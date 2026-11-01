@@ -193,7 +193,7 @@ nativeRendered target tsrc userDecls examples synthResults =
         -- teardown, so the probe binary still exists while it runs.  Same shape as
         -- `build_cmd.mdk`'s `runBuildNative`.
         let rendered = runInTmp target tsrc examples synthResults tmpDir nonce
-        let _ = cleanupTempDir tmpDir
+        cleanupTempDir tmpDir
         rendered
 
 -- ── the scratch project ─────────────────────────────────────────────────────

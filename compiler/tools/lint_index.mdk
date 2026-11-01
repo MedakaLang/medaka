@@ -181,10 +181,10 @@ sigOf t = SigVal (stripTy t)
 
 sigRowsOf : String -> HashMap String Unit -> Decl -> List IndexRow
 sigRowsOf m signed (DTypeSig pub name ty loc) =
-  let _ = setInPlace name () signed
+  setInPlace name () signed
   [mkRow m name RkValue (sigOf ty) "" [] 0 pub (Some loc)]
 sigRowsOf m signed (DExtern (ExternDecl { edPub = pub, edName = name, edTy = ty, edLoc = loc, ... })) =
-  let _ = setInPlace name () signed
+  setInPlace name () signed
   [mkRow m name RkValue (sigOf ty) "" [] 0 pub (Some loc)]
 sigRowsOf m signed (DAttrib _ d) = sigRowsOf m signed d
 sigRowsOf m _ (DData { dataVis = vis, dataName = name, dataParams = ps, dataCtors = ctors, dataNameLoc = loc, ... }) =
@@ -296,7 +296,7 @@ unsignedRow : String ->
 unsignedRow m signed seen pub name loc
   | has name signed || has name seen = []
   | otherwise =
-    let _ = setInPlace name () seen
+    setInPlace name () seen
     [mkRow m name RkValue NoSig "" [] 0 pub (Some loc)]
 
 -- A signature's own spans point into the file that declared it and answer
@@ -411,16 +411,16 @@ sexpOptLoc (Some (Loc _ a b c d)) = SList [
 -- The location's file is the shard's own path, restored on load.
 readOptLoc : String -> SexpCursor -> Option Loc
 readOptLoc path cur =
-  let _ = cursorOpen cur
+  cursorOpen cur
   if isCloseByte (cursorPeek cur) then
-    let _ = cursorAdvance cur
+    cursorAdvance cur
     None
   else
     let a = cursorInt cur
     let b = cursorInt cur
     let c = cursorInt cur
     let d = cursorInt cur
-    let _ = cursorClose cur
+    cursorClose cur
     Some (Loc path a b c d)
 
 -- The shard text: version, stamp, path, content hash, module id, rows digest,
@@ -458,7 +458,7 @@ readSlot cur =
 
 readRow : String -> String -> SexpCursor -> IndexRow
 readRow path m cur =
-  let _ = cursorOpen cur
+  cursorOpen cur
   let n = cursorAtom cur
   let k = match kindOfTag (cursorChar cur)
     Some kk => kk
@@ -469,18 +469,18 @@ readRow path m cur =
   let arity = cursorInt cur
   let exp = readBoolTF cur
   let loc = readOptLoc path cur
-  let _ = cursorClose cur
+  cursorClose cur
   mkRow m n k sig parent fields arity exp loc
 
 readOptTy : SexpCursor -> Option Ty
 readOptTy cur =
-  let _ = cursorOpen cur
+  cursorOpen cur
   if isCloseByte (cursorPeek cur) then
-    let _ = cursorAdvance cur
+    cursorAdvance cur
     None
   else
     let t = readTy cur
-    let _ = cursorClose cur
+    cursorClose cur
     Some t
 
 -- (module id, rows digest, rows), or `None` on any doubt: a wrong version,
@@ -493,7 +493,7 @@ decodeRowShard : String ->
   Option (String, String, List IndexRow)
 decodeRowShard stamp path hash text =
   let cur = cursorOf text
-  let _ = cursorOpen cur
+  cursorOpen cur
   let v = cursorInt cur
   let st = cursorAtom cur
   let p = cursorAtom cur
@@ -508,7 +508,7 @@ decodeRowShard stamp path hash text =
     let m = cursorAtom cur
     let digest = cursorAtom cur
     let rows = cursorList (readRow path m) cur
-    let _ = cursorClose cur
+    cursorClose cur
     if cursorFailed cur || not (cursorAtEnd cur) then
       None
     else
@@ -616,7 +616,7 @@ writeShard dir sp text =
   match makeStagingDir dir
     Err _ => ()
     Ok tmp =>
-      let _ = stageAndRename tmp sp text
+      stageAndRename tmp sp text
       let _ = removeDir tmp
       ()
 
@@ -730,7 +730,7 @@ indexFingerprint ix =
 mkScope : String -> List IndexRow -> IndexScope
 mkScope digest rows =
   let m = new ()
-  let _ = groupInto (reverse rows) m
+  groupInto (reverse rows) m
   let signed = filterList isExportedSigValue rows
   IndexScope {
     ixsByName = m,
@@ -753,7 +753,7 @@ rowModule r = r.ixrModule
 groupInto : List IndexRow -> HashMap String (List IndexRow) -> Unit
 groupInto [] _ = ()
 groupInto (r :: rest) m =
-  let _ = setInPlace r.ixrName (r :: findWithDefault [] r.ixrName m) m
+  setInPlace r.ixrName (r :: findWithDefault [] r.ixrName m) m
   groupInto rest m
 
 sortedUnique : List String -> List String

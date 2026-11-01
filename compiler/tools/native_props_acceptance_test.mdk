@@ -19,7 +19,7 @@ withFixtures files inspect = match makeTempDir ()
     let result = match writeFixtureFiles dir (manifest :: files)
       Err message => fail message
       Ok _ => inspect "\{dir}/main.mdk"
-    let _ = cleanupTempDir dir
+    cleanupTempDir dir
     result
 
 runInvocation : List String ->

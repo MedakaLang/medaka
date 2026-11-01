@@ -112,9 +112,6 @@ IDENT "src"
 IDENT "_len"
 EQUAL
 INDENT
-LET
-UNDERSCORE
-EQUAL
 IDENT "stageBump"
 STRING "lex.offsets"
 NEWLINE
@@ -147,9 +144,6 @@ IDENT "src"
 IDENT "_len"
 EQUAL
 INDENT
-LET
-UNDERSCORE
-EQUAL
 IDENT "stageBump"
 STRING "lex.pairs"
 NEWLINE
@@ -174,9 +168,6 @@ IDENT "tokenize"
 IDENT "s"
 EQUAL
 INDENT
-LET
-UNDERSCORE
-EQUAL
 IDENT "stageBump"
 STRING "lex.tokenize"
 NEWLINE
@@ -927,9 +918,6 @@ IDENT "collectComments"
 IDENT "s"
 EQUAL
 INDENT
-LET
-UNDERSCORE
-EQUAL
 IDENT "stageBump"
 STRING "lint.comments"
 NEWLINE

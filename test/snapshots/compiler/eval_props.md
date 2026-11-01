@@ -36,8 +36,8 @@ export
 startEvalPropWorker : Unit -> <IO> String
 startEvalPropWorker _ =
   let nonce = mintNonce ()
-  let _ = putStrLn "\{bootstrapBase}\{nonce}"
-  let _ = flushStdout ()
+  putStrLn "\{bootstrapBase}\{nonce}"
+  flushStdout ()
   nonce
 
 -- Emit the bootstrap before loading the target, and keep the nonce out of
@@ -240,7 +240,7 @@ validateFailure _ _ =
 (DTypeSig false "bootstrapBase" (TyCon "String"))
 (DFunDef false "bootstrapBase" () (ELit (LString "@@__mdk_eval_props_bootstrap__@@ ")))
 (DTypeSig true "startEvalPropWorker" (TyFun (TyCon "Unit") (TyEffect ("IO") None (TyCon "String"))))
-(DFunDef false "startEvalPropWorker" (PWild) (EBlock (DoLet false false (PVar "nonce") (EApp (EVar "mintNonce") (ELit LUnit))) (DoLet false false PWild (EApp (EVar "putStrLn") (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "")) (EApp (EVar "display") (EVar "bootstrapBase"))) (ELit (LString ""))) (EApp (EVar "display") (EVar "nonce"))) (ELit (LString ""))))) (DoLet false false PWild (EApp (EVar "flushStdout") (ELit LUnit))) (DoExpr (EVar "nonce"))))
+(DFunDef false "startEvalPropWorker" (PWild) (EBlock (DoLet false false (PVar "nonce") (EApp (EVar "mintNonce") (ELit LUnit))) (DoExpr (EApp (EVar "putStrLn") (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "")) (EApp (EVar "display") (EVar "bootstrapBase"))) (ELit (LString ""))) (EApp (EVar "display") (EVar "nonce"))) (ELit (LString ""))))) (DoExpr (EApp (EVar "flushStdout") (ELit LUnit))) (DoExpr (EVar "nonce"))))
 (DTypeSig true "takeEvalPropBootstrap" (TyFun (TyCon "String") (TyApp (TyApp (TyCon "Result") (TyCon "String")) (TyTuple (TyCon "String") (TyCon "String")))))
 (DFunDef false "takeEvalPropBootstrap" ((PVar "stdout")) (EMatch (EApp (EVar "splitNl") (EVar "stdout")) (arm (PList) () (EApp (EVar "Err") (ELit (LString "interpreter property worker omitted its bootstrap header")))) (arm (PCons (PVar "header") (PVar "rest")) () (EIf (EApp (EVar "not") (EApp (EApp (EVar "startsWith") (EVar "bootstrapBase")) (EVar "header"))) (EApp (EVar "Err") (ELit (LString "interpreter property worker emitted a malformed bootstrap header"))) (EBlock (DoLet false false (PVar "nonce") (EApp (EApp (EApp (EVar "stringSlice") (EApp (EVar "stringLength") (EVar "bootstrapBase"))) (EApp (EVar "stringLength") (EVar "header"))) (EVar "header"))) (DoExpr (EIf (EBinOp "==" (EVar "nonce") (ELit (LString ""))) (EApp (EVar "Err") (ELit (LString "interpreter property worker emitted an empty bootstrap nonce"))) (EIf (EApp (EApp (EVar "anyList") (EApp (EVar "startsWith") (EVar "bootstrapBase"))) (EVar "rest")) (EApp (EVar "Err") (ELit (LString "interpreter property worker emitted a duplicate bootstrap header"))) (EApp (EVar "Ok") (ETuple (EVar "nonce") (EApp (EVar "joinNl") (EVar "rest"))))))))))))
 (DTypeSig false "sentinelBase" (TyCon "String"))
@@ -322,7 +322,7 @@ validateFailure _ _ =
 (DTypeSig false "bootstrapBase" (TyCon "String"))
 (DFunDef false "bootstrapBase" () (ELit (LString "@@__mdk_eval_props_bootstrap__@@ ")))
 (DTypeSig true "startEvalPropWorker" (TyFun (TyCon "Unit") (TyEffect ("IO") None (TyCon "String"))))
-(DFunDef false "startEvalPropWorker" (PWild) (EBlock (DoLet false false (PVar "nonce") (EApp (EVar "mintNonce") (ELit LUnit))) (DoLet false false PWild (EApp (EVar "putStrLn") (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "")) (EApp (EMethodRef "display") (EVar "bootstrapBase"))) (ELit (LString ""))) (EApp (EMethodRef "display") (EVar "nonce"))) (ELit (LString ""))))) (DoLet false false PWild (EApp (EVar "flushStdout") (ELit LUnit))) (DoExpr (EVar "nonce"))))
+(DFunDef false "startEvalPropWorker" (PWild) (EBlock (DoLet false false (PVar "nonce") (EApp (EVar "mintNonce") (ELit LUnit))) (DoExpr (EApp (EVar "putStrLn") (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "")) (EApp (EMethodRef "display") (EVar "bootstrapBase"))) (ELit (LString ""))) (EApp (EMethodRef "display") (EVar "nonce"))) (ELit (LString ""))))) (DoExpr (EApp (EVar "flushStdout") (ELit LUnit))) (DoExpr (EVar "nonce"))))
 (DTypeSig true "takeEvalPropBootstrap" (TyFun (TyCon "String") (TyApp (TyApp (TyCon "Result") (TyCon "String")) (TyTuple (TyCon "String") (TyCon "String")))))
 (DFunDef false "takeEvalPropBootstrap" ((PVar "stdout")) (EMatch (EApp (EVar "splitNl") (EVar "stdout")) (arm (PList) () (EApp (EVar "Err") (ELit (LString "interpreter property worker omitted its bootstrap header")))) (arm (PCons (PVar "header") (PVar "rest")) () (EIf (EApp (EVar "not") (EApp (EApp (EVar "startsWith") (EVar "bootstrapBase")) (EVar "header"))) (EApp (EVar "Err") (ELit (LString "interpreter property worker emitted a malformed bootstrap header"))) (EBlock (DoLet false false (PVar "nonce") (EApp (EApp (EApp (EVar "stringSlice") (EApp (EVar "stringLength") (EVar "bootstrapBase"))) (EApp (EVar "stringLength") (EVar "header"))) (EVar "header"))) (DoExpr (EIf (EBinOp "==" (EVar "nonce") (ELit (LString ""))) (EApp (EVar "Err") (ELit (LString "interpreter property worker emitted an empty bootstrap nonce"))) (EIf (EApp (EApp (EVar "anyList") (EApp (EVar "startsWith") (EVar "bootstrapBase"))) (EVar "rest")) (EApp (EVar "Err") (ELit (LString "interpreter property worker emitted a duplicate bootstrap header"))) (EApp (EVar "Ok") (ETuple (EVar "nonce") (EApp (EVar "joinNl") (EVar "rest"))))))))))))
 (DTypeSig false "sentinelBase" (TyCon "String"))

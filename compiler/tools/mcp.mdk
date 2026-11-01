@@ -211,8 +211,8 @@ fieldInt key j = match get key j
 -- single-line, so this is exactly one MCP frame.
 writeMessage : Json -> <IO> Unit
 writeMessage j =
-  let _ = putStr (stringify j)
-  let _ = putStr "\n"
+  putStr (stringify j)
+  putStr "\n"
   flushStdout ()
 
 -- All diagnostics go to stderr — stdout is protocol-only.
@@ -1937,8 +1937,8 @@ handleToolsCall state runtimeSrc coreSrc stdlibDir idJson params stalenessCheck 
       writeMessage (errorMsg idJson (0 - 32602) "tools/call: missing 'name'")
     Some name =>
       let args = fieldOr "arguments" params
-      let _ = logMcpCall "tools/call" name (stringify args)
-      let _ = selectToolProfile args
+      logMcpCall "tools/call" name (stringify args)
+      selectToolProfile args
       match callTool state runtimeSrc coreSrc stdlibDir name args
         None =>
           writeMessage
@@ -2067,15 +2067,14 @@ serveLoop state runtimeSrc coreSrc stdlibDir stalenessCheck serverVersion =
   match readLineOpt ()
     None => unit
     Some raw =>
-      let _ =
-        handleLine
-          state
-          runtimeSrc
-          coreSrc
-          stdlibDir
-          raw
-          stalenessCheck
-          serverVersion
+      handleLine
+        state
+        runtimeSrc
+        coreSrc
+        stdlibDir
+        raw
+        stalenessCheck
+        serverVersion
       serveLoop state runtimeSrc coreSrc stdlibDir stalenessCheck serverVersion
 
 -- Public entry point for the driver (`runMcpCmd` in medaka_cli.mdk).  The prelude
@@ -2093,7 +2092,7 @@ runMcpServer : String ->
   String ->
   <IO> Unit
 runMcpServer runtimeSrc coreSrc stdlibDir stalenessCheck serverVersion =
-  let _ = logMcp "medaka mcp server start"
+  logMcp "medaka mcp server start"
   serveLoop
     (Ref emptyMcpSyntaxState)
     runtimeSrc

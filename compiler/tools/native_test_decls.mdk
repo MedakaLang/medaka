@@ -142,7 +142,7 @@ nativeRendered target tsrc tests = match makeTempDir ()
     -- `results` is bound (and so fully forced — Medaka is strict) BEFORE the
     -- teardown, so the probe binary still exists while it runs.
     let results = runInTmp target tsrc tests tmpDir nonce
-    let _ = cleanupTempDir tmpDir
+    cleanupTempDir tmpDir
     results
 
 -- ── the scratch project ─────────────────────────────────────────────────────

@@ -407,7 +407,7 @@ nativeRenderedPlanned target tsrc modules env jobs = match makeTempDir ()
   Ok tmp =>
     let nonce = freshProbeNonce (mintNonce ()) propProbePrefixes tsrc
     let rendered = runInTmpPlanned target tsrc modules env jobs tmp nonce
-    let _ = cleanupTempDir tmp
+    cleanupTempDir tmp
     rendered
 
 runInTmpPlanned : String ->

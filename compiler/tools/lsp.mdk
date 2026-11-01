@@ -1224,8 +1224,8 @@ writeMessage j =
   let body = stringify j
   let n = utf8Len body
   let header = stringConcat ["Content-Length: ", intToString n, "\r\n\r\n"]
-  let _ = putStr header
-  let _ = putStr body
+  putStr header
+  putStr body
   flushStdout ()
 
 -- Content-Length counts BYTES on the wire, but `stringLength` counts Unicode
@@ -1605,7 +1605,7 @@ publishDiagnosticsFrom runtimeSrc coreSrc uri src decls =
       coreSrc
       decls
   let diags = flatMap snd front.foDiags
-  let _ = publishDiagnosticsList uri (diagsToJson src diags)
+  publishDiagnosticsList uri (diagsToJson src diags)
   map (_ => front.foReport) front.foDriven
 
 -- ── B.10.5: project-wide (multi-file) diagnostics ───────────────────────────
@@ -1728,7 +1728,7 @@ publishProjectDiagnostics runtimeSrc coreSrc uri text docs =
       [projectDir, stdlibDir]
       runtimeSrc
       coreSrc
-  let _ = publishEach docs sources results
+  publishEach docs sources results
   -- A resolve-blocked entry is not the last module the drive checked, so its
   -- report holds another module's locals and seed: nothing is kept.
   match keyed
@@ -1790,8 +1790,7 @@ publishEach docs sources ((file, ds) :: rest) =
         None => map (diagnosticWithRange (jRange 0 0 0 0)) ds),
     ),
   ]
-  let _ =
-    writeMessage (notificationMsg "textDocument/publishDiagnostics" params)
+  writeMessage (notificationMsg "textDocument/publishDiagnostics" params)
   publishEach docs sources rest
 
 -- Choose the single-document or project path for a freshly-edited buffer.
@@ -1811,7 +1810,7 @@ selectProjectProfileFor file docs = match carryProjectProfile None file
   Err msg => match manifestPathOf file
     None => docs
     Some path =>
-      let _ = publishEach docs omEmpty [
+      publishEach docs omEmpty [
         (
           path,
           [mkDiag SevError RModuleLoad msg (Some (Loc path 1 1 1 1))],
@@ -1824,7 +1823,7 @@ clearFlaggedManifest file docs = match manifestPathOf file
   None => docs
   Some path =>
     if docsFlagged path docs then
-      let _ = publishEach docs omEmpty [(path, [])]
+      publishEach docs omEmpty [(path, [])]
       docsUnflag path docs
     else
       docs
@@ -2020,7 +2019,7 @@ projectRefIndexPrepared runtimeSrc coreSrc rootFile docs =
           match prepared
             Some value => match snapshotSyntaxSource value
               Some _ =>
-                let _ = stageBump "lsp.project.parsed_hit"
+                stageBump "lsp.project.parsed_hit"
                 structuralParsed value
               None => parseWithPositionsOpt src
             None => parseWithPositionsOpt src
@@ -2038,7 +2037,7 @@ handleDefinition runtimeSrc coreSrc idJson params docs =
       None => (JNull, docs)
       Some src =>
         projectDefinitionPrepared runtimeSrc coreSrc uri src params docs
-  let _ = writeMessage (responseMsg idJson result)
+  writeMessage (responseMsg idJson result)
   updated
 
 projectDefinitionPrepared : String ->
@@ -2156,7 +2155,7 @@ handleReferences runtimeSrc coreSrc idJson params docs =
       None => (JNull, docs)
       Some src =>
         referencesResultPrepared runtimeSrc coreSrc uri src params docs
-  let _ = writeMessage (responseMsg idJson result)
+  writeMessage (responseMsg idJson result)
   updated
 
 -- Exported for `medaka_references` (#254) — TRUE WHOLE-PROJECT scope, not
@@ -2383,9 +2382,8 @@ dispatch runtimeSrc coreSrc serverVersion msg docs = match methodOf msg
   None => Step docs True
   Some meth =>
     if meth == "initialize" then
-      let _ =
-        writeMessage
-          (responseMsg (requestId msg) (initializeResultFor serverVersion))
+      writeMessage
+        (responseMsg (requestId msg) (initializeResultFor serverVersion))
       Step docs True
     else if meth == "initialized" then
       Step docs True
@@ -2410,21 +2408,21 @@ dispatch runtimeSrc coreSrc serverVersion msg docs = match methodOf msg
         _ => docs
       let _ = match docs2
         Docs xs _ _ _ _ _ _ =>
-          let _ = retainParsed projectParseCache (map snd xs)
-          let _ = retainOpenProjectSources docs2
+          retainParsed projectParseCache (map snd xs)
+          retainOpenProjectSources docs2
           if isEmpty xs then clearSessionSourceOwners ()
       Step docs2 True
     else if meth == "textDocument/codeAction" then
-      let _ = handleCodeAction (requestId msg) (fieldOr "params" msg) docs
+      handleCodeAction (requestId msg) (fieldOr "params" msg) docs
       Step docs True
     else if meth == "textDocument/formatting" then
-      let _ = handleFormatting (requestId msg) (fieldOr "params" msg) docs
+      handleFormatting (requestId msg) (fieldOr "params" msg) docs
       Step docs True
     else if meth == "textDocument/documentSymbol" then
       let docs2 = match requestUri (fieldOr "params" msg)
         Some uri => docsPrepare uri docs
         None => docs
-      let _ = handleDocumentSymbol (requestId msg) (fieldOr "params" msg) docs2
+      handleDocumentSymbol (requestId msg) (fieldOr "params" msg) docs2
       Step docs2 True
     else if meth == "textDocument/definition" then
       let docs2 =
@@ -2436,7 +2434,7 @@ dispatch runtimeSrc coreSrc serverVersion msg docs = match methodOf msg
           docs
       Step docs2 True
     else if meth == "textDocument/documentHighlight" then
-      let _ = handleHighlight (requestId msg) (fieldOr "params" msg) docs
+      handleHighlight (requestId msg) (fieldOr "params" msg) docs
       Step docs True
     else if meth == "textDocument/references" then
       let docs2 =
@@ -2448,43 +2446,35 @@ dispatch runtimeSrc coreSrc serverVersion msg docs = match methodOf msg
           docs
       Step docs2 True
     else if meth == "textDocument/hover" then
-      let _ =
-        handleHover
-          runtimeSrc
-          coreSrc
-          (requestId msg)
-          (fieldOr "params" msg)
-          docs
+      handleHover runtimeSrc coreSrc (requestId msg) (fieldOr "params" msg) docs
       Step docs True
     else if meth == "textDocument/completion" then
-      let _ =
-        handleCompletion
-          runtimeSrc
-          coreSrc
-          (requestId msg)
-          (fieldOr "params" msg)
-          docs
+      handleCompletion
+        runtimeSrc
+        coreSrc
+        (requestId msg)
+        (fieldOr "params" msg)
+        docs
       Step docs True
     else if meth == "textDocument/inlayHint" then
-      let _ =
-        handleInlayHint
-          runtimeSrc
-          coreSrc
-          (requestId msg)
-          (fieldOr "params" msg)
-          docs
+      handleInlayHint
+        runtimeSrc
+        coreSrc
+        (requestId msg)
+        (fieldOr "params" msg)
+        docs
       Step docs True
     else if meth == "textDocument/semanticTokens/full" then
       let docs2 = match requestUri (fieldOr "params" msg)
         Some uri => docsPrepare uri docs
         None => docs
-      let _ = handleSemanticTokens (requestId msg) (fieldOr "params" msg) docs2
+      handleSemanticTokens (requestId msg) (fieldOr "params" msg) docs2
       Step docs2 True
     else if meth == "shutdown" then
-      let _ = writeMessage (responseMsg (requestId msg) JNull)
+      writeMessage (responseMsg (requestId msg) JNull)
       Step docs True
     else if meth == "exit" then
-      let _ = logLine "exit (clean shutdown)"
+      logLine "exit (clean shutdown)"
       Step docs False
     else
       Step docs True  -- unrecognized method — ignore
@@ -2502,14 +2492,14 @@ serveOnce runtimeSrc coreSrc serverVersion docs = match readHeaders 0
   Some len => match readExactly len
     None => Step docs False
     Some body =>
-      let _ = logLine (stringConcat ["recv ", body])
+      logLine (stringConcat ["recv ", body])
       match parse body
         Err _ =>
-          let _ = logLine "  parse-error: malformed JSON body (skipped)"
+          logLine "  parse-error: malformed JSON body (skipped)"
           Step docs True
         Ok msg =>
           let step = dispatch runtimeSrc coreSrc serverVersion msg docs
-          let _ = logLine "  handled"
+          logLine "  handled"
           step
 -- input stream closed
 
@@ -2529,10 +2519,10 @@ serve runtimeSrc coreSrc serverVersion docs =
 export
 runServer : String -> String -> String -> <IO> Unit
 runServer runtimeSrc coreSrc serverVersion =
-  let _ = logLine "=== medaka-lsp session start ==="
+  logLine "=== medaka-lsp session start ==="
   projectCache := []
   projectParseCache := omEmpty
-  let _ = serve runtimeSrc coreSrc serverVersion emptyDocs
+  serve runtimeSrc coreSrc serverVersion emptyDocs
   projectCache := []
   projectParseCache := omEmpty
   clearSessionSourceOwners ()

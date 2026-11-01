@@ -56,7 +56,7 @@ withTarget inspect = match makeTempDir ()
     let result = match written
       Err message => fail message
       Ok _ => inspect target
-    let _ = cleanupTempDir dir
+    cleanupTempDir dir
     result
 
 rows : String -> <Exec, IO> List (String, Int, Int, Bool, String)

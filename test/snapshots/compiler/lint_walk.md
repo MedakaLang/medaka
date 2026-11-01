@@ -964,7 +964,7 @@ lintParseSource src =
   match prescanErrorPairs src tokens offsets
     Some e => Err e
     None =>
-      let _ = stageBump "parse.positions"
+      stageBump "parse.positions"
       match parseWithPositionsOptPairs src tokens offsets
         Some parsed => Ok parsed
         None =>
@@ -1591,7 +1591,7 @@ applySuppressionsMultiDirs dirTable findings =
 dirTableMap : List (String, List Directive) -> HashMap String (List Directive)
 dirTableMap rows =
   let m = new ()
-  let _ = dirTableFill m rows
+  dirTableFill m rows
   m
 
 dirTableFill : HashMap String (List Directive) ->
@@ -1970,7 +1970,7 @@ appendIfPath file diag (path, src, diags) =
 (DTypeSig true "indexKeyWith" (TyFun (TyFun (TyCon "StdlibIndex") (TyCon "String")) (TyFun (TyApp (TyCon "List") (TyCon "Rule")) (TyFun (TyCon "StdlibIndex") (TyCon "String")))))
 (DFunDef false "indexKeyWith" ((PVar "fingerprintOf") (PVar "roster") (PVar "idx")) (EIf (EApp (EVar "rosterNeeds") (EVar "roster")) (EApp (EVar "fingerprintOf") (EVar "idx")) (ELit (LString ""))))
 (DTypeSig true "lintParseSource" (TyFun (TyCon "String") (TyApp (TyApp (TyCon "Result") (TyCon "ParseError")) (TyTuple (TyApp (TyCon "List") (TyCon "Decl")) (TyCon "Positions")))))
-(DFunDef false "lintParseSource" ((PVar "src")) (EBlock (DoLet false false (PTuple (PVar "tokens") (PVar "offsets")) (EApp (EVar "tokenizeWithOffsetPairs") (EVar "src"))) (DoExpr (EMatch (EApp (EApp (EApp (EVar "prescanErrorPairs") (EVar "src")) (EVar "tokens")) (EVar "offsets")) (arm (PCon "Some" (PVar "e")) () (EApp (EVar "Err") (EVar "e"))) (arm (PCon "None") () (EBlock (DoLet false false PWild (EApp (EVar "stageBump") (ELit (LString "parse.positions")))) (DoExpr (EMatch (EApp (EApp (EApp (EVar "parseWithPositionsOptPairs") (EVar "src")) (EVar "tokens")) (EVar "offsets")) (arm (PCon "Some" (PVar "parsed")) () (EApp (EVar "Ok") (EVar "parsed"))) (arm (PCon "None") () (EApp (EApp (EVar "map") (ELam (PWild) (EApp (EVar "parseWithPositions") (EVar "src")))) (EApp (EApp (EApp (EVar "parseResultPairs") (EVar "src")) (EVar "tokens")) (EVar "offsets"))))))))))))
+(DFunDef false "lintParseSource" ((PVar "src")) (EBlock (DoLet false false (PTuple (PVar "tokens") (PVar "offsets")) (EApp (EVar "tokenizeWithOffsetPairs") (EVar "src"))) (DoExpr (EMatch (EApp (EApp (EApp (EVar "prescanErrorPairs") (EVar "src")) (EVar "tokens")) (EVar "offsets")) (arm (PCon "Some" (PVar "e")) () (EApp (EVar "Err") (EVar "e"))) (arm (PCon "None") () (EBlock (DoExpr (EApp (EVar "stageBump") (ELit (LString "parse.positions")))) (DoExpr (EMatch (EApp (EApp (EApp (EVar "parseWithPositionsOptPairs") (EVar "src")) (EVar "tokens")) (EVar "offsets")) (arm (PCon "Some" (PVar "parsed")) () (EApp (EVar "Ok") (EVar "parsed"))) (arm (PCon "None") () (EApp (EApp (EVar "map") (ELam (PWild) (EApp (EVar "parseWithPositions") (EVar "src")))) (EApp (EApp (EApp (EVar "parseResultPairs") (EVar "src")) (EVar "tokens")) (EVar "offsets"))))))))))))
 (DTypeSig false "stdlibMemberPaths" (TyFun (TyCon "String") (TyEffect ("IO") None (TyApp (TyCon "Option") (TyApp (TyCon "List") (TyCon "String"))))))
 (DFunDef false "stdlibMemberPaths" ((PVar "dir")) (EMatch (EApp (EVar "listDir") (EVar "dir")) (arm (PCon "Err" PWild) () (EVar "None")) (arm (PCon "Ok" (PVar "entries")) () (EApp (EVar "Some") (EApp (EVar "sortUniqS") (EApp (EApp (EApp (EVar "memberPathsGo") (EVar "dir")) (ELit (LString ""))) (EVar "entries")))))))
 (DTypeSig false "memberPathsGo" (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyEffect ("IO") None (TyApp (TyCon "List") (TyCon "String")))))))
@@ -2105,7 +2105,7 @@ appendIfPath file diag (path, src, diags) =
 (DTypeSig true "applySuppressionsMultiDirs" (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "Directive")))) (TyFun (TyApp (TyCon "List") (TyCon "Finding")) (TyApp (TyCon "List") (TyCon "Finding")))))
 (DFunDef false "applySuppressionsMultiDirs" ((PVar "dirTable") (PVar "findings")) (EBlock (DoLet false false (PVar "table") (EApp (EVar "dirTableMap") (EVar "dirTable"))) (DoExpr (EApp (EApp (EVar "filterList") (ELam ((PVar "f")) (EApp (EVar "not") (EApp (EApp (EVar "findingSuppressedMulti") (EVar "table")) (EVar "f"))))) (EVar "findings")))))
 (DTypeSig false "dirTableMap" (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "Directive")))) (TyApp (TyApp (TyCon "HashMap") (TyCon "String")) (TyApp (TyCon "List") (TyCon "Directive")))))
-(DFunDef false "dirTableMap" ((PVar "rows")) (EBlock (DoLet false false (PVar "m") (EApp (EVar "new") (ELit LUnit))) (DoLet false false PWild (EApp (EApp (EVar "dirTableFill") (EVar "m")) (EVar "rows"))) (DoExpr (EVar "m"))))
+(DFunDef false "dirTableMap" ((PVar "rows")) (EBlock (DoLet false false (PVar "m") (EApp (EVar "new") (ELit LUnit))) (DoExpr (EApp (EApp (EVar "dirTableFill") (EVar "m")) (EVar "rows"))) (DoExpr (EVar "m"))))
 (DTypeSig false "dirTableFill" (TyFun (TyApp (TyApp (TyCon "HashMap") (TyCon "String")) (TyApp (TyCon "List") (TyCon "Directive"))) (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "Directive")))) (TyCon "Unit"))))
 (DFunDef false "dirTableFill" (PWild (PList)) (ELit LUnit))
 (DFunDef false "dirTableFill" ((PVar "m") (PCons (PTuple (PVar "p") (PVar "ds")) (PVar "rest"))) (EBlock (DoLet false false PWild (EIf (EApp (EApp (EVar "has") (EVar "p")) (EVar "m")) (ELit LUnit) (EApp (EApp (EApp (EVar "setInPlace") (EVar "p")) (EVar "ds")) (EVar "m")))) (DoExpr (EApp (EApp (EVar "dirTableFill") (EVar "m")) (EVar "rest")))))
@@ -2371,7 +2371,7 @@ appendIfPath file diag (path, src, diags) =
 (DTypeSig true "indexKeyWith" (TyFun (TyFun (TyCon "StdlibIndex") (TyCon "String")) (TyFun (TyApp (TyCon "List") (TyCon "Rule")) (TyFun (TyCon "StdlibIndex") (TyCon "String")))))
 (DFunDef false "indexKeyWith" ((PVar "fingerprintOf") (PVar "roster") (PVar "idx")) (EIf (EApp (EVar "rosterNeeds") (EVar "roster")) (EApp (EVar "fingerprintOf") (EVar "idx")) (ELit (LString ""))))
 (DTypeSig true "lintParseSource" (TyFun (TyCon "String") (TyApp (TyApp (TyCon "Result") (TyCon "ParseError")) (TyTuple (TyApp (TyCon "List") (TyCon "Decl")) (TyCon "Positions")))))
-(DFunDef false "lintParseSource" ((PVar "src")) (EBlock (DoLet false false (PTuple (PVar "tokens") (PVar "offsets")) (EApp (EVar "tokenizeWithOffsetPairs") (EVar "src"))) (DoExpr (EMatch (EApp (EApp (EApp (EVar "prescanErrorPairs") (EVar "src")) (EVar "tokens")) (EVar "offsets")) (arm (PCon "Some" (PVar "e")) () (EApp (EVar "Err") (EVar "e"))) (arm (PCon "None") () (EBlock (DoLet false false PWild (EApp (EVar "stageBump") (ELit (LString "parse.positions")))) (DoExpr (EMatch (EApp (EApp (EApp (EVar "parseWithPositionsOptPairs") (EVar "src")) (EVar "tokens")) (EVar "offsets")) (arm (PCon "Some" (PVar "parsed")) () (EApp (EVar "Ok") (EVar "parsed"))) (arm (PCon "None") () (EApp (EApp (EMethodRef "map") (ELam (PWild) (EApp (EVar "parseWithPositions") (EVar "src")))) (EApp (EApp (EApp (EVar "parseResultPairs") (EVar "src")) (EVar "tokens")) (EVar "offsets"))))))))))))
+(DFunDef false "lintParseSource" ((PVar "src")) (EBlock (DoLet false false (PTuple (PVar "tokens") (PVar "offsets")) (EApp (EVar "tokenizeWithOffsetPairs") (EVar "src"))) (DoExpr (EMatch (EApp (EApp (EApp (EVar "prescanErrorPairs") (EVar "src")) (EVar "tokens")) (EVar "offsets")) (arm (PCon "Some" (PVar "e")) () (EApp (EVar "Err") (EVar "e"))) (arm (PCon "None") () (EBlock (DoExpr (EApp (EVar "stageBump") (ELit (LString "parse.positions")))) (DoExpr (EMatch (EApp (EApp (EApp (EVar "parseWithPositionsOptPairs") (EVar "src")) (EVar "tokens")) (EVar "offsets")) (arm (PCon "Some" (PVar "parsed")) () (EApp (EVar "Ok") (EVar "parsed"))) (arm (PCon "None") () (EApp (EApp (EMethodRef "map") (ELam (PWild) (EApp (EVar "parseWithPositions") (EVar "src")))) (EApp (EApp (EApp (EVar "parseResultPairs") (EVar "src")) (EVar "tokens")) (EVar "offsets"))))))))))))
 (DTypeSig false "stdlibMemberPaths" (TyFun (TyCon "String") (TyEffect ("IO") None (TyApp (TyCon "Option") (TyApp (TyCon "List") (TyCon "String"))))))
 (DFunDef false "stdlibMemberPaths" ((PVar "dir")) (EMatch (EApp (EVar "listDir") (EVar "dir")) (arm (PCon "Err" PWild) () (EVar "None")) (arm (PCon "Ok" (PVar "entries")) () (EApp (EVar "Some") (EApp (EVar "sortUniqS") (EApp (EApp (EApp (EVar "memberPathsGo") (EVar "dir")) (ELit (LString ""))) (EVar "entries")))))))
 (DTypeSig false "memberPathsGo" (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyEffect ("IO") None (TyApp (TyCon "List") (TyCon "String")))))))
@@ -2506,7 +2506,7 @@ appendIfPath file diag (path, src, diags) =
 (DTypeSig true "applySuppressionsMultiDirs" (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "Directive")))) (TyFun (TyApp (TyCon "List") (TyCon "Finding")) (TyApp (TyCon "List") (TyCon "Finding")))))
 (DFunDef false "applySuppressionsMultiDirs" ((PVar "dirTable") (PVar "findings")) (EBlock (DoLet false false (PVar "table") (EApp (EVar "dirTableMap") (EVar "dirTable"))) (DoExpr (EApp (EApp (EVar "filterList") (ELam ((PVar "f")) (EApp (EVar "not") (EApp (EApp (EVar "findingSuppressedMulti") (EVar "table")) (EVar "f"))))) (EVar "findings")))))
 (DTypeSig false "dirTableMap" (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "Directive")))) (TyApp (TyApp (TyCon "HashMap") (TyCon "String")) (TyApp (TyCon "List") (TyCon "Directive")))))
-(DFunDef false "dirTableMap" ((PVar "rows")) (EBlock (DoLet false false (PVar "m") (EApp (EVar "new") (ELit LUnit))) (DoLet false false PWild (EApp (EApp (EVar "dirTableFill") (EVar "m")) (EVar "rows"))) (DoExpr (EVar "m"))))
+(DFunDef false "dirTableMap" ((PVar "rows")) (EBlock (DoLet false false (PVar "m") (EApp (EVar "new") (ELit LUnit))) (DoExpr (EApp (EApp (EVar "dirTableFill") (EVar "m")) (EVar "rows"))) (DoExpr (EVar "m"))))
 (DTypeSig false "dirTableFill" (TyFun (TyApp (TyApp (TyCon "HashMap") (TyCon "String")) (TyApp (TyCon "List") (TyCon "Directive"))) (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "Directive")))) (TyCon "Unit"))))
 (DFunDef false "dirTableFill" (PWild (PList)) (ELit LUnit))
 (DFunDef false "dirTableFill" ((PVar "m") (PCons (PTuple (PVar "p") (PVar "ds")) (PVar "rest"))) (EBlock (DoLet false false PWild (EIf (EApp (EApp (EVar "has") (EVar "p")) (EVar "m")) (ELit LUnit) (EApp (EApp (EApp (EVar "setInPlace") (EVar "p")) (EVar "ds")) (EVar "m")))) (DoExpr (EApp (EApp (EVar "dirTableFill") (EVar "m")) (EVar "rest")))))

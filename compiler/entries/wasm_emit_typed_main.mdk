@@ -343,9 +343,9 @@ reemitInput runtimePath pPath uPath = match readFile runtimePath
           probeEmission
             (emitUncheckedWithPlan probeInput floatPlan floatPrepared)
         let pLast = emitProgram pInput pProgram
-        let _ = putStrLn (if p1 == pLast then "P_EQ_PLAST" else "P_NE_PLAST")
-        let _ = putStrLn (if p1 /= ctorWat then "P_NE_CTOR" else "P_EQ_CTOR")
-        let _ = putStrLn (if mainBase /= mainWat
+        putStrLn (if p1 == pLast then "P_EQ_PLAST" else "P_NE_PLAST")
+        putStrLn (if p1 /= ctorWat then "P_NE_CTOR" else "P_EQ_CTOR")
+        putStrLn (if mainBase /= mainWat
           && isNone (stringIndexOf "call $mdk_float_to_str" mainBase)
           && isSome (stringIndexOf "call $mdk_float_to_str" mainWat) then
           "P_NE_MAIN"
@@ -371,14 +371,14 @@ reemitState runtimePath = match readFile runtimePath
     let u = emitProgram uInput uProgram
     let _ = emitProgramGaps uInput uProgram
     let p2 = emitProgram pInput pProgram
-    let _ = putStrLn "REEMIT_P1_BEGIN"
-    let _ = putStrLn p1
-    let _ = putStrLn "REEMIT_P1_END"
-    let _ = putStrLn "REEMIT_U_BEGIN"
-    let _ = putStrLn u
-    let _ = putStrLn "REEMIT_U_END"
-    let _ = putStrLn "REEMIT_P2_BEGIN"
-    let _ = putStrLn p2
+    putStrLn "REEMIT_P1_BEGIN"
+    putStrLn p1
+    putStrLn "REEMIT_P1_END"
+    putStrLn "REEMIT_U_BEGIN"
+    putStrLn u
+    putStrLn "REEMIT_U_END"
+    putStrLn "REEMIT_P2_BEGIN"
+    putStrLn p2
     putStrLn "REEMIT_P2_END"
 
 reemitStateFallbackInput : List Decl -> List Decl -> WasmEmitInput
@@ -409,9 +409,9 @@ reemitTrmcState _ =
   let p1 = emitProgram trmcStateInput (trmcStateProgram "pTrmc" 17)
   let (u, _) = emitProgramRecord trmcStateInput (trmcStateProgram "uTrmc" 29)
   let censusEvents = emitProgramGaps trmcStateInput trmcStateCensusProgram
-  let _ = printCapture "TRMC_P1" p1
-  let _ = printCapture "TRMC_RECORD_U" u
-  let _ = printEvents "TRMC_CENSUS_U_GAP" censusEvents
+  printCapture "TRMC_P1" p1
+  printCapture "TRMC_RECORD_U" u
+  printEvents "TRMC_CENSUS_U_GAP" censusEvents
   printCapture
     "TRMC_P2"
     (emitProgram trmcStateInput (trmcStateProgram "pTrmc" 17))
@@ -492,12 +492,12 @@ reemitImplSelfState _ =
   let pProgram = implSelfProgram "PLoop" 17 3
   let uProgram = implSelfProgram "ULoop" 29 4
   let p1 = emitProgram implSelfInput pProgram
-  let _ = printCapture "IMPL_SELF_P1" p1
+  printCapture "IMPL_SELF_P1" p1
   let (u, _) = emitProgramRecord implSelfInput uProgram
-  let _ = printCapture "IMPL_SELF_RECORD_U" u
+  printCapture "IMPL_SELF_RECORD_U" u
   let censusEvents =
     emitProgramGaps implSelfInput (implSelfCensusProgram uProgram)
-  let _ = printEvents "IMPL_SELF_CENSUS_U_GAP" censusEvents
+  printEvents "IMPL_SELF_CENSUS_U_GAP" censusEvents
   printCapture "IMPL_SELF_P2" (emitProgram implSelfInput pProgram)
 
 -- X-W.H2b.7: fresh WasmEmit owns the lambda-id counter, lifted-definition drain,
@@ -508,9 +508,9 @@ reemitLambdaState _ =
   let p1 = emitProgram lambdaStateInput (lambdaStateProgram 17)
   let (u, _) = emitProgramRecord lambdaStateInput (lambdaStateProgram 29)
   let censusEvents = emitProgramGaps lambdaStateInput lambdaStateCensusProgram
-  let _ = printCapture "LAMBDA_P1" p1
-  let _ = printCapture "LAMBDA_RECORD_U" u
-  let _ = printEvents "LAMBDA_CENSUS_U_GAP" censusEvents
+  printCapture "LAMBDA_P1" p1
+  printCapture "LAMBDA_RECORD_U" u
+  printEvents "LAMBDA_CENSUS_U_GAP" censusEvents
   printCapture
     "LAMBDA_P2"
     (emitProgram lambdaStateInput (lambdaStateProgram 17))
@@ -585,9 +585,9 @@ reemitTrapState _ =
   let p1 = emitProgram trapStateInput trapStateProgram
   let (u, _) = emitProgramRecord trapStateInput trapStateControlProgram
   let censusEvents = emitProgramGaps trapStateInput trapStateCensusProgram
-  let _ = printCapture "TRAP_P1" p1
-  let _ = printCapture "TRAP_RECORD_U" u
-  let _ = printEvents "TRAP_CENSUS_U_GAP" censusEvents
+  printCapture "TRAP_P1" p1
+  printCapture "TRAP_RECORD_U" u
+  printEvents "TRAP_CENSUS_U_GAP" censusEvents
   printCapture "TRAP_P2" (emitProgram trapStateInput trapStateProgram)
 
 -- A0 capture-only apparatus for H2b.9. P activates each prospective feature
@@ -607,18 +607,15 @@ reemitFeatureState _ =
     emitProgramRecord featureHashFloatInput featureHashFloatRecordUProgram
   let hashFloatCensusEvents =
     emitProgramGaps featureHashFloatInput featureHashFloatCensusProgram
-  let _ = printCapture "FEATURE_P1" p1
-  let _ = printCapture "FEATURE_HASH_INT_ONLY" hashIntOnly
-  let _ = printCapture "FEATURE_FLOAT_DIV" floatDiv
-  let _ = printCapture "FEATURE_RECORD_U" u
-  let _ = printEvents "FEATURE_CENSUS_U_GAP" censusEvents
-  let _ =
-    printCapture
-      "FEATURE_P2"
-      (emitProgram featureStateInput featureStateProgram)
-  let _ = printCapture "FEATURE_HASH_FLOAT_P1" hashFloatP1
-  let _ = printCapture "FEATURE_HASH_FLOAT_RECORD_U" hashFloatU
-  let _ = printEvents "FEATURE_HASH_FLOAT_CENSUS_P_GAP" hashFloatCensusEvents
+  printCapture "FEATURE_P1" p1
+  printCapture "FEATURE_HASH_INT_ONLY" hashIntOnly
+  printCapture "FEATURE_FLOAT_DIV" floatDiv
+  printCapture "FEATURE_RECORD_U" u
+  printEvents "FEATURE_CENSUS_U_GAP" censusEvents
+  printCapture "FEATURE_P2" (emitProgram featureStateInput featureStateProgram)
+  printCapture "FEATURE_HASH_FLOAT_P1" hashFloatP1
+  printCapture "FEATURE_HASH_FLOAT_RECORD_U" hashFloatU
+  printEvents "FEATURE_HASH_FLOAT_CENSUS_P_GAP" hashFloatCensusEvents
   printCapture
     "FEATURE_HASH_FLOAT_P2"
     (emitProgram featureHashFloatInput featureHashFloatProgram)
@@ -801,9 +798,9 @@ reemitCharFromCodeState _ =
     emitProgramRecord charFromCodeStateInput charFromCodeStateControlProgram
   let censusEvents =
     emitProgramGaps charFromCodeStateInput charFromCodeStateCensusProgram
-  let _ = printCapture "CHAR_FROM_CODE_P1" p1
-  let _ = printCapture "CHAR_FROM_CODE_RECORD_U" u
-  let _ = printEvents "CHAR_FROM_CODE_CENSUS_P_GAP" censusEvents
+  printCapture "CHAR_FROM_CODE_P1" p1
+  printCapture "CHAR_FROM_CODE_RECORD_U" u
+  printEvents "CHAR_FROM_CODE_CENSUS_P_GAP" censusEvents
   printCapture
     "CHAR_FROM_CODE_P2"
     (emitProgram charFromCodeStateInput charFromCodeStateProgram)
@@ -877,62 +874,54 @@ charFromCodeStateCensusProgram =
 -- capture so a record-mode substitution cannot hide behind valid placeholder WAT.
 reemitLeafRuntimeState : Unit -> <IO> Unit
 reemitLeafRuntimeState _ =
-  let _ =
-    reemitLeafRuntimeRow
-      "CHARCLASS"
-      leafCharClassP
-      leafCharClassU
-      "leafCharClassIntentionalGap"
-      "missingLeafCharClassCensus"
-  let _ =
-    reemitLeafRuntimeRow
-      "FLOATRNG"
-      leafFloatRngP
-      leafFloatRngU
-      "leafFloatRngIntentionalGap"
-      "missingLeafFloatRngCensus"
-  let _ =
-    reemitLeafRuntimeRow
-      "STRCODEC"
-      leafStrCodecP
-      leafStrCodecU
-      "leafStrCodecIntentionalGap"
-      "missingLeafStrCodecCensus"
-  let _ =
-    reemitLeafRuntimeRow
-      "VALUECMP"
-      leafValueCmpP
-      leafValueCmpU
-      "leafValueCmpIntentionalGap"
-      "missingLeafValueCmpCensus"
-  let _ =
-    reemitLeafRuntimeRow
-      "FLOATSTR"
-      leafFloatStrP
-      leafFloatStrU
-      "leafFloatStrIntentionalGap"
-      "missingLeafFloatStrCensus"
-  let _ =
-    reemitLeafRuntimeRow
-      "ARGS"
-      leafArgsP
-      leafArgsU
-      "leafArgsIntentionalGap"
-      "missingLeafArgsCensus"
-  let _ =
-    reemitLeafRuntimeRow
-      "FILEBYTES_READ"
-      leafFileBytesReadP
-      leafFileBytesU
-      "leafFileBytesReadIntentionalGap"
-      "missingLeafFileBytesReadCensus"
-  let _ =
-    reemitLeafRuntimeRow
-      "FILEBYTES_WRITE"
-      leafFileBytesWriteP
-      leafFileBytesU
-      "leafFileBytesWriteIntentionalGap"
-      "missingLeafFileBytesWriteCensus"
+  reemitLeafRuntimeRow
+    "CHARCLASS"
+    leafCharClassP
+    leafCharClassU
+    "leafCharClassIntentionalGap"
+    "missingLeafCharClassCensus"
+  reemitLeafRuntimeRow
+    "FLOATRNG"
+    leafFloatRngP
+    leafFloatRngU
+    "leafFloatRngIntentionalGap"
+    "missingLeafFloatRngCensus"
+  reemitLeafRuntimeRow
+    "STRCODEC"
+    leafStrCodecP
+    leafStrCodecU
+    "leafStrCodecIntentionalGap"
+    "missingLeafStrCodecCensus"
+  reemitLeafRuntimeRow
+    "VALUECMP"
+    leafValueCmpP
+    leafValueCmpU
+    "leafValueCmpIntentionalGap"
+    "missingLeafValueCmpCensus"
+  reemitLeafRuntimeRow
+    "FLOATSTR"
+    leafFloatStrP
+    leafFloatStrU
+    "leafFloatStrIntentionalGap"
+    "missingLeafFloatStrCensus"
+  reemitLeafRuntimeRow
+    "ARGS"
+    leafArgsP
+    leafArgsU
+    "leafArgsIntentionalGap"
+    "missingLeafArgsCensus"
+  reemitLeafRuntimeRow
+    "FILEBYTES_READ"
+    leafFileBytesReadP
+    leafFileBytesU
+    "leafFileBytesReadIntentionalGap"
+    "missingLeafFileBytesReadCensus"
+  reemitLeafRuntimeRow
+    "FILEBYTES_WRITE"
+    leafFileBytesWriteP
+    leafFileBytesU
+    "leafFileBytesWriteIntentionalGap"
+    "missingLeafFileBytesWriteCensus"
   reemitLeafRuntimeRow
     "MATH"
     leafMathP
@@ -951,10 +940,10 @@ reemitLeafRuntimeRow name p u gapBind gapMissing =
   let (recordU, recordEvents) = emitProgramRecord leafRuntimeInput u
   let censusEvents =
     emitProgramGaps leafRuntimeInput (leafRuntimeCensus p gapBind gapMissing)
-  let _ = printCapture ("LEAF_" ++ name ++ "_P1") p1
-  let _ = printCapture ("LEAF_" ++ name ++ "_RECORD_U") recordU
-  let _ = printEvents ("LEAF_" ++ name ++ "_RECORD_U_EVENTS") recordEvents
-  let _ = printEvents ("LEAF_" ++ name ++ "_CENSUS_P_GAP") censusEvents
+  printCapture ("LEAF_" ++ name ++ "_P1") p1
+  printCapture ("LEAF_" ++ name ++ "_RECORD_U") recordU
+  printEvents ("LEAF_" ++ name ++ "_RECORD_U_EVENTS") recordEvents
+  printEvents ("LEAF_" ++ name ++ "_CENSUS_P_GAP") censusEvents
   printCapture ("LEAF_" ++ name ++ "_P2") (emitProgram leafRuntimeInput p)
 
 leafRuntimeInput : WasmEmitInput
@@ -1317,8 +1306,8 @@ reemitRefTrapState : Unit -> <IO> Unit
 reemitRefTrapState _ =
   let p1 = emitProgram refTrapStateInput refTrapStateProgram
   let u = emitProgram refTrapStateInput refTrapStateControlProgram
-  let _ = printCapture "REF_TRAP_P1" p1
-  let _ = printCapture "REF_TRAP_U" u
+  printCapture "REF_TRAP_P1" p1
+  printCapture "REF_TRAP_U" u
   printCapture "REF_TRAP_P2" (emitProgram refTrapStateInput refTrapStateProgram)
 
 refTrapStateInput : WasmEmitInput
@@ -1449,10 +1438,10 @@ reemitGapState _ =
     emitProgramRecord gapStateInput gapStateProgram
   let censusEvents = emitProgramGaps gapStateInput gapStateProgram
   let p2 = emitProgram pInput pProgram
-  let _ = printCapture "GAP_P1" p1
-  let _ = printCapture "GAP_RECORD_WAT" recordWat
-  let _ = printEvents "GAP_RECORD_EVENTS" recordEvents
-  let _ = printEvents "GAP_CENSUS_EVENTS" censusEvents
+  printCapture "GAP_P1" p1
+  printCapture "GAP_RECORD_WAT" recordWat
+  printEvents "GAP_RECORD_EVENTS" recordEvents
+  printEvents "GAP_CENSUS_EVENTS" censusEvents
   printCapture "GAP_P2" p2
 
 -- The final strict emission is deliberately gap-bearing and last: the expected
@@ -1462,7 +1451,7 @@ reemitGapStrict : Unit -> <IO> Unit
 reemitGapStrict _ =
   let _ = emitProgramRecord gapStateInput gapStateProgram
   let _ = emitProgramGaps gapStateInput gapStateProgram
-  let _ = putStrLn "GAP_STRICT_AFTER_RECORD_CENSUS"
+  putStrLn "GAP_STRICT_AFTER_RECORD_CENSUS"
   putStr (emitProgram gapStateInput gapStateProgram)
 
 -- X-W.H2b.2: string segments belong to the fresh WasmEmit of each strict,
@@ -1480,9 +1469,9 @@ reemitStringState _ =
   let (u, _) = emitProgramRecord uInput uProgram
   let censusEvents = emitProgramGaps gapStateInput stringCensusProgram
   let p2 = emitProgram pInput pProgram
-  let _ = printCapture "STRING_P1" p1
-  let _ = printCapture "STRING_RECORD_U" u
-  let _ = printEvents "STRING_CENSUS_EVENTS" censusEvents
+  printCapture "STRING_P1" p1
+  printCapture "STRING_RECORD_U" u
+  printEvents "STRING_CENSUS_EVENTS" censusEvents
   printCapture "STRING_P2" p2
 
 reemitStringStateP : String
@@ -1503,9 +1492,9 @@ reemitDefaultState _ =
   let (u, _) = emitProgramRecord defaultStateInputU defaultStateProgramU
   let censusEvents =
     emitProgramGaps defaultStateInputU defaultStateCensusProgramU
-  let _ = printCapture "DEFAULT_P1" p1
-  let _ = printCapture "DEFAULT_RECORD_U" u
-  let _ = printEvents "DEFAULT_CENSUS_U_EVENTS" censusEvents
+  printCapture "DEFAULT_P1" p1
+  printCapture "DEFAULT_RECORD_U" u
+  printEvents "DEFAULT_CENSUS_U_EVENTS" censusEvents
   printCapture
     "DEFAULT_P2"
     (emitProgram defaultStateInputP defaultStateProgramP)
@@ -1683,8 +1672,8 @@ bindingEventCaptures : String -> CProgram -> <IO> Unit
 bindingEventCaptures name program =
   let (recordWat, recordEvents) = emitProgramRecord bindingInput program
   let censusEvents = emitProgramGaps bindingInput program
-  let _ = printCapture (name ++ "_RECORD_WAT") recordWat
-  let _ = printEvents (name ++ "_RECORD_EVENTS") recordEvents
+  printCapture (name ++ "_RECORD_WAT") recordWat
+  printEvents (name ++ "_RECORD_EVENTS") recordEvents
   printEvents (name ++ "_CENSUS_EVENTS") censusEvents
 
 captureCurrentBinding : String -> <IO> Unit
@@ -1695,8 +1684,8 @@ captureCurrentBinding "control" =
     (emitProgram (typedInput [] [] decls) (typedProgram [] [] decls))
 captureCurrentBinding "top" =
   let program = bindingSensitiveProgram "P"
-  let _ = bindingEventCaptures "CBIND_TOP" program
-  let _ = putStrLn "CBIND_TOP_STRICT"
+  bindingEventCaptures "CBIND_TOP" program
+  putStrLn "CBIND_TOP_STRICT"
   putStr (emitProgram bindingInput program)
 captureCurrentBinding "lifted" =
   -- emitLetGroupRef calls emitLgLifted before it emits this group's use-site
@@ -1715,15 +1704,15 @@ captureCurrentBinding "lifted" =
     ],
     bindingMain,
   ]
-  let _ = bindingEventCaptures "CBIND_LIFT" program
-  let _ = putStrLn "CBIND_LIFT_STRICT"
+  bindingEventCaptures "CBIND_LIFT" program
+  putStrLn "CBIND_LIFT_STRICT"
   putStr (emitProgram bindingInput program)
 captureCurrentBinding "no-writer" =
   let writerWat = emitProgram bindingInput bindingWriterProgram
-  let _ = printCapture "CBIND_NOWRITER_SETUP_WAT" writerWat
-  let _ = putStrLn "CBIND_NOWRITER_SETUP_OK"
-  let _ = bindingEventCaptures "CBIND_NOWRITER" bindingNoWriterProgram
-  let _ = putStrLn "CBIND_NOWRITER_STRICT"
+  printCapture "CBIND_NOWRITER_SETUP_WAT" writerWat
+  putStrLn "CBIND_NOWRITER_SETUP_OK"
+  bindingEventCaptures "CBIND_NOWRITER" bindingNoWriterProgram
+  putStrLn "CBIND_NOWRITER_STRICT"
   putStr (emitProgram bindingInput bindingNoWriterProgram)
 captureCurrentBinding "post-lift" =
   -- The local member L emits successfully before the enclosing body reaches the
@@ -1743,8 +1732,8 @@ captureCurrentBinding "post-lift" =
     ],
     bindingMain,
   ]
-  let _ = bindingEventCaptures "CBIND_POSTLIFT" program
-  let _ = putStrLn "CBIND_POSTLIFT_STRICT"
+  bindingEventCaptures "CBIND_POSTLIFT" program
+  putStrLn "CBIND_POSTLIFT_STRICT"
   putStr (emitProgram bindingInput program)
 captureCurrentBinding "malformed" =
   -- A literal parameter selects clause-dispatch/ref mode structurally; this is
@@ -1753,7 +1742,7 @@ captureCurrentBinding "malformed" =
     synthBind "Malformed" [CClause [PLit (LInt 0)] (CLit (LInt 1))],
     bindingMain,
   ]
-  let _ = putStrLn "CBIND_MALFORMED_REF_ROUTE"
+  putStrLn "CBIND_MALFORMED_REF_ROUTE"
   printCapture "CBIND_MALFORMED_WAT" (emitProgram bindingInput program)
 captureCurrentBinding _ =
   putStrLn
@@ -1765,20 +1754,20 @@ bindingControlSource =
 
 printCapture : String -> String -> <IO> Unit
 printCapture name text =
-  let _ = putStrLn (name ++ "_BEGIN")
-  let _ = putStrLn text
+  putStrLn (name ++ "_BEGIN")
+  putStrLn text
   putStrLn (name ++ "_END")
 
 printEvents : String -> List String -> <IO> Unit
 printEvents name events =
-  let _ = putStrLn (name ++ "_BEGIN")
-  let _ = printEventLines events
+  putStrLn (name ++ "_BEGIN")
+  printEventLines events
   putStrLn (name ++ "_END")
 
 printEventLines : List String -> <IO> Unit
 printEventLines [] = ()
 printEventLines (event :: rest) =
-  let _ = putStrLn event
+  putStrLn event
   printEventLines rest
 
 gapStateInput : WasmEmitInput

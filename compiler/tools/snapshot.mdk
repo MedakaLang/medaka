@@ -726,7 +726,7 @@ withGaps cmt text gaps =
 
 putLineFlush : String -> <IO> Unit
 putLineFlush s =
-  let _ = putStrLn s
+  putStrLn s
   flushStdout ()
 
 emitSection : String -> String -> String -> <IO> Unit
@@ -753,8 +753,8 @@ emitRaw name content = emitRawTagged name content False
 
 emitRawTagged : String -> String -> Bool -> <IO> Unit
 emitRawTagged name content diag =
-  let _ = putStrLn (if diag then "SECD \{name}" else "SEC \{name}")
-  let _ = putStr (encodeLines (contentLines content))
+  putStrLn (if diag then "SECD \{name}" else "SEC \{name}")
+  putStr (encodeLines (contentLines content))
   flushStdout ()
 
 encodeLines : List String -> String
@@ -764,7 +764,7 @@ export
 runSnapshotWorker : String -> List String -> List String -> <IO> Unit
 runSnapshotWorker root sel files = match loadPrelude root
   Err msg =>
-    let _ = ePutStrLn msg
+    ePutStrLn msg
     exit 1
   Ok (runtimeDecls, coreDecls) =>
     workerLoop root sel runtimeDecls coreDecls files
@@ -788,7 +788,7 @@ workerLoop : String ->
   <IO> Unit
 workerLoop _ _ _ _ [] = ()
 workerLoop root sel runtimeDecls coreDecls (f :: rest) =
-  let _ = workerOne root sel runtimeDecls coreDecls f
+  workerOne root sel runtimeDecls coreDecls f
   workerLoop root sel runtimeDecls coreDecls rest
 
 workerOne : String ->
@@ -798,11 +798,11 @@ workerOne : String ->
   String ->
   <IO> Unit
 workerOne root sel runtimeDecls coreDecls path =
-  let _ = putLineFlush "BEGIN \{path}"
+  putLineFlush "BEGIN \{path}"
   let _ = match carryProjectProfile None path
     Err msg => emitDiagSection root "CRASH" "\{msg}\n"
     Ok _ => ()
-  let _ = workerRender root sel runtimeDecls coreDecls path
+  workerRender root sel runtimeDecls coreDecls path
   putLineFlush "END \{path}"
 
 workerRender : String ->
@@ -815,7 +815,7 @@ workerRender root sel runtimeDecls coreDecls path = match readFile path
   Err msg => emitDiagSection root "CRASH" "cannot read fixture: \{msg}\n"
   Ok src =>
     -- SOURCE is emitted RAW — never normalized, never reflowed.
-    let _ = emitRaw "SOURCE" src
+    emitRaw "SOURCE" src
     let _ = if wants sel "TOKENS" then emitSection root "TOKENS" (tokensOf src)
     let _ =
       if wants sel "COMMENTS" then emitSection root "COMMENTS" (commentsOf src)
@@ -1477,12 +1477,11 @@ readOpt p = match readFile p
 reportResults : List SnapResult -> <IO> Bool
 reportResults results =
   let bad = filterList (r => isBad (verdictOf r)) results
-  let _ =
-    mapUnit
-      printResult
-      (filterList (r => startsWith "BLESS" (verdictOf r)) results)
-  let _ = mapUnit printResult bad
-  let _ = putStrLn (summaryLine results)
+  mapUnit
+    printResult
+    (filterList (r => startsWith "BLESS" (verdictOf r)) results)
+  mapUnit printResult bad
+  putStrLn (summaryLine results)
   isEmpty bad
 
 verdictOf : SnapResult -> String

@@ -1,5 +1,5 @@
 # META
-source_lines=176
+source_lines=172
 stages=DESUGAR,MARK
 # SOURCE
 -- lint rule rule-duplicate-body (same-file arm): two top-level functions in one file with structurally identical bodies.
@@ -105,7 +105,7 @@ sameFileGroupByKey : List (String, Int, String) ->
   HashMap String (List (String, Int, String))
 sameFileGroupByKey occs =
   let m = new ()
-  let _ = sameFileGroupGo m occs
+  sameFileGroupGo m occs
   m
 
 sameFileGroupGo : HashMap String (List (String, Int, String)) ->
@@ -113,11 +113,7 @@ sameFileGroupGo : HashMap String (List (String, Int, String)) ->
   Unit
 sameFileGroupGo _ [] = ()
 sameFileGroupGo m (o :: rest) =
-  let _ =
-    setInPlace
-      (sameFileOccKey o)
-      (o :: findWithDefault [] (sameFileOccKey o) m)
-      m
+  setInPlace (sameFileOccKey o) (o :: findWithDefault [] (sameFileOccKey o) m) m
   sameFileGroupGo m rest
 
 sameFileDistinctKeys : List (String, Int, String) -> List String
@@ -132,7 +128,7 @@ sameFileDistinctGo _ [] = []
 sameFileDistinctGo seen (o :: rest)
   | has (sameFileOccKey o) seen = sameFileDistinctGo seen rest
   | otherwise =
-    let _ = setInPlace (sameFileOccKey o) () seen
+    setInPlace (sameFileOccKey o) () seen
     sameFileOccKey o :: sameFileDistinctGo seen rest
 
 sameFileOccName : (String, Int, String) -> String
@@ -195,15 +191,15 @@ sameFileInsert x (y :: ys)
 (DTypeSig false "ruleDuplicateBodySameFile" (TyFun (TyCon "StdlibIndex") (TyFun (TyCon "String") (TyFun (TyCon "FileFacts") (TyFun (TyCon "Positions") (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyApp (TyCon "List") (TyCon "Finding"))))))))
 (DFunDef false "ruleDuplicateBodySameFile" (PWild PWild (PVar "facts") PWild PWild) (EBlock (DoLet false false (PVar "occs") (EApp (EApp (EVar "flatMap") (EVar "sameFileOccOfClause")) (EApp (EVar "factDupClauses") (EVar "facts")))) (DoLet false false (PVar "groups") (EApp (EVar "sameFileGroupByKey") (EVar "occs"))) (DoLet false false (PVar "live") (EApp (EApp (EVar "filterList") (ELam ((PVar "k")) (EBinOp ">=" (EApp (EVar "listLen") (EApp (EApp (EApp (EVar "findWithDefault") (EListLit)) (EVar "k")) (EVar "groups"))) (ELit (LInt 2))))) (EApp (EVar "sameFileDistinctKeys") (EVar "occs")))) (DoExpr (EApp (EApp (EVar "flatMap") (ELam ((PVar "k")) (EApp (EVar "emitSameFileGroup") (EApp (EVar "reverseL") (EApp (EApp (EApp (EVar "findWithDefault") (EListLit)) (EVar "k")) (EVar "groups")))))) (EApp (EVar "sortUniqS") (EVar "live"))))))
 (DTypeSig false "sameFileGroupByKey" (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "Int") (TyCon "String"))) (TyApp (TyApp (TyCon "HashMap") (TyCon "String")) (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "Int") (TyCon "String"))))))
-(DFunDef false "sameFileGroupByKey" ((PVar "occs")) (EBlock (DoLet false false (PVar "m") (EApp (EVar "new") (ELit LUnit))) (DoLet false false PWild (EApp (EApp (EVar "sameFileGroupGo") (EVar "m")) (EVar "occs"))) (DoExpr (EVar "m"))))
+(DFunDef false "sameFileGroupByKey" ((PVar "occs")) (EBlock (DoLet false false (PVar "m") (EApp (EVar "new") (ELit LUnit))) (DoExpr (EApp (EApp (EVar "sameFileGroupGo") (EVar "m")) (EVar "occs"))) (DoExpr (EVar "m"))))
 (DTypeSig false "sameFileGroupGo" (TyFun (TyApp (TyApp (TyCon "HashMap") (TyCon "String")) (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "Int") (TyCon "String")))) (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "Int") (TyCon "String"))) (TyCon "Unit"))))
 (DFunDef false "sameFileGroupGo" (PWild (PList)) (ELit LUnit))
-(DFunDef false "sameFileGroupGo" ((PVar "m") (PCons (PVar "o") (PVar "rest"))) (EBlock (DoLet false false PWild (EApp (EApp (EApp (EVar "setInPlace") (EApp (EVar "sameFileOccKey") (EVar "o"))) (EBinOp "::" (EVar "o") (EApp (EApp (EApp (EVar "findWithDefault") (EListLit)) (EApp (EVar "sameFileOccKey") (EVar "o"))) (EVar "m")))) (EVar "m"))) (DoExpr (EApp (EApp (EVar "sameFileGroupGo") (EVar "m")) (EVar "rest")))))
+(DFunDef false "sameFileGroupGo" ((PVar "m") (PCons (PVar "o") (PVar "rest"))) (EBlock (DoExpr (EApp (EApp (EApp (EVar "setInPlace") (EApp (EVar "sameFileOccKey") (EVar "o"))) (EBinOp "::" (EVar "o") (EApp (EApp (EApp (EVar "findWithDefault") (EListLit)) (EApp (EVar "sameFileOccKey") (EVar "o"))) (EVar "m")))) (EVar "m"))) (DoExpr (EApp (EApp (EVar "sameFileGroupGo") (EVar "m")) (EVar "rest")))))
 (DTypeSig false "sameFileDistinctKeys" (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "Int") (TyCon "String"))) (TyApp (TyCon "List") (TyCon "String"))))
 (DFunDef false "sameFileDistinctKeys" ((PVar "occs")) (EBlock (DoLet false false (PVar "seen") (EApp (EVar "new") (ELit LUnit))) (DoExpr (EApp (EApp (EVar "sameFileDistinctGo") (EVar "seen")) (EVar "occs")))))
 (DTypeSig false "sameFileDistinctGo" (TyFun (TyApp (TyApp (TyCon "HashMap") (TyCon "String")) (TyCon "Unit")) (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "Int") (TyCon "String"))) (TyApp (TyCon "List") (TyCon "String")))))
 (DFunDef false "sameFileDistinctGo" (PWild (PList)) (EListLit))
-(DFunDef false "sameFileDistinctGo" ((PVar "seen") (PCons (PVar "o") (PVar "rest"))) (EIf (EApp (EApp (EVar "has") (EApp (EVar "sameFileOccKey") (EVar "o"))) (EVar "seen")) (EApp (EApp (EVar "sameFileDistinctGo") (EVar "seen")) (EVar "rest")) (EIf (EVar "otherwise") (EBlock (DoLet false false PWild (EApp (EApp (EApp (EVar "setInPlace") (EApp (EVar "sameFileOccKey") (EVar "o"))) (ELit LUnit)) (EVar "seen"))) (DoExpr (EBinOp "::" (EApp (EVar "sameFileOccKey") (EVar "o")) (EApp (EApp (EVar "sameFileDistinctGo") (EVar "seen")) (EVar "rest"))))) (EApp (EVar "__fallthrough__") (ELit LUnit)))))
+(DFunDef false "sameFileDistinctGo" ((PVar "seen") (PCons (PVar "o") (PVar "rest"))) (EIf (EApp (EApp (EVar "has") (EApp (EVar "sameFileOccKey") (EVar "o"))) (EVar "seen")) (EApp (EApp (EVar "sameFileDistinctGo") (EVar "seen")) (EVar "rest")) (EIf (EVar "otherwise") (EBlock (DoExpr (EApp (EApp (EApp (EVar "setInPlace") (EApp (EVar "sameFileOccKey") (EVar "o"))) (ELit LUnit)) (EVar "seen"))) (DoExpr (EBinOp "::" (EApp (EVar "sameFileOccKey") (EVar "o")) (EApp (EApp (EVar "sameFileDistinctGo") (EVar "seen")) (EVar "rest"))))) (EApp (EVar "__fallthrough__") (ELit LUnit)))))
 (DTypeSig false "sameFileOccName" (TyFun (TyTuple (TyCon "String") (TyCon "Int") (TyCon "String")) (TyCon "String")))
 (DFunDef false "sameFileOccName" ((PTuple (PVar "n") PWild PWild)) (EVar "n"))
 (DTypeSig false "sameFileOccLine" (TyFun (TyTuple (TyCon "String") (TyCon "Int") (TyCon "String")) (TyCon "Int")))
@@ -237,15 +233,15 @@ sameFileInsert x (y :: ys)
 (DTypeSig false "ruleDuplicateBodySameFile" (TyFun (TyCon "StdlibIndex") (TyFun (TyCon "String") (TyFun (TyCon "FileFacts") (TyFun (TyCon "Positions") (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyApp (TyCon "List") (TyCon "Finding"))))))))
 (DFunDef false "ruleDuplicateBodySameFile" (PWild PWild (PVar "facts") PWild PWild) (EBlock (DoLet false false (PVar "occs") (EApp (EApp (EDictApp "flatMap") (EVar "sameFileOccOfClause")) (EApp (EVar "factDupClauses") (EVar "facts")))) (DoLet false false (PVar "groups") (EApp (EVar "sameFileGroupByKey") (EVar "occs"))) (DoLet false false (PVar "live") (EApp (EApp (EVar "filterList") (ELam ((PVar "k")) (EBinOp ">=" (EApp (EVar "listLen") (EApp (EApp (EApp (EVar "findWithDefault") (EListLit)) (EVar "k")) (EVar "groups"))) (ELit (LInt 2))))) (EApp (EVar "sameFileDistinctKeys") (EVar "occs")))) (DoExpr (EApp (EApp (EDictApp "flatMap") (ELam ((PVar "k")) (EApp (EVar "emitSameFileGroup") (EApp (EVar "reverseL") (EApp (EApp (EApp (EVar "findWithDefault") (EListLit)) (EVar "k")) (EVar "groups")))))) (EApp (EVar "sortUniqS") (EVar "live"))))))
 (DTypeSig false "sameFileGroupByKey" (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "Int") (TyCon "String"))) (TyApp (TyApp (TyCon "HashMap") (TyCon "String")) (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "Int") (TyCon "String"))))))
-(DFunDef false "sameFileGroupByKey" ((PVar "occs")) (EBlock (DoLet false false (PVar "m") (EApp (EVar "new") (ELit LUnit))) (DoLet false false PWild (EApp (EApp (EVar "sameFileGroupGo") (EVar "m")) (EVar "occs"))) (DoExpr (EVar "m"))))
+(DFunDef false "sameFileGroupByKey" ((PVar "occs")) (EBlock (DoLet false false (PVar "m") (EApp (EVar "new") (ELit LUnit))) (DoExpr (EApp (EApp (EVar "sameFileGroupGo") (EVar "m")) (EVar "occs"))) (DoExpr (EVar "m"))))
 (DTypeSig false "sameFileGroupGo" (TyFun (TyApp (TyApp (TyCon "HashMap") (TyCon "String")) (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "Int") (TyCon "String")))) (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "Int") (TyCon "String"))) (TyCon "Unit"))))
 (DFunDef false "sameFileGroupGo" (PWild (PList)) (ELit LUnit))
-(DFunDef false "sameFileGroupGo" ((PVar "m") (PCons (PVar "o") (PVar "rest"))) (EBlock (DoLet false false PWild (EApp (EApp (EApp (EVar "setInPlace") (EApp (EVar "sameFileOccKey") (EVar "o"))) (EBinOp "::" (EVar "o") (EApp (EApp (EApp (EVar "findWithDefault") (EListLit)) (EApp (EVar "sameFileOccKey") (EVar "o"))) (EVar "m")))) (EVar "m"))) (DoExpr (EApp (EApp (EVar "sameFileGroupGo") (EVar "m")) (EVar "rest")))))
+(DFunDef false "sameFileGroupGo" ((PVar "m") (PCons (PVar "o") (PVar "rest"))) (EBlock (DoExpr (EApp (EApp (EApp (EVar "setInPlace") (EApp (EVar "sameFileOccKey") (EVar "o"))) (EBinOp "::" (EVar "o") (EApp (EApp (EApp (EVar "findWithDefault") (EListLit)) (EApp (EVar "sameFileOccKey") (EVar "o"))) (EVar "m")))) (EVar "m"))) (DoExpr (EApp (EApp (EVar "sameFileGroupGo") (EVar "m")) (EVar "rest")))))
 (DTypeSig false "sameFileDistinctKeys" (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "Int") (TyCon "String"))) (TyApp (TyCon "List") (TyCon "String"))))
 (DFunDef false "sameFileDistinctKeys" ((PVar "occs")) (EBlock (DoLet false false (PVar "seen") (EApp (EVar "new") (ELit LUnit))) (DoExpr (EApp (EApp (EVar "sameFileDistinctGo") (EVar "seen")) (EVar "occs")))))
 (DTypeSig false "sameFileDistinctGo" (TyFun (TyApp (TyApp (TyCon "HashMap") (TyCon "String")) (TyCon "Unit")) (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "Int") (TyCon "String"))) (TyApp (TyCon "List") (TyCon "String")))))
 (DFunDef false "sameFileDistinctGo" (PWild (PList)) (EListLit))
-(DFunDef false "sameFileDistinctGo" ((PVar "seen") (PCons (PVar "o") (PVar "rest"))) (EIf (EApp (EApp (EVar "has") (EApp (EVar "sameFileOccKey") (EVar "o"))) (EVar "seen")) (EApp (EApp (EVar "sameFileDistinctGo") (EVar "seen")) (EVar "rest")) (EIf (EVar "otherwise") (EBlock (DoLet false false PWild (EApp (EApp (EApp (EVar "setInPlace") (EApp (EVar "sameFileOccKey") (EVar "o"))) (ELit LUnit)) (EVar "seen"))) (DoExpr (EBinOp "::" (EApp (EVar "sameFileOccKey") (EVar "o")) (EApp (EApp (EVar "sameFileDistinctGo") (EVar "seen")) (EVar "rest"))))) (EApp (EVar "__fallthrough__") (ELit LUnit)))))
+(DFunDef false "sameFileDistinctGo" ((PVar "seen") (PCons (PVar "o") (PVar "rest"))) (EIf (EApp (EApp (EVar "has") (EApp (EVar "sameFileOccKey") (EVar "o"))) (EVar "seen")) (EApp (EApp (EVar "sameFileDistinctGo") (EVar "seen")) (EVar "rest")) (EIf (EVar "otherwise") (EBlock (DoExpr (EApp (EApp (EApp (EVar "setInPlace") (EApp (EVar "sameFileOccKey") (EVar "o"))) (ELit LUnit)) (EVar "seen"))) (DoExpr (EBinOp "::" (EApp (EVar "sameFileOccKey") (EVar "o")) (EApp (EApp (EVar "sameFileDistinctGo") (EVar "seen")) (EVar "rest"))))) (EApp (EVar "__fallthrough__") (ELit LUnit)))))
 (DTypeSig false "sameFileOccName" (TyFun (TyTuple (TyCon "String") (TyCon "Int") (TyCon "String")) (TyCon "String")))
 (DFunDef false "sameFileOccName" ((PTuple (PVar "n") PWild PWild)) (EVar "n"))
 (DTypeSig false "sameFileOccLine" (TyFun (TyTuple (TyCon "String") (TyCon "Int") (TyCon "String")) (TyCon "Int")))

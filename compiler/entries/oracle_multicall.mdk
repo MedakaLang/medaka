@@ -116,5 +116,5 @@ main = match basename (executablePath ())
   "profile_eval_main" => profile_eval_main ()
   "refindex_main" => refindex_main ()
   n =>
-    let _ = ePutStrLn "oracle_multicall: unknown oracle name '\{n}'"
+    ePutStrLn "oracle_multicall: unknown oracle name '\{n}'"
     exit 125

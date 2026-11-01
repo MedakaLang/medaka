@@ -273,7 +273,7 @@ validatedPrelude path src = match parseResult src
     Err
       "\{ppDiagCliSrc src path (parseErrDiag path pe)}\n  (while loading the implicit prelude)"
   Ok decls =>
-    let _ = notePreludeParse src decls
+    notePreludeParse src decls
     Ok src
 
 -- The two prelude texts in [stdlibDir], `runtime.mdk` then `core.mdk`, as the
@@ -867,7 +867,7 @@ cleanupTempDir : String -> <IO> Unit
 cleanupTempDir dir = match listDir dir
   Err _ => ()
   Ok entries =>
-    let _ = removeEntries dir entries
+    removeEntries dir entries
     let _ = removeDir dir
     ()
 
@@ -911,7 +911,7 @@ sweepRootsFrom tmpdir scratch =
 sweepEachRoot : List String -> <IO> Unit
 sweepEachRoot [] = ()
 sweepEachRoot (r :: rest) =
-  let _ = sweepRoot r
+  sweepRoot r
   sweepEachRoot rest
 
 sweepRoot : String -> <IO> Unit
@@ -937,7 +937,7 @@ sweepRoot root =
 sweepEachStale : List String -> <IO> Unit
 sweepEachStale [] = ()
 sweepEachStale (d :: rest) =
-  let _ = cleanupTempDir d
+  cleanupTempDir d
   sweepEachStale rest
 
 -- ---- Boehm GC flag detection (GC_PREFIX override → pkg-config → brew → bare -lgc) ----
@@ -1253,7 +1253,7 @@ runBuild : String ->
   Option GateAsk ->
   <IO> Result BuildReport BuildReport
 runBuild root medaka cc TNative inputAbs outPath keepIrCli quietEmitStderr stampBuild frontGate =
-  let _ = sweepStaleTempDirs ()
+  sweepStaleTempDirs ()
   runBuildNative
     root
     medaka
@@ -1265,7 +1265,7 @@ runBuild root medaka cc TNative inputAbs outPath keepIrCli quietEmitStderr stamp
     stampBuild
     frontGate
 runBuild root medaka _cc TWasm inputAbs outPath keepIrCli quietEmitStderr _ frontGate =
-  let _ = sweepStaleTempDirs ()
+  sweepStaleTempDirs ()
   runBuildWasm root medaka inputAbs outPath keepIrCli quietEmitStderr frontGate
 
 -- ---- native (LLVM/clang) target — the original path ----
@@ -1300,7 +1300,7 @@ runBuildNative root medaka cc inputAbs outPath keepIrCli quietEmitStderr stampBu
           quietEmitStderr
           stampBuild
           frontGate
-      let _ = cleanupTempDir tmpDir
+      cleanupTempDir tmpDir
       res
 
 -- The build verb's root set: the plain P0-13 roots with nothing extra appended.
@@ -1486,7 +1486,7 @@ runBuildNativeRootsGo root medaka cc inputAbs outPath tmpDir keepIrCli extraRoot
   let diagPath = joinPath tmpDir "diag.json"
   let emitRes = runEmitterFor frontGate realTarget diagPath emitProg emitArgs
   let tEmit1 = now ()
-  let _ = emitPhase perfOn "emit-ir" (tEmit1 - tEmit0) inputAbs
+  emitPhase perfOn "emit-ir" (tEmit1 - tEmit0) inputAbs
   match emitRes
     Err e => buildErr "error: could not run the emitter `\{emitProg}`: \{e}"
     Ok (code, irRaw, emitRaw) =>
@@ -1609,7 +1609,7 @@ runBuildWasm root medaka inputAbs outPath keepIrCli quietEmitStderr frontGate =
           keepIrCli
           quietEmitStderr
           frontGate
-      let _ = cleanupTempDir tmpDir
+      cleanupTempDir tmpDir
       res
 
 -- The front-end gate runs in the wasm emitter child, so an unset or missing
@@ -2299,7 +2299,7 @@ populateRtObj cc rtC optFlag rtCflags dir objPath =
                 -- as the shell build cache's cache_put -> cache_evict, and
                 -- best-effort like sweepStaleTempDirs: a population that just
                 -- succeeded must never be failed by a sweep of OTHER entries.
-                let _ = sweepStaleObjCacheEntries dir
+                sweepStaleObjCacheEntries dir
                 objPath
               _ =>
                 let _ = removeFile tmpObj
@@ -2410,7 +2410,7 @@ clangLinkTimed cc rtC llPath outPath inputAbs tmpDir libFlags provObj profile pe
       -- rounding error, and charging that to the object cache would misattribute
       -- it to exactly the thing this slice is trying to measure.
       let tGcProbe = now ()
-      let _ = emitPhase perfOn "gc-probe" (tGcProbe - tLink0) cc
+      emitPhase perfOn "gc-probe" (tGcProbe - tLink0) cc
       let (optFlag, ltoAllowed) = resolveProfile profile
       let lto = if ltoAllowed then detectLto cc else None
       -- CI FAST PATH (MEDAKA_RT_OBJ).  Every `medaka build` otherwise recompiles the
@@ -2442,12 +2442,11 @@ clangLinkTimed cc rtC llPath outPath inputAbs tmpDir libFlags provObj profile pe
           cachedRtObj cc rtC optFlag (gcCflags ++ ltoCflags lto) tmpDir
       let rtInput = if rtCached == "" then rtC else rtCached
       let tRtObj = now ()
-      let _ =
-        emitPhase
-          perfOn
-          "rt-obj"
-          (tRtObj - tGcProbe)
-          (rtObjNote rtObjEnv rtCached)
+      emitPhase
+        perfOn
+        "rt-obj"
+        (tRtObj - tGcProbe)
+        (rtObjNote rtObjEnv rtCached)
       -- CI FAST PATH (MEDAKA_PRELUDE_OBJ, issue #118) — the LINK half.  Exactly the
       -- MEDAKA_RT_OBJ trick one level up: the prelude is 88% of a small program's IR,
       -- and clang -O2 re-optimises all of it on every build.  Precompile it ONCE
@@ -2495,7 +2494,7 @@ clangLinkTimed cc rtC llPath outPath inputAbs tmpDir libFlags provObj profile pe
       -- `match` would.
       let ccRes = linkWithGcFallback cc argsWith gcLibs
       let tClang = now ()
-      let _ = emitPhase perfOn "clang" (tClang - tRtObj) inputAbs
+      emitPhase perfOn "clang" (tClang - tRtObj) inputAbs
       match ccRes
         Err e => buildErr "error: linking \{inputAbs} failed\n\{e}"
         Ok _ => buildOk "built \{inputAbs} -> \{outPath}"
@@ -2615,7 +2614,7 @@ emitPreludeObj cc root medaka outObjPath = match probeClang cc
         "error: could not create a scratch directory for the prelude compile: \{e}"
     Ok tmpDir =>
       let res = emitPreludeObjIn cc root medaka outObjPath tmpDir
-      let _ = cleanupTempDir tmpDir
+      cleanupTempDir tmpDir
       res
 
 emitPreludeObjIn : String ->
@@ -2727,5 +2726,5 @@ emitRtObjGo cc root outObjPath = match makeTempDir ()
         match runCommandOk cc ccArgs
           Err e => buildErr "error: compiling runtime object failed\n\{e}"
           Ok _ => buildOk "compiled runtime object -> \{outObjPath}"
-    let _ = cleanupTempDir tmpDir
+    cleanupTempDir tmpDir
     res
