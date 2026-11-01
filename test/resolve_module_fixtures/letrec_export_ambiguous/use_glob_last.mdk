@@ -1,0 +1,6 @@
+-- The same collision with the imports in the opposite order.
+import n.{countdown}
+import m.*
+
+f : Int -> Int
+f x = countdown x

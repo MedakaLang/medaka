@@ -5,9 +5,15 @@
 -- computes it from the module's own decls plus the surfaces of the modules its
 -- `export import`s name, and `coreExports` builds the prelude's.  This module
 -- imports no resolver state: `frontend.resolve` imports it, never the reverse.
+--
+-- The typechecker and both interpreters (`evalModulesWith`, `cevalModules`) read
+-- the same facets through `directIn` (decl lists), `declExportsIn`/
+-- `declExportsCtors` (one decl) and `exportedValueNames`.  The one-decl
+-- predicates do not unwrap `DAttrib`; the list readers do.
 
 import frontend.ast.{
   variantName,
+  letBindName,
   Loc(..),
   UseMember(..),
   UsePath(..),
@@ -40,6 +46,7 @@ import support.util.{
   filterList,
   dedup,
   isEmptyL,
+  isNonEmptyL,
   selfBinding,
 }
 
@@ -421,9 +428,10 @@ public export data ExpNs a = ExpNs {
   nsCarry : UsePath -> ModuleExports -> List a,
 }
 
--- pub DTypeSig/DExtern/DFunDef.  The carriage rule is the only one that adds a
--- SECOND source beside the re-exported bindings themselves: a re-exported
--- interface carries its value-bound methods too (`carriedIfaceVals`).
+-- pub DTypeSig/DExtern/DFunDef, and the binders of a pub `let rec` group.  The
+-- carriage rule is the only one that adds a SECOND source beside the re-exported
+-- bindings themselves: a re-exported interface carries its value-bound methods
+-- too (`carriedIfaceVals`).
 export
 nsValues : ExpNs String
 nsValues = ExpNs {
@@ -433,6 +441,7 @@ nsValues = ExpNs {
       DTypeSig True n _ _ => [n]
       DExtern (ExternDecl { edPub = True, edName = n, ... }) => [n]
       DFunDef True n _ _ _ _ => [n]
+      DLetGroup True binds => map letBindName binds
       _ => [],
   nsCarry = path src => carriedValuesFrom src (reexportBindings path src),
 }
@@ -457,6 +466,7 @@ nsTypes = ExpNs {
 -- whose constructors exist but are withheld.  Carriage mirrors `nsTypes`:
 -- abstractness travels with the type name through an `export import` facade,
 -- so a facade's consumer gets the same answer the defining module would give.
+export
 nsAbstractData : ExpNs String
 nsAbstractData = ExpNs {
   nsGet = exp => exp.expAbstractData,
@@ -547,6 +557,7 @@ nsInterfaces = ExpNs {
         (reexportOrigins path src),
 }
 
+export
 nsIfaceMethods : ExpNs (String, List String)
 nsIfaceMethods = ExpNs {
   nsGet = exp => exp.expIfaceMethods,
@@ -732,6 +743,33 @@ exportsIn ns exp = ns.nsGet exp
 export
 directIn : ExpNs a -> List Decl -> List a
 directIn ns prog = scanDecls ns.nsDirectOf prog
+
+-- Does this ONE decl declare something in namespace `ns`?  The decl is read
+-- raw: `DAttrib` is not unwrapped, so an `@attr`-wrapped decl answers False.
+-- Use `directIn` on a decl list when the wrapper must be looked through.
+export
+declExportsIn : ExpNs a -> Decl -> Bool
+declExportsIn ns d = isNonEmptyL (ns.nsDirectOf d)
+
+-- Does this decl export constructors that `T(..)` binds?  A `newtype`'s
+-- constructor is always module-private, so `DNewtype` is False.  Raw decl,
+-- as for `declExportsIn`.
+export
+declExportsCtors : Decl -> Bool
+declExportsCtors d =
+  declExportsIn nsTypeCtors d && not (declExportsIn nsNewtypeCtors d)
+
+-- The exported value names of a module's own decls: direct values plus the
+-- methods of every exported interface, in decl order, `DAttrib` looked through.
+-- Resolve's `keepBoundMethods` filters the methods by `env.values`, but every method
+-- of a module's own interface is bound there (shadowed ones included), so the filter
+-- never drops a name this list admits.
+export
+exportedValueNames : List Decl -> List String
+exportedValueNames prog =
+  scanDecls
+    (d => nsValues.nsDirectOf d ++ flatMap snd (nsIfaceMethods.nsDirectOf d))
+    prog
 
 scanDecls : (Decl -> List a) -> List Decl -> List a
 scanDecls _ [] = []

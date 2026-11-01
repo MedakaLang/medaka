@@ -59,7 +59,6 @@ checkedFfiExternTypeNamesModules : DriveOutputs -> List (String, List Decl) -> L
 cmCheckWorker : ModuleCtx -> String -> ModuleSeed -> List Decl -> List Decl -> List Decl -> (ModuleBindings, List (String, PubScheme), ModuleCtx)
 cmFold : List (String, Scheme) -> ModuleBindings -> ModuleCtx -> List (String, List Decl) -> (List (String, List (String, PubScheme)), ModuleCtx)
 cohOntoFull : Option String -> Option String -> (List (String, PubScheme), List TcDiag, List TcDiag) -> (List (String, PubScheme), List TcDiag, List TcDiag)
-collectAbstractRecordTypes : List Decl -> List String
 collectModules : (ModulePlace -> String -> a -> b -> b) -> b -> List (String, a) -> b
 containsPair : (String, String) -> List (String, String) -> Bool
 continueFromInterface : GraphCtx -> GraphRun -> PreludeInterface -> (ModuleBindings, List (String, PubScheme), ModuleCtx)
@@ -138,8 +137,9 @@ preludeReturnPosDictNames : List Decl -> List Decl -> List String
 publicModuleExports : List Decl -> ModuleBindings -> List (String, ExportBinding)
 publishOwn : ModuleCtx -> List (String, Scheme) -> List (String, PubScheme)
 reexportSeed : List (String, a) -> List Decl -> List (String, List (String, a)) -> List (String, a)
+reexportSeedOf : List (String, a) -> List (String, List (String, a)) -> UsePath -> List (String, a)
 reexportedMethodNames : List (String, List String) -> List Decl -> List String
-reexportedMethodsOf : List (String, List String) -> Decl -> List String
+reexportedMethodsOf : List (String, List String) -> UsePath -> List String
 renameAliasedMethods : List Decl -> List (String, List Decl) -> (Map String (List (String, String)), List (String, List Decl))
 renameAliasedMethodsIn : List (String, List String) -> (String, List Decl) -> (String, List Decl)
 renameMethodVar : List (String, String) -> List (String, String) -> Expr -> Expr

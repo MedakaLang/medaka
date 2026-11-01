@@ -551,9 +551,8 @@ renameKeyCollides collided (n, _) = omHasKey n collided
 -- `coreExports` and never enters `known`: `buildExportsWith` resolves an `export
 -- import core…` through its own core argument.  The values bound beside the
 -- decls' own are every public interface's methods, where resolve passes only the
--- bound ones (`keepBoundMethods`), plus the public `let rec` binders
--- (`pubLetRecBinders`), so a re-export carries those as resolve's surface would
--- once it has them.
+-- bound ones (`keepBoundMethods`), so a re-export carries those as resolve's
+-- surface would once it has them.
 unitSurfaces : List (String, List Decl) -> List (String, ModuleExports)
 unitSurfaces units =
   let coreExp = match lookupAssoc "core" units
@@ -575,7 +574,7 @@ surfacesGo coreExp known ((mid, decls) :: rest)
         known
         mid
         decls
-        (flatMap identity (pubIfaceMethodSets decls) ++ pubLetRecBinders decls)
+        (flatMap identity (pubIfaceMethodSets decls))
     (mid, exp) :: surfacesGo coreExp (omInsert mid exp known) rest
 
 -- Per unit, the exported FUNCTION symbols, each paired with the module that
@@ -605,7 +604,7 @@ surfaceMethods (mid, exp) =
 unitFnSyms : (String, List Decl) -> (String, OrdMap Unit)
 unitFnSyms (mid, decls) =
   let defined = omFromNames (unitDefNames (mid, decls)) omEmpty
-  let exported = directIn nsValues decls ++ pubLetRecBinders decls
+  let exported = directIn nsValues decls
   (mid, omFromNames (filterInSet defined exported) omEmpty)
 
 -- The first row per name wins: a module's own values precede what it re-exports.
@@ -658,19 +657,6 @@ isMethodDecl fnSyms methods (dm, dn) =
 multiMapOf : List (String, a) -> OrdMap (List a)
 multiMapOf pairs =
   fold (m (k, v) => insertWith (++) k [v] m) omEmpty (reverseL pairs)
-
--- The binders of the public top-level `let rec` groups.  The producer's
--- `nsValues` has no arm for one, so resolve does not export it while `run`'s
--- export table does, directly and through every `export import` (#4312).  This
--- keeps the emitted program agreeing with `run` until `nsValues` gains a
--- `DLetGroup True` arm, which closes #4312 and removes this.
-pubLetRecBinders : List Decl -> List String
-pubLetRecBinders decls = flatMap pubLetRecBindersOf decls
-
-pubLetRecBindersOf : Decl -> List String
-pubLetRecBindersOf (DLetGroup True binds) = map letBindName binds
-pubLetRecBindersOf (DAttrib _ d) = pubLetRecBindersOf d
-pubLetRecBindersOf _ = []
 
 lookupDefiner : String -> List (String, String) -> Option String
 lookupDefiner _ [] = None
@@ -1553,7 +1539,7 @@ renameDecl rm (DFunDef pub n ps e site bid) =
 -- a top-level signature (`f : …` / `export f : …`) shares the function's name; it
 -- MUST be renamed in lockstep with its DFunDef so the typechecker keys f's scheme
 -- under the SAME mangled name the call sites + def now use (else dictPass /
--- publicValNames see `clampU` while the def is `<mid>__clampU` → unbound).
+-- the exported-name facet see `clampU` while the def is `<mid>__clampU` → unbound).
 renameDecl rm (DTypeSig pub n ty site) =
   DTypeSig pub (renameDefName rm n) ty site
 renameDecl rm (d@(DInterface { methods, ... })) =

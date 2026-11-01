@@ -1,0 +1,6 @@
+import ifc.{Describe}
+
+public export data Foo = Foo
+
+impl Describe Foo where
+  describe _ = "foo"

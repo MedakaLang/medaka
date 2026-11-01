@@ -1,5 +1,5 @@
 # META
-source_lines=2287
+source_lines=2283
 stages=DESUGAR,MARK
 # SOURCE
 -- tc_shadow: standalone-vs-method shadow resolution (S1-S9) outside the inference recursion,
@@ -142,7 +142,7 @@ import support.util.{
 import list.{head}
 import frontend.marker.{localBoundNames}
 import types.private_mangle.{mangledName}
-import frontend.visibility.{useModId}
+import frontend.visibility.{useModId, pubUsePaths}
 import map as IdMap
 import types.tc_foreign.{declExternNames}
 
@@ -1782,21 +1782,17 @@ reachableStandaloneSigGo graph fuel ((mid, n) :: rest) =
 -- no name into the re-exporter's own exports, so nothing downstream can reach through
 -- it.
 --
--- The catch-all arm is exhaustive by that rule rather than by omission — a re-export is
--- representable only as a `DUse True`, wrapped in `DAttrib` or not, so no other `Decl`
--- constructor can contribute a hop and a new one never will.  Its ledgered peer
--- `reexportedIfaceMethodsOf` (the interface-row half of the same walk) carries the same
--- two arms for the same reason.
+-- The hops are `pubUsePaths decls`, the one reader of `DUse True`; its ledgered peer
+-- `reexportedIfaceMethodsOf` (the interface-row half of the same walk) iterates the same list.
 reexportedOrigins : List Decl -> String -> List (String, String)
-reexportedOrigins decls name = flatMap (d => reexportedOriginsOf d name) decls
+reexportedOrigins decls name =
+  flatMap (p => reexportedOriginsOf p name) (pubUsePaths decls)
 
-reexportedOriginsOf : Decl -> String -> List (String, String)
-reexportedOriginsOf (DAttrib _ d) name = reexportedOriginsOf d name
-reexportedOriginsOf (DUse True path _) name = match importedBindings path
+reexportedOriginsOf : UsePath -> String -> List (String, String)
+reexportedOriginsOf path name = match importedBindings path
   None => [(useModId path, name)]
   Some bs =>
     map (b => (useModId path, fst b)) (filterList (b => snd b == name) bs)
-reexportedOriginsOf _ _ = []
 
 declaresStandalone : String -> List Decl -> Bool
 declaresStandalone _ [] = False
@@ -2312,7 +2308,7 @@ moduleMarkCtx gctx ms mid prog imported =
 (DUse false (UseGroup ("list") ((mem "head" false))))
 (DUse false (UseGroup ("frontend" "marker") ((mem "localBoundNames" false))))
 (DUse false (UseGroup ("types" "private_mangle") ((mem "mangledName" false))))
-(DUse false (UseGroup ("frontend" "visibility") ((mem "useModId" false))))
+(DUse false (UseGroup ("frontend" "visibility") ((mem "useModId" false) (mem "pubUsePaths" false))))
 (DUse false (UseAlias ("map") "IdMap"))
 (DUse false (UseGroup ("types" "tc_foreign") ((mem "declExternNames" false))))
 (DTypeSig true "recoveredShadowSym" (TyFun (TyCon "String") (TyFun (TyApp (TyCon "Ref") (TyCon "Route")) (TyCon "String"))))
@@ -2516,11 +2512,9 @@ moduleMarkCtx gctx ms mid prog imported =
 (DFunDef false "reachableStandaloneSigGo" (PWild PWild (PList)) (EVar "None"))
 (DFunDef false "reachableStandaloneSigGo" ((PVar "graph") (PVar "fuel") (PCons (PTuple (PVar "mid") (PVar "n")) (PVar "rest"))) (EMatch (EApp (EApp (EVar "lookupAssoc") (EVar "mid")) (EVar "graph")) (arm (PCon "None") () (EApp (EApp (EApp (EVar "reachableStandaloneSigGo") (EVar "graph")) (EVar "fuel")) (EVar "rest"))) (arm (PCon "Some" (PVar "ds")) () (EMatch (EApp (EApp (EApp (EApp (EVar "reachableStandaloneSig") (EVar "graph")) (EVar "fuel")) (EVar "ds")) (EVar "n")) (arm (PCon "Some" (PVar "sig")) () (EApp (EVar "Some") (EVar "sig"))) (arm (PCon "None") () (EApp (EApp (EApp (EVar "reachableStandaloneSigGo") (EVar "graph")) (EVar "fuel")) (EVar "rest")))))))
 (DTypeSig false "reexportedOrigins" (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyFun (TyCon "String") (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "String"))))))
-(DFunDef false "reexportedOrigins" ((PVar "decls") (PVar "name")) (EApp (EApp (EVar "flatMap") (ELam ((PVar "d")) (EApp (EApp (EVar "reexportedOriginsOf") (EVar "d")) (EVar "name")))) (EVar "decls")))
-(DTypeSig false "reexportedOriginsOf" (TyFun (TyCon "Decl") (TyFun (TyCon "String") (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "String"))))))
-(DFunDef false "reexportedOriginsOf" ((PCon "DAttrib" PWild (PVar "d")) (PVar "name")) (EApp (EApp (EVar "reexportedOriginsOf") (EVar "d")) (EVar "name")))
-(DFunDef false "reexportedOriginsOf" ((PCon "DUse" (PCon "True") (PVar "path") PWild) (PVar "name")) (EMatch (EApp (EVar "importedBindings") (EVar "path")) (arm (PCon "None") () (EListLit (ETuple (EApp (EVar "useModId") (EVar "path")) (EVar "name")))) (arm (PCon "Some" (PVar "bs")) () (EApp (EApp (EVar "map") (ELam ((PVar "b")) (ETuple (EApp (EVar "useModId") (EVar "path")) (EApp (EVar "fst") (EVar "b"))))) (EApp (EApp (EVar "filterList") (ELam ((PVar "b")) (EBinOp "==" (EApp (EVar "snd") (EVar "b")) (EVar "name")))) (EVar "bs"))))))
-(DFunDef false "reexportedOriginsOf" (PWild PWild) (EListLit))
+(DFunDef false "reexportedOrigins" ((PVar "decls") (PVar "name")) (EApp (EApp (EVar "flatMap") (ELam ((PVar "p")) (EApp (EApp (EVar "reexportedOriginsOf") (EVar "p")) (EVar "name")))) (EApp (EVar "pubUsePaths") (EVar "decls"))))
+(DTypeSig false "reexportedOriginsOf" (TyFun (TyCon "UsePath") (TyFun (TyCon "String") (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "String"))))))
+(DFunDef false "reexportedOriginsOf" ((PVar "path") (PVar "name")) (EMatch (EApp (EVar "importedBindings") (EVar "path")) (arm (PCon "None") () (EListLit (ETuple (EApp (EVar "useModId") (EVar "path")) (EVar "name")))) (arm (PCon "Some" (PVar "bs")) () (EApp (EApp (EVar "map") (ELam ((PVar "b")) (ETuple (EApp (EVar "useModId") (EVar "path")) (EApp (EVar "fst") (EVar "b"))))) (EApp (EApp (EVar "filterList") (ELam ((PVar "b")) (EBinOp "==" (EApp (EVar "snd") (EVar "b")) (EVar "name")))) (EVar "bs"))))))
 (DTypeSig false "declaresStandalone" (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyCon "Bool"))))
 (DFunDef false "declaresStandalone" (PWild (PList)) (EVar "False"))
 (DFunDef false "declaresStandalone" ((PVar "n") (PCons (PCon "DAttrib" PWild (PVar "d")) (PVar "rest"))) (EBinOp "||" (EApp (EApp (EVar "declaresStandalone") (EVar "n")) (EListLit (EVar "d"))) (EApp (EApp (EVar "declaresStandalone") (EVar "n")) (EVar "rest"))))
@@ -2612,7 +2606,7 @@ moduleMarkCtx gctx ms mid prog imported =
 (DUse false (UseGroup ("list") ((mem "head" false))))
 (DUse false (UseGroup ("frontend" "marker") ((mem "localBoundNames" false))))
 (DUse false (UseGroup ("types" "private_mangle") ((mem "mangledName" false))))
-(DUse false (UseGroup ("frontend" "visibility") ((mem "useModId" false))))
+(DUse false (UseGroup ("frontend" "visibility") ((mem "useModId" false) (mem "pubUsePaths" false))))
 (DUse false (UseAlias ("map") "IdMap"))
 (DUse false (UseGroup ("types" "tc_foreign") ((mem "declExternNames" false))))
 (DTypeSig true "recoveredShadowSym" (TyFun (TyCon "String") (TyFun (TyApp (TyCon "Ref") (TyCon "Route")) (TyCon "String"))))
@@ -2816,11 +2810,9 @@ moduleMarkCtx gctx ms mid prog imported =
 (DFunDef false "reachableStandaloneSigGo" (PWild PWild (PList)) (EVar "None"))
 (DFunDef false "reachableStandaloneSigGo" ((PVar "graph") (PVar "fuel") (PCons (PTuple (PVar "mid") (PVar "n")) (PVar "rest"))) (EMatch (EApp (EApp (EVar "lookupAssoc") (EVar "mid")) (EVar "graph")) (arm (PCon "None") () (EApp (EApp (EApp (EVar "reachableStandaloneSigGo") (EVar "graph")) (EVar "fuel")) (EVar "rest"))) (arm (PCon "Some" (PVar "ds")) () (EMatch (EApp (EApp (EApp (EApp (EVar "reachableStandaloneSig") (EVar "graph")) (EVar "fuel")) (EVar "ds")) (EVar "n")) (arm (PCon "Some" (PVar "sig")) () (EApp (EVar "Some") (EVar "sig"))) (arm (PCon "None") () (EApp (EApp (EApp (EVar "reachableStandaloneSigGo") (EVar "graph")) (EVar "fuel")) (EVar "rest")))))))
 (DTypeSig false "reexportedOrigins" (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyFun (TyCon "String") (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "String"))))))
-(DFunDef false "reexportedOrigins" ((PVar "decls") (PVar "name")) (EApp (EApp (EDictApp "flatMap") (ELam ((PVar "d")) (EApp (EApp (EVar "reexportedOriginsOf") (EVar "d")) (EVar "name")))) (EVar "decls")))
-(DTypeSig false "reexportedOriginsOf" (TyFun (TyCon "Decl") (TyFun (TyCon "String") (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "String"))))))
-(DFunDef false "reexportedOriginsOf" ((PCon "DAttrib" PWild (PVar "d")) (PVar "name")) (EApp (EApp (EVar "reexportedOriginsOf") (EVar "d")) (EVar "name")))
-(DFunDef false "reexportedOriginsOf" ((PCon "DUse" (PCon "True") (PVar "path") PWild) (PVar "name")) (EMatch (EApp (EVar "importedBindings") (EVar "path")) (arm (PCon "None") () (EListLit (ETuple (EApp (EVar "useModId") (EVar "path")) (EVar "name")))) (arm (PCon "Some" (PVar "bs")) () (EApp (EApp (EMethodRef "map") (ELam ((PVar "b")) (ETuple (EApp (EVar "useModId") (EVar "path")) (EApp (EVar "fst") (EVar "b"))))) (EApp (EApp (EVar "filterList") (ELam ((PVar "b")) (EBinOp "==" (EApp (EVar "snd") (EVar "b")) (EVar "name")))) (EVar "bs"))))))
-(DFunDef false "reexportedOriginsOf" (PWild PWild) (EListLit))
+(DFunDef false "reexportedOrigins" ((PVar "decls") (PVar "name")) (EApp (EApp (EDictApp "flatMap") (ELam ((PVar "p")) (EApp (EApp (EVar "reexportedOriginsOf") (EVar "p")) (EVar "name")))) (EApp (EVar "pubUsePaths") (EVar "decls"))))
+(DTypeSig false "reexportedOriginsOf" (TyFun (TyCon "UsePath") (TyFun (TyCon "String") (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "String"))))))
+(DFunDef false "reexportedOriginsOf" ((PVar "path") (PVar "name")) (EMatch (EApp (EVar "importedBindings") (EVar "path")) (arm (PCon "None") () (EListLit (ETuple (EApp (EVar "useModId") (EVar "path")) (EVar "name")))) (arm (PCon "Some" (PVar "bs")) () (EApp (EApp (EMethodRef "map") (ELam ((PVar "b")) (ETuple (EApp (EVar "useModId") (EVar "path")) (EApp (EVar "fst") (EVar "b"))))) (EApp (EApp (EVar "filterList") (ELam ((PVar "b")) (EBinOp "==" (EApp (EVar "snd") (EVar "b")) (EVar "name")))) (EVar "bs"))))))
 (DTypeSig false "declaresStandalone" (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyCon "Bool"))))
 (DFunDef false "declaresStandalone" (PWild (PList)) (EVar "False"))
 (DFunDef false "declaresStandalone" ((PVar "n") (PCons (PCon "DAttrib" PWild (PVar "d")) (PVar "rest"))) (EBinOp "||" (EApp (EApp (EVar "declaresStandalone") (EVar "n")) (EListLit (EVar "d"))) (EApp (EApp (EVar "declaresStandalone") (EVar "n")) (EVar "rest"))))

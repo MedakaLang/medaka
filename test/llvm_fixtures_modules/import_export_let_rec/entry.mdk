@@ -1,0 +1,3 @@
+import m.{countdown}
+
+main = putStrLn (intToString (countdown 3))

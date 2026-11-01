@@ -195,7 +195,13 @@ import types.entry_outcome.{
   mainIsUnitNow,
 }
 import frontend.desugar.{mapProg}
-import frontend.visibility.{useModId}
+import frontend.visibility.{
+  useModId,
+  pubUsePaths,
+  exportedValueNames,
+  nsAbstractData,
+  directIn,
+}
 import types.value_main.{inMainBinding}
 import frontend.resolve.{
   programIsCore,
@@ -432,7 +438,6 @@ import types.tc_module.{
   drainStampQueue,
   elabModuleStamp,
   externSchemesGo,
-  publicValNames,
   settleClosedBody,
   verdictFinding,
 }
@@ -454,34 +459,24 @@ ioJoinAtoms domains grants =
         (lookupAssoc l grants))
     hostLabels
 
--- collect the names of all VisAbstract record-shaped (a DData whose variants
--- carry named fields) decls across the given decl list.  Only
--- record-shaped abstract types can be a dot-access receiver, but harvesting any
--- abstract DData name too is harmless (a positional ADT can't reach the abstract
--- branch with a field access — its fields never exist).
-collectAbstractRecordTypes : List Decl -> List String
-collectAbstractRecordTypes [] = []
-collectAbstractRecordTypes ((DData { dataVis = VisAbstract, dataName = n }) :: rest) =
-  n :: collectAbstractRecordTypes rest
-collectAbstractRecordTypes (_ :: rest) = collectAbstractRecordTypes rest
-
--- seed abstractRecordTypesRef from every module's decls (the per-module progs plus
--- the prelude/core decls), once, before checking begins.  Keyed by the type
--- word (`typeTagOf`), so a program's own type that shares an abstract export's
--- name is not mistaken for it.
+-- seed abstractRecordTypesRef from the `VisAbstract` data decls of every module (the
+-- per-module progs plus the prelude/core decls), once, before checking begins.  Keyed
+-- by the type word (`typeTagOf`), so a program's own type that shares an abstract
+-- export's name is not mistaken for it.  Positional ADTs are harvested too, harmlessly:
+-- their fields never exist, so a field access cannot reach the abstract branch.
 seedAbstractRecordTypes : GraphCtx ->
   List Decl ->
   List (String, List Decl) ->
   Unit
 seedAbstractRecordTypes gctx coreDecls modules =
   let abstracts =
-    collectAbstractRecordTypes coreDecls
+    directIn nsAbstractData coreDecls
       ++ flatMap (m => abstractTypeWords (fst m) (snd m)) modules
   gctx.abstractRecordTypesRef := namesToSet abstracts omEmpty
 
 abstractTypeWords : String -> List Decl -> List String
 abstractTypeWords mid decls =
-  map (n => typeTagOf (OriginModule mid) n) (collectAbstractRecordTypes decls)
+  map (n => typeTagOf (OriginModule mid) n) (directIn nsAbstractData decls)
 
 -- Test-only observation (R5): read by `typecheck_test.mdk`, no production caller.
 --
@@ -1008,7 +1003,7 @@ publicModuleExports prog bindings =
     (tagModuleExports
       standalones
       (pickSchemes
-        (publicValNames prog)
+        (exportedValueNames prog)
         (omFromPairs (reverseL bindings.mbSchemes) omEmpty)))
 
 -- The first row for a name wins, unless a second import supplies a different
@@ -1115,7 +1110,7 @@ moduleImportSeed mctx base imported =
 --
 -- Conservatism (the property this rests on): a BARE key — one no loaded module exports
 -- under that exact name with that module's own mangle prefix — is still re-bound under
--- the alias.  That population is exactly the interface METHODS (publicValNames admits
+-- the alias.  That population is exactly the interface METHODS (exportedValueNames admits
 -- them; private_mangle's rename map, built from unitDefNames/pubFnNames, never renames
 -- them), which is the occurrence-carrier question #1276/#1386 own — deliberately NOT
 -- moved here.  The only keys whose binding changes are those a DIFFERENT loaded module
@@ -1316,18 +1311,16 @@ methodsPerMidGo acc ((mid, decls) :: rest) =
 -- method names a module re-exports via `export import src.{…}` (`DUse True`), taken
 -- from `acc` — the dependency's already-folded method set.
 reexportedMethodNames : List (String, List String) -> List Decl -> List String
-reexportedMethodNames acc decls = flatMap (reexportedMethodsOf acc) decls
+reexportedMethodNames acc ds =
+  flatMap (reexportedMethodsOf acc) (pubUsePaths ds)
 
-reexportedMethodsOf : List (String, List String) -> Decl -> List String
-reexportedMethodsOf acc (DAttrib _ d) = reexportedMethodsOf acc d
-reexportedMethodsOf acc (DUse True path _) =
-  match lookupAssoc (useModId path) acc
-    None => []
-    Some srcMethods => match importedBindings path
-      -- `export import src.*` re-exports every one of src's methods
-      None => srcMethods
-      Some bs => filterList (n => contains n srcMethods) (map fst bs)
-reexportedMethodsOf _ _ = []
+reexportedMethodsOf : List (String, List String) -> UsePath -> List String
+reexportedMethodsOf acc path = match lookupAssoc (useModId path) acc
+  None => []
+  Some srcMethods => match importedBindings path
+    -- `export import src.*` re-exports every one of src's methods
+    None => srcMethods
+    Some bs => filterList (n => contains n srcMethods) (map fst bs)
 
 -- Only a MODULE alias is rewritten before inference (`deAliasMethodImports`).  A
 -- member alias reaches inference as written, so `import m.{mth as loc}` binds `loc`
@@ -1561,7 +1554,7 @@ coreRenameScheme coreV m = match useMemberAlias m
     Some s => [(local, s)]
 
 -- the (key, scheme) pairs a module RE-EXPORTS via `export import` (`DUse True`).
--- Mirrors resolve's re-export set (resolve.pubUsePaths filters the same `DUse True`)
+-- Mirrors resolve's re-export set (frontend.visibility.pubUsePaths filters the same `DUse True`)
 -- into the typecheck seed: walk the export-flagged DUse decls and, for each, pick the
 -- re-exported member names out of the SOURCE dependency's public schemes already in
 -- depEnv — the exact member resolution importSeed uses (importFormSchemes /
@@ -1572,7 +1565,7 @@ coreRenameScheme coreV m = match useMemberAlias m
 -- downstream.  Transitivity is automatic: pubV accumulates these and is carried
 -- forward as depEnv, so a second `export import` hop re-resolves against the enriched
 -- pubV.  Methods need no special case — the source module's pubV already holds the
--- method scheme (publicValNames includes DInterface method names).
+-- method scheme (exportedValueNames includes DInterface method names).
 --
 -- `core` is the one source that is NOT in depEnv: it is the implicit prelude, so its
 -- schemes go into `baseSeed`, not into the per-module dep chain.  It is therefore
@@ -1585,17 +1578,19 @@ reexportSeed : List (String, a) ->
   List Decl ->
   List (String, List (String, a)) ->
   List (String, a)
-reexportSeed _ [] _ = []
-reexportSeed coreV ((DAttrib _ d) :: rest) depEnv =
-  reexportSeed coreV [d] depEnv ++ reexportSeed coreV rest depEnv
-reexportSeed coreV ((DUse True path _) :: rest) depEnv =
+reexportSeed coreV decls depEnv =
+  flatMap (reexportSeedOf coreV depEnv) (pubUsePaths decls)
+
+reexportSeedOf : List (String, a) ->
+  List (String, List (String, a)) ->
+  UsePath ->
+  List (String, a)
+reexportSeedOf coreV depEnv path =
   let depId = useModId path
   let src = if depId == "core" then Some coreV else lookupAssoc depId depEnv
   match src
-    None => reexportSeed coreV rest depEnv
-    Some depSchemes =>
-      importFormSchemes depEnv path depSchemes ++ reexportSeed coreV rest depEnv
-reexportSeed coreV (_ :: rest) depEnv = reexportSeed coreV rest depEnv
+    None => []
+    Some depSchemes => importFormSchemes depEnv path depSchemes
 
 foldModules : FoldPlan e acc ->
   Option (ModuleServe e) ->

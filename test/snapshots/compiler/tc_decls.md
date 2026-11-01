@@ -1,5 +1,5 @@
 # META
-source_lines=3248
+source_lines=3233
 stages=DESUGAR,MARK
 # SOURCE
 -- tc_decls: declaration analysis above the written-type layer: building `DataEnv` and `DeclEnvs`
@@ -217,7 +217,7 @@ import support.util.{
 }
 import list.{elemIndex, findMap, head}
 import types.registry.{spFloor}
-import frontend.visibility.{useModId}
+import frontend.visibility.{useModId, pubUsePaths, directIn, nsValues}
 import frontend.resolve.{stampGraphTyOrigins}
 import map as IdMap
 
@@ -2324,21 +2324,19 @@ ctorIdentRow tyName o cn = match mkIdent NsCtor o cn
 reexportedCtorIdents : OrdMap (List (String, String, Ident)) ->
   List Decl ->
   List (String, String, Ident)
-reexportedCtorIdents acc decls = flatMap (reexportedCtorIdentsOf acc) decls
+reexportedCtorIdents acc decls =
+  flatMap (reexportedCtorIdentsOf acc) (pubUsePaths decls)
 
 reexportedCtorIdentsOf : OrdMap (List (String, String, Ident)) ->
-  Decl ->
+  UsePath ->
   List (String, String, Ident)
-reexportedCtorIdentsOf acc (DAttrib _ d) = reexportedCtorIdentsOf acc d
-reexportedCtorIdentsOf acc (DUse True path _) =
-  match omLookup (useModId path) acc
-    None => []
-    Some src => match path
-      -- `export import src.*` re-exports every one of src's constructors
-      UseWild _ => src
-      UseGroup _ ms => flatMap (m => reexportCtorMember m src) ms
-      _ => []
-reexportedCtorIdentsOf _ _ = []
+reexportedCtorIdentsOf acc path = match omLookup (useModId path) acc
+  None => []
+  Some src => match path
+    -- `export import src.*` re-exports every one of src's constructors
+    UseWild _ => src
+    UseGroup _ ms => flatMap (m => reexportCtorMember m src) ms
+    _ => []
 
 reexportCtorMember : UseMember ->
   List (String, String, Ident) ->
@@ -2584,23 +2582,20 @@ modulePubDefiners before mid decls =
   map (n => (n, (mid, n))) (pubTopFnNames decls)
     ++ reexportDefiners before decls
 
--- the rows a module's `export import` decls (`DUse True` — the same filter resolve's
--- `pubUsePaths` and `reexportSeed` use) add to its own export table.  A plain `import`
--- is not re-exported and contributes nothing downstream.
+-- the rows a module's `export import` decls (`pubUsePaths`) add to its own export
+-- table.  A plain `import` is not re-exported and contributes nothing downstream.
 reexportDefiners : OrdMap (List (String, (String, String))) ->
   List Decl ->
   List (String, (String, String))
-reexportDefiners _ [] = []
-reexportDefiners before ((DAttrib _ d) :: rest) =
-  reexportDefiners before [d] ++ reexportDefiners before rest
-reexportDefiners before ((DUse True path _) :: rest) =
+reexportDefiners before decls =
+  flatMap (reexportDefinersOf before) (pubUsePaths decls)
+
+reexportDefinersOf : OrdMap (List (String, (String, String))) ->
+  UsePath ->
+  List (String, (String, String))
+reexportDefinersOf before path =
   let depId = useModId path
-  if depId == "core" then
-    reexportDefiners before rest
-  else
-    importFormRows path (definersIn before depId)
-      ++ reexportDefiners before rest
-reexportDefiners before (_ :: rest) = reexportDefiners before rest
+  if depId == "core" then [] else importFormRows path (definersIn before depId)
 
 -- `declTopFnNames` restricted to the EXPORTED bindings — what a wildcard import can
 -- actually bind.  A private binding must not enter the definer map: it is unreachable
@@ -2614,17 +2609,7 @@ export
 pubTopFnNames : List Decl -> List String
 pubTopFnNames decls =
   let fns = namesToSet (declTopFnNames decls) omEmpty
-  filterList (n => omHasKey n fns) (publicStandaloneNames decls)
-
-publicStandaloneNames : List Decl -> List String
-publicStandaloneNames [] = []
-publicStandaloneNames ((DAttrib _ d) :: rest) =
-  publicStandaloneNames [d] ++ publicStandaloneNames rest
-publicStandaloneNames ((DFunDef True n _ _ _ _) :: rest) =
-  n :: publicStandaloneNames rest
-publicStandaloneNames ((DTypeSig True n _ _) :: rest) =
-  n :: publicStandaloneNames rest
-publicStandaloneNames (_ :: rest) = publicStandaloneNames rest
+  filterList (n => omHasKey n fns) (directIn nsValues decls)
 
 -- test-only observation: declarations whose only callers are tests and probes.
 
@@ -3270,7 +3255,7 @@ distinctIdentsIn2 _ = False
 (DUse false (UseGroup ("support" "util") ((mem "allList" false) (mem "anyList" false) (mem "contains" false) (mem "dedup" false) (mem "filterList" false) (mem "isEmptyL" false) (mem "isNonEmptyL" false) (mem "isSome" false) (mem "listLen" false) (mem "lookupAssoc" false) (mem "reverseL" false) (mem "zipL" false))))
 (DUse false (UseGroup ("list") ((mem "elemIndex" false) (mem "findMap" false) (mem "head" false))))
 (DUse false (UseGroup ("types" "registry") ((mem "spFloor" false))))
-(DUse false (UseGroup ("frontend" "visibility") ((mem "useModId" false))))
+(DUse false (UseGroup ("frontend" "visibility") ((mem "useModId" false) (mem "pubUsePaths" false) (mem "directIn" false) (mem "nsValues" false))))
 (DUse false (UseGroup ("frontend" "resolve") ((mem "stampGraphTyOrigins" false))))
 (DUse false (UseAlias ("map") "IdMap"))
 (DTypeSig true "declEnvAccOf" (TyFun (TyCon "GraphCtx") (TyFun (TyApp (TyCon "List") (TyCon "DeclEnvModule")) (TyFun (TyCon "DeclEnvAcc") (TyCon "DeclEnvAcc")))))
@@ -3638,11 +3623,9 @@ distinctIdentsIn2 _ = False
 (DTypeSig false "ctorIdentRow" (TyFun (TyCon "String") (TyFun (TyCon "TyConOrigin") (TyFun (TyCon "String") (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "String") (TyCon "Ident")))))))
 (DFunDef false "ctorIdentRow" ((PVar "tyName") (PVar "o") (PVar "cn")) (EMatch (EApp (EApp (EApp (EVar "mkIdent") (EVar "NsCtor")) (EVar "o")) (EVar "cn")) (arm (PCon "None") () (EListLit)) (arm (PCon "Some" (PVar "i")) () (EListLit (ETuple (EVar "cn") (EVar "tyName") (EVar "i"))))))
 (DTypeSig false "reexportedCtorIdents" (TyFun (TyApp (TyCon "OrdMap") (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "String") (TyCon "Ident")))) (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "String") (TyCon "Ident"))))))
-(DFunDef false "reexportedCtorIdents" ((PVar "acc") (PVar "decls")) (EApp (EApp (EVar "flatMap") (EApp (EVar "reexportedCtorIdentsOf") (EVar "acc"))) (EVar "decls")))
-(DTypeSig false "reexportedCtorIdentsOf" (TyFun (TyApp (TyCon "OrdMap") (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "String") (TyCon "Ident")))) (TyFun (TyCon "Decl") (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "String") (TyCon "Ident"))))))
-(DFunDef false "reexportedCtorIdentsOf" ((PVar "acc") (PCon "DAttrib" PWild (PVar "d"))) (EApp (EApp (EVar "reexportedCtorIdentsOf") (EVar "acc")) (EVar "d")))
-(DFunDef false "reexportedCtorIdentsOf" ((PVar "acc") (PCon "DUse" (PCon "True") (PVar "path") PWild)) (EMatch (EApp (EApp (EVar "omLookup") (EApp (EVar "useModId") (EVar "path"))) (EVar "acc")) (arm (PCon "None") () (EListLit)) (arm (PCon "Some" (PVar "src")) () (EMatch (EVar "path") (arm (PCon "UseWild" PWild) () (EVar "src")) (arm (PCon "UseGroup" PWild (PVar "ms")) () (EApp (EApp (EVar "flatMap") (ELam ((PVar "m")) (EApp (EApp (EVar "reexportCtorMember") (EVar "m")) (EVar "src")))) (EVar "ms"))) (arm PWild () (EListLit))))))
-(DFunDef false "reexportedCtorIdentsOf" (PWild PWild) (EListLit))
+(DFunDef false "reexportedCtorIdents" ((PVar "acc") (PVar "decls")) (EApp (EApp (EVar "flatMap") (EApp (EVar "reexportedCtorIdentsOf") (EVar "acc"))) (EApp (EVar "pubUsePaths") (EVar "decls"))))
+(DTypeSig false "reexportedCtorIdentsOf" (TyFun (TyApp (TyCon "OrdMap") (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "String") (TyCon "Ident")))) (TyFun (TyCon "UsePath") (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "String") (TyCon "Ident"))))))
+(DFunDef false "reexportedCtorIdentsOf" ((PVar "acc") (PVar "path")) (EMatch (EApp (EApp (EVar "omLookup") (EApp (EVar "useModId") (EVar "path"))) (EVar "acc")) (arm (PCon "None") () (EListLit)) (arm (PCon "Some" (PVar "src")) () (EMatch (EVar "path") (arm (PCon "UseWild" PWild) () (EVar "src")) (arm (PCon "UseGroup" PWild (PVar "ms")) () (EApp (EApp (EVar "flatMap") (ELam ((PVar "m")) (EApp (EApp (EVar "reexportCtorMember") (EVar "m")) (EVar "src")))) (EVar "ms"))) (arm PWild () (EListLit))))))
 (DTypeSig false "reexportCtorMember" (TyFun (TyCon "UseMember") (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "String") (TyCon "Ident"))) (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "String") (TyCon "Ident"))))))
 (DFunDef false "reexportCtorMember" ((PVar "m") (PVar "src")) (EApp (EApp (EVar "filterList") (ELam ((PVar "r")) (EApp (EApp (EVar "rowBoundByMember") (EVar "m")) (EVar "r")))) (EVar "src")))
 (DTypeSig false "rowBoundByMember" (TyFun (TyCon "UseMember") (TyFun (TyTuple (TyCon "String") (TyCon "String") (TyCon "Ident")) (TyCon "Bool"))))
@@ -3692,18 +3675,11 @@ distinctIdentsIn2 _ = False
 (DTypeSig false "modulePubDefiners" (TyFun (TyApp (TyCon "OrdMap") (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyTuple (TyCon "String") (TyCon "String"))))) (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyTuple (TyCon "String") (TyCon "String"))))))))
 (DFunDef false "modulePubDefiners" ((PVar "before") (PVar "mid") (PVar "decls")) (EBinOp "++" (EApp (EApp (EVar "map") (ELam ((PVar "n")) (ETuple (EVar "n") (ETuple (EVar "mid") (EVar "n"))))) (EApp (EVar "pubTopFnNames") (EVar "decls"))) (EApp (EApp (EVar "reexportDefiners") (EVar "before")) (EVar "decls"))))
 (DTypeSig false "reexportDefiners" (TyFun (TyApp (TyCon "OrdMap") (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyTuple (TyCon "String") (TyCon "String"))))) (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyTuple (TyCon "String") (TyCon "String")))))))
-(DFunDef false "reexportDefiners" (PWild (PList)) (EListLit))
-(DFunDef false "reexportDefiners" ((PVar "before") (PCons (PCon "DAttrib" PWild (PVar "d")) (PVar "rest"))) (EBinOp "++" (EApp (EApp (EVar "reexportDefiners") (EVar "before")) (EListLit (EVar "d"))) (EApp (EApp (EVar "reexportDefiners") (EVar "before")) (EVar "rest"))))
-(DFunDef false "reexportDefiners" ((PVar "before") (PCons (PCon "DUse" (PCon "True") (PVar "path") PWild) (PVar "rest"))) (EBlock (DoLet false false (PVar "depId") (EApp (EVar "useModId") (EVar "path"))) (DoExpr (EIf (EBinOp "==" (EVar "depId") (ELit (LString "core"))) (EApp (EApp (EVar "reexportDefiners") (EVar "before")) (EVar "rest")) (EBinOp "++" (EApp (EApp (EVar "importFormRows") (EVar "path")) (EApp (EApp (EVar "definersIn") (EVar "before")) (EVar "depId"))) (EApp (EApp (EVar "reexportDefiners") (EVar "before")) (EVar "rest")))))))
-(DFunDef false "reexportDefiners" ((PVar "before") (PCons PWild (PVar "rest"))) (EApp (EApp (EVar "reexportDefiners") (EVar "before")) (EVar "rest")))
+(DFunDef false "reexportDefiners" ((PVar "before") (PVar "decls")) (EApp (EApp (EVar "flatMap") (EApp (EVar "reexportDefinersOf") (EVar "before"))) (EApp (EVar "pubUsePaths") (EVar "decls"))))
+(DTypeSig false "reexportDefinersOf" (TyFun (TyApp (TyCon "OrdMap") (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyTuple (TyCon "String") (TyCon "String"))))) (TyFun (TyCon "UsePath") (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyTuple (TyCon "String") (TyCon "String")))))))
+(DFunDef false "reexportDefinersOf" ((PVar "before") (PVar "path")) (EBlock (DoLet false false (PVar "depId") (EApp (EVar "useModId") (EVar "path"))) (DoExpr (EIf (EBinOp "==" (EVar "depId") (ELit (LString "core"))) (EListLit) (EApp (EApp (EVar "importFormRows") (EVar "path")) (EApp (EApp (EVar "definersIn") (EVar "before")) (EVar "depId")))))))
 (DTypeSig true "pubTopFnNames" (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyApp (TyCon "List") (TyCon "String"))))
-(DFunDef false "pubTopFnNames" ((PVar "decls")) (EBlock (DoLet false false (PVar "fns") (EApp (EApp (EVar "namesToSet") (EApp (EVar "declTopFnNames") (EVar "decls"))) (EVar "omEmpty"))) (DoExpr (EApp (EApp (EVar "filterList") (ELam ((PVar "n")) (EApp (EApp (EVar "omHasKey") (EVar "n")) (EVar "fns")))) (EApp (EVar "publicStandaloneNames") (EVar "decls"))))))
-(DTypeSig false "publicStandaloneNames" (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyApp (TyCon "List") (TyCon "String"))))
-(DFunDef false "publicStandaloneNames" ((PList)) (EListLit))
-(DFunDef false "publicStandaloneNames" ((PCons (PCon "DAttrib" PWild (PVar "d")) (PVar "rest"))) (EBinOp "++" (EApp (EVar "publicStandaloneNames") (EListLit (EVar "d"))) (EApp (EVar "publicStandaloneNames") (EVar "rest"))))
-(DFunDef false "publicStandaloneNames" ((PCons (PCon "DFunDef" (PCon "True") (PVar "n") PWild PWild PWild PWild) (PVar "rest"))) (EBinOp "::" (EVar "n") (EApp (EVar "publicStandaloneNames") (EVar "rest"))))
-(DFunDef false "publicStandaloneNames" ((PCons (PCon "DTypeSig" (PCon "True") (PVar "n") PWild PWild) (PVar "rest"))) (EBinOp "::" (EVar "n") (EApp (EVar "publicStandaloneNames") (EVar "rest"))))
-(DFunDef false "publicStandaloneNames" ((PCons PWild (PVar "rest"))) (EApp (EVar "publicStandaloneNames") (EVar "rest")))
+(DFunDef false "pubTopFnNames" ((PVar "decls")) (EBlock (DoLet false false (PVar "fns") (EApp (EApp (EVar "namesToSet") (EApp (EVar "declTopFnNames") (EVar "decls"))) (EVar "omEmpty"))) (DoExpr (EApp (EApp (EVar "filterList") (ELam ((PVar "n")) (EApp (EApp (EVar "omHasKey") (EVar "n")) (EVar "fns")))) (EApp (EApp (EVar "directIn") (EVar "nsValues")) (EVar "decls"))))))
 (DTypeSig false "deKindAbstractFixture" (TyCon "Decl"))
 (DFunDef false "deKindAbstractFixture" () (ERecordCreate "DData" ((fa "dataVis" (EVar "VisAbstract")) (fa "dataName" (ELit (LString "Opq"))) (fa "dataParams" (EListLit)) (fa "dataParamKinds" (EListLit)) (fa "dataCtors" (EListLit (EApp (EApp (EVar "Variant") (ELit (LString "MkOpq"))) (EApp (EVar "ConPos") (EListLit (EApp (EApp (EVar "tyConBuiltin") (ELit (LString "Int"))) (EVar "None"))))))) (fa "dataCtorBinders" (EListLit)) (fa "dataDerives" (EListLit)) (fa "dataOrigin" (EApp (EVar "OriginModule") (ELit (LString "m")))) (fa "dataExtern" (EVar "False")) (fa "dataNameLoc" (EVar "None")))))
 (DTypeSig false "deKindPrivateFixture" (TyCon "Decl"))
@@ -3812,7 +3788,7 @@ distinctIdentsIn2 _ = False
 (DUse false (UseGroup ("support" "util") ((mem "allList" false) (mem "anyList" false) (mem "contains" false) (mem "dedup" false) (mem "filterList" false) (mem "isEmptyL" false) (mem "isNonEmptyL" false) (mem "isSome" false) (mem "listLen" false) (mem "lookupAssoc" false) (mem "reverseL" false) (mem "zipL" false))))
 (DUse false (UseGroup ("list") ((mem "elemIndex" false) (mem "findMap" false) (mem "head" false))))
 (DUse false (UseGroup ("types" "registry") ((mem "spFloor" false))))
-(DUse false (UseGroup ("frontend" "visibility") ((mem "useModId" false))))
+(DUse false (UseGroup ("frontend" "visibility") ((mem "useModId" false) (mem "pubUsePaths" false) (mem "directIn" false) (mem "nsValues" false))))
 (DUse false (UseGroup ("frontend" "resolve") ((mem "stampGraphTyOrigins" false))))
 (DUse false (UseAlias ("map") "IdMap"))
 (DTypeSig true "declEnvAccOf" (TyFun (TyCon "GraphCtx") (TyFun (TyApp (TyCon "List") (TyCon "DeclEnvModule")) (TyFun (TyCon "DeclEnvAcc") (TyCon "DeclEnvAcc")))))
@@ -4180,11 +4156,9 @@ distinctIdentsIn2 _ = False
 (DTypeSig false "ctorIdentRow" (TyFun (TyCon "String") (TyFun (TyCon "TyConOrigin") (TyFun (TyCon "String") (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "String") (TyCon "Ident")))))))
 (DFunDef false "ctorIdentRow" ((PVar "tyName") (PVar "o") (PVar "cn")) (EMatch (EApp (EApp (EApp (EVar "mkIdent") (EVar "NsCtor")) (EVar "o")) (EVar "cn")) (arm (PCon "None") () (EListLit)) (arm (PCon "Some" (PVar "i")) () (EListLit (ETuple (EVar "cn") (EVar "tyName") (EVar "i"))))))
 (DTypeSig false "reexportedCtorIdents" (TyFun (TyApp (TyCon "OrdMap") (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "String") (TyCon "Ident")))) (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "String") (TyCon "Ident"))))))
-(DFunDef false "reexportedCtorIdents" ((PVar "acc") (PVar "decls")) (EApp (EApp (EDictApp "flatMap") (EApp (EVar "reexportedCtorIdentsOf") (EVar "acc"))) (EVar "decls")))
-(DTypeSig false "reexportedCtorIdentsOf" (TyFun (TyApp (TyCon "OrdMap") (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "String") (TyCon "Ident")))) (TyFun (TyCon "Decl") (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "String") (TyCon "Ident"))))))
-(DFunDef false "reexportedCtorIdentsOf" ((PVar "acc") (PCon "DAttrib" PWild (PVar "d"))) (EApp (EApp (EVar "reexportedCtorIdentsOf") (EVar "acc")) (EVar "d")))
-(DFunDef false "reexportedCtorIdentsOf" ((PVar "acc") (PCon "DUse" (PCon "True") (PVar "path") PWild)) (EMatch (EApp (EApp (EVar "omLookup") (EApp (EVar "useModId") (EVar "path"))) (EVar "acc")) (arm (PCon "None") () (EListLit)) (arm (PCon "Some" (PVar "src")) () (EMatch (EVar "path") (arm (PCon "UseWild" PWild) () (EVar "src")) (arm (PCon "UseGroup" PWild (PVar "ms")) () (EApp (EApp (EDictApp "flatMap") (ELam ((PVar "m")) (EApp (EApp (EVar "reexportCtorMember") (EVar "m")) (EVar "src")))) (EVar "ms"))) (arm PWild () (EListLit))))))
-(DFunDef false "reexportedCtorIdentsOf" (PWild PWild) (EListLit))
+(DFunDef false "reexportedCtorIdents" ((PVar "acc") (PVar "decls")) (EApp (EApp (EDictApp "flatMap") (EApp (EVar "reexportedCtorIdentsOf") (EVar "acc"))) (EApp (EVar "pubUsePaths") (EVar "decls"))))
+(DTypeSig false "reexportedCtorIdentsOf" (TyFun (TyApp (TyCon "OrdMap") (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "String") (TyCon "Ident")))) (TyFun (TyCon "UsePath") (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "String") (TyCon "Ident"))))))
+(DFunDef false "reexportedCtorIdentsOf" ((PVar "acc") (PVar "path")) (EMatch (EApp (EApp (EVar "omLookup") (EApp (EVar "useModId") (EVar "path"))) (EVar "acc")) (arm (PCon "None") () (EListLit)) (arm (PCon "Some" (PVar "src")) () (EMatch (EVar "path") (arm (PCon "UseWild" PWild) () (EVar "src")) (arm (PCon "UseGroup" PWild (PVar "ms")) () (EApp (EApp (EDictApp "flatMap") (ELam ((PVar "m")) (EApp (EApp (EVar "reexportCtorMember") (EVar "m")) (EVar "src")))) (EVar "ms"))) (arm PWild () (EListLit))))))
 (DTypeSig false "reexportCtorMember" (TyFun (TyCon "UseMember") (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "String") (TyCon "Ident"))) (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "String") (TyCon "Ident"))))))
 (DFunDef false "reexportCtorMember" ((PVar "m") (PVar "src")) (EApp (EApp (EVar "filterList") (ELam ((PVar "r")) (EApp (EApp (EVar "rowBoundByMember") (EVar "m")) (EVar "r")))) (EVar "src")))
 (DTypeSig false "rowBoundByMember" (TyFun (TyCon "UseMember") (TyFun (TyTuple (TyCon "String") (TyCon "String") (TyCon "Ident")) (TyCon "Bool"))))
@@ -4234,18 +4208,11 @@ distinctIdentsIn2 _ = False
 (DTypeSig false "modulePubDefiners" (TyFun (TyApp (TyCon "OrdMap") (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyTuple (TyCon "String") (TyCon "String"))))) (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyTuple (TyCon "String") (TyCon "String"))))))))
 (DFunDef false "modulePubDefiners" ((PVar "before") (PVar "mid") (PVar "decls")) (EBinOp "++" (EApp (EApp (EMethodRef "map") (ELam ((PVar "n")) (ETuple (EVar "n") (ETuple (EVar "mid") (EVar "n"))))) (EApp (EVar "pubTopFnNames") (EVar "decls"))) (EApp (EApp (EVar "reexportDefiners") (EVar "before")) (EVar "decls"))))
 (DTypeSig false "reexportDefiners" (TyFun (TyApp (TyCon "OrdMap") (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyTuple (TyCon "String") (TyCon "String"))))) (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyTuple (TyCon "String") (TyCon "String")))))))
-(DFunDef false "reexportDefiners" (PWild (PList)) (EListLit))
-(DFunDef false "reexportDefiners" ((PVar "before") (PCons (PCon "DAttrib" PWild (PVar "d")) (PVar "rest"))) (EBinOp "++" (EApp (EApp (EVar "reexportDefiners") (EVar "before")) (EListLit (EVar "d"))) (EApp (EApp (EVar "reexportDefiners") (EVar "before")) (EVar "rest"))))
-(DFunDef false "reexportDefiners" ((PVar "before") (PCons (PCon "DUse" (PCon "True") (PVar "path") PWild) (PVar "rest"))) (EBlock (DoLet false false (PVar "depId") (EApp (EVar "useModId") (EVar "path"))) (DoExpr (EIf (EBinOp "==" (EVar "depId") (ELit (LString "core"))) (EApp (EApp (EVar "reexportDefiners") (EVar "before")) (EVar "rest")) (EBinOp "++" (EApp (EApp (EVar "importFormRows") (EVar "path")) (EApp (EApp (EVar "definersIn") (EVar "before")) (EVar "depId"))) (EApp (EApp (EVar "reexportDefiners") (EVar "before")) (EVar "rest")))))))
-(DFunDef false "reexportDefiners" ((PVar "before") (PCons PWild (PVar "rest"))) (EApp (EApp (EVar "reexportDefiners") (EVar "before")) (EVar "rest")))
+(DFunDef false "reexportDefiners" ((PVar "before") (PVar "decls")) (EApp (EApp (EDictApp "flatMap") (EApp (EVar "reexportDefinersOf") (EVar "before"))) (EApp (EVar "pubUsePaths") (EVar "decls"))))
+(DTypeSig false "reexportDefinersOf" (TyFun (TyApp (TyCon "OrdMap") (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyTuple (TyCon "String") (TyCon "String"))))) (TyFun (TyCon "UsePath") (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyTuple (TyCon "String") (TyCon "String")))))))
+(DFunDef false "reexportDefinersOf" ((PVar "before") (PVar "path")) (EBlock (DoLet false false (PVar "depId") (EApp (EVar "useModId") (EVar "path"))) (DoExpr (EIf (EBinOp "==" (EVar "depId") (ELit (LString "core"))) (EListLit) (EApp (EApp (EVar "importFormRows") (EVar "path")) (EApp (EApp (EVar "definersIn") (EVar "before")) (EVar "depId")))))))
 (DTypeSig true "pubTopFnNames" (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyApp (TyCon "List") (TyCon "String"))))
-(DFunDef false "pubTopFnNames" ((PVar "decls")) (EBlock (DoLet false false (PVar "fns") (EApp (EApp (EVar "namesToSet") (EApp (EVar "declTopFnNames") (EVar "decls"))) (EVar "omEmpty"))) (DoExpr (EApp (EApp (EVar "filterList") (ELam ((PVar "n")) (EApp (EApp (EVar "omHasKey") (EVar "n")) (EVar "fns")))) (EApp (EVar "publicStandaloneNames") (EVar "decls"))))))
-(DTypeSig false "publicStandaloneNames" (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyApp (TyCon "List") (TyCon "String"))))
-(DFunDef false "publicStandaloneNames" ((PList)) (EListLit))
-(DFunDef false "publicStandaloneNames" ((PCons (PCon "DAttrib" PWild (PVar "d")) (PVar "rest"))) (EBinOp "++" (EApp (EVar "publicStandaloneNames") (EListLit (EVar "d"))) (EApp (EVar "publicStandaloneNames") (EVar "rest"))))
-(DFunDef false "publicStandaloneNames" ((PCons (PCon "DFunDef" (PCon "True") (PVar "n") PWild PWild PWild PWild) (PVar "rest"))) (EBinOp "::" (EVar "n") (EApp (EVar "publicStandaloneNames") (EVar "rest"))))
-(DFunDef false "publicStandaloneNames" ((PCons (PCon "DTypeSig" (PCon "True") (PVar "n") PWild PWild) (PVar "rest"))) (EBinOp "::" (EVar "n") (EApp (EVar "publicStandaloneNames") (EVar "rest"))))
-(DFunDef false "publicStandaloneNames" ((PCons PWild (PVar "rest"))) (EApp (EVar "publicStandaloneNames") (EVar "rest")))
+(DFunDef false "pubTopFnNames" ((PVar "decls")) (EBlock (DoLet false false (PVar "fns") (EApp (EApp (EVar "namesToSet") (EApp (EVar "declTopFnNames") (EVar "decls"))) (EVar "omEmpty"))) (DoExpr (EApp (EApp (EVar "filterList") (ELam ((PVar "n")) (EApp (EApp (EVar "omHasKey") (EVar "n")) (EVar "fns")))) (EApp (EApp (EVar "directIn") (EVar "nsValues")) (EVar "decls"))))))
 (DTypeSig false "deKindAbstractFixture" (TyCon "Decl"))
 (DFunDef false "deKindAbstractFixture" () (ERecordCreate "DData" ((fa "dataVis" (EVar "VisAbstract")) (fa "dataName" (ELit (LString "Opq"))) (fa "dataParams" (EListLit)) (fa "dataParamKinds" (EListLit)) (fa "dataCtors" (EListLit (EApp (EApp (EVar "Variant") (ELit (LString "MkOpq"))) (EApp (EVar "ConPos") (EListLit (EApp (EApp (EVar "tyConBuiltin") (ELit (LString "Int"))) (EVar "None"))))))) (fa "dataCtorBinders" (EListLit)) (fa "dataDerives" (EListLit)) (fa "dataOrigin" (EApp (EVar "OriginModule") (ELit (LString "m")))) (fa "dataExtern" (EVar "False")) (fa "dataNameLoc" (EVar "None")))))
 (DTypeSig false "deKindPrivateFixture" (TyCon "Decl"))

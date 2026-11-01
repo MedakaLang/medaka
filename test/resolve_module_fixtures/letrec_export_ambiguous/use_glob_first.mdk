@@ -1,0 +1,7 @@
+-- A `let rec` binder is exported by `m` like a signature-exported function, so a glob
+-- import of `m` collides with an explicit import of `n`.countdown (glob first).
+import m.*
+import n.{countdown}
+
+f : Int -> Int
+f x = countdown x
