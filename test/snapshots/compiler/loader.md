@@ -1,5 +1,5 @@
 # META
-source_lines=1666
+source_lines=1721
 stages=DESUGAR,MARK
 # SOURCE
 -- Parse a root .mdk file's transitive imports and return
@@ -971,6 +971,61 @@ canonicalPathId deps roots path =
       let c = moduleIdOfPath [cr] cPath
       if canonRoundTrips deps roots c cPath then c else fallback
 
+-- The test-sibling relation: `path` is the sibling of the file `<dir>/<m>.mdk` exactly
+-- when it is `<dir>/<m>_test.mdk`, `m` does not itself end in `_test` (one level only),
+-- the subject exists, and both lie in one directory of one project after
+-- `canonicalizePath`.  Answers the subject's canonical module id.  The relation is
+-- physical, never a module-id comparison: stdlib ids are bare names, so a user root's
+-- `net_test.mdk` is not the sibling of stdlib `net`.
+export
+siblingSubjectId : List (String, String) ->
+  List String ->
+  String ->
+  String ->
+  <IO> Option String
+siblingSubjectId deps roots stdlibDir path =
+  let cPath = canonicalizePath path
+  let cDir = parentDir cPath
+  match siblingSubjectName (dropPrefix (stringLength cDir + 1) cPath)
+    None => None
+    Some subject =>
+      let subjectPath = stringConcat [cDir, "/", subject]
+      if not (fileExists subjectPath) then
+        None
+      else
+        let cSubject = canonicalizePath subjectPath
+        let cStd = canonicalizePath stdlibDir
+        if parentDir cSubject == cDir && sameProjectDir cStd cDir cSubject then
+          Some (canonicalPathId deps roots cSubject)
+        else
+          None
+
+-- `foo_test.mdk` → `foo.mdk`; a name without the `_test.mdk` suffix, or whose
+-- subject would itself be a test file, has no subject.
+siblingSubjectName : String -> Option String
+siblingSubjectName file =
+  if endsWith "_test.mdk" file then
+    let stem = stripSuffixStr "_test.mdk" file
+    if endsWith "_test" stem || stringLength stem == 0 then
+      None
+    else
+      Some (stringConcat [stem, ".mdk"])
+  else
+    None
+
+-- Both files (one directory, canonical) belong to one project: the same
+-- `medaka.toml` directory, or the stdlib tree.
+sameProjectDir : String -> String -> String -> <IO> Bool
+sameProjectDir cStd cDir cSubject =
+  let subjectDir = parentDir cSubject
+  if inStdlib cStd cDir && inStdlib cStd subjectDir then
+    True
+  else
+    findProjectRoot cDir == findProjectRoot subjectDir
+
+inStdlib : String -> String -> Bool
+inStdlib cStd dir = dir == cStd || underDir cStd dir
+
 -- rewrite a UsePath so its `useModId` yields the canonical id `c`, preserving
 -- the imported member list / wildcard / alias / single name.  (For UseName the
 -- imported NAME is the last segment; the module path is the prefix — so appending
@@ -1832,6 +1887,14 @@ loadProgramFilesLocatedCachedSourcesE parseCacheRef read entry roots =
 (DFunDef false "canonicalModId" ((PVar "deps") (PVar "roots") (PVar "m")) (EMatch (EApp (EApp (EApp (EVar "findModuleFile") (EVar "deps")) (EVar "roots")) (EVar "m")) (arm (PCon "None") () (EVar "m")) (arm (PCon "Some" (PTuple (PVar "path") (PVar "owningRoot"))) () (EBlock (DoLet false false (PVar "cOwn") (EApp (EVar "canonicalizePath") (EVar "owningRoot"))) (DoExpr (EMatch (EApp (EApp (EVar "revLookupRoot") (EVar "cOwn")) (EVar "deps")) (arm (PCon "Some" (PVar "depName")) () (EApp (EVar "stringConcat") (EListLit (EVar "depName") (ELit (LString ".")) (EApp (EApp (EVar "moduleIdOfPath") (EListLit (EVar "cOwn"))) (EApp (EVar "canonicalizePath") (EVar "path")))))) (arm (PCon "None") () (EBlock (DoLet false false (PVar "cPath") (EApp (EVar "canonicalizePath") (EVar "path"))) (DoExpr (EMatch (EApp (EApp (EVar "canonRootFor") (EVar "roots")) (EVar "cPath")) (arm (PCon "None") () (EVar "m")) (arm (PCon "Some" (PVar "cr")) () (EBlock (DoLet false false (PVar "c") (EApp (EApp (EVar "moduleIdOfPath") (EListLit (EVar "cr"))) (EVar "cPath"))) (DoExpr (EIf (EApp (EApp (EApp (EApp (EVar "canonRoundTrips") (EVar "deps")) (EVar "roots")) (EVar "c")) (EVar "cPath")) (EVar "c") (EVar "m")))))))))))))))
 (DTypeSig true "canonicalPathId" (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "String"))) (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyCon "String") (TyEffect ("IO") None (TyCon "String"))))))
 (DFunDef false "canonicalPathId" ((PVar "deps") (PVar "roots") (PVar "path")) (EBlock (DoLet false false (PVar "cPath") (EApp (EVar "canonicalizePath") (EVar "path"))) (DoLet false false (PVar "fallback") (EApp (EApp (EVar "moduleIdOfPath") (EVar "roots")) (EVar "path"))) (DoExpr (EMatch (EApp (EApp (EVar "canonRootFor") (EVar "roots")) (EVar "cPath")) (arm (PCon "None") () (EVar "fallback")) (arm (PCon "Some" (PVar "cr")) () (EBlock (DoLet false false (PVar "c") (EApp (EApp (EVar "moduleIdOfPath") (EListLit (EVar "cr"))) (EVar "cPath"))) (DoExpr (EIf (EApp (EApp (EApp (EApp (EVar "canonRoundTrips") (EVar "deps")) (EVar "roots")) (EVar "c")) (EVar "cPath")) (EVar "c") (EVar "fallback")))))))))
+(DTypeSig true "siblingSubjectId" (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "String"))) (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyCon "String") (TyFun (TyCon "String") (TyEffect ("IO") None (TyApp (TyCon "Option") (TyCon "String"))))))))
+(DFunDef false "siblingSubjectId" ((PVar "deps") (PVar "roots") (PVar "stdlibDir") (PVar "path")) (EBlock (DoLet false false (PVar "cPath") (EApp (EVar "canonicalizePath") (EVar "path"))) (DoLet false false (PVar "cDir") (EApp (EVar "parentDir") (EVar "cPath"))) (DoExpr (EMatch (EApp (EVar "siblingSubjectName") (EApp (EApp (EVar "dropPrefix") (EBinOp "+" (EApp (EVar "stringLength") (EVar "cDir")) (ELit (LInt 1)))) (EVar "cPath"))) (arm (PCon "None") () (EVar "None")) (arm (PCon "Some" (PVar "subject")) () (EBlock (DoLet false false (PVar "subjectPath") (EApp (EVar "stringConcat") (EListLit (EVar "cDir") (ELit (LString "/")) (EVar "subject")))) (DoExpr (EIf (EApp (EVar "not") (EApp (EVar "fileExists") (EVar "subjectPath"))) (EVar "None") (EBlock (DoLet false false (PVar "cSubject") (EApp (EVar "canonicalizePath") (EVar "subjectPath"))) (DoLet false false (PVar "cStd") (EApp (EVar "canonicalizePath") (EVar "stdlibDir"))) (DoExpr (EIf (EBinOp "&&" (EBinOp "==" (EApp (EVar "parentDir") (EVar "cSubject")) (EVar "cDir")) (EApp (EApp (EApp (EVar "sameProjectDir") (EVar "cStd")) (EVar "cDir")) (EVar "cSubject"))) (EApp (EVar "Some") (EApp (EApp (EApp (EVar "canonicalPathId") (EVar "deps")) (EVar "roots")) (EVar "cSubject"))) (EVar "None"))))))))))))
+(DTypeSig false "siblingSubjectName" (TyFun (TyCon "String") (TyApp (TyCon "Option") (TyCon "String"))))
+(DFunDef false "siblingSubjectName" ((PVar "file")) (EIf (EApp (EApp (EVar "endsWith") (ELit (LString "_test.mdk"))) (EVar "file")) (EBlock (DoLet false false (PVar "stem") (EApp (EApp (EVar "stripSuffixStr") (ELit (LString "_test.mdk"))) (EVar "file"))) (DoExpr (EIf (EBinOp "||" (EApp (EApp (EVar "endsWith") (ELit (LString "_test"))) (EVar "stem")) (EBinOp "==" (EApp (EVar "stringLength") (EVar "stem")) (ELit (LInt 0)))) (EVar "None") (EApp (EVar "Some") (EApp (EVar "stringConcat") (EListLit (EVar "stem") (ELit (LString ".mdk")))))))) (EVar "None")))
+(DTypeSig false "sameProjectDir" (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyCon "String") (TyEffect ("IO") None (TyCon "Bool"))))))
+(DFunDef false "sameProjectDir" ((PVar "cStd") (PVar "cDir") (PVar "cSubject")) (EBlock (DoLet false false (PVar "subjectDir") (EApp (EVar "parentDir") (EVar "cSubject"))) (DoExpr (EIf (EBinOp "&&" (EApp (EApp (EVar "inStdlib") (EVar "cStd")) (EVar "cDir")) (EApp (EApp (EVar "inStdlib") (EVar "cStd")) (EVar "subjectDir"))) (EVar "True") (EBinOp "==" (EApp (EVar "findProjectRoot") (EVar "cDir")) (EApp (EVar "findProjectRoot") (EVar "subjectDir")))))))
+(DTypeSig false "inStdlib" (TyFun (TyCon "String") (TyFun (TyCon "String") (TyCon "Bool"))))
+(DFunDef false "inStdlib" ((PVar "cStd") (PVar "dir")) (EBinOp "||" (EBinOp "==" (EVar "dir") (EVar "cStd")) (EApp (EApp (EVar "underDir") (EVar "cStd")) (EVar "dir"))))
 (DTypeSig false "rewriteUsePath" (TyFun (TyCon "String") (TyFun (TyCon "UsePath") (TyCon "UsePath"))))
 (DFunDef false "rewriteUsePath" ((PVar "c") (PCon "UseName" (PVar "ns"))) (EApp (EVar "UseName") (EBinOp "++" (EApp (EVar "splitDot") (EVar "c")) (EListLit (EApp (EApp (EVar "lastOr") (ELit (LString ""))) (EVar "ns"))))))
 (DFunDef false "rewriteUsePath" ((PVar "c") (PCon "UseGroup" PWild (PVar "ms"))) (EApp (EApp (EVar "UseGroup") (EApp (EVar "splitDot") (EVar "c"))) (EVar "ms")))
@@ -2091,6 +2154,14 @@ loadProgramFilesLocatedCachedSourcesE parseCacheRef read entry roots =
 (DFunDef false "canonicalModId" ((PVar "deps") (PVar "roots") (PVar "m")) (EMatch (EApp (EApp (EApp (EVar "findModuleFile") (EVar "deps")) (EVar "roots")) (EVar "m")) (arm (PCon "None") () (EVar "m")) (arm (PCon "Some" (PTuple (PVar "path") (PVar "owningRoot"))) () (EBlock (DoLet false false (PVar "cOwn") (EApp (EVar "canonicalizePath") (EVar "owningRoot"))) (DoExpr (EMatch (EApp (EApp (EVar "revLookupRoot") (EVar "cOwn")) (EVar "deps")) (arm (PCon "Some" (PVar "depName")) () (EApp (EVar "stringConcat") (EListLit (EVar "depName") (ELit (LString ".")) (EApp (EApp (EVar "moduleIdOfPath") (EListLit (EVar "cOwn"))) (EApp (EVar "canonicalizePath") (EVar "path")))))) (arm (PCon "None") () (EBlock (DoLet false false (PVar "cPath") (EApp (EVar "canonicalizePath") (EVar "path"))) (DoExpr (EMatch (EApp (EApp (EVar "canonRootFor") (EVar "roots")) (EVar "cPath")) (arm (PCon "None") () (EVar "m")) (arm (PCon "Some" (PVar "cr")) () (EBlock (DoLet false false (PVar "c") (EApp (EApp (EVar "moduleIdOfPath") (EListLit (EVar "cr"))) (EVar "cPath"))) (DoExpr (EIf (EApp (EApp (EApp (EApp (EVar "canonRoundTrips") (EVar "deps")) (EVar "roots")) (EVar "c")) (EVar "cPath")) (EVar "c") (EVar "m")))))))))))))))
 (DTypeSig true "canonicalPathId" (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "String"))) (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyCon "String") (TyEffect ("IO") None (TyCon "String"))))))
 (DFunDef false "canonicalPathId" ((PVar "deps") (PVar "roots") (PVar "path")) (EBlock (DoLet false false (PVar "cPath") (EApp (EVar "canonicalizePath") (EVar "path"))) (DoLet false false (PVar "fallback") (EApp (EApp (EVar "moduleIdOfPath") (EVar "roots")) (EVar "path"))) (DoExpr (EMatch (EApp (EApp (EVar "canonRootFor") (EVar "roots")) (EVar "cPath")) (arm (PCon "None") () (EVar "fallback")) (arm (PCon "Some" (PVar "cr")) () (EBlock (DoLet false false (PVar "c") (EApp (EApp (EVar "moduleIdOfPath") (EListLit (EVar "cr"))) (EVar "cPath"))) (DoExpr (EIf (EApp (EApp (EApp (EApp (EVar "canonRoundTrips") (EVar "deps")) (EVar "roots")) (EVar "c")) (EVar "cPath")) (EVar "c") (EVar "fallback")))))))))
+(DTypeSig true "siblingSubjectId" (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "String"))) (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyCon "String") (TyFun (TyCon "String") (TyEffect ("IO") None (TyApp (TyCon "Option") (TyCon "String"))))))))
+(DFunDef false "siblingSubjectId" ((PVar "deps") (PVar "roots") (PVar "stdlibDir") (PVar "path")) (EBlock (DoLet false false (PVar "cPath") (EApp (EVar "canonicalizePath") (EVar "path"))) (DoLet false false (PVar "cDir") (EApp (EVar "parentDir") (EVar "cPath"))) (DoExpr (EMatch (EApp (EVar "siblingSubjectName") (EApp (EApp (EVar "dropPrefix") (EBinOp "+" (EApp (EVar "stringLength") (EVar "cDir")) (ELit (LInt 1)))) (EVar "cPath"))) (arm (PCon "None") () (EVar "None")) (arm (PCon "Some" (PVar "subject")) () (EBlock (DoLet false false (PVar "subjectPath") (EApp (EVar "stringConcat") (EListLit (EVar "cDir") (ELit (LString "/")) (EVar "subject")))) (DoExpr (EIf (EApp (EVar "not") (EApp (EVar "fileExists") (EVar "subjectPath"))) (EVar "None") (EBlock (DoLet false false (PVar "cSubject") (EApp (EVar "canonicalizePath") (EVar "subjectPath"))) (DoLet false false (PVar "cStd") (EApp (EVar "canonicalizePath") (EVar "stdlibDir"))) (DoExpr (EIf (EBinOp "&&" (EBinOp "==" (EApp (EVar "parentDir") (EVar "cSubject")) (EVar "cDir")) (EApp (EApp (EApp (EVar "sameProjectDir") (EVar "cStd")) (EVar "cDir")) (EVar "cSubject"))) (EApp (EVar "Some") (EApp (EApp (EApp (EVar "canonicalPathId") (EVar "deps")) (EVar "roots")) (EVar "cSubject"))) (EVar "None"))))))))))))
+(DTypeSig false "siblingSubjectName" (TyFun (TyCon "String") (TyApp (TyCon "Option") (TyCon "String"))))
+(DFunDef false "siblingSubjectName" ((PVar "file")) (EIf (EApp (EApp (EVar "endsWith") (ELit (LString "_test.mdk"))) (EVar "file")) (EBlock (DoLet false false (PVar "stem") (EApp (EApp (EVar "stripSuffixStr") (ELit (LString "_test.mdk"))) (EVar "file"))) (DoExpr (EIf (EBinOp "||" (EApp (EApp (EVar "endsWith") (ELit (LString "_test"))) (EVar "stem")) (EBinOp "==" (EApp (EVar "stringLength") (EVar "stem")) (ELit (LInt 0)))) (EVar "None") (EApp (EVar "Some") (EApp (EVar "stringConcat") (EListLit (EVar "stem") (ELit (LString ".mdk")))))))) (EVar "None")))
+(DTypeSig false "sameProjectDir" (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyCon "String") (TyEffect ("IO") None (TyCon "Bool"))))))
+(DFunDef false "sameProjectDir" ((PVar "cStd") (PVar "cDir") (PVar "cSubject")) (EBlock (DoLet false false (PVar "subjectDir") (EApp (EVar "parentDir") (EVar "cSubject"))) (DoExpr (EIf (EBinOp "&&" (EApp (EApp (EVar "inStdlib") (EVar "cStd")) (EVar "cDir")) (EApp (EApp (EVar "inStdlib") (EVar "cStd")) (EVar "subjectDir"))) (EVar "True") (EBinOp "==" (EApp (EVar "findProjectRoot") (EVar "cDir")) (EApp (EVar "findProjectRoot") (EVar "subjectDir")))))))
+(DTypeSig false "inStdlib" (TyFun (TyCon "String") (TyFun (TyCon "String") (TyCon "Bool"))))
+(DFunDef false "inStdlib" ((PVar "cStd") (PVar "dir")) (EBinOp "||" (EBinOp "==" (EVar "dir") (EVar "cStd")) (EApp (EApp (EVar "underDir") (EVar "cStd")) (EVar "dir"))))
 (DTypeSig false "rewriteUsePath" (TyFun (TyCon "String") (TyFun (TyCon "UsePath") (TyCon "UsePath"))))
 (DFunDef false "rewriteUsePath" ((PVar "c") (PCon "UseName" (PVar "ns"))) (EApp (EVar "UseName") (EBinOp "++" (EApp (EVar "splitDot") (EVar "c")) (EListLit (EApp (EApp (EVar "lastOr") (ELit (LString ""))) (EVar "ns"))))))
 (DFunDef false "rewriteUsePath" ((PVar "c") (PCon "UseGroup" PWild (PVar "ms"))) (EApp (EApp (EVar "UseGroup") (EApp (EVar "splitDot") (EVar "c"))) (EVar "ms")))

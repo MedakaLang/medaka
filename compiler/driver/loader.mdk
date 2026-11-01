@@ -967,6 +967,61 @@ canonicalPathId deps roots path =
       let c = moduleIdOfPath [cr] cPath
       if canonRoundTrips deps roots c cPath then c else fallback
 
+-- The test-sibling relation: `path` is the sibling of the file `<dir>/<m>.mdk` exactly
+-- when it is `<dir>/<m>_test.mdk`, `m` does not itself end in `_test` (one level only),
+-- the subject exists, and both lie in one directory of one project after
+-- `canonicalizePath`.  Answers the subject's canonical module id.  The relation is
+-- physical, never a module-id comparison: stdlib ids are bare names, so a user root's
+-- `net_test.mdk` is not the sibling of stdlib `net`.
+export
+siblingSubjectId : List (String, String) ->
+  List String ->
+  String ->
+  String ->
+  <IO> Option String
+siblingSubjectId deps roots stdlibDir path =
+  let cPath = canonicalizePath path
+  let cDir = parentDir cPath
+  match siblingSubjectName (dropPrefix (stringLength cDir + 1) cPath)
+    None => None
+    Some subject =>
+      let subjectPath = stringConcat [cDir, "/", subject]
+      if not (fileExists subjectPath) then
+        None
+      else
+        let cSubject = canonicalizePath subjectPath
+        let cStd = canonicalizePath stdlibDir
+        if parentDir cSubject == cDir && sameProjectDir cStd cDir cSubject then
+          Some (canonicalPathId deps roots cSubject)
+        else
+          None
+
+-- `foo_test.mdk` → `foo.mdk`; a name without the `_test.mdk` suffix, or whose
+-- subject would itself be a test file, has no subject.
+siblingSubjectName : String -> Option String
+siblingSubjectName file =
+  if endsWith "_test.mdk" file then
+    let stem = stripSuffixStr "_test.mdk" file
+    if endsWith "_test" stem || stringLength stem == 0 then
+      None
+    else
+      Some (stringConcat [stem, ".mdk"])
+  else
+    None
+
+-- Both files (one directory, canonical) belong to one project: the same
+-- `medaka.toml` directory, or the stdlib tree.
+sameProjectDir : String -> String -> String -> <IO> Bool
+sameProjectDir cStd cDir cSubject =
+  let subjectDir = parentDir cSubject
+  if inStdlib cStd cDir && inStdlib cStd subjectDir then
+    True
+  else
+    findProjectRoot cDir == findProjectRoot subjectDir
+
+inStdlib : String -> String -> Bool
+inStdlib cStd dir = dir == cStd || underDir cStd dir
+
 -- rewrite a UsePath so its `useModId` yields the canonical id `c`, preserving
 -- the imported member list / wildcard / alias / single name.  (For UseName the
 -- imported NAME is the last segment; the module path is the prefix — so appending

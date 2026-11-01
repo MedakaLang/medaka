@@ -610,6 +610,11 @@ inlang-frontend-ast-walk-test:
 inlang-frontend-visibility-test:
 	./medaka test compiler/frontend/visibility_test.mdk
 
+## compiler/driver/loader_test.mdk is a `*_test.mdk` sibling, outside every
+## entry's import closure ([W-MODULE-BLIND]): it pins the test-sibling relation.
+inlang-driver-loader-test:
+	./medaka test compiler/driver/loader_test.mdk
+
 ## compiler/types/prelude_elab.mdk is imported by types.typecheck and
 ## driver.build_cmd; this step runs its own sibling test by name.
 inlang-types-prelude-elab-test:
