@@ -142,6 +142,31 @@ if [ -x "$MODULES" ] && "$MODULES" "$RUNTIME" "$CORE" "$WORK/input.mdk" "$WORK" 
 if [ -f "$PLAYGROUND" ] && node "$ROOT/playground/dev_compile_node.mjs" "$PLAYGROUND" "$RUNTIME" "$CORE" "$WORK/input.mdk" >"$WORK/playground.wat" 2>"$WORK/playground.emit.err"; then check_wat playground "$WORK/playground.wat"; else bad "playground compiler failed"; cat "$WORK/playground.emit.err"; fi
 if MEDAKA_STRICT=1 MEDAKA_WASM_EMITTER="$MODULES" "$ROOT/medaka" build --target wasm --keep-ir "$WORK/input.mdk" -o "$WORK/cli.wasm" >"$WORK/cli.build.out" 2>"$WORK/cli.build.err"; then check_wat cli-text "$WORK/cli.wasm.wat"; check_cli cli; else bad "CLI Float compiler failed"; cat "$WORK/cli.build.err"; fi
 check_product_imports "$WORK/modules.wasm" "$WORK/playground.wasm" "$WORK/cli.wasm"
+# #4684: the same successful compilation loses bytes when stdout is backpressured.
+checks=$((checks + 1))
+python3 - "$ROOT" "$PLAYGROUND" "$WORK/input.mdk" "$WORK" <<'PY' || bad "#4684 playground pipe witness changed or failed"
+import pathlib
+import subprocess
+import sys
+
+root, wasm, source, work = map(pathlib.Path, sys.argv[1:])
+cmd = ["node", str(root / "playground/dev_compile_node.mjs"), str(wasm),
+       str(root / "stdlib/runtime.mdk"), str(root / "stdlib/core.mdk"), str(source)]
+with (work / "pipe-control.wat").open("wb") as output:
+    control = subprocess.run(cmd, stdout=output, stderr=subprocess.PIPE, timeout=120)
+full = (work / "pipe-control.wat").read_bytes()
+assert control.returncode == 0 and not control.stderr and b"(module" in full
+for attempt in range(3):
+    child = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+    try:
+        child.wait(timeout=30)
+    except subprocess.TimeoutExpired:
+        pass  # Drain a writer that correctly waits for the pipe to become writable.
+    output, error = child.communicate(timeout=120)
+    assert child.returncode == 0 and not error, (attempt, child.returncode, error)
+    assert output and full.startswith(output) and len(output) < len(full), (attempt, len(output), len(full))
+    print(f"#4684 attempt {attempt}: pipe {len(output)} bytes; file {len(full)} bytes")
+PY
 check_observed float modules playground cli
 cat > "$WORK/input.mdk" <<'EOF'
 data Box = Box Float
