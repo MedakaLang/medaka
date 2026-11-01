@@ -80,6 +80,7 @@ public export data DiagCode =
   | PNoPowOperator
   | POcamlMatchWith
   | PParse
+  | PRawStringAfterDot
   | PReservedKeyword
   | PUnexpectedEof
   | PWhereBodySameLine
@@ -280,6 +281,7 @@ codeText PMissingWhere = "P-MISSING-WHERE"
 codeText PNoPowOperator = "P-NO-POW-OPERATOR"
 codeText POcamlMatchWith = "P-OCAML-MATCH-WITH"
 codeText PParse = "P-PARSE"
+codeText PRawStringAfterDot = "P-RAW-STRING-AFTER-DOT"
 codeText PReservedKeyword = "P-RESERVED-KEYWORD"
 codeText PUnexpectedEof = "P-UNEXPECTED-EOF"
 codeText PWhereBodySameLine = "P-WHERE-BODY-SAME-LINE"
@@ -463,42 +465,42 @@ allDiagCodes = [
   LUnterminatedComment, LUnterminatedString, PBadNeq, PBraceBlock, PDefKeyword,
   PDoEndsInBinding, PForWhile, PGuardBarInMatch, PGuardIfInEquation, PHsCase,
   PHsSig, PMissingWhere, PNoPowOperator, POcamlMatchWith, PParse,
-  PReservedKeyword, PUnexpectedEof, PWhereBodySameLine, RAbstractCtorImport,
-  RAbstractField, RAmbiguousCtor, RAmbiguousEffect, RAmbiguousInterface,
-  RAmbiguousOccurrence, RAmbiguousType, RAsPatternMisplaced, RBareCtorImport,
-  RBuildFailed, RCannotDerive, RDupBinder, RDupBinding, RDuplicateBinding,
-  RDuplicateDef, RDuplicateIfaceMethod, RDuplicateSignature,
-  REffectLabelNoMembers, RExternWithBody, RFieldNotInRecord, RFileNotFound,
-  RFileNotUtf8, RImmutableAssign, RInternalExtern, RMethodNotInInterface,
-  RMisplacedAuthorityBinder, RModuleLoad, RNewtypeCtorPrivate, RNoExportedCtors,
-  RNonrecValueLet, ROrPatternBinders, ROrPatternMisplaced, ROrphanSignature,
-  RPrivateName, RUnbound, RUnboundAuthority, RUnknownCtor, RUnknownEffect,
-  RUnknownField, RUnknownInterface, RUnknownModule, RUnknownType,
-  TAbstractField, TAliasArity, TAmbiguousAliasMethod, TAmbiguousField,
-  TAmbiguousInstance, TAmbiguousMethod, TAmbiguousReexport,
-  TAmbiguousShadowDecl, TAuthority, TAuthorityBinder, TAuthorityDomain,
-  TAuthorityEscape, TAuthorityExistentialScope, TAuthorityIndexMismatch,
-  TAuthorityKind, TAuthorityPattern, TAuthorityPhantomExport, TBangOnBool,
-  TBindOutsideDo, TConflictingImpl, TCyclicSuperinterface, TDiscardedValue,
-  TDoNotMonad, TEffectArgUncovered, TEffectIndexEager, TEffectIndexMismatch,
-  TEffectKindMismatch, TEffectLaunder, TEffectLeak, TEffectParam,
-  TEffectParamVariance, TEffectUndetermined, TExportUnsolvedAuthority,
-  TFfiBuiltinBind, TFfiBuiltinShadow, TFfiCatalogNarrow, TFfiCSymbol,
-  TFfiDuplicateHost, TFfiJsName, TFfiNoHost, TFfiNoncrossable, TFfiNullary,
-  TFfiReservedName, TFfiUnboundHost, TFfiUnknownHost, TFfiUnlabelled,
-  TFieldNotInAllCtors, TFieldPositionDiffers, TFieldTypeDiffers,
-  TFileBoundValue, TImplKindMismatch, TImplMissingRequires, TImplTooSpecific,
-  TIncompleteImpl, TInfiniteType, TInternalOrdinal, TMainUsed, TManifestEntry,
-  TManifestInvalid, TManifestWrapper, TMethodMismatch, TMissingConstraint,
-  TMissingField, TMissingSuperImpl, TNoImpl, TNonrecValueLet, TNotAFunction,
-  TOrPatternBinderTypes, TOrPatternTooMany, TPhantomMethod, TRecursiveAlias,
-  TRequiresCycle, TRequiresDepth, TRequiresUnrouted, TResidual,
-  TSigOverExpansive, TTargetCapability, TTargetNoBinding, TTargetNotProvided,
-  TTypeMismatch, TTypeTooGeneral, TUnbound, TUnknownCtor, TUnknownField,
-  TUnknownRecord, TUnroutedDispatch, TUpdateMultiCtor, WGuardInexhaustive,
-  WImportMethodShadow, WIncomparableImpls, WKeepIrFailed, WMainMissing,
-  WMainShape, WNonexhaustive, WNonexhaustiveClauses, WPreludeMethodShadow,
-  WUnreachableAlt, WUnreachableArm
+  PRawStringAfterDot, PReservedKeyword, PUnexpectedEof, PWhereBodySameLine,
+  RAbstractCtorImport, RAbstractField, RAmbiguousCtor, RAmbiguousEffect,
+  RAmbiguousInterface, RAmbiguousOccurrence, RAmbiguousType,
+  RAsPatternMisplaced, RBareCtorImport, RBuildFailed, RCannotDerive, RDupBinder,
+  RDupBinding, RDuplicateBinding, RDuplicateDef, RDuplicateIfaceMethod,
+  RDuplicateSignature, REffectLabelNoMembers, RExternWithBody,
+  RFieldNotInRecord, RFileNotFound, RFileNotUtf8, RImmutableAssign,
+  RInternalExtern, RMethodNotInInterface, RMisplacedAuthorityBinder,
+  RModuleLoad, RNewtypeCtorPrivate, RNoExportedCtors, RNonrecValueLet,
+  ROrPatternBinders, ROrPatternMisplaced, ROrphanSignature, RPrivateName,
+  RUnbound, RUnboundAuthority, RUnknownCtor, RUnknownEffect, RUnknownField,
+  RUnknownInterface, RUnknownModule, RUnknownType, TAbstractField, TAliasArity,
+  TAmbiguousAliasMethod, TAmbiguousField, TAmbiguousInstance, TAmbiguousMethod,
+  TAmbiguousReexport, TAmbiguousShadowDecl, TAuthority, TAuthorityBinder,
+  TAuthorityDomain, TAuthorityEscape, TAuthorityExistentialScope,
+  TAuthorityIndexMismatch, TAuthorityKind, TAuthorityPattern,
+  TAuthorityPhantomExport, TBangOnBool, TBindOutsideDo, TConflictingImpl,
+  TCyclicSuperinterface, TDiscardedValue, TDoNotMonad, TEffectArgUncovered,
+  TEffectIndexEager, TEffectIndexMismatch, TEffectKindMismatch, TEffectLaunder,
+  TEffectLeak, TEffectParam, TEffectParamVariance, TEffectUndetermined,
+  TExportUnsolvedAuthority, TFfiBuiltinBind, TFfiBuiltinShadow,
+  TFfiCatalogNarrow, TFfiCSymbol, TFfiDuplicateHost, TFfiJsName, TFfiNoHost,
+  TFfiNoncrossable, TFfiNullary, TFfiReservedName, TFfiUnboundHost,
+  TFfiUnknownHost, TFfiUnlabelled, TFieldNotInAllCtors, TFieldPositionDiffers,
+  TFieldTypeDiffers, TFileBoundValue, TImplKindMismatch, TImplMissingRequires,
+  TImplTooSpecific, TIncompleteImpl, TInfiniteType, TInternalOrdinal, TMainUsed,
+  TManifestEntry, TManifestInvalid, TManifestWrapper, TMethodMismatch,
+  TMissingConstraint, TMissingField, TMissingSuperImpl, TNoImpl,
+  TNonrecValueLet, TNotAFunction, TOrPatternBinderTypes, TOrPatternTooMany,
+  TPhantomMethod, TRecursiveAlias, TRequiresCycle, TRequiresDepth,
+  TRequiresUnrouted, TResidual, TSigOverExpansive, TTargetCapability,
+  TTargetNoBinding, TTargetNotProvided, TTypeMismatch, TTypeTooGeneral,
+  TUnbound, TUnknownCtor, TUnknownField, TUnknownRecord, TUnroutedDispatch,
+  TUpdateMultiCtor, WGuardInexhaustive, WImportMethodShadow, WIncomparableImpls,
+  WKeepIrFailed, WMainMissing, WMainShape, WNonexhaustive,
+  WNonexhaustiveClauses, WPreludeMethodShadow, WUnreachableAlt, WUnreachableArm
 ]
 
 -- The code whose text is [t], or `None` when [t] is no live code.

@@ -36,6 +36,7 @@ public export data ParseDiagnosticKind =
   | UnexpectedEnd
   | UnexpectedEndExpected String
   | BadNeq
+  | RawStringAfterDot
   | HsCase
   | MatchWith
   | NoPow
@@ -87,6 +88,7 @@ problemCode HsDollar = LHsDollar
 problemCode UnexpectedEnd = PUnexpectedEof
 problemCode (UnexpectedEndExpected _) = PUnexpectedEof
 problemCode BadNeq = PBadNeq
+problemCode RawStringAfterDot = PRawStringAfterDot
 problemCode HsCase = PHsCase
 problemCode MatchWith = POcamlMatchWith
 problemCode NoPow = PNoPowOperator
@@ -153,6 +155,8 @@ renderParseProblem HsLambda = "Medaka has no `\\x -> e` lambdas; write `x => e`"
 renderParseProblem HsDollar = "Medaka has no `$`; write `f (g x)`"
 renderParseProblem UnexpectedEnd = "unexpected end of input"
 renderParseProblem BadNeq = "unexpected `!=`; did you mean `/=`?"
+renderParseProblem RawStringAfterDot =
+  "`.r\"` reads as a raw string literal, not the field `r`; put a space after the `r`, as in `p.r \"x\"`, or parenthesise the field access, as in `(p.r) \"x\"`"
 renderParseProblem HsCase =
   "Medaka has no `case ... of`; write `match e` with indented `pattern => body` arms"
 renderParseProblem MatchWith =
@@ -259,6 +263,8 @@ diagnosticHelp (ParseDiagnostic kind _ _) = problemHelp kind
 problemHelp : ParseDiagnosticKind -> Option String
 problemHelp HsSignature = Some "replace `::` with `:`"
 problemHelp BadNeq = Some "replace `!=` with `/=`"
+problemHelp RawStringAfterDot =
+  Some "insert a space between the `r` and the opening quote"
 problemHelp PositiveIntOverflow =
   Some
     "`Int` is 63-bit, spanning [-4611686018427387904, 4611686018427387903]; 4611686018427387904 fits only as the negative -4611686018427387904, so write it with its `-`"
@@ -307,6 +313,8 @@ replacementEdit loc old new = [ParseEdit loc old new MachineApplicable]
 
 problemEdits : ParseDiagnosticKind -> Loc -> List ParseEdit
 problemEdits BadNeq loc = replacementEdit loc "!=" "/="
+problemEdits RawStringAfterDot (Loc file sl sc _ _) =
+  replacementEdit (Loc file sl sc sl (sc + 2)) "r\"" "r \""
 problemEdits HsSignature loc = replacementEdit loc "::" ":"
 problemEdits (BareUnicodeEscape old new) loc = replacementEdit loc old new
 problemEdits (MalformedRadix bad prefix digits) loc =
