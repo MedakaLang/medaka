@@ -1,0 +1,61 @@
+-- Historical declarations: b52f709b16922bd015d05bb5daea790a47a47b91:compiler/backend/llvm_emit.mdk
+distinctImplKeys : List CImplEntry ->
+  List (String, String) ->
+  List (String, String)
+distinctImplKeys [] seen = reverseL seen
+distinctImplKeys ((CImplEntry method _ _ body) :: rest) seen =
+  let key = implBodyKey body
+  if keySeen method key seen then
+    distinctImplKeys rest seen
+  else
+    distinctImplKeys rest ((method, key) :: seen)
+
+implBodyKey : CImplBody -> String
+implBodyKey (CImplTagged _ key _ _ _ _ _) = key
+implBodyKey (CImplDefault _ _ key _ _ _ _) = key
+
+keySeen : String -> String -> List (String, String) -> Bool
+keySeen _ _ [] = False
+keySeen m t ((m2, t2) :: rest) =
+  if m == m2 && t == t2 then True else keySeen m t rest
+
+gatherGroup : Emit -> List CImplEntry -> (String, String) -> ImplGroup
+gatherGroup e entries (method, key) =
+  let tag = headTagForKey method key entries
+  let cls = gatherClauses method key entries
+  let positions = groupPositions method key entries
+  match firstEntryFor method key entries
+    Some ent =>
+      ImplGroup
+        method
+        tag
+        key
+        (implEntrySymTag ent)
+        positions
+        (clauseArity cls)
+        cls
+        (implEntryFnName e method ent)
+    None => panic "llvm: impl group without an entry (internal error)"
+
+headTagForKey : String -> String -> List CImplEntry -> String
+headTagForKey method key entries = match firstEntryFor method key entries
+  Some ent => implEntryTag ent
+  None => ""
+
+firstEntryFor : String -> String -> List CImplEntry -> Option CImplEntry
+firstEntryFor _ _ [] = None
+firstEntryFor method key (ent :: rest)
+  | implEntryMethodOf ent == method && implEntryKey ent == key = Some ent
+  | otherwise = firstEntryFor method key rest
+
+gatherClauses : String -> String -> List CImplEntry -> List (List Pat, CExpr)
+gatherClauses _ _ [] = []
+gatherClauses method key (ent :: rest)
+  | implEntryMethodOf ent == method && implEntryKey ent == key =
+    (implPats ent, implBody ent) :: gatherClauses method key rest
+  | otherwise = gatherClauses method key rest
+
+groupPositions : String -> String -> List CImplEntry -> List Int
+groupPositions method key entries = match firstEntryFor method key entries
+  Some ent => implEntryPositions ent
+  None => []

@@ -1,0 +1,6 @@
+-- Historical declarations: 6a87580140d5df81ca9af27c8ba5ac199c46d10f:compiler/backend/wasm_emit.mdk
+reservedCtorsOfType : String -> List String
+reservedCtorsOfType "Option" = ["Some", "None"]
+reservedCtorsOfType "Result" = ["Ok", "Err"]
+reservedCtorsOfType "Ordering" = ["Lt", "Eq", "Gt"]
+reservedCtorsOfType _ = []

@@ -237,8 +237,8 @@ warn-first policy, which governs user-program type errors reaching
 | X-G | #1404 | Re-scoped to F4 plus the globals and TRMC fields of R5. |
 | X-L | #1405 | X-L.H landed (injectivity guards). Abstract `LinkId` retired; the linkage field of R5 and the validator arms in R6 are what remains. |
 | X-N | #1406 | X-N.H complete. X-N.C (validated LLVM plan plus pure renderer) retired; the prototype check and duplicate-define refusal it promised live in the per-emission physical registries (`compiler/backend/llvm_symbols.mdk`, `compiler/backend/wasm_symbols.mdk`), because the names they judge exist only after physical lowering; R6 keeps the Core-level checks. |
-| X-W | #1407 | X-W.H complete. X-W.C retired. Residual scope: the scalar-mode decision (section 8.1, unchanged), host-ABI requirement derivation from R5's extern field, and product-input parity with `playground_main` (R9). |
-| X-X | #1408 | Kept, with the deletion set reduced to what R4 rows delete plus the two consumer-or-delete modules; the ratchet requirement is unchanged. |
+| X-W | #1407 | X-W.H complete. X-W.C retired. The scalar-mode decision in section 8.1 remains unchanged. P5.15's `F-product-observe` report records same-invocation comparison of validated `wasmPhysical.imports` against shipping artifact imports for the hand-derived Float and Int controls, plus persistent playground P-U-P and independent CLI/modules P-U-P controls. This supplies product-route evidence for the current host requirement projection; it does not claim a general browser or deployment qualification. The issue tracks the final review, CI and closure evidence. |
+| X-X | #1408 | Kept, with the deletion set reduced to R4 rows plus the two consumer-or-delete modules; the ratchet requirement is unchanged. R-GROUP and R-VALUSE source/fixture evidence is recorded in the P5.11/P5.12 reports and current backend fact ledger. The issue tracks the final review, CI and closure evidence. |
 
 ### R8. Reconciliation with the revised typechecker plan
 
@@ -284,19 +284,23 @@ links back here.
 
 ### R9. Order of work
 
-1. **Now, no dependency:** `playground_main.runEmit` passes the validated FFI
-   extern table exactly as `wasm_emit_modules_main.emitTail` does (the browser
-   compiler passes `[]` today, so a user FFI extern dies as an unbound variable
-   instead of the named WasmGC rejection). Re-derive `EMITTER-ARCHITECTURE.md`
-   and `EMITTER-ARCH-BUG-FIT.md` (done in the same PR as this revision).
+1. **Done (P5.15).** `playground_main.runEmit` carries checked extern sources
+   into lowered facts and constructs the same Wasm input shape as the modules
+   route. `test/wasm/diff_playground_input.sh` exercises named FFI refusal and
+   compares validated import demand with the actual local shipping playground
+   artifact. This is bounded Node product evidence, not browser, deployment,
+   or general host-ABI qualification.
 2. **Done.** The draft semantic program, the ANF identity modules, their probe
    entries and their gates are deleted. R9's rule stands for any future carrier:
    consumer-or-delete within one sprint, and only a product consumer keeps one.
 3. **R5 plan record** (no dependency; can run beside F1).
 4. **F1, F3, F2, F4, F5** in that order, one row per PR series, each with its
    R6 validator arm and L7 fixture.
-5. **F6** (#3966) landed 2026-10-11 (see its R4 row). **F7** is supplied by
-   checked-drive publication: policy, manifest and emission consume frozen
+5. **F6** (#3966) landed 2026-10-11 (see its R4 row): the Core carrier and
+   `validateDispatchEvidence` are present. #993 is CLOSED for its evidence and
+   disposition work; #2549 remains OPEN for upstream evidence-as-bindings work,
+   which is not a prerequisite to the landed emitter carrier. **F7** is supplied
+   by checked-drive publication: policy, manifest and emission consume frozen
    entry/protocol values after effect-row erasure.
 
 Compiler-source landing stays serialized through the one-PR golden lane and
