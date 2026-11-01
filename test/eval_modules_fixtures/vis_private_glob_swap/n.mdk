@@ -1,0 +1,2 @@
+export countdown : Int -> Int
+countdown n = 100 + n

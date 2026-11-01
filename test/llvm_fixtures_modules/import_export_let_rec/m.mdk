@@ -1,0 +1,4 @@
+isZero : Int -> Bool
+isZero n = n == 0
+
+export let rec countdown n = if isZero n then 7 else countdown (n - 1)

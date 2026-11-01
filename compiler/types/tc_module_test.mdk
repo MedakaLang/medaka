@@ -5,8 +5,8 @@
 -- module publishes, the diagnostics of its bodies (binding, impl method, `test`, `prop`, extern),
 -- the interface-cycle and impl-coherence checks that end the module, the import of an earlier
 -- module's data, the stamp queue and its drain (what is enqueued, what is reported, that a
--- drain empties the queue), `publicValNames`, `externSchemesGo`, `captureTypeErrors`,
--- `verdictFinding`, `isLiveSpan`, `spanKeys` and `settleClosedBody`.
+-- drain empties the queue), `externSchemesGo`, `captureTypeErrors`, `verdictFinding`,
+-- `isLiveSpan`, `spanKeys` and `settleClosedBody`.
 -- Not driven here, because no export reaches them: the import-overlay rows and the plural site
 -- resolvers.  Their effect is observed as the module's errors and as the drain's
 -- unrouted-dispatch findings, and an overlay that changes no verdict is not observable below
@@ -50,7 +50,6 @@ import types.tc_module.{
   elabModuleStamp,
   externSchemesGo,
   isLiveSpan,
-  publicValNames,
   settleClosedBody,
   spanKeys,
   verdictFinding,
@@ -466,55 +465,7 @@ test "a verdict finding carries its module, its diagnostic and its liveness, and
     expectFalse (deadVerdict d).dfLive,
   ]
 
--- ── what a module exports and what a graph is stamped with ───────────────
-
-test "a public signature and its public definition each name the binding, a private one names nothing" = expectEach
-  [
-    (
-      "public",
-      expectEqual
-        ["f", "f"]
-        (publicValNames (declsOf "m" """
-export f : Int
-export f = 1
-""")),
-    ),
-    (
-      "private",
-      expectEqual [] (publicValNames (declsOf "m" """
-g : Int
-g = 2
-""")),
-    ),
-  ]
-
-test "a public interface names its methods and a private one does not" = expectEach
-  [
-    (
-      "public",
-      expectEqual
-        ["q"]
-        (publicValNames
-          (declsOf "m" """
-export interface Q a where
-  q : a -> Int
-""")),
-    ),
-    (
-      "private",
-      expectEqual
-        []
-        (publicValNames (declsOf "m" """
-interface R a where
-  r : a -> Int
-""")),
-    ),
-  ]
-
-test "a public extern is named" =
-  expectEqual
-    ["foo"]
-    (publicValNames (declsOf "m" "export extern foo : Int -> Int"))
+-- ── what a graph is stamped with ──────────────────────────────────────────
 
 test "the schemes of the externs among a module's declarations are those and no others" =
   expectEqual

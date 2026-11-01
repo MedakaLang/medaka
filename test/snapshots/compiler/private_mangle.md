@@ -1,5 +1,5 @@
 # META
-source_lines=1942
+source_lines=1928
 stages=DESUGAR,MARK
 # SOURCE
 import frontend.runtime_constructors.{namedRuntimeCtor}
@@ -555,9 +555,8 @@ renameKeyCollides collided (n, _) = omHasKey n collided
 -- `coreExports` and never enters `known`: `buildExportsWith` resolves an `export
 -- import core…` through its own core argument.  The values bound beside the
 -- decls' own are every public interface's methods, where resolve passes only the
--- bound ones (`keepBoundMethods`), plus the public `let rec` binders
--- (`pubLetRecBinders`), so a re-export carries those as resolve's surface would
--- once it has them.
+-- bound ones (`keepBoundMethods`), so a re-export carries those as resolve's
+-- surface would once it has them.
 unitSurfaces : List (String, List Decl) -> List (String, ModuleExports)
 unitSurfaces units =
   let coreExp = match lookupAssoc "core" units
@@ -579,7 +578,7 @@ surfacesGo coreExp known ((mid, decls) :: rest)
         known
         mid
         decls
-        (flatMap identity (pubIfaceMethodSets decls) ++ pubLetRecBinders decls)
+        (flatMap identity (pubIfaceMethodSets decls))
     (mid, exp) :: surfacesGo coreExp (omInsert mid exp known) rest
 
 -- Per unit, the exported FUNCTION symbols, each paired with the module that
@@ -609,7 +608,7 @@ surfaceMethods (mid, exp) =
 unitFnSyms : (String, List Decl) -> (String, OrdMap Unit)
 unitFnSyms (mid, decls) =
   let defined = omFromNames (unitDefNames (mid, decls)) omEmpty
-  let exported = directIn nsValues decls ++ pubLetRecBinders decls
+  let exported = directIn nsValues decls
   (mid, omFromNames (filterInSet defined exported) omEmpty)
 
 -- The first row per name wins: a module's own values precede what it re-exports.
@@ -662,19 +661,6 @@ isMethodDecl fnSyms methods (dm, dn) =
 multiMapOf : List (String, a) -> OrdMap (List a)
 multiMapOf pairs =
   fold (m (k, v) => insertWith (++) k [v] m) omEmpty (reverseL pairs)
-
--- The binders of the public top-level `let rec` groups.  The producer's
--- `nsValues` has no arm for one, so resolve does not export it while `run`'s
--- export table does, directly and through every `export import` (#4312).  This
--- keeps the emitted program agreeing with `run` until `nsValues` gains a
--- `DLetGroup True` arm, which closes #4312 and removes this.
-pubLetRecBinders : List Decl -> List String
-pubLetRecBinders decls = flatMap pubLetRecBindersOf decls
-
-pubLetRecBindersOf : Decl -> List String
-pubLetRecBindersOf (DLetGroup True binds) = map letBindName binds
-pubLetRecBindersOf (DAttrib _ d) = pubLetRecBindersOf d
-pubLetRecBindersOf _ = []
 
 lookupDefiner : String -> List (String, String) -> Option String
 lookupDefiner _ [] = None
@@ -1557,7 +1543,7 @@ renameDecl rm (DFunDef pub n ps e site bid) =
 -- a top-level signature (`f : …` / `export f : …`) shares the function's name; it
 -- MUST be renamed in lockstep with its DFunDef so the typechecker keys f's scheme
 -- under the SAME mangled name the call sites + def now use (else dictPass /
--- publicValNames see `clampU` while the def is `<mid>__clampU` → unbound).
+-- the exported-name facet see `clampU` while the def is `<mid>__clampU` → unbound).
 renameDecl rm (DTypeSig pub n ty site) =
   DTypeSig pub (renameDefName rm n) ty site
 renameDecl rm (d@(DInterface { methods, ... })) =
@@ -2024,13 +2010,13 @@ recPatFieldVarsPM (RecPatField _ _ _ (Some p)) = patVarsPM p
 (DFunDef false "unitSurfaces" ((PVar "units")) (EBlock (DoLet false false (PVar "coreExp") (EMatch (EApp (EApp (EVar "lookupAssoc") (ELit (LString "core"))) (EVar "units")) (arm (PCon "Some" (PVar "coreDecls")) () (EApp (EVar "coreExports") (EVar "coreDecls"))) (arm (PCon "None") () (EApp (EVar "coreExports") (EListLit))))) (DoExpr (EApp (EApp (EApp (EVar "surfacesGo") (EVar "coreExp")) (EVar "omEmpty")) (EVar "units")))))
 (DTypeSig false "surfacesGo" (TyFun (TyCon "ModuleExports") (TyFun (TyApp (TyCon "OrdMap") (TyCon "ModuleExports")) (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "Decl")))) (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "ModuleExports")))))))
 (DFunDef false "surfacesGo" (PWild PWild (PList)) (EListLit))
-(DFunDef false "surfacesGo" ((PVar "coreExp") (PVar "known") (PCons (PTuple (PVar "mid") (PVar "decls")) (PVar "rest"))) (EIf (EBinOp "==" (EVar "mid") (ELit (LString "core"))) (EBinOp "::" (ETuple (EVar "mid") (EVar "coreExp")) (EApp (EApp (EApp (EVar "surfacesGo") (EVar "coreExp")) (EVar "known")) (EVar "rest"))) (EIf (EVar "otherwise") (EBlock (DoLet false false (PVar "exp") (EApp (EApp (EApp (EApp (EApp (EVar "buildExportsWith") (EVar "coreExp")) (EVar "known")) (EVar "mid")) (EVar "decls")) (EBinOp "++" (EApp (EApp (EVar "flatMap") (EVar "identity")) (EApp (EVar "pubIfaceMethodSets") (EVar "decls"))) (EApp (EVar "pubLetRecBinders") (EVar "decls"))))) (DoExpr (EBinOp "::" (ETuple (EVar "mid") (EVar "exp")) (EApp (EApp (EApp (EVar "surfacesGo") (EVar "coreExp")) (EApp (EApp (EApp (EVar "omInsert") (EVar "mid")) (EVar "exp")) (EVar "known"))) (EVar "rest"))))) (EApp (EVar "__fallthrough__") (ELit LUnit)))))
+(DFunDef false "surfacesGo" ((PVar "coreExp") (PVar "known") (PCons (PTuple (PVar "mid") (PVar "decls")) (PVar "rest"))) (EIf (EBinOp "==" (EVar "mid") (ELit (LString "core"))) (EBinOp "::" (ETuple (EVar "mid") (EVar "coreExp")) (EApp (EApp (EApp (EVar "surfacesGo") (EVar "coreExp")) (EVar "known")) (EVar "rest"))) (EIf (EVar "otherwise") (EBlock (DoLet false false (PVar "exp") (EApp (EApp (EApp (EApp (EApp (EVar "buildExportsWith") (EVar "coreExp")) (EVar "known")) (EVar "mid")) (EVar "decls")) (EApp (EApp (EVar "flatMap") (EVar "identity")) (EApp (EVar "pubIfaceMethodSets") (EVar "decls"))))) (DoExpr (EBinOp "::" (ETuple (EVar "mid") (EVar "exp")) (EApp (EApp (EApp (EVar "surfacesGo") (EVar "coreExp")) (EApp (EApp (EApp (EVar "omInsert") (EVar "mid")) (EVar "exp")) (EVar "known"))) (EVar "rest"))))) (EApp (EVar "__fallthrough__") (ELit LUnit)))))
 (DTypeSig false "fnExportsFrom" (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "Decl")))) (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "ModuleExports"))) (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "String"))))))))
 (DFunDef false "fnExportsFrom" ((PVar "units") (PVar "surfaces")) (EBlock (DoLet false false (PVar "fnSyms") (EApp (EApp (EVar "omFromPairs") (EApp (EApp (EVar "map") (EVar "unitFnSyms")) (EVar "units"))) (EVar "omEmpty"))) (DoLet false false (PVar "methods") (EApp (EApp (EVar "omFromPairs") (EApp (EApp (EVar "map") (EVar "surfaceMethods")) (EVar "surfaces"))) (EVar "omEmpty"))) (DoExpr (EApp (EApp (EVar "map") (EApp (EApp (EVar "unitFnExports") (EVar "fnSyms")) (EVar "methods"))) (EApp (EApp (EVar "zip") (EVar "units")) (EVar "surfaces"))))))
 (DTypeSig false "surfaceMethods" (TyFun (TyTuple (TyCon "String") (TyCon "ModuleExports")) (TyTuple (TyCon "String") (TyApp (TyCon "OrdMap") (TyCon "Unit")))))
 (DFunDef false "surfaceMethods" ((PTuple (PVar "mid") (PVar "exp"))) (ETuple (EVar "mid") (EApp (EApp (EVar "omFromNames") (EApp (EApp (EVar "flatMap") (EVar "snd")) (EFieldAccess (EVar "exp") "expIfaceMethods"))) (EVar "omEmpty"))))
 (DTypeSig false "unitFnSyms" (TyFun (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "Decl"))) (TyTuple (TyCon "String") (TyApp (TyCon "OrdMap") (TyCon "Unit")))))
-(DFunDef false "unitFnSyms" ((PTuple (PVar "mid") (PVar "decls"))) (EBlock (DoLet false false (PVar "defined") (EApp (EApp (EVar "omFromNames") (EApp (EVar "unitDefNames") (ETuple (EVar "mid") (EVar "decls")))) (EVar "omEmpty"))) (DoLet false false (PVar "exported") (EBinOp "++" (EApp (EApp (EVar "directIn") (EVar "nsValues")) (EVar "decls")) (EApp (EVar "pubLetRecBinders") (EVar "decls")))) (DoExpr (ETuple (EVar "mid") (EApp (EApp (EVar "omFromNames") (EApp (EApp (EVar "filterInSet") (EVar "defined")) (EVar "exported"))) (EVar "omEmpty"))))))
+(DFunDef false "unitFnSyms" ((PTuple (PVar "mid") (PVar "decls"))) (EBlock (DoLet false false (PVar "defined") (EApp (EApp (EVar "omFromNames") (EApp (EVar "unitDefNames") (ETuple (EVar "mid") (EVar "decls")))) (EVar "omEmpty"))) (DoLet false false (PVar "exported") (EApp (EApp (EVar "directIn") (EVar "nsValues")) (EVar "decls"))) (DoExpr (ETuple (EVar "mid") (EApp (EApp (EVar "omFromNames") (EApp (EApp (EVar "filterInSet") (EVar "defined")) (EVar "exported"))) (EVar "omEmpty"))))))
 (DTypeSig false "unitFnExports" (TyFun (TyApp (TyCon "OrdMap") (TyApp (TyCon "OrdMap") (TyCon "Unit"))) (TyFun (TyApp (TyCon "OrdMap") (TyApp (TyCon "OrdMap") (TyCon "Unit"))) (TyFun (TyTuple (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "Decl"))) (TyTuple (TyCon "String") (TyCon "ModuleExports"))) (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "String"))))))))
 (DFunDef false "unitFnExports" ((PVar "fnSyms") (PVar "methods") (PTuple (PTuple (PVar "mid") PWild) (PTuple PWild (PVar "exp")))) (EBlock (DoLet false false (PVar "origins") (EApp (EVar "multiMapOf") (EFieldAccess (EVar "exp") "expValueOrigins"))) (DoExpr (ETuple (EVar "mid") (EApp (EApp (EVar "dedupBy") (EVar "fst")) (EApp (EApp (EVar "flatMap") (EApp (EApp (EApp (EApp (EVar "fnExport") (EVar "fnSyms")) (EVar "methods")) (EVar "exp")) (EVar "origins"))) (EFieldAccess (EVar "exp") "expValues")))))))
 (DTypeSig false "fnExport" (TyFun (TyApp (TyCon "OrdMap") (TyApp (TyCon "OrdMap") (TyCon "Unit"))) (TyFun (TyApp (TyCon "OrdMap") (TyApp (TyCon "OrdMap") (TyCon "Unit"))) (TyFun (TyCon "ModuleExports") (TyFun (TyApp (TyCon "OrdMap") (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "String")))) (TyFun (TyCon "String") (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "String")))))))))
@@ -2041,12 +2027,6 @@ recPatFieldVarsPM (RecPatField _ _ _ (Some p)) = patVarsPM p
 (DFunDef false "isMethodDecl" ((PVar "fnSyms") (PVar "methods") (PTuple (PVar "dm") (PVar "dn"))) (EBinOp "&&" (EApp (EVar "not") (EApp (EApp (EApp (EVar "isFnSymbol") (EVar "fnSyms")) (EVar "dm")) (EVar "dn"))) (EMatch (EApp (EApp (EVar "omLookup") (EVar "dm")) (EVar "methods")) (arm (PCon "Some" (PVar "ms")) () (EApp (EApp (EVar "omHasKey") (EVar "dn")) (EVar "ms"))) (arm (PCon "None") () (EVar "False")))))
 (DTypeSig false "multiMapOf" (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyVar "a"))) (TyApp (TyCon "OrdMap") (TyApp (TyCon "List") (TyVar "a")))))
 (DFunDef false "multiMapOf" ((PVar "pairs")) (EApp (EApp (EApp (EVar "fold") (ELam ((PVar "m") (PTuple (PVar "k") (PVar "v"))) (EApp (EApp (EApp (EApp (EVar "insertWith") (ELam ((PVar "_a") (PVar "_b")) (EBinOp "++" (EVar "_a") (EVar "_b")))) (EVar "k")) (EListLit (EVar "v"))) (EVar "m")))) (EVar "omEmpty")) (EApp (EVar "reverseL") (EVar "pairs"))))
-(DTypeSig false "pubLetRecBinders" (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyApp (TyCon "List") (TyCon "String"))))
-(DFunDef false "pubLetRecBinders" ((PVar "decls")) (EApp (EApp (EVar "flatMap") (EVar "pubLetRecBindersOf")) (EVar "decls")))
-(DTypeSig false "pubLetRecBindersOf" (TyFun (TyCon "Decl") (TyApp (TyCon "List") (TyCon "String"))))
-(DFunDef false "pubLetRecBindersOf" ((PCon "DLetGroup" (PCon "True") (PVar "binds"))) (EApp (EApp (EVar "map") (EVar "letBindName")) (EVar "binds")))
-(DFunDef false "pubLetRecBindersOf" ((PCon "DAttrib" PWild (PVar "d"))) (EApp (EVar "pubLetRecBindersOf") (EVar "d")))
-(DFunDef false "pubLetRecBindersOf" (PWild) (EListLit))
 (DTypeSig false "lookupDefiner" (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "String"))) (TyApp (TyCon "Option") (TyCon "String")))))
 (DFunDef false "lookupDefiner" (PWild (PList)) (EVar "None"))
 (DFunDef false "lookupDefiner" ((PVar "k") (PCons (PTuple (PVar "n") (PVar "d")) (PVar "rest"))) (EIf (EBinOp "==" (EVar "k") (EVar "n")) (EApp (EVar "Some") (EVar "d")) (EApp (EApp (EVar "lookupDefiner") (EVar "k")) (EVar "rest"))))
@@ -2448,13 +2428,13 @@ recPatFieldVarsPM (RecPatField _ _ _ (Some p)) = patVarsPM p
 (DFunDef false "unitSurfaces" ((PVar "units")) (EBlock (DoLet false false (PVar "coreExp") (EMatch (EApp (EApp (EVar "lookupAssoc") (ELit (LString "core"))) (EVar "units")) (arm (PCon "Some" (PVar "coreDecls")) () (EApp (EVar "coreExports") (EVar "coreDecls"))) (arm (PCon "None") () (EApp (EVar "coreExports") (EListLit))))) (DoExpr (EApp (EApp (EApp (EVar "surfacesGo") (EVar "coreExp")) (EVar "omEmpty")) (EVar "units")))))
 (DTypeSig false "surfacesGo" (TyFun (TyCon "ModuleExports") (TyFun (TyApp (TyCon "OrdMap") (TyCon "ModuleExports")) (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "Decl")))) (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "ModuleExports")))))))
 (DFunDef false "surfacesGo" (PWild PWild (PList)) (EListLit))
-(DFunDef false "surfacesGo" ((PVar "coreExp") (PVar "known") (PCons (PTuple (PVar "mid") (PVar "decls")) (PVar "rest"))) (EIf (EBinOp "==" (EVar "mid") (ELit (LString "core"))) (EBinOp "::" (ETuple (EVar "mid") (EVar "coreExp")) (EApp (EApp (EApp (EVar "surfacesGo") (EVar "coreExp")) (EVar "known")) (EVar "rest"))) (EIf (EVar "otherwise") (EBlock (DoLet false false (PVar "exp") (EApp (EApp (EApp (EApp (EApp (EVar "buildExportsWith") (EVar "coreExp")) (EVar "known")) (EVar "mid")) (EVar "decls")) (EBinOp "++" (EApp (EApp (EDictApp "flatMap") (EVar "identity")) (EApp (EVar "pubIfaceMethodSets") (EVar "decls"))) (EApp (EVar "pubLetRecBinders") (EVar "decls"))))) (DoExpr (EBinOp "::" (ETuple (EVar "mid") (EVar "exp")) (EApp (EApp (EApp (EVar "surfacesGo") (EVar "coreExp")) (EApp (EApp (EApp (EVar "omInsert") (EVar "mid")) (EVar "exp")) (EVar "known"))) (EVar "rest"))))) (EApp (EVar "__fallthrough__") (ELit LUnit)))))
+(DFunDef false "surfacesGo" ((PVar "coreExp") (PVar "known") (PCons (PTuple (PVar "mid") (PVar "decls")) (PVar "rest"))) (EIf (EBinOp "==" (EVar "mid") (ELit (LString "core"))) (EBinOp "::" (ETuple (EVar "mid") (EVar "coreExp")) (EApp (EApp (EApp (EVar "surfacesGo") (EVar "coreExp")) (EVar "known")) (EVar "rest"))) (EIf (EVar "otherwise") (EBlock (DoLet false false (PVar "exp") (EApp (EApp (EApp (EApp (EApp (EVar "buildExportsWith") (EVar "coreExp")) (EVar "known")) (EVar "mid")) (EVar "decls")) (EApp (EApp (EDictApp "flatMap") (EVar "identity")) (EApp (EVar "pubIfaceMethodSets") (EVar "decls"))))) (DoExpr (EBinOp "::" (ETuple (EVar "mid") (EVar "exp")) (EApp (EApp (EApp (EVar "surfacesGo") (EVar "coreExp")) (EApp (EApp (EApp (EVar "omInsert") (EVar "mid")) (EVar "exp")) (EVar "known"))) (EVar "rest"))))) (EApp (EVar "__fallthrough__") (ELit LUnit)))))
 (DTypeSig false "fnExportsFrom" (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "Decl")))) (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "ModuleExports"))) (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "String"))))))))
 (DFunDef false "fnExportsFrom" ((PVar "units") (PVar "surfaces")) (EBlock (DoLet false false (PVar "fnSyms") (EApp (EApp (EVar "omFromPairs") (EApp (EApp (EMethodRef "map") (EVar "unitFnSyms")) (EVar "units"))) (EVar "omEmpty"))) (DoLet false false (PVar "methods") (EApp (EApp (EVar "omFromPairs") (EApp (EApp (EMethodRef "map") (EVar "surfaceMethods")) (EVar "surfaces"))) (EVar "omEmpty"))) (DoExpr (EApp (EApp (EMethodRef "map") (EApp (EApp (EVar "unitFnExports") (EVar "fnSyms")) (EVar "methods"))) (EApp (EApp (EVar "zip") (EVar "units")) (EVar "surfaces"))))))
 (DTypeSig false "surfaceMethods" (TyFun (TyTuple (TyCon "String") (TyCon "ModuleExports")) (TyTuple (TyCon "String") (TyApp (TyCon "OrdMap") (TyCon "Unit")))))
 (DFunDef false "surfaceMethods" ((PTuple (PVar "mid") (PVar "exp"))) (ETuple (EVar "mid") (EApp (EApp (EVar "omFromNames") (EApp (EApp (EDictApp "flatMap") (EVar "snd")) (EFieldAccess (EVar "exp") "expIfaceMethods"))) (EVar "omEmpty"))))
 (DTypeSig false "unitFnSyms" (TyFun (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "Decl"))) (TyTuple (TyCon "String") (TyApp (TyCon "OrdMap") (TyCon "Unit")))))
-(DFunDef false "unitFnSyms" ((PTuple (PVar "mid") (PVar "decls"))) (EBlock (DoLet false false (PVar "defined") (EApp (EApp (EVar "omFromNames") (EApp (EVar "unitDefNames") (ETuple (EVar "mid") (EVar "decls")))) (EVar "omEmpty"))) (DoLet false false (PVar "exported") (EBinOp "++" (EApp (EApp (EVar "directIn") (EVar "nsValues")) (EVar "decls")) (EApp (EVar "pubLetRecBinders") (EVar "decls")))) (DoExpr (ETuple (EVar "mid") (EApp (EApp (EVar "omFromNames") (EApp (EApp (EVar "filterInSet") (EVar "defined")) (EVar "exported"))) (EVar "omEmpty"))))))
+(DFunDef false "unitFnSyms" ((PTuple (PVar "mid") (PVar "decls"))) (EBlock (DoLet false false (PVar "defined") (EApp (EApp (EVar "omFromNames") (EApp (EVar "unitDefNames") (ETuple (EVar "mid") (EVar "decls")))) (EVar "omEmpty"))) (DoLet false false (PVar "exported") (EApp (EApp (EVar "directIn") (EVar "nsValues")) (EVar "decls"))) (DoExpr (ETuple (EVar "mid") (EApp (EApp (EVar "omFromNames") (EApp (EApp (EVar "filterInSet") (EVar "defined")) (EVar "exported"))) (EVar "omEmpty"))))))
 (DTypeSig false "unitFnExports" (TyFun (TyApp (TyCon "OrdMap") (TyApp (TyCon "OrdMap") (TyCon "Unit"))) (TyFun (TyApp (TyCon "OrdMap") (TyApp (TyCon "OrdMap") (TyCon "Unit"))) (TyFun (TyTuple (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "Decl"))) (TyTuple (TyCon "String") (TyCon "ModuleExports"))) (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "String"))))))))
 (DFunDef false "unitFnExports" ((PVar "fnSyms") (PVar "methods") (PTuple (PTuple (PVar "mid") PWild) (PTuple PWild (PVar "exp")))) (EBlock (DoLet false false (PVar "origins") (EApp (EVar "multiMapOf") (EFieldAccess (EVar "exp") "expValueOrigins"))) (DoExpr (ETuple (EVar "mid") (EApp (EApp (EVar "dedupBy") (EVar "fst")) (EApp (EApp (EDictApp "flatMap") (EApp (EApp (EApp (EApp (EVar "fnExport") (EVar "fnSyms")) (EVar "methods")) (EVar "exp")) (EVar "origins"))) (EFieldAccess (EVar "exp") "expValues")))))))
 (DTypeSig false "fnExport" (TyFun (TyApp (TyCon "OrdMap") (TyApp (TyCon "OrdMap") (TyCon "Unit"))) (TyFun (TyApp (TyCon "OrdMap") (TyApp (TyCon "OrdMap") (TyCon "Unit"))) (TyFun (TyCon "ModuleExports") (TyFun (TyApp (TyCon "OrdMap") (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "String")))) (TyFun (TyCon "String") (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "String")))))))))
@@ -2465,12 +2445,6 @@ recPatFieldVarsPM (RecPatField _ _ _ (Some p)) = patVarsPM p
 (DFunDef false "isMethodDecl" ((PVar "fnSyms") (PVar "methods") (PTuple (PVar "dm") (PVar "dn"))) (EBinOp "&&" (EApp (EVar "not") (EApp (EApp (EApp (EVar "isFnSymbol") (EVar "fnSyms")) (EVar "dm")) (EVar "dn"))) (EMatch (EApp (EApp (EVar "omLookup") (EVar "dm")) (EVar "methods")) (arm (PCon "Some" (PVar "ms")) () (EApp (EApp (EVar "omHasKey") (EVar "dn")) (EVar "ms"))) (arm (PCon "None") () (EVar "False")))))
 (DTypeSig false "multiMapOf" (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyVar "a"))) (TyApp (TyCon "OrdMap") (TyApp (TyCon "List") (TyVar "a")))))
 (DFunDef false "multiMapOf" ((PVar "pairs")) (EApp (EApp (EApp (EMethodRef "fold") (ELam ((PVar "m") (PTuple (PVar "k") (PVar "v"))) (EApp (EApp (EApp (EApp (EVar "insertWith") (ELam ((PVar "_a") (PVar "_b")) (EBinOp "++" (EVar "_a") (EVar "_b")))) (EVar "k")) (EListLit (EVar "v"))) (EVar "m")))) (EVar "omEmpty")) (EApp (EVar "reverseL") (EVar "pairs"))))
-(DTypeSig false "pubLetRecBinders" (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyApp (TyCon "List") (TyCon "String"))))
-(DFunDef false "pubLetRecBinders" ((PVar "decls")) (EApp (EApp (EDictApp "flatMap") (EVar "pubLetRecBindersOf")) (EVar "decls")))
-(DTypeSig false "pubLetRecBindersOf" (TyFun (TyCon "Decl") (TyApp (TyCon "List") (TyCon "String"))))
-(DFunDef false "pubLetRecBindersOf" ((PCon "DLetGroup" (PCon "True") (PVar "binds"))) (EApp (EApp (EMethodRef "map") (EVar "letBindName")) (EVar "binds")))
-(DFunDef false "pubLetRecBindersOf" ((PCon "DAttrib" PWild (PVar "d"))) (EApp (EVar "pubLetRecBindersOf") (EVar "d")))
-(DFunDef false "pubLetRecBindersOf" (PWild) (EListLit))
 (DTypeSig false "lookupDefiner" (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "String"))) (TyApp (TyCon "Option") (TyCon "String")))))
 (DFunDef false "lookupDefiner" (PWild (PList)) (EVar "None"))
 (DFunDef false "lookupDefiner" ((PVar "k") (PCons (PTuple (PVar "n") (PVar "d")) (PVar "rest"))) (EIf (EBinOp "==" (EVar "k") (EVar "n")) (EApp (EVar "Some") (EVar "d")) (EApp (EApp (EVar "lookupDefiner") (EVar "k")) (EVar "rest"))))

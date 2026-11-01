@@ -1,0 +1,158 @@
+-- Sibling test module for `compiler/frontend/visibility.mdk` ([P-TEST-SIBLING]).
+--
+-- The producer's facets over a module's own declarations: `declExportsIn` and
+-- `declExportsCtors` answer for one raw declaration, `exportedValueNames` lists the
+-- names a module's importers can bind as values, and `nsValues` is the namespace
+-- they come from, including the binders of an exported `let rec` group.  Each row
+-- parses a small module and reads the facet directly.  The per-namespace carriage
+-- rules over `export import` hops are exercised through `resolve_test` and the
+-- module fixtures, not here.
+
+import test.{expectEach, expectEqual, expectFalse, expectTrue}
+import frontend.ast.{Decl}
+import frontend.desugar.{desugar}
+import frontend.parser.{parse}
+import frontend.visibility.{
+  declExportsCtors,
+  declExportsIn,
+  directIn,
+  exportedValueNames,
+  nsTypes,
+  nsValues,
+}
+
+declsOf : String -> List Decl
+declsOf src = desugar (parse src)
+
+-- The one declaration of a single-declaration source, read raw.
+declOf : String -> Option Decl
+declOf src = match declsOf src
+  [d] => Some d
+  _ => None
+
+-- A source's one declaration answers `p`; a source that does not parse to exactly
+-- one declaration is a failed row.
+answers : (Decl -> Bool) -> String -> Bool
+answers p src = match declOf src
+  Some d => p d
+  None => False
+
+-- ── declExportsIn ─────────────────────────────────────────────────────────
+
+test "a public or abstract type names itself in the type namespace, a private one does not" = expectEach
+  [
+    (
+      "public",
+      expectTrue
+        (answers (declExportsIn nsTypes) "public export data T = A | B"),
+    ),
+    (
+      "abstract",
+      expectTrue (answers (declExportsIn nsTypes) "export data T = A | B"),
+    ),
+    ("private", expectFalse (answers (declExportsIn nsTypes) "data T = A | B")),
+  ]
+
+test "a declaration wrapped in an attribute is read raw, so it declares nothing" =
+  expectFalse
+    (answers
+      (declExportsIn nsTypes)
+      "@deprecated \"old\"\nexport data T = A | B")
+
+-- ── declExportsCtors ──────────────────────────────────────────────────────
+
+test "only a public data type exports constructors, not an abstract one nor a newtype" = expectEach
+  [
+    (
+      "public",
+      expectTrue (answers declExportsCtors "public export data T = A | B"),
+    ),
+    (
+      "abstract",
+      expectFalse (answers declExportsCtors "export data T = A | B"),
+    ),
+    (
+      "newtype",
+      expectFalse (answers declExportsCtors "export newtype W = W Int"),
+    ),
+    ("private", expectFalse (answers declExportsCtors "data T = A | B")),
+  ]
+
+-- ── exportedValueNames ────────────────────────────────────────────────────
+
+test "a public signature and its public definition each name the binding, a private one names nothing" = expectEach
+  [
+    (
+      "public",
+      expectEqual
+        ["f", "f"]
+        (exportedValueNames (declsOf """
+export f : Int
+export f = 1
+""")),
+    ),
+    (
+      "private",
+      expectEqual [] (exportedValueNames (declsOf """
+g : Int
+g = 2
+""")),
+    ),
+  ]
+
+test "a public interface names its methods and a private one does not" = expectEach
+  [
+    (
+      "public",
+      expectEqual
+        ["q"]
+        (exportedValueNames
+          (declsOf """
+export interface Q a where
+  q : a -> Int
+""")),
+    ),
+    (
+      "private",
+      expectEqual
+        []
+        (exportedValueNames (declsOf """
+interface R a where
+  r : a -> Int
+""")),
+    ),
+  ]
+
+test "a public extern is named" =
+  expectEqual
+    ["foo"]
+    (exportedValueNames (declsOf "export extern foo : Int -> Int"))
+
+test "an attribute over a public definition is looked through" =
+  expectEqual
+    ["h"]
+    (exportedValueNames (declsOf "@deprecated \"old\"\nexport h = 1"))
+
+-- ── nsValues: the binders of an exported `let rec` group ──────────────────
+
+test "the value namespace holds the binders of an exported let rec group, not a private one's" = expectEach
+  [
+    (
+      "public",
+      expectEqual
+        ["countdown"]
+        (directIn
+          nsValues
+          (declsOf
+            "export let rec countdown n = if n == 0 then 7 else countdown (n - 1)")),
+    ),
+    (
+      "private",
+      expectEqual
+        []
+        (directIn
+          nsValues
+          (declsOf
+            "let rec countdown n = if n == 0 then 7 else countdown (n - 1)")),
+    ),
+  ]

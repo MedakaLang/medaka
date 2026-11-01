@@ -1,5 +1,5 @@
 # META
-source_lines=3741
+source_lines=3736
 stages=DESUGAR,MARK
 # SOURCE
 -- typecheck: the entry module: the graph drive (`driveGraphK`), the chain and core memos and
@@ -199,7 +199,13 @@ import types.entry_outcome.{
   mainIsUnitNow,
 }
 import frontend.desugar.{mapProg}
-import frontend.visibility.{useModId}
+import frontend.visibility.{
+  useModId,
+  pubUsePaths,
+  exportedValueNames,
+  nsAbstractData,
+  directIn,
+}
 import types.value_main.{inMainBinding}
 import frontend.resolve.{
   programIsCore,
@@ -436,7 +442,6 @@ import types.tc_module.{
   drainStampQueue,
   elabModuleStamp,
   externSchemesGo,
-  publicValNames,
   settleClosedBody,
   verdictFinding,
 }
@@ -458,34 +463,24 @@ ioJoinAtoms domains grants =
         (lookupAssoc l grants))
     hostLabels
 
--- collect the names of all VisAbstract record-shaped (a DData whose variants
--- carry named fields) decls across the given decl list.  Only
--- record-shaped abstract types can be a dot-access receiver, but harvesting any
--- abstract DData name too is harmless (a positional ADT can't reach the abstract
--- branch with a field access — its fields never exist).
-collectAbstractRecordTypes : List Decl -> List String
-collectAbstractRecordTypes [] = []
-collectAbstractRecordTypes ((DData { dataVis = VisAbstract, dataName = n }) :: rest) =
-  n :: collectAbstractRecordTypes rest
-collectAbstractRecordTypes (_ :: rest) = collectAbstractRecordTypes rest
-
--- seed abstractRecordTypesRef from every module's decls (the per-module progs plus
--- the prelude/core decls), once, before checking begins.  Keyed by the type
--- word (`typeTagOf`), so a program's own type that shares an abstract export's
--- name is not mistaken for it.
+-- seed abstractRecordTypesRef from the `VisAbstract` data decls of every module (the
+-- per-module progs plus the prelude/core decls), once, before checking begins.  Keyed
+-- by the type word (`typeTagOf`), so a program's own type that shares an abstract
+-- export's name is not mistaken for it.  Positional ADTs are harvested too, harmlessly:
+-- their fields never exist, so a field access cannot reach the abstract branch.
 seedAbstractRecordTypes : GraphCtx ->
   List Decl ->
   List (String, List Decl) ->
   Unit
 seedAbstractRecordTypes gctx coreDecls modules =
   let abstracts =
-    collectAbstractRecordTypes coreDecls
+    directIn nsAbstractData coreDecls
       ++ flatMap (m => abstractTypeWords (fst m) (snd m)) modules
   gctx.abstractRecordTypesRef := namesToSet abstracts omEmpty
 
 abstractTypeWords : String -> List Decl -> List String
 abstractTypeWords mid decls =
-  map (n => typeTagOf (OriginModule mid) n) (collectAbstractRecordTypes decls)
+  map (n => typeTagOf (OriginModule mid) n) (directIn nsAbstractData decls)
 
 -- Test-only observation (R5): read by `typecheck_test.mdk`, no production caller.
 --
@@ -1012,7 +1007,7 @@ publicModuleExports prog bindings =
     (tagModuleExports
       standalones
       (pickSchemes
-        (publicValNames prog)
+        (exportedValueNames prog)
         (omFromPairs (reverseL bindings.mbSchemes) omEmpty)))
 
 -- The first row for a name wins, unless a second import supplies a different
@@ -1119,7 +1114,7 @@ moduleImportSeed mctx base imported =
 --
 -- Conservatism (the property this rests on): a BARE key — one no loaded module exports
 -- under that exact name with that module's own mangle prefix — is still re-bound under
--- the alias.  That population is exactly the interface METHODS (publicValNames admits
+-- the alias.  That population is exactly the interface METHODS (exportedValueNames admits
 -- them; private_mangle's rename map, built from unitDefNames/pubFnNames, never renames
 -- them), which is the occurrence-carrier question #1276/#1386 own — deliberately NOT
 -- moved here.  The only keys whose binding changes are those a DIFFERENT loaded module
@@ -1320,18 +1315,16 @@ methodsPerMidGo acc ((mid, decls) :: rest) =
 -- method names a module re-exports via `export import src.{…}` (`DUse True`), taken
 -- from `acc` — the dependency's already-folded method set.
 reexportedMethodNames : List (String, List String) -> List Decl -> List String
-reexportedMethodNames acc decls = flatMap (reexportedMethodsOf acc) decls
+reexportedMethodNames acc ds =
+  flatMap (reexportedMethodsOf acc) (pubUsePaths ds)
 
-reexportedMethodsOf : List (String, List String) -> Decl -> List String
-reexportedMethodsOf acc (DAttrib _ d) = reexportedMethodsOf acc d
-reexportedMethodsOf acc (DUse True path _) =
-  match lookupAssoc (useModId path) acc
-    None => []
-    Some srcMethods => match importedBindings path
-      -- `export import src.*` re-exports every one of src's methods
-      None => srcMethods
-      Some bs => filterList (n => contains n srcMethods) (map fst bs)
-reexportedMethodsOf _ _ = []
+reexportedMethodsOf : List (String, List String) -> UsePath -> List String
+reexportedMethodsOf acc path = match lookupAssoc (useModId path) acc
+  None => []
+  Some srcMethods => match importedBindings path
+    -- `export import src.*` re-exports every one of src's methods
+    None => srcMethods
+    Some bs => filterList (n => contains n srcMethods) (map fst bs)
 
 -- Only a MODULE alias is rewritten before inference (`deAliasMethodImports`).  A
 -- member alias reaches inference as written, so `import m.{mth as loc}` binds `loc`
@@ -1565,7 +1558,7 @@ coreRenameScheme coreV m = match useMemberAlias m
     Some s => [(local, s)]
 
 -- the (key, scheme) pairs a module RE-EXPORTS via `export import` (`DUse True`).
--- Mirrors resolve's re-export set (resolve.pubUsePaths filters the same `DUse True`)
+-- Mirrors resolve's re-export set (frontend.visibility.pubUsePaths filters the same `DUse True`)
 -- into the typecheck seed: walk the export-flagged DUse decls and, for each, pick the
 -- re-exported member names out of the SOURCE dependency's public schemes already in
 -- depEnv — the exact member resolution importSeed uses (importFormSchemes /
@@ -1576,7 +1569,7 @@ coreRenameScheme coreV m = match useMemberAlias m
 -- downstream.  Transitivity is automatic: pubV accumulates these and is carried
 -- forward as depEnv, so a second `export import` hop re-resolves against the enriched
 -- pubV.  Methods need no special case — the source module's pubV already holds the
--- method scheme (publicValNames includes DInterface method names).
+-- method scheme (exportedValueNames includes DInterface method names).
 --
 -- `core` is the one source that is NOT in depEnv: it is the implicit prelude, so its
 -- schemes go into `baseSeed`, not into the per-module dep chain.  It is therefore
@@ -1589,17 +1582,19 @@ reexportSeed : List (String, a) ->
   List Decl ->
   List (String, List (String, a)) ->
   List (String, a)
-reexportSeed _ [] _ = []
-reexportSeed coreV ((DAttrib _ d) :: rest) depEnv =
-  reexportSeed coreV [d] depEnv ++ reexportSeed coreV rest depEnv
-reexportSeed coreV ((DUse True path _) :: rest) depEnv =
+reexportSeed coreV decls depEnv =
+  flatMap (reexportSeedOf coreV depEnv) (pubUsePaths decls)
+
+reexportSeedOf : List (String, a) ->
+  List (String, List (String, a)) ->
+  UsePath ->
+  List (String, a)
+reexportSeedOf coreV depEnv path =
   let depId = useModId path
   let src = if depId == "core" then Some coreV else lookupAssoc depId depEnv
   match src
-    None => reexportSeed coreV rest depEnv
-    Some depSchemes =>
-      importFormSchemes depEnv path depSchemes ++ reexportSeed coreV rest depEnv
-reexportSeed coreV (_ :: rest) depEnv = reexportSeed coreV rest depEnv
+    None => []
+    Some depSchemes => importFormSchemes depEnv path depSchemes
 
 foldModules : FoldPlan e acc ->
   Option (ModuleServe e) ->
@@ -3761,7 +3756,7 @@ schemeLines ((n, p) :: rest) = "\{n} : \{ppPubScheme p}" :: schemeLines rest
 (DUse false (UseGroup ("types" "publish") ((mem "PubScheme" true) (mem "tcLoc" false) (mem "TcReport" false) (mem "PartialAnalysis" false) (mem "EntryTables" true) (mem "noEntryTables" false) (mem "partialAnalysis" false) (mem "freezePub" false) (mem "freezeRows" false) (mem "freezeModDiags" false) (mem "graphReportWithOutcome" false) (mem "publishSelected" false) (mem "publishCore" false) (mem "publishWithContexts" false) (mem "publishedCore" false) (mem "publishedEntrySchemes" false) (mem "ppPubScheme" false))))
 (DUse false (UseGroup ("types" "entry_outcome") ((mem "mainUseDiags" false) (mem "printlnIface" false) (mem "mainBodySpan" false) (mem "driveOutputsNow" false) (mem "entryOutcomeNow" false) (mem "mainIsAsyncNow" false) (mem "mainAsyncPayloadIsUnitNow" false) (mem "mainIsUnitNow" false))))
 (DUse false (UseGroup ("frontend" "desugar") ((mem "mapProg" false))))
-(DUse false (UseGroup ("frontend" "visibility") ((mem "useModId" false))))
+(DUse false (UseGroup ("frontend" "visibility") ((mem "useModId" false) (mem "pubUsePaths" false) (mem "exportedValueNames" false) (mem "nsAbstractData" false) (mem "directIn" false))))
 (DUse false (UseGroup ("types" "value_main") ((mem "inMainBinding" false))))
 (DUse false (UseGroup ("frontend" "resolve") ((mem "programIsCore" false) (mem "stampTyOrigins" false) (mem "runtimeExternTyOriginScope" false))))
 (DUse false (UseGroup ("types" "private_mangle") ((mem "mangledName" false))))
@@ -3794,17 +3789,13 @@ schemeLines ((n, p) :: rest) = "\{n} : \{ppPubScheme p}" :: schemeLines rest
 (DUse false (UseGroup ("types" "tc_groups") ((mem "allEVars" false))))
 (DUse false (UseGroup ("types" "tc_elab") ((mem "dictPassModulesIfEnabled" false) (mem "drivenEvidence" false))))
 (DUse false (UseGroup ("types" "tc_global") ((mem "globalCoherenceConflict" false))))
-(DUse false (UseGroup ("types" "tc_module") ((mem "captureTypeErrors" false) (mem "checkBodyImpl" false) (mem "checkGraphFinish" false) (mem "checkModuleFull" false) (mem "checkModuleFullDiags" false) (mem "drainStampQueue" false) (mem "elabModuleStamp" false) (mem "externSchemesGo" false) (mem "publicValNames" false) (mem "settleClosedBody" false) (mem "verdictFinding" false))))
+(DUse false (UseGroup ("types" "tc_module") ((mem "captureTypeErrors" false) (mem "checkBodyImpl" false) (mem "checkGraphFinish" false) (mem "checkModuleFull" false) (mem "checkModuleFullDiags" false) (mem "drainStampQueue" false) (mem "elabModuleStamp" false) (mem "externSchemesGo" false) (mem "settleClosedBody" false) (mem "verdictFinding" false))))
 (DTypeSig true "ioJoinAtoms" (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "Param"))) (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "EffParamTy"))) (TyApp (TyCon "List") (TyCon "Atom")))))
 (DFunDef false "ioJoinAtoms" ((PVar "domains") (PVar "grants")) (EApp (EApp (EVar "filterMap") (ELam ((PVar "l")) (EApp (EApp (EVar "map") (ELam ((PVar "granted")) (EApp (EApp (EVar "atomWith") (EApp (EVar "builtinLabel") (EVar "l"))) (EApp (EApp (EVar "writtenParam") (EApp (EApp (EVar "dtopIn") (EVar "domains")) (EApp (EVar "builtinLabel") (EVar "l")))) (EVar "granted"))))) (EApp (EApp (EVar "lookupAssoc") (EVar "l")) (EVar "grants"))))) (EVar "hostLabels")))
-(DTypeSig false "collectAbstractRecordTypes" (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyApp (TyCon "List") (TyCon "String"))))
-(DFunDef false "collectAbstractRecordTypes" ((PList)) (EListLit))
-(DFunDef false "collectAbstractRecordTypes" ((PCons (PRec "DData" ((rf "dataVis" (PCon "VisAbstract")) (rf "dataName" (PVar "n"))) false) (PVar "rest"))) (EBinOp "::" (EVar "n") (EApp (EVar "collectAbstractRecordTypes") (EVar "rest"))))
-(DFunDef false "collectAbstractRecordTypes" ((PCons PWild (PVar "rest"))) (EApp (EVar "collectAbstractRecordTypes") (EVar "rest")))
 (DTypeSig false "seedAbstractRecordTypes" (TyFun (TyCon "GraphCtx") (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "Decl")))) (TyCon "Unit")))))
-(DFunDef false "seedAbstractRecordTypes" ((PVar "gctx") (PVar "coreDecls") (PVar "modules")) (EBlock (DoLet false false (PVar "abstracts") (EBinOp "++" (EApp (EVar "collectAbstractRecordTypes") (EVar "coreDecls")) (EApp (EApp (EVar "flatMap") (ELam ((PVar "m")) (EApp (EApp (EVar "abstractTypeWords") (EApp (EVar "fst") (EVar "m"))) (EApp (EVar "snd") (EVar "m"))))) (EVar "modules")))) (DoExpr (EApp (EApp (EVar "setRef") (EFieldAccess (EVar "gctx") "abstractRecordTypesRef")) (EApp (EApp (EVar "namesToSet") (EVar "abstracts")) (EVar "omEmpty"))))))
+(DFunDef false "seedAbstractRecordTypes" ((PVar "gctx") (PVar "coreDecls") (PVar "modules")) (EBlock (DoLet false false (PVar "abstracts") (EBinOp "++" (EApp (EApp (EVar "directIn") (EVar "nsAbstractData")) (EVar "coreDecls")) (EApp (EApp (EVar "flatMap") (ELam ((PVar "m")) (EApp (EApp (EVar "abstractTypeWords") (EApp (EVar "fst") (EVar "m"))) (EApp (EVar "snd") (EVar "m"))))) (EVar "modules")))) (DoExpr (EApp (EApp (EVar "setRef") (EFieldAccess (EVar "gctx") "abstractRecordTypesRef")) (EApp (EApp (EVar "namesToSet") (EVar "abstracts")) (EVar "omEmpty"))))))
 (DTypeSig false "abstractTypeWords" (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyApp (TyCon "List") (TyCon "String")))))
-(DFunDef false "abstractTypeWords" ((PVar "mid") (PVar "decls")) (EApp (EApp (EVar "map") (ELam ((PVar "n")) (EApp (EApp (EVar "typeTagOf") (EApp (EVar "OriginModule") (EVar "mid"))) (EVar "n")))) (EApp (EVar "collectAbstractRecordTypes") (EVar "decls"))))
+(DFunDef false "abstractTypeWords" ((PVar "mid") (PVar "decls")) (EApp (EApp (EVar "map") (ELam ((PVar "n")) (EApp (EApp (EVar "typeTagOf") (EApp (EVar "OriginModule") (EVar "mid"))) (EVar "n")))) (EApp (EApp (EVar "directIn") (EVar "nsAbstractData")) (EVar "decls"))))
 (DTypeSig true "stickyTypeErrorDiags" (TyFun (TyCon "DriveOutputs") (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "TcDiag")))))
 (DFunDef false "stickyTypeErrorDiags" ((PVar "o")) (EApp (EVar "stickyDiagsInPushOrder") (EFieldAccess (EVar "o") "doStickyDiags")))
 (DTypeSig true "hadTypeErrors" (TyFun (TyCon "DriveOutputs") (TyCon "Bool")))
@@ -3873,7 +3864,7 @@ schemeLines ((n, p) :: rest) = "\{n} : \{ppPubScheme p}" :: schemeLines rest
 (DTypeSig false "tagModuleExports" (TyFun (TyApp (TyCon "OrdMap") (TyCon "Scheme")) (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "Scheme"))) (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "ExportBinding"))))))
 (DFunDef false "tagModuleExports" ((PVar "standalones") (PVar "schemes")) (EApp (EApp (EVar "map") (ELam ((PTuple (PVar "name") (PVar "scheme"))) (ETuple (EVar "name") (ERecordCreate "ExportBinding" ((fa "xbScheme" (EVar "scheme")) (fa "xbStandalone" (EApp (EApp (EVar "omLookup") (EVar "name")) (EVar "standalones"))) (fa "xbExtern" (EVar "False"))))))) (EVar "schemes")))
 (DTypeSig false "publicModuleExports" (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyFun (TyCon "ModuleBindings") (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "ExportBinding"))))))
-(DFunDef false "publicModuleExports" ((PVar "prog") (PVar "bindings")) (EBlock (DoLet false false (PVar "standalones") (EApp (EApp (EVar "omFromPairs") (EApp (EApp (EVar "flatMap") (ELam ((PVar "name")) (EMatch (EApp (EApp (EVar "omLookup") (EVar "name")) (EFieldAccess (EVar "bindings") "mbStandaloneSchemes")) (arm (PCon "Some" (PVar "scheme")) () (EListLit (ETuple (EVar "name") (EVar "scheme")))) (arm (PCon "None") () (EListLit))))) (EApp (EVar "pubTopFnNames") (EVar "prog")))) (EVar "omEmpty"))) (DoLet false false (PVar "externs") (EApp (EApp (EVar "omFromNames") (EApp (EApp (EVar "map") (EVar "fst")) (EApp (EVar "directExternSigs") (EApp (EVar "externDecls") (EVar "prog"))))) (EVar "omEmpty"))) (DoExpr (EApp (EApp (EVar "map") (ELam ((PTuple (PVar "name") (PVar "binding"))) (ETuple (EVar "name") (EVariantUpdate "ExportBinding" (EVar "binding") ((fa "xbExtern" (EApp (EApp (EVar "omHasKey") (EVar "name")) (EVar "externs")))))))) (EApp (EApp (EVar "tagModuleExports") (EVar "standalones")) (EApp (EApp (EVar "pickSchemes") (EApp (EVar "publicValNames") (EVar "prog"))) (EApp (EApp (EVar "omFromPairs") (EApp (EVar "reverseL") (EFieldAccess (EVar "bindings") "mbSchemes"))) (EVar "omEmpty"))))))))
+(DFunDef false "publicModuleExports" ((PVar "prog") (PVar "bindings")) (EBlock (DoLet false false (PVar "standalones") (EApp (EApp (EVar "omFromPairs") (EApp (EApp (EVar "flatMap") (ELam ((PVar "name")) (EMatch (EApp (EApp (EVar "omLookup") (EVar "name")) (EFieldAccess (EVar "bindings") "mbStandaloneSchemes")) (arm (PCon "Some" (PVar "scheme")) () (EListLit (ETuple (EVar "name") (EVar "scheme")))) (arm (PCon "None") () (EListLit))))) (EApp (EVar "pubTopFnNames") (EVar "prog")))) (EVar "omEmpty"))) (DoLet false false (PVar "externs") (EApp (EApp (EVar "omFromNames") (EApp (EApp (EVar "map") (EVar "fst")) (EApp (EVar "directExternSigs") (EApp (EVar "externDecls") (EVar "prog"))))) (EVar "omEmpty"))) (DoExpr (EApp (EApp (EVar "map") (ELam ((PTuple (PVar "name") (PVar "binding"))) (ETuple (EVar "name") (EVariantUpdate "ExportBinding" (EVar "binding") ((fa "xbExtern" (EApp (EApp (EVar "omHasKey") (EVar "name")) (EVar "externs")))))))) (EApp (EApp (EVar "tagModuleExports") (EVar "standalones")) (EApp (EApp (EVar "pickSchemes") (EApp (EVar "exportedValueNames") (EVar "prog"))) (EApp (EApp (EVar "omFromPairs") (EApp (EVar "reverseL") (EFieldAccess (EVar "bindings") "mbSchemes"))) (EVar "omEmpty"))))))))
 (DTypeSig false "importedBindingWinners" (TyFun (TyCon "ModuleCtx") (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyTuple (TyApp (TyCon "Option") (TyCon "String")) (TyCon "ExportBinding")))) (TyFun (TyApp (TyCon "OrdMap") (TyCon "Unit")) (TyFun (TyApp (TyCon "OrdMap") (TyCon "Unit")) (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "ExportBinding"))))))))
 (DFunDef false "importedBindingWinners" ((PVar "mctx") (PList) PWild PWild) (EListLit))
 (DFunDef false "importedBindingWinners" ((PVar "mctx") (PCons (PTuple (PVar "name") (PTuple PWild (PVar "binding"))) (PVar "rest")) (PVar "seen") (PVar "ambiguous")) (EIf (EApp (EApp (EVar "omHasKey") (EVar "name")) (EVar "seen")) (EApp (EApp (EApp (EApp (EVar "importedBindingWinners") (EVar "mctx")) (EVar "rest")) (EVar "seen")) (EVar "ambiguous")) (EBlock (DoLet false false (PVar "chosen") (EIf (EApp (EApp (EVar "omHasKey") (EVar "name")) (EVar "ambiguous")) (EApp (EApp (EVar "ambiguousImportBinding") (EVar "mctx")) (ELit LUnit)) (EVar "binding"))) (DoExpr (EBinOp "::" (ETuple (EVar "name") (EVar "chosen")) (EApp (EApp (EApp (EApp (EVar "importedBindingWinners") (EVar "mctx")) (EVar "rest")) (EApp (EApp (EApp (EVar "omInsert") (EVar "name")) (ELit LUnit)) (EVar "seen"))) (EVar "ambiguous")))))))
@@ -3912,11 +3903,9 @@ schemeLines ((n, p) :: rest) = "\{n} : \{ppPubScheme p}" :: schemeLines rest
 (DFunDef false "methodsPerMidGo" (PWild (PList)) (EListLit))
 (DFunDef false "methodsPerMidGo" ((PVar "acc") (PCons (PTuple (PVar "mid") (PVar "decls")) (PVar "rest"))) (EBlock (DoLet false false (PVar "entry") (ETuple (EVar "mid") (EApp (EVar "dedup") (EBinOp "++" (EApp (EVar "declMethodNames") (EVar "decls")) (EApp (EApp (EVar "reexportedMethodNames") (EVar "acc")) (EVar "decls")))))) (DoExpr (EBinOp "::" (EVar "entry") (EApp (EApp (EVar "methodsPerMidGo") (EBinOp "::" (EVar "entry") (EVar "acc"))) (EVar "rest"))))))
 (DTypeSig false "reexportedMethodNames" (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "String")))) (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyApp (TyCon "List") (TyCon "String")))))
-(DFunDef false "reexportedMethodNames" ((PVar "acc") (PVar "decls")) (EApp (EApp (EVar "flatMap") (EApp (EVar "reexportedMethodsOf") (EVar "acc"))) (EVar "decls")))
-(DTypeSig false "reexportedMethodsOf" (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "String")))) (TyFun (TyCon "Decl") (TyApp (TyCon "List") (TyCon "String")))))
-(DFunDef false "reexportedMethodsOf" ((PVar "acc") (PCon "DAttrib" PWild (PVar "d"))) (EApp (EApp (EVar "reexportedMethodsOf") (EVar "acc")) (EVar "d")))
-(DFunDef false "reexportedMethodsOf" ((PVar "acc") (PCon "DUse" (PCon "True") (PVar "path") PWild)) (EMatch (EApp (EApp (EVar "lookupAssoc") (EApp (EVar "useModId") (EVar "path"))) (EVar "acc")) (arm (PCon "None") () (EListLit)) (arm (PCon "Some" (PVar "srcMethods")) () (EMatch (EApp (EVar "importedBindings") (EVar "path")) (arm (PCon "None") () (EVar "srcMethods")) (arm (PCon "Some" (PVar "bs")) () (EApp (EApp (EVar "filterList") (ELam ((PVar "n")) (EApp (EApp (EVar "contains") (EVar "n")) (EVar "srcMethods")))) (EApp (EApp (EVar "map") (EVar "fst")) (EVar "bs"))))))))
-(DFunDef false "reexportedMethodsOf" (PWild PWild) (EListLit))
+(DFunDef false "reexportedMethodNames" ((PVar "acc") (PVar "ds")) (EApp (EApp (EVar "flatMap") (EApp (EVar "reexportedMethodsOf") (EVar "acc"))) (EApp (EVar "pubUsePaths") (EVar "ds"))))
+(DTypeSig false "reexportedMethodsOf" (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "String")))) (TyFun (TyCon "UsePath") (TyApp (TyCon "List") (TyCon "String")))))
+(DFunDef false "reexportedMethodsOf" ((PVar "acc") (PVar "path")) (EMatch (EApp (EApp (EVar "lookupAssoc") (EApp (EVar "useModId") (EVar "path"))) (EVar "acc")) (arm (PCon "None") () (EListLit)) (arm (PCon "Some" (PVar "srcMethods")) () (EMatch (EApp (EVar "importedBindings") (EVar "path")) (arm (PCon "None") () (EVar "srcMethods")) (arm (PCon "Some" (PVar "bs")) () (EApp (EApp (EVar "filterList") (ELam ((PVar "n")) (EApp (EApp (EVar "contains") (EVar "n")) (EVar "srcMethods")))) (EApp (EApp (EVar "map") (EVar "fst")) (EVar "bs"))))))))
 (DTypeSig false "renameAliasedMethodsIn" (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "String")))) (TyFun (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "Decl"))) (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "Decl"))))))
 (DFunDef false "renameAliasedMethodsIn" ((PVar "methodsPerMid") (PTuple (PVar "mid") (PVar "prog"))) (ETuple (EVar "mid") (EApp (EApp (EVar "flatMap") (EApp (EVar "deAliasMethodImports") (EVar "methodsPerMid"))) (EVar "prog"))))
 (DTypeSig false "deAliasMethodImports" (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "String")))) (TyFun (TyCon "Decl") (TyApp (TyCon "List") (TyCon "Decl")))))
@@ -3973,10 +3962,9 @@ schemeLines ((n, p) :: rest) = "\{n} : \{ppPubScheme p}" :: schemeLines rest
 (DTypeSig false "coreRenameScheme" (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyVar "a"))) (TyFun (TyCon "UseMember") (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyVar "a"))))))
 (DFunDef false "coreRenameScheme" ((PVar "coreV") (PVar "m")) (EMatch (EApp (EVar "useMemberAlias") (EVar "m")) (arm (PCon "None") () (EListLit)) (arm (PCon "Some" (PVar "local")) () (EMatch (EApp (EApp (EVar "lookupAssoc") (EApp (EVar "useMemberOrigin") (EVar "m"))) (EVar "coreV")) (arm (PCon "None") () (EListLit)) (arm (PCon "Some" (PVar "s")) () (EListLit (ETuple (EVar "local") (EVar "s"))))))))
 (DTypeSig false "reexportSeed" (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyVar "a"))) (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyVar "a"))))) (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyVar "a")))))))
-(DFunDef false "reexportSeed" (PWild (PList) PWild) (EListLit))
-(DFunDef false "reexportSeed" ((PVar "coreV") (PCons (PCon "DAttrib" PWild (PVar "d")) (PVar "rest")) (PVar "depEnv")) (EBinOp "++" (EApp (EApp (EApp (EVar "reexportSeed") (EVar "coreV")) (EListLit (EVar "d"))) (EVar "depEnv")) (EApp (EApp (EApp (EVar "reexportSeed") (EVar "coreV")) (EVar "rest")) (EVar "depEnv"))))
-(DFunDef false "reexportSeed" ((PVar "coreV") (PCons (PCon "DUse" (PCon "True") (PVar "path") PWild) (PVar "rest")) (PVar "depEnv")) (EBlock (DoLet false false (PVar "depId") (EApp (EVar "useModId") (EVar "path"))) (DoLet false false (PVar "src") (EIf (EBinOp "==" (EVar "depId") (ELit (LString "core"))) (EApp (EVar "Some") (EVar "coreV")) (EApp (EApp (EVar "lookupAssoc") (EVar "depId")) (EVar "depEnv")))) (DoExpr (EMatch (EVar "src") (arm (PCon "None") () (EApp (EApp (EApp (EVar "reexportSeed") (EVar "coreV")) (EVar "rest")) (EVar "depEnv"))) (arm (PCon "Some" (PVar "depSchemes")) () (EBinOp "++" (EApp (EApp (EApp (EVar "importFormSchemes") (EVar "depEnv")) (EVar "path")) (EVar "depSchemes")) (EApp (EApp (EApp (EVar "reexportSeed") (EVar "coreV")) (EVar "rest")) (EVar "depEnv"))))))))
-(DFunDef false "reexportSeed" ((PVar "coreV") (PCons PWild (PVar "rest")) (PVar "depEnv")) (EApp (EApp (EApp (EVar "reexportSeed") (EVar "coreV")) (EVar "rest")) (EVar "depEnv")))
+(DFunDef false "reexportSeed" ((PVar "coreV") (PVar "decls") (PVar "depEnv")) (EApp (EApp (EVar "flatMap") (EApp (EApp (EVar "reexportSeedOf") (EVar "coreV")) (EVar "depEnv"))) (EApp (EVar "pubUsePaths") (EVar "decls"))))
+(DTypeSig false "reexportSeedOf" (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyVar "a"))) (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyVar "a"))))) (TyFun (TyCon "UsePath") (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyVar "a")))))))
+(DFunDef false "reexportSeedOf" ((PVar "coreV") (PVar "depEnv") (PVar "path")) (EBlock (DoLet false false (PVar "depId") (EApp (EVar "useModId") (EVar "path"))) (DoLet false false (PVar "src") (EIf (EBinOp "==" (EVar "depId") (ELit (LString "core"))) (EApp (EVar "Some") (EVar "coreV")) (EApp (EApp (EVar "lookupAssoc") (EVar "depId")) (EVar "depEnv")))) (DoExpr (EMatch (EVar "src") (arm (PCon "None") () (EListLit)) (arm (PCon "Some" (PVar "depSchemes")) () (EApp (EApp (EApp (EVar "importFormSchemes") (EVar "depEnv")) (EVar "path")) (EVar "depSchemes")))))))
 (DTypeSig false "foldModules" (TyFun (TyApp (TyApp (TyCon "FoldPlan") (TyVar "e")) (TyVar "acc")) (TyFun (TyApp (TyCon "Option") (TyApp (TyCon "ModuleServe") (TyVar "e"))) (TyFun (TyVar "acc") (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "ExportBinding"))))) (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyFun (TyCon "ModuleCtx") (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "Decl")))) (TyTuple (TyVar "acc") (TyApp (TyCon "Option") (TyApp (TyCon "ModuleServe") (TyVar "e"))) (TyCon "ModuleCtx")))))))))))
 (DFunDef false "foldModules" ((PVar "plan") (PVar "serve") (PVar "base") (PVar "depEnv") (PVar "accData") (PVar "accAll") (PVar "prev") (PVar "modules")) (EBlock (DoLet false false (PTuple (PVar "done") (PVar "served") (PVar "last")) (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EVar "workModules") (EVar "plan")) (EVar "serve")) (EVar "depEnv")) (EVar "accData")) (EVar "accAll")) (EListLit)) (EVar "prev")) (EVar "modules"))) (DoExpr (ETuple (EApp (EApp (EApp (EVar "collectModules") (EFieldAccess (EVar "plan") "fpCollect")) (EVar "base")) (EVar "done")) (EVar "served") (EVar "last")))))
 (DTypeSig false "workModules" (TyFun (TyApp (TyApp (TyCon "FoldPlan") (TyVar "e")) (TyVar "acc")) (TyFun (TyApp (TyCon "Option") (TyApp (TyCon "ModuleServe") (TyVar "e"))) (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "ExportBinding"))))) (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyVar "e"))) (TyFun (TyCon "ModuleCtx") (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "Decl")))) (TyTuple (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyVar "e"))) (TyApp (TyCon "Option") (TyApp (TyCon "ModuleServe") (TyVar "e"))) (TyCon "ModuleCtx")))))))))))
@@ -4193,7 +4181,7 @@ schemeLines ((n, p) :: rest) = "\{n} : \{ppPubScheme p}" :: schemeLines rest
 (DUse false (UseGroup ("types" "publish") ((mem "PubScheme" true) (mem "tcLoc" false) (mem "TcReport" false) (mem "PartialAnalysis" false) (mem "EntryTables" true) (mem "noEntryTables" false) (mem "partialAnalysis" false) (mem "freezePub" false) (mem "freezeRows" false) (mem "freezeModDiags" false) (mem "graphReportWithOutcome" false) (mem "publishSelected" false) (mem "publishCore" false) (mem "publishWithContexts" false) (mem "publishedCore" false) (mem "publishedEntrySchemes" false) (mem "ppPubScheme" false))))
 (DUse false (UseGroup ("types" "entry_outcome") ((mem "mainUseDiags" false) (mem "printlnIface" false) (mem "mainBodySpan" false) (mem "driveOutputsNow" false) (mem "entryOutcomeNow" false) (mem "mainIsAsyncNow" false) (mem "mainAsyncPayloadIsUnitNow" false) (mem "mainIsUnitNow" false))))
 (DUse false (UseGroup ("frontend" "desugar") ((mem "mapProg" false))))
-(DUse false (UseGroup ("frontend" "visibility") ((mem "useModId" false))))
+(DUse false (UseGroup ("frontend" "visibility") ((mem "useModId" false) (mem "pubUsePaths" false) (mem "exportedValueNames" false) (mem "nsAbstractData" false) (mem "directIn" false))))
 (DUse false (UseGroup ("types" "value_main") ((mem "inMainBinding" false))))
 (DUse false (UseGroup ("frontend" "resolve") ((mem "programIsCore" false) (mem "stampTyOrigins" false) (mem "runtimeExternTyOriginScope" false))))
 (DUse false (UseGroup ("types" "private_mangle") ((mem "mangledName" false))))
@@ -4226,17 +4214,13 @@ schemeLines ((n, p) :: rest) = "\{n} : \{ppPubScheme p}" :: schemeLines rest
 (DUse false (UseGroup ("types" "tc_groups") ((mem "allEVars" false))))
 (DUse false (UseGroup ("types" "tc_elab") ((mem "dictPassModulesIfEnabled" false) (mem "drivenEvidence" false))))
 (DUse false (UseGroup ("types" "tc_global") ((mem "globalCoherenceConflict" false))))
-(DUse false (UseGroup ("types" "tc_module") ((mem "captureTypeErrors" false) (mem "checkBodyImpl" false) (mem "checkGraphFinish" false) (mem "checkModuleFull" false) (mem "checkModuleFullDiags" false) (mem "drainStampQueue" false) (mem "elabModuleStamp" false) (mem "externSchemesGo" false) (mem "publicValNames" false) (mem "settleClosedBody" false) (mem "verdictFinding" false))))
+(DUse false (UseGroup ("types" "tc_module") ((mem "captureTypeErrors" false) (mem "checkBodyImpl" false) (mem "checkGraphFinish" false) (mem "checkModuleFull" false) (mem "checkModuleFullDiags" false) (mem "drainStampQueue" false) (mem "elabModuleStamp" false) (mem "externSchemesGo" false) (mem "settleClosedBody" false) (mem "verdictFinding" false))))
 (DTypeSig true "ioJoinAtoms" (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "Param"))) (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "EffParamTy"))) (TyApp (TyCon "List") (TyCon "Atom")))))
 (DFunDef false "ioJoinAtoms" ((PVar "domains") (PVar "grants")) (EApp (EApp (EMethodRef "filterMap") (ELam ((PVar "l")) (EApp (EApp (EMethodRef "map") (ELam ((PVar "granted")) (EApp (EApp (EVar "atomWith") (EApp (EVar "builtinLabel") (EVar "l"))) (EApp (EApp (EVar "writtenParam") (EApp (EApp (EVar "dtopIn") (EVar "domains")) (EApp (EVar "builtinLabel") (EVar "l")))) (EVar "granted"))))) (EApp (EApp (EVar "lookupAssoc") (EVar "l")) (EVar "grants"))))) (EVar "hostLabels")))
-(DTypeSig false "collectAbstractRecordTypes" (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyApp (TyCon "List") (TyCon "String"))))
-(DFunDef false "collectAbstractRecordTypes" ((PList)) (EListLit))
-(DFunDef false "collectAbstractRecordTypes" ((PCons (PRec "DData" ((rf "dataVis" (PCon "VisAbstract")) (rf "dataName" (PVar "n"))) false) (PVar "rest"))) (EBinOp "::" (EVar "n") (EApp (EVar "collectAbstractRecordTypes") (EVar "rest"))))
-(DFunDef false "collectAbstractRecordTypes" ((PCons PWild (PVar "rest"))) (EApp (EVar "collectAbstractRecordTypes") (EVar "rest")))
 (DTypeSig false "seedAbstractRecordTypes" (TyFun (TyCon "GraphCtx") (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "Decl")))) (TyCon "Unit")))))
-(DFunDef false "seedAbstractRecordTypes" ((PVar "gctx") (PVar "coreDecls") (PVar "modules")) (EBlock (DoLet false false (PVar "abstracts") (EBinOp "++" (EApp (EVar "collectAbstractRecordTypes") (EVar "coreDecls")) (EApp (EApp (EDictApp "flatMap") (ELam ((PVar "m")) (EApp (EApp (EVar "abstractTypeWords") (EApp (EVar "fst") (EVar "m"))) (EApp (EVar "snd") (EVar "m"))))) (EVar "modules")))) (DoExpr (EApp (EApp (EVar "setRef") (EFieldAccess (EVar "gctx") "abstractRecordTypesRef")) (EApp (EApp (EVar "namesToSet") (EVar "abstracts")) (EVar "omEmpty"))))))
+(DFunDef false "seedAbstractRecordTypes" ((PVar "gctx") (PVar "coreDecls") (PVar "modules")) (EBlock (DoLet false false (PVar "abstracts") (EBinOp "++" (EApp (EApp (EVar "directIn") (EVar "nsAbstractData")) (EVar "coreDecls")) (EApp (EApp (EDictApp "flatMap") (ELam ((PVar "m")) (EApp (EApp (EVar "abstractTypeWords") (EApp (EVar "fst") (EVar "m"))) (EApp (EVar "snd") (EVar "m"))))) (EVar "modules")))) (DoExpr (EApp (EApp (EVar "setRef") (EFieldAccess (EVar "gctx") "abstractRecordTypesRef")) (EApp (EApp (EVar "namesToSet") (EVar "abstracts")) (EVar "omEmpty"))))))
 (DTypeSig false "abstractTypeWords" (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyApp (TyCon "List") (TyCon "String")))))
-(DFunDef false "abstractTypeWords" ((PVar "mid") (PVar "decls")) (EApp (EApp (EMethodRef "map") (ELam ((PVar "n")) (EApp (EApp (EVar "typeTagOf") (EApp (EVar "OriginModule") (EVar "mid"))) (EVar "n")))) (EApp (EVar "collectAbstractRecordTypes") (EVar "decls"))))
+(DFunDef false "abstractTypeWords" ((PVar "mid") (PVar "decls")) (EApp (EApp (EMethodRef "map") (ELam ((PVar "n")) (EApp (EApp (EVar "typeTagOf") (EApp (EVar "OriginModule") (EVar "mid"))) (EVar "n")))) (EApp (EApp (EVar "directIn") (EVar "nsAbstractData")) (EVar "decls"))))
 (DTypeSig true "stickyTypeErrorDiags" (TyFun (TyCon "DriveOutputs") (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "TcDiag")))))
 (DFunDef false "stickyTypeErrorDiags" ((PVar "o")) (EApp (EVar "stickyDiagsInPushOrder") (EFieldAccess (EVar "o") "doStickyDiags")))
 (DTypeSig true "hadTypeErrors" (TyFun (TyCon "DriveOutputs") (TyCon "Bool")))
@@ -4305,7 +4289,7 @@ schemeLines ((n, p) :: rest) = "\{n} : \{ppPubScheme p}" :: schemeLines rest
 (DTypeSig false "tagModuleExports" (TyFun (TyApp (TyCon "OrdMap") (TyCon "Scheme")) (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "Scheme"))) (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "ExportBinding"))))))
 (DFunDef false "tagModuleExports" ((PVar "standalones") (PVar "schemes")) (EApp (EApp (EMethodRef "map") (ELam ((PTuple (PVar "name") (PVar "scheme"))) (ETuple (EVar "name") (ERecordCreate "ExportBinding" ((fa "xbScheme" (EVar "scheme")) (fa "xbStandalone" (EApp (EApp (EVar "omLookup") (EVar "name")) (EVar "standalones"))) (fa "xbExtern" (EVar "False"))))))) (EVar "schemes")))
 (DTypeSig false "publicModuleExports" (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyFun (TyCon "ModuleBindings") (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "ExportBinding"))))))
-(DFunDef false "publicModuleExports" ((PVar "prog") (PVar "bindings")) (EBlock (DoLet false false (PVar "standalones") (EApp (EApp (EVar "omFromPairs") (EApp (EApp (EDictApp "flatMap") (ELam ((PVar "name")) (EMatch (EApp (EApp (EVar "omLookup") (EVar "name")) (EFieldAccess (EVar "bindings") "mbStandaloneSchemes")) (arm (PCon "Some" (PVar "scheme")) () (EListLit (ETuple (EVar "name") (EVar "scheme")))) (arm (PCon "None") () (EListLit))))) (EApp (EVar "pubTopFnNames") (EVar "prog")))) (EVar "omEmpty"))) (DoLet false false (PVar "externs") (EApp (EApp (EVar "omFromNames") (EApp (EApp (EMethodRef "map") (EVar "fst")) (EApp (EVar "directExternSigs") (EApp (EVar "externDecls") (EVar "prog"))))) (EVar "omEmpty"))) (DoExpr (EApp (EApp (EMethodRef "map") (ELam ((PTuple (PVar "name") (PVar "binding"))) (ETuple (EVar "name") (EVariantUpdate "ExportBinding" (EVar "binding") ((fa "xbExtern" (EApp (EApp (EVar "omHasKey") (EVar "name")) (EVar "externs")))))))) (EApp (EApp (EVar "tagModuleExports") (EVar "standalones")) (EApp (EApp (EVar "pickSchemes") (EApp (EVar "publicValNames") (EVar "prog"))) (EApp (EApp (EVar "omFromPairs") (EApp (EVar "reverseL") (EFieldAccess (EVar "bindings") "mbSchemes"))) (EVar "omEmpty"))))))))
+(DFunDef false "publicModuleExports" ((PVar "prog") (PVar "bindings")) (EBlock (DoLet false false (PVar "standalones") (EApp (EApp (EVar "omFromPairs") (EApp (EApp (EDictApp "flatMap") (ELam ((PVar "name")) (EMatch (EApp (EApp (EVar "omLookup") (EVar "name")) (EFieldAccess (EVar "bindings") "mbStandaloneSchemes")) (arm (PCon "Some" (PVar "scheme")) () (EListLit (ETuple (EVar "name") (EVar "scheme")))) (arm (PCon "None") () (EListLit))))) (EApp (EVar "pubTopFnNames") (EVar "prog")))) (EVar "omEmpty"))) (DoLet false false (PVar "externs") (EApp (EApp (EVar "omFromNames") (EApp (EApp (EMethodRef "map") (EVar "fst")) (EApp (EVar "directExternSigs") (EApp (EVar "externDecls") (EVar "prog"))))) (EVar "omEmpty"))) (DoExpr (EApp (EApp (EMethodRef "map") (ELam ((PTuple (PVar "name") (PVar "binding"))) (ETuple (EVar "name") (EVariantUpdate "ExportBinding" (EVar "binding") ((fa "xbExtern" (EApp (EApp (EVar "omHasKey") (EVar "name")) (EVar "externs")))))))) (EApp (EApp (EVar "tagModuleExports") (EVar "standalones")) (EApp (EApp (EVar "pickSchemes") (EApp (EVar "exportedValueNames") (EVar "prog"))) (EApp (EApp (EVar "omFromPairs") (EApp (EVar "reverseL") (EFieldAccess (EVar "bindings") "mbSchemes"))) (EVar "omEmpty"))))))))
 (DTypeSig false "importedBindingWinners" (TyFun (TyCon "ModuleCtx") (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyTuple (TyApp (TyCon "Option") (TyCon "String")) (TyCon "ExportBinding")))) (TyFun (TyApp (TyCon "OrdMap") (TyCon "Unit")) (TyFun (TyApp (TyCon "OrdMap") (TyCon "Unit")) (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "ExportBinding"))))))))
 (DFunDef false "importedBindingWinners" ((PVar "mctx") (PList) PWild PWild) (EListLit))
 (DFunDef false "importedBindingWinners" ((PVar "mctx") (PCons (PTuple (PVar "name") (PTuple PWild (PVar "binding"))) (PVar "rest")) (PVar "seen") (PVar "ambiguous")) (EIf (EApp (EApp (EVar "omHasKey") (EVar "name")) (EVar "seen")) (EApp (EApp (EApp (EApp (EVar "importedBindingWinners") (EVar "mctx")) (EVar "rest")) (EVar "seen")) (EVar "ambiguous")) (EBlock (DoLet false false (PVar "chosen") (EIf (EApp (EApp (EVar "omHasKey") (EVar "name")) (EVar "ambiguous")) (EApp (EApp (EVar "ambiguousImportBinding") (EVar "mctx")) (ELit LUnit)) (EVar "binding"))) (DoExpr (EBinOp "::" (ETuple (EVar "name") (EVar "chosen")) (EApp (EApp (EApp (EApp (EVar "importedBindingWinners") (EVar "mctx")) (EVar "rest")) (EApp (EApp (EApp (EVar "omInsert") (EVar "name")) (ELit LUnit)) (EVar "seen"))) (EVar "ambiguous")))))))
@@ -4344,11 +4328,9 @@ schemeLines ((n, p) :: rest) = "\{n} : \{ppPubScheme p}" :: schemeLines rest
 (DFunDef false "methodsPerMidGo" (PWild (PList)) (EListLit))
 (DFunDef false "methodsPerMidGo" ((PVar "acc") (PCons (PTuple (PVar "mid") (PVar "decls")) (PVar "rest"))) (EBlock (DoLet false false (PVar "entry") (ETuple (EVar "mid") (EApp (EVar "dedup") (EBinOp "++" (EApp (EVar "declMethodNames") (EVar "decls")) (EApp (EApp (EVar "reexportedMethodNames") (EVar "acc")) (EVar "decls")))))) (DoExpr (EBinOp "::" (EVar "entry") (EApp (EApp (EVar "methodsPerMidGo") (EBinOp "::" (EVar "entry") (EVar "acc"))) (EVar "rest"))))))
 (DTypeSig false "reexportedMethodNames" (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "String")))) (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyApp (TyCon "List") (TyCon "String")))))
-(DFunDef false "reexportedMethodNames" ((PVar "acc") (PVar "decls")) (EApp (EApp (EDictApp "flatMap") (EApp (EVar "reexportedMethodsOf") (EVar "acc"))) (EVar "decls")))
-(DTypeSig false "reexportedMethodsOf" (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "String")))) (TyFun (TyCon "Decl") (TyApp (TyCon "List") (TyCon "String")))))
-(DFunDef false "reexportedMethodsOf" ((PVar "acc") (PCon "DAttrib" PWild (PVar "d"))) (EApp (EApp (EVar "reexportedMethodsOf") (EVar "acc")) (EVar "d")))
-(DFunDef false "reexportedMethodsOf" ((PVar "acc") (PCon "DUse" (PCon "True") (PVar "path") PWild)) (EMatch (EApp (EApp (EVar "lookupAssoc") (EApp (EVar "useModId") (EVar "path"))) (EVar "acc")) (arm (PCon "None") () (EListLit)) (arm (PCon "Some" (PVar "srcMethods")) () (EMatch (EApp (EVar "importedBindings") (EVar "path")) (arm (PCon "None") () (EVar "srcMethods")) (arm (PCon "Some" (PVar "bs")) () (EApp (EApp (EVar "filterList") (ELam ((PVar "n")) (EApp (EApp (EVar "contains") (EVar "n")) (EVar "srcMethods")))) (EApp (EApp (EMethodRef "map") (EVar "fst")) (EVar "bs"))))))))
-(DFunDef false "reexportedMethodsOf" (PWild PWild) (EListLit))
+(DFunDef false "reexportedMethodNames" ((PVar "acc") (PVar "ds")) (EApp (EApp (EDictApp "flatMap") (EApp (EVar "reexportedMethodsOf") (EVar "acc"))) (EApp (EVar "pubUsePaths") (EVar "ds"))))
+(DTypeSig false "reexportedMethodsOf" (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "String")))) (TyFun (TyCon "UsePath") (TyApp (TyCon "List") (TyCon "String")))))
+(DFunDef false "reexportedMethodsOf" ((PVar "acc") (PVar "path")) (EMatch (EApp (EApp (EVar "lookupAssoc") (EApp (EVar "useModId") (EVar "path"))) (EVar "acc")) (arm (PCon "None") () (EListLit)) (arm (PCon "Some" (PVar "srcMethods")) () (EMatch (EApp (EVar "importedBindings") (EVar "path")) (arm (PCon "None") () (EVar "srcMethods")) (arm (PCon "Some" (PVar "bs")) () (EApp (EApp (EVar "filterList") (ELam ((PVar "n")) (EApp (EApp (EVar "contains") (EVar "n")) (EVar "srcMethods")))) (EApp (EApp (EMethodRef "map") (EVar "fst")) (EVar "bs"))))))))
 (DTypeSig false "renameAliasedMethodsIn" (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "String")))) (TyFun (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "Decl"))) (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "Decl"))))))
 (DFunDef false "renameAliasedMethodsIn" ((PVar "methodsPerMid") (PTuple (PVar "mid") (PVar "prog"))) (ETuple (EVar "mid") (EApp (EApp (EDictApp "flatMap") (EApp (EVar "deAliasMethodImports") (EVar "methodsPerMid"))) (EVar "prog"))))
 (DTypeSig false "deAliasMethodImports" (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "String")))) (TyFun (TyCon "Decl") (TyApp (TyCon "List") (TyCon "Decl")))))
@@ -4405,10 +4387,9 @@ schemeLines ((n, p) :: rest) = "\{n} : \{ppPubScheme p}" :: schemeLines rest
 (DTypeSig false "coreRenameScheme" (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyVar "a"))) (TyFun (TyCon "UseMember") (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyVar "a"))))))
 (DFunDef false "coreRenameScheme" ((PVar "coreV") (PVar "m")) (EMatch (EApp (EVar "useMemberAlias") (EVar "m")) (arm (PCon "None") () (EListLit)) (arm (PCon "Some" (PVar "local")) () (EMatch (EApp (EApp (EVar "lookupAssoc") (EApp (EVar "useMemberOrigin") (EVar "m"))) (EVar "coreV")) (arm (PCon "None") () (EListLit)) (arm (PCon "Some" (PVar "s")) () (EListLit (ETuple (EVar "local") (EVar "s"))))))))
 (DTypeSig false "reexportSeed" (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyVar "a"))) (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyVar "a"))))) (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyVar "a")))))))
-(DFunDef false "reexportSeed" (PWild (PList) PWild) (EListLit))
-(DFunDef false "reexportSeed" ((PVar "coreV") (PCons (PCon "DAttrib" PWild (PVar "d")) (PVar "rest")) (PVar "depEnv")) (EBinOp "++" (EApp (EApp (EApp (EVar "reexportSeed") (EVar "coreV")) (EListLit (EVar "d"))) (EVar "depEnv")) (EApp (EApp (EApp (EVar "reexportSeed") (EVar "coreV")) (EVar "rest")) (EVar "depEnv"))))
-(DFunDef false "reexportSeed" ((PVar "coreV") (PCons (PCon "DUse" (PCon "True") (PVar "path") PWild) (PVar "rest")) (PVar "depEnv")) (EBlock (DoLet false false (PVar "depId") (EApp (EVar "useModId") (EVar "path"))) (DoLet false false (PVar "src") (EIf (EBinOp "==" (EVar "depId") (ELit (LString "core"))) (EApp (EVar "Some") (EVar "coreV")) (EApp (EApp (EVar "lookupAssoc") (EVar "depId")) (EVar "depEnv")))) (DoExpr (EMatch (EVar "src") (arm (PCon "None") () (EApp (EApp (EApp (EVar "reexportSeed") (EVar "coreV")) (EVar "rest")) (EVar "depEnv"))) (arm (PCon "Some" (PVar "depSchemes")) () (EBinOp "++" (EApp (EApp (EApp (EVar "importFormSchemes") (EVar "depEnv")) (EVar "path")) (EVar "depSchemes")) (EApp (EApp (EApp (EVar "reexportSeed") (EVar "coreV")) (EVar "rest")) (EVar "depEnv"))))))))
-(DFunDef false "reexportSeed" ((PVar "coreV") (PCons PWild (PVar "rest")) (PVar "depEnv")) (EApp (EApp (EApp (EVar "reexportSeed") (EVar "coreV")) (EVar "rest")) (EVar "depEnv")))
+(DFunDef false "reexportSeed" ((PVar "coreV") (PVar "decls") (PVar "depEnv")) (EApp (EApp (EDictApp "flatMap") (EApp (EApp (EVar "reexportSeedOf") (EVar "coreV")) (EVar "depEnv"))) (EApp (EVar "pubUsePaths") (EVar "decls"))))
+(DTypeSig false "reexportSeedOf" (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyVar "a"))) (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyVar "a"))))) (TyFun (TyCon "UsePath") (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyVar "a")))))))
+(DFunDef false "reexportSeedOf" ((PVar "coreV") (PVar "depEnv") (PVar "path")) (EBlock (DoLet false false (PVar "depId") (EApp (EVar "useModId") (EVar "path"))) (DoLet false false (PVar "src") (EIf (EBinOp "==" (EVar "depId") (ELit (LString "core"))) (EApp (EVar "Some") (EVar "coreV")) (EApp (EApp (EVar "lookupAssoc") (EVar "depId")) (EVar "depEnv")))) (DoExpr (EMatch (EVar "src") (arm (PCon "None") () (EListLit)) (arm (PCon "Some" (PVar "depSchemes")) () (EApp (EApp (EApp (EVar "importFormSchemes") (EVar "depEnv")) (EVar "path")) (EVar "depSchemes")))))))
 (DTypeSig false "foldModules" (TyFun (TyApp (TyApp (TyCon "FoldPlan") (TyVar "e")) (TyVar "acc")) (TyFun (TyApp (TyCon "Option") (TyApp (TyCon "ModuleServe") (TyVar "e"))) (TyFun (TyVar "acc") (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "ExportBinding"))))) (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyFun (TyCon "ModuleCtx") (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "Decl")))) (TyTuple (TyVar "acc") (TyApp (TyCon "Option") (TyApp (TyCon "ModuleServe") (TyVar "e"))) (TyCon "ModuleCtx")))))))))))
 (DFunDef false "foldModules" ((PVar "plan") (PVar "serve") (PVar "base") (PVar "depEnv") (PVar "accData") (PVar "accAll") (PVar "prev") (PVar "modules")) (EBlock (DoLet false false (PTuple (PVar "done") (PVar "served") (PVar "last")) (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EVar "workModules") (EVar "plan")) (EVar "serve")) (EVar "depEnv")) (EVar "accData")) (EVar "accAll")) (EListLit)) (EVar "prev")) (EVar "modules"))) (DoExpr (ETuple (EApp (EApp (EApp (EVar "collectModules") (EFieldAccess (EVar "plan") "fpCollect")) (EVar "base")) (EVar "done")) (EVar "served") (EVar "last")))))
 (DTypeSig false "workModules" (TyFun (TyApp (TyApp (TyCon "FoldPlan") (TyVar "e")) (TyVar "acc")) (TyFun (TyApp (TyCon "Option") (TyApp (TyCon "ModuleServe") (TyVar "e"))) (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "ExportBinding"))))) (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyVar "e"))) (TyFun (TyCon "ModuleCtx") (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "Decl")))) (TyTuple (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyVar "e"))) (TyApp (TyCon "Option") (TyApp (TyCon "ModuleServe") (TyVar "e"))) (TyCon "ModuleCtx")))))))))))
