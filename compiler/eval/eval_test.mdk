@@ -186,7 +186,7 @@ test "test and repl random externs draw from the seeded program stream" =
         (VInt 1000000000)
   let drawSeeded =
     binds n =>
-      let _ = seedRunRng n
+      seedRunRng n
       ppValue (draw binds)
   expectAll [
     expectEqual (drawSeeded capable 7) (drawSeeded capable 7),
