@@ -1,5 +1,5 @@
 # META
-source_lines=5256
+source_lines=5264
 stages=DESUGAR,MARK
 # SOURCE
 -- compiler/tools/test_cmd.mdk — `medaka test` logic (doctests + property tests),
@@ -651,8 +651,8 @@ renderTestReportError (TestDiagnosticError triples) =
 -- `arrayGetUnsafe` &co. is not spuriously rejected.
 -- Import-bearing modules are gated by `gatedDrive` below instead, off the
 -- ONE elaboration the phases already need.
--- Returns structured diagnostics iff the module has an error, else the pair
--- (None for an exempt module, which is not gated).
+-- Returns two components: the structured diagnostics, non-empty iff the module has an error,
+-- and the held pair, `None` for an exempt module (one that is not gated).
 singleFileGateParts : Bool ->
   List Decl ->
   List Decl ->
@@ -708,9 +708,22 @@ singleFileGate exempt runtimeDecls coreDecls rsrc csrc target tsrc roots userDec
       userDecls
   (map renderTestReportError err, held)
 
+-- The prelude a single-file elaboration runs against (none when the file under test is the
+-- prelude) and the module id it is elaborated under, which is also pointed at `target`.
+singleRootScope : List Decl ->
+  String ->
+  List String ->
+  List Decl ->
+  <IO> (List Decl, String)
+singleRootScope coreDecls target roots userDecls =
+  let rootId = singleRootId roots target
+  modulePathMap := [(rootId, target)]
+  (if programIsCore userDecls then [] else coreDecls, rootId)
+
 -- `prepareSingleDiags`' elaboration as the gate's one drive: it poses the
--- value-main obligation the check drive poses, so the gate refuses what
--- `check` refuses, and keeps the pair the phases go on to read.
+-- value-main obligation the check drive poses, and keeps the pair the phases
+-- go on to read.  It does not apply the target profile's capability check, so a
+-- profile-gated `main` that `check` refuses can still pass this gate.
 singlePairDrive : List Decl ->
   List Decl ->
   String ->
@@ -718,9 +731,7 @@ singlePairDrive : List Decl ->
   List Decl ->
   <IO> (TestPair, TcReport, DriveOutputs)
 singlePairDrive runtimeDecls coreDecls target roots userDecls =
-  let livePrelude = if programIsCore userDecls then [] else coreDecls
-  let rootId = singleRootId roots target
-  modulePathMap := [(rootId, target)]
+  let (livePrelude, rootId) = singleRootScope coreDecls target roots userDecls
   let rawM = [(rootId, userDecls)]
   let ((coreM, modsM), factsM, _, report, outputs) =
     elaborateModulesMangledReport
@@ -1288,9 +1299,7 @@ prepareSingleDiags : List Decl ->
   List Decl ->
   <IO> (TestPair, List (String, TcDiag))
 prepareSingleDiags runtimeDecls coreDecls target roots userDecls =
-  let livePrelude = if programIsCore userDecls then [] else coreDecls
-  let rootId = singleRootId roots target
-  modulePathMap := [(rootId, target)]
+  let (livePrelude, rootId) = singleRootScope coreDecls target roots userDecls
   perfRow "test-elab" "single" (_ =>
     helperElaboration runtimeDecls livePrelude [(rootId, userDecls)] [])
 
@@ -1942,14 +1951,13 @@ runChosenOn EngNative _trees None target tsrc userDecls examples synthResults =
 --
 -- The prelude-only shape keeps the whole prelude (a user name shadows core only
 -- for user code; core resolves against core), appends the synth decls,
--- dict-elaborates and runs core beside the module.  When the file under test IS the prelude (`medaka
--- test stdlib/core.mdk`) it already declares everything the prelude provides,
--- so prepending it would duplicate every top-level decl (two `Bounded Char`
--- impls, etc.) and corrupt return-position dispatch — hence `programIsCore`.
--- That case alone is flattened to the shape `evalOneRootEnvFacts`
--- consumes (`elaborateOne`'s), keeping the module's diagnostics for the examples,
--- and its root frame carries the synthesized `__dt_i__` bindings the same way the
--- pair arm's does.
+-- dict-elaborates and runs core beside the module.  When the file under test IS the prelude
+-- (`medaka test stdlib/core.mdk`) it already declares everything the prelude provides, so
+-- prepending it would duplicate every top-level decl (two `Bounded Char` impls, etc.) and
+-- corrupt return-position dispatch — hence `programIsCore`.  That case alone is flattened to
+-- the shape `evalOneRootEnvFacts` consumes (`elaborateOne`'s), keeping the module's
+-- diagnostics for the examples, and its root frame carries the synthesized `__dt_i__`
+-- bindings the same way the pair arm's does.
 runChosen : DoctestTrees ->
   List Example ->
   List (Result String (List Decl)) ->
@@ -5345,8 +5353,10 @@ testFilesReport _ _ acc = acc
 (DFunDef false "singleFileGateParts" ((PCon "False") (PVar "runtimeDecls") (PVar "coreDecls") (PVar "rsrc") (PVar "csrc") (PVar "target") (PVar "tsrc") (PVar "roots") (PVar "userDecls")) (EBlock (DoLet false false (PVar "front") (EApp (EApp (EApp (EVar "perfRow") (ELit (LString "test-gate"))) (ELit (LString "single"))) (ELam (PWild) (EApp (EApp (EApp (EVar "frontEnd") (EVar "noStdlibExports")) (ELam (PWild) (EApp (EApp (EApp (EApp (EApp (EVar "singlePairDrive") (EVar "runtimeDecls")) (EVar "coreDecls")) (EVar "target")) (EVar "roots")) (EVar "userDecls")))) (ERecordCreate "FrontInput" ((fa "fiInputs" (EApp (EApp (EVar "testDriveInputs") (EListLit)) (EVar "coreDecls"))) (fa "fiAllowInternal" (EVar "True")) (fa "fiTrusted" (EListLit)) (fa "fiRuntimeSrc" (EVar "rsrc")) (fa "fiCoreSrc" (EVar "csrc")) (fa "fiPolicy" (EVar "NeverDriveRejected")) (fa "fiProgram" (EApp (EVar "FrontFile") (ETuple (ELit (LString "")) (ELit (LString "")) (EApp (EVar "targetRaw") (EVar "tsrc"))))))))))) (DoLet false false (PVar "diags") (EApp (EApp (EVar "flatMap") (EVar "snd")) (EFieldAccess (EVar "front") "foDiags"))) (DoExpr (EIf (EApp (EVar "isNonEmptyL") (EApp (EApp (EVar "filter") (EVar "diagIsError")) (EVar "diags"))) (ETuple (EApp (EVar "Some") (EApp (EVar "TestDiagnosticError") (EListLit (ETuple (EVar "target") (EVar "tsrc") (EVar "diags"))))) (EVar "None")) (ETuple (EVar "None") (EFieldAccess (EVar "front") "foDriven"))))))
 (DTypeSig false "singleFileGate" (TyFun (TyCon "Bool") (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyEffect ("IO") None (TyTuple (TyApp (TyCon "Option") (TyCon "String")) (TyApp (TyCon "Option") (TyCon "TestPair"))))))))))))))
 (DFunDef false "singleFileGate" ((PVar "exempt") (PVar "runtimeDecls") (PVar "coreDecls") (PVar "rsrc") (PVar "csrc") (PVar "target") (PVar "tsrc") (PVar "roots") (PVar "userDecls")) (EBlock (DoLet false false (PTuple (PVar "err") (PVar "held")) (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EVar "singleFileGateParts") (EVar "exempt")) (EVar "runtimeDecls")) (EVar "coreDecls")) (EVar "rsrc")) (EVar "csrc")) (EVar "target")) (EVar "tsrc")) (EVar "roots")) (EVar "userDecls"))) (DoExpr (ETuple (EApp (EApp (EVar "map") (EVar "renderTestReportError")) (EVar "err")) (EVar "held")))))
+(DTypeSig false "singleRootScope" (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyEffect ("IO") None (TyTuple (TyApp (TyCon "List") (TyCon "Decl")) (TyCon "String"))))))))
+(DFunDef false "singleRootScope" ((PVar "coreDecls") (PVar "target") (PVar "roots") (PVar "userDecls")) (EBlock (DoLet false false (PVar "rootId") (EApp (EApp (EVar "singleRootId") (EVar "roots")) (EVar "target"))) (DoExpr (EApp (EApp (EVar "setRef") (EVar "modulePathMap")) (EListLit (ETuple (EVar "rootId") (EVar "target"))))) (DoExpr (ETuple (EIf (EApp (EVar "programIsCore") (EVar "userDecls")) (EListLit) (EVar "coreDecls")) (EVar "rootId")))))
 (DTypeSig false "singlePairDrive" (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyEffect ("IO") None (TyTuple (TyCon "TestPair") (TyCon "TcReport") (TyCon "DriveOutputs")))))))))
-(DFunDef false "singlePairDrive" ((PVar "runtimeDecls") (PVar "coreDecls") (PVar "target") (PVar "roots") (PVar "userDecls")) (EBlock (DoLet false false (PVar "livePrelude") (EIf (EApp (EVar "programIsCore") (EVar "userDecls")) (EListLit) (EVar "coreDecls"))) (DoLet false false (PVar "rootId") (EApp (EApp (EVar "singleRootId") (EVar "roots")) (EVar "target"))) (DoExpr (EApp (EApp (EVar "setRef") (EVar "modulePathMap")) (EListLit (ETuple (EVar "rootId") (EVar "target"))))) (DoLet false false (PVar "rawM") (EListLit (ETuple (EVar "rootId") (EVar "userDecls")))) (DoLet false false (PTuple (PTuple (PVar "coreM") (PVar "modsM")) (PVar "factsM") PWild (PVar "report") (PVar "outputs")) (EApp (EApp (EApp (EApp (EVar "elaborateModulesMangledReport") (EApp (EApp (EVar "valueMainCandidate") (EVar "coreDecls")) (EVar "rawM"))) (EVar "runtimeDecls")) (EVar "livePrelude")) (EVar "rawM"))) (DoExpr (ETuple (EApp (EApp (EApp (EApp (EApp (EApp (EVar "TestPair") (EVar "runtimeDecls")) (EVar "livePrelude")) (EVar "coreM")) (EVar "rawM")) (EVar "modsM")) (EVar "factsM")) (EVar "report") (EVar "outputs")))))
+(DFunDef false "singlePairDrive" ((PVar "runtimeDecls") (PVar "coreDecls") (PVar "target") (PVar "roots") (PVar "userDecls")) (EBlock (DoLet false false (PTuple (PVar "livePrelude") (PVar "rootId")) (EApp (EApp (EApp (EApp (EVar "singleRootScope") (EVar "coreDecls")) (EVar "target")) (EVar "roots")) (EVar "userDecls"))) (DoLet false false (PVar "rawM") (EListLit (ETuple (EVar "rootId") (EVar "userDecls")))) (DoLet false false (PTuple (PTuple (PVar "coreM") (PVar "modsM")) (PVar "factsM") PWild (PVar "report") (PVar "outputs")) (EApp (EApp (EApp (EApp (EVar "elaborateModulesMangledReport") (EApp (EApp (EVar "valueMainCandidate") (EVar "coreDecls")) (EVar "rawM"))) (EVar "runtimeDecls")) (EVar "livePrelude")) (EVar "rawM"))) (DoExpr (ETuple (EApp (EApp (EApp (EApp (EApp (EApp (EVar "TestPair") (EVar "runtimeDecls")) (EVar "livePrelude")) (EVar "coreM")) (EVar "rawM")) (EVar "modsM")) (EVar "factsM")) (EVar "report") (EVar "outputs")))))
 (DTypeSig false "singleDoctestPhase" (TyFun (TyFun (TyCon "Unit") (TyEffect ("IO") None (TyVar "a"))) (TyEffect ("IO") None (TyVar "a"))))
 (DFunDef false "singleDoctestPhase" ((PVar "phase")) (EBlock (DoLet false false (PVar "paths") (EUnOp "!" (EVar "modulePathMap"))) (DoLet false false (PVar "result") (EApp (EVar "phase") (ELit LUnit))) (DoExpr (EApp (EApp (EVar "setRef") (EVar "modulePathMap")) (EVar "paths"))) (DoExpr (EVar "result"))))
 (DTypeSig false "gatedDrive" (TyFun (TyApp (TyCon "List") (TyCon "SiblingPair")) (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyApp (TyCon "OrdMap") (TyCon "String")) (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "String") (TyApp (TyCon "List") (TyCon "Decl")))) (TyFun (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "Decl")))) (TyTuple (TyCon "ElabResult") (TyCon "TcReport") (TyCon "DriveOutputs"))) (TyEffect ("IO") None (TyTuple (TyApp (TyCon "Option") (TyCon "TestReportError")) (TyApp (TyCon "Option") (TyCon "ElabResult"))))))))))))
@@ -5416,7 +5426,7 @@ testFilesReport _ _ acc = acc
 (DTypeSig false "prepareSingle" (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyEffect ("IO") None (TyCon "TestPair"))))))))
 (DFunDef false "prepareSingle" ((PVar "runtimeDecls") (PVar "coreDecls") (PVar "target") (PVar "roots") (PVar "userDecls")) (EApp (EVar "fst") (EApp (EApp (EApp (EApp (EApp (EVar "prepareSingleDiags") (EVar "runtimeDecls")) (EVar "coreDecls")) (EVar "target")) (EVar "roots")) (EVar "userDecls"))))
 (DTypeSig false "prepareSingleDiags" (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyEffect ("IO") None (TyTuple (TyCon "TestPair") (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "TcDiag")))))))))))
-(DFunDef false "prepareSingleDiags" ((PVar "runtimeDecls") (PVar "coreDecls") (PVar "target") (PVar "roots") (PVar "userDecls")) (EBlock (DoLet false false (PVar "livePrelude") (EIf (EApp (EVar "programIsCore") (EVar "userDecls")) (EListLit) (EVar "coreDecls"))) (DoLet false false (PVar "rootId") (EApp (EApp (EVar "singleRootId") (EVar "roots")) (EVar "target"))) (DoExpr (EApp (EApp (EVar "setRef") (EVar "modulePathMap")) (EListLit (ETuple (EVar "rootId") (EVar "target"))))) (DoExpr (EApp (EApp (EApp (EVar "perfRow") (ELit (LString "test-elab"))) (ELit (LString "single"))) (ELam (PWild) (EApp (EApp (EApp (EApp (EVar "helperElaboration") (EVar "runtimeDecls")) (EVar "livePrelude")) (EListLit (ETuple (EVar "rootId") (EVar "userDecls")))) (EListLit)))))))
+(DFunDef false "prepareSingleDiags" ((PVar "runtimeDecls") (PVar "coreDecls") (PVar "target") (PVar "roots") (PVar "userDecls")) (EBlock (DoLet false false (PTuple (PVar "livePrelude") (PVar "rootId")) (EApp (EApp (EApp (EApp (EVar "singleRootScope") (EVar "coreDecls")) (EVar "target")) (EVar "roots")) (EVar "userDecls"))) (DoExpr (EApp (EApp (EApp (EVar "perfRow") (ELit (LString "test-elab"))) (ELit (LString "single"))) (ELam (PWild) (EApp (EApp (EApp (EApp (EVar "helperElaboration") (EVar "runtimeDecls")) (EVar "livePrelude")) (EListLit (ETuple (EVar "rootId") (EVar "userDecls")))) (EListLit)))))))
 (DTypeSig false "perfRow" (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyFun (TyCon "Unit") (TyEffect ("IO") None (TyVar "a"))) (TyEffect ("IO") None (TyVar "a"))))))
 (DFunDef false "perfRow" ((PVar "label") (PVar "ops") (PVar "work")) (EBlock (DoLet false false (PVar "t0") (EApp (EVar "now") (ELit LUnit))) (DoLet false false (PVar "result") (EApp (EVar "work") (ELit LUnit))) (DoLet false false PWild (EApp (EApp (EApp (EApp (EVar "emitPhase") (EApp (EVar "perfEnabled") (ELit LUnit))) (EVar "label")) (EBinOp "-" (EApp (EVar "now") (ELit LUnit)) (EVar "t0"))) (EVar "ops"))) (DoExpr (EVar "result"))))
 (DTypeSig false "planPropRequestsTimed" (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "PlanModule")) (TyFun (TyApp (TyCon "List") (TyCon "PropRequest")) (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyEffect ("IO") None (TyApp (TyApp (TyCon "Result") (TyCon "PlanError")) (TyTuple (TyCon "PlanEnv") (TyApp (TyCon "List") (TyCon "PreparedPropRequest"))))))))))
@@ -6057,8 +6067,10 @@ testFilesReport _ _ acc = acc
 (DFunDef false "singleFileGateParts" ((PCon "False") (PVar "runtimeDecls") (PVar "coreDecls") (PVar "rsrc") (PVar "csrc") (PVar "target") (PVar "tsrc") (PVar "roots") (PVar "userDecls")) (EBlock (DoLet false false (PVar "front") (EApp (EApp (EApp (EVar "perfRow") (ELit (LString "test-gate"))) (ELit (LString "single"))) (ELam (PWild) (EApp (EApp (EApp (EVar "frontEnd") (EVar "noStdlibExports")) (ELam (PWild) (EApp (EApp (EApp (EApp (EApp (EVar "singlePairDrive") (EVar "runtimeDecls")) (EVar "coreDecls")) (EVar "target")) (EVar "roots")) (EVar "userDecls")))) (ERecordCreate "FrontInput" ((fa "fiInputs" (EApp (EApp (EVar "testDriveInputs") (EListLit)) (EVar "coreDecls"))) (fa "fiAllowInternal" (EVar "True")) (fa "fiTrusted" (EListLit)) (fa "fiRuntimeSrc" (EVar "rsrc")) (fa "fiCoreSrc" (EVar "csrc")) (fa "fiPolicy" (EVar "NeverDriveRejected")) (fa "fiProgram" (EApp (EVar "FrontFile") (ETuple (ELit (LString "")) (ELit (LString "")) (EApp (EVar "targetRaw") (EVar "tsrc"))))))))))) (DoLet false false (PVar "diags") (EApp (EApp (EDictApp "flatMap") (EVar "snd")) (EFieldAccess (EVar "front") "foDiags"))) (DoExpr (EIf (EApp (EVar "isNonEmptyL") (EApp (EApp (EMethodRef "filter") (EVar "diagIsError")) (EVar "diags"))) (ETuple (EApp (EVar "Some") (EApp (EVar "TestDiagnosticError") (EListLit (ETuple (EVar "target") (EVar "tsrc") (EVar "diags"))))) (EVar "None")) (ETuple (EVar "None") (EFieldAccess (EVar "front") "foDriven"))))))
 (DTypeSig false "singleFileGate" (TyFun (TyCon "Bool") (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyEffect ("IO") None (TyTuple (TyApp (TyCon "Option") (TyCon "String")) (TyApp (TyCon "Option") (TyCon "TestPair"))))))))))))))
 (DFunDef false "singleFileGate" ((PVar "exempt") (PVar "runtimeDecls") (PVar "coreDecls") (PVar "rsrc") (PVar "csrc") (PVar "target") (PVar "tsrc") (PVar "roots") (PVar "userDecls")) (EBlock (DoLet false false (PTuple (PVar "err") (PVar "held")) (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EVar "singleFileGateParts") (EVar "exempt")) (EVar "runtimeDecls")) (EVar "coreDecls")) (EVar "rsrc")) (EVar "csrc")) (EVar "target")) (EVar "tsrc")) (EVar "roots")) (EVar "userDecls"))) (DoExpr (ETuple (EApp (EApp (EMethodRef "map") (EVar "renderTestReportError")) (EVar "err")) (EVar "held")))))
+(DTypeSig false "singleRootScope" (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyEffect ("IO") None (TyTuple (TyApp (TyCon "List") (TyCon "Decl")) (TyCon "String"))))))))
+(DFunDef false "singleRootScope" ((PVar "coreDecls") (PVar "target") (PVar "roots") (PVar "userDecls")) (EBlock (DoLet false false (PVar "rootId") (EApp (EApp (EVar "singleRootId") (EVar "roots")) (EVar "target"))) (DoExpr (EApp (EApp (EVar "setRef") (EVar "modulePathMap")) (EListLit (ETuple (EVar "rootId") (EVar "target"))))) (DoExpr (ETuple (EIf (EApp (EVar "programIsCore") (EVar "userDecls")) (EListLit) (EVar "coreDecls")) (EVar "rootId")))))
 (DTypeSig false "singlePairDrive" (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyEffect ("IO") None (TyTuple (TyCon "TestPair") (TyCon "TcReport") (TyCon "DriveOutputs")))))))))
-(DFunDef false "singlePairDrive" ((PVar "runtimeDecls") (PVar "coreDecls") (PVar "target") (PVar "roots") (PVar "userDecls")) (EBlock (DoLet false false (PVar "livePrelude") (EIf (EApp (EVar "programIsCore") (EVar "userDecls")) (EListLit) (EVar "coreDecls"))) (DoLet false false (PVar "rootId") (EApp (EApp (EVar "singleRootId") (EVar "roots")) (EVar "target"))) (DoExpr (EApp (EApp (EVar "setRef") (EVar "modulePathMap")) (EListLit (ETuple (EVar "rootId") (EVar "target"))))) (DoLet false false (PVar "rawM") (EListLit (ETuple (EVar "rootId") (EVar "userDecls")))) (DoLet false false (PTuple (PTuple (PVar "coreM") (PVar "modsM")) (PVar "factsM") PWild (PVar "report") (PVar "outputs")) (EApp (EApp (EApp (EApp (EVar "elaborateModulesMangledReport") (EApp (EApp (EVar "valueMainCandidate") (EVar "coreDecls")) (EVar "rawM"))) (EVar "runtimeDecls")) (EVar "livePrelude")) (EVar "rawM"))) (DoExpr (ETuple (EApp (EApp (EApp (EApp (EApp (EApp (EVar "TestPair") (EVar "runtimeDecls")) (EVar "livePrelude")) (EVar "coreM")) (EVar "rawM")) (EVar "modsM")) (EVar "factsM")) (EVar "report") (EVar "outputs")))))
+(DFunDef false "singlePairDrive" ((PVar "runtimeDecls") (PVar "coreDecls") (PVar "target") (PVar "roots") (PVar "userDecls")) (EBlock (DoLet false false (PTuple (PVar "livePrelude") (PVar "rootId")) (EApp (EApp (EApp (EApp (EVar "singleRootScope") (EVar "coreDecls")) (EVar "target")) (EVar "roots")) (EVar "userDecls"))) (DoLet false false (PVar "rawM") (EListLit (ETuple (EVar "rootId") (EVar "userDecls")))) (DoLet false false (PTuple (PTuple (PVar "coreM") (PVar "modsM")) (PVar "factsM") PWild (PVar "report") (PVar "outputs")) (EApp (EApp (EApp (EApp (EVar "elaborateModulesMangledReport") (EApp (EApp (EVar "valueMainCandidate") (EVar "coreDecls")) (EVar "rawM"))) (EVar "runtimeDecls")) (EVar "livePrelude")) (EVar "rawM"))) (DoExpr (ETuple (EApp (EApp (EApp (EApp (EApp (EApp (EVar "TestPair") (EVar "runtimeDecls")) (EVar "livePrelude")) (EVar "coreM")) (EVar "rawM")) (EVar "modsM")) (EVar "factsM")) (EVar "report") (EVar "outputs")))))
 (DTypeSig false "singleDoctestPhase" (TyFun (TyFun (TyCon "Unit") (TyEffect ("IO") None (TyVar "a"))) (TyEffect ("IO") None (TyVar "a"))))
 (DFunDef false "singleDoctestPhase" ((PVar "phase")) (EBlock (DoLet false false (PVar "paths") (EUnOp "!" (EVar "modulePathMap"))) (DoLet false false (PVar "result") (EApp (EVar "phase") (ELit LUnit))) (DoExpr (EApp (EApp (EVar "setRef") (EVar "modulePathMap")) (EVar "paths"))) (DoExpr (EVar "result"))))
 (DTypeSig false "gatedDrive" (TyFun (TyApp (TyCon "List") (TyCon "SiblingPair")) (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyApp (TyCon "OrdMap") (TyCon "String")) (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "String") (TyApp (TyCon "List") (TyCon "Decl")))) (TyFun (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "Decl")))) (TyTuple (TyCon "ElabResult") (TyCon "TcReport") (TyCon "DriveOutputs"))) (TyEffect ("IO") None (TyTuple (TyApp (TyCon "Option") (TyCon "TestReportError")) (TyApp (TyCon "Option") (TyCon "ElabResult"))))))))))))
@@ -6128,7 +6140,7 @@ testFilesReport _ _ acc = acc
 (DTypeSig false "prepareSingle" (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyEffect ("IO") None (TyCon "TestPair"))))))))
 (DFunDef false "prepareSingle" ((PVar "runtimeDecls") (PVar "coreDecls") (PVar "target") (PVar "roots") (PVar "userDecls")) (EApp (EVar "fst") (EApp (EApp (EApp (EApp (EApp (EVar "prepareSingleDiags") (EVar "runtimeDecls")) (EVar "coreDecls")) (EVar "target")) (EVar "roots")) (EVar "userDecls"))))
 (DTypeSig false "prepareSingleDiags" (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyEffect ("IO") None (TyTuple (TyCon "TestPair") (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "TcDiag")))))))))))
-(DFunDef false "prepareSingleDiags" ((PVar "runtimeDecls") (PVar "coreDecls") (PVar "target") (PVar "roots") (PVar "userDecls")) (EBlock (DoLet false false (PVar "livePrelude") (EIf (EApp (EVar "programIsCore") (EVar "userDecls")) (EListLit) (EVar "coreDecls"))) (DoLet false false (PVar "rootId") (EApp (EApp (EVar "singleRootId") (EVar "roots")) (EVar "target"))) (DoExpr (EApp (EApp (EVar "setRef") (EVar "modulePathMap")) (EListLit (ETuple (EVar "rootId") (EVar "target"))))) (DoExpr (EApp (EApp (EApp (EVar "perfRow") (ELit (LString "test-elab"))) (ELit (LString "single"))) (ELam (PWild) (EApp (EApp (EApp (EApp (EVar "helperElaboration") (EVar "runtimeDecls")) (EVar "livePrelude")) (EListLit (ETuple (EVar "rootId") (EVar "userDecls")))) (EListLit)))))))
+(DFunDef false "prepareSingleDiags" ((PVar "runtimeDecls") (PVar "coreDecls") (PVar "target") (PVar "roots") (PVar "userDecls")) (EBlock (DoLet false false (PTuple (PVar "livePrelude") (PVar "rootId")) (EApp (EApp (EApp (EApp (EVar "singleRootScope") (EVar "coreDecls")) (EVar "target")) (EVar "roots")) (EVar "userDecls"))) (DoExpr (EApp (EApp (EApp (EVar "perfRow") (ELit (LString "test-elab"))) (ELit (LString "single"))) (ELam (PWild) (EApp (EApp (EApp (EApp (EVar "helperElaboration") (EVar "runtimeDecls")) (EVar "livePrelude")) (EListLit (ETuple (EVar "rootId") (EVar "userDecls")))) (EListLit)))))))
 (DTypeSig false "perfRow" (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyFun (TyCon "Unit") (TyEffect ("IO") None (TyVar "a"))) (TyEffect ("IO") None (TyVar "a"))))))
 (DFunDef false "perfRow" ((PVar "label") (PVar "ops") (PVar "work")) (EBlock (DoLet false false (PVar "t0") (EApp (EVar "now") (ELit LUnit))) (DoLet false false (PVar "result") (EApp (EVar "work") (ELit LUnit))) (DoLet false false PWild (EApp (EApp (EApp (EApp (EVar "emitPhase") (EApp (EVar "perfEnabled") (ELit LUnit))) (EVar "label")) (EBinOp "-" (EApp (EVar "now") (ELit LUnit)) (EVar "t0"))) (EVar "ops"))) (DoExpr (EVar "result"))))
 (DTypeSig false "planPropRequestsTimed" (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "PlanModule")) (TyFun (TyApp (TyCon "List") (TyCon "PropRequest")) (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyEffect ("IO") None (TyApp (TyApp (TyCon "Result") (TyCon "PlanError")) (TyTuple (TyCon "PlanEnv") (TyApp (TyCon "List") (TyCon "PreparedPropRequest"))))))))))

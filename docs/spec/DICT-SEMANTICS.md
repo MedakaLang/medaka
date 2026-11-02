@@ -2459,7 +2459,7 @@ through the degenerate 1-module list `[(rootId, decls)]`, and every arm reaches
 not violated by the split *as a driver choice*. What the split carries is a residual
 **flatten**: the prelude is concatenated into the user's declaration list rather than
 being a node of the graph, which is why the no-import arm must first compute
-`livePrelude` = *"the shadow-dropped core"* (`dropShadowedExp`, `:237-240`) and why it
+`livePrelude` (the tools verbs now use the whole core; only the oracle entries, `compiler/entries/*`, still drop shadowed core names via `dropShadowedExp`) and why it
 needs a `programIsCore` guard (`:255`) to avoid double-declaring everything when the
 file under test *is* the prelude. Under **U1** the prelude is a node like any other,
 so a genuine 2-node graph needs neither the pre-drop nor the guard — SHADOW S1's

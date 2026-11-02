@@ -647,8 +647,8 @@ renderTestReportError (TestDiagnosticError triples) =
 -- `arrayGetUnsafe` &co. is not spuriously rejected.
 -- Import-bearing modules are gated by `gatedDrive` below instead, off the
 -- ONE elaboration the phases already need.
--- Returns structured diagnostics iff the module has an error, else the pair
--- (None for an exempt module, which is not gated).
+-- Returns two components: the structured diagnostics, non-empty iff the module has an error,
+-- and the held pair, `None` for an exempt module (one that is not gated).
 singleFileGateParts : Bool ->
   List Decl ->
   List Decl ->
@@ -704,9 +704,22 @@ singleFileGate exempt runtimeDecls coreDecls rsrc csrc target tsrc roots userDec
       userDecls
   (map renderTestReportError err, held)
 
+-- The prelude a single-file elaboration runs against (none when the file under test is the
+-- prelude) and the module id it is elaborated under, which is also pointed at `target`.
+singleRootScope : List Decl ->
+  String ->
+  List String ->
+  List Decl ->
+  <IO> (List Decl, String)
+singleRootScope coreDecls target roots userDecls =
+  let rootId = singleRootId roots target
+  modulePathMap := [(rootId, target)]
+  (if programIsCore userDecls then [] else coreDecls, rootId)
+
 -- `prepareSingleDiags`' elaboration as the gate's one drive: it poses the
--- value-main obligation the check drive poses, so the gate refuses what
--- `check` refuses, and keeps the pair the phases go on to read.
+-- value-main obligation the check drive poses, and keeps the pair the phases
+-- go on to read.  It does not apply the target profile's capability check, so a
+-- profile-gated `main` that `check` refuses can still pass this gate.
 singlePairDrive : List Decl ->
   List Decl ->
   String ->
@@ -714,9 +727,7 @@ singlePairDrive : List Decl ->
   List Decl ->
   <IO> (TestPair, TcReport, DriveOutputs)
 singlePairDrive runtimeDecls coreDecls target roots userDecls =
-  let livePrelude = if programIsCore userDecls then [] else coreDecls
-  let rootId = singleRootId roots target
-  modulePathMap := [(rootId, target)]
+  let (livePrelude, rootId) = singleRootScope coreDecls target roots userDecls
   let rawM = [(rootId, userDecls)]
   let ((coreM, modsM), factsM, _, report, outputs) =
     elaborateModulesMangledReport
@@ -1284,9 +1295,7 @@ prepareSingleDiags : List Decl ->
   List Decl ->
   <IO> (TestPair, List (String, TcDiag))
 prepareSingleDiags runtimeDecls coreDecls target roots userDecls =
-  let livePrelude = if programIsCore userDecls then [] else coreDecls
-  let rootId = singleRootId roots target
-  modulePathMap := [(rootId, target)]
+  let (livePrelude, rootId) = singleRootScope coreDecls target roots userDecls
   perfRow "test-elab" "single" (_ =>
     helperElaboration runtimeDecls livePrelude [(rootId, userDecls)] [])
 
@@ -1938,14 +1947,13 @@ runChosenOn EngNative _trees None target tsrc userDecls examples synthResults =
 --
 -- The prelude-only shape keeps the whole prelude (a user name shadows core only
 -- for user code; core resolves against core), appends the synth decls,
--- dict-elaborates and runs core beside the module.  When the file under test IS the prelude (`medaka
--- test stdlib/core.mdk`) it already declares everything the prelude provides,
--- so prepending it would duplicate every top-level decl (two `Bounded Char`
--- impls, etc.) and corrupt return-position dispatch — hence `programIsCore`.
--- That case alone is flattened to the shape `evalOneRootEnvFacts`
--- consumes (`elaborateOne`'s), keeping the module's diagnostics for the examples,
--- and its root frame carries the synthesized `__dt_i__` bindings the same way the
--- pair arm's does.
+-- dict-elaborates and runs core beside the module.  When the file under test IS the prelude
+-- (`medaka test stdlib/core.mdk`) it already declares everything the prelude provides, so
+-- prepending it would duplicate every top-level decl (two `Bounded Char` impls, etc.) and
+-- corrupt return-position dispatch — hence `programIsCore`.  That case alone is flattened to
+-- the shape `evalOneRootEnvFacts` consumes (`elaborateOne`'s), keeping the module's
+-- diagnostics for the examples, and its root frame carries the synthesized `__dt_i__`
+-- bindings the same way the pair arm's does.
 runChosen : DoctestTrees ->
   List Example ->
   List (Result String (List Decl)) ->
