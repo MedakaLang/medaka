@@ -69,6 +69,7 @@ mintMethodCellWith : ModuleCtx -> PassEvidence -> String -> Int -> Route -> List
 modInScope : String -> Map String Unit -> Bool
 negatedI32Lit : Expr -> Option Int
 negatedInI32 : Int -> Option Int
+ownedBy : String -> ModuleCtx -> ModuleCtx
 passIndex : PassEvidence -> EvIndex
 passMethodFacts : EvVal -> PassMethod
 passMethodOf : PassEvidence -> EvId -> PassMethod
