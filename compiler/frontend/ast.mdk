@@ -1588,7 +1588,7 @@ export type EvTable = List EvEntry
 -- a resolved lexical address for a variable reference (STAGE2-DESIGN §2.0, the
 -- de-risked first half: resolve EMITS the slot; eval does NOT yet consume it —
 -- the tree-walker keeps its by-name frame scan).  ALocal frame slot mirrors the
--- runtime env shape `EvalEnv (List (List (String, Ref Value)))` exactly: `frame`
+-- runtime env's frame list, `List (List (String, Ref Value))`, exactly: `frame`
 -- is how many frames down the stack the binder sits (0 = innermost), `slot` is
 -- its index within that frame (the order matchPat binds names).  AGlobal = not
 -- lexically bound (top-level / prelude / extern) — eval resolves it by name, so

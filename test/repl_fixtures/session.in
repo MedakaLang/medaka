@@ -10,6 +10,9 @@ length [1, 2]
 putStrLn x = x + 1
 putStrLn 3
 1 + "a"
+compareNaN x y = 1
+compare (0.0 / 0.0) 1.0
+compareNaN 3 4
 :type x
 :browse
 :reset

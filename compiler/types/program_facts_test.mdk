@@ -1,12 +1,9 @@
--- Sibling tests for `program_facts.mdk`: the bracket nests and restores.
--- `factsNow` outside a bracket panics, and no verb observes a panic in-process, so
--- the restore after a bracket stands in for that arm.
+-- Sibling tests for `program_facts.mdk`.
 
 import test.{Expectation, expectEqual, expectAll, expectTrue, expectFalse, fail}
 import frontend.ast.{Decl, EvId(..), EvVal(..), EvEntry(..), Route(..)}
 import frontend.desugar.{desugar}
 import frontend.parser.{parseLocated}
-import types.disposition.{emptyDispositionTable}
 import types.publish.{EntryOutcome(..)}
 import types.program_facts.{
   ProgramFacts(..),
@@ -15,13 +12,9 @@ import types.program_facts.{
   factsOfElab,
   factsOfElabWith,
   factsOfElabSources,
-  withFacts,
-  factsNow,
 }
 import types.route_key.{
   evIndexEntries,
-  evIndexOf,
-  evSiteRouteIn,
 }
 import types.typecheck.{
   defaultDriveInputs, elaborateModules, elaborateModulesWithReport
@@ -89,48 +82,11 @@ main = ()
     expectEqual
       expected
       (manifestIdentities (factsOfElabWith [] elab).pfManifests),
-    expectEqual
-      expected
-      (withFacts sourceFacts (_ =>
-        manifestIdentities (factsNow ()).pfManifests)),
     expectEqual [] (manifestIdentities emptyFacts.pfManifests),
   ]
 
-routeFacts : ProgramFacts
-routeFacts = ProgramFacts {
-  pfSymbolOrigins = None,
-  pfManifests = [],
-  pfEvidence = evIndexOf [EvEntry (EvId "m" 1) (EvOne (RScalar "Int"))],
-  pfDispositions = Some emptyDispositionTable,
-  pfBinders = None,
-  pfEntryOutcome = None,
-  pfExternSources = None,
-  pfSibling = [],
-}
-
 isTyped : ProgramFacts -> Bool
 isTyped f = isSome f.pfDispositions
-
-routeOf : ProgramFacts -> String
-routeOf f = match evSiteRouteIn f.pfEvidence (EvId "m" 1)
-  RScalar tag => tag
-  _ => "other"
-
-test "withFacts makes its facts current inside the bracket" = expectAll [
-  expectTrue (withFacts routeFacts (_ => isTyped (factsNow ()))),
-  expectEqual "Int" (withFacts routeFacts (_ => routeOf (factsNow ()))),
-]
-
-test "withFacts nests, and each bracket restores the one around it" =
-  let seen = withFacts routeFacts (_ =>
-    let inner = withFacts emptyFacts (_ => isTyped (factsNow ()))
-    (inner, isTyped (factsNow ())))
-  expectEqual (False, True) seen
-
-test "sequential brackets are independent" =
-  let first = withFacts routeFacts (_ => isTyped (factsNow ()))
-  let second = withFacts emptyFacts (_ => isTyped (factsNow ()))
-  expectEqual (True, False) (first, second)
 
 test "emptyFacts carries no dispositions and no binders" = expectAll [
   expectFalse (isTyped emptyFacts),

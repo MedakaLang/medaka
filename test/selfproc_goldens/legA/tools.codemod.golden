@@ -1,0 +1,28 @@
+allCodemods : List Codemod
+applyAtom : List (String, EffAction) -> EffAtomTy -> (Option EffAtomTy, Bool)
+atomKey : EffAtomTy -> String
+codemodArgHelp : Codemod -> String
+codemodDescr : Codemod -> String
+codemodListing : String
+codemodListingLine : Codemod -> String
+codemodMk : Codemod -> List String -> Result String (Decl -> (Decl, Bool))
+codemodName : Codemod -> String
+codemodSource : (Decl -> (Decl, Bool)) -> String -> Result ParseError (Option String)
+codemodWarnDecls : Codemod -> List String -> List Decl -> List String
+collectKept : List (Option EffAtomTy, Bool) -> List EffAtomTy
+declEffectWarn : List (String, EffAction) -> Decl -> List String
+declEffectWarns : List (String, EffAction) -> List Decl -> List String
+dedupeAtoms : List EffAtomTy -> List EffAtomTy
+effTyNode : List (String, EffAction) -> Ty -> (Ty, Bool)
+effectLabelsCodemod : Codemod
+findCodemod : String -> Option Codemod
+findCodemodGo : String -> List Codemod -> Option Codemod
+mapDeclsChanged : (Decl -> (Decl, Bool)) -> List Decl -> (List Decl, Bool)
+mkEffectLabels : List String -> Result String (Decl -> (Decl, Bool))
+parseEffectArgs : List String -> List (String, EffAction) -> Result String (List (String, EffAction))
+prependDrops : List String -> List (String, EffAction) -> List (String, EffAction)
+rewriteAtoms : List (String, EffAction) -> List EffAtomTy -> (List EffAtomTy, Bool)
+rewriteBareRow : List (String, EffAction) -> List EffAtomTy -> List String -> Option Loc -> (Ty, Bool)
+rewriteRow : List (String, EffAction) -> List EffAtomTy -> List String -> Ty -> (Ty, Bool)
+sndB : (a, Bool) -> Bool
+warnEffectLabels : List String -> List Decl -> List String

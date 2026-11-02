@@ -25,6 +25,10 @@ import types.program_facts as ProgramFacts
 import eval.eval as Eval
 import tools.check as Check
 import tools.codemod as Codemod
+import types.prelude_interface as PreludeInterface
+import types.module_interface as ModuleInterface
+import types.serve_policy as ServePolicy
+import types.prelude_elab as PreludeElab
 
 batchEntryDummy : Int
 batchEntryDummy = 0

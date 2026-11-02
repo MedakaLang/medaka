@@ -22,6 +22,7 @@ import eval.eval.{
   Value(..), EvalEnv(..), EnvFrame(..), eval, extendEnv, envFrameCells, force,
   ppValue
 }
+import types.program_facts.{ProgramFacts}
 import support.util.{filterList}
 import tools.doctest.{ExResult(..)}
 import hash_map.{HashMap, new, setInPlace, has, findWithDefault}
@@ -67,9 +68,9 @@ operandText v = match force v
 -- does not reduce to Pass/Fail is an `Errored` (e.g. a partial closure); a body
 -- that genuinely panics is unrecoverable and aborts the whole run.
 export
-runOneTest : List (String, Value e) -> Expr -> <e> ExResult
-runOneTest evalEnv body =
-  runOneTestEnv (extendEnv (EvalEnv [ScanFrame []]) evalEnv) body
+runOneTest : ProgramFacts -> List (String, Value e) -> Expr -> <e> ExResult
+runOneTest facts evalEnv body =
+  runOneTestEnv (extendEnv (EvalEnv facts [ScanFrame []]) evalEnv) body
 
 -- The command path already owns an evaluated root module graph.  Reuse that
 -- graph's cells so a captured Ref in a global function stays identical to the

@@ -26,6 +26,7 @@ import tools.prop_runner.{
   PreparedPropRequest(..),
   runPreparedPropRequestsResults,
 }
+import types.program_facts.{emptyFacts}
 import eval.eval.{
   EvalEnv(..),
   EnvFrame(..),
@@ -359,7 +360,7 @@ missingHelperResults (CustomPlan key carrier word) =
     [PropHelper word "__missing_prop_generator" "__missing_prop_shrinker"]
     rows
     []
-    (EvalEnv [ScanFrame []])
+    (EvalEnv emptyFacts [ScanFrame []])
     []
 
 missingHelperIsRuntimeResult : Bool
@@ -380,7 +381,7 @@ runtimeShadowResults =
     ("restoreRandomState", VInt 23),
     ("setSeed", VInt 29),
   ]
-  let env = EvalEnv [
+  let env = EvalEnv emptyFacts [
     ScanFrame [
       ("randomState", Ref (VInt 7)),
       ("restoreRandomState", Ref (VInt 11)),
@@ -514,7 +515,8 @@ drawsFor source ty =
       let _ = seedPropRng 20261009
       let ge = GenEnv env omEmpty
       map
-        (_ => showValue (genFromPlan ge (EvalEnv [ScanFrame []]) 0 plan))
+        (_ =>
+          showValue (genFromPlan ge (EvalEnv emptyFacts [ScanFrame []]) 0 plan))
         [1, 2, 3, 4]
     Err e => [planErrorText e]
 

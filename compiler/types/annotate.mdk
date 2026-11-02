@@ -8,9 +8,9 @@
 -- elaboration), so it sees `EMethodRef`/`EMethodAt`/`EDictApp`/`EDictAt` already
 -- in place and leaves them untouched (passthrough).
 --
--- The frame model mirrors `eval.mdk`'s `EvalEnv (List (List (String, Ref
--- Value)))` EXACTLY, so the emitted address is the one a slot-indexing lookup
--- would need:
+-- The frame model mirrors the frame list of `eval.mdk`'s `EvalEnv` (its
+-- `List (List (String, Ref Value))`) EXACTLY, so the emitted address is the one
+-- a slot-indexing lookup would need:
 --   * applyClosure CURRIES — one frame PER parameter, innermost = last param;
 --   * a let-rec `let f = …`  pushes one frame `[f]` over both RHS and body;
 --   * a non-rec let / match-arm pattern / do-let pushes one frame of the
