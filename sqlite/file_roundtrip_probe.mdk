@@ -45,18 +45,18 @@ readUsers path = match openDb path
 
 runProbe : String -> <IO, FileRead, FileWrite> Unit
 runProbe path =
-  let _ = println "-- WRITE users, READ back --"
+  println "-- WRITE users, READ back --"
   match writeDatabase path "users" usersSql 3 (Some 0) baseRows
     Err e => println "write error: \{e}"
     Ok _ =>
-      let _ = readUsers path
+      readUsers path
       -- DELETE age > 100 (removes Dave, id=7) — reads + rewrites the file.
-      let _ = println "-- DELETE users WHERE age > 100, READ back --"
+      println "-- DELETE users WHERE age > 100, READ back --"
       let _ = match delete path "users" (eGt (eColInt "age") (eLitI 100))
         Err e => println "delete error: \{e}"
         Ok n => let _ = println "deleted \{n} rows" in readUsers path
       -- UPDATE age := 99 WHERE id = 3 (Carol) — reads + rewrites the file.
-      let _ = println "-- UPDATE users SET age=99 WHERE id=3, READ back --"
+      println "-- UPDATE users SET age=99 WHERE id=3, READ back --"
       match (update
         path
         "users"

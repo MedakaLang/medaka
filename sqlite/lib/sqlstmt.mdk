@@ -789,7 +789,7 @@ renderSelect : Select -> String
 renderSelect (Select { from = tbl, fromAlias = fa, joins = js, where_ = w, groupBy = gb, having = h, orderBy = ob, limit = lm, offset = off, distinct = dist, columns = cols, columnAliases = cas }) =
   -- Tie the render back-edge: install THIS module's compound renderer into
   -- lib.sqlparse's hole so `renderSqlExpr` can render an `EInSubquery`'s subquery.
-  let _ = setSubqueryRenderer renderCompound
+  setSubqueryRenderer renderCompound
   let kw = if dist then "SELECT DISTINCT" else "SELECT"
   "\{kw} \{renderCols cols cas} FROM \{tbl}\{renderAliasText fa}\{renderJoinList js}\{renderOpt " WHERE " w}\{renderGroup gb}\{renderOpt " HAVING " h}\{renderOrder ob}\{renderInt " LIMIT " lm}\{renderInt " OFFSET " off}"
 
@@ -805,7 +805,7 @@ renderSelect (Select { from = tbl, fromAlias = fa, joins = js, where_ = w, group
 export
 renderCompound : Compound -> String
 renderCompound (Compound first rest ob lm off) =
-  let _ = setSubqueryRenderer renderCompound
+  setSubqueryRenderer renderCompound
   "\{renderSelect first}\{renderSetArms rest}\{renderOrder ob}\{renderInt " LIMIT " lm}\{renderInt " OFFSET " off}"
 
 renderSetArms : List (SetOp, Select) -> String
@@ -1151,7 +1151,7 @@ deleteBranch = defer
 export
 renderStmt : Stmt -> String
 renderStmt st =
-  let _ = setSubqueryRenderer renderCompound
+  setSubqueryRenderer renderCompound
   renderStmtGo st
 
 renderStmtGo : Stmt -> String

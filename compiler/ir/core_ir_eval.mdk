@@ -467,7 +467,7 @@ cevalLetGroup : EvalEnv (Value e) -> List CBind -> CExpr -> <e> Value e
 cevalLetGroup env binds body =
   let cells = map cBindCell binds
   let env2 = pushFrame env cells
-  let _ = cInstallGroup env2 cells binds
+  cInstallGroup env2 cells binds
   ceval env2 body
 
 cBindCell : CBind -> (String, Ref (Value e))
@@ -513,14 +513,13 @@ cevalProgram facts (CProgram groups ctorArs ctorToType implEntries _ _) =
   let cells = map (n => (n, Ref VUnit)) allNames
   let frame = indexedFrame cells
   let env = EvalEnv facts [frame]
-  let _ = installFrameConsts frame boolSeeds
-  let _ = installFrameConsts frame (externBindings ())
-  let _ = installFrameConsts frame ctors
-  let _ =
-    installFrameConsts
-      frame
-      (coalesceImpls (flatMap (cImplEntryValues env) implEntries))
-  let _ = cInstallTopGroups env cells groups
+  installFrameConsts frame boolSeeds
+  installFrameConsts frame (externBindings ())
+  installFrameConsts frame ctors
+  installFrameConsts
+    frame
+    (coalesceImpls (flatMap (cImplEntryValues env) implEntries))
+  cInstallTopGroups env cells groups
   map cellResult cells
 -- impls (lazy closures) install BEFORE groups so a nullary group's eager body
 -- can already see the dispatch tables — mirrors eval.mdk's evalProgram order.
@@ -736,13 +735,13 @@ cevalModules facts preludeDecls0 modules0 =
   let implEntries =
     flatMap (cImplEntryValues globalEnv) preludeImpls
       ++ flatMap cModImplValues mods
-  let _ = installFrameConsts globalFrame boolSeeds
-  let _ = installFrameConsts globalFrame externs
-  let _ = installFrameConsts globalFrame ctors
-  let _ = installFrameConsts globalFrame (coalesceImpls implEntries)
-  let _ = cInstallTopGroups globalEnv globalCells preludeShared
-  let _ = cInstallTopGroups globalEnv privateCells preludePrivate
-  let _ = cInstallModGroups mods
+  installFrameConsts globalFrame boolSeeds
+  installFrameConsts globalFrame externs
+  installFrameConsts globalFrame ctors
+  installFrameConsts globalFrame (coalesceImpls implEntries)
+  cInstallTopGroups globalEnv globalCells preludeShared
+  cInstallTopGroups globalEnv privateCells preludePrivate
+  cInstallModGroups mods
   cRootLocals mods
 
 -- pass 1: lower + allocate each module's local cells and build its env (imports
@@ -833,7 +832,7 @@ cModImplValues (CModInfo _ _ _ cimpls _ menv) =
 cInstallModGroups : List (CModInfo (Value e)) -> <e> Unit
 cInstallModGroups [] = ()
 cInstallModGroups ((CModInfo _ decls cbinds _ cells menv) :: rest) =
-  let _ = cInstallTopGroups menv cells cbinds
+  cInstallTopGroups menv cells cbinds
   -- P0-9: install this module's own ctor values into its local cells (allocated
   -- in cBuildModInfos), so map/set construct their own arity-correct `Bin`/`Tip`.
   let _ = match menv

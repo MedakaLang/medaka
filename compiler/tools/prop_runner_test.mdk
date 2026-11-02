@@ -12,7 +12,10 @@
 -- (`seedPropRng`/`randBoolL`), independent of any `prop`'s randomized-length
 -- `List Bool` generation.
 
-import test.{expectEach, expectEqual, expectNotEqual, expectTrue}
+import test.{
+  Expectation, expectEach, expectEqual, expectNotEqual, expectSatisfies,
+  expectTrue, fail
+}
 import tools.prop_runner.{
   seedPropRng,
   genFromPlan,
@@ -66,13 +69,9 @@ drawBools : Int -> List Bool
 drawBools 0 = []
 drawBools n = randBoolL () :: drawBools (n - 1)
 
-hasTrue : List Bool -> Bool
-hasTrue [] = False
-hasTrue (x :: xs) = x || hasTrue xs
-
-hasFalse : List Bool -> Bool
-hasFalse [] = False
-hasFalse (x :: xs) = not x || hasFalse xs
+hasDraw : Bool -> List Bool -> Expectation
+hasDraw wanted draws =
+  expectSatisfies "includes \{wanted}" (any (== wanted)) draws
 
 -- True iff every adjacent pair of draws differs — the exact pre-fix symptom.
 strictlyAlternates : List Bool -> Bool
@@ -81,11 +80,11 @@ strictlyAlternates (_ :: []) = True
 strictlyAlternates (a :: b :: rest) = a /= b && strictlyAlternates (b :: rest)
 
 test "a run of Bool draws hits both values and is not a fixed alternation" =
-  let _ = seedPropRng 123456789
+  seedPropRng 123456789
   let draws = drawBools 100
   expectEach [
-    ("some draw is True", expectTrue (hasTrue draws)),
-    ("some draw is False", expectTrue (hasFalse draws)),
+    ("some draw is True", hasDraw True draws),
+    ("some draw is False", hasDraw False draws),
     (
       "the draws are not a strict alternation",
       expectTrue (not (strictlyAlternates draws)),
@@ -109,7 +108,7 @@ drawTuples 0 = []
 drawTuples n = boolsToBits (drawBools 8) :: drawTuples (n - 1)
 
 test "8-tuples of raw draws reach far more than 62/256 distinct assignments" =
-  let _ = seedPropRng 123456789
+  seedPropRng 123456789
   let tuples = drawTuples 625  -- 625 * 8 = 5000 raw draws
   expectTrue (length (nub tuples) >= 200)
 
@@ -363,16 +362,16 @@ missingHelperResults (CustomPlan key carrier word) =
     (EvalEnv emptyFacts [ScanFrame []])
     []
 
-missingHelperIsRuntimeResult : Bool
+missingHelperIsRuntimeResult : Expectation
 missingHelperIsRuntimeResult = match missingHelperPlan
   Ok (GCustom custom) => match missingHelperResults custom
     [PropResult _ _ PropErroredResult (Some PropRuntimeError) detail _ _] =>
-      detail == "selected typed custom helper binding is unavailable"
-    _ => False
-  _ => False
+      expectEqual "selected typed custom helper binding is unavailable" detail
+    _ => fail "expected exactly one runtime-error result"
+  _ => fail "the plan did not select a custom generator"
 
 test "a missing selected helper binding is a runtime result" =
-  expectTrue missingHelperIsRuntimeResult
+  missingHelperIsRuntimeResult
 
 runtimeShadowResults : ((Int, Int, Int), (Int, Int, Int))
 runtimeShadowResults =
@@ -512,7 +511,7 @@ drawsFor source ty =
   let env = buildPlanEnv (map stampBuiltins (parse source))
   match planFor env "policy" "value" ty
     Ok plan =>
-      let _ = seedPropRng 20261009
+      seedPropRng 20261009
       let ge = GenEnv env omEmpty
       map
         (_ =>

@@ -52,7 +52,7 @@ export
 printRows : (a -> String) -> List a -> <IO> Unit
 printRows _ [] = ()
 printRows shw (r :: rest) =
-  let _ = println (shw r)
+  println (shw r)
   printRows shw rest
 
 -- | Same shape as `printRows`, kept as a separate name because call sites
@@ -61,7 +61,7 @@ export
 printLines : (a -> String) -> List a -> <IO> Unit
 printLines _ [] = ()
 printLines f (x :: rest) =
-  let _ = println (f x)
+  println (f x)
   printLines f rest
 
 -- | Print one `Int` per line.
@@ -69,7 +69,7 @@ export
 printInts : List Int -> <IO> Unit
 printInts [] = ()
 printInts (n :: rest) =
-  let _ = println (intToString n)
+  println (intToString n)
   printInts rest
 
 -- | Render `(a, b)` as `"a|b"`.
@@ -82,7 +82,7 @@ export
 printPairs : List (Int, Int) -> <IO> Unit
 printPairs [] = ()
 printPairs (p :: rest) =
-  let _ = println (showPair p)
+  println (showPair p)
   printPairs rest
 
 -- | Parse a CLI arg as an `Int`, defaulting to `0` on a bad parse.

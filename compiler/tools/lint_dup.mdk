@@ -171,7 +171,7 @@ dedupeFindingsGo _ [] = []
 dedupeFindingsGo seen (f :: rest)
   | has (findingDedupeKey f) seen = dedupeFindingsGo seen rest
   | otherwise =
-    let _ = setInPlace (findingDedupeKey f) () seen
+    setInPlace (findingDedupeKey f) () seen
     f :: dedupeFindingsGo seen rest
 
 findingDedupeKey : Finding -> String
@@ -190,7 +190,7 @@ groupOccsByKey : List (String, Int, String, String) ->
   HashMap String (List (String, Int, String, String))
 groupOccsByKey occs =
   let m = new ()
-  let _ = groupOccsGo m occs
+  groupOccsGo m occs
   m
 
 groupOccsGo : HashMap String (List (String, Int, String, String)) ->
@@ -198,7 +198,7 @@ groupOccsGo : HashMap String (List (String, Int, String, String)) ->
   Unit
 groupOccsGo _ [] = ()
 groupOccsGo m (o :: rest) =
-  let _ = setInPlace (occKey o) (o :: findWithDefault [] (occKey o) m) m
+  setInPlace (occKey o) (o :: findWithDefault [] (occKey o) m) m
   groupOccsGo m rest
 
 -- Distinct keys in first-appearance order.  `keys` on the HashMap would do this
@@ -219,7 +219,7 @@ dupDistinctGo _ [] = []
 dupDistinctGo seen (o :: rest)
   | has (occKey o) seen = dupDistinctGo seen rest
   | otherwise =
-    let _ = setInPlace (occKey o) () seen
+    setInPlace (occKey o) () seen
     occKey o :: dupDistinctGo seen rest
 
 -- Can this key's group emit at all?  ≥2 occurrences spanning ≥2 distinct files.

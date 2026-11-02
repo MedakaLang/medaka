@@ -107,8 +107,9 @@ legacyNames = [
   "ctorFloatFieldsRef", "declRecFieldsRef", "recFieldTableW"
 ]
 
-check : Bool -> String -> Expectation
-check ok msg = if ok then pass else fail msg
+-- Passes when `ok`; otherwise fails with `msg`.
+holds : String -> Bool -> Expectation
+holds msg ok = if ok then pass else fail msg
 
 -- A declaration body (export keyword already removed) starts with `name` followed
 -- by one of the separators, or is exactly `name`.
@@ -162,14 +163,14 @@ apiCheck = match readFile wasmEmitPath
     fail "FAIL: WasmEmitInput API is incomplete (cannot read wasm_emit: \{e})"
   Ok text =>
     let ls = lines text
-    check
+    holds
+      "FAIL: WasmEmitInput API is incomplete"
       (exportDeclPresent "makeWasmEmitInput" "" ls
         && exportDeclPresent "emitProgram" "emitProgram : WasmEmitInput ->" ls
         && exportDeclPresent
           "emitProgramGaps"
           "emitProgramGaps : WasmEmitInput ->"
           ls)
-      "FAIL: WasmEmitInput API is incomplete"
 
 legacyCheck : <IO, FileRead> Expectation
 legacyCheck = match readFile wasmEmitPath
@@ -237,12 +238,12 @@ wasmCheckIn work = match prepare work
       let combinedWat = wasmSection (lines combined)
       expectAll [
         expectEqualText (join "\n" onlyWat) (join "\n" combinedWat),
-        check
-          (any isScoreImpl onlyWat)
-          "FAIL: snapshot WAT did not emit Score implementations",
-        check
-          (any (l => contains scoreFuncLine l) onlyWat)
-          "FAIL: snapshot WAT did not define Score at its clause's arity (no parameter)",
+        holds
+          "FAIL: snapshot WAT did not emit Score implementations"
+          (any isScoreImpl onlyWat),
+        holds
+          "FAIL: snapshot WAT did not define Score at its clause's arity (no parameter)"
+          (any (l => contains scoreFuncLine l) onlyWat),
       ]
 
 prepare : String -> <FileWrite, Exec> Result String String

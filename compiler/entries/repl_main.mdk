@@ -31,7 +31,7 @@ withCore rsrc corePath = match readFile corePath
   Ok csrc =>
     let runtimeDecls = desugar (parse rsrc)
     let preludeDecls = desugar (parse csrc)
-    let _ = initSession runtimeDecls preludeDecls
+    initSession runtimeDecls preludeDecls
     replLoop ()
 
 main = oracleMain ()

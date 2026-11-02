@@ -9,16 +9,18 @@
 
 import backend.wasm_emit_test_support_test.{watOf, funcBlock}
 import backend.emit_target.{Backend(..)}
-import test.{expectAll, expectFalse, expectTrue, labelFail}
-import string.{contains}
+import test.{
+  Expectation, expectAll, expectEqual, expectTextContainsAll, labelFail
+}
+import string.{contains, unlines}
 
 -- does any line of `block` contain `needle`
-blockHas : String -> List String -> Bool
-blockHas needle block = anyLine (l => contains needle l) block
+blockHas : String -> List String -> Expectation
+blockHas needle block = expectTextContainsAll [needle] (unlines block)
 
-anyLine : (String -> Bool) -> List String -> Bool
-anyLine _ [] = False
-anyLine p (l :: rest) = p l || anyLine p rest
+-- no line of `block` contains `needle`; the offending lines are the failure
+blockLacks : String -> List String -> Expectation
+blockLacks needle block = expectEqual [] (filter (contains needle) block)
 
 -- a single all-PVar clause: the source names are the wasm params, no s.position. copy
 pickSrc : String
@@ -29,12 +31,13 @@ test "all-PVar single clause: params are named by their source variables, with n
   expectAll [
     labelFail
       "header carries the source names"
-      (expectTrue
-        (blockHas "(param $u.61 (ref eq))" blk
-          && blockHas "(param $u.62 (ref eq))" blk)),
+      (expectAll [
+        blockHas "(param $u.61 (ref eq))" blk,
+        blockHas "(param $u.62 (ref eq))" blk,
+      ]),
     labelFail
       "no positional s.position. local is read in the body"
-      (expectFalse (blockHas "s.position." blk)),
+      (blockLacks "s.position." blk),
   ]
 
 -- a wildcard keeps its positional name; the PVar beside it keeps its source name
@@ -46,12 +49,13 @@ test "PVar + wildcard mix: the wildcard stays positional, the PVar is the source
   expectAll [
     labelFail
       "wildcard param is positional"
-      (expectTrue (blockHas "(param $s.position.0 (ref eq))" blk)),
+      (blockHas "(param $s.position.0 (ref eq))" blk),
     labelFail
       "PVar param is its source name and is never copied into"
-      (expectTrue
-        (blockHas "(param $u.62 (ref eq))" blk
-          && not (blockHas "local.set $u.62" blk))),
+      (expectAll [
+        blockHas "(param $u.62 (ref eq))" blk,
+        blockLacks "local.set $u.62" blk,
+      ]),
   ]
 
 -- a multi-clause group dispatches on positional params: the header is not the clause variable
@@ -62,9 +66,10 @@ test "multi-clause group keeps the positional params" =
   let blk = funcBlock "pairFn" (watOf multiSrc)
   labelFail
     "header is positional, not the clause variable"
-    (expectTrue
-      (blockHas "(param $s.position.0 (ref eq))" blk
-        && not (blockHas "(param $u.6e (ref eq))" blk)))
+    (expectAll [
+      blockHas "(param $s.position.0 (ref eq))" blk,
+      blockLacks "(param $u.6e (ref eq))" blk,
+    ])
 
 -- a cons-tail self-call is TRMC-looped; the loop stores into the source-named params
 trmcSrc : String
@@ -76,11 +81,13 @@ test "TRMC loop: the loop writes the source-named params directly" =
   expectAll [
     labelFail
       "the loop stores into $u.6c6f and $u.6869"
-      (expectTrue
-        (blockHas "local.set $u.6c6f" blk && blockHas "local.set $u.6869" blk)),
+      (expectAll [
+        blockHas "local.set $u.6c6f" blk,
+        blockHas "local.set $u.6869" blk,
+      ]),
     labelFail
       "no positional slot appears in the TRMC function"
-      (expectFalse (blockHas "s.position." blk)),
+      (blockLacks "s.position." blk),
   ]
 
 -- a body binder that rebinds a param name is renamed apart (`uniqueBinders`), so the
@@ -93,10 +100,11 @@ test "shadowed param: the param keeps its source name, the binder gets a distinc
   expectAll [
     labelFail
       "header names the param by its source variable"
-      (expectTrue
-        (blockHas "(param $u.7873 (ref eq))" blk
-          && not (blockHas "(param $s.position.0 (ref eq))" blk))),
+      (expectAll [
+        blockHas "(param $u.7873 (ref eq))" blk,
+        blockLacks "(param $s.position.0 (ref eq))" blk,
+      ]),
     labelFail
       "the shadowing let binder is a different local"
-      (expectTrue (blockHas "$u.78732431" blk)),
+      (blockHas "$u.78732431" blk),
   ]

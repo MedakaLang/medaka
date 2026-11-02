@@ -57,7 +57,7 @@ parsePrelude src = match lookupAssoc src !preludeCacheRef
   Some decls => decls
   None =>
     let decls = parse src
-    let _ = notePreludeParse src decls
+    notePreludeParse src decls
     decls
 
 -- drop any existing entry with this key (so a re-parse refreshes its position).
@@ -86,7 +86,7 @@ takeFirstN n (x :: xs)
 (DTypeSig true "notePreludeParse" (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyCon "Unit"))))
 (DFunDef false "notePreludeParse" ((PVar "src") (PVar "decls")) (EApp (EApp (EVar "setRef") (EVar "preludeCacheRef")) (EApp (EApp (EVar "takeFirstN") (EVar "preludeCacheLimit")) (EBinOp "::" (ETuple (EVar "src") (EVar "decls")) (EApp (EApp (EVar "dropKeyP") (EVar "src")) (EUnOp "!" (EVar "preludeCacheRef")))))))
 (DTypeSig true "parsePrelude" (TyFun (TyCon "String") (TyApp (TyCon "List") (TyCon "Decl"))))
-(DFunDef false "parsePrelude" ((PVar "src")) (EMatch (EApp (EApp (EVar "lookupAssoc") (EVar "src")) (EUnOp "!" (EVar "preludeCacheRef"))) (arm (PCon "Some" (PVar "decls")) () (EVar "decls")) (arm (PCon "None") () (EBlock (DoLet false false (PVar "decls") (EApp (EVar "parse") (EVar "src"))) (DoLet false false PWild (EApp (EApp (EVar "notePreludeParse") (EVar "src")) (EVar "decls"))) (DoExpr (EVar "decls"))))))
+(DFunDef false "parsePrelude" ((PVar "src")) (EMatch (EApp (EApp (EVar "lookupAssoc") (EVar "src")) (EUnOp "!" (EVar "preludeCacheRef"))) (arm (PCon "Some" (PVar "decls")) () (EVar "decls")) (arm (PCon "None") () (EBlock (DoLet false false (PVar "decls") (EApp (EVar "parse") (EVar "src"))) (DoExpr (EApp (EApp (EVar "notePreludeParse") (EVar "src")) (EVar "decls"))) (DoExpr (EVar "decls"))))))
 (DTypeSig false "dropKeyP" (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "Decl")))) (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "Decl")))))))
 (DFunDef false "dropKeyP" (PWild (PList)) (EListLit))
 (DFunDef false "dropKeyP" ((PVar "k") (PCons (PTuple (PVar "k2") (PVar "v")) (PVar "rest"))) (EIf (EBinOp "==" (EVar "k") (EVar "k2")) (EApp (EApp (EVar "dropKeyP") (EVar "k")) (EVar "rest")) (EIf (EVar "otherwise") (EBinOp "::" (ETuple (EVar "k2") (EVar "v")) (EApp (EApp (EVar "dropKeyP") (EVar "k")) (EVar "rest"))) (EApp (EVar "__fallthrough__") (ELit LUnit)))))
@@ -104,7 +104,7 @@ takeFirstN n (x :: xs)
 (DTypeSig true "notePreludeParse" (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyCon "Unit"))))
 (DFunDef false "notePreludeParse" ((PVar "src") (PVar "decls")) (EApp (EApp (EVar "setRef") (EVar "preludeCacheRef")) (EApp (EApp (EVar "takeFirstN") (EVar "preludeCacheLimit")) (EBinOp "::" (ETuple (EVar "src") (EVar "decls")) (EApp (EApp (EVar "dropKeyP") (EVar "src")) (EUnOp "!" (EVar "preludeCacheRef")))))))
 (DTypeSig true "parsePrelude" (TyFun (TyCon "String") (TyApp (TyCon "List") (TyCon "Decl"))))
-(DFunDef false "parsePrelude" ((PVar "src")) (EMatch (EApp (EApp (EVar "lookupAssoc") (EVar "src")) (EUnOp "!" (EVar "preludeCacheRef"))) (arm (PCon "Some" (PVar "decls")) () (EVar "decls")) (arm (PCon "None") () (EBlock (DoLet false false (PVar "decls") (EApp (EVar "parse") (EVar "src"))) (DoLet false false PWild (EApp (EApp (EVar "notePreludeParse") (EVar "src")) (EVar "decls"))) (DoExpr (EVar "decls"))))))
+(DFunDef false "parsePrelude" ((PVar "src")) (EMatch (EApp (EApp (EVar "lookupAssoc") (EVar "src")) (EUnOp "!" (EVar "preludeCacheRef"))) (arm (PCon "Some" (PVar "decls")) () (EVar "decls")) (arm (PCon "None") () (EBlock (DoLet false false (PVar "decls") (EApp (EVar "parse") (EVar "src"))) (DoExpr (EApp (EApp (EVar "notePreludeParse") (EVar "src")) (EVar "decls"))) (DoExpr (EVar "decls"))))))
 (DTypeSig false "dropKeyP" (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "Decl")))) (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "Decl")))))))
 (DFunDef false "dropKeyP" (PWild (PList)) (EListLit))
 (DFunDef false "dropKeyP" ((PVar "k") (PCons (PTuple (PVar "k2") (PVar "v")) (PVar "rest"))) (EIf (EBinOp "==" (EVar "k") (EVar "k2")) (EApp (EApp (EVar "dropKeyP") (EVar "k")) (EVar "rest")) (EIf (EVar "otherwise") (EBinOp "::" (ETuple (EVar "k2") (EVar "v")) (EApp (EApp (EVar "dropKeyP") (EVar "k")) (EVar "rest"))) (EApp (EVar "__fallthrough__") (ELit LUnit)))))

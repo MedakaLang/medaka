@@ -1847,9 +1847,8 @@ docSchemesFor runtimeSrc coreSrc filename roots _rawUser =
     runtimeSrc
     coreSrc)
     None =>
-      let _ =
-        ePutStrLn
-          "medaka doc: '\{filename}' has an unresolved import graph (missing or cyclic import) — signatures unavailable"
-      let _ = stageExit 1
+      ePutStrLn
+        "medaka doc: '\{filename}' has an unresolved import graph (missing or cyclic import) — signatures unavailable"
+      stageExit 1
       []
     Some schemes => pubSchemes schemes

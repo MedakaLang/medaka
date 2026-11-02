@@ -335,9 +335,12 @@ discardEach dir n (m :: rest) =
 
 discardGeneration : (dir : String @FileWrite*) -> Int -> <FileWrite dir> Unit
 discardGeneration dir m =
-  let _ = removeFile (ownerPath dir m)
-  let _ = removeDir (generationPath dir m)
-  ()
+  bestEffort
+    "only the highest generation is read as the holder, so an older one whose owner file survives a failed removal is inert and the next claim discards it again"
+    (removeFile (ownerPath dir m))
+  bestEffort
+    "a generation directory left behind by a failed removal is below the holder's, hence never graded, and the next claim discards it again"
+    (removeDir (generationPath dir m))
 
 {- | Beat once, and say whether this process still holds the directory.
 

@@ -85,11 +85,8 @@ main = ()
     expectEqual [] (manifestIdentities emptyFacts.pfManifests),
   ]
 
-isTyped : ProgramFacts -> Bool
-isTyped f = isSome f.pfDispositions
-
 test "emptyFacts carries no dispositions and no binders" = expectAll [
-  expectFalse (isTyped emptyFacts),
+  expectFalse (isSome emptyFacts.pfDispositions),
   expectFalse (isSome emptyFacts.pfBinders),
 ]
 

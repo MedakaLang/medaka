@@ -150,6 +150,7 @@ other rubric rule applies to test code and row labels too (R27). In brief:
 - A rejection test names the expected diagnostic, a code or a message fragment (R37).
 - A test helper returns an `Expectation`, never a `Bool` (R38). A `prop`'s oracle is the
   exception: it returns `Bool`, and a test of the oracle grades it with `expectTrue` (R46).
+- An `Expectation` helper never takes the expected `Bool` as an argument: a polarity is a second named helper that ends in a verb showing the value (`expectSatisfies "<property>"`, `expectEqual []`, `expectErrContains`), and the name is `expect<Name>` only when it wraps a `Bool` predicate kept for other uses (a `prop` oracle, a filter), otherwise a plain property name (`accepts`, `isFull`).
 - Compare contents, not lengths, unless the count is the property (R39).
 - A test program of two or more lines is a triple-quoted string, closing `"""`
   on its own line, or a fixture file (R40). `fmt --write` collapses one that

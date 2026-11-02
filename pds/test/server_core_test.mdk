@@ -18,6 +18,7 @@ import http.{
 import json.{Json(..), get, parse}
 import u8 as U8
 import test.{
+  Expectation,
   expectAll,
   expectEach,
   expectEqual,
@@ -142,9 +143,11 @@ seededStore =
     "server_core_test: seed store setup failed"
     (storePut (cidForRaw seedBytes) seedBytes storeEmpty)
 
-seedPreserved : Store -> Bool
-seedPreserved store =
-  storeSize store == 1 && storeGet (cidForRaw seedBytes) store == Some seedBytes
+seedPreserved : Store -> Expectation
+seedPreserved store = expectAll [
+  expectEqual 1 (storeSize store),
+  expectEqual (Some seedBytes) (storeGet (cidForRaw seedBytes) store),
+]
 
 fixedQuery : Bytes
 fixedQuery =
@@ -231,7 +234,7 @@ test "direct configured handle preserves Store for a fixed query" =
     (request =>
       let (next, response) = handle server testContext seededStore request
       expectEach [
-        ("the seeded store is left untouched", expectTrue (seedPreserved next)),
+        ("the seeded store is left untouched", seedPreserved next),
         (
           "the response is the exact fixed-query wire form",
           expectEqual
@@ -283,7 +286,7 @@ test "malformed framing returns exact 400 and preserves Store" =
   let (next, bytes) =
     handleBytes server testContext seededStore malformedRequest
   expectEach [
-    ("the seeded store is left untouched", expectTrue (seedPreserved next)),
+    ("the seeded store is left untouched", seedPreserved next),
     (
       "the response is the exact 400 Bad Request wire form",
       expectEqual
@@ -299,7 +302,7 @@ test "malformed framing returns exact 400 and preserves Store" =
 test "unknown route returns exact 404 and preserves Store" =
   let (next, bytes) = handleBytes server testContext seededStore unknownRequest
   expectEach [
-    ("the seeded store is left untouched", expectTrue (seedPreserved next)),
+    ("the seeded store is left untouched", seedPreserved next),
     (
       "the response is the exact 404 Not Found wire form",
       expectEqual
@@ -315,7 +318,7 @@ test "unknown route returns exact 404 and preserves Store" =
 test "resource excess returns exact 413 and preserves Store" =
   let (next, bytes) = handleBytes server testContext seededStore resourceRequest
   expectEach [
-    ("the seeded store is left untouched", expectTrue (seedPreserved next)),
+    ("the seeded store is left untouched", seedPreserved next),
     (
       "the response is the exact 413 Payload Too Large wire form",
       expectEqual

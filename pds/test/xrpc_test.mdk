@@ -14,7 +14,17 @@ import http.{
   serializeResponse,
 }
 import json.{stringify}
-import test.{expectEach, expectEqual, expectFalse, expectTrue, fail, pass}
+import test.{
+  Expectation,
+  expectAll,
+  expectEach,
+  expectEqual,
+  expectFalse,
+  expectTrue,
+  fail,
+  labelFail,
+  pass,
+}
 import lib.nsid.{validateNsid}
 import lib.handlers.{pdsRegistry}
 import lib.xrpc.{
@@ -102,30 +112,37 @@ expectedFailure status code message =
       "HTTP/1.1 \{intToString status} \{reasonFor status}\r\ncontent-type: application/json\r\ncontent-length: \{intToString (B.length body)}\r\n\r\n"
     ++ body
 
-failureValueMatches : Int -> String -> String -> XrpcFailure -> Bool
-failureValueMatches status code message failed =
-  xrpcFailureStatus failed == status
-    && xrpcFailureError failed == code
-    && xrpcFailureMessage failed == message
-    && serializeResponse (xrpcFailureResponse failed)
-      == expectedFailure status code message
+failureValueMatches : Int -> String -> String -> XrpcFailure -> Expectation
+failureValueMatches status code message failed = expectAll [
+  labelFail "status" (expectEqual status (xrpcFailureStatus failed)),
+  labelFail "error" (expectEqual code (xrpcFailureError failed)),
+  labelFail "message" (expectEqual message (xrpcFailureMessage failed)),
+  labelFail
+    "body"
+    (expectEqual
+      (expectedFailure status code message)
+      (serializeResponse (xrpcFailureResponse failed))),
+]
 
-failureMatches : Int -> String -> String -> Request -> Bool
+failureMatches : Int -> String -> String -> Request -> Expectation
 failureMatches status code message request = match routeRequest registry request
-  RouteCall _ _ => False
+  RouteCall _ _ =>
+    fail "expected a route failure but the request routed to a call"
   RouteFailure failed => failureValueMatches status code message failed
 
-sizeBoundaryMatches : InputPolicy -> Int -> String -> Bool
+sizeBoundaryMatches : InputPolicy -> Int -> String -> Expectation
 sizeBoundaryMatches policy limit message =
-  inputSizeWithinLimit policy limit
-    && not (inputSizeWithinLimit policy (limit + 1))
-    && (match (
-      inputSizeFailure policy limit,
-      inputSizeFailure policy (limit + 1),
-    )
-      (None, Some failed) =>
-        failureValueMatches 413 "PayloadTooLarge" message failed
-      _ => False)
+  if not (inputSizeWithinLimit policy limit) then
+    fail "a body of \{limit} bytes is not admitted"
+  else if inputSizeWithinLimit policy (limit + 1) then
+    fail "a body of \{limit + 1} bytes is still admitted"
+  else match (
+    inputSizeFailure policy limit,
+    inputSizeFailure policy (limit + 1),
+  )
+    (None, Some failed) =>
+      failureValueMatches 413 "PayloadTooLarge" message failed
+    _ => fail "the first refused size does not answer 413 PayloadTooLarge"
 
 test "shared NSID authority accepts ASCII case and rejects structural boundaries" = expectEach
   [
@@ -231,21 +248,19 @@ test "encoded and otherwise invalid XRPC method identities are rejected" = expec
   [
     (
       "a percent-encoded dot in the method identity is rejected",
-      expectTrue
-        (failureMatches
-          400
-          "InvalidRequest"
-          "Invalid XRPC method NSID"
-          (noBodyRequest "GET" "/xrpc/com%2eatproto.server.describeServer")),
+      failureMatches
+        400
+        "InvalidRequest"
+        "Invalid XRPC method NSID"
+        (noBodyRequest "GET" "/xrpc/com%2eatproto.server.describeServer"),
     ),
     (
       "a trailing slash after the method identity is rejected",
-      expectTrue
-        (failureMatches
-          400
-          "InvalidRequest"
-          "Invalid XRPC method NSID"
-          (noBodyRequest "GET" "/xrpc/com.atproto.server.describeServer/")),
+      failureMatches
+        400
+        "InvalidRequest"
+        "Invalid XRPC method NSID"
+        (noBodyRequest "GET" "/xrpc/com.atproto.server.describeServer/"),
     ),
   ]
 
@@ -257,64 +272,57 @@ test "routing matches authority case-insensitively and returns registered spelli
     _ => fail "expected a RouteCall to a QueryCall with no query params"
 
 test "empty XRPC method path is rejected without producing a call" =
-  expectTrue
-    (failureMatches
-      400
-      "InvalidRequest"
-      "Invalid XRPC method path"
-      (noBodyRequest "GET" "/xrpc/"))
+  failureMatches
+    400
+    "InvalidRequest"
+    "Invalid XRPC method path"
+    (noBodyRequest "GET" "/xrpc/")
 
 test "malformed query encoding is a canonical invalid-request failure" =
-  expectTrue
-    (failureMatches
-      400
-      "InvalidRequest"
-      "Invalid XRPC query parameters"
-      (noBodyRequest "GET" "/xrpc/com.atproto.server.describeServer?q=%00"))
+  failureMatches
+    400
+    "InvalidRequest"
+    "Invalid XRPC query parameters"
+    (noBodyRequest "GET" "/xrpc/com.atproto.server.describeServer?q=%00")
 
 test "unknown registered-shape method is a canonical not-found failure" =
-  expectTrue
-    (failureMatches
-      404
-      "NotFound"
-      "Unknown XRPC method: com.example.unknown"
-      (noBodyRequest "GET" "/xrpc/com.example.unknown"))
+  failureMatches
+    404
+    "NotFound"
+    "Unknown XRPC method: com.example.unknown"
+    (noBodyRequest "GET" "/xrpc/com.example.unknown")
 
 test "non-XRPC target is a canonical not-found failure" =
-  expectTrue
-    (failureMatches
-      404
-      "NotFound"
-      "XRPC route not found"
-      (noBodyRequest "GET" "/health"))
+  failureMatches
+    404
+    "NotFound"
+    "XRPC route not found"
+    (noBodyRequest "GET" "/health")
 
 test "query wrong method fails before a call exists" =
-  expectTrue
-    (failureMatches
-      405
-      "MethodNotAllowed"
-      "XRPC query endpoints require GET"
-      (noBodyRequest "POST" "/xrpc/com.atproto.server.describeServer"))
+  failureMatches
+    405
+    "MethodNotAllowed"
+    "XRPC query endpoints require GET"
+    (noBodyRequest "POST" "/xrpc/com.atproto.server.describeServer")
 
 test "procedure wrong method fails before a call exists" =
-  expectTrue
-    (failureMatches
-      405
-      "MethodNotAllowed"
-      "XRPC procedure endpoints require POST"
-      (noBodyRequest "GET" "/xrpc/com.atproto.repo.applyWrites"))
+  failureMatches
+    405
+    "MethodNotAllowed"
+    "XRPC procedure endpoints require POST"
+    (noBodyRequest "GET" "/xrpc/com.atproto.repo.applyWrites")
 
 test "query rejects a non-empty framed body" =
-  expectTrue
-    (failureMatches
-      400
-      "InvalidRequest"
-      "XRPC query endpoints do not accept request body framing"
-      (bodyRequest
-        "GET"
-        "/xrpc/com.atproto.server.describeServer"
-        "Content-Type: application/json\r\n"
-        (encodeUtf8 "{}")))
+  failureMatches
+    400
+    "InvalidRequest"
+    "XRPC query endpoints do not accept request body framing"
+    (bodyRequest
+      "GET"
+      "/xrpc/com.atproto.server.describeServer"
+      "Content-Type: application/json\r\n"
+      (encodeUtf8 "{}"))
 
 test "query admits zero-length framing and Content-Type" =
   match (routeRequest
@@ -355,22 +363,20 @@ test "no-input procedure admits a Content-Type over a zero-length body" =
     _ => fail "expected a RouteCall to a ProcedureNoInputCall"
 
 test "no-input procedure rejects a body that carries bytes" =
-  expectTrue
-    (failureMatches
-      400
-      "InvalidRequest"
-      "This procedure does not accept request body framing"
-      (bodyRequest "POST" "/xrpc/com.example.nobody.ping" "" (encodeUtf8 "{}")))
+  failureMatches
+    400
+    "InvalidRequest"
+    "This procedure does not accept request body framing"
+    (bodyRequest "POST" "/xrpc/com.example.nobody.ping" "" (encodeUtf8 "{}"))
 
 test "no-input procedure rejects a chunked transfer coding" =
-  expectTrue
-    (failureMatches
-      400
-      "InvalidRequest"
-      "This procedure does not accept request body framing"
-      (mustRequest
-        (encodeUtf8
-          "POST /xrpc/com.example.nobody.ping HTTP/1.1\r\nHost: pds.example\r\nTransfer-Encoding: chunked\r\n\r\n0\r\n\r\n")))
+  failureMatches
+    400
+    "InvalidRequest"
+    "This procedure does not accept request body framing"
+    (mustRequest
+      (encodeUtf8
+        "POST /xrpc/com.example.nobody.ping HTTP/1.1\r\nHost: pds.example\r\nTransfer-Encoding: chunked\r\n\r\n0\r\n\r\n"))
 
 test "JSON procedure produces a typed parsed call" =
   let request =
@@ -528,154 +534,141 @@ test "procedure query parameters preserve repeated names empty values and order"
 test "missing duplicate and malformed body media classify as 415" = expectEach [
   (
     "a body with no Content-Type is refused",
-    expectTrue
-      (failureMatches
-        415
-        "UnsupportedMediaType"
-        "Request body requires one Content-Type header"
-        (bodyRequest
-          "POST"
-          "/xrpc/com.atproto.repo.applyWrites"
-          ""
-          (encodeUtf8 "{}"))),
+    failureMatches
+      415
+      "UnsupportedMediaType"
+      "Request body requires one Content-Type header"
+      (bodyRequest
+        "POST"
+        "/xrpc/com.atproto.repo.applyWrites"
+        ""
+        (encodeUtf8 "{}")),
   ),
   (
     "a body with two Content-Type headers is refused",
-    expectTrue
-      (failureMatches
-        415
-        "UnsupportedMediaType"
-        "Request body requires one Content-Type header"
-        (bodyRequest
-          "POST"
-          "/xrpc/com.atproto.repo.applyWrites"
-          "Content-Type: application/json\r\nContent-Type: application/json\r\n"
-          (encodeUtf8 "{}"))),
+    failureMatches
+      415
+      "UnsupportedMediaType"
+      "Request body requires one Content-Type header"
+      (bodyRequest
+        "POST"
+        "/xrpc/com.atproto.repo.applyWrites"
+        "Content-Type: application/json\r\nContent-Type: application/json\r\n"
+        (encodeUtf8 "{}")),
   ),
   (
     "a body with a malformed Content-Type is refused",
-    expectTrue
-      (failureMatches
-        415
-        "UnsupportedMediaType"
-        "Request body has an invalid Content-Type header"
-        (bodyRequest
-          "POST"
-          "/xrpc/com.atproto.repo.applyWrites"
-          "Content-Type: application\r\n"
-          (encodeUtf8 "{}"))),
+    failureMatches
+      415
+      "UnsupportedMediaType"
+      "Request body has an invalid Content-Type header"
+      (bodyRequest
+        "POST"
+        "/xrpc/com.atproto.repo.applyWrites"
+        "Content-Type: application\r\n"
+        (encodeUtf8 "{}")),
   ),
 ]
 
 test "wrong JSON and text media classify as 415" = expectEach [
   (
     "text sent to a JSON endpoint is refused",
-    expectTrue
-      (failureMatches
-        415
-        "UnsupportedMediaType"
-        "Request body media type does not match endpoint input"
-        (bodyRequest
-          "POST"
-          "/xrpc/com.atproto.repo.applyWrites"
-          "Content-Type: text/plain\r\n"
-          (encodeUtf8 "{}"))),
+    failureMatches
+      415
+      "UnsupportedMediaType"
+      "Request body media type does not match endpoint input"
+      (bodyRequest
+        "POST"
+        "/xrpc/com.atproto.repo.applyWrites"
+        "Content-Type: text/plain\r\n"
+        (encodeUtf8 "{}")),
   ),
   (
     "JSON sent to a text endpoint is refused",
-    expectTrue
-      (failureMatches
-        415
-        "UnsupportedMediaType"
-        "Request body media type does not match endpoint input"
-        (bodyRequest
-          "POST"
-          "/xrpc/com.example.text.echo"
-          "Content-Type: application/json\r\n"
-          (encodeUtf8 "{}"))),
+    failureMatches
+      415
+      "UnsupportedMediaType"
+      "Request body media type does not match endpoint input"
+      (bodyRequest
+        "POST"
+        "/xrpc/com.example.text.echo"
+        "Content-Type: application/json\r\n"
+        (encodeUtf8 "{}")),
   ),
 ]
 
 test "invalid JSON syntax and UTF-8 classify as 400" = expectEach [
   (
     "a body that is not JSON is refused",
-    expectTrue
-      (failureMatches
-        400
-        "InvalidRequest"
-        "Request body is invalid for endpoint input"
-        (bodyRequest
-          "POST"
-          "/xrpc/com.atproto.repo.applyWrites"
-          "Content-Type: application/json\r\n"
-          (encodeUtf8 "{nope}"))),
-  ),
-  (
-    "a body that is not valid UTF-8 is refused",
-    expectTrue
-      (failureMatches
-        400
-        "InvalidRequest"
-        "Request body is invalid for endpoint input"
-        (bodyRequest
-          "POST"
-          "/xrpc/com.atproto.repo.applyWrites"
-          "Content-Type: application/json\r\n"
-          (fromU8Array [|0xc0, 0xaf|]))),
-  ),
-]
-
-test "invalid text UTF-8 classifies as 400" =
-  expectTrue
-    (failureMatches
+    failureMatches
       400
       "InvalidRequest"
       "Request body is invalid for endpoint input"
       (bodyRequest
         "POST"
-        "/xrpc/com.example.text.echo"
-        "Content-Type: text/plain\r\n"
-        (fromU8Array [|0xed, 0xa0, 0x80|])))
+        "/xrpc/com.atproto.repo.applyWrites"
+        "Content-Type: application/json\r\n"
+        (encodeUtf8 "{nope}")),
+  ),
+  (
+    "a body that is not valid UTF-8 is refused",
+    failureMatches
+      400
+      "InvalidRequest"
+      "Request body is invalid for endpoint input"
+      (bodyRequest
+        "POST"
+        "/xrpc/com.atproto.repo.applyWrites"
+        "Content-Type: application/json\r\n"
+        (fromU8Array [|0xc0, 0xaf|])),
+  ),
+]
+
+test "invalid text UTF-8 classifies as 400" =
+  failureMatches
+    400
+    "InvalidRequest"
+    "Request body is invalid for endpoint input"
+    (bodyRequest
+      "POST"
+      "/xrpc/com.example.text.echo"
+      "Content-Type: text/plain\r\n"
+      (fromU8Array [|0xed, 0xa0, 0x80|]))
 
 test "JSON input ceiling accepts at and returns exact 413 over" =
-  expectTrue
-    (sizeBoundaryMatches
-      JsonInput
-      maxJsonBodyBytes
-      "JSON request body exceeds 153600 bytes")
+  sizeBoundaryMatches
+    JsonInput
+    maxJsonBodyBytes
+    "JSON request body exceeds 153600 bytes"
 
 test "text input ceiling accepts at and returns exact 413 over" =
-  expectTrue
-    (sizeBoundaryMatches
-      TextInput
-      maxTextBodyBytes
-      "Text request body exceeds 102400 bytes")
+  sizeBoundaryMatches
+    TextInput
+    maxTextBodyBytes
+    "Text request body exceeds 102400 bytes"
 
 test "raw input ceiling accepts at and returns exact 413 over" =
-  expectTrue
-    (sizeBoundaryMatches
-      RawInput
-      maxRawBodyBytes
-      "Raw request body exceeds 5242880 bytes")
+  sizeBoundaryMatches
+    RawInput
+    maxRawBodyBytes
+    "Raw request body exceeds 5242880 bytes"
 
 test "known subscription is 426 while its wrong method is 405" = expectEach [
   (
     "a plain GET to a subscription asks for a WebSocket upgrade",
-    expectTrue
-      (failureMatches
-        426
-        "UpgradeRequired"
-        "XRPC subscription requires a WebSocket upgrade: com.atproto.sync.subscribeRepos"
-        (noBodyRequest "GET" "/xrpc/com.atproto.sync.subscribeRepos")),
+    failureMatches
+      426
+      "UpgradeRequired"
+      "XRPC subscription requires a WebSocket upgrade: com.atproto.sync.subscribeRepos"
+      (noBodyRequest "GET" "/xrpc/com.atproto.sync.subscribeRepos"),
   ),
   (
     "a POST to a subscription is refused as the wrong method",
-    expectTrue
-      (failureMatches
-        405
-        "MethodNotAllowed"
-        "XRPC subscription endpoints require GET"
-        (noBodyRequest "POST" "/xrpc/com.atproto.sync.subscribeRepos")),
+    failureMatches
+      405
+      "MethodNotAllowed"
+      "XRPC subscription endpoints require GET"
+      (noBodyRequest "POST" "/xrpc/com.atproto.sync.subscribeRepos"),
   ),
 ]
 

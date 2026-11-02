@@ -25,11 +25,11 @@ import support.path.{baseOf, chopExt}
 main : <IO> Unit
 main = match parseArgs (args ())
   Err msg =>
-    let _ = ePutStrLn msg
+    ePutStrLn msg
     exit 1
   Ok (input, outOpt) =>
     if not (fileExists input) then
-      let _ = ePutStrLn ("error: no such file: " ++ input)
+      ePutStrLn ("error: no such file: " ++ input)
       exit 1
     else
       let root = envOr "MEDAKA_ROOT" "."
@@ -52,7 +52,7 @@ main = match parseArgs (args ())
         None)
         Ok rep => println (ppBuildReport rep)
         Err rep =>
-          let _ = ePutStrLn (ppBuildReport rep)
+          ePutStrLn (ppBuildReport rep)
           exit 1
 
 -- Make a relative input absolute against the repo root's parent is wrong; the

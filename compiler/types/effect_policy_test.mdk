@@ -1,6 +1,6 @@
 -- The shared policy judgment over hand-built atoms and call graphs: every
 -- refusal beside the control that differs in one position.
-import test.{expectAll, expectEqual, expectTrue, expectFalse}
+import test.{Expectation, expectAll, expectEqual}
 import frontend.ast.{EffParamTy(..)}
 import types.effect_authority.{Authority(..), Authvar(..)}
 import types.effect_domain.{Param(..)}
@@ -27,9 +27,15 @@ ffiAtom = atomOfLabel noDomains "FFI"
 wholeGrant : String -> (String, EffParamTy)
 wholeGrant l = (l, EPTop)
 
-refused : PolicyVerdict -> Bool
-refused PolicyAdmitted = False
-refused (PolicyRefused _ _) = True
+verdictWord : PolicyVerdict -> String
+verdictWord PolicyAdmitted = "admitted"
+verdictWord (PolicyRefused _ _) = "refused"
+
+refused : PolicyVerdict -> Expectation
+refused verdict = expectEqual "refused" (verdictWord verdict)
+
+admitted : PolicyVerdict -> Expectation
+admitted verdict = expectEqual "admitted" (verdictWord verdict)
 
 refusedLabels : PolicyVerdict -> List String
 refusedLabels PolicyAdmitted = []
@@ -44,23 +50,20 @@ eightLabels = map wholeGrant (take 8 hostLabels)
 
 test "IO is the join: refused by eight labels, permitted by all eleven" = expectAll
   [
-    expectTrue (refused (policyRefusals noDomains [ioAtom] eightLabels)),
+    refused (policyRefusals noDomains [ioAtom] eightLabels),
     expectEqual
       ["IO"]
       (refusedLabels (policyRefusals noDomains [ioAtom] eightLabels)),
-    expectFalse
-      (refused (policyRefusals noDomains [ioAtom] (map wholeGrant hostLabels))),
+    admitted (policyRefusals noDomains [ioAtom] (map wholeGrant hostLabels)),
   ]
 
 test "FFI is not in the IO join" = expectAll [
-  expectTrue
-    (refused (policyRefusals noDomains [ffiAtom] (map wholeGrant hostLabels))),
-  expectFalse
-    (refused
-      (policyRefusals
-        noDomains
-        [ffiAtom]
-        (wholeGrant "FFI" :: map wholeGrant hostLabels))),
+  refused (policyRefusals noDomains [ffiAtom] (map wholeGrant hostLabels)),
+  admitted
+    (policyRefusals
+      noDomains
+      [ffiAtom]
+      (wholeGrant "FFI" :: map wholeGrant hostLabels)),
 ]
 
 unresolvedNet : Atom
@@ -76,19 +79,16 @@ atomOfLabelLabel l = match atomOfLabel noDomains l
 test "an unresolved authority needs a whole grant" =
   let partial = [("Net", EPLit "a.com/*")]
   expectAll [
-    expectTrue
-      (refused
-        (policyRefusals [("Net", PPrefix None)] [unresolvedNet] partial)),
+    refused (policyRefusals [("Net", PPrefix None)] [unresolvedNet] partial),
     expectEqual
       ["   not proven: Net k (authority variable `k`)\n"]
       (refusalLines
         (policyRefusals [("Net", PPrefix None)] [unresolvedNet] partial)),
-    expectFalse
-      (refused
-        (policyRefusals
-          [("Net", PPrefix None)]
-          [unresolvedNet]
-          [wholeGrant "Net"])),
+    admitted
+      (policyRefusals
+        [("Net", PPrefix None)]
+        [unresolvedNet]
+        [wholeGrant "Net"]),
   ]
 
 callGraph : CallGraph

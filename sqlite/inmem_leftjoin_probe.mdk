@@ -81,27 +81,26 @@ runUO : Db -> String -> Select -> <IO> Unit
 -- Intentional cross-file duplicate: parallel demo/probe script wiring the same fixture shape (not shared production logic to consolidate).
 -- lint-disable-next-line rule-duplicate-body
 runUO db label sel =
-  let _ = println label
+  println label
   match query db sel uoRow
     Err e => println "query error: \{e}"
     Ok rows => printUO rows
 
 runAll : Db -> <IO> Unit
 runAll db =
-  let _ =
-    runUO
-      db
-      "-- left join users/orders order id,oid --"
+  runUO
+    db
+    "-- left join users/orders order id,oid --"
+    (withOrderBy
+      "orders.oid"
+      True
       (withOrderBy
-        "orders.oid"
+        "users.id"
         True
-        (withOrderBy
-          "users.id"
-          True
-          (leftJoin
-            "orders"
-            (eEq (eColInt "users.id") (eColInt "orders.uid"))
-            (selectFrom "users"))))
+        (leftJoin
+          "orders"
+          (eEq (eColInt "users.id") (eColInt "orders.uid"))
+          (selectFrom "users"))))
   runUO
     db
     "-- left join where amount>100 order amount --"
@@ -125,7 +124,7 @@ main : <IO> Unit
 -- Intentional cross-file duplicate: parallel demo/probe script wiring the same fixture shape (not shared production logic to consolidate).
 -- lint-disable-next-line rule-duplicate-body
 main =
-  let _ = println "-- CREATE users+orders (in-memory) --"
+  println "-- CREATE users+orders (in-memory) --"
   match buildDatabaseMulti specs
     Err e => println "build error: \{e}"
     Ok bytes => match fromBytes bytes

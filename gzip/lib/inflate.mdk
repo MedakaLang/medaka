@@ -133,7 +133,7 @@ copyBackGo distance remaining out
     let outLen = length out
     match maGet (outLen - distance) out
       Some b =>
-        let _ = push b out
+        push b out
         copyBackGo distance (remaining - 1) out
       -- `outLen` only grows across this loop (one `push` per iteration) and
       -- `distance <= outLen` was already established by `copyBack` before
@@ -189,7 +189,7 @@ checkNlen len nlen =
 --   against each other), then `LEN` raw bytes copied verbatim into `out`.
 inflateStored : BitReader -> Builder -> Result String Unit
 inflateStored r out =
-  let _ = alignByte r
+  alignByte r
   do
     len <- getBits 16 r
     nlen <- getBits 16 r
@@ -281,7 +281,7 @@ inflateHuffmanBlock : Huffman ->
 inflateHuffmanBlock litHuff distHuff r out = match decodeSym litHuff r
   Err e => Err e
   Ok sym if sym < 256 =>
-    let _ = emitU8 (U8.truncate sym) out
+    emitU8 (U8.truncate sym) out
     inflateHuffmanBlock litHuff distHuff r out
   Ok sym if sym == symEndOfBlock => Ok ()
   Ok sym if sym <= maxLenSym => match inflateLengthDistance distHuff sym r out
@@ -373,7 +373,7 @@ fillRepeat lens i total val count =
     Err
       "dynamic Huffman: code-length repeat runs past the end of the table (have \{total} entries, run would reach \{i + count})"
   else
-    let _ = fillRepeatGo lens i (i + count) val
+    fillRepeatGo lens i (i + count) val
     Ok (i + count)
 
 fillRepeatGo : Array Int -> Int -> Int -> Int -> Unit
@@ -673,16 +673,16 @@ test "inflate: real dynamic-Huffman raw DEFLATE stream (zlib -15) round-trips" =
 repeatFirstBytes : Bytes
 repeatFirstBytes =
   let w = newBitWriter ()
-  let _ = putBits 1 1 w  -- BFINAL = 1
-  let _ = putBits 2 2 w  -- BTYPE = 2 (dynamic Huffman)
-  let _ = putBits 0 5 w  -- HLIT = 0 -> nLit = 257
-  let _ = putBits 0 5 w  -- HDIST = 0 -> nDist = 1
-  let _ = putBits 0 4 w  -- HCLEN = 0 -> nClen = 4
-  let _ = putBits 1 3 w  -- clOrder[0] = symbol 16, length 1
-  let _ = putBits 0 3 w  -- clOrder[1] = symbol 17, length 0 (unused)
-  let _ = putBits 0 3 w  -- clOrder[2] = symbol 18, length 0 (unused)
-  let _ = putBits 1 3 w  -- clOrder[3] = symbol 0,  length 1
-  let _ = putCodeMSB 1 1 w  -- the block body's first code-length symbol: code "1" -> symbol 16
+  putBits 1 1 w  -- BFINAL = 1
+  putBits 2 2 w  -- BTYPE = 2 (dynamic Huffman)
+  putBits 0 5 w  -- HLIT = 0 -> nLit = 257
+  putBits 0 5 w  -- HDIST = 0 -> nDist = 1
+  putBits 0 4 w  -- HCLEN = 0 -> nClen = 4
+  putBits 1 3 w  -- clOrder[0] = symbol 16, length 1
+  putBits 0 3 w  -- clOrder[1] = symbol 17, length 0 (unused)
+  putBits 0 3 w  -- clOrder[2] = symbol 18, length 0 (unused)
+  putBits 1 3 w  -- clOrder[3] = symbol 0,  length 1
+  putCodeMSB 1 1 w  -- the block body's first code-length symbol: code "1" -> symbol 16
   finishBitWriter w
 
 test "inflate: dynamic Huffman rejects repeat-code 16 as the FIRST code-length symbol (no previous length)" =

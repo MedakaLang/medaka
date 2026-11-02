@@ -67,7 +67,7 @@ runStaged on csrc tsrc =
   -- (issue #884), ONCE at entry — mirrors profile_main. eval's env lookup is its own
   -- machinery (not util.contains/lookupAssoc), so the op arm reads ~flat here; it is
   -- a regression tripwire on the counted path, and the gate self-skips a flat op row.
-  let _ = setOpCounting on
+  setOpCounting on
   let tTotal = now ()
   let aTotal = allocSnap ()
   -- parse-prelude: parse + desugar core.mdk (the shared prelude both drivers take).
@@ -76,14 +76,13 @@ runStaged on csrc tsrc =
   let oPP0 = opSnap ()
   let coreDecls = desugar (parse csrc)
   let tPP1 = now ()
-  let _ =
-    emitPhaseAO
-      on
-      "parse-prelude"
-      (tPP1 - tPP0)
-      (allocSnap () - aPP0)
-      "core"
-      (opSnap () - oPP0)
+  emitPhaseAO
+    on
+    "parse-prelude"
+    (tPP1 - tPP0)
+    (allocSnap () - aPP0)
+    "core"
+    (opSnap () - oPP0)
   -- parse: lex + parse + desugar the target file.
   let tP0 = now ()
   let aP0 = allocSnap ()
@@ -91,14 +90,13 @@ runStaged on csrc tsrc =
   let targetDecls = desugar (parse tsrc)
   let tP1 = now ()
   let declsOp = intToString (listLen targetDecls) ++ " decls"
-  let _ =
-    emitPhaseAO
-      on
-      "parse"
-      (tP1 - tP0)
-      (allocSnap () - aP0)
-      declsOp
-      (opSnap () - oP0)
+  emitPhaseAO
+    on
+    "parse"
+    (tP1 - tP0)
+    (allocSnap () - aP0)
+    declsOp
+    (opSnap () - oP0)
   let modules = ("target", targetDecls) :: []
   -- eval: the TREE-WALKER. evalModulesOutput forces `main` and captures stdout;
   -- stringLength forces the captured string so the whole evaluation is realized
@@ -110,14 +108,13 @@ runStaged on csrc tsrc =
   let outE = evalModulesOutputFacts emptyFacts coreDecls modules
   let _ = stringLength outE
   let tE1 = now ()
-  let _ =
-    emitPhaseAO
-      on
-      "eval"
-      (tE1 - tE0)
-      (allocSnap () - aE0)
-      declsOp
-      (opSnap () - oE0)
+  emitPhaseAO
+    on
+    "eval"
+    (tE1 - tE0)
+    (allocSnap () - aE0)
+    declsOp
+    (opSnap () - oE0)
   -- ceval: the CORE-IR evaluator over the SAME desugared input (it lowers to Core IR
   -- internally). Its frame semantics deliberately mirror eval's (parallel drivers),
   -- so a divergence in one interpreter's scaling shows against the other.
@@ -127,14 +124,13 @@ runStaged on csrc tsrc =
   let outC = cevalModulesOutputFacts emptyFacts coreDecls modules
   let _ = stringLength outC
   let tC1 = now ()
-  let _ =
-    emitPhaseAO
-      on
-      "ceval"
-      (tC1 - tC0)
-      (allocSnap () - aC0)
-      declsOp
-      (opSnap () - oC0)
+  emitPhaseAO
+    on
+    "ceval"
+    (tC1 - tC0)
+    (allocSnap () - aC0)
+    declsOp
+    (opSnap () - oC0)
   emitTotalA on (tC1 - tTotal) (allocSnap () - aTotal)
 
 main = oracleMain ()

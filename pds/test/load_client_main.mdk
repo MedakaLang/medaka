@@ -291,7 +291,10 @@ requestCeiling = seconds 30
 mustConnect : Int -> <Net> Connection *
 mustConnect port = match connect "127.0.0.1" port
   Ok conn =>
-    let _ = setTimeout conn requestCeiling
+    let () =
+      resultOrPanic
+        "test setup: setTimeout on a fresh connection"
+        (setTimeout conn requestCeiling)
     conn
   Err message =>
     panic
@@ -754,7 +757,10 @@ sampleOne port held pending target plan i acc =
     None => match connect "127.0.0.1" port
       Err _ => (None, empty, Sample target route 0 0 "connect" :: acc)
       Ok conn =>
-        let _ = setTimeout conn requestCeiling
+        let () =
+          resultOrPanic
+            "test setup: setTimeout on a fresh connection"
+            (setTimeout conn requestCeiling)
         sampleOn conn empty target route request acc
 
 {- | Sample both targets for one tick, alternating which one goes first.

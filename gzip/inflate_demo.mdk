@@ -28,15 +28,15 @@ usage = "usage: inflate_demo <input.gz> <output>"
 runInflate : String -> String -> <IO, FileRead, FileWrite> Unit
 runInflate inPath outPath = match readFileBytes inPath
   Err e =>
-    let _ = eprintln "inflate_demo: could not read \{inPath}: \{e}"
+    eprintln "inflate_demo: could not read \{inPath}: \{e}"
     exit 1
   Ok raw => match gunzipMember (fromArrayAssumeByteDomain raw)
     Err e =>
-      let _ = eprintln "inflate_demo: \{e}"
+      eprintln "inflate_demo: \{e}"
       exit 1
     Ok decoded => match writeFileBytes outPath (toArray decoded)
       Err e =>
-        let _ = eprintln "inflate_demo: could not write \{outPath}: \{e}"
+        eprintln "inflate_demo: could not write \{outPath}: \{e}"
         exit 1
       Ok _ => ()
 
@@ -44,5 +44,5 @@ main : <IO, FileRead, FileWrite> Unit
 main = match args ()
   [inPath, outPath] => runInflate inPath outPath
   _ =>
-    let _ = eprintln usage
+    eprintln usage
     exit 1

@@ -65,10 +65,9 @@ runProbe target = match readFile target
 -- would quietly break.
 report : String -> RunResult -> <IO> Unit
 report target result =
-  let _ = putStrLn ("running native doctests in " ++ target)
-  let _ = printDoctestDetails target (runDetails result)
+  putStrLn ("running native doctests in " ++ target)
+  printDoctestDetails target (runDetails result)
   let total = runPassed result + runFailed result + runErrors result
-  let _ =
-    putStrLn
-      "\n\{target}: \{intToString (runPassed result)}/\{intToString total} passed\{doctestFailSuffix result}"
+  putStrLn
+    "\n\{target}: \{intToString (runPassed result)}/\{intToString total} passed\{doctestFailSuffix result}"
   if runFailed result == 0 && runErrors result == 0 then () else exit 1

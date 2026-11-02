@@ -30,7 +30,7 @@ copyCharRange src start endp
   | endp <= start = ""
   | otherwise =
     let out = arrayMake (endp - start) (at src start)
-    let _ = arrayBlit src start out 0 (endp - start)
+    arrayBlit src start out 0 (endp - start)
     stringFromChars out
 
 commonEscDecode : Char -> Option String
