@@ -31,7 +31,8 @@ import fs.{mkdirAll}
 import hex.{decode, encode}
 import list.{lookup, take}
 import test.{
-  Expectation(..), expectEach, expectEqual, expectFalse, expectTrue, fail, pass
+  expectSatisfies, Expectation(..), expectEach, expectEqual, expectFalse,
+  expectTrue, fail, pass
 }
 import test_process.{scratchDir}
 import lib.cid.{cidToString}
@@ -225,15 +226,19 @@ seqsOf entries = map entrySeq entries
 entrySeq : EventLogEntry -> Int
 entrySeq entry = entry.seq
 
--- The staged slot is empty. Spelled as a match rather than a comparison
--- because `EventLogEntry` has no `Eq` impl, and giving it one to write this
--- assertion would put an instance on the record for the sake of a test.
-stagedIsEmpty : Bool -> Result String (Option EventLogEntry) -> Expectation
-stagedIsEmpty want r = expectEqual want (isEmptySlot r)
+-- The staged slot, named by its content. `EventLogEntry` has no `Eq` or `Debug`
+-- impl, and giving it one for an assertion would put an instance on the record.
+stagedWord : Result String (Option EventLogEntry) -> String
+stagedWord (Ok None) = "empty"
+stagedWord (Ok (Some entry)) = "entry \{entrySeq entry}"
+stagedWord (Err message) = "error: \{message}"
 
-isEmptySlot : Result String (Option EventLogEntry) -> Bool
-isEmptySlot (Ok None) = True
-isEmptySlot _ = False
+stagedIsEmpty : Result String (Option EventLogEntry) -> Expectation
+stagedIsEmpty r = expectEqual "empty" (stagedWord r)
+
+stagedHoldsEntry : Result String (Option EventLogEntry) -> Expectation
+stagedHoldsEntry r =
+  expectSatisfies "a staged slot other than empty" (/= "empty") (stagedWord r)
 
 test "a cursor below the oldest entry replays the whole log in order" =
   expectEqual (seqsOf (eventLogAfterCursor 0 threeEntries)) [1, 2, 3]
@@ -398,7 +403,7 @@ test "planning recovery leaves the pending entry and the log where they were" =
     ("recovery plans the owed arm", expectEqual "owed" arm),
     (
       "the pending entry is still staged",
-      stagedIsEmpty False (eventLogStaged dir),
+      stagedHoldsEntry (eventLogStaged dir),
     ),
     (
       "the log itself is still empty",
@@ -422,7 +427,7 @@ test "an event staged for a commit that did not persist is dropped" =
       ),
       (
         "the staging area was cleared",
-        stagedIsEmpty True (eventLogStaged dir),
+        stagedIsEmpty (eventLogStaged dir),
       ),
     ]
 
@@ -446,7 +451,7 @@ test "a non-commit event anchored to a commit that did not persist is dropped" =
       ),
       (
         "the staging area was cleared",
-        stagedIsEmpty True (eventLogStaged dir),
+        stagedIsEmpty (eventLogStaged dir),
       ),
     ]
 
@@ -464,7 +469,7 @@ test "an event staged for a commit that did persist is finished" =
       ),
       (
         "the staging area was cleared",
-        stagedIsEmpty True (eventLogStaged dir),
+        stagedIsEmpty (eventLogStaged dir),
       ),
     ]
 
@@ -484,7 +489,7 @@ test "a non-commit event anchored to the persisted head is finished" =
       ),
       (
         "the staging area was cleared",
-        stagedIsEmpty True (eventLogStaged dir),
+        stagedIsEmpty (eventLogStaged dir),
       ),
     ]
 
@@ -507,7 +512,7 @@ test "an unanchored event is finished whatever head the repository holds" =
       ),
       (
         "the mismatched-head staging area was cleared",
-        stagedIsEmpty True (eventLogStaged mismatched),
+        stagedIsEmpty (eventLogStaged mismatched),
       ),
       (
         "the headless log promoted its event",
@@ -515,7 +520,7 @@ test "an unanchored event is finished whatever head the repository holds" =
       ),
       (
         "the headless staging area was cleared",
-        stagedIsEmpty True (eventLogStaged headless),
+        stagedIsEmpty (eventLogStaged headless),
       ),
     ]
     _ => Fail "recovery failed" "two promoted logs" "an error"

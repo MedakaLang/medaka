@@ -10,7 +10,7 @@
 
 import test.{Expectation, expectTrue, expectAll, expectEqual, expectFalse}
 import support.util.{allList, anyList, contains, sortUniqS}
-import types.effect_domain.{Param(..), dantichain, djoin, dsub}
+import types.effect_domain.{Param(..), dantichain, djoin, drender, dsub}
 import types.effect_authority.{Authority(..), authJoinAll, authSub}
 
 bounded : Int -> Int -> Int
@@ -294,15 +294,25 @@ productAuthorityLaw left right =
 -- §2.4: joining constant authorities obeys the lifted pointwise order.
 
 -- The join laws stay `Bool`: a pair law is a Bool over the two parameters, and
--- the wrappers grade it against the expected Bool.
-expectPrefixJoin : Bool -> Param -> Param -> Expectation
-expectPrefixJoin want left right = expectEqual want (prefixJoinLaw left right)
+-- the wrappers grade the pair against it.
+lawVerdict : (Param -> Param -> Bool) -> Param -> Param -> String
+lawVerdict law left right =
+  if law left right then
+    "law holds"
+  else
+    "law fails for \{drender left} and \{drender right}"
 
-expectSetJoin : Bool -> Param -> Param -> Expectation
-expectSetJoin want left right = expectEqual want (setJoinLaw left right)
+expectPrefixJoin : Param -> Param -> Expectation
+expectPrefixJoin left right =
+  expectEqual "law holds" (lawVerdict prefixJoinLaw left right)
 
-expectProductJoin : Bool -> Param -> Param -> Expectation
-expectProductJoin want left right = expectEqual want (productJoinLaw left right)
+expectSetJoin : Param -> Param -> Expectation
+expectSetJoin left right =
+  expectEqual "law holds" (lawVerdict setJoinLaw left right)
+
+expectProductJoin : Param -> Param -> Expectation
+expectProductJoin left right =
+  expectEqual "law holds" (lawVerdict productJoinLaw left right)
 
 prefixPairsLaw : List Param -> Expectation
 prefixPairsLaw lefts =
@@ -312,7 +322,7 @@ prefixPairsLaw lefts =
         map
           (right => expectAll [
             expectEqual (prefixWithin left right) (dsub left right),
-            expectPrefixJoin True left right,
+            expectPrefixJoin left right,
           ])
           prefixPool)
       lefts)
@@ -325,7 +335,7 @@ setPairsLaw lefts =
         map
           (right => expectAll [
             expectEqual (setWithin left right) (dsub left right),
-            expectSetJoin True left right,
+            expectSetJoin left right,
           ])
           setPool)
       lefts)
@@ -344,7 +354,7 @@ productJoinPairsLaw : List Param -> Expectation
 productJoinPairsLaw lefts =
   expectAll
     (flatMap
-      (left => map (right => expectProductJoin True left right) productPool)
+      (left => map (right => expectProductJoin left right) productPool)
       lefts)
 
 test "finite Prefix domain realizes its inclusion and join laws" =

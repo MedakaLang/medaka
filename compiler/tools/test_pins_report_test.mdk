@@ -1,7 +1,7 @@
 -- The command report preserves the engine's raw result and grades a matching
 -- known-red pin separately. These tests exercise that boundary directly.
 
-import test.{Expectation, expectEach, expectEqual}
+import test.{expectSatisfies, Expectation, expectEach, expectEqual}
 import tools.doctest.{Engine(..), ExResult(..)}
 import tools.test_cmd.{cliGradedTestReportJson}
 import json.{Json, asInt, get}
@@ -95,7 +95,7 @@ test "a law false is held while an XPASS and engine error remain failures" =
       8,
   ]
   expectEach [
-    ("the exact law failure holds", onlyPropPassed True held),
+    ("the exact law failure holds", onlyPropPassed held),
     (
       "a held pin has its own status",
       expectEqual "known-red" (onlyPropStatus held),
@@ -104,10 +104,10 @@ test "a law false is held while an XPASS and engine error remain failures" =
       "the raw result remains visible with its replay values",
       expectEqual (Some "known-red issue #73 still holds") (onlyPropDetail held),
     ),
-    ("an XPASS drains the pin", onlyPropPassed False drained),
+    ("an XPASS drains the pin", onlyPropNotPassed drained),
     (
       "a runtime error cannot hold a false-law pin",
-      onlyPropPassed False errored,
+      onlyPropNotPassed errored,
     ),
     (
       "a held raw failure is counted as known-red rather than a pass",
@@ -149,8 +149,8 @@ test "unit pins require their exact assertion message" =
     ("eval", "assertion", 4, Fail "different detail" "left" "right"),
   ]
   expectEach [
-    ("the exact assertion pin holds", onlyTestPassed True held),
-    ("a changed assertion fails the run", onlyTestPassed False changed),
+    ("the exact assertion pin holds", onlyTestPassed held),
+    ("a changed assertion fails the run", onlyTestNotPassed changed),
   ]
 
 test "held drained and changed unit pins retain their human details" =
@@ -186,7 +186,7 @@ test "an exact native error pin retains the raw error outcome" =
     ("native", "native error", 7, Errored "native detail"),
   ]
   expectEach [
-    ("the exact error pin holds", onlyTestPassed True held),
+    ("the exact error pin holds", onlyTestPassed held),
     (
       "grading retains the engine error status",
       expectEqual "error" (onlyTestRawStatus held),
@@ -197,10 +197,23 @@ test "an exact native error pin retains the raw error outcome" =
     ),
   ]
 
-onlyPropPassed : Bool -> List GradedProp -> Expectation
-onlyPropPassed expected rows = expectEqual expected (match rows
-  [row] => gradedPropPassed row
-  _ => False)
+propOutcome : List GradedProp -> String
+propOutcome [row] =
+  if gradedPropPassed row then
+    "passed"
+  else
+    "did not pass: \{gradedPropStatus row}"
+propOutcome rows = "\{length rows} graded props, not exactly one"
+
+onlyPropPassed : List GradedProp -> Expectation
+onlyPropPassed rows = expectEqual "passed" (propOutcome rows)
+
+onlyPropNotPassed : List GradedProp -> Expectation
+onlyPropNotPassed rows =
+  expectSatisfies
+    "a graded prop outcome other than passed"
+    (/= "passed")
+    (propOutcome rows)
 
 onlyPropStatus : List GradedProp -> String
 onlyPropStatus [row] = gradedPropStatus row
@@ -210,10 +223,23 @@ onlyPropDetail : List GradedProp -> Option String
 onlyPropDetail [row] = gradedPropPinDetail row
 onlyPropDetail _ = None
 
-onlyTestPassed : Bool -> List GradedTest -> Expectation
-onlyTestPassed expected rows = expectEqual expected (match rows
-  [row] => gradedTestPassed row
-  _ => False)
+testOutcome : List GradedTest -> String
+testOutcome [row] =
+  if gradedTestPassed row then
+    "passed"
+  else
+    "did not pass: \{gradedTestStatus row}"
+testOutcome rows = "\{length rows} graded tests, not exactly one"
+
+onlyTestPassed : List GradedTest -> Expectation
+onlyTestPassed rows = expectEqual "passed" (testOutcome rows)
+
+onlyTestNotPassed : List GradedTest -> Expectation
+onlyTestNotPassed rows =
+  expectSatisfies
+    "a graded test outcome other than passed"
+    (/= "passed")
+    (testOutcome rows)
 
 onlyTestRawStatus : List GradedTest -> String
 onlyTestRawStatus [row] = gradedTestRawStatus row

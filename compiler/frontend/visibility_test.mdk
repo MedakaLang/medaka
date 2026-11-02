@@ -8,7 +8,7 @@
 -- rules over `export import` hops are exercised through `resolve_test` and the
 -- module fixtures, not here.
 
-import test.{Expectation, expectEach, expectEqual}
+import test.{expectSatisfies, Expectation, expectEach, expectEqual}
 import frontend.ast.{Decl, Loc(..), UseMember(..), UsePath(..)}
 import frontend.desugar.{desugar}
 import frontend.parser.{parse}
@@ -43,10 +43,24 @@ declOf src = match declsOf src
 
 -- A source's one declaration answers `p`; a source that does not parse to exactly
 -- one declaration is a failed row.
-answers : Bool -> (Decl -> Bool) -> String -> Expectation
-answers expected p src = expectEqual expected (match declOf src
+declAnswers : (Decl -> Bool) -> String -> Bool
+declAnswers p src = match declOf src
   Some d => p d
-  None => False)
+  None => False
+
+answers : (Decl -> Bool) -> String -> Expectation
+answers p src =
+  expectSatisfies
+    "a source whose one declaration answers the predicate"
+    (declAnswers p)
+    src
+
+doesNotAnswer : (Decl -> Bool) -> String -> Expectation
+doesNotAnswer p src =
+  expectSatisfies
+    "a source whose one declaration does not answer the predicate"
+    (s => not (declAnswers p s))
+    src
 
 -- ── declExportsIn ─────────────────────────────────────────────────────────
 
@@ -54,18 +68,17 @@ test "a public or abstract type names itself in the type namespace, a private on
   [
     (
       "public",
-      answers True (declExportsIn nsTypes) "public export data T = A | B",
+      answers (declExportsIn nsTypes) "public export data T = A | B",
     ),
     (
       "abstract",
-      answers True (declExportsIn nsTypes) "export data T = A | B",
+      answers (declExportsIn nsTypes) "export data T = A | B",
     ),
-    ("private", answers False (declExportsIn nsTypes) "data T = A | B"),
+    ("private", doesNotAnswer (declExportsIn nsTypes) "data T = A | B"),
   ]
 
 test "a declaration wrapped in an attribute is read raw, so it declares nothing" =
-  answers
-    False
+  doesNotAnswer
     (declExportsIn nsTypes)
     "@deprecated \"old\"\nexport data T = A | B"
 
@@ -75,17 +88,17 @@ test "only a public data type exports constructors, not an abstract one nor a ne
   [
     (
       "public",
-      answers True declExportsCtors "public export data T = A | B",
+      answers declExportsCtors "public export data T = A | B",
     ),
     (
       "abstract",
-      answers False declExportsCtors "export data T = A | B",
+      doesNotAnswer declExportsCtors "export data T = A | B",
     ),
     (
       "newtype",
-      answers False declExportsCtors "export newtype W = W Int",
+      doesNotAnswer declExportsCtors "export newtype W = W Int",
     ),
-    ("private", answers False declExportsCtors "data T = A | B"),
+    ("private", doesNotAnswer declExportsCtors "data T = A | B"),
   ]
 
 -- ── exportedValueNames ────────────────────────────────────────────────────
@@ -207,16 +220,21 @@ subjectExports ExportedView =
 subjectExports FullView =
   fullExportsOf (coreExports []) libKnown "subj" (declsOf subjectSrc)
 
-isFull : Bool -> ExportView -> Expectation
-isFull expected view = expectEqual expected (match view
-  FullView => True
-  ExportedView => False)
+viewWord : ExportView -> String
+viewWord FullView = "full view"
+viewWord ExportedView = "exported view"
+
+isFull : ExportView -> Expectation
+isFull view = expectEqual "full view" (viewWord view)
+
+isExported : ExportView -> Expectation
+isExported view = expectEqual "exported view" (viewWord view)
 
 test "only the importer whose subject a module is sees it in the full view" = expectEach
   [
-    ("the subject itself", isFull True (viewOf (Some "subj") "subj")),
-    ("another module", isFull False (viewOf (Some "subj") "other")),
-    ("an importer with no subject", isFull False (viewOf None "subj")),
+    ("the subject itself", isFull (viewOf (Some "subj") "subj")),
+    ("another module", isExported (viewOf (Some "subj") "other")),
+    ("an importer with no subject", isExported (viewOf None "subj")),
   ]
 
 test "the full view holds what the exported view withholds" = expectEach [

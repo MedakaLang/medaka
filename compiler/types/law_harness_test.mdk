@@ -9,6 +9,7 @@ import frontend.parser.{parseLocated}
 import list.{drop, filter, indexed, reverse, take}
 import string.{fromChars, isAlphaNum, isLower, isSpace, join, toChars}
 import test.{
+  expectSatisfies,
   Expectation,
   expectAll,
   expectEqual,
@@ -390,8 +391,19 @@ alphaEquiv : String -> String -> Bool
 alphaEquiv left right =
   canonicalTokens (typeTokens left) == canonicalTokens (typeTokens right)
 
-expectAlphaEquiv : Bool -> String -> String -> Expectation
-expectAlphaEquiv want left right = expectEqual want (alphaEquiv left right)
+expectAlphaEquiv : String -> String -> Expectation
+expectAlphaEquiv left right =
+  expectSatisfies
+    "a pair of rendered types equal up to renaming"
+    (pair => alphaEquiv (fst pair) (snd pair))
+    (left, right)
+
+expectNotAlphaEquiv : String -> String -> Expectation
+expectNotAlphaEquiv left right =
+  expectSatisfies
+    "a pair of rendered types that differ beyond renaming"
+    (pair => not (alphaEquiv (fst pair) (snd pair)))
+    (left, right)
 
 -- The tokens of a rendered type: identifiers, and every other non-space
 -- character on its own (so `->` is the two tokens `-` and `>`).
@@ -480,12 +492,12 @@ test "the observer separates a generalized binding from an ungeneralized one" = 
 
 test "alpha-equivalence accepts a renaming and rejects a non-renaming" = expectAll
   [
-    expectAlphaEquiv True "a -> b -> a" "x -> yy -> x",
-    expectAlphaEquiv True "Num a => (a, List b)" "Num c =>  (c, List d)",
-    expectAlphaEquiv False "a -> b" "a -> a",
-    expectAlphaEquiv False "a -> a" "a -> b",
-    expectAlphaEquiv False "Box a" "Pair a",
-    expectAlphaEquiv False "a -> b" "a -> b -> c",
+    expectAlphaEquiv "a -> b -> a" "x -> yy -> x",
+    expectAlphaEquiv "Num a => (a, List b)" "Num c =>  (c, List d)",
+    expectNotAlphaEquiv "a -> b" "a -> a",
+    expectNotAlphaEquiv "a -> a" "a -> b",
+    expectNotAlphaEquiv "Box a" "Pair a",
+    expectNotAlphaEquiv "a -> b" "a -> b -> c",
   ]
 
 test "shape rendering spells binders by prefix and types by instantiation" =

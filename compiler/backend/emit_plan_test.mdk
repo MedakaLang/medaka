@@ -17,7 +17,7 @@ import backend.extern_catalog.{RuntimeExternDomain(..)}
 -- constructor whose last field is a saturated self-call (at least one such leaf),
 -- and no self-call sits anywhere else, a match guard included.
 
-import backend.emit_target.{Backend(..)}
+import backend.emit_target.{Backend(..), backendName}
 import ir.extern_lower.{lowerExterns, externVar, implicitRuntimeFacts}
 import types.program_facts.{emptyFacts}
 import frontend.parser.{parse, parseResult}
@@ -181,9 +181,8 @@ test "the plan carries the target it was built with" = expectAll [
   labelFail
     "wasm"
     (isWasm
-      True
       (buildEmitPlan WasmBackend PreludeFreeRuntime (program mixed)).target),
-  labelFail "native" (isWasm False (planOf mixed).target),
+  labelFail "native" (isNotWasm (planOf mixed).target),
 ]
 
 entryOutcomeProgram : CProgram
@@ -222,10 +221,11 @@ hasAll wanted have =
     (h => all (w => any (== w) h) wanted)
     have
 
-isWasm : Bool -> Backend -> Expectation
-isWasm expected target = expectEqual expected (match target
-  WasmBackend => True
-  _ => False)
+isWasm : Backend -> Expectation
+isWasm target = expectEqual "wasm" (backendName target)
+
+isNotWasm : Backend -> Expectation
+isNotWasm target = expectNotEqual "wasm" (backendName target)
 
 -- The emitters read the global classification, the TRMC verdict and the dispatch
 -- groups from the plan; neither may recompute them.
@@ -1053,19 +1053,33 @@ uptoImpl word =
   let pats = map (p => PVar p noDeclLoc noBinderId) ["lo", "hi"]
   CImplEntry "upto" 0 2 (CImplTagged "Int" "K" "Upto" noImplSym [] pats body)
 
-implTrmc : Bool -> String -> Expectation
-implTrmc expected word =
+implIsTrmc : String -> Bool
+implIsTrmc word =
   let plan =
     buildEmitPlan
       LlvmBackend
       PreludeFreeRuntime
       (CProgram [] [] [] [uptoImpl word] [] noDeclFacts)
-  expectEqual expected (isTrmcImpl plan.trmc "upto" "K")
+  isTrmcImpl plan.trmc "upto" "K"
+
+implTrmc : String -> Expectation
+implTrmc word =
+  expectSatisfies
+    "an instance word the impl group is TRMC-eligible under"
+    implIsTrmc
+    word
+
+implNotTrmc : String -> Expectation
+implNotTrmc word =
+  expectSatisfies
+    "an instance word the impl group is not TRMC-eligible under"
+    (w => not (implIsTrmc w))
+    word
 
 test "an impl group recursing through its own instance word is TRMC-eligible" = expectAll
   [
-    labelFail "self word" (implTrmc True "K"),
-    labelFail "another instance's word" (implTrmc False "Other"),
+    labelFail "self word" (implTrmc "K"),
+    labelFail "another instance's word" (implNotTrmc "Other"),
   ]
 
 test "impl plan groups keep clause order for TRMC and prepared programs" =

@@ -58,6 +58,7 @@ import test.{
   expectEach,
   expectEqual,
   expectErr,
+  expectErrContains,
   expectFalse,
   expectOk,
   expectOkThen,
@@ -71,13 +72,8 @@ import string.{contains}
 import mut_bytes as MB
 
 rejects : String -> Bytes -> Expectation
-rejects expected input = match parseRequest input
-  Err message =>
-    if contains expected message then
-      pass
-    else
-      fail "the rejection does not say \{expected}: \{message}"
-  Ok _ => fail "the request parsed"
+rejects expected input =
+  expectErrContains expected (map (_ => ()) (parseRequest input))
 
 mustRequest : Bytes -> Request
 mustRequest input = match parseRequest input

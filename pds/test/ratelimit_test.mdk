@@ -11,8 +11,8 @@ import http.{
 import list.{replicate}
 import string.{join, repeat}
 import test.{
-  Expectation(..), expectAll, expectEach, expectEqual, expectFalse,
-  expectNotEqual, expectTrue, fail, pass
+  expectSatisfies, Expectation(..), expectAll, expectEach, expectEqual,
+  expectFalse, expectNotEqual, expectTrue, fail, pass
 }
 import lib.resource_limits.{
   handleUpdateDayWindowSeconds,
@@ -99,15 +99,51 @@ isRefusedCapacity RefusedCapacity = True
 isRefusedCapacity Refused = False
 isRefusedCapacity Admitted = False
 
-expectRefused : Bool -> RateLimitVerdict -> Expectation
-expectRefused want verdict = expectEqual want (isRefused verdict)
+verdictWord : RateLimitVerdict -> String
+verdictWord Admitted = "admitted"
+verdictWord Refused = "refused"
+verdictWord RefusedCapacity = "refused at capacity"
 
-expectAdmitted : Bool -> RateLimitVerdict -> Expectation
-expectAdmitted want verdict = expectEqual want (isAdmitted verdict)
+-- Each verdict class reports its own name when the verdict is in it and the
+-- verdict's name otherwise.
+refusedWord : RateLimitVerdict -> String
+refusedWord verdict =
+  if isRefused verdict then "refused" else verdictWord verdict
 
-expectRefusedCapacity : Bool -> RateLimitVerdict -> Expectation
-expectRefusedCapacity want verdict =
-  expectEqual want (isRefusedCapacity verdict)
+admittedWord : RateLimitVerdict -> String
+admittedWord verdict =
+  if isAdmitted verdict then "admitted" else verdictWord verdict
+
+capacityWord : RateLimitVerdict -> String
+capacityWord verdict =
+  if isRefusedCapacity verdict then
+    "refused at capacity"
+  else
+    verdictWord verdict
+
+expectRefused : RateLimitVerdict -> Expectation
+expectRefused verdict = expectEqual "refused" (refusedWord verdict)
+
+expectAdmitted : RateLimitVerdict -> Expectation
+expectAdmitted verdict = expectEqual "admitted" (admittedWord verdict)
+
+expectNotAdmitted : RateLimitVerdict -> Expectation
+expectNotAdmitted verdict =
+  expectSatisfies
+    "a verdict that is not an admission"
+    (/= "admitted")
+    (admittedWord verdict)
+
+expectRefusedCapacity : RateLimitVerdict -> Expectation
+expectRefusedCapacity verdict =
+  expectEqual "refused at capacity" (capacityWord verdict)
+
+expectNotRefusedCapacity : RateLimitVerdict -> Expectation
+expectNotRefusedCapacity verdict =
+  expectSatisfies
+    "a verdict that is not a cardinality-cap refusal"
+    (/= "refused at capacity")
+    (capacityWord verdict)
 
 -- | Run `step` `n` times for the same identity/class/instant and keep the
 -- resulting state; used to reach the exact edge of a class's allowance.
@@ -153,8 +189,8 @@ test "createSession allowance refuses at the limit and refills once its window h
       CreateSessionClass
       (2 * rateLimitWindowSeconds)
   expectAll [
-    expectRefused True atLimit,
-    expectAdmitted True laterWindow,
+    expectRefused atLimit,
+    expectAdmitted laterWindow,
   ]
 
 -- (a2) #2775: the boundary is not a free refill. A fixed window admits the
@@ -177,7 +213,7 @@ test "a caller at twice the nominal rate is refused across a window boundary" =
       maxCreateSessionPerWindow
   let (_, justAfter) =
     step spent directIdentity CreateSessionClass rateLimitWindowSeconds
-  expectRefused True justAfter
+  expectRefused justAfter
 
 test "a caller at the nominal rate is admitted across the same boundary" =
   let paced =
@@ -189,7 +225,7 @@ test "a caller at the nominal rate is admitted across the same boundary" =
       (maxCreateSessionPerWindow / 2)
   let (_, justAfter) =
     step paced directIdentity CreateSessionClass rateLimitWindowSeconds
-  expectAdmitted True justAfter
+  expectAdmitted justAfter
 
 -- The budget comes back in proportion to how far the boundary has receded,
 -- not all at once: an identity that spent everything at the start of one
@@ -205,13 +241,13 @@ test "a spent allowance returns in proportion as the boundary recedes" =
       CreateSessionClass
       (rateLimitWindowSeconds + rateLimitWindowSeconds / 2)
   expectAll [
-    expectRefused True atBoundary,
-    expectAdmitted True halfWayOn,
+    expectRefused atBoundary,
+    expectAdmitted halfWayOn,
   ]
 
 test "an identity under its allowance is admitted" =
   let (_, verdict) = step initRateLimitState directIdentity RequestsClass 0
-  expectAdmitted True verdict
+  expectAdmitted verdict
 
 test "classAllowance is per-class, not one shared counter" = expectAll [
   expectNotEqual
@@ -235,8 +271,8 @@ expectClassRefusal cls message =
     exhaust initRateLimitState directIdentity cls now (classAllowance cls)
   let (after, verdict) = step spent directIdentity cls now
   expectAll [
-    expectAdmitted False verdict,
-    expectRefusedCapacity False verdict,
+    expectNotAdmitted verdict,
+    expectNotRefusedCapacity verdict,
     expectEqual (classMessage cls) message,
     expectEqual (headerPairs
       (rateLimitHeaderList after directIdentity cls now)) [
@@ -304,7 +340,7 @@ test "a capacity refusal renders capacityMessage and the cardinality cap" =
       RequestsClass
       now
   expectAll [
-    expectRefusedCapacity True verdict,
+    expectRefusedCapacity verdict,
     expectEqual
       capacityMessage
       "too many distinct client identities tracked in the current window",
@@ -525,11 +561,11 @@ test "an over-cap X-Forwarded-For cannot escape its own exhausted bucket" =
   let saturated = saturatedFor spender
   expectAll
     [
-      expectRefused True (verdictFor saturated spender),
+      expectRefused (verdictFor saturated spender),
       -- The bucket an over-cap header would have been demoted to is fresh, and
       -- would admit — so "refused" here is the fix and not the state of a
       -- coincidentally-spent shared bucket.
-      expectAdmitted True (verdictFor saturated directIdentity),
+      expectAdmitted (verdictFor saturated directIdentity),
       expectTrue (isErr overCap),
     ]
 
@@ -554,8 +590,8 @@ test "repeating X-Forwarded-For cannot escape an exhausted bucket" =
       ])
   let saturated = saturatedFor single
   expectAll [
-    expectRefused True (verdictFor saturated single),
-    expectRefused True (verdictFor saturated doubled),
+    expectRefused (verdictFor saturated single),
+    expectRefused (verdictFor saturated doubled),
   ]
 
 -- (f) the IPv4-mapped form a dual-stack proxy emits is a client identity, not
@@ -575,8 +611,8 @@ test "distinct IPv4-mapped last hops are distinct buckets" =
       (identifyClient (TrustedProxy True) [xffHeader "::ffff:198.51.100.2"])
   let saturated = saturatedFor first
   expectAll [
-    expectRefused True (verdictFor saturated first),
-    expectAdmitted True (verdictFor saturated second),
+    expectRefused (verdictFor saturated first),
+    expectAdmitted (verdictFor saturated second),
   ]
 
 test "a truncated IPv4-mapped last hop is still rejected" =
@@ -642,10 +678,10 @@ test "a new identity past the per-window cap is refused without a row" =
   let (afterFirst, firstVerdict) = step filled extra RequestsClass 0
   let (_, secondVerdict) = step afterFirst extra RequestsClass 0
   expectAll [
-    expectRefused True firstVerdict,
-    expectRefused True secondVerdict,
-    expectRefusedCapacity True firstVerdict,
-    expectRefusedCapacity True secondVerdict,
+    expectRefused firstVerdict,
+    expectRefused secondVerdict,
+    expectRefusedCapacity firstVerdict,
+    expectRefusedCapacity secondVerdict,
   ]
 
 -- #2950's own stated acceptance is a cell that drives a large number of
@@ -695,10 +731,10 @@ test "a full previous window does not shrink the next window's own cap" =
       -- window 1's `current` starts empty even though `previous` (window 0)
       -- already holds the full cap, so this identity — new to window 1 — is
       -- admitted rather than refused by a combined 2x-cap count.
-      expectAdmitted True roomVerdict,
+      expectAdmitted roomVerdict,
       -- once window 1's own `current` has independently reached the cap, a
       -- further new identity is refused exactly as it would be in any window.
-      expectRefused True extraVerdict,
+      expectRefused extraVerdict,
     ]
 
 -- `directIdentity` is the one shared fallback bucket every untrusted-proxy or
@@ -711,8 +747,8 @@ test "directIdentity is never refused by the cardinality cap" =
     populateOthers initRateLimitState maxRateLimitIdentitiesPerWindow 0
   let (_, verdict) = step filled directIdentity RequestsClass 0
   expectAll [
-    expectAdmitted True verdict,
-    expectRefusedCapacity False verdict,
+    expectAdmitted verdict,
+    expectNotRefusedCapacity verdict,
   ]
 
 -- (h) the whole-repository export ceiling is a CLASS of its own, not a lower
@@ -732,8 +768,8 @@ test "a spent repo-export allowance still admits a plain read" =
   let (_, exportVerdict) = step saturated directIdentity RepoExportClass 0
   let (_, readVerdict) = step saturated directIdentity RequestsClass 0
   expectAll [
-    expectRefused True exportVerdict,
-    expectAdmitted True readVerdict,
+    expectRefused exportVerdict,
+    expectAdmitted readVerdict,
   ]
 
 test "getRepo is the repo-export procedure and the other sync reads are not" = expectEach
@@ -861,8 +897,8 @@ test "the fifty-first handle update in a day is refused though its five minutes 
       "each short window admits its ten",
       expectEqual (replicate 10 True) (map isAdmitted spendingDay),
     ),
-    ("the day's fifty-first charge", expectAdmitted False fiftyFirst),
-    ("the day after the first charge", expectAdmitted True nextDay),
+    ("the day's fifty-first charge", expectNotAdmitted fiftyFirst),
+    ("the day after the first charge", expectAdmitted nextDay),
   ]
 
 test "the five-minute count starts again 300 seconds after its first charge" =

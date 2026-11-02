@@ -75,19 +75,27 @@ trmcBody innerBody =
       ""
       noDeclLoc)
 
-trmcEligibleWith : Bool -> CExpr -> Expectation
-trmcEligibleWith expected innerBody =
-  expectEqual
-    expected
-    (trmcEligible
-      (_ => False)
-      (_ => 0)
-      (SelfByVar "loop")
-      1
-      [([PVar "xs" loc noBinderId], trmcBody innerBody)])
+trmcVerdict : CExpr -> String
+trmcVerdict innerBody =
+  if trmcEligible
+    (_ => False)
+    (_ => 0)
+    (SelfByVar "loop")
+    1
+    [([PVar "xs" loc noBinderId], trmcBody innerBody)] then
+    "TRMC-eligible"
+  else
+    "TRMC-ineligible"
+
+trmcEligibleWith : CExpr -> Expectation
+trmcEligibleWith innerBody = expectEqual "TRMC-eligible" (trmcVerdict innerBody)
+
+trmcIneligibleWith : CExpr -> Expectation
+trmcIneligibleWith innerBody =
+  expectEqual "TRMC-ineligible" (trmcVerdict innerBody)
 
 test "TRMC rejects a hidden self-call but keeps an ordinary capture eligible" = expectAll
   [
-    trmcEligibleWith True (CVar "xs" AGlobal),
-    trmcEligibleWith False (mkApp (CVar "loop" AGlobal) [CVar "xs" AGlobal]),
+    trmcEligibleWith (CVar "xs" AGlobal),
+    trmcIneligibleWith (mkApp (CVar "loop" AGlobal) [CVar "xs" AGlobal]),
   ]

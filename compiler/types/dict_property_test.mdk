@@ -10,7 +10,8 @@
 import list.{filter, lookup, nub, sort}
 import string.{join}
 import test.{
-  Expectation, expectAll, expectAtLeast, expectEqual, expectFalse, expectTrue
+  expectSatisfies, Expectation, expectAll, expectAtLeast, expectEqual,
+  expectFalse, expectTrue
 }
 import types.law_harness_test.{
   Perm(..),
@@ -59,17 +60,33 @@ atLeastAsSpecific a b = matches b a
 strictlyMoreSpecific : HT -> HT -> Bool
 strictlyMoreSpecific a b = atLeastAsSpecific a b && not (atLeastAsSpecific b a)
 
-expectMatches : Bool -> HT -> HT -> Expectation
-expectMatches expected pattern target =
-  expectEqual expected (matches pattern target)
+expectNoMatch : HT -> HT -> Expectation
+expectNoMatch pattern target =
+  expectSatisfies
+    "a (pattern, target) pair where the pattern does not match the target"
+    (pair => not (matches (fst pair) (snd pair)))
+    (pattern, target)
 
-expectAtLeastAsSpecific : Bool -> HT -> HT -> Expectation
-expectAtLeastAsSpecific expected a b =
-  expectEqual expected (atLeastAsSpecific a b)
+expectAtLeastAsSpecific : HT -> HT -> Expectation
+expectAtLeastAsSpecific a b =
+  expectSatisfies
+    "an (a, b) pair where a is at least as specific as b"
+    (pair => atLeastAsSpecific (fst pair) (snd pair))
+    (a, b)
 
-expectStrictlyMoreSpecific : Bool -> HT -> HT -> Expectation
-expectStrictlyMoreSpecific expected a b =
-  expectEqual expected (strictlyMoreSpecific a b)
+expectNotAtLeastAsSpecific : HT -> HT -> Expectation
+expectNotAtLeastAsSpecific a b =
+  expectSatisfies
+    "an (a, b) pair where a is not at least as specific as b"
+    (pair => not (atLeastAsSpecific (fst pair) (snd pair)))
+    (a, b)
+
+expectStrictlyMoreSpecific : HT -> HT -> Expectation
+expectStrictlyMoreSpecific a b =
+  expectSatisfies
+    "an (a, b) pair where a is strictly more specific than b"
+    (pair => strictlyMoreSpecific (fst pair) (snd pair))
+    (a, b)
 
 walk : Subst -> HT -> HT
 walk s (HV v) = match lookup v s
@@ -599,10 +616,10 @@ prop "instance candidacy ranges over every module of the graph" (imported : List
 
 test "the specificity model orders heads, rejects repeated-variable mismatches and finds ambiguity" = expectAll
   [
-    expectAtLeastAsSpecific True (headHT HPairInts) (headHT HPairSame),
-    expectAtLeastAsSpecific False (headHT HPairSame) (headHT HPairInts),
-    expectMatches False (headHT HPairSame) (goalHT (GPair AInt AStr)),
-    expectStrictlyMoreSpecific True (headHT HBoxInt) (headHT HAny),
+    expectAtLeastAsSpecific (headHT HPairInts) (headHT HPairSame),
+    expectNotAtLeastAsSpecific (headHT HPairSame) (headHT HPairInts),
+    expectNoMatch (headHT HPairSame) (goalHT (GPair AInt AStr)),
+    expectStrictlyMoreSpecific (headHT HBoxInt) (headHT HAny),
     expectEqual Missing (c1Model [HStr, HBoxAny] (GAtom AInt)),
     expectEqual Unique (c1Model [HAny, HInt] (GAtom AInt)),
     expectEqual Ambiguous (c1Model [HPairIntL, HPairIntR] (GPair AInt AInt)),
@@ -652,7 +669,7 @@ test "the improvement model unifies jointly and counts unifying heads" = expectA
     expectEqual Ambiguous (improvementModel True PtBoxFresh PtBoxInt PtFresh),
     expectEqual Ambiguous (improvementModel True PtBoxInt PtBoxInt PtBoxInt),
     expectEqual Unique (improvementModel True PtStr PtStr PtStr),
-    expectMatches False pickRepeated (pickGoal PtBoxFresh PtBoxInt PtBoxInt),
+    expectNoMatch pickRepeated (pickGoal PtBoxFresh PtBoxInt PtBoxInt),
     expectTrue
       (selectionAgrees
         Missing
