@@ -821,7 +821,16 @@ test "importing only a type reaches its non-exported impl from any module" =
 
 shadowProgram : String
 shadowProgram =
-  "-- > elem 3\n-- 4\n-- > notElem 1 [2, 3]\n-- True\nelem : Int -> Int\nelem x = x + 1\n\nprop \"elem bumps\" (n : Int) = elem n == n + 1\n"
+  """
+-- > elem 3
+-- 4
+-- > notElem 1 [2, 3]
+-- True
+elem : Int -> Int
+elem x = x + 1
+
+prop "elem bumps" (n : Int) = elem n == n + 1
+"""
 
 test "a user name shadows core only for user code, under both engines" = withScratchDir
   (dir => match writeFile "\{dir}/shadow.mdk" shadowProgram

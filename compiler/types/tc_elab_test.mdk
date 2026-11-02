@@ -14,10 +14,9 @@
 
 import test.{expectAll, expectEqual, fail}
 import test_process.{underRoot}
-import frontend.parser.{parseLocated}
+import frontend.parser.{parse, parseLocated}
 import frontend.desugar.{desugar, desugarIn, mapProg}
 import types.typecheck.{defaultDriveInputs, elaborateModules}
-import types.tc_types.{ElabResult(..)}
 import support.util.{dedup, joinNl}
 import frontend.ast.{
   Constraint(..),
@@ -45,6 +44,7 @@ import types.repr.{IfaceRef(..), Mono(..)}
 import types.solver_contract.{ClassPredicate(..)}
 import types.tc_mono.{tconBuiltin}
 import types.tc_types.{
+  ElabResult(..),
   LocalAbs(..),
   ModuleCtx,
   PendingDictApp(..),
@@ -62,10 +62,9 @@ import types.tc_state.{
   currentScopeStore,
   dictParamName,
 }
-import frontend.parser.{parse}
 import list.{
   drop,
-  sortOn,
+  sort,
   range,
   replicate,
   take,
@@ -1160,7 +1159,7 @@ evModulesOf decls =
         _ => ()
       e
   let _ = mapProg visit decls
-  sortOn (m => m) (dedup seen.value)
+  sort (dedup seen.value)
 
 -- Core and the user module's evidence module halves, with [mid] the entry's id.
 evModulesFor : String -> <IO, FileRead> Result String (List String, List String)
@@ -1180,6 +1179,10 @@ evModulesFor mid = do
 
 test "core's dict-passed evidence is minted under core whatever program is entered, and a user module's under its own id" =
   match (evModulesFor "alpha", evModulesFor "beta")
-    (Ok (ca, ua), Ok (cb, ub)) =>
-      expectEqual ((([""], [""]), ["alpha"]), ["beta"]) (((ca, cb), ua), ub)
+    (Ok (ca, ua), Ok (cb, ub)) => expectAll [
+      expectEqual [""] ca,
+      expectEqual [""] cb,
+      expectEqual ["alpha"] ua,
+      expectEqual ["beta"] ub,
+    ]
     _ => fail "could not elaborate"

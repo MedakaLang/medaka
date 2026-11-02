@@ -3450,9 +3450,24 @@ test "a leak past an <IO> bound names what IO joins on a narrowed target only" =
 -- pending escape findings: each offending top-level binding is reported once.
 nestedFlushSource : String -> String
 nestedFlushSource helper =
-  "a : Int -> Int\na x =\n  let _ = say \"a\"\n  b x\n\nb : Int -> Int\nb x = go x\n  where\n"
+  """
+a : Int -> Int
+a x =
+  let _ = say "a"
+  b x
+
+b : Int -> Int
+b x = go x
+  where
+"""
     ++ helper
-    ++ "\nc : Int -> Int\nc x =\n  let _ = say \"c\"\n  a x\n"
+    ++ """
+
+c : Int -> Int
+c x =
+  let _ = say "c"
+  a x
+"""
 
 nestedFlushLeaks : String -> List (Int, String)
 nestedFlushLeaks helper =

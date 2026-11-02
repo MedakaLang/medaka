@@ -245,13 +245,12 @@ runPipeline combined =
       -- One drive yields the diagnostics, the entry's own schemes and the
       -- elaborated trees.  The prelude stays whole: a session definition
       -- shadows a core name only for session code, never inside core.
-      let livePrelude = preludeDecls
       let (elab, _, allSchemes) = elaborateModulesWithSchemes (withHeldPrelude
-        livePrelude
+        preludeDecls
         (driveInputsFor
           !selectedProfile
           False
-          [])) False runtimeDecls livePrelude [
+          [])) False runtimeDecls preludeDecls [
         ("__repl__", combined),
       ]
       let coreE = elab.erCore
