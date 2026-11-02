@@ -1,6 +1,7 @@
--- tc_solve_test_support: the drive `typecheck_test` and `publish_test` share to observe the
--- solver through one whole check of a parsed source: its diagnostics and their codes, the
--- route words it stamps, the schemes it publishes, the evidence and disposition it keeps.
+-- tc_solve_test_support: the whole-check drive, trace sinks and graph probes the drive-level
+-- tests share.  The drive observes the solver through one whole check of a parsed source: its
+-- diagnostics and their codes, the route words it stamps, the schemes it publishes, the
+-- evidence and disposition it keeps.
 -- It imports `types.typecheck`, so the solver siblings (`tc_solve_givens_test`,
 -- `tc_solve_entail_test`, `tc_solve_test`, `tc_solve_check_test`), which sit below it, do
 -- not import it; they build their inputs from `tc_test_support`.  No production module
@@ -14,13 +15,17 @@ import frontend.ast.{
 }
 import frontend.desugar.{desugar}
 import frontend.parser.{parse, parseLocated}
-import support.util.{joinNl, listLen}
+import support.util.{joinNl, listLen, reverseL}
 import string.{join}
 import types.tc_types.{
-  DriveInputs(..), EvidenceObservationEntry(..), TraceSink,
-  MethodReturnMemoView(..), DriveOutputs(..), InvocationView(..), TcConfig(..),
-  ElabFacts(..)
+  AssumptionTraceEntry(..), DriveInputs(..), EvidenceObservationEntry(..),
+  GraphCtx(..), TraceSink(..), MethodReturnMemoView(..), ModuleCtx(..),
+  NumericPredicateTraceEntry(..), DriveOutputs(..), InvocationView(..),
+  TcConfig(..), ElabFacts(..)
 }
+import types.evidence.{ScopeId(..)}
+import types.scopes as Scopes
+import types.tc_state.{currentScopeStore}
 import types.typecheck.{
   ModDiags, checkOneDiags, defaultDriveInputs, elaborateModules, tcCode, tcMsg,
   checkOneSchemeFullK
@@ -245,3 +250,78 @@ valText (EvMethod iface arity r impls meths) =
   "\{iface}/\{debug arity} \{routeText r} \{routesText impls} \{routesText meths}"
 valText (EvLit f r) = "\{debug f} \{routeText r}"
 valText (EvHead h) = h
+
+-- A sink with every gate off and fresh buffers; each `begin*` turns one gate on.
+offTraceSink : Unit -> TraceSink
+offTraceSink _ = TraceSink {
+  tsAssumptionEnabled = False,
+  tsAssumptionEntries = Ref [],
+  tsNumericPredicateEnabled = False,
+  tsNumericPredicateEntries = Ref [],
+  tsMethodReturnEnabled = False,
+  tsMethodReturnEntries = Ref [],
+  tsEvidenceObservationEnabled = False,
+  tsEvidenceObservationEntries = Ref [],
+}
+
+-- The trace builders and readers: a test builds a sink with `begin*`, passes it as
+-- the `diTrace` of the drives it observes, and reads its buffer with `finish*`.
+export
+beginAssumptionTrace : Unit -> TraceSink
+beginAssumptionTrace _ = { offTraceSink () | tsAssumptionEnabled = True }
+
+export
+finishAssumptionTrace : TraceSink -> List AssumptionTraceEntry
+finishAssumptionTrace sink = reverseL sink.tsAssumptionEntries.value
+
+export
+beginNumericPredicateTrace : Unit -> TraceSink
+beginNumericPredicateTrace _ =
+  { offTraceSink () | tsNumericPredicateEnabled = True }
+
+export
+finishNumericPredicateTrace : TraceSink -> List NumericPredicateTraceEntry
+finishNumericPredicateTrace sink = reverseL sink.tsNumericPredicateEntries.value
+
+export
+beginMethodReturnTrace : Unit -> TraceSink
+beginMethodReturnTrace _ = { offTraceSink () | tsMethodReturnEnabled = True }
+
+-- #2095: trace-gated, zero cost when off — same discipline as
+-- `methodReturnTrace`. Generalizes that pattern from
+-- the one migrated return family to every `Obligation` `recordEvidence`
+-- publishes: a method occurrence and a dictionary application alike, whatever
+-- family produced the goal, read back from the SAME cells the stampers wrote
+-- (never re-derived), so this can never disagree with the published `EvTable`.
+export
+beginEvidenceObservation : Unit -> TraceSink
+beginEvidenceObservation _ =
+  { offTraceSink () | tsEvidenceObservationEnabled = True }
+
+export
+finishEvidenceObservation : TraceSink -> List EvidenceObservationEntry
+finishEvidenceObservation sink =
+  reverseL sink.tsEvidenceObservationEntries.value
+
+-- Test visibility (`typecheck_test.mdk`): the length of [gctx]'s method-cell index,
+-- which spans only its graph lineage.
+export
+evCellsSpanProbe : GraphCtx -> Int
+evCellsSpanProbe gctx = arrayLength gctx.graphRun.evCells.value
+
+export
+scopeTraceContext : GraphCtx -> ScopeId -> (String, String)
+scopeTraceContext gctx sid =
+  Scopes.scopeTraceContext (currentScopeStore gctx ()) sid
+
+export
+scopeFrameStats : GraphCtx -> (Int, Int)
+scopeFrameStats gctx = Scopes.scopeFrameStats (currentScopeStore gctx ())
+
+-- `hadMatchWarnings` of the last module checked, the only read of a drive that returns no
+-- outputs (the projections).
+export
+matchWarningsNow : ModuleCtx -> Bool
+matchWarningsNow mctx = match mctx.mcCells.matchWarnings.value
+  [] => False
+  _ => True

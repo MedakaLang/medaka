@@ -124,7 +124,6 @@ isOmittedElse : Expr -> Bool
 lamUnderLoc : Expr -> Option (Option Loc, List Pat, Expr)
 localRole : Bool -> BindingRole
 matchWarningLoc : Option Loc -> List Arm -> Option Loc
-matchWarningsNow : ModuleCtx -> Bool
 negateOp : ModuleCtx -> Mono -> Mono
 nonExhaustiveMsg : ModuleCtx -> Oracle -> Mono -> List (List Pat) -> Bool -> (String, Option String)
 nonGuardedRows : ModuleCtx -> List Arm -> List (List Pat)
