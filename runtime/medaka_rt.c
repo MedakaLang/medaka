@@ -2947,7 +2947,12 @@ static long long mdk_write_impl(long long path, long long content, const char *m
   long long cl = ((const long long *)content)[1];
   FILE *f = fopen(p, mode);
   if (!f) return mdk_err(mdk_str_cstr(strerror(errno)));
-  fwrite(c, 1, (size_t)cl, f); fclose(f);
+  int write_errno = 0;
+  if (fwrite(c, 1, (size_t)cl, f) != (size_t)cl)
+    write_errno = errno ? errno : EIO;
+  if (fclose(f) != 0 && write_errno == 0)
+    write_errno = errno ? errno : EIO;
+  if (write_errno != 0) return mdk_err(mdk_str_cstr(strerror(write_errno)));
   return mdk_ok(1);  /* Ok () — Unit field, value irrelevant */
 }
 
@@ -2973,11 +2978,17 @@ long long mdk_write_file_bytes(long long path, long long arr, long long grant) {
   long long n = a[0];
   FILE *f = fopen(p, "wb");
   if (!f) return mdk_err(mdk_str_cstr(strerror(errno)));
+  int write_errno = 0;
   for (long long i = 0; i < n; i++) {
     unsigned char b = (unsigned char)((a[i + 1] >> 1) & 0xFF);
-    fputc(b, f);
+    if (fputc(b, f) == EOF) {
+      write_errno = errno ? errno : EIO;
+      break;
+    }
   }
-  fclose(f);
+  if (fclose(f) != 0 && write_errno == 0)
+    write_errno = errno ? errno : EIO;
+  if (write_errno != 0) return mdk_err(mdk_str_cstr(strerror(write_errno)));
   return mdk_ok(1);  /* Ok () — Unit field, value irrelevant */
 }
 
