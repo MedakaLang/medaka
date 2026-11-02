@@ -91,8 +91,9 @@ running every referencing gate. License known required golden moves by path
 in §6, and choose the claim-bearing tests within its existing 3–5-check ceiling.
 
 A packet that adds a stdlib file names its three pins in §5: the `diagnostics_test`
-module count, the `stage_counts` lint_probe pairs, and the `libSuites`/`libExempt`
-row. No tool derives them.
+module count, the `stage_counts` lint_probe pairs, and the lib suites/exempt row in
+`pds/test/inlang_test_oracle_test.mdk` or `sqlite/test/inlang_test_oracle_test.mdk`.
+No tool derives them.
 
 When a site is a test file, name the assertion verb the slice should reach for,
 from the `write-tests` skill's § "The assertion vocabulary — pick the verb,
