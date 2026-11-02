@@ -160,8 +160,7 @@ test "editFile of a file that is not UTF-8 names the path once" = withScratchDir
     expectEqual (map (_ => ()) (readFile path)) (editFile path Ok))
 
 -- A read-only file refuses the write open, except for root, which ignores
--- the mode, so the test passes without asserting when it runs as root. The
--- write extern discards some other write failures, which are not testable.
+-- the mode, so the test passes without asserting when it runs as root.
 test "editFile on a write failure names the path" = withScratchDir (dir =>
   let path = joinPath dir "readonly.txt"
   match (
@@ -515,3 +514,24 @@ test "glob does not enter a dot directory its pattern cannot reach" = withDangli
       (Ok [joinPath dir "dang/top.txt"])
       (glob (joinPath dir "dang/**/*.txt")),
   ])
+
+-- `/dev/full` opens for writing and refuses every byte with ENOSPC, which stdio
+-- reports at the close. The device is absent on macOS, where these pass
+-- without asserting.
+test "writeFile to a full device is an Err" =
+  if fileExists "/dev/full" then
+    expectErrContains "No space left" (writeFile "/dev/full" "hello")
+  else
+    pass
+
+test "appendFile to a full device is an Err" =
+  if fileExists "/dev/full" then
+    expectErrContains "No space left" (appendFile "/dev/full" "hello")
+  else
+    pass
+
+test "writeFileBytes to a full device is an Err" =
+  if fileExists "/dev/full" then
+    expectErrContains "No space left" (writeFileBytes "/dev/full" [|1, 2, 3|])
+  else
+    pass
