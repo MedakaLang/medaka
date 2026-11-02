@@ -1,0 +1,316 @@
+-- compiler/tools/lint_recursion.mdk — the shared reader of self-recursion: the
+-- full-arity calls a body makes to its own owner, what each argument is made
+-- of, and whether a fold lambda appends onto its accumulator.
+--
+-- An owner is a clause's name and parameter patterns.  A walk's `Ctx` names
+-- the enclosing top-level declaration and nothing nearer, so a `where` or
+-- `let` loop (`go`) is not the `Ctx` owner; `letOwners` reads those from the
+-- `ELetGroup` node and hands them to the same `selfCalls`.
+--
+-- A call matches when its head is the owner's name, the file's scope model
+-- resolves that head to the owner's own binder (a lambda parameter or local
+-- `let` of the same name shadows it), and it passes exactly as many arguments
+-- as the clause has parameters.  A partial application, an over-application
+-- and a call to a different function (mutual recursion) never match.
+--
+-- An argument's role is read against the parameter it derives from.  `p ++ e`
+-- is an append onto `p`; `e ++ p` is a prepend, which costs the length of `e`
+-- and not of `p`, so it is not an accumulator append.  A name bound by a
+-- `match` arm over a parameter (`x :: rest` over `xs`) derives from that
+-- parameter.  No `types.*` import.
+
+import frontend.ast.{
+  Arm(..),
+  Expr(..),
+  FunClause(..),
+  Guard(..),
+  LetBind(..),
+  Loc,
+  Pat(..),
+  patBoundNames,
+}
+import frontend.ast_walk.{childExprs}
+import list.{findMap, get}
+import tools.lint_calls.{lastSegment}
+import tools.lint_core.{Ctx(..)}
+import tools.lint_scope.{Binder(..), BinderKind(..), FileScopes, binderOf}
+import tools.lint_shared.{mentionsVar, unwrapLoc}
+
+-- One clause of a function: its name, its parameter patterns and where the
+-- name is bound: `None` at top level, else the span of the name token of the
+-- `let`/`where` group binding.
+public export data Owner = Owner String (List Pat) (Option Loc)
+
+-- What an argument of a self-call is, relative to the parameter (by position)
+-- it derives from.  `Unchanged j`: the parameter's own name.  `AppendedTo j`:
+-- `p ++ e`.  `PrependedTo j`: `e ++ p`.  `Advanced j`: any other expression
+-- that mentions a name bound by parameter `j`.  `Fresh`: mentions none.
+public export data ArgRole =
+  | Unchanged Int
+  | Advanced Int
+  | AppendedTo Int
+  | PrependedTo Int
+  | Fresh
+  deriving (Eq, Debug)
+
+-- One full-arity self-call: the span of the nearest enclosing `ELoc`, the call
+-- expression and its arguments' roles in order.
+public export data SelfCall = SelfCall (Option Loc) Expr (List ArgRole)
+
+-- Whether a fold's lambda appends onto its accumulator.
+public export data FoldVerdict =
+  | NotAFold
+  | FoldPlain
+  | FoldAppends
+  deriving (Eq, Debug)
+
+-- A name a parameter binds: the name, the parameter's position, and whether
+-- the name is the whole parameter and not a part of it.
+data Bound = Bound String Int Bool
+
+-- The owner a `Ctx` names: the enclosing top-level declaration's clause.
+export
+ctxOwner : Ctx -> Owner
+ctxOwner ctx = Owner ctx.ctxDeclName ctx.ctxParams None
+
+-- The owners of an `ELetGroup` node, one per clause, each with its body.
+-- `[]` for any other node.
+export
+letOwners : Expr -> List (Owner, Expr)
+letOwners e = match unwrapLoc e
+  ELetGroup binds _ => flatMap bindOwners binds
+  _ => []
+
+bindOwners : LetBind -> List (Owner, Expr)
+bindOwners (LetBind name clauses site _) =
+  map ((FunClause ps body) => (Owner name ps (Some site), body)) clauses
+
+-- The full-arity self-calls in `body`, pre-order.  A self-call's arguments are
+-- searched too, so `go (go x)` yields both.
+export
+selfCalls : FileScopes -> Owner -> Expr -> List SelfCall
+selfCalls scopes (owner@(Owner _ ps _)) body =
+  walk scopes owner (paramEnv 0 ps) None body
+
+paramEnv : Int -> List Pat -> List Bound
+paramEnv _ [] = []
+paramEnv j (p :: rest) = paramBounds j p ++ paramEnv (j + 1) rest
+
+paramBounds : Int -> Pat -> List Bound
+paramBounds j (PVar n _ _) = [Bound n j True]
+paramBounds j (PAs x _ _ p) =
+  Bound x j True :: map (n => Bound n j False) (patBoundNames p)
+paramBounds j p = map (n => Bound n j False) (patBoundNames p)
+
+walk : FileScopes -> Owner -> List Bound -> Option Loc -> Expr -> List SelfCall
+walk scopes owner env _ (ELoc l inner) = walk scopes owner env (Some l) inner
+walk scopes owner env loc e = match spineOf e []
+  (hd, args) =>
+    if isSelfCall scopes owner hd args then
+      SelfCall loc e (roles env 0 args)
+        :: flatMap (walk scopes owner env loc) args
+    else match args
+      [] => walkNode scopes owner env loc e
+      _ =>
+        walk scopes owner env loc hd ++ flatMap (walk scopes owner env loc) args
+
+-- The head of an application chain with its arguments.  The head keeps its
+-- `ELoc` wrappers, which carry the site the scope model is asked about.
+spineOf : Expr -> List Expr -> (Expr, List Expr)
+spineOf e args = match unwrapLoc e
+  EApp f a => spineOf f (a :: args)
+  _ => (e, args)
+
+walkNode : FileScopes ->
+  Owner ->
+  List Bound ->
+  Option Loc ->
+  Expr ->
+  List SelfCall
+walkNode scopes owner env loc (EMatch scrut arms) =
+  walk scopes owner env loc scrut
+    ++ flatMap (walkArm scopes owner env loc scrut) arms
+walkNode scopes owner env loc (ELam ps b) =
+  walk scopes owner (without (flatMap patBoundNames ps) env) loc b
+walkNode scopes owner env loc (ELet _ _ p e1 e2) =
+  let env2 = without (patBoundNames p) env
+  walk scopes owner env2 loc e1 ++ walk scopes owner env2 loc e2
+walkNode scopes owner env loc (e@(ELetGroup binds _)) =
+  let env2 = without (flatMap groupNames binds) env
+  flatMap (walk scopes owner env2 loc) (childExprs e)
+walkNode scopes owner env loc e =
+  flatMap (walk scopes owner env loc) (childExprs e)
+
+groupNames : LetBind -> List String
+groupNames (LetBind n clauses _ _) =
+  n :: flatMap (c => flatMap patBoundNames (clausePats c)) clauses
+
+clausePats : FunClause -> List Pat
+clausePats (FunClause ps _) = ps
+
+without : List String -> List Bound -> List Bound
+without [] env = env
+without names env = filter (b => not (named b names)) env
+
+named : Bound -> List String -> Bool
+named (Bound n _ _) names = any (== n) names
+
+-- An arm over a parameter's own name binds parts of that parameter.
+walkArm : FileScopes ->
+  Owner ->
+  List Bound ->
+  Option Loc ->
+  Expr ->
+  Arm ->
+  List SelfCall
+walkArm scopes owner env loc scrut (Arm p gs body) =
+  let bound = patBoundNames p
+  let env2 = without bound env ++ armBounds env scrut bound
+  flatMap (walkGuard scopes owner env2 loc) gs
+    ++ walk scopes owner env2 loc body
+
+armBounds : List Bound -> Expr -> List String -> List Bound
+armBounds env scrut bound = match unwrapLoc scrut
+  EVar n => match findMap (b => boundIndex n b) env
+    Some j => map (m => Bound m j False) bound
+    None => []
+  _ => []
+
+boundIndex : String -> Bound -> Option Int
+boundIndex n (Bound m j _) = if n == m then Some j else None
+
+walkGuard : FileScopes ->
+  Owner ->
+  List Bound ->
+  Option Loc ->
+  Guard ->
+  List SelfCall
+walkGuard scopes owner env loc (GBool e) = walk scopes owner env loc e
+walkGuard scopes owner env loc (GBind _ e) = walk scopes owner env loc e
+
+isSelfCall : FileScopes -> Owner -> Expr -> List Expr -> Bool
+isSelfCall scopes (owner@(Owner name ps _)) hd args =
+  isNamed name hd
+    && length args == length ps
+    && bindsOwner scopes owner (varSite hd)
+
+isNamed : String -> Expr -> Bool
+isNamed name e = match unwrapLoc e
+  EVar n => n == name
+  _ => False
+
+-- The span of the identifier a head stands on: the innermost `ELoc` over it.
+varSite : Expr -> Option Loc
+varSite (ELoc l inner) = match inner
+  EVar _ => Some l
+  ELoc _ _ => varSite inner
+  _ => None
+varSite _ = None
+
+bindsOwner : FileScopes -> Owner -> Option Loc -> Bool
+bindsOwner _ _ None = False
+bindsOwner scopes (Owner name _ kind) (Some l) = match binderOf scopes l
+  None => False
+  Some b => b.binderName == name && bindsAs kind b
+
+bindsAs : Option Loc -> Binder -> Bool
+bindsAs None b = b.binderKind == BTopLevel
+bindsAs (Some site) b =
+  (b.binderKind == BLetGroup || b.binderKind == BWhere) && b.binderSpan == site
+
+-- ── argument roles ────────────────────────────────────────────────────────────
+
+-- The roles of the arguments from position `i` on.
+roles : List Bound -> Int -> List Expr -> List ArgRole
+roles _ _ [] = []
+roles env i (a :: rest) = argRole env i a :: roles env (i + 1) rest
+
+-- The role of the argument at position `i`.  An expression built from several
+-- parameters is read against the one at its own position when it mentions it.
+argRole : List Bound -> Int -> Expr -> ArgRole
+argRole env i e = match unwrapLoc e
+  EVar n => optionOr Fresh (findMap (boundRole n) env)
+  EBinOp "++" a b _ => appendRole env i a b e
+  _ => derivedRole env i e
+
+boundRole : String -> Bound -> Option ArgRole
+boundRole n (Bound m j whole)
+  | n /= m = None
+  | whole = Some (Unchanged j)
+  | otherwise = Some (Advanced j)
+
+appendRole : List Bound -> Int -> Expr -> Expr -> Expr -> ArgRole
+appendRole env i a b whole = match argRole env i a
+  Unchanged j => AppendedTo j
+  AppendedTo j => AppendedTo j
+  _ => match argRole env i b
+    Unchanged j => PrependedTo j
+    _ => derivedRole env i whole
+
+derivedRole : List Bound -> Int -> Expr -> ArgRole
+derivedRole env i e = match mentioned env e
+  [] => Fresh
+  js@(j :: _) => Advanced (if any (== i) js then i else j)
+
+-- Positions of the parameters whose names `e` mentions, in parameter order.
+mentioned : List Bound -> Expr -> List Int
+mentioned env e = flatMap (b => mentionedIn e b) env
+
+mentionedIn : Expr -> Bound -> List Int
+mentionedIn e (Bound n j _) = if mentionsVar n e then [j] else []
+
+-- ── fold lambdas ─────────────────────────────────────────────────────────────
+
+-- For an application node: whether its head is a fold from the stdlib and one
+-- of its lambda arguments appends onto the accumulator (`acc ++ e`) in a tail
+-- position of the body.  The head is matched by name (the last segment of a
+-- qualified one), not by the scope model, and a qualified or aliased fold is
+-- the same fold.
+export
+foldVerdict : Expr -> FoldVerdict
+foldVerdict e = match spineOf e []
+  (_, []) => NotAFold
+  (hd, args) => match unwrapLoc hd
+    EVar n => match foldAccIndex (lastSegment n)
+      None => NotAFold
+      Some k =>
+        if any (a => lamAppends k a) args then FoldAppends else FoldPlain
+    _ => NotAFold
+
+-- Position of the accumulator among a fold lambda's parameters, by name.
+foldAccIndex : String -> Option Int
+foldAccIndex "fold" = Some 0
+foldAccIndex "foldThen" = Some 0
+foldAccIndex "foldlSet" = Some 0
+foldAccIndex "foldlWithKey" = Some 0
+foldAccIndex "foldWithIndex" = Some 0
+foldAccIndex "foldRight" = Some 1
+foldAccIndex "foldrSet" = Some 1
+foldAccIndex "foldrWithKey" = Some 2
+foldAccIndex _ = None
+
+lamAppends : Int -> Expr -> Bool
+lamAppends k e = match unwrapLoc e
+  ELam ps body => match get k ps
+    Some (PVar acc _ _) => tailAppends acc body
+    _ => False
+  _ => False
+
+-- Whether some tail position of `e` is `acc ++ e1`.
+tailAppends : String -> Expr -> Bool
+tailAppends acc e = match unwrapLoc e
+  EBinOp "++" a _ _ => leftIsAcc acc a
+  EIf _ t el => tailAppends acc t || tailAppends acc el
+  EMatch _ arms => any (armAppends acc) arms
+  ELet _ _ _ _ body => tailAppends acc body
+  ELetGroup _ body => tailAppends acc body
+  _ => False
+
+leftIsAcc : String -> Expr -> Bool
+leftIsAcc acc a = match unwrapLoc a
+  EVar n => n == acc
+  EBinOp "++" a2 _ _ => leftIsAcc acc a2
+  _ => False
+
+armAppends : String -> Arm -> Bool
+armAppends acc (Arm _ _ body) = tailAppends acc body
