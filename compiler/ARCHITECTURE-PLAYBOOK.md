@@ -91,7 +91,7 @@ below. The cut rulings P1-D1 to P1-D22 and the exit outputs are on #4206.
 |---|---|---|---|
 | `test_probe`, `test_doc_native` | 2 | the parent's drive plus the native child's own: a value crossing a process boundary | Phase 3 C3 (#2732, #3902) |
 | `test_doc_eval`, `test_docimp_eval` | 2 | the doctest-injected program is a second graph (P1-D15) | Phase 3 C3 (#4279) |
-| `test_propsdoc_eval`, `test_arb_eval` | 4, 5 | the single-file test parent's gate and pair drives are two prelude universes, plus the doctest graph and the props worker's process | #4282 (precursor #4297), then C3 |
+| `test_propsdoc_eval`, `test_arb_eval` | 3, 4 | the single-file test parent's one gate-and-pair drive, plus the doctest graph and the props worker's process (the arbitrary fixture's custom-`Arbitrary` validation adds one more) | Phase 3 C3 |
 | `lsp.c_didchange` | 4 | four requests, not a duplicate | none needed |
 
 **What Phase 1 did not do**, and where each residual now lives:
