@@ -142,15 +142,16 @@ by serialization.
 
 ## End of sprint — review, fix, merge
 
-1. **Resync once, then start the full CI run, then review.** All slices
+1. **Start the full CI run, then review; resync at land.** All slices
    landed (or dropped), in this order:
 
-   a. **The sprint's one scheduled resync** — `sh scripts/sprint-resync.sh
-      <sprint-branch>`, here rather than at land, so the reviewer sees the
-      tree that will actually merge and the golden re-derivation happens once
-      with a reviewer downstream of it.
+   a. **No scheduled resync here.** Resync at land (step 4) with
+      `sh scripts/sprint-resync.sh <sprint-branch>`, because a mid-sprint
+      resync is redone at land when `main` has moved on. Resync now only if
+      one of the four merge triggers in the per-slice loop's step 2 has
+      fired. The contract says resync happens at land.
 
-   b. **Trigger the unnarrowed CI run** on the resynced head:
+   b. **Trigger the unnarrowed CI run** on the sprint head:
       `gh workflow run ci.yml --ref sprint/<stage>`. PR runs are narrowed;
       this is the only pre-queue execution of the whole suite, and in
       particular the only pre-queue run of `registry_keying_ratchet.sh`

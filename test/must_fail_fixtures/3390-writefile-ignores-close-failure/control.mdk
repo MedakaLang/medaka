@@ -1,5 +1,0 @@
-main : <FileWrite, Stdout> Unit
-main =
-  match writeFile "/dev/null" "hello"
-    Ok _ => println "Ok"
-    Err _ => println "Err"
