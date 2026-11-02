@@ -611,7 +611,7 @@ writeShard dir sp text = match mkdirAll dir
     Ok tmp =>
       stageAndRename tmp sp text
       bestEffort
-        "removing the staging dir; one left non-empty by a failed rename is kept on purpose"
+        "removing the staging dir; a failed write leaves the staged file in it, so it is non-empty"
         (removeDir tmp)
 
 -- A staging dir unique to THIS process, inside `dir`: `rename(2)` fails across

@@ -1,5 +1,5 @@
 # META
-source_lines=1746
+source_lines=1759
 stages=DESUGAR,MARK
 # SOURCE
 -- compiler/tools/lint_walk.mdk — the lint runner: `lintProgram*` and the one
@@ -165,6 +165,7 @@ mkFileFacts src prog pos = FileFacts {
   ffScopes = memoNew (_ => buildScopes prog),
   ffLines = memoNew (_ => fromList (lines src)),
   ffLocalMods = [],
+  ffCanonPath = "",
 }
 
 -- The dotted names of the program's `import m.*` modules that resolve to a file
@@ -211,12 +212,19 @@ export
 withLocalMods : List String -> FileFacts -> FileFacts
 withLocalMods mods ff = { ff | ffLocalMods = mods }
 
+-- `facts` knowing the canonical path of its file.
+export
+withCanonPath : String -> FileFacts -> FileFacts
+withCanonPath path ff = { ff | ffCanonPath = path }
+
 -- `mkFileFacts` for a file on disk, reading which wildcard imports are the
 -- project's own modules.
 export
 mkFileFactsAt : String -> String -> List Decl -> Positions -> <IO> FileFacts
 mkFileFactsAt path src prog pos =
-  withLocalMods (projectWildMods path prog) (mkFileFacts src prog pos)
+  withCanonPath
+    (canonicalizePath path)
+    (withLocalMods (projectWildMods path prog) (mkFileFacts src prog pos))
 
 -- `mkFileFactsAt` for a file whose rules are handed `idx`: the filesystem says
 -- which wildcard imports are the project's modules, and the index is asked
@@ -233,7 +241,12 @@ mkFileFactsIn idx path src prog pos =
   let wild = wildModsOf prog
   let idxHere = withStdlibLocalMods (localModStates path wild) idx
   let local = filterList (stdlibLocalModAsked idxHere) wild
-  (idxHere, withLocalMods local (mkFileFacts src prog pos))
+  (
+    idxHere,
+    withCanonPath
+      (canonicalizePath path)
+      (withLocalMods local (mkFileFacts src prog pos)),
+  )
 
 -- The file's inline-suppression directives, off the shared comment channel.
 export
@@ -1775,7 +1788,7 @@ appendIfPath file diag (path, src, diags) =
 (DUse false (UseGroup ("tools" "lint_dup") ((mem "dupClauseOfDecl" false))))
 (DUse false (UseGroup ("tools" "lint_registry") ((mem "allProjectRules" false) (mem "allRules" false) (mem "projectRuleActive" false) (mem "selectRules" false))))
 (DTypeSig true "mkFileFacts" (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyFun (TyCon "Positions") (TyCon "FileFacts")))))
-(DFunDef false "mkFileFacts" ((PVar "src") (PVar "prog") (PVar "pos")) (ERecordCreate "FileFacts" ((fa "ffSrc" (EVar "src")) (fa "ffComments" (EApp (EVar "memoNew") (ELam (PWild) (EApp (EVar "collectComments") (EVar "src"))))) (fa "ffOracle" (EApp (EVar "memoNew") (ELam (PWild) (EApp (EVar "buildOracle") (EVar "prog"))))) (fa "ffDupClauses" (EApp (EVar "memoNew") (ELam (PWild) (EApp (EApp (EVar "flatMap") (EVar "dupClauseOfDecl")) (EApp (EApp (EVar "declLocList") (EVar "pos")) (EVar "prog")))))) (fa "ffScopes" (EApp (EVar "memoNew") (ELam (PWild) (EApp (EVar "buildScopes") (EVar "prog"))))) (fa "ffLines" (EApp (EVar "memoNew") (ELam (PWild) (EApp (EVar "fromList") (EApp (EVar "lines") (EVar "src")))))) (fa "ffLocalMods" (EListLit)))))
+(DFunDef false "mkFileFacts" ((PVar "src") (PVar "prog") (PVar "pos")) (ERecordCreate "FileFacts" ((fa "ffSrc" (EVar "src")) (fa "ffComments" (EApp (EVar "memoNew") (ELam (PWild) (EApp (EVar "collectComments") (EVar "src"))))) (fa "ffOracle" (EApp (EVar "memoNew") (ELam (PWild) (EApp (EVar "buildOracle") (EVar "prog"))))) (fa "ffDupClauses" (EApp (EVar "memoNew") (ELam (PWild) (EApp (EApp (EVar "flatMap") (EVar "dupClauseOfDecl")) (EApp (EApp (EVar "declLocList") (EVar "pos")) (EVar "prog")))))) (fa "ffScopes" (EApp (EVar "memoNew") (ELam (PWild) (EApp (EVar "buildScopes") (EVar "prog"))))) (fa "ffLines" (EApp (EVar "memoNew") (ELam (PWild) (EApp (EVar "fromList") (EApp (EVar "lines") (EVar "src")))))) (fa "ffLocalMods" (EListLit)) (fa "ffCanonPath" (ELit (LString ""))))))
 (DTypeSig true "projectWildMods" (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyEffect ("IO") None (TyApp (TyCon "List") (TyCon "String"))))))
 (DFunDef false "projectWildMods" ((PVar "path") (PVar "prog")) (EMatch (EApp (EVar "wildModsOf") (EVar "prog")) (arm (PList) () (EListLit)) (arm (PVar "wild") () (EApp (EApp (EVar "localModsIn") (EApp (EVar "entrySearchRoots") (EApp (EVar "dirOf") (EVar "path")))) (EVar "wild")))))
 (DTypeSig true "wildModsOf" (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyApp (TyCon "List") (TyCon "String"))))
@@ -1794,10 +1807,12 @@ appendIfPath file diag (path, src, diags) =
 (DFunDef false "wildPathsOf" (PWild) (EListLit))
 (DTypeSig true "withLocalMods" (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyCon "FileFacts") (TyCon "FileFacts"))))
 (DFunDef false "withLocalMods" ((PVar "mods") (PVar "ff")) (ERecordUpdate (EVar "ff") ((fa "ffLocalMods" (EVar "mods")))))
+(DTypeSig true "withCanonPath" (TyFun (TyCon "String") (TyFun (TyCon "FileFacts") (TyCon "FileFacts"))))
+(DFunDef false "withCanonPath" ((PVar "path") (PVar "ff")) (ERecordUpdate (EVar "ff") ((fa "ffCanonPath" (EVar "path")))))
 (DTypeSig true "mkFileFactsAt" (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyFun (TyCon "Positions") (TyEffect ("IO") None (TyCon "FileFacts")))))))
-(DFunDef false "mkFileFactsAt" ((PVar "path") (PVar "src") (PVar "prog") (PVar "pos")) (EApp (EApp (EVar "withLocalMods") (EApp (EApp (EVar "projectWildMods") (EVar "path")) (EVar "prog"))) (EApp (EApp (EApp (EVar "mkFileFacts") (EVar "src")) (EVar "prog")) (EVar "pos"))))
+(DFunDef false "mkFileFactsAt" ((PVar "path") (PVar "src") (PVar "prog") (PVar "pos")) (EApp (EApp (EVar "withCanonPath") (EApp (EVar "canonicalizePath") (EVar "path"))) (EApp (EApp (EVar "withLocalMods") (EApp (EApp (EVar "projectWildMods") (EVar "path")) (EVar "prog"))) (EApp (EApp (EApp (EVar "mkFileFacts") (EVar "src")) (EVar "prog")) (EVar "pos")))))
 (DTypeSig true "mkFileFactsIn" (TyFun (TyCon "StdlibIndex") (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyFun (TyCon "Positions") (TyEffect ("IO") None (TyTuple (TyCon "StdlibIndex") (TyCon "FileFacts")))))))))
-(DFunDef false "mkFileFactsIn" ((PVar "idx") (PVar "path") (PVar "src") (PVar "prog") (PVar "pos")) (EBlock (DoLet false false (PVar "wild") (EApp (EVar "wildModsOf") (EVar "prog"))) (DoLet false false (PVar "idxHere") (EApp (EApp (EVar "withStdlibLocalMods") (EApp (EApp (EVar "localModStates") (EVar "path")) (EVar "wild"))) (EVar "idx"))) (DoLet false false (PVar "local") (EApp (EApp (EVar "filterList") (EApp (EVar "stdlibLocalModAsked") (EVar "idxHere"))) (EVar "wild"))) (DoExpr (ETuple (EVar "idxHere") (EApp (EApp (EVar "withLocalMods") (EVar "local")) (EApp (EApp (EApp (EVar "mkFileFacts") (EVar "src")) (EVar "prog")) (EVar "pos")))))))
+(DFunDef false "mkFileFactsIn" ((PVar "idx") (PVar "path") (PVar "src") (PVar "prog") (PVar "pos")) (EBlock (DoLet false false (PVar "wild") (EApp (EVar "wildModsOf") (EVar "prog"))) (DoLet false false (PVar "idxHere") (EApp (EApp (EVar "withStdlibLocalMods") (EApp (EApp (EVar "localModStates") (EVar "path")) (EVar "wild"))) (EVar "idx"))) (DoLet false false (PVar "local") (EApp (EApp (EVar "filterList") (EApp (EVar "stdlibLocalModAsked") (EVar "idxHere"))) (EVar "wild"))) (DoExpr (ETuple (EVar "idxHere") (EApp (EApp (EVar "withCanonPath") (EApp (EVar "canonicalizePath") (EVar "path"))) (EApp (EApp (EVar "withLocalMods") (EVar "local")) (EApp (EApp (EApp (EVar "mkFileFacts") (EVar "src")) (EVar "prog")) (EVar "pos"))))))))
 (DTypeSig true "factDirectives" (TyFun (TyCon "FileFacts") (TyApp (TyCon "List") (TyCon "Directive"))))
 (DFunDef false "factDirectives" ((PVar "ff")) (EApp (EVar "collectDirectives") (EApp (EVar "factComments") (EVar "ff"))))
 (DTypeSig true "lintProgram" (TyFun (TyCon "StdlibIndex") (TyFun (TyApp (TyCon "List") (TyCon "Rule")) (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyCon "Positions") (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyApp (TyCon "List") (TyCon "Finding")))))))))
@@ -2176,7 +2191,7 @@ appendIfPath file diag (path, src, diags) =
 (DUse false (UseGroup ("tools" "lint_dup") ((mem "dupClauseOfDecl" false))))
 (DUse false (UseGroup ("tools" "lint_registry") ((mem "allProjectRules" false) (mem "allRules" false) (mem "projectRuleActive" false) (mem "selectRules" false))))
 (DTypeSig true "mkFileFacts" (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyFun (TyCon "Positions") (TyCon "FileFacts")))))
-(DFunDef false "mkFileFacts" ((PVar "src") (PVar "prog") (PVar "pos")) (ERecordCreate "FileFacts" ((fa "ffSrc" (EVar "src")) (fa "ffComments" (EApp (EVar "memoNew") (ELam (PWild) (EApp (EVar "collectComments") (EVar "src"))))) (fa "ffOracle" (EApp (EVar "memoNew") (ELam (PWild) (EApp (EVar "buildOracle") (EVar "prog"))))) (fa "ffDupClauses" (EApp (EVar "memoNew") (ELam (PWild) (EApp (EApp (EDictApp "flatMap") (EVar "dupClauseOfDecl")) (EApp (EApp (EVar "declLocList") (EVar "pos")) (EVar "prog")))))) (fa "ffScopes" (EApp (EVar "memoNew") (ELam (PWild) (EApp (EVar "buildScopes") (EVar "prog"))))) (fa "ffLines" (EApp (EVar "memoNew") (ELam (PWild) (EApp (EVar "fromList") (EApp (EVar "lines") (EVar "src")))))) (fa "ffLocalMods" (EListLit)))))
+(DFunDef false "mkFileFacts" ((PVar "src") (PVar "prog") (PVar "pos")) (ERecordCreate "FileFacts" ((fa "ffSrc" (EVar "src")) (fa "ffComments" (EApp (EVar "memoNew") (ELam (PWild) (EApp (EVar "collectComments") (EVar "src"))))) (fa "ffOracle" (EApp (EVar "memoNew") (ELam (PWild) (EApp (EVar "buildOracle") (EVar "prog"))))) (fa "ffDupClauses" (EApp (EVar "memoNew") (ELam (PWild) (EApp (EApp (EDictApp "flatMap") (EVar "dupClauseOfDecl")) (EApp (EApp (EVar "declLocList") (EVar "pos")) (EVar "prog")))))) (fa "ffScopes" (EApp (EVar "memoNew") (ELam (PWild) (EApp (EVar "buildScopes") (EVar "prog"))))) (fa "ffLines" (EApp (EVar "memoNew") (ELam (PWild) (EApp (EVar "fromList") (EApp (EVar "lines") (EVar "src")))))) (fa "ffLocalMods" (EListLit)) (fa "ffCanonPath" (ELit (LString ""))))))
 (DTypeSig true "projectWildMods" (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyEffect ("IO") None (TyApp (TyCon "List") (TyCon "String"))))))
 (DFunDef false "projectWildMods" ((PVar "path") (PVar "prog")) (EMatch (EApp (EVar "wildModsOf") (EVar "prog")) (arm (PList) () (EListLit)) (arm (PVar "wild") () (EApp (EApp (EVar "localModsIn") (EApp (EVar "entrySearchRoots") (EApp (EVar "dirOf") (EVar "path")))) (EVar "wild")))))
 (DTypeSig true "wildModsOf" (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyApp (TyCon "List") (TyCon "String"))))
@@ -2195,10 +2210,12 @@ appendIfPath file diag (path, src, diags) =
 (DFunDef false "wildPathsOf" (PWild) (EListLit))
 (DTypeSig true "withLocalMods" (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyCon "FileFacts") (TyCon "FileFacts"))))
 (DFunDef false "withLocalMods" ((PVar "mods") (PVar "ff")) (ERecordUpdate (EVar "ff") ((fa "ffLocalMods" (EVar "mods")))))
+(DTypeSig true "withCanonPath" (TyFun (TyCon "String") (TyFun (TyCon "FileFacts") (TyCon "FileFacts"))))
+(DFunDef false "withCanonPath" ((PVar "path") (PVar "ff")) (ERecordUpdate (EVar "ff") ((fa "ffCanonPath" (EVar "path")))))
 (DTypeSig true "mkFileFactsAt" (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyFun (TyCon "Positions") (TyEffect ("IO") None (TyCon "FileFacts")))))))
-(DFunDef false "mkFileFactsAt" ((PVar "path") (PVar "src") (PVar "prog") (PVar "pos")) (EApp (EApp (EVar "withLocalMods") (EApp (EApp (EVar "projectWildMods") (EVar "path")) (EVar "prog"))) (EApp (EApp (EApp (EVar "mkFileFacts") (EVar "src")) (EVar "prog")) (EVar "pos"))))
+(DFunDef false "mkFileFactsAt" ((PVar "path") (PVar "src") (PVar "prog") (PVar "pos")) (EApp (EApp (EVar "withCanonPath") (EApp (EVar "canonicalizePath") (EVar "path"))) (EApp (EApp (EVar "withLocalMods") (EApp (EApp (EVar "projectWildMods") (EVar "path")) (EVar "prog"))) (EApp (EApp (EApp (EVar "mkFileFacts") (EVar "src")) (EVar "prog")) (EVar "pos")))))
 (DTypeSig true "mkFileFactsIn" (TyFun (TyCon "StdlibIndex") (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyFun (TyCon "Positions") (TyEffect ("IO") None (TyTuple (TyCon "StdlibIndex") (TyCon "FileFacts")))))))))
-(DFunDef false "mkFileFactsIn" ((PVar "idx") (PVar "path") (PVar "src") (PVar "prog") (PVar "pos")) (EBlock (DoLet false false (PVar "wild") (EApp (EVar "wildModsOf") (EVar "prog"))) (DoLet false false (PVar "idxHere") (EApp (EApp (EVar "withStdlibLocalMods") (EApp (EApp (EVar "localModStates") (EVar "path")) (EVar "wild"))) (EVar "idx"))) (DoLet false false (PVar "local") (EApp (EApp (EVar "filterList") (EApp (EVar "stdlibLocalModAsked") (EVar "idxHere"))) (EVar "wild"))) (DoExpr (ETuple (EVar "idxHere") (EApp (EApp (EVar "withLocalMods") (EVar "local")) (EApp (EApp (EApp (EVar "mkFileFacts") (EVar "src")) (EVar "prog")) (EVar "pos")))))))
+(DFunDef false "mkFileFactsIn" ((PVar "idx") (PVar "path") (PVar "src") (PVar "prog") (PVar "pos")) (EBlock (DoLet false false (PVar "wild") (EApp (EVar "wildModsOf") (EVar "prog"))) (DoLet false false (PVar "idxHere") (EApp (EApp (EVar "withStdlibLocalMods") (EApp (EApp (EVar "localModStates") (EVar "path")) (EVar "wild"))) (EVar "idx"))) (DoLet false false (PVar "local") (EApp (EApp (EVar "filterList") (EApp (EVar "stdlibLocalModAsked") (EVar "idxHere"))) (EVar "wild"))) (DoExpr (ETuple (EVar "idxHere") (EApp (EApp (EVar "withCanonPath") (EApp (EVar "canonicalizePath") (EVar "path"))) (EApp (EApp (EVar "withLocalMods") (EVar "local")) (EApp (EApp (EApp (EVar "mkFileFacts") (EVar "src")) (EVar "prog")) (EVar "pos"))))))))
 (DTypeSig true "factDirectives" (TyFun (TyCon "FileFacts") (TyApp (TyCon "List") (TyCon "Directive"))))
 (DFunDef false "factDirectives" ((PVar "ff")) (EApp (EVar "collectDirectives") (EApp (EVar "factComments") (EVar "ff"))))
 (DTypeSig true "lintProgram" (TyFun (TyCon "StdlibIndex") (TyFun (TyApp (TyCon "List") (TyCon "Rule")) (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyCon "Positions") (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyApp (TyCon "List") (TyCon "Finding")))))))))

@@ -1,5 +1,5 @@
 # META
-source_lines=275
+source_lines=306
 stages=DESUGAR,MARK
 # SOURCE
 -- compiler/tools/lint_calls.mdk — the shared reader of a discarded call: given a
@@ -23,7 +23,7 @@ import support.util.{joinWith}
 import tools.printer.{ppTy}
 import tools.lint_core.{
   Ctx(..),
-  FileFacts,
+  FileFacts(..),
   Finding,
   StdlibIndex,
   Visitor(..),
@@ -37,11 +37,17 @@ import tools.lint_index.{
   RowKind(..),
   rowHasSig,
   rowSig,
+  indexKnowsModule,
   projectRowsNamed,
   rowsIn,
-  rowsNamed,
 }
-import tools.lint_scope.{Binder(..), BinderKind(..), FileScopes, binderOf}
+import tools.lint_scope.{
+  Binder(..),
+  BinderKind(..),
+  FileScopes,
+  binderOf,
+  wildImports,
+}
 import tools.lint_shared.{unwrapLoc}
 
 -- Whether a block is a bare statement block or a `do` block.
@@ -135,8 +141,18 @@ plainBlockVisitors : (ProjectIndex -> FileScopes -> String -> DoStmt -> List Fin
 plainBlockVisitors stmtFindings idx path facts _ _ = [
   OnExpr
     [KBlock]
-    (plainBlockAt stmtFindings (projectIndexOf idx) (factScopes facts) path),
+    (plainBlockAt
+      stmtFindings
+      (projectIndexOf idx)
+      (factScopes facts)
+      (factFilePath facts path)),
 ]
+
+-- The path the index knows the file by: its canonical path when the caller
+-- looked, else the path as typed.
+factFilePath : FileFacts -> String -> String
+factFilePath facts path =
+  if facts.ffCanonPath == "" then path else facts.ffCanonPath
 
 plainBlockAt : (ProjectIndex -> FileScopes -> String -> DoStmt -> List Finding) ->
   ProjectIndex ->
@@ -196,7 +212,7 @@ nameVerdict : ProjectIndex ->
   Verdict
 nameVerdict _ _ _ _ None _ = Abstain NoSite
 nameVerdict ix scopes file name (Some l) n = match binderOf scopes l
-  None => rowsVerdict n (rowsNamed ix NsValue name)
+  None => unboundVerdict ix scopes n name
   Some b => match b.binderKind
     BTopLevel =>
       rowsVerdict n (rowsInFile file (projectRowsNamed ix NsValue name))
@@ -205,6 +221,21 @@ nameVerdict ix scopes file name (Some l) n = match binderOf scopes l
         n
         (rowsIn ix (joinWith "." b.binderFrom) NsValue b.binderOrigin)
     _ => Abstain LocalBinder
+
+-- A head no binder in the file accounts for comes from the prelude, from
+-- `runtime` or from a module the file imports with `*`.  Those are the only
+-- modules whose rows can be the callee, so a same-spelled row anywhere else in
+-- the project decides nothing; and a wildcard module the index holds no rows
+-- for (a dependency, say) may declare the name, so the question stays open.
+unboundVerdict : ProjectIndex -> FileScopes -> Int -> String -> Verdict
+unboundVerdict ix scopes n name =
+  let wild = map (joinWith ".") (wildImports scopes)
+  if any (m => not (indexKnowsModule ix m)) wild then
+    Abstain NoRows
+  else
+    rowsVerdict
+      n
+      (flatMap (m => rowsIn ix m NsValue name) ("core" :: "runtime" :: wild))
 
 -- The rows declared in the file at `file`.  The index holds the canonical path
 -- of each project file and `file` is the path the run was given, so a relative
@@ -285,9 +316,9 @@ resultAfter n t
 (DUse false (UseGroup ("string") ((mem "endsWith" false) (mem "split" false) (mem "stripPrefix" false))))
 (DUse false (UseGroup ("support" "util") ((mem "joinWith" false))))
 (DUse false (UseGroup ("tools" "printer") ((mem "ppTy" false))))
-(DUse false (UseGroup ("tools" "lint_core") ((mem "Ctx" true) (mem "FileFacts" false) (mem "Finding" false) (mem "StdlibIndex" false) (mem "Visitor" true) (mem "factScopes" false) (mem "projectIndexOf" false))))
-(DUse false (UseGroup ("tools" "lint_index") ((mem "IndexRow" true) (mem "Ns" true) (mem "ProjectIndex" false) (mem "RowKind" true) (mem "rowHasSig" false) (mem "rowSig" false) (mem "projectRowsNamed" false) (mem "rowsIn" false) (mem "rowsNamed" false))))
-(DUse false (UseGroup ("tools" "lint_scope") ((mem "Binder" true) (mem "BinderKind" true) (mem "FileScopes" false) (mem "binderOf" false))))
+(DUse false (UseGroup ("tools" "lint_core") ((mem "Ctx" true) (mem "FileFacts" true) (mem "Finding" false) (mem "StdlibIndex" false) (mem "Visitor" true) (mem "factScopes" false) (mem "projectIndexOf" false))))
+(DUse false (UseGroup ("tools" "lint_index") ((mem "IndexRow" true) (mem "Ns" true) (mem "ProjectIndex" false) (mem "RowKind" true) (mem "rowHasSig" false) (mem "rowSig" false) (mem "indexKnowsModule" false) (mem "projectRowsNamed" false) (mem "rowsIn" false))))
+(DUse false (UseGroup ("tools" "lint_scope") ((mem "Binder" true) (mem "BinderKind" true) (mem "FileScopes" false) (mem "binderOf" false) (mem "wildImports" false))))
 (DUse false (UseGroup ("tools" "lint_shared") ((mem "unwrapLoc" false))))
 (DData Public "BlockKind" () ((variant "PlainBlock" (ConPos)) (variant "DoBlock" (ConPos))) ())
 (DImpl true "Eq" ((TyCon "BlockKind")) () ((im "eq" ((PVar "__x") (PVar "__y")) (EMatch (ETuple (EVar "__x") (EVar "__y")) (arm (PTuple (PCon "PlainBlock") (PCon "PlainBlock")) () (EVar "True")) (arm (PTuple (PCon "DoBlock") (PCon "DoBlock")) () (EVar "True")) (arm (PTuple PWild PWild) () (EVar "False"))))))
@@ -313,7 +344,9 @@ resultAfter n t
 (DTypeSig true "blockOf" (TyFun (TyCon "Expr") (TyApp (TyCon "Option") (TyTuple (TyCon "BlockKind") (TyApp (TyCon "List") (TyCon "DoStmt"))))))
 (DFunDef false "blockOf" ((PVar "e")) (EMatch (EApp (EVar "unwrapLoc") (EVar "e")) (arm (PCon "EBlock" (PVar "stmts")) () (EApp (EVar "Some") (ETuple (EVar "PlainBlock") (EVar "stmts")))) (arm (PCon "EDo" PWild (PVar "stmts")) () (EApp (EVar "Some") (ETuple (EVar "DoBlock") (EVar "stmts")))) (arm PWild () (EVar "None"))))
 (DTypeSig true "plainBlockVisitors" (TyFun (TyFun (TyCon "ProjectIndex") (TyFun (TyCon "FileScopes") (TyFun (TyCon "String") (TyFun (TyCon "DoStmt") (TyApp (TyCon "List") (TyCon "Finding")))))) (TyFun (TyCon "StdlibIndex") (TyFun (TyCon "String") (TyFun (TyCon "FileFacts") (TyFun (TyCon "Positions") (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyApp (TyCon "List") (TyCon "Visitor")))))))))
-(DFunDef false "plainBlockVisitors" ((PVar "stmtFindings") (PVar "idx") (PVar "path") (PVar "facts") PWild PWild) (EListLit (EApp (EApp (EVar "OnExpr") (EListLit (EVar "KBlock"))) (EApp (EApp (EApp (EApp (EVar "plainBlockAt") (EVar "stmtFindings")) (EApp (EVar "projectIndexOf") (EVar "idx"))) (EApp (EVar "factScopes") (EVar "facts"))) (EVar "path")))))
+(DFunDef false "plainBlockVisitors" ((PVar "stmtFindings") (PVar "idx") (PVar "path") (PVar "facts") PWild PWild) (EListLit (EApp (EApp (EVar "OnExpr") (EListLit (EVar "KBlock"))) (EApp (EApp (EApp (EApp (EVar "plainBlockAt") (EVar "stmtFindings")) (EApp (EVar "projectIndexOf") (EVar "idx"))) (EApp (EVar "factScopes") (EVar "facts"))) (EApp (EApp (EVar "factFilePath") (EVar "facts")) (EVar "path"))))))
+(DTypeSig false "factFilePath" (TyFun (TyCon "FileFacts") (TyFun (TyCon "String") (TyCon "String"))))
+(DFunDef false "factFilePath" ((PVar "facts") (PVar "path")) (EIf (EBinOp "==" (EFieldAccess (EVar "facts") "ffCanonPath") (ELit (LString ""))) (EVar "path") (EFieldAccess (EVar "facts") "ffCanonPath")))
 (DTypeSig false "plainBlockAt" (TyFun (TyFun (TyCon "ProjectIndex") (TyFun (TyCon "FileScopes") (TyFun (TyCon "String") (TyFun (TyCon "DoStmt") (TyApp (TyCon "List") (TyCon "Finding")))))) (TyFun (TyCon "ProjectIndex") (TyFun (TyCon "FileScopes") (TyFun (TyCon "String") (TyFun (TyCon "Ctx") (TyFun (TyCon "Expr") (TyApp (TyCon "List") (TyCon "Finding")))))))))
 (DFunDef false "plainBlockAt" ((PVar "stmtFindings") (PVar "ix") (PVar "scopes") (PVar "path") PWild (PVar "e")) (EMatch (EApp (EVar "blockOf") (EVar "e")) (arm (PCon "Some" (PTuple (PCon "PlainBlock") (PVar "stmts"))) () (EApp (EApp (EVar "flatMap") (EApp (EApp (EApp (EVar "stmtFindings") (EVar "ix")) (EVar "scopes")) (EVar "path"))) (EVar "stmts"))) (arm PWild () (EListLit))))
 (DTypeSig true "inPlainBlock" (TyFun (TyCon "Ctx") (TyCon "Bool")))
@@ -330,7 +363,9 @@ resultAfter n t
 (DFunDef false "siteOf" (PWild) (EVar "None"))
 (DTypeSig false "nameVerdict" (TyFun (TyCon "ProjectIndex") (TyFun (TyCon "FileScopes") (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyApp (TyCon "Option") (TyCon "Loc")) (TyFun (TyCon "Int") (TyCon "Verdict"))))))))
 (DFunDef false "nameVerdict" (PWild PWild PWild PWild (PCon "None") PWild) (EApp (EVar "Abstain") (EVar "NoSite")))
-(DFunDef false "nameVerdict" ((PVar "ix") (PVar "scopes") (PVar "file") (PVar "name") (PCon "Some" (PVar "l")) (PVar "n")) (EMatch (EApp (EApp (EVar "binderOf") (EVar "scopes")) (EVar "l")) (arm (PCon "None") () (EApp (EApp (EVar "rowsVerdict") (EVar "n")) (EApp (EApp (EApp (EVar "rowsNamed") (EVar "ix")) (EVar "NsValue")) (EVar "name")))) (arm (PCon "Some" (PVar "b")) () (EMatch (EFieldAccess (EVar "b") "binderKind") (arm (PCon "BTopLevel") () (EApp (EApp (EVar "rowsVerdict") (EVar "n")) (EApp (EApp (EVar "rowsInFile") (EVar "file")) (EApp (EApp (EApp (EVar "projectRowsNamed") (EVar "ix")) (EVar "NsValue")) (EVar "name"))))) (arm (PCon "BImport") () (EApp (EApp (EVar "rowsVerdict") (EVar "n")) (EApp (EApp (EApp (EApp (EVar "rowsIn") (EVar "ix")) (EApp (EApp (EVar "joinWith") (ELit (LString "."))) (EFieldAccess (EVar "b") "binderFrom"))) (EVar "NsValue")) (EFieldAccess (EVar "b") "binderOrigin")))) (arm PWild () (EApp (EVar "Abstain") (EVar "LocalBinder")))))))
+(DFunDef false "nameVerdict" ((PVar "ix") (PVar "scopes") (PVar "file") (PVar "name") (PCon "Some" (PVar "l")) (PVar "n")) (EMatch (EApp (EApp (EVar "binderOf") (EVar "scopes")) (EVar "l")) (arm (PCon "None") () (EApp (EApp (EApp (EApp (EVar "unboundVerdict") (EVar "ix")) (EVar "scopes")) (EVar "n")) (EVar "name"))) (arm (PCon "Some" (PVar "b")) () (EMatch (EFieldAccess (EVar "b") "binderKind") (arm (PCon "BTopLevel") () (EApp (EApp (EVar "rowsVerdict") (EVar "n")) (EApp (EApp (EVar "rowsInFile") (EVar "file")) (EApp (EApp (EApp (EVar "projectRowsNamed") (EVar "ix")) (EVar "NsValue")) (EVar "name"))))) (arm (PCon "BImport") () (EApp (EApp (EVar "rowsVerdict") (EVar "n")) (EApp (EApp (EApp (EApp (EVar "rowsIn") (EVar "ix")) (EApp (EApp (EVar "joinWith") (ELit (LString "."))) (EFieldAccess (EVar "b") "binderFrom"))) (EVar "NsValue")) (EFieldAccess (EVar "b") "binderOrigin")))) (arm PWild () (EApp (EVar "Abstain") (EVar "LocalBinder")))))))
+(DTypeSig false "unboundVerdict" (TyFun (TyCon "ProjectIndex") (TyFun (TyCon "FileScopes") (TyFun (TyCon "Int") (TyFun (TyCon "String") (TyCon "Verdict"))))))
+(DFunDef false "unboundVerdict" ((PVar "ix") (PVar "scopes") (PVar "n") (PVar "name")) (EBlock (DoLet false false (PVar "wild") (EApp (EApp (EVar "map") (EApp (EVar "joinWith") (ELit (LString ".")))) (EApp (EVar "wildImports") (EVar "scopes")))) (DoExpr (EIf (EApp (EApp (EVar "any") (ELam ((PVar "m")) (EApp (EVar "not") (EApp (EApp (EVar "indexKnowsModule") (EVar "ix")) (EVar "m"))))) (EVar "wild")) (EApp (EVar "Abstain") (EVar "NoRows")) (EApp (EApp (EVar "rowsVerdict") (EVar "n")) (EApp (EApp (EVar "flatMap") (ELam ((PVar "m")) (EApp (EApp (EApp (EApp (EVar "rowsIn") (EVar "ix")) (EVar "m")) (EVar "NsValue")) (EVar "name")))) (EBinOp "::" (ELit (LString "core")) (EBinOp "::" (ELit (LString "runtime")) (EVar "wild")))))))))
 (DTypeSig false "rowsInFile" (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "IndexRow")) (TyApp (TyCon "List") (TyCon "IndexRow")))))
 (DFunDef false "rowsInFile" ((PVar "file") (PVar "rows")) (EBlock (DoLet false false (PVar "mine") (EApp (EApp (EVar "filter") (ELam ((PVar "r")) (EApp (EApp (EVar "declaredIn") (EApp (EVar "dropDotSlash") (EVar "file"))) (EFieldAccess (EVar "r") "ixrLoc")))) (EVar "rows"))) (DoExpr (EIf (EApp (EVar "oneFile") (EVar "mine")) (EVar "mine") (EListLit)))))
 (DTypeSig false "declaredIn" (TyFun (TyCon "String") (TyFun (TyApp (TyCon "Option") (TyCon "Loc")) (TyCon "Bool"))))
@@ -371,9 +406,9 @@ resultAfter n t
 (DUse false (UseGroup ("string") ((mem "endsWith" false) (mem "split" false) (mem "stripPrefix" false))))
 (DUse false (UseGroup ("support" "util") ((mem "joinWith" false))))
 (DUse false (UseGroup ("tools" "printer") ((mem "ppTy" false))))
-(DUse false (UseGroup ("tools" "lint_core") ((mem "Ctx" true) (mem "FileFacts" false) (mem "Finding" false) (mem "StdlibIndex" false) (mem "Visitor" true) (mem "factScopes" false) (mem "projectIndexOf" false))))
-(DUse false (UseGroup ("tools" "lint_index") ((mem "IndexRow" true) (mem "Ns" true) (mem "ProjectIndex" false) (mem "RowKind" true) (mem "rowHasSig" false) (mem "rowSig" false) (mem "projectRowsNamed" false) (mem "rowsIn" false) (mem "rowsNamed" false))))
-(DUse false (UseGroup ("tools" "lint_scope") ((mem "Binder" true) (mem "BinderKind" true) (mem "FileScopes" false) (mem "binderOf" false))))
+(DUse false (UseGroup ("tools" "lint_core") ((mem "Ctx" true) (mem "FileFacts" true) (mem "Finding" false) (mem "StdlibIndex" false) (mem "Visitor" true) (mem "factScopes" false) (mem "projectIndexOf" false))))
+(DUse false (UseGroup ("tools" "lint_index") ((mem "IndexRow" true) (mem "Ns" true) (mem "ProjectIndex" false) (mem "RowKind" true) (mem "rowHasSig" false) (mem "rowSig" false) (mem "indexKnowsModule" false) (mem "projectRowsNamed" false) (mem "rowsIn" false))))
+(DUse false (UseGroup ("tools" "lint_scope") ((mem "Binder" true) (mem "BinderKind" true) (mem "FileScopes" false) (mem "binderOf" false) (mem "wildImports" false))))
 (DUse false (UseGroup ("tools" "lint_shared") ((mem "unwrapLoc" false))))
 (DData Public "BlockKind" () ((variant "PlainBlock" (ConPos)) (variant "DoBlock" (ConPos))) ())
 (DImpl true "Eq" ((TyCon "BlockKind")) () ((im "eq" ((PVar "__x") (PVar "__y")) (EMatch (ETuple (EVar "__x") (EVar "__y")) (arm (PTuple (PCon "PlainBlock") (PCon "PlainBlock")) () (EVar "True")) (arm (PTuple (PCon "DoBlock") (PCon "DoBlock")) () (EVar "True")) (arm (PTuple PWild PWild) () (EVar "False"))))))
@@ -399,7 +434,9 @@ resultAfter n t
 (DTypeSig true "blockOf" (TyFun (TyCon "Expr") (TyApp (TyCon "Option") (TyTuple (TyCon "BlockKind") (TyApp (TyCon "List") (TyCon "DoStmt"))))))
 (DFunDef false "blockOf" ((PVar "e")) (EMatch (EApp (EVar "unwrapLoc") (EVar "e")) (arm (PCon "EBlock" (PVar "stmts")) () (EApp (EVar "Some") (ETuple (EVar "PlainBlock") (EVar "stmts")))) (arm (PCon "EDo" PWild (PVar "stmts")) () (EApp (EVar "Some") (ETuple (EVar "DoBlock") (EVar "stmts")))) (arm PWild () (EVar "None"))))
 (DTypeSig true "plainBlockVisitors" (TyFun (TyFun (TyCon "ProjectIndex") (TyFun (TyCon "FileScopes") (TyFun (TyCon "String") (TyFun (TyCon "DoStmt") (TyApp (TyCon "List") (TyCon "Finding")))))) (TyFun (TyCon "StdlibIndex") (TyFun (TyCon "String") (TyFun (TyCon "FileFacts") (TyFun (TyCon "Positions") (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyApp (TyCon "List") (TyCon "Visitor")))))))))
-(DFunDef false "plainBlockVisitors" ((PVar "stmtFindings") (PVar "idx") (PVar "path") (PVar "facts") PWild PWild) (EListLit (EApp (EApp (EVar "OnExpr") (EListLit (EVar "KBlock"))) (EApp (EApp (EApp (EApp (EVar "plainBlockAt") (EVar "stmtFindings")) (EApp (EVar "projectIndexOf") (EVar "idx"))) (EApp (EVar "factScopes") (EVar "facts"))) (EVar "path")))))
+(DFunDef false "plainBlockVisitors" ((PVar "stmtFindings") (PVar "idx") (PVar "path") (PVar "facts") PWild PWild) (EListLit (EApp (EApp (EVar "OnExpr") (EListLit (EVar "KBlock"))) (EApp (EApp (EApp (EApp (EVar "plainBlockAt") (EVar "stmtFindings")) (EApp (EVar "projectIndexOf") (EVar "idx"))) (EApp (EVar "factScopes") (EVar "facts"))) (EApp (EApp (EVar "factFilePath") (EVar "facts")) (EVar "path"))))))
+(DTypeSig false "factFilePath" (TyFun (TyCon "FileFacts") (TyFun (TyCon "String") (TyCon "String"))))
+(DFunDef false "factFilePath" ((PVar "facts") (PVar "path")) (EIf (EBinOp "==" (EFieldAccess (EVar "facts") "ffCanonPath") (ELit (LString ""))) (EVar "path") (EFieldAccess (EVar "facts") "ffCanonPath")))
 (DTypeSig false "plainBlockAt" (TyFun (TyFun (TyCon "ProjectIndex") (TyFun (TyCon "FileScopes") (TyFun (TyCon "String") (TyFun (TyCon "DoStmt") (TyApp (TyCon "List") (TyCon "Finding")))))) (TyFun (TyCon "ProjectIndex") (TyFun (TyCon "FileScopes") (TyFun (TyCon "String") (TyFun (TyCon "Ctx") (TyFun (TyCon "Expr") (TyApp (TyCon "List") (TyCon "Finding")))))))))
 (DFunDef false "plainBlockAt" ((PVar "stmtFindings") (PVar "ix") (PVar "scopes") (PVar "path") PWild (PVar "e")) (EMatch (EApp (EVar "blockOf") (EVar "e")) (arm (PCon "Some" (PTuple (PCon "PlainBlock") (PVar "stmts"))) () (EApp (EApp (EDictApp "flatMap") (EApp (EApp (EApp (EVar "stmtFindings") (EVar "ix")) (EVar "scopes")) (EVar "path"))) (EVar "stmts"))) (arm PWild () (EListLit))))
 (DTypeSig true "inPlainBlock" (TyFun (TyCon "Ctx") (TyCon "Bool")))
@@ -416,7 +453,9 @@ resultAfter n t
 (DFunDef false "siteOf" (PWild) (EVar "None"))
 (DTypeSig false "nameVerdict" (TyFun (TyCon "ProjectIndex") (TyFun (TyCon "FileScopes") (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyApp (TyCon "Option") (TyCon "Loc")) (TyFun (TyCon "Int") (TyCon "Verdict"))))))))
 (DFunDef false "nameVerdict" (PWild PWild PWild PWild (PCon "None") PWild) (EApp (EVar "Abstain") (EVar "NoSite")))
-(DFunDef false "nameVerdict" ((PVar "ix") (PVar "scopes") (PVar "file") (PVar "name") (PCon "Some" (PVar "l")) (PVar "n")) (EMatch (EApp (EApp (EVar "binderOf") (EVar "scopes")) (EVar "l")) (arm (PCon "None") () (EApp (EApp (EVar "rowsVerdict") (EVar "n")) (EApp (EApp (EApp (EVar "rowsNamed") (EVar "ix")) (EVar "NsValue")) (EVar "name")))) (arm (PCon "Some" (PVar "b")) () (EMatch (EFieldAccess (EVar "b") "binderKind") (arm (PCon "BTopLevel") () (EApp (EApp (EVar "rowsVerdict") (EVar "n")) (EApp (EApp (EVar "rowsInFile") (EVar "file")) (EApp (EApp (EApp (EVar "projectRowsNamed") (EVar "ix")) (EVar "NsValue")) (EVar "name"))))) (arm (PCon "BImport") () (EApp (EApp (EVar "rowsVerdict") (EVar "n")) (EApp (EApp (EApp (EApp (EVar "rowsIn") (EVar "ix")) (EApp (EApp (EVar "joinWith") (ELit (LString "."))) (EFieldAccess (EVar "b") "binderFrom"))) (EVar "NsValue")) (EFieldAccess (EVar "b") "binderOrigin")))) (arm PWild () (EApp (EVar "Abstain") (EVar "LocalBinder")))))))
+(DFunDef false "nameVerdict" ((PVar "ix") (PVar "scopes") (PVar "file") (PVar "name") (PCon "Some" (PVar "l")) (PVar "n")) (EMatch (EApp (EApp (EVar "binderOf") (EVar "scopes")) (EVar "l")) (arm (PCon "None") () (EApp (EApp (EApp (EApp (EVar "unboundVerdict") (EVar "ix")) (EVar "scopes")) (EVar "n")) (EVar "name"))) (arm (PCon "Some" (PVar "b")) () (EMatch (EFieldAccess (EVar "b") "binderKind") (arm (PCon "BTopLevel") () (EApp (EApp (EVar "rowsVerdict") (EVar "n")) (EApp (EApp (EVar "rowsInFile") (EVar "file")) (EApp (EApp (EApp (EVar "projectRowsNamed") (EVar "ix")) (EVar "NsValue")) (EVar "name"))))) (arm (PCon "BImport") () (EApp (EApp (EVar "rowsVerdict") (EVar "n")) (EApp (EApp (EApp (EApp (EVar "rowsIn") (EVar "ix")) (EApp (EApp (EVar "joinWith") (ELit (LString "."))) (EFieldAccess (EVar "b") "binderFrom"))) (EVar "NsValue")) (EFieldAccess (EVar "b") "binderOrigin")))) (arm PWild () (EApp (EVar "Abstain") (EVar "LocalBinder")))))))
+(DTypeSig false "unboundVerdict" (TyFun (TyCon "ProjectIndex") (TyFun (TyCon "FileScopes") (TyFun (TyCon "Int") (TyFun (TyCon "String") (TyCon "Verdict"))))))
+(DFunDef false "unboundVerdict" ((PVar "ix") (PVar "scopes") (PVar "n") (PVar "name")) (EBlock (DoLet false false (PVar "wild") (EApp (EApp (EMethodRef "map") (EApp (EVar "joinWith") (ELit (LString ".")))) (EApp (EVar "wildImports") (EVar "scopes")))) (DoExpr (EIf (EApp (EApp (EDictApp "any") (ELam ((PVar "m")) (EApp (EVar "not") (EApp (EApp (EVar "indexKnowsModule") (EVar "ix")) (EVar "m"))))) (EVar "wild")) (EApp (EVar "Abstain") (EVar "NoRows")) (EApp (EApp (EVar "rowsVerdict") (EVar "n")) (EApp (EApp (EDictApp "flatMap") (ELam ((PVar "m")) (EApp (EApp (EApp (EApp (EVar "rowsIn") (EVar "ix")) (EVar "m")) (EVar "NsValue")) (EVar "name")))) (EBinOp "::" (ELit (LString "core")) (EBinOp "::" (ELit (LString "runtime")) (EVar "wild")))))))))
 (DTypeSig false "rowsInFile" (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "IndexRow")) (TyApp (TyCon "List") (TyCon "IndexRow")))))
 (DFunDef false "rowsInFile" ((PVar "file") (PVar "rows")) (EBlock (DoLet false false (PVar "mine") (EApp (EApp (EMethodRef "filter") (ELam ((PVar "r")) (EApp (EApp (EVar "declaredIn") (EApp (EVar "dropDotSlash") (EVar "file"))) (EFieldAccess (EVar "r") "ixrLoc")))) (EVar "rows"))) (DoExpr (EIf (EApp (EVar "oneFile") (EVar "mine")) (EVar "mine") (EListLit)))))
 (DTypeSig false "declaredIn" (TyFun (TyCon "String") (TyFun (TyApp (TyCon "Option") (TyCon "Loc")) (TyCon "Bool"))))

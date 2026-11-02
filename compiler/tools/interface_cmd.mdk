@@ -260,7 +260,7 @@ writeAllAtomically (files@((first, _) :: _)) =
         traverse moveFile staged
       let _ = map (st => removeFile st.stStaging) staged
       bestEffort
-        "removing the staging dir after the moves; one left non-empty by a failed move is kept on purpose"
+        "removing the staging dir after the moves; every staging file was removed above, so it is non-empty only when one of those removals failed"
         (removeDir dir)
       map (_ => ()) result
 
