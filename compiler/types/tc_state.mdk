@@ -1,11 +1,8 @@
 -- tc_state: mints, copies and carries of the state records (including `emptyShadowDicts`, the
 -- check-run and module seed mints `seedCheckRun` and `plainModuleSeed`, and the span carries
 -- `sameSpan`, `mctxAt`, `dynAt`, `envAt` with their `IfSome` forms), the process interners cell and
--- its high-water carries to and from a graph run (`raiseToHighWater`, `noteHighWater`), the
--- `Windowed` channel ops, and the test-only trace-sink probes that only build or read a
--- `TraceSink`, the graph-run evidence cells or the scope store (`beginAssumptionTrace`,
--- `beginNumericPredicateTrace`, `beginMethodReturnTrace`, `beginEvidenceObservation`,
--- `evCellsSpanProbe` and their `finish` forms; `scopeTraceContext`, `scopeFrameStats`).
+-- its high-water carries to and from a graph run (`raiseToHighWater`, `noteHighWater`), and the
+-- `Windowed` channel ops.
 --
 -- Spec: TYPECHECK-CONTRACTS section 5; CELL-LIFETIMES.md.
 --
@@ -40,7 +37,6 @@ import types.scopes.{
 import types.scopes as Scopes
 import frontend.exhaust.{buildOracle, Oracle}
 import support.ordmap.{omEmpty, omInsert, OrdMap}
-import support.util.{reverseL}
 import types.registry.{mregEmpty, regEmpty, spEmpty, spFromFloor}
 import types.runtime_types.{emptyBinderTypes}
 
@@ -1101,72 +1097,3 @@ mintGraphCtx inputs admitted =
   }
   noteInterners gctx
   gctx
-
--- test-only observation: declarations whose only callers are tests and probes.
-
--- A sink with every gate off and fresh buffers; each `begin*` turns one gate on.
-offTraceSink : Unit -> TraceSink
-offTraceSink _ = TraceSink {
-  tsAssumptionEnabled = False,
-  tsAssumptionEntries = Ref [],
-  tsNumericPredicateEnabled = False,
-  tsNumericPredicateEntries = Ref [],
-  tsMethodReturnEnabled = False,
-  tsMethodReturnEntries = Ref [],
-  tsEvidenceObservationEnabled = False,
-  tsEvidenceObservationEntries = Ref [],
-}
-
--- The trace builders and readers: a test builds a sink with `begin*`, passes it as
--- the `diTrace` of the drives it observes, and reads its buffer with `finish*`.
-export
-beginAssumptionTrace : Unit -> TraceSink
-beginAssumptionTrace _ = { offTraceSink () | tsAssumptionEnabled = True }
-
-export
-finishAssumptionTrace : TraceSink -> List AssumptionTraceEntry
-finishAssumptionTrace sink = reverseL sink.tsAssumptionEntries.value
-
-export
-beginNumericPredicateTrace : Unit -> TraceSink
-beginNumericPredicateTrace _ =
-  { offTraceSink () | tsNumericPredicateEnabled = True }
-
-export
-finishNumericPredicateTrace : TraceSink -> List NumericPredicateTraceEntry
-finishNumericPredicateTrace sink = reverseL sink.tsNumericPredicateEntries.value
-
-export
-beginMethodReturnTrace : Unit -> TraceSink
-beginMethodReturnTrace _ = { offTraceSink () | tsMethodReturnEnabled = True }
-
--- #2095: trace-gated, zero cost when off — same discipline as
--- `methodReturnTrace`. Generalizes that pattern from
--- the one migrated return family to every `Obligation` `recordEvidence`
--- publishes: a method occurrence and a dictionary application alike, whatever
--- family produced the goal, read back from the SAME cells the stampers wrote
--- (never re-derived), so this can never disagree with the published `EvTable`.
-export
-beginEvidenceObservation : Unit -> TraceSink
-beginEvidenceObservation _ =
-  { offTraceSink () | tsEvidenceObservationEnabled = True }
-
-export
-finishEvidenceObservation : TraceSink -> List EvidenceObservationEntry
-finishEvidenceObservation sink =
-  reverseL sink.tsEvidenceObservationEntries.value
-
--- Test visibility (`typecheck_test.mdk`): the length of [gctx]'s method-cell index,
--- which spans only its graph lineage.
-export
-evCellsSpanProbe : GraphCtx -> Int
-evCellsSpanProbe gctx = arrayLength gctx.graphRun.evCells.value
-
-export
-scopeTraceContext : GraphCtx -> ScopeId -> (String, String)
-scopeTraceContext gctx sid =
-  Scopes.scopeTraceContext (currentScopeStore gctx ()) sid
-
-export
-scopeFrameStats : GraphCtx -> (Int, Int)
-scopeFrameStats gctx = Scopes.scopeFrameStats (currentScopeStore gctx ())

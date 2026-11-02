@@ -1,5 +1,5 @@
 -- Tests of `types.tc_state`'s own API: the state-record mints and carries, the span copy,
--- the process interners cell, the `Windowed` channel ops, the trace-sink builders, the seeds a
+-- the process interners cell, the `Windowed` channel ops, the seeds a
 -- check run and a module start from (`seedCheckRun`, `plainModuleSeed`) and the variable high
 -- water a serving drive carries to the next (`noteHighWater`, `raiseToHighWater`).
 -- A minted `ModuleCtx` or `GraphCtx` is needed throughout, so none of these is a doctest.
@@ -10,7 +10,6 @@ import test.{
   expectAll,
   expectAtLeast,
   expectEqual,
-  expectFalse,
   expectNotEqual,
   expectTrue,
 }
@@ -23,15 +22,9 @@ import types.tc_test_support.{intM}
 import frontend.ast.{Loc(..)}
 import types.tc_diag.{recordTypeError}
 import types.tc_state.{
-  beginAssumptionTrace,
-  beginEvidenceObservation,
-  beginMethodReturnTrace,
-  beginNumericPredicateTrace,
   blankModuleCtx,
   carryModuleCtx,
   dictParamName,
-  finishAssumptionTrace,
-  finishEvidenceObservation,
   freshSubRecordsOf,
   initialModuleCtx,
   interners,
@@ -203,22 +196,6 @@ test "noting a graph record points the interners at its lineage and keeps the hi
   let seesHigh = noted.lineage.lnTyvarHigh.value
   interners := saved
   expectAll [expectEqual 41 seesCounter, expectEqual 5 seesHigh]
-
-test "a begun trace sink has its one gate on and an empty buffer" =
-  let assumption = beginAssumptionTrace ()
-  let methodReturn = beginMethodReturnTrace ()
-  let numeric = beginNumericPredicateTrace ()
-  let evidence = beginEvidenceObservation ()
-  expectAll [
-    expectTrue assumption.tsAssumptionEnabled,
-    expectFalse assumption.tsMethodReturnEnabled,
-    expectTrue methodReturn.tsMethodReturnEnabled,
-    expectFalse methodReturn.tsAssumptionEnabled,
-    expectTrue numeric.tsNumericPredicateEnabled,
-    expectTrue evidence.tsEvidenceObservationEnabled,
-    expectEqual 0 (length (finishAssumptionTrace assumption)),
-    expectEqual 0 (length (finishEvidenceObservation evidence)),
-  ]
 
 test "dictionary parameter names are keyed by function and slot" = expectAll [
   expectEqual "$dict_f_0" (dictParamName "f" 0),

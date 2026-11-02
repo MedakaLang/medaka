@@ -14,8 +14,8 @@
 -- (`rebuildGroupDecls`) and the ordinary-return probes
 -- (`methodReturnResolutionMutationProbe`, `methodReturnTemplatePresenceProbe`).  Each test
 -- builds the module record, environment and graph it reads; none reaches the inference
--- recursion.  `typecheck_test` also drives `cellGoalInnerAliasing`, which reads the goals of
--- a whole check, and the mark pass over a real program.
+-- recursion.  `typecheck_test` drives `cellGoalInnerAliasing` (defined here), which reads the
+-- goals of a whole check, and the mark pass over a real program.
 
 import test.{
   expectAll,
@@ -59,7 +59,6 @@ import types.tc_occurrence.{
   argDispatchIndices,
   argDispatchIndicesById,
   arithDispatchMethod,
-  cellGoalInnerAliasing,
   binopMethod,
   constrainedSigNames,
   ctorHeadShaped,
@@ -115,12 +114,15 @@ import types.tc_test_support.{
 import types.tc_unify.{unifyIn}
 import types.tc_types.{
   BuiltinClass(..),
+  EvCell(..),
+  EvDest(..),
   GraphCtx(..),
   MethodReturnResolution(..),
   MarkCtx(..),
   ModuleCtx(..),
   ModuleMarking(..),
   GoalKind(..),
+  Obligation(..),
   OblProjection(..),
   PendingEntry(..),
   Provenance(..),
@@ -133,7 +135,7 @@ import types.tc_types.{
 }
 import types.tc_effects.{clausesOf}
 import support.ordmap.{OrdMap, omEmpty, omInsert, omLookup}
-import support.util.{isEmptyL, listLen}
+import support.util.{anyList, filterList, isEmptyL, listLen}
 import list.{reverse}
 import types.effect_rows.{pureRow}
 import map as IdMap
@@ -1387,3 +1389,60 @@ test "retained method slots own Seed, an empty row answers empty, a missing row 
   expectEqual
     ((["Seed"], ["Seed"]), ([], []), (["Decoy"], ["Decoy"]))
     (methodReturnSlotOwnershipProbe ())
+
+-- Read by this file and by the drive-level `typecheck_test`: each goal of
+-- [gctx]'s graph that writes a method cell's route or dictionaries, by kind, with
+-- whether its `oInner` is that cell's `ecInner`, so the stampers' notes reach the judgment (`judgeCells`).  Read
+-- by writing a marker through the goal's refs and looking for it in the cells, then
+-- restoring both.  A goal whose destination is no cell's (a throwaway) is skipped.
+export
+cellGoalInnerAliasing : GraphCtx -> List (String, Bool)
+cellGoalInnerAliasing gctx =
+  let g = gctx.graphRun
+  let cells = toList (filterMap identity g.evCells.value)
+  filterMap
+    (o =>
+      map (c => (goalKindName o.oKind, innerAliases o c)) (cellOfGoal cells o))
+    g.goals.value
+
+cellOfGoal : List EvCell -> Obligation -> Option EvCell
+cellOfGoal cells o = match o.oDest
+  EvRoute r =>
+    let saved = r.value
+    r := RLocal aliasMarker []
+    let hit = filterList (c => isAliasMarker c.ecTag.value) cells
+    r := saved
+    onlyCell hit
+  EvRoutes rs =>
+    let saved = rs.value
+    rs := [RLocal aliasMarker []]
+    let hit =
+      filterList
+        (c => anyList isAliasMarker (c.ecImpl.value ++ c.ecMeth.value))
+        cells
+    rs := saved
+    onlyCell hit
+
+onlyCell : List EvCell -> Option EvCell
+onlyCell [c] = Some c
+onlyCell _ = None
+
+aliasMarker : String
+aliasMarker = "<inner-alias-probe>"
+
+isAliasMarker : Route -> Bool
+isAliasMarker (RLocal sym _) = sym == aliasMarker
+isAliasMarker _ = False
+
+innerAliases : Obligation -> EvCell -> Bool
+innerAliases o c =
+  let savedGoal = o.oInner.value
+  let savedCell = c.ecInner.value
+  c.ecInner := innerNone
+  o.oInner := Inner True True
+  let hit = match c.ecInner.value
+    Inner True True => True
+    _ => False
+  o.oInner := savedGoal
+  c.ecInner := savedCell
+  hit

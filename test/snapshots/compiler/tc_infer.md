@@ -1,5 +1,5 @@
 # META
-source_lines=3623
+source_lines=3615
 stages=DESUGAR,MARK
 # SOURCE
 -- tc_infer: the expression inference recursion (variables, application, lambda, let and rec-let,
@@ -3617,14 +3617,6 @@ peelOntoParams dyn (Some src) patTypes pats =
 localRole : Bool -> BindingRole
 localRole True = RoleQuantifies
 localRole False = RoleMonomorphic
-
--- test-only observation: `hadMatchWarnings` of the last module checked, the only read of a
--- drive that returns no outputs (the projections).
-export
-matchWarningsNow : ModuleCtx -> Bool
-matchWarningsNow mctx = match mctx.mcCells.matchWarnings.value
-  [] => False
-  _ => True
 # DESUGAR
 (DUse false (UseGroup ("support" "diag_codes") ((mem "DiagCode" true))))
 (DUse false (UseGroup ("types" "tc_types") ((mem "AdmittedVerdict" true) (mem "BindingRole" true) (mem "BuiltinClass" true) (mem "CDeclared" true) (mem "CDeclaredPrefix" true) (mem "ConstraintReg" true) (mem "DeclaringBinder" true) (mem "DoCtx" true) (mem "DynCtx" true) (mem "EnvBinding" true) (mem "GoalKind" true) (mem "JoinContext" true) (mem "NumBoundary" true) (mem "NumBoundaryDisposition" true) (mem "SiteKind" true) (mem "TcEnv" true) (mem "UObligation" true) (mem "ValueScheme" true) (mem "dynFor" false) (mem "GraphCtx" false) (mem "ModuleCtx" false) (mem "PendingEntry" false) (mem "RecordInfo" false) (mem "RecordSubst" false) (mem "ScopedMember" false))))
@@ -4147,8 +4139,6 @@ matchWarningsNow mctx = match mctx.mcCells.matchWarnings.value
 (DTypeSig false "localRole" (TyFun (TyCon "Bool") (TyCon "BindingRole")))
 (DFunDef false "localRole" ((PCon "True")) (EVar "RoleQuantifies"))
 (DFunDef false "localRole" ((PCon "False")) (EVar "RoleMonomorphic"))
-(DTypeSig true "matchWarningsNow" (TyFun (TyCon "ModuleCtx") (TyCon "Bool")))
-(DFunDef false "matchWarningsNow" ((PVar "mctx")) (EMatch (EFieldAccess (EFieldAccess (EFieldAccess (EVar "mctx") "mcCells") "matchWarnings") "value") (arm (PList) () (EVar "False")) (arm PWild () (EVar "True"))))
 # MARK
 (DUse false (UseGroup ("support" "diag_codes") ((mem "DiagCode" true))))
 (DUse false (UseGroup ("types" "tc_types") ((mem "AdmittedVerdict" true) (mem "BindingRole" true) (mem "BuiltinClass" true) (mem "CDeclared" true) (mem "CDeclaredPrefix" true) (mem "ConstraintReg" true) (mem "DeclaringBinder" true) (mem "DoCtx" true) (mem "DynCtx" true) (mem "EnvBinding" true) (mem "GoalKind" true) (mem "JoinContext" true) (mem "NumBoundary" true) (mem "NumBoundaryDisposition" true) (mem "SiteKind" true) (mem "TcEnv" true) (mem "UObligation" true) (mem "ValueScheme" true) (mem "dynFor" false) (mem "GraphCtx" false) (mem "ModuleCtx" false) (mem "PendingEntry" false) (mem "RecordInfo" false) (mem "RecordSubst" false) (mem "ScopedMember" false))))
@@ -4671,5 +4661,3 @@ matchWarningsNow mctx = match mctx.mcCells.matchWarnings.value
 (DTypeSig false "localRole" (TyFun (TyCon "Bool") (TyCon "BindingRole")))
 (DFunDef false "localRole" ((PCon "True")) (EVar "RoleQuantifies"))
 (DFunDef false "localRole" ((PCon "False")) (EVar "RoleMonomorphic"))
-(DTypeSig true "matchWarningsNow" (TyFun (TyCon "ModuleCtx") (TyCon "Bool")))
-(DFunDef false "matchWarningsNow" ((PVar "mctx")) (EMatch (EFieldAccess (EFieldAccess (EFieldAccess (EVar "mctx") "mcCells") "matchWarnings") "value") (arm (PList) () (EVar "False")) (arm PWild () (EVar "True"))))
