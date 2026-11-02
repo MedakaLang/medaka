@@ -19,7 +19,7 @@ import support.util.{joinWith}
 import tools.printer.{ppTy}
 import tools.lint_core.{
   Ctx(..),
-  FileFacts,
+  FileFacts(..),
   Finding,
   StdlibIndex,
   Visitor(..),
@@ -33,11 +33,17 @@ import tools.lint_index.{
   RowKind(..),
   rowHasSig,
   rowSig,
+  indexKnowsModule,
   projectRowsNamed,
   rowsIn,
-  rowsNamed,
 }
-import tools.lint_scope.{Binder(..), BinderKind(..), FileScopes, binderOf}
+import tools.lint_scope.{
+  Binder(..),
+  BinderKind(..),
+  FileScopes,
+  binderOf,
+  wildImports,
+}
 import tools.lint_shared.{unwrapLoc}
 
 -- Whether a block is a bare statement block or a `do` block.
@@ -131,8 +137,18 @@ plainBlockVisitors : (ProjectIndex -> FileScopes -> String -> DoStmt -> List Fin
 plainBlockVisitors stmtFindings idx path facts _ _ = [
   OnExpr
     [KBlock]
-    (plainBlockAt stmtFindings (projectIndexOf idx) (factScopes facts) path),
+    (plainBlockAt
+      stmtFindings
+      (projectIndexOf idx)
+      (factScopes facts)
+      (factFilePath facts path)),
 ]
+
+-- The path the index knows the file by: its canonical path when the caller
+-- looked, else the path as typed.
+factFilePath : FileFacts -> String -> String
+factFilePath facts path =
+  if facts.ffCanonPath == "" then path else facts.ffCanonPath
 
 plainBlockAt : (ProjectIndex -> FileScopes -> String -> DoStmt -> List Finding) ->
   ProjectIndex ->
@@ -192,7 +208,7 @@ nameVerdict : ProjectIndex ->
   Verdict
 nameVerdict _ _ _ _ None _ = Abstain NoSite
 nameVerdict ix scopes file name (Some l) n = match binderOf scopes l
-  None => rowsVerdict n (rowsNamed ix NsValue name)
+  None => unboundVerdict ix scopes n name
   Some b => match b.binderKind
     BTopLevel =>
       rowsVerdict n (rowsInFile file (projectRowsNamed ix NsValue name))
@@ -201,6 +217,21 @@ nameVerdict ix scopes file name (Some l) n = match binderOf scopes l
         n
         (rowsIn ix (joinWith "." b.binderFrom) NsValue b.binderOrigin)
     _ => Abstain LocalBinder
+
+-- A head no binder in the file accounts for comes from the prelude, from
+-- `runtime` or from a module the file imports with `*`.  Those are the only
+-- modules whose rows can be the callee, so a same-spelled row anywhere else in
+-- the project decides nothing; and a wildcard module the index holds no rows
+-- for (a dependency, say) may declare the name, so the question stays open.
+unboundVerdict : ProjectIndex -> FileScopes -> Int -> String -> Verdict
+unboundVerdict ix scopes n name =
+  let wild = map (joinWith ".") (wildImports scopes)
+  if any (m => not (indexKnowsModule ix m)) wild then
+    Abstain NoRows
+  else
+    rowsVerdict
+      n
+      (flatMap (m => rowsIn ix m NsValue name) ("core" :: "runtime" :: wild))
 
 -- The rows declared in the file at `file`.  The index holds the canonical path
 -- of each project file and `file` is the path the run was given, so a relative

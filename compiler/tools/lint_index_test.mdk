@@ -32,7 +32,7 @@ import tools.lint_index.{
   RowKind(..), Ns(..), SigSlot(..), rowSig, rowsOfDecls, rowsDigest,
   encodeRowShard, decodeRowShard, rowContentHash, rowShardPath, rowsNamed,
   rowsIn, stdlibRowsNamed, stdlibRows, projectRows, ProjectIndex, Query(..),
-  Scope(..), mkProjectIndexWith
+  Scope(..), mkProjectIndexWith, projectRowsNamed
 }
 import tools.lint.{
   StdlibIndex,
@@ -854,6 +854,13 @@ projectRootCase dir =
   ]
 
 -- The index of the stdlib's rows and the project's rows.
+export
 mkProjectIndex : List IndexRow -> List IndexRow -> ProjectIndex
 mkProjectIndex stdlibRows projectRows =
   mkProjectIndexWith "" "" stdlibRows projectRows
+
+-- The rows of already-parsed declarations, for sibling tests of other modules
+-- that cannot name the private `rowsOfDecls`.
+export
+declRows : String -> List Decl -> List IndexRow
+declRows modId decls = rowsOfDecls modId decls

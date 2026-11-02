@@ -161,6 +161,7 @@ mkFileFacts src prog pos = FileFacts {
   ffScopes = memoNew (_ => buildScopes prog),
   ffLines = memoNew (_ => fromList (lines src)),
   ffLocalMods = [],
+  ffCanonPath = "",
 }
 
 -- The dotted names of the program's `import m.*` modules that resolve to a file
@@ -207,12 +208,19 @@ export
 withLocalMods : List String -> FileFacts -> FileFacts
 withLocalMods mods ff = { ff | ffLocalMods = mods }
 
+-- `facts` knowing the canonical path of its file.
+export
+withCanonPath : String -> FileFacts -> FileFacts
+withCanonPath path ff = { ff | ffCanonPath = path }
+
 -- `mkFileFacts` for a file on disk, reading which wildcard imports are the
 -- project's own modules.
 export
 mkFileFactsAt : String -> String -> List Decl -> Positions -> <IO> FileFacts
 mkFileFactsAt path src prog pos =
-  withLocalMods (projectWildMods path prog) (mkFileFacts src prog pos)
+  withCanonPath
+    (canonicalizePath path)
+    (withLocalMods (projectWildMods path prog) (mkFileFacts src prog pos))
 
 -- `mkFileFactsAt` for a file whose rules are handed `idx`: the filesystem says
 -- which wildcard imports are the project's modules, and the index is asked
@@ -229,7 +237,12 @@ mkFileFactsIn idx path src prog pos =
   let wild = wildModsOf prog
   let idxHere = withStdlibLocalMods (localModStates path wild) idx
   let local = filterList (stdlibLocalModAsked idxHere) wild
-  (idxHere, withLocalMods local (mkFileFacts src prog pos))
+  (
+    idxHere,
+    withCanonPath
+      (canonicalizePath path)
+      (withLocalMods local (mkFileFacts src prog pos)),
+  )
 
 -- The file's inline-suppression directives, off the shared comment channel.
 export

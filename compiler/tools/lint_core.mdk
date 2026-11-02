@@ -103,6 +103,9 @@ memoGet (Memo cell f) = match !cell
 -- first asks for the text of a line.  `ffLocalMods` names the file's wildcard-imported modules that
 -- resolve to a file of the project rather than the stdlib, filled by the IO
 -- caller (`withLocalMods`), since a rule cannot touch the file system.
+-- `ffCanonPath` is the file's canonical path, filled the same way (`withCanonPath`)
+-- and empty when the caller did not look: the declaration index keys files by
+-- canonical path, which a path typed with `..` or through a symlink is not.
 public export data FileFacts = FileFacts {
   ffSrc : String,
   ffComments : Memo (List Comment),
@@ -111,6 +114,7 @@ public export data FileFacts = FileFacts {
   ffScopes : Memo FileScopes,
   ffLines : Memo (Array String),
   ffLocalMods : List String,
+  ffCanonPath : String,
 }
 
 export

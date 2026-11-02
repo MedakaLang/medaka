@@ -383,7 +383,7 @@ runStaged on targetPath rsrc csrc tsrc =
   let aE0 = allocSnap ()
   let oE0 = opSnap ()
   result
-    (refuseLlvmSymbolDefects "")
+    (refuseLlvmSymbolDefects targetPath)
     (_ => ())
     (emitProgram
       input

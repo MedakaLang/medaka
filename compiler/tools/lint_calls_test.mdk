@@ -16,7 +16,8 @@ import tools.lint_calls.{
   inPlainBlock,
 }
 import tools.lint_core.{Ctx(..)}
-import tools.lint_index.{mkProjectIndex, rowsOfDecls, stdlibKeptRows}
+import tools.lint_index.{stdlibKeptRows}
+import tools.lint_index_test.{mkProjectIndex, declRows}
 import tools.lint_scope.{buildScopes}
 import tools.lint.{lintParseSource}
 
@@ -76,9 +77,9 @@ probe lib body = match lintParseSource (header ++ body)
   Err _ => None
   Ok (decls, _) =>
     let stdRows = match lintParseSource lib
-      Ok (ds, _) => rowsOfDecls "core" ds
+      Ok (ds, _) => declRows "core" ds
       Err _ => []
-    let ix = mkProjectIndex stdRows (rowsOfDecls "m" decls)
+    let ix = mkProjectIndex stdRows (declRows "m" decls)
     match mainBlock decls
       None => None
       Some (kind, stmts) =>
@@ -88,12 +89,15 @@ probe lib body = match lintParseSource (header ++ body)
 
 -- As `probe`, the library rows passing through `stdlibKeptRows` as module `lib`.
 probeKept : String -> String -> String -> Option (BlockKind, Verdict)
-probeKept lib src body = match (lintParseSource src, lintParseSource (header ++ body))
+probeKept lib src body = match (
+  lintParseSource src,
+  lintParseSource (header ++ body),
+)
   (Ok (libDecls, _), Ok (decls, _)) =>
     let ix =
       mkProjectIndex
-        (stdlibKeptRows (rowsOfDecls lib libDecls))
-        (rowsOfDecls "m" decls)
+        (stdlibKeptRows (declRows lib libDecls))
+        (declRows "m" decls)
     match mainBlock decls
       None => None
       Some (kind, stmts) =>
@@ -250,3 +254,47 @@ ctxWithParent parent = Ctx {
   ctxOwn = None,
   ctxDeclLoc = None,
 }
+
+-- The verdict of the first `let _ =` of `src`, a module `m` of a project whose
+-- other modules are `others` (module id, source).
+probeProject : List (String, String) -> String -> Option Verdict
+probeProject others src = match lintParseSource src
+  Err _ => None
+  Ok (decls, _) =>
+    let otherRows =
+      flatMap
+        ((modId, text) => match lintParseSource text
+          Ok (ds, _) => declRows modId ds
+          Err _ => [])
+        others
+    let ix = mkProjectIndex [] (declRows "m" decls ++ otherRows)
+    match mainBlock decls
+      None => None
+      Some (_, stmts) =>
+        map
+          (s => discardVerdict ix (buildScopes decls) "" s)
+          (firstDiscard stmts)
+
+wildCaller : String
+wildCaller = "import dep.lib.*\n\nmain =\n  let _ = step 1\n  ()\n"
+
+unrelatedStep : (String, String)
+unrelatedStep = ("other", "step : Int -> Unit\nstep _ = ()\n")
+
+test "a wildcard import from a module the index lacks abstains despite a same-named row elsewhere" =
+  expectEqual (Some (Abstain NoRows)) (probeProject [unrelatedStep] wildCaller)
+
+test "a wildcard import from an indexed module decides by that module's row" =
+  expectEqual
+    (map Discard (tyOfSig "Result String Int"))
+    (probeProject
+      [
+        ("dep.lib", "step : Int -> Result String Int\nstep n = Ok n\n"),
+        unrelatedStep,
+      ]
+      wildCaller)
+
+test "an unbound head does not read a same-named row of a module the file does not import" =
+  expectEqual
+    (Some (Abstain NoRows))
+    (probeProject [unrelatedStep] "main =\n  let _ = step 1\n  ()\n")
