@@ -4,12 +4,12 @@
 -- byte offset would show.
 
 import string.{
-  StrCursor, byteLength, center, countOccurrences, cutBetween, dedent, drop,
-  endsWith, fromChars, groupThousands, indent, repeat, replaceOnce, indexOf,
-  join, lastIndexOf, lines, padLeft, padRight, replace, replaceAll, reverse,
-  nextChar, sliceBetween, startCursor, splitAt, startsWith, stripPrefix,
-  stripSuffix, take, toInt, toLower, toUpper, toFixed, trim, trimLeft,
-  trimRight, unlines, unwords, utf8ByteLength
+  StrCursor, isSpace, toChars, byteLength, center, countOccurrences, cutBetween,
+  dedent, drop, endsWith, fromChars, groupThousands, indent, repeat,
+  replaceOnce, indexOf, join, lastIndexOf, lines, padLeft, padRight, replace,
+  replaceAll, reverse, nextChar, sliceBetween, startCursor, splitAt, startsWith,
+  stripPrefix, stripSuffix, take, toInt, toLower, toUpper, toFixed, trim,
+  trimLeft, trimRight, unlines, unwords, utf8ByteLength, words
 }
 import test.{expectEach, expectEqual, expectFalse, expectTrue}
 
@@ -298,12 +298,74 @@ test "trimLeft of a multibyte head with spaces" =
 test "trim treats tab, newline, carriage return and vertical tab as space" =
   expectEqual "x" (trim "\r\n\t\u{0b}\u{0c} x \r\n")
 
-test "trim does not remove a non-breaking space" = expectEqual " x" (trim " x")
+test "trim removes a no-break space" = expectEqual "x" (trim " x")
+
+test "words splits on a no-break space and an ideographic space" =
+  expectEqual ["a", "b", "c"] (words "a b　c")
+
+test "isSpace accepts exactly the 29 whitespace code points" =
+  expectEqual spaceCodePoints acceptedCodePoints
+
+-- Python's whitespace set, written out from its definition.
+spaceCodePoints : List Int
+spaceCodePoints =
+  [9, 10, 11, 12, 13, 28, 29, 30, 31, 32, 133, 160, 5760]
+    ++ [8192..=8202]
+    ++ [8232, 8233, 8239, 8287, 12288]
+
+-- Every code point 0..=1114111, swept in blocks so that no recursion is
+-- deeper than one block (the eval engine has no tail calls).
+acceptedCodePoints : List Int
+acceptedCodePoints = acceptedBlocks 271 []
+
+-- The accepted code points of blocks `b` down to 0, ascending, onto `acc`.
+acceptedBlocks : Int -> List Int -> List Int
+acceptedBlocks b acc
+  | b < 0 = acc
+  | otherwise =
+    acceptedBlocks
+      (b - 1)
+      (acceptedIn (b * 4096) (min (b * 4096 + 4095) 1114111) acc)
+
+-- The code points from `hi` down to `lo` that `isSpace` accepts, ascending.
+acceptedIn : Int -> Int -> List Int -> List Int
+acceptedIn lo hi acc
+  | hi < lo = acc
+  | otherwise = match charFromCode hi
+    Some c => acceptedIn lo (hi - 1) (if isSpace c then hi :: acc else acc)
+    None => acceptedIn lo (hi - 1) acc
 
 test "trim of a single space character" =
   expectEqual ("", "", "") (trim " ", trimLeft " ", trimRight " ")
 
 -- # Properties
+
+-- Characters drawn from the whitespace set and its near neighbours.
+trimPool : Array Char
+trimPool =
+  arrayFromList
+    (flatMap
+      (k => match charFromCode k
+        Some c => [c]
+        None => [])
+      [
+        97, 98, 9, 10, 11, 13, 28, 31, 32, 133, 160, 1680, 6158, 8192, 8202,
+        8203, 8232, 8239, 8287, 12288, 65279, 173
+      ])
+
+trimSample : List Int -> String
+trimSample ks =
+  fromChars
+    (map (k => arrayGetUnsafe (abs k % arrayLength trimPool) trimPool) ks)
+
+prop "trim neither starts nor ends with whitespace and is a substring" (ks : List Int) =
+  let s = trimSample ks
+  let t = trim s
+  let ends = toChars t
+  (t == ""
+      || not (isSpace (arrayGetUnsafe 0 ends))
+        && not (isSpace (arrayGetUnsafe (arrayLength ends - 1) ends)))
+    && isSome (indexOf t s)
 
 prop "countOccurrences agrees with replaceAll on the removed length" (s : String) =
   stringLength s - stringLength (replaceAll "ab" "" s)
@@ -951,6 +1013,32 @@ test "replaceOnce names only the first line of a long multi-line old text" =
   expectEqual
     (Err "expected 1 occurrence of `\{take 60 (repeat 70 "a")}…`, found 0")
     (replaceOnce "\{repeat 70 "a"}\nsecond" "x" "nothing")
+
+test "replaceOnce quotes an uncut needle with no ellipsis" =
+  expectEqual
+    (Err "expected 1 occurrence of `z`, found 0")
+    (replaceOnce "z" "Z" "hello")
+
+test "replaceOnce quotes a needle of exactly 60 characters with no ellipsis" =
+  let needle = repeat 60 "a"
+  expectEqual
+    (Err "expected 1 occurrence of `\{needle}`, found 0")
+    (replaceOnce needle "x" "nothing")
+
+test "replaceOnce cuts a 61-character needle to 60 with an ellipsis" =
+  expectEqual
+    (Err "expected 1 occurrence of `\{repeat 60 "a"}…`, found 0")
+    (replaceOnce (repeat 61 "a") "x" "nothing")
+
+test "replaceOnce quotes the first line of a multi-line needle with an ellipsis" =
+  expectEqual
+    (Err "expected 1 occurrence of `first…`, found 0")
+    (replaceOnce "first\nsecond" "x" "nothing")
+
+test "replaceOnce quotes an empty needle with no ellipsis" =
+  expectEqual
+    (Err "expected 1 occurrence of ``, found 0")
+    (replaceOnce "" "x" "hello")
 
 test "replaceOnce counts non-overlapping occurrences" =
   expectEqual (Ok "baa") (replaceOnce "aaa" "b" "aaaaa")

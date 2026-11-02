@@ -1,5 +1,5 @@
 # META
-source_lines=1053
+source_lines=1054
 stages=DESUGAR,MARK
 # SOURCE
 -- compiler/tools/lint_shared.mdk — helpers used by more than one lint module:
@@ -310,7 +310,8 @@ nonEmptyStr : String -> Bool
 nonEmptyStr n = n /= ""
 
 -- trim ASCII whitespace from both ends. Narrower than stdlib `string.trim`
--- (space/tab/CR/LF only, vs. `isSpace`'s broader VT/FF) — inputs here are
+-- (space/tab/CR/LF only, vs. `isSpace`'s VT, FF, the control separators and
+-- the non-ASCII spaces) — inputs here are
 -- lint-directive comment bodies, where a stray VT/FF is plausible source
 -- text and swapping to `trim` would silently change what counts as a
 -- directive boundary. Kept intentionally; see #2349.

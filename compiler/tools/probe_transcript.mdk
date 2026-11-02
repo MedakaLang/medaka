@@ -78,6 +78,26 @@ public export data Section = Section {
   secEntry : List String,
 }
 
+-- The seed `medaka test` chose for this invocation. A spawned probe or worker
+-- inherits the parent's environment and `runCommand` takes no environment of
+-- its own, so every spawn site prefixes `env` with these assignments and the
+-- whole run shares one MEDAKA_SEED.
+export
+testSeedRef : Ref (Option Int)
+testSeedRef = Ref None
+
+export
+seedEnvArgs : Unit -> List String
+seedEnvArgs _ = match !testSeedRef
+  Some n => ["MEDAKA_SEED=\{intToString n}"]
+  None => []
+
+-- `env` run with the run's seed assignment ahead of [assignmentsAndCommand].
+export
+runUnderSeed : List String -> <IO> Result String (Int, String, String)
+runUnderSeed assignmentsAndCommand =
+  runCommand "env" (seedEnvArgs () ++ assignmentsAndCommand)
+
 -- The tag of a sentinel line under `prefix`, or None for an ordinary output
 -- line.
 export

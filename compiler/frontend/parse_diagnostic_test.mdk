@@ -45,6 +45,7 @@ test "the established frontend code roster is assigned by kinds" =
         (MalformedFloat "5." "5.0" False, LMalformedFloat),
         (UnexpectedEnd, PUnexpectedEof),
         (BadNeq, PBadNeq),
+        (RawStringAfterDot, PRawStringAfterDot),
         (HsCase, PHsCase),
         (MatchWith, POcamlMatchWith),
         (NoPow, PNoPowOperator),
@@ -274,3 +275,20 @@ test "a byte-literal-shaped identifier carries help but no machine edit" =
       (Some "rename every occurrence of the identifier, for example to `b_a`")
       (diagnosticHelp diagnostic),
   ]
+
+test "a raw literal glued to a dot points at the r and edits in a space" =
+  let source = "main =\n  println (p.r\"x\")\n"
+  let check result = match result
+    Ok _ => fail "unexpected acceptance of a glued raw literal"
+    Err error =>
+      let diagnostic = parseErrorDiagnostic error
+      expectAll [
+        expectEqual
+          "P-RAW-STRING-AFTER-DOT"
+          (codeText (diagnosticCode diagnostic)),
+        expectEqual (2, 13, 2, 17) (spanText (diagnosticLoc diagnostic)),
+        expectEqual
+          [((2, 13, 2, 15), "r\"", "r \"", True)]
+          (map editText (diagnosticEdits diagnostic)),
+      ]
+  expectAll [check (parseResult source), check (parseLocatedResult source)]

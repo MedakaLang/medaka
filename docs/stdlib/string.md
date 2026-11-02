@@ -55,7 +55,17 @@ isSpace : Char -> Bool
 isSpace c
 ```
 
-Whether `c` is ASCII whitespace.
+Whether `c` is whitespace, as Python counts it.
+
+The set has 29 members: the ASCII spaces (tab through carriage return and
+the space itself), the ASCII separators 28 through 31, the next-line
+control U+0085, the no-break space, the Unicode space separators and the
+line and paragraph separators.
+
+```medaka
+> isSpace '\u{00A0}'
+True
+```
 
 ### `isUpper`
 
@@ -594,6 +604,11 @@ The string without leading or trailing whitespace.
 "hi"
 ```
 
+```medaka
+> trim "\u{00A0}hi\u{3000}"
+"hi"
+```
+
 ### `toUpper`
 
 ```
@@ -667,19 +682,20 @@ The string with `old` replaced by `new`, provided `old` occurs exactly
 once.
 
 `Err` when `old` occurs no times, more than once, or is empty. The
-message names the first line of `old` (cut at 60 characters) and the
-number of occurrences found. Occurrences are counted as
+message quotes the first line of `old`, cut at 60 characters, and puts an
+ellipsis after the quote when the quote is shorter than `old`. The number
+of occurrences found follows. Occurrences are counted as
 `countOccurrences` counts them.
 
 ```medaka
 > replaceOnce "l" "L" "help"
 Ok "heLp"
 > replaceOnce "z" "Z" "hello"
-Err "expected 1 occurrence of `z…`, found 0"
+Err "expected 1 occurrence of `z`, found 0"
 > replaceOnce "l" "L" "hello"
-Err "expected 1 occurrence of `l…`, found 2"
+Err "expected 1 occurrence of `l`, found 2"
 > replaceOnce "" "x" "hello"
-Err "expected 1 occurrence of `…`, found 0"
+Err "expected 1 occurrence of ``, found 0"
 ```
 
 ### `cutBetween`
@@ -852,6 +868,11 @@ Leading, trailing, and repeated whitespace produce no empty words.
 ```medaka
 > words "  hello   world "
 ["hello", "world"]
+```
+
+```medaka
+> words "a\u{00A0}b c"
+["a", "b", "c"]
 ```
 
 ### `unlines`

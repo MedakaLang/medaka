@@ -1,0 +1,14 @@
+-- Deep-document tests for `stdlib/toml.mdk`.
+--
+-- The largest document `tableEntries` accepts builds a 100000-element list,
+-- which the interpreter cannot run: it has no tail-call optimisation and caps
+-- call depth at 25000. The module is therefore rostered native-only in
+-- `test/stdlib_suite_test.mdk`.
+
+import toml.{parse, tableEntries}
+import test.{expectEqual, expectOkThen}
+
+test "tableEntries reads the last entry the limit admits" =
+  expectOkThen
+    (es => expectEqual 100000 (length es))
+    (parse "[gate.99999]\nname = \"x\"" |> flatMap (tableEntries "gate"))

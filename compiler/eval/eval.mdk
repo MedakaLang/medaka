@@ -5273,14 +5273,16 @@ pByteBlockWriteStdoutIO (VByteBlock b) =
 pByteBlockWriteStdoutIO _ = panic "byteBlockWriteStdout: not a ByteBlock"
 
 -- ── OS entropy ────────────────────────────────────────────────────────────
--- This binding is deliberately installed only by `medaka run`. It must not
--- enter the deterministic oracle table or the long-lived test/repl process.
+-- This binding is installed only by `medaka run`. It stays out of the
+-- deterministic oracle table, and out of the test/repl capability list: those
+-- processes draw through the seeded program stream (see runRngRef) instead.
 pOsEntropyBytes : Value e -> <Rand | e> Value e
 pOsEntropyBytes (VInt n) = vIntArray (osEntropyBytes n)
 pOsEntropyBytes _ = panic "osEntropyBytes: expected Int"
 
 -- ── `medaka run` RNG ──────────────────────────────────────────────────────
--- The run's own SplitMix64 stream, separate from the oracle's `rngU64Ref`. Until
+-- The program's own SplitMix64 stream, separate from the oracle's `rngU64Ref`;
+-- `medaka run`, `medaka test` and `medaka repl` draw from it. Until
 -- `setSeed` / `restoreRandomState` seeds it, the first draw (or `randomState`)
 -- seeds it from MEDAKA_SEED when set, else from OS entropy. A malformed
 -- MEDAKA_SEED panics, unlocated as on native, rather than using entropy.
@@ -5316,6 +5318,14 @@ runRngDraw : Unit -> <Env, Rand | e> U64
 runRngDraw _ =
   runRngEnsure ()
   rngStep runRngRef
+
+-- Seeds the program stream with [n] before the first draw (`medaka test` picks
+-- one seed per invocation and hands the same one to every engine).
+export
+seedRunRng : Int -> Unit
+seedRunRng n =
+  runRngRef := U64.truncate n
+  runRngSeeded := True
 
 runSeeds : (Value e -> <e> Value e) -> Value e -> <e> Value e
 runSeeds f v =
@@ -5395,7 +5405,9 @@ ioHostExterns _ = [
 ]
 
 -- Capability policy for `medaka test` (all three phases) and `medaka repl`: the
--- SAFE subset of ioExternBindings.  Real clock/GC reads (wallTimeSec /
+-- SAFE subset of ioExternBindings.  The random* externs draw from the seeded
+-- program stream (MEDAKA_SEED when set, else OS entropy), not the oracle's
+-- state-0 stream.  Real clock/GC reads (wallTimeSec /
 -- monotonicSec / allocBytes) and stderr writes (ePutStr / ePutStrLn) so a
 -- doctest / prop / repl session sees the SAME clock and stderr as `medaka run`
 -- (issue #85: the frozen constants in externBindings made `medaka test` diverge
@@ -5411,6 +5423,13 @@ testCapableExterns _ = [
   ("allocBytes", prim1M pAllocBytesIO),
   ("ePutStr", prim1M pEPutStr),
   ("ePutStrLn", prim1M pEPutStrLn),
+  ("randomInt", prim2M (pRandomInt runRngDraw)),
+  ("randomBool", prim1M (pRandomBool runRngDraw)),
+  ("randomFloat", prim1M (pRandomFloat runRngDraw)),
+  ("randomChar", prim1M (pRandomChar runRngDraw)),
+  ("setSeed", prim1M (runSeeds (pSetSeed runRngRef))),
+  ("randomState", prim1M runRandomState),
+  ("restoreRandomState", prim1M (runSeeds (pRestoreRandomState runRngRef))),
 ]
 
 -- `medaka run`'s output driver: evalModulesOutputFacts plus the real-I/O externs.

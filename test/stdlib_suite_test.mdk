@@ -232,6 +232,7 @@ suites = [
   ("test_process", (31, NativeCapability)),
   ("time", (36, EvalAndNative)),
   ("toml", (56, EvalAndNative)),
+  ("toml_stack_test", (1, NativeSpeed)),
   ("toml_test", (9, EvalAndNative)),
   -- The fixed-width types' wrapping, conversions and bit operations. Native
   -- matters here: the arithmetic wraps by a width-stamped builtin that each
@@ -553,6 +554,9 @@ test "stdlib/test_process.mdk executed >= 31 assertions" =
 test "stdlib/time.mdk executed >= 36 assertions" = floorExpectation "time"
 
 test "stdlib/toml.mdk executed >= 56 assertions" = floorExpectation "toml"
+
+test "stdlib/toml_stack_test.mdk executed >= 1 assertions" =
+  floorExpectation "toml_stack_test"
 
 test "stdlib/toml_test.mdk executed >= 9 assertions" =
   floorExpectation "toml_test"

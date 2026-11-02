@@ -599,9 +599,20 @@ test/guide_scripts_test.mdk    the programs on docs/guide/11-writing-scripts.md,
                                [W-SHARD-DERIVED]'s hard refusal. Its behavior IS asserted: the
                                Makefile `test:` target names it (inlang-guide-scripts-test), so
                                `make test` runs it. CI's `inlang` job runs `make test` on the
-                               merge queue and on a PR that touches compiler/, stdlib/, runtime/
-                               or the Makefile; a PR that edits only the guide page or its
-                               programs does not run it until the merge queue.
+                               merge queue, on a PR that touches compiler/, stdlib/, runtime/,
+                               the Makefile or a build script, and on a PR that touches the
+                               guide page or test/guide_scripts/* (the `inlang_corpora` arm of
+                               .github/workflows/ci.yml's classifier).
+test/run_opcount_test.mdk      `MEDAKA_PERF=1 medaka run`'s eval-row op count on a regex-census program: it repeats,
+                               stays under a ceiling and above a floor. Deliberately not a test/gates.toml
+                               `run` target, for the same reason as test/guide_scripts_test.mdk above: a
+                               brand-new gate hits [W-SHARD-DERIVED]'s hard refusal. Its behavior IS
+                               asserted: the Makefile `test:` target names it
+                               (inlang-run-opcount-test), so `make test` runs it. CI's `inlang`
+                               job runs `make test` on the merge queue, on a PR that touches
+                               compiler/, stdlib/, runtime/, the Makefile or a build script, and
+                               on a PR that touches the test itself (the `inlang_corpora` arm
+                               of .github/workflows/ci.yml's classifier).
 test/compiler_module_roster_test.mdk  a small fixed roster over four modules nothing else
                                reaches (#3081): compiler/tools/gate_cost.mdk,
                                compiler/support/util.mdk and compiler/support/manifest.mdk are

@@ -35,7 +35,10 @@
 # never cite one: `gh api repos/MedakaLang/medaka/rulesets/18885875 --jq
 # '.rules[]|select(.type=="required_status_checks")|.parameters.required_status_checks[].context'`;
 # see AGENTS.md [W-REQUIRED-CHECKS] for the general recipe): gates, soundness,
-# compiler-soundness, seed-health, inlang, wasm.
+# compiler-soundness, seed-health, inlang, wasm.  The `inlang` context is a job that
+# only reads the result of the `inlang-shard` matrix, whose steps carry the guards, so
+# both are checked here, and the aggregator is held to the shape that keeps a red
+# shard red (see AGGREGATORS below).
 #
 # EXTRACTION (F2 hardening, review-round finding): step `if:` conditions are read via
 # PyYAML, not a raw-line regex — a YAML parser is indentation- and folding-invariant by
@@ -85,12 +88,13 @@ lines = text.splitlines()
 # the fail-safe `if:` shape (a positive-match disjunct on every step) for
 # whichever job templates it's told about here. A ruleset context renamed,
 # added, or removed without a matching edit here goes unnoticed by this gate.
-REQUIRED_JOBS = {"gates", "soundness", "compiler-soundness", "seed-health", "inlang", "wasm"}
+REQUIRED_JOBS = {"gates", "soundness", "compiler-soundness", "seed-health", "inlang", "inlang-shard", "wasm"}
 
 # Known-good floors — see header comment. A job not listed here has floor 0.
 FLOORS = {
     "compiler-soundness": 5,
-    "inlang": 2,
+    "inlang": 0,
+    "inlang-shard": 2,
     "wasm": 3,
     "seed-health": 0,
     "gates": 0,
@@ -151,7 +155,29 @@ def yaml_extract():
                 counts[job] += 1
                 if not disjunct_present(if_text, refjob):
                     violations.append((job, lineno, refjob, if_text))
-    return violations, counts, len(jobs)
+    return violations, counts, len(jobs), aggregator_problems(jobs)
+
+# A required context that only aggregates a matrix: it must need that matrix and run
+# on `!cancelled()`.  A plain `needs:` skips it when a shard fails, and a skipped
+# required context counts as passing.
+AGGREGATORS = {"inlang": "inlang-shard"}
+
+def aggregator_problems(jobs):
+    problems = []
+    for agg, matrix in sorted(AGGREGATORS.items()):
+        jobdef = jobs.get(agg) or {}
+        needs = jobdef.get('needs') or []
+        if isinstance(needs, str):
+            needs = [needs]
+        if matrix not in needs:
+            problems.append(f"job '{agg}' does not need '{matrix}'")
+        if '!cancelled()' not in collapse(str(jobdef.get('if', ''))):
+            problems.append(f"job '{agg}' has no `if: ${{{{ !cancelled() }}}}`, so a failed '{matrix}' would skip it")
+        runs = ' '.join(collapse(str(st.get('run', ''))) + ' ' + collapse(str(st.get('env', '')))
+                        for st in (jobdef.get('steps') or []) if isinstance(st, dict))
+        if f"needs.{matrix}.result" not in runs or 'success' not in runs:
+            problems.append(f"job '{agg}' never tests needs.{matrix}.result against success")
+    return problems
 
 # ---- Regex-based fallback (only if YAML fails to parse) -------------------------
 # Conservative fallback discipline: a workflow file we CANNOT parse must never be
@@ -205,17 +231,18 @@ def regex_extract():
                 counts[job] += 1
                 if not disjunct_present(if_text, refjob):
                     violations.append((job, i + 1, refjob, ln.strip()))
-    return violations, counts, len(job_ranges)
+    print("WARN: aggregator shape (AGGREGATORS) is checked on the YAML path only.")
+    return violations, counts, len(job_ranges), []
 
 try:
     import yaml  # noqa: F401
-    violations, counts, njobs = yaml_extract()
+    violations, counts, njobs, agg_problems = yaml_extract()
     mode = "YAML"
 except Exception as e:
     print(f"WARN: could not parse {path} as YAML ({e}); falling back to a raw-line regex")
     print("      scan (fixed 8-space step indent) — refusing to silently treat this as")
     print("      zero sites. Re-derive why the YAML parse failed before trusting this run.")
-    violations, counts, njobs = regex_extract()
+    violations, counts, njobs, agg_problems = regex_extract()
     mode = "regex-fallback"
 
 checked_positive = sum(counts.values())
@@ -243,6 +270,12 @@ if floor_violations:
     print("      either the parser broke or a guard was silently removed:")
     for job, found, floor in floor_violations:
         print(f"       job '{job}': found {found}, floor {floor}")
+
+if agg_problems:
+    failed = True
+    print(f"FAIL: {len(agg_problems)} aggregator problem(s) — a red shard could read green:")
+    for p in agg_problems:
+        print(f"       {p}")
 
 if failed:
     sys.exit(1)

@@ -10,18 +10,18 @@
 -- pure scan, so it needs no floor / no min-of-K / no heap-pin and grades exactly the
 -- stages TIME cannot. This mirrors tools/refindex.mdk's `opCnt`.
 --
--- ⚠️ LOAD-BEARING INVARIANT — THE COUNTER IS WRITE-ONLY (identical rule to
--- timer.mdk's `allocBytes` and llvm_emit.mdk's `returnsSelfTableRef`): it is read
--- ONLY by the profiler drivers (profile_main / profile_modules_main, via `opSnap`),
--- NEVER by any compiler pass. `Ref`/`setRef` are typed PURE in stdlib/runtime.mdk
--- (no effect row), so a global counter mutated inside `contains`/`lookupAssoc`
--- (support/util.mdk) keeps their signatures unchanged and is a pure side channel. No
--- pass reads it => the emitted IR for any given input is UNPERTURBED (the
--- byte-identical-when-MEDAKA_PERF-off proof). Keep it that way: `opCounter` and
--- `opCountOn` are module-PRIVATE so nothing outside this module can even read them.
+-- LOAD-BEARING INVARIANT: the counter is write-only for compiler passes (identical rule to
+-- timer.mdk's `allocBytes` and llvm_emit.mdk's `returnsSelfTableRef`). It is read ONLY by
+-- the profiler drivers (profile_main / profile_modules_main, via `opSnap`) and by
+-- `medaka run`'s `[perf] eval` row (driver/medaka_cli.mdk `runEvalPerf`), never by a pass.
+-- `Ref`/`setRef` are typed PURE in stdlib/runtime.mdk (no effect row), so a global counter
+-- mutated inside `contains`/`lookupAssoc` (support/util.mdk) and the evaluator's frame
+-- lookups keeps their signatures unchanged and is a pure side channel. No pass reads it, so
+-- the emitted IR for any given input is unperturbed. `opCounter` and `opCountOn` are
+-- module-PRIVATE so nothing outside this module can even read them.
 --
 -- GATING (Option C, issue #884): `opBump` increments only when `opCountOn` is True,
--- which the driver flips ONCE at entry via `setOpCounting (perfEnabled ())`. Zero
+-- which the driver (a profiler, or `runRunCmd`) flips ONCE at entry via `setOpCounting (perfEnabled ())`. Zero
 -- write when off — and no `getEnv` (which is <IO>) ever runs inside the hot scan.
 --
 -- ACYCLIC: this module imports only the prelude and the stdlib's `u64`, so `util ->

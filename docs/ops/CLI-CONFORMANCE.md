@@ -356,6 +356,15 @@ the pre-sprint baseline captured when it was first written; every cell below is 
 | bare / `help` / `--help` / `-h` | prints usage | 0 | stdout | — | — | ✅ |
 | `--version` / `-v` / `version` | `medaka 0.1.0-preview` | 0 | stdout | — | — | ✅ |
 
+`medaka test` picks one program-RNG seed per invocation: `MEDAKA_SEED` when set (a malformed value is
+a usage error, exit 1), else OS entropy. Every engine uses it, the in-process eval engine and each
+spawned native probe, props worker and per-file child alike. A run in which tests, doctests or
+properties ran and something failed prints `seed: N (rerun with MEDAKA_SEED=N)` once after the
+summary; a green run, and a refusal before anything ran (a type error, a missing capability, a bad
+target), print nothing extra. A failing `--json` run adds the same N as a top-level integer `seed` member
+(a green run and a refusal add none) and keeps stderr empty. An uncaught panic under the eval engine aborts the run
+without a summary or a seed; set `MEDAKA_SEED` to make such a run repeatable. `medaka repl` draws from the same stream and honours `MEDAKA_SEED`, with no print.
+
 There is no residual C2 cell left in this table — `new` was the last one and S-5 drained it.
 
 `test`'s usage-error cell holds only **outside a project**, which is where the census probes

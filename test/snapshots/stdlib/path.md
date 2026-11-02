@@ -1,5 +1,5 @@
 # META
-source_lines=407
+source_lines=465
 stages=DESUGAR,MARK
 # SOURCE
 {- | Manipulation of `/`-separated paths as text.
@@ -207,14 +207,20 @@ filterEmpty (s :: rest) =
 
 {- | Whether `path` matches the glob `pattern`.
 
-   Both are split into segments on `/`, so repeated and trailing slashes do
-   not matter, but a leading `/` must be on both or on neither. Within one
-   segment `*` matches any run of characters and `?` exactly one character;
-   neither crosses a `/`, and a leading `.` is matched like any other
-   character. A segment that is exactly `**` matches any number of whole
-   segments, none included, so `a/**/b` matches `a/b`. `**` inside a longer
-   segment acts as `*`. There are no braces, character classes or escapes.
-   The empty pattern matches only the empty path.
+   Both are split into segments on `/`, so repeated slashes do not matter,
+   but a leading `/` must be on both or on neither. Within one segment `*`
+   matches any run of characters and `?` exactly one character; neither
+   crosses a `/`, and a leading `.` is matched like any other character, so
+   `*` and `?` match dot names. A segment that is exactly `**` matches any
+   number of whole segments, none included, so `a/**/b` matches `a/b`, but
+   it never consumes a segment that starts with `.` unless that segment is
+   the last of a path not ending in `/`: `**/*` matches `a/.x` and not
+   `.git/x`. A literal segment such as `.git` matches as written, so
+   `.git/**` matches `.git/objects/x` and not `.git/.hidden/x`. `**` inside
+   a longer segment acts as `*`. A pattern ending in `/` names directories
+   and matches only a path ending in `/`; a pattern without one ignores a
+   trailing `/` on the path. There are no braces, character classes or
+   escapes. The empty pattern matches only the empty path.
 
    > matchGlob "*.mdk" "a.mdk"
    True
@@ -238,6 +244,26 @@ filterEmpty (s :: rest) =
    False
    > matchGlob "*" ".hidden"
    True
+   > matchGlob "*/config" ".git/config"
+   True
+   > matchGlob "**/x" ".git/x"
+   False
+   > matchGlob "**/.x" "a/.x"
+   True
+   > matchGlob "**/*" "a/.x"
+   True
+   > matchGlob "**/*" ".git/x"
+   False
+   > matchGlob ".git/**" ".git/objects/x"
+   True
+   > matchGlob ".git/**" ".git/.hidden/x"
+   False
+   > matchGlob "sub/*/" "sub/d/"
+   True
+   > matchGlob "sub/*/" "sub/f"
+   False
+   > matchGlob "src/**/" "src/"
+   True
    > matchGlob "/a/*" "/a/b"
    True
    > matchGlob "/a/*" "a/b"
@@ -254,19 +280,51 @@ export
 matchGlob : String -> String -> Bool
 matchGlob pattern path =
   isAbsolute pattern == isAbsolute path
-    && matchSegments (segments pattern) (segments path)
+    && (not (endsWith "/" pattern) || endsWith "/" path)
+    && matchSegments (endsWith "/" path) (segments pattern) (segments path)
 
-matchSegments : List String -> List String -> Bool
-matchSegments [] [] = True
-matchSegments [] _ = False
-matchSegments ("**" :: ps) xs = matchSegments ps xs || skipSegment ps xs
-matchSegments (_ :: _) [] = False
-matchSegments (p :: ps) (x :: xs) =
-  matchChars (toList (toChars p)) (toList (toChars x)) && matchSegments ps xs
+-- `dir` says the path names a directory, whose last segment is then not a
+-- dotfile that `**` may consume.
+matchSegments : Bool -> List String -> List String -> Bool
+matchSegments _ [] [] = True
+matchSegments _ [] _ = False
+matchSegments dir ("**" :: ps) xs =
+  matchSegments dir ps xs || skipSegment dir ps xs
+matchSegments _ (_ :: _) [] = False
+matchSegments dir (p :: ps) (x :: xs) =
+  matchChars (toList (toChars p)) (toList (toChars x))
+    && matchSegments dir ps xs
 
-skipSegment : List String -> List String -> Bool
-skipSegment _ [] = False
-skipSegment ps (_ :: xs) = matchSegments ("**" :: ps) xs
+skipSegment : Bool -> List String -> List String -> Bool
+skipSegment _ _ [] = False
+skipSegment dir ps (x :: xs) =
+  (not (startsWith "." x) || isEmpty xs && not dir)
+    && matchSegments dir ("**" :: ps) xs
+
+{- | Whether some path strictly below the directory `dir` can match `pattern`.
+
+   `**` is not allowed to pass through a dot directory, so a walk can leave
+   such a directory unentered when this is `False` for it.
+
+   > globReaches "**/x" ".git"
+   False
+   > globReaches ".git/**" ".git"
+   True
+   > globReaches "*/config" ".git"
+   True -}
+export
+globReaches : String -> String -> Bool
+globReaches pattern dir = reachSegments (segments pattern) (segments dir)
+
+reachSegments : List String -> List String -> Bool
+reachSegments [] [] = False
+reachSegments (_ :: _) [] = True
+reachSegments [] (_ :: _) = False
+reachSegments ("**" :: ps) (d :: ds) =
+  reachSegments ps (d :: ds)
+    || not (startsWith "." d) && reachSegments ("**" :: ps) ds
+reachSegments (p :: ps) (d :: ds) =
+  matchChars (toList (toChars p)) (toList (toChars d)) && reachSegments ps ds
 
 -- Matches one segment by tracking every pattern suffix the text read so far
 -- can leave unmatched, so the cost is the text length times the pattern
@@ -444,16 +502,24 @@ prop "dirname ++ / ++ basename normalizes back to the original absolute path" (p
 (DFunDef false "filterEmpty" ((PList)) (EListLit))
 (DFunDef false "filterEmpty" ((PCons (PVar "s") (PVar "rest"))) (EIf (EBinOp "==" (EVar "s") (ELit (LString ""))) (EApp (EVar "filterEmpty") (EVar "rest")) (EBinOp "::" (EVar "s") (EApp (EVar "filterEmpty") (EVar "rest")))))
 (DTypeSig true "matchGlob" (TyFun (TyCon "String") (TyFun (TyCon "String") (TyCon "Bool"))))
-(DFunDef false "matchGlob" ((PVar "pattern") (PVar "path")) (EBinOp "&&" (EBinOp "==" (EApp (EVar "isAbsolute") (EVar "pattern")) (EApp (EVar "isAbsolute") (EVar "path"))) (EApp (EApp (EVar "matchSegments") (EApp (EVar "segments") (EVar "pattern"))) (EApp (EVar "segments") (EVar "path")))))
-(DTypeSig false "matchSegments" (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyCon "Bool"))))
-(DFunDef false "matchSegments" ((PList) (PList)) (EVar "True"))
-(DFunDef false "matchSegments" ((PList) PWild) (EVar "False"))
-(DFunDef false "matchSegments" ((PCons (PLit (LString "**")) (PVar "ps")) (PVar "xs")) (EBinOp "||" (EApp (EApp (EVar "matchSegments") (EVar "ps")) (EVar "xs")) (EApp (EApp (EVar "skipSegment") (EVar "ps")) (EVar "xs"))))
-(DFunDef false "matchSegments" ((PCons PWild PWild) (PList)) (EVar "False"))
-(DFunDef false "matchSegments" ((PCons (PVar "p") (PVar "ps")) (PCons (PVar "x") (PVar "xs"))) (EBinOp "&&" (EApp (EApp (EVar "matchChars") (EApp (EVar "toList") (EApp (EVar "toChars") (EVar "p")))) (EApp (EVar "toList") (EApp (EVar "toChars") (EVar "x")))) (EApp (EApp (EVar "matchSegments") (EVar "ps")) (EVar "xs"))))
-(DTypeSig false "skipSegment" (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyCon "Bool"))))
-(DFunDef false "skipSegment" (PWild (PList)) (EVar "False"))
-(DFunDef false "skipSegment" ((PVar "ps") (PCons PWild (PVar "xs"))) (EApp (EApp (EVar "matchSegments") (EBinOp "::" (ELit (LString "**")) (EVar "ps"))) (EVar "xs")))
+(DFunDef false "matchGlob" ((PVar "pattern") (PVar "path")) (EBinOp "&&" (EBinOp "&&" (EBinOp "==" (EApp (EVar "isAbsolute") (EVar "pattern")) (EApp (EVar "isAbsolute") (EVar "path"))) (EBinOp "||" (EApp (EVar "not") (EApp (EApp (EVar "endsWith") (ELit (LString "/"))) (EVar "pattern"))) (EApp (EApp (EVar "endsWith") (ELit (LString "/"))) (EVar "path")))) (EApp (EApp (EApp (EVar "matchSegments") (EApp (EApp (EVar "endsWith") (ELit (LString "/"))) (EVar "path"))) (EApp (EVar "segments") (EVar "pattern"))) (EApp (EVar "segments") (EVar "path")))))
+(DTypeSig false "matchSegments" (TyFun (TyCon "Bool") (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyCon "Bool")))))
+(DFunDef false "matchSegments" (PWild (PList) (PList)) (EVar "True"))
+(DFunDef false "matchSegments" (PWild (PList) PWild) (EVar "False"))
+(DFunDef false "matchSegments" ((PVar "dir") (PCons (PLit (LString "**")) (PVar "ps")) (PVar "xs")) (EBinOp "||" (EApp (EApp (EApp (EVar "matchSegments") (EVar "dir")) (EVar "ps")) (EVar "xs")) (EApp (EApp (EApp (EVar "skipSegment") (EVar "dir")) (EVar "ps")) (EVar "xs"))))
+(DFunDef false "matchSegments" (PWild (PCons PWild PWild) (PList)) (EVar "False"))
+(DFunDef false "matchSegments" ((PVar "dir") (PCons (PVar "p") (PVar "ps")) (PCons (PVar "x") (PVar "xs"))) (EBinOp "&&" (EApp (EApp (EVar "matchChars") (EApp (EVar "toList") (EApp (EVar "toChars") (EVar "p")))) (EApp (EVar "toList") (EApp (EVar "toChars") (EVar "x")))) (EApp (EApp (EApp (EVar "matchSegments") (EVar "dir")) (EVar "ps")) (EVar "xs"))))
+(DTypeSig false "skipSegment" (TyFun (TyCon "Bool") (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyCon "Bool")))))
+(DFunDef false "skipSegment" (PWild PWild (PList)) (EVar "False"))
+(DFunDef false "skipSegment" ((PVar "dir") (PVar "ps") (PCons (PVar "x") (PVar "xs"))) (EBinOp "&&" (EBinOp "||" (EApp (EVar "not") (EApp (EApp (EVar "startsWith") (ELit (LString "."))) (EVar "x"))) (EBinOp "&&" (EApp (EVar "isEmpty") (EVar "xs")) (EApp (EVar "not") (EVar "dir")))) (EApp (EApp (EApp (EVar "matchSegments") (EVar "dir")) (EBinOp "::" (ELit (LString "**")) (EVar "ps"))) (EVar "xs"))))
+(DTypeSig true "globReaches" (TyFun (TyCon "String") (TyFun (TyCon "String") (TyCon "Bool"))))
+(DFunDef false "globReaches" ((PVar "pattern") (PVar "dir")) (EApp (EApp (EVar "reachSegments") (EApp (EVar "segments") (EVar "pattern"))) (EApp (EVar "segments") (EVar "dir"))))
+(DTypeSig false "reachSegments" (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyCon "Bool"))))
+(DFunDef false "reachSegments" ((PList) (PList)) (EVar "False"))
+(DFunDef false "reachSegments" ((PCons PWild PWild) (PList)) (EVar "True"))
+(DFunDef false "reachSegments" ((PList) (PCons PWild PWild)) (EVar "False"))
+(DFunDef false "reachSegments" ((PCons (PLit (LString "**")) (PVar "ps")) (PCons (PVar "d") (PVar "ds"))) (EBinOp "||" (EApp (EApp (EVar "reachSegments") (EVar "ps")) (EBinOp "::" (EVar "d") (EVar "ds"))) (EBinOp "&&" (EApp (EVar "not") (EApp (EApp (EVar "startsWith") (ELit (LString "."))) (EVar "d"))) (EApp (EApp (EVar "reachSegments") (EBinOp "::" (ELit (LString "**")) (EVar "ps"))) (EVar "ds")))))
+(DFunDef false "reachSegments" ((PCons (PVar "p") (PVar "ps")) (PCons (PVar "d") (PVar "ds"))) (EBinOp "&&" (EApp (EApp (EVar "matchChars") (EApp (EVar "toList") (EApp (EVar "toChars") (EVar "p")))) (EApp (EVar "toList") (EApp (EVar "toChars") (EVar "d")))) (EApp (EApp (EVar "reachSegments") (EVar "ps")) (EVar "ds"))))
 (DTypeSig false "matchChars" (TyFun (TyApp (TyCon "List") (TyCon "Char")) (TyFun (TyApp (TyCon "List") (TyCon "Char")) (TyCon "Bool"))))
 (DFunDef false "matchChars" ((PVar "pat") (PVar "cs")) (EApp (EApp (EVar "matchRun") (EApp (EVar "closeStars") (EListLit (EApp (EVar "collapseStars") (EVar "pat"))))) (EVar "cs")))
 (DTypeSig false "collapseStars" (TyFun (TyApp (TyCon "List") (TyCon "Char")) (TyApp (TyCon "List") (TyCon "Char"))))
@@ -529,16 +595,24 @@ prop "dirname ++ / ++ basename normalizes back to the original absolute path" (p
 (DFunDef false "filterEmpty" ((PList)) (EListLit))
 (DFunDef false "filterEmpty" ((PCons (PVar "s") (PVar "rest"))) (EIf (EBinOp "==" (EVar "s") (ELit (LString ""))) (EApp (EVar "filterEmpty") (EVar "rest")) (EBinOp "::" (EVar "s") (EApp (EVar "filterEmpty") (EVar "rest")))))
 (DTypeSig true "matchGlob" (TyFun (TyCon "String") (TyFun (TyCon "String") (TyCon "Bool"))))
-(DFunDef false "matchGlob" ((PVar "pattern") (PVar "path")) (EBinOp "&&" (EBinOp "==" (EApp (EVar "isAbsolute") (EVar "pattern")) (EApp (EVar "isAbsolute") (EVar "path"))) (EApp (EApp (EVar "matchSegments") (EApp (EVar "segments") (EVar "pattern"))) (EApp (EVar "segments") (EVar "path")))))
-(DTypeSig false "matchSegments" (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyCon "Bool"))))
-(DFunDef false "matchSegments" ((PList) (PList)) (EVar "True"))
-(DFunDef false "matchSegments" ((PList) PWild) (EVar "False"))
-(DFunDef false "matchSegments" ((PCons (PLit (LString "**")) (PVar "ps")) (PVar "xs")) (EBinOp "||" (EApp (EApp (EVar "matchSegments") (EVar "ps")) (EVar "xs")) (EApp (EApp (EVar "skipSegment") (EVar "ps")) (EVar "xs"))))
-(DFunDef false "matchSegments" ((PCons PWild PWild) (PList)) (EVar "False"))
-(DFunDef false "matchSegments" ((PCons (PVar "p") (PVar "ps")) (PCons (PVar "x") (PVar "xs"))) (EBinOp "&&" (EApp (EApp (EVar "matchChars") (EApp (EMethodRef "toList") (EApp (EVar "toChars") (EVar "p")))) (EApp (EMethodRef "toList") (EApp (EVar "toChars") (EVar "x")))) (EApp (EApp (EVar "matchSegments") (EVar "ps")) (EVar "xs"))))
-(DTypeSig false "skipSegment" (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyCon "Bool"))))
-(DFunDef false "skipSegment" (PWild (PList)) (EVar "False"))
-(DFunDef false "skipSegment" ((PVar "ps") (PCons PWild (PVar "xs"))) (EApp (EApp (EVar "matchSegments") (EBinOp "::" (ELit (LString "**")) (EVar "ps"))) (EVar "xs")))
+(DFunDef false "matchGlob" ((PVar "pattern") (PVar "path")) (EBinOp "&&" (EBinOp "&&" (EBinOp "==" (EApp (EVar "isAbsolute") (EVar "pattern")) (EApp (EVar "isAbsolute") (EVar "path"))) (EBinOp "||" (EApp (EVar "not") (EApp (EApp (EVar "endsWith") (ELit (LString "/"))) (EVar "pattern"))) (EApp (EApp (EVar "endsWith") (ELit (LString "/"))) (EVar "path")))) (EApp (EApp (EApp (EVar "matchSegments") (EApp (EApp (EVar "endsWith") (ELit (LString "/"))) (EVar "path"))) (EApp (EVar "segments") (EVar "pattern"))) (EApp (EVar "segments") (EVar "path")))))
+(DTypeSig false "matchSegments" (TyFun (TyCon "Bool") (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyCon "Bool")))))
+(DFunDef false "matchSegments" (PWild (PList) (PList)) (EVar "True"))
+(DFunDef false "matchSegments" (PWild (PList) PWild) (EVar "False"))
+(DFunDef false "matchSegments" ((PVar "dir") (PCons (PLit (LString "**")) (PVar "ps")) (PVar "xs")) (EBinOp "||" (EApp (EApp (EApp (EVar "matchSegments") (EVar "dir")) (EVar "ps")) (EVar "xs")) (EApp (EApp (EApp (EVar "skipSegment") (EVar "dir")) (EVar "ps")) (EVar "xs"))))
+(DFunDef false "matchSegments" (PWild (PCons PWild PWild) (PList)) (EVar "False"))
+(DFunDef false "matchSegments" ((PVar "dir") (PCons (PVar "p") (PVar "ps")) (PCons (PVar "x") (PVar "xs"))) (EBinOp "&&" (EApp (EApp (EVar "matchChars") (EApp (EMethodRef "toList") (EApp (EVar "toChars") (EVar "p")))) (EApp (EMethodRef "toList") (EApp (EVar "toChars") (EVar "x")))) (EApp (EApp (EApp (EVar "matchSegments") (EVar "dir")) (EVar "ps")) (EVar "xs"))))
+(DTypeSig false "skipSegment" (TyFun (TyCon "Bool") (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyCon "Bool")))))
+(DFunDef false "skipSegment" (PWild PWild (PList)) (EVar "False"))
+(DFunDef false "skipSegment" ((PVar "dir") (PVar "ps") (PCons (PVar "x") (PVar "xs"))) (EBinOp "&&" (EBinOp "||" (EApp (EVar "not") (EApp (EApp (EVar "startsWith") (ELit (LString "."))) (EVar "x"))) (EBinOp "&&" (EApp (EMethodRef "isEmpty") (EVar "xs")) (EApp (EVar "not") (EVar "dir")))) (EApp (EApp (EApp (EVar "matchSegments") (EVar "dir")) (EBinOp "::" (ELit (LString "**")) (EVar "ps"))) (EVar "xs"))))
+(DTypeSig true "globReaches" (TyFun (TyCon "String") (TyFun (TyCon "String") (TyCon "Bool"))))
+(DFunDef false "globReaches" ((PVar "pattern") (PVar "dir")) (EApp (EApp (EVar "reachSegments") (EApp (EVar "segments") (EVar "pattern"))) (EApp (EVar "segments") (EVar "dir"))))
+(DTypeSig false "reachSegments" (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyCon "Bool"))))
+(DFunDef false "reachSegments" ((PList) (PList)) (EVar "False"))
+(DFunDef false "reachSegments" ((PCons PWild PWild) (PList)) (EVar "True"))
+(DFunDef false "reachSegments" ((PList) (PCons PWild PWild)) (EVar "False"))
+(DFunDef false "reachSegments" ((PCons (PLit (LString "**")) (PVar "ps")) (PCons (PVar "d") (PVar "ds"))) (EBinOp "||" (EApp (EApp (EVar "reachSegments") (EVar "ps")) (EBinOp "::" (EVar "d") (EVar "ds"))) (EBinOp "&&" (EApp (EVar "not") (EApp (EApp (EVar "startsWith") (ELit (LString "."))) (EVar "d"))) (EApp (EApp (EVar "reachSegments") (EBinOp "::" (ELit (LString "**")) (EVar "ps"))) (EVar "ds")))))
+(DFunDef false "reachSegments" ((PCons (PVar "p") (PVar "ps")) (PCons (PVar "d") (PVar "ds"))) (EBinOp "&&" (EApp (EApp (EVar "matchChars") (EApp (EMethodRef "toList") (EApp (EVar "toChars") (EVar "p")))) (EApp (EMethodRef "toList") (EApp (EVar "toChars") (EVar "d")))) (EApp (EApp (EVar "reachSegments") (EVar "ps")) (EVar "ds"))))
 (DTypeSig false "matchChars" (TyFun (TyApp (TyCon "List") (TyCon "Char")) (TyFun (TyApp (TyCon "List") (TyCon "Char")) (TyCon "Bool"))))
 (DFunDef false "matchChars" ((PVar "pat") (PVar "cs")) (EApp (EApp (EVar "matchRun") (EApp (EVar "closeStars") (EListLit (EApp (EVar "collapseStars") (EVar "pat"))))) (EVar "cs")))
 (DTypeSig false "collapseStars" (TyFun (TyApp (TyCon "List") (TyCon "Char")) (TyApp (TyCon "List") (TyCon "Char"))))

@@ -1,7 +1,7 @@
 import frontend.parse_locate.{locateOffset, locateTokenDiagnostic}
 import frontend.parse_hints.{
-  prescanDiagnostic, matchContinuationHint, letMutRemovedMsg, isLineEndTok,
-  isBracketOpenTok, isBracketCloseTok
+  prescanDiagnostic, matchContinuationHint, rawLiteralAfterDot,
+  letMutRemovedMsg, isLineEndTok, isBracketOpenTok, isBracketCloseTok
 }
 import frontend.parse_engine.{
   PR(..), PFail(..), ParserE(..), Parser, ParseContext, ParseMark,
@@ -4760,25 +4760,11 @@ parseSourcePairsWithIndex src tokList offPairs index =
         PErr f pos =>
           Err
             (parseErrorDiagnostic
-              (mkLocated
-                index
-                toks
-                offs
-                ends
-                (stringLength src)
-                (failProblem f)
-                pos))
+              (mkLocated src index toks offs ends (failProblem f) pos))
         PFatal f pos =>
           Err
             (parseErrorDiagnostic
-              (mkLocated
-                index
-                toks
-                offs
-                ends
-                (stringLength src)
-                (failProblem f)
-                pos))
+              (mkLocated src index toks offs ends (failProblem f) pos))
 
 export
 parseDeclAt : ParseContext -> Int -> PR Decl
@@ -4849,10 +4835,10 @@ resultDeclsResult : ParseContext ->
   Int ->
   PR (List Decl) ->
   Result ParseError (List Decl)
-resultDeclsResult _ _ index toks offs ends srcLen (PErr f pos) =
-  Err (mkLocated index toks offs ends srcLen (failProblem f) pos)
-resultDeclsResult _ _ index toks offs ends srcLen (PFatal f pos) =
-  Err (mkLocated index toks offs ends srcLen (failProblem f) pos)
+resultDeclsResult _ src index toks offs ends _ (PErr f pos) =
+  Err (mkLocated src index toks offs ends (failProblem f) pos)
+resultDeclsResult _ src index toks offs ends _ (PFatal f pos) =
+  Err (mkLocated src index toks offs ends (failProblem f) pos)
 resultDeclsResult ctx src index toks offs ends srcLen (POk ds pos)
   | isEofTok (peekTok toks pos) = Ok ds
   | otherwise = Err (deepenLeftover ctx src index toks offs ends srcLen pos)
@@ -4871,29 +4857,42 @@ deepenLeftover ctx src index toks offs ends srcLen pos =
   let result = runPWith ctx parseDecl pos
   rewind saved
   match result
-    PFatal f pos2 => mkLocated index toks offs ends srcLen (failProblem f) pos2
+    PFatal f pos2 => mkLocated src index toks offs ends (failProblem f) pos2
     PErr f pos2 if pos2 > pos =>
-      mkLocated index toks offs ends srcLen (failProblem f) pos2
+      mkLocated src index toks offs ends (failProblem f) pos2
     _ =>
       mkLocated
+        src
         index
         toks
         offs
         ends
-        srcLen
         (GenericParse (unexpectedLeftoverMsg src toks offs srcLen pos))
         pos
 
-mkLocated : (Unit -> SourceIndex) ->
+mkLocated : String ->
+  (Unit -> SourceIndex) ->
   Array Token ->
   Array Int ->
   Array Int ->
-  Int ->
   ParseDiagnosticKind ->
   Int ->
   ParseError
-mkLocated index toks offs ends srcLen kind pos =
-  ParseError (locateTokenDiagnostic index toks offs ends srcLen kind pos)
+mkLocated src index toks offs ends kind pos =
+  let srcLen = stringLength src
+  match rawLiteralAfterDot src toks offs pos
+    Some lit =>
+      ParseError
+        (locateTokenDiagnostic
+          index
+          toks
+          offs
+          ends
+          srcLen
+          RawStringAfterDot
+          lit)
+    None =>
+      ParseError (locateTokenDiagnostic index toks offs ends srcLen kind pos)
 
 -- Is the char at `offset` the first non-whitespace character on its line?  If
 -- so, return `Some col` where `col` is its (0-based, tab-not-expanded — same

@@ -17,10 +17,10 @@ import support.ordmap.{OrdMap, omEmpty, omHasKey, omInsert, omKeys, omLookup}
 import support.util.{joinNl, joinWith, splitNl, listLen, reverseL}
 import string.{toInt}
 import tools.probe_transcript.{
-  Chunk(..), Section(..), chunksOf, decodeValue, endTag, firstNonEmptyLine,
-  mintNonce, freshProbeNonce, noncedPrefix, probeNameNonce, renameUserMain,
-  runtimeAlias, runtimeDependencyName, runtimeDependencyPrefix, sentinelLine,
-  startTag, tagsInOrder, valuePrintExprWith
+  runUnderSeed, Chunk(..), Section(..), chunksOf, decodeValue, endTag,
+  firstNonEmptyLine, mintNonce, freshProbeNonce, noncedPrefix, probeNameNonce,
+  renameUserMain, runtimeAlias, runtimeDependencyName, runtimeDependencyPrefix,
+  sentinelLine, startTag, tagsInOrder, valuePrintExprWith
 }
 import tools.printer.{exprToString, ppTy}
 import tools.prop_plan.{
@@ -448,7 +448,7 @@ buildAndRunPlanned target entry out tmp jobs nonce =
       Err
         (NativeBuildFailure
           "native property runner: could not build \{target} natively\n\{ppBuildReport rep}")
-    Ok _ => match runCommand "env" [
+    Ok _ => match runUnderSeed [
       "MEDAKA_ROOT=" ++ root,
       "MEDAKA=" ++ medaka,
       "MEDAKA_EMITTER=" ++ emitter,

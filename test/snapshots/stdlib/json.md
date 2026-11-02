@@ -1,5 +1,5 @@
 # META
-source_lines=1026
+source_lines=1034
 stages=DESUGAR,MARK
 # SOURCE
 {- | A JSON value type with a parser and a serializer.
@@ -86,9 +86,13 @@ charOfCode k = optionOr ' ' (charFromCode k)
 
 -- `floatToString` can emit a trailing-dot form (e.g. `1000.0` → "1000.") which
 -- is not valid JSON (a number needs a digit after the point).  Append a `0` in
--- that case so serialized floats always re-parse.
+-- that case so serialized floats always re-parse. A non-finite float has no
+-- JSON number, so it is written as `null`. `f - f` is zero only for a finite
+-- `f`: it is NaN for an infinity and for a NaN.
 renderFloat : Float -> String
-renderFloat f = fixTrailingDot (floatToString f)
+renderFloat f
+  | f - f == 0.0 = fixTrailingDot (floatToString f)
+  | otherwise = "null"
 
 fixTrailingDot : String -> String
 fixTrailingDot s = fixTrailingDotGo s (stringToChars s)
@@ -165,12 +169,15 @@ objectPiecesInto pairs i acc
 {- | The value as compact JSON text, with no whitespace between tokens.
 
    Strings are escaped as JSON requires. A float always has a digit after
-   its decimal point, so the text parses again.
+   its decimal point, so the text parses again. A non-finite float comes back
+   as null, since JSON has no number for it.
 
    > stringify (jObject [("a", JInt 1), ("b", JString "hi")])
    "{\"a\":1,\"b\":\"hi\"}"
    > stringify (JFloat 1000.0)
    "1000.0"
+   > stringify (jArray [JFloat (1.0 / 0.0), JFloat (0.0 / 0.0)])
+   "[null,null]"
    > stringify (jObject [("a", jArray [JInt 1, jObject []]), ("b", JNull)])
    "{\"a\":[1,{}],\"b\":null}" -}
 export
@@ -184,8 +191,9 @@ stringify j = stringConcat (reverse (stringifyInto j []))
 
 -- ── Parsing (recursive descent over an Array Char + position) ────────────
 
--- JSON whitespace is *exactly* space, tab, LF, CR — stricter than
--- `string.isSpace` (which accepts other Unicode space chars), so it stays local.
+-- JSON whitespace is *exactly* space, tab, LF, CR (RFC 8259 section 2), a
+-- subset of what `string.isSpace` accepts, so the predicate is spec-bound and
+-- stays local.
 -- Same predicate as sqlite/lib/sqlite.mdk's isSpaceChar; not consolidated since
 -- sqlite shouldn't need to import all of json for one char check.
 isWs : Char -> Bool
@@ -863,10 +871,10 @@ prettyMembers n level pairs i acc
    Members keep their stored order, `": "` separates a key from its value,
    and empty arrays and objects stay on one line. The text has no trailing
    newline. An `n` of 0 still breaks lines, with no indentation. A non-finite
-   float is written as the word inf, -inf or nan, as `stringify` writes it, and
-   that text is not JSON. A float of magnitude `1e12` up to but not including
-   `1e16` prints in exponent form (`1e+12`, `1.5e+13`) where Python prints
-   `1000000000000.0`; `123456789012.0` and `999999999999.0` stay plain.
+   float comes back as null, since JSON has no number for it. A float of
+   magnitude `1e12` up to but not including `1e16` prints in exponent form
+   (`1e+12`, `1.5e+13`) where Python prints `1000000000000.0`; `123456789012.0`
+   and `999999999999.0` stay plain.
 
    > pretty 2 (jObject [("a", jArray [JInt 1, JInt 2]), ("b", jObject [])])
    "{\n  \"a\": [\n    1,\n    2\n  ],\n  \"b\": {}\n}" -}
@@ -1041,7 +1049,7 @@ prop "get finds an inserted key" (k : Int) (v : Int) =
 (DTypeSig false "charOfCode" (TyFun (TyCon "Int") (TyCon "Char")))
 (DFunDef false "charOfCode" ((PVar "k")) (EApp (EApp (EVar "optionOr") (ELit (LChar " "))) (EApp (EVar "charFromCode") (EVar "k"))))
 (DTypeSig false "renderFloat" (TyFun (TyCon "Float") (TyCon "String")))
-(DFunDef false "renderFloat" ((PVar "f")) (EApp (EVar "fixTrailingDot") (EApp (EVar "floatToString") (EVar "f"))))
+(DFunDef false "renderFloat" ((PVar "f")) (EIf (EBinOp "==" (EBinOp "-" (EVar "f") (EVar "f")) (ELit (LFloat 0.0))) (EApp (EVar "fixTrailingDot") (EApp (EVar "floatToString") (EVar "f"))) (EIf (EVar "otherwise") (ELit (LString "null")) (EApp (EVar "__fallthrough__") (ELit LUnit)))))
 (DTypeSig false "fixTrailingDot" (TyFun (TyCon "String") (TyCon "String")))
 (DFunDef false "fixTrailingDot" ((PVar "s")) (EApp (EApp (EVar "fixTrailingDotGo") (EVar "s")) (EApp (EVar "stringToChars") (EVar "s"))))
 (DTypeSig false "fixTrailingDotGo" (TyFun (TyCon "String") (TyFun (TyApp (TyCon "Array") (TyCon "Char")) (TyCon "String"))))
@@ -1292,7 +1300,7 @@ prop "get finds an inserted key" (k : Int) (v : Int) =
 (DTypeSig false "charOfCode" (TyFun (TyCon "Int") (TyCon "Char")))
 (DFunDef false "charOfCode" ((PVar "k")) (EApp (EApp (EVar "optionOr") (ELit (LChar " "))) (EApp (EVar "charFromCode") (EVar "k"))))
 (DTypeSig false "renderFloat" (TyFun (TyCon "Float") (TyCon "String")))
-(DFunDef false "renderFloat" ((PVar "f")) (EApp (EVar "fixTrailingDot") (EApp (EVar "floatToString") (EVar "f"))))
+(DFunDef false "renderFloat" ((PVar "f")) (EIf (EBinOp "==" (EBinOp "-" (EVar "f") (EVar "f")) (ELit (LFloat 0.0))) (EApp (EVar "fixTrailingDot") (EApp (EVar "floatToString") (EVar "f"))) (EIf (EVar "otherwise") (ELit (LString "null")) (EApp (EVar "__fallthrough__") (ELit LUnit)))))
 (DTypeSig false "fixTrailingDot" (TyFun (TyCon "String") (TyCon "String")))
 (DFunDef false "fixTrailingDot" ((PVar "s")) (EApp (EApp (EVar "fixTrailingDotGo") (EVar "s")) (EApp (EVar "stringToChars") (EVar "s"))))
 (DTypeSig false "fixTrailingDotGo" (TyFun (TyCon "String") (TyFun (TyApp (TyCon "Array") (TyCon "Char")) (TyCon "String"))))
