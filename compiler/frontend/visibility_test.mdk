@@ -8,7 +8,7 @@
 -- rules over `export import` hops are exercised through `resolve_test` and the
 -- module fixtures, not here.
 
-import test.{expectEach, expectEqual, expectFalse, expectTrue}
+import test.{Expectation, expectEach, expectEqual}
 import frontend.ast.{Decl, Loc(..), UseMember(..), UsePath(..)}
 import frontend.desugar.{desugar}
 import frontend.parser.{parse}
@@ -43,10 +43,10 @@ declOf src = match declsOf src
 
 -- A source's one declaration answers `p`; a source that does not parse to exactly
 -- one declaration is a failed row.
-answers : (Decl -> Bool) -> String -> Bool
-answers p src = match declOf src
+answers : Bool -> (Decl -> Bool) -> String -> Expectation
+answers expected p src = expectEqual expected (match declOf src
   Some d => p d
-  None => False
+  None => False)
 
 -- ── declExportsIn ─────────────────────────────────────────────────────────
 
@@ -54,21 +54,20 @@ test "a public or abstract type names itself in the type namespace, a private on
   [
     (
       "public",
-      expectTrue
-        (answers (declExportsIn nsTypes) "public export data T = A | B"),
+      answers True (declExportsIn nsTypes) "public export data T = A | B",
     ),
     (
       "abstract",
-      expectTrue (answers (declExportsIn nsTypes) "export data T = A | B"),
+      answers True (declExportsIn nsTypes) "export data T = A | B",
     ),
-    ("private", expectFalse (answers (declExportsIn nsTypes) "data T = A | B")),
+    ("private", answers False (declExportsIn nsTypes) "data T = A | B"),
   ]
 
 test "a declaration wrapped in an attribute is read raw, so it declares nothing" =
-  expectFalse
-    (answers
-      (declExportsIn nsTypes)
-      "@deprecated \"old\"\nexport data T = A | B")
+  answers
+    False
+    (declExportsIn nsTypes)
+    "@deprecated \"old\"\nexport data T = A | B"
 
 -- ── declExportsCtors ──────────────────────────────────────────────────────
 
@@ -76,17 +75,17 @@ test "only a public data type exports constructors, not an abstract one nor a ne
   [
     (
       "public",
-      expectTrue (answers declExportsCtors "public export data T = A | B"),
+      answers True declExportsCtors "public export data T = A | B",
     ),
     (
       "abstract",
-      expectFalse (answers declExportsCtors "export data T = A | B"),
+      answers False declExportsCtors "export data T = A | B",
     ),
     (
       "newtype",
-      expectFalse (answers declExportsCtors "export newtype W = W Int"),
+      answers False declExportsCtors "export newtype W = W Int",
     ),
-    ("private", expectFalse (answers declExportsCtors "data T = A | B")),
+    ("private", answers False declExportsCtors "data T = A | B"),
   ]
 
 -- ── exportedValueNames ────────────────────────────────────────────────────
@@ -208,15 +207,16 @@ subjectExports ExportedView =
 subjectExports FullView =
   fullExportsOf (coreExports []) libKnown "subj" (declsOf subjectSrc)
 
-isFull : ExportView -> Bool
-isFull FullView = True
-isFull ExportedView = False
+isFull : Bool -> ExportView -> Expectation
+isFull expected view = expectEqual expected (match view
+  FullView => True
+  ExportedView => False)
 
 test "only the importer whose subject a module is sees it in the full view" = expectEach
   [
-    ("the subject itself", expectTrue (isFull (viewOf (Some "subj") "subj"))),
-    ("another module", expectFalse (isFull (viewOf (Some "subj") "other"))),
-    ("an importer with no subject", expectFalse (isFull (viewOf None "subj"))),
+    ("the subject itself", isFull True (viewOf (Some "subj") "subj")),
+    ("another module", isFull False (viewOf (Some "subj") "other")),
+    ("an importer with no subject", isFull False (viewOf None "subj")),
   ]
 
 test "the full view holds what the exported view withholds" = expectEach [

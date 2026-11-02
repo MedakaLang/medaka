@@ -126,11 +126,13 @@ diagCode (Diag _ code _ _ _ _) = diagIdText code
 tripleDiags : (String, String, List Diag) -> List Diag
 tripleDiags (_, _, diags) = diags
 
-anyDupRuleDiag : List (String, String, List Diag) -> Bool
-anyDupRuleDiag triples =
-  anyList
-    (t => anyList (d => diagCode d == "rule-duplicate-body") (tripleDiags t))
-    triples
+anyDupRuleDiag : Bool -> List (String, String, List Diag) -> Expectation
+anyDupRuleDiag expected triples =
+  expectEqual
+    expected
+    (anyList
+      (t => anyList (d => diagCode d == "rule-duplicate-body") (tripleDiags t))
+      triples)
 
 -- (path, code, message) keys, sorted — a set representation two triple lists
 -- can be compared by, independent of file/rule ordering.
@@ -173,7 +175,7 @@ test "the old per-file-only triple builder never carries a duplicate-body findin
     Err _ => fail "could not build stdlib index"
     Ok idx =>
       let triples = lintFilesToDiagTriples idx True [] [] [] None fixtureFiles
-      expectTrue (not (anyDupRuleDiag triples))
+      anyDupRuleDiag False triples
 
 -- ── 2. the JSON path's own internals surface it ─────────────────────────────
 test "the JSON path's own internals surface the duplicate-body finding" =
@@ -184,7 +186,7 @@ test "the JSON path's own internals surface the duplicate-body finding" =
       let triples = map dropQuadParse quads
       let cross = projectJsonFindings idx True [] [] [] quads
       let merged = mergeProjectIntoTriples cross triples
-      expectTrue (anyDupRuleDiag merged)
+      anyDupRuleDiag True merged
 
 -- ── 3. renderer parity: JSON internals == MCP internals ─────────────────────
 test "the MCP path's own internals produce the SAME finding set as JSON" =

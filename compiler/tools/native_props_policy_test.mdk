@@ -6,7 +6,9 @@ import driver.build_cmd.{cleanupTempDir, makeTempDir}
 import json.{Json, asArray, asInt, asString, get, parse, stringify}
 import string.{contains, endsWith}
 import support.util.{listLen}
-import test.{Expectation, expectAll, expectEqual, expectTrue, fail, labelFail}
+import test.{
+  Expectation, expectAll, expectEqual, expectSatisfies, fail, labelFail
+}
 import test_process.{boundedVerbSeconds, medakaBin}
 import tools.native_fixture_test_support_test.{writeFixtureFiles}
 
@@ -66,24 +68,45 @@ warningText : String
 warningText =
   "WARNING: shrink fuel exhausted, counterexample may not be minimal"
 
-hasExpectedDetail : String -> Bool -> Json -> Bool
+hasExpectedDetail : String -> Bool -> Json -> Expectation
 hasExpectedDetail expectedDetail expectsWarning row = match field "detail" row
-  None => False
-  Some detail =>
-    endsWith expectedDetail detail
-      && contains warningText detail == expectsWarning
+  None => fail "the row carries no detail"
+  Some detail => expectAll [
+    labelFail
+      "detail ends with \{expectedDetail}"
+      (expectSatisfies
+        "ends with the expected detail"
+        (endsWith expectedDetail)
+        detail),
+    labelFail
+      "shrink-fuel warning present"
+      (expectEqual expectsWarning (contains warningText detail)),
+  ]
 
-lawFailureDetail : String -> String -> String -> Bool -> List Json -> Bool
+lawFailureDetail : String ->
+  String ->
+  String ->
+  Bool ->
+  List Json ->
+  Expectation
 lawFailureDetail engine name expectedDetail expectsWarning rows =
   match propertyRow engine name rows
-    None => False
+    None => fail "no \{engine} row named \{name}"
     Some row =>
-      field "status" row == Some "fail"
-        && field "rawStatus" row == Some "fail"
-        && field "failureKind" row == Some "law-false"
-        && intField "seed" row == Some 1
-        && intField "cases" row == Some 20
-        && hasExpectedDetail expectedDetail expectsWarning row
+      labelFail
+        "\{engine} \{name}"
+        (expectAll [
+          labelFail "status" (expectEqual (Some "fail") (field "status" row)),
+          labelFail
+            "rawStatus"
+            (expectEqual (Some "fail") (field "rawStatus" row)),
+          labelFail
+            "failureKind"
+            (expectEqual (Some "law-false") (field "failureKind" row)),
+          labelFail "seed" (expectEqual (Some 1) (intField "seed" row)),
+          labelFail "cases" (expectEqual (Some 20) (intField "cases" row)),
+          hasExpectedDetail expectedDetail expectsWarning row,
+        ])
 
 policyFixture : String
 policyFixture =
@@ -98,102 +121,53 @@ test "eval and native consume the shared structural shrink policy" = withFixture
       expectAll [
         labelFail (stringify report) (expectEqual 1 code),
         labelFail (stringify report) (expectEqual 14 (listLen rows)),
-        expectTrue
-          (lawFailureDetail
-            "eval"
-            "negative integer floor"
-            "n = -11"
-            False
-            rows),
-        expectTrue
-          (lawFailureDetail
-            "native"
-            "negative integer floor"
-            "n = -11"
-            False
-            rows),
-        expectTrue
-          (lawFailureDetail
-            "eval"
-            "positive integer floor"
-            "n = 11"
-            False
-            rows),
-        expectTrue
-          (lawFailureDetail
-            "native"
-            "positive integer floor"
-            "n = 11"
-            False
-            rows),
-        expectTrue
-          (lawFailureDetail
-            "eval"
-            "list integer floor"
-            "xs = [-11]"
-            False
-            rows),
-        expectTrue
-          (lawFailureDetail
-            "native"
-            "list integer floor"
-            "xs = [-11]"
-            False
-            rows),
-        expectTrue
-          (lawFailureDetail
-            "eval"
-            "array integer floor"
-            "xs = [-11]"
-            False
-            rows),
-        expectTrue
-          (lawFailureDetail
-            "native"
-            "array integer floor"
-            "xs = [|-11|]"
-            False
-            rows),
-        expectTrue
-          (lawFailureDetail
-            "eval"
-            "single nullary terminates"
-            "value = One()"
-            False
-            rows),
-        expectTrue
-          (lawFailureDetail
-            "native"
-            "single nullary terminates"
-            "value = One"
-            False
-            rows),
-        expectTrue
-          (lawFailureDetail
-            "eval"
-            "multiple nullaries terminate"
-            "value = First()"
-            False
-            rows),
-        expectTrue
-          (lawFailureDetail
-            "native"
-            "multiple nullaries terminate"
-            "value = First"
-            False
-            rows),
-        expectTrue
-          (lawFailureDetail
-            "eval"
-            "custom self cycle warns"
-            "value = Wrap(1) (WARNING: shrink fuel exhausted, counterexample may not be minimal — see #1307)"
-            True
-            rows),
-        expectTrue
-          (lawFailureDetail
-            "native"
-            "custom self cycle warns"
-            "value = Wrap (1) (WARNING: shrink fuel exhausted, counterexample may not be minimal — see #1307)"
-            True
-            rows),
+        lawFailureDetail "eval" "negative integer floor" "n = -11" False rows,
+        lawFailureDetail "native" "negative integer floor" "n = -11" False rows,
+        lawFailureDetail "eval" "positive integer floor" "n = 11" False rows,
+        lawFailureDetail "native" "positive integer floor" "n = 11" False rows,
+        lawFailureDetail "eval" "list integer floor" "xs = [-11]" False rows,
+        lawFailureDetail "native" "list integer floor" "xs = [-11]" False rows,
+        lawFailureDetail "eval" "array integer floor" "xs = [-11]" False rows,
+        lawFailureDetail
+          "native"
+          "array integer floor"
+          "xs = [|-11|]"
+          False
+          rows,
+        lawFailureDetail
+          "eval"
+          "single nullary terminates"
+          "value = One()"
+          False
+          rows,
+        lawFailureDetail
+          "native"
+          "single nullary terminates"
+          "value = One"
+          False
+          rows,
+        lawFailureDetail
+          "eval"
+          "multiple nullaries terminate"
+          "value = First()"
+          False
+          rows,
+        lawFailureDetail
+          "native"
+          "multiple nullaries terminate"
+          "value = First"
+          False
+          rows,
+        lawFailureDetail
+          "eval"
+          "custom self cycle warns"
+          "value = Wrap(1) (WARNING: shrink fuel exhausted, counterexample may not be minimal — see #1307)"
+          True
+          rows,
+        lawFailureDetail
+          "native"
+          "custom self cycle warns"
+          "value = Wrap (1) (WARNING: shrink fuel exhausted, counterexample may not be minimal — see #1307)"
+          True
+          rows,
       ])

@@ -18,8 +18,8 @@ import support.util.{lookupAssoc}
 import io.{runVerb}
 import string.{contains, indexOf, toInt, trim}
 import test.{
-  Expectation, expectAll, expectEqual, expectFalse, expectNotEqual, expectTrue,
-  fail, labelFail
+  Expectation, expectAll, expectEqual, expectFalse, expectLessThan,
+  expectNotEqual, expectTrue, fail, labelFail
 }
 import test_process.{medakaBin, underRoot, withScratchDir}
 
@@ -87,13 +87,15 @@ dirWithPassFailBroken dir = do
     "\{dir}/d_ok_test.mdk"
     "import test.{expectEqual}\n\ntest \"also fine\" = expectEqual (2 + 2) 4\n"
 
-appearsBefore : String -> String -> String -> Bool
+appearsBefore : String -> String -> String -> Expectation
 appearsBefore first second text = match (
   indexOf first text,
   indexOf second text,
 )
-  (Some i, Some j) => i < j
-  _ => False
+  (Some i, Some j) =>
+    labelFail "\{first} comes before \{second}" (expectLessThan j i)
+  (None, _) => fail "\{first} is absent"
+  _ => fail "\{second} is absent"
 
 dirRun : String -> String -> <Exec, IO> Result String (Int, String, String)
 dirRun jobs dir = runVerb "env" [
@@ -122,11 +124,10 @@ test "a directory run is the same serial or concurrent, in order, with death not
           (contains "c_broken_test.mdk: test runner died (child exited" e4),
         expectFalse (contains "a_ok_test.mdk: test runner died" e4),
         expectFalse (contains "d_ok_test.mdk: test runner died" e4),
-        expectTrue
-          (appearsBefore
-            "b_fail_test.mdk: test runner died"
-            "c_broken_test.mdk: test runner died"
-            e4),
+        appearsBefore
+          "b_fail_test.mdk: test runner died"
+          "c_broken_test.mdk: test runner died"
+          e4,
       ]
       _ => fail "could not spawn medaka test")
 
@@ -152,8 +153,8 @@ test "a slow first file still prints first under concurrent jobs" = withScratchD
         expectEqual c1 c4,
         expectEqual o1 o4,
         expectEqual e1 e4,
-        expectTrue (appearsBefore "slow one" "fast two" o4),
-        expectTrue (appearsBefore "fast two" "fast three" o4),
+        appearsBefore "slow one" "fast two" o4,
+        appearsBefore "fast two" "fast three" o4,
       ]
       _ => fail "could not spawn medaka test")
 

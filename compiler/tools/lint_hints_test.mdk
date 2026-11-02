@@ -2,7 +2,8 @@
 -- an error, and the matcher's metavariable, side-condition and nesting rules.
 
 import test.{
-  expectEach, expectEqual, expectErr, expectOk, expectTrue, expectFalse
+  Expectation, expectEach, expectEqual, expectErr, expectFalse, expectOk,
+  expectTrue
 }
 import frontend.ast.{Decl(..), Expr}
 import frontend.parser.{parseResult}
@@ -33,9 +34,9 @@ subjectOf text = match parseResult ("x = " ++ text ++ "\n")
   _ => panic ("probe does not parse: " ++ text)
 
 -- Whether the row matches the subject at its root.
-matches : String -> List HintCond -> String -> Bool
-matches rowText conds subject = match compileHint (rowOf rowText conds)
-  Ok h => isSome (matchHint h (subjectOf subject))
+matches : Bool -> String -> List HintCond -> String -> Expectation
+matches expected rowText conds subject = match compileHint (rowOf rowText conds)
+  Ok h => expectEqual expected (isSome (matchHint h (subjectOf subject)))
   Err m => panic m
 
 declCtx : String -> Bool -> Ctx
@@ -75,28 +76,28 @@ test "a row that does not compile is an error, not a no-op" = expectEach [
 ]
 
 test "a repeated metavariable needs equal subexpressions" = expectEach [
-  ("same names", expectTrue (matches "f a a ==> a" [] "g x x")),
-  ("different names", expectFalse (matches "f a a ==> a" [] "g x y")),
+  ("same names", matches True "f a a ==> a" [] "g x x"),
+  ("different names", matches False "f a a ==> a" [] "g x y"),
   (
     "equal applications",
-    expectTrue (matches "f a a ==> a" [] "g (h x) (h x)"),
+    matches True "f a a ==> a" [] "g (h x) (h x)",
   ),
   (
     "unequal applications",
-    expectFalse (matches "f a a ==> a" [] "g (h x) (h y)"),
+    matches False "f a a ==> a" [] "g (h x) (h y)",
   ),
   (
     "brackets are not structure",
-    expectTrue (matches "f a a ==> a" [] "g x (x)"),
+    matches True "f a a ==> a" [] "g x (x)",
   ),
 ]
 
 test "a literal name matches only that name, a metavariable anything" = expectEach
   [
-    ("literal", expectTrue (matches "neg (neg a) ==> a" [] "neg (neg y)")),
-    ("other name", expectFalse (matches "neg (neg a) ==> a" [] "pos (neg y)")),
-    ("operator", expectFalse (matches "not (a == b) ==> a" [] "not (a /= b)")),
-    ("operands", expectTrue (matches "not (a == b) ==> a" [] "not (1 == y z)")),
+    ("literal", matches True "neg (neg a) ==> a" [] "neg (neg y)"),
+    ("other name", matches False "neg (neg a) ==> a" [] "pos (neg y)"),
+    ("operator", matches False "not (a == b) ==> a" [] "not (a /= b)"),
+    ("operands", matches True "not (a == b) ==> a" [] "not (1 == y z)"),
   ]
 
 test "a head name is recorded for the prelude check" =
@@ -107,12 +108,12 @@ test "a head name is recorded for the prelude check" =
     Err m => panic m
 
 test "an atomic condition admits names and literals only" = expectEach [
-  ("name", expectTrue (matches "pick a b ==> a" [Atomic "b"] "pick x y")),
-  ("literal", expectTrue (matches "pick a b ==> a" [Atomic "b"] "pick x 1")),
-  ("call", expectFalse (matches "pick a b ==> a" [Atomic "b"] "pick x (g y)")),
+  ("name", matches True "pick a b ==> a" [Atomic "b"] "pick x y"),
+  ("literal", matches True "pick a b ==> a" [Atomic "b"] "pick x 1"),
+  ("call", matches False "pick a b ==> a" [Atomic "b"] "pick x (g y)"),
   (
     "other operand free",
-    expectTrue (matches "pick a b ==> a" [Atomic "b"] "pick (g x) 1"),
+    matches True "pick a b ==> a" [Atomic "b"] "pick (g x) 1",
   ),
 ]
 

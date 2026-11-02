@@ -14,7 +14,9 @@ import frontend.parser.{parseLocated}
 import frontend.resolve.{resErrorCode, resolveProgram}
 import list.{filter, indexed, lookup, nub, reverse, sort, zip}
 import string.{isUpper, join, split, toChars}
-import test.{expectAll, expectAtLeast, expectEqual, expectFalse, expectTrue}
+import test.{
+  Expectation, expectAll, expectAtLeast, expectEqual, expectFalse, expectTrue
+}
 import types.law_harness_test.{
   Verdict(..),
   alphaEquiv,
@@ -459,6 +461,10 @@ fitsRigid MAny _ = True
 fitsRigid MErr _ = False
 fitsRigid body declared = body == declared
 
+expectFitsRigid : Bool -> MT -> MT -> Expectation
+expectFitsRigid expected body declared =
+  expectEqual expected (fitsRigid body declared)
+
 vFits : VBody -> Bool
 vFits VKv = False
 vFits _ = True
@@ -697,11 +703,11 @@ test "the identity model's distinct pairs disagree with a model that conflates t
 
 test "the W3 model holds both binders' b apart and rejects a pinned or laundering body" = expectAll
   [
-    expectFalse (fitsRigid (bodyMT WBoxB EX) (declaredMT WBoxB RBoxVarB)),
-    expectTrue (fitsRigid (bodyMT WBoxB EY) (declaredMT WBoxB RVarB)),
-    expectFalse (fitsRigid (bodyMT WBoxC EBoxInt) (declaredMT WBoxC RHead)),
-    expectFalse (fitsRigid (bodyMT WInt EUnboxX) (declaredMT WInt RHead)),
-    expectTrue (fitsRigid (bodyMT WInt EAny) (declaredMT WInt RVarB)),
+    expectFitsRigid False (bodyMT WBoxB EX) (declaredMT WBoxB RBoxVarB),
+    expectFitsRigid True (bodyMT WBoxB EY) (declaredMT WBoxB RVarB),
+    expectFitsRigid False (bodyMT WBoxC EBoxInt) (declaredMT WBoxC RHead),
+    expectFitsRigid False (bodyMT WInt EUnboxX) (declaredMT WInt RHead),
+    expectFitsRigid True (bodyMT WInt EAny) (declaredMT WInt RVarB),
     expectEqual Rejected (w3Verdict WInt RNum EInt VKv),
     expectEqual Rejected (fst (checkFlat (w3Program WBoxB RBoxVarB EX VK))),
   ]
