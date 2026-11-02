@@ -87,6 +87,21 @@ modSource = joinWith "\n" [
   "",
 ]
 
+-- Module sources that export one function `f` of the given type.
+intId : String
+intId = """
+export
+f : Int -> Int
+f x = x
+"""
+
+stringId : String
+stringId = """
+export
+f : String -> String
+f x = x
+"""
+
 parseRows : String -> String -> List IndexRow
 parseRows modId src = match lintParseSource src
   Ok (decls, _) => rowsOfDecls modId decls
@@ -226,8 +241,8 @@ test "a type and a constructor of the same name do not collide" =
   ]
 
 test "ambiguity is kept: every module's candidate is returned" =
-  let a = parseRows "a" "export\nf : Int -> Int\nf x = x\n"
-  let b = parseRows "b" "export\nf : String -> String\nf x = x\n"
+  let a = parseRows "a" intId
+  let b = parseRows "b" stringId
   let idx = mkProjectIndex (a ++ b) []
   expectEach [
     (
@@ -241,8 +256,8 @@ test "ambiguity is kept: every module's candidate is returned" =
   ]
 
 test "the project and stdlib scopes are kept apart" =
-  let std = parseRows "list" "export\nf : Int -> Int\nf x = x\n"
-  let proj = parseRows "p" "export\nf : String -> String\nf x = x\n"
+  let std = parseRows "list" intId
+  let proj = parseRows "p" stringId
   let idx = mkProjectIndex std proj
   expectEach [
     (
@@ -319,9 +334,20 @@ test "a decoded signature stays text until it is asked for" =
         _ => fail "the signature was decoded eagerly"
 
 test "the digest ignores positions and follows signatures" =
-  let base = parseRows "m" "export\nf : Int -> Int\nf x = x\n"
-  let moved = parseRows "m" "\n\n\nexport\nf : Int -> Int\nf x = x + 1\n"
-  let changed = parseRows "m" "export\nf : Int -> String\nf x = x\n"
+  let base = parseRows "m" intId
+  let moved = parseRows "m" """
+
+
+
+export
+f : Int -> Int
+f x = x + 1
+"""
+  let changed = parseRows "m" """
+export
+f : Int -> String
+f x = x
+"""
   expectEach [
     (
       "a body edit that moves lines keeps the digest",
@@ -695,23 +721,13 @@ stampCase dir =
     ),
     (
       "it answers for the newer stamp",
-      decodesText True "stamp-2/x" src hash text,
+      expectOkThen (decodes "stamp-2/x" src hash) text,
     ),
     (
       "and no longer for the older",
-      decodesText False "stamp-1/x" src hash text,
+      expectOkThen (doesNotDecode "stamp-1/x" src hash) text,
     ),
   ]
-
-decodesText : Bool ->
-  String ->
-  String ->
-  String ->
-  Result String String ->
-  Expectation
-decodesText expected stamp path hash shard = expectEqual expected (match shard
-  Ok text => isSome (decodeRowShard stamp path hash text)
-  Err _ => False)
 
 test "a shard names its path, so a shard of another path is not served" =
   let a = "/p/one/m.mdk"

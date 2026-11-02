@@ -325,14 +325,6 @@ stripAtom a = { a | eatLoc = None }
 stripConstraint : Constraint -> Constraint
 stripConstraint c = { c | constraintArgs = map stripTy c.constraintArgs }
 
--- Rows whose module is visible from outside: the stdlib as a user sees it.
-export
-exportedRows : List IndexRow -> List IndexRow
-exportedRows rows = filterList rowIsExported rows
-
-rowIsExported : IndexRow -> Bool
-rowIsExported r = r.ixrExported
-
 -- The rows the stdlib scope keeps: the exported ones, plus the host primitives
 -- of `runtime`.  A primitive is in scope in every program though `runtime.mdk`
 -- does not export it, so a call to one has a declared signature to read.  Its
@@ -561,7 +553,7 @@ rowContentHash src = hashStringHex src
 -- A file's rows and their digest, from its shard when the shard answers for
 -- this exact content, else from a parse (and the shard is rewritten).  `Err`
 -- carries the source and the parse error for the caller's diagnostic.  An
--- unreadable file has no rows.  `dir` "" means no cache.  `exportedOnly` keeps
+-- unreadable file has no rows.  `dir` "" means no cache.  `stdlibScope` keeps
 -- the exported rows and the `runtime` primitives, in the shard and in the result.
 export
 fileRows : Bool ->
@@ -571,11 +563,11 @@ fileRows : Bool ->
   String ->
   String ->
   <IO> Result (String, ParseError) (String, List IndexRow)
-fileRows exportedOnly parse dir stamp modId path = match readFile path
+fileRows stdlibScope parse dir stamp modId path = match readFile path
   Err _ => Ok ("", [])
   Ok src =>
     let hash = rowContentHash src
-    let shardStamp = if exportedOnly then "\{stamp}/x" else stamp
+    let shardStamp = if stdlibScope then "\{stamp}/x" else stamp
     let sp = rowShardPath dir path
     let cached =
       if dir == "" then
@@ -589,7 +581,7 @@ fileRows exportedOnly parse dir stamp modId path = match readFile path
         Err e => Err (src, e)
         Ok (decls, _) =>
           let all = map (atPath path) (rowsOfDecls modId decls)
-          let rows = if exportedOnly then stdlibKeptRows all else all
+          let rows = if stdlibScope then stdlibKeptRows all else all
           let _ =
             if dir == "" then
               ()
@@ -603,6 +595,8 @@ atPath path r = match r.ixrLoc
   Some (Loc _ a b c d) => { r | ixrLoc = Some (Loc path a b c d) }
   None => r
 
+-- The cache is best-effort: a shard that cannot be written is a miss on the
+-- next run, so a failed `mkdirAll` or `makeStagingDir` is skipped silently.
 writeShard : String -> String -> String -> <IO> Unit
 writeShard dir sp text = match mkdirAll dir
   Err _ => ()

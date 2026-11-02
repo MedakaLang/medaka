@@ -1,5 +1,5 @@
 # META
-source_lines=1060
+source_lines=1054
 stages=DESUGAR,MARK
 # SOURCE
 -- The declaration index lint rules query about modules other than the one they
@@ -329,14 +329,6 @@ stripAtom a = { a | eatLoc = None }
 stripConstraint : Constraint -> Constraint
 stripConstraint c = { c | constraintArgs = map stripTy c.constraintArgs }
 
--- Rows whose module is visible from outside: the stdlib as a user sees it.
-export
-exportedRows : List IndexRow -> List IndexRow
-exportedRows rows = filterList rowIsExported rows
-
-rowIsExported : IndexRow -> Bool
-rowIsExported r = r.ixrExported
-
 -- The rows the stdlib scope keeps: the exported ones, plus the host primitives
 -- of `runtime`.  A primitive is in scope in every program though `runtime.mdk`
 -- does not export it, so a call to one has a declared signature to read.  Its
@@ -565,7 +557,7 @@ rowContentHash src = hashStringHex src
 -- A file's rows and their digest, from its shard when the shard answers for
 -- this exact content, else from a parse (and the shard is rewritten).  `Err`
 -- carries the source and the parse error for the caller's diagnostic.  An
--- unreadable file has no rows.  `dir` "" means no cache.  `exportedOnly` keeps
+-- unreadable file has no rows.  `dir` "" means no cache.  `stdlibScope` keeps
 -- the exported rows and the `runtime` primitives, in the shard and in the result.
 export
 fileRows : Bool ->
@@ -575,11 +567,11 @@ fileRows : Bool ->
   String ->
   String ->
   <IO> Result (String, ParseError) (String, List IndexRow)
-fileRows exportedOnly parse dir stamp modId path = match readFile path
+fileRows stdlibScope parse dir stamp modId path = match readFile path
   Err _ => Ok ("", [])
   Ok src =>
     let hash = rowContentHash src
-    let shardStamp = if exportedOnly then "\{stamp}/x" else stamp
+    let shardStamp = if stdlibScope then "\{stamp}/x" else stamp
     let sp = rowShardPath dir path
     let cached =
       if dir == "" then
@@ -593,7 +585,7 @@ fileRows exportedOnly parse dir stamp modId path = match readFile path
         Err e => Err (src, e)
         Ok (decls, _) =>
           let all = map (atPath path) (rowsOfDecls modId decls)
-          let rows = if exportedOnly then stdlibKeptRows all else all
+          let rows = if stdlibScope then stdlibKeptRows all else all
           let _ =
             if dir == "" then
               ()
@@ -607,6 +599,8 @@ atPath path r = match r.ixrLoc
   Some (Loc _ a b c d) => { r | ixrLoc = Some (Loc path a b c d) }
   None => r
 
+-- The cache is best-effort: a shard that cannot be written is a miss on the
+-- next run, so a failed `mkdirAll` or `makeStagingDir` is skipped silently.
 writeShard : String -> String -> String -> <IO> Unit
 writeShard dir sp text = match mkdirAll dir
   Err _ => ()
@@ -1158,10 +1152,6 @@ localModOfKey key = match readQuery key
 (DFunDef false "stripAtom" ((PVar "a")) (ERecordUpdate (EVar "a") ((fa "eatLoc" (EVar "None")))))
 (DTypeSig false "stripConstraint" (TyFun (TyCon "Constraint") (TyCon "Constraint")))
 (DFunDef false "stripConstraint" ((PVar "c")) (ERecordUpdate (EVar "c") ((fa "constraintArgs" (EApp (EApp (EVar "map") (EVar "stripTy")) (EFieldAccess (EVar "c") "constraintArgs"))))))
-(DTypeSig true "exportedRows" (TyFun (TyApp (TyCon "List") (TyCon "IndexRow")) (TyApp (TyCon "List") (TyCon "IndexRow"))))
-(DFunDef false "exportedRows" ((PVar "rows")) (EApp (EApp (EVar "filterList") (EVar "rowIsExported")) (EVar "rows")))
-(DTypeSig false "rowIsExported" (TyFun (TyCon "IndexRow") (TyCon "Bool")))
-(DFunDef false "rowIsExported" ((PVar "r")) (EFieldAccess (EVar "r") "ixrExported"))
 (DTypeSig true "stdlibKeptRows" (TyFun (TyApp (TyCon "List") (TyCon "IndexRow")) (TyApp (TyCon "List") (TyCon "IndexRow"))))
 (DFunDef false "stdlibKeptRows" ((PVar "rows")) (EApp (EApp (EVar "filterList") (EVar "keptInStdlib")) (EVar "rows")))
 (DTypeSig false "keptInStdlib" (TyFun (TyCon "IndexRow") (TyCon "Bool")))
@@ -1223,7 +1213,7 @@ localModOfKey key = match readQuery key
 (DTypeSig false "rowContentHash" (TyFun (TyCon "String") (TyCon "String")))
 (DFunDef false "rowContentHash" ((PVar "src")) (EApp (EVar "hashStringHex") (EVar "src")))
 (DTypeSig true "fileRows" (TyFun (TyCon "Bool") (TyFun (TyFun (TyCon "String") (TyApp (TyApp (TyCon "Result") (TyCon "ParseError")) (TyTuple (TyApp (TyCon "List") (TyCon "Decl")) (TyCon "Positions")))) (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyCon "String") (TyEffect ("IO") None (TyApp (TyApp (TyCon "Result") (TyTuple (TyCon "String") (TyCon "ParseError"))) (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "IndexRow"))))))))))))
-(DFunDef false "fileRows" ((PVar "exportedOnly") (PVar "parse") (PVar "dir") (PVar "stamp") (PVar "modId") (PVar "path")) (EMatch (EApp (EVar "readFile") (EVar "path")) (arm (PCon "Err" PWild) () (EApp (EVar "Ok") (ETuple (ELit (LString "")) (EListLit)))) (arm (PCon "Ok" (PVar "src")) () (EBlock (DoLet false false (PVar "hash") (EApp (EVar "rowContentHash") (EVar "src"))) (DoLet false false (PVar "shardStamp") (EIf (EVar "exportedOnly") (EBinOp "++" (EBinOp "++" (ELit (LString "")) (EApp (EVar "display") (EVar "stamp"))) (ELit (LString "/x"))) (EVar "stamp"))) (DoLet false false (PVar "sp") (EApp (EApp (EVar "rowShardPath") (EVar "dir")) (EVar "path"))) (DoLet false false (PVar "cached") (EIf (EBinOp "==" (EVar "dir") (ELit (LString ""))) (EVar "None") (EMatch (EApp (EVar "readFile") (EVar "sp")) (arm (PCon "Ok" (PVar "text")) () (EApp (EApp (EApp (EApp (EVar "decodeRowShard") (EVar "shardStamp")) (EVar "path")) (EVar "hash")) (EVar "text"))) (arm (PCon "Err" PWild) () (EVar "None"))))) (DoExpr (EMatch (EVar "cached") (arm (PCon "Some" (PTuple PWild (PVar "digest") (PVar "rows"))) () (EApp (EVar "Ok") (ETuple (EVar "digest") (EVar "rows")))) (arm (PCon "None") () (EMatch (EApp (EVar "parse") (EVar "src")) (arm (PCon "Err" (PVar "e")) () (EApp (EVar "Err") (ETuple (EVar "src") (EVar "e")))) (arm (PCon "Ok" (PTuple (PVar "decls") PWild)) () (EBlock (DoLet false false (PVar "all") (EApp (EApp (EVar "map") (EApp (EVar "atPath") (EVar "path"))) (EApp (EApp (EVar "rowsOfDecls") (EVar "modId")) (EVar "decls")))) (DoLet false false (PVar "rows") (EIf (EVar "exportedOnly") (EApp (EVar "stdlibKeptRows") (EVar "all")) (EVar "all"))) (DoLet false false PWild (EIf (EBinOp "==" (EVar "dir") (ELit (LString ""))) (ELit LUnit) (EApp (EApp (EApp (EVar "writeShard") (EVar "dir")) (EVar "sp")) (EApp (EApp (EApp (EApp (EApp (EVar "encodeRowShard") (EVar "shardStamp")) (EVar "path")) (EVar "hash")) (EVar "modId")) (EVar "rows"))))) (DoExpr (EApp (EVar "Ok") (ETuple (EApp (EVar "rowsDigest") (EVar "rows")) (EVar "rows"))))))))))))))
+(DFunDef false "fileRows" ((PVar "stdlibScope") (PVar "parse") (PVar "dir") (PVar "stamp") (PVar "modId") (PVar "path")) (EMatch (EApp (EVar "readFile") (EVar "path")) (arm (PCon "Err" PWild) () (EApp (EVar "Ok") (ETuple (ELit (LString "")) (EListLit)))) (arm (PCon "Ok" (PVar "src")) () (EBlock (DoLet false false (PVar "hash") (EApp (EVar "rowContentHash") (EVar "src"))) (DoLet false false (PVar "shardStamp") (EIf (EVar "stdlibScope") (EBinOp "++" (EBinOp "++" (ELit (LString "")) (EApp (EVar "display") (EVar "stamp"))) (ELit (LString "/x"))) (EVar "stamp"))) (DoLet false false (PVar "sp") (EApp (EApp (EVar "rowShardPath") (EVar "dir")) (EVar "path"))) (DoLet false false (PVar "cached") (EIf (EBinOp "==" (EVar "dir") (ELit (LString ""))) (EVar "None") (EMatch (EApp (EVar "readFile") (EVar "sp")) (arm (PCon "Ok" (PVar "text")) () (EApp (EApp (EApp (EApp (EVar "decodeRowShard") (EVar "shardStamp")) (EVar "path")) (EVar "hash")) (EVar "text"))) (arm (PCon "Err" PWild) () (EVar "None"))))) (DoExpr (EMatch (EVar "cached") (arm (PCon "Some" (PTuple PWild (PVar "digest") (PVar "rows"))) () (EApp (EVar "Ok") (ETuple (EVar "digest") (EVar "rows")))) (arm (PCon "None") () (EMatch (EApp (EVar "parse") (EVar "src")) (arm (PCon "Err" (PVar "e")) () (EApp (EVar "Err") (ETuple (EVar "src") (EVar "e")))) (arm (PCon "Ok" (PTuple (PVar "decls") PWild)) () (EBlock (DoLet false false (PVar "all") (EApp (EApp (EVar "map") (EApp (EVar "atPath") (EVar "path"))) (EApp (EApp (EVar "rowsOfDecls") (EVar "modId")) (EVar "decls")))) (DoLet false false (PVar "rows") (EIf (EVar "stdlibScope") (EApp (EVar "stdlibKeptRows") (EVar "all")) (EVar "all"))) (DoLet false false PWild (EIf (EBinOp "==" (EVar "dir") (ELit (LString ""))) (ELit LUnit) (EApp (EApp (EApp (EVar "writeShard") (EVar "dir")) (EVar "sp")) (EApp (EApp (EApp (EApp (EApp (EVar "encodeRowShard") (EVar "shardStamp")) (EVar "path")) (EVar "hash")) (EVar "modId")) (EVar "rows"))))) (DoExpr (EApp (EVar "Ok") (ETuple (EApp (EVar "rowsDigest") (EVar "rows")) (EVar "rows"))))))))))))))
 (DTypeSig false "atPath" (TyFun (TyCon "String") (TyFun (TyCon "IndexRow") (TyCon "IndexRow"))))
 (DFunDef false "atPath" ((PVar "path") (PVar "r")) (EMatch (EFieldAccess (EVar "r") "ixrLoc") (arm (PCon "Some" (PCon "Loc" PWild (PVar "a") (PVar "b") (PVar "c") (PVar "d"))) () (ERecordUpdate (EVar "r") ((fa "ixrLoc" (EApp (EVar "Some") (EApp (EApp (EApp (EApp (EApp (EVar "Loc") (EVar "path")) (EVar "a")) (EVar "b")) (EVar "c")) (EVar "d"))))))) (arm (PCon "None") () (EVar "r"))))
 (DTypeSig false "writeShard" (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyCon "String") (TyEffect ("IO") None (TyCon "Unit"))))))
@@ -1460,10 +1450,6 @@ localModOfKey key = match readQuery key
 (DFunDef false "stripAtom" ((PVar "a")) (ERecordUpdate (EVar "a") ((fa "eatLoc" (EVar "None")))))
 (DTypeSig false "stripConstraint" (TyFun (TyCon "Constraint") (TyCon "Constraint")))
 (DFunDef false "stripConstraint" ((PVar "c")) (ERecordUpdate (EVar "c") ((fa "constraintArgs" (EApp (EApp (EMethodRef "map") (EVar "stripTy")) (EFieldAccess (EVar "c") "constraintArgs"))))))
-(DTypeSig true "exportedRows" (TyFun (TyApp (TyCon "List") (TyCon "IndexRow")) (TyApp (TyCon "List") (TyCon "IndexRow"))))
-(DFunDef false "exportedRows" ((PVar "rows")) (EApp (EApp (EVar "filterList") (EVar "rowIsExported")) (EVar "rows")))
-(DTypeSig false "rowIsExported" (TyFun (TyCon "IndexRow") (TyCon "Bool")))
-(DFunDef false "rowIsExported" ((PVar "r")) (EFieldAccess (EVar "r") "ixrExported"))
 (DTypeSig true "stdlibKeptRows" (TyFun (TyApp (TyCon "List") (TyCon "IndexRow")) (TyApp (TyCon "List") (TyCon "IndexRow"))))
 (DFunDef false "stdlibKeptRows" ((PVar "rows")) (EApp (EApp (EVar "filterList") (EVar "keptInStdlib")) (EVar "rows")))
 (DTypeSig false "keptInStdlib" (TyFun (TyCon "IndexRow") (TyCon "Bool")))
@@ -1525,7 +1511,7 @@ localModOfKey key = match readQuery key
 (DTypeSig false "rowContentHash" (TyFun (TyCon "String") (TyCon "String")))
 (DFunDef false "rowContentHash" ((PVar "src")) (EApp (EVar "hashStringHex") (EVar "src")))
 (DTypeSig true "fileRows" (TyFun (TyCon "Bool") (TyFun (TyFun (TyCon "String") (TyApp (TyApp (TyCon "Result") (TyCon "ParseError")) (TyTuple (TyApp (TyCon "List") (TyCon "Decl")) (TyCon "Positions")))) (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyCon "String") (TyEffect ("IO") None (TyApp (TyApp (TyCon "Result") (TyTuple (TyCon "String") (TyCon "ParseError"))) (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "IndexRow"))))))))))))
-(DFunDef false "fileRows" ((PVar "exportedOnly") (PVar "parse") (PVar "dir") (PVar "stamp") (PVar "modId") (PVar "path")) (EMatch (EApp (EVar "readFile") (EVar "path")) (arm (PCon "Err" PWild) () (EApp (EVar "Ok") (ETuple (ELit (LString "")) (EListLit)))) (arm (PCon "Ok" (PVar "src")) () (EBlock (DoLet false false (PVar "hash") (EApp (EVar "rowContentHash") (EVar "src"))) (DoLet false false (PVar "shardStamp") (EIf (EVar "exportedOnly") (EBinOp "++" (EBinOp "++" (ELit (LString "")) (EApp (EMethodRef "display") (EVar "stamp"))) (ELit (LString "/x"))) (EVar "stamp"))) (DoLet false false (PVar "sp") (EApp (EApp (EVar "rowShardPath") (EVar "dir")) (EVar "path"))) (DoLet false false (PVar "cached") (EIf (EBinOp "==" (EVar "dir") (ELit (LString ""))) (EVar "None") (EMatch (EApp (EVar "readFile") (EVar "sp")) (arm (PCon "Ok" (PVar "text")) () (EApp (EApp (EApp (EApp (EVar "decodeRowShard") (EVar "shardStamp")) (EVar "path")) (EMethodRef "hash")) (EVar "text"))) (arm (PCon "Err" PWild) () (EVar "None"))))) (DoExpr (EMatch (EVar "cached") (arm (PCon "Some" (PTuple PWild (PVar "digest") (PVar "rows"))) () (EApp (EVar "Ok") (ETuple (EVar "digest") (EVar "rows")))) (arm (PCon "None") () (EMatch (EApp (EVar "parse") (EVar "src")) (arm (PCon "Err" (PVar "e")) () (EApp (EVar "Err") (ETuple (EVar "src") (EVar "e")))) (arm (PCon "Ok" (PTuple (PVar "decls") PWild)) () (EBlock (DoLet false false (PVar "all") (EApp (EApp (EMethodRef "map") (EApp (EVar "atPath") (EVar "path"))) (EApp (EApp (EVar "rowsOfDecls") (EVar "modId")) (EVar "decls")))) (DoLet false false (PVar "rows") (EIf (EVar "exportedOnly") (EApp (EVar "stdlibKeptRows") (EDictApp "all")) (EDictApp "all"))) (DoLet false false PWild (EIf (EBinOp "==" (EVar "dir") (ELit (LString ""))) (ELit LUnit) (EApp (EApp (EApp (EVar "writeShard") (EVar "dir")) (EVar "sp")) (EApp (EApp (EApp (EApp (EApp (EVar "encodeRowShard") (EVar "shardStamp")) (EVar "path")) (EMethodRef "hash")) (EVar "modId")) (EVar "rows"))))) (DoExpr (EApp (EVar "Ok") (ETuple (EApp (EVar "rowsDigest") (EVar "rows")) (EVar "rows"))))))))))))))
+(DFunDef false "fileRows" ((PVar "stdlibScope") (PVar "parse") (PVar "dir") (PVar "stamp") (PVar "modId") (PVar "path")) (EMatch (EApp (EVar "readFile") (EVar "path")) (arm (PCon "Err" PWild) () (EApp (EVar "Ok") (ETuple (ELit (LString "")) (EListLit)))) (arm (PCon "Ok" (PVar "src")) () (EBlock (DoLet false false (PVar "hash") (EApp (EVar "rowContentHash") (EVar "src"))) (DoLet false false (PVar "shardStamp") (EIf (EVar "stdlibScope") (EBinOp "++" (EBinOp "++" (ELit (LString "")) (EApp (EMethodRef "display") (EVar "stamp"))) (ELit (LString "/x"))) (EVar "stamp"))) (DoLet false false (PVar "sp") (EApp (EApp (EVar "rowShardPath") (EVar "dir")) (EVar "path"))) (DoLet false false (PVar "cached") (EIf (EBinOp "==" (EVar "dir") (ELit (LString ""))) (EVar "None") (EMatch (EApp (EVar "readFile") (EVar "sp")) (arm (PCon "Ok" (PVar "text")) () (EApp (EApp (EApp (EApp (EVar "decodeRowShard") (EVar "shardStamp")) (EVar "path")) (EMethodRef "hash")) (EVar "text"))) (arm (PCon "Err" PWild) () (EVar "None"))))) (DoExpr (EMatch (EVar "cached") (arm (PCon "Some" (PTuple PWild (PVar "digest") (PVar "rows"))) () (EApp (EVar "Ok") (ETuple (EVar "digest") (EVar "rows")))) (arm (PCon "None") () (EMatch (EApp (EVar "parse") (EVar "src")) (arm (PCon "Err" (PVar "e")) () (EApp (EVar "Err") (ETuple (EVar "src") (EVar "e")))) (arm (PCon "Ok" (PTuple (PVar "decls") PWild)) () (EBlock (DoLet false false (PVar "all") (EApp (EApp (EMethodRef "map") (EApp (EVar "atPath") (EVar "path"))) (EApp (EApp (EVar "rowsOfDecls") (EVar "modId")) (EVar "decls")))) (DoLet false false (PVar "rows") (EIf (EVar "stdlibScope") (EApp (EVar "stdlibKeptRows") (EDictApp "all")) (EDictApp "all"))) (DoLet false false PWild (EIf (EBinOp "==" (EVar "dir") (ELit (LString ""))) (ELit LUnit) (EApp (EApp (EApp (EVar "writeShard") (EVar "dir")) (EVar "sp")) (EApp (EApp (EApp (EApp (EApp (EVar "encodeRowShard") (EVar "shardStamp")) (EVar "path")) (EMethodRef "hash")) (EVar "modId")) (EVar "rows"))))) (DoExpr (EApp (EVar "Ok") (ETuple (EApp (EVar "rowsDigest") (EVar "rows")) (EVar "rows"))))))))))))))
 (DTypeSig false "atPath" (TyFun (TyCon "String") (TyFun (TyCon "IndexRow") (TyCon "IndexRow"))))
 (DFunDef false "atPath" ((PVar "path") (PVar "r")) (EMatch (EFieldAccess (EVar "r") "ixrLoc") (arm (PCon "Some" (PCon "Loc" PWild (PVar "a") (PVar "b") (PVar "c") (PVar "d"))) () (ERecordUpdate (EVar "r") ((fa "ixrLoc" (EApp (EVar "Some") (EApp (EApp (EApp (EApp (EApp (EVar "Loc") (EVar "path")) (EVar "a")) (EVar "b")) (EVar "c")) (EVar "d"))))))) (arm (PCon "None") () (EVar "r"))))
 (DTypeSig false "writeShard" (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyCon "String") (TyEffect ("IO") None (TyCon "Unit"))))))

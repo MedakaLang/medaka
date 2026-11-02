@@ -50,6 +50,7 @@ import test.{
   expectAll,
   expectEqual,
   expectEqualLines,
+  expectSatisfies,
   expectTextContainsAll,
   labelFail,
 }
@@ -116,13 +117,8 @@ sqlite3Args db args =
 sqlite3Query : String -> String -> <Exec, IO> Result String String
 sqlite3Query db sql = sqlite3Args db [sql]
 
-byteUnchanged : Bool -> Expectation
-byteUnchanged True = Pass "bit-for-bit unchanged" "bit-for-bit unchanged"
-byteUnchanged False =
-  Fail
-    "the database file was modified despite the Err"
-    "bit-for-bit unchanged"
-    "modified"
+unchangedProperty : String
+unchangedProperty = "the database file is bit-for-bit unchanged"
 
 -- # delete
 --
@@ -296,7 +292,7 @@ test "delete_negative: refused with the clean Err, and the database is untouched
       expectEqual
         "Error: cannot mutate: database has indexes (would be silently dropped)"
         r.deleteOut,
-      byteUnchanged r.bytesUnchanged,
+      expectSatisfies unchangedProperty (u => u) r.bytesUnchanged,
       expectEqual "ok" r.integrityCheck,
     ]
 
@@ -652,7 +648,7 @@ test "schema that is not UTF-8: a write refuses with exit 1 and leaves the file 
       expectTextContainsAll
         ["error: cannot mutate: the schema is not UTF-8:", "x'6EFF'"]
         r.output,
-      byteUnchanged r.unchanged,
+      expectSatisfies unchangedProperty (u => u) r.unchanged,
       expectEqual ["74", "6EFF"] r.names,
       expectEqual ["x"] r.cleanRows,
     ]
@@ -922,7 +918,7 @@ runRejections cli db = do
   Ok
     (expectAll [
       noFailures "reject" (flatLines failLists),
-      byteUnchanged (before == after),
+      expectSatisfies unchangedProperty (u => u) (before == after),
       expectEqual "ok" (trim ic),
     ])
 

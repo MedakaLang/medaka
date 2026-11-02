@@ -1,5 +1,5 @@
 # META
-source_lines=306
+source_lines=326
 stages=DESUGAR,MARK
 # SOURCE
 -- compiler/tools/lint_calls.mdk — the shared reader of a discarded call: given a
@@ -93,7 +93,7 @@ impl Debug Verdict where
   debug (Discard t) = "Discard (\{ppTy t})"
   debug (Abstain r) = "Abstain \{debug r}"
 
--- The head type constructor of a declared result, for the drains that sort
+-- The head type constructor of a declared result, for the rules that sort
 -- discards: `Unit`, `Result _ _`, `Option _`, anything else.
 public export data DiscardClass =
   | ClassUnit
@@ -180,6 +180,26 @@ discardVerdict : ProjectIndex -> FileScopes -> String -> DoStmt -> Verdict
 discardVerdict ix scopes file (DoLet _ _ PWild rhs _) =
   callVerdict ix scopes file rhs
 discardVerdict _ _ _ _ = Abstain NotADiscard
+
+-- The discard a rule may report: the statement's span, its right-hand side and
+-- the head type constructor of the declared result.  `None` for a statement
+-- that is not a discard, a call the index cannot vouch for, and a statement
+-- with a zero-width span.  A zero-width span (`noDeclLoc`, or the 1:0 span of
+-- the unlocated `parse` path) marks a statement with no source text, so there
+-- is nothing to point a finding at and no bytes for a fix to edit.
+export
+discardOf : ProjectIndex ->
+  FileScopes ->
+  String ->
+  DoStmt ->
+  Option (Loc, Expr, DiscardClass)
+discardOf ix scopes file (s@(DoLet _ _ PWild rhs (loc@(Loc _ sl sc el ec)))) =
+  if sl == el && sc == ec then
+    None
+  else match discardVerdict ix scopes file s
+    Discard ty => Some (loc, rhs, discardClass ty)
+    Abstain _ => None
+discardOf _ _ _ _ = None
 
 callVerdict : ProjectIndex -> FileScopes -> String -> Expr -> Verdict
 callVerdict ix scopes file e = match spine e 0
@@ -354,6 +374,9 @@ resultAfter n t
 (DTypeSig true "discardVerdict" (TyFun (TyCon "ProjectIndex") (TyFun (TyCon "FileScopes") (TyFun (TyCon "String") (TyFun (TyCon "DoStmt") (TyCon "Verdict"))))))
 (DFunDef false "discardVerdict" ((PVar "ix") (PVar "scopes") (PVar "file") (PCon "DoLet" PWild PWild (PCon "PWild") (PVar "rhs") PWild)) (EApp (EApp (EApp (EApp (EVar "callVerdict") (EVar "ix")) (EVar "scopes")) (EVar "file")) (EVar "rhs")))
 (DFunDef false "discardVerdict" (PWild PWild PWild PWild) (EApp (EVar "Abstain") (EVar "NotADiscard")))
+(DTypeSig true "discardOf" (TyFun (TyCon "ProjectIndex") (TyFun (TyCon "FileScopes") (TyFun (TyCon "String") (TyFun (TyCon "DoStmt") (TyApp (TyCon "Option") (TyTuple (TyCon "Loc") (TyCon "Expr") (TyCon "DiscardClass"))))))))
+(DFunDef false "discardOf" ((PVar "ix") (PVar "scopes") (PVar "file") (PAs "s" (PCon "DoLet" PWild PWild (PCon "PWild") (PVar "rhs") (PAs "loc" (PCon "Loc" PWild (PVar "sl") (PVar "sc") (PVar "el") (PVar "ec")))))) (EIf (EBinOp "&&" (EBinOp "==" (EVar "sl") (EVar "el")) (EBinOp "==" (EVar "sc") (EVar "ec"))) (EVar "None") (EMatch (EApp (EApp (EApp (EApp (EVar "discardVerdict") (EVar "ix")) (EVar "scopes")) (EVar "file")) (EVar "s")) (arm (PCon "Discard" (PVar "ty")) () (EApp (EVar "Some") (ETuple (EVar "loc") (EVar "rhs") (EApp (EVar "discardClass") (EVar "ty"))))) (arm (PCon "Abstain" PWild) () (EVar "None")))))
+(DFunDef false "discardOf" (PWild PWild PWild PWild) (EVar "None"))
 (DTypeSig false "callVerdict" (TyFun (TyCon "ProjectIndex") (TyFun (TyCon "FileScopes") (TyFun (TyCon "String") (TyFun (TyCon "Expr") (TyCon "Verdict"))))))
 (DFunDef false "callVerdict" ((PVar "ix") (PVar "scopes") (PVar "file") (PVar "e")) (EMatch (EApp (EApp (EVar "spine") (EVar "e")) (ELit (LInt 0))) (arm (PTuple (PVar "hd") (PLit (LInt 0))) () (EApp (EVar "Abstain") (EVar "NotACall"))) (arm (PTuple (PVar "hd") (PVar "n")) () (EMatch (EApp (EVar "unwrapLoc") (EVar "hd")) (arm (PCon "EVar" (PVar "name")) () (EApp (EApp (EApp (EApp (EApp (EApp (EVar "nameVerdict") (EVar "ix")) (EVar "scopes")) (EVar "file")) (EVar "name")) (EApp (EVar "siteOf") (EVar "hd"))) (EVar "n"))) (arm PWild () (EApp (EVar "Abstain") (EVar "HeadNotAName")))))))
 (DTypeSig false "spine" (TyFun (TyCon "Expr") (TyFun (TyCon "Int") (TyTuple (TyCon "Expr") (TyCon "Int")))))
@@ -444,6 +467,9 @@ resultAfter n t
 (DTypeSig true "discardVerdict" (TyFun (TyCon "ProjectIndex") (TyFun (TyCon "FileScopes") (TyFun (TyCon "String") (TyFun (TyCon "DoStmt") (TyCon "Verdict"))))))
 (DFunDef false "discardVerdict" ((PVar "ix") (PVar "scopes") (PVar "file") (PCon "DoLet" PWild PWild (PCon "PWild") (PVar "rhs") PWild)) (EApp (EApp (EApp (EApp (EVar "callVerdict") (EVar "ix")) (EVar "scopes")) (EVar "file")) (EVar "rhs")))
 (DFunDef false "discardVerdict" (PWild PWild PWild PWild) (EApp (EVar "Abstain") (EVar "NotADiscard")))
+(DTypeSig true "discardOf" (TyFun (TyCon "ProjectIndex") (TyFun (TyCon "FileScopes") (TyFun (TyCon "String") (TyFun (TyCon "DoStmt") (TyApp (TyCon "Option") (TyTuple (TyCon "Loc") (TyCon "Expr") (TyCon "DiscardClass"))))))))
+(DFunDef false "discardOf" ((PVar "ix") (PVar "scopes") (PVar "file") (PAs "s" (PCon "DoLet" PWild PWild (PCon "PWild") (PVar "rhs") (PAs "loc" (PCon "Loc" PWild (PVar "sl") (PVar "sc") (PVar "el") (PVar "ec")))))) (EIf (EBinOp "&&" (EBinOp "==" (EVar "sl") (EVar "el")) (EBinOp "==" (EVar "sc") (EVar "ec"))) (EVar "None") (EMatch (EApp (EApp (EApp (EApp (EVar "discardVerdict") (EVar "ix")) (EVar "scopes")) (EVar "file")) (EVar "s")) (arm (PCon "Discard" (PVar "ty")) () (EApp (EVar "Some") (ETuple (EVar "loc") (EVar "rhs") (EApp (EVar "discardClass") (EVar "ty"))))) (arm (PCon "Abstain" PWild) () (EVar "None")))))
+(DFunDef false "discardOf" (PWild PWild PWild PWild) (EVar "None"))
 (DTypeSig false "callVerdict" (TyFun (TyCon "ProjectIndex") (TyFun (TyCon "FileScopes") (TyFun (TyCon "String") (TyFun (TyCon "Expr") (TyCon "Verdict"))))))
 (DFunDef false "callVerdict" ((PVar "ix") (PVar "scopes") (PVar "file") (PVar "e")) (EMatch (EApp (EApp (EVar "spine") (EVar "e")) (ELit (LInt 0))) (arm (PTuple (PVar "hd") (PLit (LInt 0))) () (EApp (EVar "Abstain") (EVar "NotACall"))) (arm (PTuple (PVar "hd") (PVar "n")) () (EMatch (EApp (EVar "unwrapLoc") (EVar "hd")) (arm (PCon "EVar" (PVar "name")) () (EApp (EApp (EApp (EApp (EApp (EApp (EVar "nameVerdict") (EVar "ix")) (EVar "scopes")) (EVar "file")) (EVar "name")) (EApp (EVar "siteOf") (EVar "hd"))) (EVar "n"))) (arm PWild () (EApp (EVar "Abstain") (EVar "HeadNotAName")))))))
 (DTypeSig false "spine" (TyFun (TyCon "Expr") (TyFun (TyCon "Int") (TyTuple (TyCon "Expr") (TyCon "Int")))))
