@@ -421,6 +421,15 @@ drawTestSrc =
 drawMainSrc : String
 drawMainSrc = "main = println (intToString (randomInt 0 1000000000))\n"
 
+-- A test that draws, then panics with the draw as its message.
+panicTestSrc : String
+panicTestSrc =
+  "import test.{expectEqual}\n\ntest \"draws then panics\" =\n  let n = randomInt 0 1000000000\n  if n >= 0 then panic (intToString n) else expectEqual 1 1\n"
+
+-- A program that panics on its own, with no test runner around it.
+panicMainSrc : String
+panicMainSrc = "main = panic \"boom\"\n"
+
 passTestSrc : String
 passTestSrc = "import test.{expectEqual}\n\ntest \"fine\" = expectEqual 1 1\n"
 
@@ -593,6 +602,45 @@ test "a --json type-error refusal carries no seed" =
       expectEqual 1 code,
       expectEqual None (jsonMember "seed" out),
     ]))
+
+test "an eval-engine panic still prints the run's seed once" =
+  withFixtures
+    [("panic_test.mdk", panicTestSrc)]
+    (dir =>
+      let target = "\{dir}/panic_test.mdk"
+      withSpawn (seededTest (Some 7) [
+        "--engines",
+        "eval",
+        target,
+      ]) ((_, out, err) =>
+        let combined = "\{out}\n\{err}"
+        expectEqual 1 (length (seedLines (lines combined)))))
+
+test "an eval-engine panic in a directory still prints the run's seed once" =
+  withFixtures
+    [("panic_test.mdk", panicTestSrc)]
+    (dir => withSpawn (seededTest (Some 7) [
+      "--engines",
+      "eval",
+      dir,
+    ]) ((_, out, err) =>
+      let combined = "\{out}\n\{err}"
+      expectEqual 1 (length (seedLines (lines combined)))))
+
+test "a panicking medaka run prints no seed line, seeded" =
+  withFixtures
+    [("panic.mdk", panicMainSrc)]
+    (dir => withSpawn (runVerb "env" [
+      "MEDAKA_SEED=7",
+      medakaBin,
+      "run",
+      "\{dir}/panic.mdk",
+    ]) ((code, out, err) =>
+      let combined = "\{out}\n\{err}"
+      expectAll [
+        expectNotEqual 0 code,
+        expectEqual 0 (length (seedLines (lines combined))),
+      ]))
 
 siblingFixtureRun : String ->
   String ->
