@@ -1,5 +1,5 @@
 # META
-source_lines=769
+source_lines=767
 stages=DESUGAR,MARK
 # SOURCE
 import types.capability_manifest.{
@@ -68,7 +68,7 @@ import types.typecheck.{
   pubSchemes,
   bindingGrantArity,
 }
-import types.program_facts.{factsOfElab, withFacts}
+import types.program_facts.{factsOfElab}
 import eval.eval.{
   Value(..), evalModulesRootEnvFacts, buildStampExterns, apply, readOutput,
   resetOutput, ppValue
@@ -292,23 +292,21 @@ runPlugin fnName grants elab =
   let (coreE, modulesE) =
     mangleCtorCollisionsPair [] (elab.erCore, elab.erModules)
   let facts = factsOfElab elab
-  withFacts facts (_ =>
-    resetOutput ()
-    let rootEnv =
-      evalModulesRootEnvFacts
-        facts
-        (buildStampExterns ())
-        (coreE ++ stubD)
-        modulesE
-    match lookupValue fnName rootEnv
-      None => "   (no '" ++ fnName ++ "' binding in output)\n"
-      Some fnVal =>
-        let sample = "X-Forwarded-For: 192.168.1.1"
-        let granted =
-          fold (f _ => apply f (VList [])) fnVal (replicate grants ())
-        let result = apply granted (VString sample)
-        let logged = readOutput ()
-        "\{logged}   \{fnName} \{escStr sample} = \{ppValue result}\n")
+  resetOutput ()
+  let rootEnv =
+    evalModulesRootEnvFacts
+      facts
+      (buildStampExterns ())
+      (coreE ++ stubD)
+      modulesE
+  match lookupValue fnName rootEnv
+    None => "   (no '" ++ fnName ++ "' binding in output)\n"
+    Some fnVal =>
+      let sample = "X-Forwarded-For: 192.168.1.1"
+      let granted = fold (f _ => apply f (VList [])) fnVal (replicate grants ())
+      let result = apply granted (VString sample)
+      let logged = readOutput ()
+      "\{logged}   \{fnName} \{escStr sample} = \{ppValue result}\n"
 
 lookupValue : String -> List (String, Value e) -> Option (Value e)
 lookupValue _ [] = None
@@ -794,7 +792,7 @@ joinSemiTok xs = joinWith ";" xs
 (DUse false (UseGroup ("types" "publish") ((mem "TcReport" false))))
 (DUse false (UseGroup ("types" "tc_types") ((mem "ElabResult" false) (mem "DriveInputs" true) (mem "DriveOutputs" true))))
 (DUse false (UseGroup ("types" "typecheck") ((mem "elaborateModulesWithReport" false) (mem "entrySplit" false) (mem "pubSchemes" false) (mem "bindingGrantArity" false))))
-(DUse false (UseGroup ("types" "program_facts") ((mem "factsOfElab" false) (mem "withFacts" false))))
+(DUse false (UseGroup ("types" "program_facts") ((mem "factsOfElab" false))))
 (DUse false (UseGroup ("eval" "eval") ((mem "Value" true) (mem "evalModulesRootEnvFacts" false) (mem "buildStampExterns" false) (mem "apply" false) (mem "readOutput" false) (mem "resetOutput" false) (mem "ppValue" false))))
 (DUse false (UseGroup ("support" "util") ((mem "sortUniqS" false) (mem "joinWith" false) (mem "escStr" false) (mem "lookupAssoc" false) (mem "filterList" false) (mem "listLen" false) (mem "escOneHex2" false) (mem "anyList" false))))
 (DUse false (UseGroup ("string") ((mem "toLower" false))))
@@ -838,7 +836,7 @@ joinSemiTok xs = joinWith ";" xs
 (DTypeSig false "stubSource" (TyCon "String"))
 (DFunDef false "stubSource" () (EApp (EVar "stringConcat") (EListLit (ELit (LString "cacheGet req = \"\"\n")) (ELit (LString "cacheSet req result = ()\n")) (ELit (LString "logEvent s = putStr (stringConcat [\"   [LOG] \", s, \"\\n\"])\n")) (ELit (LString "getEnv k = None\n")) (ELit (LString "args u = []\n")) (ELit (LString "executablePath u = \"\"\n")) (ELit (LString "readFile p g = Err \"\"\n")) (ELit (LString "readFileBytes p g = Err \"\"\n")) (ELit (LString "fileExists p g = False\n")) (ELit (LString "canonicalizePath p g = p\n")) (ELit (LString "listDir p g = Err \"\"\n")) (ELit (LString "statFile p g = Err \"\"\n")) (ELit (LString "writeFile p c g = Err \"\"\n")) (ELit (LString "writeFileBytes p b g = Err \"\"\n")) (ELit (LString "appendFile p c g = Err \"\"\n")) (ELit (LString "makeDir p g = Err \"\"\n")) (ELit (LString "removeFile p g = Err \"\"\n")) (ELit (LString "rename o n gs gd = Err \"\"\n")) (ELit (LString "removeDir p g = Err \"\"\n")) (ELit (LString "runCommand cmd a = Err \"\"\n")) (ELit (LString "runCommandBatch cmd j a = []\n")) (ELit (LString "netResolve h = Err \"\"\n")) (ELit (LString "netTcpConnect h p = Err \"\"\n")) (ELit (LString "netTcpListen h p = Err \"\"\n")) (ELit (LString "netListenPort fd = Err \"\"\n")) (ELit (LString "netTcpAccept fd = Err \"\"\n")) (ELit (LString "netSend fd b = Err \"\"\n")) (ELit (LString "netRecv fd n = Err \"\"\n")) (ELit (LString "netShutdown fd how = Err \"\"\n")) (ELit (LString "netClose fd = Err \"\"\n")) (ELit (LString "netSetTimeout fd ms = Err \"\"\n")))))
 (DTypeSig false "runPlugin" (TyFun (TyCon "String") (TyFun (TyCon "Int") (TyFun (TyCon "ElabResult") (TyCon "String")))))
-(DFunDef false "runPlugin" ((PVar "fnName") (PVar "grants") (PVar "elab")) (EBlock (DoLet false false (PVar "stubD") (EApp (EVar "desugar") (EApp (EVar "parse") (EVar "stubSource")))) (DoLet false false (PTuple (PVar "coreE") (PVar "modulesE")) (EApp (EApp (EVar "mangleCtorCollisionsPair") (EListLit)) (ETuple (EFieldAccess (EVar "elab") "erCore") (EFieldAccess (EVar "elab") "erModules")))) (DoLet false false (PVar "facts") (EApp (EVar "factsOfElab") (EVar "elab"))) (DoExpr (EApp (EApp (EVar "withFacts") (EVar "facts")) (ELam (PWild) (EBlock (DoExpr (EApp (EVar "resetOutput") (ELit LUnit))) (DoLet false false (PVar "rootEnv") (EApp (EApp (EApp (EApp (EVar "evalModulesRootEnvFacts") (EVar "facts")) (EApp (EVar "buildStampExterns") (ELit LUnit))) (EBinOp "++" (EVar "coreE") (EVar "stubD"))) (EVar "modulesE"))) (DoExpr (EMatch (EApp (EApp (EVar "lookupValue") (EVar "fnName")) (EVar "rootEnv")) (arm (PCon "None") () (EBinOp "++" (EBinOp "++" (ELit (LString "   (no '")) (EVar "fnName")) (ELit (LString "' binding in output)\n")))) (arm (PCon "Some" (PVar "fnVal")) () (EBlock (DoLet false false (PVar "sample") (ELit (LString "X-Forwarded-For: 192.168.1.1"))) (DoLet false false (PVar "granted") (EApp (EApp (EApp (EVar "fold") (ELam ((PVar "f") PWild) (EApp (EApp (EVar "apply") (EVar "f")) (EApp (EVar "VList") (EListLit))))) (EVar "fnVal")) (EApp (EApp (EVar "replicate") (EVar "grants")) (ELit LUnit)))) (DoLet false false (PVar "result") (EApp (EApp (EVar "apply") (EVar "granted")) (EApp (EVar "VString") (EVar "sample")))) (DoLet false false (PVar "logged") (EApp (EVar "readOutput") (ELit LUnit))) (DoExpr (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "")) (EApp (EVar "display") (EVar "logged"))) (ELit (LString "   "))) (EApp (EVar "display") (EVar "fnName"))) (ELit (LString " "))) (EApp (EVar "display") (EApp (EVar "escStr") (EVar "sample")))) (ELit (LString " = "))) (EApp (EVar "display") (EApp (EVar "ppValue") (EVar "result")))) (ELit (LString "\n"))))))))))))))
+(DFunDef false "runPlugin" ((PVar "fnName") (PVar "grants") (PVar "elab")) (EBlock (DoLet false false (PVar "stubD") (EApp (EVar "desugar") (EApp (EVar "parse") (EVar "stubSource")))) (DoLet false false (PTuple (PVar "coreE") (PVar "modulesE")) (EApp (EApp (EVar "mangleCtorCollisionsPair") (EListLit)) (ETuple (EFieldAccess (EVar "elab") "erCore") (EFieldAccess (EVar "elab") "erModules")))) (DoLet false false (PVar "facts") (EApp (EVar "factsOfElab") (EVar "elab"))) (DoExpr (EApp (EVar "resetOutput") (ELit LUnit))) (DoLet false false (PVar "rootEnv") (EApp (EApp (EApp (EApp (EVar "evalModulesRootEnvFacts") (EVar "facts")) (EApp (EVar "buildStampExterns") (ELit LUnit))) (EBinOp "++" (EVar "coreE") (EVar "stubD"))) (EVar "modulesE"))) (DoExpr (EMatch (EApp (EApp (EVar "lookupValue") (EVar "fnName")) (EVar "rootEnv")) (arm (PCon "None") () (EBinOp "++" (EBinOp "++" (ELit (LString "   (no '")) (EVar "fnName")) (ELit (LString "' binding in output)\n")))) (arm (PCon "Some" (PVar "fnVal")) () (EBlock (DoLet false false (PVar "sample") (ELit (LString "X-Forwarded-For: 192.168.1.1"))) (DoLet false false (PVar "granted") (EApp (EApp (EApp (EVar "fold") (ELam ((PVar "f") PWild) (EApp (EApp (EVar "apply") (EVar "f")) (EApp (EVar "VList") (EListLit))))) (EVar "fnVal")) (EApp (EApp (EVar "replicate") (EVar "grants")) (ELit LUnit)))) (DoLet false false (PVar "result") (EApp (EApp (EVar "apply") (EVar "granted")) (EApp (EVar "VString") (EVar "sample")))) (DoLet false false (PVar "logged") (EApp (EVar "readOutput") (ELit LUnit))) (DoExpr (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "")) (EApp (EVar "display") (EVar "logged"))) (ELit (LString "   "))) (EApp (EVar "display") (EVar "fnName"))) (ELit (LString " "))) (EApp (EVar "display") (EApp (EVar "escStr") (EVar "sample")))) (ELit (LString " = "))) (EApp (EVar "display") (EApp (EVar "ppValue") (EVar "result")))) (ELit (LString "\n"))))))))))
 (DTypeSig false "lookupValue" (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "Value") (TyVar "e")))) (TyApp (TyCon "Option") (TyApp (TyCon "Value") (TyVar "e"))))))
 (DFunDef false "lookupValue" (PWild (PList)) (EVar "None"))
 (DFunDef false "lookupValue" ((PVar "k") (PCons (PTuple (PVar "n") (PVar "v")) (PVar "rest"))) (EIf (EBinOp "==" (EVar "k") (EVar "n")) (EApp (EVar "Some") (EVar "v")) (EApp (EApp (EVar "lookupValue") (EVar "k")) (EVar "rest"))))
@@ -980,7 +978,7 @@ joinSemiTok xs = joinWith ";" xs
 (DUse false (UseGroup ("types" "publish") ((mem "TcReport" false))))
 (DUse false (UseGroup ("types" "tc_types") ((mem "ElabResult" false) (mem "DriveInputs" true) (mem "DriveOutputs" true))))
 (DUse false (UseGroup ("types" "typecheck") ((mem "elaborateModulesWithReport" false) (mem "entrySplit" false) (mem "pubSchemes" false) (mem "bindingGrantArity" false))))
-(DUse false (UseGroup ("types" "program_facts") ((mem "factsOfElab" false) (mem "withFacts" false))))
+(DUse false (UseGroup ("types" "program_facts") ((mem "factsOfElab" false))))
 (DUse false (UseGroup ("eval" "eval") ((mem "Value" true) (mem "evalModulesRootEnvFacts" false) (mem "buildStampExterns" false) (mem "apply" false) (mem "readOutput" false) (mem "resetOutput" false) (mem "ppValue" false))))
 (DUse false (UseGroup ("support" "util") ((mem "sortUniqS" false) (mem "joinWith" false) (mem "escStr" false) (mem "lookupAssoc" false) (mem "filterList" false) (mem "listLen" false) (mem "escOneHex2" false) (mem "anyList" false))))
 (DUse false (UseGroup ("string") ((mem "toLower" false))))
@@ -1024,7 +1022,7 @@ joinSemiTok xs = joinWith ";" xs
 (DTypeSig false "stubSource" (TyCon "String"))
 (DFunDef false "stubSource" () (EApp (EVar "stringConcat") (EListLit (ELit (LString "cacheGet req = \"\"\n")) (ELit (LString "cacheSet req result = ()\n")) (ELit (LString "logEvent s = putStr (stringConcat [\"   [LOG] \", s, \"\\n\"])\n")) (ELit (LString "getEnv k = None\n")) (ELit (LString "args u = []\n")) (ELit (LString "executablePath u = \"\"\n")) (ELit (LString "readFile p g = Err \"\"\n")) (ELit (LString "readFileBytes p g = Err \"\"\n")) (ELit (LString "fileExists p g = False\n")) (ELit (LString "canonicalizePath p g = p\n")) (ELit (LString "listDir p g = Err \"\"\n")) (ELit (LString "statFile p g = Err \"\"\n")) (ELit (LString "writeFile p c g = Err \"\"\n")) (ELit (LString "writeFileBytes p b g = Err \"\"\n")) (ELit (LString "appendFile p c g = Err \"\"\n")) (ELit (LString "makeDir p g = Err \"\"\n")) (ELit (LString "removeFile p g = Err \"\"\n")) (ELit (LString "rename o n gs gd = Err \"\"\n")) (ELit (LString "removeDir p g = Err \"\"\n")) (ELit (LString "runCommand cmd a = Err \"\"\n")) (ELit (LString "runCommandBatch cmd j a = []\n")) (ELit (LString "netResolve h = Err \"\"\n")) (ELit (LString "netTcpConnect h p = Err \"\"\n")) (ELit (LString "netTcpListen h p = Err \"\"\n")) (ELit (LString "netListenPort fd = Err \"\"\n")) (ELit (LString "netTcpAccept fd = Err \"\"\n")) (ELit (LString "netSend fd b = Err \"\"\n")) (ELit (LString "netRecv fd n = Err \"\"\n")) (ELit (LString "netShutdown fd how = Err \"\"\n")) (ELit (LString "netClose fd = Err \"\"\n")) (ELit (LString "netSetTimeout fd ms = Err \"\"\n")))))
 (DTypeSig false "runPlugin" (TyFun (TyCon "String") (TyFun (TyCon "Int") (TyFun (TyCon "ElabResult") (TyCon "String")))))
-(DFunDef false "runPlugin" ((PVar "fnName") (PVar "grants") (PVar "elab")) (EBlock (DoLet false false (PVar "stubD") (EApp (EVar "desugar") (EApp (EVar "parse") (EVar "stubSource")))) (DoLet false false (PTuple (PVar "coreE") (PVar "modulesE")) (EApp (EApp (EVar "mangleCtorCollisionsPair") (EListLit)) (ETuple (EFieldAccess (EVar "elab") "erCore") (EFieldAccess (EVar "elab") "erModules")))) (DoLet false false (PVar "facts") (EApp (EVar "factsOfElab") (EVar "elab"))) (DoExpr (EApp (EApp (EVar "withFacts") (EVar "facts")) (ELam (PWild) (EBlock (DoExpr (EApp (EVar "resetOutput") (ELit LUnit))) (DoLet false false (PVar "rootEnv") (EApp (EApp (EApp (EApp (EVar "evalModulesRootEnvFacts") (EVar "facts")) (EApp (EVar "buildStampExterns") (ELit LUnit))) (EBinOp "++" (EVar "coreE") (EVar "stubD"))) (EVar "modulesE"))) (DoExpr (EMatch (EApp (EApp (EVar "lookupValue") (EVar "fnName")) (EVar "rootEnv")) (arm (PCon "None") () (EBinOp "++" (EBinOp "++" (ELit (LString "   (no '")) (EVar "fnName")) (ELit (LString "' binding in output)\n")))) (arm (PCon "Some" (PVar "fnVal")) () (EBlock (DoLet false false (PVar "sample") (ELit (LString "X-Forwarded-For: 192.168.1.1"))) (DoLet false false (PVar "granted") (EApp (EApp (EApp (EMethodRef "fold") (ELam ((PVar "f") PWild) (EApp (EApp (EVar "apply") (EVar "f")) (EApp (EVar "VList") (EListLit))))) (EVar "fnVal")) (EApp (EApp (EVar "replicate") (EVar "grants")) (ELit LUnit)))) (DoLet false false (PVar "result") (EApp (EApp (EVar "apply") (EVar "granted")) (EApp (EVar "VString") (EVar "sample")))) (DoLet false false (PVar "logged") (EApp (EVar "readOutput") (ELit LUnit))) (DoExpr (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "")) (EApp (EMethodRef "display") (EVar "logged"))) (ELit (LString "   "))) (EApp (EMethodRef "display") (EVar "fnName"))) (ELit (LString " "))) (EApp (EMethodRef "display") (EApp (EVar "escStr") (EVar "sample")))) (ELit (LString " = "))) (EApp (EMethodRef "display") (EApp (EVar "ppValue") (EVar "result")))) (ELit (LString "\n"))))))))))))))
+(DFunDef false "runPlugin" ((PVar "fnName") (PVar "grants") (PVar "elab")) (EBlock (DoLet false false (PVar "stubD") (EApp (EVar "desugar") (EApp (EVar "parse") (EVar "stubSource")))) (DoLet false false (PTuple (PVar "coreE") (PVar "modulesE")) (EApp (EApp (EVar "mangleCtorCollisionsPair") (EListLit)) (ETuple (EFieldAccess (EVar "elab") "erCore") (EFieldAccess (EVar "elab") "erModules")))) (DoLet false false (PVar "facts") (EApp (EVar "factsOfElab") (EVar "elab"))) (DoExpr (EApp (EVar "resetOutput") (ELit LUnit))) (DoLet false false (PVar "rootEnv") (EApp (EApp (EApp (EApp (EVar "evalModulesRootEnvFacts") (EVar "facts")) (EApp (EVar "buildStampExterns") (ELit LUnit))) (EBinOp "++" (EVar "coreE") (EVar "stubD"))) (EVar "modulesE"))) (DoExpr (EMatch (EApp (EApp (EVar "lookupValue") (EVar "fnName")) (EVar "rootEnv")) (arm (PCon "None") () (EBinOp "++" (EBinOp "++" (ELit (LString "   (no '")) (EVar "fnName")) (ELit (LString "' binding in output)\n")))) (arm (PCon "Some" (PVar "fnVal")) () (EBlock (DoLet false false (PVar "sample") (ELit (LString "X-Forwarded-For: 192.168.1.1"))) (DoLet false false (PVar "granted") (EApp (EApp (EApp (EMethodRef "fold") (ELam ((PVar "f") PWild) (EApp (EApp (EVar "apply") (EVar "f")) (EApp (EVar "VList") (EListLit))))) (EVar "fnVal")) (EApp (EApp (EVar "replicate") (EVar "grants")) (ELit LUnit)))) (DoLet false false (PVar "result") (EApp (EApp (EVar "apply") (EVar "granted")) (EApp (EVar "VString") (EVar "sample")))) (DoLet false false (PVar "logged") (EApp (EVar "readOutput") (ELit LUnit))) (DoExpr (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "")) (EApp (EMethodRef "display") (EVar "logged"))) (ELit (LString "   "))) (EApp (EMethodRef "display") (EVar "fnName"))) (ELit (LString " "))) (EApp (EMethodRef "display") (EApp (EVar "escStr") (EVar "sample")))) (ELit (LString " = "))) (EApp (EMethodRef "display") (EApp (EVar "ppValue") (EVar "result")))) (ELit (LString "\n"))))))))))
 (DTypeSig false "lookupValue" (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "Value") (TyVar "e")))) (TyApp (TyCon "Option") (TyApp (TyCon "Value") (TyVar "e"))))))
 (DFunDef false "lookupValue" (PWild (PList)) (EVar "None"))
 (DFunDef false "lookupValue" ((PVar "k") (PCons (PTuple (PVar "n") (PVar "v")) (PVar "rest"))) (EIf (EBinOp "==" (EVar "k") (EVar "n")) (EApp (EVar "Some") (EVar "v")) (EApp (EApp (EVar "lookupValue") (EVar "k")) (EVar "rest"))))

@@ -39,13 +39,12 @@ import types.typecheck.{
 import driver.build_cmd.{withHeldPrelude}
 import types.target_profile.{selectedProfile}
 import types.private_mangle.{mangleCtorCollisionsPair}
-import types.program_facts.{ProgramFacts, emptyFacts, factsOfElab, withFacts}
+import types.program_facts.{factsOfElab}
 import eval.eval.{
   Value(..),
   evalOneRootEnvFacts,
   testCapableExterns,
   funNamesOf,
-  dropShadowedExp,
   ppValue,
   lookupBinding,
   force,
@@ -234,21 +233,19 @@ lookupScheme name ((n, s) :: rest)
   | name == n = Some s
   | otherwise = lookupScheme name rest
 
--- The bindings are forced by the caller, inside `withFacts` of the facts returned
--- beside them.
 runPipeline : List Decl ->
-  <IO> (List String, List (String, Scheme), List (String, Value <IO>), ProgramFacts)
+  <IO> (List String, List (String, Scheme), List (String, Value <IO>))
 runPipeline combined =
   let runtimeDecls = !runtimeDeclsRef
   let preludeDecls = !preludeDeclsRef
   let resErrs = resolveProgram runtimeDecls preludeDecls combined
   match resErrs
-    e :: _ => (map ppResError resErrs, [], [], emptyFacts)
+    e :: _ => (map ppResError resErrs, [], [])
     [] =>
       -- One drive yields the diagnostics, the entry's own schemes and the
-      -- elaborated trees; the session's shadowed prelude names are dropped
-      -- before it, so a redefinition is checked against what will run.
-      let livePrelude = dropShadowedExp (funNamesOf combined) preludeDecls
+      -- elaborated trees.  The prelude stays whole: a session definition
+      -- shadows a core name only for session code, never inside core.
+      let livePrelude = preludeDecls
       let (elab, _, allSchemes) = elaborateModulesWithSchemes (withHeldPrelude
         livePrelude
         (driveInputsFor
@@ -262,7 +259,7 @@ runPipeline combined =
       let diagsE = elab.erPerModule
       let tcErrs = flatMap (d => fst (snd d)) diagsE
       match tcErrs
-        e :: _ => (map tcMsg tcErrs, [], [], emptyFacts)
+        e :: _ => (map tcMsg tcErrs, [], [])
         [] =>
           let (coreM, modulesM) = mangleCtorCollisionsPair [] (coreE, modulesE)
           let facts = factsOfElab elab
@@ -271,7 +268,7 @@ runPipeline combined =
             "__repl__",
             flatMap snd modulesM,
           )
-          ([], pubSchemes allSchemes, bindings, facts)
+          ([], pubSchemes allSchemes, bindings)
 -- DRIVER-COLLAPSE Phase 3/4: eval via the 1-module wrapper (evalOneRootEnvFacts
 -- = evalModulesRootEnvFacts over [("__repl__", combined)]) instead of the flat
 -- evalProgram (preludeDecls ++ combined).  The prelude is installed
@@ -315,7 +312,7 @@ processDeclInput src = match parseResult src
 processDeclParsed : List Decl -> <IO> Unit
 processDeclParsed newDecls =
   let combined = combinedDecls newDecls
-  let (errs, allSchemes, _bindings, _) = runPipeline combined
+  let (errs, allSchemes, _bindings) = runPipeline combined
   match errs
     e :: _ => mapIO_ printErr errs
     [] =>
@@ -350,7 +347,7 @@ processExprInput src =
 processExprParsed : List Decl -> <IO> Unit
 processExprParsed newDecls =
   let combined = combinedDecls newDecls
-  let (errs, allSchemes, bindings, facts) = runPipeline combined
+  let (errs, allSchemes, bindings) = runPipeline combined
   match errs
     e :: _ => mapIO_ printErr errs
     [] =>
@@ -358,7 +355,7 @@ processExprParsed newDecls =
       let schemeOpt = lookupScheme "__repl__" allSchemes
       match (valOpt, schemeOpt)
         (Some v, Some scheme) =>
-          let vStr = withFacts facts (_ => ppValue (force v))
+          let vStr = ppValue (force v)
           let tStr = ppScheme scheme
           putStrLn "\{vStr} : \{tStr}"
         _ => ()
@@ -378,7 +375,7 @@ processTypeCmd commandLen exprSrc =
 processTypeParsed : List Decl -> <IO> Unit
 processTypeParsed newDecls =
   let combined = combinedDecls newDecls
-  let (errs, allSchemes, _, _) = runPipeline combined
+  let (errs, allSchemes, _) = runPipeline combined
   match errs
     e :: _ => mapIO_ printErr errs
     [] => match lookupScheme "__repl__" allSchemes

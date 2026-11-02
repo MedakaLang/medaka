@@ -96,7 +96,7 @@ import types.module_interface.{retainModuleInterfaces}
 import types.target_profile.{selectedProfile}
 import driver.main_autoprint.{valueMainCandidate}
 import types.private_mangle.{mangleCtorCollisionsPair}
-import types.program_facts.{ProgramFacts, factsOfElab, withFacts, withSibling}
+import types.program_facts.{ProgramFacts, factsOfElab, withSibling}
 import frontend.ast.{SiblingPair}
 import frontend.marker.{declRefs}
 import eval.eval.{
@@ -109,8 +109,6 @@ import eval.eval.{
   modulePathMap,
   testCapableExterns,
   seedRunRng,
-  funNamesOf,
-  dropShadowedExp,
   lookupBinding,
   force,
   ppValue,
@@ -224,7 +222,6 @@ import tools.test_runner.{
   collectTests, exprLine, runOneTestEnv, hasTests, uncapableExternsEnv
 }
 import driver.diagnostics.{
-  analyzeLocated,
   frontEnd,
   FrontInput(..),
   FrontOutput(..),
@@ -640,33 +637,107 @@ renderTestReportError (TestSetupError text) = text
 renderTestReportError (TestDiagnosticError triples) =
   joinNl (flatMap renderFileErrors triples)
 
--- Type-check the module the way `medaka check` does.  Prelude-only (no
--- non-core imports) modules go through `analyzeLocated`, the single-file
--- analyzer `medaka check` uses: it correctly handles the target==prelude case
--- (`medaka test stdlib/core.mdk`, the neq-hang canary) via the shared
--- shadow-scoping, and is UNGUARDED for internal-only externs so a stdlib
--- module that calls `arrayGetUnsafe` &co. is not spuriously rejected.
+-- Type-check the module the way `medaka check` does.  A prelude-only (no
+-- non-core imports) module goes through `frontEnd`, the single-file front end
+-- `medaka check` uses, whose one drive is the prop/`test "…"` pair's
+-- elaboration: the gate's verdict and the trees the phases read come off the
+-- same drive.  It handles the target==prelude case (`medaka test
+-- stdlib/core.mdk`, the neq-hang canary) via the shared shadow-scoping, and is
+-- UNGUARDED for internal-only externs so a stdlib module that calls
+-- `arrayGetUnsafe` &co. is not spuriously rejected.
 -- Import-bearing modules are gated by `gatedDrive` below instead, off the
 -- ONE elaboration the phases already need.
--- Returns structured diagnostics iff the module has an error.
-singleFileTypeErrorsParts : String ->
+-- Returns structured diagnostics iff the module has an error, else the pair
+-- (None for an exempt module, which is not gated).
+singleFileGateParts : Bool ->
+  List Decl ->
+  List Decl ->
   String ->
   String ->
   String ->
-  Option TestReportError
-singleFileTypeErrorsParts target tsrc rsrc csrc =
-  let diags = analyzeLocated noStdlibExports rsrc csrc tsrc
+  String ->
+  List String ->
+  List Decl ->
+  <IO> (Option TestReportError, Option TestPair)
+singleFileGateParts True _ _ _ _ _ _ _ _ = (None, None)
+singleFileGateParts False runtimeDecls coreDecls rsrc csrc target tsrc roots userDecls =
+  let front = perfRow "test-gate" "single" (_ =>
+    frontEnd
+      noStdlibExports
+      (_ => singlePairDrive runtimeDecls coreDecls target roots userDecls)
+      FrontInput {
+        fiInputs = testDriveInputs [] coreDecls,
+        fiAllowInternal = True,
+        fiTrusted = [],
+        fiRuntimeSrc = rsrc,
+        fiCoreSrc = csrc,
+        fiPolicy = NeverDriveRejected,
+        fiProgram = FrontFile ("", "", targetRaw tsrc),
+      })
+  let diags = flatMap snd front.foDiags
   if isNonEmptyL (filter diagIsError diags) then
-    Some (TestDiagnosticError [(target, tsrc, diags)])
+    (Some (TestDiagnosticError [(target, tsrc, diags)]), None)
   else
-    None
+    (None, front.foDriven)
 
-singleFileTypeErrors : String -> String -> String -> String -> Option String
-singleFileTypeErrors target tsrc rsrc csrc =
-  map renderTestReportError (singleFileTypeErrorsParts target tsrc rsrc csrc)
+singleFileGate : Bool ->
+  List Decl ->
+  List Decl ->
+  String ->
+  String ->
+  String ->
+  String ->
+  List String ->
+  List Decl ->
+  <IO> (Option String, Option TestPair)
+singleFileGate exempt runtimeDecls coreDecls rsrc csrc target tsrc roots userDecls =
+  let (err, held) =
+    singleFileGateParts
+      exempt
+      runtimeDecls
+      coreDecls
+      rsrc
+      csrc
+      target
+      tsrc
+      roots
+      userDecls
+  (map renderTestReportError err, held)
 
--- #1362: `singleFileTypeErrors` above uses the UNGUARDED `analyzeLocated` (no
--- internal-extern restriction) so a stdlib module under test is never
+-- `prepareSingleDiags`' elaboration as the gate's one drive: it poses the
+-- value-main obligation the check drive poses, so the gate refuses what
+-- `check` refuses, and keeps the pair the phases go on to read.
+singlePairDrive : List Decl ->
+  List Decl ->
+  String ->
+  List String ->
+  List Decl ->
+  <IO> (TestPair, TcReport, DriveOutputs)
+singlePairDrive runtimeDecls coreDecls target roots userDecls =
+  let livePrelude = if programIsCore userDecls then [] else coreDecls
+  let rootId = singleRootId roots target
+  modulePathMap := [(rootId, target)]
+  let rawM = [(rootId, userDecls)]
+  let ((coreM, modsM), factsM, _, report, outputs) =
+    elaborateModulesMangledReport
+      (valueMainCandidate coreDecls rawM)
+      runtimeDecls
+      livePrelude
+      rawM
+  (TestPair runtimeDecls livePrelude coreM rawM modsM factsM, report, outputs)
+
+-- The doctest phase elaborates its own tree under its own module path, after
+-- the gate's pair was elaborated and before that pair is evaluated, so the
+-- pair's module path is put back after it.
+singleDoctestPhase : (Unit -> <IO> a) -> <IO> a
+singleDoctestPhase phase =
+  let paths = !modulePathMap
+  let result = phase ()
+  modulePathMap := paths
+  result
+
+-- #1362: `singleFileGateParts` above is UNGUARDED (no internal-extern
+-- restriction) so a stdlib module under test is never
 -- spuriously rejected; the multi-module gate is unguarded too
 -- (`allowInternal = True`, `trustedMods = []`) for the same reason — `medaka
 -- test` is not the internal-extern enforcement surface (`check`/`--json` is).
@@ -819,10 +890,10 @@ data HelperValidation =
 
 -- What the DOCTEST phase's interpreter arm evaluates.  The two shapes are NOT
 -- interchangeable, which is why this is a separate type rather than a third
--- `TestPair` constructor: the single-file arm hands `evalOneRootEnvFacts` an EMPTY
--- prelude with core folded into one `__main__` unit, so prelude-shadow splitting
--- and cross-unit constructor mangling both see a different program than the pair
--- form's core-beside-modules shape does.
+-- `TestPair` constructor: the single-file arm elaborates the one `__main__` unit
+-- beside the whole of core, and a core file under test (`programIsCore`) runs
+-- with core folded into that unit, so cross-unit constructor mangling sees a
+-- different program than the pair form's shape does.
 --
 -- `DtSingle` carries the INPUTS, not a tree: the single-file elaboration must
 -- not happen for a module that declares no doctests, and `runChosen` is the
@@ -1192,7 +1263,7 @@ uncurryPair runtimeDecls rawCore rawModules (core, mods) facts =
   TestPair runtimeDecls rawCore core rawModules mods facts
 
 -- The single-file prop/`test "…"` arm's elaboration: the degenerate 1-module
--- list over the shadow-dropped prelude (`programIsCore` ⇒ [], so `medaka test
+-- list over the whole prelude (`programIsCore` ⇒ [], so `medaka test
 -- stdlib/core.mdk` does not double-prepend it).  Built once and shared by the
 -- two phases, rather than elaborated once in each.
 prepareSingle : List Decl ->
@@ -1213,11 +1284,7 @@ prepareSingleDiags : List Decl ->
   List Decl ->
   <IO> (TestPair, List (String, TcDiag))
 prepareSingleDiags runtimeDecls coreDecls target roots userDecls =
-  let livePrelude =
-    if programIsCore userDecls then
-      []
-    else
-      dropShadowedExp (funNamesOf userDecls) coreDecls
+  let livePrelude = if programIsCore userDecls then [] else coreDecls
   let rootId = singleRootId roots target
   modulePathMap := [(rootId, target)]
   perfRow "test-elab" "single" (_ =>
@@ -1278,12 +1345,17 @@ driveAll engines runtimeDecls coreDecls rsrc csrc stdlibDir target tsrc roots ca
       file
       index
   | otherwise =
-    let gate =
-      if exempt then
-        None
-      else
-        perfRow "test-gate" "single" (_ =>
-          singleFileTypeErrors target tsrc rsrc csrc)
+    let (gate, held) =
+      singleFileGate
+        exempt
+        runtimeDecls
+        coreDecls
+        rsrc
+        csrc
+        target
+        tsrc
+        roots
+        userDecls
     match gate
       Some errText =>
         let _ = ePutStrLn (typecheckGateFail target errText)
@@ -1300,6 +1372,7 @@ driveAll engines runtimeDecls coreDecls rsrc csrc stdlibDir target tsrc roots ca
           cases
           filterOpt
           userDecls
+          held
           file
           index
 
@@ -1410,10 +1483,11 @@ driveSingle : List Engine ->
   Int ->
   Option String ->
   List Decl ->
+  Option TestPair ->
   String ->
   PinIndex ->
   <IO> Bool
-driveSingle engines runtimeDecls coreDecls stdlibDir target tsrc roots cases filterOpt userDecls file index =
+driveSingle engines runtimeDecls coreDecls stdlibDir target tsrc roots cases filterOpt userDecls held file index =
   currentEvalFile := target
   let examples = filterExamplesByName filterOpt (targetExamples tsrc)
   if filterMatchedNothing filterOpt tsrc userDecls then
@@ -1422,14 +1496,22 @@ driveSingle engines runtimeDecls coreDecls stdlibDir target tsrc roots cases fil
   else
     let synthResults = buildSynthResults userDecls examples
     let laterPhases = hasProps userDecls || hasTests userDecls
+    let trees =
+      _ =>
+        singlePhaseTrees
+          engines
+          runtimeDecls
+          coreDecls
+          target
+          roots
+          userDecls
+          held
     let (early, native) =
       singleNativeRuns
         engines
-        runtimeDecls
-        coreDecls
+        trees
         target
         tsrc
-        roots
         userDecls
         examples
         synthResults
@@ -1439,7 +1521,7 @@ driveSingle engines runtimeDecls coreDecls stdlibDir target tsrc roots cases fil
         filterOpt
         file
         index
-    let doctestsOk =
+    let doctestsOk = singleDoctestPhase (_ =>
       runDoctests
         engines
         (DtSingle runtimeDecls coreDecls target roots userDecls)
@@ -1448,12 +1530,11 @@ driveSingle engines runtimeDecls coreDecls stdlibDir target tsrc roots cases fil
         tsrc
         userDecls
         examples
-        synthResults
+        synthResults)
     if laterPhases then
       let pair = match early
-        Some trees => trees
-        None =>
-          singlePhaseTrees engines runtimeDecls coreDecls target roots userDecls
+        Some p => p
+        None => trees ()
       let propsOk =
         runPropsPinned
           engines
@@ -1484,19 +1565,22 @@ driveSingle engines runtimeDecls coreDecls stdlibDir target tsrc roots cases fil
       seedHintUnless doctestsOk
 
 -- The prelude-only arm's prop/`test "…"` pair, or `unreadTrees` when no phase
--- under `engines` reads it.
+-- under `engines` reads it.  [held] is the gate's pair; only an exempt module,
+-- which has no gate, elaborates one here.
 singlePhaseTrees : List Engine ->
   List Decl ->
   List Decl ->
   String ->
   List String ->
   List Decl ->
+  Option TestPair ->
   <IO> TestPair
-singlePhaseTrees engines runtimeDecls coreDecls target roots userDecls =
+singlePhaseTrees engines runtimeDecls coreDecls target roots userDecls held =
   if treesUnread engines userDecls then
     unreadTrees
-  else
-    prepareSingle runtimeDecls coreDecls target roots userDecls
+  else match held
+    Some pair => pair
+    None => prepareSingle runtimeDecls coreDecls target roots userDecls
 
 -- The native arms share one merged probe when the native engine runs alone, the
 -- file is not the prelude, and its arms would otherwise build two probes or
@@ -1611,13 +1695,11 @@ multiNativeRuns engines pair target tsrc userDecls examples synthResults include
 -- the merged probe needs it: a merged probe plans the properties before the
 -- doctest phase, and the native doctest arm reads no tree, so nothing that
 -- phase evaluates is elaborated in between.  The first component is that early
--- pair, None when each arm runs on a probe of its own.
+-- pair, None when each arm runs on a probe of its own; [trees] builds it.
 singleNativeRuns : List Engine ->
-  List Decl ->
-  List Decl ->
+  (Unit -> <IO> TestPair) ->
   String ->
   String ->
-  List String ->
   List Decl ->
   List Example ->
   List (Result String (List Decl)) ->
@@ -1628,7 +1710,7 @@ singleNativeRuns : List Engine ->
   String ->
   PinIndex ->
   <IO> (Option TestPair, Option NativeArmResults)
-singleNativeRuns engines runtimeDecls coreDecls target tsrc roots userDecls examples synthResults laterPhases includeTests cases filterOpt file index =
+singleNativeRuns engines trees target tsrc userDecls examples synthResults laterPhases includeTests cases filterOpt file index =
   let merges =
     mergesNativeArms
       engines
@@ -1640,12 +1722,7 @@ singleNativeRuns engines runtimeDecls coreDecls target tsrc roots userDecls exam
       filterOpt
       file
       index
-  let early =
-    if merges && laterPhases then
-      Some
-        (singlePhaseTrees engines runtimeDecls coreDecls target roots userDecls)
-    else
-      None
+  let early = if merges && laterPhases then Some (trees ()) else None
   (
     early,
     nativeRunsFor
@@ -1859,12 +1936,13 @@ runChosenOn EngNative _trees None target tsrc userDecls examples synthResults =
 -- shares; `DtSingle` elaborates HERE — this is the first point that knows the
 -- module has examples worth a tree.
 --
--- The prelude-only shape drops the shadowed prelude, appends the synth decls,
--- dict-elaborates and runs.  When the file under test IS the prelude (`medaka
+-- The prelude-only shape keeps the whole prelude (a user name shadows core only
+-- for user code; core resolves against core), appends the synth decls,
+-- dict-elaborates and runs core beside the module.  When the file under test IS the prelude (`medaka
 -- test stdlib/core.mdk`) it already declares everything the prelude provides,
 -- so prepending it would duplicate every top-level decl (two `Bounded Char`
 -- impls, etc.) and corrupt return-position dispatch — hence `programIsCore`.
--- Its one-module elaboration is flattened to the shape `evalOneRootEnvFacts`
+-- That case alone is flattened to the shape `evalOneRootEnvFacts`
 -- consumes (`elaborateOne`'s), keeping the module's diagnostics for the examples,
 -- and its root frame carries the synthesized `__dt_i__` bindings the same way the
 -- pair arm's does.
@@ -1881,17 +1959,14 @@ runChosen (DtPair (TestPair _runtimeM _rawCoreM coreM _rawM modsM facts)) exampl
   -- like `H.foo`, which `rootLocals` never carries (#3206). A `__dt_i__`
   -- synth binding is always in `localCells`, first in this flattened list
   -- either way, so this changes nothing about what `force` below returns.
-  let rendered = withFacts facts (_ =>
+  let rendered =
     let env = evalModulesRootEnvFacts facts (testCapableExterns ()) coreM modsM
-    renderExamples env injectedExampleDiags.value synthResults examples)
+    renderExamples env injectedExampleDiags.value synthResults examples
   buildDetailsFrom (Ok rendered) synthResults examples
 runChosen (DtSingle runtimeDecls coreDecls target roots userDecls) examples synthResults =
   let allUser = userDecls ++ buildSynthDecls synthResults
-  let livePrelude =
-    if programIsCore userDecls then
-      []
-    else
-      dropShadowedExp (funNamesOf allUser) coreDecls
+  let isCore = programIsCore userDecls
+  let livePrelude = if isCore then [] else coreDecls
   let rootId = singleRootId roots target
   modulePathMap := [("__main__", target)]
   let elab = elaborateModules (testDriveInputs
@@ -1902,14 +1977,20 @@ runChosen (DtSingle runtimeDecls coreDecls target roots userDecls) examples synt
   let coreE = elab.erCore
   let modulesE = elab.erModules
   let perModule = elab.erPerModule
-  let elaborated = coreE ++ flatMap snd modulesE
   let facts = factsOfElab elab
-  let rendered = withFacts facts (_ =>
-    let env = evalOneRootEnvFacts facts (testCapableExterns ()) [] (
-      "__main__",
-      elaborated,
-    )
-    renderExamples env (exampleDiagLines perModule) synthResults examples)
+  let rendered =
+    let env =
+      if isCore then
+        evalOneRootEnvFacts facts (testCapableExterns ()) [] (
+          "__main__",
+          coreE ++ flatMap snd modulesE,
+        )
+      else
+        evalOneRootEnvFacts facts (testCapableExterns ()) coreE (
+          "__main__",
+          flatMap snd modulesE,
+        )
+    renderExamples env (exampleDiagLines perModule) synthResults examples
   buildDetailsFrom (Ok rendered) synthResults examples
 
 -- ── The interpreter's adapter onto doctest.mdk's buildDetailsFrom seam ──────
@@ -2107,9 +2188,23 @@ elaborateModulesMangled : List Decl ->
   List (String, List Decl) ->
   ((List Decl, List (String, List Decl)), ProgramFacts, List (String, TcDiag))
 elaborateModulesMangled runtimeDecls coreDecls modules =
-  let elab =
-    elaborateModules
+  let (trees, facts, diags, _, _) =
+    elaborateModulesMangledReport False runtimeDecls coreDecls modules
+  (trees, facts, diags)
+
+-- `elaborateModulesMangled` beside its drive's report and outputs, with the
+-- value-main obligation [valueMain] posed.
+elaborateModulesMangledReport : Bool ->
+  List Decl ->
+  List Decl ->
+  List (String, List Decl) ->
+  ((List Decl, List (String, List Decl)), ProgramFacts, List (String, TcDiag), TcReport, DriveOutputs)
+elaborateModulesMangledReport valueMain runtimeDecls coreDecls modules =
+  let (elab, report, outputs) =
+    elaborateModulesWithReport
       (testDriveInputs [] coreDecls)
+      valueMain
+      None
       runtimeDecls
       coreDecls
       modules
@@ -2118,6 +2213,8 @@ elaborateModulesMangled runtimeDecls coreDecls modules =
       mangleCtorCollisionsPair [] (coreE, modulesE),
       factsOfElab elab,
       residual ++ perModuleErrors perModule [],
+      report,
+      outputs,
     )
 
 -- Evaluate the file's `prop "…"` decls in the shared elaboration's root
@@ -2481,7 +2578,7 @@ printTestVerdict target line name result =
 -- the CLI does (entry dir + project root, then stdlib).
 --
 -- #1443: gated by the SAME `typecheckExempt` predicate and the same two gates
--- `runTest` uses (`singleFileTypeErrors` prelude-only, `prepareMulti`'s
+-- `runTest` uses (`singleFileGate` prelude-only, `prepareMulti`'s
 -- per-module verdict import-bearing), so a module that fails the type check can
 -- no longer report a green (empty, `"ok":true`) summary here — the located
 -- type-error text is returned as the first element instead, and no phase runs
@@ -2574,12 +2671,18 @@ runTestReportPinned engines runtimeSrc coreSrc target tsrc userDecls stdlibDir c
       exempt
       file
       index
-  else match (if exempt then
-    None
-  else
-    singleFileTypeErrorsParts target tsrc runtimeSrc coreSrc)
-    Some errText => (Some errText, [], [], [], False)
-    None =>
+  else match (singleFileGateParts
+    exempt
+    runtimeDecls
+    coreDecls
+    runtimeSrc
+    coreSrc
+    target
+    tsrc
+    roots
+    userDecls)
+    (Some errText, _) => (Some errText, [], [], [], False)
+    (None, held) =>
       reportSingle
         engines
         runtimeDecls
@@ -2593,6 +2696,7 @@ runTestReportPinned engines runtimeSrc coreSrc target tsrc userDecls stdlibDir c
         includeTestDecls
         userDecls
         exempt
+        held
         file
         index
 
@@ -2817,21 +2921,30 @@ reportSingle : List Engine ->
   Bool ->
   List Decl ->
   Bool ->
+  Option TestPair ->
   String ->
   PinIndex ->
   <IO> (Option TestReportError, List (Engine, RunResult), List PropResult, List (Engine, String, Int, ExResult), Bool)
-reportSingle engines runtimeDecls coreDecls stdlibDir target tsrc roots cases filterOpt includeTestDecls userDecls exempt file index =
+reportSingle engines runtimeDecls coreDecls stdlibDir target tsrc roots cases filterOpt includeTestDecls userDecls exempt held file index =
   let examples = filterExamplesByName filterOpt (targetExamples tsrc)
   let synthResults = buildSynthResults userDecls examples
   let laterPhases = hasProps userDecls || includeTestDecls && hasTests userDecls
+  let trees =
+    _ =>
+      singlePhaseTrees
+        engines
+        runtimeDecls
+        coreDecls
+        target
+        roots
+        userDecls
+        held
   let (early, native) =
     singleNativeRuns
       engines
-      runtimeDecls
-      coreDecls
+      trees
       target
       tsrc
-      roots
       userDecls
       examples
       synthResults
@@ -2841,7 +2954,7 @@ reportSingle engines runtimeDecls coreDecls stdlibDir target tsrc roots cases fi
       filterOpt
       file
       index
-  let doctestRuns =
+  let doctestRuns = singleDoctestPhase (_ =>
     doctestReport
       engines
       (DtSingle runtimeDecls coreDecls target roots userDecls)
@@ -2850,12 +2963,11 @@ reportSingle engines runtimeDecls coreDecls stdlibDir target tsrc roots cases fi
       tsrc
       userDecls
       examples
-      synthResults
+      synthResults)
   if laterPhases then
     let pair = match early
-      Some trees => trees
-      None =>
-        singlePhaseTrees engines runtimeDecls coreDecls target roots userDecls
+      Some p => p
+      None => trees ()
     (
       None,
       doctestRuns,
@@ -3474,9 +3586,9 @@ withRootEvalEnv : ProgramFacts ->
   List (String, List Decl) ->
   (EvalEnv (Value <IO>) -> <IO> a) ->
   <IO> a
-withRootEvalEnv facts coreM modsM consume = withFacts facts (_ =>
+withRootEvalEnv facts coreM modsM consume =
   consume
-    (evalModulesRootEvalEnvFacts facts (testCapableExterns ()) coreM modsM))
+    (evalModulesRootEvalEnvFacts facts (testCapableExterns ()) coreM modsM)
 
 -- The structural-only path keeps the established engine behavior unchanged.
 propsReportEnginesPlain : NativePropLeaf ->

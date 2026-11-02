@@ -2013,7 +2013,14 @@ jobs:
     # text-only with no build, so it's ample headroom over an actual run.
     timeout-minutes: 5
     steps:
+      # Full history, blobs on demand: the authored range base..head must be
+      # complete. A depth-1 clone makes `git cat-file -e "$head"` succeed on a
+      # shallow head, so the targeted fetch below never ran and the range listed
+      # only the queue's merge commit (#4218). Same shape as `compiler-soundness`.
       - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          filter: blob:none
 
       # Step-guarded on `docs_only`, same as `ci-gen-drift` / `gate-balance`
       # above (#2269). All THREE steps carry the guard, not just the download:
@@ -2092,21 +2099,19 @@ jobs:
           git cat-file -e "$head" 2>/dev/null || git fetch --no-tags --depth=50 origin "$head" 2>/dev/null || true
           git cat-file -e "$base" 2>/dev/null || git fetch --no-tags --depth=50 origin "$base" 2>/dev/null || true
 
+          # The range is trusted only when both ends exist and base is an
+          # ancestor of head; anything else would list a different set than the
+          # authored commits. An untrusted range exports an EMPTY message
+          # (fail-closed) with the reason logged, never a partial one (a lone
+          # merge commit's text is exactly the hole #4218 closed).
           msg=""
-          if git cat-file -e "$head" 2>/dev/null && git cat-file -e "$base" 2>/dev/null; then
+          if ! git cat-file -e "$head" 2>/dev/null || ! git cat-file -e "$base" 2>/dev/null; then
+            echo "--- base or head object missing (base=$base head=$head): authored range unavailable, exporting empty (fail-closed)."
+          elif ! git merge-base --is-ancestor "$base" "$head" 2>/dev/null; then
+            echo "--- base $base is not an ancestor of head $head: authored range untrusted, exporting empty (fail-closed)."
+          else
             msg="$(git log --pretty=%B "$base..$head" 2>/dev/null || true)"
-          fi
-          if [ -z "$msg" ] && git cat-file -e "$head" 2>/dev/null; then
-            # Range unavailable (base unreachable, or a shallow boundary cut it
-            # short). On `merge_group` the head is ITSELF the auto-merge commit,
-            # so the authored message lives on its SECOND PARENT — measured on
-            # this repo: 93a40382 is "Merge pull request #2212 from ...", and
-            # 93a40382^2 = 1c1b48f3 carries the real text.
-            if [ "$EVENT" = "merge_group" ] && git cat-file -e "$head^2" 2>/dev/null; then
-              msg="$(git log -1 --pretty=%B "$head^2" 2>/dev/null || true)"
-            else
-              msg="$(git log -1 --pretty=%B "$head" 2>/dev/null || true)"
-            fi
+            echo "--- $(git rev-list --count "$base..$head") commit(s) in the authored range."
           fi
 
           echo "--- resolved authored message(s) for $base..$head:"

@@ -13,7 +13,7 @@ import frontend.desugar.{desugar}
 import frontend.parser.{parseLocated}
 import types.typecheck.{defaultDriveInputs, elaborateModules}
 import eval.eval.{Value(..), evalOneFacts, force}
-import types.program_facts.{factsOfElab, withFacts}
+import types.program_facts.{factsOfElab}
 import support.util.{lookupAssoc}
 import io.{runVerb}
 import string.{contains, indexOf, toInt, trim, lines, words, startsWith, join}
@@ -65,14 +65,12 @@ mainAfterHelperDiags _ =
   let modulesE = elab.erModules
   let _ = helperElabDiags [] [] methodProgram
   let facts = factsOfElab elab
-  withFacts facts (_ =>
-    let bindings =
-      evalOneFacts facts coreE ("helper_probe", flatMap snd modulesE)
-    match lookupAssoc "main" bindings
-      Some value => match force value
-        VInt n => n
-        _ => -1
-      None => -2)
+  let bindings = evalOneFacts facts coreE ("helper_probe", flatMap snd modulesE)
+  match lookupAssoc "main" bindings
+    Some value => match force value
+      VInt n => n
+      _ => -1
+    None => -2
 
 test "trees elaborated before a helper diagnostics drive still evaluate" =
   expectEqual 7 (mainAfterHelperDiags ())
@@ -820,3 +818,29 @@ test "importing only a type reaches its non-exported impl from any module" =
     Ok (code, out, _) =>
       expectAll [expectEqual 0 code, expectEqual "green\n" out]
     Err e => fail e
+
+shadowProgram : String
+shadowProgram =
+  "-- > elem 3\n-- 4\n-- > notElem 1 [2, 3]\n-- True\nelem : Int -> Int\nelem x = x + 1\n\nprop \"elem bumps\" (n : Int) = elem n == n + 1\n"
+
+test "a user name shadows core only for user code, under both engines" = withScratchDir
+  (dir => match writeFile "\{dir}/shadow.mdk" shadowProgram
+    Err e => fail e
+    Ok () =>
+      expectAll
+        (flatMap
+          (engine => match runVerb medakaBin [
+            "test",
+            "--engines",
+            engine,
+            "\{dir}/shadow.mdk",
+          ]
+            Ok (code, out, err) => [
+              expectEqual 0 code,
+              expectTrue (contains "ok   \{dir}/shadow.mdk:1: elem 3" out),
+              expectTrue
+                (contains "ok   \{dir}/shadow.mdk:3: notElem 1 [2, 3]" out),
+              expectFalse (contains "unbound constrained fn" err),
+            ]
+            Err e => [fail e])
+          ["eval", "native"]))

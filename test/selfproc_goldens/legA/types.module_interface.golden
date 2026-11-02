@@ -1,0 +1,36 @@
+applyModuleInterface : GraphCtx -> ModuleInterface -> ((String, (List (String, PubScheme), List TcDiag, List TcDiag)), List (String, ExportBinding))
+applyModuleTrees : GraphCtx -> ModuleTrees -> List Decl
+captureModuleRows : GraphCtx -> ModuleRows
+cellEntriesFrom : GraphRun -> Int -> List EvEntry
+currentModuleInterfaces : Unit -> List ModuleInterface
+declMethodGrantKeys : Decl -> List String
+forgetLocalRows : LocalAbsState -> GrantState -> String -> Unit
+freezeExport : ExportBinding -> FrozenExport
+freezeModuleInterface : ModuleKey -> Int -> (String, (List (String, PubScheme), List TcDiag, List TcDiag)) -> List (String, ExportBinding) -> List (String, ExportBinding) -> ModuleRows -> ModuleCtx -> Option ModuleTrees -> ModuleInterface
+freezeModuleTrees : String -> List Decl -> List (String, PubScheme) -> ModuleRows -> ModuleCtx -> ModuleTrees
+freshModuleSerial : Unit -> Int
+idsUnder : List String -> Map String (List Int) -> List (String, List Int)
+insertIds : List Int -> Map Int Unit -> Map Int Unit
+insertRow : String -> (Ident, String, a) -> SpellingPop a -> SpellingPop a
+mergePop : SpellingPop a -> SpellingPop a -> SpellingPop a
+methodCellEntriesFrom : Array (Option EvCell) -> Int -> Int -> List EvEntry -> List EvEntry
+methodGrantKeys : List Decl -> List String
+moduleCacheHit : ModuleKey -> Option ModuleInterface
+moduleCacheRef : Ref ModuleCache
+moduleInterfaceIdentity : ModuleInterface -> String
+moduleKeyText : ModuleKey -> String
+newPrefix : List a -> List a -> List a
+privateBindingsOf : ModuleInterface -> List (String, ExportBinding)
+recordModuleInterface : ModuleInterface -> Unit
+retainModuleInterfaces : List String -> Unit
+seedModuleInterfaces : List ModuleInterface -> Unit
+servedEntriesFrom : EvIndex -> Int -> List EvEntry -> List EvEntry
+servedEntryIn : EvIndex -> Int -> EvEntry -> EvEntry
+setServedArity : EvIndex -> EvId -> Int -> Unit
+siteCellEntriesFrom : Array (Option (EvId, SiteCell)) -> Int -> Int -> List EvEntry -> List EvEntry
+siteCellValue : SiteCell -> EvVal
+thawExport : FrozenExport -> ExportBinding
+topBinderNames : List Decl -> List String
+withInterface : ModuleCache -> ModuleInterface -> ModuleCache
+zonkLocalAbs : LocalAbs -> LocalAbs
+zonkObls : List (a, List VecObl) -> List (a, List VecObl)
