@@ -615,7 +615,7 @@ root_wrapper_check() {
   code=$(printf '%s\n' "$body" | strip_comments)
   delegates=$(printf '%s\n' "$code" | grep -Fc 'buildRootModuleStateWith')
   original_args=$(printf '%s\n' "$code" | grep -Fc 'buildRootModuleStateWith facts extraExterns preludeDecls modules')
-  final_calls=$(printf '%s\n' "$code" | grep -Fc "$final mods globalCells")
+  final_calls=$(printf '%s\n' "$code" | grep -Fc "$final facts mods globalCells")
   if [ "$delegates" -ne 1 ] || [ "$original_args" -ne 1 ] || [ "$final_calls" -ne 1 ]; then
     echo "FAIL: $label must delegate exactly once to buildRootModuleStateWith"
     echo "  with its original extraExterns/preludeDecls/modules arguments, then"

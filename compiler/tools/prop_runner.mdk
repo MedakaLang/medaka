@@ -24,7 +24,7 @@ import eval.eval.{
   Value(..), EvalEnv(..), EnvFrame(..), apply, eval, extendEnv, envFrameCells,
   force, lookupEnv, lookupRuntimeBinding, ppValue
 }
-import types.program_facts.{emptyFacts}
+import types.program_facts.{ProgramFacts}
 import support.util.{listLen, lookupAssoc, isEmptyL}
 import support.ordmap.{OrdMap, omEmpty, omHasKey, omInsert, omLookup}
 import tools.prop_plan.{
@@ -227,14 +227,15 @@ propLocPrefix : String -> Int -> String
 propLocPrefix _ 0 = ""
 propLocPrefix target line = "\{target}:\{intToString line}: "
 
-runProp : GenEnv ->
+runProp : ProgramFacts ->
+  GenEnv ->
   List (String, Value e) ->
   Decl ->
   Int ->
   String ->
   List (String, Int) ->
   <IO | e> Bool
-runProp genEnv evalEnv (DProp _ name params body) maxTests target propLines =
+runProp facts genEnv evalEnv (DProp _ name params body) maxTests target propLines =
   let line = lineOfPropName name propLines
   let _ = putStr "\{propLocPrefix target line}Testing \{escStrLocal name} ... "
   -- #2295: capture the prop's OWN RNG state at the moment it starts drawing
@@ -242,7 +243,7 @@ runProp genEnv evalEnv (DProp _ name params body) maxTests target propLines =
   -- value via `--seed` reproduces this prop's draws byte-for-byte regardless
   -- of what ran before it, so it is the number to print on failure.
   let seedAtStart = !propRngStateRef
-  let rootEnv = extendEnv (EvalEnv emptyFacts [ScanFrame []]) evalEnv
+  let rootEnv = extendEnv (EvalEnv facts [ScanFrame []]) evalEnv
   match planPropParams (genEnvPlan genEnv) name params
     Err e =>
       let _ = putStrLn ("ERROR: " ++ planErrorText e)
@@ -271,7 +272,7 @@ runProp genEnv evalEnv (DProp _ name params body) maxTests target propLines =
             let _ = putStrLn "  Counterexample:"
             let _ = printCounterexample shrunk
             False
-runProp _genEnv _evalEnv _decl _maxTests _target _propLines = True
+runProp _facts _genEnv _evalEnv _decl _maxTests _target _propLines = True
 
 findFailure : GenEnv ->
   EvalEnv (Value e) ->
@@ -1020,7 +1021,8 @@ propNameMatches _ _ = False
 -- line lookup (test_cmd.mdk's `propLineTests`) so every prop's output carries
 -- `file:line` — see `runProp`.
 export
-runAllProps : Int ->
+runAllProps : ProgramFacts ->
+  Int ->
   Option String ->
   String ->
   List (String, Int) ->
@@ -1028,30 +1030,31 @@ runAllProps : Int ->
   List Decl ->
   List Decl ->
   <IO | e> Bool
-runAllProps cases filterOpt target propLines evalEnv program allDecls =
+runAllProps facts cases filterOpt target propLines evalEnv program allDecls =
   let props = filterPropsByName filterOpt (filterProps program)
   if isEmptyL props then
     True
   else
     let genEnv = buildGenEnv program allDecls
-    let results = runEach cases target propLines genEnv evalEnv props
+    let results = runEach facts cases target propLines genEnv evalEnv props
     let nPass = countTrue results
     let nFail = listLen results - nPass
     let _ =
       putStrLn "\n\{intToString nPass} passed, \{intToString nFail} failed"
     nFail == 0
 
-runEach : Int ->
+runEach : ProgramFacts ->
+  Int ->
   String ->
   List (String, Int) ->
   GenEnv ->
   List (String, Value e) ->
   List Decl ->
   <IO | e> List Bool
-runEach _ _ _ _ _ [] = []
-runEach cases target propLines genEnv evalEnv (p :: rest) =
-  runProp genEnv evalEnv p cases target propLines
-    :: runEach cases target propLines genEnv evalEnv rest
+runEach _ _ _ _ _ _ [] = []
+runEach facts cases target propLines genEnv evalEnv (p :: rest) =
+  runProp facts genEnv evalEnv p cases target propLines
+    :: runEach facts cases target propLines genEnv evalEnv rest
 
 countTrue : List Bool -> Int
 countTrue [] = 0
@@ -1147,16 +1150,17 @@ propResultCases (PropResult _ _ _ _ _ _ cases) = cases
 -- mcp's medaka_test, and `medaka test --json`) already reports `file` once
 -- at the top level, so only the line is folded into `detail`.
 export
-runAllPropsResults : Int ->
+runAllPropsResults : ProgramFacts ->
+  Int ->
   Option String ->
   List (String, Int) ->
   List (String, Value e) ->
   List Decl ->
   List Decl ->
   <e> List PropResult
-runAllPropsResults cases filterOpt propLines evalEnv program allDecls =
+runAllPropsResults facts cases filterOpt propLines evalEnv program allDecls =
   let props = filterPropsByName filterOpt (filterProps program)
-  let rootEnv = extendEnv (EvalEnv emptyFacts [ScanFrame []]) evalEnv
+  let rootEnv = extendEnv (EvalEnv facts [ScanFrame []]) evalEnv
   if isEmptyL props then
     []
   else
@@ -1175,14 +1179,16 @@ runAllPropsResults cases filterOpt propLines evalEnv program allDecls =
 -- is preserved.  A declaration name is NOT an identity: duplicate root names
 -- are a protocol error for every matching request, never "first one wins".
 export
-runAllPropRequestsResults : List PropRequest ->
+runAllPropRequestsResults : ProgramFacts ->
+  List PropRequest ->
   List (String, Int) ->
   List (String, Value e) ->
   List Decl ->
   List Decl ->
   <e> List PropResult
-runAllPropRequestsResults requests propLines evalEnv program allDecls =
+runAllPropRequestsResults facts requests propLines evalEnv program allDecls =
   runPropRequests
+    facts
     requests
     propLines
     (buildGenEnv program allDecls)
@@ -1330,14 +1336,15 @@ requestPlanError : PlanError -> PropRequest -> PropResult
 requestPlanError err (PropRequest name seed cases) =
   capabilityResult name seed cases err
 
-runPropRequests : List PropRequest ->
+runPropRequests : ProgramFacts ->
+  List PropRequest ->
   List (String, Int) ->
   GenEnv ->
   List (String, Value e) ->
   List Decl ->
   <e> List PropResult
-runPropRequests requests propLines genEnv evalEnv props =
-  let rootEnv = extendEnv (EvalEnv emptyFacts [ScanFrame []]) evalEnv
+runPropRequests facts requests propLines genEnv evalEnv props =
+  let rootEnv = extendEnv (EvalEnv facts [ScanFrame []]) evalEnv
   runPropRequestsChecked
     requests
     requests

@@ -13,7 +13,7 @@ import frontend.desugar.{desugar}
 import frontend.parser.{parseLocated}
 import types.typecheck.{defaultDriveInputs, elaborateModules}
 import eval.eval.{Value(..), evalOneFacts, force}
-import types.program_facts.{factsOfElab, withFacts}
+import types.program_facts.{factsOfElab}
 import support.util.{lookupAssoc}
 import io.{runVerb}
 import string.{contains, indexOf, toInt, trim}
@@ -62,14 +62,12 @@ mainAfterHelperDiags _ =
   let modulesE = elab.erModules
   let _ = helperElabDiags [] [] methodProgram
   let facts = factsOfElab elab
-  withFacts facts (_ =>
-    let bindings =
-      evalOneFacts facts coreE ("helper_probe", flatMap snd modulesE)
-    match lookupAssoc "main" bindings
-      Some value => match force value
-        VInt n => n
-        _ => -1
-      None => -2)
+  let bindings = evalOneFacts facts coreE ("helper_probe", flatMap snd modulesE)
+  match lookupAssoc "main" bindings
+    Some value => match force value
+      VInt n => n
+      _ => -1
+    None => -2
 
 test "trees elaborated before a helper diagnostics drive still evaluate" =
   expectEqual 7 (mainAfterHelperDiags ())

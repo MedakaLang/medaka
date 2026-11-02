@@ -51,7 +51,7 @@ import ir.core_ir_lower.{
   instanceReqCounts,
   declaredMethodArities,
 }
-import types.program_facts.{ProgramFacts(..), emptyFacts, withFacts}
+import types.program_facts.{ProgramFacts(..), emptyFacts}
 import support.util.{isEmptyL, dedup, contains, filterList}
 import support.ordmap.{OrdMap}
 import types.private_mangle.{mangleCtorCollisions}
@@ -679,74 +679,70 @@ cevalModules : ProgramFacts ->
   List Decl ->
   List (String, List Decl) ->
   <e> List (String, Value e)
-cevalModules facts preludeDecls0 modules0 = withFacts
-  facts
-  (_ =>
-    -- #1292: the Core-IR half of the ctor-collision rename -- the
-    -- mechanism and the parity argument are written out once, on eval.mdk's
-    -- `evalModulesWith`.  Must move with it: this driver seeds the SAME
-    -- program-global `ctorToTypeRef`.
-    let (preludeDecls, modules) =
-      mangleCtorCollisions facts.pfSibling preludeDecls0 modules0
-    let moduleDecls = flatMap snd modules
-    let allDecls = preludeDecls ++ moduleDecls
-    let dispositions = facts.pfDispositions
-    ctorToTypeRef := buildCtorToType allDecls
-    ctorFieldOrdersRef := buildCtorFieldOrders allDecls
-    ffiExternNamesRef := externDeclNamesOfDecls allDecls
-    let disp = installDispatchTables dispositions allDecls
-    let ctors = collectCtors allDecls
-    let externs = externBindings ()
-    let reqCounts = instanceReqCounts allDecls
-    let arities = declaredMethodArities allDecls
-    let preludeGroups = lowerGroupsWith facts preludeDecls
-    let preludeImpls =
-      lowerImplsWithFacts facts disp reqCounts arities dispositions preludeDecls
-    -- S1-PRELUDE (a), #1497/#1492 — the Core-IR half of the evalModulesWith/cevalModules
-    -- lockstep pair; the mechanism and the frame-count caveat are written out once, on
-    -- eval.mdk's `preludeShadowNames`.
-    let shadowNames = preludeShadowNames moduleDecls
-    let preludeShared =
-      filterList (b => not (contains (cBindName b) shadowNames)) preludeGroups
-    let preludePrivate =
-      filterList (b => contains (cBindName b) shadowNames) preludeGroups
-    let globalNames =
-      map fst boolSeeds
-        ++ map fst externs
-        ++ map fst ctors
-        ++ implMethodNames allDecls
-        ++ map cBindName preludeShared
-    let globalCells = map (n => (n, Ref VUnit)) globalNames
-    let globalFrame = indexedFrame globalCells
-    let runtimeFrame = indexedFrame (runtimeCellsOf externs)
-    let privateCells = map (cBindName >> (n => (n, Ref VUnit))) preludePrivate
-    let globalEnv =
-      EvalEnv
-        facts
-        (globalFramesWith privateCells globalFrame ++ [runtimeFrame])
-    let mods =
-      cBuildModInfos
-        facts
-        disp
-        reqCounts
-        arities
-        globalFrame
-        runtimeFrame
-        (coreImportExports privateCells globalCells preludeDecls)
-        []
-        []
-        modules
-    let implEntries =
-      flatMap (cImplEntryValues globalEnv) preludeImpls
-        ++ flatMap cModImplValues mods
-    let _ = installConsts globalCells boolSeeds
-    let _ = installConsts globalCells externs
-    let _ = installConsts globalCells ctors
-    let _ = installConsts globalCells (coalesceImpls implEntries)
-    let _ = cInstallTopGroups globalEnv globalCells preludeShared
-    let _ = cInstallTopGroups globalEnv privateCells preludePrivate
-    let _ = cInstallModGroups mods
-    cRootLocals mods)
+cevalModules facts preludeDecls0 modules0 =
+  -- #1292: the Core-IR half of the ctor-collision rename -- the
+  -- mechanism and the parity argument are written out once, on eval.mdk's
+  -- `evalModulesWith`.  Must move with it: this driver seeds the SAME
+  -- program-global `ctorToTypeRef`.
+  let (preludeDecls, modules) =
+    mangleCtorCollisions facts.pfSibling preludeDecls0 modules0
+  let moduleDecls = flatMap snd modules
+  let allDecls = preludeDecls ++ moduleDecls
+  let dispositions = facts.pfDispositions
+  ctorToTypeRef := buildCtorToType allDecls
+  ctorFieldOrdersRef := buildCtorFieldOrders allDecls
+  ffiExternNamesRef := externDeclNamesOfDecls allDecls
+  let disp = installDispatchTables dispositions allDecls
+  let ctors = collectCtors allDecls
+  let externs = externBindings ()
+  let reqCounts = instanceReqCounts allDecls
+  let arities = declaredMethodArities allDecls
+  let preludeGroups = lowerGroupsWith facts preludeDecls
+  let preludeImpls =
+    lowerImplsWithFacts facts disp reqCounts arities dispositions preludeDecls
+  -- S1-PRELUDE (a), #1497/#1492 — the Core-IR half of the evalModulesWith/cevalModules
+  -- lockstep pair; the mechanism and the frame-count caveat are written out once, on
+  -- eval.mdk's `preludeShadowNames`.
+  let shadowNames = preludeShadowNames moduleDecls
+  let preludeShared =
+    filterList (b => not (contains (cBindName b) shadowNames)) preludeGroups
+  let preludePrivate =
+    filterList (b => contains (cBindName b) shadowNames) preludeGroups
+  let globalNames =
+    map fst boolSeeds
+      ++ map fst externs
+      ++ map fst ctors
+      ++ implMethodNames allDecls
+      ++ map cBindName preludeShared
+  let globalCells = map (n => (n, Ref VUnit)) globalNames
+  let globalFrame = indexedFrame globalCells
+  let runtimeFrame = indexedFrame (runtimeCellsOf externs)
+  let privateCells = map (cBindName >> (n => (n, Ref VUnit))) preludePrivate
+  let globalEnv =
+    EvalEnv facts (globalFramesWith privateCells globalFrame ++ [runtimeFrame])
+  let mods =
+    cBuildModInfos
+      facts
+      disp
+      reqCounts
+      arities
+      globalFrame
+      runtimeFrame
+      (coreImportExports privateCells globalCells preludeDecls)
+      []
+      []
+      modules
+  let implEntries =
+    flatMap (cImplEntryValues globalEnv) preludeImpls
+      ++ flatMap cModImplValues mods
+  let _ = installConsts globalCells boolSeeds
+  let _ = installConsts globalCells externs
+  let _ = installConsts globalCells ctors
+  let _ = installConsts globalCells (coalesceImpls implEntries)
+  let _ = cInstallTopGroups globalEnv globalCells preludeShared
+  let _ = cInstallTopGroups globalEnv privateCells preludePrivate
+  let _ = cInstallModGroups mods
+  cRootLocals mods
 
 -- pass 1: lower + allocate each module's local cells and build its env (imports
 -- resolved against already-processed modules, since loader order is
@@ -863,8 +859,8 @@ cevalModulesOutputFacts : ProgramFacts ->
   List Decl ->
   List (String, List Decl) ->
   String
-cevalModulesOutputFacts facts preludeDecls modules = withFacts facts (_ =>
+cevalModulesOutputFacts facts preludeDecls modules =
   resetOutput ()
   let binds = cevalModules facts preludeDecls modules
   let _ = cRunMainForEffect binds
-  readOutput ())
+  readOutput ()

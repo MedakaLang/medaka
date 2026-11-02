@@ -26,7 +26,7 @@ import eval.eval.{
   Value(..), EvalEnv(..), EnvFrame(..), eval, extendEnv, envFrameCells, force,
   ppValue
 }
-import types.program_facts.{emptyFacts}
+import types.program_facts.{ProgramFacts}
 import support.util.{filterList}
 import tools.doctest.{ExResult(..)}
 import hash_map.{HashMap, new, setInPlace, has, findWithDefault}
@@ -72,9 +72,9 @@ operandText v = match force v
 -- does not reduce to Pass/Fail is an `Errored` (e.g. a partial closure); a body
 -- that genuinely panics is unrecoverable and aborts the whole run.
 export
-runOneTest : List (String, Value e) -> Expr -> <e> ExResult
-runOneTest evalEnv body =
-  runOneTestEnv (extendEnv (EvalEnv emptyFacts [ScanFrame []]) evalEnv) body
+runOneTest : ProgramFacts -> List (String, Value e) -> Expr -> <e> ExResult
+runOneTest facts evalEnv body =
+  runOneTestEnv (extendEnv (EvalEnv facts [ScanFrame []]) evalEnv) body
 
 -- The command path already owns an evaluated root module graph.  Reuse that
 -- graph's cells so a captured Ref in a global function stays identical to the
@@ -250,7 +250,7 @@ closureOver graph seen (w :: work)
 (DUse false (UseGroup ("frontend" "marker") ((mem "declRefs" false) (mem "localBoundNames" false))))
 (DUse false (UseGroup ("frontend" "resolve") ((mem "firstExprLoc" false))))
 (DUse false (UseGroup ("eval" "eval") ((mem "Value" true) (mem "EvalEnv" true) (mem "EnvFrame" true) (mem "eval" false) (mem "extendEnv" false) (mem "envFrameCells" false) (mem "force" false) (mem "ppValue" false))))
-(DUse false (UseGroup ("types" "program_facts") ((mem "emptyFacts" false))))
+(DUse false (UseGroup ("types" "program_facts") ((mem "ProgramFacts" false))))
 (DUse false (UseGroup ("support" "util") ((mem "filterList" false))))
 (DUse false (UseGroup ("tools" "doctest") ((mem "ExResult" true))))
 (DUse false (UseGroup ("hash_map") ((mem "HashMap" false) (mem "new" false) (mem "setInPlace" false) (mem "has" false) (mem "findWithDefault" false))))
@@ -266,8 +266,8 @@ closureOver graph seen (w :: work)
 (DFunDef false "collectTests" ((PCons PWild (PVar "rest"))) (EApp (EVar "collectTests") (EVar "rest")))
 (DTypeSig false "operandText" (TyFun (TyApp (TyCon "Value") (TyVar "e")) (TyEffect () (Some "e") (TyCon "String"))))
 (DFunDef false "operandText" ((PVar "v")) (EMatch (EApp (EVar "force") (EVar "v")) (arm (PCon "VString" (PVar "s")) () (EVar "s")) (arm (PVar "other") () (EApp (EVar "ppValue") (EVar "other")))))
-(DTypeSig true "runOneTest" (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "Value") (TyVar "e")))) (TyFun (TyCon "Expr") (TyEffect () (Some "e") (TyCon "ExResult")))))
-(DFunDef false "runOneTest" ((PVar "evalEnv") (PVar "body")) (EApp (EApp (EVar "runOneTestEnv") (EApp (EApp (EVar "extendEnv") (EApp (EApp (EVar "EvalEnv") (EVar "emptyFacts")) (EListLit (EApp (EVar "ScanFrame") (EListLit))))) (EVar "evalEnv"))) (EVar "body")))
+(DTypeSig true "runOneTest" (TyFun (TyCon "ProgramFacts") (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "Value") (TyVar "e")))) (TyFun (TyCon "Expr") (TyEffect () (Some "e") (TyCon "ExResult"))))))
+(DFunDef false "runOneTest" ((PVar "facts") (PVar "evalEnv") (PVar "body")) (EApp (EApp (EVar "runOneTestEnv") (EApp (EApp (EVar "extendEnv") (EApp (EApp (EVar "EvalEnv") (EVar "facts")) (EListLit (EApp (EVar "ScanFrame") (EListLit))))) (EVar "evalEnv"))) (EVar "body")))
 (DTypeSig true "runOneTestEnv" (TyFun (TyApp (TyCon "EvalEnv") (TyApp (TyCon "Value") (TyVar "e"))) (TyFun (TyCon "Expr") (TyEffect () (Some "e") (TyCon "ExResult")))))
 (DFunDef false "runOneTestEnv" ((PVar "evalEnv") (PVar "body")) (EBlock (DoLet false false (PVar "env") (EApp (EApp (EVar "extendEnv") (EVar "evalEnv")) (EListLit))) (DoExpr (EMatch (EApp (EVar "force") (EApp (EApp (EVar "eval") (EVar "env")) (EVar "body"))) (arm (PCon "VCon" (PLit (LString "Pass")) (PList (PVar "e") (PVar "a"))) () (EApp (EApp (EVar "Pass") (EApp (EVar "operandText") (EVar "e"))) (EApp (EVar "operandText") (EVar "a")))) (arm (PCon "VCon" (PLit (LString "Fail")) (PList (PVar "m") (PVar "e") (PVar "a"))) () (EApp (EApp (EApp (EVar "Fail") (EApp (EVar "operandText") (EVar "m"))) (EApp (EVar "operandText") (EVar "e"))) (EApp (EVar "operandText") (EVar "a")))) (arm (PVar "other") () (EApp (EVar "Errored") (EBinOp "++" (ELit (LString "test body did not evaluate to an Expectation: ")) (EApp (EVar "ppValue") (EVar "other")))))))))
 (DTypeSig true "uncapableExterns" (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "Value") (TyVar "e")))) (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "Int") (TyCon "Expr"))) (TyApp (TyCon "List") (TyCon "String"))))))
@@ -312,7 +312,7 @@ closureOver graph seen (w :: work)
 (DUse false (UseGroup ("frontend" "marker") ((mem "declRefs" false) (mem "localBoundNames" false))))
 (DUse false (UseGroup ("frontend" "resolve") ((mem "firstExprLoc" false))))
 (DUse false (UseGroup ("eval" "eval") ((mem "Value" true) (mem "EvalEnv" true) (mem "EnvFrame" true) (mem "eval" false) (mem "extendEnv" false) (mem "envFrameCells" false) (mem "force" false) (mem "ppValue" false))))
-(DUse false (UseGroup ("types" "program_facts") ((mem "emptyFacts" false))))
+(DUse false (UseGroup ("types" "program_facts") ((mem "ProgramFacts" false))))
 (DUse false (UseGroup ("support" "util") ((mem "filterList" false))))
 (DUse false (UseGroup ("tools" "doctest") ((mem "ExResult" true))))
 (DUse false (UseGroup ("hash_map") ((mem "HashMap" false) (mem "new" false) (mem "setInPlace" false) (mem "has" false) (mem "findWithDefault" false))))
@@ -328,8 +328,8 @@ closureOver graph seen (w :: work)
 (DFunDef false "collectTests" ((PCons PWild (PVar "rest"))) (EApp (EVar "collectTests") (EVar "rest")))
 (DTypeSig false "operandText" (TyFun (TyApp (TyCon "Value") (TyVar "e")) (TyEffect () (Some "e") (TyCon "String"))))
 (DFunDef false "operandText" ((PVar "v")) (EMatch (EApp (EVar "force") (EVar "v")) (arm (PCon "VString" (PVar "s")) () (EVar "s")) (arm (PVar "other") () (EApp (EVar "ppValue") (EVar "other")))))
-(DTypeSig true "runOneTest" (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "Value") (TyVar "e")))) (TyFun (TyCon "Expr") (TyEffect () (Some "e") (TyCon "ExResult")))))
-(DFunDef false "runOneTest" ((PVar "evalEnv") (PVar "body")) (EApp (EApp (EVar "runOneTestEnv") (EApp (EApp (EVar "extendEnv") (EApp (EApp (EVar "EvalEnv") (EVar "emptyFacts")) (EListLit (EApp (EVar "ScanFrame") (EListLit))))) (EVar "evalEnv"))) (EVar "body")))
+(DTypeSig true "runOneTest" (TyFun (TyCon "ProgramFacts") (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "Value") (TyVar "e")))) (TyFun (TyCon "Expr") (TyEffect () (Some "e") (TyCon "ExResult"))))))
+(DFunDef false "runOneTest" ((PVar "facts") (PVar "evalEnv") (PVar "body")) (EApp (EApp (EVar "runOneTestEnv") (EApp (EApp (EVar "extendEnv") (EApp (EApp (EVar "EvalEnv") (EVar "facts")) (EListLit (EApp (EVar "ScanFrame") (EListLit))))) (EVar "evalEnv"))) (EVar "body")))
 (DTypeSig true "runOneTestEnv" (TyFun (TyApp (TyCon "EvalEnv") (TyApp (TyCon "Value") (TyVar "e"))) (TyFun (TyCon "Expr") (TyEffect () (Some "e") (TyCon "ExResult")))))
 (DFunDef false "runOneTestEnv" ((PVar "evalEnv") (PVar "body")) (EBlock (DoLet false false (PVar "env") (EApp (EApp (EVar "extendEnv") (EVar "evalEnv")) (EListLit))) (DoExpr (EMatch (EApp (EVar "force") (EApp (EApp (EVar "eval") (EVar "env")) (EVar "body"))) (arm (PCon "VCon" (PLit (LString "Pass")) (PList (PVar "e") (PVar "a"))) () (EApp (EApp (EVar "Pass") (EApp (EVar "operandText") (EVar "e"))) (EApp (EVar "operandText") (EVar "a")))) (arm (PCon "VCon" (PLit (LString "Fail")) (PList (PVar "m") (PVar "e") (PVar "a"))) () (EApp (EApp (EApp (EVar "Fail") (EApp (EVar "operandText") (EVar "m"))) (EApp (EVar "operandText") (EVar "e"))) (EApp (EVar "operandText") (EVar "a")))) (arm (PVar "other") () (EApp (EVar "Errored") (EBinOp "++" (ELit (LString "test body did not evaluate to an Expectation: ")) (EApp (EVar "ppValue") (EVar "other")))))))))
 (DTypeSig true "uncapableExterns" (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "Value") (TyVar "e")))) (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "Int") (TyCon "Expr"))) (TyApp (TyCon "List") (TyCon "String"))))))
