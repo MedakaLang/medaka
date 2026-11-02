@@ -293,8 +293,8 @@ productAuthorityLaw left right =
 -- finite upper bound. §2.2: `dantichain` preserves what the authority admits.
 -- §2.4: joining constant authorities obeys the lifted pointwise order.
 
--- The join laws stay `Bool` (they are also conjuncts of other laws); the
--- graded calls go through these wrappers, which grade the expected Bool.
+-- The join laws stay `Bool`: a pair law is a Bool over the two parameters, and
+-- the wrappers grade it against the expected Bool.
 expectPrefixJoin : Bool -> Param -> Param -> Expectation
 expectPrefixJoin want left right = expectEqual want (prefixJoinLaw left right)
 
