@@ -14,7 +14,7 @@ import types.typecheck.{
   chainArgs, checkModulesK, elaborateModulesWithReport, hadTypeErrors,
   checkModulesPartialLast
 }
-import types.tc_infer.{matchWarningsNow}
+import types.tc_solve_test_support.{matchWarningsNow}
 
 preludeSrc : String
 preludeSrc = joinNl [

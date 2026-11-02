@@ -961,7 +961,7 @@ predicate_slot_src="$ROOT/compiler/types/typecheck.mdk"
 tc_types_src="$ROOT/compiler/types/tc_types.mdk"
 eval_src="$ROOT/compiler/eval/eval.mdk"
 tc_env_src="$ROOT/compiler/types/tc_env.mdk"
-tc_state_src="$ROOT/compiler/types/tc_state.mdk"
+tc_trace_sink_src="$ROOT/compiler/types/tc_solve_test_support.mdk"
 # Absence anchors read every declaration of the former single file: typecheck.mdk plus the tc_*.mdk layer modules.
 tc_union_src="$RESULTS/tc_union.mdk"
 cat "$predicate_slot_src" "$ROOT"/compiler/types/tc_*.mdk > "$tc_union_src"
@@ -1209,7 +1209,7 @@ done || exit 1
 
 printf '%s\n' 'beginNumericPredicateTrace : Unit -> TraceSink
 finishNumericPredicateTrace : TraceSink -> List NumericPredicateTraceEntry' | while IFS= read -r required; do
-  if ! grep -Fq "$required" "$tc_state_src"; then
+  if ! grep -Fq "$required" "$tc_trace_sink_src"; then
     echo "FAIL: numeric return predicate migration is missing required source: $required"
     exit 1
   fi

@@ -68,25 +68,25 @@ import types.tc_types.{
   DriveInputs(..),
   DriveOutputs(..),
   GraphCtx(..),
+  TraceSink(..),
   MethodReturnMemoView(..),
   MethodReturnTraceEntry(..),
   MethodReturnTraceStage(..),
 }
 import types.module_interface_test_support.{noValueMain}
 import types.tc_diag_text.{stickyDiagsInPushOrder}
-import types.tc_state.{
+import types.tc_solve_test_support.{
   beginAssumptionTrace,
   beginEvidenceObservation,
+  beginMethodReturnTrace,
   beginNumericPredicateTrace,
   evCellsSpanProbe,
   finishAssumptionTrace,
   finishEvidenceObservation,
   finishNumericPredicateTrace,
+  matchWarningsNow,
   scopeFrameStats,
   scopeTraceContext,
-  beginMethodReturnTrace,
-}
-import types.tc_solve_test_support.{
   absentReturnSource,
   evidenceEntriesOfKind,
   modErrorCount,
@@ -128,7 +128,6 @@ import types.typecheck.{
   tcMsg,
 }
 import string as S
-import types.tc_infer.{matchWarningsNow}
 import types.target_profile.{selectProfile}
 import types.route_key.{evIndexOf, evIndexSlotCount}
 import support.ordmap.{omKeys}
@@ -212,6 +211,24 @@ numericTraceView gctx entry =
     ntvPrerequisites = map numericRouteView entry.nptPrerequisites,
   }
 
+-- The numeric-predicate entries [sink] holds, projected while [gctx] is live.
+numericTraceNow : GraphCtx -> TraceSink -> List NumericTraceView
+numericTraceNow gctx sink =
+  map (numericTraceView gctx) (finishNumericPredicateTrace sink)
+
+-- The assumption entries [sink] holds as (goal owner, binder owner, binder slot).
+assumptionContextsNow : GraphCtx -> TraceSink -> List (String, String, Int)
+assumptionContextsNow gctx sink =
+  map
+    (entry =>
+      let (EvidenceBinderId binderScope slot) = entry.atBinder
+      (
+        snd (scopeTraceContext gctx entry.atGoalScope),
+        snd (scopeTraceContext gctx binderScope),
+        slot,
+      ))
+    (finishAssumptionTrace sink)
+
 numericValueSource : Bool -> String
 numericValueSource collision = numericBodySource collision "N n"
 
@@ -244,7 +261,7 @@ numericCheckObserved source =
         (parse numericPreludeSource)) [
         ("numeric_predicate", desugar (parseLocated source)),
       ])
-  let trace = map (numericTraceView gctx) (finishNumericPredicateTrace sink)
+  let trace = numericTraceNow gctx sink
   (map tcMsg errors, trace)
 
 numericStages : List NumericTraceView -> List NumericPredicateTraceStage
@@ -469,7 +486,7 @@ numericSchemeObserved key source =
     map
       (entry => ppScheme (snd entry).psScheme)
       (filter (entry => fst entry == "value") schemes)
-  let trace = map (numericTraceView gctx) (finishNumericPredicateTrace sink)
+  let trace = numericTraceNow gctx sink
   (values, trace)
 
 numericImportedObserved : Bool -> (Int, List NumericTraceView)
@@ -518,7 +535,7 @@ numericImportedObserved reverseOrder =
       []
       (desugar (parse numericPreludeSource))
       (map (item => (fst item, desugar (parseLocated (snd item)))) sources)
-  let trace = map (numericTraceView gctx) (finishNumericPredicateTrace sink)
+  let trace = numericTraceNow gctx sink
   (modErrorCount results, trace)
 
 test "numeric predicates survive module and import order permutations" =
@@ -741,16 +758,7 @@ arithmeticSchemeObserved key source =
         ppScheme (snd entry).psScheme,
       ))
       (filter (entry => isArithmeticFunction (fst entry)) schemes)
-  let assumptions =
-    map
-      (entry =>
-        let (EvidenceBinderId binderScope slot) = entry.atBinder
-        (
-          snd (scopeTraceContext gctx entry.atGoalScope),
-          snd (scopeTraceContext gctx binderScope),
-          slot,
-        ))
-      (finishAssumptionTrace sink)
+  let assumptions = assumptionContextsNow gctx sink
   (values, assumptions)
 
 arithmeticErrorCodes : String -> List String
@@ -825,17 +833,8 @@ arithmeticTraceObserved source =
         (parse arithmeticPreludeSource)) [
         ("arithmetic_trace", desugar (parseLocated source)),
       ])
-  let trace = map (numericTraceView gctx) (finishNumericPredicateTrace sink)
-  let assumptions =
-    map
-      (entry =>
-        let (EvidenceBinderId binderScope slot) = entry.atBinder
-        (
-          snd (scopeTraceContext gctx entry.atGoalScope),
-          snd (scopeTraceContext gctx binderScope),
-          slot,
-        ))
-      (finishAssumptionTrace sink)
+  let trace = numericTraceNow gctx sink
+  let assumptions = assumptionContextsNow gctx sink
   (map tcMsg errors, trace, assumptions)
 
 test "operator events correlate by whole span scope and exact prelude Num predicate" =
@@ -984,7 +983,7 @@ arithmeticImportedObserved reverseOrder =
       []
       (desugar (parse arithmeticPreludeSource))
       (map (item => (fst item, desugar (parseLocated (snd item)))) sources)
-  let trace = map (numericTraceView gctx) (finishNumericPredicateTrace sink)
+  let trace = numericTraceNow gctx sink
   let arithmetic =
     filter
       (view =>
@@ -1124,16 +1123,7 @@ declaredNumMemberSchemeObserved key member source =
         ppScheme (snd entry).psScheme,
       ))
       (filter (entry => fst entry == member) schemes)
-  let assumptions =
-    map
-      (entry =>
-        let (EvidenceBinderId binderScope slot) = entry.atBinder
-        (
-          snd (scopeTraceContext gctx entry.atGoalScope),
-          snd (scopeTraceContext gctx binderScope),
-          slot,
-        ))
-      (finishAssumptionTrace sink)
+  let assumptions = assumptionContextsNow gctx sink
   (values, assumptions)
 
 declaredNumErrorCodes : String -> List String
@@ -2004,6 +1994,18 @@ traceView gctx entry =
 traceViewsNow : GraphCtx -> List AssumptionTraceEntry -> List TraceView
 traceViewsNow gctx entries = map (traceView gctx) entries
 
+-- The request [sink] observed: its assumption entries projected while [gctx] is live, with
+-- [errors] and the scope store's frame counts.
+requestViewNow : GraphCtx -> TraceSink -> Int -> RequestView
+requestViewNow gctx sink errors =
+  let (count, capacity) = scopeFrameStats gctx
+  RequestView {
+    rvTrace = traceViewsNow gctx (finishAssumptionTrace sink),
+    rvErrors = errors,
+    rvFrameCount = count,
+    rvFrameCapacity = capacity,
+  }
+
 runModulesObserved : List (String, String) -> ModuleTraceView
 runModulesObserved sources =
   let sink = beginAssumptionTrace ()
@@ -2030,15 +2032,7 @@ runObserved moduleId source =
       (driveArgs (traced sink) False None [] [] [
         (moduleId, desugar (parse source)),
       ])
-  let entries = finishAssumptionTrace sink
-  let views = traceViewsNow gctx entries
-  let (count, capacity) = scopeFrameStats gctx
-  RequestView {
-    rvTrace = views,
-    rvErrors = listLen errors,
-    rvFrameCount = count,
-    rvFrameCapacity = capacity,
-  }
+  requestViewNow gctx sink (listLen errors)
 
 -- `checkModulesChainReportForGraph`'s per-module rows beside the graph record its
 -- drive ends in.
@@ -2079,15 +2073,7 @@ runCachedObserved entrySource =
         ("cache_prefix", desugar (parse scalarSource)),
         ("cache_entry", desugar (parse entrySource)),
       ]
-  let entries = finishAssumptionTrace sink
-  let views = traceViewsNow gctx entries
-  let (count, capacity) = scopeFrameStats gctx
-  RequestView {
-    rvTrace = views,
-    rvErrors = modErrorCount results,
-    rvFrameCount = count,
-    rvFrameCapacity = capacity,
-  }
+  requestViewNow gctx sink (modErrorCount results)
 
 withoutBinderIds : List TraceView -> List ContextView
 withoutBinderIds views =
@@ -6633,3 +6619,19 @@ checkModulesEntryReport inputs runtimeDecls coreDecls modules =
 -- the same rendering are two findings).
 stickyTypeErrorDiags : DriveOutputs -> List (String, TcDiag)
 stickyTypeErrorDiags o = stickyDiagsInPushOrder o.doStickyDiags
+
+test "a begun trace sink has its one gate on and an empty buffer" =
+  let assumption = beginAssumptionTrace ()
+  let methodReturn = beginMethodReturnTrace ()
+  let numeric = beginNumericPredicateTrace ()
+  let evidence = beginEvidenceObservation ()
+  expectAll [
+    expectTrue assumption.tsAssumptionEnabled,
+    expectFalse assumption.tsMethodReturnEnabled,
+    expectTrue methodReturn.tsMethodReturnEnabled,
+    expectFalse methodReturn.tsAssumptionEnabled,
+    expectTrue numeric.tsNumericPredicateEnabled,
+    expectTrue evidence.tsEvidenceObservationEnabled,
+    expectEqual 0 (length (finishAssumptionTrace assumption)),
+    expectEqual 0 (length (finishEvidenceObservation evidence)),
+  ]
