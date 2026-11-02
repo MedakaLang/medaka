@@ -64,7 +64,7 @@ import types.typecheck.{
   pubSchemes,
   bindingGrantArity,
 }
-import types.program_facts.{factsOfElab, withFacts}
+import types.program_facts.{factsOfElab}
 import eval.eval.{
   Value(..), evalModulesRootEnvFacts, buildStampExterns, apply, readOutput,
   resetOutput, ppValue
@@ -288,23 +288,21 @@ runPlugin fnName grants elab =
   let (coreE, modulesE) =
     mangleCtorCollisionsPair [] (elab.erCore, elab.erModules)
   let facts = factsOfElab elab
-  withFacts facts (_ =>
-    resetOutput ()
-    let rootEnv =
-      evalModulesRootEnvFacts
-        facts
-        (buildStampExterns ())
-        (coreE ++ stubD)
-        modulesE
-    match lookupValue fnName rootEnv
-      None => "   (no '" ++ fnName ++ "' binding in output)\n"
-      Some fnVal =>
-        let sample = "X-Forwarded-For: 192.168.1.1"
-        let granted =
-          fold (f _ => apply f (VList [])) fnVal (replicate grants ())
-        let result = apply granted (VString sample)
-        let logged = readOutput ()
-        "\{logged}   \{fnName} \{escStr sample} = \{ppValue result}\n")
+  resetOutput ()
+  let rootEnv =
+    evalModulesRootEnvFacts
+      facts
+      (buildStampExterns ())
+      (coreE ++ stubD)
+      modulesE
+  match lookupValue fnName rootEnv
+    None => "   (no '" ++ fnName ++ "' binding in output)\n"
+    Some fnVal =>
+      let sample = "X-Forwarded-For: 192.168.1.1"
+      let granted = fold (f _ => apply f (VList [])) fnVal (replicate grants ())
+      let result = apply granted (VString sample)
+      let logged = readOutput ()
+      "\{logged}   \{fnName} \{escStr sample} = \{ppValue result}\n"
 
 lookupValue : String -> List (String, Value e) -> Option (Value e)
 lookupValue _ [] = None

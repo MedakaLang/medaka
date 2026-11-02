@@ -40,7 +40,7 @@ import ir.core_ir.{
   noDeclFacts,
 }
 import ir.core_ir_lower.{lowerProgramWithFacts}
-import types.program_facts.{ProgramFacts, factsOfElab, withFacts}
+import types.program_facts.{ProgramFacts, factsOfElab}
 import ir.core_ir_sexp.{cprogramToSexp}
 import types.evidence.{
   EvidenceBinderId(..),
@@ -1375,13 +1375,12 @@ blockRecEvalValue =
   let program = desugar (parseLocated source)
   let (elaborated, facts) =
     elaborateOneFacts defaultDriveInputs [] core ("block_rec_eval", program)
-  withFacts facts (_ =>
-    let bindings = evalOneFacts facts [] ("block_rec_eval", elaborated)
-    match lookupAssoc "main" bindings
-      Some value => match force value
-        VFloat result => result
-        _ => 0.0
-      _ => 0.0)
+  let bindings = evalOneFacts facts [] ("block_rec_eval", elaborated)
+  match lookupAssoc "main" bindings
+    Some value => match force value
+      VFloat result => result
+      _ => 0.0
+    _ => 0.0
 
 test "block recursive let executes with its captured Num dictionary" =
   expectEqual 1.5 blockRecEvalValue
@@ -2784,13 +2783,12 @@ placedNumInheritedValue = placedNumValue True
 placedNumValue : Bool -> Int
 placedNumValue inherited =
   let (elaborated, facts) = placedNumElaborated inherited
-  withFacts facts (_ =>
-    let bindings = evalOneFacts facts [] ("placed_num", elaborated)
-    match lookupAssoc "main" bindings
-      Some v => match force v
-        VInt n => n
-        _ => 0 - 1
-      _ => 0 - 1)
+  let bindings = evalOneFacts facts [] ("placed_num", elaborated)
+  match lookupAssoc "main" bindings
+    Some v => match force v
+      VInt n => n
+      _ => 0 - 1
+    _ => 0 - 1
 
 -- The body-local literal `[1, 2]` appears nowhere in `t`'s declared type, so the
 -- body's own numeric boundary grounds it to Int on either placement, and the call
@@ -3552,14 +3550,13 @@ preludeOutcome prelude sources =
     let elaborated = elab.erModules
     let rootId = optionOr "" (map fst (last sources))
     let facts = factsOfElab elab
-    withFacts facts (_ =>
-      let bindings =
-        evalOneFacts facts [] (rootId, coreD ++ flatMap snd elaborated)
-      match lookupAssoc "main" bindings
-        Some value => match force value
-          VString s => (codes, s)
-          _ => (codes, "<not a string>")
-        None => (codes, "<no main>"))
+    let bindings =
+      evalOneFacts facts [] (rootId, coreD ++ flatMap snd elaborated)
+    match lookupAssoc "main" bindings
+      Some value => match force value
+        VString s => (codes, s)
+        _ => (codes, "<not a string>")
+      None => (codes, "<no main>")
   else
     (codes, "")
 

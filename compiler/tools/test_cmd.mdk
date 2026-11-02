@@ -96,7 +96,7 @@ import types.module_interface.{retainModuleInterfaces}
 import types.target_profile.{selectedProfile}
 import driver.main_autoprint.{valueMainCandidate}
 import types.private_mangle.{mangleCtorCollisionsPair}
-import types.program_facts.{ProgramFacts, factsOfElab, withFacts, withSibling}
+import types.program_facts.{ProgramFacts, factsOfElab, withSibling}
 import frontend.ast.{SiblingPair}
 import frontend.marker.{declRefs}
 import eval.eval.{
@@ -1877,9 +1877,9 @@ runChosen (DtPair (TestPair _runtimeM _rawCoreM coreM _rawM modsM facts)) exampl
   -- like `H.foo`, which `rootLocals` never carries (#3206). A `__dt_i__`
   -- synth binding is always in `localCells`, first in this flattened list
   -- either way, so this changes nothing about what `force` below returns.
-  let rendered = withFacts facts (_ =>
+  let rendered =
     let env = evalModulesRootEnvFacts facts (testCapableExterns ()) coreM modsM
-    renderExamples env injectedExampleDiags.value synthResults examples)
+    renderExamples env injectedExampleDiags.value synthResults examples
   buildDetailsFrom (Ok rendered) synthResults examples
 runChosen (DtSingle runtimeDecls coreDecls target roots userDecls) examples synthResults =
   let allUser = userDecls ++ buildSynthDecls synthResults
@@ -1900,12 +1900,12 @@ runChosen (DtSingle runtimeDecls coreDecls target roots userDecls) examples synt
   let perModule = elab.erPerModule
   let elaborated = coreE ++ flatMap snd modulesE
   let facts = factsOfElab elab
-  let rendered = withFacts facts (_ =>
+  let rendered =
     let env = evalOneRootEnvFacts facts (testCapableExterns ()) [] (
       "__main__",
       elaborated,
     )
-    renderExamples env (exampleDiagLines perModule) synthResults examples)
+    renderExamples env (exampleDiagLines perModule) synthResults examples
   buildDetailsFrom (Ok rendered) synthResults examples
 
 -- ── The interpreter's adapter onto doctest.mdk's buildDetailsFrom seam ──────
@@ -3470,9 +3470,9 @@ withRootEvalEnv : ProgramFacts ->
   List (String, List Decl) ->
   (EvalEnv (Value <IO>) -> <IO> a) ->
   <IO> a
-withRootEvalEnv facts coreM modsM consume = withFacts facts (_ =>
+withRootEvalEnv facts coreM modsM consume =
   consume
-    (evalModulesRootEvalEnvFacts facts (testCapableExterns ()) coreM modsM))
+    (evalModulesRootEvalEnvFacts facts (testCapableExterns ()) coreM modsM)
 
 -- The structural-only path keeps the established engine behavior unchanged.
 propsReportEnginesPlain : NativePropLeaf ->
