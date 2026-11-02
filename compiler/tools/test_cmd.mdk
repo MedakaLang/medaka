@@ -224,6 +224,7 @@ import tools.test_runner.{
 import driver.diagnostics.{
   frontEnd,
   FrontInput(..),
+  FrontDriveIn(..),
   FrontOutput(..),
   FrontPolicy(..),
   FrontProgram(..),
@@ -664,7 +665,13 @@ singleFileGateParts False runtimeDecls coreDecls rsrc csrc target tsrc roots use
   let front = perfRow "test-gate" "single" (_ =>
     frontEnd
       noStdlibExports
-      (_ => singlePairDrive runtimeDecls coreDecls target roots userDecls)
+      (d =>
+        singlePairDrive
+          runtimeDecls
+          coreDecls
+          target
+          roots
+          (frontUserDecls d userDecls))
       FrontInput {
         fiInputs = testDriveInputs [] coreDecls,
         fiAllowInternal = True,
@@ -715,6 +722,14 @@ singleRootScope coreDecls target roots userDecls =
   let rootId = singleRootId roots target
   modulePathMap := [(rootId, target)]
   (if programIsCore userDecls then [] else coreDecls, rootId)
+
+-- The tree the front end desugared from the located parse of the target: the
+-- drive must read it, because a caller's own `userDecls` may come from an
+-- unlocated parse, and a diagnostic raised against that tree has no range.
+frontUserDecls : FrontDriveIn -> List Decl -> List Decl
+frontUserDecls d fallback = match d.fdPairs
+  (_, decls) :: _ => decls
+  [] => fallback
 
 -- `prepareSingleDiags`' elaboration as the gate's one drive: it poses the
 -- value-main obligation the check drive poses, and keeps the pair the phases
