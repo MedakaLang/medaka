@@ -1,13 +1,12 @@
 # META
-source_lines=147
+source_lines=123
 stages=DESUGAR,MARK
 # SOURCE
 import types.symbol_origins.{SymbolOrigins}
 -- The facts a typechecked program carries to the stages that read it: the
--- evidence index, the disposition table and the binder-type table, as one value,
--- plus the one run-owned cell that holds it for the duration of a bracketed
--- region.  A reader asks `factsNow` or takes a `ProgramFacts` argument.  The cell
--- is owned by the run that sets it.
+-- evidence index, the disposition table and the binder-type table, as one value.
+-- A reader takes a `ProgramFacts` argument, or reads it off the `EvalEnv` it
+-- evaluates in.
 -- No inference and no table construction beyond `evIndexOf`: a leaf that imports
 -- representation modules only, never `types.typecheck`.
 
@@ -116,29 +115,6 @@ export
 factsWithEvidence : EvTable -> ProgramFacts -> ProgramFacts
 factsWithEvidence table facts = { facts | pfEvidence = evIndexOf table }
 
-currentFacts : Ref (Option ProgramFacts)
-currentFacts = Ref None
-
--- Run [action] with [facts] current, then put back whatever was current before, so
--- brackets nest and follow one another.
-export
-withFacts : ProgramFacts -> (Unit -> <e> a) -> <e> a
-withFacts facts action =
-  let saved = !currentFacts
-  currentFacts := Some facts
-  let result = action ()
-  currentFacts := saved
-  result
-
--- The facts of the innermost enclosing `withFacts`; a read outside every bracket
--- is a panic.
-export
-factsNow : Unit -> ProgramFacts
-factsNow _ =
-  optionOrPanic
-    "program facts: read outside any withFacts bracket"
-    !currentFacts
-
 export
 withSymbolOrigins : SymbolOrigins -> ProgramFacts -> ProgramFacts
 withSymbolOrigins origins facts = { facts | pfSymbolOrigins = Some origins }
@@ -175,12 +151,6 @@ withSibling sibling facts = { facts | pfSibling = sibling }
 (DFunDef false "withCheckedExternSources" ((PVar "project") (PVar "outputs") (PVar "core") (PVar "modules") (PVar "facts")) (EBlock (DoLet false false (PVar "sources") (EApp (EApp (EVar "flatMap") (ELam ((PTuple (PVar "mid") (PVar "decls"))) (EApp (EApp (EApp (EApp (EVar "sourceExterns") (EVar "CheckedSource")) (EVar "mid")) (EApp (EApp (EVar "project") (EVar "outputs")) (EListLit (ETuple (EVar "mid") (EVar "decls"))))) (EVar "decls")))) (EBinOp "::" (ETuple (ELit (LString "core")) (EVar "core")) (EVar "modules")))) (DoExpr (ERecordUpdate (EVar "facts") ((fa "pfExternSources" (EApp (EVar "Some") (EVar "sources"))))))))
 (DTypeSig true "factsWithEvidence" (TyFun (TyCon "EvTable") (TyFun (TyCon "ProgramFacts") (TyCon "ProgramFacts"))))
 (DFunDef false "factsWithEvidence" ((PVar "table") (PVar "facts")) (ERecordUpdate (EVar "facts") ((fa "pfEvidence" (EApp (EVar "evIndexOf") (EVar "table"))))))
-(DTypeSig false "currentFacts" (TyApp (TyCon "Ref") (TyApp (TyCon "Option") (TyCon "ProgramFacts"))))
-(DFunDef false "currentFacts" () (EApp (EVar "Ref") (EVar "None")))
-(DTypeSig true "withFacts" (TyFun (TyCon "ProgramFacts") (TyFun (TyFun (TyCon "Unit") (TyEffect () (Some "e") (TyVar "a"))) (TyEffect () (Some "e") (TyVar "a")))))
-(DFunDef false "withFacts" ((PVar "facts") (PVar "action")) (EBlock (DoLet false false (PVar "saved") (EUnOp "!" (EVar "currentFacts"))) (DoExpr (EApp (EApp (EVar "setRef") (EVar "currentFacts")) (EApp (EVar "Some") (EVar "facts")))) (DoLet false false (PVar "result") (EApp (EVar "action") (ELit LUnit))) (DoExpr (EApp (EApp (EVar "setRef") (EVar "currentFacts")) (EVar "saved"))) (DoExpr (EVar "result"))))
-(DTypeSig true "factsNow" (TyFun (TyCon "Unit") (TyCon "ProgramFacts")))
-(DFunDef false "factsNow" (PWild) (EApp (EApp (EVar "optionOrPanic") (ELit (LString "program facts: read outside any withFacts bracket"))) (EUnOp "!" (EVar "currentFacts"))))
 (DTypeSig true "withSymbolOrigins" (TyFun (TyCon "SymbolOrigins") (TyFun (TyCon "ProgramFacts") (TyCon "ProgramFacts"))))
 (DFunDef false "withSymbolOrigins" ((PVar "origins") (PVar "facts")) (ERecordUpdate (EVar "facts") ((fa "pfSymbolOrigins" (EApp (EVar "Some") (EVar "origins"))))))
 (DTypeSig true "withSibling" (TyFun (TyApp (TyCon "List") (TyCon "SiblingPair")) (TyFun (TyCon "ProgramFacts") (TyCon "ProgramFacts"))))
@@ -211,12 +181,6 @@ withSibling sibling facts = { facts | pfSibling = sibling }
 (DFunDef false "withCheckedExternSources" ((PVar "project") (PVar "outputs") (PVar "core") (PVar "modules") (PVar "facts")) (EBlock (DoLet false false (PVar "sources") (EApp (EApp (EDictApp "flatMap") (ELam ((PTuple (PVar "mid") (PVar "decls"))) (EApp (EApp (EApp (EApp (EVar "sourceExterns") (EVar "CheckedSource")) (EVar "mid")) (EApp (EApp (EVar "project") (EVar "outputs")) (EListLit (ETuple (EVar "mid") (EVar "decls"))))) (EVar "decls")))) (EBinOp "::" (ETuple (ELit (LString "core")) (EVar "core")) (EVar "modules")))) (DoExpr (ERecordUpdate (EVar "facts") ((fa "pfExternSources" (EApp (EVar "Some") (EVar "sources"))))))))
 (DTypeSig true "factsWithEvidence" (TyFun (TyCon "EvTable") (TyFun (TyCon "ProgramFacts") (TyCon "ProgramFacts"))))
 (DFunDef false "factsWithEvidence" ((PVar "table") (PVar "facts")) (ERecordUpdate (EVar "facts") ((fa "pfEvidence" (EApp (EVar "evIndexOf") (EVar "table"))))))
-(DTypeSig false "currentFacts" (TyApp (TyCon "Ref") (TyApp (TyCon "Option") (TyCon "ProgramFacts"))))
-(DFunDef false "currentFacts" () (EApp (EVar "Ref") (EVar "None")))
-(DTypeSig true "withFacts" (TyFun (TyCon "ProgramFacts") (TyFun (TyFun (TyCon "Unit") (TyEffect () (Some "e") (TyVar "a"))) (TyEffect () (Some "e") (TyVar "a")))))
-(DFunDef false "withFacts" ((PVar "facts") (PVar "action")) (EBlock (DoLet false false (PVar "saved") (EUnOp "!" (EVar "currentFacts"))) (DoExpr (EApp (EApp (EVar "setRef") (EVar "currentFacts")) (EApp (EVar "Some") (EVar "facts")))) (DoLet false false (PVar "result") (EApp (EVar "action") (ELit LUnit))) (DoExpr (EApp (EApp (EVar "setRef") (EVar "currentFacts")) (EVar "saved"))) (DoExpr (EVar "result"))))
-(DTypeSig true "factsNow" (TyFun (TyCon "Unit") (TyCon "ProgramFacts")))
-(DFunDef false "factsNow" (PWild) (EApp (EApp (EVar "optionOrPanic") (ELit (LString "program facts: read outside any withFacts bracket"))) (EUnOp "!" (EVar "currentFacts"))))
 (DTypeSig true "withSymbolOrigins" (TyFun (TyCon "SymbolOrigins") (TyFun (TyCon "ProgramFacts") (TyCon "ProgramFacts"))))
 (DFunDef false "withSymbolOrigins" ((PVar "origins") (PVar "facts")) (ERecordUpdate (EVar "facts") ((fa "pfSymbolOrigins" (EApp (EVar "Some") (EVar "origins"))))))
 (DTypeSig true "withSibling" (TyFun (TyApp (TyCon "List") (TyCon "SiblingPair")) (TyFun (TyCon "ProgramFacts") (TyCon "ProgramFacts"))))

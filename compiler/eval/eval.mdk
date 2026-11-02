@@ -75,8 +75,6 @@ import types.disposition.{DispositionTable, InstanceShape(..), inheritorsOf}
 import types.program_facts.{
   ProgramFacts(..),
   emptyFacts,
-  factsNow,
-  withFacts,
 }
 import support.util.{
   contains,
@@ -209,7 +207,7 @@ public export data Value (e : Effect) =
 -- (so letrec / mutual recursion can back-patch a closure's own binding).
 -- Parameterized over the VALUE type (`v := Value e`), not the row — see the
 -- kind-inference note on `Value`.
-public export data EvalEnv v = EvalEnv (List (EnvFrame v))
+public export data EvalEnv v = EvalEnv ProgramFacts (List (EnvFrame v))
 
 -- A call frame is a short list, scanned by name.  A module-level frame (a
 -- module's own top-level names, its imports, the shared global and runtime
@@ -234,7 +232,7 @@ frameCells (IndexedFrame cells _) = cells
 -- The frames' cells, nearest first, for a consumer that reads names only.
 export
 envFrameCells : EvalEnv v -> List (List (String, Ref v))
-envFrameCells (EvalEnv frames) = map frameCells frames
+envFrameCells (EvalEnv _ frames) = map frameCells frames
 
 -- ── value rendering ──────────────────────────────────────────────────────
 export
@@ -600,7 +598,7 @@ runtimeTypeTag _ = None
 -- ── environment ───────────────────────────────────────────────────────────
 export
 lookupEnv : EvalEnv (Value e) -> String -> <e> Value e
-lookupEnv (EvalEnv frames) name = lookupFrames frames name
+lookupEnv (EvalEnv _ frames) name = lookupFrames frames name
 
 -- Runtime externs have their own final frame. A module environment also carries
 -- nearer local/import frames and a mutable global dispatcher frame, where a user
@@ -608,7 +606,7 @@ lookupEnv (EvalEnv frames) name = lookupFrames frames name
 -- that method behavior; this lookup reaches the retained primitive cell instead.
 export
 lookupRuntimeBinding : EvalEnv (Value e) -> String -> <e> Value e
-lookupRuntimeBinding (EvalEnv frames) name =
+lookupRuntimeBinding (EvalEnv _ frames) name =
   lookupRuntimeBindingFrames frames name None
 
 lookupRuntimeBindingFrames : List (EnvFrame (Value e)) ->
@@ -627,7 +625,7 @@ lookupRuntimeBindingFrames (frame :: rest) name found =
 -- right for a program identifier (resolve already proved it bound) and wrong for a
 -- synthetic cell whose absence is a normal answer (`withCallFile`'s file tag).
 lookupEnvOpt : EvalEnv (Value e) -> String -> <e> Option (Value e)
-lookupEnvOpt (EvalEnv frames) name = lookupFramesOpt frames name
+lookupEnvOpt (EvalEnv _ frames) name = lookupFramesOpt frames name
 
 lookupFramesOpt : List (EnvFrame (Value e)) -> String -> <e> Option (Value e)
 lookupFramesOpt [] _ = None
@@ -664,7 +662,7 @@ lookupFrames (frame :: rest) name = match lookupFrameCell frame name
 -- the candidates' shape (VTypedImpl vs VClosure) is the real discriminator.
 export
 lookupMethod : EvalEnv (Value e) -> String -> <e> Value e
-lookupMethod (EvalEnv frames) name = lookupMethodFrames frames frames name
+lookupMethod (EvalEnv _ frames) name = lookupMethodFrames frames frames name
 
 lookupMethodFrames : List (EnvFrame (Value e)) ->
   List (EnvFrame (Value e)) ->
@@ -748,7 +746,7 @@ lookupCells ((n, cell) :: rest) name =
 -- by-name scan it saves), so the rep is unchanged — see PERF-NOTES.
 lookupAtAddr : EvalEnv (Value e) -> String -> Addr -> <e> Value e
 lookupAtAddr env name AGlobal = lookupEnv env name
-lookupAtAddr (EvalEnv frames) name (ALocal depth slot) =
+lookupAtAddr (EvalEnv _ frames) name (ALocal depth slot) =
   forceCell
     (addrCell (frameCells (frameAtDepth frames depth name)) slot name)
     name
@@ -768,8 +766,8 @@ addrCell ((n, cell) :: rest) slot name
 
 export
 extendEnv : EvalEnv (Value e) -> List (String, Value e) -> EvalEnv (Value e)
-extendEnv (EvalEnv frames) binds =
-  EvalEnv (ScanFrame (map cellOf binds) :: frames)
+extendEnv (EvalEnv facts frames) binds =
+  EvalEnv facts (ScanFrame (map cellOf binds) :: frames)
 
 cellOf : (String, Value e) -> (String, Ref (Value e))
 cellOf (n, v) = (n, Ref v)
@@ -778,7 +776,8 @@ export
 pushFrame : EvalEnv (Value e) ->
   List (String, Ref (Value e)) ->
   EvalEnv (Value e)
-pushFrame (EvalEnv frames) frame = EvalEnv (ScanFrame frame :: frames)
+pushFrame (EvalEnv facts frames) frame =
+  EvalEnv facts (ScanFrame frame :: frames)
 
 export
 findCell : List (String, Ref (Value e)) -> String -> Ref (Value e)
@@ -1573,16 +1572,13 @@ eval env (EVarId x _) = if startsWithAt x then VUnit else lookupEnv env x
 eval env (EVarAt x addr) =
   if startsWithAt x then VUnit else lookupAtAddr env x addr
 -- #2705: the occurrence's answer comes from the evidence of the program facts
--- the forcing caller holds (`withFacts`), not from cells on the node — the same
--- seam `EDictAt` crosses below.
-eval env (EMethodAt name _ ev) =
-  evalMethodAtEv env name (evMethodRoutesIn (factsNow ()).pfEvidence ev)
+-- the environment carries, not from cells on the node — the same seam
+-- `EDictAt` crosses below.
+eval (env@(EvalEnv facts _)) (EMethodAt name _ ev) =
+  evalMethodAtEv env name (evMethodRoutesIn facts.pfEvidence ev)
 
-eval env (EDictAt name ev) =
-  applyDicts
-    env
-    (lookupEnv env name)
-    (evDictRoutesIn (factsNow ()).pfEvidence ev)
+eval (env@(EvalEnv facts _)) (EDictAt name ev) =
+  applyDicts env (lookupEnv env name) (evDictRoutesIn facts.pfEvidence ev)
 eval env (app@(EApp _ _)) = evalApp env app
 eval env (ELam pats body) = VClosure env pats body noTrapLoc
 eval env (ELet _ True (PVar f _ _) e1 e2) = evalRecLet env f e1 e2
@@ -4252,12 +4248,10 @@ noMainMsg = "no `main` in this file; add `main = ...`"
 -- evidence, no dispositions, no binders.  A typed program uses `evalOneFacts`.
 export
 evalMain : List Decl -> String
-evalMain prog = withFacts
-  emptyFacts
-  (_ =>
-    match lookupBinding "main" (evalOneFacts emptyFacts [] ("__main__", prog))
-      Some v => ppValue (force v)
-      None => runtimePanic ENoMain noMainMsg)
+evalMain prog =
+  match lookupBinding "main" (evalOneFacts emptyFacts [] ("__main__", prog))
+    Some v => ppValue (force v)
+    None => runtimePanic ENoMain noMainMsg
 
 -- Run the program for its OUTPUT (forcing `main`, whose IO side-effects append
 -- to outputChunks) and return the captured stdout — diffs against === EVAL ===.
@@ -4419,73 +4413,71 @@ coreImportExports privateCells globalCells preludeDecls =
 -- drivers, so the oracle stays free of I/O regardless of what `e` is otherwise instantiated at.
 -- [T-EVAL-LOCKSTEP] [facts] is the program's `ProgramFacts`: its dispositions
 -- select the inherited defaults, and its evidence answers every method and
--- dictionary site.  The returned values are forced by the caller, so it forces
--- them inside `withFacts` of the same facts; the bracket here covers the install.
+-- dictionary site; every environment built here carries it.
 export
 evalModulesWith : ProgramFacts ->
   List (String, Value e) ->
   List Decl ->
   List (String, List Decl) ->
   <e> List (String, Value e)
-evalModulesWith facts extraExterns preludeDecls0 modules0 = withFacts
-  facts
-  (_ =>
-    -- #1292: rename CROSS-UNIT-COLLIDING constructors to `<mid>__<Ctor>` before
-    -- anything below reads them, so the program-global `ctorToTypeRef` seeded on the
-    -- next lines stops folding two modules' same-named constructors into ONE entry
-    -- (which tagged every value of the loser's type with the winner's type, and
-    -- dispatched it to the wrong impl -- silently, at exit 0).  A no-op returning its
-    -- input BYTE-IDENTICAL when no constructor name is declared by two units, which
-    -- is every program without the bug.  Idempotent, so a caller that had to rename
-    -- earlier (tools/test_cmd.mdk, whose `test`/prop bodies come out of this same
-    -- module list) costs nothing here.
-    let (preludeDecls, modules) =
-      mangleCtorCollisions facts.pfSibling preludeDecls0 modules0
-    let externs = externBindings () ++ extraExterns
-    let moduleDecls = flatMap snd modules
-    let allDecls = preludeDecls ++ moduleDecls
-    let dispositions = facts.pfDispositions
-    ctorToTypeRef := buildCtorToType allDecls
-    ffiExternNamesRef := externDeclNamesOfDecls allDecls
-    let disp = installDispatchTables dispositions allDecls
-    let ctors = collectCtors allDecls
-    let preludeGroups = groupsOf preludeDecls
-    -- S1-PRELUDE (a), #1497/#1492 — see `preludeShadowNames` for the full mechanism.
-    let shadowNames = preludeShadowNames moduleDecls
-    let preludeShared = groupsNotNamedIn shadowNames preludeGroups
-    let preludePrivate = groupsNamedIn shadowNames preludeGroups
-    let globalNames =
-      map fst boolSeeds
-        ++ map fst externs
-        ++ map fst ctors
-        ++ implMethodNames allDecls
-        ++ map fst preludeShared
-    let globalCells = map (n => (n, Ref VUnit)) globalNames
-    let globalFrame = indexedFrame globalCells
-    let runtimeFrame = indexedFrame (runtimeCellsOf externs)
-    let privateCells = map (fst >> (n => (n, Ref VUnit))) preludePrivate
-    let globalEnv =
-      EvalEnv (globalFramesWith privateCells globalFrame ++ [runtimeFrame])
-    let mods =
-      buildModInfos
-        globalFrame
-        runtimeFrame
-        (coreImportExports privateCells globalCells preludeDecls)
-        facts.pfSibling
-        []
-        []
-        modules
-    let implEntries =
-      flatMap (declImplEntries dispositions globalEnv disp) preludeDecls
-        ++ flatMap (modImplEntries disp) mods
-    let _ = installConsts globalCells boolSeeds
-    let _ = installConsts globalCells externs
-    let _ = installConsts globalCells ctors
-    let _ = installConsts globalCells (coalesceImpls implEntries)
-    let _ = installGroups globalEnv globalCells preludeShared
-    let _ = installGroups globalEnv privateCells preludePrivate
-    let _ = installModGroups mods
-    rootLocals mods)
+evalModulesWith facts extraExterns preludeDecls0 modules0 =
+  -- #1292: rename CROSS-UNIT-COLLIDING constructors to `<mid>__<Ctor>` before
+  -- anything below reads them, so the program-global `ctorToTypeRef` seeded on the
+  -- next lines stops folding two modules' same-named constructors into ONE entry
+  -- (which tagged every value of the loser's type with the winner's type, and
+  -- dispatched it to the wrong impl -- silently, at exit 0).  A no-op returning its
+  -- input BYTE-IDENTICAL when no constructor name is declared by two units, which
+  -- is every program without the bug.  Idempotent, so a caller that had to rename
+  -- earlier (tools/test_cmd.mdk, whose `test`/prop bodies come out of this same
+  -- module list) costs nothing here.
+  let (preludeDecls, modules) =
+    mangleCtorCollisions facts.pfSibling preludeDecls0 modules0
+  let externs = externBindings () ++ extraExterns
+  let moduleDecls = flatMap snd modules
+  let allDecls = preludeDecls ++ moduleDecls
+  let dispositions = facts.pfDispositions
+  ctorToTypeRef := buildCtorToType allDecls
+  ffiExternNamesRef := externDeclNamesOfDecls allDecls
+  let disp = installDispatchTables dispositions allDecls
+  let ctors = collectCtors allDecls
+  let preludeGroups = groupsOf preludeDecls
+  -- S1-PRELUDE (a), #1497/#1492 — see `preludeShadowNames` for the full mechanism.
+  let shadowNames = preludeShadowNames moduleDecls
+  let preludeShared = groupsNotNamedIn shadowNames preludeGroups
+  let preludePrivate = groupsNamedIn shadowNames preludeGroups
+  let globalNames =
+    map fst boolSeeds
+      ++ map fst externs
+      ++ map fst ctors
+      ++ implMethodNames allDecls
+      ++ map fst preludeShared
+  let globalCells = map (n => (n, Ref VUnit)) globalNames
+  let globalFrame = indexedFrame globalCells
+  let runtimeFrame = indexedFrame (runtimeCellsOf externs)
+  let privateCells = map (fst >> (n => (n, Ref VUnit))) preludePrivate
+  let globalEnv =
+    EvalEnv facts (globalFramesWith privateCells globalFrame ++ [runtimeFrame])
+  let mods =
+    buildModInfos
+      facts
+      globalFrame
+      runtimeFrame
+      (coreImportExports privateCells globalCells preludeDecls)
+      facts.pfSibling
+      []
+      []
+      modules
+  let implEntries =
+    flatMap (declImplEntries dispositions globalEnv disp) preludeDecls
+      ++ flatMap (modImplEntries facts disp) mods
+  let _ = installConsts globalCells boolSeeds
+  let _ = installConsts globalCells externs
+  let _ = installConsts globalCells ctors
+  let _ = installConsts globalCells (coalesceImpls implEntries)
+  let _ = installGroups globalEnv globalCells preludeShared
+  let _ = installGroups globalEnv privateCells preludePrivate
+  let _ = installModGroups mods
+  rootLocals mods
 
 -- pass 1: allocate each module's local cells + build its env (imports resolved
 -- against already-processed modules, since loader order is dependency-first)
@@ -4497,7 +4489,8 @@ evalModulesWith facts extraExterns preludeDecls0 modules0 = withFacts
 -- core as C` / `import core.{n as p}` must reach the prelude's own standalone.
 -- One list cannot answer both — a single frame is first-match, so whichever cell
 -- it holds is the only one either consumer can see.
-buildModInfos : EnvFrame (Value e) ->
+buildModInfos : ProgramFacts ->
+  EnvFrame (Value e) ->
   EnvFrame (Value e) ->
   ModExports (Value e) ->
   List SiblingPair ->
@@ -4505,8 +4498,8 @@ buildModInfos : EnvFrame (Value e) ->
   List (String, ModExports (Value e)) ->
   List (String, List Decl) ->
   List (ModInfo (Value e))
-buildModInfos _ _ _ _ _ _ [] = []
-buildModInfos globalFrame runtimeFrame coreExports sibling fulls exportsMap ((mid, decls) :: rest) =
+buildModInfos _ _ _ _ _ _ _ [] = []
+buildModInfos facts globalFrame runtimeFrame coreExports sibling fulls exportsMap ((mid, decls) :: rest) =
   let grps = groupsOf decls
   -- P0-9: each module's OWN constructors ALSO live in its LOCAL frame (they stay
   -- in the shared global too — see evalModulesWith — for by-name / `Type(..)`
@@ -4525,7 +4518,7 @@ buildModInfos globalFrame runtimeFrame coreExports sibling fulls exportsMap ((mi
   -- applyClosure/applyClosureF (below) ever searches this far.
   let fileTagFrame =
     ScanFrame [(evalFileTagName, Ref (VString (moduleFileOf mid)))]
-  let menv = EvalEnv [
+  let menv = EvalEnv facts [
     indexedFrame localCells,
     indexedFrame imports,
     globalFrame,
@@ -4544,6 +4537,7 @@ buildModInfos globalFrame runtimeFrame coreExports sibling fulls exportsMap ((mi
         decls
   ModInfo mid decls grps localCells menv
     :: buildModInfos
+      facts
       globalFrame
       runtimeFrame
       coreExports
@@ -4682,13 +4676,13 @@ installModGroups ((ModInfo _ decls grps cells menv) :: rest) =
   installModGroups rest
 
 -- a module's impl methods / interface defaults close over ITS env but coalesce
--- into the shared global VMulti; the dispositions are those of the bracket its
--- driver opened
-modImplEntries : List ((String, String, String), List Int) ->
+-- into the shared global VMulti; the dispositions are those of [facts]
+modImplEntries : ProgramFacts ->
+  List ((String, String, String), List Int) ->
   ModInfo (Value e) ->
   List (String, (Int, Value e))
-modImplEntries disp (ModInfo _ decls _ _ menv) =
-  flatMap (declImplEntries (factsNow ()).pfDispositions menv disp) decls
+modImplEntries facts disp (ModInfo _ decls _ _ menv) =
+  flatMap (declImplEntries facts.pfDispositions menv disp) decls
 
 -- the root module is last in dependency order; its locals hold `main`
 rootLocals : List (ModInfo (Value e)) -> <e> List (String, Value e)
@@ -4708,7 +4702,6 @@ rootLocals (_ :: rest) = rootLocals rest
 -- (testCapableExterns) can override the frozen clock/GC constants without those
 -- prims reaching the differential-oracle probes.  Kept in LOCKSTEP with
 -- evalModulesWith — the two module drivers are deliberate parallel copies.
--- The caller forces the returned values inside `withFacts facts`.
 export
 evalModulesRootEnvFacts : ProgramFacts ->
   List (String, Value e) ->
@@ -4718,10 +4711,9 @@ evalModulesRootEnvFacts : ProgramFacts ->
 evalModulesRootEnvFacts facts extraExterns preludeDecls modules =
   let (mods, globalCells) =
     buildRootModuleStateWith facts extraExterns preludeDecls modules
-  rootFullEnv mods globalCells
+  rootFullEnv facts mods globalCells
 
--- `evalModulesRootEnvFacts` returning the root environment itself; the caller
--- evaluates in it inside `withFacts facts`.
+-- `evalModulesRootEnvFacts` returning the root environment itself.
 export
 evalModulesRootEvalEnvFacts : ProgramFacts ->
   List (String, Value e) ->
@@ -4731,7 +4723,7 @@ evalModulesRootEvalEnvFacts : ProgramFacts ->
 evalModulesRootEvalEnvFacts facts extraExterns preludeDecls modules =
   let (mods, globalCells) =
     buildRootModuleStateWith facts extraExterns preludeDecls modules
-  rootFullEvalEnv mods globalCells
+  rootFullEvalEnv facts mods globalCells
 
 -- [T-EVAL-LOCKSTEP] third driver, over [facts] as `evalModulesWith` is.
 buildRootModuleStateWith : ProgramFacts ->
@@ -4739,72 +4731,75 @@ buildRootModuleStateWith : ProgramFacts ->
   List Decl ->
   List (String, List Decl) ->
   <e> (List (ModInfo (Value e)), List (String, Ref (Value e)))
-buildRootModuleStateWith facts extraExterns preludeDecls0 modules0 = withFacts
-  facts
-  (_ =>
-    -- same rename, same reason as evalModulesWith.
-    let (preludeDecls, modules) =
-      mangleCtorCollisions facts.pfSibling preludeDecls0 modules0
-    let externs = externBindings () ++ extraExterns
-    let moduleDecls = flatMap snd modules
-    let allDecls = preludeDecls ++ moduleDecls
-    let dispositions = facts.pfDispositions
-    ctorToTypeRef := buildCtorToType allDecls
-    ffiExternNamesRef := externDeclNamesOfDecls allDecls
-    let disp = installDispatchTables dispositions allDecls
-    let ctors = collectCtors allDecls
-    let preludeGroups = groupsOf preludeDecls
-    -- S1-PRELUDE (a), #1497/#1492 — see `preludeShadowNames` for the full mechanism.
-    let shadowNames = preludeShadowNames moduleDecls
-    let preludeShared = groupsNotNamedIn shadowNames preludeGroups
-    let preludePrivate = groupsNamedIn shadowNames preludeGroups
-    let globalNames =
-      map fst boolSeeds
-        ++ map fst externs
-        ++ map fst ctors
-        ++ implMethodNames allDecls
-        ++ map fst preludeShared
-    let globalCells = map (n => (n, Ref VUnit)) globalNames
-    let globalFrame = indexedFrame globalCells
-    let runtimeFrame = indexedFrame (runtimeCellsOf externs)
-    let privateCells = map (fst >> (n => (n, Ref VUnit))) preludePrivate
-    let globalEnv =
-      EvalEnv (globalFramesWith privateCells globalFrame ++ [runtimeFrame])
-    let mods =
-      buildModInfos
-        globalFrame
-        runtimeFrame
-        (coreImportExports privateCells globalCells preludeDecls)
-        facts.pfSibling
-        []
-        []
-        modules
-    let implEntries =
-      flatMap (declImplEntries dispositions globalEnv disp) preludeDecls
-        ++ flatMap (modImplEntries disp) mods
-    let _ = installConsts globalCells boolSeeds
-    let _ = installConsts globalCells externs
-    let _ = installConsts globalCells ctors
-    let _ = installConsts globalCells (coalesceImpls implEntries)
-    let _ = installGroups globalEnv globalCells preludeShared
-    let _ = installGroups globalEnv privateCells preludePrivate
-    let _ = installModGroups mods
-    (mods, globalCells))
+buildRootModuleStateWith facts extraExterns preludeDecls0 modules0 =
+  -- same rename, same reason as evalModulesWith.
+  let (preludeDecls, modules) =
+    mangleCtorCollisions facts.pfSibling preludeDecls0 modules0
+  let externs = externBindings () ++ extraExterns
+  let moduleDecls = flatMap snd modules
+  let allDecls = preludeDecls ++ moduleDecls
+  let dispositions = facts.pfDispositions
+  ctorToTypeRef := buildCtorToType allDecls
+  ffiExternNamesRef := externDeclNamesOfDecls allDecls
+  let disp = installDispatchTables dispositions allDecls
+  let ctors = collectCtors allDecls
+  let preludeGroups = groupsOf preludeDecls
+  -- S1-PRELUDE (a), #1497/#1492 — see `preludeShadowNames` for the full mechanism.
+  let shadowNames = preludeShadowNames moduleDecls
+  let preludeShared = groupsNotNamedIn shadowNames preludeGroups
+  let preludePrivate = groupsNamedIn shadowNames preludeGroups
+  let globalNames =
+    map fst boolSeeds
+      ++ map fst externs
+      ++ map fst ctors
+      ++ implMethodNames allDecls
+      ++ map fst preludeShared
+  let globalCells = map (n => (n, Ref VUnit)) globalNames
+  let globalFrame = indexedFrame globalCells
+  let runtimeFrame = indexedFrame (runtimeCellsOf externs)
+  let privateCells = map (fst >> (n => (n, Ref VUnit))) preludePrivate
+  let globalEnv =
+    EvalEnv facts (globalFramesWith privateCells globalFrame ++ [runtimeFrame])
+  let mods =
+    buildModInfos
+      facts
+      globalFrame
+      runtimeFrame
+      (coreImportExports privateCells globalCells preludeDecls)
+      facts.pfSibling
+      []
+      []
+      modules
+  let implEntries =
+    flatMap (declImplEntries dispositions globalEnv disp) preludeDecls
+      ++ flatMap (modImplEntries facts disp) mods
+  let _ = installConsts globalCells boolSeeds
+  let _ = installConsts globalCells externs
+  let _ = installConsts globalCells ctors
+  let _ = installConsts globalCells (coalesceImpls implEntries)
+  let _ = installGroups globalEnv globalCells preludeShared
+  let _ = installGroups globalEnv privateCells preludePrivate
+  let _ = installModGroups mods
+  (mods, globalCells)
 
 -- Flatten the root module's frame stack (locals first, then imports, then
 -- globals) to an assoc list — local names shadow imports shadow globals, which
 -- is the lookup order in its EvalEnv.
-rootFullEnv : List (ModInfo (Value e)) ->
+rootFullEnv : ProgramFacts ->
+  List (ModInfo (Value e)) ->
   List (String, Ref (Value e)) ->
   <e> List (String, Value e)
-rootFullEnv mods globalCells = flattenEnv (rootFullEvalEnv mods globalCells)
+rootFullEnv facts mods globalCells =
+  flattenEnv (rootFullEvalEnv facts mods globalCells)
 
-rootFullEvalEnv : List (ModInfo (Value e)) ->
+rootFullEvalEnv : ProgramFacts ->
+  List (ModInfo (Value e)) ->
   List (String, Ref (Value e)) ->
   EvalEnv (Value e)
-rootFullEvalEnv [] globalCells = EvalEnv [ScanFrame globalCells]
-rootFullEvalEnv [ModInfo _ _ _ _ menv] _ = menv
-rootFullEvalEnv (_ :: rest) globalCells = rootFullEvalEnv rest globalCells
+rootFullEvalEnv facts [] globalCells = EvalEnv facts [ScanFrame globalCells]
+rootFullEvalEnv _ [ModInfo _ _ _ _ menv] _ = menv
+rootFullEvalEnv facts (_ :: rest) globalCells =
+  rootFullEvalEnv facts rest globalCells
 
 flattenEnv : EvalEnv (Value e) -> <e> List (String, Value e)
 flattenEnv env = map cellResult (concatList (envFrameCells env))
@@ -5007,11 +5002,11 @@ evalModulesOutputFacts : ProgramFacts ->
   List Decl ->
   List (String, List Decl) ->
   String
-evalModulesOutputFacts facts preludeDecls modules = withFacts facts (_ =>
+evalModulesOutputFacts facts preludeDecls modules =
   resetOutput ()
   let binds = evalModulesWith facts [] preludeDecls modules
   let _ = runMainForEffect binds
-  readOutput ())
+  readOutput ()
 
 -- ── run-path real-I/O externs (B2, RUN-EFFECTS) ────────────────────────────
 -- Real-I/O primitives installed ONLY by `medaka run`'s driver
@@ -5446,17 +5441,15 @@ evalModulesOutputRunFacts : ProgramFacts ->
   List Decl ->
   List (String, List Decl) ->
   <IO> String
-evalModulesOutputRunFacts facts preludeDecls modules = withFacts
-  facts
-  (_ =>
-    resetOutput ()
-    -- Only the real `medaka run` CLI driver reaches this function (never the
-    -- pure differential-oracle probes — see appendOutput/stashRunStdout above),
-    -- so this is the one place it is safe to arm the abort-time flush.
-    let _ = enableRunStdoutFlush ()
-    let binds = evalModulesWith facts (ioExternBindings ()) preludeDecls modules
-    let _ = runMainForEffect binds
-    readOutput ())
+evalModulesOutputRunFacts facts preludeDecls modules =
+  resetOutput ()
+  -- Only the real `medaka run` CLI driver reaches this function (never the
+  -- pure differential-oracle probes — see appendOutput/stashRunStdout above),
+  -- so this is the one place it is safe to arm the abort-time flush.
+  let _ = enableRunStdoutFlush ()
+  let binds = evalModulesWith facts (ioExternBindings ()) preludeDecls modules
+  let _ = runMainForEffect binds
+  readOutput ()
 
 -- ── Phase 0 (DRIVER-COLLAPSE): 1-module eval wrappers over evalModulesWith ──
 -- evalOneFacts / evalOneOutputFacts / evalOneRootEnvFacts run a SINGLE program as
@@ -5465,8 +5458,7 @@ evalModulesOutputRunFacts facts preludeDecls modules = withFacts
 -- module's funDefs as LOCALS over a per-module frame; for a single module with
 -- zero imports the root frame is locals ∪ globals.  It uses separate prelude/module
 -- install order — the binding/install/thunk-force hazard class (phases
--- 96/103/121/125/134).  The caller forces the returned values inside
--- `withFacts facts`.
+-- 96/103/121/125/134).
 export
 evalOneFacts : ProgramFacts ->
   List Decl ->

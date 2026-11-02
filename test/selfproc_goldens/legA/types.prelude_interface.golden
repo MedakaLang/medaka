@@ -1,0 +1,18 @@
+contextsOf : List (String, PubScheme) -> Map String (List VecObl)
+currentPreludeInterface : Unit -> List (List (List Atom), PreludeInterface)
+freezeInterface : CrossRun -> GraphRun -> Map String (Ty, List (String, Int)) -> List (String, PubScheme) -> Map String Unit -> InvocationView -> PreludeInterface
+freezeScheme : Scheme -> PubScheme
+interfaceKeyOf : Int -> List (String, String) -> String -> InterfaceKey
+joinKey : List Atom -> String
+keysMatch : InterfaceKey -> InterfaceKey -> Option String
+mapSlots : (a -> a) -> List (b, List a) -> List (b, List a)
+preludeCacheHit : (Int, Int) -> List Atom -> Option PreludeInterface
+preludeCacheRef : Ref (Option PreludeCacheEntry)
+seedPreludeInterface : (Int, Int) -> List (List (List Atom), PreludeInterface) -> Unit
+standaloneRows : Map String Unit -> List (String, Scheme) -> Map String Scheme
+thawInterface : GraphCtx -> PreludeInterface -> (ModuleBindings, List (String, PubScheme), CrossRun, GraphRunSeed)
+thawScheme : PubScheme -> Scheme
+zonkMethodSlot : MethodPredicateSlot -> MethodPredicateSlot
+zonkMonoList : ZState -> List Mono -> (ZState, List Mono)
+zonkRecord : RecordInfo -> RecordInfo
+zonkSlot : PredicateSlot -> PredicateSlot

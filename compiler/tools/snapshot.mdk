@@ -185,15 +185,17 @@ import types.annotate.{annotateProgram}
 import types.typecheck.{
   driveInputsFor,
   checkOneToLinesWithRuntime,
-  elaborateOneFacts,
+  elaborateModules,
   elaborateModulesWithReport,
   hadTypeErrors,
   hadMatchWarnings,
 }
 import types.target_profile.{selectedProfile}
 import types.private_mangle.{mangleUnitsEv}
-import types.program_facts.{emptyFacts, factsOfElabSources, factsWithEvidence}
-import eval.eval.{evalOneOutputFacts, funNamesOf, dropShadowedExp, noMainMsg}
+import types.program_facts.{
+  emptyFacts, factsOfElab, factsOfElabSources, factsWithEvidence
+}
+import eval.eval.{evalOneOutputFacts, funNamesOf, noMainMsg}
 import backend.emit_plan.{buildEmitPlan}
 
 import ir.extern_lower.{externHeadRows}
@@ -595,15 +597,16 @@ coreIrOf d =
 
 evalOf : List Decl -> List Decl -> List Decl -> String
 evalOf runtimeDecls coreDecls d =
-  let livePrelude = dropShadowedExp (funNamesOf d) coreDecls
-  let (elaborated, facts) = elaborateOneFacts (driveInputsFor
+  let elab = elaborateModules (driveInputsFor
     !selectedProfile
     False
-    []) runtimeDecls livePrelude (
-    "__user__",
-    d,
+    []) runtimeDecls coreDecls [
+    ("__user__", d),
+  ]
+  evalOneOutputFacts (factsOfElab elab) elab.erCore (
+    "__main__",
+    flatMap snd elab.erModules,
   )
-  evalOneOutputFacts facts [] ("__main__", elaborated)
 
 -- ── the emit path (BOTH backends, ONE lowered CProgram) ──────────────────────
 --

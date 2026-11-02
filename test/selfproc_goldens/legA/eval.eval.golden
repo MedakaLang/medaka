@@ -32,7 +32,7 @@ boolSeeds : List (String, Value a)
 boolToInt : Bool -> Int
 buildCtorFieldOrders : List Decl -> List (String, List String)
 buildMethodReqCounts : Option DispositionTable -> List Decl -> List ((String, String), Int)
-buildModInfos : EnvFrame (Value a) -> EnvFrame (Value a) -> ModExports (Value a) -> List SiblingPair -> List (String, ModExports (Value a)) -> List (String, ModExports (Value a)) -> List (String, List Decl) -> List (ModInfo (Value a))
+buildModInfos : ProgramFacts -> EnvFrame (Value a) -> EnvFrame (Value a) -> ModExports (Value a) -> List SiblingPair -> List (String, ModExports (Value a)) -> List (String, ModExports (Value a)) -> List (String, List Decl) -> List (ModInfo (Value a))
 buildRootModuleStateWith : ProgramFacts -> List (String, Value a) -> List Decl -> List (String, List Decl) -> <a> (List (ModInfo (Value a)), List (String, Ref (Value a)))
 buildStampExterns : Unit -> List (String, Value a)
 buildWith : Value a -> Int -> Int -> <a> List (Value a)
@@ -274,7 +274,7 @@ methodReqCountIndexGo : List ((String, String), Int) -> Map String (Map String I
 methodReqCountRef : Ref (Map String (Map String Int))
 mkGroup : List (String, (List Pat, Expr, Loc)) -> String -> (String, List (List Pat, Expr, Loc))
 modExportCells : ModExports a -> List (String, Ref a)
-modImplEntries : List ((String, String, String), List Int) -> ModInfo (Value a) -> List (String, (Int, Value a))
+modImplEntries : ProgramFacts -> List ((String, String, String), List Int) -> ModInfo (Value a) -> List (String, (Int, Value a))
 moduleExports : ExportView -> ModExports (Value a) -> List (String, ModExports (Value a)) -> EnvFrame (Value a) -> EnvFrame (Value a) -> List (String, Ref (Value a)) -> List Decl -> ModExports (Value a)
 moduleFileOf : String -> String
 moduleMethodNames : List Decl -> List String
@@ -501,8 +501,8 @@ rngDraw : Unit -> U64
 rngStateRef : Ref Int
 rngStep : Ref U64 -> U64
 rngU64Ref : Ref U64
-rootFullEnv : List (ModInfo (Value a)) -> List (String, Ref (Value a)) -> <a> List (String, Value a)
-rootFullEvalEnv : List (ModInfo (Value a)) -> List (String, Ref (Value a)) -> EvalEnv (Value a)
+rootFullEnv : ProgramFacts -> List (ModInfo (Value a)) -> List (String, Ref (Value a)) -> <a> List (String, Value a)
+rootFullEvalEnv : ProgramFacts -> List (ModInfo (Value a)) -> List (String, Ref (Value a)) -> EvalEnv (Value a)
 rootLocals : List (ModInfo (Value a)) -> <a> List (String, Value a)
 routeTag : EvalEnv (Value a) -> Route -> <a> String
 runGuards : EvalEnv (Value a) -> List Guard -> <a> Option (EvalEnv (Value a))

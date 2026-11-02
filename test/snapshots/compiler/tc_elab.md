@@ -1,5 +1,5 @@
 # META
-source_lines=2047
+source_lines=2055
 stages=DESUGAR,MARK
 # SOURCE
 -- tc_elab: dict-passing elaboration (`dictPass`), the grant rewrite (`grantWholeDomain`),
@@ -686,7 +686,8 @@ dictPass : ModuleCtx ->
   List String ->
   List Decl ->
   List Decl
-dictPass mctx idx mid names prog =
+dictPass mctx0 idx mid names prog =
+  let mctx = ownedBy mid mctx0
   let pe = PassEvidence idx (Ref omEmpty)
   map
     (dictPassDecl
@@ -697,6 +698,13 @@ dictPass mctx idx mid names prog =
     (mapProg
       (e => rewriteLocalDictExpr mctx.mcGraph (rewriteBinopExpr mctx pe e))
       (grantPass mctx.mcGraph pe mid prog))
+
+-- [mctx] re-pointed so evidence ids minted while module [mid] is dict-passed carry
+-- [mid] (core is ""), not whichever module was checked last.  Every other cell stays
+-- shared with [mctx]; only the identity cell is fresh.
+ownedBy : String -> ModuleCtx -> ModuleCtx
+ownedBy mid mctx =
+  { mctx | mcCells = { mctx.mcCells | currentModuleRef = Ref mid } }
 
 passIndex : PassEvidence -> EvIndex
 passIndex (PassEvidence idx _) = idx
@@ -2159,7 +2167,9 @@ sigPredicateSlot (iface, _) =
 (DFunDef false "realizeRecDictApps" ((PVar "_sx") (PList)) (ELit LUnit))
 (DFunDef false "realizeRecDictApps" ((PVar "sx") (PCons (PCon "RecDictApp" (PVar "routesRef") (PVar "callee") (PVar "encl") (PVar "mono") (PVar "scope") PWild) (PVar "rest"))) (EBlock (DoLet false false (PVar "slots") (EApp (EApp (EVar "optionOr") (EListLit)) (EApp (EApp (EVar "lookupPredicateSlots") (EVar "callee")) (EFieldAccess (EFieldAccess (EFieldAccess (EFieldAccess (EVar "sx") "sxModule") "mcCells") "funPredicateSlotsIdxRef") "value")))) (DoLet false false (PVar "routes") (EApp (EApp (EApp (EApp (EApp (EVar "recRoutes") (EVar "sx")) (EVar "encl")) (EVar "scope")) (EVar "mono")) (EVar "slots"))) (DoExpr (EApp (EApp (EVar "setRef") (EVar "routesRef")) (EVar "routes"))) (DoExpr (EApp (EApp (EVar "realizeRecDictApps") (EVar "sx")) (EVar "rest")))))
 (DTypeSig false "dictPass" (TyFun (TyCon "ModuleCtx") (TyFun (TyCon "EvIndex") (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyApp (TyCon "List") (TyCon "Decl"))))))))
-(DFunDef false "dictPass" ((PVar "mctx") (PVar "idx") (PVar "mid") (PVar "names") (PVar "prog")) (EBlock (DoLet false false (PVar "pe") (EApp (EApp (EVar "PassEvidence") (EVar "idx")) (EApp (EVar "Ref") (EVar "omEmpty")))) (DoExpr (EApp (EApp (EVar "map") (EApp (EApp (EApp (EApp (EVar "dictPassDecl") (EVar "mctx")) (EVar "pe")) (EApp (EApp (EVar "omFromNames") (EVar "names")) (EVar "omEmpty"))) (EApp (EVar "returnPosMethodNames") (EVar "prog")))) (EApp (EApp (EVar "mapProg") (ELam ((PVar "e")) (EApp (EApp (EVar "rewriteLocalDictExpr") (EFieldAccess (EVar "mctx") "mcGraph")) (EApp (EApp (EApp (EVar "rewriteBinopExpr") (EVar "mctx")) (EVar "pe")) (EVar "e"))))) (EApp (EApp (EApp (EApp (EVar "grantPass") (EFieldAccess (EVar "mctx") "mcGraph")) (EVar "pe")) (EVar "mid")) (EVar "prog")))))))
+(DFunDef false "dictPass" ((PVar "mctx0") (PVar "idx") (PVar "mid") (PVar "names") (PVar "prog")) (EBlock (DoLet false false (PVar "mctx") (EApp (EApp (EVar "ownedBy") (EVar "mid")) (EVar "mctx0"))) (DoLet false false (PVar "pe") (EApp (EApp (EVar "PassEvidence") (EVar "idx")) (EApp (EVar "Ref") (EVar "omEmpty")))) (DoExpr (EApp (EApp (EVar "map") (EApp (EApp (EApp (EApp (EVar "dictPassDecl") (EVar "mctx")) (EVar "pe")) (EApp (EApp (EVar "omFromNames") (EVar "names")) (EVar "omEmpty"))) (EApp (EVar "returnPosMethodNames") (EVar "prog")))) (EApp (EApp (EVar "mapProg") (ELam ((PVar "e")) (EApp (EApp (EVar "rewriteLocalDictExpr") (EFieldAccess (EVar "mctx") "mcGraph")) (EApp (EApp (EApp (EVar "rewriteBinopExpr") (EVar "mctx")) (EVar "pe")) (EVar "e"))))) (EApp (EApp (EApp (EApp (EVar "grantPass") (EFieldAccess (EVar "mctx") "mcGraph")) (EVar "pe")) (EVar "mid")) (EVar "prog")))))))
+(DTypeSig false "ownedBy" (TyFun (TyCon "String") (TyFun (TyCon "ModuleCtx") (TyCon "ModuleCtx"))))
+(DFunDef false "ownedBy" ((PVar "mid") (PVar "mctx")) (ERecordUpdate (EVar "mctx") ((fa "mcCells" (ERecordUpdate (EFieldAccess (EVar "mctx") "mcCells") ((fa "currentModuleRef" (EApp (EVar "Ref") (EVar "mid")))))))))
 (DTypeSig false "passIndex" (TyFun (TyCon "PassEvidence") (TyCon "EvIndex")))
 (DFunDef false "passIndex" ((PCon "PassEvidence" (PVar "idx") PWild)) (EVar "idx"))
 (DTypeSig false "passMethodOf" (TyFun (TyCon "PassEvidence") (TyFun (TyCon "EvId") (TyCon "PassMethod"))))
@@ -2524,7 +2534,9 @@ sigPredicateSlot (iface, _) =
 (DFunDef false "realizeRecDictApps" ((PVar "_sx") (PList)) (ELit LUnit))
 (DFunDef false "realizeRecDictApps" ((PVar "sx") (PCons (PCon "RecDictApp" (PVar "routesRef") (PVar "callee") (PVar "encl") (PVar "mono") (PVar "scope") PWild) (PVar "rest"))) (EBlock (DoLet false false (PVar "slots") (EApp (EApp (EVar "optionOr") (EListLit)) (EApp (EApp (EVar "lookupPredicateSlots") (EVar "callee")) (EFieldAccess (EFieldAccess (EFieldAccess (EFieldAccess (EVar "sx") "sxModule") "mcCells") "funPredicateSlotsIdxRef") "value")))) (DoLet false false (PVar "routes") (EApp (EApp (EApp (EApp (EApp (EVar "recRoutes") (EVar "sx")) (EVar "encl")) (EVar "scope")) (EVar "mono")) (EVar "slots"))) (DoExpr (EApp (EApp (EVar "setRef") (EVar "routesRef")) (EVar "routes"))) (DoExpr (EApp (EApp (EVar "realizeRecDictApps") (EVar "sx")) (EVar "rest")))))
 (DTypeSig false "dictPass" (TyFun (TyCon "ModuleCtx") (TyFun (TyCon "EvIndex") (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyApp (TyCon "List") (TyCon "Decl"))))))))
-(DFunDef false "dictPass" ((PVar "mctx") (PVar "idx") (PVar "mid") (PVar "names") (PVar "prog")) (EBlock (DoLet false false (PVar "pe") (EApp (EApp (EVar "PassEvidence") (EVar "idx")) (EApp (EVar "Ref") (EVar "omEmpty")))) (DoExpr (EApp (EApp (EMethodRef "map") (EApp (EApp (EApp (EApp (EVar "dictPassDecl") (EVar "mctx")) (EVar "pe")) (EApp (EApp (EVar "omFromNames") (EVar "names")) (EVar "omEmpty"))) (EApp (EVar "returnPosMethodNames") (EVar "prog")))) (EApp (EApp (EVar "mapProg") (ELam ((PVar "e")) (EApp (EApp (EVar "rewriteLocalDictExpr") (EFieldAccess (EVar "mctx") "mcGraph")) (EApp (EApp (EApp (EVar "rewriteBinopExpr") (EVar "mctx")) (EVar "pe")) (EVar "e"))))) (EApp (EApp (EApp (EApp (EVar "grantPass") (EFieldAccess (EVar "mctx") "mcGraph")) (EVar "pe")) (EVar "mid")) (EVar "prog")))))))
+(DFunDef false "dictPass" ((PVar "mctx0") (PVar "idx") (PVar "mid") (PVar "names") (PVar "prog")) (EBlock (DoLet false false (PVar "mctx") (EApp (EApp (EVar "ownedBy") (EVar "mid")) (EVar "mctx0"))) (DoLet false false (PVar "pe") (EApp (EApp (EVar "PassEvidence") (EVar "idx")) (EApp (EVar "Ref") (EVar "omEmpty")))) (DoExpr (EApp (EApp (EMethodRef "map") (EApp (EApp (EApp (EApp (EVar "dictPassDecl") (EVar "mctx")) (EVar "pe")) (EApp (EApp (EVar "omFromNames") (EVar "names")) (EVar "omEmpty"))) (EApp (EVar "returnPosMethodNames") (EVar "prog")))) (EApp (EApp (EVar "mapProg") (ELam ((PVar "e")) (EApp (EApp (EVar "rewriteLocalDictExpr") (EFieldAccess (EVar "mctx") "mcGraph")) (EApp (EApp (EApp (EVar "rewriteBinopExpr") (EVar "mctx")) (EVar "pe")) (EVar "e"))))) (EApp (EApp (EApp (EApp (EVar "grantPass") (EFieldAccess (EVar "mctx") "mcGraph")) (EVar "pe")) (EVar "mid")) (EVar "prog")))))))
+(DTypeSig false "ownedBy" (TyFun (TyCon "String") (TyFun (TyCon "ModuleCtx") (TyCon "ModuleCtx"))))
+(DFunDef false "ownedBy" ((PVar "mid") (PVar "mctx")) (ERecordUpdate (EVar "mctx") ((fa "mcCells" (ERecordUpdate (EFieldAccess (EVar "mctx") "mcCells") ((fa "currentModuleRef" (EApp (EVar "Ref") (EVar "mid")))))))))
 (DTypeSig false "passIndex" (TyFun (TyCon "PassEvidence") (TyCon "EvIndex")))
 (DFunDef false "passIndex" ((PCon "PassEvidence" (PVar "idx") PWild)) (EVar "idx"))
 (DTypeSig false "passMethodOf" (TyFun (TyCon "PassEvidence") (TyFun (TyCon "EvId") (TyCon "PassMethod"))))
