@@ -1,0 +1,152 @@
+-- compiler/tools/lint_recursion_test.mdk: sibling test for lint_recursion.mdk
+-- (`[P-TEST-SIBLING]`, AGENTS.md).  Each row parses a small program, takes the
+-- clause or local loop named in the row and checks the roles of the arguments
+-- of its self-calls.
+
+import test.{expectEqual}
+import frontend.ast.{Decl(..), Expr, Pat}
+import frontend.ast_walk.{childExprs}
+import list.{findMap}
+import tools.lint_recursion.{
+  ArgRole(..),
+  FoldVerdict(..),
+  Owner(..),
+  SelfCall(..),
+  foldVerdict,
+  letOwners,
+  selfCalls,
+}
+import tools.lint_scope.{buildScopes}
+import tools.lint.{lintParseSource}
+
+-- The roles of each self-call in the body of the top-level clause `name`.
+rolesOf : String -> String -> Option (List (List ArgRole))
+rolesOf name src = match lintParseSource src
+  Err _ => None
+  Ok (decls, _) =>
+    map
+      (c =>
+        map callRoles (selfCalls (buildScopes decls) (ownerOf name c) (snd c)))
+      (findMap (clauseOf name) decls)
+
+ownerOf : String -> (List Pat, Expr) -> Owner
+ownerOf name c = Owner name (fst c) None
+
+clauseOf : String -> Decl -> Option (List Pat, Expr)
+clauseOf name (DFunDef _ n ps body _ _) =
+  if n == name then Some (ps, body) else None
+clauseOf _ _ = None
+
+callRoles : SelfCall -> List ArgRole
+callRoles (SelfCall _ _ roles) = roles
+
+-- The roles of each self-call made by the local loops of the first `let`/`where`
+-- group in the body of `name`.
+localRolesOf : String -> String -> Option (List (List ArgRole))
+localRolesOf name src = match lintParseSource src
+  Err _ => None
+  Ok (decls, _) => match findMap (clauseOf name) decls
+    None => None
+    Some (_, body) =>
+      let scopes = buildScopes decls
+      Some
+        (flatMap
+          (o => map callRoles (selfCalls scopes (fst o) (snd o)))
+          (groupOwners body))
+
+groupOwners : Expr -> List (Owner, Expr)
+groupOwners e = match letOwners e
+  [] => flatMap groupOwners (childExprs e)
+  found => found
+
+-- The fold verdict of the body of `g`.
+foldOf : String -> FoldVerdict
+foldOf src = match lintParseSource src
+  Ok (decls, _) => match findMap (clauseOf "g") decls
+    Some (_, body) => foldVerdict body
+    None => NotAFold
+  Err _ => NotAFold
+
+test "a full-arity self-call is matched, with each argument's role" =
+  expectEqual
+    (Some [[Advanced 0, Unchanged 1]])
+    (rolesOf "f" "f a b = if a == 0 then b else f (a - 1) b\n")
+
+test "a partial self-application is not matched" =
+  expectEqual (Some []) (rolesOf "f" "f a b = map (f a) [b]\n")
+
+test "an over-application is not matched" =
+  expectEqual (Some []) (rolesOf "f" "f a = f a 1\n")
+
+test "a call to another function is not matched" =
+  expectEqual (Some []) (rolesOf "f" "f a = g a\n\ng a = f a\n")
+
+test "a lambda parameter that shadows the name is not matched" =
+  expectEqual (Some []) (rolesOf "f" "f a = map (f => f a) [a]\n")
+
+test "a let binding that shadows the name is not matched" =
+  expectEqual (Some []) (rolesOf "f" "f a =\n  let f = x => x\n  f a\n")
+
+test "a where-local loop is an owner of its own self-calls" =
+  expectEqual
+    (Some [[Advanced 0, Advanced 1]])
+    (localRolesOf
+      "f"
+      "f xs = go xs 0\n  where\n    go [] n = n\n    go (y :: ys) n = go ys (n + y)\n")
+
+test "the enclosing function's name inside a where-local loop is not the loop" =
+  expectEqual
+    (Some [])
+    (localRolesOf "f" "f xs = go xs\n  where\n    go ys = f ys\n")
+
+test "an argument passed on unchanged is Unchanged" =
+  expectEqual
+    (Some [[Unchanged 0, Advanced 1]])
+    (rolesOf "f" "f s n = if n == 0 then s else f s (n - 1)\n")
+
+test "an argument built from nothing a parameter holds is Fresh" =
+  expectEqual (Some [[Fresh]]) (rolesOf "f" "f a = if a == 0 then 0 else f 0\n")
+
+test "an arm over a parameter binds parts of that parameter" =
+  expectEqual
+    (Some [[Advanced 0, AppendedTo 1]])
+    (rolesOf
+      "f"
+      "f xs acc = match xs\n  [] => acc\n  x :: rest => f rest (acc ++ [x])\n")
+
+test "acc ++ e is an append onto the accumulator" =
+  expectEqual
+    (Some [[AppendedTo 0, Advanced 1]])
+    (rolesOf "f" "f acc n = if n == 0 then acc else f (acc ++ [n]) (n - 1)\n")
+
+test "e ++ acc is a prepend, not an append" =
+  expectEqual
+    (Some [[PrependedTo 0, Unchanged 1]])
+    (rolesOf "f" "f acc n = if n == 0 then acc else f ([n] ++ acc) n\n")
+
+test "a chained append stays an append" =
+  expectEqual
+    (Some [[AppendedTo 0]])
+    (rolesOf "f" "f acc = f (acc ++ [1] ++ [2])\n")
+
+test "a fold lambda that appends onto its accumulator" =
+  expectEqual FoldAppends (foldOf "g xs = fold (acc x => acc ++ [x]) [] xs\n")
+
+test "a fold lambda that conses onto its accumulator does not" =
+  expectEqual FoldPlain (foldOf "g xs = fold (acc x => x :: acc) [] xs\n")
+
+test "a fold lambda that prepends to its accumulator does not" =
+  expectEqual FoldPlain (foldOf "g xs = fold (acc x => [x] ++ acc) [] xs\n")
+
+test "an append in one branch of a fold lambda counts" =
+  expectEqual
+    FoldAppends
+    (foldOf "g xs = fold (acc x => if x > 0 then acc ++ [x] else acc) [] xs\n")
+
+test "foldRight's accumulator is its second parameter" =
+  expectEqual
+    FoldAppends
+    (foldOf "g xs = foldRight (x acc => acc ++ [x]) [] xs\n")
+
+test "a call that is not a fold is NotAFold" =
+  expectEqual NotAFold (foldOf "g xs = map (x => x ++ [x]) xs\n")
