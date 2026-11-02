@@ -88,17 +88,42 @@ preflight:
 ## falls back to one step at a time with every core nested.
 ## Steps share no scratch: each `medaka test --native` builds in its own mktemp
 ## directory, so the only ordering kept is a -O2 rerun after its base step.
+## The outer count never exceeds the number of selected steps, so a shard holding
+## one step (below) runs it with every core nested.
 INLANG_CORES ?= $(shell nproc 2>/dev/null || sysctl -n hw.ncpu 2>/dev/null || echo 4)
 INLANG_SERIAL := $(filter 3.%,$(MAKE_VERSION))
 INLANG_JOBS_ORIGIN := $(origin INLANG_JOBS)
-INLANG_BASE_JOBS := $(if $(INLANG_SERIAL),1,$(shell j=$$(( $(INLANG_CORES) / 2 )); [ $$j -ge 1 ] || j=1; echo $$j))
-INLANG_JOBS ?= $(if $(INLANG_SERIAL),1,$(shell j=$(INLANG_BASE_JOBS); [ $(INLANG_CORES) -lt 4 ] || j=$$(( j + 1 )); echo $$j))
-INLANG_NESTED ?= $(shell n=$$(( $(INLANG_CORES) / $(if $(filter undefined,$(INLANG_JOBS_ORIGIN)),$(INLANG_BASE_JOBS),$(INLANG_JOBS)) )); [ $$n -ge 1 ] || n=1; echo $$n)
-INLANG_SYNC := $(if $(INLANG_SERIAL),,--output-sync=target)
 INLANG_MAKEFILE := $(lastword $(MAKEFILE_LIST))
 ## The step list is READ from the `inlang-*` targets between the markers below,
 ## so the targets are the one declaration (preflight reads the same span).
 INLANG_STEPS := $(shell awk '/^. inlang-steps: begin/{f=1;next} /^. inlang-steps: end/{exit} f&&/^inlang-[^ :]*:/{sub(/:.*/,""); print}' $(INLANG_MAKEFILE))
+## CI splits the suite across runners with INLANG_SHARD=k/N; unset, every step runs.
+## Each step named in INLANG_SOLO has a shard of its own, the first ones in order:
+## `inlang-types` is a directory of ~80 probes and costs about as much as half of
+## the other steps together.  The other steps are dealt round-robin over the
+## remaining shards, each `-o2` rerun with its base step, because an order-only
+## prerequisite is still built and would otherwise run in two shards.  A shard
+## that selects no step is an error, never a green run of nothing.
+INLANG_SOLO ?= inlang-types
+INLANG_SHARD ?=
+INLANG_SELECTED := $(if $(INLANG_SHARD),$(shell printf '%s\n' $(INLANG_STEPS) | awk -v spec='$(INLANG_SHARD)' -v solo='$(INLANG_SOLO)' ' \
+  BEGIN { split(spec, p, "/"); k = p[1] + 0; n = p[2] + 0; ns = split(solo, s, " "); \
+          for (i = 1; i <= ns; i++) slot[s[i]] = i; \
+          if (spec !~ /^[0-9]+\/[0-9]+$$/ || k < 1 || k > n || n <= ns) { print "inlang-shard-invalid"; exit } } \
+  { if ($$0 in slot) sh = slot[$$0]; \
+    else if ($$0 ~ /-o2$$/) { b = substr($$0, 1, length($$0) - 3); if (!(b in got)) { print "inlang-shard-invalid"; exit } sh = got[b] } \
+    else { sh = ns + 1 + (r % (n - ns)); r++ } \
+    got[$$0] = sh; if (sh == k) print $$0 }'),$(INLANG_STEPS))
+ifneq ($(filter inlang-shard-invalid,$(INLANG_SELECTED)),)
+$(error INLANG_SHARD=$(INLANG_SHARD): want k/N with 1 <= k <= N and N above the $(words $(INLANG_SOLO)) solo step(s), and every -o2 step after its base)
+endif
+ifeq ($(strip $(INLANG_SELECTED)),)
+$(error INLANG_SHARD=$(INLANG_SHARD) selects no inlang step)
+endif
+INLANG_BASE_JOBS := $(if $(INLANG_SERIAL),1,$(shell j=$$(( $(INLANG_CORES) / 2 )); [ $$j -ge 1 ] || j=1; [ $$j -le $(words $(INLANG_SELECTED)) ] || j=$(words $(INLANG_SELECTED)); echo $$j))
+INLANG_JOBS ?= $(if $(INLANG_SERIAL),1,$(shell j=$(INLANG_BASE_JOBS); [ $(INLANG_CORES) -lt 4 ] || j=$$(( j + 1 )); echo $$j))
+INLANG_NESTED ?= $(shell n=$$(( $(INLANG_CORES) / $(if $(filter undefined,$(INLANG_JOBS_ORIGIN)),$(INLANG_BASE_JOBS),$(INLANG_JOBS)) )); [ $$n -ge 1 ] || n=1; echo $$n)
+INLANG_SYNC := $(if $(INLANG_SERIAL),,--output-sync=target)
 
 
 ## test    — the IN-LANGUAGE suite: doctests, property tests, and `test "…"` decls,
@@ -122,7 +147,7 @@ test: medaka
 	GC_INITIAL_HEAP_SIZE=$(if $(GC_INITIAL_HEAP_SIZE),$(GC_INITIAL_HEAP_SIZE),1073741824) MEDAKA_TEST_JOBS=$(if $(MEDAKA_TEST_JOBS),$(MEDAKA_TEST_JOBS),$(INLANG_NESTED)) $(MAKE) -f $(INLANG_MAKEFILE) --no-print-directory -j$(INLANG_JOBS) $(INLANG_SYNC) inlang-steps
 
 .PHONY: inlang-steps $(INLANG_STEPS)
-inlang-steps: $(INLANG_STEPS)
+inlang-steps: $(INLANG_SELECTED)
 
 # inlang-steps: begin (test/preflight.sh derives its file set from the lines between these markers)
 inlang-ported:
