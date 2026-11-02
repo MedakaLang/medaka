@@ -1,5 +1,5 @@
 # META
-source_lines=2726
+source_lines=2725
 stages=DESUGAR,MARK
 # SOURCE
 -- compiler/driver/build_cmd.mdk — `medaka build`, self-hosted
@@ -681,8 +681,7 @@ treesLoaded () = isSome !preludeTreesRef
 
 -- [inputs] for a drive over [coreDecls], keyed for the tree arm when this
 -- process holds the shipped prelude and [coreDecls] are all of core: a drive
--- whose prelude had a shadowed function dropped (`dropShadowedExp`) is not the
--- core the trees were written for.
+-- over a trimmed prelude is not the core the trees were written for.
 export
 withHeldPrelude : List Decl -> DriveInputs -> DriveInputs
 withHeldPrelude coreDecls inputs = match !preludeTreesRef
