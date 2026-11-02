@@ -732,7 +732,7 @@ lookupFrameCell (IndexedFrame _ index) name =
 lookupCells : List (String, Ref (Value e)) -> String -> Option (Ref (Value e))
 lookupCells [] _ = None
 lookupCells ((n, cell) :: rest) name =
-  opBump ()
+  let _ = opBump ()
   if n == name then Some cell else lookupCells rest name
 
 -- ── lexical-address lookup (consumes annotate.mdk's EVarAt; DORMANT, §2.0) ──
@@ -1059,7 +1059,7 @@ applyDispatch : Value e -> Value e -> <e> Value e
 applyDispatch f x = match applyOpt f x
   Some v => v
   None =>
-    markFunSite f
+    let _ = markFunSite f
     runtimePanic ENonexhaustiveMatch "non-exhaustive match"
 
 applyOpt : Value e -> Value e -> <e> Option (Value e)
@@ -1099,7 +1099,7 @@ markFunSite : Value e -> <e> Unit
 markFunSite (VClosure env _ _ site)
   | isNoLoc site = ()
   | otherwise =
-    stampDefiningFile env
+    let _ = stampDefiningFile env
     currentEvalLoc := site
 markFunSite (VMulti (v :: _)) = markFunSite v
 markFunSite _ = ()
@@ -1610,7 +1610,7 @@ eval env (EAnnot (EBinOp op l r _) (TyCon { tyConName = tag }))
   | isTaggedFixedHead tag =
     let lv = eval env l
     let rv = eval env r
-    markTrapSite l
+    let _ = markTrapSite l
     evalArithAt tag op lv rv
 eval env (EAnnot e _) = eval env e
 eval env (EHeadAnnot e _) = eval env e
@@ -1628,10 +1628,10 @@ eval env (ERangeArray lo hi incl) =
 -- for diagnostics: on a successful eval nothing reads it, so valid-program
 -- output is byte-identical.
 eval env (ELoc l (EMatch scrut arms)) =
-  updateEvalLoc l
+  let _ = updateEvalLoc l
   evalMatch l env (eval env scrut) arms
 eval env (ELoc l e) =
-  updateEvalLoc l
+  let _ = updateEvalLoc l
   eval env e
 eval env (EDoOrigin _ e) = eval env e
 eval _ _ = panic "eval: unsupported node"
@@ -1658,7 +1658,7 @@ appSpine (node@(EApp f _)) acc = appSpine f (node :: acc)
 appSpine (EBinOp "|>" l r _) acc = appSpine r (EApp r l :: acc)
 appSpine (ELoc l inner) acc
   | isAppSpine inner =
-    updateEvalLoc l
+    let _ = updateEvalLoc l
     appSpine inner acc
 appSpine (EAnnot inner _) acc
   | isAppSpine inner = appSpine inner acc
@@ -1688,7 +1688,7 @@ evalSpineArgs env (_ :: rest) = evalSpineArgs env rest
 
 applySpine : Value e -> List Expr -> List (Value e) -> <e> Value e
 applySpine f (node :: nodes) (v :: vs) =
-  markTrapSite node
+  let _ = markTrapSite node
   applySpine (apply f v) nodes vs
 applySpine f _ _ = f
 
@@ -2005,7 +2005,7 @@ blockLetLast site env pat e = match matchPat pat (eval env e)
 -- (`noTrapLoc` leaves the evaluator where the right-hand side left it).
 letRefuted : Loc -> a
 letRefuted site =
-  updateEvalLoc site
+  let _ = updateEvalLoc site
   runtimePanic ELetRefute "let pattern match failed"
 
 blockRecLet : EvalEnv (Value e) -> String -> Expr -> List DoStmt -> <e> Value e
@@ -2038,7 +2038,7 @@ evalLetGroup : EvalEnv (Value e) -> List LetBind -> Expr -> <e> Value e
 evalLetGroup env binds body =
   let cells = map letBindCell binds
   let env2 = pushFrame env cells
-  installGroup env2 cells binds
+  let _ = installGroup env2 cells binds
   eval env2 body
 
 letBindCell : LetBind -> (String, Ref (Value e))
@@ -2108,7 +2108,7 @@ isNullary _ = False
 -- re-points it before raising.
 evalMatch : Loc -> EvalEnv (Value e) -> Value e -> List Arm -> <e> Value e
 evalMatch site _ _ [] =
-  updateEvalLoc site
+  let _ = updateEvalLoc site
   runtimePanic ENonexhaustiveMatch "non-exhaustive match"
 evalMatch site env sv ((Arm pat guards body) :: rest)
   | isNonEmptyL guards && armHasOr pat guards =
@@ -2161,7 +2161,7 @@ evalIf _ _ _ _ = panic "if condition is not a Bool"
 negFloatIEEE : Float -> Float
 negFloatIEEE f =
   let bs = floatToBytes64 f
-  arraySetUnsafe 0 (bitXor (arrayGetUnsafe 0 bs) 128) bs
+  let _ = arraySetUnsafe 0 (bitXor (arrayGetUnsafe 0 bs) 128) bs
   bytesToFloat64 bs 0
 
 export
@@ -2192,7 +2192,7 @@ evalBinop env "++" l r = appendVal (eval env l) (eval env r)
 evalBinop env op l r =
   let lv = eval env l
   let rv = eval env r
-  markTrapSite l
+  let _ = markTrapSite l
   evalArith op lv rv
 
 composeFwd : Value e -> Value e -> Value e
@@ -3033,7 +3033,7 @@ export
 resetOutput : Unit -> <e> Unit
 resetOutput _ =
   outputChunks := []
-  stashRunStdout ""
+  let _ = stashRunStdout ""
   ()
 
 -- Runtime-diagnostic side channels (RUNTIME-DIAGNOSTIC-CHANNEL-DESIGN.md).
@@ -4073,7 +4073,7 @@ pArrayCopy _ = panic "arrayCopy: not an Array"
 -- Routes to the host arraySetUnsafe extern (the native Array is mutable).
 pArraySetUnsafe : Value e -> Value e -> Value e -> <e> Value e
 pArraySetUnsafe (VInt i) v (VArray a) =
-  arraySetUnsafe i v a
+  let _ = arraySetUnsafe i v a
   VUnit
 pArraySetUnsafe _ _ _ = panic "arraySetUnsafe: bad operands"
 
@@ -4082,7 +4082,7 @@ pArraySetUnsafe _ _ _ = panic "arraySetUnsafe: bad operands"
 -- arrayMakeWith below, whose function argument is a Value closure).
 pArrayFill : Value e -> Value e -> <e> Value e
 pArrayFill v (VArray a) =
-  arrayFill v a
+  let _ = arrayFill v a
   VUnit
 pArrayFill _ _ = panic "arrayFill: not an Array"
 
@@ -4126,7 +4126,7 @@ pByteBlockGetUnsafe _ _ = panic "byteBlockGetUnsafe: bad operands"
 
 pByteBlockSetUnsafe : Value e -> Value e -> Value e -> <e> Value e
 pByteBlockSetUnsafe (VInt i) (VInt v) (VByteBlock b) =
-  arraySetUnsafe i (lowByte v) b
+  let _ = arraySetUnsafe i (lowByte v) b
   VUnit
 pByteBlockSetUnsafe _ _ _ = panic "byteBlockSetUnsafe: bad operands"
 
@@ -4148,7 +4148,7 @@ pByteBlockBlit : Value e ->
   Value e ->
   <e> Value e
 pByteBlockBlit (VByteBlock src) (VInt srcOff) (VByteBlock dst) (VInt dstOff) (VInt len) =
-  arrayBlit src srcOff dst dstOff len
+  let _ = arrayBlit src srcOff dst dstOff len
   VUnit
 pByteBlockBlit _ _ _ _ _ = panic "byteBlockBlit: bad operands"
 
@@ -4214,7 +4214,7 @@ export
 runtimeCellsOf : List (String, Value e) -> <e> List (String, Ref (Value e))
 runtimeCellsOf externs =
   let cells = map (fst >> (n => (n, Ref VUnit))) externs
-  installConsts cells externs
+  let _ = installConsts cells externs
   cells
 
 installGroups : EvalEnv (Value e) ->
@@ -4470,13 +4470,13 @@ evalModulesWith facts extraExterns preludeDecls0 modules0 =
   let implEntries =
     flatMap (declImplEntries dispositions globalEnv disp) preludeDecls
       ++ flatMap (modImplEntries facts disp) mods
-  installConsts globalCells boolSeeds
-  installConsts globalCells externs
-  installConsts globalCells ctors
-  installConsts globalCells (coalesceImpls implEntries)
-  installGroups globalEnv globalCells preludeShared
-  installGroups globalEnv privateCells preludePrivate
-  installModGroups mods
+  let _ = installConsts globalCells boolSeeds
+  let _ = installConsts globalCells externs
+  let _ = installConsts globalCells ctors
+  let _ = installConsts globalCells (coalesceImpls implEntries)
+  let _ = installGroups globalEnv globalCells preludeShared
+  let _ = installGroups globalEnv privateCells preludePrivate
+  let _ = installModGroups mods
   rootLocals mods
 
 -- pass 1: allocate each module's local cells + build its env (imports resolved
@@ -4669,10 +4669,10 @@ ifaceMethodNmE (IfaceMethod n _ _ _) = n
 installModGroups : List (ModInfo (Value e)) -> <e> Unit
 installModGroups [] = ()
 installModGroups ((ModInfo _ decls grps cells menv) :: rest) =
-  installGroups menv cells grps
+  let _ = installGroups menv cells grps
   -- P0-9: install this module's own ctor values into its local cells (allocated
   -- in buildModInfos), so map/set construct their own arity-correct `Bin`/`Tip`.
-  installConsts cells (collectCtors decls)
+  let _ = installConsts cells (collectCtors decls)
   installModGroups rest
 
 -- a module's impl methods / interface defaults close over ITS env but coalesce
@@ -4773,13 +4773,13 @@ buildRootModuleStateWith facts extraExterns preludeDecls0 modules0 =
   let implEntries =
     flatMap (declImplEntries dispositions globalEnv disp) preludeDecls
       ++ flatMap (modImplEntries facts disp) mods
-  installConsts globalCells boolSeeds
-  installConsts globalCells externs
-  installConsts globalCells ctors
-  installConsts globalCells (coalesceImpls implEntries)
-  installGroups globalEnv globalCells preludeShared
-  installGroups globalEnv privateCells preludePrivate
-  installModGroups mods
+  let _ = installConsts globalCells boolSeeds
+  let _ = installConsts globalCells externs
+  let _ = installConsts globalCells ctors
+  let _ = installConsts globalCells (coalesceImpls implEntries)
+  let _ = installGroups globalEnv globalCells preludeShared
+  let _ = installGroups globalEnv privateCells preludePrivate
+  let _ = installModGroups mods
   (mods, globalCells)
 
 -- Flatten the root module's frame stack (locals first, then imports, then
@@ -5080,7 +5080,7 @@ pMonotonicSecIO _ = VFloat (monotonicSec ())
 
 pSleepMsIO : Value e -> <Clock | e> Value e
 pSleepMsIO (VInt n) =
-  sleepMs n
+  let _ = sleepMs n
   VUnit
 pSleepMsIO _ = panic "sleepMs: expected Int"
 
@@ -5122,7 +5122,7 @@ pExit (VInt n) =
   -- than dropped ([W-QUIETER]).  No-op unless `--json` armed it, and no-op when
   -- there is nothing staged, so every other caller is byte-identical.
   let _ = if !runJsonMode then flushRunEnvelope !pendingRunDiags
-  exit n
+  let _ = exit n
   VUnit
 pExit _ = panic "exit: not an Int"
 
@@ -5132,13 +5132,13 @@ pAllocBytesIO _ = VFloat (allocBytes ())
 -- ── stderr (was: pDiscard — ALL stderr was silently dropped) ───────────────
 pEPutStr : Value e -> <Stderr | e> Value e
 pEPutStr (VString s) =
-  ePutStr s
+  let _ = ePutStr s
   VUnit
 pEPutStr _ = panic "ePutStr: not a String"
 
 pEPutStrLn : Value e -> <Stderr | e> Value e
 pEPutStrLn (VString s) =
-  ePutStrLn s
+  let _ = ePutStrLn s
   VUnit
 pEPutStrLn _ = panic "ePutStrLn: not a String"
 
@@ -5265,10 +5265,10 @@ pReadExactly _ = panic "readExactly: expected Int"
 -- Flushing here leaves stdio empty whenever the stash holds anything.
 pByteBlockWriteStdoutIO : Value e -> <Stdout | e> Value e
 pByteBlockWriteStdoutIO (VByteBlock b) =
-  putStr (readOutput ())
+  let _ = putStr (readOutput ())
   resetOutput ()
-  byteBlockWriteStdout (byteBlockFromIntArray b)
-  flushStdout ()
+  let _ = byteBlockWriteStdout (byteBlockFromIntArray b)
+  let _ = flushStdout ()
   VUnit
 pByteBlockWriteStdoutIO _ = panic "byteBlockWriteStdout: not a ByteBlock"
 
@@ -5446,7 +5446,7 @@ evalModulesOutputRunFacts facts preludeDecls modules =
   -- Only the real `medaka run` CLI driver reaches this function (never the
   -- pure differential-oracle probes — see appendOutput/stashRunStdout above),
   -- so this is the one place it is safe to arm the abort-time flush.
-  enableRunStdoutFlush ()
+  let _ = enableRunStdoutFlush ()
   let binds = evalModulesWith facts (ioExternBindings ()) preludeDecls modules
   let _ = runMainForEffect binds
   readOutput ()
