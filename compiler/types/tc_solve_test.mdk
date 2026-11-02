@@ -18,8 +18,11 @@ import frontend.parser.{parse}
 import types.effect_rows.{EffRow(..), pureRow}
 import types.repr.{Mono(..), Tyvar(..), normalize, ppMono}
 import types.tc_types.{
-  GoalKind(..), ImplRow(..), InstRef(..), MethodPredicateSlot(..),
-  ModuleCtx(..), PredicateSlot(..), PredicateSlotArgs(..)
+  AssumAnswer(..), GivenMatch(..), GivenProvenance(..), GivenScope(..),
+  GoalKind(..), GraphCtx(..), ImplRow(..), InstRef(..), MethodPredicateSlot(..),
+  MethodReturnMemoView(..), MethodReturnRequest, MethodReturnTraceEntry(..),
+  ModuleCtx(..), Obligation(..), PredicateRequest(..), PredicateSlot(..),
+  PredicateSlotArgs(..), TraceSink
 }
 import types.tc_unify.{freshEffvar, freshVar, unify}
 import types.tc_mono.{monoVecSameGiven, tyvarId}
@@ -38,6 +41,7 @@ import types.tc_solve.{
   ifaceRefNone,
   isLocalAbsName,
   localSourceName,
+  methodReturnArgs,
   methodSlotArgumentIds,
   methodSlotBoundIds,
   methodSlotIdsAtPositions,
@@ -46,6 +50,7 @@ import types.tc_solve.{
   noteWalkGoalFollowed,
   numericReturnRoute,
   refileDeterminedRows,
+  sameTraceEvId,
   uOblArgs,
   walkGoalFollowed,
   occurrenceDispatchMonos,
@@ -64,30 +69,21 @@ import types.tc_mono.{tconBuiltin}
 import types.tc_test_support.{
   boolM, fresh, ifaceOf, intM, oblOver, sigsOf, varM
 }
-import types.tc_types.{
-  GivenProvenance(..), GivenMatch(..), GivenScope(..), AssumAnswer(..)
-}
 import types.evidence.{SolverEvidence(..)}
 import types.scopes as Scopes
 import types.scopes.{ScopeOwner(..)}
 import frontend.ast.{TyConOrigin(..)}
 import types.repr.{IfaceRef(..)}
-import types.tc_types.{PredicateRequest(..)}
 import types.tc_solve_givens.{
   anyGivenMatches, firstPredForEncl, firstPredForEnclAt,
   firstPredForEnclResidual, givensForScope, pushGiven
 }
 import types.tc_state.{currentScopeStore}
-import types.tc_types.{
-  GraphCtx(..), MethodReturnMemoView(..), MethodReturnRequest,
-  MethodReturnTraceEntry(..), Obligation(..), TraceSink
-}
 import frontend.ast.{EvEntry(..), EvId(..), EvTable, EvVal(..), ifaceIdentity}
 import types.solver_contract.{SolverFailure(..), SolverOutcome(..)}
 import types.tc_mono.{exactReturnRequestOfGoal}
 import string.{join}
 import list.{reverse}
-import types.tc_solve.{methodReturnArgs, sameTraceEvId}
 
 -- `monoVecSameGiven` equates two arrows that differ only in their effect rows; the
 -- solving walks' memo must not, in either order.
@@ -569,8 +565,9 @@ isLegacyPredicateAnswer : Option AssumAnswer -> Bool
 isLegacyPredicateAnswer (Some (LegacyPredicate _)) = True
 isLegacyPredicateAnswer _ = False
 
--- A method occurrence's answer is published under the occurrence's own id: the memo view
--- of a goal that finds one renders its interface, arity and three route answers.
+-- Only this hand-built table reaches the `EvMethod` arm: no drive publishes `EvMethod` under
+-- an exact-return goal's id. The goal's id is the `freshEvId` that `recordSite` mints, and an
+-- `EvMethod` entry is published under the method cell's own mint (`mintMethodCellRaw`).
 test "a memo view renders the evidence a method occurrence published" =
   let ev = EvId "m" 3
   let table =
@@ -661,15 +658,11 @@ methodReturnMemoView gctx evidence goal request =
   MethodReturnMemoView {
     mrmvInterface = methodReturnMemoIface request.mrrIface,
     mrmvMethod = request.mrrName,
-    mrmvArguments =
-      map methodReturnMemoArguments (methodReturnArgs gctx request),
+    mrmvArguments = map (map ppMono) (methodReturnArgs gctx request),
     mrmvOutcome = outcome,
     mrmvPrerequisites = prerequisites,
     mrmvEvidence = methodReturnMemoEvidence goal.oEv evidence,
   }
-
-methodReturnMemoArguments : List Mono -> List String
-methodReturnMemoArguments arguments = map ppMono arguments
 
 methodReturnMemoIface : IfaceRef -> String
 methodReturnMemoIface iface =

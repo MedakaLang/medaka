@@ -533,9 +533,9 @@ EOF2
 check_target_refusal net-via 'T-TARGET-CAPABILITY main.mdk 5:0 `main` performs <Net> via `main → fetchIt`, and the target `wasmgc/browser-worker` does not grant Net' "$WORK/target-net-via/netmod.mdk"
 # The compiler wasm's first run in a browser is baseline-tier (Liftoff), whose frames are
 # several times larger than optimized ones, and a browser worker gives ~1 MB of stack. A
-# program that imports `async` once overflowed it (types.typecheck.sealMethodReturnGoals
-# recursed once per goal). --liftoff-only pins that tier so the retry in compile.mjs cannot
-# tier up and hide a regression; 400 KB is 4x what the compiler needs today and half what
+# program that imports `async` once overflowed it (`sealMethodReturnGoals` in
+# compiler/types/tc_solve_test.mdk recursed once per goal). --liftoff-only pins that tier so the retry in
+# compile.mjs cannot tier up and hide a regression; 400 KB is 4x what the compiler needs today and half what
 # it needed before the fix.
 check_liftoff_stack() {
   label="$1"; prog="$2"; want="$3"; need="$4"; checks=$((checks + 1))

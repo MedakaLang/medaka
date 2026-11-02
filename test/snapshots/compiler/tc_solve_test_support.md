@@ -1,5 +1,5 @@
 # META
-source_lines=327
+source_lines=325
 stages=DESUGAR,MARK
 # SOURCE
 -- tc_solve_test_support: the whole-check drive, trace sinks and graph probes the drive-level
@@ -291,12 +291,10 @@ export
 beginMethodReturnTrace : Unit -> TraceSink
 beginMethodReturnTrace _ = { offTraceSink () | tsMethodReturnEnabled = True }
 
--- #2095: trace-gated, zero cost when off — same discipline as
--- `methodReturnTrace`. Generalizes that pattern from
--- the one migrated return family to every `Obligation` `recordEvidence`
--- publishes: a method occurrence and a dictionary application alike, whatever
--- family produced the goal, read back from the SAME cells the stampers wrote
--- (never re-derived), so this can never disagree with the published `EvTable`.
+-- Trace-gated, zero cost when off, the same discipline as `methodReturnTrace`. It covers
+-- every `Obligation` `recordEvidence` publishes (a method occurrence and a dictionary
+-- application alike, whatever family produced the goal), read back from the very cells the
+-- stampers wrote and never re-derived, so it cannot disagree with the published `EvTable`.
 export
 beginEvidenceObservation : Unit -> TraceSink
 beginEvidenceObservation _ =
