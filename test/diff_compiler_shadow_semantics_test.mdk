@@ -60,8 +60,7 @@ import list.{sort}
 import path.{basename}
 import string.{contains, endsWith, padRight, replaceAll, stripSuffix, unlines}
 import test.{
-  Expectation, expectAll, expectEqual, expectLineContainsAll, expectTrue, fail,
-  pass
+  Expectation, expectAll, expectEqual, expectLineContainsAll, fail, pass
 }
 import test_process.{
   boundedVerbSeconds,
@@ -1496,9 +1495,14 @@ test "binaryRanClean distinguishes a panicking binary from a clean one" =
 -- # Spawning a sweep side by side
 
 -- Whether a spawn exited with `want` and wrote exactly `errText` to stderr.
-exitedWith : Int -> String -> Result String (Int, String, String) -> Bool
-exitedWith want errText (Ok (code, _, err)) = code == want && err == errText
-exitedWith _ _ (Err _) = False
+exitedWith : Int -> String -> Result String (Int, String, String) -> Expectation
+exitedWith want errText (Ok (code, _, err)) =
+  if code == want && err == errText then
+    pass
+  else
+    fail
+      "expected exit \{want} with stderr \{errText} but got exit \{code} with stderr \{err}"
+exitedWith _ _ (Err e) = fail "the run produced no result: \{e}"
 
 test "boundedVerbsSeconds answers each row as boundedVerbSeconds does, in order" =
   let rows = [
@@ -1512,8 +1516,8 @@ test "boundedVerbsSeconds answers each row as boundedVerbSeconds does, in order"
       expectEqual
         (map ((cmd, args) => boundedVerbSeconds 5 cmd args) rows)
         answers,
-      expectTrue (exitedWith 0 "" first),
-      expectTrue (exitedWith 3 "second" second),
+      exitedWith 0 "" first,
+      exitedWith 3 "second" second,
     ]
     _ => fail "expected one answer per row, got \{debug answers}"
 
@@ -1529,9 +1533,9 @@ test "a hanging row of a batch is killed by its alarm and the others still answe
       expectEqual
         [Ok (0, "before", ""), Ok (142, "", ""), Ok (0, "after", "")]
         answers,
-      expectTrue (exitedWith 0 "" before),
-      expectTrue (exitedWith 142 "" hung),
-      expectTrue (exitedWith 0 "" after),
+      exitedWith 0 "" before,
+      exitedWith 142 "" hung,
+      exitedWith 0 "" after,
     ]
     _ => fail "expected one answer per row, got \{debug answers}"
 

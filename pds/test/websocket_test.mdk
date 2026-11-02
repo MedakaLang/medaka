@@ -24,6 +24,7 @@ import bytes.{Bytes, encodeUtf8, fromU8Array}
 import list.{replicate}
 import mut_bytes as MB
 import test.{
+  Expectation,
   expectEach,
   expectEqual,
   expectErr,
@@ -32,6 +33,7 @@ import test.{
   expectOkThen,
   expectTrue,
   fail,
+  pass,
 }
 import u8 as U8
 import lib.sha1.{sha1}
@@ -64,26 +66,22 @@ decodedAs (Decoded (Frame fin opcode payload) consumed) =
 decodedAs NeedMore = None
 decodedAs (Rejected _ _) = None
 
-rejectedWith : Int -> DecodeResult -> Bool
-rejectedWith code (Rejected c _) = c == code
-rejectedWith _ (Decoded _ _) = False
-rejectedWith _ NeedMore = False
+rejectedWith : Int -> DecodeResult -> Expectation
+rejectedWith code (Rejected c _) = expectEqual code c
+rejectedWith code _ = fail "expected the frame to be rejected with \{code}"
 
 -- The message half of a close-payload failure, for the tests that read only it.
 closeMessage : Result (Int, String) a -> Result String a
 closeMessage (Err (_, message)) = Err message
 closeMessage (Ok value) = Ok value
 
-isNeedMore : DecodeResult -> Bool
-isNeedMore NeedMore = True
-isNeedMore (Decoded _ _) = False
-isNeedMore (Rejected _ _) = False
+isNeedMore : DecodeResult -> Expectation
+isNeedMore NeedMore = pass
+isNeedMore _ = fail "expected the decoder to need more bytes"
 
-eventRejectedWith : Int -> AssembleEvent -> Bool
-eventRejectedWith code (EventRejected c _) = c == code
-eventRejectedWith _ EventPartial = False
-eventRejectedWith _ (EventMessage _ _) = False
-eventRejectedWith _ (EventControl _) = False
+eventRejectedWith : Int -> AssembleEvent -> Expectation
+eventRejectedWith code (EventRejected c _) = expectEqual code c
+eventRejectedWith code _ = fail "expected the event to be rejected with \{code}"
 
 -- `n` copies of one byte, for a payload whose length is what is under test.
 filled : Int -> Int -> Bytes
@@ -465,16 +463,16 @@ test "a control frame interleaved in a fragmented message leaves it open" =
 
 test "a continuation frame with nothing open is refused with 1002 (§5.4)" =
   let (_, event) = assembleFrame None (Frame True Continuation hello)
-  expectTrue (eventRejectedWith 1002 event)
+  eventRejectedWith 1002 event
 
 test "a new data frame while a fragmented message is open is refused (§5.4)" =
   let (afterFirst, _) = assembleFrame None (Frame False Text (encodeUtf8 "Hel"))
   let (_, event) = assembleFrame afterFirst (Frame True Text hello)
-  expectTrue (eventRejectedWith 1002 event)
+  eventRejectedWith 1002 event
 
 test "a Text message with invalid UTF-8 is refused with 1007 (§8.1)" =
   let (_, event) = assembleFrame None (Frame True Text (fromU8Array [|0xff|]))
-  expectTrue (eventRejectedWith 1007 event)
+  eventRejectedWith 1007 event
 
 test "a multi-byte character split across Text fragments is accepted (§5.4)" =
   let (afterFirst, _) =
@@ -490,7 +488,7 @@ test "a character split across fragments and left invalid is refused with 1007" 
     assembleFrame None (Frame False Text (fromU8Array [|0xc3|]))
   let (_, event) =
     assembleFrame afterFirst (Frame True Continuation (fromU8Array [|0x41|]))
-  expectTrue (eventRejectedWith 1007 event)
+  eventRejectedWith 1007 event
 
 test "a close reason that is not UTF-8 fails with 1007 (§7.4.1)" =
   match parseClosePayload (fromU8Array [|0x03, 0xe8, 0xff|])
@@ -498,66 +496,58 @@ test "a close reason that is not UTF-8 fails with 1007 (§7.4.1)" =
     Ok _ => fail "expected the invalid close reason to be refused"
 
 test "a negative offset is a rejection, not a panic" =
-  expectTrue
-    (rejectedWith
-      1002
-      (decodeFrame
-        FromClient
-        1000
-        (fromU8Array [|0x82, 0x82, 1, 2, 3, 4, 10, 20|])
-        (-1)))
+  rejectedWith
+    1002
+    (decodeFrame
+      FromClient
+      1000
+      (fromU8Array [|0x82, 0x82, 1, 2, 3, 4, 10, 20|])
+      (-1))
 
 -- # Adversarial input
 
 test "an unmasked client frame is REFUSED, not read anyway (§5.1)" =
-  expectTrue
-    (rejectedWith 1002 (decodeFrame FromClient maxPayload unmaskedHelloWire 0))
+  rejectedWith 1002 (decodeFrame FromClient maxPayload unmaskedHelloWire 0)
 
 test "a masked server frame is refused (§5.1)" =
-  expectTrue
-    (rejectedWith 1002 (decodeFrame FromServer maxPayload maskedHelloWire 0))
+  rejectedWith 1002 (decodeFrame FromServer maxPayload maskedHelloWire 0)
 
 test "a set RSV bit is refused with 1002 (§5.2)" =
-  expectTrue
-    (rejectedWith
-      1002
-      (decodeFrame FromServer maxPayload (fromU8Array [|0xc1, 0x01, 0x41|]) 0))
+  rejectedWith
+    1002
+    (decodeFrame FromServer maxPayload (fromU8Array [|0xc1, 0x01, 0x41|]) 0)
 
 test "a reserved opcode is refused with 1002 (§5.2)" =
-  expectTrue
-    (rejectedWith
-      1002
-      (decodeFrame FromServer maxPayload (fromU8Array [|0x83, 0x01, 0x41|]) 0))
+  rejectedWith
+    1002
+    (decodeFrame FromServer maxPayload (fromU8Array [|0x83, 0x01, 0x41|]) 0)
 
 test "a control frame declaring over 125 bytes is refused with 1002 (§5.5)" =
-  expectTrue
-    (rejectedWith
-      1002
-      (decodeFrame
-        FromServer
-        maxPayload
-        (fromU8Array [|0x89, 0x7e, 0x01, 0x00|])
-        0))
+  rejectedWith
+    1002
+    (decodeFrame
+      FromServer
+      maxPayload
+      (fromU8Array [|0x89, 0x7e, 0x01, 0x00|])
+      0)
 
 test "a fragmented control frame is refused with 1002 (§5.5)" =
-  expectTrue
-    (rejectedWith
-      1002
-      (decodeFrame FromServer maxPayload (fromU8Array [|0x09, 0x01, 0x41|]) 0))
+  rejectedWith
+    1002
+    (decodeFrame FromServer maxPayload (fromU8Array [|0x09, 0x01, 0x41|]) 0)
 
 test "a 64-bit length with the most significant bit set is refused (§5.2)" =
   let wire = fromU8Array [|0x82, 0x7f, 0x80, 0, 0, 0, 0, 0, 0, 0|]
-  expectTrue (rejectedWith 1002 (decodeFrame FromServer maxPayload wire 0))
+  rejectedWith 1002 (decodeFrame FromServer maxPayload wire 0)
 
 test "a non-minimally encoded length is refused with 1002 (§5.2)" =
-  expectTrue
-    (rejectedWith
-      1002
-      (decodeFrame
-        FromServer
-        maxPayload
-        (fromU8Array [|0x82, 0x7e, 0x00, 0x05, 0x41|])
-        0))
+  rejectedWith
+    1002
+    (decodeFrame
+      FromServer
+      maxPayload
+      (fromU8Array [|0x82, 0x7e, 0x00, 0x05, 0x41|])
+      0)
 
 -- The two assertions that matter most: NOTHING is ever allocated to the size
 -- an attacker declared. A terabyte declared in a ten-byte frame is refused
@@ -565,37 +555,34 @@ test "a non-minimally encoded length is refused with 1002 (§5.2)" =
 -- asks for more bytes rather than allocating for the promise.
 test "a terabyte declared in a 10-byte frame is refused with 1009, not allocated" =
   let wire = fromU8Array [|0x82, 0x7f, 0, 0x01, 0, 0, 0, 0, 0, 0|]
-  expectTrue (rejectedWith 1009 (decodeFrame FromServer maxPayload wire 0))
+  rejectedWith 1009 (decodeFrame FromServer maxPayload wire 0)
 
 -- #2905: a 64-bit length from 2^62 up to 2^63 - 1 is past `Int`, and read as
 -- an `Int` it wrapped to a negative number that the minimal-encoding check
 -- then reported as a 1002. It is an oversized length, so it is a 1009.
 test "a 64-bit length of 2^62 is refused as too big (1009), not as malformed" =
   let wire = fromU8Array [|0x82, 0x7f, 0x40, 0, 0, 0, 0, 0, 0, 0|]
-  expectTrue (rejectedWith 1009 (decodeFrame FromServer maxPayload wire 0))
+  rejectedWith 1009 (decodeFrame FromServer maxPayload wire 0)
 
 test "a 64-bit length of 2^63 - 1 is refused as too big (1009)" =
   let wire =
     fromU8Array [|0x82, 0x7f, 0x7f, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff|]
-  expectTrue (rejectedWith 1009 (decodeFrame FromServer maxPayload wire 0))
+  rejectedWith 1009 (decodeFrame FromServer maxPayload wire 0)
 
 test "a declared length beyond the bytes in hand needs more, never allocates" =
-  expectTrue
-    (isNeedMore
-      (decodeFrame
-        FromServer
-        maxPayload
-        (fromU8Array [|0x81, 0x64, 0x48, 0x65, 0x6c|])
-        0))
+  isNeedMore
+    (decodeFrame
+      FromServer
+      maxPayload
+      (fromU8Array [|0x81, 0x64, 0x48, 0x65, 0x6c|])
+      0)
 
 test "a truncated two-byte header needs more bytes" =
-  expectTrue
-    (isNeedMore (decodeFrame FromServer maxPayload (fromU8Array [|0x81|]) 0))
+  isNeedMore (decodeFrame FromServer maxPayload (fromU8Array [|0x81|]) 0)
 
 test "a 16-bit length field with only one of its two bytes needs more" =
-  expectTrue
-    (isNeedMore
-      (decodeFrame FromServer maxPayload (fromU8Array [|0x82, 0x7e, 0x01|]) 0))
+  isNeedMore
+    (decodeFrame FromServer maxPayload (fromU8Array [|0x82, 0x7e, 0x01|]) 0)
 
 -- # The close handshake — RFC 6455 §5.5.1, §7.4
 
