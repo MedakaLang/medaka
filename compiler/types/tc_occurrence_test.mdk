@@ -97,7 +97,6 @@ import types.tc_solve.{
   methodReturnSelectedIdentity, solveExactReturnOnce
 }
 import types.tc_state.{initialModuleCtx, probeGraphCtx, wAll}
-import types.tc_types.{EvCell(..), EvDest(..), Obligation(..)}
 import types.tc_test_support.{
   at,
   sizeScheme,
@@ -115,12 +114,15 @@ import types.tc_test_support.{
 import types.tc_unify.{unifyIn}
 import types.tc_types.{
   BuiltinClass(..),
+  EvCell(..),
+  EvDest(..),
   GraphCtx(..),
   MethodReturnResolution(..),
   MarkCtx(..),
   ModuleCtx(..),
   ModuleMarking(..),
   GoalKind(..),
+  Obligation(..),
   OblProjection(..),
   PendingEntry(..),
   Provenance(..),
@@ -133,7 +135,7 @@ import types.tc_types.{
 }
 import types.tc_effects.{clausesOf}
 import support.ordmap.{OrdMap, omEmpty, omInsert, omLookup}
-import support.util.{anyList, filterList, isEmptyL, listLen, reverseL}
+import support.util.{anyList, filterList, isEmptyL, listLen}
 import list.{reverse}
 import types.effect_rows.{pureRow}
 import map as IdMap
@@ -1397,18 +1399,11 @@ export
 cellGoalInnerAliasing : GraphCtx -> List (String, Bool)
 cellGoalInnerAliasing gctx =
   let g = gctx.graphRun
-  let cells = cellsFrom g.evCells.value 0 []
+  let cells = toList (filterMap identity g.evCells.value)
   filterMap
     (o =>
       map (c => (goalKindName o.oKind, innerAliases o c)) (cellOfGoal cells o))
     g.goals.value
-
-cellsFrom : Array (Option EvCell) -> Int -> List EvCell -> List EvCell
-cellsFrom arr i acc
-  | i >= arrayLength arr = reverseL acc
-  | otherwise = match arrayGetUnsafe i arr
-    Some c => cellsFrom arr (i + 1) (c :: acc)
-    None => cellsFrom arr (i + 1) acc
 
 cellOfGoal : List EvCell -> Obligation -> Option EvCell
 cellOfGoal cells o = match o.oDest

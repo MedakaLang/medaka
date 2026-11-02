@@ -1211,7 +1211,7 @@ done || exit 1
 
 printf '%s\n' 'beginNumericPredicateTrace : Unit -> TraceSink
 finishNumericPredicateTrace : TraceSink -> List NumericPredicateTraceEntry' | while IFS= read -r required; do
-  if ! grep -Fq "$required" "$tc_trace_sink_src"; then
+  if ! grep -Fxq "$required" "$tc_trace_sink_src"; then
     echo "FAIL: numeric return predicate migration is missing required source: $required"
     exit 1
   fi

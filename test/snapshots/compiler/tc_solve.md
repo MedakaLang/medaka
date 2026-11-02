@@ -1,5 +1,5 @@
 # META
-source_lines=2235
+source_lines=2236
 stages=DESUGAR,MARK
 # SOURCE
 -- tc_solve: one solving judgment over one goal store, above the entailment core: the exact-return
@@ -2111,7 +2111,8 @@ siteKindMonos (SKPredicateOp _ _) = []
 siteKindMonos (SKRLocal _ _ ms _ vecs) = ms ++ flatMap identity vecs
 
 -- Observation declarations exported for readers outside this module: the method-slot and
--- method-return probes `tc_occurrence` and `tc_module` read.
+-- method-return probes that `tc_occurrence` (its own probe section), `tc_occurrence_test`,
+-- `tc_solve_test` and `tc_module_test` read.
 
 export
 methodSlotBoundIds : List MethodPredicateSlot -> List (List Int)

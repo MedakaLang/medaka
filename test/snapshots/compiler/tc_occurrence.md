@@ -1,13 +1,12 @@
 # META
-source_lines=3254
+source_lines=3253
 stages=DESUGAR,MARK
 # SOURCE
 -- tc_occurrence: method and literal occurrence inference, operator dispatch-site recording
 -- (including `recordShadowStandaloneObls`), evidence-site minting, the mark pass over binding
 -- groups and the write-back of its marked clauses over the declarations (`rebuildGroupDecls`), the
--- constrained-signature set, and the evidence-cell and method-return probes that `tc_module` and
--- the drive-level `typecheck_test` read (the `cellGoalInnerAliasing` family, the `methodRow*Probe`
--- and `methodReturn*Probe` rows).
+-- constrained-signature set, and the method-row and method-return probes (the `methodRow*Probe` and
+-- `methodReturn*Probe` rows).
 --
 -- Spec: DICT section 4 (occurrence half), section 5, section 8 I7; SHADOW S2-DECL.
 --
@@ -3207,7 +3206,7 @@ popMarkedClause grouped pending n =
     [] => panic "rebuildGroupDecls: no marked clause left for \{n}"
 
 -- Observation declarations exported for readers outside this module: the method-row and
--- method-return probes `tc_module` reads.
+-- method-return probes that `tc_occurrence_test` and `tc_module_test` read.
 
 export
 firstMethodRow : List MethodSchemeRow -> MethodSchemeRow

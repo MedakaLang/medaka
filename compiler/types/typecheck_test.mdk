@@ -145,6 +145,12 @@ import types.tc_solve_test.{
 }
 import types.tc_occurrence_test.{cellGoalInnerAliasing}
 
+data AssumptionContext = AssumptionContext {
+  acGoalOwner : String,
+  acBinderOwner : String,
+  acBinderSlot : Int,
+} deriving (Eq, Debug)
+
 data NumericTraceView = NumericTraceView {
   ntvStage : NumericPredicateTraceStage,
   ntvInterface : String,
@@ -216,17 +222,17 @@ numericTraceNow : GraphCtx -> TraceSink -> List NumericTraceView
 numericTraceNow gctx sink =
   map (numericTraceView gctx) (finishNumericPredicateTrace sink)
 
--- The assumption entries [sink] holds as (goal owner, binder owner, binder slot).
-assumptionContextsNow : GraphCtx -> TraceSink -> List (String, String, Int)
+-- The assumption entries [sink] holds, each as its goal owner, binder owner and binder slot.
+assumptionContextsNow : GraphCtx -> TraceSink -> List AssumptionContext
 assumptionContextsNow gctx sink =
   map
     (entry =>
       let (EvidenceBinderId binderScope slot) = entry.atBinder
-      (
-        snd (scopeTraceContext gctx entry.atGoalScope),
-        snd (scopeTraceContext gctx binderScope),
-        slot,
-      ))
+      AssumptionContext {
+        acGoalOwner = snd (scopeTraceContext gctx entry.atGoalScope),
+        acBinderOwner = snd (scopeTraceContext gctx binderScope),
+        acBinderSlot = slot,
+      })
     (finishAssumptionTrace sink)
 
 numericValueSource : Bool -> String
@@ -741,7 +747,7 @@ isArithmeticFunction name = contains name [
 
 arithmeticSchemeObserved : Option (Int, Int) ->
   String ->
-  (List (String, Int, String), List (String, String, Int))
+  (List (String, Int, String), List AssumptionContext)
 arithmeticSchemeObserved key source =
   let sink = beginAssumptionTrace ()
   let ((_, schemes), gctx) =
@@ -808,23 +814,23 @@ test "declared and inferred arithmetic retain one Num slot at finalized queries"
       "arithmeticErrorCodes' bindings for the cold query",
       expectEqual
         [
-          ("binding:inferredRem", "binding:inferredRem", 0),
-          ("binding:inferredDiv", "binding:inferredDiv", 0),
-          ("binding:inferredMul", "binding:inferredMul", 0),
-          ("binding:inferredSub", "binding:inferredSub", 0),
-          ("binding:inferredAdd", "binding:inferredAdd", 0),
-          ("binding:signedRem", "binding:signedRem", 0),
-          ("binding:signedDiv", "binding:signedDiv", 0),
-          ("binding:signedMul", "binding:signedMul", 0),
-          ("binding:signedSub", "binding:signedSub", 0),
-          ("binding:signedAdd", "binding:signedAdd", 0),
+          AssumptionContext "binding:inferredRem" "binding:inferredRem" 0,
+          AssumptionContext "binding:inferredDiv" "binding:inferredDiv" 0,
+          AssumptionContext "binding:inferredMul" "binding:inferredMul" 0,
+          AssumptionContext "binding:inferredSub" "binding:inferredSub" 0,
+          AssumptionContext "binding:inferredAdd" "binding:inferredAdd" 0,
+          AssumptionContext "binding:signedRem" "binding:signedRem" 0,
+          AssumptionContext "binding:signedDiv" "binding:signedDiv" 0,
+          AssumptionContext "binding:signedMul" "binding:signedMul" 0,
+          AssumptionContext "binding:signedSub" "binding:signedSub" 0,
+          AssumptionContext "binding:signedAdd" "binding:signedAdd" 0,
         ]
         (snd cold),
     ),
   ]
 
 arithmeticTraceObserved : String ->
-  (List String, List NumericTraceView, List (String, String, Int))
+  (List String, List NumericTraceView, List AssumptionContext)
 arithmeticTraceObserved source =
   let sink = { beginNumericPredicateTrace () | tsAssumptionEnabled = True }
   let ((errors, _), gctx) =
@@ -868,8 +874,8 @@ test "operator events correlate by whole span scope and exact prelude Num predic
         (filter (view => view.ntvStage == NPTArithmetic) operator)),
     expectEqual
       [
-        ("binding:value", "binding:value", 0),
-        ("binding:value", "binding:value", 0),
+        AssumptionContext "binding:value" "binding:value" 0,
+        AssumptionContext "binding:value" "binding:value" 0,
       ]
       assumptions,
   ]
@@ -901,7 +907,9 @@ test "generic remainder uses the same scoped Num evidence route" =
           view.ntvPrerequisites,
         ))
         (filter (view => view.ntvStage == NPTArithmetic) operator)),
-    expectEqual [("binding:value", "binding:value", 0)] assumptions,
+    expectEqual
+      [AssumptionContext "binding:value" "binding:value" 0]
+      assumptions,
   ]
 
 arithmeticImportedObserved : Bool -> (Int, List NumericTraceView)
@@ -1100,14 +1108,14 @@ schemeVariableCount (Forall variables _ _ _ _ _) = listLen variables
 
 declaredNumSchemeObserved : Option (Int, Int) ->
   String ->
-  (List (Int, String), List (String, String, Int))
+  (List (Int, String), List AssumptionContext)
 declaredNumSchemeObserved key source =
   declaredNumMemberSchemeObserved key "value" source
 
 declaredNumMemberSchemeObserved : Option (Int, Int) ->
   String ->
   String ->
-  (List (Int, String), List (String, String, Int))
+  (List (Int, String), List AssumptionContext)
 declaredNumMemberSchemeObserved key member source =
   let sink = beginAssumptionTrace ()
   let ((_, schemes), gctx) =
@@ -1148,7 +1156,9 @@ test "declared numeric result retains its quantifier and given at finalized quer
     ("cold's arity/scheme", expectEqual [(1, "Int -> a")] (fst cold)),
     (
       "cold's binding trace",
-      expectEqual [("binding:value", "binding:value", 0)] (snd cold),
+      expectEqual
+        [AssumptionContext "binding:value" "binding:value" 0]
+        (snd cold),
     ),
     ("cold == keyed", expectEqual cold keyed),
     ("keyed == repeated", expectEqual keyed repeated),
@@ -1394,8 +1404,8 @@ test "block recursive arithmetic retains the outer predicate and route" =
         arithmetic),
     expectEqual
       [
-        ("local:local", "binding:value", 0),
-        ("local:local", "binding:value", 0),
+        AssumptionContext "local:local" "binding:value" 0,
+        AssumptionContext "local:local" "binding:value" 0,
       ]
       assumptions,
   ]
