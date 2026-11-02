@@ -9,8 +9,8 @@ import types.tc_types.{InvocationView(..)}
 -- per-join drives (`mergeSections`), the text does not depend on the user's
 -- program, and the real prelude stays under its size bound.
 import test.{
-  Expectation, expectTrue, expectFalse, expectEqual, expectAll, expectAtLeast,
-  expectAtMost, labelFail, fail, pass
+  Expectation, expectTrue, expectEqual, expectAll, expectAtLeast, expectAtMost,
+  labelFail, fail, pass
 }
 import list.{zip, indexed, drop, sort}
 import string as S
@@ -142,6 +142,9 @@ decodes text = match decodeInterface text
   Ok _ => True
   Err _ => False
 
+expectDecodes : Bool -> String -> Expectation
+expectDecodes want text = expectEqual want (decodes text)
+
 -- The header counts the sections and the digest covers every byte after the
 -- header line, so a cut anywhere is refused, the final newline included.
 test "a truncated file is refused" =
@@ -157,7 +160,7 @@ test "a truncated file is refused" =
       (expectEqual [] (filter (i => decodes (S.take i smallText)) cuts)),
     labelFail
       "the missing newline is refused"
-      (expectFalse (decodes (S.take (n - 1) smallText))),
+      (expectDecodes False (S.take (n - 1) smallText)),
   ]
 
 -- ── 2. byte flips ───────────────────────────────────────────────────────────

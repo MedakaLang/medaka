@@ -133,7 +133,7 @@ test "sequential brackets are independent" =
   expectEqual (True, False) (first, second)
 
 test "emptyFacts carries no dispositions and no binders" = expectAll [
-  expectFalse (isTyped emptyFacts),
+  expectFalse (isSome emptyFacts.pfDispositions),
   expectFalse (isSome emptyFacts.pfBinders),
 ]
 

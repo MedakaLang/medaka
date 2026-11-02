@@ -2,7 +2,15 @@
 -- honest control, observed through production inference on tiny programs.
 -- The rows come from docs/ops/EFFECTS-REARCHITECTURE-HANDOFF.md.
 import support.diag_codes.{codeText}
-import test.{expectAll, expectEqual, expectTrue, expectFalse}
+import test.{
+  Expectation,
+  expectAll,
+  expectEqual,
+  expectNotEqual,
+  expectSatisfies,
+  expectTrue,
+  expectFalse,
+}
 import frontend.desugar.{desugar}
 import frontend.parser.{parseLocated}
 import types.typecheck.{
@@ -49,87 +57,81 @@ schemeOf source name =
     Some p => ppScheme p.psScheme
     None => "<missing>"
 
-rejects : String -> Bool
-rejects source = contains "T-AUTHORITY" (codes source)
+rejects : String -> Expectation
+rejects source =
+  expectSatisfies
+    "rejected with T-AUTHORITY"
+    (contains "T-AUTHORITY")
+    (codes source)
 
-accepts : String -> Bool
-accepts source = match codes source
-  [] => True
-  _ => False
+accepts : Bool -> String -> Expectation
+accepts want source = expectEqual want (isEmptyList (codes source))
 
 test "a literal must lie within the bound; raw dynamic input is top" = expectAll
   [
-    expectTrue
-      (accepts "ok : Unit -> <Store \"cfg/*\"> Int\nok _ = load \"cfg/app\"\n"),
-    expectFalse
-      (accepts
-        "bad : Unit -> <Store \"cfg/*\"> Int\nbad _ = load \"/etc/x\"\n"),
-    expectFalse
-      (accepts "dyn : String -> <Store \"cfg/*\"> Int\ndyn p = load p\n"),
+    accepts
+      True
+      "ok : Unit -> <Store \"cfg/*\"> Int\nok _ = load \"cfg/app\"\n",
+    accepts
+      False
+      "bad : Unit -> <Store \"cfg/*\"> Int\nbad _ = load \"/etc/x\"\n",
+    accepts False "dyn : String -> <Store \"cfg/*\"> Int\ndyn p = load p\n",
   ]
 
 test "a named wrapper is checked against its own argument" = expectAll [
-  expectTrue
-    (accepts "honest : (p : String) -> <Store p> Int\nhonest p = load p\n"),
-  expectTrue
-    (rejects
-      "extend : (p : String) -> <Store p> Int\nextend p = load (p ++ \"/x\")\n"),
-  expectTrue
-    (rejects
-      "sneaky : (p : String) -> <Store p> Int\nsneaky p = load \"/etc/x\"\n"),
-  expectTrue
-    (rejects
-      "rooted : (p : String) -> <Store p> Int\nrooted p = load (\"/\" ++ p)\n"),
-  expectTrue
-    (rejects "wide : (p : String) -> <Store p> Int\nwide p = anyStore ()\n"),
+  accepts True "honest : (p : String) -> <Store p> Int\nhonest p = load p\n",
+  rejects
+    "extend : (p : String) -> <Store p> Int\nextend p = load (p ++ \"/x\")\n",
+  rejects
+    "sneaky : (p : String) -> <Store p> Int\nsneaky p = load \"/etc/x\"\n",
+  rejects
+    "rooted : (p : String) -> <Store p> Int\nrooted p = load (\"/\" ++ p)\n",
+  rejects "wide : (p : String) -> <Store p> Int\nwide p = anyStore ()\n",
 ]
 
 test "the implementation binder's spelling does not matter" = expectAll [
-  expectTrue
-    (accepts "honest : (p : String) -> <Store p> Int\nhonest q = load q\n"),
-  expectTrue
-    (rejects
-      "sneaky : (p : String) -> <Store p> Int\nsneaky q = load \"/etc/x\"\n"),
+  accepts True "honest : (p : String) -> <Store p> Int\nhonest q = load q\n",
+  rejects "sneaky : (p : String) -> <Store p> Int\nsneaky q = load \"/etc/x\"\n",
 ]
 
 test "both determining positions of a two-path extern are charged" = expectAll [
-  expectTrue
-    (accepts
-      "mv : Unit -> <Store \"tmp/*\"> Unit\nmv _ = move \"tmp/a\" \"tmp/b\"\n"),
-  expectFalse
-    (accepts
-      "mv : Unit -> <Store \"tmp/*\"> Unit\nmv _ = move \"tmp/a\" \"/etc/x\"\n"),
-  expectFalse
-    (accepts
-      "mv : Unit -> <Store \"tmp/*\"> Unit\nmv _ = move \"/etc/x\" \"tmp/a\"\n"),
+  accepts
+    True
+    "mv : Unit -> <Store \"tmp/*\"> Unit\nmv _ = move \"tmp/a\" \"tmp/b\"\n",
+  accepts
+    False
+    "mv : Unit -> <Store \"tmp/*\"> Unit\nmv _ = move \"tmp/a\" \"/etc/x\"\n",
+  accepts
+    False
+    "mv : Unit -> <Store \"tmp/*\"> Unit\nmv _ = move \"/etc/x\" \"tmp/a\"\n",
 ]
 
 test "aliases, partial applications and higher-order application keep the relation" = expectAll
   [
-    expectTrue
-      (accepts
-        "ld = load\nok : Unit -> <Store \"cfg/*\"> Int\nok _ = ld \"cfg/app\"\n"),
-    expectFalse
-      (accepts
-        "ld = load\nbad : Unit -> <Store \"cfg/*\"> Int\nbad _ = ld \"/etc/x\"\n"),
-    expectTrue
-      (accepts
-        "part : Unit -> <Store \"tmp/*\"> Unit\npart _ =\n  let from = move \"tmp/a\"\n  from \"tmp/b\"\n"),
-    expectFalse
-      (accepts
-        "part : Unit -> <Store \"tmp/*\"> Unit\npart _ =\n  let from = move \"tmp/a\"\n  from \"/etc/x\"\n"),
-    expectTrue
-      (accepts
-        "apply : (a -> <e> b) -> a -> <e> b\napply f x = f x\nok : Unit -> <Store \"cfg/*\"> Int\nok _ = apply load \"cfg/app\"\n"),
-    expectFalse
-      (accepts
-        "apply : (a -> <e> b) -> a -> <e> b\napply f x = f x\nbad : Unit -> <Store \"cfg/*\"> Int\nbad _ = apply load \"/etc/x\"\n"),
-    expectTrue
-      (accepts
-        "comp = load >> (n => n + 1)\nok : Unit -> <Store \"cfg/*\"> Int\nok _ = comp \"cfg/app\"\n"),
-    expectFalse
-      (accepts
-        "comp = load >> (n => n + 1)\nbad : Unit -> <Store \"cfg/*\"> Int\nbad _ = comp \"/etc/x\"\n"),
+    accepts
+      True
+      "ld = load\nok : Unit -> <Store \"cfg/*\"> Int\nok _ = ld \"cfg/app\"\n",
+    accepts
+      False
+      "ld = load\nbad : Unit -> <Store \"cfg/*\"> Int\nbad _ = ld \"/etc/x\"\n",
+    accepts
+      True
+      "part : Unit -> <Store \"tmp/*\"> Unit\npart _ =\n  let from = move \"tmp/a\"\n  from \"tmp/b\"\n",
+    accepts
+      False
+      "part : Unit -> <Store \"tmp/*\"> Unit\npart _ =\n  let from = move \"tmp/a\"\n  from \"/etc/x\"\n",
+    accepts
+      True
+      "apply : (a -> <e> b) -> a -> <e> b\napply f x = f x\nok : Unit -> <Store \"cfg/*\"> Int\nok _ = apply load \"cfg/app\"\n",
+    accepts
+      False
+      "apply : (a -> <e> b) -> a -> <e> b\napply f x = f x\nbad : Unit -> <Store \"cfg/*\"> Int\nbad _ = apply load \"/etc/x\"\n",
+    accepts
+      True
+      "comp = load >> (n => n + 1)\nok : Unit -> <Store \"cfg/*\"> Int\nok _ = comp \"cfg/app\"\n",
+    accepts
+      False
+      "comp = load >> (n => n + 1)\nbad : Unit -> <Store \"cfg/*\"> Int\nbad _ = comp \"/etc/x\"\n",
   ]
 
 test "a wrapper publishes its argument's authority, not a fresh universal" = expectAll
@@ -147,24 +149,23 @@ test "a wrapper publishes its argument's authority, not a fresh universal" = exp
   ]
 
 test "branches join and a let-bound literal is seen through" = expectAll [
-  expectTrue
-    (accepts
-      "ok : Bool -> <Store \"cfg/*\"> Int\nok b = load (if b then \"cfg/a\" else \"cfg/b\")\n"),
-  expectFalse
-    (accepts
-      "bad : Bool -> <Store \"cfg/*\"> Int\nbad b = load (if b then \"cfg/a\" else \"/etc/x\")\n"),
-  expectTrue
-    (accepts
-      "ok : Unit -> <Store \"cfg/*\"> Int\nok _ =\n  let dest = \"cfg/app\"\n  load dest\n"),
+  accepts
+    True
+    "ok : Bool -> <Store \"cfg/*\"> Int\nok b = load (if b then \"cfg/a\" else \"cfg/b\")\n",
+  accepts
+    False
+    "bad : Bool -> <Store \"cfg/*\"> Int\nbad b = load (if b then \"cfg/a\" else \"/etc/x\")\n",
+  accepts
+    True
+    "ok : Unit -> <Store \"cfg/*\"> Int\nok _ =\n  let dest = \"cfg/app\"\n  load dest\n",
 ]
 
 test "the set domain does not preserve concatenation" = expectAll [
-  expectTrue
-    (accepts "ok : Unit -> <Var {\"HOME\"}> Int\nok _ = lookup \"HOME\"\n"),
-  expectFalse
-    (accepts
-      "bad : (n : String) -> <Var n> Int\nbad n = lookup (n ++ \"_X\")\n"),
-  expectTrue (accepts "ok : (n : String) -> <Var n> Int\nok n = lookup n\n"),
+  accepts True "ok : Unit -> <Var {\"HOME\"}> Int\nok _ = lookup \"HOME\"\n",
+  accepts
+    False
+    "bad : (n : String) -> <Var n> Int\nbad n = lookup (n ++ \"_X\")\n",
+  accepts True "ok : (n : String) -> <Var n> Int\nok n = lookup n\n",
 ]
 
 test "a binder has one domain and a String type" = expectAll [
@@ -180,61 +181,54 @@ test "a binder has one domain and a String type" = expectAll [
 
 test "a name is read by its binding: rebinding shadows the outer authority" = expectAll
   [
-    expectTrue
-      (rejects
-        "arm : (p : String) -> <Store p> Int\narm p = load (match \"/etc/x\"\n  p => p)\n"),
-    expectTrue
-      (rejects
-        "pat : (p : String) -> <Store p> Int\npat p = load (let (p, _) = (\"/etc/x\", 1) in p)\n"),
-    expectFalse
-      (accepts
-        "outer : String -> <Store \"cfg/*\"> Int\nouter input =\n  let q = \"cfg/app\"\n  match Some input\n    Some q => load q\n    None => 0\n"),
-    expectFalse
-      (accepts
-        "chain : Unit -> <Store \"cfg/*\"> Int\nchain _ =\n  let x = \"/etc/x\"\n  let q = x\n  let x = \"cfg/app\"\n  load q\n"),
-    expectTrue
-      (accepts
-        "rename : (p : String) -> <Store p> Int\nrename p = load (match p\n  q => q)\n"),
-    expectTrue
-      (accepts
-        "chain : Unit -> <Store \"cfg/*\"> Int\nchain _ =\n  let x = \"cfg/app\"\n  let q = x\n  let x = \"/etc/x\"\n  load q\n"),
+    rejects
+      "arm : (p : String) -> <Store p> Int\narm p = load (match \"/etc/x\"\n  p => p)\n",
+    rejects
+      "pat : (p : String) -> <Store p> Int\npat p = load (let (p, _) = (\"/etc/x\", 1) in p)\n",
+    accepts
+      False
+      "outer : String -> <Store \"cfg/*\"> Int\nouter input =\n  let q = \"cfg/app\"\n  match Some input\n    Some q => load q\n    None => 0\n",
+    accepts
+      False
+      "chain : Unit -> <Store \"cfg/*\"> Int\nchain _ =\n  let x = \"/etc/x\"\n  let q = x\n  let x = \"cfg/app\"\n  load q\n",
+    accepts
+      True
+      "rename : (p : String) -> <Store p> Int\nrename p = load (match p\n  q => q)\n",
+    accepts
+      True
+      "chain : Unit -> <Store \"cfg/*\"> Int\nchain _ =\n  let x = \"cfg/app\"\n  let q = x\n  let x = \"/etc/x\"\n  load q\n",
   ]
 
 test "a method contract's binder is rigid in every body that implements it" = expectAll
   [
-    expectTrue
-      (rejects
-        "interface Loader a where\n  get : a -> (p : String) -> <Store p> Int\ndata X = X\ncomp = (f => f) load\nimpl Loader X where\n  get _ p = comp \"/etc/x\"\n"),
-    expectTrue
-      (accepts
-        "interface Loader a where\n  get : a -> (p : String) -> <Store p> Int\ndata X = X\nimpl Loader X where\n  get _ p = load p\n"),
-    expectTrue
-      (rejects
-        "interface Loader a where\n  get : a -> (p : String) -> <Store p> Int\n  get _ p = load (p ++ \"/x\")\ndata X = X\nimpl Loader X where\n"),
+    rejects
+      "interface Loader a where\n  get : a -> (p : String) -> <Store p> Int\ndata X = X\ncomp = (f => f) load\nimpl Loader X where\n  get _ p = comp \"/etc/x\"\n",
+    accepts
+      True
+      "interface Loader a where\n  get : a -> (p : String) -> <Store p> Int\ndata X = X\nimpl Loader X where\n  get _ p = load p\n",
+    rejects
+      "interface Loader a where\n  get : a -> (p : String) -> <Store p> Int\n  get _ p = load (p ++ \"/x\")\ndata X = X\nimpl Loader X where\n",
   ]
 
 test "a lambda-form definition and a qualified result follow the signature" = expectAll
   [
-    expectTrue
-      (accepts "lam : (p : String) -> <Store p> Int\nlam = p => load p\n"),
-    expectTrue
-      (rejects
-        "lam : (p : String) -> <Store p> Int\nlam = p => load \"/etc/x\"\n"),
-    expectTrue
-      (accepts
-        "idp : (p : String) -> <Store p> String @p\nidp p = p\nvia : (p : String) -> <Store p> Int\nvia p = load (idp p)\n"),
+    accepts True "lam : (p : String) -> <Store p> Int\nlam = p => load p\n",
+    rejects "lam : (p : String) -> <Store p> Int\nlam = p => load \"/etc/x\"\n",
+    accepts
+      True
+      "idp : (p : String) -> <Store p> String @p\nidp p = p\nvia : (p : String) -> <Store p> Int\nvia p = load (idp p)\n",
   ]
 
 test "a written prefix element without a star is exact" = expectAll [
-  expectFalse
-    (accepts
-      "exact : Unit -> <Store \"/etc/host\"> Int\nexact _ = load \"/etc/hostname\"\n"),
-  expectTrue
-    (accepts
-      "pat : Unit -> <Store \"/etc/host*\"> Int\npat _ = load \"/etc/hostname\"\n"),
-  expectTrue
-    (accepts
-      "same : Unit -> <Store \"/etc/host\"> Int\nsame _ = load \"/etc/host\"\n"),
+  accepts
+    False
+    "exact : Unit -> <Store \"/etc/host\"> Int\nexact _ = load \"/etc/hostname\"\n",
+  accepts
+    True
+    "pat : Unit -> <Store \"/etc/host*\"> Int\npat _ = load \"/etc/hostname\"\n",
+  accepts
+    True
+    "same : Unit -> <Store \"/etc/host\"> Int\nsame _ = load \"/etc/host\"\n",
 ]
 
 test "the authority algebra" =
@@ -333,22 +327,18 @@ handle = "data H (p : Authority Store) = H (String @p)\n"
 
 test "a qualified field is a proof source: construction checks the stored value" = expectAll
   [
-    expectTrue
-      (accepts (handle ++ "mk : Unit -> H \"cfg/*\"\nmk _ = H \"cfg/app\"\n")),
-    expectTrue
-      (rejects (handle ++ "mk : Unit -> H \"cfg/*\"\nmk _ = H \"/etc/x\"\n")),
-    expectTrue (rejects (handle ++ "mk : String -> H \"cfg/*\"\nmk s = H s\n")),
-    expectTrue
-      (accepts
-        (handle ++ "open : (path : String) -> H path\nopen path = H path\n")),
-    expectTrue
-      (rejects
-        (handle
-          ++ "open : (path : String) -> H path\nopen path = H (path ++ \"/x\")\n")),
-    expectTrue
-      (rejects
-        (handle
-          ++ "open : (path : String) -> H path\nopen path = H \"/etc/x\"\n")),
+    accepts True (handle ++ "mk : Unit -> H \"cfg/*\"\nmk _ = H \"cfg/app\"\n"),
+    rejects (handle ++ "mk : Unit -> H \"cfg/*\"\nmk _ = H \"/etc/x\"\n"),
+    rejects (handle ++ "mk : String -> H \"cfg/*\"\nmk s = H s\n"),
+    accepts
+      True
+      (handle ++ "open : (path : String) -> H path\nopen path = H path\n"),
+    rejects
+      (handle
+        ++ "open : (path : String) -> H path\nopen path = H (path ++ \"/x\")\n"),
+    rejects
+      (handle
+        ++ "open : (path : String) -> H path\nopen path = H \"/etc/x\"\n"),
     expectEqual
       "(path : String) -> H path"
       (schemeOf
@@ -358,46 +348,41 @@ test "a qualified field is a proof source: construction checks the stored value"
   ]
 
 test "matching recovers the declared qualifier and nothing more" = expectAll [
-  expectTrue
-    (accepts (handle ++ "read : H p -> <Store p> Int\nread (H s) = load s\n")),
-  expectTrue
-    (rejects
-      (handle
-        ++ "read : H p -> <Store p> Int\nread (H s) = load \"/etc/x\"\n")),
-  expectFalse
-    (accepts
-      ("data U = U String\n"
-        ++ "readU : U -> <Store \"cfg/*\"> Int\nreadU (U s) = load s\n")),
-  expectTrue
-    (accepts
-      ("data U = U String\n"
-        ++ "readU : U -> <Store> Int\nreadU (U s) = load s\n")),
-  expectTrue
-    (accepts
-      ("data H2 (p : Authority Store) = A (String @p) | B Int\n"
-        ++ "f : H2 p -> <Store p> Int\nf (A s) = load s\nf (B n) = n\n")),
-  expectTrue
-    (rejects
-      ("data H2 (p : Authority Store) = A (String @p) | B Int\n"
-        ++ "f : H2 p -> <Store p> Int\nf (A s) = load s\nf (B n) = load \"cfg/x\"\n")),
+  accepts True (handle ++ "read : H p -> <Store p> Int\nread (H s) = load s\n"),
+  rejects
+    (handle ++ "read : H p -> <Store p> Int\nread (H s) = load \"/etc/x\"\n"),
+  accepts
+    False
+    ("data U = U String\n"
+      ++ "readU : U -> <Store \"cfg/*\"> Int\nreadU (U s) = load s\n"),
+  accepts
+    True
+    ("data U = U String\n"
+      ++ "readU : U -> <Store> Int\nreadU (U s) = load s\n"),
+  accepts
+    True
+    ("data H2 (p : Authority Store) = A (String @p) | B Int\n"
+      ++ "f : H2 p -> <Store p> Int\nf (A s) = load s\nf (B n) = n\n"),
+  rejects
+    ("data H2 (p : Authority Store) = A (String @p) | B Int\n"
+      ++ "f : H2 p -> <Store p> Int\nf (A s) = load s\nf (B n) = load \"cfg/x\"\n"),
 ]
 
 test "an index in a signature quantifies like a type variable" = expectAll [
-  expectTrue
-    (accepts
-      (handle
-        ++ "read : H p -> <Store p> Int\nread (H s) = load s\n"
-        ++ "via : H p -> <Store p> Int\nvia h = read h\n")),
-  expectTrue
-    (accepts
-      (handle
-        ++ "read : H p -> <Store p> Int\nread (H s) = load s\n"
-        ++ "viaTop : H p -> <Store> Int\nviaTop h = read h\n")),
-  expectTrue
-    (rejects
-      (handle
-        ++ "read : H p -> <Store p> Int\nread (H s) = load s\n"
-        ++ "viaBad : H p -> <Store \"cfg/*\"> Int\nviaBad h = read h\n")),
+  accepts
+    True
+    (handle
+      ++ "read : H p -> <Store p> Int\nread (H s) = load s\n"
+      ++ "via : H p -> <Store p> Int\nvia h = read h\n"),
+  accepts
+    True
+    (handle
+      ++ "read : H p -> <Store p> Int\nread (H s) = load s\n"
+      ++ "viaTop : H p -> <Store> Int\nviaTop h = read h\n"),
+  rejects
+    (handle
+      ++ "read : H p -> <Store p> Int\nread (H s) = load s\n"
+      ++ "viaBad : H p -> <Store \"cfg/*\"> Int\nviaBad h = read h\n"),
   expectTrue
     (contains
       "T-AUTHORITY-KIND"
@@ -411,19 +396,18 @@ test "an index in a signature quantifies like a type variable" = expectAll [
 -- (the `Ref` cell rows live in effect_data_field_{ok,launder}: `:=` needs the
 -- prelude this matrix runs without)
 test "an index is invariant; `*` is the top" = expectAll [
-  expectTrue
-    (accepts (handle ++ "same : H \"cfg/*\" -> H \"cfg/*\"\nsame h = h\n")),
+  accepts True (handle ++ "same : H \"cfg/*\" -> H \"cfg/*\"\nsame h = h\n"),
   expectEqual
     ["T-AUTHORITY-INDEX-MISMATCH"]
     (codes (handle ++ "widen : H \"cfg/app\" -> H \"cfg/*\"\nwiden h = h\n")),
-  expectTrue (accepts (handle ++ "anyH : String -> H *\nanyH s = H s\n")),
-  expectTrue
-    (accepts
-      (handle ++ "fromAny : H * -> <Store> Int\nfromAny (H s) = load s\n")),
-  expectFalse
-    (accepts
-      (handle
-        ++ "fromAny : H * -> <Store \"cfg/*\"> Int\nfromAny (H s) = load s\n")),
+  accepts True (handle ++ "anyH : String -> H *\nanyH s = H s\n"),
+  accepts
+    True
+    (handle ++ "fromAny : H * -> <Store> Int\nfromAny (H s) = load s\n"),
+  accepts
+    False
+    (handle
+      ++ "fromAny : H * -> <Store \"cfg/*\"> Int\nfromAny (H s) = load s\n"),
 ]
 
 test "a phantom authority index is trusted only at home" = expectAll [
@@ -431,13 +415,12 @@ test "a phantom authority index is trusted only at home" = expectAll [
     (contains
       "T-AUTHORITY-PHANTOM-EXPORT"
       (codes "public export data P (p : Authority Store) = P Int\n")),
-  expectTrue (accepts "export data P (p : Authority Store) = P Int\n"),
-  expectTrue
-    (accepts "public export data Q (p : Authority Store) = Q (String @p)\n"),
-  expectTrue
-    (accepts
-      ("data P (p : Authority Store) = P Int\n"
-        ++ "mk : (path : String) -> P path\nmk _ = P 1\n")),
+  accepts True "export data P (p : Authority Store) = P Int\n",
+  accepts True "public export data Q (p : Authority Store) = Q (String @p)\n",
+  accepts
+    True
+    ("data P (p : Authority Store) = P Int\n"
+      ++ "mk : (path : String) -> P path\nmk _ = P 1\n"),
 ]
 
 record : String
@@ -445,32 +428,25 @@ record = "data R (p : Authority Store) = R { path : String @p, n : Int }\n"
 
 test "record fields: create, read, pattern and update follow the qualifier" = expectAll
   [
-    expectTrue
-      (accepts
-        (record
-          ++ "mk : Unit -> R \"cfg/*\"\nmk _ = R { path = \"cfg/a\", n = 1 }\n")),
-    expectTrue
-      (rejects
-        (record
-          ++ "mk : Unit -> R \"cfg/*\"\nmk _ = R { path = \"/etc/x\", n = 1 }\n")),
-    expectTrue
-      (accepts (record ++ "rd : R p -> <Store p> Int\nrd r = load r.path\n")),
-    expectTrue
-      (accepts
-        (record
-          ++ "rd : R p -> <Store p> Int\nrd (R { path = s }) = load s\n")),
-    expectTrue
-      (accepts
-        (record ++ "rd : R p -> <Store p> Int\nrd (R { path }) = load path\n")),
-    expectTrue
-      (rejects
-        (record
-          ++ "rd : R p -> <Store p> Int\nrd (R { path }) = load \"/etc/x\"\n")),
-    expectTrue
-      (accepts (record ++ "upd : R p -> R p\nupd r = { r | n = 2 }\n")),
-    expectTrue
-      (rejects
-        (record ++ "upd : R p -> R p\nupd r = { r | path = \"/etc/x\" }\n")),
+    accepts
+      True
+      (record
+        ++ "mk : Unit -> R \"cfg/*\"\nmk _ = R { path = \"cfg/a\", n = 1 }\n"),
+    rejects
+      (record
+        ++ "mk : Unit -> R \"cfg/*\"\nmk _ = R { path = \"/etc/x\", n = 1 }\n"),
+    accepts True (record ++ "rd : R p -> <Store p> Int\nrd r = load r.path\n"),
+    accepts
+      True
+      (record ++ "rd : R p -> <Store p> Int\nrd (R { path = s }) = load s\n"),
+    accepts
+      True
+      (record ++ "rd : R p -> <Store p> Int\nrd (R { path }) = load path\n"),
+    rejects
+      (record
+        ++ "rd : R p -> <Store p> Int\nrd (R { path }) = load \"/etc/x\"\n"),
+    accepts True (record ++ "upd : R p -> R p\nupd r = { r | n = 2 }\n"),
+    rejects (record ++ "upd : R p -> R p\nupd r = { r | path = \"/etc/x\" }\n"),
   ]
 
 existential : String
@@ -481,34 +457,32 @@ existential =
     ++ "write : H p -> String @p -> Unit\nwrite _ _ = ()\n"
 
 test "an existential opens a rigid authority scoped to the arm" = expectAll [
-  expectTrue
-    (accepts
-      (existential
-        ++ "pack : (path : String) -> Any\npack path = Any (H path)\n")),
-  expectTrue
-    (accepts
-      (existential
-        ++ "use : Any -> <Store> Int\nuse a = match a\n  Any h => read h\n")),
-  expectTrue
-    (rejects
-      (existential
-        ++ "use : Any -> <Store \"cfg/*\"> Int\nuse a = match a\n  Any h => read h\n")),
-  expectTrue
-    (accepts
-      (existential
-        ++ "wr : Any -> Unit\nwr a = match a\n  Any h => match h\n    H s => write h s\n")),
-  expectTrue
-    (rejects
-      (existential
-        ++ "wr : Any -> Unit\nwr a = match a\n  Any h => write h \"/etc/x\"\n")),
+  accepts
+    True
+    (existential
+      ++ "pack : (path : String) -> Any\npack path = Any (H path)\n"),
+  accepts
+    True
+    (existential
+      ++ "use : Any -> <Store> Int\nuse a = match a\n  Any h => read h\n"),
+  rejects
+    (existential
+      ++ "use : Any -> <Store \"cfg/*\"> Int\nuse a = match a\n  Any h => read h\n"),
+  accepts
+    True
+    (existential
+      ++ "wr : Any -> Unit\nwr a = match a\n  Any h => match h\n    H s => write h s\n"),
+  rejects
+    (existential
+      ++ "wr : Any -> Unit\nwr a = match a\n  Any h => write h \"/etc/x\"\n"),
   expectTrue
     (contains
       "T-AUTHORITY-ESCAPE"
       (codes
         (existential ++ "esc : Any -> H *\nesc a = match a\n  Any h => h\n"))),
-  expectTrue
-    (accepts
-      (existential ++ "useC : Any -> <Store> Int\nuseC (Any h) = read h\n")),
+  accepts
+    True
+    (existential ++ "useC : Any -> <Store> Int\nuseC (Any h) = read h\n"),
   expectTrue
     (contains
       "T-AUTHORITY-ESCAPE"
@@ -537,29 +511,28 @@ test "an alias parameter substitutes; an impl head and a forward reference elabo
         (handle
           ++ "type HA (q : Authority Store) = H q\nback : HA p -> H p\nback h = h\n")
         "back"),
-    expectTrue
-      (accepts
-        (handle
-          ++ "type HA (q : Authority Store) = H q\nmk : Unit -> HA \"cfg/*\"\nmk _ = H \"cfg/app\"\n")),
-    expectTrue
-      (rejects
-        (handle
-          ++ "type HA (q : Authority Store) = H q\nmk : Unit -> HA \"cfg/*\"\nmk _ = H \"/etc/x\"\n")),
-    expectTrue
-      (accepts
-        (indexedD ++ "impl Eq (D p) where\n  eq (D _ a) (D _ b) = a == b\n")),
-    expectTrue
-      (accepts
-        "data E (p : Authority Store) = E (String @p) Int deriving (Eq)\n"),
+    accepts
+      True
+      (handle
+        ++ "type HA (q : Authority Store) = H q\nmk : Unit -> HA \"cfg/*\"\nmk _ = H \"cfg/app\"\n"),
+    rejects
+      (handle
+        ++ "type HA (q : Authority Store) = H q\nmk : Unit -> HA \"cfg/*\"\nmk _ = H \"/etc/x\"\n"),
+    accepts
+      True
+      (indexedD ++ "impl Eq (D p) where\n  eq (D _ a) (D _ b) = a == b\n"),
+    accepts
+      True
+      "data E (p : Authority Store) = E (String @p) Int deriving (Eq)\n",
     expectTrue
       (contains
         "T-AUTHORITY-KIND"
         (codes
           (indexedD
             ++ "impl Eq (D Int) where\n  eq (D _ a) (D _ b) = a == b\n"))),
-    expectTrue
-      (accepts
-        "data A (p : Authority Store) = A Int (B p)\ndata B (p : Authority Store) = B (String @p)\n"),
+    accepts
+      True
+      "data A (p : Authority Store) = A Int (B p)\ndata B (p : Authority Store) = B (String @p)\n",
   ]
 
 sealed : String
@@ -572,15 +545,14 @@ test "a field read cannot open an existential: it recovers the top" = expectAll
     expectEqual
       "Sealed -> H *"
       (schemeOf (sealed ++ "unseal s = H s.path\n") "unseal"),
-    expectFalse
-      (accepts (sealed ++ "at : Sealed -> H \"cfg/*\"\nat s = H s.path\n")),
+    accepts False (sealed ++ "at : Sealed -> H \"cfg/*\"\nat s = H s.path\n"),
     expectEqual
       "Sealed -> Int"
       (schemeOf (sealed ++ "count s = s.n\n") "count"),
-    expectTrue
-      (accepts
-        (sealed
-          ++ "open : Sealed -> <Store> Int\nopen s = match s\n  Sealed { path } => load path\n")),
+    accepts
+      True
+      (sealed
+        ++ "open : Sealed -> <Store> Int\nopen s = match s\n  Sealed { path } => load path\n"),
   ]
 
 raw : String
@@ -589,13 +561,11 @@ raw = "data Raw (p : Authority Store) = Raw Int\n"
 test "an unsigned forwarder of a phantom constructor publishes the top" = expectAll
   [
     expectEqual "Int -> Raw *" (schemeOf (raw ++ "mk = Raw\n") "mk"),
-    expectFalse
-      (accepts
-        (raw ++ "mk = Raw\nforge : Unit -> Raw \"cfg/*\"\nforge _ = mk 3\n")),
-    expectTrue
-      (accepts (raw ++ "home : Unit -> Raw \"cfg/*\"\nhome _ = Raw 3\n")),
-    expectTrue
-      (accepts (raw ++ "mk = Raw\nany : Unit -> Raw *\nany _ = mk 3\n")),
+    accepts
+      False
+      (raw ++ "mk = Raw\nforge : Unit -> Raw \"cfg/*\"\nforge _ = mk 3\n"),
+    accepts True (raw ++ "home : Unit -> Raw \"cfg/*\"\nhome _ = Raw 3\n"),
+    accepts True (raw ++ "mk = Raw\nany : Unit -> Raw *\nany _ = mk 3\n"),
   ]
 
 -- Two modules: the provider declares the heads and the importer applies
@@ -635,10 +605,8 @@ claimCodes body = moduleCodesOf provider body
 moduleCodes : ModDiags -> List String
 moduleCodes (_, (_, errors, _)) = map (d => codeText (tcCode d)) errors
 
-claimAccepts : String -> Bool
-claimAccepts body = match claimCodes body
-  [] => True
-  _ => False
+claimAccepts : Bool -> String -> Expectation
+claimAccepts want body = expectEqual want (isEmptyList (claimCodes body))
 
 test "a public constructor carries its parameter, and an importer proves the index through the field" = expectAll
   [
@@ -654,19 +622,19 @@ test "a public constructor carries its parameter, and an importer proves the ind
         "T-AUTHORITY-PHANTOM-EXPORT"
         (codes
           "public export data Cb (p : Authority Store) = Cb Int (Unit -> <Store p> Int)\n")),
-    expectTrue
-      (accepts
-        (handle
-          ++ "public export data Pair (p : Authority Store) = Pair (H p) (List (H p))\n")),
-    expectTrue
-      (accepts
-        (handle
-          ++ "public export data Tup (p : Authority Store) = Tup (Int, H p)\n")),
-    expectTrue
-      (accepts
-        (handle
-          ++ "public export data Box a = Box a\n"
-          ++ "public export data Boxed (p : Authority Store) = Boxed (Box (H p))\n")),
+    accepts
+      True
+      (handle
+        ++ "public export data Pair (p : Authority Store) = Pair (H p) (List (H p))\n"),
+    accepts
+      True
+      (handle
+        ++ "public export data Tup (p : Authority Store) = Tup (Int, H p)\n"),
+    accepts
+      True
+      (handle
+        ++ "public export data Box a = Box a\n"
+        ++ "public export data Boxed (p : Authority Store) = Boxed (Box (H p))\n"),
     expectTrue
       (contains
         "T-AUTHORITY-PHANTOM-EXPORT"
@@ -674,30 +642,28 @@ test "a public constructor carries its parameter, and an importer proves the ind
           (handle
             ++ "public export data Opt (p : Authority Store) = Opt (Option (H p))\n"))),
     -- the importer proves the index through the carrying field
-    expectTrue
-      (claimAccepts
-        "tokAt : (path : String) -> Tok path\ntokAt path = Tok (H path) []\n"),
-    expectTrue
-      (claimAccepts
-        "cfg : Unit -> Tok \"cfg/*\"\ncfg _ = Tok (H \"cfg/app\") []\n"),
-    expectFalse
-      (claimAccepts
-        "bad : Unit -> Tok \"cfg/*\"\nbad _ = Tok (H \"/etc/x\") []\n"),
-    expectTrue (claimAccepts "re : Tok p -> Tok p\nre (Tok h hs) = Tok h hs\n"),
-    expectTrue
-      (claimAccepts
-        "fromT t = Tok (hd t) (hsOf t)\nhd (Tok h _) = h\nhsOf (Tok _ hs) = hs\nuse : Tok \"cfg/*\" -> Tok \"cfg/*\"\nuse t = fromT t\n"),
-    expectTrue
-      (claimAccepts
-        "ok h =\n  let t = Tok h [h]\n  t\nuse : Unit -> Tok \"cfg/*\"\nuse _ = ok (H \"cfg/a\")\n"),
+    claimAccepts
+      True
+      "tokAt : (path : String) -> Tok path\ntokAt path = Tok (H path) []\n",
+    claimAccepts
+      True
+      "cfg : Unit -> Tok \"cfg/*\"\ncfg _ = Tok (H \"cfg/app\") []\n",
+    claimAccepts
+      False
+      "bad : Unit -> Tok \"cfg/*\"\nbad _ = Tok (H \"/etc/x\") []\n",
+    claimAccepts True "re : Tok p -> Tok p\nre (Tok h hs) = Tok h hs\n",
+    claimAccepts
+      True
+      "fromT t = Tok (hd t) (hsOf t)\nhd (Tok h _) = h\nhsOf (Tok _ hs) = hs\nuse : Tok \"cfg/*\" -> Tok \"cfg/*\"\nuse t = fromT t\n",
+    claimAccepts
+      True
+      "ok h =\n  let t = Tok h [h]\n  t\nuse : Unit -> Tok \"cfg/*\"\nuse _ = ok (H \"cfg/a\")\n",
     -- an unsigned forwarder of an abstract phantom head publishes the top
-    expectTrue (claimAccepts "any : Unit -> Raw *\nany _ = mkRaw 3\n"),
-    expectFalse
-      (claimAccepts "forge : Unit -> Raw \"cfg/*\"\nforge _ = mkRaw 3\n"),
+    claimAccepts True "any : Unit -> Raw *\nany _ = mkRaw 3\n",
+    claimAccepts False "forge : Unit -> Raw \"cfg/*\"\nforge _ = mkRaw 3\n",
     -- a record read cannot open an imported existential either
-    expectFalse
-      (claimAccepts "unseal : SealedR -> H \"cfg/*\"\nunseal s = s.h\n"),
-    expectTrue (claimAccepts "count : SealedR -> Int\ncount s = s.k\n"),
+    claimAccepts False "unseal : SealedR -> H \"cfg/*\"\nunseal s = s.h\n",
+    claimAccepts True "count : SealedR -> Int\ncount s = s.k\n",
   ]
 
 test "a signature's index publishes as written; impl heads abstract over an index and dispatch" = expectAll
@@ -705,24 +671,24 @@ test "a signature's index publishes as written; impl heads abstract over an inde
     expectEqual
       "Unit -> List (H p)"
       (schemeOf (handle ++ "none : Unit -> List (H p)\nnone _ = []\n") "none"),
-    expectTrue
-      (accepts
-        (handle
-          ++ "none : Unit -> List (H p)\nnone _ = []\nuse : Unit -> List (H \"cfg/*\")\nuse _ = none ()\n")),
+    accepts
+      True
+      (handle
+        ++ "none : Unit -> List (H p)\nnone _ = []\nuse : Unit -> List (H \"cfg/*\")\nuse _ = none ()\n"),
     -- a return-position method at an indexed head, and a two-parameter interface
-    expectTrue
-      (accepts
-        (raw
-          ++ "interface Make a where\n  make : Int -> a\nimpl Make (Raw p) where\n  make n = Raw n\nforge : Unit -> Raw \"cfg/*\"\nforge _ = make 3\n")),
-    expectTrue
-      (accepts
-        (raw
-          ++ "interface Conv a b where\n  conv : a -> b\nimpl Conv (Raw p) Int where\n  conv _ = 1\nuse : Raw \"cfg/a\" -> Int\nuse b = conv b\n")),
+    accepts
+      True
+      (raw
+        ++ "interface Make a where\n  make : Int -> a\nimpl Make (Raw p) where\n  make n = Raw n\nforge : Unit -> Raw \"cfg/*\"\nforge _ = make 3\n"),
+    accepts
+      True
+      (raw
+        ++ "interface Conv a b where\n  conv : a -> b\nimpl Conv (Raw p) Int where\n  conv _ = 1\nuse : Raw \"cfg/a\" -> Int\nuse b = conv b\n"),
     -- an impl head takes a name in an `Authority` slot, never a written term
-    expectTrue
-      (accepts
-        (handle
-          ++ "interface Describe a where\n  describe : a -> String\nimpl Describe (H p) where\n  describe _ = \"h\"\nuse : H \"cfg/*\" -> String\nuse h = describe h\n")),
+    accepts
+      True
+      (handle
+        ++ "interface Describe a where\n  describe : a -> String\nimpl Describe (H p) where\n  describe _ = \"h\"\nuse : H \"cfg/*\" -> String\nuse h = describe h\n"),
     expectTrue
       (contains
         "T-AUTHORITY-KIND"
@@ -757,14 +723,14 @@ test "an existential record: a read is the top, an update repacks the binder who
         (codes
           (handle
             ++ "data Two = Two (p : Authority Store) { a : H p, b : H p }\nf t = { t | a = H \"/etc/x\" }\n"))),
-    expectTrue
-      (accepts
-        (handle
-          ++ "data Two = Two (p : Authority Store) { a : H p, b : H p }\nf t = { t | a = H \"/etc/x\", b = H \"/etc/x\" }\n")),
-    expectTrue
-      (accepts
-        (handle
-          ++ "data Two = Two (p : Authority Store) { a : H p, n : Int }\nf t = { t | n = 2 }\n")),
+    accepts
+      True
+      (handle
+        ++ "data Two = Two (p : Authority Store) { a : H p, b : H p }\nf t = { t | a = H \"/etc/x\", b = H \"/etc/x\" }\n"),
+    accepts
+      True
+      (handle
+        ++ "data Two = Two (p : Authority Store) { a : H p, n : Int }\nf t = { t | n = 2 }\n"),
     expectTrue
       (contains
         "T-AUTHORITY-ESCAPE"
@@ -794,8 +760,7 @@ test "the review's S2 findings: one domain per binder, the offending site, disti
       (contains
         "T-AUTHORITY-DOMAIN"
         (codes (handle ++ "two : H p -> <Var p> Int\ntwo (H s) = load s\n"))),
-    expectTrue
-      (accepts (handle ++ "one : H p -> <Store p> Int\none (H s) = load s\n")),
+    accepts True (handle ++ "one : H p -> <Store p> Int\none (H s) = load s\n"),
     -- two sites perform the label; the report lands on the one outside the
     -- bound (line 4), not the first (line 3)
     expectEqual
@@ -807,18 +772,18 @@ test "the review's S2 findings: one domain per binder, the offending site, disti
       (contains
         "T-EFFECT-PARAM"
         (codes "effect Dup Product (Host : Prefix, Host : Set)\n")),
-    expectTrue (accepts "effect Two Product (Host : Prefix, Method : Set)\n"),
+    accepts True "effect Two Product (Host : Prefix, Method : Set)\n",
     -- a bare literal lifts into a Set first axis as a one-element set
-    expectTrue
-      (accepts
-        ("effect M Product (Method : Set, Host : Prefix)\n"
-          ++ "extern call : (m : String) -> <M m> Unit\n"
-          ++ "ok : Unit -> <M \"GET\"> Unit\nok _ = call \"GET\"\n")),
-    expectFalse
-      (accepts
-        ("effect M Product (Method : Set, Host : Prefix)\n"
-          ++ "extern call : (m : String) -> <M m> Unit\n"
-          ++ "bad : Unit -> <M \"GET\"> Unit\nbad _ = call \"POST\"\n")),
+    accepts
+      True
+      ("effect M Product (Method : Set, Host : Prefix)\n"
+        ++ "extern call : (m : String) -> <M m> Unit\n"
+        ++ "ok : Unit -> <M \"GET\"> Unit\nok _ = call \"GET\"\n"),
+    accepts
+      False
+      ("effect M Product (Method : Set, Host : Prefix)\n"
+        ++ "extern call : (m : String) -> <M m> Unit\n"
+        ++ "bad : Unit -> <M \"GET\"> Unit\nbad _ = call \"POST\"\n"),
     -- a signature's own kind error is located at the signature (line 2)
     expectEqual
       [2]
@@ -834,8 +799,9 @@ messagesOf source =
   )
   map tcMsg errors
 
-anyMentions : String -> List String -> Bool
-anyMentions needle msgs = anyList (m => S.contains needle m) msgs
+anyMentions : Bool -> String -> List String -> Expectation
+anyMentions want needle msgs =
+  expectEqual want (anyList (m => S.contains needle m) msgs)
 
 test "a qualifier's authority has one domain; a joined qualifier is the join of its names" = expectAll
   [
@@ -847,19 +813,17 @@ test "a qualifier's authority has one domain; a joined qualifier is the join of 
         (codes "idQ : (a : String) -> String @a\nidQ a = a\n")),
     expectEqual [1] (errorLines "idQ : (a : String) -> String @a\nidQ a = a\n"),
     -- with a label naming it, the qualifier is a bound a caller relies on
-    expectTrue
-      (accepts
-        "idR : (a : String) -> <Store a> String @a\nidR a = a\nuse : (a : String) -> <Store a> Int\nuse a = load (idR a)\n"),
+    accepts
+      True
+      "idR : (a : String) -> <Store a> String @a\nidR a = a\nuse : (a : String) -> <Store a> Int\nuse a = load (idR a)\n",
     -- a joined qualifier admits either name, and its caller must admit both
-    expectTrue
-      (accepts
-        "pick : (a : String) -> (b : String) -> Bool -> <Store a, Store b> String @(a | b)\npick a b c = if c then a else b\nboth : (a : String) -> (b : String) -> <Store a, Store b> Int\nboth a b = load (pick a b True)\n"),
-    expectTrue
-      (rejects
-        "pickA : (a : String) -> (b : String) -> Bool -> <Store a, Store b> String @a\npickA a b c = if c then a else b\n"),
-    expectTrue
-      (rejects
-        "pick : (a : String) -> (b : String) -> Bool -> <Store a, Store b> String @(a | b)\npick a b c = if c then a else b\nonly : (a : String) -> <Store a> Int\nonly a = load (pick a \"/etc/x\" True)\n"),
+    accepts
+      True
+      "pick : (a : String) -> (b : String) -> Bool -> <Store a, Store b> String @(a | b)\npick a b c = if c then a else b\nboth : (a : String) -> (b : String) -> <Store a, Store b> Int\nboth a b = load (pick a b True)\n",
+    rejects
+      "pickA : (a : String) -> (b : String) -> Bool -> <Store a, Store b> String @a\npickA a b c = if c then a else b\n",
+    rejects
+      "pick : (a : String) -> (b : String) -> Bool -> <Store a, Store b> String @(a | b)\npick a b c = if c then a else b\nonly : (a : String) -> <Store a> Int\nonly a = load (pick a \"/etc/x\" True)\n",
     -- a join is within one domain
     expectTrue
       (contains
@@ -867,12 +831,11 @@ test "a qualifier's authority has one domain; a joined qualifier is the join of 
         (codes
           "mix : (a : String) -> (b : String) -> <Store a, Var b> String @(a | b)\nmix a b = a\n")),
     -- a field joined over two parameters carries neither alone
-    expectTrue
-      (accepts
-        "data Two (p : Authority Store) (q : Authority Store) = Two (String @(p | q))\nrd : Two p q -> <Store p, Store q> Int\nrd (Two s) = load s\n"),
-    expectTrue
-      (rejects
-        "data Two (p : Authority Store) (q : Authority Store) = Two (String @(p | q))\nrd : Two p q -> <Store p> Int\nrd (Two s) = load s\n"),
+    accepts
+      True
+      "data Two (p : Authority Store) (q : Authority Store) = Two (String @(p | q))\nrd : Two p q -> <Store p, Store q> Int\nrd (Two s) = load s\n",
+    rejects
+      "data Two (p : Authority Store) (q : Authority Store) = Two (String @(p | q))\nrd : Two p q -> <Store p> Int\nrd (Two s) = load s\n",
     expectTrue
       (contains
         "T-AUTHORITY-PHANTOM-EXPORT"
@@ -885,7 +848,7 @@ test "an effect declaration and an authority kind are located, and an atomic lab
     -- the axis diagnostics land on the declaration (line 1), not on whatever
     -- span the module's last inferred expression left (line 3)
     expectEqual [1] (errorLines "effect P Product\nx : Int\nx = 1\n"),
-    expectTrue (accepts "x : Int\nx = 1\neffect P Product (Host : Prefix)\n"),
+    accepts True "x : Int\nx = 1\neffect P Product (Host : Prefix)\n",
     -- `Authority L` ranges over L's domain, so an atomic L is refused at the label
     expectEqual
       [2]
@@ -894,7 +857,7 @@ test "an effect declaration and an authority kind are located, and an atomic lab
       (contains
         "T-AUTHORITY-KIND"
         (codes "data I (p : Authority IO) = I Int\n")),
-    expectTrue (accepts "data S (p : Authority Store) = S Int\n"),
+    accepts True "data S (p : Authority Store) = S Int\n",
   ]
 
 test "an index is an equality, reported once as one; an opened authority is named as what it is" = expectAll
@@ -909,25 +872,25 @@ test "an index is an equality, reported once as one; an opened authority is name
     expectEqual
       ["T-AUTHORITY-INDEX-MISMATCH"]
       (codes (handle ++ "k : H p -> H \"a/*\"\nk h = h\n")),
-    expectTrue (accepts (handle ++ "e : H \"a/*\" -> H \"a/*\"\ne h = h\n")),
-    expectTrue (accepts (handle ++ "v : H p -> H p\nv h = h\n")),
+    accepts True (handle ++ "e : H \"a/*\" -> H \"a/*\"\ne h = h\n"),
+    accepts True (handle ++ "v : H p -> H p\nv h = h\n"),
     -- an opened existential is the authority of the opened value, not a
     -- caller's choice
-    expectTrue
-      (anyMentions
-        "this arm or clause opened"
-        (messagesOf
-          (handle
-            ++ "data AnyH = AnyH (p : Authority Store) (H p)\nsameAs : H p -> String @p -> Int\nsameAs _ _ = 1\nm (AnyH h) = sameAs h \"cfg/x\"\n"))),
-    expectTrue
-      (accepts
+    anyMentions
+      True
+      "this arm or clause opened"
+      (messagesOf
         (handle
-          ++ "data AnyH = AnyH (p : Authority Store) (H p)\nsameAs : H p -> String @p -> Int\nsameAs _ _ = 1\npathOf : H p -> String @p\npathOf (H s) = s\nm (AnyH h) = sameAs h (pathOf h)\n")),
-    expectFalse
-      (anyMentions
-        "this arm or clause opened"
-        (messagesOf
-          "sneaky : (p : String) -> <Store p> Int\nsneaky p = load \"/etc/x\"\n")),
+          ++ "data AnyH = AnyH (p : Authority Store) (H p)\nsameAs : H p -> String @p -> Int\nsameAs _ _ = 1\nm (AnyH h) = sameAs h \"cfg/x\"\n")),
+    accepts
+      True
+      (handle
+        ++ "data AnyH = AnyH (p : Authority Store) (H p)\nsameAs : H p -> String @p -> Int\nsameAs _ _ = 1\npathOf : H p -> String @p\npathOf (H s) = s\nm (AnyH h) = sameAs h (pathOf h)\n"),
+    anyMentions
+      False
+      "this arm or clause opened"
+      (messagesOf
+        "sneaky : (p : String) -> <Store p> Int\nsneaky p = load \"/etc/x\"\n"),
   ]
 
 -- #3327: a forward reference to an `(e : Effect)` head kinds the same in
@@ -935,12 +898,12 @@ test "an index is an equality, reported once as one; an opened authority is name
 -- the declaration that makes it, in either order.
 test "a forward-referenced Effect-kinded head kinds the same in either order (#3327)" = expectAll
   [
-    expectTrue
-      (accepts
-        "data W (e : Effect) = WUntil Int (Timer e)\ndata Timer (e : Effect) = Timer (Unit -> <e> Int)\nmk : Int -> W <Store | e>\nmk t = WUntil t (Timer (u => load \"cfg/x\"))\n"),
-    expectTrue
-      (accepts
-        "data Timer (e : Effect) = Timer (Unit -> <e> Int)\ndata W (e : Effect) = WUntil Int (Timer e)\nmk : Int -> W <Store | e>\nmk t = WUntil t (Timer (u => load \"cfg/x\"))\n"),
+    accepts
+      True
+      "data W (e : Effect) = WUntil Int (Timer e)\ndata Timer (e : Effect) = Timer (Unit -> <e> Int)\nmk : Int -> W <Store | e>\nmk t = WUntil t (Timer (u => load \"cfg/x\"))\n",
+    accepts
+      True
+      "data Timer (e : Effect) = Timer (Unit -> <e> Int)\ndata W (e : Effect) = WUntil Int (Timer e)\nmk : Int -> W <Store | e>\nmk t = WUntil t (Timer (u => load \"cfg/x\"))\n",
     expectEqual
       [1]
       (errorLines
@@ -982,11 +945,11 @@ test "an effect label crosses a member-list re-export with its identity (#3304)"
       (reexportCodes
         "export import eff.*\n"
         "import facade.{Logging, doLog}\nact : Int -> <Logging> Int\nact x = doLog x\n"),
-    expectFalse
-      (isEmptyList
-        (reexportCodes
-          "export import eff.{doLog}\n"
-          "import facade.{doLog}\nact : Int -> <> Int\nact x = doLog x\n")),
+    expectNotEqual
+      []
+      (reexportCodes
+        "export import eff.{doLog}\n"
+        "import facade.{doLog}\nact : Int -> <> Int\nact x = doLog x\n"),
   ]
 
 isEmptyList : List a -> Bool
@@ -1000,31 +963,31 @@ test "a joined field is built against written indices, a join of one name carrie
     -- their join (the Prefix join is the longest common prefix, "cfg/*")
     -- with inferred indices a join upper has no principal solution, so the
     -- construction is refused (a completeness gap the handoff lists)
-    expectFalse
-      (accepts
-        "data Two (p : Authority Store) (q : Authority Store) = Two (String @(p | q))\nmk = Two \"cfg/x\"\n"),
-    expectFalse
-      (accepts
-        "data AnyJ = AnyJ (p : Authority Store) (q : Authority Store) (String @(p | q))\nmk = AnyJ \"/etc/x\"\n"),
-    expectTrue
-      (accepts
-        "data Two (p : Authority Store) (q : Authority Store) = Two (String @(p | q))\nmk : Unit -> Two \"cfg/a/*\" \"cfg/b/*\"\nmk _ = Two \"cfg/b/x\"\n"),
-    expectFalse
-      (accepts
-        "data Two (p : Authority Store) (q : Authority Store) = Two (String @(p | q))\nmk : Unit -> Two \"cfg/a/*\" \"cfg/b/*\"\nmk _ = Two \"/etc/x\"\n"),
+    accepts
+      False
+      "data Two (p : Authority Store) (q : Authority Store) = Two (String @(p | q))\nmk = Two \"cfg/x\"\n",
+    accepts
+      False
+      "data AnyJ = AnyJ (p : Authority Store) (q : Authority Store) (String @(p | q))\nmk = AnyJ \"/etc/x\"\n",
+    accepts
+      True
+      "data Two (p : Authority Store) (q : Authority Store) = Two (String @(p | q))\nmk : Unit -> Two \"cfg/a/*\" \"cfg/b/*\"\nmk _ = Two \"cfg/b/x\"\n",
+    accepts
+      False
+      "data Two (p : Authority Store) (q : Authority Store) = Two (String @(p | q))\nmk : Unit -> Two \"cfg/a/*\" \"cfg/b/*\"\nmk _ = Two \"/etc/x\"\n",
     -- `@(p | p)` is `@p`
-    expectTrue
-      (accepts
-        "public export data One (p : Authority Store) = One (String @(p | p))\n"),
+    accepts
+      True
+      "public export data One (p : Authority Store) = One (String @(p | p))\n",
     -- a qualifier naming a non-String argument is refused, alone or joined
     expectTrue
       (contains
         "T-AUTHORITY-BINDER"
         (codes
           "g : (a : String) -> (n : Int) -> <Store a> String @(a | n)\ng a n = a\n")),
-    expectTrue
-      (accepts
-        "g : (a : String) -> (b : String) -> <Store a, Store b> String @(a | b)\ng a b = a\n"),
+    accepts
+      True
+      "g : (a : String) -> (b : String) -> <Store a, Store b> String @(a | b)\ng a b = a\n",
   ]
 
 test "an empty bare literal on a Product label is refused, not read as the whole domain" = expectAll
@@ -1036,11 +999,11 @@ test "an empty bare literal on a Product label is refused, not read as the whole
           ("effect Web Product (Host : Prefix, Method : Set)\n"
             ++ "hit : Int -> <Web Host=\"evil.com/x\"> Int\nhit n = n\n"
             ++ "f : Unit -> <Web \"\"> Int\nf _ = hit 1\n"))),
-    expectTrue
-      (accepts
-        ("effect Web Product (Host : Prefix, Method : Set)\n"
-          ++ "hit : Int -> <Web Host=\"a.com/x\"> Int\nhit n = n\n"
-          ++ "f : Unit -> <Web \"a.com/*\"> Int\nf _ = hit 1\n")),
+    accepts
+      True
+      ("effect Web Product (Host : Prefix, Method : Set)\n"
+        ++ "hit : Int -> <Web Host=\"a.com/x\"> Int\nhit n = n\n"
+        ++ "f : Unit -> <Web \"a.com/*\"> Int\nf _ = hit 1\n"),
   ]
 
 -- An opened existential cannot leave its arm through the authority solve: a
@@ -1072,29 +1035,29 @@ escapeByJoin =
 
 test "an opened authority does not escape through the solve of an older variable" = expectAll
   [
-    expectFalse
-      (accepts
-        (escapeByIndex
-          ++ "only : Unit -> <Store \"cfg/*\"> Int\nonly _ = peek (H \"cfg/a\") (pack ())\n")),
-    expectTrue
-      (accepts
-        (escapeByIndex
-          ++ "anyAt : String -> H *\nanyAt s = H s\nwide : String -> <Store> Int\nwide x = peek (anyAt x) (pack ())\n")),
-    expectFalse
-      (accepts
-        (escapeByJoin
-          ++ "only : E \"cfg/*\" -> <Store \"cfg/*\"> Int\nonly e = peek e\n")),
-    expectTrue
-      (accepts
-        (escapeByJoin ++ "wide : E q -> <Store> Int\nwide e = peek e\n")),
-    expectFalse
-      (accepts
-        (escapeByRow
-          ++ "only : Unit -> <Store \"cfg/*\"> Int\nonly _ = peek (_ => load \"cfg/a\") (pack ())\n")),
-    expectTrue
-      (accepts
-        (escapeByRow
-          ++ "wide : Unit -> <Store> Int\nwide _ = peek (_ => 1) (pack ())\n")),
+    accepts
+      False
+      (escapeByIndex
+        ++ "only : Unit -> <Store \"cfg/*\"> Int\nonly _ = peek (H \"cfg/a\") (pack ())\n"),
+    accepts
+      True
+      (escapeByIndex
+        ++ "anyAt : String -> H *\nanyAt s = H s\nwide : String -> <Store> Int\nwide x = peek (anyAt x) (pack ())\n"),
+    accepts
+      False
+      (escapeByJoin
+        ++ "only : E \"cfg/*\" -> <Store \"cfg/*\"> Int\nonly e = peek e\n"),
+    accepts
+      True
+      (escapeByJoin ++ "wide : E q -> <Store> Int\nwide e = peek e\n"),
+    accepts
+      False
+      (escapeByRow
+        ++ "only : Unit -> <Store \"cfg/*\"> Int\nonly _ = peek (_ => load \"cfg/a\") (pack ())\n"),
+    accepts
+      True
+      (escapeByRow
+        ++ "wide : Unit -> <Store> Int\nwide _ = peek (_ => 1) (pack ())\n"),
   ]
 
 -- #3462 (a): an unsigned binding keeps the obligations between its own
@@ -1123,17 +1086,16 @@ test "a residual relates two quantified authorities and is checked at each use" 
     expectEqual
       "(a <= d) => Dir d -> Dir a -> <Store a> Int"
       (schemeOf residualHead "rdSub"),
-    expectTrue (accepts (residual "use _ = subIn cfg app\n")),
-    expectTrue (rejects (residual "use _ = subIn cfg etc\n")),
-    expectTrue (rejects (residual "use _ = subIn app cfg\n")),
-    expectTrue
-      (accepts
-        (residual
-          "cap : Unit -> <Store \"cfg/app\"> Int\ncap _ = rdSub cfg app\n")),
-    expectFalse
-      (accepts
-        (residual
-          "cap : Unit -> <Store \"cfg/*\"> Int\ncap _ = rdSub cfg etc\n")),
+    accepts True (residual "use _ = subIn cfg app\n"),
+    rejects (residual "use _ = subIn cfg etc\n"),
+    rejects (residual "use _ = subIn app cfg\n"),
+    accepts
+      True
+      (residual
+        "cap : Unit -> <Store \"cfg/app\"> Int\ncap _ = rdSub cfg app\n"),
+    accepts
+      False
+      (residual "cap : Unit -> <Store \"cfg/*\"> Int\ncap _ = rdSub cfg etc\n"),
   ]
 
 test "a residual names the binding whose scheme carried it" =
@@ -1149,58 +1111,49 @@ test "a residual may bound a variable by a join of two others" = expectAll [
       (residual
         "sub2 : Dir a -> Dir b -> String @(a | b) -> Dir a\nsub2 h _ _ = h\neither h1 h2 (Dir p) = sub2 h1 h2 p\n")
       "either"),
-  expectTrue
-    (accepts
-      (residual
-        "sub2 : Dir a -> Dir b -> String @(a | b) -> Dir a\nsub2 h _ _ = h\neither h1 h2 (Dir p) = sub2 h1 h2 p\nuse _ = either cfg etc app\n")),
-  expectTrue
-    (rejects
-      (residual
-        "sub2 : Dir a -> Dir b -> String @(a | b) -> Dir a\nsub2 h _ _ = h\neither h1 h2 (Dir p) = sub2 h1 h2 p\nuse _ = either cfg cfg etc\n")),
+  accepts
+    True
+    (residual
+      "sub2 : Dir a -> Dir b -> String @(a | b) -> Dir a\nsub2 h _ _ = h\neither h1 h2 (Dir p) = sub2 h1 h2 p\nuse _ = either cfg etc app\n"),
+  rejects
+    (residual
+      "sub2 : Dir a -> Dir b -> String @(a | b) -> Dir a\nsub2 h _ _ = h\neither h1 h2 (Dir p) = sub2 h1 h2 p\nuse _ = either cfg cfg etc\n"),
 ]
 
 test "a residual may relate a quantified authority to a constant" = expectAll [
   expectEqual
     "(\"cfg/app\" <= d) => Dir d -> Dir d"
     (schemeOf (residual "withApp h = sub h \"cfg/app\"\n") "withApp"),
-  expectTrue
-    (accepts (residual "withApp h = sub h \"cfg/app\"\nuse _ = withApp cfg\n")),
-  expectTrue
-    (rejects (residual "withApp h = sub h \"cfg/app\"\nuse _ = withApp etc\n")),
+  accepts
+    True
+    (residual "withApp h = sub h \"cfg/app\"\nuse _ = withApp cfg\n"),
+  rejects (residual "withApp h = sub h \"cfg/app\"\nuse _ = withApp etc\n"),
   expectEqual
     "(d <= \"cfg/*\") => Dir d -> Dir \"cfg/*\""
     (schemeOf (residual "inCfg (Dir p) = sub cfg p\n") "inCfg"),
-  expectTrue
-    (accepts (residual "inCfg (Dir p) = sub cfg p\nuse _ = inCfg app\n")),
-  expectTrue
-    (rejects (residual "inCfg (Dir p) = sub cfg p\nuse _ = inCfg etc\n")),
+  accepts True (residual "inCfg (Dir p) = sub cfg p\nuse _ = inCfg app\n"),
+  rejects (residual "inCfg (Dir p) = sub cfg p\nuse _ = inCfg etc\n"),
 ]
 
 test "a local binding keeps its residuals like a top-level one" = expectAll [
-  expectTrue
-    (accepts
-      (residual
-        "outer _ =\n  let inner h (Dir p) = sub h p\n  inner cfg app\n")),
-  expectTrue
-    (rejects
-      (residual
-        "outer _ =\n  let inner h (Dir p) = sub h p\n  inner cfg etc\n")),
-  expectTrue
-    (accepts (residual "outer _ =\n  let inner = subIn\n  inner cfg app\n")),
-  expectTrue
-    (rejects (residual "outer _ =\n  let inner = subIn\n  inner cfg etc\n")),
+  accepts
+    True
+    (residual "outer _ =\n  let inner h (Dir p) = sub h p\n  inner cfg app\n"),
+  rejects
+    (residual "outer _ =\n  let inner h (Dir p) = sub h p\n  inner cfg etc\n"),
+  accepts True (residual "outer _ =\n  let inner = subIn\n  inner cfg app\n"),
+  rejects (residual "outer _ =\n  let inner = subIn\n  inner cfg etc\n"),
 ]
 
 test "a signature cannot yet state a residual, so it stays refused" = expectAll
   [
-    expectTrue
-      (rejects
-        (residual
-          "subInS : Dir d -> Dir q -> Dir d\nsubInS h (Dir p) = sub h p\n")),
-    expectTrue
-      (accepts
-        (residual
-          "subInS : Dir d -> Dir d -> Dir d\nsubInS h (Dir p) = sub h p\n")),
+    rejects
+      (residual
+        "subInS : Dir d -> Dir q -> Dir d\nsubInS h (Dir p) = sub h p\n"),
+    accepts
+      True
+      (residual
+        "subInS : Dir d -> Dir d -> Dir d\nsubInS h (Dir p) = sub h p\n"),
   ]
 
 residualModuleCodes : String -> List String
@@ -1245,14 +1198,13 @@ test "a residual crosses a module boundary with its scheme" = expectAll [
 -- the domain's top has no freedom and is solved to it.
 test "a residual may name an authority outside the binding's scope" = expectAll
   [
-    expectTrue
-      (rejects
-        (residual
-          "via h s =\n  let inner (Dir p) = sub h p\n  inner s\nuse _ = via cfg etc\n")),
-    expectTrue
-      (accepts
-        (residual
-          "via h s =\n  let inner (Dir p) = sub h p\n  inner s\nuse _ = via cfg app\n")),
+    rejects
+      (residual
+        "via h s =\n  let inner (Dir p) = sub h p\n  inner s\nuse _ = via cfg etc\n"),
+    accepts
+      True
+      (residual
+        "via h s =\n  let inner (Dir p) = sub h p\n  inner s\nuse _ = via cfg app\n"),
     expectEqual
       "(a <= d) => Dir d -> Dir a -> Dir d"
       (schemeOf
@@ -1261,22 +1213,22 @@ test "a residual may name an authority outside the binding's scope" = expectAll
   ]
 
 test "a monomorphic binding owes its residuals where it is used" = expectAll [
-  expectTrue (accepts (residual "outer _ =\n  let p = subIn cfg\n  p app\n")),
-  expectTrue (rejects (residual "outer _ =\n  let p = subIn cfg\n  p etc\n")),
-  expectTrue (accepts (residual "partial = subIn cfg\nuse _ = partial app\n")),
+  accepts True (residual "outer _ =\n  let p = subIn cfg\n  p app\n"),
+  rejects (residual "outer _ =\n  let p = subIn cfg\n  p etc\n"),
+  accepts True (residual "partial = subIn cfg\nuse _ = partial app\n"),
 ]
 
 -- A variable nothing bounds below takes its least solution, the empty
 -- authority, which every bound admits (review round 2).  The control feeds
 -- the same cell a value outside the bound.
 test "a variable nothing bounds below takes the empty authority" = expectAll [
-  expectTrue (accepts (residual "partial = subIn cfg\n")),
-  expectTrue (accepts (residual "outer _ =\n  let p = subIn cfg\n  0\n")),
-  expectTrue
-    (accepts
-      (residual
-        "each f xs = match xs\n  [] => []\n  x :: r => f x :: each f r\nnone _ = each (subIn cfg) []\n")),
-  expectTrue (rejects (residual "partial = subIn cfg\nuse _ = partial etc\n")),
+  accepts True (residual "partial = subIn cfg\n"),
+  accepts True (residual "outer _ =\n  let p = subIn cfg\n  0\n"),
+  accepts
+    True
+    (residual
+      "each f xs = match xs\n  [] => []\n  x :: r => f x :: each f r\nnone _ = each (subIn cfg) []\n"),
+  rejects (residual "partial = subIn cfg\nuse _ = partial etc\n"),
   expectEqual
     "Dir {} -> Dir \"cfg/*\""
     (schemeOf (residual "partial = subIn cfg\n") "partial"),
@@ -1293,14 +1245,13 @@ test "a variable nothing bounds below takes the empty authority" = expectAll [
 -- the universal as a flexible variable and admit a read outside it (review
 -- round 2).  The control widens the declared row to the whole label.
 test "an obligation over a universal never leaves its scope" = expectAll [
-  expectTrue
-    (rejects
-      (residual
-        "readAt p = load p\nsecond a b = b\ng = second f readAt\nf : Dir d -> <Store d> Int\nf _ = g \"/tmp/x\"\n")),
-  expectTrue
-    (accepts
-      (residual
-        "readAt p = load p\nsecond a b = b\ng = second f readAt\nf : Dir d -> <Store> Int\nf _ = g \"/tmp/x\"\n")),
+  rejects
+    (residual
+      "readAt p = load p\nsecond a b = b\ng = second f readAt\nf : Dir d -> <Store d> Int\nf _ = g \"/tmp/x\"\n"),
+  accepts
+    True
+    (residual
+      "readAt p = load p\nsecond a b = b\ng = second f readAt\nf : Dir d -> <Store> Int\nf _ = g \"/tmp/x\"\n"),
 ]
 
 -- A monomorphic cell is outside the group that uses it: two members may each
@@ -1313,8 +1264,8 @@ test "two members may each owe a residual to one monomorphic cell" =
     expectEqual
       "(d <= \"cfg/*\") => Dir d -> Dir \"cfg/*\""
       (schemeOf (residual group) "q1"),
-    expectTrue (accepts (residual (group ++ "use _ = q1 app\n"))),
-    expectTrue (rejects (residual (group ++ "use _ = q1 etc\n"))),
+    accepts True (residual (group ++ "use _ = q1 app\n")),
+    rejects (residual (group ++ "use _ = q1 etc\n")),
   ]
 
 -- A relation another member of a recursive group would quantify with no
@@ -1324,23 +1275,21 @@ test "two members may each owe a residual to one monomorphic cell" =
 -- itself, which keeps its residual.
 test "a recursive group decides a relation two members' schemes share" = expectAll
   [
-    expectTrue
-      (rejects
-        (residual
-          "q1 n (Dir p) = if n then sub cfg p else q2 False (Dir p)\nq2 n (Dir p) = q1 n (Dir p)\n")),
+    rejects
+      (residual
+        "q1 n (Dir p) = if n then sub cfg p else q2 False (Dir p)\nq2 n (Dir p) = q1 n (Dir p)\n"),
     expectEqual
       "(d <= \"cfg/*\") => Bool -> Dir d -> Dir \"cfg/*\""
       (schemeOf
         (residual "q1 n (Dir p) = if n then sub cfg p else q1 False (Dir p)\n")
         "q1"),
-    expectTrue
-      (accepts
-        (residual
-          "q1 n (Dir p) = if n then sub cfg p else q1 False (Dir p)\nuse _ = q1 True app\n")),
-    expectTrue
-      (rejects
-        (residual
-          "q1 n (Dir p) = if n then sub cfg p else q1 False (Dir p)\nuse _ = q1 True etc\n")),
+    accepts
+      True
+      (residual
+        "q1 n (Dir p) = if n then sub cfg p else q1 False (Dir p)\nuse _ = q1 True app\n"),
+    rejects
+      (residual
+        "q1 n (Dir p) = if n then sub cfg p else q1 False (Dir p)\nuse _ = q1 True etc\n"),
   ]
 
 -- An exported binding the value restriction keeps monomorphic, whose type
@@ -1394,8 +1343,8 @@ test "a where helper a sibling calls keeps its residual" =
   let block =
     "outer h ds = go ds\n  where\n    rd (Dir p) = sub h p\n    go xs = match xs\n      [] => []\n      d :: rest => rd d :: go rest\n"
   expectAll [
-    expectTrue (accepts (residual (block ++ "use _ = outer cfg [app]\n"))),
-    expectTrue (rejects (residual (block ++ "use _ = outer cfg [etc]\n"))),
+    accepts True (residual (block ++ "use _ = outer cfg [app]\n")),
+    rejects (residual (block ++ "use _ = outer cfg [etc]\n")),
   ]
 
 test "an authority bounded below by the top is solved, not kept" =
@@ -1444,24 +1393,24 @@ test "an alias-qualified occurrence is located at its own name" =
 -- begins and a known one is appended; a pattern already admits both.
 test "a concatenation extends an exact prefix; a literal suffix is appended" = expectAll
   [
-    expectFalse
-      (accepts
-        "bad : String -> <Store \"cfg/\"> Int\nbad x = load (\"cfg/\" ++ x)\n"),
-    expectTrue
-      (accepts
-        "ok : String -> <Store \"cfg/*\"> Int\nok x = load (\"cfg/\" ++ x)\n"),
-    expectFalse
-      (accepts
-        "bad : String -> <Store \"cfg/\"> Int\nbad x =\n  let p = \"cfg/\" ++ x\n  load p\n"),
-    expectTrue
-      (accepts
-        "ok : Unit -> <Store \"cfg/app.toml\"> Int\nok _ = load (\"cfg/\" ++ \"app\" ++ \".toml\")\n"),
-    expectFalse
-      (accepts
-        "bad : Unit -> <Store \"cfg/app.toml\"> Int\nbad _ = load (\"cfg/\" ++ \"app\")\n"),
-    expectTrue
-      (accepts
-        "ok : String -> <Store \"cfg/*\"> Int\nok x = load ((\"cfg/\" ++ x) ++ \".toml\")\n"),
+    accepts
+      False
+      "bad : String -> <Store \"cfg/\"> Int\nbad x = load (\"cfg/\" ++ x)\n",
+    accepts
+      True
+      "ok : String -> <Store \"cfg/*\"> Int\nok x = load (\"cfg/\" ++ x)\n",
+    accepts
+      False
+      "bad : String -> <Store \"cfg/\"> Int\nbad x =\n  let p = \"cfg/\" ++ x\n  load p\n",
+    accepts
+      True
+      "ok : Unit -> <Store \"cfg/app.toml\"> Int\nok _ = load (\"cfg/\" ++ \"app\" ++ \".toml\")\n",
+    accepts
+      False
+      "bad : Unit -> <Store \"cfg/app.toml\"> Int\nbad _ = load (\"cfg/\" ++ \"app\")\n",
+    accepts
+      True
+      "ok : String -> <Store \"cfg/*\"> Int\nok x = load ((\"cfg/\" ++ x) ++ \".toml\")\n",
     expectEqual
       "String -> <Store \"cfg/*\"> Int"
       (schemeOf "f x = load (\"cfg/\" ++ x)\n" "f"),
@@ -1469,26 +1418,26 @@ test "a concatenation extends an exact prefix; a literal suffix is appended" = e
 
 test "a concatenation extends a Product's primary axis; a literal chain is a literal" = expectAll
   [
-    expectFalse
-      (accepts
-        ("effect Web Product (Host : Prefix, Method : Set)\n"
-          ++ "extern call : (u : String) -> <Web u> Unit\n"
-          ++ "bad : String -> <Web \"a.com/x\"> Unit\nbad s = call (\"a.com/x\" ++ s)\n")),
-    expectTrue
-      (accepts
-        ("effect Web Product (Host : Prefix, Method : Set)\n"
-          ++ "extern call : (u : String) -> <Web u> Unit\n"
-          ++ "ok : String -> <Web \"a.com/*\"> Unit\nok s = call (\"a.com/\" ++ s)\n")),
-    expectTrue
-      (accepts
-        ("effect M Product (Method : Set, Host : Prefix)\n"
-          ++ "extern call : (m : String) -> <M m> Unit\n"
-          ++ "ok : Unit -> <M \"GET\"> Unit\nok _ = call (\"GE\" ++ \"T\")\n")),
-    expectFalse
-      (accepts
-        ("effect M Product (Method : Set, Host : Prefix)\n"
-          ++ "extern call : (m : String) -> <M m> Unit\n"
-          ++ "bad : String -> <M \"GET\"> Unit\nbad s = call (\"GE\" ++ s)\n")),
+    accepts
+      False
+      ("effect Web Product (Host : Prefix, Method : Set)\n"
+        ++ "extern call : (u : String) -> <Web u> Unit\n"
+        ++ "bad : String -> <Web \"a.com/x\"> Unit\nbad s = call (\"a.com/x\" ++ s)\n"),
+    accepts
+      True
+      ("effect Web Product (Host : Prefix, Method : Set)\n"
+        ++ "extern call : (u : String) -> <Web u> Unit\n"
+        ++ "ok : String -> <Web \"a.com/*\"> Unit\nok s = call (\"a.com/\" ++ s)\n"),
+    accepts
+      True
+      ("effect M Product (Method : Set, Host : Prefix)\n"
+        ++ "extern call : (m : String) -> <M m> Unit\n"
+        ++ "ok : Unit -> <M \"GET\"> Unit\nok _ = call (\"GE\" ++ \"T\")\n"),
+    accepts
+      False
+      ("effect M Product (Method : Set, Host : Prefix)\n"
+        ++ "extern call : (m : String) -> <M m> Unit\n"
+        ++ "bad : String -> <M \"GET\"> Unit\nbad s = call (\"GE\" ++ s)\n"),
   ]
 
 -- A label whose every axis an argument names, for the tests below.
@@ -1500,22 +1449,21 @@ httpPrelude =
 
 test "every axis takes a binder: each argument is charged on its own axis" = expectAll
   [
-    expectTrue
-      (accepts
-        (httpPrelude
-          ++ "get : Unit -> <Http Host=\"a.com/*\" Method={\"GET\"}> Int\nget _ = request \"a.com/x\" \"GET\"\n")),
-    expectFalse
-      (accepts
-        (httpPrelude
-          ++ "get : String -> <Http Host=\"a.com/*\" Method={\"GET\"}> Int\nget m = request \"a.com/x\" m\n")),
-    expectTrue
-      (accepts
-        (httpPrelude
-          ++ "fwd : (host : String) -> (method : String) -> <Http Host=host Method=method> Int\nfwd host method = request host method\n")),
-    expectTrue
-      (rejects
-        (httpPrelude
-          ++ "swap : (host : String) -> (method : String) -> <Http Host=host Method=method> Int\nswap host method = request method host\n")),
+    accepts
+      True
+      (httpPrelude
+        ++ "get : Unit -> <Http Host=\"a.com/*\" Method={\"GET\"}> Int\nget _ = request \"a.com/x\" \"GET\"\n"),
+    accepts
+      False
+      (httpPrelude
+        ++ "get : String -> <Http Host=\"a.com/*\" Method={\"GET\"}> Int\nget m = request \"a.com/x\" m\n"),
+    accepts
+      True
+      (httpPrelude
+        ++ "fwd : (host : String) -> (method : String) -> <Http Host=host Method=method> Int\nfwd host method = request host method\n"),
+    rejects
+      (httpPrelude
+        ++ "swap : (host : String) -> (method : String) -> <Http Host=host Method=method> Int\nswap host method = request method host\n"),
     expectEqual
       "(host : String) -> (method : String) -> <Http Host=host Method=method> Int"
       (schemeOf httpPrelude "request"),
@@ -1524,25 +1472,23 @@ test "every axis takes a binder: each argument is charged on its own axis" = exp
 test "an axis variable extends to its axis's top; a whole-domain binder is no axis's" = expectAll
   [
     -- `host ++ "/x"` may leave what the caller's exact host admits
-    expectTrue
-      (rejects
-        (httpPrelude
-          ++ "under : (host : String) -> (method : String) -> <Http Host=host Method=method> Int\nunder host method = request (host ++ \"/x\") method\n")),
+    rejects
+      (httpPrelude
+        ++ "under : (host : String) -> (method : String) -> <Http Host=host Method=method> Int\nunder host method = request (host ++ \"/x\") method\n"),
     -- unless the host ranges over patterns of the primary axis (#3620)
-    expectTrue
-      (accepts
-        (httpPrelude
-          ++ "under : (host : String @Http*) -> (method : String) -> <Http Host=host Method=method> Int\nunder host method = request (host ++ \"/v1\") method\n")),
-    expectTrue
-      (accepts
-        (httpPrelude
-          ++ "lit : String -> <Http Host=\"a.com/*\" Method={\"GET\"}> Int\nlit s = request (\"a.com/\" ++ s) \"GET\"\n")),
+    accepts
+      True
+      (httpPrelude
+        ++ "under : (host : String @Http*) -> (method : String) -> <Http Host=host Method=method> Int\nunder host method = request (host ++ \"/v1\") method\n"),
+    accepts
+      True
+      (httpPrelude
+        ++ "lit : String -> <Http Host=\"a.com/*\" Method={\"GET\"}> Int\nlit s = request (\"a.com/\" ++ s) \"GET\"\n"),
     -- `u` is an element of the whole Product domain, so on the Host axis its
     -- value is that axis's top
-    expectTrue
-      (rejects
-        (httpPrelude
-          ++ "via : (u : String) -> (method : String) -> <Http u> Int\nvia u method = request u method\n")),
+    rejects
+      (httpPrelude
+        ++ "via : (u : String) -> (method : String) -> <Http u> Int\nvia u method = request u method\n"),
     -- one binder at an axis and at a label of another domain
     expectTrue
       (contains
@@ -1562,18 +1508,18 @@ test "an extension of an authority variable is the whole domain" = expectAll
       ["T-AUTHORITY"]
       (codes
         "readUnder : (p : String) -> String -> <Store p> Int\nreadUnder p suffix = load (p ++ suffix)\nonlyApp : Unit -> <Store \"cfg/app.toml\"> Int\nonlyApp _ = readUnder \"cfg/app.toml\" \".bak\"\n"),
-    expectTrue
-      (accepts
-        "readUnder : (p : String) -> String -> <Store p> Int\nreadUnder p _ = load p\nonlyApp : Unit -> <Store \"cfg/app.toml\"> Int\nonlyApp _ = readUnder \"cfg/app.toml\" \".bak\"\n"),
+    accepts
+      True
+      "readUnder : (p : String) -> String -> <Store p> Int\nreadUnder p _ = load p\nonlyApp : Unit -> <Store \"cfg/app.toml\"> Int\nonlyApp _ = readUnder \"cfg/app.toml\" \".bak\"\n",
     -- the pattern-ranging sibling (#3620): the extension stays within `p`, and
     -- the caller is charged the pattern its exact element begins
-    expectTrue
-      (accepts
-        "readUnder : (p : String @Store*) -> String -> <Store p> Int\nreadUnder p suffix = load (p ++ suffix)\ncfg : Unit -> <Store \"cfg/*\"> Int\ncfg _ = readUnder \"cfg/\" \"app.toml\"\n"),
-    expectTrue
-      (accepts
-        (handleP
-          ++ "readH : H d -> String -> <Store d> Int\nreadH (H p) x = load (p ++ x)\n")),
+    accepts
+      True
+      "readUnder : (p : String @Store*) -> String -> <Store p> Int\nreadUnder p suffix = load (p ++ suffix)\ncfg : Unit -> <Store \"cfg/*\"> Int\ncfg _ = readUnder \"cfg/\" \"app.toml\"\n",
+    accepts
+      True
+      (handleP
+        ++ "readH : H d -> String -> <Store d> Int\nreadH (H p) x = load (p ++ x)\n"),
     expectEqual
       ["T-AUTHORITY"]
       (codes
@@ -1584,10 +1530,10 @@ test "an extension of an authority variable is the whole domain" = expectAll
       (codes
         (handle
           ++ "readAny : String -> <Store \"/etc\"> Int\nreadAny x = match H \"/etc\"\n  H p => load (p ++ x)\n")),
-    expectTrue
-      (accepts
-        (handle
-          ++ "readAny : String -> <Store \"/etc\"> Int\nreadAny x = match H \"/etc\"\n  H p => load p\n")),
+    accepts
+      True
+      (handle
+        ++ "readAny : String -> <Store \"/etc\"> Int\nreadAny x = match H \"/etc\"\n  H p => load p\n"),
   ]
 
 -- A named argument may write its domain, `(dir : String @Store)`, so a helper
@@ -1595,58 +1541,58 @@ test "an extension of an authority variable is the whole domain" = expectAll
 -- domain belongs to the binder; the argument's type stays `String` (#3559).
 test "a binder's written domain gives a qualifier a domain and charges nothing" = expectAll
   [
-    expectTrue
-      (accepts
-        "same : (dir : String @Store) -> String @dir\nsame dir = dir\nuse : (a : String) -> <Store a> Int\nuse a = load (same a)\n"),
+    accepts
+      True
+      "same : (dir : String @Store) -> String @dir\nsame dir = dir\nuse : (a : String) -> <Store a> Int\nuse a = load (same a)\n",
     -- the helper forwards its caller's authority, so it cannot launder one
-    expectTrue
-      (accepts
-        "same : (dir : String @Store) -> String @dir\nsame dir = dir\ncfg : Unit -> <Store \"cfg/*\"> Int\ncfg _ = load (same \"cfg/app\")\n"),
-    expectFalse
-      (accepts
-        "same : (dir : String @Store) -> String @dir\nsame dir = dir\ncfg : Unit -> <Store \"cfg/*\"> Int\ncfg _ = load (same \"/etc/x\")\n"),
-    expectTrue
-      (accepts
-        "pick : (a : String @Store) -> (b : String @Store) -> Bool -> String @(a | b)\npick a b c = if c then a else b\n"),
+    accepts
+      True
+      "same : (dir : String @Store) -> String @dir\nsame dir = dir\ncfg : Unit -> <Store \"cfg/*\"> Int\ncfg _ = load (same \"cfg/app\")\n",
+    accepts
+      False
+      "same : (dir : String @Store) -> String @dir\nsame dir = dir\ncfg : Unit -> <Store \"cfg/*\"> Int\ncfg _ = load (same \"/etc/x\")\n",
+    accepts
+      True
+      "pick : (a : String @Store) -> (b : String @Store) -> Bool -> String @(a | b)\npick a b c = if c then a else b\n",
     -- an annotated binder may still be an atom's parameter of its domain
-    expectTrue
-      (accepts
-        "rd : (dir : String @Store) -> <Store dir> Int\nrd dir = load dir\n"),
+    accepts
+      True
+      "rd : (dir : String @Store) -> <Store dir> Int\nrd dir = load dir\n",
     expectTrue
       (contains
         "T-AUTHORITY-DOMAIN"
         (codes
           "rd : (dir : String @Store) -> <Var dir> Int\nrd dir = lookup dir\n")),
     -- an extension of the argument in a result is still the whole domain
-    expectTrue
-      (anyMentions
-        "reaches the whole domain"
-        (messagesOf
-          "withSuffix : (dir : String @Store) -> String @dir\nwithSuffix dir = dir ++ \"/index\"\n")),
+    anyMentions
+      True
+      "reaches the whole domain"
+      (messagesOf
+        "withSuffix : (dir : String @Store) -> String @dir\nwithSuffix dir = dir ++ \"/index\"\n"),
     -- and the report points at the pattern-ranging spelling, on the
     -- program's own label (#3574)
-    expectTrue
-      (anyMentions
-        "`(dir : String @Store*)`"
-        (messagesOf
-          "withSuffix : (dir : String @Store) -> String @dir\nwithSuffix dir = dir ++ \"/index\"\n")),
+    anyMentions
+      True
+      "`(dir : String @Store*)`"
+      (messagesOf
+        "withSuffix : (dir : String @Store) -> String @dir\nwithSuffix dir = dir ++ \"/index\"\n"),
     -- a pattern-ranging binder keeps its authority through the extension
-    expectTrue
-      (accepts
-        "withSuffix : (dir : String @Store*) -> String @dir\nwithSuffix dir = dir ++ \"/index\"\n"),
+    accepts
+      True
+      "withSuffix : (dir : String @Store*) -> String @dir\nwithSuffix dir = dir ++ \"/index\"\n",
     -- with no domain written, the qualifier's report names the binder form first
-    expectTrue
-      (anyMentions
-        "write one on the binder, `(a : String @FileRead)`"
-        (messagesOf "idQ : (a : String) -> String @a\nidQ a = a\n")),
+    anyMentions
+      True
+      "write one on the binder, `(a : String @FileRead)`"
+      (messagesOf "idQ : (a : String) -> String @a\nidQ a = a\n"),
   ]
 
 test "a Product label's binder domain is its primary axis" = expectAll
   [
-    expectTrue
-      (accepts
-        (httpPrelude
-          ++ "hostOf : (host : String @Http) -> String @host\nhostOf host = host\nget : (host : String @Http) -> (m : String) -> <Http Host=host Method=m> Int\nget host m = request (hostOf host) m\n")),
+    accepts
+      True
+      (httpPrelude
+        ++ "hostOf : (host : String @Http) -> String @host\nhostOf host = host\nget : (host : String @Http) -> (m : String) -> <Http Host=host Method=m> Int\nget host m = request (hostOf host) m\n"),
     -- the whole Product is a different domain from its primary axis
     expectTrue
       (contains
@@ -1655,9 +1601,9 @@ test "a Product label's binder domain is its primary axis" = expectAll
           (httpPrelude
             ++ "all : (u : String @Http) -> <Http u> Int\nall u = whole u\n"))),
     -- a Set-first Product's primary axis is a Set
-    expectTrue
-      (accepts
-        "effect M Product (Method : Set, Host : Prefix)\nm : (x : String @M) -> <Var x> Int\nm x = lookup x\n"),
+    accepts
+      True
+      "effect M Product (Method : Set, Host : Prefix)\nm : (x : String @M) -> <Var x> Int\nm x = lookup x\n",
     expectTrue
       (contains
         "T-AUTHORITY-DOMAIN"
@@ -1769,12 +1715,12 @@ test "an index row still refuses an atom its declaration does not cover" = expec
       (jobCodes
         "closed : Unit -> Job <Store \"cfg/*\"> Int\nclosed _ = thenJob (step \"cfg/app\") (a => varStep \"x\")\n"),
     -- the report is coverage, not equality
-    expectTrue
-      (anyMentions
-        "is not covered by \"cfg/*\""
-        (messagesOf
-          (jobPrelude
-            ++ "out : Unit -> Job <Store \"cfg/*\" | e> Int\nout _ = thenJob (step \"cfg/app\") (a => step \"data/x\")\n"))),
+    anyMentions
+      True
+      "is not covered by \"cfg/*\""
+      (messagesOf
+        (jobPrelude
+          ++ "out : Unit -> Job <Store \"cfg/*\" | e> Int\nout _ = thenJob (step \"cfg/app\") (a => step \"data/x\")\n")),
   ]
 
 test "two written index rows must still be equal" = expectAll [
@@ -1785,12 +1731,12 @@ test "two written index rows must still be equal" = expectAll [
     ["T-AUTHORITY-INDEX-MISMATCH"]
     (jobCodes
       "narrow : Job <Store \"cfg/*\"> Int -> Job <Store \"data/*\"> Int\nnarrow j = j\n"),
-  expectTrue
-    (anyMentions
-      "is invariant"
-      (messagesOf
-        (jobPrelude
-          ++ "narrow : Job <Store \"cfg/*\"> Int -> Job <Store \"data/*\"> Int\nnarrow j = j\n"))),
+  anyMentions
+    True
+    "is invariant"
+    (messagesOf
+      (jobPrelude
+        ++ "narrow : Job <Store \"cfg/*\"> Int -> Job <Store \"data/*\"> Int\nnarrow j = j\n")),
   expectTrue
     (contains
       "T-EFFECT-INDEX-MISMATCH"
@@ -1811,43 +1757,42 @@ dir =
 
 test "a pattern-ranging binder admits a right extension" = expectAll
   [
-    expectTrue
-      (accepts
-        (dir
-          ++ "cfg : H \"cfg/*\"\ncfg = H \"cfg/\"\nuse : String -> <Store \"cfg/*\"> Int\nuse x = readD cfg x\n")),
+    accepts
+      True
+      (dir
+        ++ "cfg : H \"cfg/*\"\ncfg = H \"cfg/\"\nuse : String -> <Store \"cfg/*\"> Int\nuse x = readD cfg x\n"),
     -- a data index keeps its binder: `sub` returns the directory it was given
-    expectTrue
-      (accepts
-        (dir
-          ++ "sub : H d -> String -> H d\nsub (H root) n = H (root ++ n ++ \"/\")\n")),
+    accepts
+      True
+      (dir
+        ++ "sub : H d -> String -> H d\nsub (H root) n = H (root ++ n ++ \"/\")\n"),
     expectEqual
       "H d -> String -> H d"
       (schemeOf (dir ++ "sub (H root) n = H (root ++ n)\n") "sub"),
     -- a value-derived exact element closes to the pattern it begins
     expectEqual "H \"cfg/*\"" (schemeOf (dir ++ "d1 = H \"cfg/\"\n") "d1"),
     -- a runtime value is the whole domain, charged as the label bare
-    expectTrue
-      (accepts
-        (dir
-          ++ "mk : String -> H *\nmk s = H s\nuse : String -> <Store> Int\nuse s = readD (mk s) \"x\"\n")),
+    accepts
+      True
+      (dir
+        ++ "mk : String -> H *\nmk s = H s\nuse : String -> <Store> Int\nuse s = readD (mk s) \"x\"\n"),
     -- a join of patterns is a pattern
-    expectTrue
-      (accepts (handleP ++ "j : H (\"a/*\" | \"b/*\")\nj = H \"a/x\"\n")),
+    accepts True (handleP ++ "j : H (\"a/*\" | \"b/*\")\nj = H \"a/x\"\n"),
     -- an opened pattern existential is charged the label bare
-    expectTrue
-      (accepts
-        (dir
-          ++ "data AnyH = AnyH (d : Authority Store*) (H d)\nuse : AnyH -> <Store> Int\nuse a = match a\n  AnyH h => readD h \"x\"\n")),
+    accepts
+      True
+      (dir
+        ++ "data AnyH = AnyH (d : Authority Store*) (H d)\nuse : AnyH -> <Store> Int\nuse a = match a\n  AnyH h => readD h \"x\"\n"),
     -- a pattern forwards into an ordinary binder
-    expectTrue
-      (accepts
-        (handleP
-          ++ "data O (p : Authority Store) = O (String @p)\ntoO : H d -> O d\ntoO (H r) = O r\n")),
+    accepts
+      True
+      (handleP
+        ++ "data O (p : Authority Store) = O (String @p)\ntoO : H d -> O d\ntoO (H r) = O r\n"),
     -- an impl head's bare index inherits the slot's range
-    expectTrue
-      (accepts
-        (handleP
-          ++ "interface Named a where\n  nameOf : a -> String\nimpl Named (H d) where\n  nameOf (H r) = r\n")),
+    accepts
+      True
+      (handleP
+        ++ "interface Named a where\n  nameOf : a -> String\nimpl Named (H d) where\n  nameOf (H r) = r\n"),
     -- the written spellings print back
     expectEqual
       "effect Store Prefix\n\ndata H (d : Authority Store*) = H (String @d)\n\nsame : (dir : String @Store*) -> String @dir\nsame dir = dir\n"
@@ -1876,16 +1821,16 @@ test "an interpolated binder is read through the prelude's display only" =
         (codes (ownDisplay ++ under ++ "under d x = load \"\\{d}/\\{x}\"\n")),
       -- the report names the program's `display` as the cause, not the
       -- appending the body already does
-      expectTrue
-        (anyMentions
-          "this module's own `display`"
-          (messagesOf
-            (ownDisplay ++ under ++ "under d x = load \"\\{d}/\\{x}\"\n"))),
-      expectFalse
-        (anyMentions
-          "appending to the named argument"
-          (messagesOf
-            (ownDisplay ++ under ++ "under d x = load \"\\{d}/\\{x}\"\n"))),
+      anyMentions
+        True
+        "this module's own `display`"
+        (messagesOf
+          (ownDisplay ++ under ++ "under d x = load \"\\{d}/\\{x}\"\n")),
+      anyMentions
+        False
+        "appending to the named argument"
+        (messagesOf
+          (ownDisplay ++ under ++ "under d x = load \"\\{d}/\\{x}\"\n")),
     ]
 
 test "two sites with identical authority-pattern text each report" =
@@ -1916,11 +1861,10 @@ test "a pattern slot refuses what is not a pattern" = expectAll
     expectEqual
       ["T-AUTHORITY-PATTERN"]
       (codes (handleP ++ "mk : (p : String @Store) -> H p\nmk p = H p\n")),
-    expectTrue
-      (anyMentions
-        "`(p : String @Store*)`"
-        (messagesOf
-          (handleP ++ "mk : (p : String @Store) -> H p\nmk p = H p\n"))),
+    anyMentions
+      True
+      "`(p : String @Store*)`"
+      (messagesOf (handleP ++ "mk : (p : String @Store) -> H p\nmk p = H p\n")),
     expectEqual
       ["T-AUTHORITY-PATTERN"]
       (codes (handleP ++ "mk : (p : String) -> H p\nmk p = H p\n")),
@@ -1946,17 +1890,16 @@ test "a pattern slot refuses what is not a pattern" = expectAll
     expectEqual
       ["T-AUTHORITY"]
       (codes (handleP ++ "bad : H \"cfg/*\"\nbad = H \"cfg\"\n")),
-    expectFalse
-      (accepts
-        (dir
-          ++ "f : String -> <Store \"cfg/*\"> Int\nf x = readD (H x) \"a\"\n")),
-    expectFalse
-      (accepts
-        (dir ++ "f : H * -> <Store \"cfg/*\"> Int\nf h = readD h \"a\"\n")),
+    accepts
+      False
+      (dir ++ "f : String -> <Store \"cfg/*\"> Int\nf x = readD (H x) \"a\"\n"),
+    accepts
+      False
+      (dir ++ "f : H * -> <Store \"cfg/*\"> Int\nf h = readD h \"a\"\n"),
     -- a caller's exact element is charged the pattern it begins
-    expectFalse
-      (accepts
-        "readUnder : (p : String @Store*) -> String -> <Store p> Int\nreadUnder p x = load (p ++ x)\nonlyApp : Unit -> <Store \"cfg/app.toml\"> Int\nonlyApp _ = readUnder \"cfg/app.toml\" \"\"\n"),
+    accepts
+      False
+      "readUnder : (p : String @Store*) -> String -> <Store p> Int\nreadUnder p x = load (p ++ x)\nonlyApp : Unit -> <Store \"cfg/app.toml\"> Int\nonlyApp _ = readUnder \"cfg/app.toml\" \"\"\n",
   ]
 
 test "a phantom pattern existential is constructed and matched like an ordinary one" = expectAll
@@ -1998,10 +1941,10 @@ test "an alias parameter of a pattern kind fills a pattern slot" = expectAll
     expectEqual
       ["T-AUTHORITY-PATTERN"]
       (codes (handleP ++ "type D (p : Authority Store) = H p\n")),
-    expectTrue
-      (anyMentions
-        "`(p : Authority Store*)`"
-        (messagesOf (handleP ++ "type D (p : Authority Store) = H p\n"))),
+    anyMentions
+      True
+      "`(p : Authority Store*)`"
+      (messagesOf (handleP ++ "type D (p : Authority Store) = H p\n")),
   ]
 
 test "a malformed pattern-slot argument is reported by its most specific rule" = expectAll
@@ -2013,34 +1956,34 @@ test "a malformed pattern-slot argument is reported by its most specific rule" =
         (handleP
           ++ "both : (p : String @Store*) -> (q : String) -> Bool -> H (p | q)\nboth p q b = if b then H p else H q\n")),
     -- otherwise the kind error names the slot with its `*`
-    expectTrue
-      (anyMentions
-        "this slot is `Authority Store*`"
-        (messagesOf
-          (handleP
-            ++ "both : (p : String @Store*) -> (q : String @Store*) -> Bool -> H (p | q)\nboth p q b = if b then H p else H q\n"))),
+    anyMentions
+      True
+      "this slot is `Authority Store*`"
+      (messagesOf
+        (handleP
+          ++ "both : (p : String @Store*) -> (q : String @Store*) -> Bool -> H (p | q)\nboth p q b = if b then H p else H q\n")),
   ]
 
 test "the rule-A report offers the `*` only where it would help" = expectAll
   [
     -- no extension: nothing a pattern-ranging binder would admit
-    expectFalse
-      (anyMentions
-        "pattern-ranging"
-        (messagesOf
-          "sneaky : (dir : String) -> <Store dir> Int\nsneaky dir = load \"secrets/key\"\n")),
+    anyMentions
+      False
+      "pattern-ranging"
+      (messagesOf
+        "sneaky : (dir : String) -> <Store dir> Int\nsneaky dir = load \"secrets/key\"\n"),
     -- an extension in a Set domain, which has no patterns
-    expectFalse
-      (anyMentions
-        "pattern-ranging"
-        (messagesOf
-          "signAs : (p : String) -> <Var p> Int\nsignAs p = lookup (p ++ \"-v2\")\n")),
+    anyMentions
+      False
+      "pattern-ranging"
+      (messagesOf
+        "signAs : (p : String) -> <Var p> Int\nsignAs p = lookup (p ++ \"-v2\")\n"),
     -- a refused Set-domain `*` leaves an ordinary binder behind
-    expectFalse
-      (anyMentions
-        "append to it on the right"
-        (messagesOf
-          "signAs : (p : String @Var*) -> <Var p> Int\nsignAs p = lookup (p ++ \"-v2\")\n")),
+    anyMentions
+      False
+      "append to it on the right"
+      (messagesOf
+        "signAs : (p : String @Var*) -> <Var p> Int\nsignAs p = lookup (p ++ \"-v2\")\n"),
   ]
 
 test "a pattern-ranging binder needs a domain with patterns" = expectAll
@@ -2056,9 +1999,9 @@ test "a pattern-ranging binder needs a domain with patterns" = expectAll
       (codes
         "effect M Product (Method : Set, Host : Prefix)\ndata V (d : Authority M*) = V (String @d)\n"),
     -- a Product whose primary axis is a Prefix has patterns
-    expectTrue
-      (accepts
-        "effect W Product (Host : Prefix, Method : Set)\ndata V (d : Authority W*) = V (String @d)\n"),
+    accepts
+      True
+      "effect W Product (Host : Prefix, Method : Set)\ndata V (d : Authority W*) = V (String @d)\n",
   ]
 
 patternProvider : String

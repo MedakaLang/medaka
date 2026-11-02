@@ -13,6 +13,7 @@
 -- `nestedRequireGoals` over an obligation and the impl table of a hand-written module.
 
 import test.{
+  Expectation,
   expectAll,
   expectEqual,
   expectFalse,
@@ -427,9 +428,9 @@ test "the residuals of one member are those its index owns, in order" =
 
 test "the rename law is informative exactly when the parameter shares the name of a member its body mentions" = expectAll
   [
-    expectTrue (shadowsMention (RenameCase 2 [[RefGroup 0], [RefParam]] 1)),
-    expectFalse (shadowsMention (RenameCase 2 [[RefGroup 0], [RefParam]] 0)),
-    expectFalse (shadowsMention (RenameCase 2 [[RefGroup 1], [Rebind 1]] 1)),
+    shadowsMention True (RenameCase 2 [[RefGroup 0], [RefParam]] 1),
+    shadowsMention False (RenameCase 2 [[RefGroup 0], [RefParam]] 0),
+    shadowsMention False (RenameCase 2 [[RefGroup 1], [Rebind 1]] 1),
   ]
 
 test "the order law is informative exactly when some binding depends on a later component" =
@@ -538,9 +539,11 @@ edgesBothWays (RenameCase size bodies p) =
 
 -- Whether the case's parameter shares a group member's name that its body mentions, so the
 -- rename has a capture to get right.
-shadowsMention : RenameCase -> Bool
-shadowsMention (RenameCase size bodies p) =
-  p > 0 && any (ps => any (mentions size (paramNameOf size p)) ps) bodies
+shadowsMention : Bool -> RenameCase -> Expectation
+shadowsMention want (RenameCase size bodies p) =
+  expectEqual
+    want
+    (p > 0 && any (ps => any (mentions size (paramNameOf size p)) ps) bodies)
 
 mentions : Int -> String -> Piece -> Bool
 mentions _ _ RefParam = True

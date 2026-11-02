@@ -30,7 +30,9 @@ import bytes.{Bytes, encodeUtf8, fromU8Array}
 import fs.{mkdirAll}
 import hex.{decode, encode}
 import list.{lookup, take}
-import test.{Expectation(..), expectEach, expectEqual, expectFalse, expectTrue}
+import test.{
+  Expectation(..), expectEach, expectEqual, expectFalse, expectTrue, fail, pass
+}
 import test_process.{scratchDir}
 import lib.cid.{cidToString}
 import lib.dagcbor.{DagCbor(..), dagCborDecode, dagCborEncode}
@@ -226,9 +228,12 @@ entrySeq entry = entry.seq
 -- The staged slot is empty. Spelled as a match rather than a comparison
 -- because `EventLogEntry` has no `Eq` impl, and giving it one to write this
 -- assertion would put an instance on the record for the sake of a test.
-stagedIsEmpty : Result String (Option EventLogEntry) -> Bool
-stagedIsEmpty (Ok None) = True
-stagedIsEmpty _ = False
+stagedIsEmpty : Bool -> Result String (Option EventLogEntry) -> Expectation
+stagedIsEmpty want r = expectEqual want (isEmptySlot r)
+
+isEmptySlot : Result String (Option EventLogEntry) -> Bool
+isEmptySlot (Ok None) = True
+isEmptySlot _ = False
 
 test "a cursor below the oldest entry replays the whole log in order" =
   expectEqual (seqsOf (eventLogAfterCursor 0 threeEntries)) [1, 2, 3]
@@ -393,7 +398,7 @@ test "planning recovery leaves the pending entry and the log where they were" =
     ("recovery plans the owed arm", expectEqual "owed" arm),
     (
       "the pending entry is still staged",
-      expectFalse (stagedIsEmpty (eventLogStaged dir)),
+      stagedIsEmpty False (eventLogStaged dir),
     ),
     (
       "the log itself is still empty",
@@ -417,7 +422,7 @@ test "an event staged for a commit that did not persist is dropped" =
       ),
       (
         "the staging area was cleared",
-        expectTrue (stagedIsEmpty (eventLogStaged dir)),
+        stagedIsEmpty True (eventLogStaged dir),
       ),
     ]
 
@@ -441,7 +446,7 @@ test "a non-commit event anchored to a commit that did not persist is dropped" =
       ),
       (
         "the staging area was cleared",
-        expectTrue (stagedIsEmpty (eventLogStaged dir)),
+        stagedIsEmpty True (eventLogStaged dir),
       ),
     ]
 
@@ -459,7 +464,7 @@ test "an event staged for a commit that did persist is finished" =
       ),
       (
         "the staging area was cleared",
-        expectTrue (stagedIsEmpty (eventLogStaged dir)),
+        stagedIsEmpty True (eventLogStaged dir),
       ),
     ]
 
@@ -479,7 +484,7 @@ test "a non-commit event anchored to the persisted head is finished" =
       ),
       (
         "the staging area was cleared",
-        expectTrue (stagedIsEmpty (eventLogStaged dir)),
+        stagedIsEmpty True (eventLogStaged dir),
       ),
     ]
 
@@ -502,7 +507,7 @@ test "an unanchored event is finished whatever head the repository holds" =
       ),
       (
         "the mismatched-head staging area was cleared",
-        expectTrue (stagedIsEmpty (eventLogStaged mismatched)),
+        stagedIsEmpty True (eventLogStaged mismatched),
       ),
       (
         "the headless log promoted its event",
@@ -510,7 +515,7 @@ test "an unanchored event is finished whatever head the repository holds" =
       ),
       (
         "the headless staging area was cleared",
-        expectTrue (stagedIsEmpty (eventLogStaged headless)),
+        stagedIsEmpty True (eventLogStaged headless),
       ),
     ]
     _ => Fail "recovery failed" "two promoted logs" "an error"
@@ -603,10 +608,14 @@ sameEntry left right =
     && left.anchorCommitCid == right.anchorCommitCid
     && left.frameHex == right.frameHex
 
-sameEntries : List EventLogEntry -> List EventLogEntry -> Bool
-sameEntries [] [] = True
-sameEntries (l :: ls) (r :: rs) = sameEntry l r && sameEntries ls rs
-sameEntries _ _ = False
+sameEntries : List EventLogEntry -> List EventLogEntry -> Expectation
+sameEntries [] [] = pass
+sameEntries (l :: ls) (r :: rs) =
+  if sameEntry l r then
+    sameEntries ls rs
+  else
+    fail "an entry read back differently"
+sameEntries _ _ = fail "the entry counts differ"
 
 {- | The #2692 property, directly: after appending to a log that already holds
    forty entries, every one of those forty reads back exactly as it did before.
@@ -627,7 +636,7 @@ test "an append leaves every entry already in the log untouched" =
         ("the append is numbered forty-one", expectEqual 41 seq),
         (
           "the first forty entries are byte-for-byte what they were",
-          expectTrue (sameEntries before (take 40 after)),
+          sameEntries before (take 40 after),
         ),
       ]
 

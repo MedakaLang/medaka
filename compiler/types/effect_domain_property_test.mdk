@@ -8,7 +8,7 @@
 -- intentionally outside this model: their meanings depend on filesystem
 -- interpretation and deferred constraints, respectively.
 
-import test.{expectTrue, expectAll, expectFalse}
+import test.{Expectation, expectTrue, expectAll, expectEqual, expectFalse}
 import support.util.{allList, anyList, contains, sortUniqS}
 import types.effect_domain.{Param(..), dantichain, djoin, dsub}
 import types.effect_authority.{Authority(..), authJoinAll, authSub}
@@ -293,41 +293,65 @@ productAuthorityLaw left right =
 -- finite upper bound. §2.2: `dantichain` preserves what the authority admits.
 -- §2.4: joining constant authorities obeys the lifted pointwise order.
 
-prefixPairsLaw : List Param -> Bool
-prefixPairsLaw [] = True
-prefixPairsLaw (left :: rest) =
-  allList
-      (right =>
-        dsub left right == prefixWithin left right && prefixJoinLaw left right)
-      prefixPool
-    && prefixPairsLaw rest
+-- The join laws stay `Bool`: a pair law is a Bool over the two parameters, and
+-- the wrappers grade it against the expected Bool.
+expectPrefixJoin : Bool -> Param -> Param -> Expectation
+expectPrefixJoin want left right = expectEqual want (prefixJoinLaw left right)
 
-setPairsLaw : List Param -> Bool
-setPairsLaw [] = True
-setPairsLaw (left :: rest) =
-  allList
-      (right =>
-        dsub left right == setWithin left right && setJoinLaw left right)
-      setPool
-    && setPairsLaw rest
+expectSetJoin : Bool -> Param -> Param -> Expectation
+expectSetJoin want left right = expectEqual want (setJoinLaw left right)
 
-productOrderPairsLaw : List Param -> Bool
-productOrderPairsLaw [] = True
-productOrderPairsLaw (left :: rest) =
-  allList (right => dsub left right == productWithin left right) productPool
-    && productOrderPairsLaw rest
+expectProductJoin : Bool -> Param -> Param -> Expectation
+expectProductJoin want left right = expectEqual want (productJoinLaw left right)
 
-productJoinPairsLaw : List Param -> Bool
-productJoinPairsLaw [] = True
-productJoinPairsLaw (left :: rest) =
-  allList (right => productJoinLaw left right) productPool
-    && productJoinPairsLaw rest
+prefixPairsLaw : List Param -> Expectation
+prefixPairsLaw lefts =
+  expectAll
+    (flatMap
+      (left =>
+        map
+          (right => expectAll [
+            expectEqual (prefixWithin left right) (dsub left right),
+            expectPrefixJoin True left right,
+          ])
+          prefixPool)
+      lefts)
+
+setPairsLaw : List Param -> Expectation
+setPairsLaw lefts =
+  expectAll
+    (flatMap
+      (left =>
+        map
+          (right => expectAll [
+            expectEqual (setWithin left right) (dsub left right),
+            expectSetJoin True left right,
+          ])
+          setPool)
+      lefts)
+
+productOrderPairsLaw : List Param -> Expectation
+productOrderPairsLaw lefts =
+  expectAll
+    (flatMap
+      (left =>
+        map
+          (right => expectEqual (productWithin left right) (dsub left right))
+          productPool)
+      lefts)
+
+productJoinPairsLaw : List Param -> Expectation
+productJoinPairsLaw lefts =
+  expectAll
+    (flatMap
+      (left => map (right => expectProductJoin True left right) productPool)
+      lefts)
 
 test "finite Prefix domain realizes its inclusion and join laws" =
-  expectTrue (prefixPairsLaw prefixPool)
+  prefixPairsLaw prefixPool
 
 test "finite Set domain realizes its inclusion and join laws" =
-  expectTrue (setPairsLaw setPool)
+  setPairsLaw setPool
 
 test "a present empty Set parameter remains distinct from an absent authority" =
   let bottom = PSet (Some [])
@@ -342,10 +366,10 @@ test "a present empty Set parameter remains distinct from an absent authority" =
   ]
 
 test "finite Product domain realizes its inclusion law" =
-  expectTrue (productOrderPairsLaw productPool)
+  productOrderPairsLaw productPool
 
 test "finite Product domain realizes its join law" =
-  expectTrue (productJoinPairsLaw productPool)
+  productJoinPairsLaw productPool
 
 prop "Prefix antichains preserve their finite authority" (raw : List Int) =
   prefixAntichainLaw (map prefixFromRaw raw)

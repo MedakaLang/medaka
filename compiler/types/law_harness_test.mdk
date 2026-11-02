@@ -8,7 +8,12 @@ import frontend.desugar.{desugar}
 import frontend.parser.{parseLocated}
 import list.{drop, filter, indexed, reverse, take}
 import string.{fromChars, isAlphaNum, isLower, isSpace, join, toChars}
-import test.{expectAll, expectEqual, expectFalse, expectNotEqual, expectTrue}
+import test.{
+  Expectation,
+  expectAll,
+  expectEqual,
+  expectNotEqual,
+}
 import types.typecheck.{
   defaultDriveInputs,
   ModDiags,
@@ -300,6 +305,12 @@ export
 shapeIsPolymorphic : Shape -> Bool
 shapeIsPolymorphic shape = shapeTypeAt "Int" shape /= shapeTypeAt "Bool" shape
 
+-- The shape's type mentions no variable: its Int and Bool spellings coincide.
+export
+expectMonomorphic : Shape -> Expectation
+expectMonomorphic shape =
+  expectEqual (shapeTypeAt "Int" shape) (shapeTypeAt "Bool" shape)
+
 typeFrom : (Int -> String) -> Int -> Shape -> (String, Int)
 typeFrom _ next SInt = ("Int", next)
 typeFrom _ next SStr = ("String", next)
@@ -378,6 +389,9 @@ export
 alphaEquiv : String -> String -> Bool
 alphaEquiv left right =
   canonicalTokens (typeTokens left) == canonicalTokens (typeTokens right)
+
+expectAlphaEquiv : Bool -> String -> String -> Expectation
+expectAlphaEquiv want left right = expectEqual want (alphaEquiv left right)
 
 -- The tokens of a rendered type: identifiers, and every other non-space
 -- character on its own (so `->` is the two tokens `-` and `>`).
@@ -466,12 +480,12 @@ test "the observer separates a generalized binding from an ungeneralized one" = 
 
 test "alpha-equivalence accepts a renaming and rejects a non-renaming" = expectAll
   [
-    expectTrue (alphaEquiv "a -> b -> a" "x -> yy -> x"),
-    expectTrue (alphaEquiv "Num a => (a, List b)" "Num c =>  (c, List d)"),
-    expectFalse (alphaEquiv "a -> b" "a -> a"),
-    expectFalse (alphaEquiv "a -> a" "a -> b"),
-    expectFalse (alphaEquiv "Box a" "Pair a"),
-    expectFalse (alphaEquiv "a -> b" "a -> b -> c"),
+    expectAlphaEquiv True "a -> b -> a" "x -> yy -> x",
+    expectAlphaEquiv True "Num a => (a, List b)" "Num c =>  (c, List d)",
+    expectAlphaEquiv False "a -> b" "a -> a",
+    expectAlphaEquiv False "a -> a" "a -> b",
+    expectAlphaEquiv False "Box a" "Pair a",
+    expectAlphaEquiv False "a -> b" "a -> b -> c",
   ]
 
 test "shape rendering spells binders by prefix and types by instantiation" =
@@ -481,5 +495,5 @@ test "shape rendering spells binders by prefix and types by instantiation" =
     expectEqual "((w0 => (w1 => w1)), (Pair 1))" (shapeAt "w" shape),
     expectEqual "((t0 -> (t1 -> t1)), (t2 -> Pair Int t2))" (shapeScheme shape),
     expectNotEqual (shapeTypeAt "Int" shape) (shapeTypeAt "Bool" shape),
-    expectFalse (shapeIsPolymorphic (SRef SInt)),
+    expectMonomorphic (SRef SInt),
   ]
