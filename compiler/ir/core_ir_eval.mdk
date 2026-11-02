@@ -76,7 +76,7 @@ import eval.eval.{
   boolSeeds,
   externBindings,
   ctorToTypeRef,
-  installConsts,
+  installFrameConsts,
   cellResult,
   lookupBinding,
   isNullary,
@@ -511,12 +511,13 @@ cevalProgram facts (CProgram groups ctorArs ctorToType implEntries _ _) =
       ++ map cBindName groups
       ++ cImplMethodNames implEntries
   let cells = map (n => (n, Ref VUnit)) allNames
-  let env = EvalEnv facts [indexedFrame cells]
-  installConsts cells boolSeeds
-  installConsts cells (externBindings ())
-  installConsts cells ctors
-  installConsts
-    cells
+  let frame = indexedFrame cells
+  let env = EvalEnv facts [frame]
+  installFrameConsts frame boolSeeds
+  installFrameConsts frame (externBindings ())
+  installFrameConsts frame ctors
+  installFrameConsts
+    frame
     (coalesceImpls (flatMap (cImplEntryValues env) implEntries))
   cInstallTopGroups env cells groups
   map cellResult cells
@@ -734,10 +735,10 @@ cevalModules facts preludeDecls0 modules0 =
   let implEntries =
     flatMap (cImplEntryValues globalEnv) preludeImpls
       ++ flatMap cModImplValues mods
-  installConsts globalCells boolSeeds
-  installConsts globalCells externs
-  installConsts globalCells ctors
-  installConsts globalCells (coalesceImpls implEntries)
+  installFrameConsts globalFrame boolSeeds
+  installFrameConsts globalFrame externs
+  installFrameConsts globalFrame ctors
+  installFrameConsts globalFrame (coalesceImpls implEntries)
   cInstallTopGroups globalEnv globalCells preludeShared
   cInstallTopGroups globalEnv privateCells preludePrivate
   cInstallModGroups mods
@@ -834,7 +835,10 @@ cInstallModGroups ((CModInfo _ decls cbinds _ cells menv) :: rest) =
   cInstallTopGroups menv cells cbinds
   -- P0-9: install this module's own ctor values into its local cells (allocated
   -- in cBuildModInfos), so map/set construct their own arity-correct `Bin`/`Tip`.
-  installConsts cells (collectCtors decls)
+  let _ = match menv
+    EvalEnv _ (localFrame :: _) =>
+      installFrameConsts localFrame (collectCtors decls)
+    _ => panic "module environment has no local frame"
   cInstallModGroups rest
 
 -- the root module is last in dependency order; its locals hold `main`

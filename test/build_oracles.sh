@@ -172,16 +172,16 @@ if [ "${1:-}" = "--build-one" ]; then
   rm -f "$out"
   printf 'building    %s ...\n' "$e"
   _t0=$(_now_ms)
-  # The two profilers are read by test/diff_compiler_stage_ir_scaling.sh through
+  # The symbol profilers are read by the stage/interpreter scaling gates through
   # Callgrind's per-symbol attribution, so valgrind must be able to read their symbol
   # tables. valgrind 3.22 (CI's Ubuntu) reads none from some lld ThinLTO layouts and
   # reports every function as a bare address, and whether a build lands on such a
   # layout moves with unrelated code size. `medaka build` picks ThinLTO whenever clang
-  # can find ld.lld, so these two are linked plain on every box. The shared
+  # can find ld.lld, so these probes are linked plain on every box. The shared
   # MEDAKA_RT_OBJ / MEDAKA_PRELUDE_OBJ were compiled for the detected link mode (bitcode
   # under ThinLTO), so these builds compile their own instead.
   case "$e" in
-    profile_main | profile_modules_main) set -- MEDAKA_NO_LTO=1 MEDAKA_RT_OBJ= MEDAKA_PRELUDE_OBJ= ;;
+    profile_main | profile_modules_main | profile_eval_main) set -- MEDAKA_NO_LTO=1 MEDAKA_RT_OBJ= MEDAKA_PRELUDE_OBJ= ;;
     *) set -- ;;
   esac
   if ! ( cd "$ROOT" && env "$@" MEDAKA_ROOT="$ROOT" MEDAKA_EMITTER="$EMITTER" MEDAKA_CLANG_OPT="${ORACLE_OPT:--O0}" "$MEDAKA" build --allow-internal "$src" -o "$out" ) >"$BINDIR/$e.buildlog" 2>&1; then
@@ -328,7 +328,7 @@ fi
 # whenever any covered name is missing or stale, and CI builds it once per run in
 # ci.yml's `oracles` job; gate rows only link it (`--link-multicall`).
 #
-# The singles are built alone: the two profilers link without LTO so callgrind
+# The singles are built alone: the symbol profilers link without LTO so callgrind
 # can attribute symbols (see --build-one).
 #
 # Links are HARDLINKS: the dispatcher reads executablePath (), which resolves a
@@ -340,7 +340,7 @@ fi
 # compiler/entries/oracle_multicall.mdk's arms must equal `--multicall-names`;
 # test/check_build_oracles_for_consistency.sh fails when they differ.
 MULTICALL=oracle_multicall
-MULTICALL_SINGLES="profile_main profile_modules_main"
+MULTICALL_SINGLES="profile_main profile_modules_main profile_eval_main"
 # --for and --build-multicall narrow ENTRIES; the multicall always covers all.
 ALL_ENTRIES="$ENTRIES"
 
@@ -507,8 +507,8 @@ fi
 
 # ── `--for <gate-pattern>...` : build ONLY the oracles those gates actually read ──
 #
-# A bare build is one multicall binary linked under the 51 names `--multicall-names`
-# prints, plus one build per single-build oracle (profile_main, profile_modules_main).
+# A bare build is one multicall binary linked under the names `--multicall-names`
+# prints, plus one build per single-build symbol profiler.
 # Before the multicall it was one medaka build + clang per oracle, which on a 2-core
 # CI runner took 18+ minutes.
 #
