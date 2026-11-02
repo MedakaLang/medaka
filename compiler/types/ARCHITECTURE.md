@@ -264,15 +264,11 @@ Rulings that qualify the table:
   the judgments at the binder's boundary (DICT section 4 `gen`/`gen-sig`, section 8 I1); the merged
   row holds 116 declarations in 1,861 A8 lines, under 3,000.
 - Sizes are the A8 file measure: non-blank, non-comment lines of the generated file, including the
-  import block, export markers, declarations and the probe sections that stay (P4-D8), with the
-  fixtures that move to the sibling test taken out. Over 3,000: no row of the table; `tc_infer`
+  import block, export markers, declarations and the test-only probe sections that stay in the `tc_*`
+  modules, with the fixtures that move to the sibling test taken out. Over 3,000: no row of the table; `tc_infer`
   measures 2,403 (the 64-declaration recursion plus its arm helpers), so no over-3,000 reason is owed.
   `tc_module` (2,650) and `tc_occurrence` (2,900) carry no adopted reason: a sprint that would take
   either over 3,000 stops for Val.
-- The D8 exception (narrow, named): the 14 trace and probe sinks consumed by drive-level tests stay
-  exported from their home modules and are imported directly by `typecheck_test.mdk`, with no
-  facade; `typecheck_test.mdk` is not their subject's sibling, so the R35 sibling privilege
-  (`docs/design/TEST-SIBLING-ACCESS-DESIGN.md`) does not reach them.
 - `tc_mono`'s holds is reworded to "pure except for minting effect-variable ids from the
   graph-run counter"; lifting that mint is an idiom-slice option under the identity oracles.
 - The alias-qualified-method family (45 declarations across `tc_env`, `tc_scope` and `typecheck`)
@@ -286,8 +282,13 @@ Rulings that qualify the table:
   (the `tc_env` block that calls `deKindRow0` moves to `tc_decls_test.mdk`).
 
 *Position* says whether the graph forces the row's place (edges down, none up) or precedent
-chose it where either order is acyclic. Test-only probes stay in the module whose state they
-read, in a marked section exported to that module's sibling only; fixtures move to the
+chose it where either order is acyclic. A probe or instrument that only tests read lives in
+test code. If it needs no private names it goes in a `*_test_support.mdk` module (for the
+typechecker, `compiler/types/tc_solve_test_support.mdk`); if it needs its home module's private
+names it goes in that module's own `*_test.mdk` sibling and is exported from there to other tests
+(`_test` to `_test` imports keep the exporting sibling's privilege). No production module exports a
+name only for a test: `rule-dead-code` is gated, so a private name only a sibling reads is dead and
+moves into the sibling (`docs/design/TEST-SIBLING-ACCESS-DESIGN.md` §3.1). Fixtures move to the
 siblings (P4-D8). Every module gets a `<module>_test.mdk` in its sprint, with the
 `typecheck_test.mdk` blocks whose subject moved plus API tests by the `write-tests` table; #3944's
 exclusion of white-box tests of `unify`, `generalize`, `instantiate` and `entail` is reversed by
