@@ -9,17 +9,17 @@ import bytes as B
 import bytes.{Bytes, encodeUtf8, fromU8Array}
 import json.{Json(..), jObject}
 import list.{replicate}
-import string.{contains, join, repeat}
+import string.{join, repeat}
 import test.{
   Expectation,
   expectEach,
   expectEqual,
+  expectErrContains,
   expectFalse,
   expectGreaterThan,
   expectOkThen,
   expectTrue,
   fail,
-  pass,
 }
 import lib.dagcbor.{DagCbor(..)}
 import lib.handlers.{recordHandler}
@@ -58,15 +58,9 @@ import lib.tid.{
 }
 import lib.sign.{Sign}
 
--- `Tid` has no `Debug` instance, so `expectErrContains` cannot name the Ok case.
+-- `Tid` has no `Debug` instance, so the Ok payload is dropped before `expectErrContains`.
 errContains : String -> Result String a -> Expectation
-errContains witness (Err message) =
-  if contains witness message then
-    pass
-  else
-    fail "expected an error containing \{witness} but got \{message}"
-errContains witness (Ok _) =
-  fail "expected an error containing \{witness} but got Ok"
+errContains witness r = expectErrContains witness (map (_ => ()) r)
 
 mustTid : Int -> Int -> Tid
 mustTid micros clockId =

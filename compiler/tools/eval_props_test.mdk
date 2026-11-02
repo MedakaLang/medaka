@@ -5,7 +5,7 @@
 import driver.build_cmd.{makeTempDir, cleanupTempDir}
 import json.{Json, parse, get, asArray, asInt, asString, stringify}
 import test.{
-  Expectation, expectAll, expectEqual, expectErr, fail, labelFail, pass
+  Expectation, expectAll, expectEqual, expectErrContains, fail, labelFail, pass
 }
 import test_process.{boundedVerbSeconds, medakaBin}
 import tools.native_fixture_test_support_test.{writeFixtureFiles}
@@ -34,16 +34,18 @@ decodesExpectedRuntime =
     Ok _ => fail "decoded rows differ from the one expected runtime row"
     Err e => fail "decoder rejected the complete wire: \{e}"
 
-decodeRejects : String -> Expectation
-decodeRejects text = match decodeEvalPropRows "nonce" [request] text
-  Err _ => pass
-  Ok _ => fail "decoder accepted: \{text}"
+decodeRejects : String -> String -> Expectation
+decodeRejects fragment text =
+  expectErrContains
+    fragment
+    (map (_ => ()) (decodeEvalPropRows "nonce" [request] text))
 
 bootstrapPrefix : String
 bootstrapPrefix = "@@__mdk_eval_props_bootstrap__@@ "
 
-bootstrapRejects : String -> Expectation
-bootstrapRejects text = expectErr (takeEvalPropBootstrap text)
+bootstrapRejects : String -> String -> Expectation
+bootstrapRejects fragment text =
+  expectErrContains fragment (takeEvalPropBootstrap text)
 
 test "eval property worker decoder accepts one complete typed row" =
   decodesExpectedRuntime
@@ -51,30 +53,40 @@ test "eval property worker decoder accepts one complete typed row" =
 test "eval property worker decoder rejects truncated, mismatched, and contradictory rows" = expectAll
   [
     decodeRejects
+      "an incomplete or malformed transcript"
       "\{noncedPrefix "@@__mdk_eval_props__@@" "nonce"}row-0\n\{runtimeRow}\n",
     decodeRejects
+      "changed a row engine"
       (completeWire
         "nonce"
         "{\"engine\":\"native\",\"name\":\"law\",\"status\":\"error\",\"failureKind\":\"runtime\",\"detail\":\"boom\",\"seed\":7,\"cases\":3}"),
     decodeRejects
+      "changed a row name"
       (completeWire
         "nonce"
         "{\"engine\":\"eval\",\"name\":\"other\",\"status\":\"error\",\"failureKind\":\"runtime\",\"detail\":\"boom\",\"seed\":7,\"cases\":3}"),
     decodeRejects
+      "changed a row replay request"
       (completeWire
         "nonce"
         "{\"engine\":\"eval\",\"name\":\"law\",\"status\":\"error\",\"failureKind\":\"runtime\",\"detail\":\"boom\",\"seed\":8,\"cases\":3}"),
     decodeRejects
+      "changed a row replay request"
       (completeWire
         "nonce"
         "{\"engine\":\"eval\",\"name\":\"law\",\"status\":\"error\",\"failureKind\":\"runtime\",\"detail\":\"boom\",\"seed\":7,\"cases\":4}"),
     decodeRejects
+      "an invalid status/failureKind pair"
       (completeWire
         "nonce"
         "{\"engine\":\"eval\",\"name\":\"law\",\"status\":\"error\",\"failureKind\":\"law-false\",\"detail\":\"boom\",\"seed\":7,\"cases\":3}"),
-    decodeRejects (completeWire "nonce" runtimeRow ++ "garbage\n"),
-    bootstrapRejects "missing\n",
-    bootstrapRejects "\{bootstrapPrefix}nonce\n\{bootstrapPrefix}again\n",
+    decodeRejects
+      "an incomplete or malformed transcript"
+      (completeWire "nonce" runtimeRow ++ "garbage\n"),
+    bootstrapRejects "a malformed bootstrap header" "missing\n",
+    bootstrapRejects
+      "a duplicate bootstrap header"
+      "\{bootstrapPrefix}nonce\n\{bootstrapPrefix}again\n",
   ]
 
 withFixture : String ->

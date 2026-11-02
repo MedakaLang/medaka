@@ -15,7 +15,8 @@ import frontend.resolve.{resErrorCode, resolveProgram}
 import list.{filter, indexed, lookup, nub, reverse, sort, zip}
 import string.{isUpper, join, split, toChars}
 import test.{
-  Expectation, expectAll, expectAtLeast, expectEqual, expectFalse, expectTrue
+  expectSatisfies, Expectation, expectAll, expectAtLeast, expectEqual,
+  expectFalse, expectTrue
 }
 import types.law_harness_test.{
   Verdict(..),
@@ -461,9 +462,19 @@ fitsRigid MAny _ = True
 fitsRigid MErr _ = False
 fitsRigid body declared = body == declared
 
-expectFitsRigid : Bool -> MT -> MT -> Expectation
-expectFitsRigid expected body declared =
-  expectEqual expected (fitsRigid body declared)
+expectFitsRigid : MT -> MT -> Expectation
+expectFitsRigid body declared =
+  expectSatisfies
+    "a (body, declared) pair where the body fits the rigid declared type"
+    (pair => fitsRigid (fst pair) (snd pair))
+    (body, declared)
+
+expectMisfitsRigid : MT -> MT -> Expectation
+expectMisfitsRigid body declared =
+  expectSatisfies
+    "a (body, declared) pair where the body does not fit the rigid declared type"
+    (pair => not (fitsRigid (fst pair) (snd pair)))
+    (body, declared)
 
 vFits : VBody -> Bool
 vFits VKv = False
@@ -703,11 +714,11 @@ test "the identity model's distinct pairs disagree with a model that conflates t
 
 test "the W3 model holds both binders' b apart and rejects a pinned or laundering body" = expectAll
   [
-    expectFitsRigid False (bodyMT WBoxB EX) (declaredMT WBoxB RBoxVarB),
-    expectFitsRigid True (bodyMT WBoxB EY) (declaredMT WBoxB RVarB),
-    expectFitsRigid False (bodyMT WBoxC EBoxInt) (declaredMT WBoxC RHead),
-    expectFitsRigid False (bodyMT WInt EUnboxX) (declaredMT WInt RHead),
-    expectFitsRigid True (bodyMT WInt EAny) (declaredMT WInt RVarB),
+    expectMisfitsRigid (bodyMT WBoxB EX) (declaredMT WBoxB RBoxVarB),
+    expectFitsRigid (bodyMT WBoxB EY) (declaredMT WBoxB RVarB),
+    expectMisfitsRigid (bodyMT WBoxC EBoxInt) (declaredMT WBoxC RHead),
+    expectMisfitsRigid (bodyMT WInt EUnboxX) (declaredMT WInt RHead),
+    expectFitsRigid (bodyMT WInt EAny) (declaredMT WInt RVarB),
     expectEqual Rejected (w3Verdict WInt RNum EInt VKv),
     expectEqual Rejected (fst (checkFlat (w3Program WBoxB RBoxVarB EX VK))),
   ]

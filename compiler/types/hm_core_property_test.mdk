@@ -11,7 +11,10 @@ import frontend.desugar.{desugar}
 import frontend.parser.{parseLocated}
 import list.{drop, elemIndex, filter, lookup, nub, reverse}
 import string.{isAlphaNum, join, toChars}
-import test.{Expectation, expectAll, expectAtLeast, expectEqual, expectTrue}
+import test.{
+  expectSatisfies, Expectation, expectAll, expectAtLeast, expectEqual,
+  expectTrue
+}
 import types.law_harness_test.{
   Shape(..),
   Verdict(..),
@@ -50,8 +53,19 @@ renderTy (TT items) = "(\{join ", " (map renderTy items)})"
 sameType : Ty -> Ty -> Bool
 sameType left right = alphaEquiv (renderTy left) (renderTy right)
 
-expectSameType : Bool -> Ty -> Ty -> Expectation
-expectSameType want left right = expectEqual want (sameType left right)
+expectSameType : Ty -> Ty -> Expectation
+expectSameType left right =
+  expectSatisfies
+    "a pair of types equal up to renaming"
+    (pair => sameType (fst pair) (snd pair))
+    (left, right)
+
+expectDifferentType : Ty -> Ty -> Expectation
+expectDifferentType left right =
+  expectSatisfies
+    "a pair of types that differ beyond renaming"
+    (pair => not (sameType (fst pair) (snd pair)))
+    (left, right)
 
 {- Reads a rendered type back into the model: the printer's spelling and the
    harness's spelling both, redundant parentheses allowed. A token the
@@ -700,8 +714,8 @@ test "the type reader round-trips both spellings and rejects junk" = expectAll [
     (parseTy "((t0 -> t0), (t2 -> Pair Int t2))"),
   expectEqual (TF (TF (TV "a") (TV "b")) (TV "c")) (parseTy "(a -> b) -> c"),
   expectEqual unreadable (parseTy "a -> "),
-  expectSameType True (parseTy "a -> b -> a") (parseTy "(t1 -> (t0 -> t1))"),
-  expectSameType False (parseTy "a -> b") (parseTy "t0 -> t0"),
+  expectSameType (parseTy "a -> b -> a") (parseTy "(t1 -> (t0 -> t1))"),
+  expectDifferentType (parseTy "a -> b") (parseTy "t0 -> t0"),
 ]
 
 test "the unification model finds unifiers, clashes and cycles" = expectAll [

@@ -12,6 +12,7 @@
 -- `medaka test --native compiler/tools/lint_index_test.mdk`.
 
 import test.{
+  expectSatisfies,
   Expectation,
   expectEqual,
   expectTrue,
@@ -269,9 +270,19 @@ shardOf : List IndexRow -> String
 shardOf rows =
   encodeRowShard "stamp" "/p/m.mdk" (rowContentHash modSource) "m" rows
 
-decodes : Bool -> String -> String -> String -> String -> Expectation
-decodes expected stamp path hash text =
-  expectEqual expected (isSome (decodeRowShard stamp path hash text))
+decodes : String -> String -> String -> String -> Expectation
+decodes stamp path hash text =
+  expectSatisfies
+    "a shard text that decodes under the stamp, path and hash"
+    (t => isSome (decodeRowShard stamp path hash t))
+    text
+
+doesNotDecode : String -> String -> String -> String -> Expectation
+doesNotDecode stamp path hash text =
+  expectSatisfies
+    "a shard text that is refused under the stamp, path and hash"
+    (t => isNone (decodeRowShard stamp path hash t))
+    text
 
 decodeOk : String -> Option (List IndexRow)
 decodeOk text =
@@ -336,23 +347,23 @@ test "a corrupt, stale or foreign shard is a miss" =
   expectEach [
     (
       "control: the good shard decodes",
-      decodes True "stamp" "/p/m.mdk" hash good,
+      decodes "stamp" "/p/m.mdk" hash good,
     ),
-    ("wrong stamp", decodes False "other" "/p/m.mdk" hash good),
-    ("wrong path", decodes False "stamp" "/p/n.mdk" hash good),
+    ("wrong stamp", doesNotDecode "other" "/p/m.mdk" hash good),
+    ("wrong path", doesNotDecode "stamp" "/p/n.mdk" hash good),
     (
       "wrong content hash",
-      decodes False "stamp" "/p/m.mdk" "1.2" good,
+      doesNotDecode "stamp" "/p/m.mdk" "1.2" good,
     ),
     (
       "truncated",
-      decodes False "stamp" "/p/m.mdk" hash (stringSlice 0 80 good),
+      doesNotDecode "stamp" "/p/m.mdk" hash (stringSlice 0 80 good),
     ),
-    ("garbage", decodes False "stamp" "/p/m.mdk" hash "(((("),
-    ("empty", decodes False "stamp" "/p/m.mdk" hash ""),
+    ("garbage", doesNotDecode "stamp" "/p/m.mdk" hash "(((("),
+    ("empty", doesNotDecode "stamp" "/p/m.mdk" hash ""),
     (
       "trailing text",
-      decodes False "stamp" "/p/m.mdk" hash (good ++ " x"),
+      doesNotDecode "stamp" "/p/m.mdk" hash (good ++ " x"),
     ),
   ]
 
@@ -717,8 +728,7 @@ test "a shard names its path, so a shard of another path is not served" =
     ),
     (
       "a shard of one path does not decode for the other",
-      decodes
-        False
+      doesNotDecode
         "stamp"
         b
         hash
