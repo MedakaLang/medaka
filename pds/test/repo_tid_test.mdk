@@ -19,6 +19,7 @@ import test.{
   expectOkThen,
   expectTrue,
   fail,
+  pass,
 }
 import lib.dagcbor.{DagCbor(..)}
 import lib.handlers.{recordHandler}
@@ -57,9 +58,15 @@ import lib.tid.{
 }
 import lib.sign.{Sign}
 
-errContains : String -> Result String a -> Bool
-errContains witness (Err message) = contains witness message
-errContains _ (Ok _) = False
+-- `Tid` has no `Debug` instance, so `expectErrContains` cannot name the Ok case.
+errContains : String -> Result String a -> Expectation
+errContains witness (Err message) =
+  if contains witness message then
+    pass
+  else
+    fail "expected an error containing \{witness} but got \{message}"
+errContains witness (Ok _) =
+  fail "expected an error containing \{witness} but got Ok"
 
 mustTid : Int -> Int -> Tid
 mustTid micros clockId =
@@ -121,19 +128,19 @@ test "TID monotonic next falls back to the successor when the proposal cannot be
 test "TID parser rejects length alphabet high bit and range" = expectEach [
   (
     "a 12-character TID is rejected for its length",
-    expectTrue (errContains "13" (tidParse "3ke6kg3wk222")),
+    errContains "13" (tidParse "3ke6kg3wk222"),
   ),
   (
     "a character outside the base32-sortable alphabet is rejected",
-    expectTrue (errContains "alphabet" (tidParse "3ke6kg3wk2220")),
+    errContains "alphabet" (tidParse "3ke6kg3wk2220"),
   ),
   (
     "a leading character with the high bit set is rejected",
-    expectTrue (errContains "high bit" (tidParse "k222222222222")),
+    errContains "high bit" (tidParse "k222222222222"),
   ),
   (
     "a timestamp past 53 bits is rejected",
-    expectTrue (errContains "53-bit" (tidParse "c222222222222")),
+    errContains "53-bit" (tidParse "c222222222222"),
   ),
 ]
 
@@ -148,22 +155,20 @@ test "TID encoder rejects timestamp and clock ranges" = expectEach [
 ]
 
 test "repository rejects invalid DID before signing" =
-  expectTrue
-    (errContains
-      "invalid DID"
-      (repoInitFromKeyBytes
-        "not-a-did"
-        (fromU8Array (arrayMake 32 1))
-        (mustTid 1 0)))
+  errContains
+    "invalid DID"
+    (repoInitFromKeyBytes
+      "not-a-did"
+      (fromU8Array (arrayMake 32 1))
+      (mustTid 1 0))
 
 test "repository rejects invalid signing key before commit construction" =
-  expectTrue
-    (errContains
-      "bad signing key"
-      (repoInitFromKeyBytes
-        "did:plc:medaka"
-        (fromU8Array (arrayMake 32 0))
-        (mustTid 1 0)))
+  errContains
+    "bad signing key"
+    (repoInitFromKeyBytes
+      "did:plc:medaka"
+      (fromU8Array (arrayMake 32 0))
+      (mustTid 1 0))
 
 test "shared generic NSID authority accepts uppercase while retaining lowercase form" = expectEach
   [

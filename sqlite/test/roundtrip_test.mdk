@@ -83,13 +83,15 @@ test "parse-render-parse is stable across the representative query set" =
   expectEach (map (sql => (sql, expectTrue (parseStable sql))) stableQueries)
 
 -- ── SELECT DISTINCT idempotence: the result carries no duplicate rows ───────
-hasNoDups : List (List Cell) -> Bool
-hasNoDups [] = True
-hasNoDups (x :: rest) = if elem x rest then False else hasNoDups rest
+-- The rows that occur again later in the result, in result order.
+repeatedRows : List (List Cell) -> List (List Cell)
+repeatedRows [] = []
+repeatedRows (x :: rest) =
+  if elem x rest then x :: repeatedRows rest else repeatedRows rest
 
 distinctIsUnique : String -> Expectation
 distinctIsUnique sql =
-  expectOkThen (rows => expectTrue (hasNoDups rows)) (qd sql)
+  expectOkThen (rows => expectEqual [] (repeatedRows rows)) (qd sql)
 
 test "SELECT DISTINCT produces no duplicate rows" = expectAll [
   distinctIsUnique "SELECT DISTINCT age FROM users",
@@ -106,11 +108,12 @@ firstInt : List Cell -> Int
 firstInt (c :: _) = cellInt c
 firstInt [] = 0
 
-nonDecreasing : List Int -> Bool
-nonDecreasing [] = True
-nonDecreasing [_] = True
-nonDecreasing (a :: b :: rest) =
-  if a <= b then nonDecreasing (b :: rest) else False
+-- The first adjacent pair that is out of ascending order, if any.
+firstDescent : List Int -> Option (Int, Int)
+firstDescent [] = None
+firstDescent [_] = None
+firstDescent (a :: b :: rest) =
+  if a <= b then firstDescent (b :: rest) else Some (a, b)
 
 -- Ordered ascending ⇒ the projected ints are non-decreasing, and ORDER BY is a
 -- permutation (it neither drops nor invents rows), so the count is preserved.
@@ -119,7 +122,7 @@ test "ORDER BY ASC is a sorted, count-preserving permutation" =
     (ordered =>
       expectOkThen
         (unordered => expectAll [
-          expectTrue (nonDecreasing (map firstInt ordered)),
+          expectEqual None (firstDescent (map firstInt ordered)),
           expectEqual (length ordered) (length unordered),
         ])
         (q "SELECT age FROM users WHERE age IS NOT NULL"))

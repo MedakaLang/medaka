@@ -50,7 +50,7 @@ import shell.server.{
   waitingReads,
 }
 import u8 as U8
-import test.{expectAll, expectEqual, expectTrue}
+import test.{Expectation, expectAll, expectEqual, expectTrue, fail, pass}
 import vector.{capacity, fromArray, get, new, pushArray, rawParts}
 
 -- # `vector.pushArray`/`vector.rawParts` directly
@@ -183,9 +183,10 @@ mustWaiter queued =
     "read_buffer_test: the queue refused a place it had room for"
     queued
 
-queueRefused : Option BufferWaiter -> Bool
-queueRefused None = True
-queueRefused (Some _) = False
+queueRefused : Option BufferWaiter -> Expectation
+queueRefused None = pass
+queueRefused (Some _) =
+  fail "the queue took a read past a full budget and a full queue"
 
 -- | `n` further reads queued for headroom, each asking for the same amount.
 queueReads : BufferCensus -> Int -> Int -> Unit
@@ -242,7 +243,7 @@ test "a read past a full budget and a full queue is refused outright" =
   expectAll [
     expectTrue filledBudget,
     expectEqual maxQueuedBufferedReads queued,
-    expectTrue (queueRefused past),
+    queueRefused past,
   ]
 
 -- A waiter whose wait ran out leaves the queue on its own settle, so the next
