@@ -129,6 +129,7 @@ fixtureNames = [
   "rem-parity",
   "self-shadow-extern",
   "stdlib-reimpl",
+  "test-bool-helper",
   "test-bool-literal-equal",
   "test-equal-in-true",
   "unused-import",
@@ -411,6 +412,19 @@ test "rule-rem-parity fixture" = fixtureHolds "rem-parity"
 test "rule-self-shadow-extern fixture" = fixtureHolds "self-shadow-extern"
 
 test "rule-stdlib-reimpl fixture" = fixtureHolds "stdlib-reimpl"
+
+test "rule-test-bool-helper fixture" = fixtureHolds "test-bool-helper"
+
+test "rule-test-bool-helper ignores a non-test file" = match (
+  readOr "\{fixtureDir}/test-bool-helper.mdk",
+  indexForRules ["rule-test-bool-helper"],
+)
+  (Ok src, Ok idx) =>
+    match lintLinesAt idx "fixture.mdk" "rule-test-bool-helper" src
+      Err e => fail e
+      Ok flagged => expectEqual [] flagged
+  (Err e, _) => fail e
+  (_, Err e) => fail e
 
 test "rule-test-bool-literal-equal fixture" =
   fixtureHolds "test-bool-literal-equal"

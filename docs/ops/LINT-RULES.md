@@ -43,6 +43,7 @@ Every rule `medaka lint` knows. `universal` rules are meaningful in any Medaka p
 | [`rule-directive-reason`](#rule-directive-reason) | internal | style | gated | not-fixable | file |
 | [`rule-regex-literal`](#rule-regex-literal) | universal | correctness | gated | not-fixable | file |
 | [`rule-test-bool-literal-equal`](#rule-test-bool-literal-equal) | internal | style | gated | fixable | file |
+| [`rule-test-bool-helper`](#rule-test-bool-helper) | internal | style | gated | not-fixable | file |
 | [`rule-test-equal-in-true`](#rule-test-equal-in-true) | internal | style | gated | fixable | file |
 | [`rule-prelude-shadow`](#rule-prelude-shadow) | universal | suspicious | gated | not-fixable | file |
 
@@ -574,6 +575,21 @@ Before:
   expectEqual True (a == 1)
 After:
   expectTrue (a == 1)
+```
+
+## rule-test-bool-helper
+
+a `-> Bool` helper in a `*_test.mdk` whose call is graded with `expectTrue`/`expectFalse`. Return an `Expect` (`expectErrContains`, `expectEqual`, ...) so a failure says what was expected
+
+A `Bool` helper graded with `expectTrue`/`expectFalse` fails with "expected True, got False" and names nothing. Make the helper return an `Expect` built from the verb that fits (`expectErrContains`, `expectEqual`, `expectOk`, ...; see the `write-tests` table) and drop the `expectTrue`/`expectFalse` wrapper at its call sites. A helper that a `prop` in the same file references keeps `Bool`, because a prop's oracle is `Bool`. Covered call shapes: `expectTrue (h a b)`, `expectFalse (h a b)`, `h a b |> expectTrue`, `x |> h |> expectTrue`. Not covered: a call nested deeper in the argument (`expectTrue (a && h b)`, `expectTrue (not (h b))`).
+
+```
+Before:
+  rejects : String -> Bool
+  test "t" = expectTrue (rejects "x")
+After:
+  rejects : String -> Expect
+  test "t" = rejects "x"
 ```
 
 ## rule-test-equal-in-true

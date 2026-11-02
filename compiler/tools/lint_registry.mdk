@@ -39,6 +39,7 @@ import tools.lint_rule_lambda_section as LambdaSection
 import tools.lint_rule_if_max_min as IfMaxMin
 import tools.lint_rule_bool_simplify as BoolSimplify
 import tools.lint_rule_regex_literal as RegexLiteral
+import tools.lint_rule_internal_test_bool_helper as TestBoolHelper
 import tools.lint_rule_internal_test_equal_in_true as TestEqualInTrue
 import tools.lint_rule_unused_import as UnusedImport
 import tools.lint_rule_unused_param as UnusedParam
@@ -89,6 +90,7 @@ allRules = [
   DirectiveReason.rule,
   RegexLiteral.rule,
   TestBoolLiteralEqual.rule,
+  TestBoolHelper.rule,
   TestEqualInTrue.rule,
   PreludeShadow.rule,
 ]
