@@ -68,7 +68,6 @@ import types.tc_types.{
   PendingMethodDict,
   RecDictApp,
   ReqWalk,
-  TraceSink,
 }
 import types.tc_mono.{
   allConcreteHeads,
@@ -78,7 +77,6 @@ import types.tc_mono.{
   cohOverlapGo,
   containsI,
   dedupI,
-  exactReturnRequestOfGoal,
   findTvarInMono,
   headTyconMono,
   matchEqMono,
@@ -206,8 +204,6 @@ import frontend.ast.{
   Require(..),
   Route(..),
   Ty(..),
-  EvTable,
-  ifaceIdentity,
   mkIdent,
   tyConBuiltin,
 }
@@ -229,7 +225,6 @@ import types.repr.{
   Mono(..),
   lookupAssocI,
   normalize,
-  ppMono,
   tupleSpine,
 }
 import map.{Map(..)}
@@ -253,7 +248,6 @@ import support.util.{
   splitOnChar,
 }
 import list.{drop, get, indexed, reverse, take, zip}
-import string.{join}
 import types.evidence_complete.{innerNone}
 import types.scopes as Scopes
 import map as IdMap
@@ -2112,146 +2106,8 @@ siteKindMonos (SKOp _) = []
 siteKindMonos (SKPredicateOp _ _) = []
 siteKindMonos (SKRLocal _ _ ms _ vecs) = ms ++ flatMap identity vecs
 
--- Observation declarations exported for readers outside this module: the method-return trace and
--- memo views for the drive-level `typecheck_test`, and the method-slot and method-return probes
--- `tc_occurrence` and `tc_module` read.
-
--- Each entry with the evidence its goal published in [evidence], the table of the
--- drive that recorded it.
-export
-finishMethodReturnTrace : TraceSink -> EvTable -> List MethodReturnTraceEntry
-finishMethodReturnTrace sink evidence =
-  map
-    (publishMethodReturnTrace evidence)
-    (reverse sink.tsMethodReturnEntries.value)
-
-publishMethodReturnTrace : EvTable ->
-  MethodReturnTraceEntry ->
-  MethodReturnTraceEntry
-publishMethodReturnTrace evidence entry =
-  let published = match entry.mrtGoal
-    Some goal => lookupTraceEvidence goal evidence
-    None => None
-  MethodReturnTraceEntry {
-    mrtStage = entry.mrtStage,
-    mrtInterface = entry.mrtInterface,
-    mrtMethod = entry.mrtMethod,
-    mrtArguments = entry.mrtArguments,
-    mrtScope = entry.mrtScope,
-    mrtOrigin = entry.mrtOrigin,
-    mrtGoal = entry.mrtGoal,
-    mrtPublished = published,
-    mrtQualifiedBody = entry.mrtQualifiedBody,
-    mrtWanted = entry.mrtWanted,
-    mrtOutcome = entry.mrtOutcome,
-    mrtRoute = entry.mrtRoute,
-    mrtPrerequisites = entry.mrtPrerequisites,
-  }
-
-lookupTraceEvidence : EvId -> EvTable -> Option EvVal
-lookupTraceEvidence _ [] = None
-lookupTraceEvidence goal ((EvEntry candidate value) :: rest) =
-  if sameTraceEvId goal candidate then
-    Some value
-  else
-    lookupTraceEvidence goal rest
-
-sealMethodReturnGoals : GraphCtx ->
-  EvTable ->
-  List Obligation ->
-  (List Obligation, List MethodReturnMemoView)
-sealMethodReturnGoals gctx evidence goals =
-  sealMethodReturnGoalsFrom gctx evidence (reverse goals) ([], [])
-
--- Walks the goals last to first so each result list is built in input order, with
--- no recursion before the cons: the goal list of a program that imports `async` is
--- long enough to overflow the baseline-tier wasm stack in a browser worker.
-sealMethodReturnGoalsFrom : GraphCtx ->
-  EvTable ->
-  List Obligation ->
-  (List Obligation, List MethodReturnMemoView) ->
-  (List Obligation, List MethodReturnMemoView)
-sealMethodReturnGoalsFrom _gctx _ [] acc = acc
-sealMethodReturnGoalsFrom gctx evidence (goal :: rest) (goals, views) =
-  match exactReturnRequestOfGoal goal
-    Some request => sealMethodReturnGoalsFrom gctx evidence rest (
-      goals,
-      methodReturnMemoView gctx evidence goal request :: views,
-    )
-    None => sealMethodReturnGoalsFrom gctx evidence rest (goal :: goals, views)
-
-methodReturnMemoView : GraphCtx ->
-  EvTable ->
-  Obligation ->
-  MethodReturnRequest ->
-  MethodReturnMemoView
-methodReturnMemoView gctx evidence goal request =
-  let (outcome, prerequisites) = match request.mrrResolution.value
-    None => ("legacy", [])
-    Some resolution => (
-      methodReturnMemoOutcome resolution.mrrOutcome,
-      methodReturnMemoPrerequisites resolution.mrrOutcome,
-    )
-  MethodReturnMemoView {
-    mrmvInterface = methodReturnMemoIface request.mrrIface,
-    mrmvMethod = request.mrrName,
-    mrmvArguments =
-      map methodReturnMemoArguments (methodReturnArgs gctx request),
-    mrmvOutcome = outcome,
-    mrmvPrerequisites = prerequisites,
-    mrmvEvidence = methodReturnMemoEvidence goal.oEv evidence,
-  }
-
-methodReturnMemoArguments : List Mono -> List String
-methodReturnMemoArguments arguments = map ppMono arguments
-
-methodReturnMemoIface : IfaceRef -> String
-methodReturnMemoIface iface =
-  let identity = ifaceIdentity iface.irOrigin iface.irName
-  if identity == "" then iface.irName else identity
-
-methodReturnMemoOutcome : SolverOutcome -> String
-methodReturnMemoOutcome (Solved (GivenEvidence _)) = "given"
-methodReturnMemoOutcome (Solved (InstanceEvidence _ _ _ _)) = "instance"
-methodReturnMemoOutcome (Solved (SuperclassEvidence _ _)) = "superclass"
-methodReturnMemoOutcome (Deferred _ _) = "deferred"
-methodReturnMemoOutcome (Insoluble _ MissingInstance) = "missing"
-methodReturnMemoOutcome (Insoluble _ (AmbiguousInstances _)) = "ambiguous"
-methodReturnMemoOutcome (Insoluble _ (ResolutionCycle _)) = "cycle"
-
-methodReturnMemoPrerequisites : SolverOutcome -> List (String, List String)
-methodReturnMemoPrerequisites (Solved (InstanceEvidence _ _ prerequisites _)) =
-  map
-    (prerequisite => (
-      methodReturnMemoIface prerequisite.prerequisiteInterface,
-      map ppMono prerequisite.prerequisiteArguments,
-    ))
-    prerequisites
-methodReturnMemoPrerequisites _ = []
-
-methodReturnMemoEvidence : EvId -> EvTable -> String
-methodReturnMemoEvidence goal evidence = match lookupTraceEvidence goal evidence
-  Some (EvOne route) => methodReturnMemoRoute route
-  Some (EvMany routes) => join "," (map methodReturnMemoRoute routes)
-  Some (EvLit _ route) => methodReturnMemoRoute route
-  Some (EvHead head) => "head:\{head}"
-  None => "unpublished"
-
-methodReturnMemoRoute : Route -> String
-methodReturnMemoRoute RNone = "none"
-methodReturnMemoRoute (RKey key prerequisites supers) =
-  "key:\{key}[\{join "," (map methodReturnMemoRoute prerequisites)}]\{methodReturnMemoSupers supers}"
-methodReturnMemoRoute (RDict name) = "given:\{name}"
-methodReturnMemoRoute (RDictFwd name) = "forwarded:\{name}"
-methodReturnMemoRoute (RLocal name _) = "local:\{name}"
-methodReturnMemoRoute (RScalar name) = "scalar:\{name}"
-methodReturnMemoRoute (RProj r path) =
-  "projected:\{methodReturnMemoRoute r}.\{join "." (map intToString path)}"
-
-methodReturnMemoSupers : List Route -> String
-methodReturnMemoSupers [] = ""
-methodReturnMemoSupers supers =
-  "{\{join "," (map methodReturnMemoRoute supers)}}"
+-- Observation declarations exported for readers outside this module: the method-slot and
+-- method-return probes `tc_occurrence` and `tc_module` read.
 
 export
 methodSlotBoundIds : List MethodPredicateSlot -> List (List Int)
@@ -2377,13 +2233,3 @@ methodReturnProbeOblIfaces (obl :: rest) =
     PMethodLevel => [obl.pred.iface.irName]
     _ => []
   here ++ methodReturnProbeOblIfaces rest
-
--- The method-return views of [gctx]: its live exact-return goals, sealed.
-export
-methodReturnMemoCurrentViews : GraphCtx -> List MethodReturnMemoView
-methodReturnMemoCurrentViews gctx =
-  snd
-    (sealMethodReturnGoals
-      gctx
-      gctx.graphRun.evTable.value
-      gctx.graphRun.goals.value)

@@ -139,11 +139,11 @@ import support.util.{
 import list.{get, last, nub, sort, reverse}
 import types.solver_contract.{SolverOutcome(..), Wanted(..)}
 import types.publish.{TcReport(..)}
-import types.tc_solve.{
+import types.tc_solve_test.{
   finishMethodReturnTrace,
   methodReturnMemoCurrentViews,
 }
-import types.tc_occurrence.{cellGoalInnerAliasing}
+import types.tc_occurrence_test.{cellGoalInnerAliasing}
 
 data NumericTraceView = NumericTraceView {
   ntvStage : NumericPredicateTraceStage,

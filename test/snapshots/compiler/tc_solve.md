@@ -1,5 +1,5 @@
 # META
-source_lines=2389
+source_lines=2235
 stages=DESUGAR,MARK
 # SOURCE
 -- tc_solve: one solving judgment over one goal store, above the entailment core: the exact-return
@@ -72,7 +72,6 @@ import types.tc_types.{
   PendingMethodDict,
   RecDictApp,
   ReqWalk,
-  TraceSink,
 }
 import types.tc_mono.{
   allConcreteHeads,
@@ -82,7 +81,6 @@ import types.tc_mono.{
   cohOverlapGo,
   containsI,
   dedupI,
-  exactReturnRequestOfGoal,
   findTvarInMono,
   headTyconMono,
   matchEqMono,
@@ -210,8 +208,6 @@ import frontend.ast.{
   Require(..),
   Route(..),
   Ty(..),
-  EvTable,
-  ifaceIdentity,
   mkIdent,
   tyConBuiltin,
 }
@@ -233,7 +229,6 @@ import types.repr.{
   Mono(..),
   lookupAssocI,
   normalize,
-  ppMono,
   tupleSpine,
 }
 import map.{Map(..)}
@@ -257,7 +252,6 @@ import support.util.{
   splitOnChar,
 }
 import list.{drop, get, indexed, reverse, take, zip}
-import string.{join}
 import types.evidence_complete.{innerNone}
 import types.scopes as Scopes
 import map as IdMap
@@ -2116,146 +2110,8 @@ siteKindMonos (SKOp _) = []
 siteKindMonos (SKPredicateOp _ _) = []
 siteKindMonos (SKRLocal _ _ ms _ vecs) = ms ++ flatMap identity vecs
 
--- Observation declarations exported for readers outside this module: the method-return trace and
--- memo views for the drive-level `typecheck_test`, and the method-slot and method-return probes
--- `tc_occurrence` and `tc_module` read.
-
--- Each entry with the evidence its goal published in [evidence], the table of the
--- drive that recorded it.
-export
-finishMethodReturnTrace : TraceSink -> EvTable -> List MethodReturnTraceEntry
-finishMethodReturnTrace sink evidence =
-  map
-    (publishMethodReturnTrace evidence)
-    (reverse sink.tsMethodReturnEntries.value)
-
-publishMethodReturnTrace : EvTable ->
-  MethodReturnTraceEntry ->
-  MethodReturnTraceEntry
-publishMethodReturnTrace evidence entry =
-  let published = match entry.mrtGoal
-    Some goal => lookupTraceEvidence goal evidence
-    None => None
-  MethodReturnTraceEntry {
-    mrtStage = entry.mrtStage,
-    mrtInterface = entry.mrtInterface,
-    mrtMethod = entry.mrtMethod,
-    mrtArguments = entry.mrtArguments,
-    mrtScope = entry.mrtScope,
-    mrtOrigin = entry.mrtOrigin,
-    mrtGoal = entry.mrtGoal,
-    mrtPublished = published,
-    mrtQualifiedBody = entry.mrtQualifiedBody,
-    mrtWanted = entry.mrtWanted,
-    mrtOutcome = entry.mrtOutcome,
-    mrtRoute = entry.mrtRoute,
-    mrtPrerequisites = entry.mrtPrerequisites,
-  }
-
-lookupTraceEvidence : EvId -> EvTable -> Option EvVal
-lookupTraceEvidence _ [] = None
-lookupTraceEvidence goal ((EvEntry candidate value) :: rest) =
-  if sameTraceEvId goal candidate then
-    Some value
-  else
-    lookupTraceEvidence goal rest
-
-sealMethodReturnGoals : GraphCtx ->
-  EvTable ->
-  List Obligation ->
-  (List Obligation, List MethodReturnMemoView)
-sealMethodReturnGoals gctx evidence goals =
-  sealMethodReturnGoalsFrom gctx evidence (reverse goals) ([], [])
-
--- Walks the goals last to first so each result list is built in input order, with
--- no recursion before the cons: the goal list of a program that imports `async` is
--- long enough to overflow the baseline-tier wasm stack in a browser worker.
-sealMethodReturnGoalsFrom : GraphCtx ->
-  EvTable ->
-  List Obligation ->
-  (List Obligation, List MethodReturnMemoView) ->
-  (List Obligation, List MethodReturnMemoView)
-sealMethodReturnGoalsFrom _gctx _ [] acc = acc
-sealMethodReturnGoalsFrom gctx evidence (goal :: rest) (goals, views) =
-  match exactReturnRequestOfGoal goal
-    Some request => sealMethodReturnGoalsFrom gctx evidence rest (
-      goals,
-      methodReturnMemoView gctx evidence goal request :: views,
-    )
-    None => sealMethodReturnGoalsFrom gctx evidence rest (goal :: goals, views)
-
-methodReturnMemoView : GraphCtx ->
-  EvTable ->
-  Obligation ->
-  MethodReturnRequest ->
-  MethodReturnMemoView
-methodReturnMemoView gctx evidence goal request =
-  let (outcome, prerequisites) = match request.mrrResolution.value
-    None => ("legacy", [])
-    Some resolution => (
-      methodReturnMemoOutcome resolution.mrrOutcome,
-      methodReturnMemoPrerequisites resolution.mrrOutcome,
-    )
-  MethodReturnMemoView {
-    mrmvInterface = methodReturnMemoIface request.mrrIface,
-    mrmvMethod = request.mrrName,
-    mrmvArguments =
-      map methodReturnMemoArguments (methodReturnArgs gctx request),
-    mrmvOutcome = outcome,
-    mrmvPrerequisites = prerequisites,
-    mrmvEvidence = methodReturnMemoEvidence goal.oEv evidence,
-  }
-
-methodReturnMemoArguments : List Mono -> List String
-methodReturnMemoArguments arguments = map ppMono arguments
-
-methodReturnMemoIface : IfaceRef -> String
-methodReturnMemoIface iface =
-  let identity = ifaceIdentity iface.irOrigin iface.irName
-  if identity == "" then iface.irName else identity
-
-methodReturnMemoOutcome : SolverOutcome -> String
-methodReturnMemoOutcome (Solved (GivenEvidence _)) = "given"
-methodReturnMemoOutcome (Solved (InstanceEvidence _ _ _ _)) = "instance"
-methodReturnMemoOutcome (Solved (SuperclassEvidence _ _)) = "superclass"
-methodReturnMemoOutcome (Deferred _ _) = "deferred"
-methodReturnMemoOutcome (Insoluble _ MissingInstance) = "missing"
-methodReturnMemoOutcome (Insoluble _ (AmbiguousInstances _)) = "ambiguous"
-methodReturnMemoOutcome (Insoluble _ (ResolutionCycle _)) = "cycle"
-
-methodReturnMemoPrerequisites : SolverOutcome -> List (String, List String)
-methodReturnMemoPrerequisites (Solved (InstanceEvidence _ _ prerequisites _)) =
-  map
-    (prerequisite => (
-      methodReturnMemoIface prerequisite.prerequisiteInterface,
-      map ppMono prerequisite.prerequisiteArguments,
-    ))
-    prerequisites
-methodReturnMemoPrerequisites _ = []
-
-methodReturnMemoEvidence : EvId -> EvTable -> String
-methodReturnMemoEvidence goal evidence = match lookupTraceEvidence goal evidence
-  Some (EvOne route) => methodReturnMemoRoute route
-  Some (EvMany routes) => join "," (map methodReturnMemoRoute routes)
-  Some (EvLit _ route) => methodReturnMemoRoute route
-  Some (EvHead head) => "head:\{head}"
-  None => "unpublished"
-
-methodReturnMemoRoute : Route -> String
-methodReturnMemoRoute RNone = "none"
-methodReturnMemoRoute (RKey key prerequisites supers) =
-  "key:\{key}[\{join "," (map methodReturnMemoRoute prerequisites)}]\{methodReturnMemoSupers supers}"
-methodReturnMemoRoute (RDict name) = "given:\{name}"
-methodReturnMemoRoute (RDictFwd name) = "forwarded:\{name}"
-methodReturnMemoRoute (RLocal name _) = "local:\{name}"
-methodReturnMemoRoute (RScalar name) = "scalar:\{name}"
-methodReturnMemoRoute (RProj r path) =
-  "projected:\{methodReturnMemoRoute r}.\{join "." (map intToString path)}"
-
-methodReturnMemoSupers : List Route -> String
-methodReturnMemoSupers [] = ""
-methodReturnMemoSupers supers =
-  "{\{join "," (map methodReturnMemoRoute supers)}}"
+-- Observation declarations exported for readers outside this module: the method-slot and
+-- method-return probes `tc_occurrence` and `tc_module` read.
 
 export
 methodSlotBoundIds : List MethodPredicateSlot -> List (List Int)
@@ -2381,19 +2237,9 @@ methodReturnProbeOblIfaces (obl :: rest) =
     PMethodLevel => [obl.pred.iface.irName]
     _ => []
   here ++ methodReturnProbeOblIfaces rest
-
--- The method-return views of [gctx]: its live exact-return goals, sealed.
-export
-methodReturnMemoCurrentViews : GraphCtx -> List MethodReturnMemoView
-methodReturnMemoCurrentViews gctx =
-  snd
-    (sealMethodReturnGoals
-      gctx
-      gctx.graphRun.evTable.value
-      gctx.graphRun.goals.value)
 # DESUGAR
-(DUse false (UseGroup ("types" "tc_types") ((mem "Provenance" true) (mem "OblProjection" true) (mem "GoalReach" true) (mem "GoalPayload" true) (mem "GivenScope" true) (mem "GivenProvenance" true) (mem "GivenMatch" true) (mem "AdmittedAnswer" true) (mem "AssumAnswer" true) (mem "BuiltinClass" true) (mem "EvDest" true) (mem "GoalKind" true) (mem "GoalWindow" true) (mem "GraphMarks" true) (mem "MethodReturnMemoView" true) (mem "MethodReturnResolution" true) (mem "MethodReturnTraceEntry" true) (mem "MethodReturnTraceStage" true) (mem "MethodTemplateGivenResult" true) (mem "Obligation" true) (mem "PendingDictApp" true) (mem "PredicateRequest" true) (mem "PredicateSlot" true) (mem "PredicateSlotArgs" true) (mem "SiteCtx" true) (mem "SiteKind" true) (mem "SolvedGoalEntry" true) (mem "Undetermined" true) (mem "UObligation" true) (mem "DynCtx" false) (mem "dynFor" false) (mem "GivenEntry" false) (mem "GraphCtx" false) (mem "ImplEnv" false) (mem "ImplRow" false) (mem "LocalAbs" false) (mem "MethodPredicateSlot" false) (mem "MethodPredicateTemplate" false) (mem "MethodReturnRequest" false) (mem "MethodRow" false) (mem "MethodSchemeRow" false) (mem "MethodTrackedInstantiation" false) (mem "ModuleCtx" false) (mem "NumAnchorTestObservation" false) (mem "PendingEntry" false) (mem "PendingMethodDict" false) (mem "RecDictApp" false) (mem "ReqWalk" false) (mem "TraceSink" false))))
-(DUse false (UseGroup ("types" "tc_mono") ((mem "allConcreteHeads" false) (mem "anyListM" false) (mem "cohApply" false) (mem "cohOverlap" false) (mem "cohOverlapGo" false) (mem "containsI" false) (mem "dedupI" false) (mem "exactReturnRequestOfGoal" false) (mem "findTvarInMono" false) (mem "headTyconMono" false) (mem "matchEqMono" false) (mem "matchOneSided" false) (mem "matchStep" false) (mem "matchTyMono" false) (mem "monoHeadIsDecl" false) (mem "monoMintedBefore" false) (mem "monoSameGiven" false) (mem "monoSizes" false) (mem "monoTyvarIds" false) (mem "monoUnboundIds" false) (mem "monoVarCells" false) (mem "monoVecSameGiven" false) (mem "monoVectorClosed" false) (mem "peelQual" false) (mem "rigidSigPairs" false) (mem "sigCellsOf" false) (mem "sigRigidBindings" false) (mem "stripArrows" false) (mem "stripTyConstraints" false) (mem "substMono" false) (mem "tconBuiltin" false) (mem "tyvarId" false) (mem "tyVarNames" false) (mem "walkMonosSame" false) (mem "unrigidSig" false))))
+(DUse false (UseGroup ("types" "tc_types") ((mem "Provenance" true) (mem "OblProjection" true) (mem "GoalReach" true) (mem "GoalPayload" true) (mem "GivenScope" true) (mem "GivenProvenance" true) (mem "GivenMatch" true) (mem "AdmittedAnswer" true) (mem "AssumAnswer" true) (mem "BuiltinClass" true) (mem "EvDest" true) (mem "GoalKind" true) (mem "GoalWindow" true) (mem "GraphMarks" true) (mem "MethodReturnMemoView" true) (mem "MethodReturnResolution" true) (mem "MethodReturnTraceEntry" true) (mem "MethodReturnTraceStage" true) (mem "MethodTemplateGivenResult" true) (mem "Obligation" true) (mem "PendingDictApp" true) (mem "PredicateRequest" true) (mem "PredicateSlot" true) (mem "PredicateSlotArgs" true) (mem "SiteCtx" true) (mem "SiteKind" true) (mem "SolvedGoalEntry" true) (mem "Undetermined" true) (mem "UObligation" true) (mem "DynCtx" false) (mem "dynFor" false) (mem "GivenEntry" false) (mem "GraphCtx" false) (mem "ImplEnv" false) (mem "ImplRow" false) (mem "LocalAbs" false) (mem "MethodPredicateSlot" false) (mem "MethodPredicateTemplate" false) (mem "MethodReturnRequest" false) (mem "MethodRow" false) (mem "MethodSchemeRow" false) (mem "MethodTrackedInstantiation" false) (mem "ModuleCtx" false) (mem "NumAnchorTestObservation" false) (mem "PendingEntry" false) (mem "PendingMethodDict" false) (mem "RecDictApp" false) (mem "ReqWalk" false))))
+(DUse false (UseGroup ("types" "tc_mono") ((mem "allConcreteHeads" false) (mem "anyListM" false) (mem "cohApply" false) (mem "cohOverlap" false) (mem "cohOverlapGo" false) (mem "containsI" false) (mem "dedupI" false) (mem "findTvarInMono" false) (mem "headTyconMono" false) (mem "matchEqMono" false) (mem "matchOneSided" false) (mem "matchStep" false) (mem "matchTyMono" false) (mem "monoHeadIsDecl" false) (mem "monoMintedBefore" false) (mem "monoSameGiven" false) (mem "monoSizes" false) (mem "monoTyvarIds" false) (mem "monoUnboundIds" false) (mem "monoVarCells" false) (mem "monoVecSameGiven" false) (mem "monoVectorClosed" false) (mem "peelQual" false) (mem "rigidSigPairs" false) (mem "sigCellsOf" false) (mem "sigRigidBindings" false) (mem "stripArrows" false) (mem "stripTyConstraints" false) (mem "substMono" false) (mem "tconBuiltin" false) (mem "tyvarId" false) (mem "tyVarNames" false) (mem "walkMonosSame" false) (mem "unrigidSig" false))))
 (DUse false (UseGroup ("types" "tc_state") ((mem "callUOblsWindow" false) (mem "currentScopeStore" false) (mem "moduleWindow" false))))
 (DUse false (UseGroup ("types" "tc_env") ((mem "anyArgMentions" false) (mem "dispatchTyparams" false) (mem "ieHeadRows" false) (mem "ieRowIfaceMatches" false) (mem "ieRowOfIface" false) (mem "ieRowsAll" false) (mem "ieRowTys" false) (mem "instRefSeq" false) (mem "methodArgs" false) (mem "methodRowIface" false) (mem "methodRowTestIface" false) (mem "methodSlotKey" false) (mem "originMethodName" false) (mem "sameIfaceDecl" false))))
 (DUse false (UseGroup ("types" "tc_diag") ((mem "erredDuring" false))))
@@ -2403,16 +2249,15 @@ methodReturnMemoCurrentViews gctx =
 (DUse false (UseGroup ("types" "tc_solve_givens") ((mem "activeDictPredOf" false) (mem "activeDictVarOfEncl" false) (mem "assumAnswerEvidence" false) (mem "assumAnswerRoute" false) (mem "enclSlot" false) (mem "givenInScope" false) (mem "givenRoute" false) (mem "givensForScope" false) (mem "goalMatchesGiven" false) (mem "noteAssumption" false) (mem "predicateRequestMatchesSlot" false) (mem "projectedGivenOf" false))))
 (DUse false (UseGroup ("types" "tc_solve_entail") ((mem "determinedGoalInstance" false) (mem "directSuperGoals" false) (mem "enteredGoalKey" false) (mem "freshRowHeads" false) (mem "goalCandidates" false) (mem "goalHeadCon" false) (mem "goalIsProjection" false) (mem "goalRows" false) (mem "ieSelectRowByIface" false) (mem "paramMonoOf" false) (mem "positionBindings" false) (mem "repeatedBindings" false) (mem "reqWalkMemo" false) (mem "reqWalkStart" false) (mem "routeOfD" false) (mem "rowCountsFor" false) (mem "rowHeadMatches" false) (mem "rowRouteKey" false) (mem "selectedCallSupers" false) (mem "selectedRowReqMatch" false) (mem "stableGoalReach" false) (mem "superRoutesAt" false) (mem "findMatchingImplReqsU" false))))
 (DUse false (UseGroup ("types" "solver_contract") ((mem "SolverFailure" true) (mem "ClassPredicate" true) (mem "GoalOrigin" true) (mem "Instantiation" true) (mem "InstantiationArgument" true) (mem "SolverBlocker" true) (mem "SolverOutcome" true) (mem "Wanted" true))))
-(DUse false (UseGroup ("frontend" "ast") ((mem "TyConOrigin" true) (mem "Ns" true) (mem "Lit" true) (mem "Expr" true) (mem "Decl" true) (mem "EvEntry" true) (mem "EvId" true) (mem "EvVal" true) (mem "IfaceMethod" true) (mem "ImplMethod" true) (mem "Loc" true) (mem "Require" true) (mem "Route" true) (mem "Ty" true) (mem "EvTable" false) (mem "ifaceIdentity" false) (mem "mkIdent" false) (mem "tyConBuiltin" false))))
+(DUse false (UseGroup ("frontend" "ast") ((mem "TyConOrigin" true) (mem "Ns" true) (mem "Lit" true) (mem "Expr" true) (mem "Decl" true) (mem "EvEntry" true) (mem "EvId" true) (mem "EvVal" true) (mem "IfaceMethod" true) (mem "ImplMethod" true) (mem "Loc" true) (mem "Require" true) (mem "Route" true) (mem "Ty" true) (mem "mkIdent" false) (mem "tyConBuiltin" false))))
 (DUse false (UseGroup ("types" "effect_rows") ((mem "EffRow" true) (mem "pureRow" false))))
 (DUse false (UseGroup ("types" "evidence") ((mem "SolverEvidence" true) (mem "PrerequisiteEvidence" true) (mem "RequestInstanceId" true) (mem "ScopeId" true) (mem "SuperEvidence" true) (mem "goalIdForDestination" false))))
 (DUse false (UseGroup ("types" "registry") ((mem "HeadKey" true) (mem "headKeyTag" false))))
-(DUse false (UseGroup ("types" "repr") ((mem "IfaceRef" true) (mem "Mono" true) (mem "lookupAssocI" false) (mem "normalize" false) (mem "ppMono" false) (mem "tupleSpine" false))))
+(DUse false (UseGroup ("types" "repr") ((mem "IfaceRef" true) (mem "Mono" true) (mem "lookupAssocI" false) (mem "normalize" false) (mem "tupleSpine" false))))
 (DUse false (UseGroup ("map") ((mem "Map" true))))
 (DUse false (UseGroup ("support" "ordmap") ((mem "omEmpty" false) (mem "omFromNames" false) (mem "omHasKey" false) (mem "omInsert" false) (mem "omLookup" false) (mem "OrdMap" false))))
 (DUse false (UseGroup ("support" "util") ((mem "allList" false) (mem "anyList" false) (mem "contains" false) (mem "dedup" false) (mem "endsWith" false) (mem "eqStr" false) (mem "filterList" false) (mem "isEmptyL" false) (mem "isNonEmptyL" false) (mem "listLen" false) (mem "lookupAssoc" false) (mem "orElseOpt" false) (mem "reverseL" false) (mem "splitOnChar" false))))
 (DUse false (UseGroup ("list") ((mem "drop" false) (mem "get" false) (mem "indexed" false) (mem "reverse" false) (mem "take" false) (mem "zip" false))))
-(DUse false (UseGroup ("string") ((mem "join" false))))
 (DUse false (UseGroup ("types" "evidence_complete") ((mem "innerNone" false))))
 (DUse false (UseAlias ("types" "scopes") "Scopes"))
 (DUse false (UseAlias ("map") "IdMap"))
@@ -2767,48 +2612,6 @@ methodReturnMemoCurrentViews gctx =
 (DFunDef false "siteKindMonos" ((PCon "SKOp" PWild)) (EListLit))
 (DFunDef false "siteKindMonos" ((PCon "SKPredicateOp" PWild PWild)) (EListLit))
 (DFunDef false "siteKindMonos" ((PCon "SKRLocal" PWild PWild (PVar "ms") PWild (PVar "vecs"))) (EBinOp "++" (EVar "ms") (EApp (EApp (EVar "flatMap") (EVar "identity")) (EVar "vecs"))))
-(DTypeSig true "finishMethodReturnTrace" (TyFun (TyCon "TraceSink") (TyFun (TyCon "EvTable") (TyApp (TyCon "List") (TyCon "MethodReturnTraceEntry")))))
-(DFunDef false "finishMethodReturnTrace" ((PVar "sink") (PVar "evidence")) (EApp (EApp (EVar "map") (EApp (EVar "publishMethodReturnTrace") (EVar "evidence"))) (EApp (EVar "reverse") (EFieldAccess (EFieldAccess (EVar "sink") "tsMethodReturnEntries") "value"))))
-(DTypeSig false "publishMethodReturnTrace" (TyFun (TyCon "EvTable") (TyFun (TyCon "MethodReturnTraceEntry") (TyCon "MethodReturnTraceEntry"))))
-(DFunDef false "publishMethodReturnTrace" ((PVar "evidence") (PVar "entry")) (EBlock (DoLet false false (PVar "published") (EMatch (EFieldAccess (EVar "entry") "mrtGoal") (arm (PCon "Some" (PVar "goal")) () (EApp (EApp (EVar "lookupTraceEvidence") (EVar "goal")) (EVar "evidence"))) (arm (PCon "None") () (EVar "None")))) (DoExpr (ERecordCreate "MethodReturnTraceEntry" ((fa "mrtStage" (EFieldAccess (EVar "entry") "mrtStage")) (fa "mrtInterface" (EFieldAccess (EVar "entry") "mrtInterface")) (fa "mrtMethod" (EFieldAccess (EVar "entry") "mrtMethod")) (fa "mrtArguments" (EFieldAccess (EVar "entry") "mrtArguments")) (fa "mrtScope" (EFieldAccess (EVar "entry") "mrtScope")) (fa "mrtOrigin" (EFieldAccess (EVar "entry") "mrtOrigin")) (fa "mrtGoal" (EFieldAccess (EVar "entry") "mrtGoal")) (fa "mrtPublished" (EVar "published")) (fa "mrtQualifiedBody" (EFieldAccess (EVar "entry") "mrtQualifiedBody")) (fa "mrtWanted" (EFieldAccess (EVar "entry") "mrtWanted")) (fa "mrtOutcome" (EFieldAccess (EVar "entry") "mrtOutcome")) (fa "mrtRoute" (EFieldAccess (EVar "entry") "mrtRoute")) (fa "mrtPrerequisites" (EFieldAccess (EVar "entry") "mrtPrerequisites")))))))
-(DTypeSig false "lookupTraceEvidence" (TyFun (TyCon "EvId") (TyFun (TyCon "EvTable") (TyApp (TyCon "Option") (TyCon "EvVal")))))
-(DFunDef false "lookupTraceEvidence" (PWild (PList)) (EVar "None"))
-(DFunDef false "lookupTraceEvidence" ((PVar "goal") (PCons (PCon "EvEntry" (PVar "candidate") (PVar "value")) (PVar "rest"))) (EIf (EApp (EApp (EVar "sameTraceEvId") (EVar "goal")) (EVar "candidate")) (EApp (EVar "Some") (EVar "value")) (EApp (EApp (EVar "lookupTraceEvidence") (EVar "goal")) (EVar "rest"))))
-(DTypeSig false "sealMethodReturnGoals" (TyFun (TyCon "GraphCtx") (TyFun (TyCon "EvTable") (TyFun (TyApp (TyCon "List") (TyCon "Obligation")) (TyTuple (TyApp (TyCon "List") (TyCon "Obligation")) (TyApp (TyCon "List") (TyCon "MethodReturnMemoView")))))))
-(DFunDef false "sealMethodReturnGoals" ((PVar "gctx") (PVar "evidence") (PVar "goals")) (EApp (EApp (EApp (EApp (EVar "sealMethodReturnGoalsFrom") (EVar "gctx")) (EVar "evidence")) (EApp (EVar "reverse") (EVar "goals"))) (ETuple (EListLit) (EListLit))))
-(DTypeSig false "sealMethodReturnGoalsFrom" (TyFun (TyCon "GraphCtx") (TyFun (TyCon "EvTable") (TyFun (TyApp (TyCon "List") (TyCon "Obligation")) (TyFun (TyTuple (TyApp (TyCon "List") (TyCon "Obligation")) (TyApp (TyCon "List") (TyCon "MethodReturnMemoView"))) (TyTuple (TyApp (TyCon "List") (TyCon "Obligation")) (TyApp (TyCon "List") (TyCon "MethodReturnMemoView"))))))))
-(DFunDef false "sealMethodReturnGoalsFrom" ((PVar "_gctx") PWild (PList) (PVar "acc")) (EVar "acc"))
-(DFunDef false "sealMethodReturnGoalsFrom" ((PVar "gctx") (PVar "evidence") (PCons (PVar "goal") (PVar "rest")) (PTuple (PVar "goals") (PVar "views"))) (EMatch (EApp (EVar "exactReturnRequestOfGoal") (EVar "goal")) (arm (PCon "Some" (PVar "request")) () (EApp (EApp (EApp (EApp (EVar "sealMethodReturnGoalsFrom") (EVar "gctx")) (EVar "evidence")) (EVar "rest")) (ETuple (EVar "goals") (EBinOp "::" (EApp (EApp (EApp (EApp (EVar "methodReturnMemoView") (EVar "gctx")) (EVar "evidence")) (EVar "goal")) (EVar "request")) (EVar "views"))))) (arm (PCon "None") () (EApp (EApp (EApp (EApp (EVar "sealMethodReturnGoalsFrom") (EVar "gctx")) (EVar "evidence")) (EVar "rest")) (ETuple (EBinOp "::" (EVar "goal") (EVar "goals")) (EVar "views"))))))
-(DTypeSig false "methodReturnMemoView" (TyFun (TyCon "GraphCtx") (TyFun (TyCon "EvTable") (TyFun (TyCon "Obligation") (TyFun (TyCon "MethodReturnRequest") (TyCon "MethodReturnMemoView"))))))
-(DFunDef false "methodReturnMemoView" ((PVar "gctx") (PVar "evidence") (PVar "goal") (PVar "request")) (EBlock (DoLet false false (PTuple (PVar "outcome") (PVar "prerequisites")) (EMatch (EFieldAccess (EFieldAccess (EVar "request") "mrrResolution") "value") (arm (PCon "None") () (ETuple (ELit (LString "legacy")) (EListLit))) (arm (PCon "Some" (PVar "resolution")) () (ETuple (EApp (EVar "methodReturnMemoOutcome") (EFieldAccess (EVar "resolution") "mrrOutcome")) (EApp (EVar "methodReturnMemoPrerequisites") (EFieldAccess (EVar "resolution") "mrrOutcome")))))) (DoExpr (ERecordCreate "MethodReturnMemoView" ((fa "mrmvInterface" (EApp (EVar "methodReturnMemoIface") (EFieldAccess (EVar "request") "mrrIface"))) (fa "mrmvMethod" (EFieldAccess (EVar "request") "mrrName")) (fa "mrmvArguments" (EApp (EApp (EVar "map") (EVar "methodReturnMemoArguments")) (EApp (EApp (EVar "methodReturnArgs") (EVar "gctx")) (EVar "request")))) (fa "mrmvOutcome" (EVar "outcome")) (fa "mrmvPrerequisites" (EVar "prerequisites")) (fa "mrmvEvidence" (EApp (EApp (EVar "methodReturnMemoEvidence") (EFieldAccess (EVar "goal") "oEv")) (EVar "evidence"))))))))
-(DTypeSig false "methodReturnMemoArguments" (TyFun (TyApp (TyCon "List") (TyCon "Mono")) (TyApp (TyCon "List") (TyCon "String"))))
-(DFunDef false "methodReturnMemoArguments" ((PVar "arguments")) (EApp (EApp (EVar "map") (EVar "ppMono")) (EVar "arguments")))
-(DTypeSig false "methodReturnMemoIface" (TyFun (TyCon "IfaceRef") (TyCon "String")))
-(DFunDef false "methodReturnMemoIface" ((PVar "iface")) (EBlock (DoLet false false (PVar "identity") (EApp (EApp (EVar "ifaceIdentity") (EFieldAccess (EVar "iface") "irOrigin")) (EFieldAccess (EVar "iface") "irName"))) (DoExpr (EIf (EBinOp "==" (EVar "identity") (ELit (LString ""))) (EFieldAccess (EVar "iface") "irName") (EVar "identity")))))
-(DTypeSig false "methodReturnMemoOutcome" (TyFun (TyCon "SolverOutcome") (TyCon "String")))
-(DFunDef false "methodReturnMemoOutcome" ((PCon "Solved" (PCon "GivenEvidence" PWild))) (ELit (LString "given")))
-(DFunDef false "methodReturnMemoOutcome" ((PCon "Solved" (PCon "InstanceEvidence" PWild PWild PWild PWild))) (ELit (LString "instance")))
-(DFunDef false "methodReturnMemoOutcome" ((PCon "Solved" (PCon "SuperclassEvidence" PWild PWild))) (ELit (LString "superclass")))
-(DFunDef false "methodReturnMemoOutcome" ((PCon "Deferred" PWild PWild)) (ELit (LString "deferred")))
-(DFunDef false "methodReturnMemoOutcome" ((PCon "Insoluble" PWild (PCon "MissingInstance"))) (ELit (LString "missing")))
-(DFunDef false "methodReturnMemoOutcome" ((PCon "Insoluble" PWild (PCon "AmbiguousInstances" PWild))) (ELit (LString "ambiguous")))
-(DFunDef false "methodReturnMemoOutcome" ((PCon "Insoluble" PWild (PCon "ResolutionCycle" PWild))) (ELit (LString "cycle")))
-(DTypeSig false "methodReturnMemoPrerequisites" (TyFun (TyCon "SolverOutcome") (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "String"))))))
-(DFunDef false "methodReturnMemoPrerequisites" ((PCon "Solved" (PCon "InstanceEvidence" PWild PWild (PVar "prerequisites") PWild))) (EApp (EApp (EVar "map") (ELam ((PVar "prerequisite")) (ETuple (EApp (EVar "methodReturnMemoIface") (EFieldAccess (EVar "prerequisite") "prerequisiteInterface")) (EApp (EApp (EVar "map") (EVar "ppMono")) (EFieldAccess (EVar "prerequisite") "prerequisiteArguments"))))) (EVar "prerequisites")))
-(DFunDef false "methodReturnMemoPrerequisites" (PWild) (EListLit))
-(DTypeSig false "methodReturnMemoEvidence" (TyFun (TyCon "EvId") (TyFun (TyCon "EvTable") (TyCon "String"))))
-(DFunDef false "methodReturnMemoEvidence" ((PVar "goal") (PVar "evidence")) (EMatch (EApp (EApp (EVar "lookupTraceEvidence") (EVar "goal")) (EVar "evidence")) (arm (PCon "Some" (PCon "EvOne" (PVar "route"))) () (EApp (EVar "methodReturnMemoRoute") (EVar "route"))) (arm (PCon "Some" (PCon "EvMany" (PVar "routes"))) () (EApp (EApp (EVar "join") (ELit (LString ","))) (EApp (EApp (EVar "map") (EVar "methodReturnMemoRoute")) (EVar "routes")))) (arm (PCon "Some" (PCon "EvLit" PWild (PVar "route"))) () (EApp (EVar "methodReturnMemoRoute") (EVar "route"))) (arm (PCon "Some" (PCon "EvHead" (PVar "head"))) () (EBinOp "++" (EBinOp "++" (ELit (LString "head:")) (EApp (EVar "display") (EVar "head"))) (ELit (LString "")))) (arm (PCon "None") () (ELit (LString "unpublished")))))
-(DTypeSig false "methodReturnMemoRoute" (TyFun (TyCon "Route") (TyCon "String")))
-(DFunDef false "methodReturnMemoRoute" ((PCon "RNone")) (ELit (LString "none")))
-(DFunDef false "methodReturnMemoRoute" ((PCon "RKey" (PVar "key") (PVar "prerequisites") (PVar "supers"))) (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "key:")) (EApp (EVar "display") (EVar "key"))) (ELit (LString "["))) (EApp (EVar "display") (EApp (EApp (EVar "join") (ELit (LString ","))) (EApp (EApp (EVar "map") (EVar "methodReturnMemoRoute")) (EVar "prerequisites"))))) (ELit (LString "]"))) (EApp (EVar "display") (EApp (EVar "methodReturnMemoSupers") (EVar "supers")))) (ELit (LString ""))))
-(DFunDef false "methodReturnMemoRoute" ((PCon "RDict" (PVar "name"))) (EBinOp "++" (EBinOp "++" (ELit (LString "given:")) (EApp (EVar "display") (EVar "name"))) (ELit (LString ""))))
-(DFunDef false "methodReturnMemoRoute" ((PCon "RDictFwd" (PVar "name"))) (EBinOp "++" (EBinOp "++" (ELit (LString "forwarded:")) (EApp (EVar "display") (EVar "name"))) (ELit (LString ""))))
-(DFunDef false "methodReturnMemoRoute" ((PCon "RLocal" (PVar "name") PWild)) (EBinOp "++" (EBinOp "++" (ELit (LString "local:")) (EApp (EVar "display") (EVar "name"))) (ELit (LString ""))))
-(DFunDef false "methodReturnMemoRoute" ((PCon "RScalar" (PVar "name"))) (EBinOp "++" (EBinOp "++" (ELit (LString "scalar:")) (EApp (EVar "display") (EVar "name"))) (ELit (LString ""))))
-(DFunDef false "methodReturnMemoRoute" ((PCon "RProj" (PVar "r") (PVar "path"))) (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "projected:")) (EApp (EVar "display") (EApp (EVar "methodReturnMemoRoute") (EVar "r")))) (ELit (LString "."))) (EApp (EVar "display") (EApp (EApp (EVar "join") (ELit (LString "."))) (EApp (EApp (EVar "map") (EVar "intToString")) (EVar "path"))))) (ELit (LString ""))))
-(DTypeSig false "methodReturnMemoSupers" (TyFun (TyApp (TyCon "List") (TyCon "Route")) (TyCon "String")))
-(DFunDef false "methodReturnMemoSupers" ((PList)) (ELit (LString "")))
-(DFunDef false "methodReturnMemoSupers" ((PVar "supers")) (EBinOp "++" (EBinOp "++" (ELit (LString "{")) (EApp (EVar "display") (EApp (EApp (EVar "join") (ELit (LString ","))) (EApp (EApp (EVar "map") (EVar "methodReturnMemoRoute")) (EVar "supers"))))) (ELit (LString "}"))))
 (DTypeSig true "methodSlotBoundIds" (TyFun (TyApp (TyCon "List") (TyCon "MethodPredicateSlot")) (TyApp (TyCon "List") (TyApp (TyCon "List") (TyCon "Int")))))
 (DFunDef false "methodSlotBoundIds" ((PVar "slots")) (EApp (EApp (EVar "map") (ELam ((PVar "slot")) (EFieldAccess (EFieldAccess (EVar "slot") "mpsPredicate") "psBoundIds"))) (EVar "slots")))
 (DTypeSig true "methodSlotPositions" (TyFun (TyApp (TyCon "List") (TyCon "MethodPredicateSlot")) (TyApp (TyCon "List") (TyApp (TyCon "List") (TyCon "Int")))))
@@ -2846,11 +2649,9 @@ methodReturnMemoCurrentViews gctx =
 (DTypeSig true "methodReturnProbeOblIfaces" (TyFun (TyApp (TyCon "List") (TyCon "UObligation")) (TyApp (TyCon "List") (TyCon "String"))))
 (DFunDef false "methodReturnProbeOblIfaces" ((PList)) (EListLit))
 (DFunDef false "methodReturnProbeOblIfaces" ((PCons (PVar "obl") (PVar "rest"))) (EBlock (DoLet false false (PVar "here") (EMatch (EFieldAccess (EVar "obl") "prov") (arm (PCon "PMethodLevel") () (EListLit (EFieldAccess (EFieldAccess (EFieldAccess (EVar "obl") "pred") "iface") "irName"))) (arm PWild () (EListLit)))) (DoExpr (EBinOp "++" (EVar "here") (EApp (EVar "methodReturnProbeOblIfaces") (EVar "rest"))))))
-(DTypeSig true "methodReturnMemoCurrentViews" (TyFun (TyCon "GraphCtx") (TyApp (TyCon "List") (TyCon "MethodReturnMemoView"))))
-(DFunDef false "methodReturnMemoCurrentViews" ((PVar "gctx")) (EApp (EVar "snd") (EApp (EApp (EApp (EVar "sealMethodReturnGoals") (EVar "gctx")) (EFieldAccess (EFieldAccess (EFieldAccess (EVar "gctx") "graphRun") "evTable") "value")) (EFieldAccess (EFieldAccess (EFieldAccess (EVar "gctx") "graphRun") "goals") "value"))))
 # MARK
-(DUse false (UseGroup ("types" "tc_types") ((mem "Provenance" true) (mem "OblProjection" true) (mem "GoalReach" true) (mem "GoalPayload" true) (mem "GivenScope" true) (mem "GivenProvenance" true) (mem "GivenMatch" true) (mem "AdmittedAnswer" true) (mem "AssumAnswer" true) (mem "BuiltinClass" true) (mem "EvDest" true) (mem "GoalKind" true) (mem "GoalWindow" true) (mem "GraphMarks" true) (mem "MethodReturnMemoView" true) (mem "MethodReturnResolution" true) (mem "MethodReturnTraceEntry" true) (mem "MethodReturnTraceStage" true) (mem "MethodTemplateGivenResult" true) (mem "Obligation" true) (mem "PendingDictApp" true) (mem "PredicateRequest" true) (mem "PredicateSlot" true) (mem "PredicateSlotArgs" true) (mem "SiteCtx" true) (mem "SiteKind" true) (mem "SolvedGoalEntry" true) (mem "Undetermined" true) (mem "UObligation" true) (mem "DynCtx" false) (mem "dynFor" false) (mem "GivenEntry" false) (mem "GraphCtx" false) (mem "ImplEnv" false) (mem "ImplRow" false) (mem "LocalAbs" false) (mem "MethodPredicateSlot" false) (mem "MethodPredicateTemplate" false) (mem "MethodReturnRequest" false) (mem "MethodRow" false) (mem "MethodSchemeRow" false) (mem "MethodTrackedInstantiation" false) (mem "ModuleCtx" false) (mem "NumAnchorTestObservation" false) (mem "PendingEntry" false) (mem "PendingMethodDict" false) (mem "RecDictApp" false) (mem "ReqWalk" false) (mem "TraceSink" false))))
-(DUse false (UseGroup ("types" "tc_mono") ((mem "allConcreteHeads" false) (mem "anyListM" false) (mem "cohApply" false) (mem "cohOverlap" false) (mem "cohOverlapGo" false) (mem "containsI" false) (mem "dedupI" false) (mem "exactReturnRequestOfGoal" false) (mem "findTvarInMono" false) (mem "headTyconMono" false) (mem "matchEqMono" false) (mem "matchOneSided" false) (mem "matchStep" false) (mem "matchTyMono" false) (mem "monoHeadIsDecl" false) (mem "monoMintedBefore" false) (mem "monoSameGiven" false) (mem "monoSizes" false) (mem "monoTyvarIds" false) (mem "monoUnboundIds" false) (mem "monoVarCells" false) (mem "monoVecSameGiven" false) (mem "monoVectorClosed" false) (mem "peelQual" false) (mem "rigidSigPairs" false) (mem "sigCellsOf" false) (mem "sigRigidBindings" false) (mem "stripArrows" false) (mem "stripTyConstraints" false) (mem "substMono" false) (mem "tconBuiltin" false) (mem "tyvarId" false) (mem "tyVarNames" false) (mem "walkMonosSame" false) (mem "unrigidSig" false))))
+(DUse false (UseGroup ("types" "tc_types") ((mem "Provenance" true) (mem "OblProjection" true) (mem "GoalReach" true) (mem "GoalPayload" true) (mem "GivenScope" true) (mem "GivenProvenance" true) (mem "GivenMatch" true) (mem "AdmittedAnswer" true) (mem "AssumAnswer" true) (mem "BuiltinClass" true) (mem "EvDest" true) (mem "GoalKind" true) (mem "GoalWindow" true) (mem "GraphMarks" true) (mem "MethodReturnMemoView" true) (mem "MethodReturnResolution" true) (mem "MethodReturnTraceEntry" true) (mem "MethodReturnTraceStage" true) (mem "MethodTemplateGivenResult" true) (mem "Obligation" true) (mem "PendingDictApp" true) (mem "PredicateRequest" true) (mem "PredicateSlot" true) (mem "PredicateSlotArgs" true) (mem "SiteCtx" true) (mem "SiteKind" true) (mem "SolvedGoalEntry" true) (mem "Undetermined" true) (mem "UObligation" true) (mem "DynCtx" false) (mem "dynFor" false) (mem "GivenEntry" false) (mem "GraphCtx" false) (mem "ImplEnv" false) (mem "ImplRow" false) (mem "LocalAbs" false) (mem "MethodPredicateSlot" false) (mem "MethodPredicateTemplate" false) (mem "MethodReturnRequest" false) (mem "MethodRow" false) (mem "MethodSchemeRow" false) (mem "MethodTrackedInstantiation" false) (mem "ModuleCtx" false) (mem "NumAnchorTestObservation" false) (mem "PendingEntry" false) (mem "PendingMethodDict" false) (mem "RecDictApp" false) (mem "ReqWalk" false))))
+(DUse false (UseGroup ("types" "tc_mono") ((mem "allConcreteHeads" false) (mem "anyListM" false) (mem "cohApply" false) (mem "cohOverlap" false) (mem "cohOverlapGo" false) (mem "containsI" false) (mem "dedupI" false) (mem "findTvarInMono" false) (mem "headTyconMono" false) (mem "matchEqMono" false) (mem "matchOneSided" false) (mem "matchStep" false) (mem "matchTyMono" false) (mem "monoHeadIsDecl" false) (mem "monoMintedBefore" false) (mem "monoSameGiven" false) (mem "monoSizes" false) (mem "monoTyvarIds" false) (mem "monoUnboundIds" false) (mem "monoVarCells" false) (mem "monoVecSameGiven" false) (mem "monoVectorClosed" false) (mem "peelQual" false) (mem "rigidSigPairs" false) (mem "sigCellsOf" false) (mem "sigRigidBindings" false) (mem "stripArrows" false) (mem "stripTyConstraints" false) (mem "substMono" false) (mem "tconBuiltin" false) (mem "tyvarId" false) (mem "tyVarNames" false) (mem "walkMonosSame" false) (mem "unrigidSig" false))))
 (DUse false (UseGroup ("types" "tc_state") ((mem "callUOblsWindow" false) (mem "currentScopeStore" false) (mem "moduleWindow" false))))
 (DUse false (UseGroup ("types" "tc_env") ((mem "anyArgMentions" false) (mem "dispatchTyparams" false) (mem "ieHeadRows" false) (mem "ieRowIfaceMatches" false) (mem "ieRowOfIface" false) (mem "ieRowsAll" false) (mem "ieRowTys" false) (mem "instRefSeq" false) (mem "methodArgs" false) (mem "methodRowIface" false) (mem "methodRowTestIface" false) (mem "methodSlotKey" false) (mem "originMethodName" false) (mem "sameIfaceDecl" false))))
 (DUse false (UseGroup ("types" "tc_diag") ((mem "erredDuring" false))))
@@ -2860,16 +2661,15 @@ methodReturnMemoCurrentViews gctx =
 (DUse false (UseGroup ("types" "tc_solve_givens") ((mem "activeDictPredOf" false) (mem "activeDictVarOfEncl" false) (mem "assumAnswerEvidence" false) (mem "assumAnswerRoute" false) (mem "enclSlot" false) (mem "givenInScope" false) (mem "givenRoute" false) (mem "givensForScope" false) (mem "goalMatchesGiven" false) (mem "noteAssumption" false) (mem "predicateRequestMatchesSlot" false) (mem "projectedGivenOf" false))))
 (DUse false (UseGroup ("types" "tc_solve_entail") ((mem "determinedGoalInstance" false) (mem "directSuperGoals" false) (mem "enteredGoalKey" false) (mem "freshRowHeads" false) (mem "goalCandidates" false) (mem "goalHeadCon" false) (mem "goalIsProjection" false) (mem "goalRows" false) (mem "ieSelectRowByIface" false) (mem "paramMonoOf" false) (mem "positionBindings" false) (mem "repeatedBindings" false) (mem "reqWalkMemo" false) (mem "reqWalkStart" false) (mem "routeOfD" false) (mem "rowCountsFor" false) (mem "rowHeadMatches" false) (mem "rowRouteKey" false) (mem "selectedCallSupers" false) (mem "selectedRowReqMatch" false) (mem "stableGoalReach" false) (mem "superRoutesAt" false) (mem "findMatchingImplReqsU" false))))
 (DUse false (UseGroup ("types" "solver_contract") ((mem "SolverFailure" true) (mem "ClassPredicate" true) (mem "GoalOrigin" true) (mem "Instantiation" true) (mem "InstantiationArgument" true) (mem "SolverBlocker" true) (mem "SolverOutcome" true) (mem "Wanted" true))))
-(DUse false (UseGroup ("frontend" "ast") ((mem "TyConOrigin" true) (mem "Ns" true) (mem "Lit" true) (mem "Expr" true) (mem "Decl" true) (mem "EvEntry" true) (mem "EvId" true) (mem "EvVal" true) (mem "IfaceMethod" true) (mem "ImplMethod" true) (mem "Loc" true) (mem "Require" true) (mem "Route" true) (mem "Ty" true) (mem "EvTable" false) (mem "ifaceIdentity" false) (mem "mkIdent" false) (mem "tyConBuiltin" false))))
+(DUse false (UseGroup ("frontend" "ast") ((mem "TyConOrigin" true) (mem "Ns" true) (mem "Lit" true) (mem "Expr" true) (mem "Decl" true) (mem "EvEntry" true) (mem "EvId" true) (mem "EvVal" true) (mem "IfaceMethod" true) (mem "ImplMethod" true) (mem "Loc" true) (mem "Require" true) (mem "Route" true) (mem "Ty" true) (mem "mkIdent" false) (mem "tyConBuiltin" false))))
 (DUse false (UseGroup ("types" "effect_rows") ((mem "EffRow" true) (mem "pureRow" false))))
 (DUse false (UseGroup ("types" "evidence") ((mem "SolverEvidence" true) (mem "PrerequisiteEvidence" true) (mem "RequestInstanceId" true) (mem "ScopeId" true) (mem "SuperEvidence" true) (mem "goalIdForDestination" false))))
 (DUse false (UseGroup ("types" "registry") ((mem "HeadKey" true) (mem "headKeyTag" false))))
-(DUse false (UseGroup ("types" "repr") ((mem "IfaceRef" true) (mem "Mono" true) (mem "lookupAssocI" false) (mem "normalize" false) (mem "ppMono" false) (mem "tupleSpine" false))))
+(DUse false (UseGroup ("types" "repr") ((mem "IfaceRef" true) (mem "Mono" true) (mem "lookupAssocI" false) (mem "normalize" false) (mem "tupleSpine" false))))
 (DUse false (UseGroup ("map") ((mem "Map" true))))
 (DUse false (UseGroup ("support" "ordmap") ((mem "omEmpty" false) (mem "omFromNames" false) (mem "omHasKey" false) (mem "omInsert" false) (mem "omLookup" false) (mem "OrdMap" false))))
 (DUse false (UseGroup ("support" "util") ((mem "allList" false) (mem "anyList" false) (mem "contains" false) (mem "dedup" false) (mem "endsWith" false) (mem "eqStr" false) (mem "filterList" false) (mem "isEmptyL" false) (mem "isNonEmptyL" false) (mem "listLen" false) (mem "lookupAssoc" false) (mem "orElseOpt" false) (mem "reverseL" false) (mem "splitOnChar" false))))
 (DUse false (UseGroup ("list") ((mem "drop" false) (mem "get" false) (mem "indexed" false) (mem "reverse" false) (mem "take" false) (mem "zip" false))))
-(DUse false (UseGroup ("string") ((mem "join" false))))
 (DUse false (UseGroup ("types" "evidence_complete") ((mem "innerNone" false))))
 (DUse false (UseAlias ("types" "scopes") "Scopes"))
 (DUse false (UseAlias ("map") "IdMap"))
@@ -3224,48 +3024,6 @@ methodReturnMemoCurrentViews gctx =
 (DFunDef false "siteKindMonos" ((PCon "SKOp" PWild)) (EListLit))
 (DFunDef false "siteKindMonos" ((PCon "SKPredicateOp" PWild PWild)) (EListLit))
 (DFunDef false "siteKindMonos" ((PCon "SKRLocal" PWild PWild (PVar "ms") PWild (PVar "vecs"))) (EBinOp "++" (EVar "ms") (EApp (EApp (EDictApp "flatMap") (EVar "identity")) (EVar "vecs"))))
-(DTypeSig true "finishMethodReturnTrace" (TyFun (TyCon "TraceSink") (TyFun (TyCon "EvTable") (TyApp (TyCon "List") (TyCon "MethodReturnTraceEntry")))))
-(DFunDef false "finishMethodReturnTrace" ((PVar "sink") (PVar "evidence")) (EApp (EApp (EMethodRef "map") (EApp (EVar "publishMethodReturnTrace") (EVar "evidence"))) (EApp (EVar "reverse") (EFieldAccess (EFieldAccess (EVar "sink") "tsMethodReturnEntries") "value"))))
-(DTypeSig false "publishMethodReturnTrace" (TyFun (TyCon "EvTable") (TyFun (TyCon "MethodReturnTraceEntry") (TyCon "MethodReturnTraceEntry"))))
-(DFunDef false "publishMethodReturnTrace" ((PVar "evidence") (PVar "entry")) (EBlock (DoLet false false (PVar "published") (EMatch (EFieldAccess (EVar "entry") "mrtGoal") (arm (PCon "Some" (PVar "goal")) () (EApp (EApp (EVar "lookupTraceEvidence") (EVar "goal")) (EVar "evidence"))) (arm (PCon "None") () (EVar "None")))) (DoExpr (ERecordCreate "MethodReturnTraceEntry" ((fa "mrtStage" (EFieldAccess (EVar "entry") "mrtStage")) (fa "mrtInterface" (EFieldAccess (EVar "entry") "mrtInterface")) (fa "mrtMethod" (EFieldAccess (EVar "entry") "mrtMethod")) (fa "mrtArguments" (EFieldAccess (EVar "entry") "mrtArguments")) (fa "mrtScope" (EFieldAccess (EVar "entry") "mrtScope")) (fa "mrtOrigin" (EFieldAccess (EVar "entry") "mrtOrigin")) (fa "mrtGoal" (EFieldAccess (EVar "entry") "mrtGoal")) (fa "mrtPublished" (EVar "published")) (fa "mrtQualifiedBody" (EFieldAccess (EVar "entry") "mrtQualifiedBody")) (fa "mrtWanted" (EFieldAccess (EVar "entry") "mrtWanted")) (fa "mrtOutcome" (EFieldAccess (EVar "entry") "mrtOutcome")) (fa "mrtRoute" (EFieldAccess (EVar "entry") "mrtRoute")) (fa "mrtPrerequisites" (EFieldAccess (EVar "entry") "mrtPrerequisites")))))))
-(DTypeSig false "lookupTraceEvidence" (TyFun (TyCon "EvId") (TyFun (TyCon "EvTable") (TyApp (TyCon "Option") (TyCon "EvVal")))))
-(DFunDef false "lookupTraceEvidence" (PWild (PList)) (EVar "None"))
-(DFunDef false "lookupTraceEvidence" ((PVar "goal") (PCons (PCon "EvEntry" (PVar "candidate") (PVar "value")) (PVar "rest"))) (EIf (EApp (EApp (EVar "sameTraceEvId") (EVar "goal")) (EVar "candidate")) (EApp (EVar "Some") (EVar "value")) (EApp (EApp (EVar "lookupTraceEvidence") (EVar "goal")) (EVar "rest"))))
-(DTypeSig false "sealMethodReturnGoals" (TyFun (TyCon "GraphCtx") (TyFun (TyCon "EvTable") (TyFun (TyApp (TyCon "List") (TyCon "Obligation")) (TyTuple (TyApp (TyCon "List") (TyCon "Obligation")) (TyApp (TyCon "List") (TyCon "MethodReturnMemoView")))))))
-(DFunDef false "sealMethodReturnGoals" ((PVar "gctx") (PVar "evidence") (PVar "goals")) (EApp (EApp (EApp (EApp (EVar "sealMethodReturnGoalsFrom") (EVar "gctx")) (EVar "evidence")) (EApp (EVar "reverse") (EVar "goals"))) (ETuple (EListLit) (EListLit))))
-(DTypeSig false "sealMethodReturnGoalsFrom" (TyFun (TyCon "GraphCtx") (TyFun (TyCon "EvTable") (TyFun (TyApp (TyCon "List") (TyCon "Obligation")) (TyFun (TyTuple (TyApp (TyCon "List") (TyCon "Obligation")) (TyApp (TyCon "List") (TyCon "MethodReturnMemoView"))) (TyTuple (TyApp (TyCon "List") (TyCon "Obligation")) (TyApp (TyCon "List") (TyCon "MethodReturnMemoView"))))))))
-(DFunDef false "sealMethodReturnGoalsFrom" ((PVar "_gctx") PWild (PList) (PVar "acc")) (EVar "acc"))
-(DFunDef false "sealMethodReturnGoalsFrom" ((PVar "gctx") (PVar "evidence") (PCons (PVar "goal") (PVar "rest")) (PTuple (PVar "goals") (PVar "views"))) (EMatch (EApp (EVar "exactReturnRequestOfGoal") (EVar "goal")) (arm (PCon "Some" (PVar "request")) () (EApp (EApp (EApp (EApp (EVar "sealMethodReturnGoalsFrom") (EVar "gctx")) (EVar "evidence")) (EVar "rest")) (ETuple (EVar "goals") (EBinOp "::" (EApp (EApp (EApp (EApp (EVar "methodReturnMemoView") (EVar "gctx")) (EVar "evidence")) (EVar "goal")) (EVar "request")) (EVar "views"))))) (arm (PCon "None") () (EApp (EApp (EApp (EApp (EVar "sealMethodReturnGoalsFrom") (EVar "gctx")) (EVar "evidence")) (EVar "rest")) (ETuple (EBinOp "::" (EVar "goal") (EVar "goals")) (EVar "views"))))))
-(DTypeSig false "methodReturnMemoView" (TyFun (TyCon "GraphCtx") (TyFun (TyCon "EvTable") (TyFun (TyCon "Obligation") (TyFun (TyCon "MethodReturnRequest") (TyCon "MethodReturnMemoView"))))))
-(DFunDef false "methodReturnMemoView" ((PVar "gctx") (PVar "evidence") (PVar "goal") (PVar "request")) (EBlock (DoLet false false (PTuple (PVar "outcome") (PVar "prerequisites")) (EMatch (EFieldAccess (EFieldAccess (EVar "request") "mrrResolution") "value") (arm (PCon "None") () (ETuple (ELit (LString "legacy")) (EListLit))) (arm (PCon "Some" (PVar "resolution")) () (ETuple (EApp (EVar "methodReturnMemoOutcome") (EFieldAccess (EVar "resolution") "mrrOutcome")) (EApp (EVar "methodReturnMemoPrerequisites") (EFieldAccess (EVar "resolution") "mrrOutcome")))))) (DoExpr (ERecordCreate "MethodReturnMemoView" ((fa "mrmvInterface" (EApp (EVar "methodReturnMemoIface") (EFieldAccess (EVar "request") "mrrIface"))) (fa "mrmvMethod" (EFieldAccess (EVar "request") "mrrName")) (fa "mrmvArguments" (EApp (EApp (EMethodRef "map") (EVar "methodReturnMemoArguments")) (EApp (EApp (EVar "methodReturnArgs") (EVar "gctx")) (EVar "request")))) (fa "mrmvOutcome" (EVar "outcome")) (fa "mrmvPrerequisites" (EVar "prerequisites")) (fa "mrmvEvidence" (EApp (EApp (EVar "methodReturnMemoEvidence") (EFieldAccess (EVar "goal") "oEv")) (EVar "evidence"))))))))
-(DTypeSig false "methodReturnMemoArguments" (TyFun (TyApp (TyCon "List") (TyCon "Mono")) (TyApp (TyCon "List") (TyCon "String"))))
-(DFunDef false "methodReturnMemoArguments" ((PVar "arguments")) (EApp (EApp (EMethodRef "map") (EVar "ppMono")) (EVar "arguments")))
-(DTypeSig false "methodReturnMemoIface" (TyFun (TyCon "IfaceRef") (TyCon "String")))
-(DFunDef false "methodReturnMemoIface" ((PVar "iface")) (EBlock (DoLet false false (PVar "identity") (EApp (EApp (EVar "ifaceIdentity") (EFieldAccess (EVar "iface") "irOrigin")) (EFieldAccess (EVar "iface") "irName"))) (DoExpr (EIf (EBinOp "==" (EVar "identity") (ELit (LString ""))) (EFieldAccess (EVar "iface") "irName") (EVar "identity")))))
-(DTypeSig false "methodReturnMemoOutcome" (TyFun (TyCon "SolverOutcome") (TyCon "String")))
-(DFunDef false "methodReturnMemoOutcome" ((PCon "Solved" (PCon "GivenEvidence" PWild))) (ELit (LString "given")))
-(DFunDef false "methodReturnMemoOutcome" ((PCon "Solved" (PCon "InstanceEvidence" PWild PWild PWild PWild))) (ELit (LString "instance")))
-(DFunDef false "methodReturnMemoOutcome" ((PCon "Solved" (PCon "SuperclassEvidence" PWild PWild))) (ELit (LString "superclass")))
-(DFunDef false "methodReturnMemoOutcome" ((PCon "Deferred" PWild PWild)) (ELit (LString "deferred")))
-(DFunDef false "methodReturnMemoOutcome" ((PCon "Insoluble" PWild (PCon "MissingInstance"))) (ELit (LString "missing")))
-(DFunDef false "methodReturnMemoOutcome" ((PCon "Insoluble" PWild (PCon "AmbiguousInstances" PWild))) (ELit (LString "ambiguous")))
-(DFunDef false "methodReturnMemoOutcome" ((PCon "Insoluble" PWild (PCon "ResolutionCycle" PWild))) (ELit (LString "cycle")))
-(DTypeSig false "methodReturnMemoPrerequisites" (TyFun (TyCon "SolverOutcome") (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "String"))))))
-(DFunDef false "methodReturnMemoPrerequisites" ((PCon "Solved" (PCon "InstanceEvidence" PWild PWild (PVar "prerequisites") PWild))) (EApp (EApp (EMethodRef "map") (ELam ((PVar "prerequisite")) (ETuple (EApp (EVar "methodReturnMemoIface") (EFieldAccess (EVar "prerequisite") "prerequisiteInterface")) (EApp (EApp (EMethodRef "map") (EVar "ppMono")) (EFieldAccess (EVar "prerequisite") "prerequisiteArguments"))))) (EVar "prerequisites")))
-(DFunDef false "methodReturnMemoPrerequisites" (PWild) (EListLit))
-(DTypeSig false "methodReturnMemoEvidence" (TyFun (TyCon "EvId") (TyFun (TyCon "EvTable") (TyCon "String"))))
-(DFunDef false "methodReturnMemoEvidence" ((PVar "goal") (PVar "evidence")) (EMatch (EApp (EApp (EVar "lookupTraceEvidence") (EVar "goal")) (EVar "evidence")) (arm (PCon "Some" (PCon "EvOne" (PVar "route"))) () (EApp (EVar "methodReturnMemoRoute") (EVar "route"))) (arm (PCon "Some" (PCon "EvMany" (PVar "routes"))) () (EApp (EApp (EVar "join") (ELit (LString ","))) (EApp (EApp (EMethodRef "map") (EVar "methodReturnMemoRoute")) (EVar "routes")))) (arm (PCon "Some" (PCon "EvLit" PWild (PVar "route"))) () (EApp (EVar "methodReturnMemoRoute") (EVar "route"))) (arm (PCon "Some" (PCon "EvHead" (PVar "head"))) () (EBinOp "++" (EBinOp "++" (ELit (LString "head:")) (EApp (EMethodRef "display") (EVar "head"))) (ELit (LString "")))) (arm (PCon "None") () (ELit (LString "unpublished")))))
-(DTypeSig false "methodReturnMemoRoute" (TyFun (TyCon "Route") (TyCon "String")))
-(DFunDef false "methodReturnMemoRoute" ((PCon "RNone")) (ELit (LString "none")))
-(DFunDef false "methodReturnMemoRoute" ((PCon "RKey" (PVar "key") (PVar "prerequisites") (PVar "supers"))) (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "key:")) (EApp (EMethodRef "display") (EVar "key"))) (ELit (LString "["))) (EApp (EMethodRef "display") (EApp (EApp (EVar "join") (ELit (LString ","))) (EApp (EApp (EMethodRef "map") (EVar "methodReturnMemoRoute")) (EVar "prerequisites"))))) (ELit (LString "]"))) (EApp (EMethodRef "display") (EApp (EVar "methodReturnMemoSupers") (EVar "supers")))) (ELit (LString ""))))
-(DFunDef false "methodReturnMemoRoute" ((PCon "RDict" (PVar "name"))) (EBinOp "++" (EBinOp "++" (ELit (LString "given:")) (EApp (EMethodRef "display") (EVar "name"))) (ELit (LString ""))))
-(DFunDef false "methodReturnMemoRoute" ((PCon "RDictFwd" (PVar "name"))) (EBinOp "++" (EBinOp "++" (ELit (LString "forwarded:")) (EApp (EMethodRef "display") (EVar "name"))) (ELit (LString ""))))
-(DFunDef false "methodReturnMemoRoute" ((PCon "RLocal" (PVar "name") PWild)) (EBinOp "++" (EBinOp "++" (ELit (LString "local:")) (EApp (EMethodRef "display") (EVar "name"))) (ELit (LString ""))))
-(DFunDef false "methodReturnMemoRoute" ((PCon "RScalar" (PVar "name"))) (EBinOp "++" (EBinOp "++" (ELit (LString "scalar:")) (EApp (EMethodRef "display") (EVar "name"))) (ELit (LString ""))))
-(DFunDef false "methodReturnMemoRoute" ((PCon "RProj" (PVar "r") (PVar "path"))) (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "projected:")) (EApp (EMethodRef "display") (EApp (EVar "methodReturnMemoRoute") (EVar "r")))) (ELit (LString "."))) (EApp (EMethodRef "display") (EApp (EApp (EVar "join") (ELit (LString "."))) (EApp (EApp (EMethodRef "map") (EVar "intToString")) (EVar "path"))))) (ELit (LString ""))))
-(DTypeSig false "methodReturnMemoSupers" (TyFun (TyApp (TyCon "List") (TyCon "Route")) (TyCon "String")))
-(DFunDef false "methodReturnMemoSupers" ((PList)) (ELit (LString "")))
-(DFunDef false "methodReturnMemoSupers" ((PVar "supers")) (EBinOp "++" (EBinOp "++" (ELit (LString "{")) (EApp (EMethodRef "display") (EApp (EApp (EVar "join") (ELit (LString ","))) (EApp (EApp (EMethodRef "map") (EVar "methodReturnMemoRoute")) (EVar "supers"))))) (ELit (LString "}"))))
 (DTypeSig true "methodSlotBoundIds" (TyFun (TyApp (TyCon "List") (TyCon "MethodPredicateSlot")) (TyApp (TyCon "List") (TyApp (TyCon "List") (TyCon "Int")))))
 (DFunDef false "methodSlotBoundIds" ((PVar "slots")) (EApp (EApp (EMethodRef "map") (ELam ((PVar "slot")) (EFieldAccess (EFieldAccess (EVar "slot") "mpsPredicate") "psBoundIds"))) (EVar "slots")))
 (DTypeSig true "methodSlotPositions" (TyFun (TyApp (TyCon "List") (TyCon "MethodPredicateSlot")) (TyApp (TyCon "List") (TyApp (TyCon "List") (TyCon "Int")))))
@@ -3303,5 +3061,3 @@ methodReturnMemoCurrentViews gctx =
 (DTypeSig true "methodReturnProbeOblIfaces" (TyFun (TyApp (TyCon "List") (TyCon "UObligation")) (TyApp (TyCon "List") (TyCon "String"))))
 (DFunDef false "methodReturnProbeOblIfaces" ((PList)) (EListLit))
 (DFunDef false "methodReturnProbeOblIfaces" ((PCons (PVar "obl") (PVar "rest"))) (EBlock (DoLet false false (PVar "here") (EMatch (EFieldAccess (EVar "obl") "prov") (arm (PCon "PMethodLevel") () (EListLit (EFieldAccess (EFieldAccess (EFieldAccess (EVar "obl") "pred") "iface") "irName"))) (arm PWild () (EListLit)))) (DoExpr (EBinOp "++" (EVar "here") (EApp (EVar "methodReturnProbeOblIfaces") (EVar "rest"))))))
-(DTypeSig true "methodReturnMemoCurrentViews" (TyFun (TyCon "GraphCtx") (TyApp (TyCon "List") (TyCon "MethodReturnMemoView"))))
-(DFunDef false "methodReturnMemoCurrentViews" ((PVar "gctx")) (EApp (EVar "snd") (EApp (EApp (EApp (EVar "sealMethodReturnGoals") (EVar "gctx")) (EFieldAccess (EFieldAccess (EFieldAccess (EVar "gctx") "graphRun") "evTable") "value")) (EFieldAccess (EFieldAccess (EFieldAccess (EVar "gctx") "graphRun") "goals") "value"))))
