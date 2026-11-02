@@ -89,21 +89,23 @@ running doctests in stdlib/string.mdk
   ok   stdlib/string.mdk:781: splitAt 2 "hello"
   ok   stdlib/string.mdk:792: split "," "a,b,c"
   ok   stdlib/string.mdk:794: split "," "abc"
-  ok   stdlib/string.mdk:837: lines "a\nb\nc"
-  ok   stdlib/string.mdk:870: stripCR "ab\r"
-  ok   stdlib/string.mdk:872: stripCR "ab"
-  ok   stdlib/string.mdk:886: words "  hello   world "
-  ok   stdlib/string.mdk:889: words "a\u{00A0}b c"
-  ok   stdlib/string.mdk:908: unlines ["a", "b"]
-  ok   stdlib/string.mdk:925: unwords ["a", "b", "c"]
-  ok   stdlib/string.mdk:948: dedent "\n    foo = 1\n    bar = 2\n"
-  ok   stdlib/string.mdk:967: indent "> " "a\n\n  \nb"
-  ok   stdlib/string.mdk:969: indent "> " "a\r\n\r\nb\r\n"
-  ok   stdlib/string.mdk:971: indent "> " "a\rb"
-  ok   stdlib/string.mdk:1074: padLeft 5 '.' "ab"
-  ok   stdlib/string.mdk:1088: padRight 5 '.' "ab"
-  ok   stdlib/string.mdk:1103: center 5 '.' "ab"
-  ok   stdlib/string.mdk:1132: isNone (nextChar (startCursor ""))
-  ok   stdlib/string.mdk:1159: sliceBetween (startCursor "héllo") (startCursor "héllo")
+  ok   stdlib/string.mdk:839: lines "a\nb\nc"
+  ok   stdlib/string.mdk:841: lines "a\n"
+  ok   stdlib/string.mdk:843: lines ""
+  ok   stdlib/string.mdk:876: stripCR "ab\r"
+  ok   stdlib/string.mdk:878: stripCR "ab"
+  ok   stdlib/string.mdk:892: words "  hello   world "
+  ok   stdlib/string.mdk:895: words "a\u{00A0}b c"
+  ok   stdlib/string.mdk:914: unlines ["a", "b"]
+  ok   stdlib/string.mdk:931: unwords ["a", "b", "c"]
+  ok   stdlib/string.mdk:954: dedent "\n    foo = 1\n    bar = 2\n"
+  ok   stdlib/string.mdk:973: indent "> " "a\n\n  \nb"
+  ok   stdlib/string.mdk:975: indent "> " "a\r\n\r\nb\r\n"
+  ok   stdlib/string.mdk:977: indent "> " "a\rb"
+  ok   stdlib/string.mdk:1080: padLeft 5 '.' "ab"
+  ok   stdlib/string.mdk:1094: padRight 5 '.' "ab"
+  ok   stdlib/string.mdk:1109: center 5 '.' "ab"
+  ok   stdlib/string.mdk:1138: isNone (nextChar (startCursor ""))
+  ok   stdlib/string.mdk:1165: sliceBetween (startCursor "héllo") (startCursor "héllo")
 
-stdlib/string.mdk: 106/106 passed
+stdlib/string.mdk: 108/108 passed
