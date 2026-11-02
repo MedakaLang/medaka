@@ -103,6 +103,7 @@ Live design docs: **OPEN** = not started, **PARTIAL** = in progress. Read before
 | [`INTEGER-TYPES-DESIGN.md`](design/INTEGER-TYPES-DESIGN.md) | The integer stack | — |
 | [`INTERFACE-CANDIDATES.md`](design/INTERFACE-CANDIDATES.md) | INTERFACE-CANDIDATES.md — which built-in constructs could generalize behind an interface | PARTIAL |
 | [`LANGUAGE-SURFACE-AUDIT.md`](design/LANGUAGE-SURFACE-AUDIT.md) | LANGUAGE-SURFACE-AUDIT.md | OPEN |
+| [`MCP-AGENT-SERVICE.md`](design/MCP-AGENT-SERVICE.md) | MCP agent service: architecture and execution plan | PLANNED |
 | [`MESSAGE-AUDIT.md`](design/MESSAGE-AUDIT.md) | MESSAGE-AUDIT.md | PARTIAL |
 | [`MUT-SCOPING-DESIGN.md`](design/MUT-SCOPING-DESIGN.md) | `<Mut>` scoping — effect masking for allocate→fill→freeze | CLOSED |
 | [`PERF-CI-COVERAGE.md`](design/PERF-CI-COVERAGE.md) | PERF-CI-COVERAGE.md — a comprehensive design for catching quadratics in CI | DESIGN |
