@@ -206,6 +206,7 @@ inheritedEntryRows : Option DispositionTable -> Decl -> List ((String, String), 
 insertScore : (Int, Value a) -> List (Int, Value a) -> List (Int, Value a)
 installConsts : List (String, Ref (Value a)) -> List (String, Value a) -> <a> Unit
 installDispatchTables : Option DispositionTable -> List Decl -> List ((String, String, String), List Int)
+installFrameConsts : EnvFrame (Value a) -> List (String, Value a) -> <a> Unit
 installGroup : EvalEnv (Value a) -> List (String, Ref (Value a)) -> List LetBind -> <a> Unit
 installGroups : EvalEnv (Value a) -> List (String, Ref (Value a)) -> List (String, List (List Pat, Expr, Loc)) -> <a> Unit
 installModGroups : List (ModInfo (Value a)) -> <a> Unit

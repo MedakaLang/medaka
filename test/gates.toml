@@ -1951,7 +1951,7 @@ run = "test/diff_compiler_eval_scaling.sh"
 oracles = ["profile_eval_main"]
 sources = ["compiler/eval/*", "compiler/frontend/desugar.mdk", "compiler/frontend/visibility.mdk", "compiler/ir/core_ir_eval.mdk", "test/diff_compiler_eval_scaling.sh"]
 corpus = []
-toolchain = []
+toolchain = ["clang", "valgrind"]
 link = "production"
 
 [[gate]]

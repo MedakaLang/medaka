@@ -76,7 +76,7 @@ import eval.eval.{
   boolSeeds,
   externBindings,
   ctorToTypeRef,
-  installConsts,
+  installFrameConsts,
   cellResult,
   lookupBinding,
   isNullary,
@@ -511,13 +511,14 @@ cevalProgram facts (CProgram groups ctorArs ctorToType implEntries _ _) =
       ++ map cBindName groups
       ++ cImplMethodNames implEntries
   let cells = map (n => (n, Ref VUnit)) allNames
-  let env = EvalEnv facts [indexedFrame cells]
-  let _ = installConsts cells boolSeeds
-  let _ = installConsts cells (externBindings ())
-  let _ = installConsts cells ctors
+  let frame = indexedFrame cells
+  let env = EvalEnv facts [frame]
+  let _ = installFrameConsts frame boolSeeds
+  let _ = installFrameConsts frame (externBindings ())
+  let _ = installFrameConsts frame ctors
   let _ =
-    installConsts
-      cells
+    installFrameConsts
+      frame
       (coalesceImpls (flatMap (cImplEntryValues env) implEntries))
   let _ = cInstallTopGroups env cells groups
   map cellResult cells
@@ -735,10 +736,10 @@ cevalModules facts preludeDecls0 modules0 =
   let implEntries =
     flatMap (cImplEntryValues globalEnv) preludeImpls
       ++ flatMap cModImplValues mods
-  let _ = installConsts globalCells boolSeeds
-  let _ = installConsts globalCells externs
-  let _ = installConsts globalCells ctors
-  let _ = installConsts globalCells (coalesceImpls implEntries)
+  let _ = installFrameConsts globalFrame boolSeeds
+  let _ = installFrameConsts globalFrame externs
+  let _ = installFrameConsts globalFrame ctors
+  let _ = installFrameConsts globalFrame (coalesceImpls implEntries)
   let _ = cInstallTopGroups globalEnv globalCells preludeShared
   let _ = cInstallTopGroups globalEnv privateCells preludePrivate
   let _ = cInstallModGroups mods
@@ -835,7 +836,10 @@ cInstallModGroups ((CModInfo _ decls cbinds _ cells menv) :: rest) =
   let _ = cInstallTopGroups menv cells cbinds
   -- P0-9: install this module's own ctor values into its local cells (allocated
   -- in cBuildModInfos), so map/set construct their own arity-correct `Bin`/`Tip`.
-  let _ = installConsts cells (collectCtors decls)
+  let _ = match menv
+    EvalEnv _ (localFrame :: _) =>
+      installFrameConsts localFrame (collectCtors decls)
+    _ => panic "module environment has no local frame"
   cInstallModGroups rest
 
 -- the root module is last in dependency order; its locals hold `main`

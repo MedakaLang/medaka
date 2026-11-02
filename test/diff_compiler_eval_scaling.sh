@@ -13,20 +13,18 @@
 # over synthetic inputs of size N, 2N, 4N and grades the GROWTH RATIO — the same
 # scaling discipline as diff_compiler_perf_scaling.sh, applied where nothing looked.
 #
-# WHY DETERMINISTIC METRICS ONLY (alloc + op), NOT WALL-TIME
-# ---------------------------------------------------------
-# diff_compiler_perf_scaling.sh grades allocation PLUS a heap-pinned min-of-K TIME
-# arm. That TIME arm is deliberately ABSENT here, and the absence is measured, not
-# lazy: the interpreters' wall-clock latency is SUPER-LINEAR IN RECURSION DEPTH on
-# the CURRENT, CORRECT interpreter — a depth-N non-tail recursion that retains a
-# growing live set (the `listbuild` shape below) reads a ~4.0x TIME ratio while its
-# ALLOCATION ratio is a clean ~2.0x, and pinning the GC heap (which fixes the
-# heap-resize step perf_scaling documents) does NOT remove it (measured 4.1x pinned).
-# It is inherent to a non-TCO tree-walker under a conservative GC (the deep host
-# stack is re-scanned per collection), so a wall-time gate here would be a PERMANENT
-# FALSE-RED, the exact failure mode perf_scaling's rules 2-4 exist to prevent. So
-# this gate follows diff_compiler_references_scaling.sh's precedent instead — grade
-# the DETERMINISTIC, noise-free signals only:
+# DETERMINISTIC METRICS: allocation, lookup operations, and list-match instructions
+# -----------------------------------------------------------------------------
+# Allocation and counted lookups miss non-allocating scans in pattern matching.
+# In particular, comparing lengths before matching [] made list traversals
+# quadratic while both metrics stayed linear. The listmatch Callgrind arm below
+# measures inclusive matchPat instructions at 4000/8000 elements, independently
+# of startup and typechecking. It fails at a 3.0 ratio and rejects missing symbols
+# or insufficient signal. EVAL_LISTMATCH_ONLY=1 runs just that arm;
+# EVAL_LISTMATCH_PROFILE selects a paired no-LTO oracle for a baseline comparison.
+# Missing measurement tools and stale local oracles fail the arm.
+# Wall time remains ungraded because shared-host stalls and GC are noisy.
+# The remaining arms grade these signals through profile_eval_main:
 #
 #   ALLOCATION (primary)  GC-allocated bytes are deterministic and see a frame/env
 #                         COPY quadratic (a tree-walker that copied the whole env per
@@ -89,6 +87,71 @@
 set -u
 
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
+
+# Empty-list clauses occur on every tail of ordinary list traversals. Allocation
+# and lookup counters cannot see a redundant length scan here; count instructions
+# inside matchPat instead, excluding CLI startup and typechecking.
+listmatch_ir() (
+  command -v valgrind >/dev/null && command -v callgrind_annotate >/dev/null || {
+    echo "FAIL: listmatch Ir requires valgrind and callgrind_annotate"
+    exit 1
+  }
+  binary_ir="${EVAL_LISTMATCH_PROFILE:-$ROOT/test/bin/profile_eval_main}"
+  source_ir="${MEDAKA_ROOT:-$ROOT}"
+  cli_ir="${MEDAKA:-$ROOT/medaka}"
+  [ -x "$binary_ir" ] || { echo "FAIL: build the no-LTO profile_eval_main oracle first"; exit 1; }
+  # CI's artifact key proves source identity; local direct runs need the same
+  # timestamp guard that run_gates applies to its selected oracles.
+  if [ -z "${CI:-}" ]; then
+    newer_ir="$(find "$source_ir/compiler" "$source_ir/stdlib" -name '*.mdk' \
+      ! -name '*_test.mdk' -newer "$binary_ir" -print)" || exit 1
+    runtime_ir="$(find "$source_ir/runtime" \( -name '*.c' -o -name '*.h' \) \
+      -newer "$binary_ir" -print)" || exit 1
+    [ -z "$newer_ir$runtime_ir" ] || { echo "FAIL: stale listmatch oracle; rebuild profile_eval_main"; exit 1; }
+  fi
+  work_ir="$(mktemp -d "${TMPDIR:-/tmp}/medaka-listmatch.XXXXXX")" || exit 1
+  trap 'rm -rf "$work_ir"' EXIT HUP INT TERM
+  module_ir="$(printf '%s' eval.eval | od -An -v -tx1 | tr -d ' \n')"
+  symbol_ir="mdk.user.$(printf 'm%s__matchPat' "$module_ir" | od -An -v -tx1 | tr -d ' \n')"
+  for n_ir in 4000 8000; do
+    {
+      printf 'buildList : Int -> List Int\nbuildList n = if n <= 0 then [] else n :: buildList (n - 1)\n'
+      printf 'countList : List Int -> Int\ncountList xs = match xs\n  [] => 0\n  _ :: rest => 1 + countList rest\n'
+      printf 'main = if countList (buildList %s) == %s then putStrLn "matched" else panic "wrong list count"\n' "$n_ir" "$n_ir"
+    } > "$work_ir/probe.mdk"
+    MEDAKA_STRICT=1 "$cli_ir" check "$work_ir/probe.mdk" \
+      > "$work_ir/check.stdout" 2> "$work_ir/check.stderr" || {
+        cat "$work_ir/check.stderr"; exit 1
+      }
+    MEDAKA_STRICT=1 MEDAKA_PERF=1 GC_INITIAL_HEAP_SIZE=2147483648 \
+      perl -e 'alarm shift; exec @ARGV or die $!' 180 \
+      valgrind --tool=callgrind \
+      --callgrind-out-file="$work_ir/out.cg" "$binary_ir" \
+      "$source_ir/stdlib/runtime.mdk" "$source_ir/stdlib/core.mdk" "$work_ir/probe.mdk" \
+      > "$work_ir/stdout" 2> "$work_ir/stderr" || {
+        cat "$work_ir/stderr"; exit 1
+      }
+    awk '$1=="[perf]" && $2=="eval" {e++} $1=="[perf]" && $2=="ceval" {c++}
+      END {exit !(e==1 && c==1)}' "$work_ir/stderr" || {
+        echo "FAIL: listmatch did not finish both interpreter stages"; cat "$work_ir/stderr"; exit 1
+      }
+    callgrind_annotate --auto=no --inclusive=yes --threshold=100 "$work_ir/out.cg" \
+      > "$work_ir/annotated" || exit 1
+    count_ir="$(awk -v sym=":$symbol_ir " 'index($0,sym) {gsub(/,/, "", $1); count++; value=$1}
+      END {if(count == 1) print value}' "$work_ir/annotated")"
+    case "$count_ir" in ''|*[!0-9]*) echo "FAIL: missing or ambiguous matchPat Ir at N=$n_ir"; exit 1 ;; esac
+    [ "$count_ir" -gt 100000 ] || { echo "FAIL: listmatch instruction signal too small"; exit 1; }
+    if [ "$n_ir" = 4000 ]; then small_ir="$count_ir"; else large_ir="$count_ir"; fi
+  done
+  awk -v a="$small_ir" -v b="$large_ir" 'BEGIN {
+    printf "listmatch Ir: %s -> %s, ratio %.3f (limit 3.0)\n", a, b, b/a
+    if (b/a >= 3.0) {print "FAIL: empty-list pattern matching is superlinear"; exit 1}
+  }'
+)
+
+listmatch_ir || exit $?
+[ "${EVAL_LISTMATCH_ONLY:-0}" = 1 ] && exit 0
+
 PROFILE="$ROOT/test/bin/profile_eval_main"
 RUNTIME="$ROOT/stdlib/runtime.mdk"
 CORE="$ROOT/stdlib/core.mdk"
@@ -164,9 +227,8 @@ gen_tailrec() {
 gen_listbuild() {
   n=$1; f=$2
   # Build an N-element list via non-tail `range`, then fold it. Stresses cons
-  # allocation + list traversal. ALLOC is O(N); the wall-TIME super-linearity noted
-  # in the header lives here (retained growing live set) — which is exactly why this
-  # gate does not grade time.
+  # allocation + list traversal. The separate listmatch instruction arm covers
+  # empty-list matching; this shape also exercises the non-tail builder and fold.
   {
     printf 'range : Int -> Int -> List Int\n'
     printf 'range lo hi = match lo < hi\n  False => []\n  True => lo :: range (lo + 1) hi\n'
