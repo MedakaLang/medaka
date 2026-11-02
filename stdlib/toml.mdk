@@ -19,7 +19,7 @@
 
 import list.{reverse}
 import map.{Map(..), get, insertWith}
-import string.{lines, toInt, startsWith, drop, indexOf, contains}
+import string.{lines, toInt, startsWith, drop, indexOf, contains, trimAscii}
 import core.{Display}
 import regex.{Regex, mustCompile, find as reFind}
 
@@ -166,7 +166,7 @@ findEq arr n i
 parseKvAfterEq : Array Char -> Int -> Int -> Result String (String, TomlValue)
 parseKvAfterEq arr n eq =
   let keyRaw = stringFromChars (arrayMakeWith eq (k => arrayGetUnsafe k arr))
-  let key = asciiTrim keyRaw
+  let key = trimAscii keyRaw
   -- Dotted keys (`foo.bar = "zzz"`) are unsupported; reject loudly rather
   -- than silently accepting a dot as an ordinary key character.
   if contains "." key then
@@ -221,7 +221,7 @@ parseKvArr arr i key = match parseArrayValue arr i
 -- unquoted scalar forms (integer / boolean), which run to end-of-line.
 restOfLine : Array Char -> Int -> Int -> String
 restOfLine arr n i =
-  asciiTrim
+  trimAscii
     (stringFromChars (arrayMakeWith (n - i) (j => arrayGetUnsafe (i + j) arr)))
 
 -- Unquoted scalar: `true`/`false`, or an integer.  Anything else (an inline
@@ -259,11 +259,11 @@ tableRe = mustCompile "^\\[(.+)\\]$"
 parseHeader : String -> Option Header
 parseHeader s = match reFind arrayTableRe s
   Some m => match m.groups
-    (Some g) :: [] => Some (HArrayTable (asciiTrim g.text))
+    (Some g) :: [] => Some (HArrayTable (trimAscii g.text))
     _ => None
   None => match reFind tableRe s
     Some m => match m.groups
-      (Some g) :: [] => Some (HTable (asciiTrim g.text))
+      (Some g) :: [] => Some (HTable (trimAscii g.text))
       _ => None
     None => None
 
@@ -294,7 +294,7 @@ parseLinesAcc : List String ->
   Result String (List (String, TomlValue))
 parseLinesAcc [] _ _ acc = Ok (reverse acc)
 parseLinesAcc (l :: ls) section counts acc =
-  let trimmed = asciiTrim (stripComment l)
+  let trimmed = trimAscii (stripComment l)
   if trimmed == "" then
     parseLinesAcc ls section counts acc
   else match parseHeader trimmed
@@ -852,34 +852,3 @@ prop "Display Toml renders every entry" (k : String) (n : Int) =
   let two = display (Toml [(k, TInt n), (k ++ "2", TInt n)])
   stringLength two > stringLength one
     && contains (displayTomlValue (TInt n)) two
-
--- Trims code points 9-13 and 32 (tab through carriage return, and space) on
--- purpose: a non-ASCII space such as U+00A0 and the ASCII separators 28-31
--- stay data here, and `string.trim` (which strips them) would be wrong.
--- TOML whitespace is only tab and space (TOML v1.0.0, "Spec"); the wider
--- 9-13 set is leniency toward stray newline-class controls inside a line.
-asciiTrim : String -> String
--- The same few lines live in each package that needs a spec-bound trim; the
--- packages share no module that could host them, and string must not export it.
--- lint-disable-next-line rule-stdlib-reimpl, rule-duplicate-body -- an independence requirement: the packages share no module that could host a spec-bound trim, and string must not export one
-asciiTrim s =
-  let chars = stringToChars s
-  let n = arrayLength chars
-  let lo = asciiTrimFront chars 0 n
-  stringSlice lo (asciiTrimBack chars (n - 1) lo + 1) s
-
-asciiTrimFront : Array Char -> Int -> Int -> Int
--- Part of asciiTrim, duplicated with it for the same reason.
--- lint-disable-next-line rule-duplicate-body -- an independence requirement: part of asciiTrim, copied with it because the packages share no module to host it
-asciiTrimFront chars i n
-  | i >= n = n
-  | charIsSpace (arrayGetUnsafe i chars) = asciiTrimFront chars (i + 1) n
-  | otherwise = i
-
-asciiTrimBack : Array Char -> Int -> Int -> Int
--- Part of asciiTrim, duplicated with it for the same reason.
--- lint-disable-next-line rule-duplicate-body -- an independence requirement: part of asciiTrim, copied with it because the packages share no module to host it
-asciiTrimBack chars i lo
-  | i < lo = lo - 1
-  | charIsSpace (arrayGetUnsafe i chars) = asciiTrimBack chars (i - 1) lo
-  | otherwise = i

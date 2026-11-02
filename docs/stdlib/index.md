@@ -1079,6 +1079,7 @@ Operations on `String` and `Char`.
 - [`trimLeft`](string.md#trimleft)
 - [`trimRight`](string.md#trimright)
 - [`trim`](string.md#trim)
+- [`trimAscii`](string.md#trimascii)
 - [`toUpper`](string.md#toupper)
 - [`toLower`](string.md#tolower)
 - [`capitalize`](string.md#capitalize)

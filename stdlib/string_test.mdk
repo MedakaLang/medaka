@@ -9,7 +9,7 @@ import string.{
   replaceOnce, indexOf, join, lastIndexOf, lines, padLeft, padRight, replace,
   replaceAll, reverse, nextChar, sliceBetween, startCursor, splitAt, startsWith,
   stripPrefix, stripSuffix, take, toInt, toLower, toUpper, toFixed, trim,
-  trimLeft, trimRight, unlines, unwords, utf8ByteLength, words
+  trimAscii, trimLeft, trimRight, unlines, unwords, utf8ByteLength, words
 }
 import test.{expectEach, expectEqual, expectFalse, expectTrue}
 
@@ -299,6 +299,31 @@ test "trim treats tab, newline, carriage return and vertical tab as space" =
   expectEqual "x" (trim "\r\n\t\u{0b}\u{0c} x \r\n")
 
 test "trim removes a no-break space" = expectEqual "x" (trim " x")
+
+-- `c`, then `x`, then `c`: a code point at both ends with a letter inside.
+edged : Int -> String
+edged k = match charFromCode k
+  Some c => fromChars [c, 'x', c]
+  None => ""
+
+test "trimAscii removes code points 9 to 13 and 32 from both ends" =
+  expectEach
+    (map
+      (k => (intToString k, expectEqual "x" (trimAscii (edged k))))
+      [9, 10, 11, 12, 13, 32])
+
+test "trimAscii keeps the separators 28 to 31 and the non-ASCII spaces" =
+  expectEach
+    (map
+      (k => (intToString k, expectEqual (edged k) (trimAscii (edged k))))
+      [28, 29, 30, 31, 133, 160, 12288])
+
+test "trimAscii keeps an interior space and gives empty for blank input" = expectEach
+  [
+    ("interior", expectEqual "a b" (trimAscii "a b")),
+    ("empty", expectEqual "" (trimAscii "")),
+    ("all space", expectEqual "" (trimAscii " \t\r\n")),
+  ]
 
 test "words splits on a no-break space and an ideographic space" =
   expectEqual ["a", "b", "c"] (words "a b　c")
