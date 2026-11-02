@@ -4,7 +4,9 @@
 
 import driver.build_cmd.{makeTempDir, cleanupTempDir}
 import json.{Json, parse, get, asArray, asInt, asString, stringify}
-import test.{Expectation, expectAll, expectEqual, expectTrue, fail, labelFail}
+import test.{
+  Expectation, expectAll, expectEqual, expectErr, fail, labelFail, pass
+}
 import test_process.{boundedVerbSeconds, medakaBin}
 import tools.native_fixture_test_support_test.{writeFixtureFiles}
 import tools.eval_props.{decodeEvalPropRows, takeEvalPropBootstrap}
@@ -24,63 +26,55 @@ runtimeRow : String
 runtimeRow =
   "{\"engine\":\"eval\",\"name\":\"law\",\"status\":\"error\",\"failureKind\":\"runtime\",\"detail\":\"boom\",\"seed\":7,\"cases\":3}"
 
-decodesExpectedRuntime : Bool
+decodesExpectedRuntime : Expectation
 decodesExpectedRuntime =
   match decodeEvalPropRows "nonce" [request] (completeWire "nonce" runtimeRow)
     Ok [PropResult "eval" "law" PropErroredResult (Some PropRuntimeError) "boom" 7 3] =>
-      True
-    _ => False
+      pass
+    Ok _ => fail "decoded rows differ from the one expected runtime row"
+    Err e => fail "decoder rejected the complete wire: \{e}"
 
-decodeRejects : String -> Bool
+decodeRejects : String -> Expectation
 decodeRejects text = match decodeEvalPropRows "nonce" [request] text
-  Err _ => True
-  Ok _ => False
+  Err _ => pass
+  Ok _ => fail "decoder accepted: \{text}"
 
 bootstrapPrefix : String
 bootstrapPrefix = "@@__mdk_eval_props_bootstrap__@@ "
 
-bootstrapRejects : String -> Bool
-bootstrapRejects text = match takeEvalPropBootstrap text
-  Err _ => True
-  Ok _ => False
+bootstrapRejects : String -> Expectation
+bootstrapRejects text = expectErr (takeEvalPropBootstrap text)
 
 test "eval property worker decoder accepts one complete typed row" =
-  expectTrue decodesExpectedRuntime
+  decodesExpectedRuntime
 
 test "eval property worker decoder rejects truncated, mismatched, and contradictory rows" = expectAll
   [
-    expectTrue
-      (decodeRejects
-        "\{noncedPrefix "@@__mdk_eval_props__@@" "nonce"}row-0\n\{runtimeRow}\n"),
-    expectTrue
-      (decodeRejects
-        (completeWire
-          "nonce"
-          "{\"engine\":\"native\",\"name\":\"law\",\"status\":\"error\",\"failureKind\":\"runtime\",\"detail\":\"boom\",\"seed\":7,\"cases\":3}")),
-    expectTrue
-      (decodeRejects
-        (completeWire
-          "nonce"
-          "{\"engine\":\"eval\",\"name\":\"other\",\"status\":\"error\",\"failureKind\":\"runtime\",\"detail\":\"boom\",\"seed\":7,\"cases\":3}")),
-    expectTrue
-      (decodeRejects
-        (completeWire
-          "nonce"
-          "{\"engine\":\"eval\",\"name\":\"law\",\"status\":\"error\",\"failureKind\":\"runtime\",\"detail\":\"boom\",\"seed\":8,\"cases\":3}")),
-    expectTrue
-      (decodeRejects
-        (completeWire
-          "nonce"
-          "{\"engine\":\"eval\",\"name\":\"law\",\"status\":\"error\",\"failureKind\":\"runtime\",\"detail\":\"boom\",\"seed\":7,\"cases\":4}")),
-    expectTrue
-      (decodeRejects
-        (completeWire
-          "nonce"
-          "{\"engine\":\"eval\",\"name\":\"law\",\"status\":\"error\",\"failureKind\":\"law-false\",\"detail\":\"boom\",\"seed\":7,\"cases\":3}")),
-    expectTrue (decodeRejects (completeWire "nonce" runtimeRow ++ "garbage\n")),
-    expectTrue (bootstrapRejects "missing\n"),
-    expectTrue
-      (bootstrapRejects "\{bootstrapPrefix}nonce\n\{bootstrapPrefix}again\n"),
+    decodeRejects
+      "\{noncedPrefix "@@__mdk_eval_props__@@" "nonce"}row-0\n\{runtimeRow}\n",
+    decodeRejects
+      (completeWire
+        "nonce"
+        "{\"engine\":\"native\",\"name\":\"law\",\"status\":\"error\",\"failureKind\":\"runtime\",\"detail\":\"boom\",\"seed\":7,\"cases\":3}"),
+    decodeRejects
+      (completeWire
+        "nonce"
+        "{\"engine\":\"eval\",\"name\":\"other\",\"status\":\"error\",\"failureKind\":\"runtime\",\"detail\":\"boom\",\"seed\":7,\"cases\":3}"),
+    decodeRejects
+      (completeWire
+        "nonce"
+        "{\"engine\":\"eval\",\"name\":\"law\",\"status\":\"error\",\"failureKind\":\"runtime\",\"detail\":\"boom\",\"seed\":8,\"cases\":3}"),
+    decodeRejects
+      (completeWire
+        "nonce"
+        "{\"engine\":\"eval\",\"name\":\"law\",\"status\":\"error\",\"failureKind\":\"runtime\",\"detail\":\"boom\",\"seed\":7,\"cases\":4}"),
+    decodeRejects
+      (completeWire
+        "nonce"
+        "{\"engine\":\"eval\",\"name\":\"law\",\"status\":\"error\",\"failureKind\":\"law-false\",\"detail\":\"boom\",\"seed\":7,\"cases\":3}"),
+    decodeRejects (completeWire "nonce" runtimeRow ++ "garbage\n"),
+    bootstrapRejects "missing\n",
+    bootstrapRejects "\{bootstrapPrefix}nonce\n\{bootstrapPrefix}again\n",
   ]
 
 withFixture : String ->

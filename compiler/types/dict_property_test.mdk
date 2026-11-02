@@ -9,7 +9,9 @@
 
 import list.{filter, lookup, nub, sort}
 import string.{join}
-import test.{expectAll, expectAtLeast, expectEqual, expectFalse, expectTrue}
+import test.{
+  Expectation, expectAll, expectAtLeast, expectEqual, expectFalse, expectTrue
+}
 import types.law_harness_test.{
   Perm(..),
   Verdict(..),
@@ -56,6 +58,18 @@ atLeastAsSpecific a b = matches b a
 
 strictlyMoreSpecific : HT -> HT -> Bool
 strictlyMoreSpecific a b = atLeastAsSpecific a b && not (atLeastAsSpecific b a)
+
+expectMatches : Bool -> HT -> HT -> Expectation
+expectMatches expected pattern target =
+  expectEqual expected (matches pattern target)
+
+expectAtLeastAsSpecific : Bool -> HT -> HT -> Expectation
+expectAtLeastAsSpecific expected a b =
+  expectEqual expected (atLeastAsSpecific a b)
+
+expectStrictlyMoreSpecific : Bool -> HT -> HT -> Expectation
+expectStrictlyMoreSpecific expected a b =
+  expectEqual expected (strictlyMoreSpecific a b)
 
 walk : Subst -> HT -> HT
 walk s (HV v) = match lookup v s
@@ -585,10 +599,10 @@ prop "instance candidacy ranges over every module of the graph" (imported : List
 
 test "the specificity model orders heads, rejects repeated-variable mismatches and finds ambiguity" = expectAll
   [
-    expectTrue (atLeastAsSpecific (headHT HPairInts) (headHT HPairSame)),
-    expectFalse (atLeastAsSpecific (headHT HPairSame) (headHT HPairInts)),
-    expectFalse (matches (headHT HPairSame) (goalHT (GPair AInt AStr))),
-    expectTrue (strictlyMoreSpecific (headHT HBoxInt) (headHT HAny)),
+    expectAtLeastAsSpecific True (headHT HPairInts) (headHT HPairSame),
+    expectAtLeastAsSpecific False (headHT HPairSame) (headHT HPairInts),
+    expectMatches False (headHT HPairSame) (goalHT (GPair AInt AStr)),
+    expectStrictlyMoreSpecific True (headHT HBoxInt) (headHT HAny),
     expectEqual Missing (c1Model [HStr, HBoxAny] (GAtom AInt)),
     expectEqual Unique (c1Model [HAny, HInt] (GAtom AInt)),
     expectEqual Ambiguous (c1Model [HPairIntL, HPairIntR] (GPair AInt AInt)),
@@ -638,7 +652,7 @@ test "the improvement model unifies jointly and counts unifying heads" = expectA
     expectEqual Ambiguous (improvementModel True PtBoxFresh PtBoxInt PtFresh),
     expectEqual Ambiguous (improvementModel True PtBoxInt PtBoxInt PtBoxInt),
     expectEqual Unique (improvementModel True PtStr PtStr PtStr),
-    expectFalse (matches pickRepeated (pickGoal PtBoxFresh PtBoxInt PtBoxInt)),
+    expectMatches False pickRepeated (pickGoal PtBoxFresh PtBoxInt PtBoxInt),
     expectTrue
       (selectionAgrees
         Missing

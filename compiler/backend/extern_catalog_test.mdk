@@ -28,7 +28,7 @@ import test.{
   expectEach,
   expectEqual,
   expectTextContainsAll,
-  expectTrue,
+  expectSatisfies,
   labelFail,
 }
 import frontend.parser.{parse}
@@ -114,6 +114,10 @@ sameFamily _ _ = False
 
 hasUse : WasmUse -> String -> Bool
 hasUse u n = any (== u) (wasmUses n)
+
+listsUse : WasmUse -> String -> Expectation
+listsUse u n =
+  expectSatisfies "lists \{debug u}" (uses => any (== u) uses) (wasmUses n)
 
 -- The externs whose wasm lowering demands `u`.
 demanders : WasmUse -> List String
@@ -313,7 +317,7 @@ demandRow use name src marker =
     expectAll [
       labelFail "runtime group emitted" (expectTextContainsAll [marker] wat),
       labelFail "emitted with no gap" (expectEqual [] gaps),
-      labelFail "the catalog lists the demand" (expectTrue (hasUse use name)),
+      labelFail "the catalog lists the demand" (listsUse use name),
     ],
   )
 

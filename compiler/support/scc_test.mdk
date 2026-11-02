@@ -3,7 +3,9 @@
 -- self-loops, duplicate edges, disconnected vertices, and arbitrary cycles
 -- without needing a custom Arbitrary instance.
 
-import test.{expectAll, expectEqual, expectFalse, expectTrue}
+import test.{
+  Expectation, expectAll, expectEqual, expectFalse, expectTrue, labelFail
+}
 import list.{reverse}
 import support.ordmap.{OrdMap, omEmpty, omInsert, omLookup}
 import support.scc.{tarjanSCCs}
@@ -166,15 +168,25 @@ matrixRow from (to :: rest) bits place =
   let tail = matrixRow from rest bits (place + 1)
   if bitAt bits place == 1 then (from, to) :: tail else tail
 
-allThreeNodeGraphsSatisfy : Int -> Bool
-allThreeNodeGraphsSatisfy 512 = True
-allThreeNodeGraphsSatisfy bits =
+threeNodeGraphSatisfies : Int -> Expectation
+threeNodeGraphSatisfies bits =
   let names = ["a", "b", "c"]
   let graph = namedGraph names (matrixEdges names bits)
   let groups = tarjanSCCs names graph
-  exactPartition names graph groups
-    && dependencyOrder names graph groups
-    && allThreeNodeGraphsSatisfy (bits + 1)
+  labelFail
+    "adjacency bits \{bits}"
+    (expectAll [
+      labelFail
+        "exact partition"
+        (expectTrue (exactPartition names graph groups)),
+      labelFail
+        "dependency order"
+        (expectTrue (dependencyOrder names graph groups)),
+    ])
+
+allThreeNodeGraphsSatisfy : Int -> Expectation
+allThreeNodeGraphsSatisfy from =
+  expectAll (map threeNodeGraphSatisfies [from..=511])
 
 sccLaw : List (Int, Int) -> Bool
 sccLaw pairs =
@@ -241,7 +253,7 @@ test "the independent partition oracle rejects duplicated members and empty comp
 -- all 2^(3*3) directed adjacency matrices, including loops and disconnected
 -- vertices, checked against the same independently-written reachability law.
 test "Tarjan satisfies the reachability partition and dependency laws on every three-node graph" =
-  expectTrue (allThreeNodeGraphsSatisfy 0)
+  allThreeNodeGraphsSatisfy 0
 
 test "Tarjan coalesces a cycle even when its input names start in the middle" =
   let names = ["b", "c", "a"]

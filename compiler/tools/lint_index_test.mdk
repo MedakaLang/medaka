@@ -16,7 +16,6 @@ import test.{
   expectEqual,
   expectTrue,
   expectNotEqual,
-  expectFalse,
   expectEach,
   fail,
   expectOkThen,
@@ -287,8 +286,9 @@ shardOf : List IndexRow -> String
 shardOf rows =
   encodeRowShard "stamp" "/p/m.mdk" (rowContentHash modSource) "m" rows
 
-decodes : String -> String -> String -> String -> Bool
-decodes stamp path hash text = isSome (decodeRowShard stamp path hash text)
+decodes : Bool -> String -> String -> String -> String -> Expectation
+decodes expected stamp path hash text =
+  expectEqual expected (isSome (decodeRowShard stamp path hash text))
 
 decodeOk : String -> Option (List IndexRow)
 decodeOk text =
@@ -353,23 +353,23 @@ test "a corrupt, stale or foreign shard is a miss" =
   expectEach [
     (
       "control: the good shard decodes",
-      expectTrue (decodes "stamp" "/p/m.mdk" hash good),
+      decodes True "stamp" "/p/m.mdk" hash good,
     ),
-    ("wrong stamp", expectFalse (decodes "other" "/p/m.mdk" hash good)),
-    ("wrong path", expectFalse (decodes "stamp" "/p/n.mdk" hash good)),
+    ("wrong stamp", decodes False "other" "/p/m.mdk" hash good),
+    ("wrong path", decodes False "stamp" "/p/n.mdk" hash good),
     (
       "wrong content hash",
-      expectFalse (decodes "stamp" "/p/m.mdk" "1.2" good),
+      decodes False "stamp" "/p/m.mdk" "1.2" good,
     ),
     (
       "truncated",
-      expectFalse (decodes "stamp" "/p/m.mdk" hash (stringSlice 0 80 good)),
+      decodes False "stamp" "/p/m.mdk" hash (stringSlice 0 80 good),
     ),
-    ("garbage", expectFalse (decodes "stamp" "/p/m.mdk" hash "((((")),
-    ("empty", expectFalse (decodes "stamp" "/p/m.mdk" hash "")),
+    ("garbage", decodes False "stamp" "/p/m.mdk" hash "(((("),
+    ("empty", decodes False "stamp" "/p/m.mdk" hash ""),
     (
       "trailing text",
-      expectFalse (decodes "stamp" "/p/m.mdk" hash (good ++ " x")),
+      decodes False "stamp" "/p/m.mdk" hash (good ++ " x"),
     ),
   ]
 
@@ -701,18 +701,23 @@ stampCase dir =
     ),
     (
       "it answers for the newer stamp",
-      expectTrue (decodesText "stamp-2/x" src hash text),
+      decodesText True "stamp-2/x" src hash text,
     ),
     (
       "and no longer for the older",
-      expectFalse (decodesText "stamp-1/x" src hash text),
+      decodesText False "stamp-1/x" src hash text,
     ),
   ]
 
-decodesText : String -> String -> String -> Result String String -> Bool
-decodesText stamp path hash (Ok text) =
-  isSome (decodeRowShard stamp path hash text)
-decodesText _ _ _ (Err _) = False
+decodesText : Bool ->
+  String ->
+  String ->
+  String ->
+  Result String String ->
+  Expectation
+decodesText expected stamp path hash shard = expectEqual expected (match shard
+  Ok text => isSome (decodeRowShard stamp path hash text)
+  Err _ => False)
 
 test "a shard names its path, so a shard of another path is not served" =
   let a = "/p/one/m.mdk"
@@ -729,12 +734,12 @@ test "a shard names its path, so a shard of another path is not served" =
     ),
     (
       "a shard of one path does not decode for the other",
-      expectFalse
-        (decodes
-          "stamp"
-          b
-          hash
-          (encodeRowShard "stamp" a hash "m" (rowsOf "m"))),
+      decodes
+        False
+        "stamp"
+        b
+        hash
+        (encodeRowShard "stamp" a hash "m" (rowsOf "m")),
     ),
   ]
 

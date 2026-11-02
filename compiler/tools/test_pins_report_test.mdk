@@ -1,7 +1,7 @@
 -- The command report preserves the engine's raw result and grades a matching
 -- known-red pin separately. These tests exercise that boundary directly.
 
-import test.{expectEach, expectEqual, expectFalse, expectTrue}
+import test.{Expectation, expectEach, expectEqual}
 import tools.doctest.{Engine(..), ExResult(..)}
 import tools.test_cmd.{cliGradedTestReportJson}
 import json.{Json, asInt, get}
@@ -95,7 +95,7 @@ test "a law false is held while an XPASS and engine error remain failures" =
       8,
   ]
   expectEach [
-    ("the exact law failure holds", expectTrue (onlyPropPassed held)),
+    ("the exact law failure holds", onlyPropPassed True held),
     (
       "a held pin has its own status",
       expectEqual "known-red" (onlyPropStatus held),
@@ -104,10 +104,10 @@ test "a law false is held while an XPASS and engine error remain failures" =
       "the raw result remains visible with its replay values",
       expectEqual (Some "known-red issue #73 still holds") (onlyPropDetail held),
     ),
-    ("an XPASS drains the pin", expectFalse (onlyPropPassed drained)),
+    ("an XPASS drains the pin", onlyPropPassed False drained),
     (
       "a runtime error cannot hold a false-law pin",
-      expectFalse (onlyPropPassed errored),
+      onlyPropPassed False errored,
     ),
     (
       "a held raw failure is counted as known-red rather than a pass",
@@ -149,8 +149,8 @@ test "unit pins require their exact assertion message" =
     ("eval", "assertion", 4, Fail "different detail" "left" "right"),
   ]
   expectEach [
-    ("the exact assertion pin holds", expectTrue (onlyTestPassed held)),
-    ("a changed assertion fails the run", expectFalse (onlyTestPassed changed)),
+    ("the exact assertion pin holds", onlyTestPassed True held),
+    ("a changed assertion fails the run", onlyTestPassed False changed),
   ]
 
 test "held drained and changed unit pins retain their human details" =
@@ -186,7 +186,7 @@ test "an exact native error pin retains the raw error outcome" =
     ("native", "native error", 7, Errored "native detail"),
   ]
   expectEach [
-    ("the exact error pin holds", expectTrue (onlyTestPassed held)),
+    ("the exact error pin holds", onlyTestPassed True held),
     (
       "grading retains the engine error status",
       expectEqual "error" (onlyTestRawStatus held),
@@ -197,9 +197,10 @@ test "an exact native error pin retains the raw error outcome" =
     ),
   ]
 
-onlyPropPassed : List GradedProp -> Bool
-onlyPropPassed [row] = gradedPropPassed row
-onlyPropPassed _ = False
+onlyPropPassed : Bool -> List GradedProp -> Expectation
+onlyPropPassed expected rows = expectEqual expected (match rows
+  [row] => gradedPropPassed row
+  _ => False)
 
 onlyPropStatus : List GradedProp -> String
 onlyPropStatus [row] = gradedPropStatus row
@@ -209,9 +210,10 @@ onlyPropDetail : List GradedProp -> Option String
 onlyPropDetail [row] = gradedPropPinDetail row
 onlyPropDetail _ = None
 
-onlyTestPassed : List GradedTest -> Bool
-onlyTestPassed [row] = gradedTestPassed row
-onlyTestPassed _ = False
+onlyTestPassed : Bool -> List GradedTest -> Expectation
+onlyTestPassed expected rows = expectEqual expected (match rows
+  [row] => gradedTestPassed row
+  _ => False)
 
 onlyTestRawStatus : List GradedTest -> String
 onlyTestRawStatus [row] = gradedTestRawStatus row

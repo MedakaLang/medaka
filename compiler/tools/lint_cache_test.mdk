@@ -24,6 +24,7 @@ import test.{
   expectFalse,
   expectEach,
   fail,
+  pass,
 }
 import test_process.{withScratchDir}
 import frontend.ast.{Decl}
@@ -353,15 +354,15 @@ scenarioC2 go dir =
       ),
     ])
 
-isFail : Expectation -> Bool
-isFail (Fail _ _ _) = True
-isFail (Pass _ _) = False
+isFail : Expectation -> Expectation
+isFail (Fail _ _ _) = pass
+isFail (Pass _ _) = fail "the scenario stayed green with the mechanism disabled"
 
 test "(a) a signature edit in B re-lints A and A shows the new signature" =
   withScratchDir (scenarioA run)
 
 test "(a) without the fingerprint A is served stale, so the scenario goes red" =
-  withScratchDir (dir => expectTrue (isFail (scenarioA runNoFingerprint dir)))
+  withScratchDir (dir => isFail (scenarioA runNoFingerprint dir))
 
 test "(b) a body-only edit in B re-lints B alone and A keeps its finding" =
   withScratchDir (scenarioB run)
@@ -373,7 +374,7 @@ test "(c) a stdlib signature edit re-lints A and A shows the new signature" =
   withScratchDir (scenarioC run)
 
 test "(c) without the fingerprint A is served stale, so the scenario goes red" =
-  withScratchDir (dir => expectTrue (isFail (scenarioC runNoFingerprint dir)))
+  withScratchDir (dir => isFail (scenarioC runNoFingerprint dir))
 
 test "(c') a stdlib body-only edit invalidates nothing" =
   withScratchDir (scenarioC2 run)
@@ -855,10 +856,10 @@ test "(h) an enumerating question keeps A warm across a body-only edit" = withSc
         dir))
 
 test "(i) without recording, a signature edit to an asked name is served stale" =
-  withScratchDir (dir => expectTrue (isFail (caseF unrecorded dir)))
+  withScratchDir (dir => isFail (caseF unrecorded dir))
 
 test "(i) without recording, a newly declared asked name is served stale" =
-  withScratchDir (dir => expectTrue (isFail (caseFAbsent unrecorded dir)))
+  withScratchDir (dir => isFail (caseFAbsent unrecorded dir))
 
 -- ── adversarial answers ─────────────────────────────────────────────────────
 
@@ -1075,16 +1076,10 @@ test "(w3) an edit to the module's body keeps A warm" = withScratchDir (dir =>
 
 test "(w4) without recording, a created module is served stale" = withScratchDir
   (dir =>
-    expectTrue
-      (isFail
-        (graded
-          True
-          (wildCase unrecorded None [Edit mPath (Some mSource)] dir))))
+    isFail
+      (graded True (wildCase unrecorded None [Edit mPath (Some mSource)] dir)))
 
 test "(w4) without recording, a deleted module is served stale" = withScratchDir
   (dir =>
-    expectTrue
-      (isFail
-        (graded
-          True
-          (wildCase unrecorded (Some mSource) [Edit mPath None] dir))))
+    isFail
+      (graded True (wildCase unrecorded (Some mSource) [Edit mPath None] dir)))
