@@ -2099,19 +2099,23 @@ jobs:
           git cat-file -e "$head" 2>/dev/null || git fetch --no-tags --depth=50 origin "$head" 2>/dev/null || true
           git cat-file -e "$base" 2>/dev/null || git fetch --no-tags --depth=50 origin "$base" 2>/dev/null || true
 
-          # The range is trusted only when both ends exist and base is an
-          # ancestor of head; anything else would list a different set than the
-          # authored commits. An untrusted range exports an EMPTY message
-          # (fail-closed) with the reason logged, never a partial one (a lone
-          # merge commit's text is exactly the hole #4218 closed).
+          # The authored range is merge-base(base, head)..head. On `pull_request`
+          # the event's base is main's tip when the event fired, which is NOT an
+          # ancestor of a head that is behind main; `base..head` would then list
+          # main's newer commits too, and testing `base` as an ancestor would
+          # reject every behind-main PR. A missing object, or no merge base,
+          # exports an EMPTY message (fail-closed) with the reason logged, never
+          # a partial one (a lone merge commit's text is the hole #4218 closed).
           msg=""
-          if ! git cat-file -e "$head" 2>/dev/null || ! git cat-file -e "$base" 2>/dev/null; then
-            echo "--- base or head object missing (base=$base head=$head): authored range unavailable, exporting empty (fail-closed)."
-          elif ! git merge-base --is-ancestor "$base" "$head" 2>/dev/null; then
-            echo "--- base $base is not an ancestor of head $head: authored range untrusted, exporting empty (fail-closed)."
+          mb=""
+          if git cat-file -e "$head" 2>/dev/null && git cat-file -e "$base" 2>/dev/null; then
+            mb="$(git merge-base "$base" "$head" 2>/dev/null || true)"
+          fi
+          if [ -z "$mb" ]; then
+            echo "--- no merge base for base=$base head=$head (object missing or unrelated history): authored range unavailable, exporting empty (fail-closed)."
           else
-            msg="$(git log --pretty=%B "$base..$head" 2>/dev/null || true)"
-            echo "--- $(git rev-list --count "$base..$head") commit(s) in the authored range."
+            msg="$(git log --pretty=%B "$mb..$head" 2>/dev/null || true)"
+            echo "--- $(git rev-list --count "$mb..$head") commit(s) in the authored range $mb..$head."
           fi
 
           echo "--- resolved authored message(s) for $base..$head:"
