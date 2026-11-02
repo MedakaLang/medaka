@@ -13,20 +13,18 @@
 # over synthetic inputs of size N, 2N, 4N and grades the GROWTH RATIO — the same
 # scaling discipline as diff_compiler_perf_scaling.sh, applied where nothing looked.
 #
-# WHY DETERMINISTIC METRICS ONLY (alloc + op), NOT WALL-TIME
-# ---------------------------------------------------------
-# diff_compiler_perf_scaling.sh grades allocation PLUS a heap-pinned min-of-K TIME
-# arm. That TIME arm is deliberately ABSENT here, and the absence is measured, not
-# lazy: the interpreters' wall-clock latency is SUPER-LINEAR IN RECURSION DEPTH on
-# the CURRENT, CORRECT interpreter — a depth-N non-tail recursion that retains a
-# growing live set (the `listbuild` shape below) reads a ~4.0x TIME ratio while its
-# ALLOCATION ratio is a clean ~2.0x, and pinning the GC heap (which fixes the
-# heap-resize step perf_scaling documents) does NOT remove it (measured 4.1x pinned).
-# It is inherent to a non-TCO tree-walker under a conservative GC (the deep host
-# stack is re-scanned per collection), so a wall-time gate here would be a PERMANENT
-# FALSE-RED, the exact failure mode perf_scaling's rules 2-4 exist to prevent. So
-# this gate follows diff_compiler_references_scaling.sh's precedent instead — grade
-# the DETERMINISTIC, noise-free signals only:
+# DETERMINISTIC METRICS: allocation, lookup operations, and list-match instructions
+# -----------------------------------------------------------------------------
+# Allocation and counted lookups miss non-allocating scans in pattern matching.
+# In particular, comparing lengths before matching [] made list traversals
+# quadratic while both metrics stayed linear. The listmatch Callgrind arm below
+# measures inclusive matchPat instructions at 4000/8000 elements, independently
+# of startup and typechecking. It fails at a 3.0 ratio and rejects missing symbols
+# or insufficient signal. EVAL_LISTMATCH_ONLY=1 runs just that arm; MEDAKA selects
+# the binary, allowing a saved pre-fix compiler to prove the check fails.
+# Without Valgrind the arm reports a skip; an explicit ONLY request exits 2.
+# Wall time remains ungraded because shared-host stalls and GC are noisy.
+# The remaining arms grade these signals through profile_eval_main:
 #
 #   ALLOCATION (primary)  GC-allocated bytes are deterministic and see a frame/env
 #                         COPY quadratic (a tree-walker that copied the whole env per
@@ -89,6 +87,52 @@
 set -u
 
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
+
+# Empty-list clauses occur on every tail of ordinary list traversals. Allocation
+# and lookup counters cannot see a redundant length scan here; count instructions
+# inside matchPat instead, excluding CLI startup and typechecking.
+listmatch_ir() (
+  command -v valgrind >/dev/null && command -v callgrind_annotate >/dev/null || {
+    echo "listmatch Ir: SKIP — valgrind and callgrind_annotate required"
+    exit 2
+  }
+  work_ir="$(mktemp -d "${TMPDIR:-/tmp}/medaka-listmatch.XXXXXX")" || exit 1
+  trap 'rm -rf "$work_ir"' EXIT HUP INT TERM
+  binary_ir="${MEDAKA:-$ROOT/medaka}"
+  module_ir="$(printf '%s' eval.eval | od -An -v -tx1 | tr -d ' \n')"
+  symbol_ir="mdk.user.$(printf 'm%s__matchPat' "$module_ir" | od -An -v -tx1 | tr -d ' \n')"
+  for n_ir in 4000 8000; do
+    printf 'main = println (length [1..=%s])\n' "$n_ir" > "$work_ir/probe.mdk"
+    GC_INITIAL_HEAP_SIZE=2147483648 perl -e 'alarm shift; exec @ARGV or die $!' 180 \
+      valgrind --tool=callgrind \
+      --callgrind-out-file="$work_ir/out.cg" "$binary_ir" run "$work_ir/probe.mdk" \
+      > "$work_ir/stdout" 2> "$work_ir/stderr" || {
+        cat "$work_ir/stderr"; exit 1
+      }
+    [ "$(cat "$work_ir/stdout")" = "$n_ir" ] || {
+      echo "FAIL: listmatch N=$n_ir produced the wrong length"; exit 1
+    }
+    callgrind_annotate --auto=no --inclusive=yes --threshold=100 "$work_ir/out.cg" \
+      > "$work_ir/annotated" || exit 1
+    count_ir="$(awk -v sym=":$symbol_ir " 'index($0,sym) {gsub(/,/, "", $1); count++; value=$1}
+      END {if(count == 1) print value}' "$work_ir/annotated")"
+    case "$count_ir" in ''|*[!0-9]*) echo "FAIL: missing or ambiguous matchPat Ir at N=$n_ir"; exit 1 ;; esac
+    [ "$count_ir" -gt 100000 ] || { echo "FAIL: listmatch instruction signal too small"; exit 1; }
+    if [ "$n_ir" = 4000 ]; then small_ir="$count_ir"; else large_ir="$count_ir"; fi
+  done
+  awk -v a="$small_ir" -v b="$large_ir" 'BEGIN {
+    printf "listmatch Ir: %s -> %s, ratio %.3f (limit 3.0)\n", a, b, b/a
+    if (b/a >= 3.0) {print "FAIL: empty-list pattern matching is superlinear"; exit 1}
+  }'
+)
+
+if listmatch_ir; then
+  [ "${EVAL_LISTMATCH_ONLY:-0}" = 1 ] && exit 0
+else
+  ir_status=$?
+  [ "$ir_status" = 2 ] && [ "${EVAL_LISTMATCH_ONLY:-0}" != 1 ] || exit "$ir_status"
+fi
+
 PROFILE="$ROOT/test/bin/profile_eval_main"
 RUNTIME="$ROOT/stdlib/runtime.mdk"
 CORE="$ROOT/stdlib/core.mdk"

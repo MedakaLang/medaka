@@ -3,6 +3,7 @@
 import test.{expectAll, expectEqual, expectNotEqual}
 import frontend.ast.{
   noBinderId,
+  Addr(..),
   Lit(..),
   Pat(..),
   Expr(..),
@@ -17,6 +18,18 @@ import frontend.ast.{
 import types.route_key.{implRouteKeyWord}
 import eval.eval.{
   buildMethodReqCounts,
+  matchPat,
+  EvalEnv(..),
+  EnvFrame(..),
+  indexedFrame,
+  installFrameConsts,
+  lookupEnv,
+  applyValue,
+  pushFrame,
+  evalFileTagName,
+  lookupEnvOpt,
+  lookupAtAddr,
+  applyClosure,
   Value(..),
   evalModulesOutputFacts,
   ppValue,
@@ -31,6 +44,7 @@ import frontend.parser.{parse}
 import frontend.desugar.{desugar}
 import types.program_facts.{ProgramFacts, emptyFacts, withSibling}
 import frontend.ast.{SiblingPair(..)}
+import support.opcount.{setOpCounting, opSnap}
 
 testLoc : Loc
 testLoc = Loc "" 1 0 1 0
@@ -308,3 +322,109 @@ test "each of two test siblings reads its own subject in both evaluators" = expe
 evalModulesOutput : List Decl -> List (String, List Decl) -> String
 evalModulesOutput preludeDecls modules =
   evalModulesOutputFacts emptyFacts preludeDecls modules
+
+-- Render bindings so these assertions also pin their left-to-right order.
+matchedBindings : Pat -> Value e -> Option (List (String, String))
+matchedBindings pat value =
+  map (map (pair => (fst pair, ppValue (snd pair)))) (matchPat pat value)
+
+test "sequence patterns require exact arity and preserve bindings" =
+  let x = PVar "x" testLoc noBinderId
+  let y = PVar "y" testLoc noBinderId
+  expectAll [
+    expectEqual (Some []) (matchedBindings (PList []) (VList [])),
+    expectEqual None (matchedBindings (PList []) (VList [VInt 1])),
+    expectEqual None (matchedBindings (PList [x]) (VList [])),
+    expectEqual None (matchedBindings (PList [x]) (VList [VInt 1, VInt 2])),
+    expectEqual None (matchedBindings (PList [x, y]) (VList [VInt 1])),
+    expectEqual
+      (Some [("x", "1"), ("y", "2")])
+      (matchedBindings (PList [x, y]) (VList [VInt 1, VInt 2])),
+    expectEqual
+      None
+      (matchedBindings (PList [PLit (LInt 9), y]) (VList [VInt 1, VInt 2])),
+    expectEqual
+      (Some [("x", "1"), ("y", "2")])
+      (matchedBindings (PTuple [x, y]) (VTuple [VInt 1, VInt 2])),
+    expectEqual None (matchedBindings (PTuple [x]) (VTuple [VInt 1, VInt 2])),
+    expectEqual None (matchedBindings (PTuple [x, y]) (VTuple [VInt 1])),
+    expectEqual
+      (Some [("x", "1")])
+      (matchedBindings (PCon "Box" [x]) (VCon "Box" [VInt 1])),
+    expectEqual None (matchedBindings (PCon "Box" [x]) (VCon "Other" [VInt 1])),
+    expectEqual
+      None
+      (matchedBindings (PCon "Box" [x]) (VCon "Box" [VInt 1, VInt 2])),
+    expectEqual
+      None
+      (matchedBindings (PCon "Box" [x, y]) (VCon "Box" [VInt 1])),
+    expectEqual
+      (Some [("x", "[1, 2]")])
+      (matchedBindings
+        (PList [PList [], x])
+        (VList [VList [], VList [VInt 1, VInt 2]])),
+  ]
+
+test "indexed installation updates the first cell and preserves lexical shadows" =
+  let first = Ref (VInt 0)
+  let duplicate = Ref (VInt 99)
+  let other = Ref (VInt 0)
+  let frame = indexedFrame [("x", first), ("x", duplicate), ("y", other)]
+  let env = EvalEnv emptyFacts [frame]
+  let _ = installFrameConsts frame [("x", VInt 1), ("y", VInt 3), ("x", VInt 2)]
+  let shadowed = pushFrame env [("x", Ref (VInt 8))]
+  expectAll [
+    expectEqual "2" (ppValue !first),
+    expectEqual "99" (ppValue !duplicate),
+    expectEqual "3" (ppValue (lookupEnv env "y")),
+    expectEqual "8" (ppValue (lookupEnv shadowed "x")),
+    expectEqual "2" (ppValue (lookupEnv env "x")),
+  ]
+
+test "file attribution lookup skips ordinary indexed frames" =
+  let env = EvalEnv emptyFacts [
+    indexedFrame [("x", Ref (VInt 7))],
+    indexedFrame [("y", Ref (VInt 8))],
+    ScanFrame [(evalFileTagName, Ref (VString "module.mdk"))],
+  ]
+  let _ = setOpCounting True
+  let before = opSnap ()
+  let file = map ppValue (lookupEnvOpt env evalFileTagName)
+  let ops = opSnap () - before
+  let _ = setOpCounting False
+  expectAll [
+    expectEqual (Some "module.mdk") file,
+    expectEqual 1 ops,
+    expectEqual (Some "7") (map ppValue (lookupEnvOpt env "x")),
+    expectEqual None (map ppValue (lookupEnvOpt env "missing")),
+  ]
+
+test "variable parameters keep curried frames and independent partial applications" =
+  let env = EvalEnv emptyFacts [ScanFrame [("x", Ref (VInt 99))]]
+  let x = PVar "x" testLoc noBinderId
+  let y = PVar "y" testLoc noBinderId
+  let body = ETuple [EVarAt "x" (ALocal 1 0), EVarAt "y" (ALocal 0 0)]
+  let partial = applyValue (VClosure env [x, y] body testLoc) (VInt 3)
+  let left = applyValue partial (VInt 10)
+  let right = applyValue partial (VInt 20)
+  let host =
+    VClosureF
+      env
+      [x, PWild, y]
+      (e => VTuple [
+        lookupAtAddr e "x" (ALocal 2 0),
+        lookupAtAddr e "y" (ALocal 0 0),
+      ])
+  let hostResult =
+    applyValue (applyValue (applyValue host (VInt 4)) VUnit) (VInt 5)
+  expectAll [
+    expectEqual "(3, 10)" (ppValue left),
+    expectEqual "(3, 20)" (ppValue right),
+    expectEqual "(4, 5)" (ppValue hostResult),
+    expectEqual "99" (ppValue (lookupEnv env "x")),
+    expectEqual
+      None
+      (map
+        ppValue
+        (applyClosure env [PLit (LInt 7)] (ELit LUnit) testLoc (VInt 8))),
+  ]
