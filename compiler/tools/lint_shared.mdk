@@ -184,6 +184,10 @@ ruleNameTestBoolLiteralEqual : String
 ruleNameTestBoolLiteralEqual = "rule-test-bool-literal-equal"
 
 export
+ruleNameTestBoolHelper : String
+ruleNameTestBoolHelper = "rule-test-bool-helper"
+
+export
 ruleNameTestEqualInTrue : String
 ruleNameTestEqualInTrue = "rule-test-equal-in-true"
 

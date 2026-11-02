@@ -1,0 +1,129 @@
+-- lint rule rule-test-bool-helper: a `-> Bool` helper in a `*_test.mdk` graded with `expectTrue`/`expectFalse`. Return an `Expect` from the helper instead.
+
+import frontend.ast.{Expr(..), Decl(..), Ty(..)}
+import frontend.ast_walk.{DeclBody(..), declBodies}
+import frontend.parser.{Positions(..)}
+import driver.diagnostics.{Severity(..)}
+import support.util.{anyList, endsWith}
+import tools.lint_core.{
+  Category(..),
+  FileFacts(..),
+  Finding(..),
+  Fixability(..),
+  Ratchet(..),
+  Rule,
+  RuleMeta(..),
+  Scope(..),
+  StdlibIndex,
+  mkRule,
+}
+import tools.lint_shared.{
+  appSpineOf,
+  childExprs,
+  mentionsVar,
+  ruleNameTestBoolHelper,
+  unwrapLoc,
+}
+
+export
+rule : Rule
+rule =
+  mkRule
+    RuleMeta {
+      name = ruleNameTestBoolHelper,
+      summary =
+        "a `-> Bool` helper in a `*_test.mdk` whose call is graded with `expectTrue`/`expectFalse`. Return an `Expect` (`expectErrContains`, `expectEqual`, ...) so a failure says what was expected",
+      doc =
+        "A `Bool` helper graded with `expectTrue`/`expectFalse` fails with \"expected True, got False\" and names nothing. Make the helper return an `Expect` built from the verb that fits (`expectErrContains`, `expectEqual`, `expectOk`, ...; see the `write-tests` table) and drop the `expectTrue`/`expectFalse` wrapper at its call sites. A helper that a `prop` in the same file references keeps `Bool`, because a prop's oracle is `Bool`. Covered call shapes: `expectTrue (h a b)`, `expectFalse (h a b)`, `h a b |> expectTrue`, `x |> h |> expectTrue`. Not covered: a call nested deeper in the argument (`expectTrue (a && h b)`, `expectTrue (not (h b))`).\n\nBefore:\n  rejects : String -> Bool\n  test \"t\" = expectTrue (rejects \"x\")\nAfter:\n  rejects : String -> Expect\n  test \"t\" = rejects \"x\"",
+      category = Style,
+      scope = Internal,
+      ratchet = Gated,
+      defaultSeverity = SevWarning,
+      fixability = NotFixable,
+      needs = [],
+    }
+    ruleTestBoolHelper
+    None
+
+-- ── rule: test-bool-helper (R38, R46) ─────────────────────────────────────────
+-- File-local: the helper's declared signature and every call of it come from
+-- the one file.  A helper counts when its signature ends in `Bool` (any arity,
+-- a zero-argument `Bool` value included) and some call of it, with the helper
+-- as the head of the graded expression, is the argument of `expectTrue` or
+-- `expectFalse`.  The finding sits on the signature.  A `prop` is the one
+-- consumer that needs `Bool`, so a helper any `prop` body mentions is exempt.
+ruleTestBoolHelper : StdlibIndex ->
+  String ->
+  FileFacts ->
+  Positions ->
+  List Decl ->
+  List Finding
+ruleTestBoolHelper _ path _ _ decls
+  | endsWith "_test.mdk" path =
+    let graded = flatMap gradedHeads (allBodies decls)
+    let propBodies = flatMap propBodyOf decls
+    flatMap (helperFinding graded propBodies) decls
+  | otherwise = []
+
+helperFinding : List String -> List Expr -> Decl -> List Finding
+helperFinding graded propBodies (DTypeSig _ name ty loc)
+  | endsInBool ty
+    && elem name graded
+    && not (anyList (mentionsVar name) propBodies) = [
+    Finding {
+      rule = ruleNameTestBoolHelper,
+      message =
+        "`\{name}` returns `Bool` and is graded with `expectTrue`/`expectFalse`, which reports no expectation on failure. Return an `Expect` (for example `expectErrContains`, `expectEqual`) and drop the wrapper at its call sites",
+      severity = SevWarning,
+      loc = Some loc,
+      fix = None,
+    },
+  ]
+helperFinding graded propBodies (DAttrib _ d) =
+  helperFinding graded propBodies d
+helperFinding _ _ _ = []
+
+endsInBool : Ty -> Bool
+endsInBool (TyFun _ r) = endsInBool r
+endsInBool (TyConstrained _ t) = endsInBool t
+endsInBool (TyNamed _ t _) = endsInBool t
+endsInBool (TyCon { tyConName = n }) = n == "Bool"
+endsInBool _ = False
+
+propBodyOf : Decl -> List Expr
+propBodyOf (DProp _ _ _ body) = [body]
+propBodyOf (DAttrib _ d) = propBodyOf d
+propBodyOf _ = []
+
+allBodies : List Decl -> List Expr
+allBodies decls = flatMap (d => map bodyExpr (declBodies d)) decls
+
+bodyExpr : DeclBody -> Expr
+bodyExpr (DeclBody _ e) = e
+
+-- The callee names of every expression graded by `expectTrue`/`expectFalse`
+-- somewhere inside `e`.
+gradedHeads : Expr -> List String
+gradedHeads e = here (unwrapLoc e) ++ flatMap gradedHeads (childExprs e)
+
+here : Expr -> List String
+here (EApp f a)
+  | isVerb f = headNames a
+here (EBinOp "|>" a f _)
+  | isVerb f = headNames a
+here _ = []
+
+isVerb : Expr -> Bool
+isVerb f = match unwrapLoc f
+  EVar "expectTrue" => True
+  EVar "expectFalse" => True
+  _ => False
+
+-- The callee of a graded expression: the head of an application, or, for a
+-- pipeline, the head of its last stage.
+headNames : Expr -> List String
+headNames e = match unwrapLoc e
+  EBinOp "|>" _ rhs _ => headNames rhs
+  other => match appSpineOf other
+    (EVar n, _) => [n]
+    _ => []

@@ -1,5 +1,5 @@
 # META
-source_lines=1061
+source_lines=1065
 stages=DESUGAR,MARK
 # SOURCE
 -- compiler/tools/lint_shared.mdk — helpers used by more than one lint module:
@@ -186,6 +186,10 @@ ruleNameRegexLiteral = "rule-regex-literal"
 export
 ruleNameTestBoolLiteralEqual : String
 ruleNameTestBoolLiteralEqual = "rule-test-bool-literal-equal"
+
+export
+ruleNameTestBoolHelper : String
+ruleNameTestBoolHelper = "rule-test-bool-helper"
 
 export
 ruleNameTestEqualInTrue : String
@@ -1156,6 +1160,8 @@ lastArmSpan arms = match last arms
 (DFunDef false "ruleNameRegexLiteral" () (ELit (LString "rule-regex-literal")))
 (DTypeSig true "ruleNameTestBoolLiteralEqual" (TyCon "String"))
 (DFunDef false "ruleNameTestBoolLiteralEqual" () (ELit (LString "rule-test-bool-literal-equal")))
+(DTypeSig true "ruleNameTestBoolHelper" (TyCon "String"))
+(DFunDef false "ruleNameTestBoolHelper" () (ELit (LString "rule-test-bool-helper")))
 (DTypeSig true "ruleNameTestEqualInTrue" (TyCon "String"))
 (DFunDef false "ruleNameTestEqualInTrue" () (ELit (LString "rule-test-equal-in-true")))
 (DTypeSig true "ruleNamePreludeShadow" (TyCon "String"))
@@ -1509,6 +1515,8 @@ lastArmSpan arms = match last arms
 (DFunDef false "ruleNameRegexLiteral" () (ELit (LString "rule-regex-literal")))
 (DTypeSig true "ruleNameTestBoolLiteralEqual" (TyCon "String"))
 (DFunDef false "ruleNameTestBoolLiteralEqual" () (ELit (LString "rule-test-bool-literal-equal")))
+(DTypeSig true "ruleNameTestBoolHelper" (TyCon "String"))
+(DFunDef false "ruleNameTestBoolHelper" () (ELit (LString "rule-test-bool-helper")))
 (DTypeSig true "ruleNameTestEqualInTrue" (TyCon "String"))
 (DFunDef false "ruleNameTestEqualInTrue" () (ELit (LString "rule-test-equal-in-true")))
 (DTypeSig true "ruleNamePreludeShadow" (TyCon "String"))
