@@ -42,9 +42,10 @@ and per-directory tables, not the median or p90). The sprint base is `0bdc72265`
 | CPU per verb, sprint base to sprint head | unchanged within noise, user+sys, median of 3, each binary built from its own tree, on a loaded shared box: hello `check`/`run`/`build` 0.04/0.06/0.62 s to 0.04/0.05/0.54 s; value `main` 0.05 s to 0.05 s; `test stdlib/list.mdk` 1.87 s to 1.62 s; `check` of the CLI graph 29.5 s to 29.7 s. The 2026-10-21 figures (17.9 s for the CLI graph) were taken on a different box load and are not comparable to these | `/usr/bin/time -f '%U %S'`, raw runs in the arch-closeout report |
 | Design docs in `compiler/` | 20 files, 19,176 lines | `ls compiler/*.md \| wc -l`; `cat compiler/*.md \| wc -l` |
 
-Open milestones this plan draws on (2026-10-21): M-PUBLISH (1 open), M-PIPELINE (1),
-M-CACHE (4), M-BOUNDARIES (3), M-IDENTITY (11); run-once O2 (2), O3 (2), O4 (8), O5 (5).
-The Phase 1 and Phase 2 milestones are still open with 3 and 5 issues each (§3, §4).
+The architecture milestones (Phases 0 to 4) are closed, and epic #4206 closed 2026-11-02; its
+unruled scope is filed as #4749, #4750 and #4751. Other milestones this plan draws on, still
+open on 2026-11-02: M-PUBLISH (1 open), M-PIPELINE (1), M-CACHE (2), M-BOUNDARIES (2),
+M-IDENTITY (11), M-EFFECTS (1); run-once O1 (3), O2 (2), O3 (1), O4 (7), O5 (4).
 
 ---
 
@@ -159,7 +160,8 @@ lines in `typecheck.mdk`, all parameters, re-wraps and records, loaned against
   comment), so `typecheck.module` is 2 on every verb's hello probe. Phase 3 inherits both
   facts (§5).
 - Style debt the diff-scoped review cannot see (#4350); a nested-group effect-escape bug
-  found beside the work (#4331, fixed by arch-closeout); the Phase 2 milestone is still open on these five.
+  found beside the work (#4331, fixed by arch-closeout). The Phase 2 milestone closed on
+  2026-11-01; #4350 and #4355 stay open as debt.
 - Every refusal in the phase (sprint 4, 6d and 6e, two each) was a measured set smaller
   than the affected set, or a packet fact that contact contradicted; none was a wrong
   change. The end-of-sprint review found what per-slice checks missed each time it fired:
@@ -220,7 +222,8 @@ sprints.
 tracked by #4604, which is an issue; no PR carries that number.
 
 Landed rows: B1 on 2026-10-14 (#4107, PR #4110); B5 on 2026-10-27 (P5.8, PR #4537); F1 in #4314;
-F2 in #4703; F3 in #4717. B2 to B4 have no landing line in this section; see #4206.
+F2 in #4703; F3 in #4717. B2 to B4 have no single landing PR; their owners and evidence are the B2, B3 and B4 rows of
+[`backend/ARCHITECTURE.md`](backend/ARCHITECTURE.md).
 
 Named limits, as their rows state them: B3's fingerprint is a bounded historical-shape floor,
 and arbitrary algorithm rewrites can evade it; B5's guarantee is not independent Wasm

@@ -1,5 +1,5 @@
 # META
-source_lines=520
+source_lines=540
 stages=DESUGAR,MARK
 # SOURCE
 -- Tests for the file primitives `stdlib/fs.mdk` builds on.
@@ -167,8 +167,7 @@ test "editFile of a file that is not UTF-8 names the path once" = withScratchDir
       Ok _ => expectEqual (map (_ => ()) (readFile path)) (editFile path Ok))
 
 -- A read-only file refuses the write open, except for root, which ignores
--- the mode, so the test passes without asserting when it runs as root. The
--- write extern discards some other write failures, which are not testable.
+-- the mode, so the test passes without asserting when it runs as root.
 test "editFile on a write failure names the path" = withScratchDir (dir =>
   let path = joinPath dir "readonly.txt"
   match (
@@ -522,6 +521,27 @@ test "glob does not enter a dot directory its pattern cannot reach" = withDangli
       (Ok [joinPath dir "dang/top.txt"])
       (glob (joinPath dir "dang/**/*.txt")),
   ])
+
+-- `/dev/full` opens for writing and refuses every byte with ENOSPC, which stdio
+-- reports at the close. The device is absent on macOS, where these pass
+-- without asserting.
+test "writeFile to a full device is an Err" =
+  if fileExists "/dev/full" then
+    expectErrContains "No space left" (writeFile "/dev/full" "hello")
+  else
+    pass
+
+test "appendFile to a full device is an Err" =
+  if fileExists "/dev/full" then
+    expectErrContains "No space left" (appendFile "/dev/full" "hello")
+  else
+    pass
+
+test "writeFileBytes to a full device is an Err" =
+  if fileExists "/dev/full" then
+    expectErrContains "No space left" (writeFileBytes "/dev/full" [|1, 2, 3|])
+  else
+    pass
 # DESUGAR
 (DUse false (UseGroup ("fs") ((mem "editFile" false) (mem "glob" false) (mem "isDir" false) (mem "isFile" false) (mem "mkdirAll" false) (mem "stat" false) (mem "walkDir" false) (mem "walkFiles" false) (mem "walkFilesSkipping" false))))
 (DUse false (UseGroup ("list") ((mem "sort" false))))
@@ -611,6 +631,9 @@ test "glob does not enter a dot directory its pattern cannot reach" = withDangli
 (DTest false "glob with a trailing slash finds directories, written with the slash" (EApp (EVar "withDotTree") (ELam ((PVar "dir")) (EApp (EVar "expectEach") (EListLit (ETuple (ELit (LString "sub/*/")) (EApp (EApp (EVar "expectEqual") (EApp (EVar "Ok") (EApp (EApp (EVar "rooted") (EVar "dir")) (EListLit (ELit (LString "sub/.dot/")) (ELit (LString "sub/inner/")))))) (EApp (EVar "glob") (EApp (EApp (EVar "joinPath") (EVar "dir")) (ELit (LString "sub/*/")))))) (ETuple (ELit (LString "**/")) (EApp (EApp (EVar "expectEqual") (EApp (EVar "Ok") (EBinOp "::" (EBinOp "++" (EBinOp "++" (ELit (LString "")) (EApp (EVar "display") (EVar "dir"))) (ELit (LString "/"))) (EApp (EApp (EVar "rooted") (EVar "dir")) (EListLit (ELit (LString "empty/")) (ELit (LString "empty/nested/")) (ELit (LString "sub/")) (ELit (LString "sub/inner/"))))))) (EApp (EVar "glob") (EApp (EApp (EVar "joinPath") (EVar "dir")) (ELit (LString "**/")))))) (ETuple (ELit (LString ".*/")) (EApp (EApp (EVar "expectEqual") (EApp (EVar "Ok") (EApp (EApp (EVar "rooted") (EVar "dir")) (EListLit (ELit (LString ".git/")) (ELit (LString ".venv/")))))) (EApp (EVar "glob") (EApp (EApp (EVar "joinPath") (EVar "dir")) (ELit (LString ".*/")))))) (ETuple (ELit (LString ".git/**/")) (EApp (EApp (EVar "expectEqual") (EApp (EVar "Ok") (EApp (EApp (EVar "rooted") (EVar "dir")) (EListLit (ELit (LString ".git/")) (ELit (LString ".git/objects/")))))) (EApp (EVar "glob") (EApp (EApp (EVar "joinPath") (EVar "dir")) (ELit (LString ".git/**/")))))) (ETuple (ELit (LString "sub/")) (EApp (EApp (EVar "expectEqual") (EApp (EVar "Ok") (EListLit (EApp (EApp (EVar "joinPath") (EVar "dir")) (ELit (LString "sub/")))))) (EApp (EVar "glob") (EApp (EApp (EVar "joinPath") (EVar "dir")) (ELit (LString "sub/")))))) (ETuple (ELit (LString "a.mdk/")) (EApp (EApp (EVar "expectEqual") (EApp (EVar "Ok") (EListLit))) (EApp (EVar "glob") (EApp (EApp (EVar "joinPath") (EVar "dir")) (ELit (LString "a.mdk/")))))))))))
 (DTest false "glob of a trailing-slash pattern under a missing prefix is an Err" (EApp (EVar "withDotTree") (ELam ((PVar "dir")) (EBlock (DoLet false false (PVar "prefix") (EApp (EApp (EVar "joinPath") (EVar "dir")) (ELit (LString "absent")))) (DoExpr (EApp (EApp (EVar "expectErrContains") (EBinOp "++" (EBinOp "++" (ELit (LString "")) (EApp (EVar "display") (EVar "prefix"))) (ELit (LString ": ")))) (EApp (EVar "glob") (EApp (EApp (EVar "joinPath") (EVar "prefix")) (ELit (LString "*/"))))))))))
 (DTest false "glob does not enter a dot directory its pattern cannot reach" (EApp (EVar "withDangling") (ELam ((PVar "dir")) (EApp (EVar "expectAll") (EListLit (EApp (EApp (EVar "expectOkThen") (ELam ((PTuple (PVar "code") PWild PWild)) (EApp (EApp (EVar "expectEqual") (ELit (LInt 0))) (EVar "code")))) (EApp (EApp (EVar "runVerb") (ELit (LString "mv"))) (EListLit (EApp (EApp (EVar "joinPath") (EVar "dir")) (ELit (LString "dang/deep"))) (EApp (EApp (EVar "joinPath") (EVar "dir")) (ELit (LString "dang/.deep")))))) (EApp (EApp (EVar "expectEqual") (EApp (EVar "Ok") (EListLit (EApp (EApp (EVar "joinPath") (EVar "dir")) (ELit (LString "dang/top.txt")))))) (EApp (EVar "glob") (EApp (EApp (EVar "joinPath") (EVar "dir")) (ELit (LString "dang/**/*.txt"))))))))))
+(DTest false "writeFile to a full device is an Err" (EIf (EApp (EVar "fileExists") (ELit (LString "/dev/full"))) (EApp (EApp (EVar "expectErrContains") (ELit (LString "No space left"))) (EApp (EApp (EVar "writeFile") (ELit (LString "/dev/full"))) (ELit (LString "hello")))) (EVar "pass")))
+(DTest false "appendFile to a full device is an Err" (EIf (EApp (EVar "fileExists") (ELit (LString "/dev/full"))) (EApp (EApp (EVar "expectErrContains") (ELit (LString "No space left"))) (EApp (EApp (EVar "appendFile") (ELit (LString "/dev/full"))) (ELit (LString "hello")))) (EVar "pass")))
+(DTest false "writeFileBytes to a full device is an Err" (EIf (EApp (EVar "fileExists") (ELit (LString "/dev/full"))) (EApp (EApp (EVar "expectErrContains") (ELit (LString "No space left"))) (EApp (EApp (EVar "writeFileBytes") (ELit (LString "/dev/full"))) (EArrayLit (ELit (LInt 1)) (ELit (LInt 2)) (ELit (LInt 3))))) (EVar "pass")))
 # MARK
 (DUse false (UseGroup ("fs") ((mem "editFile" false) (mem "glob" false) (mem "isDir" false) (mem "isFile" false) (mem "mkdirAll" false) (mem "stat" false) (mem "walkDir" false) (mem "walkFiles" false) (mem "walkFilesSkipping" false))))
 (DUse false (UseGroup ("list") ((mem "sort" false))))
@@ -700,3 +723,6 @@ test "glob does not enter a dot directory its pattern cannot reach" = withDangli
 (DTest false "glob with a trailing slash finds directories, written with the slash" (EApp (EVar "withDotTree") (ELam ((PVar "dir")) (EApp (EVar "expectEach") (EListLit (ETuple (ELit (LString "sub/*/")) (EApp (EApp (EVar "expectEqual") (EApp (EVar "Ok") (EApp (EApp (EVar "rooted") (EVar "dir")) (EListLit (ELit (LString "sub/.dot/")) (ELit (LString "sub/inner/")))))) (EApp (EVar "glob") (EApp (EApp (EVar "joinPath") (EVar "dir")) (ELit (LString "sub/*/")))))) (ETuple (ELit (LString "**/")) (EApp (EApp (EVar "expectEqual") (EApp (EVar "Ok") (EBinOp "::" (EBinOp "++" (EBinOp "++" (ELit (LString "")) (EApp (EMethodRef "display") (EVar "dir"))) (ELit (LString "/"))) (EApp (EApp (EVar "rooted") (EVar "dir")) (EListLit (ELit (LString "empty/")) (ELit (LString "empty/nested/")) (ELit (LString "sub/")) (ELit (LString "sub/inner/"))))))) (EApp (EVar "glob") (EApp (EApp (EVar "joinPath") (EVar "dir")) (ELit (LString "**/")))))) (ETuple (ELit (LString ".*/")) (EApp (EApp (EVar "expectEqual") (EApp (EVar "Ok") (EApp (EApp (EVar "rooted") (EVar "dir")) (EListLit (ELit (LString ".git/")) (ELit (LString ".venv/")))))) (EApp (EVar "glob") (EApp (EApp (EVar "joinPath") (EVar "dir")) (ELit (LString ".*/")))))) (ETuple (ELit (LString ".git/**/")) (EApp (EApp (EVar "expectEqual") (EApp (EVar "Ok") (EApp (EApp (EVar "rooted") (EVar "dir")) (EListLit (ELit (LString ".git/")) (ELit (LString ".git/objects/")))))) (EApp (EVar "glob") (EApp (EApp (EVar "joinPath") (EVar "dir")) (ELit (LString ".git/**/")))))) (ETuple (ELit (LString "sub/")) (EApp (EApp (EVar "expectEqual") (EApp (EVar "Ok") (EListLit (EApp (EApp (EVar "joinPath") (EVar "dir")) (ELit (LString "sub/")))))) (EApp (EVar "glob") (EApp (EApp (EVar "joinPath") (EVar "dir")) (ELit (LString "sub/")))))) (ETuple (ELit (LString "a.mdk/")) (EApp (EApp (EVar "expectEqual") (EApp (EVar "Ok") (EListLit))) (EApp (EVar "glob") (EApp (EApp (EVar "joinPath") (EVar "dir")) (ELit (LString "a.mdk/")))))))))))
 (DTest false "glob of a trailing-slash pattern under a missing prefix is an Err" (EApp (EVar "withDotTree") (ELam ((PVar "dir")) (EBlock (DoLet false false (PVar "prefix") (EApp (EApp (EVar "joinPath") (EVar "dir")) (ELit (LString "absent")))) (DoExpr (EApp (EApp (EVar "expectErrContains") (EBinOp "++" (EBinOp "++" (ELit (LString "")) (EApp (EMethodRef "display") (EVar "prefix"))) (ELit (LString ": ")))) (EApp (EVar "glob") (EApp (EApp (EVar "joinPath") (EVar "prefix")) (ELit (LString "*/"))))))))))
 (DTest false "glob does not enter a dot directory its pattern cannot reach" (EApp (EVar "withDangling") (ELam ((PVar "dir")) (EApp (EVar "expectAll") (EListLit (EApp (EApp (EVar "expectOkThen") (ELam ((PTuple (PVar "code") PWild PWild)) (EApp (EApp (EVar "expectEqual") (ELit (LInt 0))) (EVar "code")))) (EApp (EApp (EVar "runVerb") (ELit (LString "mv"))) (EListLit (EApp (EApp (EVar "joinPath") (EVar "dir")) (ELit (LString "dang/deep"))) (EApp (EApp (EVar "joinPath") (EVar "dir")) (ELit (LString "dang/.deep")))))) (EApp (EApp (EVar "expectEqual") (EApp (EVar "Ok") (EListLit (EApp (EApp (EVar "joinPath") (EVar "dir")) (ELit (LString "dang/top.txt")))))) (EApp (EVar "glob") (EApp (EApp (EVar "joinPath") (EVar "dir")) (ELit (LString "dang/**/*.txt"))))))))))
+(DTest false "writeFile to a full device is an Err" (EIf (EApp (EVar "fileExists") (ELit (LString "/dev/full"))) (EApp (EApp (EVar "expectErrContains") (ELit (LString "No space left"))) (EApp (EApp (EVar "writeFile") (ELit (LString "/dev/full"))) (ELit (LString "hello")))) (EVar "pass")))
+(DTest false "appendFile to a full device is an Err" (EIf (EApp (EVar "fileExists") (ELit (LString "/dev/full"))) (EApp (EApp (EVar "expectErrContains") (ELit (LString "No space left"))) (EApp (EApp (EVar "appendFile") (ELit (LString "/dev/full"))) (ELit (LString "hello")))) (EVar "pass")))
+(DTest false "writeFileBytes to a full device is an Err" (EIf (EApp (EVar "fileExists") (ELit (LString "/dev/full"))) (EApp (EApp (EVar "expectErrContains") (ELit (LString "No space left"))) (EApp (EApp (EVar "writeFileBytes") (ELit (LString "/dev/full"))) (EArrayLit (ELit (LInt 1)) (ELit (LInt 2)) (ELit (LInt 3))))) (EVar "pass")))
