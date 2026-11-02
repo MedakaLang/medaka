@@ -213,7 +213,6 @@ import types.tc_effects.{
   borrowedEffectCells,
   collectProducedSummary,
   finishEffectSummaryScopeKeeping,
-  flushPendingEscapes,
   freshEffectSummary,
   grantOnlyBindingId,
   localBindingSummary,
@@ -3336,7 +3335,6 @@ processLetGroup env binds =
     finishValueEffectsKeeping
       env.teDyn
       (map (letBindGeneralizes env) (zipL binds summaries))
-  flushPendingEscapes env.teDyn.dcModule env.teDyn.dcGroup
   exitLevel env.teDyn.dcModule ()
   -- PLAN.md #11 / D4, as a where block narrows it (#3487): ground the Num-only
   -- vars owned by this just-exited component that no member's type mentions

@@ -3446,6 +3446,30 @@ test "a leak past an <IO> bound names what IO joins on a narrowed target only" =
     ),
   ]
 
+-- A nested let group inside an SCC must not close the enclosing group's
+-- pending escape findings: each offending top-level binding is reported once.
+nestedFlushSource : String -> String
+nestedFlushSource helper =
+  "a : Int -> Int\na x =\n  let _ = say \"a\"\n  b x\n\nb : Int -> Int\nb x = go x\n  where\n"
+    ++ helper
+    ++ "\nc : Int -> Int\nc x =\n  let _ = say \"c\"\n  a x\n"
+
+nestedFlushLeaks : String -> List (Int, String)
+nestedFlushLeaks helper =
+  map
+    ((_, line, code, _) => (line, code))
+    (ioJoinCheck None [("entry", nestedFlushSource helper)])
+
+test "a nested let group does not flush the enclosing group's findings early, so a leaking SCC member is reported once" =
+  expectEqual
+    [(3, "T-EFFECT-LEAK"), (13, "T-EFFECT-LEAK")]
+    (nestedFlushLeaks "    go y = c y\n")
+
+test "a nested let group that itself leaks is reported once, beside the enclosing group's findings" =
+  expectEqual
+    [(3, "T-EFFECT-LEAK"), (10, "T-EFFECT-LEAK"), (15, "T-EFFECT-LEAK")]
+    (nestedFlushLeaks "    go y =\n      let _ = say \"go\"\n      c y\n")
+
 -- A performed `IO` is covered only by a label of the join, so on
 -- `wasmgc/wasi-p2`, whose join is empty, a pure bound still refuses it.
 test "an <IO> extern in a pure function is refused on every profile" =
