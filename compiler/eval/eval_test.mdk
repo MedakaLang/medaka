@@ -200,7 +200,7 @@ test "test and repl random externs draw from the seeded program stream" =
         (VInt 1000000000)
   let drawSeeded =
     binds n =>
-      let _ = seedRunRng n
+      seedRunRng n
       ppValue (draw binds)
   expectAll [
     expectEqual (drawSeeded capable 7) (drawSeeded capable 7),
@@ -371,7 +371,7 @@ test "indexed installation updates the first cell and preserves lexical shadows"
   let other = Ref (VInt 0)
   let frame = indexedFrame [("x", first), ("x", duplicate), ("y", other)]
   let env = EvalEnv emptyFacts [frame]
-  let _ = installFrameConsts frame [("x", VInt 1), ("y", VInt 3), ("x", VInt 2)]
+  installFrameConsts frame [("x", VInt 1), ("y", VInt 3), ("x", VInt 2)]
   let shadowed = pushFrame env [("x", Ref (VInt 8))]
   expectAll [
     expectEqual "2" (ppValue !first),
@@ -387,11 +387,11 @@ test "file attribution lookup skips ordinary indexed frames" =
     indexedFrame [("y", Ref (VInt 8))],
     ScanFrame [(evalFileTagName, Ref (VString "module.mdk"))],
   ]
-  let _ = setOpCounting True
+  setOpCounting True
   let before = opSnap ()
   let file = map ppValue (lookupEnvOpt env evalFileTagName)
   let ops = opSnap () - before
-  let _ = setOpCounting False
+  setOpCounting False
   expectAll [
     expectEqual (Some "module.mdk") file,
     expectEqual 1 ops,
