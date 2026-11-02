@@ -595,10 +595,10 @@ test "executed signed Float mains keep shipped printing across core collisions a
           [False, True])
       ["entry", "core"])
 
-untouched : (Int, Int) -> Ref Tyvar -> Bool
+untouched : (Int, Int) -> Ref Tyvar -> Expectation
 untouched (id, lvl) cell = match !cell
-  Unbound i l => i == id && l == lvl
-  Link _ => False
+  Unbound i l => expectEqual (id, lvl) (i, l)
+  Link _ => fail "the cell was linked"
 
 tvar : Int -> Mono
 tvar id = TVar (Ref (Unbound id 1))
@@ -660,7 +660,7 @@ test "a free Unbound is re-minted with its id and reported as FreeMeta" =
   expectEach [
     (
       "source cell not written",
-      expectTrue (untouched (7, 3) src),
+      untouched (7, 3) src,
     ),
     ("reported", expectEqual [FreeMeta "f" TyVarK 7] found),
     (

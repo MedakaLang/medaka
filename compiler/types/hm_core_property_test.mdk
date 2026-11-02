@@ -11,7 +11,7 @@ import frontend.desugar.{desugar}
 import frontend.parser.{parseLocated}
 import list.{drop, elemIndex, filter, lookup, nub, reverse}
 import string.{isAlphaNum, join, toChars}
-import test.{expectAll, expectAtLeast, expectEqual, expectFalse, expectTrue}
+import test.{Expectation, expectAll, expectAtLeast, expectEqual, expectTrue}
 import types.law_harness_test.{
   Shape(..),
   Verdict(..),
@@ -49,6 +49,9 @@ renderTy (TT items) = "(\{join ", " (map renderTy items)})"
 -- Equal up to a renaming of variables, by the harness's canonical renaming.
 sameType : Ty -> Ty -> Bool
 sameType left right = alphaEquiv (renderTy left) (renderTy right)
+
+expectSameType : Bool -> Ty -> Ty -> Expectation
+expectSameType want left right = expectEqual want (sameType left right)
 
 {- Reads a rendered type back into the model: the printer's spelling and the
    harness's spelling both, redundant parentheses allowed. A token the
@@ -526,6 +529,14 @@ principalAgrees model (codes, inferred) (codesAgain, reinferred) =
     && isEmpty codesAgain
     && alphaEquiv inferred reinferred
 
+expectPrincipalAgrees : Bool ->
+  Ty ->
+  (List String, String) ->
+  (List String, String) ->
+  Expectation
+expectPrincipalAgrees want model first again =
+  expectEqual want (principalAgrees model first again)
+
 annotatedBinding : String -> Shape -> String
 annotatedBinding scheme shape =
   "\{shapeSupport}g : \{scheme}\ng = \{shapeAt "w" shape}\n"
@@ -689,8 +700,8 @@ test "the type reader round-trips both spellings and rejects junk" = expectAll [
     (parseTy "((t0 -> t0), (t2 -> Pair Int t2))"),
   expectEqual (TF (TF (TV "a") (TV "b")) (TV "c")) (parseTy "(a -> b) -> c"),
   expectEqual unreadable (parseTy "a -> "),
-  expectTrue (sameType (parseTy "a -> b -> a") (parseTy "(t1 -> (t0 -> t1))")),
-  expectFalse (sameType (parseTy "a -> b") (parseTy "t0 -> t0")),
+  expectSameType True (parseTy "a -> b -> a") (parseTy "(t1 -> (t0 -> t1))"),
+  expectSameType False (parseTy "a -> b") (parseTy "t0 -> t0"),
 ]
 
 test "the unification model finds unifiers, clashes and cycles" = expectAll [
@@ -737,15 +748,15 @@ test "the principality comparison rejects a less general, a different and an err
   let model = parseTy "(t0 -> t0)"
   let fine = ([], "a -> a")
   expectAll [
-    expectTrue (principalAgrees model fine fine),
-    expectFalse (principalAgrees model ([], "a -> b") ([], "a -> b")),
-    expectFalse (principalAgrees model fine ([], "Int -> Int")),
-    expectFalse (principalAgrees model (["T-TYPE-MISMATCH"], "a -> a") fine),
-    expectFalse
-      (principalAgrees
-        model
-        fine
-        (schemeOf "g" (annotatedBinding "Int -> Int" SId))),
+    expectPrincipalAgrees True model fine fine,
+    expectPrincipalAgrees False model ([], "a -> b") ([], "a -> b"),
+    expectPrincipalAgrees False model fine ([], "Int -> Int"),
+    expectPrincipalAgrees False model (["T-TYPE-MISMATCH"], "a -> a") fine,
+    expectPrincipalAgrees
+      False
+      model
+      fine
+      (schemeOf "g" (annotatedBinding "Int -> Int" SId)),
     expectTrue (principal SId),
   ]
 

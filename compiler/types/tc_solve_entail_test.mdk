@@ -9,6 +9,7 @@
 import types.tc_mono.{tconFrom, tconBuiltin}
 import list.{head, reverse}
 import test.{
+  Expectation,
   expectAll,
   expectFalse,
   expectEqual,
@@ -122,8 +123,7 @@ flatGoals n
     flatGoals (n - 1) ++ [(ifaceOf "G\{intToString (n - 1)}", [intM])]
 
 test "a chain of goals that never shrink is cut off by a step that names the goal" =
-  expectTrue
-    (isDeep (firstStop (reqWalkSeed (ifaceOf "Seed") [intM]) (flatGoals 200)))
+  isDeep (firstStop (reqWalkSeed (ifaceOf "Seed") [intM]) (flatGoals 200))
 
 firstStop : ReqWalk -> List (IfaceRef, List Mono) -> (Int, Option ReqStep)
 firstStop walk goals = firstStopGo 0 walk goals
@@ -137,9 +137,9 @@ firstStopGo n walk ((iface, args) :: rest) = match reqWalkEnter walk iface args
   ReqOn next => firstStopGo (n + 1) next rest
   stop => (n, Some stop)
 
-isDeep : (Int, Option ReqStep) -> Bool
-isDeep (_, Some (ReqDeep _ _)) = True
-isDeep _ = False
+isDeep : (Int, Option ReqStep) -> Expectation
+isDeep (_, Some (ReqDeep _ _)) = pass
+isDeep _ = fail "the walk did not stop on a deep step"
 
 test "the steps taken before the cut-off are the fuel the walk starts with" =
   let (steps, _) =

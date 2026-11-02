@@ -2607,24 +2607,31 @@ dispositionsAfter sources =
 sameIfaceSpelling : IfaceRef -> String -> Bool
 sameIfaceSpelling iface name = iface.irName == name
 
-anyMatchSupplied : String -> String -> List MethodDisposition -> Bool
-anyMatchSupplied _ _ [] = False
+anyMatchSupplied : String -> String -> List MethodDisposition -> Expectation
+anyMatchSupplied _ _ [] = fail "no supplied row has that instance and method"
 anyMatchSupplied wantMid wantMethod (d :: rest) = match d
   Supplied { instance = i, method = m } =>
-    instIdMid i == wantMid && m == wantMethod
-      || anyMatchSupplied wantMid wantMethod rest
+    if instIdMid i == wantMid && m == wantMethod then
+      pass
+    else
+      anyMatchSupplied wantMid wantMethod rest
   InheritedDefault _ _ _ => anyMatchSupplied wantMid wantMethod rest
 
 anyMatchInheritedDefault : String ->
   String ->
   String ->
   List MethodDisposition ->
-  Bool
-anyMatchInheritedDefault _ _ _ [] = False
+  Expectation
+anyMatchInheritedDefault _ _ _ [] =
+  fail "no inherited default has that instance, interface and method"
 anyMatchInheritedDefault wantMid wantIface wantMethod (d :: rest) = match d
   InheritedDefault { instance = i, iface = ir, method = m } =>
-    instIdMid i == wantMid && sameIfaceSpelling ir wantIface && m == wantMethod
-      || anyMatchInheritedDefault wantMid wantIface wantMethod rest
+    if instIdMid i == wantMid
+      && sameIfaceSpelling ir wantIface
+      && m == wantMethod then
+      pass
+    else
+      anyMatchInheritedDefault wantMid wantIface wantMethod rest
   Supplied _ _ _ => anyMatchInheritedDefault wantMid wantIface wantMethod rest
 
 -- #1265's shape: `Dog` implements two DIFFERENT interfaces (`ifa::Speak`,
@@ -2671,10 +2678,8 @@ test "#1265: two same-named methods of two different interfaces stay two rows" =
     ),
   ]
   expectAll [
-    expectTrue
-      (anyMatchInheritedDefault "ca" "Speak" "speak" (dispositionRows table)),
-    expectTrue
-      (anyMatchInheritedDefault "cb" "Greet" "speak" (dispositionRows table)),
+    anyMatchInheritedDefault "ca" "Speak" "speak" (dispositionRows table),
+    anyMatchInheritedDefault "cb" "Greet" "speak" (dispositionRows table),
   ]
 
 -- #1020's cross-module shape: a cross-module `impl` overriding NOTHING
@@ -2708,15 +2713,9 @@ test "#1020: cross-module empty and overriding impls disposition correctly" =
     ),
   ]
   expectAll [
-    expectTrue
-      (anyMatchInheritedDefault
-        "entry"
-        "Speak"
-        "speak"
-        (dispositionRows table)),
-    expectTrue (anyMatchSupplied "entry" "loud" (dispositionRows table)),
-    expectTrue
-      (anyMatchInheritedDefault "entry" "Loud" "loud" (dispositionRows table)),
+    anyMatchInheritedDefault "entry" "Speak" "speak" (dispositionRows table),
+    anyMatchSupplied "entry" "loud" (dispositionRows table),
+    anyMatchInheritedDefault "entry" "Loud" "loud" (dispositionRows table),
   ]
 
 -- The same method body, written as a supplied impl method or inherited as the
@@ -5350,10 +5349,14 @@ methodOutcomeView entry = match entry.mrtOutcome
   Some (Insoluble _ _) => Some MOVInsoluble
   None => None
 
-methodTraceUsesOneOutcome : List MethodReturnTraceEntry -> Bool
+methodTraceUsesOneOutcome : List MethodReturnTraceEntry -> Expectation
 methodTraceUsesOneOutcome trace = match map methodOutcomeView trace
-  [None, Some checked, Some stamped] => checked == stamped
-  _ => False
+  [None, Some checked, Some stamped] =>
+    if checked == stamped then
+      pass
+    else
+      fail "the checked and stamped outcomes differ"
+  _ => fail "the trace is not None, a checked outcome, then a stamped one"
 
 methodWantedView : MethodReturnTraceEntry -> Option MethodWantedView
 methodWantedView entry = match (entry.mrtQualifiedBody, entry.mrtWanted)
@@ -5442,7 +5445,7 @@ test "ordinary return shares declaration identity vector and goal destination" =
     ),
     (
       "the trace uses one outcome",
-      expectTrue (methodTraceUsesOneOutcome trace),
+      methodTraceUsesOneOutcome trace,
     ),
     (
       "outcomes are None, an instance, then given",
@@ -5503,7 +5506,7 @@ test "ordinary return given evidence feeds checking and route publication" =
         "use _ = choose ()",
       ])
   expectAll [
-    expectTrue (methodTraceUsesOneOutcome trace),
+    methodTraceUsesOneOutcome trace,
     expectTrue (match map methodOutcomeView trace
       [None, Some (MOVGiven checked), Some (MOVGiven stamped)] =>
         checked == stamped
@@ -5549,7 +5552,7 @@ test "ordinary return instance evidence retains selected prerequisites" =
         "value = make ()",
       ])
   expectAll [
-    expectTrue (methodTraceUsesOneOutcome trace),
+    methodTraceUsesOneOutcome trace,
     expectTrue (match map methodOutcomeView trace
       [None, Some (MOVInstance _ ["Box Int"] [("Need", ["Int"])]), Some (MOVInstance _ ["Box Int"] [("Need", ["Int"])])] =>
         True
@@ -5611,7 +5614,7 @@ test "absent return formal completes from the exact enclosing given" =
     ),
     (
       "the trace uses one outcome",
-      expectTrue (methodTraceUsesOneOutcome trace),
+      methodTraceUsesOneOutcome trace,
     ),
     (
       "the given and stamped outcomes agree",
@@ -6107,14 +6110,17 @@ scopeOrdinal (ScopeId n) = n
 -- prerequisite identities, and binder scope, exactly the four the mission's
 -- mutation checks name. Correct on the real entry; each mutation test shows it
 -- FALSE on one deliberately wrong field.
-evidenceEntryMatches : (EvidenceOutcomeKind, Option String, List String, Int) ->
+evidenceEntryMatches : Bool ->
+  (EvidenceOutcomeKind, Option String, List String, Int) ->
   EvidenceObservationEntry ->
-  Bool
-evidenceEntryMatches (outcome, instanceKey, prerequisites, scopeN) e =
-  e.eoeOutcome == outcome
-    && e.eoeInstanceKey == instanceKey
-    && e.eoePrerequisites == prerequisites
-    && scopeOrdinal e.eoeScope == scopeN
+  Expectation
+evidenceEntryMatches want (outcome, instanceKey, prerequisites, scopeN) e =
+  expectEqual
+    want
+    (e.eoeOutcome == outcome
+      && e.eoeInstanceKey == instanceKey
+      && e.eoePrerequisites == prerequisites
+      && scopeOrdinal e.eoeScope == scopeN)
 
 test "a nested constrained call forwards the enclosing given (#2095 given forwarding)" =
   let trace =
@@ -6184,42 +6190,42 @@ test "the construction goal's pin is sensitive to identity, prerequisites, and s
     [e] =>
       let scopeN = scopeOrdinal e.eoeScope
       expectAll [
-        expectTrue
-          (evidenceEntryMatches
-            (
-              EOKInstance,
-              Some "evidence_observation::Build|(evidence_observation.Box a)|",
-              ["RKey evidence_observation::Need|Int|"],
-              scopeN,
-            )
-            e),
-        expectFalse
-          (evidenceEntryMatches
-            (
-              EOKInstance,
-              Some "SomethingElse",
-              ["RKey evidence_observation::Need|Int|"],
-              scopeN,
-            )
-            e),
-        expectFalse
-          (evidenceEntryMatches
-            (
-              EOKInstance,
-              Some "evidence_observation::Build|(evidence_observation.Box a)|",
-              [],
-              scopeN,
-            )
-            e),
-        expectFalse
-          (evidenceEntryMatches
-            (
-              EOKInstance,
-              Some "evidence_observation::Build|(evidence_observation.Box a)|",
-              ["RKey evidence_observation::Need|Int|"],
-              scopeN + 1,
-            )
-            e),
+        evidenceEntryMatches
+          True
+          (
+            EOKInstance,
+            Some "evidence_observation::Build|(evidence_observation.Box a)|",
+            ["RKey evidence_observation::Need|Int|"],
+            scopeN,
+          )
+          e,
+        evidenceEntryMatches
+          False
+          (
+            EOKInstance,
+            Some "SomethingElse",
+            ["RKey evidence_observation::Need|Int|"],
+            scopeN,
+          )
+          e,
+        evidenceEntryMatches
+          False
+          (
+            EOKInstance,
+            Some "evidence_observation::Build|(evidence_observation.Box a)|",
+            [],
+            scopeN,
+          )
+          e,
+        evidenceEntryMatches
+          False
+          (
+            EOKInstance,
+            Some "evidence_observation::Build|(evidence_observation.Box a)|",
+            ["RKey evidence_observation::Need|Int|"],
+            scopeN + 1,
+          )
+          e,
       ]
     _ => fail "expected exactly one Box Int construction goal"
 

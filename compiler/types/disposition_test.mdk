@@ -9,12 +9,12 @@
 -- duplicate-detection fold, and the validator — none of which needs a
 -- typechecked program to exercise.
 --
--- Comparisons below go through hand-written boolean predicates rather than
+-- Comparisons render the looked-up row to a string (`rowLabel`) rather than
 -- `expectEqual` on a `MethodDisposition`/`Option MethodDisposition` value:
 -- neither `IfaceRef` nor `MethodDisposition` derives `Eq`/`Debug`, and adding
 -- either only for this file would be exactly the kind of instance a real
 -- reader (`types.repr`'s own callers) never asked for.
-import test.{expectTrue, expectEqual, expectAll}
+import test.{Expectation, expectEqual, expectAll}
 import frontend.ast.{TyConOrigin(..)}
 import types.repr.{IfaceRef(..)}
 import types.disposition.{
@@ -25,8 +25,6 @@ import types.disposition.{
   dispositionLookup,
   dispositionRows,
   emptyDispositionTable,
-  instIdMid,
-  instIdSeq,
   dispositionProblems,
 }
 
@@ -42,36 +40,39 @@ dogInst = InstId "ca" 0
 catInst : InstId
 catInst = InstId "cb" 1
 
-sameInst : InstId -> InstId -> Bool
-sameInst a b = instIdMid a == instIdMid b && instIdSeq a == instIdSeq b
+-- The row a lookup found, as its kind and key; `none` when there is no row.
+rowLabel : Option MethodDisposition -> String
+rowLabel None = "none"
+rowLabel (Some (Supplied { instance = i, method = m })) =
+  "supplied " ++ dispositionKey i m
+rowLabel (Some (InheritedDefault { instance = i, method = m })) =
+  "inherited " ++ dispositionKey i m
 
-isNoneRow : Option MethodDisposition -> Bool
-isNoneRow None = True
-isNoneRow (Some _) = False
+expectNoneRow : Option MethodDisposition -> Expectation
+expectNoneRow o = expectEqual "none" (rowLabel o)
 
-isSuppliedFor : InstId -> String -> Option MethodDisposition -> Bool
-isSuppliedFor wantInst wantMethod (Some (Supplied { instance = i, method = m })) =
-  sameInst i wantInst && m == wantMethod
-isSuppliedFor _ _ _ = False
+expectSuppliedFor : InstId -> String -> Option MethodDisposition -> Expectation
+expectSuppliedFor wantInst wantMethod o =
+  expectEqual ("supplied " ++ dispositionKey wantInst wantMethod) (rowLabel o)
 
-isInheritedDefaultFor : InstId -> String -> Option MethodDisposition -> Bool
-isInheritedDefaultFor wantInst wantMethod (Some (InheritedDefault { instance = i, method = m })) =
-  sameInst i wantInst && m == wantMethod
-isInheritedDefaultFor _ _ _ = False
+expectInheritedDefaultFor : InstId ->
+  String ->
+  Option MethodDisposition ->
+  Expectation
+expectInheritedDefaultFor wantInst wantMethod o =
+  expectEqual ("inherited " ++ dispositionKey wantInst wantMethod) (rowLabel o)
 
 test "dispositionKey renders instance identity and method as one string" =
   expectEqual "ca#0@speak" (dispositionKey dogInst "speak")
 
 test "an empty table answers every lookup with None" =
-  expectTrue
-    (isNoneRow (dispositionLookup dogInst "speak" emptyDispositionTable))
+  expectNoneRow (dispositionLookup dogInst "speak" emptyDispositionTable)
 
 test "buildDispositionTable answers a supplied row by exact key" =
   let table = buildDispositionTable [
     Supplied { instance = dogInst, iface = speakIface, method = "speak" },
   ]
-  expectTrue
-    (isSuppliedFor dogInst "speak" (dispositionLookup dogInst "speak" table))
+  expectSuppliedFor dogInst "speak" (dispositionLookup dogInst "speak" table)
 
 -- #1265's shape: the SAME method spelling, inherited on the SAME underlying
 -- type, but under two impls of two differently-named interfaces — two
@@ -92,16 +93,14 @@ test "two same-named methods of two different interfaces stay distinct rows" =
     },
   ]
   expectAll [
-    expectTrue
-      (isInheritedDefaultFor
-        dogInst
-        "speak"
-        (dispositionLookup dogInst "speak" table)),
-    expectTrue
-      (isInheritedDefaultFor
-        catInst
-        "speak"
-        (dispositionLookup catInst "speak" table)),
+    expectInheritedDefaultFor
+      dogInst
+      "speak"
+      (dispositionLookup dogInst "speak" table),
+    expectInheritedDefaultFor
+      catInst
+      "speak"
+      (dispositionLookup catInst "speak" table),
     expectEqual 2 (length (dispositionRows table)),
   ]
 

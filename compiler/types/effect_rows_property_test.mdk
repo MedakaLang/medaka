@@ -108,9 +108,16 @@ pow2 : Int -> Int
 pow2 0 = 1
 pow2 n = 2 * pow2 (n - 1)
 
-allClosedTriples : Int -> Bool
-allClosedTriples 512 = True
-allClosedTriples code =
+-- The codes whose triple breaks the model or the algebra: empty when every
+-- triple holds, so the failure lists the rows that do not.
+closedTripleFailures : Int -> List Int
+closedTripleFailures 512 = []
+closedTripleFailures code =
+  let rest = closedTripleFailures (code + 1)
+  if closedTripleHolds code then rest else code :: rest
+
+closedTripleHolds : Int -> Bool
+closedTripleHolds code =
   let a = rowFromBits (code % 8)
   let b = rowFromBits (code / 8 % 8)
   let c = rowFromBits (code / 64)
@@ -119,10 +126,9 @@ allClosedTriples code =
     && ab == observedLabels (closedJoin b a)
     && observedLabels (closedJoin (closedJoin a b) c)
       == observedLabels (closedJoin a (closedJoin b c))
-    && allClosedTriples (code + 1)
 
 test "closed grade joins obey the model and algebra on all three-label row triples" =
-  expectTrue (allClosedTriples 0)
+  expectEqual [] (closedTripleFailures 0)
 
 test "joining an open row cannot solve its callback from a neighbouring closed row" =
   let tail = Ref (EUnbound 7 0)
