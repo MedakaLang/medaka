@@ -481,17 +481,6 @@ abstractTypeWords : String -> List Decl -> List String
 abstractTypeWords mid decls =
   map (n => typeTagOf (OriginModule mid) n) (directIn nsAbstractData decls)
 
--- Test-only observation (R5): read by `typecheck_test.mdk`, no production caller.
---
--- #2544 (M4): every diagnostic that armed the sticky gate in the drive, each tagged
--- with the module it was recorded in, in push order, deduplicated PER GOAL —
--- module, code, location and text together — never by text alone (a text key would
--- re-introduce the suppressed-check shape OD5 forbids: two goals at two sites with
--- the same rendering are two findings).
-export
-stickyTypeErrorDiags : DriveOutputs -> List (String, TcDiag)
-stickyTypeErrorDiags o = stickyDiagsInPushOrder o.doStickyDiags
-
 -- True iff the drive recorded a type error, as the drive left it.
 export
 hadTypeErrors : DriveOutputs -> Bool
@@ -2460,7 +2449,6 @@ chainArgs inputs valueMain preludeKey chainKey stepKeys runtimeDecls coreDecls0 
   }
 
 -- The arguments of an unkeyed drive that executes nothing.
-export
 driveArgs : DriveInputs ->
   Bool ->
   Option (Int, Int) ->
@@ -3198,19 +3186,6 @@ checkModulesEntryFullReportKGraph (DriveArgs inputs valueMain _ preludeKey _ run
         effectiveModules0)
   ((g.gdReport, g.gdOutputs), g.gdGraph)
 
--- render the entry report: type errors win (each `TYPE ERROR: …`), else the
--- entry's `name : scheme` lines followed by its non-exhaustive-match warnings.
--- The harness sorts, so scheme/warn relative order is not load-bearing.  Mirrors
--- runCheck's single-file shape, but over the entry module of a resolved graph.
-export
-checkModulesEntryReport : DriveInputs ->
-  List Decl ->
-  List Decl ->
-  List (String, List Decl) ->
-  String
-checkModulesEntryReport inputs runtimeDecls coreDecls modules =
-  fst (checkModulesEntryReportOut inputs runtimeDecls coreDecls modules)
-
 -- `checkModulesEntryReport` beside the outputs of its drive.
 checkModulesEntryReportOut : DriveInputs ->
   List Decl ->
@@ -3308,7 +3283,6 @@ checkOneSchemeFullK inputs preludeKey runtimeDecls coreDecls prog =
 
 -- `checkOneSchemeFullK` beside the graph record its drive ends in, for a test that
 -- observes that record after the drive.
-export
 checkOneSchemeFullKGraph : DriveArgs ->
   ((List (String, PubScheme), List (String, PubScheme)), GraphCtx)
 checkOneSchemeFullKGraph args =
@@ -3327,15 +3301,6 @@ checkOneDiags : DriveInputs ->
   (List TcDiag, List TcDiag)
 checkOneDiags inputs runtimeDecls coreDecls prog =
   checkOneDiagsK inputs False None runtimeDecls coreDecls prog
-
--- `checkOneDiags` beside the graph record its drive ends in, for a test that observes
--- that record after the drive.
-export
-checkOneDiagsGraph : DriveArgs -> ((List TcDiag, List TcDiag), GraphCtx)
-checkOneDiagsGraph args =
-  let (report, gctx) = checkOneReportKGraph args
-  let (_, _, errs, warns) = entrySplit report
-  ((errs, warns), gctx)
 
 -- `checkOneDiags` with the prelude key for the prelude interface — same contract as
 -- `checkOneSchemeFullK` — and the caller's value-main candidate (`autoPrintWanted`).
@@ -3528,14 +3493,6 @@ elaborateModules inputs runtimeDecls coreDecls0 modulesIn =
     coreDecls0
     modulesIn)
     (result, _, _) => result
-
--- `elaborateModules` beside the graph record its drive ends in, for a test that
--- observes that record after the drive.
-export
-elaborateModulesGraph : DriveArgs -> (ElabResult, GraphCtx)
-elaborateModulesGraph args =
-  let ((result, _, _), gctx) = elabTreesDrive args
-  (result, gctx)
 
 -- `elaborateModules` together with the prelude's schemes and the entry module's own
 -- schemes, from the SAME drive: a verb that both reads types and evaluates the

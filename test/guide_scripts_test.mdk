@@ -301,13 +301,17 @@ test "MEDAKA_SEED makes draws repeat on run and on a built program" = expectAll
     labelFail "built" (graded "draw" (buildIn "MEDAKA_SEED=42 ")),
   ]
 
+-- `medaka test` gives this process a MEDAKA_SEED, so the spawn removes it.
+unseededRun : String
+unseededRun = "unset MEDAKA_SEED; " ++ runIn ""
+
 test "without MEDAKA_SEED three runs of the same program draw differently" = withBinAndFile
   "draw"
-  (bin file => match clean (spawnBody bin file (runIn ""))
+  (bin file => match clean (spawnBody bin file unseededRun)
     Err e => fail e
-    Ok a => match clean (spawnBody bin file (runIn ""))
+    Ok a => match clean (spawnBody bin file unseededRun)
       Err e => fail e
-      Ok b => match clean (spawnBody bin file (runIn ""))
+      Ok b => match clean (spawnBody bin file unseededRun)
         Err e => fail e
         Ok c => expectEqual 3 (length (nub [a, b, c])))
 

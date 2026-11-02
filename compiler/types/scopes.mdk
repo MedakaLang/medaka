@@ -46,13 +46,6 @@ freshScopeStore _ = ScopeStore {
   ssNext = Ref 0,
 }
 
-export
-copyScopeStore : ScopeStore -> ScopeStore
-copyScopeStore store = ScopeStore {
-  ssFrames = Ref (arrayCopy store.ssFrames.value),
-  ssNext = Ref store.ssNext.value,
-}
-
 scopeOrdinal : ScopeId -> Int
 scopeOrdinal (ScopeId i) = i
 
@@ -171,7 +164,6 @@ closeScopeCursor store (ScopeOpen sid) = match (scopeFrame store sid).sfParent
   Some parent => ScopeOpen parent
   None => ScopeClosed
 
-export
 scopeOwnerLabel : ScopeOwner -> String
 scopeOwnerLabel ModuleOwner = "module"
 scopeOwnerLabel (BindingOwner name) = "binding:" ++ name

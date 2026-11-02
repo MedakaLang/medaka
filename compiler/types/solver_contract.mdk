@@ -22,12 +22,12 @@ public export data ClassPredicate = ClassPredicate {
 
 -- Predicate order is dictionary-parameter order.  Keeping the formal binder in
 -- the same record makes the correspondence indivisible during instantiation.
-public export data Qualifier = Qualifier {
+export data Qualifier = Qualifier {
   predicate : ClassPredicate,
   formal : EvidenceBinderId,
 }
 
-public export data QualifiedScheme = QualifiedScheme {
+export data QualifiedScheme = QualifiedScheme {
   hm : Scheme,
   qualifiers : List Qualifier,
 }
@@ -57,7 +57,7 @@ public export data Instantiation = Instantiation {
   arguments : List InstantiationArgument,
 }
 
-public export data InstantiationServices subst = InstantiationServices {
+export data InstantiationServices subst = InstantiationServices {
   makeSubstitution : List Int -> List Int -> List Int -> subst,
   substituteBody : subst -> Mono -> Mono,
   substituteForce : subst -> EffRow -> EffRow,
@@ -98,34 +98,6 @@ public export data SolverOutcome =
   | Solved SolverEvidence
   | Deferred Wanted (List SolverBlocker)
   | Insoluble Wanted SolverFailure
-
-substitutePredicate : InstantiationServices subst ->
-  subst ->
-  ClassPredicate ->
-  ClassPredicate
-substitutePredicate services subst pred = ClassPredicate {
-  predicateInterface = pred.predicateInterface,
-  predicateArguments =
-    map (services.substituteArgument subst) pred.predicateArguments,
-}
-
-instantiateQualifiers : InstantiationServices subst ->
-  subst ->
-  ScopeId ->
-  GoalOrigin ->
-  List Qualifier ->
-  List InstantiationArgument
-instantiateQualifiers _ _ _ _ [] = []
-instantiateQualifiers services subst scope origin (qualifier :: rest) =
-  let wanted = Wanted {
-    id = services.freshGoal origin scope,
-    predicate = substitutePredicate services subst qualifier.predicate,
-    origin = origin,
-    scope = scope,
-    destination = services.freshDestination origin scope,
-  }
-  InstantiationArgument { formal = qualifier.formal, wanted = wanted }
-    :: instantiateQualifiers services subst scope origin rest
 
 instantiateExistingQualifiers : ExistingInstantiationServices subst ->
   subst ->
@@ -178,20 +150,3 @@ instantiateQualifiedAt services subst scope origin targets qualified =
           origin
           qualified.qualifiers
           targets)
-
-export
-instantiateQualified : InstantiationServices subst ->
-  ScopeId ->
-  GoalOrigin ->
-  QualifiedScheme ->
-  Instantiation
-instantiateQualified services scope origin qualified = match qualified.hm
-  Forall typeVariables effectVariables authorityVariables _ schemeForce schemeBody =>
-    let subst =
-      services.makeSubstitution typeVariables effectVariables authorityVariables
-    Instantiation {
-      body = services.substituteBody subst schemeBody,
-      force = services.substituteForce subst schemeForce,
-      arguments =
-        instantiateQualifiers services subst scope origin qualified.qualifiers,
-    }

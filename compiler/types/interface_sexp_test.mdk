@@ -27,27 +27,27 @@ import support.sexp_value.{
 }
 import test_process.{underRoot, mdkModuleStem, testFileStem, withScratchDir}
 import types.interface_sexp.{
-  bindingSExp, bindingOfSExp, schemeSExp, schemeOfSExp, monoSExp, monoOfSExp,
-  effRowOfSExp, paramSExp, paramOfSExp, tyConOriginSExp, tyConOriginOfSExp,
-  pubSchemeSExp, pubSchemeOfSExp, ifaceRefSExp, ifaceRefOfSExp, nested,
-  listSExp, listOfSExp, pairSExp, pairOfSExp, tripleSExp, tripleOfSExp,
-  optionSExp, optionOfSExp, unitSExp, unitOfSExp, ordMapSExp, ordMapOfSExp,
-  intMapSExp, intMapOfSExp, surfaceTySExp, surfaceTyOfSExp, variantSExp,
-  variantOfSExp, tabKeySExp, tabKeyOfSExp, dataVisSExp, dataVisOfSExp,
-  recordInfoSExp, recordInfoOfSExp, predicateSlotSExp, predicateSlotOfSExp,
-  methodPredicateSlotSExp, methodPredicateSlotOfSExp, cDeclaredPrefixSExp,
-  cDeclaredPrefixOfSExp, builtinClassesSExp, builtinClassesOfSExp,
-  spellingPopSExp, spellingPopOfSExp, atomSExp, PreludeInterfaceFile(..),
-  InterfaceSection(..), interfaceFormatVersion, sectionsOfCache,
+  bindingSExp, bindingOfSExp, pubSchemeSExp, pubSchemeOfSExp, ifaceRefSExp,
+  ifaceRefOfSExp, nested, listSExp, listOfSExp, pairSExp, pairOfSExp,
+  tripleSExp, tripleOfSExp, optionSExp, optionOfSExp, unitSExp, unitOfSExp,
+  ordMapSExp, ordMapOfSExp, intMapSExp, intMapOfSExp, surfaceTySExp,
+  surfaceTyOfSExp, variantSExp, variantOfSExp, tabKeySExp, tabKeyOfSExp,
+  dataVisSExp, dataVisOfSExp, recordInfoSExp, recordInfoOfSExp,
+  predicateSlotSExp, predicateSlotOfSExp, methodPredicateSlotSExp,
+  methodPredicateSlotOfSExp, cDeclaredPrefixSExp, cDeclaredPrefixOfSExp,
+  builtinClassesSExp, spellingPopSExp, spellingPopOfSExp, atomSExp,
+  PreludeInterfaceFile(..), InterfaceSection(..), interfaceFormatVersion,
   cacheOfSections, encodeInterface, decodeInterface, readInterface,
-  readInterfaceGated, renderFault
+  readInterfaceGated, renderFault, monoNode, schemeNode, paramNode, originNode,
+  rooted, decMono, decScheme, decRow, decParam, decOrigin, decClasses
 }
 import types.interface_frame.{sha256Hex}
 import types.prelude_interface.{
   PreludeInterface(..), InterfaceKey(..), keysMatch, currentPreludeInterface
 }
 import types.publish.{
-  PubScheme(..), TcReport(..), LiveCell(..), VarKind(..), ppPubScheme, liveCells
+  PubScheme(..), TcReport(..), LiveCell(..), VarKind(..), ppPubScheme,
+  liveCells, emptyZonk, zonkMono, zonkScheme
 }
 import types.registry.{
   SpellingPop, spRows, spFloor, spCollided, spInsert, spEmpty
@@ -66,6 +66,43 @@ import types.typecheck.{
   checkModulesChainReportFor, checkModulesEntryFullReportK, defaultDriveInputs,
   driveInputsFor, entrySplit
 }
+
+monoSExp : Mono -> SExp
+monoSExp m = monoNode (snd (zonkMono emptyZonk m))
+
+schemeSExp : Scheme -> SExp
+schemeSExp s = schemeNode (snd (zonkScheme emptyZonk s))
+
+paramSExp : Param -> SExp
+paramSExp = paramNode
+
+tyConOriginSExp : TyConOrigin -> SExp
+tyConOriginSExp = originNode
+
+monoOfSExp : SExp -> Result SexpError Mono
+monoOfSExp = rooted decMono "mono"
+
+schemeOfSExp : SExp -> Result SexpError Scheme
+schemeOfSExp = rooted decScheme "scheme"
+
+effRowOfSExp : SExp -> Result SexpError EffRow
+effRowOfSExp = rooted decRow "row"
+
+paramOfSExp : SExp -> Result SexpError Param
+paramOfSExp = decParam "param"
+
+tyConOriginOfSExp : SExp -> Result SexpError TyConOrigin
+tyConOriginOfSExp = decOrigin "origin"
+
+builtinClassesOfSExp : SExp -> Result SexpError BuiltinClasses
+builtinClassesOfSExp = decClasses "classes"
+
+sectionsOfCache : List (List (List Atom), PreludeInterface) ->
+  List InterfaceSection
+sectionsOfCache = map (s => InterfaceSection {
+  isJoins = fst s,
+  isInterface = snd s,
+})
 
 -- ── the law ─────────────────────────────────────────────────────────────────
 

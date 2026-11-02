@@ -67,7 +67,6 @@ factsOfElab : ElabResult -> ProgramFacts
 factsOfElab elab = factsOfElabWith elab.erEvidence elab
 
 -- [elab]'s facts with [table] as its evidence.
-export
 factsOfElabWith : EvTable -> ElabResult -> ProgramFacts
 factsOfElabWith table elab = ProgramFacts {
   pfSymbolOrigins = None,

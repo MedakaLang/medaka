@@ -191,14 +191,20 @@ matchGlob pattern path
 
 Whether `path` matches the glob `pattern`.
 
-Both are split into segments on `/`, so repeated and trailing slashes do
-not matter, but a leading `/` must be on both or on neither. Within one
-segment `*` matches any run of characters and `?` exactly one character;
-neither crosses a `/`, and a leading `.` is matched like any other
-character. A segment that is exactly `**` matches any number of whole
-segments, none included, so `a/**/b` matches `a/b`. `**` inside a longer
-segment acts as `*`. There are no braces, character classes or escapes.
-The empty pattern matches only the empty path.
+Both are split into segments on `/`, so repeated slashes do not matter,
+but a leading `/` must be on both or on neither. Within one segment `*`
+matches any run of characters and `?` exactly one character; neither
+crosses a `/`, and a leading `.` is matched like any other character, so
+`*` and `?` match dot names. A segment that is exactly `**` matches any
+number of whole segments, none included, so `a/**/b` matches `a/b`, but
+it never consumes a segment that starts with `.` unless that segment is
+the last of a path not ending in `/`: `**/*` matches `a/.x` and not
+`.git/x`. A literal segment such as `.git` matches as written, so
+`.git/**` matches `.git/objects/x` and not `.git/.hidden/x`. `**` inside
+a longer segment acts as `*`. A pattern ending in `/` names directories
+and matches only a path ending in `/`; a pattern without one ignores a
+trailing `/` on the path. There are no braces, character classes or
+escapes. The empty pattern matches only the empty path.
 
 ```medaka
 > matchGlob "*.mdk" "a.mdk"
@@ -223,6 +229,26 @@ True
 False
 > matchGlob "*" ".hidden"
 True
+> matchGlob "*/config" ".git/config"
+True
+> matchGlob "**/x" ".git/x"
+False
+> matchGlob "**/.x" "a/.x"
+True
+> matchGlob "**/*" "a/.x"
+True
+> matchGlob "**/*" ".git/x"
+False
+> matchGlob ".git/**" ".git/objects/x"
+True
+> matchGlob ".git/**" ".git/.hidden/x"
+False
+> matchGlob "sub/*/" "sub/d/"
+True
+> matchGlob "sub/*/" "sub/f"
+False
+> matchGlob "src/**/" "src/"
+True
 > matchGlob "/a/*" "/a/b"
 True
 > matchGlob "/a/*" "a/b"
@@ -235,6 +261,27 @@ True
 False
 > matchGlob "*a*a*a*a*a*a*b" "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
 False
+```
+
+### `globReaches`
+
+```
+globReaches : String -> String -> Bool
+globReaches pattern dir
+```
+
+Whether some path strictly below the directory `dir` can match `pattern`.
+
+`**` is not allowed to pass through a dot directory, so a walk can leave
+such a directory unentered when this is `False` for it.
+
+```medaka
+> globReaches "**/x" ".git"
+False
+> globReaches ".git/**" ".git"
+True
+> globReaches "*/config" ".git"
+True
 ```
 
 ## Predicates

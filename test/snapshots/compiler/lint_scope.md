@@ -1,5 +1,5 @@
 # META
-source_lines=623
+source_lines=615
 stages=DESUGAR,MARK
 # SOURCE
 -- compiler/tools/lint_scope.mdk — the per-file scope model of the lint rules: every
@@ -122,14 +122,6 @@ siteKey (Loc _ l c _ _) = l * 4294967296 + c
 export
 binderOf : FileScopes -> Loc -> Option Binder
 binderOf fs loc = get (siteKey loc) fs.fsSites
-
-export
-allBinders : FileScopes -> List Binder
-allBinders fs = fs.fsBinders
-
-export
-allUses : FileScopes -> List Use
-allUses fs = fs.fsUses
 
 -- The modules a file imports with `import m.*`.
 export
@@ -644,10 +636,6 @@ walkAssign w scope loc x e =
 (DFunDef false "siteKey" ((PCon "Loc" PWild (PVar "l") (PVar "c") PWild PWild)) (EBinOp "+" (EBinOp "*" (EVar "l") (ELit (LInt 4294967296))) (EVar "c")))
 (DTypeSig true "binderOf" (TyFun (TyCon "FileScopes") (TyFun (TyCon "Loc") (TyApp (TyCon "Option") (TyCon "Binder")))))
 (DFunDef false "binderOf" ((PVar "fs") (PVar "loc")) (EApp (EApp (EVar "get") (EApp (EVar "siteKey") (EVar "loc"))) (EFieldAccess (EVar "fs") "fsSites")))
-(DTypeSig true "allBinders" (TyFun (TyCon "FileScopes") (TyApp (TyCon "List") (TyCon "Binder"))))
-(DFunDef false "allBinders" ((PVar "fs")) (EFieldAccess (EVar "fs") "fsBinders"))
-(DTypeSig true "allUses" (TyFun (TyCon "FileScopes") (TyApp (TyCon "List") (TyCon "Use"))))
-(DFunDef false "allUses" ((PVar "fs")) (EFieldAccess (EVar "fs") "fsUses"))
 (DTypeSig true "wildImports" (TyFun (TyCon "FileScopes") (TyApp (TyCon "List") (TyApp (TyCon "List") (TyCon "String")))))
 (DFunDef false "wildImports" ((PVar "fs")) (EFieldAccess (EVar "fs") "fsWild"))
 (DTypeSig true "usesNamedIn" (TyFun (TyCon "FileScopes") (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyFun (TyCon "String") (TyApp (TyCon "List") (TyCon "Use")))))))
@@ -915,10 +903,6 @@ walkAssign w scope loc x e =
 (DFunDef false "siteKey" ((PCon "Loc" PWild (PVar "l") (PVar "c") PWild PWild)) (EBinOp "+" (EBinOp "*" (EVar "l") (ELit (LInt 4294967296))) (EVar "c")))
 (DTypeSig true "binderOf" (TyFun (TyCon "FileScopes") (TyFun (TyCon "Loc") (TyApp (TyCon "Option") (TyCon "Binder")))))
 (DFunDef false "binderOf" ((PVar "fs") (PVar "loc")) (EApp (EApp (EVar "get") (EApp (EVar "siteKey") (EVar "loc"))) (EFieldAccess (EVar "fs") "fsSites")))
-(DTypeSig true "allBinders" (TyFun (TyCon "FileScopes") (TyApp (TyCon "List") (TyCon "Binder"))))
-(DFunDef false "allBinders" ((PVar "fs")) (EFieldAccess (EVar "fs") "fsBinders"))
-(DTypeSig true "allUses" (TyFun (TyCon "FileScopes") (TyApp (TyCon "List") (TyCon "Use"))))
-(DFunDef false "allUses" ((PVar "fs")) (EFieldAccess (EVar "fs") "fsUses"))
 (DTypeSig true "wildImports" (TyFun (TyCon "FileScopes") (TyApp (TyCon "List") (TyApp (TyCon "List") (TyCon "String")))))
 (DFunDef false "wildImports" ((PVar "fs")) (EFieldAccess (EVar "fs") "fsWild"))
 (DTypeSig true "usesNamedIn" (TyFun (TyCon "FileScopes") (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyFun (TyCon "String") (TyApp (TyCon "List") (TyCon "Use")))))))

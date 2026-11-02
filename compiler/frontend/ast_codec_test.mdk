@@ -11,7 +11,7 @@ import test.{
 import test_process.{underRoot}
 import frontend.ast.*
 import frontend.ast_codec.{
-  declsSExp, evEntriesSExp, decodeDecls, decodeEvEntries, readDecls
+  declsSExp, evEntriesSExp, decodeEvEntries, readDecls, decodeAll
 }
 import frontend.desugar.{desugar}
 import frontend.desugar_cache.{desugaredPrelude}
@@ -1139,3 +1139,7 @@ dumpDecl (DLetGroup a0 a1) =
   SList [SAtom "ctor:Decl.DLetGroup", dumpBool a0, dumpList dumpLetBind a1]
 dumpDecl (DAttrib a0 a1) =
   SList [SAtom "ctor:Decl.DAttrib", dumpList dumpAttr a0, dumpDecl a1]
+
+-- The whole of `text` is one list of declarations.
+decodeDecls : String -> Result SexpError (List Decl)
+decodeDecls text = decodeAll readDecls text

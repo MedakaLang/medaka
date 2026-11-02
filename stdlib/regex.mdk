@@ -125,8 +125,9 @@ digitRanges = [(48, 57)]
 wordRanges : List (Int, Int)
 wordRanges = [(48, 57), (65, 90), (95, 95), (97, 122)]
 
--- Space is ` \t\n\r`, matching string.isSpace's ASCII set minus form feed
--- and vertical tab, which no subject in the census uses.
+-- Space is ` \t\n\r`: the ASCII whitespace of `string.isSpace` without form
+-- feed and vertical tab, which no subject in the census uses, and without the
+-- non-ASCII spaces.
 spaceRanges : List (Int, Int)
 spaceRanges = [(9, 10), (13, 13), (32, 32)]
 

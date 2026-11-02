@@ -1233,7 +1233,6 @@ notePerformSite env eff = match env.teDyn.dcPerformSites
       map (cell => (cell, env.teDyn.dcModule.mcLoc)) (snd (rowFlat eff))
         ++ sites.value
 
-export
 markBinders : Ref (Map Int Unit) -> List (Ref Authvar) -> Unit
 markBinders table cells =
   table := fold (m c => IdMap.set (authvarId c) () m) table.value cells

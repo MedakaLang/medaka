@@ -134,7 +134,7 @@ The mechanical loop:
 ## Where things live
 
 Owners below are the `compiler/types/` modules, verified by grep at the time of writing; the
-layer table is `compiler/ARCHITECTURE-PLAYBOOK.md` §6 and each module's spec is in `compiler/types/ARCHITECTURE.md`. Grep the name.
+layer table is in `compiler/types/ARCHITECTURE.md` (section "Layer order"), and each module's spec is in that same file. Grep the name.
 
 | Area | Real names |
 |---|---|

@@ -1,5 +1,5 @@
 # META
-source_lines=1514
+source_lines=1512
 stages=DESUGAR,MARK
 # SOURCE
 -- tc_diag_text: the context-free message text of the typechecker: every message, help and fix
@@ -1443,7 +1443,6 @@ derivableIface : String -> Bool
 derivableIface iface =
   contains iface ["Eq", "Ord", "Debug", "Display", "Generic"]
 
-export
 quotedNames : List String -> String
 quotedNames names = joinWith ", " (map (n => "`" ++ n ++ "`") names)
 
@@ -1490,7 +1489,6 @@ findTupleCand key ((res, help, fix) :: rest)
   | otherwise = findTupleCand key rest
 
 -- prepend an optional bare-message diagnostic (code, severity, help) to a TcDiag list.
-export
 prependDiagOpt : DiagCode ->
   Int ->
   Option String ->
@@ -1948,7 +1946,7 @@ dropAmbiguity = filterList (d => tcCode d /= TAmbiguousInstance)
 (DFunDef false "noImplAdvice" ((PVar "iface") (PVar "n")) (EIf (EApp (EVar "derivableIface") (EVar "iface")) (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "add `deriving ")) (EApp (EVar "display") (EVar "iface"))) (ELit (LString "` to `"))) (EApp (EVar "display") (EVar "n"))) (ELit (LString "` or write `impl "))) (EApp (EVar "display") (EVar "iface"))) (ELit (LString " "))) (EApp (EVar "display") (EVar "n"))) (ELit (LString "`"))) (EIf (EVar "otherwise") (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "write `impl ")) (EApp (EVar "display") (EVar "iface"))) (ELit (LString " "))) (EApp (EVar "display") (EVar "n"))) (ELit (LString "`"))) (EApp (EVar "__fallthrough__") (ELit LUnit)))))
 (DTypeSig true "derivableIface" (TyFun (TyCon "String") (TyCon "Bool")))
 (DFunDef false "derivableIface" ((PVar "iface")) (EApp (EApp (EVar "contains") (EVar "iface")) (EListLit (ELit (LString "Eq")) (ELit (LString "Ord")) (ELit (LString "Debug")) (ELit (LString "Display")) (ELit (LString "Generic")))))
-(DTypeSig true "quotedNames" (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyCon "String")))
+(DTypeSig false "quotedNames" (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyCon "String")))
 (DFunDef false "quotedNames" ((PVar "names")) (EApp (EApp (EVar "joinWith") (ELit (LString ", "))) (EApp (EApp (EVar "map") (ELam ((PVar "n")) (EBinOp "++" (EBinOp "++" (ELit (LString "`")) (EVar "n")) (ELit (LString "`"))))) (EVar "names"))))
 (DTypeSig true "locKey" (TyFun (TyApp (TyCon "Option") (TyCon "Loc")) (TyCon "String")))
 (DFunDef false "locKey" ((PCon "None")) (ELit (LString "")))
@@ -1967,7 +1965,7 @@ dropAmbiguity = filterList (d => tcCode d /= TAmbiguousInstance)
 (DTypeSig true "findTupleCand" (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "Mono") (TyCon "String") (TyApp (TyCon "Option") (TyTuple (TyCon "Loc") (TyCon "String"))))) (TyApp (TyCon "Option") (TyTuple (TyCon "String") (TyApp (TyCon "Option") (TyTuple (TyCon "Loc") (TyCon "String"))))))))
 (DFunDef false "findTupleCand" (PWild (PList)) (EVar "None"))
 (DFunDef false "findTupleCand" ((PVar "key") (PCons (PTuple (PVar "res") (PVar "help") (PVar "fix")) (PVar "rest"))) (EIf (EBinOp "==" (EApp (EVar "ppMono") (EApp (EVar "normalize") (EVar "res"))) (EVar "key")) (EApp (EVar "Some") (ETuple (EVar "help") (EVar "fix"))) (EIf (EVar "otherwise") (EApp (EApp (EVar "findTupleCand") (EVar "key")) (EVar "rest")) (EApp (EVar "__fallthrough__") (ELit LUnit)))))
-(DTypeSig true "prependDiagOpt" (TyFun (TyCon "DiagCode") (TyFun (TyCon "Int") (TyFun (TyApp (TyCon "Option") (TyCon "String")) (TyFun (TyApp (TyCon "Option") (TyCon "String")) (TyFun (TyApp (TyCon "List") (TyCon "TcDiag")) (TyApp (TyCon "List") (TyCon "TcDiag"))))))))
+(DTypeSig false "prependDiagOpt" (TyFun (TyCon "DiagCode") (TyFun (TyCon "Int") (TyFun (TyApp (TyCon "Option") (TyCon "String")) (TyFun (TyApp (TyCon "Option") (TyCon "String")) (TyFun (TyApp (TyCon "List") (TyCon "TcDiag")) (TyApp (TyCon "List") (TyCon "TcDiag"))))))))
 (DFunDef false "prependDiagOpt" (PWild PWild PWild (PCon "None") (PVar "ds")) (EVar "ds"))
 (DFunDef false "prependDiagOpt" ((PVar "code") (PVar "sev") (PVar "help") (PCon "Some" (PVar "msg")) (PVar "ds")) (EBinOp "::" (EApp (EVar "writtenDiag") (EApp (EApp (EApp (EApp (EApp (EApp (EVar "TcDiag") (EVar "code")) (EVar "sev")) (EVar "None")) (EVar "msg")) (EVar "help")) (EVar "None"))) (EVar "ds")))
 (DTypeSig true "prependConflict" (TyFun (TyApp (TyCon "Option") (TyCon "String")) (TyFun (TyApp (TyCon "List") (TyCon "TcDiag")) (TyApp (TyCon "List") (TyCon "TcDiag")))))
@@ -2408,7 +2406,7 @@ dropAmbiguity = filterList (d => tcCode d /= TAmbiguousInstance)
 (DFunDef false "noImplAdvice" ((PVar "iface") (PVar "n")) (EIf (EApp (EVar "derivableIface") (EVar "iface")) (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "add `deriving ")) (EApp (EMethodRef "display") (EVar "iface"))) (ELit (LString "` to `"))) (EApp (EMethodRef "display") (EVar "n"))) (ELit (LString "` or write `impl "))) (EApp (EMethodRef "display") (EVar "iface"))) (ELit (LString " "))) (EApp (EMethodRef "display") (EVar "n"))) (ELit (LString "`"))) (EIf (EVar "otherwise") (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "write `impl ")) (EApp (EMethodRef "display") (EVar "iface"))) (ELit (LString " "))) (EApp (EMethodRef "display") (EVar "n"))) (ELit (LString "`"))) (EApp (EVar "__fallthrough__") (ELit LUnit)))))
 (DTypeSig true "derivableIface" (TyFun (TyCon "String") (TyCon "Bool")))
 (DFunDef false "derivableIface" ((PVar "iface")) (EApp (EApp (EVar "contains") (EVar "iface")) (EListLit (ELit (LString "Eq")) (ELit (LString "Ord")) (ELit (LString "Debug")) (ELit (LString "Display")) (ELit (LString "Generic")))))
-(DTypeSig true "quotedNames" (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyCon "String")))
+(DTypeSig false "quotedNames" (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyCon "String")))
 (DFunDef false "quotedNames" ((PVar "names")) (EApp (EApp (EVar "joinWith") (ELit (LString ", "))) (EApp (EApp (EMethodRef "map") (ELam ((PVar "n")) (EBinOp "++" (EBinOp "++" (ELit (LString "`")) (EVar "n")) (ELit (LString "`"))))) (EVar "names"))))
 (DTypeSig true "locKey" (TyFun (TyApp (TyCon "Option") (TyCon "Loc")) (TyCon "String")))
 (DFunDef false "locKey" ((PCon "None")) (ELit (LString "")))
@@ -2427,7 +2425,7 @@ dropAmbiguity = filterList (d => tcCode d /= TAmbiguousInstance)
 (DTypeSig true "findTupleCand" (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "Mono") (TyCon "String") (TyApp (TyCon "Option") (TyTuple (TyCon "Loc") (TyCon "String"))))) (TyApp (TyCon "Option") (TyTuple (TyCon "String") (TyApp (TyCon "Option") (TyTuple (TyCon "Loc") (TyCon "String"))))))))
 (DFunDef false "findTupleCand" (PWild (PList)) (EVar "None"))
 (DFunDef false "findTupleCand" ((PVar "key") (PCons (PTuple (PVar "res") (PVar "help") (PVar "fix")) (PVar "rest"))) (EIf (EBinOp "==" (EApp (EVar "ppMono") (EApp (EVar "normalize") (EVar "res"))) (EVar "key")) (EApp (EVar "Some") (ETuple (EVar "help") (EVar "fix"))) (EIf (EVar "otherwise") (EApp (EApp (EVar "findTupleCand") (EVar "key")) (EVar "rest")) (EApp (EVar "__fallthrough__") (ELit LUnit)))))
-(DTypeSig true "prependDiagOpt" (TyFun (TyCon "DiagCode") (TyFun (TyCon "Int") (TyFun (TyApp (TyCon "Option") (TyCon "String")) (TyFun (TyApp (TyCon "Option") (TyCon "String")) (TyFun (TyApp (TyCon "List") (TyCon "TcDiag")) (TyApp (TyCon "List") (TyCon "TcDiag"))))))))
+(DTypeSig false "prependDiagOpt" (TyFun (TyCon "DiagCode") (TyFun (TyCon "Int") (TyFun (TyApp (TyCon "Option") (TyCon "String")) (TyFun (TyApp (TyCon "Option") (TyCon "String")) (TyFun (TyApp (TyCon "List") (TyCon "TcDiag")) (TyApp (TyCon "List") (TyCon "TcDiag"))))))))
 (DFunDef false "prependDiagOpt" (PWild PWild PWild (PCon "None") (PVar "ds")) (EVar "ds"))
 (DFunDef false "prependDiagOpt" ((PVar "code") (PVar "sev") (PVar "help") (PCon "Some" (PVar "msg")) (PVar "ds")) (EBinOp "::" (EApp (EVar "writtenDiag") (EApp (EApp (EApp (EApp (EApp (EApp (EVar "TcDiag") (EVar "code")) (EVar "sev")) (EVar "None")) (EVar "msg")) (EVar "help")) (EVar "None"))) (EVar "ds")))
 (DTypeSig true "prependConflict" (TyFun (TyApp (TyCon "Option") (TyCon "String")) (TyFun (TyApp (TyCon "List") (TyCon "TcDiag")) (TyApp (TyCon "List") (TyCon "TcDiag")))))

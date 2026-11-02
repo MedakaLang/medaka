@@ -110,9 +110,7 @@ import types.tc_mono.{
 import types.tc_state.{
   callUOblsWindow,
   currentScopeStore,
-  initialModuleCtx,
   moduleWindow,
-  probeGraphCtx,
 }
 import types.tc_env.{
   anyArgMentions,
@@ -135,7 +133,6 @@ import types.tc_scope.{methodAdmittedHere, methodVisibleHere}
 import types.tc_unify.{
   enterLevel,
   exitLevel,
-  freshEffvar,
   freshTvMap,
   freshVar,
   instantiateMethodTracked,
@@ -148,13 +145,9 @@ import types.tc_decls_types.{fromAstType, reqTyToMono}
 import types.tc_solve_givens.{
   activeDictPredOf,
   activeDictVarOfEncl,
-  anyGivenMatches,
   assumAnswerEvidence,
   assumAnswerRoute,
   enclSlot,
-  firstPredForEncl,
-  firstPredForEnclAt,
-  firstPredForEnclResidual,
   givenInScope,
   givenRoute,
   givensForScope,
@@ -162,7 +155,6 @@ import types.tc_solve_givens.{
   noteAssumption,
   predicateRequestMatchesSlot,
   projectedGivenOf,
-  pushGiven,
 }
 import types.tc_solve_entail.{
   determinedGoalInstance,
@@ -2120,7 +2112,9 @@ siteKindMonos (SKOp _) = []
 siteKindMonos (SKPredicateOp _ _) = []
 siteKindMonos (SKRLocal _ _ ms _ vecs) = ms ++ flatMap identity vecs
 
--- test-only observation: declarations whose only callers are tests and probes.
+-- Observation declarations exported for readers outside this module: the method-return trace and
+-- memo views for the drive-level `typecheck_test`, and the method-slot and method-return probes
+-- `tc_occurrence` and `tc_module` read.
 
 -- Each entry with the evidence its goal published in [evidence], the table of the
 -- drive that recorded it.
@@ -2258,119 +2252,6 @@ methodReturnMemoSupers : List Route -> String
 methodReturnMemoSupers [] = ""
 methodReturnMemoSupers supers =
   "{\{join "," (map methodReturnMemoRoute supers)}}"
-
--- Private probe for the memo's goal equality: two goals `C (Int -> Int)` whose arrows
--- carry different effect rows are one predicate to `monoVecSameGiven` and two to
--- `walkGoalSame`, in either order; the same row is one goal to both.
-export
-walkGoalSameProbe : Unit -> List Bool
-walkGoalSameProbe _ =
-  let iface = ifaceRefBare "C"
-  let int = tconBuiltin "Int"
-  let mctx = initialModuleCtx (probeGraphCtx ())
-  let row1 = EffRow [] (Some (freshEffvar mctx ()))
-  let row2 = EffRow [] (Some (freshEffvar mctx ()))
-  let goal1 = [TFun int row1 int]
-  let goal2 = [TFun int row2 int]
-  [
-    monoVecSameGiven goal1 goal2,
-    monoVecSameGiven goal2 goal1,
-    walkGoalSame iface goal1 iface goal2,
-    walkGoalSame iface goal2 iface goal1,
-    walkGoalSame iface goal1 iface [TFun int row1 int],
-  ]
-
-isSemanticGivenAnswer : Option AssumAnswer -> Bool
-isSemanticGivenAnswer (Some (SemanticGiven (GivenEvidence _))) = True
-isSemanticGivenAnswer _ = False
-
-isLegacyPredicateAnswer : Option AssumAnswer -> Bool
-isLegacyPredicateAnswer (Some (LegacyPredicate _)) = True
-isLegacyPredicateAnswer _ = False
-
--- Private service check for the selection half of the scope adapter.  It keeps
--- the full-vector and id-witness eligibility rules observable independently of
--- production examples, and its sibling query fails if lexical filtering is
--- removed from `anyGivenMatches`.
-scopeGivenProbe : Unit -> List Bool
-scopeGivenProbe _ =
-  let gctx = probeGraphCtx ()
-  let store = currentScopeStore gctx ()
-  let root = Scopes.freshScope store None 0 "given-probe" ModuleOwner
-  let owner =
-    Scopes.freshScope store (Some root) 1 "given-probe" (BindingOwner "owner")
-  let sibling =
-    Scopes.freshScope store (Some root) 1 "given-probe" (BindingOwner "sibling")
-  let iface =
-    IfaceRef { irName = "PairGiven", irOrigin = OriginModule "given-probe" }
-  let args = [tconBuiltin "Int", tconBuiltin "Bool"]
-  let slot = PredicateSlot {
-    psIface = iface,
-    psArgs = PSArgsKnown args,
-    psBoundIds = [41],
-  }
-  pushGiven gctx GMPredicate DirectGiven slot (Scopes.binderAt owner 0)
-  let exact = PredicateRequest { prIface = iface, prArgs = PSArgsKnown args }
-  let unknown = PredicateRequest { prIface = iface, prArgs = PSArgsUnknown }
-  let truncated = PredicateRequest {
-    prIface = iface,
-    prArgs = PSArgsKnown [tconBuiltin "Int"],
-  }
-  let witnessIface = IfaceRef {
-    irName = "WitnessGiven",
-    irOrigin = OriginModule "given-probe",
-  }
-  let witnessSlot = PredicateSlot {
-    psIface = witnessIface,
-    psArgs = PSArgsKnown [tconBuiltin "Int"],
-    psBoundIds = [73],
-  }
-  let witnessRequest = PredicateRequest {
-    prIface = witnessIface,
-    prArgs = PSArgsKnown [tconBuiltin "Int"],
-  }
-  pushGiven gctx GMIdWitnessed DirectGiven witnessSlot (Scopes.binderAt owner 1)
-  let compatibleIface = IfaceRef {
-    irName = "CompatibleGiven",
-    irOrigin = OriginModule "given-probe",
-  }
-  let compatibleSlot = PredicateSlot {
-    psIface = compatibleIface,
-    psArgs = PSArgsUnknown,
-    psBoundIds = [89],
-  }
-  let compatibleRequest = PredicateRequest {
-    prIface = compatibleIface,
-    prArgs = PSArgsKnown [tconBuiltin "Int"],
-  }
-  pushGiven
-    gctx
-    GMPredicate
-    DirectGiven
-    compatibleSlot
-    (Scopes.binderAt owner 2)
-  let givens = givensForScope gctx owner
-  let result = [
-    anyGivenMatches gctx exact owner givens,
-    not (anyGivenMatches gctx exact sibling givens),
-    not (anyGivenMatches gctx truncated owner givens),
-    not (anyGivenMatches gctx witnessRequest owner givens),
-    isSome
-      (firstPredForEnclAt gctx GSImplRequires 73 witnessRequest owner givens),
-    isNone
-      (firstPredForEnclAt gctx GSImplRequires 74 witnessRequest owner givens),
-    isSemanticGivenAnswer (firstPredForEncl gctx exact owner givens),
-    isLegacyPredicateAnswer
-      (firstPredForEnclAt gctx GSPredicateOnly 41 unknown owner givens),
-    isLegacyPredicateAnswer
-      (firstPredForEnclResidual gctx "PairGiven" args owner givens),
-    isLegacyPredicateAnswer
-      (firstPredForEncl gctx compatibleRequest owner givens),
-  ]
-  result
-
--- > scopeGivenProbe ()
--- [True, True, True, True, True, True, True, True, True, True]
 
 export
 methodSlotBoundIds : List MethodPredicateSlot -> List (List Int)

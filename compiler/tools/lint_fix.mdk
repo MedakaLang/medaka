@@ -19,7 +19,7 @@ import support.source_index.{sourcePositionToOffset}
 -- Why a fix run produced nothing.  The input that does not parse is the
 -- caller's; an output that does not parse is a fixer's bug, and is never
 -- returned.
-public export data FixError =
+export data FixError =
   | SourceDoesNotParse String
   | FixedOutputDoesNotParse Int String
   | EditsRejected EditError

@@ -72,7 +72,6 @@ export
 declaredCtorOrdinal : ConstructorFacts -> String -> Option Int
 declaredCtorOrdinal facts name = omLookup name facts.ordinals
 
-export
 declaredTypeCtors : ConstructorFacts -> String -> List String
 declaredTypeCtors facts name = optionOr [] (omLookup name facts.rosters)
 

@@ -1,0 +1,58 @@
+-- Historical declarations: b52f709b16922bd015d05bb5daea790a47a47b91:compiler/backend/wasm_emit.mdk
+distinctImplKeys : List CImplEntry -> List (String, String)
+distinctImplKeys entries = dedupPairs (flatMap implKeyOf entries) []
+
+gatherImplGroup : Prog -> List CImplEntry -> (String, String) -> ImplG
+gatherImplGroup prog entries (m, key) =
+  let mEntries = methodEntriesW prog m
+  let headTag = headTagForKeyW m key mEntries
+  let clauses = flatMap (implClauseFor m key) mEntries
+  let fnName = match firstEntryForKeyW m key mEntries
+    Some ent => implEntrySymW m ent
+    None => panic "wasm: impl group without an entry (internal error)"
+  ImplG m headTag key (implGroupArity clauses) clauses fnName
+
+dedupPairs : List (String, String) ->
+  List (String, String) ->
+  List (String, String)
+dedupPairs pairs acc = dedupPairsGo pairs (seedPairSeen acc omEmpty) acc
+
+dedupPairsGo : List (String, String) ->
+  OrdMap Unit ->
+  List (String, String) ->
+  List (String, String)
+dedupPairsGo [] _ acc = reverseL acc
+dedupPairsGo (p :: rest) seen acc =
+  let k = pairKey p
+  if omHasKey k seen then
+    dedupPairsGo rest seen acc
+  else
+    dedupPairsGo rest (omInsert k () seen) (p :: acc)
+
+seedPairSeen : List (String, String) -> OrdMap Unit -> OrdMap Unit
+seedPairSeen [] m = m
+seedPairSeen (p :: rest) m = seedPairSeen rest (omInsert (pairKey p) () m)
+
+pairKey : (String, String) -> String
+pairKey (a, b) = "\{a} \{b}"
+
+implKeyOf : CImplEntry -> List (String, String)
+implKeyOf ent = [(implEntryMethodW ent, implEntryKeyW ent)]
+
+headTagForKeyW : String -> String -> List CImplEntry -> String
+headTagForKeyW method key entries = match firstEntryForKeyW method key entries
+  Some ent => implEntryTagW ent
+  None => ""
+
+implClauseFor : String -> String -> CImplEntry -> List CClause
+implClauseFor m tag ent =
+  if implEntryMethodW ent == m && implEntryAnswersW tag ent then
+    [CClause (implEntryPatsW ent) (implBodyExprW (implEntryBodyW ent))]
+  else
+    []
+
+firstEntryForKeyW : String -> String -> List CImplEntry -> Option CImplEntry
+firstEntryForKeyW _ _ [] = None
+firstEntryForKeyW method key (ent :: rest)
+  | implEntryMethodW ent == method && implEntryKeyW ent == key = Some ent
+  | otherwise = firstEntryForKeyW method key rest

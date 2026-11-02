@@ -1,5 +1,5 @@
 # META
-source_lines=599
+source_lines=598
 stages=DESUGAR,MARK
 # SOURCE
 import frontend.parse_diagnostic.{ParseDiagnosticKind(..), UnicodeProblem(..)}
@@ -550,7 +550,6 @@ asciiByte src pos next s = match stringToChars s
       (NonAsciiByte (copyCharRange src (pos + 2) (next - 1)) (utf8FixIt s))
 
 -- `b'\xC3'`, `b'\xA9'` for the UTF-8 bytes of `s`.
-export
 utf8FixIt : String -> String
 utf8FixIt s = joinWith ", " (map byteLiteralText (toList (toUtf8 s)))
 
@@ -769,7 +768,7 @@ rawTripleGo src len open p
 (DFunDef false "hexByteEscape" ((PVar "src") (PVar "len") (PVar "pos") (PVar "h")) (EBlock (DoLet false false (PVar "he") (EApp (EApp (EApp (EVar "uHexEnd") (EVar "src")) (EVar "len")) (EVar "h"))) (DoLet false false (PVar "n") (EBinOp "-" (EVar "he") (EVar "h"))) (DoExpr (EIf (EBinOp "&&" (EBinOp "&&" (EBinOp "==" (EVar "n") (ELit (LInt 2))) (EBinOp "<" (EVar "he") (EVar "len"))) (EApp (EVar "isApos") (EApp (EApp (EVar "at") (EVar "src")) (EVar "he")))) (EApp (EVar "Ok") (ETuple (EApp (EApp (EApp (EApp (EVar "parseHex") (EVar "src")) (EVar "h")) (EVar "he")) (ELit (LInt 0))) (EBinOp "+" (EVar "he") (ELit (LInt 1))))) (EIf (EBinOp "==" (EVar "n") (ELit (LInt 2))) (EApp (EApp (EApp (EVar "lexFailure") (EVar "pos")) (EVar "len")) (EVar "unterminatedByte")) (EApp (EApp (EApp (EVar "lexFailure") (EVar "pos")) (EVar "he")) (EApp (EVar "BadByteLiteral") (ELit (LString "invalid byte escape `\\x`; it takes exactly two hex digits, `\\x00` to `\\xFF`")))))))))
 (DTypeSig false "asciiByte" (TyFun (TyApp (TyCon "Array") (TyCon "Char")) (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyFun (TyCon "String") (TyApp (TyApp (TyCon "Result") (TyCon "LexError")) (TyTuple (TyCon "Int") (TyCon "Int"))))))))
 (DFunDef false "asciiByte" ((PVar "src") (PVar "pos") (PVar "next") (PVar "s")) (EMatch (EApp (EVar "stringToChars") (EVar "s")) (arm (PVar "cs") ((GBool (EBinOp "&&" (EBinOp ">" (EApp (EVar "arrayLength") (EVar "cs")) (ELit (LInt 0))) (EBinOp "<" (EApp (EVar "charCode") (EApp (EApp (EVar "at") (EVar "cs")) (ELit (LInt 0)))) (ELit (LInt 128)))))) (EApp (EVar "Ok") (ETuple (EApp (EVar "charCode") (EApp (EApp (EVar "at") (EVar "cs")) (ELit (LInt 0)))) (EVar "next")))) (arm PWild () (EApp (EApp (EApp (EVar "lexFailure") (EVar "pos")) (EVar "next")) (EApp (EApp (EVar "NonAsciiByte") (EApp (EApp (EApp (EVar "copyCharRange") (EVar "src")) (EBinOp "+" (EVar "pos") (ELit (LInt 2)))) (EBinOp "-" (EVar "next") (ELit (LInt 1))))) (EApp (EVar "utf8FixIt") (EVar "s")))))))
-(DTypeSig true "utf8FixIt" (TyFun (TyCon "String") (TyCon "String")))
+(DTypeSig false "utf8FixIt" (TyFun (TyCon "String") (TyCon "String")))
 (DFunDef false "utf8FixIt" ((PVar "s")) (EApp (EApp (EVar "joinWith") (ELit (LString ", "))) (EApp (EApp (EVar "map") (EVar "byteLiteralText")) (EApp (EVar "toList") (EApp (EVar "toUtf8") (EVar "s"))))))
 (DTypeSig false "byteLiteralText" (TyFun (TyCon "Int") (TyCon "String")))
 (DFunDef false "byteLiteralText" ((PVar "n")) (EBinOp "++" (EBinOp "++" (ELit (LString "`b'\\x")) (EApp (EVar "display") (EApp (EVar "Hex.encodeUpper") (EApp (EVar "B.fromArrayAssumeByteDomain") (EArrayLit (EVar "n")))))) (ELit (LString "'`"))))
@@ -957,7 +956,7 @@ rawTripleGo src len open p
 (DFunDef false "hexByteEscape" ((PVar "src") (PVar "len") (PVar "pos") (PVar "h")) (EBlock (DoLet false false (PVar "he") (EApp (EApp (EApp (EVar "uHexEnd") (EVar "src")) (EVar "len")) (EVar "h"))) (DoLet false false (PVar "n") (EBinOp "-" (EVar "he") (EVar "h"))) (DoExpr (EIf (EBinOp "&&" (EBinOp "&&" (EBinOp "==" (EVar "n") (ELit (LInt 2))) (EBinOp "<" (EVar "he") (EVar "len"))) (EApp (EVar "isApos") (EApp (EApp (EVar "at") (EVar "src")) (EVar "he")))) (EApp (EVar "Ok") (ETuple (EApp (EApp (EApp (EApp (EVar "parseHex") (EVar "src")) (EVar "h")) (EVar "he")) (ELit (LInt 0))) (EBinOp "+" (EVar "he") (ELit (LInt 1))))) (EIf (EBinOp "==" (EVar "n") (ELit (LInt 2))) (EApp (EApp (EApp (EVar "lexFailure") (EVar "pos")) (EVar "len")) (EVar "unterminatedByte")) (EApp (EApp (EApp (EVar "lexFailure") (EVar "pos")) (EVar "he")) (EApp (EVar "BadByteLiteral") (ELit (LString "invalid byte escape `\\x`; it takes exactly two hex digits, `\\x00` to `\\xFF`")))))))))
 (DTypeSig false "asciiByte" (TyFun (TyApp (TyCon "Array") (TyCon "Char")) (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyFun (TyCon "String") (TyApp (TyApp (TyCon "Result") (TyCon "LexError")) (TyTuple (TyCon "Int") (TyCon "Int"))))))))
 (DFunDef false "asciiByte" ((PVar "src") (PVar "pos") (PVar "next") (PVar "s")) (EMatch (EApp (EVar "stringToChars") (EVar "s")) (arm (PVar "cs") ((GBool (EBinOp "&&" (EBinOp ">" (EApp (EVar "arrayLength") (EVar "cs")) (ELit (LInt 0))) (EBinOp "<" (EApp (EVar "charCode") (EApp (EApp (EVar "at") (EVar "cs")) (ELit (LInt 0)))) (ELit (LInt 128)))))) (EApp (EVar "Ok") (ETuple (EApp (EVar "charCode") (EApp (EApp (EVar "at") (EVar "cs")) (ELit (LInt 0)))) (EVar "next")))) (arm PWild () (EApp (EApp (EApp (EVar "lexFailure") (EVar "pos")) (EVar "next")) (EApp (EApp (EVar "NonAsciiByte") (EApp (EApp (EApp (EVar "copyCharRange") (EVar "src")) (EBinOp "+" (EVar "pos") (ELit (LInt 2)))) (EBinOp "-" (EVar "next") (ELit (LInt 1))))) (EApp (EVar "utf8FixIt") (EVar "s")))))))
-(DTypeSig true "utf8FixIt" (TyFun (TyCon "String") (TyCon "String")))
+(DTypeSig false "utf8FixIt" (TyFun (TyCon "String") (TyCon "String")))
 (DFunDef false "utf8FixIt" ((PVar "s")) (EApp (EApp (EVar "joinWith") (ELit (LString ", "))) (EApp (EApp (EMethodRef "map") (EVar "byteLiteralText")) (EApp (EMethodRef "toList") (EApp (EVar "toUtf8") (EVar "s"))))))
 (DTypeSig false "byteLiteralText" (TyFun (TyCon "Int") (TyCon "String")))
 (DFunDef false "byteLiteralText" ((PVar "n")) (EBinOp "++" (EBinOp "++" (ELit (LString "`b'\\x")) (EApp (EMethodRef "display") (EApp (EVar "Hex.encodeUpper") (EApp (EVar "B.fromArrayAssumeByteDomain") (EArrayLit (EVar "n")))))) (ELit (LString "'`"))))

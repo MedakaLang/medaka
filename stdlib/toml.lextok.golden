@@ -21,8 +21,6 @@ NEWLINE
 IMPORT
 IDENT "string"
 DOT_LBRACE
-IDENT "trim"
-COMMA
 IDENT "lines"
 COMMA
 IDENT "toInt"
@@ -981,7 +979,7 @@ NEWLINE
 LET
 IDENT "key"
 EQUAL
-IDENT "trim"
+IDENT "asciiTrim"
 IDENT "keyRaw"
 NEWLINE
 IF
@@ -1309,7 +1307,7 @@ IDENT "n"
 IDENT "i"
 EQUAL
 INDENT
-IDENT "trim"
+IDENT "asciiTrim"
 LPAREN
 IDENT "stringFromChars"
 LPAREN
@@ -1484,7 +1482,7 @@ UPPER "Some"
 LPAREN
 UPPER "HArrayTable"
 LPAREN
-IDENT "trim"
+IDENT "asciiTrim"
 IDENT "g"
 DOT
 IDENT "text"
@@ -1524,7 +1522,7 @@ UPPER "Some"
 LPAREN
 UPPER "HTable"
 LPAREN
-IDENT "trim"
+IDENT "asciiTrim"
 IDENT "g"
 DOT
 IDENT "text"
@@ -1764,7 +1762,7 @@ INDENT
 LET
 IDENT "trimmed"
 EQUAL
-IDENT "trim"
+IDENT "asciiTrim"
 LPAREN
 IDENT "stripComment"
 IDENT "l"
@@ -2386,7 +2384,7 @@ DEDENT
 NEWLINE
 DEDENT
 NEWLINE
-IDENT "tableCountGo"
+IDENT "tableLastGo"
 COLON
 UPPER "String"
 ARROW
@@ -2401,7 +2399,7 @@ UPPER "Int"
 ARROW
 UPPER "Int"
 NEWLINE
-IDENT "tableCountGo"
+IDENT "tableLastGo"
 UNDERSCORE
 LBRACKET
 RBRACKET
@@ -2409,7 +2407,7 @@ IDENT "best"
 EQUAL
 IDENT "best"
 NEWLINE
-IDENT "tableCountGo"
+IDENT "tableLastGo"
 IDENT "prefix"
 LPAREN
 LPAREN
@@ -2429,7 +2427,7 @@ IDENT "k"
 INDENT
 UPPER "None"
 FAT_ARROW
-IDENT "tableCountGo"
+IDENT "tableLastGo"
 IDENT "prefix"
 IDENT "rest"
 IDENT "best"
@@ -2437,16 +2435,12 @@ NEWLINE
 UPPER "Some"
 IDENT "i"
 FAT_ARROW
-IDENT "tableCountGo"
+IDENT "tableLastGo"
 IDENT "prefix"
 IDENT "rest"
 LPAREN
 IDENT "max"
-LPAREN
 IDENT "i"
-PLUS
-INT 1
-RPAREN
 IDENT "best"
 RPAREN
 NEWLINE
@@ -2469,7 +2463,11 @@ UPPER "Toml"
 IDENT "kvs"
 RPAREN
 EQUAL
-IDENT "tableCountGo"
+INDENT
+LET
+IDENT "last"
+EQUAL
+IDENT "tableLastGo"
 LPAREN
 IDENT "stringConcat"
 LBRACKET
@@ -2479,7 +2477,24 @@ STRING "."
 RBRACKET
 RPAREN
 IDENT "kvs"
+LPAREN
 INT 0
+MINUS
+INT 1
+RPAREN
+NEWLINE
+IF
+IDENT "last"
+EQ_EQ
+IDENT "intMaxBound"
+THEN
+IDENT "last"
+ELSE
+IDENT "last"
+PLUS
+INT 1
+NEWLINE
+DEDENT
 NEWLINE
 IDENT "tableEntryGo"
 COLON
@@ -2567,11 +2582,7 @@ UPPER "Some"
 IDENT "j"
 FAT_ARROW
 IDENT "max"
-LPAREN
 IDENT "j"
-PLUS
-INT 1
-RPAREN
 IDENT "best"
 NEWLINE
 DEDENT
@@ -2665,7 +2676,7 @@ RBRACKET
 NEWLINE
 LET
 LPAREN
-IDENT "count"
+IDENT "last"
 COMMA
 IDENT "entry"
 RPAREN
@@ -2682,7 +2693,11 @@ RBRACKET
 RPAREN
 IDENT "entryPrefix"
 IDENT "kvs"
+LPAREN
 INT 0
+MINUS
+INT 1
+RPAREN
 LBRACKET
 RBRACKET
 NEWLINE
@@ -2690,8 +2705,8 @@ DEDENT
 NEWLINE
 IF
 IDENT "i"
-GEQ
-IDENT "count"
+GT
+IDENT "last"
 THEN
 UPPER "None"
 ELSE
@@ -2871,6 +2886,14 @@ DEDENT
 NEWLINE
 DEDENT
 NEWLINE
+IDENT "tableEntryLimit"
+COLON
+UPPER "Int"
+NEWLINE
+IDENT "tableEntryLimit"
+EQUAL
+INT 100000
+NEWLINE
 EXPORT
 NEWLINE
 IDENT "tableEntries"
@@ -2879,8 +2902,12 @@ UPPER "String"
 ARROW
 UPPER "Toml"
 ARROW
+UPPER "Result"
+UPPER "String"
+LPAREN
 UPPER "List"
 UPPER "Toml"
+RPAREN
 NEWLINE
 IDENT "tableEntries"
 IDENT "name"
@@ -2901,12 +2928,47 @@ STRING "."
 RBRACKET
 NEWLINE
 LET
+IDENT "last"
+EQUAL
+IDENT "tableLastGo"
+IDENT "prefix"
+IDENT "kvs"
+LPAREN
+INT 0
+MINUS
+INT 1
+RPAREN
+NEWLINE
+LET
 IDENT "groups"
 EQUAL
 IDENT "groupEntries"
 IDENT "prefix"
 IDENT "kvs"
 NEWLINE
+MATCH
+IDENT "last"
+GEQ
+IDENT "tableEntryLimit"
+INDENT
+UPPER "True"
+FAT_ARROW
+INDENT
+UPPER "Err"
+INTERP_OPEN "too many [["
+IDENT "name"
+INTERP_MID "]] entries: index "
+IDENT "last"
+INTERP_MID " is past the limit of "
+IDENT "tableEntryLimit"
+INTERP_END ""
+NEWLINE
+DEDENT
+NEWLINE
+UPPER "False"
+FAT_ARROW
+UPPER "Ok"
+LPAREN
 IDENT "map"
 LPAREN
 IDENT "i"
@@ -2925,12 +2987,12 @@ RPAREN
 RPAREN
 LBRACKET
 INT 0
-DOTDOT
-IDENT "tableCountGo"
-IDENT "prefix"
-IDENT "kvs"
-INT 0
+DOTDOT_EQ
+IDENT "last"
 RBRACKET
+RPAREN
+NEWLINE
+DEDENT
 NEWLINE
 DEDENT
 NEWLINE
@@ -3934,23 +3996,17 @@ IDENT "eq"
 IDENT "a"
 IDENT "b"
 AND
-IDENT "not"
-LPAREN
 IDENT "display"
 IDENT "a"
-EQ_EQ
+NEQ
 IDENT "display"
 IDENT "c"
-RPAREN
 AND
-IDENT "not"
-LPAREN
 IDENT "display"
 IDENT "a"
-EQ_EQ
+NEQ
 IDENT "display"
 IDENT "d"
-RPAREN
 NEWLINE
 DEDENT
 NEWLINE
@@ -4024,6 +4080,150 @@ IDENT "n"
 RPAREN
 RPAREN
 IDENT "two"
+NEWLINE
+DEDENT
+NEWLINE
+IDENT "asciiTrim"
+COLON
+UPPER "String"
+ARROW
+UPPER "String"
+NEWLINE
+IDENT "asciiTrim"
+IDENT "s"
+EQUAL
+INDENT
+LET
+IDENT "chars"
+EQUAL
+IDENT "stringToChars"
+IDENT "s"
+NEWLINE
+LET
+IDENT "n"
+EQUAL
+IDENT "arrayLength"
+IDENT "chars"
+NEWLINE
+LET
+IDENT "lo"
+EQUAL
+IDENT "asciiTrimFront"
+IDENT "chars"
+INT 0
+IDENT "n"
+NEWLINE
+IDENT "stringSlice"
+IDENT "lo"
+LPAREN
+IDENT "asciiTrimBack"
+IDENT "chars"
+LPAREN
+IDENT "n"
+MINUS
+INT 1
+RPAREN
+IDENT "lo"
+PLUS
+INT 1
+RPAREN
+IDENT "s"
+NEWLINE
+DEDENT
+NEWLINE
+IDENT "asciiTrimFront"
+COLON
+UPPER "Array"
+UPPER "Char"
+ARROW
+UPPER "Int"
+ARROW
+UPPER "Int"
+ARROW
+UPPER "Int"
+NEWLINE
+IDENT "asciiTrimFront"
+IDENT "chars"
+IDENT "i"
+IDENT "n"
+INDENT
+PIPE
+IDENT "i"
+GEQ
+IDENT "n"
+EQUAL
+IDENT "n"
+NEWLINE
+PIPE
+IDENT "charIsSpace"
+LPAREN
+IDENT "arrayGetUnsafe"
+IDENT "i"
+IDENT "chars"
+RPAREN
+EQUAL
+IDENT "asciiTrimFront"
+IDENT "chars"
+LPAREN
+IDENT "i"
+PLUS
+INT 1
+RPAREN
+IDENT "n"
+NEWLINE
+PIPE
+IDENT "otherwise"
+EQUAL
+IDENT "i"
+NEWLINE
+DEDENT
+NEWLINE
+IDENT "asciiTrimBack"
+COLON
+UPPER "Array"
+UPPER "Char"
+ARROW
+UPPER "Int"
+ARROW
+UPPER "Int"
+ARROW
+UPPER "Int"
+NEWLINE
+IDENT "asciiTrimBack"
+IDENT "chars"
+IDENT "i"
+IDENT "lo"
+INDENT
+PIPE
+IDENT "i"
+LT
+IDENT "lo"
+EQUAL
+IDENT "lo"
+MINUS
+INT 1
+NEWLINE
+PIPE
+IDENT "charIsSpace"
+LPAREN
+IDENT "arrayGetUnsafe"
+IDENT "i"
+IDENT "chars"
+RPAREN
+EQUAL
+IDENT "asciiTrimBack"
+IDENT "chars"
+LPAREN
+IDENT "i"
+MINUS
+INT 1
+RPAREN
+IDENT "lo"
+NEWLINE
+PIPE
+IDENT "otherwise"
+EQUAL
+IDENT "i"
 NEWLINE
 DEDENT
 NEWLINE

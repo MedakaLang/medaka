@@ -43,6 +43,26 @@ matchContinuationHint toks offs lines matchPos armPos =
       None => None
       Some col => matchCandidate input armPos col left
 
+-- At a `.` glued to a raw string literal (`p.r"x"`), the token index of that
+-- literal; the lexer reads `r"` after a `.` as the literal's prefix, never as a
+-- field `r` applied to a string.
+export
+rawLiteralAfterDot : String -> Array Token -> Array Int -> Int -> Option Int
+rawLiteralAfterDot src toks offs pos =
+  if pos < 0 || pos + 1 >= arrayLength offs then
+    None
+  else match (peekTok toks pos, peekTok toks (pos + 1))
+    (TDot, TString _) =>
+      let at = arrayGetUnsafe (pos + 1) offs
+      let chars = stringToChars src
+      if at == arrayGetUnsafe pos offs + 1
+        && at < arrayLength chars
+        && arrayGetUnsafe at chars == 'r' then
+        Some (pos + 1)
+      else
+        None
+    _ => None
+
 matchHeaderStart : HintInput -> Int -> Int -> Int -> (Int, Int)
 matchHeaderStart input start i left
   | left <= 0 || i <= 0 = (i, left)

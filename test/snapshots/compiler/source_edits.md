@@ -7,7 +7,7 @@ import tools.source_snapshot.{SourceSnapshot(..), SnapshotId, matchesSnapshot}
 import frontend.syntax_source.{SourceSpan(..)}
 
 public export data SourceEdit = SourceEdit SnapshotId SourceSpan String String
-public export data EditError =
+export data EditError =
   | StaleSnapshot
   | InvalidRange
   | OverlappingEdits
@@ -64,7 +64,7 @@ applySourceEdits (snapshot@(SourceSnapshot _ _ _ text _)) edits =
 (DUse false (UseGroup ("tools" "source_snapshot") ((mem "SourceSnapshot" true) (mem "SnapshotId" false) (mem "matchesSnapshot" false))))
 (DUse false (UseGroup ("frontend" "syntax_source") ((mem "SourceSpan" true))))
 (DData Public "SourceEdit" () ((variant "SourceEdit" (ConPos (TyCon "SnapshotId") (TyCon "SourceSpan") (TyCon "String") (TyCon "String")))) ())
-(DData Public "EditError" () ((variant "StaleSnapshot" (ConPos)) (variant "InvalidRange" (ConPos)) (variant "OverlappingEdits" (ConPos)) (variant "ExpectedTextMismatch" (ConPos))) ())
+(DData Abstract "EditError" () ((variant "StaleSnapshot" (ConPos)) (variant "InvalidRange" (ConPos)) (variant "OverlappingEdits" (ConPos)) (variant "ExpectedTextMismatch" (ConPos))) ())
 (DTypeSig false "compareEdit" (TyFun (TyCon "SourceEdit") (TyFun (TyCon "SourceEdit") (TyCon "Ordering"))))
 (DFunDef false "compareEdit" ((PCon "SourceEdit" PWild (PCon "SourceSpan" (PVar "a") (PVar "b")) PWild PWild) (PCon "SourceEdit" PWild (PCon "SourceSpan" (PVar "c") (PVar "d")) PWild PWild)) (EIf (EBinOp "==" (EVar "a") (EVar "c")) (EApp (EApp (EVar "compare") (EVar "b")) (EVar "d")) (EApp (EApp (EVar "compare") (EVar "a")) (EVar "c"))))
 (DTypeSig false "validateEach" (TyFun (TyCon "SourceSnapshot") (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "SourceEdit")) (TyApp (TyApp (TyCon "Result") (TyCon "EditError")) (TyCon "Unit"))))))
@@ -86,7 +86,7 @@ applySourceEdits (snapshot@(SourceSnapshot _ _ _ text _)) edits =
 (DUse false (UseGroup ("tools" "source_snapshot") ((mem "SourceSnapshot" true) (mem "SnapshotId" false) (mem "matchesSnapshot" false))))
 (DUse false (UseGroup ("frontend" "syntax_source") ((mem "SourceSpan" true))))
 (DData Public "SourceEdit" () ((variant "SourceEdit" (ConPos (TyCon "SnapshotId") (TyCon "SourceSpan") (TyCon "String") (TyCon "String")))) ())
-(DData Public "EditError" () ((variant "StaleSnapshot" (ConPos)) (variant "InvalidRange" (ConPos)) (variant "OverlappingEdits" (ConPos)) (variant "ExpectedTextMismatch" (ConPos))) ())
+(DData Abstract "EditError" () ((variant "StaleSnapshot" (ConPos)) (variant "InvalidRange" (ConPos)) (variant "OverlappingEdits" (ConPos)) (variant "ExpectedTextMismatch" (ConPos))) ())
 (DTypeSig false "compareEdit" (TyFun (TyCon "SourceEdit") (TyFun (TyCon "SourceEdit") (TyCon "Ordering"))))
 (DFunDef false "compareEdit" ((PCon "SourceEdit" PWild (PCon "SourceSpan" (PVar "a") (PVar "b")) PWild PWild) (PCon "SourceEdit" PWild (PCon "SourceSpan" (PVar "c") (PVar "d")) PWild PWild)) (EIf (EBinOp "==" (EVar "a") (EVar "c")) (EApp (EApp (EMethodRef "compare") (EVar "b")) (EVar "d")) (EApp (EApp (EMethodRef "compare") (EVar "a")) (EVar "c"))))
 (DTypeSig false "validateEach" (TyFun (TyCon "SourceSnapshot") (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "SourceEdit")) (TyApp (TyApp (TyCon "Result") (TyCon "EditError")) (TyCon "Unit"))))))

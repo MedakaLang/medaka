@@ -3,7 +3,7 @@ import tools.source_snapshot.{SourceSnapshot(..), SnapshotId, matchesSnapshot}
 import frontend.syntax_source.{SourceSpan(..)}
 
 public export data SourceEdit = SourceEdit SnapshotId SourceSpan String String
-public export data EditError =
+export data EditError =
   | StaleSnapshot
   | InvalidRange
   | OverlappingEdits

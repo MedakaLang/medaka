@@ -1,5 +1,5 @@
 # META
-source_lines=518
+source_lines=512
 stages=DESUGAR,MARK
 # SOURCE
 -- compiler/tools/test_pins.mdk -- the typed known-red ledger shared by test
@@ -383,12 +383,6 @@ pinFromIndex : PinIndex ->
 pinFromIndex index file kind name engine =
   omLookup (selectorKey file kind name engine) index
 
-export
-pinFor : List TestPin -> String -> PinKind -> String -> String -> Option TestPin
-pinFor pins file kind name engine = match buildPinIndex pins
-  Err _ => None
-  Ok index => pinFromIndex index file kind name engine
-
 pinNamePresent : TestPin -> OrdMap Unit -> OrdMap Unit -> Bool
 pinNamePresent pin propNames testNames = match pin.pinKind
   PropPin => isSome (omLookup pin.pinName propNames)
@@ -638,8 +632,6 @@ pinVerdictDetail (PinChanged issue detail) =
 (DFunDef false "buildPinIndexGo" ((PCons (PVar "pin") (PVar "rest")) (PVar "index")) (EBlock (DoLet false false (PVar "key") (EApp (EVar "pinSelectorKey") (EVar "pin"))) (DoExpr (EMatch (EApp (EApp (EVar "omLookup") (EVar "key")) (EVar "index")) (arm (PCon "Some" PWild) () (EApp (EVar "Err") (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "")) (EApp (EVar "display") (EVar "pinOrigin"))) (ELit (LString ": duplicate selector for '"))) (EApp (EVar "display") (EFieldAccess (EVar "pin") "pinFile"))) (ELit (LString "' / "))) (EApp (EVar "display") (EApp (EVar "pinKindKey") (EFieldAccess (EVar "pin") "pinKind")))) (ELit (LString " '"))) (EApp (EVar "display") (EFieldAccess (EVar "pin") "pinName"))) (ELit (LString "' / "))) (EApp (EVar "display") (EFieldAccess (EVar "pin") "pinEngine"))) (ELit (LString ""))))) (arm (PCon "None") () (EApp (EApp (EVar "buildPinIndexGo") (EVar "rest")) (EApp (EApp (EApp (EVar "omInsert") (EVar "key")) (EVar "pin")) (EVar "index"))))))))
 (DTypeSig true "pinFromIndex" (TyFun (TyCon "PinIndex") (TyFun (TyCon "String") (TyFun (TyCon "PinKind") (TyFun (TyCon "String") (TyFun (TyCon "String") (TyApp (TyCon "Option") (TyCon "TestPin"))))))))
 (DFunDef false "pinFromIndex" ((PVar "index") (PVar "file") (PVar "kind") (PVar "name") (PVar "engine")) (EApp (EApp (EVar "omLookup") (EApp (EApp (EApp (EApp (EVar "selectorKey") (EVar "file")) (EVar "kind")) (EVar "name")) (EVar "engine"))) (EVar "index")))
-(DTypeSig true "pinFor" (TyFun (TyApp (TyCon "List") (TyCon "TestPin")) (TyFun (TyCon "String") (TyFun (TyCon "PinKind") (TyFun (TyCon "String") (TyFun (TyCon "String") (TyApp (TyCon "Option") (TyCon "TestPin"))))))))
-(DFunDef false "pinFor" ((PVar "pins") (PVar "file") (PVar "kind") (PVar "name") (PVar "engine")) (EMatch (EApp (EVar "buildPinIndex") (EVar "pins")) (arm (PCon "Err" PWild) () (EVar "None")) (arm (PCon "Ok" (PVar "index")) () (EApp (EApp (EApp (EApp (EApp (EVar "pinFromIndex") (EVar "index")) (EVar "file")) (EVar "kind")) (EVar "name")) (EVar "engine")))))
 (DTypeSig false "pinNamePresent" (TyFun (TyCon "TestPin") (TyFun (TyApp (TyCon "OrdMap") (TyCon "Unit")) (TyFun (TyApp (TyCon "OrdMap") (TyCon "Unit")) (TyCon "Bool")))))
 (DFunDef false "pinNamePresent" ((PVar "pin") (PVar "propNames") (PVar "testNames")) (EMatch (EFieldAccess (EVar "pin") "pinKind") (arm (PCon "PropPin") () (EApp (EVar "isSome") (EApp (EApp (EVar "omLookup") (EFieldAccess (EVar "pin") "pinName")) (EVar "propNames")))) (arm (PCon "TestPin") () (EApp (EVar "isSome") (EApp (EApp (EVar "omLookup") (EFieldAccess (EVar "pin") "pinName")) (EVar "testNames"))))))
 (DTypeSig false "validatePinNamesGo" (TyFun (TyApp (TyCon "List") (TyCon "TestPin")) (TyFun (TyCon "String") (TyFun (TyApp (TyCon "OrdMap") (TyCon "Unit")) (TyFun (TyApp (TyCon "OrdMap") (TyCon "Unit")) (TyApp (TyApp (TyCon "Result") (TyCon "String")) (TyCon "Unit")))))))
@@ -794,8 +786,6 @@ pinVerdictDetail (PinChanged issue detail) =
 (DFunDef false "buildPinIndexGo" ((PCons (PVar "pin") (PVar "rest")) (PVar "index")) (EBlock (DoLet false false (PVar "key") (EApp (EVar "pinSelectorKey") (EVar "pin"))) (DoExpr (EMatch (EApp (EApp (EVar "omLookup") (EVar "key")) (EMethodRef "index")) (arm (PCon "Some" PWild) () (EApp (EVar "Err") (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "")) (EApp (EMethodRef "display") (EVar "pinOrigin"))) (ELit (LString ": duplicate selector for '"))) (EApp (EMethodRef "display") (EFieldAccess (EVar "pin") "pinFile"))) (ELit (LString "' / "))) (EApp (EMethodRef "display") (EApp (EVar "pinKindKey") (EFieldAccess (EVar "pin") "pinKind")))) (ELit (LString " '"))) (EApp (EMethodRef "display") (EFieldAccess (EVar "pin") "pinName"))) (ELit (LString "' / "))) (EApp (EMethodRef "display") (EFieldAccess (EVar "pin") "pinEngine"))) (ELit (LString ""))))) (arm (PCon "None") () (EApp (EApp (EVar "buildPinIndexGo") (EVar "rest")) (EApp (EApp (EApp (EVar "omInsert") (EVar "key")) (EVar "pin")) (EMethodRef "index"))))))))
 (DTypeSig true "pinFromIndex" (TyFun (TyCon "PinIndex") (TyFun (TyCon "String") (TyFun (TyCon "PinKind") (TyFun (TyCon "String") (TyFun (TyCon "String") (TyApp (TyCon "Option") (TyCon "TestPin"))))))))
 (DFunDef false "pinFromIndex" ((PVar "index") (PVar "file") (PVar "kind") (PVar "name") (PVar "engine")) (EApp (EApp (EVar "omLookup") (EApp (EApp (EApp (EApp (EVar "selectorKey") (EVar "file")) (EVar "kind")) (EVar "name")) (EVar "engine"))) (EMethodRef "index")))
-(DTypeSig true "pinFor" (TyFun (TyApp (TyCon "List") (TyCon "TestPin")) (TyFun (TyCon "String") (TyFun (TyCon "PinKind") (TyFun (TyCon "String") (TyFun (TyCon "String") (TyApp (TyCon "Option") (TyCon "TestPin"))))))))
-(DFunDef false "pinFor" ((PVar "pins") (PVar "file") (PVar "kind") (PVar "name") (PVar "engine")) (EMatch (EApp (EVar "buildPinIndex") (EVar "pins")) (arm (PCon "Err" PWild) () (EVar "None")) (arm (PCon "Ok" (PVar "index")) () (EApp (EApp (EApp (EApp (EApp (EVar "pinFromIndex") (EMethodRef "index")) (EVar "file")) (EVar "kind")) (EVar "name")) (EVar "engine")))))
 (DTypeSig false "pinNamePresent" (TyFun (TyCon "TestPin") (TyFun (TyApp (TyCon "OrdMap") (TyCon "Unit")) (TyFun (TyApp (TyCon "OrdMap") (TyCon "Unit")) (TyCon "Bool")))))
 (DFunDef false "pinNamePresent" ((PVar "pin") (PVar "propNames") (PVar "testNames")) (EMatch (EFieldAccess (EVar "pin") "pinKind") (arm (PCon "PropPin") () (EApp (EVar "isSome") (EApp (EApp (EVar "omLookup") (EFieldAccess (EVar "pin") "pinName")) (EVar "propNames")))) (arm (PCon "TestPin") () (EApp (EVar "isSome") (EApp (EApp (EVar "omLookup") (EFieldAccess (EVar "pin") "pinName")) (EVar "testNames"))))))
 (DTypeSig false "validatePinNamesGo" (TyFun (TyApp (TyCon "List") (TyCon "TestPin")) (TyFun (TyCon "String") (TyFun (TyApp (TyCon "OrdMap") (TyCon "Unit")) (TyFun (TyApp (TyCon "OrdMap") (TyCon "Unit")) (TyApp (TyApp (TyCon "Result") (TyCon "String")) (TyCon "Unit")))))))

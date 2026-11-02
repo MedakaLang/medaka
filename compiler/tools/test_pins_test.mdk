@@ -4,17 +4,9 @@
 
 import test.{expectEach, expectEqual, expectFalse, expectOk, expectTrue}
 import tools.test_pins.{
-  PinKind(..),
-  PinObservation(..),
-  PinVerdict(..),
-  TestExpectedFailure(..),
-  TestPin(..),
-  classifyPin,
-  parsePins,
-  pinFor,
-  pinVerdictDetail,
-  pinVerdictPassed,
-  validatePinNames,
+  PinKind(..), PinObservation(..), PinVerdict(..), TestExpectedFailure(..),
+  TestPin(..), classifyPin, parsePins, pinVerdictDetail, pinVerdictPassed,
+  validatePinNames, buildPinIndex, pinFromIndex
 }
 import string.{replace}
 
@@ -341,3 +333,8 @@ test "verdict text names the owning issue" = expectEach [
       (pinVerdictDetail (PinDrained 42)),
   ),
 ]
+
+pinFor : List TestPin -> String -> PinKind -> String -> String -> Option TestPin
+pinFor pins file kind name engine = match buildPinIndex pins
+  Err _ => None
+  Ok index => pinFromIndex index file kind name engine

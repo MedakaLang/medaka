@@ -1,5 +1,5 @@
 # META
-source_lines=505
+source_lines=497
 stages=DESUGAR,MARK
 # SOURCE
 -- S-expression values with one canonical rendering and a fail-closed reader.
@@ -448,14 +448,6 @@ atomBool path node = match expectAtom path node
   Ok "false" => Ok False
   Ok _ => shapeError path "expected true or false"
 
-export
-expectList : Int -> String -> SExp -> Result SexpError (List SExp)
-expectList arity path (SList items)
-  | length items == arity = Ok items
-  | otherwise =
-    shapeError path ("expected a list of " ++ intToString arity ++ " items")
-expectList _ path _ = shapeError path "expected a list"
-
 -- ── skipping ────────────────────────────────────────────────────────────────
 
 -- Steps over one node without building it.  A decoder that stores a sub-tree
@@ -621,9 +613,6 @@ skipNodeAt b n p depth inQ
 (DFunDef false "atomInt" ((PVar "path") (PVar "node")) (EMatch (EApp (EApp (EVar "expectAtom") (EVar "path")) (EVar "node")) (arm (PCon "Err" (PVar "e")) () (EApp (EVar "Err") (EVar "e"))) (arm (PCon "Ok" (PVar "s")) () (EMatch (EApp (EVar "stringToInt") (EVar "s")) (arm (PCon "Some" (PVar "n")) () (EApp (EVar "Ok") (EVar "n"))) (arm (PCon "None") () (EApp (EApp (EVar "shapeError") (EVar "path")) (ELit (LString "expected an integer"))))))))
 (DTypeSig true "atomBool" (TyFun (TyCon "String") (TyFun (TyCon "SExp") (TyApp (TyApp (TyCon "Result") (TyCon "SexpError")) (TyCon "Bool")))))
 (DFunDef false "atomBool" ((PVar "path") (PVar "node")) (EMatch (EApp (EApp (EVar "expectAtom") (EVar "path")) (EVar "node")) (arm (PCon "Err" (PVar "e")) () (EApp (EVar "Err") (EVar "e"))) (arm (PCon "Ok" (PLit (LString "true"))) () (EApp (EVar "Ok") (EVar "True"))) (arm (PCon "Ok" (PLit (LString "false"))) () (EApp (EVar "Ok") (EVar "False"))) (arm (PCon "Ok" PWild) () (EApp (EApp (EVar "shapeError") (EVar "path")) (ELit (LString "expected true or false"))))))
-(DTypeSig true "expectList" (TyFun (TyCon "Int") (TyFun (TyCon "String") (TyFun (TyCon "SExp") (TyApp (TyApp (TyCon "Result") (TyCon "SexpError")) (TyApp (TyCon "List") (TyCon "SExp")))))))
-(DFunDef false "expectList" ((PVar "arity") (PVar "path") (PCon "SList" (PVar "items"))) (EIf (EBinOp "==" (EApp (EVar "length") (EVar "items")) (EVar "arity")) (EApp (EVar "Ok") (EVar "items")) (EIf (EVar "otherwise") (EApp (EApp (EVar "shapeError") (EVar "path")) (EBinOp "++" (EBinOp "++" (ELit (LString "expected a list of ")) (EApp (EVar "intToString") (EVar "arity"))) (ELit (LString " items")))) (EApp (EVar "__fallthrough__") (ELit LUnit)))))
-(DFunDef false "expectList" (PWild (PVar "path") PWild) (EApp (EApp (EVar "shapeError") (EVar "path")) (ELit (LString "expected a list"))))
 (DTypeSig true "cursorSkip" (TyFun (TyCon "SexpCursor") (TyCon "Unit")))
 (DFunDef false "cursorSkip" ((PVar "cur")) (EBlock (DoLet false false (PVar "p") (EApp (EApp (EApp (EVar "skipWsAt") (EFieldAccess (EVar "cur") "scBytes")) (EFieldAccess (EVar "cur") "scLen")) (EFieldAccess (EFieldAccess (EVar "cur") "scPos") "value"))) (DoExpr (EApp (EApp (EVar "cursorStep") (EVar "cur")) (EApp (EApp (EApp (EApp (EApp (EVar "skipNodeAt") (EFieldAccess (EVar "cur") "scBytes")) (EFieldAccess (EVar "cur") "scLen")) (EVar "p")) (ELit (LInt 0))) (EVar "False"))))))
 (DTypeSig true "cursorSkipText" (TyFun (TyCon "SexpCursor") (TyCon "String")))
@@ -744,9 +733,6 @@ skipNodeAt b n p depth inQ
 (DFunDef false "atomInt" ((PVar "path") (PVar "node")) (EMatch (EApp (EApp (EVar "expectAtom") (EVar "path")) (EVar "node")) (arm (PCon "Err" (PVar "e")) () (EApp (EVar "Err") (EVar "e"))) (arm (PCon "Ok" (PVar "s")) () (EMatch (EApp (EVar "stringToInt") (EVar "s")) (arm (PCon "Some" (PVar "n")) () (EApp (EVar "Ok") (EVar "n"))) (arm (PCon "None") () (EApp (EApp (EVar "shapeError") (EVar "path")) (ELit (LString "expected an integer"))))))))
 (DTypeSig true "atomBool" (TyFun (TyCon "String") (TyFun (TyCon "SExp") (TyApp (TyApp (TyCon "Result") (TyCon "SexpError")) (TyCon "Bool")))))
 (DFunDef false "atomBool" ((PVar "path") (PVar "node")) (EMatch (EApp (EApp (EVar "expectAtom") (EVar "path")) (EVar "node")) (arm (PCon "Err" (PVar "e")) () (EApp (EVar "Err") (EVar "e"))) (arm (PCon "Ok" (PLit (LString "true"))) () (EApp (EVar "Ok") (EVar "True"))) (arm (PCon "Ok" (PLit (LString "false"))) () (EApp (EVar "Ok") (EVar "False"))) (arm (PCon "Ok" PWild) () (EApp (EApp (EVar "shapeError") (EVar "path")) (ELit (LString "expected true or false"))))))
-(DTypeSig true "expectList" (TyFun (TyCon "Int") (TyFun (TyCon "String") (TyFun (TyCon "SExp") (TyApp (TyApp (TyCon "Result") (TyCon "SexpError")) (TyApp (TyCon "List") (TyCon "SExp")))))))
-(DFunDef false "expectList" ((PVar "arity") (PVar "path") (PCon "SList" (PVar "items"))) (EIf (EBinOp "==" (EApp (EMethodRef "length") (EVar "items")) (EVar "arity")) (EApp (EVar "Ok") (EVar "items")) (EIf (EVar "otherwise") (EApp (EApp (EVar "shapeError") (EVar "path")) (EBinOp "++" (EBinOp "++" (ELit (LString "expected a list of ")) (EApp (EVar "intToString") (EVar "arity"))) (ELit (LString " items")))) (EApp (EVar "__fallthrough__") (ELit LUnit)))))
-(DFunDef false "expectList" (PWild (PVar "path") PWild) (EApp (EApp (EVar "shapeError") (EVar "path")) (ELit (LString "expected a list"))))
 (DTypeSig true "cursorSkip" (TyFun (TyCon "SexpCursor") (TyCon "Unit")))
 (DFunDef false "cursorSkip" ((PVar "cur")) (EBlock (DoLet false false (PVar "p") (EApp (EApp (EApp (EVar "skipWsAt") (EFieldAccess (EVar "cur") "scBytes")) (EFieldAccess (EVar "cur") "scLen")) (EFieldAccess (EFieldAccess (EVar "cur") "scPos") "value"))) (DoExpr (EApp (EApp (EVar "cursorStep") (EVar "cur")) (EApp (EApp (EApp (EApp (EApp (EVar "skipNodeAt") (EFieldAccess (EVar "cur") "scBytes")) (EFieldAccess (EVar "cur") "scLen")) (EVar "p")) (ELit (LInt 0))) (EVar "False"))))))
 (DTypeSig true "cursorSkipText" (TyFun (TyCon "SexpCursor") (TyCon "String")))

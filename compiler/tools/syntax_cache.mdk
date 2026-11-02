@@ -6,7 +6,7 @@ import tools.snapshot_syntax.{
   snapshotSyntaxSource
 }
 
-public export data SyntaxCacheLimits = SyntaxCacheLimits Int Int Int Int
+export data SyntaxCacheLimits = SyntaxCacheLimits Int Int Int Int
 data CacheEntry = CacheEntry ParseOptions PreparedSyntax Int Int
 export data SyntaxCache =
   SyntaxCache SyntaxCacheLimits (OrdMap CacheEntry) (List String) Int Int
@@ -50,21 +50,12 @@ invalidateSyntax uri (cache@(SyntaxCache limits entries order source tokens)) =
         (tokens - t)
 
 export
-clearSyntax : SyntaxCache -> SyntaxCache
-clearSyntax (SyntaxCache limits _ _ _ _) = emptySyntaxCache limits
-
-export
 syntaxCacheEntryLimit : SyntaxCache -> Int
 syntaxCacheEntryLimit (SyntaxCache (SyntaxCacheLimits count _ _ _) _ _ _ _) =
   count
 
-export
 syntaxCacheSize : SyntaxCache -> Int
 syntaxCacheSize (SyntaxCache _ entries _ _ _) = omSize entries
-
-export
-syntaxCacheWeight : SyntaxCache -> (Int, Int)
-syntaxCacheWeight (SyntaxCache _ _ _ source tokens) = (source, tokens)
 
 trimCache : SyntaxCache -> SyntaxCache
 trimCache (cache@(SyntaxCache (SyntaxCacheLimits count _ sourceLimit tokenLimit) _ order source tokens)) =

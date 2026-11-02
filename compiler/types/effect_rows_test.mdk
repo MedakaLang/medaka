@@ -1,11 +1,17 @@
 import test.{expectAll, expectEqual, expectTrue}
 import types.effect_domain.{Param(..)}
 import types.effect_rows.{
-  Atom(..), atomBuiltin, renderAtoms, EffRow(..), Effvar(..), dedupCells,
-  effrowLabels, rowFlat, joinRows, effvarId, effrowNorm, isJoinCell, linkRow
+  Atom(..), atomBuiltin, renderAtoms, EffRow(..), Effvar(..), effrowLabels,
+  rowFlat, joinRows, effvarId, effrowNorm, isJoinCell, linkRow
 }
 import support.util.{listLen}
+import list.{nubBy}
 import support.opcount.{setOpCounting, opSnap}
+
+-- Keep the first cell for each stable identity (`list.nubBy`: the same keep-first
+-- dedup).
+dedupCells : List (Ref Effvar) -> List (Ref Effvar)
+dedupCells cells = nubBy (a b => effvarId a == effvarId b) cells
 
 deepDiamond : Int -> Ref Effvar -> Ref Effvar
 deepDiamond 0 leaf = leaf

@@ -46,7 +46,7 @@ typecheck (calls exhaust per EMatch) → eval`. All in `compiler/frontend/` exce
 - ⚠️ **[P-TEST-SIBLING]** A compiler-internal test is a `foo_test.mdk` sibling of `foo.mdk`
   (`foo.test.mdk` does not load). The suffix is excluded from the source fingerprints and the
   snapshot corpus. Run with `medaka test <file>`; if no entry imports it, name it in the
-  Makefile's `test:` target ([W-MODULE-BLIND]).
+  Makefile's `test:` target ([W-MODULE-BLIND]). A sibling sees its subject's private names; a non-test module cannot import a `*_test` module.
 
 Key support files: `compiler/driver/loader.mdk` (dep walk, `medaka.toml` walk-up),
 `compiler/driver/diagnostics.mdk` (accumulating errors), `compiler/driver/build_cmd.mdk`,

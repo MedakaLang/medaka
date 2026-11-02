@@ -1,0 +1,17 @@
+-- Historical declarations: 6a87580140d5df81ca9af27c8ba5ac199c46d10f:compiler/backend/llvm_emit.mdk
+groupCtorsByType : List (String, String) -> OrdMap (List String)
+groupCtorsByType t = omMapValues reverseL (foldCtorsByType t omEmpty)
+
+foldCtorsByType : List (String, String) ->
+  OrdMap (List String) ->
+  OrdMap (List String)
+foldCtorsByType [] acc = acc
+foldCtorsByType ((c, ty) :: rest) acc =
+  foldCtorsByType rest (omInsert ty (c :: optionOr [] (omLookup ty acc)) acc)
+
+reservedCtorsOfType : String -> List String
+reservedCtorsOfType "List" = ["Cons", "Nil"]
+reservedCtorsOfType "Option" = ["Some", "None"]
+reservedCtorsOfType "Result" = ["Ok", "Err"]
+reservedCtorsOfType "Ordering" = ["Lt", "Eq", "Gt"]
+reservedCtorsOfType _ = []

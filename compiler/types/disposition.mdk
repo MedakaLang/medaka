@@ -31,7 +31,6 @@ export
 instIdMid : InstId -> String
 instIdMid (InstId m _) = m
 
-export
 instIdSeq : InstId -> Int
 instIdSeq (InstId _ s) = s
 
@@ -111,19 +110,6 @@ emptyDispositionTable = DispositionTable {
 export
 dispositionRows : DispositionTable -> List MethodDisposition
 dispositionRows table = table.dtRows
-
--- Fold [rows] into the table's map index, panicking on the first duplicate
--- (instance, method) key — two rows publishing the same slot is a producer
--- bug, never a case with a policy: `dispositionLookup` below must answer with
--- exactly one row or none.
-export
-buildDispositionTable : List MethodDisposition -> DispositionTable
-buildDispositionTable rows = DispositionTable {
-  dtRows = rows,
-  dtIndex = insertDispositions rows omEmpty,
-  dtInheritors = omEmpty,
-  dtIfaceSuperCounts = omEmpty,
-}
 
 -- The producer's builder: each row with its instance's shape and its interface's
 -- word (`route_key.ifaceWordOf`), which also fills the inheritor index, and each
@@ -205,7 +191,6 @@ insertDispositions (d :: rest) acc =
 -- A map lookup, never a List scan.  (`MethodDisposition` derives no `Debug`,
 -- so this is exercised as a `test` in `disposition_test.mdk` rather than a
 -- doctest that would print one.)
-export
 dispositionLookup : InstId ->
   String ->
   DispositionTable ->
@@ -225,7 +210,6 @@ ifaceRefSameSpelling a b = a.irName == b.irName
 -- iface, method) slots: a slot with no row, or a slot answered by a different
 -- interface.  Empty when every slot is disposed.  (A second row for one slot never
 -- reaches here: building the table refuses it.)
-export
 dispositionProblems : List (InstId, IfaceRef, String) ->
   DispositionTable ->
   List String

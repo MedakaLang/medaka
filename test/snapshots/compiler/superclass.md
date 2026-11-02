@@ -1,5 +1,5 @@
 # META
-source_lines=139
+source_lines=138
 stages=DESUGAR,MARK
 # SOURCE
 -- The superclass closure: every predicate a dictionary for one predicate also
@@ -49,7 +49,6 @@ superClosure lookup step key seeds =
   closureLayers lookup step key kept seen kept
 
 -- The direct supers of one node, in declaration order, each carrying its path.
-export
 directSupers : (IfaceRef -> Option (List String, List Super)) ->
   (List String -> p -> Super -> Option p) ->
   SuperNode p ->
@@ -148,7 +147,7 @@ keepFresh key (n :: rest) seen =
 (DData Public "SuperNode" ("p") ((variant "SuperNode" (ConNamed (field "superPath" (TyApp (TyCon "List") (TyCon "Int"))) (field "superIface" (TyCon "IfaceRef")) (field "superPayload" (TyVar "p"))))) ())
 (DTypeSig true "superClosure" (TyFun (TyFun (TyCon "IfaceRef") (TyApp (TyCon "Option") (TyTuple (TyApp (TyCon "List") (TyCon "String")) (TyApp (TyCon "List") (TyCon "Super"))))) (TyFun (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyVar "p") (TyFun (TyCon "Super") (TyApp (TyCon "Option") (TyVar "p"))))) (TyFun (TyFun (TyCon "IfaceRef") (TyFun (TyVar "p") (TyCon "String"))) (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "IfaceRef") (TyVar "p"))) (TyApp (TyCon "List") (TyApp (TyCon "SuperNode") (TyVar "p"))))))))
 (DFunDef false "superClosure" ((PVar "lookup") (PVar "step") (PVar "key") (PVar "seeds")) (EBlock (DoLet false false (PVar "seedNodes") (EApp (EApp (EVar "seedNodesFrom") (ELit (LInt 0))) (EVar "seeds"))) (DoLet false false (PTuple (PVar "kept") (PVar "seen")) (EApp (EApp (EApp (EVar "keepFresh") (EVar "key")) (EVar "seedNodes")) (EVar "omEmpty"))) (DoExpr (EApp (EApp (EApp (EApp (EApp (EApp (EVar "closureLayers") (EVar "lookup")) (EVar "step")) (EVar "key")) (EVar "kept")) (EVar "seen")) (EVar "kept")))))
-(DTypeSig true "directSupers" (TyFun (TyFun (TyCon "IfaceRef") (TyApp (TyCon "Option") (TyTuple (TyApp (TyCon "List") (TyCon "String")) (TyApp (TyCon "List") (TyCon "Super"))))) (TyFun (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyVar "p") (TyFun (TyCon "Super") (TyApp (TyCon "Option") (TyVar "p"))))) (TyFun (TyApp (TyCon "SuperNode") (TyVar "p")) (TyApp (TyCon "List") (TyApp (TyCon "SuperNode") (TyVar "p")))))))
+(DTypeSig false "directSupers" (TyFun (TyFun (TyCon "IfaceRef") (TyApp (TyCon "Option") (TyTuple (TyApp (TyCon "List") (TyCon "String")) (TyApp (TyCon "List") (TyCon "Super"))))) (TyFun (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyVar "p") (TyFun (TyCon "Super") (TyApp (TyCon "Option") (TyVar "p"))))) (TyFun (TyApp (TyCon "SuperNode") (TyVar "p")) (TyApp (TyCon "List") (TyApp (TyCon "SuperNode") (TyVar "p")))))))
 (DFunDef false "directSupers" ((PVar "lookup") (PVar "step") (PVar "node")) (EMatch (EApp (EVar "lookup") (EFieldAccess (EVar "node") "superIface")) (arm (PCon "None") () (EListLit)) (arm (PCon "Some" (PTuple (PVar "typarams") (PVar "supers"))) () (EApp (EApp (EApp (EApp (EApp (EVar "directSupersFrom") (EVar "step")) (EVar "typarams")) (EVar "node")) (ELit (LInt 0))) (EVar "supers")))))
 (DTypeSig true "superIfaceRef" (TyFun (TyCon "Super") (TyCon "IfaceRef")))
 (DFunDef false "superIfaceRef" ((PRec "Super" ((rf "superHead" None) (rf "superOrigin" None)) true)) (ERecordCreate "IfaceRef" ((fa "irName" (EVar "superHead")) (fa "irOrigin" (EVar "superOrigin")))))
@@ -181,7 +180,7 @@ keepFresh key (n :: rest) seen =
 (DData Public "SuperNode" ("p") ((variant "SuperNode" (ConNamed (field "superPath" (TyApp (TyCon "List") (TyCon "Int"))) (field "superIface" (TyCon "IfaceRef")) (field "superPayload" (TyVar "p"))))) ())
 (DTypeSig true "superClosure" (TyFun (TyFun (TyCon "IfaceRef") (TyApp (TyCon "Option") (TyTuple (TyApp (TyCon "List") (TyCon "String")) (TyApp (TyCon "List") (TyCon "Super"))))) (TyFun (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyVar "p") (TyFun (TyCon "Super") (TyApp (TyCon "Option") (TyVar "p"))))) (TyFun (TyFun (TyCon "IfaceRef") (TyFun (TyVar "p") (TyCon "String"))) (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "IfaceRef") (TyVar "p"))) (TyApp (TyCon "List") (TyApp (TyCon "SuperNode") (TyVar "p"))))))))
 (DFunDef false "superClosure" ((PVar "lookup") (PVar "step") (PVar "key") (PVar "seeds")) (EBlock (DoLet false false (PVar "seedNodes") (EApp (EApp (EVar "seedNodesFrom") (ELit (LInt 0))) (EVar "seeds"))) (DoLet false false (PTuple (PVar "kept") (PVar "seen")) (EApp (EApp (EApp (EVar "keepFresh") (EVar "key")) (EVar "seedNodes")) (EVar "omEmpty"))) (DoExpr (EApp (EApp (EApp (EApp (EApp (EApp (EVar "closureLayers") (EVar "lookup")) (EVar "step")) (EVar "key")) (EVar "kept")) (EVar "seen")) (EVar "kept")))))
-(DTypeSig true "directSupers" (TyFun (TyFun (TyCon "IfaceRef") (TyApp (TyCon "Option") (TyTuple (TyApp (TyCon "List") (TyCon "String")) (TyApp (TyCon "List") (TyCon "Super"))))) (TyFun (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyVar "p") (TyFun (TyCon "Super") (TyApp (TyCon "Option") (TyVar "p"))))) (TyFun (TyApp (TyCon "SuperNode") (TyVar "p")) (TyApp (TyCon "List") (TyApp (TyCon "SuperNode") (TyVar "p")))))))
+(DTypeSig false "directSupers" (TyFun (TyFun (TyCon "IfaceRef") (TyApp (TyCon "Option") (TyTuple (TyApp (TyCon "List") (TyCon "String")) (TyApp (TyCon "List") (TyCon "Super"))))) (TyFun (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyVar "p") (TyFun (TyCon "Super") (TyApp (TyCon "Option") (TyVar "p"))))) (TyFun (TyApp (TyCon "SuperNode") (TyVar "p")) (TyApp (TyCon "List") (TyApp (TyCon "SuperNode") (TyVar "p")))))))
 (DFunDef false "directSupers" ((PVar "lookup") (PVar "step") (PVar "node")) (EMatch (EApp (EVar "lookup") (EFieldAccess (EVar "node") "superIface")) (arm (PCon "None") () (EListLit)) (arm (PCon "Some" (PTuple (PVar "typarams") (PVar "supers"))) () (EApp (EApp (EApp (EApp (EApp (EVar "directSupersFrom") (EVar "step")) (EVar "typarams")) (EVar "node")) (ELit (LInt 0))) (EVar "supers")))))
 (DTypeSig true "superIfaceRef" (TyFun (TyCon "Super") (TyCon "IfaceRef")))
 (DFunDef false "superIfaceRef" ((PRec "Super" ((rf "superHead" None) (rf "superOrigin" None)) true)) (ERecordCreate "IfaceRef" ((fa "irName" (EVar "superHead")) (fa "irOrigin" (EVar "superOrigin")))))

@@ -31,9 +31,24 @@ import types.solver_contract.{
   QualifiedScheme(..),
   Qualifier(..),
   Wanted(..),
-  instantiateQualified,
 }
 import support.util.{listLen}
+
+instantiateQualified : InstantiationServices subst ->
+  ScopeId ->
+  GoalOrigin ->
+  QualifiedScheme ->
+  Instantiation
+instantiateQualified services scope origin qualified = match qualified.hm
+  Forall typeVariables effectVariables authorityVariables _ schemeForce schemeBody =>
+    let subst =
+      services.makeSubstitution typeVariables effectVariables authorityVariables
+    Instantiation {
+      body = services.substituteBody subst schemeBody,
+      force = services.substituteForce subst schemeForce,
+      arguments =
+        instantiateQualifiers services subst scope origin qualified.qualifiers,
+    }
 
 data TestSubstitution = TestSubstitution Int (Ref Tyvar) (Ref Effvar)
 
@@ -514,3 +529,31 @@ test "wanted storage and both allocators receive the occurrence context" =
       cfoAbsentDestinations = [("synthetic", 5)],
     }
     (contextForwardingResult ())
+
+substitutePredicate : InstantiationServices subst ->
+  subst ->
+  ClassPredicate ->
+  ClassPredicate
+substitutePredicate services subst pred = ClassPredicate {
+  predicateInterface = pred.predicateInterface,
+  predicateArguments =
+    map (services.substituteArgument subst) pred.predicateArguments,
+}
+
+instantiateQualifiers : InstantiationServices subst ->
+  subst ->
+  ScopeId ->
+  GoalOrigin ->
+  List Qualifier ->
+  List InstantiationArgument
+instantiateQualifiers _ _ _ _ [] = []
+instantiateQualifiers services subst scope origin (qualifier :: rest) =
+  let wanted = Wanted {
+    id = services.freshGoal origin scope,
+    predicate = substitutePredicate services subst qualifier.predicate,
+    origin = origin,
+    scope = scope,
+    destination = services.freshDestination origin scope,
+  }
+  InstantiationArgument { formal = qualifier.formal, wanted = wanted }
+    :: instantiateQualifiers services subst scope origin rest

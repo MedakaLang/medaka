@@ -2079,7 +2079,6 @@ coreShadowMapFor gctx coreProg shadowMap
 --     local is `sz`) bind it under a different spelling, so neither admits it — and
 --     both then agree with what the un-mangled path already does with that spelling.
 -- Empty shadowMap ⇒ `lookupAssoc` misses ⇒ True ⇒ the check/run path is untouched.
-export
 shadowSymSpelledBare : SpellCtx -> List (String, String) -> String -> Bool
 shadowSymSpelledBare sc sm n = match lookupAssoc n sm
   None => True
@@ -2092,7 +2091,6 @@ spellCtxOf gctx prog = SpellCtx {
   scCorePfx = mangledName "core" "",
 }
 
-export
 moduleSpellsShadowBare : SpellCtx -> String -> String -> Bool
 moduleSpellsShadowBare sc sym bare =
   contains sym sc.scTopFns
@@ -2133,14 +2131,12 @@ formBareLocals gctx path acc =
 
 -- the BARE interface-method name a (possibly mangled) standalone-shadow symbol stands for.
 -- Identity on the un-mangled run/check path, where the map is empty.
-export
 shadowBareName : List (String, String) -> String -> String
 shadowBareName sm n = optionOr n (lookupAssoc n sm)
 
 -- Method nameability and standalone availability are independent. The wrapper
 -- admits standalone routes only for this module's definitions or actual imported
 -- standalone descriptors, never for private functions elsewhere in the graph.
-export
 methodMarkCtx : GraphCtx -> MarkSets -> String -> List Decl -> MarkCtx
 methodMarkCtx gctx ms "" coreProg
   | omSize (ifaceExportsIndex gctx ()) == 0 = MarkCtx {

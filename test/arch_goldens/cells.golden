@@ -16,7 +16,7 @@ tools.lint_cmd	1
 tools.lsp	2
 tools.lsp_harness	1
 tools.printer	8
-tools.probe_transcript	1
+tools.probe_transcript	2
 tools.prop_runner	5
 tools.refindex	2
 tools.repl	6

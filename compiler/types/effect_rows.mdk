@@ -422,21 +422,3 @@ finishChunks : List (List Atom) -> List Atom
 finishChunks [] = []
 finishChunks [labels] = labels
 finishChunks chunks = atomsUnion [] (flattenChunks chunks [])
-
-export
-dedupCells : List (Ref Effvar) -> List (Ref Effvar)
-dedupCells cells = reverseL (dedupCellsGo cells Tip [])
-
--- `rowFlat` returns unbound cells, but this public helper is also used while
--- constructing joins. Keep the first cell for each stable identity.
-dedupCellsGo : List (Ref Effvar) ->
-  Map Int Unit ->
-  List (Ref Effvar) ->
-  List (Ref Effvar)
-dedupCellsGo [] _ acc = acc
-dedupCellsGo (cell :: cells) seen acc =
-  let id = effvarId cell
-  if has id seen then
-    dedupCellsGo cells seen acc
-  else
-    dedupCellsGo cells (set id () seen) (cell :: acc)

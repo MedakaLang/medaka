@@ -45,11 +45,6 @@ export
 readEvEntries : SexpCursor -> Result SexpError (List EvEntry)
 readEvEntries cur = checked "evidence" cur (cursorList readEvEntry cur)
 
--- The whole of `text` is one list of declarations.
-export
-decodeDecls : String -> Result SexpError (List Decl)
-decodeDecls text = decodeAll readDecls text
-
 -- The whole of `text` is one list of evidence rows.
 export
 decodeEvEntries : String -> Result SexpError (List EvEntry)

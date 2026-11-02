@@ -56,6 +56,14 @@ import types.tc_types.{
   ModuleCtx(..),
   Windowed(..),
 }
+import types.scopes.{DefaultBodyIdentity(..)}
+import types.tc_state.{
+  currentScopeStore, defaultReceiverOrdinal, renderEvidenceBinder
+}
+import types.scopes as Scopes
+import types.scopes.{ScopeOwner(..)}
+import frontend.ast.{TyConOrigin(..)}
+import types.repr.{IfaceRef(..)}
 
 -- A channel as `wNew` would mint it; `wNew` is not exported, and the record's own fields
 -- are the whole of its state.
@@ -284,3 +292,33 @@ test "noting the high water of a graph that is lower than the lineage leaves the
   let later = probeGraphCtx ()
   raiseToHighWater later
   expectAtLeast highTyvar later.graphRun.tyvarCounter.value
+
+-- Test-only seam: the names a default body's evidence binders render to.  Its
+-- method-level slots are dictionary parameters of the lowered body; its receiver is
+-- never a parameter -- lowering and eval rebind it per instance (`defaultReceiverDict`).
+defaultBodyBinderNamesProbe : Unit -> List String
+defaultBodyBinderNamesProbe _ =
+  let gctx = probeGraphCtx ()
+  let iface =
+    IfaceRef { irName = "Supply", irOrigin = OriginModule "owner-module" }
+  let owner = DefaultBodyIdentity { dbiIface = iface, dbiMethod = "copy" }
+  let store = currentScopeStore gctx ()
+  let root = Scopes.freshScope store None 0 "owner-module" ModuleOwner
+  let body =
+    Scopes.freshScope
+      store
+      (Some root)
+      1
+      "owner-module"
+      (DefaultBodyOwner owner)
+  let rendered = [
+    renderEvidenceBinder gctx (Scopes.binderAt body 0),
+    renderEvidenceBinder gctx (Scopes.binderAt body 1),
+    renderEvidenceBinder gctx (Scopes.binderAt body defaultReceiverOrdinal),
+  ]
+  rendered
+
+test "a default body's evidence binders render with the method's dictionary names and the receiver's self name" =
+  expectEqual
+    ["$dict_copy_0", "$dict_copy_1", "$self_copy"]
+    (defaultBodyBinderNamesProbe ())

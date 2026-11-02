@@ -820,6 +820,7 @@ Manipulation of `/`-separated paths as text.
 - [`joinAll`](path.md#joinall)
 - [`segments`](path.md#segments)
 - [`matchGlob`](path.md#matchglob)
+- [`globReaches`](path.md#globreaches)
 - [`isAbsolute`](path.md#isabsolute)
 - [`stripPrefix`](path.md#stripprefix)
 - [`normalize`](path.md#normalize)

@@ -1,5 +1,5 @@
 # META
-source_lines=416
+source_lines=413
 stages=DESUGAR,MARK
 # SOURCE
 -- compiler/tools/lint_hints.mdk — the rewrite-hint engine: a rule that rewrites
@@ -174,7 +174,6 @@ condMeta (Atomic m) = Some m
 condMeta _ = None
 
 -- Compile one row, or say why it cannot be.
-export
 compileHint : HintRow -> Result String Hint
 compileHint row = match split " ==> " row.rowText
   [lhsText, rhsText] => match (exprOfText lhsText, exprOfText rhsText)
@@ -247,7 +246,6 @@ public export data Found = Found {
 }
 
 -- The subject against the template; a bound subexpression keeps its wrappers.
-export
 matchHint : Hint -> Expr -> Option Found
 matchHint h subject = match matchT h.hintLhs subject (Found [] [])
   Some found => if condsHold h.hintRow.rowConds found then Some found else None
@@ -410,7 +408,6 @@ allHeadsPrelude idx facts found =
 
 -- Inside the definition of a function the row names, the rewrite would call it
 -- from its own body.  A test's or prop's owner name is its description.
-export
 inOwnDefinition : Hint -> Ctx -> Bool
 inOwnDefinition h ctx =
   not ctx.ctxInTest && any (ownsName ctx) h.hintRow.rowConds
@@ -477,7 +474,7 @@ ownsName _ _ = False
 (DTypeSig false "condMeta" (TyFun (TyCon "HintCond") (TyApp (TyCon "Option") (TyCon "String"))))
 (DFunDef false "condMeta" ((PCon "Atomic" (PVar "m"))) (EApp (EVar "Some") (EVar "m")))
 (DFunDef false "condMeta" (PWild) (EVar "None"))
-(DTypeSig true "compileHint" (TyFun (TyCon "HintRow") (TyApp (TyApp (TyCon "Result") (TyCon "String")) (TyCon "Hint"))))
+(DTypeSig false "compileHint" (TyFun (TyCon "HintRow") (TyApp (TyApp (TyCon "Result") (TyCon "String")) (TyCon "Hint"))))
 (DFunDef false "compileHint" ((PVar "row")) (EMatch (EApp (EApp (EVar "split") (ELit (LString " ==> "))) (EFieldAccess (EVar "row") "rowText")) (arm (PList (PVar "lhsText") (PVar "rhsText")) () (EMatch (ETuple (EApp (EVar "exprOfText") (EVar "lhsText")) (EApp (EVar "exprOfText") (EVar "rhsText"))) (arm (PTuple (PCon "Ok" (PVar "l")) (PCon "Ok" (PVar "r"))) () (EMatch (ETuple (EApp (EVar "templateOf") (EVar "l")) (EApp (EVar "templateOf") (EVar "r"))) (arm (PTuple (PCon "Ok" (PVar "lhs")) (PCon "Ok" (PVar "rhs"))) () (EApp (EApp (EApp (EVar "checkHint") (EVar "row")) (EVar "lhs")) (EVar "rhs"))) (arm (PTuple (PCon "Err" (PVar "m")) PWild) () (EApp (EVar "Err") (EApp (EApp (EVar "rowFailure") (EVar "row")) (EVar "m")))) (arm (PTuple PWild (PCon "Err" (PVar "m"))) () (EApp (EVar "Err") (EApp (EApp (EVar "rowFailure") (EVar "row")) (EVar "m")))))) (arm (PTuple (PCon "Err" (PVar "m")) PWild) () (EApp (EVar "Err") (EApp (EApp (EVar "rowFailure") (EVar "row")) (EVar "m")))) (arm (PTuple PWild (PCon "Err" (PVar "m"))) () (EApp (EVar "Err") (EApp (EApp (EVar "rowFailure") (EVar "row")) (EVar "m")))))) (arm PWild () (EApp (EVar "Err") (EApp (EApp (EVar "rowFailure") (EVar "row")) (ELit (LString "expected exactly one ` ==> `")))))))
 (DTypeSig false "checkHint" (TyFun (TyCon "HintRow") (TyFun (TyCon "Expr") (TyFun (TyCon "Expr") (TyApp (TyApp (TyCon "Result") (TyCon "String")) (TyCon "Hint"))))))
 (DFunDef false "checkHint" ((PVar "row") (PVar "lhs") (PVar "rhs")) (EBlock (DoLet false false (PVar "bound") (EApp (EVar "metasOf") (EVar "lhs"))) (DoExpr (EMatch (EApp (EVar "rootKind") (EVar "lhs")) (arm (PCon "None") () (EApp (EVar "Err") (EApp (EApp (EVar "rowFailure") (EVar "row")) (ELit (LString "the left side is not an application or an operator"))))) (arm (PCon "Some" (PVar "kind")) () (EApp (EApp (EApp (EApp (EApp (EVar "checkBound") (EVar "row")) (EVar "kind")) (EVar "lhs")) (EVar "rhs")) (EVar "bound")))))))
@@ -492,7 +489,7 @@ ownsName _ _ = False
 (DTypeSig false "compileOrPanic" (TyFun (TyCon "HintRow") (TyCon "Hint")))
 (DFunDef false "compileOrPanic" ((PVar "row")) (EMatch (EApp (EVar "compileHint") (EVar "row")) (arm (PCon "Ok" (PVar "h")) () (EVar "h")) (arm (PCon "Err" (PVar "m")) () (EApp (EVar "panic") (EVar "m")))))
 (DData Public "Found" () ((variant "Found" (ConNamed (field "foundBinds" (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "Expr")))) (field "foundHeads" (TyApp (TyCon "List") (TyCon "Expr")))))) ())
-(DTypeSig true "matchHint" (TyFun (TyCon "Hint") (TyFun (TyCon "Expr") (TyApp (TyCon "Option") (TyCon "Found")))))
+(DTypeSig false "matchHint" (TyFun (TyCon "Hint") (TyFun (TyCon "Expr") (TyApp (TyCon "Option") (TyCon "Found")))))
 (DFunDef false "matchHint" ((PVar "h") (PVar "subject")) (EMatch (EApp (EApp (EApp (EVar "matchT") (EFieldAccess (EVar "h") "hintLhs")) (EVar "subject")) (EApp (EApp (EVar "Found") (EListLit)) (EListLit))) (arm (PCon "Some" (PVar "found")) () (EIf (EApp (EApp (EVar "condsHold") (EFieldAccess (EFieldAccess (EVar "h") "hintRow") "rowConds")) (EVar "found")) (EApp (EVar "Some") (EVar "found")) (EVar "None"))) (arm (PCon "None") () (EVar "None"))))
 (DTypeSig false "condsHold" (TyFun (TyApp (TyCon "List") (TyCon "HintCond")) (TyFun (TyCon "Found") (TyCon "Bool"))))
 (DFunDef false "condsHold" ((PVar "conds") (PVar "found")) (EApp (EApp (EVar "all") (EApp (EVar "condHolds") (EVar "found"))) (EVar "conds")))
@@ -536,7 +533,7 @@ ownsName _ _ = False
 (DFunDef false "hintFix" ((PVar "h") (PVar "found") (PVar "idx") (PVar "facts") (PVar "ctx") (PVar "e") (PVar "rewritten")) (EIf (EBinOp "&&" (EBinOp "&&" (EApp (EApp (EApp (EVar "allHeadsPrelude") (EVar "idx")) (EVar "facts")) (EVar "found")) (EApp (EVar "not") (EApp (EApp (EVar "any") (EApp (EApp (EApp (EVar "rebinds") (EVar "idx")) (EVar "facts")) (EVar "ctx"))) (EFieldAccess (EVar "h") "hintIntro")))) (EApp (EVar "not") (EApp (EApp (EVar "inOwnDefinition") (EVar "h")) (EVar "ctx")))) (EApp (EApp (EApp (EApp (EApp (EVar "replaceNodeFix") (EFieldAccess (EFieldAccess (EVar "h") "hintRow") "rowApplicability")) (EFieldAccess (EFieldAccess (EVar "h") "hintRow") "rowFix")) (EVar "ctx")) (EVar "e")) (EVar "rewritten")) (EVar "None")))
 (DTypeSig false "allHeadsPrelude" (TyFun (TyCon "StdlibIndex") (TyFun (TyCon "FileFacts") (TyFun (TyCon "Found") (TyCon "Bool")))))
 (DFunDef false "allHeadsPrelude" ((PVar "idx") (PVar "facts") (PVar "found")) (EApp (EApp (EVar "all") (EApp (EApp (EVar "usesPreludeName") (EVar "idx")) (EVar "facts"))) (EFieldAccess (EVar "found") "foundHeads")))
-(DTypeSig true "inOwnDefinition" (TyFun (TyCon "Hint") (TyFun (TyCon "Ctx") (TyCon "Bool"))))
+(DTypeSig false "inOwnDefinition" (TyFun (TyCon "Hint") (TyFun (TyCon "Ctx") (TyCon "Bool"))))
 (DFunDef false "inOwnDefinition" ((PVar "h") (PVar "ctx")) (EBinOp "&&" (EApp (EVar "not") (EFieldAccess (EVar "ctx") "ctxInTest")) (EApp (EApp (EVar "any") (EApp (EVar "ownsName") (EVar "ctx"))) (EFieldAccess (EFieldAccess (EVar "h") "hintRow") "rowConds"))))
 (DTypeSig false "ownsName" (TyFun (TyCon "Ctx") (TyFun (TyCon "HintCond") (TyCon "Bool"))))
 (DFunDef false "ownsName" ((PVar "ctx") (PCon "NotInDefOf" (PVar "names"))) (EApp (EApp (EVar "elem") (EFieldAccess (EVar "ctx") "ctxDeclName")) (EVar "names")))
@@ -600,7 +597,7 @@ ownsName _ _ = False
 (DTypeSig false "condMeta" (TyFun (TyCon "HintCond") (TyApp (TyCon "Option") (TyCon "String"))))
 (DFunDef false "condMeta" ((PCon "Atomic" (PVar "m"))) (EApp (EVar "Some") (EVar "m")))
 (DFunDef false "condMeta" (PWild) (EVar "None"))
-(DTypeSig true "compileHint" (TyFun (TyCon "HintRow") (TyApp (TyApp (TyCon "Result") (TyCon "String")) (TyCon "Hint"))))
+(DTypeSig false "compileHint" (TyFun (TyCon "HintRow") (TyApp (TyApp (TyCon "Result") (TyCon "String")) (TyCon "Hint"))))
 (DFunDef false "compileHint" ((PVar "row")) (EMatch (EApp (EApp (EVar "split") (ELit (LString " ==> "))) (EFieldAccess (EVar "row") "rowText")) (arm (PList (PVar "lhsText") (PVar "rhsText")) () (EMatch (ETuple (EApp (EVar "exprOfText") (EVar "lhsText")) (EApp (EVar "exprOfText") (EVar "rhsText"))) (arm (PTuple (PCon "Ok" (PVar "l")) (PCon "Ok" (PVar "r"))) () (EMatch (ETuple (EApp (EVar "templateOf") (EVar "l")) (EApp (EVar "templateOf") (EVar "r"))) (arm (PTuple (PCon "Ok" (PVar "lhs")) (PCon "Ok" (PVar "rhs"))) () (EApp (EApp (EApp (EVar "checkHint") (EVar "row")) (EVar "lhs")) (EVar "rhs"))) (arm (PTuple (PCon "Err" (PVar "m")) PWild) () (EApp (EVar "Err") (EApp (EApp (EVar "rowFailure") (EVar "row")) (EVar "m")))) (arm (PTuple PWild (PCon "Err" (PVar "m"))) () (EApp (EVar "Err") (EApp (EApp (EVar "rowFailure") (EVar "row")) (EVar "m")))))) (arm (PTuple (PCon "Err" (PVar "m")) PWild) () (EApp (EVar "Err") (EApp (EApp (EVar "rowFailure") (EVar "row")) (EVar "m")))) (arm (PTuple PWild (PCon "Err" (PVar "m"))) () (EApp (EVar "Err") (EApp (EApp (EVar "rowFailure") (EVar "row")) (EVar "m")))))) (arm PWild () (EApp (EVar "Err") (EApp (EApp (EVar "rowFailure") (EVar "row")) (ELit (LString "expected exactly one ` ==> `")))))))
 (DTypeSig false "checkHint" (TyFun (TyCon "HintRow") (TyFun (TyCon "Expr") (TyFun (TyCon "Expr") (TyApp (TyApp (TyCon "Result") (TyCon "String")) (TyCon "Hint"))))))
 (DFunDef false "checkHint" ((PVar "row") (PVar "lhs") (PVar "rhs")) (EBlock (DoLet false false (PVar "bound") (EApp (EVar "metasOf") (EVar "lhs"))) (DoExpr (EMatch (EApp (EVar "rootKind") (EVar "lhs")) (arm (PCon "None") () (EApp (EVar "Err") (EApp (EApp (EVar "rowFailure") (EVar "row")) (ELit (LString "the left side is not an application or an operator"))))) (arm (PCon "Some" (PVar "kind")) () (EApp (EApp (EApp (EApp (EApp (EVar "checkBound") (EVar "row")) (EVar "kind")) (EVar "lhs")) (EVar "rhs")) (EVar "bound")))))))
@@ -615,7 +612,7 @@ ownsName _ _ = False
 (DTypeSig false "compileOrPanic" (TyFun (TyCon "HintRow") (TyCon "Hint")))
 (DFunDef false "compileOrPanic" ((PVar "row")) (EMatch (EApp (EVar "compileHint") (EVar "row")) (arm (PCon "Ok" (PVar "h")) () (EVar "h")) (arm (PCon "Err" (PVar "m")) () (EApp (EVar "panic") (EVar "m")))))
 (DData Public "Found" () ((variant "Found" (ConNamed (field "foundBinds" (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "Expr")))) (field "foundHeads" (TyApp (TyCon "List") (TyCon "Expr")))))) ())
-(DTypeSig true "matchHint" (TyFun (TyCon "Hint") (TyFun (TyCon "Expr") (TyApp (TyCon "Option") (TyCon "Found")))))
+(DTypeSig false "matchHint" (TyFun (TyCon "Hint") (TyFun (TyCon "Expr") (TyApp (TyCon "Option") (TyCon "Found")))))
 (DFunDef false "matchHint" ((PVar "h") (PVar "subject")) (EMatch (EApp (EApp (EApp (EVar "matchT") (EFieldAccess (EVar "h") "hintLhs")) (EVar "subject")) (EApp (EApp (EVar "Found") (EListLit)) (EListLit))) (arm (PCon "Some" (PVar "found")) () (EIf (EApp (EApp (EVar "condsHold") (EFieldAccess (EFieldAccess (EVar "h") "hintRow") "rowConds")) (EVar "found")) (EApp (EVar "Some") (EVar "found")) (EVar "None"))) (arm (PCon "None") () (EVar "None"))))
 (DTypeSig false "condsHold" (TyFun (TyApp (TyCon "List") (TyCon "HintCond")) (TyFun (TyCon "Found") (TyCon "Bool"))))
 (DFunDef false "condsHold" ((PVar "conds") (PVar "found")) (EApp (EApp (EDictApp "all") (EApp (EVar "condHolds") (EVar "found"))) (EVar "conds")))
@@ -659,7 +656,7 @@ ownsName _ _ = False
 (DFunDef false "hintFix" ((PVar "h") (PVar "found") (PVar "idx") (PVar "facts") (PVar "ctx") (PVar "e") (PVar "rewritten")) (EIf (EBinOp "&&" (EBinOp "&&" (EApp (EApp (EApp (EVar "allHeadsPrelude") (EVar "idx")) (EVar "facts")) (EVar "found")) (EApp (EVar "not") (EApp (EApp (EDictApp "any") (EApp (EApp (EApp (EVar "rebinds") (EVar "idx")) (EVar "facts")) (EVar "ctx"))) (EFieldAccess (EVar "h") "hintIntro")))) (EApp (EVar "not") (EApp (EApp (EVar "inOwnDefinition") (EVar "h")) (EVar "ctx")))) (EApp (EApp (EApp (EApp (EApp (EVar "replaceNodeFix") (EFieldAccess (EFieldAccess (EVar "h") "hintRow") "rowApplicability")) (EFieldAccess (EFieldAccess (EVar "h") "hintRow") "rowFix")) (EVar "ctx")) (EVar "e")) (EVar "rewritten")) (EVar "None")))
 (DTypeSig false "allHeadsPrelude" (TyFun (TyCon "StdlibIndex") (TyFun (TyCon "FileFacts") (TyFun (TyCon "Found") (TyCon "Bool")))))
 (DFunDef false "allHeadsPrelude" ((PVar "idx") (PVar "facts") (PVar "found")) (EApp (EApp (EDictApp "all") (EApp (EApp (EVar "usesPreludeName") (EVar "idx")) (EVar "facts"))) (EFieldAccess (EVar "found") "foundHeads")))
-(DTypeSig true "inOwnDefinition" (TyFun (TyCon "Hint") (TyFun (TyCon "Ctx") (TyCon "Bool"))))
+(DTypeSig false "inOwnDefinition" (TyFun (TyCon "Hint") (TyFun (TyCon "Ctx") (TyCon "Bool"))))
 (DFunDef false "inOwnDefinition" ((PVar "h") (PVar "ctx")) (EBinOp "&&" (EApp (EVar "not") (EFieldAccess (EVar "ctx") "ctxInTest")) (EApp (EApp (EDictApp "any") (EApp (EVar "ownsName") (EVar "ctx"))) (EFieldAccess (EFieldAccess (EVar "h") "hintRow") "rowConds"))))
 (DTypeSig false "ownsName" (TyFun (TyCon "Ctx") (TyFun (TyCon "HintCond") (TyCon "Bool"))))
 (DFunDef false "ownsName" ((PVar "ctx") (PCon "NotInDefOf" (PVar "names"))) (EApp (EApp (EDictApp "elem") (EFieldAccess (EVar "ctx") "ctxDeclName")) (EVar "names")))

@@ -74,7 +74,6 @@ preludeNamesRef = Ref []
 -- ── Initialise session ────────────────────────────────────────────────────
 -- The names a whole-graph check of the prelude would list: top-level binders
 -- plus interface method names (the check lists methods as schemes too).
-export
 preludeBinderNames : List Decl -> List String
 preludeBinderNames decls = funNamesOf decls ++ flatMap ifaceMethodNames decls
 

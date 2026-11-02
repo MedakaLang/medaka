@@ -1439,7 +1439,6 @@ derivableIface : String -> Bool
 derivableIface iface =
   contains iface ["Eq", "Ord", "Debug", "Display", "Generic"]
 
-export
 quotedNames : List String -> String
 quotedNames names = joinWith ", " (map (n => "`" ++ n ++ "`") names)
 
@@ -1486,7 +1485,6 @@ findTupleCand key ((res, help, fix) :: rest)
   | otherwise = findTupleCand key rest
 
 -- prepend an optional bare-message diagnostic (code, severity, help) to a TcDiag list.
-export
 prependDiagOpt : DiagCode ->
   Int ->
   Option String ->

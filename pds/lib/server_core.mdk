@@ -41,7 +41,8 @@ import lib.credential.{
 import lib.cors.{isPreflight, preflightResponse, withAllowOrigin}
 import lib.websocket.{handshakeAccept}
 import u8 as U8
-import string.{join, splitAt, toInt, toLower, trim}
+import string.{join, splitAt, toInt, toLower}
+import lib.asciitrim.{asciiTrim}
 import lib.atsyntax.{validateDid, validateHandle}
 import lib.jwt.{
   Claims(..),
@@ -719,7 +720,7 @@ cursorOf : List QueryParam ->
   Option String ->
   Result Response (Option Int)
 cursorOf [] 0 _ = Ok None
-cursorOf [] 1 (Some text) = match toInt (trim text)
+cursorOf [] 1 (Some text) = match toInt (asciiTrim text)
   Some seq =>
     if seq < 0 then
       Err (badHandshakeResponse "Query parameter 'cursor' must not be negative")
@@ -740,7 +741,7 @@ cursorOf ((QueryParam key value) :: rest) count found =
 -- one naming a version this server does not speak.
 speaksVersion : Bytes -> Bool
 speaksVersion value = match B.decodeUtf8 value
-  Some text => trim text == webSocketVersion
+  Some text => asciiTrim text == webSocketVersion
   None => False
 
 -- The handshake's own well-formedness, once the route is known to be a
@@ -768,7 +769,7 @@ admitKey request nsid params =
         (badHandshakeResponse "Sec-WebSocket-Key must not be repeated")
     HeaderPicked key => match B.decodeUtf8 key
       None => UpgradeRefused (badHandshakeResponse keyNotBase64Message)
-      Some text => match handshakeAccept (trim text)
+      Some text => match handshakeAccept (asciiTrim text)
         Err detail => UpgradeRefused (badHandshakeResponse detail)
         Ok accept => match cursorOf params 0 None
           Err refusal => UpgradeRefused refusal
@@ -1321,7 +1322,7 @@ admitServiceExpiry : RequestContext ->
 admitServiceExpiry context lxm params = match QueryParams.soleParam "exp" params
   Err message => Err (serviceAuthRefusal message)
   Ok None => Ok (context.nowSeconds + serviceTokenLifetimeSeconds)
-  Ok (Some text) => match toInt (trim text)
+  Ok (Some text) => match toInt (asciiTrim text)
     None =>
       Err
         (serviceAuthRefusal

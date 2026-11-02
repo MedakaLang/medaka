@@ -175,7 +175,6 @@ cacheDirOf root = "\{root}/.medaka/lint-cache"
 -- `a/b.mdk` with `a_b.mdk`.  The hash is only a filename disambiguator, never a
 -- correctness argument: the full path is stored INSIDE the shard and checked on
 -- load, so a collision costs both files a permanent miss, never a wrong hit.
-export
 shardPathOf : String -> String -> String
 shardPathOf cacheDir srcPath =
   "\{cacheDir}/\{sanitizePath srcPath}-\{hashString srcPath}.sx"

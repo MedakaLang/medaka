@@ -2242,12 +2242,6 @@ exactReturnRequestOfGoal goal = match goal.oPayload
   GPSite _ _ (SKExactReturn _ request) => Some request
   _ => None
 
--- every super slot in a `requires` chain carries the SAME id; represent the slot by it.
-export
-firstOrZero : List Int -> Int
-firstOrZero [] = 0
-firstOrZero (x :: _) = x
-
 export
 allMethodParamsMentioned : List String -> Ty -> Bool
 allMethodParamsMentioned [] _ = True

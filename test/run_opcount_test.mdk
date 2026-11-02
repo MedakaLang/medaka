@@ -1,0 +1,101 @@
+-- Gate-test for `MEDAKA_PERF=1 medaka run`'s deterministic op count.
+--
+-- The `[perf] eval` row of `medaka run` carries the evaluator's op count
+-- (frame-cell probes, support/opcount.mdk) as its last tab-separated field. A
+-- findAll-heavy census program, the shape of an agent script that tallies
+-- backticked names with regex over a generated document, is run twice: the
+-- count must repeat exactly, sit under a ceiling that a by-name frame scan
+-- would blow through, and sit above a floor that a counter reading 0 would miss.
+-- With MEDAKA_PERF unset the run prints no `[perf]` row at all.
+--
+-- `--native`: it spawns `medaka`, which the interpreter does not bind.
+
+import string.{contains, lines, split, startsWith, toInt, trim}
+import test.{
+  Expectation,
+  expectAll,
+  expectAtLeast,
+  expectAtMost,
+  expectEqual,
+  expectFalse,
+  expectTextContainsAll,
+  fail,
+  labelFail,
+}
+import test_process.{boundedVerbSeconds, medakaBin, withScratchDir}
+
+program : String
+program =
+  """
+import string.{join}
+import regex as R
+import set as S
+
+group1 : R.Regex -> String -> List String
+group1 re doc = filterMap (m => match (m : R.Match).groups
+  Some g :: _ => Some g.text
+  _ => None) (R.findAll re doc)
+
+genDoc : Int -> String
+genDoc n = join " " (map (i => "| `L-CODE" ++ intToString i ++ "` | `P-OTHER" ++ intToString (i * 2) ++ "` and prose E-WORD" ++ intToString i ++ " |") [1..=n])
+
+main =
+  let doc = genDoc 40
+  let tickRe = R.mustCompile "`([A-Z]+-[A-Z0-9-]+)`"
+  let anyRe = R.mustCompile "([LPRTWE]-[A-Z][A-Z0-9-]*[A-Z0-9])"
+  let tick = S.fromList (group1 tickRe doc)
+  let anyw = S.fromList (group1 anyRe doc)
+  println ("backticked " ++ display (S.size tick) ++ " any " ++ display (S.size anyw))
+  println ("tick not any: " ++ display (S.size (S.difference tick anyw)))
+"""
+
+-- Measured 6486783 on this binary: ceiling is 2x that, floor is 1/6.5 of it.
+opsCeiling : Int
+opsCeiling = 13000000
+
+opsFloor : Int
+opsFloor = 1000000
+
+-- (exit code, stdout, stderr) of `medaka run file`, with `pre` env settings.
+runWith pre file =
+  boundedVerbSeconds
+    300
+    "env"
+    (pre ++ ["MEDAKA_STRICT=1", medakaBin, "run", file])
+
+-- The op field of the `[perf] eval` row: the last tab-separated column.
+opsOf : String -> Option Int
+opsOf err = match filter (startsWith "[perf] eval") (lines err)
+  [row] => match split "\t" row
+    [_, _, _, _, ops] => toInt (trim ops)
+    _ => None
+  _ => None
+
+withProgram : (String -> <Exec, IO, FileRead, FileWrite> Expectation) ->
+  <Exec, IO, FileRead, FileWrite> Expectation
+withProgram k = withScratchDir
+  (dir => match writeFile "\{dir}/census.mdk" program
+    Err e => fail "cannot write program: \{e}"
+    Ok _ => k "\{dir}/census.mdk")
+
+test "the eval row's op count repeats and sits between floor and ceiling" = withProgram
+  (file => match (
+    runWith ["MEDAKA_PERF=1"] file,
+    runWith ["MEDAKA_PERF=1"] file,
+  )
+    (Ok (0, _, e1), Ok (0, _, e2)) => match (opsOf e1, opsOf e2)
+      (Some a, Some b) => expectAll [
+        labelFail "deterministic" (expectEqual a b),
+        labelFail "ceiling" (expectAtMost opsCeiling a),
+        labelFail "floor" (expectAtLeast opsFloor a),
+      ]
+      _ => fail "no five-column [perf] eval row in: \{e1}"
+    (r1, r2) => fail "run failed: \{debug r1} \{debug r2}")
+
+test "without MEDAKA_PERF the run prints no perf row" = withProgram
+  (file => match runWith [] file
+    Ok (0, out, err) => expectAll [
+      labelFail "stderr" (expectFalse (contains "[perf]" err)),
+      labelFail "stdout" (expectTextContainsAll ["backticked 80 any 120"] out),
+    ]
+    r => fail "run failed: \{debug r}")

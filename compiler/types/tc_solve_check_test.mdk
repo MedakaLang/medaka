@@ -34,6 +34,10 @@ import types.tc_types.{
 import types.tc_unify.{freshVar, unify}
 import list.{drop, lookup}
 import support.ordmap.{omEmpty, omLookup}
+import types.tc_mono.{monoTyvarIds, peelQual, tyvarId}
+import types.tc_solve.{ifaceRefBare}
+import types.tc_solve_check.{inferredPredicateSlots}
+import types.tc_state.{initialModuleCtx, probeGraphCtx}
 
 -- ── fixtures ──────────────────────────────────────────────────────────────
 
@@ -329,3 +333,75 @@ test "when the interface parameter occurs at two positions the first one's mono 
     (map
       (t => map ppMono (dispatchMonosOf ["a"] t (TFun boolM pureRow intM)))
       (sigsOf (parse "x : a -> a")))
+
+-- Private producer probe: same-lead predicates stay distinct, an exact duplicate
+-- collapses, a multi-argument predicate owns one slot, a vector whose lead is another
+-- predicate's non-lead survives, and a trace-only id retains PSArgsUnknown.
+inferredPredicateSlotsProbe : ModuleCtx ->
+  Unit ->
+  List (String, Option (List String), List String)
+inferredPredicateSlotsProbe mctx _ =
+  let a = freshVar mctx ()
+  let b = freshVar mctx ()
+  let c = freshVar mctx ()
+  let aid = freshVarId a
+  let bid = freshVarId b
+  let cid = freshVarId c
+  let tweak = ifaceRefBare "Tweak"
+  let slots =
+    inferredPredicateSlots
+      mctx
+      "__inferred_predicate_slot_probe__"
+      [aid, bid, cid]
+      [
+        (tweak, aid, [a, tconBuiltin "Int"]),
+        (tweak, aid, [a, tconBuiltin "Bool"]),
+        (tweak, aid, [a, tconBuiltin "Int"]),
+        (ifaceRefBare "Ix", aid, [a, b]),
+        (ifaceRefBare "Num", bid, [b]),
+      ]
+  map (inferredPredicateSlotProbeRow aid bid cid) slots
+
+-- The id of the one type variable a fresh variable mono holds.
+freshVarId : Mono -> Int
+freshVarId mono = match monoTyvarIds mono
+  [id] => id
+  _ => panic "freshVar did not yield exactly one type variable"
+
+inferredPredicateSlotProbeRow : Int ->
+  Int ->
+  Int ->
+  PredicateSlot ->
+  (String, Option (List String), List String)
+inferredPredicateSlotProbeRow aid bid cid slot = (
+  slot.psIface.irName,
+  match slot.psArgs
+    PSArgsUnknown => None
+    PSArgsKnown args =>
+      Some (map (inferredPredicateSlotMonoTag aid bid cid) args),
+  map (inferredPredicateSlotIdTag aid bid cid) slot.psBoundIds,
+)
+
+inferredPredicateSlotMonoTag : Int -> Int -> Int -> Mono -> String
+inferredPredicateSlotMonoTag aid bid cid mono = match peelQual mono
+  TVar cell => inferredPredicateSlotIdTag aid bid cid (tyvarId cell)
+  TCon name _ => name
+  _ => "_"
+
+inferredPredicateSlotIdTag : Int -> Int -> Int -> Int -> String
+inferredPredicateSlotIdTag aid bid cid id
+  | id == aid = "a"
+  | id == bid = "b"
+  | id == cid = "c"
+  | otherwise = "_"
+
+test "inferred predicate slots keep same-lead predicates distinct and collapse an exact duplicate" =
+  expectEqual
+    [
+      ("Tweak", Some ["a", "Int"], ["a"]),
+      ("Tweak", Some ["a", "Bool"], ["a"]),
+      ("Ix", Some ["a", "b"], ["a", "b"]),
+      ("Num", Some ["b"], ["b"]),
+      ("", None, ["c"]),
+    ]
+    (inferredPredicateSlotsProbe (initialModuleCtx (probeGraphCtx ())) ())

@@ -2,7 +2,7 @@ import frontend.lex_token.{Token(..), describeToken, peekTok as tokenPeekTok}
 import frontend.ast.{Loc(..)}
 import frontend.parse_diagnostic.{ParseDiagnosticKind(..), renderParseProblem}
 import frontend.parse_positions.{locOfSpanWith}
-import support.source_index.{lineStartsOf, offsetToLineColFast}
+import support.source_index.{lineStartsOf}
 import support.util.{reverseL}
 
 public export data PR a = POk a Int | PErr PFail Int | PFatal PFail Int
@@ -276,14 +276,6 @@ locOfSpan ctx start end =
 export
 spanLoc : Int -> Int -> ParserE e Loc
 spanLoc start end = ParserE (ctx pos => POk (locOfSpan ctx start end) pos)
-
-export
-tokLineCol : ParseContext -> Int -> (Int, Int)
-tokLineCol ctx i =
-  if ctx.pcGuardPositions && i >= 0 && i < arrayLength ctx.pcOffsets then
-    offsetToLineColFast ctx.pcLineStarts (fst (arrayGetUnsafe i ctx.pcOffsets))
-  else
-    (0, 0)
 
 export
 depthOf : ParseContext -> Int

@@ -1,5 +1,5 @@
 # META
-source_lines=106
+source_lines=97
 stages=DESUGAR,MARK
 # SOURCE
 import support.ordmap.{OrdMap, omEmpty, omLookup, omInsert, omDelete, omSize}
@@ -10,7 +10,7 @@ import tools.snapshot_syntax.{
   snapshotSyntaxSource
 }
 
-public export data SyntaxCacheLimits = SyntaxCacheLimits Int Int Int Int
+export data SyntaxCacheLimits = SyntaxCacheLimits Int Int Int Int
 data CacheEntry = CacheEntry ParseOptions PreparedSyntax Int Int
 export data SyntaxCache =
   SyntaxCache SyntaxCacheLimits (OrdMap CacheEntry) (List String) Int Int
@@ -54,21 +54,12 @@ invalidateSyntax uri (cache@(SyntaxCache limits entries order source tokens)) =
         (tokens - t)
 
 export
-clearSyntax : SyntaxCache -> SyntaxCache
-clearSyntax (SyntaxCache limits _ _ _ _) = emptySyntaxCache limits
-
-export
 syntaxCacheEntryLimit : SyntaxCache -> Int
 syntaxCacheEntryLimit (SyntaxCache (SyntaxCacheLimits count _ _ _) _ _ _ _) =
   count
 
-export
 syntaxCacheSize : SyntaxCache -> Int
 syntaxCacheSize (SyntaxCache _ entries _ _ _) = omSize entries
-
-export
-syntaxCacheWeight : SyntaxCache -> (Int, Int)
-syntaxCacheWeight (SyntaxCache _ _ _ source tokens) = (source, tokens)
 
 trimCache : SyntaxCache -> SyntaxCache
 trimCache (cache@(SyntaxCache (SyntaxCacheLimits count _ sourceLimit tokenLimit) _ order source tokens)) =
@@ -113,7 +104,7 @@ insertSyntax options prepared cache =
 (DUse false (UseGroup ("frontend" "syntax_source") ((mem "syntaxSourceText" false) (mem "syntaxTokens" false))))
 (DUse false (UseGroup ("tools" "source_snapshot") ((mem "SnapshotId" true))))
 (DUse false (UseGroup ("tools" "snapshot_syntax") ((mem "ParseOptions" false) (mem "PreparedSyntax" false) (mem "snapshotSyntaxId" false) (mem "snapshotSyntaxVersion" false) (mem "snapshotSyntaxSource" false))))
-(DData Public "SyntaxCacheLimits" () ((variant "SyntaxCacheLimits" (ConPos (TyCon "Int") (TyCon "Int") (TyCon "Int") (TyCon "Int")))) ())
+(DData Abstract "SyntaxCacheLimits" () ((variant "SyntaxCacheLimits" (ConPos (TyCon "Int") (TyCon "Int") (TyCon "Int") (TyCon "Int")))) ())
 (DData Private "CacheEntry" () ((variant "CacheEntry" (ConPos (TyCon "ParseOptions") (TyCon "PreparedSyntax") (TyCon "Int") (TyCon "Int")))) ())
 (DData Abstract "SyntaxCache" () ((variant "SyntaxCache" (ConPos (TyCon "SyntaxCacheLimits") (TyApp (TyCon "OrdMap") (TyCon "CacheEntry")) (TyApp (TyCon "List") (TyCon "String")) (TyCon "Int") (TyCon "Int")))) ())
 (DTypeSig true "defaultSyntaxCacheLimits" (TyCon "SyntaxCacheLimits"))
@@ -124,14 +115,10 @@ insertSyntax options prepared cache =
 (DFunDef false "lookupSyntax" ((PCon "SnapshotId" (PVar "uri") (PVar "generation")) (PVar "version") (PVar "options") (PCon "SyntaxCache" PWild (PVar "entries") PWild PWild PWild)) (EApp (EApp (EVar "andThen") (EApp (EApp (EVar "omLookup") (EVar "uri")) (EVar "entries"))) (ELam ((PVar "__do_x")) (EMatch (EVar "__do_x") (arm (PCon "CacheEntry" (PVar "stored") (PVar "prepared") PWild PWild) () (ELet false (PCon "SnapshotId" PWild (PVar "current")) (EApp (EVar "snapshotSyntaxId") (EVar "prepared")) (EIf (EBinOp "&&" (EBinOp "&&" (EBinOp "==" (EVar "generation") (EVar "current")) (EBinOp "==" (EVar "version") (EApp (EVar "snapshotSyntaxVersion") (EVar "prepared")))) (EBinOp "==" (EVar "options") (EVar "stored"))) (EApp (EVar "Some") (EVar "prepared")) (EVar "None"))))))))
 (DTypeSig true "invalidateSyntax" (TyFun (TyCon "String") (TyFun (TyCon "SyntaxCache") (TyCon "SyntaxCache"))))
 (DFunDef false "invalidateSyntax" ((PVar "uri") (PAs "cache" (PCon "SyntaxCache" (PVar "limits") (PVar "entries") (PVar "order") (PVar "source") (PVar "tokens")))) (EMatch (EApp (EApp (EVar "omLookup") (EVar "uri")) (EVar "entries")) (arm (PCon "None") () (EVar "cache")) (arm (PCon "Some" (PCon "CacheEntry" PWild PWild (PVar "s") (PVar "t"))) () (EApp (EApp (EApp (EApp (EApp (EVar "SyntaxCache") (EVar "limits")) (EApp (EApp (EVar "omDelete") (EVar "uri")) (EVar "entries"))) (EApp (EApp (EVar "filter") (ELam ((PVar "_s")) (EBinOp "/=" (EVar "_s") (EVar "uri")))) (EVar "order"))) (EBinOp "-" (EVar "source") (EVar "s"))) (EBinOp "-" (EVar "tokens") (EVar "t"))))))
-(DTypeSig true "clearSyntax" (TyFun (TyCon "SyntaxCache") (TyCon "SyntaxCache")))
-(DFunDef false "clearSyntax" ((PCon "SyntaxCache" (PVar "limits") PWild PWild PWild PWild)) (EApp (EVar "emptySyntaxCache") (EVar "limits")))
 (DTypeSig true "syntaxCacheEntryLimit" (TyFun (TyCon "SyntaxCache") (TyCon "Int")))
 (DFunDef false "syntaxCacheEntryLimit" ((PCon "SyntaxCache" (PCon "SyntaxCacheLimits" (PVar "count") PWild PWild PWild) PWild PWild PWild PWild)) (EVar "count"))
-(DTypeSig true "syntaxCacheSize" (TyFun (TyCon "SyntaxCache") (TyCon "Int")))
+(DTypeSig false "syntaxCacheSize" (TyFun (TyCon "SyntaxCache") (TyCon "Int")))
 (DFunDef false "syntaxCacheSize" ((PCon "SyntaxCache" PWild (PVar "entries") PWild PWild PWild)) (EApp (EVar "omSize") (EVar "entries")))
-(DTypeSig true "syntaxCacheWeight" (TyFun (TyCon "SyntaxCache") (TyTuple (TyCon "Int") (TyCon "Int"))))
-(DFunDef false "syntaxCacheWeight" ((PCon "SyntaxCache" PWild PWild PWild (PVar "source") (PVar "tokens"))) (ETuple (EVar "source") (EVar "tokens")))
 (DTypeSig false "trimCache" (TyFun (TyCon "SyntaxCache") (TyCon "SyntaxCache")))
 (DFunDef false "trimCache" ((PAs "cache" (PCon "SyntaxCache" (PCon "SyntaxCacheLimits" (PVar "count") PWild (PVar "sourceLimit") (PVar "tokenLimit")) PWild (PVar "order") (PVar "source") (PVar "tokens")))) (EIf (EBinOp "&&" (EBinOp "&&" (EBinOp "<=" (EApp (EVar "syntaxCacheSize") (EVar "cache")) (EVar "count")) (EBinOp "<=" (EVar "source") (EVar "sourceLimit"))) (EBinOp "<=" (EVar "tokens") (EVar "tokenLimit"))) (EVar "cache") (EMatch (EVar "order") (arm (PList) () (EVar "cache")) (arm (PCons (PVar "uri") PWild) () (EApp (EVar "trimCache") (EApp (EApp (EVar "invalidateSyntax") (EVar "uri")) (EVar "cache")))))))
 (DTypeSig true "insertSyntax" (TyFun (TyCon "ParseOptions") (TyFun (TyCon "PreparedSyntax") (TyFun (TyCon "SyntaxCache") (TyCon "SyntaxCache")))))
@@ -141,7 +128,7 @@ insertSyntax options prepared cache =
 (DUse false (UseGroup ("frontend" "syntax_source") ((mem "syntaxSourceText" false) (mem "syntaxTokens" false))))
 (DUse false (UseGroup ("tools" "source_snapshot") ((mem "SnapshotId" true))))
 (DUse false (UseGroup ("tools" "snapshot_syntax") ((mem "ParseOptions" false) (mem "PreparedSyntax" false) (mem "snapshotSyntaxId" false) (mem "snapshotSyntaxVersion" false) (mem "snapshotSyntaxSource" false))))
-(DData Public "SyntaxCacheLimits" () ((variant "SyntaxCacheLimits" (ConPos (TyCon "Int") (TyCon "Int") (TyCon "Int") (TyCon "Int")))) ())
+(DData Abstract "SyntaxCacheLimits" () ((variant "SyntaxCacheLimits" (ConPos (TyCon "Int") (TyCon "Int") (TyCon "Int") (TyCon "Int")))) ())
 (DData Private "CacheEntry" () ((variant "CacheEntry" (ConPos (TyCon "ParseOptions") (TyCon "PreparedSyntax") (TyCon "Int") (TyCon "Int")))) ())
 (DData Abstract "SyntaxCache" () ((variant "SyntaxCache" (ConPos (TyCon "SyntaxCacheLimits") (TyApp (TyCon "OrdMap") (TyCon "CacheEntry")) (TyApp (TyCon "List") (TyCon "String")) (TyCon "Int") (TyCon "Int")))) ())
 (DTypeSig true "defaultSyntaxCacheLimits" (TyCon "SyntaxCacheLimits"))
@@ -152,14 +139,10 @@ insertSyntax options prepared cache =
 (DFunDef false "lookupSyntax" ((PCon "SnapshotId" (PVar "uri") (PVar "generation")) (PVar "version") (PVar "options") (PCon "SyntaxCache" PWild (PVar "entries") PWild PWild PWild)) (EApp (EApp (EMethodRef "andThen") (EApp (EApp (EVar "omLookup") (EVar "uri")) (EVar "entries"))) (ELam ((PVar "__do_x")) (EMatch (EVar "__do_x") (arm (PCon "CacheEntry" (PVar "stored") (PVar "prepared") PWild PWild) () (ELet false (PCon "SnapshotId" PWild (PVar "current")) (EApp (EVar "snapshotSyntaxId") (EVar "prepared")) (EIf (EBinOp "&&" (EBinOp "&&" (EBinOp "==" (EVar "generation") (EVar "current")) (EBinOp "==" (EVar "version") (EApp (EVar "snapshotSyntaxVersion") (EVar "prepared")))) (EBinOp "==" (EVar "options") (EVar "stored"))) (EApp (EVar "Some") (EVar "prepared")) (EVar "None"))))))))
 (DTypeSig true "invalidateSyntax" (TyFun (TyCon "String") (TyFun (TyCon "SyntaxCache") (TyCon "SyntaxCache"))))
 (DFunDef false "invalidateSyntax" ((PVar "uri") (PAs "cache" (PCon "SyntaxCache" (PVar "limits") (PVar "entries") (PVar "order") (PVar "source") (PVar "tokens")))) (EMatch (EApp (EApp (EVar "omLookup") (EVar "uri")) (EVar "entries")) (arm (PCon "None") () (EVar "cache")) (arm (PCon "Some" (PCon "CacheEntry" PWild PWild (PVar "s") (PVar "t"))) () (EApp (EApp (EApp (EApp (EApp (EVar "SyntaxCache") (EVar "limits")) (EApp (EApp (EVar "omDelete") (EVar "uri")) (EVar "entries"))) (EApp (EApp (EMethodRef "filter") (ELam ((PVar "_s")) (EBinOp "/=" (EVar "_s") (EVar "uri")))) (EVar "order"))) (EBinOp "-" (EVar "source") (EVar "s"))) (EBinOp "-" (EVar "tokens") (EVar "t"))))))
-(DTypeSig true "clearSyntax" (TyFun (TyCon "SyntaxCache") (TyCon "SyntaxCache")))
-(DFunDef false "clearSyntax" ((PCon "SyntaxCache" (PVar "limits") PWild PWild PWild PWild)) (EApp (EVar "emptySyntaxCache") (EVar "limits")))
 (DTypeSig true "syntaxCacheEntryLimit" (TyFun (TyCon "SyntaxCache") (TyCon "Int")))
 (DFunDef false "syntaxCacheEntryLimit" ((PCon "SyntaxCache" (PCon "SyntaxCacheLimits" (PVar "count") PWild PWild PWild) PWild PWild PWild PWild)) (EDictApp "count"))
-(DTypeSig true "syntaxCacheSize" (TyFun (TyCon "SyntaxCache") (TyCon "Int")))
+(DTypeSig false "syntaxCacheSize" (TyFun (TyCon "SyntaxCache") (TyCon "Int")))
 (DFunDef false "syntaxCacheSize" ((PCon "SyntaxCache" PWild (PVar "entries") PWild PWild PWild)) (EApp (EVar "omSize") (EVar "entries")))
-(DTypeSig true "syntaxCacheWeight" (TyFun (TyCon "SyntaxCache") (TyTuple (TyCon "Int") (TyCon "Int"))))
-(DFunDef false "syntaxCacheWeight" ((PCon "SyntaxCache" PWild PWild PWild (PVar "source") (PVar "tokens"))) (ETuple (EVar "source") (EVar "tokens")))
 (DTypeSig false "trimCache" (TyFun (TyCon "SyntaxCache") (TyCon "SyntaxCache")))
 (DFunDef false "trimCache" ((PAs "cache" (PCon "SyntaxCache" (PCon "SyntaxCacheLimits" (PVar "count") PWild (PVar "sourceLimit") (PVar "tokenLimit")) PWild (PVar "order") (PVar "source") (PVar "tokens")))) (EIf (EBinOp "&&" (EBinOp "&&" (EBinOp "<=" (EApp (EVar "syntaxCacheSize") (EVar "cache")) (EDictApp "count")) (EBinOp "<=" (EVar "source") (EVar "sourceLimit"))) (EBinOp "<=" (EVar "tokens") (EVar "tokenLimit"))) (EVar "cache") (EMatch (EVar "order") (arm (PList) () (EVar "cache")) (arm (PCons (PVar "uri") PWild) () (EApp (EVar "trimCache") (EApp (EApp (EVar "invalidateSyntax") (EVar "uri")) (EVar "cache")))))))
 (DTypeSig true "insertSyntax" (TyFun (TyCon "ParseOptions") (TyFun (TyCon "PreparedSyntax") (TyFun (TyCon "SyntaxCache") (TyCon "SyntaxCache")))))

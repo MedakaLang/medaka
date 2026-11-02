@@ -1,0 +1,5 @@
+data P = P { r : String }
+
+main =
+  let p = P { r = "a" }
+  println (p.r"x")

@@ -51,10 +51,8 @@ improveGoal : DynCtx -> Map String Unit -> IfaceRef -> List Mono -> Unit
 improveLocalGoals : DynCtx -> List UObligation -> Int -> Unit
 improvementPool : ModuleCtx -> List Mono -> List ImplRow
 instanceSuperEvidence : GraphCtx -> IfaceRef -> List Mono -> List SuperEvidence
-isLegacyPredicateAnswer : Option AssumAnswer -> Bool
 isLocalAbsName : String -> Bool
 isSelection : AdmittedAnswer -> Bool
-isSemanticGivenAnswer : Option AssumAnswer -> Bool
 isUndecided : AdmittedAnswer -> Bool
 localSlotArgs : ModuleCtx -> List (Int, Mono) -> PredicateSlot -> List Mono
 localSlotLead : ModuleCtx -> List (Int, Mono) -> PredicateSlot -> Mono
@@ -147,7 +145,6 @@ routesOfMonosTopV : SiteCtx -> String -> ScopeId -> List Mono -> List IfaceRef -
 rowHeadSubstRigid : ModuleCtx -> Map String Unit -> List Mono -> ImplRow -> Option (List (Int, Mono))
 rowHeadUnifies : ModuleCtx -> List Mono -> ImplRow -> Bool
 sameTraceEvId : EvId -> EvId -> Bool
-scopeGivenProbe : Unit -> List Bool
 sealMethodReturnGoals : GraphCtx -> List EvEntry -> List Obligation -> (List Obligation, List MethodReturnMemoView)
 sealMethodReturnGoalsFrom : GraphCtx -> List EvEntry -> List Obligation -> (List Obligation, List MethodReturnMemoView) -> (List Obligation, List MethodReturnMemoView)
 siblingStaysSatisfiable : ModuleCtx -> Ref (List (Int, Mono)) -> List Int -> UObligation -> Bool
@@ -170,6 +167,5 @@ walkDispatch : List String -> Ty -> Mono -> List (String, Mono)
 walkGoalDischarged : ReqWalk -> IfaceRef -> List Mono -> Bool
 walkGoalFollowed : ReqWalk -> IfaceRef -> List Mono -> Bool
 walkGoalSame : IfaceRef -> List Mono -> IfaceRef -> List Mono -> Bool
-walkGoalSameProbe : Unit -> List Bool
 wantedMatches : Wanted -> Wanted -> Bool
 withDeclaredVars : ModuleCtx -> Map String Unit -> List Mono -> Map String Unit

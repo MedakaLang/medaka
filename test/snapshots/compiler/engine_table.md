@@ -38,7 +38,7 @@ import string.{unlines}
 public export data Cell = Real | Canned | Refused deriving (Eq)
 
 -- oracle, run, test, native, wasm
-public export data EngineRow = EngineRow String Cell Cell Cell Cell Cell
+export data EngineRow = EngineRow String Cell Cell Cell Cell Cell
 
 runtimePath : String
 runtimePath = "stdlib/runtime.mdk"
@@ -254,7 +254,7 @@ renderEngineTable rows =
 (DUse false (UseGroup ("string") ((mem "unlines" false))))
 (DData Public "Cell" () ((variant "Real" (ConPos)) (variant "Canned" (ConPos)) (variant "Refused" (ConPos))) ())
 (DImpl true "Eq" ((TyCon "Cell")) () ((im "eq" ((PVar "__x") (PVar "__y")) (EMatch (ETuple (EVar "__x") (EVar "__y")) (arm (PTuple (PCon "Real") (PCon "Real")) () (EVar "True")) (arm (PTuple (PCon "Canned") (PCon "Canned")) () (EVar "True")) (arm (PTuple (PCon "Refused") (PCon "Refused")) () (EVar "True")) (arm (PTuple PWild PWild) () (EVar "False"))))))
-(DData Public "EngineRow" () ((variant "EngineRow" (ConPos (TyCon "String") (TyCon "Cell") (TyCon "Cell") (TyCon "Cell") (TyCon "Cell") (TyCon "Cell")))) ())
+(DData Abstract "EngineRow" () ((variant "EngineRow" (ConPos (TyCon "String") (TyCon "Cell") (TyCon "Cell") (TyCon "Cell") (TyCon "Cell") (TyCon "Cell")))) ())
 (DTypeSig false "runtimePath" (TyCon "String"))
 (DFunDef false "runtimePath" () (ELit (LString "stdlib/runtime.mdk")))
 (DTypeSig false "oracleIntendedOnRun" (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "String"))))
@@ -318,7 +318,7 @@ renderEngineTable rows =
 (DUse false (UseGroup ("string") ((mem "unlines" false))))
 (DData Public "Cell" () ((variant "Real" (ConPos)) (variant "Canned" (ConPos)) (variant "Refused" (ConPos))) ())
 (DImpl true "Eq" ((TyCon "Cell")) () ((im "eq" ((PVar "__x") (PVar "__y")) (EMatch (ETuple (EVar "__x") (EVar "__y")) (arm (PTuple (PCon "Real") (PCon "Real")) () (EVar "True")) (arm (PTuple (PCon "Canned") (PCon "Canned")) () (EVar "True")) (arm (PTuple (PCon "Refused") (PCon "Refused")) () (EVar "True")) (arm (PTuple PWild PWild) () (EVar "False"))))))
-(DData Public "EngineRow" () ((variant "EngineRow" (ConPos (TyCon "String") (TyCon "Cell") (TyCon "Cell") (TyCon "Cell") (TyCon "Cell") (TyCon "Cell")))) ())
+(DData Abstract "EngineRow" () ((variant "EngineRow" (ConPos (TyCon "String") (TyCon "Cell") (TyCon "Cell") (TyCon "Cell") (TyCon "Cell") (TyCon "Cell")))) ())
 (DTypeSig false "runtimePath" (TyCon "String"))
 (DFunDef false "runtimePath" () (ELit (LString "stdlib/runtime.mdk")))
 (DTypeSig false "oracleIntendedOnRun" (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "String"))))

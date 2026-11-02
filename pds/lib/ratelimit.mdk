@@ -53,7 +53,8 @@ import http.{Header, headerName, headerValue, makeHeader}
 import list.{last}
 import map.{Map(..), filterWithKey, get, has, set, size}
 import regex.{Regex, isFullMatch, mustCompile}
-import string.{split, trim}
+import string.{split}
+import lib.asciitrim.{asciiTrim}
 import lib.nsid.{sameNsidIdentity}
 import lib.resource_limits.{
   checkXffHeaderBytes,
@@ -585,7 +586,7 @@ lastHopToken bytes = match checkXffHeaderBytes (B.length bytes)
     Err message => Err message
     Ok () => match decodeUtf8 bytes
       None => Ok None
-      Some text => match last (map trim (split "," text))
+      Some text => match last (map asciiTrim (split "," text))
         Some candidate =>
           if isAddressToken candidate then Ok (Some candidate) else Ok None
         None => Ok None

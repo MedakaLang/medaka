@@ -1,5 +1,5 @@
 # META
-source_lines=1775
+source_lines=1774
 stages=DESUGAR,MARK
 # SOURCE
 -- tc_scope: name visibility across imports, read off the envelopes: the method-scope ladder (the
@@ -126,7 +126,6 @@ export
 ifaceSortKey : IfaceRef -> String
 ifaceSortKey ir = "\{ifaceIdentity ir.irOrigin ir.irName}|\{ir.irName}"
 
-export
 sortIfaceRefs : List IfaceRef -> List IfaceRef
 sortIfaceRefs xs = sortIfaceRefsGo xs []
 
@@ -1796,7 +1795,7 @@ importedIfaceRows idx (_ :: rest) = importedIfaceRows idx rest
 (DUse false (UseGroup ("frontend" "visibility") ((mem "useModId" false))))
 (DTypeSig true "ifaceSortKey" (TyFun (TyCon "IfaceRef") (TyCon "String")))
 (DFunDef false "ifaceSortKey" ((PVar "ir")) (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "")) (EApp (EVar "display") (EApp (EApp (EVar "ifaceIdentity") (EFieldAccess (EVar "ir") "irOrigin")) (EFieldAccess (EVar "ir") "irName")))) (ELit (LString "|"))) (EApp (EVar "display") (EFieldAccess (EVar "ir") "irName"))) (ELit (LString ""))))
-(DTypeSig true "sortIfaceRefs" (TyFun (TyApp (TyCon "List") (TyCon "IfaceRef")) (TyApp (TyCon "List") (TyCon "IfaceRef"))))
+(DTypeSig false "sortIfaceRefs" (TyFun (TyApp (TyCon "List") (TyCon "IfaceRef")) (TyApp (TyCon "List") (TyCon "IfaceRef"))))
 (DFunDef false "sortIfaceRefs" ((PVar "xs")) (EApp (EApp (EVar "sortIfaceRefsGo") (EVar "xs")) (EListLit)))
 (DTypeSig false "sortIfaceRefsGo" (TyFun (TyApp (TyCon "List") (TyCon "IfaceRef")) (TyFun (TyApp (TyCon "List") (TyCon "IfaceRef")) (TyApp (TyCon "List") (TyCon "IfaceRef")))))
 (DFunDef false "sortIfaceRefsGo" ((PList) (PVar "acc")) (EVar "acc"))
@@ -2108,7 +2107,7 @@ importedIfaceRows idx (_ :: rest) = importedIfaceRows idx rest
 (DUse false (UseGroup ("frontend" "visibility") ((mem "useModId" false))))
 (DTypeSig true "ifaceSortKey" (TyFun (TyCon "IfaceRef") (TyCon "String")))
 (DFunDef false "ifaceSortKey" ((PVar "ir")) (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "")) (EApp (EMethodRef "display") (EApp (EApp (EVar "ifaceIdentity") (EFieldAccess (EVar "ir") "irOrigin")) (EFieldAccess (EVar "ir") "irName")))) (ELit (LString "|"))) (EApp (EMethodRef "display") (EFieldAccess (EVar "ir") "irName"))) (ELit (LString ""))))
-(DTypeSig true "sortIfaceRefs" (TyFun (TyApp (TyCon "List") (TyCon "IfaceRef")) (TyApp (TyCon "List") (TyCon "IfaceRef"))))
+(DTypeSig false "sortIfaceRefs" (TyFun (TyApp (TyCon "List") (TyCon "IfaceRef")) (TyApp (TyCon "List") (TyCon "IfaceRef"))))
 (DFunDef false "sortIfaceRefs" ((PVar "xs")) (EApp (EApp (EVar "sortIfaceRefsGo") (EVar "xs")) (EListLit)))
 (DTypeSig false "sortIfaceRefsGo" (TyFun (TyApp (TyCon "List") (TyCon "IfaceRef")) (TyFun (TyApp (TyCon "List") (TyCon "IfaceRef")) (TyApp (TyCon "List") (TyCon "IfaceRef")))))
 (DFunDef false "sortIfaceRefsGo" ((PList) (PVar "acc")) (EVar "acc"))

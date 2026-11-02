@@ -1020,7 +1020,7 @@ public export data DriveArgs = DriveArgs {
 -- `types.publish` cannot import this module.
 --
 -- `doStickyDiags` is the sticky list as the drive left it, newest first, not yet
--- deduplicated (`stickyTypeErrorDiags` reads it); `doFfiAliases` and `doOrdIndex`
+-- deduplicated by its readers; `doFfiAliases` and `doOrdIndex`
 -- are the two tables of the declaration envelope that `checkedFfiExternTypeNamesModules`
 -- reads.  `doEffvarNext` is the drive's effect-variable counter at its end: a
 -- consumer that mints effect variables over `doInvocationView`'s schemes

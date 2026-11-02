@@ -5233,7 +5233,7 @@ gen_tomlent() {
     printf '    Ok doc =>\n'
     printf '      let a0 = allocBytes ()\n'
     printf '      let t0 = T.monotonic ()\n'
-    printf '      let es = TM.tableEntries "gate" doc\n'
+    printf '      let es = resultOrPanic "tableEntries" (TM.tableEntries "gate" doc)\n'
     printf '      let n = length es\n'
     printf '      let secs = T.elapsedSince t0\n'
     printf '      let mb = (allocBytes () - a0) / 1048576.0\n'

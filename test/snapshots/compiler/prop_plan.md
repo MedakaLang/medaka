@@ -1,5 +1,5 @@
 # META
-source_lines=1691
+source_lines=1686
 stages=DESUGAR,MARK
 # SOURCE
 -- The engine-neutral property planning layer.
@@ -1402,11 +1402,6 @@ listBoundDecays env plan =
   let truth = finiteTruth env plan
   abstractFinite env truth plan && cyclesThroughListUnder env truth plan
 
-export
-planCyclesThroughList : PlanEnv -> GenPlan -> Bool
-planCyclesThroughList env plan =
-  cyclesThroughListUnder env (finiteTruth env plan) plan
-
 -- A carrier state is a node; an edge records whether the field path leading to
 -- the next state crosses a list. A cycle through a list is a closed walk using
 -- at least one list edge. Building the graph visits each state once and the
@@ -2202,8 +2197,6 @@ intShrinkSteps = [IntToZero, IntHalf, IntTowardZero]
 (DFunDef false "listLengthBound" ((PVar "env") (PVar "depth") (PVar "plan")) (EBlock (DoLet false false (PVar "truth") (EApp (EApp (EVar "finiteTruth") (EVar "env")) (EVar "plan"))) (DoExpr (EIf (EApp (EVar "not") (EApp (EApp (EApp (EVar "abstractFinite") (EVar "env")) (EVar "truth")) (EVar "plan"))) (ELit (LInt 0)) (EIf (EApp (EApp (EApp (EVar "cyclesThroughListUnder") (EVar "env")) (EVar "truth")) (EVar "plan")) (EApp (EApp (EVar "max") (ELit (LInt 0))) (EBinOp "-" (EVar "listLenMax") (EVar "depth"))) (EIf (EBinOp "&&" (EBinOp ">=" (EVar "depth") (EVar "maxGenDepth")) (EApp (EApp (EVar "planCanDiverge") (EVar "env")) (EVar "plan"))) (ELit (LInt 0)) (EVar "listLenMax")))))))
 (DTypeSig true "listBoundDecays" (TyFun (TyCon "PlanEnv") (TyFun (TyCon "GenPlan") (TyCon "Bool"))))
 (DFunDef false "listBoundDecays" ((PVar "env") (PVar "plan")) (EBlock (DoLet false false (PVar "truth") (EApp (EApp (EVar "finiteTruth") (EVar "env")) (EVar "plan"))) (DoExpr (EBinOp "&&" (EApp (EApp (EApp (EVar "abstractFinite") (EVar "env")) (EVar "truth")) (EVar "plan")) (EApp (EApp (EApp (EVar "cyclesThroughListUnder") (EVar "env")) (EVar "truth")) (EVar "plan"))))))
-(DTypeSig true "planCyclesThroughList" (TyFun (TyCon "PlanEnv") (TyFun (TyCon "GenPlan") (TyCon "Bool"))))
-(DFunDef false "planCyclesThroughList" ((PVar "env") (PVar "plan")) (EApp (EApp (EApp (EVar "cyclesThroughListUnder") (EVar "env")) (EApp (EApp (EVar "finiteTruth") (EVar "env")) (EVar "plan"))) (EVar "plan")))
 (DTypeSig false "cyclesThroughListUnder" (TyFun (TyCon "PlanEnv") (TyFun (TyApp (TyCon "OrdMap") (TyCon "Unit")) (TyFun (TyCon "GenPlan") (TyCon "Bool")))))
 (DFunDef false "cyclesThroughListUnder" ((PVar "env") (PVar "truth") (PVar "root")) (EBlock (DoLet false false (PVar "graph") (EApp (EApp (EApp (EApp (EVar "buildListGraph") (EVar "env")) (EVar "truth")) (EApp (EApp (EApp (EVar "nominalLeaves") (EVar "root")) (EVar "False")) (EListLit))) (EVar "omEmpty"))) (DoExpr (EApp (EApp (EVar "anyStateReturns") (EVar "graph")) (EApp (EVar "omKeys") (EVar "graph"))))))
 (DTypeSig false "nominalLeaves" (TyFun (TyCon "GenPlan") (TyFun (TyCon "Bool") (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "GenPlan") (TyCon "Bool"))) (TyApp (TyCon "List") (TyTuple (TyCon "GenPlan") (TyCon "Bool")))))))
@@ -2833,8 +2826,6 @@ intShrinkSteps = [IntToZero, IntHalf, IntTowardZero]
 (DFunDef false "listLengthBound" ((PVar "env") (PVar "depth") (PVar "plan")) (EBlock (DoLet false false (PVar "truth") (EApp (EApp (EVar "finiteTruth") (EVar "env")) (EVar "plan"))) (DoExpr (EIf (EApp (EVar "not") (EApp (EApp (EApp (EVar "abstractFinite") (EVar "env")) (EVar "truth")) (EVar "plan"))) (ELit (LInt 0)) (EIf (EApp (EApp (EApp (EVar "cyclesThroughListUnder") (EVar "env")) (EVar "truth")) (EVar "plan")) (EApp (EApp (EMethodRef "max") (ELit (LInt 0))) (EBinOp "-" (EVar "listLenMax") (EVar "depth"))) (EIf (EBinOp "&&" (EBinOp ">=" (EVar "depth") (EVar "maxGenDepth")) (EApp (EApp (EVar "planCanDiverge") (EVar "env")) (EVar "plan"))) (ELit (LInt 0)) (EVar "listLenMax")))))))
 (DTypeSig true "listBoundDecays" (TyFun (TyCon "PlanEnv") (TyFun (TyCon "GenPlan") (TyCon "Bool"))))
 (DFunDef false "listBoundDecays" ((PVar "env") (PVar "plan")) (EBlock (DoLet false false (PVar "truth") (EApp (EApp (EVar "finiteTruth") (EVar "env")) (EVar "plan"))) (DoExpr (EBinOp "&&" (EApp (EApp (EApp (EVar "abstractFinite") (EVar "env")) (EVar "truth")) (EVar "plan")) (EApp (EApp (EApp (EVar "cyclesThroughListUnder") (EVar "env")) (EVar "truth")) (EVar "plan"))))))
-(DTypeSig true "planCyclesThroughList" (TyFun (TyCon "PlanEnv") (TyFun (TyCon "GenPlan") (TyCon "Bool"))))
-(DFunDef false "planCyclesThroughList" ((PVar "env") (PVar "plan")) (EApp (EApp (EApp (EVar "cyclesThroughListUnder") (EVar "env")) (EApp (EApp (EVar "finiteTruth") (EVar "env")) (EVar "plan"))) (EVar "plan")))
 (DTypeSig false "cyclesThroughListUnder" (TyFun (TyCon "PlanEnv") (TyFun (TyApp (TyCon "OrdMap") (TyCon "Unit")) (TyFun (TyCon "GenPlan") (TyCon "Bool")))))
 (DFunDef false "cyclesThroughListUnder" ((PVar "env") (PVar "truth") (PVar "root")) (EBlock (DoLet false false (PVar "graph") (EApp (EApp (EApp (EApp (EVar "buildListGraph") (EVar "env")) (EVar "truth")) (EApp (EApp (EApp (EVar "nominalLeaves") (EVar "root")) (EVar "False")) (EListLit))) (EVar "omEmpty"))) (DoExpr (EApp (EApp (EVar "anyStateReturns") (EVar "graph")) (EApp (EVar "omKeys") (EVar "graph"))))))
 (DTypeSig false "nominalLeaves" (TyFun (TyCon "GenPlan") (TyFun (TyCon "Bool") (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "GenPlan") (TyCon "Bool"))) (TyApp (TyCon "List") (TyTuple (TyCon "GenPlan") (TyCon "Bool")))))))

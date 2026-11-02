@@ -23,7 +23,7 @@ import support.source_index.{sourcePositionToOffset}
 -- Why a fix run produced nothing.  The input that does not parse is the
 -- caller's; an output that does not parse is a fixer's bug, and is never
 -- returned.
-public export data FixError =
+export data FixError =
   | SourceDoesNotParse String
   | FixedOutputDoesNotParse Int String
   | EditsRejected EditError
@@ -316,7 +316,7 @@ separatesChildren _ = False
 (DUse false (UseGroup ("tools" "source_edits") ((mem "EditError" false) (mem "SourceEdit" true) (mem "applySourceEdits" false) (mem "validateSourceEdits" false))))
 (DUse false (UseGroup ("tools" "source_snapshot") ((mem "SourceSnapshot" true) (mem "makeSnapshot" false) (mem "snapshotId" false))))
 (DUse false (UseGroup ("support" "source_index") ((mem "sourcePositionToOffset" false))))
-(DData Public "FixError" () ((variant "SourceDoesNotParse" (ConPos (TyCon "String"))) (variant "FixedOutputDoesNotParse" (ConPos (TyCon "Int") (TyCon "String"))) (variant "EditsRejected" (ConPos (TyCon "EditError")))) ())
+(DData Abstract "FixError" () ((variant "SourceDoesNotParse" (ConPos (TyCon "String"))) (variant "FixedOutputDoesNotParse" (ConPos (TyCon "Int") (TyCon "String"))) (variant "EditsRejected" (ConPos (TyCon "EditError")))) ())
 (DTypeSig true "fixErrorText" (TyFun (TyCon "FixError") (TyCon "String")))
 (DFunDef false "fixErrorText" ((PCon "SourceDoesNotParse" (PVar "msg"))) (EVar "msg"))
 (DFunDef false "fixErrorText" ((PCon "FixedOutputDoesNotParse" (PVar "pass") (PVar "msg"))) (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "the fixed source of pass ")) (EApp (EVar "display") (EApp (EVar "intToString") (EVar "pass")))) (ELit (LString " does not parse: "))) (EApp (EVar "display") (EVar "msg"))) (ELit (LString ""))))
@@ -426,7 +426,7 @@ separatesChildren _ = False
 (DUse false (UseGroup ("tools" "source_edits") ((mem "EditError" false) (mem "SourceEdit" true) (mem "applySourceEdits" false) (mem "validateSourceEdits" false))))
 (DUse false (UseGroup ("tools" "source_snapshot") ((mem "SourceSnapshot" true) (mem "makeSnapshot" false) (mem "snapshotId" false))))
 (DUse false (UseGroup ("support" "source_index") ((mem "sourcePositionToOffset" false))))
-(DData Public "FixError" () ((variant "SourceDoesNotParse" (ConPos (TyCon "String"))) (variant "FixedOutputDoesNotParse" (ConPos (TyCon "Int") (TyCon "String"))) (variant "EditsRejected" (ConPos (TyCon "EditError")))) ())
+(DData Abstract "FixError" () ((variant "SourceDoesNotParse" (ConPos (TyCon "String"))) (variant "FixedOutputDoesNotParse" (ConPos (TyCon "Int") (TyCon "String"))) (variant "EditsRejected" (ConPos (TyCon "EditError")))) ())
 (DTypeSig true "fixErrorText" (TyFun (TyCon "FixError") (TyCon "String")))
 (DFunDef false "fixErrorText" ((PCon "SourceDoesNotParse" (PVar "msg"))) (EVar "msg"))
 (DFunDef false "fixErrorText" ((PCon "FixedOutputDoesNotParse" (PVar "pass") (PVar "msg"))) (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "the fixed source of pass ")) (EApp (EMethodRef "display") (EApp (EVar "intToString") (EVar "pass")))) (ELit (LString " does not parse: "))) (EApp (EMethodRef "display") (EVar "msg"))) (ELit (LString ""))))

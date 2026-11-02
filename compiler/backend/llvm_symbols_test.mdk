@@ -50,6 +50,17 @@ import backend.llvm_symbols.{
 }
 import support.symbol_origin.{SymbolOrigin(..)}
 
+-- `env` arguments for building a copied emitter.  That emitter only ever emits a
+-- one-line program, so it links like a `medaka test` probe: -O0 without
+-- ThinLTO, a few seconds of clang where the default link takes over a minute.
+emitterBuildEnv : List String
+emitterBuildEnv = [
+  "-u",
+  "MEDAKA_STRICT",
+  "MEDAKA_CLANG_OPT=-O0",
+  "MEDAKA_NO_LTO=1",
+]
+
 at : String -> SymbolOrigin
 at b = SymbolOrigin b "" 0 0
 
@@ -607,17 +618,22 @@ test "llvm concatenated raw call refuses complete publication" = withScratchDir
         (Ok source, Ok _) =>
           if not (contains hole source) then
             fail "llvm mutation point missing"
-          else match (boundedVerbSeconds 240 "env" [
-            "-u", "MEDAKA_STRICT", medakaBin, "build", "--allow-internal",
-            entry, "-o", clean
-          ])
+          else match (boundedVerbSeconds
+            240
+            "env"
+            (emitterBuildEnv
+              ++ [medakaBin, "build", "--allow-internal", entry, "-o", clean]))
             Ok (0, _, _) => match writeFile emitter (replace hole insert source)
               Err e => fail e
               Ok _ =>
-                match (boundedVerbSeconds 240 "env" [
-                  "-u", "MEDAKA_STRICT", medakaBin, "build", "--allow-internal",
-                  entry, "-o", mutant
-                ])
+                match (boundedVerbSeconds
+                  240
+                  "env"
+                  (emitterBuildEnv
+                    ++ [
+                      medakaBin, "build", "--allow-internal", entry, "-o",
+                      mutant
+                    ]))
                   Ok (0, _, _) =>
                     let goodArgs = [
                       "MEDAKA_EMITTER=" ++ clean,

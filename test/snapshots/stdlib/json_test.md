@@ -1,5 +1,5 @@
 # META
-source_lines=270
+source_lines=280
 stages=DESUGAR,MARK
 # SOURCE
 -- Tests for the path, pretty-printing and line readers in `stdlib/json.mdk`,
@@ -14,6 +14,7 @@ import json.{
   parse,
   parseLines,
   pretty,
+  stringify,
   stringifyLines,
 }
 import string.{join}
@@ -175,6 +176,15 @@ test "parse reads back what pretty writes" = withDoc (j => expectAll [
   expectEqual (Ok j) (parse (pretty 8 j)),
 ])
 
+test "stringify and pretty write non-finite floats as null, and parse reads them back" =
+  let doc =
+    jArray [JFloat (1.0 / 0.0), JFloat (0.0 - 1.0 / 0.0), JFloat (0.0 / 0.0)]
+  expectAll [
+    expectEqual "[null,null,null]" (stringify doc),
+    expectEqual "[\n  null,\n  null,\n  null\n]" (pretty 2 doc),
+    expectEqual (Ok (jArray [JNull, JNull, JNull])) (parse (stringify doc)),
+  ]
+
 test "parseLines numbers lines over the input, blank lines included" =
   expectEqual
     [Ok (JInt 1), Ok (JInt 2), Err "line 5: unexpected end of input"]
@@ -273,7 +283,7 @@ test "parse still reads escaped control characters and a space" = expectAll [
   expectEqual (Ok (JString "a b")) (parse "\"a b\""),
 ]
 # DESUGAR
-(DUse false (UseGroup ("json") ((mem "Json" true) (mem "atPath" false) (mem "asNumber" false) (mem "jArray" false) (mem "jObject" false) (mem "parse" false) (mem "parseLines" false) (mem "pretty" false) (mem "stringifyLines" false))))
+(DUse false (UseGroup ("json") ((mem "Json" true) (mem "atPath" false) (mem "asNumber" false) (mem "jArray" false) (mem "jObject" false) (mem "parse" false) (mem "parseLines" false) (mem "pretty" false) (mem "stringify" false) (mem "stringifyLines" false))))
 (DUse false (UseGroup ("string") ((mem "join" false))))
 (DUse false (UseGroup ("test") ((mem "Expectation" false) (mem "expectAll" false) (mem "expectEqual" false) (mem "expectEqualText" false) (mem "expectErrContains" false) (mem "expectOkThen" false))))
 (DTypeSig false "sample" (TyCon "Json"))
@@ -300,6 +310,7 @@ test "parse still reads escaped control characters and a space" = expectAll [
 (DTest false "pretty 0 breaks lines without indentation, as Python indent=0" (EApp (EVar "withDoc") (ELam ((PVar "j")) (EApp (EApp (EVar "expectEqualText") (EApp (EApp (EVar "join") (ELit (LString "\n"))) (EListLit (ELit (LString "{")) (ELit (LString "\"name\": \"café 日本\",")) (ELit (LString "\"empty_a\": [],")) (ELit (LString "\"empty_o\": {},")) (ELit (LString "\"nested\": [")) (ELit (LString "[],")) (ELit (LString "{")) (ELit (LString "\"k\": [")) (ELit (LString "1,")) (ELit (LString "null,")) (ELit (LString "true,")) (ELit (LString "false")) (ELit (LString "]")) (ELit (LString "},")) (ELit (LString "-5")) (ELit (LString "],")) (ELit (LString "\"floats\": [")) (ELit (LString "1.0,")) (ELit (LString "0.1,")) (ELit (LString "1e+20,")) (ELit (LString "-0.0,")) (ELit (LString "1.5e-07,")) (ELit (LString "0.0001")) (ELit (LString "],")) (ELit (LString "\"ctl\": \"a\\nb\\t\\\"q\\\"\\\\ \\u0001 \\u001f\",")) (ELit (LString "\"k\": {")) (ELit (LString "\"x\": {")) (ELit (LString "\"y\": []")) (ELit (LString "}")) (ELit (LString "}")) (ELit (LString "}"))))) (EApp (EApp (EVar "pretty") (ELit (LInt 0))) (EVar "j"))))))
 (DTest false "pretty keeps empty containers inline and ends without a newline" (EApp (EVar "expectAll") (EListLit (EApp (EApp (EVar "expectEqual") (ELit (LString "[]"))) (EApp (EApp (EVar "pretty") (ELit (LInt 2))) (EApp (EVar "jArray") (EListLit)))) (EApp (EApp (EVar "expectEqual") (ELit (LString "{}"))) (EApp (EApp (EVar "pretty") (ELit (LInt 2))) (EApp (EVar "jObject") (EListLit)))) (EApp (EApp (EVar "expectEqual") (ELit (LString "[\n  1\n]"))) (EApp (EApp (EVar "pretty") (ELit (LInt 2))) (EApp (EVar "jArray") (EListLit (EApp (EVar "JInt") (ELit (LInt 1))))))))))
 (DTest false "parse reads back what pretty writes" (EApp (EVar "withDoc") (ELam ((PVar "j")) (EApp (EVar "expectAll") (EListLit (EApp (EApp (EVar "expectEqual") (EApp (EVar "Ok") (EVar "j"))) (EApp (EVar "parse") (EApp (EApp (EVar "pretty") (ELit (LInt 2))) (EVar "j")))) (EApp (EApp (EVar "expectEqual") (EApp (EVar "Ok") (EVar "j"))) (EApp (EVar "parse") (EApp (EApp (EVar "pretty") (ELit (LInt 0))) (EVar "j")))) (EApp (EApp (EVar "expectEqual") (EApp (EVar "Ok") (EVar "j"))) (EApp (EVar "parse") (EApp (EApp (EVar "pretty") (ELit (LInt 8))) (EVar "j")))))))))
+(DTest false "stringify and pretty write non-finite floats as null, and parse reads them back" (EBlock (DoLet false false (PVar "doc") (EApp (EVar "jArray") (EListLit (EApp (EVar "JFloat") (EBinOp "/" (ELit (LFloat 1.0)) (ELit (LFloat 0.0)))) (EApp (EVar "JFloat") (EBinOp "-" (ELit (LFloat 0.0)) (EBinOp "/" (ELit (LFloat 1.0)) (ELit (LFloat 0.0))))) (EApp (EVar "JFloat") (EBinOp "/" (ELit (LFloat 0.0)) (ELit (LFloat 0.0))))))) (DoExpr (EApp (EVar "expectAll") (EListLit (EApp (EApp (EVar "expectEqual") (ELit (LString "[null,null,null]"))) (EApp (EVar "stringify") (EVar "doc"))) (EApp (EApp (EVar "expectEqual") (ELit (LString "[\n  null,\n  null,\n  null\n]"))) (EApp (EApp (EVar "pretty") (ELit (LInt 2))) (EVar "doc"))) (EApp (EApp (EVar "expectEqual") (EApp (EVar "Ok") (EApp (EVar "jArray") (EListLit (EVar "JNull") (EVar "JNull") (EVar "JNull"))))) (EApp (EVar "parse") (EApp (EVar "stringify") (EVar "doc")))))))))
 (DTest false "parseLines numbers lines over the input, blank lines included" (EApp (EApp (EVar "expectEqual") (EListLit (EApp (EVar "Ok") (EApp (EVar "JInt") (ELit (LInt 1)))) (EApp (EVar "Ok") (EApp (EVar "JInt") (ELit (LInt 2)))) (EApp (EVar "Err") (ELit (LString "line 5: unexpected end of input"))))) (EApp (EVar "parseLines") (ELit (LString "1\n\n  \n2\n[3,")))))
 (DTest false "parseLines reads CRLF lines" (EApp (EApp (EVar "expectEqual") (EListLit (EApp (EVar "Ok") (EApp (EVar "jObject") (EListLit (ETuple (ELit (LString "a")) (EApp (EVar "JInt") (ELit (LInt 1))))))) (EApp (EVar "Ok") (EApp (EVar "jArray") (EListLit (EApp (EVar "JInt") (ELit (LInt 2)))))))) (EApp (EVar "parseLines") (ELit (LString "{\"a\":1}\r\n\r\n[2]\r\n")))))
 (DTest false "parseLines returns a bad line as an Err and goes on" (EApp (EApp (EVar "expectEqual") (EListLit (EApp (EVar "Err") (ELit (LString "line 1: unexpected character 'x'"))) (EApp (EVar "Ok") (EApp (EVar "JInt") (ELit (LInt 2)))))) (EApp (EVar "parseLines") (ELit (LString "x\n2\n")))))
@@ -317,7 +328,7 @@ test "parse still reads escaped control characters and a space" = expectAll [
 (DTest false "parse rejects an unescaped control character in a string" (EApp (EVar "expectAll") (EListLit (EApp (EApp (EVar "expectErrContains") (ELit (LString "control character"))) (EApp (EVar "parse") (ELit (LString "\"a\tb\"")))) (EApp (EApp (EVar "expectErrContains") (ELit (LString "control character"))) (EApp (EVar "parse") (ELit (LString "\"a\nb\"")))) (EApp (EApp (EVar "expectErrContains") (ELit (LString "control character"))) (EApp (EVar "parse") (ELit (LString "\"a\rb\"")))) (EApp (EApp (EVar "expectErrContains") (ELit (LString "control character"))) (EApp (EVar "parse") (ELit (LString "\"a\0b\"")))) (EApp (EApp (EVar "expectErrContains") (ELit (LString "control character"))) (EApp (EVar "parse") (ELit (LString "\"a\u{1f}b\"")))) (EApp (EApp (EVar "expectErrContains") (ELit (LString "control character"))) (EApp (EVar "parse") (ELit (LString "{\"k\t\": 1}")))))))
 (DTest false "parse still reads escaped control characters and a space" (EApp (EVar "expectAll") (EListLit (EApp (EApp (EVar "expectEqual") (EApp (EVar "Ok") (EApp (EVar "JString") (ELit (LString "a\tb"))))) (EApp (EVar "parse") (ELit (LString "\"a\\tb\"")))) (EApp (EApp (EVar "expectEqual") (EApp (EVar "Ok") (EApp (EVar "JString") (ELit (LString "a\u{01}b"))))) (EApp (EVar "parse") (ELit (LString "\"a\\u0001b\"")))) (EApp (EApp (EVar "expectEqual") (EApp (EVar "Ok") (EApp (EVar "JString") (ELit (LString "a b"))))) (EApp (EVar "parse") (ELit (LString "\"a b\"")))))))
 # MARK
-(DUse false (UseGroup ("json") ((mem "Json" true) (mem "atPath" false) (mem "asNumber" false) (mem "jArray" false) (mem "jObject" false) (mem "parse" false) (mem "parseLines" false) (mem "pretty" false) (mem "stringifyLines" false))))
+(DUse false (UseGroup ("json") ((mem "Json" true) (mem "atPath" false) (mem "asNumber" false) (mem "jArray" false) (mem "jObject" false) (mem "parse" false) (mem "parseLines" false) (mem "pretty" false) (mem "stringify" false) (mem "stringifyLines" false))))
 (DUse false (UseGroup ("string") ((mem "join" false))))
 (DUse false (UseGroup ("test") ((mem "Expectation" false) (mem "expectAll" false) (mem "expectEqual" false) (mem "expectEqualText" false) (mem "expectErrContains" false) (mem "expectOkThen" false))))
 (DTypeSig false "sample" (TyCon "Json"))
@@ -344,6 +355,7 @@ test "parse still reads escaped control characters and a space" = expectAll [
 (DTest false "pretty 0 breaks lines without indentation, as Python indent=0" (EApp (EVar "withDoc") (ELam ((PVar "j")) (EApp (EApp (EVar "expectEqualText") (EApp (EApp (EVar "join") (ELit (LString "\n"))) (EListLit (ELit (LString "{")) (ELit (LString "\"name\": \"café 日本\",")) (ELit (LString "\"empty_a\": [],")) (ELit (LString "\"empty_o\": {},")) (ELit (LString "\"nested\": [")) (ELit (LString "[],")) (ELit (LString "{")) (ELit (LString "\"k\": [")) (ELit (LString "1,")) (ELit (LString "null,")) (ELit (LString "true,")) (ELit (LString "false")) (ELit (LString "]")) (ELit (LString "},")) (ELit (LString "-5")) (ELit (LString "],")) (ELit (LString "\"floats\": [")) (ELit (LString "1.0,")) (ELit (LString "0.1,")) (ELit (LString "1e+20,")) (ELit (LString "-0.0,")) (ELit (LString "1.5e-07,")) (ELit (LString "0.0001")) (ELit (LString "],")) (ELit (LString "\"ctl\": \"a\\nb\\t\\\"q\\\"\\\\ \\u0001 \\u001f\",")) (ELit (LString "\"k\": {")) (ELit (LString "\"x\": {")) (ELit (LString "\"y\": []")) (ELit (LString "}")) (ELit (LString "}")) (ELit (LString "}"))))) (EApp (EApp (EVar "pretty") (ELit (LInt 0))) (EVar "j"))))))
 (DTest false "pretty keeps empty containers inline and ends without a newline" (EApp (EVar "expectAll") (EListLit (EApp (EApp (EVar "expectEqual") (ELit (LString "[]"))) (EApp (EApp (EVar "pretty") (ELit (LInt 2))) (EApp (EVar "jArray") (EListLit)))) (EApp (EApp (EVar "expectEqual") (ELit (LString "{}"))) (EApp (EApp (EVar "pretty") (ELit (LInt 2))) (EApp (EVar "jObject") (EListLit)))) (EApp (EApp (EVar "expectEqual") (ELit (LString "[\n  1\n]"))) (EApp (EApp (EVar "pretty") (ELit (LInt 2))) (EApp (EVar "jArray") (EListLit (EApp (EVar "JInt") (ELit (LInt 1))))))))))
 (DTest false "parse reads back what pretty writes" (EApp (EVar "withDoc") (ELam ((PVar "j")) (EApp (EVar "expectAll") (EListLit (EApp (EApp (EVar "expectEqual") (EApp (EVar "Ok") (EVar "j"))) (EApp (EVar "parse") (EApp (EApp (EVar "pretty") (ELit (LInt 2))) (EVar "j")))) (EApp (EApp (EVar "expectEqual") (EApp (EVar "Ok") (EVar "j"))) (EApp (EVar "parse") (EApp (EApp (EVar "pretty") (ELit (LInt 0))) (EVar "j")))) (EApp (EApp (EVar "expectEqual") (EApp (EVar "Ok") (EVar "j"))) (EApp (EVar "parse") (EApp (EApp (EVar "pretty") (ELit (LInt 8))) (EVar "j")))))))))
+(DTest false "stringify and pretty write non-finite floats as null, and parse reads them back" (EBlock (DoLet false false (PVar "doc") (EApp (EVar "jArray") (EListLit (EApp (EVar "JFloat") (EBinOp "/" (ELit (LFloat 1.0)) (ELit (LFloat 0.0)))) (EApp (EVar "JFloat") (EBinOp "-" (ELit (LFloat 0.0)) (EBinOp "/" (ELit (LFloat 1.0)) (ELit (LFloat 0.0))))) (EApp (EVar "JFloat") (EBinOp "/" (ELit (LFloat 0.0)) (ELit (LFloat 0.0))))))) (DoExpr (EApp (EVar "expectAll") (EListLit (EApp (EApp (EVar "expectEqual") (ELit (LString "[null,null,null]"))) (EApp (EVar "stringify") (EVar "doc"))) (EApp (EApp (EVar "expectEqual") (ELit (LString "[\n  null,\n  null,\n  null\n]"))) (EApp (EApp (EVar "pretty") (ELit (LInt 2))) (EVar "doc"))) (EApp (EApp (EVar "expectEqual") (EApp (EVar "Ok") (EApp (EVar "jArray") (EListLit (EVar "JNull") (EVar "JNull") (EVar "JNull"))))) (EApp (EVar "parse") (EApp (EVar "stringify") (EVar "doc")))))))))
 (DTest false "parseLines numbers lines over the input, blank lines included" (EApp (EApp (EVar "expectEqual") (EListLit (EApp (EVar "Ok") (EApp (EVar "JInt") (ELit (LInt 1)))) (EApp (EVar "Ok") (EApp (EVar "JInt") (ELit (LInt 2)))) (EApp (EVar "Err") (ELit (LString "line 5: unexpected end of input"))))) (EApp (EVar "parseLines") (ELit (LString "1\n\n  \n2\n[3,")))))
 (DTest false "parseLines reads CRLF lines" (EApp (EApp (EVar "expectEqual") (EListLit (EApp (EVar "Ok") (EApp (EVar "jObject") (EListLit (ETuple (ELit (LString "a")) (EApp (EVar "JInt") (ELit (LInt 1))))))) (EApp (EVar "Ok") (EApp (EVar "jArray") (EListLit (EApp (EVar "JInt") (ELit (LInt 2)))))))) (EApp (EVar "parseLines") (ELit (LString "{\"a\":1}\r\n\r\n[2]\r\n")))))
 (DTest false "parseLines returns a bad line as an Err and goes on" (EApp (EApp (EVar "expectEqual") (EListLit (EApp (EVar "Err") (ELit (LString "line 1: unexpected character 'x'"))) (EApp (EVar "Ok") (EApp (EVar "JInt") (ELit (LInt 2)))))) (EApp (EVar "parseLines") (ELit (LString "x\n2\n")))))

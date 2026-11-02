@@ -87,7 +87,7 @@ import regex.{
 -- parsing `de_sig` back — the sig is a rendering, not a data structure) /
 -- de_line (the declaration's source line, which is what places a `-- # Title`
 -- section heading relative to the entries around it).
-public export data DocEntry = DocEntry String String String String DocKind Int
+export data DocEntry = DocEntry String String String String DocKind Int
 
 -- What kind of declaration produced an entry, for the library-mode impl
 -- rebucketing pass (`rebucketLibraryImpls`).  `KTypeDecl` marks a `data`/

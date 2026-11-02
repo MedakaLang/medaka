@@ -1,5 +1,5 @@
 # META
-source_lines=2267
+source_lines=2261
 stages=DESUGAR,MARK
 # SOURCE
 -- tc_mono: operations over `Mono`/`Scheme`, pure except for minting effect-variable ids from the
@@ -2246,12 +2246,6 @@ exactReturnRequestOfGoal goal = match goal.oPayload
   GPSite _ _ (SKExactReturn _ request) => Some request
   _ => None
 
--- every super slot in a `requires` chain carries the SAME id; represent the slot by it.
-export
-firstOrZero : List Int -> Int
-firstOrZero [] = 0
-firstOrZero (x :: _) = x
-
 export
 allMethodParamsMentioned : List String -> Ty -> Bool
 allMethodParamsMentioned [] _ = True
@@ -2857,9 +2851,6 @@ implDeclWithReqs _ = []
 (DFunDef false "oblArgKey" ((PVar "m")) (EMatch (EApp (EVar "normalize") (EVar "m")) (arm (PCon "TVar" (PVar "cell")) () (EBinOp "++" (EBinOp "++" (ELit (LString "v")) (EApp (EVar "display") (EApp (EVar "intToString") (EApp (EVar "tyvarId") (EVar "cell"))))) (ELit (LString ".")))) (arm (PCon "TCon" (PVar "name") PWild) () (EBinOp "++" (EBinOp "++" (ELit (LString "c")) (EApp (EVar "display") (EApp (EVar "lenKey") (EVar "name")))) (ELit (LString "")))) (arm (PCon "TRigid" (PVar "name")) () (EBinOp "++" (EBinOp "++" (ELit (LString "c")) (EApp (EVar "display") (EApp (EVar "lenKey") (EVar "name")))) (ELit (LString "")))) (arm (PCon "TApp" (PVar "a") (PVar "b")) () (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "a")) (EApp (EVar "display") (EApp (EVar "oblArgKey") (EVar "a")))) (ELit (LString ""))) (EApp (EVar "display") (EApp (EVar "oblArgKey") (EVar "b")))) (ELit (LString "")))) (arm (PCon "TFun" (PVar "a") PWild (PVar "b")) () (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "f")) (EApp (EVar "display") (EApp (EVar "oblArgKey") (EVar "a")))) (ELit (LString ""))) (EApp (EVar "display") (EApp (EVar "oblArgKey") (EVar "b")))) (ELit (LString "")))) (arm (PCon "TQual" (PVar "a") PWild) () (EApp (EVar "oblArgKey") (EVar "a"))) (arm PWild () (ELit (LString "*")))))
 (DTypeSig true "exactReturnRequestOfGoal" (TyFun (TyCon "Obligation") (TyApp (TyCon "Option") (TyCon "MethodReturnRequest"))))
 (DFunDef false "exactReturnRequestOfGoal" ((PVar "goal")) (EMatch (EFieldAccess (EVar "goal") "oPayload") (arm (PCon "GPSite" PWild PWild (PCon "SKExactReturn" PWild (PVar "request"))) () (EApp (EVar "Some") (EVar "request"))) (arm PWild () (EVar "None"))))
-(DTypeSig true "firstOrZero" (TyFun (TyApp (TyCon "List") (TyCon "Int")) (TyCon "Int")))
-(DFunDef false "firstOrZero" ((PList)) (ELit (LInt 0)))
-(DFunDef false "firstOrZero" ((PCons (PVar "x") PWild)) (EVar "x"))
 (DTypeSig true "allMethodParamsMentioned" (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyCon "Ty") (TyCon "Bool"))))
 (DFunDef false "allMethodParamsMentioned" ((PList) PWild) (EVar "True"))
 (DFunDef false "allMethodParamsMentioned" ((PCons (PVar "param") (PVar "rest")) (PVar "ty")) (EBinOp "&&" (EApp (EApp (EVar "argMentions") (EListLit (EVar "param"))) (EApp (EVar "stripTyConstraints") (EVar "ty"))) (EApp (EApp (EVar "allMethodParamsMentioned") (EVar "rest")) (EVar "ty"))))
@@ -3457,9 +3448,6 @@ implDeclWithReqs _ = []
 (DFunDef false "oblArgKey" ((PVar "m")) (EMatch (EApp (EVar "normalize") (EVar "m")) (arm (PCon "TVar" (PVar "cell")) () (EBinOp "++" (EBinOp "++" (ELit (LString "v")) (EApp (EMethodRef "display") (EApp (EVar "intToString") (EApp (EVar "tyvarId") (EVar "cell"))))) (ELit (LString ".")))) (arm (PCon "TCon" (PVar "name") PWild) () (EBinOp "++" (EBinOp "++" (ELit (LString "c")) (EApp (EMethodRef "display") (EApp (EVar "lenKey") (EVar "name")))) (ELit (LString "")))) (arm (PCon "TRigid" (PVar "name")) () (EBinOp "++" (EBinOp "++" (ELit (LString "c")) (EApp (EMethodRef "display") (EApp (EVar "lenKey") (EVar "name")))) (ELit (LString "")))) (arm (PCon "TApp" (PVar "a") (PVar "b")) () (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "a")) (EApp (EMethodRef "display") (EApp (EVar "oblArgKey") (EVar "a")))) (ELit (LString ""))) (EApp (EMethodRef "display") (EApp (EVar "oblArgKey") (EVar "b")))) (ELit (LString "")))) (arm (PCon "TFun" (PVar "a") PWild (PVar "b")) () (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "f")) (EApp (EMethodRef "display") (EApp (EVar "oblArgKey") (EVar "a")))) (ELit (LString ""))) (EApp (EMethodRef "display") (EApp (EVar "oblArgKey") (EVar "b")))) (ELit (LString "")))) (arm (PCon "TQual" (PVar "a") PWild) () (EApp (EVar "oblArgKey") (EVar "a"))) (arm PWild () (ELit (LString "*")))))
 (DTypeSig true "exactReturnRequestOfGoal" (TyFun (TyCon "Obligation") (TyApp (TyCon "Option") (TyCon "MethodReturnRequest"))))
 (DFunDef false "exactReturnRequestOfGoal" ((PVar "goal")) (EMatch (EFieldAccess (EVar "goal") "oPayload") (arm (PCon "GPSite" PWild PWild (PCon "SKExactReturn" PWild (PVar "request"))) () (EApp (EVar "Some") (EVar "request"))) (arm PWild () (EVar "None"))))
-(DTypeSig true "firstOrZero" (TyFun (TyApp (TyCon "List") (TyCon "Int")) (TyCon "Int")))
-(DFunDef false "firstOrZero" ((PList)) (ELit (LInt 0)))
-(DFunDef false "firstOrZero" ((PCons (PVar "x") PWild)) (EVar "x"))
 (DTypeSig true "allMethodParamsMentioned" (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyCon "Ty") (TyCon "Bool"))))
 (DFunDef false "allMethodParamsMentioned" ((PList) PWild) (EVar "True"))
 (DFunDef false "allMethodParamsMentioned" ((PCons (PVar "param") (PVar "rest")) (PVar "ty")) (EBinOp "&&" (EApp (EApp (EVar "argMentions") (EListLit (EVar "param"))) (EApp (EVar "stripTyConstraints") (EVar "ty"))) (EApp (EApp (EVar "allMethodParamsMentioned") (EVar "rest")) (EVar "ty"))))

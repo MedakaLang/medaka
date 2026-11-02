@@ -392,7 +392,7 @@ if [ "$TEST_WIRED" = 1 ]; then
   dir_golden="$GOLD/test/dir.golden"
   if [ -f "$dir_golden" ]; then
     dir_want="$(cat "$dir_golden")"
-    dir_got="$(MEDAKA_ROOT="$ROOT" bound "$MEDAKA" test "$FIX/test_dir" 2>/dev/null | sed "s#$ROOT/##g" | strip_unit)"
+    dir_got="$(MEDAKA_SEED=1 MEDAKA_ROOT="$ROOT" bound "$MEDAKA" test "$FIX/test_dir" 2>/dev/null | sed "s#$ROOT/##g" | strip_unit)"
     if [ "$dir_got" = "$dir_want" ]; then pass=$((pass+1)); printf 'ok   test/dir (multi-file directory report)\n'
     else fail=$((fail+1)); printf 'FAIL test/dir\n'
       printf '  want: [%s]\n  got:  [%s]\n' "$dir_want" "$dir_got"; fi
@@ -468,7 +468,7 @@ if [ "$TEST_WIRED" = 1 ]; then
   nt_run() {
     _nt_dir=$1; shift
     nt_rc=0
-    (cd "$_nt_dir" && MEDAKA_ROOT="$ROOT" bound "$MEDAKA" test "$@") \
+    (cd "$_nt_dir" && MEDAKA_SEED=1 MEDAKA_ROOT="$ROOT" bound "$MEDAKA" test "$@") \
       >"$TMP/nt.out" 2>"$TMP/nt.err" || nt_rc=$?
     nt_out="$(cat "$TMP/nt.out")"; nt_err="$(cat "$TMP/nt.err")"
   }

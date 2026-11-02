@@ -45,7 +45,6 @@ superClosure lookup step key seeds =
   closureLayers lookup step key kept seen kept
 
 -- The direct supers of one node, in declaration order, each carrying its path.
-export
 directSupers : (IfaceRef -> Option (List String, List Super)) ->
   (List String -> p -> Super -> Option p) ->
   SuperNode p ->

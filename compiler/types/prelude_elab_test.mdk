@@ -22,7 +22,7 @@ import types.interface_frame as Framing
 import types.interface_frame.{InterfaceFault(..)}
 import types.prelude_elab.{
   PreludeElab(..), preludeElabOf, encodeElabFile, readElabFile, elabKeyOf,
-  seedPreludeElab, preludeElabHit, formatVersion, binderSpan, relocDecls,
+  seedPreludeElab, preludeElabCacheRef, formatVersion, binderSpan, relocDecls,
   readElabKey, readElabFileGated, readElabKeyGated, BinderRun(..)
 }
 import types.interface_frame.{noGate}
@@ -31,6 +31,11 @@ import types.publish.{CheckedProgram(..), TcReport(..)}
 import types.runtime_types.{BinderRow(..)}
 import types.typecheck.{defaultDriveInputs, elaborateModulesWithReport}
 import map.{entries}
+
+preludeElabHit : (Int, Int) -> Option PreludeElab
+preludeElabHit generation = match !preludeElabCacheRef
+  Some (seen, pe, _) if seen == generation => Some pe
+  _ => None
 
 testKey : InterfaceKey
 testKey = testKeyAt formatVersion

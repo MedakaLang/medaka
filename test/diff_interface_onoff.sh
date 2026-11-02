@@ -265,9 +265,9 @@ name="$1"; shift
 cd "$FIX" || exit 99
 for arm in a b; do
   if [ "$arm" = a ]; then
-    env MEDAKA_NO_INTERFACE=1 timeout 300 "$M" "$@" > "$OUT/m.$arm.$name.out" 2> "$OUT/m.$arm.$name.err" < "$OUT/repl.in"
+    env MEDAKA_SEED=1 MEDAKA_NO_INTERFACE=1 timeout 300 "$M" "$@" > "$OUT/m.$arm.$name.out" 2> "$OUT/m.$arm.$name.err" < "$OUT/repl.in"
   else
-    env MEDAKA_STRICT=1 timeout 300 "$M" "$@" > "$OUT/m.$arm.$name.out" 2> "$OUT/m.$arm.$name.err" < "$OUT/repl.in"
+    env MEDAKA_SEED=1 MEDAKA_STRICT=1 timeout 300 "$M" "$@" > "$OUT/m.$arm.$name.out" 2> "$OUT/m.$arm.$name.err" < "$OUT/repl.in"
   fi
   echo $? > "$OUT/m.$arm.$name.code"
 done
@@ -313,7 +313,7 @@ mkroot() {
 fbrow() {
   name=$1; envx=$2; r="$FB/root.$name"; o="$FB/$name"
   mkdir -p "$o"
-  e() { env MEDAKA_ROOT="$r" "$envx" "$@"; }
+  e() { env MEDAKA_ROOT="$r" MEDAKA_SEED=1 "$envx" "$@"; }
   e "$M" run "$HELLO" > "$o/run.out" 2> "$o/run.err" < /dev/null; echo $? > "$o/run.code"
   e MEDAKA_STAGE_COUNTS=1 "$M" run "$HELLO" 2>&1 > /dev/null < /dev/null | awk -F'\t' '$2 == "typecheck.module" { print $3 }' > "$o/run.stage"
   e "$M" run --json "$HELLO" > "$o/runj.out" 2> "$o/runj.err" < /dev/null; echo $? > "$o/runj.code"

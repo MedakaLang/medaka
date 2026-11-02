@@ -152,12 +152,26 @@ UPPER "String"
 NEWLINE
 IDENT "renderFloat"
 IDENT "f"
+INDENT
+PIPE
+IDENT "f"
+MINUS
+IDENT "f"
+EQ_EQ
+FLOAT 0.0
 EQUAL
 IDENT "fixTrailingDot"
 LPAREN
 IDENT "floatToString"
 IDENT "f"
 RPAREN
+NEWLINE
+PIPE
+IDENT "otherwise"
+EQUAL
+STRING "null"
+NEWLINE
+DEDENT
 NEWLINE
 IDENT "fixTrailingDot"
 COLON

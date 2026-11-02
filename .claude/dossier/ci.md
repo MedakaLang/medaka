@@ -749,3 +749,20 @@ class is also why the spelling uses an underscore rather than a hyphen: it allow
 `_`, `.` and `/` in a registry name (the rule exists because gate names are emitted into
 `pattern:` and re-read as unquoted shell words), and bending the name to the existing rule beat
 widening a safety check for a cosmetic gain (Val, 2026-08-30).
+
+## `inlang` runs as three shards behind one context (2026-11-01)
+
+`make test` on one 4-vCPU runner had reached ~28 min. A census found 5,311 CPU-s summed per step,
+packed three steps at a time. CPU cuts (#4733, −7%) could not close that gap alone, so the job is
+now an `inlang-shard` matrix of three rows (`INLANG_SHARD=k/3`). The Makefile derives each
+shard's steps from the `inlang-*` targets: `INLANG_SOLO` (`inlang-types`, ~80 probes, about
+as much CPU as half the other steps) has a shard of its own with every core nested, and the
+rest are dealt round-robin, each `-o2` rerun kept with its base step. An empty or malformed
+shard is a make error, never a green run of nothing.
+
+The required context did not move. `inlang` is now an aggregator that needs `inlang-shard`,
+runs on `!cancelled()` and passes only on `success`: the alias-job shape from #2178 above,
+so the ruleset was not edited. `test/diff_compiler_ci_guard_failsafe.sh` checks that shape
+(`AGGREGATORS`), because a plain `needs:` would skip `inlang` when a shard fails, and a skipped
+required context counts as passing. It also holds the step-guard floor on `inlang-shard`, where
+the guarded steps now live.

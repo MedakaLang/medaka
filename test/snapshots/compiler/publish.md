@@ -1,5 +1,5 @@
 # META
-source_lines=749
+source_lines=748
 stages=DESUGAR,MARK
 # SOURCE
 -- The shapes the typechecker publishes, and the pure functions that freeze a
@@ -653,7 +653,6 @@ liveCells name (PubScheme { psScheme = (Forall ids effIds authIds residuals row 
 
 -- At graph end nothing in the graph can fix an unquantified cell: it is a
 -- weak variable.
-export
 atGraphEnd : List LiveCell -> List LiveCell
 atGraphEnd = map toWeak
 
@@ -874,7 +873,7 @@ walkEffCell name effIds authIds member cell (w@(Walk seen found)) = match !cell
 (DData Private "Walk" () ((variant "Walk" (ConPos (TyApp (TyApp (TyCon "Map") (TyCon "Int")) (TyCon "Unit")) (TyApp (TyCon "List") (TyCon "LiveCell"))))) ())
 (DTypeSig true "liveCells" (TyFun (TyCon "String") (TyFun (TyCon "PubScheme") (TyApp (TyCon "List") (TyCon "LiveCell")))))
 (DFunDef false "liveCells" ((PVar "name") (PRec "PubScheme" ((rf "psScheme" (PCon "Forall" (PVar "ids") (PVar "effIds") (PVar "authIds") (PVar "residuals") (PVar "row") (PVar "t"))) (rf "psContext" (PVar "ctx"))) false)) (EBlock (DoLet false false (PVar "w0") (EApp (EApp (EVar "Walk") (EVar "Tip")) (EListLit))) (DoLet false false (PVar "w1") (EApp (EApp (EApp (EApp (EVar "walkResiduals") (EVar "name")) (EVar "authIds")) (EVar "residuals")) (EVar "w0"))) (DoLet false false (PVar "w2") (EApp (EApp (EApp (EApp (EApp (EVar "walkRow") (EVar "name")) (EVar "effIds")) (EVar "authIds")) (EVar "row")) (EVar "w1"))) (DoLet false false (PVar "w3") (EApp (EApp (EApp (EApp (EApp (EApp (EVar "walkMono") (EVar "name")) (EVar "ids")) (EVar "effIds")) (EVar "authIds")) (EVar "t")) (EVar "w2"))) (DoLet false false (PVar "w4") (EApp (EApp (EApp (EVar "foldWalk") (EApp (EApp (EApp (EApp (EVar "walkObl") (EVar "name")) (EVar "ids")) (EVar "effIds")) (EVar "authIds"))) (EVar "ctx")) (EVar "w3"))) (DoExpr (EMatch (EVar "w4") (arm (PCon "Walk" PWild (PVar "found")) () (EApp (EVar "nub") (EApp (EVar "reverse") (EVar "found"))))))))
-(DTypeSig true "atGraphEnd" (TyFun (TyApp (TyCon "List") (TyCon "LiveCell")) (TyApp (TyCon "List") (TyCon "LiveCell"))))
+(DTypeSig false "atGraphEnd" (TyFun (TyApp (TyCon "List") (TyCon "LiveCell")) (TyApp (TyCon "List") (TyCon "LiveCell"))))
 (DFunDef false "atGraphEnd" () (EApp (EVar "map") (EVar "toWeak")))
 (DTypeSig false "toWeak" (TyFun (TyCon "LiveCell") (TyCon "LiveCell")))
 (DFunDef false "toWeak" ((PCon "FreeMeta" (PVar "n") (PVar "k") (PVar "i"))) (EApp (EApp (EApp (EVar "WeakVar") (EVar "n")) (EVar "k")) (EVar "i")))
@@ -1031,7 +1030,7 @@ walkEffCell name effIds authIds member cell (w@(Walk seen found)) = match !cell
 (DData Private "Walk" () ((variant "Walk" (ConPos (TyApp (TyApp (TyCon "Map") (TyCon "Int")) (TyCon "Unit")) (TyApp (TyCon "List") (TyCon "LiveCell"))))) ())
 (DTypeSig true "liveCells" (TyFun (TyCon "String") (TyFun (TyCon "PubScheme") (TyApp (TyCon "List") (TyCon "LiveCell")))))
 (DFunDef false "liveCells" ((PVar "name") (PRec "PubScheme" ((rf "psScheme" (PCon "Forall" (PVar "ids") (PVar "effIds") (PVar "authIds") (PVar "residuals") (PVar "row") (PVar "t"))) (rf "psContext" (PVar "ctx"))) false)) (EBlock (DoLet false false (PVar "w0") (EApp (EApp (EVar "Walk") (EVar "Tip")) (EListLit))) (DoLet false false (PVar "w1") (EApp (EApp (EApp (EApp (EVar "walkResiduals") (EVar "name")) (EVar "authIds")) (EVar "residuals")) (EVar "w0"))) (DoLet false false (PVar "w2") (EApp (EApp (EApp (EApp (EApp (EVar "walkRow") (EVar "name")) (EVar "effIds")) (EVar "authIds")) (EVar "row")) (EVar "w1"))) (DoLet false false (PVar "w3") (EApp (EApp (EApp (EApp (EApp (EApp (EVar "walkMono") (EVar "name")) (EVar "ids")) (EVar "effIds")) (EVar "authIds")) (EVar "t")) (EVar "w2"))) (DoLet false false (PVar "w4") (EApp (EApp (EApp (EVar "foldWalk") (EApp (EApp (EApp (EApp (EVar "walkObl") (EVar "name")) (EVar "ids")) (EVar "effIds")) (EVar "authIds"))) (EVar "ctx")) (EVar "w3"))) (DoExpr (EMatch (EVar "w4") (arm (PCon "Walk" PWild (PVar "found")) () (EApp (EVar "nub") (EApp (EVar "reverse") (EVar "found"))))))))
-(DTypeSig true "atGraphEnd" (TyFun (TyApp (TyCon "List") (TyCon "LiveCell")) (TyApp (TyCon "List") (TyCon "LiveCell"))))
+(DTypeSig false "atGraphEnd" (TyFun (TyApp (TyCon "List") (TyCon "LiveCell")) (TyApp (TyCon "List") (TyCon "LiveCell"))))
 (DFunDef false "atGraphEnd" () (EApp (EMethodRef "map") (EVar "toWeak")))
 (DTypeSig false "toWeak" (TyFun (TyCon "LiveCell") (TyCon "LiveCell")))
 (DFunDef false "toWeak" ((PCon "FreeMeta" (PVar "n") (PVar "k") (PVar "i"))) (EApp (EApp (EApp (EVar "WeakVar") (EVar "n")) (EVar "k")) (EVar "i")))

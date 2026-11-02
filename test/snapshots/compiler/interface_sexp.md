@@ -1,5 +1,5 @@
 # META
-source_lines=1711
+source_lines=1654
 stages=DESUGAR,MARK
 # SOURCE
 -- The scheme-level interface codec: every type a published scheme is built
@@ -120,7 +120,7 @@ import types.interface_frame.{
 import types.prelude_interface.{PreludeInterface(..), InterfaceKey(..)}
 import types.publish.{
   PubScheme(..), ZState(..), LiveCell(..), emptyZonk, zonkMono, zonkRow,
-  zonkAuthority, zonkVecObl, zonkScheme, freezePub, liveCells
+  zonkAuthority, zonkVecObl, freezePub, liveCells
 }
 import types.registry.{
   SpellingPop, spRows, spFloor, spCollided, spFromProjections
@@ -259,14 +259,6 @@ pubNode p =
   tagged "pub" [schemeNode p.psScheme, SList (map oblNode p.psContext)]
 
 export
-monoSExp : Mono -> SExp
-monoSExp m = monoNode (snd (zonkMono emptyZonk m))
-
-export
-schemeSExp : Scheme -> SExp
-schemeSExp s = schemeNode (snd (zonkScheme emptyZonk s))
-
-export
 effRowSExp : EffRow -> SExp
 effRowSExp row = rowNode (snd (zonkRow emptyZonk row))
 
@@ -282,10 +274,6 @@ effLabelSExp = labelNode
 export
 authoritySExp : Authority -> SExp
 authoritySExp auth = authNode (snd (zonkAuthority emptyZonk auth))
-
-export
-paramSExp : Param -> SExp
-paramSExp = paramNode
 
 export
 authResidualSExp : AuthResidual -> SExp
@@ -305,10 +293,6 @@ pubSchemeSExp p = pubNode (freezePub p.psScheme p.psContext)
 export
 ifaceRefSExp : IfaceRef -> SExp
 ifaceRefSExp = ifaceNode
-
-export
-tyConOriginSExp : TyConOrigin -> SExp
-tyConOriginSExp = originNode
 
 -- A weak variable (`FreeMeta`) is a legal frozen inhabitant; a link or an open
 -- summary in a published row is a bug in whatever froze it.
@@ -342,18 +326,15 @@ optionSExp : (a -> SExp) -> Option a -> SExp
 optionSExp _ None = SAtom "none"
 optionSExp f (Some x) = tagged "some" [f x]
 
-export
 unitSExp : Unit -> SExp
 unitSExp _ = SList []
 
 mapNode : (k -> SExp) -> (v -> SExp) -> Map k v -> SExp
 mapNode key value m = listSExp (pairSExp key value) (IdMap.entries m)
 
-export
 ordMapSExp : (a -> SExp) -> OrdMap a -> SExp
 ordMapSExp value m = mapNode SAtom value m
 
-export
 intMapSExp : (a -> SExp) -> Map Int a -> SExp
 intMapSExp value m = mapNode intNode value m
 
@@ -497,7 +478,6 @@ zonkSlotArgs s = match s.psArgs
   PSArgsKnown args =>
     { s | psArgs = PSArgsKnown (snd (mapAccumL zonkMono emptyZonk args)) }
 
-export
 surfaceTySExp : Ty -> SExp
 surfaceTySExp = surfaceNode
 
@@ -536,7 +516,6 @@ export
 cDeclaredPrefixSExp : CDeclaredPrefix -> SExp
 cDeclaredPrefixSExp = prefixNode
 
-export
 builtinClassesSExp : BuiltinClasses -> SExp
 builtinClassesSExp = classesNode
 
@@ -864,18 +843,6 @@ rooted : (ZState -> String -> SExp -> Dec a) ->
 rooted dec root node = map snd (dec emptyZonk root node)
 
 export
-monoOfSExp : SExp -> Result SexpError Mono
-monoOfSExp = rooted decMono "mono"
-
-export
-schemeOfSExp : SExp -> Result SexpError Scheme
-schemeOfSExp = rooted decScheme "scheme"
-
-export
-effRowOfSExp : SExp -> Result SexpError EffRow
-effRowOfSExp = rooted decRow "row"
-
-export
 atomOfSExp : SExp -> Result SexpError Atom
 atomOfSExp = rooted decAtom "atom"
 
@@ -886,10 +853,6 @@ effLabelOfSExp = decLabel "label"
 export
 authorityOfSExp : SExp -> Result SexpError Authority
 authorityOfSExp = rooted decAuth "authority"
-
-export
-paramOfSExp : SExp -> Result SexpError Param
-paramOfSExp = decParam "param"
 
 export
 authResidualOfSExp : SExp -> Result SexpError AuthResidual
@@ -906,10 +869,6 @@ pubSchemeOfSExp = rooted decPub "pub"
 export
 ifaceRefOfSExp : SExp -> Result SexpError IfaceRef
 ifaceRefOfSExp = decIface "iface"
-
-export
-tyConOriginOfSExp : SExp -> Result SexpError TyConOrigin
-tyConOriginOfSExp = decOrigin "origin"
 
 export
 bindingOfSExp : SExp -> Result SexpError (String, PubScheme)
@@ -957,7 +916,6 @@ optionOfSExp item path (SList [SAtom "some", x]) =
   map Some (item (at path "some" 1) x)
 optionOfSExp _ path node = misfit path [("none", 0), ("some", 1)] node
 
-export
 unitOfSExp : Reader Unit
 unitOfSExp _ (SList []) = Ok ()
 unitOfSExp path node = refuse path node "expected ()"
@@ -980,11 +938,9 @@ decMap key value path node = do
   pairs <- decList (pairOfSExp key value) path node
   keyed path node pairs
 
-export
 ordMapOfSExp : Reader a -> Reader (OrdMap a)
 ordMapOfSExp value path node = decMap expectAtom value path node
 
-export
 intMapOfSExp : Reader a -> Reader (Map Int a)
 intMapOfSExp value path node = decMap atomInt value path node
 
@@ -1244,7 +1200,6 @@ spellingPopOfSExp payload path (SList [SAtom "pop", rows, floor, collided]) = do
   Ok (spFromProjections rows1 floor1 collided1)
 spellingPopOfSExp _ path node = misfit path [("pop", 3)] node
 
-export
 surfaceTyOfSExp : SExp -> Result SexpError Ty
 surfaceTyOfSExp = decSurface "ty"
 
@@ -1276,10 +1231,6 @@ export
 cDeclaredPrefixOfSExp : SExp -> Result SexpError CDeclaredPrefix
 cDeclaredPrefixOfSExp = decPrefix "prefix"
 
-export
-builtinClassesOfSExp : SExp -> Result SexpError BuiltinClasses
-builtinClassesOfSExp = decClasses "classes"
-
 -- ── the whole file ──────────────────────────────────────────────────────────
 
 -- [isJoins] are the IO joins the section's interface is valid for.
@@ -1296,14 +1247,6 @@ public export data PreludeInterfaceFile = PreludeInterfaceFile {
 export
 interfaceFormatVersion : Int
 interfaceFormatVersion = 3
-
-export
-sectionsOfCache : List (List (List Atom), PreludeInterface) ->
-  List InterfaceSection
-sectionsOfCache = map (s => InterfaceSection {
-  isJoins = fst s,
-  isInterface = snd s,
-})
 
 export
 cacheOfSections : List InterfaceSection ->
@@ -1723,7 +1666,7 @@ decodeParsed _ _ top =
 (DUse false (UseGroup ("support" "sexp_value") ((mem "SExp" true) (mem "SexpError" true) (mem "renderSExp" false) (mem "parseSExp" false) (mem "expectAtom" false) (mem "atomInt" false) (mem "atomBool" false))))
 (DUse false (UseGroup ("types" "interface_frame") ((mem "InterfaceFault" true) (mem "KeyGate" false) (mem "bodyOf" false) (mem "declaredVersion" false) (mem "framedFile" false) (mem "gated" false) (mem "headerOf" false) (mem "keyFields" false) (mem "noGate" false) (mem "readKeyFields" false) (mem "sha256Hex" false))))
 (DUse false (UseGroup ("types" "prelude_interface") ((mem "PreludeInterface" true) (mem "InterfaceKey" true))))
-(DUse false (UseGroup ("types" "publish") ((mem "PubScheme" true) (mem "ZState" true) (mem "LiveCell" true) (mem "emptyZonk" false) (mem "zonkMono" false) (mem "zonkRow" false) (mem "zonkAuthority" false) (mem "zonkVecObl" false) (mem "zonkScheme" false) (mem "freezePub" false) (mem "liveCells" false))))
+(DUse false (UseGroup ("types" "publish") ((mem "PubScheme" true) (mem "ZState" true) (mem "LiveCell" true) (mem "emptyZonk" false) (mem "zonkMono" false) (mem "zonkRow" false) (mem "zonkAuthority" false) (mem "zonkVecObl" false) (mem "freezePub" false) (mem "liveCells" false))))
 (DUse false (UseGroup ("types" "registry") ((mem "SpellingPop" false) (mem "spRows" false) (mem "spFloor" false) (mem "spCollided" false) (mem "spFromProjections" false))))
 (DUse false (UseGroup ("types" "repr") ((mem "Mono" true) (mem "Tyvar" true) (mem "Scheme" true) (mem "AuthResidual" true) (mem "VecObl" true) (mem "IfaceRef" true))))
 (DUse false (UseGroup ("types" "tc_types") ((mem "RecordInfo" true) (mem "PredicateSlot" true) (mem "PredicateSlotArgs" true) (mem "MethodPredicateSlot" true) (mem "CDeclaredPrefix" true) (mem "BuiltinClasses" true) (mem "PublishedInvocationView" true) (mem "Kind" true) (mem "Polarity" true))))
@@ -1789,10 +1732,6 @@ decodeParsed _ _ top =
 (DFunDef false "schemeNode" ((PCon "Forall" (PVar "ids") (PVar "effIds") (PVar "authIds") (PVar "residuals") (PVar "row") (PVar "t"))) (EApp (EApp (EVar "tagged") (ELit (LString "forall"))) (EListLit (EApp (EVar "idsNode") (EVar "ids")) (EApp (EVar "idsNode") (EVar "effIds")) (EApp (EVar "idsNode") (EVar "authIds")) (EApp (EVar "SList") (EApp (EApp (EVar "map") (EVar "residualNode")) (EVar "residuals"))) (EApp (EVar "rowNode") (EVar "row")) (EApp (EVar "monoNode") (EVar "t")))))
 (DTypeSig false "pubNode" (TyFun (TyCon "PubScheme") (TyCon "SExp")))
 (DFunDef false "pubNode" ((PVar "p")) (EApp (EApp (EVar "tagged") (ELit (LString "pub"))) (EListLit (EApp (EVar "schemeNode") (EFieldAccess (EVar "p") "psScheme")) (EApp (EVar "SList") (EApp (EApp (EVar "map") (EVar "oblNode")) (EFieldAccess (EVar "p") "psContext"))))))
-(DTypeSig true "monoSExp" (TyFun (TyCon "Mono") (TyCon "SExp")))
-(DFunDef false "monoSExp" ((PVar "m")) (EApp (EVar "monoNode") (EApp (EVar "snd") (EApp (EApp (EVar "zonkMono") (EVar "emptyZonk")) (EVar "m")))))
-(DTypeSig true "schemeSExp" (TyFun (TyCon "Scheme") (TyCon "SExp")))
-(DFunDef false "schemeSExp" ((PVar "s")) (EApp (EVar "schemeNode") (EApp (EVar "snd") (EApp (EApp (EVar "zonkScheme") (EVar "emptyZonk")) (EVar "s")))))
 (DTypeSig true "effRowSExp" (TyFun (TyCon "EffRow") (TyCon "SExp")))
 (DFunDef false "effRowSExp" ((PVar "row")) (EApp (EVar "rowNode") (EApp (EVar "snd") (EApp (EApp (EVar "zonkRow") (EVar "emptyZonk")) (EVar "row")))))
 (DTypeSig true "atomSExp" (TyFun (TyCon "Atom") (TyCon "SExp")))
@@ -1801,8 +1740,6 @@ decodeParsed _ _ top =
 (DFunDef false "effLabelSExp" () (EVar "labelNode"))
 (DTypeSig true "authoritySExp" (TyFun (TyCon "Authority") (TyCon "SExp")))
 (DFunDef false "authoritySExp" ((PVar "auth")) (EApp (EVar "authNode") (EApp (EVar "snd") (EApp (EApp (EVar "zonkAuthority") (EVar "emptyZonk")) (EVar "auth")))))
-(DTypeSig true "paramSExp" (TyFun (TyCon "Param") (TyCon "SExp")))
-(DFunDef false "paramSExp" () (EVar "paramNode"))
 (DTypeSig true "authResidualSExp" (TyFun (TyCon "AuthResidual") (TyCon "SExp")))
 (DFunDef false "authResidualSExp" ((PVar "r")) (EBlock (DoLet false false (PTuple (PVar "z1") (PVar "lo")) (EApp (EApp (EVar "zonkAuthority") (EVar "emptyZonk")) (EFieldAccess (EVar "r") "arLower"))) (DoLet false false (PTuple PWild (PVar "hi")) (EApp (EApp (EVar "zonkAuthority") (EVar "z1")) (EFieldAccess (EVar "r") "arUpper"))) (DoExpr (EApp (EVar "residualNode") (ERecordUpdate (EVar "r") ((fa "arLower" (EVar "lo")) (fa "arUpper" (EVar "hi"))))))))
 (DTypeSig true "vecOblSExp" (TyFun (TyCon "VecObl") (TyCon "SExp")))
@@ -1811,8 +1748,6 @@ decodeParsed _ _ top =
 (DFunDef false "pubSchemeSExp" ((PVar "p")) (EApp (EVar "pubNode") (EApp (EApp (EVar "freezePub") (EFieldAccess (EVar "p") "psScheme")) (EFieldAccess (EVar "p") "psContext"))))
 (DTypeSig true "ifaceRefSExp" (TyFun (TyCon "IfaceRef") (TyCon "SExp")))
 (DFunDef false "ifaceRefSExp" () (EVar "ifaceNode"))
-(DTypeSig true "tyConOriginSExp" (TyFun (TyCon "TyConOrigin") (TyCon "SExp")))
-(DFunDef false "tyConOriginSExp" () (EVar "originNode"))
 (DTypeSig false "notFrozen" (TyFun (TyCon "LiveCell") (TyCon "Bool")))
 (DFunDef false "notFrozen" ((PCon "LinkCell" PWild PWild PWild)) (EVar "True"))
 (DFunDef false "notFrozen" ((PCon "OpenSummary" PWild PWild)) (EVar "True"))
@@ -1828,13 +1763,13 @@ decodeParsed _ _ top =
 (DTypeSig true "optionSExp" (TyFun (TyFun (TyVar "a") (TyCon "SExp")) (TyFun (TyApp (TyCon "Option") (TyVar "a")) (TyCon "SExp"))))
 (DFunDef false "optionSExp" (PWild (PCon "None")) (EApp (EVar "SAtom") (ELit (LString "none"))))
 (DFunDef false "optionSExp" ((PVar "f") (PCon "Some" (PVar "x"))) (EApp (EApp (EVar "tagged") (ELit (LString "some"))) (EListLit (EApp (EVar "f") (EVar "x")))))
-(DTypeSig true "unitSExp" (TyFun (TyCon "Unit") (TyCon "SExp")))
+(DTypeSig false "unitSExp" (TyFun (TyCon "Unit") (TyCon "SExp")))
 (DFunDef false "unitSExp" (PWild) (EApp (EVar "SList") (EListLit)))
 (DTypeSig false "mapNode" (TyFun (TyFun (TyVar "k") (TyCon "SExp")) (TyFun (TyFun (TyVar "v") (TyCon "SExp")) (TyFun (TyApp (TyApp (TyCon "Map") (TyVar "k")) (TyVar "v")) (TyCon "SExp")))))
 (DFunDef false "mapNode" ((PVar "key") (PVar "value") (PVar "m")) (EApp (EApp (EVar "listSExp") (EApp (EApp (EVar "pairSExp") (EVar "key")) (EVar "value"))) (EApp (EVar "IdMap.entries") (EVar "m"))))
-(DTypeSig true "ordMapSExp" (TyFun (TyFun (TyVar "a") (TyCon "SExp")) (TyFun (TyApp (TyCon "OrdMap") (TyVar "a")) (TyCon "SExp"))))
+(DTypeSig false "ordMapSExp" (TyFun (TyFun (TyVar "a") (TyCon "SExp")) (TyFun (TyApp (TyCon "OrdMap") (TyVar "a")) (TyCon "SExp"))))
 (DFunDef false "ordMapSExp" ((PVar "value") (PVar "m")) (EApp (EApp (EApp (EVar "mapNode") (EVar "SAtom")) (EVar "value")) (EVar "m")))
-(DTypeSig true "intMapSExp" (TyFun (TyFun (TyVar "a") (TyCon "SExp")) (TyFun (TyApp (TyApp (TyCon "Map") (TyCon "Int")) (TyVar "a")) (TyCon "SExp"))))
+(DTypeSig false "intMapSExp" (TyFun (TyFun (TyVar "a") (TyCon "SExp")) (TyFun (TyApp (TyApp (TyCon "Map") (TyCon "Int")) (TyVar "a")) (TyCon "SExp"))))
 (DFunDef false "intMapSExp" ((PVar "value") (PVar "m")) (EApp (EApp (EApp (EVar "mapNode") (EVar "intNode")) (EVar "value")) (EVar "m")))
 (DTypeSig false "surfaceNode" (TyFun (TyCon "Ty") (TyCon "SExp")))
 (DFunDef false "surfaceNode" ((PRec "TyCon" ((rf "tyConName" (PVar "name")) (rf "tyConOrigin" (PVar "origin"))) false)) (EApp (EApp (EVar "tagged") (ELit (LString "scon"))) (EListLit (EApp (EVar "SAtom") (EVar "name")) (EApp (EVar "originNode") (EVar "origin")))))
@@ -1901,7 +1836,7 @@ decodeParsed _ _ top =
 (DFunDef false "zonkNamed" ((PVar "z") (PTuple (PVar "name") (PVar "m"))) (EBlock (DoLet false false (PTuple (PVar "z1") (PVar "m1")) (EApp (EApp (EVar "zonkMono") (EVar "z")) (EVar "m"))) (DoExpr (ETuple (EVar "z1") (ETuple (EVar "name") (EVar "m1"))))))
 (DTypeSig false "zonkSlotArgs" (TyFun (TyCon "PredicateSlot") (TyCon "PredicateSlot")))
 (DFunDef false "zonkSlotArgs" ((PVar "s")) (EMatch (EFieldAccess (EVar "s") "psArgs") (arm (PCon "PSArgsUnknown") () (EVar "s")) (arm (PCon "PSArgsKnown" (PVar "args")) () (ERecordUpdate (EVar "s") ((fa "psArgs" (EApp (EVar "PSArgsKnown") (EApp (EVar "snd") (EApp (EApp (EApp (EVar "mapAccumL") (EVar "zonkMono")) (EVar "emptyZonk")) (EVar "args"))))))))))
-(DTypeSig true "surfaceTySExp" (TyFun (TyCon "Ty") (TyCon "SExp")))
+(DTypeSig false "surfaceTySExp" (TyFun (TyCon "Ty") (TyCon "SExp")))
 (DFunDef false "surfaceTySExp" () (EVar "surfaceNode"))
 (DTypeSig true "variantSExp" (TyFun (TyCon "Variant") (TyCon "SExp")))
 (DFunDef false "variantSExp" () (EVar "variantNode"))
@@ -1917,7 +1852,7 @@ decodeParsed _ _ top =
 (DFunDef false "methodPredicateSlotSExp" ((PVar "m")) (EApp (EVar "methodSlotNode") (ERecordUpdate (EVar "m") ((fa "mpsPredicate" (EApp (EVar "zonkSlotArgs") (EFieldAccess (EVar "m") "mpsPredicate")))))))
 (DTypeSig true "cDeclaredPrefixSExp" (TyFun (TyCon "CDeclaredPrefix") (TyCon "SExp")))
 (DFunDef false "cDeclaredPrefixSExp" () (EVar "prefixNode"))
-(DTypeSig true "builtinClassesSExp" (TyFun (TyCon "BuiltinClasses") (TyCon "SExp")))
+(DTypeSig false "builtinClassesSExp" (TyFun (TyCon "BuiltinClasses") (TyCon "SExp")))
 (DFunDef false "builtinClassesSExp" () (EVar "classesNode"))
 (DTypeSig true "spellingPopSExp" (TyFun (TyFun (TyVar "a") (TyCon "SExp")) (TyFun (TyApp (TyCon "SpellingPop") (TyVar "a")) (TyCon "SExp"))))
 (DFunDef false "spellingPopSExp" ((PVar "payload") (PVar "pop")) (EApp (EApp (EVar "tagged") (ELit (LString "pop"))) (EListLit (EApp (EApp (EVar "ordMapSExp") (EApp (EVar "listSExp") (EApp (EVar "popRowNode") (EVar "payload")))) (EApp (EVar "spRows") (EVar "pop"))) (EApp (EApp (EVar "ordMapSExp") (EVar "payload")) (EApp (EVar "spFloor") (EVar "pop"))) (EApp (EApp (EVar "listSExp") (EVar "SAtom")) (EApp (EVar "spCollided") (EVar "pop"))))))
@@ -2027,20 +1962,12 @@ decodeParsed _ _ top =
 (DFunDef false "decPub" (PWild (PVar "path") (PVar "node")) (EApp (EApp (EApp (EVar "misfit") (EVar "path")) (EListLit (ETuple (ELit (LString "pub")) (ELit (LInt 2))))) (EVar "node")))
 (DTypeSig false "rooted" (TyFun (TyFun (TyCon "ZState") (TyFun (TyCon "String") (TyFun (TyCon "SExp") (TyApp (TyCon "Dec") (TyVar "a"))))) (TyFun (TyCon "String") (TyFun (TyCon "SExp") (TyApp (TyApp (TyCon "Result") (TyCon "SexpError")) (TyVar "a"))))))
 (DFunDef false "rooted" ((PVar "dec") (PVar "root") (PVar "node")) (EApp (EApp (EVar "map") (EVar "snd")) (EApp (EApp (EApp (EVar "dec") (EVar "emptyZonk")) (EVar "root")) (EVar "node"))))
-(DTypeSig true "monoOfSExp" (TyFun (TyCon "SExp") (TyApp (TyApp (TyCon "Result") (TyCon "SexpError")) (TyCon "Mono"))))
-(DFunDef false "monoOfSExp" () (EApp (EApp (EVar "rooted") (EVar "decMono")) (ELit (LString "mono"))))
-(DTypeSig true "schemeOfSExp" (TyFun (TyCon "SExp") (TyApp (TyApp (TyCon "Result") (TyCon "SexpError")) (TyCon "Scheme"))))
-(DFunDef false "schemeOfSExp" () (EApp (EApp (EVar "rooted") (EVar "decScheme")) (ELit (LString "scheme"))))
-(DTypeSig true "effRowOfSExp" (TyFun (TyCon "SExp") (TyApp (TyApp (TyCon "Result") (TyCon "SexpError")) (TyCon "EffRow"))))
-(DFunDef false "effRowOfSExp" () (EApp (EApp (EVar "rooted") (EVar "decRow")) (ELit (LString "row"))))
 (DTypeSig true "atomOfSExp" (TyFun (TyCon "SExp") (TyApp (TyApp (TyCon "Result") (TyCon "SexpError")) (TyCon "Atom"))))
 (DFunDef false "atomOfSExp" () (EApp (EApp (EVar "rooted") (EVar "decAtom")) (ELit (LString "atom"))))
 (DTypeSig true "effLabelOfSExp" (TyFun (TyCon "SExp") (TyApp (TyApp (TyCon "Result") (TyCon "SexpError")) (TyCon "EffLabel"))))
 (DFunDef false "effLabelOfSExp" () (EApp (EVar "decLabel") (ELit (LString "label"))))
 (DTypeSig true "authorityOfSExp" (TyFun (TyCon "SExp") (TyApp (TyApp (TyCon "Result") (TyCon "SexpError")) (TyCon "Authority"))))
 (DFunDef false "authorityOfSExp" () (EApp (EApp (EVar "rooted") (EVar "decAuth")) (ELit (LString "authority"))))
-(DTypeSig true "paramOfSExp" (TyFun (TyCon "SExp") (TyApp (TyApp (TyCon "Result") (TyCon "SexpError")) (TyCon "Param"))))
-(DFunDef false "paramOfSExp" () (EApp (EVar "decParam") (ELit (LString "param"))))
 (DTypeSig true "authResidualOfSExp" (TyFun (TyCon "SExp") (TyApp (TyApp (TyCon "Result") (TyCon "SexpError")) (TyCon "AuthResidual"))))
 (DFunDef false "authResidualOfSExp" () (EApp (EApp (EVar "rooted") (EVar "decResidual")) (ELit (LString "residual"))))
 (DTypeSig true "vecOblOfSExp" (TyFun (TyCon "SExp") (TyApp (TyApp (TyCon "Result") (TyCon "SexpError")) (TyCon "VecObl"))))
@@ -2049,8 +1976,6 @@ decodeParsed _ _ top =
 (DFunDef false "pubSchemeOfSExp" () (EApp (EApp (EVar "rooted") (EVar "decPub")) (ELit (LString "pub"))))
 (DTypeSig true "ifaceRefOfSExp" (TyFun (TyCon "SExp") (TyApp (TyApp (TyCon "Result") (TyCon "SexpError")) (TyCon "IfaceRef"))))
 (DFunDef false "ifaceRefOfSExp" () (EApp (EVar "decIface") (ELit (LString "iface"))))
-(DTypeSig true "tyConOriginOfSExp" (TyFun (TyCon "SExp") (TyApp (TyApp (TyCon "Result") (TyCon "SexpError")) (TyCon "TyConOrigin"))))
-(DFunDef false "tyConOriginOfSExp" () (EApp (EVar "decOrigin") (ELit (LString "origin"))))
 (DTypeSig true "bindingOfSExp" (TyFun (TyCon "SExp") (TyApp (TyApp (TyCon "Result") (TyCon "SexpError")) (TyTuple (TyCon "String") (TyCon "PubScheme")))))
 (DFunDef false "bindingOfSExp" ((PCon "SList" (PList (PCon "SAtom" (PLit (LString "binding"))) (PVar "n") (PVar "p")))) (EApp (EApp (EVar "andThen") (EApp (EApp (EVar "expectAtom") (EApp (EApp (EApp (EVar "at") (ELit (LString "binding"))) (ELit (LString "binding"))) (ELit (LInt 1)))) (EVar "n"))) (ELam ((PVar "name")) (EApp (EApp (EVar "andThen") (EApp (EApp (EApp (EVar "decPub") (EVar "emptyZonk")) (EApp (EApp (EApp (EVar "at") (ELit (LString "binding"))) (ELit (LString "binding"))) (ELit (LInt 2)))) (EVar "p"))) (ELam ((PVar "__do_x")) (EMatch (EVar "__do_x") (arm (PTuple PWild (PVar "pub")) () (EApp (EVar "Ok") (ETuple (EVar "name") (EVar "pub"))))))))))
 (DFunDef false "bindingOfSExp" ((PVar "node")) (EApp (EApp (EApp (EVar "misfit") (ELit (LString "binding"))) (EListLit (ETuple (ELit (LString "binding")) (ELit (LInt 2))))) (EVar "node")))
@@ -2069,7 +1994,7 @@ decodeParsed _ _ top =
 (DFunDef false "optionOfSExp" (PWild PWild (PCon "SAtom" (PLit (LString "none")))) (EApp (EVar "Ok") (EVar "None")))
 (DFunDef false "optionOfSExp" ((PVar "item") (PVar "path") (PCon "SList" (PList (PCon "SAtom" (PLit (LString "some"))) (PVar "x")))) (EApp (EApp (EVar "map") (EVar "Some")) (EApp (EApp (EVar "item") (EApp (EApp (EApp (EVar "at") (EVar "path")) (ELit (LString "some"))) (ELit (LInt 1)))) (EVar "x"))))
 (DFunDef false "optionOfSExp" (PWild (PVar "path") (PVar "node")) (EApp (EApp (EApp (EVar "misfit") (EVar "path")) (EListLit (ETuple (ELit (LString "none")) (ELit (LInt 0))) (ETuple (ELit (LString "some")) (ELit (LInt 1))))) (EVar "node")))
-(DTypeSig true "unitOfSExp" (TyApp (TyCon "Reader") (TyCon "Unit")))
+(DTypeSig false "unitOfSExp" (TyApp (TyCon "Reader") (TyCon "Unit")))
 (DFunDef false "unitOfSExp" (PWild (PCon "SList" (PList))) (EApp (EVar "Ok") (ELit LUnit)))
 (DFunDef false "unitOfSExp" ((PVar "path") (PVar "node")) (EApp (EApp (EApp (EVar "refuse") (EVar "path")) (EVar "node")) (ELit (LString "expected ()"))))
 (DTypeSig false "ascending" (TyConstrained ((cstr "Ord" (TyVar "a"))) (TyFun (TyApp (TyCon "List") (TyVar "a")) (TyCon "Bool"))))
@@ -2079,9 +2004,9 @@ decodeParsed _ _ top =
 (DFunDef false "keyed" ((PVar "path") (PVar "node") (PVar "pairs")) (EIf (EApp (EVar "ascending") (EApp (EApp (EVar "map") (EVar "fst")) (EVar "pairs"))) (EApp (EVar "Ok") (EApp (EVar "IdMap.fromList") (EVar "pairs"))) (EApp (EApp (EApp (EVar "refuse") (EVar "path")) (EVar "node")) (ELit (LString "keys must ascend strictly")))))
 (DTypeSig false "decMap" (TyConstrained ((cstr "Ord" (TyVar "k"))) (TyFun (TyApp (TyCon "Reader") (TyVar "k")) (TyFun (TyApp (TyCon "Reader") (TyVar "v")) (TyApp (TyCon "Reader") (TyApp (TyApp (TyCon "Map") (TyVar "k")) (TyVar "v")))))))
 (DFunDef false "decMap" ((PVar "key") (PVar "value") (PVar "path") (PVar "node")) (EApp (EApp (EVar "andThen") (EApp (EApp (EApp (EVar "decList") (EApp (EApp (EVar "pairOfSExp") (EVar "key")) (EVar "value"))) (EVar "path")) (EVar "node"))) (ELam ((PVar "pairs")) (EApp (EApp (EApp (EVar "keyed") (EVar "path")) (EVar "node")) (EVar "pairs")))))
-(DTypeSig true "ordMapOfSExp" (TyFun (TyApp (TyCon "Reader") (TyVar "a")) (TyApp (TyCon "Reader") (TyApp (TyCon "OrdMap") (TyVar "a")))))
+(DTypeSig false "ordMapOfSExp" (TyFun (TyApp (TyCon "Reader") (TyVar "a")) (TyApp (TyCon "Reader") (TyApp (TyCon "OrdMap") (TyVar "a")))))
 (DFunDef false "ordMapOfSExp" ((PVar "value") (PVar "path") (PVar "node")) (EApp (EApp (EApp (EApp (EVar "decMap") (EVar "expectAtom")) (EVar "value")) (EVar "path")) (EVar "node")))
-(DTypeSig true "intMapOfSExp" (TyFun (TyApp (TyCon "Reader") (TyVar "a")) (TyApp (TyCon "Reader") (TyApp (TyApp (TyCon "Map") (TyCon "Int")) (TyVar "a")))))
+(DTypeSig false "intMapOfSExp" (TyFun (TyApp (TyCon "Reader") (TyVar "a")) (TyApp (TyCon "Reader") (TyApp (TyApp (TyCon "Map") (TyCon "Int")) (TyVar "a")))))
 (DFunDef false "intMapOfSExp" ((PVar "value") (PVar "path") (PVar "node")) (EApp (EApp (EApp (EApp (EVar "decMap") (EVar "atomInt")) (EVar "value")) (EVar "path")) (EVar "node")))
 (DTypeSig false "surfaceHeads" (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "Int"))))
 (DFunDef false "surfaceHeads" () (EListLit (ETuple (ELit (LString "scon")) (ELit (LInt 2))) (ETuple (ELit (LString "svar")) (ELit (LInt 1))) (ETuple (ELit (LString "sapp")) (ELit (LInt 2))) (ETuple (ELit (LString "sfun")) (ELit (LInt 2))) (ETuple (ELit (LString "stuple")) (ELit (LInt 1))) (ETuple (ELit (LString "seffect")) (ELit (LInt 3))) (ETuple (ELit (LString "sconstrained")) (ELit (LInt 2))) (ETuple (ELit (LString "snamed")) (ELit (LInt 3))) (ETuple (ELit (LString "squal")) (ELit (LInt 2))) (ETuple (ELit (LString "srow")) (ELit (LInt 2))) (ETuple (ELit (LString "sauth")) (ELit (LInt 1)))))
@@ -2173,7 +2098,7 @@ decodeParsed _ _ top =
 (DTypeSig true "spellingPopOfSExp" (TyFun (TyApp (TyCon "Reader") (TyVar "a")) (TyApp (TyCon "Reader") (TyApp (TyCon "SpellingPop") (TyVar "a")))))
 (DFunDef false "spellingPopOfSExp" ((PVar "payload") (PVar "path") (PCon "SList" (PList (PCon "SAtom" (PLit (LString "pop"))) (PVar "rows") (PVar "floor") (PVar "collided")))) (EApp (EApp (EVar "andThen") (EApp (EApp (EApp (EVar "ordMapOfSExp") (EApp (EVar "decList") (EApp (EVar "decPopRow") (EVar "payload")))) (EApp (EApp (EApp (EVar "at") (EVar "path")) (ELit (LString "pop"))) (ELit (LInt 1)))) (EVar "rows"))) (ELam ((PVar "rows1")) (EApp (EApp (EVar "andThen") (EApp (EApp (EApp (EVar "ordMapOfSExp") (EVar "payload")) (EApp (EApp (EApp (EVar "at") (EVar "path")) (ELit (LString "pop"))) (ELit (LInt 2)))) (EVar "floor"))) (ELam ((PVar "floor1")) (EApp (EApp (EVar "andThen") (EApp (EApp (EApp (EVar "decList") (EVar "expectAtom")) (EApp (EApp (EApp (EVar "at") (EVar "path")) (ELit (LString "pop"))) (ELit (LInt 3)))) (EVar "collided"))) (ELam ((PVar "collided1")) (EApp (EVar "Ok") (EApp (EApp (EApp (EVar "spFromProjections") (EVar "rows1")) (EVar "floor1")) (EVar "collided1"))))))))))
 (DFunDef false "spellingPopOfSExp" (PWild (PVar "path") (PVar "node")) (EApp (EApp (EApp (EVar "misfit") (EVar "path")) (EListLit (ETuple (ELit (LString "pop")) (ELit (LInt 3))))) (EVar "node")))
-(DTypeSig true "surfaceTyOfSExp" (TyFun (TyCon "SExp") (TyApp (TyApp (TyCon "Result") (TyCon "SexpError")) (TyCon "Ty"))))
+(DTypeSig false "surfaceTyOfSExp" (TyFun (TyCon "SExp") (TyApp (TyApp (TyCon "Result") (TyCon "SexpError")) (TyCon "Ty"))))
 (DFunDef false "surfaceTyOfSExp" () (EApp (EVar "decSurface") (ELit (LString "ty"))))
 (DTypeSig true "variantOfSExp" (TyFun (TyCon "SExp") (TyApp (TyApp (TyCon "Result") (TyCon "SexpError")) (TyCon "Variant"))))
 (DFunDef false "variantOfSExp" () (EApp (EVar "decVariant") (ELit (LString "variant"))))
@@ -2189,14 +2114,10 @@ decodeParsed _ _ top =
 (DFunDef false "methodPredicateSlotOfSExp" () (EApp (EApp (EVar "rooted") (EVar "decMethodSlot")) (ELit (LString "mslot"))))
 (DTypeSig true "cDeclaredPrefixOfSExp" (TyFun (TyCon "SExp") (TyApp (TyApp (TyCon "Result") (TyCon "SexpError")) (TyCon "CDeclaredPrefix"))))
 (DFunDef false "cDeclaredPrefixOfSExp" () (EApp (EVar "decPrefix") (ELit (LString "prefix"))))
-(DTypeSig true "builtinClassesOfSExp" (TyFun (TyCon "SExp") (TyApp (TyApp (TyCon "Result") (TyCon "SexpError")) (TyCon "BuiltinClasses"))))
-(DFunDef false "builtinClassesOfSExp" () (EApp (EVar "decClasses") (ELit (LString "classes"))))
 (DData Public "InterfaceSection" () ((variant "InterfaceSection" (ConNamed (field "isJoins" (TyApp (TyCon "List") (TyApp (TyCon "List") (TyCon "Atom")))) (field "isInterface" (TyCon "PreludeInterface"))))) ())
 (DData Public "PreludeInterfaceFile" () ((variant "PreludeInterfaceFile" (ConNamed (field "ifKey" (TyCon "InterfaceKey")) (field "ifSections" (TyApp (TyCon "List") (TyCon "InterfaceSection")))))) ())
 (DTypeSig true "interfaceFormatVersion" (TyCon "Int"))
 (DFunDef false "interfaceFormatVersion" () (ELit (LInt 3)))
-(DTypeSig true "sectionsOfCache" (TyFun (TyApp (TyCon "List") (TyTuple (TyApp (TyCon "List") (TyApp (TyCon "List") (TyCon "Atom"))) (TyCon "PreludeInterface"))) (TyApp (TyCon "List") (TyCon "InterfaceSection"))))
-(DFunDef false "sectionsOfCache" () (EApp (EVar "map") (ELam ((PVar "s")) (ERecordCreate "InterfaceSection" ((fa "isJoins" (EApp (EVar "fst") (EVar "s"))) (fa "isInterface" (EApp (EVar "snd") (EVar "s"))))))))
 (DTypeSig true "cacheOfSections" (TyFun (TyApp (TyCon "List") (TyCon "InterfaceSection")) (TyApp (TyCon "List") (TyTuple (TyApp (TyCon "List") (TyApp (TyCon "List") (TyCon "Atom"))) (TyCon "PreludeInterface")))))
 (DFunDef false "cacheOfSections" () (EApp (EVar "map") (ELam ((PVar "s")) (ETuple (EFieldAccess (EVar "s") "isJoins") (EFieldAccess (EVar "s") "isInterface")))))
 (DTypeSig true "mergeSections" (TyFun (TyApp (TyCon "List") (TyTuple (TyApp (TyCon "List") (TyCon "Atom")) (TyCon "PreludeInterface"))) (TyApp (TyCon "List") (TyCon "InterfaceSection"))))
@@ -2300,7 +2221,7 @@ decodeParsed _ _ top =
 (DUse false (UseGroup ("support" "sexp_value") ((mem "SExp" true) (mem "SexpError" true) (mem "renderSExp" false) (mem "parseSExp" false) (mem "expectAtom" false) (mem "atomInt" false) (mem "atomBool" false))))
 (DUse false (UseGroup ("types" "interface_frame") ((mem "InterfaceFault" true) (mem "KeyGate" false) (mem "bodyOf" false) (mem "declaredVersion" false) (mem "framedFile" false) (mem "gated" false) (mem "headerOf" false) (mem "keyFields" false) (mem "noGate" false) (mem "readKeyFields" false) (mem "sha256Hex" false))))
 (DUse false (UseGroup ("types" "prelude_interface") ((mem "PreludeInterface" true) (mem "InterfaceKey" true))))
-(DUse false (UseGroup ("types" "publish") ((mem "PubScheme" true) (mem "ZState" true) (mem "LiveCell" true) (mem "emptyZonk" false) (mem "zonkMono" false) (mem "zonkRow" false) (mem "zonkAuthority" false) (mem "zonkVecObl" false) (mem "zonkScheme" false) (mem "freezePub" false) (mem "liveCells" false))))
+(DUse false (UseGroup ("types" "publish") ((mem "PubScheme" true) (mem "ZState" true) (mem "LiveCell" true) (mem "emptyZonk" false) (mem "zonkMono" false) (mem "zonkRow" false) (mem "zonkAuthority" false) (mem "zonkVecObl" false) (mem "freezePub" false) (mem "liveCells" false))))
 (DUse false (UseGroup ("types" "registry") ((mem "SpellingPop" false) (mem "spRows" false) (mem "spFloor" false) (mem "spCollided" false) (mem "spFromProjections" false))))
 (DUse false (UseGroup ("types" "repr") ((mem "Mono" true) (mem "Tyvar" true) (mem "Scheme" true) (mem "AuthResidual" true) (mem "VecObl" true) (mem "IfaceRef" true))))
 (DUse false (UseGroup ("types" "tc_types") ((mem "RecordInfo" true) (mem "PredicateSlot" true) (mem "PredicateSlotArgs" true) (mem "MethodPredicateSlot" true) (mem "CDeclaredPrefix" true) (mem "BuiltinClasses" true) (mem "PublishedInvocationView" true) (mem "Kind" true) (mem "Polarity" true))))
@@ -2366,10 +2287,6 @@ decodeParsed _ _ top =
 (DFunDef false "schemeNode" ((PCon "Forall" (PVar "ids") (PVar "effIds") (PVar "authIds") (PVar "residuals") (PVar "row") (PVar "t"))) (EApp (EApp (EVar "tagged") (ELit (LString "forall"))) (EListLit (EApp (EVar "idsNode") (EVar "ids")) (EApp (EVar "idsNode") (EVar "effIds")) (EApp (EVar "idsNode") (EVar "authIds")) (EApp (EVar "SList") (EApp (EApp (EMethodRef "map") (EVar "residualNode")) (EVar "residuals"))) (EApp (EVar "rowNode") (EVar "row")) (EApp (EVar "monoNode") (EVar "t")))))
 (DTypeSig false "pubNode" (TyFun (TyCon "PubScheme") (TyCon "SExp")))
 (DFunDef false "pubNode" ((PVar "p")) (EApp (EApp (EVar "tagged") (ELit (LString "pub"))) (EListLit (EApp (EVar "schemeNode") (EFieldAccess (EVar "p") "psScheme")) (EApp (EVar "SList") (EApp (EApp (EMethodRef "map") (EVar "oblNode")) (EFieldAccess (EVar "p") "psContext"))))))
-(DTypeSig true "monoSExp" (TyFun (TyCon "Mono") (TyCon "SExp")))
-(DFunDef false "monoSExp" ((PVar "m")) (EApp (EVar "monoNode") (EApp (EVar "snd") (EApp (EApp (EVar "zonkMono") (EVar "emptyZonk")) (EVar "m")))))
-(DTypeSig true "schemeSExp" (TyFun (TyCon "Scheme") (TyCon "SExp")))
-(DFunDef false "schemeSExp" ((PVar "s")) (EApp (EVar "schemeNode") (EApp (EVar "snd") (EApp (EApp (EVar "zonkScheme") (EVar "emptyZonk")) (EVar "s")))))
 (DTypeSig true "effRowSExp" (TyFun (TyCon "EffRow") (TyCon "SExp")))
 (DFunDef false "effRowSExp" ((PVar "row")) (EApp (EVar "rowNode") (EApp (EVar "snd") (EApp (EApp (EVar "zonkRow") (EVar "emptyZonk")) (EVar "row")))))
 (DTypeSig true "atomSExp" (TyFun (TyCon "Atom") (TyCon "SExp")))
@@ -2378,8 +2295,6 @@ decodeParsed _ _ top =
 (DFunDef false "effLabelSExp" () (EVar "labelNode"))
 (DTypeSig true "authoritySExp" (TyFun (TyCon "Authority") (TyCon "SExp")))
 (DFunDef false "authoritySExp" ((PVar "auth")) (EApp (EVar "authNode") (EApp (EVar "snd") (EApp (EApp (EVar "zonkAuthority") (EVar "emptyZonk")) (EVar "auth")))))
-(DTypeSig true "paramSExp" (TyFun (TyCon "Param") (TyCon "SExp")))
-(DFunDef false "paramSExp" () (EVar "paramNode"))
 (DTypeSig true "authResidualSExp" (TyFun (TyCon "AuthResidual") (TyCon "SExp")))
 (DFunDef false "authResidualSExp" ((PVar "r")) (EBlock (DoLet false false (PTuple (PVar "z1") (PVar "lo")) (EApp (EApp (EVar "zonkAuthority") (EVar "emptyZonk")) (EFieldAccess (EVar "r") "arLower"))) (DoLet false false (PTuple PWild (PVar "hi")) (EApp (EApp (EVar "zonkAuthority") (EVar "z1")) (EFieldAccess (EVar "r") "arUpper"))) (DoExpr (EApp (EVar "residualNode") (ERecordUpdate (EVar "r") ((fa "arLower" (EVar "lo")) (fa "arUpper" (EVar "hi"))))))))
 (DTypeSig true "vecOblSExp" (TyFun (TyCon "VecObl") (TyCon "SExp")))
@@ -2388,8 +2303,6 @@ decodeParsed _ _ top =
 (DFunDef false "pubSchemeSExp" ((PVar "p")) (EApp (EVar "pubNode") (EApp (EApp (EVar "freezePub") (EFieldAccess (EVar "p") "psScheme")) (EFieldAccess (EVar "p") "psContext"))))
 (DTypeSig true "ifaceRefSExp" (TyFun (TyCon "IfaceRef") (TyCon "SExp")))
 (DFunDef false "ifaceRefSExp" () (EVar "ifaceNode"))
-(DTypeSig true "tyConOriginSExp" (TyFun (TyCon "TyConOrigin") (TyCon "SExp")))
-(DFunDef false "tyConOriginSExp" () (EVar "originNode"))
 (DTypeSig false "notFrozen" (TyFun (TyCon "LiveCell") (TyCon "Bool")))
 (DFunDef false "notFrozen" ((PCon "LinkCell" PWild PWild PWild)) (EVar "True"))
 (DFunDef false "notFrozen" ((PCon "OpenSummary" PWild PWild)) (EVar "True"))
@@ -2405,13 +2318,13 @@ decodeParsed _ _ top =
 (DTypeSig true "optionSExp" (TyFun (TyFun (TyVar "a") (TyCon "SExp")) (TyFun (TyApp (TyCon "Option") (TyVar "a")) (TyCon "SExp"))))
 (DFunDef false "optionSExp" (PWild (PCon "None")) (EApp (EVar "SAtom") (ELit (LString "none"))))
 (DFunDef false "optionSExp" ((PVar "f") (PCon "Some" (PVar "x"))) (EApp (EApp (EVar "tagged") (ELit (LString "some"))) (EListLit (EApp (EVar "f") (EVar "x")))))
-(DTypeSig true "unitSExp" (TyFun (TyCon "Unit") (TyCon "SExp")))
+(DTypeSig false "unitSExp" (TyFun (TyCon "Unit") (TyCon "SExp")))
 (DFunDef false "unitSExp" (PWild) (EApp (EVar "SList") (EListLit)))
 (DTypeSig false "mapNode" (TyFun (TyFun (TyVar "k") (TyCon "SExp")) (TyFun (TyFun (TyVar "v") (TyCon "SExp")) (TyFun (TyApp (TyApp (TyCon "Map") (TyVar "k")) (TyVar "v")) (TyCon "SExp")))))
 (DFunDef false "mapNode" ((PVar "key") (PVar "value") (PVar "m")) (EApp (EApp (EVar "listSExp") (EApp (EApp (EVar "pairSExp") (EVar "key")) (EVar "value"))) (EApp (EVar "IdMap.entries") (EVar "m"))))
-(DTypeSig true "ordMapSExp" (TyFun (TyFun (TyVar "a") (TyCon "SExp")) (TyFun (TyApp (TyCon "OrdMap") (TyVar "a")) (TyCon "SExp"))))
+(DTypeSig false "ordMapSExp" (TyFun (TyFun (TyVar "a") (TyCon "SExp")) (TyFun (TyApp (TyCon "OrdMap") (TyVar "a")) (TyCon "SExp"))))
 (DFunDef false "ordMapSExp" ((PVar "value") (PVar "m")) (EApp (EApp (EApp (EVar "mapNode") (EVar "SAtom")) (EVar "value")) (EVar "m")))
-(DTypeSig true "intMapSExp" (TyFun (TyFun (TyVar "a") (TyCon "SExp")) (TyFun (TyApp (TyApp (TyCon "Map") (TyCon "Int")) (TyVar "a")) (TyCon "SExp"))))
+(DTypeSig false "intMapSExp" (TyFun (TyFun (TyVar "a") (TyCon "SExp")) (TyFun (TyApp (TyApp (TyCon "Map") (TyCon "Int")) (TyVar "a")) (TyCon "SExp"))))
 (DFunDef false "intMapSExp" ((PVar "value") (PVar "m")) (EApp (EApp (EApp (EVar "mapNode") (EVar "intNode")) (EVar "value")) (EVar "m")))
 (DTypeSig false "surfaceNode" (TyFun (TyCon "Ty") (TyCon "SExp")))
 (DFunDef false "surfaceNode" ((PRec "TyCon" ((rf "tyConName" (PVar "name")) (rf "tyConOrigin" (PVar "origin"))) false)) (EApp (EApp (EVar "tagged") (ELit (LString "scon"))) (EListLit (EApp (EVar "SAtom") (EVar "name")) (EApp (EVar "originNode") (EVar "origin")))))
@@ -2478,7 +2391,7 @@ decodeParsed _ _ top =
 (DFunDef false "zonkNamed" ((PVar "z") (PTuple (PVar "name") (PVar "m"))) (EBlock (DoLet false false (PTuple (PVar "z1") (PVar "m1")) (EApp (EApp (EVar "zonkMono") (EVar "z")) (EVar "m"))) (DoExpr (ETuple (EVar "z1") (ETuple (EVar "name") (EVar "m1"))))))
 (DTypeSig false "zonkSlotArgs" (TyFun (TyCon "PredicateSlot") (TyCon "PredicateSlot")))
 (DFunDef false "zonkSlotArgs" ((PVar "s")) (EMatch (EFieldAccess (EVar "s") "psArgs") (arm (PCon "PSArgsUnknown") () (EVar "s")) (arm (PCon "PSArgsKnown" (PVar "args")) () (ERecordUpdate (EVar "s") ((fa "psArgs" (EApp (EVar "PSArgsKnown") (EApp (EVar "snd") (EApp (EApp (EApp (EVar "mapAccumL") (EVar "zonkMono")) (EVar "emptyZonk")) (EVar "args"))))))))))
-(DTypeSig true "surfaceTySExp" (TyFun (TyCon "Ty") (TyCon "SExp")))
+(DTypeSig false "surfaceTySExp" (TyFun (TyCon "Ty") (TyCon "SExp")))
 (DFunDef false "surfaceTySExp" () (EVar "surfaceNode"))
 (DTypeSig true "variantSExp" (TyFun (TyCon "Variant") (TyCon "SExp")))
 (DFunDef false "variantSExp" () (EVar "variantNode"))
@@ -2494,7 +2407,7 @@ decodeParsed _ _ top =
 (DFunDef false "methodPredicateSlotSExp" ((PVar "m")) (EApp (EVar "methodSlotNode") (ERecordUpdate (EVar "m") ((fa "mpsPredicate" (EApp (EVar "zonkSlotArgs") (EFieldAccess (EVar "m") "mpsPredicate")))))))
 (DTypeSig true "cDeclaredPrefixSExp" (TyFun (TyCon "CDeclaredPrefix") (TyCon "SExp")))
 (DFunDef false "cDeclaredPrefixSExp" () (EVar "prefixNode"))
-(DTypeSig true "builtinClassesSExp" (TyFun (TyCon "BuiltinClasses") (TyCon "SExp")))
+(DTypeSig false "builtinClassesSExp" (TyFun (TyCon "BuiltinClasses") (TyCon "SExp")))
 (DFunDef false "builtinClassesSExp" () (EVar "classesNode"))
 (DTypeSig true "spellingPopSExp" (TyFun (TyFun (TyVar "a") (TyCon "SExp")) (TyFun (TyApp (TyCon "SpellingPop") (TyVar "a")) (TyCon "SExp"))))
 (DFunDef false "spellingPopSExp" ((PVar "payload") (PVar "pop")) (EApp (EApp (EVar "tagged") (ELit (LString "pop"))) (EListLit (EApp (EApp (EVar "ordMapSExp") (EApp (EVar "listSExp") (EApp (EVar "popRowNode") (EVar "payload")))) (EApp (EVar "spRows") (EVar "pop"))) (EApp (EApp (EVar "ordMapSExp") (EVar "payload")) (EApp (EVar "spFloor") (EVar "pop"))) (EApp (EApp (EVar "listSExp") (EVar "SAtom")) (EApp (EVar "spCollided") (EVar "pop"))))))
@@ -2604,20 +2517,12 @@ decodeParsed _ _ top =
 (DFunDef false "decPub" (PWild (PVar "path") (PVar "node")) (EApp (EApp (EApp (EVar "misfit") (EVar "path")) (EListLit (ETuple (ELit (LString "pub")) (ELit (LInt 2))))) (EVar "node")))
 (DTypeSig false "rooted" (TyFun (TyFun (TyCon "ZState") (TyFun (TyCon "String") (TyFun (TyCon "SExp") (TyApp (TyCon "Dec") (TyVar "a"))))) (TyFun (TyCon "String") (TyFun (TyCon "SExp") (TyApp (TyApp (TyCon "Result") (TyCon "SexpError")) (TyVar "a"))))))
 (DFunDef false "rooted" ((PVar "dec") (PVar "root") (PVar "node")) (EApp (EApp (EMethodRef "map") (EVar "snd")) (EApp (EApp (EApp (EVar "dec") (EVar "emptyZonk")) (EVar "root")) (EVar "node"))))
-(DTypeSig true "monoOfSExp" (TyFun (TyCon "SExp") (TyApp (TyApp (TyCon "Result") (TyCon "SexpError")) (TyCon "Mono"))))
-(DFunDef false "monoOfSExp" () (EApp (EApp (EVar "rooted") (EVar "decMono")) (ELit (LString "mono"))))
-(DTypeSig true "schemeOfSExp" (TyFun (TyCon "SExp") (TyApp (TyApp (TyCon "Result") (TyCon "SexpError")) (TyCon "Scheme"))))
-(DFunDef false "schemeOfSExp" () (EApp (EApp (EVar "rooted") (EVar "decScheme")) (ELit (LString "scheme"))))
-(DTypeSig true "effRowOfSExp" (TyFun (TyCon "SExp") (TyApp (TyApp (TyCon "Result") (TyCon "SexpError")) (TyCon "EffRow"))))
-(DFunDef false "effRowOfSExp" () (EApp (EApp (EVar "rooted") (EVar "decRow")) (ELit (LString "row"))))
 (DTypeSig true "atomOfSExp" (TyFun (TyCon "SExp") (TyApp (TyApp (TyCon "Result") (TyCon "SexpError")) (TyCon "Atom"))))
 (DFunDef false "atomOfSExp" () (EApp (EApp (EVar "rooted") (EVar "decAtom")) (ELit (LString "atom"))))
 (DTypeSig true "effLabelOfSExp" (TyFun (TyCon "SExp") (TyApp (TyApp (TyCon "Result") (TyCon "SexpError")) (TyCon "EffLabel"))))
 (DFunDef false "effLabelOfSExp" () (EApp (EVar "decLabel") (ELit (LString "label"))))
 (DTypeSig true "authorityOfSExp" (TyFun (TyCon "SExp") (TyApp (TyApp (TyCon "Result") (TyCon "SexpError")) (TyCon "Authority"))))
 (DFunDef false "authorityOfSExp" () (EApp (EApp (EVar "rooted") (EVar "decAuth")) (ELit (LString "authority"))))
-(DTypeSig true "paramOfSExp" (TyFun (TyCon "SExp") (TyApp (TyApp (TyCon "Result") (TyCon "SexpError")) (TyCon "Param"))))
-(DFunDef false "paramOfSExp" () (EApp (EVar "decParam") (ELit (LString "param"))))
 (DTypeSig true "authResidualOfSExp" (TyFun (TyCon "SExp") (TyApp (TyApp (TyCon "Result") (TyCon "SexpError")) (TyCon "AuthResidual"))))
 (DFunDef false "authResidualOfSExp" () (EApp (EApp (EVar "rooted") (EVar "decResidual")) (ELit (LString "residual"))))
 (DTypeSig true "vecOblOfSExp" (TyFun (TyCon "SExp") (TyApp (TyApp (TyCon "Result") (TyCon "SexpError")) (TyCon "VecObl"))))
@@ -2626,8 +2531,6 @@ decodeParsed _ _ top =
 (DFunDef false "pubSchemeOfSExp" () (EApp (EApp (EVar "rooted") (EVar "decPub")) (ELit (LString "pub"))))
 (DTypeSig true "ifaceRefOfSExp" (TyFun (TyCon "SExp") (TyApp (TyApp (TyCon "Result") (TyCon "SexpError")) (TyCon "IfaceRef"))))
 (DFunDef false "ifaceRefOfSExp" () (EApp (EVar "decIface") (ELit (LString "iface"))))
-(DTypeSig true "tyConOriginOfSExp" (TyFun (TyCon "SExp") (TyApp (TyApp (TyCon "Result") (TyCon "SexpError")) (TyCon "TyConOrigin"))))
-(DFunDef false "tyConOriginOfSExp" () (EApp (EVar "decOrigin") (ELit (LString "origin"))))
 (DTypeSig true "bindingOfSExp" (TyFun (TyCon "SExp") (TyApp (TyApp (TyCon "Result") (TyCon "SexpError")) (TyTuple (TyCon "String") (TyCon "PubScheme")))))
 (DFunDef false "bindingOfSExp" ((PCon "SList" (PList (PCon "SAtom" (PLit (LString "binding"))) (PVar "n") (PVar "p")))) (EApp (EApp (EMethodRef "andThen") (EApp (EApp (EVar "expectAtom") (EApp (EApp (EApp (EVar "at") (ELit (LString "binding"))) (ELit (LString "binding"))) (ELit (LInt 1)))) (EVar "n"))) (ELam ((PVar "name")) (EApp (EApp (EMethodRef "andThen") (EApp (EApp (EApp (EVar "decPub") (EVar "emptyZonk")) (EApp (EApp (EApp (EVar "at") (ELit (LString "binding"))) (ELit (LString "binding"))) (ELit (LInt 2)))) (EVar "p"))) (ELam ((PVar "__do_x")) (EMatch (EVar "__do_x") (arm (PTuple PWild (PVar "pub")) () (EApp (EVar "Ok") (ETuple (EVar "name") (EVar "pub"))))))))))
 (DFunDef false "bindingOfSExp" ((PVar "node")) (EApp (EApp (EApp (EVar "misfit") (ELit (LString "binding"))) (EListLit (ETuple (ELit (LString "binding")) (ELit (LInt 2))))) (EVar "node")))
@@ -2646,7 +2549,7 @@ decodeParsed _ _ top =
 (DFunDef false "optionOfSExp" (PWild PWild (PCon "SAtom" (PLit (LString "none")))) (EApp (EVar "Ok") (EVar "None")))
 (DFunDef false "optionOfSExp" ((PVar "item") (PVar "path") (PCon "SList" (PList (PCon "SAtom" (PLit (LString "some"))) (PVar "x")))) (EApp (EApp (EMethodRef "map") (EVar "Some")) (EApp (EApp (EVar "item") (EApp (EApp (EApp (EVar "at") (EVar "path")) (ELit (LString "some"))) (ELit (LInt 1)))) (EVar "x"))))
 (DFunDef false "optionOfSExp" (PWild (PVar "path") (PVar "node")) (EApp (EApp (EApp (EVar "misfit") (EVar "path")) (EListLit (ETuple (ELit (LString "none")) (ELit (LInt 0))) (ETuple (ELit (LString "some")) (ELit (LInt 1))))) (EVar "node")))
-(DTypeSig true "unitOfSExp" (TyApp (TyCon "Reader") (TyCon "Unit")))
+(DTypeSig false "unitOfSExp" (TyApp (TyCon "Reader") (TyCon "Unit")))
 (DFunDef false "unitOfSExp" (PWild (PCon "SList" (PList))) (EApp (EVar "Ok") (ELit LUnit)))
 (DFunDef false "unitOfSExp" ((PVar "path") (PVar "node")) (EApp (EApp (EApp (EVar "refuse") (EVar "path")) (EVar "node")) (ELit (LString "expected ()"))))
 (DTypeSig false "ascending" (TyConstrained ((cstr "Ord" (TyVar "a"))) (TyFun (TyApp (TyCon "List") (TyVar "a")) (TyCon "Bool"))))
@@ -2656,9 +2559,9 @@ decodeParsed _ _ top =
 (DFunDef false "keyed" ((PVar "path") (PVar "node") (PVar "pairs")) (EIf (EApp (EDictApp "ascending") (EApp (EApp (EMethodRef "map") (EVar "fst")) (EVar "pairs"))) (EApp (EVar "Ok") (EApp (EVar "IdMap.fromList") (EVar "pairs"))) (EApp (EApp (EApp (EVar "refuse") (EVar "path")) (EVar "node")) (ELit (LString "keys must ascend strictly")))))
 (DTypeSig false "decMap" (TyConstrained ((cstr "Ord" (TyVar "k"))) (TyFun (TyApp (TyCon "Reader") (TyVar "k")) (TyFun (TyApp (TyCon "Reader") (TyVar "v")) (TyApp (TyCon "Reader") (TyApp (TyApp (TyCon "Map") (TyVar "k")) (TyVar "v")))))))
 (DFunDef false "decMap" ((PVar "key") (PVar "value") (PVar "path") (PVar "node")) (EApp (EApp (EMethodRef "andThen") (EApp (EApp (EApp (EVar "decList") (EApp (EApp (EVar "pairOfSExp") (EVar "key")) (EVar "value"))) (EVar "path")) (EVar "node"))) (ELam ((PVar "pairs")) (EApp (EApp (EApp (EDictApp "keyed") (EVar "path")) (EVar "node")) (EVar "pairs")))))
-(DTypeSig true "ordMapOfSExp" (TyFun (TyApp (TyCon "Reader") (TyVar "a")) (TyApp (TyCon "Reader") (TyApp (TyCon "OrdMap") (TyVar "a")))))
+(DTypeSig false "ordMapOfSExp" (TyFun (TyApp (TyCon "Reader") (TyVar "a")) (TyApp (TyCon "Reader") (TyApp (TyCon "OrdMap") (TyVar "a")))))
 (DFunDef false "ordMapOfSExp" ((PVar "value") (PVar "path") (PVar "node")) (EApp (EApp (EApp (EApp (EDictApp "decMap") (EVar "expectAtom")) (EVar "value")) (EVar "path")) (EVar "node")))
-(DTypeSig true "intMapOfSExp" (TyFun (TyApp (TyCon "Reader") (TyVar "a")) (TyApp (TyCon "Reader") (TyApp (TyApp (TyCon "Map") (TyCon "Int")) (TyVar "a")))))
+(DTypeSig false "intMapOfSExp" (TyFun (TyApp (TyCon "Reader") (TyVar "a")) (TyApp (TyCon "Reader") (TyApp (TyApp (TyCon "Map") (TyCon "Int")) (TyVar "a")))))
 (DFunDef false "intMapOfSExp" ((PVar "value") (PVar "path") (PVar "node")) (EApp (EApp (EApp (EApp (EDictApp "decMap") (EVar "atomInt")) (EVar "value")) (EVar "path")) (EVar "node")))
 (DTypeSig false "surfaceHeads" (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "Int"))))
 (DFunDef false "surfaceHeads" () (EListLit (ETuple (ELit (LString "scon")) (ELit (LInt 2))) (ETuple (ELit (LString "svar")) (ELit (LInt 1))) (ETuple (ELit (LString "sapp")) (ELit (LInt 2))) (ETuple (ELit (LString "sfun")) (ELit (LInt 2))) (ETuple (ELit (LString "stuple")) (ELit (LInt 1))) (ETuple (ELit (LString "seffect")) (ELit (LInt 3))) (ETuple (ELit (LString "sconstrained")) (ELit (LInt 2))) (ETuple (ELit (LString "snamed")) (ELit (LInt 3))) (ETuple (ELit (LString "squal")) (ELit (LInt 2))) (ETuple (ELit (LString "srow")) (ELit (LInt 2))) (ETuple (ELit (LString "sauth")) (ELit (LInt 1)))))
@@ -2750,7 +2653,7 @@ decodeParsed _ _ top =
 (DTypeSig true "spellingPopOfSExp" (TyFun (TyApp (TyCon "Reader") (TyVar "a")) (TyApp (TyCon "Reader") (TyApp (TyCon "SpellingPop") (TyVar "a")))))
 (DFunDef false "spellingPopOfSExp" ((PVar "payload") (PVar "path") (PCon "SList" (PList (PCon "SAtom" (PLit (LString "pop"))) (PVar "rows") (PVar "floor") (PVar "collided")))) (EApp (EApp (EMethodRef "andThen") (EApp (EApp (EApp (EVar "ordMapOfSExp") (EApp (EVar "decList") (EApp (EVar "decPopRow") (EVar "payload")))) (EApp (EApp (EApp (EVar "at") (EVar "path")) (ELit (LString "pop"))) (ELit (LInt 1)))) (EVar "rows"))) (ELam ((PVar "rows1")) (EApp (EApp (EMethodRef "andThen") (EApp (EApp (EApp (EVar "ordMapOfSExp") (EVar "payload")) (EApp (EApp (EApp (EVar "at") (EVar "path")) (ELit (LString "pop"))) (ELit (LInt 2)))) (EVar "floor"))) (ELam ((PVar "floor1")) (EApp (EApp (EMethodRef "andThen") (EApp (EApp (EApp (EVar "decList") (EVar "expectAtom")) (EApp (EApp (EApp (EVar "at") (EVar "path")) (ELit (LString "pop"))) (ELit (LInt 3)))) (EVar "collided"))) (ELam ((PVar "collided1")) (EApp (EVar "Ok") (EApp (EApp (EApp (EVar "spFromProjections") (EVar "rows1")) (EVar "floor1")) (EVar "collided1"))))))))))
 (DFunDef false "spellingPopOfSExp" (PWild (PVar "path") (PVar "node")) (EApp (EApp (EApp (EVar "misfit") (EVar "path")) (EListLit (ETuple (ELit (LString "pop")) (ELit (LInt 3))))) (EVar "node")))
-(DTypeSig true "surfaceTyOfSExp" (TyFun (TyCon "SExp") (TyApp (TyApp (TyCon "Result") (TyCon "SexpError")) (TyCon "Ty"))))
+(DTypeSig false "surfaceTyOfSExp" (TyFun (TyCon "SExp") (TyApp (TyApp (TyCon "Result") (TyCon "SexpError")) (TyCon "Ty"))))
 (DFunDef false "surfaceTyOfSExp" () (EApp (EVar "decSurface") (ELit (LString "ty"))))
 (DTypeSig true "variantOfSExp" (TyFun (TyCon "SExp") (TyApp (TyApp (TyCon "Result") (TyCon "SexpError")) (TyCon "Variant"))))
 (DFunDef false "variantOfSExp" () (EApp (EVar "decVariant") (ELit (LString "variant"))))
@@ -2766,14 +2669,10 @@ decodeParsed _ _ top =
 (DFunDef false "methodPredicateSlotOfSExp" () (EApp (EApp (EVar "rooted") (EVar "decMethodSlot")) (ELit (LString "mslot"))))
 (DTypeSig true "cDeclaredPrefixOfSExp" (TyFun (TyCon "SExp") (TyApp (TyApp (TyCon "Result") (TyCon "SexpError")) (TyCon "CDeclaredPrefix"))))
 (DFunDef false "cDeclaredPrefixOfSExp" () (EApp (EVar "decPrefix") (ELit (LString "prefix"))))
-(DTypeSig true "builtinClassesOfSExp" (TyFun (TyCon "SExp") (TyApp (TyApp (TyCon "Result") (TyCon "SexpError")) (TyCon "BuiltinClasses"))))
-(DFunDef false "builtinClassesOfSExp" () (EApp (EVar "decClasses") (ELit (LString "classes"))))
 (DData Public "InterfaceSection" () ((variant "InterfaceSection" (ConNamed (field "isJoins" (TyApp (TyCon "List") (TyApp (TyCon "List") (TyCon "Atom")))) (field "isInterface" (TyCon "PreludeInterface"))))) ())
 (DData Public "PreludeInterfaceFile" () ((variant "PreludeInterfaceFile" (ConNamed (field "ifKey" (TyCon "InterfaceKey")) (field "ifSections" (TyApp (TyCon "List") (TyCon "InterfaceSection")))))) ())
 (DTypeSig true "interfaceFormatVersion" (TyCon "Int"))
 (DFunDef false "interfaceFormatVersion" () (ELit (LInt 3)))
-(DTypeSig true "sectionsOfCache" (TyFun (TyApp (TyCon "List") (TyTuple (TyApp (TyCon "List") (TyApp (TyCon "List") (TyCon "Atom"))) (TyCon "PreludeInterface"))) (TyApp (TyCon "List") (TyCon "InterfaceSection"))))
-(DFunDef false "sectionsOfCache" () (EApp (EMethodRef "map") (ELam ((PVar "s")) (ERecordCreate "InterfaceSection" ((fa "isJoins" (EApp (EVar "fst") (EVar "s"))) (fa "isInterface" (EApp (EVar "snd") (EVar "s"))))))))
 (DTypeSig true "cacheOfSections" (TyFun (TyApp (TyCon "List") (TyCon "InterfaceSection")) (TyApp (TyCon "List") (TyTuple (TyApp (TyCon "List") (TyApp (TyCon "List") (TyCon "Atom"))) (TyCon "PreludeInterface")))))
 (DFunDef false "cacheOfSections" () (EApp (EMethodRef "map") (ELam ((PVar "s")) (ETuple (EFieldAccess (EVar "s") "isJoins") (EFieldAccess (EVar "s") "isInterface")))))
 (DTypeSig true "mergeSections" (TyFun (TyApp (TyCon "List") (TyTuple (TyApp (TyCon "List") (TyCon "Atom")) (TyCon "PreludeInterface"))) (TyApp (TyCon "List") (TyCon "InterfaceSection"))))

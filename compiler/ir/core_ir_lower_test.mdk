@@ -8,9 +8,10 @@ import frontend.ast.{BinderId(..)}
 
 import test.{expectAll, expectEqual, expectTrue, fail}
 import frontend.desugar.{desugar}
-import frontend.parser.{parse}
+import frontend.parser.{parse, parseLocated}
 import ir.core_ir_lower.{
-  noInlineFnNames, methodResultFacts, lowerProgramEmitWith
+  noInlineFnNames, methodResultFacts, lowerProgramEmitWith,
+  methodLevelConstraintIfaces, ifaceMethodArityKey
 }
 import ir.core_ir.{
   leadingDictParams,
@@ -25,6 +26,7 @@ import ir.core_ir.{
 }
 import frontend.ast.{
   Decl(..),
+  IfaceMethod(..),
   Lit(..),
   Pat(..),
   TyConOrigin(..),
@@ -37,7 +39,7 @@ import ir.sexp.{patSexp}
 import types.annotate.{annotateProgram}
 import types.program_facts.{ProgramFacts(..), emptyFacts}
 import types.publish.{EntryOutcome(..)}
-import support.util.{isEmptyL, joinNl}
+import support.util.{isEmptyL, joinNl, lookupAssoc}
 import types.capability_manifest.{
   EntryKey(..),
   ManifestRequest(..),
@@ -48,6 +50,7 @@ import types.capability_manifest.{
 }
 import types.effect_domain.{Param(..)}
 import ir.core_ir.{withBinderRows}
+import types.route_key.{ifaceWordOf}
 import ir.core_ir_sexp.{cprogramToSexp}
 import ir.core_ir_sexp_parse.{parseCProgram}
 import ir.dce.{dceFilter}
@@ -448,3 +451,59 @@ test "explicit origins group clauses in order without merging equal names" =
   expectEqual
     [(a, "same", [1, 3]), (b, "same", [2]), (pin, "0autoprintln", [4])]
     (map originGroupShape (groupOriginClauses rows))
+
+-- ── method → method-level constraint interface names (native backend, G7) ────
+-- Per interface method that carries a method-level `=>` constraint (foldMap's
+-- `Monoid m =>`): the interface name of each such constraint, in slot order —
+-- the same order typecheck's `methodConstraintSlotIds`/`resolveMethodDicts` fill
+-- the method occurrence's `methRoutes` list.  This lets the default-body emitter
+-- map a cross-interface method (e.g. the `empty` in foldMap's default, a Monoid
+-- method whose dict is threaded per-call by the result type, not the container)
+-- to the threaded method-dict PARAM and dispatch it at run time — so one shared
+-- `@mdk_default_foldMap_List` serves both a List-monoid and a String-monoid fold.
+-- Every constraint that mentions a tyvar is a slot, interface params included;
+-- the same predicate as typecheck's `constraintIsMethodLevel`.
+-- Qualified rows include an explicit [] so a selected unconstrained method cannot
+-- fall through to a same-spelled interface method's legacy bare row.
+methodConstraintIfaces : List Decl -> List (String, List String)
+methodConstraintIfaces prog = flatMap methodConstraintIfaceEntries prog
+
+test "qualified method constraints preserve a selected empty row" =
+  let program =
+    desugar
+      (parseLocated
+        (joinNl [
+          "interface Plain a where",
+          "  collide : a -> Int",
+          "interface Rich a where",
+          "  collide : Num b => a -> b -> Int",
+        ]))
+  let rows = methodConstraintIfaces program
+  expectAll [
+    expectEqual
+      (Some [])
+      (lookupAssoc (ifaceMethodArityKey "Plain" "collide") rows),
+    expectEqual
+      (Some ["Num"])
+      (lookupAssoc (ifaceMethodArityKey "Rich" "collide") rows),
+    expectEqual (Some ["Num"]) (lookupAssoc "collide" rows),
+  ]
+
+methodConstraintIfaceEntries : Decl -> List (String, List String)
+-- #1037
+methodConstraintIfaceEntries (DAttrib _ d) = methodConstraintIfaceEntries d
+methodConstraintIfaceEntries (DInterface { name = ifaceName, ifaceOrigin = o, methods, ... }) =
+  flatMap (m => methodConstraintIfaceEntry (ifaceWordOf o ifaceName) m) methods
+methodConstraintIfaceEntries _ = []
+
+methodConstraintIfaceEntry : String -> IfaceMethod -> List (String, List String)
+methodConstraintIfaceEntry ifaceWord (IfaceMethod mname mty _ _) =
+  let ifaces = methodLevelConstraintIfaces mty
+  let qualified = (ifaceMethodArityKey ifaceWord mname, ifaces)
+  if isEmptyL ifaces then
+    [qualified]
+  else
+    [
+      (mname, ifaces),
+      qualified,
+    ]

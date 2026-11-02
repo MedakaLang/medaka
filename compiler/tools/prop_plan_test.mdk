@@ -3,22 +3,10 @@ import frontend.ast.{
 }
 import frontend.parser.{parse}
 import tools.prop_plan.{
-  PlanEnv,
-  PlanError,
-  PlanModule(..),
-  TypeKey(..),
-  PlanDef(..),
-  PlanCtor(..),
-  GenPlan(..),
-  buildPlanEnvModules,
-  planDef,
-  planFor,
-  instantiateCtor,
-  planErrorText,
-  ctorWeights,
-  maxGenDepth,
-  listLenMax,
-  planCyclesThroughList,
+  PlanEnv, PlanError, PlanModule(..), TypeKey(..), PlanDef(..), PlanCtor(..),
+  GenPlan(..), buildPlanEnvModules, planDef, planFor, instantiateCtor,
+  planErrorText, ctorWeights, maxGenDepth, listLenMax, cyclesThroughListUnder,
+  finiteTruth
 }
 import test.{expectAll, expectEqual, expectNotEqual}
 
@@ -254,3 +242,7 @@ test "the list-cycle predicate resolves a deep Option chain and still sees a lis
     expectEqual (Ok False) (chainCycles 14 False),
     expectEqual (Ok True) (chainCycles 14 True),
   ]
+
+planCyclesThroughList : PlanEnv -> GenPlan -> Bool
+planCyclesThroughList env plan =
+  cyclesThroughListUnder env (finiteTruth env plan) plan

@@ -77,8 +77,6 @@ memberOfIds : ModuleCtx -> List Mono -> Map Int Int
 memberOverlayDecl : Int -> List DeclEnvModule -> String -> UseMember -> List Decl
 memberPeelSource : ModuleCtx -> List (String, Ty) -> String -> Mono -> Option Mono
 membersSpanLoc : Map String (List (List Pat, Expr)) -> List String -> Option Loc
-methodReturnOwnershipProbe : Unit -> (List String, List String, Bool, Bool)
-methodReturnProbeStamp : ModuleCtx -> MethodSchemeRow -> MethodSchemeRow -> List Decl -> (String, String, String)
 moduleRefNameSet : List Decl -> Map String Unit
 moduleStampOrder : List StampStep
 noteEvidenceObservation : GraphCtx -> Obligation -> Unit

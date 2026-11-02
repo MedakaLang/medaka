@@ -6,8 +6,8 @@ import support.sexp_value.{
   parseSExp,
   atomInt,
   atomBool,
-  expectList,
   expectAtom,
+  shapeError,
   cursorOf,
   cursorFailed,
   cursorAtEnd,
@@ -240,3 +240,10 @@ test "node helpers accept the right shape and name the path on failure" = expect
 pathOf : Result SexpError a -> String
 pathOf (Err (SexpError { sePath })) = sePath
 pathOf (Ok _) = ""
+
+expectList : Int -> String -> SExp -> Result SexpError (List SExp)
+expectList arity path (SList items)
+  | length items == arity = Ok items
+  | otherwise =
+    shapeError path ("expected a list of " ++ intToString arity ++ " items")
+expectList _ path _ = shapeError path "expected a list"

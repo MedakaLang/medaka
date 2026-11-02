@@ -504,7 +504,7 @@ Already present and reused: `charToStr` (= `fromChar`), `showStringLit`,
 - ✅ `isDigit : Char -> Bool` — `'0'..'9'` (ASCII, via `charCode`)
 - ✅ `isAlpha : Char -> Bool` — wraps `charIsAlpha`
 - ✅ `isAlphaNum : Char -> Bool` — `isAlpha c || isDigit c`
-- ✅ `isSpace : Char -> Bool` — wraps `charIsSpace`
+- ✅ `isSpace : Char -> Bool` — ASCII whitespace plus the non-ASCII spaces, as Python counts whitespace
 - ✅ `isUpper : Char -> Bool` — wraps `charIsUpper`
 - ✅ `isLower : Char -> Bool` — wraps `charIsLower`
 - ✅ `isPunct : Char -> Bool` — wraps `charIsPunct`

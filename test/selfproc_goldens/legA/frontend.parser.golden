@@ -272,7 +272,7 @@ missingWhereImplMsg : ParseDiagnosticKind
 mixedByteBoundMsg : String
 mkAttr : Int -> String -> Option String -> ParserE <> Attr
 mkEffect : (List EffAtomTy, List String) -> Ty -> Ty
-mkLocated : (Unit -> SourceIndex) -> Array Token -> Array Int -> Array Int -> Int -> ParseDiagnosticKind -> Int -> ParseError
+mkLocated : String -> (Unit -> SourceIndex) -> Array Token -> Array Int -> Array Int -> ParseDiagnosticKind -> Int -> ParseError
 mkRec : String -> (List RecPatField, Bool) -> Pat
 mkRow : (List EffAtomTy, List String) -> Loc -> Ty
 mulLevel : Int

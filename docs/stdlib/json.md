@@ -77,13 +77,16 @@ stringify j
 The value as compact JSON text, with no whitespace between tokens.
 
 Strings are escaped as JSON requires. A float always has a digit after
-its decimal point, so the text parses again.
+its decimal point, so the text parses again. A non-finite float comes back
+as null, since JSON has no number for it.
 
 ```medaka
 > stringify (jObject [("a", JInt 1), ("b", JString "hi")])
 "{\"a\":1,\"b\":\"hi\"}"
 > stringify (JFloat 1000.0)
 "1000.0"
+> stringify (jArray [JFloat (1.0 / 0.0), JFloat (0.0 / 0.0)])
+"[null,null]"
 > stringify (jObject [("a", jArray [JInt 1, jObject []]), ("b", JNull)])
 "{\"a\":[1,{}],\"b\":null}"
 ```
@@ -309,10 +312,10 @@ The value as JSON text spread over lines, indented `n` spaces per level.
 Members keep their stored order, `": "` separates a key from its value,
 and empty arrays and objects stay on one line. The text has no trailing
 newline. An `n` of 0 still breaks lines, with no indentation. A non-finite
-float is written as the word inf, -inf or nan, as `stringify` writes it, and
-that text is not JSON. A float of magnitude `1e12` up to but not including
-`1e16` prints in exponent form (`1e+12`, `1.5e+13`) where Python prints
-`1000000000000.0`; `123456789012.0` and `999999999999.0` stay plain.
+float comes back as null, since JSON has no number for it. A float of
+magnitude `1e12` up to but not including `1e16` prints in exponent form
+(`1e+12`, `1.5e+13`) where Python prints `1000000000000.0`; `123456789012.0`
+and `999999999999.0` stay plain.
 
 ```medaka
 > pretty 2 (jObject [("a", jArray [JInt 1, JInt 2]), ("b", jObject [])])

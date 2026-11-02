@@ -1,5 +1,5 @@
 # META
-source_lines=4155
+source_lines=4116
 stages=DESUGAR,MARK
 # SOURCE
 import support.symbol_encoding.{encodePair}
@@ -3006,10 +3006,8 @@ originsFor prog = match (factsNow ()).pfSymbolOrigins
   Some origins => origins
   None => singleProgramOrigins prog
 
-public export data OriginClause =
-  OriginClause SymbolOrigin String CClause Loc BinderId
+export data OriginClause = OriginClause SymbolOrigin String CClause Loc BinderId
 
-export
 groupOriginClauses : List OriginClause -> List (SymbolOrigin, CBind)
 groupOriginClauses clauses =
   map
@@ -3656,7 +3654,6 @@ declaredArityOr arities ifaceWord mname pats =
 -- Declaration-derived results and callback positions, keyed by the qualified
 -- interface word. A method result uses only the head parameter; callbacks keep
 -- the signature's full parameter set, including non-head element parameters.
-export
 methodResultFacts : List Decl -> List MethodResultFact
 methodResultFacts prog = flatMap ifaceMethodResultFacts prog
 
@@ -3789,45 +3786,9 @@ ifaceWordOfKey key = match splitOnChar '|' key
   w :: _ => w
   [] => key
 
--- ── method → method-level constraint INTERFACE names (native backend, G7) ────
--- Per interface method that carries a method-level `=>` constraint (foldMap's
--- `Monoid m =>`): the interface name of each such constraint, IN SLOT ORDER —
--- the SAME order typecheck's `methodConstraintSlotIds`/`resolveMethodDicts` fill
--- the method occurrence's `methRoutes` list.  This lets the default-body emitter
--- map a cross-interface method (e.g. the `empty` in foldMap's default, a Monoid
--- method whose dict is threaded per-call by the RESULT type, not the container)
--- to the threaded method-dict PARAM and dispatch it at run time — so one shared
--- `@mdk_default_foldMap_List` serves both a List-monoid and a String-monoid fold.
--- Every constraint that mentions a tyvar is a slot, interface params included;
--- the same predicate as typecheck's `constraintIsMethodLevel`.
--- Qualified rows include an explicit [] so a selected unconstrained method cannot
--- fall through to a same-spelled interface method's legacy bare row.
-export
-methodConstraintIfaces : List Decl -> List (String, List String)
-methodConstraintIfaces prog = flatMap methodConstraintIfaceEntries prog
-
-methodConstraintIfaceEntries : Decl -> List (String, List String)
--- #1037
-methodConstraintIfaceEntries (DAttrib _ d) = methodConstraintIfaceEntries d
-methodConstraintIfaceEntries (DInterface { name = ifaceName, ifaceOrigin = o, methods, ... }) =
-  flatMap (m => methodConstraintIfaceEntry (ifaceWordOf o ifaceName) m) methods
-methodConstraintIfaceEntries _ = []
-
-methodConstraintIfaceEntry : String -> IfaceMethod -> List (String, List String)
-methodConstraintIfaceEntry ifaceWord (IfaceMethod mname mty _ _) =
-  let ifaces = methodLevelConstraintIfaces mty
-  let qualified = (ifaceMethodArityKey ifaceWord mname, ifaces)
-  if isEmptyL ifaces then
-    [qualified]
-  else
-    [
-      (mname, ifaces),
-      qualified,
-    ]
-
 -- The program's method-context table (`core_ir.CProgram`): each interface method
 -- whose declared `=>` context has a slot, with that slot count, keyed like the
--- qualified rows above.
+-- qualified rows of `ifaceMethodArityKey`.
 methodContextSlotCounts : List Decl -> List (String, Int)
 methodContextSlotCounts prog = flatMap methodContextRows prog
 
@@ -5170,8 +5131,8 @@ nodeTag _ = "?"
 (DFunDef false "lowerGroupsRaw" ((PVar "prog")) (EApp (EApp (EVar "map") (EVar "snd")) (EApp (EVar "groupOriginClauses") (EApp (EApp (EVar "funClausesOf") (EApp (EVar "originsFor") (EVar "prog"))) (EVar "prog")))))
 (DTypeSig false "originsFor" (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyCon "SymbolOrigins")))
 (DFunDef false "originsFor" ((PVar "prog")) (EMatch (EFieldAccess (EApp (EVar "factsNow") (ELit LUnit)) "pfSymbolOrigins") (arm (PCon "Some" (PVar "origins")) () (EVar "origins")) (arm (PCon "None") () (EApp (EVar "singleProgramOrigins") (EVar "prog")))))
-(DData Public "OriginClause" () ((variant "OriginClause" (ConPos (TyCon "SymbolOrigin") (TyCon "String") (TyCon "CClause") (TyCon "Loc") (TyCon "BinderId")))) ())
-(DTypeSig true "groupOriginClauses" (TyFun (TyApp (TyCon "List") (TyCon "OriginClause")) (TyApp (TyCon "List") (TyTuple (TyCon "SymbolOrigin") (TyCon "CBind")))))
+(DData Abstract "OriginClause" () ((variant "OriginClause" (ConPos (TyCon "SymbolOrigin") (TyCon "String") (TyCon "CClause") (TyCon "Loc") (TyCon "BinderId")))) ())
+(DTypeSig false "groupOriginClauses" (TyFun (TyApp (TyCon "List") (TyCon "OriginClause")) (TyApp (TyCon "List") (TyTuple (TyCon "SymbolOrigin") (TyCon "CBind")))))
 (DFunDef false "groupOriginClauses" ((PVar "clauses")) (EApp (EApp (EVar "map") (EVar "groupToBind")) (EApp (EVar "groupSortIndex") (EApp (EVar "groupRuns") (EApp (EVar "groupSortKey") (EApp (EApp (EVar "groupTag") (EVar "clauses")) (ELit (LInt 0))))))))
 (DTypeSig false "groupTag" (TyFun (TyApp (TyCon "List") (TyCon "OriginClause")) (TyFun (TyCon "Int") (TyApp (TyCon "List") (TyTuple (TyTuple (TyCon "String") (TyCon "Int")) (TyCon "OriginClause"))))))
 (DFunDef false "groupTag" ((PList) PWild) (EListLit))
@@ -5343,7 +5304,7 @@ nodeTag _ = "?"
 (DFunDef false "declaredArityRow" ((PTuple (PVar "mname") (PTuple PWild (PVar "ifaceWord") (PVar "arity")))) (ETuple (EApp (EApp (EVar "ifaceMethodArityKey") (EVar "ifaceWord")) (EVar "mname")) (EVar "arity")))
 (DTypeSig false "declaredArityOr" (TyFun (TyApp (TyCon "OrdMap") (TyCon "Int")) (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "Pat")) (TyCon "Int"))))))
 (DFunDef false "declaredArityOr" ((PVar "arities") (PVar "ifaceWord") (PVar "mname") (PVar "pats")) (EMatch (EApp (EApp (EVar "omLookup") (EApp (EApp (EVar "ifaceMethodArityKey") (EVar "ifaceWord")) (EVar "mname"))) (EVar "arities")) (arm (PCon "Some" (PVar "n")) () (EVar "n")) (arm (PCon "None") () (EBinOp "-" (EApp (EVar "listLen") (EVar "pats")) (EApp (EVar "leadingDictParams") (EVar "pats"))))))
-(DTypeSig true "methodResultFacts" (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyApp (TyCon "List") (TyCon "MethodResultFact"))))
+(DTypeSig false "methodResultFacts" (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyApp (TyCon "List") (TyCon "MethodResultFact"))))
 (DFunDef false "methodResultFacts" ((PVar "prog")) (EApp (EApp (EVar "flatMap") (EVar "ifaceMethodResultFacts")) (EVar "prog")))
 (DTypeSig false "ifaceMethodResultFacts" (TyFun (TyCon "Decl") (TyApp (TyCon "List") (TyCon "MethodResultFact"))))
 (DFunDef false "ifaceMethodResultFacts" ((PCon "DAttrib" PWild (PVar "d"))) (EApp (EVar "ifaceMethodResultFacts") (EVar "d")))
@@ -5390,14 +5351,6 @@ nodeTag _ = "?"
 (DFunDef false "ifaceMethodArityKey" ((PVar "ifaceWord") (PVar "mname")) (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "")) (EApp (EVar "display") (EVar "ifaceWord"))) (ELit (LString "#"))) (EApp (EVar "display") (EVar "mname"))) (ELit (LString ""))))
 (DTypeSig true "ifaceWordOfKey" (TyFun (TyCon "String") (TyCon "String")))
 (DFunDef false "ifaceWordOfKey" ((PVar "key")) (EMatch (EApp (EApp (EVar "splitOnChar") (ELit (LChar "|"))) (EVar "key")) (arm (PCons (PVar "w") PWild) () (EVar "w")) (arm (PList) () (EVar "key"))))
-(DTypeSig true "methodConstraintIfaces" (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "String"))))))
-(DFunDef false "methodConstraintIfaces" ((PVar "prog")) (EApp (EApp (EVar "flatMap") (EVar "methodConstraintIfaceEntries")) (EVar "prog")))
-(DTypeSig false "methodConstraintIfaceEntries" (TyFun (TyCon "Decl") (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "String"))))))
-(DFunDef false "methodConstraintIfaceEntries" ((PCon "DAttrib" PWild (PVar "d"))) (EApp (EVar "methodConstraintIfaceEntries") (EVar "d")))
-(DFunDef false "methodConstraintIfaceEntries" ((PRec "DInterface" ((rf "name" (PVar "ifaceName")) (rf "ifaceOrigin" (PVar "o")) (rf "methods" None)) true)) (EApp (EApp (EVar "flatMap") (ELam ((PVar "m")) (EApp (EApp (EVar "methodConstraintIfaceEntry") (EApp (EApp (EVar "ifaceWordOf") (EVar "o")) (EVar "ifaceName"))) (EVar "m")))) (EVar "methods")))
-(DFunDef false "methodConstraintIfaceEntries" (PWild) (EListLit))
-(DTypeSig false "methodConstraintIfaceEntry" (TyFun (TyCon "String") (TyFun (TyCon "IfaceMethod") (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "String")))))))
-(DFunDef false "methodConstraintIfaceEntry" ((PVar "ifaceWord") (PCon "IfaceMethod" (PVar "mname") (PVar "mty") PWild PWild)) (EBlock (DoLet false false (PVar "ifaces") (EApp (EVar "methodLevelConstraintIfaces") (EVar "mty"))) (DoLet false false (PVar "qualified") (ETuple (EApp (EApp (EVar "ifaceMethodArityKey") (EVar "ifaceWord")) (EVar "mname")) (EVar "ifaces"))) (DoExpr (EIf (EApp (EVar "isEmptyL") (EVar "ifaces")) (EListLit (EVar "qualified")) (EListLit (ETuple (EVar "mname") (EVar "ifaces")) (EVar "qualified"))))))
 (DTypeSig false "methodContextSlotCounts" (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "Int")))))
 (DFunDef false "methodContextSlotCounts" ((PVar "prog")) (EApp (EApp (EVar "flatMap") (EVar "methodContextRows")) (EVar "prog")))
 (DTypeSig false "methodContextRows" (TyFun (TyCon "Decl") (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "Int")))))
@@ -6552,8 +6505,8 @@ nodeTag _ = "?"
 (DFunDef false "lowerGroupsRaw" ((PVar "prog")) (EApp (EApp (EMethodRef "map") (EVar "snd")) (EApp (EVar "groupOriginClauses") (EApp (EApp (EVar "funClausesOf") (EApp (EVar "originsFor") (EVar "prog"))) (EVar "prog")))))
 (DTypeSig false "originsFor" (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyCon "SymbolOrigins")))
 (DFunDef false "originsFor" ((PVar "prog")) (EMatch (EFieldAccess (EApp (EVar "factsNow") (ELit LUnit)) "pfSymbolOrigins") (arm (PCon "Some" (PVar "origins")) () (EVar "origins")) (arm (PCon "None") () (EApp (EVar "singleProgramOrigins") (EVar "prog")))))
-(DData Public "OriginClause" () ((variant "OriginClause" (ConPos (TyCon "SymbolOrigin") (TyCon "String") (TyCon "CClause") (TyCon "Loc") (TyCon "BinderId")))) ())
-(DTypeSig true "groupOriginClauses" (TyFun (TyApp (TyCon "List") (TyCon "OriginClause")) (TyApp (TyCon "List") (TyTuple (TyCon "SymbolOrigin") (TyCon "CBind")))))
+(DData Abstract "OriginClause" () ((variant "OriginClause" (ConPos (TyCon "SymbolOrigin") (TyCon "String") (TyCon "CClause") (TyCon "Loc") (TyCon "BinderId")))) ())
+(DTypeSig false "groupOriginClauses" (TyFun (TyApp (TyCon "List") (TyCon "OriginClause")) (TyApp (TyCon "List") (TyTuple (TyCon "SymbolOrigin") (TyCon "CBind")))))
 (DFunDef false "groupOriginClauses" ((PVar "clauses")) (EApp (EApp (EMethodRef "map") (EVar "groupToBind")) (EApp (EVar "groupSortIndex") (EApp (EVar "groupRuns") (EApp (EVar "groupSortKey") (EApp (EApp (EVar "groupTag") (EVar "clauses")) (ELit (LInt 0))))))))
 (DTypeSig false "groupTag" (TyFun (TyApp (TyCon "List") (TyCon "OriginClause")) (TyFun (TyCon "Int") (TyApp (TyCon "List") (TyTuple (TyTuple (TyCon "String") (TyCon "Int")) (TyCon "OriginClause"))))))
 (DFunDef false "groupTag" ((PList) PWild) (EListLit))
@@ -6725,7 +6678,7 @@ nodeTag _ = "?"
 (DFunDef false "declaredArityRow" ((PTuple (PVar "mname") (PTuple PWild (PVar "ifaceWord") (PVar "arity")))) (ETuple (EApp (EApp (EVar "ifaceMethodArityKey") (EVar "ifaceWord")) (EVar "mname")) (EVar "arity")))
 (DTypeSig false "declaredArityOr" (TyFun (TyApp (TyCon "OrdMap") (TyCon "Int")) (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "Pat")) (TyCon "Int"))))))
 (DFunDef false "declaredArityOr" ((PVar "arities") (PVar "ifaceWord") (PVar "mname") (PVar "pats")) (EMatch (EApp (EApp (EVar "omLookup") (EApp (EApp (EVar "ifaceMethodArityKey") (EVar "ifaceWord")) (EVar "mname"))) (EVar "arities")) (arm (PCon "Some" (PVar "n")) () (EVar "n")) (arm (PCon "None") () (EBinOp "-" (EApp (EVar "listLen") (EVar "pats")) (EApp (EVar "leadingDictParams") (EVar "pats"))))))
-(DTypeSig true "methodResultFacts" (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyApp (TyCon "List") (TyCon "MethodResultFact"))))
+(DTypeSig false "methodResultFacts" (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyApp (TyCon "List") (TyCon "MethodResultFact"))))
 (DFunDef false "methodResultFacts" ((PVar "prog")) (EApp (EApp (EDictApp "flatMap") (EVar "ifaceMethodResultFacts")) (EVar "prog")))
 (DTypeSig false "ifaceMethodResultFacts" (TyFun (TyCon "Decl") (TyApp (TyCon "List") (TyCon "MethodResultFact"))))
 (DFunDef false "ifaceMethodResultFacts" ((PCon "DAttrib" PWild (PVar "d"))) (EApp (EVar "ifaceMethodResultFacts") (EVar "d")))
@@ -6772,14 +6725,6 @@ nodeTag _ = "?"
 (DFunDef false "ifaceMethodArityKey" ((PVar "ifaceWord") (PVar "mname")) (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "")) (EApp (EMethodRef "display") (EVar "ifaceWord"))) (ELit (LString "#"))) (EApp (EMethodRef "display") (EVar "mname"))) (ELit (LString ""))))
 (DTypeSig true "ifaceWordOfKey" (TyFun (TyCon "String") (TyCon "String")))
 (DFunDef false "ifaceWordOfKey" ((PVar "key")) (EMatch (EApp (EApp (EVar "splitOnChar") (ELit (LChar "|"))) (EVar "key")) (arm (PCons (PVar "w") PWild) () (EVar "w")) (arm (PList) () (EVar "key"))))
-(DTypeSig true "methodConstraintIfaces" (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "String"))))))
-(DFunDef false "methodConstraintIfaces" ((PVar "prog")) (EApp (EApp (EDictApp "flatMap") (EVar "methodConstraintIfaceEntries")) (EVar "prog")))
-(DTypeSig false "methodConstraintIfaceEntries" (TyFun (TyCon "Decl") (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "String"))))))
-(DFunDef false "methodConstraintIfaceEntries" ((PCon "DAttrib" PWild (PVar "d"))) (EApp (EVar "methodConstraintIfaceEntries") (EVar "d")))
-(DFunDef false "methodConstraintIfaceEntries" ((PRec "DInterface" ((rf "name" (PVar "ifaceName")) (rf "ifaceOrigin" (PVar "o")) (rf "methods" None)) true)) (EApp (EApp (EDictApp "flatMap") (ELam ((PVar "m")) (EApp (EApp (EVar "methodConstraintIfaceEntry") (EApp (EApp (EVar "ifaceWordOf") (EVar "o")) (EVar "ifaceName"))) (EVar "m")))) (EVar "methods")))
-(DFunDef false "methodConstraintIfaceEntries" (PWild) (EListLit))
-(DTypeSig false "methodConstraintIfaceEntry" (TyFun (TyCon "String") (TyFun (TyCon "IfaceMethod") (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "String")))))))
-(DFunDef false "methodConstraintIfaceEntry" ((PVar "ifaceWord") (PCon "IfaceMethod" (PVar "mname") (PVar "mty") PWild PWild)) (EBlock (DoLet false false (PVar "ifaces") (EApp (EVar "methodLevelConstraintIfaces") (EVar "mty"))) (DoLet false false (PVar "qualified") (ETuple (EApp (EApp (EVar "ifaceMethodArityKey") (EVar "ifaceWord")) (EVar "mname")) (EVar "ifaces"))) (DoExpr (EIf (EApp (EVar "isEmptyL") (EVar "ifaces")) (EListLit (EVar "qualified")) (EListLit (ETuple (EVar "mname") (EVar "ifaces")) (EVar "qualified"))))))
 (DTypeSig false "methodContextSlotCounts" (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "Int")))))
 (DFunDef false "methodContextSlotCounts" ((PVar "prog")) (EApp (EApp (EDictApp "flatMap") (EVar "methodContextRows")) (EVar "prog")))
 (DTypeSig false "methodContextRows" (TyFun (TyCon "Decl") (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "Int")))))

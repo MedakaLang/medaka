@@ -275,8 +275,9 @@ binEngine bin = (bin, [])
 wasmEngine : String -> <IO> (String, List String)
 wasmEngine bin = ("node", ["\{medakaRoot}/test/wasm/run.js", bin])
 
--- The stdout of a clean run of `engine` under `MEDAKA_SEED=seed` (any
--- environment when `seed` is `None`), else the reason it was not one.
+-- The stdout of a clean run of `engine` under `MEDAKA_SEED=seed` (with
+-- MEDAKA_SEED removed when `seed` is `None`: `medaka test` gives this process
+-- one), else the reason it was not one.
 drawOf : String ->
   Option String ->
   (String, List String) ->
@@ -284,7 +285,7 @@ drawOf : String ->
 drawOf tag seed (cmd, argv) =
   let argv2 = match seed
     Some v => ["MEDAKA_SEED=\{v}", cmd] ++ argv
-    None => cmd :: argv
+    None => ["-u", "MEDAKA_SEED", cmd] ++ argv
   match boundedVerbSeconds 60 "env" argv2
     Err e => Err "\{tag}: \{e}"
     Ok (0, out, _) => Ok out

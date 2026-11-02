@@ -389,7 +389,6 @@ isRunSection n = n == "EVAL" || n == "CRASH"
 canonText : String -> String
 canonText text = blockOf (map trimRight (contentLines text))
 
-export
 normalizeText : String -> String -> String
 normalizeText root text = blockOf (map (normalizeLine root) (contentLines text))
 

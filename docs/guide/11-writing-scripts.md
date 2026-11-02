@@ -70,6 +70,14 @@ $ MEDAKA_SEED=42 medaka run draw.mdk
 
 (The first line is one possible unseeded run; it differs every time.)
 
+`medaka test` seeds its draws the same way, once per run and for every engine. When a
+test fails, the run ends with `seed: N (rerun with MEDAKA_SEED=N)`; set that variable to
+replay the draws (under `--json` a failing run carries the number as a top-level `seed`
+member). An uncaught panic aborts the run without a summary, so no seed is printed:
+set `MEDAKA_SEED` to make the run repeatable. A failing property prints two seeds: the property
+seed (`--seed`, used to generate its cases) and the run seed (`MEDAKA_SEED`, used for draws in
+the body); rerun with both when the body draws.
+
 ## Four worked examples
 
 The programs below start by writing their own input files, so each one runs from an
@@ -145,8 +153,8 @@ new line 1
 new line 2
 # end generated
 host = "localhost"
-Err "app.toml: expected 1 occurrence of `no such text…`, found 0"
-Err "app.toml: expected 1 occurrence of `line…`, found 2"
+Err "app.toml: expected 1 occurrence of `no such text`, found 0"
+Err "app.toml: expected 1 occurrence of `line`, found 2"
 ```
 
 ### Count what is in a repository
@@ -579,7 +587,7 @@ main =
 bonana
 bonono
 Ok "panana"
-Err "expected 1 occurrence of `n…`, found 2"
+Err "expected 1 occurrence of `n`, found 2"
 ```
 
 ### Line counts
@@ -730,13 +738,12 @@ GNU `diff -U3 --label A --label B` prints:
 
 ## Python and shell idioms in Medaka
 
-The thirty idioms below are the most frequent in a survey of 19,391 distinct scripts
-that coding agents wrote and ran in this repository: 7,289 Python and 8,088 shell
-bodies, the rest Medaka and JavaScript. They are ranked by how many scripts use the
-idiom (the count is in the first column), and where Python and shell spell the same
-thing differently, both are given. Each cell on the right is a line from a program
-that runs in the test suite, with these definitions in force. The cells that use `sh` or
-`runCommand` come from a second program that must be built, and its definitions follow.
+The thirty idioms below are the ones Python and shell scripts reach for most, ranked by
+how often they appear (the count is in the middle column), and where Python and shell
+spell the same thing differently, both are given. Each cell on the right is a line from a
+program that runs in the test suite, with these definitions in force. The cells that use
+`sh` or `runCommand` come from a second program that must be built, and its definitions
+follow.
 
 ```medaka-nocheck: setup only; the table that follows holds the cells that complete this program
 import diff.{unified}
@@ -808,5 +815,5 @@ main =
 | `sort \| uniq -c`, `Counter(xs)` | 507 | `println (debug (entries (countBy (x => x) ["a", "b", "a"])))` |
 | `diff -u a b`, `difflib.unified_diff` | 336 | `print (unified 1 ("old", "a\nb\n") ("new", "a\nB\n"))` |
 
-Where a count is shared (the three string idioms), the survey did not separate them.
+Where a count is shared (the three string idioms), the three were counted together.
 A cell that prints nothing, such as the `mkdirAll` one, is a statement whose effect is the point.

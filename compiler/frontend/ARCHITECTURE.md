@@ -12,7 +12,7 @@ desugared and resolved AST that `types/` infers over. Syntactic only: no type in
 | Module | Owns | Entry points |
 |---|---|---|
 | `ast.mdk` | The surface (pre-desugar) AST nodes the parser builds; post-parse-only nodes are omitted by design | `Lit`, `Expr`, `Decl`, `Pat` |
-| `ast_codec.mdk` | The compact s-expression codec for elaborated declarations and evidence rows: an `SExp` writer and a cursor reader that fails closed; imports `ast` and `support/` only | `declsSExp`, `readDecls`, `decodeDecls`, `evEntriesSExp`, `decodeEvEntries` |
+| `ast_codec.mdk` | The compact s-expression codec for elaborated declarations and evidence rows: an `SExp` writer and a cursor reader that fails closed; imports `ast` and `support/` only | `declsSExp`, `readDecls`, `evEntriesSExp`, `readEvEntries`, `decodeEvEntries` |
 | `parse_diagnostic.mdk` | Structured parse problems, locations, edits and rendering | `ParseDiagnostic`, `ParseDiagnosticKind`, `locateParseProblem`, `renderParseDiagnostic` |
 | `lex_token.mdk` | Token and raw-token types, token descriptions, predicates and EOF-clamped token access | `Token`, `RawTok`, `describeToken`, `peekTok` |
 | `parse_locate.mdk` | Token offsets and typed diagnostic locations; imports only `lex_token`, `parse_diagnostic` and `support/source_index` | `locateOffset`, `locateTokenDiagnostic` |
@@ -25,7 +25,7 @@ desugared and resolved AST that `types/` infers over. Syntactic only: no type in
 | `parse_engine.mdk` | Parse contexts, combinators, rollback and cue recording | `Parser`, `ParseContext`, `runPWith`, `mark`, `rewind` |
 | `parse_result.mdk` | Immutable parsed declarations, positions, metadata and parse errors | `ParsedSource`, `ParseMetadata`, `ParseError`, `parsedDecls` |
 | `parser.mdk` | Grammar over parse-engine contexts and tokens; stratified operator ladder | `parse`, `parseLocated`, `parseResult`, `parseSource` |
-| `parse_recovery.mdk` | Bounded recovery over prepared tokens and strict parse results | `parseRecovering`, `recoverSourcePairsWithIndex` |
+| `parse_recovery.mdk` | Bounded recovery over prepared tokens and strict parse results | `RecoveryLimits`, `defaultRecoveryAdmission`, `recoverSourcePairsWithIndex` |
 | `recovery_result.mdk` | Immutable partial results, diagnostics and recovery budgets | `RecoveredSource`, `RecoveryStats` |
 | `syntax_source.mdk` | Immutable original text, scanner comments, token coverage, strict parse and bounded recovery | `SyntaxSource`, `publishSyntax`, `renderOriginal` |
 | `desugar.mdk` | Lowers sugar (guards, sections, interpolation, comprehensions, do, `?`, deriving) to the core AST; runs after parse, before resolve; owns the shared `mapExpr`/`mapDecl` traversal | `desugar` |

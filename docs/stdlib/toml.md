@@ -175,20 +175,25 @@ None
 ### `tableEntries`
 
 ```
-tableEntries : String -> Toml -> List Toml
+tableEntries : String -> Toml -> Result String (List Toml)
 tableEntries name _
 ```
 
 Every `[[name]]` entry in the document, in document order.
 
 Entry `i` is what `tableEntry name i` returns, but the document is read
-once for all of them. The list is empty when there are no entries.
+once for all of them. The list is empty when there are no entries. The
+result is an `Err` when the largest entry index is 100000 or more, so the
+function reads at most 100000 entries; `medaka run` cannot build a list that
+long. The message names the table and that index.
 
 ```medaka
-> map (getString "name") (tableEntries "gate" (Toml [("gate.0.name", TString "a"), ("gate.1.name", TString "b")]))
-[Some "a", Some "b"]
+> map (map (getString "name")) (tableEntries "gate" (Toml [("gate.0.name", TString "a"), ("gate.1.name", TString "b")]))
+Ok [Some "a", Some "b"]
 > tableEntries "gate" (Toml [("package.name", TString "x")])
-[]
+Ok []
+> tableEntries "gate" (Toml [("gate.100000.name", TString "x")])
+Err "too many [[gate]] entries: index 100000 is past the limit of 100000"
 ```
 
 ## Instances
