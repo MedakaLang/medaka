@@ -682,7 +682,8 @@ dictPass : ModuleCtx ->
   List String ->
   List Decl ->
   List Decl
-dictPass mctx idx mid names prog =
+dictPass mctx0 idx mid names prog =
+  let mctx = ownedBy mid mctx0
   let pe = PassEvidence idx (Ref omEmpty)
   map
     (dictPassDecl
@@ -693,6 +694,13 @@ dictPass mctx idx mid names prog =
     (mapProg
       (e => rewriteLocalDictExpr mctx.mcGraph (rewriteBinopExpr mctx pe e))
       (grantPass mctx.mcGraph pe mid prog))
+
+-- [mctx] re-pointed so evidence ids minted while module [mid] is dict-passed carry
+-- [mid] (core is ""), not whichever module was checked last.  Every other cell stays
+-- shared with [mctx]; only the identity cell is fresh.
+ownedBy : String -> ModuleCtx -> ModuleCtx
+ownedBy mid mctx =
+  { mctx | mcCells = { mctx.mcCells | currentModuleRef = Ref mid } }
 
 passIndex : PassEvidence -> EvIndex
 passIndex (PassEvidence idx _) = idx

@@ -12,7 +12,13 @@
 -- committed arm of `resolveAdmittedSite` (it needs two admitted declarations of one spelling).
 -- What a whole check elaborates is observed through `types.typecheck` in `typecheck_test`.
 
-import test.{expectAll, expectEqual}
+import test.{expectAll, expectEqual, fail}
+import test_process.{underRoot}
+import frontend.parser.{parseLocated}
+import frontend.desugar.{desugar, desugarIn, mapProg}
+import types.typecheck.{defaultDriveInputs, elaborateModules}
+import types.tc_types.{ElabResult(..)}
+import support.util.{dedup, joinNl}
 import frontend.ast.{
   Constraint(..),
   Decl(..),
@@ -59,6 +65,7 @@ import types.tc_state.{
 import frontend.parser.{parse}
 import list.{
   drop,
+  sortOn,
   range,
   replicate,
   take,
@@ -1131,3 +1138,48 @@ test "a grant case calls a file extern exactly when its head is one, and an oper
       map (h => grantsApply (GrantCase h 0)) [0, 1, 2, 3],
       map (r => opRouted (OpCase 0 r)) [0, 1, 2],
     )
+
+-- ── evidence identity of the dict pass ────────────────────────────────────
+
+-- The module half of every evidence id [decls] carry, sorted, without repeats.
+evModulesOf : List Decl -> List String
+evModulesOf decls =
+  let seen = Ref []
+  let note = (EvId m _) => seen := m :: seen.value
+  let visit =
+    e =>
+      match e
+        EBinOp _ _ _ ev => note ev
+        EUnOp _ _ ev => note ev
+        EFieldAccess _ _ ev => note ev
+        ERecordUpdate _ _ ev => note ev
+        EMethodAt _ _ ev => note ev
+        EDictAt _ ev => note ev
+        ENumLit _ ev _ => note ev
+        EWideLit _ _ ev _ => note ev
+        _ => ()
+      e
+  let _ = mapProg visit decls
+  sortOn (m => m) (dedup seen.value)
+
+-- Core and the user module's evidence module halves, with [mid] the entry's id.
+evModulesFor : String -> <IO, FileRead> Result String (List String, List String)
+evModulesFor mid = do
+  rsrc <- readFile (underRoot "stdlib/runtime.mdk")
+  csrc <- readFile (underRoot "stdlib/core.mdk")
+  let src = joinNl [
+    "double : Num a => a -> a",
+    "double x = x + x",
+    "main = double 2 + 1",
+  ]
+  let elab = elaborateModules defaultDriveInputs (desugar (parse rsrc)) (desugar
+    (parse csrc)) [
+    (mid, desugarIn mid (parseLocated src)),
+  ]
+  Ok (evModulesOf elab.erCore, evModulesOf (flatMap snd elab.erModules))
+
+test "core's dict-passed evidence is minted under core whatever program is entered, and a user module's under its own id" =
+  match (evModulesFor "alpha", evModulesFor "beta")
+    (Ok (ca, ua), Ok (cb, ub)) =>
+      expectEqual ((([""], [""]), ["alpha"]), ["beta"]) (((ca, cb), ua), ub)
+    _ => fail "could not elaborate"
