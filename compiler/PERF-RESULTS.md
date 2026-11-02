@@ -1924,7 +1924,7 @@ The edited file from port 01 was also identical.
 | 01, literal edit | 0.0823 s | 0.0849 s | effectively unchanged |
 | 02, diagnostic-code regex census | 28.28 s | 21.96 s | 1.29x |
 | 03, JSON report | 0.3230 s | 0.2650 s | 1.22x |
-| 04, TOML gate grouping | 22.23 s | 13.17 s | 1.69x |
+| 04, TOML gate grouping | 19.41 s | 13.17 s | 1.47x |
 
 Peak RSS in these heap-pinned runs was about 78 MiB for the edit, 2.18 GiB for
 regex and TOML, and 308 versus 297 MiB for JSON. The heap pin dominates the larger
@@ -1939,26 +1939,33 @@ and compiled pattern prepared first, fell from 498,445,648 to 413,864,912 bytes
 (17.0%); repeated runs gave identical allocation deltas. Its remaining allocation
 is still large, about 395 MiB for 9.6 KB of text.
 
-For `main = println (length [1..=N])`, inclusive `eval.eval.matchPat` instructions:
+The enrolled `test/diff_compiler_eval_scaling.sh` arm measures inclusive
+`eval.eval.matchPat` instructions in the plain/no-LTO `profile_eval_main` oracle,
+over a generated list builder and counter with an assertion on the result.
+Both interpreters execute the fixture; the shared matcher cost is aggregated.
 
 | N | Before Ir | After Ir |
 |---:|---:|---:|
-| 4,000 | 138,589,818 | 5,997,488 |
-| 8,000 | 533,212,894 | 12,014,411 |
-| doubling ratio | 3.847 | 2.003 |
+| 4,000 | 695,103,199 | 18,158,138 |
+| 8,000 | 2,734,193,839 | 36,336,168 |
+| doubling ratio | 3.934 | 2.001 |
 
-The new arm of `test/diff_compiler_eval_scaling.sh` rejects a ratio >=3.0.
-It passed on the changed compiler and failed on the saved baseline with
-`empty-list pattern matching is superlinear`. Run only this arm with:
+The arm rejects a ratio >=3.0. It passed on the changed oracle and failed on the
+paired baseline with `empty-list pattern matching is superlinear`. Run it with:
 
 ```sh
+FORCE=1 JOBS=1 sh test/build_oracles.sh --build-one profile_eval_main
 EVAL_LISTMATCH_ONLY=1 sh test/diff_compiler_eval_scaling.sh
 ```
 
-`MEDAKA` selects the binary; use that binary's own `MEDAKA_ROOT` for comparisons.
-The arm rejects missing/ambiguous symbols, insufficient signal, wrong output and
-execution failures; each subprocess has a 180-second ceiling. Without Valgrind the
-ordinary gate reports this arm skipped; an explicit ONLY request exits 2.
+`EVAL_LISTMATCH_PROFILE` overrides the oracle for a baseline differential; pair it
+with that tree's `MEDAKA` and `MEDAKA_ROOT`. The arm checks CLI freshness with
+`MEDAKA_STRICT=1`, rejects locally stale oracle timestamps, and relies on the
+content-hash artifact key in CI. It also rejects missing tools, missing/ambiguous
+symbols, insufficient signal, unfinished interpreter stages and execution
+failures; each measured subprocess has a 180-second ceiling. Missing-tool and
+stale-oracle controls both exited 1. The no-LTO build avoids the documented
+Valgrind 3.22 ThinLTO symbol-table hazard; this was reviewed independently.
 
 An 8,000-string `list.reverse` probe fell from 87.46 to 12.54 ms (minimum of three),
 and from 13,444,160 to 12,544,544 allocated bytes. The input is

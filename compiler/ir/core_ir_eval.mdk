@@ -836,8 +836,10 @@ cInstallModGroups ((CModInfo _ decls cbinds _ cells menv) :: rest) =
   let _ = cInstallTopGroups menv cells cbinds
   -- P0-9: install this module's own ctor values into its local cells (allocated
   -- in cBuildModInfos), so map/set construct their own arity-correct `Bin`/`Tip`.
-  let (EvalEnv _ (localFrame :: _)) = menv
-  let _ = installFrameConsts localFrame (collectCtors decls)
+  let _ = match menv
+    EvalEnv _ (localFrame :: _) =>
+      installFrameConsts localFrame (collectCtors decls)
+    _ => panic "module environment has no local frame"
   cInstallModGroups rest
 
 -- the root module is last in dependency order; its locals hold `main`

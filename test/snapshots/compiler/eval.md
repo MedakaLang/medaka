@@ -1,5 +1,5 @@
 # META
-source_lines=5514
+source_lines=5516
 stages=DESUGAR,MARK
 # SOURCE
 -- Self-hosted eval stage — Stage-1 capstone, the tree-walking
@@ -2776,8 +2776,8 @@ implDeclNames (DImpl { methods, ... }) = map implMethodName methods
 -- A default method's name needs its cell even when no impl supplies it, because
 -- every inheriting instance's entry installs under it
 -- (`inheritedDefaultEntries`); `evalModulesWith`/`cevalModules` both build
--- `globalCells` from this, and `installConsts`' `findCell` PANICS on a name with no
--- cell, so the two halves cannot be split.
+-- `globalCells` from this; constant installation rejects a name without an
+-- allocated cell, so the two halves cannot be split.
 implDeclNames (DInterface { methods, ... }) = flatMap defaultNamesOf methods
 implDeclNames _ = []
 
@@ -4353,7 +4353,7 @@ data ModInfo v =
 -- `globalNames` allocates a cell per name in list order, so a colliding name gets TWO
 -- cells: an earlier one from `implMethodNames allDecls` (the coalesced impl
 -- dispatcher) and a later one from the prelude's own groups.  But BOTH
--- `installConsts`' and `installGroups`' `findCell` return the FIRST cell of that name,
+-- constant installation and `installGroups` both select the first cell of that name,
 -- so `installGroups … preludeGroups` — which runs LAST — OVERWROTE the method
 -- dispatcher with the prelude standalone's closure and left the second cell VUnit.
 -- `lookupMethod`'s walk-past-a-shadow logic could not help: it walks FRAMES, and there
@@ -4701,8 +4701,10 @@ installModGroups ((ModInfo _ decls grps cells menv) :: rest) =
   let _ = installGroups menv cells grps
   -- P0-9: install this module's own ctor values into its local cells (allocated
   -- in buildModInfos), so map/set construct their own arity-correct `Bin`/`Tip`.
-  let (EvalEnv _ (localFrame :: _)) = menv
-  let _ = installFrameConsts localFrame (collectCtors decls)
+  let _ = match menv
+    EvalEnv _ (localFrame :: _) =>
+      installFrameConsts localFrame (collectCtors decls)
+    _ => panic "module environment has no local frame"
   installModGroups rest
 
 -- a module's impl methods / interface defaults close over ITS env but coalesce
@@ -5043,9 +5045,9 @@ evalModulesOutputFacts facts preludeDecls modules =
 -- (evalModulesOutputRunFacts) — never by the differential-oracle drivers, so the
 -- oracle never performs real I/O regardless of what `e` is otherwise instantiated at.
 --
--- OVERRIDE SEMANTICS: evalModulesWith installs `externBindings () ++ extraExterns`
--- through installConsts, which is LAST-WRITE-WINS on a duplicate name (findCell
--- returns the first cell; installConsts writes each entry in turn).  So an extern
+-- evalModulesWith installs `externBindings () ++ extraExterns` through the index
+-- in list order: it selects the first cell and writes each duplicate entry in
+-- turn, so the last entry wins. An extern
 -- present in BOTH tables resolves to the ioExternBindings one under `medaka run`
 -- and to the externBindings one under the oracle.  That is deliberate for the
 -- clock/GC/stderr prims: the oracle keeps its DETERMINISTIC frozen constants (it
@@ -7097,7 +7099,7 @@ evalOneRootEnvFacts facts extraExterns preludeDecls (rootId, prog) =
 (DFunDef false "ifaceMethodNmE" ((PCon "IfaceMethod" (PVar "n") PWild PWild PWild)) (EVar "n"))
 (DTypeSig false "installModGroups" (TyFun (TyApp (TyCon "List") (TyApp (TyCon "ModInfo") (TyApp (TyCon "Value") (TyVar "e")))) (TyEffect () (Some "e") (TyCon "Unit"))))
 (DFunDef false "installModGroups" ((PList)) (ELit LUnit))
-(DFunDef false "installModGroups" ((PCons (PCon "ModInfo" PWild (PVar "decls") (PVar "grps") (PVar "cells") (PVar "menv")) (PVar "rest"))) (EBlock (DoLet false false PWild (EApp (EApp (EApp (EVar "installGroups") (EVar "menv")) (EVar "cells")) (EVar "grps"))) (DoLet false false (PCon "EvalEnv" PWild (PCons (PVar "localFrame") PWild)) (EVar "menv")) (DoLet false false PWild (EApp (EApp (EVar "installFrameConsts") (EVar "localFrame")) (EApp (EVar "collectCtors") (EVar "decls")))) (DoExpr (EApp (EVar "installModGroups") (EVar "rest")))))
+(DFunDef false "installModGroups" ((PCons (PCon "ModInfo" PWild (PVar "decls") (PVar "grps") (PVar "cells") (PVar "menv")) (PVar "rest"))) (EBlock (DoLet false false PWild (EApp (EApp (EApp (EVar "installGroups") (EVar "menv")) (EVar "cells")) (EVar "grps"))) (DoLet false false PWild (EMatch (EVar "menv") (arm (PCon "EvalEnv" PWild (PCons (PVar "localFrame") PWild)) () (EApp (EApp (EVar "installFrameConsts") (EVar "localFrame")) (EApp (EVar "collectCtors") (EVar "decls")))) (arm PWild () (EApp (EVar "panic") (ELit (LString "module environment has no local frame")))))) (DoExpr (EApp (EVar "installModGroups") (EVar "rest")))))
 (DTypeSig false "modImplEntries" (TyFun (TyCon "ProgramFacts") (TyFun (TyApp (TyCon "List") (TyTuple (TyTuple (TyCon "String") (TyCon "String") (TyCon "String")) (TyApp (TyCon "List") (TyCon "Int")))) (TyFun (TyApp (TyCon "ModInfo") (TyApp (TyCon "Value") (TyVar "e"))) (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyTuple (TyCon "Int") (TyApp (TyCon "Value") (TyVar "e")))))))))
 (DFunDef false "modImplEntries" ((PVar "facts") (PVar "disp") (PCon "ModInfo" PWild (PVar "decls") PWild PWild (PVar "menv"))) (EApp (EApp (EVar "flatMap") (EApp (EApp (EApp (EVar "declImplEntries") (EFieldAccess (EVar "facts") "pfDispositions")) (EVar "menv")) (EVar "disp"))) (EVar "decls")))
 (DTypeSig false "rootLocals" (TyFun (TyApp (TyCon "List") (TyApp (TyCon "ModInfo") (TyApp (TyCon "Value") (TyVar "e")))) (TyEffect () (Some "e") (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "Value") (TyVar "e")))))))
@@ -8910,7 +8912,7 @@ evalOneRootEnvFacts facts extraExterns preludeDecls (rootId, prog) =
 (DFunDef false "ifaceMethodNmE" ((PCon "IfaceMethod" (PVar "n") PWild PWild PWild)) (EVar "n"))
 (DTypeSig false "installModGroups" (TyFun (TyApp (TyCon "List") (TyApp (TyCon "ModInfo") (TyApp (TyCon "Value") (TyVar "e")))) (TyEffect () (Some "e") (TyCon "Unit"))))
 (DFunDef false "installModGroups" ((PList)) (ELit LUnit))
-(DFunDef false "installModGroups" ((PCons (PCon "ModInfo" PWild (PVar "decls") (PVar "grps") (PVar "cells") (PVar "menv")) (PVar "rest"))) (EBlock (DoLet false false PWild (EApp (EApp (EApp (EVar "installGroups") (EVar "menv")) (EVar "cells")) (EVar "grps"))) (DoLet false false (PCon "EvalEnv" PWild (PCons (PVar "localFrame") PWild)) (EVar "menv")) (DoLet false false PWild (EApp (EApp (EVar "installFrameConsts") (EVar "localFrame")) (EApp (EVar "collectCtors") (EVar "decls")))) (DoExpr (EApp (EVar "installModGroups") (EVar "rest")))))
+(DFunDef false "installModGroups" ((PCons (PCon "ModInfo" PWild (PVar "decls") (PVar "grps") (PVar "cells") (PVar "menv")) (PVar "rest"))) (EBlock (DoLet false false PWild (EApp (EApp (EApp (EVar "installGroups") (EVar "menv")) (EVar "cells")) (EVar "grps"))) (DoLet false false PWild (EMatch (EVar "menv") (arm (PCon "EvalEnv" PWild (PCons (PVar "localFrame") PWild)) () (EApp (EApp (EVar "installFrameConsts") (EVar "localFrame")) (EApp (EVar "collectCtors") (EVar "decls")))) (arm PWild () (EApp (EVar "panic") (ELit (LString "module environment has no local frame")))))) (DoExpr (EApp (EVar "installModGroups") (EVar "rest")))))
 (DTypeSig false "modImplEntries" (TyFun (TyCon "ProgramFacts") (TyFun (TyApp (TyCon "List") (TyTuple (TyTuple (TyCon "String") (TyCon "String") (TyCon "String")) (TyApp (TyCon "List") (TyCon "Int")))) (TyFun (TyApp (TyCon "ModInfo") (TyApp (TyCon "Value") (TyVar "e"))) (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyTuple (TyCon "Int") (TyApp (TyCon "Value") (TyVar "e")))))))))
 (DFunDef false "modImplEntries" ((PVar "facts") (PVar "disp") (PCon "ModInfo" PWild (PVar "decls") PWild PWild (PVar "menv"))) (EApp (EApp (EDictApp "flatMap") (EApp (EApp (EApp (EVar "declImplEntries") (EFieldAccess (EVar "facts") "pfDispositions")) (EVar "menv")) (EVar "disp"))) (EVar "decls")))
 (DTypeSig false "rootLocals" (TyFun (TyApp (TyCon "List") (TyApp (TyCon "ModInfo") (TyApp (TyCon "Value") (TyVar "e")))) (TyEffect () (Some "e") (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "Value") (TyVar "e")))))))

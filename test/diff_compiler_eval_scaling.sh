@@ -20,9 +20,9 @@
 # quadratic while both metrics stayed linear. The listmatch Callgrind arm below
 # measures inclusive matchPat instructions at 4000/8000 elements, independently
 # of startup and typechecking. It fails at a 3.0 ratio and rejects missing symbols
-# or insufficient signal. EVAL_LISTMATCH_ONLY=1 runs just that arm; MEDAKA selects
-# the binary, allowing a saved pre-fix compiler to prove the check fails.
-# Without Valgrind the arm reports a skip; an explicit ONLY request exits 2.
+# or insufficient signal. EVAL_LISTMATCH_ONLY=1 runs just that arm;
+# EVAL_LISTMATCH_PROFILE selects a paired no-LTO oracle for a baseline comparison.
+# Missing measurement tools and stale local oracles fail the arm.
 # Wall time remains ungraded because shared-host stalls and GC are noisy.
 # The remaining arms grade these signals through profile_eval_main:
 #
@@ -93,25 +93,48 @@ ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 # inside matchPat instead, excluding CLI startup and typechecking.
 listmatch_ir() (
   command -v valgrind >/dev/null && command -v callgrind_annotate >/dev/null || {
-    echo "listmatch Ir: SKIP — valgrind and callgrind_annotate required"
-    exit 2
+    echo "FAIL: listmatch Ir requires valgrind and callgrind_annotate"
+    exit 1
   }
+  binary_ir="${EVAL_LISTMATCH_PROFILE:-$ROOT/test/bin/profile_eval_main}"
+  source_ir="${MEDAKA_ROOT:-$ROOT}"
+  cli_ir="${MEDAKA:-$ROOT/medaka}"
+  [ -x "$binary_ir" ] || { echo "FAIL: build the no-LTO profile_eval_main oracle first"; exit 1; }
+  # CI's artifact key proves source identity; local direct runs need the same
+  # timestamp guard that run_gates applies to its selected oracles.
+  if [ -z "${CI:-}" ]; then
+    newer_ir="$(find "$source_ir/compiler" "$source_ir/stdlib" -name '*.mdk' \
+      ! -name '*_test.mdk' -newer "$binary_ir" -print)" || exit 1
+    runtime_ir="$(find "$source_ir/runtime" \( -name '*.c' -o -name '*.h' \) \
+      -newer "$binary_ir" -print)" || exit 1
+    [ -z "$newer_ir$runtime_ir" ] || { echo "FAIL: stale listmatch oracle; rebuild profile_eval_main"; exit 1; }
+  fi
   work_ir="$(mktemp -d "${TMPDIR:-/tmp}/medaka-listmatch.XXXXXX")" || exit 1
   trap 'rm -rf "$work_ir"' EXIT HUP INT TERM
-  binary_ir="${MEDAKA:-$ROOT/medaka}"
   module_ir="$(printf '%s' eval.eval | od -An -v -tx1 | tr -d ' \n')"
   symbol_ir="mdk.user.$(printf 'm%s__matchPat' "$module_ir" | od -An -v -tx1 | tr -d ' \n')"
   for n_ir in 4000 8000; do
-    printf 'main = println (length [1..=%s])\n' "$n_ir" > "$work_ir/probe.mdk"
-    GC_INITIAL_HEAP_SIZE=2147483648 perl -e 'alarm shift; exec @ARGV or die $!' 180 \
+    {
+      printf 'buildList : Int -> List Int\nbuildList n = if n <= 0 then [] else n :: buildList (n - 1)\n'
+      printf 'countList : List Int -> Int\ncountList xs = match xs\n  [] => 0\n  _ :: rest => 1 + countList rest\n'
+      printf 'main = if countList (buildList %s) == %s then putStrLn "matched" else panic "wrong list count"\n' "$n_ir" "$n_ir"
+    } > "$work_ir/probe.mdk"
+    MEDAKA_STRICT=1 "$cli_ir" check "$work_ir/probe.mdk" \
+      > "$work_ir/check.stdout" 2> "$work_ir/check.stderr" || {
+        cat "$work_ir/check.stderr"; exit 1
+      }
+    MEDAKA_STRICT=1 MEDAKA_PERF=1 GC_INITIAL_HEAP_SIZE=2147483648 \
+      perl -e 'alarm shift; exec @ARGV or die $!' 180 \
       valgrind --tool=callgrind \
-      --callgrind-out-file="$work_ir/out.cg" "$binary_ir" run "$work_ir/probe.mdk" \
+      --callgrind-out-file="$work_ir/out.cg" "$binary_ir" \
+      "$source_ir/stdlib/runtime.mdk" "$source_ir/stdlib/core.mdk" "$work_ir/probe.mdk" \
       > "$work_ir/stdout" 2> "$work_ir/stderr" || {
         cat "$work_ir/stderr"; exit 1
       }
-    [ "$(cat "$work_ir/stdout")" = "$n_ir" ] || {
-      echo "FAIL: listmatch N=$n_ir produced the wrong length"; exit 1
-    }
+    awk '$1=="[perf]" && $2=="eval" {e++} $1=="[perf]" && $2=="ceval" {c++}
+      END {exit !(e==1 && c==1)}' "$work_ir/stderr" || {
+        echo "FAIL: listmatch did not finish both interpreter stages"; cat "$work_ir/stderr"; exit 1
+      }
     callgrind_annotate --auto=no --inclusive=yes --threshold=100 "$work_ir/out.cg" \
       > "$work_ir/annotated" || exit 1
     count_ir="$(awk -v sym=":$symbol_ir " 'index($0,sym) {gsub(/,/, "", $1); count++; value=$1}
@@ -126,12 +149,8 @@ listmatch_ir() (
   }'
 )
 
-if listmatch_ir; then
-  [ "${EVAL_LISTMATCH_ONLY:-0}" = 1 ] && exit 0
-else
-  ir_status=$?
-  [ "$ir_status" = 2 ] && [ "${EVAL_LISTMATCH_ONLY:-0}" != 1 ] || exit "$ir_status"
-fi
+listmatch_ir || exit $?
+[ "${EVAL_LISTMATCH_ONLY:-0}" = 1 ] && exit 0
 
 PROFILE="$ROOT/test/bin/profile_eval_main"
 RUNTIME="$ROOT/stdlib/runtime.mdk"

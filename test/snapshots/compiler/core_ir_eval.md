@@ -1,5 +1,5 @@
 # META
-source_lines=868
+source_lines=870
 stages=DESUGAR,MARK
 # SOURCE
 -- Core IR evaluator — STAGE2-DESIGN §2.1's "trivial Core-IR tree-walker" that
@@ -840,8 +840,10 @@ cInstallModGroups ((CModInfo _ decls cbinds _ cells menv) :: rest) =
   let _ = cInstallTopGroups menv cells cbinds
   -- P0-9: install this module's own ctor values into its local cells (allocated
   -- in cBuildModInfos), so map/set construct their own arity-correct `Bin`/`Tip`.
-  let (EvalEnv _ (localFrame :: _)) = menv
-  let _ = installFrameConsts localFrame (collectCtors decls)
+  let _ = match menv
+    EvalEnv _ (localFrame :: _) =>
+      installFrameConsts localFrame (collectCtors decls)
+    _ => panic "module environment has no local frame"
   cInstallModGroups rest
 
 -- the root module is last in dependency order; its locals hold `main`
@@ -1075,7 +1077,7 @@ cevalModulesOutputFacts facts preludeDecls modules =
 (DFunDef false "cModImplValues" ((PCon "CModInfo" PWild PWild PWild (PVar "cimpls") PWild (PVar "menv"))) (EApp (EApp (EVar "flatMap") (EApp (EVar "cImplEntryValues") (EVar "menv"))) (EVar "cimpls")))
 (DTypeSig false "cInstallModGroups" (TyFun (TyApp (TyCon "List") (TyApp (TyCon "CModInfo") (TyApp (TyCon "Value") (TyVar "e")))) (TyEffect () (Some "e") (TyCon "Unit"))))
 (DFunDef false "cInstallModGroups" ((PList)) (ELit LUnit))
-(DFunDef false "cInstallModGroups" ((PCons (PCon "CModInfo" PWild (PVar "decls") (PVar "cbinds") PWild (PVar "cells") (PVar "menv")) (PVar "rest"))) (EBlock (DoLet false false PWild (EApp (EApp (EApp (EVar "cInstallTopGroups") (EVar "menv")) (EVar "cells")) (EVar "cbinds"))) (DoLet false false (PCon "EvalEnv" PWild (PCons (PVar "localFrame") PWild)) (EVar "menv")) (DoLet false false PWild (EApp (EApp (EVar "installFrameConsts") (EVar "localFrame")) (EApp (EVar "collectCtors") (EVar "decls")))) (DoExpr (EApp (EVar "cInstallModGroups") (EVar "rest")))))
+(DFunDef false "cInstallModGroups" ((PCons (PCon "CModInfo" PWild (PVar "decls") (PVar "cbinds") PWild (PVar "cells") (PVar "menv")) (PVar "rest"))) (EBlock (DoLet false false PWild (EApp (EApp (EApp (EVar "cInstallTopGroups") (EVar "menv")) (EVar "cells")) (EVar "cbinds"))) (DoLet false false PWild (EMatch (EVar "menv") (arm (PCon "EvalEnv" PWild (PCons (PVar "localFrame") PWild)) () (EApp (EApp (EVar "installFrameConsts") (EVar "localFrame")) (EApp (EVar "collectCtors") (EVar "decls")))) (arm PWild () (EApp (EVar "panic") (ELit (LString "module environment has no local frame")))))) (DoExpr (EApp (EVar "cInstallModGroups") (EVar "rest")))))
 (DTypeSig false "cRootLocals" (TyFun (TyApp (TyCon "List") (TyApp (TyCon "CModInfo") (TyApp (TyCon "Value") (TyVar "e")))) (TyEffect () (Some "e") (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "Value") (TyVar "e")))))))
 (DFunDef false "cRootLocals" ((PList)) (EListLit))
 (DFunDef false "cRootLocals" ((PList (PCon "CModInfo" PWild PWild PWild PWild (PVar "cells") PWild))) (EApp (EApp (EVar "map") (EVar "cellResult")) (EVar "cells")))
@@ -1289,7 +1291,7 @@ cevalModulesOutputFacts facts preludeDecls modules =
 (DFunDef false "cModImplValues" ((PCon "CModInfo" PWild PWild PWild (PVar "cimpls") PWild (PVar "menv"))) (EApp (EApp (EDictApp "flatMap") (EApp (EVar "cImplEntryValues") (EVar "menv"))) (EVar "cimpls")))
 (DTypeSig false "cInstallModGroups" (TyFun (TyApp (TyCon "List") (TyApp (TyCon "CModInfo") (TyApp (TyCon "Value") (TyVar "e")))) (TyEffect () (Some "e") (TyCon "Unit"))))
 (DFunDef false "cInstallModGroups" ((PList)) (ELit LUnit))
-(DFunDef false "cInstallModGroups" ((PCons (PCon "CModInfo" PWild (PVar "decls") (PVar "cbinds") PWild (PVar "cells") (PVar "menv")) (PVar "rest"))) (EBlock (DoLet false false PWild (EApp (EApp (EApp (EVar "cInstallTopGroups") (EVar "menv")) (EVar "cells")) (EVar "cbinds"))) (DoLet false false (PCon "EvalEnv" PWild (PCons (PVar "localFrame") PWild)) (EVar "menv")) (DoLet false false PWild (EApp (EApp (EVar "installFrameConsts") (EVar "localFrame")) (EApp (EVar "collectCtors") (EVar "decls")))) (DoExpr (EApp (EVar "cInstallModGroups") (EVar "rest")))))
+(DFunDef false "cInstallModGroups" ((PCons (PCon "CModInfo" PWild (PVar "decls") (PVar "cbinds") PWild (PVar "cells") (PVar "menv")) (PVar "rest"))) (EBlock (DoLet false false PWild (EApp (EApp (EApp (EVar "cInstallTopGroups") (EVar "menv")) (EVar "cells")) (EVar "cbinds"))) (DoLet false false PWild (EMatch (EVar "menv") (arm (PCon "EvalEnv" PWild (PCons (PVar "localFrame") PWild)) () (EApp (EApp (EVar "installFrameConsts") (EVar "localFrame")) (EApp (EVar "collectCtors") (EVar "decls")))) (arm PWild () (EApp (EVar "panic") (ELit (LString "module environment has no local frame")))))) (DoExpr (EApp (EVar "cInstallModGroups") (EVar "rest")))))
 (DTypeSig false "cRootLocals" (TyFun (TyApp (TyCon "List") (TyApp (TyCon "CModInfo") (TyApp (TyCon "Value") (TyVar "e")))) (TyEffect () (Some "e") (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "Value") (TyVar "e")))))))
 (DFunDef false "cRootLocals" ((PList)) (EListLit))
 (DFunDef false "cRootLocals" ((PList (PCon "CModInfo" PWild PWild PWild PWild (PVar "cells") PWild))) (EApp (EApp (EMethodRef "map") (EVar "cellResult")) (EVar "cells")))
