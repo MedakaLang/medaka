@@ -1714,15 +1714,22 @@ jobs:
           fi
 
   # ── The in-language suite: doctests, properties, `test "..."` decls ───────────
-  inlang:
+  # `make test` runs in three shards (`INLANG_SHARD`, Makefile): shard 1 is the
+  # `compiler/types` directory step alone with every core, shards 2 and 3 deal the
+  # other steps round-robin.  One runner took ~28 min; the Makefile derives each
+  # shard's steps, so a new `inlang-*` step needs no edit here.  The required
+  # context stays `inlang`: the job after this one passes only when every shard did.
+  inlang-shard:
     # `build` for the binaries (#1928); `if:` guard as on `gates` above.
     needs: [detect, build]
     if: ${{ !cancelled() }}
     runs-on: ubuntu-latest
-    # `inlang-backend-core-validate-test` (compiler/backend/core_validate_test.mdk) re-runs
-    # its own probe in serial children and has grown to 22-25 min; until that test is fixed
-    # the job needs headroom over its old 30-minute ceiling (#4568).
-    timeout-minutes: 45
+    name: inlang-shard ${{ matrix.shard }}
+    timeout-minutes: 30
+    strategy:
+      fail-fast: false
+      matrix:
+        shard: ['1/3', '2/3', '3/3']
     steps:
       - uses: actions/checkout@v4
       # #1931. The job-level `if:` stays `!cancelled()` — NEVER a job-level skip, or
@@ -1753,7 +1760,25 @@ jobs:
         if: ${{ needs.detect.result != 'success' || (needs.detect.outputs.docs_only != 'true' && (needs.detect.outputs.compiler_touched == 'true' || needs.detect.outputs.inlang_corpora == 'true')) }}
         env:
           SKIP_CLI_LINK_IF_FRESH: '1'
+          INLANG_SHARD: ${{ matrix.shard }}
         run: make test
+
+  # The required `inlang` context.  `!cancelled()` so a failed shard still reaches
+  # this job and reports red here, rather than leaving the context skipped.  The
+  # shards never skip at job level (their narrowing is per step), so `success` is
+  # the only passing result.
+  inlang:
+    needs: [inlang-shard]
+    if: ${{ !cancelled() }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: Every inlang shard passed
+        env:
+          SHARDS: ${{ needs.inlang-shard.result }}
+        run: |
+          echo "inlang-shard result: $SHARDS"
+          test "$SHARDS" = success
 
   # ── T25: the WasmGC backend gates ─────────────────────────────────────────────
   # WasmGC is one of Medaka's TWO production backends and the engine the
