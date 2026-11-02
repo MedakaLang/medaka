@@ -3145,6 +3145,13 @@ export
 pendingRunDiags : Ref (List (String, String, List Diag))
 pendingRunDiags = Ref []
 
+-- An opaque extra line `runtimePanic` appends to its non-JSON abort text (the
+-- `medaka test` driver sets the rerun-seed line here). Read only at the panic
+-- chokepoint and set only by that driver, so `run` and `repl` never see one.
+export
+abortNote : Ref (Option String)
+abortNote = Ref None
+
 -- Update currentEvalLoc from an ELoc span, but IGNORE the placeholder span the
 -- non-located `parse` produces (every token collapses to the zero-width
 -- `Loc "" 1 0 1 0`).  The prelude (runtime.mdk/core.mdk) is parsed that way, so
@@ -3208,8 +3215,11 @@ runtimePanic code msg = match !currentEvalLoc
       panic
         "\{fmtSentinel}\{cjAllToJsonWith (runEnvelopeFields ()) (!pendingRunDiags ++ [(ff, "", [diag])])}"
     else
-      panic
-        "\{fmtSentinel}\{ff}:\{intToString sl}:\{intToString sc}: runtime error [\{code}]: \{msg}"
+      let line =
+        "\{ff}:\{intToString sl}:\{intToString sc}: runtime error [\{code}]: \{msg}"
+      match !abortNote
+        Some note => panic "\{fmtSentinel}\{line}\n\{note}"
+        None => panic "\{fmtSentinel}\{line}"
 
 -- 0x01 marker (see runtimePanic / mdk_panic): a preformatted runtime diagnostic
 -- the abort primitive must print verbatim, never re-banner.

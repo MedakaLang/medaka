@@ -177,21 +177,3 @@ issue = 1134
 seed = 20261009
 cases = 500
 failure = "false"
-
-[[pin]]
-file = "tools/test_cmd_test.mdk"
-kind = "test"
-name = "an eval-engine panic still prints the run's seed once"
-engine = "native"
-issue = 4762
-detail_lines = ["member 1 of 2: expected 1 but got 0"]
-failure = "assertion"
-
-[[pin]]
-file = "tools/test_cmd_test.mdk"
-kind = "test"
-name = "an eval-engine panic in a directory still prints the run's seed once"
-engine = "native"
-issue = 4762
-detail_lines = ["member 1 of 2: expected 1 but got 0"]
-failure = "assertion"

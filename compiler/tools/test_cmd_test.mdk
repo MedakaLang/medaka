@@ -616,6 +616,18 @@ test "an eval-engine panic still prints the run's seed once" =
         let combined = "\{out}\n\{err}"
         expectEqual 1 (length (seedLines (lines combined)))))
 
+test "an eval-engine panic beside a passing test prints the run's seed once, on stderr" =
+  withFixtures
+    [("mixed_test.mdk", "\{passTestSrc}\n\{panicTestSrc}")]
+    (dir => withSpawn (seededTest (Some 7) [
+      "--engines",
+      "eval",
+      "\{dir}/mixed_test.mdk",
+    ]) ((_, out, err) => expectAll [
+      expectEqual 0 (length (seedLines (lines out))),
+      expectEqual 1 (length (seedLines (lines err))),
+    ]))
+
 test "an eval-engine panic in a directory still prints the run's seed once" =
   withFixtures
     [("panic_test.mdk", panicTestSrc)]

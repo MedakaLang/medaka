@@ -109,6 +109,7 @@ import eval.eval.{
   modulePathMap,
   testCapableExterns,
   seedRunRng,
+  abortNote,
   lookupBinding,
   force,
   ppValue,
@@ -4705,6 +4706,7 @@ entropySeed bytes = fold (acc b => acc * 256 + b) 0 (take 7 (toList bytes))
 adoptTestSeed : Int -> Unit
 adoptTestSeed n =
   testSeedRef := Some n
+  abortNote := Some (testSeedLine n)
   seedRunRng n
 
 testSeedLine : Int -> String
@@ -5270,10 +5272,11 @@ testFilesReport (f :: rest) (r :: results) (failedSoFar, seenSoFar) =
       if code == 0 then
         (True, seenLine)
       else
-        let _ = ePutStr err
+        let (shownErr, seenNote) = dropSeedLine err
+        let _ = ePutStr shownErr
         let _ =
           ePutStrLn
             "medaka test: \{f}: test runner died (child exited \{intToString code})"
-        (False, seenLine)
+        (False, seenLine || seenNote)
   testFilesReport rest results (failedSoFar || not ok, seenSoFar || seen)
 testFilesReport _ _ acc = acc

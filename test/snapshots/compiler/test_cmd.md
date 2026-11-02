@@ -1,5 +1,5 @@
 # META
-source_lines=5279
+source_lines=5282
 stages=DESUGAR,MARK
 # SOURCE
 -- compiler/tools/test_cmd.mdk — `medaka test` logic (doctests + property tests),
@@ -113,6 +113,7 @@ import eval.eval.{
   modulePathMap,
   testCapableExterns,
   seedRunRng,
+  abortNote,
   lookupBinding,
   force,
   ppValue,
@@ -4709,6 +4710,7 @@ entropySeed bytes = fold (acc b => acc * 256 + b) 0 (take 7 (toList bytes))
 adoptTestSeed : Int -> Unit
 adoptTestSeed n =
   testSeedRef := Some n
+  abortNote := Some (testSeedLine n)
   seedRunRng n
 
 testSeedLine : Int -> String
@@ -5274,11 +5276,12 @@ testFilesReport (f :: rest) (r :: results) (failedSoFar, seenSoFar) =
       if code == 0 then
         (True, seenLine)
       else
-        let _ = ePutStr err
+        let (shownErr, seenNote) = dropSeedLine err
+        let _ = ePutStr shownErr
         let _ =
           ePutStrLn
             "medaka test: \{f}: test runner died (child exited \{intToString code})"
-        (False, seenLine)
+        (False, seenLine || seenNote)
   testFilesReport rest results (failedSoFar || not ok, seenSoFar || seen)
 testFilesReport _ _ acc = acc
 # DESUGAR
@@ -5299,7 +5302,7 @@ testFilesReport _ _ acc = acc
 (DUse false (UseGroup ("types" "program_facts") ((mem "ProgramFacts" false) (mem "factsOfElab" false) (mem "withSibling" false))))
 (DUse false (UseGroup ("frontend" "ast") ((mem "SiblingPair" false))))
 (DUse false (UseGroup ("frontend" "marker") ((mem "declRefs" false))))
-(DUse false (UseGroup ("eval" "eval") ((mem "Value" false) (mem "EvalEnv" false) (mem "evalOneRootEnvFacts" false) (mem "evalModulesRootEvalEnvFacts" false) (mem "evalModulesRootEnvFacts" false) (mem "currentEvalFile" false) (mem "modulePathMap" false) (mem "testCapableExterns" false) (mem "seedRunRng" false) (mem "lookupBinding" false) (mem "force" false) (mem "ppValue" false))))
+(DUse false (UseGroup ("eval" "eval") ((mem "Value" false) (mem "EvalEnv" false) (mem "evalOneRootEnvFacts" false) (mem "evalModulesRootEvalEnvFacts" false) (mem "evalModulesRootEnvFacts" false) (mem "currentEvalFile" false) (mem "modulePathMap" false) (mem "testCapableExterns" false) (mem "seedRunRng" false) (mem "abortNote" false) (mem "lookupBinding" false) (mem "force" false) (mem "ppValue" false))))
 (DUse false (UseGroup ("tools" "doctest") ((mem "Example" false) (mem "ExResult" true) (mem "RunResult" true) (mem "Engine" true) (mem "engineName" false) (mem "buildSynthResults" false) (mem "buildSynthDecls" false) (mem "buildDetailsFrom" false) (mem "doctestFailSuffix" false) (mem "hasUseDecls" false) (mem "printDoctestDetails" false) (mem "runDetails" false) (mem "runPassed" false) (mem "runFailed" false) (mem "runErrors" false) (mem "exampleExpected" false) (mem "exampleInput" false) (mem "exampleLine" false) (mem "synthName" false) (mem "exResultJsonFields" false))))
 (DUse false (UseGroup ("tools" "native_doctest") ((mem "runNativeDoctests" false))))
 (DUse false (UseGroup ("tools" "native_test_decls") ((mem "runNativeTests" false))))
@@ -5875,7 +5878,7 @@ testFilesReport _ _ acc = acc
 (DTypeSig false "entropySeed" (TyFun (TyApp (TyCon "Array") (TyCon "Int")) (TyCon "Int")))
 (DFunDef false "entropySeed" ((PVar "bytes")) (EApp (EApp (EApp (EVar "fold") (ELam ((PVar "acc") (PVar "b")) (EBinOp "+" (EBinOp "*" (EVar "acc") (ELit (LInt 256))) (EVar "b")))) (ELit (LInt 0))) (EApp (EApp (EVar "take") (ELit (LInt 7))) (EApp (EVar "toList") (EVar "bytes")))))
 (DTypeSig false "adoptTestSeed" (TyFun (TyCon "Int") (TyCon "Unit")))
-(DFunDef false "adoptTestSeed" ((PVar "n")) (EBlock (DoExpr (EApp (EApp (EVar "setRef") (EVar "testSeedRef")) (EApp (EVar "Some") (EVar "n")))) (DoExpr (EApp (EVar "seedRunRng") (EVar "n")))))
+(DFunDef false "adoptTestSeed" ((PVar "n")) (EBlock (DoExpr (EApp (EApp (EVar "setRef") (EVar "testSeedRef")) (EApp (EVar "Some") (EVar "n")))) (DoExpr (EApp (EApp (EVar "setRef") (EVar "abortNote")) (EApp (EVar "Some") (EApp (EVar "testSeedLine") (EVar "n"))))) (DoExpr (EApp (EVar "seedRunRng") (EVar "n")))))
 (DTypeSig false "testSeedLine" (TyFun (TyCon "Int") (TyCon "String")))
 (DFunDef false "testSeedLine" ((PVar "n")) (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "seed: ")) (EApp (EVar "display") (EApp (EVar "intToString") (EVar "n")))) (ELit (LString " (rerun with MEDAKA_SEED="))) (EApp (EVar "display") (EApp (EVar "intToString") (EVar "n")))) (ELit (LString ")"))))
 (DTypeSig true "printTestSeedLine" (TyFun (TyCon "Unit") (TyEffect ("IO") None (TyCon "Unit"))))
@@ -5995,7 +5998,7 @@ testFilesReport _ _ acc = acc
 (DFunDef false "testFilesSerial" ((PVar "medaka") (PCons (PVar "f") (PVar "rest")) (PCons (PVar "argv") (PVar "argvs")) (PTuple (PVar "failedSoFar") (PVar "seenSoFar"))) (EBlock (DoLet false false (PTuple (PVar "failed") (PVar "seen")) (EApp (EApp (EApp (EVar "testFilesReport") (EListLit (EVar "f"))) (EListLit (EApp (EApp (EVar "runCommand") (EVar "medaka")) (EVar "argv")))) (ETuple (EVar "False") (EVar "False")))) (DoExpr (EApp (EApp (EApp (EApp (EVar "testFilesSerial") (EVar "medaka")) (EVar "rest")) (EVar "argvs")) (ETuple (EBinOp "||" (EVar "failedSoFar") (EVar "failed")) (EBinOp "||" (EVar "seenSoFar") (EVar "seen")))))))
 (DFunDef false "testFilesSerial" (PWild PWild PWild (PVar "acc")) (EVar "acc"))
 (DTypeSig false "testFilesReport" (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyApp (TyCon "List") (TyApp (TyApp (TyCon "Result") (TyCon "String")) (TyTuple (TyCon "Int") (TyCon "String") (TyCon "String")))) (TyFun (TyTuple (TyCon "Bool") (TyCon "Bool")) (TyEffect ("IO") None (TyTuple (TyCon "Bool") (TyCon "Bool")))))))
-(DFunDef false "testFilesReport" ((PCons (PVar "f") (PVar "rest")) (PCons (PVar "r") (PVar "results")) (PTuple (PVar "failedSoFar") (PVar "seenSoFar"))) (EBlock (DoLet false false (PTuple (PVar "ok") (PVar "seen")) (EMatch (EVar "r") (arm (PCon "Err" (PVar "e")) () (EBlock (DoLet false false PWild (EApp (EVar "ePutStrLn") (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "medaka test: ")) (EApp (EVar "display") (EVar "f"))) (ELit (LString ": failed to start test runner: "))) (EApp (EVar "display") (EVar "e"))) (ELit (LString ""))))) (DoExpr (ETuple (EVar "False") (EVar "False"))))) (arm (PCon "Ok" (PTuple (PVar "code") (PVar "out") (PVar "err"))) () (EBlock (DoLet false false (PTuple (PVar "shown") (PVar "seenLine")) (EApp (EVar "dropSeedLine") (EVar "out"))) (DoLet false false PWild (EApp (EVar "putStr") (EVar "shown"))) (DoLet false false PWild (EApp (EVar "flushStdout") (ELit LUnit))) (DoExpr (EIf (EBinOp "==" (EVar "code") (ELit (LInt 0))) (ETuple (EVar "True") (EVar "seenLine")) (EBlock (DoLet false false PWild (EApp (EVar "ePutStr") (EVar "err"))) (DoLet false false PWild (EApp (EVar "ePutStrLn") (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "medaka test: ")) (EApp (EVar "display") (EVar "f"))) (ELit (LString ": test runner died (child exited "))) (EApp (EVar "display") (EApp (EVar "intToString") (EVar "code")))) (ELit (LString ")"))))) (DoExpr (ETuple (EVar "False") (EVar "seenLine")))))))))) (DoExpr (EApp (EApp (EApp (EVar "testFilesReport") (EVar "rest")) (EVar "results")) (ETuple (EBinOp "||" (EVar "failedSoFar") (EApp (EVar "not") (EVar "ok"))) (EBinOp "||" (EVar "seenSoFar") (EVar "seen")))))))
+(DFunDef false "testFilesReport" ((PCons (PVar "f") (PVar "rest")) (PCons (PVar "r") (PVar "results")) (PTuple (PVar "failedSoFar") (PVar "seenSoFar"))) (EBlock (DoLet false false (PTuple (PVar "ok") (PVar "seen")) (EMatch (EVar "r") (arm (PCon "Err" (PVar "e")) () (EBlock (DoLet false false PWild (EApp (EVar "ePutStrLn") (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "medaka test: ")) (EApp (EVar "display") (EVar "f"))) (ELit (LString ": failed to start test runner: "))) (EApp (EVar "display") (EVar "e"))) (ELit (LString ""))))) (DoExpr (ETuple (EVar "False") (EVar "False"))))) (arm (PCon "Ok" (PTuple (PVar "code") (PVar "out") (PVar "err"))) () (EBlock (DoLet false false (PTuple (PVar "shown") (PVar "seenLine")) (EApp (EVar "dropSeedLine") (EVar "out"))) (DoLet false false PWild (EApp (EVar "putStr") (EVar "shown"))) (DoLet false false PWild (EApp (EVar "flushStdout") (ELit LUnit))) (DoExpr (EIf (EBinOp "==" (EVar "code") (ELit (LInt 0))) (ETuple (EVar "True") (EVar "seenLine")) (EBlock (DoLet false false (PTuple (PVar "shownErr") (PVar "seenNote")) (EApp (EVar "dropSeedLine") (EVar "err"))) (DoLet false false PWild (EApp (EVar "ePutStr") (EVar "shownErr"))) (DoLet false false PWild (EApp (EVar "ePutStrLn") (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "medaka test: ")) (EApp (EVar "display") (EVar "f"))) (ELit (LString ": test runner died (child exited "))) (EApp (EVar "display") (EApp (EVar "intToString") (EVar "code")))) (ELit (LString ")"))))) (DoExpr (ETuple (EVar "False") (EBinOp "||" (EVar "seenLine") (EVar "seenNote"))))))))))) (DoExpr (EApp (EApp (EApp (EVar "testFilesReport") (EVar "rest")) (EVar "results")) (ETuple (EBinOp "||" (EVar "failedSoFar") (EApp (EVar "not") (EVar "ok"))) (EBinOp "||" (EVar "seenSoFar") (EVar "seen")))))))
 (DFunDef false "testFilesReport" (PWild PWild (PVar "acc")) (EVar "acc"))
 # MARK
 (DUse false (UseGroup ("support" "diag_codes") ((mem "DiagCode" true))))
@@ -6015,7 +6018,7 @@ testFilesReport _ _ acc = acc
 (DUse false (UseGroup ("types" "program_facts") ((mem "ProgramFacts" false) (mem "factsOfElab" false) (mem "withSibling" false))))
 (DUse false (UseGroup ("frontend" "ast") ((mem "SiblingPair" false))))
 (DUse false (UseGroup ("frontend" "marker") ((mem "declRefs" false))))
-(DUse false (UseGroup ("eval" "eval") ((mem "Value" false) (mem "EvalEnv" false) (mem "evalOneRootEnvFacts" false) (mem "evalModulesRootEvalEnvFacts" false) (mem "evalModulesRootEnvFacts" false) (mem "currentEvalFile" false) (mem "modulePathMap" false) (mem "testCapableExterns" false) (mem "seedRunRng" false) (mem "lookupBinding" false) (mem "force" false) (mem "ppValue" false))))
+(DUse false (UseGroup ("eval" "eval") ((mem "Value" false) (mem "EvalEnv" false) (mem "evalOneRootEnvFacts" false) (mem "evalModulesRootEvalEnvFacts" false) (mem "evalModulesRootEnvFacts" false) (mem "currentEvalFile" false) (mem "modulePathMap" false) (mem "testCapableExterns" false) (mem "seedRunRng" false) (mem "abortNote" false) (mem "lookupBinding" false) (mem "force" false) (mem "ppValue" false))))
 (DUse false (UseGroup ("tools" "doctest") ((mem "Example" false) (mem "ExResult" true) (mem "RunResult" true) (mem "Engine" true) (mem "engineName" false) (mem "buildSynthResults" false) (mem "buildSynthDecls" false) (mem "buildDetailsFrom" false) (mem "doctestFailSuffix" false) (mem "hasUseDecls" false) (mem "printDoctestDetails" false) (mem "runDetails" false) (mem "runPassed" false) (mem "runFailed" false) (mem "runErrors" false) (mem "exampleExpected" false) (mem "exampleInput" false) (mem "exampleLine" false) (mem "synthName" false) (mem "exResultJsonFields" false))))
 (DUse false (UseGroup ("tools" "native_doctest") ((mem "runNativeDoctests" false))))
 (DUse false (UseGroup ("tools" "native_test_decls") ((mem "runNativeTests" false))))
@@ -6591,7 +6594,7 @@ testFilesReport _ _ acc = acc
 (DTypeSig false "entropySeed" (TyFun (TyApp (TyCon "Array") (TyCon "Int")) (TyCon "Int")))
 (DFunDef false "entropySeed" ((PVar "bytes")) (EApp (EApp (EApp (EMethodRef "fold") (ELam ((PVar "acc") (PVar "b")) (EBinOp "+" (EBinOp "*" (EVar "acc") (ELit (LInt 256))) (EVar "b")))) (ELit (LInt 0))) (EApp (EApp (EVar "take") (ELit (LInt 7))) (EApp (EMethodRef "toList") (EVar "bytes")))))
 (DTypeSig false "adoptTestSeed" (TyFun (TyCon "Int") (TyCon "Unit")))
-(DFunDef false "adoptTestSeed" ((PVar "n")) (EBlock (DoExpr (EApp (EApp (EVar "setRef") (EVar "testSeedRef")) (EApp (EVar "Some") (EVar "n")))) (DoExpr (EApp (EVar "seedRunRng") (EVar "n")))))
+(DFunDef false "adoptTestSeed" ((PVar "n")) (EBlock (DoExpr (EApp (EApp (EVar "setRef") (EVar "testSeedRef")) (EApp (EVar "Some") (EVar "n")))) (DoExpr (EApp (EApp (EVar "setRef") (EVar "abortNote")) (EApp (EVar "Some") (EApp (EVar "testSeedLine") (EVar "n"))))) (DoExpr (EApp (EVar "seedRunRng") (EVar "n")))))
 (DTypeSig false "testSeedLine" (TyFun (TyCon "Int") (TyCon "String")))
 (DFunDef false "testSeedLine" ((PVar "n")) (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "seed: ")) (EApp (EMethodRef "display") (EApp (EVar "intToString") (EVar "n")))) (ELit (LString " (rerun with MEDAKA_SEED="))) (EApp (EMethodRef "display") (EApp (EVar "intToString") (EVar "n")))) (ELit (LString ")"))))
 (DTypeSig true "printTestSeedLine" (TyFun (TyCon "Unit") (TyEffect ("IO") None (TyCon "Unit"))))
@@ -6711,5 +6714,5 @@ testFilesReport _ _ acc = acc
 (DFunDef false "testFilesSerial" ((PVar "medaka") (PCons (PVar "f") (PVar "rest")) (PCons (PVar "argv") (PVar "argvs")) (PTuple (PVar "failedSoFar") (PVar "seenSoFar"))) (EBlock (DoLet false false (PTuple (PVar "failed") (PVar "seen")) (EApp (EApp (EApp (EVar "testFilesReport") (EListLit (EVar "f"))) (EListLit (EApp (EApp (EVar "runCommand") (EVar "medaka")) (EVar "argv")))) (ETuple (EVar "False") (EVar "False")))) (DoExpr (EApp (EApp (EApp (EApp (EVar "testFilesSerial") (EVar "medaka")) (EVar "rest")) (EVar "argvs")) (ETuple (EBinOp "||" (EVar "failedSoFar") (EVar "failed")) (EBinOp "||" (EVar "seenSoFar") (EVar "seen")))))))
 (DFunDef false "testFilesSerial" (PWild PWild PWild (PVar "acc")) (EVar "acc"))
 (DTypeSig false "testFilesReport" (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyApp (TyCon "List") (TyApp (TyApp (TyCon "Result") (TyCon "String")) (TyTuple (TyCon "Int") (TyCon "String") (TyCon "String")))) (TyFun (TyTuple (TyCon "Bool") (TyCon "Bool")) (TyEffect ("IO") None (TyTuple (TyCon "Bool") (TyCon "Bool")))))))
-(DFunDef false "testFilesReport" ((PCons (PVar "f") (PVar "rest")) (PCons (PVar "r") (PVar "results")) (PTuple (PVar "failedSoFar") (PVar "seenSoFar"))) (EBlock (DoLet false false (PTuple (PVar "ok") (PVar "seen")) (EMatch (EVar "r") (arm (PCon "Err" (PVar "e")) () (EBlock (DoLet false false PWild (EApp (EVar "ePutStrLn") (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "medaka test: ")) (EApp (EMethodRef "display") (EVar "f"))) (ELit (LString ": failed to start test runner: "))) (EApp (EMethodRef "display") (EVar "e"))) (ELit (LString ""))))) (DoExpr (ETuple (EVar "False") (EVar "False"))))) (arm (PCon "Ok" (PTuple (PVar "code") (PVar "out") (PVar "err"))) () (EBlock (DoLet false false (PTuple (PVar "shown") (PVar "seenLine")) (EApp (EVar "dropSeedLine") (EVar "out"))) (DoLet false false PWild (EApp (EVar "putStr") (EVar "shown"))) (DoLet false false PWild (EApp (EVar "flushStdout") (ELit LUnit))) (DoExpr (EIf (EBinOp "==" (EVar "code") (ELit (LInt 0))) (ETuple (EVar "True") (EVar "seenLine")) (EBlock (DoLet false false PWild (EApp (EVar "ePutStr") (EVar "err"))) (DoLet false false PWild (EApp (EVar "ePutStrLn") (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "medaka test: ")) (EApp (EMethodRef "display") (EVar "f"))) (ELit (LString ": test runner died (child exited "))) (EApp (EMethodRef "display") (EApp (EVar "intToString") (EVar "code")))) (ELit (LString ")"))))) (DoExpr (ETuple (EVar "False") (EVar "seenLine")))))))))) (DoExpr (EApp (EApp (EApp (EVar "testFilesReport") (EVar "rest")) (EVar "results")) (ETuple (EBinOp "||" (EVar "failedSoFar") (EApp (EVar "not") (EVar "ok"))) (EBinOp "||" (EVar "seenSoFar") (EVar "seen")))))))
+(DFunDef false "testFilesReport" ((PCons (PVar "f") (PVar "rest")) (PCons (PVar "r") (PVar "results")) (PTuple (PVar "failedSoFar") (PVar "seenSoFar"))) (EBlock (DoLet false false (PTuple (PVar "ok") (PVar "seen")) (EMatch (EVar "r") (arm (PCon "Err" (PVar "e")) () (EBlock (DoLet false false PWild (EApp (EVar "ePutStrLn") (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "medaka test: ")) (EApp (EMethodRef "display") (EVar "f"))) (ELit (LString ": failed to start test runner: "))) (EApp (EMethodRef "display") (EVar "e"))) (ELit (LString ""))))) (DoExpr (ETuple (EVar "False") (EVar "False"))))) (arm (PCon "Ok" (PTuple (PVar "code") (PVar "out") (PVar "err"))) () (EBlock (DoLet false false (PTuple (PVar "shown") (PVar "seenLine")) (EApp (EVar "dropSeedLine") (EVar "out"))) (DoLet false false PWild (EApp (EVar "putStr") (EVar "shown"))) (DoLet false false PWild (EApp (EVar "flushStdout") (ELit LUnit))) (DoExpr (EIf (EBinOp "==" (EVar "code") (ELit (LInt 0))) (ETuple (EVar "True") (EVar "seenLine")) (EBlock (DoLet false false (PTuple (PVar "shownErr") (PVar "seenNote")) (EApp (EVar "dropSeedLine") (EVar "err"))) (DoLet false false PWild (EApp (EVar "ePutStr") (EVar "shownErr"))) (DoLet false false PWild (EApp (EVar "ePutStrLn") (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "medaka test: ")) (EApp (EMethodRef "display") (EVar "f"))) (ELit (LString ": test runner died (child exited "))) (EApp (EMethodRef "display") (EApp (EVar "intToString") (EVar "code")))) (ELit (LString ")"))))) (DoExpr (ETuple (EVar "False") (EBinOp "||" (EVar "seenLine") (EVar "seenNote"))))))))))) (DoExpr (EApp (EApp (EApp (EVar "testFilesReport") (EVar "rest")) (EVar "results")) (ETuple (EBinOp "||" (EVar "failedSoFar") (EApp (EVar "not") (EVar "ok"))) (EBinOp "||" (EVar "seenSoFar") (EVar "seen")))))))
 (DFunDef false "testFilesReport" (PWild PWild (PVar "acc")) (EVar "acc"))
