@@ -286,9 +286,11 @@ chose it where either order is acyclic. A probe or instrument that only tests re
 test code. If it needs no private names it goes in a `*_test_support.mdk` module (for the
 typechecker, `compiler/types/tc_solve_test_support.mdk`); if it needs its home module's private
 names it goes in that module's own `*_test.mdk` sibling and is exported from there to other tests
-(`_test` to `_test` imports keep the exporting sibling's privilege). No production module exports a
-name only for a test: `rule-dead-code` is gated, so a private name only a sibling reads is dead and
-moves into the sibling (`docs/design/TEST-SIBLING-ACCESS-DESIGN.md` §3.1). Fixtures move to the
+(`_test` to `_test` imports keep the exporting sibling's privilege). A new probe gets no production
+export: `rule-dead-code` is gated, so a private name only a sibling reads is dead and moves into the
+sibling (`docs/design/TEST-SIBLING-ACCESS-DESIGN.md` §3.1). The method-row and method-return probe
+sections still exported from `tc_solve`, `tc_occurrence`, `tc_env`, `tc_decls`, `tc_mono`, `tc_state`
+and `scopes` predate the rule and are read only by tests; #4767 tracks moving them. Fixtures move to the
 siblings (P4-D8). Every module gets a `<module>_test.mdk` in its sprint, with the
 `typecheck_test.mdk` blocks whose subject moved plus API tests by the `write-tests` table; #3944's
 exclusion of white-box tests of `unify`, `generalize`, `instantiate` and `entail` is reversed by
