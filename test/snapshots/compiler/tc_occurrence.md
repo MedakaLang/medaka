@@ -1,5 +1,5 @@
 # META
-source_lines=3319
+source_lines=3254
 stages=DESUGAR,MARK
 # SOURCE
 -- tc_occurrence: method and literal occurrence inference, operator dispatch-site recording
@@ -145,7 +145,6 @@ import types.tc_solve_entail.{noteNumericPredicateTrace}
 import types.tc_solve.{
   builtinClassPresent,
   consSiteFn,
-  goalKindName,
   isLocalAbsName,
   localSourceName,
   methodPredicateTemplateHasAbsent,
@@ -3207,72 +3206,8 @@ popMarkedClause grouped pending n =
     c :: cs => (c, omInsert n cs pending)
     [] => panic "rebuildGroupDecls: no marked clause left for \{n}"
 
--- Observation declarations exported for readers outside this module: `cellGoalInnerAliasing` for
--- the drive-level `typecheck_test`, and the method-row and method-return probes `tc_module` reads.
-
--- Test visibility (`typecheck_test.mdk` and `tc_occurrence_test.mdk`): each goal of
--- [gctx]'s graph that writes a method cell's route or dictionaries, by kind, with
--- whether its `oInner` is that cell's `ecInner`, so the stampers' notes reach the judgment (`judgeCells`).  Read
--- by writing a marker through the goal's refs and looking for it in the cells, then
--- restoring both.  A goal whose destination is no cell's (a throwaway) is skipped.
-export
-cellGoalInnerAliasing : GraphCtx -> List (String, Bool)
-cellGoalInnerAliasing gctx =
-  let g = gctx.graphRun
-  let cells = cellsFrom g.evCells.value 0 []
-  filterMap
-    (o =>
-      map (c => (goalKindName o.oKind, innerAliases o c)) (cellOfGoal cells o))
-    g.goals.value
-
-cellsFrom : Array (Option EvCell) -> Int -> List EvCell -> List EvCell
-cellsFrom arr i acc
-  | i >= arrayLength arr = reverseL acc
-  | otherwise = match arrayGetUnsafe i arr
-    Some c => cellsFrom arr (i + 1) (c :: acc)
-    None => cellsFrom arr (i + 1) acc
-
-cellOfGoal : List EvCell -> Obligation -> Option EvCell
-cellOfGoal cells o = match o.oDest
-  EvRoute r =>
-    let saved = r.value
-    r := RLocal aliasMarker []
-    let hit = filterList (c => isAliasMarker c.ecTag.value) cells
-    r := saved
-    onlyCell hit
-  EvRoutes rs =>
-    let saved = rs.value
-    rs := [RLocal aliasMarker []]
-    let hit =
-      filterList
-        (c => anyList isAliasMarker (c.ecImpl.value ++ c.ecMeth.value))
-        cells
-    rs := saved
-    onlyCell hit
-
-onlyCell : List EvCell -> Option EvCell
-onlyCell [c] = Some c
-onlyCell _ = None
-
-aliasMarker : String
-aliasMarker = "<inner-alias-probe>"
-
-isAliasMarker : Route -> Bool
-isAliasMarker (RLocal sym _) = sym == aliasMarker
-isAliasMarker _ = False
-
-innerAliases : Obligation -> EvCell -> Bool
-innerAliases o c =
-  let savedGoal = o.oInner.value
-  let savedCell = c.ecInner.value
-  c.ecInner := innerNone
-  o.oInner := Inner True True
-  let hit = match c.ecInner.value
-    Inner True True => True
-    _ => False
-  o.oInner := savedGoal
-  c.ecInner := savedCell
-  hit
+-- Observation declarations exported for readers outside this module: the method-row and
+-- method-return probes `tc_module` reads.
 
 export
 firstMethodRow : List MethodSchemeRow -> MethodSchemeRow
@@ -3333,7 +3268,7 @@ methodReturnProbeCodes prev ownedRow impls =
 (DUse false (UseGroup ("types" "tc_decls") ((mem "constraintIface" false) (mem "constraintIsMethodLevel" false) (mem "constraintVarNames" false) (mem "ifaceMethodSchemeRows" false) (mem "importerDefiners" false))))
 (DUse false (UseGroup ("types" "tc_solve_givens") ((mem "predicateSlotIds" false) (mem "predicateSlotIdsAt" false))))
 (DUse false (UseGroup ("types" "tc_solve_entail") ((mem "noteNumericPredicateTrace" false))))
-(DUse false (UseGroup ("types" "tc_solve") ((mem "builtinClassPresent" false) (mem "consSiteFn" false) (mem "goalKindName" false) (mem "isLocalAbsName" false) (mem "localSourceName" false) (mem "methodPredicateTemplateHasAbsent" false) (mem "methodReturnProbeIface" false) (mem "methodReturnProbeOccurrence" false) (mem "methodReturnProbeScope" false) (mem "methodReturnProbeSpelling" false) (mem "noteMethodReturnTrace" false) (mem "pushDictApp" false) (mem "pushGoal" false) (mem "returnPosMethodNames" false) (mem "routeLocalSym" false))))
+(DUse false (UseGroup ("types" "tc_solve") ((mem "builtinClassPresent" false) (mem "consSiteFn" false) (mem "isLocalAbsName" false) (mem "localSourceName" false) (mem "methodPredicateTemplateHasAbsent" false) (mem "methodReturnProbeIface" false) (mem "methodReturnProbeOccurrence" false) (mem "methodReturnProbeScope" false) (mem "methodReturnProbeSpelling" false) (mem "noteMethodReturnTrace" false) (mem "pushDictApp" false) (mem "pushGoal" false) (mem "returnPosMethodNames" false) (mem "routeLocalSym" false))))
 (DUse false (UseGroup ("types" "tc_solve_check") ((mem "checkCallObligationsU" false) (mem "dedupSlotVecs" false) (mem "dispatchMonosOf" false))))
 (DUse false (UseGroup ("types" "tc_shadow") ((mem "buildStandaloneShadowsGraph" false) (mem "callArgVecsV" false) (mem "computeMangledShadowMap" false) (mem "constraintMonosOf" false) (mem "coreShadowMapFor" false) (mem "declaredConstraintFor" false) (mem "declaredEffectsAt" false) (mem "isDefinerShadow" false) (mem "isShadowStandalone" false) (mem "rejectAdmittedValueOccurrence" false) (mem "shadowDeclaredFor" false) (mem "shadowStandaloneDictSlots" false) (mem "shadowStandaloneDictSlotsAt" false) (mem "standaloneValueBinding" false) (mem "standaloneValueBindingEmit" false) (mem "standaloneValuePinned" false))))
 (DUse false (UseGroup ("types" "tc_effects") ((mem "clausesOf" false) (mem "evOrdinal" false) (mem "grantNameIn" false) (mem "recordMethodGrantOcc" false) (mem "recordStandaloneGrantOcc" false))))
@@ -3815,22 +3750,6 @@ methodReturnProbeCodes prev ownedRow impls =
 (DFunDef false "rebuildFunClauses" ((PVar "grouped") (PVar "pending") (PVar "n") (PCons PWild (PVar "rest"))) (EBlock (DoLet false false (PTuple (PTuple (PVar "ps") (PVar "e")) (PVar "pending2")) (EApp (EApp (EApp (EVar "popMarkedClause") (EVar "grouped")) (EVar "pending")) (EVar "n"))) (DoLet false false (PTuple (PVar "cs") (PVar "pending3")) (EApp (EApp (EApp (EApp (EVar "rebuildFunClauses") (EVar "grouped")) (EVar "pending2")) (EVar "n")) (EVar "rest"))) (DoExpr (ETuple (EBinOp "::" (EApp (EApp (EVar "FunClause") (EVar "ps")) (EVar "e")) (EVar "cs")) (EVar "pending3")))))
 (DTypeSig false "popMarkedClause" (TyFun (TyApp (TyCon "OrdMap") (TyApp (TyCon "List") (TyTuple (TyApp (TyCon "List") (TyCon "Pat")) (TyCon "Expr")))) (TyFun (TyApp (TyCon "OrdMap") (TyApp (TyCon "List") (TyTuple (TyApp (TyCon "List") (TyCon "Pat")) (TyCon "Expr")))) (TyFun (TyCon "String") (TyTuple (TyTuple (TyApp (TyCon "List") (TyCon "Pat")) (TyCon "Expr")) (TyApp (TyCon "OrdMap") (TyApp (TyCon "List") (TyTuple (TyApp (TyCon "List") (TyCon "Pat")) (TyCon "Expr")))))))))
 (DFunDef false "popMarkedClause" ((PVar "grouped") (PVar "pending") (PVar "n")) (EBlock (DoLet false false (PVar "remaining") (EMatch (EApp (EApp (EVar "omLookup") (EVar "n")) (EVar "pending")) (arm (PCon "Some" (PVar "cs")) () (EVar "cs")) (arm (PCon "None") () (EApp (EApp (EVar "clausesOf") (EVar "n")) (EVar "grouped"))))) (DoExpr (EMatch (EVar "remaining") (arm (PCons (PVar "c") (PVar "cs")) () (ETuple (EVar "c") (EApp (EApp (EApp (EVar "omInsert") (EVar "n")) (EVar "cs")) (EVar "pending")))) (arm (PList) () (EApp (EVar "panic") (EBinOp "++" (EBinOp "++" (ELit (LString "rebuildGroupDecls: no marked clause left for ")) (EApp (EVar "display") (EVar "n"))) (ELit (LString "")))))))))
-(DTypeSig true "cellGoalInnerAliasing" (TyFun (TyCon "GraphCtx") (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "Bool")))))
-(DFunDef false "cellGoalInnerAliasing" ((PVar "gctx")) (EBlock (DoLet false false (PVar "g") (EFieldAccess (EVar "gctx") "graphRun")) (DoLet false false (PVar "cells") (EApp (EApp (EApp (EVar "cellsFrom") (EFieldAccess (EFieldAccess (EVar "g") "evCells") "value")) (ELit (LInt 0))) (EListLit))) (DoExpr (EApp (EApp (EVar "filterMap") (ELam ((PVar "o")) (EApp (EApp (EVar "map") (ELam ((PVar "c")) (ETuple (EApp (EVar "goalKindName") (EFieldAccess (EVar "o") "oKind")) (EApp (EApp (EVar "innerAliases") (EVar "o")) (EVar "c"))))) (EApp (EApp (EVar "cellOfGoal") (EVar "cells")) (EVar "o"))))) (EFieldAccess (EFieldAccess (EVar "g") "goals") "value")))))
-(DTypeSig false "cellsFrom" (TyFun (TyApp (TyCon "Array") (TyApp (TyCon "Option") (TyCon "EvCell"))) (TyFun (TyCon "Int") (TyFun (TyApp (TyCon "List") (TyCon "EvCell")) (TyApp (TyCon "List") (TyCon "EvCell"))))))
-(DFunDef false "cellsFrom" ((PVar "arr") (PVar "i") (PVar "acc")) (EIf (EBinOp ">=" (EVar "i") (EApp (EVar "arrayLength") (EVar "arr"))) (EApp (EVar "reverseL") (EVar "acc")) (EIf (EVar "otherwise") (EMatch (EApp (EApp (EVar "arrayGetUnsafe") (EVar "i")) (EVar "arr")) (arm (PCon "Some" (PVar "c")) () (EApp (EApp (EApp (EVar "cellsFrom") (EVar "arr")) (EBinOp "+" (EVar "i") (ELit (LInt 1)))) (EBinOp "::" (EVar "c") (EVar "acc")))) (arm (PCon "None") () (EApp (EApp (EApp (EVar "cellsFrom") (EVar "arr")) (EBinOp "+" (EVar "i") (ELit (LInt 1)))) (EVar "acc")))) (EApp (EVar "__fallthrough__") (ELit LUnit)))))
-(DTypeSig false "cellOfGoal" (TyFun (TyApp (TyCon "List") (TyCon "EvCell")) (TyFun (TyCon "Obligation") (TyApp (TyCon "Option") (TyCon "EvCell")))))
-(DFunDef false "cellOfGoal" ((PVar "cells") (PVar "o")) (EMatch (EFieldAccess (EVar "o") "oDest") (arm (PCon "EvRoute" (PVar "r")) () (EBlock (DoLet false false (PVar "saved") (EFieldAccess (EVar "r") "value")) (DoExpr (EApp (EApp (EVar "setRef") (EVar "r")) (EApp (EApp (EVar "RLocal") (EVar "aliasMarker")) (EListLit)))) (DoLet false false (PVar "hit") (EApp (EApp (EVar "filterList") (ELam ((PVar "c")) (EApp (EVar "isAliasMarker") (EFieldAccess (EFieldAccess (EVar "c") "ecTag") "value")))) (EVar "cells"))) (DoExpr (EApp (EApp (EVar "setRef") (EVar "r")) (EVar "saved"))) (DoExpr (EApp (EVar "onlyCell") (EVar "hit"))))) (arm (PCon "EvRoutes" (PVar "rs")) () (EBlock (DoLet false false (PVar "saved") (EFieldAccess (EVar "rs") "value")) (DoExpr (EApp (EApp (EVar "setRef") (EVar "rs")) (EListLit (EApp (EApp (EVar "RLocal") (EVar "aliasMarker")) (EListLit))))) (DoLet false false (PVar "hit") (EApp (EApp (EVar "filterList") (ELam ((PVar "c")) (EApp (EApp (EVar "anyList") (EVar "isAliasMarker")) (EBinOp "++" (EFieldAccess (EFieldAccess (EVar "c") "ecImpl") "value") (EFieldAccess (EFieldAccess (EVar "c") "ecMeth") "value"))))) (EVar "cells"))) (DoExpr (EApp (EApp (EVar "setRef") (EVar "rs")) (EVar "saved"))) (DoExpr (EApp (EVar "onlyCell") (EVar "hit")))))))
-(DTypeSig false "onlyCell" (TyFun (TyApp (TyCon "List") (TyCon "EvCell")) (TyApp (TyCon "Option") (TyCon "EvCell"))))
-(DFunDef false "onlyCell" ((PList (PVar "c"))) (EApp (EVar "Some") (EVar "c")))
-(DFunDef false "onlyCell" (PWild) (EVar "None"))
-(DTypeSig false "aliasMarker" (TyCon "String"))
-(DFunDef false "aliasMarker" () (ELit (LString "<inner-alias-probe>")))
-(DTypeSig false "isAliasMarker" (TyFun (TyCon "Route") (TyCon "Bool")))
-(DFunDef false "isAliasMarker" ((PCon "RLocal" (PVar "sym") PWild)) (EBinOp "==" (EVar "sym") (EVar "aliasMarker")))
-(DFunDef false "isAliasMarker" (PWild) (EVar "False"))
-(DTypeSig false "innerAliases" (TyFun (TyCon "Obligation") (TyFun (TyCon "EvCell") (TyCon "Bool"))))
-(DFunDef false "innerAliases" ((PVar "o") (PVar "c")) (EBlock (DoLet false false (PVar "savedGoal") (EFieldAccess (EFieldAccess (EVar "o") "oInner") "value")) (DoLet false false (PVar "savedCell") (EFieldAccess (EFieldAccess (EVar "c") "ecInner") "value")) (DoExpr (EApp (EApp (EVar "setRef") (EFieldAccess (EVar "c") "ecInner")) (EVar "innerNone"))) (DoExpr (EApp (EApp (EVar "setRef") (EFieldAccess (EVar "o") "oInner")) (EApp (EApp (EVar "Inner") (EVar "True")) (EVar "True")))) (DoLet false false (PVar "hit") (EMatch (EFieldAccess (EFieldAccess (EVar "c") "ecInner") "value") (arm (PCon "Inner" (PCon "True") (PCon "True")) () (EVar "True")) (arm PWild () (EVar "False")))) (DoExpr (EApp (EApp (EVar "setRef") (EFieldAccess (EVar "o") "oInner")) (EVar "savedGoal"))) (DoExpr (EApp (EApp (EVar "setRef") (EFieldAccess (EVar "c") "ecInner")) (EVar "savedCell"))) (DoExpr (EVar "hit"))))
 (DTypeSig true "firstMethodRow" (TyFun (TyApp (TyCon "List") (TyCon "MethodSchemeRow")) (TyCon "MethodSchemeRow")))
 (DFunDef false "firstMethodRow" ((PCons (PVar "row") PWild)) (EVar "row"))
 (DFunDef false "firstMethodRow" ((PList)) (EApp (EVar "panic") (ELit (LString "method-row observer expected a row"))))
@@ -3850,7 +3769,7 @@ methodReturnProbeCodes prev ownedRow impls =
 (DUse false (UseGroup ("types" "tc_decls") ((mem "constraintIface" false) (mem "constraintIsMethodLevel" false) (mem "constraintVarNames" false) (mem "ifaceMethodSchemeRows" false) (mem "importerDefiners" false))))
 (DUse false (UseGroup ("types" "tc_solve_givens") ((mem "predicateSlotIds" false) (mem "predicateSlotIdsAt" false))))
 (DUse false (UseGroup ("types" "tc_solve_entail") ((mem "noteNumericPredicateTrace" false))))
-(DUse false (UseGroup ("types" "tc_solve") ((mem "builtinClassPresent" false) (mem "consSiteFn" false) (mem "goalKindName" false) (mem "isLocalAbsName" false) (mem "localSourceName" false) (mem "methodPredicateTemplateHasAbsent" false) (mem "methodReturnProbeIface" false) (mem "methodReturnProbeOccurrence" false) (mem "methodReturnProbeScope" false) (mem "methodReturnProbeSpelling" false) (mem "noteMethodReturnTrace" false) (mem "pushDictApp" false) (mem "pushGoal" false) (mem "returnPosMethodNames" false) (mem "routeLocalSym" false))))
+(DUse false (UseGroup ("types" "tc_solve") ((mem "builtinClassPresent" false) (mem "consSiteFn" false) (mem "isLocalAbsName" false) (mem "localSourceName" false) (mem "methodPredicateTemplateHasAbsent" false) (mem "methodReturnProbeIface" false) (mem "methodReturnProbeOccurrence" false) (mem "methodReturnProbeScope" false) (mem "methodReturnProbeSpelling" false) (mem "noteMethodReturnTrace" false) (mem "pushDictApp" false) (mem "pushGoal" false) (mem "returnPosMethodNames" false) (mem "routeLocalSym" false))))
 (DUse false (UseGroup ("types" "tc_solve_check") ((mem "checkCallObligationsU" false) (mem "dedupSlotVecs" false) (mem "dispatchMonosOf" false))))
 (DUse false (UseGroup ("types" "tc_shadow") ((mem "buildStandaloneShadowsGraph" false) (mem "callArgVecsV" false) (mem "computeMangledShadowMap" false) (mem "constraintMonosOf" false) (mem "coreShadowMapFor" false) (mem "declaredConstraintFor" false) (mem "declaredEffectsAt" false) (mem "isDefinerShadow" false) (mem "isShadowStandalone" false) (mem "rejectAdmittedValueOccurrence" false) (mem "shadowDeclaredFor" false) (mem "shadowStandaloneDictSlots" false) (mem "shadowStandaloneDictSlotsAt" false) (mem "standaloneValueBinding" false) (mem "standaloneValueBindingEmit" false) (mem "standaloneValuePinned" false))))
 (DUse false (UseGroup ("types" "tc_effects") ((mem "clausesOf" false) (mem "evOrdinal" false) (mem "grantNameIn" false) (mem "recordMethodGrantOcc" false) (mem "recordStandaloneGrantOcc" false))))
@@ -4332,22 +4251,6 @@ methodReturnProbeCodes prev ownedRow impls =
 (DFunDef false "rebuildFunClauses" ((PVar "grouped") (PVar "pending") (PVar "n") (PCons PWild (PVar "rest"))) (EBlock (DoLet false false (PTuple (PTuple (PVar "ps") (PVar "e")) (PVar "pending2")) (EApp (EApp (EApp (EVar "popMarkedClause") (EVar "grouped")) (EVar "pending")) (EVar "n"))) (DoLet false false (PTuple (PVar "cs") (PVar "pending3")) (EApp (EApp (EApp (EApp (EVar "rebuildFunClauses") (EVar "grouped")) (EVar "pending2")) (EVar "n")) (EVar "rest"))) (DoExpr (ETuple (EBinOp "::" (EApp (EApp (EVar "FunClause") (EVar "ps")) (EVar "e")) (EVar "cs")) (EVar "pending3")))))
 (DTypeSig false "popMarkedClause" (TyFun (TyApp (TyCon "OrdMap") (TyApp (TyCon "List") (TyTuple (TyApp (TyCon "List") (TyCon "Pat")) (TyCon "Expr")))) (TyFun (TyApp (TyCon "OrdMap") (TyApp (TyCon "List") (TyTuple (TyApp (TyCon "List") (TyCon "Pat")) (TyCon "Expr")))) (TyFun (TyCon "String") (TyTuple (TyTuple (TyApp (TyCon "List") (TyCon "Pat")) (TyCon "Expr")) (TyApp (TyCon "OrdMap") (TyApp (TyCon "List") (TyTuple (TyApp (TyCon "List") (TyCon "Pat")) (TyCon "Expr")))))))))
 (DFunDef false "popMarkedClause" ((PVar "grouped") (PVar "pending") (PVar "n")) (EBlock (DoLet false false (PVar "remaining") (EMatch (EApp (EApp (EVar "omLookup") (EVar "n")) (EVar "pending")) (arm (PCon "Some" (PVar "cs")) () (EVar "cs")) (arm (PCon "None") () (EApp (EApp (EVar "clausesOf") (EVar "n")) (EVar "grouped"))))) (DoExpr (EMatch (EVar "remaining") (arm (PCons (PVar "c") (PVar "cs")) () (ETuple (EVar "c") (EApp (EApp (EApp (EVar "omInsert") (EVar "n")) (EVar "cs")) (EVar "pending")))) (arm (PList) () (EApp (EVar "panic") (EBinOp "++" (EBinOp "++" (ELit (LString "rebuildGroupDecls: no marked clause left for ")) (EApp (EMethodRef "display") (EVar "n"))) (ELit (LString "")))))))))
-(DTypeSig true "cellGoalInnerAliasing" (TyFun (TyCon "GraphCtx") (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "Bool")))))
-(DFunDef false "cellGoalInnerAliasing" ((PVar "gctx")) (EBlock (DoLet false false (PVar "g") (EFieldAccess (EVar "gctx") "graphRun")) (DoLet false false (PVar "cells") (EApp (EApp (EApp (EVar "cellsFrom") (EFieldAccess (EFieldAccess (EVar "g") "evCells") "value")) (ELit (LInt 0))) (EListLit))) (DoExpr (EApp (EApp (EMethodRef "filterMap") (ELam ((PVar "o")) (EApp (EApp (EMethodRef "map") (ELam ((PVar "c")) (ETuple (EApp (EVar "goalKindName") (EFieldAccess (EVar "o") "oKind")) (EApp (EApp (EVar "innerAliases") (EVar "o")) (EVar "c"))))) (EApp (EApp (EVar "cellOfGoal") (EVar "cells")) (EVar "o"))))) (EFieldAccess (EFieldAccess (EVar "g") "goals") "value")))))
-(DTypeSig false "cellsFrom" (TyFun (TyApp (TyCon "Array") (TyApp (TyCon "Option") (TyCon "EvCell"))) (TyFun (TyCon "Int") (TyFun (TyApp (TyCon "List") (TyCon "EvCell")) (TyApp (TyCon "List") (TyCon "EvCell"))))))
-(DFunDef false "cellsFrom" ((PVar "arr") (PVar "i") (PVar "acc")) (EIf (EBinOp ">=" (EVar "i") (EApp (EVar "arrayLength") (EVar "arr"))) (EApp (EVar "reverseL") (EVar "acc")) (EIf (EVar "otherwise") (EMatch (EApp (EApp (EVar "arrayGetUnsafe") (EVar "i")) (EVar "arr")) (arm (PCon "Some" (PVar "c")) () (EApp (EApp (EApp (EVar "cellsFrom") (EVar "arr")) (EBinOp "+" (EVar "i") (ELit (LInt 1)))) (EBinOp "::" (EVar "c") (EVar "acc")))) (arm (PCon "None") () (EApp (EApp (EApp (EVar "cellsFrom") (EVar "arr")) (EBinOp "+" (EVar "i") (ELit (LInt 1)))) (EVar "acc")))) (EApp (EVar "__fallthrough__") (ELit LUnit)))))
-(DTypeSig false "cellOfGoal" (TyFun (TyApp (TyCon "List") (TyCon "EvCell")) (TyFun (TyCon "Obligation") (TyApp (TyCon "Option") (TyCon "EvCell")))))
-(DFunDef false "cellOfGoal" ((PVar "cells") (PVar "o")) (EMatch (EFieldAccess (EVar "o") "oDest") (arm (PCon "EvRoute" (PVar "r")) () (EBlock (DoLet false false (PVar "saved") (EFieldAccess (EVar "r") "value")) (DoExpr (EApp (EApp (EVar "setRef") (EVar "r")) (EApp (EApp (EVar "RLocal") (EVar "aliasMarker")) (EListLit)))) (DoLet false false (PVar "hit") (EApp (EApp (EVar "filterList") (ELam ((PVar "c")) (EApp (EVar "isAliasMarker") (EFieldAccess (EFieldAccess (EVar "c") "ecTag") "value")))) (EVar "cells"))) (DoExpr (EApp (EApp (EVar "setRef") (EVar "r")) (EVar "saved"))) (DoExpr (EApp (EVar "onlyCell") (EVar "hit"))))) (arm (PCon "EvRoutes" (PVar "rs")) () (EBlock (DoLet false false (PVar "saved") (EFieldAccess (EVar "rs") "value")) (DoExpr (EApp (EApp (EVar "setRef") (EVar "rs")) (EListLit (EApp (EApp (EVar "RLocal") (EVar "aliasMarker")) (EListLit))))) (DoLet false false (PVar "hit") (EApp (EApp (EVar "filterList") (ELam ((PVar "c")) (EApp (EApp (EVar "anyList") (EVar "isAliasMarker")) (EBinOp "++" (EFieldAccess (EFieldAccess (EVar "c") "ecImpl") "value") (EFieldAccess (EFieldAccess (EVar "c") "ecMeth") "value"))))) (EVar "cells"))) (DoExpr (EApp (EApp (EVar "setRef") (EVar "rs")) (EVar "saved"))) (DoExpr (EApp (EVar "onlyCell") (EVar "hit")))))))
-(DTypeSig false "onlyCell" (TyFun (TyApp (TyCon "List") (TyCon "EvCell")) (TyApp (TyCon "Option") (TyCon "EvCell"))))
-(DFunDef false "onlyCell" ((PList (PVar "c"))) (EApp (EVar "Some") (EVar "c")))
-(DFunDef false "onlyCell" (PWild) (EVar "None"))
-(DTypeSig false "aliasMarker" (TyCon "String"))
-(DFunDef false "aliasMarker" () (ELit (LString "<inner-alias-probe>")))
-(DTypeSig false "isAliasMarker" (TyFun (TyCon "Route") (TyCon "Bool")))
-(DFunDef false "isAliasMarker" ((PCon "RLocal" (PVar "sym") PWild)) (EBinOp "==" (EVar "sym") (EVar "aliasMarker")))
-(DFunDef false "isAliasMarker" (PWild) (EVar "False"))
-(DTypeSig false "innerAliases" (TyFun (TyCon "Obligation") (TyFun (TyCon "EvCell") (TyCon "Bool"))))
-(DFunDef false "innerAliases" ((PVar "o") (PVar "c")) (EBlock (DoLet false false (PVar "savedGoal") (EFieldAccess (EFieldAccess (EVar "o") "oInner") "value")) (DoLet false false (PVar "savedCell") (EFieldAccess (EFieldAccess (EVar "c") "ecInner") "value")) (DoExpr (EApp (EApp (EVar "setRef") (EFieldAccess (EVar "c") "ecInner")) (EVar "innerNone"))) (DoExpr (EApp (EApp (EVar "setRef") (EFieldAccess (EVar "o") "oInner")) (EApp (EApp (EVar "Inner") (EVar "True")) (EVar "True")))) (DoLet false false (PVar "hit") (EMatch (EFieldAccess (EFieldAccess (EVar "c") "ecInner") "value") (arm (PCon "Inner" (PCon "True") (PCon "True")) () (EVar "True")) (arm PWild () (EVar "False")))) (DoExpr (EApp (EApp (EVar "setRef") (EFieldAccess (EVar "o") "oInner")) (EVar "savedGoal"))) (DoExpr (EApp (EApp (EVar "setRef") (EFieldAccess (EVar "c") "ecInner")) (EVar "savedCell"))) (DoExpr (EVar "hit"))))
 (DTypeSig true "firstMethodRow" (TyFun (TyApp (TyCon "List") (TyCon "MethodSchemeRow")) (TyCon "MethodSchemeRow")))
 (DFunDef false "firstMethodRow" ((PCons (PVar "row") PWild)) (EVar "row"))
 (DFunDef false "firstMethodRow" ((PList)) (EApp (EVar "panic") (ELit (LString "method-row observer expected a row"))))

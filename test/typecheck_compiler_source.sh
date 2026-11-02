@@ -970,6 +970,8 @@ cat "$predicate_slot_src" "$ROOT"/compiler/types/tc_*.mdk > "$tc_union_src"
 predicate_slot_rows_src="$RESULTS/predicate_slot_rows.mdk"
 predicate_slot_row_files="$predicate_slot_src $ROOT/compiler/types/tc_decls.mdk $ROOT/compiler/types/tc_solve_givens.mdk $ROOT/compiler/types/tc_solve_entail.mdk $ROOT/compiler/types/tc_solve.mdk $ROOT/compiler/types/tc_solve_check.mdk $ROOT/compiler/types/tc_shadow.mdk $ROOT/compiler/types/tc_effects.mdk $ROOT/compiler/types/tc_occurrence.mdk $ROOT/compiler/types/tc_groups.mdk $ROOT/compiler/types/tc_pat.mdk $ROOT/compiler/types/tc_infer_records.mdk $ROOT/compiler/types/tc_infer.mdk $ROOT/compiler/types/tc_elab.mdk $ROOT/compiler/types/tc_global.mdk $ROOT/compiler/types/tc_module.mdk"
 cat $predicate_slot_row_files > "$predicate_slot_rows_src"
+# The method-return trace publisher lives in tc_solve_test.mdk; its rows are sliced like the layer's but stay out of the concatenated source above.
+predicate_slot_row_files="$predicate_slot_row_files $ROOT/compiler/types/tc_solve_test.mdk"
 tc_solve_givens_src="$ROOT/compiler/types/tc_solve_givens.mdk"
 tc_solve_entail_src="$ROOT/compiler/types/tc_solve_entail.mdk"
 tc_occurrence_src="$ROOT/compiler/types/tc_occurrence.mdk"
