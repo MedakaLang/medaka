@@ -108,8 +108,6 @@ import eval.eval.{
   currentEvalFile,
   modulePathMap,
   testCapableExterns,
-  funNamesOf,
-  dropShadowedExp,
   lookupBinding,
   force,
   ppValue,
@@ -815,10 +813,10 @@ data HelperValidation =
 
 -- What the DOCTEST phase's interpreter arm evaluates.  The two shapes are NOT
 -- interchangeable, which is why this is a separate type rather than a third
--- `TestPair` constructor: the single-file arm hands `evalOneRootEnvFacts` an EMPTY
--- prelude with core folded into one `__main__` unit, so prelude-shadow splitting
--- and cross-unit constructor mangling both see a different program than the pair
--- form's core-beside-modules shape does.
+-- `TestPair` constructor: the single-file arm elaborates the one `__main__` unit
+-- beside the whole of core, and a core file under test (`programIsCore`) runs
+-- with core folded into that unit, so cross-unit constructor mangling sees a
+-- different program than the pair form's shape does.
 --
 -- `DtSingle` carries the INPUTS, not a tree: the single-file elaboration must
 -- not happen for a module that declares no doctests, and `runChosen` is the
@@ -1188,7 +1186,7 @@ uncurryPair runtimeDecls rawCore rawModules (core, mods) facts =
   TestPair runtimeDecls rawCore core rawModules mods facts
 
 -- The single-file prop/`test "…"` arm's elaboration: the degenerate 1-module
--- list over the shadow-dropped prelude (`programIsCore` ⇒ [], so `medaka test
+-- list over the whole prelude (`programIsCore` ⇒ [], so `medaka test
 -- stdlib/core.mdk` does not double-prepend it).  Built once and shared by the
 -- two phases, rather than elaborated once in each.
 prepareSingle : List Decl ->
@@ -1209,11 +1207,7 @@ prepareSingleDiags : List Decl ->
   List Decl ->
   <IO> (TestPair, List (String, TcDiag))
 prepareSingleDiags runtimeDecls coreDecls target roots userDecls =
-  let livePrelude =
-    if programIsCore userDecls then
-      []
-    else
-      dropShadowedExp (funNamesOf userDecls) coreDecls
+  let livePrelude = if programIsCore userDecls then [] else coreDecls
   let rootId = singleRootId roots target
   modulePathMap := [(rootId, target)]
   perfRow "test-elab" "single" (_ =>
@@ -1855,12 +1849,13 @@ runChosenOn EngNative _trees None target tsrc userDecls examples synthResults =
 -- shares; `DtSingle` elaborates HERE — this is the first point that knows the
 -- module has examples worth a tree.
 --
--- The prelude-only shape drops the shadowed prelude, appends the synth decls,
--- dict-elaborates and runs.  When the file under test IS the prelude (`medaka
+-- The prelude-only shape keeps the whole prelude (a user name shadows core only
+-- for user code; core resolves against core), appends the synth decls,
+-- dict-elaborates and runs core beside the module.  When the file under test IS the prelude (`medaka
 -- test stdlib/core.mdk`) it already declares everything the prelude provides,
 -- so prepending it would duplicate every top-level decl (two `Bounded Char`
 -- impls, etc.) and corrupt return-position dispatch — hence `programIsCore`.
--- Its one-module elaboration is flattened to the shape `evalOneRootEnvFacts`
+-- That case alone is flattened to the shape `evalOneRootEnvFacts`
 -- consumes (`elaborateOne`'s), keeping the module's diagnostics for the examples,
 -- and its root frame carries the synthesized `__dt_i__` bindings the same way the
 -- pair arm's does.
@@ -1883,11 +1878,8 @@ runChosen (DtPair (TestPair _runtimeM _rawCoreM coreM _rawM modsM facts)) exampl
   buildDetailsFrom (Ok rendered) synthResults examples
 runChosen (DtSingle runtimeDecls coreDecls target roots userDecls) examples synthResults =
   let allUser = userDecls ++ buildSynthDecls synthResults
-  let livePrelude =
-    if programIsCore userDecls then
-      []
-    else
-      dropShadowedExp (funNamesOf allUser) coreDecls
+  let isCore = programIsCore userDecls
+  let livePrelude = if isCore then [] else coreDecls
   let rootId = singleRootId roots target
   modulePathMap := [("__main__", target)]
   let elab = elaborateModules (testDriveInputs
@@ -1898,13 +1890,19 @@ runChosen (DtSingle runtimeDecls coreDecls target roots userDecls) examples synt
   let coreE = elab.erCore
   let modulesE = elab.erModules
   let perModule = elab.erPerModule
-  let elaborated = coreE ++ flatMap snd modulesE
   let facts = factsOfElab elab
   let rendered =
-    let env = evalOneRootEnvFacts facts (testCapableExterns ()) [] (
-      "__main__",
-      elaborated,
-    )
+    let env =
+      if isCore then
+        evalOneRootEnvFacts facts (testCapableExterns ()) [] (
+          "__main__",
+          coreE ++ flatMap snd modulesE,
+        )
+      else
+        evalOneRootEnvFacts facts (testCapableExterns ()) coreE (
+          "__main__",
+          flatMap snd modulesE,
+        )
     renderExamples env (exampleDiagLines perModule) synthResults examples
   buildDetailsFrom (Ok rendered) synthResults examples
 

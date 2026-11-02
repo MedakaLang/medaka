@@ -1,5 +1,5 @@
 # META
-source_lines=5059
+source_lines=5057
 stages=DESUGAR,MARK
 # SOURCE
 -- compiler/tools/test_cmd.mdk — `medaka test` logic (doctests + property tests),
@@ -112,8 +112,6 @@ import eval.eval.{
   currentEvalFile,
   modulePathMap,
   testCapableExterns,
-  funNamesOf,
-  dropShadowedExp,
   lookupBinding,
   force,
   ppValue,
@@ -819,10 +817,10 @@ data HelperValidation =
 
 -- What the DOCTEST phase's interpreter arm evaluates.  The two shapes are NOT
 -- interchangeable, which is why this is a separate type rather than a third
--- `TestPair` constructor: the single-file arm hands `evalOneRootEnvFacts` an EMPTY
--- prelude with core folded into one `__main__` unit, so prelude-shadow splitting
--- and cross-unit constructor mangling both see a different program than the pair
--- form's core-beside-modules shape does.
+-- `TestPair` constructor: the single-file arm elaborates the one `__main__` unit
+-- beside the whole of core, and a core file under test (`programIsCore`) runs
+-- with core folded into that unit, so cross-unit constructor mangling sees a
+-- different program than the pair form's shape does.
 --
 -- `DtSingle` carries the INPUTS, not a tree: the single-file elaboration must
 -- not happen for a module that declares no doctests, and `runChosen` is the
@@ -1192,7 +1190,7 @@ uncurryPair runtimeDecls rawCore rawModules (core, mods) facts =
   TestPair runtimeDecls rawCore core rawModules mods facts
 
 -- The single-file prop/`test "…"` arm's elaboration: the degenerate 1-module
--- list over the shadow-dropped prelude (`programIsCore` ⇒ [], so `medaka test
+-- list over the whole prelude (`programIsCore` ⇒ [], so `medaka test
 -- stdlib/core.mdk` does not double-prepend it).  Built once and shared by the
 -- two phases, rather than elaborated once in each.
 prepareSingle : List Decl ->
@@ -1213,11 +1211,7 @@ prepareSingleDiags : List Decl ->
   List Decl ->
   <IO> (TestPair, List (String, TcDiag))
 prepareSingleDiags runtimeDecls coreDecls target roots userDecls =
-  let livePrelude =
-    if programIsCore userDecls then
-      []
-    else
-      dropShadowedExp (funNamesOf userDecls) coreDecls
+  let livePrelude = if programIsCore userDecls then [] else coreDecls
   let rootId = singleRootId roots target
   modulePathMap := [(rootId, target)]
   perfRow "test-elab" "single" (_ =>
@@ -1859,12 +1853,13 @@ runChosenOn EngNative _trees None target tsrc userDecls examples synthResults =
 -- shares; `DtSingle` elaborates HERE — this is the first point that knows the
 -- module has examples worth a tree.
 --
--- The prelude-only shape drops the shadowed prelude, appends the synth decls,
--- dict-elaborates and runs.  When the file under test IS the prelude (`medaka
+-- The prelude-only shape keeps the whole prelude (a user name shadows core only
+-- for user code; core resolves against core), appends the synth decls,
+-- dict-elaborates and runs core beside the module.  When the file under test IS the prelude (`medaka
 -- test stdlib/core.mdk`) it already declares everything the prelude provides,
 -- so prepending it would duplicate every top-level decl (two `Bounded Char`
 -- impls, etc.) and corrupt return-position dispatch — hence `programIsCore`.
--- Its one-module elaboration is flattened to the shape `evalOneRootEnvFacts`
+-- That case alone is flattened to the shape `evalOneRootEnvFacts`
 -- consumes (`elaborateOne`'s), keeping the module's diagnostics for the examples,
 -- and its root frame carries the synthesized `__dt_i__` bindings the same way the
 -- pair arm's does.
@@ -1887,11 +1882,8 @@ runChosen (DtPair (TestPair _runtimeM _rawCoreM coreM _rawM modsM facts)) exampl
   buildDetailsFrom (Ok rendered) synthResults examples
 runChosen (DtSingle runtimeDecls coreDecls target roots userDecls) examples synthResults =
   let allUser = userDecls ++ buildSynthDecls synthResults
-  let livePrelude =
-    if programIsCore userDecls then
-      []
-    else
-      dropShadowedExp (funNamesOf allUser) coreDecls
+  let isCore = programIsCore userDecls
+  let livePrelude = if isCore then [] else coreDecls
   let rootId = singleRootId roots target
   modulePathMap := [("__main__", target)]
   let elab = elaborateModules (testDriveInputs
@@ -1902,13 +1894,19 @@ runChosen (DtSingle runtimeDecls coreDecls target roots userDecls) examples synt
   let coreE = elab.erCore
   let modulesE = elab.erModules
   let perModule = elab.erPerModule
-  let elaborated = coreE ++ flatMap snd modulesE
   let facts = factsOfElab elab
   let rendered =
-    let env = evalOneRootEnvFacts facts (testCapableExterns ()) [] (
-      "__main__",
-      elaborated,
-    )
+    let env =
+      if isCore then
+        evalOneRootEnvFacts facts (testCapableExterns ()) [] (
+          "__main__",
+          coreE ++ flatMap snd modulesE,
+        )
+      else
+        evalOneRootEnvFacts facts (testCapableExterns ()) coreE (
+          "__main__",
+          flatMap snd modulesE,
+        )
     renderExamples env (exampleDiagLines perModule) synthResults examples
   buildDetailsFrom (Ok rendered) synthResults examples
 
@@ -5079,7 +5077,7 @@ testFilesReport _ _ acc = acc
 (DUse false (UseGroup ("types" "program_facts") ((mem "ProgramFacts" false) (mem "factsOfElab" false) (mem "withSibling" false))))
 (DUse false (UseGroup ("frontend" "ast") ((mem "SiblingPair" false))))
 (DUse false (UseGroup ("frontend" "marker") ((mem "declRefs" false))))
-(DUse false (UseGroup ("eval" "eval") ((mem "Value" false) (mem "EvalEnv" false) (mem "evalOneRootEnvFacts" false) (mem "evalModulesRootEvalEnvFacts" false) (mem "evalModulesRootEnvFacts" false) (mem "currentEvalFile" false) (mem "modulePathMap" false) (mem "testCapableExterns" false) (mem "funNamesOf" false) (mem "dropShadowedExp" false) (mem "lookupBinding" false) (mem "force" false) (mem "ppValue" false))))
+(DUse false (UseGroup ("eval" "eval") ((mem "Value" false) (mem "EvalEnv" false) (mem "evalOneRootEnvFacts" false) (mem "evalModulesRootEvalEnvFacts" false) (mem "evalModulesRootEnvFacts" false) (mem "currentEvalFile" false) (mem "modulePathMap" false) (mem "testCapableExterns" false) (mem "lookupBinding" false) (mem "force" false) (mem "ppValue" false))))
 (DUse false (UseGroup ("tools" "doctest") ((mem "Example" false) (mem "ExResult" true) (mem "RunResult" true) (mem "Engine" true) (mem "engineName" false) (mem "buildSynthResults" false) (mem "buildSynthDecls" false) (mem "buildDetailsFrom" false) (mem "doctestFailSuffix" false) (mem "hasUseDecls" false) (mem "printDoctestDetails" false) (mem "runDetails" false) (mem "runPassed" false) (mem "runFailed" false) (mem "runErrors" false) (mem "exampleExpected" false) (mem "exampleInput" false) (mem "exampleLine" false) (mem "synthName" false) (mem "exResultJsonFields" false))))
 (DUse false (UseGroup ("tools" "native_doctest") ((mem "runNativeDoctests" false))))
 (DUse false (UseGroup ("tools" "native_test_decls") ((mem "runNativeTests" false))))
@@ -5213,7 +5211,7 @@ testFilesReport _ _ acc = acc
 (DTypeSig false "prepareSingle" (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyEffect ("IO") None (TyCon "TestPair"))))))))
 (DFunDef false "prepareSingle" ((PVar "runtimeDecls") (PVar "coreDecls") (PVar "target") (PVar "roots") (PVar "userDecls")) (EApp (EVar "fst") (EApp (EApp (EApp (EApp (EApp (EVar "prepareSingleDiags") (EVar "runtimeDecls")) (EVar "coreDecls")) (EVar "target")) (EVar "roots")) (EVar "userDecls"))))
 (DTypeSig false "prepareSingleDiags" (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyEffect ("IO") None (TyTuple (TyCon "TestPair") (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "TcDiag")))))))))))
-(DFunDef false "prepareSingleDiags" ((PVar "runtimeDecls") (PVar "coreDecls") (PVar "target") (PVar "roots") (PVar "userDecls")) (EBlock (DoLet false false (PVar "livePrelude") (EIf (EApp (EVar "programIsCore") (EVar "userDecls")) (EListLit) (EApp (EApp (EVar "dropShadowedExp") (EApp (EVar "funNamesOf") (EVar "userDecls"))) (EVar "coreDecls")))) (DoLet false false (PVar "rootId") (EApp (EApp (EVar "singleRootId") (EVar "roots")) (EVar "target"))) (DoExpr (EApp (EApp (EVar "setRef") (EVar "modulePathMap")) (EListLit (ETuple (EVar "rootId") (EVar "target"))))) (DoExpr (EApp (EApp (EApp (EVar "perfRow") (ELit (LString "test-elab"))) (ELit (LString "single"))) (ELam (PWild) (EApp (EApp (EApp (EApp (EVar "helperElaboration") (EVar "runtimeDecls")) (EVar "livePrelude")) (EListLit (ETuple (EVar "rootId") (EVar "userDecls")))) (EListLit)))))))
+(DFunDef false "prepareSingleDiags" ((PVar "runtimeDecls") (PVar "coreDecls") (PVar "target") (PVar "roots") (PVar "userDecls")) (EBlock (DoLet false false (PVar "livePrelude") (EIf (EApp (EVar "programIsCore") (EVar "userDecls")) (EListLit) (EVar "coreDecls"))) (DoLet false false (PVar "rootId") (EApp (EApp (EVar "singleRootId") (EVar "roots")) (EVar "target"))) (DoExpr (EApp (EApp (EVar "setRef") (EVar "modulePathMap")) (EListLit (ETuple (EVar "rootId") (EVar "target"))))) (DoExpr (EApp (EApp (EApp (EVar "perfRow") (ELit (LString "test-elab"))) (ELit (LString "single"))) (ELam (PWild) (EApp (EApp (EApp (EApp (EVar "helperElaboration") (EVar "runtimeDecls")) (EVar "livePrelude")) (EListLit (ETuple (EVar "rootId") (EVar "userDecls")))) (EListLit)))))))
 (DTypeSig false "perfRow" (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyFun (TyCon "Unit") (TyEffect ("IO") None (TyVar "a"))) (TyEffect ("IO") None (TyVar "a"))))))
 (DFunDef false "perfRow" ((PVar "label") (PVar "ops") (PVar "work")) (EBlock (DoLet false false (PVar "t0") (EApp (EVar "now") (ELit LUnit))) (DoLet false false (PVar "result") (EApp (EVar "work") (ELit LUnit))) (DoLet false false PWild (EApp (EApp (EApp (EApp (EVar "emitPhase") (EApp (EVar "perfEnabled") (ELit LUnit))) (EVar "label")) (EBinOp "-" (EApp (EVar "now") (ELit LUnit)) (EVar "t0"))) (EVar "ops"))) (DoExpr (EVar "result"))))
 (DTypeSig false "planPropRequestsTimed" (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "PlanModule")) (TyFun (TyApp (TyCon "List") (TyCon "PropRequest")) (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyEffect ("IO") None (TyApp (TyApp (TyCon "Result") (TyCon "PlanError")) (TyTuple (TyCon "PlanEnv") (TyApp (TyCon "List") (TyCon "PreparedPropRequest"))))))))))
@@ -5265,7 +5263,7 @@ testFilesReport _ _ acc = acc
 (DTypeSig false "runChosen" (TyFun (TyCon "DoctestTrees") (TyFun (TyApp (TyCon "List") (TyCon "Example")) (TyFun (TyApp (TyCon "List") (TyApp (TyApp (TyCon "Result") (TyCon "String")) (TyApp (TyCon "List") (TyCon "Decl")))) (TyEffect ("IO") None (TyCon "RunResult"))))))
 (DFunDef false "runChosen" ((PCon "DtPair" (PCon "TestPairErr" (PVar "e"))) (PVar "examples") (PVar "synthResults")) (EApp (EApp (EApp (EVar "buildDetailsFrom") (EApp (EVar "Err") (EVar "e"))) (EVar "synthResults")) (EVar "examples")))
 (DFunDef false "runChosen" ((PCon "DtPair" (PCon "TestPair" (PVar "_runtimeM") (PVar "_rawCoreM") (PVar "coreM") (PVar "_rawM") (PVar "modsM") (PVar "facts"))) (PVar "examples") (PVar "synthResults")) (EBlock (DoLet false false (PVar "rendered") (EBlock (DoLet false false (PVar "env") (EApp (EApp (EApp (EApp (EVar "evalModulesRootEnvFacts") (EVar "facts")) (EApp (EVar "testCapableExterns") (ELit LUnit))) (EVar "coreM")) (EVar "modsM"))) (DoExpr (EApp (EApp (EApp (EApp (EVar "renderExamples") (EVar "env")) (EFieldAccess (EVar "injectedExampleDiags") "value")) (EVar "synthResults")) (EVar "examples"))))) (DoExpr (EApp (EApp (EApp (EVar "buildDetailsFrom") (EApp (EVar "Ok") (EVar "rendered"))) (EVar "synthResults")) (EVar "examples")))))
-(DFunDef false "runChosen" ((PCon "DtSingle" (PVar "runtimeDecls") (PVar "coreDecls") (PVar "target") (PVar "roots") (PVar "userDecls")) (PVar "examples") (PVar "synthResults")) (EBlock (DoLet false false (PVar "allUser") (EBinOp "++" (EVar "userDecls") (EApp (EVar "buildSynthDecls") (EVar "synthResults")))) (DoLet false false (PVar "livePrelude") (EIf (EApp (EVar "programIsCore") (EVar "userDecls")) (EListLit) (EApp (EApp (EVar "dropShadowedExp") (EApp (EVar "funNamesOf") (EVar "allUser"))) (EVar "coreDecls")))) (DoLet false false (PVar "rootId") (EApp (EApp (EVar "singleRootId") (EVar "roots")) (EVar "target"))) (DoExpr (EApp (EApp (EVar "setRef") (EVar "modulePathMap")) (EListLit (ETuple (ELit (LString "__main__")) (EVar "target"))))) (DoLet false false (PVar "elab") (EApp (EApp (EApp (EApp (EVar "elaborateModules") (EApp (EApp (EVar "testDriveInputs") (EListLit)) (EVar "livePrelude"))) (EVar "runtimeDecls")) (EVar "livePrelude")) (EListLit (ETuple (EVar "rootId") (EVar "allUser"))))) (DoLet false false (PVar "coreE") (EFieldAccess (EVar "elab") "erCore")) (DoLet false false (PVar "modulesE") (EFieldAccess (EVar "elab") "erModules")) (DoLet false false (PVar "perModule") (EFieldAccess (EVar "elab") "erPerModule")) (DoLet false false (PVar "elaborated") (EBinOp "++" (EVar "coreE") (EApp (EApp (EVar "flatMap") (EVar "snd")) (EVar "modulesE")))) (DoLet false false (PVar "facts") (EApp (EVar "factsOfElab") (EVar "elab"))) (DoLet false false (PVar "rendered") (EBlock (DoLet false false (PVar "env") (EApp (EApp (EApp (EApp (EVar "evalOneRootEnvFacts") (EVar "facts")) (EApp (EVar "testCapableExterns") (ELit LUnit))) (EListLit)) (ETuple (ELit (LString "__main__")) (EVar "elaborated")))) (DoExpr (EApp (EApp (EApp (EApp (EVar "renderExamples") (EVar "env")) (EApp (EVar "exampleDiagLines") (EVar "perModule"))) (EVar "synthResults")) (EVar "examples"))))) (DoExpr (EApp (EApp (EApp (EVar "buildDetailsFrom") (EApp (EVar "Ok") (EVar "rendered"))) (EVar "synthResults")) (EVar "examples")))))
+(DFunDef false "runChosen" ((PCon "DtSingle" (PVar "runtimeDecls") (PVar "coreDecls") (PVar "target") (PVar "roots") (PVar "userDecls")) (PVar "examples") (PVar "synthResults")) (EBlock (DoLet false false (PVar "allUser") (EBinOp "++" (EVar "userDecls") (EApp (EVar "buildSynthDecls") (EVar "synthResults")))) (DoLet false false (PVar "isCore") (EApp (EVar "programIsCore") (EVar "userDecls"))) (DoLet false false (PVar "livePrelude") (EIf (EVar "isCore") (EListLit) (EVar "coreDecls"))) (DoLet false false (PVar "rootId") (EApp (EApp (EVar "singleRootId") (EVar "roots")) (EVar "target"))) (DoExpr (EApp (EApp (EVar "setRef") (EVar "modulePathMap")) (EListLit (ETuple (ELit (LString "__main__")) (EVar "target"))))) (DoLet false false (PVar "elab") (EApp (EApp (EApp (EApp (EVar "elaborateModules") (EApp (EApp (EVar "testDriveInputs") (EListLit)) (EVar "livePrelude"))) (EVar "runtimeDecls")) (EVar "livePrelude")) (EListLit (ETuple (EVar "rootId") (EVar "allUser"))))) (DoLet false false (PVar "coreE") (EFieldAccess (EVar "elab") "erCore")) (DoLet false false (PVar "modulesE") (EFieldAccess (EVar "elab") "erModules")) (DoLet false false (PVar "perModule") (EFieldAccess (EVar "elab") "erPerModule")) (DoLet false false (PVar "facts") (EApp (EVar "factsOfElab") (EVar "elab"))) (DoLet false false (PVar "rendered") (EBlock (DoLet false false (PVar "env") (EIf (EVar "isCore") (EApp (EApp (EApp (EApp (EVar "evalOneRootEnvFacts") (EVar "facts")) (EApp (EVar "testCapableExterns") (ELit LUnit))) (EListLit)) (ETuple (ELit (LString "__main__")) (EBinOp "++" (EVar "coreE") (EApp (EApp (EVar "flatMap") (EVar "snd")) (EVar "modulesE"))))) (EApp (EApp (EApp (EApp (EVar "evalOneRootEnvFacts") (EVar "facts")) (EApp (EVar "testCapableExterns") (ELit LUnit))) (EVar "coreE")) (ETuple (ELit (LString "__main__")) (EApp (EApp (EVar "flatMap") (EVar "snd")) (EVar "modulesE")))))) (DoExpr (EApp (EApp (EApp (EApp (EVar "renderExamples") (EVar "env")) (EApp (EVar "exampleDiagLines") (EVar "perModule"))) (EVar "synthResults")) (EVar "examples"))))) (DoExpr (EApp (EApp (EApp (EVar "buildDetailsFrom") (EApp (EVar "Ok") (EVar "rendered"))) (EVar "synthResults")) (EVar "examples")))))
 (DTypeSig false "renderExamples" (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "Value") (TyVar "e")))) (TyFun (TyApp (TyCon "OrdMap") (TyCon "String")) (TyFun (TyApp (TyCon "List") (TyApp (TyApp (TyCon "Result") (TyCon "String")) (TyApp (TyCon "List") (TyCon "Decl")))) (TyFun (TyApp (TyCon "List") (TyCon "Example")) (TyEffect () (Some "e") (TyApp (TyCon "List") (TyApp (TyApp (TyCon "Result") (TyCon "String")) (TyCon "String")))))))))
 (DFunDef false "renderExamples" ((PVar "env") (PVar "diags") (PVar "synthResults") (PVar "examples")) (EApp (EApp (EApp (EApp (EApp (EVar "renderExamplesGo") (EVar "env")) (EVar "diags")) (EVar "synthResults")) (ELit (LInt 0))) (EVar "examples")))
 (DTypeSig false "renderExamplesGo" (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "Value") (TyVar "e")))) (TyFun (TyApp (TyCon "OrdMap") (TyCon "String")) (TyFun (TyApp (TyCon "List") (TyApp (TyApp (TyCon "Result") (TyCon "String")) (TyApp (TyCon "List") (TyCon "Decl")))) (TyFun (TyCon "Int") (TyFun (TyApp (TyCon "List") (TyCon "Example")) (TyEffect () (Some "e") (TyApp (TyCon "List") (TyApp (TyApp (TyCon "Result") (TyCon "String")) (TyCon "String"))))))))))
@@ -5767,7 +5765,7 @@ testFilesReport _ _ acc = acc
 (DUse false (UseGroup ("types" "program_facts") ((mem "ProgramFacts" false) (mem "factsOfElab" false) (mem "withSibling" false))))
 (DUse false (UseGroup ("frontend" "ast") ((mem "SiblingPair" false))))
 (DUse false (UseGroup ("frontend" "marker") ((mem "declRefs" false))))
-(DUse false (UseGroup ("eval" "eval") ((mem "Value" false) (mem "EvalEnv" false) (mem "evalOneRootEnvFacts" false) (mem "evalModulesRootEvalEnvFacts" false) (mem "evalModulesRootEnvFacts" false) (mem "currentEvalFile" false) (mem "modulePathMap" false) (mem "testCapableExterns" false) (mem "funNamesOf" false) (mem "dropShadowedExp" false) (mem "lookupBinding" false) (mem "force" false) (mem "ppValue" false))))
+(DUse false (UseGroup ("eval" "eval") ((mem "Value" false) (mem "EvalEnv" false) (mem "evalOneRootEnvFacts" false) (mem "evalModulesRootEvalEnvFacts" false) (mem "evalModulesRootEnvFacts" false) (mem "currentEvalFile" false) (mem "modulePathMap" false) (mem "testCapableExterns" false) (mem "lookupBinding" false) (mem "force" false) (mem "ppValue" false))))
 (DUse false (UseGroup ("tools" "doctest") ((mem "Example" false) (mem "ExResult" true) (mem "RunResult" true) (mem "Engine" true) (mem "engineName" false) (mem "buildSynthResults" false) (mem "buildSynthDecls" false) (mem "buildDetailsFrom" false) (mem "doctestFailSuffix" false) (mem "hasUseDecls" false) (mem "printDoctestDetails" false) (mem "runDetails" false) (mem "runPassed" false) (mem "runFailed" false) (mem "runErrors" false) (mem "exampleExpected" false) (mem "exampleInput" false) (mem "exampleLine" false) (mem "synthName" false) (mem "exResultJsonFields" false))))
 (DUse false (UseGroup ("tools" "native_doctest") ((mem "runNativeDoctests" false))))
 (DUse false (UseGroup ("tools" "native_test_decls") ((mem "runNativeTests" false))))
@@ -5901,7 +5899,7 @@ testFilesReport _ _ acc = acc
 (DTypeSig false "prepareSingle" (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyEffect ("IO") None (TyCon "TestPair"))))))))
 (DFunDef false "prepareSingle" ((PVar "runtimeDecls") (PVar "coreDecls") (PVar "target") (PVar "roots") (PVar "userDecls")) (EApp (EVar "fst") (EApp (EApp (EApp (EApp (EApp (EVar "prepareSingleDiags") (EVar "runtimeDecls")) (EVar "coreDecls")) (EVar "target")) (EVar "roots")) (EVar "userDecls"))))
 (DTypeSig false "prepareSingleDiags" (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyEffect ("IO") None (TyTuple (TyCon "TestPair") (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "TcDiag")))))))))))
-(DFunDef false "prepareSingleDiags" ((PVar "runtimeDecls") (PVar "coreDecls") (PVar "target") (PVar "roots") (PVar "userDecls")) (EBlock (DoLet false false (PVar "livePrelude") (EIf (EApp (EVar "programIsCore") (EVar "userDecls")) (EListLit) (EApp (EApp (EVar "dropShadowedExp") (EApp (EVar "funNamesOf") (EVar "userDecls"))) (EVar "coreDecls")))) (DoLet false false (PVar "rootId") (EApp (EApp (EVar "singleRootId") (EVar "roots")) (EVar "target"))) (DoExpr (EApp (EApp (EVar "setRef") (EVar "modulePathMap")) (EListLit (ETuple (EVar "rootId") (EVar "target"))))) (DoExpr (EApp (EApp (EApp (EVar "perfRow") (ELit (LString "test-elab"))) (ELit (LString "single"))) (ELam (PWild) (EApp (EApp (EApp (EApp (EVar "helperElaboration") (EVar "runtimeDecls")) (EVar "livePrelude")) (EListLit (ETuple (EVar "rootId") (EVar "userDecls")))) (EListLit)))))))
+(DFunDef false "prepareSingleDiags" ((PVar "runtimeDecls") (PVar "coreDecls") (PVar "target") (PVar "roots") (PVar "userDecls")) (EBlock (DoLet false false (PVar "livePrelude") (EIf (EApp (EVar "programIsCore") (EVar "userDecls")) (EListLit) (EVar "coreDecls"))) (DoLet false false (PVar "rootId") (EApp (EApp (EVar "singleRootId") (EVar "roots")) (EVar "target"))) (DoExpr (EApp (EApp (EVar "setRef") (EVar "modulePathMap")) (EListLit (ETuple (EVar "rootId") (EVar "target"))))) (DoExpr (EApp (EApp (EApp (EVar "perfRow") (ELit (LString "test-elab"))) (ELit (LString "single"))) (ELam (PWild) (EApp (EApp (EApp (EApp (EVar "helperElaboration") (EVar "runtimeDecls")) (EVar "livePrelude")) (EListLit (ETuple (EVar "rootId") (EVar "userDecls")))) (EListLit)))))))
 (DTypeSig false "perfRow" (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyFun (TyCon "Unit") (TyEffect ("IO") None (TyVar "a"))) (TyEffect ("IO") None (TyVar "a"))))))
 (DFunDef false "perfRow" ((PVar "label") (PVar "ops") (PVar "work")) (EBlock (DoLet false false (PVar "t0") (EApp (EVar "now") (ELit LUnit))) (DoLet false false (PVar "result") (EApp (EVar "work") (ELit LUnit))) (DoLet false false PWild (EApp (EApp (EApp (EApp (EVar "emitPhase") (EApp (EVar "perfEnabled") (ELit LUnit))) (EVar "label")) (EBinOp "-" (EApp (EVar "now") (ELit LUnit)) (EVar "t0"))) (EVar "ops"))) (DoExpr (EVar "result"))))
 (DTypeSig false "planPropRequestsTimed" (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "PlanModule")) (TyFun (TyApp (TyCon "List") (TyCon "PropRequest")) (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyEffect ("IO") None (TyApp (TyApp (TyCon "Result") (TyCon "PlanError")) (TyTuple (TyCon "PlanEnv") (TyApp (TyCon "List") (TyCon "PreparedPropRequest"))))))))))
@@ -5953,7 +5951,7 @@ testFilesReport _ _ acc = acc
 (DTypeSig false "runChosen" (TyFun (TyCon "DoctestTrees") (TyFun (TyApp (TyCon "List") (TyCon "Example")) (TyFun (TyApp (TyCon "List") (TyApp (TyApp (TyCon "Result") (TyCon "String")) (TyApp (TyCon "List") (TyCon "Decl")))) (TyEffect ("IO") None (TyCon "RunResult"))))))
 (DFunDef false "runChosen" ((PCon "DtPair" (PCon "TestPairErr" (PVar "e"))) (PVar "examples") (PVar "synthResults")) (EApp (EApp (EApp (EVar "buildDetailsFrom") (EApp (EVar "Err") (EVar "e"))) (EVar "synthResults")) (EVar "examples")))
 (DFunDef false "runChosen" ((PCon "DtPair" (PCon "TestPair" (PVar "_runtimeM") (PVar "_rawCoreM") (PVar "coreM") (PVar "_rawM") (PVar "modsM") (PVar "facts"))) (PVar "examples") (PVar "synthResults")) (EBlock (DoLet false false (PVar "rendered") (EBlock (DoLet false false (PVar "env") (EApp (EApp (EApp (EApp (EVar "evalModulesRootEnvFacts") (EVar "facts")) (EApp (EVar "testCapableExterns") (ELit LUnit))) (EVar "coreM")) (EVar "modsM"))) (DoExpr (EApp (EApp (EApp (EApp (EVar "renderExamples") (EVar "env")) (EFieldAccess (EVar "injectedExampleDiags") "value")) (EVar "synthResults")) (EVar "examples"))))) (DoExpr (EApp (EApp (EApp (EVar "buildDetailsFrom") (EApp (EVar "Ok") (EVar "rendered"))) (EVar "synthResults")) (EVar "examples")))))
-(DFunDef false "runChosen" ((PCon "DtSingle" (PVar "runtimeDecls") (PVar "coreDecls") (PVar "target") (PVar "roots") (PVar "userDecls")) (PVar "examples") (PVar "synthResults")) (EBlock (DoLet false false (PVar "allUser") (EBinOp "++" (EVar "userDecls") (EApp (EVar "buildSynthDecls") (EVar "synthResults")))) (DoLet false false (PVar "livePrelude") (EIf (EApp (EVar "programIsCore") (EVar "userDecls")) (EListLit) (EApp (EApp (EVar "dropShadowedExp") (EApp (EVar "funNamesOf") (EVar "allUser"))) (EVar "coreDecls")))) (DoLet false false (PVar "rootId") (EApp (EApp (EVar "singleRootId") (EVar "roots")) (EVar "target"))) (DoExpr (EApp (EApp (EVar "setRef") (EVar "modulePathMap")) (EListLit (ETuple (ELit (LString "__main__")) (EVar "target"))))) (DoLet false false (PVar "elab") (EApp (EApp (EApp (EApp (EVar "elaborateModules") (EApp (EApp (EVar "testDriveInputs") (EListLit)) (EVar "livePrelude"))) (EVar "runtimeDecls")) (EVar "livePrelude")) (EListLit (ETuple (EVar "rootId") (EVar "allUser"))))) (DoLet false false (PVar "coreE") (EFieldAccess (EVar "elab") "erCore")) (DoLet false false (PVar "modulesE") (EFieldAccess (EVar "elab") "erModules")) (DoLet false false (PVar "perModule") (EFieldAccess (EVar "elab") "erPerModule")) (DoLet false false (PVar "elaborated") (EBinOp "++" (EVar "coreE") (EApp (EApp (EDictApp "flatMap") (EVar "snd")) (EVar "modulesE")))) (DoLet false false (PVar "facts") (EApp (EVar "factsOfElab") (EVar "elab"))) (DoLet false false (PVar "rendered") (EBlock (DoLet false false (PVar "env") (EApp (EApp (EApp (EApp (EVar "evalOneRootEnvFacts") (EVar "facts")) (EApp (EVar "testCapableExterns") (ELit LUnit))) (EListLit)) (ETuple (ELit (LString "__main__")) (EVar "elaborated")))) (DoExpr (EApp (EApp (EApp (EApp (EVar "renderExamples") (EVar "env")) (EApp (EVar "exampleDiagLines") (EVar "perModule"))) (EVar "synthResults")) (EVar "examples"))))) (DoExpr (EApp (EApp (EApp (EVar "buildDetailsFrom") (EApp (EVar "Ok") (EVar "rendered"))) (EVar "synthResults")) (EVar "examples")))))
+(DFunDef false "runChosen" ((PCon "DtSingle" (PVar "runtimeDecls") (PVar "coreDecls") (PVar "target") (PVar "roots") (PVar "userDecls")) (PVar "examples") (PVar "synthResults")) (EBlock (DoLet false false (PVar "allUser") (EBinOp "++" (EVar "userDecls") (EApp (EVar "buildSynthDecls") (EVar "synthResults")))) (DoLet false false (PVar "isCore") (EApp (EVar "programIsCore") (EVar "userDecls"))) (DoLet false false (PVar "livePrelude") (EIf (EVar "isCore") (EListLit) (EVar "coreDecls"))) (DoLet false false (PVar "rootId") (EApp (EApp (EVar "singleRootId") (EVar "roots")) (EVar "target"))) (DoExpr (EApp (EApp (EVar "setRef") (EVar "modulePathMap")) (EListLit (ETuple (ELit (LString "__main__")) (EVar "target"))))) (DoLet false false (PVar "elab") (EApp (EApp (EApp (EApp (EVar "elaborateModules") (EApp (EApp (EVar "testDriveInputs") (EListLit)) (EVar "livePrelude"))) (EVar "runtimeDecls")) (EVar "livePrelude")) (EListLit (ETuple (EVar "rootId") (EVar "allUser"))))) (DoLet false false (PVar "coreE") (EFieldAccess (EVar "elab") "erCore")) (DoLet false false (PVar "modulesE") (EFieldAccess (EVar "elab") "erModules")) (DoLet false false (PVar "perModule") (EFieldAccess (EVar "elab") "erPerModule")) (DoLet false false (PVar "facts") (EApp (EVar "factsOfElab") (EVar "elab"))) (DoLet false false (PVar "rendered") (EBlock (DoLet false false (PVar "env") (EIf (EVar "isCore") (EApp (EApp (EApp (EApp (EVar "evalOneRootEnvFacts") (EVar "facts")) (EApp (EVar "testCapableExterns") (ELit LUnit))) (EListLit)) (ETuple (ELit (LString "__main__")) (EBinOp "++" (EVar "coreE") (EApp (EApp (EDictApp "flatMap") (EVar "snd")) (EVar "modulesE"))))) (EApp (EApp (EApp (EApp (EVar "evalOneRootEnvFacts") (EVar "facts")) (EApp (EVar "testCapableExterns") (ELit LUnit))) (EVar "coreE")) (ETuple (ELit (LString "__main__")) (EApp (EApp (EDictApp "flatMap") (EVar "snd")) (EVar "modulesE")))))) (DoExpr (EApp (EApp (EApp (EApp (EVar "renderExamples") (EVar "env")) (EApp (EVar "exampleDiagLines") (EVar "perModule"))) (EVar "synthResults")) (EVar "examples"))))) (DoExpr (EApp (EApp (EApp (EVar "buildDetailsFrom") (EApp (EVar "Ok") (EVar "rendered"))) (EVar "synthResults")) (EVar "examples")))))
 (DTypeSig false "renderExamples" (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "Value") (TyVar "e")))) (TyFun (TyApp (TyCon "OrdMap") (TyCon "String")) (TyFun (TyApp (TyCon "List") (TyApp (TyApp (TyCon "Result") (TyCon "String")) (TyApp (TyCon "List") (TyCon "Decl")))) (TyFun (TyApp (TyCon "List") (TyCon "Example")) (TyEffect () (Some "e") (TyApp (TyCon "List") (TyApp (TyApp (TyCon "Result") (TyCon "String")) (TyCon "String")))))))))
 (DFunDef false "renderExamples" ((PVar "env") (PVar "diags") (PVar "synthResults") (PVar "examples")) (EApp (EApp (EApp (EApp (EApp (EVar "renderExamplesGo") (EVar "env")) (EVar "diags")) (EVar "synthResults")) (ELit (LInt 0))) (EVar "examples")))
 (DTypeSig false "renderExamplesGo" (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "Value") (TyVar "e")))) (TyFun (TyApp (TyCon "OrdMap") (TyCon "String")) (TyFun (TyApp (TyCon "List") (TyApp (TyApp (TyCon "Result") (TyCon "String")) (TyApp (TyCon "List") (TyCon "Decl")))) (TyFun (TyCon "Int") (TyFun (TyApp (TyCon "List") (TyCon "Example")) (TyEffect () (Some "e") (TyApp (TyCon "List") (TyApp (TyApp (TyCon "Result") (TyCon "String")) (TyCon "String"))))))))))
