@@ -3,7 +3,9 @@
 -- first `let _ =` of its first block and checks the verdict and the block kind.
 
 import test.{expectEqual, expectTrue, expectFalse}
-import frontend.ast.{Decl(..), DoStmt(..), Expr(..), Pat(..), Ty}
+import frontend.ast.{
+  Decl(..), DoStmt(..), Expr(..), Loc, Pat(..), Ty, noDeclLoc
+}
 import frontend.ast_walk.{DeclBody(..), ExprKind(..), childExprs, declBodies}
 import tools.lint_calls.{
   AbstainReason(..),
@@ -12,11 +14,13 @@ import tools.lint_calls.{
   Verdict(..),
   blockOf,
   discardClass,
+  discardOf,
   discardVerdict,
   inPlainBlock,
 }
 import tools.lint_core.{Ctx(..)}
-import tools.lint_index.{stdlibKeptRows}
+import list.{findMap}
+import tools.lint_index.{ProjectIndex, stdlibKeptRows}
 import tools.lint_index_test.{mkProjectIndex, declRows}
 import tools.lint_scope.{buildScopes}
 import tools.lint.{lintParseSource}
@@ -47,28 +51,31 @@ noSig n = Ok n
 stmtsOf : Expr -> Option (BlockKind, List DoStmt)
 stmtsOf e = match blockOf e
   Some found => Some found
-  None => firstBlock (childExprs e)
-
-firstBlock : List Expr -> Option (BlockKind, List DoStmt)
-firstBlock [] = None
-firstBlock (e :: rest) = match stmtsOf e
-  Some found => Some found
-  None => firstBlock rest
+  None => findMap stmtsOf (childExprs e)
 
 mainBlock : List Decl -> Option (BlockKind, List DoStmt)
-mainBlock [] = None
-mainBlock (d :: rest) = match firstBlockOfDecl d
-  Some found => Some found
-  None => mainBlock rest
+mainBlock decls = findMap firstBlockOfDecl decls
 
 firstBlockOfDecl : Decl -> Option (BlockKind, List DoStmt)
-firstBlockOfDecl d = firstBlock (map ((DeclBody _ body) => body) (declBodies d))
+firstBlockOfDecl d =
+  findMap stmtsOf (map ((DeclBody _ body) => body) (declBodies d))
 
 firstDiscard : List DoStmt -> Option DoStmt
-firstDiscard [] = None
-firstDiscard (s :: rest) = match s
-  DoLet _ _ PWild _ _ => Some s
-  _ => firstDiscard rest
+firstDiscard = find isDiscard
+
+isDiscard : DoStmt -> Bool
+isDiscard (DoLet _ _ PWild _ _) = True
+isDiscard _ = False
+
+-- The block kind and verdict of the first `let _ =` in the first block of
+-- `decls`, read against `ix`.
+verdictIn : ProjectIndex -> List Decl -> Option (BlockKind, Verdict)
+verdictIn ix decls = match mainBlock decls
+  None => None
+  Some (kind, stmts) =>
+    map
+      (s => (kind, discardVerdict ix (buildScopes decls) "" s))
+      (firstDiscard stmts)
 
 -- The block kind and verdict of the first `let _ =` in `body`, the program
 -- being `header` followed by `body`.  `stdlib` rows come from `lib` instead.
@@ -79,13 +86,7 @@ probe lib body = match lintParseSource (header ++ body)
     let stdRows = match lintParseSource lib
       Ok (ds, _) => declRows "core" ds
       Err _ => []
-    let ix = mkProjectIndex stdRows (declRows "m" decls)
-    match mainBlock decls
-      None => None
-      Some (kind, stmts) =>
-        map
-          (s => (kind, discardVerdict ix (buildScopes decls) "" s))
-          (firstDiscard stmts)
+    verdictIn (mkProjectIndex stdRows (declRows "m" decls)) decls
 
 -- As `probe`, the library rows passing through `stdlibKeptRows` as module `lib`.
 probeKept : String -> String -> String -> Option (BlockKind, Verdict)
@@ -94,20 +95,24 @@ probeKept lib src body = match (
   lintParseSource (header ++ body),
 )
   (Ok (libDecls, _), Ok (decls, _)) =>
-    let ix =
-      mkProjectIndex
+    verdictIn
+      (mkProjectIndex
         (stdlibKeptRows (declRows lib libDecls))
-        (declRows "m" decls)
-    match mainBlock decls
-      None => None
-      Some (kind, stmts) =>
-        map
-          (s => (kind, discardVerdict ix (buildScopes decls) "" s))
-          (firstDiscard stmts)
+        (declRows "m" decls))
+      decls
   _ => None
 
 verdictOf : String -> Option (BlockKind, Verdict)
 verdictOf body = probe "" body
+
+-- A program whose `main` is a bare block of `stmt` followed by `()`.
+mainWith : String -> String
+mainWith stmt = """
+
+main =
+  \{stmt}
+  ()
+"""
 
 -- A type written in a signature, as a parsed `Ty`.
 tyOfSig : String -> Option Ty
@@ -119,72 +124,86 @@ discarding : String -> Option (BlockKind, Verdict)
 discarding t = map (ty => (PlainBlock, Discard ty)) (tyOfSig t)
 
 test "a saturated Unit call is a Unit discard" =
-  expectEqual
-    (discarding "Unit")
-    (verdictOf "\nmain =\n  let _ = unitFn 1\n  ()\n")
+  expectEqual (discarding "Unit") (verdictOf (mainWith "let _ = unitFn 1"))
 
 test "a saturated Result call is a Result discard" =
   expectEqual
     (discarding "Result String Int")
-    (verdictOf "\nmain =\n  let _ = resultFn 1\n  ()\n")
+    (verdictOf (mainWith "let _ = resultFn 1"))
 
 test "a saturated Option call is an Option discard" =
   expectEqual
     (discarding "Option Int")
-    (verdictOf "\nmain =\n  let _ = optionFn 1\n  ()\n")
+    (verdictOf (mainWith "let _ = optionFn 1"))
 
 test "an effect row on the result is not part of the declared result" =
   expectEqual
     (discarding "Result String Unit")
-    (verdictOf "\nmain =\n  let _ = effectful \"x\"\n  ()\n")
+    (verdictOf (mainWith "let _ = effectful \"x\""))
 
 test "a partial application abstains" =
   expectEqual
     (Some (PlainBlock, Abstain PartialApplication))
-    (verdictOf "\nmain =\n  let _ = twoArgs 1\n  ()\n")
+    (verdictOf (mainWith "let _ = twoArgs 1"))
 
 test "a local that shadows a top-level name abstains" =
   expectEqual
     (Some (PlainBlock, Abstain LocalBinder))
-    (verdictOf "\nmain =\n  let unitFn = n => Ok n\n  let _ = unitFn 1\n  ()\n")
+    (verdictOf """
+
+main =
+  let unitFn = n => Ok n
+  let _ = unitFn 1
+  ()
+""")
 
 test "a parameter that shadows a top-level name abstains" =
   expectEqual
     (Some (PlainBlock, Abstain LocalBinder))
     (verdictOf
-      "\nrun resultFn =\n  let _ = resultFn 1\n  ()\n\nmain = run unitFn\n")
+      """
+
+run resultFn =
+  let _ = resultFn 1
+  ()
+
+main = run unitFn
+""")
 
 test "an unsigned callee abstains" =
   expectEqual
     (Some (PlainBlock, Abstain NoSignature))
-    (verdictOf "\nmain =\n  let _ = noSig 1\n  ()\n")
+    (verdictOf (mainWith "let _ = noSig 1"))
 
 test "an operator section head abstains" =
   expectEqual
     (Some (PlainBlock, Abstain HeadNotAName))
-    (verdictOf "\nmain =\n  let _ = (+ 1) 2\n  ()\n")
+    (verdictOf (mainWith "let _ = (+ 1) 2"))
 
 test "a lambda head abstains" =
   expectEqual
     (Some (PlainBlock, Abstain HeadNotAName))
-    (verdictOf "\nmain =\n  let _ = (n => Ok n) 2\n  ()\n")
+    (verdictOf (mainWith "let _ = (n => Ok n) 2"))
 
 test "a name with no argument abstains" =
   expectEqual
     (Some (PlainBlock, Abstain NotACall))
-    (verdictOf "\nmain =\n  let _ = unitFn\n  ()\n")
+    (verdictOf (mainWith "let _ = unitFn"))
 
 test "a name the index does not declare abstains" =
   expectEqual
     (Some (PlainBlock, Abstain NoRows))
-    (verdictOf "\nmain =\n  let _ = mystery 1\n  ()\n")
+    (verdictOf (mainWith "let _ = mystery 1"))
 
 test "an unresolved prelude name resolves through the stdlib rows" =
   expectEqual
     (discarding "Option Int")
     (probe
-      "libFn : Int -> Option Int\nlibFn n = Some n\n"
-      "\nmain =\n  let _ = libFn 1\n  ()\n")
+      """
+libFn : Int -> Option Int
+libFn n = Some n
+"""
+      (mainWith "let _ = libFn 1"))
 
 test "a runtime extern resolves through the kept stdlib rows" =
   expectEqual
@@ -192,32 +211,50 @@ test "a runtime extern resolves through the kept stdlib rows" =
     (probeKept
       "runtime"
       "extern ePutStrLn : String -> <Stderr> Unit\n"
-      "\nmain =\n  let _ = ePutStrLn \"x\"\n  ()\n")
+      (mainWith "let _ = ePutStrLn \"x\""))
 
 test "an unexported value of another stdlib module stays out of the stdlib rows" =
   expectEqual
     (Some (PlainBlock, Abstain NoRows))
     (probeKept
       "other"
-      "hidden : Int -> Unit\nhidden _ = ()\n"
-      "\nmain =\n  let _ = hidden 1\n  ()\n")
+      """
+hidden : Int -> Unit
+hidden _ = ()
+"""
+      (mainWith "let _ = hidden 1"))
 
 test "a method call abstains" =
   expectEqual
     (Some (PlainBlock, Abstain NotAPlainFunction))
     (probe
-      "interface Sized a where\n  sizeOf : a -> Int\n"
-      "\nmain =\n  let _ = sizeOf 1\n  ()\n")
+      """
+interface Sized a where
+  sizeOf : a -> Int
+"""
+      (mainWith "let _ = sizeOf 1"))
 
 test "a saturated call inside a do block reports the do kind" =
   expectEqual
     (Some (DoBlock, Abstain NoRows))
-    (verdictOf "\nmain =\n  do\n    let _ = missing 1\n    pure ()\n")
+    (verdictOf """
+
+main =
+  do
+    let _ = missing 1
+    pure ()
+""")
 
 test "the same saturated call in a do block is a Unit discard of a do block" =
   expectEqual
     (map (ty => (DoBlock, Discard ty)) (tyOfSig "Unit"))
-    (verdictOf "\nmain =\n  do\n    let _ = unitFn 1\n    pure ()\n")
+    (verdictOf """
+
+main =
+  do
+    let _ = unitFn 1
+    pure ()
+""")
 
 test "a statement that is not let underscore is no discard" =
   expectEqual
@@ -227,6 +264,29 @@ test "a statement that is not let underscore is no discard" =
       (buildScopes [])
       ""
       (DoAssign "x" (EVar "y")))
+
+withLoc : Loc -> DoStmt -> DoStmt
+withLoc l (DoLet a b p e _) = DoLet a b p e l
+withLoc _ s = s
+
+-- The class `discardOf` reports for the first `let _ =` of a Unit call, after
+-- `edit` has rewritten the statement.
+discardClassOf : (DoStmt -> DoStmt) -> Option DiscardClass
+discardClassOf edit =
+  match lintParseSource (header ++ mainWith "let _ = unitFn 1")
+    Err _ => None
+    Ok (decls, _) => do
+      (_, stmts) <- mainBlock decls
+      s <- firstDiscard stmts
+      let ix = mkProjectIndex [] (declRows "m" decls)
+      (_, _, c) <- discardOf ix (buildScopes decls) "" (edit s)
+      Some c
+
+test "a let underscore of a Unit call is a Unit discard" =
+  expectEqual (Some ClassUnit) (discardClassOf (s => s))
+
+test "a let underscore with a zero-width span is no discard" =
+  expectEqual None (discardClassOf (withLoc noDeclLoc))
 
 test "the ctx fact says plain block for a bare-block parent" =
   expectTrue (inPlainBlock (ctxWithParent (Some KBlock)))
@@ -276,10 +336,22 @@ probeProject others src = match lintParseSource src
           (firstDiscard stmts)
 
 wildCaller : String
-wildCaller = "import dep.lib.*\n\nmain =\n  let _ = step 1\n  ()\n"
+wildCaller = """
+import dep.lib.*
+
+main =
+  let _ = step 1
+  ()
+"""
 
 unrelatedStep : (String, String)
-unrelatedStep = ("other", "step : Int -> Unit\nstep _ = ()\n")
+unrelatedStep = (
+  "other",
+  """
+step : Int -> Unit
+step _ = ()
+""",
+)
 
 test "a wildcard import from a module the index lacks abstains despite a same-named row elsewhere" =
   expectEqual (Some (Abstain NoRows)) (probeProject [unrelatedStep] wildCaller)
@@ -289,7 +361,13 @@ test "a wildcard import from an indexed module decides by that module's row" =
     (map Discard (tyOfSig "Result String Int"))
     (probeProject
       [
-        ("dep.lib", "step : Int -> Result String Int\nstep n = Ok n\n"),
+        (
+          "dep.lib",
+          """
+step : Int -> Result String Int
+step n = Ok n
+""",
+        ),
         unrelatedStep,
       ]
       wildCaller)
@@ -297,4 +375,8 @@ test "a wildcard import from an indexed module decides by that module's row" =
 test "an unbound head does not read a same-named row of a module the file does not import" =
   expectEqual
     (Some (Abstain NoRows))
-    (probeProject [unrelatedStep] "main =\n  let _ = step 1\n  ()\n")
+    (probeProject [unrelatedStep] """
+main =
+  let _ = step 1
+  ()
+""")

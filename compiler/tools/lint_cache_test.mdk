@@ -168,6 +168,8 @@ stdPath : Env -> String
 stdPath e = "\{e.std}/list.mdk"
 
 aSource : String
+-- Escaped, not triple-quoted: `gate verify` reads a column-0 `import` inside a
+-- string as an import of this file.
 aSource = "import b.{f}\n\ng : Int -> Int\ng x = f x\n"
 
 bSource : String -> String -> String
@@ -643,10 +645,18 @@ cPath : Env -> String
 cPath e = "\{e.proj}/c.mdk"
 
 bBase : String
-bBase = "export\nf : Int -> Int\nf x = x + 1\n"
+bBase = """
+export
+f : Int -> Int
+f x = x + 1
+"""
 
 cBase : String
-cBase = "export\nh : Int -> Int\nh x = x\n"
+cBase = """
+export
+h : Int -> Int
+h x = x
+"""
 
 -- One file's new source, or `None` to delete it.
 data Edit = Edit (Env -> String) (Option String)
@@ -723,17 +733,25 @@ askEntry view rule idx e path = match readFile path
       Err _ => []
       Ok entry => [(path, entry)]
 
--- A is re-linted (or not, as `relint` says) and says what an uncached lint
--- of the edited tree says.
-graded : Bool -> Option Outcome -> <IO, FileRead, FileWrite, Exec> Expectation
-graded _ None = fail "a run did not complete"
-graded relint (Some o) = expectEach [
-  (
-    "A is re-linted exactly when an answer moved",
-    expectEqual relint o.warmA.relinted,
-  ),
-  ("A says what an uncached lint says", expectEqual o.truth o.warmA.texts),
+-- A is re-linted, and says what an uncached lint of the edited tree says.
+relintsA : Option Outcome -> <IO, FileRead, FileWrite, Exec> Expectation
+relintsA None = fail "a run did not complete"
+relintsA (Some o) = expectEach [
+  ("A is re-linted when an answer moved", expectTrue o.warmA.relinted),
+  truthRow o,
 ]
+
+-- A stays warm, and says what an uncached lint of the edited tree says.
+keepsAWarm : Option Outcome -> <IO, FileRead, FileWrite, Exec> Expectation
+keepsAWarm None = fail "a run did not complete"
+keepsAWarm (Some o) = expectEach [
+  ("A is not re-linted when no answer moved", expectFalse o.warmA.relinted),
+  truthRow o,
+]
+
+truthRow : Outcome -> (String, Expectation)
+truthRow o =
+  ("A says what an uncached lint says", expectEqual o.truth o.warmA.texts)
 
 recorded : StdlibIndex -> StdlibIndex
 recorded = recordingStdlibIndex
@@ -746,8 +764,7 @@ caseE : (StdlibIndex -> StdlibIndex) ->
   String ->
   <IO, FileRead, FileWrite, Exec> Expectation
 caseE view dir =
-  graded
-    False
+  keepsAWarm
     (askCase
       view
       [askIn "b" NsValue "f"]
@@ -761,8 +778,7 @@ caseF : (StdlibIndex -> StdlibIndex) ->
   String ->
   <IO, FileRead, FileWrite, Exec> Expectation
 caseF view dir =
-  graded
-    True
+  relintsA
     (askCase
       view
       [askIn "b" NsValue "f"]
@@ -776,8 +792,7 @@ caseFAbsent : (StdlibIndex -> StdlibIndex) ->
   String ->
   <IO, FileRead, FileWrite, Exec> Expectation
 caseFAbsent view dir =
-  graded
-    True
+  relintsA
     (askCase
       view
       [askIn "b" NsValue "g"]
@@ -817,8 +832,7 @@ test "(f) a name A asked about while absent, then declared, re-lints A" =
 
 test "(g) a second module exporting a name A asked about re-lints A" = withScratchDir
   (dir =>
-    graded
-      True
+    relintsA
       (askCase
         recorded
         [askNamed NsValue "f"]
@@ -829,8 +843,7 @@ test "(g) a second module exporting a name A asked about re-lints A" = withScrat
 
 test "(h) an enumerating question re-lints A on a signature edit anywhere" = withScratchDir
   (dir =>
-    graded
-      True
+    relintsA
       (askCase
         recorded
         [askAll]
@@ -841,8 +854,7 @@ test "(h) an enumerating question re-lints A on a signature edit anywhere" = wit
 
 test "(h) an enumerating question keeps A warm across a body-only edit" = withScratchDir
   (dir =>
-    graded
-      False
+    keepsAWarm
       (askCase
         recorded
         [askAll]
@@ -864,8 +876,7 @@ test "(i) without recording, a newly declared asked name is served stale" =
 -- ── adversarial answers ─────────────────────────────────────────────────────
 
 test "an asked name losing its export re-lints A" = withScratchDir (dir =>
-  graded
-    True
+  relintsA
     (askCase
       recorded
       [askIn "b" NsValue "f"]
@@ -875,8 +886,7 @@ test "an asked name losing its export re-lints A" = withScratchDir (dir =>
       dir))
 
 test "an unasked name losing its export keeps A warm" = withScratchDir (dir =>
-  graded
-    False
+  keepsAWarm
     (askCase
       recorded
       [askIn "b" NsValue "f"]
@@ -887,8 +897,7 @@ test "an unasked name losing its export keeps A warm" = withScratchDir (dir =>
 
 test "an asked constructor's field list changing re-lints A" = withScratchDir
   (dir =>
-    graded
-      True
+    relintsA
       (askCase
         recorded
         [askNamed NsValue "P"]
@@ -903,8 +912,7 @@ test "an asked constructor's field list changing re-lints A" = withScratchDir
 
 test "an asked value becoming an interface method re-lints A" = withScratchDir
   (dir =>
-    graded
-      True
+    relintsA
       (askCase
         recorded
         [askIn "b" NsValue "m"]
@@ -919,8 +927,7 @@ test "an asked value becoming an interface method re-lints A" = withScratchDir
 
 test "an asked type alias becoming an interface re-lints A" = withScratchDir
   (dir =>
-    graded
-      True
+    relintsA
       (askCase
         recorded
         [askIn "b" NsType "T"]
@@ -935,8 +942,7 @@ test "an asked type alias becoming an interface re-lints A" = withScratchDir
 
 test "an asked name moving to another module re-lints A" = withScratchDir
   (dir =>
-    graded
-      True
+    relintsA
       (askCase
         recorded
         [askNamed NsValue "f"]
@@ -950,8 +956,7 @@ test "an asked name moving to another module re-lints A" = withScratchDir
 
 test "deleting the file that declared an asked name re-lints A" = withScratchDir
   (dir =>
-    graded
-      True
+    relintsA
       (askCase
         recorded
         [askIn "b" NsValue "f"]
@@ -962,8 +967,7 @@ test "deleting the file that declared an asked name re-lints A" = withScratchDir
 
 test "deleting a file A asked nothing about keeps A warm" = withScratchDir
   (dir =>
-    graded
-      False
+    keepsAWarm
       (askCase
         recorded
         [askIn "b" NsValue "f"]
@@ -1004,7 +1008,11 @@ wildSource : String
 wildSource = "import m.*\n\ng : Int -> Int\ng x = x\n"
 
 mSource : String
-mSource = "export\nk : Int\nk = 1\n"
+mSource = """
+export
+k : Int
+k = 1
+"""
 
 mPath : Env -> String
 mPath e = "\{e.proj}/m.mdk"
@@ -1047,7 +1055,7 @@ wildCase view mStart edits dir =
         _ => None
 
 test "(w1) creating the project module A imports with * re-lints A" = withScratchDir
-  (dir => graded True (wildCase recorded None [Edit mPath (Some mSource)] dir))
+  (dir => relintsA (wildCase recorded None [Edit mPath (Some mSource)] dir))
 
 test "(w1) the finding set changes when the module appears" = withScratchDir
   (dir => match wildCase recorded None [Edit mPath (Some mSource)] dir
@@ -1055,7 +1063,7 @@ test "(w1) the finding set changes when the module appears" = withScratchDir
     Some o => expectEqual ["local: m"] o.warmA.texts)
 
 test "(w2) deleting the project module A imports with * re-lints A" = withScratchDir
-  (dir => graded True (wildCase recorded (Some mSource) [Edit mPath None] dir))
+  (dir => relintsA (wildCase recorded (Some mSource) [Edit mPath None] dir))
 
 test "(w2) the finding set changes when the module disappears" = withScratchDir
   (dir => match wildCase recorded (Some mSource) [Edit mPath None] dir
@@ -1063,11 +1071,10 @@ test "(w2) the finding set changes when the module disappears" = withScratchDir
     Some o => expectEqual ["local: "] o.warmA.texts)
 
 test "(w3) creating an unrelated file keeps A warm" = withScratchDir (dir =>
-  graded False (wildCase recorded None [Edit cPath (Some cBase)] dir))
+  keepsAWarm (wildCase recorded None [Edit cPath (Some cBase)] dir))
 
 test "(w3) an edit to the module's body keeps A warm" = withScratchDir (dir =>
-  graded
-    False
+  keepsAWarm
     (wildCase
       recorded
       (Some mSource)
@@ -1077,9 +1084,9 @@ test "(w3) an edit to the module's body keeps A warm" = withScratchDir (dir =>
 test "(w4) without recording, a created module is served stale" = withScratchDir
   (dir =>
     isFail
-      (graded True (wildCase unrecorded None [Edit mPath (Some mSource)] dir)))
+      (relintsA (wildCase unrecorded None [Edit mPath (Some mSource)] dir)))
 
 test "(w4) without recording, a deleted module is served stale" = withScratchDir
   (dir =>
     isFail
-      (graded True (wildCase unrecorded (Some mSource) [Edit mPath None] dir)))
+      (relintsA (wildCase unrecorded (Some mSource) [Edit mPath None] dir)))

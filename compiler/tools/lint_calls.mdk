@@ -89,7 +89,7 @@ impl Debug Verdict where
   debug (Discard t) = "Discard (\{ppTy t})"
   debug (Abstain r) = "Abstain \{debug r}"
 
--- The head type constructor of a declared result, for the drains that sort
+-- The head type constructor of a declared result, for the rules that sort
 -- discards: `Unit`, `Result _ _`, `Option _`, anything else.
 public export data DiscardClass =
   | ClassUnit
@@ -176,6 +176,26 @@ discardVerdict : ProjectIndex -> FileScopes -> String -> DoStmt -> Verdict
 discardVerdict ix scopes file (DoLet _ _ PWild rhs _) =
   callVerdict ix scopes file rhs
 discardVerdict _ _ _ _ = Abstain NotADiscard
+
+-- The discard a rule may report: the statement's span, its right-hand side and
+-- the head type constructor of the declared result.  `None` for a statement
+-- that is not a discard, a call the index cannot vouch for, and a statement
+-- with a zero-width span.  A zero-width span (`noDeclLoc`, or the 1:0 span of
+-- the unlocated `parse` path) marks a statement with no source text, so there
+-- is nothing to point a finding at and no bytes for a fix to edit.
+export
+discardOf : ProjectIndex ->
+  FileScopes ->
+  String ->
+  DoStmt ->
+  Option (Loc, Expr, DiscardClass)
+discardOf ix scopes file (s@(DoLet _ _ PWild rhs (loc@(Loc _ sl sc el ec)))) =
+  if sl == el && sc == ec then
+    None
+  else match discardVerdict ix scopes file s
+    Discard ty => Some (loc, rhs, discardClass ty)
+    Abstain _ => None
+discardOf _ _ _ _ = None
 
 callVerdict : ProjectIndex -> FileScopes -> String -> Expr -> Verdict
 callVerdict ix scopes file e = match spine e 0

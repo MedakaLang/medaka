@@ -1,14 +1,11 @@
 -- lint rule rule-discarded-result: `let _ = e` on a call whose declared result is a Result or an Option, in a plain block. The value is propagated, handled or named.
 
 import driver.diagnostics.{Severity(..)}
-import frontend.ast.{Decl, DoStmt(..), Expr(..), Loc(..), Pat(..)}
-import frontend.ast_walk.{ExprKind(..)}
+import frontend.ast.{Decl, DoStmt, Loc}
 import frontend.parser.{Positions(..)}
 import tools.lint_calls.{
   DiscardClass(..),
-  Verdict(..),
-  discardClass,
-  discardVerdict,
+  discardOf,
   plainBlockVisitors,
 }
 import tools.lint_core.{
@@ -58,16 +55,10 @@ ruleDiscardedResult : StdlibIndex ->
 ruleDiscardedResult = plainBlockVisitors resultStmt
 
 resultStmt : ProjectIndex -> FileScopes -> String -> DoStmt -> List Finding
-resultStmt ix scopes path (s@(DoLet _ _ PWild _ (Loc f sl sc el ec))) =
-  if sl == el && sc == ec then
-    []
-  else match discardVerdict ix scopes path s
-    Discard ty => match discardClass ty
-      ClassResult => [finding resultMessage (Loc f sl sc el ec)]
-      ClassOption => [finding optionMessage (Loc f sl sc el ec)]
-      _ => []
-    Abstain _ => []
-resultStmt _ _ _ _ = []
+resultStmt ix scopes path s = match discardOf ix scopes path s
+  Some (loc, _, ClassResult) => [finding resultMessage loc]
+  Some (loc, _, ClassOption) => [finding optionMessage loc]
+  _ => []
 
 finding : String -> Loc -> Finding
 finding message loc = Finding {

@@ -1,14 +1,11 @@
 -- lint rule rule-let-underscore-unit: `let _ = e` on a call whose declared result is Unit, in a plain block. Write the bare statement `e`.
 
 import driver.diagnostics.{Severity(..)}
-import frontend.ast.{Decl, DoStmt(..), Expr(..), Loc(..), Pat(..)}
-import frontend.ast_walk.{ExprKind(..)}
+import frontend.ast.{Decl, DoStmt, Expr(..), Loc(..)}
 import frontend.parser.{Positions(..)}
 import tools.lint_calls.{
   DiscardClass(..),
-  Verdict(..),
-  discardClass,
-  discardVerdict,
+  discardOf,
   plainBlockVisitors,
 }
 import tools.lint_core.{
@@ -61,17 +58,10 @@ ruleLetUnderscoreUnit : StdlibIndex ->
 ruleLetUnderscoreUnit = plainBlockVisitors unitStmt
 
 unitStmt : ProjectIndex -> FileScopes -> String -> DoStmt -> List Finding
-unitStmt ix scopes path (s@(DoLet _ _ PWild rhs (Loc f sl sc el ec))) =
-  if sl == el && sc == ec then
-    []
-  else match discardVerdict ix scopes path s
-    Discard ty =>
-      if discardClass ty == ClassUnit then
-        [finding (Loc f sl sc el ec) (dropFix f sl sc rhs)]
-      else
-        []
-    Abstain _ => []
-unitStmt _ _ _ _ = []
+unitStmt ix scopes path s = match discardOf ix scopes path s
+  Some (loc@(Loc f sl sc _ _), rhs, ClassUnit) =>
+    [finding loc (dropFix f sl sc rhs)]
+  _ => []
 
 finding : Loc -> Option Fix -> Finding
 finding loc fix = Finding {

@@ -1,18 +1,15 @@
 # META
-source_lines=87
+source_lines=78
 stages=DESUGAR,MARK
 # SOURCE
 -- lint rule rule-discarded-result: `let _ = e` on a call whose declared result is a Result or an Option, in a plain block. The value is propagated, handled or named.
 
 import driver.diagnostics.{Severity(..)}
-import frontend.ast.{Decl, DoStmt(..), Expr(..), Loc(..), Pat(..)}
-import frontend.ast_walk.{ExprKind(..)}
+import frontend.ast.{Decl, DoStmt, Loc}
 import frontend.parser.{Positions(..)}
 import tools.lint_calls.{
   DiscardClass(..),
-  Verdict(..),
-  discardClass,
-  discardVerdict,
+  discardOf,
   plainBlockVisitors,
 }
 import tools.lint_core.{
@@ -62,16 +59,10 @@ ruleDiscardedResult : StdlibIndex ->
 ruleDiscardedResult = plainBlockVisitors resultStmt
 
 resultStmt : ProjectIndex -> FileScopes -> String -> DoStmt -> List Finding
-resultStmt ix scopes path (s@(DoLet _ _ PWild _ (Loc f sl sc el ec))) =
-  if sl == el && sc == ec then
-    []
-  else match discardVerdict ix scopes path s
-    Discard ty => match discardClass ty
-      ClassResult => [finding resultMessage (Loc f sl sc el ec)]
-      ClassOption => [finding optionMessage (Loc f sl sc el ec)]
-      _ => []
-    Abstain _ => []
-resultStmt _ _ _ _ = []
+resultStmt ix scopes path s = match discardOf ix scopes path s
+  Some (loc, _, ClassResult) => [finding resultMessage loc]
+  Some (loc, _, ClassOption) => [finding optionMessage loc]
+  _ => []
 
 finding : String -> Loc -> Finding
 finding message loc = Finding {
@@ -91,10 +82,9 @@ optionMessage =
   "`let _ = e` throws away an Option, and with it the `None` case. Handle `None` in a match that says what absence means, or rewrite the call so the result is not discarded"
 # DESUGAR
 (DUse false (UseGroup ("driver" "diagnostics") ((mem "Severity" true))))
-(DUse false (UseGroup ("frontend" "ast") ((mem "Decl" false) (mem "DoStmt" true) (mem "Expr" true) (mem "Loc" true) (mem "Pat" true))))
-(DUse false (UseGroup ("frontend" "ast_walk") ((mem "ExprKind" true))))
+(DUse false (UseGroup ("frontend" "ast") ((mem "Decl" false) (mem "DoStmt" false) (mem "Loc" false))))
 (DUse false (UseGroup ("frontend" "parser") ((mem "Positions" true))))
-(DUse false (UseGroup ("tools" "lint_calls") ((mem "DiscardClass" true) (mem "Verdict" true) (mem "discardClass" false) (mem "discardVerdict" false) (mem "plainBlockVisitors" false))))
+(DUse false (UseGroup ("tools" "lint_calls") ((mem "DiscardClass" true) (mem "discardOf" false) (mem "plainBlockVisitors" false))))
 (DUse false (UseGroup ("tools" "lint_core") ((mem "Category" true) (mem "FileFacts" false) (mem "Finding" true) (mem "Fixability" true) (mem "Need" true) (mem "Ratchet" true) (mem "Rule" false) (mem "RuleMeta" true) (mem "Scope" true) (mem "StdlibIndex" false) (mem "Visitor" true) (mem "mkVisitorRule" false))))
 (DUse false (UseGroup ("tools" "lint_index") ((mem "ProjectIndex" false))))
 (DUse false (UseGroup ("tools" "lint_scope") ((mem "FileScopes" false))))
@@ -104,8 +94,7 @@ optionMessage =
 (DTypeSig false "ruleDiscardedResult" (TyFun (TyCon "StdlibIndex") (TyFun (TyCon "String") (TyFun (TyCon "FileFacts") (TyFun (TyCon "Positions") (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyApp (TyCon "List") (TyCon "Visitor"))))))))
 (DFunDef false "ruleDiscardedResult" () (EApp (EVar "plainBlockVisitors") (EVar "resultStmt")))
 (DTypeSig false "resultStmt" (TyFun (TyCon "ProjectIndex") (TyFun (TyCon "FileScopes") (TyFun (TyCon "String") (TyFun (TyCon "DoStmt") (TyApp (TyCon "List") (TyCon "Finding")))))))
-(DFunDef false "resultStmt" ((PVar "ix") (PVar "scopes") (PVar "path") (PAs "s" (PCon "DoLet" PWild PWild (PCon "PWild") PWild (PCon "Loc" (PVar "f") (PVar "sl") (PVar "sc") (PVar "el") (PVar "ec"))))) (EIf (EBinOp "&&" (EBinOp "==" (EVar "sl") (EVar "el")) (EBinOp "==" (EVar "sc") (EVar "ec"))) (EListLit) (EMatch (EApp (EApp (EApp (EApp (EVar "discardVerdict") (EVar "ix")) (EVar "scopes")) (EVar "path")) (EVar "s")) (arm (PCon "Discard" (PVar "ty")) () (EMatch (EApp (EVar "discardClass") (EVar "ty")) (arm (PCon "ClassResult") () (EListLit (EApp (EApp (EVar "finding") (EVar "resultMessage")) (EApp (EApp (EApp (EApp (EApp (EVar "Loc") (EVar "f")) (EVar "sl")) (EVar "sc")) (EVar "el")) (EVar "ec"))))) (arm (PCon "ClassOption") () (EListLit (EApp (EApp (EVar "finding") (EVar "optionMessage")) (EApp (EApp (EApp (EApp (EApp (EVar "Loc") (EVar "f")) (EVar "sl")) (EVar "sc")) (EVar "el")) (EVar "ec"))))) (arm PWild () (EListLit)))) (arm (PCon "Abstain" PWild) () (EListLit)))))
-(DFunDef false "resultStmt" (PWild PWild PWild PWild) (EListLit))
+(DFunDef false "resultStmt" ((PVar "ix") (PVar "scopes") (PVar "path") (PVar "s")) (EMatch (EApp (EApp (EApp (EApp (EVar "discardOf") (EVar "ix")) (EVar "scopes")) (EVar "path")) (EVar "s")) (arm (PCon "Some" (PTuple (PVar "loc") PWild (PCon "ClassResult"))) () (EListLit (EApp (EApp (EVar "finding") (EVar "resultMessage")) (EVar "loc")))) (arm (PCon "Some" (PTuple (PVar "loc") PWild (PCon "ClassOption"))) () (EListLit (EApp (EApp (EVar "finding") (EVar "optionMessage")) (EVar "loc")))) (arm PWild () (EListLit))))
 (DTypeSig false "finding" (TyFun (TyCon "String") (TyFun (TyCon "Loc") (TyCon "Finding"))))
 (DFunDef false "finding" ((PVar "message") (PVar "loc")) (ERecordCreate "Finding" ((fa "rule" (EVar "ruleNameDiscardedResult")) (fa "message" (EVar "message")) (fa "severity" (EVar "SevWarning")) (fa "loc" (EApp (EVar "Some") (EVar "loc"))) (fa "fix" (EVar "None")))))
 (DTypeSig false "resultMessage" (TyCon "String"))
@@ -114,10 +103,9 @@ optionMessage =
 (DFunDef false "optionMessage" () (ELit (LString "`let _ = e` throws away an Option, and with it the `None` case. Handle `None` in a match that says what absence means, or rewrite the call so the result is not discarded")))
 # MARK
 (DUse false (UseGroup ("driver" "diagnostics") ((mem "Severity" true))))
-(DUse false (UseGroup ("frontend" "ast") ((mem "Decl" false) (mem "DoStmt" true) (mem "Expr" true) (mem "Loc" true) (mem "Pat" true))))
-(DUse false (UseGroup ("frontend" "ast_walk") ((mem "ExprKind" true))))
+(DUse false (UseGroup ("frontend" "ast") ((mem "Decl" false) (mem "DoStmt" false) (mem "Loc" false))))
 (DUse false (UseGroup ("frontend" "parser") ((mem "Positions" true))))
-(DUse false (UseGroup ("tools" "lint_calls") ((mem "DiscardClass" true) (mem "Verdict" true) (mem "discardClass" false) (mem "discardVerdict" false) (mem "plainBlockVisitors" false))))
+(DUse false (UseGroup ("tools" "lint_calls") ((mem "DiscardClass" true) (mem "discardOf" false) (mem "plainBlockVisitors" false))))
 (DUse false (UseGroup ("tools" "lint_core") ((mem "Category" true) (mem "FileFacts" false) (mem "Finding" true) (mem "Fixability" true) (mem "Need" true) (mem "Ratchet" true) (mem "Rule" false) (mem "RuleMeta" true) (mem "Scope" true) (mem "StdlibIndex" false) (mem "Visitor" true) (mem "mkVisitorRule" false))))
 (DUse false (UseGroup ("tools" "lint_index") ((mem "ProjectIndex" false))))
 (DUse false (UseGroup ("tools" "lint_scope") ((mem "FileScopes" false))))
@@ -127,8 +115,7 @@ optionMessage =
 (DTypeSig false "ruleDiscardedResult" (TyFun (TyCon "StdlibIndex") (TyFun (TyCon "String") (TyFun (TyCon "FileFacts") (TyFun (TyCon "Positions") (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyApp (TyCon "List") (TyCon "Visitor"))))))))
 (DFunDef false "ruleDiscardedResult" () (EApp (EVar "plainBlockVisitors") (EVar "resultStmt")))
 (DTypeSig false "resultStmt" (TyFun (TyCon "ProjectIndex") (TyFun (TyCon "FileScopes") (TyFun (TyCon "String") (TyFun (TyCon "DoStmt") (TyApp (TyCon "List") (TyCon "Finding")))))))
-(DFunDef false "resultStmt" ((PVar "ix") (PVar "scopes") (PVar "path") (PAs "s" (PCon "DoLet" PWild PWild (PCon "PWild") PWild (PCon "Loc" (PVar "f") (PVar "sl") (PVar "sc") (PVar "el") (PVar "ec"))))) (EIf (EBinOp "&&" (EBinOp "==" (EVar "sl") (EVar "el")) (EBinOp "==" (EVar "sc") (EVar "ec"))) (EListLit) (EMatch (EApp (EApp (EApp (EApp (EVar "discardVerdict") (EVar "ix")) (EVar "scopes")) (EVar "path")) (EVar "s")) (arm (PCon "Discard" (PVar "ty")) () (EMatch (EApp (EVar "discardClass") (EVar "ty")) (arm (PCon "ClassResult") () (EListLit (EApp (EApp (EVar "finding") (EVar "resultMessage")) (EApp (EApp (EApp (EApp (EApp (EVar "Loc") (EVar "f")) (EVar "sl")) (EVar "sc")) (EVar "el")) (EVar "ec"))))) (arm (PCon "ClassOption") () (EListLit (EApp (EApp (EVar "finding") (EVar "optionMessage")) (EApp (EApp (EApp (EApp (EApp (EVar "Loc") (EVar "f")) (EVar "sl")) (EVar "sc")) (EVar "el")) (EVar "ec"))))) (arm PWild () (EListLit)))) (arm (PCon "Abstain" PWild) () (EListLit)))))
-(DFunDef false "resultStmt" (PWild PWild PWild PWild) (EListLit))
+(DFunDef false "resultStmt" ((PVar "ix") (PVar "scopes") (PVar "path") (PVar "s")) (EMatch (EApp (EApp (EApp (EApp (EVar "discardOf") (EVar "ix")) (EVar "scopes")) (EVar "path")) (EVar "s")) (arm (PCon "Some" (PTuple (PVar "loc") PWild (PCon "ClassResult"))) () (EListLit (EApp (EApp (EVar "finding") (EVar "resultMessage")) (EVar "loc")))) (arm (PCon "Some" (PTuple (PVar "loc") PWild (PCon "ClassOption"))) () (EListLit (EApp (EApp (EVar "finding") (EVar "optionMessage")) (EVar "loc")))) (arm PWild () (EListLit))))
 (DTypeSig false "finding" (TyFun (TyCon "String") (TyFun (TyCon "Loc") (TyCon "Finding"))))
 (DFunDef false "finding" ((PVar "message") (PVar "loc")) (ERecordCreate "Finding" ((fa "rule" (EVar "ruleNameDiscardedResult")) (fa "message" (EVar "message")) (fa "severity" (EVar "SevWarning")) (fa "loc" (EApp (EVar "Some") (EVar "loc"))) (fa "fix" (EVar "None")))))
 (DTypeSig false "resultMessage" (TyCon "String"))
