@@ -208,9 +208,8 @@ gen_tailrec() {
 gen_listbuild() {
   n=$1; f=$2
   # Build an N-element list via non-tail `range`, then fold it. Stresses cons
-  # allocation + list traversal. ALLOC is O(N); the wall-TIME super-linearity noted
-  # in the header lives here (retained growing live set) — which is exactly why this
-  # gate does not grade time.
+  # allocation + list traversal. The separate listmatch instruction arm covers
+  # empty-list matching; this shape also exercises the non-tail builder and fold.
   {
     printf 'range : Int -> Int -> List Int\n'
     printf 'range lo hi = match lo < hi\n  False => []\n  True => lo :: range (lo + 1) hi\n'
