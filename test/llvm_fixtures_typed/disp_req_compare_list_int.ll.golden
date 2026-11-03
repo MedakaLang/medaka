@@ -304,6 +304,8 @@ else13:
 ; mdk-module impl.5f5f757365725f5f3a3a4f72647c285f5f757365725f5f2e4d794c6973742061297c.636f6d70617265
 define internal i64 @mdk.impl.7a5a5f35665f5f35665f757365725f35665f5f35665f5f32655f4d794c697374.636f6d70617265(i64 %arg0, i64 %arg1, i64 %arg2) {
 entry:
+  %t92 = alloca i64
+  %t98 = alloca i64, i64 3
   %t0 = alloca i64
   %t3 = icmp eq i64 %arg1, 562949953421315
   %t4 = and i64 %arg1, 1
@@ -418,7 +420,6 @@ slotok84:
   %t88 = inttoptr i64 %t87 to ptr
   %t89 = load i64, ptr %t88
   %t90 = icmp eq i64 %t89, 3
-  %t92 = alloca i64
   br i1 %t90, label %apfast91, label %apslow91
 apfast91:
   %t93 = inttoptr i64 %t87 to ptr
@@ -429,7 +430,6 @@ apfast91:
   store i64 %t97, ptr %t92
   br label %apend91
 apslow91:
-  %t98 = alloca i64, i64 3
   %t99 = getelementptr i64, ptr %t98, i64 0
   store i64 %arg0, ptr %t99
   %t100 = getelementptr i64, ptr %t98, i64 1

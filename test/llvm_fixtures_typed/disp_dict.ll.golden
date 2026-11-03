@@ -281,6 +281,8 @@ lz_unforced:
 ; mdk-module module.5f5f757365725f5f
 define internal i64 @mdk.user.6d356635663735373336353732356635665f5f66697273745a65726f(i64 %arg0, i64 %arg1) {
 entry:
+  %t9 = alloca i64
+  %t15 = alloca i64, i64 1
   %t0 = icmp eq i64 %arg0, 0 ; slot __user__::Zero.zero
   br i1 %t0, label %slotnull1, label %slotok1
 slotnull1:
@@ -293,7 +295,6 @@ slotok1:
   %t5 = inttoptr i64 %t4 to ptr
   %t6 = load i64, ptr %t5
   %t7 = icmp eq i64 %t6, 1
-  %t9 = alloca i64
   br i1 %t7, label %apfast8, label %apslow8
 apfast8:
   %t10 = inttoptr i64 %t4 to ptr
@@ -304,7 +305,6 @@ apfast8:
   store i64 %t14, ptr %t9
   br label %apend8
 apslow8:
-  %t15 = alloca i64, i64 1
   %t16 = getelementptr i64, ptr %t15, i64 0
   store i64 %arg0, ptr %t16
   %t17 = call i64 @__mdk_apply(i64 %t4, i64 1, ptr %t15)
