@@ -4,6 +4,7 @@ import os
 import subprocess
 import sys
 import tempfile
+import threading
 import time
 
 from pathlib import Path
@@ -133,17 +134,38 @@ def _run_contained(command, environment, transcript, limits, requests, started, 
             cancel = limits.get('cancel_after')
             deadline = min(timeout, cancel) if cancel is not None else timeout
             read_fd, write_fd = os.pipe()
+            output_read, output_write = os.pipe()
             try:
                 supervisor = subprocess.Popen(
                     [sys.executable, str(Path(__file__).with_name('supervisor.py')), str(write_fd),
                      json.dumps([str(boundary.path), boundary.uid, command, env])],
-                    stdin=subprocess.PIPE, stdout=stdout, stderr=subprocess.DEVNULL,
+                    stdin=subprocess.PIPE, stdout=output_write, stderr=subprocess.DEVNULL,
                     env={'PATH': os.defpath}, cwd=workspace, pass_fds=(write_fd,))
             except OSError:
                 supervisor = None
             finally:
                 os.close(write_fd)
+                os.close(output_write)
             if supervisor is not None:
+                arrivals, reader_errors = [], []
+                observed_bytes = [0]
+                def observe():
+                    try:
+                        while True:
+                            chunk = os.read(output_read, 4096)
+                            if not chunk:
+                                break
+                            now = time.monotonic_ns()
+                            remaining = limits.get("output_bytes", 1048576) + 1 - observed_bytes[0]
+                            if remaining > 0:
+                                bounded = chunk[:remaining]
+                                arrivals.extend([now] * bounded.count(b"\n"))
+                                stdout.write(bounded)
+                                observed_bytes[0] += min(len(chunk), remaining)
+                    except OSError as error:
+                        reader_errors.append(error)
+                reader = threading.Thread(target=observe)
+                reader.start()
                 try:
                     supervisor.communicate(transcript, timeout=deadline)
                 except subprocess.TimeoutExpired:
@@ -156,6 +178,8 @@ def _run_contained(command, environment, transcript, limits, requests, started, 
                     raise
                 finally:
                     boundary.close()
+                    reader.join()
+                    os.close(output_read)
                 try:
                     with os.fdopen(read_fd, 'rb') as status_stream:
                         observed_status = json.load(status_stream)
@@ -168,7 +192,7 @@ def _run_contained(command, environment, transcript, limits, requests, started, 
                     status = 'observer_failure'
                 stdout.seek(0)
                 output = stdout.read(limits.get('output_bytes', 1048576) + 1)
-                if len(output) > limits.get('output_bytes', 1048576):
+                if reader_errors or len(output) > limits.get('output_bytes', 1048576):
                     observer_failure = True
                 else:
                     try:
@@ -177,12 +201,17 @@ def _run_contained(command, environment, transcript, limits, requests, started, 
                         malformed = True
                     else:
                         try:
+                            if limits.get('timing_callback') is not None:
+                                if len(arrivals) != len(responses):
+                                    raise ValueError('response timing mismatch')
+                                limits['timing_callback']([t - started for t in arrivals])
                             if limits.get('response_callback') is not None:
                                 limits['response_callback'](responses)
                         except Exception:
                             observer_failure = True
             else:
                 os.close(read_fd)
+                os.close(output_read)
         try:
             with open(trace, encoding='utf-8') as stream:
                 events = [json.loads(line) for line in stream]

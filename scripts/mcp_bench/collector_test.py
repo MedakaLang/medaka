@@ -293,6 +293,15 @@ print(json.dumps({'jsonrpc':'2.0','id':1,'result':{'blocked':blocked,'pid':os.ge
         def fail(_):
             raise RuntimeError('grader failed')
         self.assertEqual('observer_failure', self.worker('print(' + repr(RESPONSE) + ')', response_callback=fail)['outcome'])
+        self.assertEqual('observer_failure', self.worker('print(' + repr(RESPONSE) + ')', timing_callback=fail)['outcome'])
+
+    def test_response_arrival_precedes_worker_exit(self):
+        timings = []
+        result = self.worker('import time; print(' + repr(RESPONSE) + ', flush=True); time.sleep(1)',
+                             timing_callback=timings.extend)
+        self.assertEqual('success', result['outcome'])
+        self.assertEqual(1, len(timings))
+        self.assertGreater(result['wall_ns'] - timings[0], 700_000_000)
 
     def test_pairs_match_and_extra_calls_are_rejected(self):
         start, finish = event('start'), event('finish', 'success')
