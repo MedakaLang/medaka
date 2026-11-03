@@ -1,5 +1,11 @@
 # MCP.md — `medaka mcp`, the LSP-for-agents
 
+The planned replacement is described in the
+[MCP agent-service architecture](../design/MCP-AGENT-SERVICE.md), tracked by
+[#4768](https://github.com/MedakaLang/medaka/issues/4768). It adds independent
+installation and per-workspace compiler workers. The instructions below describe
+the current implementation; the planned recovery and routing behavior has not shipped.
+
 **Status:** IMPLEMENTED — 58d050a7, 2026-07-16 (7 tools); `medaka_references`
 added #870/#912. All 8 tools shipped and merged (#246/#247/#249/#250/#251/
 #252/#255/#870/#912), protocol-version negotiation in place, verified READY

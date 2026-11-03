@@ -1,15 +1,12 @@
 # META
-source_lines=1172
+source_lines=1099
 stages=DESUGAR,MARK
 # SOURCE
 -- tc_state: mints, copies and carries of the state records (including `emptyShadowDicts`, the
 -- check-run and module seed mints `seedCheckRun` and `plainModuleSeed`, and the span carries
 -- `sameSpan`, `mctxAt`, `dynAt`, `envAt` with their `IfSome` forms), the process interners cell and
--- its high-water carries to and from a graph run (`raiseToHighWater`, `noteHighWater`), the
--- `Windowed` channel ops, and the test-only trace-sink probes that only build or read a
--- `TraceSink`, the graph-run evidence cells or the scope store (`beginAssumptionTrace`,
--- `beginNumericPredicateTrace`, `beginMethodReturnTrace`, `beginEvidenceObservation`,
--- `evCellsSpanProbe` and their `finish` forms; `scopeTraceContext`, `scopeFrameStats`).
+-- its high-water carries to and from a graph run (`raiseToHighWater`, `noteHighWater`), and the
+-- `Windowed` channel ops.
 --
 -- Spec: TYPECHECK-CONTRACTS section 5; CELL-LIFETIMES.md.
 --
@@ -44,7 +41,6 @@ import types.scopes.{
 import types.scopes as Scopes
 import frontend.exhaust.{buildOracle, Oracle}
 import support.ordmap.{omEmpty, omInsert, OrdMap}
-import support.util.{reverseL}
 import types.registry.{mregEmpty, regEmpty, spEmpty, spFromFloor}
 import types.runtime_types.{emptyBinderTypes}
 
@@ -1105,75 +1101,6 @@ mintGraphCtx inputs admitted =
   }
   noteInterners gctx
   gctx
-
--- test-only observation: declarations whose only callers are tests and probes.
-
--- A sink with every gate off and fresh buffers; each `begin*` turns one gate on.
-offTraceSink : Unit -> TraceSink
-offTraceSink _ = TraceSink {
-  tsAssumptionEnabled = False,
-  tsAssumptionEntries = Ref [],
-  tsNumericPredicateEnabled = False,
-  tsNumericPredicateEntries = Ref [],
-  tsMethodReturnEnabled = False,
-  tsMethodReturnEntries = Ref [],
-  tsEvidenceObservationEnabled = False,
-  tsEvidenceObservationEntries = Ref [],
-}
-
--- The trace builders and readers: a test builds a sink with `begin*`, passes it as
--- the `diTrace` of the drives it observes, and reads its buffer with `finish*`.
-export
-beginAssumptionTrace : Unit -> TraceSink
-beginAssumptionTrace _ = { offTraceSink () | tsAssumptionEnabled = True }
-
-export
-finishAssumptionTrace : TraceSink -> List AssumptionTraceEntry
-finishAssumptionTrace sink = reverseL sink.tsAssumptionEntries.value
-
-export
-beginNumericPredicateTrace : Unit -> TraceSink
-beginNumericPredicateTrace _ =
-  { offTraceSink () | tsNumericPredicateEnabled = True }
-
-export
-finishNumericPredicateTrace : TraceSink -> List NumericPredicateTraceEntry
-finishNumericPredicateTrace sink = reverseL sink.tsNumericPredicateEntries.value
-
-export
-beginMethodReturnTrace : Unit -> TraceSink
-beginMethodReturnTrace _ = { offTraceSink () | tsMethodReturnEnabled = True }
-
--- #2095: trace-gated, zero cost when off — same discipline as
--- `methodReturnTrace`. Generalizes that pattern from
--- the one migrated return family to every `Obligation` `recordEvidence`
--- publishes: a method occurrence and a dictionary application alike, whatever
--- family produced the goal, read back from the SAME cells the stampers wrote
--- (never re-derived), so this can never disagree with the published `EvTable`.
-export
-beginEvidenceObservation : Unit -> TraceSink
-beginEvidenceObservation _ =
-  { offTraceSink () | tsEvidenceObservationEnabled = True }
-
-export
-finishEvidenceObservation : TraceSink -> List EvidenceObservationEntry
-finishEvidenceObservation sink =
-  reverseL sink.tsEvidenceObservationEntries.value
-
--- Test visibility (`typecheck_test.mdk`): the length of [gctx]'s method-cell index,
--- which spans only its graph lineage.
-export
-evCellsSpanProbe : GraphCtx -> Int
-evCellsSpanProbe gctx = arrayLength gctx.graphRun.evCells.value
-
-export
-scopeTraceContext : GraphCtx -> ScopeId -> (String, String)
-scopeTraceContext gctx sid =
-  Scopes.scopeTraceContext (currentScopeStore gctx ()) sid
-
-export
-scopeFrameStats : GraphCtx -> (Int, Int)
-scopeFrameStats gctx = Scopes.scopeFrameStats (currentScopeStore gctx ())
 # DESUGAR
 (DUse false (UseGroup ("types" "tc_mono") ((mem "locEq" false) (mem "monoScheme" false) (mem "tconBuiltin" false))))
 (DUse false (UseGroup ("frontend" "ast") ((mem "Decl" true) (mem "Loc" true) (mem "TyConOrigin" true) (mem "defaultReceiverDict" false))))
@@ -1187,7 +1114,6 @@ scopeFrameStats gctx = Scopes.scopeFrameStats (currentScopeStore gctx ())
 (DUse false (UseAlias ("types" "scopes") "Scopes"))
 (DUse false (UseGroup ("frontend" "exhaust") ((mem "buildOracle" false) (mem "Oracle" false))))
 (DUse false (UseGroup ("support" "ordmap") ((mem "omEmpty" false) (mem "omInsert" false) (mem "OrdMap" false))))
-(DUse false (UseGroup ("support" "util") ((mem "reverseL" false))))
 (DUse false (UseGroup ("types" "registry") ((mem "mregEmpty" false) (mem "regEmpty" false) (mem "spEmpty" false) (mem "spFromFloor" false))))
 (DUse false (UseGroup ("types" "runtime_types") ((mem "emptyBinderTypes" false))))
 (DTypeSig true "callUOblsWindow" (TyFun (TyCon "ModuleCtx") (TyFun (TyCon "Int") (TyApp (TyCon "List") (TyCon "UObligation")))))
@@ -1317,28 +1243,6 @@ scopeFrameStats gctx = Scopes.scopeFrameStats (currentScopeStore gctx ())
 (DFunDef false "builtinCtors" () (EApp (EApp (EApp (EVar "omInsert") (ELit (LString "True"))) (EApp (EVar "monoScheme") (EApp (EVar "tconBuiltin") (ELit (LString "Bool"))))) (EApp (EApp (EApp (EVar "omInsert") (ELit (LString "False"))) (EApp (EVar "monoScheme") (EApp (EVar "tconBuiltin") (ELit (LString "Bool"))))) (EVar "omEmpty"))))
 (DTypeSig true "mintGraphCtx" (TyFun (TyCon "DriveInputs") (TyFun (TyApp (TyCon "OrdMap") (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "String")))) (TyCon "GraphCtx"))))
 (DFunDef false "mintGraphCtx" ((PVar "inputs") (PVar "admitted")) (EBlock (DoLet false false (PVar "carried") (EFieldAccess (EVar "interners") "value")) (DoLet false false (PVar "base") (EApp (EApp (EVar "initialGraphCtx") (EVar "builtinCtors")) (EApp (EVar "graphLineageRun") (EFieldAccess (EVar "carried") "lineage")))) (DoLet false false (PVar "gctx") (EVariantUpdate "GraphCtx" (EVar "base") ((fa "trace" (EFieldAccess (EVar "inputs") "diTrace")) (fa "graphAdmittedMethodsRef" (EApp (EVar "Ref") (EVar "admitted"))) (fa "builtinExternNamesRef" (EFieldAccess (EVar "carried") "externCatalog"))))) (DoExpr (EApp (EVar "noteInterners") (EVar "gctx"))) (DoExpr (EVar "gctx"))))
-(DTypeSig false "offTraceSink" (TyFun (TyCon "Unit") (TyCon "TraceSink")))
-(DFunDef false "offTraceSink" (PWild) (ERecordCreate "TraceSink" ((fa "tsAssumptionEnabled" (EVar "False")) (fa "tsAssumptionEntries" (EApp (EVar "Ref") (EListLit))) (fa "tsNumericPredicateEnabled" (EVar "False")) (fa "tsNumericPredicateEntries" (EApp (EVar "Ref") (EListLit))) (fa "tsMethodReturnEnabled" (EVar "False")) (fa "tsMethodReturnEntries" (EApp (EVar "Ref") (EListLit))) (fa "tsEvidenceObservationEnabled" (EVar "False")) (fa "tsEvidenceObservationEntries" (EApp (EVar "Ref") (EListLit))))))
-(DTypeSig true "beginAssumptionTrace" (TyFun (TyCon "Unit") (TyCon "TraceSink")))
-(DFunDef false "beginAssumptionTrace" (PWild) (ERecordUpdate (EApp (EVar "offTraceSink") (ELit LUnit)) ((fa "tsAssumptionEnabled" (EVar "True")))))
-(DTypeSig true "finishAssumptionTrace" (TyFun (TyCon "TraceSink") (TyApp (TyCon "List") (TyCon "AssumptionTraceEntry"))))
-(DFunDef false "finishAssumptionTrace" ((PVar "sink")) (EApp (EVar "reverseL") (EFieldAccess (EFieldAccess (EVar "sink") "tsAssumptionEntries") "value")))
-(DTypeSig true "beginNumericPredicateTrace" (TyFun (TyCon "Unit") (TyCon "TraceSink")))
-(DFunDef false "beginNumericPredicateTrace" (PWild) (ERecordUpdate (EApp (EVar "offTraceSink") (ELit LUnit)) ((fa "tsNumericPredicateEnabled" (EVar "True")))))
-(DTypeSig true "finishNumericPredicateTrace" (TyFun (TyCon "TraceSink") (TyApp (TyCon "List") (TyCon "NumericPredicateTraceEntry"))))
-(DFunDef false "finishNumericPredicateTrace" ((PVar "sink")) (EApp (EVar "reverseL") (EFieldAccess (EFieldAccess (EVar "sink") "tsNumericPredicateEntries") "value")))
-(DTypeSig true "beginMethodReturnTrace" (TyFun (TyCon "Unit") (TyCon "TraceSink")))
-(DFunDef false "beginMethodReturnTrace" (PWild) (ERecordUpdate (EApp (EVar "offTraceSink") (ELit LUnit)) ((fa "tsMethodReturnEnabled" (EVar "True")))))
-(DTypeSig true "beginEvidenceObservation" (TyFun (TyCon "Unit") (TyCon "TraceSink")))
-(DFunDef false "beginEvidenceObservation" (PWild) (ERecordUpdate (EApp (EVar "offTraceSink") (ELit LUnit)) ((fa "tsEvidenceObservationEnabled" (EVar "True")))))
-(DTypeSig true "finishEvidenceObservation" (TyFun (TyCon "TraceSink") (TyApp (TyCon "List") (TyCon "EvidenceObservationEntry"))))
-(DFunDef false "finishEvidenceObservation" ((PVar "sink")) (EApp (EVar "reverseL") (EFieldAccess (EFieldAccess (EVar "sink") "tsEvidenceObservationEntries") "value")))
-(DTypeSig true "evCellsSpanProbe" (TyFun (TyCon "GraphCtx") (TyCon "Int")))
-(DFunDef false "evCellsSpanProbe" ((PVar "gctx")) (EApp (EVar "arrayLength") (EFieldAccess (EFieldAccess (EFieldAccess (EVar "gctx") "graphRun") "evCells") "value")))
-(DTypeSig true "scopeTraceContext" (TyFun (TyCon "GraphCtx") (TyFun (TyCon "ScopeId") (TyTuple (TyCon "String") (TyCon "String")))))
-(DFunDef false "scopeTraceContext" ((PVar "gctx") (PVar "sid")) (EApp (EApp (EVar "Scopes.scopeTraceContext") (EApp (EApp (EVar "currentScopeStore") (EVar "gctx")) (ELit LUnit))) (EVar "sid")))
-(DTypeSig true "scopeFrameStats" (TyFun (TyCon "GraphCtx") (TyTuple (TyCon "Int") (TyCon "Int"))))
-(DFunDef false "scopeFrameStats" ((PVar "gctx")) (EApp (EVar "Scopes.scopeFrameStats") (EApp (EApp (EVar "currentScopeStore") (EVar "gctx")) (ELit LUnit))))
 # MARK
 (DUse false (UseGroup ("types" "tc_mono") ((mem "locEq" false) (mem "monoScheme" false) (mem "tconBuiltin" false))))
 (DUse false (UseGroup ("frontend" "ast") ((mem "Decl" true) (mem "Loc" true) (mem "TyConOrigin" true) (mem "defaultReceiverDict" false))))
@@ -1352,7 +1256,6 @@ scopeFrameStats gctx = Scopes.scopeFrameStats (currentScopeStore gctx ())
 (DUse false (UseAlias ("types" "scopes") "Scopes"))
 (DUse false (UseGroup ("frontend" "exhaust") ((mem "buildOracle" false) (mem "Oracle" false))))
 (DUse false (UseGroup ("support" "ordmap") ((mem "omEmpty" false) (mem "omInsert" false) (mem "OrdMap" false))))
-(DUse false (UseGroup ("support" "util") ((mem "reverseL" false))))
 (DUse false (UseGroup ("types" "registry") ((mem "mregEmpty" false) (mem "regEmpty" false) (mem "spEmpty" false) (mem "spFromFloor" false))))
 (DUse false (UseGroup ("types" "runtime_types") ((mem "emptyBinderTypes" false))))
 (DTypeSig true "callUOblsWindow" (TyFun (TyCon "ModuleCtx") (TyFun (TyCon "Int") (TyApp (TyCon "List") (TyCon "UObligation")))))
@@ -1482,25 +1385,3 @@ scopeFrameStats gctx = Scopes.scopeFrameStats (currentScopeStore gctx ())
 (DFunDef false "builtinCtors" () (EApp (EApp (EApp (EVar "omInsert") (ELit (LString "True"))) (EApp (EVar "monoScheme") (EApp (EVar "tconBuiltin") (ELit (LString "Bool"))))) (EApp (EApp (EApp (EVar "omInsert") (ELit (LString "False"))) (EApp (EVar "monoScheme") (EApp (EVar "tconBuiltin") (ELit (LString "Bool"))))) (EVar "omEmpty"))))
 (DTypeSig true "mintGraphCtx" (TyFun (TyCon "DriveInputs") (TyFun (TyApp (TyCon "OrdMap") (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "String")))) (TyCon "GraphCtx"))))
 (DFunDef false "mintGraphCtx" ((PVar "inputs") (PVar "admitted")) (EBlock (DoLet false false (PVar "carried") (EFieldAccess (EVar "interners") "value")) (DoLet false false (PVar "base") (EApp (EApp (EVar "initialGraphCtx") (EVar "builtinCtors")) (EApp (EVar "graphLineageRun") (EFieldAccess (EVar "carried") "lineage")))) (DoLet false false (PVar "gctx") (EVariantUpdate "GraphCtx" (EVar "base") ((fa "trace" (EFieldAccess (EVar "inputs") "diTrace")) (fa "graphAdmittedMethodsRef" (EApp (EVar "Ref") (EVar "admitted"))) (fa "builtinExternNamesRef" (EFieldAccess (EVar "carried") "externCatalog"))))) (DoExpr (EApp (EVar "noteInterners") (EVar "gctx"))) (DoExpr (EVar "gctx"))))
-(DTypeSig false "offTraceSink" (TyFun (TyCon "Unit") (TyCon "TraceSink")))
-(DFunDef false "offTraceSink" (PWild) (ERecordCreate "TraceSink" ((fa "tsAssumptionEnabled" (EVar "False")) (fa "tsAssumptionEntries" (EApp (EVar "Ref") (EListLit))) (fa "tsNumericPredicateEnabled" (EVar "False")) (fa "tsNumericPredicateEntries" (EApp (EVar "Ref") (EListLit))) (fa "tsMethodReturnEnabled" (EVar "False")) (fa "tsMethodReturnEntries" (EApp (EVar "Ref") (EListLit))) (fa "tsEvidenceObservationEnabled" (EVar "False")) (fa "tsEvidenceObservationEntries" (EApp (EVar "Ref") (EListLit))))))
-(DTypeSig true "beginAssumptionTrace" (TyFun (TyCon "Unit") (TyCon "TraceSink")))
-(DFunDef false "beginAssumptionTrace" (PWild) (ERecordUpdate (EApp (EVar "offTraceSink") (ELit LUnit)) ((fa "tsAssumptionEnabled" (EVar "True")))))
-(DTypeSig true "finishAssumptionTrace" (TyFun (TyCon "TraceSink") (TyApp (TyCon "List") (TyCon "AssumptionTraceEntry"))))
-(DFunDef false "finishAssumptionTrace" ((PVar "sink")) (EApp (EVar "reverseL") (EFieldAccess (EFieldAccess (EVar "sink") "tsAssumptionEntries") "value")))
-(DTypeSig true "beginNumericPredicateTrace" (TyFun (TyCon "Unit") (TyCon "TraceSink")))
-(DFunDef false "beginNumericPredicateTrace" (PWild) (ERecordUpdate (EApp (EVar "offTraceSink") (ELit LUnit)) ((fa "tsNumericPredicateEnabled" (EVar "True")))))
-(DTypeSig true "finishNumericPredicateTrace" (TyFun (TyCon "TraceSink") (TyApp (TyCon "List") (TyCon "NumericPredicateTraceEntry"))))
-(DFunDef false "finishNumericPredicateTrace" ((PVar "sink")) (EApp (EVar "reverseL") (EFieldAccess (EFieldAccess (EVar "sink") "tsNumericPredicateEntries") "value")))
-(DTypeSig true "beginMethodReturnTrace" (TyFun (TyCon "Unit") (TyCon "TraceSink")))
-(DFunDef false "beginMethodReturnTrace" (PWild) (ERecordUpdate (EApp (EVar "offTraceSink") (ELit LUnit)) ((fa "tsMethodReturnEnabled" (EVar "True")))))
-(DTypeSig true "beginEvidenceObservation" (TyFun (TyCon "Unit") (TyCon "TraceSink")))
-(DFunDef false "beginEvidenceObservation" (PWild) (ERecordUpdate (EApp (EVar "offTraceSink") (ELit LUnit)) ((fa "tsEvidenceObservationEnabled" (EVar "True")))))
-(DTypeSig true "finishEvidenceObservation" (TyFun (TyCon "TraceSink") (TyApp (TyCon "List") (TyCon "EvidenceObservationEntry"))))
-(DFunDef false "finishEvidenceObservation" ((PVar "sink")) (EApp (EVar "reverseL") (EFieldAccess (EFieldAccess (EVar "sink") "tsEvidenceObservationEntries") "value")))
-(DTypeSig true "evCellsSpanProbe" (TyFun (TyCon "GraphCtx") (TyCon "Int")))
-(DFunDef false "evCellsSpanProbe" ((PVar "gctx")) (EApp (EVar "arrayLength") (EFieldAccess (EFieldAccess (EFieldAccess (EVar "gctx") "graphRun") "evCells") "value")))
-(DTypeSig true "scopeTraceContext" (TyFun (TyCon "GraphCtx") (TyFun (TyCon "ScopeId") (TyTuple (TyCon "String") (TyCon "String")))))
-(DFunDef false "scopeTraceContext" ((PVar "gctx") (PVar "sid")) (EApp (EApp (EVar "Scopes.scopeTraceContext") (EApp (EApp (EVar "currentScopeStore") (EVar "gctx")) (ELit LUnit))) (EVar "sid")))
-(DTypeSig true "scopeFrameStats" (TyFun (TyCon "GraphCtx") (TyTuple (TyCon "Int") (TyCon "Int"))))
-(DFunDef false "scopeFrameStats" ((PVar "gctx")) (EApp (EVar "Scopes.scopeFrameStats") (EApp (EApp (EVar "currentScopeStore") (EVar "gctx")) (ELit LUnit))))

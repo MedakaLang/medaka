@@ -1,5 +1,4 @@
 admittedSetOccurrence : TcEnv -> String -> Scheme -> Bool
-aliasMarker : String
 allInRange : List Int -> Int -> Bool
 anyIdPinned : List Int -> List (Int, Mono) -> Bool
 anyRootMatch : Int -> List (Mono, Loc) -> Bool
@@ -18,9 +17,6 @@ binopMethod : String -> Option String
 boundInsert : List String -> Map String String -> Map String String
 boundOfList : List String -> Map String String
 calleeIsGeneralized : ModuleCtx -> String -> Option (List CSlot) -> List (Int, Mono) -> Bool
-cellGoalInnerAliasing : GraphCtx -> List (String, Bool)
-cellOfGoal : List EvCell -> Obligation -> Option EvCell
-cellsFrom : Array (Option EvCell) -> Int -> List EvCell -> List EvCell
 constrainedSigNames : List Decl -> List String
 constraintsHaveMethodLevel : List String -> List Constraint -> Bool
 ctorHeadShaped : String -> Bool
@@ -44,7 +40,6 @@ inferNumLitBare : ModuleCtx -> Int -> Ref (Option Float) -> Mono
 inferNumLitMethod : ModuleCtx -> MethodSchemeRow -> Ref Route -> Mono
 inferNumLitVar : TcEnv -> Int -> Ref (Option Float) -> Ref Route -> Mono
 inferWideLit : TcEnv -> Int -> Int -> EvId -> String -> Mono
-innerAliases : Obligation -> EvCell -> Bool
 instantiateMethodPredicateArgument : GraphCtx -> MethodInstantiationSubst -> Option Mono -> Option Mono
 instantiateMethodPredicateSlot : GraphCtx -> MethodPredicateSlot -> List (Int, Mono) -> Option PredicateSlot
 instantiateMethodPredicateSlots : GraphCtx -> List MethodPredicateSlot -> List (Int, Mono) -> List PredicateSlot
@@ -54,7 +49,6 @@ instantiateVarTrackedId : TcEnv -> String -> Int -> Scheme -> Mono
 instantiateVarTrackedWithSubst : TcEnv -> String -> Int -> Scheme -> MethodTrackedInstantiation
 instantiatedMethodPredicate : GraphCtx -> MethodPredicateSlot -> List (Int, Mono) -> List (Int, Mono) -> PredicateSlot
 instantiatedMethodPredicateArgs : GraphCtx -> PredicateSlotArgs -> List (Int, Mono) -> PredicateSlotArgs
-isAliasMarker : Route -> Bool
 isGrantOnlyEv : GraphCtx -> EvId -> Bool
 letPatRename : GraphCtx -> Pat -> Expr -> Map String String -> (Pat, Map String String)
 localAbsCandidate : Expr -> Bool
@@ -96,7 +90,6 @@ noDictHook : String -> EvId -> Unit
 notAnOpSite : EvId -> a
 nthMethodMono : Int -> List Mono -> Mono
 omittedParamVars : ModuleCtx -> List String -> Ty -> List (String, Mono)
-onlyCell : List EvCell -> Option EvCell
 pinUnboundIds : ModuleCtx -> List Int -> List (Int, Mono) -> List (Int, Mono)
 placeholderMonoOf : String -> List (String, Mono) -> Mono
 popMarkedClause : Map String (List (List Pat, Expr)) -> Map String (List (List Pat, Expr)) -> String -> ((List Pat, Expr), Map String (List (List Pat, Expr)))

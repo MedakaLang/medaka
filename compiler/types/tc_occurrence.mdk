@@ -1,9 +1,8 @@
 -- tc_occurrence: method and literal occurrence inference, operator dispatch-site recording
 -- (including `recordShadowStandaloneObls`), evidence-site minting, the mark pass over binding
 -- groups and the write-back of its marked clauses over the declarations (`rebuildGroupDecls`), the
--- constrained-signature set, and the evidence-cell and method-return probes that `tc_module` and
--- the drive-level `typecheck_test` read (the `cellGoalInnerAliasing` family, the `methodRow*Probe`
--- and `methodReturn*Probe` rows).
+-- constrained-signature set, and the method-row and method-return probes (the `methodRow*Probe` and
+-- `methodReturn*Probe` rows).
 --
 -- Spec: DICT section 4 (occurrence half), section 5, section 8 I7; SHADOW S2-DECL.
 --
@@ -141,7 +140,6 @@ import types.tc_solve_entail.{noteNumericPredicateTrace}
 import types.tc_solve.{
   builtinClassPresent,
   consSiteFn,
-  goalKindName,
   isLocalAbsName,
   localSourceName,
   methodPredicateTemplateHasAbsent,
@@ -3203,72 +3201,8 @@ popMarkedClause grouped pending n =
     c :: cs => (c, omInsert n cs pending)
     [] => panic "rebuildGroupDecls: no marked clause left for \{n}"
 
--- Observation declarations exported for readers outside this module: `cellGoalInnerAliasing` for
--- the drive-level `typecheck_test`, and the method-row and method-return probes `tc_module` reads.
-
--- Test visibility (`typecheck_test.mdk` and `tc_occurrence_test.mdk`): each goal of
--- [gctx]'s graph that writes a method cell's route or dictionaries, by kind, with
--- whether its `oInner` is that cell's `ecInner`, so the stampers' notes reach the judgment (`judgeCells`).  Read
--- by writing a marker through the goal's refs and looking for it in the cells, then
--- restoring both.  A goal whose destination is no cell's (a throwaway) is skipped.
-export
-cellGoalInnerAliasing : GraphCtx -> List (String, Bool)
-cellGoalInnerAliasing gctx =
-  let g = gctx.graphRun
-  let cells = cellsFrom g.evCells.value 0 []
-  filterMap
-    (o =>
-      map (c => (goalKindName o.oKind, innerAliases o c)) (cellOfGoal cells o))
-    g.goals.value
-
-cellsFrom : Array (Option EvCell) -> Int -> List EvCell -> List EvCell
-cellsFrom arr i acc
-  | i >= arrayLength arr = reverseL acc
-  | otherwise = match arrayGetUnsafe i arr
-    Some c => cellsFrom arr (i + 1) (c :: acc)
-    None => cellsFrom arr (i + 1) acc
-
-cellOfGoal : List EvCell -> Obligation -> Option EvCell
-cellOfGoal cells o = match o.oDest
-  EvRoute r =>
-    let saved = r.value
-    r := RLocal aliasMarker []
-    let hit = filterList (c => isAliasMarker c.ecTag.value) cells
-    r := saved
-    onlyCell hit
-  EvRoutes rs =>
-    let saved = rs.value
-    rs := [RLocal aliasMarker []]
-    let hit =
-      filterList
-        (c => anyList isAliasMarker (c.ecImpl.value ++ c.ecMeth.value))
-        cells
-    rs := saved
-    onlyCell hit
-
-onlyCell : List EvCell -> Option EvCell
-onlyCell [c] = Some c
-onlyCell _ = None
-
-aliasMarker : String
-aliasMarker = "<inner-alias-probe>"
-
-isAliasMarker : Route -> Bool
-isAliasMarker (RLocal sym _) = sym == aliasMarker
-isAliasMarker _ = False
-
-innerAliases : Obligation -> EvCell -> Bool
-innerAliases o c =
-  let savedGoal = o.oInner.value
-  let savedCell = c.ecInner.value
-  c.ecInner := innerNone
-  o.oInner := Inner True True
-  let hit = match c.ecInner.value
-    Inner True True => True
-    _ => False
-  o.oInner := savedGoal
-  c.ecInner := savedCell
-  hit
+-- Observation declarations exported for readers outside this module: the method-row and
+-- method-return probes that `tc_occurrence_test` and `tc_module_test` read.
 
 export
 firstMethodRow : List MethodSchemeRow -> MethodSchemeRow

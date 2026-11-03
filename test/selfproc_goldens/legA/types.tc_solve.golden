@@ -29,7 +29,6 @@ exactReturnRoutes : SiteCtx -> String -> String -> ScopeId -> Bool -> MethodRetu
 fileDeterminedRow : ModuleCtx -> ImplRow -> List Mono -> Unit
 fileGoal : GraphCtx -> Int -> UObligation -> Map Int (List Int) -> Map Int (List Int)
 fillOmittedTemplateArgs : List String -> List (Option Mono) -> List (String, Mono) -> List (Option Mono)
-finishMethodReturnTrace : TraceSink -> List EvEntry -> List MethodReturnTraceEntry
 goalAnsweredBy : GraphCtx -> List (IfaceRef, List Mono) -> IfaceRef -> List Mono -> Bool
 goalDefersOpenWorld : ModuleCtx -> ScopeId -> IfaceRef -> List Mono -> Bool
 goalIdsClaimed : ModuleCtx -> List Int -> Bool
@@ -57,7 +56,6 @@ isUndecided : AdmittedAnswer -> Bool
 localSlotArgs : ModuleCtx -> List (Int, Mono) -> PredicateSlot -> List Mono
 localSlotLead : ModuleCtx -> List (Int, Mono) -> PredicateSlot -> Mono
 localSourceName : String -> String
-lookupTraceEvidence : EvId -> List EvEntry -> Option EvVal
 methodDictEntry : Obligation -> List PendingMethodDict
 methodPredicateRoute : SiteCtx -> String -> ScopeId -> PredicateSlot -> Route
 methodPredicateRoutes : SiteCtx -> String -> ScopeId -> List PredicateSlot -> List Route
@@ -74,15 +72,6 @@ methodReturnEvidenceRoute : SiteCtx -> String -> ScopeId -> PrerequisiteEvidence
 methodReturnEvidenceRoutes : SiteCtx -> String -> ScopeId -> List PrerequisiteEvidence -> List Route
 methodReturnInstanceMatches : RequestInstanceId -> ImplRow -> Bool
 methodReturnInstantiation : ModuleCtx -> MethodReturnRequest -> Option Instantiation
-methodReturnMemoArguments : List Mono -> List String
-methodReturnMemoCurrentViews : GraphCtx -> List MethodReturnMemoView
-methodReturnMemoEvidence : EvId -> List EvEntry -> String
-methodReturnMemoIface : IfaceRef -> String
-methodReturnMemoOutcome : SolverOutcome -> String
-methodReturnMemoPrerequisites : SolverOutcome -> List (String, List String)
-methodReturnMemoRoute : Route -> String
-methodReturnMemoSupers : List Route -> String
-methodReturnMemoView : GraphCtx -> List EvEntry -> Obligation -> MethodReturnRequest -> MethodReturnMemoView
 methodReturnOrigin : ModuleCtx -> Option Loc -> GoalOrigin
 methodReturnPredicate : GraphCtx -> MethodReturnRequest -> Option ClassPredicate
 methodReturnPredicateFromTemplate : GraphCtx -> MethodPredicateTemplate -> List String -> List (String, Mono) -> ScopeId -> Option ClassPredicate
@@ -118,7 +107,6 @@ openScope : ModuleCtx -> ScopeId -> Unit
 outerRigidIds : Option Int -> List Mono -> Map String Unit -> Map String Unit
 predicateSlotKnownArgs : PredicateSlotArgs -> List Mono
 prerequisiteEvidence : (IfaceRef, List Mono) -> PrerequisiteEvidence
-publishMethodReturnTrace : List EvEntry -> MethodReturnTraceEntry -> MethodReturnTraceEntry
 pushDictApp : GraphCtx -> PendingDictApp -> Unit
 pushGoal : GraphCtx -> Obligation -> Unit
 pushLocalDictApp : ModuleCtx -> String -> EvId -> LocalAbs -> List (Int, Mono) -> ScopeId -> Unit
@@ -145,8 +133,6 @@ routesOfMonosTopV : SiteCtx -> String -> ScopeId -> List Mono -> List IfaceRef -
 rowHeadSubstRigid : ModuleCtx -> Map String Unit -> List Mono -> ImplRow -> Option (List (Int, Mono))
 rowHeadUnifies : ModuleCtx -> List Mono -> ImplRow -> Bool
 sameTraceEvId : EvId -> EvId -> Bool
-sealMethodReturnGoals : GraphCtx -> List EvEntry -> List Obligation -> (List Obligation, List MethodReturnMemoView)
-sealMethodReturnGoalsFrom : GraphCtx -> List EvEntry -> List Obligation -> (List Obligation, List MethodReturnMemoView) -> (List Obligation, List MethodReturnMemoView)
 siblingStaysSatisfiable : ModuleCtx -> Ref (List (Int, Mono)) -> List Int -> UObligation -> Bool
 siblingsStaySatisfiable : ModuleCtx -> GoalWindow -> List (Int, Mono) -> Bool
 siteEntry : Obligation -> List PendingEntry
