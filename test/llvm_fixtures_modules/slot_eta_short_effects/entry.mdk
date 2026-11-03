@@ -1,0 +1,56 @@
+-- #4786: an impl reached through a dictionary runs when it has its OWN count of
+-- values, whatever count the method declares.  `Int`'s `forgeOp` and `forgeTo`
+-- take one value of the two declared and bump the counter before they return a
+-- function for the rest; its `forgeMk` takes both, so one value runs nothing.
+-- Each counter line is printed before the function bound above it is applied, so
+-- a backend that runs `forgeOp` only at the declared count prints a lower count
+-- on the first two counter lines, and one that runs `forgeMk` early prints a
+-- higher count on the fourth.
+-- Must print:  1 / 42 / 2 / 53 / 64 / 3 / 3 / 75 / 4 / 81 / 5
+import forge.{
+  Forge(..),
+  forgeOp,
+  forgeMk,
+  forgeTo,
+  partialOp,
+  valueOp,
+  fullOp,
+  partialMk,
+  overTo,
+}
+
+counter : Ref Int
+counter = Ref 0
+
+impl Forge Int where
+  forgeOp x =
+    counter := counter.value + 1
+    y => x + y
+  forgeMk x y =
+    counter := counter.value + 1
+    x + y
+  forgeTo _ =
+    counter := counter.value + 1
+    v => v
+
+say : Int -> <IO> Unit
+say n = putStrLn (intToString n)
+
+-- The integer arguments are annotated: the native gate links no prelude, and
+-- without `Num` a bare literal at a constrained call is not resolved to `Int`.
+main : <IO> Unit
+main =
+  let f = partialOp (40 : Int)
+  say counter.value
+  say (f 2)
+  let g = valueOp (50 : Int)
+  say counter.value
+  say (g 3)
+  say (fullOp (60 : Int) 4)
+  say counter.value
+  let k = partialMk (70 : Int)
+  say counter.value
+  say (k 5)
+  say counter.value
+  say (overTo (80 : Int) (n => n + 1))
+  say counter.value

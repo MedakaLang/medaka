@@ -25,8 +25,8 @@ import support.symbol_encoding.{encodePair}
 -- ROOTS
 --   * `main`.
 --   * every `$memo_<tag>_<method>` top-level CAF (`core_ir_lower.memoBindName`).
---     These are referenced by the wasm emitter's RDict dispatch arm
---     (`wasm_emit.slotWrapperLines` emits `call $force_$memo_…`) WITHOUT any
+--     These are referenced by the wasm emitter's method tables
+--     (`wasm_emit.slotBodyW` emits `call $force_$memo_…`) WITHOUT any
 --     `CVar` occurrence in the IR, so an IR-only walk cannot see the edge.  There
 --     are two in the whole corpus (`$memo_List_empty`, `$memo_String_empty`), so
 --     rooting them unconditionally is both cheap and the only safe rule.
@@ -53,13 +53,14 @@ import support.symbol_encoding.{encodePair}
 -- call graph.  The rule that makes this safe is ALL-OR-NOTHING PER METHOD NAME:
 -- for a method `m` we either keep EVERY entry naming `m` or none, and "none" is
 -- chosen only when no reachable body mentions `m` at all.  Every emitter query
--- against the impl list is filtered by the BARE METHOD NAME first
--- (`implForW`, `findDefaultW`,
--- `headTagForKeyW`), so for a kept method the emitter sees the identical candidate
--- set it saw before, and for a dropped method it never asks.  In particular this
--- cannot silently turn a concrete `RKey` impl call into an interface-default
--- synthesis (`implForW` returning `None` for an impl we pruned), which is the one
--- way a per-(method, tag) prune could miscompile without failing validation.
+-- against the impl list is keyed by the bare method name first (`methodEntriesW`,
+-- under `implForWSite` for a static `RKey` call), so for a kept method the emitter
+-- sees the identical candidate set it would see unfiltered.  A dropped method
+-- leaves its method-table slots empty, and an empty slot holds a trap; no site
+-- loads it, because a site that loads a slot mentions the method.  In particular
+-- this cannot silently turn a concrete `RKey` impl call into an interface-default
+-- synthesis (`implForWSite` returning `None` for an impl we pruned), which is the
+-- one way a per-(method, tag) prune could miscompile without failing validation.
 --
 -- The residual is exactly that conservatism: a method mentioned anywhere reachable
 -- keeps ALL of its impls at ALL types, even the ones a whole-program optimizer can

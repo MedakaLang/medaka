@@ -15,6 +15,7 @@ public export data WasmGeneratedFamily =
   | WFfi
   | WDispatch
   | WSlot
+  | WSlotClosure
   | WScratch
   | WGuard
   | WPosition
@@ -111,6 +112,7 @@ wasmFamily WConstCell = "constcell"
 wasmFamily WFfi = "ffi"
 wasmFamily WDispatch = "dispatch"
 wasmFamily WSlot = "slot"
+wasmFamily WSlotClosure = "slotclos"
 wasmFamily WScratch = "scratch"
 wasmFamily WGuard = "guard"
 wasmFamily WPosition = "position"

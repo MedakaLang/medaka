@@ -251,7 +251,7 @@ import ir.core_ir.{
   CallSite(..),
   siteSentinelName,
 }
-import list.{replicate}
+import list.{replicate, get, zip}
 import types.runtime_types.{BinderRow(..), RuntimeType(..), binderOrdinal}
 import backend.extern_catalog.{
   RuntimeExternDomain,
@@ -403,6 +403,10 @@ data WTrmcCtx =
 -- WasmEmit (peer of WTrmcCtx) so one emission's group authority cannot reach another.
 data WDispCtx = WDispOff | WDispOn String String Int (List String)
 
+-- a hoisted immutable global: its name, its reference type and its constant
+-- initializer
+data ConstCell = ConstCell { global : String, ty : String, init : String }
+
 data WasmEmit = WasmEmit {
   physical : Option WasmDemandPlan,
   externFacts : OrdMap ExternDeclFact,
@@ -423,7 +427,7 @@ data WasmEmit = WasmEmit {
   -- keeps them in emission order for the module's global section.  See
   -- `wConstClos` for the mechanism.
   constClosIdx : Ref (OrdMap String),
-  constClosCells : Ref (List (String, String, String)),
+  constClosCells : Ref (List ConstCell),
   nextConstClosId : Ref Int,
   -- the module's physical identities so far and the defects found against them,
   -- latest first (backend/wasm_symbols.mdk).  `closureChecked` is False for the
@@ -1603,45 +1607,50 @@ wConstClos prog lamName arity =
   -- a global's initializer declares its own function reference, so only the
   -- function and the `$clos` type have to exist
   registerW emit (checkRef (WasmFunc (symNameW lamName)) origin)
-  let _ =
-    if emit.closureChecked then
-      registerW emit (checkTypeUse "clos" (symNameW lamName) origin)
-      registerW emit (checkTypeUse "argarr" (symNameW lamName) origin)
-  let initBody =
+  if emit.closureChecked then
+    registerW emit (checkTypeUse "clos" (symNameW lamName) origin)
+    registerW emit (checkTypeUse "argarr" (symNameW lamName) origin)
+  hoistConstW
+    prog
+    "$clos"
     "(struct.new $clos (ref.func \{lamName}) (i32.const \{intToString arity}) (array.new_fixed $argarr 0))"
-  match omLookup initBody !emit.constClosIdx
-    Some g => [globalW prog "global.get" g]
-    None =>
-      let g = "$" ++ WN.wasmName (WN.WConstGlobal !emit.nextConstClosId)
-      registerW emit (declareSymbol (WasmGlobal (symNameW g)) GlobalDecl origin)
-      setRef emit.nextConstClosId (!emit.nextConstClosId + 1)
-      setRef emit.constClosIdx (omInsert initBody g !emit.constClosIdx)
-      setRef
-        emit.constClosCells
-        ((g, "$clos", initBody) :: !emit.constClosCells)
-      [globalW prog "global.get" g]
 
 -- A dictionary whose every part is known at compile time is one immutable global,
 -- built once at instantiation, instead of a table allocated at each use.  Its
--- initializer is a constant expression over `ref.func` of the slot functions, so
--- it shares the closure globals' list and dedup (`wConstClos`).
+-- initializer is a constant expression over `ref.func` of the slot functions and
+-- the slot closures' globals, so it shares the closure globals' list and dedup.
 wConstDict : Prog -> String -> List String
 wConstDict prog initBody =
   let emit = progEmit prog
-  let origin = (progFnCtx prog).origin
-  let _ =
-    if emit.closureChecked then
-      registerW emit (checkTypeUse "dict" "constant dictionary" origin)
+  if emit.closureChecked then
+    registerW
+      emit
+      (checkTypeUse "dict" "constant dictionary" (progFnCtx prog).origin)
+  hoistConstW prog "$dict" initBody
+
+-- The global holding [initBody] of reference type [ty], hoisted on its first use
+-- and shared by every later one: two equal initializers name one global.  An
+-- initializer may read only globals hoisted before it, since the section keeps
+-- hoisting order.
+hoistConstW : Prog -> String -> String -> List String
+hoistConstW prog ty initBody =
+  let emit = progEmit prog
   match omLookup initBody !emit.constClosIdx
     Some g => [globalW prog "global.get" g]
     None =>
       let g = "$" ++ WN.wasmName (WN.WConstGlobal !emit.nextConstClosId)
-      registerW emit (declareSymbol (WasmGlobal (symNameW g)) GlobalDecl origin)
+      registerW
+        emit
+        (declareSymbol
+          (WasmGlobal (symNameW g))
+          GlobalDecl
+          (progFnCtx prog).origin)
       setRef emit.nextConstClosId (!emit.nextConstClosId + 1)
       setRef emit.constClosIdx (omInsert initBody g !emit.constClosIdx)
       setRef
         emit.constClosCells
-        ((g, "$dict", initBody) :: !emit.constClosCells)
+        (ConstCell { global = g, ty = ty, init = initBody }
+          :: !emit.constClosCells)
       [globalW prog "global.get" g]
 
 -- the hoisted globals, in emission order.  Drained by emitRefProgram AFTER every body
@@ -1651,8 +1660,9 @@ wConstClosGlobalLines : WasmEmit -> List String
 wConstClosGlobalLines emit =
   map oneConstClosGlobal (reverseL !emit.constClosCells)
 
-oneConstClosGlobal : (String, String, String) -> String
-oneConstClosGlobal (g, ty, initBody) = "  (global \{g} (ref \{ty}) \{initBody})"
+oneConstClosGlobal : ConstCell -> String
+oneConstClosGlobal cell =
+  "  (global \{cell.global} (ref \{cell.ty}) \{cell.init})"
 
 -- [nm] is taken by `ref.func`, so the element declaration lists it.  That
 -- declaration is written only for a module with closures.
@@ -2360,11 +2370,13 @@ emitTypeSection prog =
       -- A dictionary is a method table (llvm_emit's `[hdr | supers | slots | requires]`):
       -- field 0 = i32 header (the instance key's `dictTag`), field 1 = a $dictarr holding
       -- the supers then the `requires` dictionaries, field 2 = a $slotarr holding one
-      -- $slotN function per interface method, in declaration order.  A word that is not a
-      -- $dict (the i31 0 of an unconstrained witness) has no slots.
+      -- $slotN function per interface method, in declaration order, field 3 = a $dictarr
+      -- holding, per slot, the `$clos` of the impl's own value count (see "method
+      -- tables").  A word that is not a $dict (the i31 0 of an unconstrained witness)
+      -- has no slots.
       "    (type $dictarr (array (mut (ref eq))))",
       "    (type $slotarr (array funcref))",
-      "    (type $dict (sub (struct (field i32) (field (ref $dictarr)) (field (ref $slotarr)))))",
+      "    (type $dict (sub (struct (field i32) (field (ref $dictarr)) (field (ref $slotarr)) (field (ref $dictarr)))))",
     ]
     ++ slotTypes
     ++ strTypes
@@ -3492,20 +3504,25 @@ defineClosureW prog fnSym arity =
 -- array and makes the tail call [call] on them.
 closWrapperLines : String -> String -> Int -> List String
 closWrapperLines wrapper call arity =
-  let argLoads =
-    flatMap
-      (i => [
-        "local.get \{syntheticLocalName WN.WAbiArgs 0}",
-        "i32.const " ++ intToString i,
-        "array.get $argarr",
-        "ref.as_non_null",
-      ])
-      (rangeList 0 arity)
+  codeFuncLines wrapper (flatMap closArgW (rangeList 0 arity) ++ [call])
+
+-- the `$codety` function [name] with [body]
+codeFuncLines : String -> List String -> List String
+codeFuncLines name body =
   [
-      "  (func \{wrapper} (type $codety) (param \{syntheticLocalName WN.WAbiSelf 0} (ref eq)) (param \{syntheticLocalName WN.WAbiArgs 0} (ref $argarr)) (result (ref eq))",
+      "  (func \{name} (type $codety) (param \{syntheticLocalName WN.WAbiSelf 0} (ref eq)) (param \{syntheticLocalName WN.WAbiArgs 0} (ref $argarr)) (result (ref eq))",
     ]
-    ++ indent (argLoads ++ [call])
+    ++ indent body
     ++ ["  )"]
+
+-- argument [i] of a `$codety` function
+closArgW : Int -> List String
+closArgW i = [
+  "local.get \{syntheticLocalName WN.WAbiArgs 0}",
+  "i32.const " ++ intToString i,
+  "array.get $argarr",
+  "ref.as_non_null",
+]
 
 localDeclRef : String -> String
 localDeclRef l = "(local $" ++ gname l ++ " (ref eq))"
@@ -3582,39 +3599,15 @@ emitMethodRef prog env d name iface siteArity (route@(RKey _tag _ _)) implRoutes
       args
       end
 -- A runtime dictionary carries the entry in a slot, so the site cannot know the
--- entry's arity: it loads the slot of the declared value arity and calls it.
-emitMethodRef prog env d name iface siteArity (route@(RDict dpar)) implRoutes methRoutes args _ end =
-  emitDictRoutedRef
-    prog
-    env
-    d
-    name
-    iface
-    siteArity
-    route
-    dpar
-    implRoutes
-    methRoutes
-    args
-    end
-emitMethodRef prog env d name iface siteArity (route@(RDictFwd dpar)) implRoutes methRoutes args _ end =
-  emitDictRoutedRef
-    prog
-    env
-    d
-    name
-    iface
-    siteArity
-    route
-    dpar
-    implRoutes
-    methRoutes
-    args
-    end
+-- entry's arity: it calls through the slot (`emitDictRoutedRef`).
+emitMethodRef prog env d name iface _ (RDict dpar) _ methRoutes args _ end =
+  emitDictRoutedRef prog env d name iface dpar methRoutes args end
+emitMethodRef prog env d name iface _ (RDictFwd dpar) _ methRoutes args _ end =
+  emitDictRoutedRef prog env d name iface dpar methRoutes args end
 -- A projected super dictionary is read into its own local (`projLocalName`,
 -- declared by `collectExprLocals`) and its slot is called exactly as a dict
 -- parameter's.
-emitMethodRef prog env d name iface siteArity (route@(RProj r path)) implRoutes methRoutes args _ end =
+emitMethodRef prog env d name iface _ (route@(RProj r path)) _ methRoutes args _ end =
   let local = projLocalName r path
   routeWitness prog env d route
     ++ ["local.set $" ++ gname local]
@@ -3624,10 +3617,7 @@ emitMethodRef prog env d name iface siteArity (route@(RProj r path)) implRoutes 
       d
       name
       iface
-      siteArity
-      route
       local
-      implRoutes
       methRoutes
       args
       end
@@ -3745,25 +3735,25 @@ isInheritedEntryW : CImplEntry -> Bool
 isInheritedEntryW (CImplEntry _ _ _ (CImplDefault _ _ _ _ _ _ _)) = True
 isInheritedEntryW _ = False
 
--- A dictionary-routed call of [name] with [args]: the slot call when the
--- arguments fill the slot's declared value arity.  Any other count applies the
--- method's value closure (whose body is that saturated slot call) through
--- $__mdk_apply, whose under-application arm makes the residual PAP and whose
--- over-application arm applies the surplus to the call's result.
+-- A dictionary-routed call of [name] with [args], through [name]'s slot of the
+-- dictionary in local [dpar], given the dictionary, the method-level dictionaries
+-- and the values.  Arguments that fill the slot's declared value arity call the slot's
+-- function.  Any other count applies the slot's closure, which takes the impl's
+-- own value count, through $__mdk_apply: an eta-short impl runs once its own
+-- values are supplied, a residual becomes a PAP, and a surplus is applied to the
+-- impl's result.  A word that is no $dict (a null witness) traps at `unreachable`
+-- instead of being read.
 emitDictRoutedRef : Prog ->
   Env ->
   Int ->
   String ->
   String ->
-  Int ->
-  Route ->
   String ->
-  List Route ->
   List Route ->
   List CExpr ->
   CallEndW ->
   List String
-emitDictRoutedRef prog env d name iface siteArity route dpar implRoutes methRoutes args end =
+emitDictRoutedRef prog env d name iface dpar methRoutes args end =
   match (slotIndexW
     name
     0
@@ -3772,31 +3762,27 @@ emitDictRoutedRef prog env d name iface siteArity route dpar implRoutes methRout
       gapLP prog "wasm: method '\{name}' is not a slot of interface '\{iface}'"
         ++ endValueW end
     Some (i, slot) =>
-      if listLen args == slot.valueArity then
-        callViaSlotRef prog env d i slot dpar methRoutes args end
-      else if methodValueArityW
-          prog
-          (CMethod
-            name
-            (MethodEvidence iface siteArity route implRoutes methRoutes))
-        == slot.valueArity then
-        emitMethodValueRef
-            prog
-            env
-            d
-            name
-            iface
-            siteArity
-            route
-            implRoutes
-            methRoutes
-          ++ emitArgsArray prog env d args
-          ++ [callFnW prog end "__mdk_apply" 2]
+      if envHas dpar env then
+        let operands =
+          ["local.get $" ++ gname dpar]
+            ++ flatMap (routeWitness prog env d) methRoutes
+            ++ flatMap (a => emitRefExpr prog env d a) args
+        if listLen args == slot.valueArity then
+          slotNullCheckW dpar
+            ++ operands
+            ++ slotFieldW dpar 2 "$slotarr" i
+            ++ callSlotW prog (slotArityW slot) end
+        else
+          slotNullCheckW dpar
+            ++ slotFieldW dpar 3 "$dictarr" i
+            ++ operands
+            ++ [
+              "array.new_fixed $argarr "
+                ++ intToString (1 + listLen methRoutes + listLen args),
+              callFnW prog end "__mdk_apply" 2,
+            ]
       else
-        gapLP
-            prog
-            "wasm: method '\{name}' of '\{iface}' declares \{intToString slot.valueArity} values, the site \{intToString siteArity}"
-          ++ endValueW end
+        gapLP prog "wasm W5: dict param '\{dpar}' not in scope" ++ endValueW end
 
 -- the index of [name]'s slot among [slots], and the slot
 slotIndexW : String -> Int -> List MethodSlot -> Option (Int, MethodSlot)
@@ -3806,32 +3792,6 @@ slotIndexW name i (slot :: rest) =
     Some (i, slot)
   else
     slotIndexW name (i + 1) rest
-
--- Call slot [i] of the dictionary in local [dpar]: the dictionary, the method-level
--- dictionaries and the values, then the slot's function.  A word that is no
--- $dict (a null witness) traps at `unreachable` instead of being read.
-callViaSlotRef : Prog ->
-  Env ->
-  Int ->
-  Int ->
-  MethodSlot ->
-  String ->
-  List Route ->
-  List CExpr ->
-  CallEndW ->
-  List String
-callViaSlotRef prog env d i slot dpar methRoutes args end =
-  if envHas dpar env then
-    let argInstrs = flatMap (a => emitRefExpr prog env d a) args
-    let methInstrs = flatMap (routeWitness prog env d) methRoutes
-    slotNullCheckW dpar
-      ++ ["local.get $" ++ gname dpar]
-      ++ methInstrs
-      ++ argInstrs
-      ++ slotFieldW dpar i
-      ++ callSlotW prog (slotArityW slot) end
-  else
-    gapLP prog "wasm W5: dict param '\{dpar}' not in scope" ++ endValueW end
 
 -- the operand count of a call of [slot]
 slotArityW : MethodSlot -> Int
@@ -3848,15 +3808,15 @@ slotNullCheckW dpar = [
   "end",
 ]
 
--- the function in slot [i] of the $dict in local [dpar], as a `(ref $slotN)`
--- is left to the call: this pushes the funcref
-slotFieldW : String -> Int -> List String
-slotFieldW dpar i = [
+-- element [i] of the array in field [field] (of array type [arr]) of the $dict in
+-- local [dpar]: a slot's function (field 2) or its closure (field 3)
+slotFieldW : String -> Int -> String -> Int -> List String
+slotFieldW dpar field arr i = [
   "local.get $" ++ gname dpar,
   "ref.cast (ref $dict)",
-  "struct.get $dict 2",
+  "struct.get $dict " ++ intToString field,
   "i32.const " ++ intToString i,
-  "array.get $slotarr",
+  "array.get " ++ arr,
 ]
 
 -- the call of the funcref on top of the stack as a slot of [arity] operands
@@ -3906,7 +3866,7 @@ routeWitness prog env d (route@(RKey tag reqs sups)) =
           "array.new_fixed $dictarr "
             ++ intToString (listLen sups + listLen reqs),
         ]
-        ++ slotArrayW prog tag
+        ++ slotArraysW prog tag
         ++ ["struct.new $dict"]
 -- a super projected out of a dictionary: a dictionary with supers is always a table
 routeWitness prog env d (RProj r path) =
@@ -3950,26 +3910,32 @@ superFieldW i = [
 -- interface in declaration order, a function of `1 + contextDicts + valueArity`
 -- operands called as `(dict, mw.., args..)`.  The function is a per-(instance,
 -- method) wrapper that reads the instance's `requires` out of the dictionary and
--- calls the impl's define.
+-- calls the impl's define.  The fourth field holds, per slot, a `$clos` taking
+-- `1 + contextDicts + own` operands, own being the number of values the impl's
+-- define takes: a site whose argument count is not the declared one applies it,
+-- so the impl runs at its own count of values, as llvm_emit's slot closure does.
 
--- The `$slotarr` of instance [key]: one wrapper `ref.func` per slot.  An instance
--- the plan has no groups for had every impl dropped by the reach filter, so each
--- of its slots is a trap.
-slotArrayW : Prog -> String -> List String
-slotArrayW prog key =
-  let elements = slotElementsW prog key
-  elements ++ ["array.new_fixed $slotarr " ++ intToString (listLen elements)]
+-- The `$slotarr` and the closure `$dictarr` of instance [key], built at run time.
+slotArraysW : Prog -> String -> List String
+slotArraysW prog key =
+  let fills = instanceFillsW prog key
+  let functions = flatMap (slotFunctionW prog key) fills
+  let closures = flatMap (slotClosureW prog key) fills
+  functions
+    ++ ["array.new_fixed $slotarr " ++ intToString (listLen functions)]
+    ++ closures
+    ++ ["array.new_fixed $dictarr " ++ intToString (listLen closures)]
 
--- the `ref.func` of each slot of instance [key], in slot order
-slotElementsW : Prog -> String -> List String
-slotElementsW prog key =
+-- Each slot of instance [key] with its callees.  An instance the plan has no
+-- groups for had every impl dropped by the reach filter, so none of its slots
+-- has a callee.
+instanceFillsW : Prog -> String -> List (MethodSlot, List SlotCallee)
+instanceFillsW prog key =
   let tables = (progIndex prog).fnImpl.methodTables
-  let iface = ifaceWordOfKey key
-  let slots = interfaceSlots tables iface
+  let slots = interfaceSlots tables (ifaceWordOfKey key)
   match omLookup key tables.instances
-    Some table =>
-      flatMap (slotFunctionW prog key iface) (zipSlotsW slots table.fills)
-    None => flatMap (slot => slotFunctionW prog key iface (slot, [])) slots
+    Some table => zip slots table.fills
+    None => map (slot => (slot, [])) slots
 
 -- The constant expression of a dictionary built from known instances only: a
 -- concrete route, its supers and `requires` likewise, and the null word of an
@@ -3979,53 +3945,84 @@ closedDictW prog (RKey tag reqs sups) =
   match allSomeW (map (closedDictW prog) (sups ++ reqs))
     None => None
     Some fields =>
-      let slots = slotElementsW prog tag
-      let fieldText = joinWith "" (map (" " ++ _) fields)
-      let slotText = joinWith "" (map (i => " (" ++ i ++ ")") slots)
+      let fills = instanceFillsW prog tag
+      let functions = flatMap (slotFunctionW prog tag) fills
+      let closures = flatMap (slotClosureW prog tag) fills
       let tag32 = intToString (dictTag tag)
-      let nFields = intToString (listLen fields)
-      let nSlots = intToString (listLen slots)
+      let slotText = constArrayW "$slotarr" (map foldedW functions)
+      let closureText = constArrayW "$dictarr" (map foldedW closures)
       Some
-        "(struct.new $dict (i32.const \{tag32}) (array.new_fixed $dictarr \{nFields}\{fieldText}) (array.new_fixed $slotarr \{nSlots}\{slotText}))"
+        "(struct.new $dict (i32.const \{tag32}) \{constArrayW "$dictarr" fields} \{slotText} \{closureText})"
 closedDictW _ RNone = Some "(ref.i31 (i32.const 0))"
 closedDictW _ (RLocal _ _) = Some "(ref.i31 (i32.const 0))"
 closedDictW _ (RScalar _) = Some "(ref.i31 (i32.const 0))"
 closedDictW _ _ = None
+
+-- the constant array of type [ty] holding [elements], each a folded expression
+constArrayW : String -> List String -> String
+constArrayW ty elements =
+  let elementText = joinWith "" (map (" " ++ _) elements)
+  "(array.new_fixed \{ty} \{intToString (listLen elements)}\{elementText})"
+
+-- the instruction [i] as a folded expression
+foldedW : String -> String
+foldedW i = "(" ++ i ++ ")"
 
 allSomeW : List (Option a) -> Option (List a)
 allSomeW [] = Some []
 allSomeW (None :: _) = None
 allSomeW ((Some x) :: rest) = map (x :: _) (allSomeW rest)
 
-zipSlotsW : List MethodSlot ->
-  List (List SlotCallee) ->
-  List (MethodSlot, List SlotCallee)
-zipSlotsW (slot :: slots) (fill :: fills) =
-  (slot, fill) :: zipSlotsW slots fills
-zipSlotsW _ _ = []
-
-slotFunctionW : Prog ->
-  String ->
-  String ->
-  (MethodSlot, List SlotCallee) ->
-  List String
--- No group fills the slot: the reach filter dropped every impl of a method no
--- reachable body names, so no site loads this slot and it holds a trap.
-slotFunctionW prog _ _ (slot, []) =
+-- The `ref.func` of the function in [slot] of instance [key].  No group fills a
+-- slot of a method no reachable body names (the reach filter dropped every impl
+-- of it), so no site loads that slot and it holds a trap.
+slotFunctionW : Prog -> String -> (MethodSlot, List SlotCallee) -> List String
+slotFunctionW prog _ (slot, []) =
   let name = "$" ++ WN.wasmName (WN.WGenerated WN.WSlot "" (slotArityW slot))
-  liftSlotW prog name slot (() => [
-    "  (func \{name} (type $\{WD.slotTypeName (slotArityW slot)}) \{slotParamsW slot} (result (ref eq))",
-    "    unreachable",
-    "  )",
-  ])
-slotFunctionW prog key iface (slot, [callee]) =
+  liftSlotW prog name slot (() => slotFuncLines slot name ["unreachable"])
+slotFunctionW prog key (slot, [callee]) =
   let name =
     "$" ++ WN.wasmName (WN.WGenerated WN.WSlot "\{key}.\{slot.method}" 0)
-  match nthImplGW (progImplGroups prog) callee.group
+  match get callee.group (progImplGroups prog)
     Some g => liftSlotW prog name slot (() =>
-      slotWrapperLines prog name iface slot callee g)
+      slotFuncLines
+        slot
+        name
+        (slotBodyW
+          prog
+          (ifaceWordOfKey key)
+          slot
+          callee
+          g
+          (slotOperandW slot)
+          slot.valueArity))
     None => gapLP prog "wasm: invalid impl group ordinal"
-slotFunctionW prog key _ (slot, _) =
+slotFunctionW prog key (slot, _) = slotCalleesGapW prog key slot
+
+-- The global holding the closure of [slot] of instance [key]: it takes the
+-- dictionary, the method-level dictionaries and as many values as the impl's
+-- define takes.  An empty slot's closure traps, as its function does.
+slotClosureW : Prog -> String -> (MethodSlot, List SlotCallee) -> List String
+slotClosureW prog _ (slot, []) =
+  let name = "$" ++ WN.wasmName (WN.WGenerated WN.WSlotClosure "" 0)
+  liftCodeW prog name (() => codeFuncLines name ["unreachable"])
+  wConstClos prog name (slotArityW slot)
+slotClosureW prog key (slot, [callee]) =
+  let name =
+    "$" ++ WN.wasmName (WN.WGenerated WN.WSlotClosure "\{key}.\{slot.method}" 0)
+  match get callee.group (progImplGroups prog)
+    Some g =>
+      let own = ownValuesW slot callee g
+      liftCodeW prog name (() =>
+        codeFuncLines
+          name
+          (slotBodyW prog (ifaceWordOfKey key) slot callee g closArgW own))
+      wConstClos prog name (1 + slot.contextDicts + own)
+    None => gapLP prog "wasm: invalid impl group ordinal"
+slotClosureW prog key (slot, _) = slotCalleesGapW prog key slot
+
+slotCalleesGapW : Prog -> String -> MethodSlot -> List String
+slotCalleesGapW prog key slot =
   gapLP
     prog
     "wasm: slot '\{slot.method}' of instance '\{key}' has more than one callee"
@@ -4033,16 +4030,34 @@ slotFunctionW prog key _ (slot, _) =
 -- Lift the function [name] of [slot]'s type once, and push a reference to it.
 liftSlotW : Prog -> String -> MethodSlot -> (Unit -> List String) -> List String
 liftSlotW prog name slot lines =
+  liftOnceW
+    prog
+    name
+    (FuncOfType (WD.slotTypeName (slotArityW slot)) (slotArityW slot))
+    lines
+  [refFuncW prog name]
+
+-- Lift the `$codety` function [name] once.
+liftCodeW : Prog -> String -> (Unit -> List String) -> Unit
+liftCodeW prog name lines = liftOnceW prog name codeShapeW lines
+
+-- Lift the function [name] of [shape] once; [lines] are built only then.
+liftOnceW : Prog -> String -> WasmShape -> (Unit -> List String) -> Unit
+liftOnceW prog name shape lines =
   noteFuncRef prog name
   if omHasKey name !(progEmit prog).liftedDefinitionNames then
     ()
   else
-    addLiftedNamed
-      prog
-      name
-      (FuncOfType (WD.slotTypeName (slotArityW slot)) (slotArityW slot))
-      (lines ())
-  [refFuncW prog name]
+    addLiftedNamed prog name shape (lines ())
+
+-- the slot function [name] of [slot]'s type with [body]
+slotFuncLines : MethodSlot -> String -> List String -> List String
+slotFuncLines slot name body =
+  [
+      "  (func \{name} (type $\{WD.slotTypeName (slotArityW slot)}) \{slotParamsW slot} (result (ref eq))",
+    ]
+    ++ indent body
+    ++ ["  )"]
 
 -- the parameters of a slot function: the dictionary, the method-level
 -- dictionaries, the values
@@ -4062,81 +4077,87 @@ slotParamsW slot =
         (rangeList 0 slot.valueArity))
   "(param $sd (ref eq))\{methodDicts}\{values}"
 
-nthImplGW : List ImplG -> Int -> Option ImplG
-nthImplGW [] _ = None
-nthImplGW (g :: rest) i = if i <= 0 then Some g else nthImplGW rest (i - 1)
+-- operand [i] of a slot function of [slot]: the dictionary, then the
+-- method-level dictionaries, then the values
+slotOperandW : MethodSlot -> Int -> List String
+slotOperandW slot i =
+  if i == 0 then
+    ["local.get $sd"]
+  else if i <= slot.contextDicts then
+    ["local.get $sm\{intToString (i - 1)}"]
+  else
+    ["local.get $sa\{intToString (i - 1 - slot.contextDicts)}"]
 
--- the wrapper's function: it takes as many values as the slot declares and applies
--- the define to as many as the define takes.  A define taking fewer (an eta-short
--- clause) runs on its own values at once and its result is applied to the rest, so
--- its effects keep their order; a define taking more is applied through
+-- the leading dictionaries impl group [g]'s define takes for [slot]: the
+-- method-level ones, then an inherited default's receiver or the instance's
+-- `requires`
+leadingDictsW : MethodSlot -> SlotCallee -> ImplG -> Int
+leadingDictsW slot callee (ImplG _ _ _ _ clauses _) =
+  let leading = match clauses
+    (CClause pats _) :: _ => leadingDictParams pats
+    [] => 0
+  slot.contextDicts
+    + (if callee.inherited then 1 else maxI 0 (leading - slot.contextDicts))
+
+-- the number of values impl group [g]'s define takes
+ownValuesW : MethodSlot -> SlotCallee -> ImplG -> Int
+ownValuesW slot callee (g@(ImplG _ _ _ total _ _)) =
+  maxI 0 (total - leadingDictsW slot callee g)
+
+-- The body applying impl group [g]'s define, of interface [iface], to what
+-- [operand] reads: operand 0 is the dictionary, then come the method-level
+-- dictionaries, then [values] values.  A define taking fewer values (an eta-short
+-- clause) runs on its own values at once and its result is applied to the rest,
+-- so its effects keep their order; a define taking more is applied through
 -- `$__mdk_apply`, which makes the residual PAP.
-slotWrapperLines : Prog ->
-  String ->
+slotBodyW : Prog ->
   String ->
   MethodSlot ->
   SlotCallee ->
   ImplG ->
+  (Int -> List String) ->
+  Int ->
   List String
-slotWrapperLines prog name iface slot callee (g@(ImplG method _ _ total clauses fnName)) =
+slotBodyW prog iface slot callee (g@(ImplG method _ _ total _ fnName)) operand values =
   let ctx = slot.contextDicts
-  let values = slot.valueArity
-  let leading = match clauses
-    (CClause pats _) :: _ => leadingDictParams pats
-    [] => 0
-  let reqs = if callee.inherited then 0 else maxI 0 (leading - ctx)
-  let dicts = ctx + (if callee.inherited then 1 else reqs)
-  let own = total - dicts
   let supers = optionOr 0 (omLookup iface (progIndex prog).fnImpl.superCounts)
+  let dicts = leadingDictsW slot callee g
+  let own = total - dicts
   let memo = match groupEntryW prog g
     Some ent => "$memo_\{implEntrySymTagW ent}_\{method}"
     None => ""
-  let methodDicts = map (i => "local.get $sm\{intToString i}") (rangeList 0 ctx)
   let dictLoads =
-    methodDicts
+    flatMap operand (rangeList 1 (ctx + 1))
       ++ (if callee.inherited then
-        ["local.get $sd"]
+        operand 0
       else
         flatMap
-          (i => [
-            "local.get $sd",
-            "ref.cast (ref $dict)",
-            "struct.get $dict 1",
-            "i32.const " ++ intToString (supers + i),
-            "array.get $dictarr",
-            "ref.as_non_null",
-          ])
-          (rangeList 0 reqs))
-  let value = i => "local.get $sa\{intToString i}"
-  let body =
-    if values == 0 && ctx == 0 && isLazyGlobalW prog memo then
-      [callFnW prog CallTailW (forcerW memo) 0]
-    else if own == values then
-      dictLoads
-        ++ map value (rangeList 0 values)
-        ++ [callFnW prog CallTailW fnName (dicts + values)]
-    else if own >= 0 && own < values then
-      dictLoads
-        ++ map value (rangeList 0 own)
-        ++ [callFnW prog CallValueW fnName (dicts + own)]
-        ++ map value (rangeList own values)
-        ++ [
-          "array.new_fixed $argarr " ++ intToString (values - own),
-          callFnW prog CallTailW "__mdk_apply" 2,
-        ]
-    else
-      defineClosureW prog fnName total
-        ++ dictLoads
-        ++ map value (rangeList 0 values)
-        ++ [
-          "array.new_fixed $argarr " ++ intToString (dicts + values),
-          callFnW prog CallTailW "__mdk_apply" 2,
-        ]
-  [
-      "  (func \{name} (type $\{WD.slotTypeName (slotArityW slot)}) \{slotParamsW slot} (result (ref eq))",
-    ]
-    ++ indent body
-    ++ ["  )"]
+          (i => operand 0 ++ superFieldW (supers + i))
+          (rangeList 0 (dicts - ctx)))
+  let value = i => operand (1 + ctx + i)
+  if slot.valueArity == 0 && ctx == 0 && isLazyGlobalW prog memo then
+    [callFnW prog CallTailW (forcerW memo) 0]
+  else if own == values then
+    dictLoads
+      ++ flatMap value (rangeList 0 values)
+      ++ [callFnW prog CallTailW fnName (dicts + values)]
+  else if own >= 0 && own < values then
+    dictLoads
+      ++ flatMap value (rangeList 0 own)
+      ++ [callFnW prog CallValueW fnName (dicts + own)]
+      ++ flatMap value (rangeList own values)
+      ++ [
+        "array.new_fixed $argarr " ++ intToString (values - own),
+        callFnW prog CallTailW "__mdk_apply" 2,
+      ]
+  else
+    defineClosureW prog fnName total
+      ++ dictLoads
+      ++ flatMap value (rangeList 0 values)
+      ++ [
+        "array.new_fixed $argarr " ++ intToString (dicts + values),
+        callFnW prog CallTailW "__mdk_apply" 2,
+      ]
 
 -- a constrained-function occurrence applied to `args`: prepend the materialized
 -- dict witnesses (one per `=>` constraint, in route order) to the args, then call
@@ -4215,7 +4236,9 @@ emitLocalDictRef prog env d name routes args end =
 -- ABI W4 HOFs expect — the working lambda path IS the reference.
 
 -- CMethod value: arity k = the method's declared USER arity; a nullary method (k <= 0)
--- is a plain value — keep the immediate saturated dispatch.
+-- is a plain value — keep the immediate saturated dispatch.  Through a dictionary
+-- the value is the slot's closure applied to the dictionaries alone, so the impl
+-- runs at its own count of values, as at a partial site.
 emitMethodValueRef : Prog ->
   Env ->
   Int ->
@@ -4244,11 +4267,32 @@ emitMethodValueRef prog env d name iface siteArity route implRoutes methRoutes =
       []
       (callModeFor (definedArityW prog node) 0)
       CallValueW
+  else if isDictRouteW route then
+    emitMethodRef
+      prog
+      env
+      d
+      name
+      iface
+      siteArity
+      route
+      implRoutes
+      methRoutes
+      []
+      (callModeFor (definedArityW prog node) 0)
+      CallValueW
   else
     let names = etaValNames arity
     let ps = map (n => PVar n (Loc "" 0 0 0 0) noBinderId) names
     let body = stampedAppW prog node (map (n => CVar n AGlobal) names)
     emitClosure prog env d ps body
+
+-- a route whose dictionary is a run-time value
+isDictRouteW : Route -> Bool
+isDictRouteW (RDict _) = True
+isDictRouteW (RDictFwd _) = True
+isDictRouteW (RProj _ _) = True
+isDictRouteW _ = False
 
 -- the method's USER arity for an eta-value closure: the occurrence's defined arity
 -- (#410: an RLocal route forwards to a STANDALONE, so the closure exposes that
@@ -4433,13 +4477,7 @@ emitClausesImpl prog fnName params arity clauses =
 -- CAF.
 groupEntryW : Prog -> ImplG -> Option CImplEntry
 groupEntryW prog (ImplG method _ _ _ _ fnName) =
-  firstWhereW
-    (ent => implEntrySymW method ent == fnName)
-    (methodEntriesW prog method)
-
-firstWhereW : (a -> Bool) -> List a -> Option a
-firstWhereW _ [] = None
-firstWhereW p (x :: rest) = if p x then Some x else firstWhereW p rest
+  find (ent => implEntrySymW method ent == fnName) (methodEntriesW prog method)
 
 -- the entry of the occurrence's interface [iface] for (method, tag) at the site's
 -- arity (mirror of llvm_emit's implForSite): a supplied method, or an inherited
@@ -9794,9 +9832,9 @@ leafArm : Prog ->
   List CArm ->
   Int ->
   Option (Pat, List CGuard, CExpr, Option OrArm)
-leafArm prog arms i = match nthArm arms i
+leafArm prog arms i = match get i arms
   Some (CArm pat guards body) => Some (pat, guards, body, orBlockOf prog i)
-  Some (CArmAlt pat guards owner) => match nthArm arms owner
+  Some (CArmAlt pat guards owner) => match get owner arms
     Some (CArm _ _ body) => Some (pat, guards, body, orBlockOf prog owner)
     _ => None
   None => None
@@ -11099,13 +11137,12 @@ allDigitsGo cs i =
 indent : List String -> List String
 indent lines = map ("    " ++ _) lines
 
--- `indent` applied `d` times, but in ONE pass (#381).  The if/else CHAIN emitters
--- (emitLitSwitch{Ref,Tail}) nest their own recursion inside
--- `indent`, so the k-th arm's text would be re-mapped — and every line
--- re-allocated — once per level above it: O(arms²) line copies for one chain.
--- Threading the depth and padding ONCE collapses that to one copy per line.  The
--- emitted text is unchanged: `indentBy d` is by construction `indent` iterated d
--- times, and `indentBy 0` is the identity.
+-- `indent` applied `d` times, but in ONE pass (#381).  The if/else chain emitters
+-- `emitLitSwitchRef` and `emitLitSwitchTail` nest one level per arm, so indenting
+-- each level's text as it returns would re-copy every line once per level above
+-- it: O(arms²) line copies for one chain.  They thread the depth instead and pad
+-- once here.  `indentBy d` is `indent` iterated d times, and `indentBy 0` is the
+-- identity.
 indentBy : Int -> List String -> List String
 indentBy d lines =
   let pad = indentPad d
@@ -11179,10 +11216,6 @@ rangeList lo hi = if lo >= hi then [] else lo :: rangeList (lo + 1) hi
 tailList : List a -> List a
 tailList [] = []
 tailList (_ :: xs) = xs
-
-nthArm : List CArm -> Int -> Option CArm
-nthArm [] _ = None
-nthArm (a :: rest) i = if i == 0 then Some a else nthArm rest (i - 1)
 
 -- a readable tag for the unsupported-node gap message.
 ctag : CExpr -> String

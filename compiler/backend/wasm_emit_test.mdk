@@ -3,9 +3,17 @@
 -- pinned end to end by the wasm fixtures (`test/wasm/fixtures_modules`).
 
 import backend.wasm_emit.{
-  slotNullCheckW, slotFieldW, slotTypeLines, slotParamsW, gname
+  slotNullCheckW,
+  slotFieldW,
+  slotTypeLines,
+  slotParamsW,
+  gname,
+  ImplG(..),
+  ownValuesW,
 }
-import backend.emit_plan.{MethodSlot(..)}
+import backend.emit_plan.{MethodSlot(..), SlotCallee(..)}
+import frontend.ast.{Lit(..), Loc(..), Pat(..), noBinderId}
+import ir.core_ir.{CClause(..), CExpr(..)}
 import test.{expectAll, expectEqual}
 
 -- A word that is no `$dict` (the `i31 0` of a null witness) must not be read as a
@@ -31,7 +39,51 @@ test "a slot load reads the slot array field of the dictionary" =
       "i32.const 3",
       "array.get $slotarr",
     ]
-    (slotFieldW "d" 3)
+    (slotFieldW "d" 2 "$slotarr" 3)
+
+-- A site with fewer or more arguments than the slot declares applies the slot's
+-- closure through `$__mdk_apply`, never the slot's function.
+test "a site whose argument count is not the declared one loads the slot's closure" =
+  expectEqual
+    [
+      "local.get $\{gname "d"}",
+      "ref.cast (ref $dict)",
+      "struct.get $dict 3",
+      "i32.const 1",
+      "array.get $dictarr",
+    ]
+    (slotFieldW "d" 3 "$dictarr" 1)
+
+-- `forgeOp : a -> a -> a` with the eta-short `forgeOp x = (effect; y => ..)` under
+-- one leading dictionary: the define takes it and one value, so the closure takes
+-- one value and the impl runs at the first value, not at the second.  The
+-- dictionary is a `requires` of a supplied impl, or an inherited default's
+-- receiver.
+test "a slot's closure takes the impl's own value count, not the declared one" =
+  let slot = MethodSlot { method = "forgeOp", contextDicts = 0, valueArity = 2 }
+  let pat = x => PVar x (Loc "" 0 0 0 0) noBinderId
+  let g =
+    ImplG
+      "forgeOp"
+      ""
+      ""
+      2
+      [CClause [pat "$dict_r", pat "x"] (CLit (LInt 0))]
+      "f"
+  expectAll [
+    expectEqual
+      1
+      (ownValuesW
+        slot
+        SlotCallee { group = 0, inherited = False, declaredArity = 1 }
+        g),
+    expectEqual
+      1
+      (ownValuesW
+        slot
+        SlotCallee { group = 0, inherited = True, declaredArity = 1 }
+        g),
+  ]
 
 test "the slot function types declared are exactly the demanded arities" =
   expectEqual
