@@ -7,17 +7,22 @@ import frontend.parser.{parse}
 import tools.doctest.{Engine(..)}
 import tools.test_cmd.{
   treesUnread, childJobsPrefix, childGcMarkersPrefix, helperElabDiags, runTest,
-  besideRuntime
+  besideRuntime, abortEnvelopeTemplate
 }
 import frontend.desugar.{desugar}
 import frontend.parser.{parseLocated}
 import types.typecheck.{defaultDriveInputs, elaborateModules}
-import eval.eval.{Value(..), evalOneFacts, force}
+import eval.eval.{Value(..), evalOneFacts, force, currentEvalFile}
+import driver.diagnostics.{
+  cjAllToJsonWith, abortEnvelopeFields, mkDiag, Severity(..)
+}
+import support.diag_codes.{DiagCode(..)}
 import types.program_facts.{factsOfElab}
 import support.util.{lookupAssoc}
 import io.{runVerb}
 import string.{
-  contains, indexOf, toInt, trim, lines, words, startsWith, join, endsWith
+  contains, indexOf, toInt, trim, lines, words, startsWith, join, endsWith,
+  repeat, replaceAll
 }
 import list.{reverse, take}
 import test.{
@@ -707,6 +712,174 @@ test "a panicking medaka run prints no seed line, seeded" =
         expectNotEqual 0 code,
         expectEqual 0 (length (seedLines (lines combined))),
       ]))
+
+-- A test-only file, so it runs untyped: its test reaches a `panic` in the
+-- evaluator's own compiled code, not `runtimePanic`.
+evalInternalPanicSrc : String
+evalInternalPanicSrc =
+  "import test.{expectEqual}\n\ntest \"bad\" = expectEqual 1 \"a\"\n"
+
+-- The recursion in `deep` overflows the C stack before the evaluator's depth
+-- limit: sixty nested additions per level.
+deepSrc : String
+deepSrc = join "" [
+  "deep : Int -> Int\ndeep n = if n == 0 then 0 else ",
+  repeat 60 "(1 + ",
+  "deep (n - 1)",
+  repeat 60 ")",
+  "\n",
+]
+
+cStackTestSrc : String
+cStackTestSrc =
+  "import test.{expectEqual}\n\n\{deepSrc}\ntest \"cstack3\" =\n  let k = randomInt 20000 20000\n  expectEqual 0 (deep k)\n"
+
+cStackMainSrc : String
+cStackMainSrc = "\{deepSrc}\nmain = println (intToString (deep 20000))\n"
+
+-- The line after the first line of [ls] that contains [needle].
+lineAfter : String -> List String -> Option String
+lineAfter _ [] = None
+lineAfter needle (l :: rest)
+  | contains needle l = match rest
+    next :: _ => Some next
+    [] => None
+  | otherwise = lineAfter needle rest
+
+-- A seeded eval-engine run of [src] aborts with [code] in each of the three
+-- modes: a single file prints the seed on stderr right after the error line,
+-- `--json` writes one envelope holding the seed and the code with stdout empty,
+-- and a directory run prints the one seed line on stdout.
+abortSeedRows : String -> String -> <Exec, IO, FileRead, FileWrite> Expectation
+abortSeedRows src code =
+  withFixtures
+    [("abort_test.mdk", src)]
+    (dir =>
+      let target = "\{dir}/abort_test.mdk"
+      expectAll [
+        labelFail
+          "single file"
+          (withSpawn (seededTest (Some 7) [
+            "--engines", "eval", target
+          ]) ((exit, out, err) => expectAll [
+            expectNotEqual 0 exit,
+            expectEqual [] (seedLines (lines out)),
+            expectEqual [seedLineFor 7] (seedLines (lines err)),
+            expectEqual
+              (Some (seedLineFor 7))
+              (lineAfter "runtime error [\{code}]" (lines err)),
+          ])),
+        labelFail
+          "--json"
+          (withSpawn (seededTest (Some 7) [
+            "--json", "--engines", "eval", target
+          ]) ((exit, out, err) => expectAll [
+            expectNotEqual 0 exit,
+            expectEqual "" out,
+            expectEqual 1 (count (l => trim l /= "") (lines err)),
+            expectEqual (Some code) (firstDiagCode err),
+            expectEqual (Some (JInt 7)) (jsonMember "seed" err),
+          ])),
+        labelFail
+          "directory"
+          (withSpawn (seededTest (Some 7) [
+            "--engines", "eval", dir
+          ]) ((exit, out, err) => expectAll [
+            expectNotEqual 0 exit,
+            expectEqual [seedLineFor 7] (seedLines (lines out)),
+            expectEqual [] (seedLines (lines err)),
+          ])),
+      ])
+
+test "a panic in the evaluator's compiled code prints the run's seed in every mode" =
+  abortSeedRows evalInternalPanicSrc "E-PANIC"
+
+test "a C stack overflow under the eval engine prints the run's seed in every mode" =
+  abortSeedRows cStackTestSrc "E-STACK-OVERFLOW"
+
+test "medaka run of the evaluator-panic and stack-overflow programs prints no seed, seeded" =
+  withFixtures
+    [
+      ("typeerr.mdk", "main = println (debug (1 == \"a\"))\n"),
+      ("cstack.mdk", cStackMainSrc),
+    ]
+    (dir =>
+      expectAll
+        (map
+          (name =>
+            labelFail
+              name
+              (withSpawn (runVerb "env" [
+                "MEDAKA_SEED=7",
+                medakaBin,
+                "run",
+                "\{dir}/\{name}",
+              ]) ((code, out, err) => expectAll [
+                expectNotEqual 0 code,
+                expectEqual [] (seedLines (lines "\{out}\n\{err}")),
+              ])))
+          ["typeerr.mdk", "cstack.mdk"]))
+
+test "a --json parse-error refusal prints no seed" =
+  withFixtures
+    [
+      (
+        "parse_test.mdk",
+        "import test.{expectEqual}\n\ntest \"p\" = expectEqual 1 (1 +)\n",
+      ),
+    ]
+    (dir => withSpawn (seededTest (Some 7) [
+      "--json",
+      "--engines",
+      "eval",
+      "\{dir}/parse_test.mdk",
+    ]) ((code, out, err) => expectAll [
+      expectNotEqual 0 code,
+      expectEqual [] (seedLines (lines "\{out}\n\{err}")),
+      expectEqual None (jsonMember "seed" err),
+      expectEqual None (jsonMember "seed" out),
+    ]))
+
+-- [s] as the body of a Medaka string literal.
+medakaStringBody : String -> String
+medakaStringBody s =
+  s
+    |> replaceAll "\\" "\\\\"
+    |> replaceAll "\"" "\\\""
+    |> replaceAll "\n" "\\n"
+    |> replaceAll "\u{01}" "\\u{01}"
+    |> replaceAll "\u{02}" "\\u{02}"
+
+hostileMessage : String
+hostileMessage = "q\"b\\n\nu\u{01}é"
+
+test "the runtime fills the abort template as the envelope serializer renders the diagnostic" =
+  let tmpl = abortEnvelopeTemplate ()
+  let expected = cjAllToJsonWith (abortEnvelopeFields ()) [
+    (!currentEvalFile, "", [mkDiag SevError EPanic hostileMessage None]),
+  ]
+  withFixtures
+    [
+      (
+        "esc.mdk",
+        "main =\n  setAbortReport \"\" \"\{medakaStringBody tmpl}\"\n  panic \"\{medakaStringBody hostileMessage}\"\n",
+      ),
+    ]
+    (dir => match runVerb medakaBin [
+      "build",
+      "\{dir}/esc.mdk",
+      "-o",
+      "\{dir}/esc",
+    ]
+      Ok (0, _, _) => withSpawn (runVerb
+        "\{dir}/esc"
+        []) ((code, out, err) => expectAll [
+        expectEqual 1 code,
+        expectEqual "" out,
+        expectEqual "\{expected}\n" err,
+      ])
+      Ok (_, _, err) => fail "medaka build failed: \{err}"
+      Err e => fail e)
 
 siblingFixtureRun : String ->
   String ->

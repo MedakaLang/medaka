@@ -2784,15 +2784,24 @@ pendingEnvelopeExtras = Ref []
 export
 runEnvelopeFields : Unit -> <e> List (String, Json)
 runEnvelopeFields _ =
-  let staleF = match !pendingStaleNotice
-    None => []
-    Some msg => [("staleBinary", JString msg)]
-  let preludeF =
-    map ((field, msg) => (field, JString msg)) !pendingPreludeNotices
   let perfF = match takePerfSink ()
     [] => []
     ls => [("perf", JArray (arrayFromList (map (l => JString l) ls)))]
-  staleF ++ preludeF ++ perfF ++ !pendingEnvelopeExtras
+  staleNoticeFields () ++ perfF ++ !pendingEnvelopeExtras
+
+-- `runEnvelopeFields` without the `perf` member, for an envelope rendered ahead
+-- of an abort that may never happen: reading the perf sink drains it, and the
+-- lines it holds belong to whichever channel reports the run that follows.
+export
+abortEnvelopeFields : Unit -> <e> List (String, Json)
+abortEnvelopeFields _ = staleNoticeFields () ++ !pendingEnvelopeExtras
+
+staleNoticeFields : Unit -> <e> List (String, Json)
+staleNoticeFields _ =
+  let staleF = match !pendingStaleNotice
+    None => []
+    Some msg => [("staleBinary", JString msg)]
+  staleF ++ map ((field, msg) => (field, JString msg)) !pendingPreludeNotices
 
 -- Emit the ONE `run --json` envelope on stderr — or nothing at all when there
 -- is nothing to say (no diagnostics AND no notices), which keeps a clean run on

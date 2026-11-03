@@ -321,6 +321,25 @@ static void mdk_flush_run_stdout_on_abort(void);
  * no table, prints the unlocated line. */
 __attribute__((weak)) const char *const *const mdk_site_files = 0;
 
+/* The abort report `setAbortReport` registers (mdk_set_abort_report below), held
+ * in malloc memory because the abort path reads it from a signal handler after
+ * the GC may have freed the Medaka strings.  An empty string clears its slot.
+ *
+ * With a note, an abort writes its line and then the note on a line of its own.
+ * With a template (a JSON envelope), a coded abort writes the template in place
+ * of its line: byte 0x01 becomes the code, byte 0x02 the message, escaped as
+ * stdlib/json.mdk's `escapeChar` escapes a string.  A pre-formatted line is
+ * written as it is, then the note.  Each slot is cleared before it is written,
+ * so an abort during the write adds no second report. */
+static char *mdk_abort_note = 0;
+static char *mdk_abort_tmpl = 0;
+
+static char *mdk_take_abort_slot(char **slot) {
+  char *p = *slot;
+  *slot = 0;
+  return p;
+}
+
 struct mdk_abort_buf {
   char b[192];
   size_t n;
@@ -393,9 +412,74 @@ static void mdk_abort_put_site(unsigned long long site) {
   mdk_abort_write(a.b, a.n);
 }
 
+static void mdk_abort_write_note(const char *note) {
+  if (!note) return;
+  mdk_abort_write(note, strlen(note));
+  mdk_abort_write("\n", 1);
+}
+
+/* `bytes` as the inside of a JSON string literal, as stdlib/json.mdk's
+ * `escapeChar` writes it: every byte from 0x20 up, those of UTF-8 sequences
+ * included, is copied, except `"` and `\`. */
+static void mdk_abort_write_json_escaped(const char *bytes, size_t blen) {
+  static const char hex[] = "0123456789abcdef";
+  size_t run = 0;
+  for (size_t i = 0; i < blen; i++) {
+    unsigned char c = (unsigned char)bytes[i];
+    char esc[6];
+    size_t n = 2;
+    esc[0] = '\\';
+    if (c == '"' || c == '\\') esc[1] = (char)c;
+    else if (c == 8) esc[1] = 'b';
+    else if (c == 9) esc[1] = 't';
+    else if (c == 10) esc[1] = 'n';
+    else if (c == 12) esc[1] = 'f';
+    else if (c == 13) esc[1] = 'r';
+    else if (c < 32) {
+      esc[1] = 'u';
+      esc[2] = '0';
+      esc[3] = '0';
+      esc[4] = hex[c / 16];
+      esc[5] = hex[c % 16];
+      n = 6;
+    } else continue;
+    mdk_abort_write(bytes + run, i - run);
+    mdk_abort_write(esc, n);
+    run = i + 1;
+  }
+  mdk_abort_write(bytes + run, blen - run);
+}
+
+static void mdk_abort_write_template(const char *tmpl, const char *code,
+                                     const char *pre, const char *bytes,
+                                     size_t blen, const char *post) {
+  const char *run = tmpl;
+  const char *p = tmpl;
+  for (; *p; p++) {
+    if (*p != '\x01' && *p != '\x02') continue;
+    mdk_abort_write(run, (size_t)(p - run));
+    if (*p == '\x01') {
+      mdk_abort_write(code, strlen(code));
+    } else {
+      mdk_abort_write_json_escaped(pre, strlen(pre));
+      if (bytes) mdk_abort_write_json_escaped(bytes, blen);
+      if (post) mdk_abort_write_json_escaped(post, strlen(post));
+    }
+    run = p + 1;
+  }
+  mdk_abort_write(run, (size_t)(p - run));
+  mdk_abort_write("\n", 1);
+}
+
 static void mdk_abort_coded(unsigned long long site, const char *code,
                             const char *pre, const char *bytes, size_t blen,
                             const char *post) {
+  char *tmpl = mdk_take_abort_slot(&mdk_abort_tmpl);
+  char *note = mdk_take_abort_slot(&mdk_abort_note);
+  if (tmpl) {
+    mdk_abort_write_template(tmpl, code, pre, bytes, blen, post);
+    return;
+  }
   mdk_abort_put_site(site);
   mdk_abort_write("runtime error [", 15);
   mdk_abort_write(code, strlen(code));
@@ -404,11 +488,17 @@ static void mdk_abort_coded(unsigned long long site, const char *code,
   if (bytes) mdk_abort_write(bytes, blen);
   if (post) mdk_abort_write(post, strlen(post));
   mdk_abort_write("\n", 1);
+  mdk_abort_write_note(note);
 }
 
+/* A pre-formatted line under `--json` is already the whole envelope, so only a
+ * note follows it. */
 static void mdk_abort_verbatim(const char *bytes, size_t blen) {
+  mdk_take_abort_slot(&mdk_abort_tmpl);
+  char *note = mdk_take_abort_slot(&mdk_abort_note);
   mdk_abort_write(bytes, blen);
   mdk_abort_write("\n", 1);
+  mdk_abort_write_note(note);
 }
 
 /* The `_at` twins are defined below; each plain entry calls its twin with site 0. */
@@ -1188,12 +1278,6 @@ void mdk_stash_run_stdout(long long w) {
   mdk_run_chunks[mdk_run_chunk_count].len = byte_len;
   mdk_run_chunk_count++;
 }
-
-/* The abort note and `--json` envelope template, held in malloc memory
-   because the abort path reads them from a signal handler after the GC may
-   have freed the Medaka strings.  An empty string clears its slot. */
-static char *mdk_abort_note = 0;
-static char *mdk_abort_tmpl = 0;
 
 static char *mdk_copy_abort_string(long long w) {
   const char *cell = (const char *)w;
