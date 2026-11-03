@@ -1,5 +1,5 @@
 # META
-source_lines=1807
+source_lines=1806
 stages=DESUGAR,MARK
 # SOURCE
 -- Parse a root .mdk file's transitive imports and return
@@ -57,18 +57,17 @@ lastOr d (_ :: xs) = lastOr d xs
 -- split a String on a single-char separator (mirrors String.split_on_char).
 -- Always returns ≥1 segment; empty input → [""].  No-sep input → [s].
 splitOnChar : String -> String -> List String
-splitOnChar sep s = splitGo sep s 0 (stringLength s) ""
+splitOnChar sep s = splitGo sep s 0 (stringLength s) 0
 
-splitGo : String -> String -> Int -> Int -> String -> List String
-splitGo sep s i len acc =
+-- `start` is where the current segment began; each segment is one slice.
+splitGo : String -> String -> Int -> Int -> Int -> List String
+splitGo sep s i len start =
   if i >= len then
-    [acc]
+    [stringSlice start len s]
+  else if stringSlice i (i + 1) s == sep then
+    stringSlice start i s :: splitGo sep s (i + 1) len (i + 1)
   else
-    let c = stringSlice i (i + 1) s
-    if c == sep then
-      acc :: splitGo sep s (i + 1) len ""
-    else
-      splitGo sep s (i + 1) len (acc ++ c)
+    splitGo sep s (i + 1) len start
 
 -- join segments with "/" (mirrors String.concat "/")
 joinSlash : List String -> String
@@ -1823,9 +1822,9 @@ loadProgramFilesLocatedCachedSourcesE parseCacheRef read entry roots =
 (DFunDef false "lastOr" (PWild (PList (PVar "x"))) (EVar "x"))
 (DFunDef false "lastOr" ((PVar "d") (PCons PWild (PVar "xs"))) (EApp (EApp (EVar "lastOr") (EVar "d")) (EVar "xs")))
 (DTypeSig false "splitOnChar" (TyFun (TyCon "String") (TyFun (TyCon "String") (TyApp (TyCon "List") (TyCon "String")))))
-(DFunDef false "splitOnChar" ((PVar "sep") (PVar "s")) (EApp (EApp (EApp (EApp (EApp (EVar "splitGo") (EVar "sep")) (EVar "s")) (ELit (LInt 0))) (EApp (EVar "stringLength") (EVar "s"))) (ELit (LString ""))))
-(DTypeSig false "splitGo" (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyFun (TyCon "String") (TyApp (TyCon "List") (TyCon "String"))))))))
-(DFunDef false "splitGo" ((PVar "sep") (PVar "s") (PVar "i") (PVar "len") (PVar "acc")) (EIf (EBinOp ">=" (EVar "i") (EVar "len")) (EListLit (EVar "acc")) (EBlock (DoLet false false (PVar "c") (EApp (EApp (EApp (EVar "stringSlice") (EVar "i")) (EBinOp "+" (EVar "i") (ELit (LInt 1)))) (EVar "s"))) (DoExpr (EIf (EBinOp "==" (EVar "c") (EVar "sep")) (EBinOp "::" (EVar "acc") (EApp (EApp (EApp (EApp (EApp (EVar "splitGo") (EVar "sep")) (EVar "s")) (EBinOp "+" (EVar "i") (ELit (LInt 1)))) (EVar "len")) (ELit (LString "")))) (EApp (EApp (EApp (EApp (EApp (EVar "splitGo") (EVar "sep")) (EVar "s")) (EBinOp "+" (EVar "i") (ELit (LInt 1)))) (EVar "len")) (EBinOp "++" (EVar "acc") (EVar "c"))))))))
+(DFunDef false "splitOnChar" ((PVar "sep") (PVar "s")) (EApp (EApp (EApp (EApp (EApp (EVar "splitGo") (EVar "sep")) (EVar "s")) (ELit (LInt 0))) (EApp (EVar "stringLength") (EVar "s"))) (ELit (LInt 0))))
+(DTypeSig false "splitGo" (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyApp (TyCon "List") (TyCon "String"))))))))
+(DFunDef false "splitGo" ((PVar "sep") (PVar "s") (PVar "i") (PVar "len") (PVar "start")) (EIf (EBinOp ">=" (EVar "i") (EVar "len")) (EListLit (EApp (EApp (EApp (EVar "stringSlice") (EVar "start")) (EVar "len")) (EVar "s"))) (EIf (EBinOp "==" (EApp (EApp (EApp (EVar "stringSlice") (EVar "i")) (EBinOp "+" (EVar "i") (ELit (LInt 1)))) (EVar "s")) (EVar "sep")) (EBinOp "::" (EApp (EApp (EApp (EVar "stringSlice") (EVar "start")) (EVar "i")) (EVar "s")) (EApp (EApp (EApp (EApp (EApp (EVar "splitGo") (EVar "sep")) (EVar "s")) (EBinOp "+" (EVar "i") (ELit (LInt 1)))) (EVar "len")) (EBinOp "+" (EVar "i") (ELit (LInt 1))))) (EApp (EApp (EApp (EApp (EApp (EVar "splitGo") (EVar "sep")) (EVar "s")) (EBinOp "+" (EVar "i") (ELit (LInt 1)))) (EVar "len")) (EVar "start")))))
 (DTypeSig false "joinSlash" (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyCon "String")))
 (DFunDef false "joinSlash" ((PList)) (ELit (LString "")))
 (DFunDef false "joinSlash" ((PList (PVar "x"))) (EVar "x"))
@@ -2104,9 +2103,9 @@ loadProgramFilesLocatedCachedSourcesE parseCacheRef read entry roots =
 (DFunDef false "lastOr" (PWild (PList (PVar "x"))) (EVar "x"))
 (DFunDef false "lastOr" ((PVar "d") (PCons PWild (PVar "xs"))) (EApp (EApp (EVar "lastOr") (EVar "d")) (EVar "xs")))
 (DTypeSig false "splitOnChar" (TyFun (TyCon "String") (TyFun (TyCon "String") (TyApp (TyCon "List") (TyCon "String")))))
-(DFunDef false "splitOnChar" ((PVar "sep") (PVar "s")) (EApp (EApp (EApp (EApp (EApp (EVar "splitGo") (EVar "sep")) (EVar "s")) (ELit (LInt 0))) (EApp (EVar "stringLength") (EVar "s"))) (ELit (LString ""))))
-(DTypeSig false "splitGo" (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyFun (TyCon "String") (TyApp (TyCon "List") (TyCon "String"))))))))
-(DFunDef false "splitGo" ((PVar "sep") (PVar "s") (PVar "i") (PVar "len") (PVar "acc")) (EIf (EBinOp ">=" (EVar "i") (EVar "len")) (EListLit (EVar "acc")) (EBlock (DoLet false false (PVar "c") (EApp (EApp (EApp (EVar "stringSlice") (EVar "i")) (EBinOp "+" (EVar "i") (ELit (LInt 1)))) (EVar "s"))) (DoExpr (EIf (EBinOp "==" (EVar "c") (EVar "sep")) (EBinOp "::" (EVar "acc") (EApp (EApp (EApp (EApp (EApp (EVar "splitGo") (EVar "sep")) (EVar "s")) (EBinOp "+" (EVar "i") (ELit (LInt 1)))) (EVar "len")) (ELit (LString "")))) (EApp (EApp (EApp (EApp (EApp (EVar "splitGo") (EVar "sep")) (EVar "s")) (EBinOp "+" (EVar "i") (ELit (LInt 1)))) (EVar "len")) (EBinOp "++" (EVar "acc") (EVar "c"))))))))
+(DFunDef false "splitOnChar" ((PVar "sep") (PVar "s")) (EApp (EApp (EApp (EApp (EApp (EVar "splitGo") (EVar "sep")) (EVar "s")) (ELit (LInt 0))) (EApp (EVar "stringLength") (EVar "s"))) (ELit (LInt 0))))
+(DTypeSig false "splitGo" (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyApp (TyCon "List") (TyCon "String"))))))))
+(DFunDef false "splitGo" ((PVar "sep") (PVar "s") (PVar "i") (PVar "len") (PVar "start")) (EIf (EBinOp ">=" (EVar "i") (EVar "len")) (EListLit (EApp (EApp (EApp (EVar "stringSlice") (EVar "start")) (EVar "len")) (EVar "s"))) (EIf (EBinOp "==" (EApp (EApp (EApp (EVar "stringSlice") (EVar "i")) (EBinOp "+" (EVar "i") (ELit (LInt 1)))) (EVar "s")) (EVar "sep")) (EBinOp "::" (EApp (EApp (EApp (EVar "stringSlice") (EVar "start")) (EVar "i")) (EVar "s")) (EApp (EApp (EApp (EApp (EApp (EVar "splitGo") (EVar "sep")) (EVar "s")) (EBinOp "+" (EVar "i") (ELit (LInt 1)))) (EVar "len")) (EBinOp "+" (EVar "i") (ELit (LInt 1))))) (EApp (EApp (EApp (EApp (EApp (EVar "splitGo") (EVar "sep")) (EVar "s")) (EBinOp "+" (EVar "i") (ELit (LInt 1)))) (EVar "len")) (EVar "start")))))
 (DTypeSig false "joinSlash" (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyCon "String")))
 (DFunDef false "joinSlash" ((PList)) (ELit (LString "")))
 (DFunDef false "joinSlash" ((PList (PVar "x"))) (EVar "x"))

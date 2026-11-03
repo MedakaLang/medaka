@@ -164,6 +164,7 @@ import support.util.{
   lookupAssoc,
   contains,
   reverseL,
+  joinWith,
   isEmptyL,
   filterList,
   dedup,
@@ -1476,16 +1477,16 @@ mangledName mid name = encodePair mid name
 
 export
 sanitizeId : String -> String
-sanitizeId s = sanitizeGo s 0 (stringLength s) ""
+sanitizeId s = sanitizeGo s 0 (stringLength s) []
 
-sanitizeGo : String -> Int -> Int -> String -> String
+sanitizeGo : String -> Int -> Int -> List String -> String
 sanitizeGo s i len acc =
   if i >= len then
-    acc
+    joinWith "" (reverseL acc)
   else
     let c = stringSlice i (i + 1) s
     let c2 = if safeChar c then c else "_"
-    sanitizeGo s (i + 1) len (acc ++ c2)
+    sanitizeGo s (i + 1) len (c2 :: acc)
 
 export
 safeChar : String -> Bool
@@ -1529,7 +1530,7 @@ injectiveIdent s =
   if allSafeChars s 0 (stringLength s) && not (startsZZ s) then
     s
   else
-    "zZ\{escapeGo s 0 (stringLength s) ""}"
+    "zZ\{escapeGo s 0 (stringLength s) []}"
 
 -- does [s] already begin with the escape marker?  Such a string must take the
 -- escape branch even if it is otherwise a plain identifier, or the two images
@@ -1547,14 +1548,14 @@ allSafeChars s i len =
   else
     False
 
-escapeGo : String -> Int -> Int -> String -> String
+escapeGo : String -> Int -> Int -> List String -> String
 escapeGo s i len acc =
   if i >= len then
-    acc
+    joinWith "" (reverseL acc)
   else
     let c = stringSlice i (i + 1) s
     let c2 = if alnumChar c then c else "_\{hexOfChar c}_"
-    escapeGo s (i + 1) len (acc ++ c2)
+    escapeGo s (i + 1) len (c2 :: acc)
 
 -- `safeChar` MINUS the underscore: `_` introduces an escape, so it has to be
 -- escaped like any other non-alphanumeric character.

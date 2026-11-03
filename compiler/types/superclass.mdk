@@ -20,6 +20,7 @@
 -- selected again.
 
 import frontend.ast.{Super(..)}
+import list.{reverse}
 import types.repr.{IfaceRef}
 import support.ordmap.{OrdMap, omEmpty, omHasKey, omInsert}
 
@@ -42,7 +43,7 @@ superClosure : (IfaceRef -> Option (List String, List Super)) ->
 superClosure lookup step key seeds =
   let seedNodes = seedNodesFrom 0 seeds
   let (kept, seen) = keepFresh key seedNodes omEmpty
-  closureLayers lookup step key kept seen kept
+  closureLayers lookup step key [kept] seen kept
 
 -- The direct supers of one node, in declaration order, each carrying its path.
 directSupers : (IfaceRef -> Option (List String, List Super)) ->
@@ -103,20 +104,21 @@ directSupersFrom step typarams node i (s :: rest) =
         :: tailNodes
 
 -- Breadth-first: expand the whole frontier, keep the unseen nodes in order,
--- append them, repeat until a layer adds nothing.  Declared supers are
+-- stack them as a layer (`layers` is newest-first, flattened once at the end),
+-- repeat until a layer adds nothing.  Declared supers are
 -- acyclic (W1), and the dedup set bounds the walk regardless.
 closureLayers : (IfaceRef -> Option (List String, List Super)) ->
   (List String -> p -> Super -> Option p) ->
   (IfaceRef -> p -> String) ->
-  List (SuperNode p) ->
+  List (List (SuperNode p)) ->
   OrdMap Bool ->
   List (SuperNode p) ->
   List (SuperNode p)
-closureLayers _ _ _ acc _ [] = acc
-closureLayers lookup step key acc seen frontier =
+closureLayers _ _ _ layers _ [] = flatMap (layer => layer) (reverse layers)
+closureLayers lookup step key layers seen frontier =
   let candidates = flatMapNodes (directSupers lookup step) frontier
   let (fresh, seen2) = keepFresh key candidates seen
-  closureLayers lookup step key (acc ++ fresh) seen2 fresh
+  closureLayers lookup step key (fresh :: layers) seen2 fresh
 
 flatMapNodes : (SuperNode p -> List (SuperNode p)) ->
   List (SuperNode p) ->

@@ -53,18 +53,17 @@ lastOr d (_ :: xs) = lastOr d xs
 -- split a String on a single-char separator (mirrors String.split_on_char).
 -- Always returns ≥1 segment; empty input → [""].  No-sep input → [s].
 splitOnChar : String -> String -> List String
-splitOnChar sep s = splitGo sep s 0 (stringLength s) ""
+splitOnChar sep s = splitGo sep s 0 (stringLength s) 0
 
-splitGo : String -> String -> Int -> Int -> String -> List String
-splitGo sep s i len acc =
+-- `start` is where the current segment began; each segment is one slice.
+splitGo : String -> String -> Int -> Int -> Int -> List String
+splitGo sep s i len start =
   if i >= len then
-    [acc]
+    [stringSlice start len s]
+  else if stringSlice i (i + 1) s == sep then
+    stringSlice start i s :: splitGo sep s (i + 1) len (i + 1)
   else
-    let c = stringSlice i (i + 1) s
-    if c == sep then
-      acc :: splitGo sep s (i + 1) len ""
-    else
-      splitGo sep s (i + 1) len (acc ++ c)
+    splitGo sep s (i + 1) len start
 
 -- join segments with "/" (mirrors String.concat "/")
 joinSlash : List String -> String

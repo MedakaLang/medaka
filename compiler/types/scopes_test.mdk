@@ -347,6 +347,8 @@ buildScopeTreeGo store (raw :: rest) ids parents =
   buildScopeTreeGo
     store
     rest
+    -- Bound: one step per node of a generated scope tree, and nthScope already walks ids per step.
+    -- lint-disable-next-line rule-accumulator-append
     (ids ++ [sid])
     (parents ++ [(scopeInt sid, Some (scopeInt parent))])
 

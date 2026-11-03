@@ -1,5 +1,5 @@
 # META
-source_lines=2481
+source_lines=2483
 stages=TYPES
 diagnostics=TYPES
 # SOURCE
@@ -1414,7 +1414,7 @@ export interface Foldable t where
   toList : t a -> List a
   isEmpty : t a -> Bool
   length : t a -> Int
-  foldMap f = fold (acc x => acc ++ f x) empty
+  foldMap f t = listFoldMapGo empty (fold (acc x => f x :: acc) [] t)
   foldUntil f z t = foldUntilList f z (toList t)
   length t = fold (acc _ => acc + 1) 0 t
   isEmpty t = match toList t
@@ -2190,6 +2190,8 @@ arbitraryString : Unit -> <Rand> String
 arbitraryString () = go (randomInt 0 10) ""
   where
     go 0 acc = acc
+    -- Bound: at most ten steps, the count comes from randomInt 0 10.
+    -- lint-disable-next-line rule-accumulator-append
     go n acc = go (n - 1) (acc ++ charToStr (randomChar ()))
 
 export impl Arbitrary String where

@@ -434,6 +434,8 @@ canonicalFrom (token :: rest) seen =
   if isVariableToken token then match positionIn token seen 0
     Some k => "v\{intToString k}" :: canonicalFrom rest seen
     None =>
+      -- Bound: seen holds the distinct type variables of one law, a handful.
+      -- lint-disable-next-line rule-accumulator-append
       "v\{intToString (length seen)}" :: canonicalFrom rest (seen ++ [token])
   else
     token :: canonicalFrom rest seen

@@ -419,7 +419,7 @@ dispatchUntilStable defined graph seen modules named pending =
         graph
         seen
         modules
-        (named ++ flatMap snd fired)
+        (flatMap snd fired ++ named)
         (filter (p => isNone (firedBy names p)) pending)
 
 firedBy : HashMap String Unit ->

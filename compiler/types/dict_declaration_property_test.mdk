@@ -52,6 +52,8 @@ reachable : List (Idx, Idx) -> List Idx -> List Idx -> List Idx
 reachable _ [] seen = seen
 reachable edges (i :: rest) seen =
   let next = filter (j => not (any (== j) seen)) (successors edges i)
+  -- Bound: the generated graph has four nodes (Idx), so seen holds at most four.
+  -- lint-disable-next-line rule-accumulator-append
   reachable edges (rest ++ next) (seen ++ next)
 
 -- W1's model: the superclass relation has a cycle iff some interface reaches

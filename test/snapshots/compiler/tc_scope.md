@@ -1,5 +1,5 @@
 # META
-source_lines=1774
+source_lines=1775
 stages=DESUGAR,MARK
 # SOURCE
 -- tc_scope: name visibility across imports, read off the envelopes: the method-scope ladder (the
@@ -105,6 +105,7 @@ import support.util.{
   joinWith,
   listLen,
   lookupAssoc,
+  reverseL,
   sortUniqS,
 }
 import string.{endsWith}
@@ -828,10 +829,10 @@ aliasRowModule (_, _, m, _, _) = m
 aliasRowIdents : List (String, String, String, Ident, Loc) ->
   List Ident ->
   List Ident
-aliasRowIdents [] acc = acc
+aliasRowIdents [] acc = reverseL acc
 aliasRowIdents ((_, _, _, i, _) :: rest) acc
   | anyList (== i) acc = aliasRowIdents rest acc
-  | otherwise = aliasRowIdents rest (acc ++ [i])
+  | otherwise = aliasRowIdents rest (i :: acc)
 
 -- The LAST colliding import's span — the one a plain insert would let silently overwrite.  Both
 -- orderings of the same two imports land on the same line, so the diagnostic's span is
@@ -1785,7 +1786,7 @@ importedIfaceRows idx (_ :: rest) = importedIfaceRows idx rest
 (DUse false (UseGroup ("types" "tc_diag_text") ((mem "ambigReexportHelp" false) (mem "ambigReexportMsg" false) (mem "backticked" false))))
 (DUse false (UseGroup ("frontend" "ast") ((mem "ConPayload" true) (mem "Decl" true) (mem "Ident" true) (mem "Loc" true) (mem "Ns" true) (mem "Ty" true) (mem "TyConOrigin" true) (mem "UseMember" true) (mem "UsePath" true) (mem "Variant" true) (mem "ifaceIdentity" false) (mem "mkIdent" false) (mem "qualifiedLocal" false) (mem "useMemberAlias" false) (mem "useMemberLocal" false) (mem "useMemberOrigin" false))))
 (DUse false (UseGroup ("types" "repr") ((mem "IfaceRef" true) (mem "Scheme" true) (mem "VecObl" true))))
-(DUse false (UseGroup ("support" "util") ((mem "anyList" false) (mem "contains" false) (mem "dedup" false) (mem "filterList" false) (mem "isEmptyL" false) (mem "isNonEmptyL" false) (mem "joinDot" false) (mem "joinWith" false) (mem "listLen" false) (mem "lookupAssoc" false) (mem "sortUniqS" false))))
+(DUse false (UseGroup ("support" "util") ((mem "anyList" false) (mem "contains" false) (mem "dedup" false) (mem "filterList" false) (mem "isEmptyL" false) (mem "isNonEmptyL" false) (mem "joinDot" false) (mem "joinWith" false) (mem "listLen" false) (mem "lookupAssoc" false) (mem "reverseL" false) (mem "sortUniqS" false))))
 (DUse false (UseGroup ("string") ((mem "endsWith" false))))
 (DUse false (UseGroup ("types" "registry") ((mem "HeadKey" true) (mem "Registry" false) (mem "spCollided" false) (mem "SpellingPop" false) (mem "spInsert" false) (mem "spRows" false))))
 (DUse false (UseGroup ("support" "ordmap") ((mem "omEmpty" false) (mem "omFromNames" false) (mem "omHasKey" false) (mem "omInsert" false) (mem "omKeys" false) (mem "omLookup" false) (mem "OrdMap" false))))
@@ -1913,8 +1914,8 @@ importedIfaceRows idx (_ :: rest) = importedIfaceRows idx rest
 (DTypeSig false "aliasRowModule" (TyFun (TyTuple (TyCon "String") (TyCon "String") (TyCon "String") (TyCon "Ident") (TyCon "Loc")) (TyCon "String")))
 (DFunDef false "aliasRowModule" ((PTuple PWild PWild (PVar "m") PWild PWild)) (EVar "m"))
 (DTypeSig false "aliasRowIdents" (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "String") (TyCon "String") (TyCon "Ident") (TyCon "Loc"))) (TyFun (TyApp (TyCon "List") (TyCon "Ident")) (TyApp (TyCon "List") (TyCon "Ident")))))
-(DFunDef false "aliasRowIdents" ((PList) (PVar "acc")) (EVar "acc"))
-(DFunDef false "aliasRowIdents" ((PCons (PTuple PWild PWild PWild (PVar "i") PWild) (PVar "rest")) (PVar "acc")) (EIf (EApp (EApp (EVar "anyList") (ELam ((PVar "_s")) (EBinOp "==" (EVar "_s") (EVar "i")))) (EVar "acc")) (EApp (EApp (EVar "aliasRowIdents") (EVar "rest")) (EVar "acc")) (EIf (EVar "otherwise") (EApp (EApp (EVar "aliasRowIdents") (EVar "rest")) (EBinOp "++" (EVar "acc") (EListLit (EVar "i")))) (EApp (EVar "__fallthrough__") (ELit LUnit)))))
+(DFunDef false "aliasRowIdents" ((PList) (PVar "acc")) (EApp (EVar "reverseL") (EVar "acc")))
+(DFunDef false "aliasRowIdents" ((PCons (PTuple PWild PWild PWild (PVar "i") PWild) (PVar "rest")) (PVar "acc")) (EIf (EApp (EApp (EVar "anyList") (ELam ((PVar "_s")) (EBinOp "==" (EVar "_s") (EVar "i")))) (EVar "acc")) (EApp (EApp (EVar "aliasRowIdents") (EVar "rest")) (EVar "acc")) (EIf (EVar "otherwise") (EApp (EApp (EVar "aliasRowIdents") (EVar "rest")) (EBinOp "::" (EVar "i") (EVar "acc"))) (EApp (EVar "__fallthrough__") (ELit LUnit)))))
 (DTypeSig false "aliasRowLastLoc" (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "String") (TyCon "String") (TyCon "Ident") (TyCon "Loc"))) (TyApp (TyCon "Option") (TyCon "Loc"))))
 (DFunDef false "aliasRowLastLoc" ((PList)) (EVar "None"))
 (DFunDef false "aliasRowLastLoc" ((PList (PTuple PWild PWild PWild PWild (PVar "l")))) (EApp (EVar "Some") (EVar "l")))
@@ -2097,7 +2098,7 @@ importedIfaceRows idx (_ :: rest) = importedIfaceRows idx rest
 (DUse false (UseGroup ("types" "tc_diag_text") ((mem "ambigReexportHelp" false) (mem "ambigReexportMsg" false) (mem "backticked" false))))
 (DUse false (UseGroup ("frontend" "ast") ((mem "ConPayload" true) (mem "Decl" true) (mem "Ident" true) (mem "Loc" true) (mem "Ns" true) (mem "Ty" true) (mem "TyConOrigin" true) (mem "UseMember" true) (mem "UsePath" true) (mem "Variant" true) (mem "ifaceIdentity" false) (mem "mkIdent" false) (mem "qualifiedLocal" false) (mem "useMemberAlias" false) (mem "useMemberLocal" false) (mem "useMemberOrigin" false))))
 (DUse false (UseGroup ("types" "repr") ((mem "IfaceRef" true) (mem "Scheme" true) (mem "VecObl" true))))
-(DUse false (UseGroup ("support" "util") ((mem "anyList" false) (mem "contains" false) (mem "dedup" false) (mem "filterList" false) (mem "isEmptyL" false) (mem "isNonEmptyL" false) (mem "joinDot" false) (mem "joinWith" false) (mem "listLen" false) (mem "lookupAssoc" false) (mem "sortUniqS" false))))
+(DUse false (UseGroup ("support" "util") ((mem "anyList" false) (mem "contains" false) (mem "dedup" false) (mem "filterList" false) (mem "isEmptyL" false) (mem "isNonEmptyL" false) (mem "joinDot" false) (mem "joinWith" false) (mem "listLen" false) (mem "lookupAssoc" false) (mem "reverseL" false) (mem "sortUniqS" false))))
 (DUse false (UseGroup ("string") ((mem "endsWith" false))))
 (DUse false (UseGroup ("types" "registry") ((mem "HeadKey" true) (mem "Registry" false) (mem "spCollided" false) (mem "SpellingPop" false) (mem "spInsert" false) (mem "spRows" false))))
 (DUse false (UseGroup ("support" "ordmap") ((mem "omEmpty" false) (mem "omFromNames" false) (mem "omHasKey" false) (mem "omInsert" false) (mem "omKeys" false) (mem "omLookup" false) (mem "OrdMap" false))))
@@ -2225,8 +2226,8 @@ importedIfaceRows idx (_ :: rest) = importedIfaceRows idx rest
 (DTypeSig false "aliasRowModule" (TyFun (TyTuple (TyCon "String") (TyCon "String") (TyCon "String") (TyCon "Ident") (TyCon "Loc")) (TyCon "String")))
 (DFunDef false "aliasRowModule" ((PTuple PWild PWild (PVar "m") PWild PWild)) (EVar "m"))
 (DTypeSig false "aliasRowIdents" (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "String") (TyCon "String") (TyCon "Ident") (TyCon "Loc"))) (TyFun (TyApp (TyCon "List") (TyCon "Ident")) (TyApp (TyCon "List") (TyCon "Ident")))))
-(DFunDef false "aliasRowIdents" ((PList) (PVar "acc")) (EVar "acc"))
-(DFunDef false "aliasRowIdents" ((PCons (PTuple PWild PWild PWild (PVar "i") PWild) (PVar "rest")) (PVar "acc")) (EIf (EApp (EApp (EVar "anyList") (ELam ((PVar "_s")) (EBinOp "==" (EVar "_s") (EVar "i")))) (EVar "acc")) (EApp (EApp (EVar "aliasRowIdents") (EVar "rest")) (EVar "acc")) (EIf (EVar "otherwise") (EApp (EApp (EVar "aliasRowIdents") (EVar "rest")) (EBinOp "++" (EVar "acc") (EListLit (EVar "i")))) (EApp (EVar "__fallthrough__") (ELit LUnit)))))
+(DFunDef false "aliasRowIdents" ((PList) (PVar "acc")) (EApp (EVar "reverseL") (EVar "acc")))
+(DFunDef false "aliasRowIdents" ((PCons (PTuple PWild PWild PWild (PVar "i") PWild) (PVar "rest")) (PVar "acc")) (EIf (EApp (EApp (EVar "anyList") (ELam ((PVar "_s")) (EBinOp "==" (EVar "_s") (EVar "i")))) (EVar "acc")) (EApp (EApp (EVar "aliasRowIdents") (EVar "rest")) (EVar "acc")) (EIf (EVar "otherwise") (EApp (EApp (EVar "aliasRowIdents") (EVar "rest")) (EBinOp "::" (EVar "i") (EVar "acc"))) (EApp (EVar "__fallthrough__") (ELit LUnit)))))
 (DTypeSig false "aliasRowLastLoc" (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "String") (TyCon "String") (TyCon "Ident") (TyCon "Loc"))) (TyApp (TyCon "Option") (TyCon "Loc"))))
 (DFunDef false "aliasRowLastLoc" ((PList)) (EVar "None"))
 (DFunDef false "aliasRowLastLoc" ((PList (PTuple PWild PWild PWild PWild (PVar "l")))) (EApp (EVar "Some") (EVar "l")))
