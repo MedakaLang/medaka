@@ -1,0 +1,170 @@
+-- Fixture for rule-list-as-set.  The rule matches a membership call by name, so
+-- the file declares its own `contains` and `lookupAssoc` and checks standalone.
+
+import list.{lookup, reverse}
+import test.{expectEqual}
+
+contains : String -> List String -> Bool
+contains x xs = any (== x) xs
+
+lookupAssoc : String -> List (String, Int) -> Option Int
+lookupAssoc k xs = lookup k xs
+
+-- a seen-list consed by the self-call and tested on every step
+dedupGo : List String -> List String -> List String
+dedupGo seen [] = reverse seen
+dedupGo seen (x :: xs) =
+  -- expect-next-line rule-list-as-set
+  if contains x seen then dedupGo seen xs else dedupGo (x :: seen) xs
+
+-- `elem`, and the container through `|>`
+elemGo : List Int -> List Int -> Int
+elemGo seen [] = length seen
+elemGo seen (x :: xs) =
+  -- expect-next-line rule-list-as-set
+  if seen |> elem x then elemGo seen xs else elemGo (seen ++ [x]) xs
+
+-- tested in one clause, grown in another: a scope walk
+renameGo : List String -> List (String, Int) -> List String
+renameGo bound [] = []
+renameGo bound ((n, 0) :: rest) =
+  -- expect-next-line rule-list-as-set
+  if notElem n bound then n :: renameGo bound rest else renameGo bound rest
+renameGo bound ((n, _) :: rest) = renameGo ([n] ++ bound) rest
+
+-- an association list grown through a `let`
+envGo : List (String, Int) -> List String -> Int
+envGo env [] = 0
+envGo env (x :: xs) =
+  let env2 = (x, 1) :: env
+  -- expect-next-line rule-list-as-set
+  match lookupAssoc x env
+    Some v => v + envGo env xs
+    None => envGo env2 xs
+
+-- a where-local loop
+viaWhere : List String -> Int
+viaWhere ys = go [] ys
+  where
+    go seen [] = length seen
+    go seen (z :: zs) =
+      -- expect-next-line rule-list-as-set
+      if contains z seen then go seen zs else go (z :: seen) zs
+
+-- a fold lambda that conses onto a tested accumulator
+foldDedup : List String -> List String
+foldDedup xs =
+  -- expect-next-line rule-list-as-set
+  fold (acc x => if contains x acc then acc else x :: acc) [] xs
+
+-- a fold lambda that only tests its accumulator
+foldTestOnly : List String -> Bool
+foldTestOnly xs = fold (acc x => acc && contains x xs) True xs
+
+-- the container is passed on unchanged: it does not grow
+fixedPool : List String -> List String -> Int
+fixedPool pool [] = 0
+fixedPool pool (x :: xs) =
+  if contains x pool then 1 + fixedPool pool xs else fixedPool pool xs
+
+-- the container shrinks
+shrinking : String -> List String -> Bool
+shrinking x [] = False
+shrinking x (y :: ys) = contains x ys || shrinking x ys
+
+-- a different parameter grows
+otherGrows : List String -> List String -> List String -> List String
+otherGrows pool out [] = out
+otherGrows pool out (x :: xs) =
+  if contains x pool then
+    otherGrows pool (x :: out) xs
+  else
+    otherGrows pool out xs
+
+-- mutual recursion is a call to a different function
+pingSeen : List String -> List String -> Int
+pingSeen seen [] = 0
+pingSeen seen (x :: xs) = if contains x seen then 1 else pongSeen (x :: seen) xs
+
+pongSeen : List String -> List String -> Int
+pongSeen seen [] = 0
+pongSeen seen (x :: xs) = pingSeen seen xs
+
+-- a lambda parameter that shadows the grown parameter
+shadowed : List String -> List String -> Int
+shadowed seen [] = 0
+shadowed seen (x :: xs) =
+  let hit = any (seen => contains x seen) [[x]]
+  if hit then shadowed seen xs else shadowed (x :: seen) xs
+
+-- not covered: the growth happens in a helper the loop calls
+viaHelper : List String -> List String -> Int
+viaHelper seen [] = length seen
+viaHelper seen (x :: xs) =
+  if contains x seen then viaHelper seen xs else viaHelper (remember x seen) xs
+
+remember : String -> List String -> List String
+remember x seen = x :: seen
+
+-- not covered: a tuple accumulator
+foldPair : List String -> List String
+foldPair xs =
+  fst
+    (fold
+      ((acc, n) x => if contains x acc then (acc, n) else (x :: acc, n + 1))
+      ([], 0)
+      xs)
+
+-- not covered: `any (== x)` is not a named membership call
+anyEq : List String -> List String -> Int
+anyEq seen [] = 0
+anyEq seen (x :: xs) =
+  if any (== x) seen then anyEq seen xs else anyEq (x :: seen) xs
+
+-- a where-local loop over a fixed pool of the enclosing function
+whereFixed : List String -> List String -> Int
+whereFixed pool ys = go 0 ys
+  where
+    go n [] = n
+    go n (z :: zs) = if contains z pool then go (n + 1) zs else go n zs
+
+-- a `let` bound to something other than the grown parameter
+letNotGrown : List String -> List String -> Int
+letNotGrown seen [] = 0
+letNotGrown seen (x :: xs) =
+  let other = [x]
+  if contains x seen then letNotGrown other xs else letNotGrown seen xs
+
+-- not covered: the test is made by a helper the loop calls
+testViaHelper : List String -> List String -> Int
+testViaHelper seen [] = 0
+testViaHelper seen (x :: xs) =
+  if isSeen x seen then testViaHelper seen xs else testViaHelper (x :: seen) xs
+
+isSeen : String -> List String -> Bool
+isSeen x seen = contains x seen
+
+-- not covered: a container held in a `Ref`
+refSeen : Ref (List String) -> List String -> <IO> Unit
+refSeen r [] = ()
+refSeen r (x :: xs) =
+  if not (contains x !r) then r := x :: !r
+  refSeen r xs
+
+-- a directive silences the finding
+silenced : List String -> List String -> Int
+silenced seen [] = 0
+silenced seen (x :: xs) =
+  -- lint-disable-next-line rule-list-as-set
+  if contains x seen then silenced seen xs else silenced (x :: seen) xs
+
+-- a loop inside a test body runs over fixed test data and is not reported
+test "loop in a test" =
+  let go seen n =
+    if n == 0 then
+      seen
+    else if contains "a" seen then
+      seen
+    else
+      go ("a" :: seen) (n - 1)
+  expectEqual ["a"] (go [] 3)

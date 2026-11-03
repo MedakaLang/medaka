@@ -266,6 +266,7 @@ foldVerdict e = match spineOf e []
     _ => NotAFold
 
 -- Position of the accumulator among a fold lambda's parameters, by name.
+export
 foldAccIndex : String -> Option Int
 foldAccIndex "fold" = Some 0
 foldAccIndex "foldThen" = Some 0

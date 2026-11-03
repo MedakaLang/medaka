@@ -1,0 +1,63 @@
+-- compiler/tools/lint_rule_list_as_set_test.mdk: sibling test for
+-- lint_rule_list_as_set.mdk ([P-TEST-SIBLING], AGENTS.md).  The rule is not in
+-- the registry, and the per-rule fixture harness (lint_rule_fixtures_test.mdk)
+-- runs only registered rules, so this module runs the rule over its fixture
+-- itself.  A line below `-- expect-next-line rule-list-as-set` is a positive;
+-- every other line is a negative.  Run with `medaka test --native`: it reads
+-- the fixture file.
+
+import test.{
+  Expectation, expectAll, expectEqual, expectNotEqual, fail, labelFail
+}
+import test_process.{underRoot}
+import list.{indexed, sort}
+import string.{lines, trim}
+import frontend.ast.{Loc(..)}
+import tools.lint.{
+  Finding(..),
+  applySuppressions,
+  emptyStdlibIndex,
+  lintParseSource,
+  lintProgram,
+}
+import tools.lint_rule_list_as_set.{rule}
+
+fixturePath : <Env "MEDAKA_ROOT"> String
+fixturePath = underRoot "test/lint_unregistered_rule_fixtures/list-as-set.mdk"
+
+marker : String
+marker = "-- expect-next-line rule-list-as-set"
+
+-- The 1-based lines the markers annotate.
+markedLines : String -> List Int
+markedLines src =
+  flatMap
+    ((i, text) => if trim text == marker then [i + 2] else [])
+    (indexed (lines src))
+
+-- The lines the rule flags, after directive suppression.
+flaggedLines : String -> Result String (List Int)
+flaggedLines src = match lintParseSource src
+  Err _ => Err "the fixture does not parse"
+  Ok (decls, pos) =>
+    let findings =
+      applySuppressions
+        src
+        (lintProgram emptyStdlibIndex [rule] "fixture.mdk" src pos decls)
+    Ok (sort (flatMap ((f : Finding) => locLines f.loc) findings))
+
+locLines : Option Loc -> List Int
+locLines (Some (Loc _ line _ _ _)) = [line]
+locLines None = []
+
+fixtureHolds : String -> Expectation
+fixtureHolds src = match flaggedLines src
+  Err e => fail e
+  Ok flagged => expectAll [
+    labelFail "marks a positive" (expectNotEqual [] (markedLines src)),
+    labelFail "flagged lines" (expectEqual (markedLines src) flagged),
+  ]
+
+test "rule-list-as-set fixture" = match readFile fixturePath
+  Err _ => fail "cannot read \{fixturePath}"
+  Ok src => fixtureHolds src
