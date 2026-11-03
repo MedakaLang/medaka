@@ -1,0 +1,163 @@
+[
+  {
+    "id": "import-definition",
+    "category": "imported_definition",
+    "prompt": "Locate the definition used by A.value in main.mdk. Give its file and declaration.",
+    "files": {
+      "main.mdk": "import alpha as A\nimport beta as B\nmain = A.value + B.value\n",
+      "alpha.mdk": "export value = 11\n",
+      "beta.mdk": "export value = 22\n"
+    },
+    "controls": [
+      {
+        "id": "same-name-alias",
+        "question": "Which declaration does B.value use?",
+        "answer": "beta.mdk: export value = 22",
+        "basis": "docs/spec/SYNTAX.md \u00a7 Modules \u2014 import / export"
+      }
+    ],
+    "rubric": [
+      {
+        "id": "definition",
+        "answer": "alpha.mdk: export value = 11",
+        "basis": "docs/spec/SYNTAX.md \u00a7 Modules \u2014 import / export; A is alpha, B is beta"
+      }
+    ]
+  },
+  {
+    "id": "shadow-references",
+    "category": "shadowed_references",
+    "prompt": "In main.mdk identify references to the top-level value named x, excluding declarations.",
+    "files": {
+      "main.mdk": "x = 7\nf x = x + 1\ng = x + 2\nmain = g\n"
+    },
+    "controls": [
+      {
+        "id": "parameter",
+        "question": "What does x in f x = x + 1 refer to?",
+        "answer": "The parameter x of f, not the top-level x",
+        "basis": "Lexical binding: function parameters bind their body; docs/spec/SYNTAX.md functions"
+      }
+    ],
+    "rubric": [
+      {
+        "id": "references",
+        "answer": "Only the x in g = x + 2",
+        "basis": "Lexical binding: parameter x shadows top-level x inside f"
+      }
+    ]
+  },
+  {
+    "id": "stdlib-filter",
+    "category": "stdlib_api_discovery",
+    "prompt": "Find the standard library operation for retaining elements of a list matching a predicate. Give its name and origin.",
+    "files": {
+      "main.mdk": "main = 0\n"
+    },
+    "controls": [
+      {
+        "id": "reexport",
+        "question": "Does importing list make filter available?",
+        "answer": "Yes, list re-exports core.filter",
+        "basis": "stdlib/list.mdk:19"
+      }
+    ],
+    "rubric": [
+      {
+        "id": "api",
+        "answer": "filter, defined/exported by core and re-exported by list",
+        "basis": "stdlib/core.mdk Filterable interface; stdlib/list.mdk:19"
+      }
+    ]
+  },
+  {
+    "id": "repair-diagnostic",
+    "category": "diagnostic_repair",
+    "prompt": "Repair main.mdk so it returns an integer sum of two integers. Explain the change. The separate incomplete.mdk is a control; do not repair it.",
+    "files": {
+      "main.mdk": "main = 1 + \"2\"\n",
+      "incomplete.mdk": "main = 1 +\n"
+    },
+    "controls": [
+      {
+        "id": "incomplete-source",
+        "question": "Is incomplete.mdk a complete expression?",
+        "answer": "No; the right operand is missing",
+        "basis": "docs/spec/SYNTAX.md expressions and binary operators"
+      }
+    ],
+    "rubric": [
+      {
+        "id": "repair",
+        "answer": "Replace \"2\" with 2, giving main = 1 + 2",
+        "basis": "Integer addition requires integer operands; docs/spec/SYNTAX.md numeric types"
+      },
+      {
+        "id": "result",
+        "answer": "3",
+        "basis": "Integer arithmetic"
+      }
+    ]
+  },
+  {
+    "id": "dispatch",
+    "category": "dispatch_explanation",
+    "prompt": "Explain which implementation supplies describe for main and why.",
+    "files": {
+      "main.mdk": "interface Describe a where\n  describe : a -> String\n\nimpl Describe Int where\n  describe x = \"integer\"\n\nimpl Describe String where\n  describe x = \"text\"\n\nmain = describe 4\n"
+    },
+    "controls": [
+      {
+        "id": "other-type",
+        "question": "Which implementation supplies describe \"hi\"?",
+        "answer": "Describe String",
+        "basis": "Argument has type String; docs/spec/SYNTAX.md interfaces"
+      }
+    ],
+    "rubric": [
+      {
+        "id": "implementation",
+        "answer": "Describe Int, because 4 has type Int",
+        "basis": "docs/spec/SYNTAX.md interfaces; impl selection follows receiver type"
+      },
+      {
+        "id": "result",
+        "answer": "integer",
+        "basis": "Describe Int method body in main.mdk"
+      }
+    ]
+  },
+  {
+    "id": "worktree-validation",
+    "category": "compiler_edit_worktree_validation",
+    "prompt": "A compiler source file was edited in worktree B after its medaka binary was built. Worktree A has a fresh binary. Explain how to validate B and whether A can establish B\u2019s changed compiler behavior.",
+    "files": {
+      "scenario.txt": "A and B are separate worktrees. B has an unbuilt compiler source edit. A is built and has no such edit.\n"
+    },
+    "controls": [
+      {
+        "id": "same-path",
+        "question": "If both worktrees have a ./medaka path, does the spelling alone establish identical builds?",
+        "answer": "No; paths do not establish compiler or stdlib identity",
+        "basis": "docs/design/MCP-AGENT-SERVICE.md \u00a7 Workspace and toolchain identity"
+      }
+    ],
+    "rubric": [
+      {
+        "id": "build",
+        "answer": "Build B in place, then run the relevant checks with B\u2019s fresh binary",
+        "basis": "AGENTS.md B-NO-BORROW-ISOLATED and B-STALENESS"
+      },
+      {
+        "id": "identity",
+        "answer": "A cannot establish B\u2019s changed behavior; check B compiler and stdlib fingerprints and workspace",
+        "basis": "docs/design/MCP-AGENT-SERVICE.md \u00a7 Workspace and toolchain identity"
+      },
+      {
+        "id": "staleness",
+        "answer": "Use MEDAKA_STRICT=1 when probing freshness-sensitive commands",
+        "basis": "compiler/driver/medaka_cli.mdk checkSourceStaleness"
+      }
+    ]
+  }
+]
