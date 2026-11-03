@@ -153,7 +153,7 @@ runtimeDecls = [
   fn "void" "mdk_eputstrln" ["i64"],
   fn "void" "mdk_flushstdout" ["i64"],
   fn "void" "mdk_print_unit" [],
-  fn "void" "mdk_panic" ["i64"],
+  noReturn "mdk_panic" ["i64"],
   fn "void" "mdk_exit" ["i64"],
   fn "i64" "mdk_array_make" ["i64", "i64"],
   fn "i64" "mdk_array_copy" ["i64"],
@@ -322,5 +322,6 @@ runtimeDecls = [
   fn "void" "mdk_sleep_ms" ["i64"],
   fn "i64" "mdk_alloc_bytes" ["i64"],
   fn "void" "mdk_stash_run_stdout" ["i64"],
+  fn "void" "mdk_set_abort_report" ["i64", "i64"],
   fn "void" "mdk_enable_run_stdout_flush" ["i64"],
 ]

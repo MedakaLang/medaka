@@ -1189,6 +1189,34 @@ void mdk_stash_run_stdout(long long w) {
   mdk_run_chunk_count++;
 }
 
+/* The abort note and `--json` envelope template, held in malloc memory
+   because the abort path reads them from a signal handler after the GC may
+   have freed the Medaka strings.  An empty string clears its slot. */
+static char *mdk_abort_note = 0;
+static char *mdk_abort_tmpl = 0;
+
+static char *mdk_copy_abort_string(long long w) {
+  const char *cell = (const char *)w;
+  long long byte_len = ((const long long *)cell)[1];
+  if (byte_len == 0) return 0;
+  char *copy = malloc((size_t)byte_len + 1);
+  if (!copy) return 0;
+  memcpy(copy, cell + 24, (size_t)byte_len);
+  copy[byte_len] = 0;
+  return copy;
+}
+
+void mdk_set_abort_report(long long note, long long tmpl) {
+  char *new_note = mdk_copy_abort_string(note);
+  char *new_tmpl = mdk_copy_abort_string(tmpl);
+  char *old_note = mdk_abort_note;
+  char *old_tmpl = mdk_abort_tmpl;
+  mdk_abort_note = new_note;
+  mdk_abort_tmpl = new_tmpl;
+  free(old_note);
+  free(old_tmpl);
+}
+
 /* Async-signal-safe: only word-sized reads and write(2), no allocation, no
    stdio.  Clears the stash first so a re-entrant abort during the flush
    itself (or a later abort path, e.g. mdk_exit after this already ran)

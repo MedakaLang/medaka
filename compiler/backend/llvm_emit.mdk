@@ -2389,6 +2389,11 @@ emitIoExtern e env "stashRunStdout" args = match emitArgs e env args
     emit e (rtLine e "" "void" "mdk_stash_run_stdout" (i64Ops [s]))
     ("1", LTUnit)
   _ => panic "llvm: stashRunStdout takes exactly one argument"
+emitIoExtern e env "setAbortReport" args = match emitArgs e env args
+  [note, tmpl] =>
+    emit e (rtLine e "" "void" "mdk_set_abort_report" (i64Ops [note, tmpl]))
+    ("1", LTUnit)
+  _ => panic "llvm: setAbortReport takes exactly two arguments"
 emitIoExtern e env "enableRunStdoutFlush" args = match emitArgs e env args
   [u] =>
     emit e (rtLine e "" "void" "mdk_enable_run_stdout_flush" (i64Ops [u]))

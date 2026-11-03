@@ -3250,6 +3250,12 @@ pStashRunStdout : Value e -> <e> Value e
 pStashRunStdout (VString s) = let _ = stashRunStdout s in VUnit
 pStashRunStdout _ = panic "stashRunStdout: not a String"
 
+-- Inert, unlike pStashRunStdout: a guest program under the interpreter must
+-- not rewrite the host's abort report, so this never calls the C function.
+pSetAbortReport : Value e -> Value e -> <e> Value e
+pSetAbortReport (VString _) (VString _) = VUnit
+pSetAbortReport _ _ = panic "setAbortReport: not a String"
+
 pEnableRunStdoutFlush : Value e -> <e> Value e
 pEnableRunStdoutFlush _ = let _ = enableRunStdoutFlush () in VUnit
 
@@ -3575,6 +3581,7 @@ externBindings _ = [
   ("ePutStr", prim1M pDiscard),
   ("ePutStrLn", prim1M pDiscard),
   ("stashRunStdout", prim1M pStashRunStdout),
+  ("setAbortReport", prim2M pSetAbortReport),
   ("enableRunStdoutFlush", prim1M pEnableRunStdoutFlush),
   ("panic", prim1 pPanic),
   ("indexError", prim1 (s => runtimePanic EIndexOob (unString s))),

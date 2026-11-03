@@ -471,6 +471,16 @@ runtimeAbiRows = [
     },
   ),
   (
+    "setAbortReport",
+    CallableShape {
+      writtenValueArity = 2,
+      loweredCoreArity = 2,
+      parameterHeads = ["String", "String"],
+      resultHead = "Unit",
+      canonicalSignature = "v1:String -> String -> Unit",
+    },
+  ),
+  (
     "__fallthrough__",
     CallableShape {
       writtenValueArity = 1,

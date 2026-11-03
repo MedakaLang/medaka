@@ -1362,6 +1362,7 @@ docOnlyExcluded = [
   "__fallthrough__",
   "setRef",
   "stashRunStdout",
+  "setAbortReport",
   "enableRunStdoutFlush",
   "assertSnapshot",
   "indexError",
