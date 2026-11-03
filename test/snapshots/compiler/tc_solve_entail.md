@@ -1,5 +1,5 @@
 # META
-source_lines=2401
+source_lines=2403
 stages=DESUGAR,MARK
 # SOURCE
 -- tc_solve_entail: entailment as routes: the judgment `P ⊢ π ⇝ e` at a site (`entail` and its
@@ -1159,6 +1159,8 @@ positionBindings : List Ty ->
 positionBindings [] [] acc = Some acc
 positionBindings (p :: ps) (c :: cs) acc = match matchTyMono p c
   None => None
+  -- Bound: one step per head position of one instance, so a handful of bindings.
+  -- lint-disable-next-line rule-accumulator-append
   Some s => positionBindings ps cs (acc ++ s)
 positionBindings _ _ _ = None
 

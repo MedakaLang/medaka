@@ -262,13 +262,13 @@ allCtors = [
   "Route.RProj", "EvVal.EvOne", "EvVal.EvMany", "EvVal.EvMethod", "EvVal.EvLit",
   "EvVal.EvHead", "EvEntry.EvEntry", "Addr.ALocal", "Addr.AGlobal", "Pat.PVar",
   "Pat.PWild", "Pat.PLit", "Pat.PCon", "Pat.PCons", "Pat.PTuple", "Pat.PList",
-  "Pat.PAs", "Pat.PRng", "Pat.PRec", "RecPatField.RecPatField", "Guard.GBool",
-  "Guard.GBind", "Arm.Arm", "DoStmt.DoExpr", "DoStmt.DoBind", "DoStmt.DoLet",
-  "DoStmt.DoAssign", "DoStmt.DoFieldAssign", "InterpPart.InterpStr",
-  "InterpPart.InterpExpr", "GuardArm.GuardArm", "FieldAssign.FieldAssign",
-  "Section.SecBare", "Section.SecRight", "Section.SecLeft",
-  "FunClause.FunClause", "LetBind.LetBind", "Expr.ELit", "Expr.EVar",
-  "Expr.EApp", "Expr.ELam", "Expr.ELet", "Expr.EMatch", "Expr.EIf",
+  "Pat.PAs", "Pat.PRng", "Pat.PRec", "Pat.PAnn", "RecPatField.RecPatField",
+  "Guard.GBool", "Guard.GBind", "Arm.Arm", "DoStmt.DoExpr", "DoStmt.DoBind",
+  "DoStmt.DoLet", "DoStmt.DoAssign", "DoStmt.DoFieldAssign",
+  "InterpPart.InterpStr", "InterpPart.InterpExpr", "GuardArm.GuardArm",
+  "FieldAssign.FieldAssign", "Section.SecBare", "Section.SecRight",
+  "Section.SecLeft", "FunClause.FunClause", "LetBind.LetBind", "Expr.ELit",
+  "Expr.EVar", "Expr.EApp", "Expr.ELam", "Expr.ELet", "Expr.EMatch", "Expr.EIf",
   "Expr.EBinOp", "Expr.EUnOp", "Expr.EInfix", "Expr.EFieldAccess",
   "Expr.ETuple", "Expr.EListLit", "Expr.EArrayLit", "Expr.ERangeList",
   "Expr.ERangeArray", "Expr.ESlice", "Expr.ELetGroup", "Expr.ESection",
@@ -302,6 +302,7 @@ cornerSource = stringJoin "\n" [
   "  bind c \"stub_add\"",
   "",
   "g = (xs@(x :: _)) => x",
+  "h = (x : Int) => x",
   "m = Map { 1 => 2 }",
   "s = Set { 1, 2 }",
 ]
@@ -726,6 +727,7 @@ dumpPat (PRec a0 a1 a2) = SList [
   dumpList dumpRecPatField a1,
   dumpBool a2,
 ]
+dumpPat (PAnn a0 a1) = SList [SAtom "ctor:Pat.PAnn", dumpPat a0, dumpTy a1]
 
 dumpRecPatField : RecPatField -> SExp
 dumpRecPatField (RecPatField a0 a1 a2 a3) = SList [

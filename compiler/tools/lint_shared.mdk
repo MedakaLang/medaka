@@ -12,7 +12,7 @@ import support.util.{
   contains, filterList, splitOnChar, joinWith, startsWith, listLen, anyList,
   joinNl, dedupBy
 }
-import list.{sortBy, last, reverse}
+import list.{sortBy, last, reverse, findMap}
 import array.{get as arrayGet}
 import string.{split, isUpper, words, unwords}
 import support.path.{stripMdk}
@@ -150,6 +150,10 @@ ruleNameLetUnderscoreUnit = "rule-let-underscore-unit"
 export
 ruleNameDiscardedResult : String
 ruleNameDiscardedResult = "rule-discarded-result"
+
+export
+ruleNameAccumulatorAppend : String
+ruleNameAccumulatorAppend = "rule-accumulator-append"
 
 export
 ruleNamePreferAssignOp : String
@@ -355,6 +359,12 @@ export
 unwrapLoc : Expr -> Expr
 unwrapLoc (ELoc _ e) = unwrapLoc e
 unwrapLoc e = e
+
+-- The span of the first located node in `e`.
+export
+firstLoc : Expr -> Option Loc
+firstLoc (ELoc l _) = Some l
+firstLoc e = findMap firstLoc (childExprs e)
 
 -- ── per-decl source locations (Task B) ─────────────────────────────────────────
 -- `Positions` carries one `DeclPos` per top-level decl, parallel to the decl
@@ -856,6 +866,7 @@ calledName e = match unwrapLoc e
   _ => ""
 
 -- The span of the identifier a use stands on: the innermost `ELoc` over an `EVar`.
+export
 varSite : Expr -> Option Loc
 varSite (ELoc l inner) = match varSite inner
   Some inner2 => Some inner2
@@ -1064,3 +1075,7 @@ lastArmSpan : List Arm -> Option Loc
 lastArmSpan arms = match last arms
   Some (Arm _ _ body) => tightSpan body
   None => None
+
+export
+ruleNameResliceInLoop : String
+ruleNameResliceInLoop = "rule-reslice-in-loop"

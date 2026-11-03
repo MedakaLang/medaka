@@ -3227,6 +3227,8 @@ clausePatGo _ [] _ tAcc bAcc env = (tAcc, bAcc, env)
 clausePatGo prog ((pat, a) :: rest) clLabel tAcc bAcc env =
   let occ = ["local.get $" ++ wParamId a]
   let (t, b, env2) = patTestBind prog pat occ clLabel env
+  -- Bound: one step per clause parameter, bounded by the clause arity.
+  -- lint-disable-next-line rule-accumulator-append
   clausePatGo prog rest clLabel (tAcc ++ t) (bAcc ++ b) env2
 
 -- (tests, binds, env') for matching `pat` against the value snippet `occ`.

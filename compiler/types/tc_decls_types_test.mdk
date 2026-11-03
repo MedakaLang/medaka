@@ -8,14 +8,28 @@
 -- and pushes nothing.  The closed model types of `tc_mono_test` give the property its inputs.
 
 import test.{
+  Expectation,
   expectAll,
   expectEach,
   expectEqual,
   expectFalse,
+  expectTextContainsAll,
   expectTrue,
+  fail,
 }
-import frontend.parser.{parse}
-import frontend.ast.{Decl(..), Ty(..), TyConOrigin(..)}
+import support.diag_codes.{codeText, DiagCode(..)}
+import frontend.desugar.{desugar}
+import frontend.parser.{parse, parseLocated}
+import types.typecheck.{
+  checkModulesDiagsChain,
+  checkOneDiags,
+  defaultDriveInputs,
+  tcCode,
+  tcMsg,
+}
+import types.publish.{TcDiag, tcLoc}
+import frontend.ast.{Decl(..), Loc(..), Ty(..), TyConOrigin(..)}
+import support.util.{listLen}
 import types.repr.{Mono(..), ppMono, ppTy}
 import types.effect_rows.{pureRow}
 import types.tc_mono.{monoUnboundIds, tconBuiltin, tconFrom}
@@ -36,6 +50,7 @@ import types.tc_decls_types.{
   binderDomainsIn,
   checkDeclAuthorityUses,
   checkDeclaredKinds,
+  kindScopeOf,
   checkEffectParams,
   fromAstType,
   kindsEq,
@@ -63,7 +78,7 @@ analyse src =
   let ds = parse src
   let m = ctxFor ds
   recordKindsOf m ds
-  checkDeclaredKinds m ds
+  checkDeclaredKinds m (kindScopeOf m) ds
   checkEffectParams m ds
   checkDeclAuthorityUses m ds
   let monos = map (t => ppMono (fromAstType m [] t)) (sigsOf ds)
@@ -342,3 +357,816 @@ prop "a closed written type converts to the closed Mono of its model, with no di
   ppMono mono == ppMono (expected t)
     && isEmpty (monoUnboundIds mono)
     && isEmpty (codesOf m)
+
+-- ── written-type kinds ────────────────────────────────────────────────────
+
+-- Every error a whole check of [src] reports, with the `Option` the kind
+-- cases apply declared above it.
+checkedDiags : String -> List TcDiag
+checkedDiags src =
+  fst
+    (checkOneDiags defaultDriveInputs [] [] (
+      "kinds",
+      desugar (parseLocated ("data Option a = None | Some a\n" ++ src)),
+    ))
+
+-- The `(code, message)` of every error a whole check of [src] reports.
+checkedErrors : String -> List (String, String)
+checkedErrors src =
+  let errors = checkedDiags src
+  map (e => (codeText (tcCode e), tcMsg e)) errors
+
+-- The `(module, code, message)` of every error a check of [modules] reports,
+-- with [core] the prelude they see.
+moduleErrors : String -> List (String, String) -> List (String, String, String)
+moduleErrors core modules =
+  flatMap
+    ((mid, (_, errors, _)) =>
+      map (e => (mid, codeText (tcCode e), tcMsg e)) errors)
+    (checkModulesDiagsChain
+      defaultDriveInputs
+      None
+      ""
+      []
+      []
+      (desugar (parseLocated core))
+      (map (m => (fst m, desugar (parseLocated (snd m)))) modules))
+
+-- [src] is rejected with exactly one error, a kind error saying [fragment].
+rejectsOnceWith : String -> String -> Expectation
+rejectsOnceWith fragment src = match checkedErrors src
+  [(code, msg)] => expectAll [
+    expectEqual "T-WRITTEN-KIND-MISMATCH" code,
+    expectTextContainsAll [fragment] msg,
+  ]
+  errors => fail "expected exactly one kind error, got \{debug errors}"
+
+optionUnapplied : String
+optionUnapplied = "`Option` expects 1 type argument, got 0; write `Option a`"
+
+test "a constructor written where a type goes is one kind error at that written type" = expectEach
+  [
+    (
+      "an unapplied constructor in a signature",
+      rejectsOnceWith optionUnapplied """
+      f : Option -> Int
+      f _ = 0
+      """,
+    ),
+    (
+      "both sides",
+      rejectsOnceWith optionUnapplied """
+        g : Option -> Option
+        g x = x
+        """,
+    ),
+    (
+      "a record field",
+      rejectsOnceWith optionUnapplied "data R = R { f : Option }\n",
+    ),
+    (
+      "an alias right-hand side used in a signature",
+      rejectsOnceWith optionUnapplied """
+          type O = Option
+          g : O -> Int
+          g _ = 0
+          """,
+    ),
+    (
+      "an impl head at a slot of kind Type",
+      rejectsOnceWith
+        optionUnapplied
+        """
+          interface Shower a where
+            sh : a -> String
+          impl Shower Option where
+            sh _ = "o"
+          """,
+    ),
+    (
+      "a requires argument",
+      rejectsOnceWith
+        "`Option` expects 1 type argument, got 0; write `Option b`"
+        """
+          interface Foo a where
+            foo : a -> Int
+          impl Foo (List a) requires Foo Option where
+            foo _ = 0
+          """,
+    ),
+  ]
+
+-- EFFECTS-SEMANTICS §6.2-§6.3: a variable applied to a constructor takes the
+-- constructor's kind at that argument, so a kind may nest an arrow.
+test "a variable applied to a constructor is of a kind that takes it" = expectEach
+  [
+    (
+      "a signature variable",
+      expectEqual
+        []
+        (checkedErrors
+          """
+            data Holder f = H (f Int)
+            g : f Option -> Int
+            g _ = 7
+            v : Int
+            v = g (H (Some 1))
+            """),
+    ),
+    (
+      "a data parameter",
+      expectEqual
+        []
+        (checkedErrors
+          """
+            data Wrap g = W (g Option)
+            data Holder f = H (f Int)
+            x : Wrap Holder
+            x = W (H (Some 3))
+            """),
+    ),
+    (
+      "a variable passed to another variable",
+      expectEqual
+        []
+        (checkedErrors
+          """
+            data Holder f = H (f Int)
+            g : f h -> h Int -> Int
+            g _ _ = 7
+            v : Int
+            v = g (H (Some 1)) (Some 2)
+            """),
+    ),
+  ]
+
+-- EFFECTS-SEMANTICS §6.2: every use of a variable agrees, so a variable
+-- passed to another takes the kind that one's other uses fix, whichever use
+-- is written first.
+test "a variable passed to a variable takes the kind of that parameter" = expectEach
+  [
+    (
+      "a signature, either use first",
+      expectEqual
+        []
+        (checkedErrors
+          """
+            data Holder f = H (f Int)
+            g1 : f Option -> f h -> Int
+            g1 _ _ = 1
+            g2 : f h -> f Option -> Int
+            g2 _ _ = 2
+            v : Int
+            v = g1 (H (Some 1)) (H [2]) + g2 (H [3]) (H (Some 4))
+            """),
+    ),
+    (
+      "a data head",
+      expectEqual
+        []
+        (checkedErrors
+          """
+            data Holder f = H (f Int)
+            data D2 f h = D2 (f Option) (f h)
+            d2 : D2 Holder List
+            d2 = D2 (H (Some 1)) (H [2])
+            """),
+    ),
+    (
+      "an interface method",
+      expectEqual
+        []
+        (checkedErrors
+          """
+            data Holder f = H (f Int)
+            interface Two f where
+              two : f Option -> f h -> Int
+            impl Two Holder where
+              two _ _ = 5
+            """),
+    ),
+    (
+      "an interface parameter across methods",
+      expectEqual
+        []
+        (checkedErrors
+          """
+            data Holder f = H (f Int)
+            interface Two f where
+              one : f h -> Int
+              two : f Option -> Int
+            impl Two Holder where
+              one _ = 1
+              two _ = 2
+            """),
+    ),
+  ]
+
+test "uses of a variable that disagree are one error in either order" = expectEach
+  [
+    (
+      "the constructor first",
+      rejectsOnceWith
+        "`Int` has kind `Type`, but a type of kind `Type -> Type` is expected here"
+        """
+          g : f Option -> f Int -> Int
+          g _ _ = 0
+          """,
+    ),
+    (
+      "the constructor second",
+      rejectsOnceWith
+        "`Int` has kind `Type`, but a type of kind `Type -> Type` is expected here"
+        """
+          g : f Int -> f Option -> Int
+          g _ _ = 0
+          """,
+    ),
+  ]
+
+-- An interface parameter is judged by the rule a signature variable is.
+test "an interface parameter takes its kind from a head it is passed to and from requires" = expectEach
+  [
+    (
+      "passed bare to a head's constructor parameter",
+      expectEqual
+        []
+        (checkedErrors
+          """
+            data Wrap f a = W (f a)
+            interface Foo f where
+              foo : Wrap f Int -> Int
+            impl Foo Option where
+              foo (W (Some n)) = n
+              foo (W None) = 0
+            """),
+    ),
+    (
+      "a requires clause on a prelude interface",
+      expectEqual
+        []
+        (moduleErrors
+          """
+            public export data Option a = None | Some a
+            interface Mappable f where
+              map : (a -> b) -> f a -> f b
+            impl Mappable Option where
+              map g (Some x) = Some (g x)
+              map _ None = None
+            """
+          [("main", """
+            interface Sub f requires Mappable f
+            impl Sub Option
+            """)]),
+    ),
+    (
+      "a requires clause on an interface of the module",
+      expectEqual
+        []
+        (checkedErrors
+          """
+            interface Mapper f where
+              mmap : (a -> b) -> f a -> f b
+            interface Sub f requires Mapper f
+            impl Mapper Option where
+              mmap g (Some x) = Some (g x)
+              mmap _ None = None
+            impl Sub Option
+            """),
+    ),
+    (
+      "a requires chain declared before the interfaces it requires",
+      expectEqual
+        []
+        (checkedErrors
+          """
+            interface C3 f requires C2 f
+            interface C2 f requires C1 f
+            interface C1 f where
+              c1 : f Int -> Int
+            impl C1 Option where
+              c1 (Some n) = n
+              c1 None = 0
+            impl C2 Option
+            impl C3 Option
+            """),
+    ),
+    (
+      "passed bare to an exported head's constructor parameter",
+      expectEqual
+        []
+        (checkedErrors
+          """
+            public export data Wrap f a = W (f a)
+            export interface Foo f where
+              foo : Wrap f Int -> Int
+            impl Foo Option where
+              foo (W (Some n)) = n
+              foo (W None) = 0
+            """),
+    ),
+  ]
+
+test "a constructor applied to too many arguments is one kind error" = expectEach
+  [
+    (
+      "Option Int Int",
+      rejectsOnceWith
+        "`Option` expects 1 type argument, got 2; remove the extra argument"
+        """
+          h : Option Int Int -> Int
+          h _ = 0
+          """,
+    ),
+    (
+      "Int String",
+      rejectsOnceWith
+        "`Int` expects 0 type arguments, got 1; remove the extra argument"
+        """
+          k : Int String -> Int
+          k _ = 0
+          """,
+    ),
+    (
+      "a data field",
+      rejectsOnceWith
+        "`List` expects 1 type argument, got 2"
+        "data Box = Box (List Int Int)\n",
+    ),
+    (
+      "an interface parameter used at two arities",
+      rejectsOnceWith
+        "`f` expects 2 type arguments, got 1"
+        """
+        interface Mixed f where
+          one : f a -> Int
+          two : f a b -> Int
+        """,
+    ),
+  ]
+
+test "a parameter with no constructor use is of kind Type unless annotated" = expectEach
+  [
+    (
+      "Proxy Option",
+      rejectsOnceWith
+        optionUnapplied
+        """
+          data Proxy t = Proxy
+          p : Proxy Option
+          p = Proxy
+          """,
+    ),
+    (
+      "Proxy Int",
+      expectEqual
+        []
+        (checkedErrors """
+          data Proxy t = Proxy
+          p : Proxy Int
+          p = Proxy
+          """),
+    ),
+    (
+      "an annotated Proxy Option",
+      expectEqual
+        []
+        (checkedErrors
+          """
+            data Proxy (t : Type -> Type) = Proxy
+            p : Proxy Option
+            p = Proxy
+            """),
+    ),
+    (
+      "a method-less interface",
+      rejectsOnceWith optionUnapplied """
+        interface Marker f
+        impl Marker Option
+        """,
+    ),
+  ]
+
+test "a parameter's constructor kind is inferred from its uses" = expectEach [
+  (
+    "applied in a field",
+    expectEqual
+      []
+      (checkedErrors
+        """
+          data Wrap f a = W (f a)
+          w : Wrap Option Int
+          w = W (Some 1)
+          """),
+  ),
+  (
+    "applied in a method",
+    expectEqual
+      []
+      (checkedErrors
+        """
+          interface Mapper f where
+            mapIt : (a -> b) -> f a -> f b
+          impl Mapper Option where
+            mapIt _ _ = None
+          """),
+  ),
+  (
+    "passed on to a head declared above",
+    expectEqual
+      []
+      (checkedErrors
+        """
+          data Wrap f a = W (f a)
+          data W2 f = W2 (Wrap f Int)
+          v : W2 Option
+          v = W2 (W (Some 1))
+          """),
+  ),
+  (
+    "passed on to a head declared below",
+    expectEqual
+      []
+      (checkedErrors
+        """
+          data W2 f = W2 (Wrap f Int)
+          data Wrap f a = W (f a)
+          v : W2 Option
+          v = W2 (W (Some 1))
+          """),
+  ),
+  (
+    "a declared arrow kind keeps its inner arrow",
+    expectEqual
+      []
+      (checkedErrors "data Wrap (g : (Type -> Type) -> Type) = W (g Option)\n"),
+  ),
+  (
+    "Int where a constructor goes",
+    rejectsOnceWith
+      "`Int` has kind `Type`, but a type of kind `Type -> Type` is expected here"
+      """
+        data Wrap f a = W (f a)
+        w : Wrap Int Int -> Int
+        w _ = 0
+        """,
+  ),
+]
+
+-- A lambda parameter's annotation reaches this layer as the expression
+-- annotation desugar makes of it, so it is judged as one.
+test "a lambda parameter's annotation is judged as an expression annotation" = expectEach
+  [
+    (
+      "the annotated name binds",
+      expectEqual [] (checkedErrors """
+        f : Int -> Int
+        f = (x : Int) => x + 1
+        """),
+    ),
+    (
+      "a field read through the annotated parameter",
+      expectEqual
+        []
+        (checkedErrors
+          """
+            data Rec = Rec { fld : Int }
+            g : Rec -> Int
+            g = (r : Rec) => r.fld
+            """),
+    ),
+    (
+      "an unapplied constructor is one kind error",
+      rejectsOnceWith optionUnapplied "f = (x : Option) => 0\n",
+    ),
+    (
+      "inside a tuple parameter",
+      rejectsOnceWith optionUnapplied "f = ((a : Option), b) => b\n",
+    ),
+    (
+      "a written type that disagrees with the use",
+      expectEqual
+        ["T-TYPE-MISMATCH"]
+        (map fst (checkedErrors """
+          f : String -> String
+          f = (x : Int) => x
+          """)),
+    ),
+  ]
+
+-- Desugar checks an annotated pattern that names no value through a name of
+-- its own; no program can bind that name, and in an or-pattern every
+-- alternative still binds the same names.
+test "an annotated pattern is checked through a name no program binds" = expectEach
+  [
+    (
+      "a parameter spelled like an old fresh name is not captured",
+      expectEqual
+        []
+        (checkedErrors
+          """
+            outer : String -> (Int, Int) -> String
+            outer = __annot_0 => ((a, b) : (Int, Int)) => __annot_0
+            """),
+    ),
+    (
+      "an annotation inside one or-pattern alternative",
+      expectEqual
+        []
+        (checkedErrors
+          """
+            data Result a b = Ok a | Err b
+            sumE : Result (Int, Int) (Int, Int) -> Int
+            sumE = (Ok ((a, b) : (Int, Int)) | Err (a, b)) => a + b
+            """),
+    ),
+    (
+      "annotations in several alternatives, over wildcards",
+      expectEqual
+        []
+        (checkedErrors
+          """
+            data T = A (Int, Int) | B (Int, Int) | C Int Int
+            f : T -> Int
+            f = (A ((x, _) : (Int, Int)) | B (_, x) | C x (_ : Int)) => x
+            """),
+    ),
+    (
+      "a disagreeing annotation inside one alternative is one mismatch naming no binder",
+      expectEqual
+        [("T-TYPE-MISMATCH", "type mismatch: Int vs String")]
+        (checkedErrors
+          """
+            data Result a b = Ok a | Err b
+            sumE : Result (Int, Int) (Int, Int) -> Int
+            sumE = (Ok ((a, b) : (String, Int)) | Err (a, b)) => b
+            """),
+    ),
+  ]
+
+-- Without the annotation this program checks clean.
+test "a do-bind annotation is checked against the bound value" =
+  expectEqual
+    [("T-TYPE-MISMATCH", "type mismatch: Int vs String")]
+    (checkedErrors
+      """
+        andThen : Option a -> (a -> Option b) -> Option b
+        andThen o k = match o
+          Some x => k x
+          None => None
+        f : Option Int
+        f = do
+          (a, b) : (String, String) <- Some (3, 4)
+          Some (a + b)
+        """)
+
+-- The `(line, column)` of every kind error a whole check of [src] reports.
+kindErrorStarts : String -> List (Int, Int)
+kindErrorStarts src =
+  let errors = checkedDiags src
+  flatMap
+    (e => match (tcCode e, tcLoc e)
+      (TWrittenKindMismatch, Some (Loc _ l c _ _)) => [(l, c)]
+      _ => [])
+    errors
+
+-- The `(line, column, end line, end column)` of every kind error a whole
+-- check of [src] reports.
+kindErrorSpans : String -> List (Int, Int, Int, Int)
+kindErrorSpans src =
+  flatMap
+    (e => match (tcCode e, tcLoc e)
+      (TWrittenKindMismatch, Some (Loc _ l c el ec)) => [(l, c, el, ec)]
+      _ => [])
+    (checkedDiags src)
+
+-- A type variable carries no position, so an error about one spans the
+-- signature that writes it rather than naming another part of it.
+test "a kind error about a type variable spans its written type" = expectEach [
+  (
+    "a signature variable",
+    expectEqual
+      [(2, 0, 2, 21)]
+      (kindErrorSpans """
+          k : f -> f Int -> Int
+          k _ _ = 0
+          """),
+  ),
+  (
+    "an interface parameter",
+    expectEqual
+      [(3, 2, 3, 15)]
+      (kindErrorSpans
+        """
+          interface M f where
+            ma : f -> Int
+            mb : f Int -> Int
+          """),
+  ),
+]
+
+test "a kind error is located at the written type and carries its own code" = expectEach
+  [
+    (
+      "under-application, at the annotation",
+      expectEqual [(2, 4)] (kindErrorStarts """
+        f : Option -> Int
+        f _ = 0
+        """),
+    ),
+    (
+      "over-application",
+      expectEqual
+        [(2, 4)]
+        (kindErrorStarts """
+          h : Option Int Int -> Int
+          h _ = 0
+          """),
+    ),
+    (
+      "a wrong-kind argument",
+      expectEqual [(2, 4)] (kindErrorStarts """
+        k : Int String -> Int
+        k _ = 0
+        """),
+    ),
+    (
+      "the (,) sugar, at the written constructor",
+      expectEqual [(2, 4)] (kindErrorStarts """
+        t : (,) -> Int
+        t _ = 0
+        """),
+    ),
+  ]
+
+-- A fix that writes arguments names them apart from the type's variables,
+-- and a constructor whose expected kind comes from a variable's inferred
+-- kind is not told to take arguments: the variable may be what is wrong.
+test "a fix hint is given only where it is right" = expectEach [
+  (
+    "a variable's fix names an argument apart from it",
+    rejectsOnceWith
+      "`a` expects 1 type argument, got 0; write `a b`"
+      """
+        interface M f where
+          mm : f a -> Int
+        interface Foo a where
+          foo : a -> Int
+        impl Foo (List a) requires M a where
+          foo _ = 0
+        """,
+  ),
+  (
+    "a constructor at a variable's argument",
+    rejectsOnceWith
+      "`Option` has kind `Type -> Type`, but a type of kind `Type` is expected here"
+      "data W (f : Type -> Type) = W (f Option)\n",
+  ),
+]
+
+test "an unapplied (,) is told to write a tuple" =
+  rejectsOnceWith
+    "`(,)` expects 2 type arguments, got 0; write `(a, b)`"
+    """
+      t : (,) -> Int
+      t _ = 0
+      """
+
+-- One ill-kinded annotation is ONE kind error, wherever its consequences land.
+test "an ill-kinded annotation inside an applied lambda is one kind error" =
+  expectEqual
+    1
+    (listLen (kindErrorStarts """
+      h : Int -> Int
+      h n = ((x : Option) => 0) n
+      """))
+
+-- A rejected written type converts to a variable, so the kind error is the
+-- only error it causes, wherever the program passes a value through it.
+test "a rejected written type causes no second error at its uses" = expectEach [
+  (
+    "a use of the signature",
+    rejectsOnceWith
+      optionUnapplied
+      """
+        f : Option -> Int
+        f _ = 0
+        main = f (Some 3)
+        """,
+  ),
+  (
+    "uses at two types",
+    rejectsOnceWith
+      optionUnapplied
+      """
+        f : Option -> Int
+        f _ = 0
+        main = f (Some 3) + f [1]
+        """,
+  ),
+  (
+    "an applied lambda's annotation",
+    rejectsOnceWith
+      optionUnapplied
+      """
+        h : Int -> Int
+        h n = ((x : Option) => 0) n
+        """,
+  ),
+  (
+    "a let annotation",
+    rejectsOnceWith
+      optionUnapplied
+      """
+        h : Int -> Int
+        h n =
+          let _ = (n : Option)
+          n
+        """,
+  ),
+  (
+    "an expression annotation",
+    rejectsOnceWith optionUnapplied """
+      k : Int
+      k = (3 : Option)
+      """,
+  ),
+  (
+    "two rejected occurrences in one signature",
+    rejectsOnceWith
+      optionUnapplied
+      """
+        f : Option -> Option
+        f x = x
+        main = f (Some 3)
+        """,
+  ),
+  (
+    "an alias whose right-hand side is rejected",
+    rejectsOnceWith
+      optionUnapplied
+      """
+        type O = Option
+        g : O -> Int
+        g _ = 0
+        main = g (Some 1)
+        """,
+  ),
+  (
+    "an interface method's type in an impl body",
+    rejectsOnceWith
+      "`Option` expects 1 type argument, got 0; write `Option b`"
+      """
+        interface Foo a where
+          foo : a -> Option
+        impl Foo Int where
+          foo _ = Some 1
+        """,
+  ),
+]
+
+-- The recovery judges each written type where it converts, so an imported
+-- alias at the span of a rejected occurrence of the importer converts as
+-- written and its own mismatch is reported.
+test "a rejected written type hides no error in another module's type" =
+  expectEqual
+    [
+      (
+        "main",
+        "T-WRITTEN-KIND-MISMATCH",
+        "`Option` expects 1 type argument, got 0; write `Option a`",
+      ),
+      ("main", "T-TYPE-MISMATCH", "type mismatch: String vs Option Int"),
+    ]
+    (moduleErrors "public export data Option a = None | Some a\n" [
+      ("al", """
+        -- line 1
+        -- line 2
+        export type O = Option Int
+        """),
+      (
+        "main",
+        """
+          import al.{O}
+          -- line 2
+          zzzzzzzzzzzzz : Option -> Int
+          zzzzzzzzzzzzz _ = 0
+          h : O -> String
+          h x = x
+          """,
+      ),
+    ])
+
+test "a kind error does not hide an independent type error" =
+  expectEqual
+    ["T-WRITTEN-KIND-MISMATCH", "T-TYPE-MISMATCH"]
+    (map
+      fst
+      (checkedErrors
+        """
+          f : Option -> Int
+          f _ = 0
+          g : Int -> String
+          g n = n
+          main = f (Some 3)
+          """))

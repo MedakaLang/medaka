@@ -440,6 +440,7 @@ relocClause o (FunClause ps b) = FunClause (map (relocPat o) ps) (relocExpr o b)
 relocPat : (BinderId -> BinderId) -> Pat -> Pat
 relocPat o (PVar n l bid) = PVar n l (o bid)
 relocPat o (PAs n l bid p) = PAs n l (o bid) (relocPat o p)
+relocPat o (PAnn p t) = PAnn (relocPat o p) t
 relocPat o (PCon c ps) = PCon c (map (relocPat o) ps)
 relocPat o (PCons h t) = PCons (relocPat o h) (relocPat o t)
 relocPat o (PTuple ps) = PTuple (map (relocPat o) ps)

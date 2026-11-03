@@ -1,5 +1,5 @@
 # META
-source_lines=1227
+source_lines=1231
 stages=DESUGAR,MARK
 # SOURCE
 -- Tests for the substring search and replace functions in `stdlib/string.mdk`.
@@ -479,6 +479,8 @@ refCountOccurrences needle hay
 refCountGo : String -> String -> Int -> Int -> Int
 refCountGo needle hay i acc
   | i + stringLength needle > stringLength hay = acc
+  -- Bound: reference oracle over short test strings, kept as the codepoint definition.
+  -- lint-disable-next-line rule-reslice-in-loop
   | stringSlice i (i + stringLength needle) hay == needle =
     refCountGo needle hay (i + stringLength needle) (acc + 1)
   | otherwise = refCountGo needle hay (i + 1) acc
@@ -493,6 +495,8 @@ refLastIndexOf needle hay
 refLastGo : String -> String -> Int -> Option Int -> Option Int
 refLastGo needle hay i acc
   | i + stringLength needle > stringLength hay = acc
+  -- Bound: reference oracle over short test strings, kept as the codepoint definition.
+  -- lint-disable-next-line rule-reslice-in-loop
   | stringSlice i (i + stringLength needle) hay == needle =
     refLastGo needle hay (i + 1) (Some i)
   | otherwise = refLastGo needle hay (i + 1) acc

@@ -138,13 +138,17 @@ public export data ObligationSite = ObligationSite {
 public export data RecordInfo =
   RecordInfo (List Int) (List Int) Mono (List (String, Mono)) (OrdMap Mono)
 
--- Kind of a data-type parameter, inferred from usage: KRow iff the param name
--- appears in a field's effect-tail position (`<e>`), else KType.  Drives
--- kind-aware type-app elaboration (a KRow arg becomes a TEff row, not a TApp
--- tyvar) and ctor-result-type construction.  Per-type, positional.
+-- Kind of a data-type parameter (EFFECTS-SEMANTICS §6.1-§6.3): `Effect` (KRow)
+-- and `Authority` (KAuth) only where the head declares them, otherwise `Type`
+-- or an arrow over `Type` (`declKindEntriesIn`).  Drives kind-aware type-app
+-- elaboration (a KRow arg becomes a TEff row, not a TApp tyvar) and
+-- ctor-result-type construction.  Per-type, positional.
 -- A `KAuth` slot's flag is the `*` of `Authority L*`: the slot takes only a
 -- pattern of the label's domain (EFFECTS-SEMANTICS §4.1).
-public export data Kind = KType | KRow | KAuth EffLabel Bool
+-- A `KArrow` parameter is itself a constructor (`f` in `data Wrap f a = W (f a)`
+-- is `KArrow KType KType`); arrows nest to the right, as §6.1's `Kind -> Kind`
+-- does, and elaborate an argument as a type, exactly as `KType` does.
+public export data Kind = KType | KRow | KAuth EffLabel Bool | KArrow Kind Kind
 
 -- ── #1119 D-2 (#1098 / #1121): per-parameter VARIANCE ─────────────────────
 -- Variance of a data-type parameter, inferred from how it OCCURS in the
@@ -386,7 +390,7 @@ public export data DeclEnvs = DeclEnvs {
   deIfaces : ClassEnv,  -- A-3.3 (#1519) built it; A-3.5c (#1557) made it LIVE — three readers, see the `CE` block
   deMethods : MethodEnv,  -- #2563: the method namespace by declaration identity, read at the reader's ordinal — see `MethodEnv`
   deKindsBefore : OrdMap (List (TabKey, List Kind)),
-  deNameIndexBefore : OrdMap (OrdMap Unit),  -- #2158: `deKindsBefore`'s BARE-NAME twin, the SAME rows' `tabKeyName`s as a membership set — see `declEnvSeedChain`
+  deNameIndexBefore : OrdMap (OrdMap (List (TabKey, List Kind))),  -- #2158: `deKindsBefore`'s BARE-NAME twin, the SAME rows bucketed by `tabKeyName` (`tabNameIndex`) — see `declEnvSeedChain`
   dePolaritiesBefore : OrdMap (List (TabKey, List Polarity)),  -- #1119 D-2: `deKindsBefore`'s VARIANCE twin — see `declEnvPolarityChain`
   deAtomsBefore : OrdMap (List (TabKey, List (List Atom))),  -- #2110 S2-1: `deKindsBefore`'s ATOM-GUARANTEE twin — see `declEnvRowAtomsChain`
   deOwnersBefore : OrdMap (OrdMap (List String)),
@@ -496,10 +500,10 @@ public export data DeclEnvAcc = DeclEnvAcc {
 public export data DeclEnvSeedAcc = DeclEnvSeedAcc {
   dsKAcc : List (TabKey, List Kind),
   dsOAcc : OrdMap (List String),
-  dsNAcc : OrdMap Unit,
+  dsNAcc : OrdMap (List (TabKey, List Kind)),
   dsKinds : OrdMap (List (TabKey, List Kind)),
   dsOwners : OrdMap (OrdMap (List String)),
-  dsNames : OrdMap (OrdMap Unit),
+  dsNames : OrdMap (OrdMap (List (TabKey, List Kind))),
 }
 
 public export data DataTypeDecl = DataTypeDecl {
@@ -820,10 +824,8 @@ public export data ImplAcc = ImplAcc {
 -- is `declGradedScope typarams methods`, computed ONCE per interface exactly
 -- as `methodRowsInto` already does, not re-derived
 -- per method; its raw `Super` list, unelaborated; its per-typaram kind
--- signature, POSITIONAL with `ceTyparams` — `ifaceParamKindsOf p methods` for
--- each `p`, the SAME pure computation `registerIfaceParamKindsGo` performs
--- per slot, so a graded interface's `KRow` inference cannot drift between the
--- live universe and this table; and, since #1557 A-3.5a, its REQUIRED-method
+-- signature, POSITIONAL with `ceTyparams` — each parameter's resolved slot
+-- kinds (`ifaceParamKindsDecl`); and, since #1557 A-3.5a, its REQUIRED-method
 -- names — `requiredMethodNames methods`, the SAME pure computation the retired
 -- `universeIfaceRequiredRef` writer (`insertIfaceRequired`) stored under the
 -- SAME `regKeyOfTab (ifaceTabKey ifaceOrigin name)` key, so relocating
@@ -2035,7 +2037,7 @@ public export data ModuleCells = ModuleCells {
   recordByNameRef : Ref (OrdMap RecordInfo),
   fieldOwnersRef : Ref (OrdMap (List String)),
   dataParamKindsRef : Ref (List (TabKey, List Kind)),
-  dataParamNameIndexRef : Ref (OrdMap Unit),  -- #2158: `tabKeyName`-only index over dataParamKindsRef's keys, kept in lockstep at every write site (freshModuleCtx / declEnvSeedDataUniverse / recordParamKinds) so `noImplHintFor`'s bare-name membership test is O(1)-ish instead of an O(n) `tabHasName` scan. Same bare-name semantics as `tabHasName` — collapses TkIdent/TkBare and module identity by design (#1111 A-2.3), not a stricter key.
+  dataParamNameIndexRef : Ref (OrdMap (List (TabKey, List Kind))),  -- #2158: dataParamKindsRef's rows bucketed by `tabKeyName`, each bucket in the list's order (`tabNameIndex`), kept in lockstep at every write site (freshModuleCtx / declEnvSeedDataUniverse / recordParamKinds) so `noImplHintFor`'s bare-name membership test and a head's kind lookup (`kindScopeOf`) are O(log n) instead of an O(n) scan. Same bare-name semantics as `tabHasName` — collapses TkIdent/TkBare and module identity by design (#1111 A-2.3), not a stricter key.
   dataParamPolarityRef : Ref (List (TabKey, List Polarity)),  -- #1119 D-2: `dataParamKindsRef`'s VARIANCE twin — same key, same prepend/first-match discipline.  Read ONLY through `paramPolaritiesOf` (which seeds the two write channels).
   dataParamRowAtomsRef : Ref (List (TabKey, List (List Atom))),  -- #2110: the ATOM-GUARANTEE twin of the two above — per KRow parameter, the atoms this declaration charges at EVERY occurrence of that parameter.  Read ONLY through `paramRowAtomsOf`.
   aliasTableRef : Ref (List (TabKey, (List String, Ty))),

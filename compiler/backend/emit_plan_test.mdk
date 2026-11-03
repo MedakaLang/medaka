@@ -541,6 +541,8 @@ renameRetirementTokens text names (t :: ts) ((start, end) :: spans) offset =
   match t
     TIdent n => match omLookup n names
       Some replacement =>
+        -- Bound: text is the printed ASCII source of one retirement fixture, where a slice costs its own length.
+        -- lint-disable-next-line rule-reslice-in-loop
         sliceClamped offset start text
           :: replacement
           :: renameRetirementTokens text names ts spans end

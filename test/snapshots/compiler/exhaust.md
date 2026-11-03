@@ -1,5 +1,5 @@
 # META
-source_lines=1241
+source_lines=1243
 stages=DESUGAR,MARK
 # SOURCE
 -- Self-hosted exhaust stage — standalone
@@ -391,6 +391,7 @@ desugarPat _ (PList []) = PCon listNilCtor []
 desugarPat oracle (PList (h :: rest)) =
   PCon listConsCtor [desugarPat oracle h, desugarPat oracle (PList rest)]
 desugarPat oracle (PAs _ _ _ p) = desugarPat oracle p
+desugarPat oracle (PAnn p _) = desugarPat oracle p
 desugarPat oracle (PRec name fields _) =
   desugarRecPat oracle (oracleCtorName oracle name) fields
 desugarPat _ (PRng lo hi incl) = PRng lo hi incl
@@ -845,6 +846,7 @@ isIrrefutablePat (PTuple ps) = allList isIrrefutablePat ps
 isIrrefutablePat (PAs _ _ _ p) = isIrrefutablePat p
 isIrrefutablePat (POr ps) = anyList isIrrefutablePat ps
 isIrrefutablePat (PRec _ fields _) = allList recFieldIrrefutable fields
+isIrrefutablePat (PAnn p _) = isIrrefutablePat p
 isIrrefutablePat _ = False
 
 recFieldIrrefutable : RecPatField -> Bool
@@ -1345,6 +1347,7 @@ exhaustToLines prog = exhaustToLinesWith prog prog
 (DFunDef false "desugarPat" (PWild (PCon "PList" (PList))) (EApp (EApp (EVar "PCon") (EVar "listNilCtor")) (EListLit)))
 (DFunDef false "desugarPat" ((PVar "oracle") (PCon "PList" (PCons (PVar "h") (PVar "rest")))) (EApp (EApp (EVar "PCon") (EVar "listConsCtor")) (EListLit (EApp (EApp (EVar "desugarPat") (EVar "oracle")) (EVar "h")) (EApp (EApp (EVar "desugarPat") (EVar "oracle")) (EApp (EVar "PList") (EVar "rest"))))))
 (DFunDef false "desugarPat" ((PVar "oracle") (PCon "PAs" PWild PWild PWild (PVar "p"))) (EApp (EApp (EVar "desugarPat") (EVar "oracle")) (EVar "p")))
+(DFunDef false "desugarPat" ((PVar "oracle") (PCon "PAnn" (PVar "p") PWild)) (EApp (EApp (EVar "desugarPat") (EVar "oracle")) (EVar "p")))
 (DFunDef false "desugarPat" ((PVar "oracle") (PCon "PRec" (PVar "name") (PVar "fields") PWild)) (EApp (EApp (EApp (EVar "desugarRecPat") (EVar "oracle")) (EApp (EApp (EVar "oracleCtorName") (EVar "oracle")) (EVar "name"))) (EVar "fields")))
 (DFunDef false "desugarPat" (PWild (PCon "PRng" (PVar "lo") (PVar "hi") (PVar "incl"))) (EApp (EApp (EApp (EVar "PRng") (EVar "lo")) (EVar "hi")) (EVar "incl")))
 (DFunDef false "desugarPat" ((PVar "oracle") (PCon "POr" (PVar "alts"))) (EApp (EVar "POr") (EApp (EApp (EVar "map") (EApp (EVar "desugarPat") (EVar "oracle"))) (EVar "alts"))))
@@ -1507,6 +1510,7 @@ exhaustToLines prog = exhaustToLinesWith prog prog
 (DFunDef false "isIrrefutablePat" ((PCon "PAs" PWild PWild PWild (PVar "p"))) (EApp (EVar "isIrrefutablePat") (EVar "p")))
 (DFunDef false "isIrrefutablePat" ((PCon "POr" (PVar "ps"))) (EApp (EApp (EVar "anyList") (EVar "isIrrefutablePat")) (EVar "ps")))
 (DFunDef false "isIrrefutablePat" ((PCon "PRec" PWild (PVar "fields") PWild)) (EApp (EApp (EVar "allList") (EVar "recFieldIrrefutable")) (EVar "fields")))
+(DFunDef false "isIrrefutablePat" ((PCon "PAnn" (PVar "p") PWild)) (EApp (EVar "isIrrefutablePat") (EVar "p")))
 (DFunDef false "isIrrefutablePat" (PWild) (EVar "False"))
 (DTypeSig false "recFieldIrrefutable" (TyFun (TyCon "RecPatField") (TyCon "Bool")))
 (DFunDef false "recFieldIrrefutable" ((PCon "RecPatField" PWild PWild PWild (PCon "None"))) (EVar "True"))
@@ -1776,6 +1780,7 @@ exhaustToLines prog = exhaustToLinesWith prog prog
 (DFunDef false "desugarPat" (PWild (PCon "PList" (PList))) (EApp (EApp (EVar "PCon") (EVar "listNilCtor")) (EListLit)))
 (DFunDef false "desugarPat" ((PVar "oracle") (PCon "PList" (PCons (PVar "h") (PVar "rest")))) (EApp (EApp (EVar "PCon") (EVar "listConsCtor")) (EListLit (EApp (EApp (EVar "desugarPat") (EVar "oracle")) (EVar "h")) (EApp (EApp (EVar "desugarPat") (EVar "oracle")) (EApp (EVar "PList") (EVar "rest"))))))
 (DFunDef false "desugarPat" ((PVar "oracle") (PCon "PAs" PWild PWild PWild (PVar "p"))) (EApp (EApp (EVar "desugarPat") (EVar "oracle")) (EVar "p")))
+(DFunDef false "desugarPat" ((PVar "oracle") (PCon "PAnn" (PVar "p") PWild)) (EApp (EApp (EVar "desugarPat") (EVar "oracle")) (EVar "p")))
 (DFunDef false "desugarPat" ((PVar "oracle") (PCon "PRec" (PVar "name") (PVar "fields") PWild)) (EApp (EApp (EApp (EVar "desugarRecPat") (EVar "oracle")) (EApp (EApp (EVar "oracleCtorName") (EVar "oracle")) (EVar "name"))) (EVar "fields")))
 (DFunDef false "desugarPat" (PWild (PCon "PRng" (PVar "lo") (PVar "hi") (PVar "incl"))) (EApp (EApp (EApp (EVar "PRng") (EVar "lo")) (EVar "hi")) (EVar "incl")))
 (DFunDef false "desugarPat" ((PVar "oracle") (PCon "POr" (PVar "alts"))) (EApp (EVar "POr") (EApp (EApp (EMethodRef "map") (EApp (EVar "desugarPat") (EVar "oracle"))) (EVar "alts"))))
@@ -1938,6 +1943,7 @@ exhaustToLines prog = exhaustToLinesWith prog prog
 (DFunDef false "isIrrefutablePat" ((PCon "PAs" PWild PWild PWild (PVar "p"))) (EApp (EVar "isIrrefutablePat") (EVar "p")))
 (DFunDef false "isIrrefutablePat" ((PCon "POr" (PVar "ps"))) (EApp (EApp (EVar "anyList") (EVar "isIrrefutablePat")) (EVar "ps")))
 (DFunDef false "isIrrefutablePat" ((PCon "PRec" PWild (PVar "fields") PWild)) (EApp (EApp (EVar "allList") (EVar "recFieldIrrefutable")) (EVar "fields")))
+(DFunDef false "isIrrefutablePat" ((PCon "PAnn" (PVar "p") PWild)) (EApp (EVar "isIrrefutablePat") (EVar "p")))
 (DFunDef false "isIrrefutablePat" (PWild) (EVar "False"))
 (DTypeSig false "recFieldIrrefutable" (TyFun (TyCon "RecPatField") (TyCon "Bool")))
 (DFunDef false "recFieldIrrefutable" ((PCon "RecPatField" PWild PWild PWild (PCon "None"))) (EVar "True"))

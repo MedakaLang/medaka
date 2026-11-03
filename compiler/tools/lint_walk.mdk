@@ -80,7 +80,7 @@ import support.util.{
 }
 import hash_map.{HashMap, new, get, setInPlace, has}
 import list.{take, drop, indexed, nub}
-import string.{indexOf, lines}
+import string.{indexOf, lines, split as splitString}
 import array.{fromList}
 import tools.printer.{declToString}
 import support.path.{dirOf, stripMdk}
@@ -1362,14 +1362,7 @@ parseLintFlagList prefix (x :: rest)
 -- (see mcp.mdk's `lintNameListArg`).
 export
 splitLintNames : String -> List String
-splitLintNames s = splitLintNamesGo (stringToChars s) s 0 0 (stringLength s)
-
-splitLintNamesGo : Array Char -> String -> Int -> Int -> Int -> List String
-splitLintNamesGo chars s start i n
-  | i >= n = [stringSlice start n s]
-  | arrayGetUnsafe i chars == ',' =
-    stringSlice start i s :: splitLintNamesGo chars s (i + 1) (i + 1) n
-  | otherwise = splitLintNamesGo chars s start (i + 1) n
+splitLintNames s = splitString "," s
 
 -- Apply finding-level filters.  Operates on Finding.rule (a String) so no
 -- Rule-record field access is needed by the caller.

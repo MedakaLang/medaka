@@ -13,6 +13,7 @@ aliasDfsVisitNeighbors : Map String (List String) -> Ref (Map String Unit) -> Re
 aliasExpansionStep : List (TabKey, (List String, Ty)) -> Ty -> Option (TabKey, Ty)
 ambigRowsOf : String -> Map String (List (String, String)) -> List String -> List (String, List String)
 ambiguousExportRows : String -> List (String, (String, String)) -> List (String, List String)
+asWritten : ModuleCtx -> List (String, Mono) -> Ty -> (Ty, List (String, Mono))
 astTypeFreshTbl : ModuleCtx -> Ty -> (Mono, List (String, Mono))
 atSignature : ModuleCtx -> Ty -> (ModuleCtx -> a) -> a
 binderIsPattern : GraphCtx -> List (String, Option EffAtomTy) -> List String -> String -> Bool
@@ -50,7 +51,7 @@ declEnvReachSeed : String -> Map String Unit
 declEnvRowAtomEntries : GraphCtx -> List Decl -> List (TabKey, List (List Atom))
 declEnvRowAtomsChain : GraphCtx -> List DeclEnvModule -> (List (TabKey, List (List Atom)), Map String (List (TabKey, List (List Atom)))) -> (List (TabKey, List (List Atom)), Map String (List (TabKey, List (List Atom))))
 declEnvRowAtomsEntries : GraphCtx -> Int -> DeclEnvModule -> List (TabKey, List (List Atom))
-declEnvRowKindEntries : GraphCtx -> Int -> DeclEnvModule -> List (TabKey, List Kind)
+declEnvRowKindEntries : GraphCtx -> Int -> DeclEnvModule -> List (TabKey, List Kind) -> List (TabKey, List Kind)
 declEnvRowsFrom : GraphCtx -> Int -> List (String, List Decl) -> List DeclEnvModule
 declEnvSeedChain : GraphCtx -> List DeclEnvModule -> DeclEnvSeedAcc -> DeclEnvSeedAcc
 declEnvSeedDataUniverse : ModuleCtx -> String -> DeclEnvs -> Unit
@@ -65,6 +66,7 @@ emitCyclicAliasErrors : ModuleCtx -> List Decl -> List (TabKey, (List String, Ty
 existentialCells : ModuleCtx -> List (String, KindAnn) -> List (String, Ref Authvar)
 fieldNameOf : Field -> String
 firstRowPerName : Map String Unit -> List (String, (String, String)) -> List (String, (String, String))
+freshTblWith : (ModuleCtx -> List (String, Mono) -> Ty -> (Ty, List (String, Mono))) -> ModuleCtx -> Ty -> (Mono, List (String, Mono))
 graphAliasRow : Decl -> List (TabKey, (List String, Ty))
 groupDefinerPairs : Map String (List (String, String)) -> List (String, (String, String)) -> Map String (List (String, String))
 headAnnotTy : ModuleCtx -> Ty -> Mono
@@ -104,12 +106,13 @@ privateModuleExports : List Decl -> ModuleBindings -> List (String, ExportBindin
 pubTopFnNames : List Decl -> List String
 publicModuleExports : List Decl -> ModuleBindings -> List (String, ExportBinding)
 recordCtors : GraphCtx -> TyConOrigin -> String -> DataVis -> List String -> List Variant -> Unit
-recordDeclKinds : ModuleCtx -> Decl -> Unit
-recordDeclParamKinds : ModuleCtx -> Decl -> Unit
+recordDeclKinds : ModuleCtx -> List Decl -> Unit
+recordDeclKindsAs : ModuleCtx -> Option (TabKey, List Kind) -> Decl -> Unit
 recordDeclaredKinds : ModuleCtx -> Decl -> Unit
 recordExistentials : GraphCtx -> List (String, Ref Authvar) -> Unit
 recordParamKinds : ModuleCtx -> TyConOrigin -> String -> List Kind -> Unit
 recordParamRowAtoms : ModuleCtx -> TyConOrigin -> String -> List (List Atom) -> Unit
+recordSolvedKinds : ModuleCtx -> TyConOrigin -> String -> Option (TabKey, List Kind) -> Unit
 reexportCtorMember : UseMember -> List (String, String, Ident) -> List (String, String, Ident)
 reexportDefiners : Map String (List (String, (String, String))) -> List UsePath -> List (String, (String, String))
 reexportDefinersOf : Map String (List (String, (String, String))) -> UsePath -> List (String, (String, String))

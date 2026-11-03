@@ -787,6 +787,7 @@ patShape (PLit (LInt n)) = intToString n
 patShape (PTuple ps) = "(tuple \{joinWith " " (map patShape ps)})"
 patShape (PAs x _ _ p) = "\{x}@\{patShape p}"
 patShape (PCons h t) = "(\{patShape h} :: \{patShape t})"
+patShape (PAnn p _) = "(ann \{patShape p})"
 patShape _ = "?"
 
 armShape : Arm -> String
@@ -956,3 +957,57 @@ test "a range pattern mixing a byte bound with an integer or character bound is 
       parseMsg "f x = match x\n  'a'..=b'z' => 1\n  _ => 0\n",
       parseMsg "f x = match x\n  b'a'..=b'z' => 1\n  _ => 0\n",
     )
+
+-- ── annotated binding patterns ────────────────────────────────────────────
+
+lambdaParamShapes : String -> List String
+lambdaParamShapes src = match declBody src
+  Ok (ELam ps _) => map patShape ps
+  Ok _ => ["not a lambda"]
+  Err m => [m]
+
+test "a lambda parameter keeps its annotation as a pattern" = expectEach [
+  (
+    "#2826",
+    expectEqual ["(ann x)"] (lambdaParamShapes "f = (x : Int) => x + 1\n"),
+  ),
+  (
+    "two annotated parameters",
+    expectEqual
+      ["(ann x)", "(ann y)"]
+      (lambdaParamShapes "f = (x : Int) (y : String) => y\n"),
+  ),
+  (
+    "inside a tuple",
+    expectEqual
+      ["(tuple (ann a) b)"]
+      (lambdaParamShapes "f = ((a : Int), b) => a\n"),
+  ),
+  (
+    "around a constructor pattern",
+    expectEqual
+      ["(ann (Some x))"]
+      (lambdaParamShapes "f = (Some x : Option Int) => x\n"),
+  ),
+  (
+    "an unannotated parameter list is unchanged",
+    expectEqual ["x", "(tuple a b)"] (lambdaParamShapes "f = x (a, b) => x\n"),
+  ),
+]
+
+test "formatting an annotated lambda parameter is stable and keeps the annotation" =
+  let src =
+    """f = (x : Int) => x + 1
+
+g = (x : Int) (y : List String) => y
+
+h = ((a : Int), b) => a + b
+
+k = (Some x : Option Int) => x
+
+m = (f : Int -> Int) => f 1
+"""
+  expectAll [
+    expectEqual src (formatSource src),
+    expectEqual (formatSource src) (formatSource (formatSource src)),
+  ]

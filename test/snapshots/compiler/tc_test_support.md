@@ -1,5 +1,5 @@
 # META
-source_lines=459
+source_lines=462
 stages=DESUGAR,MARK
 # SOURCE
 -- tc_test_support: the fixtures the `tc_*_test` siblings of `compiler/types` share: a fresh
@@ -60,6 +60,7 @@ import types.tc_env.{
   implAccFinish,
   methodEnvGo,
   ordinaryEnvBinding,
+  tabNameIndexOnto,
   tyTabKey,
 }
 import types.scopes.{ScopeOwner(..), freshScope, openScopeCursor}
@@ -225,7 +226,9 @@ recordKinds m o n kinds
     m.mcCells.dataParamKindsRef :=
       (tyTabKey o n, kinds) :: m.mcCells.dataParamKindsRef.value
     m.mcCells.dataParamNameIndexRef :=
-      omInsert n () m.mcCells.dataParamNameIndexRef.value
+      tabNameIndexOnto
+        [(tyTabKey o n, kinds)]
+        m.mcCells.dataParamNameIndexRef.value
   | otherwise = ()
 
 -- A module declaring `Sizeable` with its method `size`, and `impl Sizeable Int`.
@@ -445,7 +448,7 @@ envsOfModules m modules =
           (snd (snd p)))
       (zip (range 0 (length modules)) modules)
   (
-    classEnvFinish (buildClassEnvGo m.mcGraph dms emptyClassEnv),
+    classEnvFinish (buildClassEnvGo m.mcGraph [] dms emptyClassEnv),
     implAccFinish (buildImplEnvGo dms emptyDeclEnvAcc.daImpls),
   )
 
@@ -476,7 +479,7 @@ oblOver iface args = UObligation {
 (DUse false (UseGroup ("types" "publish") ((mem "tcCode" false) (mem "tcMsg" false))))
 (DUse false (UseGroup ("types" "tc_decls") ((mem "kindIsDeclared" false) (mem "registerData" false))))
 (DUse false (UseGroup ("types" "tc_scope") ((mem "insertRecordPop" false))))
-(DUse false (UseGroup ("types" "tc_env") ((mem "buildClassEnvGo" false) (mem "buildImplEnvGo" false) (mem "classEnvFinish" false) (mem "declEnvModule" false) (mem "declParamKinds" false) (mem "emptyDeclEnvAcc" false) (mem "bindingWithStandalone" false) (mem "envFor" false) (mem "extendBindings" false) (mem "implAccFinish" false) (mem "methodEnvGo" false) (mem "ordinaryEnvBinding" false) (mem "tyTabKey" false))))
+(DUse false (UseGroup ("types" "tc_env") ((mem "buildClassEnvGo" false) (mem "buildImplEnvGo" false) (mem "classEnvFinish" false) (mem "declEnvModule" false) (mem "declParamKinds" false) (mem "emptyDeclEnvAcc" false) (mem "bindingWithStandalone" false) (mem "envFor" false) (mem "extendBindings" false) (mem "implAccFinish" false) (mem "methodEnvGo" false) (mem "ordinaryEnvBinding" false) (mem "tabNameIndexOnto" false) (mem "tyTabKey" false))))
 (DUse false (UseGroup ("types" "scopes") ((mem "ScopeOwner" true) (mem "freshScope" false) (mem "openScopeCursor" false))))
 (DUse false (UseGroup ("types" "tc_state") ((mem "blankModuleCtx" false) (mem "currentScopeStore" false) (mem "emptyClassEnv" false) (mem "freshModuleCtx" false) (mem "probeGraphCtx" false) (mem "wAll" false))))
 (DUse false (UseGroup ("types" "evidence") ((mem "ScopeId" true))))
@@ -535,7 +538,7 @@ oblOver iface args = UObligation {
 (DFunDef false "recordKindsOf" ((PVar "m") (PCons (PRec "DTypeAlias" ((rf "tyAliasName" (PVar "n")) (rf "tyAliasParams" (PVar "ps")) (rf "tyAliasParamKinds" (PVar "anns")) (rf "tyAliasOrigin" (PVar "o"))) false) (PVar "rest"))) (EBlock (DoExpr (EApp (EApp (EApp (EApp (EVar "recordKinds") (EVar "m")) (EVar "o")) (EVar "n")) (EApp (EApp (EApp (EVar "declParamKinds") (EFieldAccess (EVar "m") "mcGraph")) (EVar "ps")) (EVar "anns")))) (DoExpr (EApp (EApp (EVar "recordKindsOf") (EVar "m")) (EVar "rest")))))
 (DFunDef false "recordKindsOf" ((PVar "m") (PCons PWild (PVar "rest"))) (EApp (EApp (EVar "recordKindsOf") (EVar "m")) (EVar "rest")))
 (DTypeSig false "recordKinds" (TyFun (TyCon "ModuleCtx") (TyFun (TyCon "TyConOrigin") (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "Kind")) (TyCon "Unit"))))))
-(DFunDef false "recordKinds" ((PVar "m") (PVar "o") (PVar "n") (PVar "kinds")) (EIf (EApp (EApp (EVar "any") (EVar "kindIsDeclared")) (EVar "kinds")) (EBlock (DoExpr (EApp (EApp (EVar "setRef") (EFieldAccess (EFieldAccess (EVar "m") "mcCells") "dataParamKindsRef")) (EBinOp "::" (ETuple (EApp (EApp (EVar "tyTabKey") (EVar "o")) (EVar "n")) (EVar "kinds")) (EFieldAccess (EFieldAccess (EFieldAccess (EVar "m") "mcCells") "dataParamKindsRef") "value")))) (DoExpr (EApp (EApp (EVar "setRef") (EFieldAccess (EFieldAccess (EVar "m") "mcCells") "dataParamNameIndexRef")) (EApp (EApp (EApp (EVar "omInsert") (EVar "n")) (ELit LUnit)) (EFieldAccess (EFieldAccess (EFieldAccess (EVar "m") "mcCells") "dataParamNameIndexRef") "value"))))) (EIf (EVar "otherwise") (ELit LUnit) (EApp (EVar "__fallthrough__") (ELit LUnit)))))
+(DFunDef false "recordKinds" ((PVar "m") (PVar "o") (PVar "n") (PVar "kinds")) (EIf (EApp (EApp (EVar "any") (EVar "kindIsDeclared")) (EVar "kinds")) (EBlock (DoExpr (EApp (EApp (EVar "setRef") (EFieldAccess (EFieldAccess (EVar "m") "mcCells") "dataParamKindsRef")) (EBinOp "::" (ETuple (EApp (EApp (EVar "tyTabKey") (EVar "o")) (EVar "n")) (EVar "kinds")) (EFieldAccess (EFieldAccess (EFieldAccess (EVar "m") "mcCells") "dataParamKindsRef") "value")))) (DoExpr (EApp (EApp (EVar "setRef") (EFieldAccess (EFieldAccess (EVar "m") "mcCells") "dataParamNameIndexRef")) (EApp (EApp (EVar "tabNameIndexOnto") (EListLit (ETuple (EApp (EApp (EVar "tyTabKey") (EVar "o")) (EVar "n")) (EVar "kinds")))) (EFieldAccess (EFieldAccess (EFieldAccess (EVar "m") "mcCells") "dataParamNameIndexRef") "value"))))) (EIf (EVar "otherwise") (ELit LUnit) (EApp (EVar "__fallthrough__") (ELit LUnit)))))
 (DTypeSig true "libSource" (TyCon "String"))
 (DFunDef false "libSource" () (ELit (LString "interface Sizeable a where\n  size : a -> Int\nimpl Sizeable Int where\n  size n = n\n")))
 (DTypeSig true "declaredIn" (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyApp (TyCon "List") (TyCon "Decl")))))
@@ -590,7 +593,7 @@ oblOver iface args = UObligation {
 (DTypeSig true "envsOf" (TyFun (TyCon "ModuleCtx") (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyTuple (TyCon "ClassEnv") (TyCon "ImplEnv")))))
 (DFunDef false "envsOf" ((PVar "m") (PVar "ds")) (EApp (EApp (EVar "envsOfModules") (EVar "m")) (EListLit (ETuple (ELit (LString "m")) (EVar "ds")))))
 (DTypeSig true "envsOfModules" (TyFun (TyCon "ModuleCtx") (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "Decl")))) (TyTuple (TyCon "ClassEnv") (TyCon "ImplEnv")))))
-(DFunDef false "envsOfModules" ((PVar "m") (PVar "modules")) (EBlock (DoLet false false (PVar "dms") (EApp (EApp (EVar "map") (ELam ((PVar "p")) (EApp (EApp (EApp (EApp (EVar "declEnvModule") (EFieldAccess (EVar "m") "mcGraph")) (EBinOp "+" (EVar "moduleOrdinal") (EApp (EVar "fst") (EVar "p")))) (EApp (EVar "fst") (EApp (EVar "snd") (EVar "p")))) (EApp (EVar "snd") (EApp (EVar "snd") (EVar "p")))))) (EApp (EApp (EVar "zip") (EApp (EApp (EVar "range") (ELit (LInt 0))) (EApp (EVar "length") (EVar "modules")))) (EVar "modules")))) (DoExpr (ETuple (EApp (EVar "classEnvFinish") (EApp (EApp (EApp (EVar "buildClassEnvGo") (EFieldAccess (EVar "m") "mcGraph")) (EVar "dms")) (EVar "emptyClassEnv"))) (EApp (EVar "implAccFinish") (EApp (EApp (EVar "buildImplEnvGo") (EVar "dms")) (EFieldAccess (EVar "emptyDeclEnvAcc") "daImpls")))))))
+(DFunDef false "envsOfModules" ((PVar "m") (PVar "modules")) (EBlock (DoLet false false (PVar "dms") (EApp (EApp (EVar "map") (ELam ((PVar "p")) (EApp (EApp (EApp (EApp (EVar "declEnvModule") (EFieldAccess (EVar "m") "mcGraph")) (EBinOp "+" (EVar "moduleOrdinal") (EApp (EVar "fst") (EVar "p")))) (EApp (EVar "fst") (EApp (EVar "snd") (EVar "p")))) (EApp (EVar "snd") (EApp (EVar "snd") (EVar "p")))))) (EApp (EApp (EVar "zip") (EApp (EApp (EVar "range") (ELit (LInt 0))) (EApp (EVar "length") (EVar "modules")))) (EVar "modules")))) (DoExpr (ETuple (EApp (EVar "classEnvFinish") (EApp (EApp (EApp (EApp (EVar "buildClassEnvGo") (EFieldAccess (EVar "m") "mcGraph")) (EListLit)) (EVar "dms")) (EVar "emptyClassEnv"))) (EApp (EVar "implAccFinish") (EApp (EApp (EVar "buildImplEnvGo") (EVar "dms")) (EFieldAccess (EVar "emptyDeclEnvAcc") "daImpls")))))))
 (DTypeSig true "oblOver" (TyFun (TyCon "IfaceRef") (TyFun (TyApp (TyCon "List") (TyCon "Mono")) (TyCon "UObligation"))))
 (DFunDef false "oblOver" ((PVar "iface") (PVar "args")) (ERecordCreate "UObligation" ((fa "pred" (ERecordCreate "Predicate" ((fa "iface" (EVar "iface")) (fa "args" (EVar "args"))))) (fa "originId" (ELit (LInt 0))) (fa "prov" (EVar "PNumLit")) (fa "loc" (EVar "None")) (fa "uoScope" (EApp (EVar "ScopeId") (ELit (LInt 0)))) (fa "oblProj" (EVar "OpProjected")))))
 # MARK
@@ -608,7 +611,7 @@ oblOver iface args = UObligation {
 (DUse false (UseGroup ("types" "publish") ((mem "tcCode" false) (mem "tcMsg" false))))
 (DUse false (UseGroup ("types" "tc_decls") ((mem "kindIsDeclared" false) (mem "registerData" false))))
 (DUse false (UseGroup ("types" "tc_scope") ((mem "insertRecordPop" false))))
-(DUse false (UseGroup ("types" "tc_env") ((mem "buildClassEnvGo" false) (mem "buildImplEnvGo" false) (mem "classEnvFinish" false) (mem "declEnvModule" false) (mem "declParamKinds" false) (mem "emptyDeclEnvAcc" false) (mem "bindingWithStandalone" false) (mem "envFor" false) (mem "extendBindings" false) (mem "implAccFinish" false) (mem "methodEnvGo" false) (mem "ordinaryEnvBinding" false) (mem "tyTabKey" false))))
+(DUse false (UseGroup ("types" "tc_env") ((mem "buildClassEnvGo" false) (mem "buildImplEnvGo" false) (mem "classEnvFinish" false) (mem "declEnvModule" false) (mem "declParamKinds" false) (mem "emptyDeclEnvAcc" false) (mem "bindingWithStandalone" false) (mem "envFor" false) (mem "extendBindings" false) (mem "implAccFinish" false) (mem "methodEnvGo" false) (mem "ordinaryEnvBinding" false) (mem "tabNameIndexOnto" false) (mem "tyTabKey" false))))
 (DUse false (UseGroup ("types" "scopes") ((mem "ScopeOwner" true) (mem "freshScope" false) (mem "openScopeCursor" false))))
 (DUse false (UseGroup ("types" "tc_state") ((mem "blankModuleCtx" false) (mem "currentScopeStore" false) (mem "emptyClassEnv" false) (mem "freshModuleCtx" false) (mem "probeGraphCtx" false) (mem "wAll" false))))
 (DUse false (UseGroup ("types" "evidence") ((mem "ScopeId" true))))
@@ -667,7 +670,7 @@ oblOver iface args = UObligation {
 (DFunDef false "recordKindsOf" ((PVar "m") (PCons (PRec "DTypeAlias" ((rf "tyAliasName" (PVar "n")) (rf "tyAliasParams" (PVar "ps")) (rf "tyAliasParamKinds" (PVar "anns")) (rf "tyAliasOrigin" (PVar "o"))) false) (PVar "rest"))) (EBlock (DoExpr (EApp (EApp (EApp (EApp (EVar "recordKinds") (EVar "m")) (EVar "o")) (EVar "n")) (EApp (EApp (EApp (EVar "declParamKinds") (EFieldAccess (EVar "m") "mcGraph")) (EVar "ps")) (EVar "anns")))) (DoExpr (EApp (EApp (EVar "recordKindsOf") (EVar "m")) (EVar "rest")))))
 (DFunDef false "recordKindsOf" ((PVar "m") (PCons PWild (PVar "rest"))) (EApp (EApp (EVar "recordKindsOf") (EVar "m")) (EVar "rest")))
 (DTypeSig false "recordKinds" (TyFun (TyCon "ModuleCtx") (TyFun (TyCon "TyConOrigin") (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "Kind")) (TyCon "Unit"))))))
-(DFunDef false "recordKinds" ((PVar "m") (PVar "o") (PVar "n") (PVar "kinds")) (EIf (EApp (EApp (EDictApp "any") (EVar "kindIsDeclared")) (EVar "kinds")) (EBlock (DoExpr (EApp (EApp (EVar "setRef") (EFieldAccess (EFieldAccess (EVar "m") "mcCells") "dataParamKindsRef")) (EBinOp "::" (ETuple (EApp (EApp (EVar "tyTabKey") (EVar "o")) (EVar "n")) (EVar "kinds")) (EFieldAccess (EFieldAccess (EFieldAccess (EVar "m") "mcCells") "dataParamKindsRef") "value")))) (DoExpr (EApp (EApp (EVar "setRef") (EFieldAccess (EFieldAccess (EVar "m") "mcCells") "dataParamNameIndexRef")) (EApp (EApp (EApp (EVar "omInsert") (EVar "n")) (ELit LUnit)) (EFieldAccess (EFieldAccess (EFieldAccess (EVar "m") "mcCells") "dataParamNameIndexRef") "value"))))) (EIf (EVar "otherwise") (ELit LUnit) (EApp (EVar "__fallthrough__") (ELit LUnit)))))
+(DFunDef false "recordKinds" ((PVar "m") (PVar "o") (PVar "n") (PVar "kinds")) (EIf (EApp (EApp (EDictApp "any") (EVar "kindIsDeclared")) (EVar "kinds")) (EBlock (DoExpr (EApp (EApp (EVar "setRef") (EFieldAccess (EFieldAccess (EVar "m") "mcCells") "dataParamKindsRef")) (EBinOp "::" (ETuple (EApp (EApp (EVar "tyTabKey") (EVar "o")) (EVar "n")) (EVar "kinds")) (EFieldAccess (EFieldAccess (EFieldAccess (EVar "m") "mcCells") "dataParamKindsRef") "value")))) (DoExpr (EApp (EApp (EVar "setRef") (EFieldAccess (EFieldAccess (EVar "m") "mcCells") "dataParamNameIndexRef")) (EApp (EApp (EVar "tabNameIndexOnto") (EListLit (ETuple (EApp (EApp (EVar "tyTabKey") (EVar "o")) (EVar "n")) (EVar "kinds")))) (EFieldAccess (EFieldAccess (EFieldAccess (EVar "m") "mcCells") "dataParamNameIndexRef") "value"))))) (EIf (EVar "otherwise") (ELit LUnit) (EApp (EVar "__fallthrough__") (ELit LUnit)))))
 (DTypeSig true "libSource" (TyCon "String"))
 (DFunDef false "libSource" () (ELit (LString "interface Sizeable a where\n  size : a -> Int\nimpl Sizeable Int where\n  size n = n\n")))
 (DTypeSig true "declaredIn" (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyApp (TyCon "List") (TyCon "Decl")))))
@@ -722,6 +725,6 @@ oblOver iface args = UObligation {
 (DTypeSig true "envsOf" (TyFun (TyCon "ModuleCtx") (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyTuple (TyCon "ClassEnv") (TyCon "ImplEnv")))))
 (DFunDef false "envsOf" ((PVar "m") (PVar "ds")) (EApp (EApp (EVar "envsOfModules") (EVar "m")) (EListLit (ETuple (ELit (LString "m")) (EVar "ds")))))
 (DTypeSig true "envsOfModules" (TyFun (TyCon "ModuleCtx") (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "Decl")))) (TyTuple (TyCon "ClassEnv") (TyCon "ImplEnv")))))
-(DFunDef false "envsOfModules" ((PVar "m") (PVar "modules")) (EBlock (DoLet false false (PVar "dms") (EApp (EApp (EMethodRef "map") (ELam ((PVar "p")) (EApp (EApp (EApp (EApp (EVar "declEnvModule") (EFieldAccess (EVar "m") "mcGraph")) (EBinOp "+" (EVar "moduleOrdinal") (EApp (EVar "fst") (EVar "p")))) (EApp (EVar "fst") (EApp (EVar "snd") (EVar "p")))) (EApp (EVar "snd") (EApp (EVar "snd") (EVar "p")))))) (EApp (EApp (EVar "zip") (EApp (EApp (EVar "range") (ELit (LInt 0))) (EApp (EMethodRef "length") (EVar "modules")))) (EVar "modules")))) (DoExpr (ETuple (EApp (EVar "classEnvFinish") (EApp (EApp (EApp (EVar "buildClassEnvGo") (EFieldAccess (EVar "m") "mcGraph")) (EVar "dms")) (EVar "emptyClassEnv"))) (EApp (EVar "implAccFinish") (EApp (EApp (EVar "buildImplEnvGo") (EVar "dms")) (EFieldAccess (EVar "emptyDeclEnvAcc") "daImpls")))))))
+(DFunDef false "envsOfModules" ((PVar "m") (PVar "modules")) (EBlock (DoLet false false (PVar "dms") (EApp (EApp (EMethodRef "map") (ELam ((PVar "p")) (EApp (EApp (EApp (EApp (EVar "declEnvModule") (EFieldAccess (EVar "m") "mcGraph")) (EBinOp "+" (EVar "moduleOrdinal") (EApp (EVar "fst") (EVar "p")))) (EApp (EVar "fst") (EApp (EVar "snd") (EVar "p")))) (EApp (EVar "snd") (EApp (EVar "snd") (EVar "p")))))) (EApp (EApp (EVar "zip") (EApp (EApp (EVar "range") (ELit (LInt 0))) (EApp (EMethodRef "length") (EVar "modules")))) (EVar "modules")))) (DoExpr (ETuple (EApp (EVar "classEnvFinish") (EApp (EApp (EApp (EApp (EVar "buildClassEnvGo") (EFieldAccess (EVar "m") "mcGraph")) (EListLit)) (EVar "dms")) (EVar "emptyClassEnv"))) (EApp (EVar "implAccFinish") (EApp (EApp (EVar "buildImplEnvGo") (EVar "dms")) (EFieldAccess (EVar "emptyDeclEnvAcc") "daImpls")))))))
 (DTypeSig true "oblOver" (TyFun (TyCon "IfaceRef") (TyFun (TyApp (TyCon "List") (TyCon "Mono")) (TyCon "UObligation"))))
 (DFunDef false "oblOver" ((PVar "iface") (PVar "args")) (ERecordCreate "UObligation" ((fa "pred" (ERecordCreate "Predicate" ((fa "iface" (EVar "iface")) (fa "args" (EVar "args"))))) (fa "originId" (ELit (LInt 0))) (fa "prov" (EVar "PNumLit")) (fa "loc" (EVar "None")) (fa "uoScope" (EApp (EVar "ScopeId") (ELit (LInt 0)))) (fa "oblProj" (EVar "OpProjected")))))

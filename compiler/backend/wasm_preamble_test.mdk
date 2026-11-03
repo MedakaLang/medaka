@@ -69,10 +69,11 @@ identEnd : String -> Int -> Int
 identEnd line j =
   if j >= stringLength line then
     j
-  else if contains (stringSlice j (j + 1) line) [" ", "(", ")", "\""] then
-    j
   else
-    identEnd line (j + 1)
+    -- Bound: line is one line of generated WAT (ASCII), where a one-character slice is O(1).
+    -- lint-disable-next-line rule-reslice-in-loop
+    let c = stringSlice j (j + 1) line
+    if contains c [" ", "(", ")", "\""] then j else identEnd line (j + 1)
 
 codeLines : List String -> List String
 codeLines = filter (l => not (stringStartsWith ";;" (trimAscii l)))

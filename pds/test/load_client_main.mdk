@@ -36,7 +36,7 @@ import io.{eprintln}
 import net.{Connection, close, connect, recv, sendAll, setTimeout}
 import string.{join, lines, padLeft, split, startsWith, toInt, trim}
 import time.{Duration, elapsedSince, millis, monotonic, seconds, sleep}
-import test.response_support.{findHeaderEnd}
+import test.response_support.{findHeaderEnd, recvChunks}
 
 -- # The corpus this client reads
 
@@ -243,17 +243,10 @@ parseHeaderBlock headerBytes = match map lines (decodeUtf8 headerBytes)
     len <- contentLengthOf rest
     Ok (status, len)
 
+-- Chunks are collected newest-first with a running length and joined once.
 recvAtLeast : Connection * -> Bytes -> Int -> <Net> Result String Bytes
 recvAtLeast conn buf need =
-  if B.length buf >= need then
-    Ok buf
-  else match recv conn 65536
-    Err message => Err message
-    Ok chunk =>
-      if B.isEmpty chunk then
-        Err "load_client: connection closed mid-response"
-      else
-        recvAtLeast conn (buf ++ chunk) need
+  recvChunks "load_client" conn [buf] (B.length buf) need
 
 {- | Reads one complete response: status, body, and bytes buffered past it.
 
@@ -281,6 +274,8 @@ readOneResponse conn pending = match findHeaderEnd pending 0
       if B.isEmpty chunk then
         Err "load_client: connection closed before response headers"
       else
+        -- Bound: the loop ends at the header terminator, so the buffer is one response head plus at most one chunk.
+        -- lint-disable-next-line rule-accumulator-append
         readOneResponse conn (pending ++ chunk)
 
 -- A request that has not answered within this is a failed request, not a slow

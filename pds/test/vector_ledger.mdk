@@ -429,7 +429,7 @@ conflictFindings seen (s :: rest) =
   if pin == "" then
     conflictFindings seen rest
   else match find (p => value "id" p == pin) seen
-    None => conflictFindings (seen ++ [s]) rest
+    None => conflictFindings (s :: seen) rest
     Some first =>
       let here =
         if value "commit" first /= value "commit" s then
@@ -565,7 +565,7 @@ duplicateFindings seen (s :: rest) =
   if file == "" then
     duplicateFindings seen rest
   else match find (p => value "file" p == file) seen
-    None => duplicateFindings (seen ++ [s]) rest
+    None => duplicateFindings (s :: seen) rest
     Some first =>
       [
           "duplicate row: [vector] stanzas at line \{intToString first.line} and line \{intToString s.line} both name file \"\{file}\"",

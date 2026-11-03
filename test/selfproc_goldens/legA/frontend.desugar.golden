@@ -1,9 +1,16 @@
 andAll : List Expr -> Expr
 andLeft : Expr -> List Expr -> Expr
+annotCheck : String -> Ty -> Expr
+annotChecks : List Expr -> Expr -> Expr
+annotGuard : List Expr -> Guard
+annotName : Int -> String
+annotsOut : Pat -> Int -> (Pat, List Expr, Int)
+annotsOutOf : List Pat -> Int -> (List Pat, List Expr, Int)
 appliedHead : String -> List String -> Ty
 appliedHeadGo : Ty -> List String -> Ty
 applyDeriveParams : String -> List String -> List (Option KindAnn) -> Decl -> Decl
 armChain : List Guard -> Expr -> Expr -> Expr
+armHasAnnot : Arm -> Bool
 assignIndexLhs : Expr -> Expr -> Expr -> EvId -> Expr
 attribHead : List Attr -> List Decl -> List Decl
 binMethod : String -> String -> String -> Expr -> ImplMethod
@@ -39,13 +46,21 @@ desugarRecordPuns : List Decl -> List Decl
 doCont : Pat -> Expr -> Expr
 doResultLoc : List DoStmt -> Option Loc
 doStmtLoc : DoStmt -> Option Loc
+dropAnnots : Pat -> Pat
+dropBinders : Pat -> Pat
+dropFieldAnnots : RecPatField -> RecPatField
+dropFieldBinders : RecPatField -> RecPatField
 eqArms : List Variant -> List Arm
 eqBody : Int -> List String -> List String -> Expr
 eqSameConArm : Variant -> Arm
+eraseArmAnnots : Arm -> Arm
+eraseLamAnnots : List Pat -> Expr -> Expr
+eraseMatchAnnots : Expr -> List Arm -> Expr
 expandDecl : Decl -> List Decl
 exprLoc : Expr -> Option Loc
 exprSpanLoc : Expr -> Option Loc
 fallthrough : Expr
+fieldAnnotsOut : List RecPatField -> Int -> (List RecPatField, List Expr, Int)
 firstDoStmtLoc : List DoStmt -> Option Loc
 foldlMethods : (Map String IfaceMethod, List String) -> List IfaceMethod -> (Map String IfaceMethod, List String)
 freshBinderId : String -> BinderId
@@ -54,6 +69,8 @@ genVarsGo : String -> Int -> Int -> List String
 genericArm : Variant -> Arm
 genericRFields : List Field -> List String -> List Expr
 genericRep : String -> ConPayload -> List String -> Expr
+guardHasAnnot : Guard -> Bool
+guardsAnnotsOut : List Guard -> Int -> List Guard
 guardsToCore : List GuardArm -> Expr
 hashArm : (Int, Variant) -> Arm
 hashFold : Expr -> List String -> Expr
@@ -97,6 +114,9 @@ methodAt : Map String IfaceMethod -> String -> IfaceMethod
 methodName : IfaceMethod -> String
 moduleAliases : List Decl -> List String
 newtypeDerivers : String -> List String -> List (Option KindAnn) -> String -> Ty -> List (String, Unit -> Decl)
+orAlternatives : Pat -> List Pat
+orAnnotsOut : List Pat -> Int -> (Pat, List Expr, Int)
+orCheckArms : List Pat -> Int -> (List Arm, Int)
 ordArms : List Variant -> List Arm
 ordBody : Int -> Int -> List String -> List String -> Expr
 ordCell : Int -> Variant -> (Int, Variant) -> Arm

@@ -5,8 +5,8 @@ import types.interface_sexp.{invocationViewSExp, invocationViewOfSExp}
 -- and decode with its text, its rendering and its ids intact; malformed text
 -- is refused with its path.
 import test.{
-  Expectation, expectEqual, expectEach, expectAll, expectAtLeast, labelFail,
-  fail
+  Expectation, expectEqual, expectEach, expectAll, expectAtLeast,
+  expectTextContainsAll, labelFail, fail
 }
 import list.{sort, indexed, take, drop}
 import map as M
@@ -14,7 +14,7 @@ import string as S
 import frontend.ast.{
   Decl, TyConOrigin(..), Ty(..), EffAtomTy(..), EffParamTy(..), Constraint(..),
   Variant(..), ConPayload(..), Field(..), Ns(..), TabKey(..), DataVis(..),
-  Ident, Loc(..), mkIdent
+  Ident, Loc(..), mkIdent, tabKeyOf
 }
 import frontend.desugar.{desugar, desugarIn}
 import frontend.parser.{parse, parseLocated}
@@ -59,8 +59,9 @@ import types.effect_rows.{EffRow(..), Effvar(..), Atom, atomBuiltin}
 import types.effect_authority.{Authority(..)}
 import types.effect_domain.{Param(..)}
 import types.tc_types.{
-  DriveInputs, RecordInfo(..), PredicateSlot(..), PredicateSlotArgs(..),
-  MethodPredicateSlot(..), CDeclaredPrefix(..), BuiltinClasses(..)
+  DriveInputs, Kind(..), PublishedInvocationView(..), RecordInfo(..),
+  PredicateSlot(..), PredicateSlotArgs(..), MethodPredicateSlot(..),
+  CDeclaredPrefix(..), BuiltinClasses(..)
 }
 import types.typecheck.{
   checkModulesChainReportFor, checkModulesEntryFullReportK, defaultDriveInputs,
@@ -543,6 +544,20 @@ shapesRow =
 
 test "the shapes no published row holds round-trip" =
   roundTrips ("shapes", shapesRow)
+
+-- No prelude head has a constructor parameter, so no published view holds an
+-- arrow kind; `Wrap f a` here stands for one that does.
+test "an arrow kind round-trips through the invocation view" =
+  let view = PublishedInvocationView [] [] [
+    (tabKeyOf NsType (OriginModule "m") "Wrap", [KArrow KType KType, KType]),
+  ]
+  let render = v => [renderSExp (invocationViewSExp v)]
+  expectAll [
+    law invocationViewSExp (nested invocationViewOfSExp) render "kinds" view,
+    expectTextContainsAll
+      ["(arrow type type)"]
+      (renderSExp (invocationViewSExp view)),
+  ]
 
 -- Every node kind the grammar names but `unresolved`, which no published row
 -- holds; the origin test above carries it.
@@ -1674,10 +1689,10 @@ test "a malformed file is refused" = match preludeInterface
         expectEqual
           (Some (
             "header/medaka-interface.1",
-            "4: format version 4, this compiler reads 3",
+            "5: format version 5, this compiler reads 4",
           ))
           (failureOf
-            "(medaka-interface 4 (sources ()) (compiler c) (sections 0))\n"),
+            "(medaka-interface 5 (sources ()) (compiler c) (sections 0))\n"),
       ),
       (
         "truncated in the header",

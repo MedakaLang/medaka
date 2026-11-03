@@ -126,6 +126,7 @@ import types.tc_env.{
   ceRowSupers,
   ceRowTyparams,
   ceSlotKindsAt,
+  kindOfParams,
   constraintSlotDispatchVar,
   declGradedScope,
   effTailNames,
@@ -162,11 +163,14 @@ import types.tc_unify.{
   unifyInto,
 }
 import types.tc_decls_types.{
+  KindScope,
   authArgBindersIn,
   bindingForceFromAst,
   fromAstType,
   fromAstTypeE,
   kindsEq,
+  recoveredScope,
+  reportWrittenKinds,
   patternSlotNamesIn,
   rowArgNamesIn,
   sigConstraintsOf,
@@ -316,22 +320,70 @@ import map as IdMap
 -- only the interface's declared slot kinds come from stage K's `CE`.  Re-pointing this
 -- walk at `IE.ieRows` changes what the check reads, which is a routing decision, not a
 -- refactor.
+--
+-- Every impl head is also judged as a written type (EFFECTS-SEMANTICS §6.2): each
+-- head type at its interface slot's kind, and each `requires` argument at its
+-- interface's, a graded slot excepted (`reportWrittenKinds`), [sc] the module's.
 export
-checkGradedImplHeads : ModuleCtx -> ClassEnv -> Int -> List Decl -> Unit
-checkGradedImplHeads _mctx _ _ [] = ()
-checkGradedImplHeads mctx ce cur (d :: rest) =
-  checkGradedImplHeadDecl mctx ce cur d
-  checkGradedImplHeads mctx ce cur rest
+checkGradedImplHeads : ModuleCtx ->
+  KindScope ->
+  ClassEnv ->
+  Int ->
+  List Decl ->
+  Unit
+checkGradedImplHeads mctx sc ce cur prog =
+  each (checkGradedImplHeadDecl mctx sc ce cur) prog
 
 -- `implOrigin` is the identity the interface name in `impl <iface> …` acquired at
 -- resolve, read off the same record pattern as the name itself so the two cannot drift
 -- apart (as `tyConOrigin` is read beside `tyConName`).
-checkGradedImplHeadDecl : ModuleCtx -> ClassEnv -> Int -> Decl -> Unit
-checkGradedImplHeadDecl mctx ce cur (DAttrib _ d) =
-  checkGradedImplHeadDecl mctx ce cur d
-checkGradedImplHeadDecl mctx ce cur (DImpl { iface, tys, implOrigin = o, ... }) =
+checkGradedImplHeadDecl : ModuleCtx ->
+  KindScope ->
+  ClassEnv ->
+  Int ->
+  Decl ->
+  Unit
+checkGradedImplHeadDecl mctx sc ce cur (DAttrib _ d) =
+  checkGradedImplHeadDecl mctx sc ce cur d
+checkGradedImplHeadDecl mctx sc ce cur (DImpl { iface, tys, reqs, implOrigin = o, implIfaceLoc = loc, ... }) =
   checkGradedImplTys mctx ce cur o iface 0 tys
-checkGradedImplHeadDecl _mctx _ _ _ = ()
+  reportWrittenKinds
+    mctx
+    sc
+    []
+    loc
+    (implSlotKinds ce cur o iface 0 tys ++ flatMap (requireSlotKinds sc) reqs)
+checkGradedImplHeadDecl _mctx _ _ _ _ = ()
+
+-- Each impl head type with its interface slot's kind, `None` for a slot not known.
+implSlotKinds : ClassEnv ->
+  Int ->
+  TyConOrigin ->
+  String ->
+  Int ->
+  List Ty ->
+  List (Option Kind, Ty)
+implSlotKinds ce cur o iface i0 tys0 = go i0 tys0
+  where
+    go _ [] = []
+    go i (t :: rest) =
+      (
+          map
+            kindOfParams
+            (ceSlotKindsAt (regKeyOfTab (ifaceTabKey o iface)) cur i ce),
+          t,
+        )
+        :: go (i + 1) rest
+
+requireSlotKinds : KindScope -> Require -> List (Option Kind, Ty)
+requireSlotKinds sc (Require { requireHead = n, requireOrigin = o, requireArgs = args }) =
+  slotKindsFor (optionOr [] (sc.ksIfaces o n)) args
+
+-- Argument i at the i-th of [kinds]; an argument past them at no known kind.
+slotKindsFor : List Kind -> List Ty -> List (Option Kind, Ty)
+slotKindsFor _ [] = []
+slotKindsFor (k :: ks) (t :: ts) = (Some k, t) :: slotKindsFor ks ts
+slotKindsFor [] (t :: ts) = (None, t) :: slotKindsFor [] ts
 
 -- The `CE` lookup via `ceSlotKindsAt` uses ordinal filtering — the key is a RegKey
 -- (`ifaceTabKey o iface` + slot position), identity-based not bare-name, carrying the
@@ -2161,7 +2213,8 @@ instantiateMethodBody mctx (ImplBody site) ifaceParams mty gscope =
       mty
       (dedup (effTailNames mty ++ rowArgNamesIn mctx gscope mty))
   let mtvs = baseMap ++ extraMap
-  let expected = fromAstTypeE mctx effMap mtvs mty
+  let (written, scope) = recoveredScope mctx mtvs mty
+  let expected = fromAstTypeE mctx effMap scope written
   let contractForce = bindingForceFromAst mctx effMap mtvs mty
   MethodBodyInstance {
     mbiExpected = expected,

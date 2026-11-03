@@ -1,8 +1,8 @@
 -- Regression for the eval-path CONSTRAINED-DEFAULT cross-module dispatch bug
 -- (compiler/eval/eval.mdk `pickByTag`):
 -- `foldMap : Monoid m => (a -> m) -> t a -> m` carries a method-level `=>`
--- constraint and comes with an interface DEFAULT body (`fold (acc x => acc ++ f x)
--- empty`).  A cross-module impl (`Foldable Bag`, defined here, NOT co-located with
+-- constraint and comes with an interface DEFAULT body (`listFoldMapGo empty (fold
+-- ... t)`).  A cross-module impl (`Foldable Bag`, defined here, NOT co-located with
 -- core.mdk's `Foldable` interface) does NOT override `foldMap`, so it inherits the
 -- default.  desugar's `fillImplDefaults` only specializes defaults into SAME-module
 -- impls, so eval reaches `foldMap`@Bag via the untagged default-fallback candidate.

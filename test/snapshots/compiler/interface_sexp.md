@@ -1,5 +1,5 @@
 # META
-source_lines=1654
+source_lines=1661
 stages=DESUGAR,MARK
 # SOURCE
 -- The scheme-level interface codec: every type a published scheme is built
@@ -1246,7 +1246,7 @@ public export data PreludeInterfaceFile = PreludeInterfaceFile {
 
 export
 interfaceFormatVersion : Int
-interfaceFormatVersion = 3
+interfaceFormatVersion = 4
 
 export
 cacheOfSections : List InterfaceSection ->
@@ -1313,6 +1313,8 @@ kindNode KType = SAtom "type"
 kindNode KRow = SAtom "row"
 kindNode (KAuth label pattern) =
   tagged "auth-kind" [effLabelSExp label, boolNode pattern]
+kindNode (KArrow domain result) =
+  tagged "arrow" [kindNode domain, kindNode result]
 
 export
 invocationViewSExp : PublishedInvocationView -> SExp
@@ -1344,7 +1346,12 @@ decKind path (SList [SAtom "auth-kind", label, pattern]) = do
   l <- nested effLabelOfSExp (at path "auth-kind" 1) label
   p <- atomBool (at path "auth-kind" 2) pattern
   Ok (KAuth l p)
-decKind path node = misfit path [("type", 0), ("row", 0), ("auth-kind", 2)] node
+decKind path (SList [SAtom "arrow", domain, result]) = do
+  d <- decKind (at path "arrow" 1) domain
+  r <- decKind (at path "arrow" 2) result
+  Ok (KArrow d r)
+decKind path node =
+  misfit path [("type", 0), ("row", 0), ("auth-kind", 2), ("arrow", 2)] node
 
 decInvocationView : Reader PublishedInvocationView
 decInvocationView path (SList [SAtom "invocation-view", ctors, pols, kinds]) =
@@ -2117,7 +2124,7 @@ decodeParsed _ _ top =
 (DData Public "InterfaceSection" () ((variant "InterfaceSection" (ConNamed (field "isJoins" (TyApp (TyCon "List") (TyApp (TyCon "List") (TyCon "Atom")))) (field "isInterface" (TyCon "PreludeInterface"))))) ())
 (DData Public "PreludeInterfaceFile" () ((variant "PreludeInterfaceFile" (ConNamed (field "ifKey" (TyCon "InterfaceKey")) (field "ifSections" (TyApp (TyCon "List") (TyCon "InterfaceSection")))))) ())
 (DTypeSig true "interfaceFormatVersion" (TyCon "Int"))
-(DFunDef false "interfaceFormatVersion" () (ELit (LInt 3)))
+(DFunDef false "interfaceFormatVersion" () (ELit (LInt 4)))
 (DTypeSig true "cacheOfSections" (TyFun (TyApp (TyCon "List") (TyCon "InterfaceSection")) (TyApp (TyCon "List") (TyTuple (TyApp (TyCon "List") (TyApp (TyCon "List") (TyCon "Atom"))) (TyCon "PreludeInterface")))))
 (DFunDef false "cacheOfSections" () (EApp (EVar "map") (ELam ((PVar "s")) (ETuple (EFieldAccess (EVar "s") "isJoins") (EFieldAccess (EVar "s") "isInterface")))))
 (DTypeSig true "mergeSections" (TyFun (TyApp (TyCon "List") (TyTuple (TyApp (TyCon "List") (TyCon "Atom")) (TyCon "PreludeInterface"))) (TyApp (TyCon "List") (TyCon "InterfaceSection"))))
@@ -2149,6 +2156,7 @@ decodeParsed _ _ top =
 (DFunDef false "kindNode" ((PCon "KType")) (EApp (EVar "SAtom") (ELit (LString "type"))))
 (DFunDef false "kindNode" ((PCon "KRow")) (EApp (EVar "SAtom") (ELit (LString "row"))))
 (DFunDef false "kindNode" ((PCon "KAuth" (PVar "label") (PVar "pattern"))) (EApp (EApp (EVar "tagged") (ELit (LString "auth-kind"))) (EListLit (EApp (EVar "effLabelSExp") (EVar "label")) (EApp (EVar "boolNode") (EVar "pattern")))))
+(DFunDef false "kindNode" ((PCon "KArrow" (PVar "domain") (PVar "result"))) (EApp (EApp (EVar "tagged") (ELit (LString "arrow"))) (EListLit (EApp (EVar "kindNode") (EVar "domain")) (EApp (EVar "kindNode") (EVar "result")))))
 (DTypeSig true "invocationViewSExp" (TyFun (TyCon "PublishedInvocationView") (TyCon "SExp")))
 (DFunDef false "invocationViewSExp" ((PCon "PublishedInvocationView" (PVar "ctors") (PVar "pols") (PVar "kinds"))) (EIf (EApp (EApp (EVar "any") (ELam ((PVar "c")) (EApp (EVar "not") (EApp (EVar "isEmpty") (EFieldAccess (EVar "c") "psContext"))))) (EVar "ctors")) (EApp (EVar "panic") (ELit (LString "invocation constructors must have empty contexts"))) (EMatch (EApp (EApp (EVar "filter") (EVar "notFrozen")) (EApp (EApp (EVar "flatMap") (EApp (EVar "liveCells") (ELit (LString "invocation constructor")))) (EVar "ctors"))) (arm (PList) () (EApp (EApp (EVar "tagged") (ELit (LString "invocation-view"))) (EListLit (EApp (EApp (EVar "listSExp") (EVar "pubSchemeSExp")) (EVar "ctors")) (EApp (EApp (EVar "listSExp") (EApp (EApp (EVar "pairSExp") (EVar "tabKeySExp")) (EApp (EVar "listSExp") (EVar "polarityNode")))) (EVar "pols")) (EApp (EApp (EVar "listSExp") (EApp (EApp (EVar "pairSExp") (EVar "tabKeySExp")) (EApp (EVar "listSExp") (EVar "kindNode")))) (EVar "kinds"))))) (arm (PVar "faults") () (EApp (EVar "panic") (EBinOp "++" (EBinOp "++" (ELit (LString "invocation view is not frozen: ")) (EApp (EVar "display") (EApp (EVar "debug") (EVar "faults")))) (ELit (LString ""))))))))
 (DTypeSig false "decPolarity" (TyApp (TyCon "Reader") (TyCon "Polarity")))
@@ -2161,7 +2169,8 @@ decodeParsed _ _ top =
 (DFunDef false "decKind" (PWild (PCon "SAtom" (PLit (LString "type")))) (EApp (EVar "Ok") (EVar "KType")))
 (DFunDef false "decKind" (PWild (PCon "SAtom" (PLit (LString "row")))) (EApp (EVar "Ok") (EVar "KRow")))
 (DFunDef false "decKind" ((PVar "path") (PCon "SList" (PList (PCon "SAtom" (PLit (LString "auth-kind"))) (PVar "label") (PVar "pattern")))) (EApp (EApp (EVar "andThen") (EApp (EApp (EApp (EVar "nested") (EVar "effLabelOfSExp")) (EApp (EApp (EApp (EVar "at") (EVar "path")) (ELit (LString "auth-kind"))) (ELit (LInt 1)))) (EVar "label"))) (ELam ((PVar "l")) (EApp (EApp (EVar "andThen") (EApp (EApp (EVar "atomBool") (EApp (EApp (EApp (EVar "at") (EVar "path")) (ELit (LString "auth-kind"))) (ELit (LInt 2)))) (EVar "pattern"))) (ELam ((PVar "p")) (EApp (EVar "Ok") (EApp (EApp (EVar "KAuth") (EVar "l")) (EVar "p"))))))))
-(DFunDef false "decKind" ((PVar "path") (PVar "node")) (EApp (EApp (EApp (EVar "misfit") (EVar "path")) (EListLit (ETuple (ELit (LString "type")) (ELit (LInt 0))) (ETuple (ELit (LString "row")) (ELit (LInt 0))) (ETuple (ELit (LString "auth-kind")) (ELit (LInt 2))))) (EVar "node")))
+(DFunDef false "decKind" ((PVar "path") (PCon "SList" (PList (PCon "SAtom" (PLit (LString "arrow"))) (PVar "domain") (PVar "result")))) (EApp (EApp (EVar "andThen") (EApp (EApp (EVar "decKind") (EApp (EApp (EApp (EVar "at") (EVar "path")) (ELit (LString "arrow"))) (ELit (LInt 1)))) (EVar "domain"))) (ELam ((PVar "d")) (EApp (EApp (EVar "andThen") (EApp (EApp (EVar "decKind") (EApp (EApp (EApp (EVar "at") (EVar "path")) (ELit (LString "arrow"))) (ELit (LInt 2)))) (EVar "result"))) (ELam ((PVar "r")) (EApp (EVar "Ok") (EApp (EApp (EVar "KArrow") (EVar "d")) (EVar "r"))))))))
+(DFunDef false "decKind" ((PVar "path") (PVar "node")) (EApp (EApp (EApp (EVar "misfit") (EVar "path")) (EListLit (ETuple (ELit (LString "type")) (ELit (LInt 0))) (ETuple (ELit (LString "row")) (ELit (LInt 0))) (ETuple (ELit (LString "auth-kind")) (ELit (LInt 2))) (ETuple (ELit (LString "arrow")) (ELit (LInt 2))))) (EVar "node")))
 (DTypeSig false "decInvocationView" (TyApp (TyCon "Reader") (TyCon "PublishedInvocationView")))
 (DFunDef false "decInvocationView" ((PVar "path") (PCon "SList" (PList (PCon "SAtom" (PLit (LString "invocation-view"))) (PVar "ctors") (PVar "pols") (PVar "kinds")))) (EApp (EApp (EVar "andThen") (EApp (EApp (EApp (EVar "listOfSExp") (EApp (EVar "nested") (EVar "pubSchemeOfSExp"))) (EApp (EApp (EApp (EVar "at") (EVar "path")) (ELit (LString "invocation-view"))) (ELit (LInt 1)))) (EVar "ctors"))) (ELam ((PVar "cs")) (EApp (EApp (EVar "andThen") (EApp (EApp (EApp (EVar "listOfSExp") (EApp (EApp (EVar "pairOfSExp") (EApp (EVar "nested") (EVar "tabKeyOfSExp"))) (EApp (EVar "listOfSExp") (EVar "decPolarity")))) (EApp (EApp (EApp (EVar "at") (EVar "path")) (ELit (LString "invocation-view"))) (ELit (LInt 2)))) (EVar "pols"))) (ELam ((PVar "ps")) (EApp (EApp (EVar "andThen") (EApp (EApp (EApp (EVar "listOfSExp") (EApp (EApp (EVar "pairOfSExp") (EApp (EVar "nested") (EVar "tabKeyOfSExp"))) (EApp (EVar "listOfSExp") (EVar "decKind")))) (EApp (EApp (EApp (EVar "at") (EVar "path")) (ELit (LString "invocation-view"))) (ELit (LInt 3)))) (EVar "kinds"))) (ELam ((PVar "ks")) (EIf (EApp (EApp (EVar "any") (ELam ((PVar "c")) (EApp (EVar "not") (EApp (EVar "isEmpty") (EFieldAccess (EVar "c") "psContext"))))) (EVar "cs")) (EApp (EApp (EApp (EVar "refuse") (EVar "path")) (EVar "ctors")) (ELit (LString "invocation constructors must have empty contexts"))) (EApp (EVar "Ok") (EApp (EApp (EApp (EVar "PublishedInvocationView") (EVar "cs")) (EVar "ps")) (EVar "ks")))))))))))
 (DFunDef false "decInvocationView" ((PVar "path") (PVar "node")) (EApp (EApp (EApp (EVar "misfit") (EVar "path")) (EListLit (ETuple (ELit (LString "invocation-view")) (ELit (LInt 3))))) (EVar "node")))
@@ -2672,7 +2681,7 @@ decodeParsed _ _ top =
 (DData Public "InterfaceSection" () ((variant "InterfaceSection" (ConNamed (field "isJoins" (TyApp (TyCon "List") (TyApp (TyCon "List") (TyCon "Atom")))) (field "isInterface" (TyCon "PreludeInterface"))))) ())
 (DData Public "PreludeInterfaceFile" () ((variant "PreludeInterfaceFile" (ConNamed (field "ifKey" (TyCon "InterfaceKey")) (field "ifSections" (TyApp (TyCon "List") (TyCon "InterfaceSection")))))) ())
 (DTypeSig true "interfaceFormatVersion" (TyCon "Int"))
-(DFunDef false "interfaceFormatVersion" () (ELit (LInt 3)))
+(DFunDef false "interfaceFormatVersion" () (ELit (LInt 4)))
 (DTypeSig true "cacheOfSections" (TyFun (TyApp (TyCon "List") (TyCon "InterfaceSection")) (TyApp (TyCon "List") (TyTuple (TyApp (TyCon "List") (TyApp (TyCon "List") (TyCon "Atom"))) (TyCon "PreludeInterface")))))
 (DFunDef false "cacheOfSections" () (EApp (EMethodRef "map") (ELam ((PVar "s")) (ETuple (EFieldAccess (EVar "s") "isJoins") (EFieldAccess (EVar "s") "isInterface")))))
 (DTypeSig true "mergeSections" (TyFun (TyApp (TyCon "List") (TyTuple (TyApp (TyCon "List") (TyCon "Atom")) (TyCon "PreludeInterface"))) (TyApp (TyCon "List") (TyCon "InterfaceSection"))))
@@ -2704,6 +2713,7 @@ decodeParsed _ _ top =
 (DFunDef false "kindNode" ((PCon "KType")) (EApp (EVar "SAtom") (ELit (LString "type"))))
 (DFunDef false "kindNode" ((PCon "KRow")) (EApp (EVar "SAtom") (ELit (LString "row"))))
 (DFunDef false "kindNode" ((PCon "KAuth" (PVar "label") (PVar "pattern"))) (EApp (EApp (EVar "tagged") (ELit (LString "auth-kind"))) (EListLit (EApp (EVar "effLabelSExp") (EVar "label")) (EApp (EVar "boolNode") (EVar "pattern")))))
+(DFunDef false "kindNode" ((PCon "KArrow" (PVar "domain") (PVar "result"))) (EApp (EApp (EVar "tagged") (ELit (LString "arrow"))) (EListLit (EApp (EVar "kindNode") (EVar "domain")) (EApp (EVar "kindNode") (EVar "result")))))
 (DTypeSig true "invocationViewSExp" (TyFun (TyCon "PublishedInvocationView") (TyCon "SExp")))
 (DFunDef false "invocationViewSExp" ((PCon "PublishedInvocationView" (PVar "ctors") (PVar "pols") (PVar "kinds"))) (EIf (EApp (EApp (EDictApp "any") (ELam ((PVar "c")) (EApp (EVar "not") (EApp (EMethodRef "isEmpty") (EFieldAccess (EVar "c") "psContext"))))) (EVar "ctors")) (EApp (EVar "panic") (ELit (LString "invocation constructors must have empty contexts"))) (EMatch (EApp (EApp (EMethodRef "filter") (EVar "notFrozen")) (EApp (EApp (EDictApp "flatMap") (EApp (EVar "liveCells") (ELit (LString "invocation constructor")))) (EVar "ctors"))) (arm (PList) () (EApp (EApp (EVar "tagged") (ELit (LString "invocation-view"))) (EListLit (EApp (EApp (EVar "listSExp") (EVar "pubSchemeSExp")) (EVar "ctors")) (EApp (EApp (EVar "listSExp") (EApp (EApp (EVar "pairSExp") (EVar "tabKeySExp")) (EApp (EVar "listSExp") (EVar "polarityNode")))) (EVar "pols")) (EApp (EApp (EVar "listSExp") (EApp (EApp (EVar "pairSExp") (EVar "tabKeySExp")) (EApp (EVar "listSExp") (EVar "kindNode")))) (EVar "kinds"))))) (arm (PVar "faults") () (EApp (EVar "panic") (EBinOp "++" (EBinOp "++" (ELit (LString "invocation view is not frozen: ")) (EApp (EMethodRef "display") (EApp (EMethodRef "debug") (EVar "faults")))) (ELit (LString ""))))))))
 (DTypeSig false "decPolarity" (TyApp (TyCon "Reader") (TyCon "Polarity")))
@@ -2716,7 +2726,8 @@ decodeParsed _ _ top =
 (DFunDef false "decKind" (PWild (PCon "SAtom" (PLit (LString "type")))) (EApp (EVar "Ok") (EVar "KType")))
 (DFunDef false "decKind" (PWild (PCon "SAtom" (PLit (LString "row")))) (EApp (EVar "Ok") (EVar "KRow")))
 (DFunDef false "decKind" ((PVar "path") (PCon "SList" (PList (PCon "SAtom" (PLit (LString "auth-kind"))) (PVar "label") (PVar "pattern")))) (EApp (EApp (EMethodRef "andThen") (EApp (EApp (EApp (EVar "nested") (EVar "effLabelOfSExp")) (EApp (EApp (EApp (EVar "at") (EVar "path")) (ELit (LString "auth-kind"))) (ELit (LInt 1)))) (EVar "label"))) (ELam ((PVar "l")) (EApp (EApp (EMethodRef "andThen") (EApp (EApp (EVar "atomBool") (EApp (EApp (EApp (EVar "at") (EVar "path")) (ELit (LString "auth-kind"))) (ELit (LInt 2)))) (EVar "pattern"))) (ELam ((PVar "p")) (EApp (EVar "Ok") (EApp (EApp (EVar "KAuth") (EVar "l")) (EVar "p"))))))))
-(DFunDef false "decKind" ((PVar "path") (PVar "node")) (EApp (EApp (EApp (EVar "misfit") (EVar "path")) (EListLit (ETuple (ELit (LString "type")) (ELit (LInt 0))) (ETuple (ELit (LString "row")) (ELit (LInt 0))) (ETuple (ELit (LString "auth-kind")) (ELit (LInt 2))))) (EVar "node")))
+(DFunDef false "decKind" ((PVar "path") (PCon "SList" (PList (PCon "SAtom" (PLit (LString "arrow"))) (PVar "domain") (PVar "result")))) (EApp (EApp (EMethodRef "andThen") (EApp (EApp (EVar "decKind") (EApp (EApp (EApp (EVar "at") (EVar "path")) (ELit (LString "arrow"))) (ELit (LInt 1)))) (EVar "domain"))) (ELam ((PVar "d")) (EApp (EApp (EMethodRef "andThen") (EApp (EApp (EVar "decKind") (EApp (EApp (EApp (EVar "at") (EVar "path")) (ELit (LString "arrow"))) (ELit (LInt 2)))) (EVar "result"))) (ELam ((PVar "r")) (EApp (EVar "Ok") (EApp (EApp (EVar "KArrow") (EVar "d")) (EVar "r"))))))))
+(DFunDef false "decKind" ((PVar "path") (PVar "node")) (EApp (EApp (EApp (EVar "misfit") (EVar "path")) (EListLit (ETuple (ELit (LString "type")) (ELit (LInt 0))) (ETuple (ELit (LString "row")) (ELit (LInt 0))) (ETuple (ELit (LString "auth-kind")) (ELit (LInt 2))) (ETuple (ELit (LString "arrow")) (ELit (LInt 2))))) (EVar "node")))
 (DTypeSig false "decInvocationView" (TyApp (TyCon "Reader") (TyCon "PublishedInvocationView")))
 (DFunDef false "decInvocationView" ((PVar "path") (PCon "SList" (PList (PCon "SAtom" (PLit (LString "invocation-view"))) (PVar "ctors") (PVar "pols") (PVar "kinds")))) (EApp (EApp (EMethodRef "andThen") (EApp (EApp (EApp (EVar "listOfSExp") (EApp (EVar "nested") (EVar "pubSchemeOfSExp"))) (EApp (EApp (EApp (EVar "at") (EVar "path")) (ELit (LString "invocation-view"))) (ELit (LInt 1)))) (EVar "ctors"))) (ELam ((PVar "cs")) (EApp (EApp (EMethodRef "andThen") (EApp (EApp (EApp (EVar "listOfSExp") (EApp (EApp (EVar "pairOfSExp") (EApp (EVar "nested") (EVar "tabKeyOfSExp"))) (EApp (EVar "listOfSExp") (EVar "decPolarity")))) (EApp (EApp (EApp (EVar "at") (EVar "path")) (ELit (LString "invocation-view"))) (ELit (LInt 2)))) (EVar "pols"))) (ELam ((PVar "ps")) (EApp (EApp (EMethodRef "andThen") (EApp (EApp (EApp (EVar "listOfSExp") (EApp (EApp (EVar "pairOfSExp") (EApp (EVar "nested") (EVar "tabKeyOfSExp"))) (EApp (EVar "listOfSExp") (EVar "decKind")))) (EApp (EApp (EApp (EVar "at") (EVar "path")) (ELit (LString "invocation-view"))) (ELit (LInt 3)))) (EVar "kinds"))) (ELam ((PVar "ks")) (EIf (EApp (EApp (EDictApp "any") (ELam ((PVar "c")) (EApp (EVar "not") (EApp (EMethodRef "isEmpty") (EFieldAccess (EVar "c") "psContext"))))) (EVar "cs")) (EApp (EApp (EApp (EVar "refuse") (EVar "path")) (EVar "ctors")) (ELit (LString "invocation constructors must have empty contexts"))) (EApp (EVar "Ok") (EApp (EApp (EApp (EVar "PublishedInvocationView") (EVar "cs")) (EVar "ps")) (EVar "ks")))))))))))
 (DFunDef false "decInvocationView" ((PVar "path") (PVar "node")) (EApp (EApp (EApp (EVar "misfit") (EVar "path")) (EListLit (ETuple (ELit (LString "invocation-view")) (ELit (LInt 3))))) (EVar "node")))

@@ -21,6 +21,7 @@ import support.diag_codes.{DiagCode(..)}
 import support.stage_count.{stageBump}
 import frontend.ast.{
   patBindings,
+  variantFieldTys,
   isHint,
   letBindName,
   declBinderNames,
@@ -1968,13 +1969,6 @@ duplicateCtorBinders bound binders loc =
     (n => DuplicateBinder "constructor" n loc)
     (findDups bound (map fst binders))
 
-variantFieldTys : Variant -> List Ty
-variantFieldTys (Variant _ (ConPos tys)) = tys
-variantFieldTys (Variant _ (ConNamed fs _)) = map fieldTyOf fs
-
-fieldTyOf : Field -> Ty
-fieldTyOf (Field _ t) = t
-
 checkVariant : Env -> List String -> Variant -> List ResError
 checkVariant env bound (Variant _ (ConPos tys)) =
   flatMap (checkTypeIn bound None env) tys
@@ -2588,10 +2582,14 @@ stmtLoc (DoAssign _ e) = firstExprLoc e
 stmtLoc (DoFieldAssign _ _ e) = firstExprLoc e
 
 unionStr : List String -> List String -> List String
-unionStr acc [] = acc
-unionStr acc (x :: xs)
-  | contains x acc = unionStr acc xs
-  | otherwise = unionStr (acc ++ [x]) xs
+unionStr acc xs = unionStrGo acc [] xs
+
+-- `fresh` holds the new names newest-first; `acc` is copied once, at the end.
+unionStrGo : List String -> List String -> List String -> List String
+unionStrGo acc fresh [] = acc ++ reverseL fresh
+unionStrGo acc fresh (x :: xs)
+  | contains x acc || contains x fresh = unionStrGo acc fresh xs
+  | otherwise = unionStrGo acc (x :: fresh) xs
 
 externWithBodyErrors : List String -> List Decl -> List ResError
 externWithBodyErrors _ [] = []
@@ -5625,6 +5623,7 @@ unqualPat ctx (PCons a b) = PCons (unqualPat ctx a) (unqualPat ctx b)
 unqualPat ctx (PTuple ps) = PTuple (map (unqualPat ctx) ps)
 unqualPat ctx (PList ps) = PList (map (unqualPat ctx) ps)
 unqualPat ctx (PAs x l bid p) = PAs x l bid (unqualPat ctx p)
+unqualPat ctx (PAnn p t) = PAnn (unqualPat ctx p) t
 unqualPat ctx (POr ps) = POr (map (unqualPat ctx) ps)
 unqualPat _ (PRng a b incl) = PRng a b incl
 unqualPat ctx (PRec name fs rest) =

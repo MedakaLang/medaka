@@ -50,7 +50,7 @@ import eval.eval.{
   force,
 }
 import support.util.{contains, startsWith}
-import string.{trimAscii}
+import string.{split as splitString, trimAscii}
 
 -- ── Session state ─────────────────────────────────────────────────────────
 accumulatedRef : Ref (List Decl)
@@ -200,7 +200,7 @@ needsMore source =
   if endsWithBlankLine source then
     False
   else
-    let lines = stringSplitNewlines source
+    let lines = splitString "\n" source
     let nonEmpty = filterEmpty lines
     match lastLine nonEmpty
       None => False
@@ -486,14 +486,3 @@ dispatchInput src =
 
 -- ── String utilities ──────────────────────────────────────────────────────
 -- Trimming is `string.trimAscii` (imported above).
-
--- Split a string on "\n".
-stringSplitNewlines : String -> List String
-stringSplitNewlines s = stringSplitOn "\n" s 0 0 (stringLength s)
-
-stringSplitOn : String -> String -> Int -> Int -> Int -> List String
-stringSplitOn sep s start cur len
-  | cur >= len = [stringSlice start len s]
-  | stringSlice cur (cur + 1) s == sep =
-    stringSlice start cur s :: stringSplitOn sep s (cur + 1) (cur + 1) len
-  | otherwise = stringSplitOn sep s start (cur + 1) len
