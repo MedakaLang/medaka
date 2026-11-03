@@ -17,7 +17,12 @@ import frontend.desugar.{desugar}
 import types.annotate.{annotateProgram}
 import types.program_facts.{emptyFacts}
 import types.runtime_types.{RuntimeType(..)}
-import ir.core_ir.{CProgram, CExpr(..), CallSite(..), CallMode(..)}
+import ir.core_ir.{
+  CProgram, CExpr(..), CallSite(..), CallMode(..), CImplEntry(..),
+  CImplBody(..), MethodEvidence(..), MethodResultFact(..), DeclFacts(..),
+  noDeclFacts, noImplSym
+}
+import frontend.ast.{Route(..)}
 import ir.core_ir_lower.{lowerProgramEmitWith}
 import ir.extern_lower.{walkExternVars, externVar, implicitRuntimeFacts}
 import ir.extern_types.{ExternDeclFact(..)}
@@ -648,3 +653,55 @@ test "tuple physical type identities match emitted root and constructor" =
     (filter
       (t => t == "T_zZ_24_Tuple2" || t == "C_Tup2" || t == "T_Tup2")
       demand.representationTypes)
+
+-- main = m           (a method occurrence: interface I declares `m` with 2 values and
+--                     one method-level dictionary, so its slot takes 1 + 1 + 2 operands)
+-- impl m for Int = 1 (the impl that gives a dictionary of I a table)
+slotProgram : List CImplEntry -> CProgram
+slotProgram impls =
+  CProgram
+    [
+      synthBind "main" [
+        CClause [] (CMethod "m" (MethodEvidence "I" 2 (RDict "d") [] [])),
+      ],
+    ]
+    []
+    []
+    impls
+    [("I#m", 1)]
+    { noDeclFacts |
+      factMethodResults = [
+        MethodResultFact {
+          iface = "I",
+          method = "m",
+          returnsHead = False,
+          callbackPositions = [],
+          valueArity = 2,
+        },
+      ],
+    }
+
+slotImpl : CImplEntry
+slotImpl =
+  CImplEntry
+    "m"
+    0
+    2
+    (CImplTagged "Int" "Int" "I" noImplSym [] [] (CLit (LInt 1)))
+
+slotTypes : List CImplEntry -> List String
+slotTypes impls =
+  filter
+    (t => t == "dict" || t == "dictcell" || t == "slotarr" || t == "slot4")
+    (physical
+      (fst
+        (prepareWasmPlan
+          PreludeFreeRuntime
+          omEmpty
+          (slotProgram impls)))).representationTypes
+
+test "a program with an impl demands the table types and its slot function type" = expectAll
+  [
+    expectEqual ["dict", "slot4", "slotarr"] (slotTypes [slotImpl]),
+    expectEqual [] (filter (== "slot4") (slotTypes [])),
+  ]
