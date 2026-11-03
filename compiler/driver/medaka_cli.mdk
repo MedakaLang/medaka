@@ -175,6 +175,7 @@ import driver.diagnostics.{
   cjAllToJson,
   flushRunEnvelope,
   pendingStaleNotice,
+  pendingEnvelopeExtras,
   pendingPreludeNotices,
   readDiagSrc,
   mkDiag,
@@ -243,6 +244,7 @@ import tools.test_cmd.{
   testFilesGo,
   runEvalPropsWorker,
 }
+import tools.probe_transcript.{testSeedRef}
 import tools.prop_runner.{seedPropRng, PropRequest(..)}
 import tools.doctest.{Engine(..)}
 import tools.repl.{initSession, replLoop}
@@ -3336,6 +3338,13 @@ runTestProjectCmd engines cases filterOpt seedOpt =
 -- unchanged, via `seedPropRng` in `runTestCmd` before this function is called.
 runTestJsonCmd : List Engine -> Int -> Option String -> String -> <IO> Unit
 runTestJsonCmd engines cases filterOpt target =
+  -- An eval-engine panic aborts this process before the report prints; the
+  -- panic chokepoint then emits the `run --json` envelope on stderr, so the
+  -- seed rides in it.
+  runJsonMode := True
+  pendingEnvelopeExtras := match !testSeedRef
+    Some n => [("seed", JInt n)]
+    None => []
   let root = envOr "MEDAKA_ROOT" defaultMedakaRoot
   let stdlibDir = root ++ "/stdlib"
   let r = do

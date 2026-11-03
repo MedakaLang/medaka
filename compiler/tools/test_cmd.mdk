@@ -2678,6 +2678,9 @@ runTestReportPinned engines runtimeSrc coreSrc target tsrc userDecls stdlibDir c
   let coreDecls = desugaredPrelude coreSrc
   let roots = entrySearchRoots (dirOf target) ++ [stdlibDir]
   let exempt = typecheckExempt target userDecls tsrc
+  -- A panic during a graded run names the target, as `driveSingle`/`driveMulti`
+  -- do for the printing arm.
+  currentEvalFile := target
   if hasUseDecls userDecls then
     reportMulti
       engines

@@ -16,7 +16,9 @@ import eval.eval.{Value(..), evalOneFacts, force}
 import types.program_facts.{factsOfElab}
 import support.util.{lookupAssoc}
 import io.{runVerb}
-import string.{contains, indexOf, toInt, trim, lines, words, startsWith, join}
+import string.{
+  contains, indexOf, toInt, trim, lines, words, startsWith, join, endsWith
+}
 import list.{reverse, take}
 import test.{
   Expectation, expectAll, expectEqual, expectFalse, expectNotEqual, expectTrue,
@@ -601,6 +603,46 @@ test "a --json type-error refusal carries no seed" =
     ]) ((code, out, _) => expectAll [
       expectEqual 1 code,
       expectEqual None (jsonMember "seed" out),
+    ]))
+
+-- The first element of the envelope's `files` array, or Null when absent.
+firstFileEntry : String -> Json
+firstFileEntry out = match J.parse (trim out)
+  Ok doc => match J.get "files" doc
+    Some files => optionOr JNull (J.at 0 files)
+    None => JNull
+  Err _ => JNull
+
+-- The `file` of the first entry of the envelope's `files`, or "" when absent.
+firstFileName : String -> String
+firstFileName out = match J.get "file" (firstFileEntry out)
+  Some (JString f) => f
+  _ => ""
+
+-- The code of the first diagnostic of the first file of the envelope.
+firstDiagCode : String -> String
+firstDiagCode out = match J.get "diagnostics" (firstFileEntry out)
+  Some ds => match J.at 0 ds
+    Some d => match J.get "code" d
+      Some (JString c) => c
+      _ => ""
+    None => ""
+  None => ""
+
+test "an aborted --json run emits the run envelope with the seed on stderr" =
+  withFixtures
+    [("panic_test.mdk", panicTestSrc)]
+    (dir => withSpawn (seededTest (Some 7) [
+      "--json",
+      "--engines",
+      "eval",
+      "\{dir}/panic_test.mdk",
+    ]) ((code, out, err) => expectAll [
+      expectNotEqual 0 code,
+      expectEqual "" (trim out),
+      expectTrue (endsWith "panic_test.mdk" (firstFileName err)),
+      expectEqual "E-PANIC" (firstDiagCode err),
+      expectEqual (Some (JInt 7)) (jsonMember "seed" err),
     ]))
 
 test "an eval-engine panic still prints the run's seed once" =
