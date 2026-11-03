@@ -514,11 +514,14 @@ setCardCap = 16
 
 export
 commonPrefixLen : String -> String -> Int -> Int
-commonPrefixLen a b i =
-  if i >= stringLength a || i >= stringLength b then
+commonPrefixLen a b i = commonPrefixChars (stringToChars a) (stringToChars b) i
+
+commonPrefixChars : Array Char -> Array Char -> Int -> Int
+commonPrefixChars xs ys i =
+  if i >= arrayLength xs || i >= arrayLength ys then
     i
-  else if stringSlice i (i + 1) a == stringSlice i (i + 1) b then
-    commonPrefixLen a b (i + 1)
+  else if arrayGetUnsafe i xs == arrayGetUnsafe i ys then
+    commonPrefixChars xs ys (i + 1)
   else
     i
 

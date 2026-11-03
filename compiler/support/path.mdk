@@ -6,28 +6,16 @@
 -- dirname: the path up to (not including) the final "/"; "." if none.
 export
 dirOf : String -> String
-dirOf path = dirGo path (stringLength path)
-
-dirGo : String -> Int -> String
-dirGo _ 0 = "."
-dirGo path i =
-  if stringSlice (i - 1) i path == "/" then
-    stringSlice 0 (i - 1) path
-  else
-    dirGo path (i - 1)
+dirOf path = match stringLastIndexOf "/" path
+  Some i => stringSlice 0 i path
+  None => "."
 
 -- basename: the text after the final "/" (whole string if none).
 export
 baseOf : String -> String
-baseOf path = baseGo path (stringLength path) (stringLength path)
-
-baseGo : String -> Int -> Int -> String
-baseGo path end 0 = stringSlice 0 end path
-baseGo path end i =
-  if stringSlice (i - 1) i path == "/" then
-    stringSlice i end path
-  else
-    baseGo path end (i - 1)
+baseOf path = match stringLastIndexOf "/" path
+  Some i => stringSlice (i + 1) (stringLength path) path
+  None => path
 
 -- Alias of baseOf (kept for call sites that read more naturally as baseName).
 export
@@ -37,19 +25,11 @@ baseName path = baseOf path
 -- Drop a trailing ".ext" from the basename (no-op if the dot is before a "/").
 export
 chopExt : String -> String
-chopExt path = chopGo path (stringLength path)
-
-chopGo : String -> Int -> String
-chopGo path 0 = path
-chopGo path i =
-  let c = stringSlice (i - 1) i path
-  if c == "/" then
-    path
-  else if c == "." then
-    stringSlice 0 (i - 1) path
-  else
-    chopGo path (i - 1)
--- no extension in the basename
+chopExt path = match stringLastIndexOf "." path
+  Some d => match stringLastIndexOf "/" path
+    Some s => if s > d then path else stringSlice 0 d path
+    None => stringSlice 0 d path
+  None => path
 
 export
 joinPath : String -> String -> String

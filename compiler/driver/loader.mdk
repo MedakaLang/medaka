@@ -11,6 +11,7 @@
 --   * Cycles ARE detected (an in-progress stack) and reported as an Err.
 
 import support.stage_count.{stageBump}
+import support.path.{dirOf}
 import support.ordmap.{OrdMap, omEmpty, omInsert, omLookup, omFromPairs}
 import frontend.ast.{
   Decl(..),
@@ -53,17 +54,7 @@ lastOr d (_ :: xs) = lastOr d xs
 -- split a String on a single-char separator (mirrors String.split_on_char).
 -- Always returns ≥1 segment; empty input → [""].  No-sep input → [s].
 splitOnChar : String -> String -> List String
-splitOnChar sep s = splitGo sep s 0 (stringLength s) 0
-
--- `start` is where the current segment began; each segment is one slice.
-splitGo : String -> String -> Int -> Int -> Int -> List String
-splitGo sep s i len start =
-  if i >= len then
-    [stringSlice start len s]
-  else if stringSlice i (i + 1) s == sep then
-    stringSlice start i s :: splitGo sep s (i + 1) len (i + 1)
-  else
-    splitGo sep s (i + 1) len start
+splitOnChar sep s = Str.split sep s
 
 -- join segments with "/" (mirrors String.concat "/")
 joinSlash : List String -> String
@@ -206,15 +197,7 @@ findRootGo cur =
 
 -- parent directory: strip the last `/`-component (mirrors the loader's dir logic).
 parentDir : String -> String
-parentDir path = parentGo path (stringLength path)
-
-parentGo : String -> Int -> String
-parentGo _path 0 = "."
-parentGo path i =
-  if stringSlice (i - 1) i path == "/" then
-    stringSlice 0 (i - 1) path
-  else
-    parentGo path (i - 1)
+parentDir = dirOf
 
 -- ── cross-project dependencies (medaka.toml [dependencies]) ──────────────────
 --
@@ -247,16 +230,9 @@ unquote s =
 
 -- the substring before the first `=` (trimmed); "" if there is no `=`.
 keyBeforeEq : String -> String
-keyBeforeEq line = keyEqGo line 0 (stringLength line)
-
-keyEqGo : String -> Int -> Int -> String
-keyEqGo line i n =
-  if i >= n then
-    ""
-  else if stringSlice i (i + 1) line == "=" then
-    stringTrim (stringSlice 0 i line)
-  else
-    keyEqGo line (i + 1) n
+keyBeforeEq line = match stringIndexOf "=" line
+  Some i => stringTrim (stringSlice 0 i line)
+  None => ""
 
 -- the substring after the first `=` (trimmed + unquoted); "" if there is no `=`.
 valAfterEq : String -> String
@@ -265,16 +241,9 @@ valAfterEq line = unquote (rawValAfterEq line)
 -- The trimmed but still quoted value.  `scanAllowInternal` needs this form so
 -- that a quoted string cannot impersonate the canonical unquoted boolean.
 rawValAfterEq : String -> String
-rawValAfterEq line = valEqGo line 0 (stringLength line)
-
-valEqGo : String -> Int -> Int -> String
-valEqGo line i n =
-  if i >= n then
-    ""
-  else if stringSlice i (i + 1) line == "=" then
-    stringTrim (stringSlice (i + 1) n line)
-  else
-    valEqGo line (i + 1) n
+rawValAfterEq line = match stringIndexOf "=" line
+  Some i => stringTrim (stringSlice (i + 1) (stringLength line) line)
+  None => ""
 
 -- scan the lines of a medaka.toml: once we cross the `[dependencies]` header,
 -- collect `name = "path"` entries until the next `[section]` header (or EOF).

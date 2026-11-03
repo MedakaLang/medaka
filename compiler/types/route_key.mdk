@@ -580,14 +580,9 @@ typeTagOf _ name = name
 -- "Int"
 export
 typeTagName : String -> String
-typeTagName tag = afterLastDot tag (stringLength tag - 1)
-
-afterLastDot : String -> Int -> String
-afterLastDot tag i
-  | i < 0 = tag
-  | stringSlice i (i + 1) tag == "." =
-    stringSlice (i + 1) (stringLength tag) tag
-  | otherwise = afterLastDot tag (i - 1)
+typeTagName tag = match stringLastIndexOf "." tag
+  Some i => stringSlice (i + 1) (stringLength tag) tag
+  None => tag
 
 -- ── the ONE prec-2 `Ty` printer ──────────────────────────────────────────
 -- Mirrors `types/typecheck.mdk`'s `ppTy` family byte-for-byte (which in turn

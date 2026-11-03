@@ -1,5 +1,5 @@
 # META
-source_lines=224
+source_lines=215
 stages=DESUGAR,MARK
 # SOURCE
 -- Written effect parameters decoded against declared domains, without inference state.
@@ -10,7 +10,8 @@ import types.effect_domain.{
 import types.effect_rows.{
   EffLabel, Atom, labelKey, builtinLabel, atomWith, effLabelName
 }
-import support.util.{sortUniqS, filterList, reverseL, contains, joinWith}
+import support.util.{sortUniqS, filterList, contains, joinWith}
+import string.{split}
 
 lookupDomain : String -> List (String, Param) -> Param
 lookupDomain _ [] = PUnit
@@ -75,17 +76,7 @@ decodeSetParam s =
 
 -- split a string on ',' (Set-element separator; authority tokens contain none)
 splitOnComma : String -> List String
-splitOnComma s = splitOnCommaGo s 0 0 []
-
-splitOnCommaGo : String -> Int -> Int -> List String -> List String
-splitOnCommaGo s start i acc =
-  let n = stringLength s
-  if i >= n then
-    reverseL (stringSlice start n s :: acc)
-  else if stringSlice i (i + 1) s == "," then
-    splitOnCommaGo s (i + 1) (i + 1) (stringSlice start i s :: acc)
-  else
-    splitOnCommaGo s start (i + 1) acc
+splitOnComma s = split "," s
 
 -- A written Prefix element is any non-empty string.  A trailing `*` makes it a
 -- pattern; without one it is an exact element and admits only itself, so no
@@ -230,7 +221,8 @@ axisProblems schema name p = match lookupAxis name schema
 (DUse false (UseGroup ("frontend" "ast") ((mem "EffParamTy" true))))
 (DUse false (UseGroup ("types" "effect_domain") ((mem "Param" true) (mem "canonParam" false) (mem "subTopOf" false) (mem "lookupAxis" false) (mem "productPrimaryLift" false) (mem "productOver" false))))
 (DUse false (UseGroup ("types" "effect_rows") ((mem "EffLabel" false) (mem "Atom" false) (mem "labelKey" false) (mem "builtinLabel" false) (mem "atomWith" false) (mem "effLabelName" false))))
-(DUse false (UseGroup ("support" "util") ((mem "sortUniqS" false) (mem "filterList" false) (mem "reverseL" false) (mem "contains" false) (mem "joinWith" false))))
+(DUse false (UseGroup ("support" "util") ((mem "sortUniqS" false) (mem "filterList" false) (mem "contains" false) (mem "joinWith" false))))
+(DUse false (UseGroup ("string") ((mem "split" false))))
 (DTypeSig false "lookupDomain" (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "Param"))) (TyCon "Param"))))
 (DFunDef false "lookupDomain" (PWild (PList)) (EVar "PUnit"))
 (DFunDef false "lookupDomain" ((PVar "l") (PCons (PTuple (PVar "k") (PVar "p")) (PVar "rest"))) (EIf (EBinOp "==" (EVar "l") (EVar "k")) (EVar "p") (EApp (EApp (EVar "lookupDomain") (EVar "l")) (EVar "rest"))))
@@ -257,9 +249,7 @@ axisProblems schema name p = match lookupAxis name schema
 (DTypeSig true "decodeSetParam" (TyFun (TyCon "String") (TyApp (TyCon "List") (TyCon "String"))))
 (DFunDef false "decodeSetParam" ((PVar "s")) (EBlock (DoLet false false (PVar "n") (EApp (EVar "stringLength") (EVar "s"))) (DoExpr (EIf (EBinOp "&&" (EBinOp "&&" (EBinOp ">=" (EVar "n") (ELit (LInt 2))) (EBinOp "==" (EApp (EApp (EApp (EVar "stringSlice") (ELit (LInt 0))) (ELit (LInt 1))) (EVar "s")) (ELit (LString "{")))) (EBinOp "==" (EApp (EApp (EApp (EVar "stringSlice") (EBinOp "-" (EVar "n") (ELit (LInt 1)))) (EVar "n")) (EVar "s")) (ELit (LString "}")))) (EApp (EVar "sortUniqS") (EApp (EApp (EVar "filterList") (ELam ((PVar "_s")) (EBinOp "/=" (EVar "_s") (ELit (LString ""))))) (EApp (EVar "splitOnComma") (EApp (EApp (EApp (EVar "stringSlice") (ELit (LInt 1))) (EBinOp "-" (EVar "n") (ELit (LInt 1)))) (EVar "s"))))) (EApp (EVar "sortUniqS") (EApp (EApp (EVar "filterList") (ELam ((PVar "_s")) (EBinOp "/=" (EVar "_s") (ELit (LString ""))))) (EApp (EVar "splitOnComma") (EVar "s"))))))))
 (DTypeSig false "splitOnComma" (TyFun (TyCon "String") (TyApp (TyCon "List") (TyCon "String"))))
-(DFunDef false "splitOnComma" ((PVar "s")) (EApp (EApp (EApp (EApp (EVar "splitOnCommaGo") (EVar "s")) (ELit (LInt 0))) (ELit (LInt 0))) (EListLit)))
-(DTypeSig false "splitOnCommaGo" (TyFun (TyCon "String") (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyApp (TyCon "List") (TyCon "String")))))))
-(DFunDef false "splitOnCommaGo" ((PVar "s") (PVar "start") (PVar "i") (PVar "acc")) (EBlock (DoLet false false (PVar "n") (EApp (EVar "stringLength") (EVar "s"))) (DoExpr (EIf (EBinOp ">=" (EVar "i") (EVar "n")) (EApp (EVar "reverseL") (EBinOp "::" (EApp (EApp (EApp (EVar "stringSlice") (EVar "start")) (EVar "n")) (EVar "s")) (EVar "acc"))) (EIf (EBinOp "==" (EApp (EApp (EApp (EVar "stringSlice") (EVar "i")) (EBinOp "+" (EVar "i") (ELit (LInt 1)))) (EVar "s")) (ELit (LString ","))) (EApp (EApp (EApp (EApp (EVar "splitOnCommaGo") (EVar "s")) (EBinOp "+" (EVar "i") (ELit (LInt 1)))) (EBinOp "+" (EVar "i") (ELit (LInt 1)))) (EBinOp "::" (EApp (EApp (EApp (EVar "stringSlice") (EVar "start")) (EVar "i")) (EVar "s")) (EVar "acc"))) (EApp (EApp (EApp (EApp (EVar "splitOnCommaGo") (EVar "s")) (EVar "start")) (EBinOp "+" (EVar "i") (ELit (LInt 1)))) (EVar "acc")))))))
+(DFunDef false "splitOnComma" ((PVar "s")) (EApp (EApp (EVar "split") (ELit (LString ","))) (EVar "s")))
 (DTypeSig false "prefixPatternOk" (TyFun (TyCon "String") (TyCon "Bool")))
 (DFunDef false "prefixPatternOk" ((PVar "s")) (EBinOp ">" (EApp (EVar "stringLength") (EVar "s")) (ELit (LInt 0))))
 (DTypeSig true "effectParamMsg" (TyFun (TyCon "String") (TyFun (TyCon "String") (TyCon "String"))))
@@ -306,7 +296,8 @@ axisProblems schema name p = match lookupAxis name schema
 (DUse false (UseGroup ("frontend" "ast") ((mem "EffParamTy" true))))
 (DUse false (UseGroup ("types" "effect_domain") ((mem "Param" true) (mem "canonParam" false) (mem "subTopOf" false) (mem "lookupAxis" false) (mem "productPrimaryLift" false) (mem "productOver" false))))
 (DUse false (UseGroup ("types" "effect_rows") ((mem "EffLabel" false) (mem "Atom" false) (mem "labelKey" false) (mem "builtinLabel" false) (mem "atomWith" false) (mem "effLabelName" false))))
-(DUse false (UseGroup ("support" "util") ((mem "sortUniqS" false) (mem "filterList" false) (mem "reverseL" false) (mem "contains" false) (mem "joinWith" false))))
+(DUse false (UseGroup ("support" "util") ((mem "sortUniqS" false) (mem "filterList" false) (mem "contains" false) (mem "joinWith" false))))
+(DUse false (UseGroup ("string") ((mem "split" false))))
 (DTypeSig false "lookupDomain" (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "Param"))) (TyCon "Param"))))
 (DFunDef false "lookupDomain" (PWild (PList)) (EVar "PUnit"))
 (DFunDef false "lookupDomain" ((PVar "l") (PCons (PTuple (PVar "k") (PVar "p")) (PVar "rest"))) (EIf (EBinOp "==" (EVar "l") (EVar "k")) (EVar "p") (EApp (EApp (EVar "lookupDomain") (EVar "l")) (EVar "rest"))))
@@ -333,9 +324,7 @@ axisProblems schema name p = match lookupAxis name schema
 (DTypeSig true "decodeSetParam" (TyFun (TyCon "String") (TyApp (TyCon "List") (TyCon "String"))))
 (DFunDef false "decodeSetParam" ((PVar "s")) (EBlock (DoLet false false (PVar "n") (EApp (EVar "stringLength") (EVar "s"))) (DoExpr (EIf (EBinOp "&&" (EBinOp "&&" (EBinOp ">=" (EVar "n") (ELit (LInt 2))) (EBinOp "==" (EApp (EApp (EApp (EVar "stringSlice") (ELit (LInt 0))) (ELit (LInt 1))) (EVar "s")) (ELit (LString "{")))) (EBinOp "==" (EApp (EApp (EApp (EVar "stringSlice") (EBinOp "-" (EVar "n") (ELit (LInt 1)))) (EVar "n")) (EVar "s")) (ELit (LString "}")))) (EApp (EVar "sortUniqS") (EApp (EApp (EVar "filterList") (ELam ((PVar "_s")) (EBinOp "/=" (EVar "_s") (ELit (LString ""))))) (EApp (EVar "splitOnComma") (EApp (EApp (EApp (EVar "stringSlice") (ELit (LInt 1))) (EBinOp "-" (EVar "n") (ELit (LInt 1)))) (EVar "s"))))) (EApp (EVar "sortUniqS") (EApp (EApp (EVar "filterList") (ELam ((PVar "_s")) (EBinOp "/=" (EVar "_s") (ELit (LString ""))))) (EApp (EVar "splitOnComma") (EVar "s"))))))))
 (DTypeSig false "splitOnComma" (TyFun (TyCon "String") (TyApp (TyCon "List") (TyCon "String"))))
-(DFunDef false "splitOnComma" ((PVar "s")) (EApp (EApp (EApp (EApp (EVar "splitOnCommaGo") (EVar "s")) (ELit (LInt 0))) (ELit (LInt 0))) (EListLit)))
-(DTypeSig false "splitOnCommaGo" (TyFun (TyCon "String") (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyApp (TyCon "List") (TyCon "String")))))))
-(DFunDef false "splitOnCommaGo" ((PVar "s") (PVar "start") (PVar "i") (PVar "acc")) (EBlock (DoLet false false (PVar "n") (EApp (EVar "stringLength") (EVar "s"))) (DoExpr (EIf (EBinOp ">=" (EVar "i") (EVar "n")) (EApp (EVar "reverseL") (EBinOp "::" (EApp (EApp (EApp (EVar "stringSlice") (EVar "start")) (EVar "n")) (EVar "s")) (EVar "acc"))) (EIf (EBinOp "==" (EApp (EApp (EApp (EVar "stringSlice") (EVar "i")) (EBinOp "+" (EVar "i") (ELit (LInt 1)))) (EVar "s")) (ELit (LString ","))) (EApp (EApp (EApp (EApp (EVar "splitOnCommaGo") (EVar "s")) (EBinOp "+" (EVar "i") (ELit (LInt 1)))) (EBinOp "+" (EVar "i") (ELit (LInt 1)))) (EBinOp "::" (EApp (EApp (EApp (EVar "stringSlice") (EVar "start")) (EVar "i")) (EVar "s")) (EVar "acc"))) (EApp (EApp (EApp (EApp (EVar "splitOnCommaGo") (EVar "s")) (EVar "start")) (EBinOp "+" (EVar "i") (ELit (LInt 1)))) (EVar "acc")))))))
+(DFunDef false "splitOnComma" ((PVar "s")) (EApp (EApp (EVar "split") (ELit (LString ","))) (EVar "s")))
 (DTypeSig false "prefixPatternOk" (TyFun (TyCon "String") (TyCon "Bool")))
 (DFunDef false "prefixPatternOk" ((PVar "s")) (EBinOp ">" (EApp (EVar "stringLength") (EVar "s")) (ELit (LInt 0))))
 (DTypeSig true "effectParamMsg" (TyFun (TyCon "String") (TyFun (TyCon "String") (TyCon "String"))))
