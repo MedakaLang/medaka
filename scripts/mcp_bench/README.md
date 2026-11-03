@@ -89,3 +89,24 @@ the named scope. On both Linux and macOS the portable collector reports CPU
 and peak RSS unavailable for the worker process tree; it does not attribute
 process-wide aggregate measurements to a run. Wall time includes process startup
 and observation. `summarize` retains each metric value, scope, and reason.
+
+`trials.py` provides pure preparation and import; it does not launch an agent or
+assert that arm isolation is enforceable. `trial_manifest` exports only source
+files, neutral prompt and control IDs/questions, with a fixed 600-second and
+30-call limit. The host must enforce the limits and record attempts separately
+from admissions. `import_transcript` returns a `trial-run-1` record containing
+one or two attempts; a second attempt is accepted only after an infrastructure
+error. Each attempt carries its outcome, answer, raw request/result bytes, actual
+usage counters (null when unavailable), a completeness flag and a SHA-256
+content reference to retained evidence. The caller owns persistence and must
+verify that the referenced artifact matches its digest. Raw bytes require a
+lossless encoding when persisted as JSON. An unknown outcome stays unknown.
+
+`grade` consumes independent per-criterion and per-control judgments, each
+with its task-spec basis and content-addressed evidence reference. The caller
+must independently inspect the answer and artifacts against that basis; the
+function cannot establish the truth of a supplied judgment or verify a digest.
+Missing judgments and missing answers produce an unknown verdict, wrong controls
+produce an incorrect verdict, and all criteria and controls remain in the
+reported denominator. The task rubric and control answers stay outside the
+trial workspace. No trial records are created by these functions.
