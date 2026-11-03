@@ -837,6 +837,7 @@ freshModuleCells seed mid = ModuleCells {
   effectSitesRef = Ref omEmpty,
   rowFailureReportedRef = Ref omEmpty,
   typeErrorKeySetRef = Ref omEmpty,
+  writtenKindRecoveriesRef = Ref omEmpty,
   escapedExistentialsRef = Ref Tip,
   openedAuthvarsRef = Ref Tip,
   indexSubstitutedRef = Ref Tip,

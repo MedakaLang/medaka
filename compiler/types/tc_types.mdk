@@ -2015,6 +2015,10 @@ public export data ModuleCells = ModuleCells {
   -- Every recorded (code, location, message) triple: the same diagnostic at
   -- the same span is one diagnostic, however many checks derive it.
   typeErrorKeySetRef : Ref (OrdMap Unit),
+  -- The written constructor occurrences the written-kind check rejected, keyed by
+  -- `writtenKindSiteKey`: conversion reads each as a type variable, so the kind
+  -- error is the only report the occurrence causes (`recoveredOccurrence`).
+  writtenKindRecoveriesRef : Ref (OrdMap Unit),
   -- Existential cells reported as escaping their scope: an obligation over
   -- one is a consequence of the escape, not a second defect.
   escapedExistentialsRef : Ref (Map Int Unit),

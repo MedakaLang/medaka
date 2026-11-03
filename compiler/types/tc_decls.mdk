@@ -150,6 +150,7 @@ import types.tc_decls_types.{
   sigVarsWithAuths,
   substAliasArgs,
   writtenBindingForce,
+  writtenKindRecoveryNames,
 }
 import types.effect_authority.{Authority(..), Authvar(..), authvarId}
 import types.effect_rows.{
@@ -1069,21 +1070,29 @@ sigToSchemeTvsIn : ModuleCtx ->
   List (String, List Kind) ->
   Ty ->
   (Scheme, List (String, Mono))
-sigToSchemeTvsIn outer scope ty = atSignature outer ty (mctx =>
-  let rows = rowArgNamesIn mctx (qualifiedKindScope mctx scope ty) ty
-  let auths = authArgBindersIn mctx ty
-  let tvs = freshTvMap mctx (sigTyVarNames ty rows (map fst auths))
-  let etbl = sigVarsForWith mctx ty (dedup (effTailNames ty ++ rows)) auths
-  (
-    Forall
-      (map (snd >> monoTyvarId) tvs)
-      (map effvarIdOf etbl.svRows)
-      (map authvarIdOf etbl.svAuths)
-      []
-      (bindingForceFromAst mctx etbl tvs ty)
-      (fromAstTypeE mctx etbl tvs ty),
-    tvs,
-  ))
+sigToSchemeTvsIn outer scope ty = atSignature
+  outer
+  ty
+  (mctx =>
+    let rows = rowArgNamesIn mctx (qualifiedKindScope mctx scope ty) ty
+    let auths = authArgBindersIn mctx ty
+    let tvs = freshTvMap mctx (sigTyVarNames ty rows (map fst auths))
+    let etbl = sigVarsForWith mctx ty (dedup (effTailNames ty ++ rows)) auths
+    -- A rejected occurrence's variable is quantified, not returned: no written
+    -- name or constraint refers to it.
+    let quantified = match writtenKindRecoveryNames mctx ty
+      [] => tvs
+      names => tvs ++ freshTvMap mctx names
+    (
+      Forall
+        (map (snd >> monoTyvarId) quantified)
+        (map effvarIdOf etbl.svRows)
+        (map authvarIdOf etbl.svAuths)
+        []
+        (bindingForceFromAst mctx etbl quantified ty)
+        (fromAstTypeE mctx etbl quantified ty),
+      tvs,
+    ))
 
 export
 sigVarsFor : ModuleCtx -> Ty -> List String -> SigVars

@@ -7,7 +7,7 @@ annotationsIn : Expr -> List (Expr, Ty)
 anyRowDeclaredType : List Kind -> List Kind -> Bool
 anyRowSlotArg : SigVars -> List (String, Mono) -> List Ty -> Bool
 appFallback : ModuleCtx -> SigVars -> List (String, Mono) -> TyConOrigin -> String -> List Ty -> Mono
-argKindErrors : KindScope -> List (String, Kind) -> List Kind -> List Ty -> Option (Option Loc, String)
+argKindErrors : KindScope -> List (String, Kind) -> List Kind -> List Ty -> Option KindError
 argsCarry : GraphCtx -> List TabKey -> String -> TabKey -> Int -> List Ty -> Bool
 astEffrowE : GraphCtx -> SigVars -> Ty -> EffRow
 atomAuthorityName : GraphCtx -> EffAtomTy -> List (String, Option Loc)
@@ -51,7 +51,7 @@ checkOneEffectParam : ModuleCtx -> String -> Param -> EffParamTy -> Unit
 checkPhantomAuthorityExport : ModuleCtx -> DataVis -> String -> List String -> List Variant -> Unit
 checkSuperKinds : ModuleCtx -> List Decl -> String -> List String -> List (Option KindAnn) -> List IfaceMethod -> List Super -> Unit
 checkWrittenElementCap : ModuleCtx -> List EffAtomTy -> Unit
-constraintKindError : KindScope -> List (String, Kind) -> Constraint -> Option (Option Loc, String)
+constraintKindError : KindScope -> List (String, Kind) -> Constraint -> Option KindError
 declaredAuthority : GraphCtx -> (String, Option KindAnn) -> List (String, Param)
 dedupLocated : List (String, Option Loc) -> List (String, Option Loc) -> List (String, Option Loc)
 domainParam : Option String -> Param
@@ -61,17 +61,18 @@ expandAliasHeadTyWith : List (TabKey, (List String, Ty)) -> Ty -> Ty
 fieldTypeE : ModuleCtx -> SigVars -> List (String, Mono) -> Field -> Mono
 findIfaceDecl : List Decl -> String -> Option (List String, List (Option KindAnn), List IfaceMethod)
 firstIfaceMethodLoc : List IfaceMethod -> Option Loc
-firstKindError : List (Unit -> Option (Option Loc, String)) -> Option (Option Loc, String)
+firstKindError : List (Unit -> Option KindError) -> Option KindError
 foldAppFallback : ModuleCtx -> SigVars -> List (String, Mono) -> Mono -> List Ty -> Mono
 foldAppKinds : ModuleCtx -> SigVars -> List (String, Mono) -> Mono -> List Kind -> List Ty -> Mono
 foldRowSlotArgs : ModuleCtx -> SigVars -> List (String, Mono) -> Mono -> List Ty -> Mono
-formKindError : KindScope -> List (String, Kind) -> Option Kind -> Ty -> Option (Option Loc, String)
+formKindError : KindScope -> List (String, Kind) -> Option Kind -> Ty -> Option KindError
 fromAstDomainE : ModuleCtx -> SigVars -> List (String, Mono) -> Ty -> Mono
+fromAstTyCon : ModuleCtx -> SigVars -> List (String, Mono) -> TyConOrigin -> String -> Mono
 fromAstType : ModuleCtx -> List (String, Mono) -> Ty -> Mono
 fromAstTypeApp : ModuleCtx -> SigVars -> List (String, Mono) -> TyConOrigin -> String -> List Ty -> Mono
 fromAstTypeE : ModuleCtx -> SigVars -> List (String, Mono) -> Ty -> Mono
 fromAstTypeVarApp : ModuleCtx -> SigVars -> List (String, Mono) -> String -> List Ty -> Ty -> Ty -> Mono
-headKindError : KindScope -> List (String, Kind) -> Option Kind -> String -> Bool -> Option Loc -> List Kind -> List Ty -> Option (Option Loc, String)
+headKindError : KindScope -> List (String, Kind) -> Option Kind -> String -> Bool -> Option Loc -> List Kind -> List Ty -> Option KindError
 headKindsAt : Map String (List (TabKey, List Kind)) -> TyConOrigin -> String -> Option (List Kind)
 headParamKinds : KindScope -> TyConOrigin -> String -> List String -> List (String, Kind)
 ifaceKindsAt : ClassEnv -> Int -> TyConOrigin -> String -> Option (List Kind)
@@ -82,19 +83,22 @@ isOrdinaryBinder : SigVars -> String -> Bool
 isRowSlotArg : SigVars -> List (String, Mono) -> Ty -> Bool
 isStringTy : Ty -> Bool
 kauthArgVarNames : GraphCtx -> List Kind -> List Ty -> List (String, Param)
-kindAgainst : Option Loc -> (Unit -> String) -> Int -> Kind -> Option Kind -> Option (Option Loc, String)
+kindAgainst : Option Loc -> (Unit -> String) -> Int -> Kind -> Option Kind -> Option KindError
 kindAgainstMsg : String -> Int -> Kind -> Kind -> String
 kindAnnHasEffect : KindAnn -> Bool
 kindArgMono : ModuleCtx -> SigVars -> List (String, Mono) -> Kind -> Ty -> Mono
-kindErrorIn : KindScope -> List (String, Kind) -> Option Kind -> Ty -> Option (Option Loc, String)
+kindErrorIn : KindScope -> List (String, Kind) -> Option Kind -> Ty -> Option KindError
 kindScopeOf : ModuleCtx -> KindScope
 krowArgVarNames : List Kind -> List Ty -> List String
 literalDomainTop : List EffParamTy -> Param
+markRecovery : ModuleCtx -> Option String -> Option Loc -> Unit
 namedArgTypes : Ty -> List (String, Ty)
 namedAtomBinder : GraphCtx -> EffAtomTy -> List (String, Param)
 namedAtomBinders : GraphCtx -> Ty -> List (String, Param)
+occurrenceKeysIn : Ty -> List String
 orNextError : Option a -> (Unit -> Option a) -> Option a
 ordinaryBinderIn : SigVars -> Bool -> Ty -> Option String
+ownedBy : String -> KindError -> KindError
 paramCarries : GraphCtx -> List TabKey -> TabKey -> Int -> Bool
 patternArgVarNames : List Kind -> List Ty -> List String
 patternSlotNamesIn : ModuleCtx -> Ty -> List String
@@ -109,12 +113,15 @@ qualifyBy : SigVars -> String -> Mono -> Mono
 qualifyByAll : SigVars -> List String -> Mono -> Mono
 qualifyByTerms : ModuleCtx -> SigVars -> List EffParamTy -> Option Loc -> Mono -> Mono
 recFieldMono : ModuleCtx -> SigVars -> List (String, Mono) -> Field -> (String, Mono)
+recoveredOccurrence : ModuleCtx -> List (String, Mono) -> String -> Option Loc -> Option Mono
 registerEffectDomain : GraphCtx -> EffLabel -> Option String -> List (String, String) -> Unit
 reportBinderDomains : ModuleCtx -> Ty -> List (String, Param) -> Unit
 reportBodyKinds : ModuleCtx -> KindScope -> Decl -> Unit
 reportUnboundAuthorityNames : ModuleCtx -> Ty -> SigVars -> Unit
 reportUnboundAuthorityNamesIn : ModuleCtx -> List Ty -> SigVars -> Unit
 reportWrittenKinds : ModuleCtx -> KindScope -> List (String, Kind) -> Option Loc -> List (Option Kind, Ty) -> Unit
+reportWrittenKindsAnd : Bool -> ModuleCtx -> KindScope -> List (String, Kind) -> Option Loc -> List (Option Kind, Ty) -> Unit
+reportWrittenKindsRecovering : ModuleCtx -> KindScope -> Option Loc -> Ty -> Unit
 reqTyToMono : ModuleCtx -> List (String, Mono) -> Ty -> Mono
 returnRowE : ModuleCtx -> SigVars -> List (String, Mono) -> Ty -> EffRow
 rowArgNames : ModuleCtx -> Ty -> List String
@@ -129,7 +136,7 @@ sigConstraintsOf : Ty -> List Constraint
 sigVarsUnion : SigVars -> SigVars -> SigVars
 sigVarsWithAuths : List (String, Ref Authvar) -> SigVars -> SigVars
 sigVarsWithRows : List (String, Ref Effvar) -> SigVars -> SigVars
-spineKindError : KindScope -> List (String, Kind) -> Option Kind -> Ty -> Option (Option Loc, String)
+spineKindError : KindScope -> List (String, Kind) -> Option Kind -> Ty -> Option KindError
 spliceRowTails : List (String, Ty) -> List String -> (List EffAtomTy, List String)
 substAliasArgs : List (String, Ty) -> Ty -> Ty
 substRowTailsAt : List (String, Ty) -> Ty -> (Ty, Bool)
@@ -141,10 +148,13 @@ tailCellsOf : SigVars -> List String -> List (Ref Effvar)
 tyCarries : GraphCtx -> List TabKey -> String -> Ty -> Bool
 tyVarTypeOcc : ModuleCtx -> String -> Ty -> Bool
 tyVarTypeOccSlots : ModuleCtx -> String -> List Kind -> List Ty -> Bool
-varKindError : KindScope -> List (String, Kind) -> Option Kind -> String -> Kind -> List Ty -> Option (Option Loc, String)
+unowned : KindError -> KindError
+varKindError : KindScope -> List (String, Kind) -> Option Kind -> String -> Kind -> List Ty -> Option KindError
 writtenAxisTerm : SigVars -> List (String, EffParamTy) -> (String, Param) -> (String, Authority)
 writtenBindingForce : ModuleCtx -> SigVars -> List (String, Mono) -> Ty -> Option EffRow
 writtenElement : Param -> EffAtomTy -> List Param
+writtenKindRecoveryNames : ModuleCtx -> Ty -> List String
+writtenKindSiteKey : String -> Loc -> String
 writtenQualifiers : Ty -> List (List String, Option Loc)
 writtenTermProblems : String -> Param -> List EffParamTy -> List String
 zipCtorBinders : List Variant -> List (List (String, KindAnn)) -> List (Variant, List (String, KindAnn))

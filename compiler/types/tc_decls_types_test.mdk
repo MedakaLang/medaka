@@ -615,3 +615,44 @@ test "an ill-kinded annotation inside an applied lambda is one kind error" =
   expectEqual
     1
     (listLen (kindErrorStarts "h : Int -> Int\nh n = ((x : Option) => 0) n\n"))
+
+-- A rejected written type converts to a variable, so the kind error is the
+-- only error it causes, wherever the program passes a value through it.
+test "a rejected written type causes no second error at its uses" = expectEach [
+  (
+    "#4752: a use of the signature",
+    rejectsOnceWith
+      optionUnapplied
+      "f : Option -> Int\nf _ = 0\nmain = f (Some 3)\n",
+  ),
+  (
+    "uses at two types",
+    rejectsOnceWith
+      optionUnapplied
+      "f : Option -> Int\nf _ = 0\nmain = f (Some 3) + f [1]\n",
+  ),
+  (
+    "an applied lambda's annotation",
+    rejectsOnceWith
+      optionUnapplied
+      "h : Int -> Int\nh n = ((x : Option) => 0) n\n",
+  ),
+  (
+    "a let annotation",
+    rejectsOnceWith
+      optionUnapplied
+      "h : Int -> Int\nh n =\n  let _ = (n : Option)\n  n\n",
+  ),
+  (
+    "an expression annotation",
+    rejectsOnceWith optionUnapplied "k : Int\nk = (3 : Option)\n",
+  ),
+]
+
+test "a kind error does not hide an independent type error" =
+  expectEqual
+    ["T-WRITTEN-KIND-MISMATCH", "T-TYPE-MISMATCH"]
+    (map
+      fst
+      (checkedErrors
+        "f : Option -> Int\nf _ = 0\ng : Int -> String\ng n = n\nmain = f (Some 3)\n"))

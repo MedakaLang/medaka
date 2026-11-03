@@ -200,7 +200,7 @@ import types.registry.{regKeyOfTab}
 import types.expr_loc.{exprStartLoc}
 import frontend.ast_walk.{DeclBody(..), childExprs, declBodies}
 import frontend.resolve.{primitiveTypes, tupleCtorTyNames}
-import support.ordmap.{omEmpty, omInsert, omLookup, OrdMap}
+import support.ordmap.{omEmpty, omHasKey, omInsert, omLookup, omSize, OrdMap}
 export import types.tc_env.{kindsEq}
 
 -- The effect-label domain registry maps a label's identity key (`labelKey`) to the
@@ -568,7 +568,7 @@ checkDeclaredKindsDecl mctx sc prog (d@(DInterface { name, typarams, typaramKind
     methods
   reportBodyKinds mctx sc d
 checkDeclaredKindsDecl mctx sc _ (DTypeSig _ _ ty loc) =
-  reportWrittenKinds mctx sc [] (Some loc) [(Some KType, ty)]
+  reportWrittenKindsRecovering mctx sc (Some loc) ty
 checkDeclaredKindsDecl mctx sc _ (DExtern (ExternDecl { edTy = ty, edLoc = loc })) =
   reportWrittenKinds mctx sc [] (Some loc) [(Some KType, ty)]
 checkDeclaredKindsDecl mctx sc _ d = reportBodyKinds mctx sc d
@@ -1398,19 +1398,10 @@ fromAstTypeE : ModuleCtx -> SigVars -> List (String, Mono) -> Ty -> Mono
 -- stamped on the `Ty.TyCon` this conversion is reading, and the record pattern
 -- puts it in scope for free — there is nowhere else it could come from and no
 -- ambient module id to get it wrong from.
-fromAstTypeE mctx etbl tvs (TyCon { tyConName = n, tyConOrigin = o }) =
-  match lookupTab (tyTabKey o n) mctx.mcCells.aliasTableRef.value
-    -- Transparent non-parameterized alias (`type Foo = Int`): expand to its RHS,
-    -- recursively so alias-of-alias (`type A = Int; type B = A`) flattens.  Cycle
-    -- rejection is deferred (stage 4); the non-cyclic corpus terminates.
-    Some (params, rhs) if listLen params == 0 => fromAstTypeE mctx etbl tvs rhs
-    -- A parameterized alias used UNAPPLIED (`x : Pair`): a type alias is not a
-    -- first-class type constructor (DESIGN §3/§9 fork 2), so it must be saturated.
-    -- Reject with an arity error and keep the bare TCon so inference continues.
-    Some (params, _) =>
-      pushTypeErrorOnce mctx TAliasArity (aliasArityMsg n (listLen params) 0)
-      tconFrom o n
-    _ => tconFrom o n
+fromAstTypeE mctx etbl tvs (TyCon { tyConName = n, tyConOrigin = o, tyConLoc = l }) =
+  optionOrElse
+    (_ => fromAstTyCon mctx etbl tvs o n)
+    (recoveredOccurrence mctx tvs n l)
 -- RIGID PRODUCER 1 of 2 (#1110).  A `TyVar` bound by the enclosing scheme
 -- resolves to its mono; the FALLBACK — an unbound type-parameter name — is a
 -- rigid variable, not a type constructor.  See `Mono.TRigid`.
@@ -1428,8 +1419,10 @@ fromAstTypeE mctx _ _ (TyAuth p loc) =
   pushTypeErrorOncePerSite mctx TAuthorityKind loc (authorityTermAsTypeMsg p)
   tconBuiltin "Unit"
 fromAstTypeE mctx etbl tvs (TyApp a b) = match tyAppSpine (TyApp a b)
-  (TyCon { tyConName = n, tyConOrigin = o }, args) =>
-    fromAstTypeApp mctx etbl tvs o n args
+  (TyCon { tyConName = n, tyConOrigin = o, tyConLoc = l }, args) =>
+    optionOrElse
+      (_ => fromAstTypeApp mctx etbl tvs o n args)
+      (recoveredOccurrence mctx tvs n l)
   -- #822: an ABSTRACT head with known kinds — an interface typaram of graded kind
   -- (`f e a`, `f : Row -> Type -> Type`).  Anything else stays opaque.
   (TyVar h, args) => fromAstTypeVarApp mctx etbl tvs h args a b
@@ -1465,6 +1458,27 @@ fromAstTypeE mctx _etbl _tvs (TyRow labels tail loc) =
     loc
     (rowKindMismatchMsg labels tail)
   tconBuiltin "Unit"
+
+-- A constructor written unapplied, with [o] the identity its occurrence carries.
+fromAstTyCon : ModuleCtx ->
+  SigVars ->
+  List (String, Mono) ->
+  TyConOrigin ->
+  String ->
+  Mono
+fromAstTyCon mctx etbl tvs o n =
+  match lookupTab (tyTabKey o n) mctx.mcCells.aliasTableRef.value
+    -- Transparent non-parameterized alias (`type Foo = Int`): expand to its RHS,
+    -- recursively so alias-of-alias (`type A = Int; type B = A`) flattens.  Cycle
+    -- rejection is deferred (stage 4); the non-cyclic corpus terminates.
+    Some (params, rhs) if listLen params == 0 => fromAstTypeE mctx etbl tvs rhs
+    -- A parameterized alias used UNAPPLIED (`x : Pair`): a type alias is not a
+    -- first-class type constructor (DESIGN §3/§9 fork 2), so it must be saturated.
+    -- Reject with an arity error and keep the bare TCon so inference continues.
+    Some (params, _) =>
+      pushTypeErrorOnce mctx TAliasArity (aliasArityMsg n (listLen params) 0)
+      tconFrom o n
+    _ => tconFrom o n
 
 -- An arrow's domain: a named argument whose name an effect atom refers to is
 -- qualified by that binder's authority; an unreferenced name binds nothing.
@@ -2395,20 +2409,120 @@ reportWrittenKinds : ModuleCtx ->
   List (Option Kind, Ty) ->
   Unit
 reportWrittenKinds mctx sc declared fallback items =
+  reportWrittenKindsAnd False mctx sc declared fallback items
+
+-- `reportWrittenKinds`, which also marks each rejected constructor occurrence
+-- for conversion to read as a type variable (`recoveredOccurrence`).  Only a
+-- type that converts after this check and only as a value's type may be
+-- marked: a signature or an annotation.  A data field converts before it, and
+-- an impl head read as a variable would be an impl for every type.
+reportWrittenKindsRecovering : ModuleCtx ->
+  KindScope ->
+  Option Loc ->
+  Ty ->
+  Unit
+reportWrittenKindsRecovering mctx sc fallback ty =
+  reportWrittenKindsAnd True mctx sc [] fallback [(Some KType, ty)]
+
+reportWrittenKindsAnd : Bool ->
+  ModuleCtx ->
+  KindScope ->
+  List (String, Kind) ->
+  Option Loc ->
+  List (Option Kind, Ty) ->
+  Unit
+reportWrittenKindsAnd recover mctx sc declared fallback items =
   let used =
     flatMap (it => kindUses sc.ksHeads sc.ksIfaces (fst it) (snd it)) items
   let vars =
     declared ++ filterList (u => not (kindTypeOnly (snd u))) used ++ used
   each
     (it => match kindErrorIn sc vars (fst it) (snd it)
-      Some (loc, msg) =>
+      Some (KindError loc msg owner) =>
         pushTypeErrorOncePerSite
           mctx
           TWrittenKindMismatch
           (orElseLoc loc (orElseLoc (firstTyLoc (snd it)) fallback))
           msg
+        if recover then markRecovery mctx owner loc
       None => ())
     items
+
+-- A written type's first kind error: its span, its message, and the name of
+-- the constructor whose occurrence at that span it rejects, when the error is
+-- about that occurrence's own application rather than about a variable or a
+-- form around it.
+data KindError = KindError (Option Loc) String (Option String)
+
+-- [e] as an error about the occurrence of [n] at its span.
+ownedBy : String -> KindError -> KindError
+ownedBy n (KindError loc msg _) = KindError loc msg (Some n)
+
+-- [e] as an error about no occurrence.
+unowned : KindError -> KindError
+unowned (KindError loc msg _) = KindError loc msg None
+
+markRecovery : ModuleCtx -> Option String -> Option Loc -> Unit
+markRecovery mctx (Some n) (Some loc) =
+  mctx.mcCells.writtenKindRecoveriesRef :=
+    omInsert
+      (writtenKindSiteKey n loc)
+      ()
+      mctx.mcCells.writtenKindRecoveriesRef.value
+markRecovery _ _ _ = ()
+
+-- The key of the occurrence of [n] written at [loc].
+writtenKindSiteKey : String -> Loc -> String
+writtenKindSiteKey n (Loc file l1 c1 l2 c2) =
+  "\{n}@\{file}:\{l1}:\{c1}-\{l2}:\{c2}"
+
+-- What conversion reads for an occurrence of [n] at [loc] the written-kind
+-- check rejected: the variable [tvs] binds for it where the conversion
+-- quantifies one (`writtenKindRecoveryNames`), else a fresh variable.  The
+-- program is rejected by the kind error, so the variable never types an
+-- accepted program; it unifies with whatever the program passes, so the
+-- rejected type causes no second error.  `None` for any other occurrence.
+recoveredOccurrence : ModuleCtx ->
+  List (String, Mono) ->
+  String ->
+  Option Loc ->
+  Option Mono
+recoveredOccurrence mctx tvs n (Some loc) =
+  let sites = mctx.mcCells.writtenKindRecoveriesRef.value
+  if omSize sites == 0 then
+    None
+  else
+    let key = writtenKindSiteKey n loc
+    if omHasKey key sites then
+      Some (optionOrElse (_ => freshVar mctx ()) (lookupAssoc key tvs))
+    else
+      None
+recoveredOccurrence _ _ _ None = None
+
+-- The names a signature quantifies its rejected occurrences under, one per
+-- occurrence (`recoveredOccurrence`): each is generalised as an unconstrained
+-- variable is.  None when the check rejected no occurrence in the module.
+export
+writtenKindRecoveryNames : ModuleCtx -> Ty -> List String
+writtenKindRecoveryNames mctx ty =
+  let sites = mctx.mcCells.writtenKindRecoveriesRef.value
+  if omSize sites == 0 then
+    []
+  else
+    filterList (k => omHasKey k sites) (occurrenceKeysIn ty)
+
+-- The keys of the constructor occurrences [ty] converts, constraints aside.
+occurrenceKeysIn : Ty -> List String
+occurrenceKeysIn (TyCon { tyConName = n, tyConLoc = (Some loc) }) =
+  [writtenKindSiteKey n loc]
+occurrenceKeysIn (TyApp a b) = occurrenceKeysIn a ++ occurrenceKeysIn b
+occurrenceKeysIn (TyFun a b) = occurrenceKeysIn a ++ occurrenceKeysIn b
+occurrenceKeysIn (TyTuple ts) = flatMap occurrenceKeysIn ts
+occurrenceKeysIn (TyEffect _ _ t) = occurrenceKeysIn t
+occurrenceKeysIn (TyConstrained _ t) = occurrenceKeysIn t
+occurrenceKeysIn (TyNamed _ t _) = occurrenceKeysIn t
+occurrenceKeysIn (TyQual t _ _) = occurrenceKeysIn t
+occurrenceKeysIn _ = []
 
 -- The first kind error of [ty] at a position of kind [want] (`None` where it
 -- is unknown), with [vars] the kinds of its variables: its span, if it has
@@ -2417,7 +2531,7 @@ kindErrorIn : KindScope ->
   List (String, Kind) ->
   Option Kind ->
   Ty ->
-  Option (Option Loc, String)
+  Option KindError
 kindErrorIn sc vars (Some k) ty =
   if kindTypeOnly k then spineKindError sc vars (Some k) ty else None
 kindErrorIn sc vars None ty = spineKindError sc vars None ty
@@ -2426,7 +2540,7 @@ spineKindError : KindScope ->
   List (String, Kind) ->
   Option Kind ->
   Ty ->
-  Option (Option Loc, String)
+  Option KindError
 spineKindError sc vars want ty = match tyAppSpine ty
   (TyCon { tyConName = n, tyConOrigin = o, tyConLoc = loc }, args) =>
     match sc.ksHeads o n
@@ -2450,19 +2564,25 @@ headKindError : KindScope ->
   Option Loc ->
   List Kind ->
   List Ty ->
-  Option (Option Loc, String)
+  Option KindError
 headKindError sc vars want n isAlias loc params args
   | isAlias && listLen args /= listLen params =
     argKindErrors sc vars params args
   | listLen args > listLen params =
-    Some (loc, writtenKindArityMsg n (listLen params) (listLen args))
+    Some
+      (KindError
+        loc
+        (writtenKindArityMsg n (listLen params) (listLen args))
+        (Some n))
   | otherwise = orNextError (argKindErrors sc vars params args) (_ =>
-    kindAgainst
-      loc
-      (_ => ppConName n)
-      (listLen args)
-      (kindOfParams (drop (listLen args) params))
-      want)
+    map
+      (ownedBy n)
+      (kindAgainst
+        loc
+        (_ => ppConName n)
+        (listLen args)
+        (kindOfParams (drop (listLen args) params))
+        want))
 
 -- A variable applied to [args], judged as a head of kind [k] is.
 varKindError : KindScope ->
@@ -2471,13 +2591,15 @@ varKindError : KindScope ->
   String ->
   Kind ->
   List Ty ->
-  Option (Option Loc, String)
+  Option KindError
 varKindError sc vars want v k args
   | not (kindTypeOnly k) = argKindErrors sc vars [] args
-  | listLen args > listLen (kindParams k) = Some (
-    firstTyLocList args,
-    writtenKindArityMsg v (listLen (kindParams k)) (listLen args),
-  )
+  | listLen args > listLen (kindParams k) =
+    Some
+      (KindError
+        (firstTyLocList args)
+        (writtenKindArityMsg v (listLen (kindParams k)) (listLen args))
+        None)
   | otherwise = orNextError (argKindErrors sc vars (kindParams k) args) (_ =>
     kindAgainst
       (firstTyLocList args)
@@ -2492,7 +2614,7 @@ formKindError : KindScope ->
   List (String, Kind) ->
   Option Kind ->
   Ty ->
-  Option (Option Loc, String)
+  Option KindError
 formKindError sc vars want (TyFun a b) = firstKindError [
   _ => kindErrorIn sc vars (Some KType) a,
   _ => kindErrorIn sc vars (Some KType) b,
@@ -2505,7 +2627,7 @@ formKindError sc vars want (TyTuple ts) = firstKindError [
 formKindError sc vars want (TyEffect _ _ t) = kindErrorIn sc vars want t
 formKindError sc vars want (TyConstrained cs t) =
   firstKindError
-    (map (c => _ => constraintKindError sc vars c) cs
+    (map (c => _ => map unowned (constraintKindError sc vars c)) cs
       ++ [_ => kindErrorIn sc vars want t])
 formKindError sc vars want (TyNamed _ t _) = kindErrorIn sc vars want t
 formKindError sc vars want (TyQual t _ _) = kindErrorIn sc vars want t
@@ -2515,7 +2637,7 @@ formKindError _ _ _ _ = None
 constraintKindError : KindScope ->
   List (String, Kind) ->
   Constraint ->
-  Option (Option Loc, String)
+  Option KindError
 constraintKindError sc vars (Constraint { constraintHead = n, constraintOrigin = o, constraintArgs = args }) =
   argKindErrors sc vars (optionOr [] (sc.ksIfaces o n)) args
 
@@ -2524,7 +2646,7 @@ argKindErrors : KindScope ->
   List (String, Kind) ->
   List Kind ->
   List Ty ->
-  Option (Option Loc, String)
+  Option KindError
 argKindErrors _ _ _ [] = None
 argKindErrors sc vars (k :: ks) (a :: as2) = orNextError (kindErrorIn
   sc
@@ -2544,10 +2666,10 @@ kindAgainst : Option Loc ->
   Int ->
   Kind ->
   Option Kind ->
-  Option (Option Loc, String)
+  Option KindError
 kindAgainst loc written applied got (Some want) =
   if kindTypeOnly got && kindTypeOnly want && not (kindEq got want) then
-    Some (loc, kindAgainstMsg (written ()) applied got want)
+    Some (KindError loc (kindAgainstMsg (written ()) applied got want) None)
   else
     None
 kindAgainst _ _ _ _ None = None
@@ -2559,8 +2681,7 @@ kindAgainstMsg written applied got want
   where
     missing = listLen (kindParams got) - listLen (kindParams want)
 
-firstKindError : List (Unit -> Option (Option Loc, String)) ->
-  Option (Option Loc, String)
+firstKindError : List (Unit -> Option KindError) -> Option KindError
 firstKindError [] = None
 firstKindError (check :: rest) =
   orNextError (check ()) (_ => firstKindError rest)
@@ -2582,9 +2703,12 @@ reportBodyKinds mctx sc d =
   each
     ((DeclBody _ body) =>
       each
-        (a => reportWrittenKinds mctx sc [] (Some (exprStartLoc (fst a))) [
-          (Some KType, snd a),
-        ])
+        (a =>
+          reportWrittenKindsRecovering
+            mctx
+            sc
+            (Some (exprStartLoc (fst a)))
+            (snd a))
         (annotationsIn body))
     (declBodies d)
 

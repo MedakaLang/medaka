@@ -1,5 +1,5 @@
 # META
-source_lines=2803
+source_lines=2812
 stages=DESUGAR,MARK
 # SOURCE
 -- tc_decls: declaration analysis above the written-type layer: building `DataEnv` and `DeclEnvs`
@@ -154,6 +154,7 @@ import types.tc_decls_types.{
   sigVarsWithAuths,
   substAliasArgs,
   writtenBindingForce,
+  writtenKindRecoveryNames,
 }
 import types.effect_authority.{Authority(..), Authvar(..), authvarId}
 import types.effect_rows.{
@@ -1073,21 +1074,29 @@ sigToSchemeTvsIn : ModuleCtx ->
   List (String, List Kind) ->
   Ty ->
   (Scheme, List (String, Mono))
-sigToSchemeTvsIn outer scope ty = atSignature outer ty (mctx =>
-  let rows = rowArgNamesIn mctx (qualifiedKindScope mctx scope ty) ty
-  let auths = authArgBindersIn mctx ty
-  let tvs = freshTvMap mctx (sigTyVarNames ty rows (map fst auths))
-  let etbl = sigVarsForWith mctx ty (dedup (effTailNames ty ++ rows)) auths
-  (
-    Forall
-      (map (snd >> monoTyvarId) tvs)
-      (map effvarIdOf etbl.svRows)
-      (map authvarIdOf etbl.svAuths)
-      []
-      (bindingForceFromAst mctx etbl tvs ty)
-      (fromAstTypeE mctx etbl tvs ty),
-    tvs,
-  ))
+sigToSchemeTvsIn outer scope ty = atSignature
+  outer
+  ty
+  (mctx =>
+    let rows = rowArgNamesIn mctx (qualifiedKindScope mctx scope ty) ty
+    let auths = authArgBindersIn mctx ty
+    let tvs = freshTvMap mctx (sigTyVarNames ty rows (map fst auths))
+    let etbl = sigVarsForWith mctx ty (dedup (effTailNames ty ++ rows)) auths
+    -- A rejected occurrence's variable is quantified, not returned: no written
+    -- name or constraint refers to it.
+    let quantified = match writtenKindRecoveryNames mctx ty
+      [] => tvs
+      names => tvs ++ freshTvMap mctx names
+    (
+      Forall
+        (map (snd >> monoTyvarId) quantified)
+        (map effvarIdOf etbl.svRows)
+        (map authvarIdOf etbl.svAuths)
+        []
+        (bindingForceFromAst mctx etbl quantified ty)
+        (fromAstTypeE mctx etbl quantified ty),
+      tvs,
+    ))
 
 export
 sigVarsFor : ModuleCtx -> Ty -> List String -> SigVars
@@ -2815,7 +2824,7 @@ methodRowNumObservation saved caseName builtinDecls decls =
 (DUse false (UseGroup ("types" "tc_scope") ((mem "importFormRows" false) (mem "memberBindsCtorName" false))))
 (DUse false (UseGroup ("types" "tc_unify") ((mem "atomsEscape" false) (mem "freshAuthBinderRanged" false) (mem "freshAuthvar" false) (mem "freshAuthvarRanged" false) (mem "freshEffMap" false) (mem "freshEffvar" false) (mem "freshTvMap" false) (mem "freshVar" false) (mem "namedArgDomains" false) (mem "freshVars" false))))
 (DUse false (UseGroup ("types" "tc_decls_variance") ((mem "declEnvPolarityChain" false) (mem "inferParamPolarities" false) (mem "payloadAstTypes" false) (mem "recordParamPolarities" false) (mem "seedParamPolarityFixpointScoped" false) (mem "variantPayload" false))))
-(DUse false (UseGroup ("types" "tc_decls_types") ((mem "atomsOfWritten" false) (mem "authArgBindersIn" false) (mem "authorityBinderBound" false) (mem "binderDomainsIn" false) (mem "bindingForceFromAst" false) (mem "fromAstType" false) (mem "fromAstTypeE" false) (mem "namedArgTypes" false) (mem "namedAtomBinders" false) (mem "patternSlotNamesIn" false) (mem "payloadTypesE" false) (mem "qualifiedKindScope" false) (mem "recFieldMono" false) (mem "reportBinderDomains" false) (mem "reportUnboundAuthorityNames" false) (mem "reportUnboundAuthorityNamesIn" false) (mem "rowArgNames" false) (mem "rowArgNamesIn" false) (mem "sigVarsWithAuths" false) (mem "substAliasArgs" false) (mem "writtenBindingForce" false))))
+(DUse false (UseGroup ("types" "tc_decls_types") ((mem "atomsOfWritten" false) (mem "authArgBindersIn" false) (mem "authorityBinderBound" false) (mem "binderDomainsIn" false) (mem "bindingForceFromAst" false) (mem "fromAstType" false) (mem "fromAstTypeE" false) (mem "namedArgTypes" false) (mem "namedAtomBinders" false) (mem "patternSlotNamesIn" false) (mem "payloadTypesE" false) (mem "qualifiedKindScope" false) (mem "recFieldMono" false) (mem "reportBinderDomains" false) (mem "reportUnboundAuthorityNames" false) (mem "reportUnboundAuthorityNamesIn" false) (mem "rowArgNames" false) (mem "rowArgNamesIn" false) (mem "sigVarsWithAuths" false) (mem "substAliasArgs" false) (mem "writtenBindingForce" false) (mem "writtenKindRecoveryNames" false))))
 (DUse false (UseGroup ("types" "effect_authority") ((mem "Authority" true) (mem "Authvar" true) (mem "authvarId" false))))
 (DUse false (UseGroup ("types" "effect_rows") ((mem "Atom" true) (mem "EffLabel" true) (mem "EffRow" true) (mem "Effvar" true) (mem "atomsNorm" false) (mem "pureRow" false))))
 (DUse false (UseGroup ("frontend" "ast") ((mem "UsePath" true) (mem "Ns" true) (mem "Lit" true) (mem "Expr" true) (mem "Attr" true) (mem "ConPayload" true) (mem "Constraint" true) (mem "DataVis" true) (mem "Decl" true) (mem "EffAtomTy" true) (mem "ExternDecl" true) (mem "Field" true) (mem "Ident" true) (mem "IfaceMethod" true) (mem "KindAnn" true) (mem "Loc" true) (mem "TabKey" true) (mem "Ty" true) (mem "TyConOrigin" true) (mem "UseMember" true) (mem "Variant" true) (mem "externDecls" false) (mem "firstTyLoc" false) (mem "firstTyLocList" false) (mem "identOriginFold" false) (mem "lookupTab" false) (mem "mapTyFull" false) (mem "mkIdent" false) (mem "tabKeyEq" false) (mem "tabKeyName" false))))
@@ -2961,7 +2970,7 @@ methodRowNumObservation saved caseName builtinDecls decls =
 (DTypeSig true "sigToSchemeTvs" (TyFun (TyCon "ModuleCtx") (TyFun (TyCon "Ty") (TyTuple (TyCon "Scheme") (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "Mono")))))))
 (DFunDef false "sigToSchemeTvs" ((PVar "mctx") (PVar "ty")) (EApp (EApp (EApp (EVar "sigToSchemeTvsIn") (EVar "mctx")) (EListLit)) (EVar "ty")))
 (DTypeSig true "sigToSchemeTvsIn" (TyFun (TyCon "ModuleCtx") (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "Kind")))) (TyFun (TyCon "Ty") (TyTuple (TyCon "Scheme") (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "Mono"))))))))
-(DFunDef false "sigToSchemeTvsIn" ((PVar "outer") (PVar "scope") (PVar "ty")) (EApp (EApp (EApp (EVar "atSignature") (EVar "outer")) (EVar "ty")) (ELam ((PVar "mctx")) (EBlock (DoLet false false (PVar "rows") (EApp (EApp (EApp (EVar "rowArgNamesIn") (EVar "mctx")) (EApp (EApp (EApp (EVar "qualifiedKindScope") (EVar "mctx")) (EVar "scope")) (EVar "ty"))) (EVar "ty"))) (DoLet false false (PVar "auths") (EApp (EApp (EVar "authArgBindersIn") (EVar "mctx")) (EVar "ty"))) (DoLet false false (PVar "tvs") (EApp (EApp (EVar "freshTvMap") (EVar "mctx")) (EApp (EApp (EApp (EVar "sigTyVarNames") (EVar "ty")) (EVar "rows")) (EApp (EApp (EVar "map") (EVar "fst")) (EVar "auths"))))) (DoLet false false (PVar "etbl") (EApp (EApp (EApp (EApp (EVar "sigVarsForWith") (EVar "mctx")) (EVar "ty")) (EApp (EVar "dedup") (EBinOp "++" (EApp (EVar "effTailNames") (EVar "ty")) (EVar "rows")))) (EVar "auths"))) (DoExpr (ETuple (EApp (EApp (EApp (EApp (EApp (EApp (EVar "Forall") (EApp (EApp (EVar "map") (EBinOp ">>" (EVar "snd") (EVar "monoTyvarId"))) (EVar "tvs"))) (EApp (EApp (EVar "map") (EVar "effvarIdOf")) (EFieldAccess (EVar "etbl") "svRows"))) (EApp (EApp (EVar "map") (EVar "authvarIdOf")) (EFieldAccess (EVar "etbl") "svAuths"))) (EListLit)) (EApp (EApp (EApp (EApp (EVar "bindingForceFromAst") (EVar "mctx")) (EVar "etbl")) (EVar "tvs")) (EVar "ty"))) (EApp (EApp (EApp (EApp (EVar "fromAstTypeE") (EVar "mctx")) (EVar "etbl")) (EVar "tvs")) (EVar "ty"))) (EVar "tvs")))))))
+(DFunDef false "sigToSchemeTvsIn" ((PVar "outer") (PVar "scope") (PVar "ty")) (EApp (EApp (EApp (EVar "atSignature") (EVar "outer")) (EVar "ty")) (ELam ((PVar "mctx")) (EBlock (DoLet false false (PVar "rows") (EApp (EApp (EApp (EVar "rowArgNamesIn") (EVar "mctx")) (EApp (EApp (EApp (EVar "qualifiedKindScope") (EVar "mctx")) (EVar "scope")) (EVar "ty"))) (EVar "ty"))) (DoLet false false (PVar "auths") (EApp (EApp (EVar "authArgBindersIn") (EVar "mctx")) (EVar "ty"))) (DoLet false false (PVar "tvs") (EApp (EApp (EVar "freshTvMap") (EVar "mctx")) (EApp (EApp (EApp (EVar "sigTyVarNames") (EVar "ty")) (EVar "rows")) (EApp (EApp (EVar "map") (EVar "fst")) (EVar "auths"))))) (DoLet false false (PVar "etbl") (EApp (EApp (EApp (EApp (EVar "sigVarsForWith") (EVar "mctx")) (EVar "ty")) (EApp (EVar "dedup") (EBinOp "++" (EApp (EVar "effTailNames") (EVar "ty")) (EVar "rows")))) (EVar "auths"))) (DoLet false false (PVar "quantified") (EMatch (EApp (EApp (EVar "writtenKindRecoveryNames") (EVar "mctx")) (EVar "ty")) (arm (PList) () (EVar "tvs")) (arm (PVar "names") () (EBinOp "++" (EVar "tvs") (EApp (EApp (EVar "freshTvMap") (EVar "mctx")) (EVar "names")))))) (DoExpr (ETuple (EApp (EApp (EApp (EApp (EApp (EApp (EVar "Forall") (EApp (EApp (EVar "map") (EBinOp ">>" (EVar "snd") (EVar "monoTyvarId"))) (EVar "quantified"))) (EApp (EApp (EVar "map") (EVar "effvarIdOf")) (EFieldAccess (EVar "etbl") "svRows"))) (EApp (EApp (EVar "map") (EVar "authvarIdOf")) (EFieldAccess (EVar "etbl") "svAuths"))) (EListLit)) (EApp (EApp (EApp (EApp (EVar "bindingForceFromAst") (EVar "mctx")) (EVar "etbl")) (EVar "quantified")) (EVar "ty"))) (EApp (EApp (EApp (EApp (EVar "fromAstTypeE") (EVar "mctx")) (EVar "etbl")) (EVar "quantified")) (EVar "ty"))) (EVar "tvs")))))))
 (DTypeSig true "sigVarsFor" (TyFun (TyCon "ModuleCtx") (TyFun (TyCon "Ty") (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyCon "SigVars")))))
 (DFunDef false "sigVarsFor" ((PVar "mctx") (PVar "ty") (PVar "rowNames")) (EApp (EApp (EApp (EApp (EVar "sigVarsForWith") (EVar "mctx")) (EVar "ty")) (EVar "rowNames")) (EApp (EApp (EVar "authArgBindersIn") (EVar "mctx")) (EVar "ty"))))
 (DTypeSig false "sigVarsForWith" (TyFun (TyCon "ModuleCtx") (TyFun (TyCon "Ty") (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "Param"))) (TyCon "SigVars"))))))
@@ -3291,7 +3300,7 @@ methodRowNumObservation saved caseName builtinDecls decls =
 (DUse false (UseGroup ("types" "tc_scope") ((mem "importFormRows" false) (mem "memberBindsCtorName" false))))
 (DUse false (UseGroup ("types" "tc_unify") ((mem "atomsEscape" false) (mem "freshAuthBinderRanged" false) (mem "freshAuthvar" false) (mem "freshAuthvarRanged" false) (mem "freshEffMap" false) (mem "freshEffvar" false) (mem "freshTvMap" false) (mem "freshVar" false) (mem "namedArgDomains" false) (mem "freshVars" false))))
 (DUse false (UseGroup ("types" "tc_decls_variance") ((mem "declEnvPolarityChain" false) (mem "inferParamPolarities" false) (mem "payloadAstTypes" false) (mem "recordParamPolarities" false) (mem "seedParamPolarityFixpointScoped" false) (mem "variantPayload" false))))
-(DUse false (UseGroup ("types" "tc_decls_types") ((mem "atomsOfWritten" false) (mem "authArgBindersIn" false) (mem "authorityBinderBound" false) (mem "binderDomainsIn" false) (mem "bindingForceFromAst" false) (mem "fromAstType" false) (mem "fromAstTypeE" false) (mem "namedArgTypes" false) (mem "namedAtomBinders" false) (mem "patternSlotNamesIn" false) (mem "payloadTypesE" false) (mem "qualifiedKindScope" false) (mem "recFieldMono" false) (mem "reportBinderDomains" false) (mem "reportUnboundAuthorityNames" false) (mem "reportUnboundAuthorityNamesIn" false) (mem "rowArgNames" false) (mem "rowArgNamesIn" false) (mem "sigVarsWithAuths" false) (mem "substAliasArgs" false) (mem "writtenBindingForce" false))))
+(DUse false (UseGroup ("types" "tc_decls_types") ((mem "atomsOfWritten" false) (mem "authArgBindersIn" false) (mem "authorityBinderBound" false) (mem "binderDomainsIn" false) (mem "bindingForceFromAst" false) (mem "fromAstType" false) (mem "fromAstTypeE" false) (mem "namedArgTypes" false) (mem "namedAtomBinders" false) (mem "patternSlotNamesIn" false) (mem "payloadTypesE" false) (mem "qualifiedKindScope" false) (mem "recFieldMono" false) (mem "reportBinderDomains" false) (mem "reportUnboundAuthorityNames" false) (mem "reportUnboundAuthorityNamesIn" false) (mem "rowArgNames" false) (mem "rowArgNamesIn" false) (mem "sigVarsWithAuths" false) (mem "substAliasArgs" false) (mem "writtenBindingForce" false) (mem "writtenKindRecoveryNames" false))))
 (DUse false (UseGroup ("types" "effect_authority") ((mem "Authority" true) (mem "Authvar" true) (mem "authvarId" false))))
 (DUse false (UseGroup ("types" "effect_rows") ((mem "Atom" true) (mem "EffLabel" true) (mem "EffRow" true) (mem "Effvar" true) (mem "atomsNorm" false) (mem "pureRow" false))))
 (DUse false (UseGroup ("frontend" "ast") ((mem "UsePath" true) (mem "Ns" true) (mem "Lit" true) (mem "Expr" true) (mem "Attr" true) (mem "ConPayload" true) (mem "Constraint" true) (mem "DataVis" true) (mem "Decl" true) (mem "EffAtomTy" true) (mem "ExternDecl" true) (mem "Field" true) (mem "Ident" true) (mem "IfaceMethod" true) (mem "KindAnn" true) (mem "Loc" true) (mem "TabKey" true) (mem "Ty" true) (mem "TyConOrigin" true) (mem "UseMember" true) (mem "Variant" true) (mem "externDecls" false) (mem "firstTyLoc" false) (mem "firstTyLocList" false) (mem "identOriginFold" false) (mem "lookupTab" false) (mem "mapTyFull" false) (mem "mkIdent" false) (mem "tabKeyEq" false) (mem "tabKeyName" false))))
@@ -3437,7 +3446,7 @@ methodRowNumObservation saved caseName builtinDecls decls =
 (DTypeSig true "sigToSchemeTvs" (TyFun (TyCon "ModuleCtx") (TyFun (TyCon "Ty") (TyTuple (TyCon "Scheme") (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "Mono")))))))
 (DFunDef false "sigToSchemeTvs" ((PVar "mctx") (PVar "ty")) (EApp (EApp (EApp (EVar "sigToSchemeTvsIn") (EVar "mctx")) (EListLit)) (EVar "ty")))
 (DTypeSig true "sigToSchemeTvsIn" (TyFun (TyCon "ModuleCtx") (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "Kind")))) (TyFun (TyCon "Ty") (TyTuple (TyCon "Scheme") (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "Mono"))))))))
-(DFunDef false "sigToSchemeTvsIn" ((PVar "outer") (PVar "scope") (PVar "ty")) (EApp (EApp (EApp (EVar "atSignature") (EVar "outer")) (EVar "ty")) (ELam ((PVar "mctx")) (EBlock (DoLet false false (PVar "rows") (EApp (EApp (EApp (EVar "rowArgNamesIn") (EVar "mctx")) (EApp (EApp (EApp (EVar "qualifiedKindScope") (EVar "mctx")) (EVar "scope")) (EVar "ty"))) (EVar "ty"))) (DoLet false false (PVar "auths") (EApp (EApp (EVar "authArgBindersIn") (EVar "mctx")) (EVar "ty"))) (DoLet false false (PVar "tvs") (EApp (EApp (EVar "freshTvMap") (EVar "mctx")) (EApp (EApp (EApp (EVar "sigTyVarNames") (EVar "ty")) (EVar "rows")) (EApp (EApp (EMethodRef "map") (EVar "fst")) (EVar "auths"))))) (DoLet false false (PVar "etbl") (EApp (EApp (EApp (EApp (EVar "sigVarsForWith") (EVar "mctx")) (EVar "ty")) (EApp (EVar "dedup") (EBinOp "++" (EApp (EVar "effTailNames") (EVar "ty")) (EVar "rows")))) (EVar "auths"))) (DoExpr (ETuple (EApp (EApp (EApp (EApp (EApp (EApp (EVar "Forall") (EApp (EApp (EMethodRef "map") (EBinOp ">>" (EVar "snd") (EVar "monoTyvarId"))) (EVar "tvs"))) (EApp (EApp (EMethodRef "map") (EVar "effvarIdOf")) (EFieldAccess (EVar "etbl") "svRows"))) (EApp (EApp (EMethodRef "map") (EVar "authvarIdOf")) (EFieldAccess (EVar "etbl") "svAuths"))) (EListLit)) (EApp (EApp (EApp (EApp (EVar "bindingForceFromAst") (EVar "mctx")) (EVar "etbl")) (EVar "tvs")) (EVar "ty"))) (EApp (EApp (EApp (EApp (EVar "fromAstTypeE") (EVar "mctx")) (EVar "etbl")) (EVar "tvs")) (EVar "ty"))) (EVar "tvs")))))))
+(DFunDef false "sigToSchemeTvsIn" ((PVar "outer") (PVar "scope") (PVar "ty")) (EApp (EApp (EApp (EVar "atSignature") (EVar "outer")) (EVar "ty")) (ELam ((PVar "mctx")) (EBlock (DoLet false false (PVar "rows") (EApp (EApp (EApp (EVar "rowArgNamesIn") (EVar "mctx")) (EApp (EApp (EApp (EVar "qualifiedKindScope") (EVar "mctx")) (EVar "scope")) (EVar "ty"))) (EVar "ty"))) (DoLet false false (PVar "auths") (EApp (EApp (EVar "authArgBindersIn") (EVar "mctx")) (EVar "ty"))) (DoLet false false (PVar "tvs") (EApp (EApp (EVar "freshTvMap") (EVar "mctx")) (EApp (EApp (EApp (EVar "sigTyVarNames") (EVar "ty")) (EVar "rows")) (EApp (EApp (EMethodRef "map") (EVar "fst")) (EVar "auths"))))) (DoLet false false (PVar "etbl") (EApp (EApp (EApp (EApp (EVar "sigVarsForWith") (EVar "mctx")) (EVar "ty")) (EApp (EVar "dedup") (EBinOp "++" (EApp (EVar "effTailNames") (EVar "ty")) (EVar "rows")))) (EVar "auths"))) (DoLet false false (PVar "quantified") (EMatch (EApp (EApp (EVar "writtenKindRecoveryNames") (EVar "mctx")) (EVar "ty")) (arm (PList) () (EVar "tvs")) (arm (PVar "names") () (EBinOp "++" (EVar "tvs") (EApp (EApp (EVar "freshTvMap") (EVar "mctx")) (EVar "names")))))) (DoExpr (ETuple (EApp (EApp (EApp (EApp (EApp (EApp (EVar "Forall") (EApp (EApp (EMethodRef "map") (EBinOp ">>" (EVar "snd") (EVar "monoTyvarId"))) (EVar "quantified"))) (EApp (EApp (EMethodRef "map") (EVar "effvarIdOf")) (EFieldAccess (EVar "etbl") "svRows"))) (EApp (EApp (EMethodRef "map") (EVar "authvarIdOf")) (EFieldAccess (EVar "etbl") "svAuths"))) (EListLit)) (EApp (EApp (EApp (EApp (EVar "bindingForceFromAst") (EVar "mctx")) (EVar "etbl")) (EVar "quantified")) (EVar "ty"))) (EApp (EApp (EApp (EApp (EVar "fromAstTypeE") (EVar "mctx")) (EVar "etbl")) (EVar "quantified")) (EVar "ty"))) (EVar "tvs")))))))
 (DTypeSig true "sigVarsFor" (TyFun (TyCon "ModuleCtx") (TyFun (TyCon "Ty") (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyCon "SigVars")))))
 (DFunDef false "sigVarsFor" ((PVar "mctx") (PVar "ty") (PVar "rowNames")) (EApp (EApp (EApp (EApp (EVar "sigVarsForWith") (EVar "mctx")) (EVar "ty")) (EVar "rowNames")) (EApp (EApp (EVar "authArgBindersIn") (EVar "mctx")) (EVar "ty"))))
 (DTypeSig false "sigVarsForWith" (TyFun (TyCon "ModuleCtx") (TyFun (TyCon "Ty") (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "Param"))) (TyCon "SigVars"))))))
