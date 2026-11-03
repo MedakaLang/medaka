@@ -84,6 +84,7 @@ import types.tc_env.{
   declEnvVisibleTo,
   declGradedScope,
   declKindEntriesIn,
+  declKindsReadKnown,
   declKindEntriesPublicIn,
   declKindsIn,
   declParamKinds,
@@ -255,7 +256,7 @@ declEnvAccOf gctx (m :: rest) a =
     daAmbig = snd definers,
     daData = dataEnvFromRowsGo [m] a.daData,
     daImpls = buildImplEnvGo [m] a.daImpls,
-    daIfaces = buildClassEnvGo gctx [m] a.daIfaces,
+    daIfaces = buildClassEnvGo gctx a.daSeeds.dsKAcc [m] a.daIfaces,
     daMethods = methodEnvGo gctx [m] a.daMethods,
     daSeeds = declEnvSeedChain gctx [m] a.daSeeds,
     daPolarity = declEnvPolarityChain [m] a.daPolarity,
@@ -347,7 +348,8 @@ buildDeclEnvs gctx acc coreRow modRows =
 -- `DData` arm calls `recordParamKinds` regardless of `dataVis`.
 -- [known] is every earlier row's visible entries, which an own head can pass a
 -- parameter on to.  The memo is solved against none of them, so a row that can see
--- an imported head with a constructor parameter is solved again against them.
+-- an imported head with a constructor parameter, or that passes a head to a
+-- variable (`declKindsReadKnown`), is solved again against them.
 declEnvRowKindEntries : GraphCtx ->
   Int ->
   DeclEnvModule ->
@@ -357,7 +359,8 @@ declEnvRowKindEntries gctx cur m known
   | declEnvVisibleTo cur m.demOrd False || declEnvSiblingSees cur m =
     declKindEntriesIn gctx known m.demDecls
   | declEnvVisibleTo cur m.demOrd True =
-    if anyList (e => anyList kindHasArrow (snd e)) known then
+    if anyList (e => anyList kindHasArrow (snd e)) known
+      || declKindsReadKnown gctx m.demDecls then
       declKindEntriesPublicIn gctx known m.demDecls
     else
       m.demKindEntries

@@ -25,7 +25,6 @@
 
 import support.diag_codes.{DiagCode(..)}
 import types.tc_types.{
-  ClassEnv,
   Kind(..),
   SigVars(..),
   GraphCtx,
@@ -79,11 +78,16 @@ import types.tc_diag_text.{
 }
 import types.tc_state.{emptySigVars, mctxAtIfSome}
 import types.tc_env.{
+  KindReads(..),
+  ceParamKindsAt,
   kindEq,
   kindOfParams,
   kindParams,
   kindTypeOnly,
-  kindUses,
+  headKindsIn,
+  tabNameIndex,
+  tabNameLookup,
+  varKindsOf,
   anyKRow,
   ceLookupAt,
   ceRowParamKinds,
@@ -91,8 +95,6 @@ import types.tc_env.{
   domainHasPatterns,
   dtopFor,
   effTailNames,
-  ifaceParamKindsDeclAll,
-  ifaceParamKindsFor,
   ifaceParamKindsOf,
   ifaceTabKey,
   kindAnnSlots,
@@ -160,10 +162,9 @@ import frontend.ast.{
   patternMark,
   qualifierSource,
   tabKeyEq,
-  tabKeyName,
   variantName,
 }
-import types.repr.{Mono(..), ppAuthArg, ppConName, ppTy, tupleTagArity}
+import types.repr.{Mono(..), ppAuthArg, ppConName, ppTy}
 import types.effect_domain.{
   Param(..),
   canonParam,
@@ -199,8 +200,7 @@ import types.effect_param_decode.{
 import types.registry.{regKeyOfTab}
 import types.expr_loc.{exprStartLoc}
 import frontend.ast_walk.{DeclBody(..), childExprs, declBodies}
-import frontend.resolve.{primitiveTypes, tupleCtorTyNames}
-import support.ordmap.{omEmpty, omHasKey, omInsert, omLookup, omSize, OrdMap}
+import support.ordmap.{omHasKey, omInsert, omSize, OrdMap}
 export import types.tc_env.{kindsEq}
 
 -- The effect-label domain registry maps a label's identity key (`labelKey`) to the
@@ -546,22 +546,10 @@ checkDeclaredKindsDecl mctx sc _ (DTypeAlias { tyAliasName = n, tyAliasParams = 
   checkAliasPatternSlots mctx (zipParamKinds ps ks) rhs
   checkHeadKinds mctx n ps ks [rhs]
   reportWrittenKinds mctx sc (headParamKinds sc o n ps) nloc [(Some KType, rhs)]
-checkDeclaredKindsDecl mctx sc prog (d@(DInterface { name, typarams, typaramKinds, supers, methods, ... })) =
+checkDeclaredKindsDecl mctx sc prog (d@(DInterface { name, typarams, typaramKinds, supers, methods, ifaceOrigin = o, ... })) =
   checkIfaceHeadKinds mctx name typarams (padAnns typarams typaramKinds) methods
-  checkSuperKinds
-    mctx
-    prog
-    name
-    typarams
-    (padAnns typarams typaramKinds)
-    methods
-    supers
-  let declared =
-    zipL
-      typarams
-      (map
-        kindOfParams
-        (ifaceParamKindsDeclAll mctx.mcGraph typarams typaramKinds methods))
+  let declared = zipL typarams (optionOr [] (sc.ksIfaces o name))
+  checkSuperKinds mctx sc prog name declared methods supers
   each
     ((IfaceMethod _ mty _ mloc) =>
       reportWrittenKinds mctx sc declared mloc [(Some KType, mty)])
@@ -881,50 +869,39 @@ firstIfaceMethodLoc [] = None
 firstIfaceMethodLoc ((IfaceMethod _ mty _ _) :: _) = firstTyLoc mty
 
 -- (d) `requires` chain, same module only: the sub's resolved kinds for the
--- parameters it applies the super to must equal the super's own resolved
--- kinds at those positions.
+-- parameters it applies the super to (its [own] kinds, by parameter) must
+-- equal the super's own resolved kinds at those positions.
 checkSuperKinds : ModuleCtx ->
+  KindScope ->
   List Decl ->
   String ->
-  List String ->
-  List (Option KindAnn) ->
+  List (String, Kind) ->
   List IfaceMethod ->
   List Super ->
   Unit
 checkSuperKinds _mctx _ _ _ _ _ [] = ()
-checkSuperKinds mctx prog name typarams anns methods ((Super { superHead = sh, superParams = sps }) :: rest) =
-  match findIfaceDecl prog sh
-    Some (stps, sanns, smethods) =>
-      let subKinds =
-        map (p => ifaceParamKindsFor mctx.mcGraph typarams anns methods p) sps
-      let superKinds =
-        ifaceParamKindsDeclAll mctx.mcGraph stps (padAnns stps sanns) smethods
-      if listLen subKinds == listLen superKinds
-        && not
-          (allList
-            (pair => kindsEq (fst pair) (snd pair))
-            (zipKinds subKinds superKinds)) then
-        pushTypeErrorOnceAt
-          mctx
-          TEffectKindMismatch
-          (firstIfaceMethodLoc methods)
-          (requiresKindMsg name sh)
-    None => ()
-  checkSuperKinds mctx prog name typarams anns methods rest
+checkSuperKinds mctx sc prog name own methods ((Super { superHead = sh, superParams = sps, superOrigin = so }) :: rest) =
+  if declaresIface prog sh then
+    let subKinds = map (p => optionOr KType (lookupAssoc p own)) sps
+    let superKinds = optionOr [] (sc.ksIfaces so sh)
+    if listLen subKinds == listLen superKinds
+      && not
+        (allList
+          (pair => kindEq (fst pair) (snd pair))
+          (zipL subKinds superKinds)) then
+      pushTypeErrorOnceAt
+        mctx
+        TEffectKindMismatch
+        (firstIfaceMethodLoc methods)
+        (requiresKindMsg name sh)
+  checkSuperKinds mctx sc prog name own methods rest
 
-zipKinds : List (List Kind) -> List (List Kind) -> List (List Kind, List Kind)
-zipKinds (a :: xs) (b :: ys) = (a, b) :: zipKinds xs ys
-zipKinds _ _ = []
-
-findIfaceDecl : List Decl ->
-  String ->
-  Option (List String, List (Option KindAnn), List IfaceMethod)
-findIfaceDecl [] _ = None
-findIfaceDecl ((DAttrib _ d) :: rest) n = findIfaceDecl (d :: rest) n
-findIfaceDecl ((DInterface { name, typarams, typaramKinds, methods, ... }) :: rest) n
-  | name == n = Some (typarams, typaramKinds, methods)
-  | otherwise = findIfaceDecl rest n
-findIfaceDecl (_ :: rest) n = findIfaceDecl rest n
+declaresIface : List Decl -> String -> Bool
+declaresIface [] _ = False
+declaresIface ((DAttrib _ d) :: rest) n = declaresIface (d :: rest) n
+declaresIface ((DInterface { name, ... }) :: rest) n =
+  name == n || declaresIface rest n
+declaresIface (_ :: rest) n = declaresIface rest n
 
 checkEffectParamsTy : ModuleCtx -> Ty -> Unit
 checkEffectParamsTy mctx (TyFun (TyNamed n a d) b) =
@@ -2337,63 +2314,32 @@ public export data KindScope = KindScope {
   ksAlias : TyConOrigin -> String -> Bool,
 }
 
+-- What a judge of one type reads (`KindReads`).
+kindReadsOf : KindScope -> KindReads
+kindReadsOf sc = KindReads {
+  krSlots = sc.ksHeads,
+  krHeads = sc.ksHeads,
+  krIfaces = sc.ksIfaces,
+}
+
 export
 kindScopeOf : ModuleCtx -> KindScope
 kindScopeOf mctx =
   let envs = mctx.mcGraph.declEnvsRef.value
   KindScope {
-    ksHeads = headKindsAt (tabNameIndex mctx.mcCells.dataParamKindsRef.value),
+    ksHeads = headKindsIn (tabNameIndex mctx.mcCells.dataParamKindsRef.value),
     ksIfaces =
-      ifaceKindsAt
-        envs.deIfaces
-        (declEnvsOrdOf mctx.mcCells.currentModuleRef.value envs),
+      ceParamKindsAt
+        (declEnvsOrdOf mctx.mcCells.currentModuleRef.value envs)
+        envs.deIfaces,
     ksAlias = aliasAt (tabNameIndex mctx.mcCells.aliasTableRef.value),
   }
-
--- A table indexed by name, each bucket in table order, so a probe answers
--- what `lookupTab` over the whole table answers.
-tabNameIndex : List (TabKey, v) -> OrdMap (List (TabKey, v))
-tabNameIndex rows =
-  fold
-    (index row =>
-      let name = tabKeyName (fst row)
-      omInsert name (row :: optionOr [] (omLookup name index)) index)
-    omEmpty
-    (reverseL rows)
-
-tabNameLookup : OrdMap (List (TabKey, v)) -> TabKey -> Option v
-tabNameLookup index key =
-  lookupTab key (optionOr [] (omLookup (tabKeyName key) index))
-
-headKindsAt : OrdMap (List (TabKey, List Kind)) ->
-  TyConOrigin ->
-  String ->
-  Option (List Kind)
-headKindsAt index o n = match tabNameLookup index (tyTabKey o n)
-  Some kinds => Some kinds
-  None => builtinParamKinds n
-
-ifaceKindsAt : ClassEnv -> Int -> TyConOrigin -> String -> Option (List Kind)
-ifaceKindsAt ce cur o n =
-  map
-    (row => map kindOfParams (ceRowParamKinds row))
-    (ceLookupAt (regKeyOfTab (ifaceTabKey o n)) cur ce)
 
 aliasAt : OrdMap (List (TabKey, (List String, Ty))) ->
   TyConOrigin ->
   String ->
   Bool
 aliasAt index o n = isSome (tabNameLookup index (tyTabKey o n))
-
--- A builtin head's parameter kinds: a tuple takes a `Type` per component,
--- `List`, `Ref` and `Array` take one, and every other primitive none.
-builtinParamKinds : String -> Option (List Kind)
-builtinParamKinds n
-  | contains n ["List", "Ref", "Array"] = Some [KType]
-  | contains n primitiveTypes = Some []
-  | contains n tupleCtorTyNames =
-    map (k => map (_ => KType) [1..=k]) (tupleTagArity n)
-  | otherwise = None
 
 -- Reports the first kind error of each of [items], a written type with the
 -- kind its position takes.  [declared] are the kinds of the variables a
@@ -2432,10 +2378,7 @@ reportWrittenKindsAnd : Bool ->
   List (Option Kind, Ty) ->
   Unit
 reportWrittenKindsAnd recover mctx sc declared fallback items =
-  let used =
-    flatMap (it => kindUses sc.ksHeads sc.ksIfaces (fst it) (snd it)) items
-  let vars =
-    declared ++ filterList (u => not (kindTypeOnly (snd u))) used ++ used
+  let vars = varKindsOf (kindReadsOf sc) declared items
   each
     (it => match kindErrorIn sc vars (fst it) (snd it)
       Some (KindError loc msg owner) =>

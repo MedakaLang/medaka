@@ -441,7 +441,7 @@ envsOfModules m modules =
           (snd (snd p)))
       (zip (range 0 (length modules)) modules)
   (
-    classEnvFinish (buildClassEnvGo m.mcGraph dms emptyClassEnv),
+    classEnvFinish (buildClassEnvGo m.mcGraph [] dms emptyClassEnv),
     implAccFinish (buildImplEnvGo dms emptyDeclEnvAcc.daImpls),
   )
 

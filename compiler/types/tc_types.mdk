@@ -824,10 +824,8 @@ public export data ImplAcc = ImplAcc {
 -- is `declGradedScope typarams methods`, computed ONCE per interface exactly
 -- as `methodRowsInto` already does, not re-derived
 -- per method; its raw `Super` list, unelaborated; its per-typaram kind
--- signature, POSITIONAL with `ceTyparams` — `ifaceParamKindsOf p methods` for
--- each `p`, the SAME pure computation `registerIfaceParamKindsGo` performs
--- per slot, so a graded interface's `KRow` inference cannot drift between the
--- live universe and this table; and, since #1557 A-3.5a, its REQUIRED-method
+-- signature, POSITIONAL with `ceTyparams` — each parameter's resolved slot
+-- kinds (`ifaceParamKindsDecl`); and, since #1557 A-3.5a, its REQUIRED-method
 -- names — `requiredMethodNames methods`, the SAME pure computation the retired
 -- `universeIfaceRequiredRef` writer (`insertIfaceRequired`) stored under the
 -- SAME `regKeyOfTab (ifaceTabKey ifaceOrigin name)` key, so relocating

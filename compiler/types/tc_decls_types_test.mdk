@@ -20,7 +20,13 @@ import test.{
 import support.diag_codes.{codeText, DiagCode(..)}
 import frontend.desugar.{desugar}
 import frontend.parser.{parse, parseLocated}
-import types.typecheck.{checkOneDiags, defaultDriveInputs, tcCode, tcMsg}
+import types.typecheck.{
+  checkModulesDiagsChain,
+  checkOneDiags,
+  defaultDriveInputs,
+  tcCode,
+  tcMsg,
+}
 import types.publish.{tcLoc}
 import frontend.ast.{Decl(..), Loc(..), Ty(..), TyConOrigin(..)}
 import support.util.{listLen}
@@ -363,6 +369,22 @@ checkedErrors src =
   )
   map (e => (codeText (tcCode e), tcMsg e)) errors
 
+-- The `(module, code, message)` of every error a check of [modules] reports,
+-- with [core] the prelude they see.
+moduleErrors : String -> List (String, String) -> List (String, String, String)
+moduleErrors core modules =
+  flatMap
+    ((mid, (_, errors, _)) =>
+      map (e => (mid, codeText (tcCode e), tcMsg e)) errors)
+    (checkModulesDiagsChain
+      defaultDriveInputs
+      None
+      ""
+      []
+      []
+      (desugar (parseLocated core))
+      (map (m => (fst m, desugar (parseLocated (snd m)))) modules))
+
 -- [src] is rejected with exactly one error, a kind error saying [fragment].
 rejectsOnceWith : String -> String -> Expectation
 rejectsOnceWith fragment src = match checkedErrors src
@@ -416,9 +438,98 @@ test "a constructor written where a type goes is one kind error at that written 
             foo _ = 0
           """,
     ),
+  ]
+
+-- EFFECTS-SEMANTICS §6.2-§6.3: a variable applied to a constructor takes the
+-- constructor's kind at that argument, so a kind may nest an arrow.
+test "a variable applied to a constructor is of a kind that takes it" = expectEach
+  [
     (
-      "the argument of a signature variable",
-      rejectsOnceWith optionUnapplied "g : f Option -> Int\ng _ = 0\n",
+      "a signature variable",
+      expectEqual
+        []
+        (checkedErrors
+          """
+            data Holder f = H (f Int)
+            g : f Option -> Int
+            g _ = 7
+            v : Int
+            v = g (H (Some 1))
+            """),
+    ),
+    (
+      "a data parameter",
+      expectEqual
+        []
+        (checkedErrors
+          """
+            data Wrap g = W (g Option)
+            data Holder f = H (f Int)
+            x : Wrap Holder
+            x = W (H (Some 3))
+            """),
+    ),
+    (
+      "a variable passed to another variable",
+      expectEqual
+        []
+        (checkedErrors
+          """
+            data Holder f = H (f Int)
+            g : f h -> h Int -> Int
+            g _ _ = 7
+            v : Int
+            v = g (H (Some 1)) (Some 2)
+            """),
+    ),
+  ]
+
+-- An interface parameter is judged by the rule a signature variable is.
+test "an interface parameter takes its kind from a head it is passed to and from requires" = expectEach
+  [
+    (
+      "passed bare to a head's constructor parameter",
+      expectEqual
+        []
+        (checkedErrors
+          """
+            data Wrap f a = W (f a)
+            interface Foo f where
+              foo : Wrap f Int -> Int
+            impl Foo Option where
+              foo (W (Some n)) = n
+              foo (W None) = 0
+            """),
+    ),
+    (
+      "a requires clause on a prelude interface",
+      expectEqual
+        []
+        (moduleErrors
+          """
+            data Option a = None | Some a
+            interface Mappable f where
+              map : (a -> b) -> f a -> f b
+            impl Mappable Option where
+              map g (Some x) = Some (g x)
+              map _ None = None
+            """
+          [("main", "interface Sub f requires Mappable f\nimpl Sub Option\n")]),
+    ),
+    (
+      "a requires clause on an interface of the module",
+      expectEqual
+        []
+        (checkedErrors
+          """
+            interface Mapper f where
+              mmap : (a -> b) -> f a -> f b
+            interface Sub f requires Mapper f
+            impl Mapper Option where
+              mmap g (Some x) = Some (g x)
+              mmap _ None = None
+            impl Sub Option
+            """),
     ),
   ]
 

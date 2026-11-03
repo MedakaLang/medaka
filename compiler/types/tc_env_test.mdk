@@ -128,7 +128,7 @@ buildImplEnv : List DeclEnvModule -> ImplEnv
 buildImplEnv mods = implAccFinish (buildImplEnvGo mods emptyDeclEnvAcc.daImpls)
 
 buildClassEnv : GraphCtx -> List DeclEnvModule -> ClassEnv
-buildClassEnv g mods = classEnvFinish (buildClassEnvGo g mods emptyClassEnv)
+buildClassEnv g mods = classEnvFinish (buildClassEnvGo g [] mods emptyClassEnv)
 
 implEnv : Unit -> ImplEnv
 implEnv _ =

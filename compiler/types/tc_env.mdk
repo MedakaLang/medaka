@@ -64,12 +64,13 @@ import frontend.ast.{
   orElseLoc,
   sameTyConHead,
   tabKeyEq,
+  tabKeyName,
   tabKeyOf,
   tyConBuiltin,
   useMemberLocal,
   useMemberOrigin,
 }
-import types.repr.{IfaceRef(..), Mono(..), Scheme(..)}
+import types.repr.{IfaceRef(..), Mono(..), Scheme(..), tupleTagArity}
 import types.effect_param_decode.{dtopIn}
 import types.effect_domain.{Param(..)}
 import types.effect_rows.{EffLabel(..), labelKey}
@@ -116,12 +117,14 @@ import support.ordmap.{
   omEmpty, omFromNames, omHasKey, omInsert, omLookup, omSize, OrdMap
 }
 import list.{
+  drop,
   filterMap,
   findMap,
   last,
   somes,
 }
 import support.util.{
+  allList,
   anyList,
   contains,
   dedup,
@@ -131,6 +134,7 @@ import support.util.{
   lookupAssoc,
   reverseL,
   selfBinding,
+  zipL,
 }
 import types.registry.{
   HeadKey(..),
@@ -146,7 +150,7 @@ import types.registry.{
   regLookupK,
 }
 import types.route_key.{implRouteKeyWord}
-import frontend.resolve.{variantFieldTys}
+import frontend.resolve.{primitiveTypes, tupleCtorTyNames, variantFieldTys}
 import types.solver_contract.{GoalOrigin(..)}
 
 -- ── A-3.2b residual (#1512): the alias universe, sourced from stage K ──────
@@ -439,20 +443,6 @@ domainHasPatterns _ = False
 export
 rangedOver : GraphCtx -> EffLabel -> Bool -> Bool
 rangedOver gctx l pat = pat && domainHasPatterns (dtopFor gctx l)
-
--- the resolved slot kinds of the sub-interface's OWN parameter [p]
-export
-ifaceParamKindsFor : GraphCtx ->
-  List String ->
-  List (Option KindAnn) ->
-  List IfaceMethod ->
-  String ->
-  List Kind
-ifaceParamKindsFor _gctx [] _ _ _ = []
-ifaceParamKindsFor gctx (q :: qs) (a :: anns) methods p
-  | q == p = ifaceParamKindsDecl gctx a p methods
-  | otherwise = ifaceParamKindsFor gctx qs anns methods p
-ifaceParamKindsFor _gctx _ [] _ _ = []
 
 -- ── #1111 A-2.3: the TYPE-namespace table key, and the MISS POLICY ────────
 -- The ONE place a key for `aliasTableRef` / `dataParamKindsRef` is minted, on
@@ -1349,12 +1339,77 @@ export
 classEnvFinish : ClassEnv -> ClassEnv
 classEnvFinish env = ClassEnv { env | ceRows = reverseL env.ceRows }
 
+-- [known] is the kind table the heads outside each module answer from.
 export
-buildClassEnvGo : GraphCtx -> List DeclEnvModule -> ClassEnv -> ClassEnv
-buildClassEnvGo _gctx [] env = env
-buildClassEnvGo gctx (m :: rest) env =
-  let rows = classEnvRowsOf gctx m.demOrd (classEnvDeclFacts m.demDecls)
-  buildClassEnvGo gctx rest (ceAddRows rows env)
+buildClassEnvGo : GraphCtx ->
+  List (TabKey, List Kind) ->
+  List DeclEnvModule ->
+  ClassEnv ->
+  ClassEnv
+buildClassEnvGo _gctx _ [] env = env
+buildClassEnvGo gctx known (m :: rest) env =
+  let rows = match classEnvDeclFacts m.demDecls
+    [] => []
+    facts => classEnvModuleRows gctx known m env facts
+  buildClassEnvGo gctx known rest (ceAddRows rows env)
+
+-- One module's interface rows.  A parameter's kind may follow from a head of
+-- the module or from another of its interfaces (`ifaceParamKindsDecl`), so
+-- the rows are built again against the last round's until no kind changes.
+classEnvModuleRows : GraphCtx ->
+  List (TabKey, List Kind) ->
+  DeclEnvModule ->
+  ClassEnv ->
+  List (String, List String, List (Option KindAnn), List IfaceMethod, List Super, TyConOrigin, Option Loc) ->
+  List CeRow
+classEnvModuleRows gctx known m env facts =
+  let heads =
+    headKindsIn
+      (tabNameIndex (declKindEntriesIn gctx known m.demDecls ++ known))
+  let roundOf =
+    rows =>
+      classEnvRowsOf
+        gctx
+        KindReads {
+          krSlots = heads,
+          krHeads = heads,
+          krIfaces = ceParamKindsAt m.demOrd (ceAddRows rows env),
+        }
+        m.demOrd
+        facts
+  classEnvRowsFix roundOf (listLen facts) (roundOf [])
+
+classEnvRowsFix : (List CeRow -> List CeRow) -> Int -> List CeRow -> List CeRow
+classEnvRowsFix roundOf fuel rows
+  | fuel <= 0 || not (anyList ceRowHasConstructorParam rows) = rows
+  | otherwise =
+    let next = roundOf rows
+    if sameCeRowKinds rows next then
+      next
+    else
+      classEnvRowsFix roundOf (fuel - 1) next
+
+ceRowHasConstructorParam : CeRow -> Bool
+ceRowHasConstructorParam r =
+  anyList (slots => kindHasArrow (kindOfParams slots)) (ceRowParamKinds r)
+
+sameCeRowKinds : List CeRow -> List CeRow -> Bool
+sameCeRowKinds (a :: as2) (b :: bs) =
+  allList
+      (pair => kindsEq (fst pair) (snd pair))
+      (zipL (ceRowParamKinds a) (ceRowParamKinds b))
+    && sameCeRowKinds as2 bs
+sameCeRowKinds [] [] = True
+sameCeRowKinds _ _ = False
+
+-- Each parameter's kind of the interface [o]/[n] as a reader at ordinal [cur]
+-- sees it, `None` for an interface it does not see.
+export
+ceParamKindsAt : Int -> ClassEnv -> TyConOrigin -> String -> Option (List Kind)
+ceParamKindsAt cur ce o n =
+  map
+    (row => map kindOfParams (ceRowParamKinds row))
+    (ceLookupAt (regKeyOfTab (ifaceTabKey o n)) cur ce)
 
 -- One interface decl's raw facts: name, typarams, methods, supers, identity.
 classEnvDeclFacts : List Decl ->
@@ -1369,11 +1424,12 @@ classEnvDeclFact (DInterface { name, typarams, typaramKinds, supers, methods, if
 classEnvDeclFact _ = []
 
 classEnvRowsOf : GraphCtx ->
+  KindReads ->
   Int ->
   List (String, List String, List (Option KindAnn), List IfaceMethod, List Super, TyConOrigin, Option Loc) ->
   List CeRow
-classEnvRowsOf _gctx _ [] = []
-classEnvRowsOf gctx ord ((name, typarams, kinds, methods, supers, o, loc) :: rest) =
+classEnvRowsOf _gctx _ _ [] = []
+classEnvRowsOf gctx reads ord ((name, typarams, kinds, methods, supers, o, loc) :: rest) =
   let scope = declGradedScope gctx typarams kinds methods
   let row =
     CeRow
@@ -1386,24 +1442,12 @@ classEnvRowsOf gctx ord ((name, typarams, kinds, methods, supers, o, loc) :: res
       typarams
       (map (ceMethodOf scope) methods)
       supers
-      (ifaceParamKindsDeclAll gctx typarams kinds methods)
+      (map
+        (pa => ifaceParamKindsDecl gctx reads (snd pa) (fst pa) supers methods)
+        (zipL typarams (padAnns typarams kinds)))
       (requiredMethodNames methods)
       loc
-  row :: classEnvRowsOf gctx ord rest
-
--- every parameter's RESOLVED slot kinds, positional with [typarams].
-export
-ifaceParamKindsDeclAll : GraphCtx ->
-  List String ->
-  List (Option KindAnn) ->
-  List IfaceMethod ->
-  List (List Kind)
-ifaceParamKindsDeclAll _gctx [] _ _ = []
-ifaceParamKindsDeclAll gctx (p :: ps) [] methods =
-  ifaceParamKindsDeclAll gctx (p :: ps) [None] methods
-ifaceParamKindsDeclAll gctx (p :: ps) (a :: anns) methods =
-  ifaceParamKindsDecl gctx a p methods
-    :: ifaceParamKindsDeclAll gctx ps anns methods
+  row :: classEnvRowsOf gctx reads ord rest
 
 ceMethodOf : List (String, List Kind) ->
   IfaceMethod ->
@@ -1478,10 +1522,8 @@ ceRowsOwnedBy cur env = filterList (r => ceRowOrd r == cur) env.ceRows
 
 -- Slot [i]'s declared kind signature for interface [key], at the reading
 -- module's ordinal.  `ceRowParamKinds` is POSITIONAL with `ceTyparams` and
--- holds `ifaceParamKindsOf p methods` per slot — the SAME pure computation the
--- retired `ifaceParamKindsRef` writer (`registerIfaceParamKindsGo`) performed
--- per slot under an `ifaceSlotKey o iface i` key, so indexing this list by `i`
--- and looking that key up are the same question.  An out-of-range slot ABSTAINS
+-- holds each parameter's resolved slot kinds (`ifaceParamKindsDecl`).  An
+-- out-of-range slot ABSTAINS
 -- (`None`), which is the pre-existing miss policy: `checkGradedImplTys`' own
 -- `_ => ()` arm already covered "an interface with fewer parameters than the
 -- impl has type arguments".
@@ -1939,11 +1981,13 @@ kindAnnAtom gctx (KindArrow a b) =
 
 -- ── Inferred parameter kinds (EFFECTS-SEMANTICS §6.3, §6.4) ─────────────
 -- An unannotated parameter takes the first constructor kind its uses fix, in
--- written order: applied to n arguments it is `Type -> … -> Type` with n
--- arrows, and written bare where a head's parameter (or an interface's) is a
--- constructor it takes that parameter's kind.  Any other use fixes nothing,
--- so a parameter with no such use is `Type`, a phantom included.  A use that
--- disagrees with the kind is the written type's error (`reportWrittenKinds`).
+-- written order: applied to arguments it is the arrow from their kinds to
+-- `Type`, each argument's kind its own (a head's parameters it leaves
+-- unapplied, a variable's kind, `Type` otherwise), and written bare where a
+-- head's parameter (or an interface's) is a constructor it takes that
+-- parameter's kind.  Any other use fixes nothing, so a parameter with no such
+-- use is `Type`, a phantom included.  A use that disagrees with the kind is
+-- the written type's error (`reportWrittenKinds`).
 
 -- `k1 -> … -> kn -> Type` for a head whose parameters have kinds [ks].
 export
@@ -1973,33 +2017,68 @@ kindEq (KAuth l1 p1) (KAuth l2 p2) = labelKey l1 == labelKey l2 && p1 == p2
 kindEq (KArrow d1 r1) (KArrow d2 r2) = kindEq d1 d2 && kindEq r1 r2
 kindEq _ _ = False
 
+-- What judging a written type's kinds reads, each answer `None` for a name
+-- not known: the parameter kinds of a head as positions that fix a variable
+-- written there ([krSlots]), of a head written as an argument ([krHeads]),
+-- and of an interface ([krIfaces]).  A judge of one type passes one head
+-- table as both; inference of a declaration's own heads asks [krSlots] only
+-- for heads that have a constructor parameter, the only ones whose positions
+-- can fix a constructor kind.
+public export data KindReads = KindReads {
+  krSlots : TyConOrigin -> String -> Option (List Kind),
+  krHeads : TyConOrigin -> String -> Option (List Kind),
+  krIfaces : TyConOrigin -> String -> Option (List Kind),
+}
+
 -- The kind other than `Type` each variable occurrence of [ty] fixes, in
--- written order, an `Effect` or `Authority` one included.  [heads]
--- and [ifaces] give the parameter kinds of a head and of an interface, `None`
--- for one whose kinds are unknown; [pos] is the kind the position of [ty]
--- takes, `None` where it is unknown.
+-- written order, an `Effect` or `Authority` one included, with [vars] the
+-- kinds of variables known so far and [pos] the kind the position of [ty]
+-- takes (`None` where it is unknown).  A variable applied to arguments has
+-- the kind built from theirs (`argKindOf`), so `f Option` fixes
+-- `f : (Type -> Type) -> Type`.
 export
-kindUses : (TyConOrigin -> String -> Option (List Kind)) ->
-  (TyConOrigin -> String -> Option (List Kind)) ->
+kindUses : KindReads ->
+  List (String, Kind) ->
   Option Kind ->
   Ty ->
   List (String, Kind)
-kindUses heads ifaces pos ty = match tyAppSpine ty
+kindUses reads vars pos ty = match tyAppSpine ty
   (TyVar v, []) => match pos
     Some KType => []
     Some k => [(v, k)]
     None => []
   (TyVar v, args) =>
-    (v, kindOfParams (map (_ => KType) args))
-      :: flatMap (kindUses heads ifaces (Some KType)) args
+    (v, kindOfParams (map (argKindOf reads.krHeads vars) args))
+      :: flatMap (kindUses reads vars None) args
   (TyCon { tyConName = n, tyConOrigin = o }, args) =>
     if anyList takesPosition args then
-      kindUsesAt heads ifaces (optionOr [] (heads o n)) args
+      kindUsesAt reads vars (optionOr [] (reads.krSlots o n)) args
     else
-      flatMap (kindUses heads ifaces None) args
-  (hd, []) => kindUsesIn heads ifaces pos hd
+      flatMap (kindUses reads vars None) args
+  (hd, []) => kindUsesIn reads vars pos hd
   (hd, args) =>
-    kindUsesIn heads ifaces None hd ++ flatMap (kindUses heads ifaces None) args
+    kindUsesIn reads vars None hd ++ flatMap (kindUses reads vars None) args
+
+-- The kind of [ty] written as an argument: what a head or a variable of
+-- constructor kind leaves unapplied, and `Type` for any other type.
+argKindOf : (TyConOrigin -> String -> Option (List Kind)) ->
+  List (String, Kind) ->
+  Ty ->
+  Kind
+argKindOf heads vars ty = match tyAppSpine ty
+  (TyCon { tyConName = n, tyConOrigin = o }, args) =>
+    leftUnapplied (optionOr [] (heads o n)) (listLen args)
+  (TyVar v, args) => match lookupAssoc v vars
+    Some k => leftUnapplied (kindParams k) (listLen args)
+    None => KType
+  _ => KType
+
+-- The kind of a head of parameter kinds [params] applied to [n] arguments,
+-- where that is an arrow over `Type` (`Type` otherwise).
+leftUnapplied : List Kind -> Int -> Kind
+leftUnapplied params n =
+  let k = kindOfParams (drop n params)
+  if n <= listLen params && kindTypeOnly k then k else KType
 
 -- Only a variable written bare (under any wrapper `kindUsesIn` passes its
 -- position through) takes its kind from its position, so a head whose
@@ -2014,40 +2093,109 @@ takesPosition _ = False
 
 -- The forms `tyAppSpine` leaves whole.  A row or an authority term writes no
 -- type variable at a kind of `Type`'s family.
-kindUsesIn : (TyConOrigin -> String -> Option (List Kind)) ->
-  (TyConOrigin -> String -> Option (List Kind)) ->
+kindUsesIn : KindReads ->
+  List (String, Kind) ->
   Option Kind ->
   Ty ->
   List (String, Kind)
-kindUsesIn heads ifaces _ (TyFun a b) =
-  kindUses heads ifaces (Some KType) a ++ kindUses heads ifaces (Some KType) b
-kindUsesIn heads ifaces _ (TyTuple ts) =
-  flatMap (kindUses heads ifaces (Some KType)) ts
-kindUsesIn heads ifaces pos (TyEffect _ _ t) = kindUses heads ifaces pos t
-kindUsesIn heads ifaces pos (TyConstrained cs t) =
-  flatMap (constraintKindUses heads ifaces) cs ++ kindUses heads ifaces pos t
-kindUsesIn heads ifaces pos (TyNamed _ t _) = kindUses heads ifaces pos t
-kindUsesIn heads ifaces pos (TyQual t _ _) = kindUses heads ifaces pos t
+kindUsesIn reads vars _ (TyFun a b) =
+  kindUses reads vars (Some KType) a ++ kindUses reads vars (Some KType) b
+kindUsesIn reads vars _ (TyTuple ts) =
+  flatMap (kindUses reads vars (Some KType)) ts
+kindUsesIn reads vars pos (TyEffect _ _ t) = kindUses reads vars pos t
+kindUsesIn reads vars pos (TyConstrained cs t) =
+  flatMap (constraintKindUses reads vars) cs ++ kindUses reads vars pos t
+kindUsesIn reads vars pos (TyNamed _ t _) = kindUses reads vars pos t
+kindUsesIn reads vars pos (TyQual t _ _) = kindUses reads vars pos t
 kindUsesIn _ _ _ _ = []
 
-constraintKindUses : (TyConOrigin -> String -> Option (List Kind)) ->
-  (TyConOrigin -> String -> Option (List Kind)) ->
+constraintKindUses : KindReads ->
+  List (String, Kind) ->
   Constraint ->
   List (String, Kind)
-constraintKindUses heads ifaces (Constraint { constraintHead = n, constraintOrigin = o, constraintArgs = args }) =
-  kindUsesAt heads ifaces (optionOr [] (ifaces o n)) args
+constraintKindUses reads vars (Constraint { constraintHead = n, constraintOrigin = o, constraintArgs = args }) =
+  kindUsesAt reads vars (optionOr [] (reads.krIfaces o n)) args
 
 -- Argument i at the i-th of [slots]; an argument past them is at no known kind.
-kindUsesAt : (TyConOrigin -> String -> Option (List Kind)) ->
-  (TyConOrigin -> String -> Option (List Kind)) ->
+kindUsesAt : KindReads ->
+  List (String, Kind) ->
   List Kind ->
   List Ty ->
   List (String, Kind)
 kindUsesAt _ _ _ [] = []
-kindUsesAt heads ifaces (k :: ks) (a :: as2) =
-  kindUses heads ifaces (Some k) a ++ kindUsesAt heads ifaces ks as2
-kindUsesAt heads ifaces [] (a :: as2) =
-  kindUses heads ifaces None a ++ kindUsesAt heads ifaces [] as2
+kindUsesAt reads vars (k :: ks) (a :: as2) =
+  kindUses reads vars (Some k) a ++ kindUsesAt reads vars ks as2
+kindUsesAt reads vars [] (a :: as2) =
+  kindUses reads vars None a ++ kindUsesAt reads vars [] as2
+
+-- The kind of each variable [items] write, each item a type with the kind
+-- its position takes: [declared] first, then a kind involving `Effect` or
+-- `Authority` (left to the checks of those kinds), then the first use.  A
+-- variable passed as an argument contributes its own kind to the head's, so
+-- the uses are read again until no kind changes; a chain of variables each
+-- passed to the next bounds the rounds.
+export
+varKindsOf : KindReads ->
+  List (String, Kind) ->
+  List (Option Kind, Ty) ->
+  List (String, Kind)
+varKindsOf reads declared items =
+  let first = varKindsRound reads declared items declared
+  let passed = flatMap (it => varArgNames (snd it)) items
+  if anyList (v => isSome (lookupAssoc v first)) passed then
+    varKindsFix reads declared items (listLen first) first
+  else
+    first
+
+varKindsFix : KindReads ->
+  List (String, Kind) ->
+  List (Option Kind, Ty) ->
+  Int ->
+  List (String, Kind) ->
+  List (String, Kind)
+varKindsFix reads declared items fuel cur =
+  let next = varKindsRound reads declared items cur
+  if fuel <= 0 || sameVarKinds cur next then
+    next
+  else
+    varKindsFix reads declared items (fuel - 1) next
+
+varKindsRound : KindReads ->
+  List (String, Kind) ->
+  List (Option Kind, Ty) ->
+  List (String, Kind) ->
+  List (String, Kind)
+varKindsRound reads declared items vars =
+  let used = flatMap (it => kindUses reads vars (fst it) (snd it)) items
+  declared ++ filterList (u => not (kindTypeOnly (snd u))) used ++ used
+
+sameVarKinds : List (String, Kind) -> List (String, Kind) -> Bool
+sameVarKinds ((a, ka) :: as2) ((b, kb) :: bs) =
+  a == b && kindEq ka kb && sameVarKinds as2 bs
+sameVarKinds [] [] = True
+sameVarKinds _ _ = False
+
+-- The variables [ty] passes as an argument of a variable, the only uses whose
+-- kind feeds another's (`argKindOf`).
+varArgNames : Ty -> List String
+varArgNames ty = match tyAppSpine ty
+  (TyVar _, args) => flatMap argHeadVar args ++ flatMap varArgNames args
+  (_, []) => varArgNamesIn ty
+  (hd, args) => varArgNamesIn hd ++ flatMap varArgNames args
+
+argHeadVar : Ty -> List String
+argHeadVar ty = match tyAppSpine ty
+  (TyVar v, _) => [v]
+  _ => []
+
+varArgNamesIn : Ty -> List String
+varArgNamesIn (TyFun a b) = varArgNames a ++ varArgNames b
+varArgNamesIn (TyTuple ts) = flatMap varArgNames ts
+varArgNamesIn (TyEffect _ _ t) = varArgNames t
+varArgNamesIn (TyConstrained _ t) = varArgNames t
+varArgNamesIn (TyNamed _ t _) = varArgNames t
+varArgNamesIn (TyQual t _ _) = varArgNames t
+varArgNamesIn _ = []
 
 -- A constructor kind: an arrow over `Type`.
 export
@@ -2121,8 +2269,9 @@ declKindEntriesPublicIn gctx known ds =
       _ => None)
     (declKindsSolved gctx known ds)
 
--- Only a head with a constructor parameter can fix another head's parameter,
--- so only those rows of [known] are consulted.
+-- Only a head with a constructor parameter can fix another head's parameter
+-- at its positions, so only those rows of [known] are indexed for that; the
+-- whole of [known] is indexed only when a head is passed to a variable.
 declKindsSolved : GraphCtx ->
   List (TabKey, List Kind) ->
   List Decl ->
@@ -2130,9 +2279,46 @@ declKindsSolved : GraphCtx ->
 declKindsSolved gctx known ds =
   let heads = kindHeadsOf gctx ds
   let arrows = filterList (e => anyList kindHasArrow (snd e)) known
+  let others = if kindHeadsPassHeads heads then tabNameIndex known else omEmpty
   let start = map (map kindHeadStart) heads
-  let solved = kindsFixpoint arrows heads (listLen ds) start
+  let solved = kindsFixpoint arrows others heads (listLen ds) start
   withPublicity heads solved
+
+-- Whether the kinds of the heads of [ds] read the heads they are solved
+-- against beyond those with a constructor parameter (`declKindsSolved`).
+export
+declKindsReadKnown : GraphCtx -> List Decl -> Bool
+declKindsReadKnown gctx ds = kindHeadsPassHeads (kindHeadsOf gctx ds)
+
+kindHeadsPassHeads : List (Option KindHead) -> Bool
+kindHeadsPassHeads heads =
+  anyList
+    (h => match h
+      Some (KindHead _ _ _ _ uses) => anyList passesHead uses
+      None => False)
+    heads
+
+-- Whether [ty] passes a head to a variable (`f Option`), the one use whose
+-- kind reads the head's own (`argKindOf`).
+passesHead : Ty -> Bool
+passesHead ty = match tyAppSpine ty
+  (TyVar _, args) => anyList isHeadArg args || anyList passesHead args
+  (_, []) => passesHeadIn ty
+  (hd, args) => passesHeadIn hd || anyList passesHead args
+
+isHeadArg : Ty -> Bool
+isHeadArg ty = match tyAppSpine ty
+  (TyCon { tyConName = _ }, _) => True
+  _ => False
+
+passesHeadIn : Ty -> Bool
+passesHeadIn (TyFun a b) = passesHead a || passesHead b
+passesHeadIn (TyTuple ts) = anyList passesHead ts
+passesHeadIn (TyEffect _ _ t) = passesHead t
+passesHeadIn (TyConstrained _ t) = passesHead t
+passesHeadIn (TyNamed _ t _) = passesHead t
+passesHeadIn (TyQual t _ _) = passesHead t
+passesHeadIn _ = False
 
 kindHeadStart : KindHead -> (TabKey, List Kind)
 kindHeadStart (KindHead key _ _ declared _) =
@@ -2149,32 +2335,93 @@ withPublicity _ _ = []
 -- A round can carry a constructor kind one head further along a chain of
 -- heads passing a parameter on, so one round per declaration bounds it.
 kindsFixpoint : List (TabKey, List Kind) ->
+  OrdMap (List (TabKey, List Kind)) ->
   List (Option KindHead) ->
   Int ->
   List (Option (TabKey, List Kind)) ->
   List (Option (TabKey, List Kind))
-kindsFixpoint arrows heads fuel cur =
-  let table = somes cur ++ arrows
-  let next = map (map (kindHeadRound table)) heads
+kindsFixpoint arrows others heads fuel cur =
+  let table = tabNameIndex (somes cur ++ arrows)
+  let reads = KindReads {
+    krSlots = headKindsIn table,
+    krHeads =
+      o n => match tabNameLookup table (tyTabKey o n)
+        Some kinds => Some kinds
+        None => headKindsIn others o n,
+    krIfaces = _ _ => None,
+  }
+  let next = map (map (kindHeadRound reads)) heads
   if fuel <= 0 || sameKindRows cur next then
     next
   else
-    kindsFixpoint arrows heads (fuel - 1) next
+    kindsFixpoint arrows others heads (fuel - 1) next
 
 -- A head whose parameters are all declared has nothing to infer.
-kindHeadRound : List (TabKey, List Kind) -> KindHead -> (TabKey, List Kind)
-kindHeadRound table (KindHead key _ ps declared uses) =
+kindHeadRound : KindReads -> KindHead -> (TabKey, List Kind)
+kindHeadRound reads (KindHead key _ ps declared uses) =
   if anyList isNone declared then
-    (key, paramKindsFrom (kindEvidence table uses) ps declared)
+    (key, paramKindsFrom (kindEvidence reads ps declared uses) ps declared)
   else
     (key, paramKindsFrom [] ps declared)
 
-kindEvidence : List (TabKey, List Kind) -> List Ty -> List (String, Kind)
-kindEvidence table uses =
-  let heads = o n => lookupTab (tyTabKey o n) table
+-- The constructor kinds the uses of a head's parameters fix, its declared
+-- kinds known.
+kindEvidence : KindReads ->
+  List String ->
+  List (Option Kind) ->
+  List Ty ->
+  List (String, Kind)
+kindEvidence reads ps declared uses =
   filterList
     (e => kindHasArrow (snd e))
-    (flatMap (kindUses heads (_ _ => None) (Some KType)) uses)
+    (varKindsOf
+      reads
+      (declaredPairs ps declared)
+      (map (t => (Some KType, t)) uses))
+
+declaredPairs : List String -> List (Option Kind) -> List (String, Kind)
+declaredPairs (p :: ps) ((Some k) :: ds) = (p, k) :: declaredPairs ps ds
+declaredPairs (_ :: ps) (None :: ds) = declaredPairs ps ds
+declaredPairs _ _ = []
+
+-- A head's parameter kinds from a name index (`tabNameIndex`), a builtin's
+-- where the index has none.
+export
+headKindsIn : OrdMap (List (TabKey, List Kind)) ->
+  TyConOrigin ->
+  String ->
+  Option (List Kind)
+headKindsIn index o n = match tabNameLookup index (tyTabKey o n)
+  Some kinds => Some kinds
+  None => builtinParamKinds n
+
+-- A builtin head's parameter kinds: a tuple takes a `Type` per component,
+-- `List`, `Ref` and `Array` take one, and every other primitive none.
+export
+builtinParamKinds : String -> Option (List Kind)
+builtinParamKinds n
+  | contains n ["List", "Ref", "Array"] = Some [KType]
+  | contains n primitiveTypes = Some []
+  | contains n tupleCtorTyNames =
+    map (k => map (_ => KType) [1..=k]) (tupleTagArity n)
+  | otherwise = None
+
+-- A table indexed by name, each bucket in table order, so a probe answers
+-- what `lookupTab` over the whole table answers.
+export
+tabNameIndex : List (TabKey, v) -> OrdMap (List (TabKey, v))
+tabNameIndex rows =
+  fold
+    (index row =>
+      let name = tabKeyName (fst row)
+      omInsert name (row :: optionOr [] (omLookup name index)) index)
+    omEmpty
+    (reverseL rows)
+
+export
+tabNameLookup : OrdMap (List (TabKey, v)) -> TabKey -> Option v
+tabNameLookup index key =
+  lookupTab key (optionOr [] (omLookup (tabKeyName key) index))
 
 paramKindsFrom : List (String, Kind) ->
   List String ->
@@ -2287,21 +2534,54 @@ declGradedScope gctx (p :: ps) [] methods =
 declGradedScope gctx (p :: ps) (a :: anns) methods =
   declGradedScopeAdd
     p
-    (ifaceParamKindsDecl gctx a p methods)
+    (declaredSlotKinds gctx a)
     (declGradedScope gctx ps anns methods)
 
--- an interface parameter's RESOLVED slot kinds (§6.3): the declared arrow
--- kind's slots where one is written; otherwise the inferred ARITY with every
--- slot at KType — an unannotated parameter is never `Effect`-kinded.
+-- The slot kinds a parameter's declared arrow kind gives it; none otherwise.
+declaredSlotKinds : GraphCtx -> Option KindAnn -> List Kind
+declaredSlotKinds gctx (Some (KindArrow a b)) =
+  kindAnnSlots gctx (KindArrow a b)
+declaredSlotKinds _gctx _ = []
+
+-- An interface parameter's RESOLVED slot kinds (§6.3): the declared arrow
+-- kind's slots where one is written; otherwise the slots of the first
+-- constructor kind its uses fix, in the `requires` clauses and then in the
+-- methods, each method on its own (`varKindsOf`).  An unannotated parameter
+-- is never `Effect`-kinded, so only a use over `Type` counts.
 ifaceParamKindsDecl : GraphCtx ->
+  KindReads ->
   Option KindAnn ->
   String ->
+  List Super ->
   List IfaceMethod ->
   List Kind
-ifaceParamKindsDecl gctx (Some (KindArrow a b)) _ _ =
+ifaceParamKindsDecl gctx _ (Some (KindArrow a b)) _ _ _ =
   kindAnnSlots gctx (KindArrow a b)
-ifaceParamKindsDecl _gctx _ p methods =
-  map (_ => KType) (ifaceParamKindsOf p methods)
+ifaceParamKindsDecl _gctx reads _ p supers methods =
+  let uses =
+    flatMap (superParamKinds reads.krIfaces p) supers
+      ++ flatMap (methodParamKind reads p) methods
+  match find kindHasArrow uses
+    Some k => kindParams k
+    None => []
+
+-- The kind one method's signature gives [p], if it gives one.
+methodParamKind : KindReads -> String -> IfaceMethod -> List Kind
+methodParamKind reads p (IfaceMethod _ mty _ _) =
+  match lookupAssoc p (varKindsOf reads [] [(Some KType, mty)])
+    Some k => [k]
+    None => []
+
+-- The kind `requires S … p …` gives [p]: the super's parameter kind at each
+-- position [p] is passed.
+superParamKinds : (TyConOrigin -> String -> Option (List Kind)) ->
+  String ->
+  Super ->
+  List Kind
+superParamKinds ifaces p (Super { superHead = n, superParams = ps, superOrigin = o }) =
+  match ifaces o n
+    Some kinds => map snd (filterList (pk => fst pk == p) (zipL ps kinds))
+    None => []
 
 declGradedScopeAdd : String ->
   List Kind ->
