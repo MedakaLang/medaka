@@ -3,9 +3,9 @@
 import frontend.ast.{Loc(..), Decl(..)}
 import frontend.parser.{Positions(..)}
 import driver.diagnostics.{Severity(..)}
-import support.util.{filterList, splitNl, startsWith, stringTrim}
+import support.util.{filterList, splitNl, startsWith}
 import hash_map.{HashMap, new, setInPlace, has, findWithDefault}
-import string.{drop as strDrop}
+import string.{drop as strDrop, trimAscii}
 import tools.printer.{declToString}
 import support.char.{isAlnum, isLower, isUpper}
 import frontend.lexer.{Comment, commentText}
@@ -309,5 +309,5 @@ blockInner t =
 -- an inner block line is a doctest input iff it trims to `> …`.
 blockDocLineIdents : String -> List String
 blockDocLineIdents line =
-  let tr = stringTrim line
+  let tr = trimAscii line
   if startsWith ">" tr then identTokens (strDrop 1 tr) else []

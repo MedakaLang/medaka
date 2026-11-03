@@ -297,7 +297,6 @@ libRosterNames = map ((_, name, _) => name) libSuites
    `"summary":{"passed":0,...}`. -}
 libExempt : List (String, String)
 libExempt = [
-  ("asciitrim", "0 assertions"),
   ("atsyntax", "0 assertions"),
   ("blockstore", "0 assertions"),
   ("car", "0 assertions"),

@@ -66,7 +66,6 @@ import support.util.{
   contains,
   listLen,
   schemeLineName,
-  stringTrim,
   lookupAssoc,
 }
 import support.opcount.{setOpCounting, opSnap}
@@ -96,7 +95,7 @@ import types.target_profile.{
   selectedProfile,
 }
 import tools.target_check.{targetRefusal, ppTargetDiag, foldTargetDiags}
-import string.{toInt}
+import string.{toInt, trimAscii}
 -- S-cli-onto-args (#2355): the ONE argument parser.  Every verb's flag
 -- vocabulary below is an `ArgSpec` value, so its `(known: …)` roster, its
 -- rejection sentences and what it actually parses are three renderings of one
@@ -175,6 +174,7 @@ import driver.diagnostics.{
   cjAllToJson,
   flushRunEnvelope,
   pendingStaleNotice,
+  pendingEnvelopeExtras,
   pendingPreludeNotices,
   readDiagSrc,
   mkDiag,
@@ -243,6 +243,7 @@ import tools.test_cmd.{
   testFilesGo,
   runEvalPropsWorker,
 }
+import tools.probe_transcript.{testSeedRef}
 import tools.prop_runner.{seedPropRng, PropRequest(..)}
 import tools.doctest.{Engine(..)}
 import tools.repl.{initSession, replLoop}
@@ -384,7 +385,7 @@ liveSourceFingerprint root =
     -- fail-open-by-design: any failure (no perl, no hash tool, spawn error)
     -- reports None, per the comment above ("the check silently skips").
     Ok (0, out, _) =>
-      let h = stringTrim out
+      let h = trimAscii out
       if h == "" then None else Some h
     _ => None
 
@@ -3297,7 +3298,8 @@ runTestProjectCmd engines cases filterOpt seedOpt =
 -- ── test --json (#2295 (d)) ──────────────────────────────────────────────────
 -- `medaka test --json <file.mdk>`: structured counterpart of the human
 -- `medaka test` report, matching `medaka lint --json`'s flag convention (one
--- JSON object to stdout, exit 1 iff the run failed).  Single-file only for
+-- JSON object to stdout, exit 1 iff the run failed; an aborted run writes its
+-- envelope to stderr and leaves stdout empty).  Single-file only for
 -- now (mirrors this slice's scope — the directory/multi-target walk stays
 -- human-text-only).
 --
@@ -3313,6 +3315,13 @@ runTestProjectCmd engines cases filterOpt seedOpt =
 -- unchanged, via `seedPropRng` in `runTestCmd` before this function is called.
 runTestJsonCmd : List Engine -> Int -> Option String -> String -> <IO> Unit
 runTestJsonCmd engines cases filterOpt target =
+  -- An eval-engine panic aborts this process before the report prints; the
+  -- panic chokepoint then emits the `run --json` envelope on stderr, so the
+  -- seed rides in it.
+  runJsonMode := True
+  pendingEnvelopeExtras := match !testSeedRef
+    Some n => [("seed", JInt n)]
+    None => []
   let root = envOr "MEDAKA_ROOT" defaultMedakaRoot
   let stdlibDir = root ++ "/stdlib"
   let r = do

@@ -263,27 +263,6 @@ False
 False
 ```
 
-### `globReaches`
-
-```
-globReaches : String -> String -> Bool
-globReaches pattern dir
-```
-
-Whether some path strictly below the directory `dir` can match `pattern`.
-
-`**` is not allowed to pass through a dot directory, so a walk can leave
-such a directory unentered when this is `False` for it.
-
-```medaka
-> globReaches "**/x" ".git"
-False
-> globReaches ".git/**" ".git"
-True
-> globReaches "*/config" ".git"
-True
-```
-
 ## Predicates
 
 ### `isAbsolute`
