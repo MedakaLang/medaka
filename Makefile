@@ -572,12 +572,6 @@ inlang-tools-lint-cli-test:
 inlang-tools-lint-rule-fixtures-test:
 	./medaka test --native compiler/tools/lint_rule_fixtures_test.mdk
 
-## compiler/tools/lint_rule_list_as_set.mdk is a rule module outside the registry,
-## so its `*_test.mdk` sibling is the only thing that compiles and runs it
-## ([W-MODULE-BLIND]). `--native`: it reads its fixture file.
-inlang-tools-lint-list-as-set-test:
-	./medaka test --native compiler/tools/lint_rule_list_as_set_test.mdk
-
 ## S-two-way-draws-are-random (#2344): compiler/tools/prop_runner_test.mdk
 ## is outside every entry's import closure ([W-MODULE-BLIND]), so without
 ## this step its `rngNextLocal` distribution regression (both Bool values

@@ -14,21 +14,21 @@ lookupAssoc k xs = lookup k xs
 dedupGo : List String -> List String -> List String
 dedupGo seen [] = reverse seen
 dedupGo seen (x :: xs) =
-  -- expect-next-line rule-list-as-set
+  -- expect-next-line rule-list-as-set unfixed
   if contains x seen then dedupGo seen xs else dedupGo (x :: seen) xs
 
 -- `elem`, and the container through `|>`
 elemGo : List Int -> List Int -> Int
 elemGo seen [] = length seen
 elemGo seen (x :: xs) =
-  -- expect-next-line rule-list-as-set
+  -- expect-next-line rule-list-as-set unfixed
   if seen |> elem x then elemGo seen xs else elemGo (seen ++ [x]) xs
 
 -- tested in one clause, grown in another: a scope walk
 renameGo : List String -> List (String, Int) -> List String
 renameGo bound [] = []
 renameGo bound ((n, 0) :: rest) =
-  -- expect-next-line rule-list-as-set
+  -- expect-next-line rule-list-as-set unfixed
   if notElem n bound then n :: renameGo bound rest else renameGo bound rest
 renameGo bound ((n, _) :: rest) = renameGo ([n] ++ bound) rest
 
@@ -37,7 +37,7 @@ envGo : List (String, Int) -> List String -> Int
 envGo env [] = 0
 envGo env (x :: xs) =
   let env2 = (x, 1) :: env
-  -- expect-next-line rule-list-as-set
+  -- expect-next-line rule-list-as-set unfixed
   match lookupAssoc x env
     Some v => v + envGo env xs
     None => envGo env2 xs
@@ -48,13 +48,13 @@ viaWhere ys = go [] ys
   where
     go seen [] = length seen
     go seen (z :: zs) =
-      -- expect-next-line rule-list-as-set
+      -- expect-next-line rule-list-as-set unfixed
       if contains z seen then go seen zs else go (z :: seen) zs
 
 -- a fold lambda that conses onto a tested accumulator
 foldDedup : List String -> List String
 foldDedup xs =
-  -- expect-next-line rule-list-as-set
+  -- expect-next-line rule-list-as-set unfixed
   fold (acc x => if contains x acc then acc else x :: acc) [] xs
 
 -- a fold lambda that only tests its accumulator
@@ -97,10 +97,11 @@ shadowed seen (x :: xs) =
   let hit = any (seen => contains x seen) [[x]]
   if hit then shadowed seen xs else shadowed (x :: seen) xs
 
--- not covered: the growth happens in a helper the loop calls
+-- the growth is made by a helper of the file the loop calls
 viaHelper : List String -> List String -> Int
 viaHelper seen [] = length seen
 viaHelper seen (x :: xs) =
+  -- expect-next-line rule-list-as-set unfixed
   if contains x seen then viaHelper seen xs else viaHelper (remember x seen) xs
 
 remember : String -> List String -> List String
@@ -135,14 +136,77 @@ letNotGrown seen (x :: xs) =
   let other = [x]
   if contains x seen then letNotGrown other xs else letNotGrown seen xs
 
--- not covered: the test is made by a helper the loop calls
+-- the test is made by a helper of the file the loop calls
 testViaHelper : List String -> List String -> Int
 testViaHelper seen [] = 0
 testViaHelper seen (x :: xs) =
+  -- expect-next-line rule-list-as-set unfixed
   if isSeen x seen then testViaHelper seen xs else testViaHelper (x :: seen) xs
 
 isSeen : String -> List String -> Bool
 isSeen x seen = contains x seen
+
+-- a hand-rolled membership function, called on a grown list
+memberName : String -> List String -> Bool
+memberName _ [] = False
+memberName n (y :: ys) = n == y || memberName n ys
+
+handRolled : List String -> List String -> Int
+handRolled seen [] = length seen
+handRolled seen (x :: xs) =
+  -- expect-next-line rule-list-as-set unfixed
+  if memberName x seen then handRolled seen xs else handRolled (x :: seen) xs
+
+-- a helper that tests with a hand-rolled function and returns the list grown,
+-- threaded by the loop
+insertName : List String -> String -> List String
+insertName acc n
+  | memberName n acc = acc
+  | otherwise = acc ++ [n]
+
+foldNames : List String -> List String -> List String
+foldNames acc [] = acc
+foldNames acc (n :: rest) =
+  -- expect-next-line rule-list-as-set unfixed
+  foldNames (insertName acc n) rest
+
+-- a fold lambda that threads its accumulator through the same helper
+foldInsert : List String -> List String
+foldInsert xs =
+  -- expect-next-line rule-list-as-set unfixed
+  fold (acc n => insertName acc n) [] xs
+
+-- a helper that tests a list the loop passes on unchanged
+helperFixed : List String -> List String -> Int
+helperFixed pool [] = 0
+helperFixed pool (x :: xs) =
+  if isSeen x pool then 1 + helperFixed pool xs else helperFixed pool xs
+
+-- a local function that shadows the helper's name is not the helper
+shadowHelper : List String -> List String -> Int
+shadowHelper seen [] = 0
+shadowHelper seen (x :: xs) =
+  let isSeen _ _ = False
+  if isSeen x seen then shadowHelper seen xs else shadowHelper (x :: seen) xs
+
+-- not covered: a hand-rolled walk that returns neither `Bool` nor `Option`
+indexOfName : String -> List String -> Int
+indexOfName _ [] = 0
+indexOfName n (y :: ys) = if n == y then 1 else indexOfName n ys
+
+walkInt : List String -> List String -> Int
+walkInt seen [] = 0
+walkInt seen (x :: xs) =
+  if indexOfName x seen > 0 then walkInt seen xs else walkInt (x :: seen) xs
+
+-- not covered: a test two helpers away
+isSeenTwice : String -> List String -> Bool
+isSeenTwice x seen = isSeen x seen
+
+twoHops : List String -> List String -> Int
+twoHops seen [] = 0
+twoHops seen (x :: xs) =
+  if isSeenTwice x seen then twoHops seen xs else twoHops (x :: seen) xs
 
 -- not covered: a container held in a `Ref`
 refSeen : Ref (List String) -> List String -> <IO> Unit

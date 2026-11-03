@@ -6,32 +6,49 @@
 --
 -- * a parameter of a self-recursive function, at a position that some
 --   full-arity self-call, in any clause of the function, passes grown: `e :: p`,
---   `p ++ e`, `e ++ p`, or a name a `let` in that clause binds to one of those;
+--   `p ++ e`, `e ++ p`, a name a `let` in that clause binds to one of those, or
+--   a call of a growing helper (below) on `p`;
 -- * the accumulator parameter of a fold lambda (the folds `lint_recursion`
 --   knows) whose body returns the accumulator grown in a tail position.
 --
+-- A membership call is a call of one of the names above, or a full-arity call
+-- of a hand-rolled membership function of the file: a top-level function whose
+-- signature returns `Bool` or `Option`, which compares (`==` or a membership
+-- name), and whose every self-call passes the tail of a `h :: t` parameter
+-- pattern at one position and every other parameter unchanged.
+--
+-- One hop through a helper, a top-level function of the same file, is read.  A
+-- helper membership-tests a parameter when its own body makes a membership call
+-- on that parameter; a full-arity call of it in the loop is reported at the
+-- call.  A helper grows a parameter when its body returns it grown in a tail
+-- position; a self-call that passes such a call grows the container.  A helper
+-- of a helper is not read, nor a helper in another module or a `where` group.
+--
 -- Growth is what makes the test a loop cost: a container that only shrinks or
 -- is passed on unchanged is not reported.  Not covered: a container held in a
--- `Ref`, a record field or a top-level table; a test or growth made by a helper
--- the loop calls, or through mutual recursion; a tuple accumulator; a hand-rolled
--- membership function or `any (== x) xs`; a `let` alias of an alias; a test or
--- prop body.
+-- `Ref`, a record field or a top-level table; mutual recursion; a tuple
+-- accumulator; `any (== x) xs`; a hand-rolled walk that returns anything other
+-- than `Bool` or `Option`; a `let` alias of an alias; a test or prop body; a
+-- `*_test.mdk` file, whose loops run over fixed test data.  A file that names
+-- none of `contains`, `elem` and `lookup` is not read.
 
 import driver.diagnostics.{Severity(..)}
 import frontend.ast.{
-  Arm(..), Decl, DoStmt(..), Expr(..), Loc, Pat(..), orElseLoc
+  Arm(..),
+  Decl(..),
+  DoStmt(..),
+  Expr(..),
+  GuardArm(..),
+  Loc,
+  Pat(..),
+  Ty(..),
+  orElseLoc,
 }
-import frontend.ast_walk.{
-  BodyOwner(..),
-  DeclBody(..),
-  ExprKind(..),
-  childExprs,
-  declBodies,
-  stmtExprs,
-}
+import frontend.ast_walk.{ExprKind(..), childExprs, stmtExprs}
 import frontend.parser.{Positions(..)}
-import list.{findMap, get, indexed}
-import string.{contains}
+import list.{findMap, get, indexed, nub}
+import map as M
+import string.{contains, endsWith}
 import tools.lint_calls.{lastSegment}
 import tools.lint_core.{
   Category(..),
@@ -50,6 +67,7 @@ import tools.lint_core.{
   mkVisitorRule,
 }
 import tools.lint_recursion.{
+  ArgRole(..),
   Owner(..),
   SelfCall(..),
   foldAccIndex,
@@ -57,9 +75,9 @@ import tools.lint_recursion.{
   selfCalls,
   spineOf,
 }
-import tools.lint_scope.{FileScopes, binderOf}
+import tools.lint_scope.{BinderKind(..), FileScopes, binderOf}
 import tools.lint_shared.{
-  appSpineOf, firstLoc, ruleNameListAsSet, unwrapLoc, varSite
+  appSpineOf, firstLoc, ruleNameListAsSet, tyHeadName, unwrapLoc, varSite
 }
 
 export
@@ -71,7 +89,7 @@ rule =
       summary =
         "a `List` a loop grows and membership-tests on every step: each test walks the whole list. Keep a `Set` or `Map` beside it, or build the set once",
       doc =
-        "A membership test on a `List` (`contains`, `elem`, `notElem`, `lookupAssoc`, `lookup`) walks the list. When a loop grows the list and tests it on every step, the loop does work quadratic in the number of steps. The rule reports a membership test whose container is a parameter that a self-call of the same function passes grown (`x :: seen`, `seen ++ xs`, `xs ++ seen`, or a `let` bound to one of those), and a test on the accumulator of a fold lambda that returns the accumulator grown. A container that is only passed on unchanged or shrinks is not reported, nor is one held in a `Ref`, a record field or a top-level table, nor a test made by a helper the loop calls. A partial application and a call to a different function (mutual recursion) are not self-calls.\n\nKeep the names in a `Set` (or the pairs in a `Map`) beside the list, or build the set once before the loop. A list whose length is small and fixed can carry a `-- lint-disable-next-line rule-list-as-set` with the bound as its reason.\n\nBefore:\n  go seen (x :: xs) = if contains x seen then go seen xs else go (x :: seen) xs\nAfter:\n  go seen (x :: xs) = if has x seen then go seen xs else go (insert x seen) xs  -- with `seen : Set String`",
+        "A membership test on a `List` (`contains`, `elem`, `notElem`, `lookupAssoc`, `lookup`, or a hand-rolled function of the file that walks a list and returns `Bool` or `Option`) walks the list. When a loop grows the list and tests it on every step, the loop does work quadratic in the number of steps. The rule reports a membership test whose container is a parameter that a self-call of the same function passes grown (`x :: seen`, `seen ++ xs`, `xs ++ seen`, a `let` bound to one of those, or a helper of the file that returns its argument grown), and a test on the accumulator of a fold lambda that returns the accumulator grown. A test made by a helper of the same file that the loop calls with the list is reported at the call. A container that is only passed on unchanged or shrinks is not reported, nor is one held in a `Ref`, a record field or a top-level table, nor a test two helpers away. A partial application and a call to a different function (mutual recursion) are not self-calls. `*_test.mdk` files are not checked.\n\nKeep the names in a `Set` (or the pairs in a `Map`) beside the list, or build the set once before the loop. A list whose length is small and fixed can carry a `-- lint-disable-next-line rule-list-as-set` with the bound as its reason.\n\nBefore:\n  go seen (x :: xs) = if contains x seen then go seen xs else go (x :: seen) xs\nAfter:\n  go seen (x :: xs) = if has x seen then go seen xs else go (insert x seen) xs  -- with `seen : Set String`",
       category = Perf,
       scope = Universal,
       ratchet = Gated,
@@ -82,54 +100,268 @@ rule =
     ruleListAsSet
     None
 
--- A file that names no membership function has nothing to report, so its
--- bodies are not walked.
 ruleListAsSet : StdlibIndex ->
   String ->
   FileFacts ->
   Positions ->
   List Decl ->
   List Visitor
-ruleListAsSet _ _ facts _ decls
+ruleListAsSet _ path facts _ decls
+  | endsWith "_test.mdk" path = []
   | any (w => contains w facts.ffSrc) mentions =
     let scopes = factScopes facts
+    let defs = topDefs decls
+    let rd = Reader scopes (helperTable scopes decls defs)
     [
-      OnDecl (declFindings scopes decls),
-      OnExpr [KLetGroup] (localFindings scopes),
-      OnExpr [KApp] (foldFindings scopes),
+      OnDecl (declFindings rd defs),
+      OnExpr [KLetGroup] (localFindings rd),
+      OnExpr [KApp] (foldFindings rd),
     ]
   | otherwise = []
 
 mentions : List String
 mentions = ["contains", "elem", "lookup"]
 
+-- The scope model and the helper table of one file.
+data Reader = Reader FileScopes (M.Map String Helper)
+
+-- ── helpers ──────────────────────────────────────────────────────────────────
+
+-- What one top-level function of the file does with its parameters: its arity,
+-- the position it walks when it is a hand-rolled membership function, the
+-- positions its body membership-tests (each with the membership callee), and
+-- the positions it returns grown.
+data Helper = Helper Int (Option Int) (List (Int, String)) (List Int)
+
+-- One clause of a top-level function: its site, parameters, body and the
+-- candidate membership calls of the body, collected once.
+data Def = Def Loc (List Pat) Expr (List Call)
+
+-- The clauses of every top-level function, by name.
+topDefs : List Decl -> M.Map String (List Def)
+topDefs decls =
+  let heads = flatMap topHead decls
+  let names = M.fromList (map ((n, _, _, _) => (n, ())) heads)
+  fold
+    (m (n, l, ps, body) =>
+      M.insertWith (++) n [Def l ps body (callsIn names None body [])] m)
+    empty
+    heads
+
+topHead : Decl -> List (String, Loc, List Pat, Expr)
+topHead (DFunDef _ n ps body l _) = [(n, l, ps, body)]
+topHead (DAttrib _ d) = topHead d
+topHead _ = []
+
+-- The table is built in two steps so that a helper's own facts read only
+-- direct membership calls and hand-rolled membership functions: one hop.
+helperTable : FileScopes ->
+  List Decl ->
+  M.Map String (List Def) ->
+  M.Map String Helper
+helperTable scopes decls defs =
+  let sigs = M.fromList (flatMap sigOf decls)
+  let entries = M.entries defs
+  let searches = M.fromList (flatMap (searchEntry scopes sigs) entries)
+  let rd = Reader scopes searches
+  M.fromList (flatMap (helperEntry rd searches) entries)
+
+sigOf : Decl -> List (String, Ty)
+sigOf (DTypeSig _ name ty _) = [(name, ty)]
+sigOf (DAttrib _ d) = sigOf d
+sigOf _ = []
+
+helperEntry : Reader ->
+  M.Map String Helper ->
+  (String, List Def) ->
+  List (String, Helper)
+helperEntry (rd@(Reader scopes _)) searches (name, ds) =
+  let search = match M.get name searches
+    Some (Helper _ k _ _) => k
+    None => None
+  let tested =
+    nub
+      (flatMap
+        ((Def _ ps _ calls) =>
+          map
+            ((Probe _ callee _ _, j) => (j, callee))
+            (paramProbes rd (Some name) ps calls))
+        ds)
+  let grown = nub (flatMap (clauseReturnsGrown scopes) ds)
+  match (search, tested, grown)
+    (None, [], []) => []
+    _ => [(name, Helper (arityOf ds) search tested grown)]
+
+arityOf : List Def -> Int
+arityOf ((Def _ ps _ _) :: _) = length ps
+arityOf [] = 0
+
+-- The parameter positions a clause returns grown in a tail position.
+clauseReturnsGrown : FileScopes -> Def -> List Int
+clauseReturnsGrown scopes (Def _ ps body _) =
+  flatMap
+    ((j, p) => match wholeParam p
+      Some param =>
+        if tailGrows (Reader scopes empty) param body then [j] else []
+      None => [])
+    (indexed ps)
+
+-- A hand-rolled membership function: its signature returns `Bool` or
+-- `Option`, and at one position every self-call walks the tail of the list.
+searchEntry : FileScopes ->
+  M.Map String Ty ->
+  (String, List Def) ->
+  List (String, Helper)
+searchEntry scopes sigs (name, ds) = match M.get name sigs
+  Some ty if returnsTest ty
+    && any
+      ((Def _ _ body _) => compares body)
+      ds => match searchPos scopes name ds
+    Some k => [(name, Helper (arityOf ds) (Some k) [] [])]
+    None => []
+  _ => []
+
+returnsTest : Ty -> Bool
+returnsTest (TyFun _ r) = returnsTest r
+returnsTest (TyConstrained _ t) = returnsTest t
+returnsTest t = match tyHeadName t
+  Some "Bool" => True
+  Some "Option" => True
+  _ => False
+
+compares : Expr -> Bool
+compares e = match unwrapLoc e
+  EBinOp "==" _ _ _ => True
+  EVar n => isMembership (lastSegment n)
+  e2 => any compares (childExprs e2)
+
+-- The first position at which some clause binds a `h :: t` pattern and every
+-- self-call passes that clause's `t`, with every other parameter unchanged.
+searchPos : FileScopes -> String -> List Def -> Option Int
+searchPos scopes name ds = match flatMap (defSelfCalls scopes name) ds
+  [] => None
+  calls =>
+    findMap
+      (k => if all (walksAt scopes k) calls then Some k else None)
+      (nub (flatMap consPositions ds))
+
+defSelfCalls : FileScopes -> String -> Def -> List (List Pat, SelfCall)
+defSelfCalls scopes name (Def _ ps body _) =
+  map (c => (ps, c)) (selfCalls scopes (Owner name ps None) body)
+
+consPositions : Def -> List Int
+consPositions (Def _ ps _ _) =
+  flatMap ((j, p) => if isSome (consTail p) then [j] else []) (indexed ps)
+
+consTail : Pat -> Option Param
+consTail (PCons _ (PVar t l _)) = Some (Param t l)
+consTail _ = None
+
+walksAt : FileScopes -> Int -> (List Pat, SelfCall) -> Bool
+walksAt scopes k (ps, SelfCall _ call roles) =
+  let tailPassed = match (get k ps, get k (argsOf call))
+    (Some p, Some a) => match consTail p
+      Some t => isParam scopes t a
+      None => False
+    _ => False
+  tailPassed && all ((j, r) => j == k || r == Unchanged j) (indexed roles)
+
+-- The helper a call's head names, when it resolves to a top-level function of
+-- the file other than `self` and the call passes its full arity.
+topHelper : Reader -> Option String -> Expr -> Int -> Option Helper
+topHelper (Reader scopes hs) self hd n = match unwrapLoc hd
+  EVar name => match M.get name hs
+    Some (h@(Helper arity _ _ _)) if arity == n && Some name /= self =>
+      if bindsTop scopes name hd then Some h else None
+    _ => None
+  _ => None
+
+bindsTop : FileScopes -> String -> Expr -> Bool
+bindsTop scopes name hd = match varSite hd
+  Some site => match binderOf scopes site
+    Some b => b.binderKind == BTopLevel && b.binderName == name
+    None => False
+  None => False
+
 -- ── membership tests ─────────────────────────────────────────────────────────
 
--- A membership call: its span, the callee and the container argument.
-data Probe = Probe (Option Loc) String Expr
+-- A call that may be a membership test: its span, the head's name, the head
+-- and the arguments.  The head is a membership name or a top-level function of
+-- the file; arity and scope are checked when the call is read.
+data Call = Call (Option Loc) String Expr (List Expr)
+
+-- A membership call: its span, the membership callee, the helper of the file
+-- the loop calls when the test is made there, and the container argument.
+data Probe = Probe (Option Loc) String (Option String) Expr
+
+-- The candidate calls in `e`, nested bodies included, onto `acc`.  `tops`
+-- holds the names of the file's top-level functions.
+callsIn : M.Map String v -> Option Loc -> Expr -> List Call -> List Call
+callsIn tops _ (ELoc l inner) acc = callsIn tops (Some l) inner acc
+callsIn tops loc (EApp f a) acc = match spineOf f [a]
+  (hd, args) =>
+    fold
+      (acc2 c => callsIn tops loc c acc2)
+      (callsIn tops loc hd (candidate tops loc hd args acc))
+      args
+callsIn tops loc (e@(EBinOp "|>" l r _)) acc = match spineOf r []
+  (hd, args) =>
+    fold
+      (acc2 c => callsIn tops loc c acc2)
+      (candidate tops loc hd (args ++ [l]) acc)
+      (childExprs e)
+callsIn tops loc e acc =
+  fold (acc2 c => callsIn tops loc c acc2) acc (childExprs e)
+
+candidate : M.Map String v ->
+  Option Loc ->
+  Expr ->
+  List Expr ->
+  List Call ->
+  List Call
+candidate tops loc hd args acc = match unwrapLoc hd
+  EVar n if isSome (membershipName n) || M.has n tops =>
+    Call (orElseLoc (firstLoc hd) loc) n hd args :: acc
+  _ => acc
 
 -- Every membership call in `e`, nested bodies included: a container resolves
 -- to its own binder, so a test inside a nested loop is matched to the loop
 -- whose parameter it tests.
-probesIn : Option Loc -> Expr -> List Probe
-probesIn _ (ELoc l inner) = probesIn (Some l) inner
-probesIn loc e = probeHere loc e ++ flatMap (probesIn loc) (childExprs e)
+probesIn : Reader -> Expr -> List Probe
+probesIn (rd@(Reader _ hs)) e =
+  flatMap (callProbes rd None) (callsIn hs None e [])
 
-probeHere : Option Loc -> Expr -> List Probe
-probeHere loc (EApp f a) = match spineOf f [a]
-  (hd, args) => callProbe loc hd args
-probeHere loc (EBinOp "|>" l r _) = match spineOf r []
-  (hd, args) => callProbe loc hd (args ++ [l])
-probeHere _ _ = []
+-- The membership tests a call makes.  `self` is the top-level function being
+-- read, whose own calls are self-calls, not helper calls.
+callProbes : Reader -> Option String -> Call -> List Probe
+callProbes rd self (Call site n hd args) = match membershipName n
+  Some m => match args
+    [_, c] => [Probe site m None c]
+    _ => []
+  None => match topHelper rd self hd (length args)
+    Some h => helperProbes site n h args
+    None => []
 
-callProbe : Option Loc -> Expr -> List Expr -> List Probe
-callProbe loc hd args = match (unwrapLoc hd, args)
-  (EVar n, [_, c]) =>
-    if isMembership (lastSegment n) then
-      [Probe (orElseLoc (firstLoc hd) loc) (lastSegment n) c]
-    else
-      []
-  _ => []
+helperProbes : Option Loc -> String -> Helper -> List Expr -> List Probe
+helperProbes site n (Helper _ search tested _) args =
+  let searched = match search
+    Some k => match get k args
+      Some c => [Probe site n None c]
+      None => []
+    None => []
+  searched
+    ++ flatMap
+      ((j, callee) => match get j args
+        Some c => [Probe site callee (Some n) c]
+        None => [])
+      tested
+
+-- The membership name a callee spells, qualified or not.
+membershipName : String -> Option String
+membershipName n
+  | isMembership n = Some n
+  | contains "." n && isMembership (lastSegment n) = Some (lastSegment n)
+  | otherwise = None
 
 isMembership : String -> Bool
 isMembership n =
@@ -155,15 +387,20 @@ isParam scopes (Param n l) e = match varSite e
     Some b => b.binderName == n && b.binderSpan == l
     None => False
 
--- The membership calls in `body` whose container is a whole parameter, with
--- the parameter's position.
-paramProbes : FileScopes -> List Pat -> Expr -> List (Probe, Int)
-paramProbes scopes ps body = match probesIn None body
-  [] => []
-  probes => flatMap (probeParam scopes ps) probes
+-- The membership tests among `calls` whose container is a whole parameter,
+-- with the parameter's position.
+paramProbes : Reader ->
+  Option String ->
+  List Pat ->
+  List Call ->
+  List (Probe, Int)
+paramProbes (rd@(Reader scopes _)) self ps calls =
+  match flatMap (callProbes rd self) calls
+    [] => []
+    probes => flatMap (probeParam scopes ps) probes
 
 probeParam : FileScopes -> List Pat -> Probe -> List (Probe, Int)
-probeParam scopes ps (probe@(Probe _ _ c)) =
+probeParam scopes ps (probe@(Probe _ _ _ c)) =
   match findMap (atParam scopes c) (indexed ps)
     Some j => [(probe, j)]
     None => []
@@ -175,25 +412,40 @@ atParam scopes c (j, p) = match wholeParam p
 
 -- ── growth ───────────────────────────────────────────────────────────────────
 
--- Whether `e` is the parameter grown by `::` or `++`, or a name a `let` of the
--- clause (`lets`, by binder span) binds to such an expression.
-grows : FileScopes -> List (Loc, Expr) -> Param -> Expr -> Bool
-grows scopes lets param e = match unwrapLoc e
+-- Whether `e` is the parameter grown by `::`, `++` or a growing helper, or a
+-- name a `let` of the clause (`lets`, by binder span) binds to such an
+-- expression.
+grows : Reader -> List (Loc, Expr) -> Param -> Expr -> Bool
+grows (rd@(Reader scopes _)) lets param e = match unwrapLoc e
   EVar _ => match aliasOf scopes lets e
-    Some rhs => grownDirect scopes param rhs
+    Some rhs => grownDirect rd param rhs
     None => False
-  _ => grownDirect scopes param e
+  _ => grownDirect rd param e
 
-grownDirect : FileScopes -> Param -> Expr -> Bool
-grownDirect scopes param e = match unwrapLoc e
-  EBinOp "::" _ t _ => isParam scopes param t || grownDirect scopes param t
+grownDirect : Reader -> Param -> Expr -> Bool
+grownDirect (rd@(Reader scopes _)) param e = match unwrapLoc e
+  EBinOp "::" _ t _ => isParam scopes param t || grownDirect rd param t
   EBinOp "++" a b _ =>
     isParam scopes param a
       || isParam scopes param b
-      || grownDirect scopes param a
-      || grownDirect scopes param b
-  EIf _ t f => grownDirect scopes param t || grownDirect scopes param f
+      || grownDirect rd param a
+      || grownDirect rd param b
+  EIf _ t f => grownDirect rd param t || grownDirect rd param f
+  EApp _ _ => helperGrows rd param e
   _ => False
+
+-- Whether `e` is a full-arity call of a helper that returns, grown, the
+-- argument it is passed the parameter at.
+helperGrows : Reader -> Param -> Expr -> Bool
+helperGrows (rd@(Reader scopes _)) param e = match spineOf e []
+  (hd, args) => match topHelper rd None hd (length args)
+    Some (Helper _ _ _ grown) =>
+      any
+        (j => match get j args
+          Some a => isParam scopes param a
+          None => False)
+        grown
+    None => False
 
 aliasOf : FileScopes -> List (Loc, Expr) -> Expr -> Option Expr
 aliasOf scopes lets e = match varSite e
@@ -216,30 +468,29 @@ stmtLets s = flatMap letsIn (stmtExprs s)
 
 -- The parameter positions that some self-call of the function passes grown.
 -- `clauses` are all the clauses of the function, each with its parameters.
-grownPositions : FileScopes ->
+grownPositions : Reader ->
   String ->
   Option Loc ->
   List (List Pat, Expr) ->
   List Int
-grownPositions scopes name site clauses =
-  flatMap (clauseGrown scopes name site) clauses
+grownPositions rd name site clauses = flatMap (clauseGrown rd name site) clauses
 
-clauseGrown : FileScopes -> String -> Option Loc -> (List Pat, Expr) -> List Int
-clauseGrown scopes name site (ps, body) =
+clauseGrown : Reader -> String -> Option Loc -> (List Pat, Expr) -> List Int
+clauseGrown (rd@(Reader scopes _)) name site (ps, body) =
   match selfCalls scopes (Owner name ps site) body
     [] => []
     calls =>
       let lets = letsIn body
-      flatMap (callGrown scopes lets ps) calls
+      flatMap (callGrown rd lets ps) calls
 
-callGrown : FileScopes -> List (Loc, Expr) -> List Pat -> SelfCall -> List Int
-callGrown scopes lets ps (SelfCall _ call _) =
-  flatMap (argGrown scopes lets ps) (indexed (argsOf call))
+callGrown : Reader -> List (Loc, Expr) -> List Pat -> SelfCall -> List Int
+callGrown rd lets ps (SelfCall _ call _) =
+  flatMap (argGrown rd lets ps) (indexed (argsOf call))
 
-argGrown : FileScopes -> List (Loc, Expr) -> List Pat -> (Int, Expr) -> List Int
-argGrown scopes lets ps (j, a) = match get j ps
+argGrown : Reader -> List (Loc, Expr) -> List Pat -> (Int, Expr) -> List Int
+argGrown rd lets ps (j, a) = match get j ps
   Some p => match wholeParam p
-    Some param => if grows scopes lets param a then [j] else []
+    Some param => if grows rd lets param a then [j] else []
     None => []
   None => []
 
@@ -252,50 +503,50 @@ argsOf e = match appSpineOf e
 -- One clause of a top-level function.  The growth is read over every clause of
 -- the function, since a scope walk tests in one clause and grows in another.
 -- Test and prop bodies run over fixed data and are not checked.
-declFindings : FileScopes -> List Decl -> Ctx -> Decl -> List Finding
-declFindings scopes decls ctx d =
-  flatMap (bodyFindings scopes decls ctx.ctxSpan) (declBodies d)
+declFindings : Reader -> M.Map String (List Def) -> Ctx -> Decl -> List Finding
+declFindings rd defs ctx d =
+  flatMap (headFindings rd defs ctx.ctxSpan) (topHead d)
 
-bodyFindings : FileScopes -> List Decl -> Option Loc -> DeclBody -> List Finding
-bodyFindings scopes decls fallback (DeclBody (OwnerClause name ps) body) =
-  match paramProbes scopes ps body
-    [] => []
-    probes =>
-      reportGrown
-        fallback
-        (grownPositions scopes name None (clausesNamed decls name))
-        probes
-bodyFindings _ _ _ _ = []
+headFindings : Reader ->
+  M.Map String (List Def) ->
+  Option Loc ->
+  (String, Loc, List Pat, Expr) ->
+  List Finding
+headFindings rd defs fallback (name, site, ps, _) =
+  let ds = M.findWithDefault [] name defs
+  match findMap ((Def l _ _ calls) => if l == site then Some calls else None) ds
+    Some calls => match paramProbes rd (Some name) ps calls
+      [] => []
+      probes =>
+        reportGrown
+          fallback
+          (grownPositions rd name None (map defClause ds))
+          probes
+    None => []
 
-clausesNamed : List Decl -> String -> List (List Pat, Expr)
-clausesNamed decls name =
-  flatMap (d => flatMap (clauseNamed name) (declBodies d)) decls
-
-clauseNamed : String -> DeclBody -> List (List Pat, Expr)
-clauseNamed name (DeclBody (OwnerClause n ps) body) =
-  if n == name then [(ps, body)] else []
-clauseNamed _ _ = []
+defClause : Def -> (List Pat, Expr)
+defClause (Def _ ps body _) = (ps, body)
 
 -- The `where`/`let` loops of one group, each read over all of its clauses.
-localFindings : FileScopes -> Ctx -> Expr -> List Finding
-localFindings scopes ctx e
+localFindings : Reader -> Ctx -> Expr -> List Finding
+localFindings rd ctx e
   | ctx.ctxInTest = []
   | otherwise = match letOwners e
     [] => []
-    owners => flatMap (ownerFindings scopes ctx.ctxSpan owners) owners
+    owners => flatMap (ownerFindings rd ctx.ctxSpan owners) owners
 
-ownerFindings : FileScopes ->
+ownerFindings : Reader ->
   Option Loc ->
   List (Owner, Expr) ->
   (Owner, Expr) ->
   List Finding
-ownerFindings scopes fallback owners (Owner name ps site, body) =
-  match paramProbes scopes ps body
+ownerFindings (rd@(Reader _ hs)) fallback owners (Owner name ps site, body) =
+  match paramProbes rd None ps (callsIn hs None body [])
     [] => []
     probes =>
       reportGrown
         fallback
-        (grownPositions scopes name site (sameOwner name site owners))
+        (grownPositions rd name site (sameOwner name site owners))
         probes
 
 sameOwner : String -> Option Loc -> List (Owner, Expr) -> List (List Pat, Expr)
@@ -317,17 +568,17 @@ reportGrown fallback grown probes =
 
 -- A fold call is read where its lambda is the last argument given, so the later
 -- partial prefixes of the same call are not read again.
-foldFindings : FileScopes -> Ctx -> Expr -> List Finding
-foldFindings scopes ctx e
+foldFindings : Reader -> Ctx -> Expr -> List Finding
+foldFindings rd ctx e
   | ctx.ctxInTest = []
   | otherwise = match e
     EApp _ a => match unwrapLoc a
       ELam ps body => match foldAccOf e ps
         Some acc =>
-          if tailGrows scopes acc body then
+          if tailGrows rd acc body then
             map
               (probeFinding (orElseLoc (firstLoc e) ctx.ctxSpan))
-              (accProbes scopes acc body)
+              (accProbes rd acc body)
           else
             []
         None => []
@@ -345,27 +596,29 @@ foldAccOf e ps = match spineOf e []
       None => None
     _ => None
 
-accProbes : FileScopes -> Param -> Expr -> List Probe
-accProbes scopes acc body =
-  filter ((Probe _ _ c) => isParam scopes acc c) (probesIn None body)
+accProbes : Reader -> Param -> Expr -> List Probe
+accProbes (rd@(Reader scopes _)) acc body =
+  filter ((Probe _ _ _ c) => isParam scopes acc c) (probesIn rd body)
 
 -- Whether some tail position of `e` returns the accumulator grown.
-tailGrows : FileScopes -> Param -> Expr -> Bool
-tailGrows scopes acc e = match unwrapLoc e
-  EBinOp "::" _ _ _ => grownDirect scopes acc e
-  EBinOp "++" _ _ _ => grownDirect scopes acc e
-  EIf _ t f => tailGrows scopes acc t || tailGrows scopes acc f
-  EMatch _ arms => any ((Arm _ _ b) => tailGrows scopes acc b) arms
-  ELet _ _ _ _ body => tailGrows scopes acc body
-  ELetGroup _ body => tailGrows scopes acc body
+tailGrows : Reader -> Param -> Expr -> Bool
+tailGrows rd acc e = match unwrapLoc e
+  EBinOp "::" _ _ _ => grownDirect rd acc e
+  EBinOp "++" _ _ _ => grownDirect rd acc e
+  EApp _ _ => grownDirect rd acc e
+  EIf _ t f => tailGrows rd acc t || tailGrows rd acc f
+  EMatch _ arms => any ((Arm _ _ b) => tailGrows rd acc b) arms
+  EGuards arms => any ((GuardArm _ b) => tailGrows rd acc b) arms
+  ELet _ _ _ _ body => tailGrows rd acc body
+  ELetGroup _ body => tailGrows rd acc body
   _ => False
 
 -- ── findings ─────────────────────────────────────────────────────────────────
 
 probeFinding : Option Loc -> Probe -> Finding
-probeFinding fallback (Probe loc callee c) = Finding {
+probeFinding fallback (Probe loc callee via c) = Finding {
   rule = ruleNameListAsSet,
-  message = message callee (containerName c),
+  message = message callee via (containerName c),
   severity = SevWarning,
   loc = orElseLoc loc fallback,
   fix = None,
@@ -376,9 +629,11 @@ containerName c = match unwrapLoc c
   EVar n => n
   _ => "the list"
 
-message : String -> String -> String
-message callee v =
+message : String -> Option String -> String -> String
+message callee None v =
   "`\{callee}` on `\{v}`, which this loop grows on every step, walks the whole list each time, so the loop is quadratic. \{fixFor callee}"
+message callee (Some helper) v =
+  "`\{helper}` tests `\{v}` with `\{callee}`, and this loop grows `\{v}` on every step, so each call walks the whole list and the loop is quadratic. \{fixFor callee}"
 
 fixFor : String -> String
 fixFor "lookupAssoc" = lookupFix
