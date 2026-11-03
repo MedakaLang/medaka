@@ -1,5 +1,5 @@
 # META
-source_lines=1830
+source_lines=1832
 stages=DESUGAR,MARK
 # SOURCE
 import backend.impl_groups.{validateImplGroups}
@@ -265,8 +265,10 @@ validatePlanImplGroups (CProgram _ _ _ impls _ _) plan =
 
 -- The method-table check: every slot of every instance's table has exactly one
 -- callee, the callee declares the slot's value arity, and every impl group fills
--- a slot.  Only the LLVM emitter builds tables; the wasm plan may be built over a
--- reach-filtered program that keeps only the slots a dispatch reaches.
+-- a slot.  It is off for wasm: the wasm plan is built over a reach-filtered
+-- program that drops every impl of a method no reachable body names, so an
+-- instance's table there has empty fills, which the wasm emitter fills with a
+-- trap (`wasm_emit.slotFunctionW`).
 export
 validateMethodTables : Backend -> EmitPlan -> CProgram -> List String
 validateMethodTables WasmBackend _ _ = []

@@ -777,6 +777,29 @@ Two physical runtimes (Boehm+tagged-word native; host-GC+structs WasmGC) are
 layering rule, not by a shared encoding. §8 and §7.1 were never in real conflict;
 they sit at different layers.
 
+### 8.7 Dictionaries are method tables
+
+An instance witness (dictionary) is a method table, planned once as `EmitPlan.methodTables`
+by `planMethodTables` (`compiler/backend/emit_plan.mdk`) and checked by
+`validateMethodTables` (`compiler/backend/core_validate.mdk`; native only, see that
+function's comment). Both backends read the same table.
+
+- **Native layout:** `[hdr | super_0 .. | slot_0 .. | req_0 ..]`. `hdr` is
+  `hashName(instance key)`, identity only; nothing dispatches on it. The supers keep their
+  field indices. Slot `i` is the interface's i-th declared method, a closure word called
+  as `code(clos, dict, mw.., args..)`. A slot closure is a capture-free internal constant
+  over a per-(instance, method) wrapper, and the wrapper reads the instance's `requires`
+  from the dictionary. The `requires` follow the slots.
+- **WasmGC layout:** one `$dict` struct `{i32 tag, (ref $dictarr) supers++requires,
+  (ref $slotarr) slots}`. A slot is called with `call_ref` as `(dict, mw.., args..)`.
+  A null witness traps at `unreachable` before the slot load.
+- **Call sites:** a dictionary-routed call is a slot load and an indirect call. A known
+  instance (`RKey`) stays a direct call to `mdk.impl.*`.
+- **Why supers come first:** the typechecker mints super projections by index without
+  naming the root interface, and an inherited default reads its instance's `requires` by
+  index. This is the order GHC uses for class dictionaries (superclass fields before
+  methods).
+
 ---
 
 ## 9. GC strategy — keep Boehm (decided 2026-07-16); the revisit trigger

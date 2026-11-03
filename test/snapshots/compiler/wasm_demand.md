@@ -1,5 +1,5 @@
 # META
-source_lines=3003
+source_lines=3033
 stages=DESUGAR,MARK
 # SOURCE
 import backend.wasm_symbols.{WasmSymbol(..)}
@@ -17,7 +17,7 @@ import ir.core_ir.{
   CProgram(..), DeclFacts(..), EntryFact(..), CBind(..), CClause(..), CExpr(..),
   CField(..), CGuard(..), CImplEntry(..), CImplBody(..), CStmt(..), CArm(..),
   CHead(..), CTree(..), CTBranch(..), CallSite(..), CallMode(..), FailSite(..),
-  litRuntimeType
+  litRuntimeType, ifaceMethodArityKey, MethodResultFact(..)
 }
 import ir.extern_types.{ExternDeclFact(..)}
 import ir.extern_lower.{externRuntimeKey}
@@ -1790,13 +1790,14 @@ physicalTypes : ConstructorFacts ->
   WasmDemand ->
   List String
 physicalTypes _ _ False _ _ = ["boxint", "float"]
-physicalTypes constructors (CProgram _ _ ctorTypes _ _ _) True clos rep =
+physicalTypes constructors (cp@(CProgram _ _ ctorTypes _ _ _)) True clos rep =
   omKeys
     (omFromNames
       ([
-          "boxint", "float", "dictarr", "dictcell", "T_Option", "C_Some",
+          "boxint", "float", "dictarr", "slotarr", "dict", "T_Option", "C_Some",
           "T_Result", "C_Ok", "C_Err", "T_Ordering"
         ]
+        ++ map slotTypeName (slotTypeArities cp)
         ++ (if clos then ["argarr", "codety", "clos"] else [])
         ++ (if hasUse rep UseStr then ["str", "u8arr"] else [])
         ++ (if hasUse rep UseList then ["T_List", "C_Cons"] else [])
@@ -1822,6 +1823,35 @@ physicalTypes constructors (CProgram _ _ ctorTypes _ _ _) True clos rep =
                   []))
           ctorTypes)
       omEmpty)
+
+-- The function type of a slot wrapper taking [n] values: a method table's slot
+-- holds a function of `1 + method-level dictionaries + declared values`
+-- parameters, all `(ref eq)`.
+export
+slotTypeName : Int -> String
+slotTypeName n = "slot" ++ intToString n
+
+-- The widest slot function type the type section declares.
+export
+slotTypeMax : Int
+slotTypeMax = 64
+
+-- The distinct slot arities of the program's interface methods, ascending, for
+-- a program with impls (only an impl gives a dictionary a table).
+slotTypeArities : CProgram -> List Int
+slotTypeArities (CProgram _ _ _ impls mctx facts) =
+  if isEmptyL impls then
+    []
+  else
+    let contexts = omFromPairs mctx omEmpty
+    let arities = map (slotArityOfFact contexts) facts.factMethodResults
+    filterList (n => anyList (== n) arities) [1..=slotTypeMax]
+
+slotArityOfFact : OrdMap Int -> MethodResultFact -> Int
+slotArityOfFact contexts row =
+  1
+    + optionOr 0 (omLookup (ifaceMethodArityKey row.iface row.method) contexts)
+    + row.valueArity
 
 addUse : List WasmUse -> WasmUse -> List WasmUse
 addUse uses use = if any (== use) uses then uses else use :: uses
@@ -3013,7 +3043,7 @@ stmtHasFallthrough (CSAssign _ e) = exprHasFallthrough e
 (DUse false (UseAlias ("backend" "wasm_symbol_names") "WN"))
 (DUse false (UseGroup ("support" "symbol_encoding") ((mem "encodePair" false))))
 (DUse false (UseGroup ("frontend" "ast") ((mem "Lit" true) (mem "Pat" true) (mem "Addr" true) (mem "BinderId" true) (mem "Loc" true) (mem "isTaggedFixedHead" false))))
-(DUse false (UseGroup ("ir" "core_ir") ((mem "CProgram" true) (mem "DeclFacts" true) (mem "EntryFact" true) (mem "CBind" true) (mem "CClause" true) (mem "CExpr" true) (mem "CField" true) (mem "CGuard" true) (mem "CImplEntry" true) (mem "CImplBody" true) (mem "CStmt" true) (mem "CArm" true) (mem "CHead" true) (mem "CTree" true) (mem "CTBranch" true) (mem "CallSite" true) (mem "CallMode" true) (mem "FailSite" true) (mem "litRuntimeType" false))))
+(DUse false (UseGroup ("ir" "core_ir") ((mem "CProgram" true) (mem "DeclFacts" true) (mem "EntryFact" true) (mem "CBind" true) (mem "CClause" true) (mem "CExpr" true) (mem "CField" true) (mem "CGuard" true) (mem "CImplEntry" true) (mem "CImplBody" true) (mem "CStmt" true) (mem "CArm" true) (mem "CHead" true) (mem "CTree" true) (mem "CTBranch" true) (mem "CallSite" true) (mem "CallMode" true) (mem "FailSite" true) (mem "litRuntimeType" false) (mem "ifaceMethodArityKey" false) (mem "MethodResultFact" true))))
 (DUse false (UseGroup ("ir" "extern_types") ((mem "ExternDeclFact" true))))
 (DUse false (UseGroup ("ir" "extern_lower") ((mem "externRuntimeKey" false))))
 (DUse false (UseGroup ("backend" "extern_requirements") ((mem "ExternRequirements" false) (mem "RequirementBinding" true) (mem "requirementHostRows" false) (mem "requirementFacts" false))))
@@ -3495,7 +3525,15 @@ stmtHasFallthrough (CSAssign _ e) = exprHasFallthrough e
 (DFunDef false "reservedTypeRootName" ((PVar "name")) (EBinOp "++" (ELit (LString "T_")) (EApp (EVar "injectiveIdent") (EVar "name"))))
 (DTypeSig false "physicalTypes" (TyFun (TyCon "ConstructorFacts") (TyFun (TyCon "CProgram") (TyFun (TyCon "Bool") (TyFun (TyCon "Bool") (TyFun (TyCon "WasmDemand") (TyApp (TyCon "List") (TyCon "String"))))))))
 (DFunDef false "physicalTypes" (PWild PWild (PCon "False") PWild PWild) (EListLit (ELit (LString "boxint")) (ELit (LString "float"))))
-(DFunDef false "physicalTypes" ((PVar "constructors") (PCon "CProgram" PWild PWild (PVar "ctorTypes") PWild PWild PWild) (PCon "True") (PVar "clos") (PVar "rep")) (EApp (EVar "omKeys") (EApp (EApp (EVar "omFromNames") (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EListLit (ELit (LString "boxint")) (ELit (LString "float")) (ELit (LString "dictarr")) (ELit (LString "dictcell")) (ELit (LString "T_Option")) (ELit (LString "C_Some")) (ELit (LString "T_Result")) (ELit (LString "C_Ok")) (ELit (LString "C_Err")) (ELit (LString "T_Ordering"))) (EIf (EVar "clos") (EListLit (ELit (LString "argarr")) (ELit (LString "codety")) (ELit (LString "clos"))) (EListLit))) (EIf (EApp (EApp (EVar "hasUse") (EVar "rep")) (EVar "UseStr")) (EListLit (ELit (LString "str")) (ELit (LString "u8arr"))) (EListLit))) (EIf (EApp (EApp (EVar "hasUse") (EVar "rep")) (EVar "UseList")) (EListLit (ELit (LString "T_List")) (ELit (LString "C_Cons"))) (EListLit))) (EApp (EApp (EVar "flatMap") (ELam ((PVar "n")) (EListLit (EApp (EVar "reservedTypeRootName") (EBinOp "++" (ELit (LString "$Tuple")) (EApp (EVar "intToString") (EVar "n")))) (EBinOp "++" (ELit (LString "C_Tup")) (EApp (EVar "intToString") (EVar "n")))))) (EFieldAccess (EVar "rep") "tupleArities"))) (EIf (EApp (EApp (EVar "hasUse") (EVar "rep")) (EVar "UseArray")) (EListLit (ELit (LString "arr"))) (EListLit))) (EIf (EFieldAccess (EVar "rep") "refBox") (EListLit (ELit (LString "refbox"))) (EListLit))) (EIf (EApp (EApp (EVar "hasUse") (EVar "rep")) (EVar "UseU64")) (EListLit (ELit (LString "u64"))) (EListLit))) (EIf (EApp (EApp (EVar "hasUse") (EVar "rep")) (EVar "UseI64")) (EListLit (ELit (LString "i64"))) (EListLit))) (EApp (EApp (EVar "flatMap") (ELam ((PTuple (PVar "ctor") (PVar "ty"))) (EIf (EApp (EApp (EVar "contains") (EVar "ty")) (EListLit (ELit (LString "Option")) (ELit (LString "Result")) (ELit (LString "Ordering")))) (EListLit) (EBinOp "++" (EListLit (EApp (EVar "WN.wasmName") (EApp (EVar "WN.WUserType") (EVar "ty")))) (EIf (EBinOp ">" (EApp (EApp (EVar "optionOr") (ELit (LInt 0))) (EApp (EApp (EVar "declaredCtorArity") (EVar "constructors")) (EVar "ctor"))) (ELit (LInt 0))) (EListLit (EApp (EVar "WN.wasmName") (EApp (EVar "WN.WConstructorType") (EVar "ctor")))) (EListLit)))))) (EVar "ctorTypes")))) (EVar "omEmpty"))))
+(DFunDef false "physicalTypes" ((PVar "constructors") (PAs "cp" (PCon "CProgram" PWild PWild (PVar "ctorTypes") PWild PWild PWild)) (PCon "True") (PVar "clos") (PVar "rep")) (EApp (EVar "omKeys") (EApp (EApp (EVar "omFromNames") (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EListLit (ELit (LString "boxint")) (ELit (LString "float")) (ELit (LString "dictarr")) (ELit (LString "slotarr")) (ELit (LString "dict")) (ELit (LString "T_Option")) (ELit (LString "C_Some")) (ELit (LString "T_Result")) (ELit (LString "C_Ok")) (ELit (LString "C_Err")) (ELit (LString "T_Ordering"))) (EApp (EApp (EVar "map") (EVar "slotTypeName")) (EApp (EVar "slotTypeArities") (EVar "cp")))) (EIf (EVar "clos") (EListLit (ELit (LString "argarr")) (ELit (LString "codety")) (ELit (LString "clos"))) (EListLit))) (EIf (EApp (EApp (EVar "hasUse") (EVar "rep")) (EVar "UseStr")) (EListLit (ELit (LString "str")) (ELit (LString "u8arr"))) (EListLit))) (EIf (EApp (EApp (EVar "hasUse") (EVar "rep")) (EVar "UseList")) (EListLit (ELit (LString "T_List")) (ELit (LString "C_Cons"))) (EListLit))) (EApp (EApp (EVar "flatMap") (ELam ((PVar "n")) (EListLit (EApp (EVar "reservedTypeRootName") (EBinOp "++" (ELit (LString "$Tuple")) (EApp (EVar "intToString") (EVar "n")))) (EBinOp "++" (ELit (LString "C_Tup")) (EApp (EVar "intToString") (EVar "n")))))) (EFieldAccess (EVar "rep") "tupleArities"))) (EIf (EApp (EApp (EVar "hasUse") (EVar "rep")) (EVar "UseArray")) (EListLit (ELit (LString "arr"))) (EListLit))) (EIf (EFieldAccess (EVar "rep") "refBox") (EListLit (ELit (LString "refbox"))) (EListLit))) (EIf (EApp (EApp (EVar "hasUse") (EVar "rep")) (EVar "UseU64")) (EListLit (ELit (LString "u64"))) (EListLit))) (EIf (EApp (EApp (EVar "hasUse") (EVar "rep")) (EVar "UseI64")) (EListLit (ELit (LString "i64"))) (EListLit))) (EApp (EApp (EVar "flatMap") (ELam ((PTuple (PVar "ctor") (PVar "ty"))) (EIf (EApp (EApp (EVar "contains") (EVar "ty")) (EListLit (ELit (LString "Option")) (ELit (LString "Result")) (ELit (LString "Ordering")))) (EListLit) (EBinOp "++" (EListLit (EApp (EVar "WN.wasmName") (EApp (EVar "WN.WUserType") (EVar "ty")))) (EIf (EBinOp ">" (EApp (EApp (EVar "optionOr") (ELit (LInt 0))) (EApp (EApp (EVar "declaredCtorArity") (EVar "constructors")) (EVar "ctor"))) (ELit (LInt 0))) (EListLit (EApp (EVar "WN.wasmName") (EApp (EVar "WN.WConstructorType") (EVar "ctor")))) (EListLit)))))) (EVar "ctorTypes")))) (EVar "omEmpty"))))
+(DTypeSig true "slotTypeName" (TyFun (TyCon "Int") (TyCon "String")))
+(DFunDef false "slotTypeName" ((PVar "n")) (EBinOp "++" (ELit (LString "slot")) (EApp (EVar "intToString") (EVar "n"))))
+(DTypeSig true "slotTypeMax" (TyCon "Int"))
+(DFunDef false "slotTypeMax" () (ELit (LInt 64)))
+(DTypeSig false "slotTypeArities" (TyFun (TyCon "CProgram") (TyApp (TyCon "List") (TyCon "Int"))))
+(DFunDef false "slotTypeArities" ((PCon "CProgram" PWild PWild PWild (PVar "impls") (PVar "mctx") (PVar "facts"))) (EIf (EApp (EVar "isEmptyL") (EVar "impls")) (EListLit) (EBlock (DoLet false false (PVar "contexts") (EApp (EApp (EVar "omFromPairs") (EVar "mctx")) (EVar "omEmpty"))) (DoLet false false (PVar "arities") (EApp (EApp (EVar "map") (EApp (EVar "slotArityOfFact") (EVar "contexts"))) (EFieldAccess (EVar "facts") "factMethodResults"))) (DoExpr (EApp (EApp (EVar "filterList") (ELam ((PVar "n")) (EApp (EApp (EVar "anyList") (ELam ((PVar "_s")) (EBinOp "==" (EVar "_s") (EVar "n")))) (EVar "arities")))) (ERangeList (ELit (LInt 1)) (EVar "slotTypeMax") true))))))
+(DTypeSig false "slotArityOfFact" (TyFun (TyApp (TyCon "OrdMap") (TyCon "Int")) (TyFun (TyCon "MethodResultFact") (TyCon "Int"))))
+(DFunDef false "slotArityOfFact" ((PVar "contexts") (PVar "row")) (EBinOp "+" (EBinOp "+" (ELit (LInt 1)) (EApp (EApp (EVar "optionOr") (ELit (LInt 0))) (EApp (EApp (EVar "omLookup") (EApp (EApp (EVar "ifaceMethodArityKey") (EFieldAccess (EVar "row") "iface")) (EFieldAccess (EVar "row") "method"))) (EVar "contexts")))) (EFieldAccess (EVar "row") "valueArity")))
 (DTypeSig false "addUse" (TyFun (TyApp (TyCon "List") (TyCon "WasmUse")) (TyFun (TyCon "WasmUse") (TyApp (TyCon "List") (TyCon "WasmUse")))))
 (DFunDef false "addUse" ((PVar "uses") (PVar "use")) (EIf (EApp (EApp (EVar "any") (ELam ((PVar "_s")) (EBinOp "==" (EVar "_s") (EVar "use")))) (EVar "uses")) (EVar "uses") (EBinOp "::" (EVar "use") (EVar "uses"))))
 (DTypeSig true "helperOrder" (TyApp (TyCon "List") (TyCon "String")))
@@ -3956,7 +3994,7 @@ stmtHasFallthrough (CSAssign _ e) = exprHasFallthrough e
 (DUse false (UseAlias ("backend" "wasm_symbol_names") "WN"))
 (DUse false (UseGroup ("support" "symbol_encoding") ((mem "encodePair" false))))
 (DUse false (UseGroup ("frontend" "ast") ((mem "Lit" true) (mem "Pat" true) (mem "Addr" true) (mem "BinderId" true) (mem "Loc" true) (mem "isTaggedFixedHead" false))))
-(DUse false (UseGroup ("ir" "core_ir") ((mem "CProgram" true) (mem "DeclFacts" true) (mem "EntryFact" true) (mem "CBind" true) (mem "CClause" true) (mem "CExpr" true) (mem "CField" true) (mem "CGuard" true) (mem "CImplEntry" true) (mem "CImplBody" true) (mem "CStmt" true) (mem "CArm" true) (mem "CHead" true) (mem "CTree" true) (mem "CTBranch" true) (mem "CallSite" true) (mem "CallMode" true) (mem "FailSite" true) (mem "litRuntimeType" false))))
+(DUse false (UseGroup ("ir" "core_ir") ((mem "CProgram" true) (mem "DeclFacts" true) (mem "EntryFact" true) (mem "CBind" true) (mem "CClause" true) (mem "CExpr" true) (mem "CField" true) (mem "CGuard" true) (mem "CImplEntry" true) (mem "CImplBody" true) (mem "CStmt" true) (mem "CArm" true) (mem "CHead" true) (mem "CTree" true) (mem "CTBranch" true) (mem "CallSite" true) (mem "CallMode" true) (mem "FailSite" true) (mem "litRuntimeType" false) (mem "ifaceMethodArityKey" false) (mem "MethodResultFact" true))))
 (DUse false (UseGroup ("ir" "extern_types") ((mem "ExternDeclFact" true))))
 (DUse false (UseGroup ("ir" "extern_lower") ((mem "externRuntimeKey" false))))
 (DUse false (UseGroup ("backend" "extern_requirements") ((mem "ExternRequirements" false) (mem "RequirementBinding" true) (mem "requirementHostRows" false) (mem "requirementFacts" false))))
@@ -4438,7 +4476,15 @@ stmtHasFallthrough (CSAssign _ e) = exprHasFallthrough e
 (DFunDef false "reservedTypeRootName" ((PVar "name")) (EBinOp "++" (ELit (LString "T_")) (EApp (EVar "injectiveIdent") (EVar "name"))))
 (DTypeSig false "physicalTypes" (TyFun (TyCon "ConstructorFacts") (TyFun (TyCon "CProgram") (TyFun (TyCon "Bool") (TyFun (TyCon "Bool") (TyFun (TyCon "WasmDemand") (TyApp (TyCon "List") (TyCon "String"))))))))
 (DFunDef false "physicalTypes" (PWild PWild (PCon "False") PWild PWild) (EListLit (ELit (LString "boxint")) (ELit (LString "float"))))
-(DFunDef false "physicalTypes" ((PVar "constructors") (PCon "CProgram" PWild PWild (PVar "ctorTypes") PWild PWild PWild) (PCon "True") (PVar "clos") (PVar "rep")) (EApp (EVar "omKeys") (EApp (EApp (EVar "omFromNames") (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EListLit (ELit (LString "boxint")) (ELit (LString "float")) (ELit (LString "dictarr")) (ELit (LString "dictcell")) (ELit (LString "T_Option")) (ELit (LString "C_Some")) (ELit (LString "T_Result")) (ELit (LString "C_Ok")) (ELit (LString "C_Err")) (ELit (LString "T_Ordering"))) (EIf (EVar "clos") (EListLit (ELit (LString "argarr")) (ELit (LString "codety")) (ELit (LString "clos"))) (EListLit))) (EIf (EApp (EApp (EVar "hasUse") (EVar "rep")) (EVar "UseStr")) (EListLit (ELit (LString "str")) (ELit (LString "u8arr"))) (EListLit))) (EIf (EApp (EApp (EVar "hasUse") (EVar "rep")) (EVar "UseList")) (EListLit (ELit (LString "T_List")) (ELit (LString "C_Cons"))) (EListLit))) (EApp (EApp (EDictApp "flatMap") (ELam ((PVar "n")) (EListLit (EApp (EVar "reservedTypeRootName") (EBinOp "++" (ELit (LString "$Tuple")) (EApp (EVar "intToString") (EVar "n")))) (EBinOp "++" (ELit (LString "C_Tup")) (EApp (EVar "intToString") (EVar "n")))))) (EFieldAccess (EVar "rep") "tupleArities"))) (EIf (EApp (EApp (EVar "hasUse") (EVar "rep")) (EVar "UseArray")) (EListLit (ELit (LString "arr"))) (EListLit))) (EIf (EFieldAccess (EVar "rep") "refBox") (EListLit (ELit (LString "refbox"))) (EListLit))) (EIf (EApp (EApp (EVar "hasUse") (EVar "rep")) (EVar "UseU64")) (EListLit (ELit (LString "u64"))) (EListLit))) (EIf (EApp (EApp (EVar "hasUse") (EVar "rep")) (EVar "UseI64")) (EListLit (ELit (LString "i64"))) (EListLit))) (EApp (EApp (EDictApp "flatMap") (ELam ((PTuple (PVar "ctor") (PVar "ty"))) (EIf (EApp (EApp (EVar "contains") (EVar "ty")) (EListLit (ELit (LString "Option")) (ELit (LString "Result")) (ELit (LString "Ordering")))) (EListLit) (EBinOp "++" (EListLit (EApp (EVar "WN.wasmName") (EApp (EVar "WN.WUserType") (EVar "ty")))) (EIf (EBinOp ">" (EApp (EApp (EVar "optionOr") (ELit (LInt 0))) (EApp (EApp (EVar "declaredCtorArity") (EVar "constructors")) (EVar "ctor"))) (ELit (LInt 0))) (EListLit (EApp (EVar "WN.wasmName") (EApp (EVar "WN.WConstructorType") (EVar "ctor")))) (EListLit)))))) (EVar "ctorTypes")))) (EVar "omEmpty"))))
+(DFunDef false "physicalTypes" ((PVar "constructors") (PAs "cp" (PCon "CProgram" PWild PWild (PVar "ctorTypes") PWild PWild PWild)) (PCon "True") (PVar "clos") (PVar "rep")) (EApp (EVar "omKeys") (EApp (EApp (EVar "omFromNames") (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EListLit (ELit (LString "boxint")) (ELit (LString "float")) (ELit (LString "dictarr")) (ELit (LString "slotarr")) (ELit (LString "dict")) (ELit (LString "T_Option")) (ELit (LString "C_Some")) (ELit (LString "T_Result")) (ELit (LString "C_Ok")) (ELit (LString "C_Err")) (ELit (LString "T_Ordering"))) (EApp (EApp (EMethodRef "map") (EVar "slotTypeName")) (EApp (EVar "slotTypeArities") (EVar "cp")))) (EIf (EVar "clos") (EListLit (ELit (LString "argarr")) (ELit (LString "codety")) (ELit (LString "clos"))) (EListLit))) (EIf (EApp (EApp (EVar "hasUse") (EVar "rep")) (EVar "UseStr")) (EListLit (ELit (LString "str")) (ELit (LString "u8arr"))) (EListLit))) (EIf (EApp (EApp (EVar "hasUse") (EVar "rep")) (EVar "UseList")) (EListLit (ELit (LString "T_List")) (ELit (LString "C_Cons"))) (EListLit))) (EApp (EApp (EDictApp "flatMap") (ELam ((PVar "n")) (EListLit (EApp (EVar "reservedTypeRootName") (EBinOp "++" (ELit (LString "$Tuple")) (EApp (EVar "intToString") (EVar "n")))) (EBinOp "++" (ELit (LString "C_Tup")) (EApp (EVar "intToString") (EVar "n")))))) (EFieldAccess (EVar "rep") "tupleArities"))) (EIf (EApp (EApp (EVar "hasUse") (EVar "rep")) (EVar "UseArray")) (EListLit (ELit (LString "arr"))) (EListLit))) (EIf (EFieldAccess (EVar "rep") "refBox") (EListLit (ELit (LString "refbox"))) (EListLit))) (EIf (EApp (EApp (EVar "hasUse") (EVar "rep")) (EVar "UseU64")) (EListLit (ELit (LString "u64"))) (EListLit))) (EIf (EApp (EApp (EVar "hasUse") (EVar "rep")) (EVar "UseI64")) (EListLit (ELit (LString "i64"))) (EListLit))) (EApp (EApp (EDictApp "flatMap") (ELam ((PTuple (PVar "ctor") (PVar "ty"))) (EIf (EApp (EApp (EVar "contains") (EVar "ty")) (EListLit (ELit (LString "Option")) (ELit (LString "Result")) (ELit (LString "Ordering")))) (EListLit) (EBinOp "++" (EListLit (EApp (EVar "WN.wasmName") (EApp (EVar "WN.WUserType") (EVar "ty")))) (EIf (EBinOp ">" (EApp (EApp (EVar "optionOr") (ELit (LInt 0))) (EApp (EApp (EVar "declaredCtorArity") (EVar "constructors")) (EVar "ctor"))) (ELit (LInt 0))) (EListLit (EApp (EVar "WN.wasmName") (EApp (EVar "WN.WConstructorType") (EVar "ctor")))) (EListLit)))))) (EVar "ctorTypes")))) (EVar "omEmpty"))))
+(DTypeSig true "slotTypeName" (TyFun (TyCon "Int") (TyCon "String")))
+(DFunDef false "slotTypeName" ((PVar "n")) (EBinOp "++" (ELit (LString "slot")) (EApp (EVar "intToString") (EVar "n"))))
+(DTypeSig true "slotTypeMax" (TyCon "Int"))
+(DFunDef false "slotTypeMax" () (ELit (LInt 64)))
+(DTypeSig false "slotTypeArities" (TyFun (TyCon "CProgram") (TyApp (TyCon "List") (TyCon "Int"))))
+(DFunDef false "slotTypeArities" ((PCon "CProgram" PWild PWild PWild (PVar "impls") (PVar "mctx") (PVar "facts"))) (EIf (EApp (EVar "isEmptyL") (EVar "impls")) (EListLit) (EBlock (DoLet false false (PVar "contexts") (EApp (EApp (EVar "omFromPairs") (EVar "mctx")) (EVar "omEmpty"))) (DoLet false false (PVar "arities") (EApp (EApp (EMethodRef "map") (EApp (EVar "slotArityOfFact") (EVar "contexts"))) (EFieldAccess (EVar "facts") "factMethodResults"))) (DoExpr (EApp (EApp (EVar "filterList") (ELam ((PVar "n")) (EApp (EApp (EVar "anyList") (ELam ((PVar "_s")) (EBinOp "==" (EVar "_s") (EVar "n")))) (EVar "arities")))) (ERangeList (ELit (LInt 1)) (EVar "slotTypeMax") true))))))
+(DTypeSig false "slotArityOfFact" (TyFun (TyApp (TyCon "OrdMap") (TyCon "Int")) (TyFun (TyCon "MethodResultFact") (TyCon "Int"))))
+(DFunDef false "slotArityOfFact" ((PVar "contexts") (PVar "row")) (EBinOp "+" (EBinOp "+" (ELit (LInt 1)) (EApp (EApp (EVar "optionOr") (ELit (LInt 0))) (EApp (EApp (EVar "omLookup") (EApp (EApp (EVar "ifaceMethodArityKey") (EFieldAccess (EVar "row") "iface")) (EFieldAccess (EVar "row") "method"))) (EVar "contexts")))) (EFieldAccess (EVar "row") "valueArity")))
 (DTypeSig false "addUse" (TyFun (TyApp (TyCon "List") (TyCon "WasmUse")) (TyFun (TyCon "WasmUse") (TyApp (TyCon "List") (TyCon "WasmUse")))))
 (DFunDef false "addUse" ((PVar "uses") (PVar "use")) (EIf (EApp (EApp (EDictApp "any") (ELam ((PVar "_s")) (EBinOp "==" (EVar "_s") (EVar "use")))) (EVar "uses")) (EVar "uses") (EBinOp "::" (EVar "use") (EVar "uses"))))
 (DTypeSig true "helperOrder" (TyApp (TyCon "List") (TyCon "String")))

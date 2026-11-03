@@ -28,6 +28,53 @@ gate state, and the numbers (min-of-N, single-threaded, quiet machine).
 
 ---
 
+## 2026-11-02 — Method tables: dictionary dispatch (#4786)
+
+Dictionaries are method tables on both backends (`compiler/RUNTIME-DESIGN.md` §8.7). The
+numbers below come from the two slice reports, `/var/tmp/medaka-sprints/interp-v0-1-method-tables/reports/S-method-table-plan.md`
+(native) and `/var/tmp/medaka-sprints/interp-v0-1-method-tables/reports/S-method-table-wasm.md`
+(wasm). They were not re-measured for this section.
+
+**Method.** Isolated trees, `MEDAKA_STRICT=1`, minimum of 5 runs per binary. The box was at
+load ~22, so expect ±30% on any single number. The `test/bench_fixtures/dispatch` row is folded
+by clang (0.014 s) and cannot measure dictionary dispatch. The measured probe is a polymorphic
+loop with the dictionary as a runtime parameter, `probes/dispatch_rt.mdk` under the sprint
+directory:
+
+```
+gmax : Ord a => a -> a -> a
+gmax a b = if a <= b then b else a
+
+loopP : Ord a => a -> a -> Int -> a
+loopP acc x n = match n
+  0 => acc
+  _ => loopP (gmax acc x) x (n - 1)
+
+main : <IO> Unit
+main =
+  println (loopP 0 5 50000000)
+  println (loopP 0.0 5.0 50000000)
+```
+
+**Numbers** (before = the tree before method tables; after = with them):
+
+| measure | before | after |
+|---|---|---|
+| native `dispatch_rt`, min of 5 | 0.152 s | 0.406 s (2.7x slower) |
+| native binary bytes, dispatch / dispatch_rt / fib | 194528 / 213224 / 196216 | 194528 / 207880 / 196216 |
+| native `medaka` binary bytes | 14675312 | 14365976 |
+| native IR lines, dispatch / dispatch_rt / fib | 14853 / 14869 / 14734 | 17528 / 17666 / 17421 |
+| dispatcher defines, dispatch / dispatch_rt | 13 / 12 | 0 / 0 |
+| wasm bytes, dispatch / hello / fib | 68610 / 36630 / 35960 | 19362 / 12312 / 12745 |
+| wasm `dispatch.mdk` under node | 1.314 s | 1.284 s |
+
+Native is **slower** on the dictionary-dispatch probe. A slot call is an indirect call through
+a loaded pointer, which clang cannot inline. The old if-chain was inlined into the loop and the
+loop was unswitched on the loop-invariant header compare. Native binaries are equal or smaller,
+while native IR grows about 18% from the per-site null test and the two paths of `emitApplyAny`.
+
+---
+
 ## 2026-10-13 — `check` retention census and per-module release (#4090)
 
 **Census** (`make retain-census`, new): every allocation carries a header naming its
