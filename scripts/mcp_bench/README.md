@@ -59,6 +59,15 @@ This process boundary does not provide a general filesystem or network sandbox.
 Workers retain read access to public host files; do not put private grading
 material in publicly readable host paths.
 
+The CI job `MCP collector privileged behavior` runs
+`sudo env MEDAKA_MCP_REQUIRE_AUTHORITY=1 sh test/diff_compiler_mcp_collector.sh`
+on `ubuntu-latest` with a five-minute job timeout. It assumes sudo grants root,
+a writable private cgroup v2 delegation, cgroup.kill, PID/mount namespace and
+credential-drop authority. Missing cgroup authority fails the suite; missing
+namespace or credential authority fails the actual process tests. GitHub Actions
+runner support for these assumptions must be validated by the orchestrator's CI.
+For a bounded local host check use the same command under a five-minute timeout.
+
 Host acceptance requires running the suite with those authorities. A restricted
 run explicitly skips process tests when cgroup authority is unavailable while
 still testing schema, reconciliation, and fail-before-launch behavior. Skips are
