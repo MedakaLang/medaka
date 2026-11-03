@@ -141,6 +141,25 @@ print(json.dumps({'jsonrpc':'2.0','id':1,'result':{'cwd':os.getcwd(), 'secret':o
             code = 'import os; open(os.environ["MEDAKA_MCP_TRACE"],"w").write(' + repr(trace) + '); print(' + repr(RESPONSE) + ')'
             self.assertEqual(expected, run_process([sys.executable, '-c', code], {}, requests, {})['outcome'])
 
+    def test_cancel_order_across_idle_boundary(self):
+        call = lambda i: {'jsonrpc': '2.0', 'id': i, 'method': 'tools/call', 'params': {'name': 'medaka_fmt'}}
+        cancel_request = {'jsonrpc': '2.0', 'method': 'notifications/cancelled', 'params': {'requestId': 1}}
+        start = lambda i: dict(event('start'), session_id='collector', request_id=str(i), tool='medaka_fmt')
+        finish = lambda i: dict(event('finish', 'success'), session_id='collector', request_id=str(i), tool='medaka_fmt')
+        cancel = lambda i: dict(event('cancel_requested'), session_id='collector', request_id=str(i), tool='protocol')
+        cases = [
+            ([call(1), call(2), cancel_request], [start(0), finish(0), cancel(2), start(1), finish(1)], 'observer_failure'),
+            ([call(1), call(2), cancel_request], [start(0), finish(0), start(1), finish(1), cancel(2)], 'success'),
+            ([cancel_request, call(1)], [start(1), finish(1), cancel(0)], 'observer_failure'),
+            ([cancel_request, call(1)], [cancel(0), start(1), finish(1)], 'success'),
+        ]
+        for requests, events, expected in cases:
+            transcript = ''.join(json.dumps(r) + '\n' for r in requests).encode()
+            responses = ''.join(json.dumps({'jsonrpc': '2.0', 'id': r['id'], 'result': {}}) + '\n' for r in requests if 'id' in r)
+            trace = ''.join(json.dumps(e) + '\n' for e in events)
+            code = 'import os; open(os.environ["MEDAKA_MCP_TRACE"],"w").write(' + repr(trace) + '); print(' + repr(responses) + ', end="")'
+            self.assertEqual(expected, run_process([sys.executable, '-c', code], {}, transcript, {})['outcome'])
+
     def test_materialization_failure_returns_run(self):
         task = json.loads((Path(__file__).parent / 'tasks.json').read_text())[0]
         task['files'] = {'PROMPT.txt/child': 'x'}

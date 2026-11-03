@@ -163,22 +163,20 @@ def run_process(command, environment, transcript, limits):
         expected = []
         for index, request in enumerate(requests):
             if isinstance(request, list):
-                expected.append((str(index), 'protocol'))
+                expected.append(('start', str(index), 'protocol'))
+            elif isinstance(request, dict) and request.get('method') == 'notifications/cancelled':
+                expected.append(('cancel_requested', str(index), 'protocol'))
             elif isinstance(request, dict) and 'id' in request:
                 method = request.get('method')
                 if method == 'tools/call':
                     params = request.get('params')
                     name = params.get('name') if isinstance(params, dict) else None
-                    expected.append((str(index), name if isinstance(name, str) and name in known else 'unknown'))
+                    expected.append(('start', str(index), name if isinstance(name, str) and name in known else 'unknown'))
                 elif isinstance(method, str) and method not in ('initialize', 'ping', 'shutdown', 'tools/list', 'notifications/cancelled', 'notifications/initialized'):
-                    expected.append((str(index), 'protocol'))
-        cancels = [str(i) for i, r in enumerate(requests)
-                   if isinstance(r, dict) and r.get('method') == 'notifications/cancelled']
-        observed_cancels = [e.get('request_id') for e in events
-                            if isinstance(e, dict) and e.get('event') == 'cancel_requested']
-        starts = [(e.get('request_id'), e.get('tool')) for e in events
-                  if isinstance(e, dict) and e.get('event') == 'start']
-        if starts != expected or observed_cancels != cancels or any(e.get('event') == 'protocol' or e.get('session_id') != 'collector' or e.get('classification') != 'probe'
+                    expected.append(('start', str(index), 'protocol'))
+        observed = [(e.get('event'), e.get('request_id'), e.get('tool')) for e in events
+                    if isinstance(e, dict) and e.get('event') in ('start', 'cancel_requested')]
+        if observed != expected or any(e.get('event') == 'protocol' or e.get('session_id') != 'collector' or e.get('classification') != 'probe'
                                      for e in events if isinstance(e, dict)):
             observer_failure = True
     outcome = reconcile(events, status)['outcome']
