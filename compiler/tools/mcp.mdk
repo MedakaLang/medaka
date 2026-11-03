@@ -55,7 +55,7 @@ import json.{
 }
 import string.{stripCR, byteLength, startsWith}
 import tools.mcp_telemetry.{
-  TraceContext(..), beginCall, finishCall, recordProtocol
+  TraceContext(..), TraceSettings(..), beginCall, finishCall, recordProtocol
 }
 import support.source_index.{
   SourceIndex, indexSource, sourcePositionToOffset, offsetToUtf16Position,
@@ -1942,7 +1942,7 @@ handleToolsCall trace requestId state runtimeSrc coreSrc stdlibDir idJson params
       let token = beginCall trace requestId "unknown"
       let response = errorMsg idJson (0 - 32602) "tools/call: missing 'name'"
       writeMessage response
-      finishCall token "protocol_error" (byteLength (stringify response) + 1)
+      finishCall token "protocol_error" (responseWireSize response)
     Some name =>
       let safeName = if isKnownTool name then name else "unknown"
       let token = beginCall trace requestId safeName
@@ -1954,10 +1954,7 @@ handleToolsCall trace requestId state runtimeSrc coreSrc stdlibDir idJson params
           let response =
             errorMsg idJson (0 - 32601) (stringConcat ["Unknown tool: ", name])
           writeMessage response
-          finishCall
-            token
-            "protocol_error"
-            (byteLength (stringify response) + 1)
+          finishCall token "protocol_error" (responseWireSize response)
         Some result =>
           let augmented = attachStaleness stalenessCheck result
           let response = responseMsg idJson augmented
@@ -1965,7 +1962,10 @@ handleToolsCall trace requestId state runtimeSrc coreSrc stdlibDir idJson params
           finishCall
             token
             (traceOutcome name result)
-            (byteLength (stringify response) + 1)
+            (responseWireSize response)
+
+responseWireSize : Json -> Int
+responseWireSize response = byteLength (stringify response) + 1
 
 isKnownTool : String -> Bool
 isKnownTool name = isSome (lookupTool name mcpTools)
@@ -2032,7 +2032,7 @@ dispatchMsg trace requestId state runtimeSrc coreSrc stdlibDir msg stalenessChec
           (0 - 32600)
           "Invalid Request: batch requests are not supported"
       writeMessage response
-      finishCall token "protocol_error" (byteLength (stringify response) + 1)
+      finishCall token "protocol_error" (responseWireSize response)
     None => match methodOf msg
       None => logMcp "ignored: message has no string 'method' field"
       Some meth =>
@@ -2077,10 +2077,7 @@ dispatchMsg trace requestId state runtimeSrc coreSrc stdlibDir msg stalenessChec
                   (0 - 32601)
                   (stringConcat ["Method not found: ", meth])
               writeMessage response
-              finishCall
-                token
-                "protocol_error"
-                (byteLength (stringify response) + 1)
+              finishCall token "protocol_error" (responseWireSize response)
 
 -- ── read loop ────────────────────────────────────────────────────────────────
 
@@ -2127,7 +2124,7 @@ serveLoop trace state runtimeSrc coreSrc stdlibDir stalenessCheck serverVersion 
   match readLineOpt ()
     None => unit
     Some raw =>
-      let (TraceContext _ _ _ counter) = trace
+      let counter = trace.traceCounter
       let requestId = intToString !counter
       counter := !counter + 1
       handleLine
@@ -2165,15 +2162,21 @@ runMcpServer : String ->
   <IO> Unit
 runMcpServer runtimeSrc coreSrc stdlibDir stalenessCheck serverVersion =
   logMcp "medaka mcp server start"
-  let trace =
-    TraceContext
-      (optionOr "" (getEnv "MEDAKA_MCP_TRACE"))
-      (optionOr "session" (getEnv "MEDAKA_MCP_TRACE_SESSION"))
-      (if getEnv "MEDAKA_MCP_TRACE_CLASS" == Some "probe" then
-        "probe"
-      else
-        "organic")
-      (Ref 0)
+  let path = optionOr "" (getEnv "MEDAKA_MCP_TRACE")
+  let settings =
+    if path == "" then
+      None
+    else
+      Some TraceSettings {
+        tracePath = path,
+        traceSession = optionOr "session" (getEnv "MEDAKA_MCP_TRACE_SESSION"),
+        traceClassification =
+          if getEnv "MEDAKA_MCP_TRACE_CLASS" == Some "probe" then
+            "probe"
+          else
+            "organic",
+      }
+  let trace = TraceContext { traceSettings = settings, traceCounter = Ref 0 }
   serveLoop
     trace
     (Ref emptyMcpSyntaxState)

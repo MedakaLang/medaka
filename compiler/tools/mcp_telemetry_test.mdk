@@ -1,12 +1,13 @@
 import test.{expectAll, expectTextContainsAll, fail, pass}
 import test_process.{withScratchDir}
 import tools.mcp_telemetry.{
-  TraceContext(..), TraceToken(..), beginCall, finishCall, recordProtocol
+  TraceContext(..), TraceSettings(..), TraceToken(..), beginCall, finishCall,
+  recordProtocol
 }
 
 test "disabled trace returns no token" =
   match (beginCall
-    (TraceContext "" "session" "organic" (Ref 0))
+    TraceContext { traceSettings = None, traceCounter = Ref 0 }
     "0"
     "medaka_check")
     TraceDisabled => pass
@@ -15,7 +16,14 @@ test "disabled trace returns no token" =
 test "completion and cancel records contain only metadata" = withScratchDir
   (dir =>
     let path = "\{dir}/trace.jsonl"
-    let trace = TraceContext path "session" "probe" (Ref 0)
+    let trace = TraceContext {
+      traceSettings = Some TraceSettings {
+        tracePath = path,
+        traceSession = "session",
+        traceClassification = "probe",
+      },
+      traceCounter = Ref 0,
+    }
     let token = beginCall trace "0" "medaka_check"
     finishCall token "success" 42
     recordProtocol trace "cancel_requested" "1"
@@ -38,7 +46,14 @@ test "stdout cannot be a trace destination" =
 
 test "trace write failures leave the call boundary usable" = withScratchDir
   (dir =>
-    let trace = TraceContext "\{dir}/missing/trace" "session" "probe" (Ref 0)
+    let trace = TraceContext {
+      traceSettings = Some TraceSettings {
+        tracePath = "\{dir}/missing/trace",
+        traceSession = "session",
+        traceClassification = "probe",
+      },
+      traceCounter = Ref 0,
+    }
     let token = beginCall trace "0" "medaka_check"
     finishCall token "success" 42
     recordProtocol trace "cancel_requested" "1"
