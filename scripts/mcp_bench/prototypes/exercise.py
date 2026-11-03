@@ -79,19 +79,41 @@ def exercise(candidate, scenario):
         a.mkdir(); b.mkdir()
         assert not (a / 'medaka').exists()
         manifest = assemble('python', {'bundle': bundle}, [], root / 'installed')
-        medaka = assemble('medaka', {'bundle': bundle, 'supervisor': supervisor}, [], root / 'medaka-installed')
+        assemble('medaka', {'bundle': bundle, 'supervisor': supervisor}, [], root / 'medaka-installed')
         failure = subprocess.check_output([str(root / 'medaka-installed' / 'supervisor')], cwd=a, text=True)
         assert 'unavailable' in failure
         worker = manifest['worker']
-        fake = root / 'fake-worker'
-        fake.write_text('#!' + sys.executable + "\nimport json,sys\nfor line in sys.stdin:\n m=json.loads(line)\n if m['method']=='initialize': print(json.dumps({'result':{'protocolVersion':'2024-11-05'}}),flush=True)\n else: print(json.dumps({'result':{}}),flush=True)\n")
-        fake.chmod(0o755)
-        wrong = root / 'wrong-version'
-        wrong.write_text('#!' + sys.executable + "\nimport json,sys\nsys.stdin.readline()\nprint(json.dumps({'result':{'protocolVersion':'wrong'}}),flush=True)\n")
-        wrong.chmod(0o755)
-        dead = root / 'dead-worker'
-        dead.write_text('#!' + sys.executable + "\nimport json,sys\nsys.stdin.readline()\nprint(json.dumps({'result':{'protocolVersion':'2024-11-05'}}),flush=True)\n")
-        dead.chmod(0o755)
+        def fake_worker(name, initialize, tool="{'result': {}}", child=False, exit_after=False):
+            path = root / name
+            path.write_text(f"""#!{sys.executable}
+import json, subprocess, sys
+from pathlib import Path
+if {child!r}:
+    child = subprocess.Popen(['sleep', '60'])
+    Path({str(root / (name + '.pid'))!r}).write_text(str(child.pid))
+for line in sys.stdin:
+    message = json.loads(line)
+    if message['method'] == 'initialize':
+        response = {initialize}
+    else:
+        response = {tool}
+    print(json.dumps(response), flush=True)
+    if {exit_after!r}:
+        break
+""")
+            path.chmod(0o755)
+            return path
+
+        valid = "{'jsonrpc': '2.0', 'id': message['id'], 'result': {'protocolVersion': '2024-11-05'}}"
+        malformed = fake_worker('malformed', "{'result': {'protocolVersion': '2024-11-05'}}")
+        wrong_rpc = fake_worker('wrong-rpc', "{'jsonrpc': '1.0', 'id': message['id'], 'result': {'protocolVersion': '2024-11-05'}}")
+        wrong_id = fake_worker('wrong-id', "{'jsonrpc': '2.0', 'id': 99, 'result': {'protocolVersion': '2024-11-05'}}")
+        wrong = fake_worker('wrong-version', "{'jsonrpc': '2.0', 'id': message['id'], 'result': {'protocolVersion': 'wrong'}}")
+        error = fake_worker('worker-error', "{'jsonrpc': '2.0', 'id': message['id'], 'error': {'code': -1, 'message': 'no'}}")
+        both = fake_worker('both', "{'jsonrpc': '2.0', 'id': message['id'], 'result': {}, 'error': {'code': -1, 'message': 'no'}}")
+        fake = fake_worker('fake-worker', valid, "{'jsonrpc': '2.0', 'id': message['id'], 'result': {}}")
+        dead = fake_worker('dead-worker', valid, child=True, exit_after=True)
+        child_worker = fake_worker('child-worker', valid, child=True)
         artifact = {'id': worker, 'digest': manifest['sha256']}
         process = subprocess.Popen([sys.executable, str(root / 'installed' / 'external.py')], cwd=a,
                                    stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True, preexec_fn=offline)
@@ -107,26 +129,27 @@ def exercise(candidate, scenario):
                 pids.append(status['pid'])
                 assert status['ready'] and status['toolchain']['provenance'] == 'inferred'
                 assert status['attestation']['provenance'] == 'unavailable' and status['matching'] == 'unavailable'
+            alias = root / 'alias-a'
+            alias.symlink_to(a, target_is_directory=True)
+            for name, path in (('same-root', a), ('alias-root', alias)):
+                denied = exchange(process, request(name, name, 'openWorkspace', {'root': str(path), 'artifact': artifact}))
+                assert denied['status'] == 'error' and 'duplicate canonical' in denied['error']
             snapshots = []
-            for i, (wid, source, bad) in enumerate((('A', 'main = 1 + 2', False), ('B', 'main = "x" + 1', True), ('A', 'main = 1 + 2', False)), 3):
+            for i, (wid, bad) in enumerate((('A', False), ('B', True), ('A', False)), 3):
                 result = exchange(process, request(i, wid, 'check', {'file': 'probe.mdk'}))
                 semantic(result, bad)
                 snapshots.append(result['result']['snapshot'])
             assert snapshots[0] == snapshots[2] and snapshots[0] != snapshots[1]
             assert all(item['provenance'] == 'inferred' for item in snapshots)
-            for candidate in (wrong,):
+            for candidate in (malformed, wrong_rpc, wrong_id, wrong, error, both):
                 invalid_version = {'id': str(candidate), 'digest': digest(candidate)}
-                denied = exchange(process, {'type': 'replace', 'id': 'version', 'workspace': 'A', 'artifact': invalid_version})
-                assert denied['status'] == 'failed' and 'version' in denied['error']
+                denied = exchange(process, {'type': 'replace', 'id': candidate.name, 'workspace': 'A', 'artifact': invalid_version})
+                assert denied['status'] == 'failed' and denied['worker'] == worker and denied['error']
+                assert exchange(process, request('retained-' + candidate.name, 'A', 'status', {}))['result']['worker'] == worker
             fake_artifact = {'id': str(fake), 'digest': digest(fake)}
             assert exchange(process, {'type': 'replace', 'id': 'fake', 'workspace': 'B', 'artifact': fake_artifact})['status'] == 'switched'
             fake_result = exchange(process, request('fake-check', 'B', 'check', {'source': 'main = "x" + 1'}))
-            try:
-                semantic(fake_result, True)
-            except AssertionError:
-                pass
-            else:
-                raise AssertionError('fake worker passed semantic control')
+            assert fake_result['status'] == 'error' and 'invalid MCP tool result' in fake_result['error']
             assert exchange(process, {'type': 'replace', 'id': 'restore', 'workspace': 'B', 'artifact': artifact})['status'] == 'switched'
             invalid = dict(artifact, digest='0' * 64)
             failed = exchange(process, {'type': 'replace', 'id': '6', 'workspace': 'A', 'artifact': invalid})
@@ -143,8 +166,14 @@ def exercise(candidate, scenario):
             semantic(exchange(process, request(9, 'A', 'check', {'source': 'main = "x" + 1'})), True)
             missing = {'id': str(root / 'missing'), 'digest': '0' * 64}
             assert exchange(process, {'type': 'replace', 'id': '10', 'workspace': 'A', 'artifact': missing})['status'] == 'failed'
+            child_artifact = {'id': str(child_worker), 'digest': digest(child_worker)}
+            assert exchange(process, {'type': 'replace', 'id': 'child', 'workspace': 'B', 'artifact': child_artifact})['status'] == 'switched'
+            child_pid = int((root / 'child-worker.pid').read_text())
             dying = {'id': str(dead), 'digest': digest(dead)}
             assert exchange(process, {'type': 'replace', 'id': 'dead', 'workspace': 'B', 'artifact': dying})['status'] == 'switched'
+            child_stat = Path(f'/proc/{child_pid}/stat')
+            assert not child_stat.exists() or child_stat.read_text().split()[2] == 'Z'
+            dead_child_pid = int((root / 'dead-worker.pid').read_text())
             pids.append(exchange(process, request('dead-status', 'B', 'status', {}))['result']['pid'])
             died = exchange(process, request('dead-check', 'B', 'check', {'source': 'main = 1'}))
             assert died['status'] == 'error' and died['result'] is None
@@ -153,16 +182,24 @@ def exercise(candidate, scenario):
             validate_sequence(transcript)
             assert process.wait(timeout=10) == 0
             assert process.stdout.read() == '' and process.stderr.read() == ''
-            for pid in pids:
+            for pid in pids + [child_pid, dead_child_pid]:
                 try:
                     os.kill(pid, 0)
                 except ProcessLookupError:
                     continue
-                raise AssertionError('worker survived shutdown')
+                stat = Path(f'/proc/{pid}/stat')
+                if stat.exists() and stat.read_text().split()[2] == 'Z':
+                    continue
+                raise AssertionError(f'worker or child survived shutdown: {pid}')
         finally:
             if process.poll() is None:
                 process.kill(); process.wait()
             process.stdin.close(); process.stdout.close(); process.stderr.close()
+            for pid_file in root.glob('*.pid'):
+                try:
+                    os.kill(int(pid_file.read_text()), 9)
+                except ProcessLookupError:
+                    pass
         return {'python': 'offline seccomp control, A/B/A, replacement, hash/missing, stdout and semantic controls passed',
                 'medaka': 'live lifecycle unavailable (candidate disqualified)'}
 
