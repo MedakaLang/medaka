@@ -129,6 +129,7 @@ import types.tc_env.{
 import types.tc_diag.{erredDuring}
 import types.tc_scope.{methodAdmittedHere, methodVisibleHere}
 import types.tc_unify.{
+  openScope,
   enterLevel,
   exitLevel,
   freshTvMap,
@@ -573,10 +574,6 @@ goalKindName GKArithSite = "GKArithSite"
 goalKindName GKDictApp = "GKDictApp"
 goalKindName GKMethodDict = "GKMethodDict"
 goalKindName GKRecDictApp = "GKRecDictApp"
-
-export
-openScope : ModuleCtx -> ScopeId -> Unit
-openScope mctx sid = mctx.mcCells.currentScope := Scopes.openScopeCursor sid
 
 -- The marks of the module being processed (the head of `moduleRanges`); all zeros
 -- before any module started, which is the whole graph.

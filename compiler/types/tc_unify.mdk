@@ -5,8 +5,9 @@
 -- deferred pattern literals) and instantiation, with the call obligations, effects and value flows
 -- that instantiation and directional unification record (`recordObl`, `recordOblAt`,
 -- `recordSchemeCallObligations`, `performEffect`, `recordEffectSites`, `recordFileValueFlow`,
--- `captureScope`, `closeScope`, `obligationSiteHere`); and the messages of these failures that need
--- checker context (`authorityFailureMsg`, `effectLeakMsg`, `constrainedApplicationHelp`; D3).
+-- `captureScope`, `openScope`, `closeScope`, `obligationSiteHere`); and the messages of these
+-- failures that need checker context (`authorityFailureMsg`, `effectLeakMsg`,
+-- `constrainedApplicationHelp`; D3).
 -- Context-free message text is `tc_diag_text`'s.
 --
 -- Spec: HM-CORE section 3, section 4 (owed, #2555); EFFECTS section 2.4, section 5, section
@@ -958,6 +959,10 @@ closeScope mctx _ =
     Scopes.closeScopeCursor
       (currentScopeStore mctx.mcGraph ())
       mctx.mcCells.currentScope.value
+
+export
+openScope : ModuleCtx -> ScopeId -> Unit
+openScope mctx sid = mctx.mcCells.currentScope := Scopes.openScopeCursor sid
 
 tyvarLevel : Ref Tyvar -> Int
 tyvarLevel cell = match !cell

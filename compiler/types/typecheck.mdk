@@ -361,6 +361,7 @@ import types.tc_scope.{
   useKeyCands,
 }
 import types.tc_unify.{
+  openScope,
   ambiguousImportTyvarId,
   enterLevel,
   exitLevel,
@@ -398,7 +399,6 @@ import types.tc_solve_entail.{
 }
 import types.tc_solve.{
   goalsMark,
-  openScope,
   returnPosMethodNames,
   routesOfMonosTopV,
 }

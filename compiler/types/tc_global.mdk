@@ -152,6 +152,7 @@ import types.tc_diag.{
   pushTypeErrorOncePerSite,
 }
 import types.tc_unify.{
+  openScope,
   captureScope,
   closeScope,
   enterLevel,
@@ -204,7 +205,6 @@ import types.tc_solve.{
   dictAppsSince,
   goalsMark,
   improveByUniqueImpl,
-  openScope,
   returnPosMethodNames,
   rigidHeadInstanceContext,
   solvedOnWalk,

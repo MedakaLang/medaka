@@ -123,6 +123,7 @@ import types.tc_scope.{
   admittedIfaceWord, argDispatchOf, ieImplExistsForHead, methodEntryHere
 }
 import types.tc_unify.{
+  openScope,
   applicationRowTyped,
   bindFrom,
   calleeArrow,
@@ -167,7 +168,6 @@ import types.tc_solve.{
   goalsMark,
   improveLocalGoals,
   isLocalAbsName,
-  openScope,
   pushLocalDictApp,
   routeLocalSym,
 }

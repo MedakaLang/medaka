@@ -251,7 +251,6 @@ import types.tc_solve.{
   goalsSince,
   improveByUniqueImpl,
   methodDictEntry,
-  openScope,
   outerRigidIds,
   recDictAppEntry,
   refileDeterminedRows,
@@ -324,6 +323,7 @@ import types.tc_global.{
   numCallObls,
 }
 import types.tc_unify.{
+  openScope,
   captureScope,
   closeScope,
   enterLevel,

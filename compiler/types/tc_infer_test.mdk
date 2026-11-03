@@ -65,7 +65,7 @@ import types.tc_effects.{beginEffectSummaryScope, clausesOf, freshEffectSummary}
 import types.tc_occurrence.{markGroupClauses}
 import types.tc_mono.{monoScheme, tconBuiltin, tconFrom}
 import types.tc_shadow.{methodCellOf}
-import types.tc_unify.{captureScope, freshVar, closeScope}
+import types.tc_unify.{captureScope, freshVar, closeScope, openScope}
 import types.tc_test_support.{
   at,
   boolM,
@@ -103,7 +103,6 @@ import types.tc_types.{
 import support.ordmap.{omEmpty, omInsert, omKeys, omLookup}
 import map as IdMap
 import types.scopes.{ScopeOwner(..), freshScope}
-import types.tc_solve.{openScope}
 import types.tc_state.{currentScopeStore, wAll}
 
 import string.{contains}
