@@ -13,7 +13,7 @@
 import fs.{walkDir}
 import list.{
   drop, take, dropWhile, dropWhileEnd, filterMap, last, lookup, nub, partition,
-  reverse, sort, takeWhile
+  reverse, sort, takeWhile, zip
 }
 import map as M
 import set as S
@@ -1321,3 +1321,81 @@ test "arch_boundaries: LLVM text coverage remains a target-local leaf" =
 
 test "arch_boundaries: Wasm text coverage remains a target-local leaf" =
   closurePin "backend.wasm_text_coverage"
+
+-- The Layer order table of `compiler/types/ARCHITECTURE.md`. A row is a column-0
+-- `| <order> | `types/<module>.mdk` ...` line under the "## Layer order" heading;
+-- the module is the first backticked span of the second cell. A row's order is its
+-- position in the table, never the label in its first cell.
+layerSection : List String -> List String
+layerSection ls =
+  takeWhile
+    (l => not (startsWith "## " l))
+    (drop 1 (dropWhile (l => l /= "## Layer order") ls))
+
+layerRowId : String -> Option String
+layerRowId l = match split " | " l
+  first :: cell :: _ if startsWith "| " first
+    && startsWith "`types/" cell => match split "`" cell
+    _ :: path :: _ => Some (replace "/" "." (replace ".mdk" "" path))
+    _ => None
+  _ => None
+
+layerTableIds : List String -> List String
+layerTableIds ls = filterMap layerRowId (layerSection ls)
+
+-- The modules a table row must exist for: every `types/tc_*.mdk` on disk but the
+-- `*_test_support` siblings, plus the entry. `loadModules` already drops `*_test`.
+layerDiskIds : List (String, List String) -> List String
+layerDiskIds mods =
+  filter
+    (m =>
+      m == "types.typecheck"
+        || startsWith "types.tc_" m && not (endsWith "_test_support" m))
+    (map fst mods)
+
+-- Rows whose module is missing on disk, modules with no row, and repeated rows.
+layerCoverageProblems : List String -> List (String, List String) -> List String
+layerCoverageProblems ids mods =
+  let disk = layerDiskIds mods
+  map
+      (m => "\{m}: on disk, no row in the layer table")
+      (filter (m => not (elem m ids)) disk)
+    ++ map
+      (m => "\{m}: a row in the layer table, no such module on disk")
+      (filter (m => not (elem m disk)) ids)
+    ++ map
+      (m => "\{m}: more than one row in the layer table")
+      (nub (filter (m => count (== m) ids > 1) ids))
+
+-- A row's import closure may hold only rows at or below it in the table.
+layerOrderProblems : List String -> List (String, List String) -> List String
+layerOrderProblems ids mods =
+  let g = buildGraph mods
+  let rank = M.fromList (zip ids [0..=length ids])
+  let at m = optionOr 0 (M.get m rank)
+  flatMap
+    (m =>
+      map
+        (c => "\{m} (row \{at m}) imports \{c} (row \{at c}), a row above it")
+        (filter (c => M.has c rank && at c > at m) (closureOf g m)))
+    ids
+
+layerTableText : <IO> Result String (List String)
+layerTableText = match readFile (underRoot "compiler/types/ARCHITECTURE.md")
+  Err e => Err "could not read compiler/types/ARCHITECTURE.md: \{e}"
+  Ok text => Ok (lines text)
+
+test "arch_boundaries: the layer table lists exactly the tc_* modules on disk and the entry" =
+  match layerTableText
+    Err e => fail e
+    Ok ls =>
+      let ids = layerTableIds ls
+      expectAll [
+        expectAtLeast 20 (length ids),
+        expectEqual [] (layerCoverageProblems ids loadModules),
+      ]
+
+test "arch_boundaries: no layer table row imports a row above it" =
+  match layerTableText
+    Err e => fail e
+    Ok ls => expectEqual [] (layerOrderProblems (layerTableIds ls) loadModules)
