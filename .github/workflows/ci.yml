@@ -864,7 +864,7 @@ jobs:
             # is a ruleset change, not an edit here. It is a bare executor number by
             # construction (#2178): a name that cannot describe contents cannot lie
             # about them. What failed is reported by AREA, from the registry.
-            pattern: "'pds/test/constant_time_parity' 'pds/test/dagcbor_cid_vectors' 'pds/test/did_key_all_engines' 'pds/test/signing_parity' 'diff_compiler_engines_part2' 'diff_compiler_engines_part3' 'wasm_jsffi' 'wasm_edge_loader' 'diff_compiler_rejection_parity' 'diff_compiler_wasm_single_traversal' 'wasm_host_profile_agreement' 'diff_compiler_guide_render'"
+            pattern: "'pds/test/constant_time_parity' 'pds/test/dagcbor_cid_vectors' 'pds/test/did_key_all_engines' 'pds/test/signing_parity' 'diff_compiler_engines_part2' 'diff_compiler_engines_part3' 'wasm_jsffi' 'wasm_edge_loader' 'diff_compiler_rejection_parity' 'diff_compiler_wasm_single_traversal' 'wasm_host_profile_agreement' 'diff_compiler_guide_render' 'diff_compiler_mcp_collector'"
             wasm_arm: "1"
           - name: gates_2
             # ROW IDENTITY, NOT PLACEMENT. Which gates run here is DERIVED
