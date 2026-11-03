@@ -1,5 +1,5 @@
 # META
-source_lines=2838
+source_lines=2840
 stages=DESUGAR,MARK
 # SOURCE
 -- tc_decls: declaration analysis above the written-type layer: building `DataEnv` and `DeclEnvs`
@@ -1186,6 +1186,8 @@ dedupBinders : List (String, Param) ->
   List (String, Param)
 dedupBinders [] acc = reverseL acc
 dedupBinders ((n, top) :: rest) acc =
+  -- Bound: the input is the authority binders one signature or impl head writes.
+  -- lint-disable-next-line rule-list-as-set
   if isSome (lookupAssoc n acc) then
     dedupBinders rest acc
   else

@@ -1,5 +1,5 @@
 # META
-source_lines=2010
+source_lines=2012
 stages=DESUGAR,MARK
 # SOURCE
 -- compiler/tools/refindex.mdk — cross-file reference index (#254 Stage 0).
@@ -777,6 +777,8 @@ mkNamedFrameGo : W ->
   List (String, Loc) ->
   List (String, String)
 mkNamedFrameGo _ acc [] = reverseList acc
+-- Bound: `acc` holds the distinct binder names of one pattern.
+-- lint-disable-next-line rule-list-as-set
 mkNamedFrameGo w acc ((n, l) :: rest) = match assocFind (ctxOf w) n acc
   Some key =>
     recordAltSite w key l

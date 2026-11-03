@@ -1,5 +1,5 @@
 # META
-source_lines=2754
+source_lines=2756
 stages=DESUGAR,MARK
 # SOURCE
 -- tc_decls_types: the written-type layer of declaration analysis: AST types to `Mono`
@@ -1164,6 +1164,8 @@ dedupLocated : List (String, Option Loc) ->
   List (String, Option Loc)
 dedupLocated [] acc = reverseL acc
 dedupLocated ((n, l) :: rest) acc =
+  -- Bound: the input is the authority names one written type contains.
+  -- lint-disable-next-line rule-list-as-set
   if isSome (lookupAssoc n acc) then
     dedupLocated rest acc
   else

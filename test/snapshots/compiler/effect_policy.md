@@ -1,5 +1,5 @@
 # META
-source_lines=255
+source_lines=257
 stages=DESUGAR,MARK
 # SOURCE
 -- compiler/types/effect_policy.mdk — does an entry's invocation summary fit a
@@ -245,6 +245,8 @@ traceChain callGraph effTable forbiddenLabel fn visited =
   match firstWithEffect effTable forbiddenLabel (sortUniqS callees)
     None => [fn]
     Some c =>
+      -- Bound: runs only while rendering a refusal's via-chain, and `visited` is one call-graph path that ends at the first revisit.
+      -- lint-disable-next-line rule-list-as-set
       if contains c visited then
         [fn, c]
       else
