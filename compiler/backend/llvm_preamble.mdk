@@ -247,6 +247,7 @@ runtimeDecls = [
   fn "i64" "mdk_write_file_bytes" ["i64", "i64", "i64"],
   fn "i64" "mdk_write_file_mode" ["i64", "i64", "i64", "i64"],
   fn "i64" "mdk_append_file" ["i64", "i64", "i64"],
+  fn "i64" "mdk_append_file_except_stdout" ["i64", "i64", "i64"],
   fn "i64" "mdk_file_exists" ["i64", "i64"],
   fn "i64" "mdk_canonicalize_path" ["i64", "i64"],
   fn "i64" "mdk_list_dir" ["i64", "i64"],

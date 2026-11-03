@@ -2906,6 +2906,12 @@ emitFileExtern e env "appendFile" args = match emitArgs e env args
     emit e (rtLine e r "i64" "mdk_append_file" (i64Ops [p, c, g]))
     (r, LTCon)
   _ => panic "llvm: appendFile takes two arguments and its grant"
+emitFileExtern e env "appendFileExceptStdout" args = match emitArgs e env args
+  [p, c, g] =>
+    let r = freshReg e
+    emit e (rtLine e r "i64" "mdk_append_file_except_stdout" (i64Ops [p, c, g]))
+    (r, LTCon)
+  _ => panic "llvm: appendFileExceptStdout takes two arguments and its grant"
 emitFileExtern e env "fileExists" args = match emitArgs e env args
   [p, g] =>
     let r = freshReg e

@@ -1,5 +1,5 @@
 # META
-source_lines=1090
+source_lines=1098
 stages=DESUGAR,MARK
 # SOURCE
 {- | The host primitives.
@@ -115,6 +115,14 @@ extern writeFileMode : (path : String) ->
 
 -- | Appends a string to a file, creating it when it does not exist.
 extern appendFile : (path : String) ->
+  String ->
+  <FileWrite path> Result String Unit
+
+-- | Appends to a regular file, creating it if absent, while excluding stdout.
+-- The opened file is checked against stdout by device and inode before any
+-- bytes are written through that same descriptor. Other file kinds, stdout
+-- aliases, and failures to inspect either descriptor return `Err`.
+extern appendFileExceptStdout : (path : String) ->
   String ->
   <FileWrite path> Result String Unit
 
@@ -1110,6 +1118,7 @@ extern stringToLower : String -> String
 (DExtern false "writeFileBytes" (TyFun (TyNamed "path" (TyCon "String")) (TyFun (TyApp (TyCon "Array") (TyCon "Int")) (TyEffect ((atom "FileWrite" (name "path"))) None (TyApp (TyApp (TyCon "Result") (TyCon "String")) (TyCon "Unit"))))))
 (DExtern false "writeFileMode" (TyFun (TyNamed "path" (TyCon "String")) (TyFun (TyCon "Int") (TyFun (TyCon "String") (TyEffect ((atom "FileWrite" (name "path"))) None (TyApp (TyApp (TyCon "Result") (TyCon "String")) (TyCon "Unit")))))))
 (DExtern false "appendFile" (TyFun (TyNamed "path" (TyCon "String")) (TyFun (TyCon "String") (TyEffect ((atom "FileWrite" (name "path"))) None (TyApp (TyApp (TyCon "Result") (TyCon "String")) (TyCon "Unit"))))))
+(DExtern false "appendFileExceptStdout" (TyFun (TyNamed "path" (TyCon "String")) (TyFun (TyCon "String") (TyEffect ((atom "FileWrite" (name "path"))) None (TyApp (TyApp (TyCon "Result") (TyCon "String")) (TyCon "Unit"))))))
 (DExtern false "fileExists" (TyFun (TyNamed "path" (TyCon "String")) (TyEffect ((atom "FileRead" (name "path"))) None (TyCon "Bool"))))
 (DExtern false "fileMode" (TyFun (TyNamed "path" (TyCon "String")) (TyEffect ((atom "FileRead" (name "path"))) None (TyApp (TyApp (TyCon "Result") (TyCon "String")) (TyCon "Int")))))
 (DExtern false "canonicalizePath" (TyFun (TyNamed "path" (TyCon "String")) (TyEffect ((atom "FileRead" (name "path"))) None (TyCon "String"))))
@@ -1327,6 +1336,7 @@ extern stringToLower : String -> String
 (DExtern false "writeFileBytes" (TyFun (TyNamed "path" (TyCon "String")) (TyFun (TyApp (TyCon "Array") (TyCon "Int")) (TyEffect ((atom "FileWrite" (name "path"))) None (TyApp (TyApp (TyCon "Result") (TyCon "String")) (TyCon "Unit"))))))
 (DExtern false "writeFileMode" (TyFun (TyNamed "path" (TyCon "String")) (TyFun (TyCon "Int") (TyFun (TyCon "String") (TyEffect ((atom "FileWrite" (name "path"))) None (TyApp (TyApp (TyCon "Result") (TyCon "String")) (TyCon "Unit")))))))
 (DExtern false "appendFile" (TyFun (TyNamed "path" (TyCon "String")) (TyFun (TyCon "String") (TyEffect ((atom "FileWrite" (name "path"))) None (TyApp (TyApp (TyCon "Result") (TyCon "String")) (TyCon "Unit"))))))
+(DExtern false "appendFileExceptStdout" (TyFun (TyNamed "path" (TyCon "String")) (TyFun (TyCon "String") (TyEffect ((atom "FileWrite" (name "path"))) None (TyApp (TyApp (TyCon "Result") (TyCon "String")) (TyCon "Unit"))))))
 (DExtern false "fileExists" (TyFun (TyNamed "path" (TyCon "String")) (TyEffect ((atom "FileRead" (name "path"))) None (TyCon "Bool"))))
 (DExtern false "fileMode" (TyFun (TyNamed "path" (TyCon "String")) (TyEffect ((atom "FileRead" (name "path"))) None (TyApp (TyApp (TyCon "Result") (TyCon "String")) (TyCon "Int")))))
 (DExtern false "canonicalizePath" (TyFun (TyNamed "path" (TyCon "String")) (TyEffect ((atom "FileRead" (name "path"))) None (TyCon "String"))))

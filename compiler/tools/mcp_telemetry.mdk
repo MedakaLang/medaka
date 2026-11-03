@@ -58,6 +58,6 @@ emit (TraceContext path session classification _) requestId tool event outcome d
             ("response_bytes", size),
           ])
         ++ "\n"
-    match appendFile path line
+    match appendFileExceptStdout path line
       Ok _ => ()
       Err _ => ()
