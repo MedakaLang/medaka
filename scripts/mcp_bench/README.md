@@ -39,9 +39,11 @@ protocol failures; these are not represented by this minimal schema.
 Run `python3 -m unittest discover -s scripts/mcp_bench -p '*_test.py'`.
 
 `collect.run_process(command, environment, transcript, limits)` runs newline
-JSON-RPC bytes in a fresh temporary workspace and a separate process group. It
-kills members of that group on completion or termination; detached descendants
-can survive. The environment contains only PATH and a private HOME plus the
+JSON-RPC bytes in a fresh temporary workspace under a dedicated Linux child
+subreaper. On completion or termination it kills and reaps the worker and its
+descendants, including detached descendants, before returning. Other platforms
+return `unsupported` before launching a worker; macOS remains unimplemented and
+unvalidated. The environment contains only PATH and a private HOME plus the
 explicit `environment` mapping. Pass a validated task as `limits["task"]` to
 materialize its files and questions, without answers or rubric, into the workspace.
 The collector returns a validated run without payloads. A caller that needs

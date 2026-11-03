@@ -1,8 +1,8 @@
 """Host-side process observation. Transcripts are never included in run records."""
 import json
 import os
-import signal
 import subprocess
+import sys
 import tempfile
 import time
 
@@ -47,7 +47,7 @@ def reconcile(events, exitStatus):
                 outcomes.append(event['outcome'])
     except (ValueError, KeyError, TypeError):
         return _record('observer_failure')
-    if exitStatus in ('startup_failure', 'timeout', 'cancelled'):
+    if exitStatus in ('startup_failure', 'timeout', 'cancelled', 'observer_failure'):
         return _record(exitStatus)
     if exitStatus != 0:
         return _record('crash')
@@ -78,13 +78,15 @@ def _responses(data, requests):
 
 
 def run_process(command, environment, transcript, limits):
-    """Run JSON-lines bytes in a private process group; return only metadata.
+    """Run JSON-lines bytes under a private supervisor; return only metadata.
 
     Optional response_callback receives parsed responses for an explicit comparison.
     `trace=False` selects the uninstrumented arm. `cancel_after` requests process
     termination after that many seconds; cancellation means that kill was observed.
     """
     started = time.monotonic_ns()
+    if sys.platform != 'linux':
+        return _record('unsupported', limits, time.monotonic_ns() - started)
     requests = [json.loads(line) for line in transcript.splitlines()]
     events, malformed, observer_failure, status = [], False, False, 'startup_failure'
     with tempfile.TemporaryDirectory() as directory:
@@ -110,30 +112,29 @@ def run_process(command, environment, transcript, limits):
         if limits.get('trace', True):
             env.update(MEDAKA_MCP_TRACE=trace, MEDAKA_MCP_TRACE_SESSION='collector', MEDAKA_MCP_TRACE_CLASS='probe')
         with tempfile.TemporaryFile() as stdout:
+            timeout = limits.get('timeout', 30)
+            cancel = limits.get('cancel_after')
+            deadline = min(timeout, cancel) if cancel is not None else timeout
+            read_fd, write_fd = os.pipe()
             try:
-                process = subprocess.Popen(command, stdin=subprocess.PIPE, stdout=stdout,
-                                           stderr=subprocess.DEVNULL, env=env, cwd=workspace, start_new_session=True)
+                supervisor = subprocess.Popen(
+                    [sys.executable, str(Path(__file__).with_name('supervisor.py')), str(write_fd),
+                     json.dumps([deadline, cancel is not None and cancel <= timeout, command])],
+                    stdin=subprocess.PIPE, stdout=stdout, stderr=subprocess.DEVNULL,
+                    env=env, cwd=workspace, pass_fds=(write_fd,))
             except OSError:
-                process = None
-            if process is not None:
-                timeout = limits.get('timeout', 30)
-                cancel = limits.get('cancel_after')
-                deadline = min(timeout, cancel) if cancel is not None else timeout
+                supervisor = None
+            finally:
+                os.close(write_fd)
+            if supervisor is not None:
+                supervisor.communicate(transcript)
                 try:
-                    process.communicate(transcript, timeout=deadline)
-                    status = process.returncode
-                except subprocess.TimeoutExpired:
-                    try:
-                        os.killpg(process.pid, signal.SIGKILL)
-                    except ProcessLookupError:
-                        pass
-                    process.communicate()
-                    status = 'cancelled' if cancel is not None and cancel <= timeout else 'timeout'
-                finally:
-                    try:
-                        os.killpg(process.pid, signal.SIGKILL)
-                    except ProcessLookupError:
-                        pass
+                    with os.fdopen(read_fd, 'rb') as status_stream:
+                        status = json.load(status_stream)
+                except (ValueError, OSError):
+                    status = 'observer_failure'
+                if supervisor.returncode != 0:
+                    status = 'observer_failure'
                 stdout.seek(0)
                 output = stdout.read(limits.get('output_bytes', 1048576) + 1)
                 if len(output) > limits.get('output_bytes', 1048576):
@@ -149,6 +150,8 @@ def run_process(command, environment, transcript, limits):
                                 limits['response_callback'](responses)
                         except Exception:
                             observer_failure = True
+            else:
+                os.close(read_fd)
         try:
             with open(trace, encoding='utf-8') as stream:
                 events = [json.loads(line) for line in stream]
