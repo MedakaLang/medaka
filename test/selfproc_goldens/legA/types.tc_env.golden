@@ -21,6 +21,7 @@ builtinClassName : BuiltinClass -> String
 builtinClassOrigin : GraphCtx -> BuiltinClass -> TyConOrigin
 builtinIfaceRef : GraphCtx -> BuiltinClass -> IfaceRef
 builtinParamKinds : TyConOrigin -> String -> Option (List Kind)
+carriesKind : List (String, Kind) -> List String -> Bool
 ceAddRows : List CeRow -> ClassEnv -> ClassEnv
 ceInsertRow : CeRow -> ClassEnv -> ClassEnv
 ceLookupAt : RegKey -> Int -> ClassEnv -> Option CeRow
@@ -52,7 +53,8 @@ classEnvDeclFacts : List Decl -> List (String, List String, List (Option KindAnn
 classEnvFinish : ClassEnv -> ClassEnv
 classEnvModuleRows : GraphCtx -> List (TabKey, List Kind) -> DeclEnvModule -> ClassEnv -> List (String, List String, List (Option KindAnn), List IfaceMethod, List Super, TyConOrigin, Option Loc) -> List CeRow
 classEnvRowsFix : (List CeRow -> List CeRow) -> Int -> List CeRow -> List CeRow
-classEnvRowsOf : GraphCtx -> KindReads -> Int -> List (String, List String, List (Option KindAnn), List IfaceMethod, List Super, TyConOrigin, Option Loc) -> List CeRow
+classEnvRowsOf : GraphCtx -> (ClassEnv -> KindReads) -> Int -> ClassEnv -> List (String, List String, List (Option KindAnn), List IfaceMethod, List Super, TyConOrigin, Option Loc) -> List CeRow
+constraintHeadsIn : Ty -> List String
 constraintKindUses : KindReads -> List (String, Kind) -> Constraint -> List (String, Kind)
 constraintSlotDispatchVar : List String -> Constraint -> List String
 ctorExportsIndex : GraphCtx -> Unit -> Map String (List (String, String, Ident))
@@ -192,6 +194,7 @@ insertUnivImplKeys : List TabKey -> List Ty -> List Require -> ImplUniverse -> I
 instRefMid : InstRef -> String
 instRefSeq : InstRef -> Int
 isHeadArg : Ty -> Bool
+joinedKinds : List (String, Kind) -> List (String, Kind)
 keyEntryIdx : KeyEntry -> Int
 keyEntryIface : KeyEntry -> String
 keyEntryOfRow : ImplRow -> List KeyEntry
@@ -205,6 +208,7 @@ kindHeadRound : KindReads -> KindHead -> (TabKey, List Kind)
 kindHeadStart : KindHead -> (TabKey, List Kind)
 kindHeadsOf : GraphCtx -> List Decl -> List (Option KindHead)
 kindHeadsPassHeads : List (Option KindHead) -> Bool
+kindJoin : Kind -> Kind -> Kind
 kindOfAnn : GraphCtx -> Option KindAnn -> Kind
 kindOfParams : List Kind -> Kind
 kindParams : Kind -> List Kind
@@ -267,6 +271,7 @@ ordOfIndex : String -> Map String Int -> Int
 ordinaryEnvBinding : Scheme -> EnvBinding
 ordinaryValueScheme : Scheme -> ValueScheme
 originMethodName : ModuleCtx -> String -> String
+ownKindEntries : GraphCtx -> List (TabKey, List Kind) -> DeclEnvModule -> List (TabKey, List Kind)
 padAnns : List String -> List (Option KindAnn) -> List (Option KindAnn)
 paramKindsFrom : List (String, Kind) -> List String -> List (Option Kind) -> List Kind
 passesHead : Ty -> Bool
@@ -280,6 +285,7 @@ reexportedIfaceMethods : Map String (List (String, List String)) -> List Decl ->
 reexportedIfaceMethodsOf : Map String (List (String, List String)) -> UsePath -> List (String, List String)
 reexportedMethodIdents : Map String (List (String, Ident)) -> List Decl -> List (String, Ident)
 reexportedMethodIdentsOf : Map String (List (String, Ident)) -> UsePath -> List (String, Ident)
+refersAhead : List (String, List String, List (Option KindAnn), List IfaceMethod, List Super, TyConOrigin, Option Loc) -> Bool
 removeAllS : List String -> List String -> List String
 requiredMethodNames : List IfaceMethod -> List String
 sameCeRowKinds : List CeRow -> List CeRow -> Bool
@@ -292,7 +298,9 @@ standaloneValueFor : TcEnv -> String -> String -> Option ValueScheme
 superLookup : GraphCtx -> IfaceRef -> Option (List String, List Super)
 superParamKinds : (TyConOrigin -> String -> Option (List Kind)) -> String -> Super -> List Kind
 tabNameIndex : List (TabKey, a) -> Map String (List (TabKey, a))
+tabNameIndexOnto : List (TabKey, a) -> Map String (List (TabKey, a)) -> Map String (List (TabKey, a))
 tabNameLookup : Map String (List (TabKey, a)) -> TabKey -> Option a
+takesConstructor : Kind -> Bool
 takesPosition : Ty -> Bool
 tcClauseDef : String -> FunClause -> (String, (List Pat, Expr))
 tyTabKey : TyConOrigin -> String -> TabKey
@@ -305,6 +313,7 @@ varHeadHere : String -> Ty -> List Ty -> List (List Ty)
 varKindsFix : KindReads -> List (String, Kind) -> List (Option Kind, Ty) -> Int -> List (String, Kind) -> List (String, Kind)
 varKindsOf : KindReads -> List (String, Kind) -> List (Option Kind, Ty) -> List (String, Kind)
 varKindsRound : KindReads -> List (String, Kind) -> List (Option Kind, Ty) -> List (String, Kind) -> List (String, Kind)
+varSlots : List (String, Kind) -> String -> List Kind
 variantNamed : String -> List Variant -> Bool
 withCtors : ModuleCtx -> Map String Scheme -> TcEnv
 withPublicity : List (Option KindHead) -> List (Option (TabKey, List Kind)) -> List (Option (Bool, (TabKey, List Kind)))

@@ -1,5 +1,6 @@
 aliasArgBindings : ModuleCtx -> SigVars -> List (String, Mono) -> List String -> List Kind -> List Ty -> (SigVars, List (String, Mono))
 aliasArgScope : ModuleCtx -> SigVars -> List (String, Mono) -> TabKey -> List String -> List Ty -> (SigVars, List (String, Mono))
+aliasMisapplied : KindJudge -> TyConOrigin -> String -> List Kind -> List Ty -> Bool
 aliasRowParamCell : GraphCtx -> EffRow -> Ref Effvar
 aliasScopeE : ModuleCtx -> SigVars -> List (String, Mono) -> Ty -> Option (SigVars, List (String, Mono), Ty)
 anyRowDeclaredType : List Kind -> List Kind -> Bool
@@ -70,7 +71,6 @@ fromAstTypeApp : ModuleCtx -> SigVars -> List (String, Mono) -> TyConOrigin -> S
 fromAstTypeE : ModuleCtx -> SigVars -> List (String, Mono) -> Ty -> Mono
 fromAstTypeVarApp : ModuleCtx -> SigVars -> List (String, Mono) -> String -> List Ty -> Ty -> Ty -> Mono
 headKindError : KindJudge -> Bool -> Option Kind -> String -> Bool -> Option Loc -> List Kind -> List Ty -> Option KindError
-headKindsAmong : Map String Unit -> List (TabKey, List Kind) -> TyConOrigin -> String -> Option (List Kind)
 headParamKinds : KindScope -> TyConOrigin -> String -> List String -> List (String, Kind)
 isEPName : EffParamTy -> Bool
 isEPProduct : EffParamTy -> Bool
@@ -89,6 +89,7 @@ kindJudgeOf : KindScope -> List (String, Kind) -> List (Option Kind, Ty) -> Kind
 kindReadsOf : KindScope -> KindReads
 kindScopeOf : ModuleCtx -> KindScope
 krowArgVarNames : List Kind -> List Ty -> List String
+lastTyLoc : Ty -> Option Loc
 literalDomainTop : List EffParamTy -> Param
 namedArgTypes : Ty -> List (String, Ty)
 namedAtomBinder : GraphCtx -> EffAtomTy -> List (String, Param)
@@ -153,5 +154,6 @@ writtenBindingForce : ModuleCtx -> SigVars -> List (String, Mono) -> Ty -> Optio
 writtenElement : Param -> EffAtomTy -> List Param
 writtenQualifiers : Ty -> List (List String, Option Loc)
 writtenTermProblems : String -> Param -> List EffParamTy -> List String
+writtenTypeSpan : Option Loc -> Ty -> Option Loc
 zipCtorBinders : List Variant -> List (List (String, KindAnn)) -> List (Variant, List (String, KindAnn))
 zipParamKinds : List String -> List (Option KindAnn) -> List (String, Option KindAnn)

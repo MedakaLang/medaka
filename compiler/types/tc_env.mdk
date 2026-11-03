@@ -1391,21 +1391,15 @@ ownKindEntries : GraphCtx ->
   DeclEnvModule ->
   List (TabKey, List Kind)
 ownKindEntries gctx known m =
-  if allList (d => not (declaresKindHead d) || kindPublicDataDecl d) m.demDecls
+  if allList
+      (d => isNone (kindHeadOf gctx True d) || kindPublicDataDecl d)
+      m.demDecls
     && (isEmptyL known
       || not (anyList (e => anyList kindHasArrow (snd e)) known)
         && not (declKindsReadKnown gctx m.demDecls)) then
     m.demKindEntries
   else
     declKindEntriesIn gctx known m.demDecls
-
--- The declarations `kindHeadOf` reads a head from.
-declaresKindHead : Decl -> Bool
-declaresKindHead (DAttrib _ d) = declaresKindHead d
-declaresKindHead (DData { dataName = _ }) = True
-declaresKindHead (DNewtype { newtypeName = _ }) = True
-declaresKindHead (DTypeAlias { tyAliasName = _ }) = True
-declaresKindHead _ = False
 
 -- Whether an interface of [facts] names, in its `requires` or in a method's
 -- constraint, one declared at or after it.

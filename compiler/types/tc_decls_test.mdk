@@ -832,7 +832,7 @@ deSeedChainKinds gctx = (deSeedChainProbe gctx).dsKinds
 deSeedChainOwners : GraphCtx -> OrdMap (OrdMap (List String))
 deSeedChainOwners gctx = (deSeedChainProbe gctx).dsOwners
 
-deSeedChainNames : GraphCtx -> OrdMap (OrdMap Unit)
+deSeedChainNames : GraphCtx -> OrdMap (OrdMap (List (TabKey, List Kind)))
 deSeedChainNames gctx = (deSeedChainProbe gctx).dsNames
 
 -- The accumulated name set for [mid] paired with the rebuilt one, computed here off
@@ -949,7 +949,7 @@ deNameIdxModD gctx = declEnvModule gctx 3 "modD" [
   DFunDef True "modDHelper" [] (ELit (LInt 2)) noDeclLoc noBinderId,
 ]
 
-deNameIdxChain : GraphCtx -> OrdMap (OrdMap Unit)
+deNameIdxChain : GraphCtx -> OrdMap (OrdMap (List (TabKey, List Kind)))
 deNameIdxChain gctx =
   let s =
     declEnvSeedChain
@@ -965,7 +965,8 @@ deNameIdxChain gctx =
 
 -- The SAME chain with the two data-free rows removed.  Comparing against this is
 -- what turns "unrelated code is unaffected" into an assertion rather than a hope.
-deNameIdxChainNoUnrelated : GraphCtx -> OrdMap (OrdMap Unit)
+deNameIdxChainNoUnrelated : GraphCtx ->
+  OrdMap (OrdMap (List (TabKey, List Kind)))
 deNameIdxChainNoUnrelated gctx =
   let s =
     declEnvSeedChain
@@ -974,7 +975,9 @@ deNameIdxChainNoUnrelated gctx =
       deSeedChainProbeZero
   s.dsNames
 
-deNameIdxAt : OrdMap (OrdMap Unit) -> String -> List String
+deNameIdxAt : OrdMap (OrdMap (List (TabKey, List Kind))) ->
+  String ->
+  List String
 deNameIdxAt nm mid = omKeys (optionOr omEmpty (omLookup mid nm))
 
 -- Build the whole-graph `DataEnv` from the per-module rows — the SAME rows
