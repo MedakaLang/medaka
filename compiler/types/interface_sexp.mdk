@@ -1242,7 +1242,7 @@ public export data PreludeInterfaceFile = PreludeInterfaceFile {
 
 export
 interfaceFormatVersion : Int
-interfaceFormatVersion = 3
+interfaceFormatVersion = 4
 
 export
 cacheOfSections : List InterfaceSection ->
@@ -1309,6 +1309,8 @@ kindNode KType = SAtom "type"
 kindNode KRow = SAtom "row"
 kindNode (KAuth label pattern) =
   tagged "auth-kind" [effLabelSExp label, boolNode pattern]
+kindNode (KArrow domain result) =
+  tagged "arrow" [kindNode domain, kindNode result]
 
 export
 invocationViewSExp : PublishedInvocationView -> SExp
@@ -1340,7 +1342,12 @@ decKind path (SList [SAtom "auth-kind", label, pattern]) = do
   l <- nested effLabelOfSExp (at path "auth-kind" 1) label
   p <- atomBool (at path "auth-kind" 2) pattern
   Ok (KAuth l p)
-decKind path node = misfit path [("type", 0), ("row", 0), ("auth-kind", 2)] node
+decKind path (SList [SAtom "arrow", domain, result]) = do
+  d <- decKind (at path "arrow" 1) domain
+  r <- decKind (at path "arrow" 2) result
+  Ok (KArrow d r)
+decKind path node =
+  misfit path [("type", 0), ("row", 0), ("auth-kind", 2), ("arrow", 2)] node
 
 decInvocationView : Reader PublishedInvocationView
 decInvocationView path (SList [SAtom "invocation-view", ctors, pols, kinds]) =

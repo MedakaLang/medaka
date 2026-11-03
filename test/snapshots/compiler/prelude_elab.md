@@ -1,5 +1,5 @@
 # META
-source_lines=671
+source_lines=672
 stages=DESUGAR,MARK
 # SOURCE
 -- The prelude's elaborated trees as a value, an on-disk file and a process
@@ -444,6 +444,7 @@ relocClause o (FunClause ps b) = FunClause (map (relocPat o) ps) (relocExpr o b)
 relocPat : (BinderId -> BinderId) -> Pat -> Pat
 relocPat o (PVar n l bid) = PVar n l (o bid)
 relocPat o (PAs n l bid p) = PAs n l (o bid) (relocPat o p)
+relocPat o (PAnn p t) = PAnn (relocPat o p) t
 relocPat o (PCon c ps) = PCon c (map (relocPat o) ps)
 relocPat o (PCons h t) = PCons (relocPat o h) (relocPat o t)
 relocPat o (PTuple ps) = PTuple (map (relocPat o) ps)
@@ -791,6 +792,7 @@ heldPreludeEvCounter _ = map ((_, pe, _) => pe.peEvCounter) !preludeElabCacheRef
 (DTypeSig false "relocPat" (TyFun (TyFun (TyCon "BinderId") (TyCon "BinderId")) (TyFun (TyCon "Pat") (TyCon "Pat"))))
 (DFunDef false "relocPat" ((PVar "o") (PCon "PVar" (PVar "n") (PVar "l") (PVar "bid"))) (EApp (EApp (EApp (EVar "PVar") (EVar "n")) (EVar "l")) (EApp (EVar "o") (EVar "bid"))))
 (DFunDef false "relocPat" ((PVar "o") (PCon "PAs" (PVar "n") (PVar "l") (PVar "bid") (PVar "p"))) (EApp (EApp (EApp (EApp (EVar "PAs") (EVar "n")) (EVar "l")) (EApp (EVar "o") (EVar "bid"))) (EApp (EApp (EVar "relocPat") (EVar "o")) (EVar "p"))))
+(DFunDef false "relocPat" ((PVar "o") (PCon "PAnn" (PVar "p") (PVar "t"))) (EApp (EApp (EVar "PAnn") (EApp (EApp (EVar "relocPat") (EVar "o")) (EVar "p"))) (EVar "t")))
 (DFunDef false "relocPat" ((PVar "o") (PCon "PCon" (PVar "c") (PVar "ps"))) (EApp (EApp (EVar "PCon") (EVar "c")) (EApp (EApp (EVar "map") (EApp (EVar "relocPat") (EVar "o"))) (EVar "ps"))))
 (DFunDef false "relocPat" ((PVar "o") (PCon "PCons" (PVar "h") (PVar "t"))) (EApp (EApp (EVar "PCons") (EApp (EApp (EVar "relocPat") (EVar "o")) (EVar "h"))) (EApp (EApp (EVar "relocPat") (EVar "o")) (EVar "t"))))
 (DFunDef false "relocPat" ((PVar "o") (PCon "PTuple" (PVar "ps"))) (EApp (EVar "PTuple") (EApp (EApp (EVar "map") (EApp (EVar "relocPat") (EVar "o"))) (EVar "ps"))))
@@ -1008,6 +1010,7 @@ heldPreludeEvCounter _ = map ((_, pe, _) => pe.peEvCounter) !preludeElabCacheRef
 (DTypeSig false "relocPat" (TyFun (TyFun (TyCon "BinderId") (TyCon "BinderId")) (TyFun (TyCon "Pat") (TyCon "Pat"))))
 (DFunDef false "relocPat" ((PVar "o") (PCon "PVar" (PVar "n") (PVar "l") (PVar "bid"))) (EApp (EApp (EApp (EVar "PVar") (EVar "n")) (EVar "l")) (EApp (EVar "o") (EVar "bid"))))
 (DFunDef false "relocPat" ((PVar "o") (PCon "PAs" (PVar "n") (PVar "l") (PVar "bid") (PVar "p"))) (EApp (EApp (EApp (EApp (EVar "PAs") (EVar "n")) (EVar "l")) (EApp (EVar "o") (EVar "bid"))) (EApp (EApp (EVar "relocPat") (EVar "o")) (EVar "p"))))
+(DFunDef false "relocPat" ((PVar "o") (PCon "PAnn" (PVar "p") (PVar "t"))) (EApp (EApp (EVar "PAnn") (EApp (EApp (EVar "relocPat") (EVar "o")) (EVar "p"))) (EVar "t")))
 (DFunDef false "relocPat" ((PVar "o") (PCon "PCon" (PVar "c") (PVar "ps"))) (EApp (EApp (EVar "PCon") (EVar "c")) (EApp (EApp (EMethodRef "map") (EApp (EVar "relocPat") (EVar "o"))) (EVar "ps"))))
 (DFunDef false "relocPat" ((PVar "o") (PCon "PCons" (PVar "h") (PVar "t"))) (EApp (EApp (EVar "PCons") (EApp (EApp (EVar "relocPat") (EVar "o")) (EVar "h"))) (EApp (EApp (EVar "relocPat") (EVar "o")) (EVar "t"))))
 (DFunDef false "relocPat" ((PVar "o") (PCon "PTuple" (PVar "ps"))) (EApp (EVar "PTuple") (EApp (EApp (EMethodRef "map") (EApp (EVar "relocPat") (EVar "o"))) (EVar "ps"))))

@@ -69,6 +69,7 @@ import types.tc_state.{
   mctxAtIfSome,
 }
 import types.tc_env.{
+  tabNameIndexOnto,
   addCtor,
   aliasUniverseAt,
   buildClassEnvGo,
@@ -77,13 +78,16 @@ import types.tc_env.{
   classEnvFinish,
   constraintSlotDispatchVar,
   declEnvDeclsOf,
-  declEnvKindEntries,
   declEnvModule,
   declEnvReachFrom,
   declEnvRowVisible,
   declEnvSiblingSees,
   declEnvVisibleTo,
   declGradedScope,
+  declKindEntriesIn,
+  declKindsReadKnown,
+  declKindEntriesPublicIn,
+  declKindsIn,
   declParamKinds,
   declTopFnNames,
   definersIn,
@@ -92,6 +96,7 @@ import types.tc_env.{
   effTailNames,
   implAccFinish,
   importLocFor,
+  kindHasArrow,
   kindPublicDataDecl,
   methodEnvGo,
   methodSlotKey,
@@ -147,6 +152,9 @@ import types.tc_decls_types.{
   sigVarsWithAuths,
   substAliasArgs,
   writtenBindingForce,
+  kindScopeOf,
+  recoveredScope,
+  reportWrittenKinds,
 }
 import types.effect_authority.{Authority(..), Authvar(..), authvarId}
 import types.effect_rows.{
@@ -251,7 +259,7 @@ declEnvAccOf gctx (m :: rest) a =
     daAmbig = snd definers,
     daData = dataEnvFromRowsGo [m] a.daData,
     daImpls = buildImplEnvGo [m] a.daImpls,
-    daIfaces = buildClassEnvGo gctx [m] a.daIfaces,
+    daIfaces = buildClassEnvGo gctx a.daSeeds.dsKAcc [m] a.daIfaces,
     daMethods = methodEnvGo gctx [m] a.daMethods,
     daSeeds = declEnvSeedChain gctx [m] a.daSeeds,
     daPolarity = declEnvPolarityChain [m] a.daPolarity,
@@ -341,14 +349,24 @@ buildDeclEnvs gctx acc coreRow modRows =
 -- of the name axis, exactly as it would have been to A-3.6's had it landed here).
 -- The own-row arm is unfiltered because a module's own kinds are: `registerData`'s
 -- `DData` arm calls `recordParamKinds` regardless of `dataVis`.
+-- [known] is every earlier row's visible entries, which an own head can pass a
+-- parameter on to.  The memo is solved against none of them, so a row that can see
+-- an imported head with a constructor parameter, or that passes a head to a
+-- variable (`declKindsReadKnown`), is solved again against them.
 declEnvRowKindEntries : GraphCtx ->
   Int ->
   DeclEnvModule ->
+  List (TabKey, List Kind) ->
   List (TabKey, List Kind)
-declEnvRowKindEntries gctx cur m
+declEnvRowKindEntries gctx cur m known
   | declEnvVisibleTo cur m.demOrd False || declEnvSiblingSees cur m =
-    declEnvKindEntries gctx m.demDecls
-  | declEnvVisibleTo cur m.demOrd True = m.demKindEntries
+    declKindEntriesIn gctx known m.demDecls
+  | declEnvVisibleTo cur m.demOrd True =
+    if anyList (e => anyList kindHasArrow (snd e)) known
+      || declKindsReadKnown gctx m.demDecls then
+      declKindEntriesPublicIn gctx known m.demDecls
+    else
+      m.demKindEntries
   | otherwise = []
 
 -- The seed chain: reader k's seed is reader (k-1)'s seed with row (k-1)'s public
@@ -374,12 +392,12 @@ declEnvSeedChain : GraphCtx ->
   DeclEnvSeedAcc
 declEnvSeedChain _gctx [] s = s
 declEnvSeedChain gctx (m :: rest) s =
-  let kents = declEnvRowKindEntries gctx (m.demOrd + 1) m
+  let kents = declEnvRowKindEntries gctx (m.demOrd + 1) m s.dsKAcc
   declEnvSeedChain gctx rest DeclEnvSeedAcc {
     dsKAcc = kents ++ s.dsKAcc,
     dsOAcc =
       declEnvDeclFieldOwners (declEnvRowVisible (m.demOrd + 1) m) s.dsOAcc,
-    dsNAcc = omFromNames (map (p => tabKeyName (fst p)) kents) s.dsNAcc,
+    dsNAcc = tabNameIndexOnto kents s.dsNAcc,
     dsKinds = omInsert m.demId s.dsKAcc s.dsKinds,
     dsOwners = omInsert m.demId s.dsOAcc s.dsOwners,
     dsNames = omInsert m.demId s.dsNAcc s.dsNames,
@@ -1009,19 +1027,33 @@ rejectCyclicAliases mctx prog =
 -- like astTypeFresh but also returns the name→fresh-tyvar map (the same fresh
 -- vars used in the Mono), so a caller can check post-unify whether each
 -- annotation tyvar stayed a distinct unbound var (C3 AnnotationTooGeneral).
+-- An annotation is a written type (EFFECTS-SEMANTICS §6.2), judged where it
+-- converts: its kind error is reported here, and what the judgement rejects
+-- converts as a variable (`recoveredScope`).
 export
 astTypeFreshTbl : ModuleCtx -> Ty -> (Mono, List (String, Mono))
-astTypeFreshTbl outer ty = atSignature outer ty (mctx =>
+astTypeFreshTbl mctx ty =
+  reportWrittenKinds mctx (kindScopeOf mctx) [] None [(Some KType, ty)]
+  freshTblWith recoveredScope mctx ty
+
+-- [ty] converted with a fresh variable per written variable, [written] the
+-- form of [ty] that converts with its extra variables.
+freshTblWith : (ModuleCtx -> List (String, Mono) -> Ty -> (Ty, List (String, Mono))) ->
+  ModuleCtx ->
+  Ty ->
+  (Mono, List (String, Mono))
+freshTblWith written outer ty = atSignature outer ty (mctx =>
   let rows = rowArgNames mctx ty
   let auths = authArgBindersIn mctx ty
   let etbl = sigVarsForWith mctx ty (dedup (effTailNames ty ++ rows)) auths
   let tvs = freshTvMap mctx (sigTyVarNames ty rows (map fst auths))
-  (fromAstTypeE mctx etbl tvs ty, tvs))
+  let (converted, scope) = written mctx tvs ty
+  (fromAstTypeE mctx etbl scope converted, tvs))
 
 -- The head-pin's target type: if the annotation's head is a TyCon with a known
 -- declared arity (from `dataParamKindsRef`), rebuild it at that arity with fresh
 -- vars (so an empty literal's wrong-arity pin is corrected); otherwise fall back
--- to the literal annotation type.
+-- to the literal annotation type, which desugar wrote, so it is not judged.
 export
 headAnnotTy : ModuleCtx -> Ty -> Mono
 headAnnotTy mctx ty = match tyAppSpine ty
@@ -1030,8 +1062,11 @@ headAnnotTy mctx ty = match tyAppSpine ty
   (TyCon { tyConName = n, tyConOrigin = o }, _) =>
     match lookupTab (tyTabKey o n) mctx.mcCells.dataParamKindsRef.value
       Some kinds => applyParams (tconFrom o n) (freshVars mctx (listLen kinds))
-      None => fst (astTypeFreshTbl mctx ty)
-  _ => fst (astTypeFreshTbl mctx ty)
+      None => fst (freshTblWith asWritten mctx ty)
+  _ => fst (freshTblWith asWritten mctx ty)
+
+asWritten : ModuleCtx -> List (String, Mono) -> Ty -> (Ty, List (String, Mono))
+asWritten _ tvs ty = (ty, tvs)
 
 -- A diagnostic a signature's elaboration raises without a span of its own
 -- lands on the signature, not on whatever the walk last visited.
@@ -1058,21 +1093,27 @@ sigToSchemeTvsIn : ModuleCtx ->
   List (String, List Kind) ->
   Ty ->
   (Scheme, List (String, Mono))
-sigToSchemeTvsIn outer scope ty = atSignature outer ty (mctx =>
-  let rows = rowArgNamesIn mctx (qualifiedKindScope mctx scope ty) ty
-  let auths = authArgBindersIn mctx ty
-  let tvs = freshTvMap mctx (sigTyVarNames ty rows (map fst auths))
-  let etbl = sigVarsForWith mctx ty (dedup (effTailNames ty ++ rows)) auths
-  (
-    Forall
-      (map (snd >> monoTyvarId) tvs)
-      (map effvarIdOf etbl.svRows)
-      (map authvarIdOf etbl.svAuths)
-      []
-      (bindingForceFromAst mctx etbl tvs ty)
-      (fromAstTypeE mctx etbl tvs ty),
-    tvs,
-  ))
+sigToSchemeTvsIn outer scope ty = atSignature
+  outer
+  ty
+  (mctx =>
+    let rows = rowArgNamesIn mctx (qualifiedKindScope mctx scope ty) ty
+    let auths = authArgBindersIn mctx ty
+    let tvs = freshTvMap mctx (sigTyVarNames ty rows (map fst auths))
+    let etbl = sigVarsForWith mctx ty (dedup (effTailNames ty ++ rows)) auths
+    -- A rejected occurrence's variable is quantified, not returned: no written
+    -- name or constraint refers to it.
+    let (written, quantified) = recoveredScope mctx tvs ty
+    (
+      Forall
+        (map (snd >> monoTyvarId) quantified)
+        (map effvarIdOf etbl.svRows)
+        (map authvarIdOf etbl.svAuths)
+        []
+        (bindingForceFromAst mctx etbl tvs ty)
+        (fromAstTypeE mctx etbl quantified written),
+      tvs,
+    ))
 
 export
 sigVarsFor : ModuleCtx -> Ty -> List String -> SigVars
@@ -1521,7 +1562,7 @@ recordParamKinds mctx o name kinds =
   -- which is what makes "own registrations on TOP of the universe" work here
   -- without the index needing the list's ordering.
   mctx.mcCells.dataParamNameIndexRef :=
-    omInsert name () mctx.mcCells.dataParamNameIndexRef.value
+    tabNameIndexOnto [entry] mctx.mcCells.dataParamNameIndexRef.value
 
 -- ── #2110: the ATOM-GUARANTEE half, third sibling of the two above ────────
 -- Same key (`tyTabKey o name`), same prepend, same first-match read.  Per
@@ -1612,11 +1653,14 @@ intersectDeclAtoms _gctx [] = []
 intersectDeclAtoms gctx (first :: rest) =
   filterList (x => allList (b => isEmptyL (atomsEscape gctx [x] b)) rest) first
 
--- one representation per param shared across all ctors: KType → fresh TVar,
+-- one representation per param shared across all ctors: KType (or an arrow
+-- over it) → fresh TVar,
 -- KRow → a TEff wrapping a fresh effvar (the row the param stands for),
 -- KAuth → a TAuth over a fresh authority variable named after the parameter.
 mintParamReprs : ModuleCtx -> List String -> List Kind -> List Mono
 mintParamReprs mctx (_ :: ps) (KType :: ks) =
+  freshVar mctx () :: mintParamReprs mctx ps ks
+mintParamReprs mctx (_ :: ps) ((KArrow _ _) :: ks) =
   freshVar mctx () :: mintParamReprs mctx ps ks
 mintParamReprs mctx (_ :: ps) (KRow :: ks) =
   TEff (EffRow [] (Some (freshEffvar mctx ()))) :: mintParamReprs mctx ps ks
@@ -1625,9 +1669,11 @@ mintParamReprs mctx (p :: ps) ((KAuth l pat) :: ks) =
     :: mintParamReprs mctx ps ks
 mintParamReprs _mctx _ _ = []
 
--- KType param names → their TVar (the tvs map fromAstTypeE consults for tyvars)
+-- KType and KArrow param names → their TVar (the tvs map fromAstTypeE consults
+-- for tyvars)
 ktypeTvs : List String -> List Kind -> List Mono -> List (String, Mono)
 ktypeTvs (p :: ps) (KType :: ks) (r :: rs) = (p, r) :: ktypeTvs ps ks rs
+ktypeTvs (p :: ps) ((KArrow _ _) :: ks) (r :: rs) = (p, r) :: ktypeTvs ps ks rs
 ktypeTvs (_p :: ps) (_ :: ks) (_ :: rs) = ktypeTvs ps ks rs
 ktypeTvs _ _ _ = []
 
@@ -2108,7 +2154,7 @@ registerAllDataScoped env ds allDs =
 -- (`data A (p : Authority L) = A (H p)` above `data H (p : Authority L)`).
 registerAllDataGo : TcEnv -> List Decl -> TcEnv
 registerAllDataGo env ds =
-  each (recordDeclKinds env.teDyn.dcModule) ds
+  recordDeclKinds env.teDyn.dcModule ds
   registerDeclsAliasesFirst env ds
 
 -- Aliases enter the alias table ahead of every other declaration, so a field
@@ -2131,22 +2177,36 @@ isAliasDecl (DAttrib _ d) = isAliasDecl d
 isAliasDecl (DTypeAlias { ... }) = True
 isAliasDecl _ = False
 
+-- The heads of [ds] are solved together (`declKindsIn`), against the heads the
+-- table already holds, so a head may pass a parameter on to one in [ds] or to
+-- one imported.
 export
-recordDeclKinds : ModuleCtx -> Decl -> Unit
-recordDeclKinds mctx (DAttrib _ d) = recordDeclKinds mctx d
-recordDeclKinds mctx (DData { dataVis = vis, dataName = name, dataParams = params, dataParamKinds = anns, dataCtors = variants, dataOrigin = o }) =
+recordDeclKinds : ModuleCtx -> List Decl -> Unit
+recordDeclKinds mctx ds =
+  let solved = declKindsIn mctx.mcGraph mctx.mcCells.dataParamKindsRef.value ds
+  each (p => recordDeclKindsAs mctx (snd p) (fst p)) (zipL ds solved)
+
+recordDeclKindsAs : ModuleCtx -> Option (TabKey, List Kind) -> Decl -> Unit
+recordDeclKindsAs mctx solved (DAttrib _ d) = recordDeclKindsAs mctx solved d
+recordDeclKindsAs mctx solved (DData { dataVis = vis, dataName = name, dataParams = params, dataCtors = variants, dataOrigin = o }) =
   recordCtors mctx.mcGraph o name vis params variants
-  recordParamKinds mctx o name (declParamKinds mctx.mcGraph params anns)
-recordDeclKinds mctx (DNewtype { newtypePub = pub, newtypeName = name, newtypeParams = params, newtypeParamKinds = anns, newtypeCtor = con, newtypeFieldTy = fty, newtypeOrigin = o }) =
+  recordSolvedKinds mctx o name solved
+recordDeclKindsAs mctx solved (DNewtype { newtypePub = pub, newtypeName = name, newtypeParams = params, newtypeCtor = con, newtypeFieldTy = fty, newtypeOrigin = o }) =
   let vis = if pub then VisPublic else VisAbstract
   recordCtors mctx.mcGraph o name vis params [Variant con (ConPos [fty])]
-  recordParamKinds mctx o name (declParamKinds mctx.mcGraph params anns)
-recordDeclKinds mctx d = recordDeclParamKinds mctx d
+  recordSolvedKinds mctx o name solved
+recordDeclKindsAs mctx solved (DTypeAlias { tyAliasName = name, tyAliasOrigin = o }) =
+  recordSolvedKinds mctx o name solved
+recordDeclKindsAs _mctx _ _ = ()
 
-recordDeclParamKinds : ModuleCtx -> Decl -> Unit
-recordDeclParamKinds mctx d = match declKindEntry mctx.mcGraph d
-  Some (o, name, kinds) => recordParamKinds mctx o name kinds
-  None => ()
+recordSolvedKinds : ModuleCtx ->
+  TyConOrigin ->
+  String ->
+  Option (TabKey, List Kind) ->
+  Unit
+recordSolvedKinds mctx o name (Some (_, kinds)) =
+  recordParamKinds mctx o name kinds
+recordSolvedKinds _mctx _ _ None = ()
 
 -- Only a data, newtype or alias head declares parameter kinds; every other
 -- declaration has none to record.
@@ -2187,6 +2247,7 @@ recordDeclaredKinds mctx d = match declKindEntry mctx.mcGraph d
 export
 kindIsDeclared : Kind -> Bool
 kindIsDeclared KType = False
+kindIsDeclared (KArrow d r) = kindIsDeclared d || kindIsDeclared r
 kindIsDeclared _ = True
 
 -- like astTypeFresh but also returns the tyvar-name → fresh-var map
@@ -2199,7 +2260,12 @@ instantiateSigTracked outer ty = atSignature outer ty (mctx =>
   let auths = authArgBindersIn mctx ty
   let tvs = freshTvMap mctx (sigTyVarNames ty rows (map fst auths))
   let etbl = sigVarsForWith mctx ty (dedup (effTailNames ty ++ rows)) auths
-  (fromAstTypeE mctx etbl tvs ty, tvs, writtenBindingForce mctx etbl tvs ty))
+  let (written, scope) = recoveredScope mctx tvs ty
+  (
+    fromAstTypeE mctx etbl scope written,
+    tvs,
+    writtenBindingForce mctx etbl tvs ty,
+  ))
 
 export
 constraintNameMonos : List String -> List (String, Mono) -> List Mono

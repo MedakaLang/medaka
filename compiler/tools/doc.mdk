@@ -538,6 +538,7 @@ mergeArgs (x :: xs) (y :: ys) = (if x == "_" then y else x) :: mergeArgs xs ys
 headArgName : Pat -> String
 headArgName (PVar v _ _) = v
 headArgName (PAs v _ _ _) = v
+headArgName (PAnn p _) = headArgName p
 headArgName _ = "_"
 
 renderHead : String -> List String -> String

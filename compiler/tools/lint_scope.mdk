@@ -292,6 +292,7 @@ patNames (PList ps) = flatMap patNames ps
 patNames (PAs _ _ _ p) = patNames p
 patNames (POr ps) = flatMap patNames ps
 patNames (PRec n fields _) = n :: flatMap recFieldNames fields
+patNames (PAnn p ty) = patNames p ++ tyNames ty
 patNames _ = []
 
 recFieldNames : RecPatField -> List String
@@ -404,6 +405,7 @@ patNameSites (PAs x l _ p) = NameSite x l SiteAs :: patNameSites p
 patNameSites (POr ps) = flatMap patNameSites ps
 patNameSites (PRng _ _ _) = []
 patNameSites (PRec _ fields _) = flatMap recFieldNameSites fields
+patNameSites (PAnn p _) = patNameSites p
 
 recFieldNameSites : RecPatField -> List NameSite
 recFieldNameSites (RecPatField name l _ None) = [NameSite name l SitePun]

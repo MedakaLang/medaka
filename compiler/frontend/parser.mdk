@@ -312,6 +312,7 @@ exprToPat (ESection (SecLeft a "::")) = PCons (exprToPat a) PWild
 exprToPat (EAsPat x sub) = PAs x (Loc "" 0 0 0 0) noBinderId (exprToPat sub)
 exprToPat (EOrPat es) = orPatOf (map exprToPat es)
 exprToPat (EApp f x) = appToPat (EApp f x)
+exprToPat (EAnnot e t) = PAnn (exprToPat e) t
 exprToPat _ = PWild
 
 -- Alternatives joined into one pattern; nested or-patterns are flattened so a
@@ -2548,22 +2549,22 @@ parseTyParenAt : Int -> Token -> Token -> Parser Ty
 parseTyParenAt s (TString _) _ = parseTyAuthJoin s
 parseTyParenAt s TLBrace _ = parseTyAuthJoin s
 parseTyParenAt s (TUpper _) TEqual = parseTyAuthJoin s
-parseTyParenAt _ t _ = parseTyParenBody t
+parseTyParenAt s t _ = parseTyParenBody s t
 
 -- A leading comma right after `(` can only be the bare tuple type constructor
 -- `(,)`/`(,,)`/… (arities 2–5) — a normal parenthesized/tuple type always starts
 -- with a type atom.  Everything else is the existing `(a)` / `(a, b)` / `(a -> b)`
 -- path.
-parseTyParenBody : Token -> Parser Ty
-parseTyParenBody TComma = parseTupleCtorTail 0
+parseTyParenBody : Int -> Token -> Parser Ty
+parseTyParenBody s TComma = parseTupleCtorTail s 0
 -- `(e | e2)` in an Effect-kinded type-ARGUMENT slot is a bare row whose tail
 -- is a join (#821), the parenthesised spelling of `<e | e2>`: `f (e | e2) b`.
 -- Only a `|` right after the ident selects it, so `(e)` and `(e, f)` keep
 -- their ordinary parenthesised/tuple readings.
-parseTyParenBody (TIdent _) = defer
+parseTyParenBody _ (TIdent _) = defer
   t2 <- peek2P
   parseTyParenIdent t2
-parseTyParenBody _ = parseTyParenTuple
+parseTyParenBody _ _ = parseTyParenTuple
 
 parseTyParenIdent : Token -> Parser Ty
 -- `(name : T)`: an arrow-domain binder naming the argument's authority, and
@@ -2631,19 +2632,22 @@ parseTyParenTuple = defer
 -- Lowers to `TyCon "__tupleN__"`, the same dispatch tag typecheck uses
 -- (`tupleHeadTagTc`), so the unsaturated head can bind a higher-kinded class
 -- param (`impl Bimappable (,)`).
-parseTupleCtorTail : Int -> Parser Ty
-parseTupleCtorTail commas = defer
+parseTupleCtorTail : Int -> Int -> Parser Ty
+parseTupleCtorTail s commas = defer
   t <- peekP
-  tupleCtorTailFor commas t
+  tupleCtorTailFor s commas t
 
-tupleCtorTailFor : Int -> Token -> Parser Ty
-tupleCtorTailFor commas TComma = defer
+tupleCtorTailFor : Int -> Int -> Token -> Parser Ty
+tupleCtorTailFor s commas TComma = defer
   advance
-  parseTupleCtorTail (commas + 1)
-tupleCtorTailFor commas TRParen = defer
+  parseTupleCtorTail s (commas + 1)
+tupleCtorTailFor s commas TRParen = defer
   advance
-  tupleCtorTyOfArity (commas + 1)
-tupleCtorTailFor _ _ = failP "expected `,` or `)` in the tuple type constructor"
+  ctx <- contextP
+  q <- getPos
+  tupleCtorTyOfArity (Some (locOfSpan ctx s q)) (commas + 1)
+tupleCtorTailFor _ _ _ =
+  failP "expected `,` or `)` in the tuple type constructor"
 
 -- #1110 (was a residual, DRAINED by the stamping PR): this head is a BUILTIN, so
 -- `DICT-SEMANTICS.md` §8 I6.2 (a) says its identity is the reserved
@@ -2653,10 +2657,10 @@ tupleCtorTailFor _ _ = failP "expected `,` or `)` in the tuple type constructor"
 -- is what keeps resolve's stamper off it: the stamper only ever fills in an
 -- `OriginUnresolved` head, so this node is immune by construction rather than by
 -- a special case the stamper has to remember.
-tupleCtorTyOfArity : Int -> Parser Ty
-tupleCtorTyOfArity n =
+tupleCtorTyOfArity : Option Loc -> Int -> Parser Ty
+tupleCtorTyOfArity loc n =
   if n >= 2 && n <= 5 then
-    deferPure (tyConBuiltin (tupleCtorTyName n) None)
+    deferPure (tyConBuiltin (tupleCtorTyName n) loc)
   else
     failP "a tuple type constructor has 2 to 5 components"
 
@@ -4504,8 +4508,8 @@ exprStmtFor startPos e TEqual = defer
 exprStmtFor _ e _ = deferPure [DoExpr e]
 
 -- `pat <- e` → one DoBind; an annotated var LHS `x : ty <- e` → the bind PLUS a
--- shadowing `let x = (x : ty)` so x is bound AND its declared type is enforced
--- (there is no annotated-pattern node to carry the type on the binder directly)
+-- shadowing `let x = (x : ty)` so x is bound AND its declared type is enforced;
+-- any other annotated LHS keeps its type on the pattern (`PAnn`)
 bindStmts : Expr -> Expr -> List DoStmt
 bindStmts lhs rhs = match stripLoc lhs
   EAnnot inner ty => bindAnnot inner ty rhs
@@ -4522,7 +4526,7 @@ bindAnnot inner ty rhs = match stripLoc inner
       (EAnnot (EVar x) ty)
       noDeclLoc,
   ]
-  other => [DoBind (exprToPat other) rhs]
+  other => [DoBind (PAnn (exprToPat other) ty) rhs]
 
 -- a `lhs = rhs` statement: bare var → DoAssign; a field path is rejected at the
 -- statement's start (`fatalAtP`, so the message survives `many` recovery)

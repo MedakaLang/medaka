@@ -146,7 +146,6 @@ externTyOriginScope : List Decl -> Map String TyConOrigin
 externWithBodyErrors : List String -> List Decl -> List ResError
 fieldCheck : Option Loc -> Env -> String -> String -> List ResError
 fieldKnownErr : Option Loc -> Env -> String -> List ResError
-fieldTyOf : Field -> Ty
 fieldVerdict : Option Loc -> Env -> String -> String -> List String -> List ResError
 fileOfModuleErrors : List (String, String) -> (String, List ResError) -> (String, List ResError)
 fillDeclOrigin : String -> TyConOrigin -> TyConOrigin
@@ -435,7 +434,6 @@ useStubNames : UsePath -> List String
 userValueNames : List Decl -> List String
 valueBinderNames : Decl -> List String
 valueProvenance : Map String ModuleExports -> List UsePath -> Map String (List String)
-variantFieldTys : Variant -> List Ty
 whenL : Bool -> List a -> List a
 withResErrorLoc : Loc -> ResError -> ResError
 withStdlibExports : List (String, List String) -> List ResError -> List ResError

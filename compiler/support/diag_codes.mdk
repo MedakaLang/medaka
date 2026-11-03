@@ -216,6 +216,7 @@ public export data DiagCode =
   | TUnknownRecord
   | TUnroutedDispatch
   | TUpdateMultiCtor
+  | TWrittenKindMismatch
   | WGuardInexhaustive
   | WImportMethodShadow
   | WIncomparableImpls
@@ -420,6 +421,7 @@ codeText TUnknownField = "T-UNKNOWN-FIELD"
 codeText TUnknownRecord = "T-UNKNOWN-RECORD"
 codeText TUnroutedDispatch = "T-UNROUTED-DISPATCH"
 codeText TUpdateMultiCtor = "T-UPDATE-MULTI-CTOR"
+codeText TWrittenKindMismatch = "T-WRITTEN-KIND-MISMATCH"
 codeText WGuardInexhaustive = "W-GUARD-INEXHAUSTIVE"
 codeText WImportMethodShadow = "W-IMPORT-METHOD-SHADOW"
 codeText WIncomparableImpls = "W-INCOMPARABLE-IMPLS"
@@ -505,9 +507,10 @@ allDiagCodes = [
   TRequiresUnrouted, TResidual, TSigOverExpansive, TTargetCapability,
   TTargetNoBinding, TTargetNotProvided, TTypeMismatch, TTypeTooGeneral,
   TUnbound, TUnknownCtor, TUnknownField, TUnknownRecord, TUnroutedDispatch,
-  TUpdateMultiCtor, WGuardInexhaustive, WImportMethodShadow, WIncomparableImpls,
-  WKeepIrFailed, WMainMissing, WMainShape, WNonexhaustive,
-  WNonexhaustiveClauses, WPreludeMethodShadow, WUnreachableAlt, WUnreachableArm
+  TUpdateMultiCtor, TWrittenKindMismatch, WGuardInexhaustive,
+  WImportMethodShadow, WIncomparableImpls, WKeepIrFailed, WMainMissing,
+  WMainShape, WNonexhaustive, WNonexhaustiveClauses, WPreludeMethodShadow,
+  WUnreachableAlt, WUnreachableArm
 ]
 
 -- The code whose text is [t], or `None` when [t] is no live code.
