@@ -26,8 +26,8 @@
 
 import support.diag_codes.{DiagCode(..)}
 import list.{take}
-import support.util.{stringTrim, joinWith, joinNl, lookupAssoc}
-import string.{words, contains, startsWith, endsWith, split}
+import support.util.{joinWith, joinNl, lookupAssoc}
+import string.{words, contains, startsWith, endsWith, split, trimAscii}
 import frontend.desugar_cache.{
   desugaredPrelude, preludeGeneration, registerPreludeDecls
 }
@@ -737,7 +737,7 @@ makeTempDir _ =
       (envOr "MEDAKA_SCRATCH" defaultScratchRoot)
   match firstScratchDir candidates
     Ok dir => Ok dir
-    Err e => Err (stringTrim e)
+    Err e => Err (trimAscii e)
 
 -- Returns the first candidate root that yields a directory.  When every
 -- candidate fails, the error names each one.
@@ -764,9 +764,9 @@ makeScratchIn root = match runCommand "sh" [
     match runCommandOk "mktemp" ["-d", joinPath root "medaka_build_XXXXXX"]
       Err e => Err e
       Ok (out, _) =>
-        let dir = stringTrim out
+        let dir = trimAscii out
         if dir == "" then Err "mktemp -d printed no path" else Ok dir
-  Ok (_, _, err) => Err (stringTrim err)
+  Ok (_, _, err) => Err (trimAscii err)
 
 -- `mktemp -d` ignores TMPDIR once its template names a directory, so the root
 -- is spelled into the template.  Mirrors test/lib_scratch.sh's routing.
@@ -1018,14 +1018,14 @@ detectGCPrefix prefix =
 -- a spawn failure below — since the caller has no better flags to offer.
 gcQuery : String -> List String -> <IO> String
 gcQuery prog args = match runCommand prog args
-  Ok (_, out, _) => stringTrim out
+  Ok (_, out, _) => trimAscii out
   Err _ => ""
 
 detectGCBrew : String -> String -> <IO> Option (List String, List String)
 detectGCBrew cc tmpDir = match runCommand "brew" ["--prefix", "bdw-gc"]
   -- fail-open-by-design: a brew miss falls through to the bare -lgc probe.
   Ok (0, out, _) =>
-    let prefix = stringTrim out
+    let prefix = trimAscii out
     if prefix /= "" && fileExists (joinPath prefix "include/gc.h") then
       Some (["-I" ++ joinPath prefix "include"], gcPrefixLibs prefix)
     else
@@ -1057,7 +1057,7 @@ libgcMissingError _ = match runCommand "uname" ["-s"]
   -- fail-open-by-design: an unreadable/absent `uname` falls open to the
   -- Linux/GNU-flavored advice below, the same default the `_` arm gives.
   Ok (0, out, _) =>
-    if stringTrim out == "Darwin" then
+    if trimAscii out == "Darwin" then
       "error: libgc not found; install it with `brew install bdw-gc` or set GC_PREFIX to its prefix"
     else
       "error: libgc not found; install it with `apt install libgc-dev` or set GC_PREFIX to its prefix"
@@ -1088,10 +1088,7 @@ gcSectionsLinkFlag _ = match runCommand "uname" ["-s"]
   -- fail-open-by-design: an unreadable/absent `uname` falls open to the
   -- GNU link flag below, the same default the `_` arm gives.
   Ok (0, out, _) =>
-    if stringTrim out == "Darwin" then
-      "-Wl,-dead_strip"
-    else
-      "-Wl,--gc-sections"
+    if trimAscii out == "Darwin" then "-Wl,-dead_strip" else "-Wl,--gc-sections"
   _ => "-Wl,--gc-sections"
 
 -- ---- the runtime in the ThinLTO link (#3374) ----
@@ -1129,7 +1126,7 @@ detectLto cc =
 
 ltoLinker : String -> <IO> Option (List String)
 ltoLinker cc = match runCommand "uname" ["-s"]
-  Ok (0, out, _) => if stringTrim out == "Darwin" then Some [] else lldFlags cc
+  Ok (0, out, _) => if trimAscii out == "Darwin" then Some [] else lldFlags cc
   -- fail-open-by-design: no `uname` falls through to the lld probe, the same
   -- non-Darwin default gcSectionsLinkFlag takes.
   _ => lldFlags cc
@@ -1137,7 +1134,7 @@ ltoLinker cc = match runCommand "uname" ["-s"]
 lldFlags : String -> <IO> Option (List String)
 lldFlags cc = match runCommand cc ["-print-prog-name=ld.lld"]
   Ok (0, out, _) =>
-    let path = stringTrim out
+    let path = trimAscii out
     if startsWith "/" path && fileExists path then
       Some ["-fuse-ld=lld"]
     else
@@ -1352,7 +1349,7 @@ clangMissingError cc = match runCommand "uname" ["-s"]
   -- fail-open-by-design: an unreadable/absent `uname` falls open to the
   -- Linux/GNU-flavored advice below, the same default the `_` arm gives.
   Ok (0, out, _) =>
-    if stringTrim out == "Darwin" then
+    if trimAscii out == "Darwin" then
       "error: \{cc} not found; install the Xcode Command Line Tools with `xcode-select --install`"
     else
       "error: \{cc} not found; install it with `apt install clang`"
@@ -2046,7 +2043,7 @@ stampCommit : String -> <IO> String
 stampCommit projRoot =
   match runCommand "git" ["-C", projRoot, "rev-parse", "--short", "HEAD"]
     Ok (0, out, _) =>
-      let short = stringTrim out
+      let short = trimAscii out
       if short == "" then "" else short ++ stampDirtySuffix projRoot
     -- fail-open-by-design: no git, no repository, or a detached/empty HEAD all
     -- mean the same thing here — this build has no commit to name.
@@ -2058,14 +2055,14 @@ stampCommit projRoot =
 stampDirtySuffix : String -> <IO> String
 stampDirtySuffix projRoot =
   match runCommand "git" ["-C", projRoot, "status", "--porcelain"]
-    Ok (0, out, _) => if stringTrim out == "" then "" else "-dirty"
+    Ok (0, out, _) => if trimAscii out == "" then "" else "-dirty"
     _ => ""
 
 -- UTC build date: the same command and format build_native_medaka.sh stamps,
 -- and identical on GNU and BSD `date`.
 stampDate : Unit -> <IO> String
 stampDate _ = match runCommand "date" ["-u", "+%Y-%m-%d"]
-  Ok (0, out, _) => stringTrim out
+  Ok (0, out, _) => trimAscii out
   _ => ""
 
 -- ---- the automatic C-runtime object cache (#133, epic #2036 G1) ------------
@@ -2195,7 +2192,7 @@ rtObjCacheKey cc rtC optFlag rtCflags tmpDir =
       match runCommand "sh" ["-c", script, "sh", cc, flagsPath, rtC]
         -- fail-open-by-design: "" on any failure, per cachedRtObj's contract
         -- above (caller skips the cache entirely on a miss).
-        Ok (0, out, _) => stringTrim out
+        Ok (0, out, _) => trimAscii out
         _ => ""
 
 -- Resolve the cached runtime object, populating the cache on a miss.  Returns
@@ -2281,7 +2278,7 @@ populateRtObj cc rtC optFlag rtCflags dir objPath =
     Ok (0, _, _) => match runCommand "mktemp" [joinPath dir "rtobj_XXXXXX"]
       -- fail-open-by-design: mktemp failure -> "".
       Ok (0, tOut, _) =>
-        let tmpObj = stringTrim tOut
+        let tmpObj = trimAscii tOut
         if tmpObj == "" then
           ""
         else

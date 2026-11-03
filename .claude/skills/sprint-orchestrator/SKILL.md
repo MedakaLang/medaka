@@ -213,10 +213,13 @@ by serialization.
    [W-QUIETER] applies: a path that returned nothing and now returns
    something is untested by construction), *file* (real but out of scope —
    draft the issue, file it, verify by readback since `gh` writes lie; a
-   real style finding on pre-existing code goes as a lettered `file:line`
-   item onto the area's debt issue labelled `S3: friction & debt`, e.g.
-   #4350 for `typecheck.mdk`, because the next `sprint-plan` that touches
-   that file carries it (Val 2026-10-22: debt is cleaned as we go)),
+   style finding on pre-existing code is NOT filed as debt: it is *fix-now*
+   like any other (Val 2026-10-23: "we fix pre-existing style issues as well
+   unless we have a very good reason not to"). A finding left over because a
+   measured constraint blocks it, or because it needs her taste call, is
+   recorded with that reason and goes through `decision-triage`; only a
+   finding blocked by an open decision is filed, as a lettered `file:line`
+   item on the area's `S3: friction & debt` issue (e.g. #4350)),
    *dismiss* (with one NOTES.md line saying why). Anything you'd argue with
    Val about goes to Val.
 3. **Fix round.** Dispatch fix packets (same implementer contract, small

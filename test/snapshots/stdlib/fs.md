@@ -1,5 +1,5 @@
 # META
-source_lines=539
+source_lines=555
 stages=DESUGAR,MARK
 # SOURCE
 {- | Filesystem helpers built on the host file primitives.
@@ -23,8 +23,8 @@ stages=DESUGAR,MARK
 
 import core.{Result(..)}
 import io.{ownerOnlyMode}
-import list.{sortOn}
-import path.{dirname, globReaches, joinPath, matchGlob, segments}
+import list.{last, sortOn}
+import path.{dirname, joinPath, matchGlob, segments}
 import string.{contains, endsWith, indexOf, lastIndexOf, startsWith}
 
 -- # Metadata
@@ -399,10 +399,26 @@ globSkip dirs prefix pattern full =
     && not (globReaches pattern rel)
     && not (dirs && matchGlob pattern "\{rel}/")
 
+-- Whether some path strictly below the directory `dir` can match `pattern`.
+-- `**` does not pass through a dot directory, so `globSkip` leaves such a
+-- directory unentered when this is False for it. Each non-`**` segment is
+-- matched by `matchGlob` on that one segment alone.
+globReaches : String -> String -> Bool
+globReaches pattern dir = reachSegments (segments pattern) (segments dir)
+
+reachSegments : List String -> List String -> Bool
+reachSegments [] [] = False
+reachSegments (_ :: _) [] = True
+reachSegments [] (_ :: _) = False
+reachSegments ("**" :: ps) (d :: ds) =
+  reachSegments ps (d :: ds)
+    || not (startsWith "." d) && reachSegments ("**" :: ps) ds
+reachSegments (p :: ps) (d :: ds) = matchGlob p d && reachSegments ps ds
+
 isDotName : List String -> Bool
-isDotName [] = False
-isDotName [s] = startsWith "." s
-isDotName (_ :: rest) = isDotName rest
+isDotName segs = match last segs
+  None => False
+  Some name => startsWith "." name
 
 wildcardIndex : String -> Option Int
 wildcardIndex s = match (indexOf "*" s, indexOf "?" s)
@@ -544,8 +560,8 @@ prop "Debug FileStat separates records that Eq separates" (n : Int) (b : Bool) =
 # DESUGAR
 (DUse false (UseGroup ("core") ((mem "Result" true))))
 (DUse false (UseGroup ("io") ((mem "ownerOnlyMode" false))))
-(DUse false (UseGroup ("list") ((mem "sortOn" false))))
-(DUse false (UseGroup ("path") ((mem "dirname" false) (mem "globReaches" false) (mem "joinPath" false) (mem "matchGlob" false) (mem "segments" false))))
+(DUse false (UseGroup ("list") ((mem "last" false) (mem "sortOn" false))))
+(DUse false (UseGroup ("path") ((mem "dirname" false) (mem "joinPath" false) (mem "matchGlob" false) (mem "segments" false))))
 (DUse false (UseGroup ("string") ((mem "contains" false) (mem "endsWith" false) (mem "indexOf" false) (mem "lastIndexOf" false) (mem "startsWith" false))))
 (DData Public "FileStat" () ((variant "FileStat" (ConNamed (field "size" (TyCon "Int")) (field "isDir" (TyCon "Bool")) (field "isFile" (TyCon "Bool")) (field "mtime" (TyCon "Float"))))) ())
 (DImpl true "Eq" ((TyCon "FileStat")) () ((im "eq" ((PVar "__x") (PVar "__y")) (EMatch (ETuple (EVar "__x") (EVar "__y")) (arm (PTuple (PRec "FileStat" ((rf "size" (PVar "__a0")) (rf "isDir" (PVar "__a1")) (rf "isFile" (PVar "__a2")) (rf "mtime" (PVar "__a3"))) false) (PRec "FileStat" ((rf "size" (PVar "__b0")) (rf "isDir" (PVar "__b1")) (rf "isFile" (PVar "__b2")) (rf "mtime" (PVar "__b3"))) false)) () (EBinOp "&&" (EBinOp "&&" (EBinOp "&&" (EApp (EApp (EVar "eq") (EVar "__a0")) (EVar "__b0")) (EApp (EApp (EVar "eq") (EVar "__a1")) (EVar "__b1"))) (EApp (EApp (EVar "eq") (EVar "__a2")) (EVar "__b2"))) (EApp (EApp (EVar "eq") (EVar "__a3")) (EVar "__b3"))))))))
@@ -602,10 +618,16 @@ prop "Debug FileStat separates records that Eq separates" (n : Int) (b : Bool) =
 (DFunDef false "globLevels" ((PVar "prefix") (PVar "pattern")) (EIf (EApp (EApp (EVar "any") (ELam ((PVar "_s")) (EBinOp "==" (EVar "_s") (ELit (LString "**"))))) (EApp (EVar "segments") (EVar "pattern"))) (EUnOp "-" (ELit (LInt 1))) (EBinOp "-" (EApp (EVar "length") (EApp (EVar "segments") (EVar "pattern"))) (EApp (EVar "length") (EApp (EVar "segments") (EVar "prefix"))))))
 (DTypeSig false "globSkip" (TyFun (TyCon "Bool") (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyCon "String") (TyCon "Bool"))))))
 (DFunDef false "globSkip" ((PVar "dirs") (PVar "prefix") (PVar "pattern") (PVar "full")) (EBlock (DoLet false false (PVar "rel") (EApp (EApp (EVar "dropDotSlash") (EVar "prefix")) (EVar "full"))) (DoExpr (EBinOp "&&" (EBinOp "&&" (EApp (EVar "isDotName") (EApp (EVar "segments") (EVar "rel"))) (EApp (EVar "not") (EApp (EApp (EVar "globReaches") (EVar "pattern")) (EVar "rel")))) (EApp (EVar "not") (EBinOp "&&" (EVar "dirs") (EApp (EApp (EVar "matchGlob") (EVar "pattern")) (EBinOp "++" (EBinOp "++" (ELit (LString "")) (EApp (EVar "display") (EVar "rel"))) (ELit (LString "/"))))))))))
+(DTypeSig false "globReaches" (TyFun (TyCon "String") (TyFun (TyCon "String") (TyCon "Bool"))))
+(DFunDef false "globReaches" ((PVar "pattern") (PVar "dir")) (EApp (EApp (EVar "reachSegments") (EApp (EVar "segments") (EVar "pattern"))) (EApp (EVar "segments") (EVar "dir"))))
+(DTypeSig false "reachSegments" (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyCon "Bool"))))
+(DFunDef false "reachSegments" ((PList) (PList)) (EVar "False"))
+(DFunDef false "reachSegments" ((PCons PWild PWild) (PList)) (EVar "True"))
+(DFunDef false "reachSegments" ((PList) (PCons PWild PWild)) (EVar "False"))
+(DFunDef false "reachSegments" ((PCons (PLit (LString "**")) (PVar "ps")) (PCons (PVar "d") (PVar "ds"))) (EBinOp "||" (EApp (EApp (EVar "reachSegments") (EVar "ps")) (EBinOp "::" (EVar "d") (EVar "ds"))) (EBinOp "&&" (EApp (EVar "not") (EApp (EApp (EVar "startsWith") (ELit (LString "."))) (EVar "d"))) (EApp (EApp (EVar "reachSegments") (EBinOp "::" (ELit (LString "**")) (EVar "ps"))) (EVar "ds")))))
+(DFunDef false "reachSegments" ((PCons (PVar "p") (PVar "ps")) (PCons (PVar "d") (PVar "ds"))) (EBinOp "&&" (EApp (EApp (EVar "matchGlob") (EVar "p")) (EVar "d")) (EApp (EApp (EVar "reachSegments") (EVar "ps")) (EVar "ds"))))
 (DTypeSig false "isDotName" (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyCon "Bool")))
-(DFunDef false "isDotName" ((PList)) (EVar "False"))
-(DFunDef false "isDotName" ((PList (PVar "s"))) (EApp (EApp (EVar "startsWith") (ELit (LString "."))) (EVar "s")))
-(DFunDef false "isDotName" ((PCons PWild (PVar "rest"))) (EApp (EVar "isDotName") (EVar "rest")))
+(DFunDef false "isDotName" ((PVar "segs")) (EMatch (EApp (EVar "last") (EVar "segs")) (arm (PCon "None") () (EVar "False")) (arm (PCon "Some" (PVar "name")) () (EApp (EApp (EVar "startsWith") (ELit (LString "."))) (EVar "name")))))
 (DTypeSig false "wildcardIndex" (TyFun (TyCon "String") (TyApp (TyCon "Option") (TyCon "Int"))))
 (DFunDef false "wildcardIndex" ((PVar "s")) (EMatch (ETuple (EApp (EApp (EVar "indexOf") (ELit (LString "*"))) (EVar "s")) (EApp (EApp (EVar "indexOf") (ELit (LString "?"))) (EVar "s"))) (arm (PTuple (PCon "Some" (PVar "a")) (PCon "Some" (PVar "b"))) () (EApp (EVar "Some") (EApp (EApp (EVar "min") (EVar "a")) (EVar "b")))) (arm (PTuple (PCon "Some" (PVar "a")) (PCon "None")) () (EApp (EVar "Some") (EVar "a"))) (arm (PTuple (PCon "None") (PVar "b")) () (EVar "b"))))
 (DTypeSig false "dirPrefix" (TyFun (TyCon "String") (TyCon "String")))
@@ -629,8 +651,8 @@ prop "Debug FileStat separates records that Eq separates" (n : Int) (b : Bool) =
 # MARK
 (DUse false (UseGroup ("core") ((mem "Result" true))))
 (DUse false (UseGroup ("io") ((mem "ownerOnlyMode" false))))
-(DUse false (UseGroup ("list") ((mem "sortOn" false))))
-(DUse false (UseGroup ("path") ((mem "dirname" false) (mem "globReaches" false) (mem "joinPath" false) (mem "matchGlob" false) (mem "segments" false))))
+(DUse false (UseGroup ("list") ((mem "last" false) (mem "sortOn" false))))
+(DUse false (UseGroup ("path") ((mem "dirname" false) (mem "joinPath" false) (mem "matchGlob" false) (mem "segments" false))))
 (DUse false (UseGroup ("string") ((mem "contains" false) (mem "endsWith" false) (mem "indexOf" false) (mem "lastIndexOf" false) (mem "startsWith" false))))
 (DData Public "FileStat" () ((variant "FileStat" (ConNamed (field "size" (TyCon "Int")) (field "isDir" (TyCon "Bool")) (field "isFile" (TyCon "Bool")) (field "mtime" (TyCon "Float"))))) ())
 (DImpl true "Eq" ((TyCon "FileStat")) () ((im "eq" ((PVar "__x") (PVar "__y")) (EMatch (ETuple (EVar "__x") (EVar "__y")) (arm (PTuple (PRec "FileStat" ((rf "size" (PVar "__a0")) (rf "isDir" (PVar "__a1")) (rf "isFile" (PVar "__a2")) (rf "mtime" (PVar "__a3"))) false) (PRec "FileStat" ((rf "size" (PVar "__b0")) (rf "isDir" (PVar "__b1")) (rf "isFile" (PVar "__b2")) (rf "mtime" (PVar "__b3"))) false)) () (EBinOp "&&" (EBinOp "&&" (EBinOp "&&" (EApp (EApp (EMethodRef "eq") (EVar "__a0")) (EVar "__b0")) (EApp (EApp (EMethodRef "eq") (EVar "__a1")) (EVar "__b1"))) (EApp (EApp (EMethodRef "eq") (EVar "__a2")) (EVar "__b2"))) (EApp (EApp (EMethodRef "eq") (EVar "__a3")) (EVar "__b3"))))))))
@@ -687,10 +709,16 @@ prop "Debug FileStat separates records that Eq separates" (n : Int) (b : Bool) =
 (DFunDef false "globLevels" ((PVar "prefix") (PVar "pattern")) (EIf (EApp (EApp (EDictApp "any") (ELam ((PVar "_s")) (EBinOp "==" (EVar "_s") (ELit (LString "**"))))) (EApp (EVar "segments") (EVar "pattern"))) (EUnOp "-" (ELit (LInt 1))) (EBinOp "-" (EApp (EMethodRef "length") (EApp (EVar "segments") (EVar "pattern"))) (EApp (EMethodRef "length") (EApp (EVar "segments") (EVar "prefix"))))))
 (DTypeSig false "globSkip" (TyFun (TyCon "Bool") (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyCon "String") (TyCon "Bool"))))))
 (DFunDef false "globSkip" ((PVar "dirs") (PVar "prefix") (PVar "pattern") (PVar "full")) (EBlock (DoLet false false (PVar "rel") (EApp (EApp (EVar "dropDotSlash") (EVar "prefix")) (EVar "full"))) (DoExpr (EBinOp "&&" (EBinOp "&&" (EApp (EVar "isDotName") (EApp (EVar "segments") (EVar "rel"))) (EApp (EVar "not") (EApp (EApp (EVar "globReaches") (EVar "pattern")) (EVar "rel")))) (EApp (EVar "not") (EBinOp "&&" (EVar "dirs") (EApp (EApp (EVar "matchGlob") (EVar "pattern")) (EBinOp "++" (EBinOp "++" (ELit (LString "")) (EApp (EMethodRef "display") (EVar "rel"))) (ELit (LString "/"))))))))))
+(DTypeSig false "globReaches" (TyFun (TyCon "String") (TyFun (TyCon "String") (TyCon "Bool"))))
+(DFunDef false "globReaches" ((PVar "pattern") (PVar "dir")) (EApp (EApp (EVar "reachSegments") (EApp (EVar "segments") (EVar "pattern"))) (EApp (EVar "segments") (EVar "dir"))))
+(DTypeSig false "reachSegments" (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyCon "Bool"))))
+(DFunDef false "reachSegments" ((PList) (PList)) (EVar "False"))
+(DFunDef false "reachSegments" ((PCons PWild PWild) (PList)) (EVar "True"))
+(DFunDef false "reachSegments" ((PList) (PCons PWild PWild)) (EVar "False"))
+(DFunDef false "reachSegments" ((PCons (PLit (LString "**")) (PVar "ps")) (PCons (PVar "d") (PVar "ds"))) (EBinOp "||" (EApp (EApp (EVar "reachSegments") (EVar "ps")) (EBinOp "::" (EVar "d") (EVar "ds"))) (EBinOp "&&" (EApp (EVar "not") (EApp (EApp (EVar "startsWith") (ELit (LString "."))) (EVar "d"))) (EApp (EApp (EVar "reachSegments") (EBinOp "::" (ELit (LString "**")) (EVar "ps"))) (EVar "ds")))))
+(DFunDef false "reachSegments" ((PCons (PVar "p") (PVar "ps")) (PCons (PVar "d") (PVar "ds"))) (EBinOp "&&" (EApp (EApp (EVar "matchGlob") (EVar "p")) (EVar "d")) (EApp (EApp (EVar "reachSegments") (EVar "ps")) (EVar "ds"))))
 (DTypeSig false "isDotName" (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyCon "Bool")))
-(DFunDef false "isDotName" ((PList)) (EVar "False"))
-(DFunDef false "isDotName" ((PList (PVar "s"))) (EApp (EApp (EVar "startsWith") (ELit (LString "."))) (EVar "s")))
-(DFunDef false "isDotName" ((PCons PWild (PVar "rest"))) (EApp (EVar "isDotName") (EVar "rest")))
+(DFunDef false "isDotName" ((PVar "segs")) (EMatch (EApp (EVar "last") (EVar "segs")) (arm (PCon "None") () (EVar "False")) (arm (PCon "Some" (PVar "name")) () (EApp (EApp (EVar "startsWith") (ELit (LString "."))) (EVar "name")))))
 (DTypeSig false "wildcardIndex" (TyFun (TyCon "String") (TyApp (TyCon "Option") (TyCon "Int"))))
 (DFunDef false "wildcardIndex" ((PVar "s")) (EMatch (ETuple (EApp (EApp (EVar "indexOf") (ELit (LString "*"))) (EVar "s")) (EApp (EApp (EVar "indexOf") (ELit (LString "?"))) (EVar "s"))) (arm (PTuple (PCon "Some" (PVar "a")) (PCon "Some" (PVar "b"))) () (EApp (EVar "Some") (EApp (EApp (EMethodRef "min") (EVar "a")) (EVar "b")))) (arm (PTuple (PCon "Some" (PVar "a")) (PCon "None")) () (EApp (EVar "Some") (EVar "a"))) (arm (PTuple (PCon "None") (PVar "b")) () (EVar "b"))))
 (DTypeSig false "dirPrefix" (TyFun (TyCon "String") (TyCon "String")))

@@ -609,6 +609,31 @@ The string without leading or trailing whitespace.
 "hi"
 ```
 
+### `trimAscii`
+
+```
+trimAscii : String -> String
+trimAscii s
+```
+
+The string without leading or trailing ASCII whitespace: code points
+9 to 13 and 32, and no others.
+
+Use it for a machine format whose grammar defines ASCII whitespace, not
+text: TOML keys and table headers, HTTP header values, SQL number text.
+A no-break space and the separators 28 to 31 are data there, so `trim`,
+which strips them, is wrong for those formats.
+
+```medaka
+> trimAscii "\t x \r\n"
+"x"
+```
+
+```medaka
+> trimAscii "\u{00A0}x" == "\u{00A0}x"
+True
+```
+
 ### `toUpper`
 
 ```

@@ -1,0 +1,60 @@
+import test.{expectAll, expectTextContainsAll, fail, pass}
+import test_process.{withScratchDir}
+import tools.mcp_telemetry.{
+  TraceContext(..), TraceSettings(..), TraceToken(..), beginCall, finishCall,
+  recordProtocol
+}
+
+test "disabled trace returns no token" =
+  match (beginCall
+    TraceContext { traceSettings = None, traceCounter = Ref 0 }
+    "0"
+    "medaka_check")
+    TraceDisabled => pass
+    _ => fail "disabled tracing created a token"
+
+test "completion and cancel records contain selected metadata" = withScratchDir
+  (dir =>
+    let path = "\{dir}/trace.jsonl"
+    let trace = TraceContext {
+      traceSettings = Some TraceSettings {
+        tracePath = path,
+        traceSession = "session",
+        traceClassification = "probe",
+      },
+      traceCounter = Ref 0,
+    }
+    let token = beginCall trace "0" "medaka_check"
+    finishCall token "success" 42
+    recordProtocol trace "cancel_requested" "1"
+    match readFile path
+      Err e => fail e
+      Ok text => expectAll [
+        expectTextContainsAll
+          [
+            "\"event\":\"start\"", "\"event\":\"finish\"",
+            "\"outcome\":\"success\"", "\"response_bytes\":42",
+            "\"event\":\"cancel_requested\""
+          ]
+          text,
+      ])
+
+test "stdout cannot be a trace destination" =
+  match appendFileExceptStdout "/dev/stdout" "telemetry must not appear\n"
+    Err _ => pass
+    Ok _ => fail "stdout was accepted as a trace destination"
+
+test "trace write failures leave the call boundary usable" = withScratchDir
+  (dir =>
+    let trace = TraceContext {
+      traceSettings = Some TraceSettings {
+        tracePath = "\{dir}/missing/trace",
+        traceSession = "session",
+        traceClassification = "probe",
+      },
+      traceCounter = Ref 0,
+    }
+    let token = beginCall trace "0" "medaka_check"
+    finishCall token "success" 42
+    recordProtocol trace "cancel_requested" "1"
+    pass)

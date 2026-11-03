@@ -19,8 +19,8 @@
 
 import core.{Result(..)}
 import io.{ownerOnlyMode}
-import list.{sortOn}
-import path.{dirname, globReaches, joinPath, matchGlob, segments}
+import list.{last, sortOn}
+import path.{dirname, joinPath, matchGlob, segments}
 import string.{contains, endsWith, indexOf, lastIndexOf, startsWith}
 
 -- # Metadata
@@ -395,10 +395,26 @@ globSkip dirs prefix pattern full =
     && not (globReaches pattern rel)
     && not (dirs && matchGlob pattern "\{rel}/")
 
+-- Whether some path strictly below the directory `dir` can match `pattern`.
+-- `**` does not pass through a dot directory, so `globSkip` leaves such a
+-- directory unentered when this is False for it. Each non-`**` segment is
+-- matched by `matchGlob` on that one segment alone.
+globReaches : String -> String -> Bool
+globReaches pattern dir = reachSegments (segments pattern) (segments dir)
+
+reachSegments : List String -> List String -> Bool
+reachSegments [] [] = False
+reachSegments (_ :: _) [] = True
+reachSegments [] (_ :: _) = False
+reachSegments ("**" :: ps) (d :: ds) =
+  reachSegments ps (d :: ds)
+    || not (startsWith "." d) && reachSegments ("**" :: ps) ds
+reachSegments (p :: ps) (d :: ds) = matchGlob p d && reachSegments ps ds
+
 isDotName : List String -> Bool
-isDotName [] = False
-isDotName [s] = startsWith "." s
-isDotName (_ :: rest) = isDotName rest
+isDotName segs = match last segs
+  None => False
+  Some name => startsWith "." name
 
 wildcardIndex : String -> Option Int
 wildcardIndex s = match (indexOf "*" s, indexOf "?" s)

@@ -64,9 +64,9 @@ import frontend.lexer.{
   lineStartsOf,
   offsetToLineColFast,
 }
-import support.util.{joinNl, reverseL, splitNl, startsWith, stringTrim}
+import support.util.{joinNl, reverseL, splitNl, startsWith}
 import support.ordmap.{OrdMap, omEmpty, omHasKey, omInsert}
-import string.{replaceAll, toInt}
+import string.{replaceAll, toInt, trimAscii}
 
 -- One native arm's part of a merged probe (`tools/native_probe.mdk`): the
 -- sentinel prefix its transcript is read under, its import lines, its
@@ -364,8 +364,8 @@ export
 firstNonEmptyLine : List String -> String
 firstNonEmptyLine [] = ""
 firstNonEmptyLine (l :: rest)
-  | stringTrim l == "" = firstNonEmptyLine rest
-  | otherwise = stringTrim l
+  | trimAscii l == "" = firstNonEmptyLine rest
+  | otherwise = trimAscii l
 
 -- What a target's own top-level `main` is renamed to inside a probe.  Nothing
 -- in a probe references it, so dead-code elimination drops it.

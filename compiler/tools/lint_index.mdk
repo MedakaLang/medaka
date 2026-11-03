@@ -67,8 +67,9 @@ import support.sexp_value.{
   isCloseByte,
 }
 import support.util.{
-  joinWith, listLen, filterList, anyList, allList, startsWith, stringTrim
+  joinWith, listLen, filterList, anyList, allList, startsWith
 }
+import string.{trimAscii}
 import hash_map.{HashMap, new, setInPlace, has, findWithDefault, entries}
 import list.{sortBy, reverse}
 import path.{basename}
@@ -617,7 +618,7 @@ makeStagingDir : String -> <IO> Result String String
 makeStagingDir dir = match runVerb "mktemp" ["-d", "\{dir}/.staging_XXXXXX"]
   Err e => Err e
   Ok (0, out, _) =>
-    let made = stringTrim out
+    let made = trimAscii out
     if made == "" then Err "mktemp -d printed no path" else Ok made
   Ok (code, _, err) => Err "mktemp -d exited \{intToString code}: \{err}"
 

@@ -671,6 +671,13 @@ catalogRows = [
     (Inline WasmLeaf)
     Interpreted,
   ExternRow
+    "appendFileExceptStdout"
+    (CSymbol LlvmFile "mdk_append_file_except_stdout")
+    (NotProvided
+      GapPermanent
+      "requires native file descriptors to exclude stdout aliases")
+    Interpreted,
+  ExternRow
     "fileExists"
     (CSymbol LlvmFile "mdk_file_exists")
     (Inline WasmLeaf)

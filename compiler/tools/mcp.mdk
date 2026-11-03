@@ -53,7 +53,10 @@ import json.{
   asInt,
   asArray,
 }
-import string.{stripCR}
+import string.{stripCR, byteLength, startsWith}
+import tools.mcp_telemetry.{
+  TraceContext(..), TraceSettings(..), beginCall, finishCall, recordProtocol
+}
 import support.source_index.{
   SourceIndex, indexSource, sourcePositionToOffset, offsetToUtf16Position,
   clampSourcePositionToOffset, sourceEndUtf16Position
@@ -1923,7 +1926,9 @@ runTestTool runtimeSrc coreSrc stdlibDir args = match fieldStr "file" args
 
 -- ── tools/call handler ───────────────────────────────────────────────────────
 
-handleToolsCall : Ref McpSyntaxState ->
+handleToolsCall : TraceContext ->
+  String ->
+  Ref McpSyntaxState ->
   String ->
   String ->
   String ->
@@ -1931,24 +1936,58 @@ handleToolsCall : Ref McpSyntaxState ->
   Json ->
   (Unit -> <IO> Option String) ->
   <IO> Unit
-handleToolsCall state runtimeSrc coreSrc stdlibDir idJson params stalenessCheck =
+handleToolsCall trace requestId state runtimeSrc coreSrc stdlibDir idJson params stalenessCheck =
   match fieldStr "name" params
     None =>
-      writeMessage (errorMsg idJson (0 - 32602) "tools/call: missing 'name'")
+      let token = beginCall trace requestId "unknown"
+      let response = errorMsg idJson (0 - 32602) "tools/call: missing 'name'"
+      writeMessage response
+      finishCall token "protocol_error" (responseWireSize response)
     Some name =>
+      let safeName = if isKnownTool name then name else "unknown"
+      let token = beginCall trace requestId safeName
       let args = fieldOr "arguments" params
       logMcpCall "tools/call" name (stringify args)
       selectToolProfile args
       match callTool state runtimeSrc coreSrc stdlibDir name args
         None =>
-          writeMessage
-            (errorMsg
-              idJson
-              (0 - 32601)
-              (stringConcat ["Unknown tool: ", name]))
+          let response =
+            errorMsg idJson (0 - 32601) (stringConcat ["Unknown tool: ", name])
+          writeMessage response
+          finishCall token "protocol_error" (responseWireSize response)
         Some result =>
           let augmented = attachStaleness stalenessCheck result
-          writeMessage (responseMsg idJson augmented)
+          let response = responseMsg idJson augmented
+          writeMessage response
+          finishCall
+            token
+            (traceOutcome name result)
+            (responseWireSize response)
+
+responseWireSize : Json -> Int
+responseWireSize response = byteLength (stringify response) + 1
+
+isKnownTool : String -> Bool
+isKnownTool name = isSome (lookupTool name mcpTools)
+
+traceOutcome : String -> Json -> String
+traceOutcome name result = match get "isError" result
+  Some (JBool True) =>
+    if name == "medaka_check" && checkHasDiagnostics result then
+      "success"
+    else
+      "tool_error"
+  _ => "success"
+
+checkHasDiagnostics : Json -> Bool
+checkHasDiagnostics result = match get "content" result
+  Some (JArray content) =>
+    if arrayLength content == 0 then
+      False
+    else match get "text" (arrayGetUnsafe 0 content)
+      Some (JString text) => startsWith "{\"files\":" text
+      _ => False
+  _ => False
 
 -- The profile of the project holding the call's `file`, chosen afresh per call
 -- (this server analyzes many projects).  An unreadable `[target]` leaves no
@@ -1973,7 +2012,9 @@ selectToolProfile args = match fieldStr "file" args
 -- *notification* is ignored.  A top-level batch array (`[{...},{...}]`) is not
 -- a supported transport shape here — it gets one Invalid Request error rather
 -- than being silently dropped.
-dispatchMsg : Ref McpSyntaxState ->
+dispatchMsg : TraceContext ->
+  String ->
+  Ref McpSyntaxState ->
   String ->
   String ->
   String ->
@@ -1981,14 +2022,17 @@ dispatchMsg : Ref McpSyntaxState ->
   (Unit -> <IO> Option String) ->
   String ->
   <IO> Unit
-dispatchMsg state runtimeSrc coreSrc stdlibDir msg stalenessCheck serverVersion =
+dispatchMsg trace requestId state runtimeSrc coreSrc stdlibDir msg stalenessCheck serverVersion =
   match asArray msg
     Some _ =>
-      writeMessage
-        (errorMsg
+      let token = beginCall trace requestId "protocol"
+      let response =
+        errorMsg
           JNull
           (0 - 32600)
-          "Invalid Request: batch requests are not supported")
+          "Invalid Request: batch requests are not supported"
+      writeMessage response
+      finishCall token "protocol_error" (responseWireSize response)
     None => match methodOf msg
       None => logMcp "ignored: message has no string 'method' field"
       Some meth =>
@@ -1996,7 +2040,9 @@ dispatchMsg state runtimeSrc coreSrc stdlibDir msg stalenessCheck serverVersion 
         -- tools/call gets its own richer line (tool name + args) inside
         -- handleToolsCall — don't double-log it here.
         let _ = if meth == "tools/call" then unit else logMcpCall meth "" ""
-        if meth == "notifications/initialized" then
+        if meth == "notifications/cancelled" then
+          recordProtocol trace "cancel_requested" requestId
+        else if meth == "notifications/initialized" then
           unit
         else match get "id" msg
           None => unit  -- notification: no response for ANY method
@@ -2014,6 +2060,8 @@ dispatchMsg state runtimeSrc coreSrc stdlibDir msg stalenessCheck serverVersion 
               writeMessage (responseMsg idJson toolsListResult)
             else if meth == "tools/call" then
               handleToolsCall
+                trace
+                requestId
                 state
                 runtimeSrc
                 coreSrc
@@ -2022,17 +2070,22 @@ dispatchMsg state runtimeSrc coreSrc stdlibDir msg stalenessCheck serverVersion 
                 params
                 stalenessCheck
             else
-              writeMessage
-                (errorMsg
+              let token = beginCall trace requestId "protocol"
+              let response =
+                errorMsg
                   idJson
                   (0 - 32601)
-                  (stringConcat ["Method not found: ", meth]))
+                  (stringConcat ["Method not found: ", meth])
+              writeMessage response
+              finishCall token "protocol_error" (responseWireSize response)
 
 -- ── read loop ────────────────────────────────────────────────────────────────
 
 -- Parse and dispatch one input line.  Blank lines and malformed JSON are logged
 -- to stderr and skipped, never crashing the stream.
-handleLine : Ref McpSyntaxState ->
+handleLine : TraceContext ->
+  String ->
+  Ref McpSyntaxState ->
   String ->
   String ->
   String ->
@@ -2040,7 +2093,7 @@ handleLine : Ref McpSyntaxState ->
   (Unit -> <IO> Option String) ->
   String ->
   <IO> Unit
-handleLine state runtimeSrc coreSrc stdlibDir raw stalenessCheck serverVersion =
+handleLine trace requestId state runtimeSrc coreSrc stdlibDir raw stalenessCheck serverVersion =
   let line = stripCR raw
   if line == "" then
     unit
@@ -2048,6 +2101,8 @@ handleLine state runtimeSrc coreSrc stdlibDir raw stalenessCheck serverVersion =
     Err e => logMcp (stringConcat ["parse error (skipped): ", e])
     Ok msg =>
       dispatchMsg
+        trace
+        requestId
         state
         runtimeSrc
         coreSrc
@@ -2057,18 +2112,24 @@ handleLine state runtimeSrc coreSrc stdlibDir raw stalenessCheck serverVersion =
         serverVersion
 
 -- The session loop: one JSON object per line until stdin EOF (clean shutdown).
-serveLoop : Ref McpSyntaxState ->
+serveLoop : TraceContext ->
+  Ref McpSyntaxState ->
   String ->
   String ->
   String ->
   (Unit -> <IO> Option String) ->
   String ->
   <IO> Unit
-serveLoop state runtimeSrc coreSrc stdlibDir stalenessCheck serverVersion =
+serveLoop trace state runtimeSrc coreSrc stdlibDir stalenessCheck serverVersion =
   match readLineOpt ()
     None => unit
     Some raw =>
+      let counter = trace.traceCounter
+      let requestId = intToString !counter
+      counter := !counter + 1
       handleLine
+        trace
+        requestId
         state
         runtimeSrc
         coreSrc
@@ -2076,7 +2137,14 @@ serveLoop state runtimeSrc coreSrc stdlibDir stalenessCheck serverVersion =
         raw
         stalenessCheck
         serverVersion
-      serveLoop state runtimeSrc coreSrc stdlibDir stalenessCheck serverVersion
+      serveLoop
+        trace
+        state
+        runtimeSrc
+        coreSrc
+        stdlibDir
+        stalenessCheck
+        serverVersion
 
 -- Public entry point for the driver (`runMcpCmd` in medaka_cli.mdk).  The prelude
 -- sources + stdlib dir are threaded in so tools can run the compiler pipeline
@@ -2094,7 +2162,23 @@ runMcpServer : String ->
   <IO> Unit
 runMcpServer runtimeSrc coreSrc stdlibDir stalenessCheck serverVersion =
   logMcp "medaka mcp server start"
+  let path = optionOr "" (getEnv "MEDAKA_MCP_TRACE")
+  let settings =
+    if path == "" then
+      None
+    else
+      Some TraceSettings {
+        tracePath = path,
+        traceSession = optionOr "session" (getEnv "MEDAKA_MCP_TRACE_SESSION"),
+        traceClassification =
+          if getEnv "MEDAKA_MCP_TRACE_CLASS" == Some "probe" then
+            "probe"
+          else
+            "organic",
+      }
+  let trace = TraceContext { traceSettings = settings, traceCounter = Ref 0 }
   serveLoop
+    trace
     (Ref emptyMcpSyntaxState)
     runtimeSrc
     coreSrc

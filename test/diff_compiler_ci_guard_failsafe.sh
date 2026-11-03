@@ -155,7 +155,48 @@ def yaml_extract():
                 counts[job] += 1
                 if not disjunct_present(if_text, refjob):
                     violations.append((job, lineno, refjob, if_text))
-    return violations, counts, len(jobs), aggregator_problems(jobs)
+    return violations, counts, len(jobs), aggregator_problems(jobs) + collector_problems(doc, jobs)
+
+def collector_problems(doc, jobs):
+    job = jobs.get('compiler-soundness') or {}
+    steps = job.get('steps') or []
+    matches = [step for step in steps if isinstance(step, dict)
+               and step.get('name') == 'MCP collector privileged behavior']
+    if len(matches) != 1:
+        return [f"compiler-soundness must have exactly one MCP collector privileged behavior step; found {len(matches)}"]
+    step = matches[0]
+    problems = []
+    if len(steps) < 2 or steps[1] is not step:
+        problems.append('compiler-soundness MCP collector step must immediately follow checkout')
+    checkout = steps[0] if steps and isinstance(steps[0], dict) else {}
+    checkout_with = checkout.get('with') or {}
+    if (set(checkout) - {'uses', 'with', '__line__'}
+            or checkout.get('uses') != 'actions/checkout@v4'
+            or not isinstance(checkout_with, dict)
+            or {k: str(v) for k, v in checkout_with.items() if k != '__line__'}
+               != {'fetch-depth': '0', 'filter': 'blob:none'}):
+        problems.append('compiler-soundness must begin with the pinned checkout configuration')
+    command = 'sudo env MEDAKA_MCP_REQUIRE_AUTHORITY=1 sh test/diff_compiler_mcp_collector.sh'
+    command_steps = [s for s in steps if isinstance(s, dict) and s.get('run') == command]
+    if step.get('run') != command or len(command_steps) != 1:
+        problems.append('compiler-soundness must have exactly one strict MCP collector command in the named step')
+    extra = set(step) - {'name', 'run', '__line__'}
+    if extra:
+        problems.append(f'compiler-soundness MCP collector step has unexpected fields: {sorted(extra)}')
+    if 'continue-on-error' in job:
+        problems.append('compiler-soundness must not set job-level continue-on-error')
+    if collapse(str(job.get('if', ''))) != '${{ !cancelled() }}':
+        problems.append('compiler-soundness must run unless the workflow is cancelled')
+    workflow_env = doc.get('env') or {}
+    if not isinstance(workflow_env, dict) or set(workflow_env) - {'ORACLE_OPT', '__line__'}:
+        problems.append('workflow environment must not alter collector execution')
+    if 'env' in job:
+        problems.append('compiler-soundness must not override the collector environment')
+    for scope, definition in (('workflow', doc), ('compiler-soundness', job)):
+        defaults = definition.get('defaults') or {}
+        if not isinstance(defaults, dict) or 'run' in defaults:
+            problems.append(f'{scope} must not override run defaults for the MCP collector step')
+    return problems
 
 # A required context that only aggregates a matrix: it must need that matrix and run
 # on `!cancelled()`.  A plain `needs:` skips it when a shard fails, and a skipped
@@ -232,7 +273,7 @@ def regex_extract():
                 if not disjunct_present(if_text, refjob):
                     violations.append((job, i + 1, refjob, ln.strip()))
     print("WARN: aggregator shape (AGGREGATORS) is checked on the YAML path only.")
-    return violations, counts, len(job_ranges), []
+    return violations, counts, len(job_ranges), ["cannot verify the compiler-soundness MCP collector step without YAML parsing"]
 
 try:
     import yaml  # noqa: F401
@@ -273,7 +314,7 @@ if floor_violations:
 
 if agg_problems:
     failed = True
-    print(f"FAIL: {len(agg_problems)} aggregator problem(s) — a red shard could read green:")
+    print(f"FAIL: {len(agg_problems)} required-job problem(s) — required coverage could read green:")
     for p in agg_problems:
         print(f"       {p}")
 

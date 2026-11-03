@@ -7,8 +7,16 @@
 -- real stdlib pair.  Paths are relative to the repository root, where `medaka test`
 -- runs.
 
-import test.{expectEqual, expectTrue}
-import driver.loader.{siblingSubjectId, loadProgramFilesE, LoadError(..)}
+import test.{expectEach, expectEqual, expectTrue}
+import driver.loader.{
+  siblingSubjectId,
+  loadProgramFilesE,
+  LoadError(..),
+  lineValueIsTrue,
+  collectDeps,
+  scanLintInternal,
+  scanSiteRoot,
+}
 import frontend.ast.{Loc(..)}
 
 proj : String
@@ -86,3 +94,44 @@ test "a test module importing a test module loads" = expectTrue
   (match loadProgramFilesE (_ => None) "\{tifix}/foo_test.mdk" [tifix]
     Ok _ => True
     Err _ => False)
+
+test "a trailing form feed or vertical tab on a manifest value is trimmed like any ASCII whitespace" =
+  let inLintSection = False
+  let outsideSection = False
+  expectEach [
+    (
+      "lineValueIsTrue FF",
+      expectTrue (lineValueIsTrue "internal = true\u{0c}"),
+    ),
+    (
+      "lineValueIsTrue VT",
+      expectTrue (lineValueIsTrue "internal = true\u{0b}"),
+    ),
+    (
+      "scanLintInternal FF",
+      expectTrue
+        (scanLintInternal inLintSection ["[lint]", "internal = true\u{0c}"]),
+    ),
+    (
+      "scanSiteRoot FF",
+      expectEqual
+        (Some "src")
+        (scanSiteRoot outsideSection ["site-root = \"src\"\u{0c}"]),
+    ),
+    (
+      "scanLintInternal value before an inline comment",
+      expectTrue
+        (scanLintInternal inLintSection ["[lint]", "internal = true\u{0c}# c"]),
+    ),
+    (
+      "scanLintInternal key side",
+      expectTrue
+        (scanLintInternal inLintSection ["[lint]", "internal\u{0c}= true"]),
+    ),
+    (
+      "collectDeps key side",
+      expectEqual
+        [("dep", "r/../dep")]
+        (collectDeps "r" ["[dependencies]", "dep\u{0c}= \"../dep\""]),
+    ),
+  ]

@@ -3093,6 +3093,39 @@ long long mdk_append_file(long long path, long long content, long long grant) {
   return mdk_write_impl(path, content, "ab");
 }
 
+/* The checked descriptor is also the write target: pathname replacement after
+ * open cannot redirect telemetry onto stdout. Nonregular files are excluded so
+ * device aliases and pipes cannot bypass the identity check or block the server. */
+long long mdk_append_file_except_stdout(long long path, long long content,
+                                       long long grant) {
+  MDK_CONFINE(path, grant, 0, 1);
+  int fd = open((const char *)path + 24,
+                O_WRONLY | O_CREAT | O_APPEND | O_NONBLOCK, 0666);
+  if (fd < 0) return mdk_err(mdk_str_cstr(strerror(errno)));
+  struct stat target, output;
+  int failure = 0;
+  if (fstat(fd, &target) != 0 || fstat(STDOUT_FILENO, &output) != 0)
+    failure = errno ? errno : EIO;
+  else if (!S_ISREG(target.st_mode) ||
+           (target.st_dev == output.st_dev && target.st_ino == output.st_ino))
+    failure = EINVAL;
+  const char *bytes = (const char *)content + 24;
+  size_t remaining = (size_t)((const long long *)content)[1];
+  while (!failure && remaining) {
+    ssize_t written = write(fd, bytes, remaining);
+    if (written < 0 && errno == EINTR) continue;
+    if (written <= 0) {
+      failure = errno ? errno : EIO;
+      break;
+    }
+    bytes += written;
+    remaining -= (size_t)written;
+  }
+  if (close(fd) != 0 && !failure) failure = errno ? errno : EIO;
+  if (failure) return mdk_err(mdk_str_cstr(strerror(failure)));
+  return mdk_ok(1);
+}
+
 /* writeFileBytes : String -> Array Int -> Result String Unit — write raw bytes.
  * arr[0] = length; arr[i+1] = tagged int byte ((byte << 1)|1) for i in 0..len-1.
  * Untag each element: (elem >> 1) & 0xFF.  Byte-clean write counterpart of

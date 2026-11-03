@@ -1,3 +1,4 @@
+abortNote : Ref (Option String)
 addrCell : List (String, Ref (Value a)) -> Int -> String -> Ref (Value a)
 anyAdmits : String -> List String -> <FileRead | a> Bool
 anyTypedImpl : List (Value a) -> Bool
@@ -304,6 +305,7 @@ pAcos : Value a -> <a> Value a
 pAllocBytes : Value a -> <a> Value a
 pAllocBytesIO : Value a -> <IO | a> Value a
 pAppendFile : Value a -> Value a -> <FileWrite | a> Value a
+pAppendFileExceptStdout : Value a -> Value a -> <FileWrite | a> Value a
 pArgs : Value a -> Value a
 pArrayBlit : Value a -> Value a -> Value a -> Value a -> Value a -> <a> Value a
 pArrayCopy : Value a -> <a> Value a

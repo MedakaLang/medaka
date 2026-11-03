@@ -22,12 +22,10 @@ import frontend.lexer.{Comment, commentLine, commentText}
 import frontend.ast.{Decl(..)}
 import frontend.parser.{parseLocatedResult, parseErrorMessage}
 import frontend.desugar.{desugar, moduleAliases, qualifyAliasRefsWith}
-import support.util.{
-  listLen, reverseL, joinNl, startsWith, stringTrim, splitNl, isEmptyL
-}
+import support.util.{listLen, reverseL, joinNl, startsWith, splitNl, isEmptyL}
 import json.{Json(..)}
 import regex.{Regex, mustCompile, isMatch, find}
-import string.{repeat}
+import string.{repeat, trimAscii}
 
 -- ── Data ──────────────────────────────────────────────────────────────────
 
@@ -143,7 +141,7 @@ substr3 : Int -> Int -> String -> String
 substr3 a b s = stringSlice a b s
 
 -- startsWith → support/util.mdk (imported above).
--- trim → stringTrim (support/util.mdk, imported above).
+-- trim → string.trimAscii (imported above).
 
 -- splitNl → support/util.mdk (imported above; #242 dedup of the splitNl cluster).
 
@@ -214,7 +212,7 @@ expandBlock c =
 expandLines : Int -> Int -> List String -> List (Int, String)
 expandLines _ _ [] = []
 expandLines baseLine i (line :: rest) =
-  let trimmed = stringTrim line
+  let trimmed = trimAscii line
   let text = if trimmed == "" then "--" else "-- " ++ trimmed
   (baseLine + i, text) :: expandLines baseLine (i + 1) rest
 
