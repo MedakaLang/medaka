@@ -1,5 +1,5 @@
 # META
-source_lines=2103
+source_lines=2184
 stages=DESUGAR,MARK
 # SOURCE
 import tools.source_snapshot.{
@@ -57,7 +57,10 @@ import json.{
   asInt,
   asArray,
 }
-import string.{stripCR}
+import string.{stripCR, byteLength, startsWith}
+import tools.mcp_telemetry.{
+  TraceContext(..), beginCall, finishCall, recordProtocol
+}
 import support.source_index.{
   SourceIndex, indexSource, sourcePositionToOffset, offsetToUtf16Position,
   clampSourcePositionToOffset, sourceEndUtf16Position
@@ -1927,7 +1930,9 @@ runTestTool runtimeSrc coreSrc stdlibDir args = match fieldStr "file" args
 
 -- ── tools/call handler ───────────────────────────────────────────────────────
 
-handleToolsCall : Ref McpSyntaxState ->
+handleToolsCall : TraceContext ->
+  String ->
+  Ref McpSyntaxState ->
   String ->
   String ->
   String ->
@@ -1935,24 +1940,58 @@ handleToolsCall : Ref McpSyntaxState ->
   Json ->
   (Unit -> <IO> Option String) ->
   <IO> Unit
-handleToolsCall state runtimeSrc coreSrc stdlibDir idJson params stalenessCheck =
+handleToolsCall trace requestId state runtimeSrc coreSrc stdlibDir idJson params stalenessCheck =
   match fieldStr "name" params
     None =>
-      writeMessage (errorMsg idJson (0 - 32602) "tools/call: missing 'name'")
+      let token = beginCall trace requestId "unknown"
+      let response = errorMsg idJson (0 - 32602) "tools/call: missing 'name'"
+      writeMessage response
+      finishCall token "protocol_error" (byteLength (stringify response) + 1)
     Some name =>
+      let safeName = if isKnownTool name then name else "unknown"
+      let token = beginCall trace requestId safeName
       let args = fieldOr "arguments" params
       logMcpCall "tools/call" name (stringify args)
       selectToolProfile args
       match callTool state runtimeSrc coreSrc stdlibDir name args
         None =>
-          writeMessage
-            (errorMsg
-              idJson
-              (0 - 32601)
-              (stringConcat ["Unknown tool: ", name]))
+          let response =
+            errorMsg idJson (0 - 32601) (stringConcat ["Unknown tool: ", name])
+          writeMessage response
+          finishCall
+            token
+            "protocol_error"
+            (byteLength (stringify response) + 1)
         Some result =>
           let augmented = attachStaleness stalenessCheck result
-          writeMessage (responseMsg idJson augmented)
+          let response = responseMsg idJson augmented
+          writeMessage response
+          finishCall
+            token
+            (traceOutcome name result)
+            (byteLength (stringify response) + 1)
+
+isKnownTool : String -> Bool
+isKnownTool name = isSome (lookupTool name mcpTools)
+
+traceOutcome : String -> Json -> String
+traceOutcome name result = match get "isError" result
+  Some (JBool True) =>
+    if name == "medaka_check" && checkHasDiagnostics result then
+      "success"
+    else
+      "tool_error"
+  _ => "success"
+
+checkHasDiagnostics : Json -> Bool
+checkHasDiagnostics result = match get "content" result
+  Some (JArray content) =>
+    if arrayLength content == 0 then
+      False
+    else match get "text" (arrayGetUnsafe 0 content)
+      Some (JString text) => startsWith "{\"files\":" text
+      _ => False
+  _ => False
 
 -- The profile of the project holding the call's `file`, chosen afresh per call
 -- (this server analyzes many projects).  An unreadable `[target]` leaves no
@@ -1977,7 +2016,9 @@ selectToolProfile args = match fieldStr "file" args
 -- *notification* is ignored.  A top-level batch array (`[{...},{...}]`) is not
 -- a supported transport shape here — it gets one Invalid Request error rather
 -- than being silently dropped.
-dispatchMsg : Ref McpSyntaxState ->
+dispatchMsg : TraceContext ->
+  String ->
+  Ref McpSyntaxState ->
   String ->
   String ->
   String ->
@@ -1985,14 +2026,17 @@ dispatchMsg : Ref McpSyntaxState ->
   (Unit -> <IO> Option String) ->
   String ->
   <IO> Unit
-dispatchMsg state runtimeSrc coreSrc stdlibDir msg stalenessCheck serverVersion =
+dispatchMsg trace requestId state runtimeSrc coreSrc stdlibDir msg stalenessCheck serverVersion =
   match asArray msg
     Some _ =>
-      writeMessage
-        (errorMsg
+      let token = beginCall trace requestId "protocol"
+      let response =
+        errorMsg
           JNull
           (0 - 32600)
-          "Invalid Request: batch requests are not supported")
+          "Invalid Request: batch requests are not supported"
+      writeMessage response
+      finishCall token "protocol_error" (byteLength (stringify response) + 1)
     None => match methodOf msg
       None => logMcp "ignored: message has no string 'method' field"
       Some meth =>
@@ -2000,7 +2044,9 @@ dispatchMsg state runtimeSrc coreSrc stdlibDir msg stalenessCheck serverVersion 
         -- tools/call gets its own richer line (tool name + args) inside
         -- handleToolsCall — don't double-log it here.
         let _ = if meth == "tools/call" then unit else logMcpCall meth "" ""
-        if meth == "notifications/initialized" then
+        if meth == "notifications/cancelled" then
+          recordProtocol trace "cancel_requested" requestId
+        else if meth == "notifications/initialized" then
           unit
         else match get "id" msg
           None => unit  -- notification: no response for ANY method
@@ -2018,6 +2064,8 @@ dispatchMsg state runtimeSrc coreSrc stdlibDir msg stalenessCheck serverVersion 
               writeMessage (responseMsg idJson toolsListResult)
             else if meth == "tools/call" then
               handleToolsCall
+                trace
+                requestId
                 state
                 runtimeSrc
                 coreSrc
@@ -2026,17 +2074,25 @@ dispatchMsg state runtimeSrc coreSrc stdlibDir msg stalenessCheck serverVersion 
                 params
                 stalenessCheck
             else
-              writeMessage
-                (errorMsg
+              let token = beginCall trace requestId "protocol"
+              let response =
+                errorMsg
                   idJson
                   (0 - 32601)
-                  (stringConcat ["Method not found: ", meth]))
+                  (stringConcat ["Method not found: ", meth])
+              writeMessage response
+              finishCall
+                token
+                "protocol_error"
+                (byteLength (stringify response) + 1)
 
 -- ── read loop ────────────────────────────────────────────────────────────────
 
 -- Parse and dispatch one input line.  Blank lines and malformed JSON are logged
 -- to stderr and skipped, never crashing the stream.
-handleLine : Ref McpSyntaxState ->
+handleLine : TraceContext ->
+  String ->
+  Ref McpSyntaxState ->
   String ->
   String ->
   String ->
@@ -2044,7 +2100,7 @@ handleLine : Ref McpSyntaxState ->
   (Unit -> <IO> Option String) ->
   String ->
   <IO> Unit
-handleLine state runtimeSrc coreSrc stdlibDir raw stalenessCheck serverVersion =
+handleLine trace requestId state runtimeSrc coreSrc stdlibDir raw stalenessCheck serverVersion =
   let line = stripCR raw
   if line == "" then
     unit
@@ -2052,6 +2108,8 @@ handleLine state runtimeSrc coreSrc stdlibDir raw stalenessCheck serverVersion =
     Err e => logMcp (stringConcat ["parse error (skipped): ", e])
     Ok msg =>
       dispatchMsg
+        trace
+        requestId
         state
         runtimeSrc
         coreSrc
@@ -2061,18 +2119,24 @@ handleLine state runtimeSrc coreSrc stdlibDir raw stalenessCheck serverVersion =
         serverVersion
 
 -- The session loop: one JSON object per line until stdin EOF (clean shutdown).
-serveLoop : Ref McpSyntaxState ->
+serveLoop : TraceContext ->
+  Ref McpSyntaxState ->
   String ->
   String ->
   String ->
   (Unit -> <IO> Option String) ->
   String ->
   <IO> Unit
-serveLoop state runtimeSrc coreSrc stdlibDir stalenessCheck serverVersion =
+serveLoop trace state runtimeSrc coreSrc stdlibDir stalenessCheck serverVersion =
   match readLineOpt ()
     None => unit
     Some raw =>
+      let (TraceContext _ _ _ counter) = trace
+      let requestId = intToString !counter
+      counter := !counter + 1
       handleLine
+        trace
+        requestId
         state
         runtimeSrc
         coreSrc
@@ -2080,7 +2144,14 @@ serveLoop state runtimeSrc coreSrc stdlibDir stalenessCheck serverVersion =
         raw
         stalenessCheck
         serverVersion
-      serveLoop state runtimeSrc coreSrc stdlibDir stalenessCheck serverVersion
+      serveLoop
+        trace
+        state
+        runtimeSrc
+        coreSrc
+        stdlibDir
+        stalenessCheck
+        serverVersion
 
 -- Public entry point for the driver (`runMcpCmd` in medaka_cli.mdk).  The prelude
 -- sources + stdlib dir are threaded in so tools can run the compiler pipeline
@@ -2098,7 +2169,17 @@ runMcpServer : String ->
   <IO> Unit
 runMcpServer runtimeSrc coreSrc stdlibDir stalenessCheck serverVersion =
   logMcp "medaka mcp server start"
+  let trace =
+    TraceContext
+      (optionOr "" (getEnv "MEDAKA_MCP_TRACE"))
+      (optionOr "session" (getEnv "MEDAKA_MCP_TRACE_SESSION"))
+      (if getEnv "MEDAKA_MCP_TRACE_CLASS" == Some "probe" then
+        "probe"
+      else
+        "organic")
+      (Ref 0)
   serveLoop
+    trace
     (Ref emptyMcpSyntaxState)
     runtimeSrc
     coreSrc
@@ -2115,7 +2196,8 @@ runMcpServer runtimeSrc coreSrc stdlibDir stalenessCheck serverVersion =
 (DUse false (UseGroup ("driver" "parse_diag_adapter") ((mem "parseDiagnosticToDiag" false))))
 (DUse false (UseGroup ("frontend" "recovery_result") ((mem "SourceExtent" true) (mem "InvalidReason" true) (mem "RecoveryStop" true) (mem "RecoveryCompleteness" true) (mem "invalidExtent" false) (mem "invalidReason" false) (mem "invalidRegions" false) (mem "recoveredDiagnostics" false) (mem "recoveredCompleteness" false))))
 (DUse false (UseGroup ("json") ((mem "Json" true) (mem "jObject" false) (mem "jArray" false) (mem "stringify" false) (mem "parse" false) (mem "get" false) (mem "asString" false) (mem "asInt" false) (mem "asArray" false))))
-(DUse false (UseGroup ("string") ((mem "stripCR" false))))
+(DUse false (UseGroup ("string") ((mem "stripCR" false) (mem "byteLength" false) (mem "startsWith" false))))
+(DUse false (UseGroup ("tools" "mcp_telemetry") ((mem "TraceContext" true) (mem "beginCall" false) (mem "finishCall" false) (mem "recordProtocol" false))))
 (DUse false (UseGroup ("support" "source_index") ((mem "SourceIndex" false) (mem "indexSource" false) (mem "sourcePositionToOffset" false) (mem "offsetToUtf16Position" false) (mem "clampSourcePositionToOffset" false) (mem "sourceEndUtf16Position" false))))
 (DUse false (UseGroup ("driver" "diagnostics") ((mem "stdlibExportsReader" false) (mem "checkJsonSingle" false) (mem "checkJsonFile" false) (mem "cjAllToJson" false) (mem "cjFileEntry" false) (mem "parseErrDiag" false) (mem "diagIsError" false) (mem "Diag" true))))
 (DUse false (UseGroup ("tools" "lsp") ((mem "typeAtPoint" false) (mem "typeAtPointsWithIndex" false) (mem "structuralParsed" false) (mem "definitionResultParsed" false) (mem "definitionResultsParsed" false) (mem "referencesResult" false) (mem "emptyDocs" false) (mem "docsPut" false) (mem "uriOfPath" false) (mem "responseMsg" false) (mem "fieldOr" false) (mem "fieldStr" false) (mem "methodOf" false) (mem "unit" false))))
@@ -2378,18 +2460,24 @@ runMcpServer runtimeSrc coreSrc stdlibDir stalenessCheck serverVersion =
 (DFunDef false "testReportJson" ((PVar "path") (PVar "requested") (PVar "typeError") (PVar "runs") (PVar "props") (PVar "typecheckSkipped")) (EBlock (DoLet false false (PVar "engines") (EIf (EApp (EVar "isNone") (EVar "typeError")) (EApp (EVar "doctestRunEngineNames") (EVar "runs")) (EVar "requested"))) (DoExpr (EApp (EVar "jObject") (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EListLit (ETuple (ELit (LString "file")) (EApp (EVar "JString") (EVar "path"))) (ETuple (ELit (LString "engine")) (EApp (EVar "JString") (EApp (EVar "primaryEngineName") (EVar "engines")))) (ETuple (ELit (LString "note")) (EApp (EVar "JString") (EApp (EVar "mcpTestCaveat") (EVar "engines"))))) (EApp (EVar "typeErrorField") (EVar "typeError"))) (EApp (EVar "typecheckSkippedField") (EVar "typecheckSkipped"))) (EVar "testDeclsSkippedField")) (EListLit (ETuple (ELit (LString "doctests")) (EApp (EVar "doctestsJson") (EApp (EVar "primaryDoctestRun") (EVar "runs")))) (ETuple (ELit (LString "properties")) (EApp (EVar "jArray") (EApp (EApp (EVar "map") (EVar "propJson")) (EVar "props")))) (ETuple (ELit (LString "summary")) (EApp (EVar "jObject") (EListLit (ETuple (ELit (LString "passed")) (EApp (EVar "JInt") (EBinOp "+" (EApp (EVar "runPassed") (EApp (EVar "primaryDoctestRun") (EVar "runs"))) (EApp (EVar "countPassProps") (EVar "props"))))) (ETuple (ELit (LString "failed")) (EApp (EVar "JInt") (EBinOp "+" (EBinOp "+" (EApp (EVar "runFailed") (EApp (EVar "primaryDoctestRun") (EVar "runs"))) (EApp (EVar "runErrors") (EApp (EVar "primaryDoctestRun") (EVar "runs")))) (EApp (EVar "countFailProps") (EVar "props"))))) (ETuple (ELit (LString "knownRed")) (EApp (EVar "JInt") (EApp (EVar "knownRedCountProps") (EVar "props")))) (ETuple (ELit (LString "ok")) (EApp (EVar "JBool") (EApp (EApp (EApp (EVar "testReportOk") (EVar "typeError")) (EVar "runs")) (EVar "props")))))))))))))
 (DTypeSig false "runTestTool" (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyCon "Json") (TyEffect ("IO") None (TyCon "Json")))))))
 (DFunDef false "runTestTool" ((PVar "runtimeSrc") (PVar "coreSrc") (PVar "stdlibDir") (PVar "args")) (EMatch (EApp (EApp (EVar "fieldStr") (ELit (LString "file"))) (EVar "args")) (arm (PCon "None") () (EApp (EVar "toolArgError") (ELit (LString "medaka_test: missing or invalid argument — require 'file' (string)")))) (arm (PCon "Some" (PVar "path")) () (EMatch (EApp (EVar "mcpTestEnginesArg") (EVar "args")) (arm (PCon "Err" (PVar "msg")) () (EApp (EVar "toolArgError") (EVar "msg"))) (arm (PCon "Ok" (PVar "engines")) () (EMatch (EApp (EVar "readFile") (EVar "path")) (arm (PCon "Err" (PVar "e")) () (EApp (EVar "toolArgError") (EApp (EVar "stringConcat") (EListLit (ELit (LString "medaka_test: cannot read file '")) (EVar "path") (ELit (LString "': ")) (EVar "e"))))) (arm (PCon "Ok" (PVar "tsrc")) () (EMatch (EApp (EVar "parseResult") (EVar "tsrc")) (arm (PCon "Err" (PVar "err")) () (EBlock (DoLet false false (PVar "failure") (EApp (EVar "Some") (EApp (EVar "TestDiagnosticError") (EListLit (ETuple (EVar "path") (EVar "tsrc") (EListLit (EApp (EApp (EVar "parseErrDiag") (EVar "path")) (EVar "err")))))))) (DoExpr (EApp (EApp (EVar "toolTextResult") (EApp (EVar "stringify") (EApp (EApp (EApp (EApp (EApp (EApp (EVar "testReportJson") (EVar "path")) (EVar "engines")) (EVar "failure")) (EListLit)) (EListLit)) (EVar "False")))) (EVar "True"))))) (arm (PCon "Ok" (PVar "decls")) () (EBlock (DoLet false false (PTuple (PVar "typeError") (PVar "runs") (PVar "props") (PVar "_testResults") (PVar "typecheckSkipped")) (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EVar "runTestGradedReportParts") (EVar "engines")) (EVar "runtimeSrc")) (EVar "coreSrc")) (EVar "path")) (EVar "tsrc")) (EApp (EVar "desugar") (EVar "decls"))) (EVar "stdlibDir")) (ELit (LInt 100))) (EVar "None")) (EVar "False"))) (DoExpr (EApp (EApp (EVar "toolTextResult") (EApp (EVar "stringify") (EApp (EApp (EApp (EApp (EApp (EApp (EVar "testReportJson") (EVar "path")) (EVar "engines")) (EVar "typeError")) (EVar "runs")) (EVar "props")) (EVar "typecheckSkipped")))) (EApp (EVar "not") (EApp (EApp (EApp (EVar "testReportOk") (EVar "typeError")) (EVar "runs")) (EVar "props")))))))))))))))
-(DTypeSig false "handleToolsCall" (TyFun (TyApp (TyCon "Ref") (TyCon "McpSyntaxState")) (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyCon "Json") (TyFun (TyCon "Json") (TyFun (TyFun (TyCon "Unit") (TyEffect ("IO") None (TyApp (TyCon "Option") (TyCon "String")))) (TyEffect ("IO") None (TyCon "Unit"))))))))))
-(DFunDef false "handleToolsCall" ((PVar "state") (PVar "runtimeSrc") (PVar "coreSrc") (PVar "stdlibDir") (PVar "idJson") (PVar "params") (PVar "stalenessCheck")) (EMatch (EApp (EApp (EVar "fieldStr") (ELit (LString "name"))) (EVar "params")) (arm (PCon "None") () (EApp (EVar "writeMessage") (EApp (EApp (EApp (EVar "errorMsg") (EVar "idJson")) (EBinOp "-" (ELit (LInt 0)) (ELit (LInt 32602)))) (ELit (LString "tools/call: missing 'name'"))))) (arm (PCon "Some" (PVar "name")) () (EBlock (DoLet false false (PVar "args") (EApp (EApp (EVar "fieldOr") (ELit (LString "arguments"))) (EVar "params"))) (DoExpr (EApp (EApp (EApp (EVar "logMcpCall") (ELit (LString "tools/call"))) (EVar "name")) (EApp (EVar "stringify") (EVar "args")))) (DoExpr (EApp (EVar "selectToolProfile") (EVar "args"))) (DoExpr (EMatch (EApp (EApp (EApp (EApp (EApp (EApp (EVar "callTool") (EVar "state")) (EVar "runtimeSrc")) (EVar "coreSrc")) (EVar "stdlibDir")) (EVar "name")) (EVar "args")) (arm (PCon "None") () (EApp (EVar "writeMessage") (EApp (EApp (EApp (EVar "errorMsg") (EVar "idJson")) (EBinOp "-" (ELit (LInt 0)) (ELit (LInt 32601)))) (EApp (EVar "stringConcat") (EListLit (ELit (LString "Unknown tool: ")) (EVar "name")))))) (arm (PCon "Some" (PVar "result")) () (EBlock (DoLet false false (PVar "augmented") (EApp (EApp (EVar "attachStaleness") (EVar "stalenessCheck")) (EVar "result"))) (DoExpr (EApp (EVar "writeMessage") (EApp (EApp (EVar "responseMsg") (EVar "idJson")) (EVar "augmented"))))))))))))
+(DTypeSig false "handleToolsCall" (TyFun (TyCon "TraceContext") (TyFun (TyCon "String") (TyFun (TyApp (TyCon "Ref") (TyCon "McpSyntaxState")) (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyCon "Json") (TyFun (TyCon "Json") (TyFun (TyFun (TyCon "Unit") (TyEffect ("IO") None (TyApp (TyCon "Option") (TyCon "String")))) (TyEffect ("IO") None (TyCon "Unit"))))))))))))
+(DFunDef false "handleToolsCall" ((PVar "trace") (PVar "requestId") (PVar "state") (PVar "runtimeSrc") (PVar "coreSrc") (PVar "stdlibDir") (PVar "idJson") (PVar "params") (PVar "stalenessCheck")) (EMatch (EApp (EApp (EVar "fieldStr") (ELit (LString "name"))) (EVar "params")) (arm (PCon "None") () (EBlock (DoLet false false (PVar "token") (EApp (EApp (EApp (EVar "beginCall") (EVar "trace")) (EVar "requestId")) (ELit (LString "unknown")))) (DoLet false false (PVar "response") (EApp (EApp (EApp (EVar "errorMsg") (EVar "idJson")) (EBinOp "-" (ELit (LInt 0)) (ELit (LInt 32602)))) (ELit (LString "tools/call: missing 'name'")))) (DoExpr (EApp (EVar "writeMessage") (EVar "response"))) (DoExpr (EApp (EApp (EApp (EVar "finishCall") (EVar "token")) (ELit (LString "protocol_error"))) (EBinOp "+" (EApp (EVar "byteLength") (EApp (EVar "stringify") (EVar "response"))) (ELit (LInt 1))))))) (arm (PCon "Some" (PVar "name")) () (EBlock (DoLet false false (PVar "safeName") (EIf (EApp (EVar "isKnownTool") (EVar "name")) (EVar "name") (ELit (LString "unknown")))) (DoLet false false (PVar "token") (EApp (EApp (EApp (EVar "beginCall") (EVar "trace")) (EVar "requestId")) (EVar "safeName"))) (DoLet false false (PVar "args") (EApp (EApp (EVar "fieldOr") (ELit (LString "arguments"))) (EVar "params"))) (DoExpr (EApp (EApp (EApp (EVar "logMcpCall") (ELit (LString "tools/call"))) (EVar "name")) (EApp (EVar "stringify") (EVar "args")))) (DoExpr (EApp (EVar "selectToolProfile") (EVar "args"))) (DoExpr (EMatch (EApp (EApp (EApp (EApp (EApp (EApp (EVar "callTool") (EVar "state")) (EVar "runtimeSrc")) (EVar "coreSrc")) (EVar "stdlibDir")) (EVar "name")) (EVar "args")) (arm (PCon "None") () (EBlock (DoLet false false (PVar "response") (EApp (EApp (EApp (EVar "errorMsg") (EVar "idJson")) (EBinOp "-" (ELit (LInt 0)) (ELit (LInt 32601)))) (EApp (EVar "stringConcat") (EListLit (ELit (LString "Unknown tool: ")) (EVar "name"))))) (DoExpr (EApp (EVar "writeMessage") (EVar "response"))) (DoExpr (EApp (EApp (EApp (EVar "finishCall") (EVar "token")) (ELit (LString "protocol_error"))) (EBinOp "+" (EApp (EVar "byteLength") (EApp (EVar "stringify") (EVar "response"))) (ELit (LInt 1))))))) (arm (PCon "Some" (PVar "result")) () (EBlock (DoLet false false (PVar "augmented") (EApp (EApp (EVar "attachStaleness") (EVar "stalenessCheck")) (EVar "result"))) (DoLet false false (PVar "response") (EApp (EApp (EVar "responseMsg") (EVar "idJson")) (EVar "augmented"))) (DoExpr (EApp (EVar "writeMessage") (EVar "response"))) (DoExpr (EApp (EApp (EApp (EVar "finishCall") (EVar "token")) (EApp (EApp (EVar "traceOutcome") (EVar "name")) (EVar "result"))) (EBinOp "+" (EApp (EVar "byteLength") (EApp (EVar "stringify") (EVar "response"))) (ELit (LInt 1)))))))))))))
+(DTypeSig false "isKnownTool" (TyFun (TyCon "String") (TyCon "Bool")))
+(DFunDef false "isKnownTool" ((PVar "name")) (EApp (EVar "isSome") (EApp (EApp (EVar "lookupTool") (EVar "name")) (EVar "mcpTools"))))
+(DTypeSig false "traceOutcome" (TyFun (TyCon "String") (TyFun (TyCon "Json") (TyCon "String"))))
+(DFunDef false "traceOutcome" ((PVar "name") (PVar "result")) (EMatch (EApp (EApp (EVar "get") (ELit (LString "isError"))) (EVar "result")) (arm (PCon "Some" (PCon "JBool" (PCon "True"))) () (EIf (EBinOp "&&" (EBinOp "==" (EVar "name") (ELit (LString "medaka_check"))) (EApp (EVar "checkHasDiagnostics") (EVar "result"))) (ELit (LString "success")) (ELit (LString "tool_error")))) (arm PWild () (ELit (LString "success")))))
+(DTypeSig false "checkHasDiagnostics" (TyFun (TyCon "Json") (TyCon "Bool")))
+(DFunDef false "checkHasDiagnostics" ((PVar "result")) (EMatch (EApp (EApp (EVar "get") (ELit (LString "content"))) (EVar "result")) (arm (PCon "Some" (PCon "JArray" (PVar "content"))) () (EIf (EBinOp "==" (EApp (EVar "arrayLength") (EVar "content")) (ELit (LInt 0))) (EVar "False") (EMatch (EApp (EApp (EVar "get") (ELit (LString "text"))) (EApp (EApp (EVar "arrayGetUnsafe") (ELit (LInt 0))) (EVar "content"))) (arm (PCon "Some" (PCon "JString" (PVar "text"))) () (EApp (EApp (EVar "startsWith") (ELit (LString "{\"files\":"))) (EVar "text"))) (arm PWild () (EVar "False"))))) (arm PWild () (EVar "False"))))
 (DTypeSig false "selectToolProfile" (TyFun (TyCon "Json") (TyEffect ("IO") None (TyCon "Unit"))))
 (DFunDef false "selectToolProfile" ((PVar "args")) (EMatch (EApp (EApp (EVar "fieldStr") (ELit (LString "file"))) (EVar "args")) (arm (PCon "Some" (PVar "path")) () (EApp (EApp (EVar "bestEffort") (ELit (LString "an unreadable [target] leaves no profile selected, and medaka_check reports it"))) (EApp (EApp (EVar "carryProjectProfile") (EVar "None")) (EVar "path")))) (arm (PCon "None") () (EApp (EApp (EVar "setRef") (EVar "selectedProfile")) (EVar "None")))))
-(DTypeSig false "dispatchMsg" (TyFun (TyApp (TyCon "Ref") (TyCon "McpSyntaxState")) (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyCon "Json") (TyFun (TyFun (TyCon "Unit") (TyEffect ("IO") None (TyApp (TyCon "Option") (TyCon "String")))) (TyFun (TyCon "String") (TyEffect ("IO") None (TyCon "Unit"))))))))))
-(DFunDef false "dispatchMsg" ((PVar "state") (PVar "runtimeSrc") (PVar "coreSrc") (PVar "stdlibDir") (PVar "msg") (PVar "stalenessCheck") (PVar "serverVersion")) (EMatch (EApp (EVar "asArray") (EVar "msg")) (arm (PCon "Some" PWild) () (EApp (EVar "writeMessage") (EApp (EApp (EApp (EVar "errorMsg") (EVar "JNull")) (EBinOp "-" (ELit (LInt 0)) (ELit (LInt 32600)))) (ELit (LString "Invalid Request: batch requests are not supported"))))) (arm (PCon "None") () (EMatch (EApp (EVar "methodOf") (EVar "msg")) (arm (PCon "None") () (EApp (EVar "logMcp") (ELit (LString "ignored: message has no string 'method' field")))) (arm (PCon "Some" (PVar "meth")) () (EBlock (DoLet false false (PVar "params") (EApp (EApp (EVar "fieldOr") (ELit (LString "params"))) (EVar "msg"))) (DoLet false false PWild (EIf (EBinOp "==" (EVar "meth") (ELit (LString "tools/call"))) (EVar "unit") (EApp (EApp (EApp (EVar "logMcpCall") (EVar "meth")) (ELit (LString ""))) (ELit (LString ""))))) (DoExpr (EIf (EBinOp "==" (EVar "meth") (ELit (LString "notifications/initialized"))) (EVar "unit") (EMatch (EApp (EApp (EVar "get") (ELit (LString "id"))) (EVar "msg")) (arm (PCon "None") () (EVar "unit")) (arm (PCon "Some" (PVar "idJson")) () (EIf (EBinOp "==" (EVar "meth") (ELit (LString "initialize"))) (EApp (EVar "writeMessage") (EApp (EApp (EVar "responseMsg") (EVar "idJson")) (EApp (EApp (EVar "initializeResultFor") (EApp (EVar "negotiateVersion") (EVar "msg"))) (EVar "serverVersion")))) (EIf (EBinOp "==" (EVar "meth") (ELit (LString "ping"))) (EApp (EVar "writeMessage") (EApp (EApp (EVar "responseMsg") (EVar "idJson")) (EApp (EVar "jObject") (EListLit)))) (EIf (EBinOp "==" (EVar "meth") (ELit (LString "shutdown"))) (EApp (EVar "writeMessage") (EApp (EApp (EVar "responseMsg") (EVar "idJson")) (EApp (EVar "jObject") (EListLit)))) (EIf (EBinOp "==" (EVar "meth") (ELit (LString "tools/list"))) (EApp (EVar "writeMessage") (EApp (EApp (EVar "responseMsg") (EVar "idJson")) (EVar "toolsListResult"))) (EIf (EBinOp "==" (EVar "meth") (ELit (LString "tools/call"))) (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EVar "handleToolsCall") (EVar "state")) (EVar "runtimeSrc")) (EVar "coreSrc")) (EVar "stdlibDir")) (EVar "idJson")) (EVar "params")) (EVar "stalenessCheck")) (EApp (EVar "writeMessage") (EApp (EApp (EApp (EVar "errorMsg") (EVar "idJson")) (EBinOp "-" (ELit (LInt 0)) (ELit (LInt 32601)))) (EApp (EVar "stringConcat") (EListLit (ELit (LString "Method not found: ")) (EVar "meth"))))))))))))))))))))
-(DTypeSig false "handleLine" (TyFun (TyApp (TyCon "Ref") (TyCon "McpSyntaxState")) (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyFun (TyCon "Unit") (TyEffect ("IO") None (TyApp (TyCon "Option") (TyCon "String")))) (TyFun (TyCon "String") (TyEffect ("IO") None (TyCon "Unit"))))))))))
-(DFunDef false "handleLine" ((PVar "state") (PVar "runtimeSrc") (PVar "coreSrc") (PVar "stdlibDir") (PVar "raw") (PVar "stalenessCheck") (PVar "serverVersion")) (EBlock (DoLet false false (PVar "line") (EApp (EVar "stripCR") (EVar "raw"))) (DoExpr (EIf (EBinOp "==" (EVar "line") (ELit (LString ""))) (EVar "unit") (EMatch (EApp (EVar "parse") (EVar "line")) (arm (PCon "Err" (PVar "e")) () (EApp (EVar "logMcp") (EApp (EVar "stringConcat") (EListLit (ELit (LString "parse error (skipped): ")) (EVar "e"))))) (arm (PCon "Ok" (PVar "msg")) () (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EVar "dispatchMsg") (EVar "state")) (EVar "runtimeSrc")) (EVar "coreSrc")) (EVar "stdlibDir")) (EVar "msg")) (EVar "stalenessCheck")) (EVar "serverVersion"))))))))
-(DTypeSig false "serveLoop" (TyFun (TyApp (TyCon "Ref") (TyCon "McpSyntaxState")) (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyFun (TyCon "Unit") (TyEffect ("IO") None (TyApp (TyCon "Option") (TyCon "String")))) (TyFun (TyCon "String") (TyEffect ("IO") None (TyCon "Unit")))))))))
-(DFunDef false "serveLoop" ((PVar "state") (PVar "runtimeSrc") (PVar "coreSrc") (PVar "stdlibDir") (PVar "stalenessCheck") (PVar "serverVersion")) (EMatch (EApp (EVar "readLineOpt") (ELit LUnit)) (arm (PCon "None") () (EVar "unit")) (arm (PCon "Some" (PVar "raw")) () (EBlock (DoExpr (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EVar "handleLine") (EVar "state")) (EVar "runtimeSrc")) (EVar "coreSrc")) (EVar "stdlibDir")) (EVar "raw")) (EVar "stalenessCheck")) (EVar "serverVersion"))) (DoExpr (EApp (EApp (EApp (EApp (EApp (EApp (EVar "serveLoop") (EVar "state")) (EVar "runtimeSrc")) (EVar "coreSrc")) (EVar "stdlibDir")) (EVar "stalenessCheck")) (EVar "serverVersion")))))))
+(DTypeSig false "dispatchMsg" (TyFun (TyCon "TraceContext") (TyFun (TyCon "String") (TyFun (TyApp (TyCon "Ref") (TyCon "McpSyntaxState")) (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyCon "Json") (TyFun (TyFun (TyCon "Unit") (TyEffect ("IO") None (TyApp (TyCon "Option") (TyCon "String")))) (TyFun (TyCon "String") (TyEffect ("IO") None (TyCon "Unit"))))))))))))
+(DFunDef false "dispatchMsg" ((PVar "trace") (PVar "requestId") (PVar "state") (PVar "runtimeSrc") (PVar "coreSrc") (PVar "stdlibDir") (PVar "msg") (PVar "stalenessCheck") (PVar "serverVersion")) (EMatch (EApp (EVar "asArray") (EVar "msg")) (arm (PCon "Some" PWild) () (EBlock (DoLet false false (PVar "token") (EApp (EApp (EApp (EVar "beginCall") (EVar "trace")) (EVar "requestId")) (ELit (LString "protocol")))) (DoLet false false (PVar "response") (EApp (EApp (EApp (EVar "errorMsg") (EVar "JNull")) (EBinOp "-" (ELit (LInt 0)) (ELit (LInt 32600)))) (ELit (LString "Invalid Request: batch requests are not supported")))) (DoExpr (EApp (EVar "writeMessage") (EVar "response"))) (DoExpr (EApp (EApp (EApp (EVar "finishCall") (EVar "token")) (ELit (LString "protocol_error"))) (EBinOp "+" (EApp (EVar "byteLength") (EApp (EVar "stringify") (EVar "response"))) (ELit (LInt 1))))))) (arm (PCon "None") () (EMatch (EApp (EVar "methodOf") (EVar "msg")) (arm (PCon "None") () (EApp (EVar "logMcp") (ELit (LString "ignored: message has no string 'method' field")))) (arm (PCon "Some" (PVar "meth")) () (EBlock (DoLet false false (PVar "params") (EApp (EApp (EVar "fieldOr") (ELit (LString "params"))) (EVar "msg"))) (DoLet false false PWild (EIf (EBinOp "==" (EVar "meth") (ELit (LString "tools/call"))) (EVar "unit") (EApp (EApp (EApp (EVar "logMcpCall") (EVar "meth")) (ELit (LString ""))) (ELit (LString ""))))) (DoExpr (EIf (EBinOp "==" (EVar "meth") (ELit (LString "notifications/cancelled"))) (EApp (EApp (EApp (EVar "recordProtocol") (EVar "trace")) (ELit (LString "cancel_requested"))) (EVar "requestId")) (EIf (EBinOp "==" (EVar "meth") (ELit (LString "notifications/initialized"))) (EVar "unit") (EMatch (EApp (EApp (EVar "get") (ELit (LString "id"))) (EVar "msg")) (arm (PCon "None") () (EVar "unit")) (arm (PCon "Some" (PVar "idJson")) () (EIf (EBinOp "==" (EVar "meth") (ELit (LString "initialize"))) (EApp (EVar "writeMessage") (EApp (EApp (EVar "responseMsg") (EVar "idJson")) (EApp (EApp (EVar "initializeResultFor") (EApp (EVar "negotiateVersion") (EVar "msg"))) (EVar "serverVersion")))) (EIf (EBinOp "==" (EVar "meth") (ELit (LString "ping"))) (EApp (EVar "writeMessage") (EApp (EApp (EVar "responseMsg") (EVar "idJson")) (EApp (EVar "jObject") (EListLit)))) (EIf (EBinOp "==" (EVar "meth") (ELit (LString "shutdown"))) (EApp (EVar "writeMessage") (EApp (EApp (EVar "responseMsg") (EVar "idJson")) (EApp (EVar "jObject") (EListLit)))) (EIf (EBinOp "==" (EVar "meth") (ELit (LString "tools/list"))) (EApp (EVar "writeMessage") (EApp (EApp (EVar "responseMsg") (EVar "idJson")) (EVar "toolsListResult"))) (EIf (EBinOp "==" (EVar "meth") (ELit (LString "tools/call"))) (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EVar "handleToolsCall") (EVar "trace")) (EVar "requestId")) (EVar "state")) (EVar "runtimeSrc")) (EVar "coreSrc")) (EVar "stdlibDir")) (EVar "idJson")) (EVar "params")) (EVar "stalenessCheck")) (EBlock (DoLet false false (PVar "token") (EApp (EApp (EApp (EVar "beginCall") (EVar "trace")) (EVar "requestId")) (ELit (LString "protocol")))) (DoLet false false (PVar "response") (EApp (EApp (EApp (EVar "errorMsg") (EVar "idJson")) (EBinOp "-" (ELit (LInt 0)) (ELit (LInt 32601)))) (EApp (EVar "stringConcat") (EListLit (ELit (LString "Method not found: ")) (EVar "meth"))))) (DoExpr (EApp (EVar "writeMessage") (EVar "response"))) (DoExpr (EApp (EApp (EApp (EVar "finishCall") (EVar "token")) (ELit (LString "protocol_error"))) (EBinOp "+" (EApp (EVar "byteLength") (EApp (EVar "stringify") (EVar "response"))) (ELit (LInt 1))))))))))))))))))))))
+(DTypeSig false "handleLine" (TyFun (TyCon "TraceContext") (TyFun (TyCon "String") (TyFun (TyApp (TyCon "Ref") (TyCon "McpSyntaxState")) (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyFun (TyCon "Unit") (TyEffect ("IO") None (TyApp (TyCon "Option") (TyCon "String")))) (TyFun (TyCon "String") (TyEffect ("IO") None (TyCon "Unit"))))))))))))
+(DFunDef false "handleLine" ((PVar "trace") (PVar "requestId") (PVar "state") (PVar "runtimeSrc") (PVar "coreSrc") (PVar "stdlibDir") (PVar "raw") (PVar "stalenessCheck") (PVar "serverVersion")) (EBlock (DoLet false false (PVar "line") (EApp (EVar "stripCR") (EVar "raw"))) (DoExpr (EIf (EBinOp "==" (EVar "line") (ELit (LString ""))) (EVar "unit") (EMatch (EApp (EVar "parse") (EVar "line")) (arm (PCon "Err" (PVar "e")) () (EApp (EVar "logMcp") (EApp (EVar "stringConcat") (EListLit (ELit (LString "parse error (skipped): ")) (EVar "e"))))) (arm (PCon "Ok" (PVar "msg")) () (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EVar "dispatchMsg") (EVar "trace")) (EVar "requestId")) (EVar "state")) (EVar "runtimeSrc")) (EVar "coreSrc")) (EVar "stdlibDir")) (EVar "msg")) (EVar "stalenessCheck")) (EVar "serverVersion"))))))))
+(DTypeSig false "serveLoop" (TyFun (TyCon "TraceContext") (TyFun (TyApp (TyCon "Ref") (TyCon "McpSyntaxState")) (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyFun (TyCon "Unit") (TyEffect ("IO") None (TyApp (TyCon "Option") (TyCon "String")))) (TyFun (TyCon "String") (TyEffect ("IO") None (TyCon "Unit"))))))))))
+(DFunDef false "serveLoop" ((PVar "trace") (PVar "state") (PVar "runtimeSrc") (PVar "coreSrc") (PVar "stdlibDir") (PVar "stalenessCheck") (PVar "serverVersion")) (EMatch (EApp (EVar "readLineOpt") (ELit LUnit)) (arm (PCon "None") () (EVar "unit")) (arm (PCon "Some" (PVar "raw")) () (EBlock (DoLet false false (PCon "TraceContext" PWild PWild PWild (PVar "counter")) (EVar "trace")) (DoLet false false (PVar "requestId") (EApp (EVar "intToString") (EUnOp "!" (EVar "counter")))) (DoExpr (EApp (EApp (EVar "setRef") (EVar "counter")) (EBinOp "+" (EUnOp "!" (EVar "counter")) (ELit (LInt 1))))) (DoExpr (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EVar "handleLine") (EVar "trace")) (EVar "requestId")) (EVar "state")) (EVar "runtimeSrc")) (EVar "coreSrc")) (EVar "stdlibDir")) (EVar "raw")) (EVar "stalenessCheck")) (EVar "serverVersion"))) (DoExpr (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EVar "serveLoop") (EVar "trace")) (EVar "state")) (EVar "runtimeSrc")) (EVar "coreSrc")) (EVar "stdlibDir")) (EVar "stalenessCheck")) (EVar "serverVersion")))))))
 (DTypeSig true "runMcpServer" (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyFun (TyCon "Unit") (TyEffect ("IO") None (TyApp (TyCon "Option") (TyCon "String")))) (TyFun (TyCon "String") (TyEffect ("IO") None (TyCon "Unit"))))))))
-(DFunDef false "runMcpServer" ((PVar "runtimeSrc") (PVar "coreSrc") (PVar "stdlibDir") (PVar "stalenessCheck") (PVar "serverVersion")) (EBlock (DoExpr (EApp (EVar "logMcp") (ELit (LString "medaka mcp server start")))) (DoExpr (EApp (EApp (EApp (EApp (EApp (EApp (EVar "serveLoop") (EApp (EVar "Ref") (EVar "emptyMcpSyntaxState"))) (EVar "runtimeSrc")) (EVar "coreSrc")) (EVar "stdlibDir")) (EVar "stalenessCheck")) (EVar "serverVersion")))))
+(DFunDef false "runMcpServer" ((PVar "runtimeSrc") (PVar "coreSrc") (PVar "stdlibDir") (PVar "stalenessCheck") (PVar "serverVersion")) (EBlock (DoExpr (EApp (EVar "logMcp") (ELit (LString "medaka mcp server start")))) (DoLet false false (PVar "trace") (EApp (EApp (EApp (EApp (EVar "TraceContext") (EApp (EApp (EVar "optionOr") (ELit (LString ""))) (EApp (EVar "getEnv") (ELit (LString "MEDAKA_MCP_TRACE"))))) (EApp (EApp (EVar "optionOr") (ELit (LString "session"))) (EApp (EVar "getEnv") (ELit (LString "MEDAKA_MCP_TRACE_SESSION"))))) (EIf (EBinOp "==" (EApp (EVar "getEnv") (ELit (LString "MEDAKA_MCP_TRACE_CLASS"))) (EApp (EVar "Some") (ELit (LString "probe")))) (ELit (LString "probe")) (ELit (LString "organic")))) (EApp (EVar "Ref") (ELit (LInt 0))))) (DoExpr (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EVar "serveLoop") (EVar "trace")) (EApp (EVar "Ref") (EVar "emptyMcpSyntaxState"))) (EVar "runtimeSrc")) (EVar "coreSrc")) (EVar "stdlibDir")) (EVar "stalenessCheck")) (EVar "serverVersion")))))
 # MARK
 (DUse false (UseGroup ("tools" "source_snapshot") ((mem "SourceRevision" true) (mem "SourceSnapshot" true) (mem "SnapshotId" true))))
 (DUse false (UseGroup ("tools" "snapshot_syntax") ((mem "PreparedSyntax" false) (mem "parseSnapshotSyntax" false) (mem "snapshotSyntaxResult" false) (mem "snapshotSyntaxSnapshot" false) (mem "snapshotSyntaxSource" false) (mem "defaultParseOptions" false))))
@@ -2400,7 +2488,8 @@ runMcpServer runtimeSrc coreSrc stdlibDir stalenessCheck serverVersion =
 (DUse false (UseGroup ("driver" "parse_diag_adapter") ((mem "parseDiagnosticToDiag" false))))
 (DUse false (UseGroup ("frontend" "recovery_result") ((mem "SourceExtent" true) (mem "InvalidReason" true) (mem "RecoveryStop" true) (mem "RecoveryCompleteness" true) (mem "invalidExtent" false) (mem "invalidReason" false) (mem "invalidRegions" false) (mem "recoveredDiagnostics" false) (mem "recoveredCompleteness" false))))
 (DUse false (UseGroup ("json") ((mem "Json" true) (mem "jObject" false) (mem "jArray" false) (mem "stringify" false) (mem "parse" false) (mem "get" false) (mem "asString" false) (mem "asInt" false) (mem "asArray" false))))
-(DUse false (UseGroup ("string") ((mem "stripCR" false))))
+(DUse false (UseGroup ("string") ((mem "stripCR" false) (mem "byteLength" false) (mem "startsWith" false))))
+(DUse false (UseGroup ("tools" "mcp_telemetry") ((mem "TraceContext" true) (mem "beginCall" false) (mem "finishCall" false) (mem "recordProtocol" false))))
 (DUse false (UseGroup ("support" "source_index") ((mem "SourceIndex" false) (mem "indexSource" false) (mem "sourcePositionToOffset" false) (mem "offsetToUtf16Position" false) (mem "clampSourcePositionToOffset" false) (mem "sourceEndUtf16Position" false))))
 (DUse false (UseGroup ("driver" "diagnostics") ((mem "stdlibExportsReader" false) (mem "checkJsonSingle" false) (mem "checkJsonFile" false) (mem "cjAllToJson" false) (mem "cjFileEntry" false) (mem "parseErrDiag" false) (mem "diagIsError" false) (mem "Diag" true))))
 (DUse false (UseGroup ("tools" "lsp") ((mem "typeAtPoint" false) (mem "typeAtPointsWithIndex" false) (mem "structuralParsed" false) (mem "definitionResultParsed" false) (mem "definitionResultsParsed" false) (mem "referencesResult" false) (mem "emptyDocs" false) (mem "docsPut" false) (mem "uriOfPath" false) (mem "responseMsg" false) (mem "fieldOr" false) (mem "fieldStr" false) (mem "methodOf" false) (mem "unit" false))))
@@ -2663,15 +2752,21 @@ runMcpServer runtimeSrc coreSrc stdlibDir stalenessCheck serverVersion =
 (DFunDef false "testReportJson" ((PVar "path") (PVar "requested") (PVar "typeError") (PVar "runs") (PVar "props") (PVar "typecheckSkipped")) (EBlock (DoLet false false (PVar "engines") (EIf (EApp (EVar "isNone") (EVar "typeError")) (EApp (EVar "doctestRunEngineNames") (EVar "runs")) (EVar "requested"))) (DoExpr (EApp (EVar "jObject") (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EListLit (ETuple (ELit (LString "file")) (EApp (EVar "JString") (EVar "path"))) (ETuple (ELit (LString "engine")) (EApp (EVar "JString") (EApp (EVar "primaryEngineName") (EVar "engines")))) (ETuple (ELit (LString "note")) (EApp (EVar "JString") (EApp (EVar "mcpTestCaveat") (EVar "engines"))))) (EApp (EVar "typeErrorField") (EVar "typeError"))) (EApp (EVar "typecheckSkippedField") (EVar "typecheckSkipped"))) (EVar "testDeclsSkippedField")) (EListLit (ETuple (ELit (LString "doctests")) (EApp (EVar "doctestsJson") (EApp (EVar "primaryDoctestRun") (EVar "runs")))) (ETuple (ELit (LString "properties")) (EApp (EVar "jArray") (EApp (EApp (EMethodRef "map") (EVar "propJson")) (EVar "props")))) (ETuple (ELit (LString "summary")) (EApp (EVar "jObject") (EListLit (ETuple (ELit (LString "passed")) (EApp (EVar "JInt") (EBinOp "+" (EApp (EVar "runPassed") (EApp (EVar "primaryDoctestRun") (EVar "runs"))) (EApp (EVar "countPassProps") (EVar "props"))))) (ETuple (ELit (LString "failed")) (EApp (EVar "JInt") (EBinOp "+" (EBinOp "+" (EApp (EVar "runFailed") (EApp (EVar "primaryDoctestRun") (EVar "runs"))) (EApp (EVar "runErrors") (EApp (EVar "primaryDoctestRun") (EVar "runs")))) (EApp (EVar "countFailProps") (EVar "props"))))) (ETuple (ELit (LString "knownRed")) (EApp (EVar "JInt") (EApp (EVar "knownRedCountProps") (EVar "props")))) (ETuple (ELit (LString "ok")) (EApp (EVar "JBool") (EApp (EApp (EApp (EVar "testReportOk") (EVar "typeError")) (EVar "runs")) (EVar "props")))))))))))))
 (DTypeSig false "runTestTool" (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyCon "Json") (TyEffect ("IO") None (TyCon "Json")))))))
 (DFunDef false "runTestTool" ((PVar "runtimeSrc") (PVar "coreSrc") (PVar "stdlibDir") (PVar "args")) (EMatch (EApp (EApp (EVar "fieldStr") (ELit (LString "file"))) (EVar "args")) (arm (PCon "None") () (EApp (EVar "toolArgError") (ELit (LString "medaka_test: missing or invalid argument — require 'file' (string)")))) (arm (PCon "Some" (PVar "path")) () (EMatch (EApp (EVar "mcpTestEnginesArg") (EVar "args")) (arm (PCon "Err" (PVar "msg")) () (EApp (EVar "toolArgError") (EVar "msg"))) (arm (PCon "Ok" (PVar "engines")) () (EMatch (EApp (EVar "readFile") (EVar "path")) (arm (PCon "Err" (PVar "e")) () (EApp (EVar "toolArgError") (EApp (EVar "stringConcat") (EListLit (ELit (LString "medaka_test: cannot read file '")) (EVar "path") (ELit (LString "': ")) (EVar "e"))))) (arm (PCon "Ok" (PVar "tsrc")) () (EMatch (EApp (EVar "parseResult") (EVar "tsrc")) (arm (PCon "Err" (PVar "err")) () (EBlock (DoLet false false (PVar "failure") (EApp (EVar "Some") (EApp (EVar "TestDiagnosticError") (EListLit (ETuple (EVar "path") (EVar "tsrc") (EListLit (EApp (EApp (EVar "parseErrDiag") (EVar "path")) (EVar "err")))))))) (DoExpr (EApp (EApp (EVar "toolTextResult") (EApp (EVar "stringify") (EApp (EApp (EApp (EApp (EApp (EApp (EVar "testReportJson") (EVar "path")) (EVar "engines")) (EVar "failure")) (EListLit)) (EListLit)) (EVar "False")))) (EVar "True"))))) (arm (PCon "Ok" (PVar "decls")) () (EBlock (DoLet false false (PTuple (PVar "typeError") (PVar "runs") (PVar "props") (PVar "_testResults") (PVar "typecheckSkipped")) (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EVar "runTestGradedReportParts") (EVar "engines")) (EVar "runtimeSrc")) (EVar "coreSrc")) (EVar "path")) (EVar "tsrc")) (EApp (EVar "desugar") (EVar "decls"))) (EVar "stdlibDir")) (ELit (LInt 100))) (EVar "None")) (EVar "False"))) (DoExpr (EApp (EApp (EVar "toolTextResult") (EApp (EVar "stringify") (EApp (EApp (EApp (EApp (EApp (EApp (EVar "testReportJson") (EVar "path")) (EVar "engines")) (EVar "typeError")) (EVar "runs")) (EVar "props")) (EVar "typecheckSkipped")))) (EApp (EVar "not") (EApp (EApp (EApp (EVar "testReportOk") (EVar "typeError")) (EVar "runs")) (EVar "props")))))))))))))))
-(DTypeSig false "handleToolsCall" (TyFun (TyApp (TyCon "Ref") (TyCon "McpSyntaxState")) (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyCon "Json") (TyFun (TyCon "Json") (TyFun (TyFun (TyCon "Unit") (TyEffect ("IO") None (TyApp (TyCon "Option") (TyCon "String")))) (TyEffect ("IO") None (TyCon "Unit"))))))))))
-(DFunDef false "handleToolsCall" ((PVar "state") (PVar "runtimeSrc") (PVar "coreSrc") (PVar "stdlibDir") (PVar "idJson") (PVar "params") (PVar "stalenessCheck")) (EMatch (EApp (EApp (EVar "fieldStr") (ELit (LString "name"))) (EVar "params")) (arm (PCon "None") () (EApp (EVar "writeMessage") (EApp (EApp (EApp (EVar "errorMsg") (EVar "idJson")) (EBinOp "-" (ELit (LInt 0)) (ELit (LInt 32602)))) (ELit (LString "tools/call: missing 'name'"))))) (arm (PCon "Some" (PVar "name")) () (EBlock (DoLet false false (PVar "args") (EApp (EApp (EVar "fieldOr") (ELit (LString "arguments"))) (EVar "params"))) (DoExpr (EApp (EApp (EApp (EVar "logMcpCall") (ELit (LString "tools/call"))) (EVar "name")) (EApp (EVar "stringify") (EVar "args")))) (DoExpr (EApp (EVar "selectToolProfile") (EVar "args"))) (DoExpr (EMatch (EApp (EApp (EApp (EApp (EApp (EApp (EVar "callTool") (EVar "state")) (EVar "runtimeSrc")) (EVar "coreSrc")) (EVar "stdlibDir")) (EVar "name")) (EVar "args")) (arm (PCon "None") () (EApp (EVar "writeMessage") (EApp (EApp (EApp (EVar "errorMsg") (EVar "idJson")) (EBinOp "-" (ELit (LInt 0)) (ELit (LInt 32601)))) (EApp (EVar "stringConcat") (EListLit (ELit (LString "Unknown tool: ")) (EVar "name")))))) (arm (PCon "Some" (PVar "result")) () (EBlock (DoLet false false (PVar "augmented") (EApp (EApp (EVar "attachStaleness") (EVar "stalenessCheck")) (EVar "result"))) (DoExpr (EApp (EVar "writeMessage") (EApp (EApp (EVar "responseMsg") (EVar "idJson")) (EVar "augmented"))))))))))))
+(DTypeSig false "handleToolsCall" (TyFun (TyCon "TraceContext") (TyFun (TyCon "String") (TyFun (TyApp (TyCon "Ref") (TyCon "McpSyntaxState")) (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyCon "Json") (TyFun (TyCon "Json") (TyFun (TyFun (TyCon "Unit") (TyEffect ("IO") None (TyApp (TyCon "Option") (TyCon "String")))) (TyEffect ("IO") None (TyCon "Unit"))))))))))))
+(DFunDef false "handleToolsCall" ((PVar "trace") (PVar "requestId") (PVar "state") (PVar "runtimeSrc") (PVar "coreSrc") (PVar "stdlibDir") (PVar "idJson") (PVar "params") (PVar "stalenessCheck")) (EMatch (EApp (EApp (EVar "fieldStr") (ELit (LString "name"))) (EVar "params")) (arm (PCon "None") () (EBlock (DoLet false false (PVar "token") (EApp (EApp (EApp (EVar "beginCall") (EVar "trace")) (EVar "requestId")) (ELit (LString "unknown")))) (DoLet false false (PVar "response") (EApp (EApp (EApp (EVar "errorMsg") (EVar "idJson")) (EBinOp "-" (ELit (LInt 0)) (ELit (LInt 32602)))) (ELit (LString "tools/call: missing 'name'")))) (DoExpr (EApp (EVar "writeMessage") (EVar "response"))) (DoExpr (EApp (EApp (EApp (EVar "finishCall") (EVar "token")) (ELit (LString "protocol_error"))) (EBinOp "+" (EApp (EVar "byteLength") (EApp (EVar "stringify") (EVar "response"))) (ELit (LInt 1))))))) (arm (PCon "Some" (PVar "name")) () (EBlock (DoLet false false (PVar "safeName") (EIf (EApp (EVar "isKnownTool") (EVar "name")) (EVar "name") (ELit (LString "unknown")))) (DoLet false false (PVar "token") (EApp (EApp (EApp (EVar "beginCall") (EVar "trace")) (EVar "requestId")) (EVar "safeName"))) (DoLet false false (PVar "args") (EApp (EApp (EVar "fieldOr") (ELit (LString "arguments"))) (EVar "params"))) (DoExpr (EApp (EApp (EApp (EVar "logMcpCall") (ELit (LString "tools/call"))) (EVar "name")) (EApp (EVar "stringify") (EVar "args")))) (DoExpr (EApp (EVar "selectToolProfile") (EVar "args"))) (DoExpr (EMatch (EApp (EApp (EApp (EApp (EApp (EApp (EVar "callTool") (EVar "state")) (EVar "runtimeSrc")) (EVar "coreSrc")) (EVar "stdlibDir")) (EVar "name")) (EVar "args")) (arm (PCon "None") () (EBlock (DoLet false false (PVar "response") (EApp (EApp (EApp (EVar "errorMsg") (EVar "idJson")) (EBinOp "-" (ELit (LInt 0)) (ELit (LInt 32601)))) (EApp (EVar "stringConcat") (EListLit (ELit (LString "Unknown tool: ")) (EVar "name"))))) (DoExpr (EApp (EVar "writeMessage") (EVar "response"))) (DoExpr (EApp (EApp (EApp (EVar "finishCall") (EVar "token")) (ELit (LString "protocol_error"))) (EBinOp "+" (EApp (EVar "byteLength") (EApp (EVar "stringify") (EVar "response"))) (ELit (LInt 1))))))) (arm (PCon "Some" (PVar "result")) () (EBlock (DoLet false false (PVar "augmented") (EApp (EApp (EVar "attachStaleness") (EVar "stalenessCheck")) (EVar "result"))) (DoLet false false (PVar "response") (EApp (EApp (EVar "responseMsg") (EVar "idJson")) (EVar "augmented"))) (DoExpr (EApp (EVar "writeMessage") (EVar "response"))) (DoExpr (EApp (EApp (EApp (EVar "finishCall") (EVar "token")) (EApp (EApp (EVar "traceOutcome") (EVar "name")) (EVar "result"))) (EBinOp "+" (EApp (EVar "byteLength") (EApp (EVar "stringify") (EVar "response"))) (ELit (LInt 1)))))))))))))
+(DTypeSig false "isKnownTool" (TyFun (TyCon "String") (TyCon "Bool")))
+(DFunDef false "isKnownTool" ((PVar "name")) (EApp (EVar "isSome") (EApp (EApp (EVar "lookupTool") (EVar "name")) (EVar "mcpTools"))))
+(DTypeSig false "traceOutcome" (TyFun (TyCon "String") (TyFun (TyCon "Json") (TyCon "String"))))
+(DFunDef false "traceOutcome" ((PVar "name") (PVar "result")) (EMatch (EApp (EApp (EVar "get") (ELit (LString "isError"))) (EVar "result")) (arm (PCon "Some" (PCon "JBool" (PCon "True"))) () (EIf (EBinOp "&&" (EBinOp "==" (EVar "name") (ELit (LString "medaka_check"))) (EApp (EVar "checkHasDiagnostics") (EVar "result"))) (ELit (LString "success")) (ELit (LString "tool_error")))) (arm PWild () (ELit (LString "success")))))
+(DTypeSig false "checkHasDiagnostics" (TyFun (TyCon "Json") (TyCon "Bool")))
+(DFunDef false "checkHasDiagnostics" ((PVar "result")) (EMatch (EApp (EApp (EVar "get") (ELit (LString "content"))) (EVar "result")) (arm (PCon "Some" (PCon "JArray" (PVar "content"))) () (EIf (EBinOp "==" (EApp (EVar "arrayLength") (EVar "content")) (ELit (LInt 0))) (EVar "False") (EMatch (EApp (EApp (EVar "get") (ELit (LString "text"))) (EApp (EApp (EVar "arrayGetUnsafe") (ELit (LInt 0))) (EVar "content"))) (arm (PCon "Some" (PCon "JString" (PVar "text"))) () (EApp (EApp (EVar "startsWith") (ELit (LString "{\"files\":"))) (EVar "text"))) (arm PWild () (EVar "False"))))) (arm PWild () (EVar "False"))))
 (DTypeSig false "selectToolProfile" (TyFun (TyCon "Json") (TyEffect ("IO") None (TyCon "Unit"))))
 (DFunDef false "selectToolProfile" ((PVar "args")) (EMatch (EApp (EApp (EVar "fieldStr") (ELit (LString "file"))) (EVar "args")) (arm (PCon "Some" (PVar "path")) () (EApp (EApp (EVar "bestEffort") (ELit (LString "an unreadable [target] leaves no profile selected, and medaka_check reports it"))) (EApp (EApp (EVar "carryProjectProfile") (EVar "None")) (EVar "path")))) (arm (PCon "None") () (EApp (EApp (EVar "setRef") (EVar "selectedProfile")) (EVar "None")))))
-(DTypeSig false "dispatchMsg" (TyFun (TyApp (TyCon "Ref") (TyCon "McpSyntaxState")) (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyCon "Json") (TyFun (TyFun (TyCon "Unit") (TyEffect ("IO") None (TyApp (TyCon "Option") (TyCon "String")))) (TyFun (TyCon "String") (TyEffect ("IO") None (TyCon "Unit"))))))))))
-(DFunDef false "dispatchMsg" ((PVar "state") (PVar "runtimeSrc") (PVar "coreSrc") (PVar "stdlibDir") (PVar "msg") (PVar "stalenessCheck") (PVar "serverVersion")) (EMatch (EApp (EVar "asArray") (EVar "msg")) (arm (PCon "Some" PWild) () (EApp (EVar "writeMessage") (EApp (EApp (EApp (EVar "errorMsg") (EVar "JNull")) (EBinOp "-" (ELit (LInt 0)) (ELit (LInt 32600)))) (ELit (LString "Invalid Request: batch requests are not supported"))))) (arm (PCon "None") () (EMatch (EApp (EVar "methodOf") (EVar "msg")) (arm (PCon "None") () (EApp (EVar "logMcp") (ELit (LString "ignored: message has no string 'method' field")))) (arm (PCon "Some" (PVar "meth")) () (EBlock (DoLet false false (PVar "params") (EApp (EApp (EVar "fieldOr") (ELit (LString "params"))) (EVar "msg"))) (DoLet false false PWild (EIf (EBinOp "==" (EVar "meth") (ELit (LString "tools/call"))) (EVar "unit") (EApp (EApp (EApp (EVar "logMcpCall") (EVar "meth")) (ELit (LString ""))) (ELit (LString ""))))) (DoExpr (EIf (EBinOp "==" (EVar "meth") (ELit (LString "notifications/initialized"))) (EVar "unit") (EMatch (EApp (EApp (EVar "get") (ELit (LString "id"))) (EVar "msg")) (arm (PCon "None") () (EVar "unit")) (arm (PCon "Some" (PVar "idJson")) () (EIf (EBinOp "==" (EVar "meth") (ELit (LString "initialize"))) (EApp (EVar "writeMessage") (EApp (EApp (EVar "responseMsg") (EVar "idJson")) (EApp (EApp (EVar "initializeResultFor") (EApp (EVar "negotiateVersion") (EVar "msg"))) (EVar "serverVersion")))) (EIf (EBinOp "==" (EVar "meth") (ELit (LString "ping"))) (EApp (EVar "writeMessage") (EApp (EApp (EVar "responseMsg") (EVar "idJson")) (EApp (EVar "jObject") (EListLit)))) (EIf (EBinOp "==" (EVar "meth") (ELit (LString "shutdown"))) (EApp (EVar "writeMessage") (EApp (EApp (EVar "responseMsg") (EVar "idJson")) (EApp (EVar "jObject") (EListLit)))) (EIf (EBinOp "==" (EVar "meth") (ELit (LString "tools/list"))) (EApp (EVar "writeMessage") (EApp (EApp (EVar "responseMsg") (EVar "idJson")) (EVar "toolsListResult"))) (EIf (EBinOp "==" (EVar "meth") (ELit (LString "tools/call"))) (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EVar "handleToolsCall") (EVar "state")) (EVar "runtimeSrc")) (EVar "coreSrc")) (EVar "stdlibDir")) (EVar "idJson")) (EVar "params")) (EVar "stalenessCheck")) (EApp (EVar "writeMessage") (EApp (EApp (EApp (EVar "errorMsg") (EVar "idJson")) (EBinOp "-" (ELit (LInt 0)) (ELit (LInt 32601)))) (EApp (EVar "stringConcat") (EListLit (ELit (LString "Method not found: ")) (EVar "meth"))))))))))))))))))))
-(DTypeSig false "handleLine" (TyFun (TyApp (TyCon "Ref") (TyCon "McpSyntaxState")) (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyFun (TyCon "Unit") (TyEffect ("IO") None (TyApp (TyCon "Option") (TyCon "String")))) (TyFun (TyCon "String") (TyEffect ("IO") None (TyCon "Unit"))))))))))
-(DFunDef false "handleLine" ((PVar "state") (PVar "runtimeSrc") (PVar "coreSrc") (PVar "stdlibDir") (PVar "raw") (PVar "stalenessCheck") (PVar "serverVersion")) (EBlock (DoLet false false (PVar "line") (EApp (EVar "stripCR") (EVar "raw"))) (DoExpr (EIf (EBinOp "==" (EVar "line") (ELit (LString ""))) (EVar "unit") (EMatch (EApp (EVar "parse") (EVar "line")) (arm (PCon "Err" (PVar "e")) () (EApp (EVar "logMcp") (EApp (EVar "stringConcat") (EListLit (ELit (LString "parse error (skipped): ")) (EVar "e"))))) (arm (PCon "Ok" (PVar "msg")) () (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EVar "dispatchMsg") (EVar "state")) (EVar "runtimeSrc")) (EVar "coreSrc")) (EVar "stdlibDir")) (EVar "msg")) (EVar "stalenessCheck")) (EVar "serverVersion"))))))))
-(DTypeSig false "serveLoop" (TyFun (TyApp (TyCon "Ref") (TyCon "McpSyntaxState")) (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyFun (TyCon "Unit") (TyEffect ("IO") None (TyApp (TyCon "Option") (TyCon "String")))) (TyFun (TyCon "String") (TyEffect ("IO") None (TyCon "Unit")))))))))
-(DFunDef false "serveLoop" ((PVar "state") (PVar "runtimeSrc") (PVar "coreSrc") (PVar "stdlibDir") (PVar "stalenessCheck") (PVar "serverVersion")) (EMatch (EApp (EVar "readLineOpt") (ELit LUnit)) (arm (PCon "None") () (EVar "unit")) (arm (PCon "Some" (PVar "raw")) () (EBlock (DoExpr (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EVar "handleLine") (EVar "state")) (EVar "runtimeSrc")) (EVar "coreSrc")) (EVar "stdlibDir")) (EVar "raw")) (EVar "stalenessCheck")) (EVar "serverVersion"))) (DoExpr (EApp (EApp (EApp (EApp (EApp (EApp (EVar "serveLoop") (EVar "state")) (EVar "runtimeSrc")) (EVar "coreSrc")) (EVar "stdlibDir")) (EVar "stalenessCheck")) (EVar "serverVersion")))))))
+(DTypeSig false "dispatchMsg" (TyFun (TyCon "TraceContext") (TyFun (TyCon "String") (TyFun (TyApp (TyCon "Ref") (TyCon "McpSyntaxState")) (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyCon "Json") (TyFun (TyFun (TyCon "Unit") (TyEffect ("IO") None (TyApp (TyCon "Option") (TyCon "String")))) (TyFun (TyCon "String") (TyEffect ("IO") None (TyCon "Unit"))))))))))))
+(DFunDef false "dispatchMsg" ((PVar "trace") (PVar "requestId") (PVar "state") (PVar "runtimeSrc") (PVar "coreSrc") (PVar "stdlibDir") (PVar "msg") (PVar "stalenessCheck") (PVar "serverVersion")) (EMatch (EApp (EVar "asArray") (EVar "msg")) (arm (PCon "Some" PWild) () (EBlock (DoLet false false (PVar "token") (EApp (EApp (EApp (EVar "beginCall") (EVar "trace")) (EVar "requestId")) (ELit (LString "protocol")))) (DoLet false false (PVar "response") (EApp (EApp (EApp (EVar "errorMsg") (EVar "JNull")) (EBinOp "-" (ELit (LInt 0)) (ELit (LInt 32600)))) (ELit (LString "Invalid Request: batch requests are not supported")))) (DoExpr (EApp (EVar "writeMessage") (EVar "response"))) (DoExpr (EApp (EApp (EApp (EVar "finishCall") (EVar "token")) (ELit (LString "protocol_error"))) (EBinOp "+" (EApp (EVar "byteLength") (EApp (EVar "stringify") (EVar "response"))) (ELit (LInt 1))))))) (arm (PCon "None") () (EMatch (EApp (EVar "methodOf") (EVar "msg")) (arm (PCon "None") () (EApp (EVar "logMcp") (ELit (LString "ignored: message has no string 'method' field")))) (arm (PCon "Some" (PVar "meth")) () (EBlock (DoLet false false (PVar "params") (EApp (EApp (EVar "fieldOr") (ELit (LString "params"))) (EVar "msg"))) (DoLet false false PWild (EIf (EBinOp "==" (EVar "meth") (ELit (LString "tools/call"))) (EVar "unit") (EApp (EApp (EApp (EVar "logMcpCall") (EVar "meth")) (ELit (LString ""))) (ELit (LString ""))))) (DoExpr (EIf (EBinOp "==" (EVar "meth") (ELit (LString "notifications/cancelled"))) (EApp (EApp (EApp (EVar "recordProtocol") (EVar "trace")) (ELit (LString "cancel_requested"))) (EVar "requestId")) (EIf (EBinOp "==" (EVar "meth") (ELit (LString "notifications/initialized"))) (EVar "unit") (EMatch (EApp (EApp (EVar "get") (ELit (LString "id"))) (EVar "msg")) (arm (PCon "None") () (EVar "unit")) (arm (PCon "Some" (PVar "idJson")) () (EIf (EBinOp "==" (EVar "meth") (ELit (LString "initialize"))) (EApp (EVar "writeMessage") (EApp (EApp (EVar "responseMsg") (EVar "idJson")) (EApp (EApp (EVar "initializeResultFor") (EApp (EVar "negotiateVersion") (EVar "msg"))) (EVar "serverVersion")))) (EIf (EBinOp "==" (EVar "meth") (ELit (LString "ping"))) (EApp (EVar "writeMessage") (EApp (EApp (EVar "responseMsg") (EVar "idJson")) (EApp (EVar "jObject") (EListLit)))) (EIf (EBinOp "==" (EVar "meth") (ELit (LString "shutdown"))) (EApp (EVar "writeMessage") (EApp (EApp (EVar "responseMsg") (EVar "idJson")) (EApp (EVar "jObject") (EListLit)))) (EIf (EBinOp "==" (EVar "meth") (ELit (LString "tools/list"))) (EApp (EVar "writeMessage") (EApp (EApp (EVar "responseMsg") (EVar "idJson")) (EVar "toolsListResult"))) (EIf (EBinOp "==" (EVar "meth") (ELit (LString "tools/call"))) (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EVar "handleToolsCall") (EVar "trace")) (EVar "requestId")) (EVar "state")) (EVar "runtimeSrc")) (EVar "coreSrc")) (EVar "stdlibDir")) (EVar "idJson")) (EVar "params")) (EVar "stalenessCheck")) (EBlock (DoLet false false (PVar "token") (EApp (EApp (EApp (EVar "beginCall") (EVar "trace")) (EVar "requestId")) (ELit (LString "protocol")))) (DoLet false false (PVar "response") (EApp (EApp (EApp (EVar "errorMsg") (EVar "idJson")) (EBinOp "-" (ELit (LInt 0)) (ELit (LInt 32601)))) (EApp (EVar "stringConcat") (EListLit (ELit (LString "Method not found: ")) (EVar "meth"))))) (DoExpr (EApp (EVar "writeMessage") (EVar "response"))) (DoExpr (EApp (EApp (EApp (EVar "finishCall") (EVar "token")) (ELit (LString "protocol_error"))) (EBinOp "+" (EApp (EVar "byteLength") (EApp (EVar "stringify") (EVar "response"))) (ELit (LInt 1))))))))))))))))))))))
+(DTypeSig false "handleLine" (TyFun (TyCon "TraceContext") (TyFun (TyCon "String") (TyFun (TyApp (TyCon "Ref") (TyCon "McpSyntaxState")) (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyFun (TyCon "Unit") (TyEffect ("IO") None (TyApp (TyCon "Option") (TyCon "String")))) (TyFun (TyCon "String") (TyEffect ("IO") None (TyCon "Unit"))))))))))))
+(DFunDef false "handleLine" ((PVar "trace") (PVar "requestId") (PVar "state") (PVar "runtimeSrc") (PVar "coreSrc") (PVar "stdlibDir") (PVar "raw") (PVar "stalenessCheck") (PVar "serverVersion")) (EBlock (DoLet false false (PVar "line") (EApp (EVar "stripCR") (EVar "raw"))) (DoExpr (EIf (EBinOp "==" (EVar "line") (ELit (LString ""))) (EVar "unit") (EMatch (EApp (EVar "parse") (EVar "line")) (arm (PCon "Err" (PVar "e")) () (EApp (EVar "logMcp") (EApp (EVar "stringConcat") (EListLit (ELit (LString "parse error (skipped): ")) (EVar "e"))))) (arm (PCon "Ok" (PVar "msg")) () (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EVar "dispatchMsg") (EVar "trace")) (EVar "requestId")) (EVar "state")) (EVar "runtimeSrc")) (EVar "coreSrc")) (EVar "stdlibDir")) (EVar "msg")) (EVar "stalenessCheck")) (EVar "serverVersion"))))))))
+(DTypeSig false "serveLoop" (TyFun (TyCon "TraceContext") (TyFun (TyApp (TyCon "Ref") (TyCon "McpSyntaxState")) (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyFun (TyCon "Unit") (TyEffect ("IO") None (TyApp (TyCon "Option") (TyCon "String")))) (TyFun (TyCon "String") (TyEffect ("IO") None (TyCon "Unit"))))))))))
+(DFunDef false "serveLoop" ((PVar "trace") (PVar "state") (PVar "runtimeSrc") (PVar "coreSrc") (PVar "stdlibDir") (PVar "stalenessCheck") (PVar "serverVersion")) (EMatch (EApp (EVar "readLineOpt") (ELit LUnit)) (arm (PCon "None") () (EVar "unit")) (arm (PCon "Some" (PVar "raw")) () (EBlock (DoLet false false (PCon "TraceContext" PWild PWild PWild (PVar "counter")) (EVar "trace")) (DoLet false false (PVar "requestId") (EApp (EVar "intToString") (EUnOp "!" (EVar "counter")))) (DoExpr (EApp (EApp (EVar "setRef") (EVar "counter")) (EBinOp "+" (EUnOp "!" (EVar "counter")) (ELit (LInt 1))))) (DoExpr (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EVar "handleLine") (EVar "trace")) (EVar "requestId")) (EVar "state")) (EVar "runtimeSrc")) (EVar "coreSrc")) (EVar "stdlibDir")) (EVar "raw")) (EVar "stalenessCheck")) (EVar "serverVersion"))) (DoExpr (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EVar "serveLoop") (EVar "trace")) (EVar "state")) (EVar "runtimeSrc")) (EVar "coreSrc")) (EVar "stdlibDir")) (EVar "stalenessCheck")) (EVar "serverVersion")))))))
 (DTypeSig true "runMcpServer" (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyFun (TyCon "Unit") (TyEffect ("IO") None (TyApp (TyCon "Option") (TyCon "String")))) (TyFun (TyCon "String") (TyEffect ("IO") None (TyCon "Unit"))))))))
-(DFunDef false "runMcpServer" ((PVar "runtimeSrc") (PVar "coreSrc") (PVar "stdlibDir") (PVar "stalenessCheck") (PVar "serverVersion")) (EBlock (DoExpr (EApp (EVar "logMcp") (ELit (LString "medaka mcp server start")))) (DoExpr (EApp (EApp (EApp (EApp (EApp (EApp (EVar "serveLoop") (EApp (EVar "Ref") (EVar "emptyMcpSyntaxState"))) (EVar "runtimeSrc")) (EVar "coreSrc")) (EVar "stdlibDir")) (EVar "stalenessCheck")) (EVar "serverVersion")))))
+(DFunDef false "runMcpServer" ((PVar "runtimeSrc") (PVar "coreSrc") (PVar "stdlibDir") (PVar "stalenessCheck") (PVar "serverVersion")) (EBlock (DoExpr (EApp (EVar "logMcp") (ELit (LString "medaka mcp server start")))) (DoLet false false (PVar "trace") (EApp (EApp (EApp (EApp (EVar "TraceContext") (EApp (EApp (EVar "optionOr") (ELit (LString ""))) (EApp (EVar "getEnv") (ELit (LString "MEDAKA_MCP_TRACE"))))) (EApp (EApp (EVar "optionOr") (ELit (LString "session"))) (EApp (EVar "getEnv") (ELit (LString "MEDAKA_MCP_TRACE_SESSION"))))) (EIf (EBinOp "==" (EApp (EVar "getEnv") (ELit (LString "MEDAKA_MCP_TRACE_CLASS"))) (EApp (EVar "Some") (ELit (LString "probe")))) (ELit (LString "probe")) (ELit (LString "organic")))) (EApp (EVar "Ref") (ELit (LInt 0))))) (DoExpr (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EVar "serveLoop") (EVar "trace")) (EApp (EVar "Ref") (EVar "emptyMcpSyntaxState"))) (EVar "runtimeSrc")) (EVar "coreSrc")) (EVar "stdlibDir")) (EVar "stalenessCheck")) (EVar "serverVersion")))))

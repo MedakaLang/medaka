@@ -54,6 +54,17 @@ class SchemaTests(unittest.TestCase):
             with self.assertRaises(ValueError):
                 validate_run(dict(self.run, **change))
 
+    def test_event_lifecycle(self):
+        for outcome in ("success", "tool_error", "protocol_error"):
+            validate_event(dict(self.event, outcome=outcome))
+        for event in ("start", "cancel_requested"):
+            validate_event(dict(self.event, event=event, outcome=None, duration_ns=None, response_bytes=None))
+            for field in ("outcome", "duration_ns", "response_bytes"):
+                bad = dict(self.event, event=event, outcome=None, duration_ns=None, response_bytes=None)
+                bad[field] = 1
+                with self.assertRaises(ValueError):
+                    validate_event(bad)
+
     def test_controls_are_backed_by_inputs_and_source(self):
         tasks = {task['id']: task for task in self.tasks}
         self.assertIn('import alpha as A', tasks['import-definition']['files']['main.mdk'])

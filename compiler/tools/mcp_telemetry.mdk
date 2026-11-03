@@ -1,0 +1,63 @@
+import json.{Json(..), jObject, stringify}
+
+public export data TraceContext = TraceContext String String String (Ref Int)
+public export data TraceToken =
+  | TraceDisabled
+  | TraceToken TraceContext String String Float
+
+export
+beginCall : TraceContext -> String -> String -> <IO, Clock> TraceToken
+beginCall (TraceContext "" _ _ _) _ _ = TraceDisabled
+beginCall context requestId tool =
+  let started = monotonicSec ()
+  emit context requestId tool "start" JNull JNull JNull
+  TraceToken context requestId tool started
+
+export
+finishCall : TraceToken -> String -> Int -> <IO, Clock> Unit
+finishCall TraceDisabled _ _ = ()
+finishCall (TraceToken context requestId tool started) outcome responseBytes =
+  let elapsed = floatToInt ((monotonicSec () - started) * 1000000000.0)
+  emit
+    context
+    requestId
+    tool
+    "finish"
+    (JString outcome)
+    (JInt (max 0 elapsed))
+    (JInt responseBytes)
+
+export
+recordProtocol : TraceContext -> String -> String -> <IO> Unit
+recordProtocol context event requestId =
+  emit context requestId "protocol" event JNull JNull JNull
+
+emit : TraceContext ->
+  String ->
+  String ->
+  String ->
+  Json ->
+  Json ->
+  Json ->
+  <IO> Unit
+emit (TraceContext path session classification _) requestId tool event outcome duration size =
+  if path == "" then
+    ()
+  else
+    let line =
+      stringify
+          (jObject [
+            ("schema_version", JInt 1),
+            ("session_id", JString session),
+            ("request_id", JString requestId),
+            ("tool", JString tool),
+            ("classification", JString classification),
+            ("event", JString event),
+            ("outcome", outcome),
+            ("duration_ns", duration),
+            ("response_bytes", size),
+          ])
+        ++ "\n"
+    match appendFile path line
+      Ok _ => ()
+      Err _ => ()

@@ -1,0 +1,32 @@
+import test.{expectAll, expectTextContainsAll, fail, pass}
+import test_process.{withScratchDir}
+import tools.mcp_telemetry.{
+  TraceContext(..), TraceToken(..), beginCall, finishCall, recordProtocol
+}
+
+test "disabled trace returns no token" =
+  match (beginCall
+    (TraceContext "" "session" "organic" (Ref 0))
+    "0"
+    "medaka_check")
+    TraceDisabled => pass
+    _ => fail "disabled tracing created a token"
+
+test "completion and cancel records contain only metadata" = withScratchDir
+  (dir =>
+    let path = "\{dir}/trace.jsonl"
+    let trace = TraceContext path "session" "probe" (Ref 0)
+    let token = beginCall trace "0" "medaka_check"
+    finishCall token "success" 42
+    recordProtocol trace "cancel_requested" "1"
+    match readFile path
+      Err e => fail e
+      Ok text => expectAll [
+        expectTextContainsAll
+          [
+            "\"event\":\"start\"", "\"event\":\"finish\"",
+            "\"outcome\":\"success\"", "\"response_bytes\":42",
+            "\"event\":\"cancel_requested\""
+          ]
+          text,
+      ])

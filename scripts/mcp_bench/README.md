@@ -21,11 +21,11 @@ criteria contain `id`, `answer`, `basis`. Files have safe relative paths.
 Version 1 `validate_event` requires `schema_version`, `session_id`,
 `request_id`, `tool`, `classification` (`probe` or `organic`), `event`
 (`start`, `finish`, `protocol`, `cancel_requested`), `outcome`, `duration_ns`,
-and `response_bytes`. A finish has a success or tool_error outcome and numeric
-nonnegative duration and response size; other events have null outcome. The
-latter two measurements may be null outside finish. This is a preliminary host
-contract: protocol rejection detail and server event serialization must be
-reconciled by the telemetry and collector slices before integration.
+and `response_bytes`. A finish has a success, tool_error or protocol_error
+outcome and nonnegative duration and response size. Other events require null
+outcome and measurements. Request identifiers are server-generated sequence
+numbers, never client request IDs. Session identifiers are supplied by the
+collector. A cancel request is not evidence of cancellation.
 
 Version 1 `validate_run` requires `schema_version`, `run_id`, `task_id`, `arm`,
 `outcome`, `attempted`, `completed`, `passed`, `failed`, `skipped`.

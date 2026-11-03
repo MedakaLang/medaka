@@ -67,7 +67,7 @@ def validate_event(value: dict) -> Event:
         raise ValueError("event: unknown")
     if value["outcome"] not in (None, "success", "tool_error", "protocol_error"):
         raise ValueError("outcome: unknown")
-    if value["event"] == "finish" and value["outcome"] not in ("success", "tool_error"):
+    if value["event"] == "finish" and value["outcome"] not in ("success", "tool_error", "protocol_error"):
         raise ValueError("finish: missing outcome")
     if value["event"] != "finish" and value["outcome"] is not None:
         raise ValueError("non-finish: unexpected outcome")
@@ -76,6 +76,8 @@ def validate_event(value: dict) -> Event:
             _count(value[field], field)
         if value["event"] == "finish" and value[field] is None:
             raise ValueError(f"finish: missing {field}")
+        if value["event"] != "finish" and value[field] is not None:
+            raise ValueError(f"non-finish: unexpected {field}")
     return Event(deepcopy(value))
 
 
