@@ -1,5 +1,5 @@
 # META
-source_lines=1854
+source_lines=1853
 stages=DESUGAR,MARK
 # SOURCE
 -- compiler/tools/doc.mdk — the native `medaka doc` documentation extractor.
