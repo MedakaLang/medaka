@@ -281,6 +281,11 @@ Rulings that qualify the table:
   callers, `applyModuleTrees` and `forgetLocalAbs`) raises
   `test/arch_goldens/closure.types.module_interface.golden` from 33 to 35 lines, adding `types.tc_state` and
   `types.tc_mono`, and the closure goldens may only fall.
+- `ioJoinAtoms` stays in `typecheck`: moving it to `effect_policy` makes `typecheck` import
+  `effect_policy`, which `typecheck` did not import before, so `types.effect_policy` and
+  `types.capability_policy` enter the closures of `tools.lint_core` (116 to 118 lines in
+  `test/arch_goldens/closure.tools.lint_core.golden`) and `tools.lint_fix` (122 to 124), which reach
+  `types.typecheck`; `arch_boundaries` reds on both, and the closure goldens may only fall.
 - Doctest placement: a doctest runs in its owning module. One that calls a name in a higher module
   moves to the sibling `*_test.mdk` of the highest module it calls; two doctests move this way
   (the `tc_env` block that calls `deKindRow0` moves to `tc_decls_test.mdk`).
