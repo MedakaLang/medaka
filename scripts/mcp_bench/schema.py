@@ -82,9 +82,18 @@ def validate_event(value: dict) -> Event:
 
 
 def validate_run(value: dict) -> Run:
-    _object(value, {"schema_version", "run_id", "task_id", "arm", "outcome", "attempted", "completed", "passed", "failed", "skipped"}, "run")
-    if type(value["schema_version"]) is not int or value["schema_version"] != 1:
-        raise ValueError("schema_version: expected 1")
+    fields = {"schema_version", "run_id", "task_id", "arm", "outcome", "attempted", "completed", "passed", "failed", "skipped"}
+    if isinstance(value, dict) and value.get("schema_version") == 2:
+        fields |= {"wall_ns", "cpu_ns", "peak_rss_bytes", "resource_scope", "resource_reason"}
+    _object(value, fields, "run")
+    if type(value["schema_version"]) is not int or value["schema_version"] not in (1, 2):
+        raise ValueError("schema_version: expected 1 or 2")
+    if value["schema_version"] == 2:
+        _count(value["wall_ns"], "wall_ns")
+        if value["cpu_ns"] is not None or value["peak_rss_bytes"] is not None:
+            raise ValueError("resource metrics unavailable")
+        _text(value["resource_scope"], "resource_scope")
+        _text(value["resource_reason"], "resource_reason")
     for field in ("run_id", "task_id", "arm"):
         _text(value[field], field)
     if value["outcome"] not in ("success", "incorrect", "unsupported", "startup_failure", "tool_error", "protocol_error", "crash", "timeout", "cancelled", "observer_failure"):
