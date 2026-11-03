@@ -1251,7 +1251,7 @@ desugar prog = desugarIn "" prog
 export
 desugarIn : String -> List Decl -> List Decl
 desugarIn mid prog =
-  let _ = stageBump "desugar"
+  stageBump "desugar"
   qualifyAliasRefs prog
     |> mergeIfaceDefaults
     |> concatMapDecl expandDecl
@@ -1863,7 +1863,7 @@ stampRecFieldBy mint (RecPatField l loc _ (Some p)) =
 (DTypeSig true "desugar" (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyApp (TyCon "List") (TyCon "Decl"))))
 (DFunDef false "desugar" ((PVar "prog")) (EApp (EApp (EVar "desugarIn") (ELit (LString ""))) (EVar "prog")))
 (DTypeSig true "desugarIn" (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyApp (TyCon "List") (TyCon "Decl")))))
-(DFunDef false "desugarIn" ((PVar "mid") (PVar "prog")) (EBlock (DoLet false false PWild (EApp (EVar "stageBump") (ELit (LString "desugar")))) (DoExpr (EBinOp "|>" (EBinOp "|>" (EBinOp "|>" (EBinOp "|>" (EBinOp "|>" (EBinOp "|>" (EBinOp "|>" (EBinOp "|>" (EApp (EVar "qualifyAliasRefs") (EVar "prog")) (EVar "mergeIfaceDefaults")) (EApp (EVar "concatMapDecl") (EVar "expandDecl"))) (EVar "desugarRecordPuns")) (EVar "lowerContainerLiterals")) (EApp (EVar "mapProg") (EVar "rewriteDo"))) (EApp (EVar "mapProg") (EVar "rewriteAssignIndex"))) (EApp (EVar "mapProg") (EVar "rewriteSugar"))) (EApp (EVar "stampBinderIds") (EVar "mid"))))))
+(DFunDef false "desugarIn" ((PVar "mid") (PVar "prog")) (EBlock (DoExpr (EApp (EVar "stageBump") (ELit (LString "desugar")))) (DoExpr (EBinOp "|>" (EBinOp "|>" (EBinOp "|>" (EBinOp "|>" (EBinOp "|>" (EBinOp "|>" (EBinOp "|>" (EBinOp "|>" (EApp (EVar "qualifyAliasRefs") (EVar "prog")) (EVar "mergeIfaceDefaults")) (EApp (EVar "concatMapDecl") (EVar "expandDecl"))) (EVar "desugarRecordPuns")) (EVar "lowerContainerLiterals")) (EApp (EVar "mapProg") (EVar "rewriteDo"))) (EApp (EVar "mapProg") (EVar "rewriteAssignIndex"))) (EApp (EVar "mapProg") (EVar "rewriteSugar"))) (EApp (EVar "stampBinderIds") (EVar "mid"))))))
 (DTypeSig false "binderOrdinalRef" (TyApp (TyCon "Ref") (TyCon "Int")))
 (DFunDef false "binderOrdinalRef" () (EApp (EVar "Ref") (ELit (LInt 0))))
 (DTypeSig true "freshBinderId" (TyFun (TyCon "String") (TyCon "BinderId")))
@@ -2372,7 +2372,7 @@ stampRecFieldBy mint (RecPatField l loc _ (Some p)) =
 (DTypeSig true "desugar" (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyApp (TyCon "List") (TyCon "Decl"))))
 (DFunDef false "desugar" ((PVar "prog")) (EApp (EApp (EVar "desugarIn") (ELit (LString ""))) (EVar "prog")))
 (DTypeSig true "desugarIn" (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyApp (TyCon "List") (TyCon "Decl")))))
-(DFunDef false "desugarIn" ((PVar "mid") (PVar "prog")) (EBlock (DoLet false false PWild (EApp (EVar "stageBump") (ELit (LString "desugar")))) (DoExpr (EBinOp "|>" (EBinOp "|>" (EBinOp "|>" (EBinOp "|>" (EBinOp "|>" (EBinOp "|>" (EBinOp "|>" (EBinOp "|>" (EApp (EVar "qualifyAliasRefs") (EVar "prog")) (EVar "mergeIfaceDefaults")) (EApp (EVar "concatMapDecl") (EVar "expandDecl"))) (EVar "desugarRecordPuns")) (EVar "lowerContainerLiterals")) (EApp (EVar "mapProg") (EVar "rewriteDo"))) (EApp (EVar "mapProg") (EVar "rewriteAssignIndex"))) (EApp (EVar "mapProg") (EVar "rewriteSugar"))) (EApp (EVar "stampBinderIds") (EVar "mid"))))))
+(DFunDef false "desugarIn" ((PVar "mid") (PVar "prog")) (EBlock (DoExpr (EApp (EVar "stageBump") (ELit (LString "desugar")))) (DoExpr (EBinOp "|>" (EBinOp "|>" (EBinOp "|>" (EBinOp "|>" (EBinOp "|>" (EBinOp "|>" (EBinOp "|>" (EBinOp "|>" (EApp (EVar "qualifyAliasRefs") (EVar "prog")) (EVar "mergeIfaceDefaults")) (EApp (EVar "concatMapDecl") (EVar "expandDecl"))) (EVar "desugarRecordPuns")) (EVar "lowerContainerLiterals")) (EApp (EVar "mapProg") (EVar "rewriteDo"))) (EApp (EVar "mapProg") (EVar "rewriteAssignIndex"))) (EApp (EVar "mapProg") (EVar "rewriteSugar"))) (EApp (EVar "stampBinderIds") (EVar "mid"))))))
 (DTypeSig false "binderOrdinalRef" (TyApp (TyCon "Ref") (TyCon "Int")))
 (DFunDef false "binderOrdinalRef" () (EApp (EVar "Ref") (ELit (LInt 0))))
 (DTypeSig true "freshBinderId" (TyFun (TyCon "String") (TyCon "BinderId")))

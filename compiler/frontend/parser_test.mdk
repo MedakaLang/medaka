@@ -31,8 +31,8 @@ import frontend.parser.{
   prescanErrorPairs,
 }
 import test.{
-  expectEqual, expectEach, expectAll, expectSome, expectNone, expectTrue,
-  expectOkThen, expectErrContains, Expectation, expectTextContainsAll
+  expectEqual, expectEach, expectAll, expectSome, expectNone, expectOkThen,
+  expectErrContains, Expectation, expectTextContainsAll
 }
 import frontend.parser as P
 import frontend.parse_engine as E
@@ -482,10 +482,8 @@ attrOutcome src = match parseResult src
     "error at \{parseErrorLine e}:\{parseErrorCol e}: \{parseErrorMessage e}"
   Ok ds => declAttrText ds
 
-parsesOk : String -> Bool
-parsesOk src = match parseResult src
-  Ok _ => True
-  Err _ => False
+parsesOk : String -> Expectation
+parsesOk src = expectEqual "parsed" (parseMsg src)
 
 test "a bare @deprecated keeps its spelling as AttrDeprecated None" =
   expectEqual
@@ -525,7 +523,7 @@ test "a second authority qualifier after a type is refused at that @" =
     (attrOutcome "idp : (p : String) -> <FileRead p> String @p @p\nidp p = p\n")
 
 test "a single authority qualifier before an attribute line still parses" =
-  expectTrue (parsesOk "f : (p : String) -> String @p\n@inline\nf s = s\n")
+  parsesOk "f : (p : String) -> String @p\n@inline\nf s = s\n"
 
 -- ── extern `bind` clauses under a wrapped signature ─────────────────────────
 -- The clauses of the first declaration, if it is an extern, as `host symbol`

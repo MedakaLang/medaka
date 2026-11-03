@@ -33,6 +33,8 @@ Every rule `medaka lint` knows. `universal` rules are meaningful in any Medaka p
 | [`rule-concat-to-interp`](#rule-concat-to-interp) | universal | style | gated | fixable | file |
 | [`rule-self-shadow-extern`](#rule-self-shadow-extern) | universal | correctness | gated | not-fixable | file |
 | [`rule-prefer-assign-op`](#rule-prefer-assign-op) | universal | style | gated | fixable | file |
+| [`rule-let-underscore-unit`](#rule-let-underscore-unit) | universal | style | gated | fixable | file |
+| [`rule-discarded-result`](#rule-discarded-result) | universal | style | gated | not-fixable | file |
 | [`rule-promissory-reader`](#rule-promissory-reader) | internal | style | gated | not-fixable | file |
 | [`rule-orelse-staircase`](#rule-orelse-staircase) | universal | complexity | gated | not-fixable | file |
 | [`rule-clone-type`](#rule-clone-type) | universal | style | baselined | not-fixable | file |
@@ -41,6 +43,7 @@ Every rule `medaka lint` knows. `universal` rules are meaningful in any Medaka p
 | [`rule-directive-reason`](#rule-directive-reason) | internal | style | gated | not-fixable | file |
 | [`rule-regex-literal`](#rule-regex-literal) | universal | correctness | gated | not-fixable | file |
 | [`rule-test-bool-literal-equal`](#rule-test-bool-literal-equal) | internal | style | gated | fixable | file |
+| [`rule-test-bool-helper`](#rule-test-bool-helper) | internal | style | gated | not-fixable | file |
 | [`rule-test-equal-in-true`](#rule-test-equal-in-true) | internal | style | gated | fixable | file |
 | [`rule-prelude-shadow`](#rule-prelude-shadow) | universal | suspicious | gated | not-fixable | file |
 
@@ -428,6 +431,36 @@ After:
   counter := 1
 ```
 
+## rule-let-underscore-unit
+
+`let _ = e` on a call that returns Unit, in a plain block. Write the bare statement `e`
+
+A call whose declared result is Unit has no value to bind, so `let _ =` in front of it says nothing. In a plain block the call is a statement on its own; `do` blocks keep `let _ =`. Only a saturated call to a signed function is checked: the declared result decides, so a partial application, a method, a shadowed name and an unsigned function are not reported.
+
+```
+Before:
+  let _ = writeLine out "done"
+  count xs
+After:
+  writeLine out "done"
+  count xs
+```
+
+## rule-discarded-result
+
+`let _ = e` on a call that returns a Result or an Option, in a plain block. Propagate it, handle it or name the discard
+
+A call whose declared result is a `Result` or an `Option` carries a failure or an absence, and `let _ =` throws it away unread. In a plain block the error must be propagated (the enclosing function's type permits `?`, a match or `andThen`, or its signature changes with its callers), or the discard named with `bestEffort "<reason>"`, whose reason says why this error is ignorable. A discarded `Option` has a `None` case to handle, or the call is rewritten so the result is not discarded. `do` blocks are not checked. Only a saturated call to a signed function is checked: the declared result decides, so a partial application, a method, a shadowed name and an unsigned function are not reported.
+
+```
+Before:
+  let _ = writeFile path text
+  next ()
+After:
+  bestEffort "the scratch file is advisory" (writeFile path text)
+  next ()
+```
+
 ## rule-promissory-reader
 
 comment claims a symbol has no reader yet ("nothing reads this yet", "no reader yet", "do not add a reader") but the file reads it (#2550)
@@ -542,6 +575,21 @@ Before:
   expectEqual True (a == 1)
 After:
   expectTrue (a == 1)
+```
+
+## rule-test-bool-helper
+
+a `-> Bool` helper in a `*_test.mdk` whose call is graded with `expectTrue`/`expectFalse`. Return an `Expect` (`expectErrContains`, `expectEqual`, ...) so a failure says what was expected
+
+A `Bool` helper graded with `expectTrue`/`expectFalse` fails with "expected True, got False" and names nothing. Make the helper return an `Expect` built from the verb that fits (`expectErrContains`, `expectEqual`, `expectOk`, ...; see the `write-tests` table) and drop the `expectTrue`/`expectFalse` wrapper at its call sites. A helper that a `prop` in the same file references keeps `Bool`, because a prop's oracle is `Bool`. Covered call shapes: `expectTrue (h a b)`, `expectFalse (h a b)`, `h a b |> expectTrue`, `x |> h |> expectTrue`. Not covered: a call nested deeper in the argument (`expectTrue (a && h b)`, `expectTrue (not (h b))`).
+
+```
+Before:
+  rejects : String -> Bool
+  test "t" = expectTrue (rejects "x")
+After:
+  rejects : String -> Expect
+  test "t" = rejects "x"
 ```
 
 ## rule-test-equal-in-true

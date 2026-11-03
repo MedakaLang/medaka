@@ -10,11 +10,12 @@ import support.diag_codes.{
   kindText,
 }
 import string.{capitalize, concat, split, take, toLower}
-import test.{expectAll, expectEqual, expectFalse, expectNone}
+import test.{expectAll, expectEqual, expectNone}
 
-hasDuplicate : List String -> Bool
-hasDuplicate [] = False
-hasDuplicate (x :: rest) = elem x rest || hasDuplicate rest
+repeatedEntries : List String -> List String
+repeatedEntries [] = []
+repeatedEntries (x :: rest) =
+  (if elem x rest then [x] else []) ++ repeatedEntries rest
 
 -- The constructor name the naming rule derives from a code text: the prefix letter, then the
 -- CamelCase of the dash segments.
@@ -25,10 +26,10 @@ nameOfText text = match split "-" text
     prefix ++ concat (map (s => capitalize (toLower s)) segments)
 
 test "no two codes share a text" =
-  expectFalse (hasDuplicate (map codeText allDiagCodes))
+  expectEqual [] (repeatedEntries (map codeText allDiagCodes))
 
 test "no constructor is listed twice in the registry" =
-  expectFalse (hasDuplicate (map debug allDiagCodes))
+  expectEqual [] (repeatedEntries (map debug allDiagCodes))
 
 test "codeOfText inverts codeText for every code" =
   expectAll

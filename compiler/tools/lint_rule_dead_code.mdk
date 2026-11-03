@@ -154,7 +154,7 @@ reachableNames facts prog =
       ++ ("main"
         :: flatMap nonDefRefL prog ++ doctestIdents (factComments facts))
   let visited = new ()
-  let _ = bfsReach refMap visited seed
+  bfsReach refMap visited seed
   visited
 
 -- one (defName, bodyRefs) per top-level DFunDef clause; refs are the identifier
@@ -223,7 +223,7 @@ bfsReach _ _ [] = ()
 bfsReach refMap visited (x :: rest)
   | has x visited = bfsReach refMap visited rest
   | otherwise =
-    let _ = setInPlace x () visited
+    setInPlace x () visited
     bfsReach refMap visited (refsOf refMap x ++ rest)
 
 refsOf : HashMap String (List String) -> String -> List String
@@ -238,13 +238,13 @@ refsOf refMap n = findWithDefault [] n refMap
 mergeRefs : List (String, List String) -> HashMap String (List String)
 mergeRefs pairs =
   let m = new ()
-  let _ = mergeRefsGo m pairs
+  mergeRefsGo m pairs
   m
 
 mergeRefsGo : HashMap String (List String) -> List (String, List String) -> Unit
 mergeRefsGo _ [] = ()
 mergeRefsGo acc ((n, rs) :: rest) =
-  let _ = setInPlace n (sortUniqS (findWithDefault [] n acc ++ rs)) acc
+  setInPlace n (sortUniqS (findWithDefault [] n acc ++ rs)) acc
   mergeRefsGo acc rest
 
 -- ── identifier tokeniser ──────────────────────────────────────────────────────

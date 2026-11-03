@@ -107,6 +107,7 @@ fixtureNames = [
   "dead-code",
   "destructure-in-param",
   "directive-reason",
+  "discarded-result",
   "double-reverse",
   "duplicate-body",
   "eager-default",
@@ -114,6 +115,7 @@ fixtureNames = [
   "hand-rolled-derivable",
   "if-max-min",
   "lambda-section",
+  "let-underscore-unit",
   "match-on-param",
   "match-to-map",
   "missing-signature",
@@ -127,6 +129,7 @@ fixtureNames = [
   "rem-parity",
   "self-shadow-extern",
   "stdlib-reimpl",
+  "test-bool-helper",
   "test-bool-literal-equal",
   "test-equal-in-true",
   "unused-import",
@@ -244,9 +247,6 @@ lintLinesAt idx path rule src = match lintParseSource src
           src
           (lintProgram idx (selectRules [rule] []) path src pos decls)))
 
-lintLines : String -> String -> Result String (List Int)
-lintLines rule src = lintLinesAt emptyStdlibIndex (fixturePath src) rule src
-
 readOr : String -> <FileRead> Result String String
 readOr path = match readFile path
   Ok s => Ok s
@@ -292,7 +292,7 @@ fixOutcome idx rule src expected =
     Err e => fail "the fix: \{e}"
     Ok run =>
       let fixed = fst (runParts run)
-      match lintLines rule fixed
+      match lintLinesAt idx (fixturePath src) rule fixed
         Err e => fail "the fixed source: \{e}"
         Ok remaining => expectAll [
           labelFail "fix output" (expectEqual expected fixed),
@@ -370,6 +370,8 @@ test "rule-destructure-in-param fixture" = fixtureHolds "destructure-in-param"
 
 test "rule-directive-reason fixture" = fixtureHolds "directive-reason"
 
+test "rule-discarded-result fixture" = fixtureHolds "discarded-result"
+
 test "rule-double-reverse fixture" = fixtureHolds "double-reverse"
 
 test "rule-eager-default fixture" = fixtureHolds "eager-default"
@@ -382,6 +384,8 @@ test "rule-hand-rolled-derivable fixture" = fixtureHolds "hand-rolled-derivable"
 test "rule-if-max-min fixture" = fixtureHolds "if-max-min"
 
 test "rule-lambda-section fixture" = fixtureHolds "lambda-section"
+
+test "rule-let-underscore-unit fixture" = fixtureHolds "let-underscore-unit"
 
 test "rule-match-on-param fixture" = fixtureHolds "match-on-param"
 
@@ -408,6 +412,19 @@ test "rule-rem-parity fixture" = fixtureHolds "rem-parity"
 test "rule-self-shadow-extern fixture" = fixtureHolds "self-shadow-extern"
 
 test "rule-stdlib-reimpl fixture" = fixtureHolds "stdlib-reimpl"
+
+test "rule-test-bool-helper fixture" = fixtureHolds "test-bool-helper"
+
+test "rule-test-bool-helper ignores a non-test file" = match (
+  readOr "\{fixtureDir}/test-bool-helper.mdk",
+  indexForRules ["rule-test-bool-helper"],
+)
+  (Ok src, Ok idx) =>
+    match lintLinesAt idx "fixture.mdk" "rule-test-bool-helper" src
+      Err e => fail e
+      Ok flagged => expectEqual [] flagged
+  (Err e, _) => fail e
+  (_, Err e) => fail e
 
 test "rule-test-bool-literal-equal fixture" =
   fixtureHolds "test-bool-literal-equal"

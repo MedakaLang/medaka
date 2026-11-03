@@ -1,6 +1,6 @@
 # Test siblings see their subject's private names
 
-**Status:** DECIDED 2026-10-18 — semantics ruled (follow Rust unless there is a good reason not to); implemented except the items listed in §8 (stdlib siblings under `medaka test`; the typecheck D8 sinks stay exported; 33 of 34 M3 rows deferred): F1 #4314, F2 #4703, F3 #4717, migration #4616 (PR #4724).
+**Status:** DECIDED 2026-10-18 — semantics ruled (follow Rust unless there is a good reason not to); implemented except the items listed in §8 (stdlib siblings under `medaka test`; 43 of the 45 non-D8 M3 rows (32 values, 11 constructor rows) deferred): F1 #4314, F2 #4703, F3 #4717, migration #4616 (PR #4724).
 
 A `foo_test.mdk` beside `foo.mdk` may import any of `foo`'s top-level names, exported or not,
 the way a Rust `#[cfg(test)] mod tests` sees its parent's private items. This document records
@@ -267,5 +267,5 @@ view, names and record fields alike (`unbound variable parseGetInt` for
 established; `siblingSubjectId` (`compiler/driver/loader.mdk`) not matching the stdlib
 module id is the suspect.
 
-Two migration items are not done: the typecheck D8 sinks stay exported, and 33 of the 34 M3
-rows are deferred.
+One migration item is not done: 43 of the 45 non-D8 M3 rows (32 values, 11 constructor rows) are deferred. The typecheck trace and
+probe instruments were discharged by moving them into test code, not the tests (tracker #4755, PR #4761).

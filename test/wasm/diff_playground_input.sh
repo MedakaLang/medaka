@@ -50,7 +50,7 @@ bash "$ROOT/playground/build_playground_wasm.sh" >"$WORK/build.out" 2>"$WORK/bui
 # Compile scratch entry copies that report the plan retained after successful
 # gateway validation. The comments are stripped before comparing renderer text.
 cp -R "$ROOT/compiler" "$WORK/compiler"
-node - "$WORK/compiler" <<'JS'
+node - "$WORK/compiler" <<'JS' || bad "observation patch failed"
 const fs = require('node:fs');
 const dir = process.argv[2] + '/entries/';
 const comment = 'stringConcat (map (i => ";; DEMAND \\{i.namespace} \\{i.field}\\n") demand.imports)';
@@ -70,7 +70,7 @@ const pgObserve = `let observed = match plan.wasmPhysical
           None => panic "missing demand"
         let _ = putStr observed
         putStr text`;
-patch('playground_main.mdk', '        let _ = emitWatMarker warnTriples\n        putStr text', '        let _ = emitWatMarker warnTriples\n        ' + pgObserve);
+patch('playground_main.mdk', '        emitWatMarker warnTriples\n        putStr text', '        emitWatMarker warnTriples\n        ' + pgObserve);
 JS
 MEDAKA_STRICT=1 "$ROOT/medaka" build --allow-internal "$WORK/compiler/entries/wasm_emit_modules_main.mdk" -o "$WORK/observe-modules" >"$WORK/observe-build.out" 2>"$WORK/observe-build.err" || bad "observation entry build failed"
 "$MODULES" "$RUNTIME" "$CORE" "$WORK/compiler/entries/playground_main.mdk" "$WORK/compiler" "$ROOT/stdlib" >"$WORK/observe-playground.wat" 2>"$WORK/observe-playground.err" || bad "observation playground emission failed"
@@ -533,9 +533,9 @@ EOF2
 check_target_refusal net-via 'T-TARGET-CAPABILITY main.mdk 5:0 `main` performs <Net> via `main → fetchIt`, and the target `wasmgc/browser-worker` does not grant Net' "$WORK/target-net-via/netmod.mdk"
 # The compiler wasm's first run in a browser is baseline-tier (Liftoff), whose frames are
 # several times larger than optimized ones, and a browser worker gives ~1 MB of stack. A
-# program that imports `async` once overflowed it (types.typecheck.sealMethodReturnGoals
-# recursed once per goal). --liftoff-only pins that tier so the retry in compile.mjs cannot
-# tier up and hide a regression; 400 KB is 4x what the compiler needs today and half what
+# program that imports `async` once overflowed it (`sealMethodReturnGoals` in
+# compiler/types/tc_solve_test.mdk recursed once per goal). --liftoff-only pins that tier so the retry in
+# compile.mjs cannot tier up and hide a regression; 400 KB is 4x what the compiler needs today and half what
 # it needed before the fix.
 check_liftoff_stack() {
   label="$1"; prog="$2"; want="$3"; need="$4"; checks=$((checks + 1))

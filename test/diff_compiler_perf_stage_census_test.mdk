@@ -23,7 +23,7 @@ import list.{nub}
 import regex.{Regex, mustCompile, isMatch}
 import string.{lines, split, startsWith, trim}
 import test.{
-  Expectation, expectAll, expectAtLeast, expectNoFindings, expectTrue,
+  Expectation, expectAll, expectAtLeast, expectEqual, expectNoFindings,
   expectationTag, fail, pass
 }
 import test_process.{underRoot}
@@ -263,17 +263,15 @@ test "census: TIME_STAGES and OP_STAGES parse, and at least 6 stages are graded"
 
 -- Red proof for the lowered floors (compiler/entries is not mutable): an empty parse
 -- must fail both floors.
-isFailing : Expectation -> Bool
-isFailing e = expectationTag e == "Fail"
+isFailing : Expectation -> Expectation
+isFailing e = expectEqual "Fail" (expectationTag e)
 
 test "census: the lowered floors red on an empty parse" = expectAll [
-  expectTrue
-    (isFailing
-      (expectAtLeast
-        8
-        (length
-          (stagesIn (profilerHeads "empty.mdk" (numbered 1 (lines ""))))))),
-  expectTrue (isFailing (expectAtLeast 6 (length (stageNames [])))),
+  isFailing
+    (expectAtLeast
+      8
+      (length (stagesIn (profilerHeads "empty.mdk" (numbered 1 (lines "")))))),
+  isFailing (expectAtLeast 6 (length (stageNames []))),
 ]
 
 test "census: every derived stage is graded or waived" =

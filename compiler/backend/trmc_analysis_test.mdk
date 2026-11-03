@@ -1,7 +1,7 @@
 -- Structural regressions for the Core free-variable walk used by shared TRMC
 -- analysis and LLVM closure capture.
 
-import test.{expectAll, expectEqual, expectFalse, expectTrue}
+import test.{Expectation, expectAll, expectEqual}
 import frontend.ast.{
   Addr(..), Lit(..), Loc(..), Pat(..), Route(..), noDeclLoc, noBinderId
 }
@@ -75,18 +75,27 @@ trmcBody innerBody =
       ""
       noDeclLoc)
 
-trmcEligibleWith : CExpr -> Bool
-trmcEligibleWith innerBody =
-  trmcEligible
+trmcVerdict : CExpr -> String
+trmcVerdict innerBody =
+  if trmcEligible
     (_ => False)
     (_ => 0)
     (SelfByVar "loop")
     1
-    [([PVar "xs" loc noBinderId], trmcBody innerBody)]
+    [([PVar "xs" loc noBinderId], trmcBody innerBody)] then
+    "TRMC-eligible"
+  else
+    "TRMC-ineligible"
+
+trmcEligibleWith : CExpr -> Expectation
+trmcEligibleWith innerBody = expectEqual "TRMC-eligible" (trmcVerdict innerBody)
+
+trmcIneligibleWith : CExpr -> Expectation
+trmcIneligibleWith innerBody =
+  expectEqual "TRMC-ineligible" (trmcVerdict innerBody)
 
 test "TRMC rejects a hidden self-call but keeps an ordinary capture eligible" = expectAll
   [
-    expectTrue (trmcEligibleWith (CVar "xs" AGlobal)),
-    expectFalse
-      (trmcEligibleWith (mkApp (CVar "loop" AGlobal) [CVar "xs" AGlobal])),
+    trmcEligibleWith (CVar "xs" AGlobal),
+    trmcIneligibleWith (mkApp (CVar "loop" AGlobal) [CVar "xs" AGlobal]),
   ]

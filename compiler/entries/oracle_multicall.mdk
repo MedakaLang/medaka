@@ -64,7 +64,6 @@ import entries.new_main.{oracleMain as new_main}
 import entries.test_main.{oracleMain as test_main}
 import entries.repl_main.{oracleMain as repl_main}
 import entries.fuzz_gen_main.{oracleMain as fuzz_gen_main}
-import entries.profile_eval_main.{oracleMain as profile_eval_main}
 import entries.refindex_main.{oracleMain as refindex_main}
 
 main = match basename (executablePath ())
@@ -113,8 +112,7 @@ main = match basename (executablePath ())
   "test_main" => test_main ()
   "repl_main" => repl_main ()
   "fuzz_gen_main" => fuzz_gen_main ()
-  "profile_eval_main" => profile_eval_main ()
   "refindex_main" => refindex_main ()
   n =>
-    let _ = ePutStrLn "oracle_multicall: unknown oracle name '\{n}'"
+    ePutStrLn "oracle_multicall: unknown oracle name '\{n}'"
     exit 125

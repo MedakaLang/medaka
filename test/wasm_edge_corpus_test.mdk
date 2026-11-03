@@ -339,6 +339,12 @@ runAgrees : (Int, String, String) -> (Int, String, String) -> Bool
 runAgrees (nc, nout, nerr) (ec, eout, eerr) =
   nout == eout && nc == ec && (eerr == "" || eerr == nerr)
 
+expectAgrees : Bool ->
+  (Int, String, String) ->
+  (Int, String, String) ->
+  Expectation
+expectAgrees want native edge = expectEqual want (runAgrees native edge)
+
 gradeRun : String ->
   Probe ->
   List (Result String (Int, String, String)) ->
@@ -588,17 +594,15 @@ test "wasm edge corpus: a refused program built for node and run under the edge 
 test "wasm edge corpus: equal stdout with a different exit code or stray edge stderr is not agreement" =
   let native = (0, "all output\n", "")
   expectAll [
-    expectTrue (runAgrees native (0, "all output\n", "")),
-    expectTrue
-      (not
-        (runAgrees native (
-          1,
-          "all output\n",
-          "RangeError: Maximum call stack size exceeded\n",
-        ))),
-    expectTrue (not (runAgrees native (1, "all output\n", ""))),
-    expectTrue (not (runAgrees native (0, "all output\n", "warning\n"))),
-    expectTrue (runAgrees (2, "x", "boom\n") (2, "x", "boom\n")),
-    expectTrue (not (runAgrees (2, "x", "boom\n") (2, "x", "other\n"))),
-    expectTrue (not (runAgrees native (0, "less\n", ""))),
+    expectAgrees True native (0, "all output\n", ""),
+    expectAgrees False native (
+      1,
+      "all output\n",
+      "RangeError: Maximum call stack size exceeded\n",
+    ),
+    expectAgrees False native (1, "all output\n", ""),
+    expectAgrees False native (0, "all output\n", "warning\n"),
+    expectAgrees True (2, "x", "boom\n") (2, "x", "boom\n"),
+    expectAgrees False (2, "x", "boom\n") (2, "x", "other\n"),
+    expectAgrees False native (0, "less\n", ""),
   ]

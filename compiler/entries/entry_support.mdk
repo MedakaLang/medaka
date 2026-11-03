@@ -128,7 +128,7 @@ export
 failWith : String -> <IO> Unit
 -- lint-disable-next-line rule-duplicate-body
 failWith msg =
-  let _ = ePutStrLn msg
+  ePutStrLn msg
   stageExit 1
 
 -- ── file readers ───────────────────────────────────────────────────────────────
@@ -292,7 +292,7 @@ driveModulesGo runEmit runtimeP coreP entry roots =
       -- envelope, written to `path` (`driver/front_gate.mdk`).
       (Some allowInternal, Some path) =>
         let verdict = frontGateJson allowInternal (dirOf coreP) rsrc csrc entry
-        let _ = writeGateAck ()
+        writeGateAck ()
         match verdict
           Err cj => refuseJson path cj
           Ok (g, front) =>
@@ -311,10 +311,10 @@ driveModulesGo runEmit runtimeP coreP entry roots =
       -- whose graph is the one elaborated (`driver/front_gate.mdk`).
       (Some allowInternal, None) =>
         let verdict = frontGate allowInternal (dirOf coreP) rsrc csrc entry
-        let _ = writeGateAck ()
+        writeGateAck ()
         match verdict
           Err msg =>
-            let _ = ePutStrLn msg
+            ePutStrLn msg
             stageExit emitDiagExitCode
           Ok g =>
             emitLoaded
@@ -347,7 +347,7 @@ driveModulesGo runEmit runtimeP coreP entry roots =
 -- the code that tells `build` the child's verdict is a diagnostic.
 refuseJson : String -> CheckJson -> <IO> Unit
 refuseJson path cj =
-  let _ = writeDiagJson path cj
+  writeDiagJson path cj
   stageExit emitDiagExitCode
 
 -- #2072: the FFI-stamp discriminator, derived before anything elaborates and
@@ -370,7 +370,7 @@ emitLoaded : (EmitAsk -> List (String, String, List Decl) -> List Decl -> List D
   List (String, List Decl) ->
   <IO> Unit
 emitLoaded runEmit srcs json coreP entry roots mods runtimeD coreD modsD =
-  let _ = holdShippedPrelude (dirOf coreP) (fst srcs) (snd srcs)
+  holdShippedPrelude (dirOf coreP) (fst srcs) (snd srcs)
   let ownership =
     stdlibOwnership entry roots (dirOf coreP) (map dropPathTriple mods)
   let ask = EmitAsk {
@@ -436,7 +436,7 @@ moduleLoadHint e = match unknownModuleIdOf e
 emitResidualGate : List (String, String) -> String -> TcReport -> <IO> Unit
 emitResidualGate pathMap target report =
   if isNone report.trChecked then
-    let _ = ePutStrLn (residualOrGeneric pathMap target report.trResidual)
+    ePutStrLn (residualOrGeneric pathMap target report.trResidual)
     stageExit emitDiagExitCode
 
 -- The whole diagnostic verdict for a build, rendered as `medaka check` renders
@@ -487,7 +487,7 @@ selectTargetProfileOfEnv _ = match selectProfile (getEnv targetProfileEnv) None
     selectedProfile := p
     p
   Err m =>
-    let _ = failWith ("error: " ++ m)
+    failWith ("error: " ++ m)
     None
 
 -- One elaboration either way.  With a profile it is `check-policy`'s analysis,
@@ -553,7 +553,7 @@ emitTargetGate _ runtimeDecls (Some p) [] =
 emitTargetGate modsWithPath _ (Some _) ds =
   let file = entryPathOf modsWithPath
   let src = resultOr "" (readFile file)
-  let _ = ePutStrLn (joinNl (map (ppTargetDiag file src) ds))
+  ePutStrLn (joinNl (map (ppTargetDiag file src) ds))
   stageExit emitDiagExitCode
 
 -- `emitFullGate` and `emitTargetGate` for the `--json` route: the drive's
@@ -573,15 +573,14 @@ emitJsonGate : String ->
 emitJsonGate path front modsWithPath runtimeDecls buckets report profile refusal =
   match frontJsonVerdict front modsWithPath buckets refusal
     Err refused =>
-      let _ = refuseJson path refused
+      refuseJson path refused
       refused
     Ok cj =>
-      let _ =
-        emitResidualGate
-          (map modIdToPath modsWithPath)
-          (entryPathOf modsWithPath)
-          report
-      let _ = emitTargetGate modsWithPath runtimeDecls profile []
+      emitResidualGate
+        (map modIdToPath modsWithPath)
+        (entryPathOf modsWithPath)
+        report
+      emitTargetGate modsWithPath runtimeDecls profile []
       cj
 
 export
@@ -709,9 +708,8 @@ runEmitAsked ask requirement asyncDriver emitTail modsWithPath runtimeDecls core
         out.foReport
   match (ask.askJson, out.foDriven)
     (None, Some kept) =>
-      let _ = emitFullGate modsWithPath out.foDiags out.foReport
-      let _ =
-        emitTargetGate modsWithPath runtimeDecls kept.ekProfile kept.ekRefusal
+      emitFullGate modsWithPath out.foDiags out.foReport
+      emitTargetGate modsWithPath runtimeDecls kept.ekProfile kept.ekRefusal
       emitAsked ()
     (Some (path, front), Some kept) =>
       let cj =
@@ -842,10 +840,10 @@ batchLoop : String -> (List Decl -> String) -> List String -> <IO> Unit
 batchLoop _sentinel _render [] = putStr ""
 batchLoop sentinel render (path :: rest) = match readFile path
   Err msg =>
-    let _ = ePutStrLn msg
+    ePutStrLn msg
     batchLoop sentinel render rest
   Ok src =>
-    let _ = putStr "\{sentinel}\{path}\n\{render (desugar (parse src))}\n"
+    putStr "\{sentinel}\{path}\n\{render (desugar (parse src))}\n"
     batchLoop sentinel render rest
 
 -- batch CLI shape: <runtime.mdk> <core.mdk> <target.mdk>...  runtime + core parsed

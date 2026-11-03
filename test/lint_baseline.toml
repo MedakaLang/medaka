@@ -29,7 +29,7 @@ count = 1
 [[entry]]
 file = "compiler/backend/wasm_emit.mdk"
 rule = "rule-stdlib-reimpl"
-count = 2
+count = 1
 
 [[entry]]
 file = "compiler/driver/loader.mdk"
@@ -74,7 +74,7 @@ count = 2
 [[entry]]
 file = "compiler/support/util.mdk"
 rule = "rule-stdlib-reimpl"
-count = 5
+count = 4
 
 [[entry]]
 file = "compiler/tools/lsp_harness.mdk"

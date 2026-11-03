@@ -80,16 +80,15 @@ describeHeader h off =
 main = match parseGzipHeader helloGz
   Err e => println ("header parse failed: " ++ e)
   Ok (hdr, off) =>
-    let _ = println (describeHeader hdr off)
+    println (describeHeader hdr off)
     let payload = B.sliceClamped off (B.length helloGz - 8) helloGz
-    let _ = println (describeFirstBlock payload)
+    println (describeFirstBlock payload)
     match parseGzipTrailer helloGz
       Err e => println ("trailer parse failed: " ++ e)
       Ok (storedCrc, storedSize) =>
         let ourCrc = U32.toInt (crc32 helloBytes)
-        let _ =
-          println "trailer crc=\{debug storedCrc} isize=\{debug storedSize}"
-        let _ = println "crc32 of \"hello\" = \{debug ourCrc}"
+        println "trailer crc=\{debug storedCrc} isize=\{debug storedSize}"
+        println "crc32 of \"hello\" = \{debug ourCrc}"
         let crcOk = ourCrc == storedCrc
         let sizeOk = storedSize == B.length helloBytes
         println

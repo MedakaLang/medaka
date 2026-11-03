@@ -59,7 +59,7 @@ runUO : Db -> String -> Select -> <IO> Unit
 -- Intentional cross-file duplicate: parallel demo/probe script wiring the same fixture shape (not shared production logic to consolidate).
 -- lint-disable-next-line rule-duplicate-body
 runUO db label sel =
-  let _ = println label
+  println label
   match query db sel uoRow
     Err e => println "query error: \{e}"
     Ok rows => printUO rows
@@ -99,7 +99,7 @@ runABC : Db -> String -> Select -> <IO> Unit
 -- Intentional cross-file duplicate: parallel demo/probe script wiring the same fixture shape (not shared production logic to consolidate).
 -- lint-disable-next-line rule-duplicate-body
 runABC db label sel =
-  let _ = println label
+  println label
   match query db sel abcRow
     Err e => println "query error: \{e}"
     Ok rows => printABC rows
@@ -111,45 +111,42 @@ main = match args ()
     Err e => println "open error: \{e}"
     Ok db =>
       -- Full 2-table equi-join, ordered by orders.oid.
-      let _ =
-        runUO
-          db
-          "-- join users/orders --"
-          (withOrderBy
-            "orders.oid"
-            True
+      runUO
+        db
+        "-- join users/orders --"
+        (withOrderBy
+          "orders.oid"
+          True
+          (innerJoin
+            "orders"
+            (eEq (eColInt "users.id") (eColInt "orders.uid"))
+            (selectFrom "users")))
+      -- Same join + a WHERE filter on a joined column (amount > 100).
+      runUO
+        db
+        "-- join users/orders where amount>100 --"
+        (withOrderBy
+          "orders.amount"
+          True
+          (withWhere
+            (eGt (eColInt "orders.amount") (eLitI 100))
             (innerJoin
               "orders"
               (eEq (eColInt "users.id") (eColInt "orders.uid"))
-              (selectFrom "users")))
-      -- Same join + a WHERE filter on a joined column (amount > 100).
-      let _ =
-        runUO
-          db
-          "-- join users/orders where amount>100 --"
-          (withOrderBy
-            "orders.amount"
-            True
-            (withWhere
-              (eGt (eColInt "orders.amount") (eLitI 100))
-              (innerJoin
-                "orders"
-                (eEq (eColInt "users.id") (eColInt "orders.uid"))
-                (selectFrom "users"))))
+              (selectFrom "users"))))
       -- WHERE on a from-table column + ON equi-join, ordered by amount desc.
-      let _ =
-        runUO
-          db
-          "-- join users/orders where users.id=1 --"
-          (withOrderBy
-            "orders.amount"
-            False
-            (withWhere
-              (eEq (eColInt "users.id") (eLitI 1))
-              (innerJoin
-                "orders"
-                (eEq (eColInt "users.id") (eColInt "orders.uid"))
-                (selectFrom "users"))))
+      runUO
+        db
+        "-- join users/orders where users.id=1 --"
+        (withOrderBy
+          "orders.amount"
+          False
+          (withWhere
+            (eEq (eColInt "users.id") (eLitI 1))
+            (innerJoin
+              "orders"
+              (eEq (eColInt "users.id") (eColInt "orders.uid"))
+              (selectFrom "users"))))
       -- 3-table chained equi-join, ordered by tc.cid.
       runABC
         db

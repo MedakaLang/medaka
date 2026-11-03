@@ -186,7 +186,7 @@ test "gateway emission seams refuse F1-F6 and a mismatched target before returni
         let _ = match getEnv "MEDAKA_EMISSION_DESTINATION"
           Some destination => writeFile destination text
           None => Ok ()
-        let _ = putStrLn ("EMISSION_RETURNED_SENTINEL" ++ text)
+        putStrLn ("EMISSION_RETURNED_SENTINEL" ++ text)
         pass
       _ => fail "invalid emission probe selector"
     None =>
@@ -2563,8 +2563,7 @@ emissionText route victim =
   match route
     "llvm-stats" =>
       let (text, stats) = llvmStats li plan cp
-      let _ =
-        putStrLn ("EMISSION_STATS_SENTINEL" ++ intToString (listLen stats))
+      putStrLn ("EMISSION_STATS_SENTINEL" ++ intToString (listLen stats))
       text
     "llvm-strict" => llvmStrict li plan cp
     "llvm-record" => fst (llvmRecord li plan cp)
@@ -2577,12 +2576,12 @@ emissionText route victim =
         validateForEmission WasmBackend domain requirement plan cp
       match validation.defects
         [] =>
-          let _ = putStrLn "__MEDAKA_ANALYZE__"
+          putStrLn "__MEDAKA_ANALYZE__"
           "ANALYZE"
         bad => panic (joinNl (map coreDefectMessage bad))
     "playground" =>
       let wat = wasmStrict wi plan cp
-      let _ = putStrLn "__MEDAKA_WAT__"
+      putStrLn "__MEDAKA_WAT__"
       wat
     _ => wasmUnchecked wi plan cp
 

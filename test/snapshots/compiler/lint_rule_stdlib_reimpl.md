@@ -400,13 +400,13 @@ ownsModule (Some own) modName = modName == own
 sigTyMapOf : List Decl -> HashMap String Ty
 sigTyMapOf prog =
   let m = new ()
-  let _ = sigTyInto (reverseL (flatMap topSigPairL prog)) m
+  sigTyInto (reverseL (flatMap topSigPairL prog)) m
   m
 
 sigTyInto : List (String, Ty) -> HashMap String Ty -> Unit
 sigTyInto [] _ = ()
 sigTyInto ((n, t) :: rest) m =
-  let _ = setInPlace n t m
+  setInPlace n t m
   sigTyInto rest m
 
 topSigPairL : Decl -> List (String, Ty)
@@ -612,10 +612,10 @@ indexInGo x (y :: ys) i
 (DFunDef false "ownsModule" ((PCon "None") PWild) (EVar "False"))
 (DFunDef false "ownsModule" ((PCon "Some" (PVar "own")) (PVar "modName")) (EBinOp "==" (EVar "modName") (EVar "own")))
 (DTypeSig false "sigTyMapOf" (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyApp (TyApp (TyCon "HashMap") (TyCon "String")) (TyCon "Ty"))))
-(DFunDef false "sigTyMapOf" ((PVar "prog")) (EBlock (DoLet false false (PVar "m") (EApp (EVar "new") (ELit LUnit))) (DoLet false false PWild (EApp (EApp (EVar "sigTyInto") (EApp (EVar "reverseL") (EApp (EApp (EVar "flatMap") (EVar "topSigPairL")) (EVar "prog")))) (EVar "m"))) (DoExpr (EVar "m"))))
+(DFunDef false "sigTyMapOf" ((PVar "prog")) (EBlock (DoLet false false (PVar "m") (EApp (EVar "new") (ELit LUnit))) (DoExpr (EApp (EApp (EVar "sigTyInto") (EApp (EVar "reverseL") (EApp (EApp (EVar "flatMap") (EVar "topSigPairL")) (EVar "prog")))) (EVar "m"))) (DoExpr (EVar "m"))))
 (DTypeSig false "sigTyInto" (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "Ty"))) (TyFun (TyApp (TyApp (TyCon "HashMap") (TyCon "String")) (TyCon "Ty")) (TyCon "Unit"))))
 (DFunDef false "sigTyInto" ((PList) PWild) (ELit LUnit))
-(DFunDef false "sigTyInto" ((PCons (PTuple (PVar "n") (PVar "t")) (PVar "rest")) (PVar "m")) (EBlock (DoLet false false PWild (EApp (EApp (EApp (EVar "setInPlace") (EVar "n")) (EVar "t")) (EVar "m"))) (DoExpr (EApp (EApp (EVar "sigTyInto") (EVar "rest")) (EVar "m")))))
+(DFunDef false "sigTyInto" ((PCons (PTuple (PVar "n") (PVar "t")) (PVar "rest")) (PVar "m")) (EBlock (DoExpr (EApp (EApp (EApp (EVar "setInPlace") (EVar "n")) (EVar "t")) (EVar "m"))) (DoExpr (EApp (EApp (EVar "sigTyInto") (EVar "rest")) (EVar "m")))))
 (DTypeSig false "topSigPairL" (TyFun (TyCon "Decl") (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "Ty")))))
 (DFunDef false "topSigPairL" ((PCon "DTypeSig" PWild (PVar "name") (PVar "ty") PWild)) (EListLit (ETuple (EVar "name") (EVar "ty"))))
 (DFunDef false "topSigPairL" ((PCon "DAttrib" PWild (PVar "d"))) (EApp (EVar "topSigPairL") (EVar "d")))
@@ -761,10 +761,10 @@ indexInGo x (y :: ys) i
 (DFunDef false "ownsModule" ((PCon "None") PWild) (EVar "False"))
 (DFunDef false "ownsModule" ((PCon "Some" (PVar "own")) (PVar "modName")) (EBinOp "==" (EVar "modName") (EVar "own")))
 (DTypeSig false "sigTyMapOf" (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyApp (TyApp (TyCon "HashMap") (TyCon "String")) (TyCon "Ty"))))
-(DFunDef false "sigTyMapOf" ((PVar "prog")) (EBlock (DoLet false false (PVar "m") (EApp (EVar "new") (ELit LUnit))) (DoLet false false PWild (EApp (EApp (EVar "sigTyInto") (EApp (EVar "reverseL") (EApp (EApp (EDictApp "flatMap") (EVar "topSigPairL")) (EVar "prog")))) (EVar "m"))) (DoExpr (EVar "m"))))
+(DFunDef false "sigTyMapOf" ((PVar "prog")) (EBlock (DoLet false false (PVar "m") (EApp (EVar "new") (ELit LUnit))) (DoExpr (EApp (EApp (EVar "sigTyInto") (EApp (EVar "reverseL") (EApp (EApp (EDictApp "flatMap") (EVar "topSigPairL")) (EVar "prog")))) (EVar "m"))) (DoExpr (EVar "m"))))
 (DTypeSig false "sigTyInto" (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "Ty"))) (TyFun (TyApp (TyApp (TyCon "HashMap") (TyCon "String")) (TyCon "Ty")) (TyCon "Unit"))))
 (DFunDef false "sigTyInto" ((PList) PWild) (ELit LUnit))
-(DFunDef false "sigTyInto" ((PCons (PTuple (PVar "n") (PVar "t")) (PVar "rest")) (PVar "m")) (EBlock (DoLet false false PWild (EApp (EApp (EApp (EVar "setInPlace") (EVar "n")) (EVar "t")) (EVar "m"))) (DoExpr (EApp (EApp (EVar "sigTyInto") (EVar "rest")) (EVar "m")))))
+(DFunDef false "sigTyInto" ((PCons (PTuple (PVar "n") (PVar "t")) (PVar "rest")) (PVar "m")) (EBlock (DoExpr (EApp (EApp (EApp (EVar "setInPlace") (EVar "n")) (EVar "t")) (EVar "m"))) (DoExpr (EApp (EApp (EVar "sigTyInto") (EVar "rest")) (EVar "m")))))
 (DTypeSig false "topSigPairL" (TyFun (TyCon "Decl") (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "Ty")))))
 (DFunDef false "topSigPairL" ((PCon "DTypeSig" PWild (PVar "name") (PVar "ty") PWild)) (EListLit (ETuple (EVar "name") (EVar "ty"))))
 (DFunDef false "topSigPairL" ((PCon "DAttrib" PWild (PVar "d"))) (EApp (EVar "topSigPairL") (EVar "d")))

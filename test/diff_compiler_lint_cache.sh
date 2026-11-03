@@ -526,13 +526,20 @@ CACHE="$CACHE_SAVE"
 # `stdlibIndexNeeded` lets an uncached run skip `buildStdlibIndexResult` for free when
 # the active `--only`/`--disable` set never reads it — but a `--cache` POPULATE
 # run persists the FULL rule roster regardless of which rules are
-# active, so populating with `rule-stdlib-reimpl` disabled must not poison the
+# active, so populating with every index-reading rule disabled (`rule-stdlib-reimpl`,
+# `rule-let-underscore-unit`, `rule-discarded-result`) must not poison the
 # entry with a degraded (empty) stdlib index: a LATER default-rules `--cache`
 # read of the same entry must still see the finding.
 # corpus/stdlib-reimpl.mdk (copied in from test/lint_rule_fixtures above) reimplements
 # `list.reverse`, so it is the fixture that fires the rule under test.
-rm -rf "$CACHE"
-"$MEDAKA" lint --disable rule-stdlib-reimpl --cache corpus > "$WORK/warm8_populate.txt" 2>&1
+# The full corpus has wildcard imports, which build the stdlib index whatever the
+# disabled set is; scenario 8 therefore runs on a corpus of the one fixture, which
+# has none, so that the disabled set really is the case that skips the index.
+rm -rf "$CACHE" "$XDG_CACHE_HOME" corpus8
+mkdir corpus8
+cp corpus/stdlib-reimpl.mdk corpus8/
+DISABLE8=rule-stdlib-reimpl,rule-let-underscore-unit,rule-discarded-result
+"$MEDAKA" lint --disable "$DISABLE8" --cache corpus8 > "$WORK/warm8_populate.txt" 2>&1
 printf '%s\n' "$?" >> "$WORK/warm8_populate.txt"
 if grep -q 'rule-stdlib-reimpl' "$WORK/warm8_populate.txt"; then
   bad "8a precondition: populate run with the rule disabled reports nothing for it" \
@@ -540,23 +547,39 @@ if grep -q 'rule-stdlib-reimpl' "$WORK/warm8_populate.txt"; then
 else
   ok "8a precondition: populate run with the rule disabled reports nothing for it"
 fi
+# Non-vacuity, observed on the index cache (`$XDG_CACHE_HOME`): the same disabled
+# set on an UNCACHED run builds no declaration index (the degraded path
+# scenario 8 guards exists), while the `--cache` populate run above built one
+# anyway, because it persists the full roster.
+n_populate="$(find "$XDG_CACHE_HOME" -type f 2>/dev/null | wc -l | tr -d ' ')"
+rm -rf "$XDG_CACHE_HOME"
+"$MEDAKA" lint --disable "$DISABLE8" corpus8 > /dev/null 2>&1
+n_uncached="$(find "$XDG_CACHE_HOME" -type f 2>/dev/null | wc -l | tr -d ' ')"
+if [ "$n_uncached" -eq 0 ] && [ "$n_populate" -gt 0 ]; then
+  ok "8a' the disabled set skips the index uncached ($n_uncached shards) yet a --cache populate builds it ($n_populate shards)"
+else
+  bad "8a' the disabled set skips the index uncached yet a --cache populate builds it" \
+      "uncached run left $n_uncached shard(s), populate run left $n_populate — scenario 8 would be vacuous"
+fi
 
-lint_cached "$WORK/warm8.txt"
+"$MEDAKA" lint --cache corpus8 > "$WORK/warm8.txt" 2>&1
+printf '%s\n' "$?" >> "$WORK/warm8.txt"
 if grep -q 'rule-stdlib-reimpl' "$WORK/warm8.txt"; then
   ok "8b default-rules cache read sees the finding a disabled-rule populate run never computed"
 else
   bad "8b default-rules cache read sees the finding a disabled-rule populate run never computed" \
-      "cache entry was populated against an empty stdlib index (--disable rule-stdlib-reimpl --cache) and a later default --cache read silently dropped the finding"
+      "cache entry was populated against an empty stdlib index (every index-reading rule disabled, --cache) and a later default --cache read silently dropped the finding"
 fi
 
-lint_plain "$WORK/cold8.txt"
+"$MEDAKA" lint corpus8 > "$WORK/cold8.txt" 2>&1
+printf '%s\n' "$?" >> "$WORK/cold8.txt"
 if same "$WORK/cold8.txt" "$WORK/warm8.txt"; then
   ok "8c cached read == uncached read after a disabled-rule populate"
 else
   bad "8c cached read == uncached read after a disabled-rule populate" "$(diff "$WORK/cold8.txt" "$WORK/warm8.txt" | head -5)"
 fi
 
-"$MEDAKA" lint --deny rule-stdlib-reimpl --cache corpus > "$WORK/warm8_deny.txt" 2>&1
+"$MEDAKA" lint --deny rule-stdlib-reimpl --cache corpus8 > "$WORK/warm8_deny.txt" 2>&1
 deny_status=$?
 if [ "$deny_status" -eq 1 ]; then
   ok "8d --deny rule-stdlib-reimpl --cache exits 1 on the real finding"

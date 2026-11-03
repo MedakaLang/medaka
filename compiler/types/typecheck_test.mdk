@@ -68,25 +68,25 @@ import types.tc_types.{
   DriveInputs(..),
   DriveOutputs(..),
   GraphCtx(..),
+  TraceSink(..),
   MethodReturnMemoView(..),
   MethodReturnTraceEntry(..),
   MethodReturnTraceStage(..),
 }
 import types.module_interface_test_support.{noValueMain}
 import types.tc_diag_text.{stickyDiagsInPushOrder}
-import types.tc_state.{
+import types.tc_solve_test_support.{
   beginAssumptionTrace,
   beginEvidenceObservation,
+  beginMethodReturnTrace,
   beginNumericPredicateTrace,
   evCellsSpanProbe,
   finishAssumptionTrace,
   finishEvidenceObservation,
   finishNumericPredicateTrace,
+  matchWarningsNow,
   scopeFrameStats,
   scopeTraceContext,
-  beginMethodReturnTrace,
-}
-import types.tc_solve_test_support.{
   absentReturnSource,
   evidenceEntriesOfKind,
   modErrorCount,
@@ -128,7 +128,6 @@ import types.typecheck.{
   tcMsg,
 }
 import string as S
-import types.tc_infer.{matchWarningsNow}
 import types.target_profile.{selectProfile}
 import types.route_key.{evIndexOf, evIndexSlotCount}
 import support.ordmap.{omKeys}
@@ -140,11 +139,17 @@ import support.util.{
 import list.{get, last, nub, sort, reverse}
 import types.solver_contract.{SolverOutcome(..), Wanted(..)}
 import types.publish.{TcReport(..)}
-import types.tc_solve.{
+import types.tc_solve_test.{
   finishMethodReturnTrace,
   methodReturnMemoCurrentViews,
 }
-import types.tc_occurrence.{cellGoalInnerAliasing}
+import types.tc_occurrence_test.{cellGoalInnerAliasing}
+
+data AssumptionContext = AssumptionContext {
+  acGoalOwner : String,
+  acBinderOwner : String,
+  acBinderSlot : Int,
+} deriving (Eq, Debug)
 
 data NumericTraceView = NumericTraceView {
   ntvStage : NumericPredicateTraceStage,
@@ -212,6 +217,24 @@ numericTraceView gctx entry =
     ntvPrerequisites = map numericRouteView entry.nptPrerequisites,
   }
 
+-- The numeric-predicate entries [sink] holds, projected while [gctx] is live.
+numericTraceNow : GraphCtx -> TraceSink -> List NumericTraceView
+numericTraceNow gctx sink =
+  map (numericTraceView gctx) (finishNumericPredicateTrace sink)
+
+-- The assumption entries [sink] holds, each as its goal owner, binder owner and binder slot.
+assumptionContextsNow : GraphCtx -> TraceSink -> List AssumptionContext
+assumptionContextsNow gctx sink =
+  map
+    (entry =>
+      let (EvidenceBinderId binderScope slot) = entry.atBinder
+      AssumptionContext {
+        acGoalOwner = snd (scopeTraceContext gctx entry.atGoalScope),
+        acBinderOwner = snd (scopeTraceContext gctx binderScope),
+        acBinderSlot = slot,
+      })
+    (finishAssumptionTrace sink)
+
 numericValueSource : Bool -> String
 numericValueSource collision = numericBodySource collision "N n"
 
@@ -244,7 +267,7 @@ numericCheckObserved source =
         (parse numericPreludeSource)) [
         ("numeric_predicate", desugar (parseLocated source)),
       ])
-  let trace = map (numericTraceView gctx) (finishNumericPredicateTrace sink)
+  let trace = numericTraceNow gctx sink
   (map tcMsg errors, trace)
 
 numericStages : List NumericTraceView -> List NumericPredicateTraceStage
@@ -469,7 +492,7 @@ numericSchemeObserved key source =
     map
       (entry => ppScheme (snd entry).psScheme)
       (filter (entry => fst entry == "value") schemes)
-  let trace = map (numericTraceView gctx) (finishNumericPredicateTrace sink)
+  let trace = numericTraceNow gctx sink
   (values, trace)
 
 numericImportedObserved : Bool -> (Int, List NumericTraceView)
@@ -518,7 +541,7 @@ numericImportedObserved reverseOrder =
       []
       (desugar (parse numericPreludeSource))
       (map (item => (fst item, desugar (parseLocated (snd item)))) sources)
-  let trace = map (numericTraceView gctx) (finishNumericPredicateTrace sink)
+  let trace = numericTraceNow gctx sink
   (modErrorCount results, trace)
 
 test "numeric predicates survive module and import order permutations" =
@@ -724,7 +747,7 @@ isArithmeticFunction name = contains name [
 
 arithmeticSchemeObserved : Option (Int, Int) ->
   String ->
-  (List (String, Int, String), List (String, String, Int))
+  (List (String, Int, String), List AssumptionContext)
 arithmeticSchemeObserved key source =
   let sink = beginAssumptionTrace ()
   let ((_, schemes), gctx) =
@@ -741,16 +764,7 @@ arithmeticSchemeObserved key source =
         ppScheme (snd entry).psScheme,
       ))
       (filter (entry => isArithmeticFunction (fst entry)) schemes)
-  let assumptions =
-    map
-      (entry =>
-        let (EvidenceBinderId binderScope slot) = entry.atBinder
-        (
-          snd (scopeTraceContext gctx entry.atGoalScope),
-          snd (scopeTraceContext gctx binderScope),
-          slot,
-        ))
-      (finishAssumptionTrace sink)
+  let assumptions = assumptionContextsNow gctx sink
   (values, assumptions)
 
 arithmeticErrorCodes : String -> List String
@@ -800,23 +814,23 @@ test "declared and inferred arithmetic retain one Num slot at finalized queries"
       "arithmeticErrorCodes' bindings for the cold query",
       expectEqual
         [
-          ("binding:inferredRem", "binding:inferredRem", 0),
-          ("binding:inferredDiv", "binding:inferredDiv", 0),
-          ("binding:inferredMul", "binding:inferredMul", 0),
-          ("binding:inferredSub", "binding:inferredSub", 0),
-          ("binding:inferredAdd", "binding:inferredAdd", 0),
-          ("binding:signedRem", "binding:signedRem", 0),
-          ("binding:signedDiv", "binding:signedDiv", 0),
-          ("binding:signedMul", "binding:signedMul", 0),
-          ("binding:signedSub", "binding:signedSub", 0),
-          ("binding:signedAdd", "binding:signedAdd", 0),
+          AssumptionContext "binding:inferredRem" "binding:inferredRem" 0,
+          AssumptionContext "binding:inferredDiv" "binding:inferredDiv" 0,
+          AssumptionContext "binding:inferredMul" "binding:inferredMul" 0,
+          AssumptionContext "binding:inferredSub" "binding:inferredSub" 0,
+          AssumptionContext "binding:inferredAdd" "binding:inferredAdd" 0,
+          AssumptionContext "binding:signedRem" "binding:signedRem" 0,
+          AssumptionContext "binding:signedDiv" "binding:signedDiv" 0,
+          AssumptionContext "binding:signedMul" "binding:signedMul" 0,
+          AssumptionContext "binding:signedSub" "binding:signedSub" 0,
+          AssumptionContext "binding:signedAdd" "binding:signedAdd" 0,
         ]
         (snd cold),
     ),
   ]
 
 arithmeticTraceObserved : String ->
-  (List String, List NumericTraceView, List (String, String, Int))
+  (List String, List NumericTraceView, List AssumptionContext)
 arithmeticTraceObserved source =
   let sink = { beginNumericPredicateTrace () | tsAssumptionEnabled = True }
   let ((errors, _), gctx) =
@@ -825,17 +839,8 @@ arithmeticTraceObserved source =
         (parse arithmeticPreludeSource)) [
         ("arithmetic_trace", desugar (parseLocated source)),
       ])
-  let trace = map (numericTraceView gctx) (finishNumericPredicateTrace sink)
-  let assumptions =
-    map
-      (entry =>
-        let (EvidenceBinderId binderScope slot) = entry.atBinder
-        (
-          snd (scopeTraceContext gctx entry.atGoalScope),
-          snd (scopeTraceContext gctx binderScope),
-          slot,
-        ))
-      (finishAssumptionTrace sink)
+  let trace = numericTraceNow gctx sink
+  let assumptions = assumptionContextsNow gctx sink
   (map tcMsg errors, trace, assumptions)
 
 test "operator events correlate by whole span scope and exact prelude Num predicate" =
@@ -869,8 +874,8 @@ test "operator events correlate by whole span scope and exact prelude Num predic
         (filter (view => view.ntvStage == NPTArithmetic) operator)),
     expectEqual
       [
-        ("binding:value", "binding:value", 0),
-        ("binding:value", "binding:value", 0),
+        AssumptionContext "binding:value" "binding:value" 0,
+        AssumptionContext "binding:value" "binding:value" 0,
       ]
       assumptions,
   ]
@@ -902,7 +907,9 @@ test "generic remainder uses the same scoped Num evidence route" =
           view.ntvPrerequisites,
         ))
         (filter (view => view.ntvStage == NPTArithmetic) operator)),
-    expectEqual [("binding:value", "binding:value", 0)] assumptions,
+    expectEqual
+      [AssumptionContext "binding:value" "binding:value" 0]
+      assumptions,
   ]
 
 arithmeticImportedObserved : Bool -> (Int, List NumericTraceView)
@@ -984,7 +991,7 @@ arithmeticImportedObserved reverseOrder =
       []
       (desugar (parse arithmeticPreludeSource))
       (map (item => (fst item, desugar (parseLocated (snd item)))) sources)
-  let trace = map (numericTraceView gctx) (finishNumericPredicateTrace sink)
+  let trace = numericTraceNow gctx sink
   let arithmetic =
     filter
       (view =>
@@ -1101,14 +1108,14 @@ schemeVariableCount (Forall variables _ _ _ _ _) = listLen variables
 
 declaredNumSchemeObserved : Option (Int, Int) ->
   String ->
-  (List (Int, String), List (String, String, Int))
+  (List (Int, String), List AssumptionContext)
 declaredNumSchemeObserved key source =
   declaredNumMemberSchemeObserved key "value" source
 
 declaredNumMemberSchemeObserved : Option (Int, Int) ->
   String ->
   String ->
-  (List (Int, String), List (String, String, Int))
+  (List (Int, String), List AssumptionContext)
 declaredNumMemberSchemeObserved key member source =
   let sink = beginAssumptionTrace ()
   let ((_, schemes), gctx) =
@@ -1124,16 +1131,7 @@ declaredNumMemberSchemeObserved key member source =
         ppScheme (snd entry).psScheme,
       ))
       (filter (entry => fst entry == member) schemes)
-  let assumptions =
-    map
-      (entry =>
-        let (EvidenceBinderId binderScope slot) = entry.atBinder
-        (
-          snd (scopeTraceContext gctx entry.atGoalScope),
-          snd (scopeTraceContext gctx binderScope),
-          slot,
-        ))
-      (finishAssumptionTrace sink)
+  let assumptions = assumptionContextsNow gctx sink
   (values, assumptions)
 
 declaredNumErrorCodes : String -> List String
@@ -1158,7 +1156,9 @@ test "declared numeric result retains its quantifier and given at finalized quer
     ("cold's arity/scheme", expectEqual [(1, "Int -> a")] (fst cold)),
     (
       "cold's binding trace",
-      expectEqual [("binding:value", "binding:value", 0)] (snd cold),
+      expectEqual
+        [AssumptionContext "binding:value" "binding:value" 0]
+        (snd cold),
     ),
     ("cold == keyed", expectEqual cold keyed),
     ("keyed == repeated", expectEqual keyed repeated),
@@ -1404,8 +1404,8 @@ test "block recursive arithmetic retains the outer predicate and route" =
         arithmetic),
     expectEqual
       [
-        ("local:local", "binding:value", 0),
-        ("local:local", "binding:value", 0),
+        AssumptionContext "local:local" "binding:value" 0,
+        AssumptionContext "local:local" "binding:value" 0,
       ]
       assumptions,
   ]
@@ -2004,6 +2004,18 @@ traceView gctx entry =
 traceViewsNow : GraphCtx -> List AssumptionTraceEntry -> List TraceView
 traceViewsNow gctx entries = map (traceView gctx) entries
 
+-- The request [sink] observed: its assumption entries projected while [gctx] is live, with
+-- [errors] and the scope store's frame counts.
+requestViewNow : GraphCtx -> TraceSink -> Int -> RequestView
+requestViewNow gctx sink errors =
+  let (count, capacity) = scopeFrameStats gctx
+  RequestView {
+    rvTrace = traceViewsNow gctx (finishAssumptionTrace sink),
+    rvErrors = errors,
+    rvFrameCount = count,
+    rvFrameCapacity = capacity,
+  }
+
 runModulesObserved : List (String, String) -> ModuleTraceView
 runModulesObserved sources =
   let sink = beginAssumptionTrace ()
@@ -2030,15 +2042,7 @@ runObserved moduleId source =
       (driveArgs (traced sink) False None [] [] [
         (moduleId, desugar (parse source)),
       ])
-  let entries = finishAssumptionTrace sink
-  let views = traceViewsNow gctx entries
-  let (count, capacity) = scopeFrameStats gctx
-  RequestView {
-    rvTrace = views,
-    rvErrors = listLen errors,
-    rvFrameCount = count,
-    rvFrameCapacity = capacity,
-  }
+  requestViewNow gctx sink (listLen errors)
 
 -- `checkModulesChainReportForGraph`'s per-module rows beside the graph record its
 -- drive ends in.
@@ -2079,15 +2083,7 @@ runCachedObserved entrySource =
         ("cache_prefix", desugar (parse scalarSource)),
         ("cache_entry", desugar (parse entrySource)),
       ]
-  let entries = finishAssumptionTrace sink
-  let views = traceViewsNow gctx entries
-  let (count, capacity) = scopeFrameStats gctx
-  RequestView {
-    rvTrace = views,
-    rvErrors = modErrorCount results,
-    rvFrameCount = count,
-    rvFrameCapacity = capacity,
-  }
+  requestViewNow gctx sink (modErrorCount results)
 
 withoutBinderIds : List TraceView -> List ContextView
 withoutBinderIds views =
@@ -2585,24 +2581,31 @@ dispositionsAfter sources =
 sameIfaceSpelling : IfaceRef -> String -> Bool
 sameIfaceSpelling iface name = iface.irName == name
 
-anyMatchSupplied : String -> String -> List MethodDisposition -> Bool
-anyMatchSupplied _ _ [] = False
+anyMatchSupplied : String -> String -> List MethodDisposition -> Expectation
+anyMatchSupplied _ _ [] = fail "no supplied row has that instance and method"
 anyMatchSupplied wantMid wantMethod (d :: rest) = match d
   Supplied { instance = i, method = m } =>
-    instIdMid i == wantMid && m == wantMethod
-      || anyMatchSupplied wantMid wantMethod rest
+    if instIdMid i == wantMid && m == wantMethod then
+      pass
+    else
+      anyMatchSupplied wantMid wantMethod rest
   InheritedDefault _ _ _ => anyMatchSupplied wantMid wantMethod rest
 
 anyMatchInheritedDefault : String ->
   String ->
   String ->
   List MethodDisposition ->
-  Bool
-anyMatchInheritedDefault _ _ _ [] = False
+  Expectation
+anyMatchInheritedDefault _ _ _ [] =
+  fail "no inherited default has that instance, interface and method"
 anyMatchInheritedDefault wantMid wantIface wantMethod (d :: rest) = match d
   InheritedDefault { instance = i, iface = ir, method = m } =>
-    instIdMid i == wantMid && sameIfaceSpelling ir wantIface && m == wantMethod
-      || anyMatchInheritedDefault wantMid wantIface wantMethod rest
+    if instIdMid i == wantMid
+      && sameIfaceSpelling ir wantIface
+      && m == wantMethod then
+      pass
+    else
+      anyMatchInheritedDefault wantMid wantIface wantMethod rest
   Supplied _ _ _ => anyMatchInheritedDefault wantMid wantIface wantMethod rest
 
 -- The shape: `Dog` implements two DIFFERENT interfaces (`ifa::Speak`,
@@ -2649,10 +2652,8 @@ test "#1265: two same-named methods of two different interfaces stay two rows" =
     ),
   ]
   expectAll [
-    expectTrue
-      (anyMatchInheritedDefault "ca" "Speak" "speak" (dispositionRows table)),
-    expectTrue
-      (anyMatchInheritedDefault "cb" "Greet" "speak" (dispositionRows table)),
+    anyMatchInheritedDefault "ca" "Speak" "speak" (dispositionRows table),
+    anyMatchInheritedDefault "cb" "Greet" "speak" (dispositionRows table),
   ]
 
 -- The cross-module shape: a cross-module `impl` overriding NOTHING
@@ -2686,15 +2687,9 @@ test "#1020: cross-module empty and overriding impls disposition correctly" =
     ),
   ]
   expectAll [
-    expectTrue
-      (anyMatchInheritedDefault
-        "entry"
-        "Speak"
-        "speak"
-        (dispositionRows table)),
-    expectTrue (anyMatchSupplied "entry" "loud" (dispositionRows table)),
-    expectTrue
-      (anyMatchInheritedDefault "entry" "Loud" "loud" (dispositionRows table)),
+    anyMatchInheritedDefault "entry" "Speak" "speak" (dispositionRows table),
+    anyMatchSupplied "entry" "loud" (dispositionRows table),
+    anyMatchInheritedDefault "entry" "Loud" "loud" (dispositionRows table),
   ]
 
 -- The same method body, written as a supplied impl method or inherited as the
@@ -5365,10 +5360,14 @@ methodOutcomeView entry = match entry.mrtOutcome
   Some (Insoluble _ _) => Some MOVInsoluble
   None => None
 
-methodTraceUsesOneOutcome : List MethodReturnTraceEntry -> Bool
+methodTraceUsesOneOutcome : List MethodReturnTraceEntry -> Expectation
 methodTraceUsesOneOutcome trace = match map methodOutcomeView trace
-  [None, Some checked, Some stamped] => checked == stamped
-  _ => False
+  [None, Some checked, Some stamped] =>
+    if checked == stamped then
+      pass
+    else
+      fail "the checked and stamped outcomes differ"
+  _ => fail "the trace is not None, a checked outcome, then a stamped one"
 
 methodWantedView : MethodReturnTraceEntry -> Option MethodWantedView
 methodWantedView entry = match (entry.mrtQualifiedBody, entry.mrtWanted)
@@ -5457,7 +5456,7 @@ test "ordinary return shares declaration identity vector and goal destination" =
     ),
     (
       "the trace uses one outcome",
-      expectTrue (methodTraceUsesOneOutcome trace),
+      methodTraceUsesOneOutcome trace,
     ),
     (
       "outcomes are None, an instance, then given",
@@ -5518,7 +5517,7 @@ test "ordinary return given evidence feeds checking and route publication" =
         "use _ = choose ()",
       ])
   expectAll [
-    expectTrue (methodTraceUsesOneOutcome trace),
+    methodTraceUsesOneOutcome trace,
     expectTrue (match map methodOutcomeView trace
       [None, Some (MOVGiven checked), Some (MOVGiven stamped)] =>
         checked == stamped
@@ -5564,7 +5563,7 @@ test "ordinary return instance evidence retains selected prerequisites" =
         "value = make ()",
       ])
   expectAll [
-    expectTrue (methodTraceUsesOneOutcome trace),
+    methodTraceUsesOneOutcome trace,
     expectTrue (match map methodOutcomeView trace
       [None, Some (MOVInstance _ ["Box Int"] [("Need", ["Int"])]), Some (MOVInstance _ ["Box Int"] [("Need", ["Int"])])] =>
         True
@@ -5626,7 +5625,7 @@ test "absent return formal completes from the exact enclosing given" =
     ),
     (
       "the trace uses one outcome",
-      expectTrue (methodTraceUsesOneOutcome trace),
+      methodTraceUsesOneOutcome trace,
     ),
     (
       "the given and stamped outcomes agree",
@@ -6122,14 +6121,17 @@ scopeOrdinal (ScopeId n) = n
 -- prerequisite identities, and binder scope, exactly the four the mission's
 -- mutation checks name. Correct on the real entry; each mutation test shows it
 -- FALSE on one deliberately wrong field.
-evidenceEntryMatches : (EvidenceOutcomeKind, Option String, List String, Int) ->
+evidenceEntryMatches : Bool ->
+  (EvidenceOutcomeKind, Option String, List String, Int) ->
   EvidenceObservationEntry ->
-  Bool
-evidenceEntryMatches (outcome, instanceKey, prerequisites, scopeN) e =
-  e.eoeOutcome == outcome
-    && e.eoeInstanceKey == instanceKey
-    && e.eoePrerequisites == prerequisites
-    && scopeOrdinal e.eoeScope == scopeN
+  Expectation
+evidenceEntryMatches want (outcome, instanceKey, prerequisites, scopeN) e =
+  expectEqual
+    want
+    (e.eoeOutcome == outcome
+      && e.eoeInstanceKey == instanceKey
+      && e.eoePrerequisites == prerequisites
+      && scopeOrdinal e.eoeScope == scopeN)
 
 test "a nested constrained call forwards the enclosing given (#2095 given forwarding)" =
   let trace =
@@ -6199,42 +6201,42 @@ test "the construction goal's pin is sensitive to identity, prerequisites, and s
     [e] =>
       let scopeN = scopeOrdinal e.eoeScope
       expectAll [
-        expectTrue
-          (evidenceEntryMatches
-            (
-              EOKInstance,
-              Some "evidence_observation::Build|(evidence_observation.Box a)|",
-              ["RKey evidence_observation::Need|Int|"],
-              scopeN,
-            )
-            e),
-        expectFalse
-          (evidenceEntryMatches
-            (
-              EOKInstance,
-              Some "SomethingElse",
-              ["RKey evidence_observation::Need|Int|"],
-              scopeN,
-            )
-            e),
-        expectFalse
-          (evidenceEntryMatches
-            (
-              EOKInstance,
-              Some "evidence_observation::Build|(evidence_observation.Box a)|",
-              [],
-              scopeN,
-            )
-            e),
-        expectFalse
-          (evidenceEntryMatches
-            (
-              EOKInstance,
-              Some "evidence_observation::Build|(evidence_observation.Box a)|",
-              ["RKey evidence_observation::Need|Int|"],
-              scopeN + 1,
-            )
-            e),
+        evidenceEntryMatches
+          True
+          (
+            EOKInstance,
+            Some "evidence_observation::Build|(evidence_observation.Box a)|",
+            ["RKey evidence_observation::Need|Int|"],
+            scopeN,
+          )
+          e,
+        evidenceEntryMatches
+          False
+          (
+            EOKInstance,
+            Some "SomethingElse",
+            ["RKey evidence_observation::Need|Int|"],
+            scopeN,
+          )
+          e,
+        evidenceEntryMatches
+          False
+          (
+            EOKInstance,
+            Some "evidence_observation::Build|(evidence_observation.Box a)|",
+            [],
+            scopeN,
+          )
+          e,
+        evidenceEntryMatches
+          False
+          (
+            EOKInstance,
+            Some "evidence_observation::Build|(evidence_observation.Box a)|",
+            ["RKey evidence_observation::Need|Int|"],
+            scopeN + 1,
+          )
+          e,
       ]
     _ => fail "expected exactly one Box Int construction goal"
 
@@ -6633,3 +6635,19 @@ checkModulesEntryReport inputs runtimeDecls coreDecls modules =
 -- the same rendering are two findings).
 stickyTypeErrorDiags : DriveOutputs -> List (String, TcDiag)
 stickyTypeErrorDiags o = stickyDiagsInPushOrder o.doStickyDiags
+
+test "a begun trace sink has its one gate on and an empty buffer" =
+  let assumption = beginAssumptionTrace ()
+  let methodReturn = beginMethodReturnTrace ()
+  let numeric = beginNumericPredicateTrace ()
+  let evidence = beginEvidenceObservation ()
+  expectAll [
+    expectTrue assumption.tsAssumptionEnabled,
+    expectFalse assumption.tsMethodReturnEnabled,
+    expectTrue methodReturn.tsMethodReturnEnabled,
+    expectFalse methodReturn.tsAssumptionEnabled,
+    expectTrue numeric.tsNumericPredicateEnabled,
+    expectTrue evidence.tsEvidenceObservationEnabled,
+    expectEqual 0 (length (finishAssumptionTrace assumption)),
+    expectEqual 0 (length (finishEvidenceObservation evidence)),
+  ]

@@ -45,11 +45,11 @@
 -- is graded via the importing gate rather than invisible to it.
 -- `rowScratch` and the batched build (`buildBatch`) are `test.oracle_support`'s
 -- shared helpers too.
-import io.{runVerb}
 import list.{drop}
 import string.{join, split, trim}
 import test.{Expectation(..), expectEqual, expectEqualLines}
 import test.oracle_support.{
+  finishScratch,
   Seed(..),
   buildBatch,
   buildFor,
@@ -216,8 +216,7 @@ writerResult = match rowScratch "writer"
   Ok prefix =>
     let db = "\{prefix}.db"
     let out = runWriter db
-    let _ = runVerb "rm" ["-rf", db]
-    out
+    finishScratch [db] out
 
 runWriter : String -> <Exec, IO> Result String WriterRun
 runWriter db = do
@@ -406,8 +405,7 @@ writerApiResult = match rowScratch "writer-api"
     let dbBlob = "\{prefix}-blob.db"
     let dbReals = "\{prefix}-reals.db"
     let out = runWriterApi dbUsers dbKv dbBlob dbReals
-    let _ = runVerb "rm" ["-rf", dbUsers, dbKv, dbBlob, dbReals]
-    out
+    finishScratch [dbUsers, dbKv, dbBlob, dbReals] out
 
 runWriterApi : String ->
   String ->
@@ -566,8 +564,7 @@ multipageResult = match rowScratch "multipage-write"
   Ok prefix =>
     let db = "\{prefix}.db"
     let out = runMultipage db
-    let _ = runVerb "rm" ["-rf", db]
-    out
+    finishScratch [db] out
 
 runMultipage : String -> <Exec, IO> Result String MultipageRun
 runMultipage db = do
@@ -736,8 +733,7 @@ multitableResult = match rowScratch "multitable-write"
   Ok prefix =>
     let db = "\{prefix}.db"
     let out = runMultitable db
-    let _ = runVerb "rm" ["-rf", db]
-    out
+    finishScratch [db] out
 
 runMultitable : String -> <Exec, IO> Result String MultitableRun
 runMultitable db = do
@@ -926,8 +922,7 @@ rowidResult = match rowScratch "rowid-roundtrip"
     let src = "\{prefix}-src.db"
     let dst = "\{prefix}-dst.db"
     let out = runRowid src dst
-    let _ = runVerb "rm" ["-rf", src, dst]
-    out
+    finishScratch [src, dst] out
 
 runRowid : String -> String -> <Exec, IO> Result String RowidRun
 runRowid src dst = do

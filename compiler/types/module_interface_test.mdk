@@ -123,7 +123,10 @@ test "applying a frozen interface twice yields the recorded row and the same bin
         ),
         (
           "the function names are registered in the record",
-          expectTrue (hasNames g1 mi.miFunNames),
+          expectSatisfies
+            "the function names are registered in the record"
+            (names => hasNames g1 names)
+            mi.miFunNames,
         ),
       ]
 

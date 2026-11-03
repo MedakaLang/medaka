@@ -1881,3 +1881,123 @@ Figures behind the shape comments in `compiler/frontend/ast_codec.mdk` and
 | A top-level `Int` as a byte constant in the scanner (`sexp_value`) instead of a comparison | +21% |
 | A top-level `Int` as a constructor tag read in a guard (`ast_codec`) instead of a call to a constant function | +45% |
 | `readTagged` reached through two closures from `readExpr`/`readPat` | +10%; +2.8% with those two spelling the shell out |
+
+
+## 2026-11-02 — interpreter performance for scripting
+
+Workloads come from the agent-script survey in GitHub #4617, retained at
+`/var/tmp/medaka-research/agent-scripts-survey-20261029/port_py/`. The baseline is
+`8fa70f055ff1b2a310bb60ab8cbf5025f8cd3268`. The four runnable Python ports cover
+literal editing, regex census, JSON reporting and TOML grouping. Ports 05–07
+reach `runCommand`, which `run` currently refuses pending its security decision;
+they are excluded from performance results. This is not a representative sample
+of the full 19,391-script corpus requested by #4707.
+
+The changes remove repeated interpreter work:
+
+- Match list, tuple and constructor payload spines directly. Exact arity is
+  already checked by `matchPats`; the preliminary length scans made recursive
+  traversals with an `[]` clause quadratic in CPU while allocation stayed linear.
+- Use the existing stdlib hash table for large, fixed frame indexes. Construction
+  preserves first-entry precedence; lookups share the original mutable cells.
+  The index is only read after construction and iteration still uses the cell list.
+- Install constants through the same indexes, including local constructor cells
+  and both module drivers. This removes the per-name `findCell` scan (#4653).
+- Skip ordinary indexed frames when finding the reserved, unparseable file tag.
+  Its synthetic scan frame and the save/restore behavior are unchanged.
+- Bind plain variable parameters directly to cells in both closure representations,
+  preserving one frame per parameter, partial application and wildcard frames.
+- Apply a single argument directly when the head contains no application spine.
+  General, wrapped and piped spines retain their flattening path and argument order.
+
+Two isolated source trees and binaries were used for the final comparison; both
+asserted `MEDAKA_STRICT=1`. Each tree's prelude interface files were primed with
+its own compiler (`medaka interface write stdlib/core.mdk`). Timings below include
+startup, use the minimum of three runs, and pin
+`GC_INITIAL_HEAP_SIZE=2147483648`. Runs shared the host, so modest wall differences
+are illustrative; instruction and allocation readings supply the stronger evidence.
+All four ports exited successfully and their six outputs per port were identical.
+The edited file from port 01 was also identical.
+
+| Survey port | Before | After | Speedup |
+|---|---:|---:|---:|
+| 01, literal edit | 0.0823 s | 0.0849 s | effectively unchanged |
+| 02, diagnostic-code regex census | 28.28 s | 21.96 s | 1.29x |
+| 03, JSON report | 0.3230 s | 0.2650 s | 1.22x |
+| 04, TOML gate grouping | 19.41 s | 13.17 s | 1.47x |
+
+Peak RSS in these heap-pinned runs was about 78 MiB for the edit, 2.18 GiB for
+regex and TOML, and 308 versus 297 MiB for JSON. The heap pin dominates the larger
+RSS readings; they are not retained-memory measurements or evidence of a large
+RSS improvement.
+
+A 400-match, 9,600-character regex probe executes
+`length (R.findAll (R.mustCompile "E[0-9]+") (repeat 400 "let foo = bar E1234 baz\n"))`.
+Its whole-process Callgrind instructions fell from 5,247,351,534 to 4,496,858,883
+(14.3%). Allocation snapshots bracketing `length (R.findAll re s)`, with subject
+and compiled pattern prepared first, fell from 498,445,648 to 413,864,912 bytes
+(17.0%); repeated runs gave identical allocation deltas. Its remaining allocation
+is still large, about 395 MiB for 9.6 KB of text.
+
+The enrolled `test/diff_compiler_eval_scaling.sh` arm measures inclusive
+`eval.eval.matchPat` instructions in the plain/no-LTO `profile_eval_main` oracle,
+over a generated list builder and counter with an assertion on the result.
+Both interpreters execute the fixture; the shared matcher cost is aggregated.
+
+| N | Before Ir | After Ir |
+|---:|---:|---:|
+| 4,000 | 695,103,199 | 18,158,138 |
+| 8,000 | 2,734,193,839 | 36,336,168 |
+| doubling ratio | 3.934 | 2.001 |
+
+The arm rejects a ratio >=3.0. It passed on the changed oracle and failed on the
+paired baseline with `empty-list pattern matching is superlinear`. Run it with:
+
+```sh
+FORCE=1 JOBS=1 sh test/build_oracles.sh --build-one profile_eval_main
+EVAL_LISTMATCH_ONLY=1 sh test/diff_compiler_eval_scaling.sh
+```
+
+`EVAL_LISTMATCH_PROFILE` overrides the oracle for a baseline differential; pair it
+with that tree's `MEDAKA` and `MEDAKA_ROOT`. The arm checks CLI freshness with
+`MEDAKA_STRICT=1`, rejects locally stale oracle timestamps, and relies on the
+content-hash artifact key in CI. It also rejects missing tools, missing/ambiguous
+symbols, insufficient signal, unfinished interpreter stages and execution
+failures; each measured subprocess has a 180-second ceiling. Missing-tool and
+stale-oracle controls both exited 1. The no-LTO build avoids the documented
+Valgrind 3.22 ThinLTO symbol-table hazard; this was reviewed independently.
+
+An 8,000-string `list.reverse` probe fell from 87.46 to 12.54 ms (minimum of three),
+and from 13,444,160 to 12,544,544 allocated bytes. The input is
+`map intToString [1..=8000]`; snapshots bracket only `reverse xs`, and the result's
+length is checked afterwards. The evaluator recursion limit is unchanged, so
+#4655 is only partly addressed.
+
+Constructor setup was independently profiled on a generated declaration with
+4,000 nullary constructors and `main = println 1`. Before the change, `findCell`
+alone consumed 38.2% of whole-process instructions. Total instructions fell from
+1,485,661,788 to 683,421,043. Eval-stage allocation fell from 27.46 to 21.15 MiB.
+The corresponding sampled eval time was 85.7 versus 20.2 ms; this is a single
+illustrative timing, not a time budget.
+
+The 10x-Python target is still missed. On the same inputs, Python minima over five
+runs were 22.48 ms for the regex census and 39.17 ms for TOML grouping. Their 10x
+budgets are about 225 and 392 ms; the changed interpreter remains about 98x and
+34x above those budgets. Further local tuning is not a credible plan to close
+that gap by itself.
+
+The architectural follow-up should evaluate a bytecode interpreter with resolved
+variable/call targets and a shared native-library calling convention, alongside
+startup and interface-cache costs. GHCi's combination of bytecode for edited code
+and native compiled libraries is a useful reference. A cached-native script path
+also needs its clang miss cost weighed against the survey's roughly 1.9 runs per
+script. This PR makes no execution-policy change and leaves #4707's broader
+distribution/latency investigation open.
+
+Raw local profiles, measurement scripts and outputs are under
+`/tmp/medaka-interp-perf/`; they are scratch artifacts, not permanent evidence
+dependencies. Semantic coverage includes exact arity, binding order, first-cell
+installation, lexical shadows, reserved file lookup, curried frame addresses,
+independent partial applications and refutable-parameter fallthrough. The existing
+application-order fixture and runtime diagnostic gates cover evaluation order and
+cross-module error attribution.

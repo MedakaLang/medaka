@@ -1,5 +1,5 @@
 # META
-source_lines=1163
+source_lines=1169
 stages=DESUGAR,MARK
 # SOURCE
 {- | Operations on `String` and `Char`.
@@ -837,9 +837,15 @@ subChars a lo hi =
 {- | The lines of `s`, split on `\n`.
 
    A `\r` before the `\n` is removed, so Windows line endings work too.
+   Unlike `io.readLines`, this keeps the final empty line when `s` ends in
+   a newline.
 
    > lines "a\nb\nc"
-   ["a", "b", "c"] -}
+   ["a", "b", "c"]
+   > lines "a\n"
+   ["a", ""]
+   > lines ""
+   [""] -}
 export
 lines : String -> List String
 lines s =

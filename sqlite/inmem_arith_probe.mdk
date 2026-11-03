@@ -67,70 +67,65 @@ printRows [] = ()
 -- Intentional cross-file duplicate: parallel demo/probe script wiring the same fixture shape (not shared production logic to consolidate).
 -- lint-disable-next-line rule-duplicate-body
 printRows (u :: rest) =
-  let _ = println (showUser u)
+  println (showUser u)
   printRows rest
 
 runQ : Db -> String -> Select -> <IO> Unit
 -- Intentional cross-file duplicate: parallel demo/probe script wiring the same fixture shape (not shared production logic to consolidate).
 -- lint-disable-next-line rule-duplicate-body
 runQ db label sel =
-  let _ = println label
+  println label
   match query db sel userRow
     Err e => println "query error: \{e}"
     Ok rows => printRows rows
 
 runAll : Db -> <IO> Unit
 runAll db =
-  let _ =
-    runQ
-      db
-      "-- age + 5 > 30 (ORDER BY id) --"
-      (withOrderBy
-        "id"
-        True
-        (withWhere
-          (eGt (eAdd (eColInt "age") (eLitI 5)) (eLitI 30))
-          (selectFrom "users")))
-  let _ =
-    runQ
-      db
-      "-- age * 2 >= 60 --"
-      (withOrderBy
-        "id"
-        True
-        (withWhere
-          (eGe (eMul (eColInt "age") (eLitI 2)) (eLitI 60))
-          (selectFrom "users")))
-  let _ =
-    runQ
-      db
-      "-- age % 10 = 0 --"
-      (withOrderBy
-        "id"
-        True
-        (withWhere
-          (eEq (eMod (eColInt "age") (eLitI 10)) (eLitI 0))
-          (selectFrom "users")))
-  let _ =
-    runQ
-      db
-      "-- age / 10 = 3 --"
-      (withOrderBy
-        "id"
-        True
-        (withWhere
-          (eEq (eDiv (eColInt "age") (eLitI 10)) (eLitI 3))
-          (selectFrom "users")))
-  let _ =
-    runQ
-      db
-      "-- age - 5 < 20 --"
-      (withOrderBy
-        "id"
-        True
-        (withWhere
-          (eLt (eSub (eColInt "age") (eLitI 5)) (eLitI 20))
-          (selectFrom "users")))
+  runQ
+    db
+    "-- age + 5 > 30 (ORDER BY id) --"
+    (withOrderBy
+      "id"
+      True
+      (withWhere
+        (eGt (eAdd (eColInt "age") (eLitI 5)) (eLitI 30))
+        (selectFrom "users")))
+  runQ
+    db
+    "-- age * 2 >= 60 --"
+    (withOrderBy
+      "id"
+      True
+      (withWhere
+        (eGe (eMul (eColInt "age") (eLitI 2)) (eLitI 60))
+        (selectFrom "users")))
+  runQ
+    db
+    "-- age % 10 = 0 --"
+    (withOrderBy
+      "id"
+      True
+      (withWhere
+        (eEq (eMod (eColInt "age") (eLitI 10)) (eLitI 0))
+        (selectFrom "users")))
+  runQ
+    db
+    "-- age / 10 = 3 --"
+    (withOrderBy
+      "id"
+      True
+      (withWhere
+        (eEq (eDiv (eColInt "age") (eLitI 10)) (eLitI 3))
+        (selectFrom "users")))
+  runQ
+    db
+    "-- age - 5 < 20 --"
+    (withOrderBy
+      "id"
+      True
+      (withWhere
+        (eLt (eSub (eColInt "age") (eLitI 5)) (eLitI 20))
+        (selectFrom "users")))
   runQ
     db
     "-- bal * 2.0 > 15.0 (float) --"
@@ -145,7 +140,7 @@ main : <IO> Unit
 -- Intentional cross-file duplicate: parallel demo/probe script wiring the same fixture shape (not shared production logic to consolidate).
 -- lint-disable-next-line rule-duplicate-body
 main =
-  let _ = println "-- CREATE users (in-memory) --"
+  println "-- CREATE users (in-memory) --"
   match buildDatabase "users" usersSql 4 ipk usersRows
     Err e => println "build error: \{e}"
     Ok bytes => match fromBytes bytes

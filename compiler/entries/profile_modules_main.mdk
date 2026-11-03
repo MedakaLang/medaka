@@ -59,7 +59,7 @@ runStaged : Bool -> String -> String -> String -> List String -> <IO> Unit
 runStaged on rsrc csrc entry roots =
   -- Deterministic OP-COUNT side channel on iff perf output is on (issue #884). ONE
   -- call at entry; see profile_main.mdk for the invariant.
-  let _ = setOpCounting on
+  setOpCounting on
   let tTotal = now ()
   let aTotal = allocSnap ()
   let tP0 = now ()
@@ -68,14 +68,13 @@ runStaged on rsrc csrc entry roots =
   let rDecls = desugar (parse rsrc)
   let cDecls = desugar (parse csrc)
   let tP1 = now ()
-  let _ =
-    emitPhaseAO
-      on
-      "parse"
-      (tP1 - tP0)
-      (allocSnap () - aP0)
-      "runtime+core"
-      (opSnap () - oP0)
+  emitPhaseAO
+    on
+    "parse"
+    (tP1 - tP0)
+    (allocSnap () - aP0)
+    "runtime+core"
+    (opSnap () - oP0)
   let tL0 = now ()
   let aL0 = allocSnap ()
   let oL0 = opSnap ()
@@ -84,14 +83,13 @@ runStaged on rsrc csrc entry roots =
     Ok rawMods =>
       let tL1 = now ()
       let nMods = listLen rawMods
-      let _ =
-        emitPhaseAO
-          on
-          "load"
-          (tL1 - tL0)
-          (allocSnap () - aL0)
-          (intToString nMods ++ " modules")
-          (opSnap () - oL0)
+      emitPhaseAO
+        on
+        "load"
+        (tL1 - tL0)
+        (allocSnap () - aL0)
+        (intToString nMods ++ " modules")
+        (opSnap () - oL0)
       let tD0 = now ()
       let aD0 = allocSnap ()
       let oD0 = opSnap ()
@@ -99,14 +97,13 @@ runStaged on rsrc csrc entry roots =
       let nDecls = totalDecls mods
       let declsOp = intToString nDecls ++ " decls"
       let tD1 = now ()
-      let _ =
-        emitPhaseAO
-          on
-          "desugar"
-          (tD1 - tD0)
-          (allocSnap () - aD0)
-          declsOp
-          (opSnap () - oD0)
+      emitPhaseAO
+        on
+        "desugar"
+        (tD1 - tD0)
+        (allocSnap () - aD0)
+        declsOp
+        (opSnap () - oD0)
       -- resolve: the multi-module name-binding pass (issue #881). Production
       -- (medaka_cli) runs resolveModulesErrorsG, which threads `known` (grows
       -- `exp :: known`) and resolves each import via a LINEAR `findExports` scan —
@@ -122,27 +119,25 @@ runStaged on rsrc csrc entry roots =
       let oR0 = opSnap ()
       let _ = stringLength (resolveModulesToLines rDecls cDecls mods)
       let tR1 = now ()
-      let _ =
-        emitPhaseAO
-          on
-          "resolve"
-          (tR1 - tR0)
-          (allocSnap () - aR0)
-          declsOp
-          (opSnap () - oR0)
+      emitPhaseAO
+        on
+        "resolve"
+        (tR1 - tR0)
+        (allocSnap () - aR0)
+        declsOp
+        (opSnap () - oR0)
       let tT0 = now ()
       let aT0 = allocSnap ()
       let oT0 = opSnap ()
       let _ = checkModules defaultDriveInputs rDecls cDecls mods
       let tT1 = now ()
-      let _ =
-        emitPhaseAO
-          on
-          "typecheck"
-          (tT1 - tT0)
-          (allocSnap () - aT0)
-          declsOp
-          (opSnap () - oT0)
+      emitPhaseAO
+        on
+        "typecheck"
+        (tT1 - tT0)
+        (allocSnap () - aT0)
+        declsOp
+        (opSnap () - oT0)
       emitTotalA on (tT1 - tTotal) (allocSnap () - aTotal)
 -- parse: parse + desugar runtime.mdk and core.mdk
 

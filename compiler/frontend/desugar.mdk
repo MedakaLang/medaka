@@ -1247,7 +1247,7 @@ desugar prog = desugarIn "" prog
 export
 desugarIn : String -> List Decl -> List Decl
 desugarIn mid prog =
-  let _ = stageBump "desugar"
+  stageBump "desugar"
   qualifyAliasRefs prog
     |> mergeIfaceDefaults
     |> concatMapDecl expandDecl

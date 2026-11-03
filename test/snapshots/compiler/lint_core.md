@@ -1,5 +1,5 @@
 # META
-source_lines=629
+source_lines=633
 stages=DESUGAR,MARK
 # SOURCE
 -- compiler/tools/lint_core.mdk — the lint framework's data types: `Finding`,
@@ -107,6 +107,9 @@ memoGet (Memo cell f) = match !cell
 -- first asks for the text of a line.  `ffLocalMods` names the file's wildcard-imported modules that
 -- resolve to a file of the project rather than the stdlib, filled by the IO
 -- caller (`withLocalMods`), since a rule cannot touch the file system.
+-- `ffCanonPath` is the file's canonical path, filled the same way (`withCanonPath`)
+-- and empty when the caller did not look: the declaration index keys files by
+-- canonical path, which a path typed with `..` or through a symlink is not.
 public export data FileFacts = FileFacts {
   ffSrc : String,
   ffComments : Memo (List Comment),
@@ -115,6 +118,7 @@ public export data FileFacts = FileFacts {
   ffScopes : Memo FileScopes,
   ffLines : Memo (Array String),
   ffLocalMods : List String,
+  ffCanonPath : String,
 }
 
 export
@@ -659,7 +663,7 @@ public export data DupClause = DupClause {
 (DFunDef false "memoNew" ((PVar "f")) (EApp (EApp (EVar "Memo") (EApp (EVar "Ref") (EVar "None"))) (EVar "f")))
 (DTypeSig false "memoGet" (TyFun (TyApp (TyCon "Memo") (TyVar "a")) (TyVar "a")))
 (DFunDef false "memoGet" ((PCon "Memo" (PVar "cell") (PVar "f"))) (EMatch (EUnOp "!" (EVar "cell")) (arm (PCon "Some" (PVar "v")) () (EVar "v")) (arm (PCon "None") () (EBlock (DoLet false false (PVar "v") (EApp (EVar "f") (ELit LUnit))) (DoExpr (EApp (EApp (EVar "setRef") (EVar "cell")) (EApp (EVar "Some") (EVar "v")))) (DoExpr (EVar "v"))))))
-(DData Public "FileFacts" () ((variant "FileFacts" (ConNamed (field "ffSrc" (TyCon "String")) (field "ffComments" (TyApp (TyCon "Memo") (TyApp (TyCon "List") (TyCon "Comment")))) (field "ffOracle" (TyApp (TyCon "Memo") (TyCon "Oracle"))) (field "ffDupClauses" (TyApp (TyCon "Memo") (TyApp (TyCon "List") (TyCon "DupClause")))) (field "ffScopes" (TyApp (TyCon "Memo") (TyCon "FileScopes"))) (field "ffLines" (TyApp (TyCon "Memo") (TyApp (TyCon "Array") (TyCon "String")))) (field "ffLocalMods" (TyApp (TyCon "List") (TyCon "String")))))) ())
+(DData Public "FileFacts" () ((variant "FileFacts" (ConNamed (field "ffSrc" (TyCon "String")) (field "ffComments" (TyApp (TyCon "Memo") (TyApp (TyCon "List") (TyCon "Comment")))) (field "ffOracle" (TyApp (TyCon "Memo") (TyCon "Oracle"))) (field "ffDupClauses" (TyApp (TyCon "Memo") (TyApp (TyCon "List") (TyCon "DupClause")))) (field "ffScopes" (TyApp (TyCon "Memo") (TyCon "FileScopes"))) (field "ffLines" (TyApp (TyCon "Memo") (TyApp (TyCon "Array") (TyCon "String")))) (field "ffLocalMods" (TyApp (TyCon "List") (TyCon "String"))) (field "ffCanonPath" (TyCon "String"))))) ())
 (DTypeSig true "factComments" (TyFun (TyCon "FileFacts") (TyApp (TyCon "List") (TyCon "Comment"))))
 (DFunDef false "factComments" ((PVar "ff")) (EApp (EVar "memoGet") (EFieldAccess (EVar "ff") "ffComments")))
 (DTypeSig true "factOracle" (TyFun (TyCon "FileFacts") (TyCon "Oracle")))
@@ -815,7 +819,7 @@ public export data DupClause = DupClause {
 (DFunDef false "memoNew" ((PVar "f")) (EApp (EApp (EVar "Memo") (EApp (EVar "Ref") (EVar "None"))) (EVar "f")))
 (DTypeSig false "memoGet" (TyFun (TyApp (TyCon "Memo") (TyVar "a")) (TyVar "a")))
 (DFunDef false "memoGet" ((PCon "Memo" (PVar "cell") (PVar "f"))) (EMatch (EUnOp "!" (EVar "cell")) (arm (PCon "Some" (PVar "v")) () (EVar "v")) (arm (PCon "None") () (EBlock (DoLet false false (PVar "v") (EApp (EVar "f") (ELit LUnit))) (DoExpr (EApp (EApp (EVar "setRef") (EVar "cell")) (EApp (EVar "Some") (EVar "v")))) (DoExpr (EVar "v"))))))
-(DData Public "FileFacts" () ((variant "FileFacts" (ConNamed (field "ffSrc" (TyCon "String")) (field "ffComments" (TyApp (TyCon "Memo") (TyApp (TyCon "List") (TyCon "Comment")))) (field "ffOracle" (TyApp (TyCon "Memo") (TyCon "Oracle"))) (field "ffDupClauses" (TyApp (TyCon "Memo") (TyApp (TyCon "List") (TyCon "DupClause")))) (field "ffScopes" (TyApp (TyCon "Memo") (TyCon "FileScopes"))) (field "ffLines" (TyApp (TyCon "Memo") (TyApp (TyCon "Array") (TyCon "String")))) (field "ffLocalMods" (TyApp (TyCon "List") (TyCon "String")))))) ())
+(DData Public "FileFacts" () ((variant "FileFacts" (ConNamed (field "ffSrc" (TyCon "String")) (field "ffComments" (TyApp (TyCon "Memo") (TyApp (TyCon "List") (TyCon "Comment")))) (field "ffOracle" (TyApp (TyCon "Memo") (TyCon "Oracle"))) (field "ffDupClauses" (TyApp (TyCon "Memo") (TyApp (TyCon "List") (TyCon "DupClause")))) (field "ffScopes" (TyApp (TyCon "Memo") (TyCon "FileScopes"))) (field "ffLines" (TyApp (TyCon "Memo") (TyApp (TyCon "Array") (TyCon "String")))) (field "ffLocalMods" (TyApp (TyCon "List") (TyCon "String"))) (field "ffCanonPath" (TyCon "String"))))) ())
 (DTypeSig true "factComments" (TyFun (TyCon "FileFacts") (TyApp (TyCon "List") (TyCon "Comment"))))
 (DFunDef false "factComments" ((PVar "ff")) (EApp (EVar "memoGet") (EFieldAccess (EVar "ff") "ffComments")))
 (DTypeSig true "factOracle" (TyFun (TyCon "FileFacts") (TyCon "Oracle")))

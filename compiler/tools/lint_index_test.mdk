@@ -12,13 +12,15 @@
 -- `medaka test --native compiler/tools/lint_index_test.mdk`.
 
 import test.{
+  expectSatisfies,
   Expectation,
   expectEqual,
   expectTrue,
   expectNotEqual,
-  expectFalse,
   expectEach,
   fail,
+  expectOkThen,
+  pass,
 }
 import test_process.{withScratchDir}
 import frontend.ast.{Decl, Loc(..), UsePath(..), UseMember(..)}
@@ -31,7 +33,7 @@ import tools.lint_index.{
   RowKind(..), Ns(..), SigSlot(..), rowSig, rowsOfDecls, rowsDigest,
   encodeRowShard, decodeRowShard, rowContentHash, rowShardPath, rowsNamed,
   rowsIn, stdlibRowsNamed, stdlibRows, projectRows, ProjectIndex, Query(..),
-  Scope(..), mkProjectIndexWith, rowsAsked
+  Scope(..), mkProjectIndexWith, projectRowsNamed
 }
 import tools.lint.{
   StdlibIndex,
@@ -84,6 +86,21 @@ modSource = joinWith "\n" [
   "  sizeOf : a -> Int",
   "",
 ]
+
+-- Module sources that export one function `f` of the given type.
+intId : String
+intId = """
+export
+f : Int -> Int
+f x = x
+"""
+
+stringId : String
+stringId = """
+export
+f : String -> String
+f x = x
+"""
 
 parseRows : String -> String -> List IndexRow
 parseRows modId src = match lintParseSource src
@@ -224,8 +241,8 @@ test "a type and a constructor of the same name do not collide" =
   ]
 
 test "ambiguity is kept: every module's candidate is returned" =
-  let a = parseRows "a" "export\nf : Int -> Int\nf x = x\n"
-  let b = parseRows "b" "export\nf : String -> String\nf x = x\n"
+  let a = parseRows "a" intId
+  let b = parseRows "b" stringId
   let idx = mkProjectIndex (a ++ b) []
   expectEach [
     (
@@ -239,8 +256,8 @@ test "ambiguity is kept: every module's candidate is returned" =
   ]
 
 test "the project and stdlib scopes are kept apart" =
-  let std = parseRows "list" "export\nf : Int -> Int\nf x = x\n"
-  let proj = parseRows "p" "export\nf : String -> String\nf x = x\n"
+  let std = parseRows "list" intId
+  let proj = parseRows "p" stringId
   let idx = mkProjectIndex std proj
   expectEach [
     (
@@ -268,8 +285,19 @@ shardOf : List IndexRow -> String
 shardOf rows =
   encodeRowShard "stamp" "/p/m.mdk" (rowContentHash modSource) "m" rows
 
-decodes : String -> String -> String -> String -> Bool
-decodes stamp path hash text = isSome (decodeRowShard stamp path hash text)
+decodes : String -> String -> String -> String -> Expectation
+decodes stamp path hash text =
+  expectSatisfies
+    "a shard text that decodes under the stamp, path and hash"
+    (t => isSome (decodeRowShard stamp path hash t))
+    text
+
+doesNotDecode : String -> String -> String -> String -> Expectation
+doesNotDecode stamp path hash text =
+  expectSatisfies
+    "a shard text that is refused under the stamp, path and hash"
+    (t => isNone (decodeRowShard stamp path hash t))
+    text
 
 decodeOk : String -> Option (List IndexRow)
 decodeOk text =
@@ -306,9 +334,20 @@ test "a decoded signature stays text until it is asked for" =
         _ => fail "the signature was decoded eagerly"
 
 test "the digest ignores positions and follows signatures" =
-  let base = parseRows "m" "export\nf : Int -> Int\nf x = x\n"
-  let moved = parseRows "m" "\n\n\nexport\nf : Int -> Int\nf x = x + 1\n"
-  let changed = parseRows "m" "export\nf : Int -> String\nf x = x\n"
+  let base = parseRows "m" intId
+  let moved = parseRows "m" """
+
+
+
+export
+f : Int -> Int
+f x = x + 1
+"""
+  let changed = parseRows "m" """
+export
+f : Int -> String
+f x = x
+"""
   expectEach [
     (
       "a body edit that moves lines keeps the digest",
@@ -334,23 +373,23 @@ test "a corrupt, stale or foreign shard is a miss" =
   expectEach [
     (
       "control: the good shard decodes",
-      expectTrue (decodes "stamp" "/p/m.mdk" hash good),
+      decodes "stamp" "/p/m.mdk" hash good,
     ),
-    ("wrong stamp", expectFalse (decodes "other" "/p/m.mdk" hash good)),
-    ("wrong path", expectFalse (decodes "stamp" "/p/n.mdk" hash good)),
+    ("wrong stamp", doesNotDecode "other" "/p/m.mdk" hash good),
+    ("wrong path", doesNotDecode "stamp" "/p/n.mdk" hash good),
     (
       "wrong content hash",
-      expectFalse (decodes "stamp" "/p/m.mdk" "1.2" good),
+      doesNotDecode "stamp" "/p/m.mdk" "1.2" good,
     ),
     (
       "truncated",
-      expectFalse (decodes "stamp" "/p/m.mdk" hash (stringSlice 0 80 good)),
+      doesNotDecode "stamp" "/p/m.mdk" hash (stringSlice 0 80 good),
     ),
-    ("garbage", expectFalse (decodes "stamp" "/p/m.mdk" hash "((((")),
-    ("empty", expectFalse (decodes "stamp" "/p/m.mdk" hash "")),
+    ("garbage", doesNotDecode "stamp" "/p/m.mdk" hash "(((("),
+    ("empty", doesNotDecode "stamp" "/p/m.mdk" hash ""),
     (
       "trailing text",
-      expectFalse (decodes "stamp" "/p/m.mdk" hash (good ++ " x")),
+      doesNotDecode "stamp" "/p/m.mdk" hash (good ++ " x"),
     ),
   ]
 
@@ -359,12 +398,14 @@ test "a corrupted shard on disk is rebuilt from the source, not trusted" =
 
 corruptShardCase : String -> <IO, FileRead, FileWrite, Exec> Expectation
 corruptShardCase dir =
-  let _ = writeFile "\{dir}/b.mdk" "export\nf : Int -> Int\nf x = x\n"
+  resultOrPanic
+    "test setup: writeFile /b.mdk"
+    (writeFile "\{dir}/b.mdk" "export\nf : Int -> Int\nf x = x\n")
   match buildProjectIndexResult dir
     Err _ => fail "index did not build"
     Ok first =>
       let shard = rowShardPath "\{dir}/.medaka/lint-index" "\{dir}/b.mdk"
-      let _ = writeFile shard "(1 \"x\""
+      resultOrPanic "test setup: writeFile shard" (writeFile shard "(1 \"x\"")
       match buildProjectIndexResult dir
         Err _ => fail "index did not rebuild"
         Ok second => expectEqual (sigsIn first "b" "f") (sigsIn second "b" "f")
@@ -378,11 +419,15 @@ test "a signature edit is seen on the next build, a stale shard is not served" =
 
 editCase : String -> <IO, FileRead, FileWrite, Exec> Expectation
 editCase dir =
-  let _ = writeFile "\{dir}/b.mdk" "export\nf : Int -> Int\nf x = x\n"
+  resultOrPanic
+    "test setup: writeFile /b.mdk"
+    (writeFile "\{dir}/b.mdk" "export\nf : Int -> Int\nf x = x\n")
   match buildProjectIndexResult dir
     Err _ => fail "index did not build"
     Ok before =>
-      let _ = writeFile "\{dir}/b.mdk" "export\nf : Int -> Str\nf x = x\n"
+      resultOrPanic
+        "test setup: writeFile /b.mdk"
+        (writeFile "\{dir}/b.mdk" "export\nf : Int -> Str\nf x = x\n")
       match buildProjectIndexResult dir
         Err _ => fail "index did not rebuild"
         Ok after => expectEach [
@@ -406,11 +451,15 @@ test "a same-length edit that collides under the 30-bit hash is still seen" =
 
 collisionCase : String -> <IO, FileRead, FileWrite, Exec> Expectation
 collisionCase dir =
-  let _ = writeFile "\{dir}/b.mdk" collideA
+  resultOrPanic
+    "test setup: writeFile /b.mdk"
+    (writeFile "\{dir}/b.mdk" collideA)
   match buildProjectIndexResult dir
     Err _ => fail "index did not build"
     Ok before =>
-      let _ = writeFile "\{dir}/b.mdk" collideB
+      resultOrPanic
+        "test setup: writeFile /b.mdk"
+        (writeFile "\{dir}/b.mdk" collideB)
       match buildProjectIndexResult dir
         Err _ => fail "index did not rebuild"
         Ok after => expectEach [
@@ -515,7 +564,9 @@ test "--only and --disable build nothing when no surviving rule needs the index"
 
 onlyDisableCase : String -> <IO, FileRead, FileWrite, Exec> Expectation
 onlyDisableCase dir =
-  let _ = writeFile "\{dir}/b.mdk" "export\nf : Int -> Int\nf x = x\n"
+  resultOrPanic
+    "test setup: writeFile /b.mdk"
+    (writeFile "\{dir}/b.mdk" "export\nf : Int -> Int\nf x = x\n")
   let roster =
     [probeRule "p-project" [NeedsProjectIndex], probeRule "p-plain" []]
   let built = indexRows roster dir False [] []
@@ -556,7 +607,9 @@ test "a stdlib-only reader builds the stdlib rows and no project rows" =
 
 stdlibOnlyCase : String -> <IO, FileRead, FileWrite, Exec> Expectation
 stdlibOnlyCase dir =
-  let _ = writeFile "\{dir}/b.mdk" "export\nf : Int -> Int\nf x = x\n"
+  resultOrPanic
+    "test setup: writeFile /b.mdk"
+    (writeFile "\{dir}/b.mdk" "export\nf : Int -> Int\nf x = x\n")
   let roster = [probeRule "p-stdlib" [NeedsStdlibIndex]]
   let (std, proj) = indexRows roster dir False [] []
   expectTrue (std > 0 && proj == 0)
@@ -623,9 +676,9 @@ stagingCase : String -> <IO, FileRead, FileWrite, Exec> Expectation
 stagingCase dir = match (makeStagingDir dir, makeStagingDir dir)
   (Ok a, Ok b) =>
     let dest = "\{dir}/shard.sx"
-    let _ = stageAndRename a dest "AAAAAAAA"
+    stageAndRename a dest "AAAAAAAA"
     let afterA = readFile dest
-    let _ = stageAndRename b dest "BB"
+    stageAndRename b dest "BB"
     expectEach [
       ("distinct staging dirs", expectNotEqual a b),
       ("the first writer's shard is whole", expectEqual (Ok "AAAAAAAA") afterA),
@@ -642,30 +695,39 @@ stampCase : String -> <IO, FileRead, FileWrite, Exec> Expectation
 stampCase dir =
   let shards = "\{dir}/idx"
   let src = "\{dir}/m.mdk"
-  let _ = writeFile src "export\nf : Int -> Int\nf x = x\n"
-  let _ = fileRows True lintParseSource shards "stamp-1" "m" src
-  let _ = fileRows True lintParseSource shards "stamp-2" "m" src
+  resultOrPanic
+    "test setup: writeFile src"
+    (writeFile src "export\nf : Int -> Int\nf x = x\n")
+  let firstRun = fileRows True lintParseSource shards "stamp-1" "m" src
+  let secondRun = fileRows True lintParseSource shards "stamp-2" "m" src
   let hash = rowContentHash "export\nf : Int -> Int\nf x = x\n"
   let text = readFile (rowShardPath shards src)
   expectEach [
+    (
+      "stamp-1 run",
+      expectOkThen
+        (_ => pass)
+        (mapErr (_ => "the source did not parse") firstRun),
+    ),
+    (
+      "stamp-2 run",
+      expectOkThen
+        (_ => pass)
+        (mapErr (_ => "the source did not parse") secondRun),
+    ),
     (
       "one shard for the path",
       expectEqual (Ok [basename (rowShardPath shards src)]) (listDir shards),
     ),
     (
       "it answers for the newer stamp",
-      expectTrue (decodesText "stamp-2/x" src hash text),
+      expectOkThen (decodes "stamp-2/x" src hash) text,
     ),
     (
       "and no longer for the older",
-      expectFalse (decodesText "stamp-1/x" src hash text),
+      expectOkThen (doesNotDecode "stamp-1/x" src hash) text,
     ),
   ]
-
-decodesText : String -> String -> String -> Result String String -> Bool
-decodesText stamp path hash (Ok text) =
-  isSome (decodeRowShard stamp path hash text)
-decodesText _ _ _ (Err _) = False
 
 test "a shard names its path, so a shard of another path is not served" =
   let a = "/p/one/m.mdk"
@@ -682,12 +744,11 @@ test "a shard names its path, so a shard of another path is not served" =
     ),
     (
       "a shard of one path does not decode for the other",
-      expectFalse
-        (decodes
-          "stamp"
-          b
-          hash
-          (encodeRowShard "stamp" a hash "m" (rowsOf "m"))),
+      doesNotDecode
+        "stamp"
+        b
+        hash
+        (encodeRowShard "stamp" a hash "m" (rowsOf "m")),
     ),
   ]
 
@@ -734,7 +795,9 @@ test "a project rule's declared index need builds the project index" =
 
 projectNeedCase : String -> <IO, FileRead, FileWrite, Exec> Expectation
 projectNeedCase dir =
-  let _ = writeFile "\{dir}/b.mdk" "export\nf : Int -> Int\nf x = x\n"
+  resultOrPanic
+    "test setup: writeFile /b.mdk"
+    (writeFile "\{dir}/b.mdk" "export\nf : Int -> Int\nf x = x\n")
   expectEach [
     (
       "a project need sees the project rows",
@@ -775,16 +838,28 @@ test "project rows are those of the linted file's project, not the working direc
 
 projectRootCase : String -> <IO, FileRead, FileWrite, Exec> Expectation
 projectRootCase dir =
-  let _ = makeDir "\{dir}/proj"
-  let _ = makeDir "\{dir}/proj/sub"
-  let _ = makeDir "\{dir}/loose"
-  let _ = makeDir "\{dir}/loose/inner"
-  let _ = writeFile "\{dir}/proj/medaka.toml" "[package]\nname = \"p\"\n"
+  resultOrPanic "test setup: makeDir /proj" (makeDir "\{dir}/proj")
+  resultOrPanic "test setup: makeDir /proj/sub" (makeDir "\{dir}/proj/sub")
+  resultOrPanic "test setup: makeDir /loose" (makeDir "\{dir}/loose")
+  resultOrPanic
+    "test setup: makeDir /loose/inner"
+    (makeDir "\{dir}/loose/inner")
+  resultOrPanic
+    "test setup: writeFile /proj/medaka.toml"
+    (writeFile "\{dir}/proj/medaka.toml" "[package]\nname = \"p\"\n")
   let body = "export\nf : Int -> Int\nf x = x\n"
-  let _ = writeFile "\{dir}/proj/sub/b.mdk" body
-  let _ = writeFile "\{dir}/proj/sub/e.mdk" body
-  let _ = writeFile "\{dir}/loose/c.mdk" body
-  let _ = writeFile "\{dir}/loose/inner/d.mdk" body
+  resultOrPanic
+    "test setup: writeFile /proj/sub/b.mdk"
+    (writeFile "\{dir}/proj/sub/b.mdk" body)
+  resultOrPanic
+    "test setup: writeFile /proj/sub/e.mdk"
+    (writeFile "\{dir}/proj/sub/e.mdk" body)
+  resultOrPanic
+    "test setup: writeFile /loose/c.mdk"
+    (writeFile "\{dir}/loose/c.mdk" body)
+  resultOrPanic
+    "test setup: writeFile /loose/inner/d.mdk"
+    (writeFile "\{dir}/loose/inner/d.mdk" body)
   expectEach [
     (
       "under a manifest: the manifest's directory, each module once",
@@ -805,10 +880,13 @@ projectRootCase dir =
   ]
 
 -- The index of the stdlib's rows and the project's rows.
+export
 mkProjectIndex : List IndexRow -> List IndexRow -> ProjectIndex
 mkProjectIndex stdlibRows projectRows =
   mkProjectIndexWith "" "" stdlibRows projectRows
 
--- The project's candidates alone.
-projectRowsNamed : ProjectIndex -> Ns -> String -> List IndexRow
-projectRowsNamed ix ns name = rowsAsked ix (QNamed ProjectScope ns name)
+-- The rows of already-parsed declarations, for sibling tests of other modules
+-- that cannot name the private `rowsOfDecls`.
+export
+declRows : String -> List Decl -> List IndexRow
+declRows modId decls = rowsOfDecls modId decls

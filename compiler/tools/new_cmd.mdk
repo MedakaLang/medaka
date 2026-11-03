@@ -49,19 +49,19 @@ export
 newProject : String -> <IO> Int
 newProject name =
   if invalidName name then
-    let _ = ePutStrLn ("medaka new: invalid project name: \"" ++ name ++ "\"")
+    ePutStrLn ("medaka new: invalid project name: \"" ++ name ++ "\"")
     2
   else if fileExists name then
-    let _ = ePutStrLn ("medaka new: path already exists: " ++ name)
+    ePutStrLn ("medaka new: path already exists: " ++ name)
     1
   else match makeDir name
     Err msg =>
-      let _ = ePutStrLn ("medaka new: mkdir failed: " ++ msg)
+      ePutStrLn ("medaka new: mkdir failed: " ++ msg)
       1
     Ok _ =>
-      let _ = writeProjectFile (name ++ "/medaka.toml") (tomlTemplate name)
-      let _ = writeProjectFile (name ++ "/main.mdk") mainTemplate
-      let _ = writeProjectFile (name ++ "/.gitignore") gitignoreTemplate
-      let _ = writeProjectFile (name ++ "/README.md") (readmeTemplate name)
-      let _ = putStrLn ("Created " ++ name ++ "/")
+      writeProjectFile (name ++ "/medaka.toml") (tomlTemplate name)
+      writeProjectFile (name ++ "/main.mdk") mainTemplate
+      writeProjectFile (name ++ "/.gitignore") gitignoreTemplate
+      writeProjectFile (name ++ "/README.md") (readmeTemplate name)
+      putStrLn ("Created " ++ name ++ "/")
       0

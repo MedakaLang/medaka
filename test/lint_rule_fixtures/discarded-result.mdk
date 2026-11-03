@@ -1,0 +1,59 @@
+import test.{expectTrue}
+
+-- A Result extern call is flagged on its `let`; there is no fix.
+resultCall : Int -> <FileWrite "x"> Unit
+resultCall n =
+  -- expect-next-line rule-discarded-result unfixed
+  let _ = writeFile "x" "y"
+  ()
+
+-- An Option stdlib call is flagged with the Option message.
+optionCall : Int -> Unit
+optionCall n =
+  -- expect-next-line rule-discarded-result unfixed
+  let _ = checkedAdd n 1
+  ()
+
+-- A `do` block keeps `let _ =`.
+inDo : Int -> <FileWrite "x"> Unit
+inDo n = do
+  let _ = writeFile "x" "y"
+  pure ()
+
+-- A Unit call is the other rule's.
+unitCall : Int -> Unit
+unitCall n =
+  let _ = println "a"
+  ()
+
+-- A partial application has no Result yet.
+partial : Int -> Unit
+partial n =
+  let _ = checkedAdd n
+  ()
+
+-- A name the file binds is not the stdlib's.
+shadowed : Int -> Unit
+shadowed n =
+  let checkedAdd = a b => a
+  let _ = checkedAdd 1 2
+  ()
+
+-- A callee with no signature declares no result.
+unsignedCallee n = Some n
+
+useUnsigned : Int -> Unit
+useUnsigned n =
+  let _ = unsignedCallee n
+  ()
+
+-- A named discard is not a `let _ =`.
+named : Int -> Unit
+named n = bestEffort "the file is advisory" (Err "x" : Result String Int)
+
+-- A directive silences the finding.
+suppressed : Int -> Unit
+suppressed n =
+  -- lint-disable-next-line rule-discarded-result
+  let _ = checkedAdd n 2
+  ()

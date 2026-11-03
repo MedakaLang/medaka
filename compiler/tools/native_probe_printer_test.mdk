@@ -35,7 +35,7 @@ withProjectFixtures manifest files inspect = match makeTempDir ()
       match writeFixtureFiles dir (("medaka.toml", manifest) :: files)
         Err message => fail message
         Ok _ => inspect "\{dir}/main.mdk"
-    let _ = cleanupTempDir dir
+    cleanupTempDir dir
     result
 
 runNative : String -> <Exec, IO> Result String (Int, String, String)

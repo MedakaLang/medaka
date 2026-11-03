@@ -3613,11 +3613,3 @@ peelOntoParams dyn (Some src) patTypes pats =
 localRole : Bool -> BindingRole
 localRole True = RoleQuantifies
 localRole False = RoleMonomorphic
-
--- test-only observation: `hadMatchWarnings` of the last module checked, the only read of a
--- drive that returns no outputs (the projections).
-export
-matchWarningsNow : ModuleCtx -> Bool
-matchWarningsNow mctx = match mctx.mcCells.matchWarnings.value
-  [] => False
-  _ => True

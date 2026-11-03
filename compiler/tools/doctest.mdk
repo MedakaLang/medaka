@@ -116,7 +116,7 @@ export
 printDoctestDetails : String -> List (Example, ExResult) -> <IO> Unit
 printDoctestDetails _ [] = ()
 printDoctestDetails target ((ex, res) :: rest) =
-  let _ = printDoctestOne target ex res
+  printDoctestOne target ex res
   printDoctestDetails target rest
 
 printDoctestOne : String -> Example -> ExResult -> <IO> Unit
@@ -125,11 +125,11 @@ printDoctestOne target ex res =
   match res
     Pass _ _ => putStrLn "  ok   \{loc}: \{exampleInput ex}"
     Fail _ expected actual =>
-      let _ = putStrLn "  FAIL \{loc}: \{exampleInput ex}"
-      let _ = putStrLn ("       expected: " ++ expected)
+      putStrLn "  FAIL \{loc}: \{exampleInput ex}"
+      putStrLn ("       expected: " ++ expected)
       putStrLn ("         actual: " ++ actual)
     Errored msg =>
-      let _ = putStrLn "  ERROR \{loc}: \{exampleInput ex}"
+      putStrLn "  ERROR \{loc}: \{exampleInput ex}"
       putStrLn ("        " ++ msg)
 
 -- ── small string helpers (compiler avoids the stdlib) ──────────────────────

@@ -168,7 +168,7 @@ sliceClamped lo hi arr =
     [||]
   else
     let out = arrayMake m (arrayGetUnsafe lo' arr)
-    let _ = arrayBlit arr lo' out 0 m
+    arrayBlit arr lo' out 0 m
     out
 
 {- | A new array of the first `n` elements, or of the whole array when it
@@ -219,7 +219,7 @@ concatBlitAll arrs out k dstOff outer =
     if len <= 0 then
       concatBlitAll arrs out (k + 1) dstOff outer
     else
-      let _ = arrayBlit inner 0 out dstOff len
+      arrayBlit inner 0 out dstOff len
       concatBlitAll arrs out (k + 1) (dstOff + len) outer
 
 concatTotal : Array (Array a) -> Int -> Int -> Int -> Int
@@ -303,7 +303,7 @@ filterGo p arr buf i k n =
   else
     let x = arrayGetUnsafe i arr
     if p x then
-      let _ = arraySetUnsafe k x buf
+      arraySetUnsafe k x buf
       filterGo p arr buf (i + 1) (k + 1) n
     else
       filterGo p arr buf (i + 1) k n
@@ -317,7 +317,7 @@ filterFinish buf k n =
     buf
   else
     let out = arrayMake k (arrayGetUnsafe 0 buf)
-    let _ = arrayBlit buf 0 out 0 k
+    arrayBlit buf 0 out 0 k
     out
 
 -- The buffer is created from the first survivor, which supplies the element
@@ -345,7 +345,7 @@ filterMapGo f arr buf i n k =
     k
   else match f (arrayGetUnsafe i arr)
     Some y =>
-      let _ = arraySetUnsafe k y buf
+      arraySetUnsafe k y buf
       filterMapGo f arr buf (i + 1) n (k + 1)
     None => filterMapGo f arr buf (i + 1) n k
 
@@ -453,7 +453,7 @@ sortBy cmp arr =
     arrayCopy arr
   else
     let src = arrayCopy arr
-    let _ = sortRuns cmp src n 8 0
+    sortRuns cmp src n 8 0
     mergePasses cmp src (arrayMake n (arrayGetUnsafe 0 arr)) n 8
 
 -- > toList (sortBy compare (fromList [3, 1, 4, 1, 5]))
@@ -497,7 +497,7 @@ sortRuns cmp a n w lo =
     ()
   else
     let hi = min (lo + w) n
-    let _ = insertionRun cmp a lo hi (lo + 1)
+    insertionRun cmp a lo hi (lo + 1)
     sortRuns cmp a n w hi
 
 insertionRun : (a -> a -> <e> Ordering) ->
@@ -511,7 +511,7 @@ insertionRun cmp a lo hi i =
     ()
   else
     let x = arrayGetUnsafe i a
-    let _ = insertionShift cmp a lo i x
+    insertionShift cmp a lo i x
     insertionRun cmp a lo hi (i + 1)
 
 insertionShift : (a -> a -> <e> Ordering) ->
@@ -526,7 +526,7 @@ insertionShift cmp a lo j x =
   else if isNotGt cmp (arrayGetUnsafe (j - 1) a) x then
     arraySetUnsafe j x a
   else
-    let _ = arraySetUnsafe j (arrayGetUnsafe (j - 1) a) a
+    arraySetUnsafe j (arrayGetUnsafe (j - 1) a) a
     insertionShift cmp a lo (j - 1) x
 
 -- Bottom-up merge sort over two equal-length buffers, `src` and `dst`. Each
@@ -543,7 +543,7 @@ mergePasses cmp src dst n width =
   if width >= n then
     src
   else
-    let _ = mergeRuns cmp src dst n width 0
+    mergeRuns cmp src dst n width 0
     mergePasses cmp dst src n (width * 2)
 
 mergeRuns : (a -> a -> <e> Ordering) ->
@@ -559,7 +559,7 @@ mergeRuns cmp src dst n width lo =
   else
     let mid = min (lo + width) n
     let hi = min (lo + width + width) n
-    let _ = mergePair cmp src dst lo mid hi
+    mergePair cmp src dst lo mid hi
     mergeRuns cmp src dst n width hi
 
 -- Merges the adjacent runs `src[lo, mid)` and `src[mid, hi)` into `dst`. When
@@ -615,10 +615,10 @@ mergeStep : (a -> a -> <e> Ordering) ->
 mergeStep cmp src dst i iEnd j jEnd k =
   match cmp (arrayGetUnsafe i src) (arrayGetUnsafe j src)
     Gt =>
-      let _ = arraySetUnsafe k (arrayGetUnsafe j src) dst
+      arraySetUnsafe k (arrayGetUnsafe j src) dst
       mergeRun cmp src dst i iEnd (j + 1) jEnd (k + 1)
     _ =>
-      let _ = arraySetUnsafe k (arrayGetUnsafe i src) dst
+      arraySetUnsafe k (arrayGetUnsafe i src) dst
       mergeRun cmp src dst (i + 1) iEnd j jEnd (k + 1)
 
 -- Copies `src[i, iEnd)` into `dst` from index `k` on.
@@ -627,7 +627,7 @@ copyRun src dst i iEnd k =
   if i >= iEnd then
     ()
   else
-    let _ = arraySetUnsafe k (arrayGetUnsafe i src) dst
+    arraySetUnsafe k (arrayGetUnsafe i src) dst
     copyRun src dst (i + 1) iEnd (k + 1)
 
 -- # Searching
@@ -811,7 +811,7 @@ prop "foldWithIndex matches fold over zip with range" (xs : List Int) =
 prop "forEachWithIndex visits every index once, in order, matching zip with range" (xs : List Int) =
   let arr = fromList xs
   let seen = Ref []
-  let _ = forEachWithIndex (i x => seen := (i, x) :: !seen) arr
+  forEachWithIndex (i x => seen := (i, x) :: !seen) arr
   let viaZip =
     fold (acc pair => pair :: acc) [] (zip (range 0 (length arr)) arr)
   eq !seen viaZip

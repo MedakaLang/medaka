@@ -5,7 +5,8 @@
 import bytes.{fromU8Array}
 import string.{contains, toLower}
 import test.{
-  expectEach, expectEqual, expectErr, expectFalse, expectOkThen, expectTrue
+  Expectation, expectEach, expectEqual, expectErr, expectFalse, expectOkThen,
+  expectTrue, fail, pass
 }
 import base32.{base32Decode, base32Encode}
 import lib.cid.{
@@ -25,12 +26,16 @@ import lib.resource_limits.{maxDagCborDepth}
 nest : Int -> DagCbor
 nest n = if n <= 0 then DcInt 0 else DcArray [nest (n - 1)]
 
-roundTrip : DagCbor -> Bool
+roundTrip : DagCbor -> Expectation
 roundTrip value = match dagCborEncode value
-  Err _ => False
+  Err _ => fail "the value did not encode"
   Ok encoded => match dagCborDecode encoded
-    Err _ => False
-    Ok decoded => dagCborEncode decoded == Ok encoded
+    Err _ => fail "the encoding did not decode"
+    Ok decoded =>
+      if dagCborEncode decoded == Ok encoded then
+        pass
+      else
+        fail "decoding and re-encoding changed the bytes"
 
 test "base32 round-trips empty and partial groups" =
   let samples = [
@@ -92,7 +97,7 @@ test "DAG-CBOR round-trips every admitted value kind" =
     ("bytes", DcBytes (fromU8Array [|0, 255|])),
     ("text", DcString "水"),
   ]
-  expectTrue (roundTrip value)
+  roundTrip value
 
 test "DAG-CBOR map encoding is insertion-order independent" =
   let a = DcMap [("bbb", DcInt 3), ("a", DcInt 1), ("cc", DcInt 2)]
@@ -103,7 +108,7 @@ test "DAG-CBOR encoder rejects duplicate map keys" =
   expectErr (dagCborEncode (DcMap [("x", DcInt 1), ("x", DcInt 2)]))
 
 test "DAG-CBOR encoder admits the deepest nesting its decoder reads back" =
-  expectTrue (roundTrip (nest maxDagCborDepth))
+  roundTrip (nest maxDagCborDepth)
 
 test "DAG-CBOR encoder refuses nesting one level past the decoder's ceiling" =
   expectErr (dagCborEncode (nest (maxDagCborDepth + 1)))

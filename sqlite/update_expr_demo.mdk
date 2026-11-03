@@ -44,55 +44,48 @@ runOne path table asgns where_ label = match update path table asgns where_
 main : <IO, FileRead, FileWrite> Unit
 main = match args ()
   [path] =>
-    let _ =
-      runOne
-        path
-        "t1"
-        [assign "total" (eAdd (eColInt "total") (eLitI 10))]
-        (eGe (eColInt "total") (eLitI 50))
-        "t1 total+=10 WHERE total>=50"
-    let _ =
-      runOne
-        path
-        "t2"
-        [assign "x" (eMul (eColInt "x") (eLitI 2))]
-        allRows
-        "t2 x*=2"
-    let _ =
-      runOne
-        path
-        "t3"
-        [assign "c" (eAdd (eColInt "a") (eColInt "b"))]
-        allRows
-        "t3 c=a+b"
-    let _ =
-      runOne
-        path
-        "t4"
-        [assign "n" (eDiv (eColInt "n") (eLitI 2))]
-        allRows
-        "t4 n=n/2"
-    let _ =
-      runOne
-        path
-        "t5"
-        [assign "n" (eDiv (eColInt "n") (eColInt "d"))]
-        allRows
-        "t5 n=n/d (div by zero)"
-    let _ =
-      runOne
-        path
-        "t6"
-        [assign "n" (eMod (eColInt "n") (eLitI 3))]
-        allRows
-        "t6 n=n%3"
-    let _ =
-      runOne
-        path
-        "t7"
-        [assign "a" (eColInt "b"), assign "b" (eColInt "a")]
-        allRows
-        "t7 swap a,b"
+    runOne
+      path
+      "t1"
+      [assign "total" (eAdd (eColInt "total") (eLitI 10))]
+      (eGe (eColInt "total") (eLitI 50))
+      "t1 total+=10 WHERE total>=50"
+    runOne
+      path
+      "t2"
+      [assign "x" (eMul (eColInt "x") (eLitI 2))]
+      allRows
+      "t2 x*=2"
+    runOne
+      path
+      "t3"
+      [assign "c" (eAdd (eColInt "a") (eColInt "b"))]
+      allRows
+      "t3 c=a+b"
+    runOne
+      path
+      "t4"
+      [assign "n" (eDiv (eColInt "n") (eLitI 2))]
+      allRows
+      "t4 n=n/2"
+    runOne
+      path
+      "t5"
+      [assign "n" (eDiv (eColInt "n") (eColInt "d"))]
+      allRows
+      "t5 n=n/d (div by zero)"
+    runOne
+      path
+      "t6"
+      [assign "n" (eMod (eColInt "n") (eLitI 3))]
+      allRows
+      "t6 n=n%3"
+    runOne
+      path
+      "t7"
+      [assign "a" (eColInt "b"), assign "b" (eColInt "a")]
+      allRows
+      "t7 swap a,b"
     -- Float-in-Cell arithmetic (the type-lost-Float-prone shape): p := p * 1.5.
     runOne
       path

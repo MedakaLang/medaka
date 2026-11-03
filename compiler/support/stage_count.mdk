@@ -50,7 +50,7 @@ stageDump () = match !stageCountOn
 export
 stageExit : Int -> <IO> Unit
 stageExit code =
-  let _ = stageDump ()
+  stageDump ()
   exit code
 
 stagePrefix : String
@@ -78,5 +78,5 @@ forwardStageLines err =
 stageDumpKeys : List String -> <IO> Unit
 stageDumpKeys [] = ()
 stageDumpKeys (k :: rest) =
-  let _ = ePutStrLn "\{stagePrefix}\{k}\t\{countOf k}"
+  ePutStrLn "\{stagePrefix}\{k}\t\{countOf k}"
   stageDumpKeys rest

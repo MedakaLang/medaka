@@ -323,3 +323,34 @@ test "--fix past the pass limit says so and exits non-zero" = withScratchDir
 -- `deep x = x == True == ... == True` with `n` comparisons.
 deepChain : Int -> String
 deepChain n = "deep x = x" ++ concat (replicate n " == True") ++ "\n"
+
+-- The declaration index keys a file by its canonical path, so the verdict on a
+-- callee declared in the linted file must not depend on how the path is typed.
+unitDiscardSrc : String
+unitDiscardSrc =
+  "step : Int -> Unit\nstep _ = ()\n\ngo : Int -> Unit\ngo n =\n  let _ = step n\n  ()\n\nmain = go 1\n"
+
+reportsUnitDiscard : String -> Bool
+reportsUnitDiscard out = contains "[rule-let-underscore-unit]" out
+
+test "a dot-dot or symlinked path to the file gets the same discard verdict as the plain path" = withScratchDir
+  (dir => match boundedVerb "mkdir" ["-p", "\{dir}/q2"]
+    Err e => fail "could not stage the scratch tree: \{e}"
+    Ok _ => match writeFile "\{dir}/q2/main.mdk" unitDiscardSrc
+      Err e => fail "could not stage the scratch tree: \{e}"
+      Ok _ => match boundedVerb "ln" ["-s", "\{dir}/q2", "\{dir}/q2link"]
+        Err e => fail "could not stage the symlink: \{e}"
+        Ok _ =>
+          let run =
+            path => lintIn "\{dir}/q2" ["--only=rule-let-underscore-unit", path]
+          expectEach [
+            ("the plain path", graded 0 reportsUnitDiscard (run "main.mdk")),
+            (
+              "a dot-dot path",
+              graded 0 reportsUnitDiscard (run "../q2/main.mdk"),
+            ),
+            (
+              "a symlinked path",
+              graded 0 reportsUnitDiscard (run "../q2link/main.mdk"),
+            ),
+          ])

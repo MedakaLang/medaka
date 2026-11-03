@@ -68,14 +68,14 @@ readTable name createSql colCount rows =
 
 main : <IO> Unit
 main =
-  let _ = println "-- CREATE+READ users --"
-  let _ = readTable "users" usersSql 3 baseRows
-  let _ = println "-- DELETE id=2, READ users --"
+  println "-- CREATE+READ users --"
+  readTable "users" usersSql 3 baseRows
+  println "-- DELETE id=2, READ users --"
   let afterDelete = filter (r => rowId r /= 2) baseRows
-  let _ = readTable "users" usersSql 3 afterDelete
-  let _ = println "-- UPDATE id=3 age:=99, READ users --"
+  readTable "users" usersSql 3 afterDelete
+  println "-- UPDATE id=3 age:=99, READ users --"
   let afterUpdate =
     map (r => if rowId r == 3 then setAge r (CInt 99) else r) baseRows
-  let _ = readTable "users" usersSql 3 afterUpdate
-  let _ = println "-- CREATE+READ reals (float round-trip) --"
+  readTable "users" usersSql 3 afterUpdate
+  println "-- CREATE+READ reals (float round-trip) --"
   readTable "reals" realsSql 2 realsRows
