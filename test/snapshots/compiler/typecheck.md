@@ -371,6 +371,7 @@ import types.tc_scope.{
   useKeyCands,
 }
 import types.tc_unify.{
+  openScope,
   ambiguousImportTyvarId,
   enterLevel,
   exitLevel,
@@ -408,7 +409,6 @@ import types.tc_solve_entail.{
 }
 import types.tc_solve.{
   goalsMark,
-  openScope,
   returnPosMethodNames,
   routesOfMonosTopV,
 }
@@ -3713,12 +3713,12 @@ schemeLines ((n, p) :: rest) = "\{n} : \{ppPubScheme p}" :: schemeLines rest
 (DUse false (UseGroup ("types" "tc_env") ((mem "aliasOwnAt" false) (mem "aliasUniverseAt" false) (mem "boundNames" false) (mem "ceLookupAt" false) (mem "ceRowMethodNames" false) (mem "ceRowRequired" false) (mem "declEnvModule" false) (mem "emptyDeclEnvAcc" false) (mem "funDefs" false) (mem "ieRowInst" false) (mem "ieRowMethodNames" false) (mem "ieRowOrd" false) (mem "ieRowsAll" false) (mem "ieRowTriple" false) (mem "ifaceMethodNames" false) (mem "ifaceTabKey" false) (mem "importedBindings" false) (mem "instRefMid" false) (mem "instRefSeq" false) (mem "methodExportsIndex" false) (mem "namesToSet" false) (mem "ordOfIndex" false) (mem "publicDataDecls" false))))
 (DUse false (UseGroup ("types" "tc_diag_text") ((mem "prependConflict" false) (mem "prependIncomparable" false) (mem "dropAmbiguity" false) (mem "stickyDiagsInPushOrder" false))))
 (DUse false (UseGroup ("types" "tc_scope") ((mem "aliasRowSpelling" false) (mem "importFormRows" false) (mem "memberAliasCands" false) (mem "moduleAliasKeys" false) (mem "useKeyCands" false))))
-(DUse false (UseGroup ("types" "tc_unify") ((mem "ambiguousImportTyvarId" false) (mem "enterLevel" false) (mem "exitLevel" false) (mem "freshVar" false) (mem "instantiateTracked" false) (mem "lookupSchemeObls" false) (mem "recordObl" false) (mem "recordSchemeCallObligations" false) (mem "unify" false) (mem "closeScope" false))))
+(DUse false (UseGroup ("types" "tc_unify") ((mem "openScope" false) (mem "ambiguousImportTyvarId" false) (mem "enterLevel" false) (mem "exitLevel" false) (mem "freshVar" false) (mem "instantiateTracked" false) (mem "lookupSchemeObls" false) (mem "recordObl" false) (mem "recordSchemeCallObligations" false) (mem "unify" false) (mem "closeScope" false))))
 (DUse false (UseGroup ("types" "tc_decls_types") ((mem "populateEffectDomainsGraph" false))))
 (DUse false (UseGroup ("types" "tc_decls") ((mem "buildDeclEnvs" false) (mem "dataEnvFromDeclsGo" false) (mem "declEnvAccOf" false) (mem "declEnvModulesFrom" false) (mem "importerDefiners" false) (mem "privateModuleExports" false) (mem "publicModuleExports" false) (mem "siblingDepEnv" false) (mem "stampGraphDecls" false) (mem "tagModuleExports" false) (mem "withDeclParamKinds" false))))
 (DUse false (UseGroup ("types" "tc_foreign") ((mem "externDecls" false) (mem "externSigsToMap" false) (mem "ffiExternTypeRowsWith" false))))
 (DUse false (UseGroup ("types" "tc_solve_entail") ((mem "directSuperGoals" false))))
-(DUse false (UseGroup ("types" "tc_solve") ((mem "goalsMark" false) (mem "openScope" false) (mem "returnPosMethodNames" false) (mem "routesOfMonosTopV" false))))
+(DUse false (UseGroup ("types" "tc_solve") ((mem "goalsMark" false) (mem "returnPosMethodNames" false) (mem "routesOfMonosTopV" false))))
 (DUse false (UseGroup ("types" "tc_solve_check") ((mem "checkCallObligationsU" false))))
 (DUse false (UseGroup ("types" "tc_effects") ((mem "grantOrder" false))))
 (DUse false (UseGroup ("types" "tc_occurrence") ((mem "argDispatchIndices" false) (mem "argDispatchIndicesById" false) (mem "constrainedSigNames" false) (mem "markDictNames" false) (mem "markSetsOf" false) (mem "methodConstraintNames" false))))
@@ -4123,12 +4123,12 @@ schemeLines ((n, p) :: rest) = "\{n} : \{ppPubScheme p}" :: schemeLines rest
 (DUse false (UseGroup ("types" "tc_env") ((mem "aliasOwnAt" false) (mem "aliasUniverseAt" false) (mem "boundNames" false) (mem "ceLookupAt" false) (mem "ceRowMethodNames" false) (mem "ceRowRequired" false) (mem "declEnvModule" false) (mem "emptyDeclEnvAcc" false) (mem "funDefs" false) (mem "ieRowInst" false) (mem "ieRowMethodNames" false) (mem "ieRowOrd" false) (mem "ieRowsAll" false) (mem "ieRowTriple" false) (mem "ifaceMethodNames" false) (mem "ifaceTabKey" false) (mem "importedBindings" false) (mem "instRefMid" false) (mem "instRefSeq" false) (mem "methodExportsIndex" false) (mem "namesToSet" false) (mem "ordOfIndex" false) (mem "publicDataDecls" false))))
 (DUse false (UseGroup ("types" "tc_diag_text") ((mem "prependConflict" false) (mem "prependIncomparable" false) (mem "dropAmbiguity" false) (mem "stickyDiagsInPushOrder" false))))
 (DUse false (UseGroup ("types" "tc_scope") ((mem "aliasRowSpelling" false) (mem "importFormRows" false) (mem "memberAliasCands" false) (mem "moduleAliasKeys" false) (mem "useKeyCands" false))))
-(DUse false (UseGroup ("types" "tc_unify") ((mem "ambiguousImportTyvarId" false) (mem "enterLevel" false) (mem "exitLevel" false) (mem "freshVar" false) (mem "instantiateTracked" false) (mem "lookupSchemeObls" false) (mem "recordObl" false) (mem "recordSchemeCallObligations" false) (mem "unify" false) (mem "closeScope" false))))
+(DUse false (UseGroup ("types" "tc_unify") ((mem "openScope" false) (mem "ambiguousImportTyvarId" false) (mem "enterLevel" false) (mem "exitLevel" false) (mem "freshVar" false) (mem "instantiateTracked" false) (mem "lookupSchemeObls" false) (mem "recordObl" false) (mem "recordSchemeCallObligations" false) (mem "unify" false) (mem "closeScope" false))))
 (DUse false (UseGroup ("types" "tc_decls_types") ((mem "populateEffectDomainsGraph" false))))
 (DUse false (UseGroup ("types" "tc_decls") ((mem "buildDeclEnvs" false) (mem "dataEnvFromDeclsGo" false) (mem "declEnvAccOf" false) (mem "declEnvModulesFrom" false) (mem "importerDefiners" false) (mem "privateModuleExports" false) (mem "publicModuleExports" false) (mem "siblingDepEnv" false) (mem "stampGraphDecls" false) (mem "tagModuleExports" false) (mem "withDeclParamKinds" false))))
 (DUse false (UseGroup ("types" "tc_foreign") ((mem "externDecls" false) (mem "externSigsToMap" false) (mem "ffiExternTypeRowsWith" false))))
 (DUse false (UseGroup ("types" "tc_solve_entail") ((mem "directSuperGoals" false))))
-(DUse false (UseGroup ("types" "tc_solve") ((mem "goalsMark" false) (mem "openScope" false) (mem "returnPosMethodNames" false) (mem "routesOfMonosTopV" false))))
+(DUse false (UseGroup ("types" "tc_solve") ((mem "goalsMark" false) (mem "returnPosMethodNames" false) (mem "routesOfMonosTopV" false))))
 (DUse false (UseGroup ("types" "tc_solve_check") ((mem "checkCallObligationsU" false))))
 (DUse false (UseGroup ("types" "tc_effects") ((mem "grantOrder" false))))
 (DUse false (UseGroup ("types" "tc_occurrence") ((mem "argDispatchIndices" false) (mem "argDispatchIndicesById" false) (mem "constrainedSigNames" false) (mem "markDictNames" false) (mem "markSetsOf" false) (mem "methodConstraintNames" false))))

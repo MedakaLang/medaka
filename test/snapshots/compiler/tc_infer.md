@@ -1,5 +1,5 @@
 # META
-source_lines=3615
+source_lines=3581
 stages=DESUGAR,MARK
 # SOURCE
 -- tc_infer: the expression inference recursion (variables, application, lambda, let and rec-let,
@@ -20,7 +20,6 @@ stages=DESUGAR,MARK
 import support.diag_codes.{DiagCode(..)}
 import types.tc_types.{
   AdmittedVerdict(..),
-  BindingRole(..),
   BuiltinClass(..),
   CDeclared(..),
   CDeclaredPrefix(..),
@@ -127,6 +126,7 @@ import types.tc_scope.{
   admittedIfaceWord, argDispatchOf, ieImplExistsForHead, methodEntryHere
 }
 import types.tc_unify.{
+  openScope,
   applicationRowTyped,
   bindFrom,
   calleeArrow,
@@ -144,12 +144,10 @@ import types.tc_unify.{
   optionOrFresh,
   performEffect,
   poisonMismatchVars,
-  postponePendingJoins,
   predicateSlotArgs,
   predicateSlotCSlots,
   recordFileValueFlow,
   refStored,
-  settlePendingJoins,
   unify,
   unifyIn,
   unifyIntoOrd,
@@ -171,7 +169,6 @@ import types.tc_solve.{
   goalsMark,
   improveLocalGoals,
   isLocalAbsName,
-  openScope,
   pushLocalDictApp,
   routeLocalSym,
 }
@@ -212,11 +209,10 @@ import types.tc_shadow.{
   standaloneShadowDomainAt,
 }
 import types.tc_effects.{
+  finishValueEffectsKeeping,
   appSpineArgCount,
   beginEffectSummaryScope,
-  borrowedEffectCells,
   collectProducedSummary,
-  finishEffectSummaryScopeKeeping,
   freshEffectSummary,
   grantOnlyBindingId,
   localBindingSummary,
@@ -275,7 +271,6 @@ import types.tc_groups.{
   registerSchemeObligations,
   residualsOf,
   sccProtectedSignatureIds,
-  scopeRolesOf,
   sigConstraintArgTys,
   sigConstraints,
 }
@@ -389,30 +384,6 @@ import list.{last}
 import types.effect_values.{joinProducedEnvelope}
 import types.scopes as Scopes
 import map as IdMap
-
--- Close a local binding scope over [members]: whether each generalizes, and
--- its type.  Joins recorded in the scope are decided first when a member
--- generalizes, since its type must not generalize over an undecided join;
--- otherwise they belong to the enclosing scope, where later uses of the
--- alternatives can still shape them.  Everything the close reads (roots,
--- quantifiable authorities) is taken after that.
-finishValueEffectsKeeping : DynCtx ->
-  List (Bool, Mono) ->
-  List (Int, AuthResidual)
-finishValueEffectsKeeping dyn generalizing =
-  let members =
-    map ((generalizes, mono) => (localRole generalizes, mono)) generalizing
-  let level = dyn.dcModule.mcCells.currentLevel.value
-  if anyList fst generalizing then
-    settlePendingJoins dyn level
-  else
-    postponePendingJoins dyn.dcModule level
-  let monos = map snd members
-  finishEffectSummaryScopeKeeping
-    dyn.dcModule
-    (scopeRolesOf members)
-    (fold (acc mono => effectRoots mono acc) Tip monos)
-    (fold (acc mono => borrowedEffectCells dyn.dcModule mono acc) Tip monos)
 
 -- ── expression inference ──────────────────────────────────────────────────
 export
@@ -3612,28 +3583,23 @@ peelOntoParams _dyn None _ _ = ()
 peelOntoParams _dyn (Some _) _ [] = ()
 peelOntoParams dyn (Some src) patTypes pats =
   zipBindFrom dyn patTypes (peelArrows (listLen pats) src)
-
--- A local binding carries no signature of its own.
-localRole : Bool -> BindingRole
-localRole True = RoleQuantifies
-localRole False = RoleMonomorphic
 # DESUGAR
 (DUse false (UseGroup ("support" "diag_codes") ((mem "DiagCode" true))))
-(DUse false (UseGroup ("types" "tc_types") ((mem "AdmittedVerdict" true) (mem "BindingRole" true) (mem "BuiltinClass" true) (mem "CDeclared" true) (mem "CDeclaredPrefix" true) (mem "ConstraintReg" true) (mem "DeclaringBinder" true) (mem "DoCtx" true) (mem "DynCtx" true) (mem "EnvBinding" true) (mem "GoalKind" true) (mem "JoinContext" true) (mem "NumBoundary" true) (mem "NumBoundaryDisposition" true) (mem "SiteKind" true) (mem "TcEnv" true) (mem "UObligation" true) (mem "ValueScheme" true) (mem "dynFor" false) (mem "GraphCtx" false) (mem "ModuleCtx" false) (mem "PendingEntry" false) (mem "RecordInfo" false) (mem "RecordSubst" false) (mem "ScopedMember" false))))
+(DUse false (UseGroup ("types" "tc_types") ((mem "AdmittedVerdict" true) (mem "BuiltinClass" true) (mem "CDeclared" true) (mem "CDeclaredPrefix" true) (mem "ConstraintReg" true) (mem "DeclaringBinder" true) (mem "DoCtx" true) (mem "DynCtx" true) (mem "EnvBinding" true) (mem "GoalKind" true) (mem "JoinContext" true) (mem "NumBoundary" true) (mem "NumBoundaryDisposition" true) (mem "SiteKind" true) (mem "TcEnv" true) (mem "UObligation" true) (mem "ValueScheme" true) (mem "dynFor" false) (mem "GraphCtx" false) (mem "ModuleCtx" false) (mem "PendingEntry" false) (mem "RecordInfo" false) (mem "RecordSubst" false) (mem "ScopedMember" false))))
 (DUse false (UseGroup ("types" "tc_mono") ((mem "authRoots" false) (mem "authRowRoots" false) (mem "containerParamScalarArg" false) (mem "containsI" false) (mem "domainIsTupleOfArity" false) (mem "effectRoots" false) (mem "effectRowRoots" false) (mem "expectedParamTypes" false) (mem "funArity" false) (mem "headTyconMono" false) (mem "headTyconNameMono" false) (mem "joinCellOf" false) (mem "litType" false) (mem "matchCol0Type" false) (mem "monoHasArrowInSlot" false) (mem "monoIsBool" false) (mem "monoScheme" false) (mem "peelArrows" false) (mem "peelQual" false) (mem "resultAfterArrows" false) (mem "schemeIds" false) (mem "schemeMono" false) (mem "tconBuiltin" false) (mem "tupleMono" false))))
 (DUse false (UseGroup ("types" "tc_diag_text") ((mem "appSpineName" false) (mem "bangOnBoolHelp" false) (mem "bangOnBoolMsg" false) (mem "binderNonExhaustiveMsg" false) (mem "bindOutsideDoMsg" false) (mem "containerArgHint" false) (mem "containerArgMsg" false) (mem "discardedValueFix" false) (mem "discardedValueMsg" false) (mem "doBindArgHint" false) (mem "doBindArgMsg" false) (mem "i64RangeText" false) (mem "locKey" false) (mem "nonExhaustiveMatchWarning" false) (mem "notAFunctionHint" false) (mem "notAFunctionMsg" false) (mem "notAFunctionMsgFor" false) (mem "overAppliedMsg" false) (mem "renderCallArgs" false) (mem "tyOfMsg" false) (mem "u64RangeText" false) (mem "unboundVarMsg" false) (mem "unknownFieldMsg" false) (mem "unreachableAltWarning" false) (mem "unreachableArmWarning" false) (mem "wideAnnotateHelp" false) (mem "writtenDiag" false))))
 (DUse false (UseGroup ("types" "tc_state") ((mem "callUOblsWindow" false) (mem "currentScopeStore" false) (mem "dynAtIfSome" false) (mem "emptyShadowDicts" false) (mem "envAt" false) (mem "envAtIfSome" false) (mem "mctxAt" false) (mem "wMark" false) (mem "wWindow" false))))
 (DUse false (UseGroup ("types" "tc_env") ((mem "extendLocalVar" false) (mem "extendLocalVars" false) (mem "funClausePair" false) (mem "lookupLocalFlag" false) (mem "lookupMethodRow" false) (mem "lookupRecordByName" false) (mem "lookupStandaloneValue" false) (mem "lookupVar" false) (mem "seedAlphaLets" false))))
 (DUse false (UseGroup ("types" "tc_diag") ((mem "pushTypeError" false) (mem "pushTypeErrorHelpFixAt" false) (mem "recordTypeError" false))))
 (DUse false (UseGroup ("types" "tc_scope") ((mem "admittedIfaceWord" false) (mem "argDispatchOf" false) (mem "ieImplExistsForHead" false) (mem "methodEntryHere" false))))
-(DUse false (UseGroup ("types" "tc_unify") ((mem "applicationRowTyped" false) (mem "bindFrom" false) (mem "calleeArrow" false) (mem "captureScope" false) (mem "enterLevel" false) (mem "exitLevel" false) (mem "forceInstantiation" false) (mem "freshVar" false) (mem "instantiateMethodTracked" false) (mem "instantiateValueTracked" false) (mem "joinValueTypes" false) (mem "monoHasNonCovariantSlot" false) (mem "noteNumlitCtx" false) (mem "openRow" false) (mem "optionOrFresh" false) (mem "performEffect" false) (mem "poisonMismatchVars" false) (mem "postponePendingJoins" false) (mem "predicateSlotArgs" false) (mem "predicateSlotCSlots" false) (mem "recordFileValueFlow" false) (mem "refStored" false) (mem "settlePendingJoins" false) (mem "unify" false) (mem "unifyIn" false) (mem "unifyIntoOrd" false) (mem "unifyParamsExpected" false) (mem "unifySourceDomains" false) (mem "valueJoinOps" false) (mem "wantAuthority" false) (mem "zipBindFrom" false) (mem "closeScope" false))))
+(DUse false (UseGroup ("types" "tc_unify") ((mem "openScope" false) (mem "applicationRowTyped" false) (mem "bindFrom" false) (mem "calleeArrow" false) (mem "captureScope" false) (mem "enterLevel" false) (mem "exitLevel" false) (mem "forceInstantiation" false) (mem "freshVar" false) (mem "instantiateMethodTracked" false) (mem "instantiateValueTracked" false) (mem "joinValueTypes" false) (mem "monoHasNonCovariantSlot" false) (mem "noteNumlitCtx" false) (mem "openRow" false) (mem "optionOrFresh" false) (mem "performEffect" false) (mem "poisonMismatchVars" false) (mem "predicateSlotArgs" false) (mem "predicateSlotCSlots" false) (mem "recordFileValueFlow" false) (mem "refStored" false) (mem "unify" false) (mem "unifyIn" false) (mem "unifyIntoOrd" false) (mem "unifyParamsExpected" false) (mem "unifySourceDomains" false) (mem "valueJoinOps" false) (mem "wantAuthority" false) (mem "zipBindFrom" false) (mem "closeScope" false))))
 (DUse false (UseGroup ("types" "tc_decls") ((mem "astTypeFreshTbl" false) (mem "instantiateSigTracked" false) (mem "sigToSchemeTvs" false) (mem "sigToSchemeTvsIn" false) (mem "headAnnotTy" false))))
-(DUse false (UseGroup ("types" "tc_solve") ((mem "goalsMark" false) (mem "improveLocalGoals" false) (mem "isLocalAbsName" false) (mem "openScope" false) (mem "pushLocalDictApp" false) (mem "routeLocalSym" false))))
+(DUse false (UseGroup ("types" "tc_solve") ((mem "goalsMark" false) (mem "improveLocalGoals" false) (mem "isLocalAbsName" false) (mem "pushLocalDictApp" false) (mem "routeLocalSym" false))))
 (DUse false (UseGroup ("types" "tc_solve_check") ((mem "callOblsWindow" false) (mem "checkSigVarGoals" false) (mem "declaredPredicateSlots" false) (mem "dedupSlotVecs" false) (mem "finalizeNumBoundary" false) (mem "localNumGuard" false) (mem "memberTiedSurvivors" false) (mem "numConstrainedIds" false) (mem "predicateSlotView" false))))
 (DUse false (UseGroup ("types" "tc_shadow") ((mem "definerReceiverDispatches" false) (mem "definerReceiverIsDictVar" false) (mem "definerShadowArgHead" false) (mem "definerShadowSpineArgAt" false) (mem "definerShadowSpineVarAt" false) (mem "definerShadowVarHead" false) (mem "enforceStandaloneDomainAt" false) (mem "groundAdmittedReceivers" false) (mem "groundShadowReceiver" false) (mem "importerAdmittedVerdict" false) (mem "importerShadowDomain" false) (mem "importerShadowDomainAt" false) (mem "methodCellOf" false) (mem "plainAppHeadVar" false) (mem "pushAmbiguousShadowDecl" false) (mem "recoveredShadowSym" false) (mem "shadowDomainForAt" false) (mem "shadowHeadEnv" false) (mem "shadowStandaloneHead" false) (mem "shadowStandaloneSpineHeadAt" false) (mem "stampMethodArities" false) (mem "stampRoutes" false) (mem "standaloneShadowDomainAt" false))))
-(DUse false (UseGroup ("types" "tc_effects") ((mem "appSpineArgCount" false) (mem "beginEffectSummaryScope" false) (mem "borrowedEffectCells" false) (mem "collectProducedSummary" false) (mem "finishEffectSummaryScopeKeeping" false) (mem "freshEffectSummary" false) (mem "grantOnlyBindingId" false) (mem "localBindingSummary" false) (mem "notePerformSite" false) (mem "recordClauseFileBound" false) (mem "recordEffectBody" false) (mem "recordGrantOcc" false) (mem "recordStandaloneAt" false) (mem "recordValueFileBound" false) (mem "registerLocalAbsIf" false) (mem "registerLocalGroupAbs" false) (mem "spineHeadEv" false) (mem "argumentAuthority" false))))
+(DUse false (UseGroup ("types" "tc_effects") ((mem "finishValueEffectsKeeping" false) (mem "appSpineArgCount" false) (mem "beginEffectSummaryScope" false) (mem "collectProducedSummary" false) (mem "freshEffectSummary" false) (mem "grantOnlyBindingId" false) (mem "localBindingSummary" false) (mem "notePerformSite" false) (mem "recordClauseFileBound" false) (mem "recordEffectBody" false) (mem "recordGrantOcc" false) (mem "recordStandaloneAt" false) (mem "recordValueFileBound" false) (mem "registerLocalAbsIf" false) (mem "registerLocalGroupAbs" false) (mem "spineHeadEv" false) (mem "argumentAuthority" false))))
 (DUse false (UseGroup ("types" "tc_occurrence") ((mem "bindingDeclaredAt" false) (mem "freshEvId" false) (mem "inferDeclaredDictAt" false) (mem "inferDictAtFound" false) (mem "inferMethodAtCell" false) (mem "inferNumLit" false) (mem "inferWideLit" false) (mem "instantiateStandaloneOccurrence" false) (mem "instantiateVarTrackedId" false) (mem "instantiateVarTrackedWithSubst" false) (mem "isGrantOnlyEv" false) (mem "markNumlitOpTaint" false) (mem "maybeStandaloneValueMono" false) (mem "methodOmittedVars" false) (mem "pushSiteGoal" false) (mem "recordBinopGoals" false) (mem "recordIfaceObligation" false) (mem "recordMethodObligationGuarded" false) (mem "recordMethodObligationOwned" false) (mem "recordNegatedLitRange" false) (mem "recordSelectedStandaloneRoutes" false) (mem "recordUnopSite" false) (mem "siteHeadCell" false) (mem "siteRouteCell" false) (mem "standaloneOccurrence" false) (mem "standaloneSchemeFor" false))))
-(DUse false (UseGroup ("types" "tc_groups") ((mem "checkAnnotTooGeneral" false) (mem "checkLetGroupBindsLocated" false) (mem "checkRecBindNonFunction" false) (mem "checkRecursiveValue" false) (mem "constraintVarArgMonos" false) (mem "constraintVarIfaceMonos" false) (mem "exprLoc" false) (mem "genBindingRestricted" false) (mem "generalizeGroup" false) (mem "isNonexpansive" false) (mem "letBindGeneralizes" false) (mem "letGroupComponents" false) (mem "registerSchemeObligations" false) (mem "residualsOf" false) (mem "sccProtectedSignatureIds" false) (mem "scopeRolesOf" false) (mem "sigConstraintArgTys" false) (mem "sigConstraints" false))))
+(DUse false (UseGroup ("types" "tc_groups") ((mem "checkAnnotTooGeneral" false) (mem "checkLetGroupBindsLocated" false) (mem "checkRecBindNonFunction" false) (mem "checkRecursiveValue" false) (mem "constraintVarArgMonos" false) (mem "constraintVarIfaceMonos" false) (mem "exprLoc" false) (mem "genBindingRestricted" false) (mem "generalizeGroup" false) (mem "isNonexpansive" false) (mem "letBindGeneralizes" false) (mem "letGroupComponents" false) (mem "registerSchemeObligations" false) (mem "residualsOf" false) (mem "sccProtectedSignatureIds" false) (mem "sigConstraintArgTys" false) (mem "sigConstraints" false))))
 (DUse false (UseGroup ("types" "tc_pat") ((mem "closeExistentialScope" false) (mem "inferPat" false) (mem "inferPats" false) (mem "openExistentialScope" false) (mem "patOpensExistentials" false) (mem "recordLetBindType" false) (mem "recordLocalBind" false) (mem "settlePatLits" false) (mem "takeOpenedExistentials" false) (mem "takePatLits" false))))
 (DUse false (UseGroup ("types" "tc_infer_records") ((mem "assignedFieldNames" false) (mem "checkMissingFields" false) (mem "fieldAssignNamePair" false) (mem "fieldSelectionWellTyped" false) (mem "firstFieldName" false) (mem "inferFieldOfRecord" false) (mem "instantiateRecordShared" false) (mem "instantiateRecordUpdate" false) (mem "recordFieldMap" false) (mem "recordFieldNames" false) (mem "recordUpdateWellTyped" false) (mem "resolveFieldRecord" false) (mem "stampedRecordHead" false) (mem "substRecordField" false) (mem "unknownRecordFresh" false))))
 (DUse false (UseGroup ("frontend" "ast") ((mem "Arm" true) (mem "BinderId" true) (mem "DoStmt" true) (mem "EvId" true) (mem "Expr" true) (mem "FieldAssign" true) (mem "Guard" true) (mem "LetBind" true) (mem "Lit" true) (mem "Loc" true) (mem "Pat" true) (mem "Route" true) (mem "TabKey" true) (mem "Ty" true) (mem "intMinLiteralHelp" false) (mem "intMinLiteralMsg" false) (mem "isI64Head" false) (mem "isU64Head" false) (mem "letBindName" false) (mem "orElseLoc" false) (mem "taggedFixedRange" false))))
@@ -3656,8 +3622,6 @@ localRole False = RoleMonomorphic
 (DUse false (UseGroup ("types" "effect_values") ((mem "joinProducedEnvelope" false))))
 (DUse false (UseAlias ("types" "scopes") "Scopes"))
 (DUse false (UseAlias ("map") "IdMap"))
-(DTypeSig false "finishValueEffectsKeeping" (TyFun (TyCon "DynCtx") (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "Bool") (TyCon "Mono"))) (TyApp (TyCon "List") (TyTuple (TyCon "Int") (TyCon "AuthResidual"))))))
-(DFunDef false "finishValueEffectsKeeping" ((PVar "dyn") (PVar "generalizing")) (EBlock (DoLet false false (PVar "members") (EApp (EApp (EVar "map") (ELam ((PTuple (PVar "generalizes") (PVar "mono"))) (ETuple (EApp (EVar "localRole") (EVar "generalizes")) (EVar "mono")))) (EVar "generalizing"))) (DoLet false false (PVar "level") (EFieldAccess (EFieldAccess (EFieldAccess (EFieldAccess (EVar "dyn") "dcModule") "mcCells") "currentLevel") "value")) (DoExpr (EIf (EApp (EApp (EVar "anyList") (EVar "fst")) (EVar "generalizing")) (EApp (EApp (EVar "settlePendingJoins") (EVar "dyn")) (EVar "level")) (EApp (EApp (EVar "postponePendingJoins") (EFieldAccess (EVar "dyn") "dcModule")) (EVar "level")))) (DoLet false false (PVar "monos") (EApp (EApp (EVar "map") (EVar "snd")) (EVar "members"))) (DoExpr (EApp (EApp (EApp (EApp (EVar "finishEffectSummaryScopeKeeping") (EFieldAccess (EVar "dyn") "dcModule")) (EApp (EVar "scopeRolesOf") (EVar "members"))) (EApp (EApp (EApp (EVar "fold") (ELam ((PVar "acc") (PVar "mono")) (EApp (EApp (EVar "effectRoots") (EVar "mono")) (EVar "acc")))) (EVar "Tip")) (EVar "monos"))) (EApp (EApp (EApp (EVar "fold") (ELam ((PVar "acc") (PVar "mono")) (EApp (EApp (EApp (EVar "borrowedEffectCells") (EFieldAccess (EVar "dyn") "dcModule")) (EVar "mono")) (EVar "acc")))) (EVar "Tip")) (EVar "monos"))))))
 (DTypeSig true "infer" (TyFun (TyCon "TcEnv") (TyFun (TyCon "Expr") (TyCon "Mono"))))
 (DFunDef false "infer" ((PVar "_env") (PCon "ELit" (PVar "l"))) (EApp (EVar "litType") (EVar "l")))
 (DFunDef false "infer" ((PVar "env") (PCon "ENumLit" (PVar "n") (PVar "ev") PWild)) (EApp (EApp (EApp (EVar "inferNumLit") (EVar "env")) (EVar "n")) (EVar "ev")))
@@ -4136,26 +4100,23 @@ localRole False = RoleMonomorphic
 (DFunDef false "peelOntoParams" ((PVar "_dyn") (PCon "None") PWild PWild) (ELit LUnit))
 (DFunDef false "peelOntoParams" ((PVar "_dyn") (PCon "Some" PWild) PWild (PList)) (ELit LUnit))
 (DFunDef false "peelOntoParams" ((PVar "dyn") (PCon "Some" (PVar "src")) (PVar "patTypes") (PVar "pats")) (EApp (EApp (EApp (EVar "zipBindFrom") (EVar "dyn")) (EVar "patTypes")) (EApp (EApp (EVar "peelArrows") (EApp (EVar "listLen") (EVar "pats"))) (EVar "src"))))
-(DTypeSig false "localRole" (TyFun (TyCon "Bool") (TyCon "BindingRole")))
-(DFunDef false "localRole" ((PCon "True")) (EVar "RoleQuantifies"))
-(DFunDef false "localRole" ((PCon "False")) (EVar "RoleMonomorphic"))
 # MARK
 (DUse false (UseGroup ("support" "diag_codes") ((mem "DiagCode" true))))
-(DUse false (UseGroup ("types" "tc_types") ((mem "AdmittedVerdict" true) (mem "BindingRole" true) (mem "BuiltinClass" true) (mem "CDeclared" true) (mem "CDeclaredPrefix" true) (mem "ConstraintReg" true) (mem "DeclaringBinder" true) (mem "DoCtx" true) (mem "DynCtx" true) (mem "EnvBinding" true) (mem "GoalKind" true) (mem "JoinContext" true) (mem "NumBoundary" true) (mem "NumBoundaryDisposition" true) (mem "SiteKind" true) (mem "TcEnv" true) (mem "UObligation" true) (mem "ValueScheme" true) (mem "dynFor" false) (mem "GraphCtx" false) (mem "ModuleCtx" false) (mem "PendingEntry" false) (mem "RecordInfo" false) (mem "RecordSubst" false) (mem "ScopedMember" false))))
+(DUse false (UseGroup ("types" "tc_types") ((mem "AdmittedVerdict" true) (mem "BuiltinClass" true) (mem "CDeclared" true) (mem "CDeclaredPrefix" true) (mem "ConstraintReg" true) (mem "DeclaringBinder" true) (mem "DoCtx" true) (mem "DynCtx" true) (mem "EnvBinding" true) (mem "GoalKind" true) (mem "JoinContext" true) (mem "NumBoundary" true) (mem "NumBoundaryDisposition" true) (mem "SiteKind" true) (mem "TcEnv" true) (mem "UObligation" true) (mem "ValueScheme" true) (mem "dynFor" false) (mem "GraphCtx" false) (mem "ModuleCtx" false) (mem "PendingEntry" false) (mem "RecordInfo" false) (mem "RecordSubst" false) (mem "ScopedMember" false))))
 (DUse false (UseGroup ("types" "tc_mono") ((mem "authRoots" false) (mem "authRowRoots" false) (mem "containerParamScalarArg" false) (mem "containsI" false) (mem "domainIsTupleOfArity" false) (mem "effectRoots" false) (mem "effectRowRoots" false) (mem "expectedParamTypes" false) (mem "funArity" false) (mem "headTyconMono" false) (mem "headTyconNameMono" false) (mem "joinCellOf" false) (mem "litType" false) (mem "matchCol0Type" false) (mem "monoHasArrowInSlot" false) (mem "monoIsBool" false) (mem "monoScheme" false) (mem "peelArrows" false) (mem "peelQual" false) (mem "resultAfterArrows" false) (mem "schemeIds" false) (mem "schemeMono" false) (mem "tconBuiltin" false) (mem "tupleMono" false))))
 (DUse false (UseGroup ("types" "tc_diag_text") ((mem "appSpineName" false) (mem "bangOnBoolHelp" false) (mem "bangOnBoolMsg" false) (mem "binderNonExhaustiveMsg" false) (mem "bindOutsideDoMsg" false) (mem "containerArgHint" false) (mem "containerArgMsg" false) (mem "discardedValueFix" false) (mem "discardedValueMsg" false) (mem "doBindArgHint" false) (mem "doBindArgMsg" false) (mem "i64RangeText" false) (mem "locKey" false) (mem "nonExhaustiveMatchWarning" false) (mem "notAFunctionHint" false) (mem "notAFunctionMsg" false) (mem "notAFunctionMsgFor" false) (mem "overAppliedMsg" false) (mem "renderCallArgs" false) (mem "tyOfMsg" false) (mem "u64RangeText" false) (mem "unboundVarMsg" false) (mem "unknownFieldMsg" false) (mem "unreachableAltWarning" false) (mem "unreachableArmWarning" false) (mem "wideAnnotateHelp" false) (mem "writtenDiag" false))))
 (DUse false (UseGroup ("types" "tc_state") ((mem "callUOblsWindow" false) (mem "currentScopeStore" false) (mem "dynAtIfSome" false) (mem "emptyShadowDicts" false) (mem "envAt" false) (mem "envAtIfSome" false) (mem "mctxAt" false) (mem "wMark" false) (mem "wWindow" false))))
 (DUse false (UseGroup ("types" "tc_env") ((mem "extendLocalVar" false) (mem "extendLocalVars" false) (mem "funClausePair" false) (mem "lookupLocalFlag" false) (mem "lookupMethodRow" false) (mem "lookupRecordByName" false) (mem "lookupStandaloneValue" false) (mem "lookupVar" false) (mem "seedAlphaLets" false))))
 (DUse false (UseGroup ("types" "tc_diag") ((mem "pushTypeError" false) (mem "pushTypeErrorHelpFixAt" false) (mem "recordTypeError" false))))
 (DUse false (UseGroup ("types" "tc_scope") ((mem "admittedIfaceWord" false) (mem "argDispatchOf" false) (mem "ieImplExistsForHead" false) (mem "methodEntryHere" false))))
-(DUse false (UseGroup ("types" "tc_unify") ((mem "applicationRowTyped" false) (mem "bindFrom" false) (mem "calleeArrow" false) (mem "captureScope" false) (mem "enterLevel" false) (mem "exitLevel" false) (mem "forceInstantiation" false) (mem "freshVar" false) (mem "instantiateMethodTracked" false) (mem "instantiateValueTracked" false) (mem "joinValueTypes" false) (mem "monoHasNonCovariantSlot" false) (mem "noteNumlitCtx" false) (mem "openRow" false) (mem "optionOrFresh" false) (mem "performEffect" false) (mem "poisonMismatchVars" false) (mem "postponePendingJoins" false) (mem "predicateSlotArgs" false) (mem "predicateSlotCSlots" false) (mem "recordFileValueFlow" false) (mem "refStored" false) (mem "settlePendingJoins" false) (mem "unify" false) (mem "unifyIn" false) (mem "unifyIntoOrd" false) (mem "unifyParamsExpected" false) (mem "unifySourceDomains" false) (mem "valueJoinOps" false) (mem "wantAuthority" false) (mem "zipBindFrom" false) (mem "closeScope" false))))
+(DUse false (UseGroup ("types" "tc_unify") ((mem "openScope" false) (mem "applicationRowTyped" false) (mem "bindFrom" false) (mem "calleeArrow" false) (mem "captureScope" false) (mem "enterLevel" false) (mem "exitLevel" false) (mem "forceInstantiation" false) (mem "freshVar" false) (mem "instantiateMethodTracked" false) (mem "instantiateValueTracked" false) (mem "joinValueTypes" false) (mem "monoHasNonCovariantSlot" false) (mem "noteNumlitCtx" false) (mem "openRow" false) (mem "optionOrFresh" false) (mem "performEffect" false) (mem "poisonMismatchVars" false) (mem "predicateSlotArgs" false) (mem "predicateSlotCSlots" false) (mem "recordFileValueFlow" false) (mem "refStored" false) (mem "unify" false) (mem "unifyIn" false) (mem "unifyIntoOrd" false) (mem "unifyParamsExpected" false) (mem "unifySourceDomains" false) (mem "valueJoinOps" false) (mem "wantAuthority" false) (mem "zipBindFrom" false) (mem "closeScope" false))))
 (DUse false (UseGroup ("types" "tc_decls") ((mem "astTypeFreshTbl" false) (mem "instantiateSigTracked" false) (mem "sigToSchemeTvs" false) (mem "sigToSchemeTvsIn" false) (mem "headAnnotTy" false))))
-(DUse false (UseGroup ("types" "tc_solve") ((mem "goalsMark" false) (mem "improveLocalGoals" false) (mem "isLocalAbsName" false) (mem "openScope" false) (mem "pushLocalDictApp" false) (mem "routeLocalSym" false))))
+(DUse false (UseGroup ("types" "tc_solve") ((mem "goalsMark" false) (mem "improveLocalGoals" false) (mem "isLocalAbsName" false) (mem "pushLocalDictApp" false) (mem "routeLocalSym" false))))
 (DUse false (UseGroup ("types" "tc_solve_check") ((mem "callOblsWindow" false) (mem "checkSigVarGoals" false) (mem "declaredPredicateSlots" false) (mem "dedupSlotVecs" false) (mem "finalizeNumBoundary" false) (mem "localNumGuard" false) (mem "memberTiedSurvivors" false) (mem "numConstrainedIds" false) (mem "predicateSlotView" false))))
 (DUse false (UseGroup ("types" "tc_shadow") ((mem "definerReceiverDispatches" false) (mem "definerReceiverIsDictVar" false) (mem "definerShadowArgHead" false) (mem "definerShadowSpineArgAt" false) (mem "definerShadowSpineVarAt" false) (mem "definerShadowVarHead" false) (mem "enforceStandaloneDomainAt" false) (mem "groundAdmittedReceivers" false) (mem "groundShadowReceiver" false) (mem "importerAdmittedVerdict" false) (mem "importerShadowDomain" false) (mem "importerShadowDomainAt" false) (mem "methodCellOf" false) (mem "plainAppHeadVar" false) (mem "pushAmbiguousShadowDecl" false) (mem "recoveredShadowSym" false) (mem "shadowDomainForAt" false) (mem "shadowHeadEnv" false) (mem "shadowStandaloneHead" false) (mem "shadowStandaloneSpineHeadAt" false) (mem "stampMethodArities" false) (mem "stampRoutes" false) (mem "standaloneShadowDomainAt" false))))
-(DUse false (UseGroup ("types" "tc_effects") ((mem "appSpineArgCount" false) (mem "beginEffectSummaryScope" false) (mem "borrowedEffectCells" false) (mem "collectProducedSummary" false) (mem "finishEffectSummaryScopeKeeping" false) (mem "freshEffectSummary" false) (mem "grantOnlyBindingId" false) (mem "localBindingSummary" false) (mem "notePerformSite" false) (mem "recordClauseFileBound" false) (mem "recordEffectBody" false) (mem "recordGrantOcc" false) (mem "recordStandaloneAt" false) (mem "recordValueFileBound" false) (mem "registerLocalAbsIf" false) (mem "registerLocalGroupAbs" false) (mem "spineHeadEv" false) (mem "argumentAuthority" false))))
+(DUse false (UseGroup ("types" "tc_effects") ((mem "finishValueEffectsKeeping" false) (mem "appSpineArgCount" false) (mem "beginEffectSummaryScope" false) (mem "collectProducedSummary" false) (mem "freshEffectSummary" false) (mem "grantOnlyBindingId" false) (mem "localBindingSummary" false) (mem "notePerformSite" false) (mem "recordClauseFileBound" false) (mem "recordEffectBody" false) (mem "recordGrantOcc" false) (mem "recordStandaloneAt" false) (mem "recordValueFileBound" false) (mem "registerLocalAbsIf" false) (mem "registerLocalGroupAbs" false) (mem "spineHeadEv" false) (mem "argumentAuthority" false))))
 (DUse false (UseGroup ("types" "tc_occurrence") ((mem "bindingDeclaredAt" false) (mem "freshEvId" false) (mem "inferDeclaredDictAt" false) (mem "inferDictAtFound" false) (mem "inferMethodAtCell" false) (mem "inferNumLit" false) (mem "inferWideLit" false) (mem "instantiateStandaloneOccurrence" false) (mem "instantiateVarTrackedId" false) (mem "instantiateVarTrackedWithSubst" false) (mem "isGrantOnlyEv" false) (mem "markNumlitOpTaint" false) (mem "maybeStandaloneValueMono" false) (mem "methodOmittedVars" false) (mem "pushSiteGoal" false) (mem "recordBinopGoals" false) (mem "recordIfaceObligation" false) (mem "recordMethodObligationGuarded" false) (mem "recordMethodObligationOwned" false) (mem "recordNegatedLitRange" false) (mem "recordSelectedStandaloneRoutes" false) (mem "recordUnopSite" false) (mem "siteHeadCell" false) (mem "siteRouteCell" false) (mem "standaloneOccurrence" false) (mem "standaloneSchemeFor" false))))
-(DUse false (UseGroup ("types" "tc_groups") ((mem "checkAnnotTooGeneral" false) (mem "checkLetGroupBindsLocated" false) (mem "checkRecBindNonFunction" false) (mem "checkRecursiveValue" false) (mem "constraintVarArgMonos" false) (mem "constraintVarIfaceMonos" false) (mem "exprLoc" false) (mem "genBindingRestricted" false) (mem "generalizeGroup" false) (mem "isNonexpansive" false) (mem "letBindGeneralizes" false) (mem "letGroupComponents" false) (mem "registerSchemeObligations" false) (mem "residualsOf" false) (mem "sccProtectedSignatureIds" false) (mem "scopeRolesOf" false) (mem "sigConstraintArgTys" false) (mem "sigConstraints" false))))
+(DUse false (UseGroup ("types" "tc_groups") ((mem "checkAnnotTooGeneral" false) (mem "checkLetGroupBindsLocated" false) (mem "checkRecBindNonFunction" false) (mem "checkRecursiveValue" false) (mem "constraintVarArgMonos" false) (mem "constraintVarIfaceMonos" false) (mem "exprLoc" false) (mem "genBindingRestricted" false) (mem "generalizeGroup" false) (mem "isNonexpansive" false) (mem "letBindGeneralizes" false) (mem "letGroupComponents" false) (mem "registerSchemeObligations" false) (mem "residualsOf" false) (mem "sccProtectedSignatureIds" false) (mem "sigConstraintArgTys" false) (mem "sigConstraints" false))))
 (DUse false (UseGroup ("types" "tc_pat") ((mem "closeExistentialScope" false) (mem "inferPat" false) (mem "inferPats" false) (mem "openExistentialScope" false) (mem "patOpensExistentials" false) (mem "recordLetBindType" false) (mem "recordLocalBind" false) (mem "settlePatLits" false) (mem "takeOpenedExistentials" false) (mem "takePatLits" false))))
 (DUse false (UseGroup ("types" "tc_infer_records") ((mem "assignedFieldNames" false) (mem "checkMissingFields" false) (mem "fieldAssignNamePair" false) (mem "fieldSelectionWellTyped" false) (mem "firstFieldName" false) (mem "inferFieldOfRecord" false) (mem "instantiateRecordShared" false) (mem "instantiateRecordUpdate" false) (mem "recordFieldMap" false) (mem "recordFieldNames" false) (mem "recordUpdateWellTyped" false) (mem "resolveFieldRecord" false) (mem "stampedRecordHead" false) (mem "substRecordField" false) (mem "unknownRecordFresh" false))))
 (DUse false (UseGroup ("frontend" "ast") ((mem "Arm" true) (mem "BinderId" true) (mem "DoStmt" true) (mem "EvId" true) (mem "Expr" true) (mem "FieldAssign" true) (mem "Guard" true) (mem "LetBind" true) (mem "Lit" true) (mem "Loc" true) (mem "Pat" true) (mem "Route" true) (mem "TabKey" true) (mem "Ty" true) (mem "intMinLiteralHelp" false) (mem "intMinLiteralMsg" false) (mem "isI64Head" false) (mem "isU64Head" false) (mem "letBindName" false) (mem "orElseLoc" false) (mem "taggedFixedRange" false))))
@@ -4178,8 +4139,6 @@ localRole False = RoleMonomorphic
 (DUse false (UseGroup ("types" "effect_values") ((mem "joinProducedEnvelope" false))))
 (DUse false (UseAlias ("types" "scopes") "Scopes"))
 (DUse false (UseAlias ("map") "IdMap"))
-(DTypeSig false "finishValueEffectsKeeping" (TyFun (TyCon "DynCtx") (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "Bool") (TyCon "Mono"))) (TyApp (TyCon "List") (TyTuple (TyCon "Int") (TyCon "AuthResidual"))))))
-(DFunDef false "finishValueEffectsKeeping" ((PVar "dyn") (PVar "generalizing")) (EBlock (DoLet false false (PVar "members") (EApp (EApp (EMethodRef "map") (ELam ((PTuple (PVar "generalizes") (PVar "mono"))) (ETuple (EApp (EVar "localRole") (EVar "generalizes")) (EVar "mono")))) (EVar "generalizing"))) (DoLet false false (PVar "level") (EFieldAccess (EFieldAccess (EFieldAccess (EFieldAccess (EVar "dyn") "dcModule") "mcCells") "currentLevel") "value")) (DoExpr (EIf (EApp (EApp (EVar "anyList") (EVar "fst")) (EVar "generalizing")) (EApp (EApp (EVar "settlePendingJoins") (EVar "dyn")) (EVar "level")) (EApp (EApp (EVar "postponePendingJoins") (EFieldAccess (EVar "dyn") "dcModule")) (EVar "level")))) (DoLet false false (PVar "monos") (EApp (EApp (EMethodRef "map") (EVar "snd")) (EVar "members"))) (DoExpr (EApp (EApp (EApp (EApp (EVar "finishEffectSummaryScopeKeeping") (EFieldAccess (EVar "dyn") "dcModule")) (EApp (EVar "scopeRolesOf") (EVar "members"))) (EApp (EApp (EApp (EMethodRef "fold") (ELam ((PVar "acc") (PVar "mono")) (EApp (EApp (EVar "effectRoots") (EVar "mono")) (EVar "acc")))) (EVar "Tip")) (EVar "monos"))) (EApp (EApp (EApp (EMethodRef "fold") (ELam ((PVar "acc") (PVar "mono")) (EApp (EApp (EApp (EVar "borrowedEffectCells") (EFieldAccess (EVar "dyn") "dcModule")) (EVar "mono")) (EVar "acc")))) (EVar "Tip")) (EVar "monos"))))))
 (DTypeSig true "infer" (TyFun (TyCon "TcEnv") (TyFun (TyCon "Expr") (TyCon "Mono"))))
 (DFunDef false "infer" ((PVar "_env") (PCon "ELit" (PVar "l"))) (EApp (EVar "litType") (EVar "l")))
 (DFunDef false "infer" ((PVar "env") (PCon "ENumLit" (PVar "n") (PVar "ev") PWild)) (EApp (EApp (EApp (EVar "inferNumLit") (EVar "env")) (EVar "n")) (EVar "ev")))
@@ -4658,6 +4617,3 @@ localRole False = RoleMonomorphic
 (DFunDef false "peelOntoParams" ((PVar "_dyn") (PCon "None") PWild PWild) (ELit LUnit))
 (DFunDef false "peelOntoParams" ((PVar "_dyn") (PCon "Some" PWild) PWild (PList)) (ELit LUnit))
 (DFunDef false "peelOntoParams" ((PVar "dyn") (PCon "Some" (PVar "src")) (PVar "patTypes") (PVar "pats")) (EApp (EApp (EApp (EVar "zipBindFrom") (EVar "dyn")) (EVar "patTypes")) (EApp (EApp (EVar "peelArrows") (EApp (EVar "listLen") (EVar "pats"))) (EVar "src"))))
-(DTypeSig false "localRole" (TyFun (TyCon "Bool") (TyCon "BindingRole")))
-(DFunDef false "localRole" ((PCon "True")) (EVar "RoleQuantifies"))
-(DFunDef false "localRole" ((PCon "False")) (EVar "RoleMonomorphic"))

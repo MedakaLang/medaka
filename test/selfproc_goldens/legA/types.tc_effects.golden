@@ -52,6 +52,7 @@ finishEffectContract : DynCtx -> (Map Int Unit, Map Int Unit) -> Unit
 finishEffectSummaryScope : ModuleCtx -> Map Int Unit -> Map Int (Ref Effvar) -> Unit
 finishEffectSummaryScopeKeeping : ModuleCtx -> ScopeRoles -> Map Int Unit -> Map Int (Ref Effvar) -> List (Int, AuthResidual)
 finishFileValueScope : ModuleCtx -> Unit -> Unit
+finishValueEffectsKeeping : DynCtx -> List (Bool, Mono) -> List (Int, AuthResidual)
 flushPendingEscapes : ModuleCtx -> Option GroupCtx -> Unit
 freshEffectSummary : ModuleCtx -> Unit -> EffRow
 grantCalleeOf : ModuleCtx -> String -> GrantCallee
@@ -72,6 +73,7 @@ launderEscapeFromLog : GraphCtx -> List EffRow -> List EffRow -> List Absorption
 launderOpenActualArrow : GraphCtx -> EffRow -> List AbsorptionEvent -> List Atom
 leftmostPart : Expr -> Expr
 localBindingSummary : ModuleCtx -> LetBind -> (String, BindingSummary)
+localRole : Bool -> BindingRole
 markBinders : Ref (Map Int Unit) -> List (Ref Authvar) -> Unit
 markSourceless : GraphCtx -> List Int -> Unit
 memberEffectRoots : ScopedMember -> Map Int Unit -> Map Int Unit
@@ -109,6 +111,7 @@ reportEffectSummaryFailures : ModuleCtx -> List (SummaryFailure ObligationSite) 
 reportRowFailure : ModuleCtx -> SummaryFailure ObligationSite -> Unit
 retOccsEscape : GraphCtx -> List Atom -> List (String, List Atom) -> List Atom
 scopeFileBoundModule : ModuleCtx -> Unit -> String
+scopeRolesOf : List (BindingRole, Mono) -> ScopeRoles
 setGrantOcc : GraphCtx -> EvId -> GrantOcc -> Unit
 spineHeadEv : Expr -> Option EvId
 summaryEscape : GraphCtx -> Bool -> List Atom -> List Atom -> List Atom

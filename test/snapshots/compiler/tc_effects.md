@@ -1,5 +1,5 @@
 # META
-source_lines=2058
+source_lines=2134
 stages=DESUGAR,MARK
 # SOURCE
 -- tc_effects: the effect checks inference runs at binding boundaries and impl bodies (escape,
@@ -17,6 +17,7 @@ stages=DESUGAR,MARK
 
 import support.diag_codes.{DiagCode(..)}
 import types.tc_types.{
+  BindingRole(..),
   grantTopKey,
   methodGrantKey,
   setGrantIds,
@@ -37,6 +38,8 @@ import types.tc_types.{
   TcEnv,
 }
 import types.tc_mono.{
+  authIdsIn,
+  qualifierAuthIds,
   allArrowEffs,
   arrowArity,
   authCellsIn,
@@ -101,6 +104,8 @@ import types.tc_diag.{
   pushTypeErrorOncePerSite,
 }
 import types.tc_unify.{
+  postponePendingJoins,
+  settlePendingJoins,
   atomsEscape,
   authorityFailureMsg,
   captureScope,
@@ -290,6 +295,77 @@ finishEffectSummaryScopeKeeping mctx roles retained borrowed =
       },
     ))
     outcome.esoResiduals
+
+-- [members] in group order, each with its role and type.  A quantifying
+-- member's argument-position authorities are quantified (a variable two
+-- members share is a recursive group's monomorphic link and is solved as
+-- before); a monomorphic member hands every authority of its type outward.
+export
+scopeRolesOf : List (BindingRole, Mono) -> ScopeRoles
+scopeRolesOf members =
+  let owners =
+    fold
+      ((acc, index) (role, mono) =>
+        let ids = match role
+          RoleQuantifies => IdMap.keys (qualifierAuthIds mono Tip)
+          _ => []
+        (
+          fold
+            (m id => IdMap.set id (index :: optionOr [] (IdMap.get id m)) m)
+            acc
+            ids,
+          index + 1,
+        ))
+      (Tip, 0)
+      members
+  ScopeRoles {
+    rlQuantified =
+      IdMap.foldlWithKey
+        (acc id indices => match indices
+          [index] => IdMap.set id index acc
+          _ => acc)
+        Tip
+        (fst owners),
+    rlOutward =
+      fold
+        (acc (role, mono) => match role
+          RoleMonomorphic => authIdsIn mono acc
+          _ => acc)
+        Tip
+        members,
+    rlTyped = Some (fold (acc (_, mono) => authIdsIn mono acc) Tip members),
+    rlMemberAuths = _ => map ((_, mono) => authIdsIn mono Tip) members,
+  }
+
+-- Close a local binding scope over [members]: whether each generalizes, and
+-- its type.  Joins recorded in the scope are decided first when a member
+-- generalizes, since its type must not generalize over an undecided join;
+-- otherwise they belong to the enclosing scope, where later uses of the
+-- alternatives can still shape them.  Everything the close reads (roots,
+-- quantifiable authorities) is taken after that.
+export
+finishValueEffectsKeeping : DynCtx ->
+  List (Bool, Mono) ->
+  List (Int, AuthResidual)
+finishValueEffectsKeeping dyn generalizing =
+  let members =
+    map ((generalizes, mono) => (localRole generalizes, mono)) generalizing
+  let level = dyn.dcModule.mcCells.currentLevel.value
+  if anyList fst generalizing then
+    settlePendingJoins dyn level
+  else
+    postponePendingJoins dyn.dcModule level
+  let monos = map snd members
+  finishEffectSummaryScopeKeeping
+    dyn.dcModule
+    (scopeRolesOf members)
+    (fold (acc mono => effectRoots mono acc) Tip monos)
+    (fold (acc mono => borrowedEffectCells dyn.dcModule mono acc) Tip monos)
+
+-- A local binding carries no signature of its own.
+localRole : Bool -> BindingRole
+localRole True = RoleQuantifies
+localRole False = RoleMonomorphic
 
 export
 reportEffectSummaryFailures : ModuleCtx ->
@@ -2062,13 +2138,13 @@ concreteAtom : Atom -> Bool
 concreteAtom a = not (authHasVars (atomAuth a))
 # DESUGAR
 (DUse false (UseGroup ("support" "diag_codes") ((mem "DiagCode" true))))
-(DUse false (UseGroup ("types" "tc_types") ((mem "grantTopKey" false) (mem "methodGrantKey" false) (mem "setGrantIds" false) (mem "AbsorptionEvent" true) (mem "GrantBinder" true) (mem "GrantCallee" true) (mem "GrantOcc" true) (mem "MethodGrant" true) (mem "DynCtx" false) (mem "GraphCtx" false) (mem "GroupCtx" false) (mem "Kind" false) (mem "MethodSchemeRow" false) (mem "ModuleCtx" false) (mem "ObligationSite" false) (mem "ScopedMember" false) (mem "SelectedValueOccurrence" false) (mem "TcEnv" false))))
-(DUse false (UseGroup ("types" "tc_mono") ((mem "allArrowEffs" false) (mem "arrowArity" false) (mem "authCellsIn" false) (mem "authOrderIn" false) (mem "authOrderRow" false) (mem "authRoots" false) (mem "authRowCells" false) (mem "authRowRoots" false) (mem "containsI" false) (mem "effectCells" false) (mem "effectRoots" false) (mem "effectRowRoots" false) (mem "funArity" false) (mem "joinCellOf" false) (mem "monoIndexEffvarIds" false) (mem "newEffvarId" false) (mem "peelQual" false) (mem "rowTailId" false) (mem "schemeAuthIds" false) (mem "schemeIds" false) (mem "tyAppSpine" false) (mem "tyArrowCount" false) (mem "liveTailId" false) (mem "anyContainsI" false) (mem "effVarTailIds" false) (mem "hasDupI" false) (mem "isPreludeOrigin" false) (mem "tconBuiltin" false))))
+(DUse false (UseGroup ("types" "tc_types") ((mem "BindingRole" true) (mem "grantTopKey" false) (mem "methodGrantKey" false) (mem "setGrantIds" false) (mem "AbsorptionEvent" true) (mem "GrantBinder" true) (mem "GrantCallee" true) (mem "GrantOcc" true) (mem "MethodGrant" true) (mem "DynCtx" false) (mem "GraphCtx" false) (mem "GroupCtx" false) (mem "Kind" false) (mem "MethodSchemeRow" false) (mem "ModuleCtx" false) (mem "ObligationSite" false) (mem "ScopedMember" false) (mem "SelectedValueOccurrence" false) (mem "TcEnv" false))))
+(DUse false (UseGroup ("types" "tc_mono") ((mem "authIdsIn" false) (mem "qualifierAuthIds" false) (mem "allArrowEffs" false) (mem "arrowArity" false) (mem "authCellsIn" false) (mem "authOrderIn" false) (mem "authOrderRow" false) (mem "authRoots" false) (mem "authRowCells" false) (mem "authRowRoots" false) (mem "containsI" false) (mem "effectCells" false) (mem "effectRoots" false) (mem "effectRowRoots" false) (mem "funArity" false) (mem "joinCellOf" false) (mem "monoIndexEffvarIds" false) (mem "newEffvarId" false) (mem "peelQual" false) (mem "rowTailId" false) (mem "schemeAuthIds" false) (mem "schemeIds" false) (mem "tyAppSpine" false) (mem "tyArrowCount" false) (mem "liveTailId" false) (mem "anyContainsI" false) (mem "effVarTailIds" false) (mem "hasDupI" false) (mem "isPreludeOrigin" false) (mem "tconBuiltin" false))))
 (DUse false (UseGroup ("types" "tc_diag_text") ((mem "aliasesHeadRowMsg" false) (mem "argAtomsMsgFor" false) (mem "argOnlyEffVarMsg" false) (mem "collapsesEffvarsMsg" false) (mem "effectEscapeMsg" false) (mem "effectInclusionMsg" false) (mem "effectUndeterminedMsg" false) (mem "effVarLaunderMsg" false) (mem "indexEagerMsg" false))))
 (DUse false (UseGroup ("types" "tc_state") ((mem "currentScopeStore" false) (mem "mctxAt" false) (mem "wPushAll" false) (mem "wRestore" false) (mem "wSnapshot" false) (mem "wWindow" false))))
 (DUse false (UseGroup ("types" "tc_env") ((mem "declGradedScope" false) (mem "effTailNames" false) (mem "funClausePair" false) (mem "lookupBinding" false) (mem "lookupVar" false) (mem "methodArgs" false) (mem "removeAllS" false) (mem "tyTabKey" false) (mem "envVarType" false) (mem "envAlphaLets" false) (mem "lookupLocalFlag" false) (mem "lookupStandaloneValue" false))))
 (DUse false (UseGroup ("types" "tc_diag") ((mem "pushTypeError" false) (mem "pushTypeErrorAt" false) (mem "pushTypeErrorOnceAt" false) (mem "pushTypeErrorOncePerSite" false))))
-(DUse false (UseGroup ("types" "tc_unify") ((mem "atomsEscape" false) (mem "authorityFailureMsg" false) (mem "captureScope" false) (mem "effectLeakCheck" false) (mem "effectSiteKey" false) (mem "freshEffvarAt" false) (mem "freshVar" false) (mem "producedSlotCovariants" false) (mem "reportIndexFailure" false) (mem "resolvePendingJoins" false) (mem "widenOpenedFor" false))))
+(DUse false (UseGroup ("types" "tc_unify") ((mem "postponePendingJoins" false) (mem "settlePendingJoins" false) (mem "atomsEscape" false) (mem "authorityFailureMsg" false) (mem "captureScope" false) (mem "effectLeakCheck" false) (mem "effectSiteKey" false) (mem "freshEffvarAt" false) (mem "freshVar" false) (mem "producedSlotCovariants" false) (mem "reportIndexFailure" false) (mem "resolvePendingJoins" false) (mem "widenOpenedFor" false))))
 (DUse false (UseGroup ("types" "tc_decls_types") ((mem "atomsOfWritten" false) (mem "expandAliasHeadTy" false) (mem "rowArgNames" false) (mem "rowArgNamesIn" false))))
 (DUse false (UseGroup ("types" "tc_decls") ((mem "krowArgVarAtoms" false) (mem "paramRowAtomsOf" false) (mem "rowArgAtomsIn" false))))
 (DUse false (UseGroup ("types" "tc_solve") ((mem "isLocalAbsName" false))))
@@ -2111,6 +2187,13 @@ concreteAtom a = not (authHasVars (atomAuth a))
 (DFunDef false "finishEffectSummaryScope" ((PVar "mctx") (PVar "retained") (PVar "borrowed")) (EBlock (DoLet false false PWild (EApp (EApp (EApp (EApp (EVar "finishEffectSummaryScopeKeeping") (EVar "mctx")) (EVar "noScopeRoles")) (EVar "retained")) (EVar "borrowed"))) (DoExpr (ELit LUnit))))
 (DTypeSig true "finishEffectSummaryScopeKeeping" (TyFun (TyCon "ModuleCtx") (TyFun (TyCon "ScopeRoles") (TyFun (TyApp (TyApp (TyCon "Map") (TyCon "Int")) (TyCon "Unit")) (TyFun (TyApp (TyApp (TyCon "Map") (TyCon "Int")) (TyApp (TyCon "Ref") (TyCon "Effvar"))) (TyApp (TyCon "List") (TyTuple (TyCon "Int") (TyCon "AuthResidual"))))))))
 (DFunDef false "finishEffectSummaryScopeKeeping" ((PVar "mctx") (PVar "roles") (PVar "retained") (PVar "borrowed")) (EBlock (DoLet false false (PVar "outcome") (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EVar "EffectSolver.closeSummaryScope") (EFieldAccess (EFieldAccess (EVar "mctx") "mcCells") "effectSummaries")) (EFieldAccess (EFieldAccess (EFieldAccess (EVar "mctx") "mcCells") "rigidEffvarsRef") "value")) (EFieldAccess (EFieldAccess (EFieldAccess (EVar "mctx") "mcCells") "rigidAuthvarsRef") "value")) (EVar "roles")) (EVar "retained")) (EVar "borrowed")) (EApp (EVar "summaryEscape") (EFieldAccess (EVar "mctx") "mcGraph"))) (EApp (EVar "joinCellOf") (EFieldAccess (EVar "mctx") "mcGraph"))) (EApp (EVar "freshEffvarAt") (EFieldAccess (EVar "mctx") "mcGraph"))) (EApp (EVar "widenOpenedFor") (EVar "mctx")))) (DoExpr (EApp (EApp (EVar "reportEffectSummaryFailures") (EVar "mctx")) (EFieldAccess (EVar "outcome") "esoFailures"))) (DoExpr (EApp (EApp (EVar "finishFileValueScope") (EVar "mctx")) (ELit LUnit))) (DoExpr (EApp (EApp (EVar "map") (ELam ((PTuple (PVar "member") (PVar "w"))) (ETuple (EVar "member") (ERecordCreate "AuthResidual" ((fa "arLower" (EFieldAccess (EVar "w") "awLower")) (fa "arUpper" (EFieldAccess (EVar "w") "awUpper")) (fa "arExact" (EFieldAccess (EVar "w") "awExact"))))))) (EFieldAccess (EVar "outcome") "esoResiduals")))))
+(DTypeSig true "scopeRolesOf" (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "BindingRole") (TyCon "Mono"))) (TyCon "ScopeRoles")))
+(DFunDef false "scopeRolesOf" ((PVar "members")) (EBlock (DoLet false false (PVar "owners") (EApp (EApp (EApp (EVar "fold") (ELam ((PTuple (PVar "acc") (PVar "index")) (PTuple (PVar "role") (PVar "mono"))) (EBlock (DoLet false false (PVar "ids") (EMatch (EVar "role") (arm (PCon "RoleQuantifies") () (EApp (EVar "IdMap.keys") (EApp (EApp (EVar "qualifierAuthIds") (EVar "mono")) (EVar "Tip")))) (arm PWild () (EListLit)))) (DoExpr (ETuple (EApp (EApp (EApp (EVar "fold") (ELam ((PVar "m") (PVar "id")) (EApp (EApp (EApp (EVar "IdMap.set") (EVar "id")) (EBinOp "::" (EVar "index") (EApp (EApp (EVar "optionOr") (EListLit)) (EApp (EApp (EVar "IdMap.get") (EVar "id")) (EVar "m"))))) (EVar "m")))) (EVar "acc")) (EVar "ids")) (EBinOp "+" (EVar "index") (ELit (LInt 1)))))))) (ETuple (EVar "Tip") (ELit (LInt 0)))) (EVar "members"))) (DoExpr (ERecordCreate "ScopeRoles" ((fa "rlQuantified" (EApp (EApp (EApp (EVar "IdMap.foldlWithKey") (ELam ((PVar "acc") (PVar "id") (PVar "indices")) (EMatch (EVar "indices") (arm (PList (PVar "index")) () (EApp (EApp (EApp (EVar "IdMap.set") (EVar "id")) (EVar "index")) (EVar "acc"))) (arm PWild () (EVar "acc"))))) (EVar "Tip")) (EApp (EVar "fst") (EVar "owners")))) (fa "rlOutward" (EApp (EApp (EApp (EVar "fold") (ELam ((PVar "acc") (PTuple (PVar "role") (PVar "mono"))) (EMatch (EVar "role") (arm (PCon "RoleMonomorphic") () (EApp (EApp (EVar "authIdsIn") (EVar "mono")) (EVar "acc"))) (arm PWild () (EVar "acc"))))) (EVar "Tip")) (EVar "members"))) (fa "rlTyped" (EApp (EVar "Some") (EApp (EApp (EApp (EVar "fold") (ELam ((PVar "acc") (PTuple PWild (PVar "mono"))) (EApp (EApp (EVar "authIdsIn") (EVar "mono")) (EVar "acc")))) (EVar "Tip")) (EVar "members")))) (fa "rlMemberAuths" (ELam (PWild) (EApp (EApp (EVar "map") (ELam ((PTuple PWild (PVar "mono"))) (EApp (EApp (EVar "authIdsIn") (EVar "mono")) (EVar "Tip")))) (EVar "members")))))))))
+(DTypeSig true "finishValueEffectsKeeping" (TyFun (TyCon "DynCtx") (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "Bool") (TyCon "Mono"))) (TyApp (TyCon "List") (TyTuple (TyCon "Int") (TyCon "AuthResidual"))))))
+(DFunDef false "finishValueEffectsKeeping" ((PVar "dyn") (PVar "generalizing")) (EBlock (DoLet false false (PVar "members") (EApp (EApp (EVar "map") (ELam ((PTuple (PVar "generalizes") (PVar "mono"))) (ETuple (EApp (EVar "localRole") (EVar "generalizes")) (EVar "mono")))) (EVar "generalizing"))) (DoLet false false (PVar "level") (EFieldAccess (EFieldAccess (EFieldAccess (EFieldAccess (EVar "dyn") "dcModule") "mcCells") "currentLevel") "value")) (DoExpr (EIf (EApp (EApp (EVar "anyList") (EVar "fst")) (EVar "generalizing")) (EApp (EApp (EVar "settlePendingJoins") (EVar "dyn")) (EVar "level")) (EApp (EApp (EVar "postponePendingJoins") (EFieldAccess (EVar "dyn") "dcModule")) (EVar "level")))) (DoLet false false (PVar "monos") (EApp (EApp (EVar "map") (EVar "snd")) (EVar "members"))) (DoExpr (EApp (EApp (EApp (EApp (EVar "finishEffectSummaryScopeKeeping") (EFieldAccess (EVar "dyn") "dcModule")) (EApp (EVar "scopeRolesOf") (EVar "members"))) (EApp (EApp (EApp (EVar "fold") (ELam ((PVar "acc") (PVar "mono")) (EApp (EApp (EVar "effectRoots") (EVar "mono")) (EVar "acc")))) (EVar "Tip")) (EVar "monos"))) (EApp (EApp (EApp (EVar "fold") (ELam ((PVar "acc") (PVar "mono")) (EApp (EApp (EApp (EVar "borrowedEffectCells") (EFieldAccess (EVar "dyn") "dcModule")) (EVar "mono")) (EVar "acc")))) (EVar "Tip")) (EVar "monos"))))))
+(DTypeSig false "localRole" (TyFun (TyCon "Bool") (TyCon "BindingRole")))
+(DFunDef false "localRole" ((PCon "True")) (EVar "RoleQuantifies"))
+(DFunDef false "localRole" ((PCon "False")) (EVar "RoleMonomorphic"))
 (DTypeSig true "reportEffectSummaryFailures" (TyFun (TyCon "ModuleCtx") (TyFun (TyApp (TyCon "List") (TyApp (TyCon "SummaryFailure") (TyCon "ObligationSite"))) (TyCon "Unit"))))
 (DFunDef false "reportEffectSummaryFailures" ((PVar "_mctx") (PList)) (ELit LUnit))
 (DFunDef false "reportEffectSummaryFailures" ((PVar "outer") (PCons (PVar "failure") (PVar "rest"))) (EBlock (DoLet false false (PVar "fn") (EFieldAccess (EFieldAccess (EVar "failure") "esfContext") "osFn")) (DoLet false false (PVar "mctx") (EApp (EApp (EVar "mctxAt") (EApp (EApp (EVar "orElseLoc") (EApp (EApp (EApp (EApp (EVar "effectSiteOf") (EVar "outer")) (EVar "fn")) (EFieldAccess (EVar "failure") "esfLabel")) (EApp (EVar "failureBound") (EVar "failure")))) (EFieldAccess (EFieldAccess (EVar "failure") "esfContext") "osLoc"))) (EVar "outer"))) (DoExpr (EMatch (EFieldAccess (EVar "failure") "esfAuthority") (arm (PCon "Some" (PTuple (PVar "lo") (PVar "hi"))) () (EIf (EBinOp "||" (EApp (EApp (EVar "mentionsEscaped") (EVar "mctx")) (EVar "lo")) (EApp (EApp (EVar "mentionsEscaped") (EVar "mctx")) (EVar "hi"))) (ELit LUnit) (EIf (EFieldAccess (EVar "failure") "esfExact") (EApp (EApp (EApp (EApp (EApp (EVar "reportIndexFailure") (EVar "mctx")) (EFieldAccess (EFieldAccess (EVar "failure") "esfContext") "osCovering")) (EFieldAccess (EVar "mctx") "mcLoc")) (EVar "lo")) (EVar "hi")) (EApp (EApp (EApp (EApp (EVar "pushTypeErrorAt") (EVar "mctx")) (EVar "TAuthority")) (EFieldAccess (EVar "mctx") "mcLoc")) (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EVar "authorityFailureMsg") (EVar "mctx")) (EVar "fn")) (EFieldAccess (EVar "failure") "esfLabel")) (EFieldAccess (EVar "failure") "esfResidualOf")) (EVar "lo")) (EVar "hi")) (EFieldAccess (EVar "failure") "esfWrittenUpper")))))) (arm (PCon "None") () (EBlock (DoExpr (EApp (EApp (EVar "setRef") (EFieldAccess (EFieldAccess (EVar "mctx") "mcCells") "rowFailureReportedRef")) (EApp (EApp (EApp (EVar "omInsert") (EVar "fn")) (ELit LUnit)) (EFieldAccess (EFieldAccess (EFieldAccess (EVar "mctx") "mcCells") "rowFailureReportedRef") "value")))) (DoExpr (EApp (EApp (EVar "reportRowFailure") (EVar "mctx")) (EVar "failure"))))))) (DoExpr (EApp (EApp (EVar "reportEffectSummaryFailures") (EVar "outer")) (EVar "rest")))))
@@ -2421,13 +2504,13 @@ concreteAtom a = not (authHasVars (atomAuth a))
 (DFunDef false "concreteAtom" ((PVar "a")) (EApp (EVar "not") (EApp (EVar "authHasVars") (EApp (EVar "atomAuth") (EVar "a")))))
 # MARK
 (DUse false (UseGroup ("support" "diag_codes") ((mem "DiagCode" true))))
-(DUse false (UseGroup ("types" "tc_types") ((mem "grantTopKey" false) (mem "methodGrantKey" false) (mem "setGrantIds" false) (mem "AbsorptionEvent" true) (mem "GrantBinder" true) (mem "GrantCallee" true) (mem "GrantOcc" true) (mem "MethodGrant" true) (mem "DynCtx" false) (mem "GraphCtx" false) (mem "GroupCtx" false) (mem "Kind" false) (mem "MethodSchemeRow" false) (mem "ModuleCtx" false) (mem "ObligationSite" false) (mem "ScopedMember" false) (mem "SelectedValueOccurrence" false) (mem "TcEnv" false))))
-(DUse false (UseGroup ("types" "tc_mono") ((mem "allArrowEffs" false) (mem "arrowArity" false) (mem "authCellsIn" false) (mem "authOrderIn" false) (mem "authOrderRow" false) (mem "authRoots" false) (mem "authRowCells" false) (mem "authRowRoots" false) (mem "containsI" false) (mem "effectCells" false) (mem "effectRoots" false) (mem "effectRowRoots" false) (mem "funArity" false) (mem "joinCellOf" false) (mem "monoIndexEffvarIds" false) (mem "newEffvarId" false) (mem "peelQual" false) (mem "rowTailId" false) (mem "schemeAuthIds" false) (mem "schemeIds" false) (mem "tyAppSpine" false) (mem "tyArrowCount" false) (mem "liveTailId" false) (mem "anyContainsI" false) (mem "effVarTailIds" false) (mem "hasDupI" false) (mem "isPreludeOrigin" false) (mem "tconBuiltin" false))))
+(DUse false (UseGroup ("types" "tc_types") ((mem "BindingRole" true) (mem "grantTopKey" false) (mem "methodGrantKey" false) (mem "setGrantIds" false) (mem "AbsorptionEvent" true) (mem "GrantBinder" true) (mem "GrantCallee" true) (mem "GrantOcc" true) (mem "MethodGrant" true) (mem "DynCtx" false) (mem "GraphCtx" false) (mem "GroupCtx" false) (mem "Kind" false) (mem "MethodSchemeRow" false) (mem "ModuleCtx" false) (mem "ObligationSite" false) (mem "ScopedMember" false) (mem "SelectedValueOccurrence" false) (mem "TcEnv" false))))
+(DUse false (UseGroup ("types" "tc_mono") ((mem "authIdsIn" false) (mem "qualifierAuthIds" false) (mem "allArrowEffs" false) (mem "arrowArity" false) (mem "authCellsIn" false) (mem "authOrderIn" false) (mem "authOrderRow" false) (mem "authRoots" false) (mem "authRowCells" false) (mem "authRowRoots" false) (mem "containsI" false) (mem "effectCells" false) (mem "effectRoots" false) (mem "effectRowRoots" false) (mem "funArity" false) (mem "joinCellOf" false) (mem "monoIndexEffvarIds" false) (mem "newEffvarId" false) (mem "peelQual" false) (mem "rowTailId" false) (mem "schemeAuthIds" false) (mem "schemeIds" false) (mem "tyAppSpine" false) (mem "tyArrowCount" false) (mem "liveTailId" false) (mem "anyContainsI" false) (mem "effVarTailIds" false) (mem "hasDupI" false) (mem "isPreludeOrigin" false) (mem "tconBuiltin" false))))
 (DUse false (UseGroup ("types" "tc_diag_text") ((mem "aliasesHeadRowMsg" false) (mem "argAtomsMsgFor" false) (mem "argOnlyEffVarMsg" false) (mem "collapsesEffvarsMsg" false) (mem "effectEscapeMsg" false) (mem "effectInclusionMsg" false) (mem "effectUndeterminedMsg" false) (mem "effVarLaunderMsg" false) (mem "indexEagerMsg" false))))
 (DUse false (UseGroup ("types" "tc_state") ((mem "currentScopeStore" false) (mem "mctxAt" false) (mem "wPushAll" false) (mem "wRestore" false) (mem "wSnapshot" false) (mem "wWindow" false))))
 (DUse false (UseGroup ("types" "tc_env") ((mem "declGradedScope" false) (mem "effTailNames" false) (mem "funClausePair" false) (mem "lookupBinding" false) (mem "lookupVar" false) (mem "methodArgs" false) (mem "removeAllS" false) (mem "tyTabKey" false) (mem "envVarType" false) (mem "envAlphaLets" false) (mem "lookupLocalFlag" false) (mem "lookupStandaloneValue" false))))
 (DUse false (UseGroup ("types" "tc_diag") ((mem "pushTypeError" false) (mem "pushTypeErrorAt" false) (mem "pushTypeErrorOnceAt" false) (mem "pushTypeErrorOncePerSite" false))))
-(DUse false (UseGroup ("types" "tc_unify") ((mem "atomsEscape" false) (mem "authorityFailureMsg" false) (mem "captureScope" false) (mem "effectLeakCheck" false) (mem "effectSiteKey" false) (mem "freshEffvarAt" false) (mem "freshVar" false) (mem "producedSlotCovariants" false) (mem "reportIndexFailure" false) (mem "resolvePendingJoins" false) (mem "widenOpenedFor" false))))
+(DUse false (UseGroup ("types" "tc_unify") ((mem "postponePendingJoins" false) (mem "settlePendingJoins" false) (mem "atomsEscape" false) (mem "authorityFailureMsg" false) (mem "captureScope" false) (mem "effectLeakCheck" false) (mem "effectSiteKey" false) (mem "freshEffvarAt" false) (mem "freshVar" false) (mem "producedSlotCovariants" false) (mem "reportIndexFailure" false) (mem "resolvePendingJoins" false) (mem "widenOpenedFor" false))))
 (DUse false (UseGroup ("types" "tc_decls_types") ((mem "atomsOfWritten" false) (mem "expandAliasHeadTy" false) (mem "rowArgNames" false) (mem "rowArgNamesIn" false))))
 (DUse false (UseGroup ("types" "tc_decls") ((mem "krowArgVarAtoms" false) (mem "paramRowAtomsOf" false) (mem "rowArgAtomsIn" false))))
 (DUse false (UseGroup ("types" "tc_solve") ((mem "isLocalAbsName" false))))
@@ -2470,6 +2553,13 @@ concreteAtom a = not (authHasVars (atomAuth a))
 (DFunDef false "finishEffectSummaryScope" ((PVar "mctx") (PVar "retained") (PVar "borrowed")) (EBlock (DoLet false false PWild (EApp (EApp (EApp (EApp (EVar "finishEffectSummaryScopeKeeping") (EVar "mctx")) (EVar "noScopeRoles")) (EVar "retained")) (EVar "borrowed"))) (DoExpr (ELit LUnit))))
 (DTypeSig true "finishEffectSummaryScopeKeeping" (TyFun (TyCon "ModuleCtx") (TyFun (TyCon "ScopeRoles") (TyFun (TyApp (TyApp (TyCon "Map") (TyCon "Int")) (TyCon "Unit")) (TyFun (TyApp (TyApp (TyCon "Map") (TyCon "Int")) (TyApp (TyCon "Ref") (TyCon "Effvar"))) (TyApp (TyCon "List") (TyTuple (TyCon "Int") (TyCon "AuthResidual"))))))))
 (DFunDef false "finishEffectSummaryScopeKeeping" ((PVar "mctx") (PVar "roles") (PVar "retained") (PVar "borrowed")) (EBlock (DoLet false false (PVar "outcome") (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EVar "EffectSolver.closeSummaryScope") (EFieldAccess (EFieldAccess (EVar "mctx") "mcCells") "effectSummaries")) (EFieldAccess (EFieldAccess (EFieldAccess (EVar "mctx") "mcCells") "rigidEffvarsRef") "value")) (EFieldAccess (EFieldAccess (EFieldAccess (EVar "mctx") "mcCells") "rigidAuthvarsRef") "value")) (EVar "roles")) (EVar "retained")) (EVar "borrowed")) (EApp (EVar "summaryEscape") (EFieldAccess (EVar "mctx") "mcGraph"))) (EApp (EVar "joinCellOf") (EFieldAccess (EVar "mctx") "mcGraph"))) (EApp (EVar "freshEffvarAt") (EFieldAccess (EVar "mctx") "mcGraph"))) (EApp (EVar "widenOpenedFor") (EVar "mctx")))) (DoExpr (EApp (EApp (EVar "reportEffectSummaryFailures") (EVar "mctx")) (EFieldAccess (EVar "outcome") "esoFailures"))) (DoExpr (EApp (EApp (EVar "finishFileValueScope") (EVar "mctx")) (ELit LUnit))) (DoExpr (EApp (EApp (EMethodRef "map") (ELam ((PTuple (PVar "member") (PVar "w"))) (ETuple (EVar "member") (ERecordCreate "AuthResidual" ((fa "arLower" (EFieldAccess (EVar "w") "awLower")) (fa "arUpper" (EFieldAccess (EVar "w") "awUpper")) (fa "arExact" (EFieldAccess (EVar "w") "awExact"))))))) (EFieldAccess (EVar "outcome") "esoResiduals")))))
+(DTypeSig true "scopeRolesOf" (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "BindingRole") (TyCon "Mono"))) (TyCon "ScopeRoles")))
+(DFunDef false "scopeRolesOf" ((PVar "members")) (EBlock (DoLet false false (PVar "owners") (EApp (EApp (EApp (EMethodRef "fold") (ELam ((PTuple (PVar "acc") (PVar "index")) (PTuple (PVar "role") (PVar "mono"))) (EBlock (DoLet false false (PVar "ids") (EMatch (EVar "role") (arm (PCon "RoleQuantifies") () (EApp (EVar "IdMap.keys") (EApp (EApp (EVar "qualifierAuthIds") (EVar "mono")) (EVar "Tip")))) (arm PWild () (EListLit)))) (DoExpr (ETuple (EApp (EApp (EApp (EMethodRef "fold") (ELam ((PVar "m") (PVar "id")) (EApp (EApp (EApp (EVar "IdMap.set") (EVar "id")) (EBinOp "::" (EMethodRef "index") (EApp (EApp (EVar "optionOr") (EListLit)) (EApp (EApp (EVar "IdMap.get") (EVar "id")) (EVar "m"))))) (EVar "m")))) (EVar "acc")) (EVar "ids")) (EBinOp "+" (EMethodRef "index") (ELit (LInt 1)))))))) (ETuple (EVar "Tip") (ELit (LInt 0)))) (EVar "members"))) (DoExpr (ERecordCreate "ScopeRoles" ((fa "rlQuantified" (EApp (EApp (EApp (EVar "IdMap.foldlWithKey") (ELam ((PVar "acc") (PVar "id") (PVar "indices")) (EMatch (EVar "indices") (arm (PList (PVar "index")) () (EApp (EApp (EApp (EVar "IdMap.set") (EVar "id")) (EMethodRef "index")) (EVar "acc"))) (arm PWild () (EVar "acc"))))) (EVar "Tip")) (EApp (EVar "fst") (EVar "owners")))) (fa "rlOutward" (EApp (EApp (EApp (EMethodRef "fold") (ELam ((PVar "acc") (PTuple (PVar "role") (PVar "mono"))) (EMatch (EVar "role") (arm (PCon "RoleMonomorphic") () (EApp (EApp (EVar "authIdsIn") (EVar "mono")) (EVar "acc"))) (arm PWild () (EVar "acc"))))) (EVar "Tip")) (EVar "members"))) (fa "rlTyped" (EApp (EVar "Some") (EApp (EApp (EApp (EMethodRef "fold") (ELam ((PVar "acc") (PTuple PWild (PVar "mono"))) (EApp (EApp (EVar "authIdsIn") (EVar "mono")) (EVar "acc")))) (EVar "Tip")) (EVar "members")))) (fa "rlMemberAuths" (ELam (PWild) (EApp (EApp (EMethodRef "map") (ELam ((PTuple PWild (PVar "mono"))) (EApp (EApp (EVar "authIdsIn") (EVar "mono")) (EVar "Tip")))) (EVar "members")))))))))
+(DTypeSig true "finishValueEffectsKeeping" (TyFun (TyCon "DynCtx") (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "Bool") (TyCon "Mono"))) (TyApp (TyCon "List") (TyTuple (TyCon "Int") (TyCon "AuthResidual"))))))
+(DFunDef false "finishValueEffectsKeeping" ((PVar "dyn") (PVar "generalizing")) (EBlock (DoLet false false (PVar "members") (EApp (EApp (EMethodRef "map") (ELam ((PTuple (PVar "generalizes") (PVar "mono"))) (ETuple (EApp (EVar "localRole") (EVar "generalizes")) (EVar "mono")))) (EVar "generalizing"))) (DoLet false false (PVar "level") (EFieldAccess (EFieldAccess (EFieldAccess (EFieldAccess (EVar "dyn") "dcModule") "mcCells") "currentLevel") "value")) (DoExpr (EIf (EApp (EApp (EVar "anyList") (EVar "fst")) (EVar "generalizing")) (EApp (EApp (EVar "settlePendingJoins") (EVar "dyn")) (EVar "level")) (EApp (EApp (EVar "postponePendingJoins") (EFieldAccess (EVar "dyn") "dcModule")) (EVar "level")))) (DoLet false false (PVar "monos") (EApp (EApp (EMethodRef "map") (EVar "snd")) (EVar "members"))) (DoExpr (EApp (EApp (EApp (EApp (EVar "finishEffectSummaryScopeKeeping") (EFieldAccess (EVar "dyn") "dcModule")) (EApp (EVar "scopeRolesOf") (EVar "members"))) (EApp (EApp (EApp (EMethodRef "fold") (ELam ((PVar "acc") (PVar "mono")) (EApp (EApp (EVar "effectRoots") (EVar "mono")) (EVar "acc")))) (EVar "Tip")) (EVar "monos"))) (EApp (EApp (EApp (EMethodRef "fold") (ELam ((PVar "acc") (PVar "mono")) (EApp (EApp (EApp (EVar "borrowedEffectCells") (EFieldAccess (EVar "dyn") "dcModule")) (EVar "mono")) (EVar "acc")))) (EVar "Tip")) (EVar "monos"))))))
+(DTypeSig false "localRole" (TyFun (TyCon "Bool") (TyCon "BindingRole")))
+(DFunDef false "localRole" ((PCon "True")) (EVar "RoleQuantifies"))
+(DFunDef false "localRole" ((PCon "False")) (EVar "RoleMonomorphic"))
 (DTypeSig true "reportEffectSummaryFailures" (TyFun (TyCon "ModuleCtx") (TyFun (TyApp (TyCon "List") (TyApp (TyCon "SummaryFailure") (TyCon "ObligationSite"))) (TyCon "Unit"))))
 (DFunDef false "reportEffectSummaryFailures" ((PVar "_mctx") (PList)) (ELit LUnit))
 (DFunDef false "reportEffectSummaryFailures" ((PVar "outer") (PCons (PVar "failure") (PVar "rest"))) (EBlock (DoLet false false (PVar "fn") (EFieldAccess (EFieldAccess (EVar "failure") "esfContext") "osFn")) (DoLet false false (PVar "mctx") (EApp (EApp (EVar "mctxAt") (EApp (EApp (EVar "orElseLoc") (EApp (EApp (EApp (EApp (EVar "effectSiteOf") (EVar "outer")) (EVar "fn")) (EFieldAccess (EVar "failure") "esfLabel")) (EApp (EVar "failureBound") (EVar "failure")))) (EFieldAccess (EFieldAccess (EVar "failure") "esfContext") "osLoc"))) (EVar "outer"))) (DoExpr (EMatch (EFieldAccess (EVar "failure") "esfAuthority") (arm (PCon "Some" (PTuple (PVar "lo") (PVar "hi"))) () (EIf (EBinOp "||" (EApp (EApp (EVar "mentionsEscaped") (EVar "mctx")) (EVar "lo")) (EApp (EApp (EVar "mentionsEscaped") (EVar "mctx")) (EVar "hi"))) (ELit LUnit) (EIf (EFieldAccess (EVar "failure") "esfExact") (EApp (EApp (EApp (EApp (EApp (EVar "reportIndexFailure") (EVar "mctx")) (EFieldAccess (EFieldAccess (EVar "failure") "esfContext") "osCovering")) (EFieldAccess (EVar "mctx") "mcLoc")) (EVar "lo")) (EVar "hi")) (EApp (EApp (EApp (EApp (EVar "pushTypeErrorAt") (EVar "mctx")) (EVar "TAuthority")) (EFieldAccess (EVar "mctx") "mcLoc")) (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EVar "authorityFailureMsg") (EVar "mctx")) (EVar "fn")) (EFieldAccess (EVar "failure") "esfLabel")) (EFieldAccess (EVar "failure") "esfResidualOf")) (EVar "lo")) (EVar "hi")) (EFieldAccess (EVar "failure") "esfWrittenUpper")))))) (arm (PCon "None") () (EBlock (DoExpr (EApp (EApp (EVar "setRef") (EFieldAccess (EFieldAccess (EVar "mctx") "mcCells") "rowFailureReportedRef")) (EApp (EApp (EApp (EVar "omInsert") (EVar "fn")) (ELit LUnit)) (EFieldAccess (EFieldAccess (EFieldAccess (EVar "mctx") "mcCells") "rowFailureReportedRef") "value")))) (DoExpr (EApp (EApp (EVar "reportRowFailure") (EVar "mctx")) (EVar "failure"))))))) (DoExpr (EApp (EApp (EVar "reportEffectSummaryFailures") (EVar "outer")) (EVar "rest")))))

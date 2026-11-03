@@ -1,5 +1,5 @@
 # META
-source_lines=3012
+source_lines=3017
 stages=DESUGAR,MARK
 # SOURCE
 -- tc_unify: fresh variables and levels (including level lowering, `lowerToCurrent`,
@@ -9,8 +9,9 @@ stages=DESUGAR,MARK
 -- deferred pattern literals) and instantiation, with the call obligations, effects and value flows
 -- that instantiation and directional unification record (`recordObl`, `recordOblAt`,
 -- `recordSchemeCallObligations`, `performEffect`, `recordEffectSites`, `recordFileValueFlow`,
--- `captureScope`, `closeScope`, `obligationSiteHere`); and the messages of these failures that need
--- checker context (`authorityFailureMsg`, `effectLeakMsg`, `constrainedApplicationHelp`; D3).
+-- `captureScope`, `openScope`, `closeScope`, `obligationSiteHere`); and the messages of these
+-- failures that need checker context (`authorityFailureMsg`, `effectLeakMsg`,
+-- `constrainedApplicationHelp`; D3).
 -- Context-free message text is `tc_diag_text`'s.
 --
 -- Spec: HM-CORE section 3, section 4 (owed, #2555); EFFECTS section 2.4, section 5, section
@@ -962,6 +963,10 @@ closeScope mctx _ =
     Scopes.closeScopeCursor
       (currentScopeStore mctx.mcGraph ())
       mctx.mcCells.currentScope.value
+
+export
+openScope : ModuleCtx -> ScopeId -> Unit
+openScope mctx sid = mctx.mcCells.currentScope := Scopes.openScopeCursor sid
 
 tyvarLevel : Ref Tyvar -> Int
 tyvarLevel cell = match !cell
@@ -3176,6 +3181,8 @@ zipBindFrom _dyn _ _ = ()
 (DFunDef false "captureScope" ((PVar "mctx") PWild) (EApp (EVar "Scopes.captureScopeCursor") (EFieldAccess (EFieldAccess (EFieldAccess (EVar "mctx") "mcCells") "currentScope") "value")))
 (DTypeSig true "closeScope" (TyFun (TyCon "ModuleCtx") (TyFun (TyCon "Unit") (TyCon "Unit"))))
 (DFunDef false "closeScope" ((PVar "mctx") PWild) (EApp (EApp (EVar "setRef") (EFieldAccess (EFieldAccess (EVar "mctx") "mcCells") "currentScope")) (EApp (EApp (EVar "Scopes.closeScopeCursor") (EApp (EApp (EVar "currentScopeStore") (EFieldAccess (EVar "mctx") "mcGraph")) (ELit LUnit))) (EFieldAccess (EFieldAccess (EFieldAccess (EVar "mctx") "mcCells") "currentScope") "value"))))
+(DTypeSig true "openScope" (TyFun (TyCon "ModuleCtx") (TyFun (TyCon "ScopeId") (TyCon "Unit"))))
+(DFunDef false "openScope" ((PVar "mctx") (PVar "sid")) (EApp (EApp (EVar "setRef") (EFieldAccess (EFieldAccess (EVar "mctx") "mcCells") "currentScope")) (EApp (EVar "Scopes.openScopeCursor") (EVar "sid"))))
 (DTypeSig false "tyvarLevel" (TyFun (TyApp (TyCon "Ref") (TyCon "Tyvar")) (TyCon "Int")))
 (DFunDef false "tyvarLevel" ((PVar "cell")) (EMatch (EUnOp "!" (EVar "cell")) (arm (PCon "Unbound" PWild (PVar "lvl")) () (EVar "lvl")) (arm (PCon "Link" PWild) () (ELit (LInt 0)))))
 (DTypeSig false "occursAdjust" (TyFun (TyCon "ModuleCtx") (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyFun (TyCon "Mono") (TyCon "Unit"))))))
@@ -3734,6 +3741,8 @@ zipBindFrom _dyn _ _ = ()
 (DFunDef false "captureScope" ((PVar "mctx") PWild) (EApp (EVar "Scopes.captureScopeCursor") (EFieldAccess (EFieldAccess (EFieldAccess (EVar "mctx") "mcCells") "currentScope") "value")))
 (DTypeSig true "closeScope" (TyFun (TyCon "ModuleCtx") (TyFun (TyCon "Unit") (TyCon "Unit"))))
 (DFunDef false "closeScope" ((PVar "mctx") PWild) (EApp (EApp (EVar "setRef") (EFieldAccess (EFieldAccess (EVar "mctx") "mcCells") "currentScope")) (EApp (EApp (EVar "Scopes.closeScopeCursor") (EApp (EApp (EVar "currentScopeStore") (EFieldAccess (EVar "mctx") "mcGraph")) (ELit LUnit))) (EFieldAccess (EFieldAccess (EFieldAccess (EVar "mctx") "mcCells") "currentScope") "value"))))
+(DTypeSig true "openScope" (TyFun (TyCon "ModuleCtx") (TyFun (TyCon "ScopeId") (TyCon "Unit"))))
+(DFunDef false "openScope" ((PVar "mctx") (PVar "sid")) (EApp (EApp (EVar "setRef") (EFieldAccess (EFieldAccess (EVar "mctx") "mcCells") "currentScope")) (EApp (EVar "Scopes.openScopeCursor") (EVar "sid"))))
 (DTypeSig false "tyvarLevel" (TyFun (TyApp (TyCon "Ref") (TyCon "Tyvar")) (TyCon "Int")))
 (DFunDef false "tyvarLevel" ((PVar "cell")) (EMatch (EUnOp "!" (EVar "cell")) (arm (PCon "Unbound" PWild (PVar "lvl")) () (EVar "lvl")) (arm (PCon "Link" PWild) () (ELit (LInt 0)))))
 (DTypeSig false "occursAdjust" (TyFun (TyCon "ModuleCtx") (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyFun (TyCon "Mono") (TyCon "Unit"))))))
