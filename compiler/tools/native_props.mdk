@@ -9,7 +9,8 @@ import frontend.ast.{
 import tools.target_parse.{targetDesugared}
 import driver.build_cmd.{
   ppBuildReport, makeTempDir, scratchProbeManifest, cleanupTempDir,
-  runBuildNativeRoots, BuildProfile(..), envOr, defaultMedakaRoot
+  runBuildNativeRoots, BuildPaths(..), BuildOptions(..), probeBuildOptions,
+  envOr, defaultMedakaRoot
 }
 import driver.loader.{entrySearchRoots}
 import support.path.{joinPath, baseOf, dirOf}
@@ -431,19 +432,18 @@ buildAndRunPlanned target entry out tmp jobs nonce =
   let emitter = envOr "MEDAKA_EMITTER" (joinPath root "medaka_emitter")
   let cc = envOr "CC" "clang"
   match (runBuildNativeRoots
-    root
-    medaka
-    cc
-    entry
-    out
+    BuildPaths {
+      bpRoot = root,
+      bpMedaka = medaka,
+      bpCc = cc,
+      bpInput = entry,
+      bpOut = out,
+    }
     tmp
-    False
-    (entrySearchRoots (dirOf target))
-    True
-    False
-    False
-    BuildProbe
-    (Some target))
+    { probeBuildOptions |
+      boExtraRoots = entrySearchRoots (dirOf target),
+      boRealTarget = Some target,
+    })
     Err rep =>
       Err
         (NativeBuildFailure

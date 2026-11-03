@@ -2,7 +2,8 @@ import string.{replaceAll, contains, unlines}
 import test.{expectEach, expectTextContainsAll, expectFalse, fail}
 import test_process.{withScratchDir, boundedVerbSeconds, medakaRoot}
 import driver.build_cmd.{
-  runBuildNativeRoots, BuildProfile(..), ppBuildReport, envOr
+  runBuildNativeRoots, BuildPaths(..), BuildOptions(..), probeBuildOptions,
+  ppBuildReport, envOr
 }
 import types.capability_manifest.{
   ManifestRequirement(..), EntryKey(..), InvocationProtocol(..)
@@ -338,35 +339,30 @@ main = 6.0
         )
           (Err e, _) => fail e
           (_, Err e) => fail e
-          _ =>
-            match (runBuildNativeRoots
-              medakaRoot
-              medakaBin
-              (envOr "CC" "clang")
-              probe
-              binary
-              dir
-              False
-              [underRoot "compiler"]
-              True
-              False
-              False
-              BuildProbe
-              None)
-              Err report =>
-                fail ("playground probe build failed: " ++ ppBuildReport report)
-              Ok _ =>
-                expectEach
-                  (flatMap
-                    (mode =>
-                      (
-                          mode ++ "/valid",
-                          playgroundControl binary entry dir mode,
-                        )
-                        :: map
-                          (row => (
-                            "\{mode}/\{fst row}",
-                            playgroundRefusal binary entry dir mode row,
-                          ))
-                          playgroundMutationRows)
-                    ["compile", "analyze"]))
+          _ => match (runBuildNativeRoots
+            BuildPaths {
+              bpRoot = medakaRoot,
+              bpMedaka = medakaBin,
+              bpCc = envOr "CC" "clang",
+              bpInput = probe,
+              bpOut = binary,
+            }
+            dir
+            { probeBuildOptions | boExtraRoots = [underRoot "compiler"] })
+            Err report =>
+              fail ("playground probe build failed: " ++ ppBuildReport report)
+            Ok _ =>
+              expectEach
+                (flatMap
+                  (mode =>
+                    (
+                        mode ++ "/valid",
+                        playgroundControl binary entry dir mode,
+                      )
+                      :: map
+                        (row => (
+                          "\{mode}/\{fst row}",
+                          playgroundRefusal binary entry dir mode row,
+                        ))
+                        playgroundMutationRows)
+                  ["compile", "analyze"]))

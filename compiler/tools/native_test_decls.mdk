@@ -47,7 +47,9 @@ import driver.build_cmd.{
   scratchProbeManifest,
   cleanupTempDir,
   runBuildNativeRoots,
-  BuildProfile(..),
+  BuildPaths(..),
+  BuildOptions(..),
+  probeBuildOptions,
   envOr,
   defaultMedakaRoot,
 }
@@ -202,19 +204,18 @@ buildAndRun target entryPath outPath tmpDir tests nonce =
   -- the gate armed, a target the emitter records type errors for still links and
   -- reports `pass`.
   match (runBuildNativeRoots
-    root
-    medaka
-    cc
-    entryPath
-    outPath
+    BuildPaths {
+      bpRoot = root,
+      bpMedaka = medaka,
+      bpCc = cc,
+      bpInput = entryPath,
+      bpOut = outPath,
+    }
     tmpDir
-    False
-    extraRoots
-    True
-    False
-    False
-    BuildProbe
-    (Some target))
+    { probeBuildOptions |
+      boExtraRoots = extraRoots,
+      boRealTarget = Some target,
+    })
     Err rep =>
       Err
         "native test runner: could not build \{target} natively\n\{ppBuildReport rep}"

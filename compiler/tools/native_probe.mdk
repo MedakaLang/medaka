@@ -29,7 +29,9 @@ import driver.build_cmd.{
   scratchProbeManifest,
   cleanupTempDir,
   runBuildNativeRoots,
-  BuildProfile(..),
+  BuildPaths(..),
+  BuildOptions(..),
+  probeBuildOptions,
   envOr,
   defaultMedakaRoot,
 }
@@ -219,22 +221,21 @@ buildMerged target tsrc nonce sections tmpDir outPath =
         Err _ => False
         Ok _ =>
           let root = envOr "MEDAKA_ROOT" defaultMedakaRoot
-          -- The same build every per-arm probe makes, strictEmit included
+          -- The same build every per-arm probe makes, boStrictEmit included
           -- (#2679).
           match (runBuildNativeRoots
-            root
-            (envOr "MEDAKA" (joinPath root "medaka"))
-            (envOr "CC" "clang")
-            entryPath
-            outPath
+            BuildPaths {
+              bpRoot = root,
+              bpMedaka = envOr "MEDAKA" (joinPath root "medaka"),
+              bpCc = envOr "CC" "clang",
+              bpInput = entryPath,
+              bpOut = outPath,
+            }
             tmpDir
-            False
-            (entrySearchRoots (dirOf target))
-            True
-            False
-            False
-            BuildProbe
-            (Some target))
+            { probeBuildOptions |
+              boExtraRoots = entrySearchRoots (dirOf target),
+              boRealTarget = Some target,
+            })
             Err _ => False
             Ok _ => True
 

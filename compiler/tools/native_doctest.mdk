@@ -50,7 +50,9 @@ import driver.build_cmd.{
   scratchProbeManifest,
   cleanupTempDir,
   runBuildNativeRoots,
-  BuildProfile(..),
+  BuildPaths(..),
+  BuildOptions(..),
+  probeBuildOptions,
   envOr,
   defaultMedakaRoot,
 }
@@ -289,19 +291,18 @@ buildAndRun target entryPath outPath tmpDir examples synthResults nonce =
   -- strictEmit = True: same reason as the `test` probe's, same seam (#2679) —
   -- see runBuildNativeRoots.
   match (runBuildNativeRoots
-    root
-    medaka
-    cc
-    entryPath
-    outPath
+    BuildPaths {
+      bpRoot = root,
+      bpMedaka = medaka,
+      bpCc = cc,
+      bpInput = entryPath,
+      bpOut = outPath,
+    }
     tmpDir
-    False
-    extraRoots
-    True
-    False
-    False
-    BuildProbe
-    (Some target))
+    { probeBuildOptions |
+      boExtraRoots = extraRoots,
+      boRealTarget = Some target,
+    })
     Err rep =>
       Err
         "native doctest runner: could not build \{target} natively\n\{ppBuildReport rep}"
