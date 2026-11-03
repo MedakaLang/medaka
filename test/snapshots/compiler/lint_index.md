@@ -1,5 +1,5 @@
 # META
-source_lines=1041
+source_lines=1042
 stages=DESUGAR,MARK
 # SOURCE
 -- The declaration index lint rules query about modules other than the one they
@@ -71,8 +71,9 @@ import support.sexp_value.{
   isCloseByte,
 }
 import support.util.{
-  joinWith, listLen, filterList, anyList, allList, startsWith, stringTrim
+  joinWith, listLen, filterList, anyList, allList, startsWith
 }
+import string.{trimAscii}
 import hash_map.{HashMap, new, setInPlace, has, findWithDefault, entries}
 import list.{sortBy, reverse}
 import path.{basename}
@@ -614,7 +615,7 @@ makeStagingDir : String -> <IO> Result String String
 makeStagingDir dir = match runVerb "mktemp" ["-d", "\{dir}/.staging_XXXXXX"]
   Err e => Err e
   Ok (0, out, _) =>
-    let made = stringTrim out
+    let made = trimAscii out
     if made == "" then Err "mktemp -d printed no path" else Ok made
   Ok (code, _, err) => Err "mktemp -d exited \{intToString code}: \{err}"
 
@@ -1047,7 +1048,8 @@ localModOfKey key = match readQuery key
 (DUse false (UseGroup ("frontend" "ast") ((mem "Loc" true) (mem "Ty" true) (mem "EffAtomTy" true) (mem "Constraint" true) (mem "Decl" true) (mem "DataVis" true) (mem "Variant" true) (mem "ConPayload" true) (mem "Field" true) (mem "IfaceMethod" true) (mem "ExternDecl" true) (mem "LetBind" true) (mem "tyConUnresolved" false))))
 (DUse false (UseGroup ("frontend" "ast_codec") ((mem "sexpTy" false) (mem "readTy" false))))
 (DUse false (UseGroup ("support" "sexp_value") ((mem "SExp" true) (mem "SexpCursor" false) (mem "renderSExp" false) (mem "atomText" false) (mem "cursorOf" false) (mem "cursorFailed" false) (mem "cursorAtEnd" false) (mem "cursorOpen" false) (mem "cursorClose" false) (mem "cursorInt" false) (mem "cursorAtom" false) (mem "cursorChar" false) (mem "cursorList" false) (mem "cursorPeek" false) (mem "cursorAdvance" false) (mem "cursorFail" false) (mem "cursorSkipText" false) (mem "isCloseByte" false))))
-(DUse false (UseGroup ("support" "util") ((mem "joinWith" false) (mem "listLen" false) (mem "filterList" false) (mem "anyList" false) (mem "allList" false) (mem "startsWith" false) (mem "stringTrim" false))))
+(DUse false (UseGroup ("support" "util") ((mem "joinWith" false) (mem "listLen" false) (mem "filterList" false) (mem "anyList" false) (mem "allList" false) (mem "startsWith" false))))
+(DUse false (UseGroup ("string") ((mem "trimAscii" false))))
 (DUse false (UseGroup ("hash_map") ((mem "HashMap" false) (mem "new" false) (mem "setInPlace" false) (mem "has" false) (mem "findWithDefault" false) (mem "entries" false))))
 (DUse false (UseGroup ("list") ((mem "sortBy" false) (mem "reverse" false))))
 (DUse false (UseGroup ("path") ((mem "basename" false))))
@@ -1206,7 +1208,7 @@ localModOfKey key = match readQuery key
 (DTypeSig false "writeShard" (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyCon "String") (TyEffect ("IO") None (TyCon "Unit"))))))
 (DFunDef false "writeShard" ((PVar "dir") (PVar "sp") (PVar "text")) (EBlock (DoLet false false PWild (EApp (EVar "mkdirAll") (EVar "dir"))) (DoExpr (EMatch (EApp (EVar "makeStagingDir") (EVar "dir")) (arm (PCon "Err" PWild) () (ELit LUnit)) (arm (PCon "Ok" (PVar "tmp")) () (EBlock (DoLet false false PWild (EApp (EApp (EApp (EVar "stageAndRename") (EVar "tmp")) (EVar "sp")) (EVar "text"))) (DoLet false false PWild (EApp (EVar "removeDir") (EVar "tmp"))) (DoExpr (ELit LUnit))))))))
 (DTypeSig true "makeStagingDir" (TyFun (TyCon "String") (TyEffect ("IO") None (TyApp (TyApp (TyCon "Result") (TyCon "String")) (TyCon "String")))))
-(DFunDef false "makeStagingDir" ((PVar "dir")) (EMatch (EApp (EApp (EVar "runVerb") (ELit (LString "mktemp"))) (EListLit (ELit (LString "-d")) (EBinOp "++" (EBinOp "++" (ELit (LString "")) (EApp (EVar "display") (EVar "dir"))) (ELit (LString "/.staging_XXXXXX"))))) (arm (PCon "Err" (PVar "e")) () (EApp (EVar "Err") (EVar "e"))) (arm (PCon "Ok" (PTuple (PLit (LInt 0)) (PVar "out") PWild)) () (EBlock (DoLet false false (PVar "made") (EApp (EVar "stringTrim") (EVar "out"))) (DoExpr (EIf (EBinOp "==" (EVar "made") (ELit (LString ""))) (EApp (EVar "Err") (ELit (LString "mktemp -d printed no path"))) (EApp (EVar "Ok") (EVar "made")))))) (arm (PCon "Ok" (PTuple (PVar "code") PWild (PVar "err"))) () (EApp (EVar "Err") (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "mktemp -d exited ")) (EApp (EVar "display") (EApp (EVar "intToString") (EVar "code")))) (ELit (LString ": "))) (EApp (EVar "display") (EVar "err"))) (ELit (LString "")))))))
+(DFunDef false "makeStagingDir" ((PVar "dir")) (EMatch (EApp (EApp (EVar "runVerb") (ELit (LString "mktemp"))) (EListLit (ELit (LString "-d")) (EBinOp "++" (EBinOp "++" (ELit (LString "")) (EApp (EVar "display") (EVar "dir"))) (ELit (LString "/.staging_XXXXXX"))))) (arm (PCon "Err" (PVar "e")) () (EApp (EVar "Err") (EVar "e"))) (arm (PCon "Ok" (PTuple (PLit (LInt 0)) (PVar "out") PWild)) () (EBlock (DoLet false false (PVar "made") (EApp (EVar "trimAscii") (EVar "out"))) (DoExpr (EIf (EBinOp "==" (EVar "made") (ELit (LString ""))) (EApp (EVar "Err") (ELit (LString "mktemp -d printed no path"))) (EApp (EVar "Ok") (EVar "made")))))) (arm (PCon "Ok" (PTuple (PVar "code") PWild (PVar "err"))) () (EApp (EVar "Err") (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "mktemp -d exited ")) (EApp (EVar "display") (EApp (EVar "intToString") (EVar "code")))) (ELit (LString ": "))) (EApp (EVar "display") (EVar "err"))) (ELit (LString "")))))))
 (DTypeSig true "stageAndRename" (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyCon "String") (TyEffect ("IO") None (TyCon "Unit"))))))
 (DFunDef false "stageAndRename" ((PVar "tmp") (PVar "dest") (PVar "text")) (EBlock (DoLet false false (PVar "staged") (EBinOp "++" (EBinOp "++" (ELit (LString "")) (EApp (EVar "display") (EVar "tmp"))) (ELit (LString "/shard.sx")))) (DoExpr (EMatch (EApp (EApp (EVar "writeFile") (EVar "staged")) (EVar "text")) (arm (PCon "Err" PWild) () (ELit LUnit)) (arm (PCon "Ok" PWild) () (EMatch (EApp (EApp (EVar "rename") (EVar "staged")) (EVar "dest")) (arm (PCon "Err" PWild) () (EBlock (DoLet false false PWild (EApp (EVar "removeFile") (EVar "staged"))) (DoExpr (ELit LUnit)))) (arm (PCon "Ok" PWild) () (ELit LUnit))))))))
 (DData Private "IndexScope" () ((variant "IndexScope" (ConNamed (field "ixsByName" (TyApp (TyApp (TyCon "HashMap") (TyCon "String")) (TyApp (TyCon "List") (TyCon "IndexRow")))) (field "ixsRows" (TyApp (TyCon "List") (TyCon "IndexRow"))) (field "ixsNames" (TyApp (TyCon "List") (TyCon "String"))) (field "ixsModules" (TyApp (TyCon "List") (TyCon "String"))) (field "ixsDigest" (TyCon "String"))))) ())
@@ -1343,7 +1345,8 @@ localModOfKey key = match readQuery key
 (DUse false (UseGroup ("frontend" "ast") ((mem "Loc" true) (mem "Ty" true) (mem "EffAtomTy" true) (mem "Constraint" true) (mem "Decl" true) (mem "DataVis" true) (mem "Variant" true) (mem "ConPayload" true) (mem "Field" true) (mem "IfaceMethod" true) (mem "ExternDecl" true) (mem "LetBind" true) (mem "tyConUnresolved" false))))
 (DUse false (UseGroup ("frontend" "ast_codec") ((mem "sexpTy" false) (mem "readTy" false))))
 (DUse false (UseGroup ("support" "sexp_value") ((mem "SExp" true) (mem "SexpCursor" false) (mem "renderSExp" false) (mem "atomText" false) (mem "cursorOf" false) (mem "cursorFailed" false) (mem "cursorAtEnd" false) (mem "cursorOpen" false) (mem "cursorClose" false) (mem "cursorInt" false) (mem "cursorAtom" false) (mem "cursorChar" false) (mem "cursorList" false) (mem "cursorPeek" false) (mem "cursorAdvance" false) (mem "cursorFail" false) (mem "cursorSkipText" false) (mem "isCloseByte" false))))
-(DUse false (UseGroup ("support" "util") ((mem "joinWith" false) (mem "listLen" false) (mem "filterList" false) (mem "anyList" false) (mem "allList" false) (mem "startsWith" false) (mem "stringTrim" false))))
+(DUse false (UseGroup ("support" "util") ((mem "joinWith" false) (mem "listLen" false) (mem "filterList" false) (mem "anyList" false) (mem "allList" false) (mem "startsWith" false))))
+(DUse false (UseGroup ("string") ((mem "trimAscii" false))))
 (DUse false (UseGroup ("hash_map") ((mem "HashMap" false) (mem "new" false) (mem "setInPlace" false) (mem "has" false) (mem "findWithDefault" false) (mem "entries" false))))
 (DUse false (UseGroup ("list") ((mem "sortBy" false) (mem "reverse" false))))
 (DUse false (UseGroup ("path") ((mem "basename" false))))
@@ -1502,7 +1505,7 @@ localModOfKey key = match readQuery key
 (DTypeSig false "writeShard" (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyCon "String") (TyEffect ("IO") None (TyCon "Unit"))))))
 (DFunDef false "writeShard" ((PVar "dir") (PVar "sp") (PVar "text")) (EBlock (DoLet false false PWild (EApp (EVar "mkdirAll") (EVar "dir"))) (DoExpr (EMatch (EApp (EVar "makeStagingDir") (EVar "dir")) (arm (PCon "Err" PWild) () (ELit LUnit)) (arm (PCon "Ok" (PVar "tmp")) () (EBlock (DoLet false false PWild (EApp (EApp (EApp (EVar "stageAndRename") (EVar "tmp")) (EVar "sp")) (EVar "text"))) (DoLet false false PWild (EApp (EVar "removeDir") (EVar "tmp"))) (DoExpr (ELit LUnit))))))))
 (DTypeSig true "makeStagingDir" (TyFun (TyCon "String") (TyEffect ("IO") None (TyApp (TyApp (TyCon "Result") (TyCon "String")) (TyCon "String")))))
-(DFunDef false "makeStagingDir" ((PVar "dir")) (EMatch (EApp (EApp (EVar "runVerb") (ELit (LString "mktemp"))) (EListLit (ELit (LString "-d")) (EBinOp "++" (EBinOp "++" (ELit (LString "")) (EApp (EMethodRef "display") (EVar "dir"))) (ELit (LString "/.staging_XXXXXX"))))) (arm (PCon "Err" (PVar "e")) () (EApp (EVar "Err") (EVar "e"))) (arm (PCon "Ok" (PTuple (PLit (LInt 0)) (PVar "out") PWild)) () (EBlock (DoLet false false (PVar "made") (EApp (EVar "stringTrim") (EVar "out"))) (DoExpr (EIf (EBinOp "==" (EVar "made") (ELit (LString ""))) (EApp (EVar "Err") (ELit (LString "mktemp -d printed no path"))) (EApp (EVar "Ok") (EVar "made")))))) (arm (PCon "Ok" (PTuple (PVar "code") PWild (PVar "err"))) () (EApp (EVar "Err") (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "mktemp -d exited ")) (EApp (EMethodRef "display") (EApp (EVar "intToString") (EVar "code")))) (ELit (LString ": "))) (EApp (EMethodRef "display") (EVar "err"))) (ELit (LString "")))))))
+(DFunDef false "makeStagingDir" ((PVar "dir")) (EMatch (EApp (EApp (EVar "runVerb") (ELit (LString "mktemp"))) (EListLit (ELit (LString "-d")) (EBinOp "++" (EBinOp "++" (ELit (LString "")) (EApp (EMethodRef "display") (EVar "dir"))) (ELit (LString "/.staging_XXXXXX"))))) (arm (PCon "Err" (PVar "e")) () (EApp (EVar "Err") (EVar "e"))) (arm (PCon "Ok" (PTuple (PLit (LInt 0)) (PVar "out") PWild)) () (EBlock (DoLet false false (PVar "made") (EApp (EVar "trimAscii") (EVar "out"))) (DoExpr (EIf (EBinOp "==" (EVar "made") (ELit (LString ""))) (EApp (EVar "Err") (ELit (LString "mktemp -d printed no path"))) (EApp (EVar "Ok") (EVar "made")))))) (arm (PCon "Ok" (PTuple (PVar "code") PWild (PVar "err"))) () (EApp (EVar "Err") (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "mktemp -d exited ")) (EApp (EMethodRef "display") (EApp (EVar "intToString") (EVar "code")))) (ELit (LString ": "))) (EApp (EMethodRef "display") (EVar "err"))) (ELit (LString "")))))))
 (DTypeSig true "stageAndRename" (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyCon "String") (TyEffect ("IO") None (TyCon "Unit"))))))
 (DFunDef false "stageAndRename" ((PVar "tmp") (PVar "dest") (PVar "text")) (EBlock (DoLet false false (PVar "staged") (EBinOp "++" (EBinOp "++" (ELit (LString "")) (EApp (EMethodRef "display") (EVar "tmp"))) (ELit (LString "/shard.sx")))) (DoExpr (EMatch (EApp (EApp (EVar "writeFile") (EVar "staged")) (EVar "text")) (arm (PCon "Err" PWild) () (ELit LUnit)) (arm (PCon "Ok" PWild) () (EMatch (EApp (EApp (EVar "rename") (EVar "staged")) (EVar "dest")) (arm (PCon "Err" PWild) () (EBlock (DoLet false false PWild (EApp (EVar "removeFile") (EVar "staged"))) (DoExpr (ELit LUnit)))) (arm (PCon "Ok" PWild) () (ELit LUnit))))))))
 (DData Private "IndexScope" () ((variant "IndexScope" (ConNamed (field "ixsByName" (TyApp (TyApp (TyCon "HashMap") (TyCon "String")) (TyApp (TyCon "List") (TyCon "IndexRow")))) (field "ixsRows" (TyApp (TyCon "List") (TyCon "IndexRow"))) (field "ixsNames" (TyApp (TyCon "List") (TyCon "String"))) (field "ixsModules" (TyApp (TyCon "List") (TyCon "String"))) (field "ixsDigest" (TyCon "String"))))) ())

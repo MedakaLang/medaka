@@ -1,5 +1,5 @@
 # META
-source_lines=4727
+source_lines=4726
 stages=DESUGAR,MARK
 # SOURCE
 import support.diag_codes.{DiagCode(..), codeText}
@@ -70,7 +70,6 @@ import support.util.{
   contains,
   listLen,
   schemeLineName,
-  stringTrim,
   lookupAssoc,
 }
 import support.opcount.{setOpCounting, opSnap}
@@ -100,7 +99,7 @@ import types.target_profile.{
   selectedProfile,
 }
 import tools.target_check.{targetRefusal, ppTargetDiag, foldTargetDiags}
-import string.{toInt}
+import string.{toInt, trimAscii}
 -- S-cli-onto-args (#2355): the ONE argument parser.  Every verb's flag
 -- vocabulary below is an `ArgSpec` value, so its `(known: …)` roster, its
 -- rejection sentences and what it actually parses are three renderings of one
@@ -390,7 +389,7 @@ liveSourceFingerprint root =
     -- fail-open-by-design: any failure (no perl, no hash tool, spawn error)
     -- reports None, per the comment above ("the check silently skips").
     Ok (0, out, _) =>
-      let h = stringTrim out
+      let h = trimAscii out
       if h == "" then None else Some h
     _ => None
 
@@ -4740,7 +4739,7 @@ runMcpServerFromEnv _ =
 (DUse false (UseGroup ("tools" "interface_cmd") ((mem "interfaceHelpText" false) (mem "runInterfaceCmd" false))))
 (DUse false (UseGroup ("tools" "new_cmd") ((mem "newProject" false))))
 (DUse false (UseGroup ("driver" "build_cmd") ((mem "BuildTarget" true) (mem "ppBuildReport" false) (mem "runBuild" false) (mem "emitRtObj" false) (mem "emitPreludeObj" false) (mem "envOr" false) (mem "defaultMedakaRoot" false) (mem "readPreludeSources" false) (mem "loadPreludeInterface" false) (mem "PreludeInputs" true) (mem "SideFile" true) (mem "staleLine" false) (mem "shippedInputs" false) (mem "FileVerdict" false) (mem "checkPreludeElab" false) (mem "loadPreludeElab" false) (mem "preludeDeclsVerdict" false) (mem "reportStaleLine" false))))
-(DUse false (UseGroup ("support" "util") ((mem "reverseL" false) (mem "testFileSuffix" false) (mem "joinNl" false) (mem "joinWith" false) (mem "splitNl" false) (mem "startsWith" false) (mem "endsWith" false) (mem "filterList" false) (mem "contains" false) (mem "listLen" false) (mem "schemeLineName" false) (mem "stringTrim" false) (mem "lookupAssoc" false))))
+(DUse false (UseGroup ("support" "util") ((mem "reverseL" false) (mem "testFileSuffix" false) (mem "joinNl" false) (mem "joinWith" false) (mem "splitNl" false) (mem "startsWith" false) (mem "endsWith" false) (mem "filterList" false) (mem "contains" false) (mem "listLen" false) (mem "schemeLineName" false) (mem "lookupAssoc" false))))
 (DUse false (UseGroup ("support" "opcount") ((mem "setOpCounting" false) (mem "opSnap" false))))
 (DUse false (UseGroup ("support" "stage_count") ((mem "stageCountInit" false) (mem "stageDump" false) (mem "stageExit" false))))
 (DUse false (UseGroup ("support" "ordmap") ((mem "OrdMap" false) (mem "omEmpty" false) (mem "omHasKey" false) (mem "omFromNames" false))))
@@ -4750,7 +4749,7 @@ runMcpServerFromEnv _ =
 (DUse false (UseGroup ("driver" "profile_select") ((mem "manifestProfileOf" false) (mem "carryProjectProfile" false))))
 (DUse false (UseGroup ("types" "target_profile") ((mem "Backend" true) (mem "buildableNames" false) (mem "lookupProfile" false) (mem "profileBackend" false) (mem "runProfile" false) (mem "selectedProfile" false))))
 (DUse false (UseGroup ("tools" "target_check") ((mem "targetRefusal" false) (mem "ppTargetDiag" false) (mem "foldTargetDiags" false))))
-(DUse false (UseGroup ("string") ((mem "toInt" false))))
+(DUse false (UseGroup ("string") ((mem "toInt" false) (mem "trimAscii" false))))
 (DUse false (UseGroup ("args") ((mem "ArgSpec" false) (mem "Args" true) (mem "spec" false) (mem "switch" false) (mem "value" false) (mem "internal" false) (mem "parseArgs" false) (mem "flag" false) (mem "flagValue" false) (mem "lastValue" false) (mem "unknownFlagMessage" false) (mem "usageExitCode" false) (mem "withStrictDash" false))))
 (DUse false (UseGroup ("frontend" "ast") ((mem "letBindName" false) (mem "Decl" true) (mem "ExternDecl" true) (mem "Expr" true) (mem "Loc" true) (mem "LetBind" true))))
 (DUse false (UseGroup ("frontend" "parser") ((mem "parseWithPositions" false) (mem "parseResult" false))))
@@ -4791,7 +4790,7 @@ runMcpServerFromEnv _ =
 (DTypeSig false "printVersion" (TyFun (TyCon "Unit") (TyEffect ("IO") None (TyCon "Unit"))))
 (DFunDef false "printVersion" (PWild) (EApp (EVar "putStrLn") (EApp (EVar "medakaVersionString") (ELit LUnit))))
 (DTypeSig false "liveSourceFingerprint" (TyFun (TyCon "String") (TyEffect ("IO") None (TyApp (TyCon "Option") (TyCon "String")))))
-(DFunDef false "liveSourceFingerprint" ((PVar "root")) (EBlock (DoLet false false (PVar "script") (EApp (EVar "stringConcat") (EListLit (ELit (LString "command -v perl >/dev/null 2>&1 || exit 7; cd \"")) (EVar "root") (ELit (LString "\" && { find compiler -name '*.mdk' -not -name '*_test.mdk' -print;")) (ELit (LString " find stdlib -name '*.mdk' -not -name '*_test.mdk' -print; } | LC_ALL=C sort")) (ELit (LString " | perl -ne 'chomp; print \"$_\\n\"; open F,\"<\",$_ or next; local $/; my $c=<F>; print $c if defined $c; close F' 2>/dev/null")) (ELit (LString " | { if command -v sha256sum >/dev/null 2>&1; then sha256sum; elif command -v shasum >/dev/null 2>&1; then shasum -a 256; else cksum; fi; }")) (ELit (LString " | cut -d' ' -f1"))))) (DoExpr (EMatch (EApp (EApp (EVar "runCommand") (ELit (LString "sh"))) (EListLit (ELit (LString "-c")) (EVar "script"))) (arm (PCon "Ok" (PTuple (PLit (LInt 0)) (PVar "out") PWild)) () (EBlock (DoLet false false (PVar "h") (EApp (EVar "stringTrim") (EVar "out"))) (DoExpr (EIf (EBinOp "==" (EVar "h") (ELit (LString ""))) (EVar "None") (EApp (EVar "Some") (EVar "h")))))) (arm PWild () (EVar "None"))))))
+(DFunDef false "liveSourceFingerprint" ((PVar "root")) (EBlock (DoLet false false (PVar "script") (EApp (EVar "stringConcat") (EListLit (ELit (LString "command -v perl >/dev/null 2>&1 || exit 7; cd \"")) (EVar "root") (ELit (LString "\" && { find compiler -name '*.mdk' -not -name '*_test.mdk' -print;")) (ELit (LString " find stdlib -name '*.mdk' -not -name '*_test.mdk' -print; } | LC_ALL=C sort")) (ELit (LString " | perl -ne 'chomp; print \"$_\\n\"; open F,\"<\",$_ or next; local $/; my $c=<F>; print $c if defined $c; close F' 2>/dev/null")) (ELit (LString " | { if command -v sha256sum >/dev/null 2>&1; then sha256sum; elif command -v shasum >/dev/null 2>&1; then shasum -a 256; else cksum; fi; }")) (ELit (LString " | cut -d' ' -f1"))))) (DoExpr (EMatch (EApp (EApp (EVar "runCommand") (ELit (LString "sh"))) (EListLit (ELit (LString "-c")) (EVar "script"))) (arm (PCon "Ok" (PTuple (PLit (LInt 0)) (PVar "out") PWild)) () (EBlock (DoLet false false (PVar "h") (EApp (EVar "trimAscii") (EVar "out"))) (DoExpr (EIf (EBinOp "==" (EVar "h") (ELit (LString ""))) (EVar "None") (EApp (EVar "Some") (EVar "h")))))) (arm PWild () (EVar "None"))))))
 (DTypeSig false "sourceStalenessVerdict" (TyFun (TyCon "Unit") (TyEffect ("IO") None (TyApp (TyCon "Option") (TyCon "String")))))
 (DFunDef false "sourceStalenessVerdict" (PWild) (EBlock (DoLet false false (PVar "baked") (EApp (EVar "buildFingerprint") (ELit LUnit))) (DoExpr (EIf (EBinOp "==" (EVar "baked") (ELit (LString ""))) (EVar "None") (EBlock (DoLet false false (PVar "root") (EApp (EApp (EVar "envOr") (ELit (LString "MEDAKA_ROOT"))) (EVar "defaultMedakaRoot"))) (DoLet false false (PVar "compilerDir") (EApp (EApp (EVar "joinPath") (EVar "root")) (ELit (LString "compiler")))) (DoExpr (EIf (EApp (EVar "not") (EApp (EVar "fileExists") (EVar "compilerDir"))) (EVar "None") (EMatch (EApp (EVar "liveSourceFingerprint") (EVar "root")) (arm (PCon "None") () (EVar "None")) (arm (PCon "Some" (PVar "live")) () (EIf (EBinOp "==" (EVar "live") (EVar "baked")) (EVar "None") (EApp (EVar "Some") (EVar "compilerDir"))))))))))))
 (DTypeSig false "checkSourceStaleness" (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyEffect ("IO") None (TyCon "Unit"))))
@@ -5302,7 +5301,7 @@ runMcpServerFromEnv _ =
 (DUse false (UseGroup ("tools" "interface_cmd") ((mem "interfaceHelpText" false) (mem "runInterfaceCmd" false))))
 (DUse false (UseGroup ("tools" "new_cmd") ((mem "newProject" false))))
 (DUse false (UseGroup ("driver" "build_cmd") ((mem "BuildTarget" true) (mem "ppBuildReport" false) (mem "runBuild" false) (mem "emitRtObj" false) (mem "emitPreludeObj" false) (mem "envOr" false) (mem "defaultMedakaRoot" false) (mem "readPreludeSources" false) (mem "loadPreludeInterface" false) (mem "PreludeInputs" true) (mem "SideFile" true) (mem "staleLine" false) (mem "shippedInputs" false) (mem "FileVerdict" false) (mem "checkPreludeElab" false) (mem "loadPreludeElab" false) (mem "preludeDeclsVerdict" false) (mem "reportStaleLine" false))))
-(DUse false (UseGroup ("support" "util") ((mem "reverseL" false) (mem "testFileSuffix" false) (mem "joinNl" false) (mem "joinWith" false) (mem "splitNl" false) (mem "startsWith" false) (mem "endsWith" false) (mem "filterList" false) (mem "contains" false) (mem "listLen" false) (mem "schemeLineName" false) (mem "stringTrim" false) (mem "lookupAssoc" false))))
+(DUse false (UseGroup ("support" "util") ((mem "reverseL" false) (mem "testFileSuffix" false) (mem "joinNl" false) (mem "joinWith" false) (mem "splitNl" false) (mem "startsWith" false) (mem "endsWith" false) (mem "filterList" false) (mem "contains" false) (mem "listLen" false) (mem "schemeLineName" false) (mem "lookupAssoc" false))))
 (DUse false (UseGroup ("support" "opcount") ((mem "setOpCounting" false) (mem "opSnap" false))))
 (DUse false (UseGroup ("support" "stage_count") ((mem "stageCountInit" false) (mem "stageDump" false) (mem "stageExit" false))))
 (DUse false (UseGroup ("support" "ordmap") ((mem "OrdMap" false) (mem "omEmpty" false) (mem "omHasKey" false) (mem "omFromNames" false))))
@@ -5312,7 +5311,7 @@ runMcpServerFromEnv _ =
 (DUse false (UseGroup ("driver" "profile_select") ((mem "manifestProfileOf" false) (mem "carryProjectProfile" false))))
 (DUse false (UseGroup ("types" "target_profile") ((mem "Backend" true) (mem "buildableNames" false) (mem "lookupProfile" false) (mem "profileBackend" false) (mem "runProfile" false) (mem "selectedProfile" false))))
 (DUse false (UseGroup ("tools" "target_check") ((mem "targetRefusal" false) (mem "ppTargetDiag" false) (mem "foldTargetDiags" false))))
-(DUse false (UseGroup ("string") ((mem "toInt" false))))
+(DUse false (UseGroup ("string") ((mem "toInt" false) (mem "trimAscii" false))))
 (DUse false (UseGroup ("args") ((mem "ArgSpec" false) (mem "Args" true) (mem "spec" false) (mem "switch" false) (mem "value" false) (mem "internal" false) (mem "parseArgs" false) (mem "flag" false) (mem "flagValue" false) (mem "lastValue" false) (mem "unknownFlagMessage" false) (mem "usageExitCode" false) (mem "withStrictDash" false))))
 (DUse false (UseGroup ("frontend" "ast") ((mem "letBindName" false) (mem "Decl" true) (mem "ExternDecl" true) (mem "Expr" true) (mem "Loc" true) (mem "LetBind" true))))
 (DUse false (UseGroup ("frontend" "parser") ((mem "parseWithPositions" false) (mem "parseResult" false))))
@@ -5353,7 +5352,7 @@ runMcpServerFromEnv _ =
 (DTypeSig false "printVersion" (TyFun (TyCon "Unit") (TyEffect ("IO") None (TyCon "Unit"))))
 (DFunDef false "printVersion" (PWild) (EApp (EVar "putStrLn") (EApp (EVar "medakaVersionString") (ELit LUnit))))
 (DTypeSig false "liveSourceFingerprint" (TyFun (TyCon "String") (TyEffect ("IO") None (TyApp (TyCon "Option") (TyCon "String")))))
-(DFunDef false "liveSourceFingerprint" ((PVar "root")) (EBlock (DoLet false false (PVar "script") (EApp (EVar "stringConcat") (EListLit (ELit (LString "command -v perl >/dev/null 2>&1 || exit 7; cd \"")) (EVar "root") (ELit (LString "\" && { find compiler -name '*.mdk' -not -name '*_test.mdk' -print;")) (ELit (LString " find stdlib -name '*.mdk' -not -name '*_test.mdk' -print; } | LC_ALL=C sort")) (ELit (LString " | perl -ne 'chomp; print \"$_\\n\"; open F,\"<\",$_ or next; local $/; my $c=<F>; print $c if defined $c; close F' 2>/dev/null")) (ELit (LString " | { if command -v sha256sum >/dev/null 2>&1; then sha256sum; elif command -v shasum >/dev/null 2>&1; then shasum -a 256; else cksum; fi; }")) (ELit (LString " | cut -d' ' -f1"))))) (DoExpr (EMatch (EApp (EApp (EVar "runCommand") (ELit (LString "sh"))) (EListLit (ELit (LString "-c")) (EVar "script"))) (arm (PCon "Ok" (PTuple (PLit (LInt 0)) (PVar "out") PWild)) () (EBlock (DoLet false false (PVar "h") (EApp (EVar "stringTrim") (EVar "out"))) (DoExpr (EIf (EBinOp "==" (EVar "h") (ELit (LString ""))) (EVar "None") (EApp (EVar "Some") (EVar "h")))))) (arm PWild () (EVar "None"))))))
+(DFunDef false "liveSourceFingerprint" ((PVar "root")) (EBlock (DoLet false false (PVar "script") (EApp (EVar "stringConcat") (EListLit (ELit (LString "command -v perl >/dev/null 2>&1 || exit 7; cd \"")) (EVar "root") (ELit (LString "\" && { find compiler -name '*.mdk' -not -name '*_test.mdk' -print;")) (ELit (LString " find stdlib -name '*.mdk' -not -name '*_test.mdk' -print; } | LC_ALL=C sort")) (ELit (LString " | perl -ne 'chomp; print \"$_\\n\"; open F,\"<\",$_ or next; local $/; my $c=<F>; print $c if defined $c; close F' 2>/dev/null")) (ELit (LString " | { if command -v sha256sum >/dev/null 2>&1; then sha256sum; elif command -v shasum >/dev/null 2>&1; then shasum -a 256; else cksum; fi; }")) (ELit (LString " | cut -d' ' -f1"))))) (DoExpr (EMatch (EApp (EApp (EVar "runCommand") (ELit (LString "sh"))) (EListLit (ELit (LString "-c")) (EVar "script"))) (arm (PCon "Ok" (PTuple (PLit (LInt 0)) (PVar "out") PWild)) () (EBlock (DoLet false false (PVar "h") (EApp (EVar "trimAscii") (EVar "out"))) (DoExpr (EIf (EBinOp "==" (EVar "h") (ELit (LString ""))) (EVar "None") (EApp (EVar "Some") (EVar "h")))))) (arm PWild () (EVar "None"))))))
 (DTypeSig false "sourceStalenessVerdict" (TyFun (TyCon "Unit") (TyEffect ("IO") None (TyApp (TyCon "Option") (TyCon "String")))))
 (DFunDef false "sourceStalenessVerdict" (PWild) (EBlock (DoLet false false (PVar "baked") (EApp (EVar "buildFingerprint") (ELit LUnit))) (DoExpr (EIf (EBinOp "==" (EVar "baked") (ELit (LString ""))) (EVar "None") (EBlock (DoLet false false (PVar "root") (EApp (EApp (EVar "envOr") (ELit (LString "MEDAKA_ROOT"))) (EVar "defaultMedakaRoot"))) (DoLet false false (PVar "compilerDir") (EApp (EApp (EVar "joinPath") (EVar "root")) (ELit (LString "compiler")))) (DoExpr (EIf (EApp (EVar "not") (EApp (EVar "fileExists") (EVar "compilerDir"))) (EVar "None") (EMatch (EApp (EVar "liveSourceFingerprint") (EVar "root")) (arm (PCon "None") () (EVar "None")) (arm (PCon "Some" (PVar "live")) () (EIf (EBinOp "==" (EVar "live") (EVar "baked")) (EVar "None") (EApp (EVar "Some") (EVar "compilerDir"))))))))))))
 (DTypeSig false "checkSourceStaleness" (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyEffect ("IO") None (TyCon "Unit"))))

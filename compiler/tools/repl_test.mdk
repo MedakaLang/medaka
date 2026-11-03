@@ -1,9 +1,9 @@
-import test.{expectAll, expectEqual}
+import test.{expectAll, expectEqual, expectTrue}
 import list.{sort}
 import frontend.parser.{parse}
 import frontend.desugar.{desugar}
 import types.typecheck.{checkOneScheme, defaultDriveInputs}
-import tools.repl.{preludeBinderNames}
+import tools.repl.{preludeBinderNames, endsWithKeyword}
 
 sortedUnique : List String -> List String
 sortedUnique xs = dedupe (sort xs)
@@ -30,3 +30,9 @@ test "prelude binder names equal the names a whole-graph check lists" = match (
         (sortedUnique (preludeBinderNames cd)),
     ]
   _ => expectEqual "readable" "unreadable"
+
+test "a trailing vertical tab or form feed does not hide a block-opening keyword" = expectAll
+  [
+    expectTrue (endsWithKeyword "x = do\u{0b}" "do"),
+    expectTrue (endsWithKeyword "x = do\u{0c}" "do"),
+  ]

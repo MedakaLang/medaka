@@ -7,9 +7,9 @@ stages=DESUGAR,MARK
 import frontend.ast.{Loc(..), Decl(..)}
 import frontend.parser.{Positions(..)}
 import driver.diagnostics.{Severity(..)}
-import support.util.{filterList, splitNl, startsWith, stringTrim}
+import support.util.{filterList, splitNl, startsWith}
 import hash_map.{HashMap, new, setInPlace, has, findWithDefault}
-import string.{drop as strDrop}
+import string.{drop as strDrop, trimAscii}
 import tools.printer.{declToString}
 import support.char.{isAlnum, isLower, isUpper}
 import frontend.lexer.{Comment, commentText}
@@ -313,15 +313,15 @@ blockInner t =
 -- an inner block line is a doctest input iff it trims to `> …`.
 blockDocLineIdents : String -> List String
 blockDocLineIdents line =
-  let tr = stringTrim line
+  let tr = trimAscii line
   if startsWith ">" tr then identTokens (strDrop 1 tr) else []
 # DESUGAR
 (DUse false (UseGroup ("frontend" "ast") ((mem "Loc" true) (mem "Decl" true))))
 (DUse false (UseGroup ("frontend" "parser") ((mem "Positions" true))))
 (DUse false (UseGroup ("driver" "diagnostics") ((mem "Severity" true))))
-(DUse false (UseGroup ("support" "util") ((mem "filterList" false) (mem "splitNl" false) (mem "startsWith" false) (mem "stringTrim" false))))
+(DUse false (UseGroup ("support" "util") ((mem "filterList" false) (mem "splitNl" false) (mem "startsWith" false))))
 (DUse false (UseGroup ("hash_map") ((mem "HashMap" false) (mem "new" false) (mem "setInPlace" false) (mem "has" false) (mem "findWithDefault" false))))
-(DUse false (UseGroup ("string") ((mem "drop" false "strDrop"))))
+(DUse false (UseGroup ("string") ((mem "drop" false "strDrop") (mem "trimAscii" false))))
 (DUse false (UseGroup ("tools" "printer") ((mem "declToString" false))))
 (DUse false (UseGroup ("support" "char") ((mem "isAlnum" false) (mem "isLower" false) (mem "isUpper" false))))
 (DUse false (UseGroup ("frontend" "lexer") ((mem "Comment" false) (mem "commentText" false))))
@@ -403,14 +403,14 @@ blockDocLineIdents line =
 (DTypeSig false "blockInner" (TyFun (TyCon "String") (TyCon "String")))
 (DFunDef false "blockInner" ((PVar "t")) (EBlock (DoLet false false (PVar "n") (EApp (EVar "stringLength") (EVar "t"))) (DoExpr (EIf (EBinOp ">=" (EVar "n") (ELit (LInt 4))) (EApp (EApp (EApp (EVar "stringSlice") (ELit (LInt 2))) (EBinOp "-" (EVar "n") (ELit (LInt 2)))) (EVar "t")) (ELit (LString ""))))))
 (DTypeSig false "blockDocLineIdents" (TyFun (TyCon "String") (TyApp (TyCon "List") (TyCon "String"))))
-(DFunDef false "blockDocLineIdents" ((PVar "line")) (EBlock (DoLet false false (PVar "tr") (EApp (EVar "stringTrim") (EVar "line"))) (DoExpr (EIf (EApp (EApp (EVar "startsWith") (ELit (LString ">"))) (EVar "tr")) (EApp (EVar "identTokens") (EApp (EApp (EVar "strDrop") (ELit (LInt 1))) (EVar "tr"))) (EListLit)))))
+(DFunDef false "blockDocLineIdents" ((PVar "line")) (EBlock (DoLet false false (PVar "tr") (EApp (EVar "trimAscii") (EVar "line"))) (DoExpr (EIf (EApp (EApp (EVar "startsWith") (ELit (LString ">"))) (EVar "tr")) (EApp (EVar "identTokens") (EApp (EApp (EVar "strDrop") (ELit (LInt 1))) (EVar "tr"))) (EListLit)))))
 # MARK
 (DUse false (UseGroup ("frontend" "ast") ((mem "Loc" true) (mem "Decl" true))))
 (DUse false (UseGroup ("frontend" "parser") ((mem "Positions" true))))
 (DUse false (UseGroup ("driver" "diagnostics") ((mem "Severity" true))))
-(DUse false (UseGroup ("support" "util") ((mem "filterList" false) (mem "splitNl" false) (mem "startsWith" false) (mem "stringTrim" false))))
+(DUse false (UseGroup ("support" "util") ((mem "filterList" false) (mem "splitNl" false) (mem "startsWith" false))))
 (DUse false (UseGroup ("hash_map") ((mem "HashMap" false) (mem "new" false) (mem "setInPlace" false) (mem "has" false) (mem "findWithDefault" false))))
-(DUse false (UseGroup ("string") ((mem "drop" false "strDrop"))))
+(DUse false (UseGroup ("string") ((mem "drop" false "strDrop") (mem "trimAscii" false))))
 (DUse false (UseGroup ("tools" "printer") ((mem "declToString" false))))
 (DUse false (UseGroup ("support" "char") ((mem "isAlnum" false) (mem "isLower" false) (mem "isUpper" false))))
 (DUse false (UseGroup ("frontend" "lexer") ((mem "Comment" false) (mem "commentText" false))))
@@ -492,4 +492,4 @@ blockDocLineIdents line =
 (DTypeSig false "blockInner" (TyFun (TyCon "String") (TyCon "String")))
 (DFunDef false "blockInner" ((PVar "t")) (EBlock (DoLet false false (PVar "n") (EApp (EVar "stringLength") (EVar "t"))) (DoExpr (EIf (EBinOp ">=" (EVar "n") (ELit (LInt 4))) (EApp (EApp (EApp (EVar "stringSlice") (ELit (LInt 2))) (EBinOp "-" (EVar "n") (ELit (LInt 2)))) (EVar "t")) (ELit (LString ""))))))
 (DTypeSig false "blockDocLineIdents" (TyFun (TyCon "String") (TyApp (TyCon "List") (TyCon "String"))))
-(DFunDef false "blockDocLineIdents" ((PVar "line")) (EBlock (DoLet false false (PVar "tr") (EApp (EVar "stringTrim") (EVar "line"))) (DoExpr (EIf (EApp (EApp (EVar "startsWith") (ELit (LString ">"))) (EVar "tr")) (EApp (EVar "identTokens") (EApp (EApp (EVar "strDrop") (ELit (LInt 1))) (EVar "tr"))) (EListLit)))))
+(DFunDef false "blockDocLineIdents" ((PVar "line")) (EBlock (DoLet false false (PVar "tr") (EApp (EVar "trimAscii") (EVar "line"))) (DoExpr (EIf (EApp (EApp (EVar "startsWith") (ELit (LString ">"))) (EVar "tr")) (EApp (EVar "identTokens") (EApp (EApp (EVar "strDrop") (ELit (LInt 1))) (EVar "tr"))) (EListLit)))))

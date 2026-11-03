@@ -258,7 +258,6 @@ import support.util.{
   joinWith,
   splitNl,
   startsWith,
-  stringTrim,
   reverseL,
   anyList,
 }
@@ -269,7 +268,7 @@ import args.{
 }
 import json.{Json(..), jObject, jArray, stringify}
 import tools.lint.{splitLintNames}
-import string.{toInt, replaceAll}
+import string.{toInt, replaceAll, trimAscii}
 import list.{take}
 import test_process.{testJobs}
 import support.timer.{perfEnabled, now, emitPhase}
@@ -4666,7 +4665,7 @@ parseTestEngines a = match (flagValue "--engines" a, flag "--native" a)
 -- known set, not a silent drop.
 parseEngineList : String -> Result String (List Engine)
 parseEngineList spec =
-  let names = filterList (/= "") (map stringTrim (splitLintNames spec))
+  let names = filterList (/= "") (map trimAscii (splitLintNames spec))
   match names
     [] => Err "--engines requires at least one of: eval, native"
     _ => parseEngineNames names

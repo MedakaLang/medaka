@@ -1,5 +1,5 @@
 # META
-source_lines=5286
+source_lines=5285
 stages=DESUGAR,MARK
 # SOURCE
 -- compiler/tools/test_cmd.mdk — `medaka test` logic (doctests + property tests),
@@ -262,7 +262,6 @@ import support.util.{
   joinWith,
   splitNl,
   startsWith,
-  stringTrim,
   reverseL,
   anyList,
 }
@@ -273,7 +272,7 @@ import args.{
 }
 import json.{Json(..), jObject, jArray, stringify}
 import tools.lint.{splitLintNames}
-import string.{toInt, replaceAll}
+import string.{toInt, replaceAll, trimAscii}
 import list.{take}
 import test_process.{testJobs}
 import support.timer.{perfEnabled, now, emitPhase}
@@ -4670,7 +4669,7 @@ parseTestEngines a = match (flagValue "--engines" a, flag "--native" a)
 -- known set, not a silent drop.
 parseEngineList : String -> Result String (List Engine)
 parseEngineList spec =
-  let names = filterList (/= "") (map stringTrim (splitLintNames spec))
+  let names = filterList (/= "") (map trimAscii (splitLintNames spec))
   match names
     [] => Err "--engines requires at least one of: eval, native"
     _ => parseEngineNames names
@@ -5324,13 +5323,13 @@ testFilesReport _ _ acc = acc
 (DUse false (UseGroup ("tools" "test_runner") ((mem "collectTests" false) (mem "exprLine" false) (mem "runOneTestEnv" false) (mem "hasTests" false) (mem "uncapableExternsEnv" false))))
 (DUse false (UseGroup ("driver" "diagnostics") ((mem "frontEnd" false) (mem "FrontInput" true) (mem "FrontDriveIn" true) (mem "FrontOutput" true) (mem "FrontPolicy" true) (mem "FrontProgram" true) (mem "ChainSteps" true) (mem "noStdlibExports" false) (mem "siblingPairsOf" false) (mem "chainKeyOf" false) (mem "graphIdOf" false) (mem "GraphId" true) (mem "desugaredModPairs" false) (mem "mkDiag" false) (mem "Severity" true) (mem "ppDiagCliSrc" false) (mem "ppDiagCliLines" false) (mem "srcLinesArr" false) (mem "parseErrDiag" false) (mem "Diag" false) (mem "diagIsError" false))))
 (DUse true (UseGroup ("support" "util") ((mem "rootsOrDefault" false))))
-(DUse false (UseGroup ("support" "util") ((mem "listLen" false) (mem "testFileSuffix" false) (mem "joinNl" false) (mem "isNonEmptyL" false) (mem "filterList" false) (mem "endsWith" false) (mem "splitOnChar" false) (mem "contains" false) (mem "joinWith" false) (mem "splitNl" false) (mem "startsWith" false) (mem "stringTrim" false) (mem "reverseL" false) (mem "anyList" false))))
+(DUse false (UseGroup ("support" "util") ((mem "listLen" false) (mem "testFileSuffix" false) (mem "joinNl" false) (mem "isNonEmptyL" false) (mem "filterList" false) (mem "endsWith" false) (mem "splitOnChar" false) (mem "contains" false) (mem "joinWith" false) (mem "splitNl" false) (mem "startsWith" false) (mem "reverseL" false) (mem "anyList" false))))
 (DUse false (UseGroup ("support" "path") ((mem "dirOf" false) (mem "baseOf" false) (mem "joinPath" false))))
 (DUse false (UseGroup ("support" "stage_count") ((mem "forwardStageLines" false) (mem "stageExit" false))))
 (DUse false (UseGroup ("args") ((mem "ArgSpec" false) (mem "Args" false) (mem "spec" false) (mem "switch" false) (mem "value" false) (mem "internal" false) (mem "flag" false) (mem "flagValue" false) (mem "withStrictDash" false))))
 (DUse false (UseGroup ("json") ((mem "Json" true) (mem "jObject" false) (mem "jArray" false) (mem "stringify" false))))
 (DUse false (UseGroup ("tools" "lint") ((mem "splitLintNames" false))))
-(DUse false (UseGroup ("string") ((mem "toInt" false) (mem "replaceAll" false))))
+(DUse false (UseGroup ("string") ((mem "toInt" false) (mem "replaceAll" false) (mem "trimAscii" false))))
 (DUse false (UseGroup ("list") ((mem "take" false))))
 (DUse false (UseGroup ("test_process") ((mem "testJobs" false))))
 (DUse false (UseGroup ("support" "timer") ((mem "perfEnabled" false) (mem "now" false) (mem "emitPhase" false))))
@@ -5869,7 +5868,7 @@ testFilesReport _ _ acc = acc
 (DTypeSig true "parseTestEngines" (TyFun (TyCon "Args") (TyApp (TyApp (TyCon "Result") (TyCon "String")) (TyApp (TyCon "List") (TyCon "Engine")))))
 (DFunDef false "parseTestEngines" ((PVar "a")) (EMatch (ETuple (EApp (EApp (EVar "flagValue") (ELit (LString "--engines"))) (EVar "a")) (EApp (EApp (EVar "flag") (ELit (LString "--native"))) (EVar "a"))) (arm (PTuple (PCon "Some" PWild) (PCon "True")) () (EApp (EVar "Err") (ELit (LString "--native and --engines are mutually exclusive; --native is shorthand for --engines native")))) (arm (PTuple (PCon "Some" (PVar "spec")) (PCon "False")) () (EApp (EVar "parseEngineList") (EVar "spec"))) (arm (PTuple (PCon "None") (PCon "True")) () (EApp (EVar "Ok") (EListLit (EVar "EngNative")))) (arm (PTuple (PCon "None") (PCon "False")) () (EApp (EVar "Ok") (EListLit (EVar "EngNative"))))))
 (DTypeSig false "parseEngineList" (TyFun (TyCon "String") (TyApp (TyApp (TyCon "Result") (TyCon "String")) (TyApp (TyCon "List") (TyCon "Engine")))))
-(DFunDef false "parseEngineList" ((PVar "spec")) (EBlock (DoLet false false (PVar "names") (EApp (EApp (EVar "filterList") (ELam ((PVar "_s")) (EBinOp "/=" (EVar "_s") (ELit (LString ""))))) (EApp (EApp (EVar "map") (EVar "stringTrim")) (EApp (EVar "splitLintNames") (EVar "spec"))))) (DoExpr (EMatch (EVar "names") (arm (PList) () (EApp (EVar "Err") (ELit (LString "--engines requires at least one of: eval, native")))) (arm PWild () (EApp (EVar "parseEngineNames") (EVar "names")))))))
+(DFunDef false "parseEngineList" ((PVar "spec")) (EBlock (DoLet false false (PVar "names") (EApp (EApp (EVar "filterList") (ELam ((PVar "_s")) (EBinOp "/=" (EVar "_s") (ELit (LString ""))))) (EApp (EApp (EVar "map") (EVar "trimAscii")) (EApp (EVar "splitLintNames") (EVar "spec"))))) (DoExpr (EMatch (EVar "names") (arm (PList) () (EApp (EVar "Err") (ELit (LString "--engines requires at least one of: eval, native")))) (arm PWild () (EApp (EVar "parseEngineNames") (EVar "names")))))))
 (DTypeSig false "parseEngineNames" (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyApp (TyApp (TyCon "Result") (TyCon "String")) (TyApp (TyCon "List") (TyCon "Engine")))))
 (DFunDef false "parseEngineNames" ((PList)) (EApp (EVar "Ok") (EListLit)))
 (DFunDef false "parseEngineNames" ((PCons (PVar "n") (PVar "rest"))) (EMatch (EApp (EVar "engineOfName") (EVar "n")) (arm (PCon "None") () (EApp (EVar "Err") (EBinOp "++" (EBinOp "++" (ELit (LString "unknown engine `")) (EApp (EVar "display") (EVar "n"))) (ELit (LString "` (known: eval, native)"))))) (arm (PCon "Some" (PVar "e")) () (EApp (EApp (EVar "map") (ELam ((PVar "_s")) (EBinOp "::" (EVar "e") (EVar "_s")))) (EApp (EVar "parseEngineNames") (EVar "rest"))))))
@@ -6040,13 +6039,13 @@ testFilesReport _ _ acc = acc
 (DUse false (UseGroup ("tools" "test_runner") ((mem "collectTests" false) (mem "exprLine" false) (mem "runOneTestEnv" false) (mem "hasTests" false) (mem "uncapableExternsEnv" false))))
 (DUse false (UseGroup ("driver" "diagnostics") ((mem "frontEnd" false) (mem "FrontInput" true) (mem "FrontDriveIn" true) (mem "FrontOutput" true) (mem "FrontPolicy" true) (mem "FrontProgram" true) (mem "ChainSteps" true) (mem "noStdlibExports" false) (mem "siblingPairsOf" false) (mem "chainKeyOf" false) (mem "graphIdOf" false) (mem "GraphId" true) (mem "desugaredModPairs" false) (mem "mkDiag" false) (mem "Severity" true) (mem "ppDiagCliSrc" false) (mem "ppDiagCliLines" false) (mem "srcLinesArr" false) (mem "parseErrDiag" false) (mem "Diag" false) (mem "diagIsError" false))))
 (DUse true (UseGroup ("support" "util") ((mem "rootsOrDefault" false))))
-(DUse false (UseGroup ("support" "util") ((mem "listLen" false) (mem "testFileSuffix" false) (mem "joinNl" false) (mem "isNonEmptyL" false) (mem "filterList" false) (mem "endsWith" false) (mem "splitOnChar" false) (mem "contains" false) (mem "joinWith" false) (mem "splitNl" false) (mem "startsWith" false) (mem "stringTrim" false) (mem "reverseL" false) (mem "anyList" false))))
+(DUse false (UseGroup ("support" "util") ((mem "listLen" false) (mem "testFileSuffix" false) (mem "joinNl" false) (mem "isNonEmptyL" false) (mem "filterList" false) (mem "endsWith" false) (mem "splitOnChar" false) (mem "contains" false) (mem "joinWith" false) (mem "splitNl" false) (mem "startsWith" false) (mem "reverseL" false) (mem "anyList" false))))
 (DUse false (UseGroup ("support" "path") ((mem "dirOf" false) (mem "baseOf" false) (mem "joinPath" false))))
 (DUse false (UseGroup ("support" "stage_count") ((mem "forwardStageLines" false) (mem "stageExit" false))))
 (DUse false (UseGroup ("args") ((mem "ArgSpec" false) (mem "Args" false) (mem "spec" false) (mem "switch" false) (mem "value" false) (mem "internal" false) (mem "flag" false) (mem "flagValue" false) (mem "withStrictDash" false))))
 (DUse false (UseGroup ("json") ((mem "Json" true) (mem "jObject" false) (mem "jArray" false) (mem "stringify" false))))
 (DUse false (UseGroup ("tools" "lint") ((mem "splitLintNames" false))))
-(DUse false (UseGroup ("string") ((mem "toInt" false) (mem "replaceAll" false))))
+(DUse false (UseGroup ("string") ((mem "toInt" false) (mem "replaceAll" false) (mem "trimAscii" false))))
 (DUse false (UseGroup ("list") ((mem "take" false))))
 (DUse false (UseGroup ("test_process") ((mem "testJobs" false))))
 (DUse false (UseGroup ("support" "timer") ((mem "perfEnabled" false) (mem "now" false) (mem "emitPhase" false))))
@@ -6585,7 +6584,7 @@ testFilesReport _ _ acc = acc
 (DTypeSig true "parseTestEngines" (TyFun (TyCon "Args") (TyApp (TyApp (TyCon "Result") (TyCon "String")) (TyApp (TyCon "List") (TyCon "Engine")))))
 (DFunDef false "parseTestEngines" ((PVar "a")) (EMatch (ETuple (EApp (EApp (EVar "flagValue") (ELit (LString "--engines"))) (EVar "a")) (EApp (EApp (EVar "flag") (ELit (LString "--native"))) (EVar "a"))) (arm (PTuple (PCon "Some" PWild) (PCon "True")) () (EApp (EVar "Err") (ELit (LString "--native and --engines are mutually exclusive; --native is shorthand for --engines native")))) (arm (PTuple (PCon "Some" (PVar "spec")) (PCon "False")) () (EApp (EVar "parseEngineList") (EVar "spec"))) (arm (PTuple (PCon "None") (PCon "True")) () (EApp (EVar "Ok") (EListLit (EVar "EngNative")))) (arm (PTuple (PCon "None") (PCon "False")) () (EApp (EVar "Ok") (EListLit (EVar "EngNative"))))))
 (DTypeSig false "parseEngineList" (TyFun (TyCon "String") (TyApp (TyApp (TyCon "Result") (TyCon "String")) (TyApp (TyCon "List") (TyCon "Engine")))))
-(DFunDef false "parseEngineList" ((PVar "spec")) (EBlock (DoLet false false (PVar "names") (EApp (EApp (EVar "filterList") (ELam ((PVar "_s")) (EBinOp "/=" (EVar "_s") (ELit (LString ""))))) (EApp (EApp (EMethodRef "map") (EVar "stringTrim")) (EApp (EVar "splitLintNames") (EVar "spec"))))) (DoExpr (EMatch (EVar "names") (arm (PList) () (EApp (EVar "Err") (ELit (LString "--engines requires at least one of: eval, native")))) (arm PWild () (EApp (EVar "parseEngineNames") (EVar "names")))))))
+(DFunDef false "parseEngineList" ((PVar "spec")) (EBlock (DoLet false false (PVar "names") (EApp (EApp (EVar "filterList") (ELam ((PVar "_s")) (EBinOp "/=" (EVar "_s") (ELit (LString ""))))) (EApp (EApp (EMethodRef "map") (EVar "trimAscii")) (EApp (EVar "splitLintNames") (EVar "spec"))))) (DoExpr (EMatch (EVar "names") (arm (PList) () (EApp (EVar "Err") (ELit (LString "--engines requires at least one of: eval, native")))) (arm PWild () (EApp (EVar "parseEngineNames") (EVar "names")))))))
 (DTypeSig false "parseEngineNames" (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyApp (TyApp (TyCon "Result") (TyCon "String")) (TyApp (TyCon "List") (TyCon "Engine")))))
 (DFunDef false "parseEngineNames" ((PList)) (EApp (EVar "Ok") (EListLit)))
 (DFunDef false "parseEngineNames" ((PCons (PVar "n") (PVar "rest"))) (EMatch (EApp (EVar "engineOfName") (EVar "n")) (arm (PCon "None") () (EApp (EVar "Err") (EBinOp "++" (EBinOp "++" (ELit (LString "unknown engine `")) (EApp (EMethodRef "display") (EVar "n"))) (ELit (LString "` (known: eval, native)"))))) (arm (PCon "Some" (PVar "e")) () (EApp (EApp (EMethodRef "map") (ELam ((PVar "_s")) (EBinOp "::" (EVar "e") (EVar "_s")))) (EApp (EVar "parseEngineNames") (EVar "rest"))))))

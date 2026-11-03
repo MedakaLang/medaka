@@ -1,5 +1,5 @@
 # META
-source_lines=522
+source_lines=520
 stages=DESUGAR,MARK
 # SOURCE
 -- Self-hosted doctest extraction + running.
@@ -26,12 +26,10 @@ import frontend.lexer.{Comment, commentLine, commentText}
 import frontend.ast.{Decl(..)}
 import frontend.parser.{parseLocatedResult, parseErrorMessage}
 import frontend.desugar.{desugar, moduleAliases, qualifyAliasRefsWith}
-import support.util.{
-  listLen, reverseL, joinNl, startsWith, stringTrim, splitNl, isEmptyL
-}
+import support.util.{listLen, reverseL, joinNl, startsWith, splitNl, isEmptyL}
 import json.{Json(..)}
 import regex.{Regex, mustCompile, isMatch, find}
-import string.{repeat}
+import string.{repeat, trimAscii}
 
 -- ── Data ──────────────────────────────────────────────────────────────────
 
@@ -147,7 +145,7 @@ substr3 : Int -> Int -> String -> String
 substr3 a b s = stringSlice a b s
 
 -- startsWith → support/util.mdk (imported above).
--- trim → stringTrim (support/util.mdk, imported above).
+-- trim → string.trimAscii (imported above).
 
 -- splitNl → support/util.mdk (imported above; #242 dedup of the splitNl cluster).
 
@@ -218,7 +216,7 @@ expandBlock c =
 expandLines : Int -> Int -> List String -> List (Int, String)
 expandLines _ _ [] = []
 expandLines baseLine i (line :: rest) =
-  let trimmed = stringTrim line
+  let trimmed = trimAscii line
   let text = if trimmed == "" then "--" else "-- " ++ trimmed
   (baseLine + i, text) :: expandLines baseLine (i + 1) rest
 
@@ -529,10 +527,10 @@ isUse _ = False
 (DUse false (UseGroup ("frontend" "ast") ((mem "Decl" true))))
 (DUse false (UseGroup ("frontend" "parser") ((mem "parseLocatedResult" false) (mem "parseErrorMessage" false))))
 (DUse false (UseGroup ("frontend" "desugar") ((mem "desugar" false) (mem "moduleAliases" false) (mem "qualifyAliasRefsWith" false))))
-(DUse false (UseGroup ("support" "util") ((mem "listLen" false) (mem "reverseL" false) (mem "joinNl" false) (mem "startsWith" false) (mem "stringTrim" false) (mem "splitNl" false) (mem "isEmptyL" false))))
+(DUse false (UseGroup ("support" "util") ((mem "listLen" false) (mem "reverseL" false) (mem "joinNl" false) (mem "startsWith" false) (mem "splitNl" false) (mem "isEmptyL" false))))
 (DUse false (UseGroup ("json") ((mem "Json" true))))
 (DUse false (UseGroup ("regex") ((mem "Regex" false) (mem "mustCompile" false) (mem "isMatch" false) (mem "find" false))))
-(DUse false (UseGroup ("string") ((mem "repeat" false))))
+(DUse false (UseGroup ("string") ((mem "repeat" false) (mem "trimAscii" false))))
 (DData Public "Example" () ((variant "Example" (ConPos (TyCon "String") (TyApp (TyCon "Option") (TyCon "String")) (TyCon "Int")))) ())
 (DTypeSig true "exampleInput" (TyFun (TyCon "Example") (TyCon "String")))
 (DFunDef false "exampleInput" ((PCon "Example" (PVar "i") PWild PWild)) (EVar "i"))
@@ -589,7 +587,7 @@ isUse _ = False
 (DFunDef false "expandBlock" ((PVar "c")) (EBlock (DoLet false false (PVar "t") (EApp (EVar "clText") (EVar "c"))) (DoLet false false (PVar "n") (EApp (EVar "slen") (EVar "t"))) (DoLet false false (PVar "inner") (EIf (EBinOp ">=" (EVar "n") (ELit (LInt 4))) (EApp (EApp (EApp (EVar "substr3") (ELit (LInt 2))) (EBinOp "-" (EVar "n") (ELit (LInt 2)))) (EVar "t")) (ELit (LString "")))) (DoExpr (EApp (EApp (EApp (EVar "expandLines") (EApp (EVar "clLine") (EVar "c"))) (ELit (LInt 0))) (EApp (EVar "splitNl") (EVar "inner"))))))
 (DTypeSig false "expandLines" (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyApp (TyCon "List") (TyTuple (TyCon "Int") (TyCon "String")))))))
 (DFunDef false "expandLines" (PWild PWild (PList)) (EListLit))
-(DFunDef false "expandLines" ((PVar "baseLine") (PVar "i") (PCons (PVar "line") (PVar "rest"))) (EBlock (DoLet false false (PVar "trimmed") (EApp (EVar "stringTrim") (EVar "line"))) (DoLet false false (PVar "text") (EIf (EBinOp "==" (EVar "trimmed") (ELit (LString ""))) (ELit (LString "--")) (EBinOp "++" (ELit (LString "-- ")) (EVar "trimmed")))) (DoExpr (EBinOp "::" (ETuple (EBinOp "+" (EVar "baseLine") (EVar "i")) (EVar "text")) (EApp (EApp (EApp (EVar "expandLines") (EVar "baseLine")) (EBinOp "+" (EVar "i") (ELit (LInt 1)))) (EVar "rest"))))))
+(DFunDef false "expandLines" ((PVar "baseLine") (PVar "i") (PCons (PVar "line") (PVar "rest"))) (EBlock (DoLet false false (PVar "trimmed") (EApp (EVar "trimAscii") (EVar "line"))) (DoLet false false (PVar "text") (EIf (EBinOp "==" (EVar "trimmed") (ELit (LString ""))) (ELit (LString "--")) (EBinOp "++" (ELit (LString "-- ")) (EVar "trimmed")))) (DoExpr (EBinOp "::" (ETuple (EBinOp "+" (EVar "baseLine") (EVar "i")) (EVar "text")) (EApp (EApp (EApp (EVar "expandLines") (EVar "baseLine")) (EBinOp "+" (EVar "i") (ELit (LInt 1)))) (EVar "rest"))))))
 (DTypeSig false "splitIntoBlocks" (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "Int") (TyCon "String"))) (TyApp (TyCon "List") (TyApp (TyCon "List") (TyTuple (TyCon "Int") (TyCon "String"))))))
 (DFunDef false "splitIntoBlocks" ((PVar "comments")) (EApp (EVar "reverseL") (EApp (EApp (EApp (EApp (EVar "blocksGo") (EListLit)) (EListLit)) (ELit (LInt 0))) (EVar "comments"))))
 (DTypeSig false "blocksGo" (TyFun (TyApp (TyCon "List") (TyApp (TyCon "List") (TyTuple (TyCon "Int") (TyCon "String")))) (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "Int") (TyCon "String"))) (TyFun (TyCon "Int") (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "Int") (TyCon "String"))) (TyApp (TyCon "List") (TyApp (TyCon "List") (TyTuple (TyCon "Int") (TyCon "String")))))))))
@@ -683,10 +681,10 @@ isUse _ = False
 (DUse false (UseGroup ("frontend" "ast") ((mem "Decl" true))))
 (DUse false (UseGroup ("frontend" "parser") ((mem "parseLocatedResult" false) (mem "parseErrorMessage" false))))
 (DUse false (UseGroup ("frontend" "desugar") ((mem "desugar" false) (mem "moduleAliases" false) (mem "qualifyAliasRefsWith" false))))
-(DUse false (UseGroup ("support" "util") ((mem "listLen" false) (mem "reverseL" false) (mem "joinNl" false) (mem "startsWith" false) (mem "stringTrim" false) (mem "splitNl" false) (mem "isEmptyL" false))))
+(DUse false (UseGroup ("support" "util") ((mem "listLen" false) (mem "reverseL" false) (mem "joinNl" false) (mem "startsWith" false) (mem "splitNl" false) (mem "isEmptyL" false))))
 (DUse false (UseGroup ("json") ((mem "Json" true))))
 (DUse false (UseGroup ("regex") ((mem "Regex" false) (mem "mustCompile" false) (mem "isMatch" false) (mem "find" false))))
-(DUse false (UseGroup ("string") ((mem "repeat" false))))
+(DUse false (UseGroup ("string") ((mem "repeat" false) (mem "trimAscii" false))))
 (DData Public "Example" () ((variant "Example" (ConPos (TyCon "String") (TyApp (TyCon "Option") (TyCon "String")) (TyCon "Int")))) ())
 (DTypeSig true "exampleInput" (TyFun (TyCon "Example") (TyCon "String")))
 (DFunDef false "exampleInput" ((PCon "Example" (PVar "i") PWild PWild)) (EVar "i"))
@@ -743,7 +741,7 @@ isUse _ = False
 (DFunDef false "expandBlock" ((PVar "c")) (EBlock (DoLet false false (PVar "t") (EApp (EVar "clText") (EVar "c"))) (DoLet false false (PVar "n") (EApp (EVar "slen") (EVar "t"))) (DoLet false false (PVar "inner") (EIf (EBinOp ">=" (EVar "n") (ELit (LInt 4))) (EApp (EApp (EApp (EVar "substr3") (ELit (LInt 2))) (EBinOp "-" (EVar "n") (ELit (LInt 2)))) (EVar "t")) (ELit (LString "")))) (DoExpr (EApp (EApp (EApp (EVar "expandLines") (EApp (EVar "clLine") (EVar "c"))) (ELit (LInt 0))) (EApp (EVar "splitNl") (EVar "inner"))))))
 (DTypeSig false "expandLines" (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyApp (TyCon "List") (TyTuple (TyCon "Int") (TyCon "String")))))))
 (DFunDef false "expandLines" (PWild PWild (PList)) (EListLit))
-(DFunDef false "expandLines" ((PVar "baseLine") (PVar "i") (PCons (PVar "line") (PVar "rest"))) (EBlock (DoLet false false (PVar "trimmed") (EApp (EVar "stringTrim") (EVar "line"))) (DoLet false false (PVar "text") (EIf (EBinOp "==" (EVar "trimmed") (ELit (LString ""))) (ELit (LString "--")) (EBinOp "++" (ELit (LString "-- ")) (EVar "trimmed")))) (DoExpr (EBinOp "::" (ETuple (EBinOp "+" (EVar "baseLine") (EVar "i")) (EVar "text")) (EApp (EApp (EApp (EVar "expandLines") (EVar "baseLine")) (EBinOp "+" (EVar "i") (ELit (LInt 1)))) (EVar "rest"))))))
+(DFunDef false "expandLines" ((PVar "baseLine") (PVar "i") (PCons (PVar "line") (PVar "rest"))) (EBlock (DoLet false false (PVar "trimmed") (EApp (EVar "trimAscii") (EVar "line"))) (DoLet false false (PVar "text") (EIf (EBinOp "==" (EVar "trimmed") (ELit (LString ""))) (ELit (LString "--")) (EBinOp "++" (ELit (LString "-- ")) (EVar "trimmed")))) (DoExpr (EBinOp "::" (ETuple (EBinOp "+" (EVar "baseLine") (EVar "i")) (EVar "text")) (EApp (EApp (EApp (EVar "expandLines") (EVar "baseLine")) (EBinOp "+" (EVar "i") (ELit (LInt 1)))) (EVar "rest"))))))
 (DTypeSig false "splitIntoBlocks" (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "Int") (TyCon "String"))) (TyApp (TyCon "List") (TyApp (TyCon "List") (TyTuple (TyCon "Int") (TyCon "String"))))))
 (DFunDef false "splitIntoBlocks" ((PVar "comments")) (EApp (EVar "reverseL") (EApp (EApp (EApp (EApp (EVar "blocksGo") (EListLit)) (EListLit)) (ELit (LInt 0))) (EVar "comments"))))
 (DTypeSig false "blocksGo" (TyFun (TyApp (TyCon "List") (TyApp (TyCon "List") (TyTuple (TyCon "Int") (TyCon "String")))) (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "Int") (TyCon "String"))) (TyFun (TyCon "Int") (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "Int") (TyCon "String"))) (TyApp (TyCon "List") (TyApp (TyCon "List") (TyTuple (TyCon "Int") (TyCon "String")))))))))

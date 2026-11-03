@@ -1,5 +1,5 @@
 # META
-source_lines=1855
+source_lines=1854
 stages=DESUGAR,MARK
 # SOURCE
 -- compiler/tools/doc.mdk — the native `medaka doc` documentation extractor.
@@ -66,8 +66,7 @@ import types.repr.{Scheme(..), ppScheme}
 import types.publish.{pubSchemes}
 import frontend.resolve.{internalExterns}
 import support.util.{
-  zipL, joinWith, reverseL, escStr, stringTrim, splitNl, contains, lookupAssoc,
-  startsWith
+  zipL, joinWith, reverseL, escStr, splitNl, contains, lookupAssoc, startsWith
 }
 import support.path.{baseOf, chopExt}
 import support.stage_count.{stageExit}
@@ -76,7 +75,7 @@ import driver.diagnostics.{projectEntrySchemes}
 import driver.loader.{moduleIdOfPath}
 import frontend.desugar.{dataDerivers, newtypeDerivers, typeKindedParams}
 import json.{Json(..), jObject, jArray}
-import string.{toLower}
+import string.{toLower, trimAscii}
 import regex.{
   Regex, Match, mustCompile, isMatch, replaceAll, escape, find, findAll
 }
@@ -269,7 +268,7 @@ expandComment c =
 expandBlockLines : Int -> Int -> List String -> List CommentRow
 expandBlockLines _ _ [] = []
 expandBlockLines baseLine i (line :: rest) =
-  (baseLine + i, stringTrim line, baseLine)
+  (baseLine + i, trimAscii line, baseLine)
     :: expandBlockLines baseLine (i + 1) rest
 
 -- splitNl → support/util.mdk (imported above; #242 dedup of the splitNl cluster).
@@ -333,7 +332,7 @@ collectDocLines tbl line acc = match lookupLineLast tbl line
 markedDoc : List CommentRow -> String
 markedDoc rows = match dropToMarker True rows
   [] => ""
-  (_, t, b) :: rest => stringTrim (joinWith "\n" (t :: sameBlockTexts b rest))
+  (_, t, b) :: rest => trimAscii (joinWith "\n" (t :: sameBlockTexts b rest))
 
 dropToMarker : Bool -> List CommentRow -> List CommentRow
 dropToMarker _ [] = []
@@ -354,7 +353,7 @@ sectionsFrom : List CommentRow -> List (Int, String)
 sectionsFrom [] = []
 sectionsFrom ((l, t, b) :: rest) =
   if b == 0 && dlen t >= 2 && dsub 0 2 t == "# " then
-    (l, stringTrim (dsub 2 (dlen t) t)) :: sectionsFrom rest
+    (l, trimAscii (dsub 2 (dlen t) t)) :: sectionsFrom rest
   else
     sectionsFrom rest
 
@@ -1790,7 +1789,7 @@ newlineRe = mustCompile "\\n"
 firstSentence : String -> String
 firstSentence prose =
   let cut = firstSentenceCut prose
-  joinWith " " (splitNl (stringTrim (dsub 0 cut prose)))
+  joinWith " " (splitNl (trimAscii (dsub 0 cut prose)))
 
 -- The end of the first `.` that is itself followed by end-of-string or a
 -- sentence gap (a space or a newline), matched then tail-tested rather than
@@ -1864,7 +1863,7 @@ docSchemesFor runtimeSrc coreSrc filename roots _rawUser =
 (DUse false (UseGroup ("types" "repr") ((mem "Scheme" true) (mem "ppScheme" false))))
 (DUse false (UseGroup ("types" "publish") ((mem "pubSchemes" false))))
 (DUse false (UseGroup ("frontend" "resolve") ((mem "internalExterns" false))))
-(DUse false (UseGroup ("support" "util") ((mem "zipL" false) (mem "joinWith" false) (mem "reverseL" false) (mem "escStr" false) (mem "stringTrim" false) (mem "splitNl" false) (mem "contains" false) (mem "lookupAssoc" false) (mem "startsWith" false))))
+(DUse false (UseGroup ("support" "util") ((mem "zipL" false) (mem "joinWith" false) (mem "reverseL" false) (mem "escStr" false) (mem "splitNl" false) (mem "contains" false) (mem "lookupAssoc" false) (mem "startsWith" false))))
 (DUse false (UseGroup ("support" "path") ((mem "baseOf" false) (mem "chopExt" false))))
 (DUse false (UseGroup ("support" "stage_count") ((mem "stageExit" false))))
 (DUse false (UseGroup ("support" "ordmap") ((mem "omEmpty" false))))
@@ -1872,7 +1871,7 @@ docSchemesFor runtimeSrc coreSrc filename roots _rawUser =
 (DUse false (UseGroup ("driver" "loader") ((mem "moduleIdOfPath" false))))
 (DUse false (UseGroup ("frontend" "desugar") ((mem "dataDerivers" false) (mem "newtypeDerivers" false) (mem "typeKindedParams" false))))
 (DUse false (UseGroup ("json") ((mem "Json" true) (mem "jObject" false) (mem "jArray" false))))
-(DUse false (UseGroup ("string") ((mem "toLower" false))))
+(DUse false (UseGroup ("string") ((mem "toLower" false) (mem "trimAscii" false))))
 (DUse false (UseGroup ("regex") ((mem "Regex" false) (mem "Match" false) (mem "mustCompile" false) (mem "isMatch" false) (mem "replaceAll" false) (mem "escape" false) (mem "find" false) (mem "findAll" false))))
 (DData Abstract "DocEntry" () ((variant "DocEntry" (ConPos (TyCon "String") (TyCon "String") (TyCon "String") (TyCon "String") (TyCon "DocKind") (TyCon "Int")))) ())
 (DData Public "DocKind" () ((variant "KPlain" (ConPos)) (variant "KTypeDecl" (ConPos)) (variant "KImplOn" (ConPos (TyApp (TyCon "Option") (TyCon "String")))) (variant "KSection" (ConPos))) ())
@@ -1916,7 +1915,7 @@ docSchemesFor runtimeSrc coreSrc filename roots _rawUser =
 (DFunDef false "expandComment" ((PVar "c")) (EBlock (DoLet false false (PVar "t") (EApp (EVar "commentText") (EVar "c"))) (DoExpr (EIf (EBinOp "&&" (EBinOp ">=" (EApp (EVar "dlen") (EVar "t")) (ELit (LInt 2))) (EBinOp "==" (EApp (EApp (EApp (EVar "dsub") (ELit (LInt 0))) (ELit (LInt 2))) (EVar "t")) (ELit (LString "{-")))) (EBlock (DoLet false false (PVar "n") (EApp (EVar "dlen") (EVar "t"))) (DoLet false false (PVar "inner") (EIf (EBinOp ">=" (EVar "n") (ELit (LInt 4))) (EApp (EApp (EApp (EVar "dsub") (ELit (LInt 2))) (EBinOp "-" (EVar "n") (ELit (LInt 2)))) (EVar "t")) (ELit (LString "")))) (DoExpr (EApp (EApp (EApp (EVar "expandBlockLines") (EApp (EVar "commentLine") (EVar "c"))) (ELit (LInt 0))) (EApp (EVar "splitNl") (EVar "inner"))))) (EListLit (ETuple (EApp (EVar "commentLine") (EVar "c")) (EApp (EVar "docLineBody") (EVar "t")) (ELit (LInt 0))))))))
 (DTypeSig false "expandBlockLines" (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyApp (TyCon "List") (TyCon "CommentRow"))))))
 (DFunDef false "expandBlockLines" (PWild PWild (PList)) (EListLit))
-(DFunDef false "expandBlockLines" ((PVar "baseLine") (PVar "i") (PCons (PVar "line") (PVar "rest"))) (EBinOp "::" (ETuple (EBinOp "+" (EVar "baseLine") (EVar "i")) (EApp (EVar "stringTrim") (EVar "line")) (EVar "baseLine")) (EApp (EApp (EApp (EVar "expandBlockLines") (EVar "baseLine")) (EBinOp "+" (EVar "i") (ELit (LInt 1)))) (EVar "rest"))))
+(DFunDef false "expandBlockLines" ((PVar "baseLine") (PVar "i") (PCons (PVar "line") (PVar "rest"))) (EBinOp "::" (ETuple (EBinOp "+" (EVar "baseLine") (EVar "i")) (EApp (EVar "trimAscii") (EVar "line")) (EVar "baseLine")) (EApp (EApp (EApp (EVar "expandBlockLines") (EVar "baseLine")) (EBinOp "+" (EVar "i") (ELit (LInt 1)))) (EVar "rest"))))
 (DTypeSig false "buildCommentTbl" (TyFun (TyApp (TyCon "List") (TyCon "Comment")) (TyApp (TyCon "List") (TyCon "CommentRow"))))
 (DFunDef false "buildCommentTbl" ((PVar "comments")) (EApp (EApp (EVar "concatMapDoc") (EVar "expandComment")) (EVar "comments")))
 (DTypeSig false "concatMapDoc" (TyFun (TyFun (TyVar "a") (TyApp (TyCon "List") (TyVar "b"))) (TyFun (TyApp (TyCon "List") (TyVar "a")) (TyApp (TyCon "List") (TyVar "b")))))
@@ -1932,7 +1931,7 @@ docSchemesFor runtimeSrc coreSrc filename roots _rawUser =
 (DTypeSig false "collectDocLines" (TyFun (TyApp (TyCon "List") (TyCon "CommentRow")) (TyFun (TyCon "Int") (TyFun (TyApp (TyCon "List") (TyCon "CommentRow")) (TyApp (TyCon "List") (TyCon "CommentRow"))))))
 (DFunDef false "collectDocLines" ((PVar "tbl") (PVar "line") (PVar "acc")) (EMatch (EApp (EApp (EVar "lookupLineLast") (EVar "tbl")) (EVar "line")) (arm (PCon "None") () (EVar "acc")) (arm (PCon "Some" (PTuple (PVar "t") (PVar "b"))) () (EApp (EApp (EApp (EVar "collectDocLines") (EVar "tbl")) (EBinOp "-" (EVar "line") (ELit (LInt 1)))) (EBinOp "::" (ETuple (EVar "line") (EVar "t") (EVar "b")) (EVar "acc"))))))
 (DTypeSig false "markedDoc" (TyFun (TyApp (TyCon "List") (TyCon "CommentRow")) (TyCon "String")))
-(DFunDef false "markedDoc" ((PVar "rows")) (EMatch (EApp (EApp (EVar "dropToMarker") (EVar "True")) (EVar "rows")) (arm (PList) () (ELit (LString ""))) (arm (PCons (PTuple PWild (PVar "t") (PVar "b")) (PVar "rest")) () (EApp (EVar "stringTrim") (EApp (EApp (EVar "joinWith") (ELit (LString "\n"))) (EBinOp "::" (EVar "t") (EApp (EApp (EVar "sameBlockTexts") (EVar "b")) (EVar "rest"))))))))
+(DFunDef false "markedDoc" ((PVar "rows")) (EMatch (EApp (EApp (EVar "dropToMarker") (EVar "True")) (EVar "rows")) (arm (PList) () (ELit (LString ""))) (arm (PCons (PTuple PWild (PVar "t") (PVar "b")) (PVar "rest")) () (EApp (EVar "trimAscii") (EApp (EApp (EVar "joinWith") (ELit (LString "\n"))) (EBinOp "::" (EVar "t") (EApp (EApp (EVar "sameBlockTexts") (EVar "b")) (EVar "rest"))))))))
 (DTypeSig false "dropToMarker" (TyFun (TyCon "Bool") (TyFun (TyApp (TyCon "List") (TyCon "CommentRow")) (TyApp (TyCon "List") (TyCon "CommentRow")))))
 (DFunDef false "dropToMarker" (PWild (PList)) (EListLit))
 (DFunDef false "dropToMarker" ((PVar "atStart") (PCons (PTuple (PVar "l") (PVar "t") (PVar "b")) (PVar "rest"))) (EIf (EBinOp "&&" (EApp (EVar "hasPipeMarker") (EVar "t")) (EBinOp "||" (EVar "atStart") (EBinOp "&&" (EBinOp ">" (EVar "b") (ELit (LInt 0))) (EBinOp "==" (EVar "l") (EVar "b"))))) (EBinOp "::" (ETuple (EVar "l") (EVar "t") (EVar "b")) (EVar "rest")) (EIf (EVar "otherwise") (EApp (EApp (EVar "dropToMarker") (EBinOp "&&" (EVar "atStart") (EApp (EVar "markerEligibleAfter") (EVar "t")))) (EVar "rest")) (EApp (EVar "__fallthrough__") (ELit LUnit)))))
@@ -1941,7 +1940,7 @@ docSchemesFor runtimeSrc coreSrc filename roots _rawUser =
 (DFunDef false "sameBlockTexts" ((PVar "b") (PCons (PTuple PWild (PVar "t") (PVar "b2")) (PVar "rest"))) (EIf (EBinOp "==" (EVar "b2") (EVar "b")) (EBinOp "::" (EVar "t") (EApp (EApp (EVar "sameBlockTexts") (EVar "b")) (EVar "rest"))) (EListLit)))
 (DTypeSig false "sectionsFrom" (TyFun (TyApp (TyCon "List") (TyCon "CommentRow")) (TyApp (TyCon "List") (TyTuple (TyCon "Int") (TyCon "String")))))
 (DFunDef false "sectionsFrom" ((PList)) (EListLit))
-(DFunDef false "sectionsFrom" ((PCons (PTuple (PVar "l") (PVar "t") (PVar "b")) (PVar "rest"))) (EIf (EBinOp "&&" (EBinOp "&&" (EBinOp "==" (EVar "b") (ELit (LInt 0))) (EBinOp ">=" (EApp (EVar "dlen") (EVar "t")) (ELit (LInt 2)))) (EBinOp "==" (EApp (EApp (EApp (EVar "dsub") (ELit (LInt 0))) (ELit (LInt 2))) (EVar "t")) (ELit (LString "# ")))) (EBinOp "::" (ETuple (EVar "l") (EApp (EVar "stringTrim") (EApp (EApp (EApp (EVar "dsub") (ELit (LInt 2))) (EApp (EVar "dlen") (EVar "t"))) (EVar "t")))) (EApp (EVar "sectionsFrom") (EVar "rest"))) (EApp (EVar "sectionsFrom") (EVar "rest"))))
+(DFunDef false "sectionsFrom" ((PCons (PTuple (PVar "l") (PVar "t") (PVar "b")) (PVar "rest"))) (EIf (EBinOp "&&" (EBinOp "&&" (EBinOp "==" (EVar "b") (ELit (LInt 0))) (EBinOp ">=" (EApp (EVar "dlen") (EVar "t")) (ELit (LInt 2)))) (EBinOp "==" (EApp (EApp (EApp (EVar "dsub") (ELit (LInt 0))) (ELit (LInt 2))) (EVar "t")) (ELit (LString "# ")))) (EBinOp "::" (ETuple (EVar "l") (EApp (EVar "trimAscii") (EApp (EApp (EApp (EVar "dsub") (ELit (LInt 2))) (EApp (EVar "dlen") (EVar "t"))) (EVar "t")))) (EApp (EVar "sectionsFrom") (EVar "rest"))) (EApp (EVar "sectionsFrom") (EVar "rest"))))
 (DTypeSig false "ppDataVariant" (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "KindAnn"))) (TyFun (TyCon "Variant") (TyCon "String"))))
 (DFunDef false "ppDataVariant" ((PList) (PCon "Variant" (PVar "name") (PCon "ConPos" (PList)))) (EVar "name"))
 (DFunDef false "ppDataVariant" ((PVar "binders") (PCon "Variant" (PVar "name") (PCon "ConPos" (PVar "tys")))) (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "")) (EApp (EVar "display") (EVar "name"))) (ELit (LString " "))) (EApp (EVar "display") (EApp (EVar "ctorBindersSource") (EVar "binders")))) (ELit (LString ""))) (EApp (EVar "display") (EApp (EApp (EVar "joinWith") (ELit (LString " "))) (EApp (EApp (EVar "map") (EApp (EVar "ppTyP") (ELit (LInt 2)))) (EVar "tys"))))) (ELit (LString ""))))
@@ -2305,7 +2304,7 @@ docSchemesFor runtimeSrc coreSrc filename roots _rawUser =
 (DTypeSig false "newlineRe" (TyCon "Regex"))
 (DFunDef false "newlineRe" () (EApp (EVar "mustCompile") (ELit (LString "\\n"))))
 (DTypeSig false "firstSentence" (TyFun (TyCon "String") (TyCon "String")))
-(DFunDef false "firstSentence" ((PVar "prose")) (EBlock (DoLet false false (PVar "cut") (EApp (EVar "firstSentenceCut") (EVar "prose"))) (DoExpr (EApp (EApp (EVar "joinWith") (ELit (LString " "))) (EApp (EVar "splitNl") (EApp (EVar "stringTrim") (EApp (EApp (EApp (EVar "dsub") (ELit (LInt 0))) (EVar "cut")) (EVar "prose"))))))))
+(DFunDef false "firstSentence" ((PVar "prose")) (EBlock (DoLet false false (PVar "cut") (EApp (EVar "firstSentenceCut") (EVar "prose"))) (DoExpr (EApp (EApp (EVar "joinWith") (ELit (LString " "))) (EApp (EVar "splitNl") (EApp (EVar "trimAscii") (EApp (EApp (EApp (EVar "dsub") (ELit (LInt 0))) (EVar "cut")) (EVar "prose"))))))))
 (DTypeSig false "firstSentenceCut" (TyFun (TyCon "String") (TyCon "Int")))
 (DFunDef false "firstSentenceCut" ((PVar "prose")) (EMatch (EApp (EApp (EVar "sentenceEndAt") (EVar "prose")) (EApp (EApp (EVar "findAll") (EVar "periodRe")) (EVar "prose"))) (arm (PCon "Some" (PVar "cut")) () (EVar "cut")) (arm (PCon "None") () (EMatch (EApp (EApp (EVar "find") (EVar "newlineRe")) (EVar "prose")) (arm (PCon "Some" (PVar "m")) () (EFieldAccess (EVar "m") "start")) (arm (PCon "None") () (EApp (EVar "dlen") (EVar "prose")))))))
 (DTypeSig false "sentenceEndAt" (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "Match")) (TyApp (TyCon "Option") (TyCon "Int")))))
@@ -2320,7 +2319,7 @@ docSchemesFor runtimeSrc coreSrc filename roots _rawUser =
 (DUse false (UseGroup ("types" "repr") ((mem "Scheme" true) (mem "ppScheme" false))))
 (DUse false (UseGroup ("types" "publish") ((mem "pubSchemes" false))))
 (DUse false (UseGroup ("frontend" "resolve") ((mem "internalExterns" false))))
-(DUse false (UseGroup ("support" "util") ((mem "zipL" false) (mem "joinWith" false) (mem "reverseL" false) (mem "escStr" false) (mem "stringTrim" false) (mem "splitNl" false) (mem "contains" false) (mem "lookupAssoc" false) (mem "startsWith" false))))
+(DUse false (UseGroup ("support" "util") ((mem "zipL" false) (mem "joinWith" false) (mem "reverseL" false) (mem "escStr" false) (mem "splitNl" false) (mem "contains" false) (mem "lookupAssoc" false) (mem "startsWith" false))))
 (DUse false (UseGroup ("support" "path") ((mem "baseOf" false) (mem "chopExt" false))))
 (DUse false (UseGroup ("support" "stage_count") ((mem "stageExit" false))))
 (DUse false (UseGroup ("support" "ordmap") ((mem "omEmpty" false))))
@@ -2328,7 +2327,7 @@ docSchemesFor runtimeSrc coreSrc filename roots _rawUser =
 (DUse false (UseGroup ("driver" "loader") ((mem "moduleIdOfPath" false))))
 (DUse false (UseGroup ("frontend" "desugar") ((mem "dataDerivers" false) (mem "newtypeDerivers" false) (mem "typeKindedParams" false))))
 (DUse false (UseGroup ("json") ((mem "Json" true) (mem "jObject" false) (mem "jArray" false))))
-(DUse false (UseGroup ("string") ((mem "toLower" false))))
+(DUse false (UseGroup ("string") ((mem "toLower" false) (mem "trimAscii" false))))
 (DUse false (UseGroup ("regex") ((mem "Regex" false) (mem "Match" false) (mem "mustCompile" false) (mem "isMatch" false) (mem "replaceAll" false) (mem "escape" false) (mem "find" false) (mem "findAll" false))))
 (DData Abstract "DocEntry" () ((variant "DocEntry" (ConPos (TyCon "String") (TyCon "String") (TyCon "String") (TyCon "String") (TyCon "DocKind") (TyCon "Int")))) ())
 (DData Public "DocKind" () ((variant "KPlain" (ConPos)) (variant "KTypeDecl" (ConPos)) (variant "KImplOn" (ConPos (TyApp (TyCon "Option") (TyCon "String")))) (variant "KSection" (ConPos))) ())
@@ -2372,7 +2371,7 @@ docSchemesFor runtimeSrc coreSrc filename roots _rawUser =
 (DFunDef false "expandComment" ((PVar "c")) (EBlock (DoLet false false (PVar "t") (EApp (EVar "commentText") (EVar "c"))) (DoExpr (EIf (EBinOp "&&" (EBinOp ">=" (EApp (EVar "dlen") (EVar "t")) (ELit (LInt 2))) (EBinOp "==" (EApp (EApp (EApp (EVar "dsub") (ELit (LInt 0))) (ELit (LInt 2))) (EVar "t")) (ELit (LString "{-")))) (EBlock (DoLet false false (PVar "n") (EApp (EVar "dlen") (EVar "t"))) (DoLet false false (PVar "inner") (EIf (EBinOp ">=" (EVar "n") (ELit (LInt 4))) (EApp (EApp (EApp (EVar "dsub") (ELit (LInt 2))) (EBinOp "-" (EVar "n") (ELit (LInt 2)))) (EVar "t")) (ELit (LString "")))) (DoExpr (EApp (EApp (EApp (EVar "expandBlockLines") (EApp (EVar "commentLine") (EVar "c"))) (ELit (LInt 0))) (EApp (EVar "splitNl") (EVar "inner"))))) (EListLit (ETuple (EApp (EVar "commentLine") (EVar "c")) (EApp (EVar "docLineBody") (EVar "t")) (ELit (LInt 0))))))))
 (DTypeSig false "expandBlockLines" (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyApp (TyCon "List") (TyCon "CommentRow"))))))
 (DFunDef false "expandBlockLines" (PWild PWild (PList)) (EListLit))
-(DFunDef false "expandBlockLines" ((PVar "baseLine") (PVar "i") (PCons (PVar "line") (PVar "rest"))) (EBinOp "::" (ETuple (EBinOp "+" (EVar "baseLine") (EVar "i")) (EApp (EVar "stringTrim") (EVar "line")) (EVar "baseLine")) (EApp (EApp (EApp (EVar "expandBlockLines") (EVar "baseLine")) (EBinOp "+" (EVar "i") (ELit (LInt 1)))) (EVar "rest"))))
+(DFunDef false "expandBlockLines" ((PVar "baseLine") (PVar "i") (PCons (PVar "line") (PVar "rest"))) (EBinOp "::" (ETuple (EBinOp "+" (EVar "baseLine") (EVar "i")) (EApp (EVar "trimAscii") (EVar "line")) (EVar "baseLine")) (EApp (EApp (EApp (EVar "expandBlockLines") (EVar "baseLine")) (EBinOp "+" (EVar "i") (ELit (LInt 1)))) (EVar "rest"))))
 (DTypeSig false "buildCommentTbl" (TyFun (TyApp (TyCon "List") (TyCon "Comment")) (TyApp (TyCon "List") (TyCon "CommentRow"))))
 (DFunDef false "buildCommentTbl" ((PVar "comments")) (EApp (EApp (EVar "concatMapDoc") (EVar "expandComment")) (EVar "comments")))
 (DTypeSig false "concatMapDoc" (TyFun (TyFun (TyVar "a") (TyApp (TyCon "List") (TyVar "b"))) (TyFun (TyApp (TyCon "List") (TyVar "a")) (TyApp (TyCon "List") (TyVar "b")))))
@@ -2388,7 +2387,7 @@ docSchemesFor runtimeSrc coreSrc filename roots _rawUser =
 (DTypeSig false "collectDocLines" (TyFun (TyApp (TyCon "List") (TyCon "CommentRow")) (TyFun (TyCon "Int") (TyFun (TyApp (TyCon "List") (TyCon "CommentRow")) (TyApp (TyCon "List") (TyCon "CommentRow"))))))
 (DFunDef false "collectDocLines" ((PVar "tbl") (PVar "line") (PVar "acc")) (EMatch (EApp (EApp (EVar "lookupLineLast") (EVar "tbl")) (EVar "line")) (arm (PCon "None") () (EVar "acc")) (arm (PCon "Some" (PTuple (PVar "t") (PVar "b"))) () (EApp (EApp (EApp (EVar "collectDocLines") (EVar "tbl")) (EBinOp "-" (EVar "line") (ELit (LInt 1)))) (EBinOp "::" (ETuple (EVar "line") (EVar "t") (EVar "b")) (EVar "acc"))))))
 (DTypeSig false "markedDoc" (TyFun (TyApp (TyCon "List") (TyCon "CommentRow")) (TyCon "String")))
-(DFunDef false "markedDoc" ((PVar "rows")) (EMatch (EApp (EApp (EVar "dropToMarker") (EVar "True")) (EVar "rows")) (arm (PList) () (ELit (LString ""))) (arm (PCons (PTuple PWild (PVar "t") (PVar "b")) (PVar "rest")) () (EApp (EVar "stringTrim") (EApp (EApp (EVar "joinWith") (ELit (LString "\n"))) (EBinOp "::" (EVar "t") (EApp (EApp (EVar "sameBlockTexts") (EVar "b")) (EVar "rest"))))))))
+(DFunDef false "markedDoc" ((PVar "rows")) (EMatch (EApp (EApp (EVar "dropToMarker") (EVar "True")) (EVar "rows")) (arm (PList) () (ELit (LString ""))) (arm (PCons (PTuple PWild (PVar "t") (PVar "b")) (PVar "rest")) () (EApp (EVar "trimAscii") (EApp (EApp (EVar "joinWith") (ELit (LString "\n"))) (EBinOp "::" (EVar "t") (EApp (EApp (EVar "sameBlockTexts") (EVar "b")) (EVar "rest"))))))))
 (DTypeSig false "dropToMarker" (TyFun (TyCon "Bool") (TyFun (TyApp (TyCon "List") (TyCon "CommentRow")) (TyApp (TyCon "List") (TyCon "CommentRow")))))
 (DFunDef false "dropToMarker" (PWild (PList)) (EListLit))
 (DFunDef false "dropToMarker" ((PVar "atStart") (PCons (PTuple (PVar "l") (PVar "t") (PVar "b")) (PVar "rest"))) (EIf (EBinOp "&&" (EApp (EVar "hasPipeMarker") (EVar "t")) (EBinOp "||" (EVar "atStart") (EBinOp "&&" (EBinOp ">" (EVar "b") (ELit (LInt 0))) (EBinOp "==" (EVar "l") (EVar "b"))))) (EBinOp "::" (ETuple (EVar "l") (EVar "t") (EVar "b")) (EVar "rest")) (EIf (EVar "otherwise") (EApp (EApp (EVar "dropToMarker") (EBinOp "&&" (EVar "atStart") (EApp (EVar "markerEligibleAfter") (EVar "t")))) (EVar "rest")) (EApp (EVar "__fallthrough__") (ELit LUnit)))))
@@ -2397,7 +2396,7 @@ docSchemesFor runtimeSrc coreSrc filename roots _rawUser =
 (DFunDef false "sameBlockTexts" ((PVar "b") (PCons (PTuple PWild (PVar "t") (PVar "b2")) (PVar "rest"))) (EIf (EBinOp "==" (EVar "b2") (EVar "b")) (EBinOp "::" (EVar "t") (EApp (EApp (EVar "sameBlockTexts") (EVar "b")) (EVar "rest"))) (EListLit)))
 (DTypeSig false "sectionsFrom" (TyFun (TyApp (TyCon "List") (TyCon "CommentRow")) (TyApp (TyCon "List") (TyTuple (TyCon "Int") (TyCon "String")))))
 (DFunDef false "sectionsFrom" ((PList)) (EListLit))
-(DFunDef false "sectionsFrom" ((PCons (PTuple (PVar "l") (PVar "t") (PVar "b")) (PVar "rest"))) (EIf (EBinOp "&&" (EBinOp "&&" (EBinOp "==" (EVar "b") (ELit (LInt 0))) (EBinOp ">=" (EApp (EVar "dlen") (EVar "t")) (ELit (LInt 2)))) (EBinOp "==" (EApp (EApp (EApp (EVar "dsub") (ELit (LInt 0))) (ELit (LInt 2))) (EVar "t")) (ELit (LString "# ")))) (EBinOp "::" (ETuple (EVar "l") (EApp (EVar "stringTrim") (EApp (EApp (EApp (EVar "dsub") (ELit (LInt 2))) (EApp (EVar "dlen") (EVar "t"))) (EVar "t")))) (EApp (EVar "sectionsFrom") (EVar "rest"))) (EApp (EVar "sectionsFrom") (EVar "rest"))))
+(DFunDef false "sectionsFrom" ((PCons (PTuple (PVar "l") (PVar "t") (PVar "b")) (PVar "rest"))) (EIf (EBinOp "&&" (EBinOp "&&" (EBinOp "==" (EVar "b") (ELit (LInt 0))) (EBinOp ">=" (EApp (EVar "dlen") (EVar "t")) (ELit (LInt 2)))) (EBinOp "==" (EApp (EApp (EApp (EVar "dsub") (ELit (LInt 0))) (ELit (LInt 2))) (EVar "t")) (ELit (LString "# ")))) (EBinOp "::" (ETuple (EVar "l") (EApp (EVar "trimAscii") (EApp (EApp (EApp (EVar "dsub") (ELit (LInt 2))) (EApp (EVar "dlen") (EVar "t"))) (EVar "t")))) (EApp (EVar "sectionsFrom") (EVar "rest"))) (EApp (EVar "sectionsFrom") (EVar "rest"))))
 (DTypeSig false "ppDataVariant" (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "KindAnn"))) (TyFun (TyCon "Variant") (TyCon "String"))))
 (DFunDef false "ppDataVariant" ((PList) (PCon "Variant" (PVar "name") (PCon "ConPos" (PList)))) (EVar "name"))
 (DFunDef false "ppDataVariant" ((PVar "binders") (PCon "Variant" (PVar "name") (PCon "ConPos" (PVar "tys")))) (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "")) (EApp (EMethodRef "display") (EVar "name"))) (ELit (LString " "))) (EApp (EMethodRef "display") (EApp (EVar "ctorBindersSource") (EVar "binders")))) (ELit (LString ""))) (EApp (EMethodRef "display") (EApp (EApp (EVar "joinWith") (ELit (LString " "))) (EApp (EApp (EMethodRef "map") (EApp (EVar "ppTyP") (ELit (LInt 2)))) (EVar "tys"))))) (ELit (LString ""))))
@@ -2761,7 +2760,7 @@ docSchemesFor runtimeSrc coreSrc filename roots _rawUser =
 (DTypeSig false "newlineRe" (TyCon "Regex"))
 (DFunDef false "newlineRe" () (EApp (EVar "mustCompile") (ELit (LString "\\n"))))
 (DTypeSig false "firstSentence" (TyFun (TyCon "String") (TyCon "String")))
-(DFunDef false "firstSentence" ((PVar "prose")) (EBlock (DoLet false false (PVar "cut") (EApp (EVar "firstSentenceCut") (EVar "prose"))) (DoExpr (EApp (EApp (EVar "joinWith") (ELit (LString " "))) (EApp (EVar "splitNl") (EApp (EVar "stringTrim") (EApp (EApp (EApp (EVar "dsub") (ELit (LInt 0))) (EVar "cut")) (EVar "prose"))))))))
+(DFunDef false "firstSentence" ((PVar "prose")) (EBlock (DoLet false false (PVar "cut") (EApp (EVar "firstSentenceCut") (EVar "prose"))) (DoExpr (EApp (EApp (EVar "joinWith") (ELit (LString " "))) (EApp (EVar "splitNl") (EApp (EVar "trimAscii") (EApp (EApp (EApp (EVar "dsub") (ELit (LInt 0))) (EVar "cut")) (EVar "prose"))))))))
 (DTypeSig false "firstSentenceCut" (TyFun (TyCon "String") (TyCon "Int")))
 (DFunDef false "firstSentenceCut" ((PVar "prose")) (EMatch (EApp (EApp (EVar "sentenceEndAt") (EVar "prose")) (EApp (EApp (EVar "findAll") (EVar "periodRe")) (EVar "prose"))) (arm (PCon "Some" (PVar "cut")) () (EVar "cut")) (arm (PCon "None") () (EMatch (EApp (EApp (EDictApp "find") (EVar "newlineRe")) (EVar "prose")) (arm (PCon "Some" (PVar "m")) () (EFieldAccess (EVar "m") "start")) (arm (PCon "None") () (EApp (EVar "dlen") (EVar "prose")))))))
 (DTypeSig false "sentenceEndAt" (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "Match")) (TyApp (TyCon "Option") (TyCon "Int")))))
