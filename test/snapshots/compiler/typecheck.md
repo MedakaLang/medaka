@@ -1,5 +1,5 @@
 # META
-source_lines=3672
+source_lines=3670
 stages=DESUGAR,MARK
 # SOURCE
 -- typecheck: the entry module: the graph drive (`driveGraphK`), the chain and core memos and
@@ -424,9 +424,7 @@ import types.tc_mark.{
   markSetsOf,
 }
 import types.tc_occurrence.{
-  argDispatchIndices,
-  argDispatchIndicesById,
-  methodConstraintNames,
+  argDispatchIndices, argDispatchIndicesById, methodConstraintNames
 }
 import types.tc_groups.{
   allEVars,

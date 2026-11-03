@@ -420,9 +420,7 @@ import types.tc_mark.{
   markSetsOf,
 }
 import types.tc_occurrence.{
-  argDispatchIndices,
-  argDispatchIndicesById,
-  methodConstraintNames,
+  argDispatchIndices, argDispatchIndicesById, methodConstraintNames
 }
 import types.tc_groups.{
   allEVars,
