@@ -304,8 +304,6 @@ else13:
 ; mdk-module impl.5f5f757365725f5f3a3a4f72647c285f5f757365725f5f2e4d794c6973742061297c.636f6d70617265
 define internal i64 @mdk.impl.7a5a5f35665f5f35665f757365725f35665f5f35665f5f32655f4d794c697374.636f6d70617265(i64 %arg0, i64 %arg1, i64 %arg2) {
 entry:
-  %t92 = alloca i64
-  %t98 = alloca i64, i64 3
   %t0 = alloca i64
   %t3 = icmp eq i64 %arg1, 562949953421315
   %t4 = and i64 %arg1, 1
@@ -408,46 +406,14 @@ conyes64:
   %t80 = inttoptr i64 %arg2 to ptr
   %t81 = getelementptr i8, ptr %t80, i64 16
   %t82 = load i64, ptr %t81
-  %t83 = icmp eq i64 %arg0, 0 ; slot __user__::Ord.compare
-  br i1 %t83, label %slotnull84, label %slotok84
-slotnull84:
-  call void @mdk_dispatch_no_impl()
-  unreachable
-slotok84:
-  %t85 = inttoptr i64 %arg0 to ptr
-  %t86 = getelementptr i8, ptr %t85, i64 8
-  %t87 = load i64, ptr %t86
-  %t88 = inttoptr i64 %t87 to ptr
-  %t89 = load i64, ptr %t88
-  %t90 = icmp eq i64 %t89, 3
-  br i1 %t90, label %apfast91, label %apslow91
-apfast91:
-  %t93 = inttoptr i64 %t87 to ptr
-  %t94 = getelementptr i8, ptr %t93, i64 8
-  %t95 = load i64, ptr %t94
-  %t96 = inttoptr i64 %t95 to ptr
-  %t97 = call i64 %t96(i64 %t87, i64 %arg0, i64 %t73, i64 %t79)
-  store i64 %t97, ptr %t92
-  br label %apend91
-apslow91:
-  %t99 = getelementptr i64, ptr %t98, i64 0
-  store i64 %arg0, ptr %t99
-  %t100 = getelementptr i64, ptr %t98, i64 1
-  store i64 %t73, ptr %t100
-  %t101 = getelementptr i64, ptr %t98, i64 2
-  store i64 %t79, ptr %t101
-  %t102 = call i64 @__mdk_apply(i64 %t87, i64 3, ptr %t98)
-  store i64 %t102, ptr %t92
-  br label %apend91
-apend91:
-  %t103 = load i64, ptr %t92
-  %t104 = icmp eq i64 %t103, 3
-  br i1 %t104, label %conyes105, label %connext105
-conyes105:
-  %t106 = musttail call i64 @mdk.impl.7a5a5f35665f5f35665f757365725f35665f5f35665f5f32655f4d794c697374.636f6d70617265(i64 %arg0, i64 %t76, i64 %t82)
-  ret i64 %t106
-connext105:
-  store i64 %t103, ptr %t0
+  %t83 = call i64 @mdk.slotcall.3(i64 %arg0, i64 0, i64 %t73, i64 %t79) ; slot __user__::Ord.compare
+  %t84 = icmp eq i64 %t83, 3
+  br i1 %t84, label %conyes85, label %connext85
+conyes85:
+  %t86 = musttail call i64 @mdk.impl.7a5a5f35665f5f35665f757365725f35665f5f35665f5f32655f4d794c697374.636f6d70617265(i64 %arg0, i64 %t76, i64 %t82)
+  ret i64 %t86
+connext85:
+  store i64 %t83, ptr %t0
   br label %decend1
 connext64:
   call void @mdk_nonexhaustive_match()
@@ -456,8 +422,8 @@ connext49:
   call void @mdk_nonexhaustive_match()
   unreachable
 decend1:
-  %t107 = load i64, ptr %t0
-  ret i64 %t107
+  %t87 = load i64, ptr %t0
+  ret i64 %t87
 }
 
 ; mdk-module program
@@ -473,3 +439,45 @@ entry:
 @mdk.slotclosure.5f5f757365725f5f3a3a4f72647c496e747c.636f6d70617265 = internal constant [2 x i64] [i64 3, i64 ptrtoint (ptr @mdk.slot.5f5f757365725f5f3a3a4f72647c496e747c.636f6d70617265 to i64)]
 ; mdk-module program
 @mdk.gen.dictcell.70726f6772616d..0 = internal constant [2 x i64] [i64 -54051695436414980, i64 ptrtoint (ptr @mdk.slotclosure.5f5f757365725f5f3a3a4f72647c496e747c.636f6d70617265 to i64)]
+; mdk-module program
+define internal i64 @mdk.slotcall.3(i64 %dict, i64 %field, i64 %arg0, i64 %arg1) alwaysinline {
+entry:
+  %t9 = alloca i64
+  %t15 = alloca i64, i64 3
+  %isnull = icmp eq i64 %dict, 0
+  br i1 %isnull, label %slotnull, label %slotok
+slotnull:
+  call void @mdk_dispatch_no_impl()
+  unreachable
+slotok:
+  %t0 = inttoptr i64 %dict to ptr
+  %t1 = add i64 %field, 1
+  %t2 = mul i64 %t1, 8
+  %t3 = getelementptr i8, ptr %t0, i64 %t2
+  %t4 = load i64, ptr %t3
+  %t5 = inttoptr i64 %t4 to ptr
+  %t6 = load i64, ptr %t5
+  %t7 = icmp eq i64 %t6, 3
+  br i1 %t7, label %apfast8, label %apslow8
+apfast8:
+  %t10 = inttoptr i64 %t4 to ptr
+  %t11 = getelementptr i8, ptr %t10, i64 8
+  %t12 = load i64, ptr %t11
+  %t13 = inttoptr i64 %t12 to ptr
+  %t14 = call i64 %t13(i64 %t4, i64 %dict, i64 %arg0, i64 %arg1)
+  store i64 %t14, ptr %t9
+  br label %apend8
+apslow8:
+  %t16 = getelementptr i64, ptr %t15, i64 0
+  store i64 %dict, ptr %t16
+  %t17 = getelementptr i64, ptr %t15, i64 1
+  store i64 %arg0, ptr %t17
+  %t18 = getelementptr i64, ptr %t15, i64 2
+  store i64 %arg1, ptr %t18
+  %t19 = call i64 @__mdk_apply(i64 %t4, i64 3, ptr %t15)
+  store i64 %t19, ptr %t9
+  br label %apend8
+apend8:
+  %t20 = load i64, ptr %t9
+  ret i64 %t20
+}

@@ -248,8 +248,6 @@ entry:
 ; mdk-module module.5f5f757365725f5f
 define internal i64 @mdk.user.6d356635663735373336353732356635665f5f64656275674c6973744974656d73(i64 %arg0, i64 %arg1) {
 entry:
-  %t42 = alloca i64
-  %t48 = alloca i64, i64 2
   %t0 = alloca i64
   %t3 = icmp eq i64 %arg1, 562949953421315
   %t4 = and i64 %arg1, 1
@@ -288,57 +286,27 @@ conyes20:
   %t30 = inttoptr i64 %arg1 to ptr
   %t31 = getelementptr i8, ptr %t30, i64 16
   %t32 = load i64, ptr %t31
-  %t33 = icmp eq i64 %arg0, 0 ; slot __user__::Debug.debug
-  br i1 %t33, label %slotnull34, label %slotok34
-slotnull34:
-  call void @mdk_dispatch_no_impl()
+  %t33 = call i64 @mdk.slotcall.2(i64 %arg0, i64 0, i64 %t29) ; slot __user__::Debug.debug
+  %t34 = call i64 @mdk.user.6d356635663735373336353732356635665f5f64656275674c6973744974656d73(i64 %arg0, i64 %t32)
+  %t35 = sub i64 %t34, 1
+  %t36 = call { i64, i1 } @llvm.sadd.with.overflow.i64(i64 %t33, i64 %t35)
+  %t37 = extractvalue { i64, i1 } %t36, 0
+  %t38 = extractvalue { i64, i1 } %t36, 1
+  br i1 %t38, label %intovf39, label %intok39
+intovf39:
+  %t40 = ashr i64 %t33, 1
+  %t41 = ashr i64 %t34, 1
+  call void @mdk_int_overflow(i64 0, i64 %t40, i64 %t41)
   unreachable
-slotok34:
-  %t35 = inttoptr i64 %arg0 to ptr
-  %t36 = getelementptr i8, ptr %t35, i64 8
-  %t37 = load i64, ptr %t36
-  %t38 = inttoptr i64 %t37 to ptr
-  %t39 = load i64, ptr %t38
-  %t40 = icmp eq i64 %t39, 2
-  br i1 %t40, label %apfast41, label %apslow41
-apfast41:
-  %t43 = inttoptr i64 %t37 to ptr
-  %t44 = getelementptr i8, ptr %t43, i64 8
-  %t45 = load i64, ptr %t44
-  %t46 = inttoptr i64 %t45 to ptr
-  %t47 = call i64 %t46(i64 %t37, i64 %arg0, i64 %t29)
-  store i64 %t47, ptr %t42
-  br label %apend41
-apslow41:
-  %t49 = getelementptr i64, ptr %t48, i64 0
-  store i64 %arg0, ptr %t49
-  %t50 = getelementptr i64, ptr %t48, i64 1
-  store i64 %t29, ptr %t50
-  %t51 = call i64 @__mdk_apply(i64 %t37, i64 2, ptr %t48)
-  store i64 %t51, ptr %t42
-  br label %apend41
-apend41:
-  %t52 = load i64, ptr %t42
-  %t53 = call i64 @mdk.user.6d356635663735373336353732356635665f5f64656275674c6973744974656d73(i64 %arg0, i64 %t32)
-  %t54 = sub i64 %t53, 1
-  %t55 = call { i64, i1 } @llvm.sadd.with.overflow.i64(i64 %t52, i64 %t54)
-  %t56 = extractvalue { i64, i1 } %t55, 0
-  %t57 = extractvalue { i64, i1 } %t55, 1
-  br i1 %t57, label %intovf58, label %intok58
-intovf58:
-  %t59 = ashr i64 %t52, 1
-  %t60 = ashr i64 %t53, 1
-  call void @mdk_int_overflow(i64 0, i64 %t59, i64 %t60)
-  unreachable
-intok58:
-  store i64 %t56, ptr %t0
+intok39:
+  store i64 %t37, ptr %t0
   br label %decend1
 connext20:
   call void @mdk_nonexhaustive_match()
   unreachable
 decend1:
-  %t61 = load i64, ptr %t0
-  ret i64 %t61
+  %t42 = load i64, ptr %t0
+  ret i64 %t42
 }
 
 ; mdk-module impl.5f5f757365725f5f3a3a44656275677c496e747c.6465627567
@@ -367,3 +335,43 @@ entry:
 @mdk.slotclosure.5f5f757365725f5f3a3a44656275677c496e747c.6465627567 = internal constant [2 x i64] [i64 2, i64 ptrtoint (ptr @mdk.slot.5f5f757365725f5f3a3a44656275677c496e747c.6465627567 to i64)]
 ; mdk-module program
 @mdk.gen.dictcell.70726f6772616d..0 = internal constant [2 x i64] [i64 -3522593011855770626, i64 ptrtoint (ptr @mdk.slotclosure.5f5f757365725f5f3a3a44656275677c496e747c.6465627567 to i64)]
+; mdk-module program
+define internal i64 @mdk.slotcall.2(i64 %dict, i64 %field, i64 %arg0) alwaysinline {
+entry:
+  %t9 = alloca i64
+  %t15 = alloca i64, i64 2
+  %isnull = icmp eq i64 %dict, 0
+  br i1 %isnull, label %slotnull, label %slotok
+slotnull:
+  call void @mdk_dispatch_no_impl()
+  unreachable
+slotok:
+  %t0 = inttoptr i64 %dict to ptr
+  %t1 = add i64 %field, 1
+  %t2 = mul i64 %t1, 8
+  %t3 = getelementptr i8, ptr %t0, i64 %t2
+  %t4 = load i64, ptr %t3
+  %t5 = inttoptr i64 %t4 to ptr
+  %t6 = load i64, ptr %t5
+  %t7 = icmp eq i64 %t6, 2
+  br i1 %t7, label %apfast8, label %apslow8
+apfast8:
+  %t10 = inttoptr i64 %t4 to ptr
+  %t11 = getelementptr i8, ptr %t10, i64 8
+  %t12 = load i64, ptr %t11
+  %t13 = inttoptr i64 %t12 to ptr
+  %t14 = call i64 %t13(i64 %t4, i64 %dict, i64 %arg0)
+  store i64 %t14, ptr %t9
+  br label %apend8
+apslow8:
+  %t16 = getelementptr i64, ptr %t15, i64 0
+  store i64 %dict, ptr %t16
+  %t17 = getelementptr i64, ptr %t15, i64 1
+  store i64 %arg0, ptr %t17
+  %t18 = call i64 @__mdk_apply(i64 %t4, i64 2, ptr %t15)
+  store i64 %t18, ptr %t9
+  br label %apend8
+apend8:
+  %t19 = load i64, ptr %t9
+  ret i64 %t19
+}

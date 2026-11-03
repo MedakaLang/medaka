@@ -53,13 +53,13 @@ table = [
     "s3-implreq-nonlead-positional-identity.mdk",
     "#1981 ROUTE 2a/3: the first method call reads dict parameter 0",
     "HAS",
-    "icmp eq i64 %arg0, 0 ; slot s3-implreq-nonlead-positional-identity::Ix\\.ix$",
+    "call i64 @mdk\\.slotcall\\.[0-9]+\\(i64 %arg0, .*\\) ; slot s3-implreq-nonlead-positional-identity::Ix\\.ix$",
   ),
   (
     "s3-implreq-nonlead-positional-identity.mdk",
     "#1981 ROUTE 2b/3: the second method call reads distinct dict parameter 1. Paired with 2a this pins full positional identity rather than lead-only collapse",
     "HAS",
-    "icmp eq i64 %arg1, 0 ; slot s3-implreq-nonlead-positional-identity::Ix\\.ix$",
+    "call i64 @mdk\\.slotcall\\.[0-9]+\\(i64 %arg1, .*\\) ; slot s3-implreq-nonlead-positional-identity::Ix\\.ix$",
   ),
   (
     "s3-implreq-nonlead-positional-identity-swapped.mdk",
@@ -77,13 +77,13 @@ table = [
     "s3-implreq-nested-positional-identity.mdk",
     "NESTED IMPL-REQUIRES ROUTE 1/2: the first nested predicate reads dict parameter 0",
     "HAS",
-    "icmp eq i64 %arg0, 0 ; slot s3-implreq-nested-positional-identity::Ix\\.ix$",
+    "call i64 @mdk\\.slotcall\\.[0-9]+\\(i64 %arg0, .*\\) ; slot s3-implreq-nested-positional-identity::Ix\\.ix$",
   ),
   (
     "s3-implreq-nested-positional-identity.mdk",
     "NESTED IMPL-REQUIRES ROUTE 2/2: the second nested predicate reads distinct dict parameter 1",
     "HAS",
-    "icmp eq i64 %arg1, 0 ; slot s3-implreq-nested-positional-identity::Ix\\.ix$",
+    "call i64 @mdk\\.slotcall\\.[0-9]+\\(i64 %arg1, .*\\) ; slot s3-implreq-nested-positional-identity::Ix\\.ix$",
   ),
   (
     "s3-implreq-nested-positional-identity-swapped.mdk",
@@ -95,13 +95,13 @@ table = [
     "s3-implreq-nested-positional-identity-swapped.mdk",
     "NESTED IMPL-REQUIRES SWAP ROUTE 1/2: the first semantic call still reads its exact slot",
     "HAS",
-    "icmp eq i64 %arg0, 0 ; slot s3-implreq-nested-positional-identity-swapped::Ix\\.ix$",
+    "call i64 @mdk\\.slotcall\\.[0-9]+\\(i64 %arg0, .*\\) ; slot s3-implreq-nested-positional-identity-swapped::Ix\\.ix$",
   ),
   (
     "s3-implreq-nested-positional-identity-swapped.mdk",
     "NESTED IMPL-REQUIRES SWAP ROUTE 2/2: the second semantic call still reads the other slot",
     "HAS",
-    "icmp eq i64 %arg1, 0 ; slot s3-implreq-nested-positional-identity-swapped::Ix\\.ix$",
+    "call i64 @mdk\\.slotcall\\.[0-9]+\\(i64 %arg1, .*\\) ; slot s3-implreq-nested-positional-identity-swapped::Ix\\.ix$",
   ),
   (
     "s-nested-encl-positional-identity.mdk",
@@ -113,13 +113,13 @@ table = [
     "s-nested-encl-positional-identity.mdk",
     "NESTED DECLARED ROUTE 1/2: the first occurrence reads dict parameter 0",
     "HAS",
-    "icmp eq i64 %arg0, 0 ; slot s-nested-encl-positional-identity::Ix\\.ix$",
+    "call i64 @mdk\\.slotcall\\.[0-9]+\\(i64 %arg0, .*\\) ; slot s-nested-encl-positional-identity::Ix\\.ix$",
   ),
   (
     "s-nested-encl-positional-identity.mdk",
     "NESTED DECLARED ROUTE 2/2: the second occurrence reads distinct dict parameter 1",
     "HAS",
-    "icmp eq i64 %arg1, 0 ; slot s-nested-encl-positional-identity::Ix\\.ix$",
+    "call i64 @mdk\\.slotcall\\.[0-9]+\\(i64 %arg1, .*\\) ; slot s-nested-encl-positional-identity::Ix\\.ix$",
   ),
   (
     "s-nested-encl-positional-identity-swapped.mdk",
@@ -131,13 +131,13 @@ table = [
     "s-nested-encl-positional-identity-swapped.mdk",
     "NESTED DECLARED SWAP ROUTE 1/2: the first semantic occurrence reads its exact slot",
     "HAS",
-    "icmp eq i64 %arg0, 0 ; slot s-nested-encl-positional-identity-swapped::Ix\\.ix$",
+    "call i64 @mdk\\.slotcall\\.[0-9]+\\(i64 %arg0, .*\\) ; slot s-nested-encl-positional-identity-swapped::Ix\\.ix$",
   ),
   (
     "s-nested-encl-positional-identity-swapped.mdk",
     "NESTED DECLARED SWAP ROUTE 2/2: the second semantic occurrence reads the other slot",
     "HAS",
-    "icmp eq i64 %arg1, 0 ; slot s-nested-encl-positional-identity-swapped::Ix\\.ix$",
+    "call i64 @mdk\\.slotcall\\.[0-9]+\\(i64 %arg1, .*\\) ; slot s-nested-encl-positional-identity-swapped::Ix\\.ix$",
   ),
   (
     "s4-joint-residual-rdict-native.mdk",
@@ -197,7 +197,7 @@ table = [
     "s3-assum-inst-precedence-xmod/main.mdk",
     "#2548 ASSUM ROUTE: the `tagn x` occurrence -- goal `Tag2 a`, LITERALLY the declared predicate -- dispatches through the FORWARDED CALLER DICT `%arg0`, never rebuilding one. This is `assum` on the wire: a regression that routed this call through `inst` instead would still print the right value but would drop this dict-forwarding shape",
     "HAS",
-    "icmp eq i64 %arg0, 0 ; slot iface::Tag2\\.tagn$",
+    "call i64 @mdk\\.slotcall\\.[0-9]+\\(i64 %arg0, .*\\) ; slot iface::Tag2\\.tagn$",
   ),
   (
     "s3-assum-inst-precedence-xmod/main.mdk",

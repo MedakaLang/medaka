@@ -3866,7 +3866,9 @@ test "(ah) a slot load tests the dictionary for null and traps through mdk_dispa
   expectEach [
     (
       "the dictionary word is compared with null before the load",
-      expectTextContainsAll ["= icmp eq i64 %arg0, 0", "label %slotnull"] ir,
+      expectTextContainsAll
+        ["@mdk.slotcall.", "= icmp eq i64 %dict, 0", "label %slotnull"]
+        ir,
     ),
     (
       "the null branch traps and does not fall through to the load",

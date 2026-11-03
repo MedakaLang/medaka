@@ -917,6 +917,8 @@ data Emit = Emit {
   defaultReceiver : Ref (Option (String, Int, Int)),
   -- the `@mdk.supers.*` constants written so far (`superCountGlobal`)
   superCountGlobals : Ref (OrdMap Unit),
+  -- the `@mdk.slotcall.*` helpers defined so far (`slotCallHelper`)
+  slotCallHelpers : Ref (OrdMap Unit),
   -- constant dict / closure cells already emitted, keyed by `constCellKey`
   -- (scope word + initializer text), so a cell is deduped only WITHIN the scope
   -- that minted it — see `constCellKey`.
@@ -8160,17 +8162,104 @@ emitSlotCall e env name iface dict methRoutes argOps =
   let dictPtr = dictWordOfRoute e env dict
   let methWords = dictWordsOf e env methRoutes
   match slotOf name (interfaceSlots e.methodTables iface) 0
-    Some (i, slot) =>
-      let clos = loadSlot e iface name dictPtr i
-      (
-        emitApplyAnyWide
-          e
-          (slotWideMessage name slot)
-          clos
-          (dictPtr :: methWords ++ argOps),
-        LTInt,
-      )
+    Some (i, slot) => match slotWideMessage name slot
+      Some msg =>
+        let clos = loadSlot e iface name dictPtr i
+        (
+          emitApplyAnyWide e (Some msg) clos (dictPtr :: methWords ++ argOps),
+          LTInt,
+        )
+      None =>
+        (emitSharedSlotCall e iface name dictPtr i (methWords ++ argOps), LTInt)
     None => gapE e "method '\{name}' is not a slot of interface '\{iface}'"
+
+-- The call of slot [i] of dictionary [dictPtr] through the shared helper for its
+-- argument count (`slotCallHelper`), passing the slot's field index; the call line
+-- carries the comment naming the slot's method, as `loadSlot`'s null test does.
+emitSharedSlotCall : Emit ->
+  String ->
+  String ->
+  String ->
+  Int ->
+  List String ->
+  String
+emitSharedSlotCall e iface method dictPtr i rest =
+  let field = slotField e iface i
+  let helper = slotCallHelper e (1 + lengthS rest)
+  let r = freshReg e
+  let call = wordCall e helper (dictPtr :: field :: rest)
+  emit e "  \{r} = \{call} ; slot \{iface}.\{method}"
+  r
+
+-- The field of dictionary [iface]'s slot [i]: a constant past the supers, or in
+-- the prelude half of a prelude-object build, the slot index added to the
+-- `@mdk.supers.*` constant (see `loadSlot`).
+slotField : Emit -> String -> Int -> String
+slotField e iface i =
+  if e.input.emitHalf == emitHalfPrelude then
+    let supers = freshReg e
+    emit e "  \{supers} = load i64, ptr @\{symRef e (superCountGlobal e iface)}"
+    let field = freshReg e
+    emit e "  \{field} = add i64 \{supers}, \{intToString i}"
+    field
+  else
+    intToString (staticSlotField e iface i)
+
+-- the field of [iface]'s slot [i] where the super count is known
+staticSlotField : Emit -> String -> Int -> Int
+staticSlotField e iface i =
+  if isSome !e.hiddenDefines then
+    let _ = superCountGlobal e iface
+    ()
+  superCountOf e iface + i
+
+-- The helper `@mdk.slotcall.<arity>(dict, field, args..)`: the null-dictionary
+-- trap, the load of the slot closure at [field] and its application to the
+-- dictionary and the [arity] - 1 arguments, emitted once per arity so a call site
+-- is one line.  `alwaysinline` puts that code back at every site, where the field
+-- is a constant and the result and argument allocas join the caller's entry block,
+-- so the optimized code is the inline sequence's.
+slotCallHelper : Emit -> Int -> String
+slotCallHelper e arity =
+  let sym = LN.llvmName (LN.LSlotCall arity)
+  if omHasKey sym !e.slotCallHelpers then
+    sym
+  else
+    e.slotCallHelpers := omInsert sym () !e.slotCallHelpers
+    withProgramScope e (_ => emitSlotCallHelper e sym arity)
+    sym
+
+emitSlotCallHelper : Emit -> String -> Int -> Unit
+emitSlotCallHelper e sym arity =
+  let saved = (bufRef e).value
+  bufRef e := []
+  let scope = beginDefine e
+  let args = wordNames "%arg" (arity - 1) 0
+  defineHeaderAs
+    e
+    "define internal"
+    LiftedDefine
+    sym
+    (FuncProto
+      "i64"
+      (map (r => LlvmParam "i64" r) ("%dict" :: "%field" :: args))
+      " alwaysinline")
+  emit e "entry:"
+  emit e "  %isnull = icmp eq i64 %dict, 0"
+  emit e "  br i1 %isnull, label %slotnull, label %slotok"
+  emit e "slotnull:"
+  emit e (rtLine e "" "void" "mdk_dispatch_no_impl" [])
+  emit e "  unreachable"
+  emit e "slotok:"
+  let clos = loadFieldDyn e "%dict" "%field"
+  let r = emitApplyAny e clos ("%dict" :: args)
+  emit e ("  ret i64 " ++ r)
+  emit e "}"
+  emit e ""
+  let lamLines = (bufRef e).value
+  lamsRef e := lamLines ++ (lamsRef e).value
+  endDefine e scope
+  bufRef e := saved
 
 -- the index of [name]'s slot among [slots], and the slot
 slotOf : String -> List MethodSlot -> Int -> Option (Int, MethodSlot)
@@ -8207,16 +8296,9 @@ loadSlot e iface method dictPtr i =
   emit e "  unreachable"
   emit e (okL ++ ":")
   if e.input.emitHalf == emitHalfPrelude then
-    let supers = freshReg e
-    emit e "  \{supers} = load i64, ptr @\{symRef e (superCountGlobal e iface)}"
-    let field = freshReg e
-    emit e "  \{field} = add i64 \{supers}, \{intToString i}"
-    loadFieldDyn e dictPtr field
+    loadFieldDyn e dictPtr (slotField e iface i)
   else
-    if isSome !e.hiddenDefines then
-      let _ = superCountGlobal e iface
-      ()
-    loadField e dictPtr (superCountOf e iface + i)
+    loadField e dictPtr (staticSlotField e iface i)
 
 -- The `@mdk.supers.*` constant of interface [iface]: declared by the prelude
 -- half, defined by the program half.
@@ -14798,6 +14880,7 @@ buildEmitState cfg input groups ctorArs ctorTypes implEntries facts =
     slotCache = Ref omEmpty,
     defaultReceiver = Ref None,
     superCountGlobals = Ref omEmpty,
+    slotCallHelpers = Ref omEmpty,
     dictConstCache = Ref [],
     strLitCache = Ref omEmpty,
     closConstCache = Ref [],

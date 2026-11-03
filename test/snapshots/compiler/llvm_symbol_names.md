@@ -1,5 +1,5 @@
 # META
-source_lines=73
+source_lines=75
 stages=DESUGAR,MARK
 # SOURCE
 import support.symbol_encoding.{encodeComponent}
@@ -33,6 +33,7 @@ public export data LlvmName =
   | LDefaultMethod String String String
   | LSlotFunction String String
   | LSlotClosure String String
+  | LSlotCall Int
   | LSuperCount String
   | LConstructor String
   | LGeneratedName GeneratedFamily String String Int
@@ -71,6 +72,7 @@ llvmName (LSlotFunction key method) =
   "mdk.slot.\{encodeComponent key}.\{encodeComponent method}"
 llvmName (LSlotClosure key method) =
   "mdk.slotclosure.\{encodeComponent key}.\{encodeComponent method}"
+llvmName (LSlotCall arity) = "mdk.slotcall." ++ intToString arity
 llvmName (LSuperCount iface) = "mdk.supers." ++ encodeComponent iface
 llvmName (LConstructor name) = "mdk.ctor." ++ encodeComponent name
 llvmName (LGeneratedName family scope subject ordinal) =
@@ -78,7 +80,7 @@ llvmName (LGeneratedName family scope subject ordinal) =
 # DESUGAR
 (DUse false (UseGroup ("support" "symbol_encoding") ((mem "encodeComponent" false))))
 (DData Public "GeneratedFamily" () ((variant "GenString" (ConPos)) (variant "GenTrap" (ConPos)) (variant "GenLambda" (ConPos)) (variant "GenMethodValue" (ConPos)) (variant "GenDictValue" (ConPos)) (variant "GenNamedPap" (ConPos)) (variant "GenIndirectPap" (ConPos)) (variant "GenDictCell" (ConPos)) (variant "GenCtorCell" (ConPos)) (variant "GenEta" (ConPos)) (variant "GenCtorPap" (ConPos)) (variant "GenCtorEta" (ConPos)) (variant "GenExternEta" (ConPos)) (variant "GenU64" (ConPos)) (variant "GenI64" (ConPos)) (variant "GenGlobalName" (ConPos))) ())
-(DData Public "LlvmName" () ((variant "LUserFunction" (ConPos (TyCon "String"))) (variant "LUserGlobal" (ConPos (TyCon "String"))) (variant "LGlobalState" (ConPos (TyCon "String"))) (variant "LGlobalForcer" (ConPos (TyCon "String"))) (variant "LRawWorker" (ConPos (TyCon "String"))) (variant "LFloatWorker" (ConPos (TyCon "String"))) (variant "LImplMethod" (ConPos (TyCon "String") (TyCon "String"))) (variant "LDefaultMethod" (ConPos (TyCon "String") (TyCon "String") (TyCon "String"))) (variant "LSlotFunction" (ConPos (TyCon "String") (TyCon "String"))) (variant "LSlotClosure" (ConPos (TyCon "String") (TyCon "String"))) (variant "LSuperCount" (ConPos (TyCon "String"))) (variant "LConstructor" (ConPos (TyCon "String"))) (variant "LGeneratedName" (ConPos (TyCon "GeneratedFamily") (TyCon "String") (TyCon "String") (TyCon "Int")))) ())
+(DData Public "LlvmName" () ((variant "LUserFunction" (ConPos (TyCon "String"))) (variant "LUserGlobal" (ConPos (TyCon "String"))) (variant "LGlobalState" (ConPos (TyCon "String"))) (variant "LGlobalForcer" (ConPos (TyCon "String"))) (variant "LRawWorker" (ConPos (TyCon "String"))) (variant "LFloatWorker" (ConPos (TyCon "String"))) (variant "LImplMethod" (ConPos (TyCon "String") (TyCon "String"))) (variant "LDefaultMethod" (ConPos (TyCon "String") (TyCon "String") (TyCon "String"))) (variant "LSlotFunction" (ConPos (TyCon "String") (TyCon "String"))) (variant "LSlotClosure" (ConPos (TyCon "String") (TyCon "String"))) (variant "LSlotCall" (ConPos (TyCon "Int"))) (variant "LSuperCount" (ConPos (TyCon "String"))) (variant "LConstructor" (ConPos (TyCon "String"))) (variant "LGeneratedName" (ConPos (TyCon "GeneratedFamily") (TyCon "String") (TyCon "String") (TyCon "Int")))) ())
 (DTypeSig false "familyTag" (TyFun (TyCon "GeneratedFamily") (TyCon "String")))
 (DFunDef false "familyTag" ((PCon "GenString")) (ELit (LString "string")))
 (DFunDef false "familyTag" ((PCon "GenTrap")) (ELit (LString "trap")))
@@ -107,13 +109,14 @@ llvmName (LGeneratedName family scope subject ordinal) =
 (DFunDef false "llvmName" ((PCon "LDefaultMethod" (PVar "iface") (PVar "method") (PVar "key"))) (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "mdk.default.")) (EApp (EVar "display") (EApp (EVar "encodeComponent") (EVar "iface")))) (ELit (LString "."))) (EApp (EVar "display") (EApp (EVar "encodeComponent") (EVar "method")))) (ELit (LString "."))) (EApp (EVar "display") (EApp (EVar "encodeComponent") (EVar "key")))) (ELit (LString ""))))
 (DFunDef false "llvmName" ((PCon "LSlotFunction" (PVar "key") (PVar "method"))) (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "mdk.slot.")) (EApp (EVar "display") (EApp (EVar "encodeComponent") (EVar "key")))) (ELit (LString "."))) (EApp (EVar "display") (EApp (EVar "encodeComponent") (EVar "method")))) (ELit (LString ""))))
 (DFunDef false "llvmName" ((PCon "LSlotClosure" (PVar "key") (PVar "method"))) (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "mdk.slotclosure.")) (EApp (EVar "display") (EApp (EVar "encodeComponent") (EVar "key")))) (ELit (LString "."))) (EApp (EVar "display") (EApp (EVar "encodeComponent") (EVar "method")))) (ELit (LString ""))))
+(DFunDef false "llvmName" ((PCon "LSlotCall" (PVar "arity"))) (EBinOp "++" (ELit (LString "mdk.slotcall.")) (EApp (EVar "intToString") (EVar "arity"))))
 (DFunDef false "llvmName" ((PCon "LSuperCount" (PVar "iface"))) (EBinOp "++" (ELit (LString "mdk.supers.")) (EApp (EVar "encodeComponent") (EVar "iface"))))
 (DFunDef false "llvmName" ((PCon "LConstructor" (PVar "name"))) (EBinOp "++" (ELit (LString "mdk.ctor.")) (EApp (EVar "encodeComponent") (EVar "name"))))
 (DFunDef false "llvmName" ((PCon "LGeneratedName" (PVar "family") (PVar "scope") (PVar "subject") (PVar "ordinal"))) (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "mdk.gen.")) (EApp (EVar "display") (EApp (EVar "familyTag") (EVar "family")))) (ELit (LString "."))) (EApp (EVar "display") (EApp (EVar "encodeComponent") (EVar "scope")))) (ELit (LString "."))) (EApp (EVar "display") (EApp (EVar "encodeComponent") (EVar "subject")))) (ELit (LString "."))) (EApp (EVar "display") (EApp (EVar "intToString") (EVar "ordinal")))) (ELit (LString ""))))
 # MARK
 (DUse false (UseGroup ("support" "symbol_encoding") ((mem "encodeComponent" false))))
 (DData Public "GeneratedFamily" () ((variant "GenString" (ConPos)) (variant "GenTrap" (ConPos)) (variant "GenLambda" (ConPos)) (variant "GenMethodValue" (ConPos)) (variant "GenDictValue" (ConPos)) (variant "GenNamedPap" (ConPos)) (variant "GenIndirectPap" (ConPos)) (variant "GenDictCell" (ConPos)) (variant "GenCtorCell" (ConPos)) (variant "GenEta" (ConPos)) (variant "GenCtorPap" (ConPos)) (variant "GenCtorEta" (ConPos)) (variant "GenExternEta" (ConPos)) (variant "GenU64" (ConPos)) (variant "GenI64" (ConPos)) (variant "GenGlobalName" (ConPos))) ())
-(DData Public "LlvmName" () ((variant "LUserFunction" (ConPos (TyCon "String"))) (variant "LUserGlobal" (ConPos (TyCon "String"))) (variant "LGlobalState" (ConPos (TyCon "String"))) (variant "LGlobalForcer" (ConPos (TyCon "String"))) (variant "LRawWorker" (ConPos (TyCon "String"))) (variant "LFloatWorker" (ConPos (TyCon "String"))) (variant "LImplMethod" (ConPos (TyCon "String") (TyCon "String"))) (variant "LDefaultMethod" (ConPos (TyCon "String") (TyCon "String") (TyCon "String"))) (variant "LSlotFunction" (ConPos (TyCon "String") (TyCon "String"))) (variant "LSlotClosure" (ConPos (TyCon "String") (TyCon "String"))) (variant "LSuperCount" (ConPos (TyCon "String"))) (variant "LConstructor" (ConPos (TyCon "String"))) (variant "LGeneratedName" (ConPos (TyCon "GeneratedFamily") (TyCon "String") (TyCon "String") (TyCon "Int")))) ())
+(DData Public "LlvmName" () ((variant "LUserFunction" (ConPos (TyCon "String"))) (variant "LUserGlobal" (ConPos (TyCon "String"))) (variant "LGlobalState" (ConPos (TyCon "String"))) (variant "LGlobalForcer" (ConPos (TyCon "String"))) (variant "LRawWorker" (ConPos (TyCon "String"))) (variant "LFloatWorker" (ConPos (TyCon "String"))) (variant "LImplMethod" (ConPos (TyCon "String") (TyCon "String"))) (variant "LDefaultMethod" (ConPos (TyCon "String") (TyCon "String") (TyCon "String"))) (variant "LSlotFunction" (ConPos (TyCon "String") (TyCon "String"))) (variant "LSlotClosure" (ConPos (TyCon "String") (TyCon "String"))) (variant "LSlotCall" (ConPos (TyCon "Int"))) (variant "LSuperCount" (ConPos (TyCon "String"))) (variant "LConstructor" (ConPos (TyCon "String"))) (variant "LGeneratedName" (ConPos (TyCon "GeneratedFamily") (TyCon "String") (TyCon "String") (TyCon "Int")))) ())
 (DTypeSig false "familyTag" (TyFun (TyCon "GeneratedFamily") (TyCon "String")))
 (DFunDef false "familyTag" ((PCon "GenString")) (ELit (LString "string")))
 (DFunDef false "familyTag" ((PCon "GenTrap")) (ELit (LString "trap")))
@@ -142,6 +145,7 @@ llvmName (LGeneratedName family scope subject ordinal) =
 (DFunDef false "llvmName" ((PCon "LDefaultMethod" (PVar "iface") (PVar "method") (PVar "key"))) (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "mdk.default.")) (EApp (EMethodRef "display") (EApp (EVar "encodeComponent") (EVar "iface")))) (ELit (LString "."))) (EApp (EMethodRef "display") (EApp (EVar "encodeComponent") (EVar "method")))) (ELit (LString "."))) (EApp (EMethodRef "display") (EApp (EVar "encodeComponent") (EVar "key")))) (ELit (LString ""))))
 (DFunDef false "llvmName" ((PCon "LSlotFunction" (PVar "key") (PVar "method"))) (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "mdk.slot.")) (EApp (EMethodRef "display") (EApp (EVar "encodeComponent") (EVar "key")))) (ELit (LString "."))) (EApp (EMethodRef "display") (EApp (EVar "encodeComponent") (EVar "method")))) (ELit (LString ""))))
 (DFunDef false "llvmName" ((PCon "LSlotClosure" (PVar "key") (PVar "method"))) (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "mdk.slotclosure.")) (EApp (EMethodRef "display") (EApp (EVar "encodeComponent") (EVar "key")))) (ELit (LString "."))) (EApp (EMethodRef "display") (EApp (EVar "encodeComponent") (EVar "method")))) (ELit (LString ""))))
+(DFunDef false "llvmName" ((PCon "LSlotCall" (PVar "arity"))) (EBinOp "++" (ELit (LString "mdk.slotcall.")) (EApp (EVar "intToString") (EVar "arity"))))
 (DFunDef false "llvmName" ((PCon "LSuperCount" (PVar "iface"))) (EBinOp "++" (ELit (LString "mdk.supers.")) (EApp (EVar "encodeComponent") (EVar "iface"))))
 (DFunDef false "llvmName" ((PCon "LConstructor" (PVar "name"))) (EBinOp "++" (ELit (LString "mdk.ctor.")) (EApp (EVar "encodeComponent") (EVar "name"))))
 (DFunDef false "llvmName" ((PCon "LGeneratedName" (PVar "family") (PVar "scope") (PVar "subject") (PVar "ordinal"))) (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "mdk.gen.")) (EApp (EMethodRef "display") (EApp (EVar "familyTag") (EVar "family")))) (ELit (LString "."))) (EApp (EMethodRef "display") (EApp (EVar "encodeComponent") (EVar "scope")))) (ELit (LString "."))) (EApp (EMethodRef "display") (EApp (EVar "encodeComponent") (EVar "subject")))) (ELit (LString "."))) (EApp (EMethodRef "display") (EApp (EVar "intToString") (EVar "ordinal")))) (ELit (LString ""))))
