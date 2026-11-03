@@ -1,0 +1,159 @@
+{
+  "packaging_ns": {
+    "python": 70259348,
+    "medaka": 58988694
+  },
+  "manifests": {
+    "python": {
+      "candidate": "python",
+      "worker": "/var/tmp/medaka-scratch/sprints/mcp-m0-20261102/03-packaging/linux-install/python/toolchain/medaka",
+      "sha256": "4b05aab61552d290a0e33d2b6f2f825290ecc61e24d9138f7fbaa829a19ee503",
+      "identity_provenance": "inferred",
+      "matching": "unavailable"
+    },
+    "medaka": {
+      "candidate": "medaka",
+      "worker": "/var/tmp/medaka-scratch/sprints/mcp-m0-20261102/03-packaging/linux-install/medaka/toolchain/medaka",
+      "sha256": "4b05aab61552d290a0e33d2b6f2f825290ecc61e24d9138f7fbaa829a19ee503",
+      "identity_provenance": "inferred",
+      "matching": "unavailable"
+    }
+  },
+  "sessions": [
+    {
+      "candidate": "medaka",
+      "repetition": 0,
+      "launch_to_exit_ns": 31687128,
+      "exit": 0,
+      "stdout": "unavailable: live worker supervision requires bidirectional process IO\n",
+      "semantic_query": "unavailable"
+    },
+    {
+      "candidate": "python",
+      "repetition": 0,
+      "launch_to_initialize_ns": 100051611,
+      "open_worker_ns": 95671819,
+      "first_query_ns": 21087573,
+      "warm_query_ns": [
+        14245668,
+        25689183,
+        10864538,
+        10083006,
+        12906503
+      ],
+      "cpu_user_seconds": 0.092832,
+      "cpu_system_seconds": 0.027619999999999995,
+      "supervisor_vmhwm_bytes": 32681984,
+      "worker_vmhwm_bytes": 75751424,
+      "worker_reaped": true
+    },
+    {
+      "candidate": "medaka",
+      "repetition": 1,
+      "launch_to_exit_ns": 19100525,
+      "exit": 0,
+      "stdout": "unavailable: live worker supervision requires bidirectional process IO\n",
+      "semantic_query": "unavailable"
+    },
+    {
+      "candidate": "python",
+      "repetition": 1,
+      "launch_to_initialize_ns": 91281249,
+      "open_worker_ns": 70599962,
+      "first_query_ns": 27469759,
+      "warm_query_ns": [
+        22200855,
+        22002626,
+        16874841,
+        25084197,
+        23197725
+      ],
+      "cpu_user_seconds": 0.12185299999999999,
+      "cpu_system_seconds": 0.025817,
+      "supervisor_vmhwm_bytes": 32706560,
+      "worker_vmhwm_bytes": 77176832,
+      "worker_reaped": true
+    },
+    {
+      "candidate": "medaka",
+      "repetition": 2,
+      "launch_to_exit_ns": 11281891,
+      "exit": 0,
+      "stdout": "unavailable: live worker supervision requires bidirectional process IO\n",
+      "semantic_query": "unavailable"
+    },
+    {
+      "candidate": "python",
+      "repetition": 2,
+      "launch_to_initialize_ns": 118471292,
+      "open_worker_ns": 100837160,
+      "first_query_ns": 28652689,
+      "warm_query_ns": [
+        16590206,
+        21453016,
+        18280222,
+        25456920,
+        22587079
+      ],
+      "cpu_user_seconds": 0.125445,
+      "cpu_system_seconds": 0.026288000000000006,
+      "supervisor_vmhwm_bytes": 32497664,
+      "worker_vmhwm_bytes": 75882496,
+      "worker_reaped": true
+    },
+    {
+      "candidate": "medaka",
+      "repetition": 3,
+      "launch_to_exit_ns": 41605096,
+      "exit": 0,
+      "stdout": "unavailable: live worker supervision requires bidirectional process IO\n",
+      "semantic_query": "unavailable"
+    },
+    {
+      "candidate": "python",
+      "repetition": 3,
+      "launch_to_initialize_ns": 126963166,
+      "open_worker_ns": 124581631,
+      "first_query_ns": 20017389,
+      "warm_query_ns": [
+        12131850,
+        20167123,
+        18142495,
+        18645001,
+        21214993
+      ],
+      "cpu_user_seconds": 0.100889,
+      "cpu_system_seconds": 0.03763,
+      "supervisor_vmhwm_bytes": 32571392,
+      "worker_vmhwm_bytes": 75771904,
+      "worker_reaped": true
+    },
+    {
+      "candidate": "medaka",
+      "repetition": 4,
+      "launch_to_exit_ns": 20885888,
+      "exit": 0,
+      "stdout": "unavailable: live worker supervision requires bidirectional process IO\n",
+      "semantic_query": "unavailable"
+    },
+    {
+      "candidate": "python",
+      "repetition": 4,
+      "launch_to_initialize_ns": 74448021,
+      "open_worker_ns": 128544822,
+      "first_query_ns": 24633873,
+      "warm_query_ns": [
+        27774216,
+        17164655,
+        18559287,
+        33696852,
+        34656114
+      ],
+      "cpu_user_seconds": 0.11266200000000004,
+      "cpu_system_seconds": 0.03162699999999999,
+      "supervisor_vmhwm_bytes": 32542720,
+      "worker_vmhwm_bytes": 76693504,
+      "worker_reaped": true
+    }
+  ]
+}
