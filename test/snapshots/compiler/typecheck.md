@@ -2267,7 +2267,7 @@ graphModuleWorker capture sel prev mid seed accData accAll prog =
 -- `mainSchemeRef`.  S-3 (#2234) made `mainShapeWarnings` pure — it now READS the ref
 -- rather than re-elaborating — which was correct for every caller that had a
 -- producer, but `checkJsonFile`'s multi-module arm (driver/diagnostics.mdk) had NONE:
--- `analyzeProject` → `typecheckPassFull` → here, and nothing on that chain wrote it.
+-- `analyzeProject` → `typecheckPassReport` → here, and nothing on that chain wrote it.
 -- Both directions of that hole are pinned:
 --   * fresh process — the ref is `None`, `mainIsUnitNow` answers False on `None`,
 --     so W-MAIN-SHAPE FIRED on a clean Unit main (false positive on every
