@@ -368,8 +368,15 @@ test "medaka test runs a target against the core.mdk beside runtime.mdk" = withS
 seededTest : Option Int ->
   List String ->
   <Exec, IO> Result String (Int, String, String)
-seededTest seed args =
-  runVerb "env" (seedAssignment seed ++ [medakaBin, "test"] ++ args)
+seededTest = seededTestEnv []
+
+-- [seededTest] with extra `NAME=value` assignments in the environment.
+seededTestEnv : List String ->
+  Option Int ->
+  List String ->
+  <Exec, IO> Result String (Int, String, String)
+seededTestEnv env seed args =
+  runVerb "env" (env ++ seedAssignment seed ++ [medakaBin, "test"] ++ args)
 
 seedAssignment : Option Int -> List String
 seedAssignment (Some n) = ["MEDAKA_SEED=\{intToString n}"]
@@ -751,7 +758,14 @@ lineAfter needle (l :: rest)
 -- `--json` writes one envelope holding the seed and the code with stdout empty,
 -- and a directory run prints the one seed line on stdout.
 abortSeedRows : String -> String -> <Exec, IO, FileRead, FileWrite> Expectation
-abortSeedRows src code =
+abortSeedRows = abortSeedRowsEnv []
+
+-- [abortSeedRows] with extra `NAME=value` assignments in the environment.
+abortSeedRowsEnv : List String ->
+  String ->
+  String ->
+  <Exec, IO, FileRead, FileWrite> Expectation
+abortSeedRowsEnv env src code =
   withFixtures
     [("abort_test.mdk", src)]
     (dir =>
@@ -759,7 +773,7 @@ abortSeedRows src code =
       expectAll [
         labelFail
           "single file"
-          (withSpawn (seededTest (Some 7) [
+          (withSpawn (seededTestEnv env (Some 7) [
             "--engines", "eval", target
           ]) ((exit, out, err) => expectAll [
             expectNotEqual 0 exit,
@@ -771,7 +785,7 @@ abortSeedRows src code =
           ])),
         labelFail
           "--json"
-          (withSpawn (seededTest (Some 7) [
+          (withSpawn (seededTestEnv env (Some 7) [
             "--json", "--engines", "eval", target
           ]) ((exit, out, err) => expectAll [
             expectNotEqual 0 exit,
@@ -782,7 +796,7 @@ abortSeedRows src code =
           ])),
         labelFail
           "directory"
-          (withSpawn (seededTest (Some 7) [
+          (withSpawn (seededTestEnv env (Some 7) [
             "--engines", "eval", dir
           ]) ((exit, out, err) => expectAll [
             expectNotEqual 0 exit,
@@ -796,6 +810,63 @@ test "a panic in the evaluator's compiled code prints the run's seed in every mo
 
 test "a C stack overflow under the eval engine prints the run's seed in every mode" =
   abortSeedRows cStackTestSrc "E-STACK-OVERFLOW"
+
+-- The heap cap that makes `oomSrc` fail to allocate; Boehm reads it on every
+-- platform, unlike `ulimit -v`.
+heapCap : List String
+heapCap = ["GC_MAXIMUM_HEAP_SIZE=200000000"]
+
+oomSrc : String
+oomSrc =
+  "import test.{expectEqual}\n\ntest \"oom\" =\n  let k = randomInt 0 1\n  let a = arrayMake 40000000 k\n  expectEqual 0 (arrayLength a)\n"
+
+oomMainSrc : String
+oomMainSrc =
+  "main =\n  let k = randomInt 0 1\n  let a = arrayMake 40000000 k\n  println (intToString (arrayLength a))\n"
+
+test "an allocation failure under the eval engine prints the run's seed in every mode" =
+  abortSeedRowsEnv heapCap oomSrc "E-OUT-OF-MEMORY"
+
+test "an allocation failure is reported as out of memory with exit 1, built and run" =
+  withFixtures
+    [("oom.mdk", oomMainSrc)]
+    (dir => expectAll [
+      labelFail
+        "run"
+        (withSpawn (runVerb
+          "env"
+          (["MEDAKA_SEED=7"]
+            ++ heapCap
+            ++ [
+              medakaBin,
+              "run",
+              "\{dir}/oom.mdk",
+            ])) ((code, out, err) => expectAll [
+          expectEqual 1 code,
+          expectTrue
+            (contains
+              "runtime error [E-OUT-OF-MEMORY]: out of memory (could not allocate "
+              err),
+          expectEqual [] (seedLines (lines "\{out}\n\{err}")),
+        ])),
+      labelFail "build" (match runVerb medakaBin [
+        "build",
+        "\{dir}/oom.mdk",
+        "-o",
+        "\{dir}/oom.bin",
+      ]
+        Ok (0, _, _) => withSpawn (runVerb
+          "env"
+          (heapCap ++ ["\{dir}/oom.bin"])) ((code, _, err) => expectAll [
+          expectEqual 1 code,
+          expectTrue
+            (contains
+              "runtime error [E-OUT-OF-MEMORY]: out of memory (could not allocate "
+              err),
+        ])
+        Ok (_, _, err) => fail "medaka build failed: \{err}"
+        Err e => fail e),
+    ])
 
 test "medaka run of the evaluator-panic and stack-overflow programs prints no seed, seeded" =
   withFixtures

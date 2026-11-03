@@ -303,6 +303,7 @@ The tables below stay as narrative.
 | `E-APPEND-UNROUTED` | runtime | unrouted append (C runtime) |
 | `E-BYTEBLOCK-APPEND` | runtime | byte-block append failure (C runtime) |
 | `E-FATAL-SIGNAL` | runtime | fatal signal caught by the C runtime |
+| `E-OUT-OF-MEMORY` | runtime | the allocator could not satisfy a request (reported by the C runtime) |
 <!-- registry:end -->
 
 ---

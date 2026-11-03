@@ -97,8 +97,15 @@ __attribute__((weak)) const long long mdk_gc_initial_heap_bytes = 0;
  * separately by GC_pthread_create.  GC_malloc would otherwise lazily init on its
  * first call. */
 
+static void *mdk_gc_oom(size_t bytes);
+static void mdk_gc_warn(char *msg, GC_word arg);
+static GC_warn_proc mdk_gc_prev_warn = 0;
+
 __attribute__((constructor)) static void mdk_gc_init(void) {
   GC_INIT();
+  mdk_gc_prev_warn = GC_get_warn_proc();
+  GC_set_warn_proc(mdk_gc_warn);
+  GC_set_oom_fn(mdk_gc_oom);
   if (mdk_gc_initial_heap_bytes > 0 && !getenv("GC_INITIAL_HEAP_SIZE"))
     GC_expand_hp((size_t)mdk_gc_initial_heap_bytes);
   /* Perf tuning (compiler/PERF-RESULTS.md): Medaka workloads are
@@ -1320,6 +1327,30 @@ static void mdk_flush_run_stdout_on_abort(void) {
       len -= n;
     }
   }
+}
+
+/* Boehm calls this from inside its allocator when a request cannot be met, so it
+   must not allocate or take a lock: it reports through the write(2)-only abort
+   emitter and leaves with _exit. A returned NULL would be dereferenced and
+   misreported as a segmentation fault. */
+static void *mdk_gc_oom(size_t bytes) {
+  struct mdk_abort_buf a;
+  a.n = 0;
+  a.b[0] = 0;
+  mdk_abuf_u64(&a, (unsigned long long)bytes);
+  mdk_flush_run_stdout_on_abort();
+  mdk_flush_build_stdout_on_fatal_signal();
+  mdk_abort_coded(0, "E-OUT-OF-MEMORY", "out of memory (could not allocate ", a.b, a.n,
+                  " bytes)");
+  _exit(1);
+}
+
+/* While an abort template is armed, stderr must stay one JSON document, and the
+   failed size is already in the coded message, so Boehm's own warnings (printed
+   as the heap fills) are dropped; otherwise they pass to the previous proc. */
+static void mdk_gc_warn(char *msg, GC_word arg) {
+  if (mdk_abort_tmpl) return;
+  if (mdk_gc_prev_warn) mdk_gc_prev_warn(msg, arg);
 }
 
 /* `panic` is BOTH the abort primitive the interpreter's `runtimePanic` uses to

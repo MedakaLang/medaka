@@ -89,24 +89,26 @@ norm() {
 }
 
 # A5_open_head__B1 reads a missing dictionary word as an allocation size before its
-# pinned SIGSEGV.  Boehm may print this exact three-line preamble, with address-derived
-# KiB counts, before the runtime's stable fatal marker.  It is allocator noise, not a
+# pinned allocation failure.  Boehm may print this exact three-line preamble, with
+# address-derived KiB counts, before the runtime's out-of-memory marker.  It is allocator noise, not a
 # different #2032 classification.  Strip it only from this exact cell's native execution
-# when it retains BOTH semantic pins: exit 139 and the exact E-FATAL-SIGNAL line.  The
+# when it retains BOTH semantic pins: exit 1 and an E-OUT-OF-MEMORY line (whose byte
+# count is the garbage word).  The
 # fixture identity, exact count and full-line forms keep warnings in every other cell,
-# on successful/other-exit programs, with changed fatal markers, and alongside unrelated
+# on successful/other-exit programs, with changed markers, and alongside unrelated
 # diagnostics visible to the transcript comparison.
 GC_EXPAND_RE='^GC Warning: Failed to expand heap by [0-9][0-9]* KiB$'
 GC_OOM_LINE='GC Warning: Out of Memory! Heap size: 0 MiB. Returning NULL!'
-FATAL_SIGNAL_LINE='runtime error [E-FATAL-SIGNAL]: fatal memory fault (segmentation fault)'
+OOM_LINE_RE='^runtime error \[E-OUT-OF-MEMORY\]: out of memory \(could not allocate [0-9][0-9]* bytes\)$'
+OOM_LINE='runtime error [E-OUT-OF-MEMORY]: out of memory (could not allocate 123456 bytes)'
 GC_NOISE_FIXDIR="$FIXDIR/A5_open_head__B1_both_defined/"
 
 norm_native_exec() {
   _nf="$1"; _nd="$2"; _nrc="$3"
   _expand_n="$(grep -Ec "$GC_EXPAND_RE" "$_nf")"
   _oom_n="$(grep -cFx "$GC_OOM_LINE" "$_nf")"
-  _fatal_n="$(grep -cFx "$FATAL_SIGNAL_LINE" "$_nf")"
-  if [ "$_nd" = "$GC_NOISE_FIXDIR" ] && [ "$_nrc" -eq 139 ] &&
+  _fatal_n="$(grep -Ec "$OOM_LINE_RE" "$_nf")"
+  if [ "$_nd" = "$GC_NOISE_FIXDIR" ] && [ "$_nrc" -eq 1 ] &&
      [ "$_expand_n" -eq 2 ] &&
      [ "$_oom_n" -eq 1 ] && [ "$_fatal_n" -eq 1 ]; then
     awk -v oom="$GC_OOM_LINE" '
@@ -130,10 +132,10 @@ normalizer_self_test() {
     'GC Warning: Failed to expand heap by 123 KiB' \
     'GC Warning: Failed to expand heap by 456 KiB' \
     "$GC_OOM_LINE" \
-    "$FATAL_SIGNAL_LINE" >"$_sf"
-  _got="$(norm_native_exec "$_sf" "$GC_NOISE_FIXDIR" 139)"
-  [ "$_got" = "$FATAL_SIGNAL_LINE" ] || {
-    echo "argtag GC normalizer self-test failed: exact fatal crash preamble was not stripped"
+    "$OOM_LINE" >"$_sf"
+  _got="$(norm_native_exec "$_sf" "$GC_NOISE_FIXDIR" 1)"
+  [ "$_got" = "$OOM_LINE" ] || {
+    echo "argtag GC normalizer self-test failed: exact out-of-memory preamble was not stripped"
     exit 2
   }
 
@@ -142,23 +144,23 @@ normalizer_self_test() {
     'GC Warning: Failed to expand heap by 456 KiB' \
     "$GC_OOM_LINE" \
     'GC Warning: unrelated allocator diagnostic' \
-    "$FATAL_SIGNAL_LINE" >"$_sf"
-  _got="$(norm_native_exec "$_sf" "$GC_NOISE_FIXDIR" 139)"
-  [ "$_got" = "GC Warning: unrelated allocator diagnostic\\n$FATAL_SIGNAL_LINE" ] || {
+    "$OOM_LINE" >"$_sf"
+  _got="$(norm_native_exec "$_sf" "$GC_NOISE_FIXDIR" 1)"
+  [ "$_got" = "GC Warning: unrelated allocator diagnostic\\n$OOM_LINE" ] || {
     echo "argtag GC normalizer self-test failed: unrelated diagnostic was hidden"
     exit 2
   }
 
-  _changed_fatal='runtime error [E-FATAL-SIGNAL]: changed fatal marker'
+  _changed_fatal='runtime error [E-FATAL-SIGNAL]: fatal memory fault (segmentation fault)'
   printf '%s\n' \
     'GC Warning: Failed to expand heap by 123 KiB' \
     'GC Warning: Failed to expand heap by 456 KiB' \
     "$GC_OOM_LINE" \
     "$_changed_fatal" >"$_sf"
   _all_changed="$(norm "$_sf" "$FIXDIR/self-test")"
-  _got="$(norm_native_exec "$_sf" "$GC_NOISE_FIXDIR" 139)"
+  _got="$(norm_native_exec "$_sf" "$GC_NOISE_FIXDIR" 1)"
   [ "$_got" = "$_all_changed" ] || {
-    echo "argtag GC normalizer self-test failed: changed fatal marker was normalized"
+    echo "argtag GC normalizer self-test failed: changed marker was normalized"
     exit 2
   }
 
@@ -166,15 +168,15 @@ normalizer_self_test() {
     'GC Warning: Failed to expand heap by 123 KiB' \
     'GC Warning: Failed to expand heap by 456 KiB' \
     "$GC_OOM_LINE" \
-    "$FATAL_SIGNAL_LINE" >"$_sf"
+    "$OOM_LINE" >"$_sf"
   _all_other_exit="$(norm "$_sf" "$FIXDIR/self-test")"
-  _got="$(norm_native_exec "$_sf" "$GC_NOISE_FIXDIR" 1)"
+  _got="$(norm_native_exec "$_sf" "$GC_NOISE_FIXDIR" 139)"
   [ "$_got" = "$_all_other_exit" ] || {
-    echo "argtag GC normalizer self-test failed: non-139 execution was normalized"
+    echo "argtag GC normalizer self-test failed: non-exit-1 execution was normalized"
     exit 2
   }
 
-  _got="$(norm_native_exec "$_sf" "$FIXDIR/A5_open_head__B2_one_default/" 139)"
+  _got="$(norm_native_exec "$_sf" "$FIXDIR/A5_open_head__B2_one_default/" 1)"
   [ "$_got" = "$_all_other_exit" ] || {
     echo "argtag GC normalizer self-test failed: a different matrix cell was normalized"
     exit 2
