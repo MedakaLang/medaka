@@ -1,5 +1,5 @@
 # META
-source_lines=5530
+source_lines=5532
 stages=DESUGAR,MARK
 # SOURCE
 -- Self-hosted eval stage — Stage-1 capstone, the tree-walking
@@ -2450,12 +2450,12 @@ clauseDef : String -> Loc -> FunClause -> (String, (List Pat, Expr, Loc))
 clauseDef n site clause = (n, funClauseToClause site clause)
 
 funGroupNames : List (String, (List Pat, Expr, Loc)) ->
-  List String ->
+  OrdMap Unit ->
   List String
 funGroupNames [] _ = []
 funGroupNames ((n, _) :: rest) seen
-  | contains n seen = funGroupNames rest seen
-  | otherwise = n :: funGroupNames rest (n :: seen)
+  | omHasKey n seen = funGroupNames rest seen
+  | otherwise = n :: funGroupNames rest (omInsert n () seen)
 
 clausesForName : String ->
   List (String, (List Pat, Expr, Loc)) ->
@@ -4547,6 +4547,8 @@ buildModInfos facts globalFrame runtimeFrame coreExports sibling fulls exportsMa
   let modCtors = collectCtors decls
   let localCells = map (n => (n, Ref VUnit)) (map fst grps ++ map fst modCtors)
   let imports =
+    -- Bound: [fulls] holds one entry per subject module of the graph (a module that has a test sibling), and the lookup inside importsMapFor runs only for a test sibling.
+    -- lint-disable-next-line rule-list-as-set
     importFrameOf coreExports (importsMapFor sibling mid fulls exportsMap) decls
   -- #1542: tag this module's env with its own file, LAST in the frame list so
   -- an ordinary name lookup (which resolves in localCells/imports/globalCells
@@ -4850,7 +4852,7 @@ concatList (x :: xs) = x ++ concatList xs
 groupsOf : List Decl -> List (String, List (List Pat, Expr, Loc))
 groupsOf decls =
   let defs = funDefs decls
-  map (mkGroup defs) (funGroupNames defs [])
+  map (mkGroup defs) (funGroupNames defs omEmpty)
 
 -- ── a module's export surface, as an import frame consumes it ───────────────
 -- ONE record rather than two slot-parallel lists (#994): expanding a `T(..)`
@@ -6434,9 +6436,9 @@ evalOneRootEnvFacts facts extraExterns preludeDecls (rootId, prog) =
 (DFunDef false "letGroupDefs" ((PCons (PCon "LetBind" (PVar "n") (PVar "clauses") (PVar "site") PWild) (PVar "rest"))) (EBinOp "++" (EApp (EApp (EVar "map") (EApp (EApp (EVar "clauseDef") (EVar "n")) (EVar "site"))) (EVar "clauses")) (EApp (EVar "letGroupDefs") (EVar "rest"))))
 (DTypeSig false "clauseDef" (TyFun (TyCon "String") (TyFun (TyCon "Loc") (TyFun (TyCon "FunClause") (TyTuple (TyCon "String") (TyTuple (TyApp (TyCon "List") (TyCon "Pat")) (TyCon "Expr") (TyCon "Loc")))))))
 (DFunDef false "clauseDef" ((PVar "n") (PVar "site") (PVar "clause")) (ETuple (EVar "n") (EApp (EApp (EVar "funClauseToClause") (EVar "site")) (EVar "clause"))))
-(DTypeSig false "funGroupNames" (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyTuple (TyApp (TyCon "List") (TyCon "Pat")) (TyCon "Expr") (TyCon "Loc")))) (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyApp (TyCon "List") (TyCon "String")))))
+(DTypeSig false "funGroupNames" (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyTuple (TyApp (TyCon "List") (TyCon "Pat")) (TyCon "Expr") (TyCon "Loc")))) (TyFun (TyApp (TyCon "OrdMap") (TyCon "Unit")) (TyApp (TyCon "List") (TyCon "String")))))
 (DFunDef false "funGroupNames" ((PList) PWild) (EListLit))
-(DFunDef false "funGroupNames" ((PCons (PTuple (PVar "n") PWild) (PVar "rest")) (PVar "seen")) (EIf (EApp (EApp (EVar "contains") (EVar "n")) (EVar "seen")) (EApp (EApp (EVar "funGroupNames") (EVar "rest")) (EVar "seen")) (EIf (EVar "otherwise") (EBinOp "::" (EVar "n") (EApp (EApp (EVar "funGroupNames") (EVar "rest")) (EBinOp "::" (EVar "n") (EVar "seen")))) (EApp (EVar "__fallthrough__") (ELit LUnit)))))
+(DFunDef false "funGroupNames" ((PCons (PTuple (PVar "n") PWild) (PVar "rest")) (PVar "seen")) (EIf (EApp (EApp (EVar "omHasKey") (EVar "n")) (EVar "seen")) (EApp (EApp (EVar "funGroupNames") (EVar "rest")) (EVar "seen")) (EIf (EVar "otherwise") (EBinOp "::" (EVar "n") (EApp (EApp (EVar "funGroupNames") (EVar "rest")) (EApp (EApp (EApp (EVar "omInsert") (EVar "n")) (ELit LUnit)) (EVar "seen")))) (EApp (EVar "__fallthrough__") (ELit LUnit)))))
 (DTypeSig false "clausesForName" (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyTuple (TyApp (TyCon "List") (TyCon "Pat")) (TyCon "Expr") (TyCon "Loc")))) (TyApp (TyCon "List") (TyTuple (TyApp (TyCon "List") (TyCon "Pat")) (TyCon "Expr") (TyCon "Loc"))))))
 (DFunDef false "clausesForName" (PWild (PList)) (EListLit))
 (DFunDef false "clausesForName" ((PVar "name") (PCons (PTuple (PVar "n") (PVar "c")) (PVar "rest"))) (EIf (EBinOp "==" (EVar "n") (EVar "name")) (EBinOp "::" (EVar "c") (EApp (EApp (EVar "clausesForName") (EVar "name")) (EVar "rest"))) (EIf (EVar "otherwise") (EApp (EApp (EVar "clausesForName") (EVar "name")) (EVar "rest")) (EApp (EVar "__fallthrough__") (ELit LUnit)))))
@@ -7138,7 +7140,7 @@ evalOneRootEnvFacts facts extraExterns preludeDecls (rootId, prog) =
 (DFunDef false "concatList" ((PList)) (EListLit))
 (DFunDef false "concatList" ((PCons (PVar "x") (PVar "xs"))) (EBinOp "++" (EVar "x") (EApp (EVar "concatList") (EVar "xs"))))
 (DTypeSig false "groupsOf" (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyTuple (TyApp (TyCon "List") (TyCon "Pat")) (TyCon "Expr") (TyCon "Loc")))))))
-(DFunDef false "groupsOf" ((PVar "decls")) (EBlock (DoLet false false (PVar "defs") (EApp (EVar "funDefs") (EVar "decls"))) (DoExpr (EApp (EApp (EVar "map") (EApp (EVar "mkGroup") (EVar "defs"))) (EApp (EApp (EVar "funGroupNames") (EVar "defs")) (EListLit))))))
+(DFunDef false "groupsOf" ((PVar "decls")) (EBlock (DoLet false false (PVar "defs") (EApp (EVar "funDefs") (EVar "decls"))) (DoExpr (EApp (EApp (EVar "map") (EApp (EVar "mkGroup") (EVar "defs"))) (EApp (EApp (EVar "funGroupNames") (EVar "defs")) (EVar "omEmpty"))))))
 (DData Public "ModExports" ("v") ((variant "ModExports" (ConPos (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "Ref") (TyVar "v")))) (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "String"))))))) ())
 (DTypeSig true "modExportCells" (TyFun (TyApp (TyCon "ModExports") (TyVar "v")) (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "Ref") (TyVar "v"))))))
 (DFunDef false "modExportCells" ((PCon "ModExports" (PVar "cells") PWild)) (EVar "cells"))
@@ -8250,9 +8252,9 @@ evalOneRootEnvFacts facts extraExterns preludeDecls (rootId, prog) =
 (DFunDef false "letGroupDefs" ((PCons (PCon "LetBind" (PVar "n") (PVar "clauses") (PVar "site") PWild) (PVar "rest"))) (EBinOp "++" (EApp (EApp (EMethodRef "map") (EApp (EApp (EVar "clauseDef") (EVar "n")) (EVar "site"))) (EVar "clauses")) (EApp (EVar "letGroupDefs") (EVar "rest"))))
 (DTypeSig false "clauseDef" (TyFun (TyCon "String") (TyFun (TyCon "Loc") (TyFun (TyCon "FunClause") (TyTuple (TyCon "String") (TyTuple (TyApp (TyCon "List") (TyCon "Pat")) (TyCon "Expr") (TyCon "Loc")))))))
 (DFunDef false "clauseDef" ((PVar "n") (PVar "site") (PVar "clause")) (ETuple (EVar "n") (EApp (EApp (EVar "funClauseToClause") (EVar "site")) (EVar "clause"))))
-(DTypeSig false "funGroupNames" (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyTuple (TyApp (TyCon "List") (TyCon "Pat")) (TyCon "Expr") (TyCon "Loc")))) (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyApp (TyCon "List") (TyCon "String")))))
+(DTypeSig false "funGroupNames" (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyTuple (TyApp (TyCon "List") (TyCon "Pat")) (TyCon "Expr") (TyCon "Loc")))) (TyFun (TyApp (TyCon "OrdMap") (TyCon "Unit")) (TyApp (TyCon "List") (TyCon "String")))))
 (DFunDef false "funGroupNames" ((PList) PWild) (EListLit))
-(DFunDef false "funGroupNames" ((PCons (PTuple (PVar "n") PWild) (PVar "rest")) (PVar "seen")) (EIf (EApp (EApp (EVar "contains") (EVar "n")) (EVar "seen")) (EApp (EApp (EVar "funGroupNames") (EVar "rest")) (EVar "seen")) (EIf (EVar "otherwise") (EBinOp "::" (EVar "n") (EApp (EApp (EVar "funGroupNames") (EVar "rest")) (EBinOp "::" (EVar "n") (EVar "seen")))) (EApp (EVar "__fallthrough__") (ELit LUnit)))))
+(DFunDef false "funGroupNames" ((PCons (PTuple (PVar "n") PWild) (PVar "rest")) (PVar "seen")) (EIf (EApp (EApp (EVar "omHasKey") (EVar "n")) (EVar "seen")) (EApp (EApp (EVar "funGroupNames") (EVar "rest")) (EVar "seen")) (EIf (EVar "otherwise") (EBinOp "::" (EVar "n") (EApp (EApp (EVar "funGroupNames") (EVar "rest")) (EApp (EApp (EApp (EVar "omInsert") (EVar "n")) (ELit LUnit)) (EVar "seen")))) (EApp (EVar "__fallthrough__") (ELit LUnit)))))
 (DTypeSig false "clausesForName" (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyTuple (TyApp (TyCon "List") (TyCon "Pat")) (TyCon "Expr") (TyCon "Loc")))) (TyApp (TyCon "List") (TyTuple (TyApp (TyCon "List") (TyCon "Pat")) (TyCon "Expr") (TyCon "Loc"))))))
 (DFunDef false "clausesForName" (PWild (PList)) (EListLit))
 (DFunDef false "clausesForName" ((PVar "name") (PCons (PTuple (PVar "n") (PVar "c")) (PVar "rest"))) (EIf (EBinOp "==" (EVar "n") (EVar "name")) (EBinOp "::" (EVar "c") (EApp (EApp (EVar "clausesForName") (EVar "name")) (EVar "rest"))) (EIf (EVar "otherwise") (EApp (EApp (EVar "clausesForName") (EVar "name")) (EVar "rest")) (EApp (EVar "__fallthrough__") (ELit LUnit)))))
@@ -8954,7 +8956,7 @@ evalOneRootEnvFacts facts extraExterns preludeDecls (rootId, prog) =
 (DFunDef false "concatList" ((PList)) (EListLit))
 (DFunDef false "concatList" ((PCons (PVar "x") (PVar "xs"))) (EBinOp "++" (EVar "x") (EApp (EVar "concatList") (EVar "xs"))))
 (DTypeSig false "groupsOf" (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyTuple (TyApp (TyCon "List") (TyCon "Pat")) (TyCon "Expr") (TyCon "Loc")))))))
-(DFunDef false "groupsOf" ((PVar "decls")) (EBlock (DoLet false false (PVar "defs") (EApp (EVar "funDefs") (EVar "decls"))) (DoExpr (EApp (EApp (EMethodRef "map") (EApp (EVar "mkGroup") (EVar "defs"))) (EApp (EApp (EVar "funGroupNames") (EVar "defs")) (EListLit))))))
+(DFunDef false "groupsOf" ((PVar "decls")) (EBlock (DoLet false false (PVar "defs") (EApp (EVar "funDefs") (EVar "decls"))) (DoExpr (EApp (EApp (EMethodRef "map") (EApp (EVar "mkGroup") (EVar "defs"))) (EApp (EApp (EVar "funGroupNames") (EVar "defs")) (EVar "omEmpty"))))))
 (DData Public "ModExports" ("v") ((variant "ModExports" (ConPos (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "Ref") (TyVar "v")))) (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "String"))))))) ())
 (DTypeSig true "modExportCells" (TyFun (TyApp (TyCon "ModExports") (TyVar "v")) (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "Ref") (TyVar "v"))))))
 (DFunDef false "modExportCells" ((PCon "ModExports" (PVar "cells") PWild)) (EVar "cells"))
