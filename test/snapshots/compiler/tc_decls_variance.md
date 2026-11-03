@@ -16,8 +16,8 @@ stages=DESUGAR,MARK
 -- compiler/ARCHITECTURE-PLAYBOOK.md section 6.
 -- Closure rule: this module may not import `types.typecheck`, nor any of `tc_decls_types`,
 -- `tc_decls`, `tc_foreign`, `tc_solve_givens`, `tc_solve_entail`, `tc_solve`, `tc_solve_check`,
--- `tc_shadow`, `tc_effects`, `tc_occurrence`, `tc_groups`, `tc_pat`, `tc_infer_records`,
--- `tc_infer`, `tc_elab`, `tc_global`, `tc_module`.
+-- `tc_shadow`, `tc_grants`, `tc_effects`, `tc_occurrence`, `tc_mark`, `tc_groups`, `tc_pat`,
+-- `tc_infer_records`, `tc_infer`, `tc_elab`, `tc_global`, `tc_stamp`, `tc_module`.
 
 import types.tc_types.{
   Polarity(..), Predicate(..), Windowed(..), DeclEnvModule, ModuleCtx
@@ -459,7 +459,7 @@ paramOccPolarities tab p pol (TyApp a b) = match tyAppSpine (TyApp a b)
   -- every occurrence reached through such a head as `PInv`.
   --
   -- THIS IS A deliberate, measured acceptance narrowing — the one place in
-  -- this function that can reject a program that used to be accepted.  It is
+  -- this function that can reject a program a less conservative verdict accepts.  It is
   -- the same trade `paramVarianceGuard`'s own "this does narrow acceptance
   -- In the sound direction too" note already documents: equality is the only
   -- symmetric sound rule available without direction, and here invariance is

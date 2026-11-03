@@ -96,9 +96,11 @@ types.tc_elab
 types.tc_env
 types.tc_foreign
 types.tc_global
+types.tc_grants
 types.tc_groups
 types.tc_infer
 types.tc_infer_records
+types.tc_mark
 types.tc_module
 types.tc_mono
 types.tc_occurrence
@@ -109,6 +111,7 @@ types.tc_solve
 types.tc_solve_check
 types.tc_solve_entail
 types.tc_solve_givens
+types.tc_stamp
 types.tc_state
 types.tc_types
 types.tc_unify

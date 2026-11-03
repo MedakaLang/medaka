@@ -367,6 +367,7 @@ import types.tc_scope.{
   useKeyCands,
 }
 import types.tc_unify.{
+  openScope,
   ambiguousImportTyvarId,
   enterLevel,
   exitLevel,
@@ -404,23 +405,20 @@ import types.tc_solve_entail.{
 }
 import types.tc_solve.{
   goalsMark,
-  openScope,
   returnPosMethodNames,
   routesOfMonosTopV,
 }
 import types.tc_solve_check.{
   checkCallObligationsU,
 }
-import types.tc_effects.{
-  grantOrder,
-}
-import types.tc_occurrence.{
-  argDispatchIndices,
-  argDispatchIndicesById,
+import types.tc_grants.{grantOrder}
+import types.tc_mark.{
   constrainedSigNames,
   markDictNames,
   markSetsOf,
-  methodConstraintNames,
+}
+import types.tc_occurrence.{
+  argDispatchIndices, argDispatchIndicesById, methodConstraintNames
 }
 import types.tc_groups.{
   allEVars,
@@ -433,17 +431,15 @@ import types.tc_global.{
   globalCoherenceConflict,
 }
 import types.tc_module.{
-  captureTypeErrors,
   checkBodyImpl,
   checkGraphFinish,
   checkModuleFull,
   checkModuleFullDiags,
-  drainStampQueue,
   elabModuleStamp,
   externSchemesGo,
   settleClosedBody,
-  verdictFinding,
 }
+import types.tc_stamp.{captureTypeErrors, drainStampQueue, verdictFinding}
 
 -- What `IO` joins in this drive: the selected profile's grants of the alias
 -- labels, each at the parameter granted, in `hostLabels` order.  With no
@@ -1797,21 +1793,21 @@ graphPreamble inputs admitted sel preludeKey runtimeDecls coreDecls modules =
   -- reader the tree arm reaches — `ctorSiblingWithholdingName`, `matchCol0Type` —
   -- would read whatever the LAST CHECK RUN IN THIS PROCESS left behind.
   --
-  -- That residue used to be unreachable by accident rather than absent: `typeCtors`
-  -- is keyed by DECLARATION IDENTITY (`tabKeyOf NsType <dataOrigin> <tyname>`), the
-  -- flat entries build it from UNSTAMPED decls (`TkBare` rows), and this arm's
-  -- readers mint `TkIdent` for a module-stamped head — so every lookup MISSED and
-  -- every reader fell through its fail-open `None` arm.  A `Module`-arm re-check
-  -- interleaved between two elaborations (the emit path's async-wrap re-check)
-  -- writes rows under the entry module's OWN identity, i.e. under exactly the key
-  -- these readers mint — so the lookups start HITTING, against rows built from the
-  -- UN-MANGLED tree while the drive walks the MANGLED one.  MEASURED:
-  -- `ctorSiblingWithholdingName` then reads the un-mangled ctor `A` as a sibling of
-  -- the mangled survivor and false-rejects `a.k` with `Field 'k' is not declared by
-  -- every constructor of 'A'`; `Display` cannot ground, the `println` route stays
-  -- RNone, and the emitter writes a NULL dict word (`i64 0`) — SILENTLY on
-  -- `runEmitWith`'s own path (`compiler/entries/entry_support.mdk`), which never
-  -- reads `hadTypeErrors` after the call.  Clean exit 0, SIGSEGV at runtime.
+  -- Such a residue would be hidden only by a key mismatch, not removed: `typeCtors` is
+  -- keyed by DECLARATION IDENTITY (`tabKeyOf NsType <dataOrigin> <tyname>`), the flat
+  -- entries build it from UNSTAMPED decls (`TkBare` rows), and this arm's readers mint
+  -- `TkIdent` for a module-stamped head — so every lookup would MISS and every reader
+  -- fall through its fail-open `None` arm.  A `Module`-arm re-check interleaved between
+  -- two elaborations (the emit path's async-wrap re-check) writes rows under the entry
+  -- module's OWN identity, i.e. under exactly the key these readers mint — so the
+  -- lookups would start HITTING, against rows built from the UN-MANGLED tree while the
+  -- drive walks the MANGLED one.  Then `ctorSiblingWithholdingName` reads the
+  -- un-mangled ctor `A` as a sibling of the mangled survivor and false-rejects `a.k`
+  -- with `Field 'k' is not declared by every constructor of 'A'`; `Display` cannot
+  -- ground, the `println` route stays RNone, and the emitter writes a NULL dict word
+  -- (`i64 0`) — SILENTLY on `runEmitWith`'s own path
+  -- (`compiler/entries/entry_support.mdk`), which never reads `hadTypeErrors` after
+  -- the call: clean exit 0, SIGSEGV at runtime.  The empty oracle below keeps it closed.
   --
   -- The module record starts from `initialModuleCtx` of the minted graph record,
   -- whose oracle is empty, so no reader can see a previous run's residue, no matter
@@ -3049,20 +3045,16 @@ autoPrintEvidence mctx mid scope iface tau =
   g.evTable := EvEntry ev (EvMany routes) :: g.evTable.value
   ev
 
--- ── multi-module `check` CLI report (DRIVER-COLLAPSE Phase 4, OPTION A) ─────
+-- ── multi-module `check` CLI report ─────
 -- The unified `medaka check` path for IMPORT-BEARING files: the caller loads the
 -- entry + its transitive imports (loadProgram), then this typechecks the whole
 -- graph in dependency order (checkModuleFullDiags per module: per-module-frame,
 -- prelude seeded once) and harvests the ENTRY module's OWN (schemes, errs, warns).
 -- Imports are RESOLVED (their public schemes seed the entry), so a valid cross-
--- module reference no longer falls through to `UnknownModule` — the known "native
--- check is single-file" limitation, fixed.  The entry is last in dependency-first
--- order.
+-- module reference resolves rather than falling through to `UnknownModule`.  The
+-- entry is last in dependency-first order.
 --
--- ⚠️ ROUTING, corrected 2026-08-26: this comment used to say "no-import (1-module)
--- files still route through runCheck … this path is reached ONLY when the load
--- returned more than one module."  FALSE since S-migrate-check-route (E-1 #1115).
--- A no-import file now reaches HERE too, via the 1-module wrappers
+-- A no-import (1-module) file reaches here too, via the 1-module wrappers
 -- `checkOneScheme` / `checkOneDiags` / `checkOneToLinesWithRuntime` /
 -- `checkOneErrorsWithRuntime`, each of which calls this function with a SINGLETON
 -- module list.  So every clause below must be correct on a 1-module graph, not

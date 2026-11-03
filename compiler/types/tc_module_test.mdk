@@ -4,25 +4,15 @@
 -- and the queue drained with `drainStampQueue`.  Covered: the signed and unsigned bindings a
 -- module publishes, the diagnostics of its bodies (binding, impl method, `test`, `prop`, extern),
 -- the interface-cycle and impl-coherence checks that end the module, the import of an earlier
--- module's data, the stamp queue and its drain (what is enqueued, what is reported, that a
--- drain empties the queue), `externSchemesGo`, `captureTypeErrors`, `verdictFinding`,
--- `isLiveSpan`, `spanKeys` and `settleClosedBody`.
--- Not driven here, because no export reaches them: the import-overlay rows and the plural site
--- resolvers.  Their effect is observed as the module's errors and as the drain's
--- unrouted-dispatch findings, and an overlay that changes no verdict is not observable below
--- the entry.  What a whole check elaborates is observed through `types.typecheck` in
--- `typecheck_test`.
+-- module's data, `externSchemesGo` and `settleClosedBody`.  The stamp queue and its drain are
+-- tested in `tc_stamp_test`, which reuses the fixtures exported here.
+-- Not driven here, because no export reaches them: the import-overlay rows.  Their effect is
+-- observed as the module's errors and as the drain's unrouted-dispatch findings, and an overlay
+-- that changes no verdict is not observable below the entry.  What a whole check elaborates is
+-- observed through `types.typecheck` in `typecheck_test`.
 
 import support.diag_codes.{DiagCode(..), codeText}
-import test.{
-  expectAll,
-  expectEach,
-  expectEqual,
-  expectFalse,
-  expectNotEqual,
-  expectTrue,
-}
-import list.{drop, sort, take}
+import test.{expectAll, expectEach, expectEqual, expectNotEqual}
 import frontend.ast.{
   Decl(..), EvEntry(..), EvVal(..), Loc(..), Route(..), Ty(..), tyConBuiltin
 }
@@ -30,17 +20,12 @@ import types.tc_state.{
   freshGraphRun, carryModuleCtx, probeGraphCtx, initialModuleCtx
 }
 import types.tc_solve.{
-  methodReturnProbeScope,
-  methodReturnProbeSpelling,
-  methodReturnArgs,
-  methodReturnProbeRouteKey,
-  methodReturnProbeIface,
-  methodReturnProbeImpl,
+  methodReturnProbeScope, methodReturnProbeSpelling, methodReturnArgs,
+  methodReturnProbeRouteKey, methodReturnProbeIface, methodReturnProbeImpl
 }
+import types.tc_mark.{markSetsOf}
 import types.tc_occurrence.{
-  methodReturnProbeRequest,
-  firstMethodRow,
-  methodReturnProbeCodes,
+  methodReturnProbeRequest, firstMethodRow, methodReturnProbeCodes
 }
 import types.tc_env.{buildFlatImplEnv}
 import types.tc_mono.{stripArrows}
@@ -49,41 +34,28 @@ import types.tc_types.{siteFor, MethodSchemeRow(..)}
 import types.tc_solve_entail.{ieSelectRowByIface, rowRouteKey}
 import types.tc_decls.{ifaceMethodSchemeRows}
 import types.tc_elab.{drivenEvidence}
-import support.ordmap.{omEmpty, omFromNames}
+import support.ordmap.{omEmpty}
 import types.repr.{Scheme(..), ppScheme}
 import types.publish.{TcDiag(..), tcCode}
-import types.tc_diag.{pushTypeError}
 import types.tc_decls.{buildDeclEnvs, declEnvModulesFrom}
 import types.tc_env.{declEnvModule, emptyDeclEnvAcc}
 import types.tc_mono.{tconBuiltin}
-import types.tc_occurrence.{markSetsOf}
 import types.tc_state.{checkRunResidue, plainModuleSeed}
 import types.tc_test_support.{codesOf, declsOf, fresh, routeTag, sizeable}
 import types.tc_types.{
-  DrainFinding(..),
-  GraphCtx,
-  ModuleCtx,
-  PreludeMarkFacts(..),
+  DrainFinding(..), GraphCtx, ModuleCtx, PreludeMarkFacts(..)
 }
 import types.tc_module.{
-  captureTypeErrors,
-  checkBodyImpl,
-  checkModuleFull,
-  checkModuleFullDiags,
-  drainStampQueue,
-  elabModuleStamp,
-  externSchemesGo,
-  isLiveSpan,
-  settleClosedBody,
-  spanKeys,
-  verdictFinding,
+  checkBodyImpl, checkModuleFull, checkModuleFullDiags, elabModuleStamp,
+  externSchemesGo, settleClosedBody
 }
+import types.tc_stamp.{drainStampQueue}
 
 -- ── fixtures ──────────────────────────────────────────────────────────────
 
 -- What one module's check handed back: the schemes it published (rendered), its error codes
 -- and its warning codes.
-data Checked = Checked {
+public export data Checked = Checked {
   chSchemes : List (String, String),
   chErrors : List String,
   chWarnings : List String,
@@ -101,6 +73,7 @@ noPreludeFacts = PreludeMarkFacts {
 
 -- A graph record over the modules [mods] (id, source), in order after an empty prelude, with
 -- the declaration envelope and the mark sets a driver's preamble installs.
+export
 prepared : List (String, String) -> (ModuleCtx, List (String, List Decl))
 prepared mods =
   let m = fresh ()
@@ -120,6 +93,7 @@ rendered : List (String, Scheme) -> List (String, String)
 rendered = map (q => (fst q, ppScheme (snd q)))
 
 -- Each module checked in the graph, later ones seeded with the schemes of the earlier ones.
+export
 checkEach : GraphCtx ->
   List (String, Scheme) ->
   List (String, List Decl) ->
@@ -138,11 +112,13 @@ checkEach g seed ((mid, ds) :: rest) =
     :: checkEach g (seed ++ b.mbSchemes) rest
 
 -- What a drain reported: the module and code of each finding, in the order reported.
+export
 findingsOf : List DrainFinding -> List (String, String)
 findingsOf = map (f => (f.dfModule, codeText (tcCode f.dfDiag)))
 
 -- The record of [m] after `checkBodyImpl` alone has checked the module "m" of [decls]: the
 -- body check queues no stamping context.
+export
 bodyChecked : ModuleCtx -> List (String, List Decl) -> ModuleCtx
 bodyChecked m decls =
   let (_, _, ctx) =
@@ -156,6 +132,7 @@ bodyChecked m decls =
   ctx
 
 -- The modules [mods] checked in one graph, then the graph drained.
+export
 driven : List (String, String) -> (List Checked, List (String, String))
 driven mods =
   let (m, decls) = prepared mods
@@ -164,12 +141,14 @@ driven mods =
 
 -- The one module "m" of source [src], checked and drained; a source that is not one module
 -- reads as an error no test expects.
+export
 onlyModule : String -> (Checked, List (String, String))
 onlyModule src = match driven [("m", src)]
   ([c], fs) => (c, fs)
   _ => (Checked [] ["not a single module"] [], [])
 
 -- The route each method occurrence of the graph was published with.
+export
 methodRoutes : GraphCtx -> List String
 methodRoutes g =
   flatMap
@@ -183,11 +162,13 @@ errorsOf : String -> List String
 errorsOf src = (fst (onlyModule src)).chErrors
 
 -- `sizeable` and a binding `y` that calls its method at [arg].
+export
 callingSz : String -> String
 callingSz arg = sizeable ++ "y : Int\ny = sz \{arg}\n"
 
 -- A module that imports the interface of the module "m" and a binding `y` that calls its method
 -- at [arg].
+export
 importingSz : String -> String
 importingSz arg = """
 import m.{Sz(..)}
@@ -346,98 +327,6 @@ f = A
     [([], []), ([("f", "T -> Int")], []), ([("f", "Int")], ["T-TYPE-MISMATCH"])]
     (map (c => (c.chSchemes, c.chErrors)) checked)
 
--- ── the stamp queue and its drain ─────────────────────────────────────────
-
-test "a module whose calls all find an impl leaves nothing to drain" =
-  expectEqual
-    (Checked [("sz", "a -> Int"), ("y", "Int")] [] [], [])
-    (onlyModule (callingSz "1"))
-
-test "a call with no impl is an error of the module and an unrouted-dispatch finding of the drain" =
-  expectEqual
-    (
-      Checked [("sz", "a -> Int"), ("y", "Int")] ["T-NO-IMPL"] [],
-      [("m", "T-UNROUTED-DISPATCH")],
-    )
-    (onlyModule (callingSz "True"))
-
-test "every module that was checked is drained, each finding under its own module" =
-  let (_, fs) = driven [
-    (
-      "m",
-      """
-export interface Sz a where
-  sz : a -> Int
-export impl Sz Int where
-  sz x = x
-""",
-    ),
-    ("n", importingSz "True"),
-    ("o", importingSz "False"),
-  ]
-  expectEqual
-    [("n", "T-UNROUTED-DISPATCH"), ("o", "T-UNROUTED-DISPATCH")]
-    (sort fs)
-
-test "a drain reports a finding once, so a second drain over the same graph finds nothing" =
-  let (m, decls) = prepared [("m", callingSz "True")]
-  let _ = checkEach m.mcGraph [] decls
-  let first = findingsOf (drainStampQueue m)
-  let second = findingsOf (drainStampQueue m)
-  expectEqual ([("m", "T-UNROUTED-DISPATCH")], []) (first, second)
-
-test "a drain empties the stamp queue the module check filled" =
-  let (m, decls) = prepared [("m", callingSz "1")]
-  let _ = checkEach m.mcGraph [] decls
-  let queued = length m.mcGraph.graphRun.stampCtxs.value
-  let _ = drainStampQueue m
-  expectEqual (True, 0) (queued > 0, length m.mcGraph.graphRun.stampCtxs.value)
-
--- A module of its own interface `name` with no impl, and a call of the method at a type that
--- has none.
-unanswered : String -> String
-unanswered name =
-  """
-interface \{name} a where
-  m\{name} : a -> Int
-y : Int
-y = m\{name} True
-"""
-
-test "a module checked after a drain has its finding drained under its own module id" =
-  let (m, decls) = prepared [("m", unanswered "Sz"), ("n", unanswered "Tz")]
-  let _ = checkEach m.mcGraph [] (take 1 decls)
-  let first = findingsOf (drainStampQueue m)
-  let _ = checkEach m.mcGraph [] (drop 1 decls)
-  let second = findingsOf (drainStampQueue m)
-  expectEqual
-    ([("m", "T-UNROUTED-DISPATCH")], [("n", "T-UNROUTED-DISPATCH")])
-    (first, second)
-
-test "the module check queues its stamping, so the drain routes a method call to its impl" =
-  let (m, decls) = prepared [("m", callingSz "1")]
-  let _ = checkEach m.mcGraph [] decls
-  let _ = drainStampQueue m
-  expectEqual ["key:m::Sz|Int|"] (methodRoutes m.mcGraph)
-
-test "the body check alone queues no stamping, so a drain leaves the method call unrouted" =
-  let (m, decls) = prepared [("m", callingSz "1")]
-  let ctx = bodyChecked m decls
-  let _ = drainStampQueue ctx
-  expectEqual ["none"] (methodRoutes m.mcGraph)
-
-test "an evidence hole is found by a drain whether or not a stamping context was queued" =
-  let (m, decls) = prepared [("m", callingSz "True")]
-  let ctx = bodyChecked m decls
-  expectEqual
-    (["T-NO-IMPL"], [("m", "T-UNROUTED-DISPATCH")])
-    (codesOf ctx, findingsOf (drainStampQueue ctx))
-
-test "a finding the drain makes of a hole is not a verdict" =
-  let (m, decls) = prepared [("m", callingSz "True")]
-  let _ = checkEach m.mcGraph [] decls
-  expectEqual [False] (map (f => f.dfVerdict) (drainStampQueue m))
-
 test "the elaborating check is the module check over an impl universe" =
   let src = callingSz "True"
   let (m, decls) = prepared [("m", src)]
@@ -455,41 +344,6 @@ x = 1
 """)]
   let (b, _, ctx) = checkModuleFull m [] [] (flatMap snd decls)
   expectEqual ([("x", "Int")], []) (rendered b.mbSchemes, codesOf ctx)
-
--- ── errors captured out of a record ───────────────────────────────────────
-
-test "the errors an action pushes are returned oldest first and leave the record as it was" =
-  let m = fresh ()
-  pushTypeError m TNoImpl "kept"
-  let taken = captureTypeErrors m (_ =>
-    pushTypeError m TUnbound "one"
-    pushTypeError m TMissingField "two")
-  expectEqual
-    (["T-UNBOUND", "T-MISSING-FIELD"], ["T-NO-IMPL"])
-    (map (d => codeText (tcCode d)) taken, codesOf m)
-
-test "an action that pushes no error captures none" =
-  expectEqual
-    []
-    (map (d => codeText (tcCode d)) (captureTypeErrors (fresh ()) (_ => ())))
-
--- The verdict finding of module "mod" over [d], on a live span and on one that is not.
-liveVerdict : TcDiag -> DrainFinding
-liveVerdict = verdictFinding "mod" True
-
-deadVerdict : TcDiag -> DrainFinding
-deadVerdict = verdictFinding "mod" False
-
-test "a verdict finding carries its module, its diagnostic and its liveness, and is a verdict" =
-  let d = TcDiag TUnknownField 1 None "msg" None None
-  let f = liveVerdict d
-  expectAll [
-    expectEqual "mod" f.dfModule,
-    expectEqual "T-UNKNOWN-FIELD" (codeText (tcCode f.dfDiag)),
-    expectTrue f.dfLive,
-    expectTrue f.dfVerdict,
-    expectFalse (deadVerdict d).dfLive,
-  ]
 
 -- ── what a graph is stamped with ──────────────────────────────────────────
 
@@ -509,55 +363,6 @@ test "settling a closed body with nothing recorded raises no error" =
   let m = fresh ()
   settleClosedBody m (tconBuiltin "Unit") 0 0 0
   expectEqual [] (codesOf m)
-
--- ── the drain's live spans ────────────────────────────────────────────────
-
--- A finding is live when its span is a live goal's.  Goals built after a drain
--- (`pushArithGoal` and its siblings) carry no location, so an unlocated live goal must not
--- make every unlocated finding live.
-test "an unlocated drain finding is never live, even beside an unlocated live goal" =
-  let at = Some (Loc "m.mdk" 3 4 3 9)
-  let live = omFromNames (spanKeys [None, at]) omEmpty
-  expectAll [
-    expectEqual ["m.mdk:3:4"] (spanKeys [None, at, None]),
-    expectFalse (isLiveSpan live None),
-    expectTrue (isLiveSpan live at),
-    expectFalse (isLiveSpan live (Some (Loc "m.mdk" 3 5 3 9))),
-  ]
-
-test "the span keys of goals skip an unlocated goal and keep the located ones in order" =
-  let first = Some (Loc "probe.mdk" 3 1 3 5)
-  let second = Some (Loc "probe.mdk" 9 1 9 5)
-  expectAll [
-    expectEqual [] (spanKeys [None, None]),
-    expectEqual (spanKeys [first]) (spanKeys [None, first, None]),
-    expectNotEqual (spanKeys [first]) (spanKeys [second]),
-    expectEqual
-      (spanKeys [first] ++ spanKeys [second])
-      (spanKeys [first, None, second]),
-  ]
-
--- The location a generated number stands for: none for a multiple of 4, else the line its
--- residue mod 6 names, so two draws often stand at one place.
-locOf : Int -> Option Loc
-locOf n = if n % 4 == 0 then None else Some (Loc "p.mdk" (n % 6) 1 (n % 6) 2)
-
--- Law: the keys of goals followed by goals are the keys of each in turn.  No precondition.
-prop "the span keys of two lists of goals are the keys of each in turn" (xs : List Int) (ys : List Int) =
-  spanKeys (map locOf (xs ++ ys))
-    == spanKeys (map locOf xs) ++ spanKeys (map locOf ys)
-
--- The same answer as `isLiveSpan`, read off the numbers: [y] stands at a place and some live goal
--- stands at that place.
-standsLive : List Int -> Int -> Bool
-standsLive xs y = y % 4 /= 0 && any (x => x % 4 /= 0 && x % 6 == y % 6) xs
-
--- Law: a finding is live exactly when a live goal stands at its place.  Precondition for the law
--- to say anything: a located finding, and live goals of which some stand at its place and some do
--- not; the examples above pin both verdicts by hand.
-prop "a span is live exactly when a live goal stands at it" (xs : List Int) (y : Int) =
-  isLiveSpan (omFromNames (spanKeys (map locOf xs)) omEmpty) (locOf y)
-    == standsLive xs y
 
 -- Runs in a carry of [prev], the caller's record, in its graph record with a fresh
 -- graph run.

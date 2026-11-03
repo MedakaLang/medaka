@@ -1,5 +1,5 @@
 # META
-source_lines=1775
+source_lines=1776
 stages=DESUGAR,MARK
 # SOURCE
 -- tc_scope: name visibility across imports, read off the envelopes: the method-scope ladder (the
@@ -18,8 +18,9 @@ stages=DESUGAR,MARK
 -- compiler/ARCHITECTURE-PLAYBOOK.md section 6.
 -- Closure rule: this module may not import `types.typecheck`, nor any of `tc_unify`,
 -- `tc_decls_variance`, `tc_decls_types`, `tc_decls`, `tc_foreign`, `tc_solve_givens`,
--- `tc_solve_entail`, `tc_solve`, `tc_solve_check`, `tc_shadow`, `tc_effects`, `tc_occurrence`,
--- `tc_groups`, `tc_pat`, `tc_infer_records`, `tc_infer`, `tc_elab`, `tc_global`, `tc_module`.
+-- `tc_solve_entail`, `tc_solve`, `tc_solve_check`, `tc_shadow`, `tc_grants`, `tc_effects`,
+-- `tc_occurrence`, `tc_mark`, `tc_groups`, `tc_pat`, `tc_infer_records`, `tc_infer`, `tc_elab`,
+-- `tc_global`, `tc_stamp`, `tc_module`.
 
 import support.diag_codes.{DiagCode(..)}
 import types.tc_types.{

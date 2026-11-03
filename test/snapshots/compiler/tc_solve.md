@@ -1,5 +1,5 @@
 # META
-source_lines=2236
+source_lines=2233
 stages=DESUGAR,MARK
 # SOURCE
 -- tc_solve: one solving judgment over one goal store, above the entailment core: the exact-return
@@ -20,8 +20,8 @@ stages=DESUGAR,MARK
 -- Placement: declarations are placed by R1-R6 of the Phase 4 module table,
 -- compiler/ARCHITECTURE-PLAYBOOK.md section 6.
 -- Closure rule: this module may not import `types.typecheck`, nor any of `tc_solve_check`,
--- `tc_shadow`, `tc_effects`, `tc_occurrence`, `tc_groups`, `tc_pat`, `tc_infer_records`,
--- `tc_infer`, `tc_elab`, `tc_global`, `tc_module`.
+-- `tc_shadow`, `tc_grants`, `tc_effects`, `tc_occurrence`, `tc_mark`, `tc_groups`, `tc_pat`,
+-- `tc_infer_records`, `tc_infer`, `tc_elab`, `tc_global`, `tc_stamp`, `tc_module`.
 
 import types.tc_types.{
   Provenance(..),
@@ -133,6 +133,7 @@ import types.tc_env.{
 import types.tc_diag.{erredDuring}
 import types.tc_scope.{methodAdmittedHere, methodVisibleHere}
 import types.tc_unify.{
+  openScope,
   enterLevel,
   exitLevel,
   freshTvMap,
@@ -577,10 +578,6 @@ goalKindName GKArithSite = "GKArithSite"
 goalKindName GKDictApp = "GKDictApp"
 goalKindName GKMethodDict = "GKMethodDict"
 goalKindName GKRecDictApp = "GKRecDictApp"
-
-export
-openScope : ModuleCtx -> ScopeId -> Unit
-openScope mctx sid = mctx.mcCells.currentScope := Scopes.openScopeCursor sid
 
 -- The marks of the module being processed (the head of `moduleRanges`); all zeros
 -- before any module started, which is the whole graph.
@@ -2245,7 +2242,7 @@ methodReturnProbeOblIfaces (obl :: rest) =
 (DUse false (UseGroup ("types" "tc_env") ((mem "anyArgMentions" false) (mem "dispatchTyparams" false) (mem "ieHeadRows" false) (mem "ieRowIfaceMatches" false) (mem "ieRowOfIface" false) (mem "ieRowsAll" false) (mem "ieRowTys" false) (mem "instRefSeq" false) (mem "methodArgs" false) (mem "methodRowIface" false) (mem "methodRowTestIface" false) (mem "methodSlotKey" false) (mem "originMethodName" false) (mem "sameIfaceDecl" false))))
 (DUse false (UseGroup ("types" "tc_diag") ((mem "erredDuring" false))))
 (DUse false (UseGroup ("types" "tc_scope") ((mem "methodAdmittedHere" false) (mem "methodVisibleHere" false))))
-(DUse false (UseGroup ("types" "tc_unify") ((mem "enterLevel" false) (mem "exitLevel" false) (mem "freshTvMap" false) (mem "freshVar" false) (mem "instantiateMethodTracked" false) (mem "monoUnboundVarLevels" false) (mem "predicateSlotArgs" false) (mem "unify" false) (mem "unifyIn" false))))
+(DUse false (UseGroup ("types" "tc_unify") ((mem "openScope" false) (mem "enterLevel" false) (mem "exitLevel" false) (mem "freshTvMap" false) (mem "freshVar" false) (mem "instantiateMethodTracked" false) (mem "monoUnboundVarLevels" false) (mem "predicateSlotArgs" false) (mem "unify" false) (mem "unifyIn" false))))
 (DUse false (UseGroup ("types" "tc_decls_types") ((mem "fromAstType" false) (mem "reqTyToMono" false))))
 (DUse false (UseGroup ("types" "tc_solve_givens") ((mem "activeDictPredOf" false) (mem "activeDictVarOfEncl" false) (mem "assumAnswerEvidence" false) (mem "assumAnswerRoute" false) (mem "enclSlot" false) (mem "givenInScope" false) (mem "givenRoute" false) (mem "givensForScope" false) (mem "goalMatchesGiven" false) (mem "noteAssumption" false) (mem "predicateRequestMatchesSlot" false) (mem "projectedGivenOf" false))))
 (DUse false (UseGroup ("types" "tc_solve_entail") ((mem "determinedGoalInstance" false) (mem "directSuperGoals" false) (mem "enteredGoalKey" false) (mem "freshRowHeads" false) (mem "goalCandidates" false) (mem "goalHeadCon" false) (mem "goalIsProjection" false) (mem "goalRows" false) (mem "ieSelectRowByIface" false) (mem "paramMonoOf" false) (mem "positionBindings" false) (mem "repeatedBindings" false) (mem "reqWalkMemo" false) (mem "reqWalkStart" false) (mem "routeOfD" false) (mem "rowCountsFor" false) (mem "rowHeadMatches" false) (mem "rowRouteKey" false) (mem "selectedCallSupers" false) (mem "selectedRowReqMatch" false) (mem "stableGoalReach" false) (mem "superRoutesAt" false) (mem "findMatchingImplReqsU" false))))
@@ -2344,8 +2341,6 @@ methodReturnProbeOblIfaces (obl :: rest) =
 (DFunDef false "goalKindName" ((PCon "GKDictApp")) (ELit (LString "GKDictApp")))
 (DFunDef false "goalKindName" ((PCon "GKMethodDict")) (ELit (LString "GKMethodDict")))
 (DFunDef false "goalKindName" ((PCon "GKRecDictApp")) (ELit (LString "GKRecDictApp")))
-(DTypeSig true "openScope" (TyFun (TyCon "ModuleCtx") (TyFun (TyCon "ScopeId") (TyCon "Unit"))))
-(DFunDef false "openScope" ((PVar "mctx") (PVar "sid")) (EApp (EApp (EVar "setRef") (EFieldAccess (EFieldAccess (EVar "mctx") "mcCells") "currentScope")) (EApp (EVar "Scopes.openScopeCursor") (EVar "sid"))))
 (DTypeSig true "currentModuleMarks" (TyFun (TyCon "GraphCtx") (TyFun (TyCon "Unit") (TyCon "GraphMarks"))))
 (DFunDef false "currentModuleMarks" ((PVar "gctx") PWild) (EMatch (EFieldAccess (EFieldAccess (EFieldAccess (EVar "gctx") "graphRun") "moduleRanges") "value") (arm (PCons (PTuple PWild (PVar "m")) PWild) () (EVar "m")) (arm (PList) () (ERecordCreate "GraphMarks" ((fa "mGoals" (ELit (LInt 0))) (fa "mNumlit" (ELit (LInt 0))))))))
 (DTypeSig true "walkGoalDischarged" (TyFun (TyCon "ReqWalk") (TyFun (TyCon "IfaceRef") (TyFun (TyApp (TyCon "List") (TyCon "Mono")) (TyCon "Bool")))))
@@ -2657,7 +2652,7 @@ methodReturnProbeOblIfaces (obl :: rest) =
 (DUse false (UseGroup ("types" "tc_env") ((mem "anyArgMentions" false) (mem "dispatchTyparams" false) (mem "ieHeadRows" false) (mem "ieRowIfaceMatches" false) (mem "ieRowOfIface" false) (mem "ieRowsAll" false) (mem "ieRowTys" false) (mem "instRefSeq" false) (mem "methodArgs" false) (mem "methodRowIface" false) (mem "methodRowTestIface" false) (mem "methodSlotKey" false) (mem "originMethodName" false) (mem "sameIfaceDecl" false))))
 (DUse false (UseGroup ("types" "tc_diag") ((mem "erredDuring" false))))
 (DUse false (UseGroup ("types" "tc_scope") ((mem "methodAdmittedHere" false) (mem "methodVisibleHere" false))))
-(DUse false (UseGroup ("types" "tc_unify") ((mem "enterLevel" false) (mem "exitLevel" false) (mem "freshTvMap" false) (mem "freshVar" false) (mem "instantiateMethodTracked" false) (mem "monoUnboundVarLevels" false) (mem "predicateSlotArgs" false) (mem "unify" false) (mem "unifyIn" false))))
+(DUse false (UseGroup ("types" "tc_unify") ((mem "openScope" false) (mem "enterLevel" false) (mem "exitLevel" false) (mem "freshTvMap" false) (mem "freshVar" false) (mem "instantiateMethodTracked" false) (mem "monoUnboundVarLevels" false) (mem "predicateSlotArgs" false) (mem "unify" false) (mem "unifyIn" false))))
 (DUse false (UseGroup ("types" "tc_decls_types") ((mem "fromAstType" false) (mem "reqTyToMono" false))))
 (DUse false (UseGroup ("types" "tc_solve_givens") ((mem "activeDictPredOf" false) (mem "activeDictVarOfEncl" false) (mem "assumAnswerEvidence" false) (mem "assumAnswerRoute" false) (mem "enclSlot" false) (mem "givenInScope" false) (mem "givenRoute" false) (mem "givensForScope" false) (mem "goalMatchesGiven" false) (mem "noteAssumption" false) (mem "predicateRequestMatchesSlot" false) (mem "projectedGivenOf" false))))
 (DUse false (UseGroup ("types" "tc_solve_entail") ((mem "determinedGoalInstance" false) (mem "directSuperGoals" false) (mem "enteredGoalKey" false) (mem "freshRowHeads" false) (mem "goalCandidates" false) (mem "goalHeadCon" false) (mem "goalIsProjection" false) (mem "goalRows" false) (mem "ieSelectRowByIface" false) (mem "paramMonoOf" false) (mem "positionBindings" false) (mem "repeatedBindings" false) (mem "reqWalkMemo" false) (mem "reqWalkStart" false) (mem "routeOfD" false) (mem "rowCountsFor" false) (mem "rowHeadMatches" false) (mem "rowRouteKey" false) (mem "selectedCallSupers" false) (mem "selectedRowReqMatch" false) (mem "stableGoalReach" false) (mem "superRoutesAt" false) (mem "findMatchingImplReqsU" false))))
@@ -2756,8 +2751,6 @@ methodReturnProbeOblIfaces (obl :: rest) =
 (DFunDef false "goalKindName" ((PCon "GKDictApp")) (ELit (LString "GKDictApp")))
 (DFunDef false "goalKindName" ((PCon "GKMethodDict")) (ELit (LString "GKMethodDict")))
 (DFunDef false "goalKindName" ((PCon "GKRecDictApp")) (ELit (LString "GKRecDictApp")))
-(DTypeSig true "openScope" (TyFun (TyCon "ModuleCtx") (TyFun (TyCon "ScopeId") (TyCon "Unit"))))
-(DFunDef false "openScope" ((PVar "mctx") (PVar "sid")) (EApp (EApp (EVar "setRef") (EFieldAccess (EFieldAccess (EVar "mctx") "mcCells") "currentScope")) (EApp (EVar "Scopes.openScopeCursor") (EVar "sid"))))
 (DTypeSig true "currentModuleMarks" (TyFun (TyCon "GraphCtx") (TyFun (TyCon "Unit") (TyCon "GraphMarks"))))
 (DFunDef false "currentModuleMarks" ((PVar "gctx") PWild) (EMatch (EFieldAccess (EFieldAccess (EFieldAccess (EVar "gctx") "graphRun") "moduleRanges") "value") (arm (PCons (PTuple PWild (PVar "m")) PWild) () (EVar "m")) (arm (PList) () (ERecordCreate "GraphMarks" ((fa "mGoals" (ELit (LInt 0))) (fa "mNumlit" (ELit (LInt 0))))))))
 (DTypeSig true "walkGoalDischarged" (TyFun (TyCon "ReqWalk") (TyFun (TyCon "IfaceRef") (TyFun (TyApp (TyCon "List") (TyCon "Mono")) (TyCon "Bool")))))

@@ -1,15 +1,15 @@
 -- tc_occurrence: method and literal occurrence inference, operator dispatch-site recording
--- (including `recordShadowStandaloneObls`), evidence-site minting, the mark pass over binding
--- groups and the write-back of its marked clauses over the declarations (`rebuildGroupDecls`), the
--- constrained-signature set, and the method-row and method-return probes (the `methodRow*Probe` and
--- `methodReturn*Probe` rows).
+-- (including `recordShadowStandaloneObls`), evidence-site minting, and the method-row and
+-- method-return probes (the `methodRow*Probe` and `methodReturn*Probe` rows). The mark pass that
+-- rewrites a group's method references into these occurrences, with the constrained-signature set,
+-- is `tc_mark`.
 --
 -- Spec: DICT section 4 (occurrence half), section 5, section 8 I7; SHADOW S2-DECL.
 --
 -- Placement: declarations are placed by R1-R6 of the Phase 4 module table,
 -- compiler/ARCHITECTURE-PLAYBOOK.md section 6.
--- Closure rule: this module may not import `types.typecheck`, nor any of `tc_groups`, `tc_pat`,
--- `tc_infer_records`, `tc_infer`, `tc_elab`, `tc_global`, `tc_module`.
+-- Closure rule: this module may not import `types.typecheck`, nor any of `tc_mark`, `tc_groups`,
+-- `tc_pat`, `tc_infer_records`, `tc_infer`, `tc_elab`, `tc_global`, `tc_stamp`, `tc_module`.
 
 import support.diag_codes.{codeText}
 import types.tc_types.{
@@ -23,11 +23,8 @@ import types.tc_types.{
   EvCell(..),
   GoalKind(..),
   GraphCtx(..),
-  MarkSets(..),
   MethodPredicateTemplate(..),
   MethodReturnRequest(..),
-  MethodReturnResolution(..),
-  MethodRowTestObservation(..),
   Obligation(..),
   PendingDictApp(..),
   PendingMethodDict(..),
@@ -38,20 +35,15 @@ import types.tc_types.{
   SelectedValueOccurrence(..),
   SiteCell(..),
   UObligation(..),
-  ArgRw,
   CDeclared,
   CSlot,
-  MarkCtx,
   MethodInstantiationSubst,
   MethodPredicateSlot,
   MethodSchemeRow,
   MethodTrackedInstantiation,
   ModuleCtx,
-  ModuleMarking,
   PendingEntry,
-  PreludeMarkFacts,
   RecDictApp,
-  ScopedMember,
   ShadowDicts,
   TcEnv,
   ValueScheme,
@@ -63,9 +55,6 @@ import types.tc_mono.{
   isMonoScheme,
   matchTyMono,
   nthFunDomain,
-  patVarsListTc,
-  patVarsTc,
-  propParamNamesTc,
   rootIdOf,
   sameRootId,
   stripArrows,
@@ -100,7 +89,6 @@ import types.tc_env.{
 }
 import types.tc_scope.{
   admittedIfaceWord,
-  aliasDictNames,
   argDispatchOf,
   methodAdmittedHere,
   methodDispatchIdx,
@@ -133,14 +121,12 @@ import types.tc_decls.{
   constraintIsMethodLevel,
   constraintVarNames,
   ifaceMethodSchemeRows,
-  importerDefiners,
 }
 import types.tc_solve_givens.{predicateSlotIds, predicateSlotIdsAt}
 import types.tc_solve_entail.{noteNumericPredicateTrace}
 import types.tc_solve.{
   builtinClassPresent,
   consSiteFn,
-  isLocalAbsName,
   localSourceName,
   methodPredicateTemplateHasAbsent,
   methodReturnProbeIface,
@@ -150,18 +136,14 @@ import types.tc_solve.{
   noteMethodReturnTrace,
   pushDictApp,
   pushGoal,
-  returnPosMethodNames,
   routeLocalSym,
 }
 import types.tc_solve_check.{
   checkCallObligationsU, dedupSlotVecs, dispatchMonosOf
 }
 import types.tc_shadow.{
-  buildStandaloneShadowsGraph,
   callArgVecsV,
-  computeMangledShadowMap,
   constraintMonosOf,
-  coreShadowMapFor,
   declaredConstraintFor,
   declaredEffectsAt,
   isDefinerShadow,
@@ -174,55 +156,32 @@ import types.tc_shadow.{
   standaloneValueBindingEmit,
   standaloneValuePinned,
 }
-import types.tc_effects.{
-  clausesOf,
-  evOrdinal,
-  grantNameIn,
-  recordMethodGrantOcc,
-  recordStandaloneGrantOcc,
+import types.tc_grants.{
+  evOrdinal, recordMethodGrantOcc, recordStandaloneGrantOcc
 }
 import frontend.ast.{
-  Section(..),
-  Arm(..),
   Constraint(..),
   Decl(..),
-  DoStmt(..),
   EvId(..),
   Expr(..),
-  FieldAssign(..),
-  FunClause(..),
-  Guard(..),
-  GuardArm(..),
   IfaceMethod(..),
-  ImplMethod(..),
-  InterpPart(..),
-  LetBind(..),
   Loc(..),
-  MethodDefault(..),
-  Pat(..),
   Route(..),
   Ty(..),
   isUnminted,
   negateLiteral,
   tyConBuiltin,
 }
-import types.solver_contract.{SolverOutcome(..), ClassPredicate(..), Wanted(..)}
+import types.solver_contract.{ClassPredicate(..)}
 import types.repr.{IfaceRef(..), Mono(..), Scheme(..), lookupAssocI}
 import types.evidence_complete.{Inner(..), innerNone}
 import types.evidence.{
-  SolverEvidence(..),
-  PrerequisiteEvidence(..),
-  RequestInstanceId(..),
   ScopeId(..),
 }
-import support.ordmap.{
-  omEmpty, omFromNames, omHasKey, omInsert, omLookup, OrdMap
-}
+import support.ordmap.{omHasKey, omLookup, OrdMap}
 import support.util.{
   allList,
-  anyList,
   contains,
-  dedup,
   filterList,
   isEmptyL,
   isNonEmptyL,
@@ -230,8 +189,7 @@ import support.util.{
   lookupAssoc,
   reverseL,
 }
-import types.chain_key.{constrainedSigName}
-import list.{get, reverse}
+import list.{get}
 import support.char.{isUpper}
 import types.publish.{tcCode}
 import map as IdMap
@@ -280,6 +238,7 @@ pushMethodDictGoal gctx pmd = pushGoal gctx Obligation {
   oInner = pmd.pmdInner,
 }
 
+export
 pushRecDictAppGoal : GraphCtx -> RecDictApp -> Unit
 pushRecDictAppGoal gctx (r@(RecDictApp routesRef _ encl _ scope ev)) = pushGoal
   gctx
@@ -537,19 +496,6 @@ recordArgSiteFn mctx _ idx mono = match nthFunDomain idx mono
         mctx.mcCells.methodSiteFns.value
   None => ()
 
--- #2705: mint the cells for one `EMethodAt` node and return the id the node
--- carries.  [seed] is the pre-pass seed (the mangled definer-shadow symbol, or
--- ""): a non-empty seed becomes the `RLocal <seed> []` fallback the stampers and
--- every seed reader (`routeLocalSym`) expect to find on the dispatch cell.
-mintMethodCell : ModuleCtx -> String -> EvId
-mintMethodCell mctx seed =
-  mintMethodCellRaw
-    mctx
-    ""
-    None
-    (if seed == "" then RNone else RLocal seed [])
-    []
-
 export
 mintMethodCellRaw : ModuleCtx ->
   String ->
@@ -586,6 +532,7 @@ mintMethodCellRaw mctx iface arity tag impls =
   ev
 
 -- The array [index] holds, grown by doubling until slot [i] exists.
+export
 indexWithSlot : Ref (Array (Option a)) -> Int -> Array (Option a)
 indexWithSlot index i =
   let arr0 = index.value
@@ -596,36 +543,6 @@ indexWithSlot index i =
     arrayBlit arr0 0 grown 0 (arrayLength arr0)
     index := grown
     grown
-
--- Mint the cell for one operator site, starting unrouted, and return its id.
-mintOpSite : ModuleCtx -> Unit -> EvId
-mintOpSite mctx _ = mintSite mctx (OpSite (Ref RNone))
-
--- Mint the cells for one numeric literal site: an unset float and an unrouted
--- `fromInt` route.
-mintLitSite : ModuleCtx -> Unit -> EvId
-mintLitSite mctx _ = mintSite mctx (LitSite (Ref None) (Ref RNone))
-
--- Mint the cell for one field access or record update, starting with the unknown
--- head "".
-mintHeadSite : ModuleCtx -> Unit -> EvId
-mintHeadSite mctx _ = mintSite mctx (HeadSite (Ref ""))
-
--- [ev] if it already has a site, else a freshly minted one: a body re-marked after
--- inference keeps the ids inference wrote through.
-mintedOr : (Unit -> EvId) -> EvId -> EvId
-mintedOr mint ev = if isUnminted ev then mint () else ev
-
-mintSite : ModuleCtx -> SiteCell -> EvId
-mintSite mctx cell =
-  let ev = freshEvId mctx ()
-  let g = mctx.mcGraph.graphRun
-  let i = evOrdinal ev - g.evBase
-  let arr = indexWithSlot g.siteCells i
-  match arrayGetUnsafe i arr
-    None => arraySetUnsafe i (Some (ev, cell)) arr
-    Some _ => panic "site cell #\{intToString (evOrdinal ev)} minted twice"
-  ev
 
 -- The cell minted for site [ev].  Inference reaching a site the mark pass never
 -- visited is a gap in marking coverage, so it panics rather than writing a cell no
@@ -1248,35 +1165,10 @@ recordNumLitSite mctx predicate tagRef occurrence origin scope =
       mctx.mcCells.methodSiteFns.value
   occurrence
 
-freshLocalAbsName : GraphCtx -> String -> String
-freshLocalAbsName gctx x =
-  let st = gctx.graphRun.localAbs
-  let (mid, k) = st.lasNext.value
-  let name = "\{x}$\{mid}$\{intToString k}$lb"
-  st.lasNext := (mid, k + 1)
-  st.lasMinted := name :: st.lasMinted.value
-  name
-
--- Mint a use node for a name that takes no dictionary, so its grants have an
--- identity to be recorded under.
-mintGrantOnly : ModuleCtx -> String -> Expr
-mintGrantOnly mctx n =
-  let ev = freshEvId mctx ()
-  let st = mctx.mcGraph.graphRun.grants
-  st.gsGrantOnly := IdMap.set (evOrdinal ev) () st.gsGrantOnly.value
-  EDictAt n ev
-
 export
 isGrantOnlyEv : GraphCtx -> EvId -> Bool
 isGrantOnlyEv gctx ev =
   IdMap.has (evOrdinal ev) gctx.graphRun.grants.gsGrantOnly.value
-
--- A grant-only use that became a dictionary application (a recursive use of a
--- member its group just promoted).
-unmarkGrantOnly : GraphCtx -> EvId -> Unit
-unmarkGrantOnly gctx ev =
-  let st = gctx.graphRun.grants
-  st.gsGrantOnly := IdMap.delete (evOrdinal ev) st.gsGrantOnly.value
 
 -- The callee's constraints are registered (funConstraintsRef has it) ⇒ a normal
 -- call: map each constraint id through the instantiation subst to this call's
@@ -2398,424 +2290,6 @@ instantiateStandaloneOccurrence outer name sym origin value =
         inst.mtiSubstitution.misTypeSubst,
   }
 
--- the user program's top-level functions carrying a `=>` constraint in their
--- signature — the set the graph driver dictionary-passes
-export
-constrainedSigNames : List Decl -> List String
-constrainedSigNames prog = flatMap constrainedSigName prog
-
--- The `ArgRw` hook that records nothing: every marker but the group-recursive one
--- (`markRecursiveOccurrences`) reads the dict application's route out of the goal
--- inference pushes for it, so it has nothing to do at mark time.
-noDictHook : String -> EvId -> Unit
-noDictHook _ _ = ()
-
--- Mint one dict-application node and tell the hook about it.
-mintDictAt : ModuleCtx -> (String -> EvId -> Unit) -> String -> Expr
-mintDictAt mctx onDict n =
-  let ev = freshEvId mctx ()
-  onDict n ev
-  EDictAt n ev
-
--- rewrite a decl body with its own parameters seeded into the bound set.  Mirrors
--- desugar's mapDecl coverage exactly (DFunDef / DInterface / DImpl / DProp /
--- DTest / DAttrib; everything else — incl. DLetGroup — left unchanged),
--- so with the emit path off this would degenerate to the same node set mapProg
--- visits.
-prePassDeclScoped : ModuleCtx -> ArgRw -> Decl -> Decl
-prePassDeclScoped mctx rw (DFunDef pub n ps e site bid) =
-  DFunDef
-    pub
-    n
-    ps
-    (rewriteArgScoped mctx rw (boundOfList (patVarsListTc ps)) e)
-    site
-    bid
-prePassDeclScoped mctx rw (d@(DInterface { methods, ... })) =
-  DInterface { d | methods = map (prePassIfaceMethodScoped mctx rw) methods }
-prePassDeclScoped mctx rw (d@(DImpl { methods, ... })) =
-  DImpl { d | methods = map (prePassImplMethodScoped mctx rw) methods }
-prePassDeclScoped mctx rw (DProp pub name params body) =
-  DProp
-    pub
-    name
-    params
-    (rewriteArgScoped mctx rw (boundOfList (propParamNamesTc params)) body)
-prePassDeclScoped mctx rw (DTest pub name body) =
-  DTest pub name (rewriteArgScoped mctx rw omEmpty body)
-prePassDeclScoped mctx rw (DAttrib attrs d) =
-  DAttrib attrs (prePassDeclScoped mctx rw d)
--- Top-level `let rec … with …` (DLetGroup): mapDecl/the catch-all skip its bodies,
--- so a constrained-fn occurrence inside a group body would never be rewritten to
--- EDictAt/EMethodAt → its call site gets no dict route → the dict-passed callee is
--- under-applied at eval.  Rewrite each clause body with that clause's params scoped
--- in, exactly like the DFunDef arm.
-prePassDeclScoped mctx rw (DLetGroup pub binds) =
-  DLetGroup pub (map (prePassLetBindScoped mctx rw) binds)
-prePassDeclScoped _mctx _ d = d
-
-prePassLetBindScoped : ModuleCtx -> ArgRw -> LetBind -> LetBind
-prePassLetBindScoped mctx rw (LetBind n clauses site bid) =
-  LetBind n (map (prePassFunClauseScoped mctx rw) clauses) site bid
-
-prePassFunClauseScoped : ModuleCtx -> ArgRw -> FunClause -> FunClause
-prePassFunClauseScoped mctx rw (FunClause ps e) =
-  FunClause ps (rewriteArgScoped mctx rw (boundOfList (patVarsListTc ps)) e)
-
-prePassIfaceMethodScoped : ModuleCtx -> ArgRw -> IfaceMethod -> IfaceMethod
-prePassIfaceMethodScoped _mctx _ (IfaceMethod n ty None mloc) =
-  IfaceMethod n ty None mloc
-prePassIfaceMethodScoped mctx rw (IfaceMethod n ty (Some (MethodDefault ps e)) mloc) =
-  IfaceMethod
-    n
-    ty
-    (Some
-      (MethodDefault
-        ps
-        (rewriteArgScoped mctx rw (boundOfList (patVarsListTc ps)) e)))
-    mloc
-
-prePassImplMethodScoped : ModuleCtx -> ArgRw -> ImplMethod -> ImplMethod
-prePassImplMethodScoped mctx rw (ImplMethod n ps e) =
-  ImplMethod n ps (rewriteArgScoped mctx rw (boundOfList (patVarsListTc ps)) e)
-
--- #1031: `bound` is an OrdMap-backed SET (name -> ()), not a `List String`
--- scanned by `contains` — a deep local nesting (N sequential lets, a reference
--- to an outer binding) made `contains n bound` an O(depth) scan per EVar,
--- O(depth²) over the body (the `scoperefs` shape).  `boundInsert`/`boundOfList`
--- extend it; membership is `omHasKey`.  A name maps to "" for an ordinary binder
--- and to the renamed binder for a candidate let binder (`letPatRename`).
-boundInsert : List String -> OrdMap String -> OrdMap String
-boundInsert [] b = b
-boundInsert (n :: rest) b = boundInsert rest (omInsert n "" b)
-
--- A let binder that `isNonexpansive` may generalize: every such binder must be able
--- to take dictionary parameters, since generalizing one over a class predicate without
--- abstracting it would share one dictionary between uses at different types.  This
--- runs before inference, without the constructor table, so it over-approximates
--- `isCtorAppSpine` by the head's spelling alone.  A candidate that does not generalize
--- with predicates abstracts nothing and its uses stay plain variables.
-localAbsCandidate : Expr -> Bool
-localAbsCandidate (ELoc _ e) = localAbsCandidate e
-localAbsCandidate (EDoOrigin _ e) = localAbsCandidate e
-localAbsCandidate (EAnnot e _) = localAbsCandidate e
-localAbsCandidate (EHeadAnnot e _) = localAbsCandidate e
-localAbsCandidate (ELit _) = True
-localAbsCandidate (EVar _) = True
-localAbsCandidate (EVarId _ _) = True
-localAbsCandidate (EMethodAt _ _ _) = True
-localAbsCandidate (EDictAt _ _) = True
-localAbsCandidate (EMethodRef _) = True
-localAbsCandidate (ELam _ _) = True
-localAbsCandidate (ETuple es) = allList localAbsCandidate es
-localAbsCandidate (EListLit es) = allList localAbsCandidate es
-localAbsCandidate (app@(EApp _ _)) = localAbsCtorSpine app
-localAbsCandidate (ERecordCreate _ fs) =
-  allList
-    (fa => match fa
-      FieldAssign _ e => localAbsCandidate e)
-    fs
-localAbsCandidate _ = False
-
-localAbsCtorSpine : Expr -> Bool
-localAbsCtorSpine (ELoc _ e) = localAbsCtorSpine e
-localAbsCtorSpine (EDoOrigin _ e) = localAbsCtorSpine e
-localAbsCtorSpine (EApp f x) = localAbsCtorSpine f && localAbsCandidate x
-localAbsCtorSpine (EVar name) = ctorHeadShaped name
-localAbsCtorSpine (EVarId name _) = ctorHeadShaped name
-localAbsCtorSpine _ = False
-
-localAbsCandidateBind : LetBind -> Bool
-localAbsCandidateBind (LetBind _ clauses _ _) =
-  anyList localAbsCandidateClause clauses
-
-localAbsCandidateClause : FunClause -> Bool
-localAbsCandidateClause (FunClause [] body) = localAbsCandidate body
-localAbsCandidateClause (FunClause _ _) = True
-
--- A candidate let binder is renamed to a name no other binder carries, so the
--- binder and every occurrence of it name ONE binding for the rest of the pipeline;
--- the bound map sends the source name to the new one, and its occurrences are
--- marked `EDictAt` so a use can carry the dictionaries the binder abstracts.  A
--- name that is already one (a tree marked a second time) is an ordinary binder.
-letPatRename : GraphCtx -> Pat -> Expr -> OrdMap String -> (Pat, OrdMap String)
-letPatRename gctx (PVar x l bid) e1 b
-  | localAbsCandidate e1 && not (isLocalAbsName x) =
-    let fresh = freshLocalAbsName gctx x
-    (PVar fresh l bid, omInsert x fresh b)
-letPatRename _gctx p _ b = (p, boundInsert (patVarsTc p) b)
-
-bindsRename : GraphCtx ->
-  List LetBind ->
-  OrdMap String ->
-  (List LetBind, OrdMap String)
-bindsRename _gctx [] b = ([], b)
-bindsRename gctx ((bind@(LetBind n clauses site bid)) :: rest) b =
-  let (n2, b1) =
-    if localAbsCandidateBind bind && not (isLocalAbsName n) then
-      let fresh = freshLocalAbsName gctx n
-      (fresh, omInsert n fresh b)
-    else
-      (n, boundInsert [n] b)
-  let (rest2, b2) = bindsRename gctx rest b1
-  (LetBind n2 clauses site bid :: rest2, b2)
-
-boundOfList : List String -> OrdMap String
-boundOfList ns = boundInsert ns omEmpty
-
--- the core scope-threaded rewrite.  `bound` is the set of names in scope as
--- locals at this node.  At an EVar: the rp arm is scope-blind (unchanged); the
--- arg-position (`an`) and constrained-fn (`dn`) arms fire only when the name is
--- NOT shadowed by a local.  Binders
--- (ELam/ELet/ELetGroup/EMatch arms/EBlock/EDo + the where/do/guard
--- binders) extend `bound`; every other node recurses into its children with the
--- same `bound`.
-rewriteArgScoped : ModuleCtx -> ArgRw -> OrdMap String -> Expr -> Expr
-rewriteArgScoped mctx (ArgRw rp dn an sm onDict granted) bound (EVar n)
-  -- P0-18: `n` is a MANGLED definer-shadow standalone (`<mid>__size`).  Mark it
-  -- `EMethodAt` with the BARE dispatch name (so `implFor` finds the impl when the
-  -- receiver has one) and seed the route's `RLocal <n>` fallback with the mangled
-  -- symbol (so a no-impl receiver still reaches the standalone `@mdk_<mid>__size`).
-  | omHasKey n bound = match omLookup n bound
-    Some "" => EVar n
-    Some renamed => EDictAt renamed (freshEvId mctx ())
-    None => EVar n
-  | otherwise = match lookupAssoc n sm
-    Some bare => EMethodAt bare n (mintMethodCell mctx n)
-    None =>
-      if omHasKey n rp || omHasKey n an then
-        EMethodAt n "" (mintMethodCell mctx "")
-      else if omHasKey n dn then
-        mintDictAt mctx onDict n
-      else if granted n then
-        mintGrantOnly mctx n
-      else
-        EVar n
--- A grant-only use of a member its group has just promoted becomes that member's
--- dictionary application, under the same id.
-rewriteArgScoped mctx (ArgRw _ dn _ _ onDict _) _ (EDictAt n ev)
-  | isGrantOnlyEv mctx.mcGraph ev && omHasKey n dn =
-    unmarkGrantOnly mctx.mcGraph ev
-    onDict n ev
-    EDictAt n ev
-  | otherwise = EDictAt n ev
--- No `EVarId` arm: every marker runs BEFORE resolve's binding-id stamp (the Flat
--- arm's whole-program pre-pass, and the schedule's per-group `markGroupClauses` →
--- `stampGroupClauses`), so a stamped occurrence never reaches this rewrite.
--- binders
-rewriteArgScoped mctx rw bound (ELam ps body) =
-  ELam ps (rewriteArgScoped mctx rw (boundInsert (patVarsListTc ps) bound) body)
-rewriteArgScoped mctx rw bound (ELet m r p e1 e2) =
-  let (p2, after) = letPatRename mctx.mcGraph p e1 bound
-  let b1 = if r then after else bound
-  ELet
-    m
-    r
-    p2
-    (rewriteArgScoped mctx rw b1 e1)
-    (rewriteArgScoped mctx rw after e2)
-rewriteArgScoped mctx rw bound (ELetGroup binds e2) =
-  let (binds2, bnd) = bindsRename mctx.mcGraph binds bound
-  ELetGroup
-    (map (rewriteArgLetBind mctx rw bnd) binds2)
-    (rewriteArgScoped mctx rw bnd e2)
-rewriteArgScoped mctx rw bound (EMatch e0 arms) =
-  EMatch
-    (rewriteArgScoped mctx rw bound e0)
-    (map (rewriteArgArm mctx rw bound) arms)
-rewriteArgScoped mctx rw bound (EBlock stmts) =
-  EBlock (rewriteArgStmts mctx rw bound stmts)
-rewriteArgScoped mctx rw bound (EDo d stmts) =
-  EDo d (rewriteArgStmts mctx rw bound stmts)
--- non-binder composites: recurse children with the same bound
-rewriteArgScoped mctx rw bound (ELoc l e) =
-  ELoc l (rewriteArgScoped mctx rw bound e)
-rewriteArgScoped mctx rw bound (EDoOrigin l e) =
-  EDoOrigin l (rewriteArgScoped mctx rw bound e)
-rewriteArgScoped mctx rw bound (EApp f x) =
-  EApp (rewriteArgScoped mctx rw bound f) (rewriteArgScoped mctx rw bound x)
-rewriteArgScoped mctx rw bound (EIf c t e) =
-  EIf
-    (rewriteArgScoped mctx rw bound c)
-    (rewriteArgScoped mctx rw bound t)
-    (rewriteArgScoped mctx rw bound e)
--- An operator site is minted once: `markRecursiveOccurrences` re-marks bodies
--- inference already wrote through these ids, so a minted id passes through.
-rewriteArgScoped mctx rw bound (EBinOp op l r ev) =
-  let l2 = rewriteArgScoped mctx rw bound l
-  let r2 = rewriteArgScoped mctx rw bound r
-  EBinOp op l2 r2 (mintedOr (mintOpSite mctx) ev)
-rewriteArgScoped mctx rw bound (EUnOp op x ev) =
-  let x2 = rewriteArgScoped mctx rw bound x
-  EUnOp op x2 (mintedOr (mintOpSite mctx) ev)
-rewriteArgScoped mctx rw bound (EInfix op l r) =
-  EInfix
-    op
-    (rewriteArgScoped mctx rw bound l)
-    (rewriteArgScoped mctx rw bound r)
-rewriteArgScoped mctx rw bound (EFieldAccess e0 n ev) =
-  EFieldAccess
-    (rewriteArgScoped mctx rw bound e0)
-    n
-    (mintedOr (mintHeadSite mctx) ev)
-rewriteArgScoped mctx rw bound (ETuple es) =
-  ETuple (map (rewriteArgScoped mctx rw bound) es)
-rewriteArgScoped mctx rw bound (EListLit es) =
-  EListLit (map (rewriteArgScoped mctx rw bound) es)
-rewriteArgScoped mctx rw bound (EArrayLit es) =
-  EArrayLit (map (rewriteArgScoped mctx rw bound) es)
-rewriteArgScoped mctx rw bound (ERangeList lo hi i) =
-  ERangeList
-    (rewriteArgScoped mctx rw bound lo)
-    (rewriteArgScoped mctx rw bound hi)
-    i
-rewriteArgScoped mctx rw bound (ERangeArray lo hi i) =
-  ERangeArray
-    (rewriteArgScoped mctx rw bound lo)
-    (rewriteArgScoped mctx rw bound hi)
-    i
-rewriteArgScoped mctx rw bound (ESlice e0 lo hi i) =
-  ESlice
-    (rewriteArgScoped mctx rw bound e0)
-    (rewriteArgScoped mctx rw bound lo)
-    (rewriteArgScoped mctx rw bound hi)
-    i
-rewriteArgScoped mctx rw bound (EIndex e0 i) =
-  EIndex (rewriteArgScoped mctx rw bound e0) (rewriteArgScoped mctx rw bound i)
-rewriteArgScoped mctx rw bound (EAnnot e0 t) =
-  EAnnot (rewriteArgScoped mctx rw bound e0) t
-rewriteArgScoped mctx rw bound (EHeadAnnot e0 t) =
-  EHeadAnnot (rewriteArgScoped mctx rw bound e0) t
-rewriteArgScoped mctx rw bound (ERecordCreate n fs) =
-  ERecordCreate n (map (rewriteArgField mctx rw bound) fs)
-rewriteArgScoped mctx rw bound (ERecordUpdate e0 fs ev) =
-  ERecordUpdate
-    (rewriteArgScoped mctx rw bound e0)
-    (map (rewriteArgField mctx rw bound) fs)
-    (mintedOr (mintHeadSite mctx) ev)
-rewriteArgScoped mctx rw bound (EVariantUpdate c e0 fs) =
-  EVariantUpdate
-    c
-    (rewriteArgScoped mctx rw bound e0)
-    (map (rewriteArgField mctx rw bound) fs)
-rewriteArgScoped mctx rw bound (EStringInterp parts) =
-  EStringInterp (map (rewriteArgInterp mctx rw bound) parts)
-rewriteArgScoped mctx rw bound (EGuards arms) =
-  EGuards (map (rewriteArgGuardArm mctx rw bound) arms)
-rewriteArgScoped mctx rw bound (ESection (SecRight op e0)) =
-  ESection (SecRight op (rewriteArgScoped mctx rw bound e0))
-rewriteArgScoped mctx rw bound (ESection (SecLeft e0 op)) =
-  ESection (SecLeft (rewriteArgScoped mctx rw bound e0) op)
-rewriteArgScoped mctx rw bound (EMapLit n kvs) =
-  EMapLit n (map (rewriteArgKv mctx rw bound) kvs)
-rewriteArgScoped mctx rw bound (ESetLit n es) =
-  ESetLit n (map (rewriteArgScoped mctx rw bound) es)
-rewriteArgScoped mctx rw bound (EAsPat x sub) =
-  EAsPat x (rewriteArgScoped mctx rw bound sub)
-rewriteArgScoped mctx rw bound (EOrPat es) =
-  EOrPat (map (rewriteArgScoped mctx rw bound) es)
--- Numeric literals carry a site id that is minted here, like operators.
-rewriteArgScoped mctx _ _ (ENumLit n ev lx) =
-  ENumLit n (mintedOr (mintLitSite mctx) ev) lx
-rewriteArgScoped mctx _ _ (EWideLit hi lo ev lx) =
-  EWideLit hi lo (mintedOr (mintOpSite mctx) ev) lx
--- leaves (ELit / EMethodRef / EDictApp / EVarAt / EMethodAt / EDictAt / SecBare)
-rewriteArgScoped _mctx _ _ e = e
-
-rewriteArgField : ModuleCtx ->
-  ArgRw ->
-  OrdMap String ->
-  FieldAssign ->
-  FieldAssign
-rewriteArgField mctx rw bound (FieldAssign n e) =
-  FieldAssign n (rewriteArgScoped mctx rw bound e)
-
-rewriteArgKv : ModuleCtx ->
-  ArgRw ->
-  OrdMap String ->
-  (Expr, Expr) ->
-  (Expr, Expr)
-rewriteArgKv mctx rw bound (k, v) =
-  (rewriteArgScoped mctx rw bound k, rewriteArgScoped mctx rw bound v)
-
-rewriteArgInterp : ModuleCtx ->
-  ArgRw ->
-  OrdMap String ->
-  InterpPart ->
-  InterpPart
-rewriteArgInterp _mctx _ _ (InterpStr s) = InterpStr s
-rewriteArgInterp mctx rw bound (InterpExpr e) =
-  InterpExpr (rewriteArgScoped mctx rw bound e)
-
-rewriteArgLetBind : ModuleCtx -> ArgRw -> OrdMap String -> LetBind -> LetBind
-rewriteArgLetBind mctx rw bound (LetBind n clauses site bid) =
-  LetBind n (map (rewriteArgFunClause mctx rw bound) clauses) site bid
-
-rewriteArgFunClause : ModuleCtx ->
-  ArgRw ->
-  OrdMap String ->
-  FunClause ->
-  FunClause
-rewriteArgFunClause mctx rw bound (FunClause ps body) =
-  FunClause
-    ps
-    (rewriteArgScoped mctx rw (boundInsert (patVarsListTc ps) bound) body)
-
--- a match/function arm: the pattern binds for the guards + body; a `| p <- e`
--- guard binds for later guards + the body (threaded left-to-right).
-rewriteArgArm : ModuleCtx -> ArgRw -> OrdMap String -> Arm -> Arm
-rewriteArgArm mctx rw bound (Arm p gs body) =
-  let b0 = boundInsert (patVarsTc p) bound
-  let (gs2, bnd) = rewriteArgGuards mctx rw b0 gs
-  Arm p gs2 (rewriteArgScoped mctx rw bnd body)
-
-rewriteArgGuardArm : ModuleCtx -> ArgRw -> OrdMap String -> GuardArm -> GuardArm
-rewriteArgGuardArm mctx rw bound (GuardArm gs body) =
-  let (gs2, bnd) = rewriteArgGuards mctx rw bound gs
-  GuardArm gs2 (rewriteArgScoped mctx rw bnd body)
-
-rewriteArgGuards : ModuleCtx ->
-  ArgRw ->
-  OrdMap String ->
-  List Guard ->
-  (List Guard, OrdMap String)
-rewriteArgGuards _mctx _ bound [] = ([], bound)
-rewriteArgGuards mctx rw bound ((GBool e) :: rest) =
-  let e2 = rewriteArgScoped mctx rw bound e
-  let (rest2, bnd) = rewriteArgGuards mctx rw bound rest
-  (GBool e2 :: rest2, bnd)
-rewriteArgGuards mctx rw bound ((GBind p e) :: rest) =
-  let e2 = rewriteArgScoped mctx rw bound e
-  let (rest2, bnd) =
-    rewriteArgGuards mctx rw (boundInsert (patVarsTc p) bound) rest
-  (GBind p e2 :: rest2, bnd)
-
--- do/block statements: a DoBind/DoLet pattern binds for SUBSEQUENT
--- statements (a recursive DoLet also for its own RHS).
-rewriteArgStmts : ModuleCtx ->
-  ArgRw ->
-  OrdMap String ->
-  List DoStmt ->
-  List DoStmt
-rewriteArgStmts _mctx _ _ [] = []
-rewriteArgStmts mctx rw bound ((DoExpr e) :: rest) =
-  DoExpr (rewriteArgScoped mctx rw bound e)
-    :: rewriteArgStmts mctx rw bound rest
-rewriteArgStmts mctx rw bound ((DoBind p e) :: rest) =
-  DoBind p (rewriteArgScoped mctx rw bound e)
-    :: rewriteArgStmts mctx rw (boundInsert (patVarsTc p) bound) rest
-rewriteArgStmts mctx rw bound ((DoLet m r p e site) :: rest) =
-  let (p2, after) = letPatRename mctx.mcGraph p e bound
-  let b1 = if r then after else bound
-  DoLet m r p2 (rewriteArgScoped mctx rw b1 e) site
-    :: rewriteArgStmts mctx rw after rest
-rewriteArgStmts mctx rw bound ((DoAssign x e) :: rest) =
-  DoAssign x (rewriteArgScoped mctx rw bound e)
-    :: rewriteArgStmts mctx rw bound rest
-rewriteArgStmts mctx rw bound ((DoFieldAssign x fs e) :: rest) =
-  DoFieldAssign x fs (rewriteArgScoped mctx rw bound e)
-    :: rewriteArgStmts mctx rw bound rest
-
 -- interface methods carrying a method-level constraint (a `=>` in the method's own
 -- signature over any tyvar, e.g. foldMap's `Monoid m`) — rewritten to EMethodAt
 -- alongside the return-position methods so the method-level dict can be folded on.
@@ -2913,293 +2387,9 @@ stripLeadingMethodConstraints (TyConstrained _ t) =
 stripLeadingMethodConstraints (TyEffect _ _ t) = stripLeadingMethodConstraints t
 stripLeadingMethodConstraints t = t
 
--- The `=>`-constrained-function dict-name set `elaborateModules` hands to prePass and
--- dictPass, which must see the same set: the prelude's constrained names, then the
--- full `constrainedSigNames` of every module (not the return-position subset:
--- dictPass gives a leading dict parameter to every function whose signature is
--- constrained, so a mark set that omitted `quad : Monoid a => a -> a` would leave
--- its call sites unmarked).  The prelude's names are the one prelude-only input, so
--- a driver with a prelude key derives them once per process.
-moduleDictNames : List String -> List (String, List Decl) -> List String
-moduleDictNames preludeNames modules =
-  preludeNames ++ constrainedSigNames (flatMap snd modules)
-
-argRwOf : MarkCtx ->
-  OrdMap Unit ->
-  (String -> EvId -> Unit) ->
-  (String -> Bool) ->
-  ArgRw
-argRwOf mc dn onDict granted = ArgRw mc.mcRp dn mc.mcAn mc.mcSm onDict granted
-
--- Mark the declarations of one module that are not binding groups (impl, default,
--- prop and test bodies) with the module's final dict-name set.  Binding
--- groups were marked on the schedule (`markGroupClauses`) and are left alone.
-export
-markTailDecls : ModuleCtx ->
-  MarkCtx ->
-  OrdMap Unit ->
-  (String -> Bool) ->
-  List Decl ->
-  List Decl
-markTailDecls mctx mc dn granted decls =
-  map (markTailDecl mctx (argRwOf mc dn noDictHook granted)) decls
-
-markTailDecl : ModuleCtx -> ArgRw -> Decl -> Decl
-markTailDecl _mctx _ (d@(DFunDef _ _ _ _ _ _)) = d
-markTailDecl _mctx _ (d@(DLetGroup _ _)) = d
-markTailDecl mctx rw (DAttrib attrs d) = DAttrib attrs (markTailDecl mctx rw d)
-markTailDecl mctx rw d = prePassDeclScoped mctx rw d
-
-markClauseWith : ModuleCtx -> ArgRw -> (List Pat, Expr) -> (List Pat, Expr)
-markClauseWith mctx rw (ps, e) =
-  (ps, rewriteArgScoped mctx rw (boundOfList (patVarsListTc ps)) e)
-
 export
 evIdModule : EvId -> String
 evIdModule (EvId m _) = m
-
--- `allDecls` IS `coreDecls ++ flatMap snd modules` -- the envelope's
--- `deAllDecls`, see `declEnvDeclsOf` -- and every list split on that seam here is
--- a `flatMap` over decls (`returnPosMethodNames`, `methodConstraintNames`,
--- `argDispatchIndices`, `argDispatchIndicesById`), so `f (xs ++ ys)` is
--- `f xs ++ f ys` for each.  That is what makes the prelude half separable WITHOUT
--- changing the order any of them produces, and the order is observable: `dedup`
--- keeps the first occurrence.
-export
-markSetsOf : GraphCtx ->
-  PreludeMarkFacts ->
-  List Decl ->
-  List (String, List Decl) ->
-  List Decl ->
-  MarkSets
-markSetsOf gctx pmf coreDecls modules allDecls =
-  -- P0-18: recover the definer-shadow map from the (already-mangled on the emit path)
-  -- decls BEFORE marking/typecheck reads it.  Empty on the un-mangled path.  Set once
-  -- here; per-module `freshModuleCtx` (in checkModuleFullImpl) does NOT clear it.
-  let units = ("core", coreDecls) :: modules
-  let userDecls = flatMap snd modules
-  let shadowMap = computeMangledShadowMap allDecls units
-  gctx.mangledShadowMapRef := shadowMap
-  gctx.argDispatchIdxByIdRef :=
-    pmf.pmfArgDispatchById ++ argDispatchIndicesById userDecls
-  let rpNames = pmf.pmfReturnPos ++ returnPosMethodNames userDecls
-  let markSharedNames =
-    dedup
-      (rpNames ++ pmf.pmfMethodConstraints ++ methodConstraintNames userDecls)
-  let graphShadowNames =
-    buildStandaloneShadowsGraph shadowMap allDecls userDecls
-  let ms = MarkSets {
-    msMarkRpNames = dedup (markSharedNames ++ graphShadowNames),
-    msMarkSharedNames = markSharedNames,
-    msGraphShadowNames = graphShadowNames,
-    msArgNames = map fst (pmf.pmfArgDispatch ++ argDispatchIndices userDecls),
-    msCoreShadowMap = coreShadowMapFor gctx coreDecls shadowMap,
-    msBareDictNames = dedup (moduleDictNames pmf.pmfConstrainedNames modules),
-    msUnits = units,
-  }
-  gctx.markSetsRef := Some ms
-  ms
-
--- The dict-name set `dictPass` consumes: [names] (the bare set plus every promotion
--- the graph made) and its import aliases across every module.  The same names, per
--- module, are what `beginModuleMarking` marked with — the def side and the call side
--- must agree on this set or the callee is under-applied (`unbound identifier:
--- $dict_…`, the Phase-134 shape).
---
--- IMPORT ALIASING: the marker rewrites a call site `EVar n` into a dict application
--- only when `n` is in the dict-name set — a set of DEFINITION names.  An aliased call
--- site writes the LOCAL name, so unless the alias locals are added the call is never
--- marked, receives no dict arguments, and silently UNDER-APPLIES: `check` stays
--- green and `run` dies downstream with a type-confused value.
-export
-markDictNames : GraphCtx ->
-  List String ->
-  List Decl ->
-  List (String, List Decl) ->
-  List String
-markDictNames gctx names coreDecls modules =
-  dedup
-    (names
-      ++ aliasDictNames
-        (importerDefiners gctx)
-        names
-        (("core", coreDecls) :: modules)
-        modules)
-
--- Mark one binding group's clauses (in the stored, newest-first order the map keeps)
--- with the dict-name set as it stands when the schedule reaches the group.  A use
--- of a member, or of a name whose scheme in [env] quantifies an authority, is
--- given a grant identity: a member's scheme is not known until the group closes.
-export
-markGroupClauses : ModuleMarking ->
-  TcEnv ->
-  List String ->
-  OrdMap (List (List Pat, Expr)) ->
-  OrdMap (List (List Pat, Expr))
-markGroupClauses mm env members grouped =
-  let own = omFromNames members omEmpty
-  mapGroupClauses
-    (markClauseWith
-      env.teDyn.dcModule
-      (argRwOf mm.mmCtx mm.mmDictSet.value noDictHook (n =>
-        omHasKey n own || grantNameIn env n)))
-    members
-    grouped
-
-export
-mapGroupClauses : ((List Pat, Expr) -> (List Pat, Expr)) ->
-  List String ->
-  OrdMap (List (List Pat, Expr)) ->
-  OrdMap (List (List Pat, Expr))
--- The map keeps a name's clauses newest-first (`groupClausesGo`); `f` is applied in
--- SOURCE order (`clausesOf`) so the evidence ids it mints follow the source, and the
--- result is stored back in the map's own order.
-mapGroupClauses _ [] grouped = grouped
-mapGroupClauses f (m :: rest) grouped =
-  mapGroupClauses
-    f
-    rest
-    (omInsert m (reverse (map f (clausesOf m grouped))) grouped)
-
--- At group close: the members this group promoted join the dict-name set, and the
--- group's own occurrences of them — the recursive calls, which were still `EVar`
--- when the group was marked because their callee had not generalized — become
--- dict applications.  Each carries the goal `inferDictAtFound`'s recursive arm
--- pushes for a callee that is a placeholder of the current group (`RecDictApp`,
--- realized at the graph-end drain against the callee's now-registered slots): the
--- callee's placeholder mono is the occurrence's instantiated type, the enclosing
--- member is the clause's own.  That arm is the ONLY effect the recursive arm has
--- beyond returning the instantiated type, which the `EVar` path returned too, so
--- rewriting after inference leaves the group's inference unchanged.
-export
-markRecursiveOccurrences : ModuleCtx ->
-  ModuleMarking ->
-  List (String, Mono) ->
-  List ScopedMember ->
-  OrdMap (List (List Pat, Expr)) ->
-  OrdMap (List (List Pat, Expr))
-markRecursiveOccurrences mctx mm placeholders scopedMembers grouped =
-  -- `promotedRef` is this module's promoted names so far (cumulative within the
-  -- module); a member already in the dict-name set — a bare-name collision with a
-  -- signatured graph name or an earlier module's promotion — was marked before
-  -- inference and needs nothing here.
-  let promoted = omFromNames mctx.mcCells.promotedRef.value omEmpty
-  let fresh =
-    filterList
-      (m => omHasKey m promoted && not (omHasKey m mm.mmDictSet.value))
-      (map (member => member.smName) scopedMembers)
-  match fresh
-    [] => grouped
-    _ =>
-      mm.mmDictSet := omFromNames fresh mm.mmDictSet.value
-      recMarkMembers
-        mctx
-        (omFromNames fresh omEmpty)
-        placeholders
-        scopedMembers
-        grouped
-
-recMarkMembers : ModuleCtx ->
-  OrdMap Unit ->
-  List (String, Mono) ->
-  List ScopedMember ->
-  OrdMap (List (List Pat, Expr)) ->
-  OrdMap (List (List Pat, Expr))
-recMarkMembers _mctx _ _ [] grouped = grouped
-recMarkMembers mctx dn placeholders (member :: rest) grouped =
-  let m = member.smName
-  let onDict =
-    callee ev =>
-      pushRecDictAppGoal
-        mctx.mcGraph
-        (RecDictApp
-          (Ref [])
-          callee
-          m
-          (placeholderMonoOf callee placeholders)
-          member.smScope
-          ev)
-  let rw = ArgRw omEmpty dn omEmpty [] onDict (_ => False)
-  recMarkMembers
-    mctx
-    dn
-    placeholders
-    rest
-    (mapGroupClauses (markClauseWith mctx rw) [m] grouped)
-
-placeholderMonoOf : String -> List (String, Mono) -> Mono
-placeholderMonoOf callee placeholders = match lookupAssoc callee placeholders
-  Some v => v
-  None =>
-    panic "markRecursiveOccurrences: \{callee} is not a member of the group"
-
--- Write each group's marked clauses back over the declarations that produced them.
--- `funDefs` flattens `DFunDef` clauses and `DLetGroup` bindings in declaration
--- order and `clausesOf` returns a name's clauses in that order, so consuming them
--- head-first as the declarations are walked restores every clause to its own slot.
--- The arms below are `funDefs`' arms, and must stay that set: a declaration shape
--- `funDefs` collects clauses from but this walk passes through would drop those
--- clauses' marks from the returned tree without a panic (the reverse direction
--- panics in `popMarkedClause`).
-export
-rebuildGroupDecls : OrdMap (List (List Pat, Expr)) -> List Decl -> List Decl
-rebuildGroupDecls grouped prog = fst (rebuildGroupDeclsGo grouped omEmpty prog)
-
-rebuildGroupDeclsGo : OrdMap (List (List Pat, Expr)) ->
-  OrdMap (List (List Pat, Expr)) ->
-  List Decl ->
-  (List Decl, OrdMap (List (List Pat, Expr)))
-rebuildGroupDeclsGo _ pending [] = ([], pending)
-rebuildGroupDeclsGo grouped pending ((DFunDef pub n _ _ site bid) :: rest) =
-  let ((ps, e), pending2) = popMarkedClause grouped pending n
-  let (ds, pending3) = rebuildGroupDeclsGo grouped pending2 rest
-  (DFunDef pub n ps e site bid :: ds, pending3)
-rebuildGroupDeclsGo grouped pending ((DLetGroup pub binds) :: rest) =
-  let (binds2, pending2) = rebuildLetBinds grouped pending binds
-  let (ds, pending3) = rebuildGroupDeclsGo grouped pending2 rest
-  (DLetGroup pub binds2 :: ds, pending3)
-rebuildGroupDeclsGo grouped pending ((DAttrib attrs d) :: rest) =
-  let (inner, pending2) = rebuildGroupDeclsGo grouped pending [d]
-  let (ds, pending3) = rebuildGroupDeclsGo grouped pending2 rest
-  (map (d2 => DAttrib attrs d2) inner ++ ds, pending3)
-rebuildGroupDeclsGo grouped pending (d :: rest) =
-  let (ds, pending2) = rebuildGroupDeclsGo grouped pending rest
-  (d :: ds, pending2)
-
-rebuildLetBinds : OrdMap (List (List Pat, Expr)) ->
-  OrdMap (List (List Pat, Expr)) ->
-  List LetBind ->
-  (List LetBind, OrdMap (List (List Pat, Expr)))
-rebuildLetBinds _ pending [] = ([], pending)
-rebuildLetBinds grouped pending ((LetBind n clauses site bid) :: rest) =
-  let (clauses2, pending2) = rebuildFunClauses grouped pending n clauses
-  let (binds, pending3) = rebuildLetBinds grouped pending2 rest
-  (LetBind n clauses2 site bid :: binds, pending3)
-
-rebuildFunClauses : OrdMap (List (List Pat, Expr)) ->
-  OrdMap (List (List Pat, Expr)) ->
-  String ->
-  List FunClause ->
-  (List FunClause, OrdMap (List (List Pat, Expr)))
-rebuildFunClauses _ pending _ [] = ([], pending)
-rebuildFunClauses grouped pending n (_ :: rest) =
-  let ((ps, e), pending2) = popMarkedClause grouped pending n
-  let (cs, pending3) = rebuildFunClauses grouped pending2 n rest
-  (FunClause ps e :: cs, pending3)
-
--- The next unconsumed marked clause of [n]: `pending` holds the clauses not yet
--- written back, in source order, minted from `clausesOf` on first use.
-popMarkedClause : OrdMap (List (List Pat, Expr)) ->
-  OrdMap (List (List Pat, Expr)) ->
-  String ->
-  ((List Pat, Expr), OrdMap (List (List Pat, Expr)))
-popMarkedClause grouped pending n =
-  let remaining = match omLookup n pending
-    Some cs => cs
-    None => clausesOf n grouped
-  match remaining
-    c :: cs => (c, omInsert n cs pending)
-    [] => panic "rebuildGroupDecls: no marked clause left for \{n}"
 
 -- Observation declarations exported for readers outside this module: the method-row and
 -- method-return probes that `tc_occurrence_test` and `tc_module_test` read.
