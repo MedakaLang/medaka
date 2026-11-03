@@ -110,3 +110,34 @@ def validate_run(value: dict) -> Run:
     if value["outcome"] == "success" and (value["passed"] == 0 or value["failed"] or value["skipped"]):
         raise ValueError("success requires nonzero, entirely passing checks")
     return Run(deepcopy(value))
+
+
+def validate_budgets(value: dict) -> dict:
+    """Validate versioned budgets, including explicit measurement gaps."""
+    _object(value, {"schema_version", "metrics"}, "budgets")
+    if type(value["schema_version"]) is not int or value["schema_version"] != 1:
+        raise ValueError("budgets: expected schema version 1")
+    metrics = value["metrics"]
+    names = {"cold_init_ns", "queued_interval_ns", "query_latency_ns", "instrumentation_overhead_ns", "peak_rss_bytes", "context_usage"}
+    _object(metrics, names, "metrics")
+    for name, entry in metrics.items():
+        _object(entry, {"status", "limit", "unit", "scope", "rationale"}, name)
+        for field in ("unit", "scope", "rationale"):
+            _text(entry[field], name + " " + field)
+        expected_unit = "bytes" if name == "peak_rss_bytes" else "unknown" if name == "context_usage" else "ns"
+        if entry["unit"] != expected_unit:
+            raise ValueError(name + ": incorrect unit")
+        if name in ("cold_init_ns", "queued_interval_ns") and entry["status"] != "measured":
+            raise ValueError(name + ": expected measured budget")
+        if entry["status"] == "measured":
+            if name not in ("cold_init_ns", "queued_interval_ns"):
+                raise ValueError(name + ": no supported measurement")
+            _count(entry["limit"], name + " limit")
+            if entry["limit"] == 0:
+                raise ValueError(name + ": limit must be positive")
+        elif entry["status"] == "unavailable":
+            if entry["limit"] is not None:
+                raise ValueError(name + ": unavailable metric cannot have a limit")
+        else:
+            raise ValueError(name + ": unknown status")
+    return deepcopy(value)

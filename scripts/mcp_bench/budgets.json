@@ -1,0 +1,11 @@
+{
+  "schema_version": 1,
+  "metrics": {
+    "cold_init_ns": {"status": "measured", "limit": 180000000, "unit": "ns", "scope": "current arm, Linux host, first response after collector entry", "rationale": "Rounded up from maximum 175853131 ns across 35 observations; pilot ceiling, not a percentile."},
+    "queued_interval_ns": {"status": "measured", "limit": 130000000, "unit": "ns", "scope": "current arm, Linux host, adjacent queued response arrivals", "rationale": "Rounded up from maximum 129549694 ns; includes observer scheduling and is not round-trip query latency."},
+    "query_latency_ns": {"status": "unavailable", "limit": null, "unit": "ns", "scope": "isolated request round trip", "rationale": "Requests were queued together; queued intervals are a distinct observable."},
+    "instrumentation_overhead_ns": {"status": "unavailable", "limit": null, "unit": "ns", "scope": "same compiler and inputs with and without instrumentation", "rationale": "Arms used different compiler revisions and stdlib trees."},
+    "peak_rss_bytes": {"status": "unavailable", "limit": null, "unit": "bytes", "scope": "worker process tree", "rationale": "Collector did not capture peak RSS."},
+    "context_usage": {"status": "unavailable", "limit": null, "unit": "unknown", "scope": "private model context use", "rationale": "Host token accounting is available but is not context occupancy."}
+  }
+}

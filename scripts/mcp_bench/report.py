@@ -18,3 +18,11 @@ def summarize(runs):
     return {'runs': len(records), 'outcomes': dict(Counter(r['outcome'] for r in records)),
             **{name: sum(r[name] for r in records) for name in ('attempted', 'completed', 'passed', 'failed', 'skipped')},
             'metrics': metrics}
+
+
+def load_budgets(path):
+    """Load the single versioned budget document."""
+    import json
+    from pathlib import Path
+    from schema import validate_budgets
+    return validate_budgets(json.loads(Path(path).read_text()))
