@@ -309,17 +309,16 @@ export
 displayCtorName : String -> String
 displayCtorName n
   | upperInitialName n = n
-  | otherwise = stripModPrefix n 0 (stringLength n)
+  | otherwise = stripModPrefix n
 
 upperInitialName : String -> Bool
 upperInitialName n = stringSlice 0 1 n >= "A" && stringSlice 0 1 n <= "Z"
 
 -- drop through the FIRST `__`; unchanged when the name has none.
-stripModPrefix : String -> Int -> Int -> String
-stripModPrefix n i len
-  | i + 2 > len = n
-  | stringSlice i (i + 2) n == "__" = stringSlice (i + 2) len n
-  | otherwise = stripModPrefix n (i + 1) len
+stripModPrefix : String -> String
+stripModPrefix n = match stringIndexOf "__" n
+  Some i => stringSlice (i + 2) (stringLength n) n
+  None => n
 
 joinSp : List String -> String
 joinSp xs = joinWith " " xs
@@ -4004,16 +4003,11 @@ pStringJoin (VString sep) (VList vs) =
 pStringJoin _ _ = panic "stringJoin: bad operands"
 
 evalLastIndexOf : String -> String -> Option Int
--- Host-level lastIndexOf: the last hit, which no stdlib function returns.
+-- The evaluator's `stringLastIndexOf` primitive: the LAST hit (not indexOf's first), and the
+-- empty needle matches at the end of the haystack.
 -- lint-disable-next-line rule-stdlib-reimpl
 evalLastIndexOf n h =
-  if n == "" then Some (stringLength h) else evalLastIndexOfGo n h 0 None
-
-evalLastIndexOfGo : String -> String -> Int -> Option Int -> Option Int
-evalLastIndexOfGo n h from acc =
-  match stringIndexOf n (stringSlice from (stringLength h) h)
-    None => acc
-    Some i => evalLastIndexOfGo n h (from + i + 1) (Some (from + i))
+  if n == "" then Some (stringLength h) else stringLastIndexOf n h
 
 pStringSlice : Value e -> Value e -> Value e -> <e> Value e
 pStringSlice (VInt lo) (VInt hi) (VString s) = VString (stringSlice lo hi s)

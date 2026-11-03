@@ -116,7 +116,6 @@ evalIf : EvalEnv (Value a) -> Value a -> Expr -> Expr -> <a> Value a
 evalIndex : Value a -> Value a -> Value a
 evalIndexInt : Value a -> Int -> Value a
 evalLastIndexOf : String -> String -> Option Int
-evalLastIndexOfGo : String -> String -> Int -> Option Int -> Option Int
 evalLet : Loc -> EvalEnv (Value a) -> Pat -> Expr -> Expr -> <a> Value a
 evalLetGroup : EvalEnv (Value a) -> List LetBind -> Expr -> <a> Value a
 evalMain : List Decl -> String
@@ -535,7 +534,7 @@ statTuple : (Int, Bool, Bool, Float) -> Value a
 storeMemo : Ref (Option (Value a)) -> Value a -> <a> Value a
 stringIndexCp : String -> Int -> Value a
 stripBody : Value a -> Value a -> <a> Value a
-stripModPrefix : String -> Int -> Int -> String
+stripModPrefix : String -> String
 stripResolved : Value a -> <a> Value a
 subClampZero : Int -> Int -> Int
 takeN : Int -> List a -> List a
