@@ -177,8 +177,8 @@ found and fixed #298/#299/#300/#301/#331/#332. Keep the flywheel turning.
 
 ### Completion telemetry
 
-Set `MEDAKA_MCP_TRACE` to a writable JSONL path to record start and finish
-metadata. Set `MEDAKA_MCP_TRACE_SESSION` to a collector-assigned session ID
+Set `MEDAKA_MCP_TRACE` to a writable regular file path for JSONL start and finish
+metadata. A path that resolves to standard output is rejected. Set `MEDAKA_MCP_TRACE_SESSION` to a collector-assigned session ID
 and `MEDAKA_MCP_TRACE_CLASS=probe` for probes; the default is `organic`.
 Events contain generated sequence IDs, tool names, outcome, monotonic duration
 and response size, but no arguments or response bodies. A cancel notification
