@@ -1,0 +1,4 @@
+-- The available process API waits for the child to exit before returning.
+main =
+  println
+    "unavailable: live worker supervision requires bidirectional process IO"
