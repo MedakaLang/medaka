@@ -62,7 +62,7 @@ alloca fix):
 | native `dispatch_rt`, min of 5 back to back | 0.134 s | 0.0147 s |
 | native binary bytes, dispatch / dispatch_rt / fib | 194528 / 213224 / 196280 | 194528 / 196328 / 196264 |
 | native `medaka` binary bytes | 14675312 | 14618904 |
-| native IR lines, dispatch / dispatch_rt / fib | 14853 / 14869 / 14734 | 17529 / 17667 / 17422 |
+| native IR lines, dispatch / dispatch_rt / fib | 14853 / 14869 / 14734 | 13624 / 13730 / 13551 |
 | dispatcher defines, dispatch / dispatch_rt | 13 / 12 | 0 / 0 |
 | wasm bytes, dispatch / hello / fib | 68610 / 36630 / 35960 | 19362 / 12312 / 12745 |
 | wasm `dispatch.mdk` under node | 1.314 s | 1.284 s |
@@ -74,7 +74,10 @@ reached from, which is past the null test of `loadSlot`. An `alloca` outside the
 is dynamic, so LLVM could not promote it to a register, inline the callee, or fold the
 constant table. The emitter now tags those `alloca`s and `hoistEntryAllocas` moves them to
 the define's entry block, with the slot ABI, the null trap and the arity check unchanged.
-Native IR grows about 18% from the per-site null test and the two paths of `emitApplyAny`.
+Inline, the per-site null test and the two paths of `emitApplyAny` grew native IR about 18%
+(fib 17422 lines); each slot call is now one line calling a shared `alwaysinline` helper per
+argument count (`@mdk.slotcall.<n>`), which clang inlines back, so the IR is below the tree
+before method tables and the bench binaries move by at most 8 bytes.
 
 ---
 

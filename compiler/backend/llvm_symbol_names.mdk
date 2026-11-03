@@ -29,6 +29,7 @@ public export data LlvmName =
   | LDefaultMethod String String String
   | LSlotFunction String String
   | LSlotClosure String String
+  | LSlotCall Int
   | LSuperCount String
   | LConstructor String
   | LGeneratedName GeneratedFamily String String Int
@@ -67,6 +68,7 @@ llvmName (LSlotFunction key method) =
   "mdk.slot.\{encodeComponent key}.\{encodeComponent method}"
 llvmName (LSlotClosure key method) =
   "mdk.slotclosure.\{encodeComponent key}.\{encodeComponent method}"
+llvmName (LSlotCall arity) = "mdk.slotcall." ++ intToString arity
 llvmName (LSuperCount iface) = "mdk.supers." ++ encodeComponent iface
 llvmName (LConstructor name) = "mdk.ctor." ++ encodeComponent name
 llvmName (LGeneratedName family scope subject ordinal) =
