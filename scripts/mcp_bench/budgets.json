@@ -1,0 +1,99 @@
+{
+  "schema_version": 2,
+  "metrics": {
+    "cold_init_ns": {
+      "status": "measured",
+      "limit": 300000000,
+      "unit": "ns",
+      "scope": "same pinned current compiler, both trace arms; collector entry to initialization response including authority/setup/startup",
+      "rationale": "Rounded to 10 ms above 294341500 ns across all 70 successful sessions; replaces the old 180 ms queued-run budget, whose samples remain intact.",
+      "evidence": {
+        "method": "collector_entry_to_first_response",
+        "samples": 70,
+        "observed_max": 294341500,
+        "artifact_sha256": "26b0c6b7ecd06c883ef39e6bdfd565a6443409e452dda7ff80973d3c1f9ab490"
+      }
+    },
+    "queued_interval_ns": {
+      "status": "measured",
+      "limit": 130000000,
+      "unit": "ns",
+      "scope": "legacy current arm; adjacent queued response arrivals",
+      "rationale": "Retained legacy ceiling above 129549694 ns over 65 intervals; distinct from interactive round trips.",
+      "evidence": {
+        "method": "adjacent_queued_arrivals",
+        "samples": 65,
+        "observed_max": 129549694,
+        "artifact_sha256": "01a428d8b59e99ba17fcd82a46ee22f962ce1d3866529aefa385875154c6ab6d"
+      }
+    },
+    "query_latency_ns": {
+      "status": "measured",
+      "limit": 170000000,
+      "unit": "ns",
+      "scope": "both trace arms; all 140 non-initialize request round trips, including tool-level error responses",
+      "rationale": "Rounded to 10 ms above observed maximum 160166838 ns; five repetitions per case/arm, no percentile inference.",
+      "evidence": {
+        "method": "serial_send_to_validated_response",
+        "samples": 140,
+        "observed_max": 160166838,
+        "artifact_sha256": "26b0c6b7ecd06c883ef39e6bdfd565a6443409e452dda7ff80973d3c1f9ab490"
+      }
+    },
+    "instrumentation_overhead_ns": {
+      "status": "measured",
+      "limit": 50000000,
+      "unit": "ns",
+      "scope": "absolute trace-on minus trace-off round-trip delta; same binary/stdlib/query and matched repetition, alternating order",
+      "rationale": "Noise-inclusive regression guardrail rounded to 10 ms above max absolute paired delta 40576264 ns. Signed range -40576264 to 22033936 ns; not an estimate of isolated observer cost or evidence of speedup.",
+      "evidence": {
+        "method": "matched_absolute_round_trip_delta",
+        "samples": 70,
+        "observed_max": 40576264,
+        "artifact_sha256": "26b0c6b7ecd06c883ef39e6bdfd565a6443409e452dda7ff80973d3c1f9ab490"
+      }
+    },
+    "peak_rss_bytes": {
+      "status": "unavailable",
+      "limit": null,
+      "unit": "bytes",
+      "scope": "worker process tree",
+      "rationale": "Cgroup memory.peak is a memory-charge substitute, not a process-tree RSS measurement.",
+      "evidence": null
+    },
+    "context_usage": {
+      "status": "unavailable",
+      "limit": null,
+      "unit": "unknown",
+      "scope": "private model context use",
+      "rationale": "Private model context occupancy is not exposed. Host input tokens are recorded separately as input_tokens_context_proxy.",
+      "evidence": null
+    },
+    "peak_memory_charge_bytes": {
+      "status": "measured",
+      "limit": 135266304,
+      "unit": "bytes",
+      "scope": "private cgroup: supervisor after migration, namespace init, worker and descendants; excludes collector",
+      "rationale": "129 MiB: next whole MiB above 134561792 bytes over 70 successful sessions. Kernel memory charges include anonymous/file/kernel accounting, with shared charges possibly elsewhere; this is not RSS or retained heap.",
+      "evidence": {
+        "method": "cgroup_v2_memory.peak",
+        "samples": 70,
+        "observed_max": 134561792,
+        "artifact_sha256": "26b0c6b7ecd06c883ef39e6bdfd565a6443409e452dda7ff80973d3c1f9ab490"
+      }
+    },
+    "input_tokens_context_proxy": {
+      "status": "measured",
+      "limit": 71000,
+      "unit": "tokens",
+      "scope": "twelve preserved pilot rows; host-accounted cumulative inputTokens, including cached input",
+      "rationale": "Rounded to 1000 above observed maximum 70893 tokens. Context-cost proxy may count repeated/cached input across turns; private context occupancy remains unknown.",
+      "evidence": {
+        "method": "host_accounted_input_tokens",
+        "samples": 12,
+        "observed_max": 70893,
+        "artifact_sha256": "6b471a2a7f78a8e5e539610bfd6355f6b9143214528e02532a6f02468f9df877"
+      }
+    }
+  }
+}

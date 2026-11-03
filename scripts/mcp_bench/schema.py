@@ -110,3 +110,64 @@ def validate_run(value: dict) -> Run:
     if value["outcome"] == "success" and (value["passed"] == 0 or value["failed"] or value["skipped"]):
         raise ValueError("success requires nonzero, entirely passing checks")
     return Run(deepcopy(value))
+
+
+def validate_budgets(value: dict) -> dict:
+    """Validate versioned budgets, including explicit measurement gaps."""
+    _object(value, {"schema_version", "metrics"}, "budgets")
+    if type(value["schema_version"]) is not int or value["schema_version"] not in (1, 2):
+        raise ValueError("budgets: expected schema version 1 or 2")
+    version = value['schema_version']
+    metrics = value["metrics"]
+    names = {"cold_init_ns", "queued_interval_ns", "query_latency_ns", "instrumentation_overhead_ns", "peak_rss_bytes", "context_usage"}
+    if version == 2:
+        names |= {'peak_memory_charge_bytes', 'input_tokens_context_proxy'}
+    methods = {'cold_init_ns': 'collector_entry_to_first_response',
+               'queued_interval_ns': 'adjacent_queued_arrivals',
+               'query_latency_ns': 'serial_send_to_validated_response',
+               'instrumentation_overhead_ns': 'matched_absolute_round_trip_delta',
+               'peak_memory_charge_bytes': 'cgroup_v2_memory.peak',
+               'peak_rss_bytes': 'process_tree_peak_rss',
+               'input_tokens_context_proxy': 'host_accounted_input_tokens'}
+    _object(metrics, names, "metrics")
+    for name, entry in metrics.items():
+        fields = {"status", "limit", "unit", "scope", "rationale"}
+        if version == 2:
+            fields.add('evidence')
+        _object(entry, fields, name)
+        for field in ("unit", "scope", "rationale"):
+            _text(entry[field], name + " " + field)
+        expected_unit = ("bytes" if name in ("peak_rss_bytes", 'peak_memory_charge_bytes') else
+                         "unknown" if name == "context_usage" else
+                         'tokens' if name == 'input_tokens_context_proxy' else "ns")
+        if entry["unit"] != expected_unit:
+            raise ValueError(name + ": incorrect unit")
+        if name in ("cold_init_ns", "queued_interval_ns") and entry["status"] != "measured":
+            raise ValueError(name + ": expected measured budget")
+        if entry["status"] == "measured":
+            if (version == 1 and name not in ("cold_init_ns", "queued_interval_ns")) or name not in methods:
+                raise ValueError(name + ": no supported measurement")
+            _count(entry["limit"], name + " limit")
+            if entry["limit"] == 0:
+                raise ValueError(name + ": limit must be positive")
+            if version == 2:
+                evidence = entry['evidence']
+                _object(evidence, {'method', 'samples', 'observed_max', 'artifact_sha256'}, name + ' evidence')
+                if evidence['method'] != methods[name]:
+                    raise ValueError(name + ': unsupported measurement method')
+                _count(evidence['samples'], name + ' samples')
+                _count(evidence['observed_max'], name + ' observed_max')
+                digest = evidence['artifact_sha256']
+                if (not isinstance(digest, str) or len(digest) != 64
+                        or any(c not in '0123456789abcdef' for c in digest)):
+                    raise ValueError(name + ': invalid evidence digest')
+                if not evidence['samples'] or entry['limit'] < evidence['observed_max']:
+                    raise ValueError(name + ': unsupported measured ceiling')
+        elif entry["status"] == "unavailable":
+            if entry["limit"] is not None:
+                raise ValueError(name + ": unavailable metric cannot have a limit")
+            if version == 2 and entry['evidence'] is not None:
+                raise ValueError(name + ': unavailable metric must have null evidence')
+        else:
+            raise ValueError(name + ": unknown status")
+    return deepcopy(value)
