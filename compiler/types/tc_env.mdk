@@ -122,6 +122,7 @@ import list.{
   filterMap,
   findMap,
   last,
+  partition,
   somes,
 }
 import support.util.{
@@ -131,6 +132,7 @@ import support.util.{
   dedup,
   filterList,
   isEmptyL,
+  isNonEmptyL,
   listLen,
   lookupAssoc,
   reverseL,
@@ -2035,7 +2037,8 @@ public export data KindReads = KindReads {
 -- kinds of variables known so far and [pos] the kind the position of [ty]
 -- takes (`None` where it is unknown).  A variable applied to arguments has
 -- the kind built from theirs (`argKindOf`), so `f Option` fixes
--- `f : (Type -> Type) -> Type`.
+-- `f : (Type -> Type) -> Type`; and its arguments sit at the parameter kinds
+-- its known kind gives (`varSlots`), so `f h` then fixes `h : Type -> Type`.
 export
 kindUses : KindReads ->
   List (String, Kind) ->
@@ -2049,7 +2052,7 @@ kindUses reads vars pos ty = match tyAppSpine ty
     None => []
   (TyVar v, args) =>
     (v, kindOfParams (map (argKindOf reads.krHeads vars) args))
-      :: flatMap (kindUses reads vars None) args
+      :: kindUsesAt reads vars (varSlots vars v) args
   (TyCon { tyConName = n, tyConOrigin = o }, args) =>
     if anyList takesPosition args then
       kindUsesAt reads vars (optionOr [] (reads.krSlots o n)) args
@@ -2058,6 +2061,12 @@ kindUses reads vars pos ty = match tyAppSpine ty
   (hd, []) => kindUsesIn reads vars pos hd
   (hd, args) =>
     kindUsesIn reads vars None hd ++ flatMap (kindUses reads vars None) args
+
+-- The parameter kinds of [v]'s known kind, where it is over `Type` alone.
+varSlots : List (String, Kind) -> String -> List Kind
+varSlots vars v = match lookupAssoc v vars
+  Some k if kindTypeOnly k => kindParams k
+  _ => []
 
 -- The kind of [ty] written as an argument: what a head or a variable of
 -- constructor kind leaves unapplied, and `Type` for any other type.
@@ -2130,10 +2139,12 @@ kindUsesAt reads vars [] (a :: as2) =
 
 -- The kind of each variable [items] write, each item a type with the kind
 -- its position takes: [declared] first, then a kind involving `Effect` or
--- `Authority` (left to the checks of those kinds), then the first use.  A
--- variable passed as an argument contributes its own kind to the head's, so
--- the uses are read again until no kind changes; a chain of variables each
--- passed to the next bounds the rounds.
+-- `Authority` (left to the checks of those kinds), then every other use
+-- joined (`kindJoin`), so the order of the uses decides nothing (§6.2: every
+-- use must agree).  A variable passed as an argument of another takes its
+-- kind from that one's and gives it its own, so the uses are read again
+-- until no kind changes; a chain of variables each passed to the next
+-- bounds the rounds.
 export
 varKindsOf : KindReads ->
   List (String, Kind) ->
@@ -2141,8 +2152,7 @@ varKindsOf : KindReads ->
   List (String, Kind)
 varKindsOf reads declared items =
   let first = varKindsRound reads declared items declared
-  let passed = flatMap (it => varArgNames (snd it)) items
-  if anyList (v => isSome (lookupAssoc v first)) passed then
+  if anyList (it => isNonEmptyL (varArgNames (snd it))) items then
     varKindsFix reads declared items (listLen first) first
   else
     first
@@ -2167,7 +2177,26 @@ varKindsRound : KindReads ->
   List (String, Kind)
 varKindsRound reads declared items vars =
   let used = flatMap (it => kindUses reads vars (fst it) (snd it)) items
-  declared ++ filterList (u => not (kindTypeOnly (snd u))) used ++ used
+  declared
+    ++ filterList (u => not (kindTypeOnly (snd u))) used
+    ++ joinedKinds (filterList (u => kindTypeOnly (snd u)) used)
+
+-- One entry per variable of [uses], its kinds joined, in first-use order.
+joinedKinds : List (String, Kind) -> List (String, Kind)
+joinedKinds [] = []
+joinedKinds ((v, k) :: rest) =
+  let (mine, others) = partition (u => fst u == v) rest
+  (v, fold kindJoin k (map snd mine)) :: joinedKinds others
+
+-- The kind over `Type` and arrows that both [a] and [b] agree with, `Type`
+-- read as what a use leaves unknown: `f h` (`h` not yet known) and
+-- `f Option` join to `(Type -> Type) -> Type`.  Uses that do not agree join
+-- too, and the check then reports the one the joined kind rejects.
+kindJoin : Kind -> Kind -> Kind
+kindJoin (KArrow d1 r1) (KArrow d2 r2) =
+  KArrow (kindJoin d1 d2) (kindJoin r1 r2)
+kindJoin KType b = b
+kindJoin a _ = a
 
 sameVarKinds : List (String, Kind) -> List (String, Kind) -> Bool
 sameVarKinds ((a, ka) :: as2) ((b, kb) :: bs) =
@@ -2544,10 +2573,11 @@ declaredSlotKinds gctx (Some (KindArrow a b)) =
 declaredSlotKinds _gctx _ = []
 
 -- An interface parameter's RESOLVED slot kinds (§6.3): the declared arrow
--- kind's slots where one is written; otherwise the slots of the first
--- constructor kind its uses fix, in the `requires` clauses and then in the
--- methods, each method on its own (`varKindsOf`).  An unannotated parameter
--- is never `Effect`-kinded, so only a use over `Type` counts.
+-- kind's slots where one is written; otherwise the slots of the constructor
+-- kinds its uses fix, in the `requires` clauses and in the methods, joined
+-- (`kindJoin`), each method's own variables on their own (`varKindsOf`).  An
+-- unannotated parameter is never `Effect`-kinded, so only a use over `Type`
+-- counts.
 ifaceParamKindsDecl : GraphCtx ->
   KindReads ->
   Option KindAnn ->
@@ -2561,9 +2591,9 @@ ifaceParamKindsDecl _gctx reads _ p supers methods =
   let uses =
     flatMap (superParamKinds reads.krIfaces p) supers
       ++ flatMap (methodParamKind reads p) methods
-  match find kindHasArrow uses
-    Some k => kindParams k
-    None => []
+  match filterList kindHasArrow uses
+    k :: ks => kindParams (fold kindJoin k ks)
+    [] => []
 
 -- The kind one method's signature gives [p], if it gives one.
 methodParamKind : KindReads -> String -> IfaceMethod -> List Kind

@@ -500,6 +500,90 @@ test "a variable applied to a constructor is of a kind that takes it" = expectEa
     ),
   ]
 
+-- EFFECTS-SEMANTICS §6.2: every use of a variable agrees, so a variable
+-- passed to another takes the kind that one's other uses fix, whichever use
+-- is written first.
+test "a variable passed to a variable takes the kind of that parameter" = expectEach
+  [
+    (
+      "a signature, either use first",
+      expectEqual
+        []
+        (checkedErrors
+          """
+            data Holder f = H (f Int)
+            g1 : f Option -> f h -> Int
+            g1 _ _ = 1
+            g2 : f h -> f Option -> Int
+            g2 _ _ = 2
+            v : Int
+            v = g1 (H (Some 1)) (H [2]) + g2 (H [3]) (H (Some 4))
+            """),
+    ),
+    (
+      "a data head",
+      expectEqual
+        []
+        (checkedErrors
+          """
+            data Holder f = H (f Int)
+            data D2 f h = D2 (f Option) (f h)
+            d2 : D2 Holder List
+            d2 = D2 (H (Some 1)) (H [2])
+            """),
+    ),
+    (
+      "an interface method",
+      expectEqual
+        []
+        (checkedErrors
+          """
+            data Holder f = H (f Int)
+            interface Two f where
+              two : f Option -> f h -> Int
+            impl Two Holder where
+              two _ _ = 5
+            """),
+    ),
+    (
+      "an interface parameter across methods",
+      expectEqual
+        []
+        (checkedErrors
+          """
+            data Holder f = H (f Int)
+            interface Two f where
+              one : f h -> Int
+              two : f Option -> Int
+            impl Two Holder where
+              one _ = 1
+              two _ = 2
+            """),
+    ),
+  ]
+
+test "uses of a variable that disagree are one error in either order" = expectEach
+  [
+    (
+      "the constructor first",
+      rejectsOnceWith
+        "`Int` has kind `Type`, but a type of kind `Type -> Type` is expected here"
+        """
+          g : f Option -> f Int -> Int
+          g _ _ = 0
+          """,
+    ),
+    (
+      "the constructor second",
+      rejectsOnceWith
+        "`Int` has kind `Type`, but a type of kind `Type -> Type` is expected here"
+        """
+          g : f Int -> f Option -> Int
+          g _ _ = 0
+          """,
+    ),
+  ]
+
 -- An interface parameter is judged by the rule a signature variable is.
 test "an interface parameter takes its kind from a head it is passed to and from requires" = expectEach
   [
@@ -581,7 +665,7 @@ test "a constructor applied to too many arguments is one kind error" = expectEac
     (
       "an interface parameter used at two arities",
       rejectsOnceWith
-        "`f` expects 1 type argument, got 2"
+        "`f` expects 2 type arguments, got 1"
         """
         interface Mixed f where
           one : f a -> Int
@@ -870,10 +954,7 @@ test "a fix hint is given only where it is right" = expectEach [
     "a constructor at a variable's argument",
     rejectsOnceWith
       "`Option` has kind `Type -> Type`, but a type of kind `Type` is expected here"
-      """
-        g : f Int -> f Option -> Int
-        g _ _ = 0
-        """,
+      "data W (f : Type -> Type) = W (f Option)\n",
   ),
 ]
 
