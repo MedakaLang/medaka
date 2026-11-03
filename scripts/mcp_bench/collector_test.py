@@ -6,6 +6,7 @@ import sys
 import tempfile
 import time
 import unittest
+from unittest.mock import patch
 
 from collect import reconcile, run_process
 from report import summarize
@@ -115,6 +116,26 @@ print(json.dumps({'jsonrpc':'2.0','id':1,'result':{'cwd':os.getcwd(), 'secret':o
                        [start, finish, dict(start, event='cancel_requested')], [start]):
             code = 'import os,json; open(os.environ["MEDAKA_MCP_TRACE"],"w").write(' + repr(''.join(json.dumps(e) + '\n' for e in events)) + '); print(' + repr(RESPONSE) + ')'
             self.assertEqual('observer_failure', run_process([sys.executable, '-c', code], {}, request, {})['outcome'])
+
+    def test_serial_lifecycle_full_process(self):
+        requests = b''.join(json.dumps({'jsonrpc': '2.0', 'id': i, 'method': 'tools/call',
+                                        'params': {'name': 'medaka_fmt'}}).encode() + b'\n' for i in (1, 2))
+        starts = [dict(event('start'), session_id='collector', request_id=str(i), tool='medaka_fmt') for i in range(2)]
+        finishes = [dict(event('finish', 'success'), session_id='collector', request_id=str(i), tool='medaka_fmt') for i in range(2)]
+        responses = ''.join(json.dumps({'jsonrpc': '2.0', 'id': i, 'result': {}}) + '\n' for i in (1, 2))
+        for events, expected in (([starts[0], starts[1], finishes[0], finishes[1]], 'observer_failure'),
+                                 ([starts[0], finishes[0], starts[1], finishes[1]], 'success')):
+            trace = ''.join(json.dumps(e) + '\n' for e in events)
+            code = 'import os; open(os.environ["MEDAKA_MCP_TRACE"],"w").write(' + repr(trace) + '); print(' + repr(responses) + ', end="")'
+            self.assertEqual(expected, run_process([sys.executable, '-c', code], {}, requests, {})['outcome'])
+
+    def test_materialization_failure_returns_run(self):
+        task = json.loads((Path(__file__).parent / 'tasks.json').read_text())[0]
+        task['files'] = {'PROMPT.txt/child': 'x'}
+        self.assertEqual('observer_failure', self.worker('pass', task=task)['outcome'])
+        task['files'] = {'valid/file.mdk': 'x'}
+        with patch.object(Path, 'write_text', side_effect=OSError('write failed')):
+            self.assertEqual('observer_failure', self.worker('pass', task=task)['outcome'])
 
     def test_resource_report_values_and_unavailability(self):
         from schema import validate_run

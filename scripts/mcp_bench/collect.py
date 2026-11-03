@@ -33,7 +33,7 @@ def reconcile(events, exitStatus):
             event = validate_event(raw)
             key = (event['session_id'], event['request_id'])
             if event['event'] == 'start':
-                if key in pending or key in completed:
+                if pending or key in completed:
                     return _record('observer_failure')
                 pending[key] = (event['tool'], event['classification'])
             elif event['event'] == 'finish':
@@ -91,13 +91,16 @@ def run_process(command, environment, transcript, limits):
         workspace.mkdir()
         task = limits.get('task')
         if task is not None:
-            task = validate_task(task)
-            for name, source in task['files'].items():
-                path = workspace / name
-                path.parent.mkdir(parents=True, exist_ok=True)
-                path.write_text(source, encoding='utf-8')
-            (workspace / 'PROMPT.txt').write_text(
-                task['prompt'] + '\n' + '\n'.join(c['question'] for c in task['controls']) + '\n', encoding='utf-8')
+            try:
+                task = validate_task(task)
+                for name, source in task['files'].items():
+                    path = workspace / name
+                    path.parent.mkdir(parents=True, exist_ok=True)
+                    path.write_text(source, encoding='utf-8')
+                (workspace / 'PROMPT.txt').write_text(
+                    task['prompt'] + '\n' + '\n'.join(c['question'] for c in task['controls']) + '\n', encoding='utf-8')
+            except (OSError, ValueError, UnicodeError):
+                return _record('observer_failure', limits, time.monotonic_ns() - started)
         env = {'PATH': os.defpath, 'HOME': str(workspace)}
         env.update(environment)
         env.pop('MEDAKA_MCP_LOG', None)
