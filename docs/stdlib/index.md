@@ -869,6 +869,7 @@ The host primitives.
 - [`writeFileBytes`](runtime.md#writefilebytes)
 - [`writeFileMode`](runtime.md#writefilemode)
 - [`appendFile`](runtime.md#appendfile)
+- [`appendFileExceptStdout`](runtime.md#appendfileexceptstdout)
 - [`fileExists`](runtime.md#fileexists)
 - [`fileMode`](runtime.md#filemode)
 - [`canonicalizePath`](runtime.md#canonicalizepath)

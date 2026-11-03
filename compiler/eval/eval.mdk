@@ -3446,6 +3446,10 @@ pFlushStdout _ = panic "flushStdout: expected Unit"
 export
 externBindings : Unit -> List (String, Value e)
 externBindings _ = [
+  (
+    "appendFileExceptStdout",
+    prim3 (_ _ _ => VCon "Err" [VString "file I/O unavailable"]),
+  ),
   ("$withFileReadBound", scopedFileBound False),
   ("$withFileWriteBound", scopedFileBound True),
   ("randomInt", prim2M (pRandomInt rngDraw)),
@@ -5229,6 +5233,12 @@ pAppendFile : Value e -> Value e -> <FileWrite | e> Value e
 pAppendFile (VString path) (VString s) = unitResultToValue (appendFile path s)
 pAppendFile _ _ = panic "appendFile: expected String String"
 
+pAppendFileExceptStdout : Value e -> Value e -> <FileWrite | e> Value e
+pAppendFileExceptStdout (VString path) (VString s) =
+  unitResultToValue (appendFileExceptStdout path s)
+pAppendFileExceptStdout _ _ =
+  panic "appendFileExceptStdout: expected String String"
+
 pMakeDir : Value e -> <FileWrite | e> Value e
 pMakeDir (VString path) = unitResultToValue (makeDir path)
 pMakeDir _ = panic "makeDir: not a String"
@@ -5420,6 +5430,7 @@ ioHostExterns _ = [
   ("writeFileBytes", granted2 pWriteFileBytes),
   ("writeFileMode", granted3 pWriteFileMode),
   ("appendFile", granted2 pAppendFile),
+  ("appendFileExceptStdout", granted2 pAppendFileExceptStdout),
   ("makeDir", granted1 True Entry pMakeDir),
   ("removeFile", granted1 True Entry pRemoveFile),
   ("removeDir", granted1 True Entry pRemoveDir),
