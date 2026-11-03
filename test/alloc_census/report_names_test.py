@@ -56,16 +56,16 @@ class Reports(unittest.TestCase):
             result = subprocess.run(['sh', str(runner)], text=True, capture_output=True, check=True)
             def check_dispatch(output):
                 section = output.split('OPAQUE_CALL survives:', 1)[1].split('ALLOCATION:', 1)[0]
-                lines = [line for line in section.splitlines() if '@mdk.dispatch..6d656173757265.0.1.1(' in line]
+                lines = [line for line in section.splitlines() if 'call i64 %' in line]
                 self.assertEqual(2, len(lines), output)
                 self.assertIn('@mdk_int_overflow_at(', section)
             check_dispatch(result.stdout)
             self.assertIn('ALLOCATION: none', result.stdout)
-            self.assertIn('LOAD: 0 total', result.stdout)
+            self.assertIn('LOAD: 6 total', result.stdout)
             self.assertIn('TAG_ARITH: 3 op(s)', result.stdout)
             self.assertIn('0 BUILD_FAILED, 0 ELIMINATED', result.stdout)
             with self.assertRaises(AssertionError):
-                check_dispatch(result.stdout.replace('@mdk.dispatch.', '@hidden.dispatch.', 1))
+                check_dispatch(result.stdout.replace('call i64 %', 'call i64 @hidden', 1))
 
         assignment = next(line for line in script.splitlines() if line.strip().startswith('opaque='))
         def classify(body):
@@ -75,8 +75,8 @@ class Reports(unittest.TestCase):
         self.assertEqual('', classify('  call i64 @mdk.user.6162()'))
         self.assertEqual('', classify('  call ptr @GC_malloc(i64 8)\n  call ptr @mdk_alloc(i64 8)'))
         self.assertIn('@mdk_int_overflow_at(', classify('  call void @mdk_int_overflow_at()'))
-        self.assertIn('@"mdk.dispatch..6d656173757265.0.1.1"(',
-                      classify('  call i64 @"mdk.dispatch..6d656173757265.0.1.1"()'))
+        self.assertIn('call i64 %t4(',
+                      classify('  %t5 = call i64 %t4(i64 %t4, i64 %arg0, i64 %arg1)'))
 
     def test_census_and_selector_mutation(self):
         cmd = ['sh', str(ROOT / 'test/o2_survivor_census.sh')]

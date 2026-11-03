@@ -7,3 +7,6 @@ bi
 bs
 OVERRIDDEN-cat
 dog/71
+int:52
+str:42
+OVERRIDDEN-bool

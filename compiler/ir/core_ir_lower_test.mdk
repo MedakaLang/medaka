@@ -11,9 +11,10 @@ import frontend.desugar.{desugar}
 import frontend.parser.{parse, parseLocated}
 import ir.core_ir_lower.{
   noInlineFnNames, methodResultFacts, lowerProgramEmitWith,
-  methodLevelConstraintIfaces, ifaceMethodArityKey
+  methodLevelConstraintIfaces
 }
 import ir.core_ir.{
+  ifaceMethodArityKey,
   leadingDictParams,
   CArm(..),
   CBind(..),

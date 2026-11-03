@@ -1,0 +1,26 @@
+-- A method with its own `=>` context, called through a dictionary parameter: the
+-- slot is applied to the receiver's dictionary, then the `Shown Int` dictionary
+-- the call site builds, then the value.  Two instances, so no call site can name
+-- the impl, and each instance renders its elements through the method-level
+-- dictionary, so a dictionary passed in the wrong position prints garbage or
+-- crashes instead of the elements.
+-- Must print:  (1,2) / <3> / (40,50)
+import render.{Render(..), Shown(..), renderWith, shown}
+
+data Pair a = Pair a a
+data One a = One a
+
+impl Render Pair where
+  renderWith (Pair x y) = "(" ++ shown x ++ "," ++ shown y ++ ")"
+
+impl Render One where
+  renderWith (One x) = "<" ++ shown x ++ ">"
+
+viaDict : Render f => f Int -> String
+viaDict c = renderWith c
+
+main : <IO> Unit
+main =
+  let _ = putStrLn (viaDict (Pair 1 2))
+  let _ = putStrLn (viaDict (One 3))
+  putStrLn (viaDict (Pair 40 50))

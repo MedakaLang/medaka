@@ -102,6 +102,7 @@ import ir.core_ir.{
   BinderSite(..),
   litRuntimeType,
   leadingDictParams,
+  ifaceMethodArityKey,
 }
 import types.runtime_types.{
   BinderRow(..),
@@ -121,7 +122,6 @@ import ir.core_ir_lower.{
   definedArityOf,
   entryArityRow,
   programArities,
-  ifaceMethodArityKey,
   ifaceWordOfKey,
 }
 import ir.core_ir_sexp.{callModeSexp}
@@ -135,7 +135,16 @@ import backend.extern_requirements.{
 }
 import backend.global_plan.{validateGlobalInit}
 import backend.emit_target.{Backend(..), backendName}
-import backend.emit_plan.{EmitPlan, indexMethodResults, lookupMethodResult}
+import backend.emit_plan.{
+  EmitPlan,
+  InstanceTable(..),
+  MethodSlot(..),
+  MethodTables(..),
+  SlotCallee(..),
+  indexMethodResults,
+  interfaceSlots,
+  lookupMethodResult,
+}
 import backend.extern_catalog.{
   RuntimeExternDomain(..),
   Disposition(..),
@@ -243,11 +252,65 @@ emissionDefects backend domain requirement plan cp =
             ++ validateDispatchEvidence cp
             ++ validateMethodResults plan cp,
         () => validateTails cp,
+        () => validateMethodTables backend plan cp,
       ]
 
 validatePlanImplGroups : CProgram -> EmitPlan -> List String
 validatePlanImplGroups (CProgram _ _ _ impls _ _) plan =
   validateImplGroups impls plan.implGroups
+
+-- The method-table check: every slot of every instance's table has exactly one
+-- callee, the callee declares the slot's value arity, and every impl group fills
+-- a slot.  Only the LLVM emitter builds tables; the wasm plan may be built over a
+-- reach-filtered program that keeps only the slots a dispatch reaches.
+export
+validateMethodTables : Backend -> EmitPlan -> CProgram -> List String
+validateMethodTables WasmBackend _ _ = []
+validateMethodTables _ plan _ =
+  let tables = plan.methodTables
+  let rows =
+    map
+      (key => (key, optionOr emptyTable (omLookup key tables.instances)))
+      (omKeys tables.instances)
+  let filled =
+    flatMap (r => flatMap (cs => cs) (snd r : InstanceTable).fills) rows
+  flatMap (r => instanceTableFaults tables (fst r) (snd r)) rows
+    ++ (if listLen filled == listLen plan.implGroups then
+      []
+    else
+      [
+        "method table: \{intToString (listLen plan.implGroups)} impl groups fill \{intToString (listLen filled)} slots",
+      ])
+
+emptyTable : InstanceTable
+emptyTable = InstanceTable { iface = "", fills = [] }
+
+instanceTableFaults : MethodTables -> String -> InstanceTable -> List String
+instanceTableFaults tables key table =
+  let slots = interfaceSlots tables table.iface
+  if listLen slots /= listLen table.fills then
+    [
+      "method table: instance `\{key}` has \{intToString (listLen table.fills)} slots, `\{table.iface}` declares \{intToString (listLen slots)}",
+    ]
+  else
+    slotsFaults key slots table.fills
+
+slotsFaults : String -> List MethodSlot -> List (List SlotCallee) -> List String
+slotsFaults key (slot :: slots) (callees :: fills) =
+  slotFaults key slot callees ++ slotsFaults key slots fills
+slotsFaults _ _ _ = []
+
+slotFaults : String -> MethodSlot -> List SlotCallee -> List String
+slotFaults key slot [callee] =
+  if callee.declaredArity == slot.valueArity then
+    []
+  else
+    [
+      "method table: slot `\{slot.method}` of instance `\{key}` takes \{intToString slot.valueArity} values, its callee declares \{intToString callee.declaredArity}",
+    ]
+slotFaults key slot callees = [
+  "method table: slot `\{slot.method}` of instance `\{key}` has \{intToString (listLen callees)} callees",
+]
 
 validateManifestCarriage : ManifestRequirement ->
   EmitPlan ->

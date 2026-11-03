@@ -72,6 +72,7 @@ import ir.core_ir.{
   CExpr(..),
   MethodEvidence(..),
   isGivenRooted,
+  ifaceMethodArityKey,
   CArm(..),
   CGuard(..),
   CStmt(..),
@@ -1286,7 +1287,7 @@ lowerProgramEmitPinnedWith facts pins prog =
 -- The declaration facts an emitting lowering publishes (see `DeclFacts`): every
 -- instance's `requires` count, and the super count of each of their interfaces.
 -- Without a published table an interface has no supers, as the emitters lay a
--- dictionary out (`llvm_emit.entrySuperCount`).
+-- dictionary out (`llvm_emit.superCountOf`).
 emitDeclFacts : ProgramFacts ->
   List Decl ->
   Option CoreSymbolOrigins ->
@@ -3801,15 +3802,6 @@ ifaceMethodArityEntry : String ->
   (String, (String, String, Int))
 ifaceMethodArityEntry ifaceWord ifaceName (IfaceMethod mname mty _ _) =
   (mname, (ifaceName, ifaceWord, listLen (methodArgTys mty)))
-
--- The identity-keyed lookup word for the ARITY leg (#1450, #1668): the interface's
--- DECLARATION word and the method name, spliced.  Minted here, beside the table it
--- keys, and read by both backends -- `ifaceWordOf` never answers `""` (it falls back
--- to the bare interface name), so this word is never the absence-matches-absence
--- hazard `ifaceIdentity` carries.  `#` cannot occur in either half.
-export
-ifaceMethodArityKey : String -> String -> String
-ifaceMethodArityKey ifaceWord mname = "\{ifaceWord}#\{mname}"
 
 -- The interface DECLARATION word an impl route key carries in its first field
 -- (`route_key.implRouteKeyWord` = `<iface word>|<type args>|<method>`).  This is a

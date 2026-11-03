@@ -285,27 +285,59 @@ conyes20:
   %t30 = inttoptr i64 %arg1 to ptr
   %t31 = getelementptr i8, ptr %t30, i64 16
   %t32 = load i64, ptr %t31
-  %t33 = call i64 @mdk.dispatch..6465627567.0.1.1(i64 %arg0, i64 %t29)
-  %t34 = call i64 @mdk.user.6d356635663735373336353732356635665f5f64656275674c6973744974656d73(i64 %arg0, i64 %t32)
-  %t35 = sub i64 %t34, 1
-  %t36 = call { i64, i1 } @llvm.sadd.with.overflow.i64(i64 %t33, i64 %t35)
-  %t37 = extractvalue { i64, i1 } %t36, 0
-  %t38 = extractvalue { i64, i1 } %t36, 1
-  br i1 %t38, label %intovf39, label %intok39
-intovf39:
-  %t40 = ashr i64 %t33, 1
-  %t41 = ashr i64 %t34, 1
-  call void @mdk_int_overflow(i64 0, i64 %t40, i64 %t41)
+  %t33 = icmp eq i64 %arg0, 0 ; slot __user__::Debug.debug
+  br i1 %t33, label %slotnull34, label %slotok34
+slotnull34:
+  call void @mdk_dispatch_no_impl()
   unreachable
-intok39:
-  store i64 %t37, ptr %t0
+slotok34:
+  %t35 = inttoptr i64 %arg0 to ptr
+  %t36 = getelementptr i8, ptr %t35, i64 8
+  %t37 = load i64, ptr %t36
+  %t38 = inttoptr i64 %t37 to ptr
+  %t39 = load i64, ptr %t38
+  %t40 = icmp eq i64 %t39, 2
+  %t42 = alloca i64
+  br i1 %t40, label %apfast41, label %apslow41
+apfast41:
+  %t43 = inttoptr i64 %t37 to ptr
+  %t44 = getelementptr i8, ptr %t43, i64 8
+  %t45 = load i64, ptr %t44
+  %t46 = inttoptr i64 %t45 to ptr
+  %t47 = call i64 %t46(i64 %t37, i64 %arg0, i64 %t29)
+  store i64 %t47, ptr %t42
+  br label %apend41
+apslow41:
+  %t48 = alloca i64, i64 2
+  %t49 = getelementptr i64, ptr %t48, i64 0
+  store i64 %arg0, ptr %t49
+  %t50 = getelementptr i64, ptr %t48, i64 1
+  store i64 %t29, ptr %t50
+  %t51 = call i64 @__mdk_apply(i64 %t37, i64 2, ptr %t48)
+  store i64 %t51, ptr %t42
+  br label %apend41
+apend41:
+  %t52 = load i64, ptr %t42
+  %t53 = call i64 @mdk.user.6d356635663735373336353732356635665f5f64656275674c6973744974656d73(i64 %arg0, i64 %t32)
+  %t54 = sub i64 %t53, 1
+  %t55 = call { i64, i1 } @llvm.sadd.with.overflow.i64(i64 %t52, i64 %t54)
+  %t56 = extractvalue { i64, i1 } %t55, 0
+  %t57 = extractvalue { i64, i1 } %t55, 1
+  br i1 %t57, label %intovf58, label %intok58
+intovf58:
+  %t59 = ashr i64 %t52, 1
+  %t60 = ashr i64 %t53, 1
+  call void @mdk_int_overflow(i64 0, i64 %t59, i64 %t60)
+  unreachable
+intok58:
+  store i64 %t56, ptr %t0
   br label %decend1
 connext20:
   call void @mdk_nonexhaustive_match()
   unreachable
 decend1:
-  %t42 = load i64, ptr %t0
-  ret i64 %t42
+  %t61 = load i64, ptr %t0
+  ret i64 %t61
 }
 
 ; mdk-module impl.5f5f757365725f5f3a3a44656275677c496e747c.6465627567
@@ -324,33 +356,13 @@ entry:
 ; mdk-module program
 @mdk_disc_none = private unnamed_addr constant i64 -1
 ; mdk-module program
-@mdk.gen.dictcell.70726f6772616d..0 = internal constant [1 x i64] [i64 -3522593011855770626]
-; mdk-module program
-define internal i64 @mdk.dispatch..6465627567.0.1.1(i64 %dict, i64 %arg0) {
+define internal i64 @mdk.slot.5f5f757365725f5f3a3a44656275677c496e747c.6465627567(i64 %clos, i64 %dict, i64 %arg0) {
 entry:
-  %t0 = inttoptr i64 %dict to ptr
-  %t1 = load i64, ptr %t0
-  %t2 = alloca i64
-  %t4 = icmp eq i64 %t1, -3522593011855770626
-  br i1 %t4, label %dispyes5, label %dispnext5
-dispyes5:
-  %t6 = call i64 @mdk.impl.496e74.6465627567(i64 %arg0)
-  store i64 %t6, ptr %t2
-  br label %dispend3
-dispnext5:
-  %t7 = icmp eq i64 %t1, -2323249779484723440
-  br i1 %t7, label %dispyes8, label %dispnext8
-dispyes8:
-  %t9 = inttoptr i64 %dict to ptr
-  %t10 = getelementptr i8, ptr %t9, i64 8
-  %t11 = load i64, ptr %t10
-  %t12 = call i64 @mdk.impl.7a5a5f35665f5f35665f757365725f35665f5f35665f5f32655f4d794c697374.6465627567(i64 %t11, i64 %arg0)
-  store i64 %t12, ptr %t2
-  br label %dispend3
-dispnext8:
-  call void @mdk_dispatch_no_impl()
-  unreachable
-dispend3:
-  %t13 = load i64, ptr %t2
-  ret i64 %t13
+  %t0 = call i64 @mdk.impl.496e74.6465627567(i64 %arg0)
+  ret i64 %t0
 }
+
+; mdk-module program
+@mdk.slotclosure.5f5f757365725f5f3a3a44656275677c496e747c.6465627567 = internal constant [2 x i64] [i64 2, i64 ptrtoint (ptr @mdk.slot.5f5f757365725f5f3a3a44656275677c496e747c.6465627567 to i64)]
+; mdk-module program
+@mdk.gen.dictcell.70726f6772616d..0 = internal constant [2 x i64] [i64 -3522593011855770626, i64 ptrtoint (ptr @mdk.slotclosure.5f5f757365725f5f3a3a44656275677c496e747c.6465627567 to i64)]

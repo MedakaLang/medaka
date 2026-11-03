@@ -316,13 +316,43 @@ entry:
 ; mdk-module impl.5f5f757365725f5f3a3a44656661756c747c285f5f757365725f5f2e426f782061297c.646566
 define internal i64 @mdk.impl.7a5a5f35665f5f35665f757365725f35665f5f35665f5f33615f5f33615f44656661756c745f37635f5f32385f5f35665f5f35665f757365725f35665f5f35665f5f32655f426f785f32305f615f32395f5f37635f.646566(i64 %arg0) {
 entry:
-  %t0 = call i64 @mdk.dispatch..646566.0.0.0(i64 %arg0)
-  %t1 = call ptr @mdk_alloc(i64 16)
-  store i64 0, ptr %t1
-  %t2 = getelementptr i8, ptr %t1, i64 8
-  store i64 %t0, ptr %t2
-  %t3 = ptrtoint ptr %t1 to i64
-  ret i64 %t3
+  %t0 = icmp eq i64 %arg0, 0 ; slot __user__::Default.def
+  br i1 %t0, label %slotnull1, label %slotok1
+slotnull1:
+  call void @mdk_dispatch_no_impl()
+  unreachable
+slotok1:
+  %t2 = inttoptr i64 %arg0 to ptr
+  %t3 = getelementptr i8, ptr %t2, i64 8
+  %t4 = load i64, ptr %t3
+  %t5 = inttoptr i64 %t4 to ptr
+  %t6 = load i64, ptr %t5
+  %t7 = icmp eq i64 %t6, 1
+  %t9 = alloca i64
+  br i1 %t7, label %apfast8, label %apslow8
+apfast8:
+  %t10 = inttoptr i64 %t4 to ptr
+  %t11 = getelementptr i8, ptr %t10, i64 8
+  %t12 = load i64, ptr %t11
+  %t13 = inttoptr i64 %t12 to ptr
+  %t14 = call i64 %t13(i64 %t4, i64 %arg0)
+  store i64 %t14, ptr %t9
+  br label %apend8
+apslow8:
+  %t15 = alloca i64, i64 1
+  %t16 = getelementptr i64, ptr %t15, i64 0
+  store i64 %arg0, ptr %t16
+  %t17 = call i64 @__mdk_apply(i64 %t4, i64 1, ptr %t15)
+  store i64 %t17, ptr %t9
+  br label %apend8
+apend8:
+  %t18 = load i64, ptr %t9
+  %t19 = call ptr @mdk_alloc(i64 16)
+  store i64 0, ptr %t19
+  %t20 = getelementptr i8, ptr %t19, i64 8
+  store i64 %t18, ptr %t20
+  %t21 = ptrtoint ptr %t19 to i64
+  ret i64 %t21
 }
 
 ; mdk-module impl.5f5f757365725f5f3a3a44656661756c747c285f5f757365725f5f2e426f7820496e74297c.646566
@@ -356,41 +386,14 @@ entry:
 @mdk.gen.globalname.70726f6772616d.246d656d6f5f7a5a5f35665f5f35665f757365725f35665f5f35665f5f33615f5f33615f44656661756c745f37635f5f32385f5f35665f5f35665f757365725f35665f5f35665f5f32655f426f785f32305f496e745f32395f5f37635f5f646566.1 = private unnamed_addr constant [98 x i8] c"\24\6D\65\6D\6F\5F\7A\5A\5F\35\66\5F\5F\35\66\5F\75\73\65\72\5F\35\66\5F\5F\35\66\5F\5F\33\61\5F\5F\33\61\5F\44\65\66\61\75\6C\74\5F\37\63\5F\5F\32\38\5F\5F\35\66\5F\5F\35\66\5F\75\73\65\72\5F\35\66\5F\5F\35\66\5F\5F\32\65\5F\42\6F\78\5F\32\30\5F\49\6E\74\5F\32\39\5F\5F\37\63\5F\5F\64\65\66\00"
 ; mdk-module module.5f5f757365725f5f
 @mdk.gen.globalname.6d6f64756c652e35663566373537333635373235663566.6d356635663735373336353732356635665f5f74686556616c.0 = private unnamed_addr constant [26 x i8] c"\6D\35\66\35\66\37\35\37\33\36\35\37\32\35\66\35\66\5F\5F\74\68\65\56\61\6C\00"
-; mdk-module module.5f5f757365725f5f
-@mdk.gen.dictcell.6d6f64756c652e35663566373537333635373235663566..1 = internal constant [1 x i64] [i64 -3679987837389335393]
 ; mdk-module program
-define internal i64 @mdk.dispatch..646566.0.0.0(i64 %dict) {
+define internal i64 @mdk.slot.5f5f757365725f5f3a3a44656661756c747c285f5f757365725f5f2e426f7820496e74297c.646566(i64 %clos, i64 %dict) {
 entry:
-  %t0 = inttoptr i64 %dict to ptr
-  %t1 = load i64, ptr %t0
-  %t2 = alloca i64
-  %t4 = icmp eq i64 %t1, 819135516110349788
-  br i1 %t4, label %dispyes5, label %dispnext5
-dispyes5:
-  %t6 = call i64 @mdk.force.246d656d6f5f496e745f646566()
-  store i64 %t6, ptr %t2
-  br label %dispend3
-dispnext5:
-  %t7 = icmp eq i64 %t1, 1546553806158917013
-  br i1 %t7, label %dispyes8, label %dispnext8
-dispyes8:
-  %t9 = inttoptr i64 %dict to ptr
-  %t10 = getelementptr i8, ptr %t9, i64 8
-  %t11 = load i64, ptr %t10
-  %t12 = call i64 @mdk.impl.7a5a5f35665f5f35665f757365725f35665f5f35665f5f33615f5f33615f44656661756c745f37635f5f32385f5f35665f5f35665f757365725f35665f5f35665f5f32655f426f785f32305f615f32395f5f37635f.646566(i64 %t11)
-  store i64 %t12, ptr %t2
-  br label %dispend3
-dispnext8:
-  %t13 = icmp eq i64 %t1, -3679987837389335393
-  br i1 %t13, label %dispyes14, label %dispnext14
-dispyes14:
-  %t15 = call i64 @mdk.force.246d656d6f5f7a5a5f35665f5f35665f757365725f35665f5f35665f5f33615f5f33615f44656661756c745f37635f5f32385f5f35665f5f35665f757365725f35665f5f35665f5f32655f426f785f32305f496e745f32395f5f37635f5f646566()
-  store i64 %t15, ptr %t2
-  br label %dispend3
-dispnext14:
-  call void @mdk_dispatch_no_impl()
-  unreachable
-dispend3:
-  %t16 = load i64, ptr %t2
-  ret i64 %t16
+  %t0 = call i64 @mdk.force.246d656d6f5f7a5a5f35665f5f35665f757365725f35665f5f35665f5f33615f5f33615f44656661756c745f37635f5f32385f5f35665f5f35665f757365725f35665f5f35665f5f32655f426f785f32305f496e745f32395f5f37635f5f646566()
+  ret i64 %t0
 }
+
+; mdk-module program
+@mdk.slotclosure.5f5f757365725f5f3a3a44656661756c747c285f5f757365725f5f2e426f7820496e74297c.646566 = internal constant [2 x i64] [i64 1, i64 ptrtoint (ptr @mdk.slot.5f5f757365725f5f3a3a44656661756c747c285f5f757365725f5f2e426f7820496e74297c.646566 to i64)]
+; mdk-module module.5f5f757365725f5f
+@mdk.gen.dictcell.6d6f64756c652e35663566373537333635373235663566..1 = internal constant [2 x i64] [i64 -3679987837389335393, i64 ptrtoint (ptr @mdk.slotclosure.5f5f757365725f5f3a3a44656661756c747c285f5f757365725f5f2e426f7820496e74297c.646566 to i64)]
