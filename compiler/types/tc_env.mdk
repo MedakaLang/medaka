@@ -2570,13 +2570,11 @@ kindsEq _ _ = False
 --
 -- #1557 A-3.5c retired the table, not the inference.  `registerIfaceParamKinds`/
 -- `registerIfaceParamKindsGo` and the `ifaceParamKindsRef`/`universeIfaceParamKinds`
--- pair they wrote into are GONE.  The inference above is unchanged and now has
--- exactly two consumers, both of which call `ifaceParamKindsOf` directly on the
--- DECLARATION they are elaborating: `declGradedScope` (the per-method scope) and
--- `classEnvRowsOf`'s `ceParamKinds` (stage K's `CE`, which is what
--- `checkGradedImplTys` now reads).  The retired writer's own comment already said the
--- table was dead weight kept only because *"removing it is a separate
--- behaviour-preserving change with its own goldens"* — this is that change.
+-- pair they wrote into are GONE.  The inference above (`ifaceParamKindsOf`) has one
+-- consumer, the evidence `checkDeclaredKinds` gives the author of an interface
+-- whose parameter needed an annotation (`checkIfaceHeadKinds`).  The per-method
+-- scope comes from the declared kinds (`declGradedScope`), and stage K's `CE` from
+-- the declared kinds and the uses (`ifaceParamKindsDecl`).
 export
 anyKRow : List Kind -> Bool
 anyKRow [] = False
@@ -2616,9 +2614,9 @@ anyKRow (_ :: rest) = anyKRow rest
 -- `registerData`'s record pattern.  Same source, same reason, as
 -- `recordParamKinds`' `dataOrigin`: it must not come from ambient state, because
 -- `registerAllData` also runs over OTHER modules' decls.)
--- The scope derived straight from the declaration being elaborated: the same
--- `ifaceParamKindsOf` inference stage K's `ceParamKinds` runs, on the very methods
--- whose signatures are about to be built.  No name, no table, no lookup — structurally unforgeable.
+-- The scope derived straight from the declaration being elaborated, from the
+-- kinds its parameters declare (`declaredSlotKinds`).  No name, no table, no
+-- lookup — structurally unforgeable.
 -- EFFECTS-SEMANTICS §6.3 / §6.8: the graded scope is now DECLARED — an
 -- interface parameter is graded iff its head writes an arrow kind with an
 -- `Effect` in it (`(f : Effect -> Type -> Type)`).  The co-occurrence inference
