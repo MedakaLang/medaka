@@ -39,8 +39,12 @@ protocol failures; these are not represented by this minimal schema.
 Run `python3 -m unittest discover -s scripts/mcp_bench -p '*_test.py'`.
 
 `collect.run_process(command, environment, transcript, limits)` runs newline
-JSON-RPC bytes in a separate process group, kills descendants on completion or
-termination, and returns a validated run without payloads. A caller that needs
+JSON-RPC bytes in a fresh temporary workspace and a separate process group. It
+kills members of that group on completion or termination; detached descendants
+can survive. The environment contains only PATH and a private HOME plus the
+explicit `environment` mapping. Pass a validated task as `limits["task"]` to
+materialize its files and questions, without answers or rubric, into the workspace.
+The collector returns a validated run without payloads. A caller that needs
 answer comparison can supply `response_callback` in `limits`; this callback
 receives sensitive responses and must keep them private. `trace=False` selects
 an uninstrumented worker. Timeout and observed cancellation are distinct from
@@ -48,7 +52,10 @@ an uninstrumented worker. Timeout and observed cancellation are distinct from
 missing or malformed telemetry and collector output limits are observer failures.
 
 Version 2 run records extend version 1 with monotonic `wall_ns`, and explicit
-`cpu_ns`, `peak_rss_bytes`, `resource_scope`, and `resource_reason`. The portable
-adapter cannot safely attribute CPU or peak RSS to an individual process tree,
-so those values are null with a reason; no process-wide aggregate is presented
-as a per-run measurement. Wall time includes process startup and observation.
+`cpu_ns`, `peak_rss_bytes`, `resource_scope`, and `resource_reason`. The last
+is a mapping from each resource metric to its unavailability reason, or null
+when measured. Nonnegative values use nanoseconds and bytes respectively and
+the named scope. On both Linux and macOS the portable collector reports CPU
+and peak RSS unavailable for the worker process tree; it does not attribute
+process-wide aggregate measurements to a run. Wall time includes process startup
+and observation. `summarize` retains each metric value, scope, and reason.

@@ -90,10 +90,15 @@ def validate_run(value: dict) -> Run:
         raise ValueError("schema_version: expected 1 or 2")
     if value["schema_version"] == 2:
         _count(value["wall_ns"], "wall_ns")
-        if value["cpu_ns"] is not None or value["peak_rss_bytes"] is not None:
-            raise ValueError("resource metrics unavailable")
         _text(value["resource_scope"], "resource_scope")
-        _text(value["resource_reason"], "resource_reason")
+        _object(value["resource_reason"], {"cpu_ns", "peak_rss_bytes"}, "resource_reason")
+        for metric in ("cpu_ns", "peak_rss_bytes"):
+            if value[metric] is None:
+                _text(value["resource_reason"][metric], metric + " reason")
+            else:
+                _count(value[metric], metric)
+                if value["resource_reason"][metric] is not None:
+                    raise ValueError(metric + ": measured value must have no unavailability reason")
     for field in ("run_id", "task_id", "arm"):
         _text(value[field], field)
     if value["outcome"] not in ("success", "incorrect", "unsupported", "startup_failure", "tool_error", "protocol_error", "crash", "timeout", "cancelled", "observer_failure"):

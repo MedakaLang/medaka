@@ -47,7 +47,7 @@ class CollectorTest(unittest.TestCase):
 
     def test_reconcile(self):
         start, finish = event('start'), event('finish', 'success')
-        for events, status, outcome in [([start, finish], 0, 'success'), ([start], 0, 'crash'),
+        for events, status, outcome in [([start, finish], 0, 'success'), ([start], 0, 'observer_failure'),
                                         ([start, finish, finish], 0, 'observer_failure'),
                                         ([event('cancel_requested')], 0, 'success'),
                                         ([event('cancel_requested')], 'cancelled', 'cancelled'),
@@ -78,6 +78,59 @@ class CollectorTest(unittest.TestCase):
             finally:
                 unrelated.kill()
                 unrelated.wait()
+
+    def test_workspace_and_environment_are_isolated(self):
+        task = json.loads((Path(__file__).parent / 'tasks.json').read_text())[0]
+        responses = []
+        code = """import os,json,pathlib
+print(json.dumps({'jsonrpc':'2.0','id':1,'result':{'cwd':os.getcwd(), 'secret':os.getenv('COLLECTOR_SECRET'), 'files':sorted(str(p) for p in pathlib.Path('.').rglob('*') if p.is_file()), 'prompt':pathlib.Path('PROMPT.txt').read_text()}}))"""
+        os.environ['COLLECTOR_SECRET'] = 'hidden'
+        try:
+            run = self.worker(code, task=task, response_callback=responses.extend)
+        finally:
+            del os.environ['COLLECTOR_SECRET']
+        self.assertEqual('success', run['outcome'])
+        result = responses[0]['result']
+        self.assertNotEqual(os.getcwd(), result['cwd'])
+        self.assertIsNone(result['secret'])
+        self.assertEqual(set(task['files']) | {'PROMPT.txt'}, set(result['files']))
+        self.assertNotIn(task['rubric'][0]['answer'], result['prompt'])
+
+    def test_callback_failure_is_observer_failure(self):
+        def fail(_):
+            raise RuntimeError('grader failed')
+        self.assertEqual('observer_failure', self.worker('print(' + repr(RESPONSE) + ')', response_callback=fail)['outcome'])
+
+    def test_pairs_match_and_extra_calls_are_rejected(self):
+        start, finish = event('start'), event('finish', 'success')
+        for field in ('tool', 'classification'):
+            bad = dict(finish, **{field: 'other' if field == 'tool' else 'organic'})
+            self.assertEqual('observer_failure', reconcile([start, bad], 0)['outcome'])
+        request = b'{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"medaka_fmt"}}\n'
+        start = dict(start, session_id='collector', request_id='0', tool='medaka_fmt')
+        finish = dict(finish, session_id='collector', request_id='0', tool='medaka_fmt')
+        extra_start = dict(start, request_id='1', tool='forged-extra')
+        extra_finish = dict(finish, request_id='1', tool='forged-extra')
+        for events in ([start, finish, extra_start, extra_finish], [dict(start, tool='medaka_check'), dict(finish, tool='medaka_check')],
+                       [start, finish, dict(start, event='cancel_requested')], [start]):
+            code = 'import os,json; open(os.environ["MEDAKA_MCP_TRACE"],"w").write(' + repr(''.join(json.dumps(e) + '\n' for e in events)) + '); print(' + repr(RESPONSE) + ')'
+            self.assertEqual('observer_failure', run_process([sys.executable, '-c', code], {}, request, {})['outcome'])
+
+    def test_resource_report_values_and_unavailability(self):
+        from schema import validate_run
+        run = self.worker('print(' + repr(RESPONSE) + ')')
+        measured = dict(run, cpu_ns=123, peak_rss_bytes=456, resource_scope='worker process',
+                        resource_reason={'cpu_ns': None, 'peak_rss_bytes': None})
+        validate_run(measured)
+        metrics = summarize([run, measured])['metrics']
+        self.assertEqual(run['wall_ns'], metrics['wall_ns'][0]['value'])
+        self.assertEqual({'value': 123, 'scope': 'worker process', 'reason': None}, metrics['cpu_ns'][1])
+        self.assertEqual(456, metrics['peak_rss_bytes'][1]['value'])
+        self.assertIsNone(metrics['cpu_ns'][0]['value'])
+        self.assertTrue(metrics['cpu_ns'][0]['reason'])
+        self.assertTrue(metrics['peak_rss_bytes'][0]['reason'])
+        with self.assertRaises(ValueError):
+            validate_run(dict(measured, resource_reason={'cpu_ns': 'unavailable', 'peak_rss_bytes': None}))
 
     def test_summary(self):
         run = self.worker('print(' + repr(RESPONSE) + ')')
