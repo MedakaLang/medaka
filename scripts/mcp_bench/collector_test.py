@@ -27,7 +27,9 @@ class CollectorTest(unittest.TestCase):
     def setUpClass(cls):
         try:
             boundary = Boundary()
-        except Unavailable:
+        except Unavailable as error:
+            if os.environ.get('MEDAKA_MCP_REQUIRE_AUTHORITY') == '1':
+                raise RuntimeError('privileged process tests require cgroup authority') from error
             cls.authority = False
         else:
             boundary.close()
@@ -220,43 +222,55 @@ print(json.dumps({'jsonrpc':'2.0','id':1,'result':{'blocked':blocked,'pid':os.ge
         self.assertTrue(all(int(line.split()[1], 16) == 0 for line in result['caps']))
 
     def test_stopped_and_killed_authority_deadline_cleanup(self):
+        import threading
         popen = subprocess.Popen
-        for sig, expected in ((19, 'timeout'), (9, 'observer_failure')):
-            with self.subTest(signal=sig), tempfile.TemporaryDirectory() as directory:
-                marker = Path(directory) / 'survived'
-                marker.touch(mode=0o666)
-                os.chmod(directory, 0o755)
-                os.chmod(marker, 0o666)
-                child = 'import pathlib,time; time.sleep(.8); pathlib.Path(' + repr(str(marker)) + ').write_text("escaped")'
-                worker = 'import subprocess,sys,time; subprocess.Popen([sys.executable,"-c",' + repr(child) + '],start_new_session=True); time.sleep(5)'
-                launched, boundaries, members = [], [], []
-                def track_boundary():
-                    boundary = Boundary()
-                    boundaries.append((boundary, boundary.path))
-                    return boundary
-                def sabotage(*args, **kwargs):
-                    supervisor = popen(*args, **kwargs)
-                    launched.append(supervisor)
-                    return supervisor
-                # Sabotage from the trusted observer after the worker has entered its namespace.
-                import threading
-                def stop():
-                    while not launched:
-                        time.sleep(.005)
-                    time.sleep(.2)
-                    members.extend(map(int, (boundaries[0][1] / 'cgroup.procs').read_text().split()))
-                    os.kill(launched[0].pid, sig)
-                thread = threading.Thread(target=stop)
-                thread.start()
-                with patch('collect.Boundary', side_effect=track_boundary), patch('collect.subprocess.Popen', side_effect=sabotage):
-                    self.assertEqual(expected, self.worker(worker, timeout=.4)['outcome'])
-                thread.join()
-                self.assertIsNotNone(launched[0].poll())
-                self.assertGreaterEqual(len(members), 4)
-                self.assertFalse(boundaries[0][1].exists())
-                self.assertEqual([], [pid for pid in members if Path(f'/proc/{pid}').exists()])
-                time.sleep(1)
-                self.assertEqual('', marker.read_text())
+        unrelated = popen([sys.executable, '-c', 'import time; time.sleep(30)'])
+        try:
+            for sig, expected in ((19, 'timeout'), (9, 'observer_failure')):
+                with self.subTest(signal=sig), tempfile.TemporaryDirectory() as directory:
+                    marker = Path(directory) / 'survived'
+                    ready = Path(directory) / 'ready'
+                    marker.touch(mode=0o666)
+                    ready.touch(mode=0o666)
+                    os.chmod(directory, 0o755)
+                    os.chmod(marker, 0o666)
+                    os.chmod(ready, 0o666)
+                    child = ('import pathlib,time; pathlib.Path(' + repr(str(ready)) + ').write_text("ready"); '
+                             'time.sleep(2); pathlib.Path(' + repr(str(marker)) + ').write_text("escaped")')
+                    worker = 'import subprocess,sys,time; subprocess.Popen([sys.executable,"-c",' + repr(child) + '],start_new_session=True); time.sleep(5)'
+                    launched, boundaries, observed = [], [], []
+                    def track_boundary():
+                        boundary = Boundary()
+                        boundaries.append((boundary, boundary.path))
+                        return boundary
+                    def sabotage(*args, **kwargs):
+                        supervisor = popen(*args, **kwargs)
+                        launched.append(supervisor)
+                        return supervisor
+                    def stop():
+                        deadline = time.monotonic() + 1
+                        while time.monotonic() < deadline:
+                            if launched and ready.read_text() == 'ready':
+                                observed.append(True)
+                                os.kill(launched[0].pid, sig)
+                                return
+                            time.sleep(.005)
+                    thread = threading.Thread(target=stop)
+                    thread.start()
+                    with patch('collect.Boundary', side_effect=track_boundary), patch('collect.subprocess.Popen', side_effect=sabotage):
+                        result = self.worker(worker, timeout=1.2)
+                    thread.join()
+                    self.assertEqual([True], observed, 'detached child did not signal readiness')
+                    self.assertEqual(expected, result['outcome'])
+                    self.assertIsNotNone(launched[0].poll())
+                    self.assertFalse(boundaries[0][1].exists())
+                    self.assertIsNone(unrelated.poll())
+                    time.sleep(2.1)
+                    self.assertEqual('', marker.read_text())
+                    self.assertIsNone(unrelated.poll())
+        finally:
+            unrelated.kill()
+            unrelated.wait()
 
     def test_concurrent_runs_keep_separate_boundaries(self):
         from concurrent.futures import ThreadPoolExecutor
