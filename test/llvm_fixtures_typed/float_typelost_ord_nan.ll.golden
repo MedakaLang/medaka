@@ -874,10 +874,11 @@ intok440:
 ; mdk-module module.5f5f757365725f5f
 define internal i64 @mdk.user.6d356635663735373336353732356635665f5f6170706c79436d70(i64 %arg0, i64 %arg1, i64 %arg2) {
 entry:
+  %t4 = alloca i64
+  %t10 = alloca i64, i64 2
   %t0 = inttoptr i64 %arg0 to ptr
   %t1 = load i64, ptr %t0
   %t2 = icmp eq i64 %t1, 2
-  %t4 = alloca i64
   br i1 %t2, label %apfast3, label %apslow3
 apfast3:
   %t5 = inttoptr i64 %arg0 to ptr
@@ -888,7 +889,6 @@ apfast3:
   store i64 %t9, ptr %t4
   br label %apend3
 apslow3:
-  %t10 = alloca i64, i64 2
   %t11 = getelementptr i64, ptr %t10, i64 0
   store i64 %arg1, ptr %t11
   %t12 = getelementptr i64, ptr %t10, i64 1

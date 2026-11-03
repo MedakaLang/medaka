@@ -208,10 +208,11 @@ done
   echo "FAIL H2B7-ROUTES: expected four lambda-id routes"
   exit 1
 }
-# Each count is the definition plus its routes: four named lifts (the extern, constructor
-# and foreign etas, and the foreign wrapper) and eight function-reference routes.
-[ "$(printf '%s' "$WASM_FLAT" | grep -o -F 'addLiftedNamed prog' | wc -l | tr -d '[:space:]')" -eq 5 ] &&
-  [ "$(printf '%s' "$WASM_FLAT" | grep -o -F 'noteFuncRef prog' | wc -l | tr -d '[:space:]')" -eq 9 ] || {
+# Each count is the definition plus its routes: five named lifts (the extern, constructor
+# and foreign etas, the foreign wrapper, and the method-table slot functions) and nine
+# function-reference routes.
+[ "$(printf '%s' "$WASM_FLAT" | grep -o -F 'addLiftedNamed prog' | wc -l | tr -d '[:space:]')" -eq 6 ] &&
+  [ "$(printf '%s' "$WASM_FLAT" | grep -o -F 'noteFuncRef prog' | wc -l | tr -d '[:space:]')" -eq 10 ] || {
   echo "FAIL H2B7-ROUTES: named lifts or function-reference routes changed"
   exit 1
 }

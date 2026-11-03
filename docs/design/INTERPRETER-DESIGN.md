@@ -153,8 +153,10 @@ and precompiled code to share them. Each is a fact with one producer (law A4).
    and a method call through a runtime dictionary is an if-chain over the whole
    program's impl table (`mdk.dispatch.*` in `llvm_emit.mdk`). Precompiled stdlib code
    cannot dispatch to a user impl that way. The dictionary becomes a **method table**:
-   `[hdr | method entries… | supers… | requires…]`, a method call through a dictionary
-   loads a slot and calls it. The VM builds such a table for a user impl with VM closures
+   `[hdr | supers… | method entries… | requires…]`, a method call through a dictionary
+   loads a slot and calls it. Supers come first because the typechecker mints super
+   projections by index without naming the root interface, and an inherited default reads
+   its `requires` by index; this is the GHC class-dictionary order. The VM builds such a table for a user impl with VM closures
    in its slots, and native `show`, `compare` or `fold` on a user type works unchanged.
    The static case (a known instance) stays a direct call to `mdk.impl.*`, so native
    code loses nothing; the if-chain dispatchers are deleted. Precedent: GHC dictionary

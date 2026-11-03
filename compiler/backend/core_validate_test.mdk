@@ -44,7 +44,7 @@ import test.{
 }
 import frontend.parser.{parse}
 import frontend.desugar.{desugar}
-import list.{take}
+import list.{drop, take}
 import support.util.{dedup, listLen, joinNl, reverseL}
 import support.ordmap.{omEmpty, omInsert}
 import frontend.marker.{declRefs}
@@ -85,13 +85,16 @@ import ir.core_ir_lower.{
 }
 import backend.extern_catalog.{catalogRow, ledgerEntry, rowLlvm, rowWasm}
 import backend.core_validate.{
-  validateForEmission, coreDefectMessage, validateMethodResults
+  validateForEmission, coreDefectMessage, validateMethodResults,
+  validateMethodTables
 }
+import backend.emit_plan.{InstanceTable(..), MethodTables(..), SlotCallee(..)}
+import support.ordmap.{omMapValues}
 import backend.core_validate.{
   CheckedTarget, checkedTarget, checkedTargetOf, ExternFinding(..),
   isUnprovidedOn, missingCatalogRows, missingRowsMessage, renderExternFinding,
   renderExternRefusalUnder, validateCalls, validateDispatchEvidence,
-  validateExterns, validateImplSymbols, implSymbolCollision, dictTagCollision,
+  validateExterns, validateImplSymbols, implSymbolCollision,
   validateMethodContexts, validateRecords, validateTails, validateBinderStamps,
   validateScalarOperators
 }
@@ -119,7 +122,7 @@ import backend.global_plan.{GlobalInitPlan(..)}
 
 import types.target_profile.{lookupProfile}
 import test_process.{underRoot, boundedVerbSeconds, withScratchDir}
-import string.{contains, split}
+import string.{contains, split, startsWith}
 import types.tc_elab.{grantWholeDomain}
 
 -- The Wasm emitters as these tests read them.  None of the programs here has a
@@ -365,7 +368,7 @@ test "(f) llvm refuses assertSnapshot and lowers what wasm refuses" = expectEach
 llvmRecordEvents : Expectation
 llvmRecordEvents =
   let decls = grantWholeDomain (desugar (parse assertSnapshotSrc))
-  let input = makeEmitInput RawUnchecked PreludeFreeRuntime [] [] 0 [] [] ""
+  let input = makeEmitInput RawUnchecked PreludeFreeRuntime [] 0 [] [] ""
   let cp = lowerProgramEmitWith emptyFacts (annotateProgram decls)
   let (_, events) =
     llvmRecord input (buildEmitPlan LlvmBackend PreludeFreeRuntime cp) cp
@@ -1055,7 +1058,7 @@ test "(t) every impl entry carries its stamped symbol and its qualified interfac
     ),
   ]
 
--- ── impl-symbol and dict-tag injectivity ────────────────────────────────────
+-- ── impl-symbol injectivity and colliding dictionary headers ────────────────────────────────────
 
 -- Two impls of one method at head tycons whose djb2 hashes agree in the full
 -- width (`hashName "Mzone" == hashName "NYone"`).
@@ -1086,50 +1089,43 @@ sameSymbolEntry (CImplEntry n s d (CImplTagged tag key iface _ pos pats body)) =
     (CImplTagged tag key iface (ImplSym "Same" "Same" "Same") pos pats body)
 sameSymbolEntry ent = ent
 
-test "(u) two distinct impls colliding on one dict-witness tag are refused, per tag width" = expectEach
+-- The defects the emission gateway reports for [cp] under [backend].
+emissionDefectTexts : Backend -> CProgram -> List String
+emissionDefectTexts backend cp =
+  map
+    coreDefectMessage
+    (validateForEmission
+      backend
+      PreludeFreeRuntime
+      RawUnchecked
+      (buildEmitPlan backend PreludeFreeRuntime cp)
+      cp).defects
+
+test "(u) instances whose dictionary headers hash alike are accepted by both backends" = expectEach
   [
     (
-      "a full-width hash collision is refused for llvm",
-      expectTextContainsAll
-        [
-          "emitted dict-witness tag collision",
-          "method `zn`",
-          "Mzone",
-          "NYone",
-          "native (LLVM) i64",
-        ]
-        (joinNl
-          (faultList (dictTagCollision LlvmBackend (lowered fullWidthSrc)))),
-    ),
-    (
-      "a full-width hash collision is refused for wasm in the native space",
-      expectTextContainsAll
-        ["emitted dict-witness tag collision", "native (LLVM) i64"]
-        (joinNl
-          (faultList (dictTagCollision WasmBackend (lowered fullWidthSrc)))),
-    ),
-    (
-      "a 30-bit-only collision is not refused for llvm",
+      "a full-width hash collision is accepted for llvm",
       expectEqual
         []
-        (faultList (dictTagCollision LlvmBackend (lowered narrowWidthSrc))),
+        (emissionDefectTexts LlvmBackend (typedLowered "" fullWidthSrc)),
     ),
     (
-      "a 30-bit-only collision is refused for wasm",
-      expectTextContainsAll
-        [
-          "emitted dict-witness tag collision",
-          "tag space: wasm (WasmGC) 30-bit"
-        ]
-        (joinNl
-          (faultList (dictTagCollision WasmBackend (lowered narrowWidthSrc)))),
-    ),
-    (
-      "a program without a collision is accepted by both",
+      "a full-width hash collision is accepted for wasm",
       expectEqual
         []
-        (faultList (dictTagCollision LlvmBackend (lowered mixedGroupSrc))
-          ++ faultList (dictTagCollision WasmBackend (lowered mixedGroupSrc))),
+        (emissionDefectTexts WasmBackend (typedLowered "" fullWidthSrc)),
+    ),
+    (
+      "a 30-bit-only collision is accepted for llvm",
+      expectEqual
+        []
+        (emissionDefectTexts LlvmBackend (typedLowered "" narrowWidthSrc)),
+    ),
+    (
+      "a 30-bit-only collision is accepted for wasm",
+      expectEqual
+        []
+        (emissionDefectTexts WasmBackend (typedLowered "" narrowWidthSrc)),
     ),
   ]
 
@@ -1179,62 +1175,39 @@ test "(v) two distinct impls stamped to one emitted symbol are refused" = expect
     ),
   ]
 
--- ── inherited defaults in the dict-tag space ────────────────────────────────
+-- ── inherited defaults whose headers hash alike ────────────────────────────────
 
--- `zn` has a default.  The first instance supplies `zn`, the second inherits it, so
--- both entries are arms of `zn`'s one dispatcher, and each arm compares its own
--- instance's word.  Typechecked, since only an elaborated program lowers the
--- inherited entries.
+-- `zn` has a default.  The first instance supplies `zn`, the second inherits it.
+-- Typechecked, since only an elaborated program lowers the inherited entries.
 defaultSrc : String -> String -> String
 defaultSrc supplied inherited =
   "interface Zn a where\n  zn : a -> String\n  zn _ = \"default\"\ndata \{supplied} = \{supplied}\ndata \{inherited} = \{inherited}\nimpl Zn \{supplied} where\n  zn _ = \"s\"\nimpl Zn \{inherited}\nmain = zn \{inherited}"
 
-defaultTags : Backend -> String -> String -> List String
-defaultTags backend supplied inherited =
-  faultList
-    (dictTagCollision backend (typedLowered "" (defaultSrc supplied inherited)))
-
-test "(af) a supplied impl colliding with an inherited default is refused, per tag width" = expectEach
+test "(af) a supplied impl and an inherited default whose headers hash alike are accepted" = expectEach
   [
     (
-      "a full-width collision is refused for llvm",
-      expectTextContainsAll
-        [
-          "emitted dict-witness tag collision",
-          "method `zn`",
-          "Mzone",
-          "NYone",
-          "native (LLVM) i64",
-        ]
-        (joinNl (defaultTags LlvmBackend "Mzone" "NYone")),
-    ),
-    (
-      "a full-width collision is refused for wasm in the native space",
-      expectTextContainsAll
-        ["emitted dict-witness tag collision", "native (LLVM) i64"]
-        (joinNl (defaultTags WasmBackend "Mzone" "NYone")),
-    ),
-    (
-      "a 30-bit-only collision is not refused for llvm",
-      expectEqual [] (defaultTags LlvmBackend "Dbnfbcp" "Llzhriz"),
-    ),
-    (
-      "a 30-bit-only collision is refused for wasm",
-      expectTextContainsAll
-        [
-          "emitted dict-witness tag collision",
-          "tag space: wasm (WasmGC) 30-bit",
-          "Dbnfbcp",
-          "Llzhriz",
-        ]
-        (joinNl (defaultTags WasmBackend "Dbnfbcp" "Llzhriz")),
-    ),
-    (
-      "distinct words are accepted by both",
+      "a full-width collision is accepted for llvm",
       expectEqual
         []
-        (defaultTags LlvmBackend "Mzone" "Pqrst"
-          ++ defaultTags WasmBackend "Mzone" "Pqrst"),
+        (emissionDefectTexts
+          LlvmBackend
+          (typedLowered "" (defaultSrc "Mzone" "NYone"))),
+    ),
+    (
+      "a full-width collision is accepted for wasm",
+      expectEqual
+        []
+        (emissionDefectTexts
+          WasmBackend
+          (typedLowered "" (defaultSrc "Mzone" "NYone"))),
+    ),
+    (
+      "a 30-bit-only collision is accepted for wasm",
+      expectEqual
+        []
+        (emissionDefectTexts
+          WasmBackend
+          (typedLowered "" (defaultSrc "Dbnfbcp" "Llzhriz"))),
     ),
   ]
 
@@ -1510,6 +1483,72 @@ test "(v) a dispatch node's evidence denotes dictionaries its callee binds" = ex
         []
         (validateDispatchEvidence
           (evidenceProg (CMethod "show" (MethodEvidence "" 1 RNone [] [])))),
+    ),
+  ]
+
+-- `evidenceProg` with one inherited default of interface `S` (one super) on an
+-- instance with one `requires`, whose receiver is `$dict_m_0` and whose body
+-- projects field [i] of [root].
+defaultProjProg : Route -> Int -> CProgram
+defaultProjProg root i = match evidenceProg (CLit (LInt 0))
+  CProgram groups ctors ctorTypes _ mctx facts =>
+    CProgram
+      groups
+      ctors
+      ctorTypes
+      [
+        CImplEntry
+          "m"
+          0
+          0
+          (CImplDefault
+            "S"
+            "T"
+            "S|T|"
+            (ImplSym "T" "S" "S|T|")
+            []
+            [PVar "$dict_m_0" noDeclLoc noBinderId]
+            (CDict "g" [RProj root [i]])),
+      ]
+      mctx
+      { facts | factRequires = ("S|T|", 1) :: facts.factRequires }
+
+test "(ai) a requires projection stays within the receiver's supers and requires, any other within the super counts" = expectEach
+  [
+    (
+      "the receiver's last requires field is accepted",
+      expectEqual
+        []
+        (validateDispatchEvidence (defaultProjProg (RDict "$dict_m_0") 1)),
+    ),
+    (
+      "a receiver field past its supers and requires is refused",
+      expectTextContainsAll
+        ["projects field 2 of dictionary `$dict_m_0`", "only 2 fields"]
+        (joinNl
+          (validateDispatchEvidence (defaultProjProg (RDict "$dict_m_0") 2))),
+    ),
+    (
+      "a super projection of another root is accepted",
+      expectEqual
+        []
+        (validateDispatchEvidence
+          (evidenceProg (CDict "g" [RProj (RDict "$dict_m_0") [0]]))),
+    ),
+    (
+      "a projection of another root past the largest super count is refused",
+      expectTextContainsAll
+        ["projects field 1 of dictionary `$dict_m_0`", "only 1 fields"]
+        (joinNl
+          (validateDispatchEvidence
+            (evidenceProg (CDict "g" [RProj (RDict "$dict_m_0") [1]])))),
+    ),
+    (
+      "outside the receiver's default a requires index is refused",
+      expectTextContainsAll
+        ["projects field 1 of dictionary `$dict_other`"]
+        (joinNl
+          (validateDispatchEvidence (defaultProjProg (RDict "$dict_other") 1))),
     ),
   ]
 
@@ -2558,7 +2597,7 @@ emissionText route victim =
               cp))))
   let plan = corruptGroupPlan victim (corruptConstructorPlan victim original)
   let requirement = manifestRequirement victim
-  let li = makeEmitInput requirement domain [] [] 0 [] [] ""
+  let li = makeEmitInput requirement domain [] 0 [] [] ""
   let wi = makeWasmEmitInput requirement domain []
   match route
     "llvm-stats" =>
@@ -2755,7 +2794,7 @@ test "gateway preserves runtime domain identity and rejects a loaded missing row
     ),
   ]
 
-test "gateway preserves collision priority and backend dict-tag widths" =
+test "gateway reports an impl-symbol collision and accepts colliding dictionary headers" =
   let check backend cp =
     map
       coreDefectMessage
@@ -2767,22 +2806,17 @@ test "gateway preserves collision priority and backend dict-tag widths" =
         cp).defects
   expectEach [
     (
-      "symbol before tags",
+      "symbol collision",
       expectTextContainsAll
         ["emitted impl-symbol collision"]
         (joinNl (check LlvmBackend (sameSymbol (lowered fullWidthSrc)))),
     ),
     (
-      "full-width tags",
-      expectTextContainsAll
-        ["emitted dict-witness tag collision", "native (LLVM) i64"]
-        (joinNl (check LlvmBackend (lowered fullWidthSrc))),
-    ),
-    (
-      "masked tags",
-      expectTextContainsAll
-        ["wasm (WasmGC) 30-bit"]
-        (joinNl (check WasmBackend (lowered narrowWidthSrc))),
+      "colliding headers are not a defect",
+      expectEqual
+        []
+        (check LlvmBackend (typedLowered "" fullWidthSrc)
+          ++ check WasmBackend (typedLowered "" narrowWidthSrc)),
     ),
   ]
 
@@ -2790,7 +2824,7 @@ test "gateway valid controls return module text and unavailable externs stay rec
   let cp = emissionVictim "not-provided"
   let lp = buildEmitPlan LlvmBackend PreludeFreeRuntime cp
   let wp = buildEmitPlan WasmBackend PreludeFreeRuntime cp
-  let li = makeEmitInput RawUnchecked PreludeFreeRuntime [] [] 0 [] [] ""
+  let li = makeEmitInput RawUnchecked PreludeFreeRuntime [] 0 [] [] ""
   let wi = makeWasmEmitInput RawUnchecked PreludeFreeRuntime []
   let (_, le) = llvmRecord li lp cp
   let (_, we) = wasmRecord wi wp cp
@@ -3272,7 +3306,7 @@ test "constructor-fact renderer P to U to P and connected colliding controls" =
     let plan = buildEmitPlan target PreludeFreeRuntime cp
     if contains "llvm" route then
       llvmStrict
-        (makeEmitInput RawUnchecked PreludeFreeRuntime [] [] 0 [] [] "")
+        (makeEmitInput RawUnchecked PreludeFreeRuntime [] 0 [] [] "")
         plan
         cp
     else
@@ -3395,7 +3429,7 @@ test "impl partition P U P and wrong-program plan" =
   let render backend cp plan =
     if backendName backend == "llvm" then
       llvmStrict
-        (makeEmitInput RawUnchecked PreludeFreeRuntime [] [] 0 [] [] "")
+        (makeEmitInput RawUnchecked PreludeFreeRuntime [] 0 [] [] "")
         plan
         cp
     else
@@ -3459,8 +3493,14 @@ groupDefault tag symbol pattern value =
       [PVar "$dict_n_0" noDeclLoc (BinderId "" 98765), PLit (LInt pattern)]
       (CLit (LInt value)))
 
+-- Every instance a group program names supplies each method its interface
+-- declares in the facts below, so its method table is complete: a method the
+-- test does not exercise gets a constant clause of its own.
 groupProgram : List CImplEntry -> CProgram
-groupProgram entries = match emissionControl
+groupProgram entries = groupProgramOf (entries ++ groupFillers entries)
+
+groupProgramOf : List CImplEntry -> CProgram
+groupProgramOf entries = match emissionControl
   CProgram bs ars tys _ contexts facts => CProgram
     bs
     ars
@@ -3509,6 +3549,28 @@ groupProgram entries = match emissionControl
           :: facts.factBinders,
     }
 
+groupFillers : List CImplEntry -> List CImplEntry
+groupFillers entries =
+  flatMap
+    (key =>
+      map
+        (m => groupTagged m key "Fill" "fill-\{m}-\{key}" 0 0)
+        (filter
+          (m =>
+            not
+              (any
+                (ent => groupEntryKey ent == key && groupEntryMethod ent == m)
+                entries))
+          (if startsWith "XI|" key then ["m"] else ["m", "mX", "n"])))
+    (dedup (map groupEntryKey entries))
+
+groupEntryKey : CImplEntry -> String
+groupEntryKey (CImplEntry _ _ _ (CImplTagged _ key _ _ _ _ _)) = key
+groupEntryKey (CImplEntry _ _ _ (CImplDefault _ _ key _ _ _ _)) = key
+
+groupEntryMethod : CImplEntry -> String
+groupEntryMethod (CImplEntry method _ _ _) = method
+
 test "physical groups preserve interleaved clauses and first symbol in both emitters" =
   let a = groupTagged "m" "I|Box Int|" "Box" "first" 0 11
   let b = groupTagged "m" "I|Box Int|" "Other" "unused" 1 22
@@ -3529,7 +3591,7 @@ test "physical groups preserve interleaved clauses and first symbol in both emit
     e,
     groupTagged "m" "I|Unrelated|" "Unrelated" "third" 0 77,
   ]
-  let li = makeEmitInput RawUnchecked PreludeFreeRuntime [] [] 0 [] [] ""
+  let li = makeEmitInput RawUnchecked PreludeFreeRuntime [] 0 [] [] ""
   let wi = makeWasmEmitInput RawUnchecked PreludeFreeRuntime []
   let render target cp =
     let plan = buildEmitPlan target PreludeFreeRuntime cp
@@ -3634,7 +3696,6 @@ test "impl groups survive the LLVM prelude and program halves" =
         RawUnchecked
         PreludeFreeRuntime
         []
-        []
         half
         []
         [("m", "I|Box Int|", "first")]
@@ -3700,7 +3761,7 @@ main = zn B
       ([a, b], [d]) =>
         let interleaved = CProgram bs ars tys [a, d, b] contexts facts
         let contiguous = CProgram bs ars tys [a, b, d] contexts facts
-        let li = makeEmitInput RawUnchecked PreludeFreeRuntime [] [] 0 [] [] ""
+        let li = makeEmitInput RawUnchecked PreludeFreeRuntime [] 0 [] [] ""
         let wi = makeWasmEmitInput RawUnchecked PreludeFreeRuntime []
         expectEach
           (map
@@ -3739,7 +3800,7 @@ test "physical groups keep concatenation-colliding method and key pairs distinct
         [PLit (LInt 0)]
         (CLit (LInt 72)))
   let cp = groupProgram [a, b]
-  let li = makeEmitInput RawUnchecked PreludeFreeRuntime [] [] 0 [] [] ""
+  let li = makeEmitInput RawUnchecked PreludeFreeRuntime [] 0 [] [] ""
   let wi = makeWasmEmitInput RawUnchecked PreludeFreeRuntime []
   let l = llvmStrict li (buildEmitPlan LlvmBackend PreludeFreeRuntime cp) cp
   let w = wasmStrict wi (buildEmitPlan WasmBackend PreludeFreeRuntime cp) cp
@@ -3762,3 +3823,124 @@ test "physical groups keep concatenation-colliding method and key pairs distinct
 
 findingExtern : ExternFinding -> String
 findingExtern (ExternFinding name _ _ _ _) = name
+
+-- ── method tables ───────────────────────────────────────────────────────────
+-- `sz` has two instances, so `viaDict`'s call is answered by the dictionary it is
+-- given: a slot load.  `B` supplies `tw`; `A` inherits it.
+tableSrc : String
+tableSrc =
+  """
+  interface Sz a where
+    sz : a -> Int
+    tw : a -> Int
+    tw x = sz x + sz x
+  data A = A
+  data B = B
+  impl Sz A where
+    sz _ = 1
+  impl Sz B where
+    sz _ = 2
+    tw _ = 7
+  viaDict : Sz a => a -> Int
+  viaDict x = sz x + tw x
+  main = viaDict A + viaDict B
+  """
+
+-- [plan] with every instance table's slot fills rewritten by [f]
+withFills : (List SlotCallee -> List SlotCallee) -> EmitPlan -> EmitPlan
+withFills f plan =
+  let tables = plan.methodTables
+  { plan |
+    methodTables = { tables |
+      instances =
+        omMapValues
+          (t => { t | fills = map f (t : InstanceTable).fills })
+          tables.instances,
+    },
+  }
+
+test "(ag) every slot of a method table has exactly one callee of the declared arity" =
+  let cp = typedLowered "" tableSrc
+  let plan = buildEmitPlan LlvmBackend PreludeFreeRuntime cp
+  let refused f =
+    joinNl (validateMethodTables LlvmBackend (withFills f plan) cp)
+  expectEach [
+    (
+      "the lowered program's tables are accepted",
+      expectEqual [] (validateMethodTables LlvmBackend plan cp),
+    ),
+    (
+      "a slot with no callee is refused",
+      expectTextContainsAll
+        ["method table: slot `sz` of instance", "has 0 callees"]
+        (refused (_ => [])),
+    ),
+    (
+      "a slot with two callees is refused",
+      expectTextContainsAll
+        ["method table: slot `tw` of instance", "has 2 callees"]
+        (refused (cs => cs ++ cs)),
+    ),
+    (
+      "a callee of another arity is refused",
+      expectTextContainsAll
+        ["takes 1 values, its callee declares 2"]
+        (refused (cs =>
+          map
+            (c => { c | declaredArity = (c : SlotCallee).declaredArity + 1 })
+            cs)),
+    ),
+    (
+      "the wasm emitter does not read the tables",
+      expectEqual
+        []
+        (validateMethodTables WasmBackend (withFills (_ => []) plan) cp),
+    ),
+  ]
+
+test "(aj) every impl group fills exactly one slot across the plan" =
+  let cp = typedLowered "" tableSrc
+  let plan = buildEmitPlan LlvmBackend PreludeFreeRuntime cp
+  let toGroup g = withFills (cs => map (c => { c | group = g }) cs) plan
+  expectEach [
+    (
+      "one group filling every slot and the others none is refused",
+      expectTextContainsAll
+        [
+          "method table: impl group 0 fills 4 slots, not one",
+          "impl group 1 fills 0 slots, not one"
+        ]
+        (joinNl (validateMethodTables LlvmBackend (toGroup 0) cp)),
+    ),
+    (
+      "a slot naming a group that does not exist is refused",
+      expectTextContainsAll
+        ["a slot names impl group 99, which does not exist"]
+        (joinNl (validateMethodTables LlvmBackend (toGroup 99) cp)),
+    ),
+  ]
+
+-- the lines from the first one that starts with [prefix]
+fromLabel : String -> List String -> List String
+fromLabel _ [] = []
+fromLabel prefix (l :: rest) =
+  if startsWith prefix l then l :: rest else fromLabel prefix rest
+
+test "(ah) a slot load tests the dictionary for null and traps through mdk_dispatch_no_impl" =
+  let cp = typedLowered "" tableSrc
+  let li = makeEmitInput RawUnchecked PreludeFreeRuntime [] 0 [] [] ""
+  let ir = llvmStrict li (buildEmitPlan LlvmBackend PreludeFreeRuntime cp) cp
+  expectEach [
+    (
+      "the dictionary word is compared with null before the load",
+      expectTextContainsAll
+        ["@mdk.slotcall.", "= icmp eq i64 %dict, 0", "label %slotnull"]
+        ir,
+    ),
+    (
+      "the null branch traps and does not fall through to the load",
+      expectEqual
+        ["  call void @mdk_dispatch_no_impl()", "  unreachable"]
+        (take 2 (drop 1 (fromLabel "slotnull" (split "\n" ir)))),
+    ),
+  ]

@@ -139,18 +139,28 @@ FIXDIR_MODULES="$ROOT/test/wasm/fixtures_modules"
 # modules grew from 2991434 to 3136797 bytes with 6613 functions unchanged.
 # physical_local_identity adds 46886 bytes and 104 functions. Absolute trap
 # paths affect bytes, so round the measured 3183683 up to the next 10000.
+#
+# Method tables (interp-v0-1-method-tables, S-method-table-wasm): a dictionary is a
+# table of slot functions and a dictionary-routed call is a slot load, so the
+# per-site dispatch chains are gone and a per-(instance, method) slot function takes
+# their place.  The modules corpus measures 1459955 B (down from 3183683 B) and 6884
+# funcs (up from 6717); the plain corpus 510856 B; the typed corpus 146 funcs.
+# Each slot also holds a closure of the impl's own value count, for a site whose
+# argument count is not the declared one: one `$codety` function per
+# (instance, method) slot.  Modules 1483573 B / 7036 funcs, plain 511288 B / 3689
+# funcs, typed 23089 B / 150 funcs.
 MODULES_BYTES_CEIL=3190000   # measured 3183683 B locally; rounded up to the next 10000
-MODULES_FUNCS_CEIL=6717   # measured, exact
+MODULES_FUNCS_CEIL=7036   # measured, exact
 MODULES_RATIO_CEIL_X1000=150   # ratio * 1000, integer-only arithmetic (no bc/awk float compare)
 
 # Descriptor migration measured 508888 plain bytes and 3685 functions; the
 # merged corpus measures 509264 bytes and 3689 functions. Four RNG fixtures
 # add one mdk_rng_ensure each; absolute paths also affect emitted bytes.
-PLAIN_BYTES_CEIL=510000
+PLAIN_BYTES_CEIL=520000   # measured 510856 B; rounded up to the next 10000
 PLAIN_FUNCS_CEIL=3689   # measured, exact
 
 TYPED_BYTES_CEIL=23500
-TYPED_FUNCS_CEIL=145
+TYPED_FUNCS_CEIL=150
 
 # ── exact per-corpus fixture-count floors (F2/S1-2 closure) ────────────────
 # These corpus sizes are fixed and every prior sprint measurement (S1-S5's own
@@ -172,7 +182,7 @@ TYPED_OK_EXACT=9
 # ("emitted-vs-reachable FUNCTION ratio") — the existing reach-ratio is a UNIT
 # ratio (S1's own notion), not this.
 F1_MODULES_FUNCS_FLOOR=1518
-MODULES_F1_RATIO_CEIL_X1000=4425  # 6717 * 1000 / 1518 = 4424.9, see the ceilings above
+MODULES_F1_RATIO_CEIL_X1000=4636  # 7036 * 1000 / 1518 = 4635.04, see the ceilings above
 
 command -v wasm-tools >/dev/null 2>&1 || { echo "wasm-tools not on PATH — skipping S5 emitted-size gate"; exit 2; }
 NODE=node

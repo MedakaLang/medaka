@@ -13,7 +13,7 @@ import ir.core_ir.{
   CProgram(..), DeclFacts(..), EntryFact(..), CBind(..), CClause(..), CExpr(..),
   CField(..), CGuard(..), CImplEntry(..), CImplBody(..), CStmt(..), CArm(..),
   CHead(..), CTree(..), CTBranch(..), CallSite(..), CallMode(..), FailSite(..),
-  litRuntimeType
+  litRuntimeType, ifaceMethodArityKey, MethodResultFact(..)
 }
 import ir.extern_types.{ExternDeclFact(..)}
 import ir.extern_lower.{externRuntimeKey}
@@ -1786,13 +1786,14 @@ physicalTypes : ConstructorFacts ->
   WasmDemand ->
   List String
 physicalTypes _ _ False _ _ = ["boxint", "float"]
-physicalTypes constructors (CProgram _ _ ctorTypes _ _ _) True clos rep =
+physicalTypes constructors (cp@(CProgram _ _ ctorTypes _ _ _)) True clos rep =
   omKeys
     (omFromNames
       ([
-          "boxint", "float", "dictarr", "dictcell", "T_Option", "C_Some",
+          "boxint", "float", "dictarr", "slotarr", "dict", "T_Option", "C_Some",
           "T_Result", "C_Ok", "C_Err", "T_Ordering"
         ]
+        ++ map slotTypeName (slotTypeArities cp)
         ++ (if clos then ["argarr", "codety", "clos"] else [])
         ++ (if hasUse rep UseStr then ["str", "u8arr"] else [])
         ++ (if hasUse rep UseList then ["T_List", "C_Cons"] else [])
@@ -1818,6 +1819,35 @@ physicalTypes constructors (CProgram _ _ ctorTypes _ _ _) True clos rep =
                   []))
           ctorTypes)
       omEmpty)
+
+-- The function type of a slot wrapper taking [n] values: a method table's slot
+-- holds a function of `1 + method-level dictionaries + declared values`
+-- parameters, all `(ref eq)`.
+export
+slotTypeName : Int -> String
+slotTypeName n = "slot" ++ intToString n
+
+-- The widest slot function type the type section declares.
+export
+slotTypeMax : Int
+slotTypeMax = 64
+
+-- The distinct slot arities of the program's interface methods, ascending, for
+-- a program with impls (only an impl gives a dictionary a table).
+slotTypeArities : CProgram -> List Int
+slotTypeArities (CProgram _ _ _ impls mctx facts) =
+  if isEmptyL impls then
+    []
+  else
+    let contexts = omFromPairs mctx omEmpty
+    let arities = map (slotArityOfFact contexts) facts.factMethodResults
+    filterList (n => anyList (== n) arities) [1..=slotTypeMax]
+
+slotArityOfFact : OrdMap Int -> MethodResultFact -> Int
+slotArityOfFact contexts row =
+  1
+    + optionOr 0 (omLookup (ifaceMethodArityKey row.iface row.method) contexts)
+    + row.valueArity
 
 addUse : List WasmUse -> WasmUse -> List WasmUse
 addUse uses use = if any (== use) uses then uses else use :: uses

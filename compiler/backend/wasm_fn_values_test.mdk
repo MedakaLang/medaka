@@ -409,3 +409,25 @@ test "block lambda initializer uses renderer scope" =
         CSExpr unit,
       ]),
   ]
+
+-- A slot function is minted at emit time and named by no Core binding, so a method
+-- reached through a dictionary's slot names no top-level function as a value, even
+-- when a binding shares the method's name.
+test "slot-routed methods name no function value" =
+  let slotted =
+    route =>
+      CApp
+        (CMethod "f" (MethodEvidence "I" 1 route [] []))
+        [unit]
+        (CallSite CallDynamic False)
+  expectEach [
+    ("dictionary parameter", expectEqual [] (uses [] [] (slotted (RDict "d")))),
+    (
+      "forwarded dictionary",
+      expectEqual [] (uses [] [] (slotted (RDictFwd "d"))),
+    ),
+    (
+      "projected super",
+      expectEqual [] (uses [] [] (slotted (RProj (RDict "d") [0]))),
+    ),
+  ]

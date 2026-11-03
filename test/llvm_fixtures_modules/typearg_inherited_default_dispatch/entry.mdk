@@ -34,8 +34,14 @@
 --          sibling calls re-stamped to the other impl, changes the printed string —
 --          which a constant-string default cannot show.
 --
+-- Labeled — the NON-CONSTANT default at a SHARED head (#2487).  `Box Int` and
+--          `Box String` inherit `label`, whose body calls `tagL` and `sizeL` on its
+--          receiver; `Box Bool` overrides it.  A sibling call answered by another
+--          `Box` instance prints that instance's tag or a size read from the wrong
+--          payload.
+--
 -- Must print:  boxint / woof / woof / BOXINT / WOOF / bi / bs
---              / OVERRIDDEN-cat / dog/71
+--              / OVERRIDDEN-cat / dog/71 / int:52 / str:42 / OVERRIDDEN-bool
 import tface.{
   Speak(..),
   speak,
@@ -45,6 +51,8 @@ import tface.{
   both,
   Described(..),
   describe,
+  Labeled(..),
+  label,
 }
 
 data Box a = Box a
@@ -53,17 +61,14 @@ impl Speak (Box Int) where
   speak _ = "boxint"
 
 -- INHERITS `speak`: same head tycon "Box", different type argument.
-impl Speak (Box String) where
-
+impl Speak (Box String)
 
 -- A SECOND inheriting sibling — the chain needs one default arm per uncovered key,
 -- not just one.
-impl Speak (Box Bool) where
-
+impl Speak (Box Bool)
 
 -- INHERITS `loud`, and is declared BEFORE the override.
-impl Loud (Box String) where
-
+impl Loud (Box String)
 
 impl Loud (Box Int) where
   loud _ = "BOXINT"
@@ -104,6 +109,22 @@ useLoud x = loud x
 useBoth : Both a => a -> String
 useBoth x = both x
 
+impl Labeled (Box Int) where
+  tagL _ = "int"
+  sizeL (Box n) = n
+
+impl Labeled (Box String) where
+  tagL _ = "str"
+  sizeL (Box s) = stringLength s
+
+impl Labeled (Box Bool) where
+  tagL _ = "bool"
+  sizeL _ = 1
+  label _ = "OVERRIDDEN-bool"
+
+useLabel : Labeled a => a -> String
+useLabel x = label x
+
 main : <IO> Unit
 main =
   let _ = putStrLn (useSpeak (Box 1))
@@ -114,4 +135,7 @@ main =
   let _ = putStrLn (useBoth (Box 3))
   let _ = putStrLn (useBoth (Box "u"))
   let _ = putStrLn (useDescribed Cat)
-  putStrLn (useDescribed Dog)
+  let _ = putStrLn (useDescribed Dog)
+  let _ = putStrLn (useLabel (Box 5))
+  let _ = putStrLn (useLabel (Box "abcd"))
+  putStrLn (useLabel (Box True))
