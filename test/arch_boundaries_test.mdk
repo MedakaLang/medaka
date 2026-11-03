@@ -997,13 +997,10 @@ test "arch_boundaries: identical-body names match dupbodies.golden" =
   -- `println` when the number is wanted.
   pin "dupbodies.golden" (identicalNames idx)
 
--- The `## Typechecker cells` section of CELL-LIFETIMES.md: from its heading to
--- the next `## ` heading.
-typecheckerSection : List String -> List String
-typecheckerSection ls =
-  takeWhile
-    (l => not (startsWith "## " l))
-    (drop 1 (dropWhile (/= "## Typechecker cells") ls))
+-- The lines under one `## ` heading: from the heading to the next `## ` heading.
+sectionUnder : String -> List String -> List String
+sectionUnder heading ls =
+  takeWhile (l => not (startsWith "## " l)) (drop 1 (dropWhile (/= heading) ls))
 
 -- Data rows of a markdown table: the header and the `|---|` separator are not.
 isDataRow : String -> Bool
@@ -1101,13 +1098,6 @@ badWidth cells =
     None
   else
     Some "\{nameOf cells}: \{length cells} cells, not 10"
-
--- The `## Cells outside the file` section: from its heading to the next `## `.
-sideSection : List String -> List String
-sideSection ls =
-  takeWhile
-    (l => not (startsWith "## " l))
-    (drop 1 (dropWhile (/= "## Cells outside the file") ls))
 
 sideNames : List String
 sideNames = [
@@ -1228,8 +1218,15 @@ test "arch_boundaries: CELL-LIFETIMES rows equal the cell census" =
     Err e => fail "could not read CELL-LIFETIMES.md: \{e}"
     Ok text =>
       let rows =
-        map rowCells (filter isDataRow (typecheckerSection (lines text)))
-      let sideRows = map rowCells (filter isDataRow (sideSection (lines text)))
+        map
+          rowCells
+          (filter isDataRow (sectionUnder "## Typechecker cells" (lines text)))
+      let sideRows =
+        map
+          rowCells
+          (filter
+            isDataRow
+            (sectionUnder "## Cells outside the file" (lines text)))
       let allRows = rows ++ sideRows
       let census = cellCensus loadModules
       expectAll [
@@ -1326,12 +1323,6 @@ test "arch_boundaries: Wasm text coverage remains a target-local leaf" =
 -- `| <order> | `types/<module>.mdk` ...` line under the "## Layer order" heading;
 -- the module is the first backticked span of the second cell. A row's order is its
 -- position in the table, never the label in its first cell.
-layerSection : List String -> List String
-layerSection ls =
-  takeWhile
-    (l => not (startsWith "## " l))
-    (drop 1 (dropWhile (l => l /= "## Layer order") ls))
-
 layerRowId : String -> Option String
 layerRowId l = match split " | " l
   first :: cell :: _ if startsWith "| " first
@@ -1341,7 +1332,7 @@ layerRowId l = match split " | " l
   _ => None
 
 layerTableIds : List String -> List String
-layerTableIds ls = filterMap layerRowId (layerSection ls)
+layerTableIds ls = filterMap layerRowId (sectionUnder "## Layer order" ls)
 
 -- The modules a table row must exist for: every `types/tc_*.mdk` on disk but the
 -- `*_test_support` siblings, plus the entry. `loadModules` already drops `*_test`.
@@ -1380,6 +1371,58 @@ layerOrderProblems ids mods =
         (filter (c => M.has c rank && at c > at m) (closureOf g m)))
     ids
 
+-- The `forced above `X`` / `forced below `Y`` claims of a row's Position cell (its
+-- last cell), as (direction, module id). `forced below everything` names no module
+-- and is not a claim.
+layerPositionClaims : String -> List (String, String)
+layerPositionClaims l =
+  let cell = optionOr "" (last (split " | " l))
+  filterMap
+    (seg =>
+      if startsWith "above `" seg then
+        claimOf "above" seg
+      else if startsWith "below `" seg then
+        claimOf "below" seg
+      else
+        None)
+    (drop 1 (split "forced " cell))
+
+claimOf : String -> String -> Option (String, String)
+claimOf dir seg = match split "`" seg
+  _ :: name :: _ => Some (dir, "types." ++ name)
+  _ => None
+
+-- A `forced above X` row must have X in its import closure and X in a lower row;
+-- a `forced below Y` row must sit in Y's import closure and Y in a higher row.
+layerPositionProblems : List String ->
+  List String ->
+  List (String, List String) ->
+  List String
+layerPositionProblems ids rowLines mods =
+  let g = buildGraph mods
+  let rank = M.fromList (zip ids [0..=length ids])
+  let at m = optionOr 0 (M.get m rank)
+  flatMap
+    (l => match layerRowId l
+      None => []
+      Some m => filterMap (claimProblem g at m) (layerPositionClaims l))
+    rowLines
+
+claimProblem : Graph ->
+  (String -> Int) ->
+  String ->
+  (String, String) ->
+  Option String
+claimProblem g at m (dir, x) =
+  if dir == "above" && not (elem x (closureOf g m) && at x < at m) then
+    Some
+      "\{m}: Position says forced above \{x}, which \{m} does not import from a lower row"
+  else if dir == "below" && not (elem m (closureOf g x) && at x > at m) then
+    Some
+      "\{m}: Position says forced below \{x}, which does not import \{m} from a higher row"
+  else
+    None
+
 layerTableText : <IO> Result String (List String)
 layerTableText = match readFile (underRoot "compiler/types/ARCHITECTURE.md")
   Err e => Err "could not read compiler/types/ARCHITECTURE.md: \{e}"
@@ -1399,3 +1442,10 @@ test "arch_boundaries: no layer table row imports a row above it" =
   match layerTableText
     Err e => fail e
     Ok ls => expectEqual [] (layerOrderProblems (layerTableIds ls) loadModules)
+
+test "arch_boundaries: every forced-above and forced-below Position cell names a real import edge" =
+  match layerTableText
+    Err e => fail e
+    Ok ls =>
+      let rows = sectionUnder "## Layer order" ls
+      expectEqual [] (layerPositionProblems (layerTableIds ls) rows loadModules)

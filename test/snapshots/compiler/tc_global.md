@@ -11,7 +11,7 @@ stages=DESUGAR,MARK
 --
 -- Placement: declarations are placed by R1-R6 of the Phase 4 module table,
 -- compiler/ARCHITECTURE-PLAYBOOK.md section 6.
--- Closure rule: this module may not import `types.typecheck`, nor any of `tc_module`.
+-- Closure rule: this module may not import `types.typecheck`, nor any of `tc_stamp`, `tc_module`.
 
 import support.diag_codes.{DiagCode(..)}
 import types.tc_types.{

@@ -1,5 +1,5 @@
 # META
-source_lines=3017
+source_lines=3018
 stages=DESUGAR,MARK
 # SOURCE
 -- tc_unify: fresh variables and levels (including level lowering, `lowerToCurrent`,
@@ -11,7 +11,7 @@ stages=DESUGAR,MARK
 -- `recordSchemeCallObligations`, `performEffect`, `recordEffectSites`, `recordFileValueFlow`,
 -- `captureScope`, `openScope`, `closeScope`, `obligationSiteHere`); and the messages of these
 -- failures that need checker context (`authorityFailureMsg`, `effectLeakMsg`,
--- `constrainedApplicationHelp`; D3).
+-- `constrainedApplicationHelp`).
 -- Context-free message text is `tc_diag_text`'s.
 --
 -- Spec: HM-CORE section 3, section 4 (owed, #2555); EFFECTS section 2.4, section 5, section
@@ -21,8 +21,9 @@ stages=DESUGAR,MARK
 -- compiler/ARCHITECTURE-PLAYBOOK.md section 6.
 -- Closure rule: this module may not import `types.typecheck`, nor any of `tc_decls_variance`,
 -- `tc_decls_types`, `tc_decls`, `tc_foreign`, `tc_solve_givens`, `tc_solve_entail`, `tc_solve`,
--- `tc_solve_check`, `tc_shadow`, `tc_effects`, `tc_occurrence`, `tc_groups`, `tc_pat`,
--- `tc_infer_records`, `tc_infer`, `tc_elab`, `tc_global`, `tc_module`.
+-- `tc_solve_check`, `tc_shadow`, `tc_grants`, `tc_effects`, `tc_occurrence`, `tc_mark`,
+-- `tc_groups`, `tc_pat`, `tc_infer_records`, `tc_infer`, `tc_elab`, `tc_global`, `tc_stamp`,
+-- `tc_module`.
 
 import support.diag_codes.{DiagCode(..)}
 import types.tc_types.{

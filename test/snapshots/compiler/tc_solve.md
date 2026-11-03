@@ -20,8 +20,8 @@ stages=DESUGAR,MARK
 -- Placement: declarations are placed by R1-R6 of the Phase 4 module table,
 -- compiler/ARCHITECTURE-PLAYBOOK.md section 6.
 -- Closure rule: this module may not import `types.typecheck`, nor any of `tc_solve_check`,
--- `tc_shadow`, `tc_effects`, `tc_occurrence`, `tc_groups`, `tc_pat`, `tc_infer_records`,
--- `tc_infer`, `tc_elab`, `tc_global`, `tc_module`.
+-- `tc_shadow`, `tc_grants`, `tc_effects`, `tc_occurrence`, `tc_mark`, `tc_groups`, `tc_pat`,
+-- `tc_infer_records`, `tc_infer`, `tc_elab`, `tc_global`, `tc_stamp`, `tc_module`.
 
 import types.tc_types.{
   Provenance(..),

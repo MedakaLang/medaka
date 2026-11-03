@@ -24,6 +24,7 @@ import types.tc_types.{
   GrantOcc(..),
   GraphCtx,
   GroupCtx(..),
+  MarkSets(..),
   MethodGrant(..),
   MethodPredicateTemplate(..),
   MethodSchemeRow(..),
@@ -47,7 +48,9 @@ import types.tc_grants.{
   recordGrantOcc,
   recordMethodGrants,
   recordStandaloneGrantOcc,
+  recordTopGrants,
   recordValueFileBound,
+  registerLocalGrants,
   spineHeadEv,
 }
 import types.tc_effects_test.{
@@ -317,3 +320,49 @@ test "a method that no longer quantifies an authority loses its recorded grants"
   ]
   recordMethodGrants gctx [readRow "read : a -> Int -> Int" (twoGrantScheme [])]
   expectEqual None (readGrants gctx)
+
+-- A graph whose driver has installed mark sets, which is what turns grant recording on.
+grantingGraph : Unit -> GraphCtx
+grantingGraph _ =
+  let gctx = probeGraphCtx ()
+  gctx.markSetsRef := Some MarkSets {
+    msMarkRpNames = [],
+    msMarkSharedNames = [],
+    msGraphShadowNames = [],
+    msArgNames = [],
+    msCoreShadowMap = [],
+    msBareDictNames = [],
+    msUnits = [],
+  }
+  gctx
+
+topIdsOf : GraphCtx -> String -> Option (List Int)
+topIdsOf gctx key = omLookup key gctx.graphRun.grants.gsTopIds.value
+
+test "a generalized top-level member that quantifies authorities records them under its module's key, and one that quantifies none has no row" =
+  let gctx = grantingGraph ()
+  recordTopGrants
+    gctx
+    "m"
+    [
+      ("f", twoGrantScheme [1, 2]),
+      ("g", twoGrantScheme []),
+    ]
+    omEmpty
+  expectAll [
+    expectEqual (Some [2, 1]) (topIdsOf gctx "m|f"),
+    expectEqual None (topIdsOf gctx "m|g"),
+    expectEqual None (topIdsOf gctx "n|f"),
+  ]
+
+test "a graph whose driver installed no mark sets records no top-level grants" =
+  let gctx = probeGraphCtx ()
+  recordTopGrants gctx "m" [("f", twoGrantScheme [1, 2])] omEmpty
+  expectEqual None (topIdsOf gctx "m|f")
+
+test "a generalized local records its authorities in grant order, and one that quantifies none has no row" =
+  let gctx = probeGraphCtx ()
+  registerLocalGrants gctx "h" (twoGrantScheme [1, 2])
+  registerLocalGrants gctx "k" (twoGrantScheme [])
+  let rows = gctx.graphRun.grants.gsLocalIds.value
+  expectEqual (Some [2, 1], None) (omLookup "h" rows, omLookup "k" rows)

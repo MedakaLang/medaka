@@ -1,5 +1,5 @@
 # META
-source_lines=2055
+source_lines=2056
 stages=DESUGAR,MARK
 # SOURCE
 -- tc_elab: dict-passing elaboration (`dictPass`), the grant rewrite (`grantWholeDomain`),
@@ -12,7 +12,8 @@ stages=DESUGAR,MARK
 --
 -- Placement: declarations are placed by R1-R6 of the Phase 4 module table,
 -- compiler/ARCHITECTURE-PLAYBOOK.md section 6.
--- Closure rule: this module may not import `types.typecheck`, nor any of `tc_global`, `tc_module`.
+-- Closure rule: this module may not import `types.typecheck`, nor any of `tc_global`, `tc_stamp`,
+-- `tc_module`.
 
 import types.tc_types.{
   AdmittedAnswer(..),

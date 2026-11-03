@@ -1797,21 +1797,21 @@ graphPreamble inputs admitted sel preludeKey runtimeDecls coreDecls modules =
   -- reader the tree arm reaches — `ctorSiblingWithholdingName`, `matchCol0Type` —
   -- would read whatever the LAST CHECK RUN IN THIS PROCESS left behind.
   --
-  -- That residue is unreachable because of a key mismatch, not because it is absent:
-  -- `typeCtors` is keyed by DECLARATION IDENTITY (`tabKeyOf NsType <dataOrigin> <tyname>`),
-  -- the flat entries build it from UNSTAMPED decls (`TkBare` rows), and this arm's
-  -- readers mint `TkIdent` for a module-stamped head — so every lookup MISSES and
-  -- every reader falls through its fail-open `None` arm.  A `Module`-arm re-check
-  -- interleaved between two elaborations (the emit path's async-wrap re-check)
-  -- writes rows under the entry module's OWN identity, i.e. under exactly the key
-  -- these readers mint — so the lookups start HITTING, against rows built from the
-  -- UN-MANGLED tree while the drive walks the MANGLED one.  MEASURED:
-  -- `ctorSiblingWithholdingName` then reads the un-mangled ctor `A` as a sibling of
-  -- the mangled survivor and false-rejects `a.k` with `Field 'k' is not declared by
-  -- every constructor of 'A'`; `Display` cannot ground, the `println` route stays
-  -- RNone, and the emitter writes a NULL dict word (`i64 0`) — SILENTLY on
-  -- `runEmitWith`'s own path (`compiler/entries/entry_support.mdk`), which never
-  -- reads `hadTypeErrors` after the call.  Clean exit 0, SIGSEGV at runtime.
+  -- Such a residue would be hidden only by a key mismatch, not removed: `typeCtors` is
+  -- keyed by DECLARATION IDENTITY (`tabKeyOf NsType <dataOrigin> <tyname>`), the flat
+  -- entries build it from UNSTAMPED decls (`TkBare` rows), and this arm's readers mint
+  -- `TkIdent` for a module-stamped head — so every lookup would MISS and every reader
+  -- fall through its fail-open `None` arm.  A `Module`-arm re-check interleaved between
+  -- two elaborations (the emit path's async-wrap re-check) writes rows under the entry
+  -- module's OWN identity, i.e. under exactly the key these readers mint — so the
+  -- lookups would start HITTING, against rows built from the UN-MANGLED tree while the
+  -- drive walks the MANGLED one.  Then `ctorSiblingWithholdingName` reads the
+  -- un-mangled ctor `A` as a sibling of the mangled survivor and false-rejects `a.k`
+  -- with `Field 'k' is not declared by every constructor of 'A'`; `Display` cannot
+  -- ground, the `println` route stays RNone, and the emitter writes a NULL dict word
+  -- (`i64 0`) — SILENTLY on `runEmitWith`'s own path
+  -- (`compiler/entries/entry_support.mdk`), which never reads `hadTypeErrors` after
+  -- the call: clean exit 0, SIGSEGV at runtime.  The empty oracle below keeps it closed.
   --
   -- The module record starts from `initialModuleCtx` of the minted graph record,
   -- whose oracle is empty, so no reader can see a previous run's residue, no matter

@@ -1,5 +1,5 @@
 # META
-source_lines=1556
+source_lines=1557
 stages=DESUGAR,MARK
 # SOURCE
 -- tc_effects: the effect checks inference runs at binding boundaries and impl bodies (escape,
@@ -7,12 +7,13 @@ stages=DESUGAR,MARK
 -- application (`argumentAuthority`), and the local-binding summaries and registrations; wires the
 -- `effect_*` leaves into inference.  Grant recording and file-bound values are `tc_grants`.
 --
--- Spec: EFFECTS section 2.3, section 5, section 6.2-6.9, section 8.
+-- Spec: EFFECTS section 5, section 6.2-6.9.
 --
 -- Placement: declarations are placed by R1-R6 of the Phase 4 module table,
 -- compiler/ARCHITECTURE-PLAYBOOK.md section 6.
 -- Closure rule: this module may not import `types.typecheck`, nor any of `tc_occurrence`,
--- `tc_groups`, `tc_pat`, `tc_infer_records`, `tc_infer`, `tc_elab`, `tc_global`, `tc_module`.
+-- `tc_mark`, `tc_groups`, `tc_pat`, `tc_infer_records`, `tc_infer`, `tc_elab`, `tc_global`,
+-- `tc_stamp`, `tc_module`.
 
 import support.diag_codes.{DiagCode(..)}
 import types.tc_types.{

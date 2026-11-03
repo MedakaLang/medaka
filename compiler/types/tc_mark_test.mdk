@@ -39,7 +39,9 @@ import types.tc_mark.{
   constrainedSigNames,
   mapGroupClauses,
   markDictNames,
+  finishModuleMarking,
   markGroupClauses,
+  markTailDecls,
   rebuildGroupDecls,
   buildStandaloneShadowsGraph,
   computeMangledShadowMap,
@@ -636,3 +638,37 @@ test "a shadow row is kept for a function the module defines or a name it import
         (markedWith [] [] [("g", "size")] [] (parse (standalone "f"))).mcSm,
     ),
   ]
+
+-- ── the tail declarations ─────────────────────────────────────────────────
+
+-- The site and occurrence nodes of each declaration's body, in declaration order; only function
+-- and test bodies are read.
+declNodes : List Decl -> List (List String)
+declNodes decls =
+  map
+    (d => match d
+      DFunDef _ _ _ body _ _ => kindsOf (nodesOf body)
+      DTest _ _ body => kindsOf (nodesOf body)
+      _ => [])
+    decls
+
+tailSource : String
+tailSource = """
+f x = x + 1
+test "t" = 1 + 2
+"""
+
+test "marking the tail declarations marks a test body and leaves a binding group's clauses alone" =
+  let m = scoped ()
+  let mc = (marking [] [] [] []).mmCtx
+  expectEqual
+    [[], ["op", "lit", "lit"]]
+    (declNodes (markTailDecls m mc omEmpty (_ => False) (parse tailSource)))
+
+test "finishing a module's marking writes the marked group clauses back and marks the tail bodies" =
+  let m = scoped ()
+  let mm = marking [] [] [] []
+  let marked = markedAs m mm ["f"] tailSource
+  expectEqual
+    [["op", "lit"], ["op", "lit", "lit"]]
+    (declNodes (finishModuleMarking mm (envFor m) marked (parse tailSource)))

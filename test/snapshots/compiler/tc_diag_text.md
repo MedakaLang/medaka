@@ -17,8 +17,8 @@ stages=DESUGAR,MARK
 -- Closure rule: this module may not import `types.typecheck`, nor any of `tc_state`, `tc_env`,
 -- `tc_diag`, `tc_scope`, `tc_unify`, `tc_decls_variance`, `tc_decls_types`, `tc_decls`,
 -- `tc_foreign`, `tc_solve_givens`, `tc_solve_entail`, `tc_solve`, `tc_solve_check`, `tc_shadow`,
--- `tc_effects`, `tc_occurrence`, `tc_groups`, `tc_pat`, `tc_infer_records`, `tc_infer`, `tc_elab`,
--- `tc_global`, `tc_module`.
+-- `tc_grants`, `tc_effects`, `tc_occurrence`, `tc_mark`, `tc_groups`, `tc_pat`,
+-- `tc_infer_records`, `tc_infer`, `tc_elab`, `tc_global`, `tc_stamp`, `tc_module`.
 
 import types.tc_mono.{
   cohPpPair,
