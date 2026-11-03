@@ -433,17 +433,15 @@ import types.tc_global.{
   globalCoherenceConflict,
 }
 import types.tc_module.{
-  captureTypeErrors,
   checkBodyImpl,
   checkGraphFinish,
   checkModuleFull,
   checkModuleFullDiags,
-  drainStampQueue,
   elabModuleStamp,
   externSchemesGo,
   settleClosedBody,
-  verdictFinding,
 }
+import types.tc_stamp.{captureTypeErrors, drainStampQueue, verdictFinding}
 
 -- What `IO` joins in this drive: the selected profile's grants of the alias
 -- labels, each at the parameter granted, in `hostLabels` order.  With no

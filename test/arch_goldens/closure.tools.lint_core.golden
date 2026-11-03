@@ -109,6 +109,7 @@ types.tc_solve
 types.tc_solve_check
 types.tc_solve_entail
 types.tc_solve_givens
+types.tc_stamp
 types.tc_state
 types.tc_types
 types.tc_unify

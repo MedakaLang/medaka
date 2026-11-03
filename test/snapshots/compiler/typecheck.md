@@ -1,5 +1,5 @@
 # META
-source_lines=3672
+source_lines=3670
 stages=DESUGAR,MARK
 # SOURCE
 -- typecheck: the entry module: the graph drive (`driveGraphK`), the chain and core memos and
@@ -437,17 +437,15 @@ import types.tc_global.{
   globalCoherenceConflict,
 }
 import types.tc_module.{
-  captureTypeErrors,
   checkBodyImpl,
   checkGraphFinish,
   checkModuleFull,
   checkModuleFullDiags,
-  drainStampQueue,
   elabModuleStamp,
   externSchemesGo,
   settleClosedBody,
-  verdictFinding,
 }
+import types.tc_stamp.{captureTypeErrors, drainStampQueue, verdictFinding}
 
 -- What `IO` joins in this drive: the selected profile's grants of the alias
 -- labels, each at the parameter granted, in `hostLabels` order.  With no
@@ -3725,7 +3723,8 @@ schemeLines ((n, p) :: rest) = "\{n} : \{ppPubScheme p}" :: schemeLines rest
 (DUse false (UseGroup ("types" "tc_groups") ((mem "allEVars" false))))
 (DUse false (UseGroup ("types" "tc_elab") ((mem "dictPassModulesIfEnabled" false) (mem "drivenEvidence" false))))
 (DUse false (UseGroup ("types" "tc_global") ((mem "globalCoherenceConflict" false))))
-(DUse false (UseGroup ("types" "tc_module") ((mem "captureTypeErrors" false) (mem "checkBodyImpl" false) (mem "checkGraphFinish" false) (mem "checkModuleFull" false) (mem "checkModuleFullDiags" false) (mem "drainStampQueue" false) (mem "elabModuleStamp" false) (mem "externSchemesGo" false) (mem "settleClosedBody" false) (mem "verdictFinding" false))))
+(DUse false (UseGroup ("types" "tc_module") ((mem "checkBodyImpl" false) (mem "checkGraphFinish" false) (mem "checkModuleFull" false) (mem "checkModuleFullDiags" false) (mem "elabModuleStamp" false) (mem "externSchemesGo" false) (mem "settleClosedBody" false))))
+(DUse false (UseGroup ("types" "tc_stamp") ((mem "captureTypeErrors" false) (mem "drainStampQueue" false) (mem "verdictFinding" false))))
 (DTypeSig true "ioJoinAtoms" (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "Param"))) (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "EffParamTy"))) (TyApp (TyCon "List") (TyCon "Atom")))))
 (DFunDef false "ioJoinAtoms" ((PVar "domains") (PVar "grants")) (EApp (EApp (EVar "filterMap") (ELam ((PVar "l")) (EApp (EApp (EVar "map") (ELam ((PVar "granted")) (EApp (EApp (EVar "atomWith") (EApp (EVar "builtinLabel") (EVar "l"))) (EApp (EApp (EVar "writtenParam") (EApp (EApp (EVar "dtopIn") (EVar "domains")) (EApp (EVar "builtinLabel") (EVar "l")))) (EVar "granted"))))) (EApp (EApp (EVar "lookupAssoc") (EVar "l")) (EVar "grants"))))) (EVar "hostLabels")))
 (DTypeSig false "seedAbstractRecordTypes" (TyFun (TyCon "GraphCtx") (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "Decl")))) (TyCon "Unit")))))
@@ -4135,7 +4134,8 @@ schemeLines ((n, p) :: rest) = "\{n} : \{ppPubScheme p}" :: schemeLines rest
 (DUse false (UseGroup ("types" "tc_groups") ((mem "allEVars" false))))
 (DUse false (UseGroup ("types" "tc_elab") ((mem "dictPassModulesIfEnabled" false) (mem "drivenEvidence" false))))
 (DUse false (UseGroup ("types" "tc_global") ((mem "globalCoherenceConflict" false))))
-(DUse false (UseGroup ("types" "tc_module") ((mem "captureTypeErrors" false) (mem "checkBodyImpl" false) (mem "checkGraphFinish" false) (mem "checkModuleFull" false) (mem "checkModuleFullDiags" false) (mem "drainStampQueue" false) (mem "elabModuleStamp" false) (mem "externSchemesGo" false) (mem "settleClosedBody" false) (mem "verdictFinding" false))))
+(DUse false (UseGroup ("types" "tc_module") ((mem "checkBodyImpl" false) (mem "checkGraphFinish" false) (mem "checkModuleFull" false) (mem "checkModuleFullDiags" false) (mem "elabModuleStamp" false) (mem "externSchemesGo" false) (mem "settleClosedBody" false))))
+(DUse false (UseGroup ("types" "tc_stamp") ((mem "captureTypeErrors" false) (mem "drainStampQueue" false) (mem "verdictFinding" false))))
 (DTypeSig true "ioJoinAtoms" (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "Param"))) (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "EffParamTy"))) (TyApp (TyCon "List") (TyCon "Atom")))))
 (DFunDef false "ioJoinAtoms" ((PVar "domains") (PVar "grants")) (EApp (EApp (EMethodRef "filterMap") (ELam ((PVar "l")) (EApp (EApp (EMethodRef "map") (ELam ((PVar "granted")) (EApp (EApp (EVar "atomWith") (EApp (EVar "builtinLabel") (EVar "l"))) (EApp (EApp (EVar "writtenParam") (EApp (EApp (EVar "dtopIn") (EVar "domains")) (EApp (EVar "builtinLabel") (EVar "l")))) (EVar "granted"))))) (EApp (EApp (EVar "lookupAssoc") (EVar "l")) (EVar "grants"))))) (EVar "hostLabels")))
 (DTypeSig false "seedAbstractRecordTypes" (TyFun (TyCon "GraphCtx") (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "Decl")))) (TyCon "Unit")))))

@@ -40,6 +40,7 @@ types.tc_infer_records
 types.tc_infer
 types.tc_elab
 types.tc_global
+types.tc_stamp
 types.tc_module
 types.program_facts
 eval.eval
