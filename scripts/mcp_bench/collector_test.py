@@ -9,6 +9,7 @@ import unittest
 from unittest.mock import patch
 
 from collect import reconcile, run_process
+from supervisor import Boundary, Unavailable
 from report import summarize
 
 REQUEST = b'{"jsonrpc":"2.0","id":1,"method":"ping","secret":"private-source"}\n'
@@ -22,6 +23,48 @@ def event(kind, outcome=None):
 
 
 class CollectorTest(unittest.TestCase):
+    @classmethod
+    def setUpClass(cls):
+        try:
+            boundary = Boundary()
+        except Unavailable:
+            cls.authority = False
+        else:
+            boundary.close()
+            cls.authority = True
+
+    def setUp(self):
+        if not self.authority and self._testMethodName not in (
+                'test_reconcile', 'test_unsupported_platform_never_launches_worker',
+                'test_no_authority_never_launches_worker', 'test_namespace_failure_never_executes_worker'):
+            self.skipTest('host cgroup/namespace authority unavailable; no worker launched')
+
+    def test_no_authority_never_launches_worker(self):
+        with patch('collect.Boundary', side_effect=Unavailable('no authority')), patch('collect.subprocess.Popen') as launch:
+            self.assertEqual('unsupported', self.worker('pass')['outcome'])
+            launch.assert_not_called()
+        with patch('supervisor.os.geteuid', return_value=1000), patch('collect.subprocess.Popen') as launch:
+            self.assertEqual('unsupported', self.worker('pass')['outcome'])
+            launch.assert_not_called()
+
+    def test_namespace_failure_never_executes_worker(self):
+        from supervisor import namespace_init
+        read_fd, write_fd = os.pipe()
+        try:
+            with patch('supervisor.syscall', side_effect=PermissionError('namespace denied')), \
+                    patch('supervisor.subprocess.Popen') as launch, \
+                    patch('supervisor.os._exit', side_effect=RuntimeError('exit intercepted')):
+                with self.assertRaisesRegex(RuntimeError, 'exit intercepted'):
+                    namespace_init(['worker-must-not-execute'], {}, 12345, b'', write_fd)
+                launch.assert_not_called()
+            os.close(write_fd)
+            write_fd = None
+            self.assertEqual(b'"unsupported"', os.read(read_fd, 100))
+        finally:
+            os.close(read_fd)
+            if write_fd is not None:
+                os.close(write_fd)
+
     def worker(self, code, **limits):
         return run_process([sys.executable, '-c', code], {}, REQUEST, limits)
 
@@ -69,40 +112,50 @@ class CollectorTest(unittest.TestCase):
         unrelated = subprocess.Popen([sys.executable, '-c', 'import time; time.sleep(5)'])
         with tempfile.TemporaryDirectory() as directory:
             marker = str(Path(directory) / 'survived')
-            child = 'import pathlib,time; time.sleep(.6); pathlib.Path(' + repr(marker) + ').touch()'
+            Path(marker).touch(mode=0o666)
+            os.chmod(marker, 0o666)
+            os.chmod(directory, 0o755)
+            child = 'import pathlib,time; time.sleep(.6); pathlib.Path(' + repr(marker) + ').write_text("escaped")'
             code = 'import subprocess,sys,time; subprocess.Popen([sys.executable,"-c",' + repr(child) + ']); time.sleep(5)'
             try:
                 self.assertEqual('timeout', self.worker(code, timeout=.2)['outcome'])
                 self.assertIsNone(unrelated.poll())
                 time.sleep(.8)
-                self.assertFalse(Path(marker).exists())
+                self.assertEqual('', Path(marker).read_text())
             finally:
                 unrelated.kill()
                 unrelated.wait()
 
     @unittest.skipUnless(sys.platform == 'linux', 'Linux subreaper regression')
     def test_detached_double_fork_cleanup_and_unrelated_reaping(self):
-        unrelated = subprocess.Popen([sys.executable, '-c', 'import time; time.sleep(7); raise SystemExit(37)'])
+        unrelated = subprocess.Popen([sys.executable, '-c', 'import sys; sys.stdin.read(); raise SystemExit(37)'], stdin=subprocess.PIPE)
         try:
             for ending, limits, expected in (
                 ('time.sleep(5)', {'timeout': .4}, 'timeout'),
                 ('time.sleep(5)', {'cancel_after': .4}, 'cancelled'),
                 ('print(' + repr(RESPONSE) + ')', {}, 'success'),
+                ('raise SystemExit(4)', {}, 'crash'),
+                ('print("invalid")', {}, 'protocol_error'),
+                ('exec(' + repr('import os,signal\nfor sig in (signal.SIGKILL,signal.SIGSTOP):\n try: os.kill(os.getppid(),sig)\n except PermissionError: pass\nprint(' + repr(RESPONSE) + ')') + ')', {}, 'success'),
             ):
                 with self.subTest(outcome=expected), tempfile.TemporaryDirectory() as directory:
                     marker = str(Path(directory) / 'escaped')
+                    Path(marker).touch(mode=0o666)
+                    os.chmod(marker, 0o666)
+                    os.chmod(directory, 0o755)
                     child = ('import os,pathlib,time; os.setsid(); '
                              'pid=os.fork(); '
                              'os._exit(0) if pid else None; '
-                             'time.sleep(1); pathlib.Path(' + repr(marker) + ').touch()')
+                             'time.sleep(1); pathlib.Path(' + repr(marker) + ').write_text("escaped")')
                     code = ('import subprocess,sys,time; '
                             'p=subprocess.Popen([sys.executable,"-c",' + repr(child) + ']); '
                             'p.wait(); ' + ending)
                     self.assertEqual(expected, self.worker(code, **limits)['outcome'])
                     self.assertIsNone(unrelated.poll())
                     time.sleep(1.2)
-                    self.assertFalse(Path(marker).exists())
-            self.assertEqual(37, unrelated.wait(timeout=7))
+                    self.assertEqual('', Path(marker).read_text())
+            unrelated.communicate(b'done', timeout=7)
+            self.assertEqual(37, unrelated.returncode)
         finally:
             if unrelated.poll() is None:
                 unrelated.kill()
@@ -131,8 +184,96 @@ print(json.dumps({'jsonrpc':'2.0','id':1,'result':{'cwd':os.getcwd(), 'secret':o
         self.assertNotIn(task['rubric'][0]['answer'], result['prompt'])
 
     def test_supervisor_death_with_missing_response_is_observer_failure(self):
-        code = 'import os,signal; os.kill(os.getppid(), signal.SIGKILL)'
-        self.assertEqual('observer_failure', self.worker(code)['outcome'])
+        popen = subprocess.Popen
+        def killed(*args, **kwargs):
+            supervisor = popen(*args, **kwargs)
+            supervisor.kill()
+            return supervisor
+        with patch('collect.subprocess.Popen', side_effect=killed):
+            self.assertEqual('observer_failure', self.worker('pass')['outcome'])
+
+    def test_signal_and_escape_attempts_have_no_authority(self):
+        code = """import os,pathlib,signal,json
+blocked=[]
+for sig in (signal.SIGKILL, signal.SIGSTOP, signal.SIGTERM):
+    try:
+        os.kill(os.getppid(), sig)
+    except PermissionError:
+        blocked.append(int(sig))
+try:
+    pathlib.Path('/sys/fs/cgroup/cgroup.procs').write_text(str(os.getpid()))
+except OSError:
+    blocked.append('escape')
+try:
+    os.setuid(0)
+except PermissionError:
+    blocked.append('root')
+caps=[line for line in pathlib.Path('/proc/self/status').read_text().splitlines() if line.startswith(('CapEff:', 'CapPrm:', 'CapAmb:'))]
+print(json.dumps({'jsonrpc':'2.0','id':1,'result':{'blocked':blocked,'pid':os.getpid(),'parent':os.getppid(),'uid':os.getuid(),'caps':caps}}))
+"""
+        responses = []
+        self.assertEqual('success', self.worker(code, response_callback=responses.extend)['outcome'])
+        result = responses[0]['result']
+        self.assertEqual([9, 19, 15, 'escape', 'root'], result['blocked'])
+        self.assertEqual(1, result['parent'])
+        self.assertNotEqual(0, result['uid'])
+        self.assertTrue(all(int(line.split()[1], 16) == 0 for line in result['caps']))
+
+    def test_stopped_and_killed_authority_deadline_cleanup(self):
+        popen = subprocess.Popen
+        for sig, expected in ((19, 'timeout'), (9, 'observer_failure')):
+            with self.subTest(signal=sig), tempfile.TemporaryDirectory() as directory:
+                marker = Path(directory) / 'survived'
+                marker.touch(mode=0o666)
+                os.chmod(directory, 0o755)
+                os.chmod(marker, 0o666)
+                child = 'import pathlib,time; time.sleep(.8); pathlib.Path(' + repr(str(marker)) + ').write_text("escaped")'
+                worker = 'import subprocess,sys,time; subprocess.Popen([sys.executable,"-c",' + repr(child) + '],start_new_session=True); time.sleep(5)'
+                launched, boundaries, members = [], [], []
+                def track_boundary():
+                    boundary = Boundary()
+                    boundaries.append((boundary, boundary.path))
+                    return boundary
+                def sabotage(*args, **kwargs):
+                    supervisor = popen(*args, **kwargs)
+                    launched.append(supervisor)
+                    return supervisor
+                # Sabotage from the trusted observer after the worker has entered its namespace.
+                import threading
+                def stop():
+                    while not launched:
+                        time.sleep(.005)
+                    time.sleep(.2)
+                    members.extend(map(int, (boundaries[0][1] / 'cgroup.procs').read_text().split()))
+                    os.kill(launched[0].pid, sig)
+                thread = threading.Thread(target=stop)
+                thread.start()
+                with patch('collect.Boundary', side_effect=track_boundary), patch('collect.subprocess.Popen', side_effect=sabotage):
+                    self.assertEqual(expected, self.worker(worker, timeout=.4)['outcome'])
+                thread.join()
+                self.assertIsNotNone(launched[0].poll())
+                self.assertGreaterEqual(len(members), 4)
+                self.assertFalse(boundaries[0][1].exists())
+                self.assertEqual([], [pid for pid in members if Path(f'/proc/{pid}').exists()])
+                time.sleep(1)
+                self.assertEqual('', marker.read_text())
+
+    def test_concurrent_runs_keep_separate_boundaries(self):
+        from concurrent.futures import ThreadPoolExecutor
+        with tempfile.TemporaryDirectory() as directory:
+            os.chmod(directory, 0o755)
+            markers = [Path(directory) / str(i) for i in range(6)]
+            codes = []
+            for marker in markers:
+                marker.touch()
+                os.chmod(marker, 0o666)
+                child = 'import os,pathlib,time; os.setsid(); os.fork(); time.sleep(.6); pathlib.Path(' + repr(str(marker)) + ').write_text("escaped")'
+                codes.append('import subprocess,sys,time; subprocess.Popen([sys.executable,"-c",' + repr(child) + ']); time.sleep(.1); print(' + repr(RESPONSE) + ')')
+            with ThreadPoolExecutor(max_workers=3) as executor:
+                runs = list(executor.map(self.worker, codes))
+            self.assertEqual(['success'] * 6, [r['outcome'] for r in runs])
+            time.sleep(.8)
+            self.assertEqual([''] * 6, [p.read_text() for p in markers])
 
     def test_callback_failure_is_observer_failure(self):
         def fail(_):
@@ -202,7 +343,12 @@ print(json.dumps({'jsonrpc':'2.0','id':1,'result':{'cwd':os.getcwd(), 'secret':o
         task['files'] = {'PROMPT.txt/child': 'x'}
         self.assertEqual('observer_failure', self.worker('pass', task=task)['outcome'])
         task['files'] = {'valid/file.mdk': 'x'}
-        with patch.object(Path, 'write_text', side_effect=OSError('write failed')):
+        write = Path.write_text
+        def failed_materialization(path, *args, **kwargs):
+            if path.name == 'file.mdk':
+                raise OSError('write failed')
+            return write(path, *args, **kwargs)
+        with patch.object(Path, 'write_text', new=failed_materialization):
             self.assertEqual('observer_failure', self.worker('pass', task=task)['outcome'])
 
     def test_resource_report_values_and_unavailability(self):
