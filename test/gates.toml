@@ -4091,3 +4091,19 @@ sources = ["compiler/types/prelude_interface.mdk", "compiler/types/interface_sex
 corpus = []
 toolchain = []
 link = "production"
+
+[[gate]]
+name = "diff_compiler_mcp_collector"
+area = "infra"
+shard = "gates_1"
+project = "compiler"
+tiers = ["merge"]
+cost = "cheap"
+kind = "exec"
+migration = "shell:external-harness"
+run = "test/diff_compiler_mcp_collector.sh"
+oracles = []
+sources = ["scripts/mcp_bench/*"]
+corpus = []
+toolchain = []
+link = "production"
