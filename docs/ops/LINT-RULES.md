@@ -46,6 +46,8 @@ Every rule `medaka lint` knows. `universal` rules are meaningful in any Medaka p
 | [`rule-test-bool-helper`](#rule-test-bool-helper) | internal | style | gated | not-fixable | file |
 | [`rule-test-equal-in-true`](#rule-test-equal-in-true) | internal | style | gated | fixable | file |
 | [`rule-prelude-shadow`](#rule-prelude-shadow) | universal | suspicious | gated | not-fixable | file |
+| [`rule-accumulator-append`](#rule-accumulator-append) | universal | perf | gated | not-fixable | file |
+| [`rule-reslice-in-loop`](#rule-reslice-in-loop) | universal | perf | gated | not-fixable | file |
 
 ## rule-match-on-param
 
@@ -616,4 +618,34 @@ Before:
   isSome o = o == 1
 After:
   isOne o = o == 1
+```
+
+## rule-accumulator-append
+
+`acc ++ e` grown across a loop: each step copies the whole accumulator. Cons then `reverse`, collect then join once, or use a builder
+
+Appending to the end of an accumulator copies the accumulator, so a loop that does it once per step does work quadratic in the length of the result. The rule reports three shapes: a self-call that passes `acc ++ e` for one of its own parameters, `r := !r ++ e` on a `Ref` inside a self-recursive function, and a fold lambda `acc x => acc ++ ...`. The same holds for a `List`, a `String` and a `Bytes`. `e ++ acc` is not reported: for a `List` it costs only the length of `e`, while a `String`, `Bytes` or `Array` copies both operands. A partial application and a call to a different function (mutual recursion) are not self-calls.
+
+Cons the new element and `reverse` once at the end, collect the pieces and join them once (`concat`, `joinWith`), or use a builder. A loop whose bound is small and fixed can carry a `-- lint-disable-next-line rule-accumulator-append` with the bound as its reason.
+
+```
+Before:
+  go acc (x :: xs) = go (acc ++ [f x]) xs
+After:
+  go acc (x :: xs) = go (f x :: acc) xs  -- and `reverse acc` at the end
+```
+
+## rule-reslice-in-loop
+
+a loop parameter re-sliced from its start on every step: quadratic on some engines and access patterns. Walk a `StrCursor`, or convert with `toChars` once
+
+A self-recursive loop that passes a `String`, `Array` or `Bytes` parameter on unchanged while another argument advances, and slices that parameter by the advancing index, starts from the front of the parameter on every step. The rule reports the String externs `stringSlice` and `charAtStr` on such a parameter, and `slice`, `sliceClamped`, `drop` and `a.[lo..hi]` on a parameter whose declared type, in the enclosing top-level signature, is `String`, `Array` or `Bytes`. A `List` parameter is skipped (`drop` on a list is the loop itself), and so is a slice whose bounds mention no advancing name. A partial application and a call to a different function (mutual recursion) are not self-calls. `stringSliceBytes` is not reported: it copies only the piece and does not walk the string.
+
+For a `String`, `stringSlice` and `charAtStr` locate their offset from the front of the string. On the native runtime a forward scan of one string is linear, because the runtime keeps a cursor cache for one string; the loop is quadratic when it alternates between two strings, goes backward or slices the tail, and on the WasmGC engine, which has no cache, even a forward scan is quadratic. Walk a `StrCursor` (`startCursor`, `nextChar`, `sliceBetween`), or convert once with `toChars` and index the `Array`. A loop whose bound is small and fixed can carry a `-- lint-disable-next-line rule-reslice-in-loop` with the bound as its reason.
+
+```
+Before:
+  go s i = if i < stringLength s then stringSlice i (i + 1) s :: go s (i + 1) else []
+After:
+  go cs i = if i < length cs then cs.[i] :: go cs (i + 1) else []  -- with `cs = toChars s`
 ```

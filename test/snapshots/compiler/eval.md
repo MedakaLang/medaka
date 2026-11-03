@@ -1,5 +1,5 @@
 # META
-source_lines=5537
+source_lines=5530
 stages=DESUGAR,MARK
 # SOURCE
 -- Self-hosted eval stage — Stage-1 capstone, the tree-walking
@@ -313,17 +313,16 @@ export
 displayCtorName : String -> String
 displayCtorName n
   | upperInitialName n = n
-  | otherwise = stripModPrefix n 0 (stringLength n)
+  | otherwise = stripModPrefix n
 
 upperInitialName : String -> Bool
 upperInitialName n = stringSlice 0 1 n >= "A" && stringSlice 0 1 n <= "Z"
 
 -- drop through the FIRST `__`; unchanged when the name has none.
-stripModPrefix : String -> Int -> Int -> String
-stripModPrefix n i len
-  | i + 2 > len = n
-  | stringSlice i (i + 2) n == "__" = stringSlice (i + 2) len n
-  | otherwise = stripModPrefix n (i + 1) len
+stripModPrefix : String -> String
+stripModPrefix n = match stringIndexOf "__" n
+  Some i => stringSlice (i + 2) (stringLength n) n
+  None => n
 
 joinSp : List String -> String
 joinSp xs = joinWith " " xs
@@ -1411,8 +1410,7 @@ methodAtNarrow env method v (RKey key _ _) = (narrowMethod env method v key, [])
 -- ARGSTAMP-UNIFY Phase 2+3 / genuine #21: under eval dict-threading an arg-position
 -- RDict site's narrowed impl method ALSO carries leading element-dict params
 -- (resolveArgStamps ran on eval too), so forward the dict's nested `reqs` exactly as
--- RDictFwd does — this is what emit's emitDispatchChain does (load fields 1..n, prepend
--- to argOps).  2-level nesting (`debug (List (List a))`) composes through this: the
+-- RDictFwd does, as the emitters do from a dictionary's `requires` fields.  2-level nesting (`debug (List (List a))`) composes through this: the
 -- forwarded inner dict (`Debug (List Int)` = VDict "List" [VDict "Int"]) supplies the
 -- List impl method's leading `Debug Int` param.  Pre-unify RDict impl methods had NO
 -- dict slot (arg-tag), so reqs were discarded; now they need them.
@@ -4022,16 +4020,11 @@ pStringJoin (VString sep) (VList vs) =
 pStringJoin _ _ = panic "stringJoin: bad operands"
 
 evalLastIndexOf : String -> String -> Option Int
--- Host-level lastIndexOf: the last hit, which no stdlib function returns.
+-- The evaluator's `stringLastIndexOf` primitive: the LAST hit (not indexOf's first), and the
+-- empty needle matches at the end of the haystack.
 -- lint-disable-next-line rule-stdlib-reimpl
 evalLastIndexOf n h =
-  if n == "" then Some (stringLength h) else evalLastIndexOfGo n h 0 None
-
-evalLastIndexOfGo : String -> String -> Int -> Option Int -> Option Int
-evalLastIndexOfGo n h from acc =
-  match stringIndexOf n (stringSlice from (stringLength h) h)
-    None => acc
-    Some i => evalLastIndexOfGo n h (from + i + 1) (Some (from + i))
+  if n == "" then Some (stringLength h) else stringLastIndexOf n h
 
 pStringSlice : Value e -> Value e -> Value e -> <e> Value e
 pStringSlice (VInt lo) (VInt hi) (VString s) = VString (stringSlice lo hi s)
@@ -5601,11 +5594,11 @@ evalOneRootEnvFacts facts extraExterns preludeDecls (rootId, prog) =
 (DFunDef false "ppValueAtom" ((PCon "VRecord" (PVar "name") (PVar "fields"))) (EBinOp "++" (EBinOp "++" (ELit (LString "(")) (EApp (EVar "ppValue") (EApp (EApp (EVar "VRecord") (EVar "name")) (EVar "fields")))) (ELit (LString ")"))))
 (DFunDef false "ppValueAtom" ((PVar "v")) (EBlock (DoLet false false (PVar "s") (EApp (EVar "ppValue") (EVar "v"))) (DoExpr (EMatch (EVar "v") (arm (PCon "VInt" PWild) ((GBool (EApp (EApp (EVar "startsWith") (ELit (LString "-"))) (EVar "s")))) (EBinOp "++" (EBinOp "++" (ELit (LString "(")) (EVar "s")) (ELit (LString ")")))) (arm (PCon "VFloat" PWild) ((GBool (EApp (EApp (EVar "startsWith") (ELit (LString "-"))) (EVar "s")))) (EBinOp "++" (EBinOp "++" (ELit (LString "(")) (EVar "s")) (ELit (LString ")")))) (arm (PCon "VI64" PWild PWild) ((GBool (EApp (EApp (EVar "startsWith") (ELit (LString "-"))) (EVar "s")))) (EBinOp "++" (EBinOp "++" (ELit (LString "(")) (EVar "s")) (ELit (LString ")")))) (arm PWild () (EVar "s"))))))
 (DTypeSig true "displayCtorName" (TyFun (TyCon "String") (TyCon "String")))
-(DFunDef false "displayCtorName" ((PVar "n")) (EIf (EApp (EVar "upperInitialName") (EVar "n")) (EVar "n") (EIf (EVar "otherwise") (EApp (EApp (EApp (EVar "stripModPrefix") (EVar "n")) (ELit (LInt 0))) (EApp (EVar "stringLength") (EVar "n"))) (EApp (EVar "__fallthrough__") (ELit LUnit)))))
+(DFunDef false "displayCtorName" ((PVar "n")) (EIf (EApp (EVar "upperInitialName") (EVar "n")) (EVar "n") (EIf (EVar "otherwise") (EApp (EVar "stripModPrefix") (EVar "n")) (EApp (EVar "__fallthrough__") (ELit LUnit)))))
 (DTypeSig false "upperInitialName" (TyFun (TyCon "String") (TyCon "Bool")))
 (DFunDef false "upperInitialName" ((PVar "n")) (EBinOp "&&" (EBinOp ">=" (EApp (EApp (EApp (EVar "stringSlice") (ELit (LInt 0))) (ELit (LInt 1))) (EVar "n")) (ELit (LString "A"))) (EBinOp "<=" (EApp (EApp (EApp (EVar "stringSlice") (ELit (LInt 0))) (ELit (LInt 1))) (EVar "n")) (ELit (LString "Z")))))
-(DTypeSig false "stripModPrefix" (TyFun (TyCon "String") (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyCon "String")))))
-(DFunDef false "stripModPrefix" ((PVar "n") (PVar "i") (PVar "len")) (EIf (EBinOp ">" (EBinOp "+" (EVar "i") (ELit (LInt 2))) (EVar "len")) (EVar "n") (EIf (EBinOp "==" (EApp (EApp (EApp (EVar "stringSlice") (EVar "i")) (EBinOp "+" (EVar "i") (ELit (LInt 2)))) (EVar "n")) (ELit (LString "__"))) (EApp (EApp (EApp (EVar "stringSlice") (EBinOp "+" (EVar "i") (ELit (LInt 2)))) (EVar "len")) (EVar "n")) (EIf (EVar "otherwise") (EApp (EApp (EApp (EVar "stripModPrefix") (EVar "n")) (EBinOp "+" (EVar "i") (ELit (LInt 1)))) (EVar "len")) (EApp (EVar "__fallthrough__") (ELit LUnit))))))
+(DTypeSig false "stripModPrefix" (TyFun (TyCon "String") (TyCon "String")))
+(DFunDef false "stripModPrefix" ((PVar "n")) (EMatch (EApp (EApp (EVar "stringIndexOf") (ELit (LString "__"))) (EVar "n")) (arm (PCon "Some" (PVar "i")) () (EApp (EApp (EApp (EVar "stringSlice") (EBinOp "+" (EVar "i") (ELit (LInt 2)))) (EApp (EVar "stringLength") (EVar "n"))) (EVar "n"))) (arm (PCon "None") () (EVar "n"))))
 (DTypeSig false "joinSp" (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyCon "String")))
 (DFunDef false "joinSp" ((PVar "xs")) (EApp (EApp (EVar "joinWith") (ELit (LString " "))) (EVar "xs")))
 (DTypeSig false "arrayToListG" (TyFun (TyApp (TyCon "Array") (TyVar "a")) (TyApp (TyCon "List") (TyVar "a"))))
@@ -6955,9 +6948,7 @@ evalOneRootEnvFacts facts extraExterns preludeDecls (rootId, prog) =
 (DFunDef false "pStringJoin" ((PCon "VString" (PVar "sep")) (PCon "VList" (PVar "vs"))) (EApp (EVar "VString") (EApp (EApp (EVar "stringJoin") (EVar "sep")) (EApp (EApp (EVar "map") (EVar "unString")) (EVar "vs")))))
 (DFunDef false "pStringJoin" (PWild PWild) (EApp (EVar "panic") (ELit (LString "stringJoin: bad operands"))))
 (DTypeSig false "evalLastIndexOf" (TyFun (TyCon "String") (TyFun (TyCon "String") (TyApp (TyCon "Option") (TyCon "Int")))))
-(DFunDef false "evalLastIndexOf" ((PVar "n") (PVar "h")) (EIf (EBinOp "==" (EVar "n") (ELit (LString ""))) (EApp (EVar "Some") (EApp (EVar "stringLength") (EVar "h"))) (EApp (EApp (EApp (EApp (EVar "evalLastIndexOfGo") (EVar "n")) (EVar "h")) (ELit (LInt 0))) (EVar "None"))))
-(DTypeSig false "evalLastIndexOfGo" (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyCon "Int") (TyFun (TyApp (TyCon "Option") (TyCon "Int")) (TyApp (TyCon "Option") (TyCon "Int")))))))
-(DFunDef false "evalLastIndexOfGo" ((PVar "n") (PVar "h") (PVar "from") (PVar "acc")) (EMatch (EApp (EApp (EVar "stringIndexOf") (EVar "n")) (EApp (EApp (EApp (EVar "stringSlice") (EVar "from")) (EApp (EVar "stringLength") (EVar "h"))) (EVar "h"))) (arm (PCon "None") () (EVar "acc")) (arm (PCon "Some" (PVar "i")) () (EApp (EApp (EApp (EApp (EVar "evalLastIndexOfGo") (EVar "n")) (EVar "h")) (EBinOp "+" (EBinOp "+" (EVar "from") (EVar "i")) (ELit (LInt 1)))) (EApp (EVar "Some") (EBinOp "+" (EVar "from") (EVar "i")))))))
+(DFunDef false "evalLastIndexOf" ((PVar "n") (PVar "h")) (EIf (EBinOp "==" (EVar "n") (ELit (LString ""))) (EApp (EVar "Some") (EApp (EVar "stringLength") (EVar "h"))) (EApp (EApp (EVar "stringLastIndexOf") (EVar "n")) (EVar "h"))))
 (DTypeSig false "pStringSlice" (TyFun (TyApp (TyCon "Value") (TyVar "e")) (TyFun (TyApp (TyCon "Value") (TyVar "e")) (TyFun (TyApp (TyCon "Value") (TyVar "e")) (TyEffect () (Some "e") (TyApp (TyCon "Value") (TyVar "e")))))))
 (DFunDef false "pStringSlice" ((PCon "VInt" (PVar "lo")) (PCon "VInt" (PVar "hi")) (PCon "VString" (PVar "s"))) (EApp (EVar "VString") (EApp (EApp (EApp (EVar "stringSlice") (EVar "lo")) (EVar "hi")) (EVar "s"))))
 (DFunDef false "pStringSlice" (PWild PWild PWild) (EApp (EVar "panic") (ELit (LString "stringSlice: bad operands"))))
@@ -7419,11 +7410,11 @@ evalOneRootEnvFacts facts extraExterns preludeDecls (rootId, prog) =
 (DFunDef false "ppValueAtom" ((PCon "VRecord" (PVar "name") (PVar "fields"))) (EBinOp "++" (EBinOp "++" (ELit (LString "(")) (EApp (EVar "ppValue") (EApp (EApp (EVar "VRecord") (EVar "name")) (EVar "fields")))) (ELit (LString ")"))))
 (DFunDef false "ppValueAtom" ((PVar "v")) (EBlock (DoLet false false (PVar "s") (EApp (EVar "ppValue") (EVar "v"))) (DoExpr (EMatch (EVar "v") (arm (PCon "VInt" PWild) ((GBool (EApp (EApp (EVar "startsWith") (ELit (LString "-"))) (EVar "s")))) (EBinOp "++" (EBinOp "++" (ELit (LString "(")) (EVar "s")) (ELit (LString ")")))) (arm (PCon "VFloat" PWild) ((GBool (EApp (EApp (EVar "startsWith") (ELit (LString "-"))) (EVar "s")))) (EBinOp "++" (EBinOp "++" (ELit (LString "(")) (EVar "s")) (ELit (LString ")")))) (arm (PCon "VI64" PWild PWild) ((GBool (EApp (EApp (EVar "startsWith") (ELit (LString "-"))) (EVar "s")))) (EBinOp "++" (EBinOp "++" (ELit (LString "(")) (EVar "s")) (ELit (LString ")")))) (arm PWild () (EVar "s"))))))
 (DTypeSig true "displayCtorName" (TyFun (TyCon "String") (TyCon "String")))
-(DFunDef false "displayCtorName" ((PVar "n")) (EIf (EApp (EVar "upperInitialName") (EVar "n")) (EVar "n") (EIf (EVar "otherwise") (EApp (EApp (EApp (EVar "stripModPrefix") (EVar "n")) (ELit (LInt 0))) (EApp (EVar "stringLength") (EVar "n"))) (EApp (EVar "__fallthrough__") (ELit LUnit)))))
+(DFunDef false "displayCtorName" ((PVar "n")) (EIf (EApp (EVar "upperInitialName") (EVar "n")) (EVar "n") (EIf (EVar "otherwise") (EApp (EVar "stripModPrefix") (EVar "n")) (EApp (EVar "__fallthrough__") (ELit LUnit)))))
 (DTypeSig false "upperInitialName" (TyFun (TyCon "String") (TyCon "Bool")))
 (DFunDef false "upperInitialName" ((PVar "n")) (EBinOp "&&" (EBinOp ">=" (EApp (EApp (EApp (EVar "stringSlice") (ELit (LInt 0))) (ELit (LInt 1))) (EVar "n")) (ELit (LString "A"))) (EBinOp "<=" (EApp (EApp (EApp (EVar "stringSlice") (ELit (LInt 0))) (ELit (LInt 1))) (EVar "n")) (ELit (LString "Z")))))
-(DTypeSig false "stripModPrefix" (TyFun (TyCon "String") (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyCon "String")))))
-(DFunDef false "stripModPrefix" ((PVar "n") (PVar "i") (PVar "len")) (EIf (EBinOp ">" (EBinOp "+" (EVar "i") (ELit (LInt 2))) (EVar "len")) (EVar "n") (EIf (EBinOp "==" (EApp (EApp (EApp (EVar "stringSlice") (EVar "i")) (EBinOp "+" (EVar "i") (ELit (LInt 2)))) (EVar "n")) (ELit (LString "__"))) (EApp (EApp (EApp (EVar "stringSlice") (EBinOp "+" (EVar "i") (ELit (LInt 2)))) (EVar "len")) (EVar "n")) (EIf (EVar "otherwise") (EApp (EApp (EApp (EVar "stripModPrefix") (EVar "n")) (EBinOp "+" (EVar "i") (ELit (LInt 1)))) (EVar "len")) (EApp (EVar "__fallthrough__") (ELit LUnit))))))
+(DTypeSig false "stripModPrefix" (TyFun (TyCon "String") (TyCon "String")))
+(DFunDef false "stripModPrefix" ((PVar "n")) (EMatch (EApp (EApp (EVar "stringIndexOf") (ELit (LString "__"))) (EVar "n")) (arm (PCon "Some" (PVar "i")) () (EApp (EApp (EApp (EVar "stringSlice") (EBinOp "+" (EVar "i") (ELit (LInt 2)))) (EApp (EVar "stringLength") (EVar "n"))) (EVar "n"))) (arm (PCon "None") () (EVar "n"))))
 (DTypeSig false "joinSp" (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyCon "String")))
 (DFunDef false "joinSp" ((PVar "xs")) (EApp (EApp (EVar "joinWith") (ELit (LString " "))) (EVar "xs")))
 (DTypeSig false "arrayToListG" (TyFun (TyApp (TyCon "Array") (TyVar "a")) (TyApp (TyCon "List") (TyVar "a"))))
@@ -8773,9 +8764,7 @@ evalOneRootEnvFacts facts extraExterns preludeDecls (rootId, prog) =
 (DFunDef false "pStringJoin" ((PCon "VString" (PVar "sep")) (PCon "VList" (PVar "vs"))) (EApp (EVar "VString") (EApp (EApp (EVar "stringJoin") (EVar "sep")) (EApp (EApp (EMethodRef "map") (EVar "unString")) (EVar "vs")))))
 (DFunDef false "pStringJoin" (PWild PWild) (EApp (EVar "panic") (ELit (LString "stringJoin: bad operands"))))
 (DTypeSig false "evalLastIndexOf" (TyFun (TyCon "String") (TyFun (TyCon "String") (TyApp (TyCon "Option") (TyCon "Int")))))
-(DFunDef false "evalLastIndexOf" ((PVar "n") (PVar "h")) (EIf (EBinOp "==" (EVar "n") (ELit (LString ""))) (EApp (EVar "Some") (EApp (EVar "stringLength") (EVar "h"))) (EApp (EApp (EApp (EApp (EVar "evalLastIndexOfGo") (EVar "n")) (EVar "h")) (ELit (LInt 0))) (EVar "None"))))
-(DTypeSig false "evalLastIndexOfGo" (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyCon "Int") (TyFun (TyApp (TyCon "Option") (TyCon "Int")) (TyApp (TyCon "Option") (TyCon "Int")))))))
-(DFunDef false "evalLastIndexOfGo" ((PVar "n") (PVar "h") (PVar "from") (PVar "acc")) (EMatch (EApp (EApp (EVar "stringIndexOf") (EVar "n")) (EApp (EApp (EApp (EVar "stringSlice") (EVar "from")) (EApp (EVar "stringLength") (EVar "h"))) (EVar "h"))) (arm (PCon "None") () (EVar "acc")) (arm (PCon "Some" (PVar "i")) () (EApp (EApp (EApp (EApp (EVar "evalLastIndexOfGo") (EVar "n")) (EVar "h")) (EBinOp "+" (EBinOp "+" (EVar "from") (EVar "i")) (ELit (LInt 1)))) (EApp (EVar "Some") (EBinOp "+" (EVar "from") (EVar "i")))))))
+(DFunDef false "evalLastIndexOf" ((PVar "n") (PVar "h")) (EIf (EBinOp "==" (EVar "n") (ELit (LString ""))) (EApp (EVar "Some") (EApp (EVar "stringLength") (EVar "h"))) (EApp (EApp (EVar "stringLastIndexOf") (EVar "n")) (EVar "h"))))
 (DTypeSig false "pStringSlice" (TyFun (TyApp (TyCon "Value") (TyVar "e")) (TyFun (TyApp (TyCon "Value") (TyVar "e")) (TyFun (TyApp (TyCon "Value") (TyVar "e")) (TyEffect () (Some "e") (TyApp (TyCon "Value") (TyVar "e")))))))
 (DFunDef false "pStringSlice" ((PCon "VInt" (PVar "lo")) (PCon "VInt" (PVar "hi")) (PCon "VString" (PVar "s"))) (EApp (EVar "VString") (EApp (EApp (EApp (EVar "stringSlice") (EVar "lo")) (EVar "hi")) (EVar "s"))))
 (DFunDef false "pStringSlice" (PWild PWild PWild) (EApp (EVar "panic") (ELit (LString "stringSlice: bad operands"))))

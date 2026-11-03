@@ -805,6 +805,7 @@ patBoundNames (PList ps) = flatMap patBoundNames ps
 patBoundNames (PAs x _ _ p) = x :: patBoundNames p
 patBoundNames (POr (p :: _)) = patBoundNames p
 patBoundNames (PRec _ fields _) = flatMap recPatFieldNames fields
+patBoundNames (PAnn p _) = patBoundNames p
 patBoundNames _ = []
 
 recPatFieldNames : RecPatField -> List String
@@ -826,6 +827,7 @@ patBindings (POr []) = []
 patBindings (POr (p :: _)) = patBindings p
 patBindings (PRng _ _ _) = []
 patBindings (PRec _ fields _) = flatMap recFieldBindings fields
+patBindings (PAnn p _) = patBindings p
 
 -- Whether [p] contains an or-pattern anywhere.
 export
@@ -837,7 +839,42 @@ patHasOr (PTuple ps) = any patHasOr ps
 patHasOr (PList ps) = any patHasOr ps
 patHasOr (PAs _ _ _ p) = patHasOr p
 patHasOr (PRec _ fields _) = any recFieldHasOr fields
+patHasOr (PAnn p _) = patHasOr p
 patHasOr _ = False
+
+-- Whether [p] holds a written type annotation (`PAnn`) anywhere.
+export
+patHasAnnot : Pat -> Bool
+patHasAnnot (PAnn _ _) = True
+patHasAnnot (PCon _ ps) = any patHasAnnot ps
+patHasAnnot (PCons a b) = patHasAnnot a || patHasAnnot b
+patHasAnnot (PTuple ps) = any patHasAnnot ps
+patHasAnnot (PList ps) = any patHasAnnot ps
+patHasAnnot (PAs _ _ _ p) = patHasAnnot p
+patHasAnnot (POr ps) = any patHasAnnot ps
+patHasAnnot (PRec _ fields _) = any recFieldHasAnnot fields
+patHasAnnot _ = False
+
+recFieldHasAnnot : RecPatField -> Bool
+recFieldHasAnnot (RecPatField _ _ _ (Some p)) = patHasAnnot p
+recFieldHasAnnot _ = False
+
+-- The types [p]'s annotations write, outermost first.
+export
+patAnnotTys : Pat -> List Ty
+patAnnotTys (PAnn p t) = t :: patAnnotTys p
+patAnnotTys (PCon _ ps) = flatMap patAnnotTys ps
+patAnnotTys (PCons a b) = patAnnotTys a ++ patAnnotTys b
+patAnnotTys (PTuple ps) = flatMap patAnnotTys ps
+patAnnotTys (PList ps) = flatMap patAnnotTys ps
+patAnnotTys (PAs _ _ _ p) = patAnnotTys p
+patAnnotTys (POr ps) = flatMap patAnnotTys ps
+patAnnotTys (PRec _ fields _) = flatMap recFieldAnnotTys fields
+patAnnotTys _ = []
+
+recFieldAnnotTys : RecPatField -> List Ty
+recFieldAnnotTys (RecPatField _ _ _ (Some p)) = patAnnotTys p
+recFieldAnnotTys _ = []
 
 recFieldHasOr : RecPatField -> Bool
 recFieldHasOr (RecPatField _ _ _ (Some p)) = patHasOr p
@@ -862,6 +899,7 @@ orCount (PTuple ps) = orCountProduct ps
 orCount (PList ps) = orCountProduct ps
 orCount (PAs _ _ _ p) = orCount p
 orCount (PRec _ fields _) = fold (n f => satMul n (recFieldCount f)) 1 fields
+orCount (PAnn p _) = orCount p
 orCount _ = 1
 
 -- The candidate count of a parameter list, as `paramCandidates` would build it.
@@ -893,6 +931,7 @@ orExpand (PList ps) = map PList (orProduct ps)
 orExpand (PAs x l bid p) = map (PAs x l bid) (orExpand p)
 orExpand (PRec c fields open) =
   map (fs => PRec c fs open) (recFieldProduct fields)
+orExpand (PAnn p t) = map (q => PAnn q t) (orExpand p)
 orExpand p = [p]
 
 orProduct : List Pat -> List (List Pat)
@@ -970,6 +1009,15 @@ variantName (Variant n _) = n
 export
 fieldName : Field -> String
 fieldName (Field n _) = n
+
+-- The field types of a constructor, in order, positional or named.
+export
+variantFieldTys : Variant -> List Ty
+variantFieldTys (Variant _ (ConPos tys)) = tys
+variantFieldTys (Variant _ (ConNamed fs _)) = map fieldTyOf fs
+
+fieldTyOf : Field -> Ty
+fieldTyOf (Field _ t) = t
 
 export
 implMethodName : ImplMethod -> String
@@ -1610,6 +1658,12 @@ public export data Pat =
   | POr (List Pat)
   | PRng Lit Lit Bool
   | PRec String (List RecPatField) Bool
+  -- `(p : T)` in a binding LHS (a lambda parameter, a do-bind or guard-bind
+  -- pattern): matches what [p] matches, and the value has the written type.
+  -- The parser builds it (`exprToPat`) so the printer and the tools keep the
+  -- written type; desugar (`eraseAnnotPats`) turns it into an expression
+  -- annotation on the bound value, so no pass from resolve on sees one.
+  | PAnn Pat Ty
 
 -- one field of a record pattern: `field` (pun, None) or `field = pat`
 -- The Loc is the field-name token (#913 Inc 2b: a punned field `{x}` binds
@@ -2690,8 +2744,9 @@ mapTyInExpr f (EApp a b) =
   let (b2, cb) = mapTyInExpr f b
   (EApp a2 b2, ca || cb)
 mapTyInExpr f (ELam ps b) =
-  let (b2, c) = mapTyInExpr f b
-  (ELam ps b2, c)
+  let (ps2, c1) = mapTyInPats f ps
+  let (b2, c2) = mapTyInExpr f b
+  (ELam ps2 b2, c1 || c2)
 mapTyInExpr f (ELet m r p e1 e2) =
   let (e1b, c1) = mapTyInExpr f e1
   let (e2b, c2) = mapTyInExpr f e2
@@ -2820,6 +2875,64 @@ mapTyInExpr f (EDoOrigin l e) =
 mapTyInExpr _ (ENumLit n ev lx) = (ENumLit n ev lx, False)
 mapTyInExpr _ (EWideLit hi lo ev lx) = (EWideLit hi lo ev lx, False)
 
+-- The written types of a pattern are its annotations (`PAnn`), which only the
+-- parser's binding positions hold: lambda parameters, do-binds and guard-binds.
+-- A pattern without one is returned as it is.
+mapTyInPat : (Ty -> (Ty, Bool)) -> Pat -> (Pat, Bool)
+mapTyInPat f p = if patHasAnnot p then mapAnnotsInPat f p else (p, False)
+
+mapTyInPats : (Ty -> (Ty, Bool)) -> List Pat -> (List Pat, Bool)
+mapTyInPats f ps =
+  if any patHasAnnot ps then mapAnnotsInPats f ps else (ps, False)
+
+mapAnnotsInPat : (Ty -> (Ty, Bool)) -> Pat -> (Pat, Bool)
+mapAnnotsInPat f (PAnn p t) =
+  let (p2, c1) = mapAnnotsInPat f p
+  let (t2, c2) = mapTyFull f t
+  (PAnn p2 t2, c1 || c2)
+mapAnnotsInPat f (PCon c ps) =
+  let (ps2, ch) = mapAnnotsInPats f ps
+  (PCon c ps2, ch)
+mapAnnotsInPat f (PCons h t) =
+  let (h2, c1) = mapAnnotsInPat f h
+  let (t2, c2) = mapAnnotsInPat f t
+  (PCons h2 t2, c1 || c2)
+mapAnnotsInPat f (PTuple ps) =
+  let (ps2, ch) = mapAnnotsInPats f ps
+  (PTuple ps2, ch)
+mapAnnotsInPat f (PList ps) =
+  let (ps2, ch) = mapAnnotsInPats f ps
+  (PList ps2, ch)
+mapAnnotsInPat f (PAs x l bid p) =
+  let (p2, ch) = mapAnnotsInPat f p
+  (PAs x l bid p2, ch)
+mapAnnotsInPat f (POr ps) =
+  let (ps2, ch) = mapAnnotsInPats f ps
+  (POr ps2, ch)
+mapAnnotsInPat f (PRec n fields open) =
+  let (fs2, ch) = mapAnnotsInFields f fields
+  (PRec n fs2 open, ch)
+mapAnnotsInPat _ p = (p, False)
+
+mapAnnotsInPats : (Ty -> (Ty, Bool)) -> List Pat -> (List Pat, Bool)
+mapAnnotsInPats _ [] = ([], False)
+mapAnnotsInPats f (p :: ps) =
+  let (p2, c1) = mapAnnotsInPat f p
+  let (ps2, c2) = mapAnnotsInPats f ps
+  (p2 :: ps2, c1 || c2)
+
+mapAnnotsInFields : (Ty -> (Ty, Bool)) ->
+  List RecPatField ->
+  (List RecPatField, Bool)
+mapAnnotsInFields _ [] = ([], False)
+mapAnnotsInFields f ((RecPatField n l bid (Some p)) :: rest) =
+  let (p2, c1) = mapAnnotsInPat f p
+  let (rest2, c2) = mapAnnotsInFields f rest
+  (RecPatField n l bid (Some p2) :: rest2, c1 || c2)
+mapAnnotsInFields f (field :: rest) =
+  let (rest2, c) = mapAnnotsInFields f rest
+  (field :: rest2, c)
+
 mapExprsB : (Ty -> (Ty, Bool)) -> List Expr -> (List Expr, Bool)
 mapExprsB _ [] = ([], False)
 mapExprsB f (e :: es) =
@@ -2830,10 +2943,11 @@ mapExprsB f (e :: es) =
 mapArmsB : (Ty -> (Ty, Bool)) -> List Arm -> (List Arm, Bool)
 mapArmsB _ [] = ([], False)
 mapArmsB f ((Arm p gs b) :: rest) =
+  let (p2, c0) = mapTyInPat f p
   let (gs2, c1) = mapGuardsB f gs
   let (b2, c2) = mapTyInExpr f b
   let (rest2, c3) = mapArmsB f rest
-  (Arm p gs2 b2 :: rest2, c1 || c2 || c3)
+  (Arm p2 gs2 b2 :: rest2, c0 || c1 || c2 || c3)
 
 mapGuardsB : (Ty -> (Ty, Bool)) -> List Guard -> (List Guard, Bool)
 mapGuardsB _ [] = ([], False)
@@ -2842,9 +2956,10 @@ mapGuardsB f ((GBool g) :: rest) =
   let (rest2, c2) = mapGuardsB f rest
   (GBool g2 :: rest2, c1 || c2)
 mapGuardsB f ((GBind p g) :: rest) =
+  let (p2, c0) = mapTyInPat f p
   let (g2, c1) = mapTyInExpr f g
   let (rest2, c2) = mapGuardsB f rest
-  (GBind p g2 :: rest2, c1 || c2)
+  (GBind p2 g2 :: rest2, c0 || c1 || c2)
 
 mapGuardArmsB : (Ty -> (Ty, Bool)) -> List GuardArm -> (List GuardArm, Bool)
 mapGuardArmsB _ [] = ([], False)
@@ -2866,8 +2981,9 @@ mapDoStmtB f (DoExpr e) =
   let (e2, c) = mapTyInExpr f e
   (DoExpr e2, c)
 mapDoStmtB f (DoBind p e) =
-  let (e2, c) = mapTyInExpr f e
-  (DoBind p e2, c)
+  let (p2, c1) = mapTyInPat f p
+  let (e2, c2) = mapTyInExpr f e
+  (DoBind p2 e2, c1 || c2)
 mapDoStmtB f (DoLet m r p e site) =
   let (e2, c) = mapTyInExpr f e
   (DoLet m r p e2 site, c)

@@ -1,5 +1,5 @@
 # META
-source_lines=825
+source_lines=820
 stages=DESUGAR,MARK
 # SOURCE
 -- The SHARED ROUTE-WORD MINT (ARCH B-2, #1113) — the only mint of an impl route
@@ -584,14 +584,9 @@ typeTagOf _ name = name
 -- "Int"
 export
 typeTagName : String -> String
-typeTagName tag = afterLastDot tag (stringLength tag - 1)
-
-afterLastDot : String -> Int -> String
-afterLastDot tag i
-  | i < 0 = tag
-  | stringSlice i (i + 1) tag == "." =
-    stringSlice (i + 1) (stringLength tag) tag
-  | otherwise = afterLastDot tag (i - 1)
+typeTagName tag = match stringLastIndexOf "." tag
+  Some i => stringSlice (i + 1) (stringLength tag) tag
+  None => tag
 
 -- ── the ONE prec-2 `Ty` printer ──────────────────────────────────────────
 -- Mirrors `types/typecheck.mdk`'s `ppTy` family byte-for-byte (which in turn
@@ -936,9 +931,7 @@ rkTyList =
 (DFunDef false "typeTagOf" ((PCon "OriginModule" (PVar "m")) (PVar "name")) (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "")) (EApp (EVar "display") (EVar "m"))) (ELit (LString "."))) (EApp (EVar "display") (EVar "name"))) (ELit (LString ""))))
 (DFunDef false "typeTagOf" (PWild (PVar "name")) (EVar "name"))
 (DTypeSig true "typeTagName" (TyFun (TyCon "String") (TyCon "String")))
-(DFunDef false "typeTagName" ((PVar "tag")) (EApp (EApp (EVar "afterLastDot") (EVar "tag")) (EBinOp "-" (EApp (EVar "stringLength") (EVar "tag")) (ELit (LInt 1)))))
-(DTypeSig false "afterLastDot" (TyFun (TyCon "String") (TyFun (TyCon "Int") (TyCon "String"))))
-(DFunDef false "afterLastDot" ((PVar "tag") (PVar "i")) (EIf (EBinOp "<" (EVar "i") (ELit (LInt 0))) (EVar "tag") (EIf (EBinOp "==" (EApp (EApp (EApp (EVar "stringSlice") (EVar "i")) (EBinOp "+" (EVar "i") (ELit (LInt 1)))) (EVar "tag")) (ELit (LString "."))) (EApp (EApp (EApp (EVar "stringSlice") (EBinOp "+" (EVar "i") (ELit (LInt 1)))) (EApp (EVar "stringLength") (EVar "tag"))) (EVar "tag")) (EIf (EVar "otherwise") (EApp (EApp (EVar "afterLastDot") (EVar "tag")) (EBinOp "-" (EVar "i") (ELit (LInt 1)))) (EApp (EVar "__fallthrough__") (ELit LUnit))))))
+(DFunDef false "typeTagName" ((PVar "tag")) (EMatch (EApp (EApp (EVar "stringLastIndexOf") (ELit (LString "."))) (EVar "tag")) (arm (PCon "Some" (PVar "i")) () (EApp (EApp (EApp (EVar "stringSlice") (EBinOp "+" (EVar "i") (ELit (LInt 1)))) (EApp (EVar "stringLength") (EVar "tag"))) (EVar "tag"))) (arm (PCon "None") () (EVar "tag"))))
 (DTypeSig false "rkTy" (TyFun (TyCon "Ty") (TyCon "String")))
 (DFunDef false "rkTy" ((PRec "TyCon" ((rf "tyConName" (PVar "n")) (rf "tyConOrigin" (PVar "o"))) false)) (EApp (EApp (EVar "typeTagOf") (EVar "o")) (EVar "n")))
 (DFunDef false "rkTy" ((PCon "TyVar" (PVar "n"))) (EVar "n"))
@@ -1089,9 +1082,7 @@ rkTyList =
 (DFunDef false "typeTagOf" ((PCon "OriginModule" (PVar "m")) (PVar "name")) (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "")) (EApp (EMethodRef "display") (EVar "m"))) (ELit (LString "."))) (EApp (EMethodRef "display") (EVar "name"))) (ELit (LString ""))))
 (DFunDef false "typeTagOf" (PWild (PVar "name")) (EVar "name"))
 (DTypeSig true "typeTagName" (TyFun (TyCon "String") (TyCon "String")))
-(DFunDef false "typeTagName" ((PVar "tag")) (EApp (EApp (EVar "afterLastDot") (EVar "tag")) (EBinOp "-" (EApp (EVar "stringLength") (EVar "tag")) (ELit (LInt 1)))))
-(DTypeSig false "afterLastDot" (TyFun (TyCon "String") (TyFun (TyCon "Int") (TyCon "String"))))
-(DFunDef false "afterLastDot" ((PVar "tag") (PVar "i")) (EIf (EBinOp "<" (EVar "i") (ELit (LInt 0))) (EVar "tag") (EIf (EBinOp "==" (EApp (EApp (EApp (EVar "stringSlice") (EVar "i")) (EBinOp "+" (EVar "i") (ELit (LInt 1)))) (EVar "tag")) (ELit (LString "."))) (EApp (EApp (EApp (EVar "stringSlice") (EBinOp "+" (EVar "i") (ELit (LInt 1)))) (EApp (EVar "stringLength") (EVar "tag"))) (EVar "tag")) (EIf (EVar "otherwise") (EApp (EApp (EVar "afterLastDot") (EVar "tag")) (EBinOp "-" (EVar "i") (ELit (LInt 1)))) (EApp (EVar "__fallthrough__") (ELit LUnit))))))
+(DFunDef false "typeTagName" ((PVar "tag")) (EMatch (EApp (EApp (EVar "stringLastIndexOf") (ELit (LString "."))) (EVar "tag")) (arm (PCon "Some" (PVar "i")) () (EApp (EApp (EApp (EVar "stringSlice") (EBinOp "+" (EVar "i") (ELit (LInt 1)))) (EApp (EVar "stringLength") (EVar "tag"))) (EVar "tag"))) (arm (PCon "None") () (EVar "tag"))))
 (DTypeSig false "rkTy" (TyFun (TyCon "Ty") (TyCon "String")))
 (DFunDef false "rkTy" ((PRec "TyCon" ((rf "tyConName" (PVar "n")) (rf "tyConOrigin" (PVar "o"))) false)) (EApp (EApp (EVar "typeTagOf") (EVar "o")) (EVar "n")))
 (DFunDef false "rkTy" ((PCon "TyVar" (PVar "n"))) (EVar "n"))

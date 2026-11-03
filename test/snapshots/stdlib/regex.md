@@ -1,5 +1,5 @@
 # META
-source_lines=1743
+source_lines=1747
 stages=DESUGAR,MARK
 # SOURCE
 {- | Regular expressions, matched in linear time.
@@ -1598,6 +1598,8 @@ stitch : (Match -> <e> String) ->
   <e> List String
 stitch _ s [] beg acc = sliceClamped beg (stringLength s) s :: acc
 stitch f s (m :: rest) beg acc =
+  -- Bound: one subject sliced at ascending offsets, linear on the native runtime (cursor cache) and quadratic on WasmGC for long non-ASCII input; the callback f may slice another string, which evicts the cache and makes native quadratic too.
+  -- lint-disable-next-line rule-reslice-in-loop
   let piece = sliceClamped beg m.start s
   let replaced = f m
   stitch f s rest m.end (replaced :: piece :: acc)
@@ -1649,6 +1651,8 @@ splitGo s [] beg lastStart acc =
   else
     acc
 splitGo s (m :: rest) beg _ acc =
+  -- Bound: one subject sliced at ascending offsets, linear on the native runtime (cursor cache) and quadratic on WasmGC for long non-ASCII input.
+  -- lint-disable-next-line rule-reslice-in-loop
   let acc2 = if m.end /= 0 then sliceClamped beg m.start s :: acc else acc
   splitGo s rest m.end m.start acc2
 

@@ -329,6 +329,11 @@ inlang-backend-wasm-emit-trapmsg-test:
 inlang-backend-wasm-emit-paramname-test:
 	./medaka test compiler/backend/wasm_emit_paramname_test.mdk
 
+## Method-table slot calls of wasm_emit.mdk: the null-word trap, the slot load and
+## the slot function types.
+inlang-backend-wasm-emit-test:
+	./medaka test compiler/backend/wasm_emit_test.mdk
+
 ## Or-pattern arms of wasm_emit.mdk: both tree engines emit a shared arm body
 ## once, against a control walker whose ten separate arms emit it ten times.
 inlang-backend-wasm-emit-orarm-test:
@@ -549,6 +554,11 @@ inlang-tools-lint-hints-test:
 ## entry's import closure ([W-MODULE-BLIND]): the discarded-call verdict.
 inlang-tools-lint-calls-test:
 	./medaka test compiler/tools/lint_calls_test.mdk
+
+## compiler/tools/lint_recursion_test.mdk is a `*_test.mdk` sibling outside every
+## entry's import closure ([W-MODULE-BLIND]): the self-call reader.
+inlang-tools-lint-recursion-test:
+	./medaka test compiler/tools/lint_recursion_test.mdk
 
 ## The `medaka lint` behaviors only the built binary shows: what the working
 ## directory and the flag combinations do. compiler/tools/lint_cli_test.mdk is

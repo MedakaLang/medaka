@@ -363,7 +363,7 @@ conyes45:
   %t61 = inttoptr i64 %arg2 to ptr
   %t62 = getelementptr i8, ptr %t61, i64 16
   %t63 = load i64, ptr %t62
-  %t64 = call i64 @mdk.dispatch..6571.0.2.2(i64 %arg0, i64 %t54, i64 %t60)
+  %t64 = call i64 @mdk.slotcall.3(i64 %arg0, i64 0, i64 %t54, i64 %t60) ; slot __user__::Eq.eq
   %t65 = ashr i64 %t64, 1
   %t66 = icmp ne i64 %t65, 0
   br i1 %t66, label %then67, label %else67
@@ -388,33 +388,55 @@ decend1:
 ; mdk-module program
 @mdk_disc_none = private unnamed_addr constant i64 -1
 ; mdk-module program
-@mdk.gen.dictcell.70726f6772616d..0 = internal constant [1 x i64] [i64 4190803891842103885]
-; mdk-module program
-define internal i64 @mdk.dispatch..6571.0.2.2(i64 %dict, i64 %arg0, i64 %arg1) {
+define internal i64 @mdk.slot.5f5f757365725f5f3a3a45717c496e747c.6571(i64 %clos, i64 %dict, i64 %arg0, i64 %arg1) {
 entry:
-  %t0 = inttoptr i64 %dict to ptr
-  %t1 = load i64, ptr %t0
-  %t2 = alloca i64
-  %t4 = icmp eq i64 %t1, 4190803891842103885
-  br i1 %t4, label %dispyes5, label %dispnext5
-dispyes5:
-  %t6 = call i64 @mdk.impl.496e74.6571(i64 %arg0, i64 %arg1)
-  store i64 %t6, ptr %t2
-  br label %dispend3
-dispnext5:
-  %t7 = icmp eq i64 %t1, 1536689363680375647
-  br i1 %t7, label %dispyes8, label %dispnext8
-dispyes8:
-  %t9 = inttoptr i64 %dict to ptr
-  %t10 = getelementptr i8, ptr %t9, i64 8
-  %t11 = load i64, ptr %t10
-  %t12 = call i64 @mdk.impl.7a5a5f35665f5f35665f757365725f35665f5f35665f5f32655f4d794c697374.6571(i64 %t11, i64 %arg0, i64 %arg1)
-  store i64 %t12, ptr %t2
-  br label %dispend3
-dispnext8:
+  %t0 = call i64 @mdk.impl.496e74.6571(i64 %arg0, i64 %arg1)
+  ret i64 %t0
+}
+
+; mdk-module program
+@mdk.slotclosure.5f5f757365725f5f3a3a45717c496e747c.6571 = internal constant [2 x i64] [i64 3, i64 ptrtoint (ptr @mdk.slot.5f5f757365725f5f3a3a45717c496e747c.6571 to i64)]
+; mdk-module program
+@mdk.gen.dictcell.70726f6772616d..0 = internal constant [2 x i64] [i64 4190803891842103885, i64 ptrtoint (ptr @mdk.slotclosure.5f5f757365725f5f3a3a45717c496e747c.6571 to i64)]
+; mdk-module program
+define internal i64 @mdk.slotcall.3(i64 %dict, i64 %field, i64 %arg0, i64 %arg1) alwaysinline {
+entry:
+  %t9 = alloca i64
+  %t15 = alloca i64, i64 3
+  %isnull = icmp eq i64 %dict, 0
+  br i1 %isnull, label %slotnull, label %slotok
+slotnull:
   call void @mdk_dispatch_no_impl()
   unreachable
-dispend3:
-  %t13 = load i64, ptr %t2
-  ret i64 %t13
+slotok:
+  %t0 = inttoptr i64 %dict to ptr
+  %t1 = add i64 %field, 1
+  %t2 = mul i64 %t1, 8
+  %t3 = getelementptr i8, ptr %t0, i64 %t2
+  %t4 = load i64, ptr %t3
+  %t5 = inttoptr i64 %t4 to ptr
+  %t6 = load i64, ptr %t5
+  %t7 = icmp eq i64 %t6, 3
+  br i1 %t7, label %apfast8, label %apslow8
+apfast8:
+  %t10 = inttoptr i64 %t4 to ptr
+  %t11 = getelementptr i8, ptr %t10, i64 8
+  %t12 = load i64, ptr %t11
+  %t13 = inttoptr i64 %t12 to ptr
+  %t14 = call i64 %t13(i64 %t4, i64 %dict, i64 %arg0, i64 %arg1)
+  store i64 %t14, ptr %t9
+  br label %apend8
+apslow8:
+  %t16 = getelementptr i64, ptr %t15, i64 0
+  store i64 %dict, ptr %t16
+  %t17 = getelementptr i64, ptr %t15, i64 1
+  store i64 %arg0, ptr %t17
+  %t18 = getelementptr i64, ptr %t15, i64 2
+  store i64 %arg1, ptr %t18
+  %t19 = call i64 @__mdk_apply(i64 %t4, i64 3, ptr %t15)
+  store i64 %t19, ptr %t9
+  br label %apend8
+apend8:
+  %t20 = load i64, ptr %t9
+  ret i64 %t20
 }

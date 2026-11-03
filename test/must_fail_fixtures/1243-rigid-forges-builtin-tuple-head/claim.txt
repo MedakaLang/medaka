@@ -5,9 +5,9 @@ what: is `isLower … || … == '_'`, so the lexer emits `TIdent` and `parseTyAt
 what: (compiler/frontend/parser.mdk:2049) makes it a `TyVar`. But `__tuple2__` is ALSO
 what: the reserved builtin tuple tag that `tupleCtorTyName`
 what: (compiler/frontend/parser.mdk:2137) mints for the `(,)` sugar. So `data Bad = Bad
-what: __tuple2__` declares a field whose type is a rigid VARIABLE, and `g : Bad -> (,)`
-what: -- which claims that variable IS the builtin 2-tuple constructor -- typechecks
-what: clean at exit 0 with no diagnostic. `check` prints `g : Bad -> (,)`. This is
+what: (__tuple2__ Int Int)` declares a field that applies a rigid VARIABLE, and `g : Bad ->
+what: (Int, Int)` -- which claims that variable IS the builtin 2-tuple constructor --
+what: typechecks clean at exit 0 with no diagnostic. `check` prints `g : Bad -> (Int, Int)`. This is
 what: DICT-SEMANTICS §8 I6.2(b) ("UNFORGEABLE: no source file may produce a head
 what: carrying the reserved origin"), which that table records as VERIFIED at the
 what: SURFACE level and OWED at the `Mono` level. Pre-existing: it reproduces on
@@ -15,7 +15,7 @@ what: `main` before ARCH A-1 PR "A" and is deliberately preserved by it, since t
 what: PR is the answer-preserving carrier step.
 cmd: check main.mdk
 exit: 0
-stdout-line: g : Bad -> (,)
+stdout-line: g : Bad -> (Int, Int)
 stdout-line: sane : Int -> Int
 control: check control.mdk
 why-fixture: SINGLE-FILE, and `check` rather than `run`: the defect is an ACCEPTANCE
@@ -23,14 +23,14 @@ why-fixture: (a program that must be rejected is not), so the observable is the
 why-fixture: inferred scheme, not a runtime value -- there is no wrong value to print
 why-fixture: because there is no way to construct a `Bad`. Two `stdout-line` pins, per
 why-fixture: this suite's rule to pin both the bug's line and a line proving the
-why-fixture: command still ran: `g : Bad -> (,)` IS the forgery (the rigid rendered as
-why-fixture: the builtin tuple head), and `sane : Int -> Int` proves the run reached
+why-fixture: command still ran: `g : Bad -> (Int, Int)` IS the forgery (the rigid read
+why-fixture: as the builtin tuple head), and `sane : Int -> Int` proves the run reached
 why-fixture: the scheme dump rather than dying early. The trailing `-- <path>: ok …`
 why-fixture: line is deliberately NOT pinned -- it embeds the absolute fixture path,
 why-fixture: which differs per checkout.
 why-control: control.mdk is byte-identical except the rigid is spelled `zzz` instead of
-why-control: `__tuple2__`, and `g`'s result is that same rigid rather than the builtin
-why-control: `(,)`. That is the ONE distinguishing feature: an ordinary rigid in a
+why-control: `__tuple2__`, and `g`'s result is `Bad` rather than the builtin pair
+why-control: `(Int, Int)`. That is the ONE distinguishing feature: an ordinary rigid in a
 why-control: constructor field, with a signature over it, must keep checking clean at
 why-control: exit 0. If the control breaks, rigid variables broke generally -- the
 why-control: environment moved, not this forgery -- and this gate says CONTROL-BROKE
@@ -70,3 +70,10 @@ why-note: is `g : Bad -> (,)` with the rigid renamed `zzz`, which REJECTS (`Type
 why-note: mismatch: (,) vs zzz`, measured). This harness requires a control that exits
 why-note: 0, so control.mdk uses `g : Bad -> Bad` instead. Both isolate the same one
 why-note: feature -- the reserved spelling -- but only this one can be the control here.
+why-note: THE REPRO APPLIES THE RIGID. The first repro wrote the pair head unapplied,
+why-note: `data Bad = Bad __tuple2__` with `g : Bad -> (,)`, and the kind check
+why-note: (EFFECTS-SEMANTICS §6.4) rejects that signature: `(,)` has kind `Type -> Type
+why-note: -> Type` where a `Type` goes. That rejection is the kind check, not a fix of
+why-note: the forging, so the pin moved to a well-kinded spelling of the same forgery:
+why-note: the rigid applied to two arguments still unifies with the builtin pair, and
+why-note: with `zzz` it does not (`type mismatch: (Int, Int) vs zzz Int Int`, measured).

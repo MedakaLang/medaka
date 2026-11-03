@@ -11,6 +11,9 @@
 import support.stage_count.{stageBump}
 import frontend.ast.{
   patHasOr,
+  patHasAnnot,
+  firstTyLoc,
+  noDeclLoc,
   stripLocE,
   noBinderId,
   unminted,
@@ -279,6 +282,10 @@ rewriteSugar (EIndex a i) = callBin "index" a i
 rewriteSugar (ESlice a lo hi incl) =
   let hiEx = if incl then EApp (EVar "sliceInclusiveEnd") hi else hi
   EApp (EApp (EApp (EVar "slice") a) lo) hiEx
+rewriteSugar (lam@(ELam ps body)) =
+  if any patHasAnnot ps then eraseLamAnnots ps body else lam
+rewriteSugar (m@(EMatch e arms)) =
+  if any armHasAnnot arms then eraseMatchAnnots e arms else m
 rewriteSugar e = e
 
 -- ── Pass: rewrite_assign_index (`a[i] := v` → `setIndex a i v`) ───────────
@@ -311,8 +318,196 @@ armChain ((GBool e) :: qs) body els = EIf e (armChain qs body els) els
 -- A guard-bind through an or-pattern keeps the guards after it on its match
 -- arm, so a later guard that fails under one alternative re-tries the next.
 armChain ((GBind p e) :: qs) body els
-  | patHasOr p = EMatch e [Arm p qs body, Arm PWild [] els]
-  | otherwise = EMatch e [Arm p [] (armChain qs body els), Arm PWild [] els]
+  | patHasOr p = eraseMatchAnnots e [Arm p qs body, Arm PWild [] els]
+  | otherwise =
+    eraseMatchAnnots e [Arm p [] (armChain qs body els), Arm PWild [] els]
+
+-- ── Pattern annotations ───────────────────────────────────────────────────
+-- `(p : T)` in a binding position is checked as the expression annotation
+-- `(v : T)` on the value it binds, so resolve and typecheck judge the written
+-- type exactly as they judge any other annotation: an unknown type, a kind
+-- error and a mismatch are the same diagnostics.  The pattern becomes [p], with
+-- `v` the name [p] binds the whole value to when it is a variable or an
+-- as-pattern, and otherwise a fresh name taken by an as-pattern; the check is
+-- `let _ = (v : T)` at the start of the code the binding scopes.
+
+eraseLamAnnots : List Pat -> Expr -> Expr
+eraseLamAnnots ps body =
+  let (ps2, checks, _) = annotsOutOf ps 0
+  ELam ps2 (annotChecks checks body)
+
+eraseMatchAnnots : Expr -> List Arm -> Expr
+eraseMatchAnnots e arms =
+  if any armHasAnnot arms then
+    EMatch e (map eraseArmAnnots arms)
+  else
+    EMatch e arms
+
+armHasAnnot : Arm -> Bool
+armHasAnnot (Arm p gs _) = patHasAnnot p || any guardHasAnnot gs
+
+guardHasAnnot : Guard -> Bool
+guardHasAnnot (GBind p _) = patHasAnnot p
+guardHasAnnot (GBool _) = False
+
+-- A guard-bind's checks are a guard of their own right after it, so a later
+-- guard reads the binder at its written type.
+eraseArmAnnots : Arm -> Arm
+eraseArmAnnots (Arm p gs body) =
+  let (p2, checks, n) = annotsOut p 0
+  Arm p2 (guardsAnnotsOut gs n) (annotChecks checks body)
+
+guardsAnnotsOut : List Guard -> Int -> List Guard
+guardsAnnotsOut [] _ = []
+guardsAnnotsOut ((GBind p e) :: rest) n =
+  if patHasAnnot p then
+    let (p2, checks, n2) = annotsOut p n
+    GBind p2 e :: annotGuard checks :: guardsAnnotsOut rest n2
+  else
+    GBind p e :: guardsAnnotsOut rest n
+guardsAnnotsOut (g :: rest) n = g :: guardsAnnotsOut rest n
+
+-- The fresh name with ordinal [n].  It holds three `$`, a character no
+-- identifier can contain, so it never captures or shadows a user's name, and no
+-- name a user writes is within the edit distance resolve's "did you mean"
+-- searches (at most 2), so no diagnostic offers it.  Ordinals are distinct
+-- within one binding position.  A nested position may reuse one; the name it
+-- shadows was read only by a check that has already run.
+annotName : Int -> String
+annotName n = "$annot$" ++ intToString n ++ "$"
+
+-- [p] without its annotations, the checks they leave in source order (each a
+-- Unit expression to evaluate ahead of the scope), and the next fresh-name
+-- ordinal.
+annotsOut : Pat -> Int -> (Pat, List Expr, Int)
+annotsOut (PAnn q t) n =
+  let (q2, checks, n2) = annotsOut q n
+  match q2
+    PVar x _ _ => (q2, checks ++ [annotCheck x t], n2)
+    PAs x _ _ _ => (q2, checks ++ [annotCheck x t], n2)
+    _ =>
+      let v = annotName n2
+      (PAs v (Loc "" 0 0 0 0) noBinderId q2, checks ++ [annotCheck v t], n2 + 1)
+annotsOut (PCon c ps) n =
+  let (ps2, checks, n2) = annotsOutOf ps n
+  (PCon c ps2, checks, n2)
+annotsOut (PCons h tl) n =
+  let (h2, c1, n1) = annotsOut h n
+  let (t2, c2, n2) = annotsOut tl n1
+  (PCons h2 t2, c1 ++ c2, n2)
+annotsOut (PTuple ps) n =
+  let (ps2, checks, n2) = annotsOutOf ps n
+  (PTuple ps2, checks, n2)
+annotsOut (PList ps) n =
+  let (ps2, checks, n2) = annotsOutOf ps n
+  (PList ps2, checks, n2)
+annotsOut (PAs x l bid q) n =
+  let (q2, checks, n2) = annotsOut q n
+  (PAs x l bid q2, checks, n2)
+annotsOut (POr ps) n =
+  let (ps2, checks, n2) = annotsOutOf ps n
+  if n2 == n then (POr ps2, checks, n2) else orAnnotsOut ps n
+annotsOut (PRec c fields open) n =
+  let (fs2, checks, n2) = fieldAnnotsOut fields n
+  (PRec c fs2 open, checks, n2)
+annotsOut p n = (p, [], n)
+
+annotsOutOf : List Pat -> Int -> (List Pat, List Expr, Int)
+annotsOutOf [] n = ([], [], n)
+annotsOutOf (p :: ps) n =
+  let (p2, c1, n1) = annotsOut p n
+  let (ps2, c2, n2) = annotsOutOf ps n1
+  (p2 :: ps2, c1 ++ c2, n2)
+
+fieldAnnotsOut : List RecPatField -> Int -> (List RecPatField, List Expr, Int)
+fieldAnnotsOut [] n = ([], [], n)
+fieldAnnotsOut ((RecPatField k l bid (Some q)) :: rest) n =
+  let (q2, c1, n1) = annotsOut q n
+  let (rest2, c2, n2) = fieldAnnotsOut rest n1
+  (RecPatField k l bid (Some q2) :: rest2, c1 ++ c2, n2)
+fieldAnnotsOut (f :: rest) n =
+  let (rest2, checks, n2) = fieldAnnotsOut rest n
+  (f :: rest2, checks, n2)
+
+-- An or-pattern whose annotations need a fresh name: one alternative alone
+-- would bind it, and every alternative must bind the same names.  The whole
+-- or-pattern binds its value to a fresh name instead, its alternatives lose
+-- their annotations, and the check matches that value again, one arm per
+-- annotated alternative with the user's names dropped.  Each arm's checks are
+-- its guard and every arm is guarded, so no arm counts as covering another and
+-- the closing `_` is neither unreachable nor missing.
+orAnnotsOut : List Pat -> Int -> (Pat, List Expr, Int)
+orAnnotsOut ps n =
+  let v = annotName n
+  let (arms, n2) = orCheckArms (filter patHasAnnot ps) (n + 1)
+  let check = EMatch (EVar v) (arms ++ [Arm PWild [] (ELit LUnit)])
+  (
+    PAs v (Loc "" 0 0 0 0) noBinderId (POr (flatMap orAlternatives ps)),
+    [check],
+    n2,
+  )
+
+orCheckArms : List Pat -> Int -> (List Arm, Int)
+orCheckArms [] n = ([], n)
+orCheckArms (p :: ps) n =
+  let (q, checks, n1) = annotsOut (dropBinders p) n
+  let (arms, n2) = orCheckArms ps n1
+  (Arm q [annotGuard checks] (ELit LUnit) :: arms, n2)
+
+-- An alternative without its annotations, as the alternatives it stands for:
+-- an annotated or-pattern alternative splices in its own.
+orAlternatives : Pat -> List Pat
+orAlternatives p = match dropAnnots p
+  POr qs => qs
+  q => [q]
+
+dropAnnots : Pat -> Pat
+dropAnnots (PAnn q _) = dropAnnots q
+dropAnnots (PCon c ps) = PCon c (map dropAnnots ps)
+dropAnnots (PCons h tl) = PCons (dropAnnots h) (dropAnnots tl)
+dropAnnots (PTuple ps) = PTuple (map dropAnnots ps)
+dropAnnots (PList ps) = PList (map dropAnnots ps)
+dropAnnots (PAs x l bid q) = PAs x l bid (dropAnnots q)
+dropAnnots (POr ps) = POr (flatMap orAlternatives ps)
+dropAnnots (PRec c fields open) = PRec c (map dropFieldAnnots fields) open
+dropAnnots p = p
+
+dropFieldAnnots : RecPatField -> RecPatField
+dropFieldAnnots (RecPatField k l bid (Some q)) =
+  RecPatField k l bid (Some (dropAnnots q))
+dropFieldAnnots f = f
+
+-- [p] matching the same values and binding nothing; its annotations stay.
+dropBinders : Pat -> Pat
+dropBinders (PVar _ _ _) = PWild
+dropBinders (PAs _ _ _ q) = dropBinders q
+dropBinders (PAnn q t) = PAnn (dropBinders q) t
+dropBinders (PCon c ps) = PCon c (map dropBinders ps)
+dropBinders (PCons h tl) = PCons (dropBinders h) (dropBinders tl)
+dropBinders (PTuple ps) = PTuple (map dropBinders ps)
+dropBinders (PList ps) = PList (map dropBinders ps)
+dropBinders (POr ps) = POr (map dropBinders ps)
+dropBinders (PRec c fields open) = PRec c (map dropFieldBinders fields) open
+dropBinders p = p
+
+dropFieldBinders : RecPatField -> RecPatField
+dropFieldBinders (RecPatField k l _ (Some q)) =
+  RecPatField k l noBinderId (Some (dropBinders q))
+dropFieldBinders (RecPatField k l _ None) =
+  RecPatField k l noBinderId (Some PWild)
+
+-- `(v : T)`, located at its written type.
+annotCheck : String -> Ty -> Expr
+annotCheck v t = locatedAt (firstTyLoc t) (EAnnot (EVar v) t)
+
+-- `let _ = c` for each check, in order, ahead of [body].
+annotChecks : List Expr -> Expr -> Expr
+annotChecks [] body = body
+annotChecks (check :: rest) body =
+  ELet noDeclLoc False PWild check (annotChecks rest body)
+
+annotGuard : List Expr -> Guard
+annotGuard checks = GBool (annotChecks checks (ELit (LBool True)))
 
 -- operator sections → lambdas
 sectionToCore : Section -> Expr

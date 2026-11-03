@@ -51,7 +51,7 @@ CC="${CC:-clang}"
 # every gap call site, not guessed; documented MVP feature gaps (unsupported node/op/
 # extern, native-only FFI, out-of-slice RNone/RScalar routes) are NOT in this set.
 is_dict_resolution_failure() {
-  grep -qE "no impl of method '|dispatch arm for '|dict param '.*' not in scope|forwarded dict '.*' not in scope|RNone route as a dict witness|CDict (value )?over unknown function" "$1"
+  grep -qE "no impl of method '|no method table for instance '|is not a slot of interface '|has no single callee|dispatch arm for '|dict param '.*' not in scope|forwarded dict '.*' not in scope|RNone route as a dict witness|CDict (value )?over unknown function" "$1"
 }
 
 # A tolerated GAP is a `gap`-helper panic that is not a resolution failure.

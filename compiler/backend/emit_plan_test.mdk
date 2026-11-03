@@ -79,6 +79,11 @@ import backend.emit_plan.{
   buildEmitPlan,
   lookupMethodResult,
   buildEmitPlanReached,
+  MethodSlot(..),
+  MethodTables(..),
+  InstanceTable(..),
+  SlotCallee(..),
+  interfaceSlots,
 }
 
 import backend.trmc_analysis.{ctorTailIsCons, dispMembersOf, dispRootOf}
@@ -284,15 +289,12 @@ test "each emitter uses the shared validation gateway and owns no collision sequ
       ))
       ["llvm_emit.mdk", "wasm_emit.mdk"])
 
-test "the gateway owns both collision checks before shape checks" =
+test "the gateway owns the impl-symbol check before shape checks" =
   match readFile "\{medakaRoot}/compiler/backend/core_validate.mdk"
     Err e => fail e
     Ok text =>
       expectTextContainsAll
-        [
-          "match implSymbolCollision cp", "match dictTagCollision backend cp",
-          "firstShapeDefect"
-        ]
+        ["match implSymbolCollision cp", "firstShapeDefect"]
         text
 
 -- Reach belongs to the plan builder: no entry calls the filter itself.
@@ -539,6 +541,8 @@ renameRetirementTokens text names (t :: ts) ((start, end) :: spans) offset =
   match t
     TIdent n => match omLookup n names
       Some replacement =>
+        -- Bound: text is the printed ASCII source of one retirement fixture, where a slice costs its own length.
+        -- lint-disable-next-line rule-reslice-in-loop
         sliceClamped offset start text
           :: replacement
           :: renameRetirementTokens text names ts spans end
@@ -1782,3 +1786,114 @@ test "method result plan index preserves qualified interface identity on both ba
             (lookupMethodResult plan.methodResults "left::Shared" "missing"),
         ])
       [LlvmBackend, WasmBackend])
+
+-- ── method tables ───────────────────────────────────────────────────────────
+-- `m::Shape` declares `area`, `scale` (one method-level dictionary) and `name`,
+-- in that order.  `Sq` supplies `scale` and `area` and inherits `name`; `Ci`
+-- supplies all three.  The entries are listed out of declaration order, so the
+-- slot order can only come from the declaration facts, and the groups are numbered
+-- in entry order: 0 Sq.scale, 1 Sq.area, 2 Ci.name, 3 Ci.area, 4 Ci.scale,
+-- 5 Sq.name.
+
+shapeFact : String -> Int -> MethodResultFact
+shapeFact method arity = MethodResultFact {
+  iface = "m::Shape",
+  method = method,
+  returnsHead = False,
+  callbackPositions = [],
+  valueArity = arity,
+}
+
+shapeEntry : String -> String -> Int -> CImplEntry
+shapeEntry key method arity =
+  CImplEntry
+    method
+    0
+    arity
+    (CImplTagged
+      key
+      "m::Shape|\{key}|"
+      "m::Shape"
+      noImplSym
+      [0]
+      (map (i => PVar "x\{intToString i}" noDeclLoc noBinderId) [1..=arity])
+      (CLit (LInt 0)))
+
+shapeProgram : CProgram
+shapeProgram =
+  CProgram
+    []
+    []
+    []
+    [
+      shapeEntry "Sq" "scale" 2,
+      shapeEntry "Sq" "area" 1,
+      shapeEntry "Ci" "name" 1,
+      shapeEntry "Ci" "area" 1,
+      shapeEntry "Ci" "scale" 2,
+      CImplEntry
+        "name"
+        0
+        1
+        (CImplDefault
+          "m::Shape"
+          "Sq"
+          "m::Shape|Sq|"
+          noImplSym
+          [0]
+          [
+            PVar "$dict_name_0" noDeclLoc noBinderId,
+            PVar "x" noDeclLoc noBinderId,
+          ]
+          (CLit (LInt 0))),
+    ]
+    [("m::Shape#scale", 1)]
+    { noDeclFacts |
+      factMethodResults = [
+        shapeFact "area" 1,
+        shapeFact "scale" 2,
+        shapeFact "name" 1,
+      ],
+    }
+
+-- each slot of instance [key]'s table, as `(group, inherited)` per callee
+fillsOf : MethodTables -> String -> List (List (Int, Bool))
+fillsOf tables key = match omLookup key tables.instances
+  Some table =>
+    map
+      (callees => map (c => ((c : SlotCallee).group, c.inherited)) callees)
+      (table : InstanceTable).fills
+  None => []
+
+test "a method table's slots follow the interface's declaration order" =
+  expectEqual
+    [
+      MethodSlot { method = "area", contextDicts = 0, valueArity = 1 },
+      MethodSlot { method = "scale", contextDicts = 1, valueArity = 2 },
+      MethodSlot { method = "name", contextDicts = 0, valueArity = 1 },
+    ]
+    (interfaceSlots
+      (buildEmitPlan LlvmBackend PreludeFreeRuntime shapeProgram).methodTables
+      "m::Shape")
+
+test "each slot of an instance's table names the one group that fills it" =
+  let tables =
+    (buildEmitPlan LlvmBackend PreludeFreeRuntime shapeProgram).methodTables
+  expectEach [
+    (
+      "Sq: area and scale supplied, name inherited",
+      expectEqual
+        [[(1, False)], [(0, False)], [(5, True)]]
+        (fillsOf tables "m::Shape|Sq|"),
+    ),
+    (
+      "Ci: every slot supplied",
+      expectEqual
+        [[(3, False)], [(4, False)], [(2, False)]]
+        (fillsOf tables "m::Shape|Ci|"),
+    ),
+    (
+      "an instance with no entries has no table",
+      expectEqual [] (fillsOf tables "m::Shape|Tri|"),
+    ),
+  ]

@@ -502,13 +502,13 @@ scanIndexInteriorCells : Bytes ->
   Int ->
   Int ->
   Int ->
-  List (List Cell, Int) ->
+  List (List (List Cell, Int)) ->
   Result String (List (List Cell, Int))
-scanIndexInteriorCells bytes pageSize usable cpArrayStart pageBase nCells i rightmost acc
+scanIndexInteriorCells bytes pageSize usable cpArrayStart pageBase nCells i rightmost chunks
   | i >= nCells = do
     let rmHdr = pageHdrOffset pageSize rightmost
     rows <- scanIndexPage bytes pageSize usable rightmost rmHdr
-    Ok (acc ++ rows)
+    Ok (flatMap (chunk => chunk) (reverse (rows :: chunks)))
   | otherwise = do
     cellPtr <- beU16 bytes (cpArrayStart + i * 2)
     let cellOff = pageBase + cellPtr
@@ -524,7 +524,7 @@ scanIndexInteriorCells bytes pageSize usable cpArrayStart pageBase nCells i righ
       nCells
       (i + 1)
       rightmost
-      (acc ++ leftRows ++ [entry])
+      ([entry] :: leftRows :: chunks)
 
 -- ---------------------------------------------------------------------------
 -- Multi-page recursive B-tree scan
@@ -599,14 +599,14 @@ scanInteriorCells : Bytes ->
   Int ->
   Int ->
   Int ->
-  List Row ->
+  List (List Row) ->
   Result String (List Row)
-scanInteriorCells bytes pageSize usable cpArrayStart pageBase nCells i rightmost acc
+scanInteriorCells bytes pageSize usable cpArrayStart pageBase nCells i rightmost chunks
   | i >= nCells = do
     -- all left-children visited; now the rightmost child
     let rmHdr = pageHdrOffset pageSize rightmost
     rows <- scanTablePage bytes pageSize usable rightmost rmHdr
-    Ok (acc ++ rows)
+    Ok (flatMap (chunk => chunk) (reverse (rows :: chunks)))
   | otherwise = do
     cellPtr <- beU16 bytes (cpArrayStart + i * 2)
     let cellOff = pageBase + cellPtr
@@ -623,7 +623,7 @@ scanInteriorCells bytes pageSize usable cpArrayStart pageBase nCells i rightmost
       nCells
       (i + 1)
       rightmost
-      (acc ++ rows)
+      (rows :: chunks)
 
 -- ---------------------------------------------------------------------------
 -- Single-path rowid seek

@@ -350,6 +350,7 @@ import types.tc_shadow.{
 }
 import types.tc_decls_types.{
   checkDeclaredKinds,
+  kindScopeOf,
   checkDeclAuthorityUses,
   checkEffectParams,
   fromAstType,
@@ -1450,7 +1451,9 @@ checkBodyImpl gctx runSeed moduleSeed mid implDecls prog0 =
   checkUndeterminedRetEffVars mctx prog
   -- EFFECTS-SEMANTICS §6.4/§6.5: declared-kind consistency.  Same placement — the
   -- slot-kind reads consult the table `dataEnv` just populated.
-  checkDeclaredKinds mctx prog
+  -- One module's kinds, as the written-type checks below read them.
+  let kinds = kindScopeOf mctx
+  checkDeclaredKinds mctx kinds prog
   -- One authority, one domain, for a declaration's `Authority` parameters.
   -- Same placement: an index slot's domain is read from that table.
   checkDeclAuthorityUses mctx prog
@@ -1464,7 +1467,7 @@ checkBodyImpl gctx runSeed moduleSeed mid implDecls prog0 =
   let classEnvHere =
     let envs = gctx.declEnvsRef.value
     (envs.deIfaces, declEnvsOrdOf mid envs)
-  checkGradedImplHeads mctx (fst classEnvHere) (snd classEnvHere) prog
+  checkGradedImplHeads mctx kinds (fst classEnvHere) (snd classEnvHere) prog
   rejectCyclicAliases mctx prog
   -- #1280: `prog` reached here through a driver's stamping walk already, and
   -- `stampTyHead` is first-write-immune, so the builtins-only scope can only fill
@@ -2090,11 +2093,9 @@ registerImportOverlay env prog overlay =
   let ctorPop = env.teDyn.dcModule.mcGraph.crossRun.universeCtorPop.value
   let recordPop = env.teDyn.dcModule.mcGraph.crossRun.universeRecordPop.value
   let served = map (d => (d, overlayCachedRows ctorPop recordPop d)) overlay
-  each
-    (p => match snd p
-      None => recordDeclKinds env.teDyn.dcModule (fst p)
-      Some _ => ())
-    served
+  recordDeclKinds
+    env.teDyn.dcModule
+    (filterMap (p => if isNone (snd p) then Some (fst p) else None) served)
   let env1 =
     fold
       (e p => if isAliasDecl (fst p) then registerData e (fst p) else e)

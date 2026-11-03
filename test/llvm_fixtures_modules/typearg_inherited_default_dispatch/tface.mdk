@@ -40,3 +40,14 @@ export interface Described a where
   sizeOf : a -> Int
   describe : a -> String
   describe x = tagOf x ++ "/" ++ intToString (sizeOf x * 10 + 1)
+
+-- ── the non-constant default at a SHARED head (#2487) ──────────────────────────
+-- `label`'s default calls two siblings on its receiver, and its instances share the
+-- head tycon `Box` and differ in the type argument.  `sizeL` reads the receiver's
+-- payload, so the default's value depends on the receiver itself, not only on
+-- which instance answered.
+export interface Labeled a where
+  tagL : a -> String
+  sizeL : a -> Int
+  label : a -> String
+  label x = tagL x ++ ":" ++ intToString (sizeL x * 10 + 2)

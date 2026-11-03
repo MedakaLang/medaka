@@ -392,13 +392,7 @@ endsWith suf s =
 -- which was O(lines × names) before.  Linear in the line's length.
 export
 schemeLineName : String -> Option String
-schemeLineName l = schemeLineNameGo l 0 (stringLength l)
-
-schemeLineNameGo : String -> Int -> Int -> Option String
-schemeLineNameGo l i n
-  | i + 3 > n = None
-  | stringSlice i (i + 3) l == " : " = Some (stringSlice 0 i l)
-  | otherwise = schemeLineNameGo l (i + 1) n
+schemeLineName l = map (i => stringSlice 0 i l) (stringIndexOf " : " l)
 
 export
 mapOption : (a -> b) -> Option a -> Option b

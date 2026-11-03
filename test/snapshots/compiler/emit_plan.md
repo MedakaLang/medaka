@@ -1,5 +1,5 @@
 # META
-source_lines=393
+source_lines=528
 stages=DESUGAR,MARK
 # SOURCE
 import backend.impl_groups.{ImplClauseGroup, groupImplEntries}
@@ -35,6 +35,7 @@ import ir.core_ir.{
   CStmt(..),
   CTBranch(..),
   CTree(..),
+  ifaceMethodArityKey,
 }
 import backend.extern_catalog.{
   RuntimeExternDomain,
@@ -49,6 +50,7 @@ import support.ordmap.{
   omHasKey,
   omFromNames,
   omFromPairs,
+  omMapValues,
 }
 import support.util.{lenKey, reverseL, filterList, listLen}
 import backend.wasm_reach.{wasmReachFilter}
@@ -109,9 +111,141 @@ public export data EmitPlan = EmitPlan {
   wasmPhysical : Option WasmDemandPlan,
   hostKeys : List String,
   jsImports : List JsImport,
+  methodTables : MethodTables,
 }
 
 public export data ReachUnits = ReachUnits { total : Int, kept : Int }
+
+-- A dictionary is a method table: `[hdr | super_0 .. | slot_0 .. | req_0 ..]`.
+-- `slots` gives each interface's slots in declaration order; slot i of a
+-- dictionary of that interface is the word after its supers, at field
+-- `supers + i`.  `instances` gives, per instance key, the impl groups that fill
+-- each slot of its interface, in slot order.  A valid program has exactly one
+-- group per slot (`core_validate.validateMethodTables`).
+public export data MethodTables = MethodTables {
+  slots : OrdMap (List MethodSlot),
+  instances : OrdMap InstanceTable,
+}
+
+-- One slot: the method, the dictionaries its own `=>` context takes, and its
+-- declared value arity.  A slot holds a closure of `1 + contextDicts +
+-- valueArity` arguments, called as `code(clos, dict, mw.., args..)`.
+public export data MethodSlot = MethodSlot {
+  method : String,
+  contextDicts : Int,
+  valueArity : Int,
+} deriving (Eq, Debug)
+
+-- An instance's table: its interface word and, per slot of that interface, the
+-- groups that fill it.
+public export data InstanceTable = InstanceTable {
+  iface : String,
+  fills : List (List SlotCallee),
+}
+
+-- A group that fills a slot: its position in `EmitPlan.implGroups`, whether it
+-- is an inherited default's per-instance body, and the value arity its entries
+-- declare.
+public export data SlotCallee = SlotCallee {
+  group : Int,
+  inherited : Bool,
+  declaredArity : Int,
+} deriving (Eq, Debug)
+
+-- the slots of interface [iface], in declaration order
+export
+interfaceSlots : MethodTables -> String -> List MethodSlot
+interfaceSlots tables iface = optionOr [] (omLookup iface tables.slots)
+
+-- Slot order is the order of the declaration facts; the first declaration of a
+-- method wins, as in `indexMethodResults`.
+planMethodTables : CProgram -> List ImplClauseGroup -> MethodTables
+planMethodTables (CProgram _ _ _ impls mctx facts) groups =
+  let contexts = omFromPairs mctx omEmpty
+  let slots = fold (addSlot contexts) omEmpty facts.factMethodResults
+  let entries = indexImplEntries impls 0 omEmpty
+  let byKey = fillsByKey entries groups 0 omEmpty
+  MethodTables {
+    slots = slots,
+    instances = omMapValues (instanceTable slots) byKey,
+  }
+
+instanceTable : OrdMap (List MethodSlot) ->
+  (String, OrdMap (List SlotCallee)) ->
+  InstanceTable
+instanceTable slots (iface, byMethod) = InstanceTable {
+  iface = iface,
+  fills =
+    map
+      (s => optionOr [] (omLookup (s : MethodSlot).method byMethod))
+      (optionOr [] (omLookup iface slots)),
+}
+
+addSlot : OrdMap Int ->
+  OrdMap (List MethodSlot) ->
+  MethodResultFact ->
+  OrdMap (List MethodSlot)
+addSlot contexts acc row =
+  let have = optionOr [] (omLookup row.iface acc)
+  if any (s => (s : MethodSlot).method == row.method) have then
+    acc
+  else
+    omInsert
+      row.iface
+      (have
+        ++ [
+          MethodSlot {
+            method = row.method,
+            contextDicts =
+              optionOr
+                0
+                (omLookup (ifaceMethodArityKey row.iface row.method) contexts),
+            valueArity = row.valueArity,
+          },
+        ])
+      acc
+
+-- per instance key: its interface word and the callees of each method
+fillsByKey : OrdMap CImplEntry ->
+  List ImplClauseGroup ->
+  Int ->
+  OrdMap (String, OrdMap (List SlotCallee)) ->
+  OrdMap (String, OrdMap (List SlotCallee))
+fillsByKey _ [] _ acc = acc
+fillsByKey entries (g :: rest) i acc = match firstEntryOf entries g
+  Some (CImplEntry method _ declared body) =>
+    let (iface, inherited) = match body
+      CImplTagged _ _ word _ _ _ _ => (word, False)
+      CImplDefault word _ _ _ _ _ _ => (word, True)
+    let key = (g : ImplClauseGroup).key
+    let byMethod = match omLookup key acc
+      Some (_, m) => m
+      None => omEmpty
+    let callee = SlotCallee {
+      group = i,
+      inherited = inherited,
+      declaredArity = declared,
+    }
+    fillsByKey
+      entries
+      rest
+      (i + 1)
+      (omInsert
+        key
+        (
+          iface,
+          omInsert
+            method
+            (optionOr [] (omLookup method byMethod) ++ [callee])
+            byMethod,
+        )
+        acc)
+  None => fillsByKey entries rest (i + 1) acc
+
+firstEntryOf : OrdMap CImplEntry -> ImplClauseGroup -> Option CImplEntry
+firstEntryOf entries g = match (g : ImplClauseGroup).indices
+  i :: _ => omLookup (intToString i) entries
+  [] => None
 
 export
 buildEmitPlan : Backend -> RuntimeExternDomain -> CProgram -> EmitPlan
@@ -207,6 +341,7 @@ planOver target domain reach ctorFields prog =
     jsImports = match physical
       Some p => p.jsImports
       None => [],
+    methodTables = planMethodTables prog implGroups,
   }
 
 export
@@ -406,16 +541,37 @@ data DemandScope = DemandScope {
 (DUse false (UseGroup ("backend" "emit_target") ((mem "Backend" true))))
 (DUse false (UseGroup ("frontend" "ast") ((mem "Lit" true) (mem "Pat" true))))
 (DUse false (UseGroup ("ir" "extern_types") ((mem "ExternDeclFact" false))))
-(DUse false (UseGroup ("ir" "core_ir") ((mem "CProgram" true) (mem "EntryFact" true) (mem "MethodResultFact" true) (mem "CArm" true) (mem "CBind" true) (mem "CClause" true) (mem "CExpr" true) (mem "CField" true) (mem "CGuard" true) (mem "CHead" true) (mem "CImplEntry" true) (mem "CImplBody" true) (mem "CStmt" true) (mem "CTBranch" true) (mem "CTree" true))))
+(DUse false (UseGroup ("ir" "core_ir") ((mem "CProgram" true) (mem "EntryFact" true) (mem "MethodResultFact" true) (mem "CArm" true) (mem "CBind" true) (mem "CClause" true) (mem "CExpr" true) (mem "CField" true) (mem "CGuard" true) (mem "CHead" true) (mem "CImplEntry" true) (mem "CImplBody" true) (mem "CStmt" true) (mem "CTBranch" true) (mem "CTree" true) (mem "ifaceMethodArityKey" false))))
 (DUse false (UseGroup ("backend" "extern_catalog") ((mem "RuntimeExternDomain" false) (mem "WasmUse" true))))
-(DUse false (UseGroup ("support" "ordmap") ((mem "OrdMap" false) (mem "omEmpty" false) (mem "omInsert" false) (mem "omLookup" false) (mem "omHasKey" false) (mem "omFromNames" false) (mem "omFromPairs" false))))
+(DUse false (UseGroup ("support" "ordmap") ((mem "OrdMap" false) (mem "omEmpty" false) (mem "omInsert" false) (mem "omLookup" false) (mem "omHasKey" false) (mem "omFromNames" false) (mem "omFromPairs" false) (mem "omMapValues" false))))
 (DUse false (UseGroup ("support" "util") ((mem "lenKey" false) (mem "reverseL" false) (mem "filterList" false) (mem "listLen" false))))
 (DUse false (UseGroup ("backend" "wasm_reach") ((mem "wasmReachFilter" false))))
 (DUse false (UseGroup ("backend" "emit_support") ((mem "eagerReachMap" false) (mem "lazyGlobalNames" false))))
 (DUse false (UseGroup ("backend" "trmc_analysis") ((mem "TrmcVerdicts" true) (mem "SelfRef" true) (mem "DispGroup" false) (mem "trmcEligible" false) (mem "detectDispatchGroups" false) (mem "dictUniformClauses" false) (mem "methodSelf" false) (mem "clauseArityOf" false) (mem "bindName" false))))
 (DUse false (UseGroup ("types" "capability_manifest") ((mem "ManifestRequest" false) (mem "CapabilityManifest" false))))
-(DData Public "EmitPlan" () ((variant "EmitPlan" (ConNamed (field "manifestIndex" (TyApp (TyCon "List") (TyCon "ManifestRequest"))) (field "target" (TyCon "Backend")) (field "externRequirements" (TyCon "ExternRequirements")) (field "entryOutcome" (TyApp (TyCon "Option") (TyCon "EntryFact"))) (field "methodResults" (TyApp (TyCon "OrdMap") (TyApp (TyCon "OrdMap") (TyCon "MethodResultFact")))) (field "constructorFacts" (TyCon "ConstructorFacts")) (field "wasmOnlyReach" (TyApp (TyCon "Option") (TyCon "ReachUnits"))) (field "lazyGlobals" (TyApp (TyCon "List") (TyCon "String"))) (field "eagerReach" (TyApp (TyCon "OrdMap") (TyApp (TyCon "List") (TyCon "String")))) (field "globalInit" (TyCon "GlobalInitPlan")) (field "implGroups" (TyApp (TyCon "List") (TyCon "ImplClauseGroup"))) (field "trmc" (TyCon "TrmcVerdicts")) (field "dispGroups" (TyApp (TyCon "List") (TyCon "DispGroup"))) (field "wasmDemand" (TyCon "WasmDemand")) (field "wasmInputs" (TyCon "WasmDemandInputs")) (field "wasmPhysical" (TyApp (TyCon "Option") (TyCon "WasmDemandPlan"))) (field "hostKeys" (TyApp (TyCon "List") (TyCon "String"))) (field "jsImports" (TyApp (TyCon "List") (TyCon "JsImport")))))) ())
+(DData Public "EmitPlan" () ((variant "EmitPlan" (ConNamed (field "manifestIndex" (TyApp (TyCon "List") (TyCon "ManifestRequest"))) (field "target" (TyCon "Backend")) (field "externRequirements" (TyCon "ExternRequirements")) (field "entryOutcome" (TyApp (TyCon "Option") (TyCon "EntryFact"))) (field "methodResults" (TyApp (TyCon "OrdMap") (TyApp (TyCon "OrdMap") (TyCon "MethodResultFact")))) (field "constructorFacts" (TyCon "ConstructorFacts")) (field "wasmOnlyReach" (TyApp (TyCon "Option") (TyCon "ReachUnits"))) (field "lazyGlobals" (TyApp (TyCon "List") (TyCon "String"))) (field "eagerReach" (TyApp (TyCon "OrdMap") (TyApp (TyCon "List") (TyCon "String")))) (field "globalInit" (TyCon "GlobalInitPlan")) (field "implGroups" (TyApp (TyCon "List") (TyCon "ImplClauseGroup"))) (field "trmc" (TyCon "TrmcVerdicts")) (field "dispGroups" (TyApp (TyCon "List") (TyCon "DispGroup"))) (field "wasmDemand" (TyCon "WasmDemand")) (field "wasmInputs" (TyCon "WasmDemandInputs")) (field "wasmPhysical" (TyApp (TyCon "Option") (TyCon "WasmDemandPlan"))) (field "hostKeys" (TyApp (TyCon "List") (TyCon "String"))) (field "jsImports" (TyApp (TyCon "List") (TyCon "JsImport"))) (field "methodTables" (TyCon "MethodTables"))))) ())
 (DData Public "ReachUnits" () ((variant "ReachUnits" (ConNamed (field "total" (TyCon "Int")) (field "kept" (TyCon "Int"))))) ())
+(DData Public "MethodTables" () ((variant "MethodTables" (ConNamed (field "slots" (TyApp (TyCon "OrdMap") (TyApp (TyCon "List") (TyCon "MethodSlot")))) (field "instances" (TyApp (TyCon "OrdMap") (TyCon "InstanceTable")))))) ())
+(DData Public "MethodSlot" () ((variant "MethodSlot" (ConNamed (field "method" (TyCon "String")) (field "contextDicts" (TyCon "Int")) (field "valueArity" (TyCon "Int"))))) ())
+(DImpl true "Eq" ((TyCon "MethodSlot")) () ((im "eq" ((PVar "__x") (PVar "__y")) (EMatch (ETuple (EVar "__x") (EVar "__y")) (arm (PTuple (PRec "MethodSlot" ((rf "method" (PVar "__a0")) (rf "contextDicts" (PVar "__a1")) (rf "valueArity" (PVar "__a2"))) false) (PRec "MethodSlot" ((rf "method" (PVar "__b0")) (rf "contextDicts" (PVar "__b1")) (rf "valueArity" (PVar "__b2"))) false)) () (EBinOp "&&" (EBinOp "&&" (EApp (EApp (EVar "eq") (EVar "__a0")) (EVar "__b0")) (EApp (EApp (EVar "eq") (EVar "__a1")) (EVar "__b1"))) (EApp (EApp (EVar "eq") (EVar "__a2")) (EVar "__b2"))))))))
+(DImpl true "Debug" ((TyCon "MethodSlot")) () ((im "debug" ((PVar "__x")) (EMatch (EVar "__x") (arm (PRec "MethodSlot" ((rf "method" (PVar "__a0")) (rf "contextDicts" (PVar "__a1")) (rf "valueArity" (PVar "__a2"))) false) () (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "MethodSlot {")) (ELit (LString " method = "))) (EApp (EVar "debug") (EVar "__a0"))) (ELit (LString ", contextDicts = "))) (EApp (EVar "debug") (EVar "__a1"))) (ELit (LString ", valueArity = "))) (EApp (EVar "debug") (EVar "__a2"))) (ELit (LString " }"))))))))
+(DData Public "InstanceTable" () ((variant "InstanceTable" (ConNamed (field "iface" (TyCon "String")) (field "fills" (TyApp (TyCon "List") (TyApp (TyCon "List") (TyCon "SlotCallee"))))))) ())
+(DData Public "SlotCallee" () ((variant "SlotCallee" (ConNamed (field "group" (TyCon "Int")) (field "inherited" (TyCon "Bool")) (field "declaredArity" (TyCon "Int"))))) ())
+(DImpl true "Eq" ((TyCon "SlotCallee")) () ((im "eq" ((PVar "__x") (PVar "__y")) (EMatch (ETuple (EVar "__x") (EVar "__y")) (arm (PTuple (PRec "SlotCallee" ((rf "group" (PVar "__a0")) (rf "inherited" (PVar "__a1")) (rf "declaredArity" (PVar "__a2"))) false) (PRec "SlotCallee" ((rf "group" (PVar "__b0")) (rf "inherited" (PVar "__b1")) (rf "declaredArity" (PVar "__b2"))) false)) () (EBinOp "&&" (EBinOp "&&" (EApp (EApp (EVar "eq") (EVar "__a0")) (EVar "__b0")) (EApp (EApp (EVar "eq") (EVar "__a1")) (EVar "__b1"))) (EApp (EApp (EVar "eq") (EVar "__a2")) (EVar "__b2"))))))))
+(DImpl true "Debug" ((TyCon "SlotCallee")) () ((im "debug" ((PVar "__x")) (EMatch (EVar "__x") (arm (PRec "SlotCallee" ((rf "group" (PVar "__a0")) (rf "inherited" (PVar "__a1")) (rf "declaredArity" (PVar "__a2"))) false) () (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "SlotCallee {")) (ELit (LString " group = "))) (EApp (EVar "debug") (EVar "__a0"))) (ELit (LString ", inherited = "))) (EApp (EVar "debug") (EVar "__a1"))) (ELit (LString ", declaredArity = "))) (EApp (EVar "debug") (EVar "__a2"))) (ELit (LString " }"))))))))
+(DTypeSig true "interfaceSlots" (TyFun (TyCon "MethodTables") (TyFun (TyCon "String") (TyApp (TyCon "List") (TyCon "MethodSlot")))))
+(DFunDef false "interfaceSlots" ((PVar "tables") (PVar "iface")) (EApp (EApp (EVar "optionOr") (EListLit)) (EApp (EApp (EVar "omLookup") (EVar "iface")) (EFieldAccess (EVar "tables") "slots"))))
+(DTypeSig false "planMethodTables" (TyFun (TyCon "CProgram") (TyFun (TyApp (TyCon "List") (TyCon "ImplClauseGroup")) (TyCon "MethodTables"))))
+(DFunDef false "planMethodTables" ((PCon "CProgram" PWild PWild PWild (PVar "impls") (PVar "mctx") (PVar "facts")) (PVar "groups")) (EBlock (DoLet false false (PVar "contexts") (EApp (EApp (EVar "omFromPairs") (EVar "mctx")) (EVar "omEmpty"))) (DoLet false false (PVar "slots") (EApp (EApp (EApp (EVar "fold") (EApp (EVar "addSlot") (EVar "contexts"))) (EVar "omEmpty")) (EFieldAccess (EVar "facts") "factMethodResults"))) (DoLet false false (PVar "entries") (EApp (EApp (EApp (EVar "indexImplEntries") (EVar "impls")) (ELit (LInt 0))) (EVar "omEmpty"))) (DoLet false false (PVar "byKey") (EApp (EApp (EApp (EApp (EVar "fillsByKey") (EVar "entries")) (EVar "groups")) (ELit (LInt 0))) (EVar "omEmpty"))) (DoExpr (ERecordCreate "MethodTables" ((fa "slots" (EVar "slots")) (fa "instances" (EApp (EApp (EVar "omMapValues") (EApp (EVar "instanceTable") (EVar "slots"))) (EVar "byKey"))))))))
+(DTypeSig false "instanceTable" (TyFun (TyApp (TyCon "OrdMap") (TyApp (TyCon "List") (TyCon "MethodSlot"))) (TyFun (TyTuple (TyCon "String") (TyApp (TyCon "OrdMap") (TyApp (TyCon "List") (TyCon "SlotCallee")))) (TyCon "InstanceTable"))))
+(DFunDef false "instanceTable" ((PVar "slots") (PTuple (PVar "iface") (PVar "byMethod"))) (ERecordCreate "InstanceTable" ((fa "iface" (EVar "iface")) (fa "fills" (EApp (EApp (EVar "map") (ELam ((PVar "s")) (EApp (EApp (EVar "optionOr") (EListLit)) (EApp (EApp (EVar "omLookup") (EFieldAccess (EAnnot (EVar "s") (TyCon "MethodSlot")) "method")) (EVar "byMethod"))))) (EApp (EApp (EVar "optionOr") (EListLit)) (EApp (EApp (EVar "omLookup") (EVar "iface")) (EVar "slots"))))))))
+(DTypeSig false "addSlot" (TyFun (TyApp (TyCon "OrdMap") (TyCon "Int")) (TyFun (TyApp (TyCon "OrdMap") (TyApp (TyCon "List") (TyCon "MethodSlot"))) (TyFun (TyCon "MethodResultFact") (TyApp (TyCon "OrdMap") (TyApp (TyCon "List") (TyCon "MethodSlot")))))))
+(DFunDef false "addSlot" ((PVar "contexts") (PVar "acc") (PVar "row")) (EBlock (DoLet false false (PVar "have") (EApp (EApp (EVar "optionOr") (EListLit)) (EApp (EApp (EVar "omLookup") (EFieldAccess (EVar "row") "iface")) (EVar "acc")))) (DoExpr (EIf (EApp (EApp (EVar "any") (ELam ((PVar "s")) (EBinOp "==" (EFieldAccess (EAnnot (EVar "s") (TyCon "MethodSlot")) "method") (EFieldAccess (EVar "row") "method")))) (EVar "have")) (EVar "acc") (EApp (EApp (EApp (EVar "omInsert") (EFieldAccess (EVar "row") "iface")) (EBinOp "++" (EVar "have") (EListLit (ERecordCreate "MethodSlot" ((fa "method" (EFieldAccess (EVar "row") "method")) (fa "contextDicts" (EApp (EApp (EVar "optionOr") (ELit (LInt 0))) (EApp (EApp (EVar "omLookup") (EApp (EApp (EVar "ifaceMethodArityKey") (EFieldAccess (EVar "row") "iface")) (EFieldAccess (EVar "row") "method"))) (EVar "contexts")))) (fa "valueArity" (EFieldAccess (EVar "row") "valueArity"))))))) (EVar "acc"))))))
+(DTypeSig false "fillsByKey" (TyFun (TyApp (TyCon "OrdMap") (TyCon "CImplEntry")) (TyFun (TyApp (TyCon "List") (TyCon "ImplClauseGroup")) (TyFun (TyCon "Int") (TyFun (TyApp (TyCon "OrdMap") (TyTuple (TyCon "String") (TyApp (TyCon "OrdMap") (TyApp (TyCon "List") (TyCon "SlotCallee"))))) (TyApp (TyCon "OrdMap") (TyTuple (TyCon "String") (TyApp (TyCon "OrdMap") (TyApp (TyCon "List") (TyCon "SlotCallee"))))))))))
+(DFunDef false "fillsByKey" (PWild (PList) PWild (PVar "acc")) (EVar "acc"))
+(DFunDef false "fillsByKey" ((PVar "entries") (PCons (PVar "g") (PVar "rest")) (PVar "i") (PVar "acc")) (EMatch (EApp (EApp (EVar "firstEntryOf") (EVar "entries")) (EVar "g")) (arm (PCon "Some" (PCon "CImplEntry" (PVar "method") PWild (PVar "declared") (PVar "body"))) () (EBlock (DoLet false false (PTuple (PVar "iface") (PVar "inherited")) (EMatch (EVar "body") (arm (PCon "CImplTagged" PWild PWild (PVar "word") PWild PWild PWild PWild) () (ETuple (EVar "word") (EVar "False"))) (arm (PCon "CImplDefault" (PVar "word") PWild PWild PWild PWild PWild PWild) () (ETuple (EVar "word") (EVar "True"))))) (DoLet false false (PVar "key") (EFieldAccess (EAnnot (EVar "g") (TyCon "ImplClauseGroup")) "key")) (DoLet false false (PVar "byMethod") (EMatch (EApp (EApp (EVar "omLookup") (EVar "key")) (EVar "acc")) (arm (PCon "Some" (PTuple PWild (PVar "m"))) () (EVar "m")) (arm (PCon "None") () (EVar "omEmpty")))) (DoLet false false (PVar "callee") (ERecordCreate "SlotCallee" ((fa "group" (EVar "i")) (fa "inherited" (EVar "inherited")) (fa "declaredArity" (EVar "declared"))))) (DoExpr (EApp (EApp (EApp (EApp (EVar "fillsByKey") (EVar "entries")) (EVar "rest")) (EBinOp "+" (EVar "i") (ELit (LInt 1)))) (EApp (EApp (EApp (EVar "omInsert") (EVar "key")) (ETuple (EVar "iface") (EApp (EApp (EApp (EVar "omInsert") (EVar "method")) (EBinOp "++" (EApp (EApp (EVar "optionOr") (EListLit)) (EApp (EApp (EVar "omLookup") (EVar "method")) (EVar "byMethod"))) (EListLit (EVar "callee")))) (EVar "byMethod")))) (EVar "acc")))))) (arm (PCon "None") () (EApp (EApp (EApp (EApp (EVar "fillsByKey") (EVar "entries")) (EVar "rest")) (EBinOp "+" (EVar "i") (ELit (LInt 1)))) (EVar "acc")))))
+(DTypeSig false "firstEntryOf" (TyFun (TyApp (TyCon "OrdMap") (TyCon "CImplEntry")) (TyFun (TyCon "ImplClauseGroup") (TyApp (TyCon "Option") (TyCon "CImplEntry")))))
+(DFunDef false "firstEntryOf" ((PVar "entries") (PVar "g")) (EMatch (EFieldAccess (EAnnot (EVar "g") (TyCon "ImplClauseGroup")) "indices") (arm (PCons (PVar "i") PWild) () (EApp (EApp (EVar "omLookup") (EApp (EVar "intToString") (EVar "i"))) (EVar "entries"))) (arm (PList) () (EVar "None"))))
 (DTypeSig true "buildEmitPlan" (TyFun (TyCon "Backend") (TyFun (TyCon "RuntimeExternDomain") (TyFun (TyCon "CProgram") (TyCon "EmitPlan")))))
 (DFunDef false "buildEmitPlan" ((PVar "target") (PVar "domain") (PVar "prog")) (EApp (EApp (EApp (EApp (EApp (EVar "planOver") (EVar "target")) (EVar "domain")) (EVar "None")) (EVar "omEmpty")) (EVar "prog")))
 (DTypeSig true "buildEmitPlanReached" (TyFun (TyCon "RuntimeExternDomain") (TyFun (TyApp (TyCon "OrdMap") (TyApp (TyCon "List") (TyCon "Int"))) (TyFun (TyCon "CProgram") (TyTuple (TyCon "EmitPlan") (TyCon "CProgram"))))))
@@ -425,7 +581,7 @@ data DemandScope = DemandScope {
 (DTypeSig false "programUnitCount" (TyFun (TyCon "CProgram") (TyCon "Int")))
 (DFunDef false "programUnitCount" ((PCon "CProgram" (PVar "groups") PWild PWild (PVar "impls") PWild PWild)) (EBinOp "+" (EApp (EVar "listLen") (EVar "groups")) (EApp (EVar "listLen") (EVar "impls"))))
 (DTypeSig false "planOver" (TyFun (TyCon "Backend") (TyFun (TyCon "RuntimeExternDomain") (TyFun (TyApp (TyCon "Option") (TyCon "ReachUnits")) (TyFun (TyApp (TyCon "OrdMap") (TyApp (TyCon "List") (TyCon "Int"))) (TyFun (TyCon "CProgram") (TyCon "EmitPlan")))))))
-(DFunDef false "planOver" ((PVar "target") (PVar "domain") (PVar "reach") (PVar "ctorFields") (PVar "prog")) (EBlock (DoLet false false (PCon "CProgram" (PVar "groups") PWild PWild (PVar "impls") PWild (PVar "facts")) (EVar "prog")) (DoLet false false (PVar "constructors") (EApp (EVar "planConstructors") (EVar "prog"))) (DoLet false false (PVar "ctors") (EFieldAccess (EVar "constructors") "arities")) (DoLet false false (PVar "fns") (EApp (EApp (EVar "filterList") (EVar "isTopFn")) (EVar "groups"))) (DoLet false false (PVar "requirements") (EApp (EApp (EApp (EVar "planExterns") (EVar "target")) (EVar "domain")) (EVar "prog"))) (DoLet false false (PVar "lazy") (EApp (EVar "lazyGlobalNames") (EVar "groups"))) (DoLet false false (PVar "eager") (EApp (EVar "eagerReachMap") (EVar "groups"))) (DoLet false false (PVar "globalInit") (EApp (EApp (EApp (EVar "planGlobals") (EVar "prog")) (EVar "lazy")) (EVar "eager"))) (DoLet false false (PVar "implGroups") (EApp (EVar "groupImplEntries") (EVar "impls"))) (DoLet false false (PVar "trmc") (ERecordCreate "TrmcVerdicts" ((fa "eligibleFns" (EApp (EApp (EVar "omFromNames") (EApp (EApp (EVar "map") (EVar "bindName")) (EApp (EApp (EVar "filterList") (ELam ((PVar "b")) (EApp (EApp (EVar "selfTrmcBind") (EVar "ctors")) (EVar "b")))) (EVar "fns")))) (EVar "omEmpty"))) (fa "eligibleImpls" (EApp (EApp (EApp (EVar "trmcImplKeys") (EVar "ctors")) (EVar "impls")) (EVar "implGroups")))))) (DoLet false false (PVar "dispatch") (EApp (EApp (EApp (EApp (EVar "planDispatchGroups") (EVar "ctors")) (EVar "fns")) (EVar "groups")) (EVar "impls"))) (DoLet false false (PVar "inputs") (ERecordCreate "WasmDemandInputs" ((fa "ctorFloatFields" (EVar "ctorFields")) (fa "lazyGlobals" (EVar "lazy")) (fa "globalInit" (EVar "globalInit")) (fa "trmcVerdicts" (EVar "trmc")) (fa "dispatchGroups" (EVar "dispatch"))))) (DoLet false false (PVar "physical") (EMatch (EVar "target") (arm (PCon "WasmBackend") () (EApp (EVar "Some") (EApp (EApp (EApp (EApp (EVar "planWasmDemand") (EVar "constructors")) (EVar "inputs")) (EVar "prog")) (EVar "requirements")))) (arm PWild () (EVar "None")))) (DoExpr (ERecordCreate "EmitPlan" ((fa "manifestIndex" (EApp (EApp (EVar "map") (ELam ((PVar "m")) (EFieldAccess (EAnnot (EVar "m") (TyCon "CapabilityManifest")) "request"))) (EFieldAccess (EVar "facts") "factManifests"))) (fa "target" (EVar "target")) (fa "externRequirements" (EVar "requirements")) (fa "entryOutcome" (EFieldAccess (EVar "facts") "factEntryOutcome")) (fa "methodResults" (EApp (EVar "indexMethodResults") (EFieldAccess (EVar "facts") "factMethodResults"))) (fa "constructorFacts" (EVar "constructors")) (fa "wasmOnlyReach" (EVar "reach")) (fa "lazyGlobals" (EVar "lazy")) (fa "eagerReach" (EVar "eager")) (fa "globalInit" (EVar "globalInit")) (fa "implGroups" (EVar "implGroups")) (fa "trmc" (EVar "trmc")) (fa "dispGroups" (EVar "dispatch")) (fa "wasmDemand" (EMatch (EVar "physical") (arm (PCon "Some" (PVar "p")) () (EFieldAccess (EVar "p") "sourceDemand")) (arm (PCon "None") () (EVar "noDemand")))) (fa "wasmInputs" (EVar "inputs")) (fa "wasmPhysical" (EVar "physical")) (fa "hostKeys" (EMatch (EVar "physical") (arm (PCon "Some" (PVar "p")) () (EFieldAccess (EVar "p") "sourceHostKeys")) (arm (PCon "None") () (EListLit)))) (fa "jsImports" (EMatch (EVar "physical") (arm (PCon "Some" (PVar "p")) () (EFieldAccess (EVar "p") "jsImports")) (arm (PCon "None") () (EListLit)))))))))
+(DFunDef false "planOver" ((PVar "target") (PVar "domain") (PVar "reach") (PVar "ctorFields") (PVar "prog")) (EBlock (DoLet false false (PCon "CProgram" (PVar "groups") PWild PWild (PVar "impls") PWild (PVar "facts")) (EVar "prog")) (DoLet false false (PVar "constructors") (EApp (EVar "planConstructors") (EVar "prog"))) (DoLet false false (PVar "ctors") (EFieldAccess (EVar "constructors") "arities")) (DoLet false false (PVar "fns") (EApp (EApp (EVar "filterList") (EVar "isTopFn")) (EVar "groups"))) (DoLet false false (PVar "requirements") (EApp (EApp (EApp (EVar "planExterns") (EVar "target")) (EVar "domain")) (EVar "prog"))) (DoLet false false (PVar "lazy") (EApp (EVar "lazyGlobalNames") (EVar "groups"))) (DoLet false false (PVar "eager") (EApp (EVar "eagerReachMap") (EVar "groups"))) (DoLet false false (PVar "globalInit") (EApp (EApp (EApp (EVar "planGlobals") (EVar "prog")) (EVar "lazy")) (EVar "eager"))) (DoLet false false (PVar "implGroups") (EApp (EVar "groupImplEntries") (EVar "impls"))) (DoLet false false (PVar "trmc") (ERecordCreate "TrmcVerdicts" ((fa "eligibleFns" (EApp (EApp (EVar "omFromNames") (EApp (EApp (EVar "map") (EVar "bindName")) (EApp (EApp (EVar "filterList") (ELam ((PVar "b")) (EApp (EApp (EVar "selfTrmcBind") (EVar "ctors")) (EVar "b")))) (EVar "fns")))) (EVar "omEmpty"))) (fa "eligibleImpls" (EApp (EApp (EApp (EVar "trmcImplKeys") (EVar "ctors")) (EVar "impls")) (EVar "implGroups")))))) (DoLet false false (PVar "dispatch") (EApp (EApp (EApp (EApp (EVar "planDispatchGroups") (EVar "ctors")) (EVar "fns")) (EVar "groups")) (EVar "impls"))) (DoLet false false (PVar "inputs") (ERecordCreate "WasmDemandInputs" ((fa "ctorFloatFields" (EVar "ctorFields")) (fa "lazyGlobals" (EVar "lazy")) (fa "globalInit" (EVar "globalInit")) (fa "trmcVerdicts" (EVar "trmc")) (fa "dispatchGroups" (EVar "dispatch"))))) (DoLet false false (PVar "physical") (EMatch (EVar "target") (arm (PCon "WasmBackend") () (EApp (EVar "Some") (EApp (EApp (EApp (EApp (EVar "planWasmDemand") (EVar "constructors")) (EVar "inputs")) (EVar "prog")) (EVar "requirements")))) (arm PWild () (EVar "None")))) (DoExpr (ERecordCreate "EmitPlan" ((fa "manifestIndex" (EApp (EApp (EVar "map") (ELam ((PVar "m")) (EFieldAccess (EAnnot (EVar "m") (TyCon "CapabilityManifest")) "request"))) (EFieldAccess (EVar "facts") "factManifests"))) (fa "target" (EVar "target")) (fa "externRequirements" (EVar "requirements")) (fa "entryOutcome" (EFieldAccess (EVar "facts") "factEntryOutcome")) (fa "methodResults" (EApp (EVar "indexMethodResults") (EFieldAccess (EVar "facts") "factMethodResults"))) (fa "constructorFacts" (EVar "constructors")) (fa "wasmOnlyReach" (EVar "reach")) (fa "lazyGlobals" (EVar "lazy")) (fa "eagerReach" (EVar "eager")) (fa "globalInit" (EVar "globalInit")) (fa "implGroups" (EVar "implGroups")) (fa "trmc" (EVar "trmc")) (fa "dispGroups" (EVar "dispatch")) (fa "wasmDemand" (EMatch (EVar "physical") (arm (PCon "Some" (PVar "p")) () (EFieldAccess (EVar "p") "sourceDemand")) (arm (PCon "None") () (EVar "noDemand")))) (fa "wasmInputs" (EVar "inputs")) (fa "wasmPhysical" (EVar "physical")) (fa "hostKeys" (EMatch (EVar "physical") (arm (PCon "Some" (PVar "p")) () (EFieldAccess (EVar "p") "sourceHostKeys")) (arm (PCon "None") () (EListLit)))) (fa "jsImports" (EMatch (EVar "physical") (arm (PCon "Some" (PVar "p")) () (EFieldAccess (EVar "p") "jsImports")) (arm (PCon "None") () (EListLit)))) (fa "methodTables" (EApp (EApp (EVar "planMethodTables") (EVar "prog")) (EVar "implGroups"))))))))
 (DTypeSig true "planEntryMainIsUnit" (TyFun (TyCon "EmitPlan") (TyCon "Bool")))
 (DFunDef false "planEntryMainIsUnit" ((PVar "plan")) (EMatch (EFieldAccess (EVar "plan") "entryOutcome") (arm (PCon "Some" (PVar "outcome")) () (EFieldAccess (EVar "outcome") "entryMainIsUnit")) (arm (PCon "None") () (EVar "False"))))
 (DTypeSig true "planEntryMainIsFloat" (TyFun (TyCon "EmitPlan") (TyCon "Bool")))
@@ -484,16 +640,37 @@ data DemandScope = DemandScope {
 (DUse false (UseGroup ("backend" "emit_target") ((mem "Backend" true))))
 (DUse false (UseGroup ("frontend" "ast") ((mem "Lit" true) (mem "Pat" true))))
 (DUse false (UseGroup ("ir" "extern_types") ((mem "ExternDeclFact" false))))
-(DUse false (UseGroup ("ir" "core_ir") ((mem "CProgram" true) (mem "EntryFact" true) (mem "MethodResultFact" true) (mem "CArm" true) (mem "CBind" true) (mem "CClause" true) (mem "CExpr" true) (mem "CField" true) (mem "CGuard" true) (mem "CHead" true) (mem "CImplEntry" true) (mem "CImplBody" true) (mem "CStmt" true) (mem "CTBranch" true) (mem "CTree" true))))
+(DUse false (UseGroup ("ir" "core_ir") ((mem "CProgram" true) (mem "EntryFact" true) (mem "MethodResultFact" true) (mem "CArm" true) (mem "CBind" true) (mem "CClause" true) (mem "CExpr" true) (mem "CField" true) (mem "CGuard" true) (mem "CHead" true) (mem "CImplEntry" true) (mem "CImplBody" true) (mem "CStmt" true) (mem "CTBranch" true) (mem "CTree" true) (mem "ifaceMethodArityKey" false))))
 (DUse false (UseGroup ("backend" "extern_catalog") ((mem "RuntimeExternDomain" false) (mem "WasmUse" true))))
-(DUse false (UseGroup ("support" "ordmap") ((mem "OrdMap" false) (mem "omEmpty" false) (mem "omInsert" false) (mem "omLookup" false) (mem "omHasKey" false) (mem "omFromNames" false) (mem "omFromPairs" false))))
+(DUse false (UseGroup ("support" "ordmap") ((mem "OrdMap" false) (mem "omEmpty" false) (mem "omInsert" false) (mem "omLookup" false) (mem "omHasKey" false) (mem "omFromNames" false) (mem "omFromPairs" false) (mem "omMapValues" false))))
 (DUse false (UseGroup ("support" "util") ((mem "lenKey" false) (mem "reverseL" false) (mem "filterList" false) (mem "listLen" false))))
 (DUse false (UseGroup ("backend" "wasm_reach") ((mem "wasmReachFilter" false))))
 (DUse false (UseGroup ("backend" "emit_support") ((mem "eagerReachMap" false) (mem "lazyGlobalNames" false))))
 (DUse false (UseGroup ("backend" "trmc_analysis") ((mem "TrmcVerdicts" true) (mem "SelfRef" true) (mem "DispGroup" false) (mem "trmcEligible" false) (mem "detectDispatchGroups" false) (mem "dictUniformClauses" false) (mem "methodSelf" false) (mem "clauseArityOf" false) (mem "bindName" false))))
 (DUse false (UseGroup ("types" "capability_manifest") ((mem "ManifestRequest" false) (mem "CapabilityManifest" false))))
-(DData Public "EmitPlan" () ((variant "EmitPlan" (ConNamed (field "manifestIndex" (TyApp (TyCon "List") (TyCon "ManifestRequest"))) (field "target" (TyCon "Backend")) (field "externRequirements" (TyCon "ExternRequirements")) (field "entryOutcome" (TyApp (TyCon "Option") (TyCon "EntryFact"))) (field "methodResults" (TyApp (TyCon "OrdMap") (TyApp (TyCon "OrdMap") (TyCon "MethodResultFact")))) (field "constructorFacts" (TyCon "ConstructorFacts")) (field "wasmOnlyReach" (TyApp (TyCon "Option") (TyCon "ReachUnits"))) (field "lazyGlobals" (TyApp (TyCon "List") (TyCon "String"))) (field "eagerReach" (TyApp (TyCon "OrdMap") (TyApp (TyCon "List") (TyCon "String")))) (field "globalInit" (TyCon "GlobalInitPlan")) (field "implGroups" (TyApp (TyCon "List") (TyCon "ImplClauseGroup"))) (field "trmc" (TyCon "TrmcVerdicts")) (field "dispGroups" (TyApp (TyCon "List") (TyCon "DispGroup"))) (field "wasmDemand" (TyCon "WasmDemand")) (field "wasmInputs" (TyCon "WasmDemandInputs")) (field "wasmPhysical" (TyApp (TyCon "Option") (TyCon "WasmDemandPlan"))) (field "hostKeys" (TyApp (TyCon "List") (TyCon "String"))) (field "jsImports" (TyApp (TyCon "List") (TyCon "JsImport")))))) ())
+(DData Public "EmitPlan" () ((variant "EmitPlan" (ConNamed (field "manifestIndex" (TyApp (TyCon "List") (TyCon "ManifestRequest"))) (field "target" (TyCon "Backend")) (field "externRequirements" (TyCon "ExternRequirements")) (field "entryOutcome" (TyApp (TyCon "Option") (TyCon "EntryFact"))) (field "methodResults" (TyApp (TyCon "OrdMap") (TyApp (TyCon "OrdMap") (TyCon "MethodResultFact")))) (field "constructorFacts" (TyCon "ConstructorFacts")) (field "wasmOnlyReach" (TyApp (TyCon "Option") (TyCon "ReachUnits"))) (field "lazyGlobals" (TyApp (TyCon "List") (TyCon "String"))) (field "eagerReach" (TyApp (TyCon "OrdMap") (TyApp (TyCon "List") (TyCon "String")))) (field "globalInit" (TyCon "GlobalInitPlan")) (field "implGroups" (TyApp (TyCon "List") (TyCon "ImplClauseGroup"))) (field "trmc" (TyCon "TrmcVerdicts")) (field "dispGroups" (TyApp (TyCon "List") (TyCon "DispGroup"))) (field "wasmDemand" (TyCon "WasmDemand")) (field "wasmInputs" (TyCon "WasmDemandInputs")) (field "wasmPhysical" (TyApp (TyCon "Option") (TyCon "WasmDemandPlan"))) (field "hostKeys" (TyApp (TyCon "List") (TyCon "String"))) (field "jsImports" (TyApp (TyCon "List") (TyCon "JsImport"))) (field "methodTables" (TyCon "MethodTables"))))) ())
 (DData Public "ReachUnits" () ((variant "ReachUnits" (ConNamed (field "total" (TyCon "Int")) (field "kept" (TyCon "Int"))))) ())
+(DData Public "MethodTables" () ((variant "MethodTables" (ConNamed (field "slots" (TyApp (TyCon "OrdMap") (TyApp (TyCon "List") (TyCon "MethodSlot")))) (field "instances" (TyApp (TyCon "OrdMap") (TyCon "InstanceTable")))))) ())
+(DData Public "MethodSlot" () ((variant "MethodSlot" (ConNamed (field "method" (TyCon "String")) (field "contextDicts" (TyCon "Int")) (field "valueArity" (TyCon "Int"))))) ())
+(DImpl true "Eq" ((TyCon "MethodSlot")) () ((im "eq" ((PVar "__x") (PVar "__y")) (EMatch (ETuple (EVar "__x") (EVar "__y")) (arm (PTuple (PRec "MethodSlot" ((rf "method" (PVar "__a0")) (rf "contextDicts" (PVar "__a1")) (rf "valueArity" (PVar "__a2"))) false) (PRec "MethodSlot" ((rf "method" (PVar "__b0")) (rf "contextDicts" (PVar "__b1")) (rf "valueArity" (PVar "__b2"))) false)) () (EBinOp "&&" (EBinOp "&&" (EApp (EApp (EMethodRef "eq") (EVar "__a0")) (EVar "__b0")) (EApp (EApp (EMethodRef "eq") (EVar "__a1")) (EVar "__b1"))) (EApp (EApp (EMethodRef "eq") (EVar "__a2")) (EVar "__b2"))))))))
+(DImpl true "Debug" ((TyCon "MethodSlot")) () ((im "debug" ((PVar "__x")) (EMatch (EVar "__x") (arm (PRec "MethodSlot" ((rf "method" (PVar "__a0")) (rf "contextDicts" (PVar "__a1")) (rf "valueArity" (PVar "__a2"))) false) () (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "MethodSlot {")) (ELit (LString " method = "))) (EApp (EMethodRef "debug") (EVar "__a0"))) (ELit (LString ", contextDicts = "))) (EApp (EMethodRef "debug") (EVar "__a1"))) (ELit (LString ", valueArity = "))) (EApp (EMethodRef "debug") (EVar "__a2"))) (ELit (LString " }"))))))))
+(DData Public "InstanceTable" () ((variant "InstanceTable" (ConNamed (field "iface" (TyCon "String")) (field "fills" (TyApp (TyCon "List") (TyApp (TyCon "List") (TyCon "SlotCallee"))))))) ())
+(DData Public "SlotCallee" () ((variant "SlotCallee" (ConNamed (field "group" (TyCon "Int")) (field "inherited" (TyCon "Bool")) (field "declaredArity" (TyCon "Int"))))) ())
+(DImpl true "Eq" ((TyCon "SlotCallee")) () ((im "eq" ((PVar "__x") (PVar "__y")) (EMatch (ETuple (EVar "__x") (EVar "__y")) (arm (PTuple (PRec "SlotCallee" ((rf "group" (PVar "__a0")) (rf "inherited" (PVar "__a1")) (rf "declaredArity" (PVar "__a2"))) false) (PRec "SlotCallee" ((rf "group" (PVar "__b0")) (rf "inherited" (PVar "__b1")) (rf "declaredArity" (PVar "__b2"))) false)) () (EBinOp "&&" (EBinOp "&&" (EApp (EApp (EMethodRef "eq") (EVar "__a0")) (EVar "__b0")) (EApp (EApp (EMethodRef "eq") (EVar "__a1")) (EVar "__b1"))) (EApp (EApp (EMethodRef "eq") (EVar "__a2")) (EVar "__b2"))))))))
+(DImpl true "Debug" ((TyCon "SlotCallee")) () ((im "debug" ((PVar "__x")) (EMatch (EVar "__x") (arm (PRec "SlotCallee" ((rf "group" (PVar "__a0")) (rf "inherited" (PVar "__a1")) (rf "declaredArity" (PVar "__a2"))) false) () (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "SlotCallee {")) (ELit (LString " group = "))) (EApp (EMethodRef "debug") (EVar "__a0"))) (ELit (LString ", inherited = "))) (EApp (EMethodRef "debug") (EVar "__a1"))) (ELit (LString ", declaredArity = "))) (EApp (EMethodRef "debug") (EVar "__a2"))) (ELit (LString " }"))))))))
+(DTypeSig true "interfaceSlots" (TyFun (TyCon "MethodTables") (TyFun (TyCon "String") (TyApp (TyCon "List") (TyCon "MethodSlot")))))
+(DFunDef false "interfaceSlots" ((PVar "tables") (PVar "iface")) (EApp (EApp (EVar "optionOr") (EListLit)) (EApp (EApp (EVar "omLookup") (EVar "iface")) (EFieldAccess (EVar "tables") "slots"))))
+(DTypeSig false "planMethodTables" (TyFun (TyCon "CProgram") (TyFun (TyApp (TyCon "List") (TyCon "ImplClauseGroup")) (TyCon "MethodTables"))))
+(DFunDef false "planMethodTables" ((PCon "CProgram" PWild PWild PWild (PVar "impls") (PVar "mctx") (PVar "facts")) (PVar "groups")) (EBlock (DoLet false false (PVar "contexts") (EApp (EApp (EVar "omFromPairs") (EVar "mctx")) (EVar "omEmpty"))) (DoLet false false (PVar "slots") (EApp (EApp (EApp (EMethodRef "fold") (EApp (EVar "addSlot") (EVar "contexts"))) (EVar "omEmpty")) (EFieldAccess (EVar "facts") "factMethodResults"))) (DoLet false false (PVar "entries") (EApp (EApp (EApp (EVar "indexImplEntries") (EVar "impls")) (ELit (LInt 0))) (EVar "omEmpty"))) (DoLet false false (PVar "byKey") (EApp (EApp (EApp (EApp (EVar "fillsByKey") (EVar "entries")) (EVar "groups")) (ELit (LInt 0))) (EVar "omEmpty"))) (DoExpr (ERecordCreate "MethodTables" ((fa "slots" (EVar "slots")) (fa "instances" (EApp (EApp (EVar "omMapValues") (EApp (EVar "instanceTable") (EVar "slots"))) (EVar "byKey"))))))))
+(DTypeSig false "instanceTable" (TyFun (TyApp (TyCon "OrdMap") (TyApp (TyCon "List") (TyCon "MethodSlot"))) (TyFun (TyTuple (TyCon "String") (TyApp (TyCon "OrdMap") (TyApp (TyCon "List") (TyCon "SlotCallee")))) (TyCon "InstanceTable"))))
+(DFunDef false "instanceTable" ((PVar "slots") (PTuple (PVar "iface") (PVar "byMethod"))) (ERecordCreate "InstanceTable" ((fa "iface" (EVar "iface")) (fa "fills" (EApp (EApp (EMethodRef "map") (ELam ((PVar "s")) (EApp (EApp (EVar "optionOr") (EListLit)) (EApp (EApp (EVar "omLookup") (EFieldAccess (EAnnot (EVar "s") (TyCon "MethodSlot")) "method")) (EVar "byMethod"))))) (EApp (EApp (EVar "optionOr") (EListLit)) (EApp (EApp (EVar "omLookup") (EVar "iface")) (EVar "slots"))))))))
+(DTypeSig false "addSlot" (TyFun (TyApp (TyCon "OrdMap") (TyCon "Int")) (TyFun (TyApp (TyCon "OrdMap") (TyApp (TyCon "List") (TyCon "MethodSlot"))) (TyFun (TyCon "MethodResultFact") (TyApp (TyCon "OrdMap") (TyApp (TyCon "List") (TyCon "MethodSlot")))))))
+(DFunDef false "addSlot" ((PVar "contexts") (PVar "acc") (PVar "row")) (EBlock (DoLet false false (PVar "have") (EApp (EApp (EVar "optionOr") (EListLit)) (EApp (EApp (EVar "omLookup") (EFieldAccess (EVar "row") "iface")) (EVar "acc")))) (DoExpr (EIf (EApp (EApp (EDictApp "any") (ELam ((PVar "s")) (EBinOp "==" (EFieldAccess (EAnnot (EVar "s") (TyCon "MethodSlot")) "method") (EFieldAccess (EVar "row") "method")))) (EVar "have")) (EVar "acc") (EApp (EApp (EApp (EVar "omInsert") (EFieldAccess (EVar "row") "iface")) (EBinOp "++" (EVar "have") (EListLit (ERecordCreate "MethodSlot" ((fa "method" (EFieldAccess (EVar "row") "method")) (fa "contextDicts" (EApp (EApp (EVar "optionOr") (ELit (LInt 0))) (EApp (EApp (EVar "omLookup") (EApp (EApp (EVar "ifaceMethodArityKey") (EFieldAccess (EVar "row") "iface")) (EFieldAccess (EVar "row") "method"))) (EVar "contexts")))) (fa "valueArity" (EFieldAccess (EVar "row") "valueArity"))))))) (EVar "acc"))))))
+(DTypeSig false "fillsByKey" (TyFun (TyApp (TyCon "OrdMap") (TyCon "CImplEntry")) (TyFun (TyApp (TyCon "List") (TyCon "ImplClauseGroup")) (TyFun (TyCon "Int") (TyFun (TyApp (TyCon "OrdMap") (TyTuple (TyCon "String") (TyApp (TyCon "OrdMap") (TyApp (TyCon "List") (TyCon "SlotCallee"))))) (TyApp (TyCon "OrdMap") (TyTuple (TyCon "String") (TyApp (TyCon "OrdMap") (TyApp (TyCon "List") (TyCon "SlotCallee"))))))))))
+(DFunDef false "fillsByKey" (PWild (PList) PWild (PVar "acc")) (EVar "acc"))
+(DFunDef false "fillsByKey" ((PVar "entries") (PCons (PVar "g") (PVar "rest")) (PVar "i") (PVar "acc")) (EMatch (EApp (EApp (EVar "firstEntryOf") (EVar "entries")) (EVar "g")) (arm (PCon "Some" (PCon "CImplEntry" (PVar "method") PWild (PVar "declared") (PVar "body"))) () (EBlock (DoLet false false (PTuple (PVar "iface") (PVar "inherited")) (EMatch (EVar "body") (arm (PCon "CImplTagged" PWild PWild (PVar "word") PWild PWild PWild PWild) () (ETuple (EVar "word") (EVar "False"))) (arm (PCon "CImplDefault" (PVar "word") PWild PWild PWild PWild PWild PWild) () (ETuple (EVar "word") (EVar "True"))))) (DoLet false false (PVar "key") (EFieldAccess (EAnnot (EVar "g") (TyCon "ImplClauseGroup")) "key")) (DoLet false false (PVar "byMethod") (EMatch (EApp (EApp (EVar "omLookup") (EVar "key")) (EVar "acc")) (arm (PCon "Some" (PTuple PWild (PVar "m"))) () (EVar "m")) (arm (PCon "None") () (EVar "omEmpty")))) (DoLet false false (PVar "callee") (ERecordCreate "SlotCallee" ((fa "group" (EVar "i")) (fa "inherited" (EVar "inherited")) (fa "declaredArity" (EVar "declared"))))) (DoExpr (EApp (EApp (EApp (EApp (EVar "fillsByKey") (EVar "entries")) (EVar "rest")) (EBinOp "+" (EVar "i") (ELit (LInt 1)))) (EApp (EApp (EApp (EVar "omInsert") (EVar "key")) (ETuple (EVar "iface") (EApp (EApp (EApp (EVar "omInsert") (EVar "method")) (EBinOp "++" (EApp (EApp (EVar "optionOr") (EListLit)) (EApp (EApp (EVar "omLookup") (EVar "method")) (EVar "byMethod"))) (EListLit (EVar "callee")))) (EVar "byMethod")))) (EVar "acc")))))) (arm (PCon "None") () (EApp (EApp (EApp (EApp (EVar "fillsByKey") (EVar "entries")) (EVar "rest")) (EBinOp "+" (EVar "i") (ELit (LInt 1)))) (EVar "acc")))))
+(DTypeSig false "firstEntryOf" (TyFun (TyApp (TyCon "OrdMap") (TyCon "CImplEntry")) (TyFun (TyCon "ImplClauseGroup") (TyApp (TyCon "Option") (TyCon "CImplEntry")))))
+(DFunDef false "firstEntryOf" ((PVar "entries") (PVar "g")) (EMatch (EFieldAccess (EAnnot (EVar "g") (TyCon "ImplClauseGroup")) "indices") (arm (PCons (PVar "i") PWild) () (EApp (EApp (EVar "omLookup") (EApp (EVar "intToString") (EVar "i"))) (EVar "entries"))) (arm (PList) () (EVar "None"))))
 (DTypeSig true "buildEmitPlan" (TyFun (TyCon "Backend") (TyFun (TyCon "RuntimeExternDomain") (TyFun (TyCon "CProgram") (TyCon "EmitPlan")))))
 (DFunDef false "buildEmitPlan" ((PVar "target") (PVar "domain") (PVar "prog")) (EApp (EApp (EApp (EApp (EApp (EVar "planOver") (EVar "target")) (EVar "domain")) (EVar "None")) (EVar "omEmpty")) (EVar "prog")))
 (DTypeSig true "buildEmitPlanReached" (TyFun (TyCon "RuntimeExternDomain") (TyFun (TyApp (TyCon "OrdMap") (TyApp (TyCon "List") (TyCon "Int"))) (TyFun (TyCon "CProgram") (TyTuple (TyCon "EmitPlan") (TyCon "CProgram"))))))
@@ -503,7 +680,7 @@ data DemandScope = DemandScope {
 (DTypeSig false "programUnitCount" (TyFun (TyCon "CProgram") (TyCon "Int")))
 (DFunDef false "programUnitCount" ((PCon "CProgram" (PVar "groups") PWild PWild (PVar "impls") PWild PWild)) (EBinOp "+" (EApp (EVar "listLen") (EVar "groups")) (EApp (EVar "listLen") (EVar "impls"))))
 (DTypeSig false "planOver" (TyFun (TyCon "Backend") (TyFun (TyCon "RuntimeExternDomain") (TyFun (TyApp (TyCon "Option") (TyCon "ReachUnits")) (TyFun (TyApp (TyCon "OrdMap") (TyApp (TyCon "List") (TyCon "Int"))) (TyFun (TyCon "CProgram") (TyCon "EmitPlan")))))))
-(DFunDef false "planOver" ((PVar "target") (PVar "domain") (PVar "reach") (PVar "ctorFields") (PVar "prog")) (EBlock (DoLet false false (PCon "CProgram" (PVar "groups") PWild PWild (PVar "impls") PWild (PVar "facts")) (EVar "prog")) (DoLet false false (PVar "constructors") (EApp (EVar "planConstructors") (EVar "prog"))) (DoLet false false (PVar "ctors") (EFieldAccess (EVar "constructors") "arities")) (DoLet false false (PVar "fns") (EApp (EApp (EVar "filterList") (EVar "isTopFn")) (EVar "groups"))) (DoLet false false (PVar "requirements") (EApp (EApp (EApp (EVar "planExterns") (EVar "target")) (EVar "domain")) (EVar "prog"))) (DoLet false false (PVar "lazy") (EApp (EVar "lazyGlobalNames") (EVar "groups"))) (DoLet false false (PVar "eager") (EApp (EVar "eagerReachMap") (EVar "groups"))) (DoLet false false (PVar "globalInit") (EApp (EApp (EApp (EVar "planGlobals") (EVar "prog")) (EVar "lazy")) (EVar "eager"))) (DoLet false false (PVar "implGroups") (EApp (EVar "groupImplEntries") (EVar "impls"))) (DoLet false false (PVar "trmc") (ERecordCreate "TrmcVerdicts" ((fa "eligibleFns" (EApp (EApp (EVar "omFromNames") (EApp (EApp (EMethodRef "map") (EVar "bindName")) (EApp (EApp (EVar "filterList") (ELam ((PVar "b")) (EApp (EApp (EVar "selfTrmcBind") (EVar "ctors")) (EVar "b")))) (EVar "fns")))) (EVar "omEmpty"))) (fa "eligibleImpls" (EApp (EApp (EApp (EVar "trmcImplKeys") (EVar "ctors")) (EVar "impls")) (EVar "implGroups")))))) (DoLet false false (PVar "dispatch") (EApp (EApp (EApp (EApp (EVar "planDispatchGroups") (EVar "ctors")) (EVar "fns")) (EVar "groups")) (EVar "impls"))) (DoLet false false (PVar "inputs") (ERecordCreate "WasmDemandInputs" ((fa "ctorFloatFields" (EVar "ctorFields")) (fa "lazyGlobals" (EVar "lazy")) (fa "globalInit" (EVar "globalInit")) (fa "trmcVerdicts" (EVar "trmc")) (fa "dispatchGroups" (EVar "dispatch"))))) (DoLet false false (PVar "physical") (EMatch (EVar "target") (arm (PCon "WasmBackend") () (EApp (EVar "Some") (EApp (EApp (EApp (EApp (EVar "planWasmDemand") (EVar "constructors")) (EVar "inputs")) (EVar "prog")) (EVar "requirements")))) (arm PWild () (EVar "None")))) (DoExpr (ERecordCreate "EmitPlan" ((fa "manifestIndex" (EApp (EApp (EMethodRef "map") (ELam ((PVar "m")) (EFieldAccess (EAnnot (EVar "m") (TyCon "CapabilityManifest")) "request"))) (EFieldAccess (EVar "facts") "factManifests"))) (fa "target" (EVar "target")) (fa "externRequirements" (EVar "requirements")) (fa "entryOutcome" (EFieldAccess (EVar "facts") "factEntryOutcome")) (fa "methodResults" (EApp (EVar "indexMethodResults") (EFieldAccess (EVar "facts") "factMethodResults"))) (fa "constructorFacts" (EVar "constructors")) (fa "wasmOnlyReach" (EVar "reach")) (fa "lazyGlobals" (EVar "lazy")) (fa "eagerReach" (EVar "eager")) (fa "globalInit" (EVar "globalInit")) (fa "implGroups" (EVar "implGroups")) (fa "trmc" (EVar "trmc")) (fa "dispGroups" (EVar "dispatch")) (fa "wasmDemand" (EMatch (EVar "physical") (arm (PCon "Some" (PVar "p")) () (EFieldAccess (EVar "p") "sourceDemand")) (arm (PCon "None") () (EVar "noDemand")))) (fa "wasmInputs" (EVar "inputs")) (fa "wasmPhysical" (EVar "physical")) (fa "hostKeys" (EMatch (EVar "physical") (arm (PCon "Some" (PVar "p")) () (EFieldAccess (EVar "p") "sourceHostKeys")) (arm (PCon "None") () (EListLit)))) (fa "jsImports" (EMatch (EVar "physical") (arm (PCon "Some" (PVar "p")) () (EFieldAccess (EVar "p") "jsImports")) (arm (PCon "None") () (EListLit)))))))))
+(DFunDef false "planOver" ((PVar "target") (PVar "domain") (PVar "reach") (PVar "ctorFields") (PVar "prog")) (EBlock (DoLet false false (PCon "CProgram" (PVar "groups") PWild PWild (PVar "impls") PWild (PVar "facts")) (EVar "prog")) (DoLet false false (PVar "constructors") (EApp (EVar "planConstructors") (EVar "prog"))) (DoLet false false (PVar "ctors") (EFieldAccess (EVar "constructors") "arities")) (DoLet false false (PVar "fns") (EApp (EApp (EVar "filterList") (EVar "isTopFn")) (EVar "groups"))) (DoLet false false (PVar "requirements") (EApp (EApp (EApp (EVar "planExterns") (EVar "target")) (EVar "domain")) (EVar "prog"))) (DoLet false false (PVar "lazy") (EApp (EVar "lazyGlobalNames") (EVar "groups"))) (DoLet false false (PVar "eager") (EApp (EVar "eagerReachMap") (EVar "groups"))) (DoLet false false (PVar "globalInit") (EApp (EApp (EApp (EVar "planGlobals") (EVar "prog")) (EVar "lazy")) (EVar "eager"))) (DoLet false false (PVar "implGroups") (EApp (EVar "groupImplEntries") (EVar "impls"))) (DoLet false false (PVar "trmc") (ERecordCreate "TrmcVerdicts" ((fa "eligibleFns" (EApp (EApp (EVar "omFromNames") (EApp (EApp (EMethodRef "map") (EVar "bindName")) (EApp (EApp (EVar "filterList") (ELam ((PVar "b")) (EApp (EApp (EVar "selfTrmcBind") (EVar "ctors")) (EVar "b")))) (EVar "fns")))) (EVar "omEmpty"))) (fa "eligibleImpls" (EApp (EApp (EApp (EVar "trmcImplKeys") (EVar "ctors")) (EVar "impls")) (EVar "implGroups")))))) (DoLet false false (PVar "dispatch") (EApp (EApp (EApp (EApp (EVar "planDispatchGroups") (EVar "ctors")) (EVar "fns")) (EVar "groups")) (EVar "impls"))) (DoLet false false (PVar "inputs") (ERecordCreate "WasmDemandInputs" ((fa "ctorFloatFields" (EVar "ctorFields")) (fa "lazyGlobals" (EVar "lazy")) (fa "globalInit" (EVar "globalInit")) (fa "trmcVerdicts" (EVar "trmc")) (fa "dispatchGroups" (EVar "dispatch"))))) (DoLet false false (PVar "physical") (EMatch (EVar "target") (arm (PCon "WasmBackend") () (EApp (EVar "Some") (EApp (EApp (EApp (EApp (EVar "planWasmDemand") (EVar "constructors")) (EVar "inputs")) (EVar "prog")) (EVar "requirements")))) (arm PWild () (EVar "None")))) (DoExpr (ERecordCreate "EmitPlan" ((fa "manifestIndex" (EApp (EApp (EMethodRef "map") (ELam ((PVar "m")) (EFieldAccess (EAnnot (EVar "m") (TyCon "CapabilityManifest")) "request"))) (EFieldAccess (EVar "facts") "factManifests"))) (fa "target" (EVar "target")) (fa "externRequirements" (EVar "requirements")) (fa "entryOutcome" (EFieldAccess (EVar "facts") "factEntryOutcome")) (fa "methodResults" (EApp (EVar "indexMethodResults") (EFieldAccess (EVar "facts") "factMethodResults"))) (fa "constructorFacts" (EVar "constructors")) (fa "wasmOnlyReach" (EVar "reach")) (fa "lazyGlobals" (EVar "lazy")) (fa "eagerReach" (EVar "eager")) (fa "globalInit" (EVar "globalInit")) (fa "implGroups" (EVar "implGroups")) (fa "trmc" (EVar "trmc")) (fa "dispGroups" (EVar "dispatch")) (fa "wasmDemand" (EMatch (EVar "physical") (arm (PCon "Some" (PVar "p")) () (EFieldAccess (EVar "p") "sourceDemand")) (arm (PCon "None") () (EVar "noDemand")))) (fa "wasmInputs" (EVar "inputs")) (fa "wasmPhysical" (EVar "physical")) (fa "hostKeys" (EMatch (EVar "physical") (arm (PCon "Some" (PVar "p")) () (EFieldAccess (EVar "p") "sourceHostKeys")) (arm (PCon "None") () (EListLit)))) (fa "jsImports" (EMatch (EVar "physical") (arm (PCon "Some" (PVar "p")) () (EFieldAccess (EVar "p") "jsImports")) (arm (PCon "None") () (EListLit)))) (fa "methodTables" (EApp (EApp (EVar "planMethodTables") (EVar "prog")) (EVar "implGroups"))))))))
 (DTypeSig true "planEntryMainIsUnit" (TyFun (TyCon "EmitPlan") (TyCon "Bool")))
 (DFunDef false "planEntryMainIsUnit" ((PVar "plan")) (EMatch (EFieldAccess (EVar "plan") "entryOutcome") (arm (PCon "Some" (PVar "outcome")) () (EFieldAccess (EVar "outcome") "entryMainIsUnit")) (arm (PCon "None") () (EVar "False"))))
 (DTypeSig true "planEntryMainIsFloat" (TyFun (TyCon "EmitPlan") (TyCon "Bool")))

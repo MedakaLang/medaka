@@ -112,6 +112,7 @@ headName (TyApp f _) = headName f
 headName (TyTuple []) = "Unit"
 headName _ = ""
 
+export
 lastSegment : String -> String
 lastSegment n = optionOr n (last (split "." n))
 

@@ -1,19 +1,18 @@
--- BARE LAMBDA, WITH CAPTURE: an anonymous `x => ...` lambda literal that DOES
--- close over a value from its enclosing scope (`k`), passed as a first-class
--- VALUE on every iteration. Parity pin for the S-3 hoist above: a capturing
--- lambda's `captureWords` is non-empty, so it must still allocate a FRESH
--- cell every call -- this path is untouched by the hoist.
-apply1 : (Int -> Int) -> Int -> Int
-apply1 f x = f x
-
-loop : Int -> Int -> Int -> Int
-loop n k acc
-  | n <= 0 = acc
-  | otherwise = loop (n - 1) (k + 1) (apply1 (x => x + k) acc)
+-- Bare lambda with a capture that escapes: an anonymous `x => ...` lambda
+-- literal that closes over `k` and outlives the iteration that builds it. Each
+-- iteration passes its lambda on to the next one, which applies it; the last
+-- one is applied after the loop. A cell is still live when the next one, with
+-- a different `k`, is built, so the probe allocates one cell per iteration. A
+-- lambda applied only inside the iteration that builds it is not a valid
+-- control: once the applying call inlines, -O2 deletes the cell.
+loop : Int -> Int -> (Int -> Int) -> Int -> Int
+loop n k f acc
+  | n <= 0 = f acc
+  | otherwise = loop (n - 1) (k + 1) (x => x + k) (f acc)
 
 main =
   let a0 = allocBytes ()
-  let r = loop 2000000 0 0
+  let r = loop 2000000 0 (x => x) 0
   let a1 = allocBytes ()
   println "lambda-capture result=\{debug r}"
   println "lambda-capture allocBytes=\{debug (a1 - a0)}"

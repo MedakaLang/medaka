@@ -5,14 +5,14 @@
 -- entry rather than a per-instance specialization of `$mdk_impl_Bag_foldMap`,
 -- emitted as an impl entry under its stamped `ImplSym` symbol.
 --
--- `foldMap f = fold (acc x => acc ++ f x) empty` is point-free in the container AND
--- carries a leading `Monoid m =>` dict, so the dict-pass gives its clause pats
--- `[$dict_foldMap_0, f]`.  The wasm define arity must be the method's user arity (2)
+-- The default `foldMap f t = listFoldMapGo empty (fold ... t)` carries a leading
+-- `Monoid m =>` dict, so the dict-pass gives its clause pats
+-- `[$dict_foldMap_0, f, t]`.  The wasm define arity must be the method's user arity (2)
 -- PLUS the leading-dict count (1) = 3, or the synthesized default drops the container
--- arg and emits an under-applied `fold step empty` PAP that fails wasm validate
--- ("expected (ref eq) but nothing on stack" — the same underflow #24 had on the
--- CONCRETE-impl path, here on its default sibling).  Oracle (medaka build / LLVM):
--- [1, 1, 2, 2, 3, 3].
+-- arg and is under-applied, which fails wasm validate ("expected (ref eq) but
+-- nothing on stack"), as the CONCRETE-impl path does
+-- when its arity is short.
+-- Oracle (medaka build / LLVM): [1, 1, 2, 2, 3, 3].
 data Bag a = Bag (List a)
 
 impl Foldable Bag where

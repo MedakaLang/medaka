@@ -380,6 +380,8 @@ tagPRec : Unit -> Int
 tagPRec () = 9
 tagPOr : Unit -> Int
 tagPOr () = 10
+tagPAnn : Unit -> Int
+tagPAnn () = 11
 
 -- Guard
 tagGBool : Unit -> Int
@@ -727,6 +729,7 @@ sexpPat (PRec a0 a1 a2) = SList [
   sexpList sexpRecPatField a1,
   sexpBool a2,
 ]
+sexpPat (PAnn a0 a1) = SList [tagAtom (tagPAnn ()), sexpPat a0, sexpTy a1]
 
 sexpRecPatField : RecPatField -> SExp
 sexpRecPatField (RecPatField a0 a1 a2 a3) =
@@ -1478,6 +1481,10 @@ readPatTagged t cur
     let a1 = cursorList readRecPatField cur
     let a2 = readBool cur
     PRec a0 a1 a2
+  | t == tagPAnn () =
+    let a0 = readPat cur
+    let a1 = readTy cur
+    PAnn a0 a1
   | otherwise = cursorFail cur dfltPat
 
 readRecPatField : SexpCursor -> RecPatField

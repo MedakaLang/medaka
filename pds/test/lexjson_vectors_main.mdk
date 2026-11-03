@@ -157,17 +157,29 @@ timeDecision n =
   min (one ()) (min (one ()) (min (one ()) (min (one ()) (one ()))))
 
 -- Quadrupling the field count multiplies an n log n decision by about 4.5
--- and a quadratic one by 16. The threshold sits between the two with a
--- factor of two of load noise on either side, so a loaded machine cannot
--- redden an n log n decision and cannot pass a quadratic one.
+-- and a quadratic one by 16. The threshold sits between the two. One loaded
+-- sample can still land past it (a 10k decision takes about 5 ms, so one
+-- scheduler hiccup moves the ratio past 9 about once in twelve runs on 2
+-- shared cores), so the ratio is measured up to three times and the check
+-- passes on the first sample under the threshold. A quadratic decision gives
+-- a ratio near 16 on every sample and stays red.
 runScaling : <IO, Clock> Bool
 runScaling =
   let _warm = timeDecision 1000
+  scalingAttempt 3
+
+scalingAttempt : Int -> <IO, Clock> Bool
+scalingAttempt left =
   let t1 = timeDecision 10000
   let t4 = timeDecision 40000
   let ratio = t4 / t1
   let () = println "scaling: 10k=\{t1}s 40k=\{t4}s ratio=\{ratio}"
-  ratio < 9.0
+  if ratio < 9.0 then
+    True
+  else if left <= 1 then
+    False
+  else
+    scalingAttempt (left - 1)
 
 runCap : <IO, Clock> Unit
 runCap =

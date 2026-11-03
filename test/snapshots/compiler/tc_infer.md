@@ -1092,7 +1092,7 @@ inferBinop _dyn op _ _ = panic ("typecheck: unsupported operator " ++ op)
 -- obligation with a bare iface-param declared type (`TyVar "a"`, typaram ["a"]) so
 -- dispatchMonosOf recovers exactly the operand mono.  `Monoid a requires Semigroup
 -- a`, so a declared `Monoid a =>` constraint superclass-closes to satisfy it (this
--- is what keeps core.mdk's `foldMap f = fold (acc x => acc ++ f x) empty` typing).
+-- is what keeps core.mdk's `foldMap` default, which appends via `Monoid`, typing).
 -- A still-polymorphic operand defers to the caller, exactly like Num/Eq/Ord.
 --
 -- Gated on the PRELUDE's `Semigroup` being present, via `builtinClassPresent`: the

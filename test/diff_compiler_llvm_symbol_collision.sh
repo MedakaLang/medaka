@@ -262,16 +262,13 @@ else
   fi
 fi
 
-# ── 5. the DICT-WITNESS TAG domain (FR-1, #348/#377) — scope-narrowing coverage ──
-# `core_validate.validateDictTags` checks a SEPARATE space from sections 1-4's
-# emitted-symbol domain: the dict-witness/route-word tag a shared dispatcher
-# compares at runtime (`private_mangle.hashName`, a non-injective djb2 hash — see
-# its own comment for the constructible-collision mechanism). FR-1 fixed the guard
-# to partition its population by METHOD NAME, the same grouping key the emitted
-# dispatcher itself uses (`llvm_emit.implsOf`/`dispFnName` — a method-name lookup),
-# because a collision between two UNRELATED methods' route words is never actually
-# compared at runtime and refusing it was a false positive (F-1/F-2 review
-# findings). This section is the missing regression coverage those findings named.
+# ── 5. dictionary headers that hash alike ───────────────────────────────────────
+# A dictionary's header word (`private_mangle.hashName`, a non-injective djb2 hash)
+# is identity only: a call loads a method-table slot and nothing compares the
+# header, so two instances whose keys hash alike must build and answer as `run`
+# does. The positive control is an unrelated-method collision with a prelude impl;
+# the same-method and inherited-default shapes are the ones a tag-comparing
+# dispatcher answered wrongly.
 
 # positive control: an unrelated-method collision (this program's `JMt` vs the
 # prelude's `Int`) must now BUILD and RUN.
@@ -306,87 +303,39 @@ else
   fi
 fi
 
-# negative control: a SAME-method-name collision (Mzone/NYone, S-4's construction,
-# dispatched through one dict parameter) must still REFUSE.
-checked=$((checked + 1))
-DWNBIN="$WORK/dict_witness_negative.bin"
-DWNLOG="$WORK/dict_witness_negative.log"
-"$MEDAKA" build "$FIX/dict_witness/negative.mdk" -o "$DWNBIN" > "$DWNLOG" 2>&1
-dwnst=$?
+# builds_and_prints <fixture> <tag> <want> : native build, run, compare stdout
+builds_and_prints() {
+  checked=$((checked + 1))
+  bp_bin="$WORK/$2.bin"
+  bp_log="$WORK/$2.log"
+  "$MEDAKA" build "$FIX/dict_witness/$1" -o "$bp_bin" > "$bp_log" 2>&1
+  bp_st=$?
+  if [ "$bp_st" -ne 0 ]; then
+    fail "$2 failed to build (exit $bp_st); colliding dictionary headers must not refuse"
+    sed 's/^/        /' "$bp_log"
+    return
+  fi
+  checked=$((checked + 1))
+  printf '%s\n' "$3" > "$WORK/$2.expected"
+  "$bp_bin" > "$WORK/$2.out" 2>&1
+  bp_rst=$?
+  if [ "$bp_rst" -ne 0 ] || ! diff -u "$WORK/$2.expected" "$WORK/$2.out" > "$WORK/$2.diff" 2>&1; then
+    fail "$2 binary did not print the hand-derived $3 (exit $bp_rst)"
+    sed 's/^/        /' "$WORK/$2.diff"
+  else
+    ok "$2 builds and prints $3"
+  fi
+}
 
-if [ "$dwnst" -eq 0 ]; then
-  fail "the dict-witness negative control built at exit 0 — the guard did NOT fire"
-  printf '      two impls of ONE method name (zn) with colliding route words ARE\n'
-  printf '      compared by that method'"'"'s shared dispatcher; this must still refuse.\n'
-  printf '      Build output:\n'
-  sed 's/^/        /' "$DWNLOG"
-else
-  ok "the dict-witness negative control refused (exit $dwnst)"
-fi
+# two impls of ONE method name at keys with equal hashes, dispatched through one dict
+builds_and_prints negative.mdk dict_witness_same_method 'mzone|nyone'
 
-# The message must name both route words -- not merely "it failed".
-checked=$((checked + 1))
-dwnmissing=""
-for want in 'emitted dict-witness tag collision' 'method `zn`' 'Mzone' 'NYone'; do
-  grep -q -- "$want" "$DWNLOG" || dwnmissing="$dwnmissing '$want'"
-done
-if [ -n "$dwnmissing" ]; then
-  fail "dict-witness negative-control diagnostic does not name both route words; missing:$dwnmissing"
-  sed 's/^/        /' "$DWNLOG"
-else
-  ok "dict-witness negative-control refusal names both route words and the method"
-fi
+# supplied at Mzone, inherited at NYone
+builds_and_prints default_negative.mdk dict_witness_default 'mzone|default'
 
-# It must refuse BEFORE producing anything.
-checked=$((checked + 1))
-if [ -e "$DWNBIN" ]; then
-  fail "a binary was produced at $DWNBIN despite the dict-witness refusal"
-  printf '      the property is "refuses before any binary is produced".\n'
-else
-  ok "no binary produced (dict-witness domain)"
-fi
-
-# the inherited-default shape: `zn` supplied at Mzone, inherited at NYone. Both
-# are arms of `zn`'s one dispatcher, so the colliding pair must still REFUSE.
-checked=$((checked + 1))
-DWDBIN="$WORK/dict_witness_default.bin"
-DWDLOG="$WORK/dict_witness_default.log"
-"$MEDAKA" build "$FIX/dict_witness/default_negative.mdk" -o "$DWDBIN" > "$DWDLOG" 2>&1
-dwdst=$?
-
-if [ "$dwdst" -eq 0 ]; then
-  fail "the inherited-default collision built at exit 0 — the guard skipped the default entry"
-  printf '      a supplied impl and an inherited default of ONE method share its\n'
-  printf '      dispatcher; with colliding words the binary answers default|default.\n'
-  sed 's/^/        /' "$DWDLOG"
-else
-  ok "the inherited-default collision refused (exit $dwdst)"
-fi
-
-checked=$((checked + 1))
-dwdmissing=""
-for want in 'emitted dict-witness tag collision' 'method `zn`' 'Mzone' 'NYone'; do
-  grep -q -- "$want" "$DWDLOG" || dwdmissing="$dwdmissing '$want'"
-done
-if [ -n "$dwdmissing" ]; then
-  fail "inherited-default refusal does not name both route words; missing:$dwdmissing"
-  sed 's/^/        /' "$DWDLOG"
-else
-  ok "inherited-default refusal names both route words and the method"
-fi
-
-checked=$((checked + 1))
-if [ -e "$DWDBIN" ]; then
-  fail "a binary was produced at $DWDBIN despite the inherited-default refusal"
-else
-  ok "no binary produced (inherited-default shape)"
-fi
-
-# ── 6. the WasmGC emitter's own dict-tag arm (#377) ─────────────────────────────
-# Each emitter refuses at its own width. `wasm_only.mdk` collides only in the
-# 30-bit wasm `dictTag`: it must build and run natively, and the wasm emitter must
-# refuse it. `negative.mdk` collides in the full width, which the wasm emitter
-# checks too.
+# ── 6. the WasmGC emitter accepts the same programs ─────────────────────────────
+# The wasm header is the 30-bit `dictTag`; `wasm_only.mdk` collides only there and
+# the others collide in the full width. None may be refused.
 
 # wasm_emit <fixture> <tag> : run the wasm emitter, WAT to $tag.wat, set $wst
 wasm_emit() {
@@ -394,67 +343,27 @@ wasm_emit() {
   wst=$?
 }
 
-# wasm_refuses <tag> <want>... : assert $wst, the message lines, and no WAT written
-wasm_refuses() {
-  tag=$1
-  shift
+# wasm_accepts <tag> : the emitter exited 0 and wrote WAT
+wasm_accepts() {
   checked=$((checked + 1))
-  if [ "$wst" -eq 0 ]; then
-    fail "$tag emitted at exit 0 — the wasm emitter's dict-tag arm did NOT fire"
-    sed 's/^/        /' "$WORK/$tag.log"
+  if [ "$wst" -eq 0 ] && [ -s "$WORK/$1.wat" ]; then
+    ok "$1 emitted by the wasm emitter"
   else
-    ok "$tag refused by the wasm emitter (exit $wst)"
-  fi
-  checked=$((checked + 1))
-  wmissing=""
-  for want in "$@"; do
-    grep -q -- "$want" "$WORK/$tag.log" || wmissing="$wmissing '$want'"
-  done
-  if [ -n "$wmissing" ]; then
-    fail "$tag wasm refusal does not name the space and both route words; missing:$wmissing"
-    sed 's/^/        /' "$WORK/$tag.log"
-  else
-    ok "$tag wasm refusal names the tag space and both route words"
-  fi
-  checked=$((checked + 1))
-  if [ -s "$WORK/$tag.wat" ]; then
-    fail "the wasm emitter wrote WAT for $tag despite the refusal"
-  else
-    ok "no WAT written ($tag)"
+    fail "$1 refused by the wasm emitter (exit $wst)"
+    sed 's/^/        /' "$WORK/$1.log"
   fi
 }
 
-checked=$((checked + 1))
-WOBIN="$WORK/wasm_only.bin"
-"$MEDAKA" build "$FIX/dict_witness/wasm_only.mdk" -o "$WOBIN" > "$WORK/wasm_only_native.log" 2>&1
-wost=$?
-if [ "$wost" -ne 0 ]; then
-  fail "the wasm-only collision failed to build natively (exit $wost)"
-  printf '      its full i64 tags are distinct, so the native dispatcher is correct\n'
-  printf '      and the native emitter must not refuse. Build output:\n'
-  sed 's/^/        /' "$WORK/wasm_only_native.log"
-else
-  ok "the wasm-only collision builds natively (exit 0)"
-  checked=$((checked + 1))
-  "$WOBIN" > "$WORK/wasm_only.out" 2>&1
-  worst=$?
-  printf 'd|l\n' > "$WORK/wasm_only.expected"
-  if [ "$worst" -ne 0 ] || ! diff -u "$WORK/wasm_only.expected" "$WORK/wasm_only.out" > "$WORK/wasm_only.diff" 2>&1; then
-    fail "the wasm-only collision's native binary did not print the hand-derived d|l (exit $worst)"
-    sed 's/^/        /' "$WORK/wasm_only.out"
-  else
-    ok "the wasm-only collision's native binary prints d|l"
-  fi
-fi
+builds_and_prints wasm_only.mdk dict_witness_wasm_only 'd|l'
 
 wasm_emit "$FIX/dict_witness/wasm_only.mdk" wasm_only_wasm
-wasm_refuses wasm_only_wasm 'emitted dict-witness tag collision' 'tag space: wasm (WasmGC) 30-bit' 'Dbnfbcp' 'Llzhriz'
+wasm_accepts wasm_only_wasm
 
 wasm_emit "$FIX/dict_witness/negative.mdk" negative_wasm
-wasm_refuses negative_wasm 'emitted dict-witness tag collision' 'tag space: native (LLVM) i64' 'Mzone' 'NYone'
+wasm_accepts negative_wasm
 
 wasm_emit "$FIX/dict_witness/default_negative.mdk" default_negative_wasm
-wasm_refuses default_negative_wasm 'emitted dict-witness tag collision' 'tag space: native (LLVM) i64' 'Mzone' 'NYone'
+wasm_accepts default_negative_wasm
 
 # A primed top-level name and its unprimed control both compute 3 + 10.
 printf "%s\n" 13 > "$WORK/primed.expected"

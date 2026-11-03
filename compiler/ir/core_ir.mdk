@@ -414,11 +414,21 @@ noImplSym = ImplSym "" "" ""
 
 -- ── programs ───────────────────────────────────────────────────────────────
 -- The method-context table, the fifth field of `CProgram`: per interface method of the lowered declarations whose
--- own `=>` context has a slot, keyed by `core_ir_lower.ifaceMethodArityKey`, the
+-- own `=>` context has a slot, keyed by `ifaceMethodArityKey`, the
 -- number of constraints in that context that mention a type variable.  It is read
 -- off the declared signature, not the typechecker's evidence, so
 -- `core_validate.validateMethodContexts` can hold a `CMethod`'s method routes and an
 -- impl entry's leading dictionaries to it.
+
+-- The identity-keyed lookup word for an interface method (#1450, #1668): the
+-- interface's DECLARATION word and the method name, spliced.  It keys the
+-- method-context table above and the lowering's declared-arity table, and both
+-- backends read it.  `ifaceWordOf` never answers `""` (it falls back to the bare
+-- interface name), so this word is never the absence-matches-absence hazard
+-- `ifaceIdentity` carries.  `#` cannot occur in either half.
+export
+ifaceMethodArityKey : String -> String -> String
+ifaceMethodArityKey ifaceWord mname = "\{ifaceWord}#\{mname}"
 
 -- A lowered program: top-level function groups (coalesced multi-clause), the
 -- constructor table (name → arity, for building VCon makers), the ctor→type map

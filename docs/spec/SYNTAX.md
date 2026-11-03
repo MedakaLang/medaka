@@ -508,6 +508,7 @@ p3 = (x, y) => x + y  -- tuple-destructuring param
 p4 = (Some x) => x  -- constructor-pattern param
 p5 = _ => 0  -- wildcard param
 p6 = (xs@rest) => xs  -- as-pattern param
+p8 = (x : Int) => x + 1  -- annotated param (parenthesised)
 
 -- point-free one-arg lambda that immediately matches (no `function` keyword)
 p7 =

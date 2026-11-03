@@ -1,5 +1,5 @@
 # META
-source_lines=1853
+source_lines=1854
 stages=DESUGAR,MARK
 # SOURCE
 -- compiler/tools/doc.mdk — the native `medaka doc` documentation extractor.
@@ -542,6 +542,7 @@ mergeArgs (x :: xs) (y :: ys) = (if x == "_" then y else x) :: mergeArgs xs ys
 headArgName : Pat -> String
 headArgName (PVar v _ _) = v
 headArgName (PAs v _ _ _) = v
+headArgName (PAnn p _) = headArgName p
 headArgName _ = "_"
 
 renderHead : String -> List String -> String
@@ -1310,7 +1311,7 @@ uniqueDoc (x :: xs) = x :: uniqueDoc (filterDoc (/= x) xs)
 -- runtimeSrc / coreSrc are the prelude sources (runtime.mdk + core.mdk), read
 -- by the caller from MEDAKA_ROOT; src is the target file; filename gives the
 -- module-name basename; roots are the import search roots (mirrors `check`'s
--- `entrySearchRoots (dirOf2 target) ++ [stdlibDir]`, medaka_cli.mdk:583) so an
+-- `entrySearchRoots (dirOf target) ++ [stdlibDir]`, front_gate.mdk) so an
 -- import-bearing target resolves its siblings before inferring schemes.
 export
 runDoc : String -> String -> String -> String -> List String -> <IO> String
@@ -1997,6 +1998,7 @@ docSchemesFor runtimeSrc coreSrc filename roots _rawUser =
 (DTypeSig false "headArgName" (TyFun (TyCon "Pat") (TyCon "String")))
 (DFunDef false "headArgName" ((PCon "PVar" (PVar "v") PWild PWild)) (EVar "v"))
 (DFunDef false "headArgName" ((PCon "PAs" (PVar "v") PWild PWild PWild)) (EVar "v"))
+(DFunDef false "headArgName" ((PCon "PAnn" (PVar "p") PWild)) (EApp (EVar "headArgName") (EVar "p")))
 (DFunDef false "headArgName" (PWild) (ELit (LString "_")))
 (DTypeSig false "renderHead" (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyCon "String"))))
 (DFunDef false "renderHead" ((PVar "name") (PVar "args")) (EIf (EApp (EApp (EVar "all") (ELam ((PVar "_s")) (EBinOp "==" (EVar "_s") (ELit (LString "_"))))) (EVar "args")) (ELit (LString "")) (EApp (EApp (EVar "joinWith") (ELit (LString " "))) (EBinOp "::" (EVar "name") (EVar "args")))))
@@ -2453,6 +2455,7 @@ docSchemesFor runtimeSrc coreSrc filename roots _rawUser =
 (DTypeSig false "headArgName" (TyFun (TyCon "Pat") (TyCon "String")))
 (DFunDef false "headArgName" ((PCon "PVar" (PVar "v") PWild PWild)) (EVar "v"))
 (DFunDef false "headArgName" ((PCon "PAs" (PVar "v") PWild PWild PWild)) (EVar "v"))
+(DFunDef false "headArgName" ((PCon "PAnn" (PVar "p") PWild)) (EApp (EVar "headArgName") (EVar "p")))
 (DFunDef false "headArgName" (PWild) (ELit (LString "_")))
 (DTypeSig false "renderHead" (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyCon "String"))))
 (DFunDef false "renderHead" ((PVar "name") (PVar "args")) (EIf (EApp (EApp (EDictApp "all") (ELam ((PVar "_s")) (EBinOp "==" (EVar "_s") (ELit (LString "_"))))) (EVar "args")) (ELit (LString "")) (EApp (EApp (EVar "joinWith") (ELit (LString " "))) (EBinOp "::" (EVar "name") (EVar "args")))))

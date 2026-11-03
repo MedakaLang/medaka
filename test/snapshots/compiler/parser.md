@@ -1,5 +1,5 @@
 # META
-source_lines=5070
+source_lines=5074
 stages=DESUGAR,MARK
 # SOURCE
 import frontend.parse_locate.{locateOffset, locateTokenDiagnostic}
@@ -316,6 +316,7 @@ exprToPat (ESection (SecLeft a "::")) = PCons (exprToPat a) PWild
 exprToPat (EAsPat x sub) = PAs x (Loc "" 0 0 0 0) noBinderId (exprToPat sub)
 exprToPat (EOrPat es) = orPatOf (map exprToPat es)
 exprToPat (EApp f x) = appToPat (EApp f x)
+exprToPat (EAnnot e t) = PAnn (exprToPat e) t
 exprToPat _ = PWild
 
 -- Alternatives joined into one pattern; nested or-patterns are flattened so a
@@ -2552,22 +2553,22 @@ parseTyParenAt : Int -> Token -> Token -> Parser Ty
 parseTyParenAt s (TString _) _ = parseTyAuthJoin s
 parseTyParenAt s TLBrace _ = parseTyAuthJoin s
 parseTyParenAt s (TUpper _) TEqual = parseTyAuthJoin s
-parseTyParenAt _ t _ = parseTyParenBody t
+parseTyParenAt s t _ = parseTyParenBody s t
 
 -- A leading comma right after `(` can only be the bare tuple type constructor
 -- `(,)`/`(,,)`/… (arities 2–5) — a normal parenthesized/tuple type always starts
 -- with a type atom.  Everything else is the existing `(a)` / `(a, b)` / `(a -> b)`
 -- path.
-parseTyParenBody : Token -> Parser Ty
-parseTyParenBody TComma = parseTupleCtorTail 0
+parseTyParenBody : Int -> Token -> Parser Ty
+parseTyParenBody s TComma = parseTupleCtorTail s 0
 -- `(e | e2)` in an Effect-kinded type-ARGUMENT slot is a bare row whose tail
 -- is a join (#821), the parenthesised spelling of `<e | e2>`: `f (e | e2) b`.
 -- Only a `|` right after the ident selects it, so `(e)` and `(e, f)` keep
 -- their ordinary parenthesised/tuple readings.
-parseTyParenBody (TIdent _) = defer
+parseTyParenBody _ (TIdent _) = defer
   t2 <- peek2P
   parseTyParenIdent t2
-parseTyParenBody _ = parseTyParenTuple
+parseTyParenBody _ _ = parseTyParenTuple
 
 parseTyParenIdent : Token -> Parser Ty
 -- `(name : T)`: an arrow-domain binder naming the argument's authority, and
@@ -2635,19 +2636,22 @@ parseTyParenTuple = defer
 -- Lowers to `TyCon "__tupleN__"`, the same dispatch tag typecheck uses
 -- (`tupleHeadTagTc`), so the unsaturated head can bind a higher-kinded class
 -- param (`impl Bimappable (,)`).
-parseTupleCtorTail : Int -> Parser Ty
-parseTupleCtorTail commas = defer
+parseTupleCtorTail : Int -> Int -> Parser Ty
+parseTupleCtorTail s commas = defer
   t <- peekP
-  tupleCtorTailFor commas t
+  tupleCtorTailFor s commas t
 
-tupleCtorTailFor : Int -> Token -> Parser Ty
-tupleCtorTailFor commas TComma = defer
+tupleCtorTailFor : Int -> Int -> Token -> Parser Ty
+tupleCtorTailFor s commas TComma = defer
   advance
-  parseTupleCtorTail (commas + 1)
-tupleCtorTailFor commas TRParen = defer
+  parseTupleCtorTail s (commas + 1)
+tupleCtorTailFor s commas TRParen = defer
   advance
-  tupleCtorTyOfArity (commas + 1)
-tupleCtorTailFor _ _ = failP "expected `,` or `)` in the tuple type constructor"
+  ctx <- contextP
+  q <- getPos
+  tupleCtorTyOfArity (Some (locOfSpan ctx s q)) (commas + 1)
+tupleCtorTailFor _ _ _ =
+  failP "expected `,` or `)` in the tuple type constructor"
 
 -- #1110 (was a residual, DRAINED by the stamping PR): this head is a BUILTIN, so
 -- `DICT-SEMANTICS.md` §8 I6.2 (a) says its identity is the reserved
@@ -2657,10 +2661,10 @@ tupleCtorTailFor _ _ = failP "expected `,` or `)` in the tuple type constructor"
 -- is what keeps resolve's stamper off it: the stamper only ever fills in an
 -- `OriginUnresolved` head, so this node is immune by construction rather than by
 -- a special case the stamper has to remember.
-tupleCtorTyOfArity : Int -> Parser Ty
-tupleCtorTyOfArity n =
+tupleCtorTyOfArity : Option Loc -> Int -> Parser Ty
+tupleCtorTyOfArity loc n =
   if n >= 2 && n <= 5 then
-    deferPure (tyConBuiltin (tupleCtorTyName n) None)
+    deferPure (tyConBuiltin (tupleCtorTyName n) loc)
   else
     failP "a tuple type constructor has 2 to 5 components"
 
@@ -4508,8 +4512,8 @@ exprStmtFor startPos e TEqual = defer
 exprStmtFor _ e _ = deferPure [DoExpr e]
 
 -- `pat <- e` → one DoBind; an annotated var LHS `x : ty <- e` → the bind PLUS a
--- shadowing `let x = (x : ty)` so x is bound AND its declared type is enforced
--- (there is no annotated-pattern node to carry the type on the binder directly)
+-- shadowing `let x = (x : ty)` so x is bound AND its declared type is enforced;
+-- any other annotated LHS keeps its type on the pattern (`PAnn`)
 bindStmts : Expr -> Expr -> List DoStmt
 bindStmts lhs rhs = match stripLoc lhs
   EAnnot inner ty => bindAnnot inner ty rhs
@@ -4526,7 +4530,7 @@ bindAnnot inner ty rhs = match stripLoc inner
       (EAnnot (EVar x) ty)
       noDeclLoc,
   ]
-  other => [DoBind (exprToPat other) rhs]
+  other => [DoBind (PAnn (exprToPat other) ty) rhs]
 
 -- a `lhs = rhs` statement: bare var → DoAssign; a field path is rejected at the
 -- statement's start (`fatalAtP`, so the message survives `many` recovery)
@@ -5166,6 +5170,7 @@ parseResultWith mode src tokList offList =
 (DFunDef false "exprToPat" ((PCon "EAsPat" (PVar "x") (PVar "sub"))) (EApp (EApp (EApp (EApp (EVar "PAs") (EVar "x")) (EApp (EApp (EApp (EApp (EApp (EVar "Loc") (ELit (LString ""))) (ELit (LInt 0))) (ELit (LInt 0))) (ELit (LInt 0))) (ELit (LInt 0)))) (EVar "noBinderId")) (EApp (EVar "exprToPat") (EVar "sub"))))
 (DFunDef false "exprToPat" ((PCon "EOrPat" (PVar "es"))) (EApp (EVar "orPatOf") (EApp (EApp (EVar "map") (EVar "exprToPat")) (EVar "es"))))
 (DFunDef false "exprToPat" ((PCon "EApp" (PVar "f") (PVar "x"))) (EApp (EVar "appToPat") (EApp (EApp (EVar "EApp") (EVar "f")) (EVar "x"))))
+(DFunDef false "exprToPat" ((PCon "EAnnot" (PVar "e") (PVar "t"))) (EApp (EApp (EVar "PAnn") (EApp (EVar "exprToPat") (EVar "e"))) (EVar "t")))
 (DFunDef false "exprToPat" (PWild) (EVar "PWild"))
 (DTypeSig false "orPatOf" (TyFun (TyApp (TyCon "List") (TyCon "Pat")) (TyCon "Pat")))
 (DFunDef false "orPatOf" ((PList (PVar "p"))) (EVar "p"))
@@ -5930,11 +5935,11 @@ parseResultWith mode src tokList offList =
 (DFunDef false "parseTyParenAt" ((PVar "s") (PCon "TString" PWild) PWild) (EApp (EVar "parseTyAuthJoin") (EVar "s")))
 (DFunDef false "parseTyParenAt" ((PVar "s") (PCon "TLBrace") PWild) (EApp (EVar "parseTyAuthJoin") (EVar "s")))
 (DFunDef false "parseTyParenAt" ((PVar "s") (PCon "TUpper" PWild) (PCon "TEqual")) (EApp (EVar "parseTyAuthJoin") (EVar "s")))
-(DFunDef false "parseTyParenAt" (PWild (PVar "t") PWild) (EApp (EVar "parseTyParenBody") (EVar "t")))
-(DTypeSig false "parseTyParenBody" (TyFun (TyCon "Token") (TyApp (TyCon "Parser") (TyCon "Ty"))))
-(DFunDef false "parseTyParenBody" ((PCon "TComma")) (EApp (EVar "parseTupleCtorTail") (ELit (LInt 0))))
-(DFunDef false "parseTyParenBody" ((PCon "TIdent" PWild)) (EApp (EApp (EVar "deferThen") (EVar "peek2P")) (ELam ((PVar "t2")) (EApp (EVar "parseTyParenIdent") (EVar "t2")))))
-(DFunDef false "parseTyParenBody" (PWild) (EVar "parseTyParenTuple"))
+(DFunDef false "parseTyParenAt" ((PVar "s") (PVar "t") PWild) (EApp (EApp (EVar "parseTyParenBody") (EVar "s")) (EVar "t")))
+(DTypeSig false "parseTyParenBody" (TyFun (TyCon "Int") (TyFun (TyCon "Token") (TyApp (TyCon "Parser") (TyCon "Ty")))))
+(DFunDef false "parseTyParenBody" ((PVar "s") (PCon "TComma")) (EApp (EApp (EVar "parseTupleCtorTail") (EVar "s")) (ELit (LInt 0))))
+(DFunDef false "parseTyParenBody" (PWild (PCon "TIdent" PWild)) (EApp (EApp (EVar "deferThen") (EVar "peek2P")) (ELam ((PVar "t2")) (EApp (EVar "parseTyParenIdent") (EVar "t2")))))
+(DFunDef false "parseTyParenBody" (PWild PWild) (EVar "parseTyParenTuple"))
 (DTypeSig false "parseTyParenIdent" (TyFun (TyCon "Token") (TyApp (TyCon "Parser") (TyCon "Ty"))))
 (DFunDef false "parseTyParenIdent" ((PCon "TColon")) (EApp (EApp (EVar "deferThen") (EVar "identNameP")) (ELam ((PVar "n")) (EApp (EApp (EVar "deferThen") (EApp (EVar "expectTok") (EVar "TColon"))) (ELam (PWild) (EApp (EApp (EVar "deferThen") (EVar "parseTy")) (ELam ((PVar "t")) (EApp (EApp (EVar "deferThen") (EVar "peekP")) (ELam ((PVar "t1")) (EApp (EApp (EVar "deferThen") (EVar "peek2P")) (ELam ((PVar "t2")) (EApp (EApp (EVar "deferThen") (EApp (EApp (EVar "binderDomainP") (EVar "t1")) (EVar "t2"))) (ELam ((PVar "d")) (EApp (EApp (EVar "deferThen") (EApp (EVar "expectTok") (EVar "TRParen"))) (ELam (PWild) (EApp (EVar "deferPure") (EApp (EApp (EApp (EVar "TyNamed") (EVar "n")) (EVar "t")) (EVar "d"))))))))))))))))))
 (DFunDef false "parseTyParenIdent" ((PCon "TPipe")) (EApp (EApp (EVar "deferThen") (EVar "contextP")) (ELam ((PVar "ctx")) (EApp (EApp (EVar "deferThen") (EVar "getPos")) (ELam ((PVar "s")) (EApp (EApp (EVar "deferThen") (EVar "identNameP")) (ELam ((PVar "v")) (EApp (EApp (EVar "deferThen") (EVar "authJoinTail")) (ELam ((PVar "rest")) (EApp (EApp (EVar "deferThen") (EApp (EVar "expectTok") (EVar "TRParen"))) (ELam (PWild) (EApp (EApp (EVar "deferThen") (EVar "getPos")) (ELam ((PVar "q")) (EApp (EVar "deferPure") (EApp (EApp (EApp (EVar "namesOrAuthJoin") (EVar "v")) (EVar "rest")) (EApp (EVar "Some") (EApp (EApp (EApp (EVar "locOfSpan") (EVar "ctx")) (EVar "s")) (EVar "q"))))))))))))))))))
@@ -5951,14 +5956,14 @@ parseResultWith mode src tokList offList =
 (DFunDef false "allNames" (PWild PWild) (EVar "None"))
 (DTypeSig false "parseTyParenTuple" (TyApp (TyCon "Parser") (TyCon "Ty")))
 (DFunDef false "parseTyParenTuple" () (EApp (EApp (EVar "deferThen") (EApp (EApp (EVar "sepBy1") (EVar "parseTy")) (EApp (EVar "expectTok") (EVar "TComma")))) (ELam ((PVar "ts")) (EApp (EApp (EVar "deferThen") (EApp (EVar "optTrailingCommaTuple") (EVar "ts"))) (ELam (PWild) (EApp (EApp (EVar "deferThen") (EApp (EVar "expectTok") (EVar "TRParen"))) (ELam (PWild) (EApp (EVar "deferPure") (EApp (EVar "tyTupleOrSingle") (EVar "ts"))))))))))
-(DTypeSig false "parseTupleCtorTail" (TyFun (TyCon "Int") (TyApp (TyCon "Parser") (TyCon "Ty"))))
-(DFunDef false "parseTupleCtorTail" ((PVar "commas")) (EApp (EApp (EVar "deferThen") (EVar "peekP")) (ELam ((PVar "t")) (EApp (EApp (EVar "tupleCtorTailFor") (EVar "commas")) (EVar "t")))))
-(DTypeSig false "tupleCtorTailFor" (TyFun (TyCon "Int") (TyFun (TyCon "Token") (TyApp (TyCon "Parser") (TyCon "Ty")))))
-(DFunDef false "tupleCtorTailFor" ((PVar "commas") (PCon "TComma")) (EApp (EApp (EVar "deferThen") (EVar "advance")) (ELam (PWild) (EApp (EVar "parseTupleCtorTail") (EBinOp "+" (EVar "commas") (ELit (LInt 1)))))))
-(DFunDef false "tupleCtorTailFor" ((PVar "commas") (PCon "TRParen")) (EApp (EApp (EVar "deferThen") (EVar "advance")) (ELam (PWild) (EApp (EVar "tupleCtorTyOfArity") (EBinOp "+" (EVar "commas") (ELit (LInt 1)))))))
-(DFunDef false "tupleCtorTailFor" (PWild PWild) (EApp (EVar "failP") (ELit (LString "expected `,` or `)` in the tuple type constructor"))))
-(DTypeSig false "tupleCtorTyOfArity" (TyFun (TyCon "Int") (TyApp (TyCon "Parser") (TyCon "Ty"))))
-(DFunDef false "tupleCtorTyOfArity" ((PVar "n")) (EIf (EBinOp "&&" (EBinOp ">=" (EVar "n") (ELit (LInt 2))) (EBinOp "<=" (EVar "n") (ELit (LInt 5)))) (EApp (EVar "deferPure") (EApp (EApp (EVar "tyConBuiltin") (EApp (EVar "tupleCtorTyName") (EVar "n"))) (EVar "None"))) (EApp (EVar "failP") (ELit (LString "a tuple type constructor has 2 to 5 components")))))
+(DTypeSig false "parseTupleCtorTail" (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyApp (TyCon "Parser") (TyCon "Ty")))))
+(DFunDef false "parseTupleCtorTail" ((PVar "s") (PVar "commas")) (EApp (EApp (EVar "deferThen") (EVar "peekP")) (ELam ((PVar "t")) (EApp (EApp (EApp (EVar "tupleCtorTailFor") (EVar "s")) (EVar "commas")) (EVar "t")))))
+(DTypeSig false "tupleCtorTailFor" (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyFun (TyCon "Token") (TyApp (TyCon "Parser") (TyCon "Ty"))))))
+(DFunDef false "tupleCtorTailFor" ((PVar "s") (PVar "commas") (PCon "TComma")) (EApp (EApp (EVar "deferThen") (EVar "advance")) (ELam (PWild) (EApp (EApp (EVar "parseTupleCtorTail") (EVar "s")) (EBinOp "+" (EVar "commas") (ELit (LInt 1)))))))
+(DFunDef false "tupleCtorTailFor" ((PVar "s") (PVar "commas") (PCon "TRParen")) (EApp (EApp (EVar "deferThen") (EVar "advance")) (ELam (PWild) (EApp (EApp (EVar "deferThen") (EVar "contextP")) (ELam ((PVar "ctx")) (EApp (EApp (EVar "deferThen") (EVar "getPos")) (ELam ((PVar "q")) (EApp (EApp (EVar "tupleCtorTyOfArity") (EApp (EVar "Some") (EApp (EApp (EApp (EVar "locOfSpan") (EVar "ctx")) (EVar "s")) (EVar "q")))) (EBinOp "+" (EVar "commas") (ELit (LInt 1)))))))))))
+(DFunDef false "tupleCtorTailFor" (PWild PWild PWild) (EApp (EVar "failP") (ELit (LString "expected `,` or `)` in the tuple type constructor"))))
+(DTypeSig false "tupleCtorTyOfArity" (TyFun (TyApp (TyCon "Option") (TyCon "Loc")) (TyFun (TyCon "Int") (TyApp (TyCon "Parser") (TyCon "Ty")))))
+(DFunDef false "tupleCtorTyOfArity" ((PVar "loc") (PVar "n")) (EIf (EBinOp "&&" (EBinOp ">=" (EVar "n") (ELit (LInt 2))) (EBinOp "<=" (EVar "n") (ELit (LInt 5)))) (EApp (EVar "deferPure") (EApp (EApp (EVar "tyConBuiltin") (EApp (EVar "tupleCtorTyName") (EVar "n"))) (EVar "loc"))) (EApp (EVar "failP") (ELit (LString "a tuple type constructor has 2 to 5 components")))))
 (DTypeSig false "tupleCtorTyName" (TyFun (TyCon "Int") (TyCon "String")))
 (DFunDef false "tupleCtorTyName" ((PLit (LInt 2))) (ELit (LString "__tuple2__")))
 (DFunDef false "tupleCtorTyName" ((PLit (LInt 3))) (ELit (LString "__tuple3__")))
@@ -6471,7 +6476,7 @@ parseResultWith mode src tokList offList =
 (DTypeSig false "bindStmts" (TyFun (TyCon "Expr") (TyFun (TyCon "Expr") (TyApp (TyCon "List") (TyCon "DoStmt")))))
 (DFunDef false "bindStmts" ((PVar "lhs") (PVar "rhs")) (EMatch (EApp (EVar "stripLoc") (EVar "lhs")) (arm (PCon "EAnnot" (PVar "inner") (PVar "ty")) () (EApp (EApp (EApp (EVar "bindAnnot") (EVar "inner")) (EVar "ty")) (EVar "rhs"))) (arm PWild () (EListLit (EApp (EApp (EVar "DoBind") (EApp (EVar "exprToPat") (EVar "lhs"))) (EVar "rhs"))))))
 (DTypeSig false "bindAnnot" (TyFun (TyCon "Expr") (TyFun (TyCon "Ty") (TyFun (TyCon "Expr") (TyApp (TyCon "List") (TyCon "DoStmt"))))))
-(DFunDef false "bindAnnot" ((PVar "inner") (PVar "ty") (PVar "rhs")) (EMatch (EApp (EVar "stripLoc") (EVar "inner")) (arm (PCon "EVar" (PVar "x")) () (EListLit (EApp (EApp (EVar "DoBind") (EApp (EApp (EApp (EVar "PVar") (EVar "x")) (EApp (EApp (EApp (EApp (EApp (EVar "Loc") (ELit (LString ""))) (ELit (LInt 0))) (ELit (LInt 0))) (ELit (LInt 0))) (ELit (LInt 0)))) (EVar "noBinderId"))) (EVar "rhs")) (EApp (EApp (EApp (EApp (EApp (EVar "DoLet") (EVar "False")) (EVar "False")) (EApp (EApp (EApp (EVar "PVar") (EVar "x")) (EApp (EApp (EApp (EApp (EApp (EVar "Loc") (ELit (LString ""))) (ELit (LInt 0))) (ELit (LInt 0))) (ELit (LInt 0))) (ELit (LInt 0)))) (EVar "noBinderId"))) (EApp (EApp (EVar "EAnnot") (EApp (EVar "EVar") (EVar "x"))) (EVar "ty"))) (EVar "noDeclLoc")))) (arm (PVar "other") () (EListLit (EApp (EApp (EVar "DoBind") (EApp (EVar "exprToPat") (EVar "other"))) (EVar "rhs"))))))
+(DFunDef false "bindAnnot" ((PVar "inner") (PVar "ty") (PVar "rhs")) (EMatch (EApp (EVar "stripLoc") (EVar "inner")) (arm (PCon "EVar" (PVar "x")) () (EListLit (EApp (EApp (EVar "DoBind") (EApp (EApp (EApp (EVar "PVar") (EVar "x")) (EApp (EApp (EApp (EApp (EApp (EVar "Loc") (ELit (LString ""))) (ELit (LInt 0))) (ELit (LInt 0))) (ELit (LInt 0))) (ELit (LInt 0)))) (EVar "noBinderId"))) (EVar "rhs")) (EApp (EApp (EApp (EApp (EApp (EVar "DoLet") (EVar "False")) (EVar "False")) (EApp (EApp (EApp (EVar "PVar") (EVar "x")) (EApp (EApp (EApp (EApp (EApp (EVar "Loc") (ELit (LString ""))) (ELit (LInt 0))) (ELit (LInt 0))) (ELit (LInt 0))) (ELit (LInt 0)))) (EVar "noBinderId"))) (EApp (EApp (EVar "EAnnot") (EApp (EVar "EVar") (EVar "x"))) (EVar "ty"))) (EVar "noDeclLoc")))) (arm (PVar "other") () (EListLit (EApp (EApp (EVar "DoBind") (EApp (EApp (EVar "PAnn") (EApp (EVar "exprToPat") (EVar "other"))) (EVar "ty"))) (EVar "rhs"))))))
 (DTypeSig false "assignFromLhs" (TyFun (TyCon "Int") (TyFun (TyCon "Expr") (TyFun (TyCon "Expr") (TyApp (TyCon "Parser") (TyCon "DoStmt"))))))
 (DFunDef false "assignFromLhs" ((PVar "startPos") (PVar "lhs") (PVar "rhs")) (EMatch (EApp (EVar "flattenFieldPath") (EVar "lhs")) (arm (PCon "Some" (PTuple (PVar "x") (PList))) () (EApp (EVar "deferPure") (EApp (EApp (EVar "DoAssign") (EVar "x")) (EVar "rhs")))) (arm (PCon "Some" (PTuple (PVar "x") (PVar "fs"))) () (EApp (EApp (EVar "fatalAtP") (EApp (EApp (EVar "fieldAssignRemovedMsg") (EVar "x")) (EVar "fs"))) (EVar "startPos"))) (arm (PCon "None") () (EApp (EVar "failP") (ELit (LString "invalid assignment target in this block"))))))
 (DTypeSig false "fieldAssignRemovedMsg" (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyCon "String"))))
@@ -6667,6 +6672,7 @@ parseResultWith mode src tokList offList =
 (DFunDef false "exprToPat" ((PCon "EAsPat" (PVar "x") (PVar "sub"))) (EApp (EApp (EApp (EApp (EVar "PAs") (EVar "x")) (EApp (EApp (EApp (EApp (EApp (EVar "Loc") (ELit (LString ""))) (ELit (LInt 0))) (ELit (LInt 0))) (ELit (LInt 0))) (ELit (LInt 0)))) (EVar "noBinderId")) (EApp (EVar "exprToPat") (EMethodRef "sub"))))
 (DFunDef false "exprToPat" ((PCon "EOrPat" (PVar "es"))) (EApp (EVar "orPatOf") (EApp (EApp (EMethodRef "map") (EVar "exprToPat")) (EVar "es"))))
 (DFunDef false "exprToPat" ((PCon "EApp" (PVar "f") (PVar "x"))) (EApp (EVar "appToPat") (EApp (EApp (EVar "EApp") (EVar "f")) (EVar "x"))))
+(DFunDef false "exprToPat" ((PCon "EAnnot" (PVar "e") (PVar "t"))) (EApp (EApp (EVar "PAnn") (EApp (EVar "exprToPat") (EVar "e"))) (EVar "t")))
 (DFunDef false "exprToPat" (PWild) (EVar "PWild"))
 (DTypeSig false "orPatOf" (TyFun (TyApp (TyCon "List") (TyCon "Pat")) (TyCon "Pat")))
 (DFunDef false "orPatOf" ((PList (PVar "p"))) (EVar "p"))
@@ -7431,11 +7437,11 @@ parseResultWith mode src tokList offList =
 (DFunDef false "parseTyParenAt" ((PVar "s") (PCon "TString" PWild) PWild) (EApp (EVar "parseTyAuthJoin") (EVar "s")))
 (DFunDef false "parseTyParenAt" ((PVar "s") (PCon "TLBrace") PWild) (EApp (EVar "parseTyAuthJoin") (EVar "s")))
 (DFunDef false "parseTyParenAt" ((PVar "s") (PCon "TUpper" PWild) (PCon "TEqual")) (EApp (EVar "parseTyAuthJoin") (EVar "s")))
-(DFunDef false "parseTyParenAt" (PWild (PVar "t") PWild) (EApp (EVar "parseTyParenBody") (EVar "t")))
-(DTypeSig false "parseTyParenBody" (TyFun (TyCon "Token") (TyApp (TyCon "Parser") (TyCon "Ty"))))
-(DFunDef false "parseTyParenBody" ((PCon "TComma")) (EApp (EVar "parseTupleCtorTail") (ELit (LInt 0))))
-(DFunDef false "parseTyParenBody" ((PCon "TIdent" PWild)) (EApp (EApp (EMethodRef "deferThen") (EVar "peek2P")) (ELam ((PVar "t2")) (EApp (EVar "parseTyParenIdent") (EVar "t2")))))
-(DFunDef false "parseTyParenBody" (PWild) (EVar "parseTyParenTuple"))
+(DFunDef false "parseTyParenAt" ((PVar "s") (PVar "t") PWild) (EApp (EApp (EVar "parseTyParenBody") (EVar "s")) (EVar "t")))
+(DTypeSig false "parseTyParenBody" (TyFun (TyCon "Int") (TyFun (TyCon "Token") (TyApp (TyCon "Parser") (TyCon "Ty")))))
+(DFunDef false "parseTyParenBody" ((PVar "s") (PCon "TComma")) (EApp (EApp (EVar "parseTupleCtorTail") (EVar "s")) (ELit (LInt 0))))
+(DFunDef false "parseTyParenBody" (PWild (PCon "TIdent" PWild)) (EApp (EApp (EMethodRef "deferThen") (EVar "peek2P")) (ELam ((PVar "t2")) (EApp (EVar "parseTyParenIdent") (EVar "t2")))))
+(DFunDef false "parseTyParenBody" (PWild PWild) (EVar "parseTyParenTuple"))
 (DTypeSig false "parseTyParenIdent" (TyFun (TyCon "Token") (TyApp (TyCon "Parser") (TyCon "Ty"))))
 (DFunDef false "parseTyParenIdent" ((PCon "TColon")) (EApp (EApp (EMethodRef "deferThen") (EVar "identNameP")) (ELam ((PVar "n")) (EApp (EApp (EMethodRef "deferThen") (EApp (EVar "expectTok") (EVar "TColon"))) (ELam (PWild) (EApp (EApp (EMethodRef "deferThen") (EVar "parseTy")) (ELam ((PVar "t")) (EApp (EApp (EMethodRef "deferThen") (EVar "peekP")) (ELam ((PVar "t1")) (EApp (EApp (EMethodRef "deferThen") (EVar "peek2P")) (ELam ((PVar "t2")) (EApp (EApp (EMethodRef "deferThen") (EApp (EApp (EVar "binderDomainP") (EVar "t1")) (EVar "t2"))) (ELam ((PVar "d")) (EApp (EApp (EMethodRef "deferThen") (EApp (EVar "expectTok") (EVar "TRParen"))) (ELam (PWild) (EApp (EMethodRef "deferPure") (EApp (EApp (EApp (EVar "TyNamed") (EVar "n")) (EVar "t")) (EVar "d"))))))))))))))))))
 (DFunDef false "parseTyParenIdent" ((PCon "TPipe")) (EApp (EApp (EMethodRef "deferThen") (EVar "contextP")) (ELam ((PVar "ctx")) (EApp (EApp (EMethodRef "deferThen") (EVar "getPos")) (ELam ((PVar "s")) (EApp (EApp (EMethodRef "deferThen") (EVar "identNameP")) (ELam ((PVar "v")) (EApp (EApp (EMethodRef "deferThen") (EVar "authJoinTail")) (ELam ((PVar "rest")) (EApp (EApp (EMethodRef "deferThen") (EApp (EVar "expectTok") (EVar "TRParen"))) (ELam (PWild) (EApp (EApp (EMethodRef "deferThen") (EVar "getPos")) (ELam ((PVar "q")) (EApp (EMethodRef "deferPure") (EApp (EApp (EApp (EVar "namesOrAuthJoin") (EVar "v")) (EVar "rest")) (EApp (EVar "Some") (EApp (EApp (EApp (EVar "locOfSpan") (EVar "ctx")) (EVar "s")) (EVar "q"))))))))))))))))))
@@ -7452,14 +7458,14 @@ parseResultWith mode src tokList offList =
 (DFunDef false "allNames" (PWild PWild) (EVar "None"))
 (DTypeSig false "parseTyParenTuple" (TyApp (TyCon "Parser") (TyCon "Ty")))
 (DFunDef false "parseTyParenTuple" () (EApp (EApp (EMethodRef "deferThen") (EApp (EApp (EVar "sepBy1") (EVar "parseTy")) (EApp (EVar "expectTok") (EVar "TComma")))) (ELam ((PVar "ts")) (EApp (EApp (EMethodRef "deferThen") (EApp (EVar "optTrailingCommaTuple") (EVar "ts"))) (ELam (PWild) (EApp (EApp (EMethodRef "deferThen") (EApp (EVar "expectTok") (EVar "TRParen"))) (ELam (PWild) (EApp (EMethodRef "deferPure") (EApp (EVar "tyTupleOrSingle") (EVar "ts"))))))))))
-(DTypeSig false "parseTupleCtorTail" (TyFun (TyCon "Int") (TyApp (TyCon "Parser") (TyCon "Ty"))))
-(DFunDef false "parseTupleCtorTail" ((PVar "commas")) (EApp (EApp (EMethodRef "deferThen") (EVar "peekP")) (ELam ((PVar "t")) (EApp (EApp (EVar "tupleCtorTailFor") (EVar "commas")) (EVar "t")))))
-(DTypeSig false "tupleCtorTailFor" (TyFun (TyCon "Int") (TyFun (TyCon "Token") (TyApp (TyCon "Parser") (TyCon "Ty")))))
-(DFunDef false "tupleCtorTailFor" ((PVar "commas") (PCon "TComma")) (EApp (EApp (EMethodRef "deferThen") (EVar "advance")) (ELam (PWild) (EApp (EVar "parseTupleCtorTail") (EBinOp "+" (EVar "commas") (ELit (LInt 1)))))))
-(DFunDef false "tupleCtorTailFor" ((PVar "commas") (PCon "TRParen")) (EApp (EApp (EMethodRef "deferThen") (EVar "advance")) (ELam (PWild) (EApp (EVar "tupleCtorTyOfArity") (EBinOp "+" (EVar "commas") (ELit (LInt 1)))))))
-(DFunDef false "tupleCtorTailFor" (PWild PWild) (EApp (EVar "failP") (ELit (LString "expected `,` or `)` in the tuple type constructor"))))
-(DTypeSig false "tupleCtorTyOfArity" (TyFun (TyCon "Int") (TyApp (TyCon "Parser") (TyCon "Ty"))))
-(DFunDef false "tupleCtorTyOfArity" ((PVar "n")) (EIf (EBinOp "&&" (EBinOp ">=" (EVar "n") (ELit (LInt 2))) (EBinOp "<=" (EVar "n") (ELit (LInt 5)))) (EApp (EMethodRef "deferPure") (EApp (EApp (EVar "tyConBuiltin") (EApp (EVar "tupleCtorTyName") (EVar "n"))) (EVar "None"))) (EApp (EVar "failP") (ELit (LString "a tuple type constructor has 2 to 5 components")))))
+(DTypeSig false "parseTupleCtorTail" (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyApp (TyCon "Parser") (TyCon "Ty")))))
+(DFunDef false "parseTupleCtorTail" ((PVar "s") (PVar "commas")) (EApp (EApp (EMethodRef "deferThen") (EVar "peekP")) (ELam ((PVar "t")) (EApp (EApp (EApp (EVar "tupleCtorTailFor") (EVar "s")) (EVar "commas")) (EVar "t")))))
+(DTypeSig false "tupleCtorTailFor" (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyFun (TyCon "Token") (TyApp (TyCon "Parser") (TyCon "Ty"))))))
+(DFunDef false "tupleCtorTailFor" ((PVar "s") (PVar "commas") (PCon "TComma")) (EApp (EApp (EMethodRef "deferThen") (EVar "advance")) (ELam (PWild) (EApp (EApp (EVar "parseTupleCtorTail") (EVar "s")) (EBinOp "+" (EVar "commas") (ELit (LInt 1)))))))
+(DFunDef false "tupleCtorTailFor" ((PVar "s") (PVar "commas") (PCon "TRParen")) (EApp (EApp (EMethodRef "deferThen") (EVar "advance")) (ELam (PWild) (EApp (EApp (EMethodRef "deferThen") (EVar "contextP")) (ELam ((PVar "ctx")) (EApp (EApp (EMethodRef "deferThen") (EVar "getPos")) (ELam ((PVar "q")) (EApp (EApp (EVar "tupleCtorTyOfArity") (EApp (EVar "Some") (EApp (EApp (EApp (EVar "locOfSpan") (EVar "ctx")) (EVar "s")) (EVar "q")))) (EBinOp "+" (EVar "commas") (ELit (LInt 1)))))))))))
+(DFunDef false "tupleCtorTailFor" (PWild PWild PWild) (EApp (EVar "failP") (ELit (LString "expected `,` or `)` in the tuple type constructor"))))
+(DTypeSig false "tupleCtorTyOfArity" (TyFun (TyApp (TyCon "Option") (TyCon "Loc")) (TyFun (TyCon "Int") (TyApp (TyCon "Parser") (TyCon "Ty")))))
+(DFunDef false "tupleCtorTyOfArity" ((PVar "loc") (PVar "n")) (EIf (EBinOp "&&" (EBinOp ">=" (EVar "n") (ELit (LInt 2))) (EBinOp "<=" (EVar "n") (ELit (LInt 5)))) (EApp (EMethodRef "deferPure") (EApp (EApp (EVar "tyConBuiltin") (EApp (EVar "tupleCtorTyName") (EVar "n"))) (EVar "loc"))) (EApp (EVar "failP") (ELit (LString "a tuple type constructor has 2 to 5 components")))))
 (DTypeSig false "tupleCtorTyName" (TyFun (TyCon "Int") (TyCon "String")))
 (DFunDef false "tupleCtorTyName" ((PLit (LInt 2))) (ELit (LString "__tuple2__")))
 (DFunDef false "tupleCtorTyName" ((PLit (LInt 3))) (ELit (LString "__tuple3__")))
@@ -7972,7 +7978,7 @@ parseResultWith mode src tokList offList =
 (DTypeSig false "bindStmts" (TyFun (TyCon "Expr") (TyFun (TyCon "Expr") (TyApp (TyCon "List") (TyCon "DoStmt")))))
 (DFunDef false "bindStmts" ((PVar "lhs") (PVar "rhs")) (EMatch (EApp (EVar "stripLoc") (EVar "lhs")) (arm (PCon "EAnnot" (PVar "inner") (PVar "ty")) () (EApp (EApp (EApp (EVar "bindAnnot") (EVar "inner")) (EVar "ty")) (EVar "rhs"))) (arm PWild () (EListLit (EApp (EApp (EVar "DoBind") (EApp (EVar "exprToPat") (EVar "lhs"))) (EVar "rhs"))))))
 (DTypeSig false "bindAnnot" (TyFun (TyCon "Expr") (TyFun (TyCon "Ty") (TyFun (TyCon "Expr") (TyApp (TyCon "List") (TyCon "DoStmt"))))))
-(DFunDef false "bindAnnot" ((PVar "inner") (PVar "ty") (PVar "rhs")) (EMatch (EApp (EVar "stripLoc") (EVar "inner")) (arm (PCon "EVar" (PVar "x")) () (EListLit (EApp (EApp (EVar "DoBind") (EApp (EApp (EApp (EVar "PVar") (EVar "x")) (EApp (EApp (EApp (EApp (EApp (EVar "Loc") (ELit (LString ""))) (ELit (LInt 0))) (ELit (LInt 0))) (ELit (LInt 0))) (ELit (LInt 0)))) (EVar "noBinderId"))) (EVar "rhs")) (EApp (EApp (EApp (EApp (EApp (EVar "DoLet") (EVar "False")) (EVar "False")) (EApp (EApp (EApp (EVar "PVar") (EVar "x")) (EApp (EApp (EApp (EApp (EApp (EVar "Loc") (ELit (LString ""))) (ELit (LInt 0))) (ELit (LInt 0))) (ELit (LInt 0))) (ELit (LInt 0)))) (EVar "noBinderId"))) (EApp (EApp (EVar "EAnnot") (EApp (EVar "EVar") (EVar "x"))) (EVar "ty"))) (EVar "noDeclLoc")))) (arm (PVar "other") () (EListLit (EApp (EApp (EVar "DoBind") (EApp (EVar "exprToPat") (EVar "other"))) (EVar "rhs"))))))
+(DFunDef false "bindAnnot" ((PVar "inner") (PVar "ty") (PVar "rhs")) (EMatch (EApp (EVar "stripLoc") (EVar "inner")) (arm (PCon "EVar" (PVar "x")) () (EListLit (EApp (EApp (EVar "DoBind") (EApp (EApp (EApp (EVar "PVar") (EVar "x")) (EApp (EApp (EApp (EApp (EApp (EVar "Loc") (ELit (LString ""))) (ELit (LInt 0))) (ELit (LInt 0))) (ELit (LInt 0))) (ELit (LInt 0)))) (EVar "noBinderId"))) (EVar "rhs")) (EApp (EApp (EApp (EApp (EApp (EVar "DoLet") (EVar "False")) (EVar "False")) (EApp (EApp (EApp (EVar "PVar") (EVar "x")) (EApp (EApp (EApp (EApp (EApp (EVar "Loc") (ELit (LString ""))) (ELit (LInt 0))) (ELit (LInt 0))) (ELit (LInt 0))) (ELit (LInt 0)))) (EVar "noBinderId"))) (EApp (EApp (EVar "EAnnot") (EApp (EVar "EVar") (EVar "x"))) (EVar "ty"))) (EVar "noDeclLoc")))) (arm (PVar "other") () (EListLit (EApp (EApp (EVar "DoBind") (EApp (EApp (EVar "PAnn") (EApp (EVar "exprToPat") (EVar "other"))) (EVar "ty"))) (EVar "rhs"))))))
 (DTypeSig false "assignFromLhs" (TyFun (TyCon "Int") (TyFun (TyCon "Expr") (TyFun (TyCon "Expr") (TyApp (TyCon "Parser") (TyCon "DoStmt"))))))
 (DFunDef false "assignFromLhs" ((PVar "startPos") (PVar "lhs") (PVar "rhs")) (EMatch (EApp (EVar "flattenFieldPath") (EVar "lhs")) (arm (PCon "Some" (PTuple (PVar "x") (PList))) () (EApp (EMethodRef "deferPure") (EApp (EApp (EVar "DoAssign") (EVar "x")) (EVar "rhs")))) (arm (PCon "Some" (PTuple (PVar "x") (PVar "fs"))) () (EApp (EApp (EVar "fatalAtP") (EApp (EApp (EVar "fieldAssignRemovedMsg") (EVar "x")) (EVar "fs"))) (EVar "startPos"))) (arm (PCon "None") () (EApp (EVar "failP") (ELit (LString "invalid assignment target in this block"))))))
 (DTypeSig false "fieldAssignRemovedMsg" (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyCon "String"))))

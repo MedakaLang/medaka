@@ -485,18 +485,99 @@ entry:
 ; mdk-module program
 @mdk_disc_none = private unnamed_addr constant i64 -1
 ; mdk-module program
-@mdk.gen.dictcell.70726f6772616d..0 = internal constant [1 x i64] [i64 -3522064109247241529]
+define internal i64 @mdk.slot.5f5f757365725f5f3a3a4f72647c466c6f61747c.6c6573735468616e(i64 %clos, i64 %dict, i64 %arg0, i64 %arg1) {
+entry:
+  %t0 = call i64 @mdk.impl.466c6f6174.6c6573735468616e(i64 %arg0, i64 %arg1)
+  ret i64 %t0
+}
+
 ; mdk-module program
-@mdk.gen.dictcell.70726f6772616d..1 = internal constant [2 x i64] [i64 1173816999876653108, i64 ptrtoint (ptr @mdk.gen.dictcell.70726f6772616d..0 to i64)]
+@mdk.slotclosure.5f5f757365725f5f3a3a4f72647c466c6f61747c.6c6573735468616e = internal constant [2 x i64] [i64 3, i64 ptrtoint (ptr @mdk.slot.5f5f757365725f5f3a3a4f72647c466c6f61747c.6c6573735468616e to i64)]
+; mdk-module program
+@mdk.gen.dictcell.70726f6772616d..0 = internal constant [2 x i64] [i64 -3522064109247241529, i64 ptrtoint (ptr @mdk.slotclosure.5f5f757365725f5f3a3a4f72647c466c6f61747c.6c6573735468616e to i64)]
+; mdk-module program
+define internal i64 @mdk.slot.5f5f757365725f5f3a3a4b657965647c466c6f61747c.6b65794f66(i64 %clos, i64 %dict, i64 %arg0) {
+entry:
+  %t0 = call i64 @mdk.impl.466c6f6174.6b65794f66(i64 %arg0)
+  ret i64 %t0
+}
+
+; mdk-module program
+@mdk.slotclosure.5f5f757365725f5f3a3a4b657965647c466c6f61747c.6b65794f66 = internal constant [2 x i64] [i64 2, i64 ptrtoint (ptr @mdk.slot.5f5f757365725f5f3a3a4b657965647c466c6f61747c.6b65794f66 to i64)]
+; mdk-module program
+define internal i64 @mdk.slot.5f5f757365725f5f3a3a4b657965647c466c6f61747c.6f726465726564(i64 %clos, i64 %dict, i64 %arg0, i64 %arg1) {
+entry:
+  %t0 = call i64 @mdk.default.7a5a5f35665f5f35665f757365725f35665f5f35665f5f33615f5f33615f4b65796564.6f726465726564.7a5a5f35665f5f35665f757365725f35665f5f35665f5f33615f5f33615f4b657965645f37635f466c6f61745f37635f(i64 %dict, i64 %arg0, i64 %arg1)
+  ret i64 %t0
+}
+
+; mdk-module program
+@mdk.slotclosure.5f5f757365725f5f3a3a4b657965647c466c6f61747c.6f726465726564 = internal constant [2 x i64] [i64 3, i64 ptrtoint (ptr @mdk.slot.5f5f757365725f5f3a3a4b657965647c466c6f61747c.6f726465726564 to i64)]
+; mdk-module program
+@mdk.gen.dictcell.70726f6772616d..1 = internal constant [4 x i64] [i64 1173816999876653108, i64 ptrtoint (ptr @mdk.gen.dictcell.70726f6772616d..0 to i64), i64 ptrtoint (ptr @mdk.slotclosure.5f5f757365725f5f3a3a4b657965647c466c6f61747c.6b65794f66 to i64), i64 ptrtoint (ptr @mdk.slotclosure.5f5f757365725f5f3a3a4b657965647c466c6f61747c.6f726465726564 to i64)]
 ; mdk-module program
 @mdk.gen.string.70726f6772616d..2 = private unnamed_addr constant { i64, i64, i64, [2 x i8] } { i64 1, i64 1, i64 1, [2 x i8] c"\61\00" }
 ; mdk-module program
 @mdk.gen.string.70726f6772616d..3 = private unnamed_addr constant { i64, i64, i64, [2 x i8] } { i64 1, i64 1, i64 1, [2 x i8] c"\62\00" }
 ; mdk-module program
-@mdk.gen.dictcell.70726f6772616d..4 = internal constant [1 x i64] [i64 3675720891059119944]
+define internal i64 @mdk.slot.5f5f757365725f5f3a3a4f72647c537472696e677c.6c6573735468616e(i64 %clos, i64 %dict, i64 %arg0, i64 %arg1) {
+entry:
+  %t0 = call i64 @mdk.impl.537472696e67.6c6573735468616e(i64 %arg0, i64 %arg1)
+  ret i64 %t0
+}
+
 ; mdk-module program
-@mdk.gen.dictcell.70726f6772616d..5 = internal constant [2 x i64] [i64 1842472865616454229, i64 ptrtoint (ptr @mdk.gen.dictcell.70726f6772616d..4 to i64)]
+@mdk.slotclosure.5f5f757365725f5f3a3a4f72647c537472696e677c.6c6573735468616e = internal constant [2 x i64] [i64 3, i64 ptrtoint (ptr @mdk.slot.5f5f757365725f5f3a3a4f72647c537472696e677c.6c6573735468616e to i64)]
 ; mdk-module program
-@mdk.gen.dictcell.70726f6772616d..6 = internal constant [1 x i64] [i64 -54051695436414980]
+@mdk.gen.dictcell.70726f6772616d..4 = internal constant [2 x i64] [i64 3675720891059119944, i64 ptrtoint (ptr @mdk.slotclosure.5f5f757365725f5f3a3a4f72647c537472696e677c.6c6573735468616e to i64)]
 ; mdk-module program
-@mdk.gen.dictcell.70726f6772616d..7 = internal constant [2 x i64] [i64 -3522267172021662167, i64 ptrtoint (ptr @mdk.gen.dictcell.70726f6772616d..6 to i64)]
+define internal i64 @mdk.slot.5f5f757365725f5f3a3a4b657965647c537472696e677c.6b65794f66(i64 %clos, i64 %dict, i64 %arg0) {
+entry:
+  %t0 = call i64 @mdk.impl.537472696e67.6b65794f66(i64 %arg0)
+  ret i64 %t0
+}
+
+; mdk-module program
+@mdk.slotclosure.5f5f757365725f5f3a3a4b657965647c537472696e677c.6b65794f66 = internal constant [2 x i64] [i64 2, i64 ptrtoint (ptr @mdk.slot.5f5f757365725f5f3a3a4b657965647c537472696e677c.6b65794f66 to i64)]
+; mdk-module program
+define internal i64 @mdk.slot.5f5f757365725f5f3a3a4b657965647c537472696e677c.6f726465726564(i64 %clos, i64 %dict, i64 %arg0, i64 %arg1) {
+entry:
+  %t0 = call i64 @mdk.default.7a5a5f35665f5f35665f757365725f35665f5f35665f5f33615f5f33615f4b65796564.6f726465726564.7a5a5f35665f5f35665f757365725f35665f5f35665f5f33615f5f33615f4b657965645f37635f537472696e675f37635f(i64 %dict, i64 %arg0, i64 %arg1)
+  ret i64 %t0
+}
+
+; mdk-module program
+@mdk.slotclosure.5f5f757365725f5f3a3a4b657965647c537472696e677c.6f726465726564 = internal constant [2 x i64] [i64 3, i64 ptrtoint (ptr @mdk.slot.5f5f757365725f5f3a3a4b657965647c537472696e677c.6f726465726564 to i64)]
+; mdk-module program
+@mdk.gen.dictcell.70726f6772616d..5 = internal constant [4 x i64] [i64 1842472865616454229, i64 ptrtoint (ptr @mdk.gen.dictcell.70726f6772616d..4 to i64), i64 ptrtoint (ptr @mdk.slotclosure.5f5f757365725f5f3a3a4b657965647c537472696e677c.6b65794f66 to i64), i64 ptrtoint (ptr @mdk.slotclosure.5f5f757365725f5f3a3a4b657965647c537472696e677c.6f726465726564 to i64)]
+; mdk-module program
+define internal i64 @mdk.slot.5f5f757365725f5f3a3a4f72647c496e747c.6c6573735468616e(i64 %clos, i64 %dict, i64 %arg0, i64 %arg1) {
+entry:
+  %t0 = call i64 @mdk.impl.496e74.6c6573735468616e(i64 %arg0, i64 %arg1)
+  ret i64 %t0
+}
+
+; mdk-module program
+@mdk.slotclosure.5f5f757365725f5f3a3a4f72647c496e747c.6c6573735468616e = internal constant [2 x i64] [i64 3, i64 ptrtoint (ptr @mdk.slot.5f5f757365725f5f3a3a4f72647c496e747c.6c6573735468616e to i64)]
+; mdk-module program
+@mdk.gen.dictcell.70726f6772616d..6 = internal constant [2 x i64] [i64 -54051695436414980, i64 ptrtoint (ptr @mdk.slotclosure.5f5f757365725f5f3a3a4f72647c496e747c.6c6573735468616e to i64)]
+; mdk-module program
+define internal i64 @mdk.slot.5f5f757365725f5f3a3a4b657965647c496e747c.6b65794f66(i64 %clos, i64 %dict, i64 %arg0) {
+entry:
+  %t0 = call i64 @mdk.impl.496e74.6b65794f66(i64 %arg0)
+  ret i64 %t0
+}
+
+; mdk-module program
+@mdk.slotclosure.5f5f757365725f5f3a3a4b657965647c496e747c.6b65794f66 = internal constant [2 x i64] [i64 2, i64 ptrtoint (ptr @mdk.slot.5f5f757365725f5f3a3a4b657965647c496e747c.6b65794f66 to i64)]
+; mdk-module program
+define internal i64 @mdk.slot.5f5f757365725f5f3a3a4b657965647c496e747c.6f726465726564(i64 %clos, i64 %dict, i64 %arg0, i64 %arg1) {
+entry:
+  %t0 = call i64 @mdk.default.7a5a5f35665f5f35665f757365725f35665f5f35665f5f33615f5f33615f4b65796564.6f726465726564.7a5a5f35665f5f35665f757365725f35665f5f35665f5f33615f5f33615f4b657965645f37635f496e745f37635f(i64 %dict, i64 %arg0, i64 %arg1)
+  ret i64 %t0
+}
+
+; mdk-module program
+@mdk.slotclosure.5f5f757365725f5f3a3a4b657965647c496e747c.6f726465726564 = internal constant [2 x i64] [i64 3, i64 ptrtoint (ptr @mdk.slot.5f5f757365725f5f3a3a4b657965647c496e747c.6f726465726564 to i64)]
+; mdk-module program
+@mdk.gen.dictcell.70726f6772616d..7 = internal constant [4 x i64] [i64 -3522267172021662167, i64 ptrtoint (ptr @mdk.gen.dictcell.70726f6772616d..6 to i64), i64 ptrtoint (ptr @mdk.slotclosure.5f5f757365725f5f3a3a4b657965647c496e747c.6b65794f66 to i64), i64 ptrtoint (ptr @mdk.slotclosure.5f5f757365725f5f3a3a4b657965647c496e747c.6f726465726564 to i64)]

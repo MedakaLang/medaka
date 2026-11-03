@@ -1,5 +1,5 @@
 # META
-source_lines=1191
+source_lines=1198
 stages=DESUGAR,MARK
 # SOURCE
 {- | Operations on `String` and `Char`.
@@ -563,6 +563,8 @@ charAtStr s i = arrayGetUnsafe 0 (toChars (stringSlice i (i + 1) s))
 firstNonSpaceStr : (Char -> Bool) -> String -> Int -> Int -> Int
 firstNonSpaceStr blank s i n
   | i >= n = n
+  -- Bound: one string probed one position at a time over its whitespace run; linear on the native runtime (the one-entry cursor cache resumes the codepoint walk) and quadratic on WasmGC for a long run beside non-ASCII text.
+  -- lint-disable-next-line rule-reslice-in-loop
   | blank (charAtStr s i) = firstNonSpaceStr blank s (i + 1) n
   | otherwise = i
 
@@ -573,6 +575,8 @@ firstNonSpaceStr blank s i n
 lastNonSpaceStr : (Char -> Bool) -> String -> Int -> Int -> Int
 lastNonSpaceStr blank s i lo
   | i < lo = lo - 1
+  -- Bound: one string probed backward from the end over its whitespace run; same bound as firstNonSpaceStr, native-linear and WasmGC-quadratic.
+  -- lint-disable-next-line rule-reslice-in-loop
   | blank (charAtStr s i) = lastNonSpaceStr blank s (i - 1) lo
   | otherwise = i
 
@@ -1065,6 +1069,8 @@ leadingIndent l = take (indentRunLength l (length l) 0) l
 -- nor a tab, or `n` when there is none.
 indentRunLength : String -> Int -> Int -> Int
 indentRunLength l n i
+  -- Bound: one string probed forward over its indentation run; same bound as firstNonSpaceStr, native-linear and WasmGC-quadratic.
+  -- lint-disable-next-line rule-reslice-in-loop
   | i < n && isIndentChar (charAtStr l i) = indentRunLength l n (i + 1)
   | otherwise = i
 
@@ -1088,13 +1094,14 @@ sharedMargin m (l :: ls)
 
 -- The longest common leading part of `a` and `b`.
 commonPrefix : String -> String -> String
-commonPrefix a b = take (sharedLength a b 0) a
+commonPrefix a b = take (sharedLength (toChars a) (toChars b) 0) a
 
 -- The number of leading characters `a` and `b` share, counting from `i`.
-sharedLength : String -> String -> Int -> Int
+sharedLength : Array Char -> Array Char -> Int -> Int
 sharedLength a b i
-  | i < length a && i < length b && charAtStr a i == charAtStr b i =
-    sharedLength a b (i + 1)
+  | i < arrayLength a
+    && i < arrayLength b
+    && arrayGetUnsafe i a == arrayGetUnsafe i b = sharedLength a b (i + 1)
   | otherwise = i
 
 -- # Padding
@@ -1394,9 +1401,9 @@ sliceBetween (StrCursor s a) (StrCursor _ b) = stringSliceBytes a b s
 (DFunDef false "sharedMargin" ((PVar "m") (PList)) (EVar "m"))
 (DFunDef false "sharedMargin" ((PVar "m") (PCons (PVar "l") (PVar "ls"))) (EIf (EBinOp "==" (EVar "l") (ELit (LString ""))) (EApp (EApp (EVar "sharedMargin") (EVar "m")) (EVar "ls")) (EIf (EVar "otherwise") (EApp (EApp (EVar "sharedMargin") (EApp (EApp (EVar "commonPrefix") (EVar "m")) (EApp (EVar "leadingIndent") (EVar "l")))) (EVar "ls")) (EApp (EVar "__fallthrough__") (ELit LUnit)))))
 (DTypeSig false "commonPrefix" (TyFun (TyCon "String") (TyFun (TyCon "String") (TyCon "String"))))
-(DFunDef false "commonPrefix" ((PVar "a") (PVar "b")) (EApp (EApp (EVar "take") (EApp (EApp (EApp (EVar "sharedLength") (EVar "a")) (EVar "b")) (ELit (LInt 0)))) (EVar "a")))
-(DTypeSig false "sharedLength" (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyCon "Int") (TyCon "Int")))))
-(DFunDef false "sharedLength" ((PVar "a") (PVar "b") (PVar "i")) (EIf (EBinOp "&&" (EBinOp "&&" (EBinOp "<" (EVar "i") (EApp (EVar "length") (EVar "a"))) (EBinOp "<" (EVar "i") (EApp (EVar "length") (EVar "b")))) (EBinOp "==" (EApp (EApp (EVar "charAtStr") (EVar "a")) (EVar "i")) (EApp (EApp (EVar "charAtStr") (EVar "b")) (EVar "i")))) (EApp (EApp (EApp (EVar "sharedLength") (EVar "a")) (EVar "b")) (EBinOp "+" (EVar "i") (ELit (LInt 1)))) (EIf (EVar "otherwise") (EVar "i") (EApp (EVar "__fallthrough__") (ELit LUnit)))))
+(DFunDef false "commonPrefix" ((PVar "a") (PVar "b")) (EApp (EApp (EVar "take") (EApp (EApp (EApp (EVar "sharedLength") (EApp (EVar "toChars") (EVar "a"))) (EApp (EVar "toChars") (EVar "b"))) (ELit (LInt 0)))) (EVar "a")))
+(DTypeSig false "sharedLength" (TyFun (TyApp (TyCon "Array") (TyCon "Char")) (TyFun (TyApp (TyCon "Array") (TyCon "Char")) (TyFun (TyCon "Int") (TyCon "Int")))))
+(DFunDef false "sharedLength" ((PVar "a") (PVar "b") (PVar "i")) (EIf (EBinOp "&&" (EBinOp "&&" (EBinOp "<" (EVar "i") (EApp (EVar "arrayLength") (EVar "a"))) (EBinOp "<" (EVar "i") (EApp (EVar "arrayLength") (EVar "b")))) (EBinOp "==" (EApp (EApp (EVar "arrayGetUnsafe") (EVar "i")) (EVar "a")) (EApp (EApp (EVar "arrayGetUnsafe") (EVar "i")) (EVar "b")))) (EApp (EApp (EApp (EVar "sharedLength") (EVar "a")) (EVar "b")) (EBinOp "+" (EVar "i") (ELit (LInt 1)))) (EIf (EVar "otherwise") (EVar "i") (EApp (EVar "__fallthrough__") (ELit LUnit)))))
 (DTypeSig true "padLeft" (TyFun (TyCon "Int") (TyFun (TyCon "Char") (TyFun (TyCon "String") (TyCon "String")))))
 (DFunDef false "padLeft" ((PVar "n") (PVar "c") (PVar "s")) (EIf (EBinOp ">=" (EApp (EVar "stringLength") (EVar "s")) (EVar "n")) (EVar "s") (EBinOp "++" (EApp (EApp (EVar "repeat") (EBinOp "-" (EVar "n") (EApp (EVar "stringLength") (EVar "s")))) (EApp (EVar "charToStr") (EVar "c"))) (EVar "s"))))
 (DTypeSig true "padRight" (TyFun (TyCon "Int") (TyFun (TyCon "Char") (TyFun (TyCon "String") (TyCon "String")))))
@@ -1613,9 +1620,9 @@ sliceBetween (StrCursor s a) (StrCursor _ b) = stringSliceBytes a b s
 (DFunDef false "sharedMargin" ((PVar "m") (PList)) (EVar "m"))
 (DFunDef false "sharedMargin" ((PVar "m") (PCons (PVar "l") (PVar "ls"))) (EIf (EBinOp "==" (EVar "l") (ELit (LString ""))) (EApp (EApp (EVar "sharedMargin") (EVar "m")) (EVar "ls")) (EIf (EVar "otherwise") (EApp (EApp (EVar "sharedMargin") (EApp (EApp (EVar "commonPrefix") (EVar "m")) (EApp (EVar "leadingIndent") (EVar "l")))) (EVar "ls")) (EApp (EVar "__fallthrough__") (ELit LUnit)))))
 (DTypeSig false "commonPrefix" (TyFun (TyCon "String") (TyFun (TyCon "String") (TyCon "String"))))
-(DFunDef false "commonPrefix" ((PVar "a") (PVar "b")) (EApp (EApp (EVar "take") (EApp (EApp (EApp (EVar "sharedLength") (EVar "a")) (EVar "b")) (ELit (LInt 0)))) (EVar "a")))
-(DTypeSig false "sharedLength" (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyCon "Int") (TyCon "Int")))))
-(DFunDef false "sharedLength" ((PVar "a") (PVar "b") (PVar "i")) (EIf (EBinOp "&&" (EBinOp "&&" (EBinOp "<" (EVar "i") (EApp (EVar "length#shadow") (EVar "a"))) (EBinOp "<" (EVar "i") (EApp (EVar "length#shadow") (EVar "b")))) (EBinOp "==" (EApp (EApp (EVar "charAtStr") (EVar "a")) (EVar "i")) (EApp (EApp (EVar "charAtStr") (EVar "b")) (EVar "i")))) (EApp (EApp (EApp (EVar "sharedLength") (EVar "a")) (EVar "b")) (EBinOp "+" (EVar "i") (ELit (LInt 1)))) (EIf (EVar "otherwise") (EVar "i") (EApp (EVar "__fallthrough__") (ELit LUnit)))))
+(DFunDef false "commonPrefix" ((PVar "a") (PVar "b")) (EApp (EApp (EVar "take") (EApp (EApp (EApp (EVar "sharedLength") (EApp (EVar "toChars") (EVar "a"))) (EApp (EVar "toChars") (EVar "b"))) (ELit (LInt 0)))) (EVar "a")))
+(DTypeSig false "sharedLength" (TyFun (TyApp (TyCon "Array") (TyCon "Char")) (TyFun (TyApp (TyCon "Array") (TyCon "Char")) (TyFun (TyCon "Int") (TyCon "Int")))))
+(DFunDef false "sharedLength" ((PVar "a") (PVar "b") (PVar "i")) (EIf (EBinOp "&&" (EBinOp "&&" (EBinOp "<" (EVar "i") (EApp (EVar "arrayLength") (EVar "a"))) (EBinOp "<" (EVar "i") (EApp (EVar "arrayLength") (EVar "b")))) (EBinOp "==" (EApp (EApp (EVar "arrayGetUnsafe") (EVar "i")) (EVar "a")) (EApp (EApp (EVar "arrayGetUnsafe") (EVar "i")) (EVar "b")))) (EApp (EApp (EApp (EVar "sharedLength") (EVar "a")) (EVar "b")) (EBinOp "+" (EVar "i") (ELit (LInt 1)))) (EIf (EVar "otherwise") (EVar "i") (EApp (EVar "__fallthrough__") (ELit LUnit)))))
 (DTypeSig true "padLeft" (TyFun (TyCon "Int") (TyFun (TyCon "Char") (TyFun (TyCon "String") (TyCon "String")))))
 (DFunDef false "padLeft" ((PVar "n") (PVar "c") (PVar "s")) (EIf (EBinOp ">=" (EApp (EVar "stringLength") (EVar "s")) (EVar "n")) (EVar "s") (EBinOp "++" (EApp (EApp (EVar "repeat") (EBinOp "-" (EVar "n") (EApp (EVar "stringLength") (EVar "s")))) (EApp (EVar "charToStr") (EVar "c"))) (EVar "s"))))
 (DTypeSig true "padRight" (TyFun (TyCon "Int") (TyFun (TyCon "Char") (TyFun (TyCon "String") (TyCon "String")))))

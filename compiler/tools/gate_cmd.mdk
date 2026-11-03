@@ -662,22 +662,12 @@ staleRefusal False root gs =
 shellFor : String -> <IO> String
 shellFor script = match readFile script
   Err _ => "sh"
-  Ok src => if substrIn "bash" (firstLineOf src) then "bash" else "sh"
+  Ok src => if strContains "bash" (firstLineOf src) then "bash" else "sh"
 
 firstLineOf : String -> String
 firstLineOf s = match splitNl s
   [] => ""
   l :: _ => l
-
-substrIn : String -> String -> Bool
-substrIn needle hay =
-  substrAt needle hay 0 (stringLength hay - stringLength needle)
-
-substrAt : String -> String -> Int -> Int -> Bool
-substrAt needle hay i last
-  | i > last = False
-  | stringSlice i (i + stringLength needle) hay == needle = True
-  | otherwise = substrAt needle hay (i + 1) last
 
 -- The invocation.  `runCommand` takes no environment and Medaka has no setEnv,
 -- so the environment goes through POSIX `env` — the same device
@@ -1510,21 +1500,21 @@ nameLeadOk c
   | c == "/" = False
   | otherwise = nameCharOk c
 
-nameCharsOk : String -> Int -> Int -> Bool
-nameCharsOk s i n
+nameCharsOk : Array Char -> Int -> Int -> Bool
+nameCharsOk cs i n
   | i >= n = True
-  | nameCharOk (stringSlice i (i + 1) s) = nameCharsOk s (i + 1) n
+  | nameCharOk (charToStr (arrayGetUnsafe i cs)) = nameCharsOk cs (i + 1) n
   | otherwise = False
 
 -- The first character outside the set, as `<char>` at 1-based position — the
 -- message has to name WHICH byte, or the reader is left eyeballing a string
 -- whose whole problem is that it contains something invisible.
-firstBadChar : String -> Int -> Int -> String
-firstBadChar s i n
+firstBadChar : Array Char -> Int -> Int -> String
+firstBadChar cs i n
   | i >= n = "(none)"
-  | not (nameCharOk (stringSlice i (i + 1) s)) =
-    "'\{stringSlice i (i + 1) s}' at position \{intToString (i + 1)}"
-  | otherwise = firstBadChar s (i + 1) n
+  | not (nameCharOk (charToStr (arrayGetUnsafe i cs))) =
+    "'\{charToStr (arrayGetUnsafe i cs)}' at position \{intToString (i + 1)}"
+  | otherwise = firstBadChar cs (i + 1) n
 
 unsafeName : String -> String -> List String
 unsafeName kind n
@@ -1533,8 +1523,8 @@ unsafeName kind n
   ]
   | not (nameLeadOk (stringSlice 0 1 n)) =
     ["\{n}: \{kind} name must start with a letter, a digit or '_'"]
-  | not (nameCharsOk n 0 (stringLength n)) = [
-    "\{n}: \{kind} name contains \{firstBadChar n 0 (stringLength n)} — allowed characters are letters, digits, '_', '.' and '/' (a name is emitted into ci.yml and re-read as an unquoted shell word)",
+  | not (nameCharsOk (stringToChars n) 0 (stringLength n)) = [
+    "\{n}: \{kind} name contains \{firstBadChar (stringToChars n) 0 (stringLength n)} — allowed characters are letters, digits, '_', '.' and '/' (a name is emitted into ci.yml and re-read as an unquoted shell word)",
   ]
   | otherwise = []
 

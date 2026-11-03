@@ -248,6 +248,8 @@ entry:
 ; mdk-module impl.5f5f757365725f5f3a3a466f6c6461626c657c5f5f757365725f5f2e4261677c.666f6c64
 define internal i64 @mdk.impl.7a5a5f35665f5f35665f757365725f35665f5f35665f5f32655f426167.666f6c64(i64 %arg0, i64 %arg1, i64 %arg2) {
 entry:
+  %t29 = alloca i64
+  %t35 = alloca i64, i64 2
   %t0 = alloca i64
   %t2 = icmp eq i64 %arg2, 1
   %t3 = and i64 %arg2, 1
@@ -280,7 +282,6 @@ conyes12:
   %t25 = inttoptr i64 %arg0 to ptr
   %t26 = load i64, ptr %t25
   %t27 = icmp eq i64 %t26, 2
-  %t29 = alloca i64
   br i1 %t27, label %apfast28, label %apslow28
 apfast28:
   %t30 = inttoptr i64 %arg0 to ptr
@@ -291,7 +292,6 @@ apfast28:
   store i64 %t34, ptr %t29
   br label %apend28
 apslow28:
-  %t35 = alloca i64, i64 2
   %t36 = getelementptr i64, ptr %t35, i64 0
   store i64 %arg1, ptr %t36
   %t37 = getelementptr i64, ptr %t35, i64 1
@@ -314,7 +314,16 @@ decend1:
 ; mdk-module program
 @mdk_disc_none = private unnamed_addr constant i64 -1
 ; mdk-module program
-@mdk.gen.dictcell.70726f6772616d..0 = internal constant [1 x i64] [i64 3070869507875195480]
+define internal i64 @mdk.slot.5f5f757365725f5f3a3a466f6c6461626c657c5f5f757365725f5f2e4261677c.666f6c64(i64 %clos, i64 %dict, i64 %arg0, i64 %arg1, i64 %arg2) {
+entry:
+  %t0 = call i64 @mdk.impl.7a5a5f35665f5f35665f757365725f35665f5f35665f5f32655f426167.666f6c64(i64 %arg0, i64 %arg1, i64 %arg2)
+  ret i64 %t0
+}
+
+; mdk-module program
+@mdk.slotclosure.5f5f757365725f5f3a3a466f6c6461626c657c5f5f757365725f5f2e4261677c.666f6c64 = internal constant [2 x i64] [i64 4, i64 ptrtoint (ptr @mdk.slot.5f5f757365725f5f3a3a466f6c6461626c657c5f5f757365725f5f2e4261677c.666f6c64 to i64)]
+; mdk-module program
+@mdk.gen.dictcell.70726f6772616d..0 = internal constant [2 x i64] [i64 3070869507875195480, i64 ptrtoint (ptr @mdk.slotclosure.5f5f757365725f5f3a3a466f6c6461626c657c5f5f757365725f5f2e4261677c.666f6c64 to i64)]
 ; mdk-module module.5f5f757365725f5f
 define internal i64 @mdk.gen.lambda.6d6f64756c652e35663566373537333635373235663566..0(i64 %clos, i64 %arg0, i64 %arg1) {
 entry:

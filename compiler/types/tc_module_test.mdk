@@ -133,6 +133,8 @@ checkEach g seed ((mid, ds) :: rest) =
       chErrors = map (d => codeText (tcCode d)) errs,
       chWarnings = map (d => codeText (tcCode d)) warns,
     }
+    -- Bound: one step per fixture module, a few per test.
+    -- lint-disable-next-line rule-accumulator-append
     :: checkEach g (seed ++ b.mbSchemes) rest
 
 -- What a drain reported: the module and code of each finding, in the order reported.

@@ -314,6 +314,31 @@ test "each of two test siblings reads its own subject in both evaluators" = expe
       (cevalModulesOutputFacts twoSiblingFacts [] twoSiblingModules),
   ]
 
+-- The name desugar checks an annotated literal parameter through is not one a
+-- user can write, so the outer parameter spelled `__annot_0` still reads 42.
+annotCaptureModules : List (String, List Decl)
+annotCaptureModules = [
+  (
+    "annot",
+    desugar
+      (parse
+        """outer = __annot_0 => (7 : Int) => __annot_0
+
+main = putStrLn (intToString (outer 42 7))
+"""),
+  ),
+]
+
+test "an annotated parameter's checked name captures no user name in both evaluators" = expectAll
+  [
+    expectEqual
+      "42\n"
+      (evalModulesOutputFacts emptyFacts [] annotCaptureModules),
+    expectEqual
+      "42\n"
+      (cevalModulesOutputFacts emptyFacts [] annotCaptureModules),
+  ]
+
 -- Run a multi-module program for its OUTPUT (the loader-driven analog of
 -- evalOutput): evaluate every module in dependency order, force the root
 -- module's `main` for its IO side-effects, return the captured stdout.  Untyped

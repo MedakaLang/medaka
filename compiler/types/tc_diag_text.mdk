@@ -69,6 +69,7 @@ import types.tc_types.{
   MethodBodyKind(..),
   RecordInfo,
 }
+import list.{take}
 import support.diag_codes.{DiagCode(..)}
 import types.publish.{TcDiag(..), tcCode}
 import support.util.{
@@ -273,10 +274,50 @@ kindName : Kind -> String
 kindName KType = "Type"
 kindName KRow = "Effect"
 kindName (KAuth l pat) = "Authority \{effLabelName l}\{patternMark pat}"
+kindName (KArrow d r) = "\{kindDomainName d} -> \{kindName r}"
+
+-- An arrow on the left of an arrow is parenthesised, as `kindAnnSource` spells it.
+kindDomainName : Kind -> String
+kindDomainName (KArrow d r) = "(\{kindName (KArrow d r)})"
+kindDomainName k = kindName k
+
+-- A written constructor given [nArgs] type arguments where its position takes
+-- [expected] (EFFECTS-SEMANTICS §6.4).  [written] is a raw head tag
+-- (`ppConName`); the remedy depends on which side the count is wrong on.  A
+-- remedy that writes arguments names them apart from [written] and from
+-- [taken], the variables the written type already uses.
+export
+writtenKindArityMsg : String -> Int -> Int -> List String -> String
+writtenKindArityMsg written expected nArgs taken =
+  "`\{ppConName written}` expects \{countTypeArguments expected}, got \{intToString nArgs}; \{writtenKindArityFix (ppConName written) expected nArgs (written :: taken)}"
+
+countTypeArguments : Int -> String
+countTypeArguments n = "\{intToString n} type \{argumentNoun n}"
+
+writtenKindArityFix : String -> Int -> Int -> List String -> String
+writtenKindArityFix written expected nArgs taken
+  | nArgs > expected = "remove the extra \{argumentNoun (nArgs - expected)}"
+  | nArgs == 0 && listLen fresh >= expected && startsWith "(" written =
+    "write `(\{joinWith ", " (take expected fresh)})`"
+  | nArgs == 0 && listLen fresh >= expected =
+    "write `\{written} \{joinWith " " (take expected fresh)}`"
+  | otherwise = "supply the missing \{argumentNoun (expected - nArgs)}"
+  where
+    fresh = filter (n => not (contains n taken)) missingArgNames
+
+missingArgNames : List String
+missingArgNames = ["a", "b", "c", "d", "e", "f", "g", "h", "k", "m", "n", "p"]
+
+-- A written type whose kind is not the one its position takes (§6.4), where
+-- the mismatch is not a count of arguments.
+export
+writtenKindMismatchMsg : String -> Kind -> Kind -> String
+writtenKindMismatchMsg written got want =
+  "`\{written}` has kind `\{kindName got}`, but a type of kind `\{kindName want}` is expected here; write a type of that kind"
 
 export
 renderKindArrow : List Kind -> String
-renderKindArrow ks = joinWith " -> " (map kindName ks ++ ["Type"])
+renderKindArrow ks = joinWith " -> " (map kindDomainName ks ++ ["Type"])
 
 -- [ctor] is a RAW head tag and must reach the reader through `ppConName` — a tuple
 -- head arrives as `__tuple2__`, and leaking that is exactly what ppConName exists to
@@ -1364,14 +1405,14 @@ locGoalKey (Some (Loc file sl sc el ec)) =
   "\{file}:\{intToString sl}:\{intToString sc}:\{intToString el}:\{intToString ec}"
 
 allDigits : String -> Bool
-allDigits n = stringLength n > 0 && allDigitsFrom n 0
+allDigits n = stringLength n > 0 && allDigitsFrom (stringToChars n) 0
 
-allDigitsFrom : String -> Int -> Bool
-allDigitsFrom n i
-  | i >= stringLength n = True
+allDigitsFrom : Array Char -> Int -> Bool
+allDigitsFrom cs i
+  | i >= arrayLength cs = True
   | otherwise =
-    let c = stringSlice i (i + 1) n
-    c >= "0" && c <= "9" && allDigitsFrom n (i + 1)
+    let c = arrayGetUnsafe i cs
+    c >= '0' && c <= '9' && allDigitsFrom cs (i + 1)
 
 export
 backticked : String -> String

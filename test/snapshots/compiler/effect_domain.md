@@ -1,5 +1,5 @@
 # META
-source_lines=883
+source_lines=886
 stages=DESUGAR,MARK
 # SOURCE
 -- Concrete authority domains: the lattice each effect label's parameter is
@@ -518,11 +518,14 @@ setCardCap = 16
 
 export
 commonPrefixLen : String -> String -> Int -> Int
-commonPrefixLen a b i =
-  if i >= stringLength a || i >= stringLength b then
+commonPrefixLen a b i = commonPrefixChars (stringToChars a) (stringToChars b) i
+
+commonPrefixChars : Array Char -> Array Char -> Int -> Int
+commonPrefixChars xs ys i =
+  if i >= arrayLength xs || i >= arrayLength ys then
     i
-  else if stringSlice i (i + 1) a == stringSlice i (i + 1) b then
-    commonPrefixLen a b (i + 1)
+  else if arrayGetUnsafe i xs == arrayGetUnsafe i ys then
+    commonPrefixChars xs ys (i + 1)
   else
     i
 
@@ -1054,7 +1057,9 @@ retagParam _ p = p
 (DTypeSig true "setCardCap" (TyCon "Int"))
 (DFunDef false "setCardCap" () (ELit (LInt 16)))
 (DTypeSig true "commonPrefixLen" (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyCon "Int") (TyCon "Int")))))
-(DFunDef false "commonPrefixLen" ((PVar "a") (PVar "b") (PVar "i")) (EIf (EBinOp "||" (EBinOp ">=" (EVar "i") (EApp (EVar "stringLength") (EVar "a"))) (EBinOp ">=" (EVar "i") (EApp (EVar "stringLength") (EVar "b")))) (EVar "i") (EIf (EBinOp "==" (EApp (EApp (EApp (EVar "stringSlice") (EVar "i")) (EBinOp "+" (EVar "i") (ELit (LInt 1)))) (EVar "a")) (EApp (EApp (EApp (EVar "stringSlice") (EVar "i")) (EBinOp "+" (EVar "i") (ELit (LInt 1)))) (EVar "b"))) (EApp (EApp (EApp (EVar "commonPrefixLen") (EVar "a")) (EVar "b")) (EBinOp "+" (EVar "i") (ELit (LInt 1)))) (EVar "i"))))
+(DFunDef false "commonPrefixLen" ((PVar "a") (PVar "b") (PVar "i")) (EApp (EApp (EApp (EVar "commonPrefixChars") (EApp (EVar "stringToChars") (EVar "a"))) (EApp (EVar "stringToChars") (EVar "b"))) (EVar "i")))
+(DTypeSig false "commonPrefixChars" (TyFun (TyApp (TyCon "Array") (TyCon "Char")) (TyFun (TyApp (TyCon "Array") (TyCon "Char")) (TyFun (TyCon "Int") (TyCon "Int")))))
+(DFunDef false "commonPrefixChars" ((PVar "xs") (PVar "ys") (PVar "i")) (EIf (EBinOp "||" (EBinOp ">=" (EVar "i") (EApp (EVar "arrayLength") (EVar "xs"))) (EBinOp ">=" (EVar "i") (EApp (EVar "arrayLength") (EVar "ys")))) (EVar "i") (EIf (EBinOp "==" (EApp (EApp (EVar "arrayGetUnsafe") (EVar "i")) (EVar "xs")) (EApp (EApp (EVar "arrayGetUnsafe") (EVar "i")) (EVar "ys"))) (EApp (EApp (EApp (EVar "commonPrefixChars") (EVar "xs")) (EVar "ys")) (EBinOp "+" (EVar "i") (ELit (LInt 1)))) (EVar "i"))))
 (DTypeSig true "drender" (TyFun (TyCon "Param") (TyCon "String")))
 (DFunDef false "drender" ((PVar "p")) (EApp (EVar "drenderN") (EApp (EVar "canonParam") (EVar "p"))))
 (DTypeSig true "drenderN" (TyFun (TyCon "Param") (TyCon "String")))
@@ -1358,7 +1363,9 @@ retagParam _ p = p
 (DTypeSig true "setCardCap" (TyCon "Int"))
 (DFunDef false "setCardCap" () (ELit (LInt 16)))
 (DTypeSig true "commonPrefixLen" (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyCon "Int") (TyCon "Int")))))
-(DFunDef false "commonPrefixLen" ((PVar "a") (PVar "b") (PVar "i")) (EIf (EBinOp "||" (EBinOp ">=" (EVar "i") (EApp (EVar "stringLength") (EVar "a"))) (EBinOp ">=" (EVar "i") (EApp (EVar "stringLength") (EVar "b")))) (EVar "i") (EIf (EBinOp "==" (EApp (EApp (EApp (EVar "stringSlice") (EVar "i")) (EBinOp "+" (EVar "i") (ELit (LInt 1)))) (EVar "a")) (EApp (EApp (EApp (EVar "stringSlice") (EVar "i")) (EBinOp "+" (EVar "i") (ELit (LInt 1)))) (EVar "b"))) (EApp (EApp (EApp (EVar "commonPrefixLen") (EVar "a")) (EVar "b")) (EBinOp "+" (EVar "i") (ELit (LInt 1)))) (EVar "i"))))
+(DFunDef false "commonPrefixLen" ((PVar "a") (PVar "b") (PVar "i")) (EApp (EApp (EApp (EVar "commonPrefixChars") (EApp (EVar "stringToChars") (EVar "a"))) (EApp (EVar "stringToChars") (EVar "b"))) (EVar "i")))
+(DTypeSig false "commonPrefixChars" (TyFun (TyApp (TyCon "Array") (TyCon "Char")) (TyFun (TyApp (TyCon "Array") (TyCon "Char")) (TyFun (TyCon "Int") (TyCon "Int")))))
+(DFunDef false "commonPrefixChars" ((PVar "xs") (PVar "ys") (PVar "i")) (EIf (EBinOp "||" (EBinOp ">=" (EVar "i") (EApp (EVar "arrayLength") (EVar "xs"))) (EBinOp ">=" (EVar "i") (EApp (EVar "arrayLength") (EVar "ys")))) (EVar "i") (EIf (EBinOp "==" (EApp (EApp (EVar "arrayGetUnsafe") (EVar "i")) (EVar "xs")) (EApp (EApp (EVar "arrayGetUnsafe") (EVar "i")) (EVar "ys"))) (EApp (EApp (EApp (EVar "commonPrefixChars") (EVar "xs")) (EVar "ys")) (EBinOp "+" (EVar "i") (ELit (LInt 1)))) (EVar "i"))))
 (DTypeSig true "drender" (TyFun (TyCon "Param") (TyCon "String")))
 (DFunDef false "drender" ((PVar "p")) (EApp (EVar "drenderN") (EApp (EVar "canonParam") (EVar "p"))))
 (DTypeSig true "drenderN" (TyFun (TyCon "Param") (TyCon "String")))

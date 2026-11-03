@@ -216,7 +216,7 @@ Core. That distinction is not represented in their types.
 | Method/source arity | the `methodArityOfInput`/`Iface`/`Entry`/`Tag`/`Route` family (split from one function 2026-08-21 to 08-27) | the `methodArityOfW`/`InputW`/`IfaceW`/`EntryW`/`TagW` family | arrow-spine table from `core_ir_lower` plus the impl clause's own pattern count (#1034) |
 | Exact/PAP/over-application | `emitApp`/`emitOverApp` plus `emitPapClosure`/`emitMethodPap`/`emitCtorPap` families | closure arity plus `$mdk_apply` branches | none |
 | Record field slot | `Emit.recByName`/`recByLabel`/`recFields` | record-name and label indexes built into `WasmEmitInput` | record-name strings on some nodes; ordinals nowhere |
-| Dispatch arm/default | one `icmp` per arm keyed on the canonical row key (`implEntryKey`), dispatch/default chain synthesis | `findByKeyW`, dispatch chains, incomplete default synthesis | `Route` plus incomplete `CImplEntry` set |
+| Dispatch arm/default | a slot load from the dictionary's method table (`emitSlotCall`); a known instance is a direct `mdk.impl.*` call | `callViaSlotRef`: a null check, then `call_ref` on the `$slotN` function of the `$dict` slot array | `Route` plus `EmitPlan.methodTables` (`planMethodTables`) |
 | Closure captures/layout | LLVM free-variable and allocation paths | Wasm closure-use scan and lifted functions | none |
 | Global forcing | native realization of shared classification | Wasm realization of shared classification | `emit_plan.EmitPlan` (built from `emit_support.eagerReachMap` / `lazyGlobalNames`) |
 | Tail/TRMC realization | `musttail`, destination cells, dispatch-group inlining | `return_call`, typed destination structs | `trmc_analysis` eligibility/groups |
@@ -317,7 +317,7 @@ and capability failures are therefore part of the Wasm backend's trusted base.
 | `test/diff_compiler_llvm*.sh` | native emitted output and typed-IR shapes |
 | `test/wasm/diff_wasm*.sh` | WAT assembly, validation, and behavior |
 | `test/diff_compiler_tmc_parity_test.mdk` | shared TMC population parity |
-| `test/diff_compiler_dispatch_shape_test.mdk` | outlined dispatch and prelude independence |
+| `test/diff_compiler_dispatch_shape_test.mdk` | no dispatchers; slot loads and slot wrappers exist; prelude independence |
 | `compiler/backend/extern_catalog_gate_test.mdk` | extern existence/disposition and pure-domain ledger |
 | `compiler/types/target_profile_host_test.mdk` | the host `PROFILES` grants and slice behaviour match `target_profile.mdk`; every emitted `env` import key is a host slice key (`checkImportKeys`, run by every wasm gate) |
 | `test/diff_compiler_perf_scaling.sh` | selected allocation/time growth classes |

@@ -1,5 +1,5 @@
 # META
-source_lines=2916
+source_lines=3032
 stages=DESUGAR,MARK
 # SOURCE
 -- Medaka AST — the surface (pre-desugar) nodes,
@@ -809,6 +809,7 @@ patBoundNames (PList ps) = flatMap patBoundNames ps
 patBoundNames (PAs x _ _ p) = x :: patBoundNames p
 patBoundNames (POr (p :: _)) = patBoundNames p
 patBoundNames (PRec _ fields _) = flatMap recPatFieldNames fields
+patBoundNames (PAnn p _) = patBoundNames p
 patBoundNames _ = []
 
 recPatFieldNames : RecPatField -> List String
@@ -830,6 +831,7 @@ patBindings (POr []) = []
 patBindings (POr (p :: _)) = patBindings p
 patBindings (PRng _ _ _) = []
 patBindings (PRec _ fields _) = flatMap recFieldBindings fields
+patBindings (PAnn p _) = patBindings p
 
 -- Whether [p] contains an or-pattern anywhere.
 export
@@ -841,7 +843,42 @@ patHasOr (PTuple ps) = any patHasOr ps
 patHasOr (PList ps) = any patHasOr ps
 patHasOr (PAs _ _ _ p) = patHasOr p
 patHasOr (PRec _ fields _) = any recFieldHasOr fields
+patHasOr (PAnn p _) = patHasOr p
 patHasOr _ = False
+
+-- Whether [p] holds a written type annotation (`PAnn`) anywhere.
+export
+patHasAnnot : Pat -> Bool
+patHasAnnot (PAnn _ _) = True
+patHasAnnot (PCon _ ps) = any patHasAnnot ps
+patHasAnnot (PCons a b) = patHasAnnot a || patHasAnnot b
+patHasAnnot (PTuple ps) = any patHasAnnot ps
+patHasAnnot (PList ps) = any patHasAnnot ps
+patHasAnnot (PAs _ _ _ p) = patHasAnnot p
+patHasAnnot (POr ps) = any patHasAnnot ps
+patHasAnnot (PRec _ fields _) = any recFieldHasAnnot fields
+patHasAnnot _ = False
+
+recFieldHasAnnot : RecPatField -> Bool
+recFieldHasAnnot (RecPatField _ _ _ (Some p)) = patHasAnnot p
+recFieldHasAnnot _ = False
+
+-- The types [p]'s annotations write, outermost first.
+export
+patAnnotTys : Pat -> List Ty
+patAnnotTys (PAnn p t) = t :: patAnnotTys p
+patAnnotTys (PCon _ ps) = flatMap patAnnotTys ps
+patAnnotTys (PCons a b) = patAnnotTys a ++ patAnnotTys b
+patAnnotTys (PTuple ps) = flatMap patAnnotTys ps
+patAnnotTys (PList ps) = flatMap patAnnotTys ps
+patAnnotTys (PAs _ _ _ p) = patAnnotTys p
+patAnnotTys (POr ps) = flatMap patAnnotTys ps
+patAnnotTys (PRec _ fields _) = flatMap recFieldAnnotTys fields
+patAnnotTys _ = []
+
+recFieldAnnotTys : RecPatField -> List Ty
+recFieldAnnotTys (RecPatField _ _ _ (Some p)) = patAnnotTys p
+recFieldAnnotTys _ = []
 
 recFieldHasOr : RecPatField -> Bool
 recFieldHasOr (RecPatField _ _ _ (Some p)) = patHasOr p
@@ -866,6 +903,7 @@ orCount (PTuple ps) = orCountProduct ps
 orCount (PList ps) = orCountProduct ps
 orCount (PAs _ _ _ p) = orCount p
 orCount (PRec _ fields _) = fold (n f => satMul n (recFieldCount f)) 1 fields
+orCount (PAnn p _) = orCount p
 orCount _ = 1
 
 -- The candidate count of a parameter list, as `paramCandidates` would build it.
@@ -897,6 +935,7 @@ orExpand (PList ps) = map PList (orProduct ps)
 orExpand (PAs x l bid p) = map (PAs x l bid) (orExpand p)
 orExpand (PRec c fields open) =
   map (fs => PRec c fs open) (recFieldProduct fields)
+orExpand (PAnn p t) = map (q => PAnn q t) (orExpand p)
 orExpand p = [p]
 
 orProduct : List Pat -> List (List Pat)
@@ -974,6 +1013,15 @@ variantName (Variant n _) = n
 export
 fieldName : Field -> String
 fieldName (Field n _) = n
+
+-- The field types of a constructor, in order, positional or named.
+export
+variantFieldTys : Variant -> List Ty
+variantFieldTys (Variant _ (ConPos tys)) = tys
+variantFieldTys (Variant _ (ConNamed fs _)) = map fieldTyOf fs
+
+fieldTyOf : Field -> Ty
+fieldTyOf (Field _ t) = t
 
 export
 implMethodName : ImplMethod -> String
@@ -1614,6 +1662,12 @@ public export data Pat =
   | POr (List Pat)
   | PRng Lit Lit Bool
   | PRec String (List RecPatField) Bool
+  -- `(p : T)` in a binding LHS (a lambda parameter, a do-bind or guard-bind
+  -- pattern): matches what [p] matches, and the value has the written type.
+  -- The parser builds it (`exprToPat`) so the printer and the tools keep the
+  -- written type; desugar (`eraseAnnotPats`) turns it into an expression
+  -- annotation on the bound value, so no pass from resolve on sees one.
+  | PAnn Pat Ty
 
 -- one field of a record pattern: `field` (pun, None) or `field = pat`
 -- The Loc is the field-name token (#913 Inc 2b: a punned field `{x}` binds
@@ -2694,8 +2748,9 @@ mapTyInExpr f (EApp a b) =
   let (b2, cb) = mapTyInExpr f b
   (EApp a2 b2, ca || cb)
 mapTyInExpr f (ELam ps b) =
-  let (b2, c) = mapTyInExpr f b
-  (ELam ps b2, c)
+  let (ps2, c1) = mapTyInPats f ps
+  let (b2, c2) = mapTyInExpr f b
+  (ELam ps2 b2, c1 || c2)
 mapTyInExpr f (ELet m r p e1 e2) =
   let (e1b, c1) = mapTyInExpr f e1
   let (e2b, c2) = mapTyInExpr f e2
@@ -2824,6 +2879,64 @@ mapTyInExpr f (EDoOrigin l e) =
 mapTyInExpr _ (ENumLit n ev lx) = (ENumLit n ev lx, False)
 mapTyInExpr _ (EWideLit hi lo ev lx) = (EWideLit hi lo ev lx, False)
 
+-- The written types of a pattern are its annotations (`PAnn`), which only the
+-- parser's binding positions hold: lambda parameters, do-binds and guard-binds.
+-- A pattern without one is returned as it is.
+mapTyInPat : (Ty -> (Ty, Bool)) -> Pat -> (Pat, Bool)
+mapTyInPat f p = if patHasAnnot p then mapAnnotsInPat f p else (p, False)
+
+mapTyInPats : (Ty -> (Ty, Bool)) -> List Pat -> (List Pat, Bool)
+mapTyInPats f ps =
+  if any patHasAnnot ps then mapAnnotsInPats f ps else (ps, False)
+
+mapAnnotsInPat : (Ty -> (Ty, Bool)) -> Pat -> (Pat, Bool)
+mapAnnotsInPat f (PAnn p t) =
+  let (p2, c1) = mapAnnotsInPat f p
+  let (t2, c2) = mapTyFull f t
+  (PAnn p2 t2, c1 || c2)
+mapAnnotsInPat f (PCon c ps) =
+  let (ps2, ch) = mapAnnotsInPats f ps
+  (PCon c ps2, ch)
+mapAnnotsInPat f (PCons h t) =
+  let (h2, c1) = mapAnnotsInPat f h
+  let (t2, c2) = mapAnnotsInPat f t
+  (PCons h2 t2, c1 || c2)
+mapAnnotsInPat f (PTuple ps) =
+  let (ps2, ch) = mapAnnotsInPats f ps
+  (PTuple ps2, ch)
+mapAnnotsInPat f (PList ps) =
+  let (ps2, ch) = mapAnnotsInPats f ps
+  (PList ps2, ch)
+mapAnnotsInPat f (PAs x l bid p) =
+  let (p2, ch) = mapAnnotsInPat f p
+  (PAs x l bid p2, ch)
+mapAnnotsInPat f (POr ps) =
+  let (ps2, ch) = mapAnnotsInPats f ps
+  (POr ps2, ch)
+mapAnnotsInPat f (PRec n fields open) =
+  let (fs2, ch) = mapAnnotsInFields f fields
+  (PRec n fs2 open, ch)
+mapAnnotsInPat _ p = (p, False)
+
+mapAnnotsInPats : (Ty -> (Ty, Bool)) -> List Pat -> (List Pat, Bool)
+mapAnnotsInPats _ [] = ([], False)
+mapAnnotsInPats f (p :: ps) =
+  let (p2, c1) = mapAnnotsInPat f p
+  let (ps2, c2) = mapAnnotsInPats f ps
+  (p2 :: ps2, c1 || c2)
+
+mapAnnotsInFields : (Ty -> (Ty, Bool)) ->
+  List RecPatField ->
+  (List RecPatField, Bool)
+mapAnnotsInFields _ [] = ([], False)
+mapAnnotsInFields f ((RecPatField n l bid (Some p)) :: rest) =
+  let (p2, c1) = mapAnnotsInPat f p
+  let (rest2, c2) = mapAnnotsInFields f rest
+  (RecPatField n l bid (Some p2) :: rest2, c1 || c2)
+mapAnnotsInFields f (field :: rest) =
+  let (rest2, c) = mapAnnotsInFields f rest
+  (field :: rest2, c)
+
 mapExprsB : (Ty -> (Ty, Bool)) -> List Expr -> (List Expr, Bool)
 mapExprsB _ [] = ([], False)
 mapExprsB f (e :: es) =
@@ -2834,10 +2947,11 @@ mapExprsB f (e :: es) =
 mapArmsB : (Ty -> (Ty, Bool)) -> List Arm -> (List Arm, Bool)
 mapArmsB _ [] = ([], False)
 mapArmsB f ((Arm p gs b) :: rest) =
+  let (p2, c0) = mapTyInPat f p
   let (gs2, c1) = mapGuardsB f gs
   let (b2, c2) = mapTyInExpr f b
   let (rest2, c3) = mapArmsB f rest
-  (Arm p gs2 b2 :: rest2, c1 || c2 || c3)
+  (Arm p2 gs2 b2 :: rest2, c0 || c1 || c2 || c3)
 
 mapGuardsB : (Ty -> (Ty, Bool)) -> List Guard -> (List Guard, Bool)
 mapGuardsB _ [] = ([], False)
@@ -2846,9 +2960,10 @@ mapGuardsB f ((GBool g) :: rest) =
   let (rest2, c2) = mapGuardsB f rest
   (GBool g2 :: rest2, c1 || c2)
 mapGuardsB f ((GBind p g) :: rest) =
+  let (p2, c0) = mapTyInPat f p
   let (g2, c1) = mapTyInExpr f g
   let (rest2, c2) = mapGuardsB f rest
-  (GBind p g2 :: rest2, c1 || c2)
+  (GBind p2 g2 :: rest2, c0 || c1 || c2)
 
 mapGuardArmsB : (Ty -> (Ty, Bool)) -> List GuardArm -> (List GuardArm, Bool)
 mapGuardArmsB _ [] = ([], False)
@@ -2870,8 +2985,9 @@ mapDoStmtB f (DoExpr e) =
   let (e2, c) = mapTyInExpr f e
   (DoExpr e2, c)
 mapDoStmtB f (DoBind p e) =
-  let (e2, c) = mapTyInExpr f e
-  (DoBind p e2, c)
+  let (p2, c1) = mapTyInPat f p
+  let (e2, c2) = mapTyInExpr f e
+  (DoBind p2 e2, c1 || c2)
 mapDoStmtB f (DoLet m r p e site) =
   let (e2, c) = mapTyInExpr f e
   (DoLet m r p e2 site, c)
@@ -2995,6 +3111,7 @@ public export data SiblingPair = SiblingPair {
 (DFunDef false "patBoundNames" ((PCon "PAs" (PVar "x") PWild PWild (PVar "p"))) (EBinOp "::" (EVar "x") (EApp (EVar "patBoundNames") (EVar "p"))))
 (DFunDef false "patBoundNames" ((PCon "POr" (PCons (PVar "p") PWild))) (EApp (EVar "patBoundNames") (EVar "p")))
 (DFunDef false "patBoundNames" ((PCon "PRec" PWild (PVar "fields") PWild)) (EApp (EApp (EVar "flatMap") (EVar "recPatFieldNames")) (EVar "fields")))
+(DFunDef false "patBoundNames" ((PCon "PAnn" (PVar "p") PWild)) (EApp (EVar "patBoundNames") (EVar "p")))
 (DFunDef false "patBoundNames" (PWild) (EListLit))
 (DTypeSig false "recPatFieldNames" (TyFun (TyCon "RecPatField") (TyApp (TyCon "List") (TyCon "String"))))
 (DFunDef false "recPatFieldNames" ((PCon "RecPatField" (PVar "label") PWild PWild (PCon "None"))) (EListLit (EVar "label")))
@@ -3012,6 +3129,7 @@ public export data SiblingPair = SiblingPair {
 (DFunDef false "patBindings" ((PCon "POr" (PCons (PVar "p") PWild))) (EApp (EVar "patBindings") (EVar "p")))
 (DFunDef false "patBindings" ((PCon "PRng" PWild PWild PWild)) (EListLit))
 (DFunDef false "patBindings" ((PCon "PRec" PWild (PVar "fields") PWild)) (EApp (EApp (EVar "flatMap") (EVar "recFieldBindings")) (EVar "fields")))
+(DFunDef false "patBindings" ((PCon "PAnn" (PVar "p") PWild)) (EApp (EVar "patBindings") (EVar "p")))
 (DTypeSig true "patHasOr" (TyFun (TyCon "Pat") (TyCon "Bool")))
 (DFunDef false "patHasOr" ((PCon "POr" PWild)) (EVar "True"))
 (DFunDef false "patHasOr" ((PCon "PCon" PWild (PVar "ps"))) (EApp (EApp (EVar "any") (EVar "patHasOr")) (EVar "ps")))
@@ -3020,7 +3138,34 @@ public export data SiblingPair = SiblingPair {
 (DFunDef false "patHasOr" ((PCon "PList" (PVar "ps"))) (EApp (EApp (EVar "any") (EVar "patHasOr")) (EVar "ps")))
 (DFunDef false "patHasOr" ((PCon "PAs" PWild PWild PWild (PVar "p"))) (EApp (EVar "patHasOr") (EVar "p")))
 (DFunDef false "patHasOr" ((PCon "PRec" PWild (PVar "fields") PWild)) (EApp (EApp (EVar "any") (EVar "recFieldHasOr")) (EVar "fields")))
+(DFunDef false "patHasOr" ((PCon "PAnn" (PVar "p") PWild)) (EApp (EVar "patHasOr") (EVar "p")))
 (DFunDef false "patHasOr" (PWild) (EVar "False"))
+(DTypeSig true "patHasAnnot" (TyFun (TyCon "Pat") (TyCon "Bool")))
+(DFunDef false "patHasAnnot" ((PCon "PAnn" PWild PWild)) (EVar "True"))
+(DFunDef false "patHasAnnot" ((PCon "PCon" PWild (PVar "ps"))) (EApp (EApp (EVar "any") (EVar "patHasAnnot")) (EVar "ps")))
+(DFunDef false "patHasAnnot" ((PCon "PCons" (PVar "a") (PVar "b"))) (EBinOp "||" (EApp (EVar "patHasAnnot") (EVar "a")) (EApp (EVar "patHasAnnot") (EVar "b"))))
+(DFunDef false "patHasAnnot" ((PCon "PTuple" (PVar "ps"))) (EApp (EApp (EVar "any") (EVar "patHasAnnot")) (EVar "ps")))
+(DFunDef false "patHasAnnot" ((PCon "PList" (PVar "ps"))) (EApp (EApp (EVar "any") (EVar "patHasAnnot")) (EVar "ps")))
+(DFunDef false "patHasAnnot" ((PCon "PAs" PWild PWild PWild (PVar "p"))) (EApp (EVar "patHasAnnot") (EVar "p")))
+(DFunDef false "patHasAnnot" ((PCon "POr" (PVar "ps"))) (EApp (EApp (EVar "any") (EVar "patHasAnnot")) (EVar "ps")))
+(DFunDef false "patHasAnnot" ((PCon "PRec" PWild (PVar "fields") PWild)) (EApp (EApp (EVar "any") (EVar "recFieldHasAnnot")) (EVar "fields")))
+(DFunDef false "patHasAnnot" (PWild) (EVar "False"))
+(DTypeSig false "recFieldHasAnnot" (TyFun (TyCon "RecPatField") (TyCon "Bool")))
+(DFunDef false "recFieldHasAnnot" ((PCon "RecPatField" PWild PWild PWild (PCon "Some" (PVar "p")))) (EApp (EVar "patHasAnnot") (EVar "p")))
+(DFunDef false "recFieldHasAnnot" (PWild) (EVar "False"))
+(DTypeSig true "patAnnotTys" (TyFun (TyCon "Pat") (TyApp (TyCon "List") (TyCon "Ty"))))
+(DFunDef false "patAnnotTys" ((PCon "PAnn" (PVar "p") (PVar "t"))) (EBinOp "::" (EVar "t") (EApp (EVar "patAnnotTys") (EVar "p"))))
+(DFunDef false "patAnnotTys" ((PCon "PCon" PWild (PVar "ps"))) (EApp (EApp (EVar "flatMap") (EVar "patAnnotTys")) (EVar "ps")))
+(DFunDef false "patAnnotTys" ((PCon "PCons" (PVar "a") (PVar "b"))) (EBinOp "++" (EApp (EVar "patAnnotTys") (EVar "a")) (EApp (EVar "patAnnotTys") (EVar "b"))))
+(DFunDef false "patAnnotTys" ((PCon "PTuple" (PVar "ps"))) (EApp (EApp (EVar "flatMap") (EVar "patAnnotTys")) (EVar "ps")))
+(DFunDef false "patAnnotTys" ((PCon "PList" (PVar "ps"))) (EApp (EApp (EVar "flatMap") (EVar "patAnnotTys")) (EVar "ps")))
+(DFunDef false "patAnnotTys" ((PCon "PAs" PWild PWild PWild (PVar "p"))) (EApp (EVar "patAnnotTys") (EVar "p")))
+(DFunDef false "patAnnotTys" ((PCon "POr" (PVar "ps"))) (EApp (EApp (EVar "flatMap") (EVar "patAnnotTys")) (EVar "ps")))
+(DFunDef false "patAnnotTys" ((PCon "PRec" PWild (PVar "fields") PWild)) (EApp (EApp (EVar "flatMap") (EVar "recFieldAnnotTys")) (EVar "fields")))
+(DFunDef false "patAnnotTys" (PWild) (EListLit))
+(DTypeSig false "recFieldAnnotTys" (TyFun (TyCon "RecPatField") (TyApp (TyCon "List") (TyCon "Ty"))))
+(DFunDef false "recFieldAnnotTys" ((PCon "RecPatField" PWild PWild PWild (PCon "Some" (PVar "p")))) (EApp (EVar "patAnnotTys") (EVar "p")))
+(DFunDef false "recFieldAnnotTys" (PWild) (EListLit))
 (DTypeSig false "recFieldHasOr" (TyFun (TyCon "RecPatField") (TyCon "Bool")))
 (DFunDef false "recFieldHasOr" ((PCon "RecPatField" PWild PWild PWild (PCon "Some" (PVar "p")))) (EApp (EVar "patHasOr") (EVar "p")))
 (DFunDef false "recFieldHasOr" (PWild) (EVar "False"))
@@ -3034,6 +3179,7 @@ public export data SiblingPair = SiblingPair {
 (DFunDef false "orCount" ((PCon "PList" (PVar "ps"))) (EApp (EVar "orCountProduct") (EVar "ps")))
 (DFunDef false "orCount" ((PCon "PAs" PWild PWild PWild (PVar "p"))) (EApp (EVar "orCount") (EVar "p")))
 (DFunDef false "orCount" ((PCon "PRec" PWild (PVar "fields") PWild)) (EApp (EApp (EApp (EVar "fold") (ELam ((PVar "n") (PVar "f")) (EApp (EApp (EVar "satMul") (EVar "n")) (EApp (EVar "recFieldCount") (EVar "f"))))) (ELit (LInt 1))) (EVar "fields")))
+(DFunDef false "orCount" ((PCon "PAnn" (PVar "p") PWild)) (EApp (EVar "orCount") (EVar "p")))
 (DFunDef false "orCount" (PWild) (ELit (LInt 1)))
 (DTypeSig true "orCountProduct" (TyFun (TyApp (TyCon "List") (TyCon "Pat")) (TyCon "Int")))
 (DFunDef false "orCountProduct" ((PVar "ps")) (EApp (EApp (EApp (EVar "fold") (ELam ((PVar "n") (PVar "p")) (EApp (EApp (EVar "satMul") (EVar "n")) (EApp (EVar "orCount") (EVar "p"))))) (ELit (LInt 1))) (EVar "ps")))
@@ -3054,6 +3200,7 @@ public export data SiblingPair = SiblingPair {
 (DFunDef false "orExpand" ((PCon "PList" (PVar "ps"))) (EApp (EApp (EVar "map") (EVar "PList")) (EApp (EVar "orProduct") (EVar "ps"))))
 (DFunDef false "orExpand" ((PCon "PAs" (PVar "x") (PVar "l") (PVar "bid") (PVar "p"))) (EApp (EApp (EVar "map") (EApp (EApp (EApp (EVar "PAs") (EVar "x")) (EVar "l")) (EVar "bid"))) (EApp (EVar "orExpand") (EVar "p"))))
 (DFunDef false "orExpand" ((PCon "PRec" (PVar "c") (PVar "fields") (PVar "open"))) (EApp (EApp (EVar "map") (ELam ((PVar "fs")) (EApp (EApp (EApp (EVar "PRec") (EVar "c")) (EVar "fs")) (EVar "open")))) (EApp (EVar "recFieldProduct") (EVar "fields"))))
+(DFunDef false "orExpand" ((PCon "PAnn" (PVar "p") (PVar "t"))) (EApp (EApp (EVar "map") (ELam ((PVar "q")) (EApp (EApp (EVar "PAnn") (EVar "q")) (EVar "t")))) (EApp (EVar "orExpand") (EVar "p"))))
 (DFunDef false "orExpand" ((PVar "p")) (EListLit (EVar "p")))
 (DTypeSig false "orProduct" (TyFun (TyApp (TyCon "List") (TyCon "Pat")) (TyApp (TyCon "List") (TyApp (TyCon "List") (TyCon "Pat")))))
 (DFunDef false "orProduct" ((PList)) (EListLit (EListLit)))
@@ -3091,6 +3238,11 @@ public export data SiblingPair = SiblingPair {
 (DFunDef false "variantName" ((PCon "Variant" (PVar "n") PWild)) (EVar "n"))
 (DTypeSig true "fieldName" (TyFun (TyCon "Field") (TyCon "String")))
 (DFunDef false "fieldName" ((PCon "Field" (PVar "n") PWild)) (EVar "n"))
+(DTypeSig true "variantFieldTys" (TyFun (TyCon "Variant") (TyApp (TyCon "List") (TyCon "Ty"))))
+(DFunDef false "variantFieldTys" ((PCon "Variant" PWild (PCon "ConPos" (PVar "tys")))) (EVar "tys"))
+(DFunDef false "variantFieldTys" ((PCon "Variant" PWild (PCon "ConNamed" (PVar "fs") PWild))) (EApp (EApp (EVar "map") (EVar "fieldTyOf")) (EVar "fs")))
+(DTypeSig false "fieldTyOf" (TyFun (TyCon "Field") (TyCon "Ty")))
+(DFunDef false "fieldTyOf" ((PCon "Field" PWild (PVar "t"))) (EVar "t"))
 (DTypeSig true "implMethodName" (TyFun (TyCon "ImplMethod") (TyCon "String")))
 (DFunDef false "implMethodName" ((PCon "ImplMethod" (PVar "n") PWild PWild)) (EVar "n"))
 (DTypeSig true "ifaceMethodName" (TyFun (TyCon "IfaceMethod") (TyCon "String")))
@@ -3240,7 +3392,7 @@ public export data SiblingPair = SiblingPair {
 (DData Public "EvEntry" () ((variant "EvEntry" (ConPos (TyCon "EvId") (TyCon "EvVal")))) ())
 (DTypeAlias true "EvTable" () (TyApp (TyCon "List") (TyCon "EvEntry")))
 (DData Public "Addr" () ((variant "ALocal" (ConPos (TyCon "Int") (TyCon "Int"))) (variant "AGlobal" (ConPos))) ())
-(DData Public "Pat" () ((variant "PVar" (ConPos (TyCon "String") (TyCon "Loc") (TyCon "BinderId"))) (variant "PWild" (ConPos)) (variant "PLit" (ConPos (TyCon "Lit"))) (variant "PCon" (ConPos (TyCon "String") (TyApp (TyCon "List") (TyCon "Pat")))) (variant "PCons" (ConPos (TyCon "Pat") (TyCon "Pat"))) (variant "PTuple" (ConPos (TyApp (TyCon "List") (TyCon "Pat")))) (variant "PList" (ConPos (TyApp (TyCon "List") (TyCon "Pat")))) (variant "PAs" (ConPos (TyCon "String") (TyCon "Loc") (TyCon "BinderId") (TyCon "Pat"))) (variant "POr" (ConPos (TyApp (TyCon "List") (TyCon "Pat")))) (variant "PRng" (ConPos (TyCon "Lit") (TyCon "Lit") (TyCon "Bool"))) (variant "PRec" (ConPos (TyCon "String") (TyApp (TyCon "List") (TyCon "RecPatField")) (TyCon "Bool")))) ())
+(DData Public "Pat" () ((variant "PVar" (ConPos (TyCon "String") (TyCon "Loc") (TyCon "BinderId"))) (variant "PWild" (ConPos)) (variant "PLit" (ConPos (TyCon "Lit"))) (variant "PCon" (ConPos (TyCon "String") (TyApp (TyCon "List") (TyCon "Pat")))) (variant "PCons" (ConPos (TyCon "Pat") (TyCon "Pat"))) (variant "PTuple" (ConPos (TyApp (TyCon "List") (TyCon "Pat")))) (variant "PList" (ConPos (TyApp (TyCon "List") (TyCon "Pat")))) (variant "PAs" (ConPos (TyCon "String") (TyCon "Loc") (TyCon "BinderId") (TyCon "Pat"))) (variant "POr" (ConPos (TyApp (TyCon "List") (TyCon "Pat")))) (variant "PRng" (ConPos (TyCon "Lit") (TyCon "Lit") (TyCon "Bool"))) (variant "PRec" (ConPos (TyCon "String") (TyApp (TyCon "List") (TyCon "RecPatField")) (TyCon "Bool"))) (variant "PAnn" (ConPos (TyCon "Pat") (TyCon "Ty")))) ())
 (DData Public "RecPatField" () ((variant "RecPatField" (ConPos (TyCon "String") (TyCon "Loc") (TyCon "BinderId") (TyApp (TyCon "Option") (TyCon "Pat"))))) ())
 (DData Public "Guard" () ((variant "GBool" (ConPos (TyCon "Expr"))) (variant "GBind" (ConPos (TyCon "Pat") (TyCon "Expr")))) ())
 (DData Public "Arm" () ((variant "Arm" (ConPos (TyCon "Pat") (TyApp (TyCon "List") (TyCon "Guard")) (TyCon "Expr")))) ())
@@ -3394,7 +3546,7 @@ public export data SiblingPair = SiblingPair {
 (DFunDef false "mapTyInExpr" (PWild (PCon "ELit" (PVar "l"))) (ETuple (EApp (EVar "ELit") (EVar "l")) (EVar "False")))
 (DFunDef false "mapTyInExpr" (PWild (PCon "EVar" (PVar "n"))) (ETuple (EApp (EVar "EVar") (EVar "n")) (EVar "False")))
 (DFunDef false "mapTyInExpr" ((PVar "f") (PCon "EApp" (PVar "a") (PVar "b"))) (EBlock (DoLet false false (PTuple (PVar "a2") (PVar "ca")) (EApp (EApp (EVar "mapTyInExpr") (EVar "f")) (EVar "a"))) (DoLet false false (PTuple (PVar "b2") (PVar "cb")) (EApp (EApp (EVar "mapTyInExpr") (EVar "f")) (EVar "b"))) (DoExpr (ETuple (EApp (EApp (EVar "EApp") (EVar "a2")) (EVar "b2")) (EBinOp "||" (EVar "ca") (EVar "cb"))))))
-(DFunDef false "mapTyInExpr" ((PVar "f") (PCon "ELam" (PVar "ps") (PVar "b"))) (EBlock (DoLet false false (PTuple (PVar "b2") (PVar "c")) (EApp (EApp (EVar "mapTyInExpr") (EVar "f")) (EVar "b"))) (DoExpr (ETuple (EApp (EApp (EVar "ELam") (EVar "ps")) (EVar "b2")) (EVar "c")))))
+(DFunDef false "mapTyInExpr" ((PVar "f") (PCon "ELam" (PVar "ps") (PVar "b"))) (EBlock (DoLet false false (PTuple (PVar "ps2") (PVar "c1")) (EApp (EApp (EVar "mapTyInPats") (EVar "f")) (EVar "ps"))) (DoLet false false (PTuple (PVar "b2") (PVar "c2")) (EApp (EApp (EVar "mapTyInExpr") (EVar "f")) (EVar "b"))) (DoExpr (ETuple (EApp (EApp (EVar "ELam") (EVar "ps2")) (EVar "b2")) (EBinOp "||" (EVar "c1") (EVar "c2"))))))
 (DFunDef false "mapTyInExpr" ((PVar "f") (PCon "ELet" (PVar "m") (PVar "r") (PVar "p") (PVar "e1") (PVar "e2"))) (EBlock (DoLet false false (PTuple (PVar "e1b") (PVar "c1")) (EApp (EApp (EVar "mapTyInExpr") (EVar "f")) (EVar "e1"))) (DoLet false false (PTuple (PVar "e2b") (PVar "c2")) (EApp (EApp (EVar "mapTyInExpr") (EVar "f")) (EVar "e2"))) (DoExpr (ETuple (EApp (EApp (EApp (EApp (EApp (EVar "ELet") (EVar "m")) (EVar "r")) (EVar "p")) (EVar "e1b")) (EVar "e2b")) (EBinOp "||" (EVar "c1") (EVar "c2"))))))
 (DFunDef false "mapTyInExpr" ((PVar "f") (PCon "EMatch" (PVar "e0") (PVar "arms"))) (EBlock (DoLet false false (PTuple (PVar "e0b") (PVar "c1")) (EApp (EApp (EVar "mapTyInExpr") (EVar "f")) (EVar "e0"))) (DoLet false false (PTuple (PVar "arms2") (PVar "c2")) (EApp (EApp (EVar "mapArmsB") (EVar "f")) (EVar "arms"))) (DoExpr (ETuple (EApp (EApp (EVar "EMatch") (EVar "e0b")) (EVar "arms2")) (EBinOp "||" (EVar "c1") (EVar "c2"))))))
 (DFunDef false "mapTyInExpr" ((PVar "f") (PCon "EIf" (PVar "c") (PVar "t") (PVar "el"))) (EBlock (DoLet false false (PTuple (PVar "cb") (PVar "c1")) (EApp (EApp (EVar "mapTyInExpr") (EVar "f")) (EVar "c"))) (DoLet false false (PTuple (PVar "tb") (PVar "c2")) (EApp (EApp (EVar "mapTyInExpr") (EVar "f")) (EVar "t"))) (DoLet false false (PTuple (PVar "elb") (PVar "c3")) (EApp (EApp (EVar "mapTyInExpr") (EVar "f")) (EVar "el"))) (DoExpr (ETuple (EApp (EApp (EApp (EVar "EIf") (EVar "cb")) (EVar "tb")) (EVar "elb")) (EBinOp "||" (EBinOp "||" (EVar "c1") (EVar "c2")) (EVar "c3"))))))
@@ -3436,16 +3588,37 @@ public export data SiblingPair = SiblingPair {
 (DFunDef false "mapTyInExpr" ((PVar "f") (PCon "EDoOrigin" (PVar "l") (PVar "e"))) (EBlock (DoLet false false (PTuple (PVar "e2") (PVar "c")) (EApp (EApp (EVar "mapTyInExpr") (EVar "f")) (EVar "e"))) (DoExpr (ETuple (EApp (EApp (EVar "EDoOrigin") (EVar "l")) (EVar "e2")) (EVar "c")))))
 (DFunDef false "mapTyInExpr" (PWild (PCon "ENumLit" (PVar "n") (PVar "ev") (PVar "lx"))) (ETuple (EApp (EApp (EApp (EVar "ENumLit") (EVar "n")) (EVar "ev")) (EVar "lx")) (EVar "False")))
 (DFunDef false "mapTyInExpr" (PWild (PCon "EWideLit" (PVar "hi") (PVar "lo") (PVar "ev") (PVar "lx"))) (ETuple (EApp (EApp (EApp (EApp (EVar "EWideLit") (EVar "hi")) (EVar "lo")) (EVar "ev")) (EVar "lx")) (EVar "False")))
+(DTypeSig false "mapTyInPat" (TyFun (TyFun (TyCon "Ty") (TyTuple (TyCon "Ty") (TyCon "Bool"))) (TyFun (TyCon "Pat") (TyTuple (TyCon "Pat") (TyCon "Bool")))))
+(DFunDef false "mapTyInPat" ((PVar "f") (PVar "p")) (EIf (EApp (EVar "patHasAnnot") (EVar "p")) (EApp (EApp (EVar "mapAnnotsInPat") (EVar "f")) (EVar "p")) (ETuple (EVar "p") (EVar "False"))))
+(DTypeSig false "mapTyInPats" (TyFun (TyFun (TyCon "Ty") (TyTuple (TyCon "Ty") (TyCon "Bool"))) (TyFun (TyApp (TyCon "List") (TyCon "Pat")) (TyTuple (TyApp (TyCon "List") (TyCon "Pat")) (TyCon "Bool")))))
+(DFunDef false "mapTyInPats" ((PVar "f") (PVar "ps")) (EIf (EApp (EApp (EVar "any") (EVar "patHasAnnot")) (EVar "ps")) (EApp (EApp (EVar "mapAnnotsInPats") (EVar "f")) (EVar "ps")) (ETuple (EVar "ps") (EVar "False"))))
+(DTypeSig false "mapAnnotsInPat" (TyFun (TyFun (TyCon "Ty") (TyTuple (TyCon "Ty") (TyCon "Bool"))) (TyFun (TyCon "Pat") (TyTuple (TyCon "Pat") (TyCon "Bool")))))
+(DFunDef false "mapAnnotsInPat" ((PVar "f") (PCon "PAnn" (PVar "p") (PVar "t"))) (EBlock (DoLet false false (PTuple (PVar "p2") (PVar "c1")) (EApp (EApp (EVar "mapAnnotsInPat") (EVar "f")) (EVar "p"))) (DoLet false false (PTuple (PVar "t2") (PVar "c2")) (EApp (EApp (EVar "mapTyFull") (EVar "f")) (EVar "t"))) (DoExpr (ETuple (EApp (EApp (EVar "PAnn") (EVar "p2")) (EVar "t2")) (EBinOp "||" (EVar "c1") (EVar "c2"))))))
+(DFunDef false "mapAnnotsInPat" ((PVar "f") (PCon "PCon" (PVar "c") (PVar "ps"))) (EBlock (DoLet false false (PTuple (PVar "ps2") (PVar "ch")) (EApp (EApp (EVar "mapAnnotsInPats") (EVar "f")) (EVar "ps"))) (DoExpr (ETuple (EApp (EApp (EVar "PCon") (EVar "c")) (EVar "ps2")) (EVar "ch")))))
+(DFunDef false "mapAnnotsInPat" ((PVar "f") (PCon "PCons" (PVar "h") (PVar "t"))) (EBlock (DoLet false false (PTuple (PVar "h2") (PVar "c1")) (EApp (EApp (EVar "mapAnnotsInPat") (EVar "f")) (EVar "h"))) (DoLet false false (PTuple (PVar "t2") (PVar "c2")) (EApp (EApp (EVar "mapAnnotsInPat") (EVar "f")) (EVar "t"))) (DoExpr (ETuple (EApp (EApp (EVar "PCons") (EVar "h2")) (EVar "t2")) (EBinOp "||" (EVar "c1") (EVar "c2"))))))
+(DFunDef false "mapAnnotsInPat" ((PVar "f") (PCon "PTuple" (PVar "ps"))) (EBlock (DoLet false false (PTuple (PVar "ps2") (PVar "ch")) (EApp (EApp (EVar "mapAnnotsInPats") (EVar "f")) (EVar "ps"))) (DoExpr (ETuple (EApp (EVar "PTuple") (EVar "ps2")) (EVar "ch")))))
+(DFunDef false "mapAnnotsInPat" ((PVar "f") (PCon "PList" (PVar "ps"))) (EBlock (DoLet false false (PTuple (PVar "ps2") (PVar "ch")) (EApp (EApp (EVar "mapAnnotsInPats") (EVar "f")) (EVar "ps"))) (DoExpr (ETuple (EApp (EVar "PList") (EVar "ps2")) (EVar "ch")))))
+(DFunDef false "mapAnnotsInPat" ((PVar "f") (PCon "PAs" (PVar "x") (PVar "l") (PVar "bid") (PVar "p"))) (EBlock (DoLet false false (PTuple (PVar "p2") (PVar "ch")) (EApp (EApp (EVar "mapAnnotsInPat") (EVar "f")) (EVar "p"))) (DoExpr (ETuple (EApp (EApp (EApp (EApp (EVar "PAs") (EVar "x")) (EVar "l")) (EVar "bid")) (EVar "p2")) (EVar "ch")))))
+(DFunDef false "mapAnnotsInPat" ((PVar "f") (PCon "POr" (PVar "ps"))) (EBlock (DoLet false false (PTuple (PVar "ps2") (PVar "ch")) (EApp (EApp (EVar "mapAnnotsInPats") (EVar "f")) (EVar "ps"))) (DoExpr (ETuple (EApp (EVar "POr") (EVar "ps2")) (EVar "ch")))))
+(DFunDef false "mapAnnotsInPat" ((PVar "f") (PCon "PRec" (PVar "n") (PVar "fields") (PVar "open"))) (EBlock (DoLet false false (PTuple (PVar "fs2") (PVar "ch")) (EApp (EApp (EVar "mapAnnotsInFields") (EVar "f")) (EVar "fields"))) (DoExpr (ETuple (EApp (EApp (EApp (EVar "PRec") (EVar "n")) (EVar "fs2")) (EVar "open")) (EVar "ch")))))
+(DFunDef false "mapAnnotsInPat" (PWild (PVar "p")) (ETuple (EVar "p") (EVar "False")))
+(DTypeSig false "mapAnnotsInPats" (TyFun (TyFun (TyCon "Ty") (TyTuple (TyCon "Ty") (TyCon "Bool"))) (TyFun (TyApp (TyCon "List") (TyCon "Pat")) (TyTuple (TyApp (TyCon "List") (TyCon "Pat")) (TyCon "Bool")))))
+(DFunDef false "mapAnnotsInPats" (PWild (PList)) (ETuple (EListLit) (EVar "False")))
+(DFunDef false "mapAnnotsInPats" ((PVar "f") (PCons (PVar "p") (PVar "ps"))) (EBlock (DoLet false false (PTuple (PVar "p2") (PVar "c1")) (EApp (EApp (EVar "mapAnnotsInPat") (EVar "f")) (EVar "p"))) (DoLet false false (PTuple (PVar "ps2") (PVar "c2")) (EApp (EApp (EVar "mapAnnotsInPats") (EVar "f")) (EVar "ps"))) (DoExpr (ETuple (EBinOp "::" (EVar "p2") (EVar "ps2")) (EBinOp "||" (EVar "c1") (EVar "c2"))))))
+(DTypeSig false "mapAnnotsInFields" (TyFun (TyFun (TyCon "Ty") (TyTuple (TyCon "Ty") (TyCon "Bool"))) (TyFun (TyApp (TyCon "List") (TyCon "RecPatField")) (TyTuple (TyApp (TyCon "List") (TyCon "RecPatField")) (TyCon "Bool")))))
+(DFunDef false "mapAnnotsInFields" (PWild (PList)) (ETuple (EListLit) (EVar "False")))
+(DFunDef false "mapAnnotsInFields" ((PVar "f") (PCons (PCon "RecPatField" (PVar "n") (PVar "l") (PVar "bid") (PCon "Some" (PVar "p"))) (PVar "rest"))) (EBlock (DoLet false false (PTuple (PVar "p2") (PVar "c1")) (EApp (EApp (EVar "mapAnnotsInPat") (EVar "f")) (EVar "p"))) (DoLet false false (PTuple (PVar "rest2") (PVar "c2")) (EApp (EApp (EVar "mapAnnotsInFields") (EVar "f")) (EVar "rest"))) (DoExpr (ETuple (EBinOp "::" (EApp (EApp (EApp (EApp (EVar "RecPatField") (EVar "n")) (EVar "l")) (EVar "bid")) (EApp (EVar "Some") (EVar "p2"))) (EVar "rest2")) (EBinOp "||" (EVar "c1") (EVar "c2"))))))
+(DFunDef false "mapAnnotsInFields" ((PVar "f") (PCons (PVar "field") (PVar "rest"))) (EBlock (DoLet false false (PTuple (PVar "rest2") (PVar "c")) (EApp (EApp (EVar "mapAnnotsInFields") (EVar "f")) (EVar "rest"))) (DoExpr (ETuple (EBinOp "::" (EVar "field") (EVar "rest2")) (EVar "c")))))
 (DTypeSig false "mapExprsB" (TyFun (TyFun (TyCon "Ty") (TyTuple (TyCon "Ty") (TyCon "Bool"))) (TyFun (TyApp (TyCon "List") (TyCon "Expr")) (TyTuple (TyApp (TyCon "List") (TyCon "Expr")) (TyCon "Bool")))))
 (DFunDef false "mapExprsB" (PWild (PList)) (ETuple (EListLit) (EVar "False")))
 (DFunDef false "mapExprsB" ((PVar "f") (PCons (PVar "e") (PVar "es"))) (EBlock (DoLet false false (PTuple (PVar "e2") (PVar "c1")) (EApp (EApp (EVar "mapTyInExpr") (EVar "f")) (EVar "e"))) (DoLet false false (PTuple (PVar "es2") (PVar "c2")) (EApp (EApp (EVar "mapExprsB") (EVar "f")) (EVar "es"))) (DoExpr (ETuple (EBinOp "::" (EVar "e2") (EVar "es2")) (EBinOp "||" (EVar "c1") (EVar "c2"))))))
 (DTypeSig false "mapArmsB" (TyFun (TyFun (TyCon "Ty") (TyTuple (TyCon "Ty") (TyCon "Bool"))) (TyFun (TyApp (TyCon "List") (TyCon "Arm")) (TyTuple (TyApp (TyCon "List") (TyCon "Arm")) (TyCon "Bool")))))
 (DFunDef false "mapArmsB" (PWild (PList)) (ETuple (EListLit) (EVar "False")))
-(DFunDef false "mapArmsB" ((PVar "f") (PCons (PCon "Arm" (PVar "p") (PVar "gs") (PVar "b")) (PVar "rest"))) (EBlock (DoLet false false (PTuple (PVar "gs2") (PVar "c1")) (EApp (EApp (EVar "mapGuardsB") (EVar "f")) (EVar "gs"))) (DoLet false false (PTuple (PVar "b2") (PVar "c2")) (EApp (EApp (EVar "mapTyInExpr") (EVar "f")) (EVar "b"))) (DoLet false false (PTuple (PVar "rest2") (PVar "c3")) (EApp (EApp (EVar "mapArmsB") (EVar "f")) (EVar "rest"))) (DoExpr (ETuple (EBinOp "::" (EApp (EApp (EApp (EVar "Arm") (EVar "p")) (EVar "gs2")) (EVar "b2")) (EVar "rest2")) (EBinOp "||" (EBinOp "||" (EVar "c1") (EVar "c2")) (EVar "c3"))))))
+(DFunDef false "mapArmsB" ((PVar "f") (PCons (PCon "Arm" (PVar "p") (PVar "gs") (PVar "b")) (PVar "rest"))) (EBlock (DoLet false false (PTuple (PVar "p2") (PVar "c0")) (EApp (EApp (EVar "mapTyInPat") (EVar "f")) (EVar "p"))) (DoLet false false (PTuple (PVar "gs2") (PVar "c1")) (EApp (EApp (EVar "mapGuardsB") (EVar "f")) (EVar "gs"))) (DoLet false false (PTuple (PVar "b2") (PVar "c2")) (EApp (EApp (EVar "mapTyInExpr") (EVar "f")) (EVar "b"))) (DoLet false false (PTuple (PVar "rest2") (PVar "c3")) (EApp (EApp (EVar "mapArmsB") (EVar "f")) (EVar "rest"))) (DoExpr (ETuple (EBinOp "::" (EApp (EApp (EApp (EVar "Arm") (EVar "p2")) (EVar "gs2")) (EVar "b2")) (EVar "rest2")) (EBinOp "||" (EBinOp "||" (EBinOp "||" (EVar "c0") (EVar "c1")) (EVar "c2")) (EVar "c3"))))))
 (DTypeSig false "mapGuardsB" (TyFun (TyFun (TyCon "Ty") (TyTuple (TyCon "Ty") (TyCon "Bool"))) (TyFun (TyApp (TyCon "List") (TyCon "Guard")) (TyTuple (TyApp (TyCon "List") (TyCon "Guard")) (TyCon "Bool")))))
 (DFunDef false "mapGuardsB" (PWild (PList)) (ETuple (EListLit) (EVar "False")))
 (DFunDef false "mapGuardsB" ((PVar "f") (PCons (PCon "GBool" (PVar "g")) (PVar "rest"))) (EBlock (DoLet false false (PTuple (PVar "g2") (PVar "c1")) (EApp (EApp (EVar "mapTyInExpr") (EVar "f")) (EVar "g"))) (DoLet false false (PTuple (PVar "rest2") (PVar "c2")) (EApp (EApp (EVar "mapGuardsB") (EVar "f")) (EVar "rest"))) (DoExpr (ETuple (EBinOp "::" (EApp (EVar "GBool") (EVar "g2")) (EVar "rest2")) (EBinOp "||" (EVar "c1") (EVar "c2"))))))
-(DFunDef false "mapGuardsB" ((PVar "f") (PCons (PCon "GBind" (PVar "p") (PVar "g")) (PVar "rest"))) (EBlock (DoLet false false (PTuple (PVar "g2") (PVar "c1")) (EApp (EApp (EVar "mapTyInExpr") (EVar "f")) (EVar "g"))) (DoLet false false (PTuple (PVar "rest2") (PVar "c2")) (EApp (EApp (EVar "mapGuardsB") (EVar "f")) (EVar "rest"))) (DoExpr (ETuple (EBinOp "::" (EApp (EApp (EVar "GBind") (EVar "p")) (EVar "g2")) (EVar "rest2")) (EBinOp "||" (EVar "c1") (EVar "c2"))))))
+(DFunDef false "mapGuardsB" ((PVar "f") (PCons (PCon "GBind" (PVar "p") (PVar "g")) (PVar "rest"))) (EBlock (DoLet false false (PTuple (PVar "p2") (PVar "c0")) (EApp (EApp (EVar "mapTyInPat") (EVar "f")) (EVar "p"))) (DoLet false false (PTuple (PVar "g2") (PVar "c1")) (EApp (EApp (EVar "mapTyInExpr") (EVar "f")) (EVar "g"))) (DoLet false false (PTuple (PVar "rest2") (PVar "c2")) (EApp (EApp (EVar "mapGuardsB") (EVar "f")) (EVar "rest"))) (DoExpr (ETuple (EBinOp "::" (EApp (EApp (EVar "GBind") (EVar "p2")) (EVar "g2")) (EVar "rest2")) (EBinOp "||" (EBinOp "||" (EVar "c0") (EVar "c1")) (EVar "c2"))))))
 (DTypeSig false "mapGuardArmsB" (TyFun (TyFun (TyCon "Ty") (TyTuple (TyCon "Ty") (TyCon "Bool"))) (TyFun (TyApp (TyCon "List") (TyCon "GuardArm")) (TyTuple (TyApp (TyCon "List") (TyCon "GuardArm")) (TyCon "Bool")))))
 (DFunDef false "mapGuardArmsB" (PWild (PList)) (ETuple (EListLit) (EVar "False")))
 (DFunDef false "mapGuardArmsB" ((PVar "f") (PCons (PCon "GuardArm" (PVar "gs") (PVar "b")) (PVar "rest"))) (EBlock (DoLet false false (PTuple (PVar "gs2") (PVar "c1")) (EApp (EApp (EVar "mapGuardsB") (EVar "f")) (EVar "gs"))) (DoLet false false (PTuple (PVar "b2") (PVar "c2")) (EApp (EApp (EVar "mapTyInExpr") (EVar "f")) (EVar "b"))) (DoLet false false (PTuple (PVar "rest2") (PVar "c3")) (EApp (EApp (EVar "mapGuardArmsB") (EVar "f")) (EVar "rest"))) (DoExpr (ETuple (EBinOp "::" (EApp (EApp (EVar "GuardArm") (EVar "gs2")) (EVar "b2")) (EVar "rest2")) (EBinOp "||" (EBinOp "||" (EVar "c1") (EVar "c2")) (EVar "c3"))))))
@@ -3454,7 +3627,7 @@ public export data SiblingPair = SiblingPair {
 (DFunDef false "mapDoStmtsB" ((PVar "f") (PCons (PVar "s") (PVar "ss"))) (EBlock (DoLet false false (PTuple (PVar "s2") (PVar "c1")) (EApp (EApp (EVar "mapDoStmtB") (EVar "f")) (EVar "s"))) (DoLet false false (PTuple (PVar "ss2") (PVar "c2")) (EApp (EApp (EVar "mapDoStmtsB") (EVar "f")) (EVar "ss"))) (DoExpr (ETuple (EBinOp "::" (EVar "s2") (EVar "ss2")) (EBinOp "||" (EVar "c1") (EVar "c2"))))))
 (DTypeSig false "mapDoStmtB" (TyFun (TyFun (TyCon "Ty") (TyTuple (TyCon "Ty") (TyCon "Bool"))) (TyFun (TyCon "DoStmt") (TyTuple (TyCon "DoStmt") (TyCon "Bool")))))
 (DFunDef false "mapDoStmtB" ((PVar "f") (PCon "DoExpr" (PVar "e"))) (EBlock (DoLet false false (PTuple (PVar "e2") (PVar "c")) (EApp (EApp (EVar "mapTyInExpr") (EVar "f")) (EVar "e"))) (DoExpr (ETuple (EApp (EVar "DoExpr") (EVar "e2")) (EVar "c")))))
-(DFunDef false "mapDoStmtB" ((PVar "f") (PCon "DoBind" (PVar "p") (PVar "e"))) (EBlock (DoLet false false (PTuple (PVar "e2") (PVar "c")) (EApp (EApp (EVar "mapTyInExpr") (EVar "f")) (EVar "e"))) (DoExpr (ETuple (EApp (EApp (EVar "DoBind") (EVar "p")) (EVar "e2")) (EVar "c")))))
+(DFunDef false "mapDoStmtB" ((PVar "f") (PCon "DoBind" (PVar "p") (PVar "e"))) (EBlock (DoLet false false (PTuple (PVar "p2") (PVar "c1")) (EApp (EApp (EVar "mapTyInPat") (EVar "f")) (EVar "p"))) (DoLet false false (PTuple (PVar "e2") (PVar "c2")) (EApp (EApp (EVar "mapTyInExpr") (EVar "f")) (EVar "e"))) (DoExpr (ETuple (EApp (EApp (EVar "DoBind") (EVar "p2")) (EVar "e2")) (EBinOp "||" (EVar "c1") (EVar "c2"))))))
 (DFunDef false "mapDoStmtB" ((PVar "f") (PCon "DoLet" (PVar "m") (PVar "r") (PVar "p") (PVar "e") (PVar "site"))) (EBlock (DoLet false false (PTuple (PVar "e2") (PVar "c")) (EApp (EApp (EVar "mapTyInExpr") (EVar "f")) (EVar "e"))) (DoExpr (ETuple (EApp (EApp (EApp (EApp (EApp (EVar "DoLet") (EVar "m")) (EVar "r")) (EVar "p")) (EVar "e2")) (EVar "site")) (EVar "c")))))
 (DFunDef false "mapDoStmtB" ((PVar "f") (PCon "DoAssign" (PVar "x") (PVar "e"))) (EBlock (DoLet false false (PTuple (PVar "e2") (PVar "c")) (EApp (EApp (EVar "mapTyInExpr") (EVar "f")) (EVar "e"))) (DoExpr (ETuple (EApp (EApp (EVar "DoAssign") (EVar "x")) (EVar "e2")) (EVar "c")))))
 (DFunDef false "mapDoStmtB" ((PVar "f") (PCon "DoFieldAssign" (PVar "x") (PVar "fs") (PVar "e"))) (EBlock (DoLet false false (PTuple (PVar "e2") (PVar "c")) (EApp (EApp (EVar "mapTyInExpr") (EVar "f")) (EVar "e"))) (DoExpr (ETuple (EApp (EApp (EApp (EVar "DoFieldAssign") (EVar "x")) (EVar "fs")) (EVar "e2")) (EVar "c")))))
@@ -3546,6 +3719,7 @@ public export data SiblingPair = SiblingPair {
 (DFunDef false "patBoundNames" ((PCon "PAs" (PVar "x") PWild PWild (PVar "p"))) (EBinOp "::" (EVar "x") (EApp (EVar "patBoundNames") (EVar "p"))))
 (DFunDef false "patBoundNames" ((PCon "POr" (PCons (PVar "p") PWild))) (EApp (EVar "patBoundNames") (EVar "p")))
 (DFunDef false "patBoundNames" ((PCon "PRec" PWild (PVar "fields") PWild)) (EApp (EApp (EDictApp "flatMap") (EVar "recPatFieldNames")) (EVar "fields")))
+(DFunDef false "patBoundNames" ((PCon "PAnn" (PVar "p") PWild)) (EApp (EVar "patBoundNames") (EVar "p")))
 (DFunDef false "patBoundNames" (PWild) (EListLit))
 (DTypeSig false "recPatFieldNames" (TyFun (TyCon "RecPatField") (TyApp (TyCon "List") (TyCon "String"))))
 (DFunDef false "recPatFieldNames" ((PCon "RecPatField" (PVar "label") PWild PWild (PCon "None"))) (EListLit (EVar "label")))
@@ -3563,6 +3737,7 @@ public export data SiblingPair = SiblingPair {
 (DFunDef false "patBindings" ((PCon "POr" (PCons (PVar "p") PWild))) (EApp (EVar "patBindings") (EVar "p")))
 (DFunDef false "patBindings" ((PCon "PRng" PWild PWild PWild)) (EListLit))
 (DFunDef false "patBindings" ((PCon "PRec" PWild (PVar "fields") PWild)) (EApp (EApp (EDictApp "flatMap") (EVar "recFieldBindings")) (EVar "fields")))
+(DFunDef false "patBindings" ((PCon "PAnn" (PVar "p") PWild)) (EApp (EVar "patBindings") (EVar "p")))
 (DTypeSig true "patHasOr" (TyFun (TyCon "Pat") (TyCon "Bool")))
 (DFunDef false "patHasOr" ((PCon "POr" PWild)) (EVar "True"))
 (DFunDef false "patHasOr" ((PCon "PCon" PWild (PVar "ps"))) (EApp (EApp (EDictApp "any") (EVar "patHasOr")) (EVar "ps")))
@@ -3571,7 +3746,34 @@ public export data SiblingPair = SiblingPair {
 (DFunDef false "patHasOr" ((PCon "PList" (PVar "ps"))) (EApp (EApp (EDictApp "any") (EVar "patHasOr")) (EVar "ps")))
 (DFunDef false "patHasOr" ((PCon "PAs" PWild PWild PWild (PVar "p"))) (EApp (EVar "patHasOr") (EVar "p")))
 (DFunDef false "patHasOr" ((PCon "PRec" PWild (PVar "fields") PWild)) (EApp (EApp (EDictApp "any") (EVar "recFieldHasOr")) (EVar "fields")))
+(DFunDef false "patHasOr" ((PCon "PAnn" (PVar "p") PWild)) (EApp (EVar "patHasOr") (EVar "p")))
 (DFunDef false "patHasOr" (PWild) (EVar "False"))
+(DTypeSig true "patHasAnnot" (TyFun (TyCon "Pat") (TyCon "Bool")))
+(DFunDef false "patHasAnnot" ((PCon "PAnn" PWild PWild)) (EVar "True"))
+(DFunDef false "patHasAnnot" ((PCon "PCon" PWild (PVar "ps"))) (EApp (EApp (EDictApp "any") (EVar "patHasAnnot")) (EVar "ps")))
+(DFunDef false "patHasAnnot" ((PCon "PCons" (PVar "a") (PVar "b"))) (EBinOp "||" (EApp (EVar "patHasAnnot") (EVar "a")) (EApp (EVar "patHasAnnot") (EVar "b"))))
+(DFunDef false "patHasAnnot" ((PCon "PTuple" (PVar "ps"))) (EApp (EApp (EDictApp "any") (EVar "patHasAnnot")) (EVar "ps")))
+(DFunDef false "patHasAnnot" ((PCon "PList" (PVar "ps"))) (EApp (EApp (EDictApp "any") (EVar "patHasAnnot")) (EVar "ps")))
+(DFunDef false "patHasAnnot" ((PCon "PAs" PWild PWild PWild (PVar "p"))) (EApp (EVar "patHasAnnot") (EVar "p")))
+(DFunDef false "patHasAnnot" ((PCon "POr" (PVar "ps"))) (EApp (EApp (EDictApp "any") (EVar "patHasAnnot")) (EVar "ps")))
+(DFunDef false "patHasAnnot" ((PCon "PRec" PWild (PVar "fields") PWild)) (EApp (EApp (EDictApp "any") (EVar "recFieldHasAnnot")) (EVar "fields")))
+(DFunDef false "patHasAnnot" (PWild) (EVar "False"))
+(DTypeSig false "recFieldHasAnnot" (TyFun (TyCon "RecPatField") (TyCon "Bool")))
+(DFunDef false "recFieldHasAnnot" ((PCon "RecPatField" PWild PWild PWild (PCon "Some" (PVar "p")))) (EApp (EVar "patHasAnnot") (EVar "p")))
+(DFunDef false "recFieldHasAnnot" (PWild) (EVar "False"))
+(DTypeSig true "patAnnotTys" (TyFun (TyCon "Pat") (TyApp (TyCon "List") (TyCon "Ty"))))
+(DFunDef false "patAnnotTys" ((PCon "PAnn" (PVar "p") (PVar "t"))) (EBinOp "::" (EVar "t") (EApp (EVar "patAnnotTys") (EVar "p"))))
+(DFunDef false "patAnnotTys" ((PCon "PCon" PWild (PVar "ps"))) (EApp (EApp (EDictApp "flatMap") (EVar "patAnnotTys")) (EVar "ps")))
+(DFunDef false "patAnnotTys" ((PCon "PCons" (PVar "a") (PVar "b"))) (EBinOp "++" (EApp (EVar "patAnnotTys") (EVar "a")) (EApp (EVar "patAnnotTys") (EVar "b"))))
+(DFunDef false "patAnnotTys" ((PCon "PTuple" (PVar "ps"))) (EApp (EApp (EDictApp "flatMap") (EVar "patAnnotTys")) (EVar "ps")))
+(DFunDef false "patAnnotTys" ((PCon "PList" (PVar "ps"))) (EApp (EApp (EDictApp "flatMap") (EVar "patAnnotTys")) (EVar "ps")))
+(DFunDef false "patAnnotTys" ((PCon "PAs" PWild PWild PWild (PVar "p"))) (EApp (EVar "patAnnotTys") (EVar "p")))
+(DFunDef false "patAnnotTys" ((PCon "POr" (PVar "ps"))) (EApp (EApp (EDictApp "flatMap") (EVar "patAnnotTys")) (EVar "ps")))
+(DFunDef false "patAnnotTys" ((PCon "PRec" PWild (PVar "fields") PWild)) (EApp (EApp (EDictApp "flatMap") (EVar "recFieldAnnotTys")) (EVar "fields")))
+(DFunDef false "patAnnotTys" (PWild) (EListLit))
+(DTypeSig false "recFieldAnnotTys" (TyFun (TyCon "RecPatField") (TyApp (TyCon "List") (TyCon "Ty"))))
+(DFunDef false "recFieldAnnotTys" ((PCon "RecPatField" PWild PWild PWild (PCon "Some" (PVar "p")))) (EApp (EVar "patAnnotTys") (EVar "p")))
+(DFunDef false "recFieldAnnotTys" (PWild) (EListLit))
 (DTypeSig false "recFieldHasOr" (TyFun (TyCon "RecPatField") (TyCon "Bool")))
 (DFunDef false "recFieldHasOr" ((PCon "RecPatField" PWild PWild PWild (PCon "Some" (PVar "p")))) (EApp (EVar "patHasOr") (EVar "p")))
 (DFunDef false "recFieldHasOr" (PWild) (EVar "False"))
@@ -3585,6 +3787,7 @@ public export data SiblingPair = SiblingPair {
 (DFunDef false "orCount" ((PCon "PList" (PVar "ps"))) (EApp (EVar "orCountProduct") (EVar "ps")))
 (DFunDef false "orCount" ((PCon "PAs" PWild PWild PWild (PVar "p"))) (EApp (EVar "orCount") (EVar "p")))
 (DFunDef false "orCount" ((PCon "PRec" PWild (PVar "fields") PWild)) (EApp (EApp (EApp (EMethodRef "fold") (ELam ((PVar "n") (PVar "f")) (EApp (EApp (EVar "satMul") (EVar "n")) (EApp (EVar "recFieldCount") (EVar "f"))))) (ELit (LInt 1))) (EVar "fields")))
+(DFunDef false "orCount" ((PCon "PAnn" (PVar "p") PWild)) (EApp (EVar "orCount") (EVar "p")))
 (DFunDef false "orCount" (PWild) (ELit (LInt 1)))
 (DTypeSig true "orCountProduct" (TyFun (TyApp (TyCon "List") (TyCon "Pat")) (TyCon "Int")))
 (DFunDef false "orCountProduct" ((PVar "ps")) (EApp (EApp (EApp (EMethodRef "fold") (ELam ((PVar "n") (PVar "p")) (EApp (EApp (EVar "satMul") (EVar "n")) (EApp (EVar "orCount") (EVar "p"))))) (ELit (LInt 1))) (EVar "ps")))
@@ -3605,6 +3808,7 @@ public export data SiblingPair = SiblingPair {
 (DFunDef false "orExpand" ((PCon "PList" (PVar "ps"))) (EApp (EApp (EMethodRef "map") (EVar "PList")) (EApp (EVar "orProduct") (EVar "ps"))))
 (DFunDef false "orExpand" ((PCon "PAs" (PVar "x") (PVar "l") (PVar "bid") (PVar "p"))) (EApp (EApp (EMethodRef "map") (EApp (EApp (EApp (EVar "PAs") (EVar "x")) (EVar "l")) (EVar "bid"))) (EApp (EVar "orExpand") (EVar "p"))))
 (DFunDef false "orExpand" ((PCon "PRec" (PVar "c") (PVar "fields") (PVar "open"))) (EApp (EApp (EMethodRef "map") (ELam ((PVar "fs")) (EApp (EApp (EApp (EVar "PRec") (EVar "c")) (EVar "fs")) (EVar "open")))) (EApp (EVar "recFieldProduct") (EVar "fields"))))
+(DFunDef false "orExpand" ((PCon "PAnn" (PVar "p") (PVar "t"))) (EApp (EApp (EMethodRef "map") (ELam ((PVar "q")) (EApp (EApp (EVar "PAnn") (EVar "q")) (EVar "t")))) (EApp (EVar "orExpand") (EVar "p"))))
 (DFunDef false "orExpand" ((PVar "p")) (EListLit (EVar "p")))
 (DTypeSig false "orProduct" (TyFun (TyApp (TyCon "List") (TyCon "Pat")) (TyApp (TyCon "List") (TyApp (TyCon "List") (TyCon "Pat")))))
 (DFunDef false "orProduct" ((PList)) (EListLit (EListLit)))
@@ -3642,6 +3846,11 @@ public export data SiblingPair = SiblingPair {
 (DFunDef false "variantName" ((PCon "Variant" (PVar "n") PWild)) (EVar "n"))
 (DTypeSig true "fieldName" (TyFun (TyCon "Field") (TyCon "String")))
 (DFunDef false "fieldName" ((PCon "Field" (PVar "n") PWild)) (EVar "n"))
+(DTypeSig true "variantFieldTys" (TyFun (TyCon "Variant") (TyApp (TyCon "List") (TyCon "Ty"))))
+(DFunDef false "variantFieldTys" ((PCon "Variant" PWild (PCon "ConPos" (PVar "tys")))) (EVar "tys"))
+(DFunDef false "variantFieldTys" ((PCon "Variant" PWild (PCon "ConNamed" (PVar "fs") PWild))) (EApp (EApp (EMethodRef "map") (EVar "fieldTyOf")) (EVar "fs")))
+(DTypeSig false "fieldTyOf" (TyFun (TyCon "Field") (TyCon "Ty")))
+(DFunDef false "fieldTyOf" ((PCon "Field" PWild (PVar "t"))) (EVar "t"))
 (DTypeSig true "implMethodName" (TyFun (TyCon "ImplMethod") (TyCon "String")))
 (DFunDef false "implMethodName" ((PCon "ImplMethod" (PVar "n") PWild PWild)) (EVar "n"))
 (DTypeSig true "ifaceMethodName" (TyFun (TyCon "IfaceMethod") (TyCon "String")))
@@ -3791,7 +4000,7 @@ public export data SiblingPair = SiblingPair {
 (DData Public "EvEntry" () ((variant "EvEntry" (ConPos (TyCon "EvId") (TyCon "EvVal")))) ())
 (DTypeAlias true "EvTable" () (TyApp (TyCon "List") (TyCon "EvEntry")))
 (DData Public "Addr" () ((variant "ALocal" (ConPos (TyCon "Int") (TyCon "Int"))) (variant "AGlobal" (ConPos))) ())
-(DData Public "Pat" () ((variant "PVar" (ConPos (TyCon "String") (TyCon "Loc") (TyCon "BinderId"))) (variant "PWild" (ConPos)) (variant "PLit" (ConPos (TyCon "Lit"))) (variant "PCon" (ConPos (TyCon "String") (TyApp (TyCon "List") (TyCon "Pat")))) (variant "PCons" (ConPos (TyCon "Pat") (TyCon "Pat"))) (variant "PTuple" (ConPos (TyApp (TyCon "List") (TyCon "Pat")))) (variant "PList" (ConPos (TyApp (TyCon "List") (TyCon "Pat")))) (variant "PAs" (ConPos (TyCon "String") (TyCon "Loc") (TyCon "BinderId") (TyCon "Pat"))) (variant "POr" (ConPos (TyApp (TyCon "List") (TyCon "Pat")))) (variant "PRng" (ConPos (TyCon "Lit") (TyCon "Lit") (TyCon "Bool"))) (variant "PRec" (ConPos (TyCon "String") (TyApp (TyCon "List") (TyCon "RecPatField")) (TyCon "Bool")))) ())
+(DData Public "Pat" () ((variant "PVar" (ConPos (TyCon "String") (TyCon "Loc") (TyCon "BinderId"))) (variant "PWild" (ConPos)) (variant "PLit" (ConPos (TyCon "Lit"))) (variant "PCon" (ConPos (TyCon "String") (TyApp (TyCon "List") (TyCon "Pat")))) (variant "PCons" (ConPos (TyCon "Pat") (TyCon "Pat"))) (variant "PTuple" (ConPos (TyApp (TyCon "List") (TyCon "Pat")))) (variant "PList" (ConPos (TyApp (TyCon "List") (TyCon "Pat")))) (variant "PAs" (ConPos (TyCon "String") (TyCon "Loc") (TyCon "BinderId") (TyCon "Pat"))) (variant "POr" (ConPos (TyApp (TyCon "List") (TyCon "Pat")))) (variant "PRng" (ConPos (TyCon "Lit") (TyCon "Lit") (TyCon "Bool"))) (variant "PRec" (ConPos (TyCon "String") (TyApp (TyCon "List") (TyCon "RecPatField")) (TyCon "Bool"))) (variant "PAnn" (ConPos (TyCon "Pat") (TyCon "Ty")))) ())
 (DData Public "RecPatField" () ((variant "RecPatField" (ConPos (TyCon "String") (TyCon "Loc") (TyCon "BinderId") (TyApp (TyCon "Option") (TyCon "Pat"))))) ())
 (DData Public "Guard" () ((variant "GBool" (ConPos (TyCon "Expr"))) (variant "GBind" (ConPos (TyCon "Pat") (TyCon "Expr")))) ())
 (DData Public "Arm" () ((variant "Arm" (ConPos (TyCon "Pat") (TyApp (TyCon "List") (TyCon "Guard")) (TyCon "Expr")))) ())
@@ -3945,7 +4154,7 @@ public export data SiblingPair = SiblingPair {
 (DFunDef false "mapTyInExpr" (PWild (PCon "ELit" (PVar "l"))) (ETuple (EApp (EVar "ELit") (EVar "l")) (EVar "False")))
 (DFunDef false "mapTyInExpr" (PWild (PCon "EVar" (PVar "n"))) (ETuple (EApp (EVar "EVar") (EVar "n")) (EVar "False")))
 (DFunDef false "mapTyInExpr" ((PVar "f") (PCon "EApp" (PVar "a") (PVar "b"))) (EBlock (DoLet false false (PTuple (PVar "a2") (PVar "ca")) (EApp (EApp (EVar "mapTyInExpr") (EVar "f")) (EVar "a"))) (DoLet false false (PTuple (PVar "b2") (PVar "cb")) (EApp (EApp (EVar "mapTyInExpr") (EVar "f")) (EVar "b"))) (DoExpr (ETuple (EApp (EApp (EVar "EApp") (EVar "a2")) (EVar "b2")) (EBinOp "||" (EVar "ca") (EVar "cb"))))))
-(DFunDef false "mapTyInExpr" ((PVar "f") (PCon "ELam" (PVar "ps") (PVar "b"))) (EBlock (DoLet false false (PTuple (PVar "b2") (PVar "c")) (EApp (EApp (EVar "mapTyInExpr") (EVar "f")) (EVar "b"))) (DoExpr (ETuple (EApp (EApp (EVar "ELam") (EVar "ps")) (EVar "b2")) (EVar "c")))))
+(DFunDef false "mapTyInExpr" ((PVar "f") (PCon "ELam" (PVar "ps") (PVar "b"))) (EBlock (DoLet false false (PTuple (PVar "ps2") (PVar "c1")) (EApp (EApp (EVar "mapTyInPats") (EVar "f")) (EVar "ps"))) (DoLet false false (PTuple (PVar "b2") (PVar "c2")) (EApp (EApp (EVar "mapTyInExpr") (EVar "f")) (EVar "b"))) (DoExpr (ETuple (EApp (EApp (EVar "ELam") (EVar "ps2")) (EVar "b2")) (EBinOp "||" (EVar "c1") (EVar "c2"))))))
 (DFunDef false "mapTyInExpr" ((PVar "f") (PCon "ELet" (PVar "m") (PVar "r") (PVar "p") (PVar "e1") (PVar "e2"))) (EBlock (DoLet false false (PTuple (PVar "e1b") (PVar "c1")) (EApp (EApp (EVar "mapTyInExpr") (EVar "f")) (EVar "e1"))) (DoLet false false (PTuple (PVar "e2b") (PVar "c2")) (EApp (EApp (EVar "mapTyInExpr") (EVar "f")) (EVar "e2"))) (DoExpr (ETuple (EApp (EApp (EApp (EApp (EApp (EVar "ELet") (EVar "m")) (EVar "r")) (EVar "p")) (EVar "e1b")) (EVar "e2b")) (EBinOp "||" (EVar "c1") (EVar "c2"))))))
 (DFunDef false "mapTyInExpr" ((PVar "f") (PCon "EMatch" (PVar "e0") (PVar "arms"))) (EBlock (DoLet false false (PTuple (PVar "e0b") (PVar "c1")) (EApp (EApp (EVar "mapTyInExpr") (EVar "f")) (EVar "e0"))) (DoLet false false (PTuple (PVar "arms2") (PVar "c2")) (EApp (EApp (EVar "mapArmsB") (EVar "f")) (EVar "arms"))) (DoExpr (ETuple (EApp (EApp (EVar "EMatch") (EVar "e0b")) (EVar "arms2")) (EBinOp "||" (EVar "c1") (EVar "c2"))))))
 (DFunDef false "mapTyInExpr" ((PVar "f") (PCon "EIf" (PVar "c") (PVar "t") (PVar "el"))) (EBlock (DoLet false false (PTuple (PVar "cb") (PVar "c1")) (EApp (EApp (EVar "mapTyInExpr") (EVar "f")) (EVar "c"))) (DoLet false false (PTuple (PVar "tb") (PVar "c2")) (EApp (EApp (EVar "mapTyInExpr") (EVar "f")) (EVar "t"))) (DoLet false false (PTuple (PVar "elb") (PVar "c3")) (EApp (EApp (EVar "mapTyInExpr") (EVar "f")) (EVar "el"))) (DoExpr (ETuple (EApp (EApp (EApp (EVar "EIf") (EVar "cb")) (EVar "tb")) (EVar "elb")) (EBinOp "||" (EBinOp "||" (EVar "c1") (EVar "c2")) (EVar "c3"))))))
@@ -3987,16 +4196,37 @@ public export data SiblingPair = SiblingPair {
 (DFunDef false "mapTyInExpr" ((PVar "f") (PCon "EDoOrigin" (PVar "l") (PVar "e"))) (EBlock (DoLet false false (PTuple (PVar "e2") (PVar "c")) (EApp (EApp (EVar "mapTyInExpr") (EVar "f")) (EVar "e"))) (DoExpr (ETuple (EApp (EApp (EVar "EDoOrigin") (EVar "l")) (EVar "e2")) (EVar "c")))))
 (DFunDef false "mapTyInExpr" (PWild (PCon "ENumLit" (PVar "n") (PVar "ev") (PVar "lx"))) (ETuple (EApp (EApp (EApp (EVar "ENumLit") (EVar "n")) (EVar "ev")) (EVar "lx")) (EVar "False")))
 (DFunDef false "mapTyInExpr" (PWild (PCon "EWideLit" (PVar "hi") (PVar "lo") (PVar "ev") (PVar "lx"))) (ETuple (EApp (EApp (EApp (EApp (EVar "EWideLit") (EVar "hi")) (EVar "lo")) (EVar "ev")) (EVar "lx")) (EVar "False")))
+(DTypeSig false "mapTyInPat" (TyFun (TyFun (TyCon "Ty") (TyTuple (TyCon "Ty") (TyCon "Bool"))) (TyFun (TyCon "Pat") (TyTuple (TyCon "Pat") (TyCon "Bool")))))
+(DFunDef false "mapTyInPat" ((PVar "f") (PVar "p")) (EIf (EApp (EVar "patHasAnnot") (EVar "p")) (EApp (EApp (EVar "mapAnnotsInPat") (EVar "f")) (EVar "p")) (ETuple (EVar "p") (EVar "False"))))
+(DTypeSig false "mapTyInPats" (TyFun (TyFun (TyCon "Ty") (TyTuple (TyCon "Ty") (TyCon "Bool"))) (TyFun (TyApp (TyCon "List") (TyCon "Pat")) (TyTuple (TyApp (TyCon "List") (TyCon "Pat")) (TyCon "Bool")))))
+(DFunDef false "mapTyInPats" ((PVar "f") (PVar "ps")) (EIf (EApp (EApp (EDictApp "any") (EVar "patHasAnnot")) (EVar "ps")) (EApp (EApp (EVar "mapAnnotsInPats") (EVar "f")) (EVar "ps")) (ETuple (EVar "ps") (EVar "False"))))
+(DTypeSig false "mapAnnotsInPat" (TyFun (TyFun (TyCon "Ty") (TyTuple (TyCon "Ty") (TyCon "Bool"))) (TyFun (TyCon "Pat") (TyTuple (TyCon "Pat") (TyCon "Bool")))))
+(DFunDef false "mapAnnotsInPat" ((PVar "f") (PCon "PAnn" (PVar "p") (PVar "t"))) (EBlock (DoLet false false (PTuple (PVar "p2") (PVar "c1")) (EApp (EApp (EVar "mapAnnotsInPat") (EVar "f")) (EVar "p"))) (DoLet false false (PTuple (PVar "t2") (PVar "c2")) (EApp (EApp (EVar "mapTyFull") (EVar "f")) (EVar "t"))) (DoExpr (ETuple (EApp (EApp (EVar "PAnn") (EVar "p2")) (EVar "t2")) (EBinOp "||" (EVar "c1") (EVar "c2"))))))
+(DFunDef false "mapAnnotsInPat" ((PVar "f") (PCon "PCon" (PVar "c") (PVar "ps"))) (EBlock (DoLet false false (PTuple (PVar "ps2") (PVar "ch")) (EApp (EApp (EVar "mapAnnotsInPats") (EVar "f")) (EVar "ps"))) (DoExpr (ETuple (EApp (EApp (EVar "PCon") (EVar "c")) (EVar "ps2")) (EVar "ch")))))
+(DFunDef false "mapAnnotsInPat" ((PVar "f") (PCon "PCons" (PVar "h") (PVar "t"))) (EBlock (DoLet false false (PTuple (PVar "h2") (PVar "c1")) (EApp (EApp (EVar "mapAnnotsInPat") (EVar "f")) (EVar "h"))) (DoLet false false (PTuple (PVar "t2") (PVar "c2")) (EApp (EApp (EVar "mapAnnotsInPat") (EVar "f")) (EVar "t"))) (DoExpr (ETuple (EApp (EApp (EVar "PCons") (EVar "h2")) (EVar "t2")) (EBinOp "||" (EVar "c1") (EVar "c2"))))))
+(DFunDef false "mapAnnotsInPat" ((PVar "f") (PCon "PTuple" (PVar "ps"))) (EBlock (DoLet false false (PTuple (PVar "ps2") (PVar "ch")) (EApp (EApp (EVar "mapAnnotsInPats") (EVar "f")) (EVar "ps"))) (DoExpr (ETuple (EApp (EVar "PTuple") (EVar "ps2")) (EVar "ch")))))
+(DFunDef false "mapAnnotsInPat" ((PVar "f") (PCon "PList" (PVar "ps"))) (EBlock (DoLet false false (PTuple (PVar "ps2") (PVar "ch")) (EApp (EApp (EVar "mapAnnotsInPats") (EVar "f")) (EVar "ps"))) (DoExpr (ETuple (EApp (EVar "PList") (EVar "ps2")) (EVar "ch")))))
+(DFunDef false "mapAnnotsInPat" ((PVar "f") (PCon "PAs" (PVar "x") (PVar "l") (PVar "bid") (PVar "p"))) (EBlock (DoLet false false (PTuple (PVar "p2") (PVar "ch")) (EApp (EApp (EVar "mapAnnotsInPat") (EVar "f")) (EVar "p"))) (DoExpr (ETuple (EApp (EApp (EApp (EApp (EVar "PAs") (EVar "x")) (EVar "l")) (EVar "bid")) (EVar "p2")) (EVar "ch")))))
+(DFunDef false "mapAnnotsInPat" ((PVar "f") (PCon "POr" (PVar "ps"))) (EBlock (DoLet false false (PTuple (PVar "ps2") (PVar "ch")) (EApp (EApp (EVar "mapAnnotsInPats") (EVar "f")) (EVar "ps"))) (DoExpr (ETuple (EApp (EVar "POr") (EVar "ps2")) (EVar "ch")))))
+(DFunDef false "mapAnnotsInPat" ((PVar "f") (PCon "PRec" (PVar "n") (PVar "fields") (PVar "open"))) (EBlock (DoLet false false (PTuple (PVar "fs2") (PVar "ch")) (EApp (EApp (EVar "mapAnnotsInFields") (EVar "f")) (EVar "fields"))) (DoExpr (ETuple (EApp (EApp (EApp (EVar "PRec") (EVar "n")) (EVar "fs2")) (EVar "open")) (EVar "ch")))))
+(DFunDef false "mapAnnotsInPat" (PWild (PVar "p")) (ETuple (EVar "p") (EVar "False")))
+(DTypeSig false "mapAnnotsInPats" (TyFun (TyFun (TyCon "Ty") (TyTuple (TyCon "Ty") (TyCon "Bool"))) (TyFun (TyApp (TyCon "List") (TyCon "Pat")) (TyTuple (TyApp (TyCon "List") (TyCon "Pat")) (TyCon "Bool")))))
+(DFunDef false "mapAnnotsInPats" (PWild (PList)) (ETuple (EListLit) (EVar "False")))
+(DFunDef false "mapAnnotsInPats" ((PVar "f") (PCons (PVar "p") (PVar "ps"))) (EBlock (DoLet false false (PTuple (PVar "p2") (PVar "c1")) (EApp (EApp (EVar "mapAnnotsInPat") (EVar "f")) (EVar "p"))) (DoLet false false (PTuple (PVar "ps2") (PVar "c2")) (EApp (EApp (EVar "mapAnnotsInPats") (EVar "f")) (EVar "ps"))) (DoExpr (ETuple (EBinOp "::" (EVar "p2") (EVar "ps2")) (EBinOp "||" (EVar "c1") (EVar "c2"))))))
+(DTypeSig false "mapAnnotsInFields" (TyFun (TyFun (TyCon "Ty") (TyTuple (TyCon "Ty") (TyCon "Bool"))) (TyFun (TyApp (TyCon "List") (TyCon "RecPatField")) (TyTuple (TyApp (TyCon "List") (TyCon "RecPatField")) (TyCon "Bool")))))
+(DFunDef false "mapAnnotsInFields" (PWild (PList)) (ETuple (EListLit) (EVar "False")))
+(DFunDef false "mapAnnotsInFields" ((PVar "f") (PCons (PCon "RecPatField" (PVar "n") (PVar "l") (PVar "bid") (PCon "Some" (PVar "p"))) (PVar "rest"))) (EBlock (DoLet false false (PTuple (PVar "p2") (PVar "c1")) (EApp (EApp (EVar "mapAnnotsInPat") (EVar "f")) (EVar "p"))) (DoLet false false (PTuple (PVar "rest2") (PVar "c2")) (EApp (EApp (EVar "mapAnnotsInFields") (EVar "f")) (EVar "rest"))) (DoExpr (ETuple (EBinOp "::" (EApp (EApp (EApp (EApp (EVar "RecPatField") (EVar "n")) (EVar "l")) (EVar "bid")) (EApp (EVar "Some") (EVar "p2"))) (EVar "rest2")) (EBinOp "||" (EVar "c1") (EVar "c2"))))))
+(DFunDef false "mapAnnotsInFields" ((PVar "f") (PCons (PVar "field") (PVar "rest"))) (EBlock (DoLet false false (PTuple (PVar "rest2") (PVar "c")) (EApp (EApp (EVar "mapAnnotsInFields") (EVar "f")) (EVar "rest"))) (DoExpr (ETuple (EBinOp "::" (EVar "field") (EVar "rest2")) (EVar "c")))))
 (DTypeSig false "mapExprsB" (TyFun (TyFun (TyCon "Ty") (TyTuple (TyCon "Ty") (TyCon "Bool"))) (TyFun (TyApp (TyCon "List") (TyCon "Expr")) (TyTuple (TyApp (TyCon "List") (TyCon "Expr")) (TyCon "Bool")))))
 (DFunDef false "mapExprsB" (PWild (PList)) (ETuple (EListLit) (EVar "False")))
 (DFunDef false "mapExprsB" ((PVar "f") (PCons (PVar "e") (PVar "es"))) (EBlock (DoLet false false (PTuple (PVar "e2") (PVar "c1")) (EApp (EApp (EVar "mapTyInExpr") (EVar "f")) (EVar "e"))) (DoLet false false (PTuple (PVar "es2") (PVar "c2")) (EApp (EApp (EVar "mapExprsB") (EVar "f")) (EVar "es"))) (DoExpr (ETuple (EBinOp "::" (EVar "e2") (EVar "es2")) (EBinOp "||" (EVar "c1") (EVar "c2"))))))
 (DTypeSig false "mapArmsB" (TyFun (TyFun (TyCon "Ty") (TyTuple (TyCon "Ty") (TyCon "Bool"))) (TyFun (TyApp (TyCon "List") (TyCon "Arm")) (TyTuple (TyApp (TyCon "List") (TyCon "Arm")) (TyCon "Bool")))))
 (DFunDef false "mapArmsB" (PWild (PList)) (ETuple (EListLit) (EVar "False")))
-(DFunDef false "mapArmsB" ((PVar "f") (PCons (PCon "Arm" (PVar "p") (PVar "gs") (PVar "b")) (PVar "rest"))) (EBlock (DoLet false false (PTuple (PVar "gs2") (PVar "c1")) (EApp (EApp (EVar "mapGuardsB") (EVar "f")) (EVar "gs"))) (DoLet false false (PTuple (PVar "b2") (PVar "c2")) (EApp (EApp (EVar "mapTyInExpr") (EVar "f")) (EVar "b"))) (DoLet false false (PTuple (PVar "rest2") (PVar "c3")) (EApp (EApp (EVar "mapArmsB") (EVar "f")) (EVar "rest"))) (DoExpr (ETuple (EBinOp "::" (EApp (EApp (EApp (EVar "Arm") (EVar "p")) (EVar "gs2")) (EVar "b2")) (EVar "rest2")) (EBinOp "||" (EBinOp "||" (EVar "c1") (EVar "c2")) (EVar "c3"))))))
+(DFunDef false "mapArmsB" ((PVar "f") (PCons (PCon "Arm" (PVar "p") (PVar "gs") (PVar "b")) (PVar "rest"))) (EBlock (DoLet false false (PTuple (PVar "p2") (PVar "c0")) (EApp (EApp (EVar "mapTyInPat") (EVar "f")) (EVar "p"))) (DoLet false false (PTuple (PVar "gs2") (PVar "c1")) (EApp (EApp (EVar "mapGuardsB") (EVar "f")) (EVar "gs"))) (DoLet false false (PTuple (PVar "b2") (PVar "c2")) (EApp (EApp (EVar "mapTyInExpr") (EVar "f")) (EVar "b"))) (DoLet false false (PTuple (PVar "rest2") (PVar "c3")) (EApp (EApp (EVar "mapArmsB") (EVar "f")) (EVar "rest"))) (DoExpr (ETuple (EBinOp "::" (EApp (EApp (EApp (EVar "Arm") (EVar "p2")) (EVar "gs2")) (EVar "b2")) (EVar "rest2")) (EBinOp "||" (EBinOp "||" (EBinOp "||" (EVar "c0") (EVar "c1")) (EVar "c2")) (EVar "c3"))))))
 (DTypeSig false "mapGuardsB" (TyFun (TyFun (TyCon "Ty") (TyTuple (TyCon "Ty") (TyCon "Bool"))) (TyFun (TyApp (TyCon "List") (TyCon "Guard")) (TyTuple (TyApp (TyCon "List") (TyCon "Guard")) (TyCon "Bool")))))
 (DFunDef false "mapGuardsB" (PWild (PList)) (ETuple (EListLit) (EVar "False")))
 (DFunDef false "mapGuardsB" ((PVar "f") (PCons (PCon "GBool" (PVar "g")) (PVar "rest"))) (EBlock (DoLet false false (PTuple (PVar "g2") (PVar "c1")) (EApp (EApp (EVar "mapTyInExpr") (EVar "f")) (EVar "g"))) (DoLet false false (PTuple (PVar "rest2") (PVar "c2")) (EApp (EApp (EVar "mapGuardsB") (EVar "f")) (EVar "rest"))) (DoExpr (ETuple (EBinOp "::" (EApp (EVar "GBool") (EVar "g2")) (EVar "rest2")) (EBinOp "||" (EVar "c1") (EVar "c2"))))))
-(DFunDef false "mapGuardsB" ((PVar "f") (PCons (PCon "GBind" (PVar "p") (PVar "g")) (PVar "rest"))) (EBlock (DoLet false false (PTuple (PVar "g2") (PVar "c1")) (EApp (EApp (EVar "mapTyInExpr") (EVar "f")) (EVar "g"))) (DoLet false false (PTuple (PVar "rest2") (PVar "c2")) (EApp (EApp (EVar "mapGuardsB") (EVar "f")) (EVar "rest"))) (DoExpr (ETuple (EBinOp "::" (EApp (EApp (EVar "GBind") (EVar "p")) (EVar "g2")) (EVar "rest2")) (EBinOp "||" (EVar "c1") (EVar "c2"))))))
+(DFunDef false "mapGuardsB" ((PVar "f") (PCons (PCon "GBind" (PVar "p") (PVar "g")) (PVar "rest"))) (EBlock (DoLet false false (PTuple (PVar "p2") (PVar "c0")) (EApp (EApp (EVar "mapTyInPat") (EVar "f")) (EVar "p"))) (DoLet false false (PTuple (PVar "g2") (PVar "c1")) (EApp (EApp (EVar "mapTyInExpr") (EVar "f")) (EVar "g"))) (DoLet false false (PTuple (PVar "rest2") (PVar "c2")) (EApp (EApp (EVar "mapGuardsB") (EVar "f")) (EVar "rest"))) (DoExpr (ETuple (EBinOp "::" (EApp (EApp (EVar "GBind") (EVar "p2")) (EVar "g2")) (EVar "rest2")) (EBinOp "||" (EBinOp "||" (EVar "c0") (EVar "c1")) (EVar "c2"))))))
 (DTypeSig false "mapGuardArmsB" (TyFun (TyFun (TyCon "Ty") (TyTuple (TyCon "Ty") (TyCon "Bool"))) (TyFun (TyApp (TyCon "List") (TyCon "GuardArm")) (TyTuple (TyApp (TyCon "List") (TyCon "GuardArm")) (TyCon "Bool")))))
 (DFunDef false "mapGuardArmsB" (PWild (PList)) (ETuple (EListLit) (EVar "False")))
 (DFunDef false "mapGuardArmsB" ((PVar "f") (PCons (PCon "GuardArm" (PVar "gs") (PVar "b")) (PVar "rest"))) (EBlock (DoLet false false (PTuple (PVar "gs2") (PVar "c1")) (EApp (EApp (EVar "mapGuardsB") (EVar "f")) (EVar "gs"))) (DoLet false false (PTuple (PVar "b2") (PVar "c2")) (EApp (EApp (EVar "mapTyInExpr") (EVar "f")) (EVar "b"))) (DoLet false false (PTuple (PVar "rest2") (PVar "c3")) (EApp (EApp (EVar "mapGuardArmsB") (EVar "f")) (EVar "rest"))) (DoExpr (ETuple (EBinOp "::" (EApp (EApp (EVar "GuardArm") (EVar "gs2")) (EVar "b2")) (EVar "rest2")) (EBinOp "||" (EBinOp "||" (EVar "c1") (EVar "c2")) (EVar "c3"))))))
@@ -4005,7 +4235,7 @@ public export data SiblingPair = SiblingPair {
 (DFunDef false "mapDoStmtsB" ((PVar "f") (PCons (PVar "s") (PVar "ss"))) (EBlock (DoLet false false (PTuple (PVar "s2") (PVar "c1")) (EApp (EApp (EVar "mapDoStmtB") (EVar "f")) (EVar "s"))) (DoLet false false (PTuple (PVar "ss2") (PVar "c2")) (EApp (EApp (EVar "mapDoStmtsB") (EVar "f")) (EVar "ss"))) (DoExpr (ETuple (EBinOp "::" (EVar "s2") (EVar "ss2")) (EBinOp "||" (EVar "c1") (EVar "c2"))))))
 (DTypeSig false "mapDoStmtB" (TyFun (TyFun (TyCon "Ty") (TyTuple (TyCon "Ty") (TyCon "Bool"))) (TyFun (TyCon "DoStmt") (TyTuple (TyCon "DoStmt") (TyCon "Bool")))))
 (DFunDef false "mapDoStmtB" ((PVar "f") (PCon "DoExpr" (PVar "e"))) (EBlock (DoLet false false (PTuple (PVar "e2") (PVar "c")) (EApp (EApp (EVar "mapTyInExpr") (EVar "f")) (EVar "e"))) (DoExpr (ETuple (EApp (EVar "DoExpr") (EVar "e2")) (EVar "c")))))
-(DFunDef false "mapDoStmtB" ((PVar "f") (PCon "DoBind" (PVar "p") (PVar "e"))) (EBlock (DoLet false false (PTuple (PVar "e2") (PVar "c")) (EApp (EApp (EVar "mapTyInExpr") (EVar "f")) (EVar "e"))) (DoExpr (ETuple (EApp (EApp (EVar "DoBind") (EVar "p")) (EVar "e2")) (EVar "c")))))
+(DFunDef false "mapDoStmtB" ((PVar "f") (PCon "DoBind" (PVar "p") (PVar "e"))) (EBlock (DoLet false false (PTuple (PVar "p2") (PVar "c1")) (EApp (EApp (EVar "mapTyInPat") (EVar "f")) (EVar "p"))) (DoLet false false (PTuple (PVar "e2") (PVar "c2")) (EApp (EApp (EVar "mapTyInExpr") (EVar "f")) (EVar "e"))) (DoExpr (ETuple (EApp (EApp (EVar "DoBind") (EVar "p2")) (EVar "e2")) (EBinOp "||" (EVar "c1") (EVar "c2"))))))
 (DFunDef false "mapDoStmtB" ((PVar "f") (PCon "DoLet" (PVar "m") (PVar "r") (PVar "p") (PVar "e") (PVar "site"))) (EBlock (DoLet false false (PTuple (PVar "e2") (PVar "c")) (EApp (EApp (EVar "mapTyInExpr") (EVar "f")) (EVar "e"))) (DoExpr (ETuple (EApp (EApp (EApp (EApp (EApp (EVar "DoLet") (EVar "m")) (EVar "r")) (EVar "p")) (EVar "e2")) (EVar "site")) (EVar "c")))))
 (DFunDef false "mapDoStmtB" ((PVar "f") (PCon "DoAssign" (PVar "x") (PVar "e"))) (EBlock (DoLet false false (PTuple (PVar "e2") (PVar "c")) (EApp (EApp (EVar "mapTyInExpr") (EVar "f")) (EVar "e"))) (DoExpr (ETuple (EApp (EApp (EVar "DoAssign") (EVar "x")) (EVar "e2")) (EVar "c")))))
 (DFunDef false "mapDoStmtB" ((PVar "f") (PCon "DoFieldAssign" (PVar "x") (PVar "fs") (PVar "e"))) (EBlock (DoLet false false (PTuple (PVar "e2") (PVar "c")) (EApp (EApp (EVar "mapTyInExpr") (EVar "f")) (EVar "e"))) (DoExpr (ETuple (EApp (EApp (EApp (EVar "DoFieldAssign") (EVar "x")) (EVar "fs")) (EVar "e2")) (EVar "c")))))

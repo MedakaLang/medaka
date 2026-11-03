@@ -362,7 +362,7 @@ nativeArityMismatches = [
 checkEtaArity : CallableShape -> String -> Expectation
 checkEtaArity shape name =
   let cp = lowered ("main = let _ = " ++ name ++ " in 42")
-  let input = makeEmitInput RawUnchecked PreludeFreeRuntime [] [] 0 [] [] ""
+  let input = makeEmitInput RawUnchecked PreludeFreeRuntime [] 0 [] [] ""
   let emitted =
     emitProgramRecord input (buildEmitPlan LlvmBackend PreludeFreeRuntime cp) cp
   match emitted

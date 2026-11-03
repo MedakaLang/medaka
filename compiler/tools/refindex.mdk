@@ -56,6 +56,7 @@
 
 import frontend.ast.{
   letBindName,
+  patAnnotTys,
   variantName,
   Loc(..),
   Ty(..),
@@ -271,6 +272,7 @@ patBinders fb (PAs x l _ p) = (x, l) :: patBinders fb p
 patBinders fb (POr ps) = flatMap (patBinders fb) ps
 patBinders _ (PRng _ _ _) = []
 patBinders fb (PRec _ fields _) = flatMap (recFieldBinders fb) fields
+patBinders fb (PAnn p _) = patBinders fb p
 
 recFieldBinders : Loc -> RecPatField -> List (String, Loc)
 recFieldBinders _ (RecPatField name l _ None) = [(name, l)]
@@ -516,6 +518,7 @@ walkExpr w scope curLoc (EApp f x) =
   walkExpr w scope curLoc f
   walkExpr w scope curLoc x
 walkExpr w scope curLoc (ELam pats body) =
+  each (walkPatTys w curLoc) pats
   let frame = mkNamedFrame w (flatMap (patBinders curLoc) pats)
   walkExpr w (frame :: scope) curLoc body
 walkExpr w scope curLoc (ELet _ isRec pat e1 e2) =
@@ -659,6 +662,7 @@ walkStmts w scope curLoc ((DoExpr e) :: rest) =
   walkExpr w scope curLoc e
   walkStmts w scope curLoc rest
 walkStmts w scope curLoc ((DoBind p e) :: rest) =
+  walkPatTys w curLoc p
   walkExpr w scope curLoc e
   let frame = mkNamedFrame w (patBinders curLoc p)
   walkStmts w (frame :: scope) curLoc rest
@@ -677,6 +681,7 @@ walkStmts w scope curLoc ((DoFieldAssign _ _ e) :: rest) =
 walkArms : W -> List (List (String, String)) -> Loc -> List Arm -> Unit
 walkArms _ _ _ [] = ()
 walkArms w scope curLoc ((Arm pat gs body) :: rest) =
+  walkPatTys w curLoc pat
   let frame = mkNamedFrame w (patBinders curLoc pat)
   let scope1 = frame :: scope
   let scope2 = walkGuards w scope1 curLoc gs
@@ -705,6 +710,7 @@ walkGuards w scope curLoc ((GBool e) :: rest) =
   walkExpr w scope curLoc e
   walkGuards w scope curLoc rest
 walkGuards w scope curLoc ((GBind p e) :: rest) =
+  walkPatTys w curLoc p
   walkExpr w scope curLoc e
   let frame = mkNamedFrame w (patBinders curLoc p)
   walkGuards w (frame :: scope) curLoc rest
@@ -721,6 +727,10 @@ walkClauses w scope curLoc ((FunClause pats body) :: rest) =
   let frame = mkNamedFrame w (flatMap (patBinders curLoc) pats)
   walkExpr w (frame :: scope) curLoc body
   walkClauses w scope curLoc rest
+
+-- The written types of a binding pattern's annotations.
+walkPatTys : W -> Loc -> Pat -> Unit
+walkPatTys w curLoc p = each (walkTy w curLoc) (patAnnotTys p)
 
 -- ── type walk (TyCon carries its OWN Option Loc — no curLoc threading needed) ─
 walkTy : W -> Loc -> Ty -> Unit

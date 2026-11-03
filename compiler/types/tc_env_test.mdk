@@ -78,9 +78,12 @@ import types.tc_types.{CeRow(..), ImplUniverse(..), Kind(..)}
 import types.registry.{HeadKey(..), MultiRegistry, mregLookupK, regKeyNTab}
 import types.tc_env.{
   buildFlatImplEnv, ceRowIface, ceRowMethodNames, ceRowMethods, ceRowParamKinds,
-  ceRowSupers, ceRowTyparams, dispHeadTab, ieUniverseAt, instRefSeq, oblIfaceKey
+  ceRowSupers, ceRowTyparams, dispHeadTab, ieUniverseAt, instRefSeq,
+  oblIfaceKey, tabNameIndex, tabNameIndexOnto, tabNameLookup
 }
-import frontend.ast.{KindAnn(..), Ns(..), Require(..), Super(..), TabKey(..)}
+import frontend.ast.{
+  KindAnn(..), Ns(..), Require(..), Super(..), TabKey(..), lookupTab
+}
 import types.tc_diag_text.{kindName}
 import support.util.{listLen}
 import types.repr.{ppTy}
@@ -128,7 +131,7 @@ buildImplEnv : List DeclEnvModule -> ImplEnv
 buildImplEnv mods = implAccFinish (buildImplEnvGo mods emptyDeclEnvAcc.daImpls)
 
 buildClassEnv : GraphCtx -> List DeclEnvModule -> ClassEnv
-buildClassEnv g mods = classEnvFinish (buildClassEnvGo g mods emptyClassEnv)
+buildClassEnv g mods = classEnvFinish (buildClassEnvGo g [] mods emptyClassEnv)
 
 implEnv : Unit -> ImplEnv
 implEnv _ =
@@ -191,6 +194,28 @@ prop "removeAllS keeps what is not dropped, in order, and distributes over appen
   removeAllS d (a ++ b) == removeAllS d a ++ removeAllS d b
     && all (x => not (elem x d)) (removeAllS d a)
     && removeAllS [] a == a
+
+-- Two names in two namespaces, so a name has more than one key.
+fourKeys : List Int -> List (TabKey, Int)
+fourKeys ks =
+  map
+    (k => (
+      TkBare
+        (if isEven k then NsType else NsIface)
+        "n\{intToString (abs k % 4 / 2)}",
+      k,
+    ))
+    ks
+
+-- Law: an index built in front of another answers every key as the table
+-- with those rows in front does, first match included.  No precondition.
+prop "an index of rows in front of an index answers as the joined table" (xs : List Int) (ys : List Int) =
+  let front = fourKeys xs
+  let back = fourKeys ys
+  let index = tabNameIndexOnto front (tabNameIndex back)
+  all
+    (k => tabNameLookup index k == lookupTab k (front ++ back))
+    (map fst (fourKeys [0, 1, 2, 3]))
 
 -- Law: an absent module id reads as the `-1` miss ordinal, and a present one as the
 -- ordinal it was indexed under.  Precondition: the index maps `known` once.

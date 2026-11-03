@@ -36,6 +36,7 @@
 
 import frontend.ast.{
   stripLocE,
+  firstTyLoc,
   EffAtomTy(..),
   qualifierSource,
   effAtomSurface,
@@ -639,6 +640,9 @@ patSpan (PTuple ps) = spansOf patSpan ps
 patSpan (PList ps) = spansOf patSpan ps
 patSpan (PRec _ fs _) = spansOf recPatFieldSpan fs
 patSpan (POr ps) = spansOf patSpan ps
+patSpan (PAnn p t) = match firstTyLoc t
+  Some l => mergeSpan (patSpan p) (locSpan l)
+  None => patSpan p
 patSpan _ = noSpan
 
 recPatFieldSpan : RecPatField -> (Int, Int, Int, Int)
@@ -1137,6 +1141,12 @@ printPat (PRec name fields rest) =
   Cat (text name) (Cat (text " { ") (Cat (sepBy (text ", ") all) (text " }")))
 printPat (PRng lo hi incl) =
   Cat (printLit lo) (Cat (text (if incl then "..=" else "..")) (printLit hi))
+-- Always parenthesized: the parser reads an annotation only inside parentheses
+-- in a binding position.
+printPat (PAnn p t) =
+  Cat
+    (text "(")
+    (Cat (printPatListElem p) (Cat (text " : ") (Cat (printType t) (text ")"))))
 
 recPatFieldDoc : RecPatField -> Doc
 recPatFieldDoc (RecPatField k _ _ None) = text k
@@ -1156,6 +1166,7 @@ printPatAtom (PList ps) = printPat (PList ps)
 printPatAtom (PRec n fs r) =
   Cat (text "(") (Cat (printPat (PRec n fs r)) (text ")"))
 printPatAtom (PRng lo hi incl) = printPat (PRng lo hi incl)
+printPatAtom (PAnn p t) = printPat (PAnn p t)
 printPatAtom p = Cat (text "(") (Cat (printPat p) (text ")"))
 
 -- A bare `|` is only read at the top of a match arm and inside parentheses, so
@@ -1715,6 +1726,8 @@ letInDoc headD rhs e2 =
 
 unwrapLams : List Pat -> Expr -> (List Pat, Expr)
 unwrapLams acc (ELoc _ e) = unwrapLams acc e
+-- Bound: one step per directly nested lambda literal in one expression.
+-- lint-disable-next-line rule-accumulator-append
 unwrapLams acc (ELam pats body) = unwrapLams (acc ++ pats) body
 unwrapLams acc body = (acc, body)
 

@@ -30,6 +30,7 @@ externDataUnresolved : Bool -> String -> List String -> List (Option KindAnn) ->
 externDecls : List Decl -> List ExternDecl
 externRowCons : Bool -> ExternDecl -> a -> List (String, (List (String, String), a)) -> List (String, (List (String, String), a))
 fieldName : Field -> String
+fieldTyOf : Field -> Ty
 firstTyLoc : Ty -> Option Loc
 firstTyLocList : List Ty -> Option Loc
 fixedWidthMask : String -> Option Int
@@ -62,6 +63,9 @@ kindAnnSource : KindAnn -> String
 kindAuthorityUnstamped : String -> Bool -> Option Loc -> KindAnn
 letBindName : LetBind -> String
 lookupTab : TabKey -> List (TabKey, a) -> Option a
+mapAnnotsInFields : (Ty -> (Ty, Bool)) -> List RecPatField -> (List RecPatField, Bool)
+mapAnnotsInPat : (Ty -> (Ty, Bool)) -> Pat -> (Pat, Bool)
+mapAnnotsInPats : (Ty -> (Ty, Bool)) -> List Pat -> (List Pat, Bool)
 mapArmsB : (Ty -> (Ty, Bool)) -> List Arm -> (List Arm, Bool)
 mapConstraintsB : (Ty -> (Ty, Bool)) -> List Constraint -> (List Constraint, Bool)
 mapDoStmtB : (Ty -> (Ty, Bool)) -> DoStmt -> (DoStmt, Bool)
@@ -83,6 +87,8 @@ mapRequiresB : (Ty -> (Ty, Bool)) -> List Require -> (List Require, Bool)
 mapTyFull : (Ty -> (Ty, Bool)) -> Ty -> (Ty, Bool)
 mapTyInDecl : (Ty -> (Ty, Bool)) -> Decl -> (Decl, Bool)
 mapTyInExpr : (Ty -> (Ty, Bool)) -> Expr -> (Expr, Bool)
+mapTyInPat : (Ty -> (Ty, Bool)) -> Pat -> (Pat, Bool)
+mapTyInPats : (Ty -> (Ty, Bool)) -> List Pat -> (List Pat, Bool)
 mapTyKids : (Ty -> (Ty, Bool)) -> Ty -> (Ty, Bool)
 mapTyListB : (Ty -> (Ty, Bool)) -> List Ty -> (List Ty, Bool)
 mapVariantB : (Ty -> (Ty, Bool)) -> Variant -> (Variant, Bool)
@@ -99,16 +105,20 @@ orElseLoc : Option Loc -> Option Loc -> Option Loc
 orExpand : Pat -> List Pat
 orProduct : List Pat -> List (List Pat)
 paramCandidates : List Pat -> List (List Pat)
+patAnnotTys : Pat -> List Ty
 patBindings : Pat -> List String
 patBoundNames : Pat -> List String
+patHasAnnot : Pat -> Bool
 patHasOr : Pat -> Bool
 patternMark : Bool -> String
 propParamName : PropParam -> String
 qualifiedLocal : String -> String -> String
 qualifierSource : (String -> String) -> List EffParamTy -> String
+recFieldAnnotTys : RecPatField -> List Ty
 recFieldBindings : RecPatField -> List String
 recFieldCandidates : RecPatField -> List RecPatField
 recFieldCount : RecPatField -> Int
+recFieldHasAnnot : RecPatField -> Bool
 recFieldHasOr : RecPatField -> Bool
 recFieldProduct : List RecPatField -> List (List RecPatField)
 recPatFieldNames : RecPatField -> List String
@@ -134,4 +144,5 @@ unminted : EvId
 useMemberAlias : UseMember -> Option String
 useMemberLocal : UseMember -> String
 useMemberOrigin : UseMember -> String
+variantFieldTys : Variant -> List Ty
 variantName : Variant -> String

@@ -405,7 +405,7 @@ parseStmt : ParserE <> (List DoStmt)
 parseStmts : ParserE <> (List DoStmt)
 parseTest : Bool -> ParserE <> Decl
 parseTestRest : Bool -> Int -> Token -> ParserE <> Decl
-parseTupleCtorTail : Int -> ParserE <> Ty
+parseTupleCtorTail : Int -> Int -> ParserE <> Ty
 parseTy : ParserE <> Ty
 parseTyApp : ParserE <> Ty
 parseTyAtom : ParserE <> Ty
@@ -416,7 +416,7 @@ parseTyAuthTop : ParserE <> Ty
 parseTyFun : ParserE <> Ty
 parseTyParen : ParserE <> Ty
 parseTyParenAt : Int -> Token -> Token -> ParserE <> Ty
-parseTyParenBody : Token -> ParserE <> Ty
+parseTyParenBody : Int -> Token -> ParserE <> Ty
 parseTyParenIdent : Token -> ParserE <> Ty
 parseTyParenTuple : ParserE <> Ty
 parseTypeAlias : Bool -> ParserE <> Decl
@@ -494,9 +494,9 @@ stringLitP : ParserE <> String
 stripLoc : Expr -> Expr
 stripLoc1 : Expr -> Expr
 trailingArrowLeftoverMsg : Token -> String -> String
-tupleCtorTailFor : Int -> Token -> ParserE <> Ty
+tupleCtorTailFor : Int -> Int -> Token -> ParserE <> Ty
 tupleCtorTyName : Int -> String
-tupleCtorTyOfArity : Int -> ParserE <> Ty
+tupleCtorTyOfArity : Option Loc -> Int -> ParserE <> Ty
 tuplePatOrSingle : List Pat -> Pat
 tyAfterApp : Ty -> ParserE <> Ty
 tyAppSpine : Ty -> Option (String, List Ty)
