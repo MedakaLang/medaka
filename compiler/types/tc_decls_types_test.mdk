@@ -634,6 +634,37 @@ test "an interface parameter takes its kind from a head it is passed to and from
             impl Sub Option
             """),
     ),
+    (
+      "a requires chain declared before the interfaces it requires",
+      expectEqual
+        []
+        (checkedErrors
+          """
+            interface C3 f requires C2 f
+            interface C2 f requires C1 f
+            interface C1 f where
+              c1 : f Int -> Int
+            impl C1 Option where
+              c1 (Some n) = n
+              c1 None = 0
+            impl C2 Option
+            impl C3 Option
+            """),
+    ),
+    (
+      "passed bare to an exported head's constructor parameter",
+      expectEqual
+        []
+        (checkedErrors
+          """
+            public export data Wrap f a = W (f a)
+            export interface Foo f where
+              foo : Wrap f Int -> Int
+            impl Foo Option where
+              foo (W (Some n)) = n
+              foo (W None) = 0
+            """),
+    ),
   ]
 
 test "a constructor applied to too many arguments is one kind error" = expectEach

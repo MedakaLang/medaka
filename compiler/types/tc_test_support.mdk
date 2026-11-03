@@ -56,6 +56,7 @@ import types.tc_env.{
   implAccFinish,
   methodEnvGo,
   ordinaryEnvBinding,
+  tabNameIndexOnto,
   tyTabKey,
 }
 import types.scopes.{ScopeOwner(..), freshScope, openScopeCursor}
@@ -221,7 +222,9 @@ recordKinds m o n kinds
     m.mcCells.dataParamKindsRef :=
       (tyTabKey o n, kinds) :: m.mcCells.dataParamKindsRef.value
     m.mcCells.dataParamNameIndexRef :=
-      omInsert n () m.mcCells.dataParamNameIndexRef.value
+      tabNameIndexOnto
+        [(tyTabKey o n, kinds)]
+        m.mcCells.dataParamNameIndexRef.value
   | otherwise = ()
 
 -- A module declaring `Sizeable` with its method `size`, and `impl Sizeable Int`.

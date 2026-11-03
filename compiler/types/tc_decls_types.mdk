@@ -86,7 +86,7 @@ import types.tc_env.{
   kindOfParams,
   kindParams,
   kindTypeOnly,
-  builtinParamKinds,
+  headKindsIn,
   varKindsOf,
   anyKRow,
   ceLookupAt,
@@ -198,7 +198,6 @@ import types.effect_param_decode.{
   writtenParam,
 }
 import types.registry.{regKeyOfTab}
-import support.ordmap.{omHasKey, OrdMap}
 export import types.tc_env.{kindsEq}
 
 -- The effect-label domain registry maps a label's identity key (`labelKey`) to the
@@ -2290,8 +2289,8 @@ spliceRowTails sub (n :: rest) =
 
 -- The kinds one module's written types are judged against: a head's and an
 -- interface's parameter kinds (`None` for one not known here), and whether a
--- head is an alias.  A head's kinds are looked up only for a name the head
--- table holds (`dataParamNameIndexRef`), so a builtin costs no walk of it.
+-- head is an alias.  A head's kinds come from the module's name index of its
+-- head table (`dataParamNameIndexRef`), so no lookup walks the table.
 public export data KindScope = KindScope {
   ksHeads : TyConOrigin -> String -> Option (List Kind),
   ksIfaces : TyConOrigin -> String -> Option (List Kind),
@@ -2310,29 +2309,16 @@ export
 kindScopeOf : ModuleCtx -> KindScope
 kindScopeOf mctx =
   let envs = mctx.mcGraph.declEnvsRef.value
-  let heads = mctx.mcCells.dataParamKindsRef.value
-  let names = mctx.mcCells.dataParamNameIndexRef.value
+  let heads = mctx.mcCells.dataParamNameIndexRef.value
   let aliases = mctx.mcCells.aliasTableRef.value
   KindScope {
-    ksHeads = o n => headKindsAmong names heads o n,
+    ksHeads = headKindsIn heads,
     ksIfaces =
       ceParamKindsAt
         (declEnvsOrdOf mctx.mcCells.currentModuleRef.value envs)
         envs.deIfaces,
     ksAlias = o n => isSome (lookupTab (tyTabKey o n) aliases),
   }
-
-headKindsAmong : OrdMap Unit ->
-  List (TabKey, List Kind) ->
-  TyConOrigin ->
-  String ->
-  Option (List Kind)
-headKindsAmong names heads o n =
-  if omHasKey n names then match lookupTab (tyTabKey o n) heads
-    Some kinds => Some kinds
-    None => builtinParamKinds o n
-  else
-    builtinParamKinds o n
 
 -- Reports the first kind error of each of [items], a written type with the
 -- kind its position takes.  [declared] are the kinds of the variables a
@@ -2393,7 +2379,15 @@ spineKindError kj want ty = match tyAppSpine ty
   (TyCon { tyConName = n, tyConOrigin = o, tyConLoc = loc }, args) =>
     match kj.kjScope.ksHeads o n
       Some params =>
-        headKindError kj True want n (kj.kjScope.ksAlias o n) loc params args
+        headKindError
+          kj
+          True
+          want
+          n
+          (aliasMisapplied kj o n params args)
+          loc
+          params
+          args
       None => argKindErrors kj [] args
   (TyVar v, args) =>
     varKindError kj want v (optionOr KType (lookupAssoc v kj.kjVars)) args
@@ -2401,11 +2395,22 @@ spineKindError kj want ty = match tyAppSpine ty
   (hd, args) =>
     orElseWith (formKindError kj None hd) (_ => argKindErrors kj [] args)
 
+-- Whether the head [o]/[n] is an alias applied at other than its arity, the
+-- one case where being an alias changes the judgement.
+aliasMisapplied : KindJudge ->
+  TyConOrigin ->
+  String ->
+  List Kind ->
+  List Ty ->
+  Bool
+aliasMisapplied kj o n params args =
+  listLen args /= listLen params && kj.kjScope.ksAlias o n
+
 -- A head applied to [args]: too many arguments, an argument of the wrong
 -- kind, or what is left unapplied disagreeing with [want].  An alias at the
--- wrong arity is `T-ALIAS-ARITY`'s, so only its arguments are judged.
--- [counts] says whether a head left wanting arguments may be told to supply
--- them, which only a head's own parameter kinds justify.
+-- wrong arity ([misapplied]) is `T-ALIAS-ARITY`'s, so only its arguments are
+-- judged.  [counts] says whether a head left wanting arguments may be told to
+-- supply them, which only a head's own parameter kinds justify.
 headKindError : KindJudge ->
   Bool ->
   Option Kind ->
@@ -2415,12 +2420,12 @@ headKindError : KindJudge ->
   List Kind ->
   List Ty ->
   Option KindError
-headKindError kj counts want n isAlias loc params args
-  | isAlias && listLen args /= listLen params = argKindErrors kj params args
+headKindError kj counts want n misapplied loc params args
+  | misapplied = argKindErrors kj params args
   | listLen args > listLen params =
-    appKindError kj counts want n isAlias loc params args
+    appKindError kj counts want n misapplied loc params args
   | otherwise = orElseWith (argKindErrors kj params args) (_ =>
-    appKindError kj counts want n isAlias loc params args)
+    appKindError kj counts want n misapplied loc params args)
 
 -- The error of a head's own application, its arguments aside (`headKindError`).
 appKindError : KindJudge ->
@@ -2432,8 +2437,8 @@ appKindError : KindJudge ->
   List Kind ->
   List Ty ->
   Option KindError
-appKindError kj counts want n isAlias loc params args
-  | isAlias && listLen args /= listLen params = None
+appKindError kj counts want n misapplied loc params args
+  | misapplied = None
   | listLen args > listLen params =
     Some
       (KindError
@@ -2490,7 +2495,7 @@ varArgKindErrors kj (k :: ks) (a :: as2) =
             False
             (Some k)
             n
-            (kj.kjScope.ksAlias o n)
+            (aliasMisapplied kj o n params args)
             loc
             params
             args
@@ -2629,11 +2634,12 @@ recoverIn mctx kj want n ty
   | not (judgedAt want) = (ty, n)
   | otherwise = match tyAppSpine ty
     (hd@(TyCon { tyConName = c, tyConOrigin = o, tyConLoc = loc }), args) =>
-      let isAlias = kj.kjScope.ksAlias o c
       match kj.kjScope.ksHeads o c
         Some params =>
-          if isSome (appKindError kj True want c isAlias loc params args)
-            || isAlias && rejectedAlias mctx kj o c params args then
+          let misapplied = aliasMisapplied kj o c params args
+          if isSome (appKindError kj True want c misapplied loc params args)
+            || kj.kjScope.ksAlias o c
+              && rejectedAlias mctx kj o c params args then
             (TyVar (recoveredName n), n + 1)
           else
             recoverArgs mctx kj hd (map Some params) n args

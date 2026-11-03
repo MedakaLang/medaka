@@ -69,6 +69,7 @@ import types.tc_state.{
   mctxAtIfSome,
 }
 import types.tc_env.{
+  tabNameIndexOnto,
   addCtor,
   aliasUniverseAt,
   buildClassEnvGo,
@@ -396,7 +397,7 @@ declEnvSeedChain gctx (m :: rest) s =
     dsKAcc = kents ++ s.dsKAcc,
     dsOAcc =
       declEnvDeclFieldOwners (declEnvRowVisible (m.demOrd + 1) m) s.dsOAcc,
-    dsNAcc = omFromNames (map (p => tabKeyName (fst p)) kents) s.dsNAcc,
+    dsNAcc = tabNameIndexOnto kents s.dsNAcc,
     dsKinds = omInsert m.demId s.dsKAcc s.dsKinds,
     dsOwners = omInsert m.demId s.dsOAcc s.dsOwners,
     dsNames = omInsert m.demId s.dsNAcc s.dsNames,
@@ -1561,7 +1562,7 @@ recordParamKinds mctx o name kinds =
   -- which is what makes "own registrations on TOP of the universe" work here
   -- without the index needing the list's ordering.
   mctx.mcCells.dataParamNameIndexRef :=
-    omInsert name () mctx.mcCells.dataParamNameIndexRef.value
+    tabNameIndexOnto [entry] mctx.mcCells.dataParamNameIndexRef.value
 
 -- ── #2110: the ATOM-GUARANTEE half, third sibling of the two above ────────
 -- Same key (`tyTabKey o name`), same prepend, same first-match read.  Per

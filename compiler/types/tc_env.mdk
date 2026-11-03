@@ -1355,9 +1355,11 @@ buildClassEnvGo gctx known (m :: rest) env =
     facts => classEnvModuleRows gctx known m env facts
   buildClassEnvGo gctx known rest (ceAddRows rows env)
 
--- One module's interface rows.  A parameter's kind may follow from a head of
--- the module or from another of its interfaces (`ifaceParamKindsDecl`), so
--- the rows are built again against the last round's until no kind changes.
+-- One module's interface rows, each built against the rows before it.  A
+-- parameter's kind may follow from a head of the module or from another of
+-- its interfaces (`ifaceParamKindsDecl`); where an interface names one
+-- declared at or after it, the rows are built again against the last
+-- round's until no kind changes.
 classEnvModuleRows : GraphCtx ->
   List (TabKey, List Kind) ->
   DeclEnvModule ->
@@ -1365,21 +1367,59 @@ classEnvModuleRows : GraphCtx ->
   List (String, List String, List (Option KindAnn), List IfaceMethod, List Super, TyConOrigin, Option Loc) ->
   List CeRow
 classEnvModuleRows gctx known m env facts =
-  let heads =
-    headKindsIn
-      (tabNameIndex (declKindEntriesIn gctx known m.demDecls ++ known))
+  let heads = headKindsIn (tabNameIndex (ownKindEntries gctx known m ++ known))
+  let readsIn =
+    ce => KindReads {
+      krSlots = heads,
+      krHeads = heads,
+      krIfaces = ceParamKindsAt m.demOrd ce,
+    }
   let roundOf =
-    rows =>
-      classEnvRowsOf
-        gctx
-        KindReads {
-          krSlots = heads,
-          krHeads = heads,
-          krIfaces = ceParamKindsAt m.demOrd (ceAddRows rows env),
-        }
-        m.demOrd
-        facts
-  classEnvRowsFix roundOf (listLen facts) (roundOf [])
+    rows => classEnvRowsOf gctx readsIn m.demOrd (ceAddRows rows env) facts
+  let first = roundOf []
+  if refersAhead facts then
+    classEnvRowsFix roundOf (listLen facts) first
+  else
+    first
+
+-- The kinds of [m]'s own heads.  Where every head is public and none reads
+-- the heads before it, they are the memo of its public ones, solved as
+-- `declEnvRowKindEntries` would solve them; with no heads before it, none
+-- can be read.
+ownKindEntries : GraphCtx ->
+  List (TabKey, List Kind) ->
+  DeclEnvModule ->
+  List (TabKey, List Kind)
+ownKindEntries gctx known m =
+  if allList (d => not (declaresKindHead d) || kindPublicDataDecl d) m.demDecls
+    && (isEmptyL known
+      || not (anyList (e => anyList kindHasArrow (snd e)) known)
+        && not (declKindsReadKnown gctx m.demDecls)) then
+    m.demKindEntries
+  else
+    declKindEntriesIn gctx known m.demDecls
+
+-- The declarations `kindHeadOf` reads a head from.
+declaresKindHead : Decl -> Bool
+declaresKindHead (DAttrib _ d) = declaresKindHead d
+declaresKindHead (DData { dataName = _ }) = True
+declaresKindHead (DNewtype { newtypeName = _ }) = True
+declaresKindHead (DTypeAlias { tyAliasName = _ }) = True
+declaresKindHead _ = False
+
+-- Whether an interface of [facts] names, in its `requires` or in a method's
+-- constraint, one declared at or after it.
+refersAhead : List (String, List String, List (Option KindAnn), List IfaceMethod, List Super, TyConOrigin, Option Loc) ->
+  Bool
+refersAhead [] = False
+refersAhead ((name, _, _, methods, supers, _, _) :: rest) =
+  let ahead = name :: map ((n, _, _, _, _, _, _) => n) rest
+  anyList (s => contains s.superHead ahead) supers
+    || anyList
+      ((IfaceMethod _ mty _ _) =>
+        anyList (h => contains h ahead) (constraintHeadsIn mty))
+      methods
+    || refersAhead rest
 
 classEnvRowsFix : (List CeRow -> List CeRow) -> Int -> List CeRow -> List CeRow
 classEnvRowsFix roundOf fuel rows
@@ -1425,13 +1465,16 @@ classEnvDeclFact (DInterface { name, typarams, typaramKinds, supers, methods, if
   [(name, typarams, typaramKinds, methods, supers, ifaceOrigin, ifaceNameLoc)]
 classEnvDeclFact _ = []
 
+-- Each row read against [ce] with the rows before it added.
 classEnvRowsOf : GraphCtx ->
-  KindReads ->
+  (ClassEnv -> KindReads) ->
   Int ->
+  ClassEnv ->
   List (String, List String, List (Option KindAnn), List IfaceMethod, List Super, TyConOrigin, Option Loc) ->
   List CeRow
-classEnvRowsOf _gctx _ _ [] = []
-classEnvRowsOf gctx reads ord ((name, typarams, kinds, methods, supers, o, loc) :: rest) =
+classEnvRowsOf _gctx _ _ _ [] = []
+classEnvRowsOf gctx readsIn ord ce ((name, typarams, kinds, methods, supers, o, loc) :: rest) =
+  let reads = readsIn ce
   let scope = declGradedScope gctx typarams kinds methods
   let row =
     CeRow
@@ -1449,7 +1492,7 @@ classEnvRowsOf gctx reads ord ((name, typarams, kinds, methods, supers, o, loc) 
         (zipL typarams (padAnns typarams kinds)))
       (requiredMethodNames methods)
       loc
-  row :: classEnvRowsOf gctx reads ord rest
+  row :: classEnvRowsOf gctx readsIn ord (ceInsertRow row ce) rest
 
 ceMethodOf : List (String, List Kind) ->
   IfaceMethod ->
@@ -2141,10 +2184,11 @@ kindUsesAt reads vars [] (a :: as2) =
 -- its position takes: [declared] first, then a kind involving `Effect` or
 -- `Authority` (left to the checks of those kinds), then every other use
 -- joined (`kindJoin`), so the order of the uses decides nothing (§6.2: every
--- use must agree).  A variable passed as an argument of another takes its
--- kind from that one's and gives it its own, so the uses are read again
--- until no kind changes; a chain of variables each passed to the next
--- bounds the rounds.
+-- use must agree).  A variable passed as an argument of another gives that
+-- one its kind and takes from it the kind of that parameter, so the uses are
+-- read again until no kind changes; a chain of variables each passed to the
+-- next bounds the rounds.  Only a passed variable of known kind or a
+-- parameter of constructor kind has anything to carry.
 export
 varKindsOf : KindReads ->
   List (String, Kind) ->
@@ -2152,10 +2196,21 @@ varKindsOf : KindReads ->
   List (String, Kind)
 varKindsOf reads declared items =
   let first = varKindsRound reads declared items declared
-  if anyList (it => isNonEmptyL (varArgNames (snd it))) items then
+  if isNonEmptyL first
+    && carriesKind first (flatMap (it => varArgNames (snd it)) items) then
     varKindsFix reads declared items (listLen first) first
   else
     first
+
+-- Whether a variable passed to another, [passed], is of a kind [vars] know,
+-- or a known kind takes a constructor, so another round can change a kind.
+carriesKind : List (String, Kind) -> List String -> Bool
+carriesKind vars passed =
+  anyList (v => isSome (lookupAssoc v vars)) passed
+    || isNonEmptyL passed && anyList (e => takesConstructor (snd e)) vars
+
+takesConstructor : Kind -> Bool
+takesConstructor k = anyList kindHasArrow (kindParams k)
 
 varKindsFix : KindReads ->
   List (String, Kind) ->
@@ -2225,6 +2280,18 @@ varArgNamesIn (TyConstrained _ t) = varArgNames t
 varArgNamesIn (TyNamed _ t _) = varArgNames t
 varArgNamesIn (TyQual t _ _) = varArgNames t
 varArgNamesIn _ = []
+
+-- The interface of each constraint [ty] writes.
+constraintHeadsIn : Ty -> List String
+constraintHeadsIn (TyConstrained cs t) =
+  map (c => c.constraintHead) cs ++ constraintHeadsIn t
+constraintHeadsIn (TyApp a b) = constraintHeadsIn a ++ constraintHeadsIn b
+constraintHeadsIn (TyFun a b) = constraintHeadsIn a ++ constraintHeadsIn b
+constraintHeadsIn (TyTuple ts) = flatMap constraintHeadsIn ts
+constraintHeadsIn (TyEffect _ _ t) = constraintHeadsIn t
+constraintHeadsIn (TyNamed _ t _) = constraintHeadsIn t
+constraintHeadsIn (TyQual t _ _) = constraintHeadsIn t
+constraintHeadsIn _ = []
 
 -- A constructor kind: an arrow over `Type`.
 export
@@ -2439,12 +2506,19 @@ builtinParamKinds _ _ = None
 -- what `lookupTab` over the whole table answers.
 export
 tabNameIndex : List (TabKey, v) -> OrdMap (List (TabKey, v))
-tabNameIndex rows =
+tabNameIndex rows = tabNameIndexOnto rows omEmpty
+
+-- The index of [rows] in front of the table [index] indexes.
+export
+tabNameIndexOnto : List (TabKey, v) ->
+  OrdMap (List (TabKey, v)) ->
+  OrdMap (List (TabKey, v))
+tabNameIndexOnto rows index0 =
   fold
     (index row =>
       let name = tabKeyName (fst row)
       omInsert name (row :: optionOr [] (omLookup name index)) index)
-    omEmpty
+    index0
     (reverseL rows)
 
 export

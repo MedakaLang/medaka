@@ -390,7 +390,7 @@ public export data DeclEnvs = DeclEnvs {
   deIfaces : ClassEnv,  -- A-3.3 (#1519) built it; A-3.5c (#1557) made it LIVE — three readers, see the `CE` block
   deMethods : MethodEnv,  -- #2563: the method namespace by declaration identity, read at the reader's ordinal — see `MethodEnv`
   deKindsBefore : OrdMap (List (TabKey, List Kind)),
-  deNameIndexBefore : OrdMap (OrdMap Unit),  -- #2158: `deKindsBefore`'s BARE-NAME twin, the SAME rows' `tabKeyName`s as a membership set — see `declEnvSeedChain`
+  deNameIndexBefore : OrdMap (OrdMap (List (TabKey, List Kind))),  -- #2158: `deKindsBefore`'s BARE-NAME twin, the SAME rows bucketed by `tabKeyName` (`tabNameIndex`) — see `declEnvSeedChain`
   dePolaritiesBefore : OrdMap (List (TabKey, List Polarity)),  -- #1119 D-2: `deKindsBefore`'s VARIANCE twin — see `declEnvPolarityChain`
   deAtomsBefore : OrdMap (List (TabKey, List (List Atom))),  -- #2110 S2-1: `deKindsBefore`'s ATOM-GUARANTEE twin — see `declEnvRowAtomsChain`
   deOwnersBefore : OrdMap (OrdMap (List String)),
@@ -500,10 +500,10 @@ public export data DeclEnvAcc = DeclEnvAcc {
 public export data DeclEnvSeedAcc = DeclEnvSeedAcc {
   dsKAcc : List (TabKey, List Kind),
   dsOAcc : OrdMap (List String),
-  dsNAcc : OrdMap Unit,
+  dsNAcc : OrdMap (List (TabKey, List Kind)),
   dsKinds : OrdMap (List (TabKey, List Kind)),
   dsOwners : OrdMap (OrdMap (List String)),
-  dsNames : OrdMap (OrdMap Unit),
+  dsNames : OrdMap (OrdMap (List (TabKey, List Kind))),
 }
 
 public export data DataTypeDecl = DataTypeDecl {
@@ -2037,7 +2037,7 @@ public export data ModuleCells = ModuleCells {
   recordByNameRef : Ref (OrdMap RecordInfo),
   fieldOwnersRef : Ref (OrdMap (List String)),
   dataParamKindsRef : Ref (List (TabKey, List Kind)),
-  dataParamNameIndexRef : Ref (OrdMap Unit),  -- #2158: `tabKeyName`-only index over dataParamKindsRef's keys, kept in lockstep at every write site (freshModuleCtx / declEnvSeedDataUniverse / recordParamKinds) so `noImplHintFor`'s bare-name membership test is O(1)-ish instead of an O(n) `tabHasName` scan. Same bare-name semantics as `tabHasName` — collapses TkIdent/TkBare and module identity by design (#1111 A-2.3), not a stricter key.
+  dataParamNameIndexRef : Ref (OrdMap (List (TabKey, List Kind))),  -- #2158: dataParamKindsRef's rows bucketed by `tabKeyName`, each bucket in the list's order (`tabNameIndex`), kept in lockstep at every write site (freshModuleCtx / declEnvSeedDataUniverse / recordParamKinds) so `noImplHintFor`'s bare-name membership test and a head's kind lookup (`kindScopeOf`) are O(log n) instead of an O(n) scan. Same bare-name semantics as `tabHasName` — collapses TkIdent/TkBare and module identity by design (#1111 A-2.3), not a stricter key.
   dataParamPolarityRef : Ref (List (TabKey, List Polarity)),  -- #1119 D-2: `dataParamKindsRef`'s VARIANCE twin — same key, same prepend/first-match discipline.  Read ONLY through `paramPolaritiesOf` (which seeds the two write channels).
   dataParamRowAtomsRef : Ref (List (TabKey, List (List Atom))),  -- #2110: the ATOM-GUARANTEE twin of the two above — per KRow parameter, the atoms this declaration charges at EVERY occurrence of that parameter.  Read ONLY through `paramRowAtomsOf`.
   aliasTableRef : Ref (List (TabKey, (List String, Ty))),
