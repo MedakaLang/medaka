@@ -65,6 +65,17 @@ class SchemaTests(unittest.TestCase):
                 with self.assertRaises(ValueError):
                     validate_event(bad)
 
+    def test_reserved_prompt_path_prefix(self):
+        for path in ('PROMPT.txt', 'PROMPT.txt/child', 'PROMPT.txt/dir/child'):
+            task = copy.deepcopy(self.tasks[0])
+            task['files'] = {path: 'x'}
+            with self.subTest(path=path), self.assertRaises(ValueError):
+                validate_task(task)
+        for path in ('PROMPT.txt.extra/child', 'dir/PROMPT.txt', 'valid/file.mdk'):
+            task = copy.deepcopy(self.tasks[0])
+            task['files'] = {path: 'x'}
+            self.assertEqual(task, validate_task(task))
+
     def test_controls_are_backed_by_inputs_and_source(self):
         tasks = {task['id']: task for task in self.tasks}
         self.assertIn('import alpha as A', tasks['import-definition']['files']['main.mdk'])

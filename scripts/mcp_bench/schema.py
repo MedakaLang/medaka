@@ -32,7 +32,7 @@ def validate_task(value: dict) -> Task:
     for path, source in value["files"].items():
         _text(path, "path")
         p = PurePosixPath(path)
-        if p.is_absolute() or ".." in p.parts or str(p) != path or path in (".", "PROMPT.txt"):
+        if p.is_absolute() or ".." in p.parts or str(p) != path or path == "." or p.parts[0] == "PROMPT.txt":
             raise ValueError("files: unsafe path")
         if not isinstance(source, str):
             raise ValueError("files: expected source text")
