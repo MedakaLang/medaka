@@ -39,11 +39,30 @@ protocol failures; these are not represented by this minimal schema.
 Run `python3 -m unittest discover -s scripts/mcp_bench -p '*_test.py'`.
 
 `collect.run_process(command, environment, transcript, limits)` runs newline
-JSON-RPC bytes in a fresh temporary workspace under a dedicated Linux child
-subreaper. On completion or termination it kills and reaps the worker and its
-descendants, including detached descendants, before returning. Other platforms
-return `unsupported` before launching a worker; macOS remains unimplemented and
-unvalidated. The environment contains only PATH and a private HOME plus the
+JSON-RPC bytes in a fresh temporary workspace under Linux cgroup v2 and a
+private PID/mount namespace. It requires root authority, a root-owned writable
+current cgroup delegation with `cgroup.kill`, namespace creation/mount authority,
+and permission to drop user/group credentials. Missing authority returns
+`unsupported` before executing the worker. Root UID alone does not establish
+support. Other platforms return `unsupported` before launch; macOS remains
+unimplemented and unvalidated.
+
+The worker has a leased unprivileged UID, no supplementary groups or capabilities,
+and `no_new_privs`; its cgroup mounts are read-only. It cannot signal its root
+namespace init or address processes in another run's PID namespace. The collector
+keeps the deadline outside this boundary, kills only its unique cgroup on every
+exit, and waits for the kernel's `populated=0` acknowledgement before removal.
+Namespace PID 1 exiting makes the kernel kill and reap the remaining namespace
+members, including detached double forks. The private supervisor's environment
+is fixed; the caller's explicit environment reaches only the unprivileged worker.
+This process boundary does not provide a general filesystem or network sandbox.
+Workers retain read access to public host files; do not put private grading
+material in publicly readable host paths.
+
+Host acceptance requires running the suite with those authorities. A restricted
+run explicitly skips process tests when cgroup authority is unavailable while
+still testing schema, reconciliation, and fail-before-launch behavior. Skips are
+not evidence that host process containment passed. The environment contains only PATH and a private HOME plus the
 explicit `environment` mapping. Pass a validated task as `limits["task"]` to
 materialize its files and questions, without answers or rubric, into the workspace.
 The collector returns a validated run without payloads. A caller that needs

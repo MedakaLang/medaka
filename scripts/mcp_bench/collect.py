@@ -9,6 +9,7 @@ import time
 from pathlib import Path
 
 from schema import validate_event, validate_run, validate_task
+from supervisor import Boundary, Unavailable
 
 
 def _record(outcome, identity=None, wall_ns=0):
@@ -47,7 +48,7 @@ def reconcile(events, exitStatus):
                 outcomes.append(event['outcome'])
     except (ValueError, KeyError, TypeError):
         return _record('observer_failure')
-    if exitStatus in ('startup_failure', 'timeout', 'cancelled', 'observer_failure'):
+    if exitStatus in ('startup_failure', 'timeout', 'cancelled', 'observer_failure', 'unsupported'):
         return _record(exitStatus)
     if exitStatus != 0:
         return _record('crash')
@@ -88,8 +89,20 @@ def run_process(command, environment, transcript, limits):
     if sys.platform != 'linux':
         return _record('unsupported', limits, time.monotonic_ns() - started)
     requests = [json.loads(line) for line in transcript.splitlines()]
+    try:
+        boundary = Boundary()
+    except Unavailable:
+        return _record('unsupported', limits, time.monotonic_ns() - started)
+    try:
+        return _run_contained(command, environment, transcript, limits, requests, started, boundary)
+    finally:
+        boundary.close()
+
+
+def _run_contained(command, environment, transcript, limits, requests, started, boundary):
     events, malformed, observer_failure, status = [], False, False, 'startup_failure'
     with tempfile.TemporaryDirectory() as directory:
+        os.chmod(directory, 0o711)
         trace = os.path.join(directory, 'trace.jsonl')
         workspace = Path(directory) / 'workspace'
         workspace.mkdir()
@@ -105,6 +118,10 @@ def run_process(command, environment, transcript, limits):
                     task['prompt'] + '\n' + '\n'.join(c['question'] for c in task['controls']) + '\n', encoding='utf-8')
             except (OSError, ValueError, UnicodeError):
                 return _record('observer_failure', limits, time.monotonic_ns() - started)
+        for path in [workspace, *workspace.rglob('*')]:
+            os.chown(path, boundary.uid, boundary.uid)
+        Path(trace).touch(mode=0o600)
+        os.chown(trace, boundary.uid, boundary.uid)
         env = {'PATH': os.defpath, 'HOME': str(workspace)}
         env.update(environment)
         env.pop('MEDAKA_MCP_LOG', None)
@@ -119,21 +136,35 @@ def run_process(command, environment, transcript, limits):
             try:
                 supervisor = subprocess.Popen(
                     [sys.executable, str(Path(__file__).with_name('supervisor.py')), str(write_fd),
-                     json.dumps([deadline, cancel is not None and cancel <= timeout, command])],
+                     json.dumps([str(boundary.path), boundary.uid, command, env])],
                     stdin=subprocess.PIPE, stdout=stdout, stderr=subprocess.DEVNULL,
-                    env=env, cwd=workspace, pass_fds=(write_fd,))
+                    env={'PATH': os.defpath}, cwd=workspace, pass_fds=(write_fd,))
             except OSError:
                 supervisor = None
             finally:
                 os.close(write_fd)
             if supervisor is not None:
-                supervisor.communicate(transcript)
+                try:
+                    supervisor.communicate(transcript, timeout=deadline)
+                except subprocess.TimeoutExpired:
+                    supervisor.kill()
+                    supervisor.communicate()
+                    status = 'cancelled' if cancel is not None and cancel <= timeout else 'timeout'
+                except BaseException:
+                    supervisor.kill()
+                    supervisor.wait()
+                    raise
+                finally:
+                    boundary.close()
                 try:
                     with os.fdopen(read_fd, 'rb') as status_stream:
-                        status = json.load(status_stream)
+                        observed_status = json.load(status_stream)
+                        if status not in ('timeout', 'cancelled'):
+                            status = observed_status
                 except (ValueError, OSError):
-                    status = 'observer_failure'
-                if supervisor.returncode != 0:
+                    if status not in ('timeout', 'cancelled'):
+                        status = 'observer_failure'
+                if supervisor.returncode != 0 and status not in ('timeout', 'cancelled'):
                     status = 'observer_failure'
                 stdout.seek(0)
                 output = stdout.read(limits.get('output_bytes', 1048576) + 1)
@@ -183,7 +214,7 @@ def run_process(command, environment, transcript, limits):
                                      for e in events if isinstance(e, dict)):
             observer_failure = True
     outcome = reconcile(events, status)['outcome']
-    if outcome not in ('timeout', 'cancelled', 'startup_failure', 'crash', 'observer_failure'):
+    if outcome not in ('timeout', 'cancelled', 'startup_failure', 'crash', 'observer_failure', 'unsupported'):
         if observer_failure:
             outcome = 'observer_failure'
         elif malformed:
