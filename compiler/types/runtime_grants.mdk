@@ -12,6 +12,7 @@ runtimePathCount "writeFile" = 1
 runtimePathCount "writeFileBytes" = 1
 runtimePathCount "writeFileMode" = 1
 runtimePathCount "appendFile" = 1
+runtimePathCount "appendFileExceptStdout" = 1
 runtimePathCount "fileExists" = 1
 runtimePathCount "fileMode" = 1
 runtimePathCount "canonicalizePath" = 1

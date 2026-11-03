@@ -41,6 +41,7 @@ not bound, so the call is rejected or aborts.
 | `writeFileBytes` | refused | real | refused | real | real |
 | `writeFileMode` | refused | real | refused | real | real |
 | `appendFile` | refused | real | refused | real | real |
+| `appendFileExceptStdout` | canned | real | canned | real | refused |
 | `fileExists` | refused | real | refused | real | real |
 | `fileMode` | refused | real | refused | real | real |
 | `canonicalizePath` | refused | real | refused | real | real |

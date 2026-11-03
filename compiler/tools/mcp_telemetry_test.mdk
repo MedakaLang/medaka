@@ -30,3 +30,16 @@ test "completion and cancel records contain only metadata" = withScratchDir
           ]
           text,
       ])
+
+test "stdout cannot be a trace destination" =
+  match appendFileExceptStdout "/dev/stdout" "telemetry must not appear\n"
+    Err _ => pass
+    Ok _ => fail "stdout was accepted as a trace destination"
+
+test "trace write failures leave the call boundary usable" = withScratchDir
+  (dir =>
+    let trace = TraceContext "\{dir}/missing/trace" "session" "probe" (Ref 0)
+    let token = beginCall trace "0" "medaka_check"
+    finishCall token "success" 42
+    recordProtocol trace "cancel_requested" "1"
+    pass)

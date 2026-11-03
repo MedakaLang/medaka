@@ -1131,3 +1131,81 @@ interruptedCase dir =
 
 test "interrupted call leaves an unmatched start" =
   withScratchDir interruptedCase
+
+traceSafetyScript : String
+traceSafetyScript =
+  """
+export MEDAKA_ROOT="$1"
+bin="$2"; input="$3"; dir="$4"; mode="$5"
+unset MEDAKA_MCP_LOG MEDAKA_MCP_TRACE
+output="$dir/stdout-$mode"; trace="$dir/trace-$mode"
+: > "$output"
+case "$mode" in
+  off) ;;
+  stdout) trace=/dev/stdout ;;
+  hardlink) ln "$output" "$trace" || exit 1 ;;
+  symlink) ln -s "$output" "$trace" || exit 1 ;;
+  race) ln -s "$dir/ordinary" "$trace" || exit 1 ;;
+  missing-parent) trace="$dir/missing/trace" ;;
+  directory) trace="$dir" ;;
+esac
+if [ "$mode" != off ]; then export MEDAKA_MCP_TRACE="$trace"; fi
+"$bin" mcp < "$input" > "$output" & pid=$!
+if [ "$mode" = race ]; then
+  i=0
+  while [ "$i" -lt 100 ]; do
+    ln -s "$output" "$dir/next" && mv -f "$dir/next" "$trace" || exit 1
+    ln -s "$dir/ordinary" "$dir/next" && mv -f "$dir/next" "$trace" || exit 1
+    i=$((i+1))
+  done
+fi
+wait "$pid"; code=$?
+cat "$output"
+exit "$code"
+"""
+
+traceSafetyRow : String -> String -> String -> <Exec, IO, FileRead> Expectation
+traceSafetyRow dir expected mode = match boundedVerbSeconds 30 "sh" [
+  "-c",
+  traceSafetyScript,
+  "sh",
+  medakaRoot,
+  medakaBin,
+  "\{dir}/input",
+  dir,
+  mode,
+]
+  Err e => fail e
+  Ok (0, out, err) => expectAll [
+    expectEqual "[mcp] medaka mcp server start\n" err,
+    expectEqual expected out,
+  ]
+  Ok (code, _, err) => fail "trace \{mode}: exited \{intToString code}: \{err}"
+
+test "trace files and stdout aliases preserve exact JSON-RPC frames" = withScratchDir
+  (dir =>
+    let input = "\{dir}/input"
+    let transcript =
+      "{\"jsonrpc\":\"2.0\",\"id\":1,\"method\":\"tools/call\",\"params\":{\"name\":\"medaka_fmt\",\"arguments\":{\"source\":\"main=1\"}}}\n"
+    match writeFile input (repeat 32 transcript)
+      Err e => fail e
+      Ok _ =>
+        match (boundedVerbSeconds 30 "sh" [
+          "-c", traceSafetyScript, "sh", medakaRoot, medakaBin, input, dir,
+          "off"
+        ])
+          Err e => fail e
+          Ok (0, expected, err) => expectAll [
+            expectEqual "[mcp] medaka mcp server start\n" err,
+            expectEqual 32 (count (/= "") (split "\n" expected)),
+            expectTextContainsAll ["\"jsonrpc\":\"2.0\"", "\"id\":1"] expected,
+            expectEach
+              (map
+                (mode => (mode, traceSafetyRow dir expected mode))
+                [
+                  "file", "stdout", "hardlink", "symlink", "race",
+                  "missing-parent", "directory"
+                ]),
+          ]
+          Ok (code, _, err) =>
+            fail "trace off: exited \{intToString code}: \{err}")
