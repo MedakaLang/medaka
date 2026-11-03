@@ -1,0 +1,67 @@
+argRwOf : MarkCtx -> Map String Unit -> (String -> EvId -> Unit) -> (String -> Bool) -> ArgRw
+bareLocalBound : BareLocals -> String -> Bool
+beginModuleMarking : ModuleCtx -> String -> List Decl -> Map String Int -> ModuleSeed -> Unit
+bindsRename : GraphCtx -> List LetBind -> Map String String -> (List LetBind, Map String String)
+boundInsert : List String -> Map String String -> Map String String
+boundOfList : List String -> Map String String
+buildStandaloneShadowsGraph : List (String, String) -> List Decl -> List Decl -> List String
+computeMangledShadowMap : List Decl -> List (String, List Decl) -> List (String, String)
+constrainedSigNames : List Decl -> List String
+coreShadowMapFor : GraphCtx -> List Decl -> List (String, String) -> List (String, String)
+declBareLocals : GraphCtx -> List Decl -> BareLocals -> BareLocals
+finishModuleMarking : ModuleMarking -> TcEnv -> Map String (List (List Pat, Expr)) -> List Decl -> List Decl
+formBareLocals : GraphCtx -> UsePath -> BareLocals -> BareLocals
+freshLocalAbsName : GraphCtx -> String -> String
+letPatRename : GraphCtx -> Pat -> Expr -> Map String String -> (Pat, Map String String)
+localAbsCandidate : Expr -> Bool
+localAbsCandidateBind : LetBind -> Bool
+localAbsCandidateClause : FunClause -> Bool
+localAbsCtorSpine : Expr -> Bool
+mapGroupClauses : ((List Pat, Expr) -> (List Pat, Expr)) -> List String -> Map String (List (List Pat, Expr)) -> Map String (List (List Pat, Expr))
+markClauseWith : ModuleCtx -> ArgRw -> (List Pat, Expr) -> (List Pat, Expr)
+markDictNames : GraphCtx -> List String -> List Decl -> List (String, List Decl) -> List String
+markGroupClauses : ModuleMarking -> TcEnv -> List String -> Map String (List (List Pat, Expr)) -> Map String (List (List Pat, Expr))
+markRecursiveOccurrences : ModuleCtx -> ModuleMarking -> List (String, Mono) -> List ScopedMember -> Map String (List (List Pat, Expr)) -> Map String (List (List Pat, Expr))
+markSetsOf : GraphCtx -> PreludeMarkFacts -> List Decl -> List (String, List Decl) -> List Decl -> MarkSets
+markTailDecl : ModuleCtx -> ArgRw -> Decl -> Decl
+markTailDecls : ModuleCtx -> MarkCtx -> Map String Unit -> (String -> Bool) -> List Decl -> List Decl
+methodMarkCtx : GraphCtx -> MarkSets -> String -> List Decl -> MarkCtx
+mintDictAt : ModuleCtx -> (String -> EvId -> Unit) -> String -> Expr
+mintGrantOnly : ModuleCtx -> String -> Expr
+mintHeadSite : ModuleCtx -> Unit -> EvId
+mintLitSite : ModuleCtx -> Unit -> EvId
+mintMethodCell : ModuleCtx -> String -> EvId
+mintOpSite : ModuleCtx -> Unit -> EvId
+mintSite : ModuleCtx -> SiteCell -> EvId
+mintedOr : (Unit -> EvId) -> EvId -> EvId
+moduleDictNames : List String -> List (String, List Decl) -> List String
+moduleMarkCtx : GraphCtx -> MarkSets -> String -> List Decl -> Map String Scheme -> MarkCtx
+moduleSpellsShadowBare : SpellCtx -> String -> String -> Bool
+noDictHook : String -> EvId -> Unit
+placeholderMonoOf : String -> List (String, Mono) -> Mono
+popMarkedClause : Map String (List (List Pat, Expr)) -> Map String (List (List Pat, Expr)) -> String -> ((List Pat, Expr), Map String (List (List Pat, Expr)))
+prePassDeclScoped : ModuleCtx -> ArgRw -> Decl -> Decl
+prePassFunClauseScoped : ModuleCtx -> ArgRw -> FunClause -> FunClause
+prePassIfaceMethodScoped : ModuleCtx -> ArgRw -> IfaceMethod -> IfaceMethod
+prePassImplMethodScoped : ModuleCtx -> ArgRw -> ImplMethod -> ImplMethod
+prePassLetBindScoped : ModuleCtx -> ArgRw -> LetBind -> LetBind
+rebuildFunClauses : Map String (List (List Pat, Expr)) -> Map String (List (List Pat, Expr)) -> String -> List FunClause -> (List FunClause, Map String (List (List Pat, Expr)))
+rebuildGroupDecls : Map String (List (List Pat, Expr)) -> List Decl -> List Decl
+rebuildGroupDeclsGo : Map String (List (List Pat, Expr)) -> Map String (List (List Pat, Expr)) -> List Decl -> (List Decl, Map String (List (List Pat, Expr)))
+rebuildLetBinds : Map String (List (List Pat, Expr)) -> Map String (List (List Pat, Expr)) -> List LetBind -> (List LetBind, Map String (List (List Pat, Expr)))
+recMarkMembers : ModuleCtx -> Map String Unit -> List (String, Mono) -> List ScopedMember -> Map String (List (List Pat, Expr)) -> Map String (List (List Pat, Expr))
+rewriteArgArm : ModuleCtx -> ArgRw -> Map String String -> Arm -> Arm
+rewriteArgField : ModuleCtx -> ArgRw -> Map String String -> FieldAssign -> FieldAssign
+rewriteArgFunClause : ModuleCtx -> ArgRw -> Map String String -> FunClause -> FunClause
+rewriteArgGuardArm : ModuleCtx -> ArgRw -> Map String String -> GuardArm -> GuardArm
+rewriteArgGuards : ModuleCtx -> ArgRw -> Map String String -> List Guard -> (List Guard, Map String String)
+rewriteArgInterp : ModuleCtx -> ArgRw -> Map String String -> InterpPart -> InterpPart
+rewriteArgKv : ModuleCtx -> ArgRw -> Map String String -> (Expr, Expr) -> (Expr, Expr)
+rewriteArgLetBind : ModuleCtx -> ArgRw -> Map String String -> LetBind -> LetBind
+rewriteArgScoped : ModuleCtx -> ArgRw -> Map String String -> Expr -> Expr
+rewriteArgStmts : ModuleCtx -> ArgRw -> Map String String -> List DoStmt -> List DoStmt
+shadowBareName : List (String, String) -> String -> String
+shadowSymSpelledBare : SpellCtx -> List (String, String) -> String -> Bool
+spellCtxOf : GraphCtx -> List Decl -> SpellCtx
+unitMangledShadows : List String -> (String, List Decl) -> List (String, String)
+unmarkGrantOnly : GraphCtx -> EvId -> Unit

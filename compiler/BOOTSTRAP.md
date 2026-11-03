@@ -84,7 +84,7 @@ collisions), and for each unit renames ITS module-PRIVATE (`pub = False`)
 colliding functions to a unique `<mid>__<name>` symbol (mid sanitized to
 `[A-Za-z0-9_]`), rewriting every in-module reference SCOPE-AWARELY (a reference is
 renamed only where the name is the free top-level name, never where a local
-binder shadows it — mirrors `tc_occurrence.mdk`'s `rewriteArgScoped` binder threading).
+binder shadows it — mirrors `tc_mark.mdk`'s `rewriteArgScoped` binder threading).
 Exported functions keep their bare name (cross-module-referenced). Private ⇒ not
 importable ⇒ references are self-contained, so no cross-module fixup is needed.
 Wired into BOTH flat-emit drivers (`llvm_bootstrap_lex_main.mdk` and

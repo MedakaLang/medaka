@@ -58,7 +58,7 @@ import entries.entry_support.{
 import support.timer.{statsEnabled, emitStats}
 import driver.emit_diagnostics.{refuseSymbolDefects}
 import types.program_facts.{ProgramFacts}
-import types.tc_occurrence.{constrainedSigNames}
+import types.tc_mark.{constrainedSigNames}
 
 main : <IO> Unit
 -- WasmGC has no clock host-imports yet (`sleepMs`/`monotonicSec` are WASM-GAP

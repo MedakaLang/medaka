@@ -103,7 +103,6 @@ noteWalkGoalFollowed : ReqWalk -> IfaceRef -> List Mono -> Unit
 numAnchorObservationView : NumAnchorTestObservation -> (String, Bool, Bool, String, String)
 numericReturnRoute : Route -> List Route -> Route
 occurrenceDispatchMonos : List String -> Ty -> Mono -> List (String, Mono) -> List Mono
-openScope : ModuleCtx -> ScopeId -> Unit
 outerRigidIds : Option Int -> List Mono -> Map String Unit -> Map String Unit
 predicateSlotKnownArgs : PredicateSlotArgs -> List Mono
 prerequisiteEvidence : (IfaceRef, List Mono) -> PrerequisiteEvidence
