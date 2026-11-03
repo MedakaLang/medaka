@@ -310,7 +310,7 @@ desugaredCodes src =
 test "a lambda parameter annotation is resolved as a written type" = expectEach
   [
     (
-      "#4719: an unknown type is R-UNKNOWN-TYPE",
+      "an unknown type is R-UNKNOWN-TYPE",
       expectEqual
         ["R-UNKNOWN-TYPE"]
         (desugaredCodes "f = (x : NoSuchType) => x\n"),
@@ -323,20 +323,29 @@ test "a lambda parameter annotation is resolved as a written type" = expectEach
       "a guard-bind annotation",
       expectEqual
         ["R-UNKNOWN-TYPE"]
-        (desugaredCodes "f n = match n\n  m if (k : NoSuchType) <- m => k\n"),
+        (desugaredCodes """
+          f n = match n
+            m if (k : NoSuchType) <- m => k
+          """),
     ),
     (
       "an annotation inside one or-pattern alternative binds the same names",
       expectEqual
         []
         (desugaredCodes
-          "data Result a b = Ok a | Err b\nf = (Ok ((a, b) : (Int, Int)) | Err (a, b)) => a + b\n"),
+          """
+            data Result a b = Ok a | Err b
+            f = (Ok ((a, b) : (Int, Int)) | Err (a, b)) => a + b
+            """),
     ),
     (
       "an unknown type inside one or-pattern alternative",
       expectEqual
         ["R-UNKNOWN-TYPE"]
         (desugaredCodes
-          "data Result a b = Ok a | Err b\nf = (Ok ((a, b) : NoSuchType) | Err (a, b)) => b\n"),
+          """
+            data Result a b = Ok a | Err b
+            f = (Ok ((a, b) : NoSuchType) | Err (a, b)) => b
+            """),
     ),
   ]

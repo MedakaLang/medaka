@@ -289,7 +289,7 @@ rewriteSugar (ESlice a lo hi incl) =
 rewriteSugar (lam@(ELam ps body)) =
   if any patHasAnnot ps then eraseLamAnnots ps body else lam
 rewriteSugar (m@(EMatch e arms)) =
-  if any armHasAnnot arms then EMatch e (map eraseArmAnnots arms) else m
+  if any armHasAnnot arms then eraseMatchAnnots e arms else m
 rewriteSugar e = e
 
 -- ── Pass: rewrite_assign_index (`a[i] := v` → `setIndex a i v`) ───────────
@@ -1728,7 +1728,7 @@ stampRecFieldBy mint (RecPatField l loc _ (Some p)) =
 (DFunDef false "rewriteSugar" ((PCon "EIndex" (PVar "a") (PVar "i"))) (EApp (EApp (EApp (EVar "callBin") (ELit (LString "index"))) (EVar "a")) (EVar "i")))
 (DFunDef false "rewriteSugar" ((PCon "ESlice" (PVar "a") (PVar "lo") (PVar "hi") (PVar "incl"))) (EBlock (DoLet false false (PVar "hiEx") (EIf (EVar "incl") (EApp (EApp (EVar "EApp") (EApp (EVar "EVar") (ELit (LString "sliceInclusiveEnd")))) (EVar "hi")) (EVar "hi"))) (DoExpr (EApp (EApp (EVar "EApp") (EApp (EApp (EVar "EApp") (EApp (EApp (EVar "EApp") (EApp (EVar "EVar") (ELit (LString "slice")))) (EVar "a"))) (EVar "lo"))) (EVar "hiEx")))))
 (DFunDef false "rewriteSugar" ((PAs "lam" (PCon "ELam" (PVar "ps") (PVar "body")))) (EIf (EApp (EApp (EVar "any") (EVar "patHasAnnot")) (EVar "ps")) (EApp (EApp (EVar "eraseLamAnnots") (EVar "ps")) (EVar "body")) (EVar "lam")))
-(DFunDef false "rewriteSugar" ((PAs "m" (PCon "EMatch" (PVar "e") (PVar "arms")))) (EIf (EApp (EApp (EVar "any") (EVar "armHasAnnot")) (EVar "arms")) (EApp (EApp (EVar "EMatch") (EVar "e")) (EApp (EApp (EVar "map") (EVar "eraseArmAnnots")) (EVar "arms"))) (EVar "m")))
+(DFunDef false "rewriteSugar" ((PAs "m" (PCon "EMatch" (PVar "e") (PVar "arms")))) (EIf (EApp (EApp (EVar "any") (EVar "armHasAnnot")) (EVar "arms")) (EApp (EApp (EVar "eraseMatchAnnots") (EVar "e")) (EVar "arms")) (EVar "m")))
 (DFunDef false "rewriteSugar" ((PVar "e")) (EVar "e"))
 (DTypeSig false "rewriteAssignIndex" (TyFun (TyCon "Expr") (TyCon "Expr")))
 (DFunDef false "rewriteAssignIndex" ((PCon "EBinOp" (PLit (LString ":=")) (PVar "lhs") (PVar "v") (PVar "r"))) (EApp (EApp (EApp (EApp (EVar "assignIndexLhs") (EApp (EVar "stripLocE") (EVar "lhs"))) (EVar "lhs")) (EVar "v")) (EVar "r")))
@@ -2314,7 +2314,7 @@ stampRecFieldBy mint (RecPatField l loc _ (Some p)) =
 (DFunDef false "rewriteSugar" ((PCon "EIndex" (PVar "a") (PVar "i"))) (EApp (EApp (EApp (EVar "callBin") (ELit (LString "index"))) (EVar "a")) (EVar "i")))
 (DFunDef false "rewriteSugar" ((PCon "ESlice" (PVar "a") (PVar "lo") (PVar "hi") (PVar "incl"))) (EBlock (DoLet false false (PVar "hiEx") (EIf (EVar "incl") (EApp (EApp (EVar "EApp") (EApp (EVar "EVar") (ELit (LString "sliceInclusiveEnd")))) (EVar "hi")) (EVar "hi"))) (DoExpr (EApp (EApp (EVar "EApp") (EApp (EApp (EVar "EApp") (EApp (EApp (EVar "EApp") (EApp (EVar "EVar") (ELit (LString "slice")))) (EVar "a"))) (EVar "lo"))) (EVar "hiEx")))))
 (DFunDef false "rewriteSugar" ((PAs "lam" (PCon "ELam" (PVar "ps") (PVar "body")))) (EIf (EApp (EApp (EDictApp "any") (EVar "patHasAnnot")) (EVar "ps")) (EApp (EApp (EVar "eraseLamAnnots") (EVar "ps")) (EVar "body")) (EVar "lam")))
-(DFunDef false "rewriteSugar" ((PAs "m" (PCon "EMatch" (PVar "e") (PVar "arms")))) (EIf (EApp (EApp (EDictApp "any") (EVar "armHasAnnot")) (EVar "arms")) (EApp (EApp (EVar "EMatch") (EVar "e")) (EApp (EApp (EMethodRef "map") (EVar "eraseArmAnnots")) (EVar "arms"))) (EVar "m")))
+(DFunDef false "rewriteSugar" ((PAs "m" (PCon "EMatch" (PVar "e") (PVar "arms")))) (EIf (EApp (EApp (EDictApp "any") (EVar "armHasAnnot")) (EVar "arms")) (EApp (EApp (EVar "eraseMatchAnnots") (EVar "e")) (EVar "arms")) (EVar "m")))
 (DFunDef false "rewriteSugar" ((PVar "e")) (EVar "e"))
 (DTypeSig false "rewriteAssignIndex" (TyFun (TyCon "Expr") (TyCon "Expr")))
 (DFunDef false "rewriteAssignIndex" ((PCon "EBinOp" (PLit (LString ":=")) (PVar "lhs") (PVar "v") (PVar "r"))) (EApp (EApp (EApp (EApp (EVar "assignIndexLhs") (EApp (EVar "stripLocE") (EVar "lhs"))) (EVar "lhs")) (EVar "v")) (EVar "r")))

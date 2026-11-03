@@ -285,7 +285,7 @@ rewriteSugar (ESlice a lo hi incl) =
 rewriteSugar (lam@(ELam ps body)) =
   if any patHasAnnot ps then eraseLamAnnots ps body else lam
 rewriteSugar (m@(EMatch e arms)) =
-  if any armHasAnnot arms then EMatch e (map eraseArmAnnots arms) else m
+  if any armHasAnnot arms then eraseMatchAnnots e arms else m
 rewriteSugar e = e
 
 -- ── Pass: rewrite_assign_index (`a[i] := v` → `setIndex a i v`) ───────────

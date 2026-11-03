@@ -2340,21 +2340,20 @@ kindsFixpoint : List (TabKey, List Kind) ->
   Int ->
   List (Option (TabKey, List Kind)) ->
   List (Option (TabKey, List Kind))
-kindsFixpoint arrows others heads fuel cur =
-  let table = tabNameIndex (somes cur ++ arrows)
-  let reads = KindReads {
-    krSlots = headKindsIn table,
-    krHeads =
-      o n => match tabNameLookup table (tyTabKey o n)
-        Some kinds => Some kinds
-        None => headKindsIn others o n,
-    krIfaces = _ _ => None,
-  }
-  let next = map (map (kindHeadRound reads)) heads
-  if fuel <= 0 || sameKindRows cur next then
-    next
-  else
-    kindsFixpoint arrows others heads (fuel - 1) next
+kindsFixpoint arrows others heads fuel0 cur0 = go fuel0 cur0
+  where
+    go fuel cur =
+      let table = tabNameIndex (somes cur ++ arrows)
+      let reads = KindReads {
+        krSlots = headKindsIn table,
+        krHeads =
+          o n => match tabNameLookup table (tyTabKey o n)
+            Some kinds => Some kinds
+            None => headKindsIn others o n,
+        krIfaces = _ _ => None,
+      }
+      let next = map (map (kindHeadRound reads)) heads
+      if fuel <= 0 || sameKindRows cur next then next else go (fuel - 1) next
 
 -- A head whose parameters are all declared has nothing to infer.
 kindHeadRound : KindReads -> KindHead -> (TabKey, List Kind)

@@ -1,5 +1,5 @@
 # META
-source_lines=4361
+source_lines=4360
 stages=DESUGAR,MARK
 # SOURCE
 -- tc_env: construction of `ImplEnv`, `ClassEnv`, `MethodEnv` and lookup in every declaration
@@ -2344,21 +2344,20 @@ kindsFixpoint : List (TabKey, List Kind) ->
   Int ->
   List (Option (TabKey, List Kind)) ->
   List (Option (TabKey, List Kind))
-kindsFixpoint arrows others heads fuel cur =
-  let table = tabNameIndex (somes cur ++ arrows)
-  let reads = KindReads {
-    krSlots = headKindsIn table,
-    krHeads =
-      o n => match tabNameLookup table (tyTabKey o n)
-        Some kinds => Some kinds
-        None => headKindsIn others o n,
-    krIfaces = _ _ => None,
-  }
-  let next = map (map (kindHeadRound reads)) heads
-  if fuel <= 0 || sameKindRows cur next then
-    next
-  else
-    kindsFixpoint arrows others heads (fuel - 1) next
+kindsFixpoint arrows others heads fuel0 cur0 = go fuel0 cur0
+  where
+    go fuel cur =
+      let table = tabNameIndex (somes cur ++ arrows)
+      let reads = KindReads {
+        krSlots = headKindsIn table,
+        krHeads =
+          o n => match tabNameLookup table (tyTabKey o n)
+            Some kinds => Some kinds
+            None => headKindsIn others o n,
+        krIfaces = _ _ => None,
+      }
+      let next = map (map (kindHeadRound reads)) heads
+      if fuel <= 0 || sameKindRows cur next then next else go (fuel - 1) next
 
 -- A head whose parameters are all declared has nothing to infer.
 kindHeadRound : KindReads -> KindHead -> (TabKey, List Kind)
@@ -4817,7 +4816,7 @@ methodRowSameNameView rows =
 (DFunDef false "withPublicity" ((PCons PWild (PVar "hs")) (PCons PWild (PVar "es"))) (EBinOp "::" (EVar "None") (EApp (EApp (EVar "withPublicity") (EVar "hs")) (EVar "es"))))
 (DFunDef false "withPublicity" (PWild PWild) (EListLit))
 (DTypeSig false "kindsFixpoint" (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "TabKey") (TyApp (TyCon "List") (TyCon "Kind")))) (TyFun (TyApp (TyCon "OrdMap") (TyApp (TyCon "List") (TyTuple (TyCon "TabKey") (TyApp (TyCon "List") (TyCon "Kind"))))) (TyFun (TyApp (TyCon "List") (TyApp (TyCon "Option") (TyCon "KindHead"))) (TyFun (TyCon "Int") (TyFun (TyApp (TyCon "List") (TyApp (TyCon "Option") (TyTuple (TyCon "TabKey") (TyApp (TyCon "List") (TyCon "Kind"))))) (TyApp (TyCon "List") (TyApp (TyCon "Option") (TyTuple (TyCon "TabKey") (TyApp (TyCon "List") (TyCon "Kind")))))))))))
-(DFunDef false "kindsFixpoint" ((PVar "arrows") (PVar "others") (PVar "heads") (PVar "fuel") (PVar "cur")) (EBlock (DoLet false false (PVar "table") (EApp (EVar "tabNameIndex") (EBinOp "++" (EApp (EVar "somes") (EVar "cur")) (EVar "arrows")))) (DoLet false false (PVar "reads") (ERecordCreate "KindReads" ((fa "krSlots" (EApp (EVar "headKindsIn") (EVar "table"))) (fa "krHeads" (ELam ((PVar "o") (PVar "n")) (EMatch (EApp (EApp (EVar "tabNameLookup") (EVar "table")) (EApp (EApp (EVar "tyTabKey") (EVar "o")) (EVar "n"))) (arm (PCon "Some" (PVar "kinds")) () (EApp (EVar "Some") (EVar "kinds"))) (arm (PCon "None") () (EApp (EApp (EApp (EVar "headKindsIn") (EVar "others")) (EVar "o")) (EVar "n")))))) (fa "krIfaces" (ELam (PWild PWild) (EVar "None")))))) (DoLet false false (PVar "next") (EApp (EApp (EVar "map") (EApp (EVar "map") (EApp (EVar "kindHeadRound") (EVar "reads")))) (EVar "heads"))) (DoExpr (EIf (EBinOp "||" (EBinOp "<=" (EVar "fuel") (ELit (LInt 0))) (EApp (EApp (EVar "sameKindRows") (EVar "cur")) (EVar "next"))) (EVar "next") (EApp (EApp (EApp (EApp (EApp (EVar "kindsFixpoint") (EVar "arrows")) (EVar "others")) (EVar "heads")) (EBinOp "-" (EVar "fuel") (ELit (LInt 1)))) (EVar "next"))))))
+(DFunDef false "kindsFixpoint" ((PVar "arrows") (PVar "others") (PVar "heads") (PVar "fuel0") (PVar "cur0")) (ELetGroup ((lgb "go" (clause ((PVar "fuel") (PVar "cur")) (EBlock (DoLet false false (PVar "table") (EApp (EVar "tabNameIndex") (EBinOp "++" (EApp (EVar "somes") (EVar "cur")) (EVar "arrows")))) (DoLet false false (PVar "reads") (ERecordCreate "KindReads" ((fa "krSlots" (EApp (EVar "headKindsIn") (EVar "table"))) (fa "krHeads" (ELam ((PVar "o") (PVar "n")) (EMatch (EApp (EApp (EVar "tabNameLookup") (EVar "table")) (EApp (EApp (EVar "tyTabKey") (EVar "o")) (EVar "n"))) (arm (PCon "Some" (PVar "kinds")) () (EApp (EVar "Some") (EVar "kinds"))) (arm (PCon "None") () (EApp (EApp (EApp (EVar "headKindsIn") (EVar "others")) (EVar "o")) (EVar "n")))))) (fa "krIfaces" (ELam (PWild PWild) (EVar "None")))))) (DoLet false false (PVar "next") (EApp (EApp (EVar "map") (EApp (EVar "map") (EApp (EVar "kindHeadRound") (EVar "reads")))) (EVar "heads"))) (DoExpr (EIf (EBinOp "||" (EBinOp "<=" (EVar "fuel") (ELit (LInt 0))) (EApp (EApp (EVar "sameKindRows") (EVar "cur")) (EVar "next"))) (EVar "next") (EApp (EApp (EVar "go") (EBinOp "-" (EVar "fuel") (ELit (LInt 1)))) (EVar "next")))))))) (EApp (EApp (EVar "go") (EVar "fuel0")) (EVar "cur0"))))
 (DTypeSig false "kindHeadRound" (TyFun (TyCon "KindReads") (TyFun (TyCon "KindHead") (TyTuple (TyCon "TabKey") (TyApp (TyCon "List") (TyCon "Kind"))))))
 (DFunDef false "kindHeadRound" ((PVar "reads") (PCon "KindHead" (PVar "key") PWild (PVar "ps") (PVar "declared") (PVar "uses"))) (EIf (EApp (EApp (EVar "anyList") (EVar "isNone")) (EVar "declared")) (ETuple (EVar "key") (EApp (EApp (EApp (EVar "paramKindsFrom") (EApp (EApp (EApp (EApp (EVar "kindEvidence") (EVar "reads")) (EVar "ps")) (EVar "declared")) (EVar "uses"))) (EVar "ps")) (EVar "declared"))) (ETuple (EVar "key") (EApp (EApp (EApp (EVar "paramKindsFrom") (EListLit)) (EVar "ps")) (EVar "declared")))))
 (DTypeSig false "kindEvidence" (TyFun (TyCon "KindReads") (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyApp (TyCon "List") (TyApp (TyCon "Option") (TyCon "Kind"))) (TyFun (TyApp (TyCon "List") (TyCon "Ty")) (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "Kind"))))))))
@@ -5647,7 +5646,7 @@ methodRowSameNameView rows =
 (DFunDef false "withPublicity" ((PCons PWild (PVar "hs")) (PCons PWild (PVar "es"))) (EBinOp "::" (EVar "None") (EApp (EApp (EVar "withPublicity") (EVar "hs")) (EVar "es"))))
 (DFunDef false "withPublicity" (PWild PWild) (EListLit))
 (DTypeSig false "kindsFixpoint" (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "TabKey") (TyApp (TyCon "List") (TyCon "Kind")))) (TyFun (TyApp (TyCon "OrdMap") (TyApp (TyCon "List") (TyTuple (TyCon "TabKey") (TyApp (TyCon "List") (TyCon "Kind"))))) (TyFun (TyApp (TyCon "List") (TyApp (TyCon "Option") (TyCon "KindHead"))) (TyFun (TyCon "Int") (TyFun (TyApp (TyCon "List") (TyApp (TyCon "Option") (TyTuple (TyCon "TabKey") (TyApp (TyCon "List") (TyCon "Kind"))))) (TyApp (TyCon "List") (TyApp (TyCon "Option") (TyTuple (TyCon "TabKey") (TyApp (TyCon "List") (TyCon "Kind")))))))))))
-(DFunDef false "kindsFixpoint" ((PVar "arrows") (PVar "others") (PVar "heads") (PVar "fuel") (PVar "cur")) (EBlock (DoLet false false (PVar "table") (EApp (EVar "tabNameIndex") (EBinOp "++" (EApp (EVar "somes") (EVar "cur")) (EVar "arrows")))) (DoLet false false (PVar "reads") (ERecordCreate "KindReads" ((fa "krSlots" (EApp (EVar "headKindsIn") (EVar "table"))) (fa "krHeads" (ELam ((PVar "o") (PVar "n")) (EMatch (EApp (EApp (EVar "tabNameLookup") (EVar "table")) (EApp (EApp (EVar "tyTabKey") (EVar "o")) (EVar "n"))) (arm (PCon "Some" (PVar "kinds")) () (EApp (EVar "Some") (EVar "kinds"))) (arm (PCon "None") () (EApp (EApp (EApp (EVar "headKindsIn") (EVar "others")) (EVar "o")) (EVar "n")))))) (fa "krIfaces" (ELam (PWild PWild) (EVar "None")))))) (DoLet false false (PVar "next") (EApp (EApp (EMethodRef "map") (EApp (EMethodRef "map") (EApp (EVar "kindHeadRound") (EVar "reads")))) (EVar "heads"))) (DoExpr (EIf (EBinOp "||" (EBinOp "<=" (EVar "fuel") (ELit (LInt 0))) (EApp (EApp (EVar "sameKindRows") (EVar "cur")) (EVar "next"))) (EVar "next") (EApp (EApp (EApp (EApp (EApp (EVar "kindsFixpoint") (EVar "arrows")) (EVar "others")) (EVar "heads")) (EBinOp "-" (EVar "fuel") (ELit (LInt 1)))) (EVar "next"))))))
+(DFunDef false "kindsFixpoint" ((PVar "arrows") (PVar "others") (PVar "heads") (PVar "fuel0") (PVar "cur0")) (ELetGroup ((lgb "go" (clause ((PVar "fuel") (PVar "cur")) (EBlock (DoLet false false (PVar "table") (EApp (EVar "tabNameIndex") (EBinOp "++" (EApp (EVar "somes") (EVar "cur")) (EVar "arrows")))) (DoLet false false (PVar "reads") (ERecordCreate "KindReads" ((fa "krSlots" (EApp (EVar "headKindsIn") (EVar "table"))) (fa "krHeads" (ELam ((PVar "o") (PVar "n")) (EMatch (EApp (EApp (EVar "tabNameLookup") (EVar "table")) (EApp (EApp (EVar "tyTabKey") (EVar "o")) (EVar "n"))) (arm (PCon "Some" (PVar "kinds")) () (EApp (EVar "Some") (EVar "kinds"))) (arm (PCon "None") () (EApp (EApp (EApp (EVar "headKindsIn") (EVar "others")) (EVar "o")) (EVar "n")))))) (fa "krIfaces" (ELam (PWild PWild) (EVar "None")))))) (DoLet false false (PVar "next") (EApp (EApp (EMethodRef "map") (EApp (EMethodRef "map") (EApp (EVar "kindHeadRound") (EVar "reads")))) (EVar "heads"))) (DoExpr (EIf (EBinOp "||" (EBinOp "<=" (EVar "fuel") (ELit (LInt 0))) (EApp (EApp (EVar "sameKindRows") (EVar "cur")) (EVar "next"))) (EVar "next") (EApp (EApp (EVar "go") (EBinOp "-" (EVar "fuel") (ELit (LInt 1)))) (EVar "next")))))))) (EApp (EApp (EVar "go") (EVar "fuel0")) (EVar "cur0"))))
 (DTypeSig false "kindHeadRound" (TyFun (TyCon "KindReads") (TyFun (TyCon "KindHead") (TyTuple (TyCon "TabKey") (TyApp (TyCon "List") (TyCon "Kind"))))))
 (DFunDef false "kindHeadRound" ((PVar "reads") (PCon "KindHead" (PVar "key") PWild (PVar "ps") (PVar "declared") (PVar "uses"))) (EIf (EApp (EApp (EVar "anyList") (EVar "isNone")) (EVar "declared")) (ETuple (EVar "key") (EApp (EApp (EApp (EVar "paramKindsFrom") (EApp (EApp (EApp (EApp (EVar "kindEvidence") (EVar "reads")) (EVar "ps")) (EVar "declared")) (EVar "uses"))) (EVar "ps")) (EVar "declared"))) (ETuple (EVar "key") (EApp (EApp (EApp (EVar "paramKindsFrom") (EListLit)) (EVar "ps")) (EVar "declared")))))
 (DTypeSig false "kindEvidence" (TyFun (TyCon "KindReads") (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyApp (TyCon "List") (TyApp (TyCon "Option") (TyCon "Kind"))) (TyFun (TyApp (TyCon "List") (TyCon "Ty")) (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "Kind"))))))))

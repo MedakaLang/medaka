@@ -1,5 +1,5 @@
 # META
-source_lines=2996
+source_lines=2998
 stages=DESUGAR,MARK
 # SOURCE
 -- tc_global: the whole-graph and declaration-level checks that need inference: the coherence scan,
@@ -367,15 +367,17 @@ implSlotKinds : ClassEnv ->
   Int ->
   List Ty ->
   List (Option Kind, Ty)
-implSlotKinds _ _ _ _ _ [] = []
-implSlotKinds ce cur o iface i (t :: rest) =
-  (
-      map
-        kindOfParams
-        (ceSlotKindsAt (regKeyOfTab (ifaceTabKey o iface)) cur i ce),
-      t,
-    )
-    :: implSlotKinds ce cur o iface (i + 1) rest
+implSlotKinds ce cur o iface i0 tys0 = go i0 tys0
+  where
+    go _ [] = []
+    go i (t :: rest) =
+      (
+          map
+            kindOfParams
+            (ceSlotKindsAt (regKeyOfTab (ifaceTabKey o iface)) cur i ce),
+          t,
+        )
+        :: go (i + 1) rest
 
 requireSlotKinds : KindScope -> Require -> List (Option Kind, Ty)
 requireSlotKinds sc (Require { requireHead = n, requireOrigin = o, requireArgs = args }) =
@@ -3042,8 +3044,7 @@ numDictObls gctx (app :: rest) =
 (DFunDef false "checkGradedImplHeadDecl" ((PVar "mctx") (PVar "sc") (PVar "ce") (PVar "cur") (PRec "DImpl" ((rf "iface" None) (rf "tys" None) (rf "reqs" None) (rf "implOrigin" (PVar "o")) (rf "implIfaceLoc" (PVar "loc"))) true)) (EBlock (DoExpr (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EVar "checkGradedImplTys") (EVar "mctx")) (EVar "ce")) (EVar "cur")) (EVar "o")) (EVar "iface")) (ELit (LInt 0))) (EVar "tys"))) (DoExpr (EApp (EApp (EApp (EApp (EApp (EVar "reportWrittenKinds") (EVar "mctx")) (EVar "sc")) (EListLit)) (EVar "loc")) (EBinOp "++" (EApp (EApp (EApp (EApp (EApp (EApp (EVar "implSlotKinds") (EVar "ce")) (EVar "cur")) (EVar "o")) (EVar "iface")) (ELit (LInt 0))) (EVar "tys")) (EApp (EApp (EVar "flatMap") (EApp (EVar "requireSlotKinds") (EVar "sc"))) (EVar "reqs")))))))
 (DFunDef false "checkGradedImplHeadDecl" ((PVar "_mctx") PWild PWild PWild PWild) (ELit LUnit))
 (DTypeSig false "implSlotKinds" (TyFun (TyCon "ClassEnv") (TyFun (TyCon "Int") (TyFun (TyCon "TyConOrigin") (TyFun (TyCon "String") (TyFun (TyCon "Int") (TyFun (TyApp (TyCon "List") (TyCon "Ty")) (TyApp (TyCon "List") (TyTuple (TyApp (TyCon "Option") (TyCon "Kind")) (TyCon "Ty"))))))))))
-(DFunDef false "implSlotKinds" (PWild PWild PWild PWild PWild (PList)) (EListLit))
-(DFunDef false "implSlotKinds" ((PVar "ce") (PVar "cur") (PVar "o") (PVar "iface") (PVar "i") (PCons (PVar "t") (PVar "rest"))) (EBinOp "::" (ETuple (EApp (EApp (EVar "map") (EVar "kindOfParams")) (EApp (EApp (EApp (EApp (EVar "ceSlotKindsAt") (EApp (EVar "regKeyOfTab") (EApp (EApp (EVar "ifaceTabKey") (EVar "o")) (EVar "iface")))) (EVar "cur")) (EVar "i")) (EVar "ce"))) (EVar "t")) (EApp (EApp (EApp (EApp (EApp (EApp (EVar "implSlotKinds") (EVar "ce")) (EVar "cur")) (EVar "o")) (EVar "iface")) (EBinOp "+" (EVar "i") (ELit (LInt 1)))) (EVar "rest"))))
+(DFunDef false "implSlotKinds" ((PVar "ce") (PVar "cur") (PVar "o") (PVar "iface") (PVar "i0") (PVar "tys0")) (ELetGroup ((lgb "go" (clause (PWild (PList)) (EListLit)) (clause ((PVar "i") (PCons (PVar "t") (PVar "rest"))) (EBinOp "::" (ETuple (EApp (EApp (EVar "map") (EVar "kindOfParams")) (EApp (EApp (EApp (EApp (EVar "ceSlotKindsAt") (EApp (EVar "regKeyOfTab") (EApp (EApp (EVar "ifaceTabKey") (EVar "o")) (EVar "iface")))) (EVar "cur")) (EVar "i")) (EVar "ce"))) (EVar "t")) (EApp (EApp (EVar "go") (EBinOp "+" (EVar "i") (ELit (LInt 1)))) (EVar "rest")))))) (EApp (EApp (EVar "go") (EVar "i0")) (EVar "tys0"))))
 (DTypeSig false "requireSlotKinds" (TyFun (TyCon "KindScope") (TyFun (TyCon "Require") (TyApp (TyCon "List") (TyTuple (TyApp (TyCon "Option") (TyCon "Kind")) (TyCon "Ty"))))))
 (DFunDef false "requireSlotKinds" ((PVar "sc") (PRec "Require" ((rf "requireHead" (PVar "n")) (rf "requireOrigin" (PVar "o")) (rf "requireArgs" (PVar "args"))) false)) (EApp (EApp (EVar "slotKindsFor") (EApp (EApp (EVar "optionOr") (EListLit)) (EApp (EApp (EFieldAccess (EVar "sc") "ksIfaces") (EVar "o")) (EVar "n")))) (EVar "args")))
 (DTypeSig false "slotKindsFor" (TyFun (TyApp (TyCon "List") (TyCon "Kind")) (TyFun (TyApp (TyCon "List") (TyCon "Ty")) (TyApp (TyCon "List") (TyTuple (TyApp (TyCon "Option") (TyCon "Kind")) (TyCon "Ty"))))))
@@ -3384,8 +3385,7 @@ numDictObls gctx (app :: rest) =
 (DFunDef false "checkGradedImplHeadDecl" ((PVar "mctx") (PVar "sc") (PVar "ce") (PVar "cur") (PRec "DImpl" ((rf "iface" None) (rf "tys" None) (rf "reqs" None) (rf "implOrigin" (PVar "o")) (rf "implIfaceLoc" (PVar "loc"))) true)) (EBlock (DoExpr (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EVar "checkGradedImplTys") (EVar "mctx")) (EVar "ce")) (EVar "cur")) (EVar "o")) (EVar "iface")) (ELit (LInt 0))) (EVar "tys"))) (DoExpr (EApp (EApp (EApp (EApp (EApp (EVar "reportWrittenKinds") (EVar "mctx")) (EVar "sc")) (EListLit)) (EVar "loc")) (EBinOp "++" (EApp (EApp (EApp (EApp (EApp (EApp (EVar "implSlotKinds") (EVar "ce")) (EVar "cur")) (EVar "o")) (EVar "iface")) (ELit (LInt 0))) (EVar "tys")) (EApp (EApp (EDictApp "flatMap") (EApp (EVar "requireSlotKinds") (EVar "sc"))) (EVar "reqs")))))))
 (DFunDef false "checkGradedImplHeadDecl" ((PVar "_mctx") PWild PWild PWild PWild) (ELit LUnit))
 (DTypeSig false "implSlotKinds" (TyFun (TyCon "ClassEnv") (TyFun (TyCon "Int") (TyFun (TyCon "TyConOrigin") (TyFun (TyCon "String") (TyFun (TyCon "Int") (TyFun (TyApp (TyCon "List") (TyCon "Ty")) (TyApp (TyCon "List") (TyTuple (TyApp (TyCon "Option") (TyCon "Kind")) (TyCon "Ty"))))))))))
-(DFunDef false "implSlotKinds" (PWild PWild PWild PWild PWild (PList)) (EListLit))
-(DFunDef false "implSlotKinds" ((PVar "ce") (PVar "cur") (PVar "o") (PVar "iface") (PVar "i") (PCons (PVar "t") (PVar "rest"))) (EBinOp "::" (ETuple (EApp (EApp (EMethodRef "map") (EVar "kindOfParams")) (EApp (EApp (EApp (EApp (EVar "ceSlotKindsAt") (EApp (EVar "regKeyOfTab") (EApp (EApp (EVar "ifaceTabKey") (EVar "o")) (EVar "iface")))) (EVar "cur")) (EVar "i")) (EVar "ce"))) (EVar "t")) (EApp (EApp (EApp (EApp (EApp (EApp (EVar "implSlotKinds") (EVar "ce")) (EVar "cur")) (EVar "o")) (EVar "iface")) (EBinOp "+" (EVar "i") (ELit (LInt 1)))) (EVar "rest"))))
+(DFunDef false "implSlotKinds" ((PVar "ce") (PVar "cur") (PVar "o") (PVar "iface") (PVar "i0") (PVar "tys0")) (ELetGroup ((lgb "go" (clause (PWild (PList)) (EListLit)) (clause ((PVar "i") (PCons (PVar "t") (PVar "rest"))) (EBinOp "::" (ETuple (EApp (EApp (EMethodRef "map") (EVar "kindOfParams")) (EApp (EApp (EApp (EApp (EVar "ceSlotKindsAt") (EApp (EVar "regKeyOfTab") (EApp (EApp (EVar "ifaceTabKey") (EVar "o")) (EVar "iface")))) (EVar "cur")) (EVar "i")) (EVar "ce"))) (EVar "t")) (EApp (EApp (EVar "go") (EBinOp "+" (EVar "i") (ELit (LInt 1)))) (EVar "rest")))))) (EApp (EApp (EVar "go") (EVar "i0")) (EVar "tys0"))))
 (DTypeSig false "requireSlotKinds" (TyFun (TyCon "KindScope") (TyFun (TyCon "Require") (TyApp (TyCon "List") (TyTuple (TyApp (TyCon "Option") (TyCon "Kind")) (TyCon "Ty"))))))
 (DFunDef false "requireSlotKinds" ((PVar "sc") (PRec "Require" ((rf "requireHead" (PVar "n")) (rf "requireOrigin" (PVar "o")) (rf "requireArgs" (PVar "args"))) false)) (EApp (EApp (EVar "slotKindsFor") (EApp (EApp (EVar "optionOr") (EListLit)) (EApp (EApp (EFieldAccess (EVar "sc") "ksIfaces") (EVar "o")) (EVar "n")))) (EVar "args")))
 (DTypeSig false "slotKindsFor" (TyFun (TyApp (TyCon "List") (TyCon "Kind")) (TyFun (TyApp (TyCon "List") (TyCon "Ty")) (TyApp (TyCon "List") (TyTuple (TyApp (TyCon "Option") (TyCon "Kind")) (TyCon "Ty"))))))

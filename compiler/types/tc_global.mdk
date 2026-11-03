@@ -363,15 +363,17 @@ implSlotKinds : ClassEnv ->
   Int ->
   List Ty ->
   List (Option Kind, Ty)
-implSlotKinds _ _ _ _ _ [] = []
-implSlotKinds ce cur o iface i (t :: rest) =
-  (
-      map
-        kindOfParams
-        (ceSlotKindsAt (regKeyOfTab (ifaceTabKey o iface)) cur i ce),
-      t,
-    )
-    :: implSlotKinds ce cur o iface (i + 1) rest
+implSlotKinds ce cur o iface i0 tys0 = go i0 tys0
+  where
+    go _ [] = []
+    go i (t :: rest) =
+      (
+          map
+            kindOfParams
+            (ceSlotKindsAt (regKeyOfTab (ifaceTabKey o iface)) cur i ce),
+          t,
+        )
+        :: go (i + 1) rest
 
 requireSlotKinds : KindScope -> Require -> List (Option Kind, Ty)
 requireSlotKinds sc (Require { requireHead = n, requireOrigin = o, requireArgs = args }) =

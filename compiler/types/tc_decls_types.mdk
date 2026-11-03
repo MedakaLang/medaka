@@ -188,7 +188,7 @@ import support.util.{
   reverseL,
   zipL,
 }
-import list.{drop, get}
+import list.{drop, findMap, get}
 import types.effect_param_decode.{
   atomicLabelParamText,
   effectParamMsg,
@@ -2399,7 +2399,7 @@ spineKindError kj want ty = match tyAppSpine ty
     varKindError kj want v (optionOr KType (lookupAssoc v kj.kjVars)) args
   (hd, []) => formKindError kj want hd
   (hd, args) =>
-    orNextError (formKindError kj None hd) (_ => argKindErrors kj [] args)
+    orElseWith (formKindError kj None hd) (_ => argKindErrors kj [] args)
 
 -- A head applied to [args]: too many arguments, an argument of the wrong
 -- kind, or what is left unapplied disagreeing with [want].  An alias at the
@@ -2419,7 +2419,7 @@ headKindError kj counts want n isAlias loc params args
   | isAlias && listLen args /= listLen params = argKindErrors kj params args
   | listLen args > listLen params =
     appKindError kj counts want n isAlias loc params args
-  | otherwise = orNextError (argKindErrors kj params args) (_ =>
+  | otherwise = orElseWith (argKindErrors kj params args) (_ =>
     appKindError kj counts want n isAlias loc params args)
 
 -- The error of a head's own application, its arguments aside (`headKindError`).
@@ -2469,7 +2469,7 @@ varKindError kj want v k args
           (listLen (kindParams k))
           (listLen args)
           kj.kjNames))
-  | otherwise = orNextError (varArgKindErrors kj (kindParams k) args) (_ =>
+  | otherwise = orElseWith (varArgKindErrors kj (kindParams k) args) (_ =>
     kindAgainst
       kj
       True
@@ -2496,7 +2496,7 @@ varArgKindErrors kj (k :: ks) (a :: as2) =
             args
         None => kindErrorIn kj (Some k) a
     _ => kindErrorIn kj (Some k) a
-  orNextError here (_ => varArgKindErrors kj ks as2)
+  orElseWith here (_ => varArgKindErrors kj ks as2)
 varArgKindErrors kj [] args = argKindErrors kj [] args
 varArgKindErrors _ _ [] = None
 
@@ -2538,9 +2538,9 @@ constraintKindError kj (Constraint { constraintHead = n, constraintOrigin = o, c
 argKindErrors : KindJudge -> List Kind -> List Ty -> Option KindError
 argKindErrors _ _ [] = None
 argKindErrors kj (k :: ks) (a :: as2) =
-  orNextError (kindErrorIn kj (Some k) a) (_ => argKindErrors kj ks as2)
+  orElseWith (kindErrorIn kj (Some k) a) (_ => argKindErrors kj ks as2)
 argKindErrors kj [] (a :: as2) =
-  orNextError (kindErrorIn kj None a) (_ => argKindErrors kj [] as2)
+  orElseWith (kindErrorIn kj None a) (_ => argKindErrors kj [] as2)
 
 -- [written], of kind [got], where [want] is expected.  Only kinds of `Type`
 -- and arrows are compared here.  [written] renders only for a message;
@@ -2569,14 +2569,7 @@ kindAgainst kj counts loc written applied got (Some want) =
 kindAgainst _ _ _ _ _ _ None = None
 
 firstKindError : List (Unit -> Option KindError) -> Option KindError
-firstKindError [] = None
-firstKindError (check :: rest) =
-  orNextError (check ()) (_ => firstKindError rest)
-
--- [first], or the next check's answer where it has none.
-orNextError : Option a -> (Unit -> Option a) -> Option a
-orNextError (Some e) _ = Some e
-orNextError None next = next ()
+firstKindError checks = findMap (check => check ()) checks
 
 -- ── Recovery from a rejected written type ──────────────────────────────────
 -- Once a written-kind error has rejected the module, a constructor whose own
