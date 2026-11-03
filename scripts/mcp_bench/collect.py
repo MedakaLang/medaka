@@ -6,7 +6,9 @@ import subprocess
 import tempfile
 import time
 
-from schema import validate_event, validate_run
+from pathlib import Path
+
+from schema import validate_event, validate_run, validate_task
 
 
 def _record(outcome, identity=None, wall_ns=0):
@@ -18,13 +20,14 @@ def _record(outcome, identity=None, wall_ns=0):
         'passed': int(outcome == 'success'), 'failed': int(outcome != 'success'), 'skipped': 0,
         'wall_ns': wall_ns, 'cpu_ns': None, 'peak_rss_bytes': None,
         'resource_scope': 'worker process tree',
-        'resource_reason': 'per-process-tree CPU and peak RSS are unavailable via the portable adapter',
+        'resource_reason': {'cpu_ns': 'portable process-tree CPU measurement unavailable',
+                            'peak_rss_bytes': 'portable process-tree peak RSS measurement unavailable'},
     })
 
 
 def reconcile(events, exitStatus):
     """Reconcile server events with observed termination; return a validated Run."""
-    pending, completed, outcomes = set(), set(), []
+    pending, completed, outcomes = {}, set(), []
     try:
         for raw in events:
             event = validate_event(raw)
@@ -32,19 +35,22 @@ def reconcile(events, exitStatus):
             if event['event'] == 'start':
                 if key in pending or key in completed:
                     return _record('observer_failure')
-                pending.add(key)
+                pending[key] = (event['tool'], event['classification'])
             elif event['event'] == 'finish':
                 if key not in pending:
                     return _record('observer_failure')
-                pending.remove(key)
+                if pending.pop(key) != (event['tool'], event['classification']):
+                    return _record('observer_failure')
                 completed.add(key)
                 outcomes.append(event['outcome'])
     except (ValueError, KeyError, TypeError):
         return _record('observer_failure')
     if exitStatus in ('startup_failure', 'timeout', 'cancelled'):
         return _record(exitStatus)
-    if exitStatus != 0 or pending:
+    if exitStatus != 0:
         return _record('crash')
+    if pending:
+        return _record('observer_failure')
     for outcome in ('protocol_error', 'tool_error'):
         if outcome in outcomes:
             return _record(outcome)
@@ -81,7 +87,18 @@ def run_process(command, environment, transcript, limits):
     events, malformed, observer_failure, status = [], False, False, 'startup_failure'
     with tempfile.TemporaryDirectory() as directory:
         trace = os.path.join(directory, 'trace.jsonl')
-        env = os.environ.copy()
+        workspace = Path(directory) / 'workspace'
+        workspace.mkdir()
+        task = limits.get('task')
+        if task is not None:
+            task = validate_task(task)
+            for name, source in task['files'].items():
+                path = workspace / name
+                path.parent.mkdir(parents=True, exist_ok=True)
+                path.write_text(source, encoding='utf-8')
+            (workspace / 'PROMPT.txt').write_text(
+                task['prompt'] + '\n' + '\n'.join(c['question'] for c in task['controls']) + '\n', encoding='utf-8')
+        env = {'PATH': os.defpath, 'HOME': str(workspace)}
         env.update(environment)
         env.pop('MEDAKA_MCP_LOG', None)
         env.pop('MEDAKA_MCP_TRACE', None)
@@ -90,7 +107,7 @@ def run_process(command, environment, transcript, limits):
         with tempfile.TemporaryFile() as stdout:
             try:
                 process = subprocess.Popen(command, stdin=subprocess.PIPE, stdout=stdout,
-                                           stderr=subprocess.DEVNULL, env=env, start_new_session=True)
+                                           stderr=subprocess.DEVNULL, env=env, cwd=workspace, start_new_session=True)
             except OSError:
                 process = None
             if process is not None:
@@ -119,10 +136,14 @@ def run_process(command, environment, transcript, limits):
                 else:
                     try:
                         responses = _responses(output, requests)
-                        if limits.get('response_callback') is not None:
-                            limits['response_callback'](responses)
                     except (ValueError, UnicodeError):
                         malformed = True
+                    else:
+                        try:
+                            if limits.get('response_callback') is not None:
+                                limits['response_callback'](responses)
+                        except Exception:
+                            observer_failure = True
         try:
             with open(trace, encoding='utf-8') as stream:
                 events = [json.loads(line) for line in stream]
@@ -132,8 +153,28 @@ def run_process(command, environment, transcript, limits):
         except (OSError, ValueError, UnicodeError):
             observer_failure = True
     if limits.get('trace', True) and status == 0:
-        calls = sum(1 for r in requests if isinstance(r, dict) and r.get('method') == 'tools/call')
-        if sum(1 for e in events if isinstance(e, dict) and e.get('event') == 'start') < calls:
+        known = {'medaka_check', 'medaka_type_at', 'medaka_symbols', 'medaka_definition',
+                 'medaka_references', 'medaka_fmt', 'medaka_lint', 'medaka_test'}
+        expected = []
+        for index, request in enumerate(requests):
+            if isinstance(request, list):
+                expected.append((str(index), 'protocol'))
+            elif isinstance(request, dict) and 'id' in request:
+                method = request.get('method')
+                if method == 'tools/call':
+                    params = request.get('params')
+                    name = params.get('name') if isinstance(params, dict) else None
+                    expected.append((str(index), name if isinstance(name, str) and name in known else 'unknown'))
+                elif isinstance(method, str) and method not in ('initialize', 'ping', 'shutdown', 'tools/list', 'notifications/cancelled', 'notifications/initialized'):
+                    expected.append((str(index), 'protocol'))
+        cancels = [str(i) for i, r in enumerate(requests)
+                   if isinstance(r, dict) and r.get('method') == 'notifications/cancelled']
+        observed_cancels = [e.get('request_id') for e in events
+                            if isinstance(e, dict) and e.get('event') == 'cancel_requested']
+        starts = [(e.get('request_id'), e.get('tool')) for e in events
+                  if isinstance(e, dict) and e.get('event') == 'start']
+        if starts != expected or observed_cancels != cancels or any(e.get('event') == 'protocol' or e.get('session_id') != 'collector' or e.get('classification') != 'probe'
+                                     for e in events if isinstance(e, dict)):
             observer_failure = True
     outcome = reconcile(events, status)['outcome']
     if outcome not in ('timeout', 'cancelled', 'startup_failure', 'crash'):
