@@ -166,6 +166,16 @@ def collector_problems(doc, jobs):
         return [f"compiler-soundness must have exactly one MCP collector privileged behavior step; found {len(matches)}"]
     step = matches[0]
     problems = []
+    if len(steps) < 2 or steps[1] is not step:
+        problems.append('compiler-soundness MCP collector step must immediately follow checkout')
+    checkout = steps[0] if steps and isinstance(steps[0], dict) else {}
+    checkout_with = checkout.get('with') or {}
+    if (set(checkout) - {'uses', 'with', '__line__'}
+            or checkout.get('uses') != 'actions/checkout@v4'
+            or not isinstance(checkout_with, dict)
+            or {k: str(v) for k, v in checkout_with.items() if k != '__line__'}
+               != {'fetch-depth': '0', 'filter': 'blob:none'}):
+        problems.append('compiler-soundness must begin with the pinned checkout configuration')
     command = 'sudo env MEDAKA_MCP_REQUIRE_AUTHORITY=1 sh test/diff_compiler_mcp_collector.sh'
     command_steps = [s for s in steps if isinstance(s, dict) and s.get('run') == command]
     if step.get('run') != command or len(command_steps) != 1:
