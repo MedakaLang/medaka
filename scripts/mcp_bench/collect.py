@@ -183,7 +183,7 @@ def run_process(command, environment, transcript, limits):
                                      for e in events if isinstance(e, dict)):
             observer_failure = True
     outcome = reconcile(events, status)['outcome']
-    if outcome not in ('timeout', 'cancelled', 'startup_failure', 'crash'):
+    if outcome not in ('timeout', 'cancelled', 'startup_failure', 'crash', 'observer_failure'):
         if observer_failure:
             outcome = 'observer_failure'
         elif malformed:

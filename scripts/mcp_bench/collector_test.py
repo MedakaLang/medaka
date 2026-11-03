@@ -130,6 +130,10 @@ print(json.dumps({'jsonrpc':'2.0','id':1,'result':{'cwd':os.getcwd(), 'secret':o
         self.assertEqual(set(task['files']) | {'PROMPT.txt'}, set(result['files']))
         self.assertNotIn(task['rubric'][0]['answer'], result['prompt'])
 
+    def test_supervisor_death_with_missing_response_is_observer_failure(self):
+        code = 'import os,signal; os.kill(os.getppid(), signal.SIGKILL)'
+        self.assertEqual('observer_failure', self.worker(code)['outcome'])
+
     def test_callback_failure_is_observer_failure(self):
         def fail(_):
             raise RuntimeError('grader failed')
