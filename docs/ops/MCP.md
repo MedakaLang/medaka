@@ -174,3 +174,15 @@ STRESS-TEST. If any tool crashes, returns a wrong or misleading answer, leaks
 a path, or is just awkward to call, file a GitHub issue with `ws:tooling`.
 This is exactly how the tools got hardened so far — a dogfood soak already
 found and fixed #298/#299/#300/#301/#331/#332. Keep the flywheel turning.
+
+### Completion telemetry
+
+Set `MEDAKA_MCP_TRACE` to a writable JSONL path to record start and finish
+metadata. Set `MEDAKA_MCP_TRACE_SESSION` to a collector-assigned session ID
+and `MEDAKA_MCP_TRACE_CLASS=probe` for probes; the default is `organic`.
+Events contain generated sequence IDs, tool names, outcome, monotonic duration
+and response size, but no arguments or response bodies. A cancel notification
+records a request, not confirmation that work stopped. An unmatched start
+indicates the process did not record a terminal event. Log write failures do not
+change protocol responses. `MEDAKA_MCP_LOG` independently enables legacy TSV
+logging, including raw arguments; the wrapper leaves it off by default.

@@ -1021,3 +1021,113 @@ test "mcp repeats symbols and local definition in one session" = withScratchDir
             ]
           _ => fail "expected four MCP responses"
       _ => fail "repeat fixture write failed")
+
+telemetryTranscript : String
+telemetryTranscript =
+  "{\"jsonrpc\":\"2.0\",\"id\":1,\"method\":\"tools/call\",\"params\":{\"name\":\"medaka_check\",\"arguments\":{\"source\":\"main = 1 +\"}}}\n{\"jsonrpc\":\"2.0\",\"id\":2,\"method\":\"tools/call\",\"params\":{\"name\":\"medaka_check\",\"arguments\":{}}}\n{\"jsonrpc\":\"2.0\",\"id\":3,\"method\":\"unknown_secret\"}\n{\"jsonrpc\":\"2.0\",\"method\":\"notifications/cancelled\",\"params\":{\"requestId\":1}}\n"
+
+telemetryCase : String -> <Exec, IO, FileRead> Expectation
+telemetryCase dir =
+  let input = "\{dir}/input"
+  let trace = "\{dir}/events"
+  match writeFile input telemetryTranscript
+    Err e => fail e
+    Ok _ =>
+      match (boundedVerbSeconds 30 "sh" [
+        "-c",
+        "MEDAKA_MCP_TRACE=\"$1\" MEDAKA_MCP_TRACE_SESSION=test MEDAKA_MCP_TRACE_CLASS=probe MEDAKA_ROOT=\"$2\" \"$3\" mcp < \"$4\"",
+        "sh", trace, medakaRoot, medakaBin, input
+      ])
+        Err e => fail e
+        Ok (code, out, _) =>
+          if code /= 0 then
+            fail "telemetry server failed"
+          else match readFile trace
+            Err e => fail e
+            Ok events => expectAll [
+              expectEqual 0 code,
+              expectTextContainsAll
+                ["P-PARSE", "missing argument", "Method not found"]
+                out,
+              expectTextContainsAll
+                [
+                  "\"outcome\":\"success\"", "\"outcome\":\"tool_error\"",
+                  "\"outcome\":\"protocol_error\"",
+                  "\"event\":\"cancel_requested\"",
+                  "\"classification\":\"probe\""
+                ]
+                events,
+              expectEqual
+                3
+                (length
+                  (filter
+                    (r => contains "\"event\":\"start\"" r)
+                    (split "\n" events))),
+              expectEqual
+                3
+                (length
+                  (filter
+                    (r => contains "\"event\":\"finish\"" r)
+                    (split "\n" events))),
+              expectFalse (contains "main = 1" events),
+              expectFalse (contains "unknown_secret" events),
+              expectFalse (contains "\"cancelled\"" events),
+            ]
+
+test "mcp telemetry records completion and cancellation requests without payloads" =
+  withScratchDir telemetryCase
+
+wrapperDefaultCase : String -> <Exec, IO, FileRead> Expectation
+wrapperDefaultCase dir =
+  match (boundedVerbSeconds 30 "sh" [
+    "-c",
+    "ln -s \"$2\" \"$1/medaka\"; ln -s \"$3/stdlib\" \"$1/stdlib\"; unset MEDAKA_MCP_LOG; CLAUDE_PROJECT_DIR=\"$1\" \"$3/scripts/medaka-mcp-wrapper.sh\" < /dev/null; test ! -e \"$1/.medaka-mcp.log\"",
+    "sh", dir, medakaBin, medakaRoot
+  ])
+    Err e => fail e
+    Ok (code, _, err) =>
+      if code == 0 then
+        expectEqual False (contains "no built binary" err)
+      else
+        fail "wrapper failed or created a default log: \{err}"
+
+test "wrapper does not enable raw logging by default" =
+  withScratchDir wrapperDefaultCase
+
+interruptedCase : String -> <Exec, IO, FileRead> Expectation
+interruptedCase dir =
+  let input = "\{dir}/input"
+  let trace = "\{dir}/events"
+  let request = jObject [
+    ("jsonrpc", JString "2.0"),
+    ("id", JInt 1),
+    ("method", JString "tools/call"),
+    (
+      "params",
+      jObject [
+        ("name", JString "medaka_check"),
+        ("arguments", jObject [("source", JString (repeat 100000 "x = 1\n"))]),
+      ],
+    ),
+  ]
+  match writeFile input (stringify request ++ "\n")
+    Err e => fail e
+    Ok _ =>
+      match (boundedVerbSeconds 30 "sh" [
+        "-c",
+        "MEDAKA_MCP_TRACE=\"$1\" MEDAKA_ROOT=\"$2\" \"$3\" mcp < \"$4\" > /dev/null 2>/dev/null & p=$!; i=0; while [ ! -s \"$1\" ] && kill -0 $p 2>/dev/null && [ $i -lt 500 ]; do i=$((i+1)); sleep .01; done; kill -9 $p 2>/dev/null || exit 1; wait $p 2>/dev/null; exit 0",
+        "sh", trace, medakaRoot, medakaBin, input
+      ])
+        Err e => fail e
+        Ok (code, _, err) =>
+          if code /= 0 then
+            fail "interruption failed: \{err}"
+          else match readFile trace
+            Err e => fail e
+            Ok events => expectAll [
+              expectTextContainsAll ["\"event\":\"start\""] events,
+              expectFalse (contains "\"event\":\"finish\"" events),
+            ]
+
+test "interrupted call leaves an unmatched start" =
+  withScratchDir interruptedCase

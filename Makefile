@@ -536,6 +536,7 @@ inlang-tools-lint-scope-test:
 ## compiler/tools/lint_fix_test.mdk is a `*_test.mdk` sibling outside every
 ## entry's import closure ([W-MODULE-BLIND]): the span-edit fix driver.
 inlang-tools-lint-fix-test:
+	./medaka test compiler/tools/mcp_telemetry_test.mdk
 	./medaka test compiler/tools/lint_fix_test.mdk
 
 ## compiler/tools/lint_hints_test.mdk is a `*_test.mdk` sibling outside every
