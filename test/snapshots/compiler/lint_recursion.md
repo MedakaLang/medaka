@@ -1,5 +1,5 @@
 # META
-source_lines=316
+source_lines=304
 stages=DESUGAR,MARK
 # SOURCE
 -- compiler/tools/lint_recursion.mdk — the shared reader of self-recursion: the
@@ -18,8 +18,9 @@ stages=DESUGAR,MARK
 -- and a call to a different function (mutual recursion) never match.
 --
 -- An argument's role is read against the parameter it derives from.  `p ++ e`
--- is an append onto `p`; `e ++ p` is a prepend, which costs the length of `e`
--- and not of `p`, so it is not an accumulator append.  A name bound by a
+-- is an append onto `p`; `e ++ p` is a prepend, which for a `List` costs only the
+-- length of `e` (a `String`, `Bytes` or `Array` copies both operands), so it is
+-- not reported as an accumulator append.  A name bound by a
 -- `match` arm over a parameter (`x :: rest` over `xs`) derives from that
 -- parameter.  No `types.*` import.
 
@@ -36,9 +37,8 @@ import frontend.ast.{
 import frontend.ast_walk.{childExprs}
 import list.{findMap, get}
 import tools.lint_calls.{lastSegment}
-import tools.lint_core.{Ctx(..)}
 import tools.lint_scope.{Binder(..), BinderKind(..), FileScopes, binderOf}
-import tools.lint_shared.{mentionsVar, unwrapLoc}
+import tools.lint_shared.{mentionsVar, unwrapLoc, varSite}
 
 -- One clause of a function: its name, its parameter patterns and where the
 -- name is bound: `None` at top level, else the span of the name token of the
@@ -71,11 +71,6 @@ public export data FoldVerdict =
 -- A name a parameter binds: the name, the parameter's position, and whether
 -- the name is the whole parameter and not a part of it.
 data Bound = Bound String Int Bool
-
--- The owner a `Ctx` names: the enclosing top-level declaration's clause.
-export
-ctxOwner : Ctx -> Owner
-ctxOwner ctx = Owner ctx.ctxDeclName ctx.ctxParams None
 
 -- The owners of an `ELetGroup` node, one per clause, each with its body.
 -- `[]` for any other node.
@@ -120,6 +115,7 @@ walk scopes owner env loc e = match spineOf e []
 
 -- The head of an application chain with its arguments.  The head keeps its
 -- `ELoc` wrappers, which carry the site the scope model is asked about.
+export
 spineOf : Expr -> List Expr -> (Expr, List Expr)
 spineOf e args = match unwrapLoc e
   EApp f a => spineOf f (a :: args)
@@ -202,14 +198,6 @@ isNamed : String -> Expr -> Bool
 isNamed name e = match unwrapLoc e
   EVar n => n == name
   _ => False
-
--- The span of the identifier a head stands on: the innermost `ELoc` over it.
-varSite : Expr -> Option Loc
-varSite (ELoc l inner) = match inner
-  EVar _ => Some l
-  ELoc _ _ => varSite inner
-  _ => None
-varSite _ = None
 
 bindsOwner : FileScopes -> Owner -> Option Loc -> Bool
 bindsOwner _ _ None = False
@@ -323,9 +311,8 @@ armAppends acc (Arm _ _ body) = tailAppends acc body
 (DUse false (UseGroup ("frontend" "ast_walk") ((mem "childExprs" false))))
 (DUse false (UseGroup ("list") ((mem "findMap" false) (mem "get" false))))
 (DUse false (UseGroup ("tools" "lint_calls") ((mem "lastSegment" false))))
-(DUse false (UseGroup ("tools" "lint_core") ((mem "Ctx" true))))
 (DUse false (UseGroup ("tools" "lint_scope") ((mem "Binder" true) (mem "BinderKind" true) (mem "FileScopes" false) (mem "binderOf" false))))
-(DUse false (UseGroup ("tools" "lint_shared") ((mem "mentionsVar" false) (mem "unwrapLoc" false))))
+(DUse false (UseGroup ("tools" "lint_shared") ((mem "mentionsVar" false) (mem "unwrapLoc" false) (mem "varSite" false))))
 (DData Public "Owner" () ((variant "Owner" (ConPos (TyCon "String") (TyApp (TyCon "List") (TyCon "Pat")) (TyApp (TyCon "Option") (TyCon "Loc"))))) ())
 (DData Public "ArgRole" () ((variant "Unchanged" (ConPos (TyCon "Int"))) (variant "Advanced" (ConPos (TyCon "Int"))) (variant "AppendedTo" (ConPos (TyCon "Int"))) (variant "PrependedTo" (ConPos (TyCon "Int"))) (variant "Fresh" (ConPos))) ())
 (DImpl true "Eq" ((TyCon "ArgRole")) () ((im "eq" ((PVar "__x") (PVar "__y")) (EMatch (ETuple (EVar "__x") (EVar "__y")) (arm (PTuple (PCon "Unchanged" (PVar "__a0")) (PCon "Unchanged" (PVar "__b0"))) () (EApp (EApp (EVar "eq") (EVar "__a0")) (EVar "__b0"))) (arm (PTuple (PCon "Advanced" (PVar "__a0")) (PCon "Advanced" (PVar "__b0"))) () (EApp (EApp (EVar "eq") (EVar "__a0")) (EVar "__b0"))) (arm (PTuple (PCon "AppendedTo" (PVar "__a0")) (PCon "AppendedTo" (PVar "__b0"))) () (EApp (EApp (EVar "eq") (EVar "__a0")) (EVar "__b0"))) (arm (PTuple (PCon "PrependedTo" (PVar "__a0")) (PCon "PrependedTo" (PVar "__b0"))) () (EApp (EApp (EVar "eq") (EVar "__a0")) (EVar "__b0"))) (arm (PTuple (PCon "Fresh") (PCon "Fresh")) () (EVar "True")) (arm (PTuple PWild PWild) () (EVar "False"))))))
@@ -335,8 +322,6 @@ armAppends acc (Arm _ _ body) = tailAppends acc body
 (DImpl true "Eq" ((TyCon "FoldVerdict")) () ((im "eq" ((PVar "__x") (PVar "__y")) (EMatch (ETuple (EVar "__x") (EVar "__y")) (arm (PTuple (PCon "NotAFold") (PCon "NotAFold")) () (EVar "True")) (arm (PTuple (PCon "FoldPlain") (PCon "FoldPlain")) () (EVar "True")) (arm (PTuple (PCon "FoldAppends") (PCon "FoldAppends")) () (EVar "True")) (arm (PTuple PWild PWild) () (EVar "False"))))))
 (DImpl true "Debug" ((TyCon "FoldVerdict")) () ((im "debug" ((PVar "__x")) (EMatch (EVar "__x") (arm (PCon "NotAFold") () (ELit (LString "NotAFold"))) (arm (PCon "FoldPlain") () (ELit (LString "FoldPlain"))) (arm (PCon "FoldAppends") () (ELit (LString "FoldAppends")))))))
 (DData Private "Bound" () ((variant "Bound" (ConPos (TyCon "String") (TyCon "Int") (TyCon "Bool")))) ())
-(DTypeSig true "ctxOwner" (TyFun (TyCon "Ctx") (TyCon "Owner")))
-(DFunDef false "ctxOwner" ((PVar "ctx")) (EApp (EApp (EApp (EVar "Owner") (EFieldAccess (EVar "ctx") "ctxDeclName")) (EFieldAccess (EVar "ctx") "ctxParams")) (EVar "None")))
 (DTypeSig true "letOwners" (TyFun (TyCon "Expr") (TyApp (TyCon "List") (TyTuple (TyCon "Owner") (TyCon "Expr")))))
 (DFunDef false "letOwners" ((PVar "e")) (EMatch (EApp (EVar "unwrapLoc") (EVar "e")) (arm (PCon "ELetGroup" (PVar "binds") PWild) () (EApp (EApp (EVar "flatMap") (EVar "bindOwners")) (EVar "binds"))) (arm PWild () (EListLit))))
 (DTypeSig false "bindOwners" (TyFun (TyCon "LetBind") (TyApp (TyCon "List") (TyTuple (TyCon "Owner") (TyCon "Expr")))))
@@ -353,7 +338,7 @@ armAppends acc (Arm _ _ body) = tailAppends acc body
 (DTypeSig false "walk" (TyFun (TyCon "FileScopes") (TyFun (TyCon "Owner") (TyFun (TyApp (TyCon "List") (TyCon "Bound")) (TyFun (TyApp (TyCon "Option") (TyCon "Loc")) (TyFun (TyCon "Expr") (TyApp (TyCon "List") (TyCon "SelfCall"))))))))
 (DFunDef false "walk" ((PVar "scopes") (PVar "owner") (PVar "env") PWild (PCon "ELoc" (PVar "l") (PVar "inner"))) (EApp (EApp (EApp (EApp (EApp (EVar "walk") (EVar "scopes")) (EVar "owner")) (EVar "env")) (EApp (EVar "Some") (EVar "l"))) (EVar "inner")))
 (DFunDef false "walk" ((PVar "scopes") (PVar "owner") (PVar "env") (PVar "loc") (PVar "e")) (EMatch (EApp (EApp (EVar "spineOf") (EVar "e")) (EListLit)) (arm (PTuple (PVar "hd") (PVar "args")) () (EIf (EApp (EApp (EApp (EApp (EVar "isSelfCall") (EVar "scopes")) (EVar "owner")) (EVar "hd")) (EVar "args")) (EBinOp "::" (EApp (EApp (EApp (EVar "SelfCall") (EVar "loc")) (EVar "e")) (EApp (EApp (EApp (EVar "roles") (EVar "env")) (ELit (LInt 0))) (EVar "args"))) (EApp (EApp (EVar "flatMap") (EApp (EApp (EApp (EApp (EVar "walk") (EVar "scopes")) (EVar "owner")) (EVar "env")) (EVar "loc"))) (EVar "args"))) (EMatch (EVar "args") (arm (PList) () (EApp (EApp (EApp (EApp (EApp (EVar "walkNode") (EVar "scopes")) (EVar "owner")) (EVar "env")) (EVar "loc")) (EVar "e"))) (arm PWild () (EBinOp "++" (EApp (EApp (EApp (EApp (EApp (EVar "walk") (EVar "scopes")) (EVar "owner")) (EVar "env")) (EVar "loc")) (EVar "hd")) (EApp (EApp (EVar "flatMap") (EApp (EApp (EApp (EApp (EVar "walk") (EVar "scopes")) (EVar "owner")) (EVar "env")) (EVar "loc"))) (EVar "args")))))))))
-(DTypeSig false "spineOf" (TyFun (TyCon "Expr") (TyFun (TyApp (TyCon "List") (TyCon "Expr")) (TyTuple (TyCon "Expr") (TyApp (TyCon "List") (TyCon "Expr"))))))
+(DTypeSig true "spineOf" (TyFun (TyCon "Expr") (TyFun (TyApp (TyCon "List") (TyCon "Expr")) (TyTuple (TyCon "Expr") (TyApp (TyCon "List") (TyCon "Expr"))))))
 (DFunDef false "spineOf" ((PVar "e") (PVar "args")) (EMatch (EApp (EVar "unwrapLoc") (EVar "e")) (arm (PCon "EApp" (PVar "f") (PVar "a")) () (EApp (EApp (EVar "spineOf") (EVar "f")) (EBinOp "::" (EVar "a") (EVar "args")))) (arm PWild () (ETuple (EVar "e") (EVar "args")))))
 (DTypeSig false "walkNode" (TyFun (TyCon "FileScopes") (TyFun (TyCon "Owner") (TyFun (TyApp (TyCon "List") (TyCon "Bound")) (TyFun (TyApp (TyCon "Option") (TyCon "Loc")) (TyFun (TyCon "Expr") (TyApp (TyCon "List") (TyCon "SelfCall"))))))))
 (DFunDef false "walkNode" ((PVar "scopes") (PVar "owner") (PVar "env") (PVar "loc") (PCon "EMatch" (PVar "scrut") (PVar "arms"))) (EBinOp "++" (EApp (EApp (EApp (EApp (EApp (EVar "walk") (EVar "scopes")) (EVar "owner")) (EVar "env")) (EVar "loc")) (EVar "scrut")) (EApp (EApp (EVar "flatMap") (EApp (EApp (EApp (EApp (EApp (EVar "walkArm") (EVar "scopes")) (EVar "owner")) (EVar "env")) (EVar "loc")) (EVar "scrut"))) (EVar "arms"))))
@@ -383,9 +368,6 @@ armAppends acc (Arm _ _ body) = tailAppends acc body
 (DFunDef false "isSelfCall" ((PVar "scopes") (PAs "owner" (PCon "Owner" (PVar "name") (PVar "ps") PWild)) (PVar "hd") (PVar "args")) (EBinOp "&&" (EBinOp "&&" (EApp (EApp (EVar "isNamed") (EVar "name")) (EVar "hd")) (EBinOp "==" (EApp (EVar "length") (EVar "args")) (EApp (EVar "length") (EVar "ps")))) (EApp (EApp (EApp (EVar "bindsOwner") (EVar "scopes")) (EVar "owner")) (EApp (EVar "varSite") (EVar "hd")))))
 (DTypeSig false "isNamed" (TyFun (TyCon "String") (TyFun (TyCon "Expr") (TyCon "Bool"))))
 (DFunDef false "isNamed" ((PVar "name") (PVar "e")) (EMatch (EApp (EVar "unwrapLoc") (EVar "e")) (arm (PCon "EVar" (PVar "n")) () (EBinOp "==" (EVar "n") (EVar "name"))) (arm PWild () (EVar "False"))))
-(DTypeSig false "varSite" (TyFun (TyCon "Expr") (TyApp (TyCon "Option") (TyCon "Loc"))))
-(DFunDef false "varSite" ((PCon "ELoc" (PVar "l") (PVar "inner"))) (EMatch (EVar "inner") (arm (PCon "EVar" PWild) () (EApp (EVar "Some") (EVar "l"))) (arm (PCon "ELoc" PWild PWild) () (EApp (EVar "varSite") (EVar "inner"))) (arm PWild () (EVar "None"))))
-(DFunDef false "varSite" (PWild) (EVar "None"))
 (DTypeSig false "bindsOwner" (TyFun (TyCon "FileScopes") (TyFun (TyCon "Owner") (TyFun (TyApp (TyCon "Option") (TyCon "Loc")) (TyCon "Bool")))))
 (DFunDef false "bindsOwner" (PWild PWild (PCon "None")) (EVar "False"))
 (DFunDef false "bindsOwner" ((PVar "scopes") (PCon "Owner" (PVar "name") PWild (PVar "kind")) (PCon "Some" (PVar "l"))) (EMatch (EApp (EApp (EVar "binderOf") (EVar "scopes")) (EVar "l")) (arm (PCon "None") () (EVar "False")) (arm (PCon "Some" (PVar "b")) () (EBinOp "&&" (EBinOp "==" (EFieldAccess (EVar "b") "binderName") (EVar "name")) (EApp (EApp (EVar "bindsAs") (EVar "kind")) (EVar "b"))))))
@@ -432,9 +414,8 @@ armAppends acc (Arm _ _ body) = tailAppends acc body
 (DUse false (UseGroup ("frontend" "ast_walk") ((mem "childExprs" false))))
 (DUse false (UseGroup ("list") ((mem "findMap" false) (mem "get" false))))
 (DUse false (UseGroup ("tools" "lint_calls") ((mem "lastSegment" false))))
-(DUse false (UseGroup ("tools" "lint_core") ((mem "Ctx" true))))
 (DUse false (UseGroup ("tools" "lint_scope") ((mem "Binder" true) (mem "BinderKind" true) (mem "FileScopes" false) (mem "binderOf" false))))
-(DUse false (UseGroup ("tools" "lint_shared") ((mem "mentionsVar" false) (mem "unwrapLoc" false))))
+(DUse false (UseGroup ("tools" "lint_shared") ((mem "mentionsVar" false) (mem "unwrapLoc" false) (mem "varSite" false))))
 (DData Public "Owner" () ((variant "Owner" (ConPos (TyCon "String") (TyApp (TyCon "List") (TyCon "Pat")) (TyApp (TyCon "Option") (TyCon "Loc"))))) ())
 (DData Public "ArgRole" () ((variant "Unchanged" (ConPos (TyCon "Int"))) (variant "Advanced" (ConPos (TyCon "Int"))) (variant "AppendedTo" (ConPos (TyCon "Int"))) (variant "PrependedTo" (ConPos (TyCon "Int"))) (variant "Fresh" (ConPos))) ())
 (DImpl true "Eq" ((TyCon "ArgRole")) () ((im "eq" ((PVar "__x") (PVar "__y")) (EMatch (ETuple (EVar "__x") (EVar "__y")) (arm (PTuple (PCon "Unchanged" (PVar "__a0")) (PCon "Unchanged" (PVar "__b0"))) () (EApp (EApp (EMethodRef "eq") (EVar "__a0")) (EVar "__b0"))) (arm (PTuple (PCon "Advanced" (PVar "__a0")) (PCon "Advanced" (PVar "__b0"))) () (EApp (EApp (EMethodRef "eq") (EVar "__a0")) (EVar "__b0"))) (arm (PTuple (PCon "AppendedTo" (PVar "__a0")) (PCon "AppendedTo" (PVar "__b0"))) () (EApp (EApp (EMethodRef "eq") (EVar "__a0")) (EVar "__b0"))) (arm (PTuple (PCon "PrependedTo" (PVar "__a0")) (PCon "PrependedTo" (PVar "__b0"))) () (EApp (EApp (EMethodRef "eq") (EVar "__a0")) (EVar "__b0"))) (arm (PTuple (PCon "Fresh") (PCon "Fresh")) () (EVar "True")) (arm (PTuple PWild PWild) () (EVar "False"))))))
@@ -444,8 +425,6 @@ armAppends acc (Arm _ _ body) = tailAppends acc body
 (DImpl true "Eq" ((TyCon "FoldVerdict")) () ((im "eq" ((PVar "__x") (PVar "__y")) (EMatch (ETuple (EVar "__x") (EVar "__y")) (arm (PTuple (PCon "NotAFold") (PCon "NotAFold")) () (EVar "True")) (arm (PTuple (PCon "FoldPlain") (PCon "FoldPlain")) () (EVar "True")) (arm (PTuple (PCon "FoldAppends") (PCon "FoldAppends")) () (EVar "True")) (arm (PTuple PWild PWild) () (EVar "False"))))))
 (DImpl true "Debug" ((TyCon "FoldVerdict")) () ((im "debug" ((PVar "__x")) (EMatch (EVar "__x") (arm (PCon "NotAFold") () (ELit (LString "NotAFold"))) (arm (PCon "FoldPlain") () (ELit (LString "FoldPlain"))) (arm (PCon "FoldAppends") () (ELit (LString "FoldAppends")))))))
 (DData Private "Bound" () ((variant "Bound" (ConPos (TyCon "String") (TyCon "Int") (TyCon "Bool")))) ())
-(DTypeSig true "ctxOwner" (TyFun (TyCon "Ctx") (TyCon "Owner")))
-(DFunDef false "ctxOwner" ((PVar "ctx")) (EApp (EApp (EApp (EVar "Owner") (EFieldAccess (EVar "ctx") "ctxDeclName")) (EFieldAccess (EVar "ctx") "ctxParams")) (EVar "None")))
 (DTypeSig true "letOwners" (TyFun (TyCon "Expr") (TyApp (TyCon "List") (TyTuple (TyCon "Owner") (TyCon "Expr")))))
 (DFunDef false "letOwners" ((PVar "e")) (EMatch (EApp (EVar "unwrapLoc") (EVar "e")) (arm (PCon "ELetGroup" (PVar "binds") PWild) () (EApp (EApp (EDictApp "flatMap") (EVar "bindOwners")) (EVar "binds"))) (arm PWild () (EListLit))))
 (DTypeSig false "bindOwners" (TyFun (TyCon "LetBind") (TyApp (TyCon "List") (TyTuple (TyCon "Owner") (TyCon "Expr")))))
@@ -462,7 +441,7 @@ armAppends acc (Arm _ _ body) = tailAppends acc body
 (DTypeSig false "walk" (TyFun (TyCon "FileScopes") (TyFun (TyCon "Owner") (TyFun (TyApp (TyCon "List") (TyCon "Bound")) (TyFun (TyApp (TyCon "Option") (TyCon "Loc")) (TyFun (TyCon "Expr") (TyApp (TyCon "List") (TyCon "SelfCall"))))))))
 (DFunDef false "walk" ((PVar "scopes") (PVar "owner") (PVar "env") PWild (PCon "ELoc" (PVar "l") (PVar "inner"))) (EApp (EApp (EApp (EApp (EApp (EVar "walk") (EVar "scopes")) (EVar "owner")) (EVar "env")) (EApp (EVar "Some") (EVar "l"))) (EVar "inner")))
 (DFunDef false "walk" ((PVar "scopes") (PVar "owner") (PVar "env") (PVar "loc") (PVar "e")) (EMatch (EApp (EApp (EVar "spineOf") (EVar "e")) (EListLit)) (arm (PTuple (PVar "hd") (PVar "args")) () (EIf (EApp (EApp (EApp (EApp (EVar "isSelfCall") (EVar "scopes")) (EVar "owner")) (EVar "hd")) (EVar "args")) (EBinOp "::" (EApp (EApp (EApp (EVar "SelfCall") (EVar "loc")) (EVar "e")) (EApp (EApp (EApp (EVar "roles") (EVar "env")) (ELit (LInt 0))) (EVar "args"))) (EApp (EApp (EDictApp "flatMap") (EApp (EApp (EApp (EApp (EVar "walk") (EVar "scopes")) (EVar "owner")) (EVar "env")) (EVar "loc"))) (EVar "args"))) (EMatch (EVar "args") (arm (PList) () (EApp (EApp (EApp (EApp (EApp (EVar "walkNode") (EVar "scopes")) (EVar "owner")) (EVar "env")) (EVar "loc")) (EVar "e"))) (arm PWild () (EBinOp "++" (EApp (EApp (EApp (EApp (EApp (EVar "walk") (EVar "scopes")) (EVar "owner")) (EVar "env")) (EVar "loc")) (EVar "hd")) (EApp (EApp (EDictApp "flatMap") (EApp (EApp (EApp (EApp (EVar "walk") (EVar "scopes")) (EVar "owner")) (EVar "env")) (EVar "loc"))) (EVar "args")))))))))
-(DTypeSig false "spineOf" (TyFun (TyCon "Expr") (TyFun (TyApp (TyCon "List") (TyCon "Expr")) (TyTuple (TyCon "Expr") (TyApp (TyCon "List") (TyCon "Expr"))))))
+(DTypeSig true "spineOf" (TyFun (TyCon "Expr") (TyFun (TyApp (TyCon "List") (TyCon "Expr")) (TyTuple (TyCon "Expr") (TyApp (TyCon "List") (TyCon "Expr"))))))
 (DFunDef false "spineOf" ((PVar "e") (PVar "args")) (EMatch (EApp (EVar "unwrapLoc") (EVar "e")) (arm (PCon "EApp" (PVar "f") (PVar "a")) () (EApp (EApp (EVar "spineOf") (EVar "f")) (EBinOp "::" (EVar "a") (EVar "args")))) (arm PWild () (ETuple (EVar "e") (EVar "args")))))
 (DTypeSig false "walkNode" (TyFun (TyCon "FileScopes") (TyFun (TyCon "Owner") (TyFun (TyApp (TyCon "List") (TyCon "Bound")) (TyFun (TyApp (TyCon "Option") (TyCon "Loc")) (TyFun (TyCon "Expr") (TyApp (TyCon "List") (TyCon "SelfCall"))))))))
 (DFunDef false "walkNode" ((PVar "scopes") (PVar "owner") (PVar "env") (PVar "loc") (PCon "EMatch" (PVar "scrut") (PVar "arms"))) (EBinOp "++" (EApp (EApp (EApp (EApp (EApp (EVar "walk") (EVar "scopes")) (EVar "owner")) (EVar "env")) (EVar "loc")) (EVar "scrut")) (EApp (EApp (EDictApp "flatMap") (EApp (EApp (EApp (EApp (EApp (EVar "walkArm") (EVar "scopes")) (EVar "owner")) (EVar "env")) (EVar "loc")) (EVar "scrut"))) (EVar "arms"))))
@@ -492,9 +471,6 @@ armAppends acc (Arm _ _ body) = tailAppends acc body
 (DFunDef false "isSelfCall" ((PVar "scopes") (PAs "owner" (PCon "Owner" (PVar "name") (PVar "ps") PWild)) (PVar "hd") (PVar "args")) (EBinOp "&&" (EBinOp "&&" (EApp (EApp (EVar "isNamed") (EVar "name")) (EVar "hd")) (EBinOp "==" (EApp (EMethodRef "length") (EVar "args")) (EApp (EMethodRef "length") (EVar "ps")))) (EApp (EApp (EApp (EVar "bindsOwner") (EVar "scopes")) (EVar "owner")) (EApp (EVar "varSite") (EVar "hd")))))
 (DTypeSig false "isNamed" (TyFun (TyCon "String") (TyFun (TyCon "Expr") (TyCon "Bool"))))
 (DFunDef false "isNamed" ((PVar "name") (PVar "e")) (EMatch (EApp (EVar "unwrapLoc") (EVar "e")) (arm (PCon "EVar" (PVar "n")) () (EBinOp "==" (EVar "n") (EVar "name"))) (arm PWild () (EVar "False"))))
-(DTypeSig false "varSite" (TyFun (TyCon "Expr") (TyApp (TyCon "Option") (TyCon "Loc"))))
-(DFunDef false "varSite" ((PCon "ELoc" (PVar "l") (PVar "inner"))) (EMatch (EVar "inner") (arm (PCon "EVar" PWild) () (EApp (EVar "Some") (EVar "l"))) (arm (PCon "ELoc" PWild PWild) () (EApp (EVar "varSite") (EVar "inner"))) (arm PWild () (EVar "None"))))
-(DFunDef false "varSite" (PWild) (EVar "None"))
 (DTypeSig false "bindsOwner" (TyFun (TyCon "FileScopes") (TyFun (TyCon "Owner") (TyFun (TyApp (TyCon "Option") (TyCon "Loc")) (TyCon "Bool")))))
 (DFunDef false "bindsOwner" (PWild PWild (PCon "None")) (EVar "False"))
 (DFunDef false "bindsOwner" ((PVar "scopes") (PCon "Owner" (PVar "name") PWild (PVar "kind")) (PCon "Some" (PVar "l"))) (EMatch (EApp (EApp (EVar "binderOf") (EVar "scopes")) (EVar "l")) (arm (PCon "None") () (EVar "False")) (arm (PCon "Some" (PVar "b")) () (EBinOp "&&" (EBinOp "==" (EFieldAccess (EVar "b") "binderName") (EVar "name")) (EApp (EApp (EVar "bindsAs") (EVar "kind")) (EVar "b"))))))

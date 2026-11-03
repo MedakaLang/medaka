@@ -12,7 +12,7 @@ import frontend.ast_walk.{
   declBodies,
 }
 import frontend.parser.{Positions(..)}
-import list.{findMap, get}
+import list.{findMap, get, nubBy}
 import string.{contains}
 import tools.lint_calls.{lastSegment}
 import tools.lint_core.{
@@ -37,6 +37,7 @@ import tools.lint_recursion.{
   SelfCall(..),
   letOwners,
   selfCalls,
+  spineOf,
 }
 import tools.lint_shared.{
   firstLoc, mentionsVar, ruleNameResliceInLoop, unwrapLoc
@@ -49,9 +50,9 @@ rule =
     RuleMeta {
       name = ruleNameResliceInLoop,
       summary =
-        "a loop parameter re-sliced from its start on every step: quadratic. Walk a `StrCursor`, or convert with `toChars` once",
+        "a loop parameter re-sliced from its start on every step: quadratic on some engines and access patterns. Walk a `StrCursor`, or convert with `toChars` once",
       doc =
-        "A self-recursive loop that passes a `String`, `Array` or `Bytes` parameter on unchanged while another argument advances, and slices that parameter by the advancing index, starts from the front of the parameter on every step. The rule reports the String externs `stringSlice` and `charAtStr` on such a parameter, and `slice`, `sliceClamped`, `drop` and `a.[lo..hi]` on a parameter whose declared type, in the enclosing top-level signature, is `String`, `Array` or `Bytes`. A `List` parameter is skipped (`drop` on a list is the loop itself), and so is a slice whose bounds mention no advancing name. A partial application and a call to a different function (mutual recursion) are not self-calls. `stringSliceBytes` is not reported: it copies only the piece and does not walk the string.\n\nFor a `String`, `stringSlice` copies the tail it is asked for and, on a string with non-ASCII text, walks from the front to find the offset, so the loop is quadratic in the length of the input. Walk a `StrCursor` (`startCursor`, `nextChar`, `sliceBetween`), or convert once with `toChars` and index the `Array`. A loop whose bound is small and fixed can carry a `-- lint-disable-next-line rule-reslice-in-loop` with the bound as its reason.\n\nBefore:\n  go s i = if i < stringLength s then charAtStr s i :: go s (i + 1) else []\nAfter:\n  go cs i = if i < length cs then cs.[i] :: go cs (i + 1) else []  -- with `cs = toChars s`",
+        "A self-recursive loop that passes a `String`, `Array` or `Bytes` parameter on unchanged while another argument advances, and slices that parameter by the advancing index, starts from the front of the parameter on every step. The rule reports the String externs `stringSlice` and `charAtStr` on such a parameter, and `slice`, `sliceClamped`, `drop` and `a.[lo..hi]` on a parameter whose declared type, in the enclosing top-level signature, is `String`, `Array` or `Bytes`. A `List` parameter is skipped (`drop` on a list is the loop itself), and so is a slice whose bounds mention no advancing name. A partial application and a call to a different function (mutual recursion) are not self-calls. `stringSliceBytes` is not reported: it copies only the piece and does not walk the string.\n\nFor a `String`, `stringSlice` and `charAtStr` locate their offset from the front of the string. On the native runtime a forward scan of one string is linear, because the runtime keeps a cursor cache for one string; the loop is quadratic when it alternates between two strings, goes backward or slices the tail, and on the WasmGC engine, which has no cache, even a forward scan is quadratic. Walk a `StrCursor` (`startCursor`, `nextChar`, `sliceBetween`), or convert once with `toChars` and index the `Array`. A loop whose bound is small and fixed can carry a `-- lint-disable-next-line rule-reslice-in-loop` with the bound as its reason.\n\nBefore:\n  go s i = if i < stringLength s then stringSlice i (i + 1) s :: go s (i + 1) else []\nAfter:\n  go cs i = if i < length cs then cs.[i] :: go cs (i + 1) else []  -- with `cs = toChars s`",
       category = Perf,
       scope = Universal,
       ratchet = Gated,
@@ -152,19 +153,14 @@ usesIn loc (ELetGroup _ body) = usesIn loc body
 usesIn loc e = useHere loc e ++ flatMap (usesIn loc) (childExprs e)
 
 useHere : Option Loc -> Expr -> List Use
-useHere loc (EApp f a) = match spine f [a]
+useHere loc (EApp f a) = match spineOf f [a]
   (hd, args) => callUse loc hd args
-useHere loc (EBinOp "|>" l r _) = match spine r []
+useHere loc (EBinOp "|>" l r _) = match spineOf r []
   (hd, args) => callUse loc hd (args ++ [l])
 useHere loc (ESlice c lo hi _) = match unwrapLoc c
   EVar v => [Use (orElseLoc (firstLoc c) loc) Polymorphic "a.[..]" v [lo, hi]]
   _ => []
 useHere _ _ = []
-
-spine : Expr -> List Expr -> (Expr, List Expr)
-spine e args = match unwrapLoc e
-  EApp f a => spine f (a :: args)
-  _ => (e, args)
 
 callUse : Option Loc -> Expr -> List Expr -> List Use
 callUse loc hd args = match unwrapLoc hd
@@ -176,7 +172,7 @@ calleeUse loc "stringSlice" [lo, hi, s] =
   containerUse loc Extern "stringSlice" s [lo, hi]
 calleeUse loc "charAtStr" [s, i] = containerUse loc Extern "charAtStr" s [i]
 calleeUse loc "drop" [n, c] = containerUse loc Polymorphic "drop" c [n]
-calleeUse loc "slice" [lo, hi, c] =
+calleeUse loc "slice" [c, lo, hi] =
   containerUse loc Polymorphic "slice" c [lo, hi]
 calleeUse loc "sliceClamped" [lo, hi, c] =
   containerUse loc Polymorphic "sliceClamped" c [lo, hi]
@@ -270,13 +266,10 @@ formApplies types Polymorphic i = match types i
 
 -- One finding per span.
 dedupe : List Finding -> List Finding
-dedupe fs = dedupeGo [] fs
+dedupe = nubBy sameSpan
 
-dedupeGo : List (Option Loc) -> List Finding -> List Finding
-dedupeGo _ [] = []
-dedupeGo seen ((f@(Finding { loc = l, ... })) :: rest)
-  | any (== l) seen = dedupeGo seen rest
-  | otherwise = f :: dedupeGo (l :: seen) rest
+sameSpan : Finding -> Finding -> Bool
+sameSpan (Finding { loc = a, ... }) (Finding { loc = b, ... }) = a == b
 
 -- ── findings ─────────────────────────────────────────────────────────────────
 
@@ -291,12 +284,25 @@ report loc msg = Finding {
 
 message : Form -> String -> String -> Option String -> String
 message form callee v ty =
-  "`\{callee}` on `\{v}`, which the loop passes on unchanged while another argument advances, starts from the front of `\{v}` on every step, so the loop is quadratic. \{fixTarget form ty}"
+  "`\{callee}` on `\{v}`, which the loop passes on unchanged while another argument advances, starts from the front of `\{v}` on every step. \{costNote form ty} \{fixTarget form ty}"
+
+-- A String is located by walking from its front, so its cost depends on the
+-- engine; an Array or Bytes slice copies the piece on every engine.
+costNote : Form -> Option String -> String
+costNote Extern _ = stringCost
+costNote Polymorphic (Some "String") = stringCost
+costNote Polymorphic _ = "The loop is quadratic."
+
+stringCost : String
+stringCost =
+  "The loop is quadratic on the WasmGC engine and, on the native runtime, when it alternates between strings, goes backward or slices the tail."
 
 fixTarget : Form -> Option String -> String
-fixTarget Extern _ =
-  "Walk a `StrCursor` (`startCursor`, `nextChar`, `sliceBetween`), or convert with `toChars` once and index the `Array`"
-fixTarget Polymorphic (Some "String") =
-  "Walk a `StrCursor` (`startCursor`, `nextChar`, `sliceBetween`), or convert with `toChars` once and index the `Array`"
+fixTarget Extern _ = stringFix
+fixTarget Polymorphic (Some "String") = stringFix
 fixTarget Polymorphic _ =
   "Keep the offset and index the value (`a.[i]`) instead of slicing it again"
+
+stringFix : String
+stringFix =
+  "Walk a `StrCursor` (`startCursor`, `nextChar`, `sliceBetween`), or convert with `toChars` once and index the `Array`"

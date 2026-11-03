@@ -1,5 +1,16 @@
 -- Fixture for rule-reslice-in-loop.
 
+import array as A
+import array.{drop}
+import bytes as B
+import list as L
+import string.{toChars}
+import test.{expectEqual}
+
+-- `string` does not export its `charAtStr`; the rule matches the name.
+charAtStr : String -> Int -> Char
+charAtStr s i = optionOr ' ' (A.get i (toChars s))
+
 -- a String sliced at an advancing index while it is passed on unchanged
 words : String -> Int -> List String
 words s i
@@ -58,11 +69,24 @@ sums arr n
   | otherwise = sum (drop n arr) + sums arr (n + 1)
 
 -- a Bytes sliced at an advancing offset
-byteSums : Bytes -> Int -> Int
+byteSums : B.Bytes -> Int -> Int
 byteSums b n
-  | n >= length b = 0
+  | n >= B.length b = 0
   -- expect-next-line rule-reslice-in-loop unfixed
-  | otherwise = length (slice n (n + 2) b) + byteSums b (n + 1)
+  | otherwise = B.length (slice b n (n + 2)) + byteSums b (n + 1)
+
+-- an Array sliced at an advancing offset
+arraySums : Array Int -> Int -> Int
+arraySums arr n
+  | n >= length arr = 0
+  -- expect-next-line rule-reslice-in-loop unfixed
+  | otherwise = sum (slice arr n (n + 2)) + arraySums arr (n + 1)
+
+-- a slice whose bounds mention no advancing name is a fixed slice
+fixedBytes : B.Bytes -> Int -> Int
+fixedBytes b n
+  | n >= B.length b = 0
+  | otherwise = B.length (slice b 0 2) + fixedBytes b (n + 1)
 
 -- the slice sugar on a String
 sugar : String -> Int -> List String
@@ -75,7 +99,7 @@ sugar s i
 listLoop : List Int -> Int -> Int
 listLoop xs n
   | n >= length xs = 0
-  | otherwise = sum (drop n xs) + listLoop xs (n + 1)
+  | otherwise = sum (L.drop n xs) + listLoop xs (n + 1)
 
 -- a test body runs over fixed data
 test "reslice in a test" =
