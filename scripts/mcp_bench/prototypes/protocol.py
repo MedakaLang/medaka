@@ -33,6 +33,8 @@ def validate_sequence(messages):
     offered = None
     worker = None
     replacing = None
+    workspaces = {}
+    opening = None
     closed = False
     for msg in messages:
         if not isinstance(msg, dict) or closed:
@@ -60,7 +62,7 @@ def validate_sequence(messages):
             text(msg["worker"])
             worker, initialized = msg["worker"], True
         elif kind in ("request", "replace"):
-            fields = {"type", "id", "context", "operation"} if kind == "request" else {"type", "id", "artifact"}
+            fields = {"type", "id", "context", "operation"} if kind == "request" else {"type", "id", "workspace", "artifact"}
             obj(msg, fields)
             if not initialized or pending is not None:
                 raise ValueError("session not ready or request in flight")
@@ -72,15 +74,22 @@ def validate_sequence(messages):
                 obj(msg["context"], IDENTITIES)
                 for item in msg["context"].values():
                     identity(item)
+                workspace = msg["context"]["workspace"]["value"]
+                if workspace is None:
+                    raise ValueError("workspace unavailable")
                 obj(msg["operation"], {"name", "arguments"})
                 text(msg["operation"]["name"])
                 if not isinstance(msg["operation"]["arguments"], dict):
                     raise ValueError("invalid arguments")
+                opening = workspace if msg["operation"]["name"] == "openWorkspace" else None
             else:
+                text(msg["workspace"])
+                if msg["workspace"] not in workspaces:
+                    raise ValueError("unknown workspace")
                 obj(msg["artifact"], {"id", "digest"})
                 text(msg["artifact"]["id"])
                 text(msg["artifact"]["digest"])
-                replacing = msg["artifact"]["id"]
+                replacing = (msg["workspace"], msg["artifact"]["id"])
             pending = (kind, msg["id"])
         elif kind == "response":
             obj(msg, {"type", "id", "status", "result", "error"})
@@ -92,19 +101,27 @@ def validate_sequence(messages):
                     raise ValueError("error has result")
             elif msg["error"] is not None or msg["result"] is None:
                 raise ValueError("response needs result only")
+            if opening is not None and msg["status"] == "complete":
+                if not isinstance(msg["result"], dict):
+                    raise ValueError("open needs worker identity")
+                text(msg["result"].get("worker"))
+                workspaces[opening] = msg["result"]["worker"]
+            opening = None
             pending = None
         elif kind == "replacement":
-            obj(msg, {"type", "id", "status", "worker", "error"})
+            obj(msg, {"type", "id", "workspace", "status", "worker", "error"})
             if pending != ("replace", msg["id"]) or msg["status"] not in ("switched", "failed"):
                 raise ValueError("unexpected replacement")
+            if msg["workspace"] != replacing[0]:
+                raise ValueError("replacement workspace mismatch")
             if msg["status"] == "failed":
                 text(msg["error"])
-                if msg["worker"] != worker:
+                if msg["worker"] != workspaces[replacing[0]]:
                     raise ValueError("failed replacement changed worker")
             else:
-                if msg["error"] is not None or msg["worker"] != replacing:
+                if msg["error"] is not None or msg["worker"] != replacing[1]:
                     raise ValueError("invalid replacement switch")
-                worker = replacing
+                workspaces[replacing[0]] = replacing[1]
             pending, replacing = None, None
         elif kind == "shutdown":
             obj(msg, {"type"})
