@@ -2,6 +2,7 @@
 import hashlib
 import json
 import os
+import signal
 from pathlib import Path
 import subprocess
 import sys
@@ -23,7 +24,8 @@ class Worker:
         self.log = tempfile.TemporaryFile(mode='w+')
         try:
             self.process = subprocess.Popen([path, 'mcp'], cwd=root, stdin=subprocess.PIPE,
-                                            stdout=subprocess.PIPE, stderr=self.log, text=True)
+                                            stdout=subprocess.PIPE, stderr=self.log, text=True,
+                                            start_new_session=True)
         except Exception:
             self.log.close()
             raise
@@ -31,7 +33,7 @@ class Worker:
             reply = self.call({'jsonrpc': '2.0', 'id': 0, 'method': 'initialize',
                                'params': {'protocolVersion': '2024-11-05', 'capabilities': {},
                                           'clientInfo': {'name': 'prototype', 'version': '1'}}})
-            if reply.get('result', {}).get('protocolVersion') != '2024-11-05':
+            if not isinstance(reply['result'], dict) or reply['result'].get('protocolVersion') != '2024-11-05':
                 raise ValueError('incompatible MCP version')
         except Exception:
             self.close()
@@ -45,18 +47,35 @@ class Worker:
         line = self.process.stdout.readline()
         if not line:
             raise RuntimeError('worker exited')
-        return json.loads(line)
+        reply = json.loads(line)
+        if (not isinstance(reply, dict) or reply.get('jsonrpc') != '2.0'
+                or type(reply.get('id')) is not type(message['id'])
+                or reply.get('id') != message['id']
+                or ('result' in reply) == ('error' in reply)):
+            raise ValueError('invalid JSON-RPC response')
+        if 'error' in reply:
+            error = reply['error']
+            if (not isinstance(error, dict) or type(error.get('code')) is not int
+                    or not isinstance(error.get('message'), str)):
+                raise ValueError('invalid JSON-RPC error')
+            raise RuntimeError('worker error: ' + error['message'])
+        return reply
 
     def close(self):
-        if self.process.poll() is None:
-            self.process.stdin.close()
-            try:
-                self.process.wait(timeout=5)
-            except subprocess.TimeoutExpired:
-                self.process.kill()
-                self.process.wait()
-        else:
-            self.process.stdin.close()
+        self.process.stdin.close()
+        try:
+            os.killpg(self.process.pid, signal.SIGTERM)
+        except ProcessLookupError:
+            pass
+        try:
+            self.process.wait(timeout=5)
+        except subprocess.TimeoutExpired:
+            pass
+        try:
+            os.killpg(self.process.pid, signal.SIGKILL)
+        except ProcessLookupError:
+            pass
+        self.process.wait()
         self.process.stdout.close()
         self.log.close()
 
@@ -68,8 +87,11 @@ class Supervisor:
     def open(self, name, root, artifact):
         if name in self.workspaces:
             raise ValueError('duplicate workspace')
-        worker = Worker(artifact, os.path.realpath(root))
-        self.workspaces[name] = (os.path.realpath(root), worker)
+        root = os.path.realpath(root)
+        if any(existing == root for existing, _ in self.workspaces.values()):
+            raise ValueError('duplicate canonical workspace root')
+        worker = Worker(artifact, root)
+        self.workspaces[name] = (root, worker)
         return self.status(name)
 
     def status(self, name):
@@ -84,6 +106,12 @@ class Supervisor:
         data = arguments['source'].encode() if 'source' in arguments else (Path(root) / arguments['file']).read_bytes()
         reply = worker.call({'jsonrpc': '2.0', 'id': request_id, 'method': 'tools/call',
                              'params': {'name': 'medaka_check', 'arguments': arguments}})
+        result = reply['result']
+        if (not isinstance(result, dict) or type(result.get('isError')) is not bool
+                or not isinstance(result.get('content'), list) or not result['content']
+                or any(not isinstance(item, dict) or item.get('type') != 'text'
+                       or not isinstance(item.get('text'), str) for item in result['content'])):
+            raise ValueError('invalid MCP tool result')
         return {'semantic': reply, 'snapshot': {'value': hashlib.sha256(data).hexdigest(), 'provenance': 'inferred'},
                 'profile': {'value': None, 'provenance': 'unavailable'}}
 

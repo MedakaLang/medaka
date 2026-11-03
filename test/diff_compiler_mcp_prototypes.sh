@@ -1,5 +1,5 @@
 #!/bin/sh
-# shell-because: external-harness The subject is the independent Python subprocess and installed artifact experiment.
+# shell-because: external-harness The subject is scripts/mcp_bench/prototypes/exercise.py and its installed subprocess experiment.
 set -eu
 root=$(CDPATH= cd -- "$(dirname "$0")/.." && pwd)
 tmp=$(mktemp -d)

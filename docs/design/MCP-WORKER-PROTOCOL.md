@@ -114,3 +114,5 @@ interface or proof of implementation. The report specifies a bounded follow-up;
 #4770 remains open and actual macOS evidence is deferred to #4820. Existing MCP
 clients and wrapper behavior remain in place until a documented compatible
 migration is implemented.
+
+The Python prototype validates JSON-RPC envelopes and MCP tool-result shape, but a protocol-conformant worker can still lie about semantics. It terminates the worker process group on replacement or shutdown, including when the direct worker has exited. Detached descendants and process-group escape remain unresolved; this is not total containment. Duplicate canonical roots are rejected, but complete workspace identity remains unavailable.
