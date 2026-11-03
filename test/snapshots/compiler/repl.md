@@ -1,5 +1,5 @@
 # META
-source_lines=498
+source_lines=492
 stages=DESUGAR,MARK
 # SOURCE
 -- Self-hosted Medaka REPL (Stage 4, Phase B.9)
@@ -54,6 +54,7 @@ import eval.eval.{
   force,
 }
 import support.util.{contains, startsWith, stringTrim}
+import string.{split as splitString}
 
 -- ── Session state ─────────────────────────────────────────────────────────
 accumulatedRef : Ref (List Decl)
@@ -492,14 +493,7 @@ dispatchInput src =
 
 -- Split a string on "\n".
 stringSplitNewlines : String -> List String
-stringSplitNewlines s = stringSplitOn "\n" s 0 0 (stringLength s)
-
-stringSplitOn : String -> String -> Int -> Int -> Int -> List String
-stringSplitOn sep s start cur len
-  | cur >= len = [stringSlice start len s]
-  | stringSlice cur (cur + 1) s == sep =
-    stringSlice start cur s :: stringSplitOn sep s (cur + 1) (cur + 1) len
-  | otherwise = stringSplitOn sep s start (cur + 1) len
+stringSplitNewlines s = splitString "\n" s
 # DESUGAR
 (DUse false (UseGroup ("frontend" "ast") ((mem "Decl" true) (mem "DataVis" true) (mem "IfaceMethod" true))))
 (DUse false (UseGroup ("frontend" "lexer") ((mem "Token" true) (mem "tokenize" false))))
@@ -514,6 +508,7 @@ stringSplitOn sep s start cur len
 (DUse false (UseGroup ("types" "program_facts") ((mem "factsOfElab" false))))
 (DUse false (UseGroup ("eval" "eval") ((mem "Value" true) (mem "evalOneRootEnvFacts" false) (mem "testCapableExterns" false) (mem "funNamesOf" false) (mem "ppValue" false) (mem "lookupBinding" false) (mem "force" false))))
 (DUse false (UseGroup ("support" "util") ((mem "contains" false) (mem "startsWith" false) (mem "stringTrim" false))))
+(DUse false (UseGroup ("string") ((mem "split" false "splitString"))))
 (DTypeSig false "accumulatedRef" (TyApp (TyCon "Ref") (TyApp (TyCon "List") (TyCon "Decl"))))
 (DFunDef false "accumulatedRef" () (EApp (EVar "Ref") (EListLit)))
 (DTypeSig false "knownNamesRef" (TyApp (TyCon "Ref") (TyApp (TyCon "List") (TyCon "String"))))
@@ -655,9 +650,7 @@ stringSplitOn sep s start cur len
 (DTypeSig false "dispatchInput" (TyFun (TyCon "String") (TyEffect ("IO") None (TyCon "Unit"))))
 (DFunDef false "dispatchInput" ((PVar "src")) (EBlock (DoLet false false (PVar "trimmed") (EApp (EVar "stringTrim") (EVar "src"))) (DoExpr (EIf (EBinOp "==" (EVar "trimmed") (ELit (LString ""))) (ELit LUnit) (EIf (EApp (EVar "isDecl") (EVar "src")) (EApp (EVar "processDeclInput") (EVar "src")) (EApp (EVar "processExprInput") (EVar "src")))))))
 (DTypeSig false "stringSplitNewlines" (TyFun (TyCon "String") (TyApp (TyCon "List") (TyCon "String"))))
-(DFunDef false "stringSplitNewlines" ((PVar "s")) (EApp (EApp (EApp (EApp (EApp (EVar "stringSplitOn") (ELit (LString "\n"))) (EVar "s")) (ELit (LInt 0))) (ELit (LInt 0))) (EApp (EVar "stringLength") (EVar "s"))))
-(DTypeSig false "stringSplitOn" (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyApp (TyCon "List") (TyCon "String"))))))))
-(DFunDef false "stringSplitOn" ((PVar "sep") (PVar "s") (PVar "start") (PVar "cur") (PVar "len")) (EIf (EBinOp ">=" (EVar "cur") (EVar "len")) (EListLit (EApp (EApp (EApp (EVar "stringSlice") (EVar "start")) (EVar "len")) (EVar "s"))) (EIf (EBinOp "==" (EApp (EApp (EApp (EVar "stringSlice") (EVar "cur")) (EBinOp "+" (EVar "cur") (ELit (LInt 1)))) (EVar "s")) (EVar "sep")) (EBinOp "::" (EApp (EApp (EApp (EVar "stringSlice") (EVar "start")) (EVar "cur")) (EVar "s")) (EApp (EApp (EApp (EApp (EApp (EVar "stringSplitOn") (EVar "sep")) (EVar "s")) (EBinOp "+" (EVar "cur") (ELit (LInt 1)))) (EBinOp "+" (EVar "cur") (ELit (LInt 1)))) (EVar "len"))) (EIf (EVar "otherwise") (EApp (EApp (EApp (EApp (EApp (EVar "stringSplitOn") (EVar "sep")) (EVar "s")) (EVar "start")) (EBinOp "+" (EVar "cur") (ELit (LInt 1)))) (EVar "len")) (EApp (EVar "__fallthrough__") (ELit LUnit))))))
+(DFunDef false "stringSplitNewlines" ((PVar "s")) (EApp (EApp (EVar "splitString") (ELit (LString "\n"))) (EVar "s")))
 # MARK
 (DUse false (UseGroup ("frontend" "ast") ((mem "Decl" true) (mem "DataVis" true) (mem "IfaceMethod" true))))
 (DUse false (UseGroup ("frontend" "lexer") ((mem "Token" true) (mem "tokenize" false))))
@@ -672,6 +665,7 @@ stringSplitOn sep s start cur len
 (DUse false (UseGroup ("types" "program_facts") ((mem "factsOfElab" false))))
 (DUse false (UseGroup ("eval" "eval") ((mem "Value" true) (mem "evalOneRootEnvFacts" false) (mem "testCapableExterns" false) (mem "funNamesOf" false) (mem "ppValue" false) (mem "lookupBinding" false) (mem "force" false))))
 (DUse false (UseGroup ("support" "util") ((mem "contains" false) (mem "startsWith" false) (mem "stringTrim" false))))
+(DUse false (UseGroup ("string") ((mem "split" false "splitString"))))
 (DTypeSig false "accumulatedRef" (TyApp (TyCon "Ref") (TyApp (TyCon "List") (TyCon "Decl"))))
 (DFunDef false "accumulatedRef" () (EApp (EVar "Ref") (EListLit)))
 (DTypeSig false "knownNamesRef" (TyApp (TyCon "Ref") (TyApp (TyCon "List") (TyCon "String"))))
@@ -813,6 +807,4 @@ stringSplitOn sep s start cur len
 (DTypeSig false "dispatchInput" (TyFun (TyCon "String") (TyEffect ("IO") None (TyCon "Unit"))))
 (DFunDef false "dispatchInput" ((PVar "src")) (EBlock (DoLet false false (PVar "trimmed") (EApp (EVar "stringTrim") (EVar "src"))) (DoExpr (EIf (EBinOp "==" (EVar "trimmed") (ELit (LString ""))) (ELit LUnit) (EIf (EApp (EVar "isDecl") (EVar "src")) (EApp (EVar "processDeclInput") (EVar "src")) (EApp (EVar "processExprInput") (EVar "src")))))))
 (DTypeSig false "stringSplitNewlines" (TyFun (TyCon "String") (TyApp (TyCon "List") (TyCon "String"))))
-(DFunDef false "stringSplitNewlines" ((PVar "s")) (EApp (EApp (EApp (EApp (EApp (EVar "stringSplitOn") (ELit (LString "\n"))) (EVar "s")) (ELit (LInt 0))) (ELit (LInt 0))) (EApp (EVar "stringLength") (EVar "s"))))
-(DTypeSig false "stringSplitOn" (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyApp (TyCon "List") (TyCon "String"))))))))
-(DFunDef false "stringSplitOn" ((PVar "sep") (PVar "s") (PVar "start") (PVar "cur") (PVar "len")) (EIf (EBinOp ">=" (EVar "cur") (EVar "len")) (EListLit (EApp (EApp (EApp (EVar "stringSlice") (EVar "start")) (EVar "len")) (EVar "s"))) (EIf (EBinOp "==" (EApp (EApp (EApp (EVar "stringSlice") (EVar "cur")) (EBinOp "+" (EVar "cur") (ELit (LInt 1)))) (EVar "s")) (EVar "sep")) (EBinOp "::" (EApp (EApp (EApp (EVar "stringSlice") (EVar "start")) (EVar "cur")) (EVar "s")) (EApp (EApp (EApp (EApp (EApp (EVar "stringSplitOn") (EVar "sep")) (EVar "s")) (EBinOp "+" (EVar "cur") (ELit (LInt 1)))) (EBinOp "+" (EVar "cur") (ELit (LInt 1)))) (EVar "len"))) (EIf (EVar "otherwise") (EApp (EApp (EApp (EApp (EApp (EVar "stringSplitOn") (EVar "sep")) (EVar "s")) (EVar "start")) (EBinOp "+" (EVar "cur") (ELit (LInt 1)))) (EVar "len")) (EApp (EVar "__fallthrough__") (ELit LUnit))))))
+(DFunDef false "stringSplitNewlines" ((PVar "s")) (EApp (EApp (EVar "splitString") (ELit (LString "\n"))) (EVar "s")))

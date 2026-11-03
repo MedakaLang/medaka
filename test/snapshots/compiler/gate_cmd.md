@@ -1,5 +1,5 @@
 # META
-source_lines=3761
+source_lines=3754
 stages=DESUGAR,MARK
 # SOURCE
 {- gate_cmd.mdk — `medaka gate`, the gate-registry driver (#2176, epic #2182).
@@ -674,14 +674,7 @@ firstLineOf s = match splitNl s
   l :: _ => l
 
 substrIn : String -> String -> Bool
-substrIn needle hay =
-  substrAt needle hay 0 (stringLength hay - stringLength needle)
-
-substrAt : String -> String -> Int -> Int -> Bool
-substrAt needle hay i last
-  | i > last = False
-  | stringSlice i (i + stringLength needle) hay == needle = True
-  | otherwise = substrAt needle hay (i + 1) last
+substrIn needle hay = strContains needle hay
 
 -- The invocation.  `runCommand` takes no environment and Medaka has no setEnv,
 -- so the environment goes through POSIX `env` — the same device
@@ -1514,21 +1507,21 @@ nameLeadOk c
   | c == "/" = False
   | otherwise = nameCharOk c
 
-nameCharsOk : String -> Int -> Int -> Bool
-nameCharsOk s i n
+nameCharsOk : Array Char -> Int -> Int -> Bool
+nameCharsOk cs i n
   | i >= n = True
-  | nameCharOk (stringSlice i (i + 1) s) = nameCharsOk s (i + 1) n
+  | nameCharOk (charToStr (arrayGetUnsafe i cs)) = nameCharsOk cs (i + 1) n
   | otherwise = False
 
 -- The first character outside the set, as `<char>` at 1-based position — the
 -- message has to name WHICH byte, or the reader is left eyeballing a string
 -- whose whole problem is that it contains something invisible.
-firstBadChar : String -> Int -> Int -> String
-firstBadChar s i n
+firstBadChar : Array Char -> Int -> Int -> String
+firstBadChar cs i n
   | i >= n = "(none)"
-  | not (nameCharOk (stringSlice i (i + 1) s)) =
-    "'\{stringSlice i (i + 1) s}' at position \{intToString (i + 1)}"
-  | otherwise = firstBadChar s (i + 1) n
+  | not (nameCharOk (charToStr (arrayGetUnsafe i cs))) =
+    "'\{charToStr (arrayGetUnsafe i cs)}' at position \{intToString (i + 1)}"
+  | otherwise = firstBadChar cs (i + 1) n
 
 unsafeName : String -> String -> List String
 unsafeName kind n
@@ -1537,8 +1530,8 @@ unsafeName kind n
   ]
   | not (nameLeadOk (stringSlice 0 1 n)) =
     ["\{n}: \{kind} name must start with a letter, a digit or '_'"]
-  | not (nameCharsOk n 0 (stringLength n)) = [
-    "\{n}: \{kind} name contains \{firstBadChar n 0 (stringLength n)} — allowed characters are letters, digits, '_', '.' and '/' (a name is emitted into ci.yml and re-read as an unquoted shell word)",
+  | not (nameCharsOk (stringToChars n) 0 (stringLength n)) = [
+    "\{n}: \{kind} name contains \{firstBadChar (stringToChars n) 0 (stringLength n)} — allowed characters are letters, digits, '_', '.' and '/' (a name is emitted into ci.yml and re-read as an unquoted shell word)",
   ]
   | otherwise = []
 
@@ -3881,9 +3874,7 @@ budgetCmdBody argv = match parseBudgetArgs argv
 (DTypeSig false "firstLineOf" (TyFun (TyCon "String") (TyCon "String")))
 (DFunDef false "firstLineOf" ((PVar "s")) (EMatch (EApp (EVar "splitNl") (EVar "s")) (arm (PList) () (ELit (LString ""))) (arm (PCons (PVar "l") PWild) () (EVar "l"))))
 (DTypeSig false "substrIn" (TyFun (TyCon "String") (TyFun (TyCon "String") (TyCon "Bool"))))
-(DFunDef false "substrIn" ((PVar "needle") (PVar "hay")) (EApp (EApp (EApp (EApp (EVar "substrAt") (EVar "needle")) (EVar "hay")) (ELit (LInt 0))) (EBinOp "-" (EApp (EVar "stringLength") (EVar "hay")) (EApp (EVar "stringLength") (EVar "needle")))))
-(DTypeSig false "substrAt" (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyCon "Bool"))))))
-(DFunDef false "substrAt" ((PVar "needle") (PVar "hay") (PVar "i") (PVar "last")) (EIf (EBinOp ">" (EVar "i") (EVar "last")) (EVar "False") (EIf (EBinOp "==" (EApp (EApp (EApp (EVar "stringSlice") (EVar "i")) (EBinOp "+" (EVar "i") (EApp (EVar "stringLength") (EVar "needle")))) (EVar "hay")) (EVar "needle")) (EVar "True") (EIf (EVar "otherwise") (EApp (EApp (EApp (EApp (EVar "substrAt") (EVar "needle")) (EVar "hay")) (EBinOp "+" (EVar "i") (ELit (LInt 1)))) (EVar "last")) (EApp (EVar "__fallthrough__") (ELit LUnit))))))
+(DFunDef false "substrIn" ((PVar "needle") (PVar "hay")) (EApp (EApp (EVar "strContains") (EVar "needle")) (EVar "hay")))
 (DTypeSig false "gateArgs" (TyFun (TyCon "RunEnv") (TyFun (TyCon "String") (TyFun (TyCon "Int") (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyApp (TyCon "List") (TyCon "String")))))))
 (DFunDef false "gateArgs" ((PVar "env") (PVar "scratch") (PVar "secs") (PVar "cmd")) (EBinOp "::" (EBinOp "++" (EBinOp "++" (ELit (LString "MEDAKA_ROOT=")) (EApp (EVar "display") (EFieldAccess (EVar "env") "root"))) (ELit (LString ""))) (EBinOp "::" (EBinOp "++" (EBinOp "++" (ELit (LString "MEDAKA=")) (EApp (EVar "display") (EFieldAccess (EVar "env") "medaka"))) (ELit (LString ""))) (EBinOp "::" (EBinOp "++" (EBinOp "++" (ELit (LString "MEDAKA_EMITTER=")) (EApp (EVar "display") (EFieldAccess (EVar "env") "emitter"))) (ELit (LString ""))) (EBinOp "::" (EBinOp "++" (EBinOp "++" (ELit (LString "TMPDIR=")) (EApp (EVar "display") (EVar "scratch"))) (ELit (LString ""))) (EBinOp "::" (EBinOp "++" (EBinOp "++" (ELit (LString "MEDAKA_SCRATCH=")) (EApp (EVar "display") (EVar "scratch"))) (ELit (LString ""))) (EBinOp "::" (ELit (LString "JOBS=1")) (EBinOp "::" (ELit (LString "timeout")) (EBinOp "::" (ELit (LString "-k")) (EBinOp "::" (ELit (LString "5s")) (EBinOp "::" (EBinOp "++" (EBinOp "++" (ELit (LString "")) (EApp (EVar "display") (EApp (EVar "intToString") (EVar "secs")))) (ELit (LString "s"))) (EVar "cmd"))))))))))))
 (DTypeSig false "gateInvocation" (TyFun (TyCon "RunEnv") (TyFun (TyCon "Gate") (TyFun (TyCon "String") (TyEffect ("IO") None (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "String"))))))))
@@ -4052,12 +4043,12 @@ budgetCmdBody argv = match parseBudgetArgs argv
 (DFunDef false "nameCharOk" ((PVar "c")) (EIf (EBinOp "&&" (EBinOp ">=" (EVar "c") (ELit (LString "a"))) (EBinOp "<=" (EVar "c") (ELit (LString "z")))) (EVar "True") (EIf (EBinOp "&&" (EBinOp ">=" (EVar "c") (ELit (LString "A"))) (EBinOp "<=" (EVar "c") (ELit (LString "Z")))) (EVar "True") (EIf (EBinOp "&&" (EBinOp ">=" (EVar "c") (ELit (LString "0"))) (EBinOp "<=" (EVar "c") (ELit (LString "9")))) (EVar "True") (EIf (EBinOp "==" (EVar "c") (ELit (LString "_"))) (EVar "True") (EIf (EBinOp "==" (EVar "c") (ELit (LString "."))) (EVar "True") (EIf (EBinOp "==" (EVar "c") (ELit (LString "/"))) (EVar "True") (EIf (EVar "otherwise") (EVar "False") (EApp (EVar "__fallthrough__") (ELit LUnit))))))))))
 (DTypeSig false "nameLeadOk" (TyFun (TyCon "String") (TyCon "Bool")))
 (DFunDef false "nameLeadOk" ((PVar "c")) (EIf (EBinOp "==" (EVar "c") (ELit (LString "."))) (EVar "False") (EIf (EBinOp "==" (EVar "c") (ELit (LString "/"))) (EVar "False") (EIf (EVar "otherwise") (EApp (EVar "nameCharOk") (EVar "c")) (EApp (EVar "__fallthrough__") (ELit LUnit))))))
-(DTypeSig false "nameCharsOk" (TyFun (TyCon "String") (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyCon "Bool")))))
-(DFunDef false "nameCharsOk" ((PVar "s") (PVar "i") (PVar "n")) (EIf (EBinOp ">=" (EVar "i") (EVar "n")) (EVar "True") (EIf (EApp (EVar "nameCharOk") (EApp (EApp (EApp (EVar "stringSlice") (EVar "i")) (EBinOp "+" (EVar "i") (ELit (LInt 1)))) (EVar "s"))) (EApp (EApp (EApp (EVar "nameCharsOk") (EVar "s")) (EBinOp "+" (EVar "i") (ELit (LInt 1)))) (EVar "n")) (EIf (EVar "otherwise") (EVar "False") (EApp (EVar "__fallthrough__") (ELit LUnit))))))
-(DTypeSig false "firstBadChar" (TyFun (TyCon "String") (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyCon "String")))))
-(DFunDef false "firstBadChar" ((PVar "s") (PVar "i") (PVar "n")) (EIf (EBinOp ">=" (EVar "i") (EVar "n")) (ELit (LString "(none)")) (EIf (EApp (EVar "not") (EApp (EVar "nameCharOk") (EApp (EApp (EApp (EVar "stringSlice") (EVar "i")) (EBinOp "+" (EVar "i") (ELit (LInt 1)))) (EVar "s")))) (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "'")) (EApp (EVar "display") (EApp (EApp (EApp (EVar "stringSlice") (EVar "i")) (EBinOp "+" (EVar "i") (ELit (LInt 1)))) (EVar "s")))) (ELit (LString "' at position "))) (EApp (EVar "display") (EApp (EVar "intToString") (EBinOp "+" (EVar "i") (ELit (LInt 1)))))) (ELit (LString ""))) (EIf (EVar "otherwise") (EApp (EApp (EApp (EVar "firstBadChar") (EVar "s")) (EBinOp "+" (EVar "i") (ELit (LInt 1)))) (EVar "n")) (EApp (EVar "__fallthrough__") (ELit LUnit))))))
+(DTypeSig false "nameCharsOk" (TyFun (TyApp (TyCon "Array") (TyCon "Char")) (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyCon "Bool")))))
+(DFunDef false "nameCharsOk" ((PVar "cs") (PVar "i") (PVar "n")) (EIf (EBinOp ">=" (EVar "i") (EVar "n")) (EVar "True") (EIf (EApp (EVar "nameCharOk") (EApp (EVar "charToStr") (EApp (EApp (EVar "arrayGetUnsafe") (EVar "i")) (EVar "cs")))) (EApp (EApp (EApp (EVar "nameCharsOk") (EVar "cs")) (EBinOp "+" (EVar "i") (ELit (LInt 1)))) (EVar "n")) (EIf (EVar "otherwise") (EVar "False") (EApp (EVar "__fallthrough__") (ELit LUnit))))))
+(DTypeSig false "firstBadChar" (TyFun (TyApp (TyCon "Array") (TyCon "Char")) (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyCon "String")))))
+(DFunDef false "firstBadChar" ((PVar "cs") (PVar "i") (PVar "n")) (EIf (EBinOp ">=" (EVar "i") (EVar "n")) (ELit (LString "(none)")) (EIf (EApp (EVar "not") (EApp (EVar "nameCharOk") (EApp (EVar "charToStr") (EApp (EApp (EVar "arrayGetUnsafe") (EVar "i")) (EVar "cs"))))) (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "'")) (EApp (EVar "display") (EApp (EVar "charToStr") (EApp (EApp (EVar "arrayGetUnsafe") (EVar "i")) (EVar "cs"))))) (ELit (LString "' at position "))) (EApp (EVar "display") (EApp (EVar "intToString") (EBinOp "+" (EVar "i") (ELit (LInt 1)))))) (ELit (LString ""))) (EIf (EVar "otherwise") (EApp (EApp (EApp (EVar "firstBadChar") (EVar "cs")) (EBinOp "+" (EVar "i") (ELit (LInt 1)))) (EVar "n")) (EApp (EVar "__fallthrough__") (ELit LUnit))))))
 (DTypeSig false "unsafeName" (TyFun (TyCon "String") (TyFun (TyCon "String") (TyApp (TyCon "List") (TyCon "String")))))
-(DFunDef false "unsafeName" ((PVar "kind") (PVar "n")) (EIf (EBinOp "==" (EVar "n") (ELit (LString ""))) (EListLit (EBinOp "++" (EBinOp "++" (ELit (LString "(empty): a ")) (EApp (EVar "display") (EVar "kind"))) (ELit (LString " name is empty — it cannot be selected, quoted or generated")))) (EIf (EApp (EVar "not") (EApp (EVar "nameLeadOk") (EApp (EApp (EApp (EVar "stringSlice") (ELit (LInt 0))) (ELit (LInt 1))) (EVar "n")))) (EListLit (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "")) (EApp (EVar "display") (EVar "n"))) (ELit (LString ": "))) (EApp (EVar "display") (EVar "kind"))) (ELit (LString " name must start with a letter, a digit or '_'")))) (EIf (EApp (EVar "not") (EApp (EApp (EApp (EVar "nameCharsOk") (EVar "n")) (ELit (LInt 0))) (EApp (EVar "stringLength") (EVar "n")))) (EListLit (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "")) (EApp (EVar "display") (EVar "n"))) (ELit (LString ": "))) (EApp (EVar "display") (EVar "kind"))) (ELit (LString " name contains "))) (EApp (EVar "display") (EApp (EApp (EApp (EVar "firstBadChar") (EVar "n")) (ELit (LInt 0))) (EApp (EVar "stringLength") (EVar "n"))))) (ELit (LString " — allowed characters are letters, digits, '_', '.' and '/' (a name is emitted into ci.yml and re-read as an unquoted shell word)")))) (EIf (EVar "otherwise") (EListLit) (EApp (EVar "__fallthrough__") (ELit LUnit)))))))
+(DFunDef false "unsafeName" ((PVar "kind") (PVar "n")) (EIf (EBinOp "==" (EVar "n") (ELit (LString ""))) (EListLit (EBinOp "++" (EBinOp "++" (ELit (LString "(empty): a ")) (EApp (EVar "display") (EVar "kind"))) (ELit (LString " name is empty — it cannot be selected, quoted or generated")))) (EIf (EApp (EVar "not") (EApp (EVar "nameLeadOk") (EApp (EApp (EApp (EVar "stringSlice") (ELit (LInt 0))) (ELit (LInt 1))) (EVar "n")))) (EListLit (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "")) (EApp (EVar "display") (EVar "n"))) (ELit (LString ": "))) (EApp (EVar "display") (EVar "kind"))) (ELit (LString " name must start with a letter, a digit or '_'")))) (EIf (EApp (EVar "not") (EApp (EApp (EApp (EVar "nameCharsOk") (EApp (EVar "stringToChars") (EVar "n"))) (ELit (LInt 0))) (EApp (EVar "stringLength") (EVar "n")))) (EListLit (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "")) (EApp (EVar "display") (EVar "n"))) (ELit (LString ": "))) (EApp (EVar "display") (EVar "kind"))) (ELit (LString " name contains "))) (EApp (EVar "display") (EApp (EApp (EApp (EVar "firstBadChar") (EApp (EVar "stringToChars") (EVar "n"))) (ELit (LInt 0))) (EApp (EVar "stringLength") (EVar "n"))))) (ELit (LString " — allowed characters are letters, digits, '_', '.' and '/' (a name is emitted into ci.yml and re-read as an unquoted shell word)")))) (EIf (EVar "otherwise") (EListLit) (EApp (EVar "__fallthrough__") (ELit LUnit)))))))
 (DTypeSig false "unsafeGateNames" (TyFun (TyApp (TyCon "List") (TyCon "Gate")) (TyApp (TyCon "List") (TyCon "String"))))
 (DFunDef false "unsafeGateNames" ((PList)) (EListLit))
 (DFunDef false "unsafeGateNames" ((PCons (PVar "g") (PVar "gs"))) (EBinOp "++" (EApp (EApp (EVar "unsafeName") (ELit (LString "gate"))) (EFieldAccess (EVar "g") "name")) (EApp (EVar "unsafeGateNames") (EVar "gs"))))
@@ -4662,9 +4653,7 @@ budgetCmdBody argv = match parseBudgetArgs argv
 (DTypeSig false "firstLineOf" (TyFun (TyCon "String") (TyCon "String")))
 (DFunDef false "firstLineOf" ((PVar "s")) (EMatch (EApp (EVar "splitNl") (EVar "s")) (arm (PList) () (ELit (LString ""))) (arm (PCons (PVar "l") PWild) () (EVar "l"))))
 (DTypeSig false "substrIn" (TyFun (TyCon "String") (TyFun (TyCon "String") (TyCon "Bool"))))
-(DFunDef false "substrIn" ((PVar "needle") (PVar "hay")) (EApp (EApp (EApp (EApp (EVar "substrAt") (EVar "needle")) (EVar "hay")) (ELit (LInt 0))) (EBinOp "-" (EApp (EVar "stringLength") (EVar "hay")) (EApp (EVar "stringLength") (EVar "needle")))))
-(DTypeSig false "substrAt" (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyCon "Bool"))))))
-(DFunDef false "substrAt" ((PVar "needle") (PVar "hay") (PVar "i") (PVar "last")) (EIf (EBinOp ">" (EVar "i") (EVar "last")) (EVar "False") (EIf (EBinOp "==" (EApp (EApp (EApp (EVar "stringSlice") (EVar "i")) (EBinOp "+" (EVar "i") (EApp (EVar "stringLength") (EVar "needle")))) (EVar "hay")) (EVar "needle")) (EVar "True") (EIf (EVar "otherwise") (EApp (EApp (EApp (EApp (EVar "substrAt") (EVar "needle")) (EVar "hay")) (EBinOp "+" (EVar "i") (ELit (LInt 1)))) (EVar "last")) (EApp (EVar "__fallthrough__") (ELit LUnit))))))
+(DFunDef false "substrIn" ((PVar "needle") (PVar "hay")) (EApp (EApp (EVar "strContains") (EVar "needle")) (EVar "hay")))
 (DTypeSig false "gateArgs" (TyFun (TyCon "RunEnv") (TyFun (TyCon "String") (TyFun (TyCon "Int") (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyApp (TyCon "List") (TyCon "String")))))))
 (DFunDef false "gateArgs" ((PVar "env") (PVar "scratch") (PVar "secs") (PVar "cmd")) (EBinOp "::" (EBinOp "++" (EBinOp "++" (ELit (LString "MEDAKA_ROOT=")) (EApp (EMethodRef "display") (EFieldAccess (EVar "env") "root"))) (ELit (LString ""))) (EBinOp "::" (EBinOp "++" (EBinOp "++" (ELit (LString "MEDAKA=")) (EApp (EMethodRef "display") (EFieldAccess (EVar "env") "medaka"))) (ELit (LString ""))) (EBinOp "::" (EBinOp "++" (EBinOp "++" (ELit (LString "MEDAKA_EMITTER=")) (EApp (EMethodRef "display") (EFieldAccess (EVar "env") "emitter"))) (ELit (LString ""))) (EBinOp "::" (EBinOp "++" (EBinOp "++" (ELit (LString "TMPDIR=")) (EApp (EMethodRef "display") (EVar "scratch"))) (ELit (LString ""))) (EBinOp "::" (EBinOp "++" (EBinOp "++" (ELit (LString "MEDAKA_SCRATCH=")) (EApp (EMethodRef "display") (EVar "scratch"))) (ELit (LString ""))) (EBinOp "::" (ELit (LString "JOBS=1")) (EBinOp "::" (ELit (LString "timeout")) (EBinOp "::" (ELit (LString "-k")) (EBinOp "::" (ELit (LString "5s")) (EBinOp "::" (EBinOp "++" (EBinOp "++" (ELit (LString "")) (EApp (EMethodRef "display") (EApp (EVar "intToString") (EVar "secs")))) (ELit (LString "s"))) (EVar "cmd"))))))))))))
 (DTypeSig false "gateInvocation" (TyFun (TyCon "RunEnv") (TyFun (TyCon "Gate") (TyFun (TyCon "String") (TyEffect ("IO") None (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "String"))))))))
@@ -4833,12 +4822,12 @@ budgetCmdBody argv = match parseBudgetArgs argv
 (DFunDef false "nameCharOk" ((PVar "c")) (EIf (EBinOp "&&" (EBinOp ">=" (EVar "c") (ELit (LString "a"))) (EBinOp "<=" (EVar "c") (ELit (LString "z")))) (EVar "True") (EIf (EBinOp "&&" (EBinOp ">=" (EVar "c") (ELit (LString "A"))) (EBinOp "<=" (EVar "c") (ELit (LString "Z")))) (EVar "True") (EIf (EBinOp "&&" (EBinOp ">=" (EVar "c") (ELit (LString "0"))) (EBinOp "<=" (EVar "c") (ELit (LString "9")))) (EVar "True") (EIf (EBinOp "==" (EVar "c") (ELit (LString "_"))) (EVar "True") (EIf (EBinOp "==" (EVar "c") (ELit (LString "."))) (EVar "True") (EIf (EBinOp "==" (EVar "c") (ELit (LString "/"))) (EVar "True") (EIf (EVar "otherwise") (EVar "False") (EApp (EVar "__fallthrough__") (ELit LUnit))))))))))
 (DTypeSig false "nameLeadOk" (TyFun (TyCon "String") (TyCon "Bool")))
 (DFunDef false "nameLeadOk" ((PVar "c")) (EIf (EBinOp "==" (EVar "c") (ELit (LString "."))) (EVar "False") (EIf (EBinOp "==" (EVar "c") (ELit (LString "/"))) (EVar "False") (EIf (EVar "otherwise") (EApp (EVar "nameCharOk") (EVar "c")) (EApp (EVar "__fallthrough__") (ELit LUnit))))))
-(DTypeSig false "nameCharsOk" (TyFun (TyCon "String") (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyCon "Bool")))))
-(DFunDef false "nameCharsOk" ((PVar "s") (PVar "i") (PVar "n")) (EIf (EBinOp ">=" (EVar "i") (EVar "n")) (EVar "True") (EIf (EApp (EVar "nameCharOk") (EApp (EApp (EApp (EVar "stringSlice") (EVar "i")) (EBinOp "+" (EVar "i") (ELit (LInt 1)))) (EVar "s"))) (EApp (EApp (EApp (EVar "nameCharsOk") (EVar "s")) (EBinOp "+" (EVar "i") (ELit (LInt 1)))) (EVar "n")) (EIf (EVar "otherwise") (EVar "False") (EApp (EVar "__fallthrough__") (ELit LUnit))))))
-(DTypeSig false "firstBadChar" (TyFun (TyCon "String") (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyCon "String")))))
-(DFunDef false "firstBadChar" ((PVar "s") (PVar "i") (PVar "n")) (EIf (EBinOp ">=" (EVar "i") (EVar "n")) (ELit (LString "(none)")) (EIf (EApp (EVar "not") (EApp (EVar "nameCharOk") (EApp (EApp (EApp (EVar "stringSlice") (EVar "i")) (EBinOp "+" (EVar "i") (ELit (LInt 1)))) (EVar "s")))) (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "'")) (EApp (EMethodRef "display") (EApp (EApp (EApp (EVar "stringSlice") (EVar "i")) (EBinOp "+" (EVar "i") (ELit (LInt 1)))) (EVar "s")))) (ELit (LString "' at position "))) (EApp (EMethodRef "display") (EApp (EVar "intToString") (EBinOp "+" (EVar "i") (ELit (LInt 1)))))) (ELit (LString ""))) (EIf (EVar "otherwise") (EApp (EApp (EApp (EVar "firstBadChar") (EVar "s")) (EBinOp "+" (EVar "i") (ELit (LInt 1)))) (EVar "n")) (EApp (EVar "__fallthrough__") (ELit LUnit))))))
+(DTypeSig false "nameCharsOk" (TyFun (TyApp (TyCon "Array") (TyCon "Char")) (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyCon "Bool")))))
+(DFunDef false "nameCharsOk" ((PVar "cs") (PVar "i") (PVar "n")) (EIf (EBinOp ">=" (EVar "i") (EVar "n")) (EVar "True") (EIf (EApp (EVar "nameCharOk") (EApp (EVar "charToStr") (EApp (EApp (EVar "arrayGetUnsafe") (EVar "i")) (EVar "cs")))) (EApp (EApp (EApp (EVar "nameCharsOk") (EVar "cs")) (EBinOp "+" (EVar "i") (ELit (LInt 1)))) (EVar "n")) (EIf (EVar "otherwise") (EVar "False") (EApp (EVar "__fallthrough__") (ELit LUnit))))))
+(DTypeSig false "firstBadChar" (TyFun (TyApp (TyCon "Array") (TyCon "Char")) (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyCon "String")))))
+(DFunDef false "firstBadChar" ((PVar "cs") (PVar "i") (PVar "n")) (EIf (EBinOp ">=" (EVar "i") (EVar "n")) (ELit (LString "(none)")) (EIf (EApp (EVar "not") (EApp (EVar "nameCharOk") (EApp (EVar "charToStr") (EApp (EApp (EVar "arrayGetUnsafe") (EVar "i")) (EVar "cs"))))) (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "'")) (EApp (EMethodRef "display") (EApp (EVar "charToStr") (EApp (EApp (EVar "arrayGetUnsafe") (EVar "i")) (EVar "cs"))))) (ELit (LString "' at position "))) (EApp (EMethodRef "display") (EApp (EVar "intToString") (EBinOp "+" (EVar "i") (ELit (LInt 1)))))) (ELit (LString ""))) (EIf (EVar "otherwise") (EApp (EApp (EApp (EVar "firstBadChar") (EVar "cs")) (EBinOp "+" (EVar "i") (ELit (LInt 1)))) (EVar "n")) (EApp (EVar "__fallthrough__") (ELit LUnit))))))
 (DTypeSig false "unsafeName" (TyFun (TyCon "String") (TyFun (TyCon "String") (TyApp (TyCon "List") (TyCon "String")))))
-(DFunDef false "unsafeName" ((PVar "kind") (PVar "n")) (EIf (EBinOp "==" (EVar "n") (ELit (LString ""))) (EListLit (EBinOp "++" (EBinOp "++" (ELit (LString "(empty): a ")) (EApp (EMethodRef "display") (EVar "kind"))) (ELit (LString " name is empty — it cannot be selected, quoted or generated")))) (EIf (EApp (EVar "not") (EApp (EVar "nameLeadOk") (EApp (EApp (EApp (EVar "stringSlice") (ELit (LInt 0))) (ELit (LInt 1))) (EVar "n")))) (EListLit (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "")) (EApp (EMethodRef "display") (EVar "n"))) (ELit (LString ": "))) (EApp (EMethodRef "display") (EVar "kind"))) (ELit (LString " name must start with a letter, a digit or '_'")))) (EIf (EApp (EVar "not") (EApp (EApp (EApp (EVar "nameCharsOk") (EVar "n")) (ELit (LInt 0))) (EApp (EVar "stringLength") (EVar "n")))) (EListLit (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "")) (EApp (EMethodRef "display") (EVar "n"))) (ELit (LString ": "))) (EApp (EMethodRef "display") (EVar "kind"))) (ELit (LString " name contains "))) (EApp (EMethodRef "display") (EApp (EApp (EApp (EVar "firstBadChar") (EVar "n")) (ELit (LInt 0))) (EApp (EVar "stringLength") (EVar "n"))))) (ELit (LString " — allowed characters are letters, digits, '_', '.' and '/' (a name is emitted into ci.yml and re-read as an unquoted shell word)")))) (EIf (EVar "otherwise") (EListLit) (EApp (EVar "__fallthrough__") (ELit LUnit)))))))
+(DFunDef false "unsafeName" ((PVar "kind") (PVar "n")) (EIf (EBinOp "==" (EVar "n") (ELit (LString ""))) (EListLit (EBinOp "++" (EBinOp "++" (ELit (LString "(empty): a ")) (EApp (EMethodRef "display") (EVar "kind"))) (ELit (LString " name is empty — it cannot be selected, quoted or generated")))) (EIf (EApp (EVar "not") (EApp (EVar "nameLeadOk") (EApp (EApp (EApp (EVar "stringSlice") (ELit (LInt 0))) (ELit (LInt 1))) (EVar "n")))) (EListLit (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "")) (EApp (EMethodRef "display") (EVar "n"))) (ELit (LString ": "))) (EApp (EMethodRef "display") (EVar "kind"))) (ELit (LString " name must start with a letter, a digit or '_'")))) (EIf (EApp (EVar "not") (EApp (EApp (EApp (EVar "nameCharsOk") (EApp (EVar "stringToChars") (EVar "n"))) (ELit (LInt 0))) (EApp (EVar "stringLength") (EVar "n")))) (EListLit (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "")) (EApp (EMethodRef "display") (EVar "n"))) (ELit (LString ": "))) (EApp (EMethodRef "display") (EVar "kind"))) (ELit (LString " name contains "))) (EApp (EMethodRef "display") (EApp (EApp (EApp (EVar "firstBadChar") (EApp (EVar "stringToChars") (EVar "n"))) (ELit (LInt 0))) (EApp (EVar "stringLength") (EVar "n"))))) (ELit (LString " — allowed characters are letters, digits, '_', '.' and '/' (a name is emitted into ci.yml and re-read as an unquoted shell word)")))) (EIf (EVar "otherwise") (EListLit) (EApp (EVar "__fallthrough__") (ELit LUnit)))))))
 (DTypeSig false "unsafeGateNames" (TyFun (TyApp (TyCon "List") (TyCon "Gate")) (TyApp (TyCon "List") (TyCon "String"))))
 (DFunDef false "unsafeGateNames" ((PList)) (EListLit))
 (DFunDef false "unsafeGateNames" ((PCons (PVar "g") (PVar "gs"))) (EBinOp "++" (EApp (EApp (EVar "unsafeName") (ELit (LString "gate"))) (EFieldAccess (EVar "g") "name")) (EApp (EVar "unsafeGateNames") (EVar "gs"))))
