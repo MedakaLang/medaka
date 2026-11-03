@@ -1,10 +1,11 @@
 # META
-source_lines=247
+source_lines=325
 stages=DESUGAR,MARK
 # SOURCE
--- tc_solve_test_support: the drive `typecheck_test` and `publish_test` share to observe the
--- solver through one whole check of a parsed source: its diagnostics and their codes, the
--- route words it stamps, the schemes it publishes, the evidence and disposition it keeps.
+-- tc_solve_test_support: the whole-check drive, trace sinks and graph probes the drive-level
+-- tests share.  The drive observes the solver through one whole check of a parsed source: its
+-- diagnostics and their codes, the route words it stamps, the schemes it publishes, the
+-- evidence and disposition it keeps.
 -- It imports `types.typecheck`, so the solver siblings (`tc_solve_givens_test`,
 -- `tc_solve_entail_test`, `tc_solve_test`, `tc_solve_check_test`), which sit below it, do
 -- not import it; they build their inputs from `tc_test_support`.  No production module
@@ -18,13 +19,17 @@ import frontend.ast.{
 }
 import frontend.desugar.{desugar}
 import frontend.parser.{parse, parseLocated}
-import support.util.{joinNl, listLen}
+import support.util.{joinNl, listLen, reverseL}
 import string.{join}
 import types.tc_types.{
-  DriveInputs(..), EvidenceObservationEntry(..), TraceSink,
-  MethodReturnMemoView(..), DriveOutputs(..), InvocationView(..), TcConfig(..),
-  ElabFacts(..)
+  AssumptionTraceEntry(..), DriveInputs(..), EvidenceObservationEntry(..),
+  GraphCtx(..), TraceSink(..), MethodReturnMemoView(..), ModuleCtx(..),
+  NumericPredicateTraceEntry(..), DriveOutputs(..), InvocationView(..),
+  TcConfig(..), ElabFacts(..)
 }
+import types.evidence.{ScopeId(..)}
+import types.scopes as Scopes
+import types.tc_state.{currentScopeStore}
 import types.typecheck.{
   ModDiags, checkOneDiags, defaultDriveInputs, elaborateModules, tcCode, tcMsg,
   checkOneSchemeFullK
@@ -249,6 +254,79 @@ valText (EvMethod iface arity r impls meths) =
   "\{iface}/\{debug arity} \{routeText r} \{routesText impls} \{routesText meths}"
 valText (EvLit f r) = "\{debug f} \{routeText r}"
 valText (EvHead h) = h
+
+-- A sink with every gate off and fresh buffers; each `begin*` turns one gate on.
+offTraceSink : Unit -> TraceSink
+offTraceSink _ = TraceSink {
+  tsAssumptionEnabled = False,
+  tsAssumptionEntries = Ref [],
+  tsNumericPredicateEnabled = False,
+  tsNumericPredicateEntries = Ref [],
+  tsMethodReturnEnabled = False,
+  tsMethodReturnEntries = Ref [],
+  tsEvidenceObservationEnabled = False,
+  tsEvidenceObservationEntries = Ref [],
+}
+
+-- The trace builders and readers: a test builds a sink with `begin*`, passes it as
+-- the `diTrace` of the drives it observes, and reads its buffer with `finish*`.
+export
+beginAssumptionTrace : Unit -> TraceSink
+beginAssumptionTrace _ = { offTraceSink () | tsAssumptionEnabled = True }
+
+export
+finishAssumptionTrace : TraceSink -> List AssumptionTraceEntry
+finishAssumptionTrace sink = reverseL sink.tsAssumptionEntries.value
+
+export
+beginNumericPredicateTrace : Unit -> TraceSink
+beginNumericPredicateTrace _ =
+  { offTraceSink () | tsNumericPredicateEnabled = True }
+
+export
+finishNumericPredicateTrace : TraceSink -> List NumericPredicateTraceEntry
+finishNumericPredicateTrace sink = reverseL sink.tsNumericPredicateEntries.value
+
+export
+beginMethodReturnTrace : Unit -> TraceSink
+beginMethodReturnTrace _ = { offTraceSink () | tsMethodReturnEnabled = True }
+
+-- Trace-gated, zero cost when off, the same discipline as `methodReturnTrace`. It covers
+-- every `Obligation` `recordEvidence` publishes (a method occurrence and a dictionary
+-- application alike, whatever family produced the goal), read back from the very cells the
+-- stampers wrote and never re-derived, so it cannot disagree with the published `EvTable`.
+export
+beginEvidenceObservation : Unit -> TraceSink
+beginEvidenceObservation _ =
+  { offTraceSink () | tsEvidenceObservationEnabled = True }
+
+export
+finishEvidenceObservation : TraceSink -> List EvidenceObservationEntry
+finishEvidenceObservation sink =
+  reverseL sink.tsEvidenceObservationEntries.value
+
+-- Test visibility (`typecheck_test.mdk`): the length of [gctx]'s method-cell index,
+-- which spans only its graph lineage.
+export
+evCellsSpanProbe : GraphCtx -> Int
+evCellsSpanProbe gctx = arrayLength gctx.graphRun.evCells.value
+
+export
+scopeTraceContext : GraphCtx -> ScopeId -> (String, String)
+scopeTraceContext gctx sid =
+  Scopes.scopeTraceContext (currentScopeStore gctx ()) sid
+
+export
+scopeFrameStats : GraphCtx -> (Int, Int)
+scopeFrameStats gctx = Scopes.scopeFrameStats (currentScopeStore gctx ())
+
+-- `hadMatchWarnings` of the last module checked, the only read of a drive that returns no
+-- outputs (the projections).
+export
+matchWarningsNow : ModuleCtx -> Bool
+matchWarningsNow mctx = match mctx.mcCells.matchWarnings.value
+  [] => False
+  _ => True
 # DESUGAR
 (DUse false (UseGroup ("support" "diag_codes") ((mem "codeText" false))))
 (DUse false (UseGroup ("list") ((mem "sort" false) (mem "filter" false) (mem "sortOn" false) (mem "indexed" false))))
@@ -256,9 +334,12 @@ valText (EvHead h) = h
 (DUse false (UseGroup ("frontend" "ast") ((mem "EvEntry" true) (mem "EvVal" true) (mem "Route" true) (mem "TyConOrigin" true) (mem "EvId" true) (mem "Loc" true))))
 (DUse false (UseGroup ("frontend" "desugar") ((mem "desugar" false))))
 (DUse false (UseGroup ("frontend" "parser") ((mem "parse" false) (mem "parseLocated" false))))
-(DUse false (UseGroup ("support" "util") ((mem "joinNl" false) (mem "listLen" false))))
+(DUse false (UseGroup ("support" "util") ((mem "joinNl" false) (mem "listLen" false) (mem "reverseL" false))))
 (DUse false (UseGroup ("string") ((mem "join" false))))
-(DUse false (UseGroup ("types" "tc_types") ((mem "DriveInputs" true) (mem "EvidenceObservationEntry" true) (mem "TraceSink" false) (mem "MethodReturnMemoView" true) (mem "DriveOutputs" true) (mem "InvocationView" true) (mem "TcConfig" true) (mem "ElabFacts" true))))
+(DUse false (UseGroup ("types" "tc_types") ((mem "AssumptionTraceEntry" true) (mem "DriveInputs" true) (mem "EvidenceObservationEntry" true) (mem "GraphCtx" true) (mem "TraceSink" true) (mem "MethodReturnMemoView" true) (mem "ModuleCtx" true) (mem "NumericPredicateTraceEntry" true) (mem "DriveOutputs" true) (mem "InvocationView" true) (mem "TcConfig" true) (mem "ElabFacts" true))))
+(DUse false (UseGroup ("types" "evidence") ((mem "ScopeId" true))))
+(DUse false (UseAlias ("types" "scopes") "Scopes"))
+(DUse false (UseGroup ("types" "tc_state") ((mem "currentScopeStore" false))))
 (DUse false (UseGroup ("types" "typecheck") ((mem "ModDiags" false) (mem "checkOneDiags" false) (mem "defaultDriveInputs" false) (mem "elaborateModules" false) (mem "tcCode" false) (mem "tcMsg" false) (mem "checkOneSchemeFullK" false))))
 (DUse false (UseGroup ("types" "repr") ((mem "Mono" true) (mem "Tyvar" true) (mem "Scheme" true) (mem "IfaceRef" true) (mem "VecObl" true))))
 (DUse false (UseGroup ("types" "effect_domain") ((mem "Param" true))))
@@ -337,6 +418,30 @@ valText (EvHead h) = h
 (DFunDef false "valText" ((PCon "EvMethod" (PVar "iface") (PVar "arity") (PVar "r") (PVar "impls") (PVar "meths"))) (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "")) (EApp (EVar "display") (EVar "iface"))) (ELit (LString "/"))) (EApp (EVar "display") (EApp (EVar "debug") (EVar "arity")))) (ELit (LString " "))) (EApp (EVar "display") (EApp (EVar "routeText") (EVar "r")))) (ELit (LString " "))) (EApp (EVar "display") (EApp (EVar "routesText") (EVar "impls")))) (ELit (LString " "))) (EApp (EVar "display") (EApp (EVar "routesText") (EVar "meths")))) (ELit (LString ""))))
 (DFunDef false "valText" ((PCon "EvLit" (PVar "f") (PVar "r"))) (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "")) (EApp (EVar "display") (EApp (EVar "debug") (EVar "f")))) (ELit (LString " "))) (EApp (EVar "display") (EApp (EVar "routeText") (EVar "r")))) (ELit (LString ""))))
 (DFunDef false "valText" ((PCon "EvHead" (PVar "h"))) (EVar "h"))
+(DTypeSig false "offTraceSink" (TyFun (TyCon "Unit") (TyCon "TraceSink")))
+(DFunDef false "offTraceSink" (PWild) (ERecordCreate "TraceSink" ((fa "tsAssumptionEnabled" (EVar "False")) (fa "tsAssumptionEntries" (EApp (EVar "Ref") (EListLit))) (fa "tsNumericPredicateEnabled" (EVar "False")) (fa "tsNumericPredicateEntries" (EApp (EVar "Ref") (EListLit))) (fa "tsMethodReturnEnabled" (EVar "False")) (fa "tsMethodReturnEntries" (EApp (EVar "Ref") (EListLit))) (fa "tsEvidenceObservationEnabled" (EVar "False")) (fa "tsEvidenceObservationEntries" (EApp (EVar "Ref") (EListLit))))))
+(DTypeSig true "beginAssumptionTrace" (TyFun (TyCon "Unit") (TyCon "TraceSink")))
+(DFunDef false "beginAssumptionTrace" (PWild) (ERecordUpdate (EApp (EVar "offTraceSink") (ELit LUnit)) ((fa "tsAssumptionEnabled" (EVar "True")))))
+(DTypeSig true "finishAssumptionTrace" (TyFun (TyCon "TraceSink") (TyApp (TyCon "List") (TyCon "AssumptionTraceEntry"))))
+(DFunDef false "finishAssumptionTrace" ((PVar "sink")) (EApp (EVar "reverseL") (EFieldAccess (EFieldAccess (EVar "sink") "tsAssumptionEntries") "value")))
+(DTypeSig true "beginNumericPredicateTrace" (TyFun (TyCon "Unit") (TyCon "TraceSink")))
+(DFunDef false "beginNumericPredicateTrace" (PWild) (ERecordUpdate (EApp (EVar "offTraceSink") (ELit LUnit)) ((fa "tsNumericPredicateEnabled" (EVar "True")))))
+(DTypeSig true "finishNumericPredicateTrace" (TyFun (TyCon "TraceSink") (TyApp (TyCon "List") (TyCon "NumericPredicateTraceEntry"))))
+(DFunDef false "finishNumericPredicateTrace" ((PVar "sink")) (EApp (EVar "reverseL") (EFieldAccess (EFieldAccess (EVar "sink") "tsNumericPredicateEntries") "value")))
+(DTypeSig true "beginMethodReturnTrace" (TyFun (TyCon "Unit") (TyCon "TraceSink")))
+(DFunDef false "beginMethodReturnTrace" (PWild) (ERecordUpdate (EApp (EVar "offTraceSink") (ELit LUnit)) ((fa "tsMethodReturnEnabled" (EVar "True")))))
+(DTypeSig true "beginEvidenceObservation" (TyFun (TyCon "Unit") (TyCon "TraceSink")))
+(DFunDef false "beginEvidenceObservation" (PWild) (ERecordUpdate (EApp (EVar "offTraceSink") (ELit LUnit)) ((fa "tsEvidenceObservationEnabled" (EVar "True")))))
+(DTypeSig true "finishEvidenceObservation" (TyFun (TyCon "TraceSink") (TyApp (TyCon "List") (TyCon "EvidenceObservationEntry"))))
+(DFunDef false "finishEvidenceObservation" ((PVar "sink")) (EApp (EVar "reverseL") (EFieldAccess (EFieldAccess (EVar "sink") "tsEvidenceObservationEntries") "value")))
+(DTypeSig true "evCellsSpanProbe" (TyFun (TyCon "GraphCtx") (TyCon "Int")))
+(DFunDef false "evCellsSpanProbe" ((PVar "gctx")) (EApp (EVar "arrayLength") (EFieldAccess (EFieldAccess (EFieldAccess (EVar "gctx") "graphRun") "evCells") "value")))
+(DTypeSig true "scopeTraceContext" (TyFun (TyCon "GraphCtx") (TyFun (TyCon "ScopeId") (TyTuple (TyCon "String") (TyCon "String")))))
+(DFunDef false "scopeTraceContext" ((PVar "gctx") (PVar "sid")) (EApp (EApp (EVar "Scopes.scopeTraceContext") (EApp (EApp (EVar "currentScopeStore") (EVar "gctx")) (ELit LUnit))) (EVar "sid")))
+(DTypeSig true "scopeFrameStats" (TyFun (TyCon "GraphCtx") (TyTuple (TyCon "Int") (TyCon "Int"))))
+(DFunDef false "scopeFrameStats" ((PVar "gctx")) (EApp (EVar "Scopes.scopeFrameStats") (EApp (EApp (EVar "currentScopeStore") (EVar "gctx")) (ELit LUnit))))
+(DTypeSig true "matchWarningsNow" (TyFun (TyCon "ModuleCtx") (TyCon "Bool")))
+(DFunDef false "matchWarningsNow" ((PVar "mctx")) (EMatch (EFieldAccess (EFieldAccess (EFieldAccess (EVar "mctx") "mcCells") "matchWarnings") "value") (arm (PList) () (EVar "False")) (arm PWild () (EVar "True"))))
 # MARK
 (DUse false (UseGroup ("support" "diag_codes") ((mem "codeText" false))))
 (DUse false (UseGroup ("list") ((mem "sort" false) (mem "filter" false) (mem "sortOn" false) (mem "indexed" false))))
@@ -344,9 +449,12 @@ valText (EvHead h) = h
 (DUse false (UseGroup ("frontend" "ast") ((mem "EvEntry" true) (mem "EvVal" true) (mem "Route" true) (mem "TyConOrigin" true) (mem "EvId" true) (mem "Loc" true))))
 (DUse false (UseGroup ("frontend" "desugar") ((mem "desugar" false))))
 (DUse false (UseGroup ("frontend" "parser") ((mem "parse" false) (mem "parseLocated" false))))
-(DUse false (UseGroup ("support" "util") ((mem "joinNl" false) (mem "listLen" false))))
+(DUse false (UseGroup ("support" "util") ((mem "joinNl" false) (mem "listLen" false) (mem "reverseL" false))))
 (DUse false (UseGroup ("string") ((mem "join" false))))
-(DUse false (UseGroup ("types" "tc_types") ((mem "DriveInputs" true) (mem "EvidenceObservationEntry" true) (mem "TraceSink" false) (mem "MethodReturnMemoView" true) (mem "DriveOutputs" true) (mem "InvocationView" true) (mem "TcConfig" true) (mem "ElabFacts" true))))
+(DUse false (UseGroup ("types" "tc_types") ((mem "AssumptionTraceEntry" true) (mem "DriveInputs" true) (mem "EvidenceObservationEntry" true) (mem "GraphCtx" true) (mem "TraceSink" true) (mem "MethodReturnMemoView" true) (mem "ModuleCtx" true) (mem "NumericPredicateTraceEntry" true) (mem "DriveOutputs" true) (mem "InvocationView" true) (mem "TcConfig" true) (mem "ElabFacts" true))))
+(DUse false (UseGroup ("types" "evidence") ((mem "ScopeId" true))))
+(DUse false (UseAlias ("types" "scopes") "Scopes"))
+(DUse false (UseGroup ("types" "tc_state") ((mem "currentScopeStore" false))))
 (DUse false (UseGroup ("types" "typecheck") ((mem "ModDiags" false) (mem "checkOneDiags" false) (mem "defaultDriveInputs" false) (mem "elaborateModules" false) (mem "tcCode" false) (mem "tcMsg" false) (mem "checkOneSchemeFullK" false))))
 (DUse false (UseGroup ("types" "repr") ((mem "Mono" true) (mem "Tyvar" true) (mem "Scheme" true) (mem "IfaceRef" true) (mem "VecObl" true))))
 (DUse false (UseGroup ("types" "effect_domain") ((mem "Param" true))))
@@ -425,3 +533,27 @@ valText (EvHead h) = h
 (DFunDef false "valText" ((PCon "EvMethod" (PVar "iface") (PVar "arity") (PVar "r") (PVar "impls") (PVar "meths"))) (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "")) (EApp (EMethodRef "display") (EVar "iface"))) (ELit (LString "/"))) (EApp (EMethodRef "display") (EApp (EMethodRef "debug") (EVar "arity")))) (ELit (LString " "))) (EApp (EMethodRef "display") (EApp (EVar "routeText") (EVar "r")))) (ELit (LString " "))) (EApp (EMethodRef "display") (EApp (EVar "routesText") (EVar "impls")))) (ELit (LString " "))) (EApp (EMethodRef "display") (EApp (EVar "routesText") (EVar "meths")))) (ELit (LString ""))))
 (DFunDef false "valText" ((PCon "EvLit" (PVar "f") (PVar "r"))) (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "")) (EApp (EMethodRef "display") (EApp (EMethodRef "debug") (EVar "f")))) (ELit (LString " "))) (EApp (EMethodRef "display") (EApp (EVar "routeText") (EVar "r")))) (ELit (LString ""))))
 (DFunDef false "valText" ((PCon "EvHead" (PVar "h"))) (EVar "h"))
+(DTypeSig false "offTraceSink" (TyFun (TyCon "Unit") (TyCon "TraceSink")))
+(DFunDef false "offTraceSink" (PWild) (ERecordCreate "TraceSink" ((fa "tsAssumptionEnabled" (EVar "False")) (fa "tsAssumptionEntries" (EApp (EVar "Ref") (EListLit))) (fa "tsNumericPredicateEnabled" (EVar "False")) (fa "tsNumericPredicateEntries" (EApp (EVar "Ref") (EListLit))) (fa "tsMethodReturnEnabled" (EVar "False")) (fa "tsMethodReturnEntries" (EApp (EVar "Ref") (EListLit))) (fa "tsEvidenceObservationEnabled" (EVar "False")) (fa "tsEvidenceObservationEntries" (EApp (EVar "Ref") (EListLit))))))
+(DTypeSig true "beginAssumptionTrace" (TyFun (TyCon "Unit") (TyCon "TraceSink")))
+(DFunDef false "beginAssumptionTrace" (PWild) (ERecordUpdate (EApp (EVar "offTraceSink") (ELit LUnit)) ((fa "tsAssumptionEnabled" (EVar "True")))))
+(DTypeSig true "finishAssumptionTrace" (TyFun (TyCon "TraceSink") (TyApp (TyCon "List") (TyCon "AssumptionTraceEntry"))))
+(DFunDef false "finishAssumptionTrace" ((PVar "sink")) (EApp (EVar "reverseL") (EFieldAccess (EFieldAccess (EVar "sink") "tsAssumptionEntries") "value")))
+(DTypeSig true "beginNumericPredicateTrace" (TyFun (TyCon "Unit") (TyCon "TraceSink")))
+(DFunDef false "beginNumericPredicateTrace" (PWild) (ERecordUpdate (EApp (EVar "offTraceSink") (ELit LUnit)) ((fa "tsNumericPredicateEnabled" (EVar "True")))))
+(DTypeSig true "finishNumericPredicateTrace" (TyFun (TyCon "TraceSink") (TyApp (TyCon "List") (TyCon "NumericPredicateTraceEntry"))))
+(DFunDef false "finishNumericPredicateTrace" ((PVar "sink")) (EApp (EVar "reverseL") (EFieldAccess (EFieldAccess (EVar "sink") "tsNumericPredicateEntries") "value")))
+(DTypeSig true "beginMethodReturnTrace" (TyFun (TyCon "Unit") (TyCon "TraceSink")))
+(DFunDef false "beginMethodReturnTrace" (PWild) (ERecordUpdate (EApp (EVar "offTraceSink") (ELit LUnit)) ((fa "tsMethodReturnEnabled" (EVar "True")))))
+(DTypeSig true "beginEvidenceObservation" (TyFun (TyCon "Unit") (TyCon "TraceSink")))
+(DFunDef false "beginEvidenceObservation" (PWild) (ERecordUpdate (EApp (EVar "offTraceSink") (ELit LUnit)) ((fa "tsEvidenceObservationEnabled" (EVar "True")))))
+(DTypeSig true "finishEvidenceObservation" (TyFun (TyCon "TraceSink") (TyApp (TyCon "List") (TyCon "EvidenceObservationEntry"))))
+(DFunDef false "finishEvidenceObservation" ((PVar "sink")) (EApp (EVar "reverseL") (EFieldAccess (EFieldAccess (EVar "sink") "tsEvidenceObservationEntries") "value")))
+(DTypeSig true "evCellsSpanProbe" (TyFun (TyCon "GraphCtx") (TyCon "Int")))
+(DFunDef false "evCellsSpanProbe" ((PVar "gctx")) (EApp (EVar "arrayLength") (EFieldAccess (EFieldAccess (EFieldAccess (EVar "gctx") "graphRun") "evCells") "value")))
+(DTypeSig true "scopeTraceContext" (TyFun (TyCon "GraphCtx") (TyFun (TyCon "ScopeId") (TyTuple (TyCon "String") (TyCon "String")))))
+(DFunDef false "scopeTraceContext" ((PVar "gctx") (PVar "sid")) (EApp (EApp (EVar "Scopes.scopeTraceContext") (EApp (EApp (EVar "currentScopeStore") (EVar "gctx")) (ELit LUnit))) (EVar "sid")))
+(DTypeSig true "scopeFrameStats" (TyFun (TyCon "GraphCtx") (TyTuple (TyCon "Int") (TyCon "Int"))))
+(DFunDef false "scopeFrameStats" ((PVar "gctx")) (EApp (EVar "Scopes.scopeFrameStats") (EApp (EApp (EVar "currentScopeStore") (EVar "gctx")) (ELit LUnit))))
+(DTypeSig true "matchWarningsNow" (TyFun (TyCon "ModuleCtx") (TyCon "Bool")))
+(DFunDef false "matchWarningsNow" ((PVar "mctx")) (EMatch (EFieldAccess (EFieldAccess (EFieldAccess (EVar "mctx") "mcCells") "matchWarnings") "value") (arm (PList) () (EVar "False")) (arm PWild () (EVar "True"))))

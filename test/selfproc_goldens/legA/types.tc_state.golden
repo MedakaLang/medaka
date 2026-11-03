@@ -1,7 +1,3 @@
-beginAssumptionTrace : Unit -> TraceSink
-beginEvidenceObservation : Unit -> TraceSink
-beginMethodReturnTrace : Unit -> TraceSink
-beginNumericPredicateTrace : Unit -> TraceSink
 blankModuleCtx : GraphCtx -> String -> ModuleCtx
 builtinCtors : Map String Scheme
 callUOblsWindow : ModuleCtx -> Int -> List UObligation
@@ -27,10 +23,6 @@ emptyTcConfig : TcConfig
 enterStampCtx : ModuleCtx -> StampCtx -> ModuleCtx
 envAt : Option Loc -> TcEnv -> TcEnv
 envAtIfSome : Option Loc -> TcEnv -> TcEnv
-evCellsSpanProbe : GraphCtx -> Int
-finishAssumptionTrace : TraceSink -> List AssumptionTraceEntry
-finishEvidenceObservation : TraceSink -> List EvidenceObservationEntry
-finishNumericPredicateTrace : TraceSink -> List NumericPredicateTraceEntry
 freshCrossRun : Map String Scheme -> CrossRun
 freshGrantState : Unit -> GrantState
 freshGraphRun : Unit -> GraphRun
@@ -51,15 +43,12 @@ moduleCtxFrom : Bool -> ModuleCtx -> ModuleCtx -> ModuleCtx -> ModuleCtx -> Modu
 moduleWindow : Int -> Int -> List a -> List a
 noteHighWater : GraphCtx -> Unit
 noteInterners : GraphCtx -> Unit
-offTraceSink : Unit -> TraceSink
 plainModuleSeed : List (String, Scheme) -> ModuleSeed
 probeGraphCtx : Unit -> GraphCtx
 raiseToHighWater : GraphCtx -> Unit
 refFrom : Bool -> Ref a -> Ref a
 renderEvidenceBinder : GraphCtx -> EvidenceBinderId -> String
 sameSpan : Option Loc -> Option Loc -> Bool
-scopeFrameStats : GraphCtx -> (Int, Int)
-scopeTraceContext : GraphCtx -> ScopeId -> (String, String)
 seedCheckRun : List Decl -> CheckRunSeed
 wAll : Windowed a -> List a
 wMark : Windowed a -> Int
