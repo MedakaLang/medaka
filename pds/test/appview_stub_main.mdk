@@ -239,6 +239,8 @@ recvRequest conn buffer = match scanRequestBoundary buffer 0
       if B.isEmpty chunk then
         Err "appview_stub: call closed before its request was complete"
       else
+        -- Bound: a forwarded call is a request head plus a small body, and the framer re-scans the buffer each step regardless.
+        -- lint-disable-next-line rule-accumulator-append
         recvRequest conn (buffer ++ chunk)
 
 observedField : String -> Request -> String

@@ -107,6 +107,8 @@ readHead conn pending = match findHeaderEnd pending 0
       if B.isEmpty chunk then
         Err "serve_subscribe: connection closed before response headers"
       else
+        -- Bound: the loop ends at the header terminator, so the buffer is one response head plus at most one chunk, and the terminator scan re-reads it each step regardless.
+        -- lint-disable-next-line rule-accumulator-append
         readHead conn (pending ++ chunk)
 
 statusOf : String -> Result String Int
@@ -146,8 +148,16 @@ readRefusalBody conn headerText pending =
     Some want => readBodyBytes conn want pending
 
 readBodyBytes : Connection * -> Int -> Bytes -> <Net> Result String String
-readBodyBytes conn want have =
-  if B.length have >= want then match decodeUtf8 (B.take want have)
+readBodyBytes conn want have = readBodyChunks conn want [have] (B.length have)
+
+-- Chunks are collected newest-first with a running length and joined once.
+readBodyChunks : Connection * ->
+  Int ->
+  List Bytes ->
+  Int ->
+  <Net> Result String String
+readBodyChunks conn want parts got =
+  if got >= want then match decodeUtf8 (B.take want (B.concat (reverse parts)))
     Some text => Ok text
     None => Err "serve_subscribe: refusal body is not UTF-8"
   else match recv conn 4096
@@ -156,7 +166,7 @@ readBodyBytes conn want have =
       if B.isEmpty chunk then
         Err "serve_subscribe: refusal body ended before its content-length"
       else
-        readBodyBytes conn want (have ++ chunk)
+        readBodyChunks conn want (chunk :: parts) (got + B.length chunk)
 
 {- | Complete a handshake and answer the bytes that arrived past the 101.
 
@@ -199,7 +209,12 @@ readFrame conn buffered = match decodeFrame FromServer maxFrameBytes buffered 0
   NeedMore => match recv conn 65536
     Err message => Err message
     Ok chunk =>
-      if B.isEmpty chunk then Ok None else readFrame conn (buffered ++ chunk)
+      if B.isEmpty chunk then
+        Ok None
+      else
+        -- Bound: the decoder re-reads the whole buffer on every step, so joining once would not remove the rescan; a frame is capped by maxFrameBytes and the test streams are a few KiB.
+        -- lint-disable-next-line rule-accumulator-append
+        readFrame conn (buffered ++ chunk)
 
 {- | The largest server frame this client will accept. An event frame carries
    a commit's blocks, so it is bounded by the same CAR ceiling a
