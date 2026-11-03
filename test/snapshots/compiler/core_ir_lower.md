@@ -1,5 +1,5 @@
 # META
-source_lines=4151
+source_lines=4153
 stages=DESUGAR,MARK
 # SOURCE
 import support.symbol_encoding.{encodePair}
@@ -1682,6 +1682,8 @@ mergeTailLambda declared pats (body@(CLam (lamPats@(_ :: _)) inner)) =
   let bound = bindPatsScope pats omEmpty
   if valueArity pats + listLen lamPats <= declared
     && allList (isFreshVarPat bound) lamPats then
+    -- Bound: one step per directly nested lambda literal, bounded by the declared arity.
+    -- lint-disable-next-line rule-accumulator-append
     mergeTailLambda declared (pats ++ lamPats) inner
   else
     (pats, body)
