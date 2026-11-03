@@ -11,8 +11,8 @@ class ProtocolTest(unittest.TestCase):
         self.init = [{"type": "initialize", "versions": [1]},
                      {"type": "initialized", "version": 1, "capabilities": ["check"], "worker": "old", "error": None}]
         self.context = {k: {"value": k, "provenance": "inferred"} for k in ("workspace", "toolchain", "snapshot", "profile")}
-        self.request = {"type": "request", "id": "1", "context": self.context, "operation": {"name": "check", "arguments": {"source": "main = 1"}}}
-        self.response = {"type": "response", "id": "1", "status": "complete", "result": {}, "error": None}
+        self.request = {"type": "request", "id": "1", "context": self.context, "operation": {"name": "openWorkspace", "arguments": {}}}
+        self.response = {"type": "response", "id": "1", "status": "complete", "result": {"worker": "old"}, "error": None}
         self.close = {"type": "shutdown"}
 
     def session(self, *items):
@@ -24,7 +24,7 @@ class ProtocolTest(unittest.TestCase):
         self.assertEqual(set(manifest["response_statuses"]), {"complete", "partial", "error"})
 
     def test_complete_partial_and_error(self):
-        for status, result, error in [("complete", {}, None), ("partial", {"incomplete": True}, None), ("error", None, "failed")]:
+        for status, result, error in [("complete", {"worker": "old"}, None), ("partial", {"incomplete": True}, None), ("error", None, "failed")]:
             response = dict(self.response, status=status, result=result, error=error)
             validate_sequence(self.session(self.request, response))
         with self.assertRaises(ValueError):
@@ -48,14 +48,30 @@ class ProtocolTest(unittest.TestCase):
             validate_sequence(self.session(self.request, self.response, self.request, self.response))
 
     def test_replacement_success_failure_and_inflight(self):
-        replace = {"type": "replace", "id": "2", "artifact": {"id": "new", "digest": "sha256:abc"}}
-        failed = {"type": "replacement", "id": "2", "status": "failed", "worker": "old", "error": "bad artifact"}
-        validate_sequence(self.session(replace, failed, self.request, self.response))
-        validate_sequence(self.session(replace, dict(failed, status="switched", worker="new", error=None)))
+        replace = {"type": "replace", "id": "2", "workspace": "workspace", "artifact": {"id": "new", "digest": "sha256:abc"}}
+        failed = {"type": "replacement", "id": "2", "workspace": "workspace", "status": "failed", "worker": "old", "error": "bad artifact"}
+        validate_sequence(self.session(self.request, self.response, replace, failed))
+        validate_sequence(self.session(self.request, self.response, replace, dict(failed, status="switched", worker="new", error=None)))
         with self.assertRaises(ValueError):
-            validate_sequence(self.session(replace, dict(failed, worker="new")))
+            validate_sequence(self.session(self.request, self.response, replace, dict(failed, worker="new")))
         with self.assertRaises(ValueError):
             validate_sequence(self.session(self.request, replace, failed, self.response))
+
+    def test_workspace_replacement_routing(self):
+        a = copy.deepcopy(self.request)
+        b = copy.deepcopy(self.request)
+        b['id'] = 'b'
+        b['context']['workspace']['value'] = 'B'
+        br = dict(self.response, id='b')
+        replace = {'type': 'replace', 'id': 'r', 'workspace': 'B',
+                   'artifact': {'id': 'new', 'digest': 'sha256:abc'}}
+        reply = {'type': 'replacement', 'id': 'r', 'workspace': 'B',
+                 'status': 'switched', 'worker': 'new', 'error': None}
+        validate_sequence(self.session(a, self.response, b, br, replace, reply))
+        with self.assertRaisesRegex(ValueError, 'unknown workspace'):
+            validate_sequence(self.session(replace, reply))
+        with self.assertRaisesRegex(ValueError, 'workspace mismatch'):
+            validate_sequence(self.session(a, self.response, b, br, replace, dict(reply, workspace='workspace')))
 
     def test_unknown_and_missing_fields(self):
         with self.assertRaises(ValueError):

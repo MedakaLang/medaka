@@ -1,11 +1,38 @@
 {
   "protocol": "medaka-worker",
-  "private_versions": [1],
+  "private_versions": [
+    1
+  ],
   "transport": "one JSON object per line, UTF-8",
-  "identity_fields": ["workspace", "toolchain", "snapshot", "profile"],
-  "identity_provenance": ["attested", "inferred", "unavailable"],
-  "message_types": ["initialize", "initialized", "request", "response", "replace", "replacement", "shutdown"],
-  "response_statuses": ["complete", "partial", "error"],
-  "replacement_statuses": ["switched", "failed"],
-  "mcp_protocol": "separate adapter negotiation; not a private protocol version"
+  "identity_fields": [
+    "workspace",
+    "toolchain",
+    "snapshot",
+    "profile"
+  ],
+  "identity_provenance": [
+    "attested",
+    "inferred",
+    "unavailable"
+  ],
+  "message_types": [
+    "initialize",
+    "initialized",
+    "request",
+    "response",
+    "replace",
+    "replacement",
+    "shutdown"
+  ],
+  "response_statuses": [
+    "complete",
+    "partial",
+    "error"
+  ],
+  "replacement_statuses": [
+    "switched",
+    "failed"
+  ],
+  "mcp_protocol": "separate adapter negotiation; not a private protocol version",
+  "replacement_workspace": "explicit existing workspace id, echoed in replacement"
 }

@@ -42,8 +42,9 @@ requires null value; other values are nonempty strings. The `response` echoes
 error for error. Partial is a terminal response for that request; subsequent
 work needs a new ID. IDs are never reused in a session, including replacements.
 
-A `replace` has `id` and `artifact` with nonempty `id` and `digest` strings.
-The terminal `replacement` echoes the request ID and has `status` `switched`
+A successful `openWorkspace` request establishes a workspace in the session;
+failed opens do not. Its complete result contains the active `worker` identifier. A `replace` has `id`, an explicit existing `workspace`, and `artifact` with nonempty `id` and `digest` strings.
+The terminal `replacement` echoes the request ID and workspace and has `status` `switched`
 with the candidate worker ID and null error, or `failed` with the old worker ID
 and nonempty error. These are lifecycle assertions; the pure transcript validator
 cannot verify file bytes, process state or atomicity. `shutdown` closes an idle
