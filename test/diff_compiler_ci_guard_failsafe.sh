@@ -155,10 +155,11 @@ def yaml_extract():
                 counts[job] += 1
                 if not disjunct_present(if_text, refjob):
                     violations.append((job, lineno, refjob, if_text))
-    return violations, counts, len(jobs), aggregator_problems(jobs) + collector_problems(jobs)
+    return violations, counts, len(jobs), aggregator_problems(jobs) + collector_problems(doc, jobs)
 
-def collector_problems(jobs):
-    steps = (jobs.get('compiler-soundness') or {}).get('steps') or []
+def collector_problems(doc, jobs):
+    job = jobs.get('compiler-soundness') or {}
+    steps = job.get('steps') or []
     matches = [step for step in steps if isinstance(step, dict)
                and step.get('name') == 'MCP collector privileged behavior']
     if len(matches) != 1:
@@ -169,8 +170,15 @@ def collector_problems(jobs):
     command_steps = [s for s in steps if isinstance(s, dict) and s.get('run') == command]
     if step.get('run') != command or len(command_steps) != 1:
         problems.append('compiler-soundness must have exactly one strict MCP collector command in the named step')
-    if 'if' in step:
-        problems.append('compiler-soundness MCP collector privileged behavior step must not have a step-level if')
+    extra = set(step) - {'name', 'run', '__line__'}
+    if extra:
+        problems.append(f'compiler-soundness MCP collector step has unexpected fields: {sorted(extra)}')
+    if 'continue-on-error' in job:
+        problems.append('compiler-soundness must not set job-level continue-on-error')
+    for scope, definition in (('workflow', doc), ('compiler-soundness', job)):
+        defaults = definition.get('defaults') or {}
+        if not isinstance(defaults, dict) or 'run' in defaults:
+            problems.append(f'{scope} must not override run defaults for the MCP collector step')
     return problems
 
 # A required context that only aggregates a matrix: it must need that matrix and run
