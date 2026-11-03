@@ -728,15 +728,15 @@ checkImplSymbolsInjective ((m, tag, key) :: rest) seen native =
 -- positions is an exact zero.  Every `(X, c)` / `(X+1, chr(ord c − 33))` adjacent
 -- pair collides: `Az`/`BY`, `Azure`/`BYure`, `Mzone`/`NYone`.  Two impls of one
 -- interface at head tycons `Mzone` and `NYone`, dispatched through a dict
--- parameter, otherwise build to a binary that answers `mzone|mzone` where `run`
--- answers `mzone|nyone`: both tags hash alike, so the shared dispatcher's first arm
--- wins every call.
+-- parameter, under the wasm emitter (which still compares dict tags at dispatch),
+-- both tags hash alike, so the first arm wins every call.  The native emitter
+-- dispatches through method-table slots and never compares a tag.
 --
 -- The pre-image population is read off every impl entry, supplied (`CImplTagged`)
 -- and inherited (`CImplDefault`) alike: each carries the canonical key
--- (`route_key.implRouteKeyWord`) of its instance, the one word its dispatcher arm
--- compares (`llvm_emit.emitDispatchArm`, `wasm_emit.dispatchKeyTestW`), and the
--- entry's method name is the grouping key of its dispatch chain.  A supplied impl and
+-- (`route_key.implRouteKeyWord`) of its instance, the one word the wasm dispatch arm
+-- compares, and the entry's method name is the grouping key of that method's dispatch
+-- chain.  A supplied impl and
 -- an inherited default of one method share that chain, so their words collide as
 -- surely as two supplied impls' do.  Both hashes are imported
 -- from `types.private_mangle`, the SAME `hashName` the LLVM emitter stamps and the
@@ -744,8 +744,8 @@ checkImplSymbolsInjective ((m, tag, key) :: rest) seen native =
 -- hash certifies a property of the copy.
 --
 -- SCOPE:
---   * partitioned by METHOD NAME.  The emitted dispatcher only compares route words
---     WITHIN one method name's dispatch chain, so two impls of unrelated methods
+--   * partitioned by METHOD NAME.  The wasm dispatch chain compares route words
+--     WITHIN one method name's chain, so two impls of unrelated methods
 --     whose words hash alike are never compared at runtime; refusing them would be a
 --     false positive.  Do not pool route words program-wide.
 --   * covers the DICT-WITNESS TAG space of both backends and nothing else.  Native
@@ -788,7 +788,7 @@ wasmDictTagSpace =
   "wasm (WasmGC) 30-bit i31 dict tag `dictTag` (`hashName` masked to the low 30 bits) -- the full i64 tags are DISTINCT, so a native build of this program is correct; the wasm tag is this hash masked to a narrower width, which collides"
 
 -- (method, route word) of an impl entry, supplied or inherited: the METHOD NAME that
--- word's dispatch chain is keyed by, and the word a dict witness for this impl
+-- word's dispatch is keyed by, and the word a dict witness for this impl
 -- carries (its canonical key, which is also the impl's identity).
 dictRouteWordRow : CImplEntry -> (String, String)
 dictRouteWordRow (CImplEntry m _ _ (CImplTagged _ key _ _ _ _ _)) = (m, key)
@@ -808,7 +808,7 @@ dictRouteWordKey (m, w) = "\{m}\n\{w}"
 -- METHOD-NAME-SCOPED (`"\{mname}\n\{intToString (hash w)}"`) so injectivity is
 -- checked WITHIN one method name's population only — the same partition
 -- `dictRouteWordKey` dedups by, and the same grouping key
--- `implsOf`/`dispFnName` use to decide what a real dispatch chain compares.
+-- `implsOf` uses to decide what a real dispatch compares.
 --
 -- The four data lines are UNINDENTED on purpose, for the same reason
 -- `checkImplSymbolsInjective`'s three are: they are CONTENT-derived, so a
