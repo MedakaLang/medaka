@@ -9,7 +9,10 @@
 
 import support.ordmap.{omEmpty}
 import driver.build_cmd.{makeTempDir, cleanupTempDir}
-import driver.diagnostics.{analyzeProject, stdlibExportsReader, Diag(..)}
+import driver.diagnostics.{
+  analyzeProject, stdlibExportsReader, Diag(..), ProjectLoad(..),
+  ProjectQuery(..)
+}
 import driver.profile_select.{carryProjectProfile}
 import test.{Expectation, expectAll, expectEqual, fail}
 
@@ -41,18 +44,19 @@ analyzedIn rsrc csrc manifestText = match makeTempDir ()
       writeFile entry program)
     let stdlibDir = "stdlib"
     let selected = carryProjectProfile None entry
-    let results =
-      analyzeProject
-        (stdlibExportsReader stdlibDir)
-        True
-        []
-        (Ref [])
-        (Ref omEmpty)
-        (_ => None)
-        entry
-        [dir, stdlibDir]
-        rsrc
-        csrc
+    let results = analyzeProject (stdlibExportsReader stdlibDir) ProjectQuery {
+      pqLoad = ProjectLoad {
+        plCache = Ref [],
+        plParseCache = Ref omEmpty,
+        plRead = _ => None,
+        plEntry = entry,
+        plRoots = [dir, stdlibDir],
+        plRuntimeSrc = rsrc,
+        plCoreSrc = csrc,
+      },
+      pqAllowInternal = True,
+      pqTrusted = [],
+    }
     let msgs = flatMap (r => map diagMessage (snd r)) results
     cleanupTempDir dir
     andThen written (_ => map (_ => msgs) selected)

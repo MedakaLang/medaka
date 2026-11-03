@@ -105,6 +105,8 @@ import driver.loader.{
 }
 import driver.diagnostics.{
   analyzeProjectKeyed,
+  ProjectLoad(..),
+  ProjectQuery(..),
   fileFront,
   FrontOutput(..),
   exportsAmong,
@@ -423,18 +425,19 @@ analyzeMulti emit rsrc csrc tsrc entry _runtimeP _coreP roots loaded exportsFor 
   let mods = map dropPath loaded
   let paths = map ((mid, path, _) => (mid, path)) loaded
   let cacheRef = Ref []
-  let (keyed, results) =
-    analyzeProjectKeyed
-      exportsFor
-      True
-      []
-      cacheRef
-      playgroundParseCache
-      (_ => None)
-      entry
-      roots
-      rsrc
-      csrc
+  let (keyed, results) = analyzeProjectKeyed exportsFor ProjectQuery {
+    pqLoad = ProjectLoad {
+      plCache = cacheRef,
+      plParseCache = playgroundParseCache,
+      plRead = _ => None,
+      plEntry = entry,
+      plRoots = roots,
+      plRuntimeSrc = rsrc,
+      plCoreSrc = csrc,
+    },
+    pqAllowInternal = True,
+    pqTrusted = [],
+  }
   let outputs = match keyed
     Some ((_, o), _) => o
     None => emptyDriveOutputs ()

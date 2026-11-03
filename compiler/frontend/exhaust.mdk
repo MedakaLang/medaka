@@ -1027,7 +1027,7 @@ totalClauseRows oracle (c :: rest)
 -- linear `contains` against a growing seen-LIST per item, and then, for EVERY
 -- distinct name, `clausesForName` rescanned the WHOLE `items` list.  `check`
 -- runs this over every top-level DFunDef in the module (twice: once via
--- analyzeLocated, once via runCheck), so a 2k-function module cost ~4M full-list
+-- analyzeFrom, once via runCheck), so a 2k-function module cost ~4M full-list
 -- walks — it was the dominant cost of `medaka check` on a large file.  Now one
 -- pass buckets clauses by name in an OrdMap (each bucket accumulated front-first,
 -- hence `reverseL` on read-back) and records first-seen names via O(log n)
