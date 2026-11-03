@@ -8,13 +8,19 @@
 -- and pushes nothing.  The closed model types of `tc_mono_test` give the property its inputs.
 
 import test.{
+  Expectation,
   expectAll,
   expectEach,
   expectEqual,
   expectFalse,
+  expectTextContainsAll,
   expectTrue,
+  fail,
 }
-import frontend.parser.{parse}
+import support.diag_codes.{codeText}
+import frontend.desugar.{desugar}
+import frontend.parser.{parse, parseLocated}
+import types.typecheck.{checkOneDiags, defaultDriveInputs, tcCode, tcMsg}
 import frontend.ast.{Decl(..), Ty(..), TyConOrigin(..)}
 import types.repr.{Mono(..), ppMono, ppTy}
 import types.effect_rows.{pureRow}
@@ -342,3 +348,192 @@ prop "a closed written type converts to the closed Mono of its model, with no di
   ppMono mono == ppMono (expected t)
     && isEmpty (monoUnboundIds mono)
     && isEmpty (codesOf m)
+
+-- ── written-type kinds ────────────────────────────────────────────────────
+
+-- The `(code, message)` of every error a whole check of [src] reports, with
+-- the `Option` the kind cases apply declared above it.
+checkedErrors : String -> List (String, String)
+checkedErrors src =
+  let (errors, _) = checkOneDiags defaultDriveInputs [] [] (
+    "kinds",
+    desugar (parseLocated ("data Option a = None | Some a\n" ++ src)),
+  )
+  map (e => (codeText (tcCode e), tcMsg e)) errors
+
+-- [src] is rejected with exactly one error, a kind error saying [fragment].
+rejectsOnceWith : String -> String -> Expectation
+rejectsOnceWith fragment src = match checkedErrors src
+  [(code, msg)] => expectAll [
+    expectEqual "T-IMPL-KIND-MISMATCH" code,
+    expectTextContainsAll [fragment] msg,
+  ]
+  errors => fail "expected exactly one kind error, got \{debug errors}"
+
+optionUnapplied : String
+optionUnapplied =
+  "`Option` has kind `Type -> Type`, but kind `Type` is expected"
+
+test "a constructor written where a type goes is one kind error at that written type" = expectEach
+  [
+    ("#4752", rejectsOnceWith optionUnapplied "f : Option -> Int\nf _ = 0\n"),
+    (
+      "both sides",
+      rejectsOnceWith optionUnapplied "g : Option -> Option\ng x = x\n",
+    ),
+    (
+      "a record field",
+      rejectsOnceWith optionUnapplied "data R = R { f : Option }\n",
+    ),
+    (
+      "an alias right-hand side used in a signature",
+      rejectsOnceWith optionUnapplied """
+          type O = Option
+          g : O -> Int
+          g _ = 0
+          """,
+    ),
+    (
+      "an impl head at a slot of kind Type",
+      rejectsOnceWith
+        optionUnapplied
+        """
+          interface Shower a where
+            sh : a -> String
+          impl Shower Option where
+            sh _ = "o"
+          """,
+    ),
+    (
+      "a requires argument",
+      rejectsOnceWith
+        optionUnapplied
+        """
+          interface Foo a where
+            foo : a -> Int
+          impl Foo (List a) requires Foo Option where
+            foo _ = 0
+          """,
+    ),
+    (
+      "the argument of a signature variable",
+      rejectsOnceWith optionUnapplied "g : f Option -> Int\ng _ = 0\n",
+    ),
+  ]
+
+test "a constructor applied to too many arguments is one kind error" = expectEach
+  [
+    (
+      "Option Int Int",
+      rejectsOnceWith
+        "`Option` has kind `Type -> Type`, but is applied to 2"
+        "h : Option Int Int -> Int\nh _ = 0\n",
+    ),
+    (
+      "Int String",
+      rejectsOnceWith
+        "`Int` has kind `Type`, but is applied to 1"
+        "k : Int String -> Int\nk _ = 0\n",
+    ),
+    (
+      "a data field",
+      rejectsOnceWith
+        "`List` has kind `Type -> Type`, but is applied to 2"
+        "data Box = Box (List Int Int)\n",
+    ),
+    (
+      "an interface parameter used at two arities",
+      rejectsOnceWith
+        "`f` has kind `Type -> Type`, but is applied to 2"
+        """
+        interface Mixed f where
+          one : f a -> Int
+          two : f a b -> Int
+        """,
+    ),
+  ]
+
+test "a parameter with no constructor use is of kind Type unless annotated" = expectEach
+  [
+    (
+      "Proxy Option",
+      rejectsOnceWith
+        optionUnapplied
+        "data Proxy t = Proxy\np : Proxy Option\np = Proxy\n",
+    ),
+    (
+      "Proxy Int",
+      expectEqual
+        []
+        (checkedErrors "data Proxy t = Proxy\np : Proxy Int\np = Proxy\n"),
+    ),
+    (
+      "an annotated Proxy Option",
+      expectEqual
+        []
+        (checkedErrors
+          "data Proxy (t : Type -> Type) = Proxy\np : Proxy Option\np = Proxy\n"),
+    ),
+    (
+      "a method-less interface",
+      rejectsOnceWith optionUnapplied "interface Marker f\nimpl Marker Option\n",
+    ),
+  ]
+
+test "a parameter's constructor kind is inferred from its uses" = expectEach [
+  (
+    "applied in a field",
+    expectEqual
+      []
+      (checkedErrors
+        "data Wrap f a = W (f a)\nw : Wrap Option Int\nw = W (Some 1)\n"),
+  ),
+  (
+    "applied in a method",
+    expectEqual
+      []
+      (checkedErrors
+        """
+          interface Mapper f where
+            mapIt : (a -> b) -> f a -> f b
+          impl Mapper Option where
+            mapIt _ _ = None
+          """),
+  ),
+  (
+    "passed on to a head declared above",
+    expectEqual
+      []
+      (checkedErrors
+        """
+          data Wrap f a = W (f a)
+          data W2 f = W2 (Wrap f Int)
+          v : W2 Option
+          v = W2 (W (Some 1))
+          """),
+  ),
+  (
+    "passed on to a head declared below",
+    expectEqual
+      []
+      (checkedErrors
+        """
+          data W2 f = W2 (Wrap f Int)
+          data Wrap f a = W (f a)
+          v : W2 Option
+          v = W2 (W (Some 1))
+          """),
+  ),
+  (
+    "a declared arrow kind keeps its inner arrow",
+    expectEqual
+      []
+      (checkedErrors "data Wrap (g : (Type -> Type) -> Type) = W (g Option)\n"),
+  ),
+  (
+    "Int where a constructor goes",
+    rejectsOnceWith
+      "`Int` has kind `Type`, but kind `Type -> Type` is expected"
+      "data Wrap f a = W (f a)\nw : Wrap Int Int -> Int\nw _ = 0\n",
+  ),
+]

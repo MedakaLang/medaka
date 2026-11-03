@@ -1,5 +1,5 @@
 # META
-source_lines=2945
+source_lines=2991
 stages=DESUGAR,MARK
 # SOURCE
 -- tc_global: the whole-graph and declaration-level checks that need inference: the coherence scan,
@@ -130,6 +130,7 @@ import types.tc_env.{
   ceRowSupers,
   ceRowTyparams,
   ceSlotKindsAt,
+  kindOfParams,
   constraintSlotDispatchVar,
   declGradedScope,
   effTailNames,
@@ -166,11 +167,14 @@ import types.tc_unify.{
   unifyInto,
 }
 import types.tc_decls_types.{
+  KindScope,
   authArgBindersIn,
   bindingForceFromAst,
   fromAstType,
   fromAstTypeE,
+  kindScopeOf,
   kindsEq,
+  reportWrittenKinds,
   patternSlotNamesIn,
   rowArgNamesIn,
   sigConstraintsOf,
@@ -320,22 +324,64 @@ import map as IdMap
 -- only the interface's declared slot kinds come from stage K's `CE`.  Re-pointing this
 -- walk at `IE.ieRows` changes what the check reads, which is a routing decision, not a
 -- refactor.
+--
+-- Every impl head is also judged as a written type (EFFECTS-SEMANTICS §6.2): each
+-- head type at its interface slot's kind, and each `requires` argument at its
+-- interface's, a graded slot excepted (`reportWrittenKinds`).
 export
 checkGradedImplHeads : ModuleCtx -> ClassEnv -> Int -> List Decl -> Unit
-checkGradedImplHeads _mctx _ _ [] = ()
-checkGradedImplHeads mctx ce cur (d :: rest) =
-  checkGradedImplHeadDecl mctx ce cur d
-  checkGradedImplHeads mctx ce cur rest
+checkGradedImplHeads mctx ce cur prog =
+  let sc = kindScopeOf mctx
+  each (checkGradedImplHeadDecl mctx sc ce cur) prog
 
 -- `implOrigin` is the identity the interface name in `impl <iface> …` acquired at
 -- resolve, read off the same record pattern as the name itself so the two cannot drift
 -- apart (as `tyConOrigin` is read beside `tyConName`).
-checkGradedImplHeadDecl : ModuleCtx -> ClassEnv -> Int -> Decl -> Unit
-checkGradedImplHeadDecl mctx ce cur (DAttrib _ d) =
-  checkGradedImplHeadDecl mctx ce cur d
-checkGradedImplHeadDecl mctx ce cur (DImpl { iface, tys, implOrigin = o, ... }) =
+checkGradedImplHeadDecl : ModuleCtx ->
+  KindScope ->
+  ClassEnv ->
+  Int ->
+  Decl ->
+  Unit
+checkGradedImplHeadDecl mctx sc ce cur (DAttrib _ d) =
+  checkGradedImplHeadDecl mctx sc ce cur d
+checkGradedImplHeadDecl mctx sc ce cur (DImpl { iface, tys, reqs, implOrigin = o, implIfaceLoc = loc, ... }) =
   checkGradedImplTys mctx ce cur o iface 0 tys
-checkGradedImplHeadDecl _mctx _ _ _ = ()
+  reportWrittenKinds
+    mctx
+    sc
+    []
+    loc
+    (implSlotKinds ce cur o iface 0 tys ++ flatMap (requireSlotKinds sc) reqs)
+checkGradedImplHeadDecl _mctx _ _ _ _ = ()
+
+-- Each impl head type with its interface slot's kind, `None` for a slot not known.
+implSlotKinds : ClassEnv ->
+  Int ->
+  TyConOrigin ->
+  String ->
+  Int ->
+  List Ty ->
+  List (Option Kind, Ty)
+implSlotKinds _ _ _ _ _ [] = []
+implSlotKinds ce cur o iface i (t :: rest) =
+  (
+      map
+        kindOfParams
+        (ceSlotKindsAt (regKeyOfTab (ifaceTabKey o iface)) cur i ce),
+      t,
+    )
+    :: implSlotKinds ce cur o iface (i + 1) rest
+
+requireSlotKinds : KindScope -> Require -> List (Option Kind, Ty)
+requireSlotKinds sc (Require { requireHead = n, requireOrigin = o, requireArgs = args }) =
+  slotKindsFor (optionOr [] (sc.ksIfaces o n)) args
+
+-- Argument i at the i-th of [kinds]; an argument past them at no known kind.
+slotKindsFor : List Kind -> List Ty -> List (Option Kind, Ty)
+slotKindsFor _ [] = []
+slotKindsFor (k :: ks) (t :: ts) = (Some k, t) :: slotKindsFor ks ts
+slotKindsFor [] (t :: ts) = (None, t) :: slotKindsFor [] ts
 
 -- The `CE` lookup via `ceSlotKindsAt` uses ordinal filtering — the key is a RegKey
 -- (`ifaceTabKey o iface` + slot position), identity-based not bare-name, carrying the
@@ -2953,10 +2999,10 @@ numDictObls gctx (app :: rest) =
 (DUse false (UseGroup ("types" "tc_mono") ((mem "allArrowEffs" false) (mem "allConcreteHeads" false) (mem "anyConcreteHead" false) (mem "anyContainsI" false) (mem "anyMember" false) (mem "authCellsIn" false) (mem "authOrderIn" false) (mem "authOrderRow" false) (mem "cohEqMono" false) (mem "cohOverlap" false) (mem "cohPpPair" false) (mem "containsI" false) (mem "dedupI" false) (mem "hasDupI" false) (mem "headVarRootOf" false) (mem "instantiateNamedMonos" false) (mem "isUnboundTvar" false) (mem "matchOneSided" false) (mem "monoRootIdSet" false) (mem "monoTyvarId" false) (mem "monoTyvarIds" false) (mem "monoUnboundIds" false) (mem "peelQual" false) (mem "sigTvarIds" false) (mem "stripTyWrap" false) (mem "tyAppSpine" false) (mem "tyStep" false) (mem "tyStructEq" false) (mem "tyvarId" false) (mem "tyVarNames" false))))
 (DUse false (UseGroup ("types" "tc_diag_text") ((mem "backticked" false) (mem "cohCrossModuleMsg" false) (mem "cohIncomparableHelp" false) (mem "cohOverlapMsg" false) (mem "cohPreludeOverlapMsg" false) (mem "collapsesTyvarsMsg" false) (mem "derivableIface" false) (mem "implGoalFixesHeadMsg" false) (mem "implHeadIndexMsg" false) (mem "implKindMismatchMsg" false) (mem "implTupleHeadKindMsg" false) (mem "methodBodyLaunderMsg" false) (mem "methodBodySubject" false) (mem "missingImplMethodMsg" false) (mem "narrowsImplHeadMsg" false) (mem "pinsTyvarMsg" false) (mem "qualifiedIfaceLabel" false) (mem "superContextNoImplMsg" false) (mem "superContextUndeclaredMsg" false) (mem "undeclaredImplPredicateMsg" false) (mem "undeclaredImplPrerequisiteMsg" false))))
 (DUse false (UseGroup ("types" "tc_state") ((mem "callUOblsWindow" false) (mem "currentScopeStore" false) (mem "defaultReceiverOrdinal" false) (mem "dynAtIfSome" false) (mem "emptySigVars" false) (mem "envAtIfSome" false) (mem "mctxAtIfSome" false) (mem "wMark" false) (mem "wPushAll" false) (mem "wRestore" false) (mem "wSnapshot" false) (mem "wWindow" false))))
-(DUse false (UseGroup ("types" "tc_env") ((mem "anyKRow" false) (mem "builtinIfaceRef" false) (mem "ceLookupAt" false) (mem "ceMethodTyAt" false) (mem "ceRequiredAt" false) (mem "ceRowIfaceName" false) (mem "ceRowLoc" false) (mem "ceRowMethods" false) (mem "ceRowsOwnedBy" false) (mem "ceRowSupers" false) (mem "ceRowTyparams" false) (mem "ceSlotKindsAt" false) (mem "constraintSlotDispatchVar" false) (mem "declGradedScope" false) (mem "effTailNames" false) (mem "extendVars" false) (mem "ieRowInst" false) (mem "ieRowLoc" false) (mem "ieRowOrd" false) (mem "ieRowsAll" false) (mem "ieRowsOwnedBy" false) (mem "ieRowsVisibleAt" false) (mem "ieRowTriple" false) (mem "ifaceTabKey" false) (mem "instRefMid" false) (mem "methodLevelConstraintVarNames" false) (mem "removeAllS" false) (mem "tyTabKey" false))))
+(DUse false (UseGroup ("types" "tc_env") ((mem "anyKRow" false) (mem "builtinIfaceRef" false) (mem "ceLookupAt" false) (mem "ceMethodTyAt" false) (mem "ceRequiredAt" false) (mem "ceRowIfaceName" false) (mem "ceRowLoc" false) (mem "ceRowMethods" false) (mem "ceRowsOwnedBy" false) (mem "ceRowSupers" false) (mem "ceRowTyparams" false) (mem "ceSlotKindsAt" false) (mem "kindOfParams" false) (mem "constraintSlotDispatchVar" false) (mem "declGradedScope" false) (mem "effTailNames" false) (mem "extendVars" false) (mem "ieRowInst" false) (mem "ieRowLoc" false) (mem "ieRowOrd" false) (mem "ieRowsAll" false) (mem "ieRowsOwnedBy" false) (mem "ieRowsVisibleAt" false) (mem "ieRowTriple" false) (mem "ifaceTabKey" false) (mem "instRefMid" false) (mem "methodLevelConstraintVarNames" false) (mem "removeAllS" false) (mem "tyTabKey" false))))
 (DUse false (UseGroup ("types" "tc_diag") ((mem "erredDuring" false) (mem "pushTypeError" false) (mem "pushTypeErrorAt" false) (mem "pushTypeErrorOnceAt" false) (mem "pushTypeErrorOncePerSite" false))))
 (DUse false (UseGroup ("types" "tc_unify") ((mem "captureScope" false) (mem "closeScope" false) (mem "enterLevel" false) (mem "exitLevel" false) (mem "freshAuthBinderRanged" false) (mem "freshTvMap" false) (mem "instantiateMethodTracked" false) (mem "rowInto" false) (mem "unifyInto" false))))
-(DUse false (UseGroup ("types" "tc_decls_types") ((mem "authArgBindersIn" false) (mem "bindingForceFromAst" false) (mem "fromAstType" false) (mem "fromAstTypeE" false) (mem "kindsEq" false) (mem "patternSlotNamesIn" false) (mem "rowArgNamesIn" false) (mem "sigConstraintsOf" false) (mem "sigVarsWithAuths" false))))
+(DUse false (UseGroup ("types" "tc_decls_types") ((mem "KindScope" false) (mem "authArgBindersIn" false) (mem "bindingForceFromAst" false) (mem "fromAstType" false) (mem "fromAstTypeE" false) (mem "kindScopeOf" false) (mem "kindsEq" false) (mem "reportWrittenKinds" false) (mem "patternSlotNamesIn" false) (mem "rowArgNamesIn" false) (mem "sigConstraintsOf" false) (mem "sigVarsWithAuths" false))))
 (DUse false (UseGroup ("types" "tc_decls") ((mem "dedupBinders" false) (mem "methodSchemesPure" false) (mem "sigToSchemeTvsIn" false) (mem "sigVarsFor" false) (mem "tyConNamesInTy" false))))
 (DUse false (UseGroup ("types" "tc_solve_givens") ((mem "givenAnswers" false) (mem "predicateSlotKnownSupers" false) (mem "publishMethodPredGivens" false) (mem "registerFunPredGiven" false) (mem "registerImplMethodDicts" false) (mem "registerMethodDictSlots" false))))
 (DUse false (UseGroup ("types" "tc_solve_entail") ((mem "goalCandidates" false) (mem "goalRows" false) (mem "reqWalkEnter" false) (mem "reqWalkStart" false) (mem "superParamsOf" false))))
@@ -2985,12 +3031,20 @@ numDictObls gctx (app :: rest) =
 (DUse false (UseAlias ("types" "scopes") "Scopes"))
 (DUse false (UseAlias ("map") "IdMap"))
 (DTypeSig true "checkGradedImplHeads" (TyFun (TyCon "ModuleCtx") (TyFun (TyCon "ClassEnv") (TyFun (TyCon "Int") (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyCon "Unit"))))))
-(DFunDef false "checkGradedImplHeads" ((PVar "_mctx") PWild PWild (PList)) (ELit LUnit))
-(DFunDef false "checkGradedImplHeads" ((PVar "mctx") (PVar "ce") (PVar "cur") (PCons (PVar "d") (PVar "rest"))) (EBlock (DoExpr (EApp (EApp (EApp (EApp (EVar "checkGradedImplHeadDecl") (EVar "mctx")) (EVar "ce")) (EVar "cur")) (EVar "d"))) (DoExpr (EApp (EApp (EApp (EApp (EVar "checkGradedImplHeads") (EVar "mctx")) (EVar "ce")) (EVar "cur")) (EVar "rest")))))
-(DTypeSig false "checkGradedImplHeadDecl" (TyFun (TyCon "ModuleCtx") (TyFun (TyCon "ClassEnv") (TyFun (TyCon "Int") (TyFun (TyCon "Decl") (TyCon "Unit"))))))
-(DFunDef false "checkGradedImplHeadDecl" ((PVar "mctx") (PVar "ce") (PVar "cur") (PCon "DAttrib" PWild (PVar "d"))) (EApp (EApp (EApp (EApp (EVar "checkGradedImplHeadDecl") (EVar "mctx")) (EVar "ce")) (EVar "cur")) (EVar "d")))
-(DFunDef false "checkGradedImplHeadDecl" ((PVar "mctx") (PVar "ce") (PVar "cur") (PRec "DImpl" ((rf "iface" None) (rf "tys" None) (rf "implOrigin" (PVar "o"))) true)) (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EVar "checkGradedImplTys") (EVar "mctx")) (EVar "ce")) (EVar "cur")) (EVar "o")) (EVar "iface")) (ELit (LInt 0))) (EVar "tys")))
-(DFunDef false "checkGradedImplHeadDecl" ((PVar "_mctx") PWild PWild PWild) (ELit LUnit))
+(DFunDef false "checkGradedImplHeads" ((PVar "mctx") (PVar "ce") (PVar "cur") (PVar "prog")) (EBlock (DoLet false false (PVar "sc") (EApp (EVar "kindScopeOf") (EVar "mctx"))) (DoExpr (EApp (EApp (EVar "each") (EApp (EApp (EApp (EApp (EVar "checkGradedImplHeadDecl") (EVar "mctx")) (EVar "sc")) (EVar "ce")) (EVar "cur"))) (EVar "prog")))))
+(DTypeSig false "checkGradedImplHeadDecl" (TyFun (TyCon "ModuleCtx") (TyFun (TyCon "KindScope") (TyFun (TyCon "ClassEnv") (TyFun (TyCon "Int") (TyFun (TyCon "Decl") (TyCon "Unit")))))))
+(DFunDef false "checkGradedImplHeadDecl" ((PVar "mctx") (PVar "sc") (PVar "ce") (PVar "cur") (PCon "DAttrib" PWild (PVar "d"))) (EApp (EApp (EApp (EApp (EApp (EVar "checkGradedImplHeadDecl") (EVar "mctx")) (EVar "sc")) (EVar "ce")) (EVar "cur")) (EVar "d")))
+(DFunDef false "checkGradedImplHeadDecl" ((PVar "mctx") (PVar "sc") (PVar "ce") (PVar "cur") (PRec "DImpl" ((rf "iface" None) (rf "tys" None) (rf "reqs" None) (rf "implOrigin" (PVar "o")) (rf "implIfaceLoc" (PVar "loc"))) true)) (EBlock (DoExpr (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EVar "checkGradedImplTys") (EVar "mctx")) (EVar "ce")) (EVar "cur")) (EVar "o")) (EVar "iface")) (ELit (LInt 0))) (EVar "tys"))) (DoExpr (EApp (EApp (EApp (EApp (EApp (EVar "reportWrittenKinds") (EVar "mctx")) (EVar "sc")) (EListLit)) (EVar "loc")) (EBinOp "++" (EApp (EApp (EApp (EApp (EApp (EApp (EVar "implSlotKinds") (EVar "ce")) (EVar "cur")) (EVar "o")) (EVar "iface")) (ELit (LInt 0))) (EVar "tys")) (EApp (EApp (EVar "flatMap") (EApp (EVar "requireSlotKinds") (EVar "sc"))) (EVar "reqs")))))))
+(DFunDef false "checkGradedImplHeadDecl" ((PVar "_mctx") PWild PWild PWild PWild) (ELit LUnit))
+(DTypeSig false "implSlotKinds" (TyFun (TyCon "ClassEnv") (TyFun (TyCon "Int") (TyFun (TyCon "TyConOrigin") (TyFun (TyCon "String") (TyFun (TyCon "Int") (TyFun (TyApp (TyCon "List") (TyCon "Ty")) (TyApp (TyCon "List") (TyTuple (TyApp (TyCon "Option") (TyCon "Kind")) (TyCon "Ty"))))))))))
+(DFunDef false "implSlotKinds" (PWild PWild PWild PWild PWild (PList)) (EListLit))
+(DFunDef false "implSlotKinds" ((PVar "ce") (PVar "cur") (PVar "o") (PVar "iface") (PVar "i") (PCons (PVar "t") (PVar "rest"))) (EBinOp "::" (ETuple (EApp (EApp (EVar "map") (EVar "kindOfParams")) (EApp (EApp (EApp (EApp (EVar "ceSlotKindsAt") (EApp (EVar "regKeyOfTab") (EApp (EApp (EVar "ifaceTabKey") (EVar "o")) (EVar "iface")))) (EVar "cur")) (EVar "i")) (EVar "ce"))) (EVar "t")) (EApp (EApp (EApp (EApp (EApp (EApp (EVar "implSlotKinds") (EVar "ce")) (EVar "cur")) (EVar "o")) (EVar "iface")) (EBinOp "+" (EVar "i") (ELit (LInt 1)))) (EVar "rest"))))
+(DTypeSig false "requireSlotKinds" (TyFun (TyCon "KindScope") (TyFun (TyCon "Require") (TyApp (TyCon "List") (TyTuple (TyApp (TyCon "Option") (TyCon "Kind")) (TyCon "Ty"))))))
+(DFunDef false "requireSlotKinds" ((PVar "sc") (PRec "Require" ((rf "requireHead" (PVar "n")) (rf "requireOrigin" (PVar "o")) (rf "requireArgs" (PVar "args"))) false)) (EApp (EApp (EVar "slotKindsFor") (EApp (EApp (EVar "optionOr") (EListLit)) (EApp (EApp (EFieldAccess (EVar "sc") "ksIfaces") (EVar "o")) (EVar "n")))) (EVar "args")))
+(DTypeSig false "slotKindsFor" (TyFun (TyApp (TyCon "List") (TyCon "Kind")) (TyFun (TyApp (TyCon "List") (TyCon "Ty")) (TyApp (TyCon "List") (TyTuple (TyApp (TyCon "Option") (TyCon "Kind")) (TyCon "Ty"))))))
+(DFunDef false "slotKindsFor" (PWild (PList)) (EListLit))
+(DFunDef false "slotKindsFor" ((PCons (PVar "k") (PVar "ks")) (PCons (PVar "t") (PVar "ts"))) (EBinOp "::" (ETuple (EApp (EVar "Some") (EVar "k")) (EVar "t")) (EApp (EApp (EVar "slotKindsFor") (EVar "ks")) (EVar "ts"))))
+(DFunDef false "slotKindsFor" ((PList) (PCons (PVar "t") (PVar "ts"))) (EBinOp "::" (ETuple (EVar "None") (EVar "t")) (EApp (EApp (EVar "slotKindsFor") (EListLit)) (EVar "ts"))))
 (DTypeSig false "checkGradedImplTys" (TyFun (TyCon "ModuleCtx") (TyFun (TyCon "ClassEnv") (TyFun (TyCon "Int") (TyFun (TyCon "TyConOrigin") (TyFun (TyCon "String") (TyFun (TyCon "Int") (TyFun (TyApp (TyCon "List") (TyCon "Ty")) (TyCon "Unit")))))))))
 (DFunDef false "checkGradedImplTys" ((PVar "_mctx") PWild PWild PWild PWild PWild (PList)) (ELit LUnit))
 (DFunDef false "checkGradedImplTys" ((PVar "mctx") (PVar "ce") (PVar "cur") (PVar "o") (PVar "iface") (PVar "i") (PCons (PVar "t") (PVar "rest"))) (EBlock (DoExpr (EMatch (EApp (EApp (EApp (EApp (EVar "ceSlotKindsAt") (EApp (EVar "regKeyOfTab") (EApp (EApp (EVar "ifaceTabKey") (EVar "o")) (EVar "iface")))) (EVar "cur")) (EVar "i")) (EVar "ce")) (arm (PCon "Some" (PVar "want")) ((GBool (EApp (EVar "anyKRow") (EVar "want")))) (EApp (EApp (EApp (EApp (EVar "checkGradedImplHead") (EVar "mctx")) (EVar "iface")) (EVar "t")) (EVar "want"))) (arm PWild () (ELit LUnit)))) (DoExpr (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EVar "checkGradedImplTys") (EVar "mctx")) (EVar "ce")) (EVar "cur")) (EVar "o")) (EVar "iface")) (EBinOp "+" (EVar "i") (ELit (LInt 1)))) (EVar "rest")))))
@@ -3287,10 +3341,10 @@ numDictObls gctx (app :: rest) =
 (DUse false (UseGroup ("types" "tc_mono") ((mem "allArrowEffs" false) (mem "allConcreteHeads" false) (mem "anyConcreteHead" false) (mem "anyContainsI" false) (mem "anyMember" false) (mem "authCellsIn" false) (mem "authOrderIn" false) (mem "authOrderRow" false) (mem "cohEqMono" false) (mem "cohOverlap" false) (mem "cohPpPair" false) (mem "containsI" false) (mem "dedupI" false) (mem "hasDupI" false) (mem "headVarRootOf" false) (mem "instantiateNamedMonos" false) (mem "isUnboundTvar" false) (mem "matchOneSided" false) (mem "monoRootIdSet" false) (mem "monoTyvarId" false) (mem "monoTyvarIds" false) (mem "monoUnboundIds" false) (mem "peelQual" false) (mem "sigTvarIds" false) (mem "stripTyWrap" false) (mem "tyAppSpine" false) (mem "tyStep" false) (mem "tyStructEq" false) (mem "tyvarId" false) (mem "tyVarNames" false))))
 (DUse false (UseGroup ("types" "tc_diag_text") ((mem "backticked" false) (mem "cohCrossModuleMsg" false) (mem "cohIncomparableHelp" false) (mem "cohOverlapMsg" false) (mem "cohPreludeOverlapMsg" false) (mem "collapsesTyvarsMsg" false) (mem "derivableIface" false) (mem "implGoalFixesHeadMsg" false) (mem "implHeadIndexMsg" false) (mem "implKindMismatchMsg" false) (mem "implTupleHeadKindMsg" false) (mem "methodBodyLaunderMsg" false) (mem "methodBodySubject" false) (mem "missingImplMethodMsg" false) (mem "narrowsImplHeadMsg" false) (mem "pinsTyvarMsg" false) (mem "qualifiedIfaceLabel" false) (mem "superContextNoImplMsg" false) (mem "superContextUndeclaredMsg" false) (mem "undeclaredImplPredicateMsg" false) (mem "undeclaredImplPrerequisiteMsg" false))))
 (DUse false (UseGroup ("types" "tc_state") ((mem "callUOblsWindow" false) (mem "currentScopeStore" false) (mem "defaultReceiverOrdinal" false) (mem "dynAtIfSome" false) (mem "emptySigVars" false) (mem "envAtIfSome" false) (mem "mctxAtIfSome" false) (mem "wMark" false) (mem "wPushAll" false) (mem "wRestore" false) (mem "wSnapshot" false) (mem "wWindow" false))))
-(DUse false (UseGroup ("types" "tc_env") ((mem "anyKRow" false) (mem "builtinIfaceRef" false) (mem "ceLookupAt" false) (mem "ceMethodTyAt" false) (mem "ceRequiredAt" false) (mem "ceRowIfaceName" false) (mem "ceRowLoc" false) (mem "ceRowMethods" false) (mem "ceRowsOwnedBy" false) (mem "ceRowSupers" false) (mem "ceRowTyparams" false) (mem "ceSlotKindsAt" false) (mem "constraintSlotDispatchVar" false) (mem "declGradedScope" false) (mem "effTailNames" false) (mem "extendVars" false) (mem "ieRowInst" false) (mem "ieRowLoc" false) (mem "ieRowOrd" false) (mem "ieRowsAll" false) (mem "ieRowsOwnedBy" false) (mem "ieRowsVisibleAt" false) (mem "ieRowTriple" false) (mem "ifaceTabKey" false) (mem "instRefMid" false) (mem "methodLevelConstraintVarNames" false) (mem "removeAllS" false) (mem "tyTabKey" false))))
+(DUse false (UseGroup ("types" "tc_env") ((mem "anyKRow" false) (mem "builtinIfaceRef" false) (mem "ceLookupAt" false) (mem "ceMethodTyAt" false) (mem "ceRequiredAt" false) (mem "ceRowIfaceName" false) (mem "ceRowLoc" false) (mem "ceRowMethods" false) (mem "ceRowsOwnedBy" false) (mem "ceRowSupers" false) (mem "ceRowTyparams" false) (mem "ceSlotKindsAt" false) (mem "kindOfParams" false) (mem "constraintSlotDispatchVar" false) (mem "declGradedScope" false) (mem "effTailNames" false) (mem "extendVars" false) (mem "ieRowInst" false) (mem "ieRowLoc" false) (mem "ieRowOrd" false) (mem "ieRowsAll" false) (mem "ieRowsOwnedBy" false) (mem "ieRowsVisibleAt" false) (mem "ieRowTriple" false) (mem "ifaceTabKey" false) (mem "instRefMid" false) (mem "methodLevelConstraintVarNames" false) (mem "removeAllS" false) (mem "tyTabKey" false))))
 (DUse false (UseGroup ("types" "tc_diag") ((mem "erredDuring" false) (mem "pushTypeError" false) (mem "pushTypeErrorAt" false) (mem "pushTypeErrorOnceAt" false) (mem "pushTypeErrorOncePerSite" false))))
 (DUse false (UseGroup ("types" "tc_unify") ((mem "captureScope" false) (mem "closeScope" false) (mem "enterLevel" false) (mem "exitLevel" false) (mem "freshAuthBinderRanged" false) (mem "freshTvMap" false) (mem "instantiateMethodTracked" false) (mem "rowInto" false) (mem "unifyInto" false))))
-(DUse false (UseGroup ("types" "tc_decls_types") ((mem "authArgBindersIn" false) (mem "bindingForceFromAst" false) (mem "fromAstType" false) (mem "fromAstTypeE" false) (mem "kindsEq" false) (mem "patternSlotNamesIn" false) (mem "rowArgNamesIn" false) (mem "sigConstraintsOf" false) (mem "sigVarsWithAuths" false))))
+(DUse false (UseGroup ("types" "tc_decls_types") ((mem "KindScope" false) (mem "authArgBindersIn" false) (mem "bindingForceFromAst" false) (mem "fromAstType" false) (mem "fromAstTypeE" false) (mem "kindScopeOf" false) (mem "kindsEq" false) (mem "reportWrittenKinds" false) (mem "patternSlotNamesIn" false) (mem "rowArgNamesIn" false) (mem "sigConstraintsOf" false) (mem "sigVarsWithAuths" false))))
 (DUse false (UseGroup ("types" "tc_decls") ((mem "dedupBinders" false) (mem "methodSchemesPure" false) (mem "sigToSchemeTvsIn" false) (mem "sigVarsFor" false) (mem "tyConNamesInTy" false))))
 (DUse false (UseGroup ("types" "tc_solve_givens") ((mem "givenAnswers" false) (mem "predicateSlotKnownSupers" false) (mem "publishMethodPredGivens" false) (mem "registerFunPredGiven" false) (mem "registerImplMethodDicts" false) (mem "registerMethodDictSlots" false))))
 (DUse false (UseGroup ("types" "tc_solve_entail") ((mem "goalCandidates" false) (mem "goalRows" false) (mem "reqWalkEnter" false) (mem "reqWalkStart" false) (mem "superParamsOf" false))))
@@ -3319,12 +3373,20 @@ numDictObls gctx (app :: rest) =
 (DUse false (UseAlias ("types" "scopes") "Scopes"))
 (DUse false (UseAlias ("map") "IdMap"))
 (DTypeSig true "checkGradedImplHeads" (TyFun (TyCon "ModuleCtx") (TyFun (TyCon "ClassEnv") (TyFun (TyCon "Int") (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyCon "Unit"))))))
-(DFunDef false "checkGradedImplHeads" ((PVar "_mctx") PWild PWild (PList)) (ELit LUnit))
-(DFunDef false "checkGradedImplHeads" ((PVar "mctx") (PVar "ce") (PVar "cur") (PCons (PVar "d") (PVar "rest"))) (EBlock (DoExpr (EApp (EApp (EApp (EApp (EVar "checkGradedImplHeadDecl") (EVar "mctx")) (EVar "ce")) (EVar "cur")) (EVar "d"))) (DoExpr (EApp (EApp (EApp (EApp (EVar "checkGradedImplHeads") (EVar "mctx")) (EVar "ce")) (EVar "cur")) (EVar "rest")))))
-(DTypeSig false "checkGradedImplHeadDecl" (TyFun (TyCon "ModuleCtx") (TyFun (TyCon "ClassEnv") (TyFun (TyCon "Int") (TyFun (TyCon "Decl") (TyCon "Unit"))))))
-(DFunDef false "checkGradedImplHeadDecl" ((PVar "mctx") (PVar "ce") (PVar "cur") (PCon "DAttrib" PWild (PVar "d"))) (EApp (EApp (EApp (EApp (EVar "checkGradedImplHeadDecl") (EVar "mctx")) (EVar "ce")) (EVar "cur")) (EVar "d")))
-(DFunDef false "checkGradedImplHeadDecl" ((PVar "mctx") (PVar "ce") (PVar "cur") (PRec "DImpl" ((rf "iface" None) (rf "tys" None) (rf "implOrigin" (PVar "o"))) true)) (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EVar "checkGradedImplTys") (EVar "mctx")) (EVar "ce")) (EVar "cur")) (EVar "o")) (EVar "iface")) (ELit (LInt 0))) (EVar "tys")))
-(DFunDef false "checkGradedImplHeadDecl" ((PVar "_mctx") PWild PWild PWild) (ELit LUnit))
+(DFunDef false "checkGradedImplHeads" ((PVar "mctx") (PVar "ce") (PVar "cur") (PVar "prog")) (EBlock (DoLet false false (PVar "sc") (EApp (EVar "kindScopeOf") (EVar "mctx"))) (DoExpr (EApp (EApp (EVar "each") (EApp (EApp (EApp (EApp (EVar "checkGradedImplHeadDecl") (EVar "mctx")) (EVar "sc")) (EVar "ce")) (EVar "cur"))) (EVar "prog")))))
+(DTypeSig false "checkGradedImplHeadDecl" (TyFun (TyCon "ModuleCtx") (TyFun (TyCon "KindScope") (TyFun (TyCon "ClassEnv") (TyFun (TyCon "Int") (TyFun (TyCon "Decl") (TyCon "Unit")))))))
+(DFunDef false "checkGradedImplHeadDecl" ((PVar "mctx") (PVar "sc") (PVar "ce") (PVar "cur") (PCon "DAttrib" PWild (PVar "d"))) (EApp (EApp (EApp (EApp (EApp (EVar "checkGradedImplHeadDecl") (EVar "mctx")) (EVar "sc")) (EVar "ce")) (EVar "cur")) (EVar "d")))
+(DFunDef false "checkGradedImplHeadDecl" ((PVar "mctx") (PVar "sc") (PVar "ce") (PVar "cur") (PRec "DImpl" ((rf "iface" None) (rf "tys" None) (rf "reqs" None) (rf "implOrigin" (PVar "o")) (rf "implIfaceLoc" (PVar "loc"))) true)) (EBlock (DoExpr (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EVar "checkGradedImplTys") (EVar "mctx")) (EVar "ce")) (EVar "cur")) (EVar "o")) (EVar "iface")) (ELit (LInt 0))) (EVar "tys"))) (DoExpr (EApp (EApp (EApp (EApp (EApp (EVar "reportWrittenKinds") (EVar "mctx")) (EVar "sc")) (EListLit)) (EVar "loc")) (EBinOp "++" (EApp (EApp (EApp (EApp (EApp (EApp (EVar "implSlotKinds") (EVar "ce")) (EVar "cur")) (EVar "o")) (EVar "iface")) (ELit (LInt 0))) (EVar "tys")) (EApp (EApp (EDictApp "flatMap") (EApp (EVar "requireSlotKinds") (EVar "sc"))) (EVar "reqs")))))))
+(DFunDef false "checkGradedImplHeadDecl" ((PVar "_mctx") PWild PWild PWild PWild) (ELit LUnit))
+(DTypeSig false "implSlotKinds" (TyFun (TyCon "ClassEnv") (TyFun (TyCon "Int") (TyFun (TyCon "TyConOrigin") (TyFun (TyCon "String") (TyFun (TyCon "Int") (TyFun (TyApp (TyCon "List") (TyCon "Ty")) (TyApp (TyCon "List") (TyTuple (TyApp (TyCon "Option") (TyCon "Kind")) (TyCon "Ty"))))))))))
+(DFunDef false "implSlotKinds" (PWild PWild PWild PWild PWild (PList)) (EListLit))
+(DFunDef false "implSlotKinds" ((PVar "ce") (PVar "cur") (PVar "o") (PVar "iface") (PVar "i") (PCons (PVar "t") (PVar "rest"))) (EBinOp "::" (ETuple (EApp (EApp (EMethodRef "map") (EVar "kindOfParams")) (EApp (EApp (EApp (EApp (EVar "ceSlotKindsAt") (EApp (EVar "regKeyOfTab") (EApp (EApp (EVar "ifaceTabKey") (EVar "o")) (EVar "iface")))) (EVar "cur")) (EVar "i")) (EVar "ce"))) (EVar "t")) (EApp (EApp (EApp (EApp (EApp (EApp (EVar "implSlotKinds") (EVar "ce")) (EVar "cur")) (EVar "o")) (EVar "iface")) (EBinOp "+" (EVar "i") (ELit (LInt 1)))) (EVar "rest"))))
+(DTypeSig false "requireSlotKinds" (TyFun (TyCon "KindScope") (TyFun (TyCon "Require") (TyApp (TyCon "List") (TyTuple (TyApp (TyCon "Option") (TyCon "Kind")) (TyCon "Ty"))))))
+(DFunDef false "requireSlotKinds" ((PVar "sc") (PRec "Require" ((rf "requireHead" (PVar "n")) (rf "requireOrigin" (PVar "o")) (rf "requireArgs" (PVar "args"))) false)) (EApp (EApp (EVar "slotKindsFor") (EApp (EApp (EVar "optionOr") (EListLit)) (EApp (EApp (EFieldAccess (EVar "sc") "ksIfaces") (EVar "o")) (EVar "n")))) (EVar "args")))
+(DTypeSig false "slotKindsFor" (TyFun (TyApp (TyCon "List") (TyCon "Kind")) (TyFun (TyApp (TyCon "List") (TyCon "Ty")) (TyApp (TyCon "List") (TyTuple (TyApp (TyCon "Option") (TyCon "Kind")) (TyCon "Ty"))))))
+(DFunDef false "slotKindsFor" (PWild (PList)) (EListLit))
+(DFunDef false "slotKindsFor" ((PCons (PVar "k") (PVar "ks")) (PCons (PVar "t") (PVar "ts"))) (EBinOp "::" (ETuple (EApp (EVar "Some") (EVar "k")) (EVar "t")) (EApp (EApp (EVar "slotKindsFor") (EVar "ks")) (EVar "ts"))))
+(DFunDef false "slotKindsFor" ((PList) (PCons (PVar "t") (PVar "ts"))) (EBinOp "::" (ETuple (EVar "None") (EVar "t")) (EApp (EApp (EVar "slotKindsFor") (EListLit)) (EVar "ts"))))
 (DTypeSig false "checkGradedImplTys" (TyFun (TyCon "ModuleCtx") (TyFun (TyCon "ClassEnv") (TyFun (TyCon "Int") (TyFun (TyCon "TyConOrigin") (TyFun (TyCon "String") (TyFun (TyCon "Int") (TyFun (TyApp (TyCon "List") (TyCon "Ty")) (TyCon "Unit")))))))))
 (DFunDef false "checkGradedImplTys" ((PVar "_mctx") PWild PWild PWild PWild PWild (PList)) (ELit LUnit))
 (DFunDef false "checkGradedImplTys" ((PVar "mctx") (PVar "ce") (PVar "cur") (PVar "o") (PVar "iface") (PVar "i") (PCons (PVar "t") (PVar "rest"))) (EBlock (DoExpr (EMatch (EApp (EApp (EApp (EApp (EVar "ceSlotKindsAt") (EApp (EVar "regKeyOfTab") (EApp (EApp (EVar "ifaceTabKey") (EVar "o")) (EVar "iface")))) (EVar "cur")) (EVar "i")) (EVar "ce")) (arm (PCon "Some" (PVar "want")) ((GBool (EApp (EVar "anyKRow") (EVar "want")))) (EApp (EApp (EApp (EApp (EVar "checkGradedImplHead") (EVar "mctx")) (EVar "iface")) (EVar "t")) (EVar "want"))) (arm PWild () (ELit LUnit)))) (DoExpr (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EVar "checkGradedImplTys") (EVar "mctx")) (EVar "ce")) (EVar "cur")) (EVar "o")) (EVar "iface")) (EBinOp "+" (EVar "i") (ELit (LInt 1)))) (EVar "rest")))))

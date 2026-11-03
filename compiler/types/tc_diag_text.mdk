@@ -273,10 +273,29 @@ kindName : Kind -> String
 kindName KType = "Type"
 kindName KRow = "Effect"
 kindName (KAuth l pat) = "Authority \{effLabelName l}\{patternMark pat}"
+kindName (KArrow d r) = "\{kindDomainName d} -> \{kindName r}"
+
+-- An arrow on the left of an arrow is parenthesised, as `kindAnnSource` spells it.
+kindDomainName : Kind -> String
+kindDomainName (KArrow d r) = "(\{kindName (KArrow d r)})"
+kindDomainName k = kindName k
+
+-- A written constructor applied to more arguments than it has parameters
+-- (EFFECTS-SEMANTICS §6.4).  [ctor] is a raw head tag (`ppConName`).
+export
+writtenKindArityMsg : String -> Kind -> Int -> String
+writtenKindArityMsg ctor kind nArgs =
+  "kind mismatch: `\{ppConName ctor}` has kind `\{kindName kind}`, but is applied to \{nArgs} type argument(s)"
+
+-- A written type whose kind is not the one its position takes (§6.4).
+export
+writtenKindMismatchMsg : String -> Kind -> Kind -> String
+writtenKindMismatchMsg written got want =
+  "kind mismatch: `\{written}` has kind `\{kindName got}`, but kind `\{kindName want}` is expected here"
 
 export
 renderKindArrow : List Kind -> String
-renderKindArrow ks = joinWith " -> " (map kindName ks ++ ["Type"])
+renderKindArrow ks = joinWith " -> " (map kindDomainName ks ++ ["Type"])
 
 -- [ctor] is a RAW head tag and must reach the reader through `ppConName` — a tuple
 -- head arrives as `__tuple2__`, and leaking that is exactly what ppConName exists to

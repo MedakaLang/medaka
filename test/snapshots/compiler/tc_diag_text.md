@@ -1,5 +1,5 @@
 # META
-source_lines=1512
+source_lines=1531
 stages=DESUGAR,MARK
 # SOURCE
 -- tc_diag_text: the context-free message text of the typechecker: every message, help and fix
@@ -277,10 +277,29 @@ kindName : Kind -> String
 kindName KType = "Type"
 kindName KRow = "Effect"
 kindName (KAuth l pat) = "Authority \{effLabelName l}\{patternMark pat}"
+kindName (KArrow d r) = "\{kindDomainName d} -> \{kindName r}"
+
+-- An arrow on the left of an arrow is parenthesised, as `kindAnnSource` spells it.
+kindDomainName : Kind -> String
+kindDomainName (KArrow d r) = "(\{kindName (KArrow d r)})"
+kindDomainName k = kindName k
+
+-- A written constructor applied to more arguments than it has parameters
+-- (EFFECTS-SEMANTICS §6.4).  [ctor] is a raw head tag (`ppConName`).
+export
+writtenKindArityMsg : String -> Kind -> Int -> String
+writtenKindArityMsg ctor kind nArgs =
+  "kind mismatch: `\{ppConName ctor}` has kind `\{kindName kind}`, but is applied to \{nArgs} type argument(s)"
+
+-- A written type whose kind is not the one its position takes (§6.4).
+export
+writtenKindMismatchMsg : String -> Kind -> Kind -> String
+writtenKindMismatchMsg written got want =
+  "kind mismatch: `\{written}` has kind `\{kindName got}`, but kind `\{kindName want}` is expected here"
 
 export
 renderKindArrow : List Kind -> String
-renderKindArrow ks = joinWith " -> " (map kindName ks ++ ["Type"])
+renderKindArrow ks = joinWith " -> " (map kindDomainName ks ++ ["Type"])
 
 -- [ctor] is a RAW head tag and must reach the reader through `ppConName` — a tuple
 -- head arrives as `__tuple2__`, and leaking that is exactly what ppConName exists to
@@ -1592,8 +1611,16 @@ dropAmbiguity = filterList (d => tcCode d /= TAmbiguousInstance)
 (DFunDef false "kindName" ((PCon "KType")) (ELit (LString "Type")))
 (DFunDef false "kindName" ((PCon "KRow")) (ELit (LString "Effect")))
 (DFunDef false "kindName" ((PCon "KAuth" (PVar "l") (PVar "pat"))) (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "Authority ")) (EApp (EVar "display") (EApp (EVar "effLabelName") (EVar "l")))) (ELit (LString ""))) (EApp (EVar "display") (EApp (EVar "patternMark") (EVar "pat")))) (ELit (LString ""))))
+(DFunDef false "kindName" ((PCon "KArrow" (PVar "d") (PVar "r"))) (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "")) (EApp (EVar "display") (EApp (EVar "kindDomainName") (EVar "d")))) (ELit (LString " -> "))) (EApp (EVar "display") (EApp (EVar "kindName") (EVar "r")))) (ELit (LString ""))))
+(DTypeSig false "kindDomainName" (TyFun (TyCon "Kind") (TyCon "String")))
+(DFunDef false "kindDomainName" ((PCon "KArrow" (PVar "d") (PVar "r"))) (EBinOp "++" (EBinOp "++" (ELit (LString "(")) (EApp (EVar "display") (EApp (EVar "kindName") (EApp (EApp (EVar "KArrow") (EVar "d")) (EVar "r"))))) (ELit (LString ")"))))
+(DFunDef false "kindDomainName" ((PVar "k")) (EApp (EVar "kindName") (EVar "k")))
+(DTypeSig true "writtenKindArityMsg" (TyFun (TyCon "String") (TyFun (TyCon "Kind") (TyFun (TyCon "Int") (TyCon "String")))))
+(DFunDef false "writtenKindArityMsg" ((PVar "ctor") (PVar "kind") (PVar "nArgs")) (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "kind mismatch: `")) (EApp (EVar "display") (EApp (EVar "ppConName") (EVar "ctor")))) (ELit (LString "` has kind `"))) (EApp (EVar "display") (EApp (EVar "kindName") (EVar "kind")))) (ELit (LString "`, but is applied to "))) (EApp (EVar "display") (EVar "nArgs"))) (ELit (LString " type argument(s)"))))
+(DTypeSig true "writtenKindMismatchMsg" (TyFun (TyCon "String") (TyFun (TyCon "Kind") (TyFun (TyCon "Kind") (TyCon "String")))))
+(DFunDef false "writtenKindMismatchMsg" ((PVar "written") (PVar "got") (PVar "want")) (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "kind mismatch: `")) (EApp (EVar "display") (EVar "written"))) (ELit (LString "` has kind `"))) (EApp (EVar "display") (EApp (EVar "kindName") (EVar "got")))) (ELit (LString "`, but kind `"))) (EApp (EVar "display") (EApp (EVar "kindName") (EVar "want")))) (ELit (LString "` is expected here"))))
 (DTypeSig true "renderKindArrow" (TyFun (TyApp (TyCon "List") (TyCon "Kind")) (TyCon "String")))
-(DFunDef false "renderKindArrow" ((PVar "ks")) (EApp (EApp (EVar "joinWith") (ELit (LString " -> "))) (EBinOp "++" (EApp (EApp (EVar "map") (EVar "kindName")) (EVar "ks")) (EListLit (ELit (LString "Type"))))))
+(DFunDef false "renderKindArrow" ((PVar "ks")) (EApp (EApp (EVar "joinWith") (ELit (LString " -> "))) (EBinOp "++" (EApp (EApp (EVar "map") (EVar "kindDomainName")) (EVar "ks")) (EListLit (ELit (LString "Type"))))))
 (DTypeSig true "implKindMismatchMsg" (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyCon "Int") (TyFun (TyApp (TyCon "List") (TyCon "Kind")) (TyFun (TyApp (TyCon "List") (TyCon "Kind")) (TyCon "String")))))))
 (DFunDef false "implKindMismatchMsg" ((PVar "iface") (PVar "ctor") (PVar "nApplied") (PVar "want") (PVar "got")) (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "instance head has the wrong kind for interface `")) (EApp (EVar "display") (EVar "iface"))) (ELit (LString "`: its type parameter is graded, kind `"))) (EApp (EVar "display") (EApp (EVar "renderKindArrow") (EVar "want")))) (ELit (LString "`, but "))) (EApp (EVar "display") (EApp (EApp (EApp (EVar "implHeadKindClause") (EVar "ctor")) (EVar "nApplied")) (EVar "got")))) (ELit (LString "; "))) (EApp (EVar "display") (EApp (EApp (EApp (EVar "implKindMismatchFix") (EVar "iface")) (EVar "ctor")) (EVar "nApplied")))) (ELit (LString ""))))
 (DTypeSig false "argumentNoun" (TyFun (TyCon "Int") (TyCon "String")))
@@ -2052,8 +2079,16 @@ dropAmbiguity = filterList (d => tcCode d /= TAmbiguousInstance)
 (DFunDef false "kindName" ((PCon "KType")) (ELit (LString "Type")))
 (DFunDef false "kindName" ((PCon "KRow")) (ELit (LString "Effect")))
 (DFunDef false "kindName" ((PCon "KAuth" (PVar "l") (PVar "pat"))) (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "Authority ")) (EApp (EMethodRef "display") (EApp (EVar "effLabelName") (EVar "l")))) (ELit (LString ""))) (EApp (EMethodRef "display") (EApp (EVar "patternMark") (EVar "pat")))) (ELit (LString ""))))
+(DFunDef false "kindName" ((PCon "KArrow" (PVar "d") (PVar "r"))) (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "")) (EApp (EMethodRef "display") (EApp (EVar "kindDomainName") (EVar "d")))) (ELit (LString " -> "))) (EApp (EMethodRef "display") (EApp (EVar "kindName") (EVar "r")))) (ELit (LString ""))))
+(DTypeSig false "kindDomainName" (TyFun (TyCon "Kind") (TyCon "String")))
+(DFunDef false "kindDomainName" ((PCon "KArrow" (PVar "d") (PVar "r"))) (EBinOp "++" (EBinOp "++" (ELit (LString "(")) (EApp (EMethodRef "display") (EApp (EVar "kindName") (EApp (EApp (EVar "KArrow") (EVar "d")) (EVar "r"))))) (ELit (LString ")"))))
+(DFunDef false "kindDomainName" ((PVar "k")) (EApp (EVar "kindName") (EVar "k")))
+(DTypeSig true "writtenKindArityMsg" (TyFun (TyCon "String") (TyFun (TyCon "Kind") (TyFun (TyCon "Int") (TyCon "String")))))
+(DFunDef false "writtenKindArityMsg" ((PVar "ctor") (PVar "kind") (PVar "nArgs")) (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "kind mismatch: `")) (EApp (EMethodRef "display") (EApp (EVar "ppConName") (EVar "ctor")))) (ELit (LString "` has kind `"))) (EApp (EMethodRef "display") (EApp (EVar "kindName") (EVar "kind")))) (ELit (LString "`, but is applied to "))) (EApp (EMethodRef "display") (EVar "nArgs"))) (ELit (LString " type argument(s)"))))
+(DTypeSig true "writtenKindMismatchMsg" (TyFun (TyCon "String") (TyFun (TyCon "Kind") (TyFun (TyCon "Kind") (TyCon "String")))))
+(DFunDef false "writtenKindMismatchMsg" ((PVar "written") (PVar "got") (PVar "want")) (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "kind mismatch: `")) (EApp (EMethodRef "display") (EVar "written"))) (ELit (LString "` has kind `"))) (EApp (EMethodRef "display") (EApp (EVar "kindName") (EVar "got")))) (ELit (LString "`, but kind `"))) (EApp (EMethodRef "display") (EApp (EVar "kindName") (EVar "want")))) (ELit (LString "` is expected here"))))
 (DTypeSig true "renderKindArrow" (TyFun (TyApp (TyCon "List") (TyCon "Kind")) (TyCon "String")))
-(DFunDef false "renderKindArrow" ((PVar "ks")) (EApp (EApp (EVar "joinWith") (ELit (LString " -> "))) (EBinOp "++" (EApp (EApp (EMethodRef "map") (EVar "kindName")) (EVar "ks")) (EListLit (ELit (LString "Type"))))))
+(DFunDef false "renderKindArrow" ((PVar "ks")) (EApp (EApp (EVar "joinWith") (ELit (LString " -> "))) (EBinOp "++" (EApp (EApp (EMethodRef "map") (EVar "kindDomainName")) (EVar "ks")) (EListLit (ELit (LString "Type"))))))
 (DTypeSig true "implKindMismatchMsg" (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyCon "Int") (TyFun (TyApp (TyCon "List") (TyCon "Kind")) (TyFun (TyApp (TyCon "List") (TyCon "Kind")) (TyCon "String")))))))
 (DFunDef false "implKindMismatchMsg" ((PVar "iface") (PVar "ctor") (PVar "nApplied") (PVar "want") (PVar "got")) (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "instance head has the wrong kind for interface `")) (EApp (EMethodRef "display") (EVar "iface"))) (ELit (LString "`: its type parameter is graded, kind `"))) (EApp (EMethodRef "display") (EApp (EVar "renderKindArrow") (EVar "want")))) (ELit (LString "`, but "))) (EApp (EMethodRef "display") (EApp (EApp (EApp (EVar "implHeadKindClause") (EVar "ctor")) (EVar "nApplied")) (EVar "got")))) (ELit (LString "; "))) (EApp (EMethodRef "display") (EApp (EApp (EApp (EVar "implKindMismatchFix") (EVar "iface")) (EVar "ctor")) (EVar "nApplied")))) (ELit (LString ""))))
 (DTypeSig false "argumentNoun" (TyFun (TyCon "Int") (TyCon "String")))

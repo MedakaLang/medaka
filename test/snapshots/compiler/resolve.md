@@ -1,5 +1,5 @@
 # META
-source_lines=6426
+source_lines=6429
 stages=DESUGAR,MARK
 # SOURCE
 -- Self-hosted resolve stage (single-file
@@ -1966,6 +1966,7 @@ duplicateCtorBinders bound binders loc =
     (n => DuplicateBinder "constructor" n loc)
     (findDups bound (map fst binders))
 
+export
 variantFieldTys : Variant -> List Ty
 variantFieldTys (Variant _ (ConPos tys)) = tys
 variantFieldTys (Variant _ (ConNamed fs _)) = map fieldTyOf fs
@@ -2083,9 +2084,11 @@ isTupleCtorTyName n = contains n tupleCtorTyNames
 -- Kept in sync with the parser's `tupleCtorTyName` and typecheck's
 -- `tupleHeadTagTc`.  Shared with `builtinTyOrigins` (#1110), which needs the same
 -- set to give every tuple head the reserved BUILTIN origin.
+export
 tupleCtorTyNames : List String
 tupleCtorTyNames = ["__tuple2__", "__tuple3__", "__tuple4__", "__tuple5__"]
 
+export
 primitiveTypes : List String
 primitiveTypes = [
   "Int", "Float", "String", "Char", "Bool", "Unit", "List", "Ref", "Array",
@@ -6869,7 +6872,7 @@ addOriginsProvenance acc n base (m :: rest) =
 (DFunDef false "checkVariants" (PWild PWild PWild PWild) (EListLit))
 (DTypeSig false "duplicateCtorBinders" (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "KindAnn"))) (TyFun (TyApp (TyCon "Option") (TyCon "Loc")) (TyApp (TyCon "List") (TyCon "ResError"))))))
 (DFunDef false "duplicateCtorBinders" ((PVar "bound") (PVar "binders") (PVar "loc")) (EApp (EApp (EVar "map") (ELam ((PVar "n")) (EApp (EApp (EApp (EVar "DuplicateBinder") (ELit (LString "constructor"))) (EVar "n")) (EVar "loc")))) (EApp (EApp (EVar "findDups") (EVar "bound")) (EApp (EApp (EVar "map") (EVar "fst")) (EVar "binders")))))
-(DTypeSig false "variantFieldTys" (TyFun (TyCon "Variant") (TyApp (TyCon "List") (TyCon "Ty"))))
+(DTypeSig true "variantFieldTys" (TyFun (TyCon "Variant") (TyApp (TyCon "List") (TyCon "Ty"))))
 (DFunDef false "variantFieldTys" ((PCon "Variant" PWild (PCon "ConPos" (PVar "tys")))) (EVar "tys"))
 (DFunDef false "variantFieldTys" ((PCon "Variant" PWild (PCon "ConNamed" (PVar "fs") PWild))) (EApp (EApp (EVar "map") (EVar "fieldTyOf")) (EVar "fs")))
 (DTypeSig false "fieldTyOf" (TyFun (TyCon "Field") (TyCon "Ty")))
@@ -6902,9 +6905,9 @@ addOriginsProvenance acc n base (m :: rest) =
 (DFunDef false "checkMethodMember" ((PVar "iface") (PVar "known") (PCon "ImplMethod" (PVar "mname") PWild (PVar "body"))) (EIf (EApp (EApp (EVar "contains") (EVar "mname")) (EVar "known")) (EListLit) (EListLit (EApp (EApp (EApp (EVar "MethodNotInInterface") (EVar "mname")) (EVar "iface")) (EApp (EVar "firstExprLoc") (EVar "body"))))))
 (DTypeSig false "isTupleCtorTyName" (TyFun (TyCon "String") (TyCon "Bool")))
 (DFunDef false "isTupleCtorTyName" ((PVar "n")) (EApp (EApp (EVar "contains") (EVar "n")) (EVar "tupleCtorTyNames")))
-(DTypeSig false "tupleCtorTyNames" (TyApp (TyCon "List") (TyCon "String")))
+(DTypeSig true "tupleCtorTyNames" (TyApp (TyCon "List") (TyCon "String")))
 (DFunDef false "tupleCtorTyNames" () (EListLit (ELit (LString "__tuple2__")) (ELit (LString "__tuple3__")) (ELit (LString "__tuple4__")) (ELit (LString "__tuple5__"))))
-(DTypeSig false "primitiveTypes" (TyApp (TyCon "List") (TyCon "String")))
+(DTypeSig true "primitiveTypes" (TyApp (TyCon "List") (TyCon "String")))
 (DFunDef false "primitiveTypes" () (EListLit (ELit (LString "Int")) (ELit (LString "Float")) (ELit (LString "String")) (ELit (LString "Char")) (ELit (LString "Bool")) (ELit (LString "Unit")) (ELit (LString "List")) (ELit (LString "Ref")) (ELit (LString "Array")) (ELit (LString "ByteBlock")) (ELit (LString "U8")) (ELit (LString "U16")) (ELit (LString "U32")) (ELit (LString "U64")) (ELit (LString "I32")) (ELit (LString "I64"))))
 (DTypeSig false "primitiveConstructors" (TyApp (TyCon "List") (TyCon "String")))
 (DFunDef false "primitiveConstructors" () (EListLit (ELit (LString "True")) (ELit (LString "False"))))
@@ -8377,7 +8380,7 @@ addOriginsProvenance acc n base (m :: rest) =
 (DFunDef false "checkVariants" (PWild PWild PWild PWild) (EListLit))
 (DTypeSig false "duplicateCtorBinders" (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "KindAnn"))) (TyFun (TyApp (TyCon "Option") (TyCon "Loc")) (TyApp (TyCon "List") (TyCon "ResError"))))))
 (DFunDef false "duplicateCtorBinders" ((PVar "bound") (PVar "binders") (PVar "loc")) (EApp (EApp (EMethodRef "map") (ELam ((PVar "n")) (EApp (EApp (EApp (EVar "DuplicateBinder") (ELit (LString "constructor"))) (EVar "n")) (EVar "loc")))) (EApp (EApp (EVar "findDups") (EVar "bound")) (EApp (EApp (EMethodRef "map") (EVar "fst")) (EVar "binders")))))
-(DTypeSig false "variantFieldTys" (TyFun (TyCon "Variant") (TyApp (TyCon "List") (TyCon "Ty"))))
+(DTypeSig true "variantFieldTys" (TyFun (TyCon "Variant") (TyApp (TyCon "List") (TyCon "Ty"))))
 (DFunDef false "variantFieldTys" ((PCon "Variant" PWild (PCon "ConPos" (PVar "tys")))) (EVar "tys"))
 (DFunDef false "variantFieldTys" ((PCon "Variant" PWild (PCon "ConNamed" (PVar "fs") PWild))) (EApp (EApp (EMethodRef "map") (EVar "fieldTyOf")) (EVar "fs")))
 (DTypeSig false "fieldTyOf" (TyFun (TyCon "Field") (TyCon "Ty")))
@@ -8410,9 +8413,9 @@ addOriginsProvenance acc n base (m :: rest) =
 (DFunDef false "checkMethodMember" ((PVar "iface") (PVar "known") (PCon "ImplMethod" (PVar "mname") PWild (PVar "body"))) (EIf (EApp (EApp (EVar "contains") (EVar "mname")) (EVar "known")) (EListLit) (EListLit (EApp (EApp (EApp (EVar "MethodNotInInterface") (EVar "mname")) (EVar "iface")) (EApp (EVar "firstExprLoc") (EVar "body"))))))
 (DTypeSig false "isTupleCtorTyName" (TyFun (TyCon "String") (TyCon "Bool")))
 (DFunDef false "isTupleCtorTyName" ((PVar "n")) (EApp (EApp (EVar "contains") (EVar "n")) (EVar "tupleCtorTyNames")))
-(DTypeSig false "tupleCtorTyNames" (TyApp (TyCon "List") (TyCon "String")))
+(DTypeSig true "tupleCtorTyNames" (TyApp (TyCon "List") (TyCon "String")))
 (DFunDef false "tupleCtorTyNames" () (EListLit (ELit (LString "__tuple2__")) (ELit (LString "__tuple3__")) (ELit (LString "__tuple4__")) (ELit (LString "__tuple5__"))))
-(DTypeSig false "primitiveTypes" (TyApp (TyCon "List") (TyCon "String")))
+(DTypeSig true "primitiveTypes" (TyApp (TyCon "List") (TyCon "String")))
 (DFunDef false "primitiveTypes" () (EListLit (ELit (LString "Int")) (ELit (LString "Float")) (ELit (LString "String")) (ELit (LString "Char")) (ELit (LString "Bool")) (ELit (LString "Unit")) (ELit (LString "List")) (ELit (LString "Ref")) (ELit (LString "Array")) (ELit (LString "ByteBlock")) (ELit (LString "U8")) (ELit (LString "U16")) (ELit (LString "U32")) (ELit (LString "U64")) (ELit (LString "I32")) (ELit (LString "I64"))))
 (DTypeSig false "primitiveConstructors" (TyApp (TyCon "List") (TyCon "String")))
 (DFunDef false "primitiveConstructors" () (EListLit (ELit (LString "True")) (ELit (LString "False"))))

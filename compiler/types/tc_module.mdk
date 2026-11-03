@@ -2090,11 +2090,9 @@ registerImportOverlay env prog overlay =
   let ctorPop = env.teDyn.dcModule.mcGraph.crossRun.universeCtorPop.value
   let recordPop = env.teDyn.dcModule.mcGraph.crossRun.universeRecordPop.value
   let served = map (d => (d, overlayCachedRows ctorPop recordPop d)) overlay
-  each
-    (p => match snd p
-      None => recordDeclKinds env.teDyn.dcModule (fst p)
-      Some _ => ())
-    served
+  recordDeclKinds
+    env.teDyn.dcModule
+    (filterMap (p => if isNone (snd p) then Some (fst p) else None) served)
   let env1 =
     fold
       (e p => if isAliasDecl (fst p) then registerData e (fst p) else e)

@@ -508,21 +508,24 @@ test "the kind projection: own row sees everything, an earlier row its public pa
         (declEnvRowKindEntries
           (probeGraphCtx ())
           0
-          (deKindRow0 (probeGraphCtx ())))),
+          (deKindRow0 (probeGraphCtx ()))
+          [])),
     expectEqual
       ["Opq", "Pt", "Wrap"]
       (kindRowNames
         (declEnvRowKindEntries
           (probeGraphCtx ())
           1
-          (deKindRow0 (probeGraphCtx ())))),
+          (deKindRow0 (probeGraphCtx ()))
+          [])),
     expectEqual
       []
       (kindRowNames
         (declEnvRowKindEntries
           (probeGraphCtx ())
           0
-          (deKindRow1 (probeGraphCtx ())))),
+          (deKindRow1 (probeGraphCtx ()))
+          [])),
   ]
 
 -- The field-owner population: only a `ConNamed` variant votes, and it votes under

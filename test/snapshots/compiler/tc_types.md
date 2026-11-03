@@ -1,5 +1,5 @@
 # META
-source_lines=3645
+source_lines=3649
 stages=DESUGAR,MARK
 # SOURCE
 -- Typechecker data declarations and state records: every `data` and `type`
@@ -142,13 +142,17 @@ public export data ObligationSite = ObligationSite {
 public export data RecordInfo =
   RecordInfo (List Int) (List Int) Mono (List (String, Mono)) (OrdMap Mono)
 
--- Kind of a data-type parameter, inferred from usage: KRow iff the param name
--- appears in a field's effect-tail position (`<e>`), else KType.  Drives
--- kind-aware type-app elaboration (a KRow arg becomes a TEff row, not a TApp
--- tyvar) and ctor-result-type construction.  Per-type, positional.
+-- Kind of a data-type parameter (EFFECTS-SEMANTICS §6.1-§6.3): `Effect` (KRow)
+-- and `Authority` (KAuth) only where the head declares them, otherwise `Type`
+-- or an arrow over `Type` (`declKindEntriesIn`).  Drives kind-aware type-app
+-- elaboration (a KRow arg becomes a TEff row, not a TApp tyvar) and
+-- ctor-result-type construction.  Per-type, positional.
 -- A `KAuth` slot's flag is the `*` of `Authority L*`: the slot takes only a
 -- pattern of the label's domain (EFFECTS-SEMANTICS §4.1).
-public export data Kind = KType | KRow | KAuth EffLabel Bool
+-- A `KArrow` parameter is itself a constructor (`f` in `data Wrap f a = W (f a)`
+-- is `KArrow KType KType`); arrows nest to the right, as §6.1's `Kind -> Kind`
+-- does, and elaborate an argument as a type, exactly as `KType` does.
+public export data Kind = KType | KRow | KAuth EffLabel Bool | KArrow Kind Kind
 
 -- ── #1119 D-2 (#1098 / #1121): per-parameter VARIANCE ─────────────────────
 -- Variance of a data-type parameter, inferred from how it OCCURS in the
@@ -3671,7 +3675,7 @@ public export data FoldPlan e acc = FoldPlan {
 (DUse false (UseGroup ("types" "route_key") ((mem "EvIndex" false))))
 (DData Public "ObligationSite" () ((variant "ObligationSite" (ConNamed (field "osLoc" (TyApp (TyCon "Option") (TyCon "Loc"))) (field "osFn" (TyCon "String")) (field "osCovering" (TyCon "Bool"))))) ())
 (DData Public "RecordInfo" () ((variant "RecordInfo" (ConPos (TyApp (TyCon "List") (TyCon "Int")) (TyApp (TyCon "List") (TyCon "Int")) (TyCon "Mono") (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "Mono"))) (TyApp (TyCon "OrdMap") (TyCon "Mono"))))) ())
-(DData Public "Kind" () ((variant "KType" (ConPos)) (variant "KRow" (ConPos)) (variant "KAuth" (ConPos (TyCon "EffLabel") (TyCon "Bool")))) ())
+(DData Public "Kind" () ((variant "KType" (ConPos)) (variant "KRow" (ConPos)) (variant "KAuth" (ConPos (TyCon "EffLabel") (TyCon "Bool"))) (variant "KArrow" (ConPos (TyCon "Kind") (TyCon "Kind")))) ())
 (DData Public "Polarity" () ((variant "PCo" (ConPos)) (variant "PContra" (ConPos)) (variant "PInv" (ConPos)) (variant "PPhantom" (ConPos))) ())
 (DData Public "SiteKind" () ((variant "SKReturn" (ConPos (TyApp (TyCon "Ref") (TyApp (TyCon "List") (TyCon "Route"))) (TyCon "Mono"))) (variant "SKAdmittedReturn" (ConPos (TyApp (TyCon "Ref") (TyCon "String")) (TyApp (TyCon "Ref") (TyApp (TyCon "List") (TyCon "Route"))) (TyCon "Mono"))) (variant "SKExactReturn" (ConPos (TyApp (TyCon "Ref") (TyApp (TyCon "List") (TyCon "Route"))) (TyCon "MethodReturnRequest"))) (variant "SKNumReturn" (ConPos (TyCon "ClassPredicate") (TyCon "Mono"))) (variant "SKArg" (ConPos (TyApp (TyCon "Ref") (TyApp (TyCon "List") (TyCon "Route"))) (TyCon "Mono") (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "Mono"))))) (variant "SKOp" (ConPos (TyCon "Bool"))) (variant "SKPredicateOp" (ConPos (TyCon "Bool") (TyCon "ClassPredicate"))) (variant "SKRLocal" (ConPos (TyCon "String") (TyCon "Bool") (TyApp (TyCon "List") (TyCon "Mono")) (TyApp (TyCon "List") (TyCon "IfaceRef")) (TyApp (TyCon "List") (TyApp (TyCon "List") (TyCon "Mono")))))) ())
 (DData Public "PendingEntry" () ((variant "PendingEntry" (ConPos (TyCon "String") (TyApp (TyCon "Ref") (TyCon "Route")) (TyCon "Mono") (TyCon "String") (TyCon "SiteKind") (TyApp (TyCon "Option") (TyCon "Loc")) (TyCon "ScopeId") (TyCon "EvId")))) ())
@@ -3898,7 +3902,7 @@ public export data FoldPlan e acc = FoldPlan {
 (DUse false (UseGroup ("types" "route_key") ((mem "EvIndex" false))))
 (DData Public "ObligationSite" () ((variant "ObligationSite" (ConNamed (field "osLoc" (TyApp (TyCon "Option") (TyCon "Loc"))) (field "osFn" (TyCon "String")) (field "osCovering" (TyCon "Bool"))))) ())
 (DData Public "RecordInfo" () ((variant "RecordInfo" (ConPos (TyApp (TyCon "List") (TyCon "Int")) (TyApp (TyCon "List") (TyCon "Int")) (TyCon "Mono") (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "Mono"))) (TyApp (TyCon "OrdMap") (TyCon "Mono"))))) ())
-(DData Public "Kind" () ((variant "KType" (ConPos)) (variant "KRow" (ConPos)) (variant "KAuth" (ConPos (TyCon "EffLabel") (TyCon "Bool")))) ())
+(DData Public "Kind" () ((variant "KType" (ConPos)) (variant "KRow" (ConPos)) (variant "KAuth" (ConPos (TyCon "EffLabel") (TyCon "Bool"))) (variant "KArrow" (ConPos (TyCon "Kind") (TyCon "Kind")))) ())
 (DData Public "Polarity" () ((variant "PCo" (ConPos)) (variant "PContra" (ConPos)) (variant "PInv" (ConPos)) (variant "PPhantom" (ConPos))) ())
 (DData Public "SiteKind" () ((variant "SKReturn" (ConPos (TyApp (TyCon "Ref") (TyApp (TyCon "List") (TyCon "Route"))) (TyCon "Mono"))) (variant "SKAdmittedReturn" (ConPos (TyApp (TyCon "Ref") (TyCon "String")) (TyApp (TyCon "Ref") (TyApp (TyCon "List") (TyCon "Route"))) (TyCon "Mono"))) (variant "SKExactReturn" (ConPos (TyApp (TyCon "Ref") (TyApp (TyCon "List") (TyCon "Route"))) (TyCon "MethodReturnRequest"))) (variant "SKNumReturn" (ConPos (TyCon "ClassPredicate") (TyCon "Mono"))) (variant "SKArg" (ConPos (TyApp (TyCon "Ref") (TyApp (TyCon "List") (TyCon "Route"))) (TyCon "Mono") (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "Mono"))))) (variant "SKOp" (ConPos (TyCon "Bool"))) (variant "SKPredicateOp" (ConPos (TyCon "Bool") (TyCon "ClassPredicate"))) (variant "SKRLocal" (ConPos (TyCon "String") (TyCon "Bool") (TyApp (TyCon "List") (TyCon "Mono")) (TyApp (TyCon "List") (TyCon "IfaceRef")) (TyApp (TyCon "List") (TyApp (TyCon "List") (TyCon "Mono")))))) ())
 (DData Public "PendingEntry" () ((variant "PendingEntry" (ConPos (TyCon "String") (TyApp (TyCon "Ref") (TyCon "Route")) (TyCon "Mono") (TyCon "String") (TyCon "SiteKind") (TyApp (TyCon "Option") (TyCon "Loc")) (TyCon "ScopeId") (TyCon "EvId")))) ())

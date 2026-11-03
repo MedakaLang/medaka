@@ -1962,6 +1962,7 @@ duplicateCtorBinders bound binders loc =
     (n => DuplicateBinder "constructor" n loc)
     (findDups bound (map fst binders))
 
+export
 variantFieldTys : Variant -> List Ty
 variantFieldTys (Variant _ (ConPos tys)) = tys
 variantFieldTys (Variant _ (ConNamed fs _)) = map fieldTyOf fs
@@ -2079,9 +2080,11 @@ isTupleCtorTyName n = contains n tupleCtorTyNames
 -- Kept in sync with the parser's `tupleCtorTyName` and typecheck's
 -- `tupleHeadTagTc`.  Shared with `builtinTyOrigins` (#1110), which needs the same
 -- set to give every tuple head the reserved BUILTIN origin.
+export
 tupleCtorTyNames : List String
 tupleCtorTyNames = ["__tuple2__", "__tuple3__", "__tuple4__", "__tuple5__"]
 
+export
 primitiveTypes : List String
 primitiveTypes = [
   "Int", "Float", "String", "Char", "Bool", "Unit", "List", "Ref", "Array",

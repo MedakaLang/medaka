@@ -138,13 +138,17 @@ public export data ObligationSite = ObligationSite {
 public export data RecordInfo =
   RecordInfo (List Int) (List Int) Mono (List (String, Mono)) (OrdMap Mono)
 
--- Kind of a data-type parameter, inferred from usage: KRow iff the param name
--- appears in a field's effect-tail position (`<e>`), else KType.  Drives
--- kind-aware type-app elaboration (a KRow arg becomes a TEff row, not a TApp
--- tyvar) and ctor-result-type construction.  Per-type, positional.
+-- Kind of a data-type parameter (EFFECTS-SEMANTICS §6.1-§6.3): `Effect` (KRow)
+-- and `Authority` (KAuth) only where the head declares them, otherwise `Type`
+-- or an arrow over `Type` (`declKindEntriesIn`).  Drives kind-aware type-app
+-- elaboration (a KRow arg becomes a TEff row, not a TApp tyvar) and
+-- ctor-result-type construction.  Per-type, positional.
 -- A `KAuth` slot's flag is the `*` of `Authority L*`: the slot takes only a
 -- pattern of the label's domain (EFFECTS-SEMANTICS §4.1).
-public export data Kind = KType | KRow | KAuth EffLabel Bool
+-- A `KArrow` parameter is itself a constructor (`f` in `data Wrap f a = W (f a)`
+-- is `KArrow KType KType`); arrows nest to the right, as §6.1's `Kind -> Kind`
+-- does, and elaborate an argument as a type, exactly as `KType` does.
+public export data Kind = KType | KRow | KAuth EffLabel Bool | KArrow Kind Kind
 
 -- ── #1119 D-2 (#1098 / #1121): per-parameter VARIANCE ─────────────────────
 -- Variance of a data-type parameter, inferred from how it OCCURS in the
