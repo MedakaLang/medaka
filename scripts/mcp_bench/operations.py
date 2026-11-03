@@ -22,6 +22,44 @@ def measure_case(case, arm, repetitions):
     return runs
 
 
+def measure_interactive_case(case, arm, index=0):
+    """One serial session; raw payloads remain private until explicitly compacted."""
+    responses, exchanges, resources = [], [], []
+    def before_request(number, workspace):
+        if case['id'] == 'changed-source' and number == 2:
+            (workspace / 'main.mdk').write_text('main = 1 + 2\n')
+    limits = {'run_id': f"{case['id']}-{index}", 'task_id': case['id'],
+              'arm': arm['name'], 'trace': arm['trace'], 'task': case['task'],
+              'interactive': True, 'before_request': before_request,
+              'response_callback': responses.extend, 'exchange_callback': exchanges.extend,
+              'resource_callback': resources.append}
+    transcript = b''.join((json.dumps(request) + '\n').encode() for request in case['requests'])
+    record = run_process([arm['binary'], 'mcp'], arm.get('environment', {}), transcript, limits)
+    return {'record': record, 'exchanges': exchanges, 'responses': responses, 'resources': resources}
+
+
+def measure_matched(root, tasks, repetitions=5):
+    """Alternate trace order within each case using the identical executable/tree."""
+    if repetitions < 1:
+        raise ValueError('repetitions must be positive')
+    queries = cases(tasks, root)
+    changed = next(case for case in queries if case['id'] == 'changed-source')
+    changed['task'] = deepcopy(next(task for task in tasks if task['id'] == 'repair-diagnostic'))
+    changed['requests'].append(call(2, 'medaka_check', {'file': 'main.mdk'}))
+    missing = deepcopy(queries[-1])
+    missing['id'] = 'missing-binary'
+    queries.append(missing)
+    samples = []
+    for case in queries:
+        for index in range(repetitions):
+            for trace in ((False, True) if index % 2 == 0 else (True, False)):
+                arm = {'name': 'trace-on' if trace else 'trace-off', 'trace': trace,
+                       'binary': str(Path(root) / ('missing-medaka' if case['id'] == 'missing-binary' else 'medaka')),
+                       'environment': {'MEDAKA_STRICT': '1'}}
+                samples.append(measure_interactive_case(case, arm, index))
+    return {'schema_version': 1, 'samples': samples}
+
+
 def call(number, tool, arguments):
     return {'jsonrpc': '2.0', 'id': number, 'method': 'tools/call',
             'params': {'name': tool, 'arguments': arguments}}
@@ -63,11 +101,20 @@ def cases(tasks, root):
 if __name__ == '__main__':
     import argparse
     parser = argparse.ArgumentParser()
-    parser.add_argument('--baseline-root', required=True)
-    parser.add_argument('--instrumented-root', required=True)
+    parser.add_argument('--baseline-root')
+    parser.add_argument('--instrumented-root')
+    parser.add_argument('--interactive-root')
     parser.add_argument('--output', required=True)
     options = parser.parse_args()
     tasks = json.loads(Path(__file__).with_name('tasks.json').read_text())
+    if options.interactive_root:
+        output = measure_matched(options.interactive_root, tasks)
+        with open(options.output, 'x', encoding='utf-8') as stream:
+            json.dump(output, stream, indent=2)
+            stream.write('\n')
+        raise SystemExit(0)
+    if not options.baseline_root or not options.instrumented_root:
+        parser.error('supply --interactive-root or both legacy roots')
     output = {}
     for name, root, trace in [('baseline', options.baseline_root, False),
                               ('instrumented', options.instrumented_root, True)]:

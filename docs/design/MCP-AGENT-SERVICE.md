@@ -278,7 +278,9 @@ application is deferred behind a safe protocol; historical read-only tools do no
 silently become writers.
 
 The [M0 baseline report](../findings/mcp-m0-baseline/REPORT.md) records the pilot and
-versioned budgets. Its measured ceilings round up observed maxima for cold first
-response and queued response intervals on the stated host; they do not establish
-isolated query latency or instrumentation overhead. Memory and context budgets
-remain unmeasured. The two-second offline handshake remains a hypothesis to test.
+versioned budgets. Version 2 records serial query round trips, an absolute matched
+trace-delta guardrail on the same binary, cgroup peak memory charge, and cumulative
+input tokens as a context-cost proxy on the stated Linux host. Trace deltas include
+measurement noise; memory charge is distinct from RSS and input tokens are distinct
+from private context occupancy. Five repetitions per case support observed maxima,
+not percentile claims. The two-second offline handshake remains a hypothesis to test.

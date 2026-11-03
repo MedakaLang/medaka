@@ -8,7 +8,7 @@ import time
 import unittest
 from unittest.mock import patch
 
-from collect import reconcile, run_process
+from collect import _responses, reconcile, run_process
 from supervisor import Boundary, Unavailable
 from report import summarize
 
@@ -303,6 +303,44 @@ print(json.dumps({'jsonrpc':'2.0','id':1,'result':{'blocked':blocked,'pid':os.ge
         self.assertEqual(1, len(timings))
         self.assertGreater(result['wall_ns'] - timings[0], 700_000_000)
 
+    def test_interactive_delayed_worker_is_serial_and_resources_are_scoped(self):
+        code = '''import os,json,select
+for _ in range(2):
+    line=b''
+    while not line.endswith(b'\\n'):
+        line += os.read(0,1)
+    request=json.loads(line)
+    premature=bool(select.select([0],[],[],.05)[0])
+    print(json.dumps({'jsonrpc':'2.0','id':request['id'],'result':{'premature':premature}}),flush=True)
+'''
+        requests = b''.join(json.dumps({'jsonrpc': '2.0', 'id': i, 'method': 'ping'}).encode() + b'\n'
+                            for i in (1, '1'))
+        responses, exchanges, resources = [], [], []
+        result = run_process([sys.executable, '-c', code], {}, requests,
+                             {'interactive': True, 'trace': False, 'response_callback': responses.extend,
+                              'exchange_callback': exchanges.extend, 'resource_callback': resources.append})
+        self.assertEqual('success', result['outcome'])
+        self.assertEqual([False, False], [r['result']['premature'] for r in responses])
+        self.assertEqual([1, '1'], [e['id'] for e in exchanges])
+        self.assertLessEqual(exchanges[0]['received_ns'], exchanges[1]['sent_ns'])
+        for exchange in exchanges:
+            self.assertEqual(exchange['received_ns'] - exchange['sent_ns'], exchange['round_trip_ns'])
+            self.assertGreater(exchange['round_trip_ns'], 0)
+        self.assertGreater(resources[0]['cpu_ns'], 0)
+        if resources[0]['peak_memory_charge_bytes'] is None:
+            self.assertTrue(resources[0]['reason']['peak_memory_charge_bytes'])
+        else:
+            self.assertGreater(resources[0]['peak_memory_charge_bytes'], 0)
+        self.assertEqual(3, resources[0]['observed_member_counts'][0])
+        self.assertEqual(2, len(resources[0]['observed_member_counts']))
+        self.assertTrue(all(0 <= count <= 3 for count in resources[0]['observed_member_counts']))
+        self.assertIn('excludes collector', resources[0]['scope'])
+
+    def test_interactive_invalid_id_and_timeout_fail(self):
+        for code, expected in [("import sys; sys.stdin.readline(); print('stray',flush=True)", 'observer_failure'),
+                               ("import sys,time; sys.stdin.readline(); time.sleep(5)", 'timeout')]:
+            self.assertEqual(expected, self.worker(code, interactive=True, timeout=.2)['outcome'])
+
     def test_pairs_match_and_extra_calls_are_rejected(self):
         start, finish = event('start'), event('finish', 'success')
         for field in ('tool', 'classification'):
@@ -393,6 +431,37 @@ print(json.dumps({'jsonrpc':'2.0','id':1,'result':{'blocked':blocked,'pid':os.ge
     def test_summary(self):
         run = self.worker('print(' + repr(RESPONSE) + ')')
         self.assertEqual({'success': 1}, summarize([run])['outcomes'])
+
+
+class ProtocolAndResourceTest(unittest.TestCase):
+    def test_exact_protocol_and_id_validation(self):
+        requests = [{'id': 1}, {'id': '1'}]
+        good = [{'jsonrpc': '2.0', 'id': 1, 'result': {}},
+                {'jsonrpc': '2.0', 'id': '1', 'error': {'code': -1, 'message': 'expected'}}]
+        encode = lambda rows: b''.join(json.dumps(row).encode() + b'\n' for row in rows)
+        self.assertEqual(good, _responses(encode(good), requests))
+        for rows in (good[:1], good + good[:1], list(reversed(good[:1])),
+                     [dict(good[0], id=True), good[1]], [dict(good[0], extra=1), good[1]],
+                     [good[0], dict(good[1], error={'code': True, 'message': 'bad'})]):
+            with self.subTest(rows=rows), self.assertRaises(ValueError):
+                _responses(encode(rows), requests)
+        with self.assertRaises(ValueError):
+            _responses(encode([good[0], good[0]]), [{'id': 1}, {'id': 1}])
+
+    def test_memory_charge_and_cpu_units_and_unavailability(self):
+        with tempfile.TemporaryDirectory() as directory:
+            boundary = Boundary.__new__(Boundary)
+            boundary.path = Path(directory)
+            (boundary.path / 'memory.peak').write_text('8192\n')
+            (boundary.path / 'cpu.stat').write_text('usage_usec 123\nuser_usec 100\nsystem_usec 23\n')
+            measured = boundary.measure()
+            self.assertEqual(8192, measured['peak_memory_charge_bytes'])
+            self.assertEqual(123000, measured['cpu_ns'])
+            self.assertEqual({'cpu_ns': None, 'peak_memory_charge_bytes': None}, measured['reason'])
+            (boundary.path / 'memory.peak').unlink()
+            missing = boundary.measure()
+            self.assertIsNone(missing['peak_memory_charge_bytes'])
+            self.assertIn('No such file', missing['reason']['peak_memory_charge_bytes'])
 
 
 if __name__ == '__main__':

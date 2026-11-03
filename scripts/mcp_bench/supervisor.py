@@ -19,10 +19,14 @@ class Unavailable(Exception):
 class Boundary:
     def __init__(self):
         self.path = self.lease = None
+        self.resources = None
         if sys.platform != 'linux' or os.geteuid() != 0:
             raise Unavailable('root cgroup and namespace authority required')
         try:
-            parent = Path('/sys/fs/cgroup') / Path('/proc/self/cgroup').read_text().strip().split('0::')[1].lstrip('/')
+            current = Path('/sys/fs/cgroup') / Path('/proc/self/cgroup').read_text().strip().split('0::')[1].lstrip('/')
+            parent = Path(os.environ.get('MEDAKA_MCP_CGROUP_PARENT', str(current))).resolve()
+            if not parent.is_relative_to('/sys/fs/cgroup'):
+                raise Unavailable('cgroup parent must be inside the cgroup mount')
             info = parent.stat()
             if info.st_uid != 0 or info.st_mode & 0o022:
                 raise Unavailable('cgroup delegation must be private to the authority')
@@ -61,11 +65,32 @@ class Boundary:
                 # populated=0 is the kernel acknowledgement, not a PID-list snapshot.
                 while 'populated 1' in (self.path / 'cgroup.events').read_text():
                     time.sleep(.01)
+                self.resources = self.measure()
                 self.path.rmdir()
             self.path = None
         if self.lease is not None:
             self.lease.rmdir()
             self.lease = None
+
+    def measure(self):
+        """Read cumulative cgroup counters before removal, including exited members."""
+        result = {'scope': 'private cgroup: supervisor, namespace init, worker and descendants; excludes collector',
+                  'cpu_ns': None, 'peak_memory_charge_bytes': None, 'reason': {}}
+        for name, filename in [('cpu_ns', 'cpu.stat'), ('peak_memory_charge_bytes', 'memory.peak')]:
+            try:
+                raw = (self.path / filename).read_text()
+                if name == 'cpu_ns':
+                    value = dict(line.split() for line in raw.splitlines())['usage_usec']
+                    result[name] = int(value) * 1000
+                else:
+                    result[name] = int(raw.strip())
+                if result[name] < 0:
+                    raise ValueError('negative cgroup counter')
+                result['reason'][name] = None
+            except (OSError, ValueError, KeyError) as error:
+                result[name] = None
+                result['reason'][name] = str(error)
+        return result
 
 
 def syscall(name, *arguments):
@@ -101,12 +126,15 @@ def namespace_init(command, environment, uid, transcript, status_fd):
         syscall('prctl', 38, 1, 0, 0, 0)  # no_new_privs survives exec and blocks setuid/capability gains.
         try:
             # This helper has one thread; all credential checks precede the worker exec.
-            worker = subprocess.Popen(command, stdin=subprocess.PIPE, env=environment,
+            worker = subprocess.Popen(command, stdin=sys.stdin.buffer if transcript is None else subprocess.PIPE, env=environment,
                                       preexec_fn=lambda: drop_privileges(uid))
         except OSError:
             status = 'startup_failure'
         else:
-            worker.communicate(transcript)
+            if transcript is None:
+                worker.wait()
+            else:
+                worker.communicate(transcript)
             status = worker.returncode
     except (OSError, subprocess.SubprocessError):
         pass
@@ -117,14 +145,16 @@ def namespace_init(command, environment, uid, transcript, status_fd):
 
 def main():
     status_fd = int(sys.argv[1])
-    cgroup, uid, command, environment = json.loads(sys.argv[2])
+    options = json.loads(sys.argv[2])
+    cgroup, uid, command, environment = options[:4]
+    interactive = len(options) == 5 and options[4]
     os.set_inheritable(status_fd, False)
     status = 'unsupported'
     child = None
     read_fd, write_fd = os.pipe()
     try:
         Path(cgroup, 'cgroup.procs').write_text(str(os.getpid()))
-        transcript = sys.stdin.buffer.read()
+        transcript = None if interactive else sys.stdin.buffer.read()
         syscall('unshare', 0x20000000 | 0x00020000)
         syscall('mount', None, b'/', None, 16384 | (1 << 18), None)
         child = os.fork()
