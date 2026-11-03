@@ -110,7 +110,7 @@ Thirteen decisions were listed for Val. Under triage:
   standing ruling of 2026-06-10) and Q2 (GHC's CAF model). Under Q2's second half it
   does not settle: Haskell's CAFs are lazy and their retention is a known leak, OCaml
   initialises strictly in textual order and does not regret it, Rust forbids runtime
-  work in a `static` and makes laziness explicit (`LazyLock`) and regards "life before
+  work in a `static` and makes laziness explicit (LazyLock) and regards "life before
   main" as a mistake to avoid. Three mature answers, none clearly ours. It survived and
   was brought (§4).
 - D11 guaranteed tail calls: Q2 (OCaml, GHC, Scheme) and Q3 (no silent engine
