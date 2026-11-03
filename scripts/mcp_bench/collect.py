@@ -32,6 +32,8 @@ def reconcile(events, exitStatus):
         for raw in events:
             event = validate_event(raw)
             key = (event['session_id'], event['request_id'])
+            if event['event'] == 'cancel_requested' and pending:
+                return _record('observer_failure')
             if event['event'] == 'start':
                 if pending or key in completed:
                     return _record('observer_failure')
