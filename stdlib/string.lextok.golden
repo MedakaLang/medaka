@@ -3263,17 +3263,25 @@ EQUAL
 IDENT "take"
 LPAREN
 IDENT "sharedLength"
+LPAREN
+IDENT "toChars"
 IDENT "a"
+RPAREN
+LPAREN
+IDENT "toChars"
 IDENT "b"
+RPAREN
 INT 0
 RPAREN
 IDENT "a"
 NEWLINE
 IDENT "sharedLength"
 COLON
-UPPER "String"
+UPPER "Array"
+UPPER "Char"
 ARROW
-UPPER "String"
+UPPER "Array"
+UPPER "Char"
 ARROW
 UPPER "Int"
 ARROW
@@ -3287,23 +3295,22 @@ INDENT
 PIPE
 IDENT "i"
 LT
-IDENT "length"
+IDENT "arrayLength"
 IDENT "a"
 AND
 IDENT "i"
 LT
-IDENT "length"
+IDENT "arrayLength"
 IDENT "b"
 AND
-IDENT "charAtStr"
+IDENT "arrayGetUnsafe"
+IDENT "i"
 IDENT "a"
-IDENT "i"
 EQ_EQ
-IDENT "charAtStr"
-IDENT "b"
+IDENT "arrayGetUnsafe"
 IDENT "i"
+IDENT "b"
 EQUAL
-INDENT
 IDENT "sharedLength"
 IDENT "a"
 IDENT "b"
@@ -3312,8 +3319,6 @@ IDENT "i"
 PLUS
 INT 1
 RPAREN
-NEWLINE
-DEDENT
 NEWLINE
 PIPE
 IDENT "otherwise"

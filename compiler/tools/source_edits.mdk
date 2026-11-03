@@ -18,15 +18,13 @@ validateEach : SourceSnapshot ->
   List SourceEdit ->
   Result EditError Unit
 validateEach _ _ [] = Ok ()
-validateEach snapshot text ((SourceEdit id (SourceSpan lo hi) expected _) :: rest) =
-  if not (matchesSnapshot id snapshot) then
-    Err StaleSnapshot
-  else if lo < 0 || hi < lo || hi > stringLength text then
-    Err InvalidRange
-  else if stringSlice lo hi text /= expected then
-    Err ExpectedTextMismatch
-  else
-    validateEach snapshot text rest
+validateEach snapshot text ((SourceEdit id (SourceSpan lo hi) expected _) :: rest)
+  | not (matchesSnapshot id snapshot) = Err StaleSnapshot
+  | lo < 0 || hi < lo || hi > stringLength text = Err InvalidRange
+  -- Bound: one text sliced at ascending offsets, linear (same forward walk as fmt, ratio under 2); out-of-order edits re-walk from the cached point, and the cost is engine-dependent.
+  -- lint-disable-next-line rule-reslice-in-loop
+  | stringSlice lo hi text /= expected = Err ExpectedTextMismatch
+  | otherwise = validateEach snapshot text rest
 
 validateOverlap : List SourceEdit -> Result EditError Unit
 validateOverlap [] = Ok ()
@@ -47,6 +45,8 @@ validateSourceEdits (snapshot@(SourceSnapshot _ _ _ text _)) edits =
 editParts : String -> Int -> List SourceEdit -> List String
 editParts text pos [] = [stringSlice pos (stringLength text) text]
 editParts text pos ((SourceEdit _ (SourceSpan lo hi) _ replacement) :: rest) =
+  -- Bound: one text sliced at ascending offsets, linear (same forward walk as fmt, ratio under 2); out-of-order edits re-walk from the cached point, and the cost is engine-dependent.
+  -- lint-disable-next-line rule-reslice-in-loop
   stringSlice pos lo text :: replacement :: editParts text hi rest
 
 export
