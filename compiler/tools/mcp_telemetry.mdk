@@ -1,14 +1,26 @@
 import json.{Json(..), jObject, stringify}
 
-public export data TraceContext = TraceContext String String String (Ref Int)
+public export data TraceSettings = TraceSettings {
+  tracePath : String,
+  traceSession : String,
+  traceClassification : String,
+}
+public export data TraceContext = TraceContext {
+  traceSettings : Option TraceSettings,
+  traceCounter : Ref Int,
+}
 public export data TraceToken =
   | TraceDisabled
   | TraceToken TraceContext String String Float
 
 export
 beginCall : TraceContext -> String -> String -> <IO, Clock> TraceToken
-beginCall (TraceContext "" _ _ _) _ _ = TraceDisabled
-beginCall context requestId tool =
+beginCall context requestId tool = match context.traceSettings
+  None => TraceDisabled
+  Some _ => beginEnabledCall context requestId tool
+
+beginEnabledCall : TraceContext -> String -> String -> <IO, Clock> TraceToken
+beginEnabledCall context requestId tool =
   let started = monotonicSec ()
   emit context requestId tool "start" JNull JNull JNull
   TraceToken context requestId tool started
@@ -40,24 +52,24 @@ emit : TraceContext ->
   Json ->
   Json ->
   <IO> Unit
-emit (TraceContext path session classification _) requestId tool event outcome duration size =
-  if path == "" then
-    ()
-  else
-    let line =
-      stringify
-          (jObject [
-            ("schema_version", JInt 1),
-            ("session_id", JString session),
-            ("request_id", JString requestId),
-            ("tool", JString tool),
-            ("classification", JString classification),
-            ("event", JString event),
-            ("outcome", outcome),
-            ("duration_ns", duration),
-            ("response_bytes", size),
-          ])
-        ++ "\n"
-    match appendFileExceptStdout path line
-      Ok _ => ()
-      Err _ => ()
+emit context requestId tool event outcome duration size =
+  match context.traceSettings
+    None => ()
+    Some settings =>
+      let line =
+        stringify
+            (jObject [
+              ("schema_version", JInt 1),
+              ("session_id", JString settings.traceSession),
+              ("request_id", JString requestId),
+              ("tool", JString tool),
+              ("classification", JString settings.traceClassification),
+              ("event", JString event),
+              ("outcome", outcome),
+              ("duration_ns", duration),
+              ("response_bytes", size),
+            ])
+          ++ "\n"
+      match appendFileExceptStdout settings.tracePath line
+        Ok _ => ()
+        Err _ => ()
