@@ -930,6 +930,41 @@ kindErrorStarts src =
       _ => [])
     errors
 
+-- The `(line, column, end line, end column)` of every kind error a whole
+-- check of [src] reports.
+kindErrorSpans : String -> List (Int, Int, Int, Int)
+kindErrorSpans src =
+  flatMap
+    (e => match (tcCode e, tcLoc e)
+      (TWrittenKindMismatch, Some (Loc _ l c el ec)) => [(l, c, el, ec)]
+      _ => [])
+    (checkedDiags src)
+
+-- A type variable carries no position, so an error about one spans the
+-- signature that writes it rather than naming another part of it.
+test "a kind error about a type variable spans its written type" = expectEach [
+  (
+    "a signature variable",
+    expectEqual
+      [(2, 0, 2, 21)]
+      (kindErrorSpans """
+          k : f -> f Int -> Int
+          k _ _ = 0
+          """),
+  ),
+  (
+    "an interface parameter",
+    expectEqual
+      [(3, 2, 3, 15)]
+      (kindErrorSpans
+        """
+          interface M f where
+            ma : f -> Int
+            mb : f Int -> Int
+          """),
+  ),
+]
+
 test "a kind error is located at the written type and carries its own code" = expectEach
   [
     (

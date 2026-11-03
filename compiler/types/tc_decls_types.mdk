@@ -2324,8 +2324,9 @@ kindScopeOf mctx =
 -- kind its position takes.  [declared] are the kinds of the variables a
 -- declaration binds; every other variable takes the kind its uses across all
 -- of [items] fix, and one used at an `Effect` or `Authority` kind is left to
--- the checks of those kinds.  [fallback] is the span of an error whose type
--- has none.
+-- the checks of those kinds.  [site] is where the declaration names what the
+-- type is written for; an error with no span of its own, as one about a type
+-- variable has, is reported at the written type's (`writtenTypeSpan`).
 export
 reportWrittenKinds : ModuleCtx ->
   KindScope ->
@@ -2333,7 +2334,7 @@ reportWrittenKinds : ModuleCtx ->
   Option Loc ->
   List (Option Kind, Ty) ->
   Unit
-reportWrittenKinds mctx sc declared fallback items =
+reportWrittenKinds mctx sc declared site items =
   let kj = kindJudgeOf sc declared items
   each
     (it => match kindErrorIn kj (fst it) (snd it)
@@ -2341,10 +2342,36 @@ reportWrittenKinds mctx sc declared fallback items =
         pushTypeErrorOncePerSite
           mctx
           TWrittenKindMismatch
-          (orElseLoc loc (orElseLoc (firstTyLoc (snd it)) fallback))
+          (orElseLoc loc (writtenTypeSpan site (snd it)))
           msg
       None => ())
     items
+
+-- From [site], or else the first positioned part of [ty], to the end of the
+-- last positioned part of [ty].  A type variable carries no position, so this
+-- is the nearest span that holds one.
+writtenTypeSpan : Option Loc -> Ty -> Option Loc
+writtenTypeSpan site ty = match (orElseLoc site (firstTyLoc ty), lastTyLoc ty)
+  (Some (Loc f sl sc el ec), Some (Loc _ _ _ el2 ec2)) =>
+    if el2 > el || el2 == el && ec2 > ec then
+      Some (Loc f sl sc el2 ec2)
+    else
+      Some (Loc f sl sc el ec)
+  (start, _) => start
+
+-- The span of the last part of [ty] that has one, in written order.
+lastTyLoc : Ty -> Option Loc
+lastTyLoc (TyCon { tyConLoc = loc }) = loc
+lastTyLoc (TyApp f x) = orElseLoc (lastTyLoc x) (lastTyLoc f)
+lastTyLoc (TyFun a b) = orElseLoc (lastTyLoc b) (lastTyLoc a)
+lastTyLoc (TyTuple ts) = findMap lastTyLoc (reverseL ts)
+lastTyLoc (TyEffect _ _ t) = lastTyLoc t
+lastTyLoc (TyNamed _ t _) = lastTyLoc t
+lastTyLoc (TyQual t _ l) = orElseLoc l (lastTyLoc t)
+lastTyLoc (TyConstrained _ t) = lastTyLoc t
+lastTyLoc (TyRow _ _ l) = l
+lastTyLoc (TyAuth _ l) = l
+lastTyLoc (TyVar _) = None
 
 -- What the written types [items] are judged with: the module's kinds, the
 -- kinds of their variables, and the names a fix may not reuse.
@@ -2456,7 +2483,8 @@ appKindError kj counts want n misapplied loc params args
 
 -- A variable applied to [args], judged as a head of kind [k] is.  Its
 -- arguments' kinds come from its own inferred kind, so a head among them is
--- not told to take more arguments.
+-- not told to take more arguments.  The variable has no span, so neither has
+-- its error (`writtenTypeSpan`).
 varKindError : KindJudge ->
   Option Kind ->
   String ->
@@ -2468,7 +2496,7 @@ varKindError kj want v k args
   | listLen args > listLen (kindParams k) =
     Some
       (KindError
-        (firstTyLocList args)
+        None
         (writtenKindArityMsg
           v
           (listLen (kindParams k))
@@ -2478,7 +2506,7 @@ varKindError kj want v k args
     kindAgainst
       kj
       True
-      (firstTyLocList args)
+      None
       (_ => v)
       (listLen args)
       (kindOfParams (drop (listLen args) (kindParams k)))
