@@ -16,7 +16,6 @@
 import support.diag_codes.{DiagCode(..)}
 import types.tc_types.{
   AdmittedVerdict(..),
-  BindingRole(..),
   BuiltinClass(..),
   CDeclared(..),
   CDeclaredPrefix(..),
@@ -141,12 +140,10 @@ import types.tc_unify.{
   optionOrFresh,
   performEffect,
   poisonMismatchVars,
-  postponePendingJoins,
   predicateSlotArgs,
   predicateSlotCSlots,
   recordFileValueFlow,
   refStored,
-  settlePendingJoins,
   unify,
   unifyIn,
   unifyIntoOrd,
@@ -208,11 +205,10 @@ import types.tc_shadow.{
   standaloneShadowDomainAt,
 }
 import types.tc_effects.{
+  finishValueEffectsKeeping,
   appSpineArgCount,
   beginEffectSummaryScope,
-  borrowedEffectCells,
   collectProducedSummary,
-  finishEffectSummaryScopeKeeping,
   freshEffectSummary,
   grantOnlyBindingId,
   localBindingSummary,
@@ -271,7 +267,6 @@ import types.tc_groups.{
   registerSchemeObligations,
   residualsOf,
   sccProtectedSignatureIds,
-  scopeRolesOf,
   sigConstraintArgTys,
   sigConstraints,
 }
@@ -385,30 +380,6 @@ import list.{last}
 import types.effect_values.{joinProducedEnvelope}
 import types.scopes as Scopes
 import map as IdMap
-
--- Close a local binding scope over [members]: whether each generalizes, and
--- its type.  Joins recorded in the scope are decided first when a member
--- generalizes, since its type must not generalize over an undecided join;
--- otherwise they belong to the enclosing scope, where later uses of the
--- alternatives can still shape them.  Everything the close reads (roots,
--- quantifiable authorities) is taken after that.
-finishValueEffectsKeeping : DynCtx ->
-  List (Bool, Mono) ->
-  List (Int, AuthResidual)
-finishValueEffectsKeeping dyn generalizing =
-  let members =
-    map ((generalizes, mono) => (localRole generalizes, mono)) generalizing
-  let level = dyn.dcModule.mcCells.currentLevel.value
-  if anyList fst generalizing then
-    settlePendingJoins dyn level
-  else
-    postponePendingJoins dyn.dcModule level
-  let monos = map snd members
-  finishEffectSummaryScopeKeeping
-    dyn.dcModule
-    (scopeRolesOf members)
-    (fold (acc mono => effectRoots mono acc) Tip monos)
-    (fold (acc mono => borrowedEffectCells dyn.dcModule mono acc) Tip monos)
 
 -- ── expression inference ──────────────────────────────────────────────────
 export
@@ -3608,8 +3579,3 @@ peelOntoParams _dyn None _ _ = ()
 peelOntoParams _dyn (Some _) _ [] = ()
 peelOntoParams dyn (Some src) patTypes pats =
   zipBindFrom dyn patTypes (peelArrows (listLen pats) src)
-
--- A local binding carries no signature of its own.
-localRole : Bool -> BindingRole
-localRole True = RoleQuantifies
-localRole False = RoleMonomorphic
