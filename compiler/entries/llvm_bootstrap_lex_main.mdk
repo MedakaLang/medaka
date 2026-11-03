@@ -37,7 +37,6 @@ import types.typecheck.{
 import types.tc_types.{DriveInputs(..)}
 import ir.core_ir_lower.{
   lowerProgramEmitWith,
-  methodIfaceTable,
   ctorFieldTypeNames,
   validateFfiExternTypeNames,
 }
@@ -82,7 +81,6 @@ runEmit inputs runtimeDecls coreDecls modules =
     makeEmitInput
       RawUnchecked
       (runtimeDomain (externDecls runtimeDecls))
-      (methodIfaceTable allDecls)
       (ctorFieldTypeNames allDecls)
       0
       []

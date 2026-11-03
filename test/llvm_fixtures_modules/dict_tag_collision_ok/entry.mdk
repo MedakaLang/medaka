@@ -1,0 +1,21 @@
+-- Two impls of one method whose instance keys hash alike
+-- (`hashName "Mzone" == hashName "NYone"`), called through a dictionary
+-- parameter. A dictionary's header word is identity only and a call loads a
+-- method-table slot, so every engine answers `mzone|nyone`.
+interface Nm a where
+  nm : a -> String
+
+data Mzone = Mzone
+data NYone = NYone
+
+impl Nm Mzone where
+  nm _ = "mzone"
+
+impl Nm NYone where
+  nm _ = "nyone"
+
+via : Nm a => a -> String
+via x = nm x
+
+main : <IO> Unit
+main = putStrLn (via Mzone ++ "|" ++ via NYone)

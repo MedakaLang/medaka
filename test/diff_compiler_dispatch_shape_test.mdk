@@ -1,17 +1,17 @@
-{- | Shape gate for typeclass dispatch codegen (issue #118). Replaces
+{- | Shape gate for typeclass dispatch codegen. Replaces
    test/diff_compiler_dispatch_shape.sh.
 
-   Behaviour gates cannot see this property: an inlined impl if-chain computes
-   the same answer as an outlined one. So the gate reads the emitted IR of two
-   probe programs and checks three assertions:
+   Behaviour gates cannot see this property: an if-chain over a method's impls
+   computes the same answer as a method-table slot. So the gate reads the
+   emitted IR of two probe programs and checks three assertions:
 
-   A. outlined: no dispatch-chain arm (`dispyes*` / `ddispyes*` label) appears
-      outside a `@mdk.dispatch.*` define.
-   B. shared: dispatcher call sites outnumber dispatcher defines at least 4x.
+   A. no chain: no dispatch-chain arm (`dispyes*` / `ddispyes*` label) and no
+      `@mdk.dispatch.*` dispatcher appears anywhere.
+   B. tables: a dictionary-routed call loads a slot (a `; slot` test), and the
+      slots it loads are closures over `@mdk.slot.*` wrappers.
    C. program-independent: among the defines common to both probes, the only
-      bodies allowed to differ are `@mdk.dispatch.*` and `mdk_program_main`. The
-      common set must hold at least 100 defines, so the check cannot pass
-      vacuously.
+      body allowed to differ is `mdk_program_main`. The common set must hold at
+      least 100 defines, so the check cannot pass vacuously.
 
    The probes are written into a scratch directory, not a fixture corpus. The
    directory comes from `withScratchDir`, which makes it fresh for this test and
@@ -28,7 +28,6 @@ import test.{
   expectAtLeast,
   expectEach,
   expectEqual,
-  expectTrue,
 }
 import string.{join, contains, startsWith, indexOf, take, drop, lines}
 import list.{filter, span}
@@ -36,8 +35,9 @@ import map as M
 
 -- ── the two probes ──────────────────────────────────────────────────────────
 -- P1 and P2 differ only in how many `deriving (Eq, Ord, Debug)` types they
--- declare. Under inline-chain codegen every dispatching prelude define would
--- then differ between them, which assertion C forbids.
+-- declare. Under codegen that names a program's impls at a dispatch site, every
+-- dispatching prelude define would then differ between them, which assertion C
+-- forbids.
 
 colorLine : String
 colorLine = "data Color = Red | Green | Blue deriving (Eq, Ord, Debug)\n"
@@ -78,11 +78,14 @@ leadGo ok s i =
   else
     i
 
-isDispDefine : String -> Bool
-isDispDefine l = startsWith "define " l && contains "@mdk.dispatch." l
+isDispSymbol : String -> Bool
+isDispSymbol l = contains "@mdk.dispatch." l
 
-isDispCall : String -> Bool
-isDispCall l = contains "call i64 @mdk.dispatch." l
+isSlotDefine : String -> Bool
+isSlotDefine l = startsWith "define internal i64 @mdk.slot." l
+
+isSlotLoad : String -> Bool
+isSlotLoad l = contains " ; slot " l
 
 -- `^d?dispyes[0-9]+:`
 isArmLabel : String -> Bool
@@ -98,21 +101,6 @@ digitsColon : String -> Bool
 digitsColon t =
   let d = leadLen (c => contains c digitSet) t
   d > 0 && startsWith ":" (drop d t)
-
--- Arms outside a define whose header names @mdk.dispatch.*. Mirrors the awk walk:
--- a `define` line resets the enclosing define, other lines leave it unchanged.
-strayArms : List String -> Int
-strayArms ls = strayGo False 0 ls
-
-strayGo : Bool -> Int -> List String -> Int
-strayGo _ n [] = n
-strayGo inDisp n (l :: rest) =
-  if startsWith "define " l then
-    strayGo (contains "@mdk.dispatch." l) n rest
-  else if isArmLabel l && not inDisp then
-    strayGo inDisp (n + 1) rest
-  else
-    strayGo inDisp n rest
 
 -- The `@name` token of a define header.
 defineName : String -> String
@@ -151,8 +139,7 @@ differs (_, b1, b2) = b1 /= b2
 
 -- A differing define that is not allowed to differ.
 disallowed : (String, String, String) -> Bool
-disallowed (n, _, _) =
-  not (startsWith "mdk.dispatch." n) && n /= "mdk_program_main"
+disallowed (n, _, _) = n /= "mdk_program_main"
 
 nameOf : (String, String, String) -> String
 nameOf (n, _, _) = n
@@ -165,17 +152,20 @@ shapeChecks ir1 ir2 = shapeOf (lines ir1) (lines ir2)
 shapeOf : List String -> List String -> Expectation
 shapeOf ls1 ls2 = expectEach [
   (
-    "A outlined: no dispatch arm outside a @mdk.dispatch.* define",
-    expectEqual 0 (strayArms ls2),
+    "A no chain: no dispatch arm",
+    expectEqual 0 (count isArmLabel ls2),
   ),
   (
-    "B shared: dispatcher defines exist",
-    expectTrue (length (filter isDispDefine ls2) > 0),
+    "A no chain: no dispatcher",
+    expectEqual 0 (count isDispSymbol ls2),
   ),
   (
-    "B shared: call sites >= 4x dispatcher defines",
-    expectTrue
-      (length (filter isDispCall ls2) >= 4 * length (filter isDispDefine ls2)),
+    "B tables: slot loads exist",
+    expectAtLeast 1 (count isSlotLoad ls2),
+  ),
+  (
+    "B tables: slot wrappers exist",
+    expectAtLeast 1 (count isSlotDefine ls2),
   ),
   (
     "C floor: >= 100 defines common to both probes",
@@ -226,5 +216,5 @@ shapeIn dir = match irOf dir "p1"
     Err e => fail e
     Ok ir2 => shapeChecks ir1 ir2
 
-test "dispatch shape: impl chain outlined, dispatchers shared, prelude program-independent" =
+test "dispatch shape: no impl chain, slots loaded from tables, prelude program-independent" =
   withScratchDir shapeIn

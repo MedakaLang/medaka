@@ -57,7 +57,7 @@ emitTarget targetPath decls =
   let cp = lowerProgramEmitWith emptyFacts decls
   let emitted =
     emitProgram
-      (makeEmitInput RawUnchecked PreludeFreeRuntime [] [] 0 [] [] "")
+      (makeEmitInput RawUnchecked PreludeFreeRuntime [] 0 [] [] "")
       (buildEmitPlan LlvmBackend PreludeFreeRuntime cp)
       cp
   match emitted

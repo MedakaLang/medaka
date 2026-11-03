@@ -1,5 +1,5 @@
 # META
-source_lines=737
+source_lines=747
 stages=DESUGAR,MARK
 # SOURCE
 import types.symbol_origins.{CoreSymbolOrigins}
@@ -418,11 +418,21 @@ noImplSym = ImplSym "" "" ""
 
 -- ── programs ───────────────────────────────────────────────────────────────
 -- The method-context table, the fifth field of `CProgram`: per interface method of the lowered declarations whose
--- own `=>` context has a slot, keyed by `core_ir_lower.ifaceMethodArityKey`, the
+-- own `=>` context has a slot, keyed by `ifaceMethodArityKey`, the
 -- number of constraints in that context that mention a type variable.  It is read
 -- off the declared signature, not the typechecker's evidence, so
 -- `core_validate.validateMethodContexts` can hold a `CMethod`'s method routes and an
 -- impl entry's leading dictionaries to it.
+
+-- The identity-keyed lookup word for an interface method (#1450, #1668): the
+-- interface's DECLARATION word and the method name, spliced.  It keys the
+-- method-context table above and the lowering's declared-arity table, and both
+-- backends read it.  `ifaceWordOf` never answers `""` (it falls back to the bare
+-- interface name), so this word is never the absence-matches-absence hazard
+-- `ifaceIdentity` carries.  `#` cannot occur in either half.
+export
+ifaceMethodArityKey : String -> String -> String
+ifaceMethodArityKey ifaceWord mname = "\{ifaceWord}#\{mname}"
 
 -- A lowered program: top-level function groups (coalesced multi-clause), the
 -- constructor table (name → arity, for building VCon makers), the ctor→type map
@@ -801,6 +811,8 @@ mapStmtBinders f (CSAssign x e) = CSAssign x (mapExprBinders f e)
 (DData Public "ImplSym" () ((variant "ImplSym" (ConPos (TyCon "String") (TyCon "String") (TyCon "String")))) ())
 (DTypeSig true "noImplSym" (TyCon "ImplSym"))
 (DFunDef false "noImplSym" () (EApp (EApp (EApp (EVar "ImplSym") (ELit (LString ""))) (ELit (LString ""))) (ELit (LString ""))))
+(DTypeSig true "ifaceMethodArityKey" (TyFun (TyCon "String") (TyFun (TyCon "String") (TyCon "String"))))
+(DFunDef false "ifaceMethodArityKey" ((PVar "ifaceWord") (PVar "mname")) (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "")) (EApp (EVar "display") (EVar "ifaceWord"))) (ELit (LString "#"))) (EApp (EVar "display") (EVar "mname"))) (ELit (LString ""))))
 (DData Public "CProgram" () ((variant "CProgram" (ConPos (TyApp (TyCon "List") (TyCon "CBind")) (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "Int"))) (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "String"))) (TyApp (TyCon "List") (TyCon "CImplEntry")) (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "Int"))) (TyCon "DeclFacts")))) ())
 (DData Public "MethodResultFact" () ((variant "MethodResultFact" (ConNamed (field "iface" (TyCon "String")) (field "method" (TyCon "String")) (field "returnsHead" (TyCon "Bool")) (field "callbackPositions" (TyApp (TyCon "List") (TyCon "Int"))) (field "valueArity" (TyCon "Int"))))) ())
 (DImpl true "Eq" ((TyCon "MethodResultFact")) () ((im "eq" ((PVar "__x") (PVar "__y")) (EMatch (ETuple (EVar "__x") (EVar "__y")) (arm (PTuple (PRec "MethodResultFact" ((rf "iface" (PVar "__a0")) (rf "method" (PVar "__a1")) (rf "returnsHead" (PVar "__a2")) (rf "callbackPositions" (PVar "__a3")) (rf "valueArity" (PVar "__a4"))) false) (PRec "MethodResultFact" ((rf "iface" (PVar "__b0")) (rf "method" (PVar "__b1")) (rf "returnsHead" (PVar "__b2")) (rf "callbackPositions" (PVar "__b3")) (rf "valueArity" (PVar "__b4"))) false)) () (EBinOp "&&" (EBinOp "&&" (EBinOp "&&" (EBinOp "&&" (EApp (EApp (EVar "eq") (EVar "__a0")) (EVar "__b0")) (EApp (EApp (EVar "eq") (EVar "__a1")) (EVar "__b1"))) (EApp (EApp (EVar "eq") (EVar "__a2")) (EVar "__b2"))) (EApp (EApp (EVar "eq") (EVar "__a3")) (EVar "__b3"))) (EApp (EApp (EVar "eq") (EVar "__a4")) (EVar "__b4"))))))))
@@ -964,6 +976,8 @@ mapStmtBinders f (CSAssign x e) = CSAssign x (mapExprBinders f e)
 (DData Public "ImplSym" () ((variant "ImplSym" (ConPos (TyCon "String") (TyCon "String") (TyCon "String")))) ())
 (DTypeSig true "noImplSym" (TyCon "ImplSym"))
 (DFunDef false "noImplSym" () (EApp (EApp (EApp (EVar "ImplSym") (ELit (LString ""))) (ELit (LString ""))) (ELit (LString ""))))
+(DTypeSig true "ifaceMethodArityKey" (TyFun (TyCon "String") (TyFun (TyCon "String") (TyCon "String"))))
+(DFunDef false "ifaceMethodArityKey" ((PVar "ifaceWord") (PVar "mname")) (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "")) (EApp (EMethodRef "display") (EVar "ifaceWord"))) (ELit (LString "#"))) (EApp (EMethodRef "display") (EVar "mname"))) (ELit (LString ""))))
 (DData Public "CProgram" () ((variant "CProgram" (ConPos (TyApp (TyCon "List") (TyCon "CBind")) (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "Int"))) (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "String"))) (TyApp (TyCon "List") (TyCon "CImplEntry")) (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "Int"))) (TyCon "DeclFacts")))) ())
 (DData Public "MethodResultFact" () ((variant "MethodResultFact" (ConNamed (field "iface" (TyCon "String")) (field "method" (TyCon "String")) (field "returnsHead" (TyCon "Bool")) (field "callbackPositions" (TyApp (TyCon "List") (TyCon "Int"))) (field "valueArity" (TyCon "Int"))))) ())
 (DImpl true "Eq" ((TyCon "MethodResultFact")) () ((im "eq" ((PVar "__x") (PVar "__y")) (EMatch (ETuple (EVar "__x") (EVar "__y")) (arm (PTuple (PRec "MethodResultFact" ((rf "iface" (PVar "__a0")) (rf "method" (PVar "__a1")) (rf "returnsHead" (PVar "__a2")) (rf "callbackPositions" (PVar "__a3")) (rf "valueArity" (PVar "__a4"))) false) (PRec "MethodResultFact" ((rf "iface" (PVar "__b0")) (rf "method" (PVar "__b1")) (rf "returnsHead" (PVar "__b2")) (rf "callbackPositions" (PVar "__b3")) (rf "valueArity" (PVar "__b4"))) false)) () (EBinOp "&&" (EBinOp "&&" (EBinOp "&&" (EBinOp "&&" (EApp (EApp (EMethodRef "eq") (EVar "__a0")) (EVar "__b0")) (EApp (EApp (EMethodRef "eq") (EVar "__a1")) (EVar "__b1"))) (EApp (EApp (EMethodRef "eq") (EVar "__a2")) (EVar "__b2"))) (EApp (EApp (EMethodRef "eq") (EVar "__a3")) (EVar "__b3"))) (EApp (EApp (EMethodRef "eq") (EVar "__a4")) (EVar "__b4"))))))))

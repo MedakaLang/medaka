@@ -329,6 +329,11 @@ inlang-backend-wasm-emit-trapmsg-test:
 inlang-backend-wasm-emit-paramname-test:
 	./medaka test compiler/backend/wasm_emit_paramname_test.mdk
 
+## Method-table slot calls of wasm_emit.mdk: the null-word trap, the slot load and
+## the slot function types.
+inlang-backend-wasm-emit-test:
+	./medaka test compiler/backend/wasm_emit_test.mdk
+
 ## Or-pattern arms of wasm_emit.mdk: both tree engines emit a shared arm body
 ## once, against a control walker whose ten separate arms emit it ten times.
 inlang-backend-wasm-emit-orarm-test:

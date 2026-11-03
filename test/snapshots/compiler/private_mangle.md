@@ -1,5 +1,5 @@
 # META
-source_lines=2039
+source_lines=2021
 stages=DESUGAR,MARK
 # SOURCE
 import frontend.runtime_constructors.{namedRuntimeCtor}
@@ -1578,24 +1578,17 @@ hexNibble : Int -> String
 hexNibble n = stringSlice n (n + 1) "0123456789abcdef"
 
 -- hashName: a deterministic djb2 string hash (seed 5381), computed in the EMITTER
--- (the emitted IR carries the decimal constant).  Shared by BOTH backends so the
--- dict-witness tag / route-key dispatch agrees across LLVM and WasmGC — the hash
--- MUST be byte-identical between them.
+-- (the emitted IR carries the decimal constant).  Shared by BOTH backends: it is the
+-- identity word in a dictionary's header, and a constructor-cell header for the
+-- built-in cells.  Nothing dispatches on a dictionary's header (a call loads a
+-- method-table slot), so two instance keys hashing alike are harmless there.
 --
--- 🚨 `hashName` IS NOT INJECTIVE, and not merely "astronomically unlikely" to
--- collide — colliding pre-images are CONSTRUCTIBLE, in the FULL i64, with no
--- masking.  djb2 is the radix-33 polynomial `5381*33^n + Σ c_i*33^i`, and the
--- identifier alphabet spans 74 code points (`0` = 48 … `z` = 122) — WIDER than the
--- radix — so `Δ_{i+1} = +1, Δ_i = −33` at two ADJACENT positions is an exact zero:
+-- `hashName` is not injective: djb2 is the radix-33 polynomial `5381*33^n +
+-- Σ c_i*33^i` over an identifier alphabet of 74 code points, wider than the radix,
+-- so `Δ_{i+1} = +1, Δ_i = −33` at two adjacent positions is an exact zero:
 -- `hashName "Az" == hashName "BY" == 5862176`, `hashName "Mzone" == hashName
--- "NYone" == 210683374574`.  Before #348's guard that was a live S0: two impls at
--- head tycons `Mzone`/`NYone` compiled to one `icmp eq i64 %headTag, 210683374574`
--- in the shared dispatcher, so `build` answered `mzone|mzone` where the
--- interpreter answered `mzone|nyone`, at exit 0 with no diagnostic.  Calling this
--- shape "astronomically unlikely" is wrong about the mechanism: the hash's
--- non-injectivity has nothing to do with the tag alphabet being small, and
--- nothing to do with the mask width.
--- `core_validate.validateDictTags` is what makes it loud; keep the two together.
+-- "NYone" == 210683374574`.  Do not use it as a key where equality must mean
+-- identity.
 --
 -- Each step is computed in `U64`, which wraps by definition, and narrowed to its
 -- low 63 bits: the value the tags have always had, when `Int` itself wrapped.
@@ -1613,23 +1606,12 @@ hashChars cs i acc
       (U64.toIntTruncating
         (U64.truncate acc * 33 + U64.truncate (charCode (arrayGetUnsafe i cs))))
 
--- the i31-safe dict-witness tag: `hashName` masked into the low 30 bits (positive
--- range of an i31).  The full djb2 hash is an i64 in the LLVM backend (an i64 dict
--- word); a WasmGC dict witness rides an i31 immediate (31 bits), so the raw hash
--- (e.g. `hashName "Color"` = 210671116836, a 38-bit value) overflows `i32.const`.
--- Masking to 30 bits keeps it a positive i32/i31 that `i31.get_s` reads back
--- unchanged, and — being applied identically at witness CREATION
--- (`wasm_emit.routeWitness`) and at the dispatch COMPARISON
--- (`wasm_emit.emitDispatchChain`) — preserves the equality test.  (No bitwise
--- primitive in the compiler subset; `% 2^30` is the mask.)
---
--- Lives HERE, beside `hashName`, rather than in `wasm_emit`, because
--- `core_validate.validateDictTags` must check the WASM tag space with the SAME
--- expression the wasm emitter mints — a second copy of the mask in the guard is a
--- copy that can drift, and a drifted guard certifies the wrong property.  The
--- 30-bit space inherits every `hashName` collision (masking cannot separate equal
--- values) AND adds its own: two pre-images whose full hashes differ by a nonzero
--- multiple of 2^30.
+-- the i31-safe dict header: `hashName` masked into the low 30 bits (positive range
+-- of an i31).  A WasmGC dictionary header is an i32, so the raw hash (e.g.
+-- `hashName "Color"` = 210671116836, a 38-bit value) overflows `i32.const`.
+-- Identity only, as for `hashName`: the mask adds collisions of its own, which are
+-- harmless for the same reason.  (No bitwise primitive in the compiler subset;
+-- `% 2^30` is the mask.)
 export
 dictTag : String -> Int
 dictTag s = posMod (hashName s) 1073741824

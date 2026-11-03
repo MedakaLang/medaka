@@ -1,0 +1,43 @@
+-- #1819: an eta-short impl clause with leading `$dict` parameters, reached through
+-- a dictionary.  `Int`'s and `List`'s clauses take one value of the two `fmtWith`
+-- declares and return a function for the second; `List`'s also takes its `requires`
+-- dictionary.  `Tag`'s takes both values.  `viaDict` supplies both values,
+-- `partialVia` only the first, so the impl's own parameter count and the call's
+-- differ in both directions.  A dictionary counted in the wrong place shifts the
+-- values, which prints the wrong text or crashes.
+-- Must print:  5/7 / t=7 / [3/7] / u=8 / [9/1] / 6/2
+import fmt.{Fmt(..), Shown(..), fmtWith, shown}
+
+data Tag = Tag String
+
+impl Fmt Int where
+  fmtWith n = b => intToString n ++ "/" ++ shown b
+
+impl Fmt Tag where
+  fmtWith (Tag t) b = t ++ "=" ++ shown b
+
+impl Fmt (List a) requires Fmt a where
+  fmtWith xs =
+    b => match xs
+      [] => "[]"
+      x :: _ => "[" ++ fmtWith x b ++ "]"
+
+viaDict : Fmt a => a -> String
+viaDict x = fmtWith x 7
+
+partialVia : Fmt a => a -> Int -> String
+partialVia x = fmtWith x
+
+-- The integer arguments are annotated: the native gate links no prelude, and
+-- without `Num` a bare literal at a constrained call is not resolved to `Fmt Int`.
+main : <IO> Unit
+main =
+  let _ = putStrLn (viaDict (5 : Int))
+  let _ = putStrLn (viaDict (Tag "t"))
+  let _ = putStrLn (viaDict [3, 4])
+  let f = partialVia (Tag "u")
+  let _ = putStrLn (f 8)
+  let g = partialVia [9]
+  let _ = putStrLn (g 1)
+  let h = partialVia (6 : Int)
+  putStrLn (h 2)

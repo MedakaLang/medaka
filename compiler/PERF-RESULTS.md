@@ -28,6 +28,70 @@ gate state, and the numbers (min-of-N, single-threaded, quiet machine).
 
 ---
 
+## 2026-11-02 — Method tables: dictionary dispatch (#4786)
+
+Dictionaries are method tables on both backends (`compiler/RUNTIME-DESIGN.md` §8.7). The
+native `dispatch_rt` number was re-measured on the final emitter; the byte counts come from the
+shared-helper step below, and the wasm numbers from the own-count closure step, as each row says.
+
+**Method.** Isolated trees, `MEDAKA_STRICT=1`, minimum of 5 runs per binary. The box was at
+load ~22, so expect ±30% on any single number. The `test/bench_fixtures/dispatch` row is folded
+by clang (0.014 s) and cannot measure dictionary dispatch. The measured probe is a polymorphic
+loop with the dictionary as a runtime parameter (`dispatch_rt`):
+
+```
+gmax : Ord a => a -> a -> a
+gmax a b = if a <= b then b else a
+
+loopP : Ord a => a -> a -> Int -> a
+loopP acc x n = match n
+  0 => acc
+  _ => loopP (gmax acc x) x (n - 1)
+
+main : <IO> Unit
+main =
+  println (loopP 0 5 50000000)
+  println (loopP 0.0 5.0 50000000)
+```
+
+**Numbers** (before = the tree before method tables; after = with them and the entry-block
+alloca fix):
+
+| measure | before | after |
+|---|---|---|
+| native `dispatch_rt`, min of 5 alternating | 0.134 s | 0.0138 s (0.0163 s before the tail-position change) |
+| native binary bytes, dispatch / dispatch_rt / fib | 194528 / 213224 / 196280 | 194528 / 196328 / 196336 |
+| native `medaka` binary bytes | 14675312 | 14630152 |
+| native IR lines, tiny program (`diff_compiler_ir_size`, ceiling 15000) | 14704 | 14360 |
+| dispatcher defines, dispatch / dispatch_rt | 13 / 12 | 0 / 0 |
+| wasm bytes, dispatch | 68610 | 19499 |
+| wasm bytes, hello / fib (not re-measured after the own-count closures) | 36630 / 35960 | 12312 / 12745 |
+| wasm `dispatch.mdk` under node, min of 5 | 1.314 s | 1.12 to 1.22 s |
+
+The first method-table emitter was 2.7x slower than the dispatchers on `dispatch_rt`
+(0.406 s against 0.152 s). The cause was not the indirect call: `emitApplyAny` and
+`emitApplyRuntime` emitted their result-slot and argv `alloca`s in the block they were
+reached from, which is past the null test of `loadSlot`. An `alloca` outside the entry block
+is dynamic, so LLVM could not promote it to a register, inline the callee, or fold the
+constant table. The emitter now tags those `alloca`s and `hoistEntryAllocas` moves them to
+the define's entry block, with the slot ABI, the null trap and the arity check unchanged.
+Inline, the per-site null test and the two paths of `emitApplyAny` grew native IR about 18%
+(tiny program 17433 lines); each slot call in non-tail position is now one line calling a shared
+`alwaysinline` helper per argument count (`@mdk.slotcall.<n>`), which clang inlines back, so the
+IR is below the tree before method tables and the bench binaries move by at most 8 bytes. A slot
+call in tail position is emitted inline with a `ret` in each branch instead, because a call to
+the helper joins its two paths before `ret` and clang does not turn that into a jump: deep
+recursion through a runtime dictionary stays a tail call (`test/wasm/fixtures_modules/tail_sites.mdk`,
+case `rdict`). The 30 tail sites in the prelude cost about 830 IR lines, so the tiny program is
+14360 lines.
+
+Wasm: an impl runs at its own value count on both backends. A wasm dictionary carries, per slot,
+a closure of that count, used by sites whose argument count differs from the declared one and by
+method values; the exact-count path is the declared-arity `call_ref`. The dictionary is one
+`$dict` struct, so a no-requires dictionary is no longer an `i31`.
+
+---
+
 ## 2026-10-13 — `check` retention census and per-module release (#4090)
 
 **Census** (`make retain-census`, new): every allocation carries a header naming its

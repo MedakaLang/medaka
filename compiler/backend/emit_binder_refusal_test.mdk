@@ -100,7 +100,7 @@ llvmFor : ManifestRequirement -> CProgram -> String
 llvmFor requirement cp =
   let emitted =
     llvmEmit
-      (makeEmitInput requirement PreludeFreeRuntime [] [] 0 [] [] "")
+      (makeEmitInput requirement PreludeFreeRuntime [] 0 [] [] "")
       (buildEmitPlan LlvmBackend PreludeFreeRuntime cp)
       cp
   match emitted
