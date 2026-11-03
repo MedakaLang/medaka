@@ -13,7 +13,7 @@ test "disabled trace returns no token" =
     TraceDisabled => pass
     _ => fail "disabled tracing created a token"
 
-test "completion and cancel records contain only metadata" = withScratchDir
+test "completion and cancel records contain selected metadata" = withScratchDir
   (dir =>
     let path = "\{dir}/trace.jsonl"
     let trace = TraceContext {
