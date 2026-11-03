@@ -11,6 +11,7 @@
 -- Run: `medaka test sqlite/test/rowid_seek_test.mdk` from the sqlite root.
 
 import test.{Expectation, expectEqual, expectAll, fail, pass}
+import string.{repeat}
 import lib.dbwriter.{buildDatabaseMulti}
 import lib.header.{headerPageSize}
 import lib.sqlite.{
@@ -45,15 +46,10 @@ n = 30
 paddingLen : Int
 paddingLen = 300
 
-padGo : Int -> String -> String
-padGo k acc
-  | k <= 0 = acc
-  | otherwise = padGo (k - 1) (acc ++ "x")
-
 -- Fixed-length filler text so every row is large enough to force the split;
 -- identical across rows since only the rowid needs to be distinct.
 padding : String
-padding = padGo paddingLen ""
+padding = repeat paddingLen "x"
 
 mkRow : Int -> List Cell
 mkRow i = [CInt i, CText padding]

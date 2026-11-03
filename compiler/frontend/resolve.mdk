@@ -2588,10 +2588,14 @@ stmtLoc (DoAssign _ e) = firstExprLoc e
 stmtLoc (DoFieldAssign _ _ e) = firstExprLoc e
 
 unionStr : List String -> List String -> List String
-unionStr acc [] = acc
-unionStr acc (x :: xs)
-  | contains x acc = unionStr acc xs
-  | otherwise = unionStr (acc ++ [x]) xs
+unionStr acc xs = unionStrGo acc [] xs
+
+-- `fresh` holds the new names newest-first; `acc` is copied once, at the end.
+unionStrGo : List String -> List String -> List String -> List String
+unionStrGo acc fresh [] = acc ++ reverseL fresh
+unionStrGo acc fresh (x :: xs)
+  | contains x acc || contains x fresh = unionStrGo acc fresh xs
+  | otherwise = unionStrGo acc (x :: fresh) xs
 
 externWithBodyErrors : List String -> List Decl -> List ResError
 externWithBodyErrors _ [] = []
