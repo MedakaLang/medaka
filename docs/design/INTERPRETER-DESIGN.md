@@ -3,8 +3,9 @@
 **Status:** PROPOSED 2026-11-02; direction chosen by Val the same day (option C of the
 2026-11-02 strategy discussion: a GHCi-model interpreter that shares the native runtime).
 Epic #4811; milestones `Interp: V0` to `Interp: V6` are listed in §12 with their issues.
-The decisions in §11 were run through the `decision-triage` skill on 2026-11-02 and every
-one was adopted there (each row names the question that settled it); Val can overturn any
+The decisions in §11 were run through the `decision-triage` skill on 2026-11-02; twelve
+were adopted there (each row names the question that settled it) and one, D10, survived
+the refined precedent question and was ruled by Val on 2026-11-03. She can overturn any
 of them on the epic. Nothing below is built. Child issues cite this document's sections
 rather than restating them.
 
@@ -159,15 +160,15 @@ and precompiled code to share them. Each is a fact with one producer (law A4).
    code loses nothing; the if-chain dispatchers are deleted. Precedent: GHC dictionary
    records, Swift witness tables, rustc vtables; `project_backend_dispatch_strategy`
    already anticipated the witness table at module boundaries.
-3. **Globals** are initialised in `@mdk_program_main`'s prologue (eager) or by a forcer
-   with a state byte (lazy, black-holed, E-CYCLIC-VALUE on re-entry). Top-level nullary
-   bindings stay lazy: that is a standing ruling (2026-06-10: a top-level binding is a
-   definition, effects flow only through `main`, an unreferenced effectful binding never
-   runs) and it is GHC's CAF model, which GHCi and native GHC share. A package module
-   gets its own initialiser for its eager globals, run at load in dependency order
-   (OCaml module initialisation); the VM's user globals are cells with the same forcer
-   state machine, so cyclic-value detection and the eager/lazy split
-   (`compiler/backend/global_plan.mdk`) are identical on every engine.
+3. **Globals** are initialised today in `@mdk_program_main`'s prologue (eager) or by a
+   forcer with a state byte (lazy, black-holed, E-CYCLIC-VALUE on re-entry). Under L1
+   (§10, ruled by Val 2026-11-03) every top-level value initialises strictly in
+   dependency order and is pure at initialisation, so the forcer, the state byte and the
+   runtime trap go: a package module gets one initialiser that runs its values in
+   dependency order at load (OCaml module initialisation), a program's modules run theirs
+   in import order, and the VM's user globals are plain cells the module initialiser
+   fills. `compiler/backend/global_plan.mdk` already computes the order; its lazy bucket
+   becomes a static error at the declaration.
 
 ### 3.5 Linking
 
@@ -380,21 +381,28 @@ agent can drive a session through `medaka mcp`.
 
 ## 10. Language changes this design asks for
 
-Val ruled on 2026-11-02 that language-level changes are on the table for this work. Three
+Val ruled on 2026-11-02 that language-level changes are on the table for this work. Four
 are worth taking because each removes a place where `run` and `build` would otherwise
-behave differently, one proposed change was withdrawn under triage, and one is a rule to
-keep rather than a change to make. Each was a decision in §11 (D10 to D13); each that
-stands changes `docs/spec/` and is filed as its own issue.
+behave differently, and one is a rule to keep rather than a change to make. Each was a
+decision in §11 (D10 to D13); each changes `docs/spec/` and is filed as its own issue.
 
-- **L1 (withdrawn). Strict, dependency-ordered top-level initialisation.** The first draft
-  proposed replacing lazy top-level nullary bindings with strict initialisation in
-  dependency order, to delete the forcer, its state byte, `VThunk` and the runtime
-  cyclic-value trap. Triage withdrew it: laziness is a standing ruling with a semantic
-  rationale (2026-06-10, `lazy-toplevel-nullary-canonical`: a binding is a definition,
-  effects flow only through `main`, an unreferenced effectful binding never runs), not an
-  accident of install order, and GHC's CAF model is the same design on both of its
-  engines. The VM implements the forcer (§3.4 item 3); #4787 is closed with this
-  sentence.
+- **L1. Top-level values initialise strictly, in dependency order, and are pure at
+  initialisation** (ruled by Val 2026-11-03, D10 option C). Today a top-level nullary
+  binding is lazy (the 2026-06-10 ruling): a thunk in `eval`, a forcer with a state byte
+  natively, black-holed, with E-CYCLIC-VALUE as a runtime trap, and an effectful binding
+  such as `greeting = println "side"` typechecks and runs on first use. Under L1 the
+  order is the semantics (OCaml's module initialisation, computed by `global_plan.mdk`'s
+  SCC order rather than textual order, so declarations stay order-independent), a value
+  cycle is a located static error, an effectful top-level binding is a located static
+  error (Rust's rule for a `static`), and the forcer, the state byte, `VThunk` and the
+  runtime trap all go on every engine. An explicit lazy cell in the stdlib (Rust's
+  LazyLock, OCaml's `Lazy.t`) is added when a real program asks for one; it is additive.
+  The decision was reopened under the `decision-triage` skill's refined precedent
+  question: Haskell's lazy CAFs are a known retention leak, OCaml's strict order is
+  unregretted, Rust forbids runtime work in statics and makes laziness explicit; the
+  deciding fact was V1, whose precompiled stdlib cannot drop an unreferenced global, so
+  laziness was the only zero-startup-cost design and L1 pays that cost only where chosen.
+  #4787 carries it, with the spec rule and the migration census.
 - **L2. Proper tail calls are a language guarantee.** The VM gives every tail call constant
   stack (§3.2); the native backend today guarantees only self tail calls and TRMC and
   leaves the rest to clang. Without L2, a program that runs on `run` can overflow on
@@ -428,10 +436,11 @@ stands changes `docs/spec/` and is filed as its own issue.
 ## 11. Decisions
 
 Every decision below was run through the `decision-triage` skill on 2026-11-02 (the three
-questions: a principled fix without a major blocker; a mature implementation to emulate;
-the best long-term shape for the language). Each was settled by one of them and adopted;
-the epic (#4811) records the same outcomes, and Val can overturn any of them there. The
-alternative stays named so overturning is cheap.
+questions: a principled fix without a major blocker; a mature language to emulate, and
+whether it regrets the choice; the best long-term shape for the language). Twelve were
+settled by one of them and adopted; D10 survived and Val ruled it. The epic (#4811)
+records the same outcomes, and Val can overturn any of them there. The alternative stays
+named so overturning is cheap.
 
 - **D1. Engine identity.** The VM shares the native runtime; `eval` stays the oracle.
   *Chosen by Val 2026-11-02 (option C).* A runtime bug now reaches `run` and `build`
@@ -460,9 +469,12 @@ alternative stays named so overturning is cheap.
   the repo's agent surface. The `repl --json` mode is the same protocol on stdio, not an
   alternative.
 - **D9. `medaka test` stays native by default** (not a decision: a measurement after V4).
-- **D10. Top-level nullary bindings stay lazy; L1 is withdrawn** (adopted; Q1 found the
-  standing 2026-06-10 ruling as a blocker, Q2 found GHC's CAF model). The VM implements
-  the forcer.
+- **D10. Top-level values initialise strictly in dependency order and are pure at
+  initialisation; an explicit lazy cell comes later on demand** (*ruled by Val
+  2026-11-03, option C*). A first triage pass adopted "keep lazy"; the refined precedent
+  question (Rust, OCaml, Haskell, and whether each regrets its choice) left it unclear
+  and it was brought. Alternatives: keep lazy (Haskell's CAFs), or strict with no lazy
+  cell at all.
 - **D11. Proper tail calls are a language guarantee on every engine** (adopted; Q2:
   OCaml, GHC, Scheme; Q3: no silent engine divergence). Whether the native backend pays
   with `musttail` or `tailcc` is a spike (#4789), not a decision; it returns as one only
@@ -477,7 +489,7 @@ alternative stays named so overturning is cheap.
 
 | milestone | delivers | done when | issues |
 |---|---|---|---|
-| Interp: V0 (the ABI is a contract) | the layout header, the conformance test, the ABI version, method-table dictionaries, stable type and site ids, per-module initialisers for eager globals, `RUNTIME-DESIGN.md` §8 re-derived | both physical backends emit the new layout; every engines gate green; the header is the only definition of the layout | #4783 #4784 #4785 #4786 #4788 #4789; #4790 found by the census; #4787 closed under triage |
+| Interp: V0 (the ABI is a contract) | the layout header, the conformance test, the ABI version, method-table dictionaries, stable type and site ids, strict ordered initialisation with per-module initialisers (L1), `RUNTIME-DESIGN.md` §8 re-derived | both physical backends emit the new layout; every engines gate green; the header is the only definition of the layout | #4783 #4784 #4785 #4786 #4787 #4788 #4789; #4790 found by the census |
 | Interp: V1 (the stdlib is a package) | per-module interface files (D6 completed), the package emission mode, the symbol table, `make medaka` links the package | no stdlib module is typechecked in a `check`, `run` or `build` process (`stage_counts.golden`); the four-import probe starts under 0.1 s | #4791 #4792 #4793 #4794 |
 | Interp: V2 (the VM runs pure programs) | `bc_isa`, `bc_frames`, `bc_emit`, `bc_object`, the generated opcode header, `interp`, `stack`, the probes | the pure fixture corpora agree with `eval` through `vm_main`; a million-element reverse and a million-deep non-tail recursion complete | #4795 #4796 #4797 #4798 #4799 |
 | Interp: V3 (the VM and native code call each other) | `link`, `enter`, the extern table, method tables for user impls, VM globals | every `run`-capable corpus agrees across all four engines; `run --engine vm` runs the survey ports | #4800 #4801 #4802 #4803 |
