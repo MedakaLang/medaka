@@ -13,6 +13,7 @@ import driver.loader.{
   loadProgramFilesE,
   LoadError(..),
   lineValueIsTrue,
+  collectDeps,
   scanLintInternal,
   scanSiteRoot,
 }
@@ -94,8 +95,10 @@ test "a test module importing a test module loads" = expectTrue
     Ok _ => True
     Err _ => False)
 
-test "a trailing form feed or vertical tab on a manifest value is trimmed like any ASCII whitespace" = expectEach
-  [
+test "a trailing form feed or vertical tab on a manifest value is trimmed like any ASCII whitespace" =
+  let inLintSection = False
+  let outsideSection = False
+  expectEach [
     (
       "lineValueIsTrue FF",
       expectTrue (lineValueIsTrue "internal = true\u{0c}"),
@@ -106,12 +109,29 @@ test "a trailing form feed or vertical tab on a manifest value is trimmed like a
     ),
     (
       "scanLintInternal FF",
-      expectTrue (scanLintInternal False ["[lint]", "internal = true\u{0c}"]),
+      expectTrue
+        (scanLintInternal inLintSection ["[lint]", "internal = true\u{0c}"]),
     ),
     (
       "scanSiteRoot FF",
       expectEqual
         (Some "src")
-        (scanSiteRoot False ["site-root = \"src\"\u{0c}"]),
+        (scanSiteRoot outsideSection ["site-root = \"src\"\u{0c}"]),
+    ),
+    (
+      "scanLintInternal value before an inline comment",
+      expectTrue
+        (scanLintInternal inLintSection ["[lint]", "internal = true\u{0c}# c"]),
+    ),
+    (
+      "scanLintInternal key side",
+      expectTrue
+        (scanLintInternal inLintSection ["[lint]", "internal\u{0c}= true"]),
+    ),
+    (
+      "collectDeps key side",
+      expectEqual
+        [("dep", "r/../dep")]
+        (collectDeps "r" ["[dependencies]", "dep\u{0c}= \"../dep\""]),
     ),
   ]

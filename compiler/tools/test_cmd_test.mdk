@@ -436,6 +436,11 @@ panicMainSrc = "main = panic \"boom\"\n"
 passTestSrc : String
 passTestSrc = "import test.{expectEqual}\n\ntest \"fine\" = expectEqual 1 1\n"
 
+-- A passing test and a panicking test in one file.
+mixedTestSrc : String
+mixedTestSrc =
+  "import test.{expectEqual}\n\ntest \"fine\" = expectEqual 1 1\n\ntest \"draws then panics\" =\n  let n = randomInt 0 1000000000\n  if n >= 0 then panic (intToString n) else expectEqual 1 1\n"
+
 -- A type error beside a doctest, so the file is type-checked and refused before
 -- any test runs.
 illTypedSrc : String
@@ -614,21 +619,21 @@ firstFileEntry out = match J.parse (trim out)
     None => JNull
   Err _ => JNull
 
--- The `file` of the first entry of the envelope's `files`, or "" when absent.
-firstFileName : String -> String
+-- The `file` of the first entry of the envelope's `files`; None when absent.
+firstFileName : String -> Option String
 firstFileName out = match J.get "file" (firstFileEntry out)
-  Some (JString f) => f
-  _ => ""
+  Some (JString f) => Some f
+  _ => None
 
--- The code of the first diagnostic of the first file of the envelope.
-firstDiagCode : String -> String
+-- The code of the first diagnostic of the first file of the envelope; None when absent.
+firstDiagCode : String -> Option String
 firstDiagCode out = match J.get "diagnostics" (firstFileEntry out)
   Some ds => match J.at 0 ds
     Some d => match J.get "code" d
-      Some (JString c) => c
-      _ => ""
-    None => ""
-  None => ""
+      Some (JString c) => Some c
+      _ => None
+    None => None
+  None => None
 
 test "an aborted --json run emits the run envelope with the seed on stderr" =
   withFixtures
@@ -641,46 +646,52 @@ test "an aborted --json run emits the run envelope with the seed on stderr" =
     ]) ((code, out, err) => expectAll [
       expectNotEqual 0 code,
       expectEqual "" (trim out),
-      expectTrue (endsWith "panic_test.mdk" (firstFileName err)),
-      expectEqual "E-PANIC" (firstDiagCode err),
+      expectTrue
+        (optionOr False (map (endsWith "panic_test.mdk") (firstFileName err))),
+      expectEqual (Some "E-PANIC") (firstDiagCode err),
       expectEqual (Some (JInt 7)) (jsonMember "seed" err),
     ]))
 
-test "an eval-engine panic still prints the run's seed once" =
-  withFixtures
+-- The seed lines on stdout and on stderr of a seeded eval-engine run that aborts.
+-- `target` names what to test from the scratch directory the fixtures live in.
+withAbortSeeds : List (String, String) ->
+  (String -> String) ->
+  ((List String, List String) -> <Exec, IO, FileRead, FileWrite> Expectation) ->
+  <Exec, IO, FileRead, FileWrite> Expectation
+withAbortSeeds files target check = withFixtures
+  files
+  (dir => withSpawn (seededTest (Some 7) [
+    "--engines",
+    "eval",
+    target dir,
+  ]) ((_, out, err) => check (seedLines (lines out), seedLines (lines err))))
+
+test "an eval-engine panic in a single file prints the run's seed once, on stderr" =
+  withAbortSeeds
     [("panic_test.mdk", panicTestSrc)]
-    (dir =>
-      let target = "\{dir}/panic_test.mdk"
-      withSpawn (seededTest (Some 7) [
-        "--engines",
-        "eval",
-        target,
-      ]) ((_, out, err) =>
-        let combined = "\{out}\n\{err}"
-        expectEqual 1 (length (seedLines (lines combined)))))
+    (dir => "\{dir}/panic_test.mdk")
+    ((onOut, onErr) => expectAll [
+      expectEqual [] onOut,
+      expectEqual [seedLineFor 7] onErr,
+    ])
 
 test "an eval-engine panic beside a passing test prints the run's seed once, on stderr" =
-  withFixtures
-    [("mixed_test.mdk", "\{passTestSrc}\n\{panicTestSrc}")]
-    (dir => withSpawn (seededTest (Some 7) [
-      "--engines",
-      "eval",
-      "\{dir}/mixed_test.mdk",
-    ]) ((_, out, err) => expectAll [
-      expectEqual 0 (length (seedLines (lines out))),
-      expectEqual 1 (length (seedLines (lines err))),
-    ]))
+  withAbortSeeds
+    [("mixed_test.mdk", mixedTestSrc)]
+    (dir => "\{dir}/mixed_test.mdk")
+    ((onOut, onErr) => expectAll [
+      expectEqual [] onOut,
+      expectEqual [seedLineFor 7] onErr,
+    ])
 
-test "an eval-engine panic in a directory still prints the run's seed once" =
-  withFixtures
+test "an eval-engine panic in a directory prints the run's seed once, on stdout" =
+  withAbortSeeds
     [("panic_test.mdk", panicTestSrc)]
-    (dir => withSpawn (seededTest (Some 7) [
-      "--engines",
-      "eval",
-      dir,
-    ]) ((_, out, err) =>
-      let combined = "\{out}\n\{err}"
-      expectEqual 1 (length (seedLines (lines combined)))))
+    (dir => dir)
+    ((onOut, onErr) => expectAll [
+      expectEqual [seedLineFor 7] onOut,
+      expectEqual [] onErr,
+    ])
 
 test "a panicking medaka run prints no seed line, seeded" =
   withFixtures

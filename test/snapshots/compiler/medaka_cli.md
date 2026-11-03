@@ -1,5 +1,5 @@
 # META
-source_lines=4692
+source_lines=4693
 stages=DESUGAR,MARK
 # SOURCE
 import support.diag_codes.{DiagCode(..), codeText}
@@ -3302,7 +3302,8 @@ runTestProjectCmd engines cases filterOpt seedOpt =
 -- ── test --json (#2295 (d)) ──────────────────────────────────────────────────
 -- `medaka test --json <file.mdk>`: structured counterpart of the human
 -- `medaka test` report, matching `medaka lint --json`'s flag convention (one
--- JSON object to stdout, exit 1 iff the run failed).  Single-file only for
+-- JSON object to stdout, exit 1 iff the run failed; an aborted run writes its
+-- envelope to stderr and leaves stdout empty).  Single-file only for
 -- now (mirrors this slice's scope — the directory/multi-target walk stays
 -- human-text-only).
 --

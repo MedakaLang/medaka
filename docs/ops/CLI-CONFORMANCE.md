@@ -363,7 +363,7 @@ properties ran and something failed prints `seed: N (rerun with MEDAKA_SEED=N)` 
 summary; a green run, and a refusal before anything ran (a type error, a missing capability, a bad
 target), print nothing extra. A failing `--json` run adds the same N as a top-level integer `seed` member
 (a green run and a refusal add none) and keeps stderr empty. An uncaught panic under the eval engine aborts the run
-without a summary; the seed line follows the runtime-error line on stderr (a directory or project run prints it once on stdout after the summary), and under `--json` the run prints the `run --json` error envelope on stderr, with the seed as a top-level `seed` member, and nothing on stdout. Only panics the evaluator raises carry the seed. `medaka repl` draws from the same stream and honours `MEDAKA_SEED`, with no print.
+without a summary; a single-file run prints the seed line on stderr directly after the runtime-error line, a directory or project run prints it once on stdout, and under `--json` the run prints the `run --json` error envelope on stderr, with the seed as a top-level `seed` member, and nothing on stdout. Only runtime errors raised through the evaluator's runtime-error path carry the seed; a panic raised inside the evaluator's own compiled code does not (tracked in #TBD). `medaka repl` draws from the same stream and honours `MEDAKA_SEED`, with no print.
 
 There is no residual C2 cell left in this table — `new` was the last one and S-5 drained it.
 

@@ -11,7 +11,9 @@ import string.{
   stripPrefix, stripSuffix, take, toInt, toLower, toUpper, toFixed, trim,
   trimAscii, trimLeft, trimRight, unlines, unwords, utf8ByteLength, words
 }
-import test.{expectEach, expectEqual, expectFalse, expectTrue}
+import test.{
+  expectAll, expectEach, expectEqual, expectFalse, expectNotEqual, expectTrue
+}
 
 -- # Fixed cases
 
@@ -301,21 +303,25 @@ test "trim treats tab, newline, carriage return and vertical tab as space" =
 test "trim removes a no-break space" = expectEqual "x" (trim " x")
 
 -- `c`, then `x`, then `c`: a code point at both ends with a letter inside.
-edged : Int -> String
-edged k = match charFromCode k
-  Some c => fromChars [c, 'x', c]
-  None => ""
+edged : Int -> Option String
+edged k = map (c => fromChars [c, 'x', c]) (charFromCode k)
 
 test "trimAscii removes code points 9 to 13 and 32 from both ends" =
   expectEach
     (map
-      (k => (intToString k, expectEqual "x" (trimAscii (edged k))))
+      (k => (intToString k, expectEqual (Some "x") (map trimAscii (edged k))))
       [9, 10, 11, 12, 13, 32])
 
 test "trimAscii keeps the separators 28 to 31 and the non-ASCII spaces" =
   expectEach
     (map
-      (k => (intToString k, expectEqual (edged k) (trimAscii (edged k))))
+      (k => (
+        intToString k,
+        expectAll [
+          expectNotEqual None (edged k),
+          expectEqual (edged k) (map trimAscii (edged k)),
+        ],
+      ))
       [28, 29, 30, 31, 133, 160, 12288])
 
 test "trimAscii keeps an interior space and gives empty for blank input" = expectEach

@@ -33,6 +33,6 @@ test "prelude binder names equal the names a whole-graph check lists" = match (
 
 test "a trailing vertical tab or form feed does not hide a block-opening keyword" = expectAll
   [
-    expectTrue (endsWithKeyword "x = do\u{0b}" "do"),
-    expectTrue (endsWithKeyword "x = do\u{0c}" "do"),
+    expectTrue (endsWithKeyword "x = where\u{0b}" "where"),
+    expectTrue (endsWithKeyword "x = where\u{0c}" "where"),
   ]

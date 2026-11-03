@@ -3123,8 +3123,8 @@ evalDepthLimit = 25000
 -- Stage 4 (RUNTIME-DIAGNOSTIC-CHANNEL-DESIGN.md Fork C): when set, `runtimePanic`
 -- emits the `Diag`-shaped JSON envelope (same shape as `medaka check --json`)
 -- instead of located text. Set once by the `run --json` CLI arm; read only at
--- the panic chokepoint, so it is inert (default False) on every other path —
--- including every valid-program eval gate.
+-- the panic chokepoint. Set by the `run --json` and `test --json` CLI arms;
+-- default False on every other path, including every valid-program eval gate.
 export
 runJsonMode : Ref Bool
 runJsonMode = Ref False
