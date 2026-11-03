@@ -276,3 +276,11 @@ supervisor-owned worktree routing and an explicit baseline-toolchain mode. Local
 matching semantics remain required for compiler-edit validation. Optional source
 application is deferred behind a safe protocol; historical read-only tools do not
 silently become writers.
+
+The [M0 baseline report](../findings/mcp-m0-baseline/REPORT.md) records the pilot and
+versioned budgets. Version 2 records serial query round trips, an absolute matched
+trace-delta guardrail on the same binary, cgroup peak memory charge, and cumulative
+input tokens as a context-cost proxy on the stated Linux host. Trace deltas include
+measurement noise; memory charge is distinct from RSS and input tokens are distinct
+from private context occupancy. Five repetitions per case support observed maxima,
+not percentile claims. The two-second offline handshake remains a hypothesis to test.

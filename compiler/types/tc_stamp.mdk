@@ -1,0 +1,759 @@
+-- tc_stamp: the graph-end stamp queue: enqueue a module's stamping context, drain it after the
+-- graph, and report what the drain found (`enqueueStampCtx`, `stampCtxOf`, `drainStampQueue`,
+-- `DrainFinding`'s verdicts); the stamper order and its plural site resolution (`moduleStampOrder`,
+-- `stampNoting`, `stampEach`, `resolveSites`, `resolveRLocalSites`, `resolveArithSites`,
+-- `resolveOpSites`), the evidence-observation writer (`noteEvidenceObservation` and its entry
+-- builders), the live-goal and evidence judgments, and binder-type materialization.
+--
+-- Spec: TYPECHECK-CONTRACTS section 3 (scoped scheduling); DICT section 4.2, section 7.1; HM-CORE
+-- section 5 (owed, #2555).
+--
+-- Placement: declarations are placed by R1-R6 of the Phase 4 module table,
+-- compiler/ARCHITECTURE-PLAYBOOK.md section 6.
+-- Closure rule: this module may not import `types.typecheck`, nor any of `tc_module`.
+
+import support.diag_codes.{DiagCode(..)}
+import frontend.ast.{
+  BinderId(..), ConPayload(..), Decl(..), EvEntry(..), EvVal(..), Expr(..),
+  ExternDecl(..), FunClause(..), Ident(..), LetBind(..), Loc(..), Ns(..),
+  Pat(..), PropParam(..), Route(..), Super(..), Ty(..), TyConOrigin(..),
+  UseMember(..), UsePath(..), Variant(..), EvTable
+}
+import types.runtime_types.{
+  BinderRow(..), RuntimeType(..), addBinderRow, runtimeTypeOf
+}
+import types.scopes.{ScopeOwner(..)}
+import types.tc_types.{
+  BuiltinClasses(..), CeRow(..), CheckRunSeed(..), ClassEnv(..),
+  ConstraintReg(..), DeclaringBinder(..), DeclEnvModule(..), DrainFinding(..),
+  EnvBinding(..), EvCell(..), EvDest(..), EvidenceObservationEntry(..),
+  EvidenceOutcomeKind(..), GoalKind(..), GoalPayload(..), GraphCtx(..),
+  GraphMarks(..), GroupCtx(..), ImplEnv(..), LiveGoal(..),
+  MethodPredicateSlot(..), MethodSchemeRow(..), ModuleBindings(..),
+  ModuleCtx(..), ModuleMarking(..), ModuleSeed(..), NumBoundary(..),
+  NumBoundaryDisposition(..), NumGuard(..), Obligation(..), ObligationSite(..),
+  PendingBinder(..), PendingEntry(..), RecDictApp(..), RecordInfo(..),
+  ScopedMember(..), ScopedScheme(..), SiteCtx(..), SiteKind(..), StampCtx(..),
+  StampStep(..), StandaloneOrigin(..), TcEnv(..), siteFor
+}
+import types.evidence_complete.{
+  EvidenceRow(..), Inner(..), innerNone, innerOr, rowHoleWith
+}
+import types.repr.{
+  IfaceRef(..), Mono(..), Scheme(..), VecObl(..), normalize, ppMono
+}
+import map.{Map(..)}
+import support.ordmap.{
+  omEmpty, omFromNames, omFromPairs, omHasKey, omInsert, omLookup, OrdMap
+}
+import types.evidence.{ScopeId(..)}
+import types.publish.{TcDiag(..), tcLoc}
+import types.tc_mono.{monoUnboundIds, resultAfterArrows}
+import support.util.{
+  anyList, dedupBy, filterList, isEmptyL, joinWith, lenKey, listLen, reverseL
+}
+import types.tc_occurrence.{evIdModule}
+import types.tc_solve.{
+  arithEntry, currentModuleMarks, dictAppEntry, goalKindName, goalKindTag,
+  goalMonos, goalsOfKindIn, goalsSince, methodDictEntry, recDictAppEntry,
+  refileDeterminedRows, returnPosMethodNames, routesOfMonosTopV, siteEntry
+}
+import types.tc_state.{
+  blankModuleCtx, enterStampCtx, moduleCtxFrom, moduleWindow, wMark, wWindow
+}
+import types.tc_solve_check.{defaultLiveNumRoots, undeterminedVectorVerdict}
+import types.tc_shadow.{checkAdmittedOccObls, resolveRLocalSite}
+import types.tc_groups.{nestedRequireGoals}
+import types.tc_diag_text.{locGoalKey, locKey}
+import list.{sortOn}
+import types.tc_elab.{
+  realizeRecDictApps, resolveAdmittedSite, resolveArgStamps, resolveArithSite,
+  resolveDictApps, resolveExactReturnSite, resolveMethodDicts,
+  resolveNumLitSite, resolveOpSite, resolvePredicateOpSite, resolveSite
+}
+import map as IdMap
+import types.effect_solver as EffectSolver
+import types.scopes as Scopes
+
+-- Every route a goal carries, in slot order — one for a site, one per slot for
+-- a dictionary application.
+obligationRoutes : Obligation -> List Route
+obligationRoutes o = match o.oDest
+  EvRoute r => [r.value]
+  EvRoutes rs => rs.value
+
+-- The predicate mono behind each slot, aligned by position with
+-- `obligationRoutes`'s answer for the SAME obligation. `GKMethodDict`'s slots
+-- carry an `IfaceRef`/`PredicateSlotArgs` pair rather than a `Mono` (#8251), so
+-- it answers `None` per slot rather than reconstructing one.
+obligationPredicateMonos : Obligation -> List (Option Mono)
+obligationPredicateMonos o = match o.oPayload
+  GPSite _ m _ => [Some m]
+  GPArith m => [Some m]
+  GPDictApp app => map Some app.pdaMonos
+  GPMethodDict pmd => map (_ => None) pmd.pmdSlots
+  GPRecDictApp (RecDictApp _ _ _ m _ _) => [Some m]
+
+routeOutcomeKind : Route -> EvidenceOutcomeKind
+routeOutcomeKind RNone = EOKNone
+routeOutcomeKind (RKey _ _ _) = EOKInstance
+routeOutcomeKind (RDict _) = EOKGiven
+routeOutcomeKind (RDictFwd _) = EOKGiven
+routeOutcomeKind (RLocal _ _) = EOKLocal
+routeOutcomeKind (RScalar _) = EOKScalar
+routeOutcomeKind (RProj r _) = routeOutcomeKind r
+
+routeGivenBinder : Route -> Option String
+routeGivenBinder (RDict n) = Some n
+routeGivenBinder (RDictFwd n) = Some n
+routeGivenBinder (RProj r _) = routeGivenBinder r
+routeGivenBinder _ = None
+
+routeInstanceKey : Route -> Option String
+routeInstanceKey (RKey k _ _) = Some k
+routeInstanceKey _ = None
+
+-- The nested route list an `RKey`/`RLocal` packs at this slot: the packed
+-- `requires`, exactly as `entailInst` produces them.
+routePrerequisiteRoutes : Route -> List Route
+routePrerequisiteRoutes (RKey _ rs _) = rs
+routePrerequisiteRoutes (RLocal _ rs) = rs
+routePrerequisiteRoutes _ = []
+
+renderRouteIdentity : Route -> String
+renderRouteIdentity RNone = "RNone"
+renderRouteIdentity (RKey k _ _) = "RKey " ++ k
+renderRouteIdentity (RDict n) = "RDict " ++ n
+renderRouteIdentity (RDictFwd n) = "RDictFwd " ++ n
+renderRouteIdentity (RLocal n _) = "RLocal " ++ n
+renderRouteIdentity (RScalar n) = "RScalar " ++ n
+renderRouteIdentity (RProj r path) =
+  "RProj (\{renderRouteIdentity r}) \{joinWith "." (map intToString path)}"
+
+noteEvidenceObservation : GraphCtx -> Obligation -> Unit
+noteEvidenceObservation gctx o = match gctx.trace
+  Some sink =>
+    if sink.tsEvidenceObservationEnabled then
+      let routes = obligationRoutes o
+      let predicates = obligationPredicateMonos o
+      let arity = listLen routes
+      sink.tsEvidenceObservationEntries :=
+        evidenceObservationEntriesGo o routes predicates arity 0
+          ++ sink.tsEvidenceObservationEntries.value
+  None => ()
+
+evidenceObservationEntriesGo : Obligation ->
+  List Route ->
+  List (Option Mono) ->
+  Int ->
+  Int ->
+  List EvidenceObservationEntry
+evidenceObservationEntriesGo _ [] _ _ _ = []
+evidenceObservationEntriesGo o (r :: rs) preds arity slot =
+  let (predHere, predsRest) = match preds
+    p :: ptail => (p, ptail)
+    [] => (None, [])
+  EvidenceObservationEntry {
+      eoeEv = o.oEv,
+      eoeGoalKind = goalKindName o.oKind,
+      eoeSlot = slot,
+      eoeArity = arity,
+      eoePredicate = map ppMono predHere,
+      eoeOutcome = routeOutcomeKind r,
+      eoeGivenBinder = routeGivenBinder r,
+      eoeInstanceKey = routeInstanceKey r,
+      eoePrerequisites = map renderRouteIdentity (routePrerequisiteRoutes r),
+      eoeScope = o.oScope,
+    }
+    :: evidenceObservationEntriesGo o rs predsRest arity (slot + 1)
+
+resolveSites : SiteCtx -> OrdMap Unit -> List PendingEntry -> Unit
+resolveSites _sx _ [] = ()
+resolveSites sx rpNames ((PendingEntry name tagRef resultMono encl kind loc scope _) :: rest) =
+  let sx = { sx | sxSite = loc }
+  match kind
+    SKReturn implRef fullMono =>
+      resolveSite
+        sx
+        rpNames
+        name
+        tagRef
+        implRef
+        resultMono
+        fullMono
+        encl
+        loc
+        scope
+    SKAdmittedReturn ifaceRef implRef fullMono =>
+      resolveAdmittedSite sx name ifaceRef tagRef implRef fullMono encl scope
+    SKExactReturn implRef request =>
+      resolveExactReturnSite
+        sx
+        rpNames
+        name
+        tagRef
+        implRef
+        resultMono
+        request
+        encl
+        loc
+        scope
+    SKNumReturn predicate fullMono =>
+      resolveNumLitSite
+        sx
+        rpNames
+        name
+        tagRef
+        resultMono
+        fullMono
+        predicate
+        encl
+        loc
+        scope
+    _ => ()
+  resolveSites sx rpNames rest
+
+-- C5: stamp RLocal on each recorded standalone-shadow arg-position site whose
+-- receiver mono now grounds to a concrete head tycon with NO impl of the method.
+-- The receiver HAS an impl (the genuine-method case, e.g. `toList (Some 7)`) → leave
+-- the route untouched (RNone → eval arg-tag-dispatches to the real impl).  An
+-- ungrounded receiver (still a tyvar) → leave it (polymorphic, deferred).
+-- RLocal only when no impl exists.
+-- S-1: the stamp calls routesOfMonosTop — a PURE
+-- function of the (union-find-solved) constraint monos — to fill the standalone's own
+-- dict routes IN PLACE.  Deliberately NOT routed through pendingDictApps: that list is
+-- resolved by resolveDictApps, which runs AFTER this in `moduleStampOrder`, so the stamp
+-- would read `[]`.  Resolving inside the stamp is ordering-immune.  An unconstrained
+-- standalone has no monos ⇒ routesOfMonosTop returns [] immediately (it cannot even
+-- reach its AmbiguousImpl arm) ⇒ `RLocal sym []` ⇒ byte-identical to the pre-S1 stamp.
+-- #156 S3d — resolveRLocalSites is DELIBERATELY NOT routed through `entail`, and DICT-
+-- SEMANTICS §3 conformance REQUIRES that, rather than merely permitting it.  This pass
+-- implements §4 `(var)`'s FIRST premise — binding selection: does this occurrence denote the
+-- module's own standalone `sym` or a shadowed interface method?  (Keyed on the solved receiver
+-- mono, which is why it runs post-inference.)  That decision reads shadow facts — isDefinerShadow,
+-- definerShadowNamesRef — that are NOT components of entailment's domain `(IE, CE, P, π)` (§3
+-- resolution-determinism); they are facts about Γ.  Folding them into the one entailment function
+-- would make it depend on inputs outside its spec-given domain — violating the very law a merge
+-- would invoke.  The tell: the `Some tag` arm treats "a live impl exists" as DO-NOTHING (the name
+-- is a genuine method, dispatched elsewhere) and emits RLocal for the NO-impl case — the inverse of
+-- `entailInst`'s success condition.  "No π to discharge; the name denotes another binding" is not an
+-- evidence statement.  §4 `(var)`'s SECOND premise — the chosen standalone's actual entailment
+-- obligations — IS routed through the one engine: every RLocal payload is filled by routesOfMonosTop
+-- → entail (EKNestedTop).  So the single-entailment-function law holds at 4-of-5 BY CONSTRUCTION; what
+-- stays out is exactly the binding-selection axis §3 never claimed (cf. §8 I1: identity keyed by
+-- binding, not bare name).  "Does an impl exist" and "which impl entails" must agree on ONE
+-- impl table — a drift between them would be a real dispatch bug.  The agreement is
+-- STRUCTURAL, not a standing obligation: both reads name ONE population, the graph-global
+-- `ModuleCells.mcCells.bodyImplEnvRef`.  `ieImplExistsForHead …bodyImplEnvRef…` answers
+-- existence directly, and `keyForSite` (also on `bodyImplEnvRef`) selects via
+-- routesOfMonosTop → routeOf → entail (EKNestedTop) → entailInst.  It is enforced by a
+-- shared REF, not by a threaded parameter: no impl list is threaded through this signature
+-- or through `routesOfMonosTop`'s subtree.  The check on any edit here is "does the thing I
+-- am reading answer over the same population `keyForSite` selects from?".  A split is
+-- observable: existence answered True off the whole graph while `routesOfMonosTop` had no
+-- row to select turns a located reject into exit 0 printing a garbage pointer.
+-- The inference-time existence reads in `inferShadowApp` / `definerReceiverDispatches` are
+-- the same decision at an earlier PHASE and read the same ref: a phase split of one decision
+-- is as fatal as a table split.
+-- Do not describe the population as "GLOBAL by design — local ∪ imported ∪ prelude":
+-- `SHADOW-SEMANTICS.md:242-245` retires that phrase as a false synonym for graph-global.
+resolveRLocalSites : SiteCtx -> List PendingEntry -> Unit
+resolveRLocalSites _sx [] = ()
+resolveRLocalSites sx ((PendingEntry name tagRef am encl kind loc scope _) :: rest) =
+  let sx = { sx | sxSite = loc }
+  match kind
+    SKRLocal sym forceLocal monos ifaces argVecs =>
+      if forceLocal then
+        tagRef :=
+          RLocal sym (routesOfMonosTopV sx encl scope monos ifaces argVecs)
+      else
+        resolveRLocalSite sx name tagRef am encl scope sym monos ifaces argVecs
+    _ => ()
+  resolveRLocalSites sx rest
+
+-- After the module is inferred, classify each recorded arithmetic operand mono and
+-- stamp the supported concrete scalar tag on the node's route. Grounded-only,
+-- exactly like resolveBinopSite: a still-
+-- polymorphic operand (headTyconMono None) is left untouched (RNone → dict path),
+-- so polymorphic-Num arithmetic keeps routing through the runtime Num dict. Never
+-- overwrite a route another pass already set (a comparison op has a different
+-- node/ref; an arithmetic route starts RNone).
+resolveArithSites : List (Ref Route, Mono) -> Unit
+resolveArithSites [] = ()
+resolveArithSites ((dref, m) :: rest) =
+  resolveArithSite dref m
+  resolveArithSites rest
+
+-- EBinOp and EUnOp share ONE dict-route resolution family
+-- (resolveOpSites/resolveOpSite/stampOpRouteVal/opDictVarOf), selected by an `isBinop`
+-- flag (Roadmap #18c collapsed the binop/unop mirror pair — unopMethodApp already
+-- reused binopRouteSplit, proving the shapes unify).  The two paths differ in exactly
+-- two flag-keyed places: the dict-var-of policy (opDictVarOf) and the RKey stamp
+-- (stampOpRouteVal — its builtin-head guard and Ord-style innerDefaultMethod reduction).
+-- #156 S3c: resolveOpSite is now a thin adapter over `entail` (EKOp kind); the inst
+-- route is stampOpRouteVal, a pure Route-returning extraction of the old stampOpRoute.
+resolveOpSites : SiteCtx -> Bool -> List PendingEntry -> Unit
+resolveOpSites _sx _ [] = ()
+resolveOpSites sx isBinop ((PendingEntry method tagRef operandMono encl kind loc scope _) :: rest) =
+  let sx = { sx | sxSite = loc }
+  match kind
+    SKOp inImpl =>
+      resolveOpSite sx isBinop method tagRef operandMono inImpl encl scope
+    SKPredicateOp inImpl predicate =>
+      resolvePredicateOpSite
+        sx
+        isBinop
+        method
+        tagRef
+        operandMono
+        inImpl
+        predicate
+        encl
+        scope
+    _ => ()
+  resolveOpSites sx isBinop rest
+
+-- PLAN.md #11: after HM + defaulting every source integer literal's type var is
+-- ground (or a genuine `Num a` survivor).  Decide each literal's runtime rep
+-- (3-way):
+--   • ground Float ⇒ stamp the float cell + CLEAR the fromInt route (dref RNone) ⇒
+--     dictPass emits `ELit (LFloat f)` (eval is value-tagged; eval_arith rejects
+--     mixed int/float tags, so a Float literal must carry a real float).
+--   • ground Int (incl. via ambiguous→Int defaulting) ⇒ clear both cells ⇒
+--     `ELit (LInt n)`, no dict dispatch.
+--   • NOT a primitive head (a still-polymorphic `Num a` — the soundness case, `1`
+--     in `inc x = x + 1` — or an exotic user numeric type) ⇒ leave [dref]'s
+--     resolveSites-stamped route in place ⇒ dictPass emits
+--     `EApp (EMethodAt "fromInt" …) (ELit (LInt n))` so the literal dispatches
+--     through the runtime Num dict (Int→identity, Float→intToFloat).  A dref left
+--     RNone (route never filled, e.g. unreachable position) falls to Int below.
+-- Reads numlitRefs (populated by inferNumLit during THIS run/module's inference).
+setNumlitFloatsGo : List (Mono, Ref (Option Float), Int, Ref Route) -> Unit
+setNumlitFloatsGo [] = ()
+setNumlitFloatsGo ((var, fref, n, dref) :: rest) =
+  match normalize var
+    TCon "Float" _ =>
+      fref := Some (intToFloat n)
+      dref := RNone
+    TCon "Int" _ => dref := RNone
+    _ => ()
+  setNumlitFloatsGo rest
+
+-- The verdict on the goals boundaries held for live roots, at the drain, after the
+-- live `Num` roots are defaulted: every module has closed, so nothing is left to
+-- ground them, and each is judged as its boundary would have judged it had it owned
+-- the live variables (DICT-SEMANTICS §6.2 T4, R-SC3), in its own module's context.
+-- A binding gets one verdict: the first of its goals that draws one.
+judgeLiveGoals : ModuleCtx -> List StampCtx -> List DrainFinding
+judgeLiveGoals saved ctxs =
+  let g = saved.mcGraph.graphRun
+  let goals = reverseL g.liveGoals.value
+  g.liveGoals := []
+  if isEmptyL goals then
+    []
+  else
+    let byModule = omFromPairs (map (c => (c.scModule, c)) ctxs) omEmpty
+    reverseL (fst (fold (judgeLiveGoal saved byModule) ([], omEmpty) goals))
+
+-- [saved] is the record the drain began with, which each entered stamp context takes
+-- its drain tables from (`enterStampCtx`).
+judgeLiveGoal : ModuleCtx ->
+  OrdMap StampCtx ->
+  (List DrainFinding, OrdMap Unit) ->
+  LiveGoal ->
+  (List DrainFinding, OrdMap Unit)
+judgeLiveGoal saved byModule (found, judged) lg =
+  let binding = "\{lg.lgModule}\t\{intToString lg.lgBinding}"
+  match (omHasKey binding judged, omLookup lg.lgModule byModule)
+    (False, Some ctx) =>
+      let stamp = enterStampCtx saved ctx
+      let rigidIds = lg.lgRigidIds
+      let diags = captureTypeErrors stamp (_ =>
+        each
+          (undeterminedVectorVerdict stamp rigidIds omEmpty lg.lgWindow)
+          (lg.lgGoal :: nestedRequireGoals stamp rigidIds omEmpty [lg.lgGoal]))
+      match diags
+        [] => (found, judged)
+        _ => (
+          reverseL (map (verdictFinding lg.lgModule True) diags) ++ found,
+          omInsert binding () judged,
+        )
+    _ => (found, judged)
+
+-- [lo, hi) less the ranges a scoped drain judged, as sub-ranges in order.
+unjudgedRanges : Int -> Int -> List (Int, Int) -> List (Int, Int)
+unjudgedRanges lo hi skips =
+  cutRanges lo hi (sortOn fst (filterList ((a, b) => b > lo && a < hi) skips))
+
+cutRanges : Int -> Int -> List (Int, Int) -> List (Int, Int)
+cutRanges lo hi [] = if lo < hi then [(lo, hi)] else []
+cutRanges lo hi ((a, b) :: rest) =
+  (if a > lo then [(lo, a)] else []) ++ cutRanges (max lo b) hi rest
+
+-- THE stamper order, run once per module by `drainStampQueue`.
+-- `SSRLocalSites` must stay after `SSReturnSites` and `SSArgStamps`: it overwrites the route
+-- they stamp on the same ref with the receiver-grounded RLocal/RNone a standalone-shadow site needs.
+moduleStampOrder : List StampStep
+moduleStampOrder = [
+  SSNumlitFloats,
+  SSReturnSites,
+  SSBinopSites,
+  SSUnopSites,
+  SSArithSites,
+  SSArgStamps,
+  SSRLocalSites,
+  SSRecDictApps,
+  SSDictApps,
+  SSMethodDicts,
+]
+
+-- Whether a finding at [loc] is live: it is located, at one of [live]'s spans.
+isLiveSpan : OrdMap Unit -> Option Loc -> Bool
+isLiveSpan _ None = False
+isLiveSpan live loc = omHasKey (locKey loc) live
+
+-- [stamp] is the record the drain entered for [ctx].
+runStampSteps : ModuleCtx -> StampCtx -> List StampStep -> Unit
+runStampSteps stamp ctx steps = each (runStampStep stamp ctx) steps
+
+-- the numeric-literal channel's window, the counterpart of `goalsSince`
+numlitSince : GraphCtx -> Int -> List (Mono, Ref (Option Float), Int, Ref Route)
+numlitSince gctx mark =
+  moduleWindow gctx.graphRun.numlitN.value mark gctx.graphRun.numlitRefs.value
+
+-- The stamp context of the module [mid] whose record is [mctx]: the module's run
+-- fields, and its tables dropped (`moduleCtxFrom`).
+stampCtxOf : ModuleCtx ->
+  String ->
+  List Decl ->
+  List Obligation ->
+  List (Mono, Ref (Option Float), Int, Ref Route) ->
+  StampCtx
+stampCtxOf mctx mid implDecls goals numlits =
+  let dropped = blankModuleCtx mctx.mcGraph mid
+  dropped.mcCells.superDeclsRef := filterList isInterfaceDecl implDecls
+  StampCtx {
+    scModule = mid,
+    scModuleCtx = moduleCtxFrom False mctx dropped dropped dropped,
+    scRpNames = returnPosMethodNames implDecls,
+    scGoals = goals,
+    scNumlits = numlits,
+    scLiveLocs = liveLocsOf mctx goals,
+  }
+
+-- The spans of [goals] and of the module's admitted-set occurrences whose types
+-- mention a variable of a live root (`GraphRun.liveRoots`): their evidence and
+-- verdicts rest on what quiescence leaves that variable.
+liveLocsOf : ModuleCtx -> List Obligation -> List String
+liveLocsOf mctx goals =
+  let ids = flatMap monoUnboundIds mctx.mcGraph.graphRun.liveRoots.value
+  if isEmptyL ids then
+    []
+  else
+    let live = fold (acc i => IdMap.set i () acc) Tip ids
+    let mentions =
+      ms => anyList (m => anyList (i => IdMap.has i live) (monoUnboundIds m)) ms
+    spanKeys
+      (map (o => o.oLoc) (filterList (o => mentions (goalMonos o)) goals)
+        ++ filterMap
+          ((_, m, loc) => if mentions [m] then Some loc else None)
+          mctx.mcCells.admittedOccObls.value)
+
+-- The span keys (`locKey`) of the located [locs].  An unlocated goal or occurrence
+-- names no span, so no unlocated finding is joined to it (`isLiveSpan`).
+spanKeys : List (Option Loc) -> List String
+spanKeys [] = []
+spanKeys (None :: rest) = spanKeys rest
+spanKeys (loc :: rest) = locKey loc :: spanKeys rest
+
+isInterfaceDecl : Decl -> Bool
+isInterfaceDecl (DAttrib _ d) = isInterfaceDecl d
+isInterfaceDecl (DInterface {  }) = True
+isInterfaceDecl _ = False
+
+-- This module's windows, cut now — see `goalsOfKindIn`.  [mctx] is the record the
+-- module was checked in.
+export
+enqueueStampCtx : ModuleCtx -> String -> List Decl -> Unit
+enqueueStampCtx mctx mid implDecls =
+  let mk = currentModuleMarks mctx.mcGraph ()
+  let ctx =
+    stampCtxOf
+      mctx
+      mid
+      implDecls
+      (goalsSince mctx.mcGraph mk.mGoals)
+      (numlitSince mctx.mcGraph mk.mNumlit)
+  mctx.mcGraph.graphRun.stampCtxs :=
+    ctx :: mctx.mcGraph.graphRun.stampCtxs.value
+
+stampNoting : ModuleCtx -> (SiteCtx -> Obligation -> Unit) -> Obligation -> Unit
+stampNoting stamp resolve o =
+  let acc = Ref innerNone
+  resolve { siteFor stamp | sxInner = Some acc } o
+  o.oInner := innerOr o.oInner.value acc.value
+
+runStampStep : ModuleCtx -> StampCtx -> StampStep -> Unit
+runStampStep _mctx ctx SSNumlitFloats = setNumlitFloatsGo ctx.scNumlits
+runStampStep stamp ctx SSReturnSites =
+  let rpNames = omFromNames ctx.scRpNames omEmpty
+  stampEach
+    stamp
+    (sx o => resolveSites sx rpNames (siteEntry o))
+    GKReturnSite
+    ctx
+runStampStep stamp ctx SSBinopSites =
+  stampEach stamp (sx o => resolveOpSites sx True (siteEntry o)) GKBinopSite ctx
+runStampStep stamp ctx SSUnopSites =
+  stampEach stamp (sx o => resolveOpSites sx False (siteEntry o)) GKUnopSite ctx
+runStampStep stamp ctx SSArithSites =
+  stampEach stamp (_ o => resolveArithSites (arithEntry o)) GKArithSite ctx
+runStampStep stamp ctx SSArgStamps =
+  stampEach stamp (sx o => resolveArgStamps sx (siteEntry o)) GKArgStamp ctx
+runStampStep stamp ctx SSRLocalSites =
+  stampEach stamp (sx o => resolveRLocalSites sx (siteEntry o)) GKRLocalSite ctx
+runStampStep stamp ctx SSRecDictApps =
+  stampEach
+    stamp
+    (sx o => realizeRecDictApps sx (recDictAppEntry o))
+    GKRecDictApp
+    ctx
+runStampStep stamp ctx SSDictApps =
+  stampEach stamp (sx o => resolveDictApps sx (dictAppEntry o)) GKDictApp ctx
+runStampStep stamp ctx SSMethodDicts =
+  stampEach
+    stamp
+    (sx o => resolveMethodDicts sx (methodDictEntry o))
+    GKMethodDict
+    ctx
+
+-- Stamps [ctx]'s goals of kind [k] one at a time, in channel order, and ORs what
+-- each stamp noted below its destination's top level into that goal's `oInner`.
+stampEach : ModuleCtx ->
+  (SiteCtx -> Obligation -> Unit) ->
+  GoalKind ->
+  StampCtx ->
+  Unit
+stampEach stamp resolve k ctx =
+  each (stampNoting stamp resolve) (goalsOfKindIn k ctx.scGoals)
+
+export
+verdictFinding : String -> Bool -> TcDiag -> DrainFinding
+verdictFinding mid live d = DrainFinding {
+  dfModule = mid,
+  dfDiag = d,
+  dfVerdict = True,
+  dfLive = live,
+}
+
+-- What [act] records in the type-error channel of [mctx], the current record, taken
+-- back out of it and out of the sticky one: a drain runs after every module's
+-- diagnostics list closed, so its caller attaches them (`attachDrainFindings`).  The
+-- dedup state [act] reads and writes stays, so a verdict the module already reported is
+-- not repeated.
+export
+captureTypeErrors : ModuleCtx -> (Unit -> Unit) -> List TcDiag
+captureTypeErrors mctx act =
+  let w = mctx.mcCells.typeErrors
+  let items = w.items.value
+  let mark = wMark w
+  let sticky = mctx.mcGraph.typeErrorsSticky.value
+  let stickyDiags = mctx.mcGraph.typeErrorsStickyDiags.value
+  act ()
+  let added = wWindow w mark
+  w.items := items
+  w.n := mark
+  mctx.mcGraph.typeErrorsSticky := sticky
+  mctx.mcGraph.typeErrorsStickyDiags := stickyDiags
+  reverseL added
+
+-- Runs every queued stamping context, then judges the evidence they finished.
+-- Returns the verdicts the drain decides (held live-root goals, admitted-set
+-- occurrences) and one `T-UNROUTED-DISPATCH` per hole, each under its module.
+-- [saved] is the record the drain begins with; each stamp context's walk runs in the
+-- record the drain enters for it (`enterStampCtx`).
+export
+drainStampQueue : ModuleCtx -> List DrainFinding
+drainStampQueue saved =
+  let ctxs = reverseL saved.mcGraph.graphRun.stampCtxs.value
+  defaultLiveNumRoots saved
+  let held = judgeLiveGoals saved ctxs
+  let verdicts = runStampCtxs saved ctxs
+  let liveLocs = omFromNames (flatMap (c => c.scLiveLocs) ctxs) omEmpty
+  let holes =
+    map
+      ((mid, d) => DrainFinding {
+        dfModule = mid,
+        dfDiag = d,
+        dfVerdict = False,
+        dfLive = isLiveSpan liveLocs (tcLoc d),
+      })
+      (judgeEvidence saved.mcGraph ctxs)
+  materializeBinderTypes saved.mcGraph ()
+  saved.mcGraph.graphRun.stampCtxs := []
+  held ++ verdicts ++ holes
+
+-- The completeness judgment (`types/evidence_complete.mdk`) over the evidence this
+-- drain finished: every method cell minted since the last drain, and the goals of
+-- [ctxs] whose destination is not a method cell.  A return-site, arg-stamp or
+-- RLocal goal writes its cell's dispatch route and a method-dict goal its method
+-- dictionaries, so those are judged once, as the cell.
+judgeEvidence : GraphCtx -> List StampCtx -> List (String, TcDiag)
+judgeEvidence gctx ctxs =
+  let g = gctx.graphRun
+  let lo = g.evJudged.value
+  g.evJudged := g.evCounter.value
+  let base = g.evBase
+  let cellHoles =
+    flatMap
+      ((a, b) => judgeCells g.evCells.value (a - base) (b - base) [])
+      (unjudgedRanges lo g.evCounter.value g.evScopedJudged.value)
+  let goalHoles = flatMap (c => flatMap (judgeGoal c.scModule) c.scGoals) ctxs
+  dedupBy holeKey (cellHoles ++ goalHoles)
+
+holeKey : (String, TcDiag) -> String
+holeKey (m, TcDiag _ _ loc msg _ _) =
+  "\{lenKey m}\{lenKey (locGoalKey loc)}\{msg}"
+
+-- The cells in slots [i, hi) (ordinals less `evBase`), last first onto [acc].  A
+-- cell no inference reached (no arity) carries no answer to judge.
+judgeCells : Array (Option EvCell) ->
+  Int ->
+  Int ->
+  List (String, TcDiag) ->
+  List (String, TcDiag)
+judgeCells arr i hi acc
+  | i >= hi || i >= arrayLength arr = acc
+  | otherwise = match arrayGetUnsafe i arr
+    Some c => match c.ecArity.value
+      Some _ =>
+        let row =
+          OccurrenceRow
+            c.ecName.value
+            c.ecIface.value
+            c.ecTag.value
+            c.ecImpl.value
+            c.ecMeth.value
+        judgeCells
+          arr
+          (i + 1)
+          hi
+          (holeDiags (evIdModule c.ecId) c.ecLoc.value c.ecInner.value row
+            ++ acc)
+      None => judgeCells arr (i + 1) hi acc
+    None => judgeCells arr (i + 1) hi acc
+
+judgeGoal : String -> Obligation -> List (String, TcDiag)
+judgeGoal mid o = match (o.oPayload, evValueOf o.oDest)
+  (GPDictApp app, EvMany rs) =>
+    holeDiags
+      mid
+      o.oLoc
+      o.oInner.value
+      (DictAppRow app.pdaCallee (map (r => r.irName) app.pdaIfaces) rs)
+  (GPRecDictApp (RecDictApp _ callee _ _ _ _), EvMany rs) =>
+    holeDiags mid o.oLoc o.oInner.value (DictAppRow callee [] rs)
+  (GPArith _, EvOne r) => holeDiags mid o.oLoc o.oInner.value (SiteRow r)
+  (GPSite _ _ _, EvOne r) =>
+    if goalKindTag o.oKind == goalKindTag GKBinopSite
+      || goalKindTag o.oKind == goalKindTag GKUnopSite then
+      holeDiags mid o.oLoc o.oInner.value (SiteRow r)
+    else
+      []
+  _ => []
+
+holeDiags : String ->
+  Option Loc ->
+  Inner ->
+  EvidenceRow ->
+  List (String, TcDiag)
+holeDiags mid loc inner row = match rowHoleWith inner row
+  None => []
+  Some (_, msg) => [(mid, TcDiag TUnroutedDispatch 1 loc msg None None)]
+
+-- Read every queued binder's type cell into the graph's runtime-type table, now
+-- that the stampers have run and nothing left in the graph can refine a drained
+-- module's types.  Runs at every drain, including the one before a memo snapshot,
+-- so a snapshot carries only materialized rows.
+materializeBinderTypes : GraphCtx -> Unit -> Unit
+materializeBinderTypes gctx _ =
+  let g = gctx.graphRun
+  match g.binderPending.value
+    [] => ()
+    pending =>
+      let cells = cellTypeHeads gctx.declEnvsRef.value.deAllDecls
+      let isCell = n o => omHasKey (cellHeadKey n o) cells
+      g.binderRows :=
+        fold
+          (acc p => addBinderRow (materializeBinder isCell p) acc)
+          g.binderRows.value
+          (reverseL pending)
+      g.binderPending := []
+
+materializeBinder : (String -> TyConOrigin -> Bool) ->
+  PendingBinder ->
+  BinderRow
+materializeBinder isCell (PendingBinder bid name t arity signed) = BinderRow {
+  brId = bid,
+  brName = name,
+  brType = runtimeTypeOf isCell t,
+  -- A solved type with fewer arrows than the declared parameters fixes nothing.
+  brReturns =
+    map
+      (n =>
+        optionOr RTValue (map (runtimeTypeOf isCell) (resultAfterArrows n t)))
+      arity,
+  brSigned = signed,
+}
+
+-- The type heads whose values are constructor cells: every `data` and `newtype`
+-- declaration in the graph except an `extern data` one, keyed by identity.
+cellTypeHeads : List Decl -> OrdMap Unit
+cellTypeHeads decls = fold (acc d => addCellHead d acc) omEmpty decls
+
+addCellHead : Decl -> OrdMap Unit -> OrdMap Unit
+addCellHead (DData { dataName = n, dataOrigin = o, dataExtern = ext, ... }) acc =
+  if ext then acc else omInsert (cellHeadKey n o) () acc
+addCellHead (DNewtype { newtypeName = n, newtypeOrigin = o, ... }) acc =
+  omInsert (cellHeadKey n o) () acc
+addCellHead (DAttrib _ d) acc = addCellHead d acc
+addCellHead _ acc = acc
+
+cellHeadKey : String -> TyConOrigin -> String
+cellHeadKey n OriginBuiltin = "builtin|\{n}"
+cellHeadKey n OriginUnresolved = "unresolved|\{n}"
+cellHeadKey n (OriginModule m) = "module \{m}|\{n}"
+
+-- Stamps each context in turn and decides its admitted-set occurrences
+-- (`checkAdmittedOccObls`), with the selector their routes commit through, against
+-- the same final solution.
+runStampCtxs : ModuleCtx -> List StampCtx -> List DrainFinding
+runStampCtxs saved ctxs =
+  reverseL (fold (acc ctx => reverseL (runStampCtx saved ctx) ++ acc) [] ctxs)
+
+runStampCtx : ModuleCtx -> StampCtx -> List DrainFinding
+runStampCtx saved ctx =
+  let stamp = enterStampCtx saved ctx
+  refileDeterminedRows stamp ()
+  runStampSteps stamp ctx moduleStampOrder
+  recordEvidence saved.mcGraph ctx.scGoals
+  let liveSpans = omFromNames ctx.scLiveLocs omEmpty
+  map
+    (d => verdictFinding ctx.scModule (isLiveSpan liveSpans (tcLoc d)) d)
+    (captureTypeErrors stamp (_ => checkAdmittedOccObls stamp ()))
+
+-- #2549 M2: publish this module's solved evidence, AFTER its stampers have run and
+-- read back out of the cells they wrote.  Deriving the table any other way would make
+-- it a second answer that can disagree with the cells; derived this way it cannot.
+recordEvidence : GraphCtx -> List Obligation -> Unit
+recordEvidence gctx gs =
+  let g = gctx.graphRun
+  each (noteEvidenceObservation gctx) gs
+  g.evTable := evEntriesOf gs ++ g.evTable.value
+
+evEntriesOf : List Obligation -> EvTable
+evEntriesOf gs = map (o => EvEntry o.oEv (evValueOf o.oDest)) gs
+
+evValueOf : EvDest -> EvVal
+evValueOf (EvRoute r) = EvOne !r
+evValueOf (EvRoutes rs) = EvMany !rs

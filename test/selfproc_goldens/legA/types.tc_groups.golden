@@ -131,7 +131,6 @@ sccProtectedSignatureIds : List (String, Ty, List (String, Mono)) -> Map String 
 sccSchemes : TcEnv -> List (String, Ty) -> Map String (List (List Pat, Expr)) -> Bool -> List (Int, AuthResidual) -> Int -> List ScopedMember -> List (String, Scheme)
 schemeObligationsOf : ModuleCtx -> Bool -> List Int -> List UObligation -> List VecObl
 schemeOblsForMember : ModuleCtx -> List (String, Ty, List (String, Mono)) -> List (IfaceRef, List Mono, Option Loc) -> List UObligation -> String -> Scheme -> List VecObl
-scopeRolesOf : List (BindingRole, Mono) -> ScopeRoles
 sectionEVars : Section -> List String
 selectedRequireGoals : ModuleCtx -> Map String Unit -> Map String Unit -> (UObligation, ReqWalk) -> List (UObligation, ReqWalk)
 sigConstraintArgTys : Ty -> List (List Ty)

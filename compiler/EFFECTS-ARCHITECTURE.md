@@ -192,7 +192,7 @@ listed here as proposed paths; presence in this table is not a delivery claim.
 | `effect_check.mdk` | Declared-signature and method-effect checks | Solver and explicit checking context; same entry for supplied/default bodies |
 | `repr.mdk` | HM monotypes, schemes and type rendering | Imports effect representation; does not own a second effect algebra |
 | `solver_contract.mdk` | Common wanted/outcome scheduling and qualified schemes | Domain-specific payloads do not require fake evidence destinations |
-| `tc_effects.mdk`, `tc_elab.mdk`, `typecheck.mdk` | Integration into eager inference, SCC boundaries, graph publication and current grant elaboration (`GrantState` in `tc_types.mdk`, `grantPass` in `tc_elab.mdk`) | Calls services; grant occurrences retain the inference substitution and lower to ordinary arguments, never backend re-inference |
+| `tc_effects.mdk`, `tc_grants.mdk`, `tc_elab.mdk`, `typecheck.mdk` | Integration into eager inference, SCC boundaries, graph publication and current grant elaboration (`GrantState` in `tc_types.mdk`, `grantPass` in `tc_elab.mdk`) | Calls services; grant occurrences retain the inference substitution and lower to ordinary arguments, never backend re-inference |
 
 Extraction is by ownership, not by a requirement that every module be pure.
 Stateful services receive narrow contexts: fresh identity allocation, inference

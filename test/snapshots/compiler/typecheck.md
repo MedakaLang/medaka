@@ -1,5 +1,5 @@
 # META
-source_lines=3672
+source_lines=3664
 stages=DESUGAR,MARK
 # SOURCE
 -- typecheck: the entry module: the graph drive (`driveGraphK`), the chain and core memos and
@@ -371,6 +371,7 @@ import types.tc_scope.{
   useKeyCands,
 }
 import types.tc_unify.{
+  openScope,
   ambiguousImportTyvarId,
   enterLevel,
   exitLevel,
@@ -408,23 +409,20 @@ import types.tc_solve_entail.{
 }
 import types.tc_solve.{
   goalsMark,
-  openScope,
   returnPosMethodNames,
   routesOfMonosTopV,
 }
 import types.tc_solve_check.{
   checkCallObligationsU,
 }
-import types.tc_effects.{
-  grantOrder,
-}
-import types.tc_occurrence.{
-  argDispatchIndices,
-  argDispatchIndicesById,
+import types.tc_grants.{grantOrder}
+import types.tc_mark.{
   constrainedSigNames,
   markDictNames,
   markSetsOf,
-  methodConstraintNames,
+}
+import types.tc_occurrence.{
+  argDispatchIndices, argDispatchIndicesById, methodConstraintNames
 }
 import types.tc_groups.{
   allEVars,
@@ -437,17 +435,15 @@ import types.tc_global.{
   globalCoherenceConflict,
 }
 import types.tc_module.{
-  captureTypeErrors,
   checkBodyImpl,
   checkGraphFinish,
   checkModuleFull,
   checkModuleFullDiags,
-  drainStampQueue,
   elabModuleStamp,
   externSchemesGo,
   settleClosedBody,
-  verdictFinding,
 }
+import types.tc_stamp.{captureTypeErrors, drainStampQueue, verdictFinding}
 
 -- What `IO` joins in this drive: the selected profile's grants of the alias
 -- labels, each at the parameter granted, in `hostLabels` order.  With no
@@ -1801,21 +1797,21 @@ graphPreamble inputs admitted sel preludeKey runtimeDecls coreDecls modules =
   -- reader the tree arm reaches — `ctorSiblingWithholdingName`, `matchCol0Type` —
   -- would read whatever the LAST CHECK RUN IN THIS PROCESS left behind.
   --
-  -- That residue used to be unreachable by accident rather than absent: `typeCtors`
-  -- is keyed by DECLARATION IDENTITY (`tabKeyOf NsType <dataOrigin> <tyname>`), the
-  -- flat entries build it from UNSTAMPED decls (`TkBare` rows), and this arm's
-  -- readers mint `TkIdent` for a module-stamped head — so every lookup MISSED and
-  -- every reader fell through its fail-open `None` arm.  A `Module`-arm re-check
-  -- interleaved between two elaborations (the emit path's async-wrap re-check)
-  -- writes rows under the entry module's OWN identity, i.e. under exactly the key
-  -- these readers mint — so the lookups start HITTING, against rows built from the
-  -- UN-MANGLED tree while the drive walks the MANGLED one.  MEASURED:
-  -- `ctorSiblingWithholdingName` then reads the un-mangled ctor `A` as a sibling of
-  -- the mangled survivor and false-rejects `a.k` with `Field 'k' is not declared by
-  -- every constructor of 'A'`; `Display` cannot ground, the `println` route stays
-  -- RNone, and the emitter writes a NULL dict word (`i64 0`) — SILENTLY on
-  -- `runEmitWith`'s own path (`compiler/entries/entry_support.mdk`), which never
-  -- reads `hadTypeErrors` after the call.  Clean exit 0, SIGSEGV at runtime.
+  -- Such a residue would be hidden only by a key mismatch, not removed: `typeCtors` is
+  -- keyed by DECLARATION IDENTITY (`tabKeyOf NsType <dataOrigin> <tyname>`), the flat
+  -- entries build it from UNSTAMPED decls (`TkBare` rows), and this arm's readers mint
+  -- `TkIdent` for a module-stamped head — so every lookup would MISS and every reader
+  -- fall through its fail-open `None` arm.  A `Module`-arm re-check interleaved between
+  -- two elaborations (the emit path's async-wrap re-check) writes rows under the entry
+  -- module's OWN identity, i.e. under exactly the key these readers mint — so the
+  -- lookups would start HITTING, against rows built from the UN-MANGLED tree while the
+  -- drive walks the MANGLED one.  Then `ctorSiblingWithholdingName` reads the
+  -- un-mangled ctor `A` as a sibling of the mangled survivor and false-rejects `a.k`
+  -- with `Field 'k' is not declared by every constructor of 'A'`; `Display` cannot
+  -- ground, the `println` route stays RNone, and the emitter writes a NULL dict word
+  -- (`i64 0`) — SILENTLY on `runEmitWith`'s own path
+  -- (`compiler/entries/entry_support.mdk`), which never reads `hadTypeErrors` after
+  -- the call: clean exit 0, SIGSEGV at runtime.  The empty oracle below keeps it closed.
   --
   -- The module record starts from `initialModuleCtx` of the minted graph record,
   -- whose oracle is empty, so no reader can see a previous run's residue, no matter
@@ -3053,20 +3049,16 @@ autoPrintEvidence mctx mid scope iface tau =
   g.evTable := EvEntry ev (EvMany routes) :: g.evTable.value
   ev
 
--- ── multi-module `check` CLI report (DRIVER-COLLAPSE Phase 4, OPTION A) ─────
+-- ── multi-module `check` CLI report ─────
 -- The unified `medaka check` path for IMPORT-BEARING files: the caller loads the
 -- entry + its transitive imports (loadProgram), then this typechecks the whole
 -- graph in dependency order (checkModuleFullDiags per module: per-module-frame,
 -- prelude seeded once) and harvests the ENTRY module's OWN (schemes, errs, warns).
 -- Imports are RESOLVED (their public schemes seed the entry), so a valid cross-
--- module reference no longer falls through to `UnknownModule` — the known "native
--- check is single-file" limitation, fixed.  The entry is last in dependency-first
--- order.
+-- module reference resolves rather than falling through to `UnknownModule`.  The
+-- entry is last in dependency-first order.
 --
--- ⚠️ ROUTING, corrected 2026-08-26: this comment used to say "no-import (1-module)
--- files still route through runCheck … this path is reached ONLY when the load
--- returned more than one module."  FALSE since S-migrate-check-route (E-1 #1115).
--- A no-import file now reaches HERE too, via the 1-module wrappers
+-- A no-import (1-module) file reaches here too, via the 1-module wrappers
 -- `checkOneScheme` / `checkOneDiags` / `checkOneToLinesWithRuntime` /
 -- `checkOneErrorsWithRuntime`, each of which calls this function with a SINGLETON
 -- module list.  So every clause below must be correct on a 1-module graph, not
@@ -3713,19 +3705,21 @@ schemeLines ((n, p) :: rest) = "\{n} : \{ppPubScheme p}" :: schemeLines rest
 (DUse false (UseGroup ("types" "tc_env") ((mem "aliasOwnAt" false) (mem "aliasUniverseAt" false) (mem "boundNames" false) (mem "ceLookupAt" false) (mem "ceRowMethodNames" false) (mem "ceRowRequired" false) (mem "declEnvModule" false) (mem "emptyDeclEnvAcc" false) (mem "funDefs" false) (mem "ieRowInst" false) (mem "ieRowMethodNames" false) (mem "ieRowOrd" false) (mem "ieRowsAll" false) (mem "ieRowTriple" false) (mem "ifaceMethodNames" false) (mem "ifaceTabKey" false) (mem "importedBindings" false) (mem "instRefMid" false) (mem "instRefSeq" false) (mem "methodExportsIndex" false) (mem "namesToSet" false) (mem "ordOfIndex" false) (mem "publicDataDecls" false))))
 (DUse false (UseGroup ("types" "tc_diag_text") ((mem "prependConflict" false) (mem "prependIncomparable" false) (mem "dropAmbiguity" false) (mem "stickyDiagsInPushOrder" false))))
 (DUse false (UseGroup ("types" "tc_scope") ((mem "aliasRowSpelling" false) (mem "importFormRows" false) (mem "memberAliasCands" false) (mem "moduleAliasKeys" false) (mem "useKeyCands" false))))
-(DUse false (UseGroup ("types" "tc_unify") ((mem "ambiguousImportTyvarId" false) (mem "enterLevel" false) (mem "exitLevel" false) (mem "freshVar" false) (mem "instantiateTracked" false) (mem "lookupSchemeObls" false) (mem "recordObl" false) (mem "recordSchemeCallObligations" false) (mem "unify" false) (mem "closeScope" false))))
+(DUse false (UseGroup ("types" "tc_unify") ((mem "openScope" false) (mem "ambiguousImportTyvarId" false) (mem "enterLevel" false) (mem "exitLevel" false) (mem "freshVar" false) (mem "instantiateTracked" false) (mem "lookupSchemeObls" false) (mem "recordObl" false) (mem "recordSchemeCallObligations" false) (mem "unify" false) (mem "closeScope" false))))
 (DUse false (UseGroup ("types" "tc_decls_types") ((mem "populateEffectDomainsGraph" false))))
 (DUse false (UseGroup ("types" "tc_decls") ((mem "buildDeclEnvs" false) (mem "dataEnvFromDeclsGo" false) (mem "declEnvAccOf" false) (mem "declEnvModulesFrom" false) (mem "importerDefiners" false) (mem "privateModuleExports" false) (mem "publicModuleExports" false) (mem "siblingDepEnv" false) (mem "stampGraphDecls" false) (mem "tagModuleExports" false) (mem "withDeclParamKinds" false))))
 (DUse false (UseGroup ("types" "tc_foreign") ((mem "externDecls" false) (mem "externSigsToMap" false) (mem "ffiExternTypeRowsWith" false))))
 (DUse false (UseGroup ("types" "tc_solve_entail") ((mem "directSuperGoals" false))))
-(DUse false (UseGroup ("types" "tc_solve") ((mem "goalsMark" false) (mem "openScope" false) (mem "returnPosMethodNames" false) (mem "routesOfMonosTopV" false))))
+(DUse false (UseGroup ("types" "tc_solve") ((mem "goalsMark" false) (mem "returnPosMethodNames" false) (mem "routesOfMonosTopV" false))))
 (DUse false (UseGroup ("types" "tc_solve_check") ((mem "checkCallObligationsU" false))))
-(DUse false (UseGroup ("types" "tc_effects") ((mem "grantOrder" false))))
-(DUse false (UseGroup ("types" "tc_occurrence") ((mem "argDispatchIndices" false) (mem "argDispatchIndicesById" false) (mem "constrainedSigNames" false) (mem "markDictNames" false) (mem "markSetsOf" false) (mem "methodConstraintNames" false))))
+(DUse false (UseGroup ("types" "tc_grants") ((mem "grantOrder" false))))
+(DUse false (UseGroup ("types" "tc_mark") ((mem "constrainedSigNames" false) (mem "markDictNames" false) (mem "markSetsOf" false))))
+(DUse false (UseGroup ("types" "tc_occurrence") ((mem "argDispatchIndices" false) (mem "argDispatchIndicesById" false) (mem "methodConstraintNames" false))))
 (DUse false (UseGroup ("types" "tc_groups") ((mem "allEVars" false))))
 (DUse false (UseGroup ("types" "tc_elab") ((mem "dictPassModulesIfEnabled" false) (mem "drivenEvidence" false))))
 (DUse false (UseGroup ("types" "tc_global") ((mem "globalCoherenceConflict" false))))
-(DUse false (UseGroup ("types" "tc_module") ((mem "captureTypeErrors" false) (mem "checkBodyImpl" false) (mem "checkGraphFinish" false) (mem "checkModuleFull" false) (mem "checkModuleFullDiags" false) (mem "drainStampQueue" false) (mem "elabModuleStamp" false) (mem "externSchemesGo" false) (mem "settleClosedBody" false) (mem "verdictFinding" false))))
+(DUse false (UseGroup ("types" "tc_module") ((mem "checkBodyImpl" false) (mem "checkGraphFinish" false) (mem "checkModuleFull" false) (mem "checkModuleFullDiags" false) (mem "elabModuleStamp" false) (mem "externSchemesGo" false) (mem "settleClosedBody" false))))
+(DUse false (UseGroup ("types" "tc_stamp") ((mem "captureTypeErrors" false) (mem "drainStampQueue" false) (mem "verdictFinding" false))))
 (DTypeSig true "ioJoinAtoms" (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "Param"))) (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "EffParamTy"))) (TyApp (TyCon "List") (TyCon "Atom")))))
 (DFunDef false "ioJoinAtoms" ((PVar "domains") (PVar "grants")) (EApp (EApp (EVar "filterMap") (ELam ((PVar "l")) (EApp (EApp (EVar "map") (ELam ((PVar "granted")) (EApp (EApp (EVar "atomWith") (EApp (EVar "builtinLabel") (EVar "l"))) (EApp (EApp (EVar "writtenParam") (EApp (EApp (EVar "dtopIn") (EVar "domains")) (EApp (EVar "builtinLabel") (EVar "l")))) (EVar "granted"))))) (EApp (EApp (EVar "lookupAssoc") (EVar "l")) (EVar "grants"))))) (EVar "hostLabels")))
 (DTypeSig false "seedAbstractRecordTypes" (TyFun (TyCon "GraphCtx") (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "Decl")))) (TyCon "Unit")))))
@@ -4123,19 +4117,21 @@ schemeLines ((n, p) :: rest) = "\{n} : \{ppPubScheme p}" :: schemeLines rest
 (DUse false (UseGroup ("types" "tc_env") ((mem "aliasOwnAt" false) (mem "aliasUniverseAt" false) (mem "boundNames" false) (mem "ceLookupAt" false) (mem "ceRowMethodNames" false) (mem "ceRowRequired" false) (mem "declEnvModule" false) (mem "emptyDeclEnvAcc" false) (mem "funDefs" false) (mem "ieRowInst" false) (mem "ieRowMethodNames" false) (mem "ieRowOrd" false) (mem "ieRowsAll" false) (mem "ieRowTriple" false) (mem "ifaceMethodNames" false) (mem "ifaceTabKey" false) (mem "importedBindings" false) (mem "instRefMid" false) (mem "instRefSeq" false) (mem "methodExportsIndex" false) (mem "namesToSet" false) (mem "ordOfIndex" false) (mem "publicDataDecls" false))))
 (DUse false (UseGroup ("types" "tc_diag_text") ((mem "prependConflict" false) (mem "prependIncomparable" false) (mem "dropAmbiguity" false) (mem "stickyDiagsInPushOrder" false))))
 (DUse false (UseGroup ("types" "tc_scope") ((mem "aliasRowSpelling" false) (mem "importFormRows" false) (mem "memberAliasCands" false) (mem "moduleAliasKeys" false) (mem "useKeyCands" false))))
-(DUse false (UseGroup ("types" "tc_unify") ((mem "ambiguousImportTyvarId" false) (mem "enterLevel" false) (mem "exitLevel" false) (mem "freshVar" false) (mem "instantiateTracked" false) (mem "lookupSchemeObls" false) (mem "recordObl" false) (mem "recordSchemeCallObligations" false) (mem "unify" false) (mem "closeScope" false))))
+(DUse false (UseGroup ("types" "tc_unify") ((mem "openScope" false) (mem "ambiguousImportTyvarId" false) (mem "enterLevel" false) (mem "exitLevel" false) (mem "freshVar" false) (mem "instantiateTracked" false) (mem "lookupSchemeObls" false) (mem "recordObl" false) (mem "recordSchemeCallObligations" false) (mem "unify" false) (mem "closeScope" false))))
 (DUse false (UseGroup ("types" "tc_decls_types") ((mem "populateEffectDomainsGraph" false))))
 (DUse false (UseGroup ("types" "tc_decls") ((mem "buildDeclEnvs" false) (mem "dataEnvFromDeclsGo" false) (mem "declEnvAccOf" false) (mem "declEnvModulesFrom" false) (mem "importerDefiners" false) (mem "privateModuleExports" false) (mem "publicModuleExports" false) (mem "siblingDepEnv" false) (mem "stampGraphDecls" false) (mem "tagModuleExports" false) (mem "withDeclParamKinds" false))))
 (DUse false (UseGroup ("types" "tc_foreign") ((mem "externDecls" false) (mem "externSigsToMap" false) (mem "ffiExternTypeRowsWith" false))))
 (DUse false (UseGroup ("types" "tc_solve_entail") ((mem "directSuperGoals" false))))
-(DUse false (UseGroup ("types" "tc_solve") ((mem "goalsMark" false) (mem "openScope" false) (mem "returnPosMethodNames" false) (mem "routesOfMonosTopV" false))))
+(DUse false (UseGroup ("types" "tc_solve") ((mem "goalsMark" false) (mem "returnPosMethodNames" false) (mem "routesOfMonosTopV" false))))
 (DUse false (UseGroup ("types" "tc_solve_check") ((mem "checkCallObligationsU" false))))
-(DUse false (UseGroup ("types" "tc_effects") ((mem "grantOrder" false))))
-(DUse false (UseGroup ("types" "tc_occurrence") ((mem "argDispatchIndices" false) (mem "argDispatchIndicesById" false) (mem "constrainedSigNames" false) (mem "markDictNames" false) (mem "markSetsOf" false) (mem "methodConstraintNames" false))))
+(DUse false (UseGroup ("types" "tc_grants") ((mem "grantOrder" false))))
+(DUse false (UseGroup ("types" "tc_mark") ((mem "constrainedSigNames" false) (mem "markDictNames" false) (mem "markSetsOf" false))))
+(DUse false (UseGroup ("types" "tc_occurrence") ((mem "argDispatchIndices" false) (mem "argDispatchIndicesById" false) (mem "methodConstraintNames" false))))
 (DUse false (UseGroup ("types" "tc_groups") ((mem "allEVars" false))))
 (DUse false (UseGroup ("types" "tc_elab") ((mem "dictPassModulesIfEnabled" false) (mem "drivenEvidence" false))))
 (DUse false (UseGroup ("types" "tc_global") ((mem "globalCoherenceConflict" false))))
-(DUse false (UseGroup ("types" "tc_module") ((mem "captureTypeErrors" false) (mem "checkBodyImpl" false) (mem "checkGraphFinish" false) (mem "checkModuleFull" false) (mem "checkModuleFullDiags" false) (mem "drainStampQueue" false) (mem "elabModuleStamp" false) (mem "externSchemesGo" false) (mem "settleClosedBody" false) (mem "verdictFinding" false))))
+(DUse false (UseGroup ("types" "tc_module") ((mem "checkBodyImpl" false) (mem "checkGraphFinish" false) (mem "checkModuleFull" false) (mem "checkModuleFullDiags" false) (mem "elabModuleStamp" false) (mem "externSchemesGo" false) (mem "settleClosedBody" false))))
+(DUse false (UseGroup ("types" "tc_stamp") ((mem "captureTypeErrors" false) (mem "drainStampQueue" false) (mem "verdictFinding" false))))
 (DTypeSig true "ioJoinAtoms" (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "Param"))) (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "EffParamTy"))) (TyApp (TyCon "List") (TyCon "Atom")))))
 (DFunDef false "ioJoinAtoms" ((PVar "domains") (PVar "grants")) (EApp (EApp (EMethodRef "filterMap") (ELam ((PVar "l")) (EApp (EApp (EMethodRef "map") (ELam ((PVar "granted")) (EApp (EApp (EVar "atomWith") (EApp (EVar "builtinLabel") (EVar "l"))) (EApp (EApp (EVar "writtenParam") (EApp (EApp (EVar "dtopIn") (EVar "domains")) (EApp (EVar "builtinLabel") (EVar "l")))) (EVar "granted"))))) (EApp (EApp (EVar "lookupAssoc") (EVar "l")) (EVar "grants"))))) (EVar "hostLabels")))
 (DTypeSig false "seedAbstractRecordTypes" (TyFun (TyCon "GraphCtx") (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "Decl")))) (TyCon "Unit")))))

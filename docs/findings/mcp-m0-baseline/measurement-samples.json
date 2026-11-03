@@ -1,0 +1,5991 @@
+{
+  "schema_version": 1,
+  "provenance": {
+    "metadata_captured_utc": "2026-11-03T20:32:02.891440+00:00",
+    "measurement_wall_timestamps": null,
+    "measurement_wall_timestamp_reason": "Only monotonic per-request offsets were recorded; metadata capture time is not measurement start/end.",
+    "host": {
+      "system": "Linux",
+      "kernel_release": "6.12.95+deb13-amd64",
+      "kernel_version": "#1 SMP PREEMPT_DYNAMIC Debian 6.12.95-1 (2026-07-04)",
+      "machine": "x86_64",
+      "cpu_model": "AMD EPYC 9645 96-Core Processor",
+      "logical_cpus": 12,
+      "mem_total": "MemTotal:       32864932 kB",
+      "python": "3.13.5",
+      "clang": "Debian clang version 19.1.7 (3+b1)",
+      "libgc": "8.2.8"
+    },
+    "compiler": {
+      "head": "e48074520cac8862d1a758974d1921804feaa49f",
+      "compiler_tree": "d1d5d5873aa6d40f936e246544de09e1ce3a2d39",
+      "stdlib_tree": "a835d2a269facd35fdfdb4845bfd3d76c0511554",
+      "binary_sha256": "406bc592b48ff1c7cc1108af1641efd026fee3685886570fa01f0cfcbb4ccf6e",
+      "strict_version": "medaka 0.1.0-preview (e48074520, built 2026-11-03)",
+      "compiler_and_stdlib_dirty": false
+    },
+    "authority": {
+      "delegation": "existing root-owned user slice with cpu memory pids enabled",
+      "changes": "only uniquely named child cgroups created and removed; shared controller configuration unchanged",
+      "membership": "supervisor moves before namespace fork and worker exec; descendants inherit cgroup; observer remains outside",
+      "cpu_scope": "cgroup cpu.stat usage_usec, multiplied by 1000; excludes supervisor pre-migration CPU",
+      "memory_scope": "cgroup memory.peak charges since cgroup creation; anonymous, file and kernel charges, not RSS; existing shared charges can belong elsewhere"
+    },
+    "method_source_sha256": {
+      "collect.py": "059a1b805530c776337e296b0af89099d27f630a6b12e6f7def323215fb7c8d9",
+      "supervisor.py": "6afcaf14f47006c612d65cf5d59b2b64d72d9e1df1284cf02b0f830486bac10f",
+      "operations.py": "302a5a202612f7e256e5996b7e2a26aaca31343ee94e80438cf86578268edbf7",
+      "report.py": "1be4b85c3119c5618fbedbbd7945c3cc0178317b06db437a30bedbd96ce8bfa0"
+    },
+    "method_source_note": "collect.py gained overflow-queue bounding and explicit broken-pipe close after collection; successful request timing and accounting paths are unchanged.",
+    "raw_sha256": "26b0c6b7ecd06c883ef39e6bdfd565a6443409e452dda7ff80973d3c1f9ab490"
+  },
+  "samples": [
+    {
+      "record": {
+        "schema_version": 2,
+        "run_id": "import-definition-0",
+        "task_id": "import-definition",
+        "arm": "trace-off",
+        "outcome": "success",
+        "attempted": 1,
+        "completed": 1,
+        "passed": 1,
+        "failed": 0,
+        "skipped": 0,
+        "wall_ns": 390307287,
+        "cpu_ns": null,
+        "peak_rss_bytes": null,
+        "resource_scope": "worker process tree",
+        "resource_reason": {
+          "cpu_ns": "portable process-tree CPU measurement unavailable",
+          "peak_rss_bytes": "portable process-tree peak RSS measurement unavailable"
+        }
+      },
+      "exchanges": [
+        {
+          "id": 0,
+          "sent_ns": 3365821,
+          "received_ns": 294341500,
+          "round_trip_ns": 290975679
+        },
+        {
+          "id": 1,
+          "sent_ns": 294819349,
+          "received_ns": 331218082,
+          "round_trip_ns": 36398733
+        },
+        {
+          "id": 2,
+          "sent_ns": 335078276,
+          "received_ns": 372763343,
+          "round_trip_ns": 37685067
+        }
+      ],
+      "resources": [
+        {
+          "scope": "private cgroup: supervisor, namespace init, worker and descendants; excludes collector",
+          "cpu_ns": 125247000,
+          "peak_memory_charge_bytes": 40202240,
+          "reason": {
+            "cpu_ns": null,
+            "peak_memory_charge_bytes": null
+          },
+          "observed_member_counts": [
+            3,
+            3,
+            3
+          ]
+        }
+      ],
+      "responses": [
+        {
+          "id": 0,
+          "sha256": "b5069d6cb2aef9ce0f66d53247268fcb8d3eada3fa3562ccc788eedab7ea1ad1",
+          "protocol_error": false,
+          "tool_error": false
+        },
+        {
+          "id": 1,
+          "sha256": "1775e5d4a2891d13455c6803f7b0cf5237ec9faf3b5a0025e7f4e295b54977fd",
+          "protocol_error": false,
+          "tool_error": false
+        },
+        {
+          "id": 2,
+          "sha256": "dd157cfd431fa0df1aba85c2fe54a855bd97b27cf65f8e3fe181c42e674d6cf1",
+          "protocol_error": false,
+          "tool_error": false
+        }
+      ]
+    },
+    {
+      "record": {
+        "schema_version": 2,
+        "run_id": "import-definition-0",
+        "task_id": "import-definition",
+        "arm": "trace-on",
+        "outcome": "success",
+        "attempted": 1,
+        "completed": 1,
+        "passed": 1,
+        "failed": 0,
+        "skipped": 0,
+        "wall_ns": 221224457,
+        "cpu_ns": null,
+        "peak_rss_bytes": null,
+        "resource_scope": "worker process tree",
+        "resource_reason": {
+          "cpu_ns": "portable process-tree CPU measurement unavailable",
+          "peak_rss_bytes": "portable process-tree peak RSS measurement unavailable"
+        }
+      },
+      "exchanges": [
+        {
+          "id": 0,
+          "sent_ns": 8861858,
+          "received_ns": 137811980,
+          "round_trip_ns": 128950122
+        },
+        {
+          "id": 1,
+          "sent_ns": 138269447,
+          "received_ns": 176926044,
+          "round_trip_ns": 38656597
+        },
+        {
+          "id": 2,
+          "sent_ns": 177366523,
+          "received_ns": 204006042,
+          "round_trip_ns": 26639519
+        }
+      ],
+      "resources": [
+        {
+          "scope": "private cgroup: supervisor, namespace init, worker and descendants; excludes collector",
+          "cpu_ns": 109534000,
+          "peak_memory_charge_bytes": 22478848,
+          "reason": {
+            "cpu_ns": null,
+            "peak_memory_charge_bytes": null
+          },
+          "observed_member_counts": [
+            3,
+            3,
+            3
+          ]
+        }
+      ],
+      "responses": [
+        {
+          "id": 0,
+          "sha256": "b5069d6cb2aef9ce0f66d53247268fcb8d3eada3fa3562ccc788eedab7ea1ad1",
+          "protocol_error": false,
+          "tool_error": false
+        },
+        {
+          "id": 1,
+          "sha256": "1775e5d4a2891d13455c6803f7b0cf5237ec9faf3b5a0025e7f4e295b54977fd",
+          "protocol_error": false,
+          "tool_error": false
+        },
+        {
+          "id": 2,
+          "sha256": "dd157cfd431fa0df1aba85c2fe54a855bd97b27cf65f8e3fe181c42e674d6cf1",
+          "protocol_error": false,
+          "tool_error": false
+        }
+      ]
+    },
+    {
+      "record": {
+        "schema_version": 2,
+        "run_id": "import-definition-1",
+        "task_id": "import-definition",
+        "arm": "trace-on",
+        "outcome": "success",
+        "attempted": 1,
+        "completed": 1,
+        "passed": 1,
+        "failed": 0,
+        "skipped": 0,
+        "wall_ns": 272805084,
+        "cpu_ns": null,
+        "peak_rss_bytes": null,
+        "resource_scope": "worker process tree",
+        "resource_reason": {
+          "cpu_ns": "portable process-tree CPU measurement unavailable",
+          "peak_rss_bytes": "portable process-tree peak RSS measurement unavailable"
+        }
+      },
+      "exchanges": [
+        {
+          "id": 0,
+          "sent_ns": 11686933,
+          "received_ns": 185790496,
+          "round_trip_ns": 174103563
+        },
+        {
+          "id": 1,
+          "sent_ns": 186306014,
+          "received_ns": 215732306,
+          "round_trip_ns": 29426292
+        },
+        {
+          "id": 2,
+          "sent_ns": 218419734,
+          "received_ns": 255862312,
+          "round_trip_ns": 37442578
+        }
+      ],
+      "resources": [
+        {
+          "scope": "private cgroup: supervisor, namespace init, worker and descendants; excludes collector",
+          "cpu_ns": 110676000,
+          "peak_memory_charge_bytes": 22851584,
+          "reason": {
+            "cpu_ns": null,
+            "peak_memory_charge_bytes": null
+          },
+          "observed_member_counts": [
+            3,
+            3,
+            3
+          ]
+        }
+      ],
+      "responses": [
+        {
+          "id": 0,
+          "sha256": "b5069d6cb2aef9ce0f66d53247268fcb8d3eada3fa3562ccc788eedab7ea1ad1",
+          "protocol_error": false,
+          "tool_error": false
+        },
+        {
+          "id": 1,
+          "sha256": "1775e5d4a2891d13455c6803f7b0cf5237ec9faf3b5a0025e7f4e295b54977fd",
+          "protocol_error": false,
+          "tool_error": false
+        },
+        {
+          "id": 2,
+          "sha256": "dd157cfd431fa0df1aba85c2fe54a855bd97b27cf65f8e3fe181c42e674d6cf1",
+          "protocol_error": false,
+          "tool_error": false
+        }
+      ]
+    },
+    {
+      "record": {
+        "schema_version": 2,
+        "run_id": "import-definition-1",
+        "task_id": "import-definition",
+        "arm": "trace-off",
+        "outcome": "success",
+        "attempted": 1,
+        "completed": 1,
+        "passed": 1,
+        "failed": 0,
+        "skipped": 0,
+        "wall_ns": 231742047,
+        "cpu_ns": null,
+        "peak_rss_bytes": null,
+        "resource_scope": "worker process tree",
+        "resource_reason": {
+          "cpu_ns": "portable process-tree CPU measurement unavailable",
+          "peak_rss_bytes": "portable process-tree peak RSS measurement unavailable"
+        }
+      },
+      "exchanges": [
+        {
+          "id": 0,
+          "sent_ns": 5705725,
+          "received_ns": 149116031,
+          "round_trip_ns": 143410306
+        },
+        {
+          "id": 1,
+          "sent_ns": 149591356,
+          "received_ns": 178582607,
+          "round_trip_ns": 28991251
+        },
+        {
+          "id": 2,
+          "sent_ns": 178973459,
+          "received_ns": 213475561,
+          "round_trip_ns": 34502102
+        }
+      ],
+      "resources": [
+        {
+          "scope": "private cgroup: supervisor, namespace init, worker and descendants; excludes collector",
+          "cpu_ns": 114846000,
+          "peak_memory_charge_bytes": 23199744,
+          "reason": {
+            "cpu_ns": null,
+            "peak_memory_charge_bytes": null
+          },
+          "observed_member_counts": [
+            3,
+            3,
+            3
+          ]
+        }
+      ],
+      "responses": [
+        {
+          "id": 0,
+          "sha256": "b5069d6cb2aef9ce0f66d53247268fcb8d3eada3fa3562ccc788eedab7ea1ad1",
+          "protocol_error": false,
+          "tool_error": false
+        },
+        {
+          "id": 1,
+          "sha256": "1775e5d4a2891d13455c6803f7b0cf5237ec9faf3b5a0025e7f4e295b54977fd",
+          "protocol_error": false,
+          "tool_error": false
+        },
+        {
+          "id": 2,
+          "sha256": "dd157cfd431fa0df1aba85c2fe54a855bd97b27cf65f8e3fe181c42e674d6cf1",
+          "protocol_error": false,
+          "tool_error": false
+        }
+      ]
+    },
+    {
+      "record": {
+        "schema_version": 2,
+        "run_id": "import-definition-2",
+        "task_id": "import-definition",
+        "arm": "trace-off",
+        "outcome": "success",
+        "attempted": 1,
+        "completed": 1,
+        "passed": 1,
+        "failed": 0,
+        "skipped": 0,
+        "wall_ns": 260995780,
+        "cpu_ns": null,
+        "peak_rss_bytes": null,
+        "resource_scope": "worker process tree",
+        "resource_reason": {
+          "cpu_ns": "portable process-tree CPU measurement unavailable",
+          "peak_rss_bytes": "portable process-tree peak RSS measurement unavailable"
+        }
+      },
+      "exchanges": [
+        {
+          "id": 0,
+          "sent_ns": 6946758,
+          "received_ns": 166729456,
+          "round_trip_ns": 159782698
+        },
+        {
+          "id": 1,
+          "sent_ns": 171258417,
+          "received_ns": 210681435,
+          "round_trip_ns": 39423018
+        },
+        {
+          "id": 2,
+          "sent_ns": 215179089,
+          "received_ns": 243913248,
+          "round_trip_ns": 28734159
+        }
+      ],
+      "resources": [
+        {
+          "scope": "private cgroup: supervisor, namespace init, worker and descendants; excludes collector",
+          "cpu_ns": 121267000,
+          "peak_memory_charge_bytes": 23474176,
+          "reason": {
+            "cpu_ns": null,
+            "peak_memory_charge_bytes": null
+          },
+          "observed_member_counts": [
+            3,
+            3,
+            3
+          ]
+        }
+      ],
+      "responses": [
+        {
+          "id": 0,
+          "sha256": "b5069d6cb2aef9ce0f66d53247268fcb8d3eada3fa3562ccc788eedab7ea1ad1",
+          "protocol_error": false,
+          "tool_error": false
+        },
+        {
+          "id": 1,
+          "sha256": "1775e5d4a2891d13455c6803f7b0cf5237ec9faf3b5a0025e7f4e295b54977fd",
+          "protocol_error": false,
+          "tool_error": false
+        },
+        {
+          "id": 2,
+          "sha256": "dd157cfd431fa0df1aba85c2fe54a855bd97b27cf65f8e3fe181c42e674d6cf1",
+          "protocol_error": false,
+          "tool_error": false
+        }
+      ]
+    },
+    {
+      "record": {
+        "schema_version": 2,
+        "run_id": "import-definition-2",
+        "task_id": "import-definition",
+        "arm": "trace-on",
+        "outcome": "success",
+        "attempted": 1,
+        "completed": 1,
+        "passed": 1,
+        "failed": 0,
+        "skipped": 0,
+        "wall_ns": 302238048,
+        "cpu_ns": null,
+        "peak_rss_bytes": null,
+        "resource_scope": "worker process tree",
+        "resource_reason": {
+          "cpu_ns": "portable process-tree CPU measurement unavailable",
+          "peak_rss_bytes": "portable process-tree peak RSS measurement unavailable"
+        }
+      },
+      "exchanges": [
+        {
+          "id": 0,
+          "sent_ns": 5452750,
+          "received_ns": 217551365,
+          "round_trip_ns": 212098615
+        },
+        {
+          "id": 1,
+          "sent_ns": 219370354,
+          "received_ns": 249428967,
+          "round_trip_ns": 30058613
+        },
+        {
+          "id": 2,
+          "sent_ns": 249875747,
+          "received_ns": 269182271,
+          "round_trip_ns": 19306524
+        }
+      ],
+      "resources": [
+        {
+          "scope": "private cgroup: supervisor, namespace init, worker and descendants; excludes collector",
+          "cpu_ns": 115478000,
+          "peak_memory_charge_bytes": 23904256,
+          "reason": {
+            "cpu_ns": null,
+            "peak_memory_charge_bytes": null
+          },
+          "observed_member_counts": [
+            3,
+            3,
+            3
+          ]
+        }
+      ],
+      "responses": [
+        {
+          "id": 0,
+          "sha256": "b5069d6cb2aef9ce0f66d53247268fcb8d3eada3fa3562ccc788eedab7ea1ad1",
+          "protocol_error": false,
+          "tool_error": false
+        },
+        {
+          "id": 1,
+          "sha256": "1775e5d4a2891d13455c6803f7b0cf5237ec9faf3b5a0025e7f4e295b54977fd",
+          "protocol_error": false,
+          "tool_error": false
+        },
+        {
+          "id": 2,
+          "sha256": "dd157cfd431fa0df1aba85c2fe54a855bd97b27cf65f8e3fe181c42e674d6cf1",
+          "protocol_error": false,
+          "tool_error": false
+        }
+      ]
+    },
+    {
+      "record": {
+        "schema_version": 2,
+        "run_id": "import-definition-3",
+        "task_id": "import-definition",
+        "arm": "trace-on",
+        "outcome": "success",
+        "attempted": 1,
+        "completed": 1,
+        "passed": 1,
+        "failed": 0,
+        "skipped": 0,
+        "wall_ns": 238056708,
+        "cpu_ns": null,
+        "peak_rss_bytes": null,
+        "resource_scope": "worker process tree",
+        "resource_reason": {
+          "cpu_ns": "portable process-tree CPU measurement unavailable",
+          "peak_rss_bytes": "portable process-tree peak RSS measurement unavailable"
+        }
+      },
+      "exchanges": [
+        {
+          "id": 0,
+          "sent_ns": 1525730,
+          "received_ns": 158198917,
+          "round_trip_ns": 156673187
+        },
+        {
+          "id": 1,
+          "sent_ns": 158913596,
+          "received_ns": 185540516,
+          "round_trip_ns": 26626920
+        },
+        {
+          "id": 2,
+          "sent_ns": 185905838,
+          "received_ns": 218575079,
+          "round_trip_ns": 32669241
+        }
+      ],
+      "resources": [
+        {
+          "scope": "private cgroup: supervisor, namespace init, worker and descendants; excludes collector",
+          "cpu_ns": 122364000,
+          "peak_memory_charge_bytes": 22024192,
+          "reason": {
+            "cpu_ns": null,
+            "peak_memory_charge_bytes": null
+          },
+          "observed_member_counts": [
+            3,
+            3,
+            3
+          ]
+        }
+      ],
+      "responses": [
+        {
+          "id": 0,
+          "sha256": "b5069d6cb2aef9ce0f66d53247268fcb8d3eada3fa3562ccc788eedab7ea1ad1",
+          "protocol_error": false,
+          "tool_error": false
+        },
+        {
+          "id": 1,
+          "sha256": "1775e5d4a2891d13455c6803f7b0cf5237ec9faf3b5a0025e7f4e295b54977fd",
+          "protocol_error": false,
+          "tool_error": false
+        },
+        {
+          "id": 2,
+          "sha256": "dd157cfd431fa0df1aba85c2fe54a855bd97b27cf65f8e3fe181c42e674d6cf1",
+          "protocol_error": false,
+          "tool_error": false
+        }
+      ]
+    },
+    {
+      "record": {
+        "schema_version": 2,
+        "run_id": "import-definition-3",
+        "task_id": "import-definition",
+        "arm": "trace-off",
+        "outcome": "success",
+        "attempted": 1,
+        "completed": 1,
+        "passed": 1,
+        "failed": 0,
+        "skipped": 0,
+        "wall_ns": 270376380,
+        "cpu_ns": null,
+        "peak_rss_bytes": null,
+        "resource_scope": "worker process tree",
+        "resource_reason": {
+          "cpu_ns": "portable process-tree CPU measurement unavailable",
+          "peak_rss_bytes": "portable process-tree peak RSS measurement unavailable"
+        }
+      },
+      "exchanges": [
+        {
+          "id": 0,
+          "sent_ns": 1906475,
+          "received_ns": 148563245,
+          "round_trip_ns": 146656770
+        },
+        {
+          "id": 1,
+          "sent_ns": 149049487,
+          "received_ns": 187647333,
+          "round_trip_ns": 38597846
+        },
+        {
+          "id": 2,
+          "sent_ns": 188083435,
+          "received_ns": 222385113,
+          "round_trip_ns": 34301678
+        }
+      ],
+      "resources": [
+        {
+          "scope": "private cgroup: supervisor, namespace init, worker and descendants; excludes collector",
+          "cpu_ns": 123501000,
+          "peak_memory_charge_bytes": 21950464,
+          "reason": {
+            "cpu_ns": null,
+            "peak_memory_charge_bytes": null
+          },
+          "observed_member_counts": [
+            3,
+            3,
+            3
+          ]
+        }
+      ],
+      "responses": [
+        {
+          "id": 0,
+          "sha256": "b5069d6cb2aef9ce0f66d53247268fcb8d3eada3fa3562ccc788eedab7ea1ad1",
+          "protocol_error": false,
+          "tool_error": false
+        },
+        {
+          "id": 1,
+          "sha256": "1775e5d4a2891d13455c6803f7b0cf5237ec9faf3b5a0025e7f4e295b54977fd",
+          "protocol_error": false,
+          "tool_error": false
+        },
+        {
+          "id": 2,
+          "sha256": "dd157cfd431fa0df1aba85c2fe54a855bd97b27cf65f8e3fe181c42e674d6cf1",
+          "protocol_error": false,
+          "tool_error": false
+        }
+      ]
+    },
+    {
+      "record": {
+        "schema_version": 2,
+        "run_id": "import-definition-4",
+        "task_id": "import-definition",
+        "arm": "trace-off",
+        "outcome": "success",
+        "attempted": 1,
+        "completed": 1,
+        "passed": 1,
+        "failed": 0,
+        "skipped": 0,
+        "wall_ns": 274029482,
+        "cpu_ns": null,
+        "peak_rss_bytes": null,
+        "resource_scope": "worker process tree",
+        "resource_reason": {
+          "cpu_ns": "portable process-tree CPU measurement unavailable",
+          "peak_rss_bytes": "portable process-tree peak RSS measurement unavailable"
+        }
+      },
+      "exchanges": [
+        {
+          "id": 0,
+          "sent_ns": 7916498,
+          "received_ns": 194746131,
+          "round_trip_ns": 186829633
+        },
+        {
+          "id": 1,
+          "sent_ns": 198823587,
+          "received_ns": 222094620,
+          "round_trip_ns": 23271033
+        },
+        {
+          "id": 2,
+          "sent_ns": 222547149,
+          "received_ns": 253787774,
+          "round_trip_ns": 31240625
+        }
+      ],
+      "resources": [
+        {
+          "scope": "private cgroup: supervisor, namespace init, worker and descendants; excludes collector",
+          "cpu_ns": 132036000,
+          "peak_memory_charge_bytes": 22953984,
+          "reason": {
+            "cpu_ns": null,
+            "peak_memory_charge_bytes": null
+          },
+          "observed_member_counts": [
+            3,
+            3,
+            3
+          ]
+        }
+      ],
+      "responses": [
+        {
+          "id": 0,
+          "sha256": "b5069d6cb2aef9ce0f66d53247268fcb8d3eada3fa3562ccc788eedab7ea1ad1",
+          "protocol_error": false,
+          "tool_error": false
+        },
+        {
+          "id": 1,
+          "sha256": "1775e5d4a2891d13455c6803f7b0cf5237ec9faf3b5a0025e7f4e295b54977fd",
+          "protocol_error": false,
+          "tool_error": false
+        },
+        {
+          "id": 2,
+          "sha256": "dd157cfd431fa0df1aba85c2fe54a855bd97b27cf65f8e3fe181c42e674d6cf1",
+          "protocol_error": false,
+          "tool_error": false
+        }
+      ]
+    },
+    {
+      "record": {
+        "schema_version": 2,
+        "run_id": "import-definition-4",
+        "task_id": "import-definition",
+        "arm": "trace-on",
+        "outcome": "success",
+        "attempted": 1,
+        "completed": 1,
+        "passed": 1,
+        "failed": 0,
+        "skipped": 0,
+        "wall_ns": 245553647,
+        "cpu_ns": null,
+        "peak_rss_bytes": null,
+        "resource_scope": "worker process tree",
+        "resource_reason": {
+          "cpu_ns": "portable process-tree CPU measurement unavailable",
+          "peak_rss_bytes": "portable process-tree peak RSS measurement unavailable"
+        }
+      },
+      "exchanges": [
+        {
+          "id": 0,
+          "sent_ns": 4281225,
+          "received_ns": 140307858,
+          "round_trip_ns": 136026633
+        },
+        {
+          "id": 1,
+          "sent_ns": 140719393,
+          "received_ns": 184309236,
+          "round_trip_ns": 43589843
+        },
+        {
+          "id": 2,
+          "sent_ns": 188670317,
+          "received_ns": 217133891,
+          "round_trip_ns": 28463574
+        }
+      ],
+      "resources": [
+        {
+          "scope": "private cgroup: supervisor, namespace init, worker and descendants; excludes collector",
+          "cpu_ns": 116893000,
+          "peak_memory_charge_bytes": 22728704,
+          "reason": {
+            "cpu_ns": null,
+            "peak_memory_charge_bytes": null
+          },
+          "observed_member_counts": [
+            3,
+            3,
+            3
+          ]
+        }
+      ],
+      "responses": [
+        {
+          "id": 0,
+          "sha256": "b5069d6cb2aef9ce0f66d53247268fcb8d3eada3fa3562ccc788eedab7ea1ad1",
+          "protocol_error": false,
+          "tool_error": false
+        },
+        {
+          "id": 1,
+          "sha256": "1775e5d4a2891d13455c6803f7b0cf5237ec9faf3b5a0025e7f4e295b54977fd",
+          "protocol_error": false,
+          "tool_error": false
+        },
+        {
+          "id": 2,
+          "sha256": "dd157cfd431fa0df1aba85c2fe54a855bd97b27cf65f8e3fe181c42e674d6cf1",
+          "protocol_error": false,
+          "tool_error": false
+        }
+      ]
+    },
+    {
+      "record": {
+        "schema_version": 2,
+        "run_id": "shadow-references-0",
+        "task_id": "shadow-references",
+        "arm": "trace-off",
+        "outcome": "success",
+        "attempted": 1,
+        "completed": 1,
+        "passed": 1,
+        "failed": 0,
+        "skipped": 0,
+        "wall_ns": 299969877,
+        "cpu_ns": null,
+        "peak_rss_bytes": null,
+        "resource_scope": "worker process tree",
+        "resource_reason": {
+          "cpu_ns": "portable process-tree CPU measurement unavailable",
+          "peak_rss_bytes": "portable process-tree peak RSS measurement unavailable"
+        }
+      },
+      "exchanges": [
+        {
+          "id": 0,
+          "sent_ns": 1499228,
+          "received_ns": 158192778,
+          "round_trip_ns": 156693550
+        },
+        {
+          "id": 1,
+          "sent_ns": 159798442,
+          "received_ns": 234620176,
+          "round_trip_ns": 74821734
+        },
+        {
+          "id": 2,
+          "sent_ns": 239025104,
+          "received_ns": 266876540,
+          "round_trip_ns": 27851436
+        }
+      ],
+      "resources": [
+        {
+          "scope": "private cgroup: supervisor, namespace init, worker and descendants; excludes collector",
+          "cpu_ns": 148385000,
+          "peak_memory_charge_bytes": 54734848,
+          "reason": {
+            "cpu_ns": null,
+            "peak_memory_charge_bytes": null
+          },
+          "observed_member_counts": [
+            3,
+            3,
+            3
+          ]
+        }
+      ],
+      "responses": [
+        {
+          "id": 0,
+          "sha256": "b5069d6cb2aef9ce0f66d53247268fcb8d3eada3fa3562ccc788eedab7ea1ad1",
+          "protocol_error": false,
+          "tool_error": false
+        },
+        {
+          "id": 1,
+          "sha256": "2fad03de206147ac5a1f3523cbac2e2147d2c0ae0763aee844c437bc56600be9",
+          "protocol_error": false,
+          "tool_error": false
+        },
+        {
+          "id": 2,
+          "sha256": "042cf569bb8e49c378cd250745b2d3bb560c41953288e61106a8bced3d4ba4b7",
+          "protocol_error": false,
+          "tool_error": false
+        }
+      ]
+    },
+    {
+      "record": {
+        "schema_version": 2,
+        "run_id": "shadow-references-0",
+        "task_id": "shadow-references",
+        "arm": "trace-on",
+        "outcome": "success",
+        "attempted": 1,
+        "completed": 1,
+        "passed": 1,
+        "failed": 0,
+        "skipped": 0,
+        "wall_ns": 272136457,
+        "cpu_ns": null,
+        "peak_rss_bytes": null,
+        "resource_scope": "worker process tree",
+        "resource_reason": {
+          "cpu_ns": "portable process-tree CPU measurement unavailable",
+          "peak_rss_bytes": "portable process-tree peak RSS measurement unavailable"
+        }
+      },
+      "exchanges": [
+        {
+          "id": 0,
+          "sent_ns": 2172813,
+          "received_ns": 153346236,
+          "round_trip_ns": 151173423
+        },
+        {
+          "id": 1,
+          "sent_ns": 153791794,
+          "received_ns": 222534297,
+          "round_trip_ns": 68742503
+        },
+        {
+          "id": 2,
+          "sent_ns": 223076086,
+          "received_ns": 255078103,
+          "round_trip_ns": 32002017
+        }
+      ],
+      "resources": [
+        {
+          "scope": "private cgroup: supervisor, namespace init, worker and descendants; excludes collector",
+          "cpu_ns": 141941000,
+          "peak_memory_charge_bytes": 53358592,
+          "reason": {
+            "cpu_ns": null,
+            "peak_memory_charge_bytes": null
+          },
+          "observed_member_counts": [
+            3,
+            3,
+            3
+          ]
+        }
+      ],
+      "responses": [
+        {
+          "id": 0,
+          "sha256": "b5069d6cb2aef9ce0f66d53247268fcb8d3eada3fa3562ccc788eedab7ea1ad1",
+          "protocol_error": false,
+          "tool_error": false
+        },
+        {
+          "id": 1,
+          "sha256": "2fad03de206147ac5a1f3523cbac2e2147d2c0ae0763aee844c437bc56600be9",
+          "protocol_error": false,
+          "tool_error": false
+        },
+        {
+          "id": 2,
+          "sha256": "042cf569bb8e49c378cd250745b2d3bb560c41953288e61106a8bced3d4ba4b7",
+          "protocol_error": false,
+          "tool_error": false
+        }
+      ]
+    },
+    {
+      "record": {
+        "schema_version": 2,
+        "run_id": "shadow-references-1",
+        "task_id": "shadow-references",
+        "arm": "trace-on",
+        "outcome": "success",
+        "attempted": 1,
+        "completed": 1,
+        "passed": 1,
+        "failed": 0,
+        "skipped": 0,
+        "wall_ns": 340036903,
+        "cpu_ns": null,
+        "peak_rss_bytes": null,
+        "resource_scope": "worker process tree",
+        "resource_reason": {
+          "cpu_ns": "portable process-tree CPU measurement unavailable",
+          "peak_rss_bytes": "portable process-tree peak RSS measurement unavailable"
+        }
+      },
+      "exchanges": [
+        {
+          "id": 0,
+          "sent_ns": 10318299,
+          "received_ns": 198221263,
+          "round_trip_ns": 187902964
+        },
+        {
+          "id": 1,
+          "sent_ns": 198665279,
+          "received_ns": 275157919,
+          "round_trip_ns": 76492640
+        },
+        {
+          "id": 2,
+          "sent_ns": 275574191,
+          "received_ns": 306795384,
+          "round_trip_ns": 31221193
+        }
+      ],
+      "resources": [
+        {
+          "scope": "private cgroup: supervisor, namespace init, worker and descendants; excludes collector",
+          "cpu_ns": 146803000,
+          "peak_memory_charge_bytes": 53006336,
+          "reason": {
+            "cpu_ns": null,
+            "peak_memory_charge_bytes": null
+          },
+          "observed_member_counts": [
+            3,
+            3,
+            3
+          ]
+        }
+      ],
+      "responses": [
+        {
+          "id": 0,
+          "sha256": "b5069d6cb2aef9ce0f66d53247268fcb8d3eada3fa3562ccc788eedab7ea1ad1",
+          "protocol_error": false,
+          "tool_error": false
+        },
+        {
+          "id": 1,
+          "sha256": "2fad03de206147ac5a1f3523cbac2e2147d2c0ae0763aee844c437bc56600be9",
+          "protocol_error": false,
+          "tool_error": false
+        },
+        {
+          "id": 2,
+          "sha256": "042cf569bb8e49c378cd250745b2d3bb560c41953288e61106a8bced3d4ba4b7",
+          "protocol_error": false,
+          "tool_error": false
+        }
+      ]
+    },
+    {
+      "record": {
+        "schema_version": 2,
+        "run_id": "shadow-references-1",
+        "task_id": "shadow-references",
+        "arm": "trace-off",
+        "outcome": "success",
+        "attempted": 1,
+        "completed": 1,
+        "passed": 1,
+        "failed": 0,
+        "skipped": 0,
+        "wall_ns": 398319304,
+        "cpu_ns": null,
+        "peak_rss_bytes": null,
+        "resource_scope": "worker process tree",
+        "resource_reason": {
+          "cpu_ns": "portable process-tree CPU measurement unavailable",
+          "peak_rss_bytes": "portable process-tree peak RSS measurement unavailable"
+        }
+      },
+      "exchanges": [
+        {
+          "id": 0,
+          "sent_ns": 6514431,
+          "received_ns": 221164423,
+          "round_trip_ns": 214649992
+        },
+        {
+          "id": 1,
+          "sent_ns": 221612364,
+          "received_ns": 330010500,
+          "round_trip_ns": 108398136
+        },
+        {
+          "id": 2,
+          "sent_ns": 330460574,
+          "received_ns": 365150110,
+          "round_trip_ns": 34689536
+        }
+      ],
+      "resources": [
+        {
+          "scope": "private cgroup: supervisor, namespace init, worker and descendants; excludes collector",
+          "cpu_ns": 167408000,
+          "peak_memory_charge_bytes": 53030912,
+          "reason": {
+            "cpu_ns": null,
+            "peak_memory_charge_bytes": null
+          },
+          "observed_member_counts": [
+            3,
+            3,
+            3
+          ]
+        }
+      ],
+      "responses": [
+        {
+          "id": 0,
+          "sha256": "b5069d6cb2aef9ce0f66d53247268fcb8d3eada3fa3562ccc788eedab7ea1ad1",
+          "protocol_error": false,
+          "tool_error": false
+        },
+        {
+          "id": 1,
+          "sha256": "2fad03de206147ac5a1f3523cbac2e2147d2c0ae0763aee844c437bc56600be9",
+          "protocol_error": false,
+          "tool_error": false
+        },
+        {
+          "id": 2,
+          "sha256": "042cf569bb8e49c378cd250745b2d3bb560c41953288e61106a8bced3d4ba4b7",
+          "protocol_error": false,
+          "tool_error": false
+        }
+      ]
+    },
+    {
+      "record": {
+        "schema_version": 2,
+        "run_id": "shadow-references-2",
+        "task_id": "shadow-references",
+        "arm": "trace-off",
+        "outcome": "success",
+        "attempted": 1,
+        "completed": 1,
+        "passed": 1,
+        "failed": 0,
+        "skipped": 0,
+        "wall_ns": 352664267,
+        "cpu_ns": null,
+        "peak_rss_bytes": null,
+        "resource_scope": "worker process tree",
+        "resource_reason": {
+          "cpu_ns": "portable process-tree CPU measurement unavailable",
+          "peak_rss_bytes": "portable process-tree peak RSS measurement unavailable"
+        }
+      },
+      "exchanges": [
+        {
+          "id": 0,
+          "sent_ns": 7593801,
+          "received_ns": 206736238,
+          "round_trip_ns": 199142437
+        },
+        {
+          "id": 1,
+          "sent_ns": 207195797,
+          "received_ns": 287730598,
+          "round_trip_ns": 80534801
+        },
+        {
+          "id": 2,
+          "sent_ns": 288151657,
+          "received_ns": 315051824,
+          "round_trip_ns": 26900167
+        }
+      ],
+      "resources": [
+        {
+          "scope": "private cgroup: supervisor, namespace init, worker and descendants; excludes collector",
+          "cpu_ns": 157146000,
+          "peak_memory_charge_bytes": 53256192,
+          "reason": {
+            "cpu_ns": null,
+            "peak_memory_charge_bytes": null
+          },
+          "observed_member_counts": [
+            3,
+            3,
+            3
+          ]
+        }
+      ],
+      "responses": [
+        {
+          "id": 0,
+          "sha256": "b5069d6cb2aef9ce0f66d53247268fcb8d3eada3fa3562ccc788eedab7ea1ad1",
+          "protocol_error": false,
+          "tool_error": false
+        },
+        {
+          "id": 1,
+          "sha256": "2fad03de206147ac5a1f3523cbac2e2147d2c0ae0763aee844c437bc56600be9",
+          "protocol_error": false,
+          "tool_error": false
+        },
+        {
+          "id": 2,
+          "sha256": "042cf569bb8e49c378cd250745b2d3bb560c41953288e61106a8bced3d4ba4b7",
+          "protocol_error": false,
+          "tool_error": false
+        }
+      ]
+    },
+    {
+      "record": {
+        "schema_version": 2,
+        "run_id": "shadow-references-2",
+        "task_id": "shadow-references",
+        "arm": "trace-on",
+        "outcome": "success",
+        "attempted": 1,
+        "completed": 1,
+        "passed": 1,
+        "failed": 0,
+        "skipped": 0,
+        "wall_ns": 291078311,
+        "cpu_ns": null,
+        "peak_rss_bytes": null,
+        "resource_scope": "worker process tree",
+        "resource_reason": {
+          "cpu_ns": "portable process-tree CPU measurement unavailable",
+          "peak_rss_bytes": "portable process-tree peak RSS measurement unavailable"
+        }
+      },
+      "exchanges": [
+        {
+          "id": 0,
+          "sent_ns": 2790641,
+          "received_ns": 141648258,
+          "round_trip_ns": 138857617
+        },
+        {
+          "id": 1,
+          "sent_ns": 142137973,
+          "received_ns": 222973357,
+          "round_trip_ns": 80835384
+        },
+        {
+          "id": 2,
+          "sent_ns": 223406124,
+          "received_ns": 257244867,
+          "round_trip_ns": 33838743
+        }
+      ],
+      "resources": [
+        {
+          "scope": "private cgroup: supervisor, namespace init, worker and descendants; excludes collector",
+          "cpu_ns": 138951000,
+          "peak_memory_charge_bytes": 53534720,
+          "reason": {
+            "cpu_ns": null,
+            "peak_memory_charge_bytes": null
+          },
+          "observed_member_counts": [
+            3,
+            3,
+            3
+          ]
+        }
+      ],
+      "responses": [
+        {
+          "id": 0,
+          "sha256": "b5069d6cb2aef9ce0f66d53247268fcb8d3eada3fa3562ccc788eedab7ea1ad1",
+          "protocol_error": false,
+          "tool_error": false
+        },
+        {
+          "id": 1,
+          "sha256": "2fad03de206147ac5a1f3523cbac2e2147d2c0ae0763aee844c437bc56600be9",
+          "protocol_error": false,
+          "tool_error": false
+        },
+        {
+          "id": 2,
+          "sha256": "042cf569bb8e49c378cd250745b2d3bb560c41953288e61106a8bced3d4ba4b7",
+          "protocol_error": false,
+          "tool_error": false
+        }
+      ]
+    },
+    {
+      "record": {
+        "schema_version": 2,
+        "run_id": "shadow-references-3",
+        "task_id": "shadow-references",
+        "arm": "trace-on",
+        "outcome": "success",
+        "attempted": 1,
+        "completed": 1,
+        "passed": 1,
+        "failed": 0,
+        "skipped": 0,
+        "wall_ns": 280140022,
+        "cpu_ns": null,
+        "peak_rss_bytes": null,
+        "resource_scope": "worker process tree",
+        "resource_reason": {
+          "cpu_ns": "portable process-tree CPU measurement unavailable",
+          "peak_rss_bytes": "portable process-tree peak RSS measurement unavailable"
+        }
+      },
+      "exchanges": [
+        {
+          "id": 0,
+          "sent_ns": 3924066,
+          "received_ns": 153875006,
+          "round_trip_ns": 149950940
+        },
+        {
+          "id": 1,
+          "sent_ns": 154362128,
+          "received_ns": 218951528,
+          "round_trip_ns": 64589400
+        },
+        {
+          "id": 2,
+          "sent_ns": 220057760,
+          "received_ns": 243743703,
+          "round_trip_ns": 23685943
+        }
+      ],
+      "resources": [
+        {
+          "scope": "private cgroup: supervisor, namespace init, worker and descendants; excludes collector",
+          "cpu_ns": 145437000,
+          "peak_memory_charge_bytes": 53571584,
+          "reason": {
+            "cpu_ns": null,
+            "peak_memory_charge_bytes": null
+          },
+          "observed_member_counts": [
+            3,
+            3,
+            3
+          ]
+        }
+      ],
+      "responses": [
+        {
+          "id": 0,
+          "sha256": "b5069d6cb2aef9ce0f66d53247268fcb8d3eada3fa3562ccc788eedab7ea1ad1",
+          "protocol_error": false,
+          "tool_error": false
+        },
+        {
+          "id": 1,
+          "sha256": "2fad03de206147ac5a1f3523cbac2e2147d2c0ae0763aee844c437bc56600be9",
+          "protocol_error": false,
+          "tool_error": false
+        },
+        {
+          "id": 2,
+          "sha256": "042cf569bb8e49c378cd250745b2d3bb560c41953288e61106a8bced3d4ba4b7",
+          "protocol_error": false,
+          "tool_error": false
+        }
+      ]
+    },
+    {
+      "record": {
+        "schema_version": 2,
+        "run_id": "shadow-references-3",
+        "task_id": "shadow-references",
+        "arm": "trace-off",
+        "outcome": "success",
+        "attempted": 1,
+        "completed": 1,
+        "passed": 1,
+        "failed": 0,
+        "skipped": 0,
+        "wall_ns": 311791128,
+        "cpu_ns": null,
+        "peak_rss_bytes": null,
+        "resource_scope": "worker process tree",
+        "resource_reason": {
+          "cpu_ns": "portable process-tree CPU measurement unavailable",
+          "peak_rss_bytes": "portable process-tree peak RSS measurement unavailable"
+        }
+      },
+      "exchanges": [
+        {
+          "id": 0,
+          "sent_ns": 10750856,
+          "received_ns": 148969372,
+          "round_trip_ns": 138218516
+        },
+        {
+          "id": 1,
+          "sent_ns": 149464797,
+          "received_ns": 243042003,
+          "round_trip_ns": 93577206
+        },
+        {
+          "id": 2,
+          "sent_ns": 243473479,
+          "received_ns": 275490799,
+          "round_trip_ns": 32017320
+        }
+      ],
+      "resources": [
+        {
+          "scope": "private cgroup: supervisor, namespace init, worker and descendants; excludes collector",
+          "cpu_ns": 168951000,
+          "peak_memory_charge_bytes": 53821440,
+          "reason": {
+            "cpu_ns": null,
+            "peak_memory_charge_bytes": null
+          },
+          "observed_member_counts": [
+            3,
+            3,
+            3
+          ]
+        }
+      ],
+      "responses": [
+        {
+          "id": 0,
+          "sha256": "b5069d6cb2aef9ce0f66d53247268fcb8d3eada3fa3562ccc788eedab7ea1ad1",
+          "protocol_error": false,
+          "tool_error": false
+        },
+        {
+          "id": 1,
+          "sha256": "2fad03de206147ac5a1f3523cbac2e2147d2c0ae0763aee844c437bc56600be9",
+          "protocol_error": false,
+          "tool_error": false
+        },
+        {
+          "id": 2,
+          "sha256": "042cf569bb8e49c378cd250745b2d3bb560c41953288e61106a8bced3d4ba4b7",
+          "protocol_error": false,
+          "tool_error": false
+        }
+      ]
+    },
+    {
+      "record": {
+        "schema_version": 2,
+        "run_id": "shadow-references-4",
+        "task_id": "shadow-references",
+        "arm": "trace-off",
+        "outcome": "success",
+        "attempted": 1,
+        "completed": 1,
+        "passed": 1,
+        "failed": 0,
+        "skipped": 0,
+        "wall_ns": 375952798,
+        "cpu_ns": null,
+        "peak_rss_bytes": null,
+        "resource_scope": "worker process tree",
+        "resource_reason": {
+          "cpu_ns": "portable process-tree CPU measurement unavailable",
+          "peak_rss_bytes": "portable process-tree peak RSS measurement unavailable"
+        }
+      },
+      "exchanges": [
+        {
+          "id": 0,
+          "sent_ns": 3256530,
+          "received_ns": 217815248,
+          "round_trip_ns": 214558718
+        },
+        {
+          "id": 1,
+          "sent_ns": 223068715,
+          "received_ns": 301174913,
+          "round_trip_ns": 78106198
+        },
+        {
+          "id": 2,
+          "sent_ns": 301601761,
+          "received_ns": 340718650,
+          "round_trip_ns": 39116889
+        }
+      ],
+      "resources": [
+        {
+          "scope": "private cgroup: supervisor, namespace init, worker and descendants; excludes collector",
+          "cpu_ns": 154229000,
+          "peak_memory_charge_bytes": 53190656,
+          "reason": {
+            "cpu_ns": null,
+            "peak_memory_charge_bytes": null
+          },
+          "observed_member_counts": [
+            3,
+            3,
+            3
+          ]
+        }
+      ],
+      "responses": [
+        {
+          "id": 0,
+          "sha256": "b5069d6cb2aef9ce0f66d53247268fcb8d3eada3fa3562ccc788eedab7ea1ad1",
+          "protocol_error": false,
+          "tool_error": false
+        },
+        {
+          "id": 1,
+          "sha256": "2fad03de206147ac5a1f3523cbac2e2147d2c0ae0763aee844c437bc56600be9",
+          "protocol_error": false,
+          "tool_error": false
+        },
+        {
+          "id": 2,
+          "sha256": "042cf569bb8e49c378cd250745b2d3bb560c41953288e61106a8bced3d4ba4b7",
+          "protocol_error": false,
+          "tool_error": false
+        }
+      ]
+    },
+    {
+      "record": {
+        "schema_version": 2,
+        "run_id": "shadow-references-4",
+        "task_id": "shadow-references",
+        "arm": "trace-on",
+        "outcome": "success",
+        "attempted": 1,
+        "completed": 1,
+        "passed": 1,
+        "failed": 0,
+        "skipped": 0,
+        "wall_ns": 363530545,
+        "cpu_ns": null,
+        "peak_rss_bytes": null,
+        "resource_scope": "worker process tree",
+        "resource_reason": {
+          "cpu_ns": "portable process-tree CPU measurement unavailable",
+          "peak_rss_bytes": "portable process-tree peak RSS measurement unavailable"
+        }
+      },
+      "exchanges": [
+        {
+          "id": 0,
+          "sent_ns": 4738963,
+          "received_ns": 205730513,
+          "round_trip_ns": 200991550
+        },
+        {
+          "id": 1,
+          "sent_ns": 206144993,
+          "received_ns": 290802299,
+          "round_trip_ns": 84657306
+        },
+        {
+          "id": 2,
+          "sent_ns": 295035799,
+          "received_ns": 326979253,
+          "round_trip_ns": 31943454
+        }
+      ],
+      "resources": [
+        {
+          "scope": "private cgroup: supervisor, namespace init, worker and descendants; excludes collector",
+          "cpu_ns": 161750000,
+          "peak_memory_charge_bytes": 53075968,
+          "reason": {
+            "cpu_ns": null,
+            "peak_memory_charge_bytes": null
+          },
+          "observed_member_counts": [
+            3,
+            3,
+            3
+          ]
+        }
+      ],
+      "responses": [
+        {
+          "id": 0,
+          "sha256": "b5069d6cb2aef9ce0f66d53247268fcb8d3eada3fa3562ccc788eedab7ea1ad1",
+          "protocol_error": false,
+          "tool_error": false
+        },
+        {
+          "id": 1,
+          "sha256": "2fad03de206147ac5a1f3523cbac2e2147d2c0ae0763aee844c437bc56600be9",
+          "protocol_error": false,
+          "tool_error": false
+        },
+        {
+          "id": 2,
+          "sha256": "042cf569bb8e49c378cd250745b2d3bb560c41953288e61106a8bced3d4ba4b7",
+          "protocol_error": false,
+          "tool_error": false
+        }
+      ]
+    },
+    {
+      "record": {
+        "schema_version": 2,
+        "run_id": "stdlib-filter-0",
+        "task_id": "stdlib-filter",
+        "arm": "trace-off",
+        "outcome": "success",
+        "attempted": 1,
+        "completed": 1,
+        "passed": 1,
+        "failed": 0,
+        "skipped": 0,
+        "wall_ns": 452773373,
+        "cpu_ns": null,
+        "peak_rss_bytes": null,
+        "resource_scope": "worker process tree",
+        "resource_reason": {
+          "cpu_ns": "portable process-tree CPU measurement unavailable",
+          "peak_rss_bytes": "portable process-tree peak RSS measurement unavailable"
+        }
+      },
+      "exchanges": [
+        {
+          "id": 0,
+          "sent_ns": 10974087,
+          "received_ns": 143710348,
+          "round_trip_ns": 132736261
+        },
+        {
+          "id": 1,
+          "sent_ns": 144132498,
+          "received_ns": 295836934,
+          "round_trip_ns": 151704436
+        },
+        {
+          "id": 2,
+          "sent_ns": 297212618,
+          "received_ns": 386108353,
+          "round_trip_ns": 88895735
+        }
+      ],
+      "resources": [
+        {
+          "scope": "private cgroup: supervisor, namespace init, worker and descendants; excludes collector",
+          "cpu_ns": 257162000,
+          "peak_memory_charge_bytes": 133160960,
+          "reason": {
+            "cpu_ns": null,
+            "peak_memory_charge_bytes": null
+          },
+          "observed_member_counts": [
+            3,
+            3,
+            3
+          ]
+        }
+      ],
+      "responses": [
+        {
+          "id": 0,
+          "sha256": "b5069d6cb2aef9ce0f66d53247268fcb8d3eada3fa3562ccc788eedab7ea1ad1",
+          "protocol_error": false,
+          "tool_error": false
+        },
+        {
+          "id": 1,
+          "sha256": "a5319ef021a9d8141dbb27967dbc6873e8b55ffbb9c72febef3abcd99aa29d36",
+          "protocol_error": false,
+          "tool_error": false
+        },
+        {
+          "id": 2,
+          "sha256": "c759368e95663e9333d6e99e17ab9eb3abb1aba7c8b6e04527702c9671a31617",
+          "protocol_error": false,
+          "tool_error": false
+        }
+      ]
+    },
+    {
+      "record": {
+        "schema_version": 2,
+        "run_id": "stdlib-filter-0",
+        "task_id": "stdlib-filter",
+        "arm": "trace-on",
+        "outcome": "success",
+        "attempted": 1,
+        "completed": 1,
+        "passed": 1,
+        "failed": 0,
+        "skipped": 0,
+        "wall_ns": 462224182,
+        "cpu_ns": null,
+        "peak_rss_bytes": null,
+        "resource_scope": "worker process tree",
+        "resource_reason": {
+          "cpu_ns": "portable process-tree CPU measurement unavailable",
+          "peak_rss_bytes": "portable process-tree peak RSS measurement unavailable"
+        }
+      },
+      "exchanges": [
+        {
+          "id": 0,
+          "sent_ns": 10079956,
+          "received_ns": 196487338,
+          "round_trip_ns": 186407382
+        },
+        {
+          "id": 1,
+          "sent_ns": 196984296,
+          "received_ns": 338317070,
+          "round_trip_ns": 141332774
+        },
+        {
+          "id": 2,
+          "sent_ns": 339285025,
+          "received_ns": 426348079,
+          "round_trip_ns": 87063054
+        }
+      ],
+      "resources": [
+        {
+          "scope": "private cgroup: supervisor, namespace init, worker and descendants; excludes collector",
+          "cpu_ns": 221759000,
+          "peak_memory_charge_bytes": 133632000,
+          "reason": {
+            "cpu_ns": null,
+            "peak_memory_charge_bytes": null
+          },
+          "observed_member_counts": [
+            3,
+            3,
+            3
+          ]
+        }
+      ],
+      "responses": [
+        {
+          "id": 0,
+          "sha256": "b5069d6cb2aef9ce0f66d53247268fcb8d3eada3fa3562ccc788eedab7ea1ad1",
+          "protocol_error": false,
+          "tool_error": false
+        },
+        {
+          "id": 1,
+          "sha256": "a5319ef021a9d8141dbb27967dbc6873e8b55ffbb9c72febef3abcd99aa29d36",
+          "protocol_error": false,
+          "tool_error": false
+        },
+        {
+          "id": 2,
+          "sha256": "c759368e95663e9333d6e99e17ab9eb3abb1aba7c8b6e04527702c9671a31617",
+          "protocol_error": false,
+          "tool_error": false
+        }
+      ]
+    },
+    {
+      "record": {
+        "schema_version": 2,
+        "run_id": "stdlib-filter-1",
+        "task_id": "stdlib-filter",
+        "arm": "trace-on",
+        "outcome": "success",
+        "attempted": 1,
+        "completed": 1,
+        "passed": 1,
+        "failed": 0,
+        "skipped": 0,
+        "wall_ns": 489486456,
+        "cpu_ns": null,
+        "peak_rss_bytes": null,
+        "resource_scope": "worker process tree",
+        "resource_reason": {
+          "cpu_ns": "portable process-tree CPU measurement unavailable",
+          "peak_rss_bytes": "portable process-tree peak RSS measurement unavailable"
+        }
+      },
+      "exchanges": [
+        {
+          "id": 0,
+          "sent_ns": 4243875,
+          "received_ns": 202803117,
+          "round_trip_ns": 198559242
+        },
+        {
+          "id": 1,
+          "sent_ns": 203897111,
+          "received_ns": 364063949,
+          "round_trip_ns": 160166838
+        },
+        {
+          "id": 2,
+          "sent_ns": 365249296,
+          "received_ns": 450712094,
+          "round_trip_ns": 85462798
+        }
+      ],
+      "resources": [
+        {
+          "scope": "private cgroup: supervisor, namespace init, worker and descendants; excludes collector",
+          "cpu_ns": 225314000,
+          "peak_memory_charge_bytes": 132808704,
+          "reason": {
+            "cpu_ns": null,
+            "peak_memory_charge_bytes": null
+          },
+          "observed_member_counts": [
+            3,
+            3,
+            3
+          ]
+        }
+      ],
+      "responses": [
+        {
+          "id": 0,
+          "sha256": "b5069d6cb2aef9ce0f66d53247268fcb8d3eada3fa3562ccc788eedab7ea1ad1",
+          "protocol_error": false,
+          "tool_error": false
+        },
+        {
+          "id": 1,
+          "sha256": "a5319ef021a9d8141dbb27967dbc6873e8b55ffbb9c72febef3abcd99aa29d36",
+          "protocol_error": false,
+          "tool_error": false
+        },
+        {
+          "id": 2,
+          "sha256": "c759368e95663e9333d6e99e17ab9eb3abb1aba7c8b6e04527702c9671a31617",
+          "protocol_error": false,
+          "tool_error": false
+        }
+      ]
+    },
+    {
+      "record": {
+        "schema_version": 2,
+        "run_id": "stdlib-filter-1",
+        "task_id": "stdlib-filter",
+        "arm": "trace-off",
+        "outcome": "success",
+        "attempted": 1,
+        "completed": 1,
+        "passed": 1,
+        "failed": 0,
+        "skipped": 0,
+        "wall_ns": 518851854,
+        "cpu_ns": null,
+        "peak_rss_bytes": null,
+        "resource_scope": "worker process tree",
+        "resource_reason": {
+          "cpu_ns": "portable process-tree CPU measurement unavailable",
+          "peak_rss_bytes": "portable process-tree peak RSS measurement unavailable"
+        }
+      },
+      "exchanges": [
+        {
+          "id": 0,
+          "sent_ns": 2152791,
+          "received_ns": 202045151,
+          "round_trip_ns": 199892360
+        },
+        {
+          "id": 1,
+          "sent_ns": 206259021,
+          "received_ns": 350079930,
+          "round_trip_ns": 143820909
+        },
+        {
+          "id": 2,
+          "sent_ns": 351559677,
+          "received_ns": 445942234,
+          "round_trip_ns": 94382557
+        }
+      ],
+      "resources": [
+        {
+          "scope": "private cgroup: supervisor, namespace init, worker and descendants; excludes collector",
+          "cpu_ns": 219892000,
+          "peak_memory_charge_bytes": 133271552,
+          "reason": {
+            "cpu_ns": null,
+            "peak_memory_charge_bytes": null
+          },
+          "observed_member_counts": [
+            3,
+            3,
+            3
+          ]
+        }
+      ],
+      "responses": [
+        {
+          "id": 0,
+          "sha256": "b5069d6cb2aef9ce0f66d53247268fcb8d3eada3fa3562ccc788eedab7ea1ad1",
+          "protocol_error": false,
+          "tool_error": false
+        },
+        {
+          "id": 1,
+          "sha256": "a5319ef021a9d8141dbb27967dbc6873e8b55ffbb9c72febef3abcd99aa29d36",
+          "protocol_error": false,
+          "tool_error": false
+        },
+        {
+          "id": 2,
+          "sha256": "c759368e95663e9333d6e99e17ab9eb3abb1aba7c8b6e04527702c9671a31617",
+          "protocol_error": false,
+          "tool_error": false
+        }
+      ]
+    },
+    {
+      "record": {
+        "schema_version": 2,
+        "run_id": "stdlib-filter-2",
+        "task_id": "stdlib-filter",
+        "arm": "trace-off",
+        "outcome": "success",
+        "attempted": 1,
+        "completed": 1,
+        "passed": 1,
+        "failed": 0,
+        "skipped": 0,
+        "wall_ns": 399726929,
+        "cpu_ns": null,
+        "peak_rss_bytes": null,
+        "resource_scope": "worker process tree",
+        "resource_reason": {
+          "cpu_ns": "portable process-tree CPU measurement unavailable",
+          "peak_rss_bytes": "portable process-tree peak RSS measurement unavailable"
+        }
+      },
+      "exchanges": [
+        {
+          "id": 0,
+          "sent_ns": 9932765,
+          "received_ns": 190767650,
+          "round_trip_ns": 180834885
+        },
+        {
+          "id": 1,
+          "sent_ns": 191256155,
+          "received_ns": 303318840,
+          "round_trip_ns": 112062685
+        },
+        {
+          "id": 2,
+          "sent_ns": 304289119,
+          "received_ns": 362288989,
+          "round_trip_ns": 57999870
+        }
+      ],
+      "resources": [
+        {
+          "scope": "private cgroup: supervisor, namespace init, worker and descendants; excludes collector",
+          "cpu_ns": 227878000,
+          "peak_memory_charge_bytes": 133287936,
+          "reason": {
+            "cpu_ns": null,
+            "peak_memory_charge_bytes": null
+          },
+          "observed_member_counts": [
+            3,
+            3,
+            3
+          ]
+        }
+      ],
+      "responses": [
+        {
+          "id": 0,
+          "sha256": "b5069d6cb2aef9ce0f66d53247268fcb8d3eada3fa3562ccc788eedab7ea1ad1",
+          "protocol_error": false,
+          "tool_error": false
+        },
+        {
+          "id": 1,
+          "sha256": "a5319ef021a9d8141dbb27967dbc6873e8b55ffbb9c72febef3abcd99aa29d36",
+          "protocol_error": false,
+          "tool_error": false
+        },
+        {
+          "id": 2,
+          "sha256": "c759368e95663e9333d6e99e17ab9eb3abb1aba7c8b6e04527702c9671a31617",
+          "protocol_error": false,
+          "tool_error": false
+        }
+      ]
+    },
+    {
+      "record": {
+        "schema_version": 2,
+        "run_id": "stdlib-filter-2",
+        "task_id": "stdlib-filter",
+        "arm": "trace-on",
+        "outcome": "success",
+        "attempted": 1,
+        "completed": 1,
+        "passed": 1,
+        "failed": 0,
+        "skipped": 0,
+        "wall_ns": 336600401,
+        "cpu_ns": null,
+        "peak_rss_bytes": null,
+        "resource_scope": "worker process tree",
+        "resource_reason": {
+          "cpu_ns": "portable process-tree CPU measurement unavailable",
+          "peak_rss_bytes": "portable process-tree peak RSS measurement unavailable"
+        }
+      },
+      "exchanges": [
+        {
+          "id": 0,
+          "sent_ns": 6875507,
+          "received_ns": 126527838,
+          "round_trip_ns": 119652331
+        },
+        {
+          "id": 1,
+          "sent_ns": 127044316,
+          "received_ns": 224296417,
+          "round_trip_ns": 97252101
+        },
+        {
+          "id": 2,
+          "sent_ns": 227696963,
+          "received_ns": 302580433,
+          "round_trip_ns": 74883470
+        }
+      ],
+      "resources": [
+        {
+          "scope": "private cgroup: supervisor, namespace init, worker and descendants; excludes collector",
+          "cpu_ns": 232078000,
+          "peak_memory_charge_bytes": 134561792,
+          "reason": {
+            "cpu_ns": null,
+            "peak_memory_charge_bytes": null
+          },
+          "observed_member_counts": [
+            3,
+            3,
+            3
+          ]
+        }
+      ],
+      "responses": [
+        {
+          "id": 0,
+          "sha256": "b5069d6cb2aef9ce0f66d53247268fcb8d3eada3fa3562ccc788eedab7ea1ad1",
+          "protocol_error": false,
+          "tool_error": false
+        },
+        {
+          "id": 1,
+          "sha256": "a5319ef021a9d8141dbb27967dbc6873e8b55ffbb9c72febef3abcd99aa29d36",
+          "protocol_error": false,
+          "tool_error": false
+        },
+        {
+          "id": 2,
+          "sha256": "c759368e95663e9333d6e99e17ab9eb3abb1aba7c8b6e04527702c9671a31617",
+          "protocol_error": false,
+          "tool_error": false
+        }
+      ]
+    },
+    {
+      "record": {
+        "schema_version": 2,
+        "run_id": "stdlib-filter-3",
+        "task_id": "stdlib-filter",
+        "arm": "trace-on",
+        "outcome": "success",
+        "attempted": 1,
+        "completed": 1,
+        "passed": 1,
+        "failed": 0,
+        "skipped": 0,
+        "wall_ns": 408007007,
+        "cpu_ns": null,
+        "peak_rss_bytes": null,
+        "resource_scope": "worker process tree",
+        "resource_reason": {
+          "cpu_ns": "portable process-tree CPU measurement unavailable",
+          "peak_rss_bytes": "portable process-tree peak RSS measurement unavailable"
+        }
+      },
+      "exchanges": [
+        {
+          "id": 0,
+          "sent_ns": 26531420,
+          "received_ns": 253143824,
+          "round_trip_ns": 226612404
+        },
+        {
+          "id": 1,
+          "sent_ns": 253598516,
+          "received_ns": 318214657,
+          "round_trip_ns": 64616141
+        },
+        {
+          "id": 2,
+          "sent_ns": 319133327,
+          "received_ns": 374080405,
+          "round_trip_ns": 54947078
+        }
+      ],
+      "resources": [
+        {
+          "scope": "private cgroup: supervisor, namespace init, worker and descendants; excludes collector",
+          "cpu_ns": 163497000,
+          "peak_memory_charge_bytes": 132648960,
+          "reason": {
+            "cpu_ns": null,
+            "peak_memory_charge_bytes": null
+          },
+          "observed_member_counts": [
+            3,
+            3,
+            3
+          ]
+        }
+      ],
+      "responses": [
+        {
+          "id": 0,
+          "sha256": "b5069d6cb2aef9ce0f66d53247268fcb8d3eada3fa3562ccc788eedab7ea1ad1",
+          "protocol_error": false,
+          "tool_error": false
+        },
+        {
+          "id": 1,
+          "sha256": "a5319ef021a9d8141dbb27967dbc6873e8b55ffbb9c72febef3abcd99aa29d36",
+          "protocol_error": false,
+          "tool_error": false
+        },
+        {
+          "id": 2,
+          "sha256": "c759368e95663e9333d6e99e17ab9eb3abb1aba7c8b6e04527702c9671a31617",
+          "protocol_error": false,
+          "tool_error": false
+        }
+      ]
+    },
+    {
+      "record": {
+        "schema_version": 2,
+        "run_id": "stdlib-filter-3",
+        "task_id": "stdlib-filter",
+        "arm": "trace-off",
+        "outcome": "success",
+        "attempted": 1,
+        "completed": 1,
+        "passed": 1,
+        "failed": 0,
+        "skipped": 0,
+        "wall_ns": 480121029,
+        "cpu_ns": null,
+        "peak_rss_bytes": null,
+        "resource_scope": "worker process tree",
+        "resource_reason": {
+          "cpu_ns": "portable process-tree CPU measurement unavailable",
+          "peak_rss_bytes": "portable process-tree peak RSS measurement unavailable"
+        }
+      },
+      "exchanges": [
+        {
+          "id": 0,
+          "sent_ns": 17775436,
+          "received_ns": 235968647,
+          "round_trip_ns": 218193211
+        },
+        {
+          "id": 1,
+          "sent_ns": 236420604,
+          "received_ns": 333350590,
+          "round_trip_ns": 96929986
+        },
+        {
+          "id": 2,
+          "sent_ns": 334302651,
+          "received_ns": 414314574,
+          "round_trip_ns": 80011923
+        }
+      ],
+      "resources": [
+        {
+          "scope": "private cgroup: supervisor, namespace init, worker and descendants; excludes collector",
+          "cpu_ns": 234007000,
+          "peak_memory_charge_bytes": 132763648,
+          "reason": {
+            "cpu_ns": null,
+            "peak_memory_charge_bytes": null
+          },
+          "observed_member_counts": [
+            3,
+            3,
+            3
+          ]
+        }
+      ],
+      "responses": [
+        {
+          "id": 0,
+          "sha256": "b5069d6cb2aef9ce0f66d53247268fcb8d3eada3fa3562ccc788eedab7ea1ad1",
+          "protocol_error": false,
+          "tool_error": false
+        },
+        {
+          "id": 1,
+          "sha256": "a5319ef021a9d8141dbb27967dbc6873e8b55ffbb9c72febef3abcd99aa29d36",
+          "protocol_error": false,
+          "tool_error": false
+        },
+        {
+          "id": 2,
+          "sha256": "c759368e95663e9333d6e99e17ab9eb3abb1aba7c8b6e04527702c9671a31617",
+          "protocol_error": false,
+          "tool_error": false
+        }
+      ]
+    },
+    {
+      "record": {
+        "schema_version": 2,
+        "run_id": "stdlib-filter-4",
+        "task_id": "stdlib-filter",
+        "arm": "trace-off",
+        "outcome": "success",
+        "attempted": 1,
+        "completed": 1,
+        "passed": 1,
+        "failed": 0,
+        "skipped": 0,
+        "wall_ns": 458867897,
+        "cpu_ns": null,
+        "peak_rss_bytes": null,
+        "resource_scope": "worker process tree",
+        "resource_reason": {
+          "cpu_ns": "portable process-tree CPU measurement unavailable",
+          "peak_rss_bytes": "portable process-tree peak RSS measurement unavailable"
+        }
+      },
+      "exchanges": [
+        {
+          "id": 0,
+          "sent_ns": 9521141,
+          "received_ns": 221624634,
+          "round_trip_ns": 212103493
+        },
+        {
+          "id": 1,
+          "sent_ns": 222029568,
+          "received_ns": 361959604,
+          "round_trip_ns": 139930036
+        },
+        {
+          "id": 2,
+          "sent_ns": 363138390,
+          "received_ns": 421840311,
+          "round_trip_ns": 58701921
+        }
+      ],
+      "resources": [
+        {
+          "scope": "private cgroup: supervisor, namespace init, worker and descendants; excludes collector",
+          "cpu_ns": 222850000,
+          "peak_memory_charge_bytes": 133292032,
+          "reason": {
+            "cpu_ns": null,
+            "peak_memory_charge_bytes": null
+          },
+          "observed_member_counts": [
+            3,
+            3,
+            3
+          ]
+        }
+      ],
+      "responses": [
+        {
+          "id": 0,
+          "sha256": "b5069d6cb2aef9ce0f66d53247268fcb8d3eada3fa3562ccc788eedab7ea1ad1",
+          "protocol_error": false,
+          "tool_error": false
+        },
+        {
+          "id": 1,
+          "sha256": "a5319ef021a9d8141dbb27967dbc6873e8b55ffbb9c72febef3abcd99aa29d36",
+          "protocol_error": false,
+          "tool_error": false
+        },
+        {
+          "id": 2,
+          "sha256": "c759368e95663e9333d6e99e17ab9eb3abb1aba7c8b6e04527702c9671a31617",
+          "protocol_error": false,
+          "tool_error": false
+        }
+      ]
+    },
+    {
+      "record": {
+        "schema_version": 2,
+        "run_id": "stdlib-filter-4",
+        "task_id": "stdlib-filter",
+        "arm": "trace-on",
+        "outcome": "success",
+        "attempted": 1,
+        "completed": 1,
+        "passed": 1,
+        "failed": 0,
+        "skipped": 0,
+        "wall_ns": 414437978,
+        "cpu_ns": null,
+        "peak_rss_bytes": null,
+        "resource_scope": "worker process tree",
+        "resource_reason": {
+          "cpu_ns": "portable process-tree CPU measurement unavailable",
+          "peak_rss_bytes": "portable process-tree peak RSS measurement unavailable"
+        }
+      },
+      "exchanges": [
+        {
+          "id": 0,
+          "sent_ns": 6394815,
+          "received_ns": 206177452,
+          "round_trip_ns": 199782637
+        },
+        {
+          "id": 1,
+          "sent_ns": 206649612,
+          "received_ns": 306003384,
+          "round_trip_ns": 99353772
+        },
+        {
+          "id": 2,
+          "sent_ns": 306971090,
+          "received_ns": 377406535,
+          "round_trip_ns": 70435445
+        }
+      ],
+      "resources": [
+        {
+          "scope": "private cgroup: supervisor, namespace init, worker and descendants; excludes collector",
+          "cpu_ns": 196210000,
+          "peak_memory_charge_bytes": 133980160,
+          "reason": {
+            "cpu_ns": null,
+            "peak_memory_charge_bytes": null
+          },
+          "observed_member_counts": [
+            3,
+            3,
+            3
+          ]
+        }
+      ],
+      "responses": [
+        {
+          "id": 0,
+          "sha256": "b5069d6cb2aef9ce0f66d53247268fcb8d3eada3fa3562ccc788eedab7ea1ad1",
+          "protocol_error": false,
+          "tool_error": false
+        },
+        {
+          "id": 1,
+          "sha256": "a5319ef021a9d8141dbb27967dbc6873e8b55ffbb9c72febef3abcd99aa29d36",
+          "protocol_error": false,
+          "tool_error": false
+        },
+        {
+          "id": 2,
+          "sha256": "c759368e95663e9333d6e99e17ab9eb3abb1aba7c8b6e04527702c9671a31617",
+          "protocol_error": false,
+          "tool_error": false
+        }
+      ]
+    },
+    {
+      "record": {
+        "schema_version": 2,
+        "run_id": "repair-diagnostic-0",
+        "task_id": "repair-diagnostic",
+        "arm": "trace-off",
+        "outcome": "success",
+        "attempted": 1,
+        "completed": 1,
+        "passed": 1,
+        "failed": 0,
+        "skipped": 0,
+        "wall_ns": 409098936,
+        "cpu_ns": null,
+        "peak_rss_bytes": null,
+        "resource_scope": "worker process tree",
+        "resource_reason": {
+          "cpu_ns": "portable process-tree CPU measurement unavailable",
+          "peak_rss_bytes": "portable process-tree peak RSS measurement unavailable"
+        }
+      },
+      "exchanges": [
+        {
+          "id": 0,
+          "sent_ns": 4661199,
+          "received_ns": 247738348,
+          "round_trip_ns": 243077149
+        },
+        {
+          "id": 1,
+          "sent_ns": 251716228,
+          "received_ns": 319832562,
+          "round_trip_ns": 68116334
+        },
+        {
+          "id": 2,
+          "sent_ns": 320273802,
+          "received_ns": 342216886,
+          "round_trip_ns": 21943084
+        },
+        {
+          "id": 3,
+          "sent_ns": 342634119,
+          "received_ns": 387482765,
+          "round_trip_ns": 44848646
+        }
+      ],
+      "resources": [
+        {
+          "scope": "private cgroup: supervisor, namespace init, worker and descendants; excludes collector",
+          "cpu_ns": 175589000,
+          "peak_memory_charge_bytes": 44679168,
+          "reason": {
+            "cpu_ns": null,
+            "peak_memory_charge_bytes": null
+          },
+          "observed_member_counts": [
+            3,
+            3,
+            3,
+            3
+          ]
+        }
+      ],
+      "responses": [
+        {
+          "id": 0,
+          "sha256": "b5069d6cb2aef9ce0f66d53247268fcb8d3eada3fa3562ccc788eedab7ea1ad1",
+          "protocol_error": false,
+          "tool_error": false
+        },
+        {
+          "id": 1,
+          "sha256": "76b43e3398bea1bb2fbc09ba7c956c70b6b969c57c837c87b327109f1ad6540d",
+          "protocol_error": false,
+          "tool_error": true
+        },
+        {
+          "id": 2,
+          "sha256": "c2a999eb4661c26a5a04fb103a1ba28402cc344861bab5ffbf3bebc356e46524",
+          "protocol_error": false,
+          "tool_error": true
+        },
+        {
+          "id": 3,
+          "sha256": "07137bf9b70fa9e0eca59fff400f88793f4154988d57b0d6d884aee83d06bbbf",
+          "protocol_error": false,
+          "tool_error": false
+        }
+      ]
+    },
+    {
+      "record": {
+        "schema_version": 2,
+        "run_id": "repair-diagnostic-0",
+        "task_id": "repair-diagnostic",
+        "arm": "trace-on",
+        "outcome": "success",
+        "attempted": 1,
+        "completed": 1,
+        "passed": 1,
+        "failed": 0,
+        "skipped": 0,
+        "wall_ns": 338554432,
+        "cpu_ns": null,
+        "peak_rss_bytes": null,
+        "resource_scope": "worker process tree",
+        "resource_reason": {
+          "cpu_ns": "portable process-tree CPU measurement unavailable",
+          "peak_rss_bytes": "portable process-tree peak RSS measurement unavailable"
+        }
+      },
+      "exchanges": [
+        {
+          "id": 0,
+          "sent_ns": 10506364,
+          "received_ns": 190506371,
+          "round_trip_ns": 180000007
+        },
+        {
+          "id": 1,
+          "sent_ns": 190924316,
+          "received_ns": 252925362,
+          "round_trip_ns": 62001046
+        },
+        {
+          "id": 2,
+          "sent_ns": 253358781,
+          "received_ns": 279697248,
+          "round_trip_ns": 26338467
+        },
+        {
+          "id": 3,
+          "sent_ns": 280167184,
+          "received_ns": 322669795,
+          "round_trip_ns": 42502611
+        }
+      ],
+      "resources": [
+        {
+          "scope": "private cgroup: supervisor, namespace init, worker and descendants; excludes collector",
+          "cpu_ns": 186291000,
+          "peak_memory_charge_bytes": 43433984,
+          "reason": {
+            "cpu_ns": null,
+            "peak_memory_charge_bytes": null
+          },
+          "observed_member_counts": [
+            3,
+            3,
+            3,
+            3
+          ]
+        }
+      ],
+      "responses": [
+        {
+          "id": 0,
+          "sha256": "b5069d6cb2aef9ce0f66d53247268fcb8d3eada3fa3562ccc788eedab7ea1ad1",
+          "protocol_error": false,
+          "tool_error": false
+        },
+        {
+          "id": 1,
+          "sha256": "76b43e3398bea1bb2fbc09ba7c956c70b6b969c57c837c87b327109f1ad6540d",
+          "protocol_error": false,
+          "tool_error": true
+        },
+        {
+          "id": 2,
+          "sha256": "c2a999eb4661c26a5a04fb103a1ba28402cc344861bab5ffbf3bebc356e46524",
+          "protocol_error": false,
+          "tool_error": true
+        },
+        {
+          "id": 3,
+          "sha256": "07137bf9b70fa9e0eca59fff400f88793f4154988d57b0d6d884aee83d06bbbf",
+          "protocol_error": false,
+          "tool_error": false
+        }
+      ]
+    },
+    {
+      "record": {
+        "schema_version": 2,
+        "run_id": "repair-diagnostic-1",
+        "task_id": "repair-diagnostic",
+        "arm": "trace-on",
+        "outcome": "success",
+        "attempted": 1,
+        "completed": 1,
+        "passed": 1,
+        "failed": 0,
+        "skipped": 0,
+        "wall_ns": 345111849,
+        "cpu_ns": null,
+        "peak_rss_bytes": null,
+        "resource_scope": "worker process tree",
+        "resource_reason": {
+          "cpu_ns": "portable process-tree CPU measurement unavailable",
+          "peak_rss_bytes": "portable process-tree peak RSS measurement unavailable"
+        }
+      },
+      "exchanges": [
+        {
+          "id": 0,
+          "sent_ns": 1392570,
+          "received_ns": 171628167,
+          "round_trip_ns": 170235597
+        },
+        {
+          "id": 1,
+          "sent_ns": 172102500,
+          "received_ns": 224022499,
+          "round_trip_ns": 51919999
+        },
+        {
+          "id": 2,
+          "sent_ns": 225506623,
+          "received_ns": 260168595,
+          "round_trip_ns": 34661972
+        },
+        {
+          "id": 3,
+          "sent_ns": 260599740,
+          "received_ns": 308412507,
+          "round_trip_ns": 47812767
+        }
+      ],
+      "resources": [
+        {
+          "scope": "private cgroup: supervisor, namespace init, worker and descendants; excludes collector",
+          "cpu_ns": 180972000,
+          "peak_memory_charge_bytes": 41299968,
+          "reason": {
+            "cpu_ns": null,
+            "peak_memory_charge_bytes": null
+          },
+          "observed_member_counts": [
+            3,
+            3,
+            3,
+            3
+          ]
+        }
+      ],
+      "responses": [
+        {
+          "id": 0,
+          "sha256": "b5069d6cb2aef9ce0f66d53247268fcb8d3eada3fa3562ccc788eedab7ea1ad1",
+          "protocol_error": false,
+          "tool_error": false
+        },
+        {
+          "id": 1,
+          "sha256": "76b43e3398bea1bb2fbc09ba7c956c70b6b969c57c837c87b327109f1ad6540d",
+          "protocol_error": false,
+          "tool_error": true
+        },
+        {
+          "id": 2,
+          "sha256": "c2a999eb4661c26a5a04fb103a1ba28402cc344861bab5ffbf3bebc356e46524",
+          "protocol_error": false,
+          "tool_error": true
+        },
+        {
+          "id": 3,
+          "sha256": "07137bf9b70fa9e0eca59fff400f88793f4154988d57b0d6d884aee83d06bbbf",
+          "protocol_error": false,
+          "tool_error": false
+        }
+      ]
+    },
+    {
+      "record": {
+        "schema_version": 2,
+        "run_id": "repair-diagnostic-1",
+        "task_id": "repair-diagnostic",
+        "arm": "trace-off",
+        "outcome": "success",
+        "attempted": 1,
+        "completed": 1,
+        "passed": 1,
+        "failed": 0,
+        "skipped": 0,
+        "wall_ns": 371799314,
+        "cpu_ns": null,
+        "peak_rss_bytes": null,
+        "resource_scope": "worker process tree",
+        "resource_reason": {
+          "cpu_ns": "portable process-tree CPU measurement unavailable",
+          "peak_rss_bytes": "portable process-tree peak RSS measurement unavailable"
+        }
+      },
+      "exchanges": [
+        {
+          "id": 0,
+          "sent_ns": 3034241,
+          "received_ns": 198635161,
+          "round_trip_ns": 195600920
+        },
+        {
+          "id": 1,
+          "sent_ns": 199134734,
+          "received_ns": 258456174,
+          "round_trip_ns": 59321440
+        },
+        {
+          "id": 2,
+          "sent_ns": 259559782,
+          "received_ns": 295287233,
+          "round_trip_ns": 35727451
+        },
+        {
+          "id": 3,
+          "sent_ns": 298879379,
+          "received_ns": 346620132,
+          "round_trip_ns": 47740753
+        }
+      ],
+      "resources": [
+        {
+          "scope": "private cgroup: supervisor, namespace init, worker and descendants; excludes collector",
+          "cpu_ns": 186099000,
+          "peak_memory_charge_bytes": 40812544,
+          "reason": {
+            "cpu_ns": null,
+            "peak_memory_charge_bytes": null
+          },
+          "observed_member_counts": [
+            3,
+            3,
+            3,
+            3
+          ]
+        }
+      ],
+      "responses": [
+        {
+          "id": 0,
+          "sha256": "b5069d6cb2aef9ce0f66d53247268fcb8d3eada3fa3562ccc788eedab7ea1ad1",
+          "protocol_error": false,
+          "tool_error": false
+        },
+        {
+          "id": 1,
+          "sha256": "76b43e3398bea1bb2fbc09ba7c956c70b6b969c57c837c87b327109f1ad6540d",
+          "protocol_error": false,
+          "tool_error": true
+        },
+        {
+          "id": 2,
+          "sha256": "c2a999eb4661c26a5a04fb103a1ba28402cc344861bab5ffbf3bebc356e46524",
+          "protocol_error": false,
+          "tool_error": true
+        },
+        {
+          "id": 3,
+          "sha256": "07137bf9b70fa9e0eca59fff400f88793f4154988d57b0d6d884aee83d06bbbf",
+          "protocol_error": false,
+          "tool_error": false
+        }
+      ]
+    },
+    {
+      "record": {
+        "schema_version": 2,
+        "run_id": "repair-diagnostic-2",
+        "task_id": "repair-diagnostic",
+        "arm": "trace-off",
+        "outcome": "success",
+        "attempted": 1,
+        "completed": 1,
+        "passed": 1,
+        "failed": 0,
+        "skipped": 0,
+        "wall_ns": 333823522,
+        "cpu_ns": null,
+        "peak_rss_bytes": null,
+        "resource_scope": "worker process tree",
+        "resource_reason": {
+          "cpu_ns": "portable process-tree CPU measurement unavailable",
+          "peak_rss_bytes": "portable process-tree peak RSS measurement unavailable"
+        }
+      },
+      "exchanges": [
+        {
+          "id": 0,
+          "sent_ns": 1703128,
+          "received_ns": 184261412,
+          "round_trip_ns": 182558284
+        },
+        {
+          "id": 1,
+          "sent_ns": 184977514,
+          "received_ns": 229096446,
+          "round_trip_ns": 44118932
+        },
+        {
+          "id": 2,
+          "sent_ns": 231052309,
+          "received_ns": 254843566,
+          "round_trip_ns": 23791257
+        },
+        {
+          "id": 3,
+          "sent_ns": 255240918,
+          "received_ns": 300762948,
+          "round_trip_ns": 45522030
+        }
+      ],
+      "resources": [
+        {
+          "scope": "private cgroup: supervisor, namespace init, worker and descendants; excludes collector",
+          "cpu_ns": 168467000,
+          "peak_memory_charge_bytes": 40673280,
+          "reason": {
+            "cpu_ns": null,
+            "peak_memory_charge_bytes": null
+          },
+          "observed_member_counts": [
+            3,
+            3,
+            3,
+            3
+          ]
+        }
+      ],
+      "responses": [
+        {
+          "id": 0,
+          "sha256": "b5069d6cb2aef9ce0f66d53247268fcb8d3eada3fa3562ccc788eedab7ea1ad1",
+          "protocol_error": false,
+          "tool_error": false
+        },
+        {
+          "id": 1,
+          "sha256": "76b43e3398bea1bb2fbc09ba7c956c70b6b969c57c837c87b327109f1ad6540d",
+          "protocol_error": false,
+          "tool_error": true
+        },
+        {
+          "id": 2,
+          "sha256": "c2a999eb4661c26a5a04fb103a1ba28402cc344861bab5ffbf3bebc356e46524",
+          "protocol_error": false,
+          "tool_error": true
+        },
+        {
+          "id": 3,
+          "sha256": "07137bf9b70fa9e0eca59fff400f88793f4154988d57b0d6d884aee83d06bbbf",
+          "protocol_error": false,
+          "tool_error": false
+        }
+      ]
+    },
+    {
+      "record": {
+        "schema_version": 2,
+        "run_id": "repair-diagnostic-2",
+        "task_id": "repair-diagnostic",
+        "arm": "trace-on",
+        "outcome": "success",
+        "attempted": 1,
+        "completed": 1,
+        "passed": 1,
+        "failed": 0,
+        "skipped": 0,
+        "wall_ns": 326835268,
+        "cpu_ns": null,
+        "peak_rss_bytes": null,
+        "resource_scope": "worker process tree",
+        "resource_reason": {
+          "cpu_ns": "portable process-tree CPU measurement unavailable",
+          "peak_rss_bytes": "portable process-tree peak RSS measurement unavailable"
+        }
+      },
+      "exchanges": [
+        {
+          "id": 0,
+          "sent_ns": 5157437,
+          "received_ns": 142298024,
+          "round_trip_ns": 137140587
+        },
+        {
+          "id": 1,
+          "sent_ns": 142727537,
+          "received_ns": 187944899,
+          "round_trip_ns": 45217362
+        },
+        {
+          "id": 2,
+          "sent_ns": 188362814,
+          "received_ns": 223445515,
+          "round_trip_ns": 35082701
+        },
+        {
+          "id": 3,
+          "sent_ns": 225162063,
+          "received_ns": 292718029,
+          "round_trip_ns": 67555966
+        }
+      ],
+      "resources": [
+        {
+          "scope": "private cgroup: supervisor, namespace init, worker and descendants; excludes collector",
+          "cpu_ns": 184142000,
+          "peak_memory_charge_bytes": 40751104,
+          "reason": {
+            "cpu_ns": null,
+            "peak_memory_charge_bytes": null
+          },
+          "observed_member_counts": [
+            3,
+            3,
+            3,
+            3
+          ]
+        }
+      ],
+      "responses": [
+        {
+          "id": 0,
+          "sha256": "b5069d6cb2aef9ce0f66d53247268fcb8d3eada3fa3562ccc788eedab7ea1ad1",
+          "protocol_error": false,
+          "tool_error": false
+        },
+        {
+          "id": 1,
+          "sha256": "76b43e3398bea1bb2fbc09ba7c956c70b6b969c57c837c87b327109f1ad6540d",
+          "protocol_error": false,
+          "tool_error": true
+        },
+        {
+          "id": 2,
+          "sha256": "c2a999eb4661c26a5a04fb103a1ba28402cc344861bab5ffbf3bebc356e46524",
+          "protocol_error": false,
+          "tool_error": true
+        },
+        {
+          "id": 3,
+          "sha256": "07137bf9b70fa9e0eca59fff400f88793f4154988d57b0d6d884aee83d06bbbf",
+          "protocol_error": false,
+          "tool_error": false
+        }
+      ]
+    },
+    {
+      "record": {
+        "schema_version": 2,
+        "run_id": "repair-diagnostic-3",
+        "task_id": "repair-diagnostic",
+        "arm": "trace-on",
+        "outcome": "success",
+        "attempted": 1,
+        "completed": 1,
+        "passed": 1,
+        "failed": 0,
+        "skipped": 0,
+        "wall_ns": 337893236,
+        "cpu_ns": null,
+        "peak_rss_bytes": null,
+        "resource_scope": "worker process tree",
+        "resource_reason": {
+          "cpu_ns": "portable process-tree CPU measurement unavailable",
+          "peak_rss_bytes": "portable process-tree peak RSS measurement unavailable"
+        }
+      },
+      "exchanges": [
+        {
+          "id": 0,
+          "sent_ns": 4756390,
+          "received_ns": 181844516,
+          "round_trip_ns": 177088126
+        },
+        {
+          "id": 1,
+          "sent_ns": 182305148,
+          "received_ns": 237194388,
+          "round_trip_ns": 54889240
+        },
+        {
+          "id": 2,
+          "sent_ns": 242124457,
+          "received_ns": 274365809,
+          "round_trip_ns": 32241352
+        },
+        {
+          "id": 3,
+          "sent_ns": 274829896,
+          "received_ns": 321048427,
+          "round_trip_ns": 46218531
+        }
+      ],
+      "resources": [
+        {
+          "scope": "private cgroup: supervisor, namespace init, worker and descendants; excludes collector",
+          "cpu_ns": 175216000,
+          "peak_memory_charge_bytes": 41017344,
+          "reason": {
+            "cpu_ns": null,
+            "peak_memory_charge_bytes": null
+          },
+          "observed_member_counts": [
+            3,
+            3,
+            3,
+            3
+          ]
+        }
+      ],
+      "responses": [
+        {
+          "id": 0,
+          "sha256": "b5069d6cb2aef9ce0f66d53247268fcb8d3eada3fa3562ccc788eedab7ea1ad1",
+          "protocol_error": false,
+          "tool_error": false
+        },
+        {
+          "id": 1,
+          "sha256": "76b43e3398bea1bb2fbc09ba7c956c70b6b969c57c837c87b327109f1ad6540d",
+          "protocol_error": false,
+          "tool_error": true
+        },
+        {
+          "id": 2,
+          "sha256": "c2a999eb4661c26a5a04fb103a1ba28402cc344861bab5ffbf3bebc356e46524",
+          "protocol_error": false,
+          "tool_error": true
+        },
+        {
+          "id": 3,
+          "sha256": "07137bf9b70fa9e0eca59fff400f88793f4154988d57b0d6d884aee83d06bbbf",
+          "protocol_error": false,
+          "tool_error": false
+        }
+      ]
+    },
+    {
+      "record": {
+        "schema_version": 2,
+        "run_id": "repair-diagnostic-3",
+        "task_id": "repair-diagnostic",
+        "arm": "trace-off",
+        "outcome": "success",
+        "attempted": 1,
+        "completed": 1,
+        "passed": 1,
+        "failed": 0,
+        "skipped": 0,
+        "wall_ns": 312361412,
+        "cpu_ns": null,
+        "peak_rss_bytes": null,
+        "resource_scope": "worker process tree",
+        "resource_reason": {
+          "cpu_ns": "portable process-tree CPU measurement unavailable",
+          "peak_rss_bytes": "portable process-tree peak RSS measurement unavailable"
+        }
+      },
+      "exchanges": [
+        {
+          "id": 0,
+          "sent_ns": 3807343,
+          "received_ns": 170874407,
+          "round_trip_ns": 167067064
+        },
+        {
+          "id": 1,
+          "sent_ns": 171362492,
+          "received_ns": 229775779,
+          "round_trip_ns": 58413287
+        },
+        {
+          "id": 2,
+          "sent_ns": 230202118,
+          "received_ns": 263076990,
+          "round_trip_ns": 32874872
+        },
+        {
+          "id": 3,
+          "sent_ns": 263476266,
+          "received_ns": 295151961,
+          "round_trip_ns": 31675695
+        }
+      ],
+      "resources": [
+        {
+          "scope": "private cgroup: supervisor, namespace init, worker and descendants; excludes collector",
+          "cpu_ns": 165083000,
+          "peak_memory_charge_bytes": 42307584,
+          "reason": {
+            "cpu_ns": null,
+            "peak_memory_charge_bytes": null
+          },
+          "observed_member_counts": [
+            3,
+            3,
+            3,
+            3
+          ]
+        }
+      ],
+      "responses": [
+        {
+          "id": 0,
+          "sha256": "b5069d6cb2aef9ce0f66d53247268fcb8d3eada3fa3562ccc788eedab7ea1ad1",
+          "protocol_error": false,
+          "tool_error": false
+        },
+        {
+          "id": 1,
+          "sha256": "76b43e3398bea1bb2fbc09ba7c956c70b6b969c57c837c87b327109f1ad6540d",
+          "protocol_error": false,
+          "tool_error": true
+        },
+        {
+          "id": 2,
+          "sha256": "c2a999eb4661c26a5a04fb103a1ba28402cc344861bab5ffbf3bebc356e46524",
+          "protocol_error": false,
+          "tool_error": true
+        },
+        {
+          "id": 3,
+          "sha256": "07137bf9b70fa9e0eca59fff400f88793f4154988d57b0d6d884aee83d06bbbf",
+          "protocol_error": false,
+          "tool_error": false
+        }
+      ]
+    },
+    {
+      "record": {
+        "schema_version": 2,
+        "run_id": "repair-diagnostic-4",
+        "task_id": "repair-diagnostic",
+        "arm": "trace-off",
+        "outcome": "success",
+        "attempted": 1,
+        "completed": 1,
+        "passed": 1,
+        "failed": 0,
+        "skipped": 0,
+        "wall_ns": 338900072,
+        "cpu_ns": null,
+        "peak_rss_bytes": null,
+        "resource_scope": "worker process tree",
+        "resource_reason": {
+          "cpu_ns": "portable process-tree CPU measurement unavailable",
+          "peak_rss_bytes": "portable process-tree peak RSS measurement unavailable"
+        }
+      },
+      "exchanges": [
+        {
+          "id": 0,
+          "sent_ns": 8490107,
+          "received_ns": 167685453,
+          "round_trip_ns": 159195346
+        },
+        {
+          "id": 1,
+          "sent_ns": 168205577,
+          "received_ns": 214666106,
+          "round_trip_ns": 46460529
+        },
+        {
+          "id": 2,
+          "sent_ns": 215146128,
+          "received_ns": 251713314,
+          "round_trip_ns": 36567186
+        },
+        {
+          "id": 3,
+          "sent_ns": 252116676,
+          "received_ns": 304810978,
+          "round_trip_ns": 52694302
+        }
+      ],
+      "resources": [
+        {
+          "scope": "private cgroup: supervisor, namespace init, worker and descendants; excludes collector",
+          "cpu_ns": 177930000,
+          "peak_memory_charge_bytes": 40747008,
+          "reason": {
+            "cpu_ns": null,
+            "peak_memory_charge_bytes": null
+          },
+          "observed_member_counts": [
+            3,
+            3,
+            3,
+            3
+          ]
+        }
+      ],
+      "responses": [
+        {
+          "id": 0,
+          "sha256": "b5069d6cb2aef9ce0f66d53247268fcb8d3eada3fa3562ccc788eedab7ea1ad1",
+          "protocol_error": false,
+          "tool_error": false
+        },
+        {
+          "id": 1,
+          "sha256": "76b43e3398bea1bb2fbc09ba7c956c70b6b969c57c837c87b327109f1ad6540d",
+          "protocol_error": false,
+          "tool_error": true
+        },
+        {
+          "id": 2,
+          "sha256": "c2a999eb4661c26a5a04fb103a1ba28402cc344861bab5ffbf3bebc356e46524",
+          "protocol_error": false,
+          "tool_error": true
+        },
+        {
+          "id": 3,
+          "sha256": "07137bf9b70fa9e0eca59fff400f88793f4154988d57b0d6d884aee83d06bbbf",
+          "protocol_error": false,
+          "tool_error": false
+        }
+      ]
+    },
+    {
+      "record": {
+        "schema_version": 2,
+        "run_id": "repair-diagnostic-4",
+        "task_id": "repair-diagnostic",
+        "arm": "trace-on",
+        "outcome": "success",
+        "attempted": 1,
+        "completed": 1,
+        "passed": 1,
+        "failed": 0,
+        "skipped": 0,
+        "wall_ns": 306130393,
+        "cpu_ns": null,
+        "peak_rss_bytes": null,
+        "resource_scope": "worker process tree",
+        "resource_reason": {
+          "cpu_ns": "portable process-tree CPU measurement unavailable",
+          "peak_rss_bytes": "portable process-tree peak RSS measurement unavailable"
+        }
+      },
+      "exchanges": [
+        {
+          "id": 0,
+          "sent_ns": 2162055,
+          "received_ns": 152187031,
+          "round_trip_ns": 150024976
+        },
+        {
+          "id": 1,
+          "sent_ns": 152614170,
+          "received_ns": 202606460,
+          "round_trip_ns": 49992290
+        },
+        {
+          "id": 2,
+          "sent_ns": 203493340,
+          "received_ns": 236173828,
+          "round_trip_ns": 32680488
+        },
+        {
+          "id": 3,
+          "sent_ns": 236810015,
+          "received_ns": 272833489,
+          "round_trip_ns": 36023474
+        }
+      ],
+      "resources": [
+        {
+          "scope": "private cgroup: supervisor, namespace init, worker and descendants; excludes collector",
+          "cpu_ns": 164789000,
+          "peak_memory_charge_bytes": 40927232,
+          "reason": {
+            "cpu_ns": null,
+            "peak_memory_charge_bytes": null
+          },
+          "observed_member_counts": [
+            3,
+            3,
+            3,
+            3
+          ]
+        }
+      ],
+      "responses": [
+        {
+          "id": 0,
+          "sha256": "b5069d6cb2aef9ce0f66d53247268fcb8d3eada3fa3562ccc788eedab7ea1ad1",
+          "protocol_error": false,
+          "tool_error": false
+        },
+        {
+          "id": 1,
+          "sha256": "76b43e3398bea1bb2fbc09ba7c956c70b6b969c57c837c87b327109f1ad6540d",
+          "protocol_error": false,
+          "tool_error": true
+        },
+        {
+          "id": 2,
+          "sha256": "c2a999eb4661c26a5a04fb103a1ba28402cc344861bab5ffbf3bebc356e46524",
+          "protocol_error": false,
+          "tool_error": true
+        },
+        {
+          "id": 3,
+          "sha256": "07137bf9b70fa9e0eca59fff400f88793f4154988d57b0d6d884aee83d06bbbf",
+          "protocol_error": false,
+          "tool_error": false
+        }
+      ]
+    },
+    {
+      "record": {
+        "schema_version": 2,
+        "run_id": "changed-source-0",
+        "task_id": "changed-source",
+        "arm": "trace-off",
+        "outcome": "success",
+        "attempted": 1,
+        "completed": 1,
+        "passed": 1,
+        "failed": 0,
+        "skipped": 0,
+        "wall_ns": 298828728,
+        "cpu_ns": null,
+        "peak_rss_bytes": null,
+        "resource_scope": "worker process tree",
+        "resource_reason": {
+          "cpu_ns": "portable process-tree CPU measurement unavailable",
+          "peak_rss_bytes": "portable process-tree peak RSS measurement unavailable"
+        }
+      },
+      "exchanges": [
+        {
+          "id": 0,
+          "sent_ns": 7920083,
+          "received_ns": 188495171,
+          "round_trip_ns": 180575088
+        },
+        {
+          "id": 1,
+          "sent_ns": 189046615,
+          "received_ns": 239837155,
+          "round_trip_ns": 50790540
+        },
+        {
+          "id": 2,
+          "sent_ns": 240483107,
+          "received_ns": 279886814,
+          "round_trip_ns": 39403707
+        }
+      ],
+      "resources": [
+        {
+          "scope": "private cgroup: supervisor, namespace init, worker and descendants; excludes collector",
+          "cpu_ns": 144867000,
+          "peak_memory_charge_bytes": 41385984,
+          "reason": {
+            "cpu_ns": null,
+            "peak_memory_charge_bytes": null
+          },
+          "observed_member_counts": [
+            3,
+            3,
+            3
+          ]
+        }
+      ],
+      "responses": [
+        {
+          "id": 0,
+          "sha256": "b5069d6cb2aef9ce0f66d53247268fcb8d3eada3fa3562ccc788eedab7ea1ad1",
+          "protocol_error": false,
+          "tool_error": false
+        },
+        {
+          "id": 1,
+          "sha256": "76b43e3398bea1bb2fbc09ba7c956c70b6b969c57c837c87b327109f1ad6540d",
+          "protocol_error": false,
+          "tool_error": true
+        },
+        {
+          "id": 2,
+          "sha256": "bd826989a8993a328899a5aeba7c62433ea4f46e1d6a3391a12e270e406a0980",
+          "protocol_error": false,
+          "tool_error": false
+        }
+      ]
+    },
+    {
+      "record": {
+        "schema_version": 2,
+        "run_id": "changed-source-0",
+        "task_id": "changed-source",
+        "arm": "trace-on",
+        "outcome": "success",
+        "attempted": 1,
+        "completed": 1,
+        "passed": 1,
+        "failed": 0,
+        "skipped": 0,
+        "wall_ns": 328260290,
+        "cpu_ns": null,
+        "peak_rss_bytes": null,
+        "resource_scope": "worker process tree",
+        "resource_reason": {
+          "cpu_ns": "portable process-tree CPU measurement unavailable",
+          "peak_rss_bytes": "portable process-tree peak RSS measurement unavailable"
+        }
+      },
+      "exchanges": [
+        {
+          "id": 0,
+          "sent_ns": 3873075,
+          "received_ns": 181746003,
+          "round_trip_ns": 177872928
+        },
+        {
+          "id": 1,
+          "sent_ns": 182239375,
+          "received_ns": 241896970,
+          "round_trip_ns": 59657595
+        },
+        {
+          "id": 2,
+          "sent_ns": 242491613,
+          "received_ns": 290941847,
+          "round_trip_ns": 48450234
+        }
+      ],
+      "resources": [
+        {
+          "scope": "private cgroup: supervisor, namespace init, worker and descendants; excludes collector",
+          "cpu_ns": 167586000,
+          "peak_memory_charge_bytes": 41029632,
+          "reason": {
+            "cpu_ns": null,
+            "peak_memory_charge_bytes": null
+          },
+          "observed_member_counts": [
+            3,
+            3,
+            3
+          ]
+        }
+      ],
+      "responses": [
+        {
+          "id": 0,
+          "sha256": "b5069d6cb2aef9ce0f66d53247268fcb8d3eada3fa3562ccc788eedab7ea1ad1",
+          "protocol_error": false,
+          "tool_error": false
+        },
+        {
+          "id": 1,
+          "sha256": "76b43e3398bea1bb2fbc09ba7c956c70b6b969c57c837c87b327109f1ad6540d",
+          "protocol_error": false,
+          "tool_error": true
+        },
+        {
+          "id": 2,
+          "sha256": "bd826989a8993a328899a5aeba7c62433ea4f46e1d6a3391a12e270e406a0980",
+          "protocol_error": false,
+          "tool_error": false
+        }
+      ]
+    },
+    {
+      "record": {
+        "schema_version": 2,
+        "run_id": "changed-source-1",
+        "task_id": "changed-source",
+        "arm": "trace-on",
+        "outcome": "success",
+        "attempted": 1,
+        "completed": 1,
+        "passed": 1,
+        "failed": 0,
+        "skipped": 0,
+        "wall_ns": 284289699,
+        "cpu_ns": null,
+        "peak_rss_bytes": null,
+        "resource_scope": "worker process tree",
+        "resource_reason": {
+          "cpu_ns": "portable process-tree CPU measurement unavailable",
+          "peak_rss_bytes": "portable process-tree peak RSS measurement unavailable"
+        }
+      },
+      "exchanges": [
+        {
+          "id": 0,
+          "sent_ns": 1667171,
+          "received_ns": 141703603,
+          "round_trip_ns": 140036432
+        },
+        {
+          "id": 1,
+          "sent_ns": 142244841,
+          "received_ns": 194603006,
+          "round_trip_ns": 52358165
+        },
+        {
+          "id": 2,
+          "sent_ns": 196004511,
+          "received_ns": 250726067,
+          "round_trip_ns": 54721556
+        }
+      ],
+      "resources": [
+        {
+          "scope": "private cgroup: supervisor, namespace init, worker and descendants; excludes collector",
+          "cpu_ns": 143297000,
+          "peak_memory_charge_bytes": 41000960,
+          "reason": {
+            "cpu_ns": null,
+            "peak_memory_charge_bytes": null
+          },
+          "observed_member_counts": [
+            3,
+            3,
+            3
+          ]
+        }
+      ],
+      "responses": [
+        {
+          "id": 0,
+          "sha256": "b5069d6cb2aef9ce0f66d53247268fcb8d3eada3fa3562ccc788eedab7ea1ad1",
+          "protocol_error": false,
+          "tool_error": false
+        },
+        {
+          "id": 1,
+          "sha256": "76b43e3398bea1bb2fbc09ba7c956c70b6b969c57c837c87b327109f1ad6540d",
+          "protocol_error": false,
+          "tool_error": true
+        },
+        {
+          "id": 2,
+          "sha256": "bd826989a8993a328899a5aeba7c62433ea4f46e1d6a3391a12e270e406a0980",
+          "protocol_error": false,
+          "tool_error": false
+        }
+      ]
+    },
+    {
+      "record": {
+        "schema_version": 2,
+        "run_id": "changed-source-1",
+        "task_id": "changed-source",
+        "arm": "trace-off",
+        "outcome": "success",
+        "attempted": 1,
+        "completed": 1,
+        "passed": 1,
+        "failed": 0,
+        "skipped": 0,
+        "wall_ns": 323108522,
+        "cpu_ns": null,
+        "peak_rss_bytes": null,
+        "resource_scope": "worker process tree",
+        "resource_reason": {
+          "cpu_ns": "portable process-tree CPU measurement unavailable",
+          "peak_rss_bytes": "portable process-tree peak RSS measurement unavailable"
+        }
+      },
+      "exchanges": [
+        {
+          "id": 0,
+          "sent_ns": 5019120,
+          "received_ns": 178077155,
+          "round_trip_ns": 173058035
+        },
+        {
+          "id": 1,
+          "sent_ns": 178532629,
+          "received_ns": 222551164,
+          "round_trip_ns": 44018535
+        },
+        {
+          "id": 2,
+          "sent_ns": 225119816,
+          "received_ns": 287604050,
+          "round_trip_ns": 62484234
+        }
+      ],
+      "resources": [
+        {
+          "scope": "private cgroup: supervisor, namespace init, worker and descendants; excludes collector",
+          "cpu_ns": 151504000,
+          "peak_memory_charge_bytes": 40927232,
+          "reason": {
+            "cpu_ns": null,
+            "peak_memory_charge_bytes": null
+          },
+          "observed_member_counts": [
+            3,
+            3,
+            3
+          ]
+        }
+      ],
+      "responses": [
+        {
+          "id": 0,
+          "sha256": "b5069d6cb2aef9ce0f66d53247268fcb8d3eada3fa3562ccc788eedab7ea1ad1",
+          "protocol_error": false,
+          "tool_error": false
+        },
+        {
+          "id": 1,
+          "sha256": "76b43e3398bea1bb2fbc09ba7c956c70b6b969c57c837c87b327109f1ad6540d",
+          "protocol_error": false,
+          "tool_error": true
+        },
+        {
+          "id": 2,
+          "sha256": "bd826989a8993a328899a5aeba7c62433ea4f46e1d6a3391a12e270e406a0980",
+          "protocol_error": false,
+          "tool_error": false
+        }
+      ]
+    },
+    {
+      "record": {
+        "schema_version": 2,
+        "run_id": "changed-source-2",
+        "task_id": "changed-source",
+        "arm": "trace-off",
+        "outcome": "success",
+        "attempted": 1,
+        "completed": 1,
+        "passed": 1,
+        "failed": 0,
+        "skipped": 0,
+        "wall_ns": 317130320,
+        "cpu_ns": null,
+        "peak_rss_bytes": null,
+        "resource_scope": "worker process tree",
+        "resource_reason": {
+          "cpu_ns": "portable process-tree CPU measurement unavailable",
+          "peak_rss_bytes": "portable process-tree peak RSS measurement unavailable"
+        }
+      },
+      "exchanges": [
+        {
+          "id": 0,
+          "sent_ns": 7047196,
+          "received_ns": 185944047,
+          "round_trip_ns": 178896851
+        },
+        {
+          "id": 1,
+          "sent_ns": 186340617,
+          "received_ns": 234834520,
+          "round_trip_ns": 48493903
+        },
+        {
+          "id": 2,
+          "sent_ns": 239353187,
+          "received_ns": 283937298,
+          "round_trip_ns": 44584111
+        }
+      ],
+      "resources": [
+        {
+          "scope": "private cgroup: supervisor, namespace init, worker and descendants; excludes collector",
+          "cpu_ns": 135007000,
+          "peak_memory_charge_bytes": 40079360,
+          "reason": {
+            "cpu_ns": null,
+            "peak_memory_charge_bytes": null
+          },
+          "observed_member_counts": [
+            3,
+            3,
+            3
+          ]
+        }
+      ],
+      "responses": [
+        {
+          "id": 0,
+          "sha256": "b5069d6cb2aef9ce0f66d53247268fcb8d3eada3fa3562ccc788eedab7ea1ad1",
+          "protocol_error": false,
+          "tool_error": false
+        },
+        {
+          "id": 1,
+          "sha256": "76b43e3398bea1bb2fbc09ba7c956c70b6b969c57c837c87b327109f1ad6540d",
+          "protocol_error": false,
+          "tool_error": true
+        },
+        {
+          "id": 2,
+          "sha256": "bd826989a8993a328899a5aeba7c62433ea4f46e1d6a3391a12e270e406a0980",
+          "protocol_error": false,
+          "tool_error": false
+        }
+      ]
+    },
+    {
+      "record": {
+        "schema_version": 2,
+        "run_id": "changed-source-2",
+        "task_id": "changed-source",
+        "arm": "trace-on",
+        "outcome": "success",
+        "attempted": 1,
+        "completed": 1,
+        "passed": 1,
+        "failed": 0,
+        "skipped": 0,
+        "wall_ns": 319368904,
+        "cpu_ns": null,
+        "peak_rss_bytes": null,
+        "resource_scope": "worker process tree",
+        "resource_reason": {
+          "cpu_ns": "portable process-tree CPU measurement unavailable",
+          "peak_rss_bytes": "portable process-tree peak RSS measurement unavailable"
+        }
+      },
+      "exchanges": [
+        {
+          "id": 0,
+          "sent_ns": 1657485,
+          "received_ns": 197590646,
+          "round_trip_ns": 195933161
+        },
+        {
+          "id": 1,
+          "sent_ns": 198041982,
+          "received_ns": 256622371,
+          "round_trip_ns": 58580389
+        },
+        {
+          "id": 2,
+          "sent_ns": 257203762,
+          "received_ns": 302294736,
+          "round_trip_ns": 45090974
+        }
+      ],
+      "resources": [
+        {
+          "scope": "private cgroup: supervisor, namespace init, worker and descendants; excludes collector",
+          "cpu_ns": 144000000,
+          "peak_memory_charge_bytes": 41082880,
+          "reason": {
+            "cpu_ns": null,
+            "peak_memory_charge_bytes": null
+          },
+          "observed_member_counts": [
+            3,
+            3,
+            3
+          ]
+        }
+      ],
+      "responses": [
+        {
+          "id": 0,
+          "sha256": "b5069d6cb2aef9ce0f66d53247268fcb8d3eada3fa3562ccc788eedab7ea1ad1",
+          "protocol_error": false,
+          "tool_error": false
+        },
+        {
+          "id": 1,
+          "sha256": "76b43e3398bea1bb2fbc09ba7c956c70b6b969c57c837c87b327109f1ad6540d",
+          "protocol_error": false,
+          "tool_error": true
+        },
+        {
+          "id": 2,
+          "sha256": "bd826989a8993a328899a5aeba7c62433ea4f46e1d6a3391a12e270e406a0980",
+          "protocol_error": false,
+          "tool_error": false
+        }
+      ]
+    },
+    {
+      "record": {
+        "schema_version": 2,
+        "run_id": "changed-source-3",
+        "task_id": "changed-source",
+        "arm": "trace-on",
+        "outcome": "success",
+        "attempted": 1,
+        "completed": 1,
+        "passed": 1,
+        "failed": 0,
+        "skipped": 0,
+        "wall_ns": 327804325,
+        "cpu_ns": null,
+        "peak_rss_bytes": null,
+        "resource_scope": "worker process tree",
+        "resource_reason": {
+          "cpu_ns": "portable process-tree CPU measurement unavailable",
+          "peak_rss_bytes": "portable process-tree peak RSS measurement unavailable"
+        }
+      },
+      "exchanges": [
+        {
+          "id": 0,
+          "sent_ns": 6330483,
+          "received_ns": 194092848,
+          "round_trip_ns": 187762365
+        },
+        {
+          "id": 1,
+          "sent_ns": 194622737,
+          "received_ns": 250285087,
+          "round_trip_ns": 55662350
+        },
+        {
+          "id": 2,
+          "sent_ns": 250870023,
+          "received_ns": 294245291,
+          "round_trip_ns": 43375268
+        }
+      ],
+      "resources": [
+        {
+          "scope": "private cgroup: supervisor, namespace init, worker and descendants; excludes collector",
+          "cpu_ns": 146771000,
+          "peak_memory_charge_bytes": 41140224,
+          "reason": {
+            "cpu_ns": null,
+            "peak_memory_charge_bytes": null
+          },
+          "observed_member_counts": [
+            3,
+            3,
+            3
+          ]
+        }
+      ],
+      "responses": [
+        {
+          "id": 0,
+          "sha256": "b5069d6cb2aef9ce0f66d53247268fcb8d3eada3fa3562ccc788eedab7ea1ad1",
+          "protocol_error": false,
+          "tool_error": false
+        },
+        {
+          "id": 1,
+          "sha256": "76b43e3398bea1bb2fbc09ba7c956c70b6b969c57c837c87b327109f1ad6540d",
+          "protocol_error": false,
+          "tool_error": true
+        },
+        {
+          "id": 2,
+          "sha256": "bd826989a8993a328899a5aeba7c62433ea4f46e1d6a3391a12e270e406a0980",
+          "protocol_error": false,
+          "tool_error": false
+        }
+      ]
+    },
+    {
+      "record": {
+        "schema_version": 2,
+        "run_id": "changed-source-3",
+        "task_id": "changed-source",
+        "arm": "trace-off",
+        "outcome": "success",
+        "attempted": 1,
+        "completed": 1,
+        "passed": 1,
+        "failed": 0,
+        "skipped": 0,
+        "wall_ns": 266959160,
+        "cpu_ns": null,
+        "peak_rss_bytes": null,
+        "resource_scope": "worker process tree",
+        "resource_reason": {
+          "cpu_ns": "portable process-tree CPU measurement unavailable",
+          "peak_rss_bytes": "portable process-tree peak RSS measurement unavailable"
+        }
+      },
+      "exchanges": [
+        {
+          "id": 0,
+          "sent_ns": 10211102,
+          "received_ns": 169449516,
+          "round_trip_ns": 159238414
+        },
+        {
+          "id": 1,
+          "sent_ns": 169915676,
+          "received_ns": 215790268,
+          "round_trip_ns": 45874592
+        },
+        {
+          "id": 2,
+          "sent_ns": 216362674,
+          "received_ns": 250182918,
+          "round_trip_ns": 33820244
+        }
+      ],
+      "resources": [
+        {
+          "scope": "private cgroup: supervisor, namespace init, worker and descendants; excludes collector",
+          "cpu_ns": 132249000,
+          "peak_memory_charge_bytes": 41431040,
+          "reason": {
+            "cpu_ns": null,
+            "peak_memory_charge_bytes": null
+          },
+          "observed_member_counts": [
+            3,
+            3,
+            3
+          ]
+        }
+      ],
+      "responses": [
+        {
+          "id": 0,
+          "sha256": "b5069d6cb2aef9ce0f66d53247268fcb8d3eada3fa3562ccc788eedab7ea1ad1",
+          "protocol_error": false,
+          "tool_error": false
+        },
+        {
+          "id": 1,
+          "sha256": "76b43e3398bea1bb2fbc09ba7c956c70b6b969c57c837c87b327109f1ad6540d",
+          "protocol_error": false,
+          "tool_error": true
+        },
+        {
+          "id": 2,
+          "sha256": "bd826989a8993a328899a5aeba7c62433ea4f46e1d6a3391a12e270e406a0980",
+          "protocol_error": false,
+          "tool_error": false
+        }
+      ]
+    },
+    {
+      "record": {
+        "schema_version": 2,
+        "run_id": "changed-source-4",
+        "task_id": "changed-source",
+        "arm": "trace-off",
+        "outcome": "success",
+        "attempted": 1,
+        "completed": 1,
+        "passed": 1,
+        "failed": 0,
+        "skipped": 0,
+        "wall_ns": 305931731,
+        "cpu_ns": null,
+        "peak_rss_bytes": null,
+        "resource_scope": "worker process tree",
+        "resource_reason": {
+          "cpu_ns": "portable process-tree CPU measurement unavailable",
+          "peak_rss_bytes": "portable process-tree peak RSS measurement unavailable"
+        }
+      },
+      "exchanges": [
+        {
+          "id": 0,
+          "sent_ns": 7086497,
+          "received_ns": 187153179,
+          "round_trip_ns": 180066682
+        },
+        {
+          "id": 1,
+          "sent_ns": 188555615,
+          "received_ns": 235355837,
+          "round_trip_ns": 46800222
+        },
+        {
+          "id": 2,
+          "sent_ns": 236039708,
+          "received_ns": 283604756,
+          "round_trip_ns": 47565048
+        }
+      ],
+      "resources": [
+        {
+          "scope": "private cgroup: supervisor, namespace init, worker and descendants; excludes collector",
+          "cpu_ns": 143261000,
+          "peak_memory_charge_bytes": 40206336,
+          "reason": {
+            "cpu_ns": null,
+            "peak_memory_charge_bytes": null
+          },
+          "observed_member_counts": [
+            3,
+            3,
+            3
+          ]
+        }
+      ],
+      "responses": [
+        {
+          "id": 0,
+          "sha256": "b5069d6cb2aef9ce0f66d53247268fcb8d3eada3fa3562ccc788eedab7ea1ad1",
+          "protocol_error": false,
+          "tool_error": false
+        },
+        {
+          "id": 1,
+          "sha256": "76b43e3398bea1bb2fbc09ba7c956c70b6b969c57c837c87b327109f1ad6540d",
+          "protocol_error": false,
+          "tool_error": true
+        },
+        {
+          "id": 2,
+          "sha256": "bd826989a8993a328899a5aeba7c62433ea4f46e1d6a3391a12e270e406a0980",
+          "protocol_error": false,
+          "tool_error": false
+        }
+      ]
+    },
+    {
+      "record": {
+        "schema_version": 2,
+        "run_id": "changed-source-4",
+        "task_id": "changed-source",
+        "arm": "trace-on",
+        "outcome": "success",
+        "attempted": 1,
+        "completed": 1,
+        "passed": 1,
+        "failed": 0,
+        "skipped": 0,
+        "wall_ns": 307753586,
+        "cpu_ns": null,
+        "peak_rss_bytes": null,
+        "resource_scope": "worker process tree",
+        "resource_reason": {
+          "cpu_ns": "portable process-tree CPU measurement unavailable",
+          "peak_rss_bytes": "portable process-tree peak RSS measurement unavailable"
+        }
+      },
+      "exchanges": [
+        {
+          "id": 0,
+          "sent_ns": 13106986,
+          "received_ns": 174446851,
+          "round_trip_ns": 161339865
+        },
+        {
+          "id": 1,
+          "sent_ns": 174983242,
+          "received_ns": 230610457,
+          "round_trip_ns": 55627215
+        },
+        {
+          "id": 2,
+          "sent_ns": 231280686,
+          "received_ns": 287185996,
+          "round_trip_ns": 55905310
+        }
+      ],
+      "resources": [
+        {
+          "scope": "private cgroup: supervisor, namespace init, worker and descendants; excludes collector",
+          "cpu_ns": 138723000,
+          "peak_memory_charge_bytes": 41029632,
+          "reason": {
+            "cpu_ns": null,
+            "peak_memory_charge_bytes": null
+          },
+          "observed_member_counts": [
+            3,
+            3,
+            3
+          ]
+        }
+      ],
+      "responses": [
+        {
+          "id": 0,
+          "sha256": "b5069d6cb2aef9ce0f66d53247268fcb8d3eada3fa3562ccc788eedab7ea1ad1",
+          "protocol_error": false,
+          "tool_error": false
+        },
+        {
+          "id": 1,
+          "sha256": "76b43e3398bea1bb2fbc09ba7c956c70b6b969c57c837c87b327109f1ad6540d",
+          "protocol_error": false,
+          "tool_error": true
+        },
+        {
+          "id": 2,
+          "sha256": "bd826989a8993a328899a5aeba7c62433ea4f46e1d6a3391a12e270e406a0980",
+          "protocol_error": false,
+          "tool_error": false
+        }
+      ]
+    },
+    {
+      "record": {
+        "schema_version": 2,
+        "run_id": "dispatch-0",
+        "task_id": "dispatch",
+        "arm": "trace-off",
+        "outcome": "success",
+        "attempted": 1,
+        "completed": 1,
+        "passed": 1,
+        "failed": 0,
+        "skipped": 0,
+        "wall_ns": 317811778,
+        "cpu_ns": null,
+        "peak_rss_bytes": null,
+        "resource_scope": "worker process tree",
+        "resource_reason": {
+          "cpu_ns": "portable process-tree CPU measurement unavailable",
+          "peak_rss_bytes": "portable process-tree peak RSS measurement unavailable"
+        }
+      },
+      "exchanges": [
+        {
+          "id": 0,
+          "sent_ns": 5685344,
+          "received_ns": 196982764,
+          "round_trip_ns": 191297420
+        },
+        {
+          "id": 1,
+          "sent_ns": 197466932,
+          "received_ns": 251419374,
+          "round_trip_ns": 53952442
+        },
+        {
+          "id": 2,
+          "sent_ns": 251883842,
+          "received_ns": 300239288,
+          "round_trip_ns": 48355446
+        }
+      ],
+      "resources": [
+        {
+          "scope": "private cgroup: supervisor, namespace init, worker and descendants; excludes collector",
+          "cpu_ns": 138200000,
+          "peak_memory_charge_bytes": 40210432,
+          "reason": {
+            "cpu_ns": null,
+            "peak_memory_charge_bytes": null
+          },
+          "observed_member_counts": [
+            3,
+            3,
+            3
+          ]
+        }
+      ],
+      "responses": [
+        {
+          "id": 0,
+          "sha256": "b5069d6cb2aef9ce0f66d53247268fcb8d3eada3fa3562ccc788eedab7ea1ad1",
+          "protocol_error": false,
+          "tool_error": false
+        },
+        {
+          "id": 1,
+          "sha256": "6add88011246126a99a0372457d7785ac8a9f76f9a5d2db00e1c7f92251b798c",
+          "protocol_error": false,
+          "tool_error": false
+        },
+        {
+          "id": 2,
+          "sha256": "bd826989a8993a328899a5aeba7c62433ea4f46e1d6a3391a12e270e406a0980",
+          "protocol_error": false,
+          "tool_error": false
+        }
+      ]
+    },
+    {
+      "record": {
+        "schema_version": 2,
+        "run_id": "dispatch-0",
+        "task_id": "dispatch",
+        "arm": "trace-on",
+        "outcome": "success",
+        "attempted": 1,
+        "completed": 1,
+        "passed": 1,
+        "failed": 0,
+        "skipped": 0,
+        "wall_ns": 314750514,
+        "cpu_ns": null,
+        "peak_rss_bytes": null,
+        "resource_scope": "worker process tree",
+        "resource_reason": {
+          "cpu_ns": "portable process-tree CPU measurement unavailable",
+          "peak_rss_bytes": "portable process-tree peak RSS measurement unavailable"
+        }
+      },
+      "exchanges": [
+        {
+          "id": 0,
+          "sent_ns": 11125895,
+          "received_ns": 185799371,
+          "round_trip_ns": 174673476
+        },
+        {
+          "id": 1,
+          "sent_ns": 186318014,
+          "received_ns": 249948882,
+          "round_trip_ns": 63630868
+        },
+        {
+          "id": 2,
+          "sent_ns": 250442805,
+          "received_ns": 297468299,
+          "round_trip_ns": 47025494
+        }
+      ],
+      "resources": [
+        {
+          "scope": "private cgroup: supervisor, namespace init, worker and descendants; excludes collector",
+          "cpu_ns": 159849000,
+          "peak_memory_charge_bytes": 39993344,
+          "reason": {
+            "cpu_ns": null,
+            "peak_memory_charge_bytes": null
+          },
+          "observed_member_counts": [
+            3,
+            3,
+            3
+          ]
+        }
+      ],
+      "responses": [
+        {
+          "id": 0,
+          "sha256": "b5069d6cb2aef9ce0f66d53247268fcb8d3eada3fa3562ccc788eedab7ea1ad1",
+          "protocol_error": false,
+          "tool_error": false
+        },
+        {
+          "id": 1,
+          "sha256": "6add88011246126a99a0372457d7785ac8a9f76f9a5d2db00e1c7f92251b798c",
+          "protocol_error": false,
+          "tool_error": false
+        },
+        {
+          "id": 2,
+          "sha256": "bd826989a8993a328899a5aeba7c62433ea4f46e1d6a3391a12e270e406a0980",
+          "protocol_error": false,
+          "tool_error": false
+        }
+      ]
+    },
+    {
+      "record": {
+        "schema_version": 2,
+        "run_id": "dispatch-1",
+        "task_id": "dispatch",
+        "arm": "trace-on",
+        "outcome": "success",
+        "attempted": 1,
+        "completed": 1,
+        "passed": 1,
+        "failed": 0,
+        "skipped": 0,
+        "wall_ns": 315655340,
+        "cpu_ns": null,
+        "peak_rss_bytes": null,
+        "resource_scope": "worker process tree",
+        "resource_reason": {
+          "cpu_ns": "portable process-tree CPU measurement unavailable",
+          "peak_rss_bytes": "portable process-tree peak RSS measurement unavailable"
+        }
+      },
+      "exchanges": [
+        {
+          "id": 0,
+          "sent_ns": 7645724,
+          "received_ns": 191475049,
+          "round_trip_ns": 183829325
+        },
+        {
+          "id": 1,
+          "sent_ns": 196403166,
+          "received_ns": 248536749,
+          "round_trip_ns": 52133583
+        },
+        {
+          "id": 2,
+          "sent_ns": 248969257,
+          "received_ns": 298756857,
+          "round_trip_ns": 49787600
+        }
+      ],
+      "resources": [
+        {
+          "scope": "private cgroup: supervisor, namespace init, worker and descendants; excludes collector",
+          "cpu_ns": 134338000,
+          "peak_memory_charge_bytes": 39555072,
+          "reason": {
+            "cpu_ns": null,
+            "peak_memory_charge_bytes": null
+          },
+          "observed_member_counts": [
+            3,
+            3,
+            3
+          ]
+        }
+      ],
+      "responses": [
+        {
+          "id": 0,
+          "sha256": "b5069d6cb2aef9ce0f66d53247268fcb8d3eada3fa3562ccc788eedab7ea1ad1",
+          "protocol_error": false,
+          "tool_error": false
+        },
+        {
+          "id": 1,
+          "sha256": "6add88011246126a99a0372457d7785ac8a9f76f9a5d2db00e1c7f92251b798c",
+          "protocol_error": false,
+          "tool_error": false
+        },
+        {
+          "id": 2,
+          "sha256": "bd826989a8993a328899a5aeba7c62433ea4f46e1d6a3391a12e270e406a0980",
+          "protocol_error": false,
+          "tool_error": false
+        }
+      ]
+    },
+    {
+      "record": {
+        "schema_version": 2,
+        "run_id": "dispatch-1",
+        "task_id": "dispatch",
+        "arm": "trace-off",
+        "outcome": "success",
+        "attempted": 1,
+        "completed": 1,
+        "passed": 1,
+        "failed": 0,
+        "skipped": 0,
+        "wall_ns": 285270026,
+        "cpu_ns": null,
+        "peak_rss_bytes": null,
+        "resource_scope": "worker process tree",
+        "resource_reason": {
+          "cpu_ns": "portable process-tree CPU measurement unavailable",
+          "peak_rss_bytes": "portable process-tree peak RSS measurement unavailable"
+        }
+      },
+      "exchanges": [
+        {
+          "id": 0,
+          "sent_ns": 8483105,
+          "received_ns": 160206450,
+          "round_trip_ns": 151723345
+        },
+        {
+          "id": 1,
+          "sent_ns": 160654542,
+          "received_ns": 217771549,
+          "round_trip_ns": 57117007
+        },
+        {
+          "id": 2,
+          "sent_ns": 218234184,
+          "received_ns": 268480512,
+          "round_trip_ns": 50246328
+        }
+      ],
+      "resources": [
+        {
+          "scope": "private cgroup: supervisor, namespace init, worker and descendants; excludes collector",
+          "cpu_ns": 150706000,
+          "peak_memory_charge_bytes": 39780352,
+          "reason": {
+            "cpu_ns": null,
+            "peak_memory_charge_bytes": null
+          },
+          "observed_member_counts": [
+            3,
+            3,
+            3
+          ]
+        }
+      ],
+      "responses": [
+        {
+          "id": 0,
+          "sha256": "b5069d6cb2aef9ce0f66d53247268fcb8d3eada3fa3562ccc788eedab7ea1ad1",
+          "protocol_error": false,
+          "tool_error": false
+        },
+        {
+          "id": 1,
+          "sha256": "6add88011246126a99a0372457d7785ac8a9f76f9a5d2db00e1c7f92251b798c",
+          "protocol_error": false,
+          "tool_error": false
+        },
+        {
+          "id": 2,
+          "sha256": "bd826989a8993a328899a5aeba7c62433ea4f46e1d6a3391a12e270e406a0980",
+          "protocol_error": false,
+          "tool_error": false
+        }
+      ]
+    },
+    {
+      "record": {
+        "schema_version": 2,
+        "run_id": "dispatch-2",
+        "task_id": "dispatch",
+        "arm": "trace-off",
+        "outcome": "success",
+        "attempted": 1,
+        "completed": 1,
+        "passed": 1,
+        "failed": 0,
+        "skipped": 0,
+        "wall_ns": 283918489,
+        "cpu_ns": null,
+        "peak_rss_bytes": null,
+        "resource_scope": "worker process tree",
+        "resource_reason": {
+          "cpu_ns": "portable process-tree CPU measurement unavailable",
+          "peak_rss_bytes": "portable process-tree peak RSS measurement unavailable"
+        }
+      },
+      "exchanges": [
+        {
+          "id": 0,
+          "sent_ns": 2975180,
+          "received_ns": 139703833,
+          "round_trip_ns": 136728653
+        },
+        {
+          "id": 1,
+          "sent_ns": 140145034,
+          "received_ns": 182481444,
+          "round_trip_ns": 42336410
+        },
+        {
+          "id": 2,
+          "sent_ns": 187023968,
+          "received_ns": 247160755,
+          "round_trip_ns": 60136787
+        }
+      ],
+      "resources": [
+        {
+          "scope": "private cgroup: supervisor, namespace init, worker and descendants; excludes collector",
+          "cpu_ns": 141858000,
+          "peak_memory_charge_bytes": 39514112,
+          "reason": {
+            "cpu_ns": null,
+            "peak_memory_charge_bytes": null
+          },
+          "observed_member_counts": [
+            3,
+            3,
+            3
+          ]
+        }
+      ],
+      "responses": [
+        {
+          "id": 0,
+          "sha256": "b5069d6cb2aef9ce0f66d53247268fcb8d3eada3fa3562ccc788eedab7ea1ad1",
+          "protocol_error": false,
+          "tool_error": false
+        },
+        {
+          "id": 1,
+          "sha256": "6add88011246126a99a0372457d7785ac8a9f76f9a5d2db00e1c7f92251b798c",
+          "protocol_error": false,
+          "tool_error": false
+        },
+        {
+          "id": 2,
+          "sha256": "bd826989a8993a328899a5aeba7c62433ea4f46e1d6a3391a12e270e406a0980",
+          "protocol_error": false,
+          "tool_error": false
+        }
+      ]
+    },
+    {
+      "record": {
+        "schema_version": 2,
+        "run_id": "dispatch-2",
+        "task_id": "dispatch",
+        "arm": "trace-on",
+        "outcome": "success",
+        "attempted": 1,
+        "completed": 1,
+        "passed": 1,
+        "failed": 0,
+        "skipped": 0,
+        "wall_ns": 284364818,
+        "cpu_ns": null,
+        "peak_rss_bytes": null,
+        "resource_scope": "worker process tree",
+        "resource_reason": {
+          "cpu_ns": "portable process-tree CPU measurement unavailable",
+          "peak_rss_bytes": "portable process-tree peak RSS measurement unavailable"
+        }
+      },
+      "exchanges": [
+        {
+          "id": 0,
+          "sent_ns": 2897838,
+          "received_ns": 157575130,
+          "round_trip_ns": 154677292
+        },
+        {
+          "id": 1,
+          "sent_ns": 157992152,
+          "received_ns": 195235097,
+          "round_trip_ns": 37242945
+        },
+        {
+          "id": 2,
+          "sent_ns": 195743773,
+          "received_ns": 251250599,
+          "round_trip_ns": 55506826
+        }
+      ],
+      "resources": [
+        {
+          "scope": "private cgroup: supervisor, namespace init, worker and descendants; excludes collector",
+          "cpu_ns": 140723000,
+          "peak_memory_charge_bytes": 39960576,
+          "reason": {
+            "cpu_ns": null,
+            "peak_memory_charge_bytes": null
+          },
+          "observed_member_counts": [
+            3,
+            3,
+            3
+          ]
+        }
+      ],
+      "responses": [
+        {
+          "id": 0,
+          "sha256": "b5069d6cb2aef9ce0f66d53247268fcb8d3eada3fa3562ccc788eedab7ea1ad1",
+          "protocol_error": false,
+          "tool_error": false
+        },
+        {
+          "id": 1,
+          "sha256": "6add88011246126a99a0372457d7785ac8a9f76f9a5d2db00e1c7f92251b798c",
+          "protocol_error": false,
+          "tool_error": false
+        },
+        {
+          "id": 2,
+          "sha256": "bd826989a8993a328899a5aeba7c62433ea4f46e1d6a3391a12e270e406a0980",
+          "protocol_error": false,
+          "tool_error": false
+        }
+      ]
+    },
+    {
+      "record": {
+        "schema_version": 2,
+        "run_id": "dispatch-3",
+        "task_id": "dispatch",
+        "arm": "trace-on",
+        "outcome": "success",
+        "attempted": 1,
+        "completed": 1,
+        "passed": 1,
+        "failed": 0,
+        "skipped": 0,
+        "wall_ns": 287720053,
+        "cpu_ns": null,
+        "peak_rss_bytes": null,
+        "resource_scope": "worker process tree",
+        "resource_reason": {
+          "cpu_ns": "portable process-tree CPU measurement unavailable",
+          "peak_rss_bytes": "portable process-tree peak RSS measurement unavailable"
+        }
+      },
+      "exchanges": [
+        {
+          "id": 0,
+          "sent_ns": 6451965,
+          "received_ns": 158213691,
+          "round_trip_ns": 151761726
+        },
+        {
+          "id": 1,
+          "sent_ns": 158683646,
+          "received_ns": 202700639,
+          "round_trip_ns": 44016993
+        },
+        {
+          "id": 2,
+          "sent_ns": 203137092,
+          "received_ns": 254405882,
+          "round_trip_ns": 51268790
+        }
+      ],
+      "resources": [
+        {
+          "scope": "private cgroup: supervisor, namespace init, worker and descendants; excludes collector",
+          "cpu_ns": 144380000,
+          "peak_memory_charge_bytes": 39952384,
+          "reason": {
+            "cpu_ns": null,
+            "peak_memory_charge_bytes": null
+          },
+          "observed_member_counts": [
+            3,
+            3,
+            3
+          ]
+        }
+      ],
+      "responses": [
+        {
+          "id": 0,
+          "sha256": "b5069d6cb2aef9ce0f66d53247268fcb8d3eada3fa3562ccc788eedab7ea1ad1",
+          "protocol_error": false,
+          "tool_error": false
+        },
+        {
+          "id": 1,
+          "sha256": "6add88011246126a99a0372457d7785ac8a9f76f9a5d2db00e1c7f92251b798c",
+          "protocol_error": false,
+          "tool_error": false
+        },
+        {
+          "id": 2,
+          "sha256": "bd826989a8993a328899a5aeba7c62433ea4f46e1d6a3391a12e270e406a0980",
+          "protocol_error": false,
+          "tool_error": false
+        }
+      ]
+    },
+    {
+      "record": {
+        "schema_version": 2,
+        "run_id": "dispatch-3",
+        "task_id": "dispatch",
+        "arm": "trace-off",
+        "outcome": "success",
+        "attempted": 1,
+        "completed": 1,
+        "passed": 1,
+        "failed": 0,
+        "skipped": 0,
+        "wall_ns": 349118846,
+        "cpu_ns": null,
+        "peak_rss_bytes": null,
+        "resource_scope": "worker process tree",
+        "resource_reason": {
+          "cpu_ns": "portable process-tree CPU measurement unavailable",
+          "peak_rss_bytes": "portable process-tree peak RSS measurement unavailable"
+        }
+      },
+      "exchanges": [
+        {
+          "id": 0,
+          "sent_ns": 6621751,
+          "received_ns": 202343280,
+          "round_trip_ns": 195721529
+        },
+        {
+          "id": 1,
+          "sent_ns": 202795157,
+          "received_ns": 264719283,
+          "round_trip_ns": 61924126
+        },
+        {
+          "id": 2,
+          "sent_ns": 265161956,
+          "received_ns": 315972387,
+          "round_trip_ns": 50810431
+        }
+      ],
+      "resources": [
+        {
+          "scope": "private cgroup: supervisor, namespace init, worker and descendants; excludes collector",
+          "cpu_ns": 145826000,
+          "peak_memory_charge_bytes": 40554496,
+          "reason": {
+            "cpu_ns": null,
+            "peak_memory_charge_bytes": null
+          },
+          "observed_member_counts": [
+            3,
+            3,
+            3
+          ]
+        }
+      ],
+      "responses": [
+        {
+          "id": 0,
+          "sha256": "b5069d6cb2aef9ce0f66d53247268fcb8d3eada3fa3562ccc788eedab7ea1ad1",
+          "protocol_error": false,
+          "tool_error": false
+        },
+        {
+          "id": 1,
+          "sha256": "6add88011246126a99a0372457d7785ac8a9f76f9a5d2db00e1c7f92251b798c",
+          "protocol_error": false,
+          "tool_error": false
+        },
+        {
+          "id": 2,
+          "sha256": "bd826989a8993a328899a5aeba7c62433ea4f46e1d6a3391a12e270e406a0980",
+          "protocol_error": false,
+          "tool_error": false
+        }
+      ]
+    },
+    {
+      "record": {
+        "schema_version": 2,
+        "run_id": "dispatch-4",
+        "task_id": "dispatch",
+        "arm": "trace-off",
+        "outcome": "success",
+        "attempted": 1,
+        "completed": 1,
+        "passed": 1,
+        "failed": 0,
+        "skipped": 0,
+        "wall_ns": 333772563,
+        "cpu_ns": null,
+        "peak_rss_bytes": null,
+        "resource_scope": "worker process tree",
+        "resource_reason": {
+          "cpu_ns": "portable process-tree CPU measurement unavailable",
+          "peak_rss_bytes": "portable process-tree peak RSS measurement unavailable"
+        }
+      },
+      "exchanges": [
+        {
+          "id": 0,
+          "sent_ns": 5305699,
+          "received_ns": 205040071,
+          "round_trip_ns": 199734372
+        },
+        {
+          "id": 1,
+          "sent_ns": 205466359,
+          "received_ns": 257220099,
+          "round_trip_ns": 51753740
+        },
+        {
+          "id": 2,
+          "sent_ns": 261430041,
+          "received_ns": 313169257,
+          "round_trip_ns": 51739216
+        }
+      ],
+      "resources": [
+        {
+          "scope": "private cgroup: supervisor, namespace init, worker and descendants; excludes collector",
+          "cpu_ns": 142033000,
+          "peak_memory_charge_bytes": 39976960,
+          "reason": {
+            "cpu_ns": null,
+            "peak_memory_charge_bytes": null
+          },
+          "observed_member_counts": [
+            3,
+            3,
+            3
+          ]
+        }
+      ],
+      "responses": [
+        {
+          "id": 0,
+          "sha256": "b5069d6cb2aef9ce0f66d53247268fcb8d3eada3fa3562ccc788eedab7ea1ad1",
+          "protocol_error": false,
+          "tool_error": false
+        },
+        {
+          "id": 1,
+          "sha256": "6add88011246126a99a0372457d7785ac8a9f76f9a5d2db00e1c7f92251b798c",
+          "protocol_error": false,
+          "tool_error": false
+        },
+        {
+          "id": 2,
+          "sha256": "bd826989a8993a328899a5aeba7c62433ea4f46e1d6a3391a12e270e406a0980",
+          "protocol_error": false,
+          "tool_error": false
+        }
+      ]
+    },
+    {
+      "record": {
+        "schema_version": 2,
+        "run_id": "dispatch-4",
+        "task_id": "dispatch",
+        "arm": "trace-on",
+        "outcome": "success",
+        "attempted": 1,
+        "completed": 1,
+        "passed": 1,
+        "failed": 0,
+        "skipped": 0,
+        "wall_ns": 304708927,
+        "cpu_ns": null,
+        "peak_rss_bytes": null,
+        "resource_scope": "worker process tree",
+        "resource_reason": {
+          "cpu_ns": "portable process-tree CPU measurement unavailable",
+          "peak_rss_bytes": "portable process-tree peak RSS measurement unavailable"
+        }
+      },
+      "exchanges": [
+        {
+          "id": 0,
+          "sent_ns": 11204025,
+          "received_ns": 170313988,
+          "round_trip_ns": 159109963
+        },
+        {
+          "id": 1,
+          "sent_ns": 170761349,
+          "received_ns": 221056313,
+          "round_trip_ns": 50294964
+        },
+        {
+          "id": 2,
+          "sent_ns": 221475669,
+          "received_ns": 271649604,
+          "round_trip_ns": 50173935
+        }
+      ],
+      "resources": [
+        {
+          "scope": "private cgroup: supervisor, namespace init, worker and descendants; excludes collector",
+          "cpu_ns": 155238000,
+          "peak_memory_charge_bytes": 40091648,
+          "reason": {
+            "cpu_ns": null,
+            "peak_memory_charge_bytes": null
+          },
+          "observed_member_counts": [
+            3,
+            3,
+            3
+          ]
+        }
+      ],
+      "responses": [
+        {
+          "id": 0,
+          "sha256": "b5069d6cb2aef9ce0f66d53247268fcb8d3eada3fa3562ccc788eedab7ea1ad1",
+          "protocol_error": false,
+          "tool_error": false
+        },
+        {
+          "id": 1,
+          "sha256": "6add88011246126a99a0372457d7785ac8a9f76f9a5d2db00e1c7f92251b798c",
+          "protocol_error": false,
+          "tool_error": false
+        },
+        {
+          "id": 2,
+          "sha256": "bd826989a8993a328899a5aeba7c62433ea4f46e1d6a3391a12e270e406a0980",
+          "protocol_error": false,
+          "tool_error": false
+        }
+      ]
+    },
+    {
+      "record": {
+        "schema_version": 2,
+        "run_id": "worktree-validation-0",
+        "task_id": "worktree-validation",
+        "arm": "trace-off",
+        "outcome": "success",
+        "attempted": 1,
+        "completed": 1,
+        "passed": 1,
+        "failed": 0,
+        "skipped": 0,
+        "wall_ns": 247081429,
+        "cpu_ns": null,
+        "peak_rss_bytes": null,
+        "resource_scope": "worker process tree",
+        "resource_reason": {
+          "cpu_ns": "portable process-tree CPU measurement unavailable",
+          "peak_rss_bytes": "portable process-tree peak RSS measurement unavailable"
+        }
+      },
+      "exchanges": [
+        {
+          "id": 0,
+          "sent_ns": 2778100,
+          "received_ns": 184970560,
+          "round_trip_ns": 182192460
+        },
+        {
+          "id": 1,
+          "sent_ns": 190733937,
+          "received_ns": 230291556,
+          "round_trip_ns": 39557619
+        }
+      ],
+      "resources": [
+        {
+          "scope": "private cgroup: supervisor, namespace init, worker and descendants; excludes collector",
+          "cpu_ns": 105381000,
+          "peak_memory_charge_bytes": 31547392,
+          "reason": {
+            "cpu_ns": null,
+            "peak_memory_charge_bytes": null
+          },
+          "observed_member_counts": [
+            3,
+            3
+          ]
+        }
+      ],
+      "responses": [
+        {
+          "id": 0,
+          "sha256": "b5069d6cb2aef9ce0f66d53247268fcb8d3eada3fa3562ccc788eedab7ea1ad1",
+          "protocol_error": false,
+          "tool_error": false
+        },
+        {
+          "id": 1,
+          "sha256": "cf12452f7fb0447d91747ec8d54d3b4bfc024ca2799a0af34d880754c42d2a73",
+          "protocol_error": false,
+          "tool_error": false
+        }
+      ]
+    },
+    {
+      "record": {
+        "schema_version": 2,
+        "run_id": "worktree-validation-0",
+        "task_id": "worktree-validation",
+        "arm": "trace-on",
+        "outcome": "success",
+        "attempted": 1,
+        "completed": 1,
+        "passed": 1,
+        "failed": 0,
+        "skipped": 0,
+        "wall_ns": 254157362,
+        "cpu_ns": null,
+        "peak_rss_bytes": null,
+        "resource_scope": "worker process tree",
+        "resource_reason": {
+          "cpu_ns": "portable process-tree CPU measurement unavailable",
+          "peak_rss_bytes": "portable process-tree peak RSS measurement unavailable"
+        }
+      },
+      "exchanges": [
+        {
+          "id": 0,
+          "sent_ns": 11092693,
+          "received_ns": 159089331,
+          "round_trip_ns": 147996638
+        },
+        {
+          "id": 1,
+          "sent_ns": 159532976,
+          "received_ns": 221056865,
+          "round_trip_ns": 61523889
+        }
+      ],
+      "resources": [
+        {
+          "scope": "private cgroup: supervisor, namespace init, worker and descendants; excludes collector",
+          "cpu_ns": 114877000,
+          "peak_memory_charge_bytes": 31965184,
+          "reason": {
+            "cpu_ns": null,
+            "peak_memory_charge_bytes": null
+          },
+          "observed_member_counts": [
+            3,
+            3
+          ]
+        }
+      ],
+      "responses": [
+        {
+          "id": 0,
+          "sha256": "b5069d6cb2aef9ce0f66d53247268fcb8d3eada3fa3562ccc788eedab7ea1ad1",
+          "protocol_error": false,
+          "tool_error": false
+        },
+        {
+          "id": 1,
+          "sha256": "cf12452f7fb0447d91747ec8d54d3b4bfc024ca2799a0af34d880754c42d2a73",
+          "protocol_error": false,
+          "tool_error": false
+        }
+      ]
+    },
+    {
+      "record": {
+        "schema_version": 2,
+        "run_id": "worktree-validation-1",
+        "task_id": "worktree-validation",
+        "arm": "trace-on",
+        "outcome": "success",
+        "attempted": 1,
+        "completed": 1,
+        "passed": 1,
+        "failed": 0,
+        "skipped": 0,
+        "wall_ns": 298495467,
+        "cpu_ns": null,
+        "peak_rss_bytes": null,
+        "resource_scope": "worker process tree",
+        "resource_reason": {
+          "cpu_ns": "portable process-tree CPU measurement unavailable",
+          "peak_rss_bytes": "portable process-tree peak RSS measurement unavailable"
+        }
+      },
+      "exchanges": [
+        {
+          "id": 0,
+          "sent_ns": 1482361,
+          "received_ns": 200773670,
+          "round_trip_ns": 199291309
+        },
+        {
+          "id": 1,
+          "sent_ns": 201240061,
+          "received_ns": 265450126,
+          "round_trip_ns": 64210065
+        }
+      ],
+      "resources": [
+        {
+          "scope": "private cgroup: supervisor, namespace init, worker and descendants; excludes collector",
+          "cpu_ns": 103480000,
+          "peak_memory_charge_bytes": 31940608,
+          "reason": {
+            "cpu_ns": null,
+            "peak_memory_charge_bytes": null
+          },
+          "observed_member_counts": [
+            3,
+            3
+          ]
+        }
+      ],
+      "responses": [
+        {
+          "id": 0,
+          "sha256": "b5069d6cb2aef9ce0f66d53247268fcb8d3eada3fa3562ccc788eedab7ea1ad1",
+          "protocol_error": false,
+          "tool_error": false
+        },
+        {
+          "id": 1,
+          "sha256": "cf12452f7fb0447d91747ec8d54d3b4bfc024ca2799a0af34d880754c42d2a73",
+          "protocol_error": false,
+          "tool_error": false
+        }
+      ]
+    },
+    {
+      "record": {
+        "schema_version": 2,
+        "run_id": "worktree-validation-1",
+        "task_id": "worktree-validation",
+        "arm": "trace-off",
+        "outcome": "success",
+        "attempted": 1,
+        "completed": 1,
+        "passed": 1,
+        "failed": 0,
+        "skipped": 0,
+        "wall_ns": 299742219,
+        "cpu_ns": null,
+        "peak_rss_bytes": null,
+        "resource_scope": "worker process tree",
+        "resource_reason": {
+          "cpu_ns": "portable process-tree CPU measurement unavailable",
+          "peak_rss_bytes": "portable process-tree peak RSS measurement unavailable"
+        }
+      },
+      "exchanges": [
+        {
+          "id": 0,
+          "sent_ns": 6412201,
+          "received_ns": 206101142,
+          "round_trip_ns": 199688941
+        },
+        {
+          "id": 1,
+          "sent_ns": 206541742,
+          "received_ns": 261205879,
+          "round_trip_ns": 54664137
+        }
+      ],
+      "resources": [
+        {
+          "scope": "private cgroup: supervisor, namespace init, worker and descendants; excludes collector",
+          "cpu_ns": 105473000,
+          "peak_memory_charge_bytes": 31510528,
+          "reason": {
+            "cpu_ns": null,
+            "peak_memory_charge_bytes": null
+          },
+          "observed_member_counts": [
+            3,
+            3
+          ]
+        }
+      ],
+      "responses": [
+        {
+          "id": 0,
+          "sha256": "b5069d6cb2aef9ce0f66d53247268fcb8d3eada3fa3562ccc788eedab7ea1ad1",
+          "protocol_error": false,
+          "tool_error": false
+        },
+        {
+          "id": 1,
+          "sha256": "cf12452f7fb0447d91747ec8d54d3b4bfc024ca2799a0af34d880754c42d2a73",
+          "protocol_error": false,
+          "tool_error": false
+        }
+      ]
+    },
+    {
+      "record": {
+        "schema_version": 2,
+        "run_id": "worktree-validation-2",
+        "task_id": "worktree-validation",
+        "arm": "trace-off",
+        "outcome": "success",
+        "attempted": 1,
+        "completed": 1,
+        "passed": 1,
+        "failed": 0,
+        "skipped": 0,
+        "wall_ns": 287278352,
+        "cpu_ns": null,
+        "peak_rss_bytes": null,
+        "resource_scope": "worker process tree",
+        "resource_reason": {
+          "cpu_ns": "portable process-tree CPU measurement unavailable",
+          "peak_rss_bytes": "portable process-tree peak RSS measurement unavailable"
+        }
+      },
+      "exchanges": [
+        {
+          "id": 0,
+          "sent_ns": 10699977,
+          "received_ns": 210188064,
+          "round_trip_ns": 199488087
+        },
+        {
+          "id": 1,
+          "sent_ns": 210629396,
+          "received_ns": 270417786,
+          "round_trip_ns": 59788390
+        }
+      ],
+      "resources": [
+        {
+          "scope": "private cgroup: supervisor, namespace init, worker and descendants; excludes collector",
+          "cpu_ns": 91606000,
+          "peak_memory_charge_bytes": 32194560,
+          "reason": {
+            "cpu_ns": null,
+            "peak_memory_charge_bytes": null
+          },
+          "observed_member_counts": [
+            3,
+            3
+          ]
+        }
+      ],
+      "responses": [
+        {
+          "id": 0,
+          "sha256": "b5069d6cb2aef9ce0f66d53247268fcb8d3eada3fa3562ccc788eedab7ea1ad1",
+          "protocol_error": false,
+          "tool_error": false
+        },
+        {
+          "id": 1,
+          "sha256": "cf12452f7fb0447d91747ec8d54d3b4bfc024ca2799a0af34d880754c42d2a73",
+          "protocol_error": false,
+          "tool_error": false
+        }
+      ]
+    },
+    {
+      "record": {
+        "schema_version": 2,
+        "run_id": "worktree-validation-2",
+        "task_id": "worktree-validation",
+        "arm": "trace-on",
+        "outcome": "success",
+        "attempted": 1,
+        "completed": 1,
+        "passed": 1,
+        "failed": 0,
+        "skipped": 0,
+        "wall_ns": 283555621,
+        "cpu_ns": null,
+        "peak_rss_bytes": null,
+        "resource_scope": "worker process tree",
+        "resource_reason": {
+          "cpu_ns": "portable process-tree CPU measurement unavailable",
+          "peak_rss_bytes": "portable process-tree peak RSS measurement unavailable"
+        }
+      },
+      "exchanges": [
+        {
+          "id": 0,
+          "sent_ns": 6996417,
+          "received_ns": 182008434,
+          "round_trip_ns": 175012017
+        },
+        {
+          "id": 1,
+          "sent_ns": 182415180,
+          "received_ns": 250486533,
+          "round_trip_ns": 68071353
+        }
+      ],
+      "resources": [
+        {
+          "scope": "private cgroup: supervisor, namespace init, worker and descendants; excludes collector",
+          "cpu_ns": 111193000,
+          "peak_memory_charge_bytes": 31649792,
+          "reason": {
+            "cpu_ns": null,
+            "peak_memory_charge_bytes": null
+          },
+          "observed_member_counts": [
+            3,
+            3
+          ]
+        }
+      ],
+      "responses": [
+        {
+          "id": 0,
+          "sha256": "b5069d6cb2aef9ce0f66d53247268fcb8d3eada3fa3562ccc788eedab7ea1ad1",
+          "protocol_error": false,
+          "tool_error": false
+        },
+        {
+          "id": 1,
+          "sha256": "cf12452f7fb0447d91747ec8d54d3b4bfc024ca2799a0af34d880754c42d2a73",
+          "protocol_error": false,
+          "tool_error": false
+        }
+      ]
+    },
+    {
+      "record": {
+        "schema_version": 2,
+        "run_id": "worktree-validation-3",
+        "task_id": "worktree-validation",
+        "arm": "trace-on",
+        "outcome": "success",
+        "attempted": 1,
+        "completed": 1,
+        "passed": 1,
+        "failed": 0,
+        "skipped": 0,
+        "wall_ns": 207927814,
+        "cpu_ns": null,
+        "peak_rss_bytes": null,
+        "resource_scope": "worker process tree",
+        "resource_reason": {
+          "cpu_ns": "portable process-tree CPU measurement unavailable",
+          "peak_rss_bytes": "portable process-tree peak RSS measurement unavailable"
+        }
+      },
+      "exchanges": [
+        {
+          "id": 0,
+          "sent_ns": 12498783,
+          "received_ns": 149779441,
+          "round_trip_ns": 137280658
+        },
+        {
+          "id": 1,
+          "sent_ns": 150233693,
+          "received_ns": 188557189,
+          "round_trip_ns": 38323496
+        }
+      ],
+      "resources": [
+        {
+          "scope": "private cgroup: supervisor, namespace init, worker and descendants; excludes collector",
+          "cpu_ns": 90375000,
+          "peak_memory_charge_bytes": 32612352,
+          "reason": {
+            "cpu_ns": null,
+            "peak_memory_charge_bytes": null
+          },
+          "observed_member_counts": [
+            3,
+            3
+          ]
+        }
+      ],
+      "responses": [
+        {
+          "id": 0,
+          "sha256": "b5069d6cb2aef9ce0f66d53247268fcb8d3eada3fa3562ccc788eedab7ea1ad1",
+          "protocol_error": false,
+          "tool_error": false
+        },
+        {
+          "id": 1,
+          "sha256": "cf12452f7fb0447d91747ec8d54d3b4bfc024ca2799a0af34d880754c42d2a73",
+          "protocol_error": false,
+          "tool_error": false
+        }
+      ]
+    },
+    {
+      "record": {
+        "schema_version": 2,
+        "run_id": "worktree-validation-3",
+        "task_id": "worktree-validation",
+        "arm": "trace-off",
+        "outcome": "success",
+        "attempted": 1,
+        "completed": 1,
+        "passed": 1,
+        "failed": 0,
+        "skipped": 0,
+        "wall_ns": 308229621,
+        "cpu_ns": null,
+        "peak_rss_bytes": null,
+        "resource_scope": "worker process tree",
+        "resource_reason": {
+          "cpu_ns": "portable process-tree CPU measurement unavailable",
+          "peak_rss_bytes": "portable process-tree peak RSS measurement unavailable"
+        }
+      },
+      "exchanges": [
+        {
+          "id": 0,
+          "sent_ns": 15061447,
+          "received_ns": 206345477,
+          "round_trip_ns": 191284030
+        },
+        {
+          "id": 1,
+          "sent_ns": 206777513,
+          "received_ns": 275139942,
+          "round_trip_ns": 68362429
+        }
+      ],
+      "resources": [
+        {
+          "scope": "private cgroup: supervisor, namespace init, worker and descendants; excludes collector",
+          "cpu_ns": 106948000,
+          "peak_memory_charge_bytes": 31596544,
+          "reason": {
+            "cpu_ns": null,
+            "peak_memory_charge_bytes": null
+          },
+          "observed_member_counts": [
+            3,
+            3
+          ]
+        }
+      ],
+      "responses": [
+        {
+          "id": 0,
+          "sha256": "b5069d6cb2aef9ce0f66d53247268fcb8d3eada3fa3562ccc788eedab7ea1ad1",
+          "protocol_error": false,
+          "tool_error": false
+        },
+        {
+          "id": 1,
+          "sha256": "cf12452f7fb0447d91747ec8d54d3b4bfc024ca2799a0af34d880754c42d2a73",
+          "protocol_error": false,
+          "tool_error": false
+        }
+      ]
+    },
+    {
+      "record": {
+        "schema_version": 2,
+        "run_id": "worktree-validation-4",
+        "task_id": "worktree-validation",
+        "arm": "trace-off",
+        "outcome": "success",
+        "attempted": 1,
+        "completed": 1,
+        "passed": 1,
+        "failed": 0,
+        "skipped": 0,
+        "wall_ns": 229281824,
+        "cpu_ns": null,
+        "peak_rss_bytes": null,
+        "resource_scope": "worker process tree",
+        "resource_reason": {
+          "cpu_ns": "portable process-tree CPU measurement unavailable",
+          "peak_rss_bytes": "portable process-tree peak RSS measurement unavailable"
+        }
+      },
+      "exchanges": [
+        {
+          "id": 0,
+          "sent_ns": 6658877,
+          "received_ns": 132344777,
+          "round_trip_ns": 125685900
+        },
+        {
+          "id": 1,
+          "sent_ns": 132834464,
+          "received_ns": 196115685,
+          "round_trip_ns": 63281221
+        }
+      ],
+      "resources": [
+        {
+          "scope": "private cgroup: supervisor, namespace init, worker and descendants; excludes collector",
+          "cpu_ns": 106273000,
+          "peak_memory_charge_bytes": 31899648,
+          "reason": {
+            "cpu_ns": null,
+            "peak_memory_charge_bytes": null
+          },
+          "observed_member_counts": [
+            3,
+            3
+          ]
+        }
+      ],
+      "responses": [
+        {
+          "id": 0,
+          "sha256": "b5069d6cb2aef9ce0f66d53247268fcb8d3eada3fa3562ccc788eedab7ea1ad1",
+          "protocol_error": false,
+          "tool_error": false
+        },
+        {
+          "id": 1,
+          "sha256": "cf12452f7fb0447d91747ec8d54d3b4bfc024ca2799a0af34d880754c42d2a73",
+          "protocol_error": false,
+          "tool_error": false
+        }
+      ]
+    },
+    {
+      "record": {
+        "schema_version": 2,
+        "run_id": "worktree-validation-4",
+        "task_id": "worktree-validation",
+        "arm": "trace-on",
+        "outcome": "success",
+        "attempted": 1,
+        "completed": 1,
+        "passed": 1,
+        "failed": 0,
+        "skipped": 0,
+        "wall_ns": 307333677,
+        "cpu_ns": null,
+        "peak_rss_bytes": null,
+        "resource_scope": "worker process tree",
+        "resource_reason": {
+          "cpu_ns": "portable process-tree CPU measurement unavailable",
+          "peak_rss_bytes": "portable process-tree peak RSS measurement unavailable"
+        }
+      },
+      "exchanges": [
+        {
+          "id": 0,
+          "sent_ns": 5301413,
+          "received_ns": 213093724,
+          "round_trip_ns": 207792311
+        },
+        {
+          "id": 1,
+          "sent_ns": 213473789,
+          "received_ns": 273602733,
+          "round_trip_ns": 60128944
+        }
+      ],
+      "resources": [
+        {
+          "scope": "private cgroup: supervisor, namespace init, worker and descendants; excludes collector",
+          "cpu_ns": 101054000,
+          "peak_memory_charge_bytes": 31457280,
+          "reason": {
+            "cpu_ns": null,
+            "peak_memory_charge_bytes": null
+          },
+          "observed_member_counts": [
+            3,
+            3
+          ]
+        }
+      ],
+      "responses": [
+        {
+          "id": 0,
+          "sha256": "b5069d6cb2aef9ce0f66d53247268fcb8d3eada3fa3562ccc788eedab7ea1ad1",
+          "protocol_error": false,
+          "tool_error": false
+        },
+        {
+          "id": 1,
+          "sha256": "cf12452f7fb0447d91747ec8d54d3b4bfc024ca2799a0af34d880754c42d2a73",
+          "protocol_error": false,
+          "tool_error": false
+        }
+      ]
+    },
+    {
+      "record": {
+        "schema_version": 2,
+        "run_id": "missing-binary-0",
+        "task_id": "missing-binary",
+        "arm": "trace-off",
+        "outcome": "startup_failure",
+        "attempted": 1,
+        "completed": 1,
+        "passed": 0,
+        "failed": 1,
+        "skipped": 0,
+        "wall_ns": 138670906,
+        "cpu_ns": null,
+        "peak_rss_bytes": null,
+        "resource_scope": "worker process tree",
+        "resource_reason": {
+          "cpu_ns": "portable process-tree CPU measurement unavailable",
+          "peak_rss_bytes": "portable process-tree peak RSS measurement unavailable"
+        }
+      },
+      "exchanges": [],
+      "resources": [
+        {
+          "scope": "private cgroup: supervisor, namespace init, worker and descendants; excludes collector",
+          "cpu_ns": 15501000,
+          "peak_memory_charge_bytes": 3670016,
+          "reason": {
+            "cpu_ns": null,
+            "peak_memory_charge_bytes": null
+          },
+          "observed_member_counts": []
+        }
+      ],
+      "responses": []
+    },
+    {
+      "record": {
+        "schema_version": 2,
+        "run_id": "missing-binary-0",
+        "task_id": "missing-binary",
+        "arm": "trace-on",
+        "outcome": "startup_failure",
+        "attempted": 1,
+        "completed": 1,
+        "passed": 0,
+        "failed": 1,
+        "skipped": 0,
+        "wall_ns": 95897859,
+        "cpu_ns": null,
+        "peak_rss_bytes": null,
+        "resource_scope": "worker process tree",
+        "resource_reason": {
+          "cpu_ns": "portable process-tree CPU measurement unavailable",
+          "peak_rss_bytes": "portable process-tree peak RSS measurement unavailable"
+        }
+      },
+      "exchanges": [],
+      "resources": [
+        {
+          "scope": "private cgroup: supervisor, namespace init, worker and descendants; excludes collector",
+          "cpu_ns": 18484000,
+          "peak_memory_charge_bytes": 2883584,
+          "reason": {
+            "cpu_ns": null,
+            "peak_memory_charge_bytes": null
+          },
+          "observed_member_counts": []
+        }
+      ],
+      "responses": []
+    },
+    {
+      "record": {
+        "schema_version": 2,
+        "run_id": "missing-binary-1",
+        "task_id": "missing-binary",
+        "arm": "trace-on",
+        "outcome": "startup_failure",
+        "attempted": 1,
+        "completed": 1,
+        "passed": 0,
+        "failed": 1,
+        "skipped": 0,
+        "wall_ns": 151057723,
+        "cpu_ns": null,
+        "peak_rss_bytes": null,
+        "resource_scope": "worker process tree",
+        "resource_reason": {
+          "cpu_ns": "portable process-tree CPU measurement unavailable",
+          "peak_rss_bytes": "portable process-tree peak RSS measurement unavailable"
+        }
+      },
+      "exchanges": [],
+      "resources": [
+        {
+          "scope": "private cgroup: supervisor, namespace init, worker and descendants; excludes collector",
+          "cpu_ns": 19989000,
+          "peak_memory_charge_bytes": 3665920,
+          "reason": {
+            "cpu_ns": null,
+            "peak_memory_charge_bytes": null
+          },
+          "observed_member_counts": []
+        }
+      ],
+      "responses": []
+    },
+    {
+      "record": {
+        "schema_version": 2,
+        "run_id": "missing-binary-1",
+        "task_id": "missing-binary",
+        "arm": "trace-off",
+        "outcome": "startup_failure",
+        "attempted": 1,
+        "completed": 1,
+        "passed": 0,
+        "failed": 1,
+        "skipped": 0,
+        "wall_ns": 134785901,
+        "cpu_ns": null,
+        "peak_rss_bytes": null,
+        "resource_scope": "worker process tree",
+        "resource_reason": {
+          "cpu_ns": "portable process-tree CPU measurement unavailable",
+          "peak_rss_bytes": "portable process-tree peak RSS measurement unavailable"
+        }
+      },
+      "exchanges": [],
+      "resources": [
+        {
+          "scope": "private cgroup: supervisor, namespace init, worker and descendants; excludes collector",
+          "cpu_ns": 14202000,
+          "peak_memory_charge_bytes": 3923968,
+          "reason": {
+            "cpu_ns": null,
+            "peak_memory_charge_bytes": null
+          },
+          "observed_member_counts": []
+        }
+      ],
+      "responses": []
+    },
+    {
+      "record": {
+        "schema_version": 2,
+        "run_id": "missing-binary-2",
+        "task_id": "missing-binary",
+        "arm": "trace-off",
+        "outcome": "startup_failure",
+        "attempted": 1,
+        "completed": 1,
+        "passed": 0,
+        "failed": 1,
+        "skipped": 0,
+        "wall_ns": 51654134,
+        "cpu_ns": null,
+        "peak_rss_bytes": null,
+        "resource_scope": "worker process tree",
+        "resource_reason": {
+          "cpu_ns": "portable process-tree CPU measurement unavailable",
+          "peak_rss_bytes": "portable process-tree peak RSS measurement unavailable"
+        }
+      },
+      "exchanges": [],
+      "resources": [
+        {
+          "scope": "private cgroup: supervisor, namespace init, worker and descendants; excludes collector",
+          "cpu_ns": 13410000,
+          "peak_memory_charge_bytes": 3657728,
+          "reason": {
+            "cpu_ns": null,
+            "peak_memory_charge_bytes": null
+          },
+          "observed_member_counts": []
+        }
+      ],
+      "responses": []
+    },
+    {
+      "record": {
+        "schema_version": 2,
+        "run_id": "missing-binary-2",
+        "task_id": "missing-binary",
+        "arm": "trace-on",
+        "outcome": "startup_failure",
+        "attempted": 1,
+        "completed": 1,
+        "passed": 0,
+        "failed": 1,
+        "skipped": 0,
+        "wall_ns": 90859340,
+        "cpu_ns": null,
+        "peak_rss_bytes": null,
+        "resource_scope": "worker process tree",
+        "resource_reason": {
+          "cpu_ns": "portable process-tree CPU measurement unavailable",
+          "peak_rss_bytes": "portable process-tree peak RSS measurement unavailable"
+        }
+      },
+      "exchanges": [],
+      "resources": [
+        {
+          "scope": "private cgroup: supervisor, namespace init, worker and descendants; excludes collector",
+          "cpu_ns": 17756000,
+          "peak_memory_charge_bytes": 3829760,
+          "reason": {
+            "cpu_ns": null,
+            "peak_memory_charge_bytes": null
+          },
+          "observed_member_counts": []
+        }
+      ],
+      "responses": []
+    },
+    {
+      "record": {
+        "schema_version": 2,
+        "run_id": "missing-binary-3",
+        "task_id": "missing-binary",
+        "arm": "trace-on",
+        "outcome": "startup_failure",
+        "attempted": 1,
+        "completed": 1,
+        "passed": 0,
+        "failed": 1,
+        "skipped": 0,
+        "wall_ns": 96544954,
+        "cpu_ns": null,
+        "peak_rss_bytes": null,
+        "resource_scope": "worker process tree",
+        "resource_reason": {
+          "cpu_ns": "portable process-tree CPU measurement unavailable",
+          "peak_rss_bytes": "portable process-tree peak RSS measurement unavailable"
+        }
+      },
+      "exchanges": [],
+      "resources": [
+        {
+          "scope": "private cgroup: supervisor, namespace init, worker and descendants; excludes collector",
+          "cpu_ns": 16863000,
+          "peak_memory_charge_bytes": 3670016,
+          "reason": {
+            "cpu_ns": null,
+            "peak_memory_charge_bytes": null
+          },
+          "observed_member_counts": []
+        }
+      ],
+      "responses": []
+    },
+    {
+      "record": {
+        "schema_version": 2,
+        "run_id": "missing-binary-3",
+        "task_id": "missing-binary",
+        "arm": "trace-off",
+        "outcome": "startup_failure",
+        "attempted": 1,
+        "completed": 1,
+        "passed": 0,
+        "failed": 1,
+        "skipped": 0,
+        "wall_ns": 102110740,
+        "cpu_ns": null,
+        "peak_rss_bytes": null,
+        "resource_scope": "worker process tree",
+        "resource_reason": {
+          "cpu_ns": "portable process-tree CPU measurement unavailable",
+          "peak_rss_bytes": "portable process-tree peak RSS measurement unavailable"
+        }
+      },
+      "exchanges": [],
+      "resources": [
+        {
+          "scope": "private cgroup: supervisor, namespace init, worker and descendants; excludes collector",
+          "cpu_ns": 16991000,
+          "peak_memory_charge_bytes": 3674112,
+          "reason": {
+            "cpu_ns": null,
+            "peak_memory_charge_bytes": null
+          },
+          "observed_member_counts": []
+        }
+      ],
+      "responses": []
+    },
+    {
+      "record": {
+        "schema_version": 2,
+        "run_id": "missing-binary-4",
+        "task_id": "missing-binary",
+        "arm": "trace-off",
+        "outcome": "startup_failure",
+        "attempted": 1,
+        "completed": 1,
+        "passed": 0,
+        "failed": 1,
+        "skipped": 0,
+        "wall_ns": 97995796,
+        "cpu_ns": null,
+        "peak_rss_bytes": null,
+        "resource_scope": "worker process tree",
+        "resource_reason": {
+          "cpu_ns": "portable process-tree CPU measurement unavailable",
+          "peak_rss_bytes": "portable process-tree peak RSS measurement unavailable"
+        }
+      },
+      "exchanges": [],
+      "resources": [
+        {
+          "scope": "private cgroup: supervisor, namespace init, worker and descendants; excludes collector",
+          "cpu_ns": 18053000,
+          "peak_memory_charge_bytes": 3792896,
+          "reason": {
+            "cpu_ns": null,
+            "peak_memory_charge_bytes": null
+          },
+          "observed_member_counts": []
+        }
+      ],
+      "responses": []
+    },
+    {
+      "record": {
+        "schema_version": 2,
+        "run_id": "missing-binary-4",
+        "task_id": "missing-binary",
+        "arm": "trace-on",
+        "outcome": "startup_failure",
+        "attempted": 1,
+        "completed": 1,
+        "passed": 0,
+        "failed": 1,
+        "skipped": 0,
+        "wall_ns": 122633258,
+        "cpu_ns": null,
+        "peak_rss_bytes": null,
+        "resource_scope": "worker process tree",
+        "resource_reason": {
+          "cpu_ns": "portable process-tree CPU measurement unavailable",
+          "peak_rss_bytes": "portable process-tree peak RSS measurement unavailable"
+        }
+      },
+      "exchanges": [],
+      "resources": [
+        {
+          "scope": "private cgroup: supervisor, namespace init, worker and descendants; excludes collector",
+          "cpu_ns": 16813000,
+          "peak_memory_charge_bytes": 3735552,
+          "reason": {
+            "cpu_ns": null,
+            "peak_memory_charge_bytes": null
+          },
+          "observed_member_counts": []
+        }
+      ],
+      "responses": []
+    }
+  ],
+  "summary": {
+    "outcomes": {
+      "success": 70,
+      "startup_failure": 10
+    },
+    "query_round_trip_ns": {
+      "samples": 140,
+      "min": 19306524,
+      "max": 160166838
+    },
+    "collector_first_response_ns": {
+      "samples": 70,
+      "min": 126527838,
+      "max": 294341500
+    },
+    "paired_trace_delta_ns": {
+      "samples": 70,
+      "min": -40576264,
+      "max": 22033936
+    },
+    "paired_absolute_trace_delta_ns": {
+      "samples": 70,
+      "min": 72014,
+      "max": 40576264
+    },
+    "session_cpu_ns": {
+      "samples": 70,
+      "min": 90375000,
+      "max": 257162000
+    },
+    "peak_memory_charge_bytes": {
+      "samples": 70,
+      "min": 21950464,
+      "max": 134561792
+    }
+  },
+  "context_proxy": {
+    "metric": "host-accounted cumulative input tokens; proxy for context cost, not occupancy",
+    "source_sha256": "6b471a2a7f78a8e5e539610bfd6355f6b9143214528e02532a6f02468f9df877",
+    "rows": [
+      {
+        "index": 0,
+        "task": "import-definition",
+        "arm": "shell-only",
+        "input_tokens": 16308,
+        "host_evidence_ref": "sha256:3a0cafbec5ce245d7bb1ae170e3371c8ff4e2e052d0afa956df5e429e5b8d519"
+      },
+      {
+        "index": 1,
+        "task": "import-definition",
+        "arm": "mcp",
+        "input_tokens": 27904,
+        "host_evidence_ref": "sha256:e68babaff952f9cb2af4bedbc5e7c72a235523498b8f8237fe01fe05a1be1ffe"
+      },
+      {
+        "index": 2,
+        "task": "shadow-references",
+        "arm": "mcp",
+        "input_tokens": 20457,
+        "host_evidence_ref": "sha256:6e0a97bb37ef612485663add4160aa2939f933f7b3c749a045115e54e393f7ec"
+      },
+      {
+        "index": 3,
+        "task": "shadow-references",
+        "arm": "shell-only",
+        "input_tokens": 10491,
+        "host_evidence_ref": "sha256:7436f6fb3904ae18f2a5b07873512e1d29acf090beb9080ac309cb7e783ab0d8"
+      },
+      {
+        "index": 4,
+        "task": "stdlib-filter",
+        "arm": "shell-only",
+        "input_tokens": 70893,
+        "host_evidence_ref": "sha256:6e5dff72e5d03b5c9d581d633bac5c7a47b8876c8e43212181f36d0dda4b9245"
+      },
+      {
+        "index": 5,
+        "task": "stdlib-filter",
+        "arm": "mcp",
+        "input_tokens": 37462,
+        "host_evidence_ref": "sha256:af64b59417d9034001e02a51bcd3f937df98253996db33d90b7df0f5ae89efa2"
+      },
+      {
+        "index": 6,
+        "task": "repair-diagnostic",
+        "arm": "mcp",
+        "input_tokens": 21043,
+        "host_evidence_ref": "sha256:dabb2d046e496890be057634302f402d1c863a991bf4406468c5e817c835737d"
+      },
+      {
+        "index": 7,
+        "task": "repair-diagnostic",
+        "arm": "shell-only",
+        "input_tokens": 10648,
+        "host_evidence_ref": "sha256:1643d89555bc582cf2a9993f0ae5c89fa8328aa8c11caf81b708bcad3aa39cbc"
+      },
+      {
+        "index": 8,
+        "task": "dispatch",
+        "arm": "shell-only",
+        "input_tokens": 25329,
+        "host_evidence_ref": "sha256:c751114a68ebd07d686d0ee522ea7137651fc97b64bae9a543dddb0b5b5e58b2"
+      },
+      {
+        "index": 9,
+        "task": "dispatch",
+        "arm": "mcp",
+        "input_tokens": 27550,
+        "host_evidence_ref": "sha256:73e17aaf3dd04b2a5264e1075aa0d9b56aaef2c94055c58aae9961400e2d56ea"
+      },
+      {
+        "index": 10,
+        "task": "worktree-validation",
+        "arm": "mcp",
+        "input_tokens": 20579,
+        "host_evidence_ref": "sha256:5aa1096261c9c778aaf55a27b30ecdb67ca4f1d6dd51c7d3ce37716ff52c229c"
+      },
+      {
+        "index": 11,
+        "task": "worktree-validation",
+        "arm": "shell-only",
+        "input_tokens": 21722,
+        "host_evidence_ref": "sha256:89535f34225af9a0d78819d10d752e655eebf4a9095c070b8ccfb26a87ad60be"
+      }
+    ]
+  }
+}

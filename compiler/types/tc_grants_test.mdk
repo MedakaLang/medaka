@@ -1,0 +1,368 @@
+-- Tests of `types.tc_grants`'s own API: grant order and the grants a use records
+-- (`grantOrder`, `recordGrantOcc`, `recordStandaloneGrantOcc`, `markSourceless`), the file-bound
+-- values (`narrowFileAtom`, `hasFileBoundValue`, `fileBodyLoc`, `fileBoundSite`, `fileValueKey`,
+-- `recordFileBound`, `recordClauseFileBound`, `recordValueFileBound`), the method grants an
+-- interface records (`recordMethodGrants`), and the small projections the grant rows read
+-- (`evOrdinal`, `spineHeadEv`, `appSpineArgCount`, `clausesAt`, `clausesOf`).  Each test builds the
+-- module record, group record and tables it reads; none reaches the inference recursion.  The
+-- fixtures shared with the effect tests are read from `tc_effects_test`.
+
+import test.{expectAll, expectEqual, expectFalse, expectTrue}
+import frontend.ast.{EvId(..), Expr(..), Loc(..), Pat(..), TyConOrigin(..)}
+import map.{Map(..), get}
+import support.ordmap.{omEmpty, omInsert, omKeys, omLookup}
+import list.{reverse}
+import types.effect_authority.{Authority(..), Authvar(..)}
+import types.effect_domain.{Param(..)}
+import types.effect_rows.{
+  Atom(..), EffLabel(..), EffRow(..), Effvar(..), atomBuiltin
+}
+import types.repr.{AuthResidual(..), IfaceRef(..), Mono(..), Scheme(..)}
+import types.tc_state.{probeGraphCtx}
+import types.tc_test_support.{ifaceOf, intM, scoped}
+import types.tc_types.{
+  GrantOcc(..),
+  GraphCtx,
+  GroupCtx(..),
+  MarkSets(..),
+  MethodGrant(..),
+  MethodPredicateTemplate(..),
+  MethodSchemeRow(..),
+  ModuleCtx(..),
+}
+import types.tc_grants.{
+  appSpineArgCount,
+  clausesAt,
+  clausesOf,
+  evOrdinal,
+  fileBodyLoc,
+  fileBoundSite,
+  fileValueKey,
+  grantOccOf,
+  grantOrder,
+  hasFileBoundValue,
+  markSourceless,
+  narrowFileAtom,
+  recordClauseFileBound,
+  recordFileBound,
+  recordGrantOcc,
+  recordMethodGrants,
+  recordStandaloneGrantOcc,
+  recordTopGrants,
+  recordValueFileBound,
+  registerLocalGrants,
+  spineHeadEv,
+}
+import types.tc_effects_test.{
+  arrowOver,
+  here,
+  narrowRead,
+  signatureOf,
+  topRead,
+  twoGrantScheme,
+}
+
+-- ── small projections ─────────────────────────────────────────────────────
+
+test "the ordinal of an evidence id is its index" = expectAll [
+  expectEqual 7 (evOrdinal (EvId "m" 7)),
+  expectEqual 0 (evOrdinal (EvId "other" 0)),
+]
+
+test "an application spine's head is the method occurrence under any located or applied wrapper" =
+  let ev = EvId "m" 4
+  let head = EMethodAt "size" "" ev
+  expectAll [
+    expectEqual (Some 4) (map evOrdinal (spineHeadEv head)),
+    expectEqual
+      (Some 4)
+      (map
+        evOrdinal
+        (spineHeadEv (ELoc here (EApp (EApp head (EVar "x")) (EVar "y"))))),
+    expectEqual None (map evOrdinal (spineHeadEv (EApp (EVar "f") (EVar "x")))),
+  ]
+
+test "a spine's argument count is the applications under located, annotated and do wrappers" =
+  let f = EVar "f"
+  expectAll [
+    expectEqual 0 (appSpineArgCount f),
+    expectEqual 2 (appSpineArgCount (EApp (EApp f (EVar "a")) (EVar "b"))),
+    expectEqual 1 (appSpineArgCount (ELoc here (EApp f (EVar "a")))),
+    expectEqual 1 (appSpineArgCount (EDoOrigin here (EApp f (EVar "a")))),
+    expectEqual 0 (appSpineArgCount (ELam [] f)),
+  ]
+
+test "a clause table answers a name's clauses in source order, and an unknown name has none" =
+  let table =
+    omInsert "f" [([PWild], EVar "second"), ([PWild], EVar "first")] omEmpty
+  let bodies =
+    cs =>
+      flatMap
+        (c => match snd c
+          EVar n => [n]
+          _ => [])
+        cs
+  expectAll [
+    expectEqual ["first", "second"] (bodies (clausesOf "f" table)),
+    expectEqual ["second", "first"] (bodies (clausesAt "f" table)),
+    expectEqual [] (bodies (clausesOf "g" table)),
+    expectEqual
+      ["b", "a"]
+      (bodies (reverse [([PWild], EVar "a"), ([PWild], EVar "b")])),
+  ]
+
+-- ── grants ────────────────────────────────────────────────────────────────
+
+test "a scheme's grants are its authorities in the order the type first mentions them" = expectAll
+  [
+    expectEqual [2, 1] (grantOrder (twoGrantScheme [1, 2])),
+    expectEqual [2, 1, 3] (grantOrder (twoGrantScheme [1, 2, 3])),
+    expectEqual [] (grantOrder (twoGrantScheme [])),
+  ]
+
+-- The kind of each cell a recorded use carries.
+cellKinds : GrantOcc -> List String
+cellKinds occ =
+  map
+    (a => match a
+      AConst _ => "const"
+      AJoin _ => "join"
+      _ => "other")
+    occ.goCells
+
+test "a use of a source binding records the instantiation of each grant in grant order" =
+  let m = scoped ()
+  let ev = EvId "probe" 3
+  recordGrantOcc m "f" ev (twoGrantScheme [1, 2]) [
+    (2, AConst (PPrefix (Some "a/"))),
+  ]
+  expectAll [
+    expectEqual
+      (Some ("f", ["const", "join"], False))
+      (map
+        (o => (o.goCallee, cellKinds o, o.goStandalone))
+        (grantOccOf m.mcGraph ev)),
+    expectEqual
+      None
+      (map (o => o.goCallee) (grantOccOf m.mcGraph (EvId "probe" 4))),
+  ]
+
+test "a use whose scheme quantifies no authority records nothing" =
+  let m = scoped ()
+  let ev = EvId "probe" 5
+  recordGrantOcc m "f" ev (twoGrantScheme []) []
+  expectEqual None (map (o => o.goCallee) (grantOccOf m.mcGraph ev))
+
+test "a method occurrence typed as the standalone it shadows records the standalone's arity" =
+  let m = scoped ()
+  let ev = EvId "probe" 6
+  recordStandaloneGrantOcc m "size" ev (twoGrantScheme [1, 2]) [] 2
+  expectEqual
+    (Some (True, Some 2))
+    (map (o => (o.goStandalone, o.goTrailing)) (grantOccOf m.mcGraph ev))
+
+test "an authority variable marked sourceless is in the graph's sourceless table" =
+  let gctx = probeGraphCtx ()
+  markSourceless gctx [4, 9]
+  let table = gctx.graphRun.grants.gsSourceless.value
+  expectAll [
+    expectEqual (Some ()) (get 4 table),
+    expectEqual (Some ()) (get 9 table),
+    expectEqual None (get 5 table),
+  ]
+
+-- ── file-bound values ─────────────────────────────────────────────────────
+
+test "only a built-in file label with a narrowed authority is a narrow file atom" = expectAll
+  [
+    expectTrue (narrowFileAtom narrowRead),
+    expectTrue
+      (narrowFileAtom (atomBuiltin "FileWrite" (PPrefix (Some "out/")))),
+    expectFalse (narrowFileAtom topRead),
+    expectFalse (narrowFileAtom (atomBuiltin "Stdout" PUnit)),
+    expectFalse
+      (narrowFileAtom
+        (Atom
+          (EffLabel "FileRead" (OriginModule "lib"))
+          (AConst (PPrefix (Some "config/"))))),
+  ]
+
+test "a function value is file-bound when a closed row of it, or of its result, is narrowed" = expectAll
+  [
+    expectTrue (hasFileBoundValue (arrowOver (EffRow [narrowRead] None))),
+    expectTrue
+      (hasFileBoundValue
+        (TFun intM (EffRow [] None) (arrowOver (EffRow [narrowRead] None)))),
+    expectFalse (hasFileBoundValue (arrowOver (EffRow [topRead] None))),
+    expectFalse
+      (hasFileBoundValue
+        (arrowOver (EffRow [narrowRead] (Some (Ref (EUnbound 820 0)))))),
+    expectFalse (hasFileBoundValue intM),
+  ]
+
+-- The line and column a location starts at.
+startOf : Loc -> (Int, Int)
+startOf (Loc _ line col _ _) = (line, col)
+
+test "a body's location is its own, else its first located child's, else none" =
+  let there = Loc "m.mdk" 7 2 7 5
+  expectAll [
+    expectEqual
+      (Some (3, 1))
+      (map startOf (fileBodyLoc (ELoc here (EVar "x")))),
+    expectEqual
+      (Some (7, 2))
+      (map startOf (fileBodyLoc (EApp (EVar "f") (ELoc there (EVar "x"))))),
+    expectEqual
+      (Some (3, 1))
+      (map
+        startOf
+        (fileBodyLoc (EApp (ELoc here (EVar "f")) (ELoc there (EVar "x"))))),
+    expectEqual None (map startOf (fileBodyLoc (EApp (EVar "f") (EVar "x")))),
+  ]
+
+test "a file-bound site names its module's length and id, then the span" = expectAll
+  [
+    expectEqual "1:a:m.mdk:3:1:3:9" (fileBoundSite "a" here),
+    expectEqual "1:b:m.mdk:3:1:3:9" (fileBoundSite "b" here),
+    expectEqual "1:a:m.mdk:3:1:3:10" (fileBoundSite "a" (Loc "m.mdk" 3 1 3 10)),
+  ]
+
+test "a value's key names its module, span and shape" =
+  let located = ELoc here (EVar "f")
+  let call = EApp located (EVar "x")
+  expectAll [
+    expectEqual None (fileValueKey "m" (EVar "x")),
+    expectEqual (Some "1:m:m.mdk:3:1:3:9:app1") (fileValueKey "m" call),
+    expectEqual (Some "1:n:m.mdk:3:1:3:9:app1") (fileValueKey "n" call),
+    expectEqual
+      (Some "1:m:m.mdk:3:1:3:9:app2")
+      (fileValueKey "m" (EApp call (EVar "y"))),
+    expectEqual
+      (Some "1:m:m.mdk:3:1:3:9:lambda")
+      (fileValueKey "m" (ELam [] located)),
+  ]
+
+-- The keys the module has recorded closed-row bounds under.
+boundKeys : ModuleCtx -> List String
+boundKeys m = omKeys m.mcGraph.graphRun.grants.gsBounds.value
+
+test "a located body under a closed narrow file row has its bound recorded" =
+  let m = scoped ()
+  recordFileBound m (ELoc here (EVar "x")) (EffRow [narrowRead] None)
+  expectEqual [fileBoundSite "probe" here] (boundKeys m)
+
+test "an open row, an unlocated body and a wide row record no bound" =
+  let m = scoped ()
+  recordFileBound
+    m
+    (ELoc here (EVar "x"))
+    (EffRow [narrowRead] (Some (Ref (EUnbound 830 0))))
+  recordFileBound m (EVar "x") (EffRow [narrowRead] None)
+  recordFileBound m (ELoc here (EVar "x")) (EffRow [topRead] None)
+  expectEqual [] (boundKeys m)
+
+test "a clause's bound is recorded at the arrow its arity reaches" =
+  let m = scoped ()
+  let body = ELoc here (EVar "x")
+  recordClauseFileBound m body 0 (arrowOver (EffRow [narrowRead] None))
+  let none = boundKeys m
+  recordClauseFileBound m body 1 (arrowOver (EffRow [narrowRead] None))
+  expectAll [
+    expectEqual [] none,
+    expectEqual [fileBoundSite "probe" here] (boundKeys m),
+  ]
+
+test "a file-bound value's type is recorded under its key" =
+  let m = scoped ()
+  let e = ELoc here (EVar "f")
+  recordValueFileBound m e (arrowOver (EffRow [narrowRead] None))
+  recordValueFileBound m (ELoc (Loc "m.mdk" 9 1 9 2) (EVar "g")) intM
+  expectEqual
+    [fileValueKey "probe" e]
+    (map Some (omKeys m.mcGraph.graphRun.grants.gsValueBounds.value))
+
+-- ── method grants ─────────────────────────────────────────────────────────
+
+-- The row of the interface method `Cap.read` of the type [src], with scheme [scheme].
+readRow : String -> Scheme -> MethodSchemeRow
+readRow src scheme = MethodSchemeRow {
+  msrIface = ifaceOf "Cap",
+  msrName = "read",
+  msrTyparams = ["a"],
+  msrType = signatureOf src,
+  msrScheme = scheme,
+  msrPredicateTemplate = MethodPredicateTemplate {
+    mptInterface = ifaceOf "Cap",
+    mptArguments = [],
+  },
+  msrMethodSlots = [],
+}
+
+-- The grants recorded for the method `Cap.read`, as (arity, parameter names).
+readGrants : GraphCtx -> Option (Int, List String)
+readGrants gctx =
+  map
+    (g => (g.mgArity, g.mgNames))
+    (omLookup "probe::Cap#read" gctx.graphRun.grants.gsMethods.value)
+
+test "a method whose scheme quantifies authorities records its arity and parameter names in grant order" =
+  let gctx = probeGraphCtx ()
+  recordMethodGrants gctx [
+    readRow "read : a -> Int -> Int" (twoGrantScheme [1, 2]),
+  ]
+  expectEqual (Some (2, ["p2", "p1"])) (readGrants gctx)
+
+test "a method that no longer quantifies an authority loses its recorded grants" =
+  let gctx = probeGraphCtx ()
+  recordMethodGrants gctx [
+    readRow "read : a -> Int -> Int" (twoGrantScheme [1, 2]),
+  ]
+  recordMethodGrants gctx [readRow "read : a -> Int -> Int" (twoGrantScheme [])]
+  expectEqual None (readGrants gctx)
+
+-- A graph whose driver has installed mark sets, which is what turns grant recording on.
+grantingGraph : Unit -> GraphCtx
+grantingGraph _ =
+  let gctx = probeGraphCtx ()
+  gctx.markSetsRef := Some MarkSets {
+    msMarkRpNames = [],
+    msMarkSharedNames = [],
+    msGraphShadowNames = [],
+    msArgNames = [],
+    msCoreShadowMap = [],
+    msBareDictNames = [],
+    msUnits = [],
+  }
+  gctx
+
+topIdsOf : GraphCtx -> String -> Option (List Int)
+topIdsOf gctx key = omLookup key gctx.graphRun.grants.gsTopIds.value
+
+test "a generalized top-level member that quantifies authorities records them under its module's key, and one that quantifies none has no row" =
+  let gctx = grantingGraph ()
+  recordTopGrants
+    gctx
+    "m"
+    [
+      ("f", twoGrantScheme [1, 2]),
+      ("g", twoGrantScheme []),
+    ]
+    omEmpty
+  expectAll [
+    expectEqual (Some [2, 1]) (topIdsOf gctx "m|f"),
+    expectEqual None (topIdsOf gctx "m|g"),
+    expectEqual None (topIdsOf gctx "n|f"),
+  ]
+
+test "a graph whose driver installed no mark sets records no top-level grants" =
+  let gctx = probeGraphCtx ()
+  recordTopGrants gctx "m" [("f", twoGrantScheme [1, 2])] omEmpty
+  expectEqual None (topIdsOf gctx "m|f")
+
+test "a generalized local records its authorities in grant order, and one that quantifies none has no row" =
+  let gctx = probeGraphCtx ()
+  registerLocalGrants gctx "h" (twoGrantScheme [1, 2])
+  registerLocalGrants gctx "k" (twoGrantScheme [])
+  let rows = gctx.graphRun.grants.gsLocalIds.value
+  expectEqual (Some [2, 1], None) (omLookup "h" rows, omLookup "k" rows)

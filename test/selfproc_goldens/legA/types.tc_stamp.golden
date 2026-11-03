@@ -1,0 +1,48 @@
+addCellHead : Decl -> Map String Unit -> Map String Unit
+captureTypeErrors : ModuleCtx -> (Unit -> Unit) -> List TcDiag
+cellHeadKey : String -> TyConOrigin -> String
+cellTypeHeads : List Decl -> Map String Unit
+cutRanges : Int -> Int -> List (Int, Int) -> List (Int, Int)
+drainStampQueue : ModuleCtx -> List DrainFinding
+enqueueStampCtx : ModuleCtx -> String -> List Decl -> Unit
+evEntriesOf : List Obligation -> List EvEntry
+evValueOf : EvDest -> EvVal
+evidenceObservationEntriesGo : Obligation -> List Route -> List (Option Mono) -> Int -> Int -> List EvidenceObservationEntry
+holeDiags : String -> Option Loc -> Inner -> EvidenceRow -> List (String, TcDiag)
+holeKey : (String, TcDiag) -> String
+isInterfaceDecl : Decl -> Bool
+isLiveSpan : Map String Unit -> Option Loc -> Bool
+judgeCells : Array (Option EvCell) -> Int -> Int -> List (String, TcDiag) -> List (String, TcDiag)
+judgeEvidence : GraphCtx -> List StampCtx -> List (String, TcDiag)
+judgeGoal : String -> Obligation -> List (String, TcDiag)
+judgeLiveGoal : ModuleCtx -> Map String StampCtx -> (List DrainFinding, Map String Unit) -> LiveGoal -> (List DrainFinding, Map String Unit)
+judgeLiveGoals : ModuleCtx -> List StampCtx -> List DrainFinding
+liveLocsOf : ModuleCtx -> List Obligation -> List String
+materializeBinder : (String -> TyConOrigin -> Bool) -> PendingBinder -> BinderRow
+materializeBinderTypes : GraphCtx -> Unit -> Unit
+moduleStampOrder : List StampStep
+noteEvidenceObservation : GraphCtx -> Obligation -> Unit
+numlitSince : GraphCtx -> Int -> List (Mono, Ref (Option Float), Int, Ref Route)
+obligationPredicateMonos : Obligation -> List (Option Mono)
+obligationRoutes : Obligation -> List Route
+recordEvidence : GraphCtx -> List Obligation -> Unit
+renderRouteIdentity : Route -> String
+resolveArithSites : List (Ref Route, Mono) -> Unit
+resolveOpSites : SiteCtx -> Bool -> List PendingEntry -> Unit
+resolveRLocalSites : SiteCtx -> List PendingEntry -> Unit
+resolveSites : SiteCtx -> Map String Unit -> List PendingEntry -> Unit
+routeGivenBinder : Route -> Option String
+routeInstanceKey : Route -> Option String
+routeOutcomeKind : Route -> EvidenceOutcomeKind
+routePrerequisiteRoutes : Route -> List Route
+runStampCtx : ModuleCtx -> StampCtx -> List DrainFinding
+runStampCtxs : ModuleCtx -> List StampCtx -> List DrainFinding
+runStampStep : ModuleCtx -> StampCtx -> StampStep -> Unit
+runStampSteps : ModuleCtx -> StampCtx -> List StampStep -> Unit
+setNumlitFloatsGo : List (Mono, Ref (Option Float), Int, Ref Route) -> Unit
+spanKeys : List (Option Loc) -> List String
+stampCtxOf : ModuleCtx -> String -> List Decl -> List Obligation -> List (Mono, Ref (Option Float), Int, Ref Route) -> StampCtx
+stampEach : ModuleCtx -> (SiteCtx -> Obligation -> Unit) -> GoalKind -> StampCtx -> Unit
+stampNoting : ModuleCtx -> (SiteCtx -> Obligation -> Unit) -> Obligation -> Unit
+unjudgedRanges : Int -> Int -> List (Int, Int) -> List (Int, Int)
+verdictFinding : String -> Bool -> TcDiag -> DrainFinding

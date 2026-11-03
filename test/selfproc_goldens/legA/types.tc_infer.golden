@@ -41,7 +41,6 @@ derefOp : DynCtx -> Mono -> Mono
 doChainIsDeferred : Expr -> Bool
 eqCompareOp : DynCtx -> Mono -> Mono -> Mono
 exemptInPlaceIndexMutHeads : List String
-finishValueEffectsKeeping : DynCtx -> List (Bool, Mono) -> List (Int, AuthResidual)
 forgetLocalAbs : GraphCtx -> String -> Unit
 funDomain : ModuleCtx -> Mono -> Mono
 groupSchemesOf : TcEnv -> List LetBind -> List (String, Scheme)
@@ -122,7 +121,6 @@ isDoLoweredAndThenCalleeExpr : Expr -> Bool
 isExemptInPlaceSetIndex : Mono -> Expr -> Bool
 isOmittedElse : Expr -> Bool
 lamUnderLoc : Expr -> Option (Option Loc, List Pat, Expr)
-localRole : Bool -> BindingRole
 matchWarningLoc : Option Loc -> List Arm -> Option Loc
 negateOp : ModuleCtx -> Mono -> Mono
 nonExhaustiveMsg : ModuleCtx -> Oracle -> Mono -> List (List Pat) -> Bool -> (String, Option String)
