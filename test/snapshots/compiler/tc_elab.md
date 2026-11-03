@@ -77,6 +77,7 @@ import types.tc_solve.{
   solveExactReturnOnce,
 }
 import types.tc_solve_check.{setFunPredicateSlots}
+import types.tc_mark.{constrainedSigNames}
 import types.tc_shadow.{
   methodCellOf,
 }
@@ -93,7 +94,6 @@ import types.tc_effects.{
 import types.tc_occurrence.{
   arithDispatchMethod,
   binopMethod,
-  constrainedSigNames,
   isGrantOnlyEv,
   mintMethodCellRaw,
   unopMethod,
@@ -2069,9 +2069,10 @@ sigPredicateSlot (iface, _) =
 (DUse false (UseGroup ("types" "tc_solve_entail") ((mem "entail" false) (mem "implDictRoutesForRow" false) (mem "rowRouteKey" false) (mem "selectedCallSupers" false))))
 (DUse false (UseGroup ("types" "tc_solve") ((mem "admittedSelection" false) (mem "exactReturnRoutes" false) (mem "isLocalAbsName" false) (mem "methodPredicateRoutes" false) (mem "methodReturnAmbiguousWithoutGiven" false) (mem "methodReturnArgs" false) (mem "methodReturnResolutionValid" false) (mem "noteMethodReturnTrace" false) (mem "numericReturnRoute" false) (mem "recRoutes" false) (mem "returnPosMethodNames" false) (mem "routesOfMonosTopV" false) (mem "solveExactReturnOnce" false))))
 (DUse false (UseGroup ("types" "tc_solve_check") ((mem "setFunPredicateSlots" false))))
+(DUse false (UseGroup ("types" "tc_mark") ((mem "constrainedSigNames" false))))
 (DUse false (UseGroup ("types" "tc_shadow") ((mem "methodCellOf" false))))
 (DUse false (UseGroup ("types" "tc_effects") ((mem "evOrdinal" false) (mem "fileBodyLoc" false) (mem "fileBoundSite" false) (mem "fileValueKey" false) (mem "grantOccOf" false) (mem "hasFileBoundValue" false) (mem "methodGrantOf" false) (mem "narrowFileAtom" false))))
-(DUse false (UseGroup ("types" "tc_occurrence") ((mem "arithDispatchMethod" false) (mem "binopMethod" false) (mem "constrainedSigNames" false) (mem "isGrantOnlyEv" false) (mem "mintMethodCellRaw" false) (mem "unopMethod" false))))
+(DUse false (UseGroup ("types" "tc_occurrence") ((mem "arithDispatchMethod" false) (mem "binopMethod" false) (mem "isGrantOnlyEv" false) (mem "mintMethodCellRaw" false) (mem "unopMethod" false))))
 (DUse false (UseGroup ("types" "tc_groups") ((mem "sigConstraints" false))))
 (DUse false (UseGroup ("frontend" "ast") ((mem "Arm" true) (mem "Decl" true) (mem "DoStmt" true) (mem "EvId" true) (mem "EvVal" true) (mem "Expr" true) (mem "FieldAssign" true) (mem "FunClause" true) (mem "Guard" true) (mem "IfaceMethod" true) (mem "ImplMethod" true) (mem "LetBind" true) (mem "Lit" true) (mem "Loc" true) (mem "MethodDefault" true) (mem "Pat" true) (mem "Route" true) (mem "Ty" true) (mem "TyConOrigin" true) (mem "EvTable" false) (mem "isI32Head" false) (mem "isI64Head" false) (mem "isU64Head" false) (mem "noBinderId" false) (mem "noDeclLoc" false) (mem "taggedFixedRange" false) (mem "tyConBuiltin" false) (mem "unminted" false))))
 (DUse false (UseGroup ("types" "effect_authority") ((mem "Authority" true) (mem "Authvar" true) (mem "GrantShape" true) (mem "authGrantShape" false) (mem "authvarId" false))))
@@ -2436,9 +2437,10 @@ sigPredicateSlot (iface, _) =
 (DUse false (UseGroup ("types" "tc_solve_entail") ((mem "entail" false) (mem "implDictRoutesForRow" false) (mem "rowRouteKey" false) (mem "selectedCallSupers" false))))
 (DUse false (UseGroup ("types" "tc_solve") ((mem "admittedSelection" false) (mem "exactReturnRoutes" false) (mem "isLocalAbsName" false) (mem "methodPredicateRoutes" false) (mem "methodReturnAmbiguousWithoutGiven" false) (mem "methodReturnArgs" false) (mem "methodReturnResolutionValid" false) (mem "noteMethodReturnTrace" false) (mem "numericReturnRoute" false) (mem "recRoutes" false) (mem "returnPosMethodNames" false) (mem "routesOfMonosTopV" false) (mem "solveExactReturnOnce" false))))
 (DUse false (UseGroup ("types" "tc_solve_check") ((mem "setFunPredicateSlots" false))))
+(DUse false (UseGroup ("types" "tc_mark") ((mem "constrainedSigNames" false))))
 (DUse false (UseGroup ("types" "tc_shadow") ((mem "methodCellOf" false))))
 (DUse false (UseGroup ("types" "tc_effects") ((mem "evOrdinal" false) (mem "fileBodyLoc" false) (mem "fileBoundSite" false) (mem "fileValueKey" false) (mem "grantOccOf" false) (mem "hasFileBoundValue" false) (mem "methodGrantOf" false) (mem "narrowFileAtom" false))))
-(DUse false (UseGroup ("types" "tc_occurrence") ((mem "arithDispatchMethod" false) (mem "binopMethod" false) (mem "constrainedSigNames" false) (mem "isGrantOnlyEv" false) (mem "mintMethodCellRaw" false) (mem "unopMethod" false))))
+(DUse false (UseGroup ("types" "tc_occurrence") ((mem "arithDispatchMethod" false) (mem "binopMethod" false) (mem "isGrantOnlyEv" false) (mem "mintMethodCellRaw" false) (mem "unopMethod" false))))
 (DUse false (UseGroup ("types" "tc_groups") ((mem "sigConstraints" false))))
 (DUse false (UseGroup ("frontend" "ast") ((mem "Arm" true) (mem "Decl" true) (mem "DoStmt" true) (mem "EvId" true) (mem "EvVal" true) (mem "Expr" true) (mem "FieldAssign" true) (mem "FunClause" true) (mem "Guard" true) (mem "IfaceMethod" true) (mem "ImplMethod" true) (mem "LetBind" true) (mem "Lit" true) (mem "Loc" true) (mem "MethodDefault" true) (mem "Pat" true) (mem "Route" true) (mem "Ty" true) (mem "TyConOrigin" true) (mem "EvTable" false) (mem "isI32Head" false) (mem "isI64Head" false) (mem "isU64Head" false) (mem "noBinderId" false) (mem "noDeclLoc" false) (mem "taggedFixedRange" false) (mem "tyConBuiltin" false) (mem "unminted" false))))
 (DUse false (UseGroup ("types" "effect_authority") ((mem "Authority" true) (mem "Authvar" true) (mem "GrantShape" true) (mem "authGrantShape" false) (mem "authvarId" false))))

@@ -61,6 +61,7 @@ types.tc_elab
 types.tc_env
 types.tc_foreign
 types.tc_groups
+types.tc_mark
 types.tc_mono
 types.tc_occurrence
 types.tc_scope

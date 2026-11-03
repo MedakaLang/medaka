@@ -39,7 +39,7 @@ typecheck (calls exhaust per EMatch) → eval`. All in `compiler/frontend/` exce
   `compiler/types/tc_infer.mdk`, once per `EMatch`; it sees only core patterns.
 - ⚠️ **[P-NO-MARK-PASS]** `markWithPrelude` (`compiler/frontend/marker.mdk`) is NOT on
   `check`/`run`/`build`/LSP — those mark inside typecheck per binding group
-  (`markGroupClauses`, `tc_occurrence.mdk`), so no production verb sees an `EMethodRef`. The file stays live for
+  (`markGroupClauses`, `tc_mark.mdk`), so no production verb sees an `EMethodRef`. The file stays live for
   `preludeStandaloneShadows`, `declRefs`, `localBoundNames`.
 - **[P-DOCTEST-RESIDUAL]** #1223 (doctest module identity) is still OPEN for import-bearing
   doctests. It is unpinned and listed in `test/MUST-FAIL-NOT-PINNABLE.txt`.

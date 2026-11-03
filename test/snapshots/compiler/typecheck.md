@@ -1,5 +1,5 @@
 # META
-source_lines=3670
+source_lines=3672
 stages=DESUGAR,MARK
 # SOURCE
 -- typecheck: the entry module: the graph drive (`driveGraphK`), the chain and core memos and
@@ -418,12 +418,14 @@ import types.tc_solve_check.{
 import types.tc_effects.{
   grantOrder,
 }
-import types.tc_occurrence.{
-  argDispatchIndices,
-  argDispatchIndicesById,
+import types.tc_mark.{
   constrainedSigNames,
   markDictNames,
   markSetsOf,
+}
+import types.tc_occurrence.{
+  argDispatchIndices,
+  argDispatchIndicesById,
   methodConstraintNames,
 }
 import types.tc_groups.{
@@ -3719,7 +3721,8 @@ schemeLines ((n, p) :: rest) = "\{n} : \{ppPubScheme p}" :: schemeLines rest
 (DUse false (UseGroup ("types" "tc_solve") ((mem "goalsMark" false) (mem "returnPosMethodNames" false) (mem "routesOfMonosTopV" false))))
 (DUse false (UseGroup ("types" "tc_solve_check") ((mem "checkCallObligationsU" false))))
 (DUse false (UseGroup ("types" "tc_effects") ((mem "grantOrder" false))))
-(DUse false (UseGroup ("types" "tc_occurrence") ((mem "argDispatchIndices" false) (mem "argDispatchIndicesById" false) (mem "constrainedSigNames" false) (mem "markDictNames" false) (mem "markSetsOf" false) (mem "methodConstraintNames" false))))
+(DUse false (UseGroup ("types" "tc_mark") ((mem "constrainedSigNames" false) (mem "markDictNames" false) (mem "markSetsOf" false))))
+(DUse false (UseGroup ("types" "tc_occurrence") ((mem "argDispatchIndices" false) (mem "argDispatchIndicesById" false) (mem "methodConstraintNames" false))))
 (DUse false (UseGroup ("types" "tc_groups") ((mem "allEVars" false))))
 (DUse false (UseGroup ("types" "tc_elab") ((mem "dictPassModulesIfEnabled" false) (mem "drivenEvidence" false))))
 (DUse false (UseGroup ("types" "tc_global") ((mem "globalCoherenceConflict" false))))
@@ -4130,7 +4133,8 @@ schemeLines ((n, p) :: rest) = "\{n} : \{ppPubScheme p}" :: schemeLines rest
 (DUse false (UseGroup ("types" "tc_solve") ((mem "goalsMark" false) (mem "returnPosMethodNames" false) (mem "routesOfMonosTopV" false))))
 (DUse false (UseGroup ("types" "tc_solve_check") ((mem "checkCallObligationsU" false))))
 (DUse false (UseGroup ("types" "tc_effects") ((mem "grantOrder" false))))
-(DUse false (UseGroup ("types" "tc_occurrence") ((mem "argDispatchIndices" false) (mem "argDispatchIndicesById" false) (mem "constrainedSigNames" false) (mem "markDictNames" false) (mem "markSetsOf" false) (mem "methodConstraintNames" false))))
+(DUse false (UseGroup ("types" "tc_mark") ((mem "constrainedSigNames" false) (mem "markDictNames" false) (mem "markSetsOf" false))))
+(DUse false (UseGroup ("types" "tc_occurrence") ((mem "argDispatchIndices" false) (mem "argDispatchIndicesById" false) (mem "methodConstraintNames" false))))
 (DUse false (UseGroup ("types" "tc_groups") ((mem "allEVars" false))))
 (DUse false (UseGroup ("types" "tc_elab") ((mem "dictPassModulesIfEnabled" false) (mem "drivenEvidence" false))))
 (DUse false (UseGroup ("types" "tc_global") ((mem "globalCoherenceConflict" false))))

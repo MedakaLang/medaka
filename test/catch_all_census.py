@@ -53,6 +53,7 @@ SRCS = [
     f"{ROOT}/compiler/types/tc_shadow.mdk",
     f"{ROOT}/compiler/types/tc_effects.mdk",
     f"{ROOT}/compiler/types/tc_occurrence.mdk",
+    f"{ROOT}/compiler/types/tc_mark.mdk",
     f"{ROOT}/compiler/types/tc_groups.mdk",
     f"{ROOT}/compiler/types/tc_pat.mdk",
     f"{ROOT}/compiler/types/tc_infer_records.mdk",

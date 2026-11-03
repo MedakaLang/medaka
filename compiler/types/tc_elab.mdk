@@ -73,6 +73,7 @@ import types.tc_solve.{
   solveExactReturnOnce,
 }
 import types.tc_solve_check.{setFunPredicateSlots}
+import types.tc_mark.{constrainedSigNames}
 import types.tc_shadow.{
   methodCellOf,
 }
@@ -89,7 +90,6 @@ import types.tc_effects.{
 import types.tc_occurrence.{
   arithDispatchMethod,
   binopMethod,
-  constrainedSigNames,
   isGrantOnlyEv,
   mintMethodCellRaw,
   unopMethod,

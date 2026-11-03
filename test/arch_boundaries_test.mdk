@@ -618,6 +618,9 @@ test "arch_boundaries: types.tc_effects closure matches its golden" =
 test "arch_boundaries: types.tc_occurrence closure matches its golden" =
   closurePin "types.tc_occurrence"
 
+test "arch_boundaries: types.tc_mark closure matches its golden" =
+  closurePin "types.tc_mark"
+
 test "arch_boundaries: types.tc_groups closure matches its golden" =
   closurePin "types.tc_groups"
 
@@ -1183,6 +1186,7 @@ typecheckFamily = [
   "types.tc_shadow",
   "types.tc_effects",
   "types.tc_occurrence",
+  "types.tc_mark",
   "types.tc_groups",
   "types.tc_pat",
   "types.tc_infer_records",

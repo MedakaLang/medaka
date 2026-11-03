@@ -2,20 +2,20 @@
 -- (`freshEvId`, `mintMethodCellRaw`, the site readers and `cellStoreMisses`, and the sites
 -- the mark pass mints through `markGroupClauses`), the structural registries read off
 -- interface declarations
--- (`argDispatchIndices`, `argDispatchIndicesById`, `methodConstraintNames`,
--- `constrainedSigNames`), the operator method tables and the goals an operator occurrence
+-- (`argDispatchIndices`, `argDispatchIndicesById`, `methodConstraintNames`), the operator
+-- method tables and the goals an operator occurrence
 -- records (`recordBinopGoals`, `recordUnopSite`, `recordIfaceObligation`,
 -- `recordNegatedLitRange`), literal inference (`inferNumLit`), the method-occurrence
 -- obligation (`mkMethodOccObl`), the obligations a standalone shadow's scheme re-records
 -- (reached through `standaloneOccurrence`, which calls `recordShadowStandaloneObls`),
 -- variable and standalone instantiation
--- (`instantiateVarTrackedId`, `standaloneSchemeFor`), the clause map of the mark pass
--- (`mapGroupClauses`, `markDictNames`), the write-back of marked clauses
--- (`rebuildGroupDecls`) and the ordinary-return probes
+-- (`instantiateVarTrackedId`, `standaloneSchemeFor`) and the ordinary-return probes
 -- (`methodReturnResolutionMutationProbe`, `methodReturnTemplatePresenceProbe`).  Each test
 -- builds the module record, environment and graph it reads; none reaches the inference
 -- recursion.  `typecheck_test` drives `cellGoalInnerAliasing` (defined here), which reads the
--- goals of a whole check, and the mark pass over a real program.
+-- goals of a whole check, and the mark pass over a real program. The mark pass's own API is
+-- tested in `tc_mark_test`, which reuses the fixtures here that build a marking and read its
+-- clauses.
 
 import test.{
   expectAll,
@@ -34,18 +34,32 @@ import frontend.ast.{
   isUnminted,
   tyConBuiltin,
 }
-import frontend.desugar.{desugar}
-import frontend.parser.{parse}
+import frontend.parser.{
+  parse,
+}
 import types.evidence.{
   PrerequisiteEvidence(..),
   RequestInstanceId(..),
   ScopeId(..),
   SolverEvidence(..),
 }
-import types.solver_contract.{SolverOutcome(..), Wanted(..)}
-import types.evidence_complete.{Inner, innerNone}
-import support.ordmap.{omFromNames}
-import types.repr.{Mono(..), Scheme(..), VecObl(..), ppMono}
+import types.solver_contract.{
+  SolverOutcome(..),
+  Wanted(..),
+}
+import types.evidence_complete.{
+  Inner,
+  innerNone,
+}
+import support.ordmap.{
+  omFromNames,
+}
+import types.repr.{
+  Mono(..),
+  Scheme(..),
+  VecObl(..),
+  ppMono,
+}
 import types.tc_env.{
   bindingWithStandalone,
   buildFlatImplEnv,
@@ -54,13 +68,19 @@ import types.tc_env.{
   extendBindings,
   ordinaryEnvBinding,
 }
-import types.tc_mono.{monoScheme, nthFunDomain, schemeMono}
+import types.tc_mono.{
+  monoScheme,
+  nthFunDomain,
+  schemeMono,
+}
+import types.tc_mark.{
+  markGroupClauses,
+}
 import types.tc_occurrence.{
   argDispatchIndices,
   argDispatchIndicesById,
   arithDispatchMethod,
   binopMethod,
-  constrainedSigNames,
   ctorHeadShaped,
   evIdModule,
   firstMethodRow,
@@ -69,13 +89,10 @@ import types.tc_occurrence.{
   inferNumLit,
   instantiateVarTrackedId,
   isGrantOnlyEv,
-  mapGroupClauses,
-  markDictNames,
   methodConstraintNames,
   methodReturnProbeIface,
   methodReturnProbeRequest,
   methodReturnProbeScope,
-  markGroupClauses,
   mintMethodCellRaw,
   mkMethodOccObl,
   pushSiteGoal,
@@ -83,20 +100,27 @@ import types.tc_occurrence.{
   recordIfaceObligation,
   recordNegatedLitRange,
   standaloneOccurrence,
-  rebuildGroupDecls,
   recordUnopSite,
   siteCellLookup,
-  siteHeadCell,
   standaloneSchemeFor,
   siteRouteCell,
   unopMethod,
 }
-import types.tc_shadow.{methodCellLookup}
-import types.tc_solve.{
-  goalKindName, methodReturnProbeImpl, methodReturnResolutionValid,
-  methodReturnSelectedIdentity, solveExactReturnOnce
+import types.tc_shadow.{
+  methodCellLookup,
 }
-import types.tc_state.{initialModuleCtx, probeGraphCtx, wAll}
+import types.tc_solve.{
+  goalKindName,
+  methodReturnProbeImpl,
+  methodReturnResolutionValid,
+  methodReturnSelectedIdentity,
+  solveExactReturnOnce,
+}
+import types.tc_state.{
+  initialModuleCtx,
+  probeGraphCtx,
+  wAll,
+}
 import types.tc_test_support.{
   at,
   sizeScheme,
@@ -111,7 +135,9 @@ import types.tc_test_support.{
   snd3,
   varM,
 }
-import types.tc_unify.{unifyIn}
+import types.tc_unify.{
+  unifyIn,
+}
 import types.tc_types.{
   BuiltinClass(..),
   EvCell(..),
@@ -126,43 +152,92 @@ import types.tc_types.{
   OblProjection(..),
   PendingEntry(..),
   Provenance(..),
-  SiteCell(..),
   SiteKind(..),
   StandaloneOrigin(..),
   TcEnv(..),
   ValueScheme(..),
   siteFor,
 }
-import types.tc_effects.{clausesOf}
-import support.ordmap.{OrdMap, omEmpty, omInsert, omLookup}
-import support.util.{anyList, filterList, isEmptyL, listLen}
-import list.{reverse}
-import types.effect_rows.{pureRow}
+import types.tc_effects.{
+  clausesOf,
+}
+import support.ordmap.{
+  OrdMap,
+  omEmpty,
+  omInsert,
+  omLookup,
+}
+import support.util.{
+  anyList,
+  filterList,
+  isEmptyL,
+  listLen,
+}
+import list.{
+  reverse,
+}
+import types.effect_rows.{
+  pureRow,
+}
 import map as IdMap
-import types.tc_types.{MethodRowTestObservation(..), MethodSchemeRow}
+import types.tc_types.{
+  MethodRowTestObservation(..),
+  MethodSchemeRow,
+}
 import types.tc_mono.{
-  allMethodParamsMentioned, schemeBodyOf, schemeIds, stripArrows, tconBuiltin,
-  tupleMono
+  allMethodParamsMentioned,
+  schemeBodyOf,
+  schemeIds,
+  stripArrows,
+  tconBuiltin,
+  tupleMono,
 }
 import types.tc_state.{
-  carryModuleCtx, emptyMethodEnv, freshGraphRun, freshSubRecordsOf
+  carryModuleCtx,
+  emptyMethodEnv,
+  freshGraphRun,
+  freshSubRecordsOf,
 }
 import types.tc_env.{
-  declEnvModule, extendMethodRow, extendVar, methodEnvGo, methodRowSameNameView,
-  methodRowTestConstantDecl, methodRowTestConstraint, methodRowTestFoldMapDecl,
-  methodRowTestNum, methodRowTestSameA, methodRowTestSameB,
-  methodRowTestUserFromInt, methodSlotKey
+  declEnvModule,
+  extendMethodRow,
+  extendVar,
+  methodEnvGo,
+  methodRowSameNameView,
+  methodRowTestConstantDecl,
+  methodRowTestConstraint,
+  methodRowTestFoldMapDecl,
+  methodRowTestNum,
+  methodRowTestSameA,
+  methodRowTestSameB,
+  methodRowTestUserFromInt,
+  methodSlotKey,
 }
-import types.tc_unify.{instantiateMethodTracked, unify}
+import types.tc_unify.{
+  instantiateMethodTracked,
+  unify,
+}
 import types.tc_solve.{
-  methodReturnArgs, methodReturnProbeGoalIfaces, methodReturnProbeOblIfaces,
-  methodReturnProbeSpelling, methodRowRegistrySlotIds, methodSlotArgumentIds,
-  methodSlotBoundIds, methodSlotIdsAtPositions, methodSlotPositions,
-  numAnchorObservationView
+  methodReturnArgs,
+  methodReturnProbeGoalIfaces,
+  methodReturnProbeOblIfaces,
+  methodReturnProbeSpelling,
+  methodRowRegistrySlotIds,
+  methodSlotArgumentIds,
+  methodSlotBoundIds,
+  methodSlotIdsAtPositions,
+  methodSlotPositions,
+  numAnchorObservationView,
 }
-import types.tc_decls.{methodRowNumObservation}
-import types.repr.{normalize}
-import types.tc_occurrence.{recordSite}
+import types.tc_decls.{
+  methodRowNumObservation,
+}
+import types.repr.{
+  normalize,
+}
+import types.tc_occurrence.{
+  recordSite,
+}
 
 -- ── fixtures ──────────────────────────────────────────────────────────────
 
@@ -182,12 +257,14 @@ test "each evidence id takes the next ordinal and names the module being inferre
     (["mod", "mod"], [0, 1])
     ([evIdModule a, evIdModule b], [ordinalOf a, ordinalOf b])
 
+export
 ordinalOf : EvId -> Int
 ordinalOf (EvId _ n) = n
 
 -- A module marking that sends the names in [rp] and [an] to method occurrences, the pairs in
 -- [sm] (mangled symbol, bare name) to shadow occurrences and the names in [dicts] to
 -- dictionary applications.
+export
 marking : List String ->
   List String ->
   List (String, String) ->
@@ -206,6 +283,7 @@ marking rp an sm dicts = ModuleMarking {
 }
 
 -- The clauses of [src] marked as members [members] of one group, by name.
+export
 markedAs : ModuleCtx ->
   ModuleMarking ->
   List String ->
@@ -215,11 +293,13 @@ markedAs m mm members src =
   markGroupClauses mm (envFor m) members (groupedOf src)
 
 -- The bodies of [name]'s clauses in [grouped], in source order.
+export
 bodiesOf : String -> OrdMap (List (List Pat, Expr)) -> List Expr
 bodiesOf name grouped = map snd (clausesOf name grouped)
 
 -- Each site or occurrence node of [e] that carries an evidence id, in reading order, with a
 -- word for its kind.
+export
 nodesOf : Expr -> List (String, EvId)
 nodesOf (EBinOp _ l r ev) = minted "op" ev ++ nodesOf l ++ nodesOf r
 nodesOf (EUnOp _ x ev) = minted "op" ev ++ nodesOf x
@@ -237,146 +317,13 @@ nodesOf _ = []
 minted : String -> EvId -> List (String, EvId)
 minted kind ev = if isUnminted ev then [] else [(kind, ev)]
 
-kindsOf : List (String, EvId) -> List String
-kindsOf nodes = map fst nodes
-
--- The kind of the site cell minted for [ev]: the cell itself, not the node that carries it.
-cellKindOf : ModuleCtx -> EvId -> String
-cellKindOf m (EvId _ n) =
-  let g = m.mcGraph.graphRun
-  match arrayGetUnsafe (n - g.evBase) g.siteCells.value
-    Some (_, OpSite _) => "op"
-    Some (_, LitSite _ _) => "lit"
-    Some (_, HeadSite _) => "head"
-    None => "unminted"
-
 -- A route as a word: the constructor and the name it carries.
+export
 routeWord : Route -> String
 routeWord RNone = "none"
 routeWord (RDict name) = "dict:" ++ name
 routeWord (RLocal name _) = "local:" ++ name
 routeWord _ = "other"
-
-test "marking a group mints a site for each operator, literal and field access in its clauses" =
-  let m = scoped ()
-  let marked =
-    markedAs m (marking [] [] [] []) ["f"] """
-f x = x + 1
-f x = x.name
-"""
-  let nodes = flatMap nodesOf (bodiesOf "f" marked)
-  expectEqual ["op", "lit", "head"] (kindsOf nodes)
-
-test "a minted operator site's cell is the one its id reads, and starts unrouted" =
-  let m = scoped ()
-  let marked = markedAs m (marking [] [] [] []) ["f"] "f x = x + y"
-  match flatMap nodesOf (bodiesOf "f" marked)
-    (_, ev) :: _ =>
-      let route = siteRouteCell m.mcGraph ev
-      let before = route.value
-      route := RDict "d"
-      expectEqual
-        ("op", "none", "dict:d")
-        (
-          cellKindOf m ev,
-          routeWord before,
-          routeWord (siteRouteCell m.mcGraph ev).value,
-        )
-    [] => expectEqual "an operator site" "none"
-
-test "a minted literal site has an unrouted fromInt route and a field access site the unknown head" =
-  let m = scoped ()
-  let marked = markedAs m (marking [] [] [] []) ["f"] "f r = (r.name, 5)"
-  match flatMap nodesOf (bodiesOf "f" marked)
-    [("head", head), ("lit", lit)] =>
-      expectEqual
-        ("head", "lit", "", "none")
-        (
-          cellKindOf m head,
-          cellKindOf m lit,
-          (siteHeadCell m.mcGraph head).value,
-          routeWord (siteRouteCell m.mcGraph lit).value,
-        )
-    _ => expectEqual "a head site then a literal site" "other"
-
-test "marking a body again keeps the ids it already minted" =
-  let m = scoped ()
-  let mm = marking [] [] [] []
-  let once = markedAs m mm ["f"] "f x = x + 1"
-  let twice = markGroupClauses mm (envFor m) ["f"] once
-  expectEqual
-    (map ordinalOfNode (flatMap nodesOf (bodiesOf "f" once)))
-    (map ordinalOfNode (flatMap nodesOf (bodiesOf "f" twice)))
-
-ordinalOfNode : (String, EvId) -> (String, Int)
-ordinalOfNode (kind, ev) = (kind, ordinalOf ev)
-
-test "a name in the return-position set becomes a method occurrence with a fresh undecided cell" =
-  let m = scoped ()
-  let marked = markedAs m (marking ["make"] [] [] []) ["f"] "f x = make x"
-  match flatMap nodesOf (bodiesOf "f" marked)
-    [("method", ev)] => match methodCellLookup m.mcGraph ev
-      Ok c => expectEqual ("", None) (c.ecIface.value, c.ecArity.value)
-      Err message => expectEqual "a minted cell" message
-    _ => expectEqual "one method occurrence" "other"
-
-test "a mangled shadow symbol is marked as the bare method with the symbol as its route fallback" =
-  let m = scoped ()
-  let marked =
-    markedAs m (marking [] [] [("m__size", "size")] []) ["f"] "f x = m__size x"
-  match flatMap methodsOf (bodiesOf "f" marked)
-    [(bare, sym, ev)] => match methodCellLookup m.mcGraph ev
-      Ok c =>
-        expectEqual
-          ("size", "m__size", "local:m__size")
-          (bare, sym, routeWord c.ecTag.value)
-      Err message => expectEqual "a minted cell" message
-    other => expectEqual "one method occurrence" (intToString (listLen other))
-
--- The bare name, symbol and id of each method occurrence in [e].
-methodsOf : Expr -> List (String, String, EvId)
-methodsOf (EMethodAt bare sym ev) = [(bare, sym, ev)]
-methodsOf (EApp f x) = methodsOf f ++ methodsOf x
-methodsOf (ELoc _ e) = methodsOf e
-methodsOf _ = []
-
-test "a name in the dictionary set becomes a dictionary application unless a parameter binds it" =
-  let m = scoped ()
-  let marked =
-    markedAs
-      m
-      (marking [] [] [] ["needs"])
-      ["f", "g"]
-      """
-f x = needs x
-g needs = needs
-"""
-  expectEqual
-    (["dict"], [])
-    (
-      kindsOf (flatMap nodesOf (bodiesOf "f" marked)),
-      kindsOf (flatMap nodesOf (bodiesOf "g" marked)),
-    )
-
-test "every member of the group is marked and a name outside it is not" =
-  let m = scoped ()
-  let marked =
-    markedAs
-      m
-      (marking [] [] [] [])
-      ["f", "g"]
-      """
-f x = x + 1
-g x = x + 1
-h x = x + 1
-"""
-  expectEqual
-    (["op", "lit"], ["op", "lit"], [])
-    (
-      kindsOf (flatMap nodesOf (bodiesOf "f" marked)),
-      kindsOf (flatMap nodesOf (bodiesOf "g" marked)),
-      kindsOf (flatMap nodesOf (bodiesOf "h" marked)),
-    )
 
 test "a method cell keeps the interface, arity, tag and impl routes it was minted with" =
   let m = scoped ()
@@ -519,36 +466,6 @@ test "the identity-keyed registry has the same indices under the interface's ide
 
 test "a method carrying its own constraint is named, and an unconstrained one is not" =
   expectEqual ["foldMap"] (methodConstraintNames (parse registrySource))
-
-test "the constrained signatures are the top-level ones with a context, attributed or not" =
-  expectEqual
-    ["plain", "attributed"]
-    (constrainedSigNames
-      (parse
-        """
-plain : Eq a => a -> Bool
-free : Int -> Int
-@inline
-attributed : Ord a => a -> a -> Bool
-"""))
-
-test "an attributed constrained signature is still a constrained signature" =
-  expectEqual
-    ["g", "h"]
-    (constrainedSigNames
-      (desugar
-        (parse
-          """
-@noinline
-g : Num a => a -> a
-g x = x
-@must_use
-@noinline
-h : Num a => a -> a
-h x = x
-k : Int -> Int
-k x = x
-""")))
 
 test "a name outside the dispatch registry is only a constructor head by its spelling" = expectAll
   [
@@ -770,6 +687,7 @@ test "an importer shadow whose scheme only the cross-module table holds records 
 -- ── the clause map of the mark pass ───────────────────────────────────────
 
 -- The clauses of [src], grouped the way a group's map keeps them.
+export
 groupedOf : String -> OrdMap (List (List Pat, Expr))
 groupedOf src =
   fold
@@ -781,83 +699,6 @@ groupedOf src =
         DFunDef _ name pats body _ _ => [(name, (pats, body))]
         _ => [])
       (parse src))
-
-test "the mark pass applies its rewrite to a member's clauses in source order and stores them back in the map's order" =
-  let counter = Ref 0
-  let stamp =
-    (pats, body) =>
-      counter := counter.value + 1
-      (pats, EVar ("clause" ++ intToString counter.value))
-  let marked =
-    mapGroupClauses stamp ["f"] (groupedOf """
-f 0 = a
-f n = b
-g n = c
-""")
-  expectEqual
-    (["clause1", "clause2"], ["c"])
-    (
-      map (c => varName (snd c)) (clausesOf "f" marked),
-      map (c => varName (snd c)) (clausesOf "g" marked),
-    )
-
-varName : Expr -> String
-varName (EVar x) = x
-varName (EVarId x _) = x
-varName (ELoc _ e) = varName e
-varName _ = panic "varName: not a variable"
-
-test "a name outside the members is not rewritten" =
-  let marked =
-    mapGroupClauses
-      (clause => (fst clause, EVar "rewritten"))
-      ["f"]
-      (groupedOf """
-f n = a
-g n = b
-""")
-  expectEqual
-    (["rewritten"], ["b"])
-    (
-      map (c => varName (snd c)) (clausesOf "f" marked),
-      map (c => varName (snd c)) (clausesOf "g" marked),
-    )
-
-test "the dict-name set keeps the bare names once and adds the local name an alias import binds" =
-  let gctx = probeGraphCtx ()
-  expectEqual
-    ["f", "g"]
-    (markDictNames gctx ["f", "f"] [] [("m", parse "import lib.{f as g}")])
-
--- ── the write-back of marked clauses ──────────────────────────────────────
-
-test "rebuilding writes each marked clause over its own declaration and leaves the rest" =
-  let prog = parse """
-f : Int -> Int
-f 0 = a
-g n = b
-f n = c
-data T = X
-"""
-  -- clauses are grouped newest first, as `groupClauses` leaves them
-  let grouped =
-    omInsert
-      "g"
-      [([], EVar "marked_g_b")]
-      (omInsert "f" [([], EVar "marked_f_c"), ([], EVar "marked_f_a")] omEmpty)
-  expectEqual
-    [
-      None,
-      Some ("f", "marked_f_a"),
-      Some ("g", "marked_g_b"),
-      Some ("f", "marked_f_c"),
-      None,
-    ]
-    (map writtenBody (rebuildGroupDecls grouped prog))
-
-writtenBody : Decl -> Option (String, String)
-writtenBody (DFunDef _ n _ (EVar v) _ _) = Some (n, v)
-writtenBody _ = None
 
 -- ── the ordinary-return probes ────────────────────────────────────────────
 

@@ -4,9 +4,8 @@
 -- stamping of a module's clauses and tail declarations (`stampGroupClauses`, `stampTailDecls`),
 -- and the registration of imported declarations (the import-overlay rows: `registerImportOverlay`,
 -- `overlay*`, `cached*`, `importOverlayDecls`, `oracleImportDecls*`, `reexported*Decl`,
--- `useDefinerRows`); the mark pass's module begin and finish rows (`beginModuleMarking`,
--- `finishModuleMarking`) stay here because `tc_occurrence` is at the A8 band when extracted, and a
--- `tc_mark` module would hold them with `methodMarkCtx` and `moduleMarkCtx` (owed, Val).
+-- `useDefinerRows`). The mark pass, including the module's begin and finish rows
+-- (`beginModuleMarking`, `finishModuleMarking`), is `tc_mark`.
 --
 -- Spec: TYPECHECK-CONTRACTS section 3 (scoped scheduling); DICT section 4.2, section 7.1; HM-CORE
 -- section 5 (owed, #2555).
@@ -15,29 +14,27 @@
 -- compiler/ARCHITECTURE-PLAYBOOK.md section 6.
 -- Closure rule: this module may not import `types.typecheck`.
 
+import types.tc_mark.{
+  beginModuleMarking, finishModuleMarking, mapGroupClauses, markGroupClauses,
+  markRecursiveOccurrences
+}
 import support.diag_codes.{DiagCode(..)}
 import frontend.ast.{
-  BinderId(..), ConPayload(..), Decl(..), EvEntry(..), EvVal(..), Expr(..),
-  ExternDecl(..), FunClause(..), Ident(..), LetBind(..), Loc(..), Ns(..),
-  Pat(..), PropParam(..), Route(..), Super(..), Ty(..), TyConOrigin(..),
-  UseMember(..), UsePath(..), Variant(..), identOriginFold, mkIdent
+  BinderId(..), ConPayload(..), Decl(..), Expr(..), FunClause(..), Ident(..),
+  LetBind(..), Loc(..), Ns(..), Pat(..), PropParam(..), Super(..), Ty(..),
+  TyConOrigin(..), UseMember(..), UsePath(..), Variant(..), identOriginFold,
+  mkIdent
 }
-import types.runtime_types.{BinderRow(..), RuntimeType(..)}
 import types.scopes.{ScopeOwner(..)}
 import types.tc_types.{
   BuiltinClasses(..), CeRow(..), CheckRunSeed(..), ClassEnv(..),
   ConstraintReg(..), DeclaringBinder(..), DeclEnvModule(..), DrainFinding(..),
-  EnvBinding(..), EvCell(..), EvDest(..), EvidenceObservationEntry(..),
-  EvidenceOutcomeKind(..), GoalKind(..), GoalPayload(..), GraphCtx(..),
-  GraphMarks(..), GroupCtx(..), ImplEnv(..), LiveGoal(..),
-  MethodPredicateSlot(..), MethodSchemeRow(..), ModuleBindings(..),
+  EnvBinding(..), GoalKind(..), GraphCtx(..), GraphMarks(..), GroupCtx(..),
+  ImplEnv(..), LiveGoal(..), MethodPredicateSlot(..), ModuleBindings(..),
   ModuleCtx(..), ModuleMarking(..), ModuleSeed(..), NumBoundary(..),
-  NumBoundaryDisposition(..), NumGuard(..), Obligation(..), ObligationSite(..),
-  PendingBinder(..), PendingEntry(..), RecDictApp(..), RecordInfo(..),
-  ScopedMember(..), ScopedScheme(..), SiteCtx(..), SiteKind(..), StampCtx(..),
-  StampStep(..), StandaloneOrigin(..), TcEnv(..), dynFor
+  NumBoundaryDisposition(..), NumGuard(..), ObligationSite(..), RecordInfo(..),
+  ScopedMember(..), ScopedScheme(..), StandaloneOrigin(..), TcEnv(..), dynFor
 }
-import types.evidence_complete.{EvidenceRow(..), Inner(..)}
 import types.repr.{IfaceRef(..), Mono(..), Scheme(..), VecObl(..)}
 import map.{Map(..)}
 import support.ordmap.{
@@ -68,12 +65,11 @@ import types.tc_decls.{
   rejectCyclicAliases, seedNumLitFromIntAnchor, sigToScheme
 }
 import types.tc_scope.{
-  aliasConstraintEntries, aliasDictNames, aliasMethodSpellings,
-  aliasQualifiedMethodEntries, annotateImportedMethodRows,
-  applyCtorScopeOverrides, applyRecordScopeOverrides, declCtorNamed,
-  importedMemberBindingNames, insertCtorPop, insertRecordPop,
-  methodNameDeclaredAt, pickSchemesByDecl, reportAmbiguousImportsIn,
-  resolveMemberRows, schemeOblEntriesFor
+  aliasConstraintEntries, aliasMethodSpellings, aliasQualifiedMethodEntries,
+  annotateImportedMethodRows, applyCtorScopeOverrides,
+  applyRecordScopeOverrides, declCtorNamed, importedMemberBindingNames,
+  insertCtorPop, insertRecordPop, methodNameDeclaredAt, pickSchemesByDecl,
+  reportAmbiguousImportsIn, resolveMemberRows, schemeOblEntriesFor
 }
 import types.tc_mono.{
   containsI, dedupI, findTvarInMonos, monoArgUnboundIds, monoScheme,
@@ -84,10 +80,7 @@ import support.util.{
   anyList, dedup, dedupBy, filterList, isEmptyL, isNonEmptyL, listLen,
   orElseOpt, reverseL
 }
-import types.tc_occurrence.{
-  argDispatchIndicesById, constrainedSigNames, mapGroupClauses,
-  markGroupClauses, markRecursiveOccurrences, markTailDecls, rebuildGroupDecls
-}
+import types.tc_occurrence.{argDispatchIndicesById}
 import types.tc_solve.{
   determineByUniqueInstance, dropGoalsSince, goalsMark, improveByUniqueImpl,
   outerRigidIds, refileDeterminedRows, uOblArgs
@@ -96,9 +89,8 @@ import types.effect_authority.{authvarId, authVars}
 import types.tc_effects.{
   beginEffectSummaryScope, borrowedEffectCells, checkEffectEscape,
   checkUndeterminedRetEffVars, clausesOf, finishEffectSummaryScopeKeeping,
-  flushPendingEscapes, freshEffectSummary, grantNameIn, memberEffectRoots,
-  recordFileBound, recordMethodGrants, recordTopGrants,
-  reportEffectSummaryFailures
+  flushPendingEscapes, freshEffectSummary, memberEffectRoots, recordFileBound,
+  recordMethodGrants, recordTopGrants, reportEffectSummaryFailures
 }
 import types.tc_state.{
   callUOblsWindow, checkRunResidue, currentScopeStore, dynAtIfSome, envAtIfSome,
@@ -124,7 +116,7 @@ import types.tc_unify.{
   widenOpenedFor
 }
 import types.tc_shadow.{
-  definerShadowsFromSet, isPreludeMid, moduleMarkCtx, nameableIfaceMethodSet,
+  definerShadowsFromSet, isPreludeMid, nameableIfaceMethodSet,
   nameableIfaceRows, nameableIfaceShadows, standaloneShadowsFromSet
 }
 import types.tc_decls_types.{
@@ -146,7 +138,7 @@ import types.tc_diag_text.{cyclicSuperIfaceMsg, ordinalSentinelMsg}
 import types.effect_rows.{effrowNorm, pureRow}
 import frontend.desugar.{exprSpanLoc, joinLocs}
 import types.tc_foreign.{
-  declExternNames, directExternSigs, externDecls, ffiCheckExternsCatalogRow,
+  directExternSigs, externDecls, ffiCheckExternsCatalogRow,
   ffiCheckExternsCrossable, ffiCheckExternsLabelled, ffiCheckExternsShadow,
   ffiStampMode
 }
@@ -3341,40 +3333,6 @@ checkGraphFinish mctx =
   mctx.mcGraph.typeErrorsStickyDiags := savedStickyDiags
   holes
 
--- Install the module's marking state at module start.  Reads the graph's mark sets
--- off the driver preamble; a Module arm reached without one is a driver bug, and
--- fails loud rather than marking nothing.
-beginModuleMarking : ModuleCtx ->
-  String ->
-  List Decl ->
-  OrdMap Int ->
-  ModuleSeed ->
-  Unit
-beginModuleMarking mctx mid prog top seed =
-  let ms =
-    optionOrPanic
-      "checkBodyImpl: Module arm entered with no mark sets (no driver preamble ran)"
-      mctx.mcGraph.markSetsRef.value
-  -- Core imports nothing, so the dict names nameable in it are its own `=>`
-  -- signatures, the set its `dictPass` gives parameters to.  A user definition that
-  -- shares a bare name with a core one is a different definition.
-  let known = match mid
-    "" => constrainedSigNames prog
-    _ => dedup (ms.msBareDictNames ++ mctx.mcGraph.promotionHarvestRef.value)
-  let aliases = aliasDictNames (importerDefiners
-    mctx.mcGraph) known ms.msUnits [
-    (mid, prog),
-  ]
-  mctx.mcGraph.graphRun.localAbs.lasNext := (mid, 0)
-  mctx.mcGraph.graphRun.localAbs.lasMinted := []
-  mctx.mcCells.markingRef := Some ModuleMarking {
-    mmCtx = moduleMarkCtx mctx.mcGraph ms mid prog seed.msImportedValues,
-    mmTop = top,
-    mmDictSet = Ref (omFromNames (known ++ aliases) omEmpty),
-    mmUserNames = omFromNames (declTopFnNames prog) seed.msImportedNames,
-    mmExterns = omFromNames (declExternNames prog) seed.msImportedExterns,
-  }
-
 -- The stamped twin of the group's marked clauses — what inference reads.  Binding
 -- ids are minted over the module's declaration heads (`stampTopScope`), so stamping
 -- one group at a time yields the ids `stampBindingIds` would have.
@@ -3384,23 +3342,6 @@ stampGroupClauses : ModuleMarking ->
   OrdMap (List (List Pat, Expr))
 stampGroupClauses mm members grouped =
   mapGroupClauses (stampClauseWith mm.mmTop) members grouped
-
--- The module's marked tree: its binding groups' marked clauses written back into the
--- declarations in source order, then the remaining bodies (impl, default, prop,
--- test) marked with the module's final dict-name set — they are inferred
--- after every group, so every promotion the module made is in the set by then.
-finishModuleMarking : ModuleMarking ->
-  TcEnv ->
-  OrdMap (List (List Pat, Expr)) ->
-  List Decl ->
-  List Decl
-finishModuleMarking mm env grouped prog =
-  markTailDecls
-    env.teDyn.dcModule
-    mm.mmCtx
-    mm.mmDictSet.value
-    (grantNameIn env)
-    (rebuildGroupDecls grouped prog)
 
 -- The stamped twin of the tail declarations, for their inference; binding groups
 -- were stamped as the schedule reached them and are not walked again.

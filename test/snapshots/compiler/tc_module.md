@@ -1,5 +1,5 @@
 # META
-source_lines=3414
+source_lines=3355
 stages=DESUGAR,MARK
 # SOURCE
 -- tc_module: the per-module check in one order: declarations, top-level groups, test and prop
@@ -8,9 +8,8 @@ stages=DESUGAR,MARK
 -- stamping of a module's clauses and tail declarations (`stampGroupClauses`, `stampTailDecls`),
 -- and the registration of imported declarations (the import-overlay rows: `registerImportOverlay`,
 -- `overlay*`, `cached*`, `importOverlayDecls`, `oracleImportDecls*`, `reexported*Decl`,
--- `useDefinerRows`); the mark pass's module begin and finish rows (`beginModuleMarking`,
--- `finishModuleMarking`) stay here because `tc_occurrence` is at the A8 band when extracted, and a
--- `tc_mark` module would hold them with `methodMarkCtx` and `moduleMarkCtx` (owed, Val).
+-- `useDefinerRows`). The mark pass, including the module's begin and finish rows
+-- (`beginModuleMarking`, `finishModuleMarking`), is `tc_mark`.
 --
 -- Spec: TYPECHECK-CONTRACTS section 3 (scoped scheduling); DICT section 4.2, section 7.1; HM-CORE
 -- section 5 (owed, #2555).
@@ -19,29 +18,27 @@ stages=DESUGAR,MARK
 -- compiler/ARCHITECTURE-PLAYBOOK.md section 6.
 -- Closure rule: this module may not import `types.typecheck`.
 
+import types.tc_mark.{
+  beginModuleMarking, finishModuleMarking, mapGroupClauses, markGroupClauses,
+  markRecursiveOccurrences
+}
 import support.diag_codes.{DiagCode(..)}
 import frontend.ast.{
-  BinderId(..), ConPayload(..), Decl(..), EvEntry(..), EvVal(..), Expr(..),
-  ExternDecl(..), FunClause(..), Ident(..), LetBind(..), Loc(..), Ns(..),
-  Pat(..), PropParam(..), Route(..), Super(..), Ty(..), TyConOrigin(..),
-  UseMember(..), UsePath(..), Variant(..), identOriginFold, mkIdent
+  BinderId(..), ConPayload(..), Decl(..), Expr(..), FunClause(..), Ident(..),
+  LetBind(..), Loc(..), Ns(..), Pat(..), PropParam(..), Super(..), Ty(..),
+  TyConOrigin(..), UseMember(..), UsePath(..), Variant(..), identOriginFold,
+  mkIdent
 }
-import types.runtime_types.{BinderRow(..), RuntimeType(..)}
 import types.scopes.{ScopeOwner(..)}
 import types.tc_types.{
   BuiltinClasses(..), CeRow(..), CheckRunSeed(..), ClassEnv(..),
   ConstraintReg(..), DeclaringBinder(..), DeclEnvModule(..), DrainFinding(..),
-  EnvBinding(..), EvCell(..), EvDest(..), EvidenceObservationEntry(..),
-  EvidenceOutcomeKind(..), GoalKind(..), GoalPayload(..), GraphCtx(..),
-  GraphMarks(..), GroupCtx(..), ImplEnv(..), LiveGoal(..),
-  MethodPredicateSlot(..), MethodSchemeRow(..), ModuleBindings(..),
+  EnvBinding(..), GoalKind(..), GraphCtx(..), GraphMarks(..), GroupCtx(..),
+  ImplEnv(..), LiveGoal(..), MethodPredicateSlot(..), ModuleBindings(..),
   ModuleCtx(..), ModuleMarking(..), ModuleSeed(..), NumBoundary(..),
-  NumBoundaryDisposition(..), NumGuard(..), Obligation(..), ObligationSite(..),
-  PendingBinder(..), PendingEntry(..), RecDictApp(..), RecordInfo(..),
-  ScopedMember(..), ScopedScheme(..), SiteCtx(..), SiteKind(..), StampCtx(..),
-  StampStep(..), StandaloneOrigin(..), TcEnv(..), dynFor
+  NumBoundaryDisposition(..), NumGuard(..), ObligationSite(..), RecordInfo(..),
+  ScopedMember(..), ScopedScheme(..), StandaloneOrigin(..), TcEnv(..), dynFor
 }
-import types.evidence_complete.{EvidenceRow(..), Inner(..)}
 import types.repr.{IfaceRef(..), Mono(..), Scheme(..), VecObl(..)}
 import map.{Map(..)}
 import support.ordmap.{
@@ -72,12 +69,11 @@ import types.tc_decls.{
   rejectCyclicAliases, seedNumLitFromIntAnchor, sigToScheme
 }
 import types.tc_scope.{
-  aliasConstraintEntries, aliasDictNames, aliasMethodSpellings,
-  aliasQualifiedMethodEntries, annotateImportedMethodRows,
-  applyCtorScopeOverrides, applyRecordScopeOverrides, declCtorNamed,
-  importedMemberBindingNames, insertCtorPop, insertRecordPop,
-  methodNameDeclaredAt, pickSchemesByDecl, reportAmbiguousImportsIn,
-  resolveMemberRows, schemeOblEntriesFor
+  aliasConstraintEntries, aliasMethodSpellings, aliasQualifiedMethodEntries,
+  annotateImportedMethodRows, applyCtorScopeOverrides,
+  applyRecordScopeOverrides, declCtorNamed, importedMemberBindingNames,
+  insertCtorPop, insertRecordPop, methodNameDeclaredAt, pickSchemesByDecl,
+  reportAmbiguousImportsIn, resolveMemberRows, schemeOblEntriesFor
 }
 import types.tc_mono.{
   containsI, dedupI, findTvarInMonos, monoArgUnboundIds, monoScheme,
@@ -88,10 +84,7 @@ import support.util.{
   anyList, dedup, dedupBy, filterList, isEmptyL, isNonEmptyL, listLen,
   orElseOpt, reverseL
 }
-import types.tc_occurrence.{
-  argDispatchIndicesById, constrainedSigNames, mapGroupClauses,
-  markGroupClauses, markRecursiveOccurrences, markTailDecls, rebuildGroupDecls
-}
+import types.tc_occurrence.{argDispatchIndicesById}
 import types.tc_solve.{
   determineByUniqueInstance, dropGoalsSince, goalsMark, improveByUniqueImpl,
   outerRigidIds, refileDeterminedRows, uOblArgs
@@ -100,9 +93,8 @@ import types.effect_authority.{authvarId, authVars}
 import types.tc_effects.{
   beginEffectSummaryScope, borrowedEffectCells, checkEffectEscape,
   checkUndeterminedRetEffVars, clausesOf, finishEffectSummaryScopeKeeping,
-  flushPendingEscapes, freshEffectSummary, grantNameIn, memberEffectRoots,
-  recordFileBound, recordMethodGrants, recordTopGrants,
-  reportEffectSummaryFailures
+  flushPendingEscapes, freshEffectSummary, memberEffectRoots, recordFileBound,
+  recordMethodGrants, recordTopGrants, reportEffectSummaryFailures
 }
 import types.tc_state.{
   callUOblsWindow, checkRunResidue, currentScopeStore, dynAtIfSome, envAtIfSome,
@@ -128,7 +120,7 @@ import types.tc_unify.{
   widenOpenedFor
 }
 import types.tc_shadow.{
-  definerShadowsFromSet, isPreludeMid, moduleMarkCtx, nameableIfaceMethodSet,
+  definerShadowsFromSet, isPreludeMid, nameableIfaceMethodSet,
   nameableIfaceRows, nameableIfaceShadows, standaloneShadowsFromSet
 }
 import types.tc_decls_types.{
@@ -150,7 +142,7 @@ import types.tc_diag_text.{cyclicSuperIfaceMsg, ordinalSentinelMsg}
 import types.effect_rows.{effrowNorm, pureRow}
 import frontend.desugar.{exprSpanLoc, joinLocs}
 import types.tc_foreign.{
-  declExternNames, directExternSigs, externDecls, ffiCheckExternsCatalogRow,
+  directExternSigs, externDecls, ffiCheckExternsCatalogRow,
   ffiCheckExternsCrossable, ffiCheckExternsLabelled, ffiCheckExternsShadow,
   ffiStampMode
 }
@@ -3345,40 +3337,6 @@ checkGraphFinish mctx =
   mctx.mcGraph.typeErrorsStickyDiags := savedStickyDiags
   holes
 
--- Install the module's marking state at module start.  Reads the graph's mark sets
--- off the driver preamble; a Module arm reached without one is a driver bug, and
--- fails loud rather than marking nothing.
-beginModuleMarking : ModuleCtx ->
-  String ->
-  List Decl ->
-  OrdMap Int ->
-  ModuleSeed ->
-  Unit
-beginModuleMarking mctx mid prog top seed =
-  let ms =
-    optionOrPanic
-      "checkBodyImpl: Module arm entered with no mark sets (no driver preamble ran)"
-      mctx.mcGraph.markSetsRef.value
-  -- Core imports nothing, so the dict names nameable in it are its own `=>`
-  -- signatures, the set its `dictPass` gives parameters to.  A user definition that
-  -- shares a bare name with a core one is a different definition.
-  let known = match mid
-    "" => constrainedSigNames prog
-    _ => dedup (ms.msBareDictNames ++ mctx.mcGraph.promotionHarvestRef.value)
-  let aliases = aliasDictNames (importerDefiners
-    mctx.mcGraph) known ms.msUnits [
-    (mid, prog),
-  ]
-  mctx.mcGraph.graphRun.localAbs.lasNext := (mid, 0)
-  mctx.mcGraph.graphRun.localAbs.lasMinted := []
-  mctx.mcCells.markingRef := Some ModuleMarking {
-    mmCtx = moduleMarkCtx mctx.mcGraph ms mid prog seed.msImportedValues,
-    mmTop = top,
-    mmDictSet = Ref (omFromNames (known ++ aliases) omEmpty),
-    mmUserNames = omFromNames (declTopFnNames prog) seed.msImportedNames,
-    mmExterns = omFromNames (declExternNames prog) seed.msImportedExterns,
-  }
-
 -- The stamped twin of the group's marked clauses — what inference reads.  Binding
 -- ids are minted over the module's declaration heads (`stampTopScope`), so stamping
 -- one group at a time yields the ids `stampBindingIds` would have.
@@ -3388,23 +3346,6 @@ stampGroupClauses : ModuleMarking ->
   OrdMap (List (List Pat, Expr))
 stampGroupClauses mm members grouped =
   mapGroupClauses (stampClauseWith mm.mmTop) members grouped
-
--- The module's marked tree: its binding groups' marked clauses written back into the
--- declarations in source order, then the remaining bodies (impl, default, prop,
--- test) marked with the module's final dict-name set — they are inferred
--- after every group, so every promotion the module made is in the set by then.
-finishModuleMarking : ModuleMarking ->
-  TcEnv ->
-  OrdMap (List (List Pat, Expr)) ->
-  List Decl ->
-  List Decl
-finishModuleMarking mm env grouped prog =
-  markTailDecls
-    env.teDyn.dcModule
-    mm.mmCtx
-    mm.mmDictSet.value
-    (grantNameIn env)
-    (rebuildGroupDecls grouped prog)
 
 -- The stamped twin of the tail declarations, for their inference; binding groups
 -- were stamped as the schedule reached them and are not walked again.
@@ -3417,12 +3358,11 @@ stampTailDecl _ (d@(DLetGroup _ _)) = d
 stampTailDecl top (DAttrib attrs d) = DAttrib attrs (stampTailDecl top d)
 stampTailDecl top d = stampDeclWith top d
 # DESUGAR
+(DUse false (UseGroup ("types" "tc_mark") ((mem "beginModuleMarking" false) (mem "finishModuleMarking" false) (mem "mapGroupClauses" false) (mem "markGroupClauses" false) (mem "markRecursiveOccurrences" false))))
 (DUse false (UseGroup ("support" "diag_codes") ((mem "DiagCode" true))))
-(DUse false (UseGroup ("frontend" "ast") ((mem "BinderId" true) (mem "ConPayload" true) (mem "Decl" true) (mem "EvEntry" true) (mem "EvVal" true) (mem "Expr" true) (mem "ExternDecl" true) (mem "FunClause" true) (mem "Ident" true) (mem "LetBind" true) (mem "Loc" true) (mem "Ns" true) (mem "Pat" true) (mem "PropParam" true) (mem "Route" true) (mem "Super" true) (mem "Ty" true) (mem "TyConOrigin" true) (mem "UseMember" true) (mem "UsePath" true) (mem "Variant" true) (mem "identOriginFold" false) (mem "mkIdent" false))))
-(DUse false (UseGroup ("types" "runtime_types") ((mem "BinderRow" true) (mem "RuntimeType" true))))
+(DUse false (UseGroup ("frontend" "ast") ((mem "BinderId" true) (mem "ConPayload" true) (mem "Decl" true) (mem "Expr" true) (mem "FunClause" true) (mem "Ident" true) (mem "LetBind" true) (mem "Loc" true) (mem "Ns" true) (mem "Pat" true) (mem "PropParam" true) (mem "Super" true) (mem "Ty" true) (mem "TyConOrigin" true) (mem "UseMember" true) (mem "UsePath" true) (mem "Variant" true) (mem "identOriginFold" false) (mem "mkIdent" false))))
 (DUse false (UseGroup ("types" "scopes") ((mem "ScopeOwner" true))))
-(DUse false (UseGroup ("types" "tc_types") ((mem "BuiltinClasses" true) (mem "CeRow" true) (mem "CheckRunSeed" true) (mem "ClassEnv" true) (mem "ConstraintReg" true) (mem "DeclaringBinder" true) (mem "DeclEnvModule" true) (mem "DrainFinding" true) (mem "EnvBinding" true) (mem "EvCell" true) (mem "EvDest" true) (mem "EvidenceObservationEntry" true) (mem "EvidenceOutcomeKind" true) (mem "GoalKind" true) (mem "GoalPayload" true) (mem "GraphCtx" true) (mem "GraphMarks" true) (mem "GroupCtx" true) (mem "ImplEnv" true) (mem "LiveGoal" true) (mem "MethodPredicateSlot" true) (mem "MethodSchemeRow" true) (mem "ModuleBindings" true) (mem "ModuleCtx" true) (mem "ModuleMarking" true) (mem "ModuleSeed" true) (mem "NumBoundary" true) (mem "NumBoundaryDisposition" true) (mem "NumGuard" true) (mem "Obligation" true) (mem "ObligationSite" true) (mem "PendingBinder" true) (mem "PendingEntry" true) (mem "RecDictApp" true) (mem "RecordInfo" true) (mem "ScopedMember" true) (mem "ScopedScheme" true) (mem "SiteCtx" true) (mem "SiteKind" true) (mem "StampCtx" true) (mem "StampStep" true) (mem "StandaloneOrigin" true) (mem "TcEnv" true) (mem "dynFor" false))))
-(DUse false (UseGroup ("types" "evidence_complete") ((mem "EvidenceRow" true) (mem "Inner" true))))
+(DUse false (UseGroup ("types" "tc_types") ((mem "BuiltinClasses" true) (mem "CeRow" true) (mem "CheckRunSeed" true) (mem "ClassEnv" true) (mem "ConstraintReg" true) (mem "DeclaringBinder" true) (mem "DeclEnvModule" true) (mem "DrainFinding" true) (mem "EnvBinding" true) (mem "GoalKind" true) (mem "GraphCtx" true) (mem "GraphMarks" true) (mem "GroupCtx" true) (mem "ImplEnv" true) (mem "LiveGoal" true) (mem "MethodPredicateSlot" true) (mem "ModuleBindings" true) (mem "ModuleCtx" true) (mem "ModuleMarking" true) (mem "ModuleSeed" true) (mem "NumBoundary" true) (mem "NumBoundaryDisposition" true) (mem "NumGuard" true) (mem "ObligationSite" true) (mem "RecordInfo" true) (mem "ScopedMember" true) (mem "ScopedScheme" true) (mem "StandaloneOrigin" true) (mem "TcEnv" true) (mem "dynFor" false))))
 (DUse false (UseGroup ("types" "repr") ((mem "IfaceRef" true) (mem "Mono" true) (mem "Scheme" true) (mem "VecObl" true))))
 (DUse false (UseGroup ("map") ((mem "Map" true))))
 (DUse false (UseGroup ("support" "ordmap") ((mem "omDelete" false) (mem "omEmpty" false) (mem "omFromNames" false) (mem "omFromPairs" false) (mem "omHasKey" false) (mem "omInsert" false) (mem "omKeys" false) (mem "omLookup" false) (mem "omMapValues" false) (mem "OrdMap" false))))
@@ -3432,26 +3372,26 @@ stampTailDecl top d = stampDeclWith top d
 (DUse false (UseGroup ("types" "publish") ((mem "TcDiag" true))))
 (DUse false (UseGroup ("types" "tc_env") ((mem "addCtor" false) (mem "attachStandaloneSources" false) (mem "bindingWithStandalone" false) (mem "ceLookupAt" false) (mem "ceRowDoneKey" false) (mem "ceRowIface" false) (mem "ceRowIfaceName" false) (mem "ceRowLoc" false) (mem "ceRowOrd" false) (mem "ceRowSupers" false) (mem "ceRowsVisibleAt" false) (mem "ctorExportsIndex" false) (mem "declEnvRowVisible" false) (mem "declEnvsOrdOf" false) (mem "declTopFnNames" false) (mem "emptyMethodModulePredicateSlots" false) (mem "extendBindings" false) (mem "extendLocalVar" false) (mem "extendMethodRows" false) (mem "extendTermBindings" false) (mem "extendVars" false) (mem "funDefs" false) (mem "ieUniverseAt" false) (mem "ifaceMethodNames" false) (mem "ifaceTabKey" false) (mem "importedBindings" false) (mem "importLocFor" false) (mem "importTableMid" false) (mem "legacyMethodSchemes" false) (mem "methodRowsByIdentity" false) (mem "methodSlotKey" false) (mem "namesToSet" false) (mem "ordinaryEnvBinding" false) (mem "publicDataDecl" false) (mem "publicDataDecls" false) (mem "withCtors" false))))
 (DUse false (UseGroup ("types" "tc_decls") ((mem "addFieldOwners" false) (mem "builtinClassesGo" false) (mem "builtinClassesOf" false) (mem "declEnvSeedDataUniverse" false) (mem "ifaceMethodSchemeRows" false) (mem "importerDefiners" false) (mem "isAliasDecl" false) (mem "loadDataUniverse" false) (mem "recordDeclKinds" false) (mem "registerAllData" false) (mem "registerAllDataScoped" false) (mem "registerData" false) (mem "rejectCyclicAliases" false) (mem "seedNumLitFromIntAnchor" false) (mem "sigToScheme" false))))
-(DUse false (UseGroup ("types" "tc_scope") ((mem "aliasConstraintEntries" false) (mem "aliasDictNames" false) (mem "aliasMethodSpellings" false) (mem "aliasQualifiedMethodEntries" false) (mem "annotateImportedMethodRows" false) (mem "applyCtorScopeOverrides" false) (mem "applyRecordScopeOverrides" false) (mem "declCtorNamed" false) (mem "importedMemberBindingNames" false) (mem "insertCtorPop" false) (mem "insertRecordPop" false) (mem "methodNameDeclaredAt" false) (mem "pickSchemesByDecl" false) (mem "reportAmbiguousImportsIn" false) (mem "resolveMemberRows" false) (mem "schemeOblEntriesFor" false))))
+(DUse false (UseGroup ("types" "tc_scope") ((mem "aliasConstraintEntries" false) (mem "aliasMethodSpellings" false) (mem "aliasQualifiedMethodEntries" false) (mem "annotateImportedMethodRows" false) (mem "applyCtorScopeOverrides" false) (mem "applyRecordScopeOverrides" false) (mem "declCtorNamed" false) (mem "importedMemberBindingNames" false) (mem "insertCtorPop" false) (mem "insertRecordPop" false) (mem "methodNameDeclaredAt" false) (mem "pickSchemesByDecl" false) (mem "reportAmbiguousImportsIn" false) (mem "resolveMemberRows" false) (mem "schemeOblEntriesFor" false))))
 (DUse false (UseGroup ("types" "tc_mono") ((mem "containsI" false) (mem "dedupI" false) (mem "findTvarInMonos" false) (mem "monoArgUnboundIds" false) (mem "monoScheme" false) (mem "monoUnboundIds" false) (mem "schemeMono" false) (mem "tconBuiltin" false) (mem "tconUnresolved" false) (mem "tyVarNames" false) (mem "unquantifiedAuthIds" false))))
 (DUse false (UseGroup ("support" "util") ((mem "anyList" false) (mem "dedup" false) (mem "dedupBy" false) (mem "filterList" false) (mem "isEmptyL" false) (mem "isNonEmptyL" false) (mem "listLen" false) (mem "orElseOpt" false) (mem "reverseL" false))))
-(DUse false (UseGroup ("types" "tc_occurrence") ((mem "argDispatchIndicesById" false) (mem "constrainedSigNames" false) (mem "mapGroupClauses" false) (mem "markGroupClauses" false) (mem "markRecursiveOccurrences" false) (mem "markTailDecls" false) (mem "rebuildGroupDecls" false))))
+(DUse false (UseGroup ("types" "tc_occurrence") ((mem "argDispatchIndicesById" false))))
 (DUse false (UseGroup ("types" "tc_solve") ((mem "determineByUniqueInstance" false) (mem "dropGoalsSince" false) (mem "goalsMark" false) (mem "improveByUniqueImpl" false) (mem "outerRigidIds" false) (mem "refileDeterminedRows" false) (mem "uOblArgs" false))))
 (DUse false (UseGroup ("types" "effect_authority") ((mem "authvarId" false) (mem "authVars" false))))
-(DUse false (UseGroup ("types" "tc_effects") ((mem "beginEffectSummaryScope" false) (mem "borrowedEffectCells" false) (mem "checkEffectEscape" false) (mem "checkUndeterminedRetEffVars" false) (mem "clausesOf" false) (mem "finishEffectSummaryScopeKeeping" false) (mem "flushPendingEscapes" false) (mem "freshEffectSummary" false) (mem "grantNameIn" false) (mem "memberEffectRoots" false) (mem "recordFileBound" false) (mem "recordMethodGrants" false) (mem "recordTopGrants" false) (mem "reportEffectSummaryFailures" false))))
+(DUse false (UseGroup ("types" "tc_effects") ((mem "beginEffectSummaryScope" false) (mem "borrowedEffectCells" false) (mem "checkEffectEscape" false) (mem "checkUndeterminedRetEffVars" false) (mem "clausesOf" false) (mem "finishEffectSummaryScopeKeeping" false) (mem "flushPendingEscapes" false) (mem "freshEffectSummary" false) (mem "memberEffectRoots" false) (mem "recordFileBound" false) (mem "recordMethodGrants" false) (mem "recordTopGrants" false) (mem "reportEffectSummaryFailures" false))))
 (DUse false (UseGroup ("types" "tc_state") ((mem "callUOblsWindow" false) (mem "checkRunResidue" false) (mem "currentScopeStore" false) (mem "dynAtIfSome" false) (mem "envAtIfSome" false) (mem "freshModuleCtx" false) (mem "mctxAt" false) (mem "plainModuleSeed" false) (mem "seedCheckRun" false) (mem "wMark" false) (mem "wWindow" false))))
 (DUse false (UseGroup ("types" "tc_solve_check") ((mem "callOblsWindow" false) (mem "checkCallObligationsU" false) (mem "checkSigVarGoals" false) (mem "dedupPredicateSlotsTable" false) (mem "finalizeNumBoundary" false) (mem "liveNumVarGo" false) (mem "numConstrainedIds" false) (mem "predicateSlotTableWithoutArgs" false) (mem "registerConstraintRegs" false) (mem "registerInferredConstraints" false) (mem "rejectUndeterminedVectors" false) (mem "rejectWithheldAmbiguity" false) (mem "setFunPredicateSlots" false) (mem "tiedSurvivors" false) (mem "undeterminedVectorVerdict" false))))
 (DUse false (UseGroup ("types" "tc_global") ((mem "calleeNumObls" false) (mem "checkCoherence" false) (mem "checkGradedImplHeads" false) (mem "checkImplCompletenessMap" false) (mem "checkPhantomMethods" false) (mem "checkSuperImpls" false) (mem "inferDefaultBodies" false) (mem "inferUserImplBodies" false) (mem "numCallObls" false))))
 (DUse false (UseGroup ("types" "tc_stamp") ((mem "drainStampQueue" false) (mem "enqueueStampCtx" false))))
 (DUse false (UseGroup ("types" "tc_unify") ((mem "openScope" false) (mem "captureScope" false) (mem "closeScope" false) (mem "enterLevel" false) (mem "exitLevel" false) (mem "freshTvMap" false) (mem "freshVar" false) (mem "generalize" false) (mem "resolvePendingJoins" false) (mem "rowInto" false) (mem "unifyIn" false) (mem "unifyInto" false) (mem "widenOpenedFor" false))))
-(DUse false (UseGroup ("types" "tc_shadow") ((mem "definerShadowsFromSet" false) (mem "isPreludeMid" false) (mem "moduleMarkCtx" false) (mem "nameableIfaceMethodSet" false) (mem "nameableIfaceRows" false) (mem "nameableIfaceShadows" false) (mem "standaloneShadowsFromSet" false))))
+(DUse false (UseGroup ("types" "tc_shadow") ((mem "definerShadowsFromSet" false) (mem "isPreludeMid" false) (mem "nameableIfaceMethodSet" false) (mem "nameableIfaceRows" false) (mem "nameableIfaceShadows" false) (mem "standaloneShadowsFromSet" false))))
 (DUse false (UseGroup ("types" "tc_decls_types") ((mem "checkDeclaredKinds" false) (mem "kindScopeOf" false) (mem "checkDeclAuthorityUses" false) (mem "checkEffectParams" false) (mem "fromAstType" false))))
 (DUse false (UseGroup ("types" "tc_infer") ((mem "checkDeferredMatches" false) (mem "checkFixedWidthLiterals" false) (mem "checkWideLiterals" false) (mem "declareRigidVars" false) (mem "infer" false) (mem "inferMemberClauses" false) (mem "preunifySigsEx" false) (mem "valueSpanLoc" false))))
 (DUse false (UseGroup ("types" "tc_groups") ((mem "checkLetRecDecls" false) (mem "checkRecursiveValue" false) (mem "checkSigConstraintCoverage" false) (mem "checkSigsFixedByExpansive" false) (mem "checkSigsOverExpansive" false) (mem "checkSigsTooGeneral" false) (mem "declRefNames" false) (mem "depGraphMap" false) (mem "groupClauses" false) (mem "groupNames" false) (mem "isLetrecGroup" false) (mem "memberForce" false) (mem "nestedRequireGoals" false) (mem "quantifiableAuthorities" false) (mem "registerSchemeObligations" false) (mem "sccProtectedSignatureIds" false) (mem "sccSchemes" false))))
 (DUse false (UseGroup ("types" "tc_diag_text") ((mem "cyclicSuperIfaceMsg" false) (mem "ordinalSentinelMsg" false))))
 (DUse false (UseGroup ("types" "effect_rows") ((mem "effrowNorm" false) (mem "pureRow" false))))
 (DUse false (UseGroup ("frontend" "desugar") ((mem "exprSpanLoc" false) (mem "joinLocs" false))))
-(DUse false (UseGroup ("types" "tc_foreign") ((mem "declExternNames" false) (mem "directExternSigs" false) (mem "externDecls" false) (mem "ffiCheckExternsCatalogRow" false) (mem "ffiCheckExternsCrossable" false) (mem "ffiCheckExternsLabelled" false) (mem "ffiCheckExternsShadow" false) (mem "ffiStampMode" false))))
+(DUse false (UseGroup ("types" "tc_foreign") ((mem "directExternSigs" false) (mem "externDecls" false) (mem "ffiCheckExternsCatalogRow" false) (mem "ffiCheckExternsCrossable" false) (mem "ffiCheckExternsLabelled" false) (mem "ffiCheckExternsShadow" false) (mem "ffiStampMode" false))))
 (DUse false (UseGroup ("frontend" "resolve") ((mem "externTyOriginScope" false) (mem "firstExprLoc" false) (mem "stampClauseWith" false) (mem "stampDeclWith" false) (mem "stampTopScope" false) (mem "stampTyOrigins" false))))
 (DUse false (UseGroup ("list") ((mem "findMap" false))))
 (DUse false (UseGroup ("types" "effect_bindings") ((mem "newBindingSummary" false))))
@@ -3723,12 +3663,8 @@ stampTailDecl top d = stampDeclWith top d
 (DFunDef false "elabModuleStamp" ((PVar "prev") (PVar "mid") (PVar "seedVars") (PVar "accData") (PVar "implDecls") (PVar "prog")) (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EVar "checkModuleFullImpl") (EFieldAccess (EVar "prev") "mcGraph")) (EApp (EVar "checkRunResidue") (EVar "prev"))) (EVar "mid")) (EApp (EVar "plainModuleSeed") (EVar "seedVars"))) (EVar "accData")) (EVar "implDecls")) (EVar "prog")))
 (DTypeSig true "checkGraphFinish" (TyFun (TyCon "ModuleCtx") (TyApp (TyCon "List") (TyCon "DrainFinding"))))
 (DFunDef false "checkGraphFinish" ((PVar "mctx")) (EBlock (DoLet false false (PVar "savedSticky") (EFieldAccess (EFieldAccess (EFieldAccess (EVar "mctx") "mcGraph") "typeErrorsSticky") "value")) (DoLet false false (PVar "savedStickyDiags") (EFieldAccess (EFieldAccess (EFieldAccess (EVar "mctx") "mcGraph") "typeErrorsStickyDiags") "value")) (DoLet false false (PVar "holes") (EApp (EVar "drainStampQueue") (EVar "mctx"))) (DoExpr (EApp (EApp (EVar "setRef") (EFieldAccess (EFieldAccess (EVar "mctx") "mcGraph") "typeErrorsSticky")) (EVar "savedSticky"))) (DoExpr (EApp (EApp (EVar "setRef") (EFieldAccess (EFieldAccess (EVar "mctx") "mcGraph") "typeErrorsStickyDiags")) (EVar "savedStickyDiags"))) (DoExpr (EVar "holes"))))
-(DTypeSig false "beginModuleMarking" (TyFun (TyCon "ModuleCtx") (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyFun (TyApp (TyCon "OrdMap") (TyCon "Int")) (TyFun (TyCon "ModuleSeed") (TyCon "Unit")))))))
-(DFunDef false "beginModuleMarking" ((PVar "mctx") (PVar "mid") (PVar "prog") (PVar "top") (PVar "seed")) (EBlock (DoLet false false (PVar "ms") (EApp (EApp (EVar "optionOrPanic") (ELit (LString "checkBodyImpl: Module arm entered with no mark sets (no driver preamble ran)"))) (EFieldAccess (EFieldAccess (EFieldAccess (EVar "mctx") "mcGraph") "markSetsRef") "value"))) (DoLet false false (PVar "known") (EMatch (EVar "mid") (arm (PLit (LString "")) () (EApp (EVar "constrainedSigNames") (EVar "prog"))) (arm PWild () (EApp (EVar "dedup") (EBinOp "++" (EFieldAccess (EVar "ms") "msBareDictNames") (EFieldAccess (EFieldAccess (EFieldAccess (EVar "mctx") "mcGraph") "promotionHarvestRef") "value")))))) (DoLet false false (PVar "aliases") (EApp (EApp (EApp (EApp (EVar "aliasDictNames") (EApp (EVar "importerDefiners") (EFieldAccess (EVar "mctx") "mcGraph"))) (EVar "known")) (EFieldAccess (EVar "ms") "msUnits")) (EListLit (ETuple (EVar "mid") (EVar "prog"))))) (DoExpr (EApp (EApp (EVar "setRef") (EFieldAccess (EFieldAccess (EFieldAccess (EFieldAccess (EVar "mctx") "mcGraph") "graphRun") "localAbs") "lasNext")) (ETuple (EVar "mid") (ELit (LInt 0))))) (DoExpr (EApp (EApp (EVar "setRef") (EFieldAccess (EFieldAccess (EFieldAccess (EFieldAccess (EVar "mctx") "mcGraph") "graphRun") "localAbs") "lasMinted")) (EListLit))) (DoExpr (EApp (EApp (EVar "setRef") (EFieldAccess (EFieldAccess (EVar "mctx") "mcCells") "markingRef")) (EApp (EVar "Some") (ERecordCreate "ModuleMarking" ((fa "mmCtx" (EApp (EApp (EApp (EApp (EApp (EVar "moduleMarkCtx") (EFieldAccess (EVar "mctx") "mcGraph")) (EVar "ms")) (EVar "mid")) (EVar "prog")) (EFieldAccess (EVar "seed") "msImportedValues"))) (fa "mmTop" (EVar "top")) (fa "mmDictSet" (EApp (EVar "Ref") (EApp (EApp (EVar "omFromNames") (EBinOp "++" (EVar "known") (EVar "aliases"))) (EVar "omEmpty")))) (fa "mmUserNames" (EApp (EApp (EVar "omFromNames") (EApp (EVar "declTopFnNames") (EVar "prog"))) (EFieldAccess (EVar "seed") "msImportedNames"))) (fa "mmExterns" (EApp (EApp (EVar "omFromNames") (EApp (EVar "declExternNames") (EVar "prog"))) (EFieldAccess (EVar "seed") "msImportedExterns"))))))))))
 (DTypeSig false "stampGroupClauses" (TyFun (TyCon "ModuleMarking") (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyApp (TyCon "OrdMap") (TyApp (TyCon "List") (TyTuple (TyApp (TyCon "List") (TyCon "Pat")) (TyCon "Expr")))) (TyApp (TyCon "OrdMap") (TyApp (TyCon "List") (TyTuple (TyApp (TyCon "List") (TyCon "Pat")) (TyCon "Expr"))))))))
 (DFunDef false "stampGroupClauses" ((PVar "mm") (PVar "members") (PVar "grouped")) (EApp (EApp (EApp (EVar "mapGroupClauses") (EApp (EVar "stampClauseWith") (EFieldAccess (EVar "mm") "mmTop"))) (EVar "members")) (EVar "grouped")))
-(DTypeSig false "finishModuleMarking" (TyFun (TyCon "ModuleMarking") (TyFun (TyCon "TcEnv") (TyFun (TyApp (TyCon "OrdMap") (TyApp (TyCon "List") (TyTuple (TyApp (TyCon "List") (TyCon "Pat")) (TyCon "Expr")))) (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyApp (TyCon "List") (TyCon "Decl")))))))
-(DFunDef false "finishModuleMarking" ((PVar "mm") (PVar "env") (PVar "grouped") (PVar "prog")) (EApp (EApp (EApp (EApp (EApp (EVar "markTailDecls") (EFieldAccess (EFieldAccess (EVar "env") "teDyn") "dcModule")) (EFieldAccess (EVar "mm") "mmCtx")) (EFieldAccess (EFieldAccess (EVar "mm") "mmDictSet") "value")) (EApp (EVar "grantNameIn") (EVar "env"))) (EApp (EApp (EVar "rebuildGroupDecls") (EVar "grouped")) (EVar "prog"))))
 (DTypeSig false "stampTailDecls" (TyFun (TyApp (TyCon "OrdMap") (TyCon "Int")) (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyApp (TyCon "List") (TyCon "Decl")))))
 (DFunDef false "stampTailDecls" ((PVar "top") (PVar "decls")) (EApp (EApp (EVar "map") (EApp (EVar "stampTailDecl") (EVar "top"))) (EVar "decls")))
 (DTypeSig false "stampTailDecl" (TyFun (TyApp (TyCon "OrdMap") (TyCon "Int")) (TyFun (TyCon "Decl") (TyCon "Decl"))))
@@ -3737,12 +3673,11 @@ stampTailDecl top d = stampDeclWith top d
 (DFunDef false "stampTailDecl" ((PVar "top") (PCon "DAttrib" (PVar "attrs") (PVar "d"))) (EApp (EApp (EVar "DAttrib") (EVar "attrs")) (EApp (EApp (EVar "stampTailDecl") (EVar "top")) (EVar "d"))))
 (DFunDef false "stampTailDecl" ((PVar "top") (PVar "d")) (EApp (EApp (EVar "stampDeclWith") (EVar "top")) (EVar "d")))
 # MARK
+(DUse false (UseGroup ("types" "tc_mark") ((mem "beginModuleMarking" false) (mem "finishModuleMarking" false) (mem "mapGroupClauses" false) (mem "markGroupClauses" false) (mem "markRecursiveOccurrences" false))))
 (DUse false (UseGroup ("support" "diag_codes") ((mem "DiagCode" true))))
-(DUse false (UseGroup ("frontend" "ast") ((mem "BinderId" true) (mem "ConPayload" true) (mem "Decl" true) (mem "EvEntry" true) (mem "EvVal" true) (mem "Expr" true) (mem "ExternDecl" true) (mem "FunClause" true) (mem "Ident" true) (mem "LetBind" true) (mem "Loc" true) (mem "Ns" true) (mem "Pat" true) (mem "PropParam" true) (mem "Route" true) (mem "Super" true) (mem "Ty" true) (mem "TyConOrigin" true) (mem "UseMember" true) (mem "UsePath" true) (mem "Variant" true) (mem "identOriginFold" false) (mem "mkIdent" false))))
-(DUse false (UseGroup ("types" "runtime_types") ((mem "BinderRow" true) (mem "RuntimeType" true))))
+(DUse false (UseGroup ("frontend" "ast") ((mem "BinderId" true) (mem "ConPayload" true) (mem "Decl" true) (mem "Expr" true) (mem "FunClause" true) (mem "Ident" true) (mem "LetBind" true) (mem "Loc" true) (mem "Ns" true) (mem "Pat" true) (mem "PropParam" true) (mem "Super" true) (mem "Ty" true) (mem "TyConOrigin" true) (mem "UseMember" true) (mem "UsePath" true) (mem "Variant" true) (mem "identOriginFold" false) (mem "mkIdent" false))))
 (DUse false (UseGroup ("types" "scopes") ((mem "ScopeOwner" true))))
-(DUse false (UseGroup ("types" "tc_types") ((mem "BuiltinClasses" true) (mem "CeRow" true) (mem "CheckRunSeed" true) (mem "ClassEnv" true) (mem "ConstraintReg" true) (mem "DeclaringBinder" true) (mem "DeclEnvModule" true) (mem "DrainFinding" true) (mem "EnvBinding" true) (mem "EvCell" true) (mem "EvDest" true) (mem "EvidenceObservationEntry" true) (mem "EvidenceOutcomeKind" true) (mem "GoalKind" true) (mem "GoalPayload" true) (mem "GraphCtx" true) (mem "GraphMarks" true) (mem "GroupCtx" true) (mem "ImplEnv" true) (mem "LiveGoal" true) (mem "MethodPredicateSlot" true) (mem "MethodSchemeRow" true) (mem "ModuleBindings" true) (mem "ModuleCtx" true) (mem "ModuleMarking" true) (mem "ModuleSeed" true) (mem "NumBoundary" true) (mem "NumBoundaryDisposition" true) (mem "NumGuard" true) (mem "Obligation" true) (mem "ObligationSite" true) (mem "PendingBinder" true) (mem "PendingEntry" true) (mem "RecDictApp" true) (mem "RecordInfo" true) (mem "ScopedMember" true) (mem "ScopedScheme" true) (mem "SiteCtx" true) (mem "SiteKind" true) (mem "StampCtx" true) (mem "StampStep" true) (mem "StandaloneOrigin" true) (mem "TcEnv" true) (mem "dynFor" false))))
-(DUse false (UseGroup ("types" "evidence_complete") ((mem "EvidenceRow" true) (mem "Inner" true))))
+(DUse false (UseGroup ("types" "tc_types") ((mem "BuiltinClasses" true) (mem "CeRow" true) (mem "CheckRunSeed" true) (mem "ClassEnv" true) (mem "ConstraintReg" true) (mem "DeclaringBinder" true) (mem "DeclEnvModule" true) (mem "DrainFinding" true) (mem "EnvBinding" true) (mem "GoalKind" true) (mem "GraphCtx" true) (mem "GraphMarks" true) (mem "GroupCtx" true) (mem "ImplEnv" true) (mem "LiveGoal" true) (mem "MethodPredicateSlot" true) (mem "ModuleBindings" true) (mem "ModuleCtx" true) (mem "ModuleMarking" true) (mem "ModuleSeed" true) (mem "NumBoundary" true) (mem "NumBoundaryDisposition" true) (mem "NumGuard" true) (mem "ObligationSite" true) (mem "RecordInfo" true) (mem "ScopedMember" true) (mem "ScopedScheme" true) (mem "StandaloneOrigin" true) (mem "TcEnv" true) (mem "dynFor" false))))
 (DUse false (UseGroup ("types" "repr") ((mem "IfaceRef" true) (mem "Mono" true) (mem "Scheme" true) (mem "VecObl" true))))
 (DUse false (UseGroup ("map") ((mem "Map" true))))
 (DUse false (UseGroup ("support" "ordmap") ((mem "omDelete" false) (mem "omEmpty" false) (mem "omFromNames" false) (mem "omFromPairs" false) (mem "omHasKey" false) (mem "omInsert" false) (mem "omKeys" false) (mem "omLookup" false) (mem "omMapValues" false) (mem "OrdMap" false))))
@@ -3752,26 +3687,26 @@ stampTailDecl top d = stampDeclWith top d
 (DUse false (UseGroup ("types" "publish") ((mem "TcDiag" true))))
 (DUse false (UseGroup ("types" "tc_env") ((mem "addCtor" false) (mem "attachStandaloneSources" false) (mem "bindingWithStandalone" false) (mem "ceLookupAt" false) (mem "ceRowDoneKey" false) (mem "ceRowIface" false) (mem "ceRowIfaceName" false) (mem "ceRowLoc" false) (mem "ceRowOrd" false) (mem "ceRowSupers" false) (mem "ceRowsVisibleAt" false) (mem "ctorExportsIndex" false) (mem "declEnvRowVisible" false) (mem "declEnvsOrdOf" false) (mem "declTopFnNames" false) (mem "emptyMethodModulePredicateSlots" false) (mem "extendBindings" false) (mem "extendLocalVar" false) (mem "extendMethodRows" false) (mem "extendTermBindings" false) (mem "extendVars" false) (mem "funDefs" false) (mem "ieUniverseAt" false) (mem "ifaceMethodNames" false) (mem "ifaceTabKey" false) (mem "importedBindings" false) (mem "importLocFor" false) (mem "importTableMid" false) (mem "legacyMethodSchemes" false) (mem "methodRowsByIdentity" false) (mem "methodSlotKey" false) (mem "namesToSet" false) (mem "ordinaryEnvBinding" false) (mem "publicDataDecl" false) (mem "publicDataDecls" false) (mem "withCtors" false))))
 (DUse false (UseGroup ("types" "tc_decls") ((mem "addFieldOwners" false) (mem "builtinClassesGo" false) (mem "builtinClassesOf" false) (mem "declEnvSeedDataUniverse" false) (mem "ifaceMethodSchemeRows" false) (mem "importerDefiners" false) (mem "isAliasDecl" false) (mem "loadDataUniverse" false) (mem "recordDeclKinds" false) (mem "registerAllData" false) (mem "registerAllDataScoped" false) (mem "registerData" false) (mem "rejectCyclicAliases" false) (mem "seedNumLitFromIntAnchor" false) (mem "sigToScheme" false))))
-(DUse false (UseGroup ("types" "tc_scope") ((mem "aliasConstraintEntries" false) (mem "aliasDictNames" false) (mem "aliasMethodSpellings" false) (mem "aliasQualifiedMethodEntries" false) (mem "annotateImportedMethodRows" false) (mem "applyCtorScopeOverrides" false) (mem "applyRecordScopeOverrides" false) (mem "declCtorNamed" false) (mem "importedMemberBindingNames" false) (mem "insertCtorPop" false) (mem "insertRecordPop" false) (mem "methodNameDeclaredAt" false) (mem "pickSchemesByDecl" false) (mem "reportAmbiguousImportsIn" false) (mem "resolveMemberRows" false) (mem "schemeOblEntriesFor" false))))
+(DUse false (UseGroup ("types" "tc_scope") ((mem "aliasConstraintEntries" false) (mem "aliasMethodSpellings" false) (mem "aliasQualifiedMethodEntries" false) (mem "annotateImportedMethodRows" false) (mem "applyCtorScopeOverrides" false) (mem "applyRecordScopeOverrides" false) (mem "declCtorNamed" false) (mem "importedMemberBindingNames" false) (mem "insertCtorPop" false) (mem "insertRecordPop" false) (mem "methodNameDeclaredAt" false) (mem "pickSchemesByDecl" false) (mem "reportAmbiguousImportsIn" false) (mem "resolveMemberRows" false) (mem "schemeOblEntriesFor" false))))
 (DUse false (UseGroup ("types" "tc_mono") ((mem "containsI" false) (mem "dedupI" false) (mem "findTvarInMonos" false) (mem "monoArgUnboundIds" false) (mem "monoScheme" false) (mem "monoUnboundIds" false) (mem "schemeMono" false) (mem "tconBuiltin" false) (mem "tconUnresolved" false) (mem "tyVarNames" false) (mem "unquantifiedAuthIds" false))))
 (DUse false (UseGroup ("support" "util") ((mem "anyList" false) (mem "dedup" false) (mem "dedupBy" false) (mem "filterList" false) (mem "isEmptyL" false) (mem "isNonEmptyL" false) (mem "listLen" false) (mem "orElseOpt" false) (mem "reverseL" false))))
-(DUse false (UseGroup ("types" "tc_occurrence") ((mem "argDispatchIndicesById" false) (mem "constrainedSigNames" false) (mem "mapGroupClauses" false) (mem "markGroupClauses" false) (mem "markRecursiveOccurrences" false) (mem "markTailDecls" false) (mem "rebuildGroupDecls" false))))
+(DUse false (UseGroup ("types" "tc_occurrence") ((mem "argDispatchIndicesById" false))))
 (DUse false (UseGroup ("types" "tc_solve") ((mem "determineByUniqueInstance" false) (mem "dropGoalsSince" false) (mem "goalsMark" false) (mem "improveByUniqueImpl" false) (mem "outerRigidIds" false) (mem "refileDeterminedRows" false) (mem "uOblArgs" false))))
 (DUse false (UseGroup ("types" "effect_authority") ((mem "authvarId" false) (mem "authVars" false))))
-(DUse false (UseGroup ("types" "tc_effects") ((mem "beginEffectSummaryScope" false) (mem "borrowedEffectCells" false) (mem "checkEffectEscape" false) (mem "checkUndeterminedRetEffVars" false) (mem "clausesOf" false) (mem "finishEffectSummaryScopeKeeping" false) (mem "flushPendingEscapes" false) (mem "freshEffectSummary" false) (mem "grantNameIn" false) (mem "memberEffectRoots" false) (mem "recordFileBound" false) (mem "recordMethodGrants" false) (mem "recordTopGrants" false) (mem "reportEffectSummaryFailures" false))))
+(DUse false (UseGroup ("types" "tc_effects") ((mem "beginEffectSummaryScope" false) (mem "borrowedEffectCells" false) (mem "checkEffectEscape" false) (mem "checkUndeterminedRetEffVars" false) (mem "clausesOf" false) (mem "finishEffectSummaryScopeKeeping" false) (mem "flushPendingEscapes" false) (mem "freshEffectSummary" false) (mem "memberEffectRoots" false) (mem "recordFileBound" false) (mem "recordMethodGrants" false) (mem "recordTopGrants" false) (mem "reportEffectSummaryFailures" false))))
 (DUse false (UseGroup ("types" "tc_state") ((mem "callUOblsWindow" false) (mem "checkRunResidue" false) (mem "currentScopeStore" false) (mem "dynAtIfSome" false) (mem "envAtIfSome" false) (mem "freshModuleCtx" false) (mem "mctxAt" false) (mem "plainModuleSeed" false) (mem "seedCheckRun" false) (mem "wMark" false) (mem "wWindow" false))))
 (DUse false (UseGroup ("types" "tc_solve_check") ((mem "callOblsWindow" false) (mem "checkCallObligationsU" false) (mem "checkSigVarGoals" false) (mem "dedupPredicateSlotsTable" false) (mem "finalizeNumBoundary" false) (mem "liveNumVarGo" false) (mem "numConstrainedIds" false) (mem "predicateSlotTableWithoutArgs" false) (mem "registerConstraintRegs" false) (mem "registerInferredConstraints" false) (mem "rejectUndeterminedVectors" false) (mem "rejectWithheldAmbiguity" false) (mem "setFunPredicateSlots" false) (mem "tiedSurvivors" false) (mem "undeterminedVectorVerdict" false))))
 (DUse false (UseGroup ("types" "tc_global") ((mem "calleeNumObls" false) (mem "checkCoherence" false) (mem "checkGradedImplHeads" false) (mem "checkImplCompletenessMap" false) (mem "checkPhantomMethods" false) (mem "checkSuperImpls" false) (mem "inferDefaultBodies" false) (mem "inferUserImplBodies" false) (mem "numCallObls" false))))
 (DUse false (UseGroup ("types" "tc_stamp") ((mem "drainStampQueue" false) (mem "enqueueStampCtx" false))))
 (DUse false (UseGroup ("types" "tc_unify") ((mem "openScope" false) (mem "captureScope" false) (mem "closeScope" false) (mem "enterLevel" false) (mem "exitLevel" false) (mem "freshTvMap" false) (mem "freshVar" false) (mem "generalize" false) (mem "resolvePendingJoins" false) (mem "rowInto" false) (mem "unifyIn" false) (mem "unifyInto" false) (mem "widenOpenedFor" false))))
-(DUse false (UseGroup ("types" "tc_shadow") ((mem "definerShadowsFromSet" false) (mem "isPreludeMid" false) (mem "moduleMarkCtx" false) (mem "nameableIfaceMethodSet" false) (mem "nameableIfaceRows" false) (mem "nameableIfaceShadows" false) (mem "standaloneShadowsFromSet" false))))
+(DUse false (UseGroup ("types" "tc_shadow") ((mem "definerShadowsFromSet" false) (mem "isPreludeMid" false) (mem "nameableIfaceMethodSet" false) (mem "nameableIfaceRows" false) (mem "nameableIfaceShadows" false) (mem "standaloneShadowsFromSet" false))))
 (DUse false (UseGroup ("types" "tc_decls_types") ((mem "checkDeclaredKinds" false) (mem "kindScopeOf" false) (mem "checkDeclAuthorityUses" false) (mem "checkEffectParams" false) (mem "fromAstType" false))))
 (DUse false (UseGroup ("types" "tc_infer") ((mem "checkDeferredMatches" false) (mem "checkFixedWidthLiterals" false) (mem "checkWideLiterals" false) (mem "declareRigidVars" false) (mem "infer" false) (mem "inferMemberClauses" false) (mem "preunifySigsEx" false) (mem "valueSpanLoc" false))))
 (DUse false (UseGroup ("types" "tc_groups") ((mem "checkLetRecDecls" false) (mem "checkRecursiveValue" false) (mem "checkSigConstraintCoverage" false) (mem "checkSigsFixedByExpansive" false) (mem "checkSigsOverExpansive" false) (mem "checkSigsTooGeneral" false) (mem "declRefNames" false) (mem "depGraphMap" false) (mem "groupClauses" false) (mem "groupNames" false) (mem "isLetrecGroup" false) (mem "memberForce" false) (mem "nestedRequireGoals" false) (mem "quantifiableAuthorities" false) (mem "registerSchemeObligations" false) (mem "sccProtectedSignatureIds" false) (mem "sccSchemes" false))))
 (DUse false (UseGroup ("types" "tc_diag_text") ((mem "cyclicSuperIfaceMsg" false) (mem "ordinalSentinelMsg" false))))
 (DUse false (UseGroup ("types" "effect_rows") ((mem "effrowNorm" false) (mem "pureRow" false))))
 (DUse false (UseGroup ("frontend" "desugar") ((mem "exprSpanLoc" false) (mem "joinLocs" false))))
-(DUse false (UseGroup ("types" "tc_foreign") ((mem "declExternNames" false) (mem "directExternSigs" false) (mem "externDecls" false) (mem "ffiCheckExternsCatalogRow" false) (mem "ffiCheckExternsCrossable" false) (mem "ffiCheckExternsLabelled" false) (mem "ffiCheckExternsShadow" false) (mem "ffiStampMode" false))))
+(DUse false (UseGroup ("types" "tc_foreign") ((mem "directExternSigs" false) (mem "externDecls" false) (mem "ffiCheckExternsCatalogRow" false) (mem "ffiCheckExternsCrossable" false) (mem "ffiCheckExternsLabelled" false) (mem "ffiCheckExternsShadow" false) (mem "ffiStampMode" false))))
 (DUse false (UseGroup ("frontend" "resolve") ((mem "externTyOriginScope" false) (mem "firstExprLoc" false) (mem "stampClauseWith" false) (mem "stampDeclWith" false) (mem "stampTopScope" false) (mem "stampTyOrigins" false))))
 (DUse false (UseGroup ("list") ((mem "findMap" false))))
 (DUse false (UseGroup ("types" "effect_bindings") ((mem "newBindingSummary" false))))
@@ -4043,12 +3978,8 @@ stampTailDecl top d = stampDeclWith top d
 (DFunDef false "elabModuleStamp" ((PVar "prev") (PVar "mid") (PVar "seedVars") (PVar "accData") (PVar "implDecls") (PVar "prog")) (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EVar "checkModuleFullImpl") (EFieldAccess (EVar "prev") "mcGraph")) (EApp (EVar "checkRunResidue") (EVar "prev"))) (EVar "mid")) (EApp (EVar "plainModuleSeed") (EVar "seedVars"))) (EVar "accData")) (EVar "implDecls")) (EVar "prog")))
 (DTypeSig true "checkGraphFinish" (TyFun (TyCon "ModuleCtx") (TyApp (TyCon "List") (TyCon "DrainFinding"))))
 (DFunDef false "checkGraphFinish" ((PVar "mctx")) (EBlock (DoLet false false (PVar "savedSticky") (EFieldAccess (EFieldAccess (EFieldAccess (EVar "mctx") "mcGraph") "typeErrorsSticky") "value")) (DoLet false false (PVar "savedStickyDiags") (EFieldAccess (EFieldAccess (EFieldAccess (EVar "mctx") "mcGraph") "typeErrorsStickyDiags") "value")) (DoLet false false (PVar "holes") (EApp (EVar "drainStampQueue") (EVar "mctx"))) (DoExpr (EApp (EApp (EVar "setRef") (EFieldAccess (EFieldAccess (EVar "mctx") "mcGraph") "typeErrorsSticky")) (EVar "savedSticky"))) (DoExpr (EApp (EApp (EVar "setRef") (EFieldAccess (EFieldAccess (EVar "mctx") "mcGraph") "typeErrorsStickyDiags")) (EVar "savedStickyDiags"))) (DoExpr (EVar "holes"))))
-(DTypeSig false "beginModuleMarking" (TyFun (TyCon "ModuleCtx") (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyFun (TyApp (TyCon "OrdMap") (TyCon "Int")) (TyFun (TyCon "ModuleSeed") (TyCon "Unit")))))))
-(DFunDef false "beginModuleMarking" ((PVar "mctx") (PVar "mid") (PVar "prog") (PVar "top") (PVar "seed")) (EBlock (DoLet false false (PVar "ms") (EApp (EApp (EVar "optionOrPanic") (ELit (LString "checkBodyImpl: Module arm entered with no mark sets (no driver preamble ran)"))) (EFieldAccess (EFieldAccess (EFieldAccess (EVar "mctx") "mcGraph") "markSetsRef") "value"))) (DoLet false false (PVar "known") (EMatch (EVar "mid") (arm (PLit (LString "")) () (EApp (EVar "constrainedSigNames") (EVar "prog"))) (arm PWild () (EApp (EVar "dedup") (EBinOp "++" (EFieldAccess (EVar "ms") "msBareDictNames") (EFieldAccess (EFieldAccess (EFieldAccess (EVar "mctx") "mcGraph") "promotionHarvestRef") "value")))))) (DoLet false false (PVar "aliases") (EApp (EApp (EApp (EApp (EVar "aliasDictNames") (EApp (EVar "importerDefiners") (EFieldAccess (EVar "mctx") "mcGraph"))) (EVar "known")) (EFieldAccess (EVar "ms") "msUnits")) (EListLit (ETuple (EVar "mid") (EVar "prog"))))) (DoExpr (EApp (EApp (EVar "setRef") (EFieldAccess (EFieldAccess (EFieldAccess (EFieldAccess (EVar "mctx") "mcGraph") "graphRun") "localAbs") "lasNext")) (ETuple (EVar "mid") (ELit (LInt 0))))) (DoExpr (EApp (EApp (EVar "setRef") (EFieldAccess (EFieldAccess (EFieldAccess (EFieldAccess (EVar "mctx") "mcGraph") "graphRun") "localAbs") "lasMinted")) (EListLit))) (DoExpr (EApp (EApp (EVar "setRef") (EFieldAccess (EFieldAccess (EVar "mctx") "mcCells") "markingRef")) (EApp (EVar "Some") (ERecordCreate "ModuleMarking" ((fa "mmCtx" (EApp (EApp (EApp (EApp (EApp (EVar "moduleMarkCtx") (EFieldAccess (EVar "mctx") "mcGraph")) (EVar "ms")) (EVar "mid")) (EVar "prog")) (EFieldAccess (EVar "seed") "msImportedValues"))) (fa "mmTop" (EVar "top")) (fa "mmDictSet" (EApp (EVar "Ref") (EApp (EApp (EVar "omFromNames") (EBinOp "++" (EVar "known") (EVar "aliases"))) (EVar "omEmpty")))) (fa "mmUserNames" (EApp (EApp (EVar "omFromNames") (EApp (EVar "declTopFnNames") (EVar "prog"))) (EFieldAccess (EVar "seed") "msImportedNames"))) (fa "mmExterns" (EApp (EApp (EVar "omFromNames") (EApp (EVar "declExternNames") (EVar "prog"))) (EFieldAccess (EVar "seed") "msImportedExterns"))))))))))
 (DTypeSig false "stampGroupClauses" (TyFun (TyCon "ModuleMarking") (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyApp (TyCon "OrdMap") (TyApp (TyCon "List") (TyTuple (TyApp (TyCon "List") (TyCon "Pat")) (TyCon "Expr")))) (TyApp (TyCon "OrdMap") (TyApp (TyCon "List") (TyTuple (TyApp (TyCon "List") (TyCon "Pat")) (TyCon "Expr"))))))))
 (DFunDef false "stampGroupClauses" ((PVar "mm") (PVar "members") (PVar "grouped")) (EApp (EApp (EApp (EVar "mapGroupClauses") (EApp (EVar "stampClauseWith") (EFieldAccess (EVar "mm") "mmTop"))) (EVar "members")) (EVar "grouped")))
-(DTypeSig false "finishModuleMarking" (TyFun (TyCon "ModuleMarking") (TyFun (TyCon "TcEnv") (TyFun (TyApp (TyCon "OrdMap") (TyApp (TyCon "List") (TyTuple (TyApp (TyCon "List") (TyCon "Pat")) (TyCon "Expr")))) (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyApp (TyCon "List") (TyCon "Decl")))))))
-(DFunDef false "finishModuleMarking" ((PVar "mm") (PVar "env") (PVar "grouped") (PVar "prog")) (EApp (EApp (EApp (EApp (EApp (EVar "markTailDecls") (EFieldAccess (EFieldAccess (EVar "env") "teDyn") "dcModule")) (EFieldAccess (EVar "mm") "mmCtx")) (EFieldAccess (EFieldAccess (EVar "mm") "mmDictSet") "value")) (EApp (EVar "grantNameIn") (EVar "env"))) (EApp (EApp (EVar "rebuildGroupDecls") (EVar "grouped")) (EVar "prog"))))
 (DTypeSig false "stampTailDecls" (TyFun (TyApp (TyCon "OrdMap") (TyCon "Int")) (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyApp (TyCon "List") (TyCon "Decl")))))
 (DFunDef false "stampTailDecls" ((PVar "top") (PVar "decls")) (EApp (EApp (EMethodRef "map") (EApp (EVar "stampTailDecl") (EVar "top"))) (EVar "decls")))
 (DTypeSig false "stampTailDecl" (TyFun (TyApp (TyCon "OrdMap") (TyCon "Int")) (TyFun (TyCon "Decl") (TyCon "Decl"))))

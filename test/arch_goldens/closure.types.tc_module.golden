@@ -64,6 +64,7 @@ types.tc_global
 types.tc_groups
 types.tc_infer
 types.tc_infer_records
+types.tc_mark
 types.tc_mono
 types.tc_occurrence
 types.tc_pat

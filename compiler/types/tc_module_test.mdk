@@ -23,6 +23,7 @@ import types.tc_solve.{
   methodReturnProbeScope, methodReturnProbeSpelling, methodReturnArgs,
   methodReturnProbeRouteKey, methodReturnProbeIface, methodReturnProbeImpl
 }
+import types.tc_mark.{markSetsOf}
 import types.tc_occurrence.{
   methodReturnProbeRequest, firstMethodRow, methodReturnProbeCodes
 }
@@ -39,7 +40,6 @@ import types.publish.{TcDiag(..), tcCode}
 import types.tc_decls.{buildDeclEnvs, declEnvModulesFrom}
 import types.tc_env.{declEnvModule, emptyDeclEnvAcc}
 import types.tc_mono.{tconBuiltin}
-import types.tc_occurrence.{markSetsOf}
 import types.tc_state.{checkRunResidue, plainModuleSeed}
 import types.tc_test_support.{codesOf, declsOf, fresh, routeTag, sizeable}
 import types.tc_types.{
