@@ -3,6 +3,7 @@ import base64
 from concurrent.futures import ThreadPoolExecutor
 import json
 import os
+import subprocess
 from pathlib import Path
 import tempfile
 import threading
@@ -100,6 +101,32 @@ class HostTests(unittest.TestCase):
             self.assertEqual(2, len(attempts))
             self.assertEqual(attempts[0], json.loads((root / 'attempt-1/attempt.json').read_text()))
             self.assertEqual(attempts[1], json.loads((root / 'attempt-2/attempt.json').read_text()))
+
+    def test_setup_subprocess_failures_are_retained_and_retried(self):
+        for phase in ('version', 'schema'):
+            for error in (subprocess.CalledProcessError(1, ['codex']),
+                          subprocess.TimeoutExpired(['codex'], 30)):
+                with self.subTest(phase=phase, error=type(error).__name__), tempfile.TemporaryDirectory() as directory:
+                    root = Path(directory)
+                    artifact = root / 'artifact'
+                    artifact.mkdir()
+                    for name in ('medaka', 'medaka_emitter', 'runtime/medaka_rt.c', 'stdlib/core.mdk', 'stdlib/runtime.mdk'):
+                        path = artifact / name
+                        path.parent.mkdir(parents=True, exist_ok=True)
+                        path.write_text('synthetic')
+                    spec = {'model': 'gpt-6.1-terra', 'effort': 'high', 'arm': 'shell-only',
+                            'deadline_seconds': 600, 'tool_call_limit': 30, 'files': {}, 'prompt': 'synthetic', 'controls': []}
+                    version = error if phase == 'version' else 'codex-cli 0.166.0'
+                    with (patch('trial_host.subprocess.check_output', side_effect=version if phase == 'version' else None,
+                                return_value=version),
+                          patch('trial_host.subprocess.run', side_effect=error)):
+                        attempts = run_with_retry(spec, root / 'run',
+                                                  lambda s, path: launch(s, path, artifact, fingerprint(artifact),
+                                                                         None, None, root / 'auth'))
+                    self.assertEqual(['infrastructure_error', 'infrastructure_error'], [a['outcome'] for a in attempts])
+                    for number, attempt in enumerate(attempts, 1):
+                        self.assertEqual(attempt, json.loads((root / f'run/attempt-{number}/attempt.json').read_text()))
+                    self.assertEqual(attempts, json.loads((root / 'run/attempts.json').read_text()))
 
     def test_materialization_excludes_host_and_other_workspace(self):
         with tempfile.TemporaryDirectory() as directory:

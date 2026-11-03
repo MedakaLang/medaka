@@ -251,7 +251,7 @@ def launch(spec, output, cli, cli_hashes, original, original_hashes, auth_file, 
         raise ValueError('unsupported model/profile/arm')
     if spec['deadline_seconds'] != 600 or spec['tool_call_limit'] != 30 or not 0 < seconds <= 600:
         raise ValueError('invalid fixed trial budget')
-    if subprocess.check_output(['codex', '--version'], text=True, stderr=subprocess.DEVNULL).strip() != CLI_VERSION:
+    if subprocess.check_output(['codex', '--version'], text=True, stderr=subprocess.DEVNULL, timeout=30).strip() != CLI_VERSION:
         raise InfrastructureError('unverified Codex CLI version')
     cli = verify_distribution(cli, cli_hashes)
     if spec['arm'] == 'mcp' and (not isinstance(original_hashes, dict) or original_hashes.get('medaka') != ORIGINAL_SHA256):
@@ -260,7 +260,7 @@ def launch(spec, output, cli, cli_hashes, original, original_hashes, auth_file, 
     output = Path(output).resolve()
     output.mkdir(parents=True, exist_ok=False)
     subprocess.run(['codex', 'app-server', 'generate-json-schema', '--experimental', '--out', str(output / 'protocol')],
-                   check=True, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+                   check=True, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, timeout=30)
     journal = Journal(output / 'host.jsonl')
     events = Journal(output / 'appserver.jsonl')
     budget = Budget(journal, seconds)
@@ -508,7 +508,7 @@ def run_with_retry(spec, output, runner):
         path = root / f'attempt-{number}'
         try:
             result = runner(spec, path)
-        except (InfrastructureError, OSError) as error:
+        except (InfrastructureError, OSError, subprocess.CalledProcessError, subprocess.TimeoutExpired) as error:
             result = {'outcome': 'infrastructure_error', 'error': type(error).__name__}
         path.mkdir(exist_ok=True)
         (path / 'attempt.json').write_text(json.dumps(result, indent=2) + '\n')
