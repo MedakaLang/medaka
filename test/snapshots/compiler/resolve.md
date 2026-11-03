@@ -1,5 +1,5 @@
 # META
-source_lines=6427
+source_lines=6431
 stages=DESUGAR,MARK
 # SOURCE
 -- Self-hosted resolve stage (single-file
@@ -2586,10 +2586,14 @@ stmtLoc (DoAssign _ e) = firstExprLoc e
 stmtLoc (DoFieldAssign _ _ e) = firstExprLoc e
 
 unionStr : List String -> List String -> List String
-unionStr acc [] = acc
-unionStr acc (x :: xs)
-  | contains x acc = unionStr acc xs
-  | otherwise = unionStr (acc ++ [x]) xs
+unionStr acc xs = unionStrGo acc [] xs
+
+-- `fresh` holds the new names newest-first; `acc` is copied once, at the end.
+unionStrGo : List String -> List String -> List String -> List String
+unionStrGo acc fresh [] = acc ++ reverseL fresh
+unionStrGo acc fresh (x :: xs)
+  | contains x acc || contains x fresh = unionStrGo acc fresh xs
+  | otherwise = unionStrGo acc (x :: fresh) xs
 
 externWithBodyErrors : List String -> List Decl -> List ResError
 externWithBodyErrors _ [] = []
@@ -7076,8 +7080,10 @@ addOriginsProvenance acc n base (m :: rest) =
 (DFunDef false "stmtLoc" ((PCon "DoAssign" PWild (PVar "e"))) (EApp (EVar "firstExprLoc") (EVar "e")))
 (DFunDef false "stmtLoc" ((PCon "DoFieldAssign" PWild PWild (PVar "e"))) (EApp (EVar "firstExprLoc") (EVar "e")))
 (DTypeSig false "unionStr" (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyApp (TyCon "List") (TyCon "String")))))
-(DFunDef false "unionStr" ((PVar "acc") (PList)) (EVar "acc"))
-(DFunDef false "unionStr" ((PVar "acc") (PCons (PVar "x") (PVar "xs"))) (EIf (EApp (EApp (EVar "contains") (EVar "x")) (EVar "acc")) (EApp (EApp (EVar "unionStr") (EVar "acc")) (EVar "xs")) (EIf (EVar "otherwise") (EApp (EApp (EVar "unionStr") (EBinOp "++" (EVar "acc") (EListLit (EVar "x")))) (EVar "xs")) (EApp (EVar "__fallthrough__") (ELit LUnit)))))
+(DFunDef false "unionStr" ((PVar "acc") (PVar "xs")) (EApp (EApp (EApp (EVar "unionStrGo") (EVar "acc")) (EListLit)) (EVar "xs")))
+(DTypeSig false "unionStrGo" (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyApp (TyCon "List") (TyCon "String"))))))
+(DFunDef false "unionStrGo" ((PVar "acc") (PVar "fresh") (PList)) (EBinOp "++" (EVar "acc") (EApp (EVar "reverseL") (EVar "fresh"))))
+(DFunDef false "unionStrGo" ((PVar "acc") (PVar "fresh") (PCons (PVar "x") (PVar "xs"))) (EIf (EBinOp "||" (EApp (EApp (EVar "contains") (EVar "x")) (EVar "acc")) (EApp (EApp (EVar "contains") (EVar "x")) (EVar "fresh"))) (EApp (EApp (EApp (EVar "unionStrGo") (EVar "acc")) (EVar "fresh")) (EVar "xs")) (EIf (EVar "otherwise") (EApp (EApp (EApp (EVar "unionStrGo") (EVar "acc")) (EBinOp "::" (EVar "x") (EVar "fresh"))) (EVar "xs")) (EApp (EVar "__fallthrough__") (ELit LUnit)))))
 (DTypeSig false "externWithBodyErrors" (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyApp (TyCon "List") (TyCon "ResError")))))
 (DFunDef false "externWithBodyErrors" (PWild (PList)) (EListLit))
 (DFunDef false "externWithBodyErrors" ((PVar "externs") (PCons (PCon "DFunDef" PWild (PVar "n") PWild PWild PWild PWild) (PVar "rest"))) (EBinOp "++" (EIf (EApp (EApp (EVar "contains") (EVar "n")) (EVar "externs")) (EListLit (EApp (EApp (EVar "ExternWithBody") (EVar "n")) (EVar "None"))) (EListLit)) (EApp (EApp (EVar "externWithBodyErrors") (EVar "externs")) (EVar "rest"))))
@@ -8580,8 +8586,10 @@ addOriginsProvenance acc n base (m :: rest) =
 (DFunDef false "stmtLoc" ((PCon "DoAssign" PWild (PVar "e"))) (EApp (EVar "firstExprLoc") (EVar "e")))
 (DFunDef false "stmtLoc" ((PCon "DoFieldAssign" PWild PWild (PVar "e"))) (EApp (EVar "firstExprLoc") (EVar "e")))
 (DTypeSig false "unionStr" (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyApp (TyCon "List") (TyCon "String")))))
-(DFunDef false "unionStr" ((PVar "acc") (PList)) (EVar "acc"))
-(DFunDef false "unionStr" ((PVar "acc") (PCons (PVar "x") (PVar "xs"))) (EIf (EApp (EApp (EVar "contains") (EVar "x")) (EVar "acc")) (EApp (EApp (EVar "unionStr") (EVar "acc")) (EVar "xs")) (EIf (EVar "otherwise") (EApp (EApp (EVar "unionStr") (EBinOp "++" (EVar "acc") (EListLit (EVar "x")))) (EVar "xs")) (EApp (EVar "__fallthrough__") (ELit LUnit)))))
+(DFunDef false "unionStr" ((PVar "acc") (PVar "xs")) (EApp (EApp (EApp (EVar "unionStrGo") (EVar "acc")) (EListLit)) (EVar "xs")))
+(DTypeSig false "unionStrGo" (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyApp (TyCon "List") (TyCon "String"))))))
+(DFunDef false "unionStrGo" ((PVar "acc") (PVar "fresh") (PList)) (EBinOp "++" (EVar "acc") (EApp (EVar "reverseL") (EVar "fresh"))))
+(DFunDef false "unionStrGo" ((PVar "acc") (PVar "fresh") (PCons (PVar "x") (PVar "xs"))) (EIf (EBinOp "||" (EApp (EApp (EVar "contains") (EVar "x")) (EVar "acc")) (EApp (EApp (EVar "contains") (EVar "x")) (EVar "fresh"))) (EApp (EApp (EApp (EVar "unionStrGo") (EVar "acc")) (EVar "fresh")) (EVar "xs")) (EIf (EVar "otherwise") (EApp (EApp (EApp (EVar "unionStrGo") (EVar "acc")) (EBinOp "::" (EVar "x") (EVar "fresh"))) (EVar "xs")) (EApp (EVar "__fallthrough__") (ELit LUnit)))))
 (DTypeSig false "externWithBodyErrors" (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyApp (TyCon "List") (TyCon "ResError")))))
 (DFunDef false "externWithBodyErrors" (PWild (PList)) (EListLit))
 (DFunDef false "externWithBodyErrors" ((PVar "externs") (PCons (PCon "DFunDef" PWild (PVar "n") PWild PWild PWild PWild) (PVar "rest"))) (EBinOp "++" (EIf (EApp (EApp (EVar "contains") (EVar "n")) (EVar "externs")) (EListLit (EApp (EApp (EVar "ExternWithBody") (EVar "n")) (EVar "None"))) (EListLit)) (EApp (EApp (EVar "externWithBodyErrors") (EVar "externs")) (EVar "rest"))))
