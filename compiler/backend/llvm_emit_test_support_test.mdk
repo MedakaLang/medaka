@@ -26,7 +26,6 @@ llOf src =
     makeEmitInput
       RawUnchecked
       PreludeFreeRuntime
-      []
       (ctorFieldTypeNames decls)
       0
       []

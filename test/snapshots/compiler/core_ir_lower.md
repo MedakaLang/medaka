@@ -1,5 +1,5 @@
 # META
-source_lines=4152
+source_lines=4151
 stages=DESUGAR,MARK
 # SOURCE
 import support.symbol_encoding.{encodePair}
@@ -4039,10 +4039,9 @@ validateFfiExternTypeNames rows =
 --
 -- A PANIC, not a located diagnostic, and that is the stage's own limit rather than
 -- a choice: Core IR lowering runs post-typecheck, where [T-ERRORS-ACCUM]'s
--- accumulating pipeline is no longer available, and this is the same shape the two
--- existing whole-program injectivity guards in `backend.core_validate` use
--- (`core_validate.validateImplSymbolInjectivity`, `validateDictTags`) for the same
--- reason.
+-- accumulating pipeline is no longer available, and this is the same shape the
+-- existing whole-program injectivity guard in `backend.core_validate` uses
+-- (`core_validate.validateImplSymbolInjectivity`) for the same reason.
 --
 -- The three data lines are UNINDENTED on purpose, matching
 -- `core_validate.checkImplSymbolsInjective`: they are CONTENT-derived, so a

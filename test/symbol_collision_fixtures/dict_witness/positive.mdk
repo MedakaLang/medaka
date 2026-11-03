@@ -1,12 +1,7 @@
--- Positive control (F-1's repro): one type, one interface, one impl, whose route
--- word `JMt` is engineered to djb2-collide with the prelude's `Int` route word
--- for a completely UNRELATED method (`hashName "Int" == hashName "JMt"`, via the
--- adjacent-position `Delta_i=+1, Delta_{i+1}=-33` shift documented on
--- `private_mangle.hashName`). `validateDictTags` partitions route words by
--- method name, because nothing in the emitted dispatcher ever compares `Int`'s
--- route word against `JMt`'s -- they belong to different method names' dispatch
--- chains (`nm` here vs whatever prelude method routes through `Int`'s colliding
--- word). Must BUILD and RUN.
+-- One type, one interface, one impl, whose key `JMt` is engineered to djb2-collide
+-- with the prelude's `Int` for a completely UNRELATED method
+-- (`hashName "Int" == hashName "JMt"`, via the adjacent-position shift documented
+-- on `private_mangle.hashName`). Must BUILD and RUN.
 interface Nm a where
   nm : a -> String
 

@@ -56,7 +56,6 @@ import types.typecheck.{
 import eval.eval.{funNamesOf, dropShadowedExp}
 import ir.core_ir_lower.{
   lowerProgramEmitWith,
-  methodIfaceTable,
   ctorFieldTypeNames,
   validateFfiExternTypeNames,
 }
@@ -302,7 +301,6 @@ runStaged on targetPath rsrc csrc tsrc =
     makeEmitInput
       RawUnchecked
       (runtimeDomain (externDecls rDecls))
-      (methodIfaceTable elaborated)
       (ctorFieldTypeNames elaborated)
       0
       []

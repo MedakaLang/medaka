@@ -965,9 +965,8 @@ mechanism):** originally, a general instance was selected via a reserved tag
 (`noneHeadTag`) falling through the per-tag dispatch. Since S3-xe-consumers (#1403 X-E.C), every
 instance — a general instance included — is keyed by its own canonical dictionary word
 (`rowRouteKey`), so dispatch is a uniform set of guarded arms with no separate tag-based
-catch-all: `eval` matches the key (`pickByKey`), native RDict's `emitDispatchChain` (superseded by method tables, RUNTIME-DESIGN §8) emits every
-entry, general instance's too, as a guarded arm on its own canonical key (a word no arm claims
-traps), and wasm's `emitMethodDispatchRef` (superseded by method tables, RUNTIME-DESIGN §8) does the same. The reserved-tag machinery this
+catch-all: `eval` matches the key (`pickByKey`), native and wasm both give every entry, general instance's too, its own method-table slot in its
+instance's table (RUNTIME-DESIGN §8), so a dictionary no instance fills traps. The reserved-tag machinery this
 paragraph originally named (`pickTagFallback`, `emitGeneralRKey`, the wasm general tier) is
 deleted.
 

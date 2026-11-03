@@ -191,7 +191,7 @@ llvmText : CProgram -> String
 llvmText cp =
   let emitted =
     emitProgram
-      (makeEmitInput RawUnchecked PreludeFreeRuntime [] [] 0 [] [] "")
+      (makeEmitInput RawUnchecked PreludeFreeRuntime [] 0 [] [] "")
       (buildEmitPlan LlvmBackend PreludeFreeRuntime cp)
       cp
   match emitted

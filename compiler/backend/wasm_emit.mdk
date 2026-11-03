@@ -4505,25 +4505,9 @@ findByKeyArityW prog method tag siteArity (entry :: rest) =
   else
     findByKeyArityW prog method tag siteArity rest
 
--- `hashName` (djb2, seed 5381) lives in `types.private_mangle`, shared verbatim
--- with the LLVM emitter so the dict-witness tag matches across backends + the
--- route-key dispatch agrees.
-
--- `dictTag` (the i31-safe 30-bit mask of `hashName`) and its `posMod` helper moved
--- to `types.private_mangle`, beside `hashName`, in #377/#348: the emit-time
--- collision guard (`core_validate.validateDictTags`) has to check THIS tag space
--- with the SAME expression this emitter mints, and a second copy of the mask is a
--- copy that can drift.  Imported at the top of this file; the emitted `i32.const`s
--- are unchanged.
---
--- ⚠️ The comment that used to stand here called a 30-bit tag collision
--- "astronomically unlikely for the small impl-tag alphabet" and the 64-bit LLVM
--- scheme's the "same theoretical collision shape".  Both halves were wrong:
--- colliding pre-images are CONSTRUCTIBLE in the full i64 (`hashName "Mzone" ==
--- hashName "NYone"`), the mechanism is the radix-33 polynomial versus a 74-code-
--- point alphabet rather than anything about how many tags a program has, and it
--- was a live silent-wrong-dispatch S0 on both backends until the guard landed.
--- See `private_mangle.hashName`'s note.
+-- `hashName` (djb2, seed 5381) and `dictTag` (its 30-bit mask, the i32 dictionary
+-- header) live in `types.private_mangle`, shared with the LLVM emitter.  The header
+-- is identity only: dispatch loads a method-table slot and never compares it.
 
 -- Common expression traversal; physical mode chooses i64 or (ref eq) values.
 -- `d` is the current match/switch nesting DEPTH: a CDecision/CTSwitch stashes a

@@ -433,7 +433,7 @@ withLowered emit src =
   let decls = annotateProgram (grantWholeDomain (desugar (parse src)))
   let cp = lowerProgramEmitWith emptyFacts decls
   emit
-    (makeEmitInput RawUnchecked PreludeFreeRuntime [] [] 0 [] [] "")
+    (makeEmitInput RawUnchecked PreludeFreeRuntime [] 0 [] [] "")
     (buildEmitPlan LlvmBackend PreludeFreeRuntime cp)
     cp
 
@@ -548,7 +548,7 @@ test "gap rejects injected raw direct call" =
   let src = "f : Int -> Int\\nf x = x + 1\\nmain : Int\\nmain = f 2\\n"
   let decls = annotateProgram (grantWholeDomain (desugar (parse src)))
   let cp = lowerProgramEmitWith emptyFacts decls
-  let input = makeEmitInput RawUnchecked PreludeFreeRuntime [] [] 0 [] [] ""
+  let input = makeEmitInput RawUnchecked PreludeFreeRuntime [] 0 [] [] ""
   match emitProgramGaps input (buildEmitPlan LlvmBackend PreludeFreeRuntime cp) cp
     Err defects => expectEqual ["E-PHYS-UNCHECKED"] (map (d => codeText (defectCode d)) defects)
     Ok _ => fail "gap census accepted a raw call"
