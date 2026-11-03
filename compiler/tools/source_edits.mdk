@@ -21,7 +21,7 @@ validateEach _ _ [] = Ok ()
 validateEach snapshot text ((SourceEdit id (SourceSpan lo hi) expected _) :: rest)
   | not (matchesSnapshot id snapshot) = Err StaleSnapshot
   | lo < 0 || hi < lo || hi > stringLength text = Err InvalidRange
-  -- Bound: one text sliced at ascending offsets, linear (same forward walk as fmt, ratio under 2); out-of-order edits re-walk from the cached point, and the cost is engine-dependent.
+  -- Bound: one text sliced once per edit, linear on the native runtime (cursor cache) when edits arrive in ascending order; unsorted input re-walks from the cached point.
   -- lint-disable-next-line rule-reslice-in-loop
   | stringSlice lo hi text /= expected = Err ExpectedTextMismatch
   | otherwise = validateEach snapshot text rest
@@ -45,7 +45,7 @@ validateSourceEdits (snapshot@(SourceSnapshot _ _ _ text _)) edits =
 editParts : String -> Int -> List SourceEdit -> List String
 editParts text pos [] = [stringSlice pos (stringLength text) text]
 editParts text pos ((SourceEdit _ (SourceSpan lo hi) _ replacement) :: rest) =
-  -- Bound: one text sliced at ascending offsets, linear (same forward walk as fmt, ratio under 2); out-of-order edits re-walk from the cached point, and the cost is engine-dependent.
+  -- Bound: one text sliced at ascending offsets by sorted edits, linear on the native runtime (cursor cache); not shipped to WasmGC.
   -- lint-disable-next-line rule-reslice-in-loop
   stringSlice pos lo text :: replacement :: editParts text hi rest
 

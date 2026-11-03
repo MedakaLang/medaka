@@ -1,11 +1,12 @@
 # META
-source_lines=51
+source_lines=52
 stages=DESUGAR,MARK
 # SOURCE
--- Shared filesystem-path string operations for the self-hosted compiler.
--- compiler deliberately avoids the standard library, so the POSIX-"/" path
--- helpers (dirname / basename / chop-extension / join) the module-entry mains
--- and the build/test drivers need live here once instead of per file.
+-- Compiler-private POSIX-"/" path string operations: dirOf / baseOf, chopExt,
+-- joinPath, stripMdk and modIdOf, shared by the module-entry mains and the
+-- build/test drivers. stdlib/path.mdk is the general path library (dirname,
+-- basename, extname, normalize); these helpers cover only what the compiler
+-- itself calls.
 
 -- dirname: the path up to (not including) the final "/"; "." if none.
 export

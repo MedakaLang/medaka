@@ -51,7 +51,7 @@ recvFrame conn buffer = match findHeaderEnd buffer 0
       if B.isEmpty chunk then
         Err "crawl_stub: call closed before its header terminator"
       else
-        -- Bound: the loop ends at the header terminator, so the buffer is one response head plus at most one chunk, and the terminator scan re-reads it each step regardless.
+        -- Bound: the loop ends at the header terminator, so the buffer is one response head plus at most one chunk.
         -- lint-disable-next-line rule-accumulator-append
         recvFrame conn (buffer ++ chunk)
   Some at =>

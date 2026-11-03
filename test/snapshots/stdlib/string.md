@@ -542,7 +542,7 @@ charAtStr s i = arrayGetUnsafe 0 (toChars (stringSlice i (i + 1) s))
 firstNonSpaceStr : String -> Int -> Int -> Int
 firstNonSpaceStr s i n
   | i >= n = n
-  -- Bound: one string probed one position at a time over its whitespace run, linear (trim of 20000/40000/80000 spaces around a non-ASCII character took 0.005/0.007/0.010s; the runtime resumes its codepoint walk from the last index), and the cost is engine-dependent.
+  -- Bound: one string probed one position at a time over its whitespace run; linear on the native runtime (the one-entry cursor cache resumes the codepoint walk) and quadratic on WasmGC for a long run beside non-ASCII text.
   -- lint-disable-next-line rule-reslice-in-loop
   | isSpace (charAtStr s i) = firstNonSpaceStr s (i + 1) n
   | otherwise = i
@@ -553,7 +553,7 @@ firstNonSpaceStr s i n
 lastNonSpaceStr : String -> Int -> Int -> Int
 lastNonSpaceStr s i lo
   | i < lo = lo - 1
-  -- Bound: one string probed backward from the end over its whitespace run, linear (trim of 20000/40000/80000 spaces around a non-ASCII character took 0.005/0.007/0.010s; the runtime resumes its codepoint walk from the last index), and the cost is engine-dependent.
+  -- Bound: one string probed backward from the end over its whitespace run; same bound as firstNonSpaceStr, native-linear and WasmGC-quadratic.
   -- lint-disable-next-line rule-reslice-in-loop
   | isSpace (charAtStr s i) = lastNonSpaceStr s (i - 1) lo
   | otherwise = i
@@ -1047,7 +1047,7 @@ leadingIndent l = take (indentRunLength l (length l) 0) l
 -- nor a tab, or `n` when there is none.
 indentRunLength : String -> Int -> Int -> Int
 indentRunLength l n i
-  -- Bound: one string probed forward over its indentation run, linear (trim of 20000/40000/80000 spaces around a non-ASCII character took 0.005/0.007/0.010s; the runtime resumes its codepoint walk from the last index), and the cost is engine-dependent.
+  -- Bound: one string probed forward over its indentation run; same bound as firstNonSpaceStr, native-linear and WasmGC-quadratic.
   -- lint-disable-next-line rule-reslice-in-loop
   | i < n && isIndentChar (charAtStr l i) = indentRunLength l n (i + 1)
   | otherwise = i

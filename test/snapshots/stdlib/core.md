@@ -1,5 +1,5 @@
 # META
-source_lines=2483
+source_lines=2486
 stages=DESUGAR,MARK
 # SOURCE
 {- | The prelude: the types, interfaces, and functions every Medaka program
@@ -1413,6 +1413,9 @@ export interface Foldable t where
   toList : t a -> List a
   isEmpty : t a -> Bool
   length : t a -> Int
+  -- `fold` conses newest-first, so `listFoldMapGo` reverses while appending; the
+  -- result equals the left fold only when `append` is associative (Monoid laws).
+  -- An unlawful Monoid sees the appends nested to the right.
   foldMap f t = listFoldMapGo empty (fold (acc x => f x :: acc) [] t)
   foldUntil f z t = foldUntilList f z (toList t)
   length t = fold (acc _ => acc + 1) 0 t
