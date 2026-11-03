@@ -155,7 +155,23 @@ def yaml_extract():
                 counts[job] += 1
                 if not disjunct_present(if_text, refjob):
                     violations.append((job, lineno, refjob, if_text))
-    return violations, counts, len(jobs), aggregator_problems(jobs)
+    return violations, counts, len(jobs), aggregator_problems(jobs) + collector_problems(jobs)
+
+def collector_problems(jobs):
+    steps = (jobs.get('compiler-soundness') or {}).get('steps') or []
+    matches = [step for step in steps if isinstance(step, dict)
+               and step.get('name') == 'MCP collector privileged behavior']
+    if len(matches) != 1:
+        return [f"compiler-soundness must have exactly one MCP collector privileged behavior step; found {len(matches)}"]
+    step = matches[0]
+    problems = []
+    command = 'sudo env MEDAKA_MCP_REQUIRE_AUTHORITY=1 sh test/diff_compiler_mcp_collector.sh'
+    command_steps = [s for s in steps if isinstance(s, dict) and s.get('run') == command]
+    if step.get('run') != command or len(command_steps) != 1:
+        problems.append('compiler-soundness must have exactly one strict MCP collector command in the named step')
+    if 'if' in step:
+        problems.append('compiler-soundness MCP collector privileged behavior step must not have a step-level if')
+    return problems
 
 # A required context that only aggregates a matrix: it must need that matrix and run
 # on `!cancelled()`.  A plain `needs:` skips it when a shard fails, and a skipped
@@ -232,7 +248,7 @@ def regex_extract():
                 if not disjunct_present(if_text, refjob):
                     violations.append((job, i + 1, refjob, ln.strip()))
     print("WARN: aggregator shape (AGGREGATORS) is checked on the YAML path only.")
-    return violations, counts, len(job_ranges), []
+    return violations, counts, len(job_ranges), ["cannot verify the compiler-soundness MCP collector step without YAML parsing"]
 
 try:
     import yaml  # noqa: F401
@@ -273,7 +289,7 @@ if floor_violations:
 
 if agg_problems:
     failed = True
-    print(f"FAIL: {len(agg_problems)} aggregator problem(s) — a red shard could read green:")
+    print(f"FAIL: {len(agg_problems)} required-job problem(s) — required coverage could read green:")
     for p in agg_problems:
         print(f"       {p}")
 
