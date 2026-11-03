@@ -17,6 +17,8 @@ import frontend.ast.{
   FieldAssign(..),
 }
 import types.effect_authority.{authVars, authvarDefaultName}
+import types.effect_param_decode.{dtopIn, writtenParam}
+import types.target_profile.{hostLabels}
 import types.effect_rows.{
   effLabelOrigin,
   atomLabelOf,
@@ -25,6 +27,8 @@ import types.effect_rows.{
   atomsUnion,
   Atom(..),
   effrowLabels,
+  builtinLabel,
+  atomWith,
 }
 import types.repr.{Scheme(..), Mono(..), normalize}
 import types.effect_domain.{Param}
@@ -36,7 +40,7 @@ import types.manifest_publish.{freezeAtoms}
 import types.capability_policy.{manifestAllowed, permitFrozen}
 export import types.capability_policy.{PolicyVerdict(..), Permit(..), allOk}
 import support.util.{
-  sortUniqS, joinWith, reverseL, filterList, contains, anyList
+  sortUniqS, joinWith, reverseL, filterList, contains, anyList, lookupAssoc
 }
 import support.ordmap.{
   OrdMap, omEmpty, omFromPairs, omFromNames, omLookup, omHasKey
@@ -253,3 +257,20 @@ firstWithEffect effTable label (c :: rest) =
     Some c
   else
     firstWithEffect effTable label rest
+
+-- What `IO` joins in this drive: the selected profile's grants of the alias
+-- labels, each at the parameter granted, in `hostLabels` order.  With no
+-- profile that is all eleven at their tops.  Every module of the program is
+-- judged against the one join, the shipped stdlib included.
+export
+ioJoinAtoms : List (String, Param) -> List (String, EffParamTy) -> List Atom
+ioJoinAtoms domains grants =
+  filterMap
+    (l =>
+      map
+        (granted =>
+          atomWith
+            (builtinLabel l)
+            (writtenParam (dtopIn domains (builtinLabel l)) granted))
+        (lookupAssoc l grants))
+    hostLabels
