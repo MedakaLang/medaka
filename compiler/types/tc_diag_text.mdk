@@ -69,6 +69,7 @@ import types.tc_types.{
   MethodBodyKind(..),
   RecordInfo,
 }
+import list.{take}
 import support.diag_codes.{DiagCode(..)}
 import types.publish.{TcDiag(..), tcCode}
 import support.util.{
@@ -280,18 +281,35 @@ kindDomainName : Kind -> String
 kindDomainName (KArrow d r) = "(\{kindName (KArrow d r)})"
 kindDomainName k = kindName k
 
--- A written constructor applied to more arguments than it has parameters
--- (EFFECTS-SEMANTICS §6.4).  [ctor] is a raw head tag (`ppConName`).
+-- A written constructor given [nArgs] type arguments where its position takes
+-- [expected] (EFFECTS-SEMANTICS §6.4).  [written] is a raw head tag
+-- (`ppConName`); the remedy depends on which side the count is wrong on.
 export
-writtenKindArityMsg : String -> Kind -> Int -> String
-writtenKindArityMsg ctor kind nArgs =
-  "kind mismatch: `\{ppConName ctor}` has kind `\{kindName kind}`, but is applied to \{nArgs} type argument(s)"
+writtenKindArityMsg : String -> Int -> Int -> String
+writtenKindArityMsg written expected nArgs =
+  "`\{ppConName written}` expects \{countTypeArguments expected}, got \{intToString nArgs}; \{writtenKindArityFix (ppConName written) expected nArgs}"
 
--- A written type whose kind is not the one its position takes (§6.4).
+countTypeArguments : Int -> String
+countTypeArguments n = "\{intToString n} type \{argumentNoun n}"
+
+writtenKindArityFix : String -> Int -> Int -> String
+writtenKindArityFix written expected nArgs
+  | nArgs > expected = "remove the extra \{argumentNoun (nArgs - expected)}"
+  | nArgs == 0 && startsWith "(" written =
+    "write `(\{joinWith ", " (take expected missingArgNames)})`"
+  | nArgs == 0 =
+    "write `\{written} \{joinWith " " (take expected missingArgNames)}`"
+  | otherwise = "supply the missing \{argumentNoun (expected - nArgs)}"
+
+missingArgNames : List String
+missingArgNames = ["a", "b", "c", "d", "e", "f"]
+
+-- A written type whose kind is not the one its position takes (§6.4), where
+-- the mismatch is not a count of arguments.
 export
 writtenKindMismatchMsg : String -> Kind -> Kind -> String
 writtenKindMismatchMsg written got want =
-  "kind mismatch: `\{written}` has kind `\{kindName got}`, but kind `\{kindName want}` is expected here"
+  "`\{written}` has kind `\{kindName got}`, but a type of kind `\{kindName want}` is expected here; write a type of that kind"
 
 export
 renderKindArrow : List Kind -> String

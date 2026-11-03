@@ -2404,7 +2404,7 @@ reportWrittenKinds mctx sc declared fallback items =
       Some (loc, msg) =>
         pushTypeErrorOncePerSite
           mctx
-          TImplKindMismatch
+          TWrittenKindMismatch
           (orElseLoc loc (orElseLoc (firstTyLoc (snd it)) fallback))
           msg
       None => ())
@@ -2455,11 +2455,12 @@ headKindError sc vars want n isAlias loc params args
   | isAlias && listLen args /= listLen params =
     argKindErrors sc vars params args
   | listLen args > listLen params =
-    Some (loc, writtenKindArityMsg n (kindOfParams params) (listLen args))
+    Some (loc, writtenKindArityMsg n (listLen params) (listLen args))
   | otherwise = orNextError (argKindErrors sc vars params args) (_ =>
     kindAgainst
       loc
       (_ => ppConName n)
+      (listLen args)
       (kindOfParams (drop (listLen args) params))
       want)
 
@@ -2473,12 +2474,15 @@ varKindError : KindScope ->
   Option (Option Loc, String)
 varKindError sc vars want v k args
   | not (kindTypeOnly k) = argKindErrors sc vars [] args
-  | listLen args > listLen (kindParams k) =
-    Some (firstTyLocList args, writtenKindArityMsg v k (listLen args))
+  | listLen args > listLen (kindParams k) = Some (
+    firstTyLocList args,
+    writtenKindArityMsg v (listLen (kindParams k)) (listLen args),
+  )
   | otherwise = orNextError (argKindErrors sc vars (kindParams k) args) (_ =>
     kindAgainst
       (firstTyLocList args)
       (_ => v)
+      (listLen args)
       (kindOfParams (drop (listLen args) (kindParams k)))
       want)
 
@@ -2492,11 +2496,11 @@ formKindError : KindScope ->
 formKindError sc vars want (TyFun a b) = firstKindError [
   _ => kindErrorIn sc vars (Some KType) a,
   _ => kindErrorIn sc vars (Some KType) b,
-  _ => kindAgainst (firstTyLoc a) (_ => ppTy (TyFun a b)) KType want,
+  _ => kindAgainst (firstTyLoc a) (_ => ppTy (TyFun a b)) 0 KType want,
 ]
 formKindError sc vars want (TyTuple ts) = firstKindError [
   _ => argKindErrors sc vars (map (_ => KType) ts) ts,
-  _ => kindAgainst (firstTyLocList ts) (_ => ppTy (TyTuple ts)) KType want,
+  _ => kindAgainst (firstTyLocList ts) (_ => ppTy (TyTuple ts)) 0 KType want,
 ]
 formKindError sc vars want (TyEffect _ _ t) = kindErrorIn sc vars want t
 formKindError sc vars want (TyConstrained cs t) =
@@ -2532,18 +2536,28 @@ argKindErrors sc vars [] (a :: as2) =
   orNextError (kindErrorIn sc vars None a) (_ => argKindErrors sc vars [] as2)
 
 -- [written], of kind [got], where [want] is expected.  Only kinds of `Type`
--- and arrows are compared here.  [written] renders only for a message.
+-- and arrows are compared here.  [written] renders only for a message;
+-- [applied] is how many arguments it was given, so that a head still wanting
+-- arguments reads as a count (`Option` expects 1 type argument, got 0).
 kindAgainst : Option Loc ->
   (Unit -> String) ->
+  Int ->
   Kind ->
   Option Kind ->
   Option (Option Loc, String)
-kindAgainst loc written got (Some want) =
+kindAgainst loc written applied got (Some want) =
   if kindTypeOnly got && kindTypeOnly want && not (kindEq got want) then
-    Some (loc, writtenKindMismatchMsg (written ()) got want)
+    Some (loc, kindAgainstMsg (written ()) applied got want)
   else
     None
-kindAgainst _ _ _ None = None
+kindAgainst _ _ _ _ None = None
+
+kindAgainstMsg : String -> Int -> Kind -> Kind -> String
+kindAgainstMsg written applied got want
+  | missing > 0 = writtenKindArityMsg written (applied + missing) applied
+  | otherwise = writtenKindMismatchMsg written got want
+  where
+    missing = listLen (kindParams got) - listLen (kindParams want)
 
 firstKindError : List (Unit -> Option (Option Loc, String)) ->
   Option (Option Loc, String)

@@ -1,5 +1,5 @@
 # META
-source_lines=1531
+source_lines=1549
 stages=DESUGAR,MARK
 # SOURCE
 -- tc_diag_text: the context-free message text of the typechecker: every message, help and fix
@@ -73,6 +73,7 @@ import types.tc_types.{
   MethodBodyKind(..),
   RecordInfo,
 }
+import list.{take}
 import support.diag_codes.{DiagCode(..)}
 import types.publish.{TcDiag(..), tcCode}
 import support.util.{
@@ -284,18 +285,35 @@ kindDomainName : Kind -> String
 kindDomainName (KArrow d r) = "(\{kindName (KArrow d r)})"
 kindDomainName k = kindName k
 
--- A written constructor applied to more arguments than it has parameters
--- (EFFECTS-SEMANTICS §6.4).  [ctor] is a raw head tag (`ppConName`).
+-- A written constructor given [nArgs] type arguments where its position takes
+-- [expected] (EFFECTS-SEMANTICS §6.4).  [written] is a raw head tag
+-- (`ppConName`); the remedy depends on which side the count is wrong on.
 export
-writtenKindArityMsg : String -> Kind -> Int -> String
-writtenKindArityMsg ctor kind nArgs =
-  "kind mismatch: `\{ppConName ctor}` has kind `\{kindName kind}`, but is applied to \{nArgs} type argument(s)"
+writtenKindArityMsg : String -> Int -> Int -> String
+writtenKindArityMsg written expected nArgs =
+  "`\{ppConName written}` expects \{countTypeArguments expected}, got \{intToString nArgs}; \{writtenKindArityFix (ppConName written) expected nArgs}"
 
--- A written type whose kind is not the one its position takes (§6.4).
+countTypeArguments : Int -> String
+countTypeArguments n = "\{intToString n} type \{argumentNoun n}"
+
+writtenKindArityFix : String -> Int -> Int -> String
+writtenKindArityFix written expected nArgs
+  | nArgs > expected = "remove the extra \{argumentNoun (nArgs - expected)}"
+  | nArgs == 0 && startsWith "(" written =
+    "write `(\{joinWith ", " (take expected missingArgNames)})`"
+  | nArgs == 0 =
+    "write `\{written} \{joinWith " " (take expected missingArgNames)}`"
+  | otherwise = "supply the missing \{argumentNoun (expected - nArgs)}"
+
+missingArgNames : List String
+missingArgNames = ["a", "b", "c", "d", "e", "f"]
+
+-- A written type whose kind is not the one its position takes (§6.4), where
+-- the mismatch is not a count of arguments.
 export
 writtenKindMismatchMsg : String -> Kind -> Kind -> String
 writtenKindMismatchMsg written got want =
-  "kind mismatch: `\{written}` has kind `\{kindName got}`, but kind `\{kindName want}` is expected here"
+  "`\{written}` has kind `\{kindName got}`, but a type of kind `\{kindName want}` is expected here; write a type of that kind"
 
 export
 renderKindArrow : List Kind -> String
@@ -1538,6 +1556,7 @@ dropAmbiguity = filterList (d => tcCode d /= TAmbiguousInstance)
 (DUse false (UseGroup ("frontend" "ast") ((mem "authTermsSurface" false) (mem "EffAtomTy" true) (mem "EffParamTy" true) (mem "Expr" true) (mem "isI64Head" false) (mem "KindAnn" true) (mem "kindAnnSource" false) (mem "Lit" true) (mem "Loc" true) (mem "patternMark" false) (mem "qualifierSource" false) (mem "TabKey" true) (mem "tabKeyName" false) (mem "Ty" true) (mem "TyConOrigin" true))))
 (DUse false (UseGroup ("types" "repr") ((mem "normalize" false) (mem "IfaceRef" true) (mem "Mono" true) (mem "ppAuthority" false) (mem "ppConName" false) (mem "ppEach" false) (mem "ppEffArgFmt" false) (mem "ppEffInsideTy" false) (mem "ppEffvarName" false) (mem "ppGo" false) (mem "ppMono" false) (mem "ppMonosShared" false) (mem "ppPredArgsShared" false) (mem "ppTy" false) (mem "ppTyAtom" false) (mem "tupleHeadTagTc" false))))
 (DUse false (UseGroup ("types" "tc_types") ((mem "DeclaringBinder" true) (mem "KeyEntry" false) (mem "Kind" true) (mem "MethodBodyKind" true) (mem "RecordInfo" false))))
+(DUse false (UseGroup ("list") ((mem "take" false))))
 (DUse false (UseGroup ("support" "diag_codes") ((mem "DiagCode" true))))
 (DUse false (UseGroup ("types" "publish") ((mem "TcDiag" true) (mem "tcCode" false))))
 (DUse false (UseGroup ("support" "util") ((mem "contains" false) (mem "dedup" false) (mem "dedupBy" false) (mem "escStr" false) (mem "filterList" false) (mem "isEmptyL" false) (mem "isNonEmptyL" false) (mem "joinWith" false) (mem "listLen" false) (mem "reverseL" false) (mem "sortUniqS" false) (mem "splitOnChar" false) (mem "startsWith" false))))
@@ -1615,10 +1634,16 @@ dropAmbiguity = filterList (d => tcCode d /= TAmbiguousInstance)
 (DTypeSig false "kindDomainName" (TyFun (TyCon "Kind") (TyCon "String")))
 (DFunDef false "kindDomainName" ((PCon "KArrow" (PVar "d") (PVar "r"))) (EBinOp "++" (EBinOp "++" (ELit (LString "(")) (EApp (EVar "display") (EApp (EVar "kindName") (EApp (EApp (EVar "KArrow") (EVar "d")) (EVar "r"))))) (ELit (LString ")"))))
 (DFunDef false "kindDomainName" ((PVar "k")) (EApp (EVar "kindName") (EVar "k")))
-(DTypeSig true "writtenKindArityMsg" (TyFun (TyCon "String") (TyFun (TyCon "Kind") (TyFun (TyCon "Int") (TyCon "String")))))
-(DFunDef false "writtenKindArityMsg" ((PVar "ctor") (PVar "kind") (PVar "nArgs")) (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "kind mismatch: `")) (EApp (EVar "display") (EApp (EVar "ppConName") (EVar "ctor")))) (ELit (LString "` has kind `"))) (EApp (EVar "display") (EApp (EVar "kindName") (EVar "kind")))) (ELit (LString "`, but is applied to "))) (EApp (EVar "display") (EVar "nArgs"))) (ELit (LString " type argument(s)"))))
+(DTypeSig true "writtenKindArityMsg" (TyFun (TyCon "String") (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyCon "String")))))
+(DFunDef false "writtenKindArityMsg" ((PVar "written") (PVar "expected") (PVar "nArgs")) (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "`")) (EApp (EVar "display") (EApp (EVar "ppConName") (EVar "written")))) (ELit (LString "` expects "))) (EApp (EVar "display") (EApp (EVar "countTypeArguments") (EVar "expected")))) (ELit (LString ", got "))) (EApp (EVar "display") (EApp (EVar "intToString") (EVar "nArgs")))) (ELit (LString "; "))) (EApp (EVar "display") (EApp (EApp (EApp (EVar "writtenKindArityFix") (EApp (EVar "ppConName") (EVar "written"))) (EVar "expected")) (EVar "nArgs")))) (ELit (LString ""))))
+(DTypeSig false "countTypeArguments" (TyFun (TyCon "Int") (TyCon "String")))
+(DFunDef false "countTypeArguments" ((PVar "n")) (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "")) (EApp (EVar "display") (EApp (EVar "intToString") (EVar "n")))) (ELit (LString " type "))) (EApp (EVar "display") (EApp (EVar "argumentNoun") (EVar "n")))) (ELit (LString ""))))
+(DTypeSig false "writtenKindArityFix" (TyFun (TyCon "String") (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyCon "String")))))
+(DFunDef false "writtenKindArityFix" ((PVar "written") (PVar "expected") (PVar "nArgs")) (EIf (EBinOp ">" (EVar "nArgs") (EVar "expected")) (EBinOp "++" (EBinOp "++" (ELit (LString "remove the extra ")) (EApp (EVar "display") (EApp (EVar "argumentNoun") (EBinOp "-" (EVar "nArgs") (EVar "expected"))))) (ELit (LString ""))) (EIf (EBinOp "&&" (EBinOp "==" (EVar "nArgs") (ELit (LInt 0))) (EApp (EApp (EVar "startsWith") (ELit (LString "("))) (EVar "written"))) (EBinOp "++" (EBinOp "++" (ELit (LString "write `(")) (EApp (EVar "display") (EApp (EApp (EVar "joinWith") (ELit (LString ", "))) (EApp (EApp (EVar "take") (EVar "expected")) (EVar "missingArgNames"))))) (ELit (LString ")`"))) (EIf (EBinOp "==" (EVar "nArgs") (ELit (LInt 0))) (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "write `")) (EApp (EVar "display") (EVar "written"))) (ELit (LString " "))) (EApp (EVar "display") (EApp (EApp (EVar "joinWith") (ELit (LString " "))) (EApp (EApp (EVar "take") (EVar "expected")) (EVar "missingArgNames"))))) (ELit (LString "`"))) (EIf (EVar "otherwise") (EBinOp "++" (EBinOp "++" (ELit (LString "supply the missing ")) (EApp (EVar "display") (EApp (EVar "argumentNoun") (EBinOp "-" (EVar "expected") (EVar "nArgs"))))) (ELit (LString ""))) (EApp (EVar "__fallthrough__") (ELit LUnit)))))))
+(DTypeSig false "missingArgNames" (TyApp (TyCon "List") (TyCon "String")))
+(DFunDef false "missingArgNames" () (EListLit (ELit (LString "a")) (ELit (LString "b")) (ELit (LString "c")) (ELit (LString "d")) (ELit (LString "e")) (ELit (LString "f"))))
 (DTypeSig true "writtenKindMismatchMsg" (TyFun (TyCon "String") (TyFun (TyCon "Kind") (TyFun (TyCon "Kind") (TyCon "String")))))
-(DFunDef false "writtenKindMismatchMsg" ((PVar "written") (PVar "got") (PVar "want")) (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "kind mismatch: `")) (EApp (EVar "display") (EVar "written"))) (ELit (LString "` has kind `"))) (EApp (EVar "display") (EApp (EVar "kindName") (EVar "got")))) (ELit (LString "`, but kind `"))) (EApp (EVar "display") (EApp (EVar "kindName") (EVar "want")))) (ELit (LString "` is expected here"))))
+(DFunDef false "writtenKindMismatchMsg" ((PVar "written") (PVar "got") (PVar "want")) (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "`")) (EApp (EVar "display") (EVar "written"))) (ELit (LString "` has kind `"))) (EApp (EVar "display") (EApp (EVar "kindName") (EVar "got")))) (ELit (LString "`, but a type of kind `"))) (EApp (EVar "display") (EApp (EVar "kindName") (EVar "want")))) (ELit (LString "` is expected here; write a type of that kind"))))
 (DTypeSig true "renderKindArrow" (TyFun (TyApp (TyCon "List") (TyCon "Kind")) (TyCon "String")))
 (DFunDef false "renderKindArrow" ((PVar "ks")) (EApp (EApp (EVar "joinWith") (ELit (LString " -> "))) (EBinOp "++" (EApp (EApp (EVar "map") (EVar "kindDomainName")) (EVar "ks")) (EListLit (ELit (LString "Type"))))))
 (DTypeSig true "implKindMismatchMsg" (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyCon "Int") (TyFun (TyApp (TyCon "List") (TyCon "Kind")) (TyFun (TyApp (TyCon "List") (TyCon "Kind")) (TyCon "String")))))))
@@ -2006,6 +2031,7 @@ dropAmbiguity = filterList (d => tcCode d /= TAmbiguousInstance)
 (DUse false (UseGroup ("frontend" "ast") ((mem "authTermsSurface" false) (mem "EffAtomTy" true) (mem "EffParamTy" true) (mem "Expr" true) (mem "isI64Head" false) (mem "KindAnn" true) (mem "kindAnnSource" false) (mem "Lit" true) (mem "Loc" true) (mem "patternMark" false) (mem "qualifierSource" false) (mem "TabKey" true) (mem "tabKeyName" false) (mem "Ty" true) (mem "TyConOrigin" true))))
 (DUse false (UseGroup ("types" "repr") ((mem "normalize" false) (mem "IfaceRef" true) (mem "Mono" true) (mem "ppAuthority" false) (mem "ppConName" false) (mem "ppEach" false) (mem "ppEffArgFmt" false) (mem "ppEffInsideTy" false) (mem "ppEffvarName" false) (mem "ppGo" false) (mem "ppMono" false) (mem "ppMonosShared" false) (mem "ppPredArgsShared" false) (mem "ppTy" false) (mem "ppTyAtom" false) (mem "tupleHeadTagTc" false))))
 (DUse false (UseGroup ("types" "tc_types") ((mem "DeclaringBinder" true) (mem "KeyEntry" false) (mem "Kind" true) (mem "MethodBodyKind" true) (mem "RecordInfo" false))))
+(DUse false (UseGroup ("list") ((mem "take" false))))
 (DUse false (UseGroup ("support" "diag_codes") ((mem "DiagCode" true))))
 (DUse false (UseGroup ("types" "publish") ((mem "TcDiag" true) (mem "tcCode" false))))
 (DUse false (UseGroup ("support" "util") ((mem "contains" false) (mem "dedup" false) (mem "dedupBy" false) (mem "escStr" false) (mem "filterList" false) (mem "isEmptyL" false) (mem "isNonEmptyL" false) (mem "joinWith" false) (mem "listLen" false) (mem "reverseL" false) (mem "sortUniqS" false) (mem "splitOnChar" false) (mem "startsWith" false))))
@@ -2083,10 +2109,16 @@ dropAmbiguity = filterList (d => tcCode d /= TAmbiguousInstance)
 (DTypeSig false "kindDomainName" (TyFun (TyCon "Kind") (TyCon "String")))
 (DFunDef false "kindDomainName" ((PCon "KArrow" (PVar "d") (PVar "r"))) (EBinOp "++" (EBinOp "++" (ELit (LString "(")) (EApp (EMethodRef "display") (EApp (EVar "kindName") (EApp (EApp (EVar "KArrow") (EVar "d")) (EVar "r"))))) (ELit (LString ")"))))
 (DFunDef false "kindDomainName" ((PVar "k")) (EApp (EVar "kindName") (EVar "k")))
-(DTypeSig true "writtenKindArityMsg" (TyFun (TyCon "String") (TyFun (TyCon "Kind") (TyFun (TyCon "Int") (TyCon "String")))))
-(DFunDef false "writtenKindArityMsg" ((PVar "ctor") (PVar "kind") (PVar "nArgs")) (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "kind mismatch: `")) (EApp (EMethodRef "display") (EApp (EVar "ppConName") (EVar "ctor")))) (ELit (LString "` has kind `"))) (EApp (EMethodRef "display") (EApp (EVar "kindName") (EVar "kind")))) (ELit (LString "`, but is applied to "))) (EApp (EMethodRef "display") (EVar "nArgs"))) (ELit (LString " type argument(s)"))))
+(DTypeSig true "writtenKindArityMsg" (TyFun (TyCon "String") (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyCon "String")))))
+(DFunDef false "writtenKindArityMsg" ((PVar "written") (PVar "expected") (PVar "nArgs")) (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "`")) (EApp (EMethodRef "display") (EApp (EVar "ppConName") (EVar "written")))) (ELit (LString "` expects "))) (EApp (EMethodRef "display") (EApp (EVar "countTypeArguments") (EVar "expected")))) (ELit (LString ", got "))) (EApp (EMethodRef "display") (EApp (EVar "intToString") (EVar "nArgs")))) (ELit (LString "; "))) (EApp (EMethodRef "display") (EApp (EApp (EApp (EVar "writtenKindArityFix") (EApp (EVar "ppConName") (EVar "written"))) (EVar "expected")) (EVar "nArgs")))) (ELit (LString ""))))
+(DTypeSig false "countTypeArguments" (TyFun (TyCon "Int") (TyCon "String")))
+(DFunDef false "countTypeArguments" ((PVar "n")) (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "")) (EApp (EMethodRef "display") (EApp (EVar "intToString") (EVar "n")))) (ELit (LString " type "))) (EApp (EMethodRef "display") (EApp (EVar "argumentNoun") (EVar "n")))) (ELit (LString ""))))
+(DTypeSig false "writtenKindArityFix" (TyFun (TyCon "String") (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyCon "String")))))
+(DFunDef false "writtenKindArityFix" ((PVar "written") (PVar "expected") (PVar "nArgs")) (EIf (EBinOp ">" (EVar "nArgs") (EVar "expected")) (EBinOp "++" (EBinOp "++" (ELit (LString "remove the extra ")) (EApp (EMethodRef "display") (EApp (EVar "argumentNoun") (EBinOp "-" (EVar "nArgs") (EVar "expected"))))) (ELit (LString ""))) (EIf (EBinOp "&&" (EBinOp "==" (EVar "nArgs") (ELit (LInt 0))) (EApp (EApp (EVar "startsWith") (ELit (LString "("))) (EVar "written"))) (EBinOp "++" (EBinOp "++" (ELit (LString "write `(")) (EApp (EMethodRef "display") (EApp (EApp (EVar "joinWith") (ELit (LString ", "))) (EApp (EApp (EVar "take") (EVar "expected")) (EVar "missingArgNames"))))) (ELit (LString ")`"))) (EIf (EBinOp "==" (EVar "nArgs") (ELit (LInt 0))) (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "write `")) (EApp (EMethodRef "display") (EVar "written"))) (ELit (LString " "))) (EApp (EMethodRef "display") (EApp (EApp (EVar "joinWith") (ELit (LString " "))) (EApp (EApp (EVar "take") (EVar "expected")) (EVar "missingArgNames"))))) (ELit (LString "`"))) (EIf (EVar "otherwise") (EBinOp "++" (EBinOp "++" (ELit (LString "supply the missing ")) (EApp (EMethodRef "display") (EApp (EVar "argumentNoun") (EBinOp "-" (EVar "expected") (EVar "nArgs"))))) (ELit (LString ""))) (EApp (EVar "__fallthrough__") (ELit LUnit)))))))
+(DTypeSig false "missingArgNames" (TyApp (TyCon "List") (TyCon "String")))
+(DFunDef false "missingArgNames" () (EListLit (ELit (LString "a")) (ELit (LString "b")) (ELit (LString "c")) (ELit (LString "d")) (ELit (LString "e")) (ELit (LString "f"))))
 (DTypeSig true "writtenKindMismatchMsg" (TyFun (TyCon "String") (TyFun (TyCon "Kind") (TyFun (TyCon "Kind") (TyCon "String")))))
-(DFunDef false "writtenKindMismatchMsg" ((PVar "written") (PVar "got") (PVar "want")) (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "kind mismatch: `")) (EApp (EMethodRef "display") (EVar "written"))) (ELit (LString "` has kind `"))) (EApp (EMethodRef "display") (EApp (EVar "kindName") (EVar "got")))) (ELit (LString "`, but kind `"))) (EApp (EMethodRef "display") (EApp (EVar "kindName") (EVar "want")))) (ELit (LString "` is expected here"))))
+(DFunDef false "writtenKindMismatchMsg" ((PVar "written") (PVar "got") (PVar "want")) (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "`")) (EApp (EMethodRef "display") (EVar "written"))) (ELit (LString "` has kind `"))) (EApp (EMethodRef "display") (EApp (EVar "kindName") (EVar "got")))) (ELit (LString "`, but a type of kind `"))) (EApp (EMethodRef "display") (EApp (EVar "kindName") (EVar "want")))) (ELit (LString "` is expected here; write a type of that kind"))))
 (DTypeSig true "renderKindArrow" (TyFun (TyApp (TyCon "List") (TyCon "Kind")) (TyCon "String")))
 (DFunDef false "renderKindArrow" ((PVar "ks")) (EApp (EApp (EVar "joinWith") (ELit (LString " -> "))) (EBinOp "++" (EApp (EApp (EMethodRef "map") (EVar "kindDomainName")) (EVar "ks")) (EListLit (ELit (LString "Type"))))))
 (DTypeSig true "implKindMismatchMsg" (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyCon "Int") (TyFun (TyApp (TyCon "List") (TyCon "Kind")) (TyFun (TyApp (TyCon "List") (TyCon "Kind")) (TyCon "String")))))))

@@ -17,11 +17,13 @@ import test.{
   expectTrue,
   fail,
 }
-import support.diag_codes.{codeText}
+import support.diag_codes.{codeText, DiagCode(..)}
 import frontend.desugar.{desugar}
 import frontend.parser.{parse, parseLocated}
 import types.typecheck.{checkOneDiags, defaultDriveInputs, tcCode, tcMsg}
-import frontend.ast.{Decl(..), Ty(..), TyConOrigin(..)}
+import types.publish.{tcLoc}
+import frontend.ast.{Decl(..), Loc(..), Ty(..), TyConOrigin(..)}
+import support.util.{listLen}
 import types.repr.{Mono(..), ppMono, ppTy}
 import types.effect_rows.{pureRow}
 import types.tc_mono.{monoUnboundIds, tconBuiltin, tconFrom}
@@ -365,14 +367,13 @@ checkedErrors src =
 rejectsOnceWith : String -> String -> Expectation
 rejectsOnceWith fragment src = match checkedErrors src
   [(code, msg)] => expectAll [
-    expectEqual "T-IMPL-KIND-MISMATCH" code,
+    expectEqual "T-WRITTEN-KIND-MISMATCH" code,
     expectTextContainsAll [fragment] msg,
   ]
   errors => fail "expected exactly one kind error, got \{debug errors}"
 
 optionUnapplied : String
-optionUnapplied =
-  "`Option` has kind `Type -> Type`, but kind `Type` is expected"
+optionUnapplied = "`Option` expects 1 type argument, got 0; write `Option a`"
 
 test "a constructor written where a type goes is one kind error at that written type" = expectEach
   [
@@ -426,25 +427,25 @@ test "a constructor applied to too many arguments is one kind error" = expectEac
     (
       "Option Int Int",
       rejectsOnceWith
-        "`Option` has kind `Type -> Type`, but is applied to 2"
+        "`Option` expects 1 type argument, got 2; remove the extra argument"
         "h : Option Int Int -> Int\nh _ = 0\n",
     ),
     (
       "Int String",
       rejectsOnceWith
-        "`Int` has kind `Type`, but is applied to 1"
+        "`Int` expects 0 type arguments, got 1; remove the extra argument"
         "k : Int String -> Int\nk _ = 0\n",
     ),
     (
       "a data field",
       rejectsOnceWith
-        "`List` has kind `Type -> Type`, but is applied to 2"
+        "`List` expects 1 type argument, got 2"
         "data Box = Box (List Int Int)\n",
     ),
     (
       "an interface parameter used at two arities",
       rejectsOnceWith
-        "`f` has kind `Type -> Type`, but is applied to 2"
+        "`f` expects 1 type argument, got 2"
         """
         interface Mixed f where
           one : f a -> Int
@@ -533,7 +534,7 @@ test "a parameter's constructor kind is inferred from its uses" = expectEach [
   (
     "Int where a constructor goes",
     rejectsOnceWith
-      "`Int` has kind `Type`, but kind `Type -> Type` is expected"
+      "`Int` has kind `Type`, but a type of kind `Type -> Type` is expected here"
       "data Wrap f a = W (f a)\nw : Wrap Int Int -> Int\nw _ = 0\n",
   ),
 ]
@@ -568,3 +569,49 @@ test "a lambda parameter's annotation is judged as an expression annotation" = e
         (map fst (checkedErrors "f : String -> String\nf = (x : Int) => x\n")),
     ),
   ]
+
+-- The `(line, column)` of every kind error a whole check of [src] reports.
+kindErrorStarts : String -> List (Int, Int)
+kindErrorStarts src =
+  let (errors, _) = checkOneDiags defaultDriveInputs [] [] (
+    "kinds",
+    desugar (parseLocated ("data Option a = None | Some a\n" ++ src)),
+  )
+  flatMap
+    (e => match (tcCode e, tcLoc e)
+      (TWrittenKindMismatch, Some (Loc _ l c _ _)) => [(l, c)]
+      _ => [])
+    errors
+
+test "a kind error is located at the written type and carries its own code" = expectEach
+  [
+    (
+      "#4752 under-application, at the annotation",
+      expectEqual [(2, 4)] (kindErrorStarts "f : Option -> Int\nf _ = 0\n"),
+    ),
+    (
+      "over-application",
+      expectEqual
+        [(2, 4)]
+        (kindErrorStarts "h : Option Int Int -> Int\nh _ = 0\n"),
+    ),
+    (
+      "a wrong-kind argument",
+      expectEqual [(2, 4)] (kindErrorStarts "k : Int String -> Int\nk _ = 0\n"),
+    ),
+    (
+      "the (,) sugar, at the written constructor",
+      expectEqual [(2, 4)] (kindErrorStarts "t : (,) -> Int\nt _ = 0\n"),
+    ),
+  ]
+
+test "an unapplied (,) is told to write a tuple" =
+  rejectsOnceWith
+    "`(,)` expects 2 type arguments, got 0; write `(a, b)`"
+    "t : (,) -> Int\nt _ = 0\n"
+
+-- One ill-kinded annotation is ONE kind error, wherever its consequences land.
+test "an ill-kinded annotation inside an applied lambda is one kind error" =
+  expectEqual
+    1
+    (listLen (kindErrorStarts "h : Int -> Int\nh n = ((x : Option) => 0) n\n"))

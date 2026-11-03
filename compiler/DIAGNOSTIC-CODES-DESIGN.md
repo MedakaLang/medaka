@@ -242,6 +242,7 @@ The tables below stay as narrative.
 | `T-FIELD-TYPE-DIFFERS` | live | field with different types |
 | `T-FILE-BOUND-VALUE` | live | function file bound inside a container |
 | `T-IMPL-KIND-MISMATCH` | live | graded instance head kind |
+| written type kind | ``` `Option` expects 1 type argument, got 0 …``` — a type written in a signature, annotation, field, alias, `requires` clause or impl argument whose constructor is under-applied (`Option` for `Option a`), over-applied (`Option Int Int`), or given an argument of the wrong kind (`Int String`); reported once per ill-kinded written type, at the written type (the `(,)` sugar included). The impl-head peer for GRADED slots keeps `T-IMPL-KIND-MISMATCH` | `T-WRITTEN-KIND-MISMATCH` |
 | `T-IMPL-MISSING-REQUIRES` | live | impl missing requires |
 | `T-IMPL-TOO-SPECIFIC` | live | impl pins method-scheme var |
 | `T-INCOMPLETE-IMPL` | live | incomplete impl |
@@ -278,6 +279,7 @@ The tables below stay as narrative.
 | `T-UNKNOWN-RECORD` | live | unknown record |
 | `T-UNROUTED-DISPATCH` | live | unrouted dispatch (evidence hole) |
 | `T-UPDATE-MULTI-CTOR` | live | record update on a multi-constructor type |
+| `T-WRITTEN-KIND-MISMATCH` | live | a written type applied to the wrong number of arguments, or whose kind is not the one its position takes |
 | `W-GUARD-INEXHAUSTIVE` | live | guards may not be exhaustive (exhaust) |
 | `W-IMPORT-METHOD-SHADOW` | live | A name module `M` **selectively imports** (`import m.{f}`) is also an interface method |
 | `W-INCOMPARABLE-IMPLS` | live | **`⊑`-incomparable impls** (warning) |

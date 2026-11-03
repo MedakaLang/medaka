@@ -82,7 +82,8 @@ isOrdinaryBinder : SigVars -> String -> Bool
 isRowSlotArg : SigVars -> List (String, Mono) -> Ty -> Bool
 isStringTy : Ty -> Bool
 kauthArgVarNames : GraphCtx -> List Kind -> List Ty -> List (String, Param)
-kindAgainst : Option Loc -> (Unit -> String) -> Kind -> Option Kind -> Option (Option Loc, String)
+kindAgainst : Option Loc -> (Unit -> String) -> Int -> Kind -> Option Kind -> Option (Option Loc, String)
+kindAgainstMsg : String -> Int -> Kind -> Kind -> String
 kindAnnHasEffect : KindAnn -> Bool
 kindArgMono : ModuleCtx -> SigVars -> List (String, Mono) -> Kind -> Ty -> Mono
 kindErrorIn : KindScope -> List (String, Kind) -> Option Kind -> Ty -> Option (Option Loc, String)
