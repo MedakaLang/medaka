@@ -59,9 +59,9 @@ This process boundary does not provide a general filesystem or network sandbox.
 Workers retain read access to public host files; do not put private grading
 material in publicly readable host paths.
 
-The CI job `MCP collector privileged behavior` runs
+The required `compiler-soundness` CI job runs
 `sudo env MEDAKA_MCP_REQUIRE_AUTHORITY=1 sh test/diff_compiler_mcp_collector.sh`
-on `ubuntu-latest` with a five-minute job timeout. It assumes sudo grants root,
+on `ubuntu-latest`. It assumes sudo grants root,
 a writable private cgroup v2 delegation, cgroup.kill, PID/mount namespace and
 credential-drop authority. Missing cgroup authority fails the suite; missing
 namespace or credential authority fails the actual process tests. GitHub Actions

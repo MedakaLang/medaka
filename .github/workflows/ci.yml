@@ -125,15 +125,6 @@ jobs:
   # Conservative in the direction that matters: any unrecognized path routes to
   # the full suite. Only meaningful for `pull_request`; every other trigger
   # defaults `docs_only=false`. Incident history: dossier `ci.md`.
-  mcp-collector-privileged:
-    name: MCP collector privileged behavior
-    runs-on: ubuntu-latest
-    timeout-minutes: 5
-    steps:
-      - uses: actions/checkout@v4
-      - name: Exercise process containment
-        run: sudo env MEDAKA_MCP_REQUIRE_AUTHORITY=1 sh test/diff_compiler_mcp_collector.sh
-
   detect:
     name: detect docs-only change
     runs-on: ubuntu-latest
@@ -1608,6 +1599,9 @@ jobs:
         with:
           fetch-depth: 0
           filter: blob:none
+
+      - name: MCP collector privileged behavior
+        run: sudo env MEDAKA_MCP_REQUIRE_AUTHORITY=1 sh test/diff_compiler_mcp_collector.sh
 
       # Toolchain still needed (clang builds the typecheck oracle; the fixpoint
       # gate cold-bootstraps from the seed on its own); the BINARY comes from
