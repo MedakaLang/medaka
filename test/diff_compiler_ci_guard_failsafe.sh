@@ -175,6 +175,13 @@ def collector_problems(doc, jobs):
         problems.append(f'compiler-soundness MCP collector step has unexpected fields: {sorted(extra)}')
     if 'continue-on-error' in job:
         problems.append('compiler-soundness must not set job-level continue-on-error')
+    if collapse(str(job.get('if', ''))) != '${{ !cancelled() }}':
+        problems.append('compiler-soundness must run unless the workflow is cancelled')
+    workflow_env = doc.get('env') or {}
+    if not isinstance(workflow_env, dict) or set(workflow_env) - {'ORACLE_OPT', '__line__'}:
+        problems.append('workflow environment must not alter collector execution')
+    if 'env' in job:
+        problems.append('compiler-soundness must not override the collector environment')
     for scope, definition in (('workflow', doc), ('compiler-soundness', job)):
         defaults = definition.get('defaults') or {}
         if not isinstance(defaults, dict) or 'run' in defaults:
