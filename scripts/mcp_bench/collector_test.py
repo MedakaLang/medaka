@@ -80,6 +80,39 @@ class CollectorTest(unittest.TestCase):
                 unrelated.kill()
                 unrelated.wait()
 
+    @unittest.skipUnless(sys.platform == 'linux', 'Linux subreaper regression')
+    def test_detached_double_fork_cleanup_and_unrelated_reaping(self):
+        unrelated = subprocess.Popen([sys.executable, '-c', 'import time; time.sleep(7); raise SystemExit(37)'])
+        try:
+            for ending, limits, expected in (
+                ('time.sleep(5)', {'timeout': .4}, 'timeout'),
+                ('time.sleep(5)', {'cancel_after': .4}, 'cancelled'),
+                ('print(' + repr(RESPONSE) + ')', {}, 'success'),
+            ):
+                with self.subTest(outcome=expected), tempfile.TemporaryDirectory() as directory:
+                    marker = str(Path(directory) / 'escaped')
+                    child = ('import os,pathlib,time; os.setsid(); '
+                             'pid=os.fork(); '
+                             'os._exit(0) if pid else None; '
+                             'time.sleep(1); pathlib.Path(' + repr(marker) + ').touch()')
+                    code = ('import subprocess,sys,time; '
+                            'p=subprocess.Popen([sys.executable,"-c",' + repr(child) + ']); '
+                            'p.wait(); ' + ending)
+                    self.assertEqual(expected, self.worker(code, **limits)['outcome'])
+                    self.assertIsNone(unrelated.poll())
+                    time.sleep(1.2)
+                    self.assertFalse(Path(marker).exists())
+            self.assertEqual(37, unrelated.wait(timeout=7))
+        finally:
+            if unrelated.poll() is None:
+                unrelated.kill()
+                unrelated.wait()
+
+    def test_unsupported_platform_never_launches_worker(self):
+        with patch('collect.sys.platform', 'darwin'), patch('collect.subprocess.Popen') as launch:
+            self.assertEqual('unsupported', self.worker('pass')['outcome'])
+            launch.assert_not_called()
+
     def test_workspace_and_environment_are_isolated(self):
         task = json.loads((Path(__file__).parent / 'tasks.json').read_text())[0]
         responses = []
