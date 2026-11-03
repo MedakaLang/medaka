@@ -22,6 +22,7 @@
 
 import support.diag_codes.{codeText}
 import test.{expectEach, expectEqual, expectTrue}
+import frontend.desugar.{desugar}
 import frontend.parser.{parse, parseLocated}
 import frontend.resolve.{
   ResError,
@@ -296,3 +297,32 @@ test "an or-pattern outside a binding position is misplaced" =
       "an or-pattern `(a | b)` is only allowed in a binding position: a lambda or function-clause parameter, a `let` left-hand side, a do-block bind or a match pattern",
     ]
     (orPatternMessages "f t = (t | t)\n")
+
+-- ── annotated lambda parameters ──────────────────────────────────────────
+
+-- The codes resolving [src] reports, desugared first as the pipeline does.
+desugaredCodes : String -> List String
+desugaredCodes src =
+  map
+    (e => codeText (resErrorCode e))
+    (resolveProgram [] [] (desugar (parseLocated src)))
+
+test "a lambda parameter annotation is resolved as a written type" = expectEach
+  [
+    (
+      "#4719: an unknown type is R-UNKNOWN-TYPE",
+      expectEqual
+        ["R-UNKNOWN-TYPE"]
+        (desugaredCodes "f = (x : NoSuchType) => x\n"),
+    ),
+    (
+      "a known type binds the name",
+      expectEqual [] (desugaredCodes "f = (x : Int) => x\n"),
+    ),
+    (
+      "a guard-bind annotation",
+      expectEqual
+        ["R-UNKNOWN-TYPE"]
+        (desugaredCodes "f n = match n\n  m if (k : NoSuchType) <- m => k\n"),
+    ),
+  ]

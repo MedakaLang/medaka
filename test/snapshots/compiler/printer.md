@@ -1,5 +1,5 @@
 # META
-source_lines=2851
+source_lines=2862
 stages=DESUGAR,MARK
 # SOURCE
 -- Pretty printer for Medaka, producing parseable source from the AST
@@ -40,6 +40,7 @@ stages=DESUGAR,MARK
 
 import frontend.ast.{
   stripLocE,
+  firstTyLoc,
   EffAtomTy(..),
   qualifierSource,
   effAtomSurface,
@@ -643,6 +644,9 @@ patSpan (PTuple ps) = spansOf patSpan ps
 patSpan (PList ps) = spansOf patSpan ps
 patSpan (PRec _ fs _) = spansOf recPatFieldSpan fs
 patSpan (POr ps) = spansOf patSpan ps
+patSpan (PAnn p t) = match firstTyLoc t
+  Some l => mergeSpan (patSpan p) (locSpan l)
+  None => patSpan p
 patSpan _ = noSpan
 
 recPatFieldSpan : RecPatField -> (Int, Int, Int, Int)
@@ -1141,6 +1145,12 @@ printPat (PRec name fields rest) =
   Cat (text name) (Cat (text " { ") (Cat (sepBy (text ", ") all) (text " }")))
 printPat (PRng lo hi incl) =
   Cat (printLit lo) (Cat (text (if incl then "..=" else "..")) (printLit hi))
+-- Always parenthesized: the parser reads an annotation only inside parentheses
+-- in a binding position.
+printPat (PAnn p t) =
+  Cat
+    (text "(")
+    (Cat (printPatListElem p) (Cat (text " : ") (Cat (printType t) (text ")"))))
 
 recPatFieldDoc : RecPatField -> Doc
 recPatFieldDoc (RecPatField k _ _ None) = text k
@@ -1160,6 +1170,7 @@ printPatAtom (PList ps) = printPat (PList ps)
 printPatAtom (PRec n fs r) =
   Cat (text "(") (Cat (printPat (PRec n fs r)) (text ")"))
 printPatAtom (PRng lo hi incl) = printPat (PRng lo hi incl)
+printPatAtom (PAnn p t) = printPat (PAnn p t)
 printPatAtom p = Cat (text "(") (Cat (printPat p) (text ")"))
 
 -- A bare `|` is only read at the top of a match arm and inside parentheses, so
@@ -2854,7 +2865,7 @@ effAxesDoc axes =
       (text (joinWith ", " (map (a => "\{fst a} : \{snd a}") axes)))
       (text ")"))
 # DESUGAR
-(DUse false (UseGroup ("frontend" "ast") ((mem "stripLocE" false) (mem "EffAtomTy" true) (mem "qualifierSource" false) (mem "effAtomSurface" false) (mem "binderDomainSurface" false) (mem "ctorBindersSurface" false) (mem "DeriveRef" true) (mem "deriveRefName" false) (mem "dDataUnresolved" false) (mem "KindAnn" true) (mem "tyParamSources" false) (mem "Loc" true) (mem "Lit" true) (mem "Ty" true) (mem "Constraint" true) (mem "Pat" true) (mem "RecPatField" true) (mem "Guard" true) (mem "Arm" true) (mem "DoStmt" true) (mem "InterpPart" true) (mem "GuardArm" true) (mem "FieldAssign" true) (mem "Section" true) (mem "FunClause" true) (mem "LetBind" true) (mem "Expr" true) (mem "UseMember" true) (mem "UsePath" true) (mem "PropParam" true) (mem "MethodDefault" true) (mem "IfaceMethod" true) (mem "Super" true) (mem "Require" true) (mem "ImplMethod" true) (mem "DataVis" true) (mem "Field" true) (mem "ConPayload" true) (mem "Variant" true) (mem "Decl" true) (mem "ExternDecl" true) (mem "ExternBind" true) (mem "Attr" true) (mem "authTermsSurface" false))))
+(DUse false (UseGroup ("frontend" "ast") ((mem "stripLocE" false) (mem "firstTyLoc" false) (mem "EffAtomTy" true) (mem "qualifierSource" false) (mem "effAtomSurface" false) (mem "binderDomainSurface" false) (mem "ctorBindersSurface" false) (mem "DeriveRef" true) (mem "deriveRefName" false) (mem "dDataUnresolved" false) (mem "KindAnn" true) (mem "tyParamSources" false) (mem "Loc" true) (mem "Lit" true) (mem "Ty" true) (mem "Constraint" true) (mem "Pat" true) (mem "RecPatField" true) (mem "Guard" true) (mem "Arm" true) (mem "DoStmt" true) (mem "InterpPart" true) (mem "GuardArm" true) (mem "FieldAssign" true) (mem "Section" true) (mem "FunClause" true) (mem "LetBind" true) (mem "Expr" true) (mem "UseMember" true) (mem "UsePath" true) (mem "PropParam" true) (mem "MethodDefault" true) (mem "IfaceMethod" true) (mem "Super" true) (mem "Require" true) (mem "ImplMethod" true) (mem "DataVis" true) (mem "Field" true) (mem "ConPayload" true) (mem "Variant" true) (mem "Decl" true) (mem "ExternDecl" true) (mem "ExternBind" true) (mem "Attr" true) (mem "authTermsSurface" false))))
 (DUse false (UseGroup ("support" "util") ((mem "u64HalvesHex" false) (mem "i64HalvesLiteral" false) (mem "zipL" false) (mem "joinWith" false) (mem "listLen" false) (mem "allList" false) (mem "isEmptyL" false) (mem "isNonEmptyL" false) (mem "escOneHex2" false))))
 (DUse false (UseGroup ("list") ((mem "last" false) (mem "sortBy" false))))
 (DUse false (UseAlias ("hex") "Hex"))
@@ -3111,6 +3122,7 @@ effAxesDoc axes =
 (DFunDef false "patSpan" ((PCon "PList" (PVar "ps"))) (EApp (EApp (EVar "spansOf") (EVar "patSpan")) (EVar "ps")))
 (DFunDef false "patSpan" ((PCon "PRec" PWild (PVar "fs") PWild)) (EApp (EApp (EVar "spansOf") (EVar "recPatFieldSpan")) (EVar "fs")))
 (DFunDef false "patSpan" ((PCon "POr" (PVar "ps"))) (EApp (EApp (EVar "spansOf") (EVar "patSpan")) (EVar "ps")))
+(DFunDef false "patSpan" ((PCon "PAnn" (PVar "p") (PVar "t"))) (EMatch (EApp (EVar "firstTyLoc") (EVar "t")) (arm (PCon "Some" (PVar "l")) () (EApp (EApp (EVar "mergeSpan") (EApp (EVar "patSpan") (EVar "p"))) (EApp (EVar "locSpan") (EVar "l")))) (arm (PCon "None") () (EApp (EVar "patSpan") (EVar "p")))))
 (DFunDef false "patSpan" (PWild) (EVar "noSpan"))
 (DTypeSig false "recPatFieldSpan" (TyFun (TyCon "RecPatField") (TyTuple (TyCon "Int") (TyCon "Int") (TyCon "Int") (TyCon "Int"))))
 (DFunDef false "recPatFieldSpan" ((PCon "RecPatField" PWild (PVar "l") PWild (PVar "q"))) (EMatch (EVar "q") (arm (PCon "Some" (PVar "p")) () (EApp (EApp (EVar "mergeSpan") (EApp (EVar "locSpan") (EVar "l"))) (EApp (EVar "patSpan") (EVar "p")))) (arm (PCon "None") () (EApp (EVar "locSpan") (EVar "l")))))
@@ -3301,6 +3313,7 @@ effAxesDoc axes =
 (DFunDef false "printPat" ((PCon "PAs" (PVar "x") PWild PWild (PVar "inner"))) (EApp (EApp (EVar "Cat") (EApp (EVar "text") (EVar "x"))) (EApp (EApp (EVar "Cat") (EApp (EVar "text") (ELit (LString "@")))) (EApp (EVar "printPatAtom") (EVar "inner")))))
 (DFunDef false "printPat" ((PCon "PRec" (PVar "name") (PVar "fields") (PVar "rest"))) (EBlock (DoLet false false (PVar "fieldDocs") (EApp (EApp (EVar "map") (EVar "recPatFieldDoc")) (EVar "fields"))) (DoLet false false (PVar "all") (EIf (EVar "rest") (EBinOp "++" (EVar "fieldDocs") (EListLit (EApp (EVar "text") (ELit (LString "..."))))) (EVar "fieldDocs"))) (DoExpr (EApp (EApp (EVar "Cat") (EApp (EVar "text") (EVar "name"))) (EApp (EApp (EVar "Cat") (EApp (EVar "text") (ELit (LString " { ")))) (EApp (EApp (EVar "Cat") (EApp (EApp (EVar "sepBy") (EApp (EVar "text") (ELit (LString ", ")))) (EVar "all"))) (EApp (EVar "text") (ELit (LString " }")))))))))
 (DFunDef false "printPat" ((PCon "PRng" (PVar "lo") (PVar "hi") (PVar "incl"))) (EApp (EApp (EVar "Cat") (EApp (EVar "printLit") (EVar "lo"))) (EApp (EApp (EVar "Cat") (EApp (EVar "text") (EIf (EVar "incl") (ELit (LString "..=")) (ELit (LString ".."))))) (EApp (EVar "printLit") (EVar "hi")))))
+(DFunDef false "printPat" ((PCon "PAnn" (PVar "p") (PVar "t"))) (EApp (EApp (EVar "Cat") (EApp (EVar "text") (ELit (LString "(")))) (EApp (EApp (EVar "Cat") (EApp (EVar "printPatListElem") (EVar "p"))) (EApp (EApp (EVar "Cat") (EApp (EVar "text") (ELit (LString " : ")))) (EApp (EApp (EVar "Cat") (EApp (EVar "printType") (EVar "t"))) (EApp (EVar "text") (ELit (LString ")"))))))))
 (DTypeSig false "recPatFieldDoc" (TyFun (TyCon "RecPatField") (TyCon "Doc")))
 (DFunDef false "recPatFieldDoc" ((PCon "RecPatField" (PVar "k") PWild PWild (PCon "None"))) (EApp (EVar "text") (EVar "k")))
 (DFunDef false "recPatFieldDoc" ((PCon "RecPatField" (PVar "k") PWild PWild (PCon "Some" (PVar "q")))) (EApp (EApp (EVar "Cat") (EApp (EVar "text") (EVar "k"))) (EApp (EApp (EVar "Cat") (EApp (EVar "text") (ELit (LString " = ")))) (EApp (EVar "printPatNoBareOr") (EVar "q")))))
@@ -3313,6 +3326,7 @@ effAxesDoc axes =
 (DFunDef false "printPatAtom" ((PCon "PList" (PVar "ps"))) (EApp (EVar "printPat") (EApp (EVar "PList") (EVar "ps"))))
 (DFunDef false "printPatAtom" ((PCon "PRec" (PVar "n") (PVar "fs") (PVar "r"))) (EApp (EApp (EVar "Cat") (EApp (EVar "text") (ELit (LString "(")))) (EApp (EApp (EVar "Cat") (EApp (EVar "printPat") (EApp (EApp (EApp (EVar "PRec") (EVar "n")) (EVar "fs")) (EVar "r")))) (EApp (EVar "text") (ELit (LString ")"))))))
 (DFunDef false "printPatAtom" ((PCon "PRng" (PVar "lo") (PVar "hi") (PVar "incl"))) (EApp (EVar "printPat") (EApp (EApp (EApp (EVar "PRng") (EVar "lo")) (EVar "hi")) (EVar "incl"))))
+(DFunDef false "printPatAtom" ((PCon "PAnn" (PVar "p") (PVar "t"))) (EApp (EVar "printPat") (EApp (EApp (EVar "PAnn") (EVar "p")) (EVar "t"))))
 (DFunDef false "printPatAtom" ((PVar "p")) (EApp (EApp (EVar "Cat") (EApp (EVar "text") (ELit (LString "(")))) (EApp (EApp (EVar "Cat") (EApp (EVar "printPat") (EVar "p"))) (EApp (EVar "text") (ELit (LString ")"))))))
 (DTypeSig false "printPatNoBareOr" (TyFun (TyCon "Pat") (TyCon "Doc")))
 (DFunDef false "printPatNoBareOr" ((PCon "POr" (PVar "ps"))) (EApp (EApp (EVar "Cat") (EApp (EVar "text") (ELit (LString "(")))) (EApp (EApp (EVar "Cat") (EApp (EVar "printPat") (EApp (EVar "POr") (EVar "ps")))) (EApp (EVar "text") (ELit (LString ")"))))))
@@ -3850,7 +3864,7 @@ effAxesDoc axes =
 (DFunDef false "effAxesDoc" ((PList)) (EVar "Nil"))
 (DFunDef false "effAxesDoc" ((PVar "axes")) (EApp (EApp (EVar "Cat") (EApp (EVar "text") (ELit (LString " (")))) (EApp (EApp (EVar "Cat") (EApp (EVar "text") (EApp (EApp (EVar "joinWith") (ELit (LString ", "))) (EApp (EApp (EVar "map") (ELam ((PVar "a")) (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "")) (EApp (EVar "display") (EApp (EVar "fst") (EVar "a")))) (ELit (LString " : "))) (EApp (EVar "display") (EApp (EVar "snd") (EVar "a")))) (ELit (LString ""))))) (EVar "axes"))))) (EApp (EVar "text") (ELit (LString ")"))))))
 # MARK
-(DUse false (UseGroup ("frontend" "ast") ((mem "stripLocE" false) (mem "EffAtomTy" true) (mem "qualifierSource" false) (mem "effAtomSurface" false) (mem "binderDomainSurface" false) (mem "ctorBindersSurface" false) (mem "DeriveRef" true) (mem "deriveRefName" false) (mem "dDataUnresolved" false) (mem "KindAnn" true) (mem "tyParamSources" false) (mem "Loc" true) (mem "Lit" true) (mem "Ty" true) (mem "Constraint" true) (mem "Pat" true) (mem "RecPatField" true) (mem "Guard" true) (mem "Arm" true) (mem "DoStmt" true) (mem "InterpPart" true) (mem "GuardArm" true) (mem "FieldAssign" true) (mem "Section" true) (mem "FunClause" true) (mem "LetBind" true) (mem "Expr" true) (mem "UseMember" true) (mem "UsePath" true) (mem "PropParam" true) (mem "MethodDefault" true) (mem "IfaceMethod" true) (mem "Super" true) (mem "Require" true) (mem "ImplMethod" true) (mem "DataVis" true) (mem "Field" true) (mem "ConPayload" true) (mem "Variant" true) (mem "Decl" true) (mem "ExternDecl" true) (mem "ExternBind" true) (mem "Attr" true) (mem "authTermsSurface" false))))
+(DUse false (UseGroup ("frontend" "ast") ((mem "stripLocE" false) (mem "firstTyLoc" false) (mem "EffAtomTy" true) (mem "qualifierSource" false) (mem "effAtomSurface" false) (mem "binderDomainSurface" false) (mem "ctorBindersSurface" false) (mem "DeriveRef" true) (mem "deriveRefName" false) (mem "dDataUnresolved" false) (mem "KindAnn" true) (mem "tyParamSources" false) (mem "Loc" true) (mem "Lit" true) (mem "Ty" true) (mem "Constraint" true) (mem "Pat" true) (mem "RecPatField" true) (mem "Guard" true) (mem "Arm" true) (mem "DoStmt" true) (mem "InterpPart" true) (mem "GuardArm" true) (mem "FieldAssign" true) (mem "Section" true) (mem "FunClause" true) (mem "LetBind" true) (mem "Expr" true) (mem "UseMember" true) (mem "UsePath" true) (mem "PropParam" true) (mem "MethodDefault" true) (mem "IfaceMethod" true) (mem "Super" true) (mem "Require" true) (mem "ImplMethod" true) (mem "DataVis" true) (mem "Field" true) (mem "ConPayload" true) (mem "Variant" true) (mem "Decl" true) (mem "ExternDecl" true) (mem "ExternBind" true) (mem "Attr" true) (mem "authTermsSurface" false))))
 (DUse false (UseGroup ("support" "util") ((mem "u64HalvesHex" false) (mem "i64HalvesLiteral" false) (mem "zipL" false) (mem "joinWith" false) (mem "listLen" false) (mem "allList" false) (mem "isEmptyL" false) (mem "isNonEmptyL" false) (mem "escOneHex2" false))))
 (DUse false (UseGroup ("list") ((mem "last" false) (mem "sortBy" false))))
 (DUse false (UseAlias ("hex") "Hex"))
@@ -4107,6 +4121,7 @@ effAxesDoc axes =
 (DFunDef false "patSpan" ((PCon "PList" (PVar "ps"))) (EApp (EApp (EVar "spansOf") (EVar "patSpan")) (EVar "ps")))
 (DFunDef false "patSpan" ((PCon "PRec" PWild (PVar "fs") PWild)) (EApp (EApp (EVar "spansOf") (EVar "recPatFieldSpan")) (EVar "fs")))
 (DFunDef false "patSpan" ((PCon "POr" (PVar "ps"))) (EApp (EApp (EVar "spansOf") (EVar "patSpan")) (EVar "ps")))
+(DFunDef false "patSpan" ((PCon "PAnn" (PVar "p") (PVar "t"))) (EMatch (EApp (EVar "firstTyLoc") (EVar "t")) (arm (PCon "Some" (PVar "l")) () (EApp (EApp (EVar "mergeSpan") (EApp (EVar "patSpan") (EVar "p"))) (EApp (EVar "locSpan") (EVar "l")))) (arm (PCon "None") () (EApp (EVar "patSpan") (EVar "p")))))
 (DFunDef false "patSpan" (PWild) (EVar "noSpan"))
 (DTypeSig false "recPatFieldSpan" (TyFun (TyCon "RecPatField") (TyTuple (TyCon "Int") (TyCon "Int") (TyCon "Int") (TyCon "Int"))))
 (DFunDef false "recPatFieldSpan" ((PCon "RecPatField" PWild (PVar "l") PWild (PVar "q"))) (EMatch (EVar "q") (arm (PCon "Some" (PVar "p")) () (EApp (EApp (EVar "mergeSpan") (EApp (EVar "locSpan") (EVar "l"))) (EApp (EVar "patSpan") (EVar "p")))) (arm (PCon "None") () (EApp (EVar "locSpan") (EVar "l")))))
@@ -4297,6 +4312,7 @@ effAxesDoc axes =
 (DFunDef false "printPat" ((PCon "PAs" (PVar "x") PWild PWild (PVar "inner"))) (EApp (EApp (EVar "Cat") (EApp (EVar "text") (EVar "x"))) (EApp (EApp (EVar "Cat") (EApp (EVar "text") (ELit (LString "@")))) (EApp (EVar "printPatAtom") (EVar "inner")))))
 (DFunDef false "printPat" ((PCon "PRec" (PVar "name") (PVar "fields") (PVar "rest"))) (EBlock (DoLet false false (PVar "fieldDocs") (EApp (EApp (EMethodRef "map") (EVar "recPatFieldDoc")) (EVar "fields"))) (DoLet false false (PVar "all") (EIf (EVar "rest") (EBinOp "++" (EVar "fieldDocs") (EListLit (EApp (EVar "text") (ELit (LString "..."))))) (EVar "fieldDocs"))) (DoExpr (EApp (EApp (EVar "Cat") (EApp (EVar "text") (EVar "name"))) (EApp (EApp (EVar "Cat") (EApp (EVar "text") (ELit (LString " { ")))) (EApp (EApp (EVar "Cat") (EApp (EApp (EVar "sepBy") (EApp (EVar "text") (ELit (LString ", ")))) (EDictApp "all"))) (EApp (EVar "text") (ELit (LString " }")))))))))
 (DFunDef false "printPat" ((PCon "PRng" (PVar "lo") (PVar "hi") (PVar "incl"))) (EApp (EApp (EVar "Cat") (EApp (EVar "printLit") (EVar "lo"))) (EApp (EApp (EVar "Cat") (EApp (EVar "text") (EIf (EVar "incl") (ELit (LString "..=")) (ELit (LString ".."))))) (EApp (EVar "printLit") (EVar "hi")))))
+(DFunDef false "printPat" ((PCon "PAnn" (PVar "p") (PVar "t"))) (EApp (EApp (EVar "Cat") (EApp (EVar "text") (ELit (LString "(")))) (EApp (EApp (EVar "Cat") (EApp (EVar "printPatListElem") (EVar "p"))) (EApp (EApp (EVar "Cat") (EApp (EVar "text") (ELit (LString " : ")))) (EApp (EApp (EVar "Cat") (EApp (EVar "printType") (EVar "t"))) (EApp (EVar "text") (ELit (LString ")"))))))))
 (DTypeSig false "recPatFieldDoc" (TyFun (TyCon "RecPatField") (TyCon "Doc")))
 (DFunDef false "recPatFieldDoc" ((PCon "RecPatField" (PVar "k") PWild PWild (PCon "None"))) (EApp (EVar "text") (EVar "k")))
 (DFunDef false "recPatFieldDoc" ((PCon "RecPatField" (PVar "k") PWild PWild (PCon "Some" (PVar "q")))) (EApp (EApp (EVar "Cat") (EApp (EVar "text") (EVar "k"))) (EApp (EApp (EVar "Cat") (EApp (EVar "text") (ELit (LString " = ")))) (EApp (EVar "printPatNoBareOr") (EVar "q")))))
@@ -4309,6 +4325,7 @@ effAxesDoc axes =
 (DFunDef false "printPatAtom" ((PCon "PList" (PVar "ps"))) (EApp (EVar "printPat") (EApp (EVar "PList") (EVar "ps"))))
 (DFunDef false "printPatAtom" ((PCon "PRec" (PVar "n") (PVar "fs") (PVar "r"))) (EApp (EApp (EVar "Cat") (EApp (EVar "text") (ELit (LString "(")))) (EApp (EApp (EVar "Cat") (EApp (EVar "printPat") (EApp (EApp (EApp (EVar "PRec") (EVar "n")) (EVar "fs")) (EVar "r")))) (EApp (EVar "text") (ELit (LString ")"))))))
 (DFunDef false "printPatAtom" ((PCon "PRng" (PVar "lo") (PVar "hi") (PVar "incl"))) (EApp (EVar "printPat") (EApp (EApp (EApp (EVar "PRng") (EVar "lo")) (EVar "hi")) (EVar "incl"))))
+(DFunDef false "printPatAtom" ((PCon "PAnn" (PVar "p") (PVar "t"))) (EApp (EVar "printPat") (EApp (EApp (EVar "PAnn") (EVar "p")) (EVar "t"))))
 (DFunDef false "printPatAtom" ((PVar "p")) (EApp (EApp (EVar "Cat") (EApp (EVar "text") (ELit (LString "(")))) (EApp (EApp (EVar "Cat") (EApp (EVar "printPat") (EVar "p"))) (EApp (EVar "text") (ELit (LString ")"))))))
 (DTypeSig false "printPatNoBareOr" (TyFun (TyCon "Pat") (TyCon "Doc")))
 (DFunDef false "printPatNoBareOr" ((PCon "POr" (PVar "ps"))) (EApp (EApp (EVar "Cat") (EApp (EVar "text") (ELit (LString "(")))) (EApp (EApp (EVar "Cat") (EApp (EVar "printPat") (EApp (EVar "POr") (EVar "ps")))) (EApp (EVar "text") (ELit (LString ")"))))))

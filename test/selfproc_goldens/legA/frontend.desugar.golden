@@ -1,9 +1,13 @@
 andAll : List Expr -> Expr
 andLeft : Expr -> List Expr -> Expr
+annotChecks : List (String, Ty) -> Expr -> Expr
+annotsOut : Pat -> Int -> (Pat, List (String, Ty), Int)
+annotsOutOf : List Pat -> Int -> (List Pat, List (String, Ty), Int)
 appliedHead : String -> List String -> Ty
 appliedHeadGo : Ty -> List String -> Ty
 applyDeriveParams : String -> List String -> List (Option KindAnn) -> Decl -> Decl
 armChain : List Guard -> Expr -> Expr -> Expr
+armHasAnnot : Arm -> Bool
 assignIndexLhs : Expr -> Expr -> Expr -> EvId -> Expr
 attribHead : List Attr -> List Decl -> List Decl
 binMethod : String -> String -> String -> Expr -> ImplMethod
@@ -42,10 +46,14 @@ doStmtLoc : DoStmt -> Option Loc
 eqArms : List Variant -> List Arm
 eqBody : Int -> List String -> List String -> Expr
 eqSameConArm : Variant -> Arm
+eraseArmAnnots : Arm -> Arm
+eraseLamAnnots : List Pat -> Expr -> Expr
+eraseMatchAnnots : Expr -> List Arm -> Expr
 expandDecl : Decl -> List Decl
 exprLoc : Expr -> Option Loc
 exprSpanLoc : Expr -> Option Loc
 fallthrough : Expr
+fieldAnnotsOut : List RecPatField -> Int -> (List RecPatField, List (String, Ty), Int)
 firstDoStmtLoc : List DoStmt -> Option Loc
 foldlMethods : (Map String IfaceMethod, List String) -> List IfaceMethod -> (Map String IfaceMethod, List String)
 freshBinderId : String -> BinderId
@@ -54,6 +62,8 @@ genVarsGo : String -> Int -> Int -> List String
 genericArm : Variant -> Arm
 genericRFields : List Field -> List String -> List Expr
 genericRep : String -> ConPayload -> List String -> Expr
+guardHasAnnot : Guard -> Bool
+guardsAnnotsOut : List Guard -> Int -> List Guard
 guardsToCore : List GuardArm -> Expr
 hashArm : (Int, Variant) -> Arm
 hashFold : Expr -> List String -> Expr

@@ -312,6 +312,7 @@ exprToPat (ESection (SecLeft a "::")) = PCons (exprToPat a) PWild
 exprToPat (EAsPat x sub) = PAs x (Loc "" 0 0 0 0) noBinderId (exprToPat sub)
 exprToPat (EOrPat es) = orPatOf (map exprToPat es)
 exprToPat (EApp f x) = appToPat (EApp f x)
+exprToPat (EAnnot e t) = PAnn (exprToPat e) t
 exprToPat _ = PWild
 
 -- Alternatives joined into one pattern; nested or-patterns are flattened so a
@@ -4504,8 +4505,8 @@ exprStmtFor startPos e TEqual = defer
 exprStmtFor _ e _ = deferPure [DoExpr e]
 
 -- `pat <- e` → one DoBind; an annotated var LHS `x : ty <- e` → the bind PLUS a
--- shadowing `let x = (x : ty)` so x is bound AND its declared type is enforced
--- (there is no annotated-pattern node to carry the type on the binder directly)
+-- shadowing `let x = (x : ty)` so x is bound AND its declared type is enforced;
+-- any other annotated LHS keeps its type on the pattern (`PAnn`)
 bindStmts : Expr -> Expr -> List DoStmt
 bindStmts lhs rhs = match stripLoc lhs
   EAnnot inner ty => bindAnnot inner ty rhs
@@ -4522,7 +4523,7 @@ bindAnnot inner ty rhs = match stripLoc inner
       (EAnnot (EVar x) ty)
       noDeclLoc,
   ]
-  other => [DoBind (exprToPat other) rhs]
+  other => [DoBind (PAnn (exprToPat other) ty) rhs]
 
 -- a `lhs = rhs` statement: bare var → DoAssign; a field path is rejected at the
 -- statement's start (`fatalAtP`, so the message survives `many` recovery)

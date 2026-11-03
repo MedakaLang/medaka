@@ -1,5 +1,5 @@
 # META
-source_lines=5070
+source_lines=5071
 stages=DESUGAR,MARK
 # SOURCE
 import frontend.parse_locate.{locateOffset, locateTokenDiagnostic}
@@ -316,6 +316,7 @@ exprToPat (ESection (SecLeft a "::")) = PCons (exprToPat a) PWild
 exprToPat (EAsPat x sub) = PAs x (Loc "" 0 0 0 0) noBinderId (exprToPat sub)
 exprToPat (EOrPat es) = orPatOf (map exprToPat es)
 exprToPat (EApp f x) = appToPat (EApp f x)
+exprToPat (EAnnot e t) = PAnn (exprToPat e) t
 exprToPat _ = PWild
 
 -- Alternatives joined into one pattern; nested or-patterns are flattened so a
@@ -4508,8 +4509,8 @@ exprStmtFor startPos e TEqual = defer
 exprStmtFor _ e _ = deferPure [DoExpr e]
 
 -- `pat <- e` → one DoBind; an annotated var LHS `x : ty <- e` → the bind PLUS a
--- shadowing `let x = (x : ty)` so x is bound AND its declared type is enforced
--- (there is no annotated-pattern node to carry the type on the binder directly)
+-- shadowing `let x = (x : ty)` so x is bound AND its declared type is enforced;
+-- any other annotated LHS keeps its type on the pattern (`PAnn`)
 bindStmts : Expr -> Expr -> List DoStmt
 bindStmts lhs rhs = match stripLoc lhs
   EAnnot inner ty => bindAnnot inner ty rhs
@@ -4526,7 +4527,7 @@ bindAnnot inner ty rhs = match stripLoc inner
       (EAnnot (EVar x) ty)
       noDeclLoc,
   ]
-  other => [DoBind (exprToPat other) rhs]
+  other => [DoBind (PAnn (exprToPat other) ty) rhs]
 
 -- a `lhs = rhs` statement: bare var → DoAssign; a field path is rejected at the
 -- statement's start (`fatalAtP`, so the message survives `many` recovery)
@@ -5166,6 +5167,7 @@ parseResultWith mode src tokList offList =
 (DFunDef false "exprToPat" ((PCon "EAsPat" (PVar "x") (PVar "sub"))) (EApp (EApp (EApp (EApp (EVar "PAs") (EVar "x")) (EApp (EApp (EApp (EApp (EApp (EVar "Loc") (ELit (LString ""))) (ELit (LInt 0))) (ELit (LInt 0))) (ELit (LInt 0))) (ELit (LInt 0)))) (EVar "noBinderId")) (EApp (EVar "exprToPat") (EVar "sub"))))
 (DFunDef false "exprToPat" ((PCon "EOrPat" (PVar "es"))) (EApp (EVar "orPatOf") (EApp (EApp (EVar "map") (EVar "exprToPat")) (EVar "es"))))
 (DFunDef false "exprToPat" ((PCon "EApp" (PVar "f") (PVar "x"))) (EApp (EVar "appToPat") (EApp (EApp (EVar "EApp") (EVar "f")) (EVar "x"))))
+(DFunDef false "exprToPat" ((PCon "EAnnot" (PVar "e") (PVar "t"))) (EApp (EApp (EVar "PAnn") (EApp (EVar "exprToPat") (EVar "e"))) (EVar "t")))
 (DFunDef false "exprToPat" (PWild) (EVar "PWild"))
 (DTypeSig false "orPatOf" (TyFun (TyApp (TyCon "List") (TyCon "Pat")) (TyCon "Pat")))
 (DFunDef false "orPatOf" ((PList (PVar "p"))) (EVar "p"))
@@ -6471,7 +6473,7 @@ parseResultWith mode src tokList offList =
 (DTypeSig false "bindStmts" (TyFun (TyCon "Expr") (TyFun (TyCon "Expr") (TyApp (TyCon "List") (TyCon "DoStmt")))))
 (DFunDef false "bindStmts" ((PVar "lhs") (PVar "rhs")) (EMatch (EApp (EVar "stripLoc") (EVar "lhs")) (arm (PCon "EAnnot" (PVar "inner") (PVar "ty")) () (EApp (EApp (EApp (EVar "bindAnnot") (EVar "inner")) (EVar "ty")) (EVar "rhs"))) (arm PWild () (EListLit (EApp (EApp (EVar "DoBind") (EApp (EVar "exprToPat") (EVar "lhs"))) (EVar "rhs"))))))
 (DTypeSig false "bindAnnot" (TyFun (TyCon "Expr") (TyFun (TyCon "Ty") (TyFun (TyCon "Expr") (TyApp (TyCon "List") (TyCon "DoStmt"))))))
-(DFunDef false "bindAnnot" ((PVar "inner") (PVar "ty") (PVar "rhs")) (EMatch (EApp (EVar "stripLoc") (EVar "inner")) (arm (PCon "EVar" (PVar "x")) () (EListLit (EApp (EApp (EVar "DoBind") (EApp (EApp (EApp (EVar "PVar") (EVar "x")) (EApp (EApp (EApp (EApp (EApp (EVar "Loc") (ELit (LString ""))) (ELit (LInt 0))) (ELit (LInt 0))) (ELit (LInt 0))) (ELit (LInt 0)))) (EVar "noBinderId"))) (EVar "rhs")) (EApp (EApp (EApp (EApp (EApp (EVar "DoLet") (EVar "False")) (EVar "False")) (EApp (EApp (EApp (EVar "PVar") (EVar "x")) (EApp (EApp (EApp (EApp (EApp (EVar "Loc") (ELit (LString ""))) (ELit (LInt 0))) (ELit (LInt 0))) (ELit (LInt 0))) (ELit (LInt 0)))) (EVar "noBinderId"))) (EApp (EApp (EVar "EAnnot") (EApp (EVar "EVar") (EVar "x"))) (EVar "ty"))) (EVar "noDeclLoc")))) (arm (PVar "other") () (EListLit (EApp (EApp (EVar "DoBind") (EApp (EVar "exprToPat") (EVar "other"))) (EVar "rhs"))))))
+(DFunDef false "bindAnnot" ((PVar "inner") (PVar "ty") (PVar "rhs")) (EMatch (EApp (EVar "stripLoc") (EVar "inner")) (arm (PCon "EVar" (PVar "x")) () (EListLit (EApp (EApp (EVar "DoBind") (EApp (EApp (EApp (EVar "PVar") (EVar "x")) (EApp (EApp (EApp (EApp (EApp (EVar "Loc") (ELit (LString ""))) (ELit (LInt 0))) (ELit (LInt 0))) (ELit (LInt 0))) (ELit (LInt 0)))) (EVar "noBinderId"))) (EVar "rhs")) (EApp (EApp (EApp (EApp (EApp (EVar "DoLet") (EVar "False")) (EVar "False")) (EApp (EApp (EApp (EVar "PVar") (EVar "x")) (EApp (EApp (EApp (EApp (EApp (EVar "Loc") (ELit (LString ""))) (ELit (LInt 0))) (ELit (LInt 0))) (ELit (LInt 0))) (ELit (LInt 0)))) (EVar "noBinderId"))) (EApp (EApp (EVar "EAnnot") (EApp (EVar "EVar") (EVar "x"))) (EVar "ty"))) (EVar "noDeclLoc")))) (arm (PVar "other") () (EListLit (EApp (EApp (EVar "DoBind") (EApp (EApp (EVar "PAnn") (EApp (EVar "exprToPat") (EVar "other"))) (EVar "ty"))) (EVar "rhs"))))))
 (DTypeSig false "assignFromLhs" (TyFun (TyCon "Int") (TyFun (TyCon "Expr") (TyFun (TyCon "Expr") (TyApp (TyCon "Parser") (TyCon "DoStmt"))))))
 (DFunDef false "assignFromLhs" ((PVar "startPos") (PVar "lhs") (PVar "rhs")) (EMatch (EApp (EVar "flattenFieldPath") (EVar "lhs")) (arm (PCon "Some" (PTuple (PVar "x") (PList))) () (EApp (EVar "deferPure") (EApp (EApp (EVar "DoAssign") (EVar "x")) (EVar "rhs")))) (arm (PCon "Some" (PTuple (PVar "x") (PVar "fs"))) () (EApp (EApp (EVar "fatalAtP") (EApp (EApp (EVar "fieldAssignRemovedMsg") (EVar "x")) (EVar "fs"))) (EVar "startPos"))) (arm (PCon "None") () (EApp (EVar "failP") (ELit (LString "invalid assignment target in this block"))))))
 (DTypeSig false "fieldAssignRemovedMsg" (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyCon "String"))))
@@ -6667,6 +6669,7 @@ parseResultWith mode src tokList offList =
 (DFunDef false "exprToPat" ((PCon "EAsPat" (PVar "x") (PVar "sub"))) (EApp (EApp (EApp (EApp (EVar "PAs") (EVar "x")) (EApp (EApp (EApp (EApp (EApp (EVar "Loc") (ELit (LString ""))) (ELit (LInt 0))) (ELit (LInt 0))) (ELit (LInt 0))) (ELit (LInt 0)))) (EVar "noBinderId")) (EApp (EVar "exprToPat") (EMethodRef "sub"))))
 (DFunDef false "exprToPat" ((PCon "EOrPat" (PVar "es"))) (EApp (EVar "orPatOf") (EApp (EApp (EMethodRef "map") (EVar "exprToPat")) (EVar "es"))))
 (DFunDef false "exprToPat" ((PCon "EApp" (PVar "f") (PVar "x"))) (EApp (EVar "appToPat") (EApp (EApp (EVar "EApp") (EVar "f")) (EVar "x"))))
+(DFunDef false "exprToPat" ((PCon "EAnnot" (PVar "e") (PVar "t"))) (EApp (EApp (EVar "PAnn") (EApp (EVar "exprToPat") (EVar "e"))) (EVar "t")))
 (DFunDef false "exprToPat" (PWild) (EVar "PWild"))
 (DTypeSig false "orPatOf" (TyFun (TyApp (TyCon "List") (TyCon "Pat")) (TyCon "Pat")))
 (DFunDef false "orPatOf" ((PList (PVar "p"))) (EVar "p"))
@@ -7972,7 +7975,7 @@ parseResultWith mode src tokList offList =
 (DTypeSig false "bindStmts" (TyFun (TyCon "Expr") (TyFun (TyCon "Expr") (TyApp (TyCon "List") (TyCon "DoStmt")))))
 (DFunDef false "bindStmts" ((PVar "lhs") (PVar "rhs")) (EMatch (EApp (EVar "stripLoc") (EVar "lhs")) (arm (PCon "EAnnot" (PVar "inner") (PVar "ty")) () (EApp (EApp (EApp (EVar "bindAnnot") (EVar "inner")) (EVar "ty")) (EVar "rhs"))) (arm PWild () (EListLit (EApp (EApp (EVar "DoBind") (EApp (EVar "exprToPat") (EVar "lhs"))) (EVar "rhs"))))))
 (DTypeSig false "bindAnnot" (TyFun (TyCon "Expr") (TyFun (TyCon "Ty") (TyFun (TyCon "Expr") (TyApp (TyCon "List") (TyCon "DoStmt"))))))
-(DFunDef false "bindAnnot" ((PVar "inner") (PVar "ty") (PVar "rhs")) (EMatch (EApp (EVar "stripLoc") (EVar "inner")) (arm (PCon "EVar" (PVar "x")) () (EListLit (EApp (EApp (EVar "DoBind") (EApp (EApp (EApp (EVar "PVar") (EVar "x")) (EApp (EApp (EApp (EApp (EApp (EVar "Loc") (ELit (LString ""))) (ELit (LInt 0))) (ELit (LInt 0))) (ELit (LInt 0))) (ELit (LInt 0)))) (EVar "noBinderId"))) (EVar "rhs")) (EApp (EApp (EApp (EApp (EApp (EVar "DoLet") (EVar "False")) (EVar "False")) (EApp (EApp (EApp (EVar "PVar") (EVar "x")) (EApp (EApp (EApp (EApp (EApp (EVar "Loc") (ELit (LString ""))) (ELit (LInt 0))) (ELit (LInt 0))) (ELit (LInt 0))) (ELit (LInt 0)))) (EVar "noBinderId"))) (EApp (EApp (EVar "EAnnot") (EApp (EVar "EVar") (EVar "x"))) (EVar "ty"))) (EVar "noDeclLoc")))) (arm (PVar "other") () (EListLit (EApp (EApp (EVar "DoBind") (EApp (EVar "exprToPat") (EVar "other"))) (EVar "rhs"))))))
+(DFunDef false "bindAnnot" ((PVar "inner") (PVar "ty") (PVar "rhs")) (EMatch (EApp (EVar "stripLoc") (EVar "inner")) (arm (PCon "EVar" (PVar "x")) () (EListLit (EApp (EApp (EVar "DoBind") (EApp (EApp (EApp (EVar "PVar") (EVar "x")) (EApp (EApp (EApp (EApp (EApp (EVar "Loc") (ELit (LString ""))) (ELit (LInt 0))) (ELit (LInt 0))) (ELit (LInt 0))) (ELit (LInt 0)))) (EVar "noBinderId"))) (EVar "rhs")) (EApp (EApp (EApp (EApp (EApp (EVar "DoLet") (EVar "False")) (EVar "False")) (EApp (EApp (EApp (EVar "PVar") (EVar "x")) (EApp (EApp (EApp (EApp (EApp (EVar "Loc") (ELit (LString ""))) (ELit (LInt 0))) (ELit (LInt 0))) (ELit (LInt 0))) (ELit (LInt 0)))) (EVar "noBinderId"))) (EApp (EApp (EVar "EAnnot") (EApp (EVar "EVar") (EVar "x"))) (EVar "ty"))) (EVar "noDeclLoc")))) (arm (PVar "other") () (EListLit (EApp (EApp (EVar "DoBind") (EApp (EApp (EVar "PAnn") (EApp (EVar "exprToPat") (EVar "other"))) (EVar "ty"))) (EVar "rhs"))))))
 (DTypeSig false "assignFromLhs" (TyFun (TyCon "Int") (TyFun (TyCon "Expr") (TyFun (TyCon "Expr") (TyApp (TyCon "Parser") (TyCon "DoStmt"))))))
 (DFunDef false "assignFromLhs" ((PVar "startPos") (PVar "lhs") (PVar "rhs")) (EMatch (EApp (EVar "flattenFieldPath") (EVar "lhs")) (arm (PCon "Some" (PTuple (PVar "x") (PList))) () (EApp (EMethodRef "deferPure") (EApp (EApp (EVar "DoAssign") (EVar "x")) (EVar "rhs")))) (arm (PCon "Some" (PTuple (PVar "x") (PVar "fs"))) () (EApp (EApp (EVar "fatalAtP") (EApp (EApp (EVar "fieldAssignRemovedMsg") (EVar "x")) (EVar "fs"))) (EVar "startPos"))) (arm (PCon "None") () (EApp (EVar "failP") (ELit (LString "invalid assignment target in this block"))))))
 (DTypeSig false "fieldAssignRemovedMsg" (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyCon "String"))))

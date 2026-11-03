@@ -1,5 +1,5 @@
 # META
-source_lines=6435
+source_lines=6436
 stages=DESUGAR,MARK
 # SOURCE
 -- Self-hosted resolve stage (single-file
@@ -5632,6 +5632,7 @@ unqualPat ctx (PCons a b) = PCons (unqualPat ctx a) (unqualPat ctx b)
 unqualPat ctx (PTuple ps) = PTuple (map (unqualPat ctx) ps)
 unqualPat ctx (PList ps) = PList (map (unqualPat ctx) ps)
 unqualPat ctx (PAs x l bid p) = PAs x l bid (unqualPat ctx p)
+unqualPat ctx (PAnn p t) = PAnn (unqualPat ctx p) t
 unqualPat ctx (POr ps) = POr (map (unqualPat ctx) ps)
 unqualPat _ (PRng a b incl) = PRng a b incl
 unqualPat ctx (PRec name fs rest) =
@@ -7784,6 +7785,7 @@ addOriginsProvenance acc n base (m :: rest) =
 (DFunDef false "unqualPat" ((PVar "ctx") (PCon "PTuple" (PVar "ps"))) (EApp (EVar "PTuple") (EApp (EApp (EVar "map") (EApp (EVar "unqualPat") (EVar "ctx"))) (EVar "ps"))))
 (DFunDef false "unqualPat" ((PVar "ctx") (PCon "PList" (PVar "ps"))) (EApp (EVar "PList") (EApp (EApp (EVar "map") (EApp (EVar "unqualPat") (EVar "ctx"))) (EVar "ps"))))
 (DFunDef false "unqualPat" ((PVar "ctx") (PCon "PAs" (PVar "x") (PVar "l") (PVar "bid") (PVar "p"))) (EApp (EApp (EApp (EApp (EVar "PAs") (EVar "x")) (EVar "l")) (EVar "bid")) (EApp (EApp (EVar "unqualPat") (EVar "ctx")) (EVar "p"))))
+(DFunDef false "unqualPat" ((PVar "ctx") (PCon "PAnn" (PVar "p") (PVar "t"))) (EApp (EApp (EVar "PAnn") (EApp (EApp (EVar "unqualPat") (EVar "ctx")) (EVar "p"))) (EVar "t")))
 (DFunDef false "unqualPat" ((PVar "ctx") (PCon "POr" (PVar "ps"))) (EApp (EVar "POr") (EApp (EApp (EVar "map") (EApp (EVar "unqualPat") (EVar "ctx"))) (EVar "ps"))))
 (DFunDef false "unqualPat" (PWild (PCon "PRng" (PVar "a") (PVar "b") (PVar "incl"))) (EApp (EApp (EApp (EVar "PRng") (EVar "a")) (EVar "b")) (EVar "incl")))
 (DFunDef false "unqualPat" ((PVar "ctx") (PCon "PRec" (PVar "name") (PVar "fs") (PVar "rest"))) (EApp (EApp (EApp (EVar "PRec") (EApp (EApp (EVar "unqualHead") (EVar "ctx")) (EVar "name"))) (EApp (EApp (EVar "map") (EApp (EVar "unqualRecPatField") (EVar "ctx"))) (EVar "fs"))) (EVar "rest")))
@@ -9292,6 +9294,7 @@ addOriginsProvenance acc n base (m :: rest) =
 (DFunDef false "unqualPat" ((PVar "ctx") (PCon "PTuple" (PVar "ps"))) (EApp (EVar "PTuple") (EApp (EApp (EMethodRef "map") (EApp (EVar "unqualPat") (EVar "ctx"))) (EVar "ps"))))
 (DFunDef false "unqualPat" ((PVar "ctx") (PCon "PList" (PVar "ps"))) (EApp (EVar "PList") (EApp (EApp (EMethodRef "map") (EApp (EVar "unqualPat") (EVar "ctx"))) (EVar "ps"))))
 (DFunDef false "unqualPat" ((PVar "ctx") (PCon "PAs" (PVar "x") (PVar "l") (PVar "bid") (PVar "p"))) (EApp (EApp (EApp (EApp (EVar "PAs") (EVar "x")) (EVar "l")) (EVar "bid")) (EApp (EApp (EVar "unqualPat") (EVar "ctx")) (EVar "p"))))
+(DFunDef false "unqualPat" ((PVar "ctx") (PCon "PAnn" (PVar "p") (PVar "t"))) (EApp (EApp (EVar "PAnn") (EApp (EApp (EVar "unqualPat") (EVar "ctx")) (EVar "p"))) (EVar "t")))
 (DFunDef false "unqualPat" ((PVar "ctx") (PCon "POr" (PVar "ps"))) (EApp (EVar "POr") (EApp (EApp (EMethodRef "map") (EApp (EVar "unqualPat") (EVar "ctx"))) (EVar "ps"))))
 (DFunDef false "unqualPat" (PWild (PCon "PRng" (PVar "a") (PVar "b") (PVar "incl"))) (EApp (EApp (EApp (EVar "PRng") (EVar "a")) (EVar "b")) (EVar "incl")))
 (DFunDef false "unqualPat" ((PVar "ctx") (PCon "PRec" (PVar "name") (PVar "fs") (PVar "rest"))) (EApp (EApp (EApp (EVar "PRec") (EApp (EApp (EVar "unqualHead") (EVar "ctx")) (EVar "name"))) (EApp (EApp (EMethodRef "map") (EApp (EVar "unqualRecPatField") (EVar "ctx"))) (EVar "fs"))) (EVar "rest")))

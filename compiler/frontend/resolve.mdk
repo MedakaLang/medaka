@@ -5628,6 +5628,7 @@ unqualPat ctx (PCons a b) = PCons (unqualPat ctx a) (unqualPat ctx b)
 unqualPat ctx (PTuple ps) = PTuple (map (unqualPat ctx) ps)
 unqualPat ctx (PList ps) = PList (map (unqualPat ctx) ps)
 unqualPat ctx (PAs x l bid p) = PAs x l bid (unqualPat ctx p)
+unqualPat ctx (PAnn p t) = PAnn (unqualPat ctx p) t
 unqualPat ctx (POr ps) = POr (map (unqualPat ctx) ps)
 unqualPat _ (PRng a b incl) = PRng a b incl
 unqualPat ctx (PRec name fs rest) =

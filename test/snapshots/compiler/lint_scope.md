@@ -1,5 +1,5 @@
 # META
-source_lines=615
+source_lines=617
 stages=DESUGAR,MARK
 # SOURCE
 -- compiler/tools/lint_scope.mdk — the per-file scope model of the lint rules: every
@@ -296,6 +296,7 @@ patNames (PList ps) = flatMap patNames ps
 patNames (PAs _ _ _ p) = patNames p
 patNames (POr ps) = flatMap patNames ps
 patNames (PRec n fields _) = n :: flatMap recFieldNames fields
+patNames (PAnn p ty) = patNames p ++ tyNames ty
 patNames _ = []
 
 recFieldNames : RecPatField -> List String
@@ -408,6 +409,7 @@ patNameSites (PAs x l _ p) = NameSite x l SiteAs :: patNameSites p
 patNameSites (POr ps) = flatMap patNameSites ps
 patNameSites (PRng _ _ _) = []
 patNameSites (PRec _ fields _) = flatMap recFieldNameSites fields
+patNameSites (PAnn p _) = patNameSites p
 
 recFieldNameSites : RecPatField -> List NameSite
 recFieldNameSites (RecPatField name l _ None) = [NameSite name l SitePun]
@@ -738,6 +740,7 @@ walkAssign w scope loc x e =
 (DFunDef false "patNames" ((PCon "PAs" PWild PWild PWild (PVar "p"))) (EApp (EVar "patNames") (EVar "p")))
 (DFunDef false "patNames" ((PCon "POr" (PVar "ps"))) (EApp (EApp (EVar "flatMap") (EVar "patNames")) (EVar "ps")))
 (DFunDef false "patNames" ((PCon "PRec" (PVar "n") (PVar "fields") PWild)) (EBinOp "::" (EVar "n") (EApp (EApp (EVar "flatMap") (EVar "recFieldNames")) (EVar "fields"))))
+(DFunDef false "patNames" ((PCon "PAnn" (PVar "p") (PVar "ty"))) (EBinOp "++" (EApp (EVar "patNames") (EVar "p")) (EApp (EVar "tyNames") (EVar "ty"))))
 (DFunDef false "patNames" (PWild) (EListLit))
 (DTypeSig false "recFieldNames" (TyFun (TyCon "RecPatField") (TyApp (TyCon "List") (TyCon "String"))))
 (DFunDef false "recFieldNames" ((PCon "RecPatField" PWild PWild PWild (PCon "Some" (PVar "p")))) (EApp (EVar "patNames") (EVar "p")))
@@ -796,6 +799,7 @@ walkAssign w scope loc x e =
 (DFunDef false "patNameSites" ((PCon "POr" (PVar "ps"))) (EApp (EApp (EVar "flatMap") (EVar "patNameSites")) (EVar "ps")))
 (DFunDef false "patNameSites" ((PCon "PRng" PWild PWild PWild)) (EListLit))
 (DFunDef false "patNameSites" ((PCon "PRec" PWild (PVar "fields") PWild)) (EApp (EApp (EVar "flatMap") (EVar "recFieldNameSites")) (EVar "fields")))
+(DFunDef false "patNameSites" ((PCon "PAnn" (PVar "p") PWild)) (EApp (EVar "patNameSites") (EVar "p")))
 (DTypeSig false "recFieldNameSites" (TyFun (TyCon "RecPatField") (TyApp (TyCon "List") (TyCon "NameSite"))))
 (DFunDef false "recFieldNameSites" ((PCon "RecPatField" (PVar "name") (PVar "l") PWild (PCon "None"))) (EListLit (EApp (EApp (EApp (EVar "NameSite") (EVar "name")) (EVar "l")) (EVar "SitePun"))))
 (DFunDef false "recFieldNameSites" ((PCon "RecPatField" PWild PWild PWild (PCon "Some" (PVar "p")))) (EApp (EVar "patNameSites") (EVar "p")))
@@ -1005,6 +1009,7 @@ walkAssign w scope loc x e =
 (DFunDef false "patNames" ((PCon "PAs" PWild PWild PWild (PVar "p"))) (EApp (EVar "patNames") (EVar "p")))
 (DFunDef false "patNames" ((PCon "POr" (PVar "ps"))) (EApp (EApp (EDictApp "flatMap") (EVar "patNames")) (EVar "ps")))
 (DFunDef false "patNames" ((PCon "PRec" (PVar "n") (PVar "fields") PWild)) (EBinOp "::" (EVar "n") (EApp (EApp (EDictApp "flatMap") (EVar "recFieldNames")) (EVar "fields"))))
+(DFunDef false "patNames" ((PCon "PAnn" (PVar "p") (PVar "ty"))) (EBinOp "++" (EApp (EVar "patNames") (EVar "p")) (EApp (EVar "tyNames") (EVar "ty"))))
 (DFunDef false "patNames" (PWild) (EListLit))
 (DTypeSig false "recFieldNames" (TyFun (TyCon "RecPatField") (TyApp (TyCon "List") (TyCon "String"))))
 (DFunDef false "recFieldNames" ((PCon "RecPatField" PWild PWild PWild (PCon "Some" (PVar "p")))) (EApp (EVar "patNames") (EVar "p")))
@@ -1063,6 +1068,7 @@ walkAssign w scope loc x e =
 (DFunDef false "patNameSites" ((PCon "POr" (PVar "ps"))) (EApp (EApp (EDictApp "flatMap") (EVar "patNameSites")) (EVar "ps")))
 (DFunDef false "patNameSites" ((PCon "PRng" PWild PWild PWild)) (EListLit))
 (DFunDef false "patNameSites" ((PCon "PRec" PWild (PVar "fields") PWild)) (EApp (EApp (EDictApp "flatMap") (EVar "recFieldNameSites")) (EVar "fields")))
+(DFunDef false "patNameSites" ((PCon "PAnn" (PVar "p") PWild)) (EApp (EVar "patNameSites") (EVar "p")))
 (DTypeSig false "recFieldNameSites" (TyFun (TyCon "RecPatField") (TyApp (TyCon "List") (TyCon "NameSite"))))
 (DFunDef false "recFieldNameSites" ((PCon "RecPatField" (PVar "name") (PVar "l") PWild (PCon "None"))) (EListLit (EApp (EApp (EApp (EVar "NameSite") (EVar "name")) (EVar "l")) (EVar "SitePun"))))
 (DFunDef false "recFieldNameSites" ((PCon "RecPatField" PWild PWild PWild (PCon "Some" (PVar "p")))) (EApp (EVar "patNameSites") (EVar "p")))

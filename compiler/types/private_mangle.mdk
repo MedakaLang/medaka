@@ -2007,6 +2007,7 @@ renamePat rm (PCons h t) = PCons (renamePat rm h) (renamePat rm t)
 renamePat rm (PTuple ps) = PTuple (map (renamePat rm) ps)
 renamePat rm (PList ps) = PList (map (renamePat rm) ps)
 renamePat rm (PAs x l bid p) = PAs x l bid (renamePat rm p)
+renamePat rm (PAnn p t) = PAnn (renamePat rm p) t
 renamePat rm (POr ps) = POr (map (renamePat rm) ps)
 renamePat rm (PRec n fields open) =
   PRec (renameDefName rm n) (map (renameRecPatField rm) fields) open

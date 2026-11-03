@@ -537,3 +537,34 @@ test "a parameter's constructor kind is inferred from its uses" = expectEach [
       "data Wrap f a = W (f a)\nw : Wrap Int Int -> Int\nw _ = 0\n",
   ),
 ]
+
+-- A lambda parameter's annotation reaches this layer as the expression
+-- annotation desugar makes of it, so it is judged as one.
+test "a lambda parameter's annotation is judged as an expression annotation" = expectEach
+  [
+    (
+      "#2826: the annotated name binds",
+      expectEqual [] (checkedErrors "f : Int -> Int\nf = (x : Int) => x + 1\n"),
+    ),
+    (
+      "#2826: a field read through the annotated parameter",
+      expectEqual
+        []
+        (checkedErrors
+          "data Rec = Rec { fld : Int }\ng : Rec -> Int\ng = (r : Rec) => r.fld\n"),
+    ),
+    (
+      "an unapplied constructor is one kind error",
+      rejectsOnceWith optionUnapplied "f = (x : Option) => 0\n",
+    ),
+    (
+      "inside a tuple parameter",
+      rejectsOnceWith optionUnapplied "f = ((a : Option), b) => b\n",
+    ),
+    (
+      "a written type that disagrees with the use",
+      expectEqual
+        ["T-TYPE-MISMATCH"]
+        (map fst (checkedErrors "f : String -> String\nf = (x : Int) => x\n")),
+    ),
+  ]

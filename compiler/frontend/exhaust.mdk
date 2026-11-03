@@ -387,6 +387,7 @@ desugarPat _ (PList []) = PCon listNilCtor []
 desugarPat oracle (PList (h :: rest)) =
   PCon listConsCtor [desugarPat oracle h, desugarPat oracle (PList rest)]
 desugarPat oracle (PAs _ _ _ p) = desugarPat oracle p
+desugarPat oracle (PAnn p _) = desugarPat oracle p
 desugarPat oracle (PRec name fields _) =
   desugarRecPat oracle (oracleCtorName oracle name) fields
 desugarPat _ (PRng lo hi incl) = PRng lo hi incl
@@ -841,6 +842,7 @@ isIrrefutablePat (PTuple ps) = allList isIrrefutablePat ps
 isIrrefutablePat (PAs _ _ _ p) = isIrrefutablePat p
 isIrrefutablePat (POr ps) = anyList isIrrefutablePat ps
 isIrrefutablePat (PRec _ fields _) = allList recFieldIrrefutable fields
+isIrrefutablePat (PAnn p _) = isIrrefutablePat p
 isIrrefutablePat _ = False
 
 recFieldIrrefutable : RecPatField -> Bool

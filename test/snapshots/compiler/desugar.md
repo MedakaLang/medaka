@@ -1,5 +1,5 @@
 # META
-source_lines=1431
+source_lines=1548
 stages=DESUGAR,MARK
 # SOURCE
 -- Self-hosted desugar stage.  Lowers surface
@@ -15,6 +15,9 @@ stages=DESUGAR,MARK
 import support.stage_count.{stageBump}
 import frontend.ast.{
   patHasOr,
+  patHasAnnot,
+  firstTyLoc,
+  noDeclLoc,
   stripLocE,
   noBinderId,
   unminted,
@@ -283,6 +286,10 @@ rewriteSugar (EIndex a i) = callBin "index" a i
 rewriteSugar (ESlice a lo hi incl) =
   let hiEx = if incl then EApp (EVar "sliceInclusiveEnd") hi else hi
   EApp (EApp (EApp (EVar "slice") a) lo) hiEx
+rewriteSugar (lam@(ELam ps body)) =
+  if any patHasAnnot ps then eraseLamAnnots ps body else lam
+rewriteSugar (m@(EMatch e arms)) =
+  if any armHasAnnot arms then EMatch e (map eraseArmAnnots arms) else m
 rewriteSugar e = e
 
 -- ── Pass: rewrite_assign_index (`a[i] := v` → `setIndex a i v`) ───────────
@@ -315,8 +322,118 @@ armChain ((GBool e) :: qs) body els = EIf e (armChain qs body els) els
 -- A guard-bind through an or-pattern keeps the guards after it on its match
 -- arm, so a later guard that fails under one alternative re-tries the next.
 armChain ((GBind p e) :: qs) body els
-  | patHasOr p = EMatch e [Arm p qs body, Arm PWild [] els]
-  | otherwise = EMatch e [Arm p [] (armChain qs body els), Arm PWild [] els]
+  | patHasOr p = eraseMatchAnnots e [Arm p qs body, Arm PWild [] els]
+  | otherwise =
+    eraseMatchAnnots e [Arm p [] (armChain qs body els), Arm PWild [] els]
+
+-- ── Pattern annotations ───────────────────────────────────────────────────
+-- `(p : T)` in a binding position is checked as the expression annotation
+-- `(v : T)` on the value it binds, so resolve and typecheck judge the written
+-- type exactly as they judge any other annotation: an unknown type, a kind
+-- error and a mismatch are the same diagnostics.  The pattern becomes [p], with
+-- `v` the name [p] binds the whole value to when it is a variable or an
+-- as-pattern, and otherwise a fresh name taken by an as-pattern; the check is
+-- `let _ = (v : T)` at the start of the code the binding scopes.
+
+eraseLamAnnots : List Pat -> Expr -> Expr
+eraseLamAnnots ps body =
+  let (ps2, checks, _) = annotsOutOf ps 0
+  ELam ps2 (annotChecks checks body)
+
+eraseMatchAnnots : Expr -> List Arm -> Expr
+eraseMatchAnnots e arms =
+  if any armHasAnnot arms then
+    EMatch e (map eraseArmAnnots arms)
+  else
+    EMatch e arms
+
+armHasAnnot : Arm -> Bool
+armHasAnnot (Arm p gs _) = patHasAnnot p || any guardHasAnnot gs
+
+guardHasAnnot : Guard -> Bool
+guardHasAnnot (GBind p _) = patHasAnnot p
+guardHasAnnot (GBool _) = False
+
+-- A guard-bind's checks are a guard of their own right after it, so a later
+-- guard reads the binder at its written type.
+eraseArmAnnots : Arm -> Arm
+eraseArmAnnots (Arm p gs body) =
+  let (p2, checks, n) = annotsOut p 0
+  Arm p2 (guardsAnnotsOut gs n) (annotChecks checks body)
+
+guardsAnnotsOut : List Guard -> Int -> List Guard
+guardsAnnotsOut [] _ = []
+guardsAnnotsOut ((GBind p e) :: rest) n =
+  if patHasAnnot p then
+    let (p2, checks, n2) = annotsOut p n
+    GBind p2 e
+      :: GBool (annotChecks checks (ELit (LBool True)))
+      :: guardsAnnotsOut rest n2
+  else
+    GBind p e :: guardsAnnotsOut rest n
+guardsAnnotsOut (g :: rest) n = g :: guardsAnnotsOut rest n
+
+-- [p] without its annotations, the (name, written type) checks they leave in
+-- source order, and the next fresh-name ordinal.
+annotsOut : Pat -> Int -> (Pat, List (String, Ty), Int)
+annotsOut (PAnn q t) n =
+  let (q2, checks, n2) = annotsOut q n
+  match q2
+    PVar x _ _ => (q2, checks ++ [(x, t)], n2)
+    PAs x _ _ _ => (q2, checks ++ [(x, t)], n2)
+    _ =>
+      let v = "__annot_" ++ intToString n2
+      (PAs v (Loc "" 0 0 0 0) noBinderId q2, checks ++ [(v, t)], n2 + 1)
+annotsOut (PCon c ps) n =
+  let (ps2, checks, n2) = annotsOutOf ps n
+  (PCon c ps2, checks, n2)
+annotsOut (PCons h tl) n =
+  let (h2, c1, n1) = annotsOut h n
+  let (t2, c2, n2) = annotsOut tl n1
+  (PCons h2 t2, c1 ++ c2, n2)
+annotsOut (PTuple ps) n =
+  let (ps2, checks, n2) = annotsOutOf ps n
+  (PTuple ps2, checks, n2)
+annotsOut (PList ps) n =
+  let (ps2, checks, n2) = annotsOutOf ps n
+  (PList ps2, checks, n2)
+annotsOut (PAs x l bid q) n =
+  let (q2, checks, n2) = annotsOut q n
+  (PAs x l bid q2, checks, n2)
+annotsOut (POr ps) n =
+  let (ps2, checks, n2) = annotsOutOf ps n
+  (POr ps2, checks, n2)
+annotsOut (PRec c fields open) n =
+  let (fs2, checks, n2) = fieldAnnotsOut fields n
+  (PRec c fs2 open, checks, n2)
+annotsOut p n = (p, [], n)
+
+annotsOutOf : List Pat -> Int -> (List Pat, List (String, Ty), Int)
+annotsOutOf [] n = ([], [], n)
+annotsOutOf (p :: ps) n =
+  let (p2, c1, n1) = annotsOut p n
+  let (ps2, c2, n2) = annotsOutOf ps n1
+  (p2 :: ps2, c1 ++ c2, n2)
+
+fieldAnnotsOut : List RecPatField ->
+  Int ->
+  (List RecPatField, List (String, Ty), Int)
+fieldAnnotsOut [] n = ([], [], n)
+fieldAnnotsOut ((RecPatField k l bid (Some q)) :: rest) n =
+  let (q2, c1, n1) = annotsOut q n
+  let (rest2, c2, n2) = fieldAnnotsOut rest n1
+  (RecPatField k l bid (Some q2) :: rest2, c1 ++ c2, n2)
+fieldAnnotsOut (f :: rest) n =
+  let (rest2, checks, n2) = fieldAnnotsOut rest n
+  (f :: rest2, checks, n2)
+
+-- `let _ = (v : T)` for each check, in order, ahead of [body]; each annotation
+-- is located at its written type.
+annotChecks : List (String, Ty) -> Expr -> Expr
+annotChecks [] body = body
+annotChecks ((v, t) :: rest) body =
+  let check = locatedAt (firstTyLoc t) (EAnnot (EVar v) t)
+  ELet noDeclLoc False PWild check (annotChecks rest body)
 
 -- operator sections → lambdas
 sectionToCore : Section -> Expr
@@ -1435,7 +1552,7 @@ stampRecFieldBy mint (RecPatField l loc _ (Some p)) =
   RecPatField l loc noBinderId (Some (stampPatBy mint p))
 # DESUGAR
 (DUse false (UseGroup ("support" "stage_count") ((mem "stageBump" false))))
-(DUse false (UseGroup ("frontend" "ast") ((mem "patHasOr" false) (mem "stripLocE" false) (mem "noBinderId" false) (mem "unminted" false) (mem "EvId" false) (mem "BinderId" true) (mem "KindAnn" true) (mem "Lit" true) (mem "Ty" true) (mem "Constraint" true) (mem "Pat" true) (mem "RecPatField" true) (mem "Guard" true) (mem "Arm" true) (mem "DoStmt" true) (mem "Loc" true) (mem "InterpPart" true) (mem "GuardArm" true) (mem "FieldAssign" true) (mem "Section" true) (mem "FunClause" true) (mem "LetBind" true) (mem "Expr" true) (mem "UseMember" true) (mem "UsePath" true) (mem "qualifiedLocal" false) (mem "tyConUnresolved" false) (mem "dImplUnresolved" false) (mem "requireUnresolved" false) (mem "PropParam" true) (mem "MethodDefault" true) (mem "IfaceMethod" true) (mem "Super" true) (mem "Require" true) (mem "ImplMethod" true) (mem "DataVis" true) (mem "Field" true) (mem "ConPayload" true) (mem "Variant" true) (mem "Attr" false) (mem "Decl" true) (mem "DeriveRef" true) (mem "deriveRefName" false) (mem "Route" true))))
+(DUse false (UseGroup ("frontend" "ast") ((mem "patHasOr" false) (mem "patHasAnnot" false) (mem "firstTyLoc" false) (mem "noDeclLoc" false) (mem "stripLocE" false) (mem "noBinderId" false) (mem "unminted" false) (mem "EvId" false) (mem "BinderId" true) (mem "KindAnn" true) (mem "Lit" true) (mem "Ty" true) (mem "Constraint" true) (mem "Pat" true) (mem "RecPatField" true) (mem "Guard" true) (mem "Arm" true) (mem "DoStmt" true) (mem "Loc" true) (mem "InterpPart" true) (mem "GuardArm" true) (mem "FieldAssign" true) (mem "Section" true) (mem "FunClause" true) (mem "LetBind" true) (mem "Expr" true) (mem "UseMember" true) (mem "UsePath" true) (mem "qualifiedLocal" false) (mem "tyConUnresolved" false) (mem "dImplUnresolved" false) (mem "requireUnresolved" false) (mem "PropParam" true) (mem "MethodDefault" true) (mem "IfaceMethod" true) (mem "Super" true) (mem "Require" true) (mem "ImplMethod" true) (mem "DataVis" true) (mem "Field" true) (mem "ConPayload" true) (mem "Variant" true) (mem "Attr" false) (mem "Decl" true) (mem "DeriveRef" true) (mem "deriveRefName" false) (mem "Route" true))))
 (DUse false (UseGroup ("support" "util") ((mem "listLen" false) (mem "joinWith" false) (mem "contains" false) (mem "allList" false) (mem "fallthroughName" false) (mem "reverseL" false) (mem "lookupAssoc" false))))
 (DUse false (UseGroup ("support" "ordmap") ((mem "OrdMap" false) (mem "omEmpty" false) (mem "omInsert" false) (mem "omLookup" false) (mem "omHasKey" false))))
 (DTypeSig true "mapExpr" (TyFun (TyFun (TyCon "Expr") (TyCon "Expr")) (TyFun (TyCon "Expr") (TyCon "Expr"))))
@@ -1532,6 +1649,8 @@ stampRecFieldBy mint (RecPatField l loc _ (Some p)) =
 (DFunDef false "rewriteSugar" ((PCon "EBinOp" (PLit (LString ":=")) (PVar "lhs") (PVar "rhs") PWild)) (EApp (EApp (EApp (EVar "callBin") (ELit (LString "setRef"))) (EVar "lhs")) (EVar "rhs")))
 (DFunDef false "rewriteSugar" ((PCon "EIndex" (PVar "a") (PVar "i"))) (EApp (EApp (EApp (EVar "callBin") (ELit (LString "index"))) (EVar "a")) (EVar "i")))
 (DFunDef false "rewriteSugar" ((PCon "ESlice" (PVar "a") (PVar "lo") (PVar "hi") (PVar "incl"))) (EBlock (DoLet false false (PVar "hiEx") (EIf (EVar "incl") (EApp (EApp (EVar "EApp") (EApp (EVar "EVar") (ELit (LString "sliceInclusiveEnd")))) (EVar "hi")) (EVar "hi"))) (DoExpr (EApp (EApp (EVar "EApp") (EApp (EApp (EVar "EApp") (EApp (EApp (EVar "EApp") (EApp (EVar "EVar") (ELit (LString "slice")))) (EVar "a"))) (EVar "lo"))) (EVar "hiEx")))))
+(DFunDef false "rewriteSugar" ((PAs "lam" (PCon "ELam" (PVar "ps") (PVar "body")))) (EIf (EApp (EApp (EVar "any") (EVar "patHasAnnot")) (EVar "ps")) (EApp (EApp (EVar "eraseLamAnnots") (EVar "ps")) (EVar "body")) (EVar "lam")))
+(DFunDef false "rewriteSugar" ((PAs "m" (PCon "EMatch" (PVar "e") (PVar "arms")))) (EIf (EApp (EApp (EVar "any") (EVar "armHasAnnot")) (EVar "arms")) (EApp (EApp (EVar "EMatch") (EVar "e")) (EApp (EApp (EVar "map") (EVar "eraseArmAnnots")) (EVar "arms"))) (EVar "m")))
 (DFunDef false "rewriteSugar" ((PVar "e")) (EVar "e"))
 (DTypeSig false "rewriteAssignIndex" (TyFun (TyCon "Expr") (TyCon "Expr")))
 (DFunDef false "rewriteAssignIndex" ((PCon "EBinOp" (PLit (LString ":=")) (PVar "lhs") (PVar "v") (PVar "r"))) (EApp (EApp (EApp (EApp (EVar "assignIndexLhs") (EApp (EVar "stripLocE") (EVar "lhs"))) (EVar "lhs")) (EVar "v")) (EVar "r")))
@@ -1547,7 +1666,42 @@ stampRecFieldBy mint (RecPatField l loc _ (Some p)) =
 (DTypeSig false "armChain" (TyFun (TyApp (TyCon "List") (TyCon "Guard")) (TyFun (TyCon "Expr") (TyFun (TyCon "Expr") (TyCon "Expr")))))
 (DFunDef false "armChain" ((PList) (PVar "body") PWild) (EVar "body"))
 (DFunDef false "armChain" ((PCons (PCon "GBool" (PVar "e")) (PVar "qs")) (PVar "body") (PVar "els")) (EApp (EApp (EApp (EVar "EIf") (EVar "e")) (EApp (EApp (EApp (EVar "armChain") (EVar "qs")) (EVar "body")) (EVar "els"))) (EVar "els")))
-(DFunDef false "armChain" ((PCons (PCon "GBind" (PVar "p") (PVar "e")) (PVar "qs")) (PVar "body") (PVar "els")) (EIf (EApp (EVar "patHasOr") (EVar "p")) (EApp (EApp (EVar "EMatch") (EVar "e")) (EListLit (EApp (EApp (EApp (EVar "Arm") (EVar "p")) (EVar "qs")) (EVar "body")) (EApp (EApp (EApp (EVar "Arm") (EVar "PWild")) (EListLit)) (EVar "els")))) (EIf (EVar "otherwise") (EApp (EApp (EVar "EMatch") (EVar "e")) (EListLit (EApp (EApp (EApp (EVar "Arm") (EVar "p")) (EListLit)) (EApp (EApp (EApp (EVar "armChain") (EVar "qs")) (EVar "body")) (EVar "els"))) (EApp (EApp (EApp (EVar "Arm") (EVar "PWild")) (EListLit)) (EVar "els")))) (EApp (EVar "__fallthrough__") (ELit LUnit)))))
+(DFunDef false "armChain" ((PCons (PCon "GBind" (PVar "p") (PVar "e")) (PVar "qs")) (PVar "body") (PVar "els")) (EIf (EApp (EVar "patHasOr") (EVar "p")) (EApp (EApp (EVar "eraseMatchAnnots") (EVar "e")) (EListLit (EApp (EApp (EApp (EVar "Arm") (EVar "p")) (EVar "qs")) (EVar "body")) (EApp (EApp (EApp (EVar "Arm") (EVar "PWild")) (EListLit)) (EVar "els")))) (EIf (EVar "otherwise") (EApp (EApp (EVar "eraseMatchAnnots") (EVar "e")) (EListLit (EApp (EApp (EApp (EVar "Arm") (EVar "p")) (EListLit)) (EApp (EApp (EApp (EVar "armChain") (EVar "qs")) (EVar "body")) (EVar "els"))) (EApp (EApp (EApp (EVar "Arm") (EVar "PWild")) (EListLit)) (EVar "els")))) (EApp (EVar "__fallthrough__") (ELit LUnit)))))
+(DTypeSig false "eraseLamAnnots" (TyFun (TyApp (TyCon "List") (TyCon "Pat")) (TyFun (TyCon "Expr") (TyCon "Expr"))))
+(DFunDef false "eraseLamAnnots" ((PVar "ps") (PVar "body")) (EBlock (DoLet false false (PTuple (PVar "ps2") (PVar "checks") PWild) (EApp (EApp (EVar "annotsOutOf") (EVar "ps")) (ELit (LInt 0)))) (DoExpr (EApp (EApp (EVar "ELam") (EVar "ps2")) (EApp (EApp (EVar "annotChecks") (EVar "checks")) (EVar "body"))))))
+(DTypeSig false "eraseMatchAnnots" (TyFun (TyCon "Expr") (TyFun (TyApp (TyCon "List") (TyCon "Arm")) (TyCon "Expr"))))
+(DFunDef false "eraseMatchAnnots" ((PVar "e") (PVar "arms")) (EIf (EApp (EApp (EVar "any") (EVar "armHasAnnot")) (EVar "arms")) (EApp (EApp (EVar "EMatch") (EVar "e")) (EApp (EApp (EVar "map") (EVar "eraseArmAnnots")) (EVar "arms"))) (EApp (EApp (EVar "EMatch") (EVar "e")) (EVar "arms"))))
+(DTypeSig false "armHasAnnot" (TyFun (TyCon "Arm") (TyCon "Bool")))
+(DFunDef false "armHasAnnot" ((PCon "Arm" (PVar "p") (PVar "gs") PWild)) (EBinOp "||" (EApp (EVar "patHasAnnot") (EVar "p")) (EApp (EApp (EVar "any") (EVar "guardHasAnnot")) (EVar "gs"))))
+(DTypeSig false "guardHasAnnot" (TyFun (TyCon "Guard") (TyCon "Bool")))
+(DFunDef false "guardHasAnnot" ((PCon "GBind" (PVar "p") PWild)) (EApp (EVar "patHasAnnot") (EVar "p")))
+(DFunDef false "guardHasAnnot" ((PCon "GBool" PWild)) (EVar "False"))
+(DTypeSig false "eraseArmAnnots" (TyFun (TyCon "Arm") (TyCon "Arm")))
+(DFunDef false "eraseArmAnnots" ((PCon "Arm" (PVar "p") (PVar "gs") (PVar "body"))) (EBlock (DoLet false false (PTuple (PVar "p2") (PVar "checks") (PVar "n")) (EApp (EApp (EVar "annotsOut") (EVar "p")) (ELit (LInt 0)))) (DoExpr (EApp (EApp (EApp (EVar "Arm") (EVar "p2")) (EApp (EApp (EVar "guardsAnnotsOut") (EVar "gs")) (EVar "n"))) (EApp (EApp (EVar "annotChecks") (EVar "checks")) (EVar "body"))))))
+(DTypeSig false "guardsAnnotsOut" (TyFun (TyApp (TyCon "List") (TyCon "Guard")) (TyFun (TyCon "Int") (TyApp (TyCon "List") (TyCon "Guard")))))
+(DFunDef false "guardsAnnotsOut" ((PList) PWild) (EListLit))
+(DFunDef false "guardsAnnotsOut" ((PCons (PCon "GBind" (PVar "p") (PVar "e")) (PVar "rest")) (PVar "n")) (EIf (EApp (EVar "patHasAnnot") (EVar "p")) (EBlock (DoLet false false (PTuple (PVar "p2") (PVar "checks") (PVar "n2")) (EApp (EApp (EVar "annotsOut") (EVar "p")) (EVar "n"))) (DoExpr (EBinOp "::" (EApp (EApp (EVar "GBind") (EVar "p2")) (EVar "e")) (EBinOp "::" (EApp (EVar "GBool") (EApp (EApp (EVar "annotChecks") (EVar "checks")) (EApp (EVar "ELit") (EApp (EVar "LBool") (EVar "True"))))) (EApp (EApp (EVar "guardsAnnotsOut") (EVar "rest")) (EVar "n2")))))) (EBinOp "::" (EApp (EApp (EVar "GBind") (EVar "p")) (EVar "e")) (EApp (EApp (EVar "guardsAnnotsOut") (EVar "rest")) (EVar "n")))))
+(DFunDef false "guardsAnnotsOut" ((PCons (PVar "g") (PVar "rest")) (PVar "n")) (EBinOp "::" (EVar "g") (EApp (EApp (EVar "guardsAnnotsOut") (EVar "rest")) (EVar "n"))))
+(DTypeSig false "annotsOut" (TyFun (TyCon "Pat") (TyFun (TyCon "Int") (TyTuple (TyCon "Pat") (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "Ty"))) (TyCon "Int")))))
+(DFunDef false "annotsOut" ((PCon "PAnn" (PVar "q") (PVar "t")) (PVar "n")) (EBlock (DoLet false false (PTuple (PVar "q2") (PVar "checks") (PVar "n2")) (EApp (EApp (EVar "annotsOut") (EVar "q")) (EVar "n"))) (DoExpr (EMatch (EVar "q2") (arm (PCon "PVar" (PVar "x") PWild PWild) () (ETuple (EVar "q2") (EBinOp "++" (EVar "checks") (EListLit (ETuple (EVar "x") (EVar "t")))) (EVar "n2"))) (arm (PCon "PAs" (PVar "x") PWild PWild PWild) () (ETuple (EVar "q2") (EBinOp "++" (EVar "checks") (EListLit (ETuple (EVar "x") (EVar "t")))) (EVar "n2"))) (arm PWild () (EBlock (DoLet false false (PVar "v") (EBinOp "++" (ELit (LString "__annot_")) (EApp (EVar "intToString") (EVar "n2")))) (DoExpr (ETuple (EApp (EApp (EApp (EApp (EVar "PAs") (EVar "v")) (EApp (EApp (EApp (EApp (EApp (EVar "Loc") (ELit (LString ""))) (ELit (LInt 0))) (ELit (LInt 0))) (ELit (LInt 0))) (ELit (LInt 0)))) (EVar "noBinderId")) (EVar "q2")) (EBinOp "++" (EVar "checks") (EListLit (ETuple (EVar "v") (EVar "t")))) (EBinOp "+" (EVar "n2") (ELit (LInt 1)))))))))))
+(DFunDef false "annotsOut" ((PCon "PCon" (PVar "c") (PVar "ps")) (PVar "n")) (EBlock (DoLet false false (PTuple (PVar "ps2") (PVar "checks") (PVar "n2")) (EApp (EApp (EVar "annotsOutOf") (EVar "ps")) (EVar "n"))) (DoExpr (ETuple (EApp (EApp (EVar "PCon") (EVar "c")) (EVar "ps2")) (EVar "checks") (EVar "n2")))))
+(DFunDef false "annotsOut" ((PCon "PCons" (PVar "h") (PVar "tl")) (PVar "n")) (EBlock (DoLet false false (PTuple (PVar "h2") (PVar "c1") (PVar "n1")) (EApp (EApp (EVar "annotsOut") (EVar "h")) (EVar "n"))) (DoLet false false (PTuple (PVar "t2") (PVar "c2") (PVar "n2")) (EApp (EApp (EVar "annotsOut") (EVar "tl")) (EVar "n1"))) (DoExpr (ETuple (EApp (EApp (EVar "PCons") (EVar "h2")) (EVar "t2")) (EBinOp "++" (EVar "c1") (EVar "c2")) (EVar "n2")))))
+(DFunDef false "annotsOut" ((PCon "PTuple" (PVar "ps")) (PVar "n")) (EBlock (DoLet false false (PTuple (PVar "ps2") (PVar "checks") (PVar "n2")) (EApp (EApp (EVar "annotsOutOf") (EVar "ps")) (EVar "n"))) (DoExpr (ETuple (EApp (EVar "PTuple") (EVar "ps2")) (EVar "checks") (EVar "n2")))))
+(DFunDef false "annotsOut" ((PCon "PList" (PVar "ps")) (PVar "n")) (EBlock (DoLet false false (PTuple (PVar "ps2") (PVar "checks") (PVar "n2")) (EApp (EApp (EVar "annotsOutOf") (EVar "ps")) (EVar "n"))) (DoExpr (ETuple (EApp (EVar "PList") (EVar "ps2")) (EVar "checks") (EVar "n2")))))
+(DFunDef false "annotsOut" ((PCon "PAs" (PVar "x") (PVar "l") (PVar "bid") (PVar "q")) (PVar "n")) (EBlock (DoLet false false (PTuple (PVar "q2") (PVar "checks") (PVar "n2")) (EApp (EApp (EVar "annotsOut") (EVar "q")) (EVar "n"))) (DoExpr (ETuple (EApp (EApp (EApp (EApp (EVar "PAs") (EVar "x")) (EVar "l")) (EVar "bid")) (EVar "q2")) (EVar "checks") (EVar "n2")))))
+(DFunDef false "annotsOut" ((PCon "POr" (PVar "ps")) (PVar "n")) (EBlock (DoLet false false (PTuple (PVar "ps2") (PVar "checks") (PVar "n2")) (EApp (EApp (EVar "annotsOutOf") (EVar "ps")) (EVar "n"))) (DoExpr (ETuple (EApp (EVar "POr") (EVar "ps2")) (EVar "checks") (EVar "n2")))))
+(DFunDef false "annotsOut" ((PCon "PRec" (PVar "c") (PVar "fields") (PVar "open")) (PVar "n")) (EBlock (DoLet false false (PTuple (PVar "fs2") (PVar "checks") (PVar "n2")) (EApp (EApp (EVar "fieldAnnotsOut") (EVar "fields")) (EVar "n"))) (DoExpr (ETuple (EApp (EApp (EApp (EVar "PRec") (EVar "c")) (EVar "fs2")) (EVar "open")) (EVar "checks") (EVar "n2")))))
+(DFunDef false "annotsOut" ((PVar "p") (PVar "n")) (ETuple (EVar "p") (EListLit) (EVar "n")))
+(DTypeSig false "annotsOutOf" (TyFun (TyApp (TyCon "List") (TyCon "Pat")) (TyFun (TyCon "Int") (TyTuple (TyApp (TyCon "List") (TyCon "Pat")) (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "Ty"))) (TyCon "Int")))))
+(DFunDef false "annotsOutOf" ((PList) (PVar "n")) (ETuple (EListLit) (EListLit) (EVar "n")))
+(DFunDef false "annotsOutOf" ((PCons (PVar "p") (PVar "ps")) (PVar "n")) (EBlock (DoLet false false (PTuple (PVar "p2") (PVar "c1") (PVar "n1")) (EApp (EApp (EVar "annotsOut") (EVar "p")) (EVar "n"))) (DoLet false false (PTuple (PVar "ps2") (PVar "c2") (PVar "n2")) (EApp (EApp (EVar "annotsOutOf") (EVar "ps")) (EVar "n1"))) (DoExpr (ETuple (EBinOp "::" (EVar "p2") (EVar "ps2")) (EBinOp "++" (EVar "c1") (EVar "c2")) (EVar "n2")))))
+(DTypeSig false "fieldAnnotsOut" (TyFun (TyApp (TyCon "List") (TyCon "RecPatField")) (TyFun (TyCon "Int") (TyTuple (TyApp (TyCon "List") (TyCon "RecPatField")) (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "Ty"))) (TyCon "Int")))))
+(DFunDef false "fieldAnnotsOut" ((PList) (PVar "n")) (ETuple (EListLit) (EListLit) (EVar "n")))
+(DFunDef false "fieldAnnotsOut" ((PCons (PCon "RecPatField" (PVar "k") (PVar "l") (PVar "bid") (PCon "Some" (PVar "q"))) (PVar "rest")) (PVar "n")) (EBlock (DoLet false false (PTuple (PVar "q2") (PVar "c1") (PVar "n1")) (EApp (EApp (EVar "annotsOut") (EVar "q")) (EVar "n"))) (DoLet false false (PTuple (PVar "rest2") (PVar "c2") (PVar "n2")) (EApp (EApp (EVar "fieldAnnotsOut") (EVar "rest")) (EVar "n1"))) (DoExpr (ETuple (EBinOp "::" (EApp (EApp (EApp (EApp (EVar "RecPatField") (EVar "k")) (EVar "l")) (EVar "bid")) (EApp (EVar "Some") (EVar "q2"))) (EVar "rest2")) (EBinOp "++" (EVar "c1") (EVar "c2")) (EVar "n2")))))
+(DFunDef false "fieldAnnotsOut" ((PCons (PVar "f") (PVar "rest")) (PVar "n")) (EBlock (DoLet false false (PTuple (PVar "rest2") (PVar "checks") (PVar "n2")) (EApp (EApp (EVar "fieldAnnotsOut") (EVar "rest")) (EVar "n"))) (DoExpr (ETuple (EBinOp "::" (EVar "f") (EVar "rest2")) (EVar "checks") (EVar "n2")))))
+(DTypeSig false "annotChecks" (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "Ty"))) (TyFun (TyCon "Expr") (TyCon "Expr"))))
+(DFunDef false "annotChecks" ((PList) (PVar "body")) (EVar "body"))
+(DFunDef false "annotChecks" ((PCons (PTuple (PVar "v") (PVar "t")) (PVar "rest")) (PVar "body")) (EBlock (DoLet false false (PVar "check") (EApp (EApp (EVar "locatedAt") (EApp (EVar "firstTyLoc") (EVar "t"))) (EApp (EApp (EVar "EAnnot") (EApp (EVar "EVar") (EVar "v"))) (EVar "t")))) (DoExpr (EApp (EApp (EApp (EApp (EApp (EVar "ELet") (EVar "noDeclLoc")) (EVar "False")) (EVar "PWild")) (EVar "check")) (EApp (EApp (EVar "annotChecks") (EVar "rest")) (EVar "body"))))))
 (DTypeSig false "sectionToCore" (TyFun (TyCon "Section") (TyCon "Expr")))
 (DFunDef false "sectionToCore" ((PCon "SecBare" (PVar "op"))) (EApp (EApp (EVar "ELam") (EListLit (EApp (EApp (EApp (EVar "PVar") (ELit (LString "_a"))) (EApp (EApp (EApp (EApp (EApp (EVar "Loc") (ELit (LString ""))) (ELit (LInt 0))) (ELit (LInt 0))) (ELit (LInt 0))) (ELit (LInt 0)))) (EVar "noBinderId")) (EApp (EApp (EApp (EVar "PVar") (ELit (LString "_b"))) (EApp (EApp (EApp (EApp (EApp (EVar "Loc") (ELit (LString ""))) (ELit (LInt 0))) (ELit (LInt 0))) (ELit (LInt 0))) (ELit (LInt 0)))) (EVar "noBinderId")))) (EApp (EApp (EApp (EVar "binOp") (EVar "op")) (EApp (EVar "EVar") (ELit (LString "_a")))) (EApp (EVar "EVar") (ELit (LString "_b"))))))
 (DFunDef false "sectionToCore" ((PCon "SecRight" (PVar "op") (PVar "e"))) (EApp (EApp (EVar "ELam") (EListLit (EApp (EApp (EApp (EVar "PVar") (ELit (LString "_s"))) (EApp (EApp (EApp (EApp (EApp (EVar "Loc") (ELit (LString ""))) (ELit (LInt 0))) (ELit (LInt 0))) (ELit (LInt 0))) (ELit (LInt 0)))) (EVar "noBinderId")))) (EApp (EApp (EApp (EVar "binOp") (EVar "op")) (EApp (EVar "EVar") (ELit (LString "_s")))) (EVar "e"))))
@@ -1944,7 +2098,7 @@ stampRecFieldBy mint (RecPatField l loc _ (Some p)) =
 (DFunDef false "stampRecFieldBy" ((PVar "mint") (PCon "RecPatField" (PVar "l") (PVar "loc") PWild (PCon "Some" (PVar "p")))) (EApp (EApp (EApp (EApp (EVar "RecPatField") (EVar "l")) (EVar "loc")) (EVar "noBinderId")) (EApp (EVar "Some") (EApp (EApp (EVar "stampPatBy") (EVar "mint")) (EVar "p")))))
 # MARK
 (DUse false (UseGroup ("support" "stage_count") ((mem "stageBump" false))))
-(DUse false (UseGroup ("frontend" "ast") ((mem "patHasOr" false) (mem "stripLocE" false) (mem "noBinderId" false) (mem "unminted" false) (mem "EvId" false) (mem "BinderId" true) (mem "KindAnn" true) (mem "Lit" true) (mem "Ty" true) (mem "Constraint" true) (mem "Pat" true) (mem "RecPatField" true) (mem "Guard" true) (mem "Arm" true) (mem "DoStmt" true) (mem "Loc" true) (mem "InterpPart" true) (mem "GuardArm" true) (mem "FieldAssign" true) (mem "Section" true) (mem "FunClause" true) (mem "LetBind" true) (mem "Expr" true) (mem "UseMember" true) (mem "UsePath" true) (mem "qualifiedLocal" false) (mem "tyConUnresolved" false) (mem "dImplUnresolved" false) (mem "requireUnresolved" false) (mem "PropParam" true) (mem "MethodDefault" true) (mem "IfaceMethod" true) (mem "Super" true) (mem "Require" true) (mem "ImplMethod" true) (mem "DataVis" true) (mem "Field" true) (mem "ConPayload" true) (mem "Variant" true) (mem "Attr" false) (mem "Decl" true) (mem "DeriveRef" true) (mem "deriveRefName" false) (mem "Route" true))))
+(DUse false (UseGroup ("frontend" "ast") ((mem "patHasOr" false) (mem "patHasAnnot" false) (mem "firstTyLoc" false) (mem "noDeclLoc" false) (mem "stripLocE" false) (mem "noBinderId" false) (mem "unminted" false) (mem "EvId" false) (mem "BinderId" true) (mem "KindAnn" true) (mem "Lit" true) (mem "Ty" true) (mem "Constraint" true) (mem "Pat" true) (mem "RecPatField" true) (mem "Guard" true) (mem "Arm" true) (mem "DoStmt" true) (mem "Loc" true) (mem "InterpPart" true) (mem "GuardArm" true) (mem "FieldAssign" true) (mem "Section" true) (mem "FunClause" true) (mem "LetBind" true) (mem "Expr" true) (mem "UseMember" true) (mem "UsePath" true) (mem "qualifiedLocal" false) (mem "tyConUnresolved" false) (mem "dImplUnresolved" false) (mem "requireUnresolved" false) (mem "PropParam" true) (mem "MethodDefault" true) (mem "IfaceMethod" true) (mem "Super" true) (mem "Require" true) (mem "ImplMethod" true) (mem "DataVis" true) (mem "Field" true) (mem "ConPayload" true) (mem "Variant" true) (mem "Attr" false) (mem "Decl" true) (mem "DeriveRef" true) (mem "deriveRefName" false) (mem "Route" true))))
 (DUse false (UseGroup ("support" "util") ((mem "listLen" false) (mem "joinWith" false) (mem "contains" false) (mem "allList" false) (mem "fallthroughName" false) (mem "reverseL" false) (mem "lookupAssoc" false))))
 (DUse false (UseGroup ("support" "ordmap") ((mem "OrdMap" false) (mem "omEmpty" false) (mem "omInsert" false) (mem "omLookup" false) (mem "omHasKey" false))))
 (DTypeSig true "mapExpr" (TyFun (TyFun (TyCon "Expr") (TyCon "Expr")) (TyFun (TyCon "Expr") (TyCon "Expr"))))
@@ -2041,6 +2195,8 @@ stampRecFieldBy mint (RecPatField l loc _ (Some p)) =
 (DFunDef false "rewriteSugar" ((PCon "EBinOp" (PLit (LString ":=")) (PVar "lhs") (PVar "rhs") PWild)) (EApp (EApp (EApp (EVar "callBin") (ELit (LString "setRef"))) (EVar "lhs")) (EVar "rhs")))
 (DFunDef false "rewriteSugar" ((PCon "EIndex" (PVar "a") (PVar "i"))) (EApp (EApp (EApp (EVar "callBin") (ELit (LString "index"))) (EVar "a")) (EVar "i")))
 (DFunDef false "rewriteSugar" ((PCon "ESlice" (PVar "a") (PVar "lo") (PVar "hi") (PVar "incl"))) (EBlock (DoLet false false (PVar "hiEx") (EIf (EVar "incl") (EApp (EApp (EVar "EApp") (EApp (EVar "EVar") (ELit (LString "sliceInclusiveEnd")))) (EVar "hi")) (EVar "hi"))) (DoExpr (EApp (EApp (EVar "EApp") (EApp (EApp (EVar "EApp") (EApp (EApp (EVar "EApp") (EApp (EVar "EVar") (ELit (LString "slice")))) (EVar "a"))) (EVar "lo"))) (EVar "hiEx")))))
+(DFunDef false "rewriteSugar" ((PAs "lam" (PCon "ELam" (PVar "ps") (PVar "body")))) (EIf (EApp (EApp (EDictApp "any") (EVar "patHasAnnot")) (EVar "ps")) (EApp (EApp (EVar "eraseLamAnnots") (EVar "ps")) (EVar "body")) (EVar "lam")))
+(DFunDef false "rewriteSugar" ((PAs "m" (PCon "EMatch" (PVar "e") (PVar "arms")))) (EIf (EApp (EApp (EDictApp "any") (EVar "armHasAnnot")) (EVar "arms")) (EApp (EApp (EVar "EMatch") (EVar "e")) (EApp (EApp (EMethodRef "map") (EVar "eraseArmAnnots")) (EVar "arms"))) (EVar "m")))
 (DFunDef false "rewriteSugar" ((PVar "e")) (EVar "e"))
 (DTypeSig false "rewriteAssignIndex" (TyFun (TyCon "Expr") (TyCon "Expr")))
 (DFunDef false "rewriteAssignIndex" ((PCon "EBinOp" (PLit (LString ":=")) (PVar "lhs") (PVar "v") (PVar "r"))) (EApp (EApp (EApp (EApp (EVar "assignIndexLhs") (EApp (EVar "stripLocE") (EVar "lhs"))) (EVar "lhs")) (EVar "v")) (EVar "r")))
@@ -2056,7 +2212,42 @@ stampRecFieldBy mint (RecPatField l loc _ (Some p)) =
 (DTypeSig false "armChain" (TyFun (TyApp (TyCon "List") (TyCon "Guard")) (TyFun (TyCon "Expr") (TyFun (TyCon "Expr") (TyCon "Expr")))))
 (DFunDef false "armChain" ((PList) (PVar "body") PWild) (EVar "body"))
 (DFunDef false "armChain" ((PCons (PCon "GBool" (PVar "e")) (PVar "qs")) (PVar "body") (PVar "els")) (EApp (EApp (EApp (EVar "EIf") (EVar "e")) (EApp (EApp (EApp (EVar "armChain") (EVar "qs")) (EVar "body")) (EVar "els"))) (EVar "els")))
-(DFunDef false "armChain" ((PCons (PCon "GBind" (PVar "p") (PVar "e")) (PVar "qs")) (PVar "body") (PVar "els")) (EIf (EApp (EVar "patHasOr") (EVar "p")) (EApp (EApp (EVar "EMatch") (EVar "e")) (EListLit (EApp (EApp (EApp (EVar "Arm") (EVar "p")) (EVar "qs")) (EVar "body")) (EApp (EApp (EApp (EVar "Arm") (EVar "PWild")) (EListLit)) (EVar "els")))) (EIf (EVar "otherwise") (EApp (EApp (EVar "EMatch") (EVar "e")) (EListLit (EApp (EApp (EApp (EVar "Arm") (EVar "p")) (EListLit)) (EApp (EApp (EApp (EVar "armChain") (EVar "qs")) (EVar "body")) (EVar "els"))) (EApp (EApp (EApp (EVar "Arm") (EVar "PWild")) (EListLit)) (EVar "els")))) (EApp (EVar "__fallthrough__") (ELit LUnit)))))
+(DFunDef false "armChain" ((PCons (PCon "GBind" (PVar "p") (PVar "e")) (PVar "qs")) (PVar "body") (PVar "els")) (EIf (EApp (EVar "patHasOr") (EVar "p")) (EApp (EApp (EVar "eraseMatchAnnots") (EVar "e")) (EListLit (EApp (EApp (EApp (EVar "Arm") (EVar "p")) (EVar "qs")) (EVar "body")) (EApp (EApp (EApp (EVar "Arm") (EVar "PWild")) (EListLit)) (EVar "els")))) (EIf (EVar "otherwise") (EApp (EApp (EVar "eraseMatchAnnots") (EVar "e")) (EListLit (EApp (EApp (EApp (EVar "Arm") (EVar "p")) (EListLit)) (EApp (EApp (EApp (EVar "armChain") (EVar "qs")) (EVar "body")) (EVar "els"))) (EApp (EApp (EApp (EVar "Arm") (EVar "PWild")) (EListLit)) (EVar "els")))) (EApp (EVar "__fallthrough__") (ELit LUnit)))))
+(DTypeSig false "eraseLamAnnots" (TyFun (TyApp (TyCon "List") (TyCon "Pat")) (TyFun (TyCon "Expr") (TyCon "Expr"))))
+(DFunDef false "eraseLamAnnots" ((PVar "ps") (PVar "body")) (EBlock (DoLet false false (PTuple (PVar "ps2") (PVar "checks") PWild) (EApp (EApp (EVar "annotsOutOf") (EVar "ps")) (ELit (LInt 0)))) (DoExpr (EApp (EApp (EVar "ELam") (EVar "ps2")) (EApp (EApp (EVar "annotChecks") (EVar "checks")) (EVar "body"))))))
+(DTypeSig false "eraseMatchAnnots" (TyFun (TyCon "Expr") (TyFun (TyApp (TyCon "List") (TyCon "Arm")) (TyCon "Expr"))))
+(DFunDef false "eraseMatchAnnots" ((PVar "e") (PVar "arms")) (EIf (EApp (EApp (EDictApp "any") (EVar "armHasAnnot")) (EVar "arms")) (EApp (EApp (EVar "EMatch") (EVar "e")) (EApp (EApp (EMethodRef "map") (EVar "eraseArmAnnots")) (EVar "arms"))) (EApp (EApp (EVar "EMatch") (EVar "e")) (EVar "arms"))))
+(DTypeSig false "armHasAnnot" (TyFun (TyCon "Arm") (TyCon "Bool")))
+(DFunDef false "armHasAnnot" ((PCon "Arm" (PVar "p") (PVar "gs") PWild)) (EBinOp "||" (EApp (EVar "patHasAnnot") (EVar "p")) (EApp (EApp (EDictApp "any") (EVar "guardHasAnnot")) (EVar "gs"))))
+(DTypeSig false "guardHasAnnot" (TyFun (TyCon "Guard") (TyCon "Bool")))
+(DFunDef false "guardHasAnnot" ((PCon "GBind" (PVar "p") PWild)) (EApp (EVar "patHasAnnot") (EVar "p")))
+(DFunDef false "guardHasAnnot" ((PCon "GBool" PWild)) (EVar "False"))
+(DTypeSig false "eraseArmAnnots" (TyFun (TyCon "Arm") (TyCon "Arm")))
+(DFunDef false "eraseArmAnnots" ((PCon "Arm" (PVar "p") (PVar "gs") (PVar "body"))) (EBlock (DoLet false false (PTuple (PVar "p2") (PVar "checks") (PVar "n")) (EApp (EApp (EVar "annotsOut") (EVar "p")) (ELit (LInt 0)))) (DoExpr (EApp (EApp (EApp (EVar "Arm") (EVar "p2")) (EApp (EApp (EVar "guardsAnnotsOut") (EVar "gs")) (EVar "n"))) (EApp (EApp (EVar "annotChecks") (EVar "checks")) (EVar "body"))))))
+(DTypeSig false "guardsAnnotsOut" (TyFun (TyApp (TyCon "List") (TyCon "Guard")) (TyFun (TyCon "Int") (TyApp (TyCon "List") (TyCon "Guard")))))
+(DFunDef false "guardsAnnotsOut" ((PList) PWild) (EListLit))
+(DFunDef false "guardsAnnotsOut" ((PCons (PCon "GBind" (PVar "p") (PVar "e")) (PVar "rest")) (PVar "n")) (EIf (EApp (EVar "patHasAnnot") (EVar "p")) (EBlock (DoLet false false (PTuple (PVar "p2") (PVar "checks") (PVar "n2")) (EApp (EApp (EVar "annotsOut") (EVar "p")) (EVar "n"))) (DoExpr (EBinOp "::" (EApp (EApp (EVar "GBind") (EVar "p2")) (EVar "e")) (EBinOp "::" (EApp (EVar "GBool") (EApp (EApp (EVar "annotChecks") (EVar "checks")) (EApp (EVar "ELit") (EApp (EVar "LBool") (EVar "True"))))) (EApp (EApp (EVar "guardsAnnotsOut") (EVar "rest")) (EVar "n2")))))) (EBinOp "::" (EApp (EApp (EVar "GBind") (EVar "p")) (EVar "e")) (EApp (EApp (EVar "guardsAnnotsOut") (EVar "rest")) (EVar "n")))))
+(DFunDef false "guardsAnnotsOut" ((PCons (PVar "g") (PVar "rest")) (PVar "n")) (EBinOp "::" (EVar "g") (EApp (EApp (EVar "guardsAnnotsOut") (EVar "rest")) (EVar "n"))))
+(DTypeSig false "annotsOut" (TyFun (TyCon "Pat") (TyFun (TyCon "Int") (TyTuple (TyCon "Pat") (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "Ty"))) (TyCon "Int")))))
+(DFunDef false "annotsOut" ((PCon "PAnn" (PVar "q") (PVar "t")) (PVar "n")) (EBlock (DoLet false false (PTuple (PVar "q2") (PVar "checks") (PVar "n2")) (EApp (EApp (EVar "annotsOut") (EVar "q")) (EVar "n"))) (DoExpr (EMatch (EVar "q2") (arm (PCon "PVar" (PVar "x") PWild PWild) () (ETuple (EVar "q2") (EBinOp "++" (EVar "checks") (EListLit (ETuple (EVar "x") (EVar "t")))) (EVar "n2"))) (arm (PCon "PAs" (PVar "x") PWild PWild PWild) () (ETuple (EVar "q2") (EBinOp "++" (EVar "checks") (EListLit (ETuple (EVar "x") (EVar "t")))) (EVar "n2"))) (arm PWild () (EBlock (DoLet false false (PVar "v") (EBinOp "++" (ELit (LString "__annot_")) (EApp (EVar "intToString") (EVar "n2")))) (DoExpr (ETuple (EApp (EApp (EApp (EApp (EVar "PAs") (EVar "v")) (EApp (EApp (EApp (EApp (EApp (EVar "Loc") (ELit (LString ""))) (ELit (LInt 0))) (ELit (LInt 0))) (ELit (LInt 0))) (ELit (LInt 0)))) (EVar "noBinderId")) (EVar "q2")) (EBinOp "++" (EVar "checks") (EListLit (ETuple (EVar "v") (EVar "t")))) (EBinOp "+" (EVar "n2") (ELit (LInt 1)))))))))))
+(DFunDef false "annotsOut" ((PCon "PCon" (PVar "c") (PVar "ps")) (PVar "n")) (EBlock (DoLet false false (PTuple (PVar "ps2") (PVar "checks") (PVar "n2")) (EApp (EApp (EVar "annotsOutOf") (EVar "ps")) (EVar "n"))) (DoExpr (ETuple (EApp (EApp (EVar "PCon") (EVar "c")) (EVar "ps2")) (EVar "checks") (EVar "n2")))))
+(DFunDef false "annotsOut" ((PCon "PCons" (PVar "h") (PVar "tl")) (PVar "n")) (EBlock (DoLet false false (PTuple (PVar "h2") (PVar "c1") (PVar "n1")) (EApp (EApp (EVar "annotsOut") (EVar "h")) (EVar "n"))) (DoLet false false (PTuple (PVar "t2") (PVar "c2") (PVar "n2")) (EApp (EApp (EVar "annotsOut") (EVar "tl")) (EVar "n1"))) (DoExpr (ETuple (EApp (EApp (EVar "PCons") (EVar "h2")) (EVar "t2")) (EBinOp "++" (EVar "c1") (EVar "c2")) (EVar "n2")))))
+(DFunDef false "annotsOut" ((PCon "PTuple" (PVar "ps")) (PVar "n")) (EBlock (DoLet false false (PTuple (PVar "ps2") (PVar "checks") (PVar "n2")) (EApp (EApp (EVar "annotsOutOf") (EVar "ps")) (EVar "n"))) (DoExpr (ETuple (EApp (EVar "PTuple") (EVar "ps2")) (EVar "checks") (EVar "n2")))))
+(DFunDef false "annotsOut" ((PCon "PList" (PVar "ps")) (PVar "n")) (EBlock (DoLet false false (PTuple (PVar "ps2") (PVar "checks") (PVar "n2")) (EApp (EApp (EVar "annotsOutOf") (EVar "ps")) (EVar "n"))) (DoExpr (ETuple (EApp (EVar "PList") (EVar "ps2")) (EVar "checks") (EVar "n2")))))
+(DFunDef false "annotsOut" ((PCon "PAs" (PVar "x") (PVar "l") (PVar "bid") (PVar "q")) (PVar "n")) (EBlock (DoLet false false (PTuple (PVar "q2") (PVar "checks") (PVar "n2")) (EApp (EApp (EVar "annotsOut") (EVar "q")) (EVar "n"))) (DoExpr (ETuple (EApp (EApp (EApp (EApp (EVar "PAs") (EVar "x")) (EVar "l")) (EVar "bid")) (EVar "q2")) (EVar "checks") (EVar "n2")))))
+(DFunDef false "annotsOut" ((PCon "POr" (PVar "ps")) (PVar "n")) (EBlock (DoLet false false (PTuple (PVar "ps2") (PVar "checks") (PVar "n2")) (EApp (EApp (EVar "annotsOutOf") (EVar "ps")) (EVar "n"))) (DoExpr (ETuple (EApp (EVar "POr") (EVar "ps2")) (EVar "checks") (EVar "n2")))))
+(DFunDef false "annotsOut" ((PCon "PRec" (PVar "c") (PVar "fields") (PVar "open")) (PVar "n")) (EBlock (DoLet false false (PTuple (PVar "fs2") (PVar "checks") (PVar "n2")) (EApp (EApp (EVar "fieldAnnotsOut") (EVar "fields")) (EVar "n"))) (DoExpr (ETuple (EApp (EApp (EApp (EVar "PRec") (EVar "c")) (EVar "fs2")) (EVar "open")) (EVar "checks") (EVar "n2")))))
+(DFunDef false "annotsOut" ((PVar "p") (PVar "n")) (ETuple (EVar "p") (EListLit) (EVar "n")))
+(DTypeSig false "annotsOutOf" (TyFun (TyApp (TyCon "List") (TyCon "Pat")) (TyFun (TyCon "Int") (TyTuple (TyApp (TyCon "List") (TyCon "Pat")) (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "Ty"))) (TyCon "Int")))))
+(DFunDef false "annotsOutOf" ((PList) (PVar "n")) (ETuple (EListLit) (EListLit) (EVar "n")))
+(DFunDef false "annotsOutOf" ((PCons (PVar "p") (PVar "ps")) (PVar "n")) (EBlock (DoLet false false (PTuple (PVar "p2") (PVar "c1") (PVar "n1")) (EApp (EApp (EVar "annotsOut") (EVar "p")) (EVar "n"))) (DoLet false false (PTuple (PVar "ps2") (PVar "c2") (PVar "n2")) (EApp (EApp (EVar "annotsOutOf") (EVar "ps")) (EVar "n1"))) (DoExpr (ETuple (EBinOp "::" (EVar "p2") (EVar "ps2")) (EBinOp "++" (EVar "c1") (EVar "c2")) (EVar "n2")))))
+(DTypeSig false "fieldAnnotsOut" (TyFun (TyApp (TyCon "List") (TyCon "RecPatField")) (TyFun (TyCon "Int") (TyTuple (TyApp (TyCon "List") (TyCon "RecPatField")) (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "Ty"))) (TyCon "Int")))))
+(DFunDef false "fieldAnnotsOut" ((PList) (PVar "n")) (ETuple (EListLit) (EListLit) (EVar "n")))
+(DFunDef false "fieldAnnotsOut" ((PCons (PCon "RecPatField" (PVar "k") (PVar "l") (PVar "bid") (PCon "Some" (PVar "q"))) (PVar "rest")) (PVar "n")) (EBlock (DoLet false false (PTuple (PVar "q2") (PVar "c1") (PVar "n1")) (EApp (EApp (EVar "annotsOut") (EVar "q")) (EVar "n"))) (DoLet false false (PTuple (PVar "rest2") (PVar "c2") (PVar "n2")) (EApp (EApp (EVar "fieldAnnotsOut") (EVar "rest")) (EVar "n1"))) (DoExpr (ETuple (EBinOp "::" (EApp (EApp (EApp (EApp (EVar "RecPatField") (EVar "k")) (EVar "l")) (EVar "bid")) (EApp (EVar "Some") (EVar "q2"))) (EVar "rest2")) (EBinOp "++" (EVar "c1") (EVar "c2")) (EVar "n2")))))
+(DFunDef false "fieldAnnotsOut" ((PCons (PVar "f") (PVar "rest")) (PVar "n")) (EBlock (DoLet false false (PTuple (PVar "rest2") (PVar "checks") (PVar "n2")) (EApp (EApp (EVar "fieldAnnotsOut") (EVar "rest")) (EVar "n"))) (DoExpr (ETuple (EBinOp "::" (EVar "f") (EVar "rest2")) (EVar "checks") (EVar "n2")))))
+(DTypeSig false "annotChecks" (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "Ty"))) (TyFun (TyCon "Expr") (TyCon "Expr"))))
+(DFunDef false "annotChecks" ((PList) (PVar "body")) (EVar "body"))
+(DFunDef false "annotChecks" ((PCons (PTuple (PVar "v") (PVar "t")) (PVar "rest")) (PVar "body")) (EBlock (DoLet false false (PVar "check") (EApp (EApp (EVar "locatedAt") (EApp (EVar "firstTyLoc") (EVar "t"))) (EApp (EApp (EVar "EAnnot") (EApp (EVar "EVar") (EVar "v"))) (EVar "t")))) (DoExpr (EApp (EApp (EApp (EApp (EApp (EVar "ELet") (EVar "noDeclLoc")) (EVar "False")) (EVar "PWild")) (EVar "check")) (EApp (EApp (EVar "annotChecks") (EVar "rest")) (EVar "body"))))))
 (DTypeSig false "sectionToCore" (TyFun (TyCon "Section") (TyCon "Expr")))
 (DFunDef false "sectionToCore" ((PCon "SecBare" (PVar "op"))) (EApp (EApp (EVar "ELam") (EListLit (EApp (EApp (EApp (EVar "PVar") (ELit (LString "_a"))) (EApp (EApp (EApp (EApp (EApp (EVar "Loc") (ELit (LString ""))) (ELit (LInt 0))) (ELit (LInt 0))) (ELit (LInt 0))) (ELit (LInt 0)))) (EVar "noBinderId")) (EApp (EApp (EApp (EVar "PVar") (ELit (LString "_b"))) (EApp (EApp (EApp (EApp (EApp (EVar "Loc") (ELit (LString ""))) (ELit (LInt 0))) (ELit (LInt 0))) (ELit (LInt 0))) (ELit (LInt 0)))) (EVar "noBinderId")))) (EApp (EApp (EApp (EVar "binOp") (EVar "op")) (EApp (EVar "EVar") (ELit (LString "_a")))) (EApp (EVar "EVar") (ELit (LString "_b"))))))
 (DFunDef false "sectionToCore" ((PCon "SecRight" (PVar "op") (PVar "e"))) (EApp (EApp (EVar "ELam") (EListLit (EApp (EApp (EApp (EVar "PVar") (ELit (LString "_s"))) (EApp (EApp (EApp (EApp (EApp (EVar "Loc") (ELit (LString ""))) (ELit (LInt 0))) (ELit (LInt 0))) (ELit (LInt 0))) (ELit (LInt 0)))) (EVar "noBinderId")))) (EApp (EApp (EApp (EVar "binOp") (EVar "op")) (EApp (EVar "EVar") (ELit (LString "_s")))) (EVar "e"))))
