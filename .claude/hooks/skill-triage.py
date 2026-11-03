@@ -129,7 +129,16 @@ review = re.search(r"\b(style|craft|slop)[ -]review\b"
                    r"|\breview\w*\b.{0,40}\b(diff|branch|sprint|PR|pull request)\b",
                    prompt, re.IGNORECASE)
 
-if not (roadmap or stdlib or mcp or sprint or gates or debug or write_tests or style_rule or review):
+# Decision-shaped task: about to list options for Val, ask for a ruling, or
+# present an epic's decision checkboxes. The three-question triage lives in
+# `decision-triage`; most such decisions are adopted there, not brought.
+decision = re.search(r"\b(decisions?|rulings?|options?)\b.{0,40}\b(for|to|from)\s+Val\b"
+                     r"|\bVal\s+(decides|rules|to rule|should rule|owes)\b"
+                     r"|\bbring\w*\b.{0,30}\b(decision|question)\b"
+                     r"|\bdecision[- ]triage\b",
+                     prompt, re.IGNORECASE)
+
+if not (roadmap or stdlib or mcp or sprint or gates or debug or write_tests or style_rule or review or decision):
     sys.exit(0)
 
 if roadmap:
@@ -253,6 +262,17 @@ if style_rule:
         "a rule needs Val's ruling (one question at a time, on a real "
         "instance), a STYLE-RULINGS.md entry, fixtures checked with "
         "scripts/review_bench/curate.py, and a dev measurement before test.\n"
+        "Triage reminder, not a directive."
+    )
+
+if decision:
+    print(
+        "Skill triage (decision-shaped task detected): load decision-triage before "
+        "listing options for Val -- three questions (principled fix without a major "
+        "blocker? a mature language to emulate? best for long-term maturity?); if any "
+        "settles it with reasonable confidence, adopt and record it, do not bring it. "
+        "What survives arrives one per message as options, pros and cons, and a "
+        "recommendation.\n"
         "Triage reminder, not a directive."
     )
 

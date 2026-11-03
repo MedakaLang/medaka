@@ -1405,14 +1405,14 @@ locGoalKey (Some (Loc file sl sc el ec)) =
   "\{file}:\{intToString sl}:\{intToString sc}:\{intToString el}:\{intToString ec}"
 
 allDigits : String -> Bool
-allDigits n = stringLength n > 0 && allDigitsFrom n 0
+allDigits n = stringLength n > 0 && allDigitsFrom (stringToChars n) 0
 
-allDigitsFrom : String -> Int -> Bool
-allDigitsFrom n i
-  | i >= stringLength n = True
+allDigitsFrom : Array Char -> Int -> Bool
+allDigitsFrom cs i
+  | i >= arrayLength cs = True
   | otherwise =
-    let c = stringSlice i (i + 1) n
-    c >= "0" && c <= "9" && allDigitsFrom n (i + 1)
+    let c = arrayGetUnsafe i cs
+    c >= '0' && c <= '9' && allDigitsFrom cs (i + 1)
 
 export
 backticked : String -> String

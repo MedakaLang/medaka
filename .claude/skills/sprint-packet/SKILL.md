@@ -129,6 +129,17 @@ and `medaka gate verify` followed by
 old "touched directory's native test target" line; they are not an invitation
 to enumerate further.
 
+**A slice that touches `compiler/**.mdk` also runs two gates `make preflight`
+does not derive**, because their `sources` in `test/gates.toml` do not name
+compiler files: `sh test/diff_compiler_lint_baseline.sh` and
+`sh test/typecheck_compiler_source.sh` (vis-test-split S-sinks-public items 5
+and 18; R35 migration's `lint_baseline` red). Name both by command. This is an
+interim line: it is deleted when those two gates declare `sources` and
+`PREFLIGHT_DRY=1 sh test/preflight.sh` derives them. Do not write "preflight
+derives the rest" or "never a hand list" into a contract. `arch_boundaries` is
+derived (`medaka gate explain compiler/types/<file>.mdk` lists it) and needs no
+hand line.
+
 **Do not enumerate the gates the diff might have moved.** That list does not
 converge: across the sprint record the unnamed gate was a snapshot/LEG-A bless
 ten times, `registry_keying_ratchet.sh` six, `selfcompile_fixpoint` three,
@@ -207,6 +218,13 @@ an explicit "none / not applicable, because …" is. They are cheap to answer
 honestly and expensive to answer falsely, which is the point: they are the
 author-side half of the `style-review` pass, and they front-load the findings
 that pass would otherwise raise a day later.
+
+**A docs-only slice answers one line instead of the five:** every number, and
+every "no X does Y", written into a doc is the output of a command quoted in
+Evidence, or it is not written; a contract Out row's premise gets the same
+grep. vis-test-split's docs slice answered four of five "not applicable" and
+still wrote a tree-wide claim ("no production module exports a name only for a
+test") that was false for about 30 names.
 
 1. **Which `stdlib/` or `compiler/support/` functions did you look for before
    writing any new helper? Name them** — or say "no new helper written". (The

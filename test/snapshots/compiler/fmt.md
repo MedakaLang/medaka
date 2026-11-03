@@ -1,5 +1,5 @@
 # META
-source_lines=919
+source_lines=932
 stages=DESUGAR,MARK
 # SOURCE
 -- Self-hosted comment-preserving formatter — `formatProgram`, the driver over
@@ -832,39 +832,48 @@ interpLitBody src _ (_ :: ts) ((_, e) :: ps) = interpLitBody src e ts ps
 
 -- Only whitespace and comments sit between two tokens, so the next literal's
 -- opening quote is the first `"` after `pos` that is not inside a comment.
+--
+-- The scans through applyTripleGo slice one string at ascending offsets. That
+-- is linear on the native runtime, whose one-entry cursor cache resumes the
+-- codepoint walk; this module is not shipped to the WasmGC engine, which has
+-- no such cache.
 openingQuoteAfter : String -> Int -> Int
-openingQuoteAfter src pos =
-  if pos >= stringLength src then
-    pos
-  else if stringSlice pos (pos + 1) src == "\"" then
-    pos
-  else if stringSlice pos (pos + 2) src == "--" then
+openingQuoteAfter src pos
+  | pos >= stringLength src = pos
+  -- Bound: one source string scanned forward, linear on the native runtime; see the note above openingQuoteAfter.
+  -- lint-disable-next-line rule-reslice-in-loop
+  | stringSlice pos (pos + 1) src == "\"" = pos
+  -- Bound: same forward scan, comment-opener probe.
+  -- lint-disable-next-line rule-reslice-in-loop
+  | stringSlice pos (pos + 2) src == "--" =
     openingQuoteAfter src (lineEndAfter src pos)
-  else if stringSlice pos (pos + 2) src == "{-" then
+  -- Bound: same forward scan, block-comment-opener probe.
+  -- lint-disable-next-line rule-reslice-in-loop
+  | stringSlice pos (pos + 2) src == "{-" =
     openingQuoteAfter src (blockCommentEnd src (pos + 2) 1)
-  else
-    openingQuoteAfter src (pos + 1)
+  | otherwise = openingQuoteAfter src (pos + 1)
 
 lineEndAfter : String -> Int -> Int
-lineEndAfter src pos =
-  if pos >= stringLength src then
-    pos
-  else if stringSlice pos (pos + 1) src == "\n" then
-    pos + 1
-  else
-    lineEndAfter src (pos + 1)
+lineEndAfter src pos
+  | pos >= stringLength src = pos
+  -- Bound: same forward scan, newline probe.
+  -- lint-disable-next-line rule-reslice-in-loop
+  | stringSlice pos (pos + 1) src == "\n" = pos + 1
+  | otherwise = lineEndAfter src (pos + 1)
 
 -- `pos` is just past a `{-`; `depth` is how many comments are still open.
 blockCommentEnd : String -> Int -> Int -> Int
-blockCommentEnd src pos depth =
-  if pos >= stringLength src || depth == 0 then
-    pos
-  else if stringSlice pos (pos + 2) src == "{-" then
+blockCommentEnd src pos depth
+  | pos >= stringLength src || depth == 0 = pos
+  -- Bound: same forward scan, nested comment-opener probe.
+  -- lint-disable-next-line rule-reslice-in-loop
+  | stringSlice pos (pos + 2) src == "{-" =
     blockCommentEnd src (pos + 2) (depth + 1)
-  else if stringSlice pos (pos + 2) src == "-}" then
+  -- Bound: same forward scan, comment-closer probe.
+  -- lint-disable-next-line rule-reslice-in-loop
+  | stringSlice pos (pos + 2) src == "-}" =
     blockCommentEnd src (pos + 2) (depth - 1)
-  else
-    blockCommentEnd src (pos + 1) depth
+  | otherwise = blockCommentEnd src (pos + 1) depth
 
 -- Whether each literal is triple-quoted or raw, paired with its source text
 -- (empty for any other literal, which is never restored).
@@ -872,6 +881,8 @@ verbatimLitInfo : String -> List (Int, Int) -> List (Bool, String)
 verbatimLitInfo _ [] = []
 verbatimLitInfo src ((s, e) :: ls) =
   let triple = isTripleStringAt src s || isRawStringAt src s
+  -- Bound: one slice per literal, at ascending offsets of the same source string.
+  -- lint-disable-next-line rule-reslice-in-loop
   (triple, if triple then stringSlice s e src else "") :: verbatimLitInfo src ls
 
 -- Zip the original literal order against the formatted output's literal
@@ -903,6 +914,8 @@ applyTripleGo ((s, e, raw) :: rest) out cursor acc =
   if s < cursor then
     applyTripleGo rest out cursor acc
   else
+    -- Bound: one chunk per literal span, at ascending offsets of one output string.
+    -- lint-disable-next-line rule-reslice-in-loop
     applyTripleGo rest out e (raw :: stringSlice cursor s out :: acc)
 
 mayHaveRestorable : String -> Bool
@@ -1108,11 +1121,11 @@ restoreVerbatimLiterals src formatted = match mayHaveRestorable src
 (DFunDef false "interpLitBody" ((PVar "src") (PVar "prevEnd") (PCons (PCon "TInterpOpen" PWild) (PVar "ts")) (PCons PWild (PVar "ps"))) (EMatch (EApp (EApp (EApp (EApp (EVar "interpLitBody") (EVar "src")) (EVar "prevEnd")) (EVar "ts")) (EVar "ps")) (arm (PCon "None") () (EVar "None")) (arm (PCon "Some" (PTuple (PVar "nend") (PVar "nested") (PVar "ts2") (PVar "ps2"))) () (EApp (EApp (EVar "map") (ELam ((PTuple (PVar "end") (PVar "inner") (PVar "ts3") (PVar "ps3"))) (ETuple (EVar "end") (EBinOp "::" (ETuple (EApp (EApp (EVar "openingQuoteAfter") (EVar "src")) (EVar "prevEnd")) (EVar "nend")) (EBinOp "++" (EVar "nested") (EVar "inner"))) (EVar "ts3") (EVar "ps3")))) (EApp (EApp (EApp (EApp (EVar "interpLitBody") (EVar "src")) (EVar "nend")) (EVar "ts2")) (EVar "ps2"))))))
 (DFunDef false "interpLitBody" ((PVar "src") PWild (PCons PWild (PVar "ts")) (PCons (PTuple PWild (PVar "e")) (PVar "ps"))) (EApp (EApp (EApp (EApp (EVar "interpLitBody") (EVar "src")) (EVar "e")) (EVar "ts")) (EVar "ps")))
 (DTypeSig false "openingQuoteAfter" (TyFun (TyCon "String") (TyFun (TyCon "Int") (TyCon "Int"))))
-(DFunDef false "openingQuoteAfter" ((PVar "src") (PVar "pos")) (EIf (EBinOp ">=" (EVar "pos") (EApp (EVar "stringLength") (EVar "src"))) (EVar "pos") (EIf (EBinOp "==" (EApp (EApp (EApp (EVar "stringSlice") (EVar "pos")) (EBinOp "+" (EVar "pos") (ELit (LInt 1)))) (EVar "src")) (ELit (LString "\""))) (EVar "pos") (EIf (EBinOp "==" (EApp (EApp (EApp (EVar "stringSlice") (EVar "pos")) (EBinOp "+" (EVar "pos") (ELit (LInt 2)))) (EVar "src")) (ELit (LString "--"))) (EApp (EApp (EVar "openingQuoteAfter") (EVar "src")) (EApp (EApp (EVar "lineEndAfter") (EVar "src")) (EVar "pos"))) (EIf (EBinOp "==" (EApp (EApp (EApp (EVar "stringSlice") (EVar "pos")) (EBinOp "+" (EVar "pos") (ELit (LInt 2)))) (EVar "src")) (ELit (LString "{-"))) (EApp (EApp (EVar "openingQuoteAfter") (EVar "src")) (EApp (EApp (EApp (EVar "blockCommentEnd") (EVar "src")) (EBinOp "+" (EVar "pos") (ELit (LInt 2)))) (ELit (LInt 1)))) (EApp (EApp (EVar "openingQuoteAfter") (EVar "src")) (EBinOp "+" (EVar "pos") (ELit (LInt 1)))))))))
+(DFunDef false "openingQuoteAfter" ((PVar "src") (PVar "pos")) (EIf (EBinOp ">=" (EVar "pos") (EApp (EVar "stringLength") (EVar "src"))) (EVar "pos") (EIf (EBinOp "==" (EApp (EApp (EApp (EVar "stringSlice") (EVar "pos")) (EBinOp "+" (EVar "pos") (ELit (LInt 1)))) (EVar "src")) (ELit (LString "\""))) (EVar "pos") (EIf (EBinOp "==" (EApp (EApp (EApp (EVar "stringSlice") (EVar "pos")) (EBinOp "+" (EVar "pos") (ELit (LInt 2)))) (EVar "src")) (ELit (LString "--"))) (EApp (EApp (EVar "openingQuoteAfter") (EVar "src")) (EApp (EApp (EVar "lineEndAfter") (EVar "src")) (EVar "pos"))) (EIf (EBinOp "==" (EApp (EApp (EApp (EVar "stringSlice") (EVar "pos")) (EBinOp "+" (EVar "pos") (ELit (LInt 2)))) (EVar "src")) (ELit (LString "{-"))) (EApp (EApp (EVar "openingQuoteAfter") (EVar "src")) (EApp (EApp (EApp (EVar "blockCommentEnd") (EVar "src")) (EBinOp "+" (EVar "pos") (ELit (LInt 2)))) (ELit (LInt 1)))) (EIf (EVar "otherwise") (EApp (EApp (EVar "openingQuoteAfter") (EVar "src")) (EBinOp "+" (EVar "pos") (ELit (LInt 1)))) (EApp (EVar "__fallthrough__") (ELit LUnit))))))))
 (DTypeSig false "lineEndAfter" (TyFun (TyCon "String") (TyFun (TyCon "Int") (TyCon "Int"))))
-(DFunDef false "lineEndAfter" ((PVar "src") (PVar "pos")) (EIf (EBinOp ">=" (EVar "pos") (EApp (EVar "stringLength") (EVar "src"))) (EVar "pos") (EIf (EBinOp "==" (EApp (EApp (EApp (EVar "stringSlice") (EVar "pos")) (EBinOp "+" (EVar "pos") (ELit (LInt 1)))) (EVar "src")) (ELit (LString "\n"))) (EBinOp "+" (EVar "pos") (ELit (LInt 1))) (EApp (EApp (EVar "lineEndAfter") (EVar "src")) (EBinOp "+" (EVar "pos") (ELit (LInt 1)))))))
+(DFunDef false "lineEndAfter" ((PVar "src") (PVar "pos")) (EIf (EBinOp ">=" (EVar "pos") (EApp (EVar "stringLength") (EVar "src"))) (EVar "pos") (EIf (EBinOp "==" (EApp (EApp (EApp (EVar "stringSlice") (EVar "pos")) (EBinOp "+" (EVar "pos") (ELit (LInt 1)))) (EVar "src")) (ELit (LString "\n"))) (EBinOp "+" (EVar "pos") (ELit (LInt 1))) (EIf (EVar "otherwise") (EApp (EApp (EVar "lineEndAfter") (EVar "src")) (EBinOp "+" (EVar "pos") (ELit (LInt 1)))) (EApp (EVar "__fallthrough__") (ELit LUnit))))))
 (DTypeSig false "blockCommentEnd" (TyFun (TyCon "String") (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyCon "Int")))))
-(DFunDef false "blockCommentEnd" ((PVar "src") (PVar "pos") (PVar "depth")) (EIf (EBinOp "||" (EBinOp ">=" (EVar "pos") (EApp (EVar "stringLength") (EVar "src"))) (EBinOp "==" (EVar "depth") (ELit (LInt 0)))) (EVar "pos") (EIf (EBinOp "==" (EApp (EApp (EApp (EVar "stringSlice") (EVar "pos")) (EBinOp "+" (EVar "pos") (ELit (LInt 2)))) (EVar "src")) (ELit (LString "{-"))) (EApp (EApp (EApp (EVar "blockCommentEnd") (EVar "src")) (EBinOp "+" (EVar "pos") (ELit (LInt 2)))) (EBinOp "+" (EVar "depth") (ELit (LInt 1)))) (EIf (EBinOp "==" (EApp (EApp (EApp (EVar "stringSlice") (EVar "pos")) (EBinOp "+" (EVar "pos") (ELit (LInt 2)))) (EVar "src")) (ELit (LString "-}"))) (EApp (EApp (EApp (EVar "blockCommentEnd") (EVar "src")) (EBinOp "+" (EVar "pos") (ELit (LInt 2)))) (EBinOp "-" (EVar "depth") (ELit (LInt 1)))) (EApp (EApp (EApp (EVar "blockCommentEnd") (EVar "src")) (EBinOp "+" (EVar "pos") (ELit (LInt 1)))) (EVar "depth"))))))
+(DFunDef false "blockCommentEnd" ((PVar "src") (PVar "pos") (PVar "depth")) (EIf (EBinOp "||" (EBinOp ">=" (EVar "pos") (EApp (EVar "stringLength") (EVar "src"))) (EBinOp "==" (EVar "depth") (ELit (LInt 0)))) (EVar "pos") (EIf (EBinOp "==" (EApp (EApp (EApp (EVar "stringSlice") (EVar "pos")) (EBinOp "+" (EVar "pos") (ELit (LInt 2)))) (EVar "src")) (ELit (LString "{-"))) (EApp (EApp (EApp (EVar "blockCommentEnd") (EVar "src")) (EBinOp "+" (EVar "pos") (ELit (LInt 2)))) (EBinOp "+" (EVar "depth") (ELit (LInt 1)))) (EIf (EBinOp "==" (EApp (EApp (EApp (EVar "stringSlice") (EVar "pos")) (EBinOp "+" (EVar "pos") (ELit (LInt 2)))) (EVar "src")) (ELit (LString "-}"))) (EApp (EApp (EApp (EVar "blockCommentEnd") (EVar "src")) (EBinOp "+" (EVar "pos") (ELit (LInt 2)))) (EBinOp "-" (EVar "depth") (ELit (LInt 1)))) (EIf (EVar "otherwise") (EApp (EApp (EApp (EVar "blockCommentEnd") (EVar "src")) (EBinOp "+" (EVar "pos") (ELit (LInt 1)))) (EVar "depth")) (EApp (EVar "__fallthrough__") (ELit LUnit)))))))
 (DTypeSig false "verbatimLitInfo" (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "Int") (TyCon "Int"))) (TyApp (TyCon "List") (TyTuple (TyCon "Bool") (TyCon "String"))))))
 (DFunDef false "verbatimLitInfo" (PWild (PList)) (EListLit))
 (DFunDef false "verbatimLitInfo" ((PVar "src") (PCons (PTuple (PVar "s") (PVar "e")) (PVar "ls"))) (EBlock (DoLet false false (PVar "triple") (EBinOp "||" (EApp (EApp (EVar "isTripleStringAt") (EVar "src")) (EVar "s")) (EApp (EApp (EVar "isRawStringAt") (EVar "src")) (EVar "s")))) (DoExpr (EBinOp "::" (ETuple (EVar "triple") (EIf (EVar "triple") (EApp (EApp (EApp (EVar "stringSlice") (EVar "s")) (EVar "e")) (EVar "src")) (ELit (LString "")))) (EApp (EApp (EVar "verbatimLitInfo") (EVar "src")) (EVar "ls"))))))
@@ -1316,11 +1329,11 @@ restoreVerbatimLiterals src formatted = match mayHaveRestorable src
 (DFunDef false "interpLitBody" ((PVar "src") (PVar "prevEnd") (PCons (PCon "TInterpOpen" PWild) (PVar "ts")) (PCons PWild (PVar "ps"))) (EMatch (EApp (EApp (EApp (EApp (EVar "interpLitBody") (EVar "src")) (EVar "prevEnd")) (EVar "ts")) (EVar "ps")) (arm (PCon "None") () (EVar "None")) (arm (PCon "Some" (PTuple (PVar "nend") (PVar "nested") (PVar "ts2") (PVar "ps2"))) () (EApp (EApp (EMethodRef "map") (ELam ((PTuple (PVar "end") (PVar "inner") (PVar "ts3") (PVar "ps3"))) (ETuple (EVar "end") (EBinOp "::" (ETuple (EApp (EApp (EVar "openingQuoteAfter") (EVar "src")) (EVar "prevEnd")) (EVar "nend")) (EBinOp "++" (EVar "nested") (EVar "inner"))) (EVar "ts3") (EVar "ps3")))) (EApp (EApp (EApp (EApp (EVar "interpLitBody") (EVar "src")) (EVar "nend")) (EVar "ts2")) (EVar "ps2"))))))
 (DFunDef false "interpLitBody" ((PVar "src") PWild (PCons PWild (PVar "ts")) (PCons (PTuple PWild (PVar "e")) (PVar "ps"))) (EApp (EApp (EApp (EApp (EVar "interpLitBody") (EVar "src")) (EVar "e")) (EVar "ts")) (EVar "ps")))
 (DTypeSig false "openingQuoteAfter" (TyFun (TyCon "String") (TyFun (TyCon "Int") (TyCon "Int"))))
-(DFunDef false "openingQuoteAfter" ((PVar "src") (PVar "pos")) (EIf (EBinOp ">=" (EVar "pos") (EApp (EVar "stringLength") (EVar "src"))) (EVar "pos") (EIf (EBinOp "==" (EApp (EApp (EApp (EVar "stringSlice") (EVar "pos")) (EBinOp "+" (EVar "pos") (ELit (LInt 1)))) (EVar "src")) (ELit (LString "\""))) (EVar "pos") (EIf (EBinOp "==" (EApp (EApp (EApp (EVar "stringSlice") (EVar "pos")) (EBinOp "+" (EVar "pos") (ELit (LInt 2)))) (EVar "src")) (ELit (LString "--"))) (EApp (EApp (EVar "openingQuoteAfter") (EVar "src")) (EApp (EApp (EVar "lineEndAfter") (EVar "src")) (EVar "pos"))) (EIf (EBinOp "==" (EApp (EApp (EApp (EVar "stringSlice") (EVar "pos")) (EBinOp "+" (EVar "pos") (ELit (LInt 2)))) (EVar "src")) (ELit (LString "{-"))) (EApp (EApp (EVar "openingQuoteAfter") (EVar "src")) (EApp (EApp (EApp (EVar "blockCommentEnd") (EVar "src")) (EBinOp "+" (EVar "pos") (ELit (LInt 2)))) (ELit (LInt 1)))) (EApp (EApp (EVar "openingQuoteAfter") (EVar "src")) (EBinOp "+" (EVar "pos") (ELit (LInt 1)))))))))
+(DFunDef false "openingQuoteAfter" ((PVar "src") (PVar "pos")) (EIf (EBinOp ">=" (EVar "pos") (EApp (EVar "stringLength") (EVar "src"))) (EVar "pos") (EIf (EBinOp "==" (EApp (EApp (EApp (EVar "stringSlice") (EVar "pos")) (EBinOp "+" (EVar "pos") (ELit (LInt 1)))) (EVar "src")) (ELit (LString "\""))) (EVar "pos") (EIf (EBinOp "==" (EApp (EApp (EApp (EVar "stringSlice") (EVar "pos")) (EBinOp "+" (EVar "pos") (ELit (LInt 2)))) (EVar "src")) (ELit (LString "--"))) (EApp (EApp (EVar "openingQuoteAfter") (EVar "src")) (EApp (EApp (EVar "lineEndAfter") (EVar "src")) (EVar "pos"))) (EIf (EBinOp "==" (EApp (EApp (EApp (EVar "stringSlice") (EVar "pos")) (EBinOp "+" (EVar "pos") (ELit (LInt 2)))) (EVar "src")) (ELit (LString "{-"))) (EApp (EApp (EVar "openingQuoteAfter") (EVar "src")) (EApp (EApp (EApp (EVar "blockCommentEnd") (EVar "src")) (EBinOp "+" (EVar "pos") (ELit (LInt 2)))) (ELit (LInt 1)))) (EIf (EVar "otherwise") (EApp (EApp (EVar "openingQuoteAfter") (EVar "src")) (EBinOp "+" (EVar "pos") (ELit (LInt 1)))) (EApp (EVar "__fallthrough__") (ELit LUnit))))))))
 (DTypeSig false "lineEndAfter" (TyFun (TyCon "String") (TyFun (TyCon "Int") (TyCon "Int"))))
-(DFunDef false "lineEndAfter" ((PVar "src") (PVar "pos")) (EIf (EBinOp ">=" (EVar "pos") (EApp (EVar "stringLength") (EVar "src"))) (EVar "pos") (EIf (EBinOp "==" (EApp (EApp (EApp (EVar "stringSlice") (EVar "pos")) (EBinOp "+" (EVar "pos") (ELit (LInt 1)))) (EVar "src")) (ELit (LString "\n"))) (EBinOp "+" (EVar "pos") (ELit (LInt 1))) (EApp (EApp (EVar "lineEndAfter") (EVar "src")) (EBinOp "+" (EVar "pos") (ELit (LInt 1)))))))
+(DFunDef false "lineEndAfter" ((PVar "src") (PVar "pos")) (EIf (EBinOp ">=" (EVar "pos") (EApp (EVar "stringLength") (EVar "src"))) (EVar "pos") (EIf (EBinOp "==" (EApp (EApp (EApp (EVar "stringSlice") (EVar "pos")) (EBinOp "+" (EVar "pos") (ELit (LInt 1)))) (EVar "src")) (ELit (LString "\n"))) (EBinOp "+" (EVar "pos") (ELit (LInt 1))) (EIf (EVar "otherwise") (EApp (EApp (EVar "lineEndAfter") (EVar "src")) (EBinOp "+" (EVar "pos") (ELit (LInt 1)))) (EApp (EVar "__fallthrough__") (ELit LUnit))))))
 (DTypeSig false "blockCommentEnd" (TyFun (TyCon "String") (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyCon "Int")))))
-(DFunDef false "blockCommentEnd" ((PVar "src") (PVar "pos") (PVar "depth")) (EIf (EBinOp "||" (EBinOp ">=" (EVar "pos") (EApp (EVar "stringLength") (EVar "src"))) (EBinOp "==" (EVar "depth") (ELit (LInt 0)))) (EVar "pos") (EIf (EBinOp "==" (EApp (EApp (EApp (EVar "stringSlice") (EVar "pos")) (EBinOp "+" (EVar "pos") (ELit (LInt 2)))) (EVar "src")) (ELit (LString "{-"))) (EApp (EApp (EApp (EVar "blockCommentEnd") (EVar "src")) (EBinOp "+" (EVar "pos") (ELit (LInt 2)))) (EBinOp "+" (EVar "depth") (ELit (LInt 1)))) (EIf (EBinOp "==" (EApp (EApp (EApp (EVar "stringSlice") (EVar "pos")) (EBinOp "+" (EVar "pos") (ELit (LInt 2)))) (EVar "src")) (ELit (LString "-}"))) (EApp (EApp (EApp (EVar "blockCommentEnd") (EVar "src")) (EBinOp "+" (EVar "pos") (ELit (LInt 2)))) (EBinOp "-" (EVar "depth") (ELit (LInt 1)))) (EApp (EApp (EApp (EVar "blockCommentEnd") (EVar "src")) (EBinOp "+" (EVar "pos") (ELit (LInt 1)))) (EVar "depth"))))))
+(DFunDef false "blockCommentEnd" ((PVar "src") (PVar "pos") (PVar "depth")) (EIf (EBinOp "||" (EBinOp ">=" (EVar "pos") (EApp (EVar "stringLength") (EVar "src"))) (EBinOp "==" (EVar "depth") (ELit (LInt 0)))) (EVar "pos") (EIf (EBinOp "==" (EApp (EApp (EApp (EVar "stringSlice") (EVar "pos")) (EBinOp "+" (EVar "pos") (ELit (LInt 2)))) (EVar "src")) (ELit (LString "{-"))) (EApp (EApp (EApp (EVar "blockCommentEnd") (EVar "src")) (EBinOp "+" (EVar "pos") (ELit (LInt 2)))) (EBinOp "+" (EVar "depth") (ELit (LInt 1)))) (EIf (EBinOp "==" (EApp (EApp (EApp (EVar "stringSlice") (EVar "pos")) (EBinOp "+" (EVar "pos") (ELit (LInt 2)))) (EVar "src")) (ELit (LString "-}"))) (EApp (EApp (EApp (EVar "blockCommentEnd") (EVar "src")) (EBinOp "+" (EVar "pos") (ELit (LInt 2)))) (EBinOp "-" (EVar "depth") (ELit (LInt 1)))) (EIf (EVar "otherwise") (EApp (EApp (EApp (EVar "blockCommentEnd") (EVar "src")) (EBinOp "+" (EVar "pos") (ELit (LInt 1)))) (EVar "depth")) (EApp (EVar "__fallthrough__") (ELit LUnit)))))))
 (DTypeSig false "verbatimLitInfo" (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "Int") (TyCon "Int"))) (TyApp (TyCon "List") (TyTuple (TyCon "Bool") (TyCon "String"))))))
 (DFunDef false "verbatimLitInfo" (PWild (PList)) (EListLit))
 (DFunDef false "verbatimLitInfo" ((PVar "src") (PCons (PTuple (PVar "s") (PVar "e")) (PVar "ls"))) (EBlock (DoLet false false (PVar "triple") (EBinOp "||" (EApp (EApp (EVar "isTripleStringAt") (EVar "src")) (EVar "s")) (EApp (EApp (EVar "isRawStringAt") (EVar "src")) (EVar "s")))) (DoExpr (EBinOp "::" (ETuple (EVar "triple") (EIf (EVar "triple") (EApp (EApp (EApp (EVar "stringSlice") (EVar "s")) (EVar "e")) (EVar "src")) (ELit (LString "")))) (EApp (EApp (EVar "verbatimLitInfo") (EVar "src")) (EVar "ls"))))))

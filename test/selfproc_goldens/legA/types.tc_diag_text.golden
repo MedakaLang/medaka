@@ -2,7 +2,7 @@ abstractFieldMsg : String -> String -> String
 aliasArityMsg : String -> Int -> Int -> String
 aliasesHeadRowMsg : String -> Ty -> String
 allDigits : String -> Bool
-allDigitsFrom : String -> Int -> Bool
+allDigitsFrom : Array Char -> Int -> Bool
 ambigReexportHelp : String -> String -> List String -> String
 ambigReexportMsg : String -> String -> List String -> String
 ambiguousFieldDeclsMsg : String -> List String -> List (String, RecordInfo) -> String

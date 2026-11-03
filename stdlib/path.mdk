@@ -297,31 +297,6 @@ skipSegment dir ps (x :: xs) =
   (not (startsWith "." x) || isEmpty xs && not dir)
     && matchSegments dir ("**" :: ps) xs
 
-{- | Whether some path strictly below the directory `dir` can match `pattern`.
-
-   `**` is not allowed to pass through a dot directory, so a walk can leave
-   such a directory unentered when this is `False` for it.
-
-   > globReaches "**/x" ".git"
-   False
-   > globReaches ".git/**" ".git"
-   True
-   > globReaches "*/config" ".git"
-   True -}
-export
-globReaches : String -> String -> Bool
-globReaches pattern dir = reachSegments (segments pattern) (segments dir)
-
-reachSegments : List String -> List String -> Bool
-reachSegments [] [] = False
-reachSegments (_ :: _) [] = True
-reachSegments [] (_ :: _) = False
-reachSegments ("**" :: ps) (d :: ds) =
-  reachSegments ps (d :: ds)
-    || not (startsWith "." d) && reachSegments ("**" :: ps) ds
-reachSegments (p :: ps) (d :: ds) =
-  matchChars (toList (toChars p)) (toList (toChars d)) && reachSegments ps ds
-
 -- Matches one segment by tracking every pattern suffix the text read so far
 -- can leave unmatched, so the cost is the text length times the pattern
 -- length however many `*` the pattern holds. A run of `*` counts as one.

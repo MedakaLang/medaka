@@ -9,9 +9,11 @@ import string.{
   replaceOnce, indexOf, join, lastIndexOf, lines, padLeft, padRight, replace,
   replaceAll, reverse, nextChar, sliceBetween, startCursor, splitAt, startsWith,
   stripPrefix, stripSuffix, take, toInt, toLower, toUpper, toFixed, trim,
-  trimLeft, trimRight, unlines, unwords, utf8ByteLength, words
+  trimAscii, trimLeft, trimRight, unlines, unwords, utf8ByteLength, words
 }
-import test.{expectEach, expectEqual, expectFalse, expectTrue}
+import test.{
+  expectAll, expectEach, expectEqual, expectFalse, expectNotEqual, expectTrue
+}
 
 -- # Fixed cases
 
@@ -300,6 +302,35 @@ test "trim treats tab, newline, carriage return and vertical tab as space" =
 
 test "trim removes a no-break space" = expectEqual "x" (trim " x")
 
+-- `c`, then `x`, then `c`: a code point at both ends with a letter inside.
+edged : Int -> Option String
+edged k = map (c => fromChars [c, 'x', c]) (charFromCode k)
+
+test "trimAscii removes code points 9 to 13 and 32 from both ends" =
+  expectEach
+    (map
+      (k => (intToString k, expectEqual (Some "x") (map trimAscii (edged k))))
+      [9, 10, 11, 12, 13, 32])
+
+test "trimAscii keeps the separators 28 to 31 and the non-ASCII spaces" =
+  expectEach
+    (map
+      (k => (
+        intToString k,
+        expectAll [
+          expectNotEqual None (edged k),
+          expectEqual (edged k) (map trimAscii (edged k)),
+        ],
+      ))
+      [28, 29, 30, 31, 133, 160, 12288])
+
+test "trimAscii keeps an interior space and gives empty for blank input" = expectEach
+  [
+    ("interior", expectEqual "a b" (trimAscii "a b")),
+    ("empty", expectEqual "" (trimAscii "")),
+    ("all space", expectEqual "" (trimAscii " \t\r\n")),
+  ]
+
 test "words splits on a no-break space and an ideographic space" =
   expectEqual ["a", "b", "c"] (words "a b　c")
 
@@ -444,6 +475,8 @@ refCountOccurrences needle hay
 refCountGo : String -> String -> Int -> Int -> Int
 refCountGo needle hay i acc
   | i + stringLength needle > stringLength hay = acc
+  -- Bound: reference oracle over short test strings, kept as the codepoint definition.
+  -- lint-disable-next-line rule-reslice-in-loop
   | stringSlice i (i + stringLength needle) hay == needle =
     refCountGo needle hay (i + stringLength needle) (acc + 1)
   | otherwise = refCountGo needle hay (i + 1) acc
@@ -458,6 +491,8 @@ refLastIndexOf needle hay
 refLastGo : String -> String -> Int -> Option Int -> Option Int
 refLastGo needle hay i acc
   | i + stringLength needle > stringLength hay = acc
+  -- Bound: reference oracle over short test strings, kept as the codepoint definition.
+  -- lint-disable-next-line rule-reslice-in-loop
   | stringSlice i (i + stringLength needle) hay == needle =
     refLastGo needle hay (i + 1) (Some i)
   | otherwise = refLastGo needle hay (i + 1) acc

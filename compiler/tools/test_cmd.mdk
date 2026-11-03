@@ -109,6 +109,7 @@ import eval.eval.{
   modulePathMap,
   testCapableExterns,
   seedRunRng,
+  abortNote,
   lookupBinding,
   force,
   ppValue,
@@ -257,7 +258,6 @@ import support.util.{
   joinWith,
   splitNl,
   startsWith,
-  stringTrim,
   reverseL,
   anyList,
 }
@@ -268,7 +268,7 @@ import args.{
 }
 import json.{Json(..), jObject, jArray, stringify}
 import tools.lint.{splitLintNames}
-import string.{toInt, replaceAll}
+import string.{toInt, replaceAll, trimAscii}
 import list.{take}
 import test_process.{testJobs}
 import support.timer.{perfEnabled, now, emitPhase}
@@ -2674,6 +2674,9 @@ runTestReportPinned engines runtimeSrc coreSrc target tsrc userDecls stdlibDir c
   let coreDecls = desugaredPrelude coreSrc
   let roots = entrySearchRoots (dirOf target) ++ [stdlibDir]
   let exempt = typecheckExempt target userDecls tsrc
+  -- A panic during a graded run names the target, as `driveSingle`/`driveMulti`
+  -- do for the printing arm.
+  currentEvalFile := target
   if hasUseDecls userDecls then
     reportMulti
       engines
@@ -4564,8 +4567,10 @@ testHelpText = stringConcat [
   "when set, else OS entropy. A run whose tests failed prints `seed: N (rerun with\n",
   "MEDAKA_SEED=N)` after the summary; a failing --json run adds a top-level\n",
   "`seed` member instead and keeps stderr empty. An uncaught panic under the\n",
-  "eval engine aborts the run with no summary and no seed; set MEDAKA_SEED\n",
-  "to make such a run repeatable.\n", "\n",
+  "eval engine ends the run with no summary: a single-file run prints the seed\n",
+  "line on stderr after the runtime error, a directory or project run prints it\n",
+  "once on stdout, and under --json the run --json error envelope goes to\n",
+  "stderr with a top-level `seed` (nothing on stdout).\n", "\n",
   "--native and --engines are mutually exclusive. With neither, the default\n",
   "is the native backend alone.\n", "\n",
   "With no target, tests the project containing the current directory: the\n",
@@ -4658,7 +4663,7 @@ parseTestEngines a = match (flagValue "--engines" a, flag "--native" a)
 -- known set, not a silent drop.
 parseEngineList : String -> Result String (List Engine)
 parseEngineList spec =
-  let names = filterList (/= "") (map stringTrim (splitLintNames spec))
+  let names = filterList (/= "") (map trimAscii (splitLintNames spec))
   match names
     [] => Err "--engines requires at least one of: eval, native"
     _ => parseEngineNames names
@@ -4702,6 +4707,7 @@ entropySeed bytes = fold (acc b => acc * 256 + b) 0 (take 7 (toList bytes))
 adoptTestSeed : Int -> Unit
 adoptTestSeed n =
   testSeedRef := Some n
+  abortNote := Some (testSeedLine n)
   seedRunRng n
 
 testSeedLine : Int -> String
@@ -5266,9 +5272,10 @@ testFilesReport (f :: rest) (r :: results) (failedSoFar, seenSoFar) =
       if code == 0 then
         (True, seenLine)
       else
-        ePutStr err
+        let (shownErr, seenNote) = dropSeedLine err
+        ePutStr shownErr
         ePutStrLn
           "medaka test: \{f}: test runner died (child exited \{intToString code})"
-        (False, seenLine)
+        (False, seenLine || seenNote)
   testFilesReport rest results (failedSoFar || not ok, seenSoFar || seen)
 testFilesReport _ _ acc = acc

@@ -967,6 +967,7 @@ NEWLINE
 IDENT "stringSlice"
 LPAREN
 IDENT "firstNonSpaceStr"
+IDENT "isSpace"
 IDENT "s"
 INT 0
 IDENT "n"
@@ -987,10 +988,12 @@ NEWLINE
 IDENT "trimRight"
 IDENT "s"
 EQUAL
+INDENT
 IDENT "stringSlice"
 INT 0
 LPAREN
 IDENT "lastNonSpaceStr"
+IDENT "isSpace"
 IDENT "s"
 LPAREN
 IDENT "stringLength"
@@ -1003,6 +1006,8 @@ PLUS
 INT 1
 RPAREN
 IDENT "s"
+NEWLINE
+DEDENT
 NEWLINE
 EXPORT
 NEWLINE
@@ -1026,6 +1031,7 @@ LET
 IDENT "lo"
 EQUAL
 IDENT "firstNonSpaceStr"
+IDENT "isSpace"
 IDENT "s"
 INT 0
 IDENT "n"
@@ -1034,6 +1040,53 @@ IDENT "stringSlice"
 IDENT "lo"
 LPAREN
 IDENT "lastNonSpaceStr"
+IDENT "isSpace"
+IDENT "s"
+LPAREN
+IDENT "n"
+MINUS
+INT 1
+RPAREN
+IDENT "lo"
+PLUS
+INT 1
+RPAREN
+IDENT "s"
+NEWLINE
+DEDENT
+NEWLINE
+EXPORT
+NEWLINE
+IDENT "trimAscii"
+COLON
+UPPER "String"
+ARROW
+UPPER "String"
+NEWLINE
+IDENT "trimAscii"
+IDENT "s"
+EQUAL
+INDENT
+LET
+IDENT "n"
+EQUAL
+IDENT "stringLength"
+IDENT "s"
+NEWLINE
+LET
+IDENT "lo"
+EQUAL
+IDENT "firstNonSpaceStr"
+IDENT "charIsSpace"
+IDENT "s"
+INT 0
+IDENT "n"
+NEWLINE
+IDENT "stringSlice"
+IDENT "lo"
+LPAREN
+IDENT "lastNonSpaceStr"
+IDENT "charIsSpace"
 IDENT "s"
 LPAREN
 IDENT "n"
@@ -1078,6 +1131,12 @@ RPAREN
 NEWLINE
 IDENT "firstNonSpaceStr"
 COLON
+LPAREN
+UPPER "Char"
+ARROW
+UPPER "Bool"
+RPAREN
+ARROW
 UPPER "String"
 ARROW
 UPPER "Int"
@@ -1087,6 +1146,7 @@ ARROW
 UPPER "Int"
 NEWLINE
 IDENT "firstNonSpaceStr"
+IDENT "blank"
 IDENT "s"
 IDENT "i"
 IDENT "n"
@@ -1099,7 +1159,7 @@ EQUAL
 IDENT "n"
 NEWLINE
 PIPE
-IDENT "isSpace"
+IDENT "blank"
 LPAREN
 IDENT "charAtStr"
 IDENT "s"
@@ -1107,6 +1167,7 @@ IDENT "i"
 RPAREN
 EQUAL
 IDENT "firstNonSpaceStr"
+IDENT "blank"
 IDENT "s"
 LPAREN
 IDENT "i"
@@ -1124,6 +1185,12 @@ DEDENT
 NEWLINE
 IDENT "lastNonSpaceStr"
 COLON
+LPAREN
+UPPER "Char"
+ARROW
+UPPER "Bool"
+RPAREN
+ARROW
 UPPER "String"
 ARROW
 UPPER "Int"
@@ -1133,6 +1200,7 @@ ARROW
 UPPER "Int"
 NEWLINE
 IDENT "lastNonSpaceStr"
+IDENT "blank"
 IDENT "s"
 IDENT "i"
 IDENT "lo"
@@ -1147,7 +1215,7 @@ MINUS
 INT 1
 NEWLINE
 PIPE
-IDENT "isSpace"
+IDENT "blank"
 LPAREN
 IDENT "charAtStr"
 IDENT "s"
@@ -1155,6 +1223,7 @@ IDENT "i"
 RPAREN
 EQUAL
 IDENT "lastNonSpaceStr"
+IDENT "blank"
 IDENT "s"
 LPAREN
 IDENT "i"
@@ -3263,17 +3332,25 @@ EQUAL
 IDENT "take"
 LPAREN
 IDENT "sharedLength"
+LPAREN
+IDENT "toChars"
 IDENT "a"
+RPAREN
+LPAREN
+IDENT "toChars"
 IDENT "b"
+RPAREN
 INT 0
 RPAREN
 IDENT "a"
 NEWLINE
 IDENT "sharedLength"
 COLON
-UPPER "String"
+UPPER "Array"
+UPPER "Char"
 ARROW
-UPPER "String"
+UPPER "Array"
+UPPER "Char"
 ARROW
 UPPER "Int"
 ARROW
@@ -3287,23 +3364,22 @@ INDENT
 PIPE
 IDENT "i"
 LT
-IDENT "length"
+IDENT "arrayLength"
 IDENT "a"
 AND
 IDENT "i"
 LT
-IDENT "length"
+IDENT "arrayLength"
 IDENT "b"
 AND
-IDENT "charAtStr"
+IDENT "arrayGetUnsafe"
+IDENT "i"
 IDENT "a"
-IDENT "i"
 EQ_EQ
-IDENT "charAtStr"
-IDENT "b"
+IDENT "arrayGetUnsafe"
 IDENT "i"
+IDENT "b"
 EQUAL
-INDENT
 IDENT "sharedLength"
 IDENT "a"
 IDENT "b"
@@ -3312,8 +3388,6 @@ IDENT "i"
 PLUS
 INT 1
 RPAREN
-NEWLINE
-DEDENT
 NEWLINE
 PIPE
 IDENT "otherwise"

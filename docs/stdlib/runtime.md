@@ -171,6 +171,17 @@ appendFile : (path : String) -> String -> <FileWrite path> Result String Unit
 
 Appends a string to a file, creating it when it does not exist.
 
+### `appendFileExceptStdout`
+
+```
+appendFileExceptStdout : (path : String) -> String -> <FileWrite path> Result String Unit
+```
+
+Appends to a regular file, creating it if absent, while excluding stdout.
+The opened file is checked against stdout by device and inode before any
+bytes are written through that same descriptor. Other file kinds, stdout
+aliases, and failures to inspect either descriptor return `Err`.
+
 ### `fileExists`
 
 ```

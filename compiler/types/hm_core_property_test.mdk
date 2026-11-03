@@ -136,6 +136,8 @@ parseAtom (token :: rest) =
 parseGroup : List Ty -> List String -> (Ty, List String)
 parseGroup items ("," :: rest) =
   let (next, after) = parseArrow rest
+  -- Bound: one step per item of a tuple type in a generated type string.
+  -- lint-disable-next-line rule-accumulator-append
   parseGroup (items ++ [next]) after
 parseGroup [single] (")" :: rest) = (single, rest)
 parseGroup items (")" :: rest) = (TT items, rest)

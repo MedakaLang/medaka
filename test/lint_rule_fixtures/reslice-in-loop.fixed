@@ -1,0 +1,115 @@
+-- Fixture for rule-reslice-in-loop.
+
+import array as A
+import array.{drop}
+import bytes as B
+import list as L
+import string.{toChars}
+import test.{expectEqual}
+
+-- `string` does not export its `charAtStr`; the rule matches the name.
+charAtStr : String -> Int -> Char
+charAtStr s i = optionOr ' ' (A.get i (toChars s))
+
+-- a String sliced at an advancing index while it is passed on unchanged
+words : String -> Int -> List String
+words s i
+  | i >= stringLength s = []
+  -- expect-next-line rule-reslice-in-loop unfixed
+  | otherwise = stringSlice i (i + 1) s :: words s (i + 1)
+
+-- the string itself changes on each step
+shrinking : String -> List String
+shrinking s
+  | stringLength s == 0 = []
+  | otherwise = stringSlice 0 1 s :: shrinking (stringSlice 1 (stringLength s) s)
+
+-- a string that advances through a tail parameter is not re-sliced from its start
+restLoop : String -> String -> List String
+restLoop whole rest
+  | stringLength rest == 0 = []
+  | otherwise = stringSlice 0 1 rest :: restLoop whole (stringSlice 1 (stringLength rest) rest)
+
+-- one char per step
+chars : String -> Int -> List Char
+chars s i
+  | i >= stringLength s = []
+  -- expect-next-line rule-reslice-in-loop unfixed
+  | otherwise = charAtStr s i :: chars s (i + 1)
+
+-- a where-local loop
+viaWhere : String -> List Char
+viaWhere str = go str 0
+  where
+    go s i
+      | i >= stringLength s = []
+      -- expect-next-line rule-reslice-in-loop unfixed
+      | otherwise = charAtStr s i :: go s (i + 1)
+
+-- a bound that mentions no advancing name is a fixed slice
+fixedWidth : String -> Int -> List String
+fixedWidth s i
+  | i >= 3 = []
+  | otherwise = stringSlice 0 2 s :: fixedWidth s (i + 1)
+
+-- mutual recursion is a call to a different function
+pingChars : String -> Int -> List Char
+pingChars s i
+  | i >= stringLength s = []
+  | otherwise = charAtStr s i :: pongChars s (i + 1)
+
+pongChars : String -> Int -> List Char
+pongChars s i = pingChars s i
+
+-- an Array dropped at an advancing offset
+sums : Array Int -> Int -> Int
+sums arr n
+  | n >= length arr = 0
+  -- expect-next-line rule-reslice-in-loop unfixed
+  | otherwise = sum (drop n arr) + sums arr (n + 1)
+
+-- a Bytes sliced at an advancing offset
+byteSums : B.Bytes -> Int -> Int
+byteSums b n
+  | n >= B.length b = 0
+  -- expect-next-line rule-reslice-in-loop unfixed
+  | otherwise = B.length (slice b n (n + 2)) + byteSums b (n + 1)
+
+-- an Array sliced at an advancing offset
+arraySums : Array Int -> Int -> Int
+arraySums arr n
+  | n >= length arr = 0
+  -- expect-next-line rule-reslice-in-loop unfixed
+  | otherwise = sum (slice arr n (n + 2)) + arraySums arr (n + 1)
+
+-- a slice whose bounds mention no advancing name is a fixed slice
+fixedBytes : B.Bytes -> Int -> Int
+fixedBytes b n
+  | n >= B.length b = 0
+  | otherwise = B.length (slice b 0 2) + fixedBytes b (n + 1)
+
+-- the slice sugar on a String
+sugar : String -> Int -> List String
+sugar s i
+  | i >= stringLength s = []
+  -- expect-next-line rule-reslice-in-loop unfixed
+  | otherwise = s.[i..(i + 1)] :: sugar s (i + 1)
+
+-- a List parameter: `drop` on a list is the loop itself
+listLoop : List Int -> Int -> Int
+listLoop xs n
+  | n >= length xs = 0
+  | otherwise = sum (L.drop n xs) + listLoop xs (n + 1)
+
+-- a test body runs over fixed data
+test "reslice in a test" =
+  let go s i = if i >= 3 then [] else charAtStr s i :: go s (i + 1)
+  expectEqual ['a', 'b', 'c'] (go "abc" 0)
+
+-- a directive silences the finding
+silenced : String -> Int -> List Char
+silenced s i
+  | i >= stringLength s = []
+  -- Bound: the input is a fixed header of at most four characters.
+  -- lint-disable-next-line rule-reslice-in-loop
+  | otherwise = charAtStr s i :: silenced s (i + 1)

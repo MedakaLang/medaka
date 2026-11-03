@@ -309,17 +309,16 @@ export
 displayCtorName : String -> String
 displayCtorName n
   | upperInitialName n = n
-  | otherwise = stripModPrefix n 0 (stringLength n)
+  | otherwise = stripModPrefix n
 
 upperInitialName : String -> Bool
 upperInitialName n = stringSlice 0 1 n >= "A" && stringSlice 0 1 n <= "Z"
 
 -- drop through the FIRST `__`; unchanged when the name has none.
-stripModPrefix : String -> Int -> Int -> String
-stripModPrefix n i len
-  | i + 2 > len = n
-  | stringSlice i (i + 2) n == "__" = stringSlice (i + 2) len n
-  | otherwise = stripModPrefix n (i + 1) len
+stripModPrefix : String -> String
+stripModPrefix n = match stringIndexOf "__" n
+  Some i => stringSlice (i + 2) (stringLength n) n
+  None => n
 
 joinSp : List String -> String
 joinSp xs = joinWith " " xs
@@ -3119,8 +3118,8 @@ evalDepthLimit = 25000
 -- Stage 4 (RUNTIME-DIAGNOSTIC-CHANNEL-DESIGN.md Fork C): when set, `runtimePanic`
 -- emits the `Diag`-shaped JSON envelope (same shape as `medaka check --json`)
 -- instead of located text. Set once by the `run --json` CLI arm; read only at
--- the panic chokepoint, so it is inert (default False) on every other path —
--- including every valid-program eval gate.
+-- the panic chokepoint. Set by the `run --json` and `test --json` CLI arms;
+-- default False on every other path, including every valid-program eval gate.
 export
 runJsonMode : Ref Bool
 runJsonMode = Ref False
@@ -3144,6 +3143,13 @@ runJsonMode = Ref False
 export
 pendingRunDiags : Ref (List (String, String, List Diag))
 pendingRunDiags = Ref []
+
+-- An opaque extra line `runtimePanic` appends to its non-JSON abort text (the
+-- `medaka test` driver sets the rerun-seed line here). Read only at the panic
+-- chokepoint and set only by that driver, so `run` and `repl` never see one.
+export
+abortNote : Ref (Option String)
+abortNote = Ref None
 
 -- Update currentEvalLoc from an ELoc span, but IGNORE the placeholder span the
 -- non-located `parse` produces (every token collapses to the zero-width
@@ -3208,8 +3214,11 @@ runtimePanic code msg = match !currentEvalLoc
       panic
         "\{fmtSentinel}\{cjAllToJsonWith (runEnvelopeFields ()) (!pendingRunDiags ++ [(ff, "", [diag])])}"
     else
-      panic
-        "\{fmtSentinel}\{ff}:\{intToString sl}:\{intToString sc}: runtime error [\{code}]: \{msg}"
+      let line =
+        "\{ff}:\{intToString sl}:\{intToString sc}: runtime error [\{code}]: \{msg}"
+      match !abortNote
+        Some note => panic "\{fmtSentinel}\{line}\n\{note}"
+        None => panic "\{fmtSentinel}\{line}"
 
 -- 0x01 marker (see runtimePanic / mdk_panic): a preformatted runtime diagnostic
 -- the abort primitive must print verbatim, never re-banner.
@@ -3436,6 +3445,10 @@ pFlushStdout _ = panic "flushStdout: expected Unit"
 export
 externBindings : Unit -> List (String, Value e)
 externBindings _ = [
+  (
+    "appendFileExceptStdout",
+    prim3 (_ _ _ => VCon "Err" [VString "file I/O unavailable"]),
+  ),
   ("$withFileReadBound", scopedFileBound False),
   ("$withFileWriteBound", scopedFileBound True),
   ("randomInt", prim2M (pRandomInt rngDraw)),
@@ -4004,16 +4017,11 @@ pStringJoin (VString sep) (VList vs) =
 pStringJoin _ _ = panic "stringJoin: bad operands"
 
 evalLastIndexOf : String -> String -> Option Int
--- Host-level lastIndexOf: the last hit, which no stdlib function returns.
+-- The evaluator's `stringLastIndexOf` primitive: the LAST hit (not indexOf's first), and the
+-- empty needle matches at the end of the haystack.
 -- lint-disable-next-line rule-stdlib-reimpl
 evalLastIndexOf n h =
-  if n == "" then Some (stringLength h) else evalLastIndexOfGo n h 0 None
-
-evalLastIndexOfGo : String -> String -> Int -> Option Int -> Option Int
-evalLastIndexOfGo n h from acc =
-  match stringIndexOf n (stringSlice from (stringLength h) h)
-    None => acc
-    Some i => evalLastIndexOfGo n h (from + i + 1) (Some (from + i))
+  if n == "" then Some (stringLength h) else stringLastIndexOf n h
 
 pStringSlice : Value e -> Value e -> Value e -> <e> Value e
 pStringSlice (VInt lo) (VInt hi) (VString s) = VString (stringSlice lo hi s)
@@ -5219,6 +5227,12 @@ pAppendFile : Value e -> Value e -> <FileWrite | e> Value e
 pAppendFile (VString path) (VString s) = unitResultToValue (appendFile path s)
 pAppendFile _ _ = panic "appendFile: expected String String"
 
+pAppendFileExceptStdout : Value e -> Value e -> <FileWrite | e> Value e
+pAppendFileExceptStdout (VString path) (VString s) =
+  unitResultToValue (appendFileExceptStdout path s)
+pAppendFileExceptStdout _ _ =
+  panic "appendFileExceptStdout: expected String String"
+
 pMakeDir : Value e -> <FileWrite | e> Value e
 pMakeDir (VString path) = unitResultToValue (makeDir path)
 pMakeDir _ = panic "makeDir: not a String"
@@ -5410,6 +5424,7 @@ ioHostExterns _ = [
   ("writeFileBytes", granted2 pWriteFileBytes),
   ("writeFileMode", granted3 pWriteFileMode),
   ("appendFile", granted2 pAppendFile),
+  ("appendFileExceptStdout", granted2 pAppendFileExceptStdout),
   ("makeDir", granted1 True Entry pMakeDir),
   ("removeFile", granted1 True Entry pRemoveFile),
   ("removeDir", granted1 True Entry pRemoveDir),

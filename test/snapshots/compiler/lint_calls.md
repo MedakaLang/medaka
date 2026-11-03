@@ -1,5 +1,5 @@
 # META
-source_lines=326
+source_lines=327
 stages=DESUGAR,MARK
 # SOURCE
 -- compiler/tools/lint_calls.mdk — the shared reader of a discarded call: given a
@@ -116,6 +116,7 @@ headName (TyApp f _) = headName f
 headName (TyTuple []) = "Unit"
 headName _ = ""
 
+export
 lastSegment : String -> String
 lastSegment n = optionOr n (last (split "." n))
 
@@ -359,7 +360,7 @@ resultAfter n t
 (DFunDef false "headName" ((PCon "TyApp" (PVar "f") PWild)) (EApp (EVar "headName") (EVar "f")))
 (DFunDef false "headName" ((PCon "TyTuple" (PList))) (ELit (LString "Unit")))
 (DFunDef false "headName" (PWild) (ELit (LString "")))
-(DTypeSig false "lastSegment" (TyFun (TyCon "String") (TyCon "String")))
+(DTypeSig true "lastSegment" (TyFun (TyCon "String") (TyCon "String")))
 (DFunDef false "lastSegment" ((PVar "n")) (EApp (EApp (EVar "optionOr") (EVar "n")) (EApp (EVar "last") (EApp (EApp (EVar "split") (ELit (LString "."))) (EVar "n")))))
 (DTypeSig true "blockOf" (TyFun (TyCon "Expr") (TyApp (TyCon "Option") (TyTuple (TyCon "BlockKind") (TyApp (TyCon "List") (TyCon "DoStmt"))))))
 (DFunDef false "blockOf" ((PVar "e")) (EMatch (EApp (EVar "unwrapLoc") (EVar "e")) (arm (PCon "EBlock" (PVar "stmts")) () (EApp (EVar "Some") (ETuple (EVar "PlainBlock") (EVar "stmts")))) (arm (PCon "EDo" PWild (PVar "stmts")) () (EApp (EVar "Some") (ETuple (EVar "DoBlock") (EVar "stmts")))) (arm PWild () (EVar "None"))))
@@ -452,7 +453,7 @@ resultAfter n t
 (DFunDef false "headName" ((PCon "TyApp" (PVar "f") PWild)) (EApp (EVar "headName") (EVar "f")))
 (DFunDef false "headName" ((PCon "TyTuple" (PList))) (ELit (LString "Unit")))
 (DFunDef false "headName" (PWild) (ELit (LString "")))
-(DTypeSig false "lastSegment" (TyFun (TyCon "String") (TyCon "String")))
+(DTypeSig true "lastSegment" (TyFun (TyCon "String") (TyCon "String")))
 (DFunDef false "lastSegment" ((PVar "n")) (EApp (EApp (EVar "optionOr") (EVar "n")) (EApp (EVar "last") (EApp (EApp (EVar "split") (ELit (LString "."))) (EVar "n")))))
 (DTypeSig true "blockOf" (TyFun (TyCon "Expr") (TyApp (TyCon "Option") (TyTuple (TyCon "BlockKind") (TyApp (TyCon "List") (TyCon "DoStmt"))))))
 (DFunDef false "blockOf" ((PVar "e")) (EMatch (EApp (EVar "unwrapLoc") (EVar "e")) (arm (PCon "EBlock" (PVar "stmts")) () (EApp (EVar "Some") (ETuple (EVar "PlainBlock") (EVar "stmts")))) (arm (PCon "EDo" PWild (PVar "stmts")) () (EApp (EVar "Some") (ETuple (EVar "DoBlock") (EVar "stmts")))) (arm PWild () (EVar "None"))))

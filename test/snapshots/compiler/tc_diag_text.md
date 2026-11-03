@@ -1409,14 +1409,14 @@ locGoalKey (Some (Loc file sl sc el ec)) =
   "\{file}:\{intToString sl}:\{intToString sc}:\{intToString el}:\{intToString ec}"
 
 allDigits : String -> Bool
-allDigits n = stringLength n > 0 && allDigitsFrom n 0
+allDigits n = stringLength n > 0 && allDigitsFrom (stringToChars n) 0
 
-allDigitsFrom : String -> Int -> Bool
-allDigitsFrom n i
-  | i >= stringLength n = True
+allDigitsFrom : Array Char -> Int -> Bool
+allDigitsFrom cs i
+  | i >= arrayLength cs = True
   | otherwise =
-    let c = stringSlice i (i + 1) n
-    c >= "0" && c <= "9" && allDigitsFrom n (i + 1)
+    let c = arrayGetUnsafe i cs
+    c >= '0' && c <= '9' && allDigitsFrom cs (i + 1)
 
 export
 backticked : String -> String
@@ -1972,9 +1972,9 @@ dropAmbiguity = filterList (d => tcCode d /= TAmbiguousInstance)
 (DFunDef false "locGoalKey" ((PCon "None")) (ELit (LString "")))
 (DFunDef false "locGoalKey" ((PCon "Some" (PCon "Loc" (PVar "file") (PVar "sl") (PVar "sc") (PVar "el") (PVar "ec")))) (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "")) (EApp (EVar "display") (EVar "file"))) (ELit (LString ":"))) (EApp (EVar "display") (EApp (EVar "intToString") (EVar "sl")))) (ELit (LString ":"))) (EApp (EVar "display") (EApp (EVar "intToString") (EVar "sc")))) (ELit (LString ":"))) (EApp (EVar "display") (EApp (EVar "intToString") (EVar "el")))) (ELit (LString ":"))) (EApp (EVar "display") (EApp (EVar "intToString") (EVar "ec")))) (ELit (LString ""))))
 (DTypeSig false "allDigits" (TyFun (TyCon "String") (TyCon "Bool")))
-(DFunDef false "allDigits" ((PVar "n")) (EBinOp "&&" (EBinOp ">" (EApp (EVar "stringLength") (EVar "n")) (ELit (LInt 0))) (EApp (EApp (EVar "allDigitsFrom") (EVar "n")) (ELit (LInt 0)))))
-(DTypeSig false "allDigitsFrom" (TyFun (TyCon "String") (TyFun (TyCon "Int") (TyCon "Bool"))))
-(DFunDef false "allDigitsFrom" ((PVar "n") (PVar "i")) (EIf (EBinOp ">=" (EVar "i") (EApp (EVar "stringLength") (EVar "n"))) (EVar "True") (EIf (EVar "otherwise") (EBlock (DoLet false false (PVar "c") (EApp (EApp (EApp (EVar "stringSlice") (EVar "i")) (EBinOp "+" (EVar "i") (ELit (LInt 1)))) (EVar "n"))) (DoExpr (EBinOp "&&" (EBinOp "&&" (EBinOp ">=" (EVar "c") (ELit (LString "0"))) (EBinOp "<=" (EVar "c") (ELit (LString "9")))) (EApp (EApp (EVar "allDigitsFrom") (EVar "n")) (EBinOp "+" (EVar "i") (ELit (LInt 1))))))) (EApp (EVar "__fallthrough__") (ELit LUnit)))))
+(DFunDef false "allDigits" ((PVar "n")) (EBinOp "&&" (EBinOp ">" (EApp (EVar "stringLength") (EVar "n")) (ELit (LInt 0))) (EApp (EApp (EVar "allDigitsFrom") (EApp (EVar "stringToChars") (EVar "n"))) (ELit (LInt 0)))))
+(DTypeSig false "allDigitsFrom" (TyFun (TyApp (TyCon "Array") (TyCon "Char")) (TyFun (TyCon "Int") (TyCon "Bool"))))
+(DFunDef false "allDigitsFrom" ((PVar "cs") (PVar "i")) (EIf (EBinOp ">=" (EVar "i") (EApp (EVar "arrayLength") (EVar "cs"))) (EVar "True") (EIf (EVar "otherwise") (EBlock (DoLet false false (PVar "c") (EApp (EApp (EVar "arrayGetUnsafe") (EVar "i")) (EVar "cs"))) (DoExpr (EBinOp "&&" (EBinOp "&&" (EBinOp ">=" (EVar "c") (ELit (LChar "0"))) (EBinOp "<=" (EVar "c") (ELit (LChar "9")))) (EApp (EApp (EVar "allDigitsFrom") (EVar "cs")) (EBinOp "+" (EVar "i") (ELit (LInt 1))))))) (EApp (EVar "__fallthrough__") (ELit LUnit)))))
 (DTypeSig true "backticked" (TyFun (TyCon "String") (TyCon "String")))
 (DFunDef false "backticked" ((PVar "s")) (EBinOp "++" (EBinOp "++" (ELit (LString "`")) (EApp (EVar "display") (EVar "s"))) (ELit (LString "`"))))
 (DTypeSig true "appSpineName" (TyFun (TyCon "Expr") (TyApp (TyCon "Option") (TyCon "String"))))
@@ -2447,9 +2447,9 @@ dropAmbiguity = filterList (d => tcCode d /= TAmbiguousInstance)
 (DFunDef false "locGoalKey" ((PCon "None")) (ELit (LString "")))
 (DFunDef false "locGoalKey" ((PCon "Some" (PCon "Loc" (PVar "file") (PVar "sl") (PVar "sc") (PVar "el") (PVar "ec")))) (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "")) (EApp (EMethodRef "display") (EVar "file"))) (ELit (LString ":"))) (EApp (EMethodRef "display") (EApp (EVar "intToString") (EVar "sl")))) (ELit (LString ":"))) (EApp (EMethodRef "display") (EApp (EVar "intToString") (EVar "sc")))) (ELit (LString ":"))) (EApp (EMethodRef "display") (EApp (EVar "intToString") (EVar "el")))) (ELit (LString ":"))) (EApp (EMethodRef "display") (EApp (EVar "intToString") (EVar "ec")))) (ELit (LString ""))))
 (DTypeSig false "allDigits" (TyFun (TyCon "String") (TyCon "Bool")))
-(DFunDef false "allDigits" ((PVar "n")) (EBinOp "&&" (EBinOp ">" (EApp (EVar "stringLength") (EVar "n")) (ELit (LInt 0))) (EApp (EApp (EVar "allDigitsFrom") (EVar "n")) (ELit (LInt 0)))))
-(DTypeSig false "allDigitsFrom" (TyFun (TyCon "String") (TyFun (TyCon "Int") (TyCon "Bool"))))
-(DFunDef false "allDigitsFrom" ((PVar "n") (PVar "i")) (EIf (EBinOp ">=" (EVar "i") (EApp (EVar "stringLength") (EVar "n"))) (EVar "True") (EIf (EVar "otherwise") (EBlock (DoLet false false (PVar "c") (EApp (EApp (EApp (EVar "stringSlice") (EVar "i")) (EBinOp "+" (EVar "i") (ELit (LInt 1)))) (EVar "n"))) (DoExpr (EBinOp "&&" (EBinOp "&&" (EBinOp ">=" (EVar "c") (ELit (LString "0"))) (EBinOp "<=" (EVar "c") (ELit (LString "9")))) (EApp (EApp (EVar "allDigitsFrom") (EVar "n")) (EBinOp "+" (EVar "i") (ELit (LInt 1))))))) (EApp (EVar "__fallthrough__") (ELit LUnit)))))
+(DFunDef false "allDigits" ((PVar "n")) (EBinOp "&&" (EBinOp ">" (EApp (EVar "stringLength") (EVar "n")) (ELit (LInt 0))) (EApp (EApp (EVar "allDigitsFrom") (EApp (EVar "stringToChars") (EVar "n"))) (ELit (LInt 0)))))
+(DTypeSig false "allDigitsFrom" (TyFun (TyApp (TyCon "Array") (TyCon "Char")) (TyFun (TyCon "Int") (TyCon "Bool"))))
+(DFunDef false "allDigitsFrom" ((PVar "cs") (PVar "i")) (EIf (EBinOp ">=" (EVar "i") (EApp (EVar "arrayLength") (EVar "cs"))) (EVar "True") (EIf (EVar "otherwise") (EBlock (DoLet false false (PVar "c") (EApp (EApp (EVar "arrayGetUnsafe") (EVar "i")) (EVar "cs"))) (DoExpr (EBinOp "&&" (EBinOp "&&" (EBinOp ">=" (EVar "c") (ELit (LChar "0"))) (EBinOp "<=" (EVar "c") (ELit (LChar "9")))) (EApp (EApp (EVar "allDigitsFrom") (EVar "cs")) (EBinOp "+" (EVar "i") (ELit (LInt 1))))))) (EApp (EVar "__fallthrough__") (ELit LUnit)))))
 (DTypeSig true "backticked" (TyFun (TyCon "String") (TyCon "String")))
 (DFunDef false "backticked" ((PVar "s")) (EBinOp "++" (EBinOp "++" (ELit (LString "`")) (EApp (EMethodRef "display") (EVar "s"))) (ELit (LString "`"))))
 (DTypeSig true "appSpineName" (TyFun (TyCon "Expr") (TyApp (TyCon "Option") (TyCon "String"))))

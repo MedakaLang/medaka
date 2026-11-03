@@ -1,5 +1,5 @@
 # META
-source_lines=1066
+source_lines=1081
 stages=DESUGAR,MARK
 # SOURCE
 -- compiler/tools/lint_shared.mdk — helpers used by more than one lint module:
@@ -16,7 +16,7 @@ import support.util.{
   contains, filterList, splitOnChar, joinWith, startsWith, listLen, anyList,
   joinNl, dedupBy
 }
-import list.{sortBy, last, reverse}
+import list.{sortBy, last, reverse, findMap}
 import array.{get as arrayGet}
 import string.{split, isUpper, words, unwords}
 import support.path.{stripMdk}
@@ -154,6 +154,10 @@ ruleNameLetUnderscoreUnit = "rule-let-underscore-unit"
 export
 ruleNameDiscardedResult : String
 ruleNameDiscardedResult = "rule-discarded-result"
+
+export
+ruleNameAccumulatorAppend : String
+ruleNameAccumulatorAppend = "rule-accumulator-append"
 
 export
 ruleNamePreferAssignOp : String
@@ -359,6 +363,12 @@ export
 unwrapLoc : Expr -> Expr
 unwrapLoc (ELoc _ e) = unwrapLoc e
 unwrapLoc e = e
+
+-- The span of the first located node in `e`.
+export
+firstLoc : Expr -> Option Loc
+firstLoc (ELoc l _) = Some l
+firstLoc e = findMap firstLoc (childExprs e)
 
 -- ── per-decl source locations (Task B) ─────────────────────────────────────────
 -- `Positions` carries one `DeclPos` per top-level decl, parallel to the decl
@@ -860,6 +870,7 @@ calledName e = match unwrapLoc e
   _ => ""
 
 -- The span of the identifier a use stands on: the innermost `ELoc` over an `EVar`.
+export
 varSite : Expr -> Option Loc
 varSite (ELoc l inner) = match varSite inner
   Some inner2 => Some inner2
@@ -1068,11 +1079,15 @@ lastArmSpan : List Arm -> Option Loc
 lastArmSpan arms = match last arms
   Some (Arm _ _ body) => tightSpan body
   None => None
+
+export
+ruleNameResliceInLoop : String
+ruleNameResliceInLoop = "rule-reslice-in-loop"
 # DESUGAR
 (DUse false (UseGroup ("frontend" "ast") ((mem "Loc" true) (mem "Expr" true) (mem "Decl" true) (mem "noBinderId" false) (mem "noDeclLoc" false) (mem "Ty" true) (mem "Pat" true) (mem "UseMember" true) (mem "Guard" true) (mem "Arm" true) (mem "ImplMethod" true) (mem "DoStmt" true) (mem "Section" true) (mem "InterpPart" true) (mem "GuardArm" true) (mem "FieldAssign" true) (mem "LetBind" true) (mem "FunClause" true))))
 (DUse false (UseGroup ("frontend" "parser") ((mem "Positions" true) (mem "DeclPos" false) (mem "positionsDecls" false) (mem "declPosLine" false))))
 (DUse false (UseGroup ("support" "util") ((mem "contains" false) (mem "filterList" false) (mem "splitOnChar" false) (mem "joinWith" false) (mem "startsWith" false) (mem "listLen" false) (mem "anyList" false) (mem "joinNl" false) (mem "dedupBy" false))))
-(DUse false (UseGroup ("list") ((mem "sortBy" false) (mem "last" false) (mem "reverse" false))))
+(DUse false (UseGroup ("list") ((mem "sortBy" false) (mem "last" false) (mem "reverse" false) (mem "findMap" false))))
 (DUse false (UseGroup ("array") ((mem "get" false "arrayGet"))))
 (DUse false (UseGroup ("string") ((mem "split" false) (mem "isUpper" false) (mem "words" false) (mem "unwords" false))))
 (DUse false (UseGroup ("support" "path") ((mem "stripMdk" false))))
@@ -1145,6 +1160,8 @@ lastArmSpan arms = match last arms
 (DFunDef false "ruleNameLetUnderscoreUnit" () (ELit (LString "rule-let-underscore-unit")))
 (DTypeSig true "ruleNameDiscardedResult" (TyCon "String"))
 (DFunDef false "ruleNameDiscardedResult" () (ELit (LString "rule-discarded-result")))
+(DTypeSig true "ruleNameAccumulatorAppend" (TyCon "String"))
+(DFunDef false "ruleNameAccumulatorAppend" () (ELit (LString "rule-accumulator-append")))
 (DTypeSig true "ruleNamePreferAssignOp" (TyCon "String"))
 (DFunDef false "ruleNamePreferAssignOp" () (ELit (LString "rule-prefer-assign-op")))
 (DTypeSig true "ruleNamePromissoryReader" (TyCon "String"))
@@ -1219,6 +1236,9 @@ lastArmSpan arms = match last arms
 (DTypeSig true "unwrapLoc" (TyFun (TyCon "Expr") (TyCon "Expr")))
 (DFunDef false "unwrapLoc" ((PCon "ELoc" PWild (PVar "e"))) (EApp (EVar "unwrapLoc") (EVar "e")))
 (DFunDef false "unwrapLoc" ((PVar "e")) (EVar "e"))
+(DTypeSig true "firstLoc" (TyFun (TyCon "Expr") (TyApp (TyCon "Option") (TyCon "Loc"))))
+(DFunDef false "firstLoc" ((PCon "ELoc" (PVar "l") PWild)) (EApp (EVar "Some") (EVar "l")))
+(DFunDef false "firstLoc" ((PVar "e")) (EApp (EApp (EVar "findMap") (EVar "firstLoc")) (EApp (EVar "childExprs") (EVar "e"))))
 (DTypeSig true "declLocList" (TyFun (TyCon "Positions") (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyApp (TyCon "List") (TyTuple (TyCon "Decl") (TyApp (TyCon "Option") (TyCon "Loc")))))))
 (DFunDef false "declLocList" ((PVar "pos") (PVar "prog")) (EApp (EApp (EVar "zipDeclLoc") (EVar "prog")) (EApp (EVar "positionsDecls") (EVar "pos"))))
 (DTypeSig false "zipDeclLoc" (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyFun (TyApp (TyCon "List") (TyCon "DeclPos")) (TyApp (TyCon "List") (TyTuple (TyCon "Decl") (TyApp (TyCon "Option") (TyCon "Loc")))))))
@@ -1368,7 +1388,7 @@ lastArmSpan arms = match last arms
 (DFunDef false "oneLine" ((PVar "t")) (EApp (EVar "unwords") (EApp (EVar "words") (EVar "t"))))
 (DTypeSig true "calledName" (TyFun (TyCon "Expr") (TyCon "String")))
 (DFunDef false "calledName" ((PVar "e")) (EMatch (EApp (EVar "unwrapLoc") (EVar "e")) (arm (PCon "EApp" (PVar "f") PWild) () (EApp (EVar "calledName") (EVar "f"))) (arm (PCon "EVar" (PVar "n")) () (EVar "n")) (arm PWild () (ELit (LString "")))))
-(DTypeSig false "varSite" (TyFun (TyCon "Expr") (TyApp (TyCon "Option") (TyCon "Loc"))))
+(DTypeSig true "varSite" (TyFun (TyCon "Expr") (TyApp (TyCon "Option") (TyCon "Loc"))))
 (DFunDef false "varSite" ((PCon "ELoc" (PVar "l") (PVar "inner"))) (EMatch (EApp (EVar "varSite") (EVar "inner")) (arm (PCon "Some" (PVar "inner2")) () (EApp (EVar "Some") (EVar "inner2"))) (arm (PCon "None") () (EMatch (EVar "inner") (arm (PCon "EVar" PWild) () (EApp (EVar "Some") (EVar "l"))) (arm PWild () (EVar "None"))))))
 (DFunDef false "varSite" (PWild) (EVar "None"))
 (DTypeSig false "wildBinds" (TyFun (TyCon "StdlibIndex") (TyFun (TyCon "FileFacts") (TyFun (TyCon "String") (TyCon "Bool")))))
@@ -1423,11 +1443,13 @@ lastArmSpan arms = match last arms
 (DFunDef false "matchSpan" (PWild PWild PWild) (EVar "None"))
 (DTypeSig false "lastArmSpan" (TyFun (TyApp (TyCon "List") (TyCon "Arm")) (TyApp (TyCon "Option") (TyCon "Loc"))))
 (DFunDef false "lastArmSpan" ((PVar "arms")) (EMatch (EApp (EVar "last") (EVar "arms")) (arm (PCon "Some" (PCon "Arm" PWild PWild (PVar "body"))) () (EApp (EVar "tightSpan") (EVar "body"))) (arm (PCon "None") () (EVar "None"))))
+(DTypeSig true "ruleNameResliceInLoop" (TyCon "String"))
+(DFunDef false "ruleNameResliceInLoop" () (ELit (LString "rule-reslice-in-loop")))
 # MARK
 (DUse false (UseGroup ("frontend" "ast") ((mem "Loc" true) (mem "Expr" true) (mem "Decl" true) (mem "noBinderId" false) (mem "noDeclLoc" false) (mem "Ty" true) (mem "Pat" true) (mem "UseMember" true) (mem "Guard" true) (mem "Arm" true) (mem "ImplMethod" true) (mem "DoStmt" true) (mem "Section" true) (mem "InterpPart" true) (mem "GuardArm" true) (mem "FieldAssign" true) (mem "LetBind" true) (mem "FunClause" true))))
 (DUse false (UseGroup ("frontend" "parser") ((mem "Positions" true) (mem "DeclPos" false) (mem "positionsDecls" false) (mem "declPosLine" false))))
 (DUse false (UseGroup ("support" "util") ((mem "contains" false) (mem "filterList" false) (mem "splitOnChar" false) (mem "joinWith" false) (mem "startsWith" false) (mem "listLen" false) (mem "anyList" false) (mem "joinNl" false) (mem "dedupBy" false))))
-(DUse false (UseGroup ("list") ((mem "sortBy" false) (mem "last" false) (mem "reverse" false))))
+(DUse false (UseGroup ("list") ((mem "sortBy" false) (mem "last" false) (mem "reverse" false) (mem "findMap" false))))
 (DUse false (UseGroup ("array") ((mem "get" false "arrayGet"))))
 (DUse false (UseGroup ("string") ((mem "split" false) (mem "isUpper" false) (mem "words" false) (mem "unwords" false))))
 (DUse false (UseGroup ("support" "path") ((mem "stripMdk" false))))
@@ -1500,6 +1522,8 @@ lastArmSpan arms = match last arms
 (DFunDef false "ruleNameLetUnderscoreUnit" () (ELit (LString "rule-let-underscore-unit")))
 (DTypeSig true "ruleNameDiscardedResult" (TyCon "String"))
 (DFunDef false "ruleNameDiscardedResult" () (ELit (LString "rule-discarded-result")))
+(DTypeSig true "ruleNameAccumulatorAppend" (TyCon "String"))
+(DFunDef false "ruleNameAccumulatorAppend" () (ELit (LString "rule-accumulator-append")))
 (DTypeSig true "ruleNamePreferAssignOp" (TyCon "String"))
 (DFunDef false "ruleNamePreferAssignOp" () (ELit (LString "rule-prefer-assign-op")))
 (DTypeSig true "ruleNamePromissoryReader" (TyCon "String"))
@@ -1574,6 +1598,9 @@ lastArmSpan arms = match last arms
 (DTypeSig true "unwrapLoc" (TyFun (TyCon "Expr") (TyCon "Expr")))
 (DFunDef false "unwrapLoc" ((PCon "ELoc" PWild (PVar "e"))) (EApp (EVar "unwrapLoc") (EVar "e")))
 (DFunDef false "unwrapLoc" ((PVar "e")) (EVar "e"))
+(DTypeSig true "firstLoc" (TyFun (TyCon "Expr") (TyApp (TyCon "Option") (TyCon "Loc"))))
+(DFunDef false "firstLoc" ((PCon "ELoc" (PVar "l") PWild)) (EApp (EVar "Some") (EVar "l")))
+(DFunDef false "firstLoc" ((PVar "e")) (EApp (EApp (EVar "findMap") (EVar "firstLoc")) (EApp (EVar "childExprs") (EVar "e"))))
 (DTypeSig true "declLocList" (TyFun (TyCon "Positions") (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyApp (TyCon "List") (TyTuple (TyCon "Decl") (TyApp (TyCon "Option") (TyCon "Loc")))))))
 (DFunDef false "declLocList" ((PVar "pos") (PVar "prog")) (EApp (EApp (EVar "zipDeclLoc") (EVar "prog")) (EApp (EVar "positionsDecls") (EVar "pos"))))
 (DTypeSig false "zipDeclLoc" (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyFun (TyApp (TyCon "List") (TyCon "DeclPos")) (TyApp (TyCon "List") (TyTuple (TyCon "Decl") (TyApp (TyCon "Option") (TyCon "Loc")))))))
@@ -1723,7 +1750,7 @@ lastArmSpan arms = match last arms
 (DFunDef false "oneLine" ((PVar "t")) (EApp (EVar "unwords") (EApp (EVar "words") (EVar "t"))))
 (DTypeSig true "calledName" (TyFun (TyCon "Expr") (TyCon "String")))
 (DFunDef false "calledName" ((PVar "e")) (EMatch (EApp (EVar "unwrapLoc") (EVar "e")) (arm (PCon "EApp" (PVar "f") PWild) () (EApp (EVar "calledName") (EVar "f"))) (arm (PCon "EVar" (PVar "n")) () (EVar "n")) (arm PWild () (ELit (LString "")))))
-(DTypeSig false "varSite" (TyFun (TyCon "Expr") (TyApp (TyCon "Option") (TyCon "Loc"))))
+(DTypeSig true "varSite" (TyFun (TyCon "Expr") (TyApp (TyCon "Option") (TyCon "Loc"))))
 (DFunDef false "varSite" ((PCon "ELoc" (PVar "l") (PVar "inner"))) (EMatch (EApp (EVar "varSite") (EVar "inner")) (arm (PCon "Some" (PVar "inner2")) () (EApp (EVar "Some") (EVar "inner2"))) (arm (PCon "None") () (EMatch (EVar "inner") (arm (PCon "EVar" PWild) () (EApp (EVar "Some") (EVar "l"))) (arm PWild () (EVar "None"))))))
 (DFunDef false "varSite" (PWild) (EVar "None"))
 (DTypeSig false "wildBinds" (TyFun (TyCon "StdlibIndex") (TyFun (TyCon "FileFacts") (TyFun (TyCon "String") (TyCon "Bool")))))
@@ -1778,3 +1805,5 @@ lastArmSpan arms = match last arms
 (DFunDef false "matchSpan" (PWild PWild PWild) (EVar "None"))
 (DTypeSig false "lastArmSpan" (TyFun (TyApp (TyCon "List") (TyCon "Arm")) (TyApp (TyCon "Option") (TyCon "Loc"))))
 (DFunDef false "lastArmSpan" ((PVar "arms")) (EMatch (EApp (EVar "last") (EVar "arms")) (arm (PCon "Some" (PCon "Arm" PWild PWild (PVar "body"))) () (EApp (EVar "tightSpan") (EVar "body"))) (arm (PCon "None") () (EVar "None"))))
+(DTypeSig true "ruleNameResliceInLoop" (TyCon "String"))
+(DFunDef false "ruleNameResliceInLoop" () (ELit (LString "rule-reslice-in-loop")))

@@ -49,7 +49,8 @@ import eval.eval.{
   lookupBinding,
   force,
 }
-import support.util.{contains, startsWith, stringTrim}
+import support.util.{contains, startsWith}
+import string.{split as splitString, trimAscii}
 
 -- ── Session state ─────────────────────────────────────────────────────────
 accumulatedRef : Ref (List Decl)
@@ -162,7 +163,7 @@ isIdentChar s =
 
 endsWithKeyword : String -> String -> Bool
 endsWithKeyword line kw =
-  let s = stringTrim line
+  let s = trimAscii line
   let ls = stringLength s
   let lk = stringLength kw
   if ls < lk then
@@ -180,7 +181,7 @@ endsWithKeyword line kw =
 filterEmpty : List String -> List String
 filterEmpty [] = []
 filterEmpty (x :: rest)
-  | stringTrim x == "" = filterEmpty rest
+  | trimAscii x == "" = filterEmpty rest
   | otherwise = x :: filterEmpty rest
 
 lastLine : List String -> Option String
@@ -199,7 +200,7 @@ needsMore source =
   if endsWithBlankLine source then
     False
   else
-    let lines = stringSplitNewlines source
+    let lines = splitString "\n" source
     let nonEmpty = filterEmpty lines
     match lastLine nonEmpty
       None => False
@@ -362,7 +363,7 @@ processExprParsed newDecls =
 -- ── Process :type command ─────────────────────────────────────────────────
 processTypeCmd : Int -> String -> <IO> Unit
 processTypeCmd commandLen exprSrc =
-  let trimmed = stringTrim exprSrc
+  let trimmed = trimAscii exprSrc
   if trimmed == "" then
     ePutStrLn ":type requires an expression"
   else
@@ -458,7 +459,7 @@ replLoopGo buf cont =
     Some line =>
       let newBuf = "\{buf}\{line}\n"
       if not cont then
-        let trimmed = stringTrim line
+        let trimmed = trimAscii line
         if stringLength trimmed > 0 && stringSlice 0 1 trimmed == ":" then
           let keepGoing = processCommand trimmed
           if keepGoing then replLoopGo "" False
@@ -475,7 +476,7 @@ replLoopGo buf cont =
 
 dispatchInput : String -> <IO> Unit
 dispatchInput src =
-  let trimmed = stringTrim src
+  let trimmed = trimAscii src
   if trimmed == "" then
     ()
   else if isDecl src then
@@ -484,15 +485,4 @@ dispatchInput src =
     processExprInput src
 
 -- ── String utilities ──────────────────────────────────────────────────────
--- stringTrim lives in `compiler/support/util.mdk` (imported above).
-
--- Split a string on "\n".
-stringSplitNewlines : String -> List String
-stringSplitNewlines s = stringSplitOn "\n" s 0 0 (stringLength s)
-
-stringSplitOn : String -> String -> Int -> Int -> Int -> List String
-stringSplitOn sep s start cur len
-  | cur >= len = [stringSlice start len s]
-  | stringSlice cur (cur + 1) s == sep =
-    stringSlice start cur s :: stringSplitOn sep s (cur + 1) (cur + 1) len
-  | otherwise = stringSplitOn sep s start (cur + 1) len
+-- Trimming is `string.trimAscii` (imported above).

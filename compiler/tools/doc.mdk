@@ -62,8 +62,7 @@ import types.repr.{Scheme(..), ppScheme}
 import types.publish.{pubSchemes}
 import frontend.resolve.{internalExterns}
 import support.util.{
-  zipL, joinWith, reverseL, escStr, stringTrim, splitNl, contains, lookupAssoc,
-  startsWith
+  zipL, joinWith, reverseL, escStr, splitNl, contains, lookupAssoc, startsWith
 }
 import support.path.{baseOf, chopExt}
 import support.stage_count.{stageExit}
@@ -72,7 +71,7 @@ import driver.diagnostics.{projectEntrySchemes}
 import driver.loader.{moduleIdOfPath}
 import frontend.desugar.{dataDerivers, newtypeDerivers, typeKindedParams}
 import json.{Json(..), jObject, jArray}
-import string.{toLower}
+import string.{toLower, trimAscii}
 import regex.{
   Regex, Match, mustCompile, isMatch, replaceAll, escape, find, findAll
 }
@@ -265,7 +264,7 @@ expandComment c =
 expandBlockLines : Int -> Int -> List String -> List CommentRow
 expandBlockLines _ _ [] = []
 expandBlockLines baseLine i (line :: rest) =
-  (baseLine + i, stringTrim line, baseLine)
+  (baseLine + i, trimAscii line, baseLine)
     :: expandBlockLines baseLine (i + 1) rest
 
 -- splitNl → support/util.mdk (imported above; #242 dedup of the splitNl cluster).
@@ -329,7 +328,7 @@ collectDocLines tbl line acc = match lookupLineLast tbl line
 markedDoc : List CommentRow -> String
 markedDoc rows = match dropToMarker True rows
   [] => ""
-  (_, t, b) :: rest => stringTrim (joinWith "\n" (t :: sameBlockTexts b rest))
+  (_, t, b) :: rest => trimAscii (joinWith "\n" (t :: sameBlockTexts b rest))
 
 dropToMarker : Bool -> List CommentRow -> List CommentRow
 dropToMarker _ [] = []
@@ -350,7 +349,7 @@ sectionsFrom : List CommentRow -> List (Int, String)
 sectionsFrom [] = []
 sectionsFrom ((l, t, b) :: rest) =
   if b == 0 && dlen t >= 2 && dsub 0 2 t == "# " then
-    (l, stringTrim (dsub 2 (dlen t) t)) :: sectionsFrom rest
+    (l, trimAscii (dsub 2 (dlen t) t)) :: sectionsFrom rest
   else
     sectionsFrom rest
 
@@ -1308,7 +1307,7 @@ uniqueDoc (x :: xs) = x :: uniqueDoc (filterDoc (/= x) xs)
 -- runtimeSrc / coreSrc are the prelude sources (runtime.mdk + core.mdk), read
 -- by the caller from MEDAKA_ROOT; src is the target file; filename gives the
 -- module-name basename; roots are the import search roots (mirrors `check`'s
--- `entrySearchRoots (dirOf2 target) ++ [stdlibDir]`, medaka_cli.mdk:583) so an
+-- `entrySearchRoots (dirOf target) ++ [stdlibDir]`, front_gate.mdk) so an
 -- import-bearing target resolves its siblings before inferring schemes.
 export
 runDoc : String -> String -> String -> String -> List String -> <IO> String
@@ -1787,7 +1786,7 @@ newlineRe = mustCompile "\\n"
 firstSentence : String -> String
 firstSentence prose =
   let cut = firstSentenceCut prose
-  joinWith " " (splitNl (stringTrim (dsub 0 cut prose)))
+  joinWith " " (splitNl (trimAscii (dsub 0 cut prose)))
 
 -- The end of the first `.` that is itself followed by end-of-string or a
 -- sentence gap (a space or a newline), matched then tail-tested rather than

@@ -536,6 +536,7 @@ inlang-tools-lint-scope-test:
 ## compiler/tools/lint_fix_test.mdk is a `*_test.mdk` sibling outside every
 ## entry's import closure ([W-MODULE-BLIND]): the span-edit fix driver.
 inlang-tools-lint-fix-test:
+	./medaka test compiler/tools/mcp_telemetry_test.mdk
 	./medaka test compiler/tools/lint_fix_test.mdk
 
 ## compiler/tools/lint_hints_test.mdk is a `*_test.mdk` sibling outside every
@@ -548,6 +549,11 @@ inlang-tools-lint-hints-test:
 ## entry's import closure ([W-MODULE-BLIND]): the discarded-call verdict.
 inlang-tools-lint-calls-test:
 	./medaka test compiler/tools/lint_calls_test.mdk
+
+## compiler/tools/lint_recursion_test.mdk is a `*_test.mdk` sibling outside every
+## entry's import closure ([W-MODULE-BLIND]): the self-call reader.
+inlang-tools-lint-recursion-test:
+	./medaka test compiler/tools/lint_recursion_test.mdk
 
 ## The `medaka lint` behaviors only the built binary shows: what the working
 ## directory and the flag combinations do. compiler/tools/lint_cli_test.mdk is
