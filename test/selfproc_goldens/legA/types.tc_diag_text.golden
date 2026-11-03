@@ -103,6 +103,7 @@ isTupleTyName : String -> Bool
 joinAnd : List String -> String
 joinDomainMsg : List String -> String
 joinMismatchMsg : String -> String -> String
+kindDomainName : Kind -> String
 kindName : Kind -> String
 letRecNonFunctionMsg : String -> String
 locGoalKey : Option Loc -> String
@@ -188,4 +189,6 @@ updateMultiCtorMsg : String -> String -> String -> List String -> List String ->
 varNameForId : List (String, Ty, List (String, Mono)) -> String -> Int -> String
 wideAnnotateHelp : String -> Bool -> String
 writtenDiag : TcDiag -> TcDiag
+writtenKindArityMsg : String -> Kind -> Int -> String
+writtenKindMismatchMsg : String -> Kind -> Kind -> String
 writtenNames : String -> String

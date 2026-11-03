@@ -2,7 +2,7 @@ calleeNumObls : ModuleCtx -> Int -> Int -> List UObligation
 checkCoherence : ModuleCtx -> ImplEnv -> Int -> Unit
 checkGradedImplHead : ModuleCtx -> String -> Ty -> List Kind -> Unit
 checkGradedImplHeadCon : ModuleCtx -> String -> TyConOrigin -> String -> Option Loc -> Int -> List Kind -> Unit
-checkGradedImplHeadDecl : ModuleCtx -> ClassEnv -> Int -> Decl -> Unit
+checkGradedImplHeadDecl : ModuleCtx -> KindScope -> ClassEnv -> Int -> Decl -> Unit
 checkGradedImplHeadKinds : ModuleCtx -> String -> String -> Option Loc -> Int -> List Kind -> List Kind -> Unit
 checkGradedImplHeads : ModuleCtx -> ClassEnv -> Int -> List Decl -> Unit
 checkGradedImplTys : ModuleCtx -> ClassEnv -> Int -> TyConOrigin -> String -> Int -> List Ty -> Unit
@@ -73,6 +73,7 @@ implHeadTypeVarRoots : List (String, Mono) -> List (String, Int)
 implHeadVarRoots : List (String, Mono) -> List (String, HeadVarRoot)
 implRequiresRoot : ModuleCtx -> String -> Int -> List (String, Mono) -> List Require -> Bool
 implRowMatchesSuper : TabKey -> String -> List Ty -> ImplRow -> Bool
+implSlotKinds : ClassEnv -> Int -> TyConOrigin -> String -> Int -> List Ty -> List (Option Kind, Ty)
 inferDefaultBodies : TcEnv -> List Decl -> Unit
 inferDefaultMethod : TcEnv -> IfaceRef -> List (String, List Kind) -> List String -> IfaceMethod -> Unit
 inferDefaultMethods : TcEnv -> IfaceRef -> List (String, List Kind) -> List String -> List IfaceMethod -> Unit
@@ -108,7 +109,9 @@ reportMissingSuperImpl : ModuleCtx -> String -> List (String, Int) -> Option Loc
 reportSuperContextLeaf : ModuleCtx -> String -> List (String, Int) -> Option Loc -> Bool -> IfaceRef -> List Mono -> (IfaceRef, List Mono) -> Unit
 requireArgsAreRoot : Int -> List (String, Mono) -> List Ty -> Bool
 requirePredicateSlot : ModuleCtx -> List (String, Mono) -> Require -> PredicateSlot
+requireSlotKinds : KindScope -> Require -> List (Option Kind, Ty)
 scopeImplMethods : ModuleCtx -> ScopeId -> List ImplMethod -> List ScopedImplMethod
+slotKindsFor : List Kind -> List Ty -> List (Option Kind, Ty)
 substParams : List String -> List (String, Ty) -> List Ty
 superContextLeaves : ModuleCtx -> ReqWalk -> Map String Unit -> List PredicateSlot -> Option Loc -> IfaceRef -> List Mono -> List (IfaceRef, List Mono)
 superHeadCovers : List Ty -> List Ty -> Bool
