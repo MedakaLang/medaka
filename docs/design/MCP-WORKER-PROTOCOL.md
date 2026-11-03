@@ -66,7 +66,7 @@ be labeled as such; it does not validate edits against a matching compiler.
 Snapshot and profile identity must change when their relevant inputs change;
 the prototype must define and test the concrete representation before caching.
 
-## Linux feasibility evidence and remaining checks
+## Initial Linux feasibility spike
 
 The 2026-11-03 spike at base `3887869bb140c000ed184beb7af2f000af4bbd86`
 used `python3 /var/tmp/medaka-scratch/sprints/mcp-m0-20261102/03-packaging/evidence/boundary/probe.py`.
@@ -86,6 +86,9 @@ If the installed Medaka candidate cannot satisfy mandatory live lifecycle
 without a host shim, disqualify it; this observation does not rule out every
 possible OS technique. No shim is authorized by this contract.
 
+The following table records the initial spike only; the later installed-candidate
+results and decision are in the [Linux decision report](../findings/mcp-m0-packaging/REPORT.md).
+
 | Checklist | Python stdlib candidate | Installed Medaka candidate |
 | --- | --- | --- |
 | Handshake without local binary | Worktree worker probe succeeded; installed/offline case unmeasured | Unmeasured |
@@ -95,9 +98,19 @@ possible OS technique. No shim is authorized by this contract.
 | Artifact change and replacement | Hash-change primitive only; replacement unmeasured | Unmeasured |
 | Missing/corrupt artifact and failed worker | Process primitives observed; candidate handling unmeasured | Unmeasured |
 
-Run the same checklist against both installed candidates, including A/B/A
-workspace routing, replacement while connected, failure controls, cleanup and
-real offline isolation. The earlier baseline budgets and provenance are in
+The subsequent installed-candidate experiment exercised A/B/A routing, connected
+replacement, failure controls, cleanup and offline isolation; its limits and
+remaining checks are in the decision report. The earlier baseline budgets and provenance are in
 `scripts/mcp_bench/budgets.json` and `docs/findings/mcp-m0-baseline/OPERATIONS.md`;
 they are not installed-candidate results. macOS is deferred to #4820 and has
 not passed this experiment.
+
+## Decision status
+
+The [Linux decision report](../findings/mcp-m0-packaging/REPORT.md) disqualifies
+both measured prototypes under the mandatory lifecycle and correctness criteria.
+This version 1 vocabulary remains an experimental contract, not a selected M1
+interface or proof of implementation. The report specifies a bounded follow-up;
+#4770 remains open and actual macOS evidence is deferred to #4820. Existing MCP
+clients and wrapper behavior remain in place until a documented compatible
+migration is implemented.
