@@ -791,8 +791,21 @@ function's comment). Both backends read the same table.
   over a per-(instance, method) wrapper, and the wrapper reads the instance's `requires`
   from the dictionary. The `requires` follow the slots.
 - **WasmGC layout:** one `$dict` struct `{i32 tag, (ref $dictarr) supers++requires,
-  (ref $slotarr) slots}`. A slot is called with `call_ref` as `(dict, mw.., args..)`.
-  A null witness traps at `unreachable` before the slot load.
+  (ref $slotarr) slots, (ref $dictarr) slot closures}`. A slot is called with
+  `call_ref` as `(dict, mw.., args..)`. A null witness traps at `unreachable` before
+  the slot load.
+- **Slot arity.** Both backends run an impl when it has its own count of values: the
+  number of values its define takes, which an eta-short clause makes smaller than the
+  method's declared count (`forgeOp x = (effect; y => ..)` for `forgeOp : a -> a -> a`
+  runs its effect at the first value, as eval does).
+  - Native: the slot closure takes `1 + contextDicts + own`. A site applies it with
+    `emitApplyAny`: an exact inline call when the counts agree, else `__mdk_apply`.
+  - WasmGC: a `call_ref` needs the function's type at the site, and the site knows
+    only the declared count, so the slot function takes `1 + contextDicts + declared`
+    and adapts inside: a define taking fewer values runs on its own values and its
+    result is applied to the rest, one taking more becomes a PAP. A site with any other
+    argument count, and a method value, applies the slot's closure instead: a `$clos`
+    of `1 + contextDicts + own` operands in the fourth field, through `$__mdk_apply`.
 - **Call sites:** a dictionary-routed call is a slot load and an indirect call. A known
   instance (`RKey`) stays a direct call to `mdk.impl.*`.
 - **Why supers come first:** the typechecker mints super projections by index without

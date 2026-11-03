@@ -1,0 +1,29 @@
+-- Every function below reaches a `Forge` method through a dictionary only: with
+-- fewer arguments than the method declares, with as many, with more (`forgeTo`'s
+-- `b` is a function at `overTo`), and as a method value.
+export interface Forge a where
+  forgeOp : a -> a -> a
+  forgeMk : a -> a -> a
+  forgeTo : a -> b -> b
+
+export
+partialOp : Forge a => a -> a -> a
+partialOp x = forgeOp x
+
+export
+valueOp : Forge a => a -> a -> a
+valueOp x =
+  let f = forgeOp
+  f x
+
+export
+fullOp : Forge a => a -> a -> a
+fullOp x y = forgeOp x y
+
+export
+partialMk : Forge a => a -> a -> a
+partialMk x = forgeMk x
+
+export
+overTo : Forge a => a -> (a -> a) -> a
+overTo x h = forgeTo x h x
