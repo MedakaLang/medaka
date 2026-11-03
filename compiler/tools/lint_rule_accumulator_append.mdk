@@ -10,7 +10,7 @@ import frontend.ast_walk.{
   declBodies,
 }
 import frontend.parser.{Positions(..)}
-import list.{findMap, get}
+import list.{get}
 import string.{contains}
 import tools.lint_core.{
   Category(..),
@@ -38,7 +38,7 @@ import tools.lint_recursion.{
   selfCalls,
 }
 import tools.lint_scope.{FileScopes}
-import tools.lint_shared.{ruleNameAccumulatorAppend, unwrapLoc}
+import tools.lint_shared.{firstLoc, ruleNameAccumulatorAppend, unwrapLoc}
 
 export
 rule : Rule
@@ -131,11 +131,6 @@ argsOf e = spine e []
     spine x acc = match unwrapLoc x
       EApp f a => spine f (a :: acc)
       _ => acc
-
--- The span of the first located node in `e`.
-firstLoc : Expr -> Option Loc
-firstLoc (ELoc l _) = Some l
-firstLoc e = findMap firstLoc (childExprs e)
 
 -- What the appended operand is, when the source says so.
 data Operand = OpList | OpString | OpUnknown

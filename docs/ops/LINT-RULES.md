@@ -47,6 +47,7 @@ Every rule `medaka lint` knows. `universal` rules are meaningful in any Medaka p
 | [`rule-test-equal-in-true`](#rule-test-equal-in-true) | internal | style | gated | fixable | file |
 | [`rule-prelude-shadow`](#rule-prelude-shadow) | universal | suspicious | gated | not-fixable | file |
 | [`rule-accumulator-append`](#rule-accumulator-append) | universal | perf | gated | not-fixable | file |
+| [`rule-reslice-in-loop`](#rule-reslice-in-loop) | universal | perf | gated | not-fixable | file |
 
 ## rule-match-on-param
 
@@ -632,4 +633,19 @@ Before:
   go acc (x :: xs) = go (acc ++ [f x]) xs
 After:
   go acc (x :: xs) = go (f x :: acc) xs  -- and `reverse acc` at the end
+```
+
+## rule-reslice-in-loop
+
+a loop parameter re-sliced from its start on every step: quadratic. Walk a `StrCursor`, or convert with `toChars` once
+
+A self-recursive loop that passes a `String`, `Array` or `Bytes` parameter on unchanged while another argument advances, and slices that parameter by the advancing index, starts from the front of the parameter on every step. The rule reports the String externs `stringSlice` and `charAtStr` on such a parameter, and `slice`, `sliceClamped`, `drop` and `a.[lo..hi]` on a parameter whose declared type, in the enclosing top-level signature, is `String`, `Array` or `Bytes`. A `List` parameter is skipped (`drop` on a list is the loop itself), and so is a slice whose bounds mention no advancing name. A partial application and a call to a different function (mutual recursion) are not self-calls. `stringSliceBytes` is not reported: it copies only the piece and does not walk the string.
+
+For a `String`, `stringSlice` copies the tail it is asked for and, on a string with non-ASCII text, walks from the front to find the offset, so the loop is quadratic in the length of the input. Walk a `StrCursor` (`startCursor`, `nextChar`, `sliceBetween`), or convert once with `toChars` and index the `Array`. A loop whose bound is small and fixed can carry a `-- lint-disable-next-line rule-reslice-in-loop` with the bound as its reason.
+
+```
+Before:
+  go s i = if i < stringLength s then charAtStr s i :: go s (i + 1) else []
+After:
+  go cs i = if i < length cs then cs.[i] :: go cs (i + 1) else []  -- with `cs = toChars s`
 ```
