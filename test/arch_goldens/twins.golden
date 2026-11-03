@@ -26,7 +26,6 @@ emitLeaf
 emitList
 emitLit
 emitMethod
-emitMethodDispatch
 emitMethodValue
 emitProgram
 emitProgramGaps
@@ -64,7 +63,6 @@ isLazyGlobal
 leafArm
 methodEntries
 methodValueArity
-narrowImplsByArity
 noteGap
 noteGapAt
 orEmptyEntries

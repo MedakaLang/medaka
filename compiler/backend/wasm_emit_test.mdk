@@ -1,0 +1,60 @@
+-- Sibling test for `compiler/backend/wasm_emit.mdk` ([P-TEST-SIBLING]): the pieces of
+-- a method-table slot call that need no program around them.  A slot call itself is
+-- pinned end to end by the wasm fixtures (`test/wasm/fixtures_modules`).
+
+import backend.wasm_emit.{
+  slotNullCheckW, slotFieldW, slotTypeLines, slotParamsW, gname
+}
+import backend.emit_plan.{MethodSlot(..)}
+import test.{expectAll, expectEqual}
+
+-- A word that is no `$dict` (the `i31 0` of a null witness) must not be read as a
+-- table: the check branches to `unreachable` before any field load.
+test "a null word at a slot load traps at unreachable" =
+  expectEqual
+    [
+      "local.get $\{gname "d"}",
+      "ref.test (ref $dict)",
+      "i32.eqz",
+      "if",
+      "  unreachable",
+      "end",
+    ]
+    (slotNullCheckW "d")
+
+test "a slot load reads the slot array field of the dictionary" =
+  expectEqual
+    [
+      "local.get $\{gname "d"}",
+      "ref.cast (ref $dict)",
+      "struct.get $dict 2",
+      "i32.const 3",
+      "array.get $slotarr",
+    ]
+    (slotFieldW "d" 3)
+
+test "the slot function types declared are exactly the demanded arities" =
+  expectEqual
+    [
+      "    (type $slot2 (func (param (ref eq)) (param (ref eq)) (result (ref eq))))",
+      "    (type $slot3 (func (param (ref eq)) (param (ref eq)) (param (ref eq)) (result (ref eq))))",
+    ]
+    (slotTypeLines ["dictarr", "slot3", "slot2", "slotarr"])
+
+test "a slot function takes the dictionary, the method-level dictionaries, then the values" = expectAll
+  [
+    expectEqual
+      "(param $sd (ref eq))"
+      (slotParamsW MethodSlot {
+        method = "m",
+        contextDicts = 0,
+        valueArity = 0,
+      }),
+    expectEqual
+      "(param $sd (ref eq)) (param $sm0 (ref eq)) (param $sa0 (ref eq)) (param $sa1 (ref eq))"
+      (slotParamsW MethodSlot {
+        method = "m",
+        contextDicts = 1,
+        valueArity = 2,
+      }),
+  ]

@@ -26,7 +26,7 @@ import support.symbol_encoding.{encodePair}
 --   * `main`.
 --   * every `$memo_<tag>_<method>` top-level CAF (`core_ir_lower.memoBindName`).
 --     These are referenced by the wasm emitter's RDict dispatch arm
---     (`wasm_emit.dispatchCallSeqW` emits `call $force_$memo_…`) WITHOUT any
+--     (`wasm_emit.slotWrapperLines` emits `call $force_$memo_…`) WITHOUT any
 --     `CVar` occurrence in the IR, so an IR-only walk cannot see the edge.  There
 --     are two in the whole corpus (`$memo_List_empty`, `$memo_String_empty`), so
 --     rooting them unconditionally is both cheap and the only safe rule.
@@ -54,7 +54,7 @@ import support.symbol_encoding.{encodePair}
 -- for a method `m` we either keep EVERY entry naming `m` or none, and "none" is
 -- chosen only when no reachable body mentions `m` at all.  Every emitter query
 -- against the impl list is filtered by the BARE METHOD NAME first
--- (`implForW`, `methodImpls` → the RDict if-chain, `findDefaultW`,
+-- (`implForW`, `findDefaultW`,
 -- `headTagForKeyW`), so for a kept method the emitter sees the identical candidate
 -- set it saw before, and for a dropped method it never asks.  In particular this
 -- cannot silently turn a concrete `RKey` impl call into an interface-default
