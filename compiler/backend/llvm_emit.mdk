@@ -7693,10 +7693,7 @@ emitApplyAny e cw argOps = emitApplyAnyWide e None cw argOps
 emitApplyAnyWide : Emit -> Option String -> String -> List String -> String
 emitApplyAnyWide _ _ cw [] = cw
 emitApplyAnyWide e wideMsg cw argOps =
-  let n = lengthS argOps
-  let hdr = loadHeader e cw
-  let cmp = freshReg e
-  emit e "  \{cmp} = icmp eq i64 \{hdr}, \{intToString n}"
+  let (hdr, cmp) = emitArityTest e cw (lengthS argOps)
   let m = intToString (freshLocal e)
   let fastL = "apfast" ++ m
   let slowL = "apslow" ++ m
@@ -7719,6 +7716,35 @@ emitApplyAnyWide e wideMsg cw argOps =
   let r = freshReg e
   emit e "  \{r} = load i64, ptr \{slot}"
   r
+
+-- `emitApplyAnyWide` in the tail position of its define: each branch returns
+-- its own result, so the exact-count call is followed by its `ret` with no join
+-- block between them.
+emitApplyAnyRet : Emit -> Option String -> String -> List String -> Unit
+emitApplyAnyRet e wideMsg cw argOps =
+  let (hdr, cmp) = emitArityTest e cw (lengthS argOps)
+  let m = intToString (freshLocal e)
+  let fastL = "apfast" ++ m
+  let slowL = "apslow" ++ m
+  emit e "  br i1 \{cmp}, label %\{fastL}, label %\{slowL}"
+  emit e (fastL ++ ":")
+  let rf = emitIndirectCallWords e cw argOps
+  emit e ("  ret i64 " ++ rf)
+  emit e (slowL ++ ":")
+  match wideMsg
+    Some msg => emitWideRefusal e hdr msg m
+    None => ()
+  let rs = emitApplyRuntime e cw argOps
+  emit e ("  ret i64 " ++ rs)
+
+-- Load closure [cw]'s header and compare it with the supplied count [n]; the
+-- header word and the comparison's register.
+emitArityTest : Emit -> String -> Int -> (String, String)
+emitArityTest e cw n =
+  let hdr = loadHeader e cw
+  let cmp = freshReg e
+  emit e "  \{cmp} = icmp eq i64 \{hdr}, \{intToString n}"
+  (hdr, cmp)
 
 -- A closure whose header (its arity; a PAP's is -1) exceeds [runtimeCallArgMax]
 -- cannot be saturated by `__mdk_apply`, so the runtime path panics with [msg]
@@ -8183,18 +8209,62 @@ emitSharedSlotCall : Emit ->
   List String ->
   String
 emitSharedSlotCall e iface method dictPtr i rest =
-  let field = slotField e iface i
+  let field = slotFieldWord e iface i
   let helper = slotCallHelper e (1 + lengthS rest)
   let r = freshReg e
   let call = wordCall e helper (dictPtr :: field :: rest)
   emit e "  \{r} = \{call} ; slot \{iface}.\{method}"
   r
 
+-- The method, evidence, arguments, slot index and slot of [ex] when it is an
+-- application `emitMethodDispatch` calls through a dictionary slot: a runtime
+-- dictionary route with no sole impl to call directly.  None for any other
+-- expression, emitting nothing.
+slotApplication : Emit ->
+  CExpr ->
+  Option (String, MethodEvidence, List CExpr, Int, MethodSlot)
+slotApplication e ex =
+  let (hd, args, _) = appParts ex
+  match hd
+    CMethod name (evidence@(MethodEvidence iface siteArity route _ _)) =>
+      let direct = soleImplDirectSite e name iface siteArity
+      if isGivenRooted route && isNone direct then
+        let slots = interfaceSlots e.methodTables iface
+        map ((i, slot) => (name, evidence, args, i, slot)) (slotOf name slots 0)
+      else
+        None
+    _ => None
+
+-- `emitSlotCall` in the tail position of its define: the slot's load and
+-- application inline rather than through the shared helper, each branch
+-- returning its own result.  Through the helper, the inlined call's result
+-- reaches the `ret` through the helper's join block, which clang does not turn
+-- into a jump.  `musttail` cannot be used: the slot's code takes the dictionary
+-- and the method's arguments, not this define's parameters.
+emitSlotTailCall : Emit ->
+  OrdMap (String, LTy) ->
+  String ->
+  MethodEvidence ->
+  List CExpr ->
+  Int ->
+  MethodSlot ->
+  Unit
+emitSlotTailCall e env name (MethodEvidence iface _ dict _ methRoutes) args i slot =
+  let argOps = emitArgs e env args
+  let dictPtr = dictWordOfRoute e env dict
+  let methWords = dictWordsOf e env methRoutes
+  let clos = loadSlot e iface name dictPtr i
+  emitApplyAnyRet
+    e
+    (slotWideMessage name slot)
+    clos
+    (dictPtr :: methWords ++ argOps)
+
 -- The field of dictionary [iface]'s slot [i]: a constant past the supers, or in
 -- the prelude half of a prelude-object build, the slot index added to the
 -- `@mdk.supers.*` constant (see `loadSlot`).
-slotField : Emit -> String -> Int -> String
-slotField e iface i =
+slotFieldWord : Emit -> String -> Int -> String
+slotFieldWord e iface i =
   if e.input.emitHalf == emitHalfPrelude then
     let supers = freshReg e
     emit e "  \{supers} = load i64, ptr @\{symRef e (superCountGlobal e iface)}"
@@ -8295,7 +8365,7 @@ loadSlot e iface method dictPtr i =
   emit e "  unreachable"
   emit e (okL ++ ":")
   if e.input.emitHalf == emitHalfPrelude then
-    loadFieldDyn e dictPtr (slotField e iface i)
+    loadFieldDyn e dictPtr (slotFieldWord e iface i)
   else
     loadField e dictPtr (staticSlotField e iface i)
 
@@ -13366,8 +13436,9 @@ emitTailClauseTree e env self arity clauses site =
 -- lowering flagged as the tail call (`isTailCall`) returns its result from the
 -- leaf: an exact call of a statically known define calls it directly
 -- (`directCallOperands`), a call of `self` through its own closure word calls
--- `self` directly (`ownClosureOperands`), and any other is computed and
--- returned at once.  `emitDirectTailCall` decides between `musttail call` and
+-- `self` directly (`ownClosureOperands`), a call through a dictionary slot is
+-- `emitSlotTailCall`'s, and any other is computed and returned at once.
+-- `emitDirectTailCall` decides between `musttail call` and
 -- `call`; a `call` followed by `ret` becomes a jump only where clang's calling
 -- convention allows.  A leaf that is not flagged is `orValue`'s.
 emitTailLeaf : Emit ->
@@ -13382,7 +13453,10 @@ emitTailLeaf e env self ex orValue =
     None => match ownClosureOperands e env self ex
       Some ops =>
         emitDirectTailCall e self (tailDefineSym self) ("%clos" :: ops)
-      None => emitValueRet e env ex
+      None => match slotApplication e ex
+        Some (name, evidence, args, i, slot) =>
+          emitSlotTailCall e env name evidence args i slot
+        None => emitValueRet e env ex
   else
     orValue ()
 
