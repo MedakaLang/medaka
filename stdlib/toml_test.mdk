@@ -4,7 +4,7 @@ import toml.{
   Toml(..), TomlValue(..), parse, tableCount, tableEntry, tableEntries,
   getString
 }
-import test.{expectEqual, expectOkThen}
+import test.{expectEach, expectEqual, expectErrContains, expectOkThen}
 
 multi : String
 multi =
@@ -99,3 +99,131 @@ test "a key followed by a no-break space keeps it in the key" =
 
 test "a table header with a no-break space inside the brackets keeps it" =
   expectEqual (Ok (Toml [("a .k", TString "v")])) (parse "[a ]\nk = \"v\"\n")
+
+-- ── Basic-string escapes ─────────────────────────────────────────────────────
+
+-- The one-character string for a code point.
+codeStr : Int -> String
+codeStr n = match charFromCode n
+  Some c => charToStr c
+  None => ""
+
+str : String -> Result String Toml
+str v = Ok (Toml [("k", TString v)])
+
+test "each TOML escape decodes" = expectEach [
+  ("\\b", expectEqual (str (codeStr 8)) (parse "k = \"\\b\"")),
+  ("\\t", expectEqual (str (codeStr 9)) (parse "k = \"\\t\"")),
+  ("\\n", expectEqual (str (codeStr 10)) (parse "k = \"\\n\"")),
+  ("\\f", expectEqual (str (codeStr 12)) (parse "k = \"\\f\"")),
+  ("\\r", expectEqual (str (codeStr 13)) (parse "k = \"\\r\"")),
+  ("\\\"", expectEqual (str "\"") (parse "k = \"\\\"\"")),
+  ("\\\\", expectEqual (str "\\") (parse "k = \"\\\\\"")),
+  ("\\u00e9", expectEqual (str "é") (parse "k = \"\\u00e9\"")),
+  ("\\u00E9", expectEqual (str "é") (parse "k = \"\\u00E9\"")),
+  (
+    "\\U0001F600",
+    expectEqual (str (codeStr 128512)) (parse "k = \"\\U0001F600\""),
+  ),
+  ("mixed", expectEqual (str "a\nb\"c") (parse "k = \"a\\nb\\\"c\"")),
+  (
+    "a raw tab",
+    expectEqual (str (codeStr 9)) (parse ("k = \"" ++ codeStr 9 ++ "\"")),
+  ),
+]
+
+test "an invalid string is an Err naming the key and the character" = expectEach
+  [
+    (
+      "unknown escape",
+      expectErrContains "key 'k': unknown escape '\\q'" (parse "k = \"a\\qb\""),
+    ),
+    (
+      "surrogate",
+      expectErrContains
+        "key 'k': U+d800 is not a Unicode scalar value"
+        (parse "k = \"\\uD800\""),
+    ),
+    (
+      "past U+10FFFF",
+      expectErrContains
+        "U+110000 is not a Unicode scalar value"
+        (parse "k = \"\\U00110000\""),
+    ),
+    (
+      "short \\u",
+      expectErrContains
+        "key 'k': \\u needs 4 hex digits"
+        (parse "k = \"\\u12\""),
+    ),
+    (
+      "short \\U",
+      expectErrContains
+        "key 'k': \\U needs 8 hex digits"
+        (parse "k = \"\\U0001F60\""),
+    ),
+    (
+      "raw LF",
+      expectErrContains
+        "key 'k': unterminated string"
+        (parse ("k = \"a" ++ codeStr 10 ++ "b\"")),
+    ),
+    (
+      "raw U+0001",
+      expectErrContains
+        "key 'k': raw control character U+0001"
+        (parse ("k = \"" ++ codeStr 1 ++ "\"")),
+    ),
+    (
+      "raw DEL",
+      expectErrContains
+        "key 'k': raw control character U+007f"
+        (parse ("k = \"" ++ codeStr 127 ++ "\"")),
+    ),
+    (
+      "in an array",
+      expectErrContains
+        "key 'xs': unknown escape '\\q'"
+        (parse "xs = [\"ok\", \"\\q\"]"),
+    ),
+  ]
+
+test "an escaped quote does not end a string or start a comment" = expectEach [
+  ("quote then hash", expectEqual (str "a\"#b") (parse "k = \"a\\\"#b\" # c")),
+  (
+    "escaped backslash closes",
+    expectEqual (str "a\\") (parse "k = \"a\\\\\" # c"),
+  ),
+  (
+    "backslash outside a string is not special",
+    expectEqual (Ok (Toml [("k", TInt 1)])) (parse "k = 1 # \\"),
+  ),
+]
+
+test "an array of strings with escapes parses" =
+  expectEqual
+    (Ok (Toml [("xs", TArray ["a\"b", "c\\d", "e\nf"])]))
+    (parse "xs = [\"a\\\"b\", \"c\\\\d\", \"e\\nf\"] # note")
+
+test "display spells escapes the way parse reads them" = expectEach [
+  (
+    "quote and backslash",
+    expectEqual "\"a\\\"\\\\\"" (display (TString "a\"\\")),
+  ),
+  ("newline", expectEqual "\"\\n\"" (display (TString "\n"))),
+  ("control", expectEqual "\"\\u0001\"" (display (TString (codeStr 1)))),
+  ("array", expectEqual "[\"x\\\"y\", \"z\"]" (display (TArray ["x\"y", "z"]))),
+]
+
+-- A string built from arbitrary code points below U+012C: quotes, backslashes,
+-- newlines and every other control character all occur.
+stringOfCodes : List Int -> String
+stringOfCodes ns = stringConcat (map (n => codeStr ((n % 300 + 300) % 300)) ns)
+
+prop "parse reads back what display writes for a string" (ns : List Int) =
+  let s = stringOfCodes ns
+  parse ("k = " ++ display (TString s)) == str s
+
+prop "parse reads back what display writes for an array of strings" (ns : List Int) (ms : List Int) =
+  let xs = [stringOfCodes ns, stringOfCodes ms]
+  parse ("xs = " ++ display (TArray xs)) == Ok (Toml [("xs", TArray xs)])

@@ -1,10 +1,13 @@
 {- | A reader for a subset of TOML.
 
    `parse` reads a document with `[section]` and `[[table]]` headers and
-   keys whose values are double-quoted strings, arrays of strings,
-   integers, or booleans, with `#` comments. Anything else (floats, dates,
-   multi-line strings, inline tables, dotted keys, and escape sequences) is
-   an error, never silently dropped.
+   keys whose values are basic strings (double-quoted, with TOML 1.0.0's
+   escapes `\b \t \n \f \r \" \\ \uXXXX \UXXXXXXXX`), arrays of basic
+   strings, integers, or booleans, with `#` comments. Anything else is an
+   error, never silently dropped: literal strings (`'..'`), multi-line
+   strings, floats, dates, inline tables, dotted keys, any other escape
+   (including TOML 1.1's `\e` and `\xHH`), and a raw control character other
+   than tab inside a string.
 
    The parsed `Toml` is a flat list of keys and values, with every key
    qualified by its section: `name` under `[package]` is `"package.name"`,
@@ -19,7 +22,10 @@
 
 import list.{reverse}
 import map.{Map(..), get, insertWith}
-import string.{lines, toInt, startsWith, drop, indexOf, contains, trimAscii}
+import string.{
+  lines, toInt, startsWith, drop, indexOf, contains, trimAscii, fromDigit,
+  toDigit
+}
 import core.{Display}
 import regex.{Regex, mustCompile, find as reFind}
 
@@ -38,70 +44,213 @@ public export data Toml = Toml (List (String, TomlValue))
 -- ── Comment stripping ────────────────────────────────────────────────────────
 
 -- Strip a `#` comment from a line, respecting double-quoted strings so
--- `entry = "foo#bar"` is preserved.
+-- `entry = "foo#bar"` is preserved.  Inside a string a backslash escapes the
+-- next character, so `\"` does not close it and `\\` before `"` does.
 stripComment : String -> String
 stripComment s =
   let arr = stringToChars s
   let n = arrayLength arr
-  stripCommentGo arr 0 n False []
+  stripCommentGo arr 0 n False False []
 
-stripCommentGo : Array Char -> Int -> Int -> Bool -> List Char -> String
-stripCommentGo arr i n inStr acc
+stripCommentGo : Array Char -> Int -> Int -> Bool -> Bool -> List Char -> String
+stripCommentGo arr i n inStr esc acc
   | i >= n = stringFromChars (arrayFromList (reverse acc))
-  | otherwise = stripCommentStep arr i n inStr acc (arrayGetUnsafe i arr)
+  | otherwise = stripCommentStep arr i n inStr esc acc (arrayGetUnsafe i arr)
 
 stripCommentStep : Array Char ->
   Int ->
   Int ->
   Bool ->
+  Bool ->
   List Char ->
   Char ->
   String
-stripCommentStep arr i n inStr acc c
-  | charCode c == 34 = stripCommentGo arr (i + 1) n (not inStr) (c :: acc)
+stripCommentStep arr i n inStr esc acc c
+  | inStr && esc = stripCommentGo arr (i + 1) n True False (c :: acc)
+  | inStr && charCode c == 92 =
+    stripCommentGo arr (i + 1) n True True (c :: acc)
+  | charCode c == 34 = stripCommentGo arr (i + 1) n (not inStr) False (c :: acc)
   | charCode c == 35 && not inStr =
     stringFromChars (arrayFromList (reverse acc))
-  | otherwise = stripCommentGo arr (i + 1) n inStr (c :: acc)
+  | otherwise = stripCommentGo arr (i + 1) n inStr False (c :: acc)
 
 -- ── String value parser ──────────────────────────────────────────────────────
 
--- Parse a double-quoted string from an Array Char starting at position i.
+-- Parse a basic string from an Array Char starting at position i, decoding
+-- its escapes.  `key` names the key being read, for the errors.
 -- Returns Ok (value, nextIndex) or Err message.
-parseQuotedStr : Array Char -> Int -> Result String (String, Int)
-parseQuotedStr arr i
+parseQuotedStr : String -> Array Char -> Int -> Result String (String, Int)
+parseQuotedStr key arr i
   | i >= arrayLength arr = Err "unexpected end of input"
-  | arrayGetUnsafe i arr == '"' = parseQuotedBody arr (i + 1) []
+  | arrayGetUnsafe i arr == '"' = parseQuotedBody key arr (i + 1) []
   | otherwise = Err "expected '\"'"
 
-parseQuotedBody : Array Char -> Int -> List Char -> Result String (String, Int)
-parseQuotedBody arr i acc
-  | i >= arrayLength arr = Err "unterminated string"
-  | arrayGetUnsafe i arr == '"' =
-    Ok (stringFromChars (arrayFromList (reverse acc)), i + 1)
-  | otherwise = parseQuotedBody arr (i + 1) (arrayGetUnsafe i arr :: acc)
+parseQuotedBody : String ->
+  Array Char ->
+  Int ->
+  List Char ->
+  Result String (String, Int)
+parseQuotedBody key arr i acc
+  | i >= arrayLength arr = Err (unterminatedMsg key)
+  | c == '"' = Ok (stringFromChars (arrayFromList (reverse acc)), i + 1)
+  | c == '\\' = parseEscape key arr (i + 1) acc
+  | isRawControl c =
+    Err
+      (stringConcat [
+        "invalid string for key '",
+        key,
+        "': raw control character ",
+        describeChar c,
+        " must be escaped",
+      ])
+  | otherwise = parseQuotedBody key arr (i + 1) (c :: acc)
+  where
+    c = arrayGetUnsafe i arr
+
+-- A basic string closes on its own line, so a raw newline inside one shows up
+-- here as the line ending early.
+unterminatedMsg : String -> String
+unterminatedMsg key = stringConcat [
+  "invalid string for key '", key,
+  "': unterminated string (a newline inside a string must be written \\n)"
+]
+
+-- TOML forbids every control character but tab raw inside a basic string.
+isRawControl : Char -> Bool
+isRawControl c =
+  let k = charCode c
+  k < 32 && k /= 9 || k == 127
+
+-- A character as it appears in an error: itself when printable ASCII,
+-- otherwise its `U+XXXX` code point.
+describeChar : Char -> String
+describeChar c
+  | charCode c > 32 && charCode c < 127 = stringConcat ["'", charToStr c, "'"]
+  | otherwise = stringConcat ["U+", hexPad 4 (charCode c)]
+
+-- `n` in lowercase hexadecimal, left-padded with zeros to `width` digits.
+hexPad : Int -> Int -> String
+hexPad width n =
+  let digits = hexDigits n
+  stringConcat [
+    stringConcat
+      (map (_ => "0") [0..width - arrayLength (stringToChars digits)]),
+    digits,
+  ]
+
+hexDigits : Int -> String
+hexDigits n
+  | n < 16 = hexDigit n
+  | otherwise = stringConcat [hexDigits (n / 16), hexDigit (n % 16)]
+
+hexDigit : Int -> String
+hexDigit d = match toDigit d
+  Some c => charToStr c
+  None => "?"
+
+-- The character after a backslash at `i`.
+parseEscape : String ->
+  Array Char ->
+  Int ->
+  List Char ->
+  Result String (String, Int)
+parseEscape key arr i acc
+  | i >= arrayLength arr = Err (unterminatedMsg key)
+  | c == 'u' = parseUnicodeEscape key arr (i + 1) 4 acc
+  | c == 'U' = parseUnicodeEscape key arr (i + 1) 8 acc
+  | otherwise = match simpleEscape c
+    Some d => parseQuotedBody key arr (i + 1) (d :: acc)
+    None =>
+      Err
+        (stringConcat [
+          "invalid string for key '",
+          key,
+          "': unknown escape '\\",
+          charToStr c,
+          "'",
+        ])
+  where
+    c = arrayGetUnsafe i arr
+
+-- The character a one-letter escape stands for.
+simpleEscape : Char -> Option Char
+simpleEscape c
+  | c == 'b' = charFromCode 8
+  | c == 't' = charFromCode 9
+  | c == 'n' = charFromCode 10
+  | c == 'f' = charFromCode 12
+  | c == 'r' = charFromCode 13
+  | c == '"' = Some '"'
+  | c == '\\' = Some '\\'
+  | otherwise = None
+
+-- `\u` and `\U` take exactly `width` hex digits naming a Unicode scalar
+-- value (no surrogates, nothing above U+10FFFF).
+parseUnicodeEscape : String ->
+  Array Char ->
+  Int ->
+  Int ->
+  List Char ->
+  Result String (String, Int)
+parseUnicodeEscape key arr i width acc = match hexRun arr i width 0
+  None =>
+    Err
+      (stringConcat [
+        "invalid string for key '",
+        key,
+        "': \\",
+        if width == 4 then "u" else "U",
+        " needs ",
+        intToString width,
+        " hex digits",
+      ])
+  Some cp => match charFromCode cp
+    Some d => parseQuotedBody key arr (i + width) (d :: acc)
+    None =>
+      Err
+        (stringConcat [
+          "invalid string for key '",
+          key,
+          "': U+",
+          hexPad 4 cp,
+          " is not a Unicode scalar value",
+        ])
+
+-- The value of the `count` hex digits at `i`, or None if any is missing.
+hexRun : Array Char -> Int -> Int -> Int -> Option Int
+hexRun arr i count acc
+  | count == 0 = Some acc
+  | i >= arrayLength arr = None
+  | otherwise = match fromDigit (arrayGetUnsafe i arr)
+    Some d => hexRun arr (i + 1) (count - 1) (acc * 16 + d)
+    None => None
 
 -- ── Array value parser ───────────────────────────────────────────────────────
 
 -- Parse a `["str1", "str2"]` array starting at position `i` (must point at `[`).
-parseArrayValue : Array Char -> Int -> Result String (List String, Int)
-parseArrayValue arr i
+parseArrayValue : String ->
+  Array Char ->
+  Int ->
+  Result String (List String, Int)
+parseArrayValue key arr i
   | i >= arrayLength arr = Err "unexpected end of input"
-  | arrayGetUnsafe i arr == '[' = parseArrayItems arr (i + 1) []
+  | arrayGetUnsafe i arr == '[' = parseArrayItems key arr (i + 1) []
   | otherwise = Err "expected '['"
 
 -- Skip spaces and parse a string item, or close on `]`.  Called at the start
 -- of the array and again after each comma, i.e. wherever an item (or the
 -- close) is expected next.
-parseArrayItems : Array Char ->
+parseArrayItems : String ->
+  Array Char ->
   Int ->
   List String ->
   Result String (List String, Int)
-parseArrayItems arr i acc
+parseArrayItems key arr i acc
   | i >= arrayLength arr = Err "unterminated array"
   | arrayGetUnsafe i arr == ']' = Ok (reverse acc, i + 1)
-  | arrayGetUnsafe i arr == ' ' = parseArrayItems arr (i + 1) acc
-  | arrayGetUnsafe i arr == '\t' = parseArrayItems arr (i + 1) acc
-  | arrayGetUnsafe i arr == '"' = parseArrayItemStr arr i acc
+  | arrayGetUnsafe i arr == ' ' = parseArrayItems key arr (i + 1) acc
+  | arrayGetUnsafe i arr == '\t' = parseArrayItems key arr (i + 1) acc
+  | arrayGetUnsafe i arr == '"' = parseArrayItemStr key arr i acc
   | otherwise =
     Err
       (stringConcat [
@@ -110,28 +259,30 @@ parseArrayItems arr i acc
         "'",
       ])
 
-parseArrayItemStr : Array Char ->
+parseArrayItemStr : String ->
+  Array Char ->
   Int ->
   List String ->
   Result String (List String, Int)
-parseArrayItemStr arr i acc = match parseQuotedStr arr i
+parseArrayItemStr key arr i acc = match parseQuotedStr key arr i
   Err e => Err e
-  Ok (s, j) => parseArraySep arr j (s :: acc)
+  Ok (s, j) => parseArraySep key arr j (s :: acc)
 
 -- After a parsed item: only a `,` (another item may follow, a trailing comma
 -- before `]` is fine) or `]` (close) is valid next.  Anything else, most
 -- commonly another quoted item with no comma between, `["x" "y"]`, is a
 -- malformed array and must be rejected loudly rather than silently accepted
 -- as two adjacent items.
-parseArraySep : Array Char ->
+parseArraySep : String ->
+  Array Char ->
   Int ->
   List String ->
   Result String (List String, Int)
-parseArraySep arr i acc
+parseArraySep key arr i acc
   | i >= arrayLength arr = Err "unterminated array"
-  | arrayGetUnsafe i arr == ' ' = parseArraySep arr (i + 1) acc
-  | arrayGetUnsafe i arr == '\t' = parseArraySep arr (i + 1) acc
-  | arrayGetUnsafe i arr == ',' = parseArrayItems arr (i + 1) acc
+  | arrayGetUnsafe i arr == ' ' = parseArraySep key arr (i + 1) acc
+  | arrayGetUnsafe i arr == '\t' = parseArraySep key arr (i + 1) acc
+  | arrayGetUnsafe i arr == ',' = parseArrayItems key arr (i + 1) acc
   | arrayGetUnsafe i arr == ']' = Ok (reverse acc, i + 1)
   | otherwise =
     Err
@@ -208,12 +359,12 @@ checkLineConsumed arr j key =
       ])
 
 parseKvStr : Array Char -> Int -> String -> Result String (String, TomlValue)
-parseKvStr arr i key = match parseQuotedStr arr i
+parseKvStr arr i key = match parseQuotedStr key arr i
   Err e => Err e
   Ok (s, j) => map (_ => (key, TString s)) (checkLineConsumed arr j key)
 
 parseKvArr : Array Char -> Int -> String -> Result String (String, TomlValue)
-parseKvArr arr i key = match parseArrayValue arr i
+parseKvArr arr i key = match parseArrayValue key arr i
   Err e => Err e
   Ok (xs, j) => map (_ => (key, TArray xs)) (checkLineConsumed arr j key)
 
@@ -254,18 +405,20 @@ arrayTableRe = mustCompile "^\\[\\[(.+)\\]\\]$"
 tableRe : Regex
 tableRe = mustCompile "^\\[(.+)\\]$"
 
+-- The single group of `re`'s match on `s`, trimmed.
+headerName : Regex -> String -> Option String
+headerName re s = match reFind re s
+  Some m => match m.groups
+    (Some g) :: [] => Some (trimAscii g.text)
+    _ => None
+  None => None
+
 -- Detect a section header and classify it, or return None.
 -- `[[t]]` is checked first: it also satisfies the `[t]` shape.
 parseHeader : String -> Option Header
-parseHeader s = match reFind arrayTableRe s
-  Some m => match m.groups
-    (Some g) :: [] => Some (HArrayTable (trimAscii g.text))
-    _ => None
-  None => match reFind tableRe s
-    Some m => match m.groups
-      (Some g) :: [] => Some (HTable (trimAscii g.text))
-      _ => None
-    None => None
+parseHeader s = match headerName arrayTableRe s
+  Some name => Some (HArrayTable name)
+  None => map HTable (headerName tableRe s)
 
 -- Qualify a key relative to the current section.  Every section qualifies;
 -- `[package]` is not special.
@@ -732,10 +885,40 @@ export impl Debug Toml where
 -- `TInt 1`.  That injectivity is the law under test.
 
 displayTomlValue : TomlValue -> String
-displayTomlValue (TString s) = debug s
-displayTomlValue (TArray xs) = debugStrList xs
+displayTomlValue (TString s) = tomlString s
+displayTomlValue (TArray xs) = stringConcat ["[", joinTomlStrs xs, "]"]
 displayTomlValue (TInt n) = intToString n
 displayTomlValue (TBool b) = if b then "true" else "false"
+
+-- A string in TOML's basic-string spelling: `parse` reads it back.
+tomlString : String -> String
+tomlString s =
+  let arr = stringToChars s
+  stringConcat [
+    "\"",
+    stringConcat
+      (map (i => tomlEscape (arrayGetUnsafe i arr)) [0..arrayLength arr]),
+    "\"",
+  ]
+
+tomlEscape : Char -> String
+tomlEscape c
+  | k == 34 = "\\\""
+  | k == 92 = "\\\\"
+  | k == 8 = "\\b"
+  | k == 9 = "\\t"
+  | k == 10 = "\\n"
+  | k == 12 = "\\f"
+  | k == 13 = "\\r"
+  | k < 32 || k == 127 = stringConcat ["\\u", hexPad 4 k]
+  | otherwise = charToStr c
+  where
+    k = charCode c
+
+joinTomlStrs : List String -> String
+joinTomlStrs [] = ""
+joinTomlStrs (x :: []) = tomlString x
+joinTomlStrs (x :: xs) = stringConcat [tomlString x, ", ", joinTomlStrs xs]
 
 displayKvPair : (String, TomlValue) -> String
 displayKvPair (k, v) = stringConcat [k, " = ", displayTomlValue v]
