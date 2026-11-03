@@ -151,7 +151,7 @@ import types.tc_decls_types.{
   sigVarsWithAuths,
   substAliasArgs,
   writtenBindingForce,
-  writtenKindRecoveryNames,
+  recoveredScope,
 }
 import types.effect_authority.{Authority(..), Authvar(..), authvarId}
 import types.effect_rows.{
@@ -1031,7 +1031,8 @@ astTypeFreshTbl outer ty = atSignature outer ty (mctx =>
   let auths = authArgBindersIn mctx ty
   let etbl = sigVarsForWith mctx ty (dedup (effTailNames ty ++ rows)) auths
   let tvs = freshTvMap mctx (sigTyVarNames ty rows (map fst auths))
-  (fromAstTypeE mctx etbl tvs ty, tvs))
+  let (written, scope) = recoveredScope mctx tvs ty
+  (fromAstTypeE mctx etbl scope written, tvs))
 
 -- The head-pin's target type: if the annotation's head is a TyCon with a known
 -- declared arity (from `dataParamKindsRef`), rebuild it at that arity with fresh
@@ -1083,17 +1084,15 @@ sigToSchemeTvsIn outer scope ty = atSignature
     let etbl = sigVarsForWith mctx ty (dedup (effTailNames ty ++ rows)) auths
     -- A rejected occurrence's variable is quantified, not returned: no written
     -- name or constraint refers to it.
-    let quantified = match writtenKindRecoveryNames mctx ty
-      [] => tvs
-      names => tvs ++ freshTvMap mctx names
+    let (written, quantified) = recoveredScope mctx tvs ty
     (
       Forall
         (map (snd >> monoTyvarId) quantified)
         (map effvarIdOf etbl.svRows)
         (map authvarIdOf etbl.svAuths)
         []
-        (bindingForceFromAst mctx etbl quantified ty)
-        (fromAstTypeE mctx etbl quantified ty),
+        (bindingForceFromAst mctx etbl tvs ty)
+        (fromAstTypeE mctx etbl quantified written),
       tvs,
     ))
 
@@ -2242,7 +2241,12 @@ instantiateSigTracked outer ty = atSignature outer ty (mctx =>
   let auths = authArgBindersIn mctx ty
   let tvs = freshTvMap mctx (sigTyVarNames ty rows (map fst auths))
   let etbl = sigVarsForWith mctx ty (dedup (effTailNames ty ++ rows)) auths
-  (fromAstTypeE mctx etbl tvs ty, tvs, writtenBindingForce mctx etbl tvs ty))
+  let (written, scope) = recoveredScope mctx tvs ty
+  (
+    fromAstTypeE mctx etbl scope written,
+    tvs,
+    writtenBindingForce mctx etbl tvs ty,
+  ))
 
 export
 constraintNameMonos : List String -> List (String, Mono) -> List Mono

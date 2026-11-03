@@ -1,5 +1,5 @@
 # META
-source_lines=1549
+source_lines=1553
 stages=DESUGAR,MARK
 # SOURCE
 -- tc_diag_text: the context-free message text of the typechecker: every message, help and fix
@@ -287,26 +287,30 @@ kindDomainName k = kindName k
 
 -- A written constructor given [nArgs] type arguments where its position takes
 -- [expected] (EFFECTS-SEMANTICS §6.4).  [written] is a raw head tag
--- (`ppConName`); the remedy depends on which side the count is wrong on.
+-- (`ppConName`); the remedy depends on which side the count is wrong on.  A
+-- remedy that writes arguments names them apart from [written] and from
+-- [taken], the variables the written type already uses.
 export
-writtenKindArityMsg : String -> Int -> Int -> String
-writtenKindArityMsg written expected nArgs =
-  "`\{ppConName written}` expects \{countTypeArguments expected}, got \{intToString nArgs}; \{writtenKindArityFix (ppConName written) expected nArgs}"
+writtenKindArityMsg : String -> Int -> Int -> List String -> String
+writtenKindArityMsg written expected nArgs taken =
+  "`\{ppConName written}` expects \{countTypeArguments expected}, got \{intToString nArgs}; \{writtenKindArityFix (ppConName written) expected nArgs (written :: taken)}"
 
 countTypeArguments : Int -> String
 countTypeArguments n = "\{intToString n} type \{argumentNoun n}"
 
-writtenKindArityFix : String -> Int -> Int -> String
-writtenKindArityFix written expected nArgs
+writtenKindArityFix : String -> Int -> Int -> List String -> String
+writtenKindArityFix written expected nArgs taken
   | nArgs > expected = "remove the extra \{argumentNoun (nArgs - expected)}"
-  | nArgs == 0 && startsWith "(" written =
-    "write `(\{joinWith ", " (take expected missingArgNames)})`"
-  | nArgs == 0 =
-    "write `\{written} \{joinWith " " (take expected missingArgNames)}`"
+  | nArgs == 0 && listLen fresh >= expected && startsWith "(" written =
+    "write `(\{joinWith ", " (take expected fresh)})`"
+  | nArgs == 0 && listLen fresh >= expected =
+    "write `\{written} \{joinWith " " (take expected fresh)}`"
   | otherwise = "supply the missing \{argumentNoun (expected - nArgs)}"
+  where
+    fresh = filter (n => not (contains n taken)) missingArgNames
 
 missingArgNames : List String
-missingArgNames = ["a", "b", "c", "d", "e", "f"]
+missingArgNames = ["a", "b", "c", "d", "e", "f", "g", "h", "k", "m", "n", "p"]
 
 -- A written type whose kind is not the one its position takes (§6.4), where
 -- the mismatch is not a count of arguments.
@@ -1634,14 +1638,14 @@ dropAmbiguity = filterList (d => tcCode d /= TAmbiguousInstance)
 (DTypeSig false "kindDomainName" (TyFun (TyCon "Kind") (TyCon "String")))
 (DFunDef false "kindDomainName" ((PCon "KArrow" (PVar "d") (PVar "r"))) (EBinOp "++" (EBinOp "++" (ELit (LString "(")) (EApp (EVar "display") (EApp (EVar "kindName") (EApp (EApp (EVar "KArrow") (EVar "d")) (EVar "r"))))) (ELit (LString ")"))))
 (DFunDef false "kindDomainName" ((PVar "k")) (EApp (EVar "kindName") (EVar "k")))
-(DTypeSig true "writtenKindArityMsg" (TyFun (TyCon "String") (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyCon "String")))))
-(DFunDef false "writtenKindArityMsg" ((PVar "written") (PVar "expected") (PVar "nArgs")) (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "`")) (EApp (EVar "display") (EApp (EVar "ppConName") (EVar "written")))) (ELit (LString "` expects "))) (EApp (EVar "display") (EApp (EVar "countTypeArguments") (EVar "expected")))) (ELit (LString ", got "))) (EApp (EVar "display") (EApp (EVar "intToString") (EVar "nArgs")))) (ELit (LString "; "))) (EApp (EVar "display") (EApp (EApp (EApp (EVar "writtenKindArityFix") (EApp (EVar "ppConName") (EVar "written"))) (EVar "expected")) (EVar "nArgs")))) (ELit (LString ""))))
+(DTypeSig true "writtenKindArityMsg" (TyFun (TyCon "String") (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyCon "String"))))))
+(DFunDef false "writtenKindArityMsg" ((PVar "written") (PVar "expected") (PVar "nArgs") (PVar "taken")) (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "`")) (EApp (EVar "display") (EApp (EVar "ppConName") (EVar "written")))) (ELit (LString "` expects "))) (EApp (EVar "display") (EApp (EVar "countTypeArguments") (EVar "expected")))) (ELit (LString ", got "))) (EApp (EVar "display") (EApp (EVar "intToString") (EVar "nArgs")))) (ELit (LString "; "))) (EApp (EVar "display") (EApp (EApp (EApp (EApp (EVar "writtenKindArityFix") (EApp (EVar "ppConName") (EVar "written"))) (EVar "expected")) (EVar "nArgs")) (EBinOp "::" (EVar "written") (EVar "taken"))))) (ELit (LString ""))))
 (DTypeSig false "countTypeArguments" (TyFun (TyCon "Int") (TyCon "String")))
 (DFunDef false "countTypeArguments" ((PVar "n")) (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "")) (EApp (EVar "display") (EApp (EVar "intToString") (EVar "n")))) (ELit (LString " type "))) (EApp (EVar "display") (EApp (EVar "argumentNoun") (EVar "n")))) (ELit (LString ""))))
-(DTypeSig false "writtenKindArityFix" (TyFun (TyCon "String") (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyCon "String")))))
-(DFunDef false "writtenKindArityFix" ((PVar "written") (PVar "expected") (PVar "nArgs")) (EIf (EBinOp ">" (EVar "nArgs") (EVar "expected")) (EBinOp "++" (EBinOp "++" (ELit (LString "remove the extra ")) (EApp (EVar "display") (EApp (EVar "argumentNoun") (EBinOp "-" (EVar "nArgs") (EVar "expected"))))) (ELit (LString ""))) (EIf (EBinOp "&&" (EBinOp "==" (EVar "nArgs") (ELit (LInt 0))) (EApp (EApp (EVar "startsWith") (ELit (LString "("))) (EVar "written"))) (EBinOp "++" (EBinOp "++" (ELit (LString "write `(")) (EApp (EVar "display") (EApp (EApp (EVar "joinWith") (ELit (LString ", "))) (EApp (EApp (EVar "take") (EVar "expected")) (EVar "missingArgNames"))))) (ELit (LString ")`"))) (EIf (EBinOp "==" (EVar "nArgs") (ELit (LInt 0))) (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "write `")) (EApp (EVar "display") (EVar "written"))) (ELit (LString " "))) (EApp (EVar "display") (EApp (EApp (EVar "joinWith") (ELit (LString " "))) (EApp (EApp (EVar "take") (EVar "expected")) (EVar "missingArgNames"))))) (ELit (LString "`"))) (EIf (EVar "otherwise") (EBinOp "++" (EBinOp "++" (ELit (LString "supply the missing ")) (EApp (EVar "display") (EApp (EVar "argumentNoun") (EBinOp "-" (EVar "expected") (EVar "nArgs"))))) (ELit (LString ""))) (EApp (EVar "__fallthrough__") (ELit LUnit)))))))
+(DTypeSig false "writtenKindArityFix" (TyFun (TyCon "String") (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyCon "String"))))))
+(DFunDef false "writtenKindArityFix" ((PVar "written") (PVar "expected") (PVar "nArgs") (PVar "taken")) (ELetGroup ((lgb "fresh" (clause () (EApp (EApp (EVar "filter") (ELam ((PVar "n")) (EApp (EVar "not") (EApp (EApp (EVar "contains") (EVar "n")) (EVar "taken"))))) (EVar "missingArgNames"))))) (EIf (EBinOp ">" (EVar "nArgs") (EVar "expected")) (EBinOp "++" (EBinOp "++" (ELit (LString "remove the extra ")) (EApp (EVar "display") (EApp (EVar "argumentNoun") (EBinOp "-" (EVar "nArgs") (EVar "expected"))))) (ELit (LString ""))) (EIf (EBinOp "&&" (EBinOp "&&" (EBinOp "==" (EVar "nArgs") (ELit (LInt 0))) (EBinOp ">=" (EApp (EVar "listLen") (EVar "fresh")) (EVar "expected"))) (EApp (EApp (EVar "startsWith") (ELit (LString "("))) (EVar "written"))) (EBinOp "++" (EBinOp "++" (ELit (LString "write `(")) (EApp (EVar "display") (EApp (EApp (EVar "joinWith") (ELit (LString ", "))) (EApp (EApp (EVar "take") (EVar "expected")) (EVar "fresh"))))) (ELit (LString ")`"))) (EIf (EBinOp "&&" (EBinOp "==" (EVar "nArgs") (ELit (LInt 0))) (EBinOp ">=" (EApp (EVar "listLen") (EVar "fresh")) (EVar "expected"))) (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "write `")) (EApp (EVar "display") (EVar "written"))) (ELit (LString " "))) (EApp (EVar "display") (EApp (EApp (EVar "joinWith") (ELit (LString " "))) (EApp (EApp (EVar "take") (EVar "expected")) (EVar "fresh"))))) (ELit (LString "`"))) (EIf (EVar "otherwise") (EBinOp "++" (EBinOp "++" (ELit (LString "supply the missing ")) (EApp (EVar "display") (EApp (EVar "argumentNoun") (EBinOp "-" (EVar "expected") (EVar "nArgs"))))) (ELit (LString ""))) (EApp (EVar "__fallthrough__") (ELit LUnit))))))))
 (DTypeSig false "missingArgNames" (TyApp (TyCon "List") (TyCon "String")))
-(DFunDef false "missingArgNames" () (EListLit (ELit (LString "a")) (ELit (LString "b")) (ELit (LString "c")) (ELit (LString "d")) (ELit (LString "e")) (ELit (LString "f"))))
+(DFunDef false "missingArgNames" () (EListLit (ELit (LString "a")) (ELit (LString "b")) (ELit (LString "c")) (ELit (LString "d")) (ELit (LString "e")) (ELit (LString "f")) (ELit (LString "g")) (ELit (LString "h")) (ELit (LString "k")) (ELit (LString "m")) (ELit (LString "n")) (ELit (LString "p"))))
 (DTypeSig true "writtenKindMismatchMsg" (TyFun (TyCon "String") (TyFun (TyCon "Kind") (TyFun (TyCon "Kind") (TyCon "String")))))
 (DFunDef false "writtenKindMismatchMsg" ((PVar "written") (PVar "got") (PVar "want")) (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "`")) (EApp (EVar "display") (EVar "written"))) (ELit (LString "` has kind `"))) (EApp (EVar "display") (EApp (EVar "kindName") (EVar "got")))) (ELit (LString "`, but a type of kind `"))) (EApp (EVar "display") (EApp (EVar "kindName") (EVar "want")))) (ELit (LString "` is expected here; write a type of that kind"))))
 (DTypeSig true "renderKindArrow" (TyFun (TyApp (TyCon "List") (TyCon "Kind")) (TyCon "String")))
@@ -2109,14 +2113,14 @@ dropAmbiguity = filterList (d => tcCode d /= TAmbiguousInstance)
 (DTypeSig false "kindDomainName" (TyFun (TyCon "Kind") (TyCon "String")))
 (DFunDef false "kindDomainName" ((PCon "KArrow" (PVar "d") (PVar "r"))) (EBinOp "++" (EBinOp "++" (ELit (LString "(")) (EApp (EMethodRef "display") (EApp (EVar "kindName") (EApp (EApp (EVar "KArrow") (EVar "d")) (EVar "r"))))) (ELit (LString ")"))))
 (DFunDef false "kindDomainName" ((PVar "k")) (EApp (EVar "kindName") (EVar "k")))
-(DTypeSig true "writtenKindArityMsg" (TyFun (TyCon "String") (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyCon "String")))))
-(DFunDef false "writtenKindArityMsg" ((PVar "written") (PVar "expected") (PVar "nArgs")) (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "`")) (EApp (EMethodRef "display") (EApp (EVar "ppConName") (EVar "written")))) (ELit (LString "` expects "))) (EApp (EMethodRef "display") (EApp (EVar "countTypeArguments") (EVar "expected")))) (ELit (LString ", got "))) (EApp (EMethodRef "display") (EApp (EVar "intToString") (EVar "nArgs")))) (ELit (LString "; "))) (EApp (EMethodRef "display") (EApp (EApp (EApp (EVar "writtenKindArityFix") (EApp (EVar "ppConName") (EVar "written"))) (EVar "expected")) (EVar "nArgs")))) (ELit (LString ""))))
+(DTypeSig true "writtenKindArityMsg" (TyFun (TyCon "String") (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyCon "String"))))))
+(DFunDef false "writtenKindArityMsg" ((PVar "written") (PVar "expected") (PVar "nArgs") (PVar "taken")) (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "`")) (EApp (EMethodRef "display") (EApp (EVar "ppConName") (EVar "written")))) (ELit (LString "` expects "))) (EApp (EMethodRef "display") (EApp (EVar "countTypeArguments") (EVar "expected")))) (ELit (LString ", got "))) (EApp (EMethodRef "display") (EApp (EVar "intToString") (EVar "nArgs")))) (ELit (LString "; "))) (EApp (EMethodRef "display") (EApp (EApp (EApp (EApp (EVar "writtenKindArityFix") (EApp (EVar "ppConName") (EVar "written"))) (EVar "expected")) (EVar "nArgs")) (EBinOp "::" (EVar "written") (EVar "taken"))))) (ELit (LString ""))))
 (DTypeSig false "countTypeArguments" (TyFun (TyCon "Int") (TyCon "String")))
 (DFunDef false "countTypeArguments" ((PVar "n")) (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "")) (EApp (EMethodRef "display") (EApp (EVar "intToString") (EVar "n")))) (ELit (LString " type "))) (EApp (EMethodRef "display") (EApp (EVar "argumentNoun") (EVar "n")))) (ELit (LString ""))))
-(DTypeSig false "writtenKindArityFix" (TyFun (TyCon "String") (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyCon "String")))))
-(DFunDef false "writtenKindArityFix" ((PVar "written") (PVar "expected") (PVar "nArgs")) (EIf (EBinOp ">" (EVar "nArgs") (EVar "expected")) (EBinOp "++" (EBinOp "++" (ELit (LString "remove the extra ")) (EApp (EMethodRef "display") (EApp (EVar "argumentNoun") (EBinOp "-" (EVar "nArgs") (EVar "expected"))))) (ELit (LString ""))) (EIf (EBinOp "&&" (EBinOp "==" (EVar "nArgs") (ELit (LInt 0))) (EApp (EApp (EVar "startsWith") (ELit (LString "("))) (EVar "written"))) (EBinOp "++" (EBinOp "++" (ELit (LString "write `(")) (EApp (EMethodRef "display") (EApp (EApp (EVar "joinWith") (ELit (LString ", "))) (EApp (EApp (EVar "take") (EVar "expected")) (EVar "missingArgNames"))))) (ELit (LString ")`"))) (EIf (EBinOp "==" (EVar "nArgs") (ELit (LInt 0))) (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "write `")) (EApp (EMethodRef "display") (EVar "written"))) (ELit (LString " "))) (EApp (EMethodRef "display") (EApp (EApp (EVar "joinWith") (ELit (LString " "))) (EApp (EApp (EVar "take") (EVar "expected")) (EVar "missingArgNames"))))) (ELit (LString "`"))) (EIf (EVar "otherwise") (EBinOp "++" (EBinOp "++" (ELit (LString "supply the missing ")) (EApp (EMethodRef "display") (EApp (EVar "argumentNoun") (EBinOp "-" (EVar "expected") (EVar "nArgs"))))) (ELit (LString ""))) (EApp (EVar "__fallthrough__") (ELit LUnit)))))))
+(DTypeSig false "writtenKindArityFix" (TyFun (TyCon "String") (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyCon "String"))))))
+(DFunDef false "writtenKindArityFix" ((PVar "written") (PVar "expected") (PVar "nArgs") (PVar "taken")) (ELetGroup ((lgb "fresh" (clause () (EApp (EApp (EMethodRef "filter") (ELam ((PVar "n")) (EApp (EVar "not") (EApp (EApp (EVar "contains") (EVar "n")) (EVar "taken"))))) (EVar "missingArgNames"))))) (EIf (EBinOp ">" (EVar "nArgs") (EVar "expected")) (EBinOp "++" (EBinOp "++" (ELit (LString "remove the extra ")) (EApp (EMethodRef "display") (EApp (EVar "argumentNoun") (EBinOp "-" (EVar "nArgs") (EVar "expected"))))) (ELit (LString ""))) (EIf (EBinOp "&&" (EBinOp "&&" (EBinOp "==" (EVar "nArgs") (ELit (LInt 0))) (EBinOp ">=" (EApp (EVar "listLen") (EVar "fresh")) (EVar "expected"))) (EApp (EApp (EVar "startsWith") (ELit (LString "("))) (EVar "written"))) (EBinOp "++" (EBinOp "++" (ELit (LString "write `(")) (EApp (EMethodRef "display") (EApp (EApp (EVar "joinWith") (ELit (LString ", "))) (EApp (EApp (EVar "take") (EVar "expected")) (EVar "fresh"))))) (ELit (LString ")`"))) (EIf (EBinOp "&&" (EBinOp "==" (EVar "nArgs") (ELit (LInt 0))) (EBinOp ">=" (EApp (EVar "listLen") (EVar "fresh")) (EVar "expected"))) (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "write `")) (EApp (EMethodRef "display") (EVar "written"))) (ELit (LString " "))) (EApp (EMethodRef "display") (EApp (EApp (EVar "joinWith") (ELit (LString " "))) (EApp (EApp (EVar "take") (EVar "expected")) (EVar "fresh"))))) (ELit (LString "`"))) (EIf (EVar "otherwise") (EBinOp "++" (EBinOp "++" (ELit (LString "supply the missing ")) (EApp (EMethodRef "display") (EApp (EVar "argumentNoun") (EBinOp "-" (EVar "expected") (EVar "nArgs"))))) (ELit (LString ""))) (EApp (EVar "__fallthrough__") (ELit LUnit))))))))
 (DTypeSig false "missingArgNames" (TyApp (TyCon "List") (TyCon "String")))
-(DFunDef false "missingArgNames" () (EListLit (ELit (LString "a")) (ELit (LString "b")) (ELit (LString "c")) (ELit (LString "d")) (ELit (LString "e")) (ELit (LString "f"))))
+(DFunDef false "missingArgNames" () (EListLit (ELit (LString "a")) (ELit (LString "b")) (ELit (LString "c")) (ELit (LString "d")) (ELit (LString "e")) (ELit (LString "f")) (ELit (LString "g")) (ELit (LString "h")) (ELit (LString "k")) (ELit (LString "m")) (ELit (LString "n")) (ELit (LString "p"))))
 (DTypeSig true "writtenKindMismatchMsg" (TyFun (TyCon "String") (TyFun (TyCon "Kind") (TyFun (TyCon "Kind") (TyCon "String")))))
 (DFunDef false "writtenKindMismatchMsg" ((PVar "written") (PVar "got") (PVar "want")) (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "`")) (EApp (EMethodRef "display") (EVar "written"))) (ELit (LString "` has kind `"))) (EApp (EMethodRef "display") (EApp (EVar "kindName") (EVar "got")))) (ELit (LString "`, but a type of kind `"))) (EApp (EMethodRef "display") (EApp (EVar "kindName") (EVar "want")))) (ELit (LString "` is expected here; write a type of that kind"))))
 (DTypeSig true "renderKindArrow" (TyFun (TyApp (TyCon "List") (TyCon "Kind")) (TyCon "String")))

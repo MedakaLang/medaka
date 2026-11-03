@@ -31,6 +31,7 @@ import types.tc_global.{
 import list.{range, take, zip}
 import support.util.{contains, joinNl, joinWith}
 import types.tc_env.{tyTabKey}
+import types.tc_decls_types.{kindScopeOf}
 import types.repr.{Mono, ppMono}
 import types.tc_solve.{uOblArgs}
 import types.tc_types.{
@@ -469,7 +470,7 @@ gradedWith : List (List Kind) ->
   Unit
 gradedWith recorded m ds ce _ =
   m.mcCells.dataParamKindsRef := flatMap (kindsOfQ ds) recorded
-  checkGradedImplHeads m ce moduleOrdinal ds
+  checkGradedImplHeads m (kindScopeOf m) ce moduleOrdinal ds
 
 -- The table row naming `Q`, as the impl head of [ds] names it, with the kinds [kinds].
 kindsOfQ : List Decl -> List Kind -> List (TabKey, List Kind)

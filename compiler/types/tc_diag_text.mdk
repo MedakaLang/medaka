@@ -283,26 +283,30 @@ kindDomainName k = kindName k
 
 -- A written constructor given [nArgs] type arguments where its position takes
 -- [expected] (EFFECTS-SEMANTICS §6.4).  [written] is a raw head tag
--- (`ppConName`); the remedy depends on which side the count is wrong on.
+-- (`ppConName`); the remedy depends on which side the count is wrong on.  A
+-- remedy that writes arguments names them apart from [written] and from
+-- [taken], the variables the written type already uses.
 export
-writtenKindArityMsg : String -> Int -> Int -> String
-writtenKindArityMsg written expected nArgs =
-  "`\{ppConName written}` expects \{countTypeArguments expected}, got \{intToString nArgs}; \{writtenKindArityFix (ppConName written) expected nArgs}"
+writtenKindArityMsg : String -> Int -> Int -> List String -> String
+writtenKindArityMsg written expected nArgs taken =
+  "`\{ppConName written}` expects \{countTypeArguments expected}, got \{intToString nArgs}; \{writtenKindArityFix (ppConName written) expected nArgs (written :: taken)}"
 
 countTypeArguments : Int -> String
 countTypeArguments n = "\{intToString n} type \{argumentNoun n}"
 
-writtenKindArityFix : String -> Int -> Int -> String
-writtenKindArityFix written expected nArgs
+writtenKindArityFix : String -> Int -> Int -> List String -> String
+writtenKindArityFix written expected nArgs taken
   | nArgs > expected = "remove the extra \{argumentNoun (nArgs - expected)}"
-  | nArgs == 0 && startsWith "(" written =
-    "write `(\{joinWith ", " (take expected missingArgNames)})`"
-  | nArgs == 0 =
-    "write `\{written} \{joinWith " " (take expected missingArgNames)}`"
+  | nArgs == 0 && listLen fresh >= expected && startsWith "(" written =
+    "write `(\{joinWith ", " (take expected fresh)})`"
+  | nArgs == 0 && listLen fresh >= expected =
+    "write `\{written} \{joinWith " " (take expected fresh)}`"
   | otherwise = "supply the missing \{argumentNoun (expected - nArgs)}"
+  where
+    fresh = filter (n => not (contains n taken)) missingArgNames
 
 missingArgNames : List String
-missingArgNames = ["a", "b", "c", "d", "e", "f"]
+missingArgNames = ["a", "b", "c", "d", "e", "f", "g", "h", "k", "m", "n", "p"]
 
 -- A written type whose kind is not the one its position takes (§6.4), where
 -- the mismatch is not a count of arguments.

@@ -50,6 +50,7 @@ import types.tc_decls_types.{
   binderDomainsIn,
   checkDeclAuthorityUses,
   checkDeclaredKinds,
+  kindScopeOf,
   checkEffectParams,
   fromAstType,
   kindsEq,
@@ -77,7 +78,7 @@ analyse src =
   let ds = parse src
   let m = ctxFor ds
   recordKindsOf m ds
-  checkDeclaredKinds m ds
+  checkDeclaredKinds m (kindScopeOf m) ds
   checkEffectParams m ds
   checkDeclAuthorityUses m ds
   let monos = map (t => ppMono (fromAstType m [] t)) (sigsOf ds)
@@ -430,7 +431,7 @@ test "a constructor written where a type goes is one kind error at that written 
     (
       "a requires argument",
       rejectsOnceWith
-        optionUnapplied
+        "`Option` expects 1 type argument, got 0; write `Option b`"
         """
           interface Foo a where
             foo : a -> Int
@@ -507,7 +508,7 @@ test "an interface parameter takes its kind from a head it is passed to and from
         []
         (moduleErrors
           """
-            data Option a = None | Some a
+            public export data Option a = None | Some a
             interface Mappable f where
               map : (a -> b) -> f a -> f b
             impl Mappable Option where
@@ -758,6 +759,31 @@ test "a kind error is located at the written type and carries its own code" = ex
     ),
   ]
 
+-- A fix that writes arguments names them apart from the type's variables,
+-- and a constructor whose expected kind comes from a variable's inferred
+-- kind is not told to take arguments: the variable may be what is wrong.
+test "a fix hint is given only where it is right" = expectEach [
+  (
+    "a variable's fix names an argument apart from it",
+    rejectsOnceWith
+      "`a` expects 1 type argument, got 0; write `a b`"
+      """
+        interface M f where
+          mm : f a -> Int
+        interface Foo a where
+          foo : a -> Int
+        impl Foo (List a) requires M a where
+          foo _ = 0
+        """,
+  ),
+  (
+    "a constructor at a variable's argument",
+    rejectsOnceWith
+      "`Option` has kind `Type -> Type`, but a type of kind `Type` is expected here"
+      "g : f Int -> f Option -> Int\ng _ _ = 0\n",
+  ),
+]
+
 test "an unapplied (,) is told to write a tuple" =
   rejectsOnceWith
     "`(,)` expects 2 type arguments, got 0; write `(a, b)`"
@@ -800,7 +826,58 @@ test "a rejected written type causes no second error at its uses" = expectEach [
     "an expression annotation",
     rejectsOnceWith optionUnapplied "k : Int\nk = (3 : Option)\n",
   ),
+  (
+    "two rejected occurrences in one signature",
+    rejectsOnceWith
+      optionUnapplied
+      "f : Option -> Option\nf x = x\nmain = f (Some 3)\n",
+  ),
+  (
+    "an alias whose right-hand side is rejected",
+    rejectsOnceWith
+      optionUnapplied
+      "type O = Option\ng : O -> Int\ng _ = 0\nmain = g (Some 1)\n",
+  ),
+  (
+    "an interface method's type in an impl body",
+    rejectsOnceWith
+      "`Option` expects 1 type argument, got 0; write `Option b`"
+      """
+        interface Foo a where
+          foo : a -> Option
+        impl Foo Int where
+          foo _ = Some 1
+        """,
+  ),
 ]
+
+-- The recovery judges each written type where it converts, so an imported
+-- alias at the span of a rejected occurrence of the importer converts as
+-- written and its own mismatch is reported.
+test "a rejected written type hides no error in another module's type" =
+  expectEqual
+    [
+      (
+        "main",
+        "T-WRITTEN-KIND-MISMATCH",
+        "`Option` expects 1 type argument, got 0; write `Option a`",
+      ),
+      ("main", "T-TYPE-MISMATCH", "type mismatch: String vs Option Int"),
+    ]
+    (moduleErrors "public export data Option a = None | Some a\n" [
+      ("al", "-- line 1\n-- line 2\nexport type O = Option Int\n"),
+      (
+        "main",
+        """
+          import al.{O}
+          -- line 2
+          zzzzzzzzzzzzz : Option -> Int
+          zzzzzzzzzzzzz _ = 0
+          h : O -> String
+          h x = x
+          """,
+      ),
+    ])
 
 test "a kind error does not hide an independent type error" =
   expectEqual

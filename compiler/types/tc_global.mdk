@@ -168,8 +168,8 @@ import types.tc_decls_types.{
   bindingForceFromAst,
   fromAstType,
   fromAstTypeE,
-  kindScopeOf,
   kindsEq,
+  recoveredScope,
   reportWrittenKinds,
   patternSlotNamesIn,
   rowArgNamesIn,
@@ -323,11 +323,15 @@ import map as IdMap
 --
 -- Every impl head is also judged as a written type (EFFECTS-SEMANTICS §6.2): each
 -- head type at its interface slot's kind, and each `requires` argument at its
--- interface's, a graded slot excepted (`reportWrittenKinds`).
+-- interface's, a graded slot excepted (`reportWrittenKinds`), [sc] the module's.
 export
-checkGradedImplHeads : ModuleCtx -> ClassEnv -> Int -> List Decl -> Unit
-checkGradedImplHeads mctx ce cur prog =
-  let sc = kindScopeOf mctx
+checkGradedImplHeads : ModuleCtx ->
+  KindScope ->
+  ClassEnv ->
+  Int ->
+  List Decl ->
+  Unit
+checkGradedImplHeads mctx sc ce cur prog =
   each (checkGradedImplHeadDecl mctx sc ce cur) prog
 
 -- `implOrigin` is the identity the interface name in `impl <iface> …` acquired at
@@ -2207,7 +2211,8 @@ instantiateMethodBody mctx (ImplBody site) ifaceParams mty gscope =
       mty
       (dedup (effTailNames mty ++ rowArgNamesIn mctx gscope mty))
   let mtvs = baseMap ++ extraMap
-  let expected = fromAstTypeE mctx effMap mtvs mty
+  let (written, scope) = recoveredScope mctx mtvs mty
+  let expected = fromAstTypeE mctx effMap scope written
   let contractForce = bindingForceFromAst mctx effMap mtvs mty
   MethodBodyInstance {
     mbiExpected = expected,
