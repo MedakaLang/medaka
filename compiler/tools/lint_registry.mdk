@@ -46,6 +46,7 @@ import tools.lint_rule_unused_param as UnusedParam
 import tools.lint_rule_unused_local as UnusedLocal
 import tools.lint_rule_let_underscore_unit as LetUnderscoreUnit
 import tools.lint_rule_discarded_result as DiscardedResult
+import tools.lint_rule_accumulator_append as AccumulatorAppend
 
 -- ── the registry ─────────────────────────────────────────────────────────────
 -- The list position is the output order of findings.  Each entry is the `rule`
@@ -93,6 +94,7 @@ allRules = [
   TestBoolHelper.rule,
   TestEqualInTrue.rule,
   PreludeShadow.rule,
+  AccumulatorAppend.rule,
 ]
 
 -- ── the project registry ──────────────────────────────────────────────────────
