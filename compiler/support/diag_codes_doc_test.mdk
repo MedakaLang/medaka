@@ -121,6 +121,6 @@ test "diag_codes_doc: every C runtime banner is a runtime or live row" = match (
     let known = textsWith "runtime" rows ++ textsWith "live" rows
     let banners = bannerCodes (lines text)
     expectAll [
-      expectEqual 4 (length (textsWith "runtime" rows)),
+      expectEqual 5 (length (textsWith "runtime" rows)),
       expectEqual [] (missingFrom known banners),
     ]
