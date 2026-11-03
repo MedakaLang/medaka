@@ -570,6 +570,48 @@ test "a lambda parameter's annotation is judged as an expression annotation" = e
     ),
   ]
 
+-- Desugar checks an annotated pattern that names no value through a name of
+-- its own; no program can bind that name, and in an or-pattern every
+-- alternative still binds the same names.
+test "an annotated pattern is checked through a name no program binds" = expectEach
+  [
+    (
+      "a parameter spelled like an old fresh name is not captured",
+      expectEqual
+        []
+        (checkedErrors
+          "outer : String -> (Int, Int) -> String\nouter = __annot_0 => ((a, b) : (Int, Int)) => __annot_0\n"),
+    ),
+    (
+      "an annotation inside one or-pattern alternative",
+      expectEqual
+        []
+        (checkedErrors
+          "data Result a b = Ok a | Err b\nsumE : Result (Int, Int) (Int, Int) -> Int\nsumE = (Ok ((a, b) : (Int, Int)) | Err (a, b)) => a + b\n"),
+    ),
+    (
+      "annotations in several alternatives, over wildcards",
+      expectEqual
+        []
+        (checkedErrors
+          "data T = A (Int, Int) | B (Int, Int) | C Int Int\nf : T -> Int\nf = (A ((x, _) : (Int, Int)) | B (_, x) | C x (_ : Int)) => x\n"),
+    ),
+    (
+      "a disagreeing annotation inside one alternative is one mismatch naming no binder",
+      expectEqual
+        [("T-TYPE-MISMATCH", "type mismatch: Int vs String")]
+        (checkedErrors
+          "data Result a b = Ok a | Err b\nsumE : Result (Int, Int) (Int, Int) -> Int\nsumE = (Ok ((a, b) : (String, Int)) | Err (a, b)) => b\n"),
+    ),
+  ]
+
+-- Without the annotation this program checks clean.
+test "a do-bind annotation is checked against the bound value" =
+  expectEqual
+    [("T-TYPE-MISMATCH", "type mismatch: Int vs String")]
+    (checkedErrors
+      "andThen : Option a -> (a -> Option b) -> Option b\nandThen o k = match o\n  Some x => k x\n  None => None\nf : Option Int\nf = do\n  (a, b) : (String, String) <- Some (3, 4)\n  Some (a + b)\n")
+
 -- The `(line, column)` of every kind error a whole check of [src] reports.
 kindErrorStarts : String -> List (Int, Int)
 kindErrorStarts src =

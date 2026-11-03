@@ -1,5 +1,5 @@
 # META
-source_lines=1548
+source_lines=1626
 stages=DESUGAR,MARK
 # SOURCE
 -- Self-hosted desugar stage.  Lowers surface
@@ -366,24 +366,32 @@ guardsAnnotsOut [] _ = []
 guardsAnnotsOut ((GBind p e) :: rest) n =
   if patHasAnnot p then
     let (p2, checks, n2) = annotsOut p n
-    GBind p2 e
-      :: GBool (annotChecks checks (ELit (LBool True)))
-      :: guardsAnnotsOut rest n2
+    GBind p2 e :: annotGuard checks :: guardsAnnotsOut rest n2
   else
     GBind p e :: guardsAnnotsOut rest n
 guardsAnnotsOut (g :: rest) n = g :: guardsAnnotsOut rest n
 
--- [p] without its annotations, the (name, written type) checks they leave in
--- source order, and the next fresh-name ordinal.
-annotsOut : Pat -> Int -> (Pat, List (String, Ty), Int)
+-- The fresh name with ordinal [n].  It holds three `$`, a character no
+-- identifier can contain, so it never captures or shadows a user's name, and no
+-- name a user writes is within the edit distance resolve's "did you mean"
+-- searches (at most 2), so no diagnostic offers it.  Ordinals are distinct
+-- within one binding position.  A nested position may reuse one; the name it
+-- shadows was read only by a check that has already run.
+annotName : Int -> String
+annotName n = "$annot$" ++ intToString n ++ "$"
+
+-- [p] without its annotations, the checks they leave in source order (each a
+-- Unit expression to evaluate ahead of the scope), and the next fresh-name
+-- ordinal.
+annotsOut : Pat -> Int -> (Pat, List Expr, Int)
 annotsOut (PAnn q t) n =
   let (q2, checks, n2) = annotsOut q n
   match q2
-    PVar x _ _ => (q2, checks ++ [(x, t)], n2)
-    PAs x _ _ _ => (q2, checks ++ [(x, t)], n2)
+    PVar x _ _ => (q2, checks ++ [annotCheck x t], n2)
+    PAs x _ _ _ => (q2, checks ++ [annotCheck x t], n2)
     _ =>
-      let v = "__annot_" ++ intToString n2
-      (PAs v (Loc "" 0 0 0 0) noBinderId q2, checks ++ [(v, t)], n2 + 1)
+      let v = annotName n2
+      (PAs v (Loc "" 0 0 0 0) noBinderId q2, checks ++ [annotCheck v t], n2 + 1)
 annotsOut (PCon c ps) n =
   let (ps2, checks, n2) = annotsOutOf ps n
   (PCon c ps2, checks, n2)
@@ -402,22 +410,20 @@ annotsOut (PAs x l bid q) n =
   (PAs x l bid q2, checks, n2)
 annotsOut (POr ps) n =
   let (ps2, checks, n2) = annotsOutOf ps n
-  (POr ps2, checks, n2)
+  if n2 == n then (POr ps2, checks, n2) else orAnnotsOut ps n
 annotsOut (PRec c fields open) n =
   let (fs2, checks, n2) = fieldAnnotsOut fields n
   (PRec c fs2 open, checks, n2)
 annotsOut p n = (p, [], n)
 
-annotsOutOf : List Pat -> Int -> (List Pat, List (String, Ty), Int)
+annotsOutOf : List Pat -> Int -> (List Pat, List Expr, Int)
 annotsOutOf [] n = ([], [], n)
 annotsOutOf (p :: ps) n =
   let (p2, c1, n1) = annotsOut p n
   let (ps2, c2, n2) = annotsOutOf ps n1
   (p2 :: ps2, c1 ++ c2, n2)
 
-fieldAnnotsOut : List RecPatField ->
-  Int ->
-  (List RecPatField, List (String, Ty), Int)
+fieldAnnotsOut : List RecPatField -> Int -> (List RecPatField, List Expr, Int)
 fieldAnnotsOut [] n = ([], [], n)
 fieldAnnotsOut ((RecPatField k l bid (Some q)) :: rest) n =
   let (q2, c1, n1) = annotsOut q n
@@ -427,13 +433,85 @@ fieldAnnotsOut (f :: rest) n =
   let (rest2, checks, n2) = fieldAnnotsOut rest n
   (f :: rest2, checks, n2)
 
--- `let _ = (v : T)` for each check, in order, ahead of [body]; each annotation
--- is located at its written type.
-annotChecks : List (String, Ty) -> Expr -> Expr
+-- An or-pattern whose annotations need a fresh name: one alternative alone
+-- would bind it, and every alternative must bind the same names.  The whole
+-- or-pattern binds its value to a fresh name instead, its alternatives lose
+-- their annotations, and the check matches that value again, one arm per
+-- annotated alternative with the user's names dropped.  Each arm's checks are
+-- its guard and every arm is guarded, so no arm counts as covering another and
+-- the closing `_` is neither unreachable nor missing.
+orAnnotsOut : List Pat -> Int -> (Pat, List Expr, Int)
+orAnnotsOut ps n =
+  let v = annotName n
+  let (arms, n2) = orCheckArms (filter patHasAnnot ps) (n + 1)
+  let check = EMatch (EVar v) (arms ++ [Arm PWild [] (ELit LUnit)])
+  (
+    PAs v (Loc "" 0 0 0 0) noBinderId (POr (flatMap orAlternatives ps)),
+    [check],
+    n2,
+  )
+
+orCheckArms : List Pat -> Int -> (List Arm, Int)
+orCheckArms [] n = ([], n)
+orCheckArms (p :: ps) n =
+  let (q, checks, n1) = annotsOut (dropBinders p) n
+  let (arms, n2) = orCheckArms ps n1
+  (Arm q [annotGuard checks] (ELit LUnit) :: arms, n2)
+
+-- An alternative without its annotations, as the alternatives it stands for:
+-- an annotated or-pattern alternative splices in its own.
+orAlternatives : Pat -> List Pat
+orAlternatives p = match dropAnnots p
+  POr qs => qs
+  q => [q]
+
+dropAnnots : Pat -> Pat
+dropAnnots (PAnn q _) = dropAnnots q
+dropAnnots (PCon c ps) = PCon c (map dropAnnots ps)
+dropAnnots (PCons h tl) = PCons (dropAnnots h) (dropAnnots tl)
+dropAnnots (PTuple ps) = PTuple (map dropAnnots ps)
+dropAnnots (PList ps) = PList (map dropAnnots ps)
+dropAnnots (PAs x l bid q) = PAs x l bid (dropAnnots q)
+dropAnnots (POr ps) = POr (flatMap orAlternatives ps)
+dropAnnots (PRec c fields open) = PRec c (map dropFieldAnnots fields) open
+dropAnnots p = p
+
+dropFieldAnnots : RecPatField -> RecPatField
+dropFieldAnnots (RecPatField k l bid (Some q)) =
+  RecPatField k l bid (Some (dropAnnots q))
+dropFieldAnnots f = f
+
+-- [p] matching the same values and binding nothing; its annotations stay.
+dropBinders : Pat -> Pat
+dropBinders (PVar _ _ _) = PWild
+dropBinders (PAs _ _ _ q) = dropBinders q
+dropBinders (PAnn q t) = PAnn (dropBinders q) t
+dropBinders (PCon c ps) = PCon c (map dropBinders ps)
+dropBinders (PCons h tl) = PCons (dropBinders h) (dropBinders tl)
+dropBinders (PTuple ps) = PTuple (map dropBinders ps)
+dropBinders (PList ps) = PList (map dropBinders ps)
+dropBinders (POr ps) = POr (map dropBinders ps)
+dropBinders (PRec c fields open) = PRec c (map dropFieldBinders fields) open
+dropBinders p = p
+
+dropFieldBinders : RecPatField -> RecPatField
+dropFieldBinders (RecPatField k l _ (Some q)) =
+  RecPatField k l noBinderId (Some (dropBinders q))
+dropFieldBinders (RecPatField k l _ None) =
+  RecPatField k l noBinderId (Some PWild)
+
+-- `(v : T)`, located at its written type.
+annotCheck : String -> Ty -> Expr
+annotCheck v t = locatedAt (firstTyLoc t) (EAnnot (EVar v) t)
+
+-- `let _ = c` for each check, in order, ahead of [body].
+annotChecks : List Expr -> Expr -> Expr
 annotChecks [] body = body
-annotChecks ((v, t) :: rest) body =
-  let check = locatedAt (firstTyLoc t) (EAnnot (EVar v) t)
+annotChecks (check :: rest) body =
   ELet noDeclLoc False PWild check (annotChecks rest body)
+
+annotGuard : List Expr -> Guard
+annotGuard checks = GBool (annotChecks checks (ELit (LBool True)))
 
 -- operator sections → lambdas
 sectionToCore : Section -> Expr
@@ -1680,28 +1758,68 @@ stampRecFieldBy mint (RecPatField l loc _ (Some p)) =
 (DFunDef false "eraseArmAnnots" ((PCon "Arm" (PVar "p") (PVar "gs") (PVar "body"))) (EBlock (DoLet false false (PTuple (PVar "p2") (PVar "checks") (PVar "n")) (EApp (EApp (EVar "annotsOut") (EVar "p")) (ELit (LInt 0)))) (DoExpr (EApp (EApp (EApp (EVar "Arm") (EVar "p2")) (EApp (EApp (EVar "guardsAnnotsOut") (EVar "gs")) (EVar "n"))) (EApp (EApp (EVar "annotChecks") (EVar "checks")) (EVar "body"))))))
 (DTypeSig false "guardsAnnotsOut" (TyFun (TyApp (TyCon "List") (TyCon "Guard")) (TyFun (TyCon "Int") (TyApp (TyCon "List") (TyCon "Guard")))))
 (DFunDef false "guardsAnnotsOut" ((PList) PWild) (EListLit))
-(DFunDef false "guardsAnnotsOut" ((PCons (PCon "GBind" (PVar "p") (PVar "e")) (PVar "rest")) (PVar "n")) (EIf (EApp (EVar "patHasAnnot") (EVar "p")) (EBlock (DoLet false false (PTuple (PVar "p2") (PVar "checks") (PVar "n2")) (EApp (EApp (EVar "annotsOut") (EVar "p")) (EVar "n"))) (DoExpr (EBinOp "::" (EApp (EApp (EVar "GBind") (EVar "p2")) (EVar "e")) (EBinOp "::" (EApp (EVar "GBool") (EApp (EApp (EVar "annotChecks") (EVar "checks")) (EApp (EVar "ELit") (EApp (EVar "LBool") (EVar "True"))))) (EApp (EApp (EVar "guardsAnnotsOut") (EVar "rest")) (EVar "n2")))))) (EBinOp "::" (EApp (EApp (EVar "GBind") (EVar "p")) (EVar "e")) (EApp (EApp (EVar "guardsAnnotsOut") (EVar "rest")) (EVar "n")))))
+(DFunDef false "guardsAnnotsOut" ((PCons (PCon "GBind" (PVar "p") (PVar "e")) (PVar "rest")) (PVar "n")) (EIf (EApp (EVar "patHasAnnot") (EVar "p")) (EBlock (DoLet false false (PTuple (PVar "p2") (PVar "checks") (PVar "n2")) (EApp (EApp (EVar "annotsOut") (EVar "p")) (EVar "n"))) (DoExpr (EBinOp "::" (EApp (EApp (EVar "GBind") (EVar "p2")) (EVar "e")) (EBinOp "::" (EApp (EVar "annotGuard") (EVar "checks")) (EApp (EApp (EVar "guardsAnnotsOut") (EVar "rest")) (EVar "n2")))))) (EBinOp "::" (EApp (EApp (EVar "GBind") (EVar "p")) (EVar "e")) (EApp (EApp (EVar "guardsAnnotsOut") (EVar "rest")) (EVar "n")))))
 (DFunDef false "guardsAnnotsOut" ((PCons (PVar "g") (PVar "rest")) (PVar "n")) (EBinOp "::" (EVar "g") (EApp (EApp (EVar "guardsAnnotsOut") (EVar "rest")) (EVar "n"))))
-(DTypeSig false "annotsOut" (TyFun (TyCon "Pat") (TyFun (TyCon "Int") (TyTuple (TyCon "Pat") (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "Ty"))) (TyCon "Int")))))
-(DFunDef false "annotsOut" ((PCon "PAnn" (PVar "q") (PVar "t")) (PVar "n")) (EBlock (DoLet false false (PTuple (PVar "q2") (PVar "checks") (PVar "n2")) (EApp (EApp (EVar "annotsOut") (EVar "q")) (EVar "n"))) (DoExpr (EMatch (EVar "q2") (arm (PCon "PVar" (PVar "x") PWild PWild) () (ETuple (EVar "q2") (EBinOp "++" (EVar "checks") (EListLit (ETuple (EVar "x") (EVar "t")))) (EVar "n2"))) (arm (PCon "PAs" (PVar "x") PWild PWild PWild) () (ETuple (EVar "q2") (EBinOp "++" (EVar "checks") (EListLit (ETuple (EVar "x") (EVar "t")))) (EVar "n2"))) (arm PWild () (EBlock (DoLet false false (PVar "v") (EBinOp "++" (ELit (LString "__annot_")) (EApp (EVar "intToString") (EVar "n2")))) (DoExpr (ETuple (EApp (EApp (EApp (EApp (EVar "PAs") (EVar "v")) (EApp (EApp (EApp (EApp (EApp (EVar "Loc") (ELit (LString ""))) (ELit (LInt 0))) (ELit (LInt 0))) (ELit (LInt 0))) (ELit (LInt 0)))) (EVar "noBinderId")) (EVar "q2")) (EBinOp "++" (EVar "checks") (EListLit (ETuple (EVar "v") (EVar "t")))) (EBinOp "+" (EVar "n2") (ELit (LInt 1)))))))))))
+(DTypeSig false "annotName" (TyFun (TyCon "Int") (TyCon "String")))
+(DFunDef false "annotName" ((PVar "n")) (EBinOp "++" (EBinOp "++" (ELit (LString "$annot$")) (EApp (EVar "intToString") (EVar "n"))) (ELit (LString "$"))))
+(DTypeSig false "annotsOut" (TyFun (TyCon "Pat") (TyFun (TyCon "Int") (TyTuple (TyCon "Pat") (TyApp (TyCon "List") (TyCon "Expr")) (TyCon "Int")))))
+(DFunDef false "annotsOut" ((PCon "PAnn" (PVar "q") (PVar "t")) (PVar "n")) (EBlock (DoLet false false (PTuple (PVar "q2") (PVar "checks") (PVar "n2")) (EApp (EApp (EVar "annotsOut") (EVar "q")) (EVar "n"))) (DoExpr (EMatch (EVar "q2") (arm (PCon "PVar" (PVar "x") PWild PWild) () (ETuple (EVar "q2") (EBinOp "++" (EVar "checks") (EListLit (EApp (EApp (EVar "annotCheck") (EVar "x")) (EVar "t")))) (EVar "n2"))) (arm (PCon "PAs" (PVar "x") PWild PWild PWild) () (ETuple (EVar "q2") (EBinOp "++" (EVar "checks") (EListLit (EApp (EApp (EVar "annotCheck") (EVar "x")) (EVar "t")))) (EVar "n2"))) (arm PWild () (EBlock (DoLet false false (PVar "v") (EApp (EVar "annotName") (EVar "n2"))) (DoExpr (ETuple (EApp (EApp (EApp (EApp (EVar "PAs") (EVar "v")) (EApp (EApp (EApp (EApp (EApp (EVar "Loc") (ELit (LString ""))) (ELit (LInt 0))) (ELit (LInt 0))) (ELit (LInt 0))) (ELit (LInt 0)))) (EVar "noBinderId")) (EVar "q2")) (EBinOp "++" (EVar "checks") (EListLit (EApp (EApp (EVar "annotCheck") (EVar "v")) (EVar "t")))) (EBinOp "+" (EVar "n2") (ELit (LInt 1)))))))))))
 (DFunDef false "annotsOut" ((PCon "PCon" (PVar "c") (PVar "ps")) (PVar "n")) (EBlock (DoLet false false (PTuple (PVar "ps2") (PVar "checks") (PVar "n2")) (EApp (EApp (EVar "annotsOutOf") (EVar "ps")) (EVar "n"))) (DoExpr (ETuple (EApp (EApp (EVar "PCon") (EVar "c")) (EVar "ps2")) (EVar "checks") (EVar "n2")))))
 (DFunDef false "annotsOut" ((PCon "PCons" (PVar "h") (PVar "tl")) (PVar "n")) (EBlock (DoLet false false (PTuple (PVar "h2") (PVar "c1") (PVar "n1")) (EApp (EApp (EVar "annotsOut") (EVar "h")) (EVar "n"))) (DoLet false false (PTuple (PVar "t2") (PVar "c2") (PVar "n2")) (EApp (EApp (EVar "annotsOut") (EVar "tl")) (EVar "n1"))) (DoExpr (ETuple (EApp (EApp (EVar "PCons") (EVar "h2")) (EVar "t2")) (EBinOp "++" (EVar "c1") (EVar "c2")) (EVar "n2")))))
 (DFunDef false "annotsOut" ((PCon "PTuple" (PVar "ps")) (PVar "n")) (EBlock (DoLet false false (PTuple (PVar "ps2") (PVar "checks") (PVar "n2")) (EApp (EApp (EVar "annotsOutOf") (EVar "ps")) (EVar "n"))) (DoExpr (ETuple (EApp (EVar "PTuple") (EVar "ps2")) (EVar "checks") (EVar "n2")))))
 (DFunDef false "annotsOut" ((PCon "PList" (PVar "ps")) (PVar "n")) (EBlock (DoLet false false (PTuple (PVar "ps2") (PVar "checks") (PVar "n2")) (EApp (EApp (EVar "annotsOutOf") (EVar "ps")) (EVar "n"))) (DoExpr (ETuple (EApp (EVar "PList") (EVar "ps2")) (EVar "checks") (EVar "n2")))))
 (DFunDef false "annotsOut" ((PCon "PAs" (PVar "x") (PVar "l") (PVar "bid") (PVar "q")) (PVar "n")) (EBlock (DoLet false false (PTuple (PVar "q2") (PVar "checks") (PVar "n2")) (EApp (EApp (EVar "annotsOut") (EVar "q")) (EVar "n"))) (DoExpr (ETuple (EApp (EApp (EApp (EApp (EVar "PAs") (EVar "x")) (EVar "l")) (EVar "bid")) (EVar "q2")) (EVar "checks") (EVar "n2")))))
-(DFunDef false "annotsOut" ((PCon "POr" (PVar "ps")) (PVar "n")) (EBlock (DoLet false false (PTuple (PVar "ps2") (PVar "checks") (PVar "n2")) (EApp (EApp (EVar "annotsOutOf") (EVar "ps")) (EVar "n"))) (DoExpr (ETuple (EApp (EVar "POr") (EVar "ps2")) (EVar "checks") (EVar "n2")))))
+(DFunDef false "annotsOut" ((PCon "POr" (PVar "ps")) (PVar "n")) (EBlock (DoLet false false (PTuple (PVar "ps2") (PVar "checks") (PVar "n2")) (EApp (EApp (EVar "annotsOutOf") (EVar "ps")) (EVar "n"))) (DoExpr (EIf (EBinOp "==" (EVar "n2") (EVar "n")) (ETuple (EApp (EVar "POr") (EVar "ps2")) (EVar "checks") (EVar "n2")) (EApp (EApp (EVar "orAnnotsOut") (EVar "ps")) (EVar "n"))))))
 (DFunDef false "annotsOut" ((PCon "PRec" (PVar "c") (PVar "fields") (PVar "open")) (PVar "n")) (EBlock (DoLet false false (PTuple (PVar "fs2") (PVar "checks") (PVar "n2")) (EApp (EApp (EVar "fieldAnnotsOut") (EVar "fields")) (EVar "n"))) (DoExpr (ETuple (EApp (EApp (EApp (EVar "PRec") (EVar "c")) (EVar "fs2")) (EVar "open")) (EVar "checks") (EVar "n2")))))
 (DFunDef false "annotsOut" ((PVar "p") (PVar "n")) (ETuple (EVar "p") (EListLit) (EVar "n")))
-(DTypeSig false "annotsOutOf" (TyFun (TyApp (TyCon "List") (TyCon "Pat")) (TyFun (TyCon "Int") (TyTuple (TyApp (TyCon "List") (TyCon "Pat")) (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "Ty"))) (TyCon "Int")))))
+(DTypeSig false "annotsOutOf" (TyFun (TyApp (TyCon "List") (TyCon "Pat")) (TyFun (TyCon "Int") (TyTuple (TyApp (TyCon "List") (TyCon "Pat")) (TyApp (TyCon "List") (TyCon "Expr")) (TyCon "Int")))))
 (DFunDef false "annotsOutOf" ((PList) (PVar "n")) (ETuple (EListLit) (EListLit) (EVar "n")))
 (DFunDef false "annotsOutOf" ((PCons (PVar "p") (PVar "ps")) (PVar "n")) (EBlock (DoLet false false (PTuple (PVar "p2") (PVar "c1") (PVar "n1")) (EApp (EApp (EVar "annotsOut") (EVar "p")) (EVar "n"))) (DoLet false false (PTuple (PVar "ps2") (PVar "c2") (PVar "n2")) (EApp (EApp (EVar "annotsOutOf") (EVar "ps")) (EVar "n1"))) (DoExpr (ETuple (EBinOp "::" (EVar "p2") (EVar "ps2")) (EBinOp "++" (EVar "c1") (EVar "c2")) (EVar "n2")))))
-(DTypeSig false "fieldAnnotsOut" (TyFun (TyApp (TyCon "List") (TyCon "RecPatField")) (TyFun (TyCon "Int") (TyTuple (TyApp (TyCon "List") (TyCon "RecPatField")) (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "Ty"))) (TyCon "Int")))))
+(DTypeSig false "fieldAnnotsOut" (TyFun (TyApp (TyCon "List") (TyCon "RecPatField")) (TyFun (TyCon "Int") (TyTuple (TyApp (TyCon "List") (TyCon "RecPatField")) (TyApp (TyCon "List") (TyCon "Expr")) (TyCon "Int")))))
 (DFunDef false "fieldAnnotsOut" ((PList) (PVar "n")) (ETuple (EListLit) (EListLit) (EVar "n")))
 (DFunDef false "fieldAnnotsOut" ((PCons (PCon "RecPatField" (PVar "k") (PVar "l") (PVar "bid") (PCon "Some" (PVar "q"))) (PVar "rest")) (PVar "n")) (EBlock (DoLet false false (PTuple (PVar "q2") (PVar "c1") (PVar "n1")) (EApp (EApp (EVar "annotsOut") (EVar "q")) (EVar "n"))) (DoLet false false (PTuple (PVar "rest2") (PVar "c2") (PVar "n2")) (EApp (EApp (EVar "fieldAnnotsOut") (EVar "rest")) (EVar "n1"))) (DoExpr (ETuple (EBinOp "::" (EApp (EApp (EApp (EApp (EVar "RecPatField") (EVar "k")) (EVar "l")) (EVar "bid")) (EApp (EVar "Some") (EVar "q2"))) (EVar "rest2")) (EBinOp "++" (EVar "c1") (EVar "c2")) (EVar "n2")))))
 (DFunDef false "fieldAnnotsOut" ((PCons (PVar "f") (PVar "rest")) (PVar "n")) (EBlock (DoLet false false (PTuple (PVar "rest2") (PVar "checks") (PVar "n2")) (EApp (EApp (EVar "fieldAnnotsOut") (EVar "rest")) (EVar "n"))) (DoExpr (ETuple (EBinOp "::" (EVar "f") (EVar "rest2")) (EVar "checks") (EVar "n2")))))
-(DTypeSig false "annotChecks" (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "Ty"))) (TyFun (TyCon "Expr") (TyCon "Expr"))))
+(DTypeSig false "orAnnotsOut" (TyFun (TyApp (TyCon "List") (TyCon "Pat")) (TyFun (TyCon "Int") (TyTuple (TyCon "Pat") (TyApp (TyCon "List") (TyCon "Expr")) (TyCon "Int")))))
+(DFunDef false "orAnnotsOut" ((PVar "ps") (PVar "n")) (EBlock (DoLet false false (PVar "v") (EApp (EVar "annotName") (EVar "n"))) (DoLet false false (PTuple (PVar "arms") (PVar "n2")) (EApp (EApp (EVar "orCheckArms") (EApp (EApp (EVar "filter") (EVar "patHasAnnot")) (EVar "ps"))) (EBinOp "+" (EVar "n") (ELit (LInt 1))))) (DoLet false false (PVar "check") (EApp (EApp (EVar "EMatch") (EApp (EVar "EVar") (EVar "v"))) (EBinOp "++" (EVar "arms") (EListLit (EApp (EApp (EApp (EVar "Arm") (EVar "PWild")) (EListLit)) (EApp (EVar "ELit") (EVar "LUnit"))))))) (DoExpr (ETuple (EApp (EApp (EApp (EApp (EVar "PAs") (EVar "v")) (EApp (EApp (EApp (EApp (EApp (EVar "Loc") (ELit (LString ""))) (ELit (LInt 0))) (ELit (LInt 0))) (ELit (LInt 0))) (ELit (LInt 0)))) (EVar "noBinderId")) (EApp (EVar "POr") (EApp (EApp (EVar "flatMap") (EVar "orAlternatives")) (EVar "ps")))) (EListLit (EVar "check")) (EVar "n2")))))
+(DTypeSig false "orCheckArms" (TyFun (TyApp (TyCon "List") (TyCon "Pat")) (TyFun (TyCon "Int") (TyTuple (TyApp (TyCon "List") (TyCon "Arm")) (TyCon "Int")))))
+(DFunDef false "orCheckArms" ((PList) (PVar "n")) (ETuple (EListLit) (EVar "n")))
+(DFunDef false "orCheckArms" ((PCons (PVar "p") (PVar "ps")) (PVar "n")) (EBlock (DoLet false false (PTuple (PVar "q") (PVar "checks") (PVar "n1")) (EApp (EApp (EVar "annotsOut") (EApp (EVar "dropBinders") (EVar "p"))) (EVar "n"))) (DoLet false false (PTuple (PVar "arms") (PVar "n2")) (EApp (EApp (EVar "orCheckArms") (EVar "ps")) (EVar "n1"))) (DoExpr (ETuple (EBinOp "::" (EApp (EApp (EApp (EVar "Arm") (EVar "q")) (EListLit (EApp (EVar "annotGuard") (EVar "checks")))) (EApp (EVar "ELit") (EVar "LUnit"))) (EVar "arms")) (EVar "n2")))))
+(DTypeSig false "orAlternatives" (TyFun (TyCon "Pat") (TyApp (TyCon "List") (TyCon "Pat"))))
+(DFunDef false "orAlternatives" ((PVar "p")) (EMatch (EApp (EVar "dropAnnots") (EVar "p")) (arm (PCon "POr" (PVar "qs")) () (EVar "qs")) (arm (PVar "q") () (EListLit (EVar "q")))))
+(DTypeSig false "dropAnnots" (TyFun (TyCon "Pat") (TyCon "Pat")))
+(DFunDef false "dropAnnots" ((PCon "PAnn" (PVar "q") PWild)) (EApp (EVar "dropAnnots") (EVar "q")))
+(DFunDef false "dropAnnots" ((PCon "PCon" (PVar "c") (PVar "ps"))) (EApp (EApp (EVar "PCon") (EVar "c")) (EApp (EApp (EVar "map") (EVar "dropAnnots")) (EVar "ps"))))
+(DFunDef false "dropAnnots" ((PCon "PCons" (PVar "h") (PVar "tl"))) (EApp (EApp (EVar "PCons") (EApp (EVar "dropAnnots") (EVar "h"))) (EApp (EVar "dropAnnots") (EVar "tl"))))
+(DFunDef false "dropAnnots" ((PCon "PTuple" (PVar "ps"))) (EApp (EVar "PTuple") (EApp (EApp (EVar "map") (EVar "dropAnnots")) (EVar "ps"))))
+(DFunDef false "dropAnnots" ((PCon "PList" (PVar "ps"))) (EApp (EVar "PList") (EApp (EApp (EVar "map") (EVar "dropAnnots")) (EVar "ps"))))
+(DFunDef false "dropAnnots" ((PCon "PAs" (PVar "x") (PVar "l") (PVar "bid") (PVar "q"))) (EApp (EApp (EApp (EApp (EVar "PAs") (EVar "x")) (EVar "l")) (EVar "bid")) (EApp (EVar "dropAnnots") (EVar "q"))))
+(DFunDef false "dropAnnots" ((PCon "POr" (PVar "ps"))) (EApp (EVar "POr") (EApp (EApp (EVar "flatMap") (EVar "orAlternatives")) (EVar "ps"))))
+(DFunDef false "dropAnnots" ((PCon "PRec" (PVar "c") (PVar "fields") (PVar "open"))) (EApp (EApp (EApp (EVar "PRec") (EVar "c")) (EApp (EApp (EVar "map") (EVar "dropFieldAnnots")) (EVar "fields"))) (EVar "open")))
+(DFunDef false "dropAnnots" ((PVar "p")) (EVar "p"))
+(DTypeSig false "dropFieldAnnots" (TyFun (TyCon "RecPatField") (TyCon "RecPatField")))
+(DFunDef false "dropFieldAnnots" ((PCon "RecPatField" (PVar "k") (PVar "l") (PVar "bid") (PCon "Some" (PVar "q")))) (EApp (EApp (EApp (EApp (EVar "RecPatField") (EVar "k")) (EVar "l")) (EVar "bid")) (EApp (EVar "Some") (EApp (EVar "dropAnnots") (EVar "q")))))
+(DFunDef false "dropFieldAnnots" ((PVar "f")) (EVar "f"))
+(DTypeSig false "dropBinders" (TyFun (TyCon "Pat") (TyCon "Pat")))
+(DFunDef false "dropBinders" ((PCon "PVar" PWild PWild PWild)) (EVar "PWild"))
+(DFunDef false "dropBinders" ((PCon "PAs" PWild PWild PWild (PVar "q"))) (EApp (EVar "dropBinders") (EVar "q")))
+(DFunDef false "dropBinders" ((PCon "PAnn" (PVar "q") (PVar "t"))) (EApp (EApp (EVar "PAnn") (EApp (EVar "dropBinders") (EVar "q"))) (EVar "t")))
+(DFunDef false "dropBinders" ((PCon "PCon" (PVar "c") (PVar "ps"))) (EApp (EApp (EVar "PCon") (EVar "c")) (EApp (EApp (EVar "map") (EVar "dropBinders")) (EVar "ps"))))
+(DFunDef false "dropBinders" ((PCon "PCons" (PVar "h") (PVar "tl"))) (EApp (EApp (EVar "PCons") (EApp (EVar "dropBinders") (EVar "h"))) (EApp (EVar "dropBinders") (EVar "tl"))))
+(DFunDef false "dropBinders" ((PCon "PTuple" (PVar "ps"))) (EApp (EVar "PTuple") (EApp (EApp (EVar "map") (EVar "dropBinders")) (EVar "ps"))))
+(DFunDef false "dropBinders" ((PCon "PList" (PVar "ps"))) (EApp (EVar "PList") (EApp (EApp (EVar "map") (EVar "dropBinders")) (EVar "ps"))))
+(DFunDef false "dropBinders" ((PCon "POr" (PVar "ps"))) (EApp (EVar "POr") (EApp (EApp (EVar "map") (EVar "dropBinders")) (EVar "ps"))))
+(DFunDef false "dropBinders" ((PCon "PRec" (PVar "c") (PVar "fields") (PVar "open"))) (EApp (EApp (EApp (EVar "PRec") (EVar "c")) (EApp (EApp (EVar "map") (EVar "dropFieldBinders")) (EVar "fields"))) (EVar "open")))
+(DFunDef false "dropBinders" ((PVar "p")) (EVar "p"))
+(DTypeSig false "dropFieldBinders" (TyFun (TyCon "RecPatField") (TyCon "RecPatField")))
+(DFunDef false "dropFieldBinders" ((PCon "RecPatField" (PVar "k") (PVar "l") PWild (PCon "Some" (PVar "q")))) (EApp (EApp (EApp (EApp (EVar "RecPatField") (EVar "k")) (EVar "l")) (EVar "noBinderId")) (EApp (EVar "Some") (EApp (EVar "dropBinders") (EVar "q")))))
+(DFunDef false "dropFieldBinders" ((PCon "RecPatField" (PVar "k") (PVar "l") PWild (PCon "None"))) (EApp (EApp (EApp (EApp (EVar "RecPatField") (EVar "k")) (EVar "l")) (EVar "noBinderId")) (EApp (EVar "Some") (EVar "PWild"))))
+(DTypeSig false "annotCheck" (TyFun (TyCon "String") (TyFun (TyCon "Ty") (TyCon "Expr"))))
+(DFunDef false "annotCheck" ((PVar "v") (PVar "t")) (EApp (EApp (EVar "locatedAt") (EApp (EVar "firstTyLoc") (EVar "t"))) (EApp (EApp (EVar "EAnnot") (EApp (EVar "EVar") (EVar "v"))) (EVar "t"))))
+(DTypeSig false "annotChecks" (TyFun (TyApp (TyCon "List") (TyCon "Expr")) (TyFun (TyCon "Expr") (TyCon "Expr"))))
 (DFunDef false "annotChecks" ((PList) (PVar "body")) (EVar "body"))
-(DFunDef false "annotChecks" ((PCons (PTuple (PVar "v") (PVar "t")) (PVar "rest")) (PVar "body")) (EBlock (DoLet false false (PVar "check") (EApp (EApp (EVar "locatedAt") (EApp (EVar "firstTyLoc") (EVar "t"))) (EApp (EApp (EVar "EAnnot") (EApp (EVar "EVar") (EVar "v"))) (EVar "t")))) (DoExpr (EApp (EApp (EApp (EApp (EApp (EVar "ELet") (EVar "noDeclLoc")) (EVar "False")) (EVar "PWild")) (EVar "check")) (EApp (EApp (EVar "annotChecks") (EVar "rest")) (EVar "body"))))))
+(DFunDef false "annotChecks" ((PCons (PVar "check") (PVar "rest")) (PVar "body")) (EApp (EApp (EApp (EApp (EApp (EVar "ELet") (EVar "noDeclLoc")) (EVar "False")) (EVar "PWild")) (EVar "check")) (EApp (EApp (EVar "annotChecks") (EVar "rest")) (EVar "body"))))
+(DTypeSig false "annotGuard" (TyFun (TyApp (TyCon "List") (TyCon "Expr")) (TyCon "Guard")))
+(DFunDef false "annotGuard" ((PVar "checks")) (EApp (EVar "GBool") (EApp (EApp (EVar "annotChecks") (EVar "checks")) (EApp (EVar "ELit") (EApp (EVar "LBool") (EVar "True"))))))
 (DTypeSig false "sectionToCore" (TyFun (TyCon "Section") (TyCon "Expr")))
 (DFunDef false "sectionToCore" ((PCon "SecBare" (PVar "op"))) (EApp (EApp (EVar "ELam") (EListLit (EApp (EApp (EApp (EVar "PVar") (ELit (LString "_a"))) (EApp (EApp (EApp (EApp (EApp (EVar "Loc") (ELit (LString ""))) (ELit (LInt 0))) (ELit (LInt 0))) (ELit (LInt 0))) (ELit (LInt 0)))) (EVar "noBinderId")) (EApp (EApp (EApp (EVar "PVar") (ELit (LString "_b"))) (EApp (EApp (EApp (EApp (EApp (EVar "Loc") (ELit (LString ""))) (ELit (LInt 0))) (ELit (LInt 0))) (ELit (LInt 0))) (ELit (LInt 0)))) (EVar "noBinderId")))) (EApp (EApp (EApp (EVar "binOp") (EVar "op")) (EApp (EVar "EVar") (ELit (LString "_a")))) (EApp (EVar "EVar") (ELit (LString "_b"))))))
 (DFunDef false "sectionToCore" ((PCon "SecRight" (PVar "op") (PVar "e"))) (EApp (EApp (EVar "ELam") (EListLit (EApp (EApp (EApp (EVar "PVar") (ELit (LString "_s"))) (EApp (EApp (EApp (EApp (EApp (EVar "Loc") (ELit (LString ""))) (ELit (LInt 0))) (ELit (LInt 0))) (ELit (LInt 0))) (ELit (LInt 0)))) (EVar "noBinderId")))) (EApp (EApp (EApp (EVar "binOp") (EVar "op")) (EApp (EVar "EVar") (ELit (LString "_s")))) (EVar "e"))))
@@ -2226,28 +2344,68 @@ stampRecFieldBy mint (RecPatField l loc _ (Some p)) =
 (DFunDef false "eraseArmAnnots" ((PCon "Arm" (PVar "p") (PVar "gs") (PVar "body"))) (EBlock (DoLet false false (PTuple (PVar "p2") (PVar "checks") (PVar "n")) (EApp (EApp (EVar "annotsOut") (EVar "p")) (ELit (LInt 0)))) (DoExpr (EApp (EApp (EApp (EVar "Arm") (EVar "p2")) (EApp (EApp (EVar "guardsAnnotsOut") (EVar "gs")) (EVar "n"))) (EApp (EApp (EVar "annotChecks") (EVar "checks")) (EVar "body"))))))
 (DTypeSig false "guardsAnnotsOut" (TyFun (TyApp (TyCon "List") (TyCon "Guard")) (TyFun (TyCon "Int") (TyApp (TyCon "List") (TyCon "Guard")))))
 (DFunDef false "guardsAnnotsOut" ((PList) PWild) (EListLit))
-(DFunDef false "guardsAnnotsOut" ((PCons (PCon "GBind" (PVar "p") (PVar "e")) (PVar "rest")) (PVar "n")) (EIf (EApp (EVar "patHasAnnot") (EVar "p")) (EBlock (DoLet false false (PTuple (PVar "p2") (PVar "checks") (PVar "n2")) (EApp (EApp (EVar "annotsOut") (EVar "p")) (EVar "n"))) (DoExpr (EBinOp "::" (EApp (EApp (EVar "GBind") (EVar "p2")) (EVar "e")) (EBinOp "::" (EApp (EVar "GBool") (EApp (EApp (EVar "annotChecks") (EVar "checks")) (EApp (EVar "ELit") (EApp (EVar "LBool") (EVar "True"))))) (EApp (EApp (EVar "guardsAnnotsOut") (EVar "rest")) (EVar "n2")))))) (EBinOp "::" (EApp (EApp (EVar "GBind") (EVar "p")) (EVar "e")) (EApp (EApp (EVar "guardsAnnotsOut") (EVar "rest")) (EVar "n")))))
+(DFunDef false "guardsAnnotsOut" ((PCons (PCon "GBind" (PVar "p") (PVar "e")) (PVar "rest")) (PVar "n")) (EIf (EApp (EVar "patHasAnnot") (EVar "p")) (EBlock (DoLet false false (PTuple (PVar "p2") (PVar "checks") (PVar "n2")) (EApp (EApp (EVar "annotsOut") (EVar "p")) (EVar "n"))) (DoExpr (EBinOp "::" (EApp (EApp (EVar "GBind") (EVar "p2")) (EVar "e")) (EBinOp "::" (EApp (EVar "annotGuard") (EVar "checks")) (EApp (EApp (EVar "guardsAnnotsOut") (EVar "rest")) (EVar "n2")))))) (EBinOp "::" (EApp (EApp (EVar "GBind") (EVar "p")) (EVar "e")) (EApp (EApp (EVar "guardsAnnotsOut") (EVar "rest")) (EVar "n")))))
 (DFunDef false "guardsAnnotsOut" ((PCons (PVar "g") (PVar "rest")) (PVar "n")) (EBinOp "::" (EVar "g") (EApp (EApp (EVar "guardsAnnotsOut") (EVar "rest")) (EVar "n"))))
-(DTypeSig false "annotsOut" (TyFun (TyCon "Pat") (TyFun (TyCon "Int") (TyTuple (TyCon "Pat") (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "Ty"))) (TyCon "Int")))))
-(DFunDef false "annotsOut" ((PCon "PAnn" (PVar "q") (PVar "t")) (PVar "n")) (EBlock (DoLet false false (PTuple (PVar "q2") (PVar "checks") (PVar "n2")) (EApp (EApp (EVar "annotsOut") (EVar "q")) (EVar "n"))) (DoExpr (EMatch (EVar "q2") (arm (PCon "PVar" (PVar "x") PWild PWild) () (ETuple (EVar "q2") (EBinOp "++" (EVar "checks") (EListLit (ETuple (EVar "x") (EVar "t")))) (EVar "n2"))) (arm (PCon "PAs" (PVar "x") PWild PWild PWild) () (ETuple (EVar "q2") (EBinOp "++" (EVar "checks") (EListLit (ETuple (EVar "x") (EVar "t")))) (EVar "n2"))) (arm PWild () (EBlock (DoLet false false (PVar "v") (EBinOp "++" (ELit (LString "__annot_")) (EApp (EVar "intToString") (EVar "n2")))) (DoExpr (ETuple (EApp (EApp (EApp (EApp (EVar "PAs") (EVar "v")) (EApp (EApp (EApp (EApp (EApp (EVar "Loc") (ELit (LString ""))) (ELit (LInt 0))) (ELit (LInt 0))) (ELit (LInt 0))) (ELit (LInt 0)))) (EVar "noBinderId")) (EVar "q2")) (EBinOp "++" (EVar "checks") (EListLit (ETuple (EVar "v") (EVar "t")))) (EBinOp "+" (EVar "n2") (ELit (LInt 1)))))))))))
+(DTypeSig false "annotName" (TyFun (TyCon "Int") (TyCon "String")))
+(DFunDef false "annotName" ((PVar "n")) (EBinOp "++" (EBinOp "++" (ELit (LString "$annot$")) (EApp (EVar "intToString") (EVar "n"))) (ELit (LString "$"))))
+(DTypeSig false "annotsOut" (TyFun (TyCon "Pat") (TyFun (TyCon "Int") (TyTuple (TyCon "Pat") (TyApp (TyCon "List") (TyCon "Expr")) (TyCon "Int")))))
+(DFunDef false "annotsOut" ((PCon "PAnn" (PVar "q") (PVar "t")) (PVar "n")) (EBlock (DoLet false false (PTuple (PVar "q2") (PVar "checks") (PVar "n2")) (EApp (EApp (EVar "annotsOut") (EVar "q")) (EVar "n"))) (DoExpr (EMatch (EVar "q2") (arm (PCon "PVar" (PVar "x") PWild PWild) () (ETuple (EVar "q2") (EBinOp "++" (EVar "checks") (EListLit (EApp (EApp (EVar "annotCheck") (EVar "x")) (EVar "t")))) (EVar "n2"))) (arm (PCon "PAs" (PVar "x") PWild PWild PWild) () (ETuple (EVar "q2") (EBinOp "++" (EVar "checks") (EListLit (EApp (EApp (EVar "annotCheck") (EVar "x")) (EVar "t")))) (EVar "n2"))) (arm PWild () (EBlock (DoLet false false (PVar "v") (EApp (EVar "annotName") (EVar "n2"))) (DoExpr (ETuple (EApp (EApp (EApp (EApp (EVar "PAs") (EVar "v")) (EApp (EApp (EApp (EApp (EApp (EVar "Loc") (ELit (LString ""))) (ELit (LInt 0))) (ELit (LInt 0))) (ELit (LInt 0))) (ELit (LInt 0)))) (EVar "noBinderId")) (EVar "q2")) (EBinOp "++" (EVar "checks") (EListLit (EApp (EApp (EVar "annotCheck") (EVar "v")) (EVar "t")))) (EBinOp "+" (EVar "n2") (ELit (LInt 1)))))))))))
 (DFunDef false "annotsOut" ((PCon "PCon" (PVar "c") (PVar "ps")) (PVar "n")) (EBlock (DoLet false false (PTuple (PVar "ps2") (PVar "checks") (PVar "n2")) (EApp (EApp (EVar "annotsOutOf") (EVar "ps")) (EVar "n"))) (DoExpr (ETuple (EApp (EApp (EVar "PCon") (EVar "c")) (EVar "ps2")) (EVar "checks") (EVar "n2")))))
 (DFunDef false "annotsOut" ((PCon "PCons" (PVar "h") (PVar "tl")) (PVar "n")) (EBlock (DoLet false false (PTuple (PVar "h2") (PVar "c1") (PVar "n1")) (EApp (EApp (EVar "annotsOut") (EVar "h")) (EVar "n"))) (DoLet false false (PTuple (PVar "t2") (PVar "c2") (PVar "n2")) (EApp (EApp (EVar "annotsOut") (EVar "tl")) (EVar "n1"))) (DoExpr (ETuple (EApp (EApp (EVar "PCons") (EVar "h2")) (EVar "t2")) (EBinOp "++" (EVar "c1") (EVar "c2")) (EVar "n2")))))
 (DFunDef false "annotsOut" ((PCon "PTuple" (PVar "ps")) (PVar "n")) (EBlock (DoLet false false (PTuple (PVar "ps2") (PVar "checks") (PVar "n2")) (EApp (EApp (EVar "annotsOutOf") (EVar "ps")) (EVar "n"))) (DoExpr (ETuple (EApp (EVar "PTuple") (EVar "ps2")) (EVar "checks") (EVar "n2")))))
 (DFunDef false "annotsOut" ((PCon "PList" (PVar "ps")) (PVar "n")) (EBlock (DoLet false false (PTuple (PVar "ps2") (PVar "checks") (PVar "n2")) (EApp (EApp (EVar "annotsOutOf") (EVar "ps")) (EVar "n"))) (DoExpr (ETuple (EApp (EVar "PList") (EVar "ps2")) (EVar "checks") (EVar "n2")))))
 (DFunDef false "annotsOut" ((PCon "PAs" (PVar "x") (PVar "l") (PVar "bid") (PVar "q")) (PVar "n")) (EBlock (DoLet false false (PTuple (PVar "q2") (PVar "checks") (PVar "n2")) (EApp (EApp (EVar "annotsOut") (EVar "q")) (EVar "n"))) (DoExpr (ETuple (EApp (EApp (EApp (EApp (EVar "PAs") (EVar "x")) (EVar "l")) (EVar "bid")) (EVar "q2")) (EVar "checks") (EVar "n2")))))
-(DFunDef false "annotsOut" ((PCon "POr" (PVar "ps")) (PVar "n")) (EBlock (DoLet false false (PTuple (PVar "ps2") (PVar "checks") (PVar "n2")) (EApp (EApp (EVar "annotsOutOf") (EVar "ps")) (EVar "n"))) (DoExpr (ETuple (EApp (EVar "POr") (EVar "ps2")) (EVar "checks") (EVar "n2")))))
+(DFunDef false "annotsOut" ((PCon "POr" (PVar "ps")) (PVar "n")) (EBlock (DoLet false false (PTuple (PVar "ps2") (PVar "checks") (PVar "n2")) (EApp (EApp (EVar "annotsOutOf") (EVar "ps")) (EVar "n"))) (DoExpr (EIf (EBinOp "==" (EVar "n2") (EVar "n")) (ETuple (EApp (EVar "POr") (EVar "ps2")) (EVar "checks") (EVar "n2")) (EApp (EApp (EVar "orAnnotsOut") (EVar "ps")) (EVar "n"))))))
 (DFunDef false "annotsOut" ((PCon "PRec" (PVar "c") (PVar "fields") (PVar "open")) (PVar "n")) (EBlock (DoLet false false (PTuple (PVar "fs2") (PVar "checks") (PVar "n2")) (EApp (EApp (EVar "fieldAnnotsOut") (EVar "fields")) (EVar "n"))) (DoExpr (ETuple (EApp (EApp (EApp (EVar "PRec") (EVar "c")) (EVar "fs2")) (EVar "open")) (EVar "checks") (EVar "n2")))))
 (DFunDef false "annotsOut" ((PVar "p") (PVar "n")) (ETuple (EVar "p") (EListLit) (EVar "n")))
-(DTypeSig false "annotsOutOf" (TyFun (TyApp (TyCon "List") (TyCon "Pat")) (TyFun (TyCon "Int") (TyTuple (TyApp (TyCon "List") (TyCon "Pat")) (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "Ty"))) (TyCon "Int")))))
+(DTypeSig false "annotsOutOf" (TyFun (TyApp (TyCon "List") (TyCon "Pat")) (TyFun (TyCon "Int") (TyTuple (TyApp (TyCon "List") (TyCon "Pat")) (TyApp (TyCon "List") (TyCon "Expr")) (TyCon "Int")))))
 (DFunDef false "annotsOutOf" ((PList) (PVar "n")) (ETuple (EListLit) (EListLit) (EVar "n")))
 (DFunDef false "annotsOutOf" ((PCons (PVar "p") (PVar "ps")) (PVar "n")) (EBlock (DoLet false false (PTuple (PVar "p2") (PVar "c1") (PVar "n1")) (EApp (EApp (EVar "annotsOut") (EVar "p")) (EVar "n"))) (DoLet false false (PTuple (PVar "ps2") (PVar "c2") (PVar "n2")) (EApp (EApp (EVar "annotsOutOf") (EVar "ps")) (EVar "n1"))) (DoExpr (ETuple (EBinOp "::" (EVar "p2") (EVar "ps2")) (EBinOp "++" (EVar "c1") (EVar "c2")) (EVar "n2")))))
-(DTypeSig false "fieldAnnotsOut" (TyFun (TyApp (TyCon "List") (TyCon "RecPatField")) (TyFun (TyCon "Int") (TyTuple (TyApp (TyCon "List") (TyCon "RecPatField")) (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "Ty"))) (TyCon "Int")))))
+(DTypeSig false "fieldAnnotsOut" (TyFun (TyApp (TyCon "List") (TyCon "RecPatField")) (TyFun (TyCon "Int") (TyTuple (TyApp (TyCon "List") (TyCon "RecPatField")) (TyApp (TyCon "List") (TyCon "Expr")) (TyCon "Int")))))
 (DFunDef false "fieldAnnotsOut" ((PList) (PVar "n")) (ETuple (EListLit) (EListLit) (EVar "n")))
 (DFunDef false "fieldAnnotsOut" ((PCons (PCon "RecPatField" (PVar "k") (PVar "l") (PVar "bid") (PCon "Some" (PVar "q"))) (PVar "rest")) (PVar "n")) (EBlock (DoLet false false (PTuple (PVar "q2") (PVar "c1") (PVar "n1")) (EApp (EApp (EVar "annotsOut") (EVar "q")) (EVar "n"))) (DoLet false false (PTuple (PVar "rest2") (PVar "c2") (PVar "n2")) (EApp (EApp (EVar "fieldAnnotsOut") (EVar "rest")) (EVar "n1"))) (DoExpr (ETuple (EBinOp "::" (EApp (EApp (EApp (EApp (EVar "RecPatField") (EVar "k")) (EVar "l")) (EVar "bid")) (EApp (EVar "Some") (EVar "q2"))) (EVar "rest2")) (EBinOp "++" (EVar "c1") (EVar "c2")) (EVar "n2")))))
 (DFunDef false "fieldAnnotsOut" ((PCons (PVar "f") (PVar "rest")) (PVar "n")) (EBlock (DoLet false false (PTuple (PVar "rest2") (PVar "checks") (PVar "n2")) (EApp (EApp (EVar "fieldAnnotsOut") (EVar "rest")) (EVar "n"))) (DoExpr (ETuple (EBinOp "::" (EVar "f") (EVar "rest2")) (EVar "checks") (EVar "n2")))))
-(DTypeSig false "annotChecks" (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "Ty"))) (TyFun (TyCon "Expr") (TyCon "Expr"))))
+(DTypeSig false "orAnnotsOut" (TyFun (TyApp (TyCon "List") (TyCon "Pat")) (TyFun (TyCon "Int") (TyTuple (TyCon "Pat") (TyApp (TyCon "List") (TyCon "Expr")) (TyCon "Int")))))
+(DFunDef false "orAnnotsOut" ((PVar "ps") (PVar "n")) (EBlock (DoLet false false (PVar "v") (EApp (EVar "annotName") (EVar "n"))) (DoLet false false (PTuple (PVar "arms") (PVar "n2")) (EApp (EApp (EVar "orCheckArms") (EApp (EApp (EMethodRef "filter") (EVar "patHasAnnot")) (EVar "ps"))) (EBinOp "+" (EVar "n") (ELit (LInt 1))))) (DoLet false false (PVar "check") (EApp (EApp (EVar "EMatch") (EApp (EVar "EVar") (EVar "v"))) (EBinOp "++" (EVar "arms") (EListLit (EApp (EApp (EApp (EVar "Arm") (EVar "PWild")) (EListLit)) (EApp (EVar "ELit") (EVar "LUnit"))))))) (DoExpr (ETuple (EApp (EApp (EApp (EApp (EVar "PAs") (EVar "v")) (EApp (EApp (EApp (EApp (EApp (EVar "Loc") (ELit (LString ""))) (ELit (LInt 0))) (ELit (LInt 0))) (ELit (LInt 0))) (ELit (LInt 0)))) (EVar "noBinderId")) (EApp (EVar "POr") (EApp (EApp (EDictApp "flatMap") (EVar "orAlternatives")) (EVar "ps")))) (EListLit (EVar "check")) (EVar "n2")))))
+(DTypeSig false "orCheckArms" (TyFun (TyApp (TyCon "List") (TyCon "Pat")) (TyFun (TyCon "Int") (TyTuple (TyApp (TyCon "List") (TyCon "Arm")) (TyCon "Int")))))
+(DFunDef false "orCheckArms" ((PList) (PVar "n")) (ETuple (EListLit) (EVar "n")))
+(DFunDef false "orCheckArms" ((PCons (PVar "p") (PVar "ps")) (PVar "n")) (EBlock (DoLet false false (PTuple (PVar "q") (PVar "checks") (PVar "n1")) (EApp (EApp (EVar "annotsOut") (EApp (EVar "dropBinders") (EVar "p"))) (EVar "n"))) (DoLet false false (PTuple (PVar "arms") (PVar "n2")) (EApp (EApp (EVar "orCheckArms") (EVar "ps")) (EVar "n1"))) (DoExpr (ETuple (EBinOp "::" (EApp (EApp (EApp (EVar "Arm") (EVar "q")) (EListLit (EApp (EVar "annotGuard") (EVar "checks")))) (EApp (EVar "ELit") (EVar "LUnit"))) (EVar "arms")) (EVar "n2")))))
+(DTypeSig false "orAlternatives" (TyFun (TyCon "Pat") (TyApp (TyCon "List") (TyCon "Pat"))))
+(DFunDef false "orAlternatives" ((PVar "p")) (EMatch (EApp (EVar "dropAnnots") (EVar "p")) (arm (PCon "POr" (PVar "qs")) () (EVar "qs")) (arm (PVar "q") () (EListLit (EVar "q")))))
+(DTypeSig false "dropAnnots" (TyFun (TyCon "Pat") (TyCon "Pat")))
+(DFunDef false "dropAnnots" ((PCon "PAnn" (PVar "q") PWild)) (EApp (EVar "dropAnnots") (EVar "q")))
+(DFunDef false "dropAnnots" ((PCon "PCon" (PVar "c") (PVar "ps"))) (EApp (EApp (EVar "PCon") (EVar "c")) (EApp (EApp (EMethodRef "map") (EVar "dropAnnots")) (EVar "ps"))))
+(DFunDef false "dropAnnots" ((PCon "PCons" (PVar "h") (PVar "tl"))) (EApp (EApp (EVar "PCons") (EApp (EVar "dropAnnots") (EVar "h"))) (EApp (EVar "dropAnnots") (EVar "tl"))))
+(DFunDef false "dropAnnots" ((PCon "PTuple" (PVar "ps"))) (EApp (EVar "PTuple") (EApp (EApp (EMethodRef "map") (EVar "dropAnnots")) (EVar "ps"))))
+(DFunDef false "dropAnnots" ((PCon "PList" (PVar "ps"))) (EApp (EVar "PList") (EApp (EApp (EMethodRef "map") (EVar "dropAnnots")) (EVar "ps"))))
+(DFunDef false "dropAnnots" ((PCon "PAs" (PVar "x") (PVar "l") (PVar "bid") (PVar "q"))) (EApp (EApp (EApp (EApp (EVar "PAs") (EVar "x")) (EVar "l")) (EVar "bid")) (EApp (EVar "dropAnnots") (EVar "q"))))
+(DFunDef false "dropAnnots" ((PCon "POr" (PVar "ps"))) (EApp (EVar "POr") (EApp (EApp (EDictApp "flatMap") (EVar "orAlternatives")) (EVar "ps"))))
+(DFunDef false "dropAnnots" ((PCon "PRec" (PVar "c") (PVar "fields") (PVar "open"))) (EApp (EApp (EApp (EVar "PRec") (EVar "c")) (EApp (EApp (EMethodRef "map") (EVar "dropFieldAnnots")) (EVar "fields"))) (EVar "open")))
+(DFunDef false "dropAnnots" ((PVar "p")) (EVar "p"))
+(DTypeSig false "dropFieldAnnots" (TyFun (TyCon "RecPatField") (TyCon "RecPatField")))
+(DFunDef false "dropFieldAnnots" ((PCon "RecPatField" (PVar "k") (PVar "l") (PVar "bid") (PCon "Some" (PVar "q")))) (EApp (EApp (EApp (EApp (EVar "RecPatField") (EVar "k")) (EVar "l")) (EVar "bid")) (EApp (EVar "Some") (EApp (EVar "dropAnnots") (EVar "q")))))
+(DFunDef false "dropFieldAnnots" ((PVar "f")) (EVar "f"))
+(DTypeSig false "dropBinders" (TyFun (TyCon "Pat") (TyCon "Pat")))
+(DFunDef false "dropBinders" ((PCon "PVar" PWild PWild PWild)) (EVar "PWild"))
+(DFunDef false "dropBinders" ((PCon "PAs" PWild PWild PWild (PVar "q"))) (EApp (EVar "dropBinders") (EVar "q")))
+(DFunDef false "dropBinders" ((PCon "PAnn" (PVar "q") (PVar "t"))) (EApp (EApp (EVar "PAnn") (EApp (EVar "dropBinders") (EVar "q"))) (EVar "t")))
+(DFunDef false "dropBinders" ((PCon "PCon" (PVar "c") (PVar "ps"))) (EApp (EApp (EVar "PCon") (EVar "c")) (EApp (EApp (EMethodRef "map") (EVar "dropBinders")) (EVar "ps"))))
+(DFunDef false "dropBinders" ((PCon "PCons" (PVar "h") (PVar "tl"))) (EApp (EApp (EVar "PCons") (EApp (EVar "dropBinders") (EVar "h"))) (EApp (EVar "dropBinders") (EVar "tl"))))
+(DFunDef false "dropBinders" ((PCon "PTuple" (PVar "ps"))) (EApp (EVar "PTuple") (EApp (EApp (EMethodRef "map") (EVar "dropBinders")) (EVar "ps"))))
+(DFunDef false "dropBinders" ((PCon "PList" (PVar "ps"))) (EApp (EVar "PList") (EApp (EApp (EMethodRef "map") (EVar "dropBinders")) (EVar "ps"))))
+(DFunDef false "dropBinders" ((PCon "POr" (PVar "ps"))) (EApp (EVar "POr") (EApp (EApp (EMethodRef "map") (EVar "dropBinders")) (EVar "ps"))))
+(DFunDef false "dropBinders" ((PCon "PRec" (PVar "c") (PVar "fields") (PVar "open"))) (EApp (EApp (EApp (EVar "PRec") (EVar "c")) (EApp (EApp (EMethodRef "map") (EVar "dropFieldBinders")) (EVar "fields"))) (EVar "open")))
+(DFunDef false "dropBinders" ((PVar "p")) (EVar "p"))
+(DTypeSig false "dropFieldBinders" (TyFun (TyCon "RecPatField") (TyCon "RecPatField")))
+(DFunDef false "dropFieldBinders" ((PCon "RecPatField" (PVar "k") (PVar "l") PWild (PCon "Some" (PVar "q")))) (EApp (EApp (EApp (EApp (EVar "RecPatField") (EVar "k")) (EVar "l")) (EVar "noBinderId")) (EApp (EVar "Some") (EApp (EVar "dropBinders") (EVar "q")))))
+(DFunDef false "dropFieldBinders" ((PCon "RecPatField" (PVar "k") (PVar "l") PWild (PCon "None"))) (EApp (EApp (EApp (EApp (EVar "RecPatField") (EVar "k")) (EVar "l")) (EVar "noBinderId")) (EApp (EVar "Some") (EVar "PWild"))))
+(DTypeSig false "annotCheck" (TyFun (TyCon "String") (TyFun (TyCon "Ty") (TyCon "Expr"))))
+(DFunDef false "annotCheck" ((PVar "v") (PVar "t")) (EApp (EApp (EVar "locatedAt") (EApp (EVar "firstTyLoc") (EVar "t"))) (EApp (EApp (EVar "EAnnot") (EApp (EVar "EVar") (EVar "v"))) (EVar "t"))))
+(DTypeSig false "annotChecks" (TyFun (TyApp (TyCon "List") (TyCon "Expr")) (TyFun (TyCon "Expr") (TyCon "Expr"))))
 (DFunDef false "annotChecks" ((PList) (PVar "body")) (EVar "body"))
-(DFunDef false "annotChecks" ((PCons (PTuple (PVar "v") (PVar "t")) (PVar "rest")) (PVar "body")) (EBlock (DoLet false false (PVar "check") (EApp (EApp (EVar "locatedAt") (EApp (EVar "firstTyLoc") (EVar "t"))) (EApp (EApp (EVar "EAnnot") (EApp (EVar "EVar") (EVar "v"))) (EVar "t")))) (DoExpr (EApp (EApp (EApp (EApp (EApp (EVar "ELet") (EVar "noDeclLoc")) (EVar "False")) (EVar "PWild")) (EVar "check")) (EApp (EApp (EVar "annotChecks") (EVar "rest")) (EVar "body"))))))
+(DFunDef false "annotChecks" ((PCons (PVar "check") (PVar "rest")) (PVar "body")) (EApp (EApp (EApp (EApp (EApp (EVar "ELet") (EVar "noDeclLoc")) (EVar "False")) (EVar "PWild")) (EVar "check")) (EApp (EApp (EVar "annotChecks") (EVar "rest")) (EVar "body"))))
+(DTypeSig false "annotGuard" (TyFun (TyApp (TyCon "List") (TyCon "Expr")) (TyCon "Guard")))
+(DFunDef false "annotGuard" ((PVar "checks")) (EApp (EVar "GBool") (EApp (EApp (EVar "annotChecks") (EVar "checks")) (EApp (EVar "ELit") (EApp (EVar "LBool") (EVar "True"))))))
 (DTypeSig false "sectionToCore" (TyFun (TyCon "Section") (TyCon "Expr")))
 (DFunDef false "sectionToCore" ((PCon "SecBare" (PVar "op"))) (EApp (EApp (EVar "ELam") (EListLit (EApp (EApp (EApp (EVar "PVar") (ELit (LString "_a"))) (EApp (EApp (EApp (EApp (EApp (EVar "Loc") (ELit (LString ""))) (ELit (LInt 0))) (ELit (LInt 0))) (ELit (LInt 0))) (ELit (LInt 0)))) (EVar "noBinderId")) (EApp (EApp (EApp (EVar "PVar") (ELit (LString "_b"))) (EApp (EApp (EApp (EApp (EApp (EVar "Loc") (ELit (LString ""))) (ELit (LInt 0))) (ELit (LInt 0))) (ELit (LInt 0))) (ELit (LInt 0)))) (EVar "noBinderId")))) (EApp (EApp (EApp (EVar "binOp") (EVar "op")) (EApp (EVar "EVar") (ELit (LString "_a")))) (EApp (EVar "EVar") (ELit (LString "_b"))))))
 (DFunDef false "sectionToCore" ((PCon "SecRight" (PVar "op") (PVar "e"))) (EApp (EApp (EVar "ELam") (EListLit (EApp (EApp (EApp (EVar "PVar") (ELit (LString "_s"))) (EApp (EApp (EApp (EApp (EApp (EVar "Loc") (ELit (LString ""))) (ELit (LInt 0))) (ELit (LInt 0))) (ELit (LInt 0))) (ELit (LInt 0)))) (EVar "noBinderId")))) (EApp (EApp (EApp (EVar "binOp") (EVar "op")) (EApp (EVar "EVar") (ELit (LString "_s")))) (EVar "e"))))

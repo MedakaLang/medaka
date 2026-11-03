@@ -325,4 +325,18 @@ test "a lambda parameter annotation is resolved as a written type" = expectEach
         ["R-UNKNOWN-TYPE"]
         (desugaredCodes "f n = match n\n  m if (k : NoSuchType) <- m => k\n"),
     ),
+    (
+      "an annotation inside one or-pattern alternative binds the same names",
+      expectEqual
+        []
+        (desugaredCodes
+          "data Result a b = Ok a | Err b\nf = (Ok ((a, b) : (Int, Int)) | Err (a, b)) => a + b\n"),
+    ),
+    (
+      "an unknown type inside one or-pattern alternative",
+      expectEqual
+        ["R-UNKNOWN-TYPE"]
+        (desugaredCodes
+          "data Result a b = Ok a | Err b\nf = (Ok ((a, b) : NoSuchType) | Err (a, b)) => b\n"),
+    ),
   ]
