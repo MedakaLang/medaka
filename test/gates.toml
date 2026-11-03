@@ -611,7 +611,7 @@ link = "production"
 [[gate]]
 name = "pds/test/constant_time_reductions"
 area = "engines"
-shard = "gates_8"
+shard = "gates_1"
 project = "pds"
 tiers = ["merge"]
 cost = "medium"
@@ -787,7 +787,7 @@ link = "production"
 [[gate]]
 name = "pds/test/mst_vectors"
 area = "engines"
-shard = "gates_8"
+shard = "gates_1"
 project = "pds"
 tiers = ["merge"]
 cost = "medium"
@@ -863,7 +863,7 @@ link = "production"
 [[gate]]
 name = "pds/test/read_routes_all_engines"
 area = "engines"
-shard = "gates_8"
+shard = "gates_1"
 project = "pds"
 tiers = ["merge"]
 # Repository-free by construction (see the test's module doc): no signing, so
@@ -882,7 +882,7 @@ link = "production"
 [[gate]]
 name = "pds/test/repo_vectors"
 area = "engines"
-shard = "gates_8"
+shard = "gates_1"
 project = "pds"
 tiers = ["merge"]
 # Was "medium" while this gate was the 948.9s pole of the whole suite — i.e. the
@@ -1149,7 +1149,7 @@ link = "production"
 [[gate]]
 name = "sqlite/test/overflow_oracle"
 area = "engines"
-shard = "gates_7"
+shard = "gates_6"
 project = "sqlite"
 tiers = ["merge"]
 cost = "medium"
@@ -1489,7 +1489,7 @@ link = "production"
 [[gate]]
 name = "diff_compiler_build"
 area = "backend"
-shard = "gates_5"
+shard = "gates_2"
 project = "compiler"
 tiers = ["merge"]
 cost = "cheap"
@@ -1521,7 +1521,7 @@ link = "differential"
 [[gate]]
 name = "diff_compiler_capability_matrix"
 area = "infra"
-shard = "gates_8"
+shard = "gates_5"
 project = "compiler"
 tiers = ["merge"]
 cost = "cheap"
@@ -1877,7 +1877,7 @@ link = "differential"
 [[gate]]
 name = "diff_compiler_engines_part2"
 area = "engines"
-shard = "gates_1"
+shard = "gates_8"
 project = "compiler"
 tiers = ["merge"]
 cost = "medium"
@@ -1893,7 +1893,7 @@ link = "differential"
 [[gate]]
 name = "diff_compiler_engines_part3"
 area = "engines"
-shard = "gates_1"
+shard = "gates_8"
 project = "compiler"
 tiers = ["merge"]
 cost = "medium"
@@ -1957,7 +1957,7 @@ link = "production"
 [[gate]]
 name = "diff_compiler_eval"
 area = "eval"
-shard = "gates_7"
+shard = "gates_6"
 project = "compiler"
 tiers = ["merge"]
 cost = "cheap"
@@ -2053,7 +2053,7 @@ link = "production"
 [[gate]]
 name = "diff_compiler_iface_order"
 area = "infra"
-shard = "gates_7"
+shard = "gates_6"
 project = "compiler"
 tiers = ["merge"]
 cost = "cheap"
@@ -2245,7 +2245,7 @@ link = "production"
 [[gate]]
 name = "diff_compiler_lint_baseline"
 area = "tooling"
-shard = "gates_7"
+shard = "gates_6"
 project = "compiler"
 tiers = ["merge"]
 cost = "cheap"
@@ -2393,7 +2393,7 @@ link = "differential"
 [[gate]]
 name = "diff_compiler_lsp"
 area = "tools"
-shard = "gates_7"
+shard = "gates_6"
 project = "compiler"
 tiers = ["merge"]
 cost = "medium"
@@ -2561,7 +2561,7 @@ link = "production"
 [[gate]]
 name = "diff_compiler_preflight_base"
 area = "infra"
-shard = "gates_7"
+shard = "gates_6"
 project = "compiler"
 tiers = ["merge"]
 cost = "cheap"
@@ -2673,7 +2673,7 @@ link = "production"
 [[gate]]
 name = "diff_compiler_rejection_parity"
 area = "engines"
-shard = "gates_1"
+shard = "gates_8"
 project = "compiler"
 tiers = ["merge"]
 cost = "cheap"
@@ -3013,7 +3013,7 @@ link = "production"
 [[gate]]
 name = "diff_native_cli"
 area = "infra"
-shard = "gates_6"
+shard = "gates_7"
 project = "compiler"
 tiers = ["merge"]
 cost = "cheap"
@@ -3205,7 +3205,7 @@ link = "production"
 [[gate]]
 name = "native_fixtures/run"
 area = "infra"
-shard = "gates_8"
+shard = "gates_1"
 project = "compiler"
 tiers = ["merge"]
 cost = "cheap"
@@ -3532,7 +3532,7 @@ link = "production"
 [[gate]]
 name = "diff_compiler_gate_registry"
 area = "infra"
-shard = "gates_6"
+shard = "gates_7"
 project = "compiler"
 tiers = ["merge"]
 cost = "cheap"
@@ -3848,7 +3848,7 @@ link = "production"
 [[gate]]
 name = "diff_compiler_guide_render"
 area = "infra"
-shard = "gates_1"
+shard = "gates_8"
 project = "compiler"
 tiers = ["merge"]
 cost = "cheap"
@@ -4088,6 +4088,22 @@ migration = "shell:instrumentation"
 run = "test/diff_interface_onoff.sh"
 oracles = []
 sources = ["compiler/types/prelude_interface.mdk", "compiler/types/interface_sexp.mdk", "compiler/support/sexp_value.mdk", "compiler/driver/loader.mdk", "compiler/driver/diagnostics.mdk", "compiler/driver/build_cmd.mdk", "compiler/driver/medaka_cli.mdk", "compiler/types/typecheck.mdk", "compiler/types/tc_types.mdk", "compiler/types/tc_mono.mdk", "compiler/types/tc_state.mdk", "compiler/types/tc_env.mdk", "compiler/types/tc_diag_text.mdk", "compiler/types/tc_diag.mdk", "compiler/types/tc_scope.mdk", "compiler/types/tc_unify.mdk", "compiler/types/tc_decls_variance.mdk", "compiler/types/tc_decls_types.mdk", "compiler/types/tc_decls.mdk", "compiler/types/tc_foreign.mdk", "compiler/types/tc_solve_givens.mdk", "compiler/types/tc_solve_entail.mdk", "compiler/types/tc_solve.mdk", "compiler/types/tc_solve_check.mdk", "compiler/types/tc_shadow.mdk", "compiler/types/tc_effects.mdk", "compiler/types/tc_occurrence.mdk", "compiler/types/tc_groups.mdk", "compiler/types/tc_pat.mdk", "compiler/types/tc_infer_records.mdk", "compiler/types/tc_infer.mdk", "compiler/types/tc_elab.mdk", "compiler/types/tc_global.mdk", "compiler/types/tc_module.mdk", "compiler/tools/interface_cmd.mdk", "stdlib/core.mdk", "stdlib/runtime.mdk", "test/build_native_medaka.sh", "test/diff_interface_onoff.sh", "compiler/types/prelude_elab.mdk", "compiler/frontend/ast_codec.mdk", "compiler/tools/test_cmd.mdk", "compiler/entries/llvm_emit_modules_main.mdk", "compiler/entries/entry_support.mdk", "compiler/types/route_key.mdk", "compiler/types/evidence_coverage.mdk", "compiler/types/prelude_decls.mdk", "compiler/frontend/desugar_cache.mdk", "compiler/frontend/desugar.mdk", "compiler/frontend/parser.mdk"]
+corpus = []
+toolchain = []
+link = "production"
+
+[[gate]]
+name = "diff_compiler_mcp_collector"
+area = "infra"
+shard = "gates_7"
+project = "compiler"
+tiers = ["merge"]
+cost = "cheap"
+kind = "exec"
+migration = "shell:external-harness"
+run = "test/diff_compiler_mcp_collector.sh"
+oracles = []
+sources = ["scripts/mcp_bench/*"]
 corpus = []
 toolchain = []
 link = "production"

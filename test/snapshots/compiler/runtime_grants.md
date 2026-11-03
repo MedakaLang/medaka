@@ -1,5 +1,5 @@
 # META
-source_lines=35
+source_lines=36
 stages=DESUGAR,MARK
 # SOURCE
 import support.ordmap.{OrdMap, omEmpty, omFromPairs}
@@ -16,6 +16,7 @@ runtimePathCount "writeFile" = 1
 runtimePathCount "writeFileBytes" = 1
 runtimePathCount "writeFileMode" = 1
 runtimePathCount "appendFile" = 1
+runtimePathCount "appendFileExceptStdout" = 1
 runtimePathCount "fileExists" = 1
 runtimePathCount "fileMode" = 1
 runtimePathCount "canonicalizePath" = 1
@@ -50,6 +51,7 @@ fileGrantExterns =
 (DFunDef false "runtimePathCount" ((PLit (LString "writeFileBytes"))) (ELit (LInt 1)))
 (DFunDef false "runtimePathCount" ((PLit (LString "writeFileMode"))) (ELit (LInt 1)))
 (DFunDef false "runtimePathCount" ((PLit (LString "appendFile"))) (ELit (LInt 1)))
+(DFunDef false "runtimePathCount" ((PLit (LString "appendFileExceptStdout"))) (ELit (LInt 1)))
 (DFunDef false "runtimePathCount" ((PLit (LString "fileExists"))) (ELit (LInt 1)))
 (DFunDef false "runtimePathCount" ((PLit (LString "fileMode"))) (ELit (LInt 1)))
 (DFunDef false "runtimePathCount" ((PLit (LString "canonicalizePath"))) (ELit (LInt 1)))
@@ -75,6 +77,7 @@ fileGrantExterns =
 (DFunDef false "runtimePathCount" ((PLit (LString "writeFileBytes"))) (ELit (LInt 1)))
 (DFunDef false "runtimePathCount" ((PLit (LString "writeFileMode"))) (ELit (LInt 1)))
 (DFunDef false "runtimePathCount" ((PLit (LString "appendFile"))) (ELit (LInt 1)))
+(DFunDef false "runtimePathCount" ((PLit (LString "appendFileExceptStdout"))) (ELit (LInt 1)))
 (DFunDef false "runtimePathCount" ((PLit (LString "fileExists"))) (ELit (LInt 1)))
 (DFunDef false "runtimePathCount" ((PLit (LString "fileMode"))) (ELit (LInt 1)))
 (DFunDef false "runtimePathCount" ((PLit (LString "canonicalizePath"))) (ELit (LInt 1)))

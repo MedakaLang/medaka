@@ -180,6 +180,17 @@ runtimeAbiRows = [
     },
   ),
   (
+    "appendFileExceptStdout",
+    CallableShape {
+      writtenValueArity = 2,
+      loweredCoreArity = 3,
+      parameterHeads = ["String", "String"],
+      resultHead = "Result",
+      canonicalSignature =
+        "v1:(path : String) -> String -> <FileWrite path> Result String Unit",
+    },
+  ),
+  (
     "fileExists",
     CallableShape {
       writtenValueArity = 1,
