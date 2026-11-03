@@ -32,6 +32,7 @@ types.tc_solve_entail
 types.tc_solve
 types.tc_solve_check
 types.tc_shadow
+types.tc_grants
 types.tc_effects
 types.tc_occurrence
 types.tc_mark

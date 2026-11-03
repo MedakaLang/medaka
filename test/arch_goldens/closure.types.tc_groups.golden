@@ -48,6 +48,7 @@ types.tc_diag
 types.tc_diag_text
 types.tc_effects
 types.tc_env
+types.tc_grants
 types.tc_mono
 types.tc_occurrence
 types.tc_scope

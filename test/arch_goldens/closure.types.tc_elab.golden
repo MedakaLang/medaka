@@ -59,6 +59,7 @@ types.tc_diag_text
 types.tc_effects
 types.tc_env
 types.tc_foreign
+types.tc_grants
 types.tc_groups
 types.tc_mark
 types.tc_mono

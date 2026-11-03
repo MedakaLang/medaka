@@ -158,9 +158,7 @@ import types.tc_types.{
   ValueScheme(..),
   siteFor,
 }
-import types.tc_effects.{
-  clausesOf,
-}
+import types.tc_grants.{clausesOf}
 import support.ordmap.{
   OrdMap,
   omEmpty,

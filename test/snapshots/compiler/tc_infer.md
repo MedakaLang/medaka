@@ -1,5 +1,5 @@
 # META
-source_lines=3581
+source_lines=3583
 stages=DESUGAR,MARK
 # SOURCE
 -- tc_infer: the expression inference recursion (variables, application, lambda, let and rec-let,
@@ -210,22 +210,24 @@ import types.tc_shadow.{
 }
 import types.tc_effects.{
   finishValueEffectsKeeping,
-  appSpineArgCount,
   beginEffectSummaryScope,
   collectProducedSummary,
   freshEffectSummary,
-  grantOnlyBindingId,
   localBindingSummary,
   notePerformSite,
-  recordClauseFileBound,
   recordEffectBody,
+  registerLocalAbsIf,
+  registerLocalGroupAbs,
+  argumentAuthority,
+}
+import types.tc_grants.{
+  appSpineArgCount,
+  grantOnlyBindingId,
+  recordClauseFileBound,
   recordGrantOcc,
   recordStandaloneAt,
   recordValueFileBound,
-  registerLocalAbsIf,
-  registerLocalGroupAbs,
   spineHeadEv,
-  argumentAuthority,
 }
 import types.tc_occurrence.{
   bindingDeclaredAt,
@@ -3597,7 +3599,8 @@ peelOntoParams dyn (Some src) patTypes pats =
 (DUse false (UseGroup ("types" "tc_solve") ((mem "goalsMark" false) (mem "improveLocalGoals" false) (mem "isLocalAbsName" false) (mem "pushLocalDictApp" false) (mem "routeLocalSym" false))))
 (DUse false (UseGroup ("types" "tc_solve_check") ((mem "callOblsWindow" false) (mem "checkSigVarGoals" false) (mem "declaredPredicateSlots" false) (mem "dedupSlotVecs" false) (mem "finalizeNumBoundary" false) (mem "localNumGuard" false) (mem "memberTiedSurvivors" false) (mem "numConstrainedIds" false) (mem "predicateSlotView" false))))
 (DUse false (UseGroup ("types" "tc_shadow") ((mem "definerReceiverDispatches" false) (mem "definerReceiverIsDictVar" false) (mem "definerShadowArgHead" false) (mem "definerShadowSpineArgAt" false) (mem "definerShadowSpineVarAt" false) (mem "definerShadowVarHead" false) (mem "enforceStandaloneDomainAt" false) (mem "groundAdmittedReceivers" false) (mem "groundShadowReceiver" false) (mem "importerAdmittedVerdict" false) (mem "importerShadowDomain" false) (mem "importerShadowDomainAt" false) (mem "methodCellOf" false) (mem "plainAppHeadVar" false) (mem "pushAmbiguousShadowDecl" false) (mem "recoveredShadowSym" false) (mem "shadowDomainForAt" false) (mem "shadowHeadEnv" false) (mem "shadowStandaloneHead" false) (mem "shadowStandaloneSpineHeadAt" false) (mem "stampMethodArities" false) (mem "stampRoutes" false) (mem "standaloneShadowDomainAt" false))))
-(DUse false (UseGroup ("types" "tc_effects") ((mem "finishValueEffectsKeeping" false) (mem "appSpineArgCount" false) (mem "beginEffectSummaryScope" false) (mem "collectProducedSummary" false) (mem "freshEffectSummary" false) (mem "grantOnlyBindingId" false) (mem "localBindingSummary" false) (mem "notePerformSite" false) (mem "recordClauseFileBound" false) (mem "recordEffectBody" false) (mem "recordGrantOcc" false) (mem "recordStandaloneAt" false) (mem "recordValueFileBound" false) (mem "registerLocalAbsIf" false) (mem "registerLocalGroupAbs" false) (mem "spineHeadEv" false) (mem "argumentAuthority" false))))
+(DUse false (UseGroup ("types" "tc_effects") ((mem "finishValueEffectsKeeping" false) (mem "beginEffectSummaryScope" false) (mem "collectProducedSummary" false) (mem "freshEffectSummary" false) (mem "localBindingSummary" false) (mem "notePerformSite" false) (mem "recordEffectBody" false) (mem "registerLocalAbsIf" false) (mem "registerLocalGroupAbs" false) (mem "argumentAuthority" false))))
+(DUse false (UseGroup ("types" "tc_grants") ((mem "appSpineArgCount" false) (mem "grantOnlyBindingId" false) (mem "recordClauseFileBound" false) (mem "recordGrantOcc" false) (mem "recordStandaloneAt" false) (mem "recordValueFileBound" false) (mem "spineHeadEv" false))))
 (DUse false (UseGroup ("types" "tc_occurrence") ((mem "bindingDeclaredAt" false) (mem "freshEvId" false) (mem "inferDeclaredDictAt" false) (mem "inferDictAtFound" false) (mem "inferMethodAtCell" false) (mem "inferNumLit" false) (mem "inferWideLit" false) (mem "instantiateStandaloneOccurrence" false) (mem "instantiateVarTrackedId" false) (mem "instantiateVarTrackedWithSubst" false) (mem "isGrantOnlyEv" false) (mem "markNumlitOpTaint" false) (mem "maybeStandaloneValueMono" false) (mem "methodOmittedVars" false) (mem "pushSiteGoal" false) (mem "recordBinopGoals" false) (mem "recordIfaceObligation" false) (mem "recordMethodObligationGuarded" false) (mem "recordMethodObligationOwned" false) (mem "recordNegatedLitRange" false) (mem "recordSelectedStandaloneRoutes" false) (mem "recordUnopSite" false) (mem "siteHeadCell" false) (mem "siteRouteCell" false) (mem "standaloneOccurrence" false) (mem "standaloneSchemeFor" false))))
 (DUse false (UseGroup ("types" "tc_groups") ((mem "checkAnnotTooGeneral" false) (mem "checkLetGroupBindsLocated" false) (mem "checkRecBindNonFunction" false) (mem "checkRecursiveValue" false) (mem "constraintVarArgMonos" false) (mem "constraintVarIfaceMonos" false) (mem "exprLoc" false) (mem "genBindingRestricted" false) (mem "generalizeGroup" false) (mem "isNonexpansive" false) (mem "letBindGeneralizes" false) (mem "letGroupComponents" false) (mem "registerSchemeObligations" false) (mem "residualsOf" false) (mem "sccProtectedSignatureIds" false) (mem "sigConstraintArgTys" false) (mem "sigConstraints" false))))
 (DUse false (UseGroup ("types" "tc_pat") ((mem "closeExistentialScope" false) (mem "inferPat" false) (mem "inferPats" false) (mem "openExistentialScope" false) (mem "patOpensExistentials" false) (mem "recordLetBindType" false) (mem "recordLocalBind" false) (mem "settlePatLits" false) (mem "takeOpenedExistentials" false) (mem "takePatLits" false))))
@@ -4114,7 +4117,8 @@ peelOntoParams dyn (Some src) patTypes pats =
 (DUse false (UseGroup ("types" "tc_solve") ((mem "goalsMark" false) (mem "improveLocalGoals" false) (mem "isLocalAbsName" false) (mem "pushLocalDictApp" false) (mem "routeLocalSym" false))))
 (DUse false (UseGroup ("types" "tc_solve_check") ((mem "callOblsWindow" false) (mem "checkSigVarGoals" false) (mem "declaredPredicateSlots" false) (mem "dedupSlotVecs" false) (mem "finalizeNumBoundary" false) (mem "localNumGuard" false) (mem "memberTiedSurvivors" false) (mem "numConstrainedIds" false) (mem "predicateSlotView" false))))
 (DUse false (UseGroup ("types" "tc_shadow") ((mem "definerReceiverDispatches" false) (mem "definerReceiverIsDictVar" false) (mem "definerShadowArgHead" false) (mem "definerShadowSpineArgAt" false) (mem "definerShadowSpineVarAt" false) (mem "definerShadowVarHead" false) (mem "enforceStandaloneDomainAt" false) (mem "groundAdmittedReceivers" false) (mem "groundShadowReceiver" false) (mem "importerAdmittedVerdict" false) (mem "importerShadowDomain" false) (mem "importerShadowDomainAt" false) (mem "methodCellOf" false) (mem "plainAppHeadVar" false) (mem "pushAmbiguousShadowDecl" false) (mem "recoveredShadowSym" false) (mem "shadowDomainForAt" false) (mem "shadowHeadEnv" false) (mem "shadowStandaloneHead" false) (mem "shadowStandaloneSpineHeadAt" false) (mem "stampMethodArities" false) (mem "stampRoutes" false) (mem "standaloneShadowDomainAt" false))))
-(DUse false (UseGroup ("types" "tc_effects") ((mem "finishValueEffectsKeeping" false) (mem "appSpineArgCount" false) (mem "beginEffectSummaryScope" false) (mem "collectProducedSummary" false) (mem "freshEffectSummary" false) (mem "grantOnlyBindingId" false) (mem "localBindingSummary" false) (mem "notePerformSite" false) (mem "recordClauseFileBound" false) (mem "recordEffectBody" false) (mem "recordGrantOcc" false) (mem "recordStandaloneAt" false) (mem "recordValueFileBound" false) (mem "registerLocalAbsIf" false) (mem "registerLocalGroupAbs" false) (mem "spineHeadEv" false) (mem "argumentAuthority" false))))
+(DUse false (UseGroup ("types" "tc_effects") ((mem "finishValueEffectsKeeping" false) (mem "beginEffectSummaryScope" false) (mem "collectProducedSummary" false) (mem "freshEffectSummary" false) (mem "localBindingSummary" false) (mem "notePerformSite" false) (mem "recordEffectBody" false) (mem "registerLocalAbsIf" false) (mem "registerLocalGroupAbs" false) (mem "argumentAuthority" false))))
+(DUse false (UseGroup ("types" "tc_grants") ((mem "appSpineArgCount" false) (mem "grantOnlyBindingId" false) (mem "recordClauseFileBound" false) (mem "recordGrantOcc" false) (mem "recordStandaloneAt" false) (mem "recordValueFileBound" false) (mem "spineHeadEv" false))))
 (DUse false (UseGroup ("types" "tc_occurrence") ((mem "bindingDeclaredAt" false) (mem "freshEvId" false) (mem "inferDeclaredDictAt" false) (mem "inferDictAtFound" false) (mem "inferMethodAtCell" false) (mem "inferNumLit" false) (mem "inferWideLit" false) (mem "instantiateStandaloneOccurrence" false) (mem "instantiateVarTrackedId" false) (mem "instantiateVarTrackedWithSubst" false) (mem "isGrantOnlyEv" false) (mem "markNumlitOpTaint" false) (mem "maybeStandaloneValueMono" false) (mem "methodOmittedVars" false) (mem "pushSiteGoal" false) (mem "recordBinopGoals" false) (mem "recordIfaceObligation" false) (mem "recordMethodObligationGuarded" false) (mem "recordMethodObligationOwned" false) (mem "recordNegatedLitRange" false) (mem "recordSelectedStandaloneRoutes" false) (mem "recordUnopSite" false) (mem "siteHeadCell" false) (mem "siteRouteCell" false) (mem "standaloneOccurrence" false) (mem "standaloneSchemeFor" false))))
 (DUse false (UseGroup ("types" "tc_groups") ((mem "checkAnnotTooGeneral" false) (mem "checkLetGroupBindsLocated" false) (mem "checkRecBindNonFunction" false) (mem "checkRecursiveValue" false) (mem "constraintVarArgMonos" false) (mem "constraintVarIfaceMonos" false) (mem "exprLoc" false) (mem "genBindingRestricted" false) (mem "generalizeGroup" false) (mem "isNonexpansive" false) (mem "letBindGeneralizes" false) (mem "letGroupComponents" false) (mem "registerSchemeObligations" false) (mem "residualsOf" false) (mem "sccProtectedSignatureIds" false) (mem "sigConstraintArgTys" false) (mem "sigConstraints" false))))
 (DUse false (UseGroup ("types" "tc_pat") ((mem "closeExistentialScope" false) (mem "inferPat" false) (mem "inferPats" false) (mem "openExistentialScope" false) (mem "patOpensExistentials" false) (mem "recordLetBindType" false) (mem "recordLocalBind" false) (mem "settlePatLits" false) (mem "takeOpenedExistentials" false) (mem "takePatLits" false))))

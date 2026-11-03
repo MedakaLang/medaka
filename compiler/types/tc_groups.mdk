@@ -121,7 +121,8 @@ import types.tc_solve_check.{
   undeterminedGoalExempt,
   prerequisiteOnWalk,
 }
-import types.tc_effects.{clausesAt, clausesOf, scopeRolesOf}
+import types.tc_effects.{scopeRolesOf}
+import types.tc_grants.{clausesAt, clausesOf}
 import types.tc_occurrence.{ctorHeadShaped}
 import frontend.ast.{
   Arm(..),

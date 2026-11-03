@@ -1,5 +1,5 @@
 # META
-source_lines=3355
+source_lines=3363
 stages=DESUGAR,MARK
 # SOURCE
 -- tc_module: the per-module check in one order: declarations, top-level groups, test and prop
@@ -91,10 +91,18 @@ import types.tc_solve.{
 }
 import types.effect_authority.{authvarId, authVars}
 import types.tc_effects.{
-  beginEffectSummaryScope, borrowedEffectCells, checkEffectEscape,
-  checkUndeterminedRetEffVars, clausesOf, finishEffectSummaryScopeKeeping,
-  flushPendingEscapes, freshEffectSummary, memberEffectRoots, recordFileBound,
-  recordMethodGrants, recordTopGrants, reportEffectSummaryFailures
+  beginEffectSummaryScope,
+  borrowedEffectCells,
+  checkEffectEscape,
+  checkUndeterminedRetEffVars,
+  finishEffectSummaryScopeKeeping,
+  flushPendingEscapes,
+  freshEffectSummary,
+  memberEffectRoots,
+  reportEffectSummaryFailures,
+}
+import types.tc_grants.{
+  clausesOf, recordFileBound, recordMethodGrants, recordTopGrants
 }
 import types.tc_state.{
   callUOblsWindow, checkRunResidue, currentScopeStore, dynAtIfSome, envAtIfSome,
@@ -3378,7 +3386,8 @@ stampTailDecl top d = stampDeclWith top d
 (DUse false (UseGroup ("types" "tc_occurrence") ((mem "argDispatchIndicesById" false))))
 (DUse false (UseGroup ("types" "tc_solve") ((mem "determineByUniqueInstance" false) (mem "dropGoalsSince" false) (mem "goalsMark" false) (mem "improveByUniqueImpl" false) (mem "outerRigidIds" false) (mem "refileDeterminedRows" false) (mem "uOblArgs" false))))
 (DUse false (UseGroup ("types" "effect_authority") ((mem "authvarId" false) (mem "authVars" false))))
-(DUse false (UseGroup ("types" "tc_effects") ((mem "beginEffectSummaryScope" false) (mem "borrowedEffectCells" false) (mem "checkEffectEscape" false) (mem "checkUndeterminedRetEffVars" false) (mem "clausesOf" false) (mem "finishEffectSummaryScopeKeeping" false) (mem "flushPendingEscapes" false) (mem "freshEffectSummary" false) (mem "memberEffectRoots" false) (mem "recordFileBound" false) (mem "recordMethodGrants" false) (mem "recordTopGrants" false) (mem "reportEffectSummaryFailures" false))))
+(DUse false (UseGroup ("types" "tc_effects") ((mem "beginEffectSummaryScope" false) (mem "borrowedEffectCells" false) (mem "checkEffectEscape" false) (mem "checkUndeterminedRetEffVars" false) (mem "finishEffectSummaryScopeKeeping" false) (mem "flushPendingEscapes" false) (mem "freshEffectSummary" false) (mem "memberEffectRoots" false) (mem "reportEffectSummaryFailures" false))))
+(DUse false (UseGroup ("types" "tc_grants") ((mem "clausesOf" false) (mem "recordFileBound" false) (mem "recordMethodGrants" false) (mem "recordTopGrants" false))))
 (DUse false (UseGroup ("types" "tc_state") ((mem "callUOblsWindow" false) (mem "checkRunResidue" false) (mem "currentScopeStore" false) (mem "dynAtIfSome" false) (mem "envAtIfSome" false) (mem "freshModuleCtx" false) (mem "mctxAt" false) (mem "plainModuleSeed" false) (mem "seedCheckRun" false) (mem "wMark" false) (mem "wWindow" false))))
 (DUse false (UseGroup ("types" "tc_solve_check") ((mem "callOblsWindow" false) (mem "checkCallObligationsU" false) (mem "checkSigVarGoals" false) (mem "dedupPredicateSlotsTable" false) (mem "finalizeNumBoundary" false) (mem "liveNumVarGo" false) (mem "numConstrainedIds" false) (mem "predicateSlotTableWithoutArgs" false) (mem "registerConstraintRegs" false) (mem "registerInferredConstraints" false) (mem "rejectUndeterminedVectors" false) (mem "rejectWithheldAmbiguity" false) (mem "setFunPredicateSlots" false) (mem "tiedSurvivors" false) (mem "undeterminedVectorVerdict" false))))
 (DUse false (UseGroup ("types" "tc_global") ((mem "calleeNumObls" false) (mem "checkCoherence" false) (mem "checkGradedImplHeads" false) (mem "checkImplCompletenessMap" false) (mem "checkPhantomMethods" false) (mem "checkSuperImpls" false) (mem "inferDefaultBodies" false) (mem "inferUserImplBodies" false) (mem "numCallObls" false))))
@@ -3693,7 +3702,8 @@ stampTailDecl top d = stampDeclWith top d
 (DUse false (UseGroup ("types" "tc_occurrence") ((mem "argDispatchIndicesById" false))))
 (DUse false (UseGroup ("types" "tc_solve") ((mem "determineByUniqueInstance" false) (mem "dropGoalsSince" false) (mem "goalsMark" false) (mem "improveByUniqueImpl" false) (mem "outerRigidIds" false) (mem "refileDeterminedRows" false) (mem "uOblArgs" false))))
 (DUse false (UseGroup ("types" "effect_authority") ((mem "authvarId" false) (mem "authVars" false))))
-(DUse false (UseGroup ("types" "tc_effects") ((mem "beginEffectSummaryScope" false) (mem "borrowedEffectCells" false) (mem "checkEffectEscape" false) (mem "checkUndeterminedRetEffVars" false) (mem "clausesOf" false) (mem "finishEffectSummaryScopeKeeping" false) (mem "flushPendingEscapes" false) (mem "freshEffectSummary" false) (mem "memberEffectRoots" false) (mem "recordFileBound" false) (mem "recordMethodGrants" false) (mem "recordTopGrants" false) (mem "reportEffectSummaryFailures" false))))
+(DUse false (UseGroup ("types" "tc_effects") ((mem "beginEffectSummaryScope" false) (mem "borrowedEffectCells" false) (mem "checkEffectEscape" false) (mem "checkUndeterminedRetEffVars" false) (mem "finishEffectSummaryScopeKeeping" false) (mem "flushPendingEscapes" false) (mem "freshEffectSummary" false) (mem "memberEffectRoots" false) (mem "reportEffectSummaryFailures" false))))
+(DUse false (UseGroup ("types" "tc_grants") ((mem "clausesOf" false) (mem "recordFileBound" false) (mem "recordMethodGrants" false) (mem "recordTopGrants" false))))
 (DUse false (UseGroup ("types" "tc_state") ((mem "callUOblsWindow" false) (mem "checkRunResidue" false) (mem "currentScopeStore" false) (mem "dynAtIfSome" false) (mem "envAtIfSome" false) (mem "freshModuleCtx" false) (mem "mctxAt" false) (mem "plainModuleSeed" false) (mem "seedCheckRun" false) (mem "wMark" false) (mem "wWindow" false))))
 (DUse false (UseGroup ("types" "tc_solve_check") ((mem "callOblsWindow" false) (mem "checkCallObligationsU" false) (mem "checkSigVarGoals" false) (mem "dedupPredicateSlotsTable" false) (mem "finalizeNumBoundary" false) (mem "liveNumVarGo" false) (mem "numConstrainedIds" false) (mem "predicateSlotTableWithoutArgs" false) (mem "registerConstraintRegs" false) (mem "registerInferredConstraints" false) (mem "rejectUndeterminedVectors" false) (mem "rejectWithheldAmbiguity" false) (mem "setFunPredicateSlots" false) (mem "tiedSurvivors" false) (mem "undeterminedVectorVerdict" false))))
 (DUse false (UseGroup ("types" "tc_global") ((mem "calleeNumObls" false) (mem "checkCoherence" false) (mem "checkGradedImplHeads" false) (mem "checkImplCompletenessMap" false) (mem "checkPhantomMethods" false) (mem "checkSuperImpls" false) (mem "inferDefaultBodies" false) (mem "inferUserImplBodies" false) (mem "numCallObls" false))))

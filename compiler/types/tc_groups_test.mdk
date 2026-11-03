@@ -35,7 +35,7 @@ import frontend.ast.{
 import frontend.parser.{parse}
 import types.repr.{AuthResidual(..), Mono(..), ppMono}
 import types.tc_mono.{tconBuiltin}
-import types.tc_effects.{clausesOf}
+import types.tc_grants.{clausesOf}
 import types.tc_env.{envFor}
 import types.tc_groups.{
   allEVars,

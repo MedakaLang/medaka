@@ -87,10 +87,18 @@ import types.tc_solve.{
 }
 import types.effect_authority.{authvarId, authVars}
 import types.tc_effects.{
-  beginEffectSummaryScope, borrowedEffectCells, checkEffectEscape,
-  checkUndeterminedRetEffVars, clausesOf, finishEffectSummaryScopeKeeping,
-  flushPendingEscapes, freshEffectSummary, memberEffectRoots, recordFileBound,
-  recordMethodGrants, recordTopGrants, reportEffectSummaryFailures
+  beginEffectSummaryScope,
+  borrowedEffectCells,
+  checkEffectEscape,
+  checkUndeterminedRetEffVars,
+  finishEffectSummaryScopeKeeping,
+  flushPendingEscapes,
+  freshEffectSummary,
+  memberEffectRoots,
+  reportEffectSummaryFailures,
+}
+import types.tc_grants.{
+  clausesOf, recordFileBound, recordMethodGrants, recordTopGrants
 }
 import types.tc_state.{
   callUOblsWindow, checkRunResidue, currentScopeStore, dynAtIfSome, envAtIfSome,

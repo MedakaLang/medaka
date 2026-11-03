@@ -1,8 +1,7 @@
 -- tc_effects: the effect checks inference runs at binding boundaries and impl bodies (escape,
--- summary failures, rigidity, index-only variables), grant and authority recording (including the
--- authority an argument carries into its application, `argumentAuthority`), and file-bound values
--- (authority bounds at binding boundaries: recording, flow and settle checks); wires the `effect_*`
--- leaves into inference.
+-- summary failures, rigidity, index-only variables), the authority an argument carries into its
+-- application (`argumentAuthority`), and the local-binding summaries and registrations; wires the
+-- `effect_*` leaves into inference.  Grant recording and file-bound values are `tc_grants`.
 --
 -- Spec: EFFECTS section 2.3, section 5, section 6.2-6.9, section 8.
 --
@@ -14,9 +13,6 @@
 import support.diag_codes.{DiagCode(..)}
 import types.tc_types.{
   BindingRole(..),
-  grantTopKey,
-  methodGrantKey,
-  setGrantIds,
   AbsorptionEvent(..),
   GrantBinder(..),
   GrantCallee(..),
@@ -26,38 +22,28 @@ import types.tc_types.{
   GraphCtx,
   GroupCtx,
   Kind,
-  MethodSchemeRow,
   ModuleCtx,
   ObligationSite,
   ScopedMember,
-  SelectedValueOccurrence,
   TcEnv,
 }
 import types.tc_mono.{
   authIdsIn,
   qualifierAuthIds,
   allArrowEffs,
-  arrowArity,
-  authCellsIn,
-  authOrderIn,
-  authOrderRow,
   authRoots,
-  authRowCells,
   authRowRoots,
   containsI,
   effectCells,
   effectRoots,
   effectRowRoots,
-  funArity,
   joinCellOf,
   monoIndexEffvarIds,
   newEffvarId,
   peelQual,
   rowTailId,
-  schemeAuthIds,
   schemeIds,
   tyAppSpine,
-  tyArrowCount,
   liveTailId,
   anyContainsI,
   effVarTailIds,
@@ -76,14 +62,11 @@ import types.tc_diag_text.{
   effVarLaunderMsg,
   indexEagerMsg,
 }
-import types.tc_state.{
-  currentScopeStore, mctxAt, wPushAll, wRestore, wSnapshot, wWindow
-}
+import types.tc_state.{mctxAt, wSnapshot}
 import types.tc_env.{
   declGradedScope,
   effTailNames,
   funClausePair,
-  lookupBinding,
   lookupVar,
   methodArgs,
   removeAllS,
@@ -93,18 +76,12 @@ import types.tc_env.{
   lookupLocalFlag,
   lookupStandaloneValue,
 }
-import types.tc_diag.{
-  pushTypeError,
-  pushTypeErrorAt,
-  pushTypeErrorOnceAt,
-  pushTypeErrorOncePerSite,
-}
+import types.tc_diag.{pushTypeError, pushTypeErrorAt, pushTypeErrorOnceAt}
 import types.tc_unify.{
   postponePendingJoins,
   settlePendingJoins,
   atomsEscape,
   authorityFailureMsg,
-  captureScope,
   effectLeakCheck,
   effectSiteKey,
   freshEffvarAt,
@@ -115,19 +92,19 @@ import types.tc_unify.{
   widenOpenedFor,
 }
 import types.tc_decls_types.{
-  atomsOfWritten, expandAliasHeadTy, rowArgNames, rowArgNamesIn
+  atomsOfWritten,
+  expandAliasHeadTy,
+  rowArgNames,
+  rowArgNamesIn,
 }
 import types.tc_decls.{krowArgVarAtoms, paramRowAtomsOf, rowArgAtomsIn}
-import types.tc_solve.{isLocalAbsName}
 import types.tc_solve_check.{registerLocalAbs}
 import types.effect_authority.{
   Authority(..),
   Authvar(..),
   authHasVars,
-  authIsTop,
   authSub,
   authvarId,
-  authvarName,
   authVars,
 }
 import types.effect_rows.{
@@ -136,22 +113,13 @@ import types.effect_rows.{
   EffRow(..),
   Effvar(..),
   atomAuth,
-  atomKey,
-  atomLabelOf,
   atomsDiff,
   effrowLabels,
   findAtom,
   rowFlat,
 }
 import types.repr.{
-  AuthResidual(..),
-  Mono(..),
-  Scheme(..),
-  lookupAssocI,
-  normalize,
-  ppEachShared,
-  ppMonosShared,
-  IfaceRef(..),
+  AuthResidual(..), Mono(..), Scheme(..), ppEachShared, IfaceRef(..)
 }
 import types.effect_bindings.{BindingSummary(..), newBindingSummary}
 import frontend.ast.{
@@ -171,9 +139,7 @@ import frontend.ast.{
   Lit(..),
 }
 import map.{Map(..)}
-import support.ordmap.{
-  omDelete, omFromNames, omHasKey, omInsert, omLookup, OrdMap
-}
+import support.ordmap.{omFromNames, omHasKey, omInsert, omLookup}
 import types.evidence.{ScopeId(..)}
 import types.effect_solver.{ScopeRoles(..), noScopeRoles, SummaryFailure}
 import support.util.{
@@ -188,18 +154,15 @@ import support.util.{
   lookupAssoc,
   reverseL,
 }
-import list.{findMap, reverse}
-import types.route_key.{ifaceWordOf}
-import frontend.desugar.{mapChildren, mapExpr}
+import list.{findMap}
 import types.effect_values.{producedInputTypes}
-import types.scopes as Scopes
-import types.runtime_grants.{fileGrantExterns}
 import types.effect_solver as EffectSolver
 import map as IdMap
 import types.scopes.{ScopeOwner(..)}
 import types.effect_infer.{alphaOf, typeAuthority}
 import types.effect_domain.{Param(..)}
 import types.tc_scope.{methodEntryHere}
+import types.tc_grants.{finishFileValueScope, registerLocalGrants}
 
 -- The site a binding performed a label at that the report is about: the
 -- first, in source order, whose authority does not lie within the bound
@@ -938,10 +901,6 @@ declaredEffectsOpen mctx ty =
   let argNames = declaredArgEffNames mctx ty
   anyList (v => not (contains v argNames)) (declaredEffectTail ty)
 
-export
-evOrdinal : EvId -> Int
-evOrdinal (EvId _ i) = i
-
 mentionsEscaped : ModuleCtx -> Authority -> Bool
 mentionsEscaped mctx q =
   anyList
@@ -976,327 +935,6 @@ recordLocalQuantified gctx sch = match schemeIds sch
   ids =>
     let st = gctx.graphRun.localAbs
     st.lasQuantified := omFromNames (map intToString ids) st.lasQuantified.value
-
--- Grants are passed only on a graph whose driver ran the marking preamble: a
--- driver that never marks has no use that could carry one.
-grantsEnabled : GraphCtx -> Unit -> Bool
-grantsEnabled gctx _ = isSome gctx.markSetsRef.value
-
--- What a use of [name] in the module being marked denotes.  An extern the module
--- declares or imports is a foreign declaration, and one spelled like a catalog
--- file extern binds that same runtime operation (a redeclaration must agree with
--- the catalog row); any other value the module defines or imports is a source
--- binding; a name the module neither defines nor imports is the catalog extern
--- when the catalog declares it.
-grantCalleeOf : ModuleCtx -> String -> GrantCallee
-grantCalleeOf mctx name
-  | isLocalAbsName name = SourceCallee
-  | otherwise = match mctx.mcCells.markingRef.value
-    Some mm =>
-      if omHasKey name mm.mmExterns then
-        externCallee name
-      else if omHasKey name mm.mmUserNames then
-        SourceCallee
-      else
-        catalogCallee mctx.mcGraph name
-    None => catalogCallee mctx.mcGraph name
-
-catalogCallee : GraphCtx -> String -> GrantCallee
-catalogCallee gctx name =
-  if omHasKey name gctx.builtinExternNamesRef.value then
-    externCallee name
-  else
-    SourceCallee
-
-externCallee : String -> GrantCallee
-externCallee name =
-  if omHasKey name fileGrantExterns then FileExternCallee else NoGrantCallee
-
--- Whether the marker gives a use of [n] a grant identity: the binding [n] denotes
--- in [env] is a value, not an interface method (whose uses are method
--- occurrences), that takes grants, and its own scheme quantifies an authority.
-export
-grantNameIn : TcEnv -> String -> Bool
-grantNameIn env n
-  | not (grantsEnabled env.teDyn.dcModule.mcGraph ()) = False
-  | otherwise = match lookupBinding env n
-    Some b => match b.ebMethodRow
-      Some _ => False
-      None =>
-        calleeTakesGrants (grantCalleeOf env.teDyn.dcModule n)
-          && isNonEmptyL (schemeAuthIds b.ebValue.vsScheme)
-    None => False
-
-calleeTakesGrants : GrantCallee -> Bool
-calleeTakesGrants SourceCallee = True
-calleeTakesGrants FileExternCallee = True
-calleeTakesGrants NoGrantCallee = False
-
--- A scheme's quantified authorities in grant order: first occurrence in the
--- type read left to right (an arrow's domain, its row, its result), so a
--- scheme and every copy of it list them alike whatever ids they carry.
-export
-grantOrder : Scheme -> List Int
-grantOrder (Forall _ _ [] _ _ _) = []
-grantOrder (Forall _ _ avars _ force body) =
-  let seen = reverseL (authOrderRow force (authOrderIn body []))
-  let quantified = filterList (i => containsI i avars) seen
-  quantified ++ filterList (i => not (containsI i quantified)) avars
-
-export
-grantOccOf : GraphCtx -> EvId -> Option GrantOcc
-grantOccOf gctx ev = IdMap.get (evOrdinal ev) gctx.graphRun.grants.gsOccs.value
-
-setGrantOcc : GraphCtx -> EvId -> GrantOcc -> Unit
-setGrantOcc gctx ev occ =
-  let st = gctx.graphRun.grants
-  st.gsOccs := IdMap.set (evOrdinal ev) occ st.gsOccs.value
-
--- The binding id resolve's stamp would have given this use: its top-level
--- binder's, or 0 for an imported name.
-export
-grantOnlyBindingId : ModuleCtx -> String -> Int
-grantOnlyBindingId mctx name = match mctx.mcCells.markingRef.value
-  Some mm => optionOr 0 (omLookup name mm.mmTop)
-  None => 0
-
-export
-recordGrantOcc : ModuleCtx ->
-  String ->
-  EvId ->
-  Scheme ->
-  List (Int, Authority) ->
-  Unit
-recordGrantOcc mctx name ev (scheme@(Forall _ _ _ _ _ body)) subst =
-  match grantCalleeOf mctx name
-    NoGrantCallee => ()
-    SourceCallee => recordOccWith mctx name ev scheme subst None False
-    FileExternCallee =>
-      recordOccWith mctx name ev scheme subst (Some (arrowArity body)) False
-
--- A method candidate's use: its grants follow its value arguments.
-export
-recordMethodGrantOcc : ModuleCtx ->
-  String ->
-  EvId ->
-  Scheme ->
-  List (Int, Authority) ->
-  Unit
-recordMethodGrantOcc mctx name ev (scheme@(Forall _ _ _ _ _ body)) subst =
-  recordOccWith mctx name ev scheme subst (Some (arrowArity body)) False
-
--- A method occurrence typed as the standalone binding its name shadows: that
--- binding's grants, leading its arguments.
-export
-recordStandaloneGrantOcc : ModuleCtx ->
-  String ->
-  EvId ->
-  Scheme ->
-  List (Int, Authority) ->
-  Int ->
-  Unit
-recordStandaloneGrantOcc mctx name ev scheme subst arity =
-  recordOccWith mctx name ev scheme subst (Some arity) True
-
-recordOccWith : ModuleCtx ->
-  String ->
-  EvId ->
-  Scheme ->
-  List (Int, Authority) ->
-  Option Int ->
-  Bool ->
-  Unit
-recordOccWith mctx name ev scheme subst trailing standalone =
-  match grantOrder scheme
-    [] => ()
-    ids => setGrantOcc mctx.mcGraph ev GrantOcc {
-      goCallee = name,
-      goCells = map (i => optionOr (AJoin []) (lookupAssocI i subst)) ids,
-      goRecIds = [],
-      goTrailing = trailing,
-      goChain = grantChainAt mctx.mcGraph (captureScope mctx ()),
-      goStandalone = standalone,
-    }
-
--- The evidence id of the method occurrence heading an application spine.
-export
-spineHeadEv : Expr -> Option EvId
-spineHeadEv (ELoc _ e) = spineHeadEv e
-spineHeadEv (EApp f _) = spineHeadEv f
-spineHeadEv (EMethodAt _ _ ev) = Some ev
--- any other head is not a method occurrence
-spineHeadEv _ = None
-
--- A shadow application's head, typed as the standalone [occurrence] selected.
-export
-recordStandaloneAt : ModuleCtx ->
-  String ->
-  Expr ->
-  SelectedValueOccurrence ->
-  Unit
-recordStandaloneAt mctx name hd occurrence = match spineHeadEv hd
-  Some ev =>
-    recordStandaloneGrantOcc
-      mctx
-      name
-      ev
-      occurrence.svoScheme
-      occurrence.svoInstance.mtiSubstitution.misAuthSubst
-      (funArity occurrence.svoInstance.mtiBody)
-  None => ()
-
-export
-methodGrantOf : GraphCtx -> String -> String -> Option MethodGrant
-methodGrantOf gctx ifaceWord method =
-  omLookup
-    (methodGrantKey ifaceWord method)
-    gctx.graphRun.grants.gsMethods.value
-
--- The interface methods a module declares whose type quantifies authorities; any
--- other method it declares has no row, whatever an earlier check of the module id
--- left.  The grants follow the arrows the written type spells, since that declared
--- arity is what the backends read; a result an alias names a function stays the
--- result.
-export
-recordMethodGrants : GraphCtx -> List MethodSchemeRow -> Unit
-recordMethodGrants gctx rows =
-  let st = gctx.graphRun.grants
-  st.gsMethods :=
-    fold
-      (acc row =>
-        let key =
-          methodGrantKey
-            (ifaceWordOf row.msrIface.irOrigin row.msrIface.irName)
-            row.msrName
-        match methodGrantOfRow row
-          Some mg => omInsert key mg acc
-          None => omDelete key acc)
-      st.gsMethods.value
-      rows
-
-methodGrantOfRow : MethodSchemeRow -> Option MethodGrant
-methodGrantOfRow row = match row.msrScheme
-  Forall _ _ _ _ force body => match grantOrder row.msrScheme
-    [] => None
-    ids =>
-      let cells = authCellsIn body (authRowCells force Tip)
-      Some MethodGrant {
-        mgArity = tyArrowCount row.msrType,
-        mgNames =
-          map
-            (i => match IdMap.get i cells
-              Some cell => optionOr "" (authvarName cell)
-              None => "")
-            ids,
-      }
-
--- Authority variables no caller supplies, whose grant is the whole domain: the
--- escape check has already held every declaration they reach to its label's top.
-export
-markSourceless : GraphCtx -> List Int -> Unit
-markSourceless gctx ids =
-  let st = gctx.graphRun.grants
-  st.gsSourceless := fold (m i => IdMap.set i () m) st.gsSourceless.value ids
-
--- The binders around [sid] whose authority parameters a grant may forward,
--- innermost first.
-grantChainAt : GraphCtx -> ScopeId -> List GrantBinder
-grantChainAt gctx (sid@(ScopeId i)) =
-  let frame = Scopes.scopeFrame (currentScopeStore gctx ()) sid
-  let outer = match frame.sfParent
-    Some parent => grantChainAt gctx parent
-    None => []
-  let own = match frame.sfOwner
-    BindingOwner n => TopGrantBinder frame.sfModuleId n :: outer
-    LocalBindingOwner n => LocalGrantBinder n :: outer
-    _ => outer
-  match IdMap.get i gctx.graphRun.grants.gsBodies.value
-    Some body => body :: own
-    None => own
-
--- A generalized top-level group: each member whose scheme quantifies
--- authorities takes them as parameters, and each use of such a member inside
--- the group that instantiated nothing (its type was the member's own) forwards
--- them.  A member that takes none has no row, whatever an earlier check of the
--- module id left.
-export
-recordTopGrants : GraphCtx ->
-  String ->
-  List (String, Scheme) ->
-  OrdMap (List (List Pat, Expr)) ->
-  Unit
-recordTopGrants gctx mid schemes grouped =
-  let st = gctx.graphRun.grants
-  let enabled = grantsEnabled gctx ()
-  let granted =
-    map ((n, sch) => (n, if enabled then grantOrder sch else [])) schemes
-  each (e => setGrantIds st.gsTopIds (grantTopKey mid (fst e), snd e)) granted
-  let taking = filterList (e => isNonEmptyL (snd e)) granted
-  match taking
-    [] => ()
-    _ =>
-      st.gsTakers := omFromNames (map fst taking) st.gsTakers.value
-      each
-        ((m, _) =>
-          each
-            (clause => recordRecursiveGrants gctx mid m taking (snd clause))
-            (clausesOf m grouped))
-        schemes
-
-recordRecursiveGrants : GraphCtx ->
-  String ->
-  String ->
-  List (String, List Int) ->
-  Expr ->
-  Unit
-recordRecursiveGrants gctx mid m taking body =
-  let visit =
-    e => match e
-      EDictAt n ev => match (lookupAssoc n taking, grantOccOf gctx ev)
-        (Some ids, None) =>
-          setGrantOcc gctx ev GrantOcc {
-            goCallee = n,
-            goCells = [],
-            goRecIds = ids,
-            goTrailing = None,
-            goChain = [TopGrantBinder mid m],
-            goStandalone = False,
-          }
-          e
-        _ => e
-      _ => e
-  let _ = mapExpr visit body
-  ()
-
--- A generalized candidate local: its quantified authorities become its
--- parameters, and its uses inside its own right-hand side forward them.
-registerLocalGrants : GraphCtx -> String -> Scheme -> Unit
-registerLocalGrants gctx name sch = match grantOrder sch
-  [] => ()
-  ids =>
-    let st = gctx.graphRun.grants
-    st.gsLocalIds := omInsert name ids st.gsLocalIds.value
-    let recOccs =
-      optionOr [] (omLookup name gctx.graphRun.localAbs.lasRecOccs.value)
-    each
-      (occ => setGrantOcc gctx (fst occ) GrantOcc {
-        goCallee = name,
-        goCells = [],
-        goRecIds = ids,
-        goTrailing = None,
-        goChain = grantChainAt gctx (snd occ),
-        goStandalone = False,
-      })
-      recOccs
-
--- Chunk C: number of arguments applied in this spine (`f a b c` ⇒ 3).
-export
-appSpineArgCount : Expr -> Int
-appSpineArgCount (ELoc _ e) = appSpineArgCount e
-appSpineArgCount (EDoOrigin _ e) = appSpineArgCount e
-appSpineArgCount (EAnnot e _) = appSpineArgCount e
-appSpineArgCount (EApp f _) = 1 + appSpineArgCount f
-appSpineArgCount _ = 0
 
 -- Inside a body that collects them (`dcPerformSites`), each variable tail of the
 -- row a call runs, with the span of the call: [env] is located at the call.
@@ -1341,212 +979,6 @@ localBindingSummary mctx (LetBind name clauses _ _) =
     (pats, _) :: _ => listLen pats
     [] => 0
   (name, newBindingSummary arity (freshVar mctx) (freshEffectSummary mctx))
-
--- A declared file row bounds every operation performed while its body runs,
--- including operations in helpers and callbacks. The bound is checked in
--- addition to each extern's own grant; a statically named symlink can change
--- the physical order between the two authorities.
-fileBoundKey : Loc -> String
-fileBoundKey (Loc file line col endLine endCol) =
-  "\{file}:\{intToString line}:\{intToString col}:\{intToString endLine}:\{intToString endCol}"
-
--- Some application and block roots carry locations only on their children.
--- Key the body by its first source node, and guard the whole body at its
--- binding/lambda seam, rather than guarding that child alone.
-export
-fileBodyLoc : Expr -> Option Loc
-fileBodyLoc (ELoc l _) = Some l
-fileBodyLoc e =
-  let found = Ref None
-  let _ =
-    mapChildren
-      (child =>
-        match found.value
-          None => found := fileBodyLoc child
-          Some _ => ()
-        child)
-      e
-  found.value
-
-export
-fileBoundSite : String -> Loc -> String
--- Parsed locations may have an empty file field; the module keeps equal
--- source spans in different modules from sharing a bound.
-fileBoundSite mid loc =
-  "\{intToString (stringLength mid)}:\{mid}:\{fileBoundKey loc}"
-
-scopeFileBoundModule : ModuleCtx -> Unit -> String
-scopeFileBoundModule mctx _ =
-  (Scopes.scopeFrame
-    (currentScopeStore mctx.mcGraph ())
-    (captureScope mctx ())).sfModuleId
-
-export
-fileValueKey : String -> Expr -> Option String
-fileValueKey mid e =
-  map (loc => "\{fileBoundSite mid loc}:\{fileValueShape e}") (fileBodyLoc e)
-
-fileValueShape : Expr -> String
-fileValueShape (ELoc _ _) = "loc"
-fileValueShape (EApp f _) = "app" ++ intToString (appSpineArgCount f + 1)
-fileValueShape (ELam _ _) = "lambda"
-fileValueShape _ = "value"
-
-finishFileValueScope : ModuleCtx -> Unit -> Unit
-finishFileValueScope mctx _ = match mctx.mcCells.fileValueScopes.value
-  saved :: rest =>
-    mctx.mcCells.fileValueScopes := rest
-    let flows = wWindow mctx.mcCells.fileValueFlows (snd saved)
-    wRestore mctx.mcCells.fileValueFlows saved
-    each
-      (flow =>
-        if isEmptyL rest || not (unsettledFileValueFlow flow) then
-          checkFileValueFlow mctx flow)
-      flows
-    -- A local result can be shaped by a later use in its enclosing scope.
-    -- Keep its producer evidence until that receiving type is determined.
-    match rest
-      [] => ()
-      _ =>
-        wPushAll
-          mctx.mcCells.fileValueFlows
-          (reverseL (filterList unsettledFileValueFlow flows))
-    ()
-  [] => ()
-
-unsettledFileValueFlow : (Option Loc, Mono, Mono) -> Bool
-unsettledFileValueFlow (_, upper, lower) =
-  unsettledPackedFileBound False upper lower
-
-unsettledPackedFileBound : Bool -> Mono -> Mono -> Bool
-unsettledPackedFileBound packed upper lower = match (
-  normalize upper,
-  normalize lower,
-)
-  (TVar _, _) => True
-  (_, TVar _) => True
-  (TQual u _, l) => unsettledPackedFileBound packed u l
-  (u, TQual l _) => unsettledPackedFileBound packed u l
-  (TApp uf ux, TApp lf lx) =>
-    unsettledPackedFileBound True uf lf || unsettledPackedFileBound True ux lx
-  (TFun ud ur ux, TFun ld lr lx) =>
-    packed && unsettledFileRow ur lr
-      || unsettledPackedFileBound packed ld ud
-      || unsettledPackedFileBound packed ux lx
-  _ => False
-
-unsettledFileRow : EffRow -> EffRow -> Bool
-unsettledFileRow upper lower =
-  let (ua, ut) = rowFlat upper
-  let (la, lt) = rowFlat lower
-  isNonEmptyL ut
-    || isNonEmptyL lt
-    || anyList (a => narrowFileAtom a && authHasVars (atomAuth a)) (ua ++ la)
-
-checkFileValueFlow : ModuleCtx -> (Option Loc, Mono, Mono) -> Unit
-checkFileValueFlow mctx (loc, upper, lower) =
-  if changesPackedFileBound False upper lower then
-    pushTypeErrorOncePerSite
-      mctx
-      TFileBoundValue
-      loc
-      ("a function's file bound cannot change inside a container: "
-        ++ ppMonosShared [lower, upper]
-        ++ "; annotate the function with the container's FileRead or FileWrite bound before packing it")
-
-changesPackedFileBound : Bool -> Mono -> Mono -> Bool
-changesPackedFileBound packed upper lower = match (
-  normalize upper,
-  normalize lower,
-)
-  (TQual u _, l) => changesPackedFileBound packed u l
-  (u, TQual l _) => changesPackedFileBound packed u l
-  (TApp uf ux, TApp lf lx) =>
-    changesPackedFileBound True uf lf || changesPackedFileBound True ux lx
-  (TFun ud ur ux, TFun ld lr lx) =>
-    packed && changesFileRow ur lr
-      || changesPackedFileBound packed ld ud
-      || changesPackedFileBound packed ux lx
-  _ => False
-
-changesFileRow : EffRow -> EffRow -> Bool
-changesFileRow upper lower =
-  let (ua, ut) = rowFlat upper
-  let (la, lt) = rowFlat lower
-  isEmptyL ut
-    && anyList
-      (u =>
-        narrowFileAtom u
-          && (isNonEmptyL lt
-            || anyList
-              (l =>
-                atomKey l == atomKey u
-                  && not
-                    (authSub (atomAuth l) (atomAuth u)
-                      && authSub (atomAuth u) (atomAuth l)))
-              la))
-      ua
-
-export
-hasFileBoundValue : Mono -> Bool
-hasFileBoundValue t = match normalize t
-  TFun _ row result =>
-    let (atoms, tails) = rowFlat row
-    isEmptyL tails && anyList narrowFileAtom atoms || hasFileBoundValue result
-  TQual inner _ => hasFileBoundValue inner
-  _ => False
-
-export
-recordValueFileBound : ModuleCtx -> Expr -> Mono -> Unit
-recordValueFileBound mctx e ty =
-  if hasFileBoundValue
-    ty then match fileValueKey (scopeFileBoundModule mctx ()) e
-    Some key =>
-      let st = mctx.mcGraph.graphRun.grants
-      st.gsValueBounds :=
-        omInsert
-          key
-          ((ty, grantChainAt mctx.mcGraph (captureScope mctx ()))
-            :: optionOr [] (omLookup key st.gsValueBounds.value))
-          st.gsValueBounds.value
-    None => ()
-
-export
-recordFileBound : ModuleCtx -> Expr -> EffRow -> Unit
-recordFileBound mctx body row =
-  let (atoms, tails) = rowFlat row
-  if isEmptyL tails && anyList narrowFileAtom atoms then match fileBodyLoc body
-    None => ()
-    Some loc =>
-      let st = mctx.mcGraph.graphRun.grants
-      let key = fileBoundSite (scopeFileBoundModule mctx ()) loc
-      st.gsBounds :=
-        omInsert
-          key
-          ((row, grantChainAt mctx.mcGraph (captureScope mctx ()))
-            :: optionOr [] (omLookup key st.gsBounds.value))
-          st.gsBounds.value
-
-export
-narrowFileAtom : Atom -> Bool
-narrowFileAtom atom = match atomLabelOf atom
-  EffLabel label OriginBuiltin =>
-    (label == "FileRead" || label == "FileWrite")
-      && not (authIsTop (atomAuth atom))
-  _ => False
-
-export
-recordClauseFileBound : ModuleCtx -> Expr -> Int -> Mono -> Unit
-recordClauseFileBound mctx body arity ty
-  | arity <= 0 = ()
-  | otherwise = match normalize ty
-    TFun _ row result =>
-      if arity == 1 then
-        recordFileBound mctx body row
-      else
-        recordClauseFileBound mctx body (arity - 1) result
-    TQual inner _ => recordClauseFileBound mctx body arity inner
-    _ => ()
 
 export
 argumentAuthority : TcEnv -> Param -> Option Expr -> Mono -> Authority
@@ -2040,16 +1472,6 @@ effVarOccAtoms gctx (TyFun a b) = effVarOccAtoms gctx a ++ effVarOccAtoms gctx b
 effVarOccAtoms gctx (TyTuple ts) = flatMap (effVarOccAtoms gctx) ts
 effVarOccAtoms gctx (TyConstrained _ t) = effVarOccAtoms gctx t
 effVarOccAtoms _gctx _ = []
-
-export
-clausesAt : String -> OrdMap (List (List Pat, Expr)) -> List (List Pat, Expr)
-clausesAt n m = match omLookup n m
-  Some xs => xs
-  None => []
-
-export
-clausesOf : String -> OrdMap (List (List Pat, Expr)) -> List (List Pat, Expr)
-clausesOf n m = reverse (clausesAt n m)
 
 export
 memberEffectRoots : ScopedMember -> Map Int Unit -> Map Int Unit

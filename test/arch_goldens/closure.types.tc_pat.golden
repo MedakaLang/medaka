@@ -44,12 +44,11 @@ types.tc_decls_types
 types.tc_decls_variance
 types.tc_diag
 types.tc_diag_text
-types.tc_effects
 types.tc_env
+types.tc_grants
 types.tc_mono
 types.tc_scope
 types.tc_solve
-types.tc_solve_check
 types.tc_solve_entail
 types.tc_solve_givens
 types.tc_state

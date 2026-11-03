@@ -1,5 +1,5 @@
 # META
-source_lines=1323
+source_lines=1319
 stages=DESUGAR,MARK
 # SOURCE
 -- tc_mark: the mark pass: rewrite a binding group's method references into marked occurrences
@@ -65,11 +65,7 @@ import types.tc_shadow.{
   isPreludeMid,
   nameableIfaceMethodSet,
 }
-import types.tc_effects.{
-  clausesOf,
-  evOrdinal,
-  grantNameIn,
-}
+import types.tc_grants.{clausesOf, evOrdinal, grantNameIn}
 import frontend.ast.{
   Section(..),
   Arm(..),
@@ -1333,7 +1329,7 @@ finishModuleMarking mm env grouped prog =
 (DUse false (UseGroup ("types" "tc_decls") ((mem "importerDefiners" false))))
 (DUse false (UseGroup ("types" "tc_solve") ((mem "isLocalAbsName" false) (mem "returnPosMethodNames" false))))
 (DUse false (UseGroup ("types" "tc_shadow") ((mem "isPreludeMid" false) (mem "nameableIfaceMethodSet" false))))
-(DUse false (UseGroup ("types" "tc_effects") ((mem "clausesOf" false) (mem "evOrdinal" false) (mem "grantNameIn" false))))
+(DUse false (UseGroup ("types" "tc_grants") ((mem "clausesOf" false) (mem "evOrdinal" false) (mem "grantNameIn" false))))
 (DUse false (UseGroup ("frontend" "ast") ((mem "Section" true) (mem "Arm" true) (mem "Decl" true) (mem "DoStmt" true) (mem "EvId" true) (mem "Expr" true) (mem "FieldAssign" true) (mem "FunClause" true) (mem "Guard" true) (mem "GuardArm" true) (mem "IfaceMethod" true) (mem "ImplMethod" true) (mem "InterpPart" true) (mem "LetBind" true) (mem "MethodDefault" true) (mem "Pat" true) (mem "Route" true) (mem "isUnminted" false) (mem "UsePath" true))))
 (DUse false (UseGroup ("types" "repr") ((mem "Mono" true) (mem "Scheme" true))))
 (DUse false (UseGroup ("support" "ordmap") ((mem "omEmpty" false) (mem "omFromNames" false) (mem "omHasKey" false) (mem "omInsert" false) (mem "omLookup" false) (mem "OrdMap" false) (mem "omSize" false))))
@@ -1580,7 +1576,7 @@ finishModuleMarking mm env grouped prog =
 (DUse false (UseGroup ("types" "tc_decls") ((mem "importerDefiners" false))))
 (DUse false (UseGroup ("types" "tc_solve") ((mem "isLocalAbsName" false) (mem "returnPosMethodNames" false))))
 (DUse false (UseGroup ("types" "tc_shadow") ((mem "isPreludeMid" false) (mem "nameableIfaceMethodSet" false))))
-(DUse false (UseGroup ("types" "tc_effects") ((mem "clausesOf" false) (mem "evOrdinal" false) (mem "grantNameIn" false))))
+(DUse false (UseGroup ("types" "tc_grants") ((mem "clausesOf" false) (mem "evOrdinal" false) (mem "grantNameIn" false))))
 (DUse false (UseGroup ("frontend" "ast") ((mem "Section" true) (mem "Arm" true) (mem "Decl" true) (mem "DoStmt" true) (mem "EvId" true) (mem "Expr" true) (mem "FieldAssign" true) (mem "FunClause" true) (mem "Guard" true) (mem "GuardArm" true) (mem "IfaceMethod" true) (mem "ImplMethod" true) (mem "InterpPart" true) (mem "LetBind" true) (mem "MethodDefault" true) (mem "Pat" true) (mem "Route" true) (mem "isUnminted" false) (mem "UsePath" true))))
 (DUse false (UseGroup ("types" "repr") ((mem "Mono" true) (mem "Scheme" true))))
 (DUse false (UseGroup ("support" "ordmap") ((mem "omEmpty" false) (mem "omFromNames" false) (mem "omHasKey" false) (mem "omInsert" false) (mem "omLookup" false) (mem "OrdMap" false) (mem "omSize" false))))

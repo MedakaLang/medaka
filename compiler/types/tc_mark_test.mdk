@@ -71,9 +71,7 @@ import types.tc_types.{
   MarkCtx(..),
   MarkSets(..),
 }
-import types.tc_effects.{
-  clausesOf,
-}
+import types.tc_grants.{clausesOf}
 import support.util.{
   listLen,
   joinNl,

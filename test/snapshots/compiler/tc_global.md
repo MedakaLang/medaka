@@ -1,5 +1,5 @@
 # META
-source_lines=2998
+source_lines=2996
 stages=DESUGAR,MARK
 # SOURCE
 -- tc_global: the whole-graph and declaration-level checks that need inference: the coherence scan,
@@ -240,11 +240,9 @@ import types.tc_effects.{
   finishEffectContract,
   indexOnlyEffVars,
   launderEscapeFromLog,
-  markSourceless,
-  methodGrantOf,
   performSiteIn,
-  recordClauseFileBound,
 }
+import types.tc_grants.{markSourceless, methodGrantOf, recordClauseFileBound}
 import types.tc_occurrence.{mkMethodOccObl}
 import types.tc_groups.{exprLoc, nestedRequireGoals, sccProtectedSignatureIds}
 import types.tc_infer.{appArgLoc, inferBindingChecked, valueSpanLoc}
@@ -3015,7 +3013,8 @@ numDictObls gctx (app :: rest) =
 (DUse false (UseGroup ("types" "tc_solve_entail") ((mem "goalCandidates" false) (mem "goalRows" false) (mem "reqWalkEnter" false) (mem "reqWalkStart" false) (mem "superParamsOf" false))))
 (DUse false (UseGroup ("types" "tc_solve") ((mem "answeredOnlyByBindingHead" false) (mem "determineByUniqueInstance" false) (mem "dictAppsSince" false) (mem "goalsMark" false) (mem "improveByUniqueImpl" false) (mem "returnPosMethodNames" false) (mem "rigidHeadInstanceContext" false) (mem "solvedOnWalk" false) (mem "uOblArgs" false))))
 (DUse false (UseGroup ("types" "tc_solve_check") ((mem "callOblsWindow" false) (mem "callPredOf" false) (mem "checkSigVarGoals" false) (mem "checkSurvivorDispatchMonos" false) (mem "checkSurvivorObligations" false) (mem "finalizeNumBoundary" false) (mem "ifaceSelfAndSupers" false) (mem "implGoalResiduals" false) (mem "numConstrainedIds" false) (mem "numObligIds" false) (mem "oblPredOf" false) (mem "registerImplRequires" false) (mem "rejectUndeterminedVectors" false) (mem "rejectWithheldAmbiguity" false) (mem "reportUndeterminedNoImpl" false) (mem "reqWalkReported" false) (mem "survivorNameOfId" false))))
-(DUse false (UseGroup ("types" "tc_effects") ((mem "beginEffectContract" false) (mem "checkMethodEffVarRigidity" false) (mem "eagerIndexOnlyVars" false) (mem "finishEffectContract" false) (mem "indexOnlyEffVars" false) (mem "launderEscapeFromLog" false) (mem "markSourceless" false) (mem "methodGrantOf" false) (mem "performSiteIn" false) (mem "recordClauseFileBound" false))))
+(DUse false (UseGroup ("types" "tc_effects") ((mem "beginEffectContract" false) (mem "checkMethodEffVarRigidity" false) (mem "eagerIndexOnlyVars" false) (mem "finishEffectContract" false) (mem "indexOnlyEffVars" false) (mem "launderEscapeFromLog" false) (mem "performSiteIn" false))))
+(DUse false (UseGroup ("types" "tc_grants") ((mem "markSourceless" false) (mem "methodGrantOf" false) (mem "recordClauseFileBound" false))))
 (DUse false (UseGroup ("types" "tc_occurrence") ((mem "mkMethodOccObl" false))))
 (DUse false (UseGroup ("types" "tc_groups") ((mem "exprLoc" false) (mem "nestedRequireGoals" false) (mem "sccProtectedSignatureIds" false))))
 (DUse false (UseGroup ("types" "tc_infer") ((mem "appArgLoc" false) (mem "inferBindingChecked" false) (mem "valueSpanLoc" false))))
@@ -3356,7 +3355,8 @@ numDictObls gctx (app :: rest) =
 (DUse false (UseGroup ("types" "tc_solve_entail") ((mem "goalCandidates" false) (mem "goalRows" false) (mem "reqWalkEnter" false) (mem "reqWalkStart" false) (mem "superParamsOf" false))))
 (DUse false (UseGroup ("types" "tc_solve") ((mem "answeredOnlyByBindingHead" false) (mem "determineByUniqueInstance" false) (mem "dictAppsSince" false) (mem "goalsMark" false) (mem "improveByUniqueImpl" false) (mem "returnPosMethodNames" false) (mem "rigidHeadInstanceContext" false) (mem "solvedOnWalk" false) (mem "uOblArgs" false))))
 (DUse false (UseGroup ("types" "tc_solve_check") ((mem "callOblsWindow" false) (mem "callPredOf" false) (mem "checkSigVarGoals" false) (mem "checkSurvivorDispatchMonos" false) (mem "checkSurvivorObligations" false) (mem "finalizeNumBoundary" false) (mem "ifaceSelfAndSupers" false) (mem "implGoalResiduals" false) (mem "numConstrainedIds" false) (mem "numObligIds" false) (mem "oblPredOf" false) (mem "registerImplRequires" false) (mem "rejectUndeterminedVectors" false) (mem "rejectWithheldAmbiguity" false) (mem "reportUndeterminedNoImpl" false) (mem "reqWalkReported" false) (mem "survivorNameOfId" false))))
-(DUse false (UseGroup ("types" "tc_effects") ((mem "beginEffectContract" false) (mem "checkMethodEffVarRigidity" false) (mem "eagerIndexOnlyVars" false) (mem "finishEffectContract" false) (mem "indexOnlyEffVars" false) (mem "launderEscapeFromLog" false) (mem "markSourceless" false) (mem "methodGrantOf" false) (mem "performSiteIn" false) (mem "recordClauseFileBound" false))))
+(DUse false (UseGroup ("types" "tc_effects") ((mem "beginEffectContract" false) (mem "checkMethodEffVarRigidity" false) (mem "eagerIndexOnlyVars" false) (mem "finishEffectContract" false) (mem "indexOnlyEffVars" false) (mem "launderEscapeFromLog" false) (mem "performSiteIn" false))))
+(DUse false (UseGroup ("types" "tc_grants") ((mem "markSourceless" false) (mem "methodGrantOf" false) (mem "recordClauseFileBound" false))))
 (DUse false (UseGroup ("types" "tc_occurrence") ((mem "mkMethodOccObl" false))))
 (DUse false (UseGroup ("types" "tc_groups") ((mem "exprLoc" false) (mem "nestedRequireGoals" false) (mem "sccProtectedSignatureIds" false))))
 (DUse false (UseGroup ("types" "tc_infer") ((mem "appArgLoc" false) (mem "inferBindingChecked" false) (mem "valueSpanLoc" false))))

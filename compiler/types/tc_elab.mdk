@@ -77,7 +77,7 @@ import types.tc_mark.{constrainedSigNames}
 import types.tc_shadow.{
   methodCellOf,
 }
-import types.tc_effects.{
+import types.tc_grants.{
   evOrdinal,
   fileBodyLoc,
   fileBoundSite,

@@ -60,7 +60,7 @@ import types.tc_unify.{
   unifyIn,
 }
 import types.tc_solve.{localSourceName}
-import types.tc_effects.{markSourceless}
+import types.tc_grants.{markSourceless}
 import types.effect_authority.{
   Authority(..), Authvar(..), authvarId, authvarLevel, authvarName
 }

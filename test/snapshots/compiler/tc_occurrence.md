@@ -1,5 +1,5 @@
 # META
-source_lines=2445
+source_lines=2443
 stages=DESUGAR,MARK
 # SOURCE
 -- tc_occurrence: method and literal occurrence inference, operator dispatch-site recording
@@ -160,10 +160,8 @@ import types.tc_shadow.{
   standaloneValueBindingEmit,
   standaloneValuePinned,
 }
-import types.tc_effects.{
-  evOrdinal,
-  recordMethodGrantOcc,
-  recordStandaloneGrantOcc,
+import types.tc_grants.{
+  evOrdinal, recordMethodGrantOcc, recordStandaloneGrantOcc
 }
 import frontend.ast.{
   Constraint(..),
@@ -2462,7 +2460,7 @@ methodReturnProbeCodes prev ownedRow impls =
 (DUse false (UseGroup ("types" "tc_solve") ((mem "builtinClassPresent" false) (mem "consSiteFn" false) (mem "localSourceName" false) (mem "methodPredicateTemplateHasAbsent" false) (mem "methodReturnProbeIface" false) (mem "methodReturnProbeOccurrence" false) (mem "methodReturnProbeScope" false) (mem "methodReturnProbeSpelling" false) (mem "noteMethodReturnTrace" false) (mem "pushDictApp" false) (mem "pushGoal" false) (mem "routeLocalSym" false))))
 (DUse false (UseGroup ("types" "tc_solve_check") ((mem "checkCallObligationsU" false) (mem "dedupSlotVecs" false) (mem "dispatchMonosOf" false))))
 (DUse false (UseGroup ("types" "tc_shadow") ((mem "callArgVecsV" false) (mem "constraintMonosOf" false) (mem "declaredConstraintFor" false) (mem "declaredEffectsAt" false) (mem "isDefinerShadow" false) (mem "isShadowStandalone" false) (mem "rejectAdmittedValueOccurrence" false) (mem "shadowDeclaredFor" false) (mem "shadowStandaloneDictSlots" false) (mem "shadowStandaloneDictSlotsAt" false) (mem "standaloneValueBinding" false) (mem "standaloneValueBindingEmit" false) (mem "standaloneValuePinned" false))))
-(DUse false (UseGroup ("types" "tc_effects") ((mem "evOrdinal" false) (mem "recordMethodGrantOcc" false) (mem "recordStandaloneGrantOcc" false))))
+(DUse false (UseGroup ("types" "tc_grants") ((mem "evOrdinal" false) (mem "recordMethodGrantOcc" false) (mem "recordStandaloneGrantOcc" false))))
 (DUse false (UseGroup ("frontend" "ast") ((mem "Constraint" true) (mem "Decl" true) (mem "EvId" true) (mem "Expr" true) (mem "IfaceMethod" true) (mem "Loc" true) (mem "Route" true) (mem "Ty" true) (mem "isUnminted" false) (mem "negateLiteral" false) (mem "tyConBuiltin" false))))
 (DUse false (UseGroup ("types" "solver_contract") ((mem "ClassPredicate" true))))
 (DUse false (UseGroup ("types" "repr") ((mem "IfaceRef" true) (mem "Mono" true) (mem "Scheme" true) (mem "lookupAssocI" false))))
@@ -2769,7 +2767,7 @@ methodReturnProbeCodes prev ownedRow impls =
 (DUse false (UseGroup ("types" "tc_solve") ((mem "builtinClassPresent" false) (mem "consSiteFn" false) (mem "localSourceName" false) (mem "methodPredicateTemplateHasAbsent" false) (mem "methodReturnProbeIface" false) (mem "methodReturnProbeOccurrence" false) (mem "methodReturnProbeScope" false) (mem "methodReturnProbeSpelling" false) (mem "noteMethodReturnTrace" false) (mem "pushDictApp" false) (mem "pushGoal" false) (mem "routeLocalSym" false))))
 (DUse false (UseGroup ("types" "tc_solve_check") ((mem "checkCallObligationsU" false) (mem "dedupSlotVecs" false) (mem "dispatchMonosOf" false))))
 (DUse false (UseGroup ("types" "tc_shadow") ((mem "callArgVecsV" false) (mem "constraintMonosOf" false) (mem "declaredConstraintFor" false) (mem "declaredEffectsAt" false) (mem "isDefinerShadow" false) (mem "isShadowStandalone" false) (mem "rejectAdmittedValueOccurrence" false) (mem "shadowDeclaredFor" false) (mem "shadowStandaloneDictSlots" false) (mem "shadowStandaloneDictSlotsAt" false) (mem "standaloneValueBinding" false) (mem "standaloneValueBindingEmit" false) (mem "standaloneValuePinned" false))))
-(DUse false (UseGroup ("types" "tc_effects") ((mem "evOrdinal" false) (mem "recordMethodGrantOcc" false) (mem "recordStandaloneGrantOcc" false))))
+(DUse false (UseGroup ("types" "tc_grants") ((mem "evOrdinal" false) (mem "recordMethodGrantOcc" false) (mem "recordStandaloneGrantOcc" false))))
 (DUse false (UseGroup ("frontend" "ast") ((mem "Constraint" true) (mem "Decl" true) (mem "EvId" true) (mem "Expr" true) (mem "IfaceMethod" true) (mem "Loc" true) (mem "Route" true) (mem "Ty" true) (mem "isUnminted" false) (mem "negateLiteral" false) (mem "tyConBuiltin" false))))
 (DUse false (UseGroup ("types" "solver_contract") ((mem "ClassPredicate" true))))
 (DUse false (UseGroup ("types" "repr") ((mem "IfaceRef" true) (mem "Mono" true) (mem "Scheme" true) (mem "lookupAssocI" false))))

@@ -61,11 +61,7 @@ import types.tc_shadow.{
   isPreludeMid,
   nameableIfaceMethodSet,
 }
-import types.tc_effects.{
-  clausesOf,
-  evOrdinal,
-  grantNameIn,
-}
+import types.tc_grants.{clausesOf, evOrdinal, grantNameIn}
 import frontend.ast.{
   Section(..),
   Arm(..),

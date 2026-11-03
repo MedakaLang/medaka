@@ -102,6 +102,7 @@ types.tc_elab
 types.tc_env
 types.tc_foreign
 types.tc_global
+types.tc_grants
 types.tc_groups
 types.tc_infer
 types.tc_infer_records

@@ -56,6 +56,7 @@ loadAll = do
   tcSolve <- readFile (underRoot "compiler/types/tc_solve.mdk")
   tcSolveCheck <- readFile (underRoot "compiler/types/tc_solve_check.mdk")
   tcShadow <- readFile (underRoot "compiler/types/tc_shadow.mdk")
+  tcGrants <- readFile (underRoot "compiler/types/tc_grants.mdk")
   tcEffects <- readFile (underRoot "compiler/types/tc_effects.mdk")
   tcOccurrence <- readFile (underRoot "compiler/types/tc_occurrence.mdk")
   tcMark <- readFile (underRoot "compiler/types/tc_mark.mdk")
@@ -74,7 +75,7 @@ loadAll = do
   declLedger <- readFile (underRoot "test/decl_runner.ledger")
   Ok (
     astText,
-    "\{tc}\n\{tcMono}\n\{tcState}\n\{tcEnv}\n\{tcDiagText}\n\{tcDiag}\n\{tcScope}\n\{tcUnify}\n\{tcDeclsVariance}\n\{tcDeclsTypes}\n\{tcDecls}\n\{tcForeign}\n\{tcSolveGivens}\n\{tcSolveEntail}\n\{tcSolve}\n\{tcSolveCheck}\n\{tcShadow}\n\{tcEffects}\n\{tcOccurrence}\n\{tcMark}\n\{tcGroups}\n\{tcPat}\n\{tcInferRecords}\n\{tcInfer}\n\{tcElab}\n\{tcGlobal}\n\{tcStamp}\n\{tcModule}\n\{rp}\n\{ck}\n\{ec}",
+    "\{tc}\n\{tcMono}\n\{tcState}\n\{tcEnv}\n\{tcDiagText}\n\{tcDiag}\n\{tcScope}\n\{tcUnify}\n\{tcDeclsVariance}\n\{tcDeclsTypes}\n\{tcDecls}\n\{tcForeign}\n\{tcSolveGivens}\n\{tcSolveEntail}\n\{tcSolve}\n\{tcSolveCheck}\n\{tcShadow}\n\{tcGrants}\n\{tcEffects}\n\{tcOccurrence}\n\{tcMark}\n\{tcGroups}\n\{tcPat}\n\{tcInferRecords}\n\{tcInfer}\n\{tcElab}\n\{tcGlobal}\n\{tcStamp}\n\{tcModule}\n\{rp}\n\{ck}\n\{ec}",
     siteLedger,
     declLedger,
   )

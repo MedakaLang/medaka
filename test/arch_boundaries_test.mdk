@@ -612,6 +612,9 @@ test "arch_boundaries: types.tc_solve_check closure matches its golden" =
 test "arch_boundaries: types.tc_shadow closure matches its golden" =
   closurePin "types.tc_shadow"
 
+test "arch_boundaries: types.tc_grants closure matches its golden" =
+  closurePin "types.tc_grants"
+
 test "arch_boundaries: types.tc_effects closure matches its golden" =
   closurePin "types.tc_effects"
 
@@ -1184,6 +1187,7 @@ typecheckFamily = [
   "types.tc_solve",
   "types.tc_solve_check",
   "types.tc_shadow",
+  "types.tc_grants",
   "types.tc_effects",
   "types.tc_occurrence",
   "types.tc_mark",

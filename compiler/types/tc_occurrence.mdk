@@ -156,10 +156,8 @@ import types.tc_shadow.{
   standaloneValueBindingEmit,
   standaloneValuePinned,
 }
-import types.tc_effects.{
-  evOrdinal,
-  recordMethodGrantOcc,
-  recordStandaloneGrantOcc,
+import types.tc_grants.{
+  evOrdinal, recordMethodGrantOcc, recordStandaloneGrantOcc
 }
 import frontend.ast.{
   Constraint(..),

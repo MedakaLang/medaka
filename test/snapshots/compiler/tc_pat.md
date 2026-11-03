@@ -64,7 +64,7 @@ import types.tc_unify.{
   unifyIn,
 }
 import types.tc_solve.{localSourceName}
-import types.tc_effects.{markSourceless}
+import types.tc_grants.{markSourceless}
 import types.effect_authority.{
   Authority(..), Authvar(..), authvarId, authvarLevel, authvarName
 }
@@ -629,7 +629,7 @@ recordLetBindType gctx (LetBind name _ _ bid, (_, summary)) =
 (DUse false (UseGroup ("types" "tc_diag") ((mem "erredDuring" false) (mem "pushTypeError" false) (mem "pushTypeErrorAt" false) (mem "recordTypeError" false))))
 (DUse false (UseGroup ("types" "tc_unify") ((mem "bindFrom" false) (mem "enterLevel" false) (mem "exitLevel" false) (mem "freshAuthSubstOpening" false) (mem "freshAuthSubstOpeningIn" false) (mem "freshEffSubst" false) (mem "freshSubst" false) (mem "freshVar" false) (mem "raiseAuthvarLevel" false) (mem "unifyAll" false) (mem "unifyIn" false))))
 (DUse false (UseGroup ("types" "tc_solve") ((mem "localSourceName" false))))
-(DUse false (UseGroup ("types" "tc_effects") ((mem "markSourceless" false))))
+(DUse false (UseGroup ("types" "tc_grants") ((mem "markSourceless" false))))
 (DUse false (UseGroup ("types" "effect_authority") ((mem "Authority" true) (mem "Authvar" true) (mem "authvarId" false) (mem "authvarLevel" false) (mem "authvarName" false))))
 (DUse false (UseGroup ("frontend" "ast") ((mem "BinderId" true) (mem "LetBind" true) (mem "Lit" true) (mem "Loc" true) (mem "Pat" true) (mem "RecPatField" true) (mem "isBoxed64Head" false) (mem "isTaggedFixedHead" false) (mem "orCountProduct" false) (mem "orElseLoc" false))))
 (DUse false (UseGroup ("types" "effect_bindings") ((mem "BindingSummary" true))))
@@ -781,7 +781,7 @@ recordLetBindType gctx (LetBind name _ _ bid, (_, summary)) =
 (DUse false (UseGroup ("types" "tc_diag") ((mem "erredDuring" false) (mem "pushTypeError" false) (mem "pushTypeErrorAt" false) (mem "recordTypeError" false))))
 (DUse false (UseGroup ("types" "tc_unify") ((mem "bindFrom" false) (mem "enterLevel" false) (mem "exitLevel" false) (mem "freshAuthSubstOpening" false) (mem "freshAuthSubstOpeningIn" false) (mem "freshEffSubst" false) (mem "freshSubst" false) (mem "freshVar" false) (mem "raiseAuthvarLevel" false) (mem "unifyAll" false) (mem "unifyIn" false))))
 (DUse false (UseGroup ("types" "tc_solve") ((mem "localSourceName" false))))
-(DUse false (UseGroup ("types" "tc_effects") ((mem "markSourceless" false))))
+(DUse false (UseGroup ("types" "tc_grants") ((mem "markSourceless" false))))
 (DUse false (UseGroup ("types" "effect_authority") ((mem "Authority" true) (mem "Authvar" true) (mem "authvarId" false) (mem "authvarLevel" false) (mem "authvarName" false))))
 (DUse false (UseGroup ("frontend" "ast") ((mem "BinderId" true) (mem "LetBind" true) (mem "Lit" true) (mem "Loc" true) (mem "Pat" true) (mem "RecPatField" true) (mem "isBoxed64Head" false) (mem "isTaggedFixedHead" false) (mem "orCountProduct" false) (mem "orElseLoc" false))))
 (DUse false (UseGroup ("types" "effect_bindings") ((mem "BindingSummary" true))))

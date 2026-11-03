@@ -206,22 +206,24 @@ import types.tc_shadow.{
 }
 import types.tc_effects.{
   finishValueEffectsKeeping,
-  appSpineArgCount,
   beginEffectSummaryScope,
   collectProducedSummary,
   freshEffectSummary,
-  grantOnlyBindingId,
   localBindingSummary,
   notePerformSite,
-  recordClauseFileBound,
   recordEffectBody,
+  registerLocalAbsIf,
+  registerLocalGroupAbs,
+  argumentAuthority,
+}
+import types.tc_grants.{
+  appSpineArgCount,
+  grantOnlyBindingId,
+  recordClauseFileBound,
   recordGrantOcc,
   recordStandaloneAt,
   recordValueFileBound,
-  registerLocalAbsIf,
-  registerLocalGroupAbs,
   spineHeadEv,
-  argumentAuthority,
 }
 import types.tc_occurrence.{
   bindingDeclaredAt,

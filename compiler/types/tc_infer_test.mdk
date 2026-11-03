@@ -61,7 +61,8 @@ import types.tc_infer.{
 import types.tc_diag_text.{locKey}
 import types.effect_bindings.{BindingSummary(..), newBindingSummary}
 import types.effect_rows.{pureRow}
-import types.tc_effects.{beginEffectSummaryScope, clausesOf, freshEffectSummary}
+import types.tc_effects.{beginEffectSummaryScope, freshEffectSummary}
+import types.tc_grants.{clausesOf}
 import types.tc_mark.{markGroupClauses}
 import types.tc_mono.{monoScheme, tconBuiltin, tconFrom}
 import types.tc_shadow.{methodCellOf}

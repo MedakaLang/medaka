@@ -51,6 +51,7 @@ SRCS = [
     f"{ROOT}/compiler/types/tc_solve.mdk",
     f"{ROOT}/compiler/types/tc_solve_check.mdk",
     f"{ROOT}/compiler/types/tc_shadow.mdk",
+    f"{ROOT}/compiler/types/tc_grants.mdk",
     f"{ROOT}/compiler/types/tc_effects.mdk",
     f"{ROOT}/compiler/types/tc_occurrence.mdk",
     f"{ROOT}/compiler/types/tc_mark.mdk",

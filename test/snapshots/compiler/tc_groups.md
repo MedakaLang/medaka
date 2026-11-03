@@ -1,5 +1,5 @@
 # META
-source_lines=2182
+source_lines=2183
 stages=DESUGAR,MARK
 # SOURCE
 -- tc_groups: binding-group analysis and the generalization policy at a binding boundary: the
@@ -125,7 +125,8 @@ import types.tc_solve_check.{
   undeterminedGoalExempt,
   prerequisiteOnWalk,
 }
-import types.tc_effects.{clausesAt, clausesOf, scopeRolesOf}
+import types.tc_effects.{scopeRolesOf}
+import types.tc_grants.{clausesAt, clausesOf}
 import types.tc_occurrence.{ctorHeadShaped}
 import frontend.ast.{
   Arm(..),
@@ -2200,7 +2201,8 @@ ifaceMethodEVars (IfaceMethod _ _ d _) = match d
 (DUse false (UseGroup ("types" "tc_solve_entail") ((mem "freshRowHeadsTvs" false) (mem "goalCandidates" false) (mem "goalIsProjection" false) (mem "goalReach" false) (mem "goalRows" false) (mem "selectedRowReqMatch" false) (mem "reqWalkEnter" false) (mem "reqWalkMemo" false) (mem "reqWalkSeed" false))))
 (DUse false (UseGroup ("types" "tc_solve") ((mem "goalVarsAllHeld" false) (mem "reqToObligation" false) (mem "uOblArgs" false) (mem "noteWalkGoalFollowed" false) (mem "solvedCleanly" false) (mem "walkGoalFollowed" false))))
 (DUse false (UseGroup ("types" "tc_solve_check") ((mem "callPredOf" false) (mem "ifaceForInferredId" false) (mem "inferredConstraintIds" false) (mem "oblPredOf" false) (mem "residualBoundPreds" false) (mem "undeterminedGoalExempt" false) (mem "prerequisiteOnWalk" false))))
-(DUse false (UseGroup ("types" "tc_effects") ((mem "clausesAt" false) (mem "clausesOf" false) (mem "scopeRolesOf" false))))
+(DUse false (UseGroup ("types" "tc_effects") ((mem "scopeRolesOf" false))))
+(DUse false (UseGroup ("types" "tc_grants") ((mem "clausesAt" false) (mem "clausesOf" false))))
 (DUse false (UseGroup ("types" "tc_occurrence") ((mem "ctorHeadShaped" false))))
 (DUse false (UseGroup ("frontend" "ast") ((mem "Arm" true) (mem "Constraint" true) (mem "Decl" true) (mem "DoStmt" true) (mem "Expr" true) (mem "FieldAssign" true) (mem "FunClause" true) (mem "Guard" true) (mem "GuardArm" true) (mem "IfaceMethod" true) (mem "ImplMethod" true) (mem "InterpPart" true) (mem "LetBind" true) (mem "Loc" true) (mem "MethodDefault" true) (mem "Pat" true) (mem "Require" true) (mem "Section" true) (mem "Super" true) (mem "Ty" true) (mem "firstTyLoc" false) (mem "letBindName" false))))
 (DUse false (UseGroup ("types" "repr") ((mem "AuthResidual" true) (mem "IfaceRef" true) (mem "Mono" true) (mem "Scheme" true) (mem "VecObl" true) (mem "normalize" false))))
@@ -2736,7 +2738,8 @@ ifaceMethodEVars (IfaceMethod _ _ d _) = match d
 (DUse false (UseGroup ("types" "tc_solve_entail") ((mem "freshRowHeadsTvs" false) (mem "goalCandidates" false) (mem "goalIsProjection" false) (mem "goalReach" false) (mem "goalRows" false) (mem "selectedRowReqMatch" false) (mem "reqWalkEnter" false) (mem "reqWalkMemo" false) (mem "reqWalkSeed" false))))
 (DUse false (UseGroup ("types" "tc_solve") ((mem "goalVarsAllHeld" false) (mem "reqToObligation" false) (mem "uOblArgs" false) (mem "noteWalkGoalFollowed" false) (mem "solvedCleanly" false) (mem "walkGoalFollowed" false))))
 (DUse false (UseGroup ("types" "tc_solve_check") ((mem "callPredOf" false) (mem "ifaceForInferredId" false) (mem "inferredConstraintIds" false) (mem "oblPredOf" false) (mem "residualBoundPreds" false) (mem "undeterminedGoalExempt" false) (mem "prerequisiteOnWalk" false))))
-(DUse false (UseGroup ("types" "tc_effects") ((mem "clausesAt" false) (mem "clausesOf" false) (mem "scopeRolesOf" false))))
+(DUse false (UseGroup ("types" "tc_effects") ((mem "scopeRolesOf" false))))
+(DUse false (UseGroup ("types" "tc_grants") ((mem "clausesAt" false) (mem "clausesOf" false))))
 (DUse false (UseGroup ("types" "tc_occurrence") ((mem "ctorHeadShaped" false))))
 (DUse false (UseGroup ("frontend" "ast") ((mem "Arm" true) (mem "Constraint" true) (mem "Decl" true) (mem "DoStmt" true) (mem "Expr" true) (mem "FieldAssign" true) (mem "FunClause" true) (mem "Guard" true) (mem "GuardArm" true) (mem "IfaceMethod" true) (mem "ImplMethod" true) (mem "InterpPart" true) (mem "LetBind" true) (mem "Loc" true) (mem "MethodDefault" true) (mem "Pat" true) (mem "Require" true) (mem "Section" true) (mem "Super" true) (mem "Ty" true) (mem "firstTyLoc" false) (mem "letBindName" false))))
 (DUse false (UseGroup ("types" "repr") ((mem "AuthResidual" true) (mem "IfaceRef" true) (mem "Mono" true) (mem "Scheme" true) (mem "VecObl" true) (mem "normalize" false))))

@@ -236,11 +236,9 @@ import types.tc_effects.{
   finishEffectContract,
   indexOnlyEffVars,
   launderEscapeFromLog,
-  markSourceless,
-  methodGrantOf,
   performSiteIn,
-  recordClauseFileBound,
 }
+import types.tc_grants.{markSourceless, methodGrantOf, recordClauseFileBound}
 import types.tc_occurrence.{mkMethodOccObl}
 import types.tc_groups.{exprLoc, nestedRequireGoals, sccProtectedSignatureIds}
 import types.tc_infer.{appArgLoc, inferBindingChecked, valueSpanLoc}

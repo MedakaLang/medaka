@@ -411,9 +411,7 @@ import types.tc_solve.{
 import types.tc_solve_check.{
   checkCallObligationsU,
 }
-import types.tc_effects.{
-  grantOrder,
-}
+import types.tc_grants.{grantOrder}
 import types.tc_mark.{
   constrainedSigNames,
   markDictNames,
