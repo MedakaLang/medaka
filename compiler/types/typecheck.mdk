@@ -92,11 +92,17 @@ import types.repr.{
   VecObl(..),
   spineParts,
 }
+import types.effect_param_decode.{
+  dtopIn,
+  writtenParam,
+}
 import types.effect_domain.{
   Param(..),
 }
 import types.effect_rows.{
   Atom(..),
+  builtinLabel,
+  atomWith,
   pureRow,
 }
 import types.effect_solver as EffectSolver
@@ -269,10 +275,10 @@ import types.disposition.{
 }
 import types.target_profile.{
   TargetProfile,
+  hostLabels,
   ioJoinGrants,
   profileName,
 }
-import types.effect_policy.{ioJoinAtoms}
 import types.runtime_types.{
   RuntimeType(..),
 }
@@ -438,6 +444,23 @@ import types.tc_module.{
   settleClosedBody,
   verdictFinding,
 }
+
+-- What `IO` joins in this drive: the selected profile's grants of the alias
+-- labels, each at the parameter granted, in `hostLabels` order.  With no
+-- profile that is all eleven at their tops.  Every module of the program is
+-- judged against the one join, the shipped stdlib included.
+export
+ioJoinAtoms : List (String, Param) -> List (String, EffParamTy) -> List Atom
+ioJoinAtoms domains grants =
+  filterMap
+    (l =>
+      map
+        (granted =>
+          atomWith
+            (builtinLabel l)
+            (writtenParam (dtopIn domains (builtinLabel l)) granted))
+        (lookupAssoc l grants))
+    hostLabels
 
 -- seed abstractRecordTypesRef from the `VisAbstract` data decls of every module (the
 -- per-module progs plus the prelude/core decls), once, before checking begins.  Keyed
