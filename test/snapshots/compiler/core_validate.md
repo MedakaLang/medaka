@@ -1,5 +1,5 @@
 # META
-source_lines=1767
+source_lines=1830
 stages=DESUGAR,MARK
 # SOURCE
 import backend.impl_groups.{validateImplGroups}
@@ -106,6 +106,7 @@ import ir.core_ir.{
   BinderSite(..),
   litRuntimeType,
   leadingDictParams,
+  ifaceMethodArityKey,
 }
 import types.runtime_types.{
   BinderRow(..),
@@ -125,7 +126,6 @@ import ir.core_ir_lower.{
   definedArityOf,
   entryArityRow,
   programArities,
-  ifaceMethodArityKey,
   ifaceWordOfKey,
 }
 import ir.core_ir_sexp.{callModeSexp}
@@ -139,7 +139,16 @@ import backend.extern_requirements.{
 }
 import backend.global_plan.{validateGlobalInit}
 import backend.emit_target.{Backend(..), backendName}
-import backend.emit_plan.{EmitPlan, indexMethodResults, lookupMethodResult}
+import backend.emit_plan.{
+  EmitPlan,
+  InstanceTable(..),
+  MethodSlot(..),
+  MethodTables(..),
+  SlotCallee(..),
+  indexMethodResults,
+  interfaceSlots,
+  lookupMethodResult,
+}
 import backend.extern_catalog.{
   RuntimeExternDomain(..),
   Disposition(..),
@@ -247,11 +256,65 @@ emissionDefects backend domain requirement plan cp =
             ++ validateDispatchEvidence cp
             ++ validateMethodResults plan cp,
         () => validateTails cp,
+        () => validateMethodTables backend plan cp,
       ]
 
 validatePlanImplGroups : CProgram -> EmitPlan -> List String
 validatePlanImplGroups (CProgram _ _ _ impls _ _) plan =
   validateImplGroups impls plan.implGroups
+
+-- The method-table check: every slot of every instance's table has exactly one
+-- callee, the callee declares the slot's value arity, and every impl group fills
+-- a slot.  Only the LLVM emitter builds tables; the wasm plan may be built over a
+-- reach-filtered program that keeps only the slots a dispatch reaches.
+export
+validateMethodTables : Backend -> EmitPlan -> CProgram -> List String
+validateMethodTables WasmBackend _ _ = []
+validateMethodTables _ plan _ =
+  let tables = plan.methodTables
+  let rows =
+    map
+      (key => (key, optionOr emptyTable (omLookup key tables.instances)))
+      (omKeys tables.instances)
+  let filled =
+    flatMap (r => flatMap (cs => cs) (snd r : InstanceTable).fills) rows
+  flatMap (r => instanceTableFaults tables (fst r) (snd r)) rows
+    ++ (if listLen filled == listLen plan.implGroups then
+      []
+    else
+      [
+        "method table: \{intToString (listLen plan.implGroups)} impl groups fill \{intToString (listLen filled)} slots",
+      ])
+
+emptyTable : InstanceTable
+emptyTable = InstanceTable { iface = "", fills = [] }
+
+instanceTableFaults : MethodTables -> String -> InstanceTable -> List String
+instanceTableFaults tables key table =
+  let slots = interfaceSlots tables table.iface
+  if listLen slots /= listLen table.fills then
+    [
+      "method table: instance `\{key}` has \{intToString (listLen table.fills)} slots, `\{table.iface}` declares \{intToString (listLen slots)}",
+    ]
+  else
+    slotsFaults key slots table.fills
+
+slotsFaults : String -> List MethodSlot -> List (List SlotCallee) -> List String
+slotsFaults key (slot :: slots) (callees :: fills) =
+  slotFaults key slot callees ++ slotsFaults key slots fills
+slotsFaults _ _ _ = []
+
+slotFaults : String -> MethodSlot -> List SlotCallee -> List String
+slotFaults key slot [callee] =
+  if callee.declaredArity == slot.valueArity then
+    []
+  else
+    [
+      "method table: slot `\{slot.method}` of instance `\{key}` takes \{intToString slot.valueArity} values, its callee declares \{intToString callee.declaredArity}",
+    ]
+slotFaults key slot callees = [
+  "method table: slot `\{slot.method}` of instance `\{key}` has \{intToString (listLen callees)} callees",
+]
 
 validateManifestCarriage : ManifestRequirement ->
   EmitPlan ->
@@ -669,15 +732,15 @@ checkImplSymbolsInjective ((m, tag, key) :: rest) seen native =
 -- positions is an exact zero.  Every `(X, c)` / `(X+1, chr(ord c − 33))` adjacent
 -- pair collides: `Az`/`BY`, `Azure`/`BYure`, `Mzone`/`NYone`.  Two impls of one
 -- interface at head tycons `Mzone` and `NYone`, dispatched through a dict
--- parameter, otherwise build to a binary that answers `mzone|mzone` where `run`
--- answers `mzone|nyone`: both tags hash alike, so the shared dispatcher's first arm
--- wins every call.
+-- parameter, under the wasm emitter (which still compares dict tags at dispatch),
+-- both tags hash alike, so the first arm wins every call.  The native emitter
+-- dispatches through method-table slots and never compares a tag.
 --
 -- The pre-image population is read off every impl entry, supplied (`CImplTagged`)
 -- and inherited (`CImplDefault`) alike: each carries the canonical key
--- (`route_key.implRouteKeyWord`) of its instance, the one word its dispatcher arm
--- compares (`llvm_emit.emitDispatchArm`, `wasm_emit.dispatchKeyTestW`), and the
--- entry's method name is the grouping key of its dispatch chain.  A supplied impl and
+-- (`route_key.implRouteKeyWord`) of its instance, the one word the wasm dispatch arm
+-- compares, and the entry's method name is the grouping key of that method's dispatch
+-- chain.  A supplied impl and
 -- an inherited default of one method share that chain, so their words collide as
 -- surely as two supplied impls' do.  Both hashes are imported
 -- from `types.private_mangle`, the SAME `hashName` the LLVM emitter stamps and the
@@ -685,8 +748,8 @@ checkImplSymbolsInjective ((m, tag, key) :: rest) seen native =
 -- hash certifies a property of the copy.
 --
 -- SCOPE:
---   * partitioned by METHOD NAME.  The emitted dispatcher only compares route words
---     WITHIN one method name's dispatch chain, so two impls of unrelated methods
+--   * partitioned by METHOD NAME.  The wasm dispatch chain compares route words
+--     WITHIN one method name's chain, so two impls of unrelated methods
 --     whose words hash alike are never compared at runtime; refusing them would be a
 --     false positive.  Do not pool route words program-wide.
 --   * covers the DICT-WITNESS TAG space of both backends and nothing else.  Native
@@ -729,7 +792,7 @@ wasmDictTagSpace =
   "wasm (WasmGC) 30-bit i31 dict tag `dictTag` (`hashName` masked to the low 30 bits) -- the full i64 tags are DISTINCT, so a native build of this program is correct; the wasm tag is this hash masked to a narrower width, which collides"
 
 -- (method, route word) of an impl entry, supplied or inherited: the METHOD NAME that
--- word's dispatch chain is keyed by, and the word a dict witness for this impl
+-- word's dispatch is keyed by, and the word a dict witness for this impl
 -- carries (its canonical key, which is also the impl's identity).
 dictRouteWordRow : CImplEntry -> (String, String)
 dictRouteWordRow (CImplEntry m _ _ (CImplTagged _ key _ _ _ _ _)) = (m, key)
@@ -749,7 +812,7 @@ dictRouteWordKey (m, w) = "\{m}\n\{w}"
 -- METHOD-NAME-SCOPED (`"\{mname}\n\{intToString (hash w)}"`) so injectivity is
 -- checked WITHIN one method name's population only — the same partition
 -- `dictRouteWordKey` dedups by, and the same grouping key
--- `implsOf`/`dispFnName` use to decide what a real dispatch chain compares.
+-- `implsOf` uses to decide what a real dispatch compares.
 --
 -- The four data lines are UNINDENTED on purpose, for the same reason
 -- `checkImplSymbolsInjective`'s three are: they are CONTENT-derived, so a
@@ -1779,17 +1842,17 @@ validatePhysicalDemand _ _ _ = []
 (DUse false (UseGroup ("ir" "extern_types") ((mem "ExternDeclFact" true) (mem "ExternUse" true))))
 (DUse false (UseGroup ("ir" "extern_uses") ((mem "collectExternUses" false))))
 (DUse false (UseGroup ("ir" "extern_lower") ((mem "externRuntimeKey" false))))
-(DUse false (UseGroup ("ir" "core_ir") ((mem "CExpr" true) (mem "CField" true) (mem "CArm" true) (mem "CGuard" true) (mem "CStmt" true) (mem "CBind" true) (mem "CClause" true) (mem "CImplEntry" true) (mem "CImplBody" true) (mem "ImplSym" true) (mem "MethodEvidence" true) (mem "CProgram" true) (mem "DeclFacts" true) (mem "MethodResultFact" true) (mem "CallMode" true) (mem "CallSite" true) (mem "noDeclFacts" false) (mem "givenNames" false) (mem "mapProgramBinders" false) (mem "BinderSite" true) (mem "litRuntimeType" false) (mem "leadingDictParams" false))))
+(DUse false (UseGroup ("ir" "core_ir") ((mem "CExpr" true) (mem "CField" true) (mem "CArm" true) (mem "CGuard" true) (mem "CStmt" true) (mem "CBind" true) (mem "CClause" true) (mem "CImplEntry" true) (mem "CImplBody" true) (mem "ImplSym" true) (mem "MethodEvidence" true) (mem "CProgram" true) (mem "DeclFacts" true) (mem "MethodResultFact" true) (mem "CallMode" true) (mem "CallSite" true) (mem "noDeclFacts" false) (mem "givenNames" false) (mem "mapProgramBinders" false) (mem "BinderSite" true) (mem "litRuntimeType" false) (mem "leadingDictParams" false) (mem "ifaceMethodArityKey" false))))
 (DUse false (UseGroup ("types" "runtime_types") ((mem "BinderRow" true) (mem "RuntimeType" true) (mem "binderOrdinal" false) (mem "runtimeTypeName" false))))
 (DUse false (UseAlias ("map") "BM"))
-(DUse false (UseGroup ("ir" "core_ir_lower") ((mem "ArityEnv" false) (mem "CallScope" false) (mem "bindGroupScope" false) (mem "bindLetScope" false) (mem "bindPatScope" false) (mem "bindPatsScope" false) (mem "callModeFor" false) (mem "definedArityOf" false) (mem "entryArityRow" false) (mem "programArities" false) (mem "ifaceMethodArityKey" false) (mem "ifaceWordOfKey" false))))
+(DUse false (UseGroup ("ir" "core_ir_lower") ((mem "ArityEnv" false) (mem "CallScope" false) (mem "bindGroupScope" false) (mem "bindLetScope" false) (mem "bindPatScope" false) (mem "bindPatsScope" false) (mem "callModeFor" false) (mem "definedArityOf" false) (mem "entryArityRow" false) (mem "programArities" false) (mem "ifaceWordOfKey" false))))
 (DUse false (UseGroup ("ir" "core_ir_sexp") ((mem "callModeSexp" false))))
 (DUse false (UseGroup ("frontend" "ast") ((mem "Pat" true) (mem "Route" true) (mem "Decl" true) (mem "ExternDecl" true) (mem "Ty" true) (mem "Lit" true) (mem "BinderId" true) (mem "isFixedIntHead" false) (mem "isBoxed64Head" false))))
 (DUse false (UseGroup ("types" "target_profile") ((mem "TargetProfile" false) (mem "withheldLabels" false) (mem "profileName" false))))
 (DUse false (UseGroup ("backend" "extern_requirements") ((mem "validateExternRequirements" false) (mem "requirementHostRows" false))))
 (DUse false (UseGroup ("backend" "global_plan") ((mem "validateGlobalInit" false))))
 (DUse false (UseGroup ("backend" "emit_target") ((mem "Backend" true) (mem "backendName" false))))
-(DUse false (UseGroup ("backend" "emit_plan") ((mem "EmitPlan" false) (mem "indexMethodResults" false) (mem "lookupMethodResult" false))))
+(DUse false (UseGroup ("backend" "emit_plan") ((mem "EmitPlan" false) (mem "InstanceTable" true) (mem "MethodSlot" true) (mem "MethodTables" true) (mem "SlotCallee" true) (mem "indexMethodResults" false) (mem "interfaceSlots" false) (mem "lookupMethodResult" false))))
 (DUse false (UseGroup ("backend" "extern_catalog") ((mem "RuntimeExternDomain" true) (mem "Disposition" true) (mem "GapKind" true) (mem "catalogRow" false) (mem "gapKindName" false) (mem "rowLlvm" false) (mem "rowWasm" false) (mem "rowEval" false))))
 (DUse false (UseGroup ("support" "ordmap") ((mem "OrdMap" false) (mem "omEmpty" false) (mem "omFromPairs" false) (mem "omInsert" false) (mem "omHasKey" false) (mem "omLookup" false) (mem "omKeys" false))))
 (DUse false (UseGroup ("types" "private_mangle") ((mem "dictTag" false) (mem "hashName" false))))
@@ -1803,9 +1866,22 @@ validatePhysicalDemand _ _ _ = []
 (DTypeSig true "validateForEmission" (TyFun (TyCon "Backend") (TyFun (TyCon "RuntimeExternDomain") (TyFun (TyCon "ManifestRequirement") (TyFun (TyCon "EmitPlan") (TyFun (TyCon "CProgram") (TyCon "EmissionValidation")))))))
 (DFunDef false "validateForEmission" ((PVar "backend") (PVar "domain") (PVar "requirement") (PVar "plan") (PVar "cp")) (EMatch (EApp (EApp (EApp (EApp (EApp (EVar "emissionDefects") (EVar "backend")) (EVar "domain")) (EVar "requirement")) (EVar "plan")) (EVar "cp")) (arm (PList) () (EBlock (DoLet false false (PVar "names") (EMatch (EVar "domain") (arm (PCon "PreludeFreeRuntime") () (EListLit)) (arm (PCon "LoadedRuntimeExterns" (PVar "decls")) () (EApp (EApp (EVar "map") (ELam ((PVar "d")) (EFieldAccess (EVar "d") "edName"))) (EVar "decls"))))) (DoExpr (EMatch (EApp (EVar "missingCatalogRows") (EVar "names")) (arm (PList) () (ERecordCreate "EmissionValidation" ((fa "defects" (EListLit)) (fa "externFindings" (EApp (EApp (EApp (EVar "validateExterns") (EVar "backend")) (EListLit)) (EVar "cp")))))) (arm (PVar "missing") () (ERecordCreate "EmissionValidation" ((fa "defects" (EListLit (EApp (EVar "CoreDefect") (EApp (EVar "missingRowsMessage") (EVar "missing"))))) (fa "externFindings" (EListLit))))))))) (arm (PVar "bad") () (ERecordCreate "EmissionValidation" ((fa "defects" (EVar "bad")) (fa "externFindings" (EListLit)))))))
 (DTypeSig false "emissionDefects" (TyFun (TyCon "Backend") (TyFun (TyCon "RuntimeExternDomain") (TyFun (TyCon "ManifestRequirement") (TyFun (TyCon "EmitPlan") (TyFun (TyCon "CProgram") (TyApp (TyCon "List") (TyCon "CoreDefect"))))))))
-(DFunDef false "emissionDefects" ((PVar "backend") (PVar "domain") (PVar "requirement") (PVar "plan") (PVar "cp")) (EIf (EBinOp "/=" (EApp (EVar "backendName") (EFieldAccess (EVar "plan") "target")) (EApp (EVar "backendName") (EVar "backend"))) (EListLit (EApp (EVar "CoreDefect") (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "internal error: emit plan was built for the ")) (EApp (EVar "display") (EApp (EVar "backendName") (EFieldAccess (EVar "plan") "target")))) (ELit (LString " backend but the "))) (EApp (EVar "display") (EApp (EVar "backendName") (EVar "backend")))) (ELit (LString " emitter received it"))))) (EMatch (EApp (EVar "implSymbolCollision") (EVar "cp")) (arm (PCon "Some" (PVar "message")) () (EListLit (EApp (EVar "CoreDefect") (EVar "message")))) (arm (PCon "None") () (EMatch (EApp (EApp (EVar "dictTagCollision") (EVar "backend")) (EVar "cp")) (arm (PCon "Some" (PVar "message")) () (EListLit (EApp (EVar "CoreDefect") (EVar "message")))) (arm (PCon "None") () (EApp (EVar "firstShapeDefect") (EListLit (ELam ((PLit LUnit)) (EApp (EApp (EApp (EVar "validateManifestCarriage") (EVar "requirement")) (EVar "plan")) (EVar "cp"))) (ELam ((PLit LUnit)) (EApp (EApp (EVar "validateConstructorFacts") (EVar "cp")) (EFieldAccess (EVar "plan") "constructorFacts"))) (ELam ((PLit LUnit)) (EApp (EApp (EVar "validatePlanImplGroups") (EVar "cp")) (EVar "plan"))) (ELam ((PLit LUnit)) (EApp (EVar "validateExternMetadata") (EVar "cp"))) (ELam ((PLit LUnit)) (EApp (EApp (EApp (EApp (EVar "validateExternRequirements") (EVar "backend")) (EVar "domain")) (EVar "cp")) (EFieldAccess (EVar "plan") "externRequirements"))) (ELam ((PLit LUnit)) (EApp (EApp (EVar "validateRequirementProjection") (EVar "backend")) (EVar "plan"))) (ELam ((PLit LUnit)) (EApp (EApp (EApp (EVar "validateGlobalInit") (EVar "cp")) (EFieldAccess (EVar "plan") "lazyGlobals")) (EFieldAccess (EVar "plan") "globalInit"))) (ELam ((PLit LUnit)) (EApp (EApp (EApp (EVar "validatePhysicalDemand") (EVar "backend")) (EVar "plan")) (EVar "cp"))) (ELam ((PLit LUnit)) (EApp (EVar "validateRecords") (EVar "cp"))) (ELam ((PLit LUnit)) (EApp (EVar "validateBinderStamps") (EVar "cp"))) (ELam ((PLit LUnit)) (EApp (EVar "validateSymbolOrigins") (EVar "cp"))) (ELam ((PLit LUnit)) (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EApp (EVar "validateScalarOperators") (EVar "cp")) (EApp (EVar "validateCalls") (EVar "cp"))) (EApp (EVar "validateImplSymbols") (EVar "cp"))) (EApp (EVar "validateMethodContexts") (EVar "cp"))) (EApp (EVar "validateDispatchEvidence") (EVar "cp"))) (EApp (EApp (EVar "validateMethodResults") (EVar "plan")) (EVar "cp")))) (ELam ((PLit LUnit)) (EApp (EVar "validateTails") (EVar "cp")))))))))))
+(DFunDef false "emissionDefects" ((PVar "backend") (PVar "domain") (PVar "requirement") (PVar "plan") (PVar "cp")) (EIf (EBinOp "/=" (EApp (EVar "backendName") (EFieldAccess (EVar "plan") "target")) (EApp (EVar "backendName") (EVar "backend"))) (EListLit (EApp (EVar "CoreDefect") (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "internal error: emit plan was built for the ")) (EApp (EVar "display") (EApp (EVar "backendName") (EFieldAccess (EVar "plan") "target")))) (ELit (LString " backend but the "))) (EApp (EVar "display") (EApp (EVar "backendName") (EVar "backend")))) (ELit (LString " emitter received it"))))) (EMatch (EApp (EVar "implSymbolCollision") (EVar "cp")) (arm (PCon "Some" (PVar "message")) () (EListLit (EApp (EVar "CoreDefect") (EVar "message")))) (arm (PCon "None") () (EMatch (EApp (EApp (EVar "dictTagCollision") (EVar "backend")) (EVar "cp")) (arm (PCon "Some" (PVar "message")) () (EListLit (EApp (EVar "CoreDefect") (EVar "message")))) (arm (PCon "None") () (EApp (EVar "firstShapeDefect") (EListLit (ELam ((PLit LUnit)) (EApp (EApp (EApp (EVar "validateManifestCarriage") (EVar "requirement")) (EVar "plan")) (EVar "cp"))) (ELam ((PLit LUnit)) (EApp (EApp (EVar "validateConstructorFacts") (EVar "cp")) (EFieldAccess (EVar "plan") "constructorFacts"))) (ELam ((PLit LUnit)) (EApp (EApp (EVar "validatePlanImplGroups") (EVar "cp")) (EVar "plan"))) (ELam ((PLit LUnit)) (EApp (EVar "validateExternMetadata") (EVar "cp"))) (ELam ((PLit LUnit)) (EApp (EApp (EApp (EApp (EVar "validateExternRequirements") (EVar "backend")) (EVar "domain")) (EVar "cp")) (EFieldAccess (EVar "plan") "externRequirements"))) (ELam ((PLit LUnit)) (EApp (EApp (EVar "validateRequirementProjection") (EVar "backend")) (EVar "plan"))) (ELam ((PLit LUnit)) (EApp (EApp (EApp (EVar "validateGlobalInit") (EVar "cp")) (EFieldAccess (EVar "plan") "lazyGlobals")) (EFieldAccess (EVar "plan") "globalInit"))) (ELam ((PLit LUnit)) (EApp (EApp (EApp (EVar "validatePhysicalDemand") (EVar "backend")) (EVar "plan")) (EVar "cp"))) (ELam ((PLit LUnit)) (EApp (EVar "validateRecords") (EVar "cp"))) (ELam ((PLit LUnit)) (EApp (EVar "validateBinderStamps") (EVar "cp"))) (ELam ((PLit LUnit)) (EApp (EVar "validateSymbolOrigins") (EVar "cp"))) (ELam ((PLit LUnit)) (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EApp (EVar "validateScalarOperators") (EVar "cp")) (EApp (EVar "validateCalls") (EVar "cp"))) (EApp (EVar "validateImplSymbols") (EVar "cp"))) (EApp (EVar "validateMethodContexts") (EVar "cp"))) (EApp (EVar "validateDispatchEvidence") (EVar "cp"))) (EApp (EApp (EVar "validateMethodResults") (EVar "plan")) (EVar "cp")))) (ELam ((PLit LUnit)) (EApp (EVar "validateTails") (EVar "cp"))) (ELam ((PLit LUnit)) (EApp (EApp (EApp (EVar "validateMethodTables") (EVar "backend")) (EVar "plan")) (EVar "cp")))))))))))
 (DTypeSig false "validatePlanImplGroups" (TyFun (TyCon "CProgram") (TyFun (TyCon "EmitPlan") (TyApp (TyCon "List") (TyCon "String")))))
 (DFunDef false "validatePlanImplGroups" ((PCon "CProgram" PWild PWild PWild (PVar "impls") PWild PWild) (PVar "plan")) (EApp (EApp (EVar "validateImplGroups") (EVar "impls")) (EFieldAccess (EVar "plan") "implGroups")))
+(DTypeSig true "validateMethodTables" (TyFun (TyCon "Backend") (TyFun (TyCon "EmitPlan") (TyFun (TyCon "CProgram") (TyApp (TyCon "List") (TyCon "String"))))))
+(DFunDef false "validateMethodTables" ((PCon "WasmBackend") PWild PWild) (EListLit))
+(DFunDef false "validateMethodTables" (PWild (PVar "plan") PWild) (EBlock (DoLet false false (PVar "tables") (EFieldAccess (EVar "plan") "methodTables")) (DoLet false false (PVar "rows") (EApp (EApp (EVar "map") (ELam ((PVar "key")) (ETuple (EVar "key") (EApp (EApp (EVar "optionOr") (EVar "emptyTable")) (EApp (EApp (EVar "omLookup") (EVar "key")) (EFieldAccess (EVar "tables") "instances")))))) (EApp (EVar "omKeys") (EFieldAccess (EVar "tables") "instances")))) (DoLet false false (PVar "filled") (EApp (EApp (EVar "flatMap") (ELam ((PVar "r")) (EApp (EApp (EVar "flatMap") (ELam ((PVar "cs")) (EVar "cs"))) (EFieldAccess (EAnnot (EApp (EVar "snd") (EVar "r")) (TyCon "InstanceTable")) "fills")))) (EVar "rows"))) (DoExpr (EBinOp "++" (EApp (EApp (EVar "flatMap") (ELam ((PVar "r")) (EApp (EApp (EApp (EVar "instanceTableFaults") (EVar "tables")) (EApp (EVar "fst") (EVar "r"))) (EApp (EVar "snd") (EVar "r"))))) (EVar "rows")) (EIf (EBinOp "==" (EApp (EVar "listLen") (EVar "filled")) (EApp (EVar "listLen") (EFieldAccess (EVar "plan") "implGroups"))) (EListLit) (EListLit (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "method table: ")) (EApp (EVar "display") (EApp (EVar "intToString") (EApp (EVar "listLen") (EFieldAccess (EVar "plan") "implGroups"))))) (ELit (LString " impl groups fill "))) (EApp (EVar "display") (EApp (EVar "intToString") (EApp (EVar "listLen") (EVar "filled"))))) (ELit (LString " slots")))))))))
+(DTypeSig false "emptyTable" (TyCon "InstanceTable"))
+(DFunDef false "emptyTable" () (ERecordCreate "InstanceTable" ((fa "iface" (ELit (LString ""))) (fa "fills" (EListLit)))))
+(DTypeSig false "instanceTableFaults" (TyFun (TyCon "MethodTables") (TyFun (TyCon "String") (TyFun (TyCon "InstanceTable") (TyApp (TyCon "List") (TyCon "String"))))))
+(DFunDef false "instanceTableFaults" ((PVar "tables") (PVar "key") (PVar "table")) (EBlock (DoLet false false (PVar "slots") (EApp (EApp (EVar "interfaceSlots") (EVar "tables")) (EFieldAccess (EVar "table") "iface"))) (DoExpr (EIf (EBinOp "/=" (EApp (EVar "listLen") (EVar "slots")) (EApp (EVar "listLen") (EFieldAccess (EVar "table") "fills"))) (EListLit (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "method table: instance `")) (EApp (EVar "display") (EVar "key"))) (ELit (LString "` has "))) (EApp (EVar "display") (EApp (EVar "intToString") (EApp (EVar "listLen") (EFieldAccess (EVar "table") "fills"))))) (ELit (LString " slots, `"))) (EApp (EVar "display") (EFieldAccess (EVar "table") "iface"))) (ELit (LString "` declares "))) (EApp (EVar "display") (EApp (EVar "intToString") (EApp (EVar "listLen") (EVar "slots"))))) (ELit (LString "")))) (EApp (EApp (EApp (EVar "slotsFaults") (EVar "key")) (EVar "slots")) (EFieldAccess (EVar "table") "fills"))))))
+(DTypeSig false "slotsFaults" (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "MethodSlot")) (TyFun (TyApp (TyCon "List") (TyApp (TyCon "List") (TyCon "SlotCallee"))) (TyApp (TyCon "List") (TyCon "String"))))))
+(DFunDef false "slotsFaults" ((PVar "key") (PCons (PVar "slot") (PVar "slots")) (PCons (PVar "callees") (PVar "fills"))) (EBinOp "++" (EApp (EApp (EApp (EVar "slotFaults") (EVar "key")) (EVar "slot")) (EVar "callees")) (EApp (EApp (EApp (EVar "slotsFaults") (EVar "key")) (EVar "slots")) (EVar "fills"))))
+(DFunDef false "slotsFaults" (PWild PWild PWild) (EListLit))
+(DTypeSig false "slotFaults" (TyFun (TyCon "String") (TyFun (TyCon "MethodSlot") (TyFun (TyApp (TyCon "List") (TyCon "SlotCallee")) (TyApp (TyCon "List") (TyCon "String"))))))
+(DFunDef false "slotFaults" ((PVar "key") (PVar "slot") (PList (PVar "callee"))) (EIf (EBinOp "==" (EFieldAccess (EVar "callee") "declaredArity") (EFieldAccess (EVar "slot") "valueArity")) (EListLit) (EListLit (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "method table: slot `")) (EApp (EVar "display") (EFieldAccess (EVar "slot") "method"))) (ELit (LString "` of instance `"))) (EApp (EVar "display") (EVar "key"))) (ELit (LString "` takes "))) (EApp (EVar "display") (EApp (EVar "intToString") (EFieldAccess (EVar "slot") "valueArity")))) (ELit (LString " values, its callee declares "))) (EApp (EVar "display") (EApp (EVar "intToString") (EFieldAccess (EVar "callee") "declaredArity")))) (ELit (LString ""))))))
+(DFunDef false "slotFaults" ((PVar "key") (PVar "slot") (PVar "callees")) (EListLit (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "method table: slot `")) (EApp (EVar "display") (EFieldAccess (EVar "slot") "method"))) (ELit (LString "` of instance `"))) (EApp (EVar "display") (EVar "key"))) (ELit (LString "` has "))) (EApp (EVar "display") (EApp (EVar "intToString") (EApp (EVar "listLen") (EVar "callees"))))) (ELit (LString " callees")))))
 (DTypeSig false "validateManifestCarriage" (TyFun (TyCon "ManifestRequirement") (TyFun (TyCon "EmitPlan") (TyFun (TyCon "CProgram") (TyApp (TyCon "List") (TyCon "String"))))))
 (DFunDef false "validateManifestCarriage" ((PVar "requirement") (PVar "plan") (PCon "CProgram" PWild PWild PWild PWild PWild (PVar "facts"))) (EBlock (DoLet false false (PVar "manifests") (EFieldAccess (EVar "facts") "factManifests")) (DoLet false false (PVar "structure") (EApp (EApp (EVar "flatMap") (ELam ((PVar "m")) (EApp (EApp (EVar "map") (ELam ((PCon "ManifestDefect" (PVar "text"))) (EBinOp "++" (ELit (LString "manifest: ")) (EVar "text")))) (EApp (EVar "validateManifest") (EVar "m"))))) (EVar "manifests"))) (DoLet false false (PVar "expected") (EMatch (EVar "requirement") (arm (PCon "RawUnchecked") () (EListLit)) (arm (PCon "CheckedEntry" (PVar "key") (PVar "protocol")) () (EBlock (DoLet false false (PVar "request") (ERecordCreate "ManifestRequest" ((fa "entry" (EVar "key")) (fa "protocol" (EVar "protocol"))))) (DoExpr (EIf (EApp (EApp (EVar "any") (ELam ((PVar "m")) (EApp (EApp (EVar "requestEqual") (EVar "request")) (EFieldAccess (EAnnot (EVar "m") (TyCon "CapabilityManifest")) "request")))) (EVar "manifests")) (EListLit) (EIf (EApp (EApp (EVar "any") (ELam ((PVar "m")) (EApp (EApp (EVar "entryKeyEqual") (EVar "key")) (EFieldAccess (EFieldAccess (EAnnot (EVar "m") (TyCon "CapabilityManifest")) "request") "entry")))) (EVar "manifests")) (EListLit (ELit (LString "manifest: wrong invocation protocol for checked entry"))) (EIf (EApp (EApp (EVar "any") (ELam ((PVar "m")) (EBinOp "==" (EFieldAccess (EFieldAccess (EFieldAccess (EAnnot (EVar "m") (TyCon "CapabilityManifest")) "request") "entry") "binding") (EFieldAccess (EVar "key") "binding")))) (EVar "manifests")) (EListLit (ELit (LString "manifest: wrong module for checked entry"))) (EIf (EApp (EApp (EVar "any") (ELam (PWild) (EVar "True"))) (EVar "manifests")) (EListLit (ELit (LString "manifest: wrong binding for checked entry"))) (EListLit (ELit (LString "manifest: missing checked entry manifest")))))))))))) (DoExpr (EBinOp "++" (EBinOp "++" (EVar "expected") (EVar "structure")) (EIf (EApp (EApp (EVar "manifestProjectionEqual") (EApp (EApp (EVar "map") (ELam ((PVar "m")) (EFieldAccess (EAnnot (EVar "m") (TyCon "CapabilityManifest")) "request"))) (EVar "manifests"))) (EFieldAccess (EVar "plan") "manifestIndex")) (EListLit) (EListLit (ELit (LString "manifest: emit plan projection disagrees with Core"))))))))
 (DTypeSig false "manifestProjectionEqual" (TyFun (TyApp (TyCon "List") (TyCon "ManifestRequest")) (TyFun (TyApp (TyCon "List") (TyCon "ManifestRequest")) (TyCon "Bool"))))
@@ -2278,17 +2354,17 @@ validatePhysicalDemand _ _ _ = []
 (DUse false (UseGroup ("ir" "extern_types") ((mem "ExternDeclFact" true) (mem "ExternUse" true))))
 (DUse false (UseGroup ("ir" "extern_uses") ((mem "collectExternUses" false))))
 (DUse false (UseGroup ("ir" "extern_lower") ((mem "externRuntimeKey" false))))
-(DUse false (UseGroup ("ir" "core_ir") ((mem "CExpr" true) (mem "CField" true) (mem "CArm" true) (mem "CGuard" true) (mem "CStmt" true) (mem "CBind" true) (mem "CClause" true) (mem "CImplEntry" true) (mem "CImplBody" true) (mem "ImplSym" true) (mem "MethodEvidence" true) (mem "CProgram" true) (mem "DeclFacts" true) (mem "MethodResultFact" true) (mem "CallMode" true) (mem "CallSite" true) (mem "noDeclFacts" false) (mem "givenNames" false) (mem "mapProgramBinders" false) (mem "BinderSite" true) (mem "litRuntimeType" false) (mem "leadingDictParams" false))))
+(DUse false (UseGroup ("ir" "core_ir") ((mem "CExpr" true) (mem "CField" true) (mem "CArm" true) (mem "CGuard" true) (mem "CStmt" true) (mem "CBind" true) (mem "CClause" true) (mem "CImplEntry" true) (mem "CImplBody" true) (mem "ImplSym" true) (mem "MethodEvidence" true) (mem "CProgram" true) (mem "DeclFacts" true) (mem "MethodResultFact" true) (mem "CallMode" true) (mem "CallSite" true) (mem "noDeclFacts" false) (mem "givenNames" false) (mem "mapProgramBinders" false) (mem "BinderSite" true) (mem "litRuntimeType" false) (mem "leadingDictParams" false) (mem "ifaceMethodArityKey" false))))
 (DUse false (UseGroup ("types" "runtime_types") ((mem "BinderRow" true) (mem "RuntimeType" true) (mem "binderOrdinal" false) (mem "runtimeTypeName" false))))
 (DUse false (UseAlias ("map") "BM"))
-(DUse false (UseGroup ("ir" "core_ir_lower") ((mem "ArityEnv" false) (mem "CallScope" false) (mem "bindGroupScope" false) (mem "bindLetScope" false) (mem "bindPatScope" false) (mem "bindPatsScope" false) (mem "callModeFor" false) (mem "definedArityOf" false) (mem "entryArityRow" false) (mem "programArities" false) (mem "ifaceMethodArityKey" false) (mem "ifaceWordOfKey" false))))
+(DUse false (UseGroup ("ir" "core_ir_lower") ((mem "ArityEnv" false) (mem "CallScope" false) (mem "bindGroupScope" false) (mem "bindLetScope" false) (mem "bindPatScope" false) (mem "bindPatsScope" false) (mem "callModeFor" false) (mem "definedArityOf" false) (mem "entryArityRow" false) (mem "programArities" false) (mem "ifaceWordOfKey" false))))
 (DUse false (UseGroup ("ir" "core_ir_sexp") ((mem "callModeSexp" false))))
 (DUse false (UseGroup ("frontend" "ast") ((mem "Pat" true) (mem "Route" true) (mem "Decl" true) (mem "ExternDecl" true) (mem "Ty" true) (mem "Lit" true) (mem "BinderId" true) (mem "isFixedIntHead" false) (mem "isBoxed64Head" false))))
 (DUse false (UseGroup ("types" "target_profile") ((mem "TargetProfile" false) (mem "withheldLabels" false) (mem "profileName" false))))
 (DUse false (UseGroup ("backend" "extern_requirements") ((mem "validateExternRequirements" false) (mem "requirementHostRows" false))))
 (DUse false (UseGroup ("backend" "global_plan") ((mem "validateGlobalInit" false))))
 (DUse false (UseGroup ("backend" "emit_target") ((mem "Backend" true) (mem "backendName" false))))
-(DUse false (UseGroup ("backend" "emit_plan") ((mem "EmitPlan" false) (mem "indexMethodResults" false) (mem "lookupMethodResult" false))))
+(DUse false (UseGroup ("backend" "emit_plan") ((mem "EmitPlan" false) (mem "InstanceTable" true) (mem "MethodSlot" true) (mem "MethodTables" true) (mem "SlotCallee" true) (mem "indexMethodResults" false) (mem "interfaceSlots" false) (mem "lookupMethodResult" false))))
 (DUse false (UseGroup ("backend" "extern_catalog") ((mem "RuntimeExternDomain" true) (mem "Disposition" true) (mem "GapKind" true) (mem "catalogRow" false) (mem "gapKindName" false) (mem "rowLlvm" false) (mem "rowWasm" false) (mem "rowEval" false))))
 (DUse false (UseGroup ("support" "ordmap") ((mem "OrdMap" false) (mem "omEmpty" false) (mem "omFromPairs" false) (mem "omInsert" false) (mem "omHasKey" false) (mem "omLookup" false) (mem "omKeys" false))))
 (DUse false (UseGroup ("types" "private_mangle") ((mem "dictTag" false) (mem "hashName" false))))
@@ -2302,9 +2378,22 @@ validatePhysicalDemand _ _ _ = []
 (DTypeSig true "validateForEmission" (TyFun (TyCon "Backend") (TyFun (TyCon "RuntimeExternDomain") (TyFun (TyCon "ManifestRequirement") (TyFun (TyCon "EmitPlan") (TyFun (TyCon "CProgram") (TyCon "EmissionValidation")))))))
 (DFunDef false "validateForEmission" ((PVar "backend") (PVar "domain") (PVar "requirement") (PVar "plan") (PVar "cp")) (EMatch (EApp (EApp (EApp (EApp (EApp (EVar "emissionDefects") (EVar "backend")) (EVar "domain")) (EVar "requirement")) (EVar "plan")) (EVar "cp")) (arm (PList) () (EBlock (DoLet false false (PVar "names") (EMatch (EVar "domain") (arm (PCon "PreludeFreeRuntime") () (EListLit)) (arm (PCon "LoadedRuntimeExterns" (PVar "decls")) () (EApp (EApp (EMethodRef "map") (ELam ((PVar "d")) (EFieldAccess (EVar "d") "edName"))) (EVar "decls"))))) (DoExpr (EMatch (EApp (EVar "missingCatalogRows") (EVar "names")) (arm (PList) () (ERecordCreate "EmissionValidation" ((fa "defects" (EListLit)) (fa "externFindings" (EApp (EApp (EApp (EVar "validateExterns") (EVar "backend")) (EListLit)) (EVar "cp")))))) (arm (PVar "missing") () (ERecordCreate "EmissionValidation" ((fa "defects" (EListLit (EApp (EVar "CoreDefect") (EApp (EVar "missingRowsMessage") (EVar "missing"))))) (fa "externFindings" (EListLit))))))))) (arm (PVar "bad") () (ERecordCreate "EmissionValidation" ((fa "defects" (EVar "bad")) (fa "externFindings" (EListLit)))))))
 (DTypeSig false "emissionDefects" (TyFun (TyCon "Backend") (TyFun (TyCon "RuntimeExternDomain") (TyFun (TyCon "ManifestRequirement") (TyFun (TyCon "EmitPlan") (TyFun (TyCon "CProgram") (TyApp (TyCon "List") (TyCon "CoreDefect"))))))))
-(DFunDef false "emissionDefects" ((PVar "backend") (PVar "domain") (PVar "requirement") (PVar "plan") (PVar "cp")) (EIf (EBinOp "/=" (EApp (EVar "backendName") (EFieldAccess (EVar "plan") "target")) (EApp (EVar "backendName") (EVar "backend"))) (EListLit (EApp (EVar "CoreDefect") (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "internal error: emit plan was built for the ")) (EApp (EMethodRef "display") (EApp (EVar "backendName") (EFieldAccess (EVar "plan") "target")))) (ELit (LString " backend but the "))) (EApp (EMethodRef "display") (EApp (EVar "backendName") (EVar "backend")))) (ELit (LString " emitter received it"))))) (EMatch (EApp (EVar "implSymbolCollision") (EVar "cp")) (arm (PCon "Some" (PVar "message")) () (EListLit (EApp (EVar "CoreDefect") (EVar "message")))) (arm (PCon "None") () (EMatch (EApp (EApp (EVar "dictTagCollision") (EVar "backend")) (EVar "cp")) (arm (PCon "Some" (PVar "message")) () (EListLit (EApp (EVar "CoreDefect") (EVar "message")))) (arm (PCon "None") () (EApp (EVar "firstShapeDefect") (EListLit (ELam ((PLit LUnit)) (EApp (EApp (EApp (EVar "validateManifestCarriage") (EVar "requirement")) (EVar "plan")) (EVar "cp"))) (ELam ((PLit LUnit)) (EApp (EApp (EVar "validateConstructorFacts") (EVar "cp")) (EFieldAccess (EVar "plan") "constructorFacts"))) (ELam ((PLit LUnit)) (EApp (EApp (EVar "validatePlanImplGroups") (EVar "cp")) (EVar "plan"))) (ELam ((PLit LUnit)) (EApp (EVar "validateExternMetadata") (EVar "cp"))) (ELam ((PLit LUnit)) (EApp (EApp (EApp (EApp (EVar "validateExternRequirements") (EVar "backend")) (EVar "domain")) (EVar "cp")) (EFieldAccess (EVar "plan") "externRequirements"))) (ELam ((PLit LUnit)) (EApp (EApp (EVar "validateRequirementProjection") (EVar "backend")) (EVar "plan"))) (ELam ((PLit LUnit)) (EApp (EApp (EApp (EVar "validateGlobalInit") (EVar "cp")) (EFieldAccess (EVar "plan") "lazyGlobals")) (EFieldAccess (EVar "plan") "globalInit"))) (ELam ((PLit LUnit)) (EApp (EApp (EApp (EVar "validatePhysicalDemand") (EVar "backend")) (EVar "plan")) (EVar "cp"))) (ELam ((PLit LUnit)) (EApp (EVar "validateRecords") (EVar "cp"))) (ELam ((PLit LUnit)) (EApp (EVar "validateBinderStamps") (EVar "cp"))) (ELam ((PLit LUnit)) (EApp (EVar "validateSymbolOrigins") (EVar "cp"))) (ELam ((PLit LUnit)) (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EApp (EVar "validateScalarOperators") (EVar "cp")) (EApp (EVar "validateCalls") (EVar "cp"))) (EApp (EVar "validateImplSymbols") (EVar "cp"))) (EApp (EVar "validateMethodContexts") (EVar "cp"))) (EApp (EVar "validateDispatchEvidence") (EVar "cp"))) (EApp (EApp (EVar "validateMethodResults") (EVar "plan")) (EVar "cp")))) (ELam ((PLit LUnit)) (EApp (EVar "validateTails") (EVar "cp")))))))))))
+(DFunDef false "emissionDefects" ((PVar "backend") (PVar "domain") (PVar "requirement") (PVar "plan") (PVar "cp")) (EIf (EBinOp "/=" (EApp (EVar "backendName") (EFieldAccess (EVar "plan") "target")) (EApp (EVar "backendName") (EVar "backend"))) (EListLit (EApp (EVar "CoreDefect") (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "internal error: emit plan was built for the ")) (EApp (EMethodRef "display") (EApp (EVar "backendName") (EFieldAccess (EVar "plan") "target")))) (ELit (LString " backend but the "))) (EApp (EMethodRef "display") (EApp (EVar "backendName") (EVar "backend")))) (ELit (LString " emitter received it"))))) (EMatch (EApp (EVar "implSymbolCollision") (EVar "cp")) (arm (PCon "Some" (PVar "message")) () (EListLit (EApp (EVar "CoreDefect") (EVar "message")))) (arm (PCon "None") () (EMatch (EApp (EApp (EVar "dictTagCollision") (EVar "backend")) (EVar "cp")) (arm (PCon "Some" (PVar "message")) () (EListLit (EApp (EVar "CoreDefect") (EVar "message")))) (arm (PCon "None") () (EApp (EVar "firstShapeDefect") (EListLit (ELam ((PLit LUnit)) (EApp (EApp (EApp (EVar "validateManifestCarriage") (EVar "requirement")) (EVar "plan")) (EVar "cp"))) (ELam ((PLit LUnit)) (EApp (EApp (EVar "validateConstructorFacts") (EVar "cp")) (EFieldAccess (EVar "plan") "constructorFacts"))) (ELam ((PLit LUnit)) (EApp (EApp (EVar "validatePlanImplGroups") (EVar "cp")) (EVar "plan"))) (ELam ((PLit LUnit)) (EApp (EVar "validateExternMetadata") (EVar "cp"))) (ELam ((PLit LUnit)) (EApp (EApp (EApp (EApp (EVar "validateExternRequirements") (EVar "backend")) (EVar "domain")) (EVar "cp")) (EFieldAccess (EVar "plan") "externRequirements"))) (ELam ((PLit LUnit)) (EApp (EApp (EVar "validateRequirementProjection") (EVar "backend")) (EVar "plan"))) (ELam ((PLit LUnit)) (EApp (EApp (EApp (EVar "validateGlobalInit") (EVar "cp")) (EFieldAccess (EVar "plan") "lazyGlobals")) (EFieldAccess (EVar "plan") "globalInit"))) (ELam ((PLit LUnit)) (EApp (EApp (EApp (EVar "validatePhysicalDemand") (EVar "backend")) (EVar "plan")) (EVar "cp"))) (ELam ((PLit LUnit)) (EApp (EVar "validateRecords") (EVar "cp"))) (ELam ((PLit LUnit)) (EApp (EVar "validateBinderStamps") (EVar "cp"))) (ELam ((PLit LUnit)) (EApp (EVar "validateSymbolOrigins") (EVar "cp"))) (ELam ((PLit LUnit)) (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EApp (EVar "validateScalarOperators") (EVar "cp")) (EApp (EVar "validateCalls") (EVar "cp"))) (EApp (EVar "validateImplSymbols") (EVar "cp"))) (EApp (EVar "validateMethodContexts") (EVar "cp"))) (EApp (EVar "validateDispatchEvidence") (EVar "cp"))) (EApp (EApp (EVar "validateMethodResults") (EVar "plan")) (EVar "cp")))) (ELam ((PLit LUnit)) (EApp (EVar "validateTails") (EVar "cp"))) (ELam ((PLit LUnit)) (EApp (EApp (EApp (EVar "validateMethodTables") (EVar "backend")) (EVar "plan")) (EVar "cp")))))))))))
 (DTypeSig false "validatePlanImplGroups" (TyFun (TyCon "CProgram") (TyFun (TyCon "EmitPlan") (TyApp (TyCon "List") (TyCon "String")))))
 (DFunDef false "validatePlanImplGroups" ((PCon "CProgram" PWild PWild PWild (PVar "impls") PWild PWild) (PVar "plan")) (EApp (EApp (EVar "validateImplGroups") (EVar "impls")) (EFieldAccess (EVar "plan") "implGroups")))
+(DTypeSig true "validateMethodTables" (TyFun (TyCon "Backend") (TyFun (TyCon "EmitPlan") (TyFun (TyCon "CProgram") (TyApp (TyCon "List") (TyCon "String"))))))
+(DFunDef false "validateMethodTables" ((PCon "WasmBackend") PWild PWild) (EListLit))
+(DFunDef false "validateMethodTables" (PWild (PVar "plan") PWild) (EBlock (DoLet false false (PVar "tables") (EFieldAccess (EVar "plan") "methodTables")) (DoLet false false (PVar "rows") (EApp (EApp (EMethodRef "map") (ELam ((PVar "key")) (ETuple (EVar "key") (EApp (EApp (EVar "optionOr") (EVar "emptyTable")) (EApp (EApp (EVar "omLookup") (EVar "key")) (EFieldAccess (EVar "tables") "instances")))))) (EApp (EVar "omKeys") (EFieldAccess (EVar "tables") "instances")))) (DoLet false false (PVar "filled") (EApp (EApp (EDictApp "flatMap") (ELam ((PVar "r")) (EApp (EApp (EDictApp "flatMap") (ELam ((PVar "cs")) (EVar "cs"))) (EFieldAccess (EAnnot (EApp (EVar "snd") (EVar "r")) (TyCon "InstanceTable")) "fills")))) (EVar "rows"))) (DoExpr (EBinOp "++" (EApp (EApp (EDictApp "flatMap") (ELam ((PVar "r")) (EApp (EApp (EApp (EVar "instanceTableFaults") (EVar "tables")) (EApp (EVar "fst") (EVar "r"))) (EApp (EVar "snd") (EVar "r"))))) (EVar "rows")) (EIf (EBinOp "==" (EApp (EVar "listLen") (EVar "filled")) (EApp (EVar "listLen") (EFieldAccess (EVar "plan") "implGroups"))) (EListLit) (EListLit (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "method table: ")) (EApp (EMethodRef "display") (EApp (EVar "intToString") (EApp (EVar "listLen") (EFieldAccess (EVar "plan") "implGroups"))))) (ELit (LString " impl groups fill "))) (EApp (EMethodRef "display") (EApp (EVar "intToString") (EApp (EVar "listLen") (EVar "filled"))))) (ELit (LString " slots")))))))))
+(DTypeSig false "emptyTable" (TyCon "InstanceTable"))
+(DFunDef false "emptyTable" () (ERecordCreate "InstanceTable" ((fa "iface" (ELit (LString ""))) (fa "fills" (EListLit)))))
+(DTypeSig false "instanceTableFaults" (TyFun (TyCon "MethodTables") (TyFun (TyCon "String") (TyFun (TyCon "InstanceTable") (TyApp (TyCon "List") (TyCon "String"))))))
+(DFunDef false "instanceTableFaults" ((PVar "tables") (PVar "key") (PVar "table")) (EBlock (DoLet false false (PVar "slots") (EApp (EApp (EVar "interfaceSlots") (EVar "tables")) (EFieldAccess (EVar "table") "iface"))) (DoExpr (EIf (EBinOp "/=" (EApp (EVar "listLen") (EVar "slots")) (EApp (EVar "listLen") (EFieldAccess (EVar "table") "fills"))) (EListLit (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "method table: instance `")) (EApp (EMethodRef "display") (EVar "key"))) (ELit (LString "` has "))) (EApp (EMethodRef "display") (EApp (EVar "intToString") (EApp (EVar "listLen") (EFieldAccess (EVar "table") "fills"))))) (ELit (LString " slots, `"))) (EApp (EMethodRef "display") (EFieldAccess (EVar "table") "iface"))) (ELit (LString "` declares "))) (EApp (EMethodRef "display") (EApp (EVar "intToString") (EApp (EVar "listLen") (EVar "slots"))))) (ELit (LString "")))) (EApp (EApp (EApp (EVar "slotsFaults") (EVar "key")) (EVar "slots")) (EFieldAccess (EVar "table") "fills"))))))
+(DTypeSig false "slotsFaults" (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "MethodSlot")) (TyFun (TyApp (TyCon "List") (TyApp (TyCon "List") (TyCon "SlotCallee"))) (TyApp (TyCon "List") (TyCon "String"))))))
+(DFunDef false "slotsFaults" ((PVar "key") (PCons (PVar "slot") (PVar "slots")) (PCons (PVar "callees") (PVar "fills"))) (EBinOp "++" (EApp (EApp (EApp (EVar "slotFaults") (EVar "key")) (EVar "slot")) (EVar "callees")) (EApp (EApp (EApp (EVar "slotsFaults") (EVar "key")) (EVar "slots")) (EVar "fills"))))
+(DFunDef false "slotsFaults" (PWild PWild PWild) (EListLit))
+(DTypeSig false "slotFaults" (TyFun (TyCon "String") (TyFun (TyCon "MethodSlot") (TyFun (TyApp (TyCon "List") (TyCon "SlotCallee")) (TyApp (TyCon "List") (TyCon "String"))))))
+(DFunDef false "slotFaults" ((PVar "key") (PVar "slot") (PList (PVar "callee"))) (EIf (EBinOp "==" (EFieldAccess (EVar "callee") "declaredArity") (EFieldAccess (EVar "slot") "valueArity")) (EListLit) (EListLit (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "method table: slot `")) (EApp (EMethodRef "display") (EFieldAccess (EVar "slot") "method"))) (ELit (LString "` of instance `"))) (EApp (EMethodRef "display") (EVar "key"))) (ELit (LString "` takes "))) (EApp (EMethodRef "display") (EApp (EVar "intToString") (EFieldAccess (EVar "slot") "valueArity")))) (ELit (LString " values, its callee declares "))) (EApp (EMethodRef "display") (EApp (EVar "intToString") (EFieldAccess (EVar "callee") "declaredArity")))) (ELit (LString ""))))))
+(DFunDef false "slotFaults" ((PVar "key") (PVar "slot") (PVar "callees")) (EListLit (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "method table: slot `")) (EApp (EMethodRef "display") (EFieldAccess (EVar "slot") "method"))) (ELit (LString "` of instance `"))) (EApp (EMethodRef "display") (EVar "key"))) (ELit (LString "` has "))) (EApp (EMethodRef "display") (EApp (EVar "intToString") (EApp (EVar "listLen") (EVar "callees"))))) (ELit (LString " callees")))))
 (DTypeSig false "validateManifestCarriage" (TyFun (TyCon "ManifestRequirement") (TyFun (TyCon "EmitPlan") (TyFun (TyCon "CProgram") (TyApp (TyCon "List") (TyCon "String"))))))
 (DFunDef false "validateManifestCarriage" ((PVar "requirement") (PVar "plan") (PCon "CProgram" PWild PWild PWild PWild PWild (PVar "facts"))) (EBlock (DoLet false false (PVar "manifests") (EFieldAccess (EVar "facts") "factManifests")) (DoLet false false (PVar "structure") (EApp (EApp (EDictApp "flatMap") (ELam ((PVar "m")) (EApp (EApp (EMethodRef "map") (ELam ((PCon "ManifestDefect" (PVar "text"))) (EBinOp "++" (ELit (LString "manifest: ")) (EVar "text")))) (EApp (EVar "validateManifest") (EVar "m"))))) (EVar "manifests"))) (DoLet false false (PVar "expected") (EMatch (EVar "requirement") (arm (PCon "RawUnchecked") () (EListLit)) (arm (PCon "CheckedEntry" (PVar "key") (PVar "protocol")) () (EBlock (DoLet false false (PVar "request") (ERecordCreate "ManifestRequest" ((fa "entry" (EVar "key")) (fa "protocol" (EVar "protocol"))))) (DoExpr (EIf (EApp (EApp (EDictApp "any") (ELam ((PVar "m")) (EApp (EApp (EVar "requestEqual") (EVar "request")) (EFieldAccess (EAnnot (EVar "m") (TyCon "CapabilityManifest")) "request")))) (EVar "manifests")) (EListLit) (EIf (EApp (EApp (EDictApp "any") (ELam ((PVar "m")) (EApp (EApp (EVar "entryKeyEqual") (EVar "key")) (EFieldAccess (EFieldAccess (EAnnot (EVar "m") (TyCon "CapabilityManifest")) "request") "entry")))) (EVar "manifests")) (EListLit (ELit (LString "manifest: wrong invocation protocol for checked entry"))) (EIf (EApp (EApp (EDictApp "any") (ELam ((PVar "m")) (EBinOp "==" (EFieldAccess (EFieldAccess (EFieldAccess (EAnnot (EVar "m") (TyCon "CapabilityManifest")) "request") "entry") "binding") (EFieldAccess (EVar "key") "binding")))) (EVar "manifests")) (EListLit (ELit (LString "manifest: wrong module for checked entry"))) (EIf (EApp (EApp (EDictApp "any") (ELam (PWild) (EVar "True"))) (EVar "manifests")) (EListLit (ELit (LString "manifest: wrong binding for checked entry"))) (EListLit (ELit (LString "manifest: missing checked entry manifest")))))))))))) (DoExpr (EBinOp "++" (EBinOp "++" (EVar "expected") (EVar "structure")) (EIf (EApp (EApp (EVar "manifestProjectionEqual") (EApp (EApp (EMethodRef "map") (ELam ((PVar "m")) (EFieldAccess (EAnnot (EVar "m") (TyCon "CapabilityManifest")) "request"))) (EVar "manifests"))) (EFieldAccess (EVar "plan") "manifestIndex")) (EListLit) (EListLit (ELit (LString "manifest: emit plan projection disagrees with Core"))))))))
 (DTypeSig false "manifestProjectionEqual" (TyFun (TyApp (TyCon "List") (TyCon "ManifestRequest")) (TyFun (TyApp (TyCon "List") (TyCon "ManifestRequest")) (TyCon "Bool"))))

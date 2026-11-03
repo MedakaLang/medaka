@@ -14,7 +14,6 @@ emitCtorEtaClosure
 emitCtorEtaDefine
 emitDecision
 emitDictValue
-emitDispatchChain
 emitDivZeroGuard
 emitExternEtaClosure
 emitExternEtaDefine
@@ -47,7 +46,6 @@ emitUn
 emitValueCmp
 emitVar
 emitVariantUpdate
-entrySuperCount
 foldImplsByMethod
 groupImplsByMethod
 hex2

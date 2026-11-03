@@ -101,12 +101,10 @@ import backend.trmc_analysis.{TrmcVerdicts, isTrmcFn, isTrmcImpl}
 --     each carrying the typechecker's resolved `Route`s.  An `RKey` route is
 --     STATICALLY resolved (the concrete impl is known at compile time) → a DIRECT
 --     call to that impl's lifted `@mdk_impl_<tag>_<method>`; `RDict`/`RDictFwd` read
---     a runtime dict-parameter witness word → a CALL to the method's SHARED
---     dispatcher `@mdk_disp_<method>_<nMeth>_<nArgs>`, which holds the impl if-chain
---     (issue #118 — the chain is OUTLINED, not inlined at the site; look for it
---     there, not here).  Mirrors core_ir_eval's methodAtNarrow/applyDicts/
---     narrowMethod.  See the "typeclass dispatch" section below for the
---     (j)/(k)/(l) rep notes.
+--     a runtime dict-parameter witness word → a load of the method's slot from
+--     that dictionary and a call through it (the method-table section below).
+--     Mirrors core_ir_eval's methodAtNarrow/applyDicts/narrowMethod.  See the
+--     "typeclass dispatch" section below for the (j)/(k)/(l) rep notes.
 --   • slice 8 — ARRAYS + RANGES.  CArray allocates a length-prefixed boxed cell
 --     (layout: [ i64 raw_len | elem0 | elem1 … ], reusing the slice-3 cell shape
 --     but with the header word = raw element count rather than a constructor hash).
@@ -786,9 +784,6 @@ data EmitInputData = EmitInputData {
   -- to it byte-identical to the symbol that prelude.o actually exports.
   preludeImplIndex : OrdMap (OrdMap String),
   srcName : String,
-  -- the method names two or more interfaces declare (by declaration word), whose
-  -- dispatchers therefore carry the interface in their symbol (`dispMethodWord`)
-  sharedMethodNames : OrdMap Unit,
   -- the complete loaded runtime declaration domain
   runtimeExterns : RuntimeExternDomain,
   -- the top-level functions `@noinline` marks (`withNoInlineFns`)
@@ -809,14 +804,13 @@ makeEmitInput : ManifestRequirement ->
   List (String, String, String) ->
   String ->
   EmitInput
-makeEmitInput requirement domain methodIfaces ctorFieldTypes emitHalf preludeBinds preludeImpls srcName = EmitInputData {
+makeEmitInput requirement domain _methodIfaces ctorFieldTypes emitHalf preludeBinds preludeImpls srcName = EmitInputData {
   manifestRequirement = requirement,
   ctorFieldIndex = omFromPairs (reverseL ctorFieldTypes) omEmpty,
   emitHalf = emitHalf,
   preludeBinds = preludeBinds,
   preludeImplIndex = preludeImplIndexOf preludeImpls omEmpty,
   srcName = srcName,
-  sharedMethodNames = sharedMethodNamesOf methodIfaces omEmpty omEmpty,
   runtimeExterns = domain,
   noInlineFns = omEmpty,
 }
@@ -836,23 +830,6 @@ fnAttrs : Emit -> String -> String
 fnAttrs e name = match omLookup name e.input.noInlineFns
   Some _ => " noinline"
   None => ""
-
--- The methods declared by more than one interface word, from `methodIfaceTable` rows
--- (one per declared interface method).  [firstWord] remembers each method's first
--- declaring word.
-sharedMethodNamesOf : List (String, (String, String, Int)) ->
-  OrdMap String ->
-  OrdMap Unit ->
-  OrdMap Unit
-sharedMethodNamesOf [] _ shared = shared
-sharedMethodNamesOf ((m, (_, word, _)) :: rest) firstWord shared =
-  match omLookup m firstWord
-    None => sharedMethodNamesOf rest (omInsert m word firstWord) shared
-    Some w =>
-      if w == word then
-        sharedMethodNamesOf rest firstWord shared
-      else
-        sharedMethodNamesOf rest firstWord (omInsert m () shared)
 
 preludeImplIndexOf : List (String, String, String) ->
   OrdMap (OrdMap String) ->
@@ -1058,8 +1035,9 @@ setScope : Emit -> String -> Unit
 setScope e s = e.curModule := s
 
 -- Run `act` attributed to `program` and restore the demanding scope afterwards.
--- The two callers are the demand-emitted WHOLE-PROGRAM entities — a dispatcher
--- and an interface default — each emitted once, from inside whichever module's
+-- The callers are the demand-emitted WHOLE-PROGRAM entities — method-table slot
+-- wrappers, super-count globals, the none-discriminant cell — each emitted once,
+-- from inside whichever module's
 -- body first needs it.  Drawing their gensyms from that module's counter would
 -- make one module's ids depend on another module's demand order, which is the
 -- coupling #2726 exists to remove.
@@ -1307,7 +1285,7 @@ installSigMap : Emit -> List (String, FnSig) -> Unit
 installSigMap e t = e.sigMap := Some (omFromPairs (reverseL t) omEmpty)
 
 -- The defined arity of a callee reached outside an application (a value-position
--- occurrence, a dispatch arm), read from the program as `core_ir_lower.stampCallModes`
+-- occurrence, a dictionary-routed call), read from the program as `core_ir_lower.stampCallModes`
 -- reads it for an application.
 definedArity : Emit -> CExpr -> Option Int
 definedArity e hd = definedArityOf e.arities omEmpty hd
@@ -1363,13 +1341,12 @@ isCtor e name = isSome (declaredCtorArity e.constructorFacts name)
 -- the program's CImplEntry list (set once in emitProgram).  A CMethod site reads
 -- it two ways: `implFor` resolves an RKey-narrowed route to the ONE concrete impl
 -- it names (a direct call to that impl's lifted fn); `implsOf` returns every
--- tagged impl of a method (the runtime RDict/RDictFwd dispatch-switch arms).
+-- tagged impl of a method (the candidates a call site's route narrows).
 -- ── impl INDEX by method name (perf #990 — the LLVM twin of #382/#985's wasm scan) ─
 -- Every per-site dispatch scan below reads the WHOLE flat `implEntries` list and FIRST
 -- filters it by the interface METHOD name: `implsOf`/`filterTagged`.  The LLVM
--- emitter resolves an RKey call site directly
--- (`emitMethod`'s `implFor` per site) and outlines one dispatcher per
--- method, so on dispatch-heavy code (many interfaces × many sites) each per-site scan is
+-- emitter resolves each RKey call site directly (`implForSite`, once per site), so
+-- on dispatch-heavy code (many interfaces × many sites) each per-site scan is
 -- O(impls) ⇒ O(sites·impls) = O(N²) `emit`-stage work (measured `emit` op-ratio ~3.77×/
 -- doubling; #986/#990).  Grouping the entries by method name ONCE — ORIGINAL ORDER
 -- preserved in each bucket — makes every one of those scans O(bucket): restricting a
@@ -1419,8 +1396,8 @@ methodEntries e method = match !e.implsByMethod
 -- inherited default's per-instance entry — each is a dispatch target.
 -- #126: a method's entries can carry literal duplicates (same tag, same key,
 -- same iface — e.g. one impl reachable via >1 re-export path), which
--- `filterTagged` alone does not collapse; every duplicate widens the linear
--- `icmp` dispatch chain `emitDispatchChain` builds from this list. Dedup
+-- `filterTagged` alone does not collapse; every duplicate is one more candidate
+-- for `implForSite`'s scan of this list. Dedup
 -- mirrors `ifaceTags`'s `dedupS` (reverse, keeps-FIRST dedup, reverse — so
 -- the SURVIVING occurrence is the LAST one in program order, same contract).
 implsOf : Emit -> String -> List CImplEntry
@@ -1431,7 +1408,7 @@ dedupImplEntries : List CImplEntry -> List CImplEntry
 dedupImplEntries xs = reverseL (dedupBy implEntryDedupKey (reverseL xs))
 
 -- injective per #242 (`lenKey`): (tag, key, iface) is exactly the routing
--- identity a dispatch arm carries, so two entries collide here only when
+-- identity an RKey route names, so two entries collide here only when
 -- they are genuinely the same impl.
 implEntryDedupKey : CImplEntry -> String
 implEntryDedupKey (CImplEntry _ _ _ (CImplTagged tag key iface _ _ _ _)) =
@@ -1452,22 +1429,19 @@ narrowImplsByIface "" impls = impls
 narrowImplsByIface iface impls =
   filterList (ent => implEntryIfaceWord ent == iface) impls
 
--- #1852: keep only the candidates whose OWN declared arity is the arity this
--- dispatcher was minted at.  The shared `@mdk_disp_<method>_<nmw>_<nargs>`
--- dispatcher is keyed by the BARE method name, so when two unrelated interfaces
--- declare the same-spelled method at DIFFERENT arity on the SAME receiver head
--- (`impl IA Int` with `szK : a -> Int`, `impl IZ Int` with `szK : b -> Int -> Int`)
--- both entries stamp the bare route word `"Int"` and both arms carry that same
--- disjunct.  Whichever the loader saw first then won every dispatcher regardless of
--- arity: the arity-2 dispatcher called the arity-1 impl, `inttoptr`'d its Int result
--- as a closure and applied it — a segfault on a check-green program, decided by
--- import order (#1852).
+-- #1852: keep only the candidates whose OWN declared arity is the arity the call
+-- site was resolved at.  Two unrelated interfaces may declare the same-spelled
+-- method at DIFFERENT arity on the SAME receiver head
+-- (`impl IA Int` with `szK : a -> Int`, `impl IZ Int` with `szK : b -> Int -> Int`);
+-- both entries stamp the bare route word `"Int"`, so the route word alone cannot
+-- tell them apart.
 --
 -- The occurrence's carried site arity is independent of the number of supplied
 -- arguments.  Compare it with each entry's interface DECLARATION arity; the
 -- entry's own parameter count remains the saturation ruler after the tag selects
 -- that entry.  No match stays empty because the occurrence scalar is
--- authoritative and restoring the whole bare-name list would re-admit the bug.
+-- authoritative: restoring the whole bare-name list lets the first-loaded entry
+-- win at every site.
 narrowImplsByArity : Emit -> String -> List CImplEntry -> Int -> List CImplEntry
 narrowImplsByArity _ _ impls siteArity =
   filterList (ent => implEntryDeclaredArity ent == siteArity) impls
@@ -7263,8 +7237,8 @@ argDecls (x :: rest) = "i64 \{x}, \{argDecls rest}"
 -- to that impl's lifted `@mdk_impl_<tag>_<method>`, with NO runtime tag inspection.
 -- The self-host compiler dispatches return-position via RKey (archive/design/COMPILER-PORT-LOG.md),
 -- so RKey alone covers the bootstrap.  RDict/RDictFwd read a named dict PARAMETER
--- at run time, so they lower to an if-chain switching on the dict's head tag over
--- the method's impls (corpus completeness — the dict-passing fixtures).  This
+-- at run time, so they lower to a call through the dictionary's slot for the method
+-- (corpus completeness — the dict-passing fixtures).  This
 -- mirrors core_ir_eval's `methodAtNarrow`/`applyDicts`/`narrowMethod` one-to-one,
 -- resolving the same routes in emitted control flow instead of walking VMulti
 -- values.  RNone (D3a: a type-variable arg-position site the front end left
@@ -7275,38 +7249,23 @@ argDecls (x :: rest) = "i64 \{x}, \{argDecls rest}"
 --   (j) DICTS (GAP 1, Option A — BOXED witness) — a dict witness is a POINTER to a
 --       heap cell `[ i64 head_tag | i64 reqdict_0 | … ]` (via @mdk_alloc, the same
 --       boxed-cell shape ADT ctors use): field 0 = `hashName(impl-head-tag)` (the
---       djb2 used for the `icmp eq` dispatch test), fields 1..n = the RECURSIVELY-
---       built witness words for the impl's per-instance `requires` dicts.  RNone ⇒ 0
+--       header word; LLVM dispatch does not compare it), then the supers, slots and
+--       per-instance `requires` words of the method table (the section below).  RNone ⇒ 0
 --       (no cell).  The rep is UNIFORM: a one-level dict (`RKey k []`) is a 1-word
 --       cell `[ hashName k ]`; a two-level dict (`RKey k [RKey k2 …]`) nests another
 --       cell pointer in field 1.  Consumption: the RKey direct-call path forwards the
---       boxed pointer as the impl fn's leading dict param; the RDict dispatch chain
---       (emitDispatchChain) loads the head tag from field 0 for the `icmp` and
---       prepends fields 1..n as the matched impl's leading element-dict args.
---       (Previously the witness was a flat i64 that dropped nested reqs and panicked
---       on a non-empty set — the GAP-1 SIGSEGV `medaka build` hit on `[[Int]]`.)
+--       boxed pointer as the impl fn's leading dict param; a dictionary-routed call
+--       reads the slot by index and passes the cell on.
 --   (k) IMPL FUNCTIONS — each tagged impl method lowers to a top-level
 --       `@mdk_impl_<tag>_<method>(params…)` (lambda-lift convention of emitFn).  A
 --       nullary return-position impl (`def`/`zero`/`empty`) is a zero-arg function
 --       the use site CALLs for its value; a parameterized impl takes its params.
 --   (l) DISPATCH — RKey ⇒ a direct call (impl chosen at compile time).  RDict/
---       RDictFwd ⇒ a CALL to the method's SHARED dispatcher
---       `@mdk_disp_<method>_<nMeth>_<nArgs>(%dict, %mw…, %arg…)`.  ⚠️ THE IF-CHAIN IS
---       NOT AT THE SITE — it lives in that dispatcher (issue #118: it used to be
---       inlined at every site, which made emitted IR grow as `Σ over sites of
---       (#impls of that site's method)`; 107 sites shared just 9 distinct chains on a
---       9-line fixture).  INSIDE the dispatcher the chain is unchanged: compare the
---       dict witness word to each impl's hashName tag; an exhausted chain is
---       `unreachable` (the typechecker proves the dict names a real impl).
---       Debugging a dispatch miscompile? The arm you want is in `@mdk_disp_*`.
---
---       Why one dispatcher can serve every site of a method: the chain body is a pure
---       function of the method (and, when two interfaces declare it, the interface —
---       `dispMethodWord`), the method-level dict count, and the arg count — all baked
---       into the symbol — plus program-global tables (`implsOf`, reading `e.implEntries`,
---       which is
---       written ONCE at Emit construction and never mutated).  So the impl set cannot
---       grow between the site that mints a dispatcher and any later site.
+--       RDictFwd ⇒ `emitSlotCall`: load the method's slot from the dictionary and call
+--       it with the dictionary, the method-level dict words and the args.  The slot
+--       names no impl; the instance's wrapper, emitted per instance slot, calls the
+--       impl define.  The slot's index is the method's position among its interface's
+--       slots, after the superinterface dicts.
 
 -- a method occurrence.  `argOps` are the already-emitted real-argument words (empty
 -- for a bare nullary method like `def`).  methRoutes/implRoutes apply method-/
@@ -7434,7 +7393,7 @@ emitMethod e env name _ _ (RLocal sym dicts) _implRoutes _methRoutes argOps mode
 -- Gap #50 (value position) — a bare method occurrence
 -- `CMethod name arity route ..` used
 -- as a FIRST-CLASS VALUE (passed to a HOF, e.g. `applyOp max 3 7`): there are no
--- applied args, so the saturated dispatch chain that `emitMethod .. []` would emit
+-- applied args, so the saturated call that `emitMethod .. []` would emit
 -- runs the impl/default with ZERO operands (garbage), and the result is then handed
 -- to the HOF as a closure word and INDIRECTLY called → crash.  Instead eta-wrap the
 -- method into a real closure value: a lifted `@mdk_methval_<name>_N(%clos, %arg…)`
@@ -7689,8 +7648,8 @@ emitCallMode e sym argOps (CallOver surplus) resTy =
   emitOverApp e sym argOps (lengthS argOps - surplus) resTy
 emitCallMode e sym argOps _ resTy = emitImplCall e sym argOps resTy
 
--- A call of define `sym` whose parameter count [arity] is known only here: a
--- dispatch arm's selected impl, which no application stamp can name.  Its mode is
+-- A call of define `sym` whose parameter count [arity] is known only here: the impl a dictionary slot or an RKey site selects, which no
+-- application stamp can name.  Its mode is
 -- the one `core_ir_lower.callModeFor` gives every stamped application.
 emitArityCall : Emit -> String -> List String -> Int -> LTy -> (String, LTy)
 emitArityCall e sym argOps arity resTy =
@@ -7889,9 +7848,9 @@ emitMethodDispatch e env name iface siteArity dict methRoutes argOps =
       -- return-position superclass constraint (`build : Sub a => Int -> a; build n = mk n`,
       -- where `mk`'s `Sup` dict stays ungrounded → the caller passes a NULL dict), would
       -- dereference null → the run≠build SIGTRAP.  Concrete-grounded callers (a real dict)
-      -- are unaffected: the direct call is the same impl the tag-dispatch chain would have
-      -- selected.
-      -- F10: saturate against the impl's own parameters (see emitDispatchArmBody).
+      -- are unaffected: the direct call is the same impl the dictionary's slot would
+      -- select.
+      -- F10: saturate against the impl's own parameters (see `emitArityCall`).
       emitArityCall
         e
         (implEntryFnName e name ent)
@@ -7947,10 +7906,9 @@ soleImplDirectSite e name iface siteArity =
 -- mirrors MEDAKA_RT_OBJ one level up: compile the prelude ONCE to `prelude.o`, and
 -- per program emit only the program's own code plus `declare`s for what it uses.
 --
--- This was IMPOSSIBLE until the dispatch chains were outlined (step 2, above): a
--- program's own `impl` decls would be INLINED into prelude function bodies, so no
--- one object could serve two programs.  With the chains outlined into shared
--- `@mdk_disp_*` dispatchers, prelude bodies are program-independent — verified by
+-- This is possible because a dictionary-routed call names its slot, not the impl: a
+-- program's own `impl` decls are never INLINED into prelude function bodies, so one
+-- object serves two programs.  Prelude bodies are program-independent — verified by
 -- emitting two programs differing only by an `impl Eq Color` and comparing all 249
 -- shared prelude defines: ZERO structural differences (only the module-global
 -- gensym counter shifts the `@mdk_lamN`/`@mdk_etac_*_N` names).
@@ -7964,7 +7922,7 @@ soleImplDirectSite e name iface siteArity =
 --   1 PRELUDE (`medaka build --emit-prelude-obj <path>`).  Emit core.mdk ALONE, as
 --             a library: no `@mdk_program_main`, `@mdk_g_*` globals declared
 --             `external` (the program half defines and initialises them), and the
---             per-program symbol family `@mdk_disp_*` DECLARED, not defined.  (An
+--             per-program slot wrappers DECLARED, not defined.  (An
 --             inherited default's `@mdk_default_*` body belongs to the instance
 --             that inherits it, so a prelude instance's is ordinary prelude code
 --             and a program instance's is program code.)
@@ -7972,12 +7930,12 @@ soleImplDirectSite e name iface siteArity =
 --   2 PROGRAM (a build with MEDAKA_PRELUDE_OBJ set).  Emit the whole program, but
 --             replace every PRELUDE define's BODY with a `declare` (emitAsDeclares).
 --             The prelude's bodies are still WALKED — that is what registers the
---             dispatchers `prelude.o` declares — their text is just dropped.
+--             wrappers `prelude.o` declares — their text is just dropped.
 --
 -- ⚠️ DCE MUST BE OFF in modes 1 and 2 (the emit driver does this).  Source DCE is
 -- per-program, so an on-DCE prelude.o would ship only what the STUB reached; and an
 -- on-DCE program half would walk fewer prelude bodies than prelude.o was built from
--- and so fail to define a dispatcher it declares.  The LINKER's `--gc-sections`
+-- and so fail to define a wrapper it declares.  The LINKER's `--gc-sections`
 -- (already in the link line, issue #120) recovers the size, from the real
 -- relocation graph rather than source reachability.
 emitHalfWhole : Int
@@ -8055,7 +8013,7 @@ hasPreludeImpl e method key = isSome (preludeImplSym e method key)
 -- only a `declare` per define it produced.
 --
 -- Running it and discarding the output is the whole point, not waste: emitting a
--- prelude body is what REGISTERS the `@mdk_disp_*` dispatchers that `prelude.o`
+-- prelude body is what REGISTERS the slot wrappers that `prelude.o`
 -- only declares, so the program half defines exactly the set the prelude half
 -- demanded.  The lifted lambdas/strings/
 -- dict-cells it also produces land (dead) in `e.lams` and are dropped by
@@ -8376,10 +8334,10 @@ implReqCount _e _name ent = leadingDictParams (implPats ent)
 -- read a dictionary pointer where its value belonged — SIGSEGV, or a silent wrong
 -- answer when nothing reads the mis-bound word.
 -- This is the SAME skew, from the SAME cause, that eval already closes in
--- `implDictRoutes` (eval/eval.mdk, #413) and that the RUNTIME dispatch chain already
--- closes in `emitDispatchArmBody`'s `cellCount` — both by sizing the call from the
+-- `implDictRoutes` (eval/eval.mdk, #413) and that the RUNTIME slot wrapper already
+-- closes in `emitSlotWrapper`'s call (`emitArityCall`) — both by sizing the call from the
 -- DEFINITION.  #413's comment claims "emit never had this bug"; that is true of the
--- dispatch chain and false of this static RKey path, which is #1648.  Same formula, so
+-- slot wrapper and false of this static RKey path, which is #1648.  Same formula, so
 -- the three now agree by construction: `implReqCount` counts the entry's own leading
 -- `$dict_*` patterns DIRECTLY (`leadingDictParams (implPats ent)`) — the define's own
 -- leading parameters — of which the first `lengthS methRoutes` are the METHOD-level dicts,
@@ -8577,7 +8535,7 @@ emitArgDispatchChain e tagReg (g :: rest) argOps colliding slot endL =
       emitAmbiguousArm e
     else
       -- F10: saturate against this group's own declared arity, the same answer the
-      -- single-group site above already takes (see emitDispatchArmBody).
+      -- single-group site above already takes (see `emitArityCall`).
       let (rv, _) = emitArityCall e (groupFnName g) argOps (groupArity g) LTInt
       emit e "  store i64 \{rv}, ptr \{slot}"
       emit e ("  br label %" ++ endL)
@@ -8754,11 +8712,10 @@ dictWordsOf e env rs = map (dictWordOfRoute e env) rs
 -- structured `VDict key reqs supers` and the leading dict-param order dict_pass
 -- binds — methRoutes then implRoutes, here the impl's own requires).  Supers come
 -- first so that a projection indexes the same field whichever instance the
--- dictionary is; a dispatch arm skips them by its interface's super count.  This makes the rep UNIFORM: a one-level dict (`RKey k []`) is a
+-- dictionary is; a slot load skips them by its interface's super count.  This makes the rep UNIFORM: a one-level dict (`RKey k []`) is a
 -- pointer to a 1-word cell `[ hashName k ]`; a two-level dict nests another cell
--- pointer in field 1.  Consumption (emitDispatchChain / the RKey direct-call path)
--- loads field 0 for the icmp and prepends fields 1..n as the matched impl's leading
--- element-dict args.  RDict/RDictFwd forward the enclosing dict parameter's word
+-- pointer in field 1.  Consumption (a slot load / the RKey direct-call path): a slot load indexes
+-- the cell's supers and slots.  RDict/RDictFwd forward the enclosing dict parameter's word
 -- (already a boxed-cell pointer); RNone is the 0 dict (no cell).
 dictWordOfRoute : Emit -> OrdMap (String, LTy) -> Route -> String
 dictWordOfRoute e env (RKey key reqs sups) =

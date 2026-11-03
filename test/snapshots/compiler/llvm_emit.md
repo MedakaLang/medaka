@@ -1,5 +1,5 @@
 # META
-source_lines=15312
+source_lines=15201
 stages=DESUGAR,MARK
 # SOURCE
 import ir.constructor_facts.{
@@ -105,12 +105,10 @@ import backend.trmc_analysis.{TrmcVerdicts, isTrmcFn, isTrmcImpl}
 --     each carrying the typechecker's resolved `Route`s.  An `RKey` route is
 --     STATICALLY resolved (the concrete impl is known at compile time) → a DIRECT
 --     call to that impl's lifted `@mdk_impl_<tag>_<method>`; `RDict`/`RDictFwd` read
---     a runtime dict-parameter witness word → a CALL to the method's SHARED
---     dispatcher `@mdk_disp_<method>_<nMeth>_<nArgs>`, which holds the impl if-chain
---     (issue #118 — the chain is OUTLINED, not inlined at the site; look for it
---     there, not here).  Mirrors core_ir_eval's methodAtNarrow/applyDicts/
---     narrowMethod.  See the "typeclass dispatch" section below for the
---     (j)/(k)/(l) rep notes.
+--     a runtime dict-parameter witness word → a load of the method's slot from
+--     that dictionary and a call through it (the method-table section below).
+--     Mirrors core_ir_eval's methodAtNarrow/applyDicts/narrowMethod.  See the
+--     "typeclass dispatch" section below for the (j)/(k)/(l) rep notes.
 --   • slice 8 — ARRAYS + RANGES.  CArray allocates a length-prefixed boxed cell
 --     (layout: [ i64 raw_len | elem0 | elem1 … ], reusing the slice-3 cell shape
 --     but with the header word = raw element count rather than a constructor hash).
@@ -344,6 +342,11 @@ import types.route_key.{numIntWord}
 import backend.impl_groups.{ImplClauseGroup(..)}
 import backend.emit_plan.{
   EmitPlan(..),
+  MethodSlot(..),
+  MethodTables(..),
+  InstanceTable(..),
+  SlotCallee(..),
+  interfaceSlots,
   lookupMethodResult,
   planEntryMainIsUnit,
   planEntryMainIsFloat,
@@ -785,9 +788,6 @@ data EmitInputData = EmitInputData {
   -- to it byte-identical to the symbol that prelude.o actually exports.
   preludeImplIndex : OrdMap (OrdMap String),
   srcName : String,
-  -- the method names two or more interfaces declare (by declaration word), whose
-  -- dispatchers therefore carry the interface in their symbol (`dispMethodWord`)
-  sharedMethodNames : OrdMap Unit,
   -- the complete loaded runtime declaration domain
   runtimeExterns : RuntimeExternDomain,
   -- the top-level functions `@noinline` marks (`withNoInlineFns`)
@@ -808,14 +808,13 @@ makeEmitInput : ManifestRequirement ->
   List (String, String, String) ->
   String ->
   EmitInput
-makeEmitInput requirement domain methodIfaces ctorFieldTypes emitHalf preludeBinds preludeImpls srcName = EmitInputData {
+makeEmitInput requirement domain _methodIfaces ctorFieldTypes emitHalf preludeBinds preludeImpls srcName = EmitInputData {
   manifestRequirement = requirement,
   ctorFieldIndex = omFromPairs (reverseL ctorFieldTypes) omEmpty,
   emitHalf = emitHalf,
   preludeBinds = preludeBinds,
   preludeImplIndex = preludeImplIndexOf preludeImpls omEmpty,
   srcName = srcName,
-  sharedMethodNames = sharedMethodNamesOf methodIfaces omEmpty omEmpty,
   runtimeExterns = domain,
   noInlineFns = omEmpty,
 }
@@ -835,23 +834,6 @@ fnAttrs : Emit -> String -> String
 fnAttrs e name = match omLookup name e.input.noInlineFns
   Some _ => " noinline"
   None => ""
-
--- The methods declared by more than one interface word, from `methodIfaceTable` rows
--- (one per declared interface method).  [firstWord] remembers each method's first
--- declaring word.
-sharedMethodNamesOf : List (String, (String, String, Int)) ->
-  OrdMap String ->
-  OrdMap Unit ->
-  OrdMap Unit
-sharedMethodNamesOf [] _ shared = shared
-sharedMethodNamesOf ((m, (_, word, _)) :: rest) firstWord shared =
-  match omLookup m firstWord
-    None => sharedMethodNamesOf rest (omInsert m word firstWord) shared
-    Some w =>
-      if w == word then
-        sharedMethodNamesOf rest firstWord shared
-      else
-        sharedMethodNamesOf rest firstWord (omInsert m () shared)
 
 preludeImplIndexOf : List (String, String, String) ->
   OrdMap (OrdMap String) ->
@@ -928,7 +910,17 @@ data Emit = Emit {
   implsByMethod : Ref (Option (OrdMap (List CImplEntry))),
   implMethodSet : Ref (Option (OrdMap Unit)),
   typeIdMap : Ref (Option (OrdMap Int)),
-  dispCache : Ref (List String),
+  -- the program's method tables (`EmitPlan.methodTables`)
+  methodTables : MethodTables,
+  -- every impl group, keyed by its position in `EmitPlan.implGroups`
+  implGroupAt : Ref (OrdMap ImplGroup),
+  -- the slot closures emitted so far, keyed by instance key and slot index
+  slotCache : Ref (OrdMap String),
+  -- while an inherited default's body is emitted: its receiver parameter and its
+  -- interface's super and slot counts (`receiverIndex`)
+  defaultReceiver : Ref (Option (String, Int, Int)),
+  -- the `@mdk.supers.*` constants written so far (`superCountGlobal`)
+  superCountGlobals : Ref (OrdMap Unit),
   -- constant dict / closure cells already emitted, keyed by `constCellKey`
   -- (scope word + initializer text), so a cell is deduped only WITHIN the scope
   -- that minted it — see `constCellKey`.
@@ -1047,8 +1039,9 @@ setScope : Emit -> String -> Unit
 setScope e s = e.curModule := s
 
 -- Run `act` attributed to `program` and restore the demanding scope afterwards.
--- The two callers are the demand-emitted WHOLE-PROGRAM entities — a dispatcher
--- and an interface default — each emitted once, from inside whichever module's
+-- The callers are the demand-emitted WHOLE-PROGRAM entities — method-table slot
+-- wrappers, super-count globals, the none-discriminant cell — each emitted once,
+-- from inside whichever module's
 -- body first needs it.  Drawing their gensyms from that module's counter would
 -- make one module's ids depend on another module's demand order, which is the
 -- coupling #2726 exists to remove.
@@ -1296,7 +1289,7 @@ installSigMap : Emit -> List (String, FnSig) -> Unit
 installSigMap e t = e.sigMap := Some (omFromPairs (reverseL t) omEmpty)
 
 -- The defined arity of a callee reached outside an application (a value-position
--- occurrence, a dispatch arm), read from the program as `core_ir_lower.stampCallModes`
+-- occurrence, a dictionary-routed call), read from the program as `core_ir_lower.stampCallModes`
 -- reads it for an application.
 definedArity : Emit -> CExpr -> Option Int
 definedArity e hd = definedArityOf e.arities omEmpty hd
@@ -1352,13 +1345,12 @@ isCtor e name = isSome (declaredCtorArity e.constructorFacts name)
 -- the program's CImplEntry list (set once in emitProgram).  A CMethod site reads
 -- it two ways: `implFor` resolves an RKey-narrowed route to the ONE concrete impl
 -- it names (a direct call to that impl's lifted fn); `implsOf` returns every
--- tagged impl of a method (the runtime RDict/RDictFwd dispatch-switch arms).
+-- tagged impl of a method (the candidates a call site's route narrows).
 -- ── impl INDEX by method name (perf #990 — the LLVM twin of #382/#985's wasm scan) ─
 -- Every per-site dispatch scan below reads the WHOLE flat `implEntries` list and FIRST
 -- filters it by the interface METHOD name: `implsOf`/`filterTagged`.  The LLVM
--- emitter resolves an RKey call site directly
--- (`emitMethod`'s `implFor` per site) and outlines one dispatcher per
--- method, so on dispatch-heavy code (many interfaces × many sites) each per-site scan is
+-- emitter resolves each RKey call site directly (`implForSite`, once per site), so
+-- on dispatch-heavy code (many interfaces × many sites) each per-site scan is
 -- O(impls) ⇒ O(sites·impls) = O(N²) `emit`-stage work (measured `emit` op-ratio ~3.77×/
 -- doubling; #986/#990).  Grouping the entries by method name ONCE — ORIGINAL ORDER
 -- preserved in each bucket — makes every one of those scans O(bucket): restricting a
@@ -1408,8 +1400,8 @@ methodEntries e method = match !e.implsByMethod
 -- inherited default's per-instance entry — each is a dispatch target.
 -- #126: a method's entries can carry literal duplicates (same tag, same key,
 -- same iface — e.g. one impl reachable via >1 re-export path), which
--- `filterTagged` alone does not collapse; every duplicate widens the linear
--- `icmp` dispatch chain `emitDispatchChain` builds from this list. Dedup
+-- `filterTagged` alone does not collapse; every duplicate is one more candidate
+-- for `implForSite`'s scan of this list. Dedup
 -- mirrors `ifaceTags`'s `dedupS` (reverse, keeps-FIRST dedup, reverse — so
 -- the SURVIVING occurrence is the LAST one in program order, same contract).
 implsOf : Emit -> String -> List CImplEntry
@@ -1420,7 +1412,7 @@ dedupImplEntries : List CImplEntry -> List CImplEntry
 dedupImplEntries xs = reverseL (dedupBy implEntryDedupKey (reverseL xs))
 
 -- injective per #242 (`lenKey`): (tag, key, iface) is exactly the routing
--- identity a dispatch arm carries, so two entries collide here only when
+-- identity an RKey route names, so two entries collide here only when
 -- they are genuinely the same impl.
 implEntryDedupKey : CImplEntry -> String
 implEntryDedupKey (CImplEntry _ _ _ (CImplTagged tag key iface _ _ _ _)) =
@@ -1441,22 +1433,19 @@ narrowImplsByIface "" impls = impls
 narrowImplsByIface iface impls =
   filterList (ent => implEntryIfaceWord ent == iface) impls
 
--- #1852: keep only the candidates whose OWN declared arity is the arity this
--- dispatcher was minted at.  The shared `@mdk_disp_<method>_<nmw>_<nargs>`
--- dispatcher is keyed by the BARE method name, so when two unrelated interfaces
--- declare the same-spelled method at DIFFERENT arity on the SAME receiver head
--- (`impl IA Int` with `szK : a -> Int`, `impl IZ Int` with `szK : b -> Int -> Int`)
--- both entries stamp the bare route word `"Int"` and both arms carry that same
--- disjunct.  Whichever the loader saw first then won every dispatcher regardless of
--- arity: the arity-2 dispatcher called the arity-1 impl, `inttoptr`'d its Int result
--- as a closure and applied it — a segfault on a check-green program, decided by
--- import order (#1852).
+-- #1852: keep only the candidates whose OWN declared arity is the arity the call
+-- site was resolved at.  Two unrelated interfaces may declare the same-spelled
+-- method at DIFFERENT arity on the SAME receiver head
+-- (`impl IA Int` with `szK : a -> Int`, `impl IZ Int` with `szK : b -> Int -> Int`);
+-- both entries stamp the bare route word `"Int"`, so the route word alone cannot
+-- tell them apart.
 --
 -- The occurrence's carried site arity is independent of the number of supplied
 -- arguments.  Compare it with each entry's interface DECLARATION arity; the
 -- entry's own parameter count remains the saturation ruler after the tag selects
 -- that entry.  No match stays empty because the occurrence scalar is
--- authoritative and restoring the whole bare-name list would re-admit the bug.
+-- authoritative: restoring the whole bare-name list lets the first-loaded entry
+-- win at every site.
 narrowImplsByArity : Emit -> String -> List CImplEntry -> Int -> List CImplEntry
 narrowImplsByArity _ _ impls siteArity =
   filterList (ent => implEntryDeclaredArity ent == siteArity) impls
@@ -1637,14 +1626,6 @@ implEntryPositions (CImplEntry _ _ _ (CImplTagged _ _ _ _ positions _ _)) =
   positions
 implEntryPositions (CImplEntry _ _ _ (CImplDefault _ _ _ _ positions _ _)) =
   positions
-
--- #747: is this a nullary/return-position/dictionary-free impl — the exact shape
--- core_ir_lower.memoKeys treats as a per-instance CAF (positions == [] && pats == [],
--- mirroring eval's memoThunk gate)?  A dispatch arm for such an impl, reached with no
--- method-level or value args, is memoised via its `$memo_<symTag>_<method>` CAF.
-implEntryMemoisable : CImplEntry -> Bool
-implEntryMemoisable ent =
-  isEmptyL (implEntryPositions ent) && isEmptyL (implPats ent)
 
 implEntryTag : CImplEntry -> String
 implEntryTag (CImplEntry _ _ _ (CImplTagged tag _ _ _ _ _ _)) = tag
@@ -7260,8 +7241,8 @@ argDecls (x :: rest) = "i64 \{x}, \{argDecls rest}"
 -- to that impl's lifted `@mdk_impl_<tag>_<method>`, with NO runtime tag inspection.
 -- The self-host compiler dispatches return-position via RKey (archive/design/COMPILER-PORT-LOG.md),
 -- so RKey alone covers the bootstrap.  RDict/RDictFwd read a named dict PARAMETER
--- at run time, so they lower to an if-chain switching on the dict's head tag over
--- the method's impls (corpus completeness — the dict-passing fixtures).  This
+-- at run time, so they lower to a call through the dictionary's slot for the method
+-- (corpus completeness — the dict-passing fixtures).  This
 -- mirrors core_ir_eval's `methodAtNarrow`/`applyDicts`/`narrowMethod` one-to-one,
 -- resolving the same routes in emitted control flow instead of walking VMulti
 -- values.  RNone (D3a: a type-variable arg-position site the front end left
@@ -7272,38 +7253,23 @@ argDecls (x :: rest) = "i64 \{x}, \{argDecls rest}"
 --   (j) DICTS (GAP 1, Option A — BOXED witness) — a dict witness is a POINTER to a
 --       heap cell `[ i64 head_tag | i64 reqdict_0 | … ]` (via @mdk_alloc, the same
 --       boxed-cell shape ADT ctors use): field 0 = `hashName(impl-head-tag)` (the
---       djb2 used for the `icmp eq` dispatch test), fields 1..n = the RECURSIVELY-
---       built witness words for the impl's per-instance `requires` dicts.  RNone ⇒ 0
+--       header word; LLVM dispatch does not compare it), then the supers, slots and
+--       per-instance `requires` words of the method table (the section below).  RNone ⇒ 0
 --       (no cell).  The rep is UNIFORM: a one-level dict (`RKey k []`) is a 1-word
 --       cell `[ hashName k ]`; a two-level dict (`RKey k [RKey k2 …]`) nests another
 --       cell pointer in field 1.  Consumption: the RKey direct-call path forwards the
---       boxed pointer as the impl fn's leading dict param; the RDict dispatch chain
---       (emitDispatchChain) loads the head tag from field 0 for the `icmp` and
---       prepends fields 1..n as the matched impl's leading element-dict args.
---       (Previously the witness was a flat i64 that dropped nested reqs and panicked
---       on a non-empty set — the GAP-1 SIGSEGV `medaka build` hit on `[[Int]]`.)
+--       boxed pointer as the impl fn's leading dict param; a dictionary-routed call
+--       reads the slot by index and passes the cell on.
 --   (k) IMPL FUNCTIONS — each tagged impl method lowers to a top-level
 --       `@mdk_impl_<tag>_<method>(params…)` (lambda-lift convention of emitFn).  A
 --       nullary return-position impl (`def`/`zero`/`empty`) is a zero-arg function
 --       the use site CALLs for its value; a parameterized impl takes its params.
 --   (l) DISPATCH — RKey ⇒ a direct call (impl chosen at compile time).  RDict/
---       RDictFwd ⇒ a CALL to the method's SHARED dispatcher
---       `@mdk_disp_<method>_<nMeth>_<nArgs>(%dict, %mw…, %arg…)`.  ⚠️ THE IF-CHAIN IS
---       NOT AT THE SITE — it lives in that dispatcher (issue #118: it used to be
---       inlined at every site, which made emitted IR grow as `Σ over sites of
---       (#impls of that site's method)`; 107 sites shared just 9 distinct chains on a
---       9-line fixture).  INSIDE the dispatcher the chain is unchanged: compare the
---       dict witness word to each impl's hashName tag; an exhausted chain is
---       `unreachable` (the typechecker proves the dict names a real impl).
---       Debugging a dispatch miscompile? The arm you want is in `@mdk_disp_*`.
---
---       Why one dispatcher can serve every site of a method: the chain body is a pure
---       function of the method (and, when two interfaces declare it, the interface —
---       `dispMethodWord`), the method-level dict count, and the arg count — all baked
---       into the symbol — plus program-global tables (`implsOf`, reading `e.implEntries`,
---       which is
---       written ONCE at Emit construction and never mutated).  So the impl set cannot
---       grow between the site that mints a dispatcher and any later site.
+--       RDictFwd ⇒ `emitSlotCall`: load the method's slot from the dictionary and call
+--       it with the dictionary, the method-level dict words and the args.  The slot
+--       names no impl; the instance's wrapper, emitted per instance slot, calls the
+--       impl define.  The slot's index is the method's position among its interface's
+--       slots, after the superinterface dicts.
 
 -- a method occurrence.  `argOps` are the already-emitted real-argument words (empty
 -- for a bare nullary method like `def`).  methRoutes/implRoutes apply method-/
@@ -7431,7 +7397,7 @@ emitMethod e env name _ _ (RLocal sym dicts) _implRoutes _methRoutes argOps mode
 -- Gap #50 (value position) — a bare method occurrence
 -- `CMethod name arity route ..` used
 -- as a FIRST-CLASS VALUE (passed to a HOF, e.g. `applyOp max 3 7`): there are no
--- applied args, so the saturated dispatch chain that `emitMethod .. []` would emit
+-- applied args, so the saturated call that `emitMethod .. []` would emit
 -- runs the impl/default with ZERO operands (garbage), and the result is then handed
 -- to the HOF as a closure word and INDIRECTLY called → crash.  Instead eta-wrap the
 -- method into a real closure value: a lifted `@mdk_methval_<name>_N(%clos, %arg…)`
@@ -7686,8 +7652,8 @@ emitCallMode e sym argOps (CallOver surplus) resTy =
   emitOverApp e sym argOps (lengthS argOps - surplus) resTy
 emitCallMode e sym argOps _ resTy = emitImplCall e sym argOps resTy
 
--- A call of define `sym` whose parameter count [arity] is known only here: a
--- dispatch arm's selected impl, which no application stamp can name.  Its mode is
+-- A call of define `sym` whose parameter count [arity] is known only here: the impl a dictionary slot or an RKey site selects, which no
+-- application stamp can name.  Its mode is
 -- the one `core_ir_lower.callModeFor` gives every stamped application.
 emitArityCall : Emit -> String -> List String -> Int -> LTy -> (String, LTy)
 emitArityCall e sym argOps arity resTy =
@@ -7864,13 +7830,8 @@ emitPapDefineIndirect e papName supplied remaining =
   bufRef e := saved
 
 -- a runtime method dispatch (RDict/RDictFwd/RProj): the dictionary [dict] denotes
--- — the enclosing function's dict PARAMETER or a super projected out of one (a BOXED
--- dict-witness pointer, GAP 1 Option A) — selects the impl at run time.  Load the head tag from the cell's field 0, then emit an if-chain over
--- the method's tagged impls — compare the head tag to each impl's hashName tag, on
--- a match load the matched impl's nested per-instance dicts from the cell's fields
--- 1..n, PREPEND them to argOps (the impl fn's leading element-dict params), call
--- that impl's lifted fn into a result slot and branch to the end; an exhausted
--- chain is `unreachable`.
+-- (the enclosing function's dict PARAMETER or a super projected out of one) holds
+-- the method's slot closure, which the call loads and calls (`emitSlotCall`).
 emitMethodDispatch : Emit ->
   OrdMap (String, LTy) ->
   String ->
@@ -7891,25 +7852,24 @@ emitMethodDispatch e env name iface siteArity dict methRoutes argOps =
       -- return-position superclass constraint (`build : Sub a => Int -> a; build n = mk n`,
       -- where `mk`'s `Sup` dict stays ungrounded → the caller passes a NULL dict), would
       -- dereference null → the run≠build SIGTRAP.  Concrete-grounded callers (a real dict)
-      -- are unaffected: the direct call is the same impl the tag-dispatch chain would have
-      -- selected.
-      -- F10: saturate against the impl's own parameters (see emitDispatchArmBody).
+      -- are unaffected: the direct call is the same impl the dictionary's slot would
+      -- select.
+      -- F10: saturate against the impl's own parameters (see `emitArityCall`).
       emitArityCall
         e
         (implEntryFnName e name ent)
         argOps
         (implSrcValueArity ent)
         LTInt
-    _ =>
-      emitMethodDispatchChain e env name iface siteArity dict methRoutes argOps
+    _ => emitSlotCall e env name iface dict methRoutes argOps
 
 -- WS-1b: Some impl iff the occurrence's interface has exactly one entry for [name]
 -- AND that entry takes no leading `requires` element-dict params (reqCount 0) — the
 -- case where a direct call needs nothing from the runtime dict.  Every instance that
 -- inherits the method has its own entry (an inherited default's per-instance body),
 -- so "one entry" is "one possible callee".  A multi-entry method, or a sole entry
--- WITH requires (whose element dicts live in the dict cell), still goes through the
--- tag-switching chain (which reads the dict).
+-- WITH requires (whose element dicts live in the dictionary), still loads its slot
+-- from the dictionary.
 soleImplDirect : Emit -> String -> String -> Int -> Option CImplEntry
 soleImplDirect e name iface siteArity = match siteImpls e name iface siteArity
   [ent] => if implReqCount e name ent <= 0 then Some ent else None
@@ -7931,11 +7891,9 @@ siteImpls e name iface siteArity =
 -- adds one (`impl Bimappable MyPair`).  Baking it there would be a silent
 -- miscompile: `prelude.o` would direct-call the wrong impl forever.
 --
--- So under `MEDAKA_PRELUDE_OBJ` every site routes through the shared dispatcher,
--- and the sole-impl shortcut moves INSIDE the dispatcher body (emitDispatcherDefine),
--- which is re-emitted per program from the WHOLE-program impl table.  The
--- null-dict property WS-1b exists for is preserved exactly: that body still makes
--- a direct call and still never loads `%dict` (see emitDispatcherDefine).
+-- So under `MEDAKA_PRELUDE_OBJ` every such site loads its slot from the dictionary,
+-- which reaches whatever impl the program supplies, and a null dictionary traps
+-- loudly at the load (`loadSlot`) instead of being read.
 --
 -- Mode 0 (every ordinary `medaka build`) keeps the direct call at the site.
 soleImplDirectSite : Emit -> String -> String -> Int -> Option CImplEntry
@@ -7952,10 +7910,9 @@ soleImplDirectSite e name iface siteArity =
 -- mirrors MEDAKA_RT_OBJ one level up: compile the prelude ONCE to `prelude.o`, and
 -- per program emit only the program's own code plus `declare`s for what it uses.
 --
--- This was IMPOSSIBLE until the dispatch chains were outlined (step 2, above): a
--- program's own `impl` decls would be INLINED into prelude function bodies, so no
--- one object could serve two programs.  With the chains outlined into shared
--- `@mdk_disp_*` dispatchers, prelude bodies are program-independent — verified by
+-- This is possible because a dictionary-routed call names its slot, not the impl: a
+-- program's own `impl` decls are never INLINED into prelude function bodies, so one
+-- object serves two programs.  Prelude bodies are program-independent — verified by
 -- emitting two programs differing only by an `impl Eq Color` and comparing all 249
 -- shared prelude defines: ZERO structural differences (only the module-global
 -- gensym counter shifts the `@mdk_lamN`/`@mdk_etac_*_N` names).
@@ -7969,7 +7926,7 @@ soleImplDirectSite e name iface siteArity =
 --   1 PRELUDE (`medaka build --emit-prelude-obj <path>`).  Emit core.mdk ALONE, as
 --             a library: no `@mdk_program_main`, `@mdk_g_*` globals declared
 --             `external` (the program half defines and initialises them), and the
---             per-program symbol family `@mdk_disp_*` DECLARED, not defined.  (An
+--             per-program slot wrappers DECLARED, not defined.  (An
 --             inherited default's `@mdk_default_*` body belongs to the instance
 --             that inherits it, so a prelude instance's is ordinary prelude code
 --             and a program instance's is program code.)
@@ -7977,12 +7934,12 @@ soleImplDirectSite e name iface siteArity =
 --   2 PROGRAM (a build with MEDAKA_PRELUDE_OBJ set).  Emit the whole program, but
 --             replace every PRELUDE define's BODY with a `declare` (emitAsDeclares).
 --             The prelude's bodies are still WALKED — that is what registers the
---             dispatchers `prelude.o` declares — their text is just dropped.
+--             wrappers `prelude.o` declares — their text is just dropped.
 --
 -- ⚠️ DCE MUST BE OFF in modes 1 and 2 (the emit driver does this).  Source DCE is
 -- per-program, so an on-DCE prelude.o would ship only what the STUB reached; and an
 -- on-DCE program half would walk fewer prelude bodies than prelude.o was built from
--- and so fail to define a dispatcher it declares.  The LINKER's `--gc-sections`
+-- and so fail to define a wrapper it declares.  The LINKER's `--gc-sections`
 -- (already in the link line, issue #120) recovers the size, from the real
 -- relocation graph rather than source reachability.
 emitHalfWhole : Int
@@ -8060,7 +8017,7 @@ hasPreludeImpl e method key = isSome (preludeImplSym e method key)
 -- only a `declare` per define it produced.
 --
 -- Running it and discarding the output is the whole point, not waste: emitting a
--- prelude body is what REGISTERS the `@mdk_disp_*` dispatchers that `prelude.o`
+-- prelude body is what REGISTERS the slot wrappers that `prelude.o`
 -- only declares, so the program half defines exactly the set the prelude half
 -- demanded.  The lifted lambdas/strings/
 -- dict-cells it also produces land (dead) in `e.lams` and are dropped by
@@ -8091,128 +8048,195 @@ emitDeclares e ((sym, proto) :: rest) =
   emit e ("declare " ++ prototypeText sym proto)
   emitDeclares e rest
 
--- ── issue #118: the dispatch chain is OUTLINED, one per method ──────────────
--- INLINING the whole impl chain at a runtime-dict dispatch site — one `icmp` +
--- branch + call arm per impl of the method, at EVERY site — makes the emitted IR
--- grow as `Σ over sites of (#impls of that site's method)`, and it is the dominant
--- term in a small program's IR: on `test/wasm/fixtures/adt_enum_nullary.mdk` (9 lines
--- of source) there were 107 dispatch sites but only NINE distinct chains between
--- them — 2,123 emitted arms, ~80% of the module's 32,895 lines, to express 9 chains.
---
--- So the chain now lives ONCE, in a shared `@mdk_disp_<method>_<nMeth>_<nArgs>`
--- define, and the site is a single `call`.  The chain BODY is unchanged — the same
--- head-tag `icmp` arms in the same order, the same
--- `unreachable` tail — so every dispatch decision is byte-for-byte the one the inline
--- chain made; only its PLACEMENT moved.
---
--- The dispatcher's parameters are exactly what the inline chain read out of the
--- enclosing define, in that order:
---   %dict   — the dict-witness word (the enclosing fn's dict PARAM; `loadTag`/
---             `loadField` read the cell's head tag and per-instance `requires`).
---   %mwK    — the METHOD-LEVEL constraint dicts.  These are AMBIENT at the CALL site
---             (a `traverse : Thenable m =>` whose `m` is not the dispatch receiver),
---             so they are still resolved from `env` HERE and passed IN — they are not,
---             and never were, in the dict cell.
---   %argK   — the supplied value args.  Each selected arm compares that count with
---             its own definition-side callable arity and emits an exact call, PAP,
---             or over-application as required.
---
--- Both operand counts and the selected declaration arity are baked into the
--- dispatcher's name.  The arity suffix is omitted when it equals nargs to preserve
--- the established prelude ABI.
-emitMethodDispatchChain : Emit ->
+-- ── method-table dispatch ───────────────────────────────────────────────────
+-- A dictionary is `[hdr | super_0 .. | slot_0 .. | req_0 ..]` (`EmitPlan.
+-- methodTables`).  Slot i of an interface is a constant closure over a
+-- per-(instance, method) wrapper, called as `code(clos, dict, mw.., args..)`.  The
+-- wrapper calls the instance's impl define, reading the instance's `requires` out
+-- of `%dict`, or passing `%dict` itself to an inherited default as its receiver.
+-- It takes as many values as that define does, which is fewer than the method
+-- declares for an eta-short clause, so the define runs as soon as the source
+-- application supplies them.  A dictionary-routed call loads the slot and applies
+-- it, so it names no impl and reaches one the program adds.
+
+-- a dictionary-routed call of [name]: load its slot from the dictionary and call
+-- the slot with the dictionary, the method-level dictionaries and the values
+emitSlotCall : Emit ->
   OrdMap (String, LTy) ->
   String ->
   String ->
-  Int ->
   Route ->
   List Route ->
   List String ->
   (String, LTy)
-emitMethodDispatchChain e env name iface siteArity dict methRoutes argOps =
+emitSlotCall e env name iface dict methRoutes argOps =
   let dictPtr = dictWordOfRoute e env dict
   let methWords = dictWordsOf e env methRoutes
-  let nmw = lengthS methWords
-  let nargs = lengthS argOps
-  let fname =
-    dispFnName (dispInterfaceWord e name iface) name nmw nargs siteArity
-  ensureDispatcherEmitted e fname name iface nmw nargs siteArity
-  emitImplCall e fname (dictPtr :: methWords ++ argOps) LTInt
+  match slotOf name (interfaceSlots e.methodTables iface) 0
+    Some (i, _) =>
+      let clos = loadSlot e iface name dictPtr i
+      (emitApplyAny e clos (dictPtr :: methWords ++ argOps), LTInt)
+    None => gapE e "method '\{name}' is not a slot of interface '\{iface}'"
 
--- the shared dispatcher's symbol: `mdk_disp_<method word>_<nmw>_<nargs>`.  Method
--- names are plain identifiers here (an operator is a `CBinPrim`, never a method
--- name — same assumption `implFnName` already makes).
-dispFnName : String -> String -> Int -> Int -> Int -> String
-dispFnName iface name nmw nargs siteArity =
-  LN.llvmName (LN.LDispatcher iface name nmw nargs siteArity)
-
--- A dispatcher's arm set is its interface's alone (`siteImpls`), so a method two
--- interfaces declare needs one dispatcher per interface: its symbol carries the
--- interface word, `injectiveIdent`-encoded.  A method only one interface declares
--- keeps the bare name, and so does a prelude (`core::`) interface's method in every
--- case — a prelude body's dispatcher symbol must not depend on what the program
--- declares (the `prelude.o` precondition), and the prelude's own interfaces never
--- share a method spelling.
-dispInterfaceWord : Emit -> String -> String -> String
-dispInterfaceWord e name iface =
-  if iface /= ""
-    && not (startsWith "core::" iface)
-    && omHasKey name e.input.sharedMethodNames then
-    iface
+-- the index of [name]'s slot among [slots], and the slot
+slotOf : String -> List MethodSlot -> Int -> Option (Int, MethodSlot)
+slotOf _ [] _ = None
+slotOf name (slot :: rest) i =
+  if (slot : MethodSlot).method == name then
+    Some (i, slot)
   else
-    ""
+    slotOf name rest (i + 1)
 
--- the dispatchers emitted so far, by symbol, scoped to this emission.
+-- the super count of interface [iface]; a word absent from the facts has none
+superCountOf : Emit -> String -> Int
+superCountOf e iface = optionOr 0 (omLookup iface e.superCounts)
 
-ensureDispatcherEmitted : Emit ->
-  String ->
-  String ->
-  String ->
-  Int ->
-  Int ->
-  Int ->
-  Unit
-ensureDispatcherEmitted e fname name iface nmw nargs siteArity =
-  if contains fname !e.dispCache then
-    ()
+-- The closure in slot [i] of dictionary [dictPtr] of interface [iface], the
+-- field after the interface's supers.  A null dictionary traps through
+-- `mdk_dispatch_no_impl` instead of being read.  The test carries a comment naming
+-- the slot's method, which no symbol in the call names.
+--
+-- The prelude half of a prelude-object build knows the super count only of an
+-- interface that has an instance in the prelude (`DeclFacts.factSupers`), so it
+-- reads the count from the interface's `@mdk.supers.*` constant, which the
+-- program half defines for every interface a prelude body loads a slot of.
+loadSlot : Emit -> String -> String -> String -> Int -> String
+loadSlot e iface method dictPtr i =
+  let isNull = freshReg e
+  emit e "  \{isNull} = icmp eq i64 \{dictPtr}, 0 ; slot \{iface}.\{method}"
+  let n = intToString (freshLocal e)
+  let trapL = "slotnull" ++ n
+  let okL = "slotok" ++ n
+  emit e "  br i1 \{isNull}, label %\{trapL}, label %\{okL}"
+  emit e (trapL ++ ":")
+  emit e (rtLine e "" "void" "mdk_dispatch_no_impl" [])
+  emit e "  unreachable"
+  emit e (okL ++ ":")
+  if e.input.emitHalf == emitHalfPrelude then
+    let supers = freshReg e
+    emit e "  \{supers} = load i64, ptr @\{symRef e (superCountGlobal e iface)}"
+    let field = freshReg e
+    emit e "  \{field} = add i64 \{supers}, \{intToString i}"
+    loadFieldDyn e dictPtr field
   else
-    -- Register before emitting, so a dispatcher can never be emitted twice however
-    -- its emission is reached.
-    e.dispCache := fname :: !e.dispCache
-    -- PRELUDE HALF: the dispatcher body enumerates every impl of the method in THIS
-    -- program, so it is inherently per-program and must NOT be baked into the shared
-    -- `prelude.o` — declare it and let the program half define it.  The program half
-    -- re-walks the prelude's own bodies (emitAsDeclares), so it reaches this exact
-    -- (name, nmw, nargs) site and DEFINES every dispatcher the prelude declares: the
-    -- demand set is derived, never encoded, and a mismatch is a LOUD undefined symbol.
+    if isSome !e.hiddenDefines then
+      let _ = superCountGlobal e iface
+      ()
+    loadField e dictPtr (superCountOf e iface + i)
+
+-- The `@mdk.supers.*` constant of interface [iface]: declared by the prelude
+-- half, defined by the program half.
+superCountGlobal : Emit -> String -> String
+superCountGlobal e iface =
+  let sym = LN.llvmName (LN.LSuperCount iface)
+  if omHasKey sym !e.superCountGlobals then
+    sym
+  else
+    e.superCountGlobals := omInsert sym () !e.superCountGlobals
+    let external = e.input.emitHalf == emitHalfPrelude
     withProgramScope e (_ =>
-      if e.input.emitHalf == emitHalfPrelude then
-        let proto = wordProto (dispParamDecls nmw nargs)
-        registerL e (declareSymbol (Generated fname) proto !e.symOrigin)
-        emitGlobal e ("declare " ++ prototypeText fname proto)
+      registerGlobal e external sym "i64"
+      emitGlobal e (if external then
+        "@\{sym} = external constant i64"
       else
-        emitDispatcherDefine e fname name iface nmw nargs siteArity)
+        "@\{sym} = constant i64 \{intToString (superCountOf e iface)}"))
+    sym
 
--- emit the shared dispatcher define.  Same side-buffer swap every other lifted define
--- uses (emitMethodValDefine/emitDictValDefine): redirect `buf`, emit, splice into
--- `lams`, restore.  `beginDefine` resets the per-define `%tN`/label counter, so the
--- dispatcher's text depends only on the method — not on where the first site of it
--- happened to appear (issue #118 step 1).
-emitDispatcherDefine : Emit ->
+-- The most arguments `mdk_call_exact` (runtime/medaka_rt.c) passes a closure's
+-- code.  A call that supplies a slot closure another count goes through
+-- `__mdk_apply`, which saturates through it (#4790).
+runtimeCallArgMax : Int
+runtimeCallArgMax = 8
+
+-- the slot closure words of instance [key]'s dictionary, in slot order
+slotWords : Emit -> String -> List String
+slotWords e key = match omLookup key e.methodTables.instances
+  Some table =>
+    slotWordsGo
+      e
+      key
+      table.iface
+      (interfaceSlots e.methodTables table.iface)
+      table.fills
+      0
+  None =>
+    if isEmptyL (interfaceSlots e.methodTables (ifaceWordOfKey key)) then
+      []
+    else
+      [gapStr e "no method table for instance '\{key}'"]
+
+slotWordsGo : Emit ->
   String ->
   String ->
+  List MethodSlot ->
+  List (List SlotCallee) ->
+  Int ->
+  List String
+slotWordsGo e key iface (slot :: slots) (fill :: fills) i =
+  slotClosureWord e key iface slot fill i
+    :: slotWordsGo e key iface slots fills (i + 1)
+slotWordsGo _ _ _ _ _ _ = []
+
+-- the word of slot [i] of instance [key]: its constant closure, emitted on first
+-- use
+slotClosureWord : Emit ->
   String ->
+  String ->
+  MethodSlot ->
+  List SlotCallee ->
   Int ->
-  Int ->
-  Int ->
+  String
+slotClosureWord e key iface slot fill i =
+  let cacheKey = lenKey key ++ intToString i
+  match omLookup cacheKey !e.slotCache
+    Some closName => "ptrtoint (ptr @" ++ symRef e closName ++ " to i64)"
+    None => match fill
+      [callee] =>
+        let closName = LN.llvmName (LN.LSlotClosure key slot.method)
+        e.slotCache := omInsert cacheKey closName !e.slotCache
+        emitSlotWrapper e key iface slot callee closName
+        "ptrtoint (ptr @" ++ symRef e closName ++ " to i64)"
+      _ =>
+        gapStr
+          e
+          "slot '\{slot.method}' of instance '\{key}' has no single callee"
+
+-- Emit slot [slot]'s wrapper for instance [key] and its constant closure
+-- [closName].  Both are internal: each half of a prelude-object build emits its
+-- own for a prelude instance.
+emitSlotWrapper : Emit ->
+  String ->
+  String ->
+  MethodSlot ->
+  SlotCallee ->
+  String ->
   Unit
-emitDispatcherDefine e fname name iface nmw nargs siteArity =
+emitSlotWrapper e key iface slot callee closName = withProgramScope e (_ =>
+  let g =
+    optionOrPanic
+      "llvm: a method table names no impl group"
+      (omLookup (intToString callee.group) !e.implGroupAt)
+  let cells = if callee.inherited then 1 else slotReqCount slot g
+  let values = maxInt 0 (groupArity g - slot.contextDicts - cells)
+  let arity = 1 + slot.contextDicts + values
+  if arity > runtimeCallArgMax then
+    let _ =
+      gapStr
+        e
+        "slot '\{slot.method}' of instance '\{key}' takes \{intToString arity} arguments; a closure of more than \{intToString runtimeCallArgMax} cannot be applied through the runtime (#4790)"
+    ()
+  let fname = LN.llvmName (LN.LSlotFunction key slot.method)
   let saved = (bufRef e).value
   bufRef e := []
   let scope = beginDefine e
-  defineHeader e LiftedDefine fname (wordProto (dispParamDecls nmw nargs))
+  defineHeaderAs
+    e
+    "define internal"
+    LiftedDefine
+    fname
+    (wordProto (closParam :: slotParamDecls slot.contextDicts values))
   emit e "entry:"
-  let (r, _) = emitDispatcherBody e name iface nmw nargs siteArity
+  let (r, _) = emitSlotBody e iface slot callee g values
   emit e ("  ret i64 " ++ r)
   emit e "}"
   emit e ""
@@ -8220,93 +8244,75 @@ emitDispatcherDefine e fname name iface nmw nargs siteArity =
   lamsRef e := lamLines ++ (lamsRef e).value
   endDefine e scope
   bufRef e := saved
+  registerGlobal e False closName "[2 x i64]"
+  emitGlobal
+    e
+    "@\{closName} = internal constant [2 x i64] [i64 \{intToString arity}, i64 ptrtoint (ptr @\{symRef e fname} to i64)]")
 
--- The dispatcher's body.  Ordinarily (mode 0) this is only ever reached when the
--- method has ≥2 impls — soleImplDirect already diverted the sole-impl case to a
--- direct call at the SITE — so the `Some` arm below is dead and the emitted IR is
--- byte-identical to what it was.
---
--- Under MEDAKA_PRELUDE_OBJ the site no longer takes that shortcut
--- (soleImplDirectSite), so the shortcut lives HERE instead, where it is computed
--- from the whole-program impl table each build.  It reproduces WS-1b exactly: a
--- direct call to the sole impl that never touches `%dict` — which is what keeps an
--- ambiguous return-position superclass constraint's NULL dict from being
--- dereferenced.  `%mw`/`%dict` are simply left unread, as at the direct call site.
-emitDispatcherBody : Emit ->
-  String ->
-  String ->
-  Int ->
-  Int ->
-  Int ->
-  (String, LTy)
-emitDispatcherBody e name iface nmw nargs siteArity =
-  match soleImplDirect e name iface siteArity
-    Some ent =>
-      -- F10: same saturation as emitDispatchArmBody — the selected interface's sole
-      -- impl parameter count can still differ from the occurrence arity.
-      emitArityCall
-        e
-        (implEntryFnName e name ent)
-        (dispWordNames "%arg" nargs 0)
-        (implSrcValueArity ent)
-        LTInt
-    _ =>
-      emitDispatchBody
-        e
-        name
-        iface
-        "%dict"
-        (dispWordNames "%mw" nmw 0)
-        (dispWordNames "%arg" nargs 0)
-        siteArity
+-- the `requires` dictionaries group [g]'s define takes after the method-level ones
+slotReqCount : MethodSlot -> ImplGroup -> Int
+slotReqCount slot g =
+  maxInt
+    0
+    (leadingDictParams (firstClausePats (groupClauses g)) - slot.contextDicts)
 
-dispParamDecls : Int -> Int -> List LlvmParam
-dispParamDecls nmw nargs =
+slotParamDecls : Int -> Int -> List LlvmParam
+slotParamDecls dicts values =
   map
     (r => LlvmParam "i64" r)
-    ("%dict" :: dispWordNames "%mw" nmw 0 ++ dispWordNames "%arg" nargs 0)
+    ("%dict" :: wordNames "%mw" dicts 0 ++ wordNames "%arg" values 0)
 
-dispWordNames : String -> Int -> Int -> List String
-dispWordNames pre n i
+wordNames : String -> Int -> Int -> List String
+wordNames pre n i
   | i >= n = []
-  | otherwise = pre ++ intToString i :: dispWordNames pre n (i + 1)
+  | otherwise = pre ++ intToString i :: wordNames pre n (i + 1)
 
--- the dispatch chain itself, verbatim from the old inline site — now the BODY of the
--- shared dispatcher.  [dictPtr] is the dict-witness word, [methWords] the ambient
--- method-level constraint dicts (`emitDispatchChain` prepends them ahead of the
--- cell-sourced per-instance `requires`, matching the lifted fn's leading dict-param
--- order: dict_pass binds methRoutes ++ implRoutes), [argOps] the saturated value args.
-emitDispatchBody : Emit ->
+-- The wrapper's body: call group [g]'s define with the method-level dictionaries,
+-- the instance's `requires` (stored after the supers and slots) or, for an
+-- inherited default, the dictionary itself, then its [values] value parameters.
+--
+-- #747: a nullary method with no method-level dictionaries whose impl is a
+-- per-instance CAF forces the CAF's `$memo_<symTag>_<name>` lazy global, so its
+-- effect runs once per instance, as eval's memoThunk does.
+emitSlotBody : Emit ->
   String ->
-  String ->
-  String ->
-  List String ->
-  List String ->
+  MethodSlot ->
+  SlotCallee ->
+  ImplGroup ->
   Int ->
   (String, LTy)
-emitDispatchBody e name iface dictPtr methWords argOps siteArity =
-  let headTag = loadTag e dictPtr
-  let impls = siteImpls e name iface siteArity
-  -- Each dispatch arm reads the arity of the same physical group as its define.
-  let groups = implGroupsForMethod e name
-  let slot = freshReg e
-  emit e ("  " ++ slot ++ " = alloca i64")
-  let endL = "dispend" ++ intToString (freshLocal e)
-  emitDispatchChain
-    e
-    dictPtr
-    headTag
-    impls
-    groups
-    name
-    methWords
-    argOps
-    slot
-    endL
-  emit e (endL ++ ":")
-  let r = freshReg e
-  emit e "  \{r} = load i64, ptr \{slot}"
-  (r, LTInt)
+emitSlotBody e iface slot callee g values =
+  let memo = memoGlobalName (groupSymTag g) slot.method
+  if slot.contextDicts == 0
+    && values == 0
+    && groupMemoisable g
+    && isLazyGlobal e memo then
+    let rv = freshReg e
+    let call = wordCall e (LN.llvmName (LN.LGlobalForcer memo)) []
+    emit e "  \{rv} = \{call}"
+    (rv, LTInt)
+  else
+    let base =
+      superCountOf e iface + listLen (interfaceSlots e.methodTables iface)
+    let cellDicts =
+      if callee.inherited then
+        ["%dict"]
+      else
+        loadReqDicts e "%dict" (base + slotReqCount slot g) base
+    emitArityCall
+      e
+      (groupFnName g)
+      (wordNames "%mw" slot.contextDicts 0
+        ++ cellDicts
+        ++ wordNames "%arg" values 0)
+      (groupArity g)
+      LTInt
+
+-- the shape core_ir_lower.memoKeys gives a per-instance CAF: no dispatch positions
+-- and no parameters
+groupMemoisable : ImplGroup -> Bool
+groupMemoisable g =
+  isEmptyL (groupPositionsOf g) && isEmptyL (firstClausePats (groupClauses g))
 
 -- the count of leading element-dict params a matched impl's lifted fn expects:
 -- `leadingDictParams` applied to THIS entry's own clause — a DIRECT count of the
@@ -8332,10 +8338,10 @@ implReqCount _e _name ent = leadingDictParams (implPats ent)
 -- read a dictionary pointer where its value belonged — SIGSEGV, or a silent wrong
 -- answer when nothing reads the mis-bound word.
 -- This is the SAME skew, from the SAME cause, that eval already closes in
--- `implDictRoutes` (eval/eval.mdk, #413) and that the RUNTIME dispatch chain already
--- closes in `emitDispatchArmBody`'s `cellCount` — both by sizing the call from the
+-- `implDictRoutes` (eval/eval.mdk, #413) and that the RUNTIME slot wrapper already
+-- closes in `emitSlotWrapper`'s call (`emitArityCall`) — both by sizing the call from the
 -- DEFINITION.  #413's comment claims "emit never had this bug"; that is true of the
--- dispatch chain and false of this static RKey path, which is #1648.  Same formula, so
+-- slot wrapper and false of this static RKey path, which is #1648.  Same formula, so
 -- the three now agree by construction: `implReqCount` counts the entry's own leading
 -- `$dict_*` patterns DIRECTLY (`leadingDictParams (implPats ent)`) — the define's own
 -- leading parameters — of which the first `lengthS methRoutes` are the METHOD-level dicts,
@@ -8369,12 +8375,6 @@ takeRoutes n (r :: rest)
   | n > 0 = r :: takeRoutes (n - 1) rest
 takeRoutes _ _ = []
 
--- The super dictionaries a dictionary of [ent]'s interface stores ahead of its
--- `requires` dictionaries (see `dictWordOfRoute`).
-entrySuperCount : Emit -> CImplEntry -> Int
-entrySuperCount e ent =
-  optionOr 0 (omLookup (implEntryIfaceWord ent) e.superCounts)
-
 -- load dict words [i, n) from the boxed dict cell `dictPtr`.  The head tag is the
 -- cell header (offset 0); field i is loaded by `loadField i` (offset 8*(i+1)), stored
 -- by emitDictCell via storeFields at the same field indices.
@@ -8383,115 +8383,6 @@ loadReqDicts e dictPtr n i
   | i >= n = []
   | otherwise = loadField e dictPtr i :: loadReqDicts e dictPtr n (i + 1)
 
--- emit ONE tagged-impl dispatch arm: test the dict head tag against this impl's route
--- key and, on a match, call the impl fn (prepending method-level + per-instance
--- `requires` dicts) and jump to `endL`; otherwise fall through to the `next` label the
--- caller continues after.
---
--- The matched impl's lifted fn expects `implReqCount` leading dict params, ordered
--- methRoutes ++ implRoutes.  The first `lengthS methWords` are METHOD-LEVEL
--- constraint dicts — already materialized from the caller's ambient args (env);
--- the remaining are this impl's per-instance `requires` dicts, loaded from the
--- runtime dispatch-dict cell's fields 0..k-1.  Sourcing the method-level ones from
--- the cell (the old behavior) was an OUT-OF-BOUNDS load whenever the dispatch dict
--- was a bare tag (no requires) → a garbage dict → SIGSEGV (e.g. `traverse` whose
--- `Thenable m =>` is over a tyvar that is not the `Traversable` receiver).
--- The arm tests the dictionary's word against this entry's canonical key: a word
--- names exactly one instance, the same one in every module, so one comparison
--- selects it.
-emitDispatchArm : Emit ->
-  String ->
-  String ->
-  CImplEntry ->
-  List ImplGroup ->
-  String ->
-  List String ->
-  List String ->
-  String ->
-  String ->
-  Unit
-emitDispatchArm e dictPtr headTag ent groups name methWords argOps slot endL =
-  let cmp = freshReg e
-  emit
-    e
-    "  \{cmp} = icmp eq i64 \{headTag}, \{intToString (hashName (implEntryKey ent))}"
-  let n = intToString (freshLocal e)
-  let yes = "dispyes" ++ n
-  let next = "dispnext" ++ n
-  emit e "  br i1 \{cmp}, label %\{yes}, label %\{next}"
-  emit e (yes ++ ":")
-  emitDispatchArmBody e dictPtr ent groups name methWords argOps slot endL
-  emit e (next ++ ":")
-
--- the matched-arm body (emitDispatchArm): load the impl's per-instance cell
--- `requires` dicts, call its lifted fn, store the result, and jump to the dispatcher
--- exit.
-emitDispatchArmBody : Emit ->
-  String ->
-  CImplEntry ->
-  List ImplGroup ->
-  String ->
-  List String ->
-  List String ->
-  String ->
-  String ->
-  Unit
-emitDispatchArmBody e dictPtr ent groups name methWords argOps slot endL =
-  let symTag = implEntrySymTag ent
-  -- #747: a nullary/return-position/dictionary-free impl reached through this runtime
-  -- dispatch (no method-level or value args) is a per-instance CAF.  core_ir_lower
-  -- synthesized a `$memo_<symTag>_<name>` lazy global for it (a LAZY value global —
-  -- isLazyGlobal confirms it exists); FORCE that shared CAF instead of re-calling the
-  -- impl fn, so the resolved tag's side effect runs once and is shared across every
-  -- occurrence at that tag (matching eval's per-VTypedImpl memoThunk).  Each tag has
-  -- its OWN `$memo` CAF ⇒ distinct tags memoise independently.
-  if isEmptyL methWords
-    && isEmptyL argOps
-    && implEntryMemoisable ent
-    && isLazyGlobal e (memoGlobalName symTag name) then
-    let rv = freshReg e
-    let memoForcer = LN.llvmName (LN.LGlobalForcer (memoGlobalName symTag name))
-    let call = wordCall e memoForcer []
-    emit e "  \{rv} = \{call}"
-    emit e "  store i64 \{rv}, ptr \{slot}"
-    emit e ("  br label %" ++ endL)
-  else
-    -- #1816: `implReqCount` is a direct `leadingDictParams` count and never negative;
-    -- the clamp guards the `- lengthS methWords` subtraction.
-    let cellCount = maxInt 0 (implReqCount e name ent - lengthS methWords)
-    let superCount = entrySuperCount e ent
-    -- an inherited default receives the dictionary that selected it
-    let cellDicts =
-      if isInheritedEntry ent then
-        [dictPtr]
-      else
-        loadReqDicts e dictPtr (superCount + cellCount) superCount
-    -- F10 (#1450/#1668 follow-on): saturate against THIS ARM'S define.  The
-    -- dispatcher is keyed by BARE method name and its `%argK` count is the arity the
-    -- SITE saw, which can differ from the selected impl's own parameter count (an
-    -- arity collision between same-spelled methods of unrelated interfaces, or an
-    -- impl clause that takes fewer parameters than its declaration).  Under-application
-    -- becomes the residual PAP the source `op x` denotes, over-application the
-    -- indirect re-apply.
-    --
-    -- #1818: `armArity` is READ OFF the group's own define arity (`groupArity`,
-    -- matched by `symTag` -- the identity naming the define), not
-    -- recomputed.  Every entry reaching this function has exactly one group in
-    -- `groups`, so the fallback (the same count, assembled from the entry) is not
-    -- expected to fire.
-    let armArity = match findGroupBySymTag symTag groups
-      Some g => groupArity g
-      None => implSrcValueArity ent + lengthS methWords + cellCount
-    let (rv, _) =
-      emitArityCall
-        e
-        (implEntryFnName e name ent)
-        (methWords ++ cellDicts ++ argOps)
-        armArity
-        LTInt
-    emit e "  store i64 \{rv}, ptr \{slot}"
-    emit e ("  br label %" ++ endL)
-
 -- #747: the synthesized per-instance CAF bind name for (symTag, method) — must match
 -- core_ir_lower.memoBindName EXACTLY.  It does NOT re-encode: [symTag] is already
 -- the selected symbol word: either a bare standalone-prelude tag or the encoded
@@ -8499,52 +8390,6 @@ emitDispatchArmBody e dictPtr ent groups name methWords argOps slot endL =
 -- Adding an encode step here would break that agreement, not strengthen it.
 memoGlobalName : String -> String -> String
 memoGlobalName symTag method = "$memo_\{symTag}_\{method}"
-
--- every entry is a guarded arm, a general instance's too: its dictionary carries its
--- own canonical key.  A word no arm claims traps.
-emitDispatchChain : Emit ->
-  String ->
-  String ->
-  List CImplEntry ->
-  List ImplGroup ->
-  String ->
-  List String ->
-  List String ->
-  String ->
-  String ->
-  Unit
-emitDispatchChain e dictPtr headTag impls groups name methWords argOps slot endL =
-  emitConcreteArms
-    e
-    dictPtr
-    headTag
-    impls
-    groups
-    name
-    methWords
-    argOps
-    slot
-    endL
-  -- #1958: no arm matched -- a dict-key mismatch.  Trap loudly instead of a bare
-  -- `unreachable`.
-  emit e (rtLine e "" "void" "mdk_dispatch_no_impl" [])
-  emit e "  unreachable"
-
-emitConcreteArms : Emit ->
-  String ->
-  String ->
-  List CImplEntry ->
-  List ImplGroup ->
-  String ->
-  List String ->
-  List String ->
-  String ->
-  String ->
-  Unit
-emitConcreteArms _ _ _ [] _ _ _ _ _ _ = ()
-emitConcreteArms e dictPtr headTag (ent :: rest) groups name methWords argOps slot endL =
-  emitDispatchArm e dictPtr headTag ent groups name methWords argOps slot endL
-  emitConcreteArms e dictPtr headTag rest groups name methWords argOps slot endL
 
 -- ── arg-position (arg-tag) dispatch at a call site ─────────────────
 -- A method occurrence with no route (RNone), or a bare CVar naming an impl method,
@@ -8694,7 +8539,7 @@ emitArgDispatchChain e tagReg (g :: rest) argOps colliding slot endL =
       emitAmbiguousArm e
     else
       -- F10: saturate against this group's own declared arity, the same answer the
-      -- single-group site above already takes (see emitDispatchArmBody).
+      -- single-group site above already takes (see `emitArityCall`).
       let (rv, _) = emitArityCall e (groupFnName g) argOps (groupArity g) LTInt
       emit e "  store i64 \{rv}, ptr \{slot}"
       emit e ("  br label %" ++ endL)
@@ -8769,22 +8614,17 @@ groupMethodOf (ImplGroup m _ _ _ _ _ _ _) = m
 groupPositionsOf : ImplGroup -> List Int
 groupPositionsOf (ImplGroup _ _ _ _ p _ _ _) = p
 
+groupKey : ImplGroup -> String
+groupKey (ImplGroup _ _ key _ _ _ _ _) = key
+
+groupClauses : ImplGroup -> List (List Pat, CExpr)
+groupClauses (ImplGroup _ _ _ _ _ _ clauses _) = clauses
+
 -- #1818: the arity resolved for this group's `define` — the single
 -- number every F10 call site should consult rather than re-derive.  See
 -- `armArityOfEntry` below, the one caller that must not recompute it.
 groupArity : ImplGroup -> Int
 groupArity (ImplGroup _ _ _ _ _ arity _ _) = arity
-
--- the group among [groups] whose lifted define is `@mdk_impl_<symTag>_<method>` —
--- i.e. the group for the same impl an entry-holding call site
--- names.  `symTag` (`implEntrySymTag`) is the entry's stamp, which also names that
--- define, so this is a same-identity lookup, not a second guess: any hit is THE group whose `arity`
--- field is what the define was actually emitted to accept.
-findGroupBySymTag : String -> List ImplGroup -> Option ImplGroup
-findGroupBySymTag _ [] = None
-findGroupBySymTag symTag (g :: rest)
-  | groupSymTag g == symTag = Some g
-  | otherwise = findGroupBySymTag symTag rest
 
 headGroup : List ImplGroup -> ImplGroup
 headGroup (g :: _) = g
@@ -8876,15 +8716,16 @@ dictWordsOf e env rs = map (dictWordOfRoute e env) rs
 -- structured `VDict key reqs supers` and the leading dict-param order dict_pass
 -- binds — methRoutes then implRoutes, here the impl's own requires).  Supers come
 -- first so that a projection indexes the same field whichever instance the
--- dictionary is; a dispatch arm skips them by its interface's super count.  This makes the rep UNIFORM: a one-level dict (`RKey k []`) is a
+-- dictionary is; a slot load skips them by its interface's super count.  This makes the rep UNIFORM: a one-level dict (`RKey k []`) is a
 -- pointer to a 1-word cell `[ hashName k ]`; a two-level dict nests another cell
--- pointer in field 1.  Consumption (emitDispatchChain / the RKey direct-call path)
--- loads field 0 for the icmp and prepends fields 1..n as the matched impl's leading
--- element-dict args.  RDict/RDictFwd forward the enclosing dict parameter's word
+-- pointer in field 1.  Consumption (a slot load / the RKey direct-call path): a slot load indexes
+-- the cell's supers and slots.  RDict/RDictFwd forward the enclosing dict parameter's word
 -- (already a boxed-cell pointer); RNone is the 0 dict (no cell).
 dictWordOfRoute : Emit -> OrdMap (String, LTy) -> Route -> String
 dictWordOfRoute e env (RKey key reqs sups) =
-  let fieldWords = dictWordsOf e env (sups ++ reqs)
+  let supWords = dictWordsOf e env sups
+  let slots = slotWords e key
+  let fieldWords = supWords ++ slots ++ dictWordsOf e env reqs
   if allConstWords fieldWords then
     emitConstDictCell e (hashName key) fieldWords
   else
@@ -8892,12 +8733,26 @@ dictWordOfRoute e env (RKey key reqs sups) =
 dictWordOfRoute e env (RDict d) = dictOperand e env d
 dictWordOfRoute e env (RDictFwd d) = dictOperand e env d
 dictWordOfRoute e env (RProj r path) =
-  loadSuperPath e (dictWordOfRoute e env r) path
+  loadSuperPath e (dictWordOfRoute e env r) (receiverPath e r path)
 dictWordOfRoute _ _ RNone = "0"
 -- S-1: RLocal's own dicts are the call's leading dict ARGS (emitted by emitMethod's
 -- RLocal arm via emitDictApp), not a dict WITNESS for this route — so as a witness it
 -- stays the no-op 0 dict, mirroring eval's `dictOfRoute (RLocal _ _) = VDict "" []`.
 dictWordOfRoute _ _ (RLocal _ _) = "0"
+
+-- A projection's path.  Its first index reads a `requires` dictionary when it is
+-- past the supers of an inherited default's receiver (`core_ir_lower.
+-- receiverFields`); the table stores those after its slots.
+receiverPath : Emit -> Route -> List Int -> List Int
+receiverPath e (RDict d) (i :: rest) = receiverIndex e d i :: rest
+receiverPath e (RDictFwd d) (i :: rest) = receiverIndex e d i :: rest
+receiverPath _ _ path = path
+
+receiverIndex : Emit -> String -> Int -> Int
+receiverIndex e d i = match !e.defaultReceiver
+  Some (recv, supers, slots) =>
+    if d == recv && i >= supers then i + slots else i
+  None => i
 
 -- the super dictionary at [path] below the dictionary word [w]: a super index i is
 -- cell field i
@@ -9049,7 +8904,29 @@ implGroupOrigin g =
   SymbolOrigin "impl \{groupMethodOf g} for \{groupTag g}" "" 0 0
 
 emitGroup : Emit -> ImplGroup -> Unit
-emitGroup e (ImplGroup method tag key _ positions arity clauses fname) =
+emitGroup e g =
+  e.defaultReceiver := defaultReceiverOf e g
+  emitGroupDefine e g
+  e.defaultReceiver := None
+
+-- An inherited default's receiver parameter (it follows the method-level
+-- dictionaries), with its interface's super and slot counts.
+defaultReceiverOf : Emit -> ImplGroup -> Option (String, Int, Int)
+defaultReceiverOf e g =
+  if groupInherits g then
+    let iface = ifaceWordOfKey (groupKey g)
+    let slots = interfaceSlots e.methodTables iface
+    let nmw = match slotOf (groupMethodOf g) slots 0
+      Some (_, slot) => slot.contextDicts
+      None => 0
+    match dropS nmw (firstClausePats (groupClauses g))
+      (PVar recv _ _) :: _ => Some (recv, superCountOf e iface, listLen slots)
+      _ => None
+  else
+    None
+
+emitGroupDefine : Emit -> ImplGroup -> Unit
+emitGroupDefine e (ImplGroup method tag key _ positions arity clauses fname) =
   let selfFnPos = selfFnParamPositions e (ifaceWordOfKey key) method
   setCurImplSelfFns e tag (selfFnParamNames clauses selfFnPos)
   if trmcImplTry e fname method tag key positions arity clauses then
@@ -9434,6 +9311,11 @@ resolveImplGroup e index group =
         clauses
         (implEntryFnName e group.method ent)
     [] => panic "llvm: empty impl group"
+
+-- each group keyed by its position
+numberGroups : Int -> List ImplGroup -> List (String, ImplGroup)
+numberGroups _ [] = []
+numberGroups i (g :: rest) = (intToString i, g) :: numberGroups (i + 1) rest
 
 clauseArity : List (List Pat, CExpr) -> Int
 clauseArity ((pats, _) :: _) = lengthS pats
@@ -14601,6 +14483,7 @@ programEmitConfig gapMode input plan groups = EmitStateConfig {
   externRequirements = plan.externRequirements,
   dispGroups = Some plan.dispGroups,
   implGroups = plan.implGroups,
+  methodTables = plan.methodTables,
 }
 
 -- The Strict-mode emission body, factored out of `emitProgramMode` so
@@ -14721,6 +14604,7 @@ data EmitStateConfig = EmitStateConfig {
   externRequirements : ExternRequirements,
   dispGroups : Option (List DispGroup),
   implGroups : List ImplClauseGroup,
+  methodTables : MethodTables,
 }
 
 -- Row #5/#6 (RUN-EMIT-002: one disposition, not two): when the caller routes the
@@ -14810,7 +14694,11 @@ buildEmitState cfg input groups ctorArs ctorTypes implEntries facts =
     implsByMethod = Ref None,
     implMethodSet = Ref None,
     typeIdMap = Ref None,
-    dispCache = Ref [],
+    methodTables = cfg.methodTables,
+    implGroupAt = Ref omEmpty,
+    slotCache = Ref omEmpty,
+    defaultReceiver = Ref None,
+    superCountGlobals = Ref omEmpty,
     dictConstCache = Ref [],
     strLitCache = Ref omEmpty,
     closConstCache = Ref [],
@@ -14838,7 +14726,6 @@ buildEmitState cfg input groups ctorArs ctorTypes implEntries facts =
   }
   e.dictConstCache := []
   e.closConstCache := []
-  e.dispCache := []
   installKnownFnMap e (collectFns groups)
   -- #561 PR-A: classify LAZY value globals (dispatch-reaching / cyclic) once per
   -- program.  Reads of these lower to `call @mdk_force_<x>()`; every other global
@@ -14853,6 +14740,7 @@ buildEmitState cfg input groups ctorArs ctorTypes implEntries facts =
   installImplMethodSet e implEntries
   let ordinalEntries = indexImplGroupEntries implEntries 0 omEmpty
   e.implGroups := map (resolveImplGroup e ordinalEntries) cfg.implGroups
+  e.implGroupAt := omFromPairs (numberGroups 0 !e.implGroups) omEmpty
   -- a group member must never be ADVERTISED as having a float `__fw` worker (the
   -- group path emits no standalone defines, so a float-context caller would call
   -- a nonexistent symbol; v3/v4 make external float callers impossible anyway —
@@ -15256,6 +15144,7 @@ emitProgramGaps input plan (cp@(CProgram groups ctorArs ctorTypes implEntries _ 
     externRequirements = plan.externRequirements,
     dispGroups = None,
     implGroups = plan.implGroups,
+    methodTables = plan.methodTables,
   }
   let found = unprovidedExterns Record input plan cp
   let e = buildEmitState cfg input groups ctorArs ctorTypes implEntries facts
@@ -15346,7 +15235,7 @@ runtimeName e symbol = optionOr "" (externRuntimeKey e.externFacts symbol)
 (DUse false (UseGroup ("types" "private_mangle") ((mem "hashName" false))))
 (DUse false (UseGroup ("types" "route_key") ((mem "numIntWord" false))))
 (DUse false (UseGroup ("backend" "impl_groups") ((mem "ImplClauseGroup" true))))
-(DUse false (UseGroup ("backend" "emit_plan") ((mem "EmitPlan" true) (mem "lookupMethodResult" false) (mem "planEntryMainIsUnit" false) (mem "planEntryMainIsFloat" false))))
+(DUse false (UseGroup ("backend" "emit_plan") ((mem "EmitPlan" true) (mem "MethodSlot" true) (mem "MethodTables" true) (mem "InstanceTable" true) (mem "SlotCallee" true) (mem "interfaceSlots" false) (mem "lookupMethodResult" false) (mem "planEntryMainIsUnit" false) (mem "planEntryMainIsFloat" false))))
 (DUse false (UseGroup ("list") ((mem "zip" false))))
 (DUse false (UseGroup ("backend" "emit_support") ((mem "bindNameMap" false) (mem "guardVars" false) (mem "ftPrefix" false) (mem "ftLabelOf" false) (mem "labelFallthrough" false) (mem "rngBound" false) (mem "appParts" false) (mem "isExactCall" false) (mem "isTailCall" false) (mem "implEntryDeclaredArity" false) (mem "nthArm" false) (mem "bindingOrigin" false))))
 (DData Private "GapMode" () ((variant "Strict" (ConPos)) (variant "Record" (ConPos))) ())
@@ -15410,22 +15299,19 @@ runtimeName e symbol = optionOr "" (externRuntimeKey e.externFacts symbol)
 (DFunDef false "gapStr" ((PVar "e") (PVar "reason")) (EMatch (EFieldAccess (EVar "e") "gapMode") (arm (PCon "Record") () (ELet false PWild (EApp (EApp (EVar "noteGap") (EVar "e")) (EVar "reason")) (ELit (LString "0")))) (arm (PCon "Strict") () (EApp (EVar "panic") (EVar "reason")))))
 (DData Private "LTy" () ((variant "LTInt" (ConPos)) (variant "LTFloat" (ConPos)) (variant "LTBool" (ConPos)) (variant "LTCon" (ConPos)) (variant "LTClosure" (ConPos)) (variant "LTStr" (ConPos)) (variant "LTUnit" (ConPos)) (variant "LTChar" (ConPos)) (variant "LTUnknown" (ConPos)) (variant "LTNum" (ConPos)) (variant "LTFloatU" (ConPos)) (variant "LTU64" (ConPos)) (variant "LTI64" (ConPos)) (variant "LTU64U" (ConPos)) (variant "LTU32U" (ConPos)) (variant "LTI32U" (ConPos))) ())
 (DUse false (UseGroup ("types" "capability_manifest") ((mem "ManifestRequirement" false))))
-(DData Private "EmitInputData" () ((variant "EmitInputData" (ConNamed (field "manifestRequirement" (TyCon "ManifestRequirement")) (field "ctorFieldIndex" (TyApp (TyCon "OrdMap") (TyApp (TyCon "List") (TyCon "String")))) (field "emitHalf" (TyCon "Int")) (field "preludeBinds" (TyApp (TyCon "List") (TyCon "String"))) (field "preludeImplIndex" (TyApp (TyCon "OrdMap") (TyApp (TyCon "OrdMap") (TyCon "String")))) (field "srcName" (TyCon "String")) (field "sharedMethodNames" (TyApp (TyCon "OrdMap") (TyCon "Unit"))) (field "runtimeExterns" (TyCon "RuntimeExternDomain")) (field "noInlineFns" (TyApp (TyCon "OrdMap") (TyCon "Unit")))))) ())
+(DData Private "EmitInputData" () ((variant "EmitInputData" (ConNamed (field "manifestRequirement" (TyCon "ManifestRequirement")) (field "ctorFieldIndex" (TyApp (TyCon "OrdMap") (TyApp (TyCon "List") (TyCon "String")))) (field "emitHalf" (TyCon "Int")) (field "preludeBinds" (TyApp (TyCon "List") (TyCon "String"))) (field "preludeImplIndex" (TyApp (TyCon "OrdMap") (TyApp (TyCon "OrdMap") (TyCon "String")))) (field "srcName" (TyCon "String")) (field "runtimeExterns" (TyCon "RuntimeExternDomain")) (field "noInlineFns" (TyApp (TyCon "OrdMap") (TyCon "Unit")))))) ())
 (DTypeAlias true "EmitInput" () (TyCon "EmitInputData"))
 (DTypeSig true "makeEmitInput" (TyFun (TyCon "ManifestRequirement") (TyFun (TyCon "RuntimeExternDomain") (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyTuple (TyCon "String") (TyCon "String") (TyCon "Int")))) (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "String")))) (TyFun (TyCon "Int") (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "String") (TyCon "String"))) (TyFun (TyCon "String") (TyCon "EmitInput"))))))))))
-(DFunDef false "makeEmitInput" ((PVar "requirement") (PVar "domain") (PVar "methodIfaces") (PVar "ctorFieldTypes") (PVar "emitHalf") (PVar "preludeBinds") (PVar "preludeImpls") (PVar "srcName")) (ERecordCreate "EmitInputData" ((fa "manifestRequirement" (EVar "requirement")) (fa "ctorFieldIndex" (EApp (EApp (EVar "omFromPairs") (EApp (EVar "reverseL") (EVar "ctorFieldTypes"))) (EVar "omEmpty"))) (fa "emitHalf" (EVar "emitHalf")) (fa "preludeBinds" (EVar "preludeBinds")) (fa "preludeImplIndex" (EApp (EApp (EVar "preludeImplIndexOf") (EVar "preludeImpls")) (EVar "omEmpty"))) (fa "srcName" (EVar "srcName")) (fa "sharedMethodNames" (EApp (EApp (EApp (EVar "sharedMethodNamesOf") (EVar "methodIfaces")) (EVar "omEmpty")) (EVar "omEmpty"))) (fa "runtimeExterns" (EVar "domain")) (fa "noInlineFns" (EVar "omEmpty")))))
+(DFunDef false "makeEmitInput" ((PVar "requirement") (PVar "domain") (PVar "_methodIfaces") (PVar "ctorFieldTypes") (PVar "emitHalf") (PVar "preludeBinds") (PVar "preludeImpls") (PVar "srcName")) (ERecordCreate "EmitInputData" ((fa "manifestRequirement" (EVar "requirement")) (fa "ctorFieldIndex" (EApp (EApp (EVar "omFromPairs") (EApp (EVar "reverseL") (EVar "ctorFieldTypes"))) (EVar "omEmpty"))) (fa "emitHalf" (EVar "emitHalf")) (fa "preludeBinds" (EVar "preludeBinds")) (fa "preludeImplIndex" (EApp (EApp (EVar "preludeImplIndexOf") (EVar "preludeImpls")) (EVar "omEmpty"))) (fa "srcName" (EVar "srcName")) (fa "runtimeExterns" (EVar "domain")) (fa "noInlineFns" (EVar "omEmpty")))))
 (DTypeSig true "withNoInlineFns" (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyCon "EmitInput") (TyCon "EmitInput"))))
 (DFunDef false "withNoInlineFns" ((PVar "names") (PVar "input")) (ERecordUpdate (EVar "input") ((fa "noInlineFns" (EApp (EApp (EVar "omFromPairs") (EApp (EApp (EVar "map") (ELam ((PVar "n")) (ETuple (EVar "n") (ELit LUnit)))) (EVar "names"))) (EVar "omEmpty"))))))
 (DTypeSig false "fnAttrs" (TyFun (TyCon "Emit") (TyFun (TyCon "String") (TyCon "String"))))
 (DFunDef false "fnAttrs" ((PVar "e") (PVar "name")) (EMatch (EApp (EApp (EVar "omLookup") (EVar "name")) (EFieldAccess (EFieldAccess (EVar "e") "input") "noInlineFns")) (arm (PCon "Some" PWild) () (ELit (LString " noinline"))) (arm (PCon "None") () (ELit (LString "")))))
-(DTypeSig false "sharedMethodNamesOf" (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyTuple (TyCon "String") (TyCon "String") (TyCon "Int")))) (TyFun (TyApp (TyCon "OrdMap") (TyCon "String")) (TyFun (TyApp (TyCon "OrdMap") (TyCon "Unit")) (TyApp (TyCon "OrdMap") (TyCon "Unit"))))))
-(DFunDef false "sharedMethodNamesOf" ((PList) PWild (PVar "shared")) (EVar "shared"))
-(DFunDef false "sharedMethodNamesOf" ((PCons (PTuple (PVar "m") (PTuple PWild (PVar "word") PWild)) (PVar "rest")) (PVar "firstWord") (PVar "shared")) (EMatch (EApp (EApp (EVar "omLookup") (EVar "m")) (EVar "firstWord")) (arm (PCon "None") () (EApp (EApp (EApp (EVar "sharedMethodNamesOf") (EVar "rest")) (EApp (EApp (EApp (EVar "omInsert") (EVar "m")) (EVar "word")) (EVar "firstWord"))) (EVar "shared"))) (arm (PCon "Some" (PVar "w")) () (EIf (EBinOp "==" (EVar "w") (EVar "word")) (EApp (EApp (EApp (EVar "sharedMethodNamesOf") (EVar "rest")) (EVar "firstWord")) (EVar "shared")) (EApp (EApp (EApp (EVar "sharedMethodNamesOf") (EVar "rest")) (EVar "firstWord")) (EApp (EApp (EApp (EVar "omInsert") (EVar "m")) (ELit LUnit)) (EVar "shared")))))))
 (DTypeSig false "preludeImplIndexOf" (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "String") (TyCon "String"))) (TyFun (TyApp (TyCon "OrdMap") (TyApp (TyCon "OrdMap") (TyCon "String"))) (TyApp (TyCon "OrdMap") (TyApp (TyCon "OrdMap") (TyCon "String"))))))
 (DFunDef false "preludeImplIndexOf" ((PList) (PVar "acc")) (EVar "acc"))
 (DFunDef false "preludeImplIndexOf" ((PCons (PTuple (PVar "method") (PVar "key") (PVar "symTag")) (PVar "rest")) (PVar "acc")) (EBlock (DoLet false false (PVar "byKey") (EApp (EApp (EVar "optionOr") (EVar "omEmpty")) (EApp (EApp (EVar "omLookup") (EVar "method")) (EVar "acc")))) (DoExpr (EApp (EApp (EVar "preludeImplIndexOf") (EVar "rest")) (EApp (EApp (EApp (EVar "omInsert") (EVar "method")) (EApp (EApp (EApp (EVar "omInsert") (EVar "key")) (EVar "symTag")) (EVar "byKey"))) (EVar "acc"))))))
 (DData Private "TailDefine" () ((variant "TailDefine" (ConPos (TyCon "String") (TyCon "Int") (TyCon "Bool")))) ())
-(DData Private "Emit" () ((variant "Emit" (ConNamed (field "input" (TyCon "EmitInput")) (field "implNames" (TyApp (TyCon "Ref") (TyApp (TyCon "OrdMap") (TyApp (TyCon "OrdMap") (TyCon "String"))))) (field "defaultNames" (TyApp (TyCon "Ref") (TyApp (TyCon "OrdMap") (TyApp (TyCon "OrdMap") (TyApp (TyCon "OrdMap") (TyCon "String")))))) (field "counter0" (TyCon "Int")) (field "trmc" (TyCon "TrmcVerdicts")) (field "methodResults" (TyApp (TyCon "OrdMap") (TyApp (TyCon "OrdMap") (TyCon "MethodResultFact")))) (field "curModule" (TyApp (TyCon "Ref") (TyCon "String"))) (field "counters" (TyApp (TyCon "Ref") (TyApp (TyCon "OrdMap") (TyCon "Int")))) (field "buf" (TyApp (TyCon "Ref") (TyApp (TyCon "List") (TyCon "String")))) (field "fnNames" (TyApp (TyCon "Ref") (TyApp (TyCon "List") (TyCon "String")))) (field "binderRows" (TyApp (TyApp (TyCon "BM.Map") (TyCon "Int")) (TyCon "BinderRow"))) (field "symbolOrigins" (TyApp (TyCon "Option") (TyCon "CoreSymbolOrigins"))) (field "externFacts" (TyApp (TyCon "OrdMap") (TyCon "ExternDeclFact"))) (field "nativePrototypes" (TyApp (TyCon "List") (TyCon "ExternDeclFact"))) (field "superCounts" (TyApp (TyCon "OrdMap") (TyCon "Int"))) (field "globalTys" (TyApp (TyCon "OrdMap") (TyCon "LTy"))) (field "lams" (TyApp (TyCon "Ref") (TyApp (TyCon "List") (TyCon "String")))) (field "implEntries" (TyApp (TyCon "Ref") (TyApp (TyCon "List") (TyCon "CImplEntry")))) (field "implGroups" (TyApp (TyCon "Ref") (TyApp (TyCon "List") (TyCon "ImplGroup")))) (field "arities" (TyCon "ArityEnv")) (field "globalsReg" (TyApp (TyCon "Ref") (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyTuple (TyCon "Bool") (TyCon "LTy")))))) (field "gapMode" (TyCon "GapMode")) (field "gapLog" (TyApp (TyCon "Ref") (TyApp (TyCon "List") (TyCon "String")))) (field "curGapBind" (TyApp (TyCon "Ref") (TyCon "String"))) (field "defineCounter" (TyApp (TyCon "Ref") (TyCon "Int"))) (field "closureRetTy" (TyApp (TyCon "Ref") (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "LTy"))))) (field "directFn" (TyApp (TyCon "Ref") (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyTuple (TyCon "String") (TyCon "Int")))))) (field "trmcCtx" (TyApp (TyCon "Ref") (TyCon "TrmcCtx"))) (field "gDispCtx" (TyApp (TyCon "Ref") (TyCon "GDispCtx"))) (field "selfTailCtx" (TyApp (TyCon "Ref") (TyApp (TyCon "Option") (TyCon "TailDefine")))) (field "gDispGroups" (TyApp (TyCon "Ref") (TyApp (TyCon "List") (TyCon "DispGroup")))) (field "gDispBinds" (TyApp (TyCon "Ref") (TyApp (TyCon "List") (TyCon "CBind")))) (field "gDispBindMap" (TyApp (TyCon "Ref") (TyApp (TyCon "OrdMap") (TyCon "CBind")))) (field "curImplTag" (TyApp (TyCon "Ref") (TyCon "String"))) (field "curSelfFnParams" (TyApp (TyCon "Ref") (TyApp (TyCon "List") (TyCon "String")))) (field "knownFnMap" (TyApp (TyCon "Ref") (TyApp (TyCon "Option") (TyApp (TyCon "OrdMap") (TyCon "Unit"))))) (field "lazyGlobalMap" (TyApp (TyCon "Ref") (TyApp (TyCon "Option") (TyApp (TyCon "OrdMap") (TyCon "Unit"))))) (field "constructorFacts" (TyCon "ConstructorFacts")) (field "sigMap" (TyApp (TyCon "Ref") (TyApp (TyCon "Option") (TyApp (TyCon "OrdMap") (TyCon "FnSig"))))) (field "implsByMethod" (TyApp (TyCon "Ref") (TyApp (TyCon "Option") (TyApp (TyCon "OrdMap") (TyApp (TyCon "List") (TyCon "CImplEntry")))))) (field "implMethodSet" (TyApp (TyCon "Ref") (TyApp (TyCon "Option") (TyApp (TyCon "OrdMap") (TyCon "Unit"))))) (field "typeIdMap" (TyApp (TyCon "Ref") (TyApp (TyCon "Option") (TyApp (TyCon "OrdMap") (TyCon "Int"))))) (field "dispCache" (TyApp (TyCon "Ref") (TyApp (TyCon "List") (TyCon "String")))) (field "dictConstCache" (TyApp (TyCon "Ref") (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "String"))))) (field "strLitCache" (TyApp (TyCon "Ref") (TyApp (TyCon "OrdMap") (TyCon "String")))) (field "closConstCache" (TyApp (TyCon "Ref") (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "String"))))) (field "floatFwSet" (TyApp (TyCon "Ref") (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyTuple (TyCon "Int") (TyApp (TyCon "List") (TyCon "Int"))))))) (field "floatClosureFns" (TyApp (TyCon "Ref") (TyApp (TyCon "List") (TyCon "String")))) (field "rawWorkers" (TyApp (TyCon "Ref") (TyApp (TyCon "OrdMap") (TyCon "RawWorker")))) (field "constGlobals" (TyApp (TyCon "Ref") (TyApp (TyCon "OrdMap") (TyCon "Lit")))) (field "inlineOpen" (TyApp (TyCon "Ref") (TyCon "Int"))) (field "inlineSpent" (TyApp (TyCon "Ref") (TyCon "Int"))) (field "siteFileNums" (TyApp (TyCon "Ref") (TyApp (TyCon "OrdMap") (TyCon "Int")))) (field "siteFiles" (TyApp (TyCon "Ref") (TyApp (TyCon "List") (TyCon "String")))) (field "siteTraps" (TyApp (TyCon "Ref") (TyApp (TyCon "List") (TyCon "String")))) (field "symbols" (TyApp (TyCon "Ref") (TyCon "SymbolRegistry"))) (field "coverage" (TyApp (TyCon "Ref") (TyCon "CallCoverage"))) (field "excusedCalls" (TyApp (TyCon "Ref") (TyApp (TyCon "List") (TyCon "LlvmSymbol")))) (field "symbolDefects" (TyApp (TyCon "Ref") (TyApp (TyCon "List") (TyCon "SymbolDefect")))) (field "symOrigin" (TyApp (TyCon "Ref") (TyCon "SymbolOrigin"))) (field "hiddenDefines" (TyApp (TyCon "Ref") (TyApp (TyCon "Option") (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "Prototype")))))) (field "orScope" (TyApp (TyCon "Ref") (TyApp (TyCon "Option") (TyCon "OrScope"))))))) ())
+(DData Private "Emit" () ((variant "Emit" (ConNamed (field "input" (TyCon "EmitInput")) (field "implNames" (TyApp (TyCon "Ref") (TyApp (TyCon "OrdMap") (TyApp (TyCon "OrdMap") (TyCon "String"))))) (field "defaultNames" (TyApp (TyCon "Ref") (TyApp (TyCon "OrdMap") (TyApp (TyCon "OrdMap") (TyApp (TyCon "OrdMap") (TyCon "String")))))) (field "counter0" (TyCon "Int")) (field "trmc" (TyCon "TrmcVerdicts")) (field "methodResults" (TyApp (TyCon "OrdMap") (TyApp (TyCon "OrdMap") (TyCon "MethodResultFact")))) (field "curModule" (TyApp (TyCon "Ref") (TyCon "String"))) (field "counters" (TyApp (TyCon "Ref") (TyApp (TyCon "OrdMap") (TyCon "Int")))) (field "buf" (TyApp (TyCon "Ref") (TyApp (TyCon "List") (TyCon "String")))) (field "fnNames" (TyApp (TyCon "Ref") (TyApp (TyCon "List") (TyCon "String")))) (field "binderRows" (TyApp (TyApp (TyCon "BM.Map") (TyCon "Int")) (TyCon "BinderRow"))) (field "symbolOrigins" (TyApp (TyCon "Option") (TyCon "CoreSymbolOrigins"))) (field "externFacts" (TyApp (TyCon "OrdMap") (TyCon "ExternDeclFact"))) (field "nativePrototypes" (TyApp (TyCon "List") (TyCon "ExternDeclFact"))) (field "superCounts" (TyApp (TyCon "OrdMap") (TyCon "Int"))) (field "globalTys" (TyApp (TyCon "OrdMap") (TyCon "LTy"))) (field "lams" (TyApp (TyCon "Ref") (TyApp (TyCon "List") (TyCon "String")))) (field "implEntries" (TyApp (TyCon "Ref") (TyApp (TyCon "List") (TyCon "CImplEntry")))) (field "implGroups" (TyApp (TyCon "Ref") (TyApp (TyCon "List") (TyCon "ImplGroup")))) (field "arities" (TyCon "ArityEnv")) (field "globalsReg" (TyApp (TyCon "Ref") (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyTuple (TyCon "Bool") (TyCon "LTy")))))) (field "gapMode" (TyCon "GapMode")) (field "gapLog" (TyApp (TyCon "Ref") (TyApp (TyCon "List") (TyCon "String")))) (field "curGapBind" (TyApp (TyCon "Ref") (TyCon "String"))) (field "defineCounter" (TyApp (TyCon "Ref") (TyCon "Int"))) (field "closureRetTy" (TyApp (TyCon "Ref") (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "LTy"))))) (field "directFn" (TyApp (TyCon "Ref") (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyTuple (TyCon "String") (TyCon "Int")))))) (field "trmcCtx" (TyApp (TyCon "Ref") (TyCon "TrmcCtx"))) (field "gDispCtx" (TyApp (TyCon "Ref") (TyCon "GDispCtx"))) (field "selfTailCtx" (TyApp (TyCon "Ref") (TyApp (TyCon "Option") (TyCon "TailDefine")))) (field "gDispGroups" (TyApp (TyCon "Ref") (TyApp (TyCon "List") (TyCon "DispGroup")))) (field "gDispBinds" (TyApp (TyCon "Ref") (TyApp (TyCon "List") (TyCon "CBind")))) (field "gDispBindMap" (TyApp (TyCon "Ref") (TyApp (TyCon "OrdMap") (TyCon "CBind")))) (field "curImplTag" (TyApp (TyCon "Ref") (TyCon "String"))) (field "curSelfFnParams" (TyApp (TyCon "Ref") (TyApp (TyCon "List") (TyCon "String")))) (field "knownFnMap" (TyApp (TyCon "Ref") (TyApp (TyCon "Option") (TyApp (TyCon "OrdMap") (TyCon "Unit"))))) (field "lazyGlobalMap" (TyApp (TyCon "Ref") (TyApp (TyCon "Option") (TyApp (TyCon "OrdMap") (TyCon "Unit"))))) (field "constructorFacts" (TyCon "ConstructorFacts")) (field "sigMap" (TyApp (TyCon "Ref") (TyApp (TyCon "Option") (TyApp (TyCon "OrdMap") (TyCon "FnSig"))))) (field "implsByMethod" (TyApp (TyCon "Ref") (TyApp (TyCon "Option") (TyApp (TyCon "OrdMap") (TyApp (TyCon "List") (TyCon "CImplEntry")))))) (field "implMethodSet" (TyApp (TyCon "Ref") (TyApp (TyCon "Option") (TyApp (TyCon "OrdMap") (TyCon "Unit"))))) (field "typeIdMap" (TyApp (TyCon "Ref") (TyApp (TyCon "Option") (TyApp (TyCon "OrdMap") (TyCon "Int"))))) (field "methodTables" (TyCon "MethodTables")) (field "implGroupAt" (TyApp (TyCon "Ref") (TyApp (TyCon "OrdMap") (TyCon "ImplGroup")))) (field "slotCache" (TyApp (TyCon "Ref") (TyApp (TyCon "OrdMap") (TyCon "String")))) (field "defaultReceiver" (TyApp (TyCon "Ref") (TyApp (TyCon "Option") (TyTuple (TyCon "String") (TyCon "Int") (TyCon "Int"))))) (field "superCountGlobals" (TyApp (TyCon "Ref") (TyApp (TyCon "OrdMap") (TyCon "Unit")))) (field "dictConstCache" (TyApp (TyCon "Ref") (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "String"))))) (field "strLitCache" (TyApp (TyCon "Ref") (TyApp (TyCon "OrdMap") (TyCon "String")))) (field "closConstCache" (TyApp (TyCon "Ref") (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "String"))))) (field "floatFwSet" (TyApp (TyCon "Ref") (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyTuple (TyCon "Int") (TyApp (TyCon "List") (TyCon "Int"))))))) (field "floatClosureFns" (TyApp (TyCon "Ref") (TyApp (TyCon "List") (TyCon "String")))) (field "rawWorkers" (TyApp (TyCon "Ref") (TyApp (TyCon "OrdMap") (TyCon "RawWorker")))) (field "constGlobals" (TyApp (TyCon "Ref") (TyApp (TyCon "OrdMap") (TyCon "Lit")))) (field "inlineOpen" (TyApp (TyCon "Ref") (TyCon "Int"))) (field "inlineSpent" (TyApp (TyCon "Ref") (TyCon "Int"))) (field "siteFileNums" (TyApp (TyCon "Ref") (TyApp (TyCon "OrdMap") (TyCon "Int")))) (field "siteFiles" (TyApp (TyCon "Ref") (TyApp (TyCon "List") (TyCon "String")))) (field "siteTraps" (TyApp (TyCon "Ref") (TyApp (TyCon "List") (TyCon "String")))) (field "symbols" (TyApp (TyCon "Ref") (TyCon "SymbolRegistry"))) (field "coverage" (TyApp (TyCon "Ref") (TyCon "CallCoverage"))) (field "excusedCalls" (TyApp (TyCon "Ref") (TyApp (TyCon "List") (TyCon "LlvmSymbol")))) (field "symbolDefects" (TyApp (TyCon "Ref") (TyApp (TyCon "List") (TyCon "SymbolDefect")))) (field "symOrigin" (TyApp (TyCon "Ref") (TyCon "SymbolOrigin"))) (field "hiddenDefines" (TyApp (TyCon "Ref") (TyApp (TyCon "Option") (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "Prototype")))))) (field "orScope" (TyApp (TyCon "Ref") (TyApp (TyCon "Option") (TyCon "OrScope"))))))) ())
 (DData Private "FnSig" () ((variant "FnSig" (ConPos (TyApp (TyCon "List") (TyCon "LTy")) (TyCon "LTy")))) ())
 (DTypeSig false "freshId" (TyFun (TyCon "Emit") (TyCon "Int")))
 (DFunDef false "freshId" ((PVar "e")) (EBlock (DoLet false false (PVar "k") (EApp (EVar "scopeWord") (EVar "e"))) (DoLet false false (PVar "n") (EApp (EApp (EVar "optionOr") (EFieldAccess (EVar "e") "counter0")) (EApp (EApp (EVar "omLookup") (EVar "k")) (EUnOp "!" (EFieldAccess (EVar "e") "counters"))))) (DoExpr (EApp (EApp (EVar "setRef") (EFieldAccess (EVar "e") "counters")) (EApp (EApp (EApp (EVar "omInsert") (EVar "k")) (EBinOp "+" (EVar "n") (ELit (LInt 1)))) (EUnOp "!" (EFieldAccess (EVar "e") "counters"))))) (DoExpr (EVar "n"))))
@@ -15583,8 +15469,6 @@ runtimeName e symbol = optionOr "" (externRuntimeKey e.externFacts symbol)
 (DTypeSig false "implEntryPositions" (TyFun (TyCon "CImplEntry") (TyApp (TyCon "List") (TyCon "Int"))))
 (DFunDef false "implEntryPositions" ((PCon "CImplEntry" PWild PWild PWild (PCon "CImplTagged" PWild PWild PWild PWild (PVar "positions") PWild PWild))) (EVar "positions"))
 (DFunDef false "implEntryPositions" ((PCon "CImplEntry" PWild PWild PWild (PCon "CImplDefault" PWild PWild PWild PWild (PVar "positions") PWild PWild))) (EVar "positions"))
-(DTypeSig false "implEntryMemoisable" (TyFun (TyCon "CImplEntry") (TyCon "Bool")))
-(DFunDef false "implEntryMemoisable" ((PVar "ent")) (EBinOp "&&" (EApp (EVar "isEmptyL") (EApp (EVar "implEntryPositions") (EVar "ent"))) (EApp (EVar "isEmptyL") (EApp (EVar "implPats") (EVar "ent")))))
 (DTypeSig false "implEntryTag" (TyFun (TyCon "CImplEntry") (TyCon "String")))
 (DFunDef false "implEntryTag" ((PCon "CImplEntry" PWild PWild PWild (PCon "CImplTagged" (PVar "tag") PWild PWild PWild PWild PWild PWild))) (EVar "tag"))
 (DFunDef false "implEntryTag" ((PCon "CImplEntry" PWild PWild PWild (PCon "CImplDefault" PWild (PVar "tag") PWild PWild PWild PWild PWild))) (EVar "tag"))
@@ -16796,7 +16680,7 @@ runtimeName e symbol = optionOr "" (externRuntimeKey e.externFacts symbol)
 (DTypeSig false "emitPapDefineIndirect" (TyFun (TyCon "Emit") (TyFun (TyCon "String") (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyCon "Unit"))))))
 (DFunDef false "emitPapDefineIndirect" ((PVar "e") (PVar "papName") (PVar "supplied") (PVar "remaining")) (EBlock (DoLet false false (PVar "saved") (EFieldAccess (EApp (EVar "bufRef") (EVar "e")) "value")) (DoExpr (EApp (EApp (EVar "setRef") (EApp (EVar "bufRef") (EVar "e"))) (EListLit))) (DoLet false false (PVar "scope") (EApp (EVar "beginDefine") (EVar "e"))) (DoExpr (EApp (EApp (EApp (EApp (EVar "defineHeader") (EVar "e")) (EVar "LiftedDefine")) (EVar "papName")) (EApp (EVar "wordProto") (EApp (EVar "etaParamDecls") (EVar "remaining"))))) (DoExpr (EApp (EApp (EVar "emit") (EVar "e")) (ELit (LString "entry:")))) (DoLet false false (PVar "innerCw") (EApp (EApp (EApp (EVar "loadField") (EVar "e")) (ELit (LString "%clos"))) (ELit (LInt 1)))) (DoLet false false (PVar "capOps") (EApp (EApp (EApp (EVar "loadPapCaptures") (EVar "e")) (EBinOp "+" (EVar "supplied") (ELit (LInt 1)))) (ELit (LInt 1)))) (DoLet false false (PVar "allArgs") (EBinOp "++" (EVar "capOps") (EApp (EApp (EVar "argNames") (EVar "remaining")) (ELit (LInt 0))))) (DoLet false false (PVar "cp") (EApp (EApp (EApp (EVar "loadField") (EVar "e")) (EVar "innerCw")) (ELit (LInt 0)))) (DoLet false false (PVar "fp") (EApp (EVar "freshReg") (EVar "e"))) (DoExpr (EApp (EApp (EVar "emit") (EVar "e")) (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "  ")) (EApp (EVar "display") (EVar "fp"))) (ELit (LString " = inttoptr i64 "))) (EApp (EVar "display") (EVar "cp"))) (ELit (LString " to ptr"))))) (DoLet false false (PVar "r") (EApp (EVar "freshReg") (EVar "e"))) (DoExpr (EApp (EApp (EVar "emit") (EVar "e")) (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "  ")) (EApp (EVar "display") (EVar "r"))) (ELit (LString " = call i64 "))) (EApp (EVar "display") (EVar "fp"))) (ELit (LString "("))) (EApp (EVar "display") (EApp (EVar "argDecls") (EBinOp "::" (EVar "innerCw") (EVar "allArgs"))))) (ELit (LString ")"))))) (DoExpr (EApp (EApp (EVar "emit") (EVar "e")) (EBinOp "++" (ELit (LString "  ret i64 ")) (EVar "r")))) (DoExpr (EApp (EApp (EVar "emit") (EVar "e")) (ELit (LString "}")))) (DoExpr (EApp (EApp (EVar "emit") (EVar "e")) (ELit (LString "")))) (DoLet false false (PVar "lamLines") (EFieldAccess (EApp (EVar "bufRef") (EVar "e")) "value")) (DoExpr (EApp (EApp (EVar "setRef") (EApp (EVar "lamsRef") (EVar "e"))) (EBinOp "++" (EVar "lamLines") (EFieldAccess (EApp (EVar "lamsRef") (EVar "e")) "value")))) (DoExpr (EApp (EApp (EVar "endDefine") (EVar "e")) (EVar "scope"))) (DoExpr (EApp (EApp (EVar "setRef") (EApp (EVar "bufRef") (EVar "e"))) (EVar "saved")))))
 (DTypeSig false "emitMethodDispatch" (TyFun (TyCon "Emit") (TyFun (TyApp (TyCon "OrdMap") (TyTuple (TyCon "String") (TyCon "LTy"))) (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyCon "Int") (TyFun (TyCon "Route") (TyFun (TyApp (TyCon "List") (TyCon "Route")) (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyTuple (TyCon "String") (TyCon "LTy")))))))))))
-(DFunDef false "emitMethodDispatch" ((PVar "e") (PVar "env") (PVar "name") (PVar "iface") (PVar "siteArity") (PVar "dict") (PVar "methRoutes") (PVar "argOps")) (EMatch (EApp (EApp (EApp (EApp (EVar "soleImplDirectSite") (EVar "e")) (EVar "name")) (EVar "iface")) (EVar "siteArity")) (arm (PCon "Some" (PVar "ent")) () (EApp (EApp (EApp (EApp (EApp (EVar "emitArityCall") (EVar "e")) (EApp (EApp (EApp (EVar "implEntryFnName") (EVar "e")) (EVar "name")) (EVar "ent"))) (EVar "argOps")) (EApp (EVar "implSrcValueArity") (EVar "ent"))) (EVar "LTInt"))) (arm PWild () (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EVar "emitMethodDispatchChain") (EVar "e")) (EVar "env")) (EVar "name")) (EVar "iface")) (EVar "siteArity")) (EVar "dict")) (EVar "methRoutes")) (EVar "argOps")))))
+(DFunDef false "emitMethodDispatch" ((PVar "e") (PVar "env") (PVar "name") (PVar "iface") (PVar "siteArity") (PVar "dict") (PVar "methRoutes") (PVar "argOps")) (EMatch (EApp (EApp (EApp (EApp (EVar "soleImplDirectSite") (EVar "e")) (EVar "name")) (EVar "iface")) (EVar "siteArity")) (arm (PCon "Some" (PVar "ent")) () (EApp (EApp (EApp (EApp (EApp (EVar "emitArityCall") (EVar "e")) (EApp (EApp (EApp (EVar "implEntryFnName") (EVar "e")) (EVar "name")) (EVar "ent"))) (EVar "argOps")) (EApp (EVar "implSrcValueArity") (EVar "ent"))) (EVar "LTInt"))) (arm PWild () (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EVar "emitSlotCall") (EVar "e")) (EVar "env")) (EVar "name")) (EVar "iface")) (EVar "dict")) (EVar "methRoutes")) (EVar "argOps")))))
 (DTypeSig false "soleImplDirect" (TyFun (TyCon "Emit") (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyCon "Int") (TyApp (TyCon "Option") (TyCon "CImplEntry")))))))
 (DFunDef false "soleImplDirect" ((PVar "e") (PVar "name") (PVar "iface") (PVar "siteArity")) (EMatch (EApp (EApp (EApp (EApp (EVar "siteImpls") (EVar "e")) (EVar "name")) (EVar "iface")) (EVar "siteArity")) (arm (PList (PVar "ent")) () (EIf (EBinOp "<=" (EApp (EApp (EApp (EVar "implReqCount") (EVar "e")) (EVar "name")) (EVar "ent")) (ELit (LInt 0))) (EApp (EVar "Some") (EVar "ent")) (EVar "None"))) (arm PWild () (EVar "None"))))
 (DTypeSig false "siteImpls" (TyFun (TyCon "Emit") (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyCon "Int") (TyApp (TyCon "List") (TyCon "CImplEntry")))))))
@@ -16829,24 +16713,38 @@ runtimeName e symbol = optionOr "" (externRuntimeKey e.externFacts symbol)
 (DTypeSig false "emitDeclares" (TyFun (TyCon "Emit") (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "Prototype"))) (TyCon "Unit"))))
 (DFunDef false "emitDeclares" (PWild (PList)) (ELit LUnit))
 (DFunDef false "emitDeclares" ((PVar "e") (PCons (PTuple (PVar "sym") (PVar "proto")) (PVar "rest"))) (EBlock (DoExpr (EApp (EApp (EVar "emit") (EVar "e")) (EBinOp "++" (ELit (LString "declare ")) (EApp (EApp (EVar "prototypeText") (EVar "sym")) (EVar "proto"))))) (DoExpr (EApp (EApp (EVar "emitDeclares") (EVar "e")) (EVar "rest")))))
-(DTypeSig false "emitMethodDispatchChain" (TyFun (TyCon "Emit") (TyFun (TyApp (TyCon "OrdMap") (TyTuple (TyCon "String") (TyCon "LTy"))) (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyCon "Int") (TyFun (TyCon "Route") (TyFun (TyApp (TyCon "List") (TyCon "Route")) (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyTuple (TyCon "String") (TyCon "LTy")))))))))))
-(DFunDef false "emitMethodDispatchChain" ((PVar "e") (PVar "env") (PVar "name") (PVar "iface") (PVar "siteArity") (PVar "dict") (PVar "methRoutes") (PVar "argOps")) (EBlock (DoLet false false (PVar "dictPtr") (EApp (EApp (EApp (EVar "dictWordOfRoute") (EVar "e")) (EVar "env")) (EVar "dict"))) (DoLet false false (PVar "methWords") (EApp (EApp (EApp (EVar "dictWordsOf") (EVar "e")) (EVar "env")) (EVar "methRoutes"))) (DoLet false false (PVar "nmw") (EApp (EVar "lengthS") (EVar "methWords"))) (DoLet false false (PVar "nargs") (EApp (EVar "lengthS") (EVar "argOps"))) (DoLet false false (PVar "fname") (EApp (EApp (EApp (EApp (EApp (EVar "dispFnName") (EApp (EApp (EApp (EVar "dispInterfaceWord") (EVar "e")) (EVar "name")) (EVar "iface"))) (EVar "name")) (EVar "nmw")) (EVar "nargs")) (EVar "siteArity"))) (DoExpr (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EVar "ensureDispatcherEmitted") (EVar "e")) (EVar "fname")) (EVar "name")) (EVar "iface")) (EVar "nmw")) (EVar "nargs")) (EVar "siteArity"))) (DoExpr (EApp (EApp (EApp (EApp (EVar "emitImplCall") (EVar "e")) (EVar "fname")) (EBinOp "::" (EVar "dictPtr") (EBinOp "++" (EVar "methWords") (EVar "argOps")))) (EVar "LTInt")))))
-(DTypeSig false "dispFnName" (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyCon "String")))))))
-(DFunDef false "dispFnName" ((PVar "iface") (PVar "name") (PVar "nmw") (PVar "nargs") (PVar "siteArity")) (EApp (EVar "LN.llvmName") (EApp (EApp (EApp (EApp (EApp (EVar "LN.LDispatcher") (EVar "iface")) (EVar "name")) (EVar "nmw")) (EVar "nargs")) (EVar "siteArity"))))
-(DTypeSig false "dispInterfaceWord" (TyFun (TyCon "Emit") (TyFun (TyCon "String") (TyFun (TyCon "String") (TyCon "String")))))
-(DFunDef false "dispInterfaceWord" ((PVar "e") (PVar "name") (PVar "iface")) (EIf (EBinOp "&&" (EBinOp "&&" (EBinOp "/=" (EVar "iface") (ELit (LString ""))) (EApp (EVar "not") (EApp (EApp (EVar "startsWith") (ELit (LString "core::"))) (EVar "iface")))) (EApp (EApp (EVar "omHasKey") (EVar "name")) (EFieldAccess (EFieldAccess (EVar "e") "input") "sharedMethodNames"))) (EVar "iface") (ELit (LString ""))))
-(DTypeSig false "ensureDispatcherEmitted" (TyFun (TyCon "Emit") (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyCon "Unit")))))))))
-(DFunDef false "ensureDispatcherEmitted" ((PVar "e") (PVar "fname") (PVar "name") (PVar "iface") (PVar "nmw") (PVar "nargs") (PVar "siteArity")) (EIf (EApp (EApp (EVar "contains") (EVar "fname")) (EUnOp "!" (EFieldAccess (EVar "e") "dispCache"))) (ELit LUnit) (EBlock (DoExpr (EApp (EApp (EVar "setRef") (EFieldAccess (EVar "e") "dispCache")) (EBinOp "::" (EVar "fname") (EUnOp "!" (EFieldAccess (EVar "e") "dispCache"))))) (DoExpr (EApp (EApp (EVar "withProgramScope") (EVar "e")) (ELam (PWild) (EIf (EBinOp "==" (EFieldAccess (EFieldAccess (EVar "e") "input") "emitHalf") (EVar "emitHalfPrelude")) (EBlock (DoLet false false (PVar "proto") (EApp (EVar "wordProto") (EApp (EApp (EVar "dispParamDecls") (EVar "nmw")) (EVar "nargs")))) (DoExpr (EApp (EApp (EVar "registerL") (EVar "e")) (EApp (EApp (EApp (EVar "declareSymbol") (EApp (EVar "Generated") (EVar "fname"))) (EVar "proto")) (EUnOp "!" (EFieldAccess (EVar "e") "symOrigin"))))) (DoExpr (EApp (EApp (EVar "emitGlobal") (EVar "e")) (EBinOp "++" (ELit (LString "declare ")) (EApp (EApp (EVar "prototypeText") (EVar "fname")) (EVar "proto")))))) (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EVar "emitDispatcherDefine") (EVar "e")) (EVar "fname")) (EVar "name")) (EVar "iface")) (EVar "nmw")) (EVar "nargs")) (EVar "siteArity")))))))))
-(DTypeSig false "emitDispatcherDefine" (TyFun (TyCon "Emit") (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyCon "Unit")))))))))
-(DFunDef false "emitDispatcherDefine" ((PVar "e") (PVar "fname") (PVar "name") (PVar "iface") (PVar "nmw") (PVar "nargs") (PVar "siteArity")) (EBlock (DoLet false false (PVar "saved") (EFieldAccess (EApp (EVar "bufRef") (EVar "e")) "value")) (DoExpr (EApp (EApp (EVar "setRef") (EApp (EVar "bufRef") (EVar "e"))) (EListLit))) (DoLet false false (PVar "scope") (EApp (EVar "beginDefine") (EVar "e"))) (DoExpr (EApp (EApp (EApp (EApp (EVar "defineHeader") (EVar "e")) (EVar "LiftedDefine")) (EVar "fname")) (EApp (EVar "wordProto") (EApp (EApp (EVar "dispParamDecls") (EVar "nmw")) (EVar "nargs"))))) (DoExpr (EApp (EApp (EVar "emit") (EVar "e")) (ELit (LString "entry:")))) (DoLet false false (PTuple (PVar "r") PWild) (EApp (EApp (EApp (EApp (EApp (EApp (EVar "emitDispatcherBody") (EVar "e")) (EVar "name")) (EVar "iface")) (EVar "nmw")) (EVar "nargs")) (EVar "siteArity"))) (DoExpr (EApp (EApp (EVar "emit") (EVar "e")) (EBinOp "++" (ELit (LString "  ret i64 ")) (EVar "r")))) (DoExpr (EApp (EApp (EVar "emit") (EVar "e")) (ELit (LString "}")))) (DoExpr (EApp (EApp (EVar "emit") (EVar "e")) (ELit (LString "")))) (DoLet false false (PVar "lamLines") (EFieldAccess (EApp (EVar "bufRef") (EVar "e")) "value")) (DoExpr (EApp (EApp (EVar "setRef") (EApp (EVar "lamsRef") (EVar "e"))) (EBinOp "++" (EVar "lamLines") (EFieldAccess (EApp (EVar "lamsRef") (EVar "e")) "value")))) (DoExpr (EApp (EApp (EVar "endDefine") (EVar "e")) (EVar "scope"))) (DoExpr (EApp (EApp (EVar "setRef") (EApp (EVar "bufRef") (EVar "e"))) (EVar "saved")))))
-(DTypeSig false "emitDispatcherBody" (TyFun (TyCon "Emit") (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyTuple (TyCon "String") (TyCon "LTy")))))))))
-(DFunDef false "emitDispatcherBody" ((PVar "e") (PVar "name") (PVar "iface") (PVar "nmw") (PVar "nargs") (PVar "siteArity")) (EMatch (EApp (EApp (EApp (EApp (EVar "soleImplDirect") (EVar "e")) (EVar "name")) (EVar "iface")) (EVar "siteArity")) (arm (PCon "Some" (PVar "ent")) () (EApp (EApp (EApp (EApp (EApp (EVar "emitArityCall") (EVar "e")) (EApp (EApp (EApp (EVar "implEntryFnName") (EVar "e")) (EVar "name")) (EVar "ent"))) (EApp (EApp (EApp (EVar "dispWordNames") (ELit (LString "%arg"))) (EVar "nargs")) (ELit (LInt 0)))) (EApp (EVar "implSrcValueArity") (EVar "ent"))) (EVar "LTInt"))) (arm PWild () (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EVar "emitDispatchBody") (EVar "e")) (EVar "name")) (EVar "iface")) (ELit (LString "%dict"))) (EApp (EApp (EApp (EVar "dispWordNames") (ELit (LString "%mw"))) (EVar "nmw")) (ELit (LInt 0)))) (EApp (EApp (EApp (EVar "dispWordNames") (ELit (LString "%arg"))) (EVar "nargs")) (ELit (LInt 0)))) (EVar "siteArity")))))
-(DTypeSig false "dispParamDecls" (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyApp (TyCon "List") (TyCon "LlvmParam")))))
-(DFunDef false "dispParamDecls" ((PVar "nmw") (PVar "nargs")) (EApp (EApp (EVar "map") (ELam ((PVar "r")) (EApp (EApp (EVar "LlvmParam") (ELit (LString "i64"))) (EVar "r")))) (EBinOp "::" (ELit (LString "%dict")) (EBinOp "++" (EApp (EApp (EApp (EVar "dispWordNames") (ELit (LString "%mw"))) (EVar "nmw")) (ELit (LInt 0))) (EApp (EApp (EApp (EVar "dispWordNames") (ELit (LString "%arg"))) (EVar "nargs")) (ELit (LInt 0)))))))
-(DTypeSig false "dispWordNames" (TyFun (TyCon "String") (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyApp (TyCon "List") (TyCon "String"))))))
-(DFunDef false "dispWordNames" ((PVar "pre") (PVar "n") (PVar "i")) (EIf (EBinOp ">=" (EVar "i") (EVar "n")) (EListLit) (EIf (EVar "otherwise") (EBinOp "::" (EBinOp "++" (EVar "pre") (EApp (EVar "intToString") (EVar "i"))) (EApp (EApp (EApp (EVar "dispWordNames") (EVar "pre")) (EVar "n")) (EBinOp "+" (EVar "i") (ELit (LInt 1))))) (EApp (EVar "__fallthrough__") (ELit LUnit)))))
-(DTypeSig false "emitDispatchBody" (TyFun (TyCon "Emit") (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyCon "Int") (TyTuple (TyCon "String") (TyCon "LTy"))))))))))
-(DFunDef false "emitDispatchBody" ((PVar "e") (PVar "name") (PVar "iface") (PVar "dictPtr") (PVar "methWords") (PVar "argOps") (PVar "siteArity")) (EBlock (DoLet false false (PVar "headTag") (EApp (EApp (EVar "loadTag") (EVar "e")) (EVar "dictPtr"))) (DoLet false false (PVar "impls") (EApp (EApp (EApp (EApp (EVar "siteImpls") (EVar "e")) (EVar "name")) (EVar "iface")) (EVar "siteArity"))) (DoLet false false (PVar "groups") (EApp (EApp (EVar "implGroupsForMethod") (EVar "e")) (EVar "name"))) (DoLet false false (PVar "slot") (EApp (EVar "freshReg") (EVar "e"))) (DoExpr (EApp (EApp (EVar "emit") (EVar "e")) (EBinOp "++" (EBinOp "++" (ELit (LString "  ")) (EVar "slot")) (ELit (LString " = alloca i64"))))) (DoLet false false (PVar "endL") (EBinOp "++" (ELit (LString "dispend")) (EApp (EVar "intToString") (EApp (EVar "freshLocal") (EVar "e"))))) (DoExpr (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EVar "emitDispatchChain") (EVar "e")) (EVar "dictPtr")) (EVar "headTag")) (EVar "impls")) (EVar "groups")) (EVar "name")) (EVar "methWords")) (EVar "argOps")) (EVar "slot")) (EVar "endL"))) (DoExpr (EApp (EApp (EVar "emit") (EVar "e")) (EBinOp "++" (EVar "endL") (ELit (LString ":"))))) (DoLet false false (PVar "r") (EApp (EVar "freshReg") (EVar "e"))) (DoExpr (EApp (EApp (EVar "emit") (EVar "e")) (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "  ")) (EApp (EVar "display") (EVar "r"))) (ELit (LString " = load i64, ptr "))) (EApp (EVar "display") (EVar "slot"))) (ELit (LString ""))))) (DoExpr (ETuple (EVar "r") (EVar "LTInt")))))
+(DTypeSig false "emitSlotCall" (TyFun (TyCon "Emit") (TyFun (TyApp (TyCon "OrdMap") (TyTuple (TyCon "String") (TyCon "LTy"))) (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyCon "Route") (TyFun (TyApp (TyCon "List") (TyCon "Route")) (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyTuple (TyCon "String") (TyCon "LTy"))))))))))
+(DFunDef false "emitSlotCall" ((PVar "e") (PVar "env") (PVar "name") (PVar "iface") (PVar "dict") (PVar "methRoutes") (PVar "argOps")) (EBlock (DoLet false false (PVar "dictPtr") (EApp (EApp (EApp (EVar "dictWordOfRoute") (EVar "e")) (EVar "env")) (EVar "dict"))) (DoLet false false (PVar "methWords") (EApp (EApp (EApp (EVar "dictWordsOf") (EVar "e")) (EVar "env")) (EVar "methRoutes"))) (DoExpr (EMatch (EApp (EApp (EApp (EVar "slotOf") (EVar "name")) (EApp (EApp (EVar "interfaceSlots") (EFieldAccess (EVar "e") "methodTables")) (EVar "iface"))) (ELit (LInt 0))) (arm (PCon "Some" (PTuple (PVar "i") PWild)) () (EBlock (DoLet false false (PVar "clos") (EApp (EApp (EApp (EApp (EApp (EVar "loadSlot") (EVar "e")) (EVar "iface")) (EVar "name")) (EVar "dictPtr")) (EVar "i"))) (DoExpr (ETuple (EApp (EApp (EApp (EVar "emitApplyAny") (EVar "e")) (EVar "clos")) (EBinOp "::" (EVar "dictPtr") (EBinOp "++" (EVar "methWords") (EVar "argOps")))) (EVar "LTInt"))))) (arm (PCon "None") () (EApp (EApp (EVar "gapE") (EVar "e")) (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "method '")) (EApp (EVar "display") (EVar "name"))) (ELit (LString "' is not a slot of interface '"))) (EApp (EVar "display") (EVar "iface"))) (ELit (LString "'")))))))))
+(DTypeSig false "slotOf" (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "MethodSlot")) (TyFun (TyCon "Int") (TyApp (TyCon "Option") (TyTuple (TyCon "Int") (TyCon "MethodSlot")))))))
+(DFunDef false "slotOf" (PWild (PList) PWild) (EVar "None"))
+(DFunDef false "slotOf" ((PVar "name") (PCons (PVar "slot") (PVar "rest")) (PVar "i")) (EIf (EBinOp "==" (EFieldAccess (EAnnot (EVar "slot") (TyCon "MethodSlot")) "method") (EVar "name")) (EApp (EVar "Some") (ETuple (EVar "i") (EVar "slot"))) (EApp (EApp (EApp (EVar "slotOf") (EVar "name")) (EVar "rest")) (EBinOp "+" (EVar "i") (ELit (LInt 1))))))
+(DTypeSig false "superCountOf" (TyFun (TyCon "Emit") (TyFun (TyCon "String") (TyCon "Int"))))
+(DFunDef false "superCountOf" ((PVar "e") (PVar "iface")) (EApp (EApp (EVar "optionOr") (ELit (LInt 0))) (EApp (EApp (EVar "omLookup") (EVar "iface")) (EFieldAccess (EVar "e") "superCounts"))))
+(DTypeSig false "loadSlot" (TyFun (TyCon "Emit") (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyCon "Int") (TyCon "String")))))))
+(DFunDef false "loadSlot" ((PVar "e") (PVar "iface") (PVar "method") (PVar "dictPtr") (PVar "i")) (EBlock (DoLet false false (PVar "isNull") (EApp (EVar "freshReg") (EVar "e"))) (DoExpr (EApp (EApp (EVar "emit") (EVar "e")) (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "  ")) (EApp (EVar "display") (EVar "isNull"))) (ELit (LString " = icmp eq i64 "))) (EApp (EVar "display") (EVar "dictPtr"))) (ELit (LString ", 0 ; slot "))) (EApp (EVar "display") (EVar "iface"))) (ELit (LString "."))) (EApp (EVar "display") (EVar "method"))) (ELit (LString ""))))) (DoLet false false (PVar "n") (EApp (EVar "intToString") (EApp (EVar "freshLocal") (EVar "e")))) (DoLet false false (PVar "trapL") (EBinOp "++" (ELit (LString "slotnull")) (EVar "n"))) (DoLet false false (PVar "okL") (EBinOp "++" (ELit (LString "slotok")) (EVar "n"))) (DoExpr (EApp (EApp (EVar "emit") (EVar "e")) (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "  br i1 ")) (EApp (EVar "display") (EVar "isNull"))) (ELit (LString ", label %"))) (EApp (EVar "display") (EVar "trapL"))) (ELit (LString ", label %"))) (EApp (EVar "display") (EVar "okL"))) (ELit (LString ""))))) (DoExpr (EApp (EApp (EVar "emit") (EVar "e")) (EBinOp "++" (EVar "trapL") (ELit (LString ":"))))) (DoExpr (EApp (EApp (EVar "emit") (EVar "e")) (EApp (EApp (EApp (EApp (EApp (EVar "rtLine") (EVar "e")) (ELit (LString ""))) (ELit (LString "void"))) (ELit (LString "mdk_dispatch_no_impl"))) (EListLit)))) (DoExpr (EApp (EApp (EVar "emit") (EVar "e")) (ELit (LString "  unreachable")))) (DoExpr (EApp (EApp (EVar "emit") (EVar "e")) (EBinOp "++" (EVar "okL") (ELit (LString ":"))))) (DoExpr (EIf (EBinOp "==" (EFieldAccess (EFieldAccess (EVar "e") "input") "emitHalf") (EVar "emitHalfPrelude")) (EBlock (DoLet false false (PVar "supers") (EApp (EVar "freshReg") (EVar "e"))) (DoExpr (EApp (EApp (EVar "emit") (EVar "e")) (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "  ")) (EApp (EVar "display") (EVar "supers"))) (ELit (LString " = load i64, ptr @"))) (EApp (EVar "display") (EApp (EApp (EVar "symRef") (EVar "e")) (EApp (EApp (EVar "superCountGlobal") (EVar "e")) (EVar "iface"))))) (ELit (LString ""))))) (DoLet false false (PVar "field") (EApp (EVar "freshReg") (EVar "e"))) (DoExpr (EApp (EApp (EVar "emit") (EVar "e")) (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "  ")) (EApp (EVar "display") (EVar "field"))) (ELit (LString " = add i64 "))) (EApp (EVar "display") (EVar "supers"))) (ELit (LString ", "))) (EApp (EVar "display") (EApp (EVar "intToString") (EVar "i")))) (ELit (LString ""))))) (DoExpr (EApp (EApp (EApp (EVar "loadFieldDyn") (EVar "e")) (EVar "dictPtr")) (EVar "field")))) (EBlock (DoExpr (EIf (EApp (EVar "isSome") (EUnOp "!" (EFieldAccess (EVar "e") "hiddenDefines"))) (EBlock (DoLet false false PWild (EApp (EApp (EVar "superCountGlobal") (EVar "e")) (EVar "iface"))) (DoExpr (ELit LUnit))) (ELit LUnit))) (DoExpr (EApp (EApp (EApp (EVar "loadField") (EVar "e")) (EVar "dictPtr")) (EBinOp "+" (EApp (EApp (EVar "superCountOf") (EVar "e")) (EVar "iface")) (EVar "i")))))))))
+(DTypeSig false "superCountGlobal" (TyFun (TyCon "Emit") (TyFun (TyCon "String") (TyCon "String"))))
+(DFunDef false "superCountGlobal" ((PVar "e") (PVar "iface")) (EBlock (DoLet false false (PVar "sym") (EApp (EVar "LN.llvmName") (EApp (EVar "LN.LSuperCount") (EVar "iface")))) (DoExpr (EIf (EApp (EApp (EVar "omHasKey") (EVar "sym")) (EUnOp "!" (EFieldAccess (EVar "e") "superCountGlobals"))) (EVar "sym") (EBlock (DoExpr (EApp (EApp (EVar "setRef") (EFieldAccess (EVar "e") "superCountGlobals")) (EApp (EApp (EApp (EVar "omInsert") (EVar "sym")) (ELit LUnit)) (EUnOp "!" (EFieldAccess (EVar "e") "superCountGlobals"))))) (DoLet false false (PVar "external") (EBinOp "==" (EFieldAccess (EFieldAccess (EVar "e") "input") "emitHalf") (EVar "emitHalfPrelude"))) (DoExpr (EApp (EApp (EVar "withProgramScope") (EVar "e")) (ELam (PWild) (EBlock (DoExpr (EApp (EApp (EApp (EApp (EVar "registerGlobal") (EVar "e")) (EVar "external")) (EVar "sym")) (ELit (LString "i64")))) (DoExpr (EApp (EApp (EVar "emitGlobal") (EVar "e")) (EIf (EVar "external") (EBinOp "++" (EBinOp "++" (ELit (LString "@")) (EApp (EVar "display") (EVar "sym"))) (ELit (LString " = external constant i64"))) (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "@")) (EApp (EVar "display") (EVar "sym"))) (ELit (LString " = constant i64 "))) (EApp (EVar "display") (EApp (EVar "intToString") (EApp (EApp (EVar "superCountOf") (EVar "e")) (EVar "iface"))))) (ELit (LString "")))))))))) (DoExpr (EVar "sym")))))))
+(DTypeSig false "runtimeCallArgMax" (TyCon "Int"))
+(DFunDef false "runtimeCallArgMax" () (ELit (LInt 8)))
+(DTypeSig false "slotWords" (TyFun (TyCon "Emit") (TyFun (TyCon "String") (TyApp (TyCon "List") (TyCon "String")))))
+(DFunDef false "slotWords" ((PVar "e") (PVar "key")) (EMatch (EApp (EApp (EVar "omLookup") (EVar "key")) (EFieldAccess (EFieldAccess (EVar "e") "methodTables") "instances")) (arm (PCon "Some" (PVar "table")) () (EApp (EApp (EApp (EApp (EApp (EApp (EVar "slotWordsGo") (EVar "e")) (EVar "key")) (EFieldAccess (EVar "table") "iface")) (EApp (EApp (EVar "interfaceSlots") (EFieldAccess (EVar "e") "methodTables")) (EFieldAccess (EVar "table") "iface"))) (EFieldAccess (EVar "table") "fills")) (ELit (LInt 0)))) (arm (PCon "None") () (EIf (EApp (EVar "isEmptyL") (EApp (EApp (EVar "interfaceSlots") (EFieldAccess (EVar "e") "methodTables")) (EApp (EVar "ifaceWordOfKey") (EVar "key")))) (EListLit) (EListLit (EApp (EApp (EVar "gapStr") (EVar "e")) (EBinOp "++" (EBinOp "++" (ELit (LString "no method table for instance '")) (EApp (EVar "display") (EVar "key"))) (ELit (LString "'")))))))))
+(DTypeSig false "slotWordsGo" (TyFun (TyCon "Emit") (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "MethodSlot")) (TyFun (TyApp (TyCon "List") (TyApp (TyCon "List") (TyCon "SlotCallee"))) (TyFun (TyCon "Int") (TyApp (TyCon "List") (TyCon "String")))))))))
+(DFunDef false "slotWordsGo" ((PVar "e") (PVar "key") (PVar "iface") (PCons (PVar "slot") (PVar "slots")) (PCons (PVar "fill") (PVar "fills")) (PVar "i")) (EBinOp "::" (EApp (EApp (EApp (EApp (EApp (EApp (EVar "slotClosureWord") (EVar "e")) (EVar "key")) (EVar "iface")) (EVar "slot")) (EVar "fill")) (EVar "i")) (EApp (EApp (EApp (EApp (EApp (EApp (EVar "slotWordsGo") (EVar "e")) (EVar "key")) (EVar "iface")) (EVar "slots")) (EVar "fills")) (EBinOp "+" (EVar "i") (ELit (LInt 1))))))
+(DFunDef false "slotWordsGo" (PWild PWild PWild PWild PWild PWild) (EListLit))
+(DTypeSig false "slotClosureWord" (TyFun (TyCon "Emit") (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyCon "MethodSlot") (TyFun (TyApp (TyCon "List") (TyCon "SlotCallee")) (TyFun (TyCon "Int") (TyCon "String"))))))))
+(DFunDef false "slotClosureWord" ((PVar "e") (PVar "key") (PVar "iface") (PVar "slot") (PVar "fill") (PVar "i")) (EBlock (DoLet false false (PVar "cacheKey") (EBinOp "++" (EApp (EVar "lenKey") (EVar "key")) (EApp (EVar "intToString") (EVar "i")))) (DoExpr (EMatch (EApp (EApp (EVar "omLookup") (EVar "cacheKey")) (EUnOp "!" (EFieldAccess (EVar "e") "slotCache"))) (arm (PCon "Some" (PVar "closName")) () (EBinOp "++" (EBinOp "++" (ELit (LString "ptrtoint (ptr @")) (EApp (EApp (EVar "symRef") (EVar "e")) (EVar "closName"))) (ELit (LString " to i64)")))) (arm (PCon "None") () (EMatch (EVar "fill") (arm (PList (PVar "callee")) () (EBlock (DoLet false false (PVar "closName") (EApp (EVar "LN.llvmName") (EApp (EApp (EVar "LN.LSlotClosure") (EVar "key")) (EFieldAccess (EVar "slot") "method")))) (DoExpr (EApp (EApp (EVar "setRef") (EFieldAccess (EVar "e") "slotCache")) (EApp (EApp (EApp (EVar "omInsert") (EVar "cacheKey")) (EVar "closName")) (EUnOp "!" (EFieldAccess (EVar "e") "slotCache"))))) (DoExpr (EApp (EApp (EApp (EApp (EApp (EApp (EVar "emitSlotWrapper") (EVar "e")) (EVar "key")) (EVar "iface")) (EVar "slot")) (EVar "callee")) (EVar "closName"))) (DoExpr (EBinOp "++" (EBinOp "++" (ELit (LString "ptrtoint (ptr @")) (EApp (EApp (EVar "symRef") (EVar "e")) (EVar "closName"))) (ELit (LString " to i64)")))))) (arm PWild () (EApp (EApp (EVar "gapStr") (EVar "e")) (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "slot '")) (EApp (EVar "display") (EFieldAccess (EVar "slot") "method"))) (ELit (LString "' of instance '"))) (EApp (EVar "display") (EVar "key"))) (ELit (LString "' has no single callee")))))))))))
+(DTypeSig false "emitSlotWrapper" (TyFun (TyCon "Emit") (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyCon "MethodSlot") (TyFun (TyCon "SlotCallee") (TyFun (TyCon "String") (TyCon "Unit"))))))))
+(DFunDef false "emitSlotWrapper" ((PVar "e") (PVar "key") (PVar "iface") (PVar "slot") (PVar "callee") (PVar "closName")) (EApp (EApp (EVar "withProgramScope") (EVar "e")) (ELam (PWild) (EBlock (DoLet false false (PVar "g") (EApp (EApp (EVar "optionOrPanic") (ELit (LString "llvm: a method table names no impl group"))) (EApp (EApp (EVar "omLookup") (EApp (EVar "intToString") (EFieldAccess (EVar "callee") "group"))) (EUnOp "!" (EFieldAccess (EVar "e") "implGroupAt"))))) (DoLet false false (PVar "cells") (EIf (EFieldAccess (EVar "callee") "inherited") (ELit (LInt 1)) (EApp (EApp (EVar "slotReqCount") (EVar "slot")) (EVar "g")))) (DoLet false false (PVar "values") (EApp (EApp (EVar "maxInt") (ELit (LInt 0))) (EBinOp "-" (EBinOp "-" (EApp (EVar "groupArity") (EVar "g")) (EFieldAccess (EVar "slot") "contextDicts")) (EVar "cells")))) (DoLet false false (PVar "arity") (EBinOp "+" (EBinOp "+" (ELit (LInt 1)) (EFieldAccess (EVar "slot") "contextDicts")) (EVar "values"))) (DoExpr (EIf (EBinOp ">" (EVar "arity") (EVar "runtimeCallArgMax")) (EBlock (DoLet false false PWild (EApp (EApp (EVar "gapStr") (EVar "e")) (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "slot '")) (EApp (EVar "display") (EFieldAccess (EVar "slot") "method"))) (ELit (LString "' of instance '"))) (EApp (EVar "display") (EVar "key"))) (ELit (LString "' takes "))) (EApp (EVar "display") (EApp (EVar "intToString") (EVar "arity")))) (ELit (LString " arguments; a closure of more than "))) (EApp (EVar "display") (EApp (EVar "intToString") (EVar "runtimeCallArgMax")))) (ELit (LString " cannot be applied through the runtime (#4790)"))))) (DoExpr (ELit LUnit))) (ELit LUnit))) (DoLet false false (PVar "fname") (EApp (EVar "LN.llvmName") (EApp (EApp (EVar "LN.LSlotFunction") (EVar "key")) (EFieldAccess (EVar "slot") "method")))) (DoLet false false (PVar "saved") (EFieldAccess (EApp (EVar "bufRef") (EVar "e")) "value")) (DoExpr (EApp (EApp (EVar "setRef") (EApp (EVar "bufRef") (EVar "e"))) (EListLit))) (DoLet false false (PVar "scope") (EApp (EVar "beginDefine") (EVar "e"))) (DoExpr (EApp (EApp (EApp (EApp (EApp (EVar "defineHeaderAs") (EVar "e")) (ELit (LString "define internal"))) (EVar "LiftedDefine")) (EVar "fname")) (EApp (EVar "wordProto") (EBinOp "::" (EVar "closParam") (EApp (EApp (EVar "slotParamDecls") (EFieldAccess (EVar "slot") "contextDicts")) (EVar "values")))))) (DoExpr (EApp (EApp (EVar "emit") (EVar "e")) (ELit (LString "entry:")))) (DoLet false false (PTuple (PVar "r") PWild) (EApp (EApp (EApp (EApp (EApp (EApp (EVar "emitSlotBody") (EVar "e")) (EVar "iface")) (EVar "slot")) (EVar "callee")) (EVar "g")) (EVar "values"))) (DoExpr (EApp (EApp (EVar "emit") (EVar "e")) (EBinOp "++" (ELit (LString "  ret i64 ")) (EVar "r")))) (DoExpr (EApp (EApp (EVar "emit") (EVar "e")) (ELit (LString "}")))) (DoExpr (EApp (EApp (EVar "emit") (EVar "e")) (ELit (LString "")))) (DoLet false false (PVar "lamLines") (EFieldAccess (EApp (EVar "bufRef") (EVar "e")) "value")) (DoExpr (EApp (EApp (EVar "setRef") (EApp (EVar "lamsRef") (EVar "e"))) (EBinOp "++" (EVar "lamLines") (EFieldAccess (EApp (EVar "lamsRef") (EVar "e")) "value")))) (DoExpr (EApp (EApp (EVar "endDefine") (EVar "e")) (EVar "scope"))) (DoExpr (EApp (EApp (EVar "setRef") (EApp (EVar "bufRef") (EVar "e"))) (EVar "saved"))) (DoExpr (EApp (EApp (EApp (EApp (EVar "registerGlobal") (EVar "e")) (EVar "False")) (EVar "closName")) (ELit (LString "[2 x i64]")))) (DoExpr (EApp (EApp (EVar "emitGlobal") (EVar "e")) (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "@")) (EApp (EVar "display") (EVar "closName"))) (ELit (LString " = internal constant [2 x i64] [i64 "))) (EApp (EVar "display") (EApp (EVar "intToString") (EVar "arity")))) (ELit (LString ", i64 ptrtoint (ptr @"))) (EApp (EVar "display") (EApp (EApp (EVar "symRef") (EVar "e")) (EVar "fname")))) (ELit (LString " to i64)]")))))))))
+(DTypeSig false "slotReqCount" (TyFun (TyCon "MethodSlot") (TyFun (TyCon "ImplGroup") (TyCon "Int"))))
+(DFunDef false "slotReqCount" ((PVar "slot") (PVar "g")) (EApp (EApp (EVar "maxInt") (ELit (LInt 0))) (EBinOp "-" (EApp (EVar "leadingDictParams") (EApp (EVar "firstClausePats") (EApp (EVar "groupClauses") (EVar "g")))) (EFieldAccess (EVar "slot") "contextDicts"))))
+(DTypeSig false "slotParamDecls" (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyApp (TyCon "List") (TyCon "LlvmParam")))))
+(DFunDef false "slotParamDecls" ((PVar "dicts") (PVar "values")) (EApp (EApp (EVar "map") (ELam ((PVar "r")) (EApp (EApp (EVar "LlvmParam") (ELit (LString "i64"))) (EVar "r")))) (EBinOp "::" (ELit (LString "%dict")) (EBinOp "++" (EApp (EApp (EApp (EVar "wordNames") (ELit (LString "%mw"))) (EVar "dicts")) (ELit (LInt 0))) (EApp (EApp (EApp (EVar "wordNames") (ELit (LString "%arg"))) (EVar "values")) (ELit (LInt 0)))))))
+(DTypeSig false "wordNames" (TyFun (TyCon "String") (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyApp (TyCon "List") (TyCon "String"))))))
+(DFunDef false "wordNames" ((PVar "pre") (PVar "n") (PVar "i")) (EIf (EBinOp ">=" (EVar "i") (EVar "n")) (EListLit) (EIf (EVar "otherwise") (EBinOp "::" (EBinOp "++" (EVar "pre") (EApp (EVar "intToString") (EVar "i"))) (EApp (EApp (EApp (EVar "wordNames") (EVar "pre")) (EVar "n")) (EBinOp "+" (EVar "i") (ELit (LInt 1))))) (EApp (EVar "__fallthrough__") (ELit LUnit)))))
+(DTypeSig false "emitSlotBody" (TyFun (TyCon "Emit") (TyFun (TyCon "String") (TyFun (TyCon "MethodSlot") (TyFun (TyCon "SlotCallee") (TyFun (TyCon "ImplGroup") (TyFun (TyCon "Int") (TyTuple (TyCon "String") (TyCon "LTy")))))))))
+(DFunDef false "emitSlotBody" ((PVar "e") (PVar "iface") (PVar "slot") (PVar "callee") (PVar "g") (PVar "values")) (EBlock (DoLet false false (PVar "memo") (EApp (EApp (EVar "memoGlobalName") (EApp (EVar "groupSymTag") (EVar "g"))) (EFieldAccess (EVar "slot") "method"))) (DoExpr (EIf (EBinOp "&&" (EBinOp "&&" (EBinOp "&&" (EBinOp "==" (EFieldAccess (EVar "slot") "contextDicts") (ELit (LInt 0))) (EBinOp "==" (EVar "values") (ELit (LInt 0)))) (EApp (EVar "groupMemoisable") (EVar "g"))) (EApp (EApp (EVar "isLazyGlobal") (EVar "e")) (EVar "memo"))) (EBlock (DoLet false false (PVar "rv") (EApp (EVar "freshReg") (EVar "e"))) (DoLet false false (PVar "call") (EApp (EApp (EApp (EVar "wordCall") (EVar "e")) (EApp (EVar "LN.llvmName") (EApp (EVar "LN.LGlobalForcer") (EVar "memo")))) (EListLit))) (DoExpr (EApp (EApp (EVar "emit") (EVar "e")) (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "  ")) (EApp (EVar "display") (EVar "rv"))) (ELit (LString " = "))) (EApp (EVar "display") (EVar "call"))) (ELit (LString ""))))) (DoExpr (ETuple (EVar "rv") (EVar "LTInt")))) (EBlock (DoLet false false (PVar "base") (EBinOp "+" (EApp (EApp (EVar "superCountOf") (EVar "e")) (EVar "iface")) (EApp (EVar "listLen") (EApp (EApp (EVar "interfaceSlots") (EFieldAccess (EVar "e") "methodTables")) (EVar "iface"))))) (DoLet false false (PVar "cellDicts") (EIf (EFieldAccess (EVar "callee") "inherited") (EListLit (ELit (LString "%dict"))) (EApp (EApp (EApp (EApp (EVar "loadReqDicts") (EVar "e")) (ELit (LString "%dict"))) (EBinOp "+" (EVar "base") (EApp (EApp (EVar "slotReqCount") (EVar "slot")) (EVar "g")))) (EVar "base")))) (DoExpr (EApp (EApp (EApp (EApp (EApp (EVar "emitArityCall") (EVar "e")) (EApp (EVar "groupFnName") (EVar "g"))) (EBinOp "++" (EBinOp "++" (EApp (EApp (EApp (EVar "wordNames") (ELit (LString "%mw"))) (EFieldAccess (EVar "slot") "contextDicts")) (ELit (LInt 0))) (EVar "cellDicts")) (EApp (EApp (EApp (EVar "wordNames") (ELit (LString "%arg"))) (EVar "values")) (ELit (LInt 0))))) (EApp (EVar "groupArity") (EVar "g"))) (EVar "LTInt"))))))))
+(DTypeSig false "groupMemoisable" (TyFun (TyCon "ImplGroup") (TyCon "Bool")))
+(DFunDef false "groupMemoisable" ((PVar "g")) (EBinOp "&&" (EApp (EVar "isEmptyL") (EApp (EVar "groupPositionsOf") (EVar "g"))) (EApp (EVar "isEmptyL") (EApp (EVar "firstClausePats") (EApp (EVar "groupClauses") (EVar "g"))))))
 (DTypeSig false "implReqCount" (TyFun (TyCon "Emit") (TyFun (TyCon "String") (TyFun (TyCon "CImplEntry") (TyCon "Int")))))
 (DFunDef false "implReqCount" ((PVar "_e") (PVar "_name") (PVar "ent")) (EApp (EVar "leadingDictParams") (EApp (EVar "implPats") (EVar "ent"))))
 (DTypeSig false "implRoutesForDefine" (TyFun (TyCon "Emit") (TyFun (TyCon "String") (TyFun (TyCon "CImplEntry") (TyFun (TyApp (TyCon "List") (TyCon "Route")) (TyFun (TyApp (TyCon "List") (TyCon "Route")) (TyApp (TyCon "List") (TyCon "Route"))))))))
@@ -16854,21 +16752,10 @@ runtimeName e symbol = optionOr "" (externRuntimeKey e.externFacts symbol)
 (DTypeSig false "takeRoutes" (TyFun (TyCon "Int") (TyFun (TyApp (TyCon "List") (TyCon "Route")) (TyApp (TyCon "List") (TyCon "Route")))))
 (DFunDef false "takeRoutes" ((PVar "n") (PCons (PVar "r") (PVar "rest"))) (EIf (EBinOp ">" (EVar "n") (ELit (LInt 0))) (EBinOp "::" (EVar "r") (EApp (EApp (EVar "takeRoutes") (EBinOp "-" (EVar "n") (ELit (LInt 1)))) (EVar "rest"))) (EApp (EVar "__fallthrough__") (ELit LUnit))))
 (DFunDef false "takeRoutes" (PWild PWild) (EListLit))
-(DTypeSig false "entrySuperCount" (TyFun (TyCon "Emit") (TyFun (TyCon "CImplEntry") (TyCon "Int"))))
-(DFunDef false "entrySuperCount" ((PVar "e") (PVar "ent")) (EApp (EApp (EVar "optionOr") (ELit (LInt 0))) (EApp (EApp (EVar "omLookup") (EApp (EVar "implEntryIfaceWord") (EVar "ent"))) (EFieldAccess (EVar "e") "superCounts"))))
 (DTypeSig false "loadReqDicts" (TyFun (TyCon "Emit") (TyFun (TyCon "String") (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyApp (TyCon "List") (TyCon "String")))))))
 (DFunDef false "loadReqDicts" ((PVar "e") (PVar "dictPtr") (PVar "n") (PVar "i")) (EIf (EBinOp ">=" (EVar "i") (EVar "n")) (EListLit) (EIf (EVar "otherwise") (EBinOp "::" (EApp (EApp (EApp (EVar "loadField") (EVar "e")) (EVar "dictPtr")) (EVar "i")) (EApp (EApp (EApp (EApp (EVar "loadReqDicts") (EVar "e")) (EVar "dictPtr")) (EVar "n")) (EBinOp "+" (EVar "i") (ELit (LInt 1))))) (EApp (EVar "__fallthrough__") (ELit LUnit)))))
-(DTypeSig false "emitDispatchArm" (TyFun (TyCon "Emit") (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyCon "CImplEntry") (TyFun (TyApp (TyCon "List") (TyCon "ImplGroup")) (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyCon "String") (TyFun (TyCon "String") (TyCon "Unit"))))))))))))
-(DFunDef false "emitDispatchArm" ((PVar "e") (PVar "dictPtr") (PVar "headTag") (PVar "ent") (PVar "groups") (PVar "name") (PVar "methWords") (PVar "argOps") (PVar "slot") (PVar "endL")) (EBlock (DoLet false false (PVar "cmp") (EApp (EVar "freshReg") (EVar "e"))) (DoExpr (EApp (EApp (EVar "emit") (EVar "e")) (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "  ")) (EApp (EVar "display") (EVar "cmp"))) (ELit (LString " = icmp eq i64 "))) (EApp (EVar "display") (EVar "headTag"))) (ELit (LString ", "))) (EApp (EVar "display") (EApp (EVar "intToString") (EApp (EVar "hashName") (EApp (EVar "implEntryKey") (EVar "ent")))))) (ELit (LString ""))))) (DoLet false false (PVar "n") (EApp (EVar "intToString") (EApp (EVar "freshLocal") (EVar "e")))) (DoLet false false (PVar "yes") (EBinOp "++" (ELit (LString "dispyes")) (EVar "n"))) (DoLet false false (PVar "next") (EBinOp "++" (ELit (LString "dispnext")) (EVar "n"))) (DoExpr (EApp (EApp (EVar "emit") (EVar "e")) (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "  br i1 ")) (EApp (EVar "display") (EVar "cmp"))) (ELit (LString ", label %"))) (EApp (EVar "display") (EVar "yes"))) (ELit (LString ", label %"))) (EApp (EVar "display") (EVar "next"))) (ELit (LString ""))))) (DoExpr (EApp (EApp (EVar "emit") (EVar "e")) (EBinOp "++" (EVar "yes") (ELit (LString ":"))))) (DoExpr (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EVar "emitDispatchArmBody") (EVar "e")) (EVar "dictPtr")) (EVar "ent")) (EVar "groups")) (EVar "name")) (EVar "methWords")) (EVar "argOps")) (EVar "slot")) (EVar "endL"))) (DoExpr (EApp (EApp (EVar "emit") (EVar "e")) (EBinOp "++" (EVar "next") (ELit (LString ":")))))))
-(DTypeSig false "emitDispatchArmBody" (TyFun (TyCon "Emit") (TyFun (TyCon "String") (TyFun (TyCon "CImplEntry") (TyFun (TyApp (TyCon "List") (TyCon "ImplGroup")) (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyCon "String") (TyFun (TyCon "String") (TyCon "Unit")))))))))))
-(DFunDef false "emitDispatchArmBody" ((PVar "e") (PVar "dictPtr") (PVar "ent") (PVar "groups") (PVar "name") (PVar "methWords") (PVar "argOps") (PVar "slot") (PVar "endL")) (EBlock (DoLet false false (PVar "symTag") (EApp (EVar "implEntrySymTag") (EVar "ent"))) (DoExpr (EIf (EBinOp "&&" (EBinOp "&&" (EBinOp "&&" (EApp (EVar "isEmptyL") (EVar "methWords")) (EApp (EVar "isEmptyL") (EVar "argOps"))) (EApp (EVar "implEntryMemoisable") (EVar "ent"))) (EApp (EApp (EVar "isLazyGlobal") (EVar "e")) (EApp (EApp (EVar "memoGlobalName") (EVar "symTag")) (EVar "name")))) (EBlock (DoLet false false (PVar "rv") (EApp (EVar "freshReg") (EVar "e"))) (DoLet false false (PVar "memoForcer") (EApp (EVar "LN.llvmName") (EApp (EVar "LN.LGlobalForcer") (EApp (EApp (EVar "memoGlobalName") (EVar "symTag")) (EVar "name"))))) (DoLet false false (PVar "call") (EApp (EApp (EApp (EVar "wordCall") (EVar "e")) (EVar "memoForcer")) (EListLit))) (DoExpr (EApp (EApp (EVar "emit") (EVar "e")) (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "  ")) (EApp (EVar "display") (EVar "rv"))) (ELit (LString " = "))) (EApp (EVar "display") (EVar "call"))) (ELit (LString ""))))) (DoExpr (EApp (EApp (EVar "emit") (EVar "e")) (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "  store i64 ")) (EApp (EVar "display") (EVar "rv"))) (ELit (LString ", ptr "))) (EApp (EVar "display") (EVar "slot"))) (ELit (LString ""))))) (DoExpr (EApp (EApp (EVar "emit") (EVar "e")) (EBinOp "++" (ELit (LString "  br label %")) (EVar "endL"))))) (EBlock (DoLet false false (PVar "cellCount") (EApp (EApp (EVar "maxInt") (ELit (LInt 0))) (EBinOp "-" (EApp (EApp (EApp (EVar "implReqCount") (EVar "e")) (EVar "name")) (EVar "ent")) (EApp (EVar "lengthS") (EVar "methWords"))))) (DoLet false false (PVar "superCount") (EApp (EApp (EVar "entrySuperCount") (EVar "e")) (EVar "ent"))) (DoLet false false (PVar "cellDicts") (EIf (EApp (EVar "isInheritedEntry") (EVar "ent")) (EListLit (EVar "dictPtr")) (EApp (EApp (EApp (EApp (EVar "loadReqDicts") (EVar "e")) (EVar "dictPtr")) (EBinOp "+" (EVar "superCount") (EVar "cellCount"))) (EVar "superCount")))) (DoLet false false (PVar "armArity") (EMatch (EApp (EApp (EVar "findGroupBySymTag") (EVar "symTag")) (EVar "groups")) (arm (PCon "Some" (PVar "g")) () (EApp (EVar "groupArity") (EVar "g"))) (arm (PCon "None") () (EBinOp "+" (EBinOp "+" (EApp (EVar "implSrcValueArity") (EVar "ent")) (EApp (EVar "lengthS") (EVar "methWords"))) (EVar "cellCount"))))) (DoLet false false (PTuple (PVar "rv") PWild) (EApp (EApp (EApp (EApp (EApp (EVar "emitArityCall") (EVar "e")) (EApp (EApp (EApp (EVar "implEntryFnName") (EVar "e")) (EVar "name")) (EVar "ent"))) (EBinOp "++" (EBinOp "++" (EVar "methWords") (EVar "cellDicts")) (EVar "argOps"))) (EVar "armArity")) (EVar "LTInt"))) (DoExpr (EApp (EApp (EVar "emit") (EVar "e")) (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "  store i64 ")) (EApp (EVar "display") (EVar "rv"))) (ELit (LString ", ptr "))) (EApp (EVar "display") (EVar "slot"))) (ELit (LString ""))))) (DoExpr (EApp (EApp (EVar "emit") (EVar "e")) (EBinOp "++" (ELit (LString "  br label %")) (EVar "endL")))))))))
 (DTypeSig false "memoGlobalName" (TyFun (TyCon "String") (TyFun (TyCon "String") (TyCon "String"))))
 (DFunDef false "memoGlobalName" ((PVar "symTag") (PVar "method")) (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "$memo_")) (EApp (EVar "display") (EVar "symTag"))) (ELit (LString "_"))) (EApp (EVar "display") (EVar "method"))) (ELit (LString ""))))
-(DTypeSig false "emitDispatchChain" (TyFun (TyCon "Emit") (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "CImplEntry")) (TyFun (TyApp (TyCon "List") (TyCon "ImplGroup")) (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyCon "String") (TyFun (TyCon "String") (TyCon "Unit"))))))))))))
-(DFunDef false "emitDispatchChain" ((PVar "e") (PVar "dictPtr") (PVar "headTag") (PVar "impls") (PVar "groups") (PVar "name") (PVar "methWords") (PVar "argOps") (PVar "slot") (PVar "endL")) (EBlock (DoExpr (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EVar "emitConcreteArms") (EVar "e")) (EVar "dictPtr")) (EVar "headTag")) (EVar "impls")) (EVar "groups")) (EVar "name")) (EVar "methWords")) (EVar "argOps")) (EVar "slot")) (EVar "endL"))) (DoExpr (EApp (EApp (EVar "emit") (EVar "e")) (EApp (EApp (EApp (EApp (EApp (EVar "rtLine") (EVar "e")) (ELit (LString ""))) (ELit (LString "void"))) (ELit (LString "mdk_dispatch_no_impl"))) (EListLit)))) (DoExpr (EApp (EApp (EVar "emit") (EVar "e")) (ELit (LString "  unreachable"))))))
-(DTypeSig false "emitConcreteArms" (TyFun (TyCon "Emit") (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "CImplEntry")) (TyFun (TyApp (TyCon "List") (TyCon "ImplGroup")) (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyCon "String") (TyFun (TyCon "String") (TyCon "Unit"))))))))))))
-(DFunDef false "emitConcreteArms" (PWild PWild PWild (PList) PWild PWild PWild PWild PWild PWild) (ELit LUnit))
-(DFunDef false "emitConcreteArms" ((PVar "e") (PVar "dictPtr") (PVar "headTag") (PCons (PVar "ent") (PVar "rest")) (PVar "groups") (PVar "name") (PVar "methWords") (PVar "argOps") (PVar "slot") (PVar "endL")) (EBlock (DoExpr (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EVar "emitDispatchArm") (EVar "e")) (EVar "dictPtr")) (EVar "headTag")) (EVar "ent")) (EVar "groups")) (EVar "name")) (EVar "methWords")) (EVar "argOps")) (EVar "slot")) (EVar "endL"))) (DoExpr (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EVar "emitConcreteArms") (EVar "e")) (EVar "dictPtr")) (EVar "headTag")) (EVar "rest")) (EVar "groups")) (EVar "name")) (EVar "methWords")) (EVar "argOps")) (EVar "slot")) (EVar "endL")))))
 (DTypeSig false "emitMethodArgDispatch" (TyFun (TyCon "Emit") (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyCon "Int") (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyTuple (TyCon "String") (TyCon "LTy"))))))))
 (DFunDef false "emitMethodArgDispatch" ((PVar "e") (PVar "method") (PVar "iface") (PVar "siteArity") (PVar "argOps")) (EMatch (EApp (EApp (EApp (EApp (EVar "implGroupsForMethodArity") (EVar "e")) (EVar "method")) (EVar "iface")) (EVar "siteArity")) (arm (PList) () (EApp (EApp (EApp (EVar "emitDefaultArgTag") (EVar "e")) (EVar "method")) (EVar "argOps"))) (arm (PList (PVar "g")) () (EApp (EApp (EApp (EApp (EApp (EVar "emitArityCall") (EVar "e")) (EApp (EVar "groupFnName") (EVar "g"))) (EVar "argOps")) (EApp (EVar "groupArity") (EVar "g"))) (EVar "LTInt"))) (arm (PVar "groups") () (EApp (EApp (EApp (EApp (EApp (EVar "emitArgTagDispatch") (EVar "e")) (EVar "method")) (EVar "groups")) (EVar "argOps")) (EApp (EVar "argTagCollidingHeads") (EVar "groups"))))))
 (DTypeSig false "argTagCollidingHeads" (TyFun (TyApp (TyCon "List") (TyCon "ImplGroup")) (TyApp (TyCon "List") (TyCon "String"))))
@@ -16916,11 +16803,12 @@ runtimeName e symbol = optionOr "" (externRuntimeKey e.externFacts symbol)
 (DFunDef false "groupMethodOf" ((PCon "ImplGroup" (PVar "m") PWild PWild PWild PWild PWild PWild PWild)) (EVar "m"))
 (DTypeSig false "groupPositionsOf" (TyFun (TyCon "ImplGroup") (TyApp (TyCon "List") (TyCon "Int"))))
 (DFunDef false "groupPositionsOf" ((PCon "ImplGroup" PWild PWild PWild PWild (PVar "p") PWild PWild PWild)) (EVar "p"))
+(DTypeSig false "groupKey" (TyFun (TyCon "ImplGroup") (TyCon "String")))
+(DFunDef false "groupKey" ((PCon "ImplGroup" PWild PWild (PVar "key") PWild PWild PWild PWild PWild)) (EVar "key"))
+(DTypeSig false "groupClauses" (TyFun (TyCon "ImplGroup") (TyApp (TyCon "List") (TyTuple (TyApp (TyCon "List") (TyCon "Pat")) (TyCon "CExpr")))))
+(DFunDef false "groupClauses" ((PCon "ImplGroup" PWild PWild PWild PWild PWild PWild (PVar "clauses") PWild)) (EVar "clauses"))
 (DTypeSig false "groupArity" (TyFun (TyCon "ImplGroup") (TyCon "Int")))
 (DFunDef false "groupArity" ((PCon "ImplGroup" PWild PWild PWild PWild PWild (PVar "arity") PWild PWild)) (EVar "arity"))
-(DTypeSig false "findGroupBySymTag" (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "ImplGroup")) (TyApp (TyCon "Option") (TyCon "ImplGroup")))))
-(DFunDef false "findGroupBySymTag" (PWild (PList)) (EVar "None"))
-(DFunDef false "findGroupBySymTag" ((PVar "symTag") (PCons (PVar "g") (PVar "rest"))) (EIf (EBinOp "==" (EApp (EVar "groupSymTag") (EVar "g")) (EVar "symTag")) (EApp (EVar "Some") (EVar "g")) (EIf (EVar "otherwise") (EApp (EApp (EVar "findGroupBySymTag") (EVar "symTag")) (EVar "rest")) (EApp (EVar "__fallthrough__") (ELit LUnit)))))
 (DTypeSig false "headGroup" (TyFun (TyApp (TyCon "List") (TyCon "ImplGroup")) (TyCon "ImplGroup")))
 (DFunDef false "headGroup" ((PCons (PVar "g") PWild)) (EVar "g"))
 (DFunDef false "headGroup" ((PList)) (EApp (EVar "panic") (ELit (LString "llvm: no impl group for arg-tag dispatch"))))
@@ -16940,12 +16828,18 @@ runtimeName e symbol = optionOr "" (externRuntimeKey e.externFacts symbol)
 (DTypeSig false "dictWordsOf" (TyFun (TyCon "Emit") (TyFun (TyApp (TyCon "OrdMap") (TyTuple (TyCon "String") (TyCon "LTy"))) (TyFun (TyApp (TyCon "List") (TyCon "Route")) (TyApp (TyCon "List") (TyCon "String"))))))
 (DFunDef false "dictWordsOf" ((PVar "e") (PVar "env") (PVar "rs")) (EApp (EApp (EVar "map") (EApp (EApp (EVar "dictWordOfRoute") (EVar "e")) (EVar "env"))) (EVar "rs")))
 (DTypeSig false "dictWordOfRoute" (TyFun (TyCon "Emit") (TyFun (TyApp (TyCon "OrdMap") (TyTuple (TyCon "String") (TyCon "LTy"))) (TyFun (TyCon "Route") (TyCon "String")))))
-(DFunDef false "dictWordOfRoute" ((PVar "e") (PVar "env") (PCon "RKey" (PVar "key") (PVar "reqs") (PVar "sups"))) (EBlock (DoLet false false (PVar "fieldWords") (EApp (EApp (EApp (EVar "dictWordsOf") (EVar "e")) (EVar "env")) (EBinOp "++" (EVar "sups") (EVar "reqs")))) (DoExpr (EIf (EApp (EVar "allConstWords") (EVar "fieldWords")) (EApp (EApp (EApp (EVar "emitConstDictCell") (EVar "e")) (EApp (EVar "hashName") (EVar "key"))) (EVar "fieldWords")) (EApp (EApp (EApp (EVar "emitDictCell") (EVar "e")) (EApp (EVar "hashName") (EVar "key"))) (EVar "fieldWords"))))))
+(DFunDef false "dictWordOfRoute" ((PVar "e") (PVar "env") (PCon "RKey" (PVar "key") (PVar "reqs") (PVar "sups"))) (EBlock (DoLet false false (PVar "supWords") (EApp (EApp (EApp (EVar "dictWordsOf") (EVar "e")) (EVar "env")) (EVar "sups"))) (DoLet false false (PVar "slots") (EApp (EApp (EVar "slotWords") (EVar "e")) (EVar "key"))) (DoLet false false (PVar "fieldWords") (EBinOp "++" (EBinOp "++" (EVar "supWords") (EVar "slots")) (EApp (EApp (EApp (EVar "dictWordsOf") (EVar "e")) (EVar "env")) (EVar "reqs")))) (DoExpr (EIf (EApp (EVar "allConstWords") (EVar "fieldWords")) (EApp (EApp (EApp (EVar "emitConstDictCell") (EVar "e")) (EApp (EVar "hashName") (EVar "key"))) (EVar "fieldWords")) (EApp (EApp (EApp (EVar "emitDictCell") (EVar "e")) (EApp (EVar "hashName") (EVar "key"))) (EVar "fieldWords"))))))
 (DFunDef false "dictWordOfRoute" ((PVar "e") (PVar "env") (PCon "RDict" (PVar "d"))) (EApp (EApp (EApp (EVar "dictOperand") (EVar "e")) (EVar "env")) (EVar "d")))
 (DFunDef false "dictWordOfRoute" ((PVar "e") (PVar "env") (PCon "RDictFwd" (PVar "d"))) (EApp (EApp (EApp (EVar "dictOperand") (EVar "e")) (EVar "env")) (EVar "d")))
-(DFunDef false "dictWordOfRoute" ((PVar "e") (PVar "env") (PCon "RProj" (PVar "r") (PVar "path"))) (EApp (EApp (EApp (EVar "loadSuperPath") (EVar "e")) (EApp (EApp (EApp (EVar "dictWordOfRoute") (EVar "e")) (EVar "env")) (EVar "r"))) (EVar "path")))
+(DFunDef false "dictWordOfRoute" ((PVar "e") (PVar "env") (PCon "RProj" (PVar "r") (PVar "path"))) (EApp (EApp (EApp (EVar "loadSuperPath") (EVar "e")) (EApp (EApp (EApp (EVar "dictWordOfRoute") (EVar "e")) (EVar "env")) (EVar "r"))) (EApp (EApp (EApp (EVar "receiverPath") (EVar "e")) (EVar "r")) (EVar "path"))))
 (DFunDef false "dictWordOfRoute" (PWild PWild (PCon "RNone")) (ELit (LString "0")))
 (DFunDef false "dictWordOfRoute" (PWild PWild (PCon "RLocal" PWild PWild)) (ELit (LString "0")))
+(DTypeSig false "receiverPath" (TyFun (TyCon "Emit") (TyFun (TyCon "Route") (TyFun (TyApp (TyCon "List") (TyCon "Int")) (TyApp (TyCon "List") (TyCon "Int"))))))
+(DFunDef false "receiverPath" ((PVar "e") (PCon "RDict" (PVar "d")) (PCons (PVar "i") (PVar "rest"))) (EBinOp "::" (EApp (EApp (EApp (EVar "receiverIndex") (EVar "e")) (EVar "d")) (EVar "i")) (EVar "rest")))
+(DFunDef false "receiverPath" ((PVar "e") (PCon "RDictFwd" (PVar "d")) (PCons (PVar "i") (PVar "rest"))) (EBinOp "::" (EApp (EApp (EApp (EVar "receiverIndex") (EVar "e")) (EVar "d")) (EVar "i")) (EVar "rest")))
+(DFunDef false "receiverPath" (PWild PWild (PVar "path")) (EVar "path"))
+(DTypeSig false "receiverIndex" (TyFun (TyCon "Emit") (TyFun (TyCon "String") (TyFun (TyCon "Int") (TyCon "Int")))))
+(DFunDef false "receiverIndex" ((PVar "e") (PVar "d") (PVar "i")) (EMatch (EUnOp "!" (EFieldAccess (EVar "e") "defaultReceiver")) (arm (PCon "Some" (PTuple (PVar "recv") (PVar "supers") (PVar "slots"))) () (EIf (EBinOp "&&" (EBinOp "==" (EVar "d") (EVar "recv")) (EBinOp ">=" (EVar "i") (EVar "supers"))) (EBinOp "+" (EVar "i") (EVar "slots")) (EVar "i"))) (arm (PCon "None") () (EVar "i"))))
 (DTypeSig false "loadSuperPath" (TyFun (TyCon "Emit") (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "Int")) (TyCon "String")))))
 (DFunDef false "loadSuperPath" (PWild (PVar "w") (PList)) (EVar "w"))
 (DFunDef false "loadSuperPath" ((PVar "e") (PVar "w") (PCons (PVar "i") (PVar "rest"))) (EApp (EApp (EApp (EVar "loadSuperPath") (EVar "e")) (EApp (EApp (EApp (EVar "loadField") (EVar "e")) (EVar "w")) (EVar "i"))) (EVar "rest")))
@@ -16974,7 +16868,11 @@ runtimeName e symbol = optionOr "" (externRuntimeKey e.externFacts symbol)
 (DTypeSig false "implGroupOrigin" (TyFun (TyCon "ImplGroup") (TyCon "SymbolOrigin")))
 (DFunDef false "implGroupOrigin" ((PVar "g")) (EApp (EApp (EApp (EApp (EVar "SymbolOrigin") (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "impl ")) (EApp (EVar "display") (EApp (EVar "groupMethodOf") (EVar "g")))) (ELit (LString " for "))) (EApp (EVar "display") (EApp (EVar "groupTag") (EVar "g")))) (ELit (LString "")))) (ELit (LString ""))) (ELit (LInt 0))) (ELit (LInt 0))))
 (DTypeSig false "emitGroup" (TyFun (TyCon "Emit") (TyFun (TyCon "ImplGroup") (TyCon "Unit"))))
-(DFunDef false "emitGroup" ((PVar "e") (PCon "ImplGroup" (PVar "method") (PVar "tag") (PVar "key") PWild (PVar "positions") (PVar "arity") (PVar "clauses") (PVar "fname"))) (EBlock (DoLet false false (PVar "selfFnPos") (EApp (EApp (EApp (EVar "selfFnParamPositions") (EVar "e")) (EApp (EVar "ifaceWordOfKey") (EVar "key"))) (EVar "method"))) (DoExpr (EApp (EApp (EApp (EVar "setCurImplSelfFns") (EVar "e")) (EVar "tag")) (EApp (EApp (EVar "selfFnParamNames") (EVar "clauses")) (EVar "selfFnPos")))) (DoExpr (EIf (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EVar "trmcImplTry") (EVar "e")) (EVar "fname")) (EVar "method")) (EVar "tag")) (EVar "key")) (EVar "positions")) (EVar "arity")) (EVar "clauses")) (EBlock (DoExpr (EApp (EVar "clearCurImplSelfFns") (EVar "e"))) (DoExpr (ELit LUnit))) (EBlock (DoLet false false PWild (EApp (EVar "beginDefine") (EVar "e"))) (DoExpr (EApp (EApp (EApp (EApp (EVar "defineHeader") (EVar "e")) (EVar "TopLevelDefine")) (EVar "fname")) (EApp (EVar "wordProto") (EApp (EApp (EVar "implParamDecls") (EVar "arity")) (ELit (LInt 0)))))) (DoExpr (EApp (EApp (EVar "emit") (EVar "e")) (ELit (LString "entry:")))) (DoExpr (EApp (EApp (EApp (EApp (EApp (EApp (EVar "emitGroupBody") (EVar "e")) (EVar "fname")) (EVar "tag")) (EVar "positions")) (EVar "arity")) (EVar "clauses"))) (DoExpr (EApp (EVar "clearCurImplSelfFns") (EVar "e"))) (DoExpr (EApp (EApp (EVar "emit") (EVar "e")) (ELit (LString "}")))) (DoExpr (EApp (EApp (EVar "emit") (EVar "e")) (ELit (LString "")))))))))
+(DFunDef false "emitGroup" ((PVar "e") (PVar "g")) (EBlock (DoExpr (EApp (EApp (EVar "setRef") (EFieldAccess (EVar "e") "defaultReceiver")) (EApp (EApp (EVar "defaultReceiverOf") (EVar "e")) (EVar "g")))) (DoExpr (EApp (EApp (EVar "emitGroupDefine") (EVar "e")) (EVar "g"))) (DoExpr (EApp (EApp (EVar "setRef") (EFieldAccess (EVar "e") "defaultReceiver")) (EVar "None")))))
+(DTypeSig false "defaultReceiverOf" (TyFun (TyCon "Emit") (TyFun (TyCon "ImplGroup") (TyApp (TyCon "Option") (TyTuple (TyCon "String") (TyCon "Int") (TyCon "Int"))))))
+(DFunDef false "defaultReceiverOf" ((PVar "e") (PVar "g")) (EIf (EApp (EVar "groupInherits") (EVar "g")) (EBlock (DoLet false false (PVar "iface") (EApp (EVar "ifaceWordOfKey") (EApp (EVar "groupKey") (EVar "g")))) (DoLet false false (PVar "slots") (EApp (EApp (EVar "interfaceSlots") (EFieldAccess (EVar "e") "methodTables")) (EVar "iface"))) (DoLet false false (PVar "nmw") (EMatch (EApp (EApp (EApp (EVar "slotOf") (EApp (EVar "groupMethodOf") (EVar "g"))) (EVar "slots")) (ELit (LInt 0))) (arm (PCon "Some" (PTuple PWild (PVar "slot"))) () (EFieldAccess (EVar "slot") "contextDicts")) (arm (PCon "None") () (ELit (LInt 0))))) (DoExpr (EMatch (EApp (EApp (EVar "dropS") (EVar "nmw")) (EApp (EVar "firstClausePats") (EApp (EVar "groupClauses") (EVar "g")))) (arm (PCons (PCon "PVar" (PVar "recv") PWild PWild) PWild) () (EApp (EVar "Some") (ETuple (EVar "recv") (EApp (EApp (EVar "superCountOf") (EVar "e")) (EVar "iface")) (EApp (EVar "listLen") (EVar "slots"))))) (arm PWild () (EVar "None"))))) (EVar "None")))
+(DTypeSig false "emitGroupDefine" (TyFun (TyCon "Emit") (TyFun (TyCon "ImplGroup") (TyCon "Unit"))))
+(DFunDef false "emitGroupDefine" ((PVar "e") (PCon "ImplGroup" (PVar "method") (PVar "tag") (PVar "key") PWild (PVar "positions") (PVar "arity") (PVar "clauses") (PVar "fname"))) (EBlock (DoLet false false (PVar "selfFnPos") (EApp (EApp (EApp (EVar "selfFnParamPositions") (EVar "e")) (EApp (EVar "ifaceWordOfKey") (EVar "key"))) (EVar "method"))) (DoExpr (EApp (EApp (EApp (EVar "setCurImplSelfFns") (EVar "e")) (EVar "tag")) (EApp (EApp (EVar "selfFnParamNames") (EVar "clauses")) (EVar "selfFnPos")))) (DoExpr (EIf (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EVar "trmcImplTry") (EVar "e")) (EVar "fname")) (EVar "method")) (EVar "tag")) (EVar "key")) (EVar "positions")) (EVar "arity")) (EVar "clauses")) (EBlock (DoExpr (EApp (EVar "clearCurImplSelfFns") (EVar "e"))) (DoExpr (ELit LUnit))) (EBlock (DoLet false false PWild (EApp (EVar "beginDefine") (EVar "e"))) (DoExpr (EApp (EApp (EApp (EApp (EVar "defineHeader") (EVar "e")) (EVar "TopLevelDefine")) (EVar "fname")) (EApp (EVar "wordProto") (EApp (EApp (EVar "implParamDecls") (EVar "arity")) (ELit (LInt 0)))))) (DoExpr (EApp (EApp (EVar "emit") (EVar "e")) (ELit (LString "entry:")))) (DoExpr (EApp (EApp (EApp (EApp (EApp (EApp (EVar "emitGroupBody") (EVar "e")) (EVar "fname")) (EVar "tag")) (EVar "positions")) (EVar "arity")) (EVar "clauses"))) (DoExpr (EApp (EVar "clearCurImplSelfFns") (EVar "e"))) (DoExpr (EApp (EApp (EVar "emit") (EVar "e")) (ELit (LString "}")))) (DoExpr (EApp (EApp (EVar "emit") (EVar "e")) (ELit (LString "")))))))))
 (DTypeSig false "trmcImplTry" (TyFun (TyCon "Emit") (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "Int")) (TyFun (TyCon "Int") (TyFun (TyApp (TyCon "List") (TyTuple (TyApp (TyCon "List") (TyCon "Pat")) (TyCon "CExpr"))) (TyCon "Bool"))))))))))
 (DFunDef false "trmcImplTry" ((PVar "e") (PVar "fname") (PVar "method") (PVar "tag") (PVar "key") (PVar "positions") (PVar "arity") (PVar "clauses")) (EBlock (DoLet false false (PVar "self") (EApp (EApp (EApp (EVar "methodSelf") (EVar "method")) (EVar "key")) (EApp (EVar "firstClausePats") (EVar "clauses")))) (DoExpr (EIf (EApp (EApp (EApp (EVar "isTrmcImpl") (EFieldAccess (EVar "e") "trmc")) (EVar "method")) (EVar "key")) (EBlock (DoLet false false (PVar "slotTys") (EApp (EApp (EApp (EApp (EVar "patPosTys") (EVar "tag")) (EVar "positions")) (EVar "arity")) (ELit (LInt 0)))) (DoLet false false (PTuple (PVar "spats") (PVar "sbody")) (EMatch (EVar "clauses") (arm (PCons (PTuple (PVar "ps") (PVar "b")) PWild) () (ETuple (EVar "ps") (EVar "b"))) (arm (PList) () (ETuple (EListLit) (EApp (EVar "CLit") (EVar "LUnit")))))) (DoLet false false (PVar "single") (EBinOp "&&" (EBinOp "==" (EApp (EVar "listLen") (EVar "clauses")) (ELit (LInt 1))) (EApp (EVar "allClausesPVar") (EVar "clauses")))) (DoExpr (EApp (EApp (EApp (EVar "tmcMarker") (EVar "e")) (EVar "fname")) (ELit (LString "trmc")))) (DoExpr (EApp (EApp (EApp (EApp (EVar "emitTrmcHeader") (EVar "e")) (EVar "fname")) (EVar "arity")) (ELit (LString "")))) (DoExpr (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EVar "emitTrmcLoopBody") (EVar "e")) (EVar "self")) (EVar "arity")) (EVar "slotTys")) (EVar "clauses")) (EVar "single")) (EVar "spats")) (EVar "sbody")) (EVar "noDeclLoc"))) (DoExpr (EApp (EApp (EVar "emit") (EVar "e")) (ELit (LString "}")))) (DoExpr (EApp (EApp (EVar "emit") (EVar "e")) (ELit (LString "")))) (DoExpr (EVar "True"))) (EVar "False")))))
 (DTypeSig false "maxInt" (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyCon "Int"))))
@@ -17051,6 +16949,9 @@ runtimeName e symbol = optionOr "" (externRuntimeKey e.externFacts symbol)
 (DFunDef false "indexImplGroupEntries" ((PCons (PVar "entry") (PVar "rest")) (PVar "i") (PVar "acc")) (EApp (EApp (EApp (EVar "indexImplGroupEntries") (EVar "rest")) (EBinOp "+" (EVar "i") (ELit (LInt 1)))) (EApp (EApp (EApp (EVar "omInsert") (EApp (EVar "intToString") (EVar "i"))) (EVar "entry")) (EVar "acc"))))
 (DTypeSig false "resolveImplGroup" (TyFun (TyCon "Emit") (TyFun (TyApp (TyCon "OrdMap") (TyCon "CImplEntry")) (TyFun (TyCon "ImplClauseGroup") (TyCon "ImplGroup")))))
 (DFunDef false "resolveImplGroup" ((PVar "e") (PVar "index") (PVar "group")) (EBlock (DoLet false false (PVar "entries") (EApp (EApp (EVar "map") (ELam ((PVar "i")) (EApp (EApp (EVar "optionOrPanic") (ELit (LString "llvm: invalid impl group ordinal"))) (EApp (EApp (EVar "omLookup") (EApp (EVar "intToString") (EVar "i"))) (EVar "index"))))) (EFieldAccess (EVar "group") "indices"))) (DoExpr (EMatch (EVar "entries") (arm (PCons (PVar "ent") PWild) () (EBlock (DoLet false false (PVar "clauses") (EApp (EApp (EVar "map") (ELam ((PVar "entry")) (ETuple (EApp (EVar "implPats") (EVar "entry")) (EApp (EVar "implBody") (EVar "entry"))))) (EVar "entries"))) (DoExpr (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EVar "ImplGroup") (EFieldAccess (EVar "group") "method")) (EApp (EVar "implEntryTag") (EVar "ent"))) (EFieldAccess (EVar "group") "key")) (EApp (EVar "implEntrySymTag") (EVar "ent"))) (EApp (EVar "implEntryPositions") (EVar "ent"))) (EApp (EVar "clauseArity") (EVar "clauses"))) (EVar "clauses")) (EApp (EApp (EApp (EVar "implEntryFnName") (EVar "e")) (EFieldAccess (EVar "group") "method")) (EVar "ent")))))) (arm (PList) () (EApp (EVar "panic") (ELit (LString "llvm: empty impl group"))))))))
+(DTypeSig false "numberGroups" (TyFun (TyCon "Int") (TyFun (TyApp (TyCon "List") (TyCon "ImplGroup")) (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "ImplGroup"))))))
+(DFunDef false "numberGroups" (PWild (PList)) (EListLit))
+(DFunDef false "numberGroups" ((PVar "i") (PCons (PVar "g") (PVar "rest"))) (EBinOp "::" (ETuple (EApp (EVar "intToString") (EVar "i")) (EVar "g")) (EApp (EApp (EVar "numberGroups") (EBinOp "+" (EVar "i") (ELit (LInt 1)))) (EVar "rest"))))
 (DTypeSig false "clauseArity" (TyFun (TyApp (TyCon "List") (TyTuple (TyApp (TyCon "List") (TyCon "Pat")) (TyCon "CExpr"))) (TyCon "Int")))
 (DFunDef false "clauseArity" ((PCons (PTuple (PVar "pats") PWild) PWild)) (EApp (EVar "lengthS") (EVar "pats")))
 (DFunDef false "clauseArity" ((PList)) (ELit (LInt 0)))
@@ -17967,7 +17868,7 @@ runtimeName e symbol = optionOr "" (externRuntimeKey e.externFacts symbol)
 (DTypeSig false "tableStats" (TyFun (TyCon "Emit") (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "Int")))))
 (DFunDef false "tableStats" ((PVar "e")) (EListLit (ETuple (ELit (LString "implEntries")) (EApp (EVar "listLen") (EUnOp "!" (EFieldAccess (EVar "e") "implEntries")))) (ETuple (ELit (LString "globalsReg")) (EApp (EVar "listLen") (EUnOp "!" (EFieldAccess (EVar "e") "globalsReg")))) (ETuple (ELit (LString "ctorType")) (EApp (EVar "omSize") (EFieldAccess (EFieldAccess (EVar "e") "constructorFacts") "owners"))) (ETuple (ELit (LString "externArity")) (EApp (EVar "omSize") (EFieldAccess (EVar "e") "externFacts"))) (ETuple (ELit (LString "knownFnMap")) (EApp (EVar "optOmSize") (EUnOp "!" (EFieldAccess (EVar "e") "knownFnMap")))) (ETuple (ELit (LString "sigMap")) (EApp (EVar "optOmSize") (EUnOp "!" (EFieldAccess (EVar "e") "sigMap"))))))
 (DTypeSig false "programEmitConfig" (TyFun (TyCon "GapMode") (TyFun (TyCon "EmitInput") (TyFun (TyCon "EmitPlan") (TyFun (TyApp (TyCon "List") (TyCon "CBind")) (TyCon "EmitStateConfig"))))))
-(DFunDef false "programEmitConfig" ((PVar "gapMode") (PVar "input") (PVar "plan") (PVar "groups")) (ERecordCreate "EmitStateConfig" ((fa "counter0" (EIf (EBinOp "==" (EFieldAccess (EVar "input") "emitHalf") (EVar "emitHalfProgram")) (EVar "programHalfIdBase") (ELit (LInt 0)))) (fa "globalsReg0" (EIf (EBinOp "==" (EFieldAccess (EVar "input") "emitHalf") (EVar "emitHalfPrelude")) (EApp (EVar "initGlobalsRegReady") (EApp (EVar "valBinds") (EVar "groups"))) (EApp (EVar "initGlobalsReg") (EApp (EVar "valBinds") (EVar "groups"))))) (fa "gapMode" (EVar "gapMode")) (fa "lazyNames" (EFieldAccess (EVar "plan") "lazyGlobals")) (fa "trmc" (EFieldAccess (EVar "plan") "trmc")) (fa "methodResults" (EFieldAccess (EVar "plan") "methodResults")) (fa "constructorFacts" (EFieldAccess (EVar "plan") "constructorFacts")) (fa "externRequirements" (EFieldAccess (EVar "plan") "externRequirements")) (fa "dispGroups" (EApp (EVar "Some") (EFieldAccess (EVar "plan") "dispGroups"))) (fa "implGroups" (EFieldAccess (EVar "plan") "implGroups")))))
+(DFunDef false "programEmitConfig" ((PVar "gapMode") (PVar "input") (PVar "plan") (PVar "groups")) (ERecordCreate "EmitStateConfig" ((fa "counter0" (EIf (EBinOp "==" (EFieldAccess (EVar "input") "emitHalf") (EVar "emitHalfProgram")) (EVar "programHalfIdBase") (ELit (LInt 0)))) (fa "globalsReg0" (EIf (EBinOp "==" (EFieldAccess (EVar "input") "emitHalf") (EVar "emitHalfPrelude")) (EApp (EVar "initGlobalsRegReady") (EApp (EVar "valBinds") (EVar "groups"))) (EApp (EVar "initGlobalsReg") (EApp (EVar "valBinds") (EVar "groups"))))) (fa "gapMode" (EVar "gapMode")) (fa "lazyNames" (EFieldAccess (EVar "plan") "lazyGlobals")) (fa "trmc" (EFieldAccess (EVar "plan") "trmc")) (fa "methodResults" (EFieldAccess (EVar "plan") "methodResults")) (fa "constructorFacts" (EFieldAccess (EVar "plan") "constructorFacts")) (fa "externRequirements" (EFieldAccess (EVar "plan") "externRequirements")) (fa "dispGroups" (EApp (EVar "Some") (EFieldAccess (EVar "plan") "dispGroups"))) (fa "implGroups" (EFieldAccess (EVar "plan") "implGroups")) (fa "methodTables" (EFieldAccess (EVar "plan") "methodTables")))))
 (DTypeSig false "runStrictEmission" (TyFun (TyCon "Emit") (TyFun (TyCon "EmitInput") (TyFun (TyCon "EmitPlan") (TyFun (TyApp (TyCon "List") (TyCon "CBind")) (TyFun (TyApp (TyCon "List") (TyCon "CImplEntry")) (TyApp (TyApp (TyCon "Result") (TyApp (TyCon "List") (TyCon "SymbolDefect"))) (TyCon "String"))))))))
 (DFunDef false "runStrictEmission" ((PVar "e") (PVar "input") (PVar "plan") (PVar "groups") (PVar "implEntries")) (EBlock (DoExpr (EApp (EVar "emitPreamble") (EVar "e"))) (DoExpr (EApp (EVar "emitFfiDeclares") (EVar "e"))) (DoExpr (EApp (EApp (EVar "emitGlobalDecls") (EVar "e")) (EApp (EVar "valBinds") (EVar "groups")))) (DoLet false false PWild (EIf (EBinOp "==" (EFieldAccess (EVar "input") "emitHalf") (EVar "emitHalfPrelude")) (ELit LUnit) (EApp (EApp (EApp (EVar "emitProgramMain") (EVar "e")) (EVar "plan")) (EVar "groups")))) (DoLet false false PWild (EIf (EBinOp "==" (EFieldAccess (EVar "input") "emitHalf") (EVar "emitHalfPrelude")) (ELit LUnit) (EApp (EApp (EVar "emitLazyForces") (EVar "e")) (EApp (EVar "valBinds") (EVar "groups"))))) (DoExpr (EApp (EApp (EVar "emitFns") (EVar "e")) (EApp (EVar "fnBinds") (EVar "groups")))) (DoExpr (EApp (EApp (EVar "emitImpls") (EVar "e")) (EVar "implEntries"))) (DoExpr (EApp (EVar "preludeIdSpaceGuard") (EVar "e"))) (DoLet false false (PVar "siteFiles") (EApp (EVar "siteFileTable") (EVar "e"))) (DoExpr (EMatch (EApp (EApp (EVar "symbolDefectsL") (EVar "e")) (EVar "True")) (arm (PList) () (EApp (EApp (EApp (EApp (EVar "finishCheckedText") (EApp (EVar "RecordedGaps") (EUnOp "!" (EFieldAccess (EVar "e") "excusedCalls")))) (EUnOp "!" (EFieldAccess (EVar "e") "symbols"))) (EUnOp "!" (EFieldAccess (EVar "e") "coverage"))) (EApp (EVar "joinNl") (EBinOp "++" (EBinOp "++" (EBinOp "++" (EApp (EVar "siteTrapDeclares") (EVar "e")) (EApp (EVar "reverseL") (EUnOp "!" (EFieldAccess (EVar "e") "buf")))) (EApp (EVar "reverseL") (EUnOp "!" (EFieldAccess (EVar "e") "lams")))) (EVar "siteFiles"))))) (arm (PVar "defects") () (EApp (EVar "Err") (EVar "defects")))))))
 (DTypeSig true "emitProgramWithStats" (TyFun (TyCon "EmitInput") (TyFun (TyCon "EmitPlan") (TyFun (TyCon "CProgram") (TyApp (TyApp (TyCon "Result") (TyApp (TyCon "List") (TyCon "SymbolDefect"))) (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "Int")))))))))
@@ -17976,13 +17877,13 @@ runtimeName e symbol = optionOr "" (externRuntimeKey e.externFacts symbol)
 (DFunDef false "emitProgram" ((PVar "input") (PVar "plan") (PVar "cp")) (EApp (EApp (EVar "map") (EVar "fst")) (EApp (EApp (EApp (EApp (EVar "emitProgramMode") (EVar "Strict")) (EVar "input")) (EVar "plan")) (EVar "cp"))))
 (DTypeSig true "emitProgramRecord" (TyFun (TyCon "EmitInput") (TyFun (TyCon "EmitPlan") (TyFun (TyCon "CProgram") (TyApp (TyApp (TyCon "Result") (TyApp (TyCon "List") (TyCon "SymbolDefect"))) (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "String"))))))))
 (DFunDef false "emitProgramRecord" ((PVar "input") (PVar "plan") (PVar "cp")) (EApp (EApp (EApp (EApp (EVar "emitProgramMode") (EVar "Record")) (EVar "input")) (EVar "plan")) (EVar "cp")))
-(DData Private "EmitStateConfig" () ((variant "EmitStateConfig" (ConNamed (field "counter0" (TyCon "Int")) (field "globalsReg0" (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyTuple (TyCon "Bool") (TyCon "LTy"))))) (field "gapMode" (TyCon "GapMode")) (field "lazyNames" (TyApp (TyCon "List") (TyCon "String"))) (field "trmc" (TyCon "TrmcVerdicts")) (field "methodResults" (TyApp (TyCon "OrdMap") (TyApp (TyCon "OrdMap") (TyCon "MethodResultFact")))) (field "constructorFacts" (TyCon "ConstructorFacts")) (field "externRequirements" (TyCon "ExternRequirements")) (field "dispGroups" (TyApp (TyCon "Option") (TyApp (TyCon "List") (TyCon "DispGroup")))) (field "implGroups" (TyApp (TyCon "List") (TyCon "ImplClauseGroup")))))) ())
+(DData Private "EmitStateConfig" () ((variant "EmitStateConfig" (ConNamed (field "counter0" (TyCon "Int")) (field "globalsReg0" (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyTuple (TyCon "Bool") (TyCon "LTy"))))) (field "gapMode" (TyCon "GapMode")) (field "lazyNames" (TyApp (TyCon "List") (TyCon "String"))) (field "trmc" (TyCon "TrmcVerdicts")) (field "methodResults" (TyApp (TyCon "OrdMap") (TyApp (TyCon "OrdMap") (TyCon "MethodResultFact")))) (field "constructorFacts" (TyCon "ConstructorFacts")) (field "externRequirements" (TyCon "ExternRequirements")) (field "dispGroups" (TyApp (TyCon "Option") (TyApp (TyCon "List") (TyCon "DispGroup")))) (field "implGroups" (TyApp (TyCon "List") (TyCon "ImplClauseGroup"))) (field "methodTables" (TyCon "MethodTables"))))) ())
 (DTypeSig false "installDispatchState" (TyFun (TyCon "Emit") (TyFun (TyApp (TyCon "Option") (TyApp (TyCon "List") (TyCon "DispGroup"))) (TyFun (TyApp (TyCon "List") (TyCon "CBind")) (TyCon "Unit")))))
 (DFunDef false "installDispatchState" ((PVar "e") (PVar "dispGroups") (PVar "fnBindsList")) (EBlock (DoLet false false PWild (EMatch (EVar "dispGroups") (arm (PCon "Some" (PVar "groups")) () (EApp (EApp (EApp (EVar "installDispatchGroups") (EVar "e")) (EVar "groups")) (EVar "fnBindsList"))) (arm (PCon "None") () (EApp (EApp (EVar "setRef") (EFieldAccess (EVar "e") "gDispGroups")) (EListLit))))) (DoExpr (EApp (EApp (EVar "setRef") (EFieldAccess (EVar "e") "floatFwSet")) (EApp (EApp (EVar "gDispDropMembers") (EVar "e")) (EApp (EApp (EVar "collectFloatFw") (EVar "e")) (EVar "fnBindsList")))))))
 (DTypeSig false "installDispatchGroups" (TyFun (TyCon "Emit") (TyFun (TyApp (TyCon "List") (TyCon "DispGroup")) (TyFun (TyApp (TyCon "List") (TyCon "CBind")) (TyCon "Unit")))))
 (DFunDef false "installDispatchGroups" ((PVar "e") (PVar "groups") (PVar "fnBindsList")) (EBlock (DoExpr (EApp (EApp (EVar "setRef") (EFieldAccess (EVar "e") "gDispBinds")) (EVar "fnBindsList"))) (DoExpr (EApp (EApp (EVar "setRef") (EFieldAccess (EVar "e") "gDispBindMap")) (EApp (EVar "bindNameMap") (EVar "fnBindsList")))) (DoExpr (EApp (EApp (EVar "setRef") (EFieldAccess (EVar "e") "gDispGroups")) (EVar "groups")))))
 (DTypeSig false "buildEmitState" (TyFun (TyCon "EmitStateConfig") (TyFun (TyCon "EmitInput") (TyFun (TyApp (TyCon "List") (TyCon "CBind")) (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "Int"))) (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "String"))) (TyFun (TyApp (TyCon "List") (TyCon "CImplEntry")) (TyFun (TyCon "DeclFacts") (TyCon "Emit")))))))))
-(DFunDef false "buildEmitState" ((PVar "cfg") (PVar "input") (PVar "groups") (PVar "ctorArs") (PVar "ctorTypes") (PVar "implEntries") (PVar "facts")) (EBlock (DoLet false false (PVar "rows") (EApp (EVar "binderRowsOf") (EFieldAccess (EVar "facts") "factBinders"))) (DoLet false false (PVar "e") (ERecordCreate "Emit" ((fa "input" (EVar "input")) (fa "implNames" (EApp (EVar "Ref") (EVar "omEmpty"))) (fa "defaultNames" (EApp (EVar "Ref") (EVar "omEmpty"))) (fa "counter0" (EFieldAccess (EVar "cfg") "counter0")) (fa "trmc" (EFieldAccess (EVar "cfg") "trmc")) (fa "methodResults" (EFieldAccess (EVar "cfg") "methodResults")) (fa "constructorFacts" (EFieldAccess (EVar "cfg") "constructorFacts")) (fa "curModule" (EApp (EVar "Ref") (EVar "scopeProgram"))) (fa "counters" (EApp (EVar "Ref") (EVar "omEmpty"))) (fa "buf" (EApp (EVar "Ref") (EListLit))) (fa "fnNames" (EApp (EVar "Ref") (EApp (EVar "collectFns") (EVar "groups")))) (fa "binderRows" (EVar "rows")) (fa "symbolOrigins" (EFieldAccess (EVar "facts") "factSymbolOrigins")) (fa "externFacts" (EApp (EVar "requirementFacts") (EFieldAccess (EVar "cfg") "externRequirements"))) (fa "nativePrototypes" (EFieldAccess (EFieldAccess (EVar "cfg") "externRequirements") "nativePrototypes")) (fa "superCounts" (EApp (EApp (EVar "omFromPairs") (EFieldAccess (EVar "facts") "factSupers")) (EVar "omEmpty"))) (fa "globalTys" (EApp (EApp (EVar "globalStampTys") (EVar "rows")) (EApp (EApp (EVar "filter") (ELam ((PVar "b")) (EApp (EVar "not") (EApp (EVar "isFnBind") (EVar "b"))))) (EVar "groups")))) (fa "lams" (EApp (EVar "Ref") (EListLit))) (fa "implEntries" (EApp (EVar "Ref") (EVar "implEntries"))) (fa "implGroups" (EApp (EVar "Ref") (EListLit))) (fa "arities" (EApp (EVar "programArities") (EApp (EApp (EApp (EApp (EApp (EApp (EVar "CProgram") (EVar "groups")) (EVar "ctorArs")) (EVar "ctorTypes")) (EVar "implEntries")) (EListLit)) (EVar "noDeclFacts")))) (fa "globalsReg" (EApp (EVar "Ref") (EFieldAccess (EVar "cfg") "globalsReg0"))) (fa "gapMode" (EFieldAccess (EVar "cfg") "gapMode")) (fa "gapLog" (EApp (EVar "Ref") (EListLit))) (fa "curGapBind" (EApp (EVar "Ref") (ELit (LString "?")))) (fa "defineCounter" (EApp (EVar "Ref") (ELit (LInt 0)))) (fa "closureRetTy" (EApp (EVar "Ref") (EListLit))) (fa "directFn" (EApp (EVar "Ref") (EListLit))) (fa "trmcCtx" (EApp (EVar "Ref") (EVar "TrmcOff"))) (fa "gDispCtx" (EApp (EVar "Ref") (EVar "GDispOff"))) (fa "selfTailCtx" (EApp (EVar "Ref") (EVar "None"))) (fa "gDispGroups" (EApp (EVar "Ref") (EListLit))) (fa "gDispBinds" (EApp (EVar "Ref") (EListLit))) (fa "gDispBindMap" (EApp (EVar "Ref") (EVar "omEmpty"))) (fa "curImplTag" (EApp (EVar "Ref") (ELit (LString "")))) (fa "curSelfFnParams" (EApp (EVar "Ref") (EListLit))) (fa "knownFnMap" (EApp (EVar "Ref") (EVar "None"))) (fa "lazyGlobalMap" (EApp (EVar "Ref") (EVar "None"))) (fa "sigMap" (EApp (EVar "Ref") (EVar "None"))) (fa "implsByMethod" (EApp (EVar "Ref") (EVar "None"))) (fa "implMethodSet" (EApp (EVar "Ref") (EVar "None"))) (fa "typeIdMap" (EApp (EVar "Ref") (EVar "None"))) (fa "dispCache" (EApp (EVar "Ref") (EListLit))) (fa "dictConstCache" (EApp (EVar "Ref") (EListLit))) (fa "strLitCache" (EApp (EVar "Ref") (EVar "omEmpty"))) (fa "closConstCache" (EApp (EVar "Ref") (EListLit))) (fa "floatFwSet" (EApp (EVar "Ref") (EListLit))) (fa "floatClosureFns" (EApp (EVar "Ref") (EListLit))) (fa "rawWorkers" (EApp (EVar "Ref") (EVar "omEmpty"))) (fa "constGlobals" (EApp (EVar "Ref") (EVar "omEmpty"))) (fa "inlineOpen" (EApp (EVar "Ref") (ELit (LInt 0)))) (fa "inlineSpent" (EApp (EVar "Ref") (ELit (LInt 0)))) (fa "siteFileNums" (EApp (EVar "Ref") (EVar "omEmpty"))) (fa "siteFiles" (EApp (EVar "Ref") (EListLit))) (fa "siteTraps" (EApp (EVar "Ref") (EListLit))) (fa "symbols" (EApp (EVar "Ref") (EApp (EVar "emptyRegistry") (EIf (EBinOp "==" (EFieldAccess (EVar "input") "emitHalf") (EVar "emitHalfWhole")) (EVar "WholeModule") (EVar "ModuleHalf"))))) (fa "coverage" (EApp (EVar "Ref") (EVar "emptyCoverage"))) (fa "excusedCalls" (EApp (EVar "Ref") (EListLit))) (fa "symbolDefects" (EApp (EVar "Ref") (EListLit))) (fa "symOrigin" (EApp (EVar "Ref") (EVar "moduleOrigin"))) (fa "hiddenDefines" (EApp (EVar "Ref") (EVar "None"))) (fa "orScope" (EApp (EVar "Ref") (EVar "None")))))) (DoExpr (EApp (EApp (EVar "setRef") (EFieldAccess (EVar "e") "dictConstCache")) (EListLit))) (DoExpr (EApp (EApp (EVar "setRef") (EFieldAccess (EVar "e") "closConstCache")) (EListLit))) (DoExpr (EApp (EApp (EVar "setRef") (EFieldAccess (EVar "e") "dispCache")) (EListLit))) (DoExpr (EApp (EApp (EVar "installKnownFnMap") (EVar "e")) (EApp (EVar "collectFns") (EVar "groups")))) (DoExpr (EApp (EApp (EVar "installLazyGlobalMap") (EVar "e")) (EFieldAccess (EVar "cfg") "lazyNames"))) (DoExpr (EApp (EVar "installTypeIds") (EVar "e"))) (DoExpr (EApp (EApp (EVar "installSigMap") (EVar "e")) (EApp (EApp (EVar "programSigs") (EVar "e")) (EApp (EVar "fnBinds") (EVar "groups"))))) (DoExpr (EApp (EApp (EVar "installImplIndex") (EVar "e")) (EVar "implEntries"))) (DoExpr (EApp (EApp (EVar "installImplMethodSet") (EVar "e")) (EVar "implEntries"))) (DoLet false false (PVar "ordinalEntries") (EApp (EApp (EApp (EVar "indexImplGroupEntries") (EVar "implEntries")) (ELit (LInt 0))) (EVar "omEmpty"))) (DoExpr (EApp (EApp (EVar "setRef") (EFieldAccess (EVar "e") "implGroups")) (EApp (EApp (EVar "map") (EApp (EApp (EVar "resolveImplGroup") (EVar "e")) (EVar "ordinalEntries"))) (EFieldAccess (EVar "cfg") "implGroups")))) (DoExpr (EApp (EApp (EApp (EVar "installDispatchState") (EVar "e")) (EFieldAccess (EVar "cfg") "dispGroups")) (EApp (EVar "fnBinds") (EVar "groups")))) (DoExpr (EApp (EApp (EVar "setRef") (EFieldAccess (EVar "e") "floatClosureFns")) (EApp (EApp (EVar "collectFloatClosureFns") (EVar "e")) (EApp (EVar "fnBinds") (EVar "groups"))))) (DoExpr (EApp (EApp (EVar "setRef") (EFieldAccess (EVar "e") "rawWorkers")) (EApp (EApp (EVar "collectRawWorkers") (EVar "e")) (EApp (EVar "fnBinds") (EVar "groups"))))) (DoExpr (EApp (EApp (EVar "setRef") (EFieldAccess (EVar "e") "constGlobals")) (EApp (EVar "collectConstGlobals") (EApp (EVar "valBinds") (EVar "groups"))))) (DoExpr (EVar "e"))))
+(DFunDef false "buildEmitState" ((PVar "cfg") (PVar "input") (PVar "groups") (PVar "ctorArs") (PVar "ctorTypes") (PVar "implEntries") (PVar "facts")) (EBlock (DoLet false false (PVar "rows") (EApp (EVar "binderRowsOf") (EFieldAccess (EVar "facts") "factBinders"))) (DoLet false false (PVar "e") (ERecordCreate "Emit" ((fa "input" (EVar "input")) (fa "implNames" (EApp (EVar "Ref") (EVar "omEmpty"))) (fa "defaultNames" (EApp (EVar "Ref") (EVar "omEmpty"))) (fa "counter0" (EFieldAccess (EVar "cfg") "counter0")) (fa "trmc" (EFieldAccess (EVar "cfg") "trmc")) (fa "methodResults" (EFieldAccess (EVar "cfg") "methodResults")) (fa "constructorFacts" (EFieldAccess (EVar "cfg") "constructorFacts")) (fa "curModule" (EApp (EVar "Ref") (EVar "scopeProgram"))) (fa "counters" (EApp (EVar "Ref") (EVar "omEmpty"))) (fa "buf" (EApp (EVar "Ref") (EListLit))) (fa "fnNames" (EApp (EVar "Ref") (EApp (EVar "collectFns") (EVar "groups")))) (fa "binderRows" (EVar "rows")) (fa "symbolOrigins" (EFieldAccess (EVar "facts") "factSymbolOrigins")) (fa "externFacts" (EApp (EVar "requirementFacts") (EFieldAccess (EVar "cfg") "externRequirements"))) (fa "nativePrototypes" (EFieldAccess (EFieldAccess (EVar "cfg") "externRequirements") "nativePrototypes")) (fa "superCounts" (EApp (EApp (EVar "omFromPairs") (EFieldAccess (EVar "facts") "factSupers")) (EVar "omEmpty"))) (fa "globalTys" (EApp (EApp (EVar "globalStampTys") (EVar "rows")) (EApp (EApp (EVar "filter") (ELam ((PVar "b")) (EApp (EVar "not") (EApp (EVar "isFnBind") (EVar "b"))))) (EVar "groups")))) (fa "lams" (EApp (EVar "Ref") (EListLit))) (fa "implEntries" (EApp (EVar "Ref") (EVar "implEntries"))) (fa "implGroups" (EApp (EVar "Ref") (EListLit))) (fa "arities" (EApp (EVar "programArities") (EApp (EApp (EApp (EApp (EApp (EApp (EVar "CProgram") (EVar "groups")) (EVar "ctorArs")) (EVar "ctorTypes")) (EVar "implEntries")) (EListLit)) (EVar "noDeclFacts")))) (fa "globalsReg" (EApp (EVar "Ref") (EFieldAccess (EVar "cfg") "globalsReg0"))) (fa "gapMode" (EFieldAccess (EVar "cfg") "gapMode")) (fa "gapLog" (EApp (EVar "Ref") (EListLit))) (fa "curGapBind" (EApp (EVar "Ref") (ELit (LString "?")))) (fa "defineCounter" (EApp (EVar "Ref") (ELit (LInt 0)))) (fa "closureRetTy" (EApp (EVar "Ref") (EListLit))) (fa "directFn" (EApp (EVar "Ref") (EListLit))) (fa "trmcCtx" (EApp (EVar "Ref") (EVar "TrmcOff"))) (fa "gDispCtx" (EApp (EVar "Ref") (EVar "GDispOff"))) (fa "selfTailCtx" (EApp (EVar "Ref") (EVar "None"))) (fa "gDispGroups" (EApp (EVar "Ref") (EListLit))) (fa "gDispBinds" (EApp (EVar "Ref") (EListLit))) (fa "gDispBindMap" (EApp (EVar "Ref") (EVar "omEmpty"))) (fa "curImplTag" (EApp (EVar "Ref") (ELit (LString "")))) (fa "curSelfFnParams" (EApp (EVar "Ref") (EListLit))) (fa "knownFnMap" (EApp (EVar "Ref") (EVar "None"))) (fa "lazyGlobalMap" (EApp (EVar "Ref") (EVar "None"))) (fa "sigMap" (EApp (EVar "Ref") (EVar "None"))) (fa "implsByMethod" (EApp (EVar "Ref") (EVar "None"))) (fa "implMethodSet" (EApp (EVar "Ref") (EVar "None"))) (fa "typeIdMap" (EApp (EVar "Ref") (EVar "None"))) (fa "methodTables" (EFieldAccess (EVar "cfg") "methodTables")) (fa "implGroupAt" (EApp (EVar "Ref") (EVar "omEmpty"))) (fa "slotCache" (EApp (EVar "Ref") (EVar "omEmpty"))) (fa "defaultReceiver" (EApp (EVar "Ref") (EVar "None"))) (fa "superCountGlobals" (EApp (EVar "Ref") (EVar "omEmpty"))) (fa "dictConstCache" (EApp (EVar "Ref") (EListLit))) (fa "strLitCache" (EApp (EVar "Ref") (EVar "omEmpty"))) (fa "closConstCache" (EApp (EVar "Ref") (EListLit))) (fa "floatFwSet" (EApp (EVar "Ref") (EListLit))) (fa "floatClosureFns" (EApp (EVar "Ref") (EListLit))) (fa "rawWorkers" (EApp (EVar "Ref") (EVar "omEmpty"))) (fa "constGlobals" (EApp (EVar "Ref") (EVar "omEmpty"))) (fa "inlineOpen" (EApp (EVar "Ref") (ELit (LInt 0)))) (fa "inlineSpent" (EApp (EVar "Ref") (ELit (LInt 0)))) (fa "siteFileNums" (EApp (EVar "Ref") (EVar "omEmpty"))) (fa "siteFiles" (EApp (EVar "Ref") (EListLit))) (fa "siteTraps" (EApp (EVar "Ref") (EListLit))) (fa "symbols" (EApp (EVar "Ref") (EApp (EVar "emptyRegistry") (EIf (EBinOp "==" (EFieldAccess (EVar "input") "emitHalf") (EVar "emitHalfWhole")) (EVar "WholeModule") (EVar "ModuleHalf"))))) (fa "coverage" (EApp (EVar "Ref") (EVar "emptyCoverage"))) (fa "excusedCalls" (EApp (EVar "Ref") (EListLit))) (fa "symbolDefects" (EApp (EVar "Ref") (EListLit))) (fa "symOrigin" (EApp (EVar "Ref") (EVar "moduleOrigin"))) (fa "hiddenDefines" (EApp (EVar "Ref") (EVar "None"))) (fa "orScope" (EApp (EVar "Ref") (EVar "None")))))) (DoExpr (EApp (EApp (EVar "setRef") (EFieldAccess (EVar "e") "dictConstCache")) (EListLit))) (DoExpr (EApp (EApp (EVar "setRef") (EFieldAccess (EVar "e") "closConstCache")) (EListLit))) (DoExpr (EApp (EApp (EVar "installKnownFnMap") (EVar "e")) (EApp (EVar "collectFns") (EVar "groups")))) (DoExpr (EApp (EApp (EVar "installLazyGlobalMap") (EVar "e")) (EFieldAccess (EVar "cfg") "lazyNames"))) (DoExpr (EApp (EVar "installTypeIds") (EVar "e"))) (DoExpr (EApp (EApp (EVar "installSigMap") (EVar "e")) (EApp (EApp (EVar "programSigs") (EVar "e")) (EApp (EVar "fnBinds") (EVar "groups"))))) (DoExpr (EApp (EApp (EVar "installImplIndex") (EVar "e")) (EVar "implEntries"))) (DoExpr (EApp (EApp (EVar "installImplMethodSet") (EVar "e")) (EVar "implEntries"))) (DoLet false false (PVar "ordinalEntries") (EApp (EApp (EApp (EVar "indexImplGroupEntries") (EVar "implEntries")) (ELit (LInt 0))) (EVar "omEmpty"))) (DoExpr (EApp (EApp (EVar "setRef") (EFieldAccess (EVar "e") "implGroups")) (EApp (EApp (EVar "map") (EApp (EApp (EVar "resolveImplGroup") (EVar "e")) (EVar "ordinalEntries"))) (EFieldAccess (EVar "cfg") "implGroups")))) (DoExpr (EApp (EApp (EVar "setRef") (EFieldAccess (EVar "e") "implGroupAt")) (EApp (EApp (EVar "omFromPairs") (EApp (EApp (EVar "numberGroups") (ELit (LInt 0))) (EUnOp "!" (EFieldAccess (EVar "e") "implGroups")))) (EVar "omEmpty")))) (DoExpr (EApp (EApp (EApp (EVar "installDispatchState") (EVar "e")) (EFieldAccess (EVar "cfg") "dispGroups")) (EApp (EVar "fnBinds") (EVar "groups")))) (DoExpr (EApp (EApp (EVar "setRef") (EFieldAccess (EVar "e") "floatClosureFns")) (EApp (EApp (EVar "collectFloatClosureFns") (EVar "e")) (EApp (EVar "fnBinds") (EVar "groups"))))) (DoExpr (EApp (EApp (EVar "setRef") (EFieldAccess (EVar "e") "rawWorkers")) (EApp (EApp (EVar "collectRawWorkers") (EVar "e")) (EApp (EVar "fnBinds") (EVar "groups"))))) (DoExpr (EApp (EApp (EVar "setRef") (EFieldAccess (EVar "e") "constGlobals")) (EApp (EVar "collectConstGlobals") (EApp (EVar "valBinds") (EVar "groups"))))) (DoExpr (EVar "e"))))
 (DTypeSig false "emitProgramMode" (TyFun (TyCon "GapMode") (TyFun (TyCon "EmitInput") (TyFun (TyCon "EmitPlan") (TyFun (TyCon "CProgram") (TyApp (TyApp (TyCon "Result") (TyApp (TyCon "List") (TyCon "SymbolDefect"))) (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "String")))))))))
 (DFunDef false "emitProgramMode" ((PVar "gapMode") (PVar "input") (PVar "plan") (PAs "cp" (PCon "CProgram" (PVar "groups") (PVar "ctorArs") (PVar "ctorTypes") (PVar "implEntries") PWild (PVar "facts")))) (EBlock (DoLet false false (PVar "found") (EApp (EApp (EApp (EApp (EVar "unprovidedExterns") (EVar "gapMode")) (EVar "input")) (EVar "plan")) (EVar "cp"))) (DoLet false false (PVar "cfg") (EApp (EApp (EApp (EApp (EVar "programEmitConfig") (EVar "gapMode")) (EVar "input")) (EVar "plan")) (EVar "groups"))) (DoLet false false (PVar "e") (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EVar "buildEmitState") (EVar "cfg")) (EVar "input")) (EVar "groups")) (EVar "ctorArs")) (EVar "ctorTypes")) (EVar "implEntries")) (EVar "facts"))) (DoExpr (EApp (EApp (EVar "noteUnprovidedExterns") (EVar "e")) (EVar "found"))) (DoExpr (EApp (EApp (EVar "map") (ELam ((PVar "text")) (ETuple (EVar "text") (EApp (EVar "reverseL") (EUnOp "!" (EFieldAccess (EVar "e") "gapLog")))))) (EApp (EApp (EApp (EApp (EApp (EVar "runStrictEmission") (EVar "e")) (EVar "input")) (EVar "plan")) (EVar "groups")) (EVar "implEntries"))))))
 (DTypeSig false "unprovidedExterns" (TyFun (TyCon "GapMode") (TyFun (TyCon "EmitInput") (TyFun (TyCon "EmitPlan") (TyFun (TyCon "CProgram") (TyApp (TyCon "List") (TyCon "ExternFinding")))))))
@@ -18067,7 +17968,7 @@ runtimeName e symbol = optionOr "" (externRuntimeKey e.externFacts symbol)
 (DFunDef false "ctag" ((PCon "CVariantUpdate" PWild PWild PWild)) (ELit (LString "CVariantUpdate (named-field variant update)")))
 (DFunDef false "ctag" (PWild) (ELit (LString "?")))
 (DTypeSig true "emitProgramGaps" (TyFun (TyCon "EmitInput") (TyFun (TyCon "EmitPlan") (TyFun (TyCon "CProgram") (TyApp (TyApp (TyCon "Result") (TyApp (TyCon "List") (TyCon "SymbolDefect"))) (TyApp (TyCon "List") (TyCon "String")))))))
-(DFunDef false "emitProgramGaps" ((PVar "input") (PVar "plan") (PAs "cp" (PCon "CProgram" (PVar "groups") (PVar "ctorArs") (PVar "ctorTypes") (PVar "implEntries") PWild (PVar "facts")))) (EBlock (DoLet false false (PVar "cfg") (ERecordCreate "EmitStateConfig" ((fa "counter0" (ELit (LInt 0))) (fa "globalsReg0" (EApp (EVar "initGlobalsRegReady") (EApp (EVar "valBinds") (EVar "groups")))) (fa "gapMode" (EVar "Record")) (fa "lazyNames" (EListLit)) (fa "trmc" (EFieldAccess (EVar "plan") "trmc")) (fa "methodResults" (EFieldAccess (EVar "plan") "methodResults")) (fa "constructorFacts" (EFieldAccess (EVar "plan") "constructorFacts")) (fa "externRequirements" (EFieldAccess (EVar "plan") "externRequirements")) (fa "dispGroups" (EVar "None")) (fa "implGroups" (EFieldAccess (EVar "plan") "implGroups"))))) (DoLet false false (PVar "found") (EApp (EApp (EApp (EApp (EVar "unprovidedExterns") (EVar "Record")) (EVar "input")) (EVar "plan")) (EVar "cp"))) (DoLet false false (PVar "e") (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EVar "buildEmitState") (EVar "cfg")) (EVar "input")) (EVar "groups")) (EVar "ctorArs")) (EVar "ctorTypes")) (EVar "implEntries")) (EVar "facts"))) (DoExpr (EApp (EApp (EVar "noteUnprovidedExterns") (EVar "e")) (EVar "found"))) (DoExpr (EApp (EVar "emitPreamble") (EVar "e"))) (DoExpr (EApp (EVar "emitFfiDeclares") (EVar "e"))) (DoExpr (EApp (EApp (EVar "emitGlobalDecls") (EVar "e")) (EApp (EVar "valBinds") (EVar "groups")))) (DoExpr (EApp (EApp (EVar "emitFnsGaps") (EVar "e")) (EApp (EVar "fnBinds") (EVar "groups")))) (DoExpr (EApp (EApp (EVar "emitImplsGaps") (EVar "e")) (EVar "implEntries"))) (DoExpr (EApp (EApp (EApp (EVar "emitTopBindsGaps") (EVar "e")) (EVar "omEmpty")) (EApp (EVar "valBinds") (EVar "groups")))) (DoExpr (EMatch (EApp (EApp (EVar "symbolDefectsL") (EVar "e")) (EVar "False")) (arm (PList) () (EApp (EApp (EVar "map") (ELam (PWild) (EApp (EVar "reverseL") (EUnOp "!" (EFieldAccess (EVar "e") "gapLog"))))) (EApp (EApp (EApp (EApp (EVar "finishCheckedText") (EApp (EVar "RecordedGaps") (EUnOp "!" (EFieldAccess (EVar "e") "excusedCalls")))) (EUnOp "!" (EFieldAccess (EVar "e") "symbols"))) (EUnOp "!" (EFieldAccess (EVar "e") "coverage"))) (EApp (EVar "joinNl") (EBinOp "++" (EBinOp "++" (EBinOp "++" (EApp (EVar "siteTrapDeclares") (EVar "e")) (EApp (EVar "reverseL") (EUnOp "!" (EFieldAccess (EVar "e") "buf")))) (EApp (EVar "reverseL") (EUnOp "!" (EFieldAccess (EVar "e") "lams")))) (EApp (EVar "siteFileTable") (EVar "e"))))))) (arm (PVar "defects") () (EApp (EVar "Err") (EVar "defects")))))))
+(DFunDef false "emitProgramGaps" ((PVar "input") (PVar "plan") (PAs "cp" (PCon "CProgram" (PVar "groups") (PVar "ctorArs") (PVar "ctorTypes") (PVar "implEntries") PWild (PVar "facts")))) (EBlock (DoLet false false (PVar "cfg") (ERecordCreate "EmitStateConfig" ((fa "counter0" (ELit (LInt 0))) (fa "globalsReg0" (EApp (EVar "initGlobalsRegReady") (EApp (EVar "valBinds") (EVar "groups")))) (fa "gapMode" (EVar "Record")) (fa "lazyNames" (EListLit)) (fa "trmc" (EFieldAccess (EVar "plan") "trmc")) (fa "methodResults" (EFieldAccess (EVar "plan") "methodResults")) (fa "constructorFacts" (EFieldAccess (EVar "plan") "constructorFacts")) (fa "externRequirements" (EFieldAccess (EVar "plan") "externRequirements")) (fa "dispGroups" (EVar "None")) (fa "implGroups" (EFieldAccess (EVar "plan") "implGroups")) (fa "methodTables" (EFieldAccess (EVar "plan") "methodTables"))))) (DoLet false false (PVar "found") (EApp (EApp (EApp (EApp (EVar "unprovidedExterns") (EVar "Record")) (EVar "input")) (EVar "plan")) (EVar "cp"))) (DoLet false false (PVar "e") (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EVar "buildEmitState") (EVar "cfg")) (EVar "input")) (EVar "groups")) (EVar "ctorArs")) (EVar "ctorTypes")) (EVar "implEntries")) (EVar "facts"))) (DoExpr (EApp (EApp (EVar "noteUnprovidedExterns") (EVar "e")) (EVar "found"))) (DoExpr (EApp (EVar "emitPreamble") (EVar "e"))) (DoExpr (EApp (EVar "emitFfiDeclares") (EVar "e"))) (DoExpr (EApp (EApp (EVar "emitGlobalDecls") (EVar "e")) (EApp (EVar "valBinds") (EVar "groups")))) (DoExpr (EApp (EApp (EVar "emitFnsGaps") (EVar "e")) (EApp (EVar "fnBinds") (EVar "groups")))) (DoExpr (EApp (EApp (EVar "emitImplsGaps") (EVar "e")) (EVar "implEntries"))) (DoExpr (EApp (EApp (EApp (EVar "emitTopBindsGaps") (EVar "e")) (EVar "omEmpty")) (EApp (EVar "valBinds") (EVar "groups")))) (DoExpr (EMatch (EApp (EApp (EVar "symbolDefectsL") (EVar "e")) (EVar "False")) (arm (PList) () (EApp (EApp (EVar "map") (ELam (PWild) (EApp (EVar "reverseL") (EUnOp "!" (EFieldAccess (EVar "e") "gapLog"))))) (EApp (EApp (EApp (EApp (EVar "finishCheckedText") (EApp (EVar "RecordedGaps") (EUnOp "!" (EFieldAccess (EVar "e") "excusedCalls")))) (EUnOp "!" (EFieldAccess (EVar "e") "symbols"))) (EUnOp "!" (EFieldAccess (EVar "e") "coverage"))) (EApp (EVar "joinNl") (EBinOp "++" (EBinOp "++" (EBinOp "++" (EApp (EVar "siteTrapDeclares") (EVar "e")) (EApp (EVar "reverseL") (EUnOp "!" (EFieldAccess (EVar "e") "buf")))) (EApp (EVar "reverseL") (EUnOp "!" (EFieldAccess (EVar "e") "lams")))) (EApp (EVar "siteFileTable") (EVar "e"))))))) (arm (PVar "defects") () (EApp (EVar "Err") (EVar "defects")))))))
 (DTypeSig false "emitFnsGaps" (TyFun (TyCon "Emit") (TyFun (TyApp (TyCon "List") (TyCon "CBind")) (TyCon "Unit"))))
 (DFunDef false "emitFnsGaps" (PWild (PList)) (ELit LUnit))
 (DFunDef false "emitFnsGaps" ((PVar "e") (PCons (PCon "CBind" (PVar "name") (PVar "cs") (PVar "site") (PVar "bid")) (PVar "rest"))) (EBlock (DoExpr (EApp (EApp (EVar "setGapBind") (EVar "e")) (EBinOp "++" (ELit (LString "fn ")) (EVar "name")))) (DoExpr (EApp (EApp (EApp (EVar "setSymOrigin") (EVar "e")) (EVar "name")) (EVar "site"))) (DoExpr (EApp (EApp (EVar "emitFn") (EVar "e")) (EApp (EApp (EApp (EApp (EVar "CBind") (EVar "name")) (EVar "cs")) (EVar "site")) (EVar "bid")))) (DoExpr (EApp (EApp (EVar "emitFnsGaps") (EVar "e")) (EVar "rest")))))
@@ -18114,7 +18015,7 @@ runtimeName e symbol = optionOr "" (externRuntimeKey e.externFacts symbol)
 (DUse false (UseGroup ("types" "private_mangle") ((mem "hashName" false))))
 (DUse false (UseGroup ("types" "route_key") ((mem "numIntWord" false))))
 (DUse false (UseGroup ("backend" "impl_groups") ((mem "ImplClauseGroup" true))))
-(DUse false (UseGroup ("backend" "emit_plan") ((mem "EmitPlan" true) (mem "lookupMethodResult" false) (mem "planEntryMainIsUnit" false) (mem "planEntryMainIsFloat" false))))
+(DUse false (UseGroup ("backend" "emit_plan") ((mem "EmitPlan" true) (mem "MethodSlot" true) (mem "MethodTables" true) (mem "InstanceTable" true) (mem "SlotCallee" true) (mem "interfaceSlots" false) (mem "lookupMethodResult" false) (mem "planEntryMainIsUnit" false) (mem "planEntryMainIsFloat" false))))
 (DUse false (UseGroup ("list") ((mem "zip" false))))
 (DUse false (UseGroup ("backend" "emit_support") ((mem "bindNameMap" false) (mem "guardVars" false) (mem "ftPrefix" false) (mem "ftLabelOf" false) (mem "labelFallthrough" false) (mem "rngBound" false) (mem "appParts" false) (mem "isExactCall" false) (mem "isTailCall" false) (mem "implEntryDeclaredArity" false) (mem "nthArm" false) (mem "bindingOrigin" false))))
 (DData Private "GapMode" () ((variant "Strict" (ConPos)) (variant "Record" (ConPos))) ())
@@ -18178,22 +18079,19 @@ runtimeName e symbol = optionOr "" (externRuntimeKey e.externFacts symbol)
 (DFunDef false "gapStr" ((PVar "e") (PVar "reason")) (EMatch (EFieldAccess (EVar "e") "gapMode") (arm (PCon "Record") () (ELet false PWild (EApp (EApp (EVar "noteGap") (EVar "e")) (EVar "reason")) (ELit (LString "0")))) (arm (PCon "Strict") () (EApp (EVar "panic") (EVar "reason")))))
 (DData Private "LTy" () ((variant "LTInt" (ConPos)) (variant "LTFloat" (ConPos)) (variant "LTBool" (ConPos)) (variant "LTCon" (ConPos)) (variant "LTClosure" (ConPos)) (variant "LTStr" (ConPos)) (variant "LTUnit" (ConPos)) (variant "LTChar" (ConPos)) (variant "LTUnknown" (ConPos)) (variant "LTNum" (ConPos)) (variant "LTFloatU" (ConPos)) (variant "LTU64" (ConPos)) (variant "LTI64" (ConPos)) (variant "LTU64U" (ConPos)) (variant "LTU32U" (ConPos)) (variant "LTI32U" (ConPos))) ())
 (DUse false (UseGroup ("types" "capability_manifest") ((mem "ManifestRequirement" false))))
-(DData Private "EmitInputData" () ((variant "EmitInputData" (ConNamed (field "manifestRequirement" (TyCon "ManifestRequirement")) (field "ctorFieldIndex" (TyApp (TyCon "OrdMap") (TyApp (TyCon "List") (TyCon "String")))) (field "emitHalf" (TyCon "Int")) (field "preludeBinds" (TyApp (TyCon "List") (TyCon "String"))) (field "preludeImplIndex" (TyApp (TyCon "OrdMap") (TyApp (TyCon "OrdMap") (TyCon "String")))) (field "srcName" (TyCon "String")) (field "sharedMethodNames" (TyApp (TyCon "OrdMap") (TyCon "Unit"))) (field "runtimeExterns" (TyCon "RuntimeExternDomain")) (field "noInlineFns" (TyApp (TyCon "OrdMap") (TyCon "Unit")))))) ())
+(DData Private "EmitInputData" () ((variant "EmitInputData" (ConNamed (field "manifestRequirement" (TyCon "ManifestRequirement")) (field "ctorFieldIndex" (TyApp (TyCon "OrdMap") (TyApp (TyCon "List") (TyCon "String")))) (field "emitHalf" (TyCon "Int")) (field "preludeBinds" (TyApp (TyCon "List") (TyCon "String"))) (field "preludeImplIndex" (TyApp (TyCon "OrdMap") (TyApp (TyCon "OrdMap") (TyCon "String")))) (field "srcName" (TyCon "String")) (field "runtimeExterns" (TyCon "RuntimeExternDomain")) (field "noInlineFns" (TyApp (TyCon "OrdMap") (TyCon "Unit")))))) ())
 (DTypeAlias true "EmitInput" () (TyCon "EmitInputData"))
 (DTypeSig true "makeEmitInput" (TyFun (TyCon "ManifestRequirement") (TyFun (TyCon "RuntimeExternDomain") (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyTuple (TyCon "String") (TyCon "String") (TyCon "Int")))) (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "String")))) (TyFun (TyCon "Int") (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "String") (TyCon "String"))) (TyFun (TyCon "String") (TyCon "EmitInput"))))))))))
-(DFunDef false "makeEmitInput" ((PVar "requirement") (PVar "domain") (PVar "methodIfaces") (PVar "ctorFieldTypes") (PVar "emitHalf") (PVar "preludeBinds") (PVar "preludeImpls") (PVar "srcName")) (ERecordCreate "EmitInputData" ((fa "manifestRequirement" (EVar "requirement")) (fa "ctorFieldIndex" (EApp (EApp (EVar "omFromPairs") (EApp (EVar "reverseL") (EVar "ctorFieldTypes"))) (EVar "omEmpty"))) (fa "emitHalf" (EVar "emitHalf")) (fa "preludeBinds" (EVar "preludeBinds")) (fa "preludeImplIndex" (EApp (EApp (EVar "preludeImplIndexOf") (EVar "preludeImpls")) (EVar "omEmpty"))) (fa "srcName" (EVar "srcName")) (fa "sharedMethodNames" (EApp (EApp (EApp (EVar "sharedMethodNamesOf") (EVar "methodIfaces")) (EVar "omEmpty")) (EVar "omEmpty"))) (fa "runtimeExterns" (EVar "domain")) (fa "noInlineFns" (EVar "omEmpty")))))
+(DFunDef false "makeEmitInput" ((PVar "requirement") (PVar "domain") (PVar "_methodIfaces") (PVar "ctorFieldTypes") (PVar "emitHalf") (PVar "preludeBinds") (PVar "preludeImpls") (PVar "srcName")) (ERecordCreate "EmitInputData" ((fa "manifestRequirement" (EVar "requirement")) (fa "ctorFieldIndex" (EApp (EApp (EVar "omFromPairs") (EApp (EVar "reverseL") (EVar "ctorFieldTypes"))) (EVar "omEmpty"))) (fa "emitHalf" (EVar "emitHalf")) (fa "preludeBinds" (EVar "preludeBinds")) (fa "preludeImplIndex" (EApp (EApp (EVar "preludeImplIndexOf") (EVar "preludeImpls")) (EVar "omEmpty"))) (fa "srcName" (EVar "srcName")) (fa "runtimeExterns" (EVar "domain")) (fa "noInlineFns" (EVar "omEmpty")))))
 (DTypeSig true "withNoInlineFns" (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyCon "EmitInput") (TyCon "EmitInput"))))
 (DFunDef false "withNoInlineFns" ((PVar "names") (PVar "input")) (ERecordUpdate (EVar "input") ((fa "noInlineFns" (EApp (EApp (EVar "omFromPairs") (EApp (EApp (EMethodRef "map") (ELam ((PVar "n")) (ETuple (EVar "n") (ELit LUnit)))) (EVar "names"))) (EVar "omEmpty"))))))
 (DTypeSig false "fnAttrs" (TyFun (TyCon "Emit") (TyFun (TyCon "String") (TyCon "String"))))
 (DFunDef false "fnAttrs" ((PVar "e") (PVar "name")) (EMatch (EApp (EApp (EVar "omLookup") (EVar "name")) (EFieldAccess (EFieldAccess (EVar "e") "input") "noInlineFns")) (arm (PCon "Some" PWild) () (ELit (LString " noinline"))) (arm (PCon "None") () (ELit (LString "")))))
-(DTypeSig false "sharedMethodNamesOf" (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyTuple (TyCon "String") (TyCon "String") (TyCon "Int")))) (TyFun (TyApp (TyCon "OrdMap") (TyCon "String")) (TyFun (TyApp (TyCon "OrdMap") (TyCon "Unit")) (TyApp (TyCon "OrdMap") (TyCon "Unit"))))))
-(DFunDef false "sharedMethodNamesOf" ((PList) PWild (PVar "shared")) (EVar "shared"))
-(DFunDef false "sharedMethodNamesOf" ((PCons (PTuple (PVar "m") (PTuple PWild (PVar "word") PWild)) (PVar "rest")) (PVar "firstWord") (PVar "shared")) (EMatch (EApp (EApp (EVar "omLookup") (EVar "m")) (EVar "firstWord")) (arm (PCon "None") () (EApp (EApp (EApp (EVar "sharedMethodNamesOf") (EVar "rest")) (EApp (EApp (EApp (EVar "omInsert") (EVar "m")) (EVar "word")) (EVar "firstWord"))) (EVar "shared"))) (arm (PCon "Some" (PVar "w")) () (EIf (EBinOp "==" (EVar "w") (EVar "word")) (EApp (EApp (EApp (EVar "sharedMethodNamesOf") (EVar "rest")) (EVar "firstWord")) (EVar "shared")) (EApp (EApp (EApp (EVar "sharedMethodNamesOf") (EVar "rest")) (EVar "firstWord")) (EApp (EApp (EApp (EVar "omInsert") (EVar "m")) (ELit LUnit)) (EVar "shared")))))))
 (DTypeSig false "preludeImplIndexOf" (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "String") (TyCon "String"))) (TyFun (TyApp (TyCon "OrdMap") (TyApp (TyCon "OrdMap") (TyCon "String"))) (TyApp (TyCon "OrdMap") (TyApp (TyCon "OrdMap") (TyCon "String"))))))
 (DFunDef false "preludeImplIndexOf" ((PList) (PVar "acc")) (EVar "acc"))
 (DFunDef false "preludeImplIndexOf" ((PCons (PTuple (PVar "method") (PVar "key") (PVar "symTag")) (PVar "rest")) (PVar "acc")) (EBlock (DoLet false false (PVar "byKey") (EApp (EApp (EVar "optionOr") (EVar "omEmpty")) (EApp (EApp (EVar "omLookup") (EVar "method")) (EVar "acc")))) (DoExpr (EApp (EApp (EVar "preludeImplIndexOf") (EVar "rest")) (EApp (EApp (EApp (EVar "omInsert") (EVar "method")) (EApp (EApp (EApp (EVar "omInsert") (EVar "key")) (EVar "symTag")) (EVar "byKey"))) (EVar "acc"))))))
 (DData Private "TailDefine" () ((variant "TailDefine" (ConPos (TyCon "String") (TyCon "Int") (TyCon "Bool")))) ())
-(DData Private "Emit" () ((variant "Emit" (ConNamed (field "input" (TyCon "EmitInput")) (field "implNames" (TyApp (TyCon "Ref") (TyApp (TyCon "OrdMap") (TyApp (TyCon "OrdMap") (TyCon "String"))))) (field "defaultNames" (TyApp (TyCon "Ref") (TyApp (TyCon "OrdMap") (TyApp (TyCon "OrdMap") (TyApp (TyCon "OrdMap") (TyCon "String")))))) (field "counter0" (TyCon "Int")) (field "trmc" (TyCon "TrmcVerdicts")) (field "methodResults" (TyApp (TyCon "OrdMap") (TyApp (TyCon "OrdMap") (TyCon "MethodResultFact")))) (field "curModule" (TyApp (TyCon "Ref") (TyCon "String"))) (field "counters" (TyApp (TyCon "Ref") (TyApp (TyCon "OrdMap") (TyCon "Int")))) (field "buf" (TyApp (TyCon "Ref") (TyApp (TyCon "List") (TyCon "String")))) (field "fnNames" (TyApp (TyCon "Ref") (TyApp (TyCon "List") (TyCon "String")))) (field "binderRows" (TyApp (TyApp (TyCon "BM.Map") (TyCon "Int")) (TyCon "BinderRow"))) (field "symbolOrigins" (TyApp (TyCon "Option") (TyCon "CoreSymbolOrigins"))) (field "externFacts" (TyApp (TyCon "OrdMap") (TyCon "ExternDeclFact"))) (field "nativePrototypes" (TyApp (TyCon "List") (TyCon "ExternDeclFact"))) (field "superCounts" (TyApp (TyCon "OrdMap") (TyCon "Int"))) (field "globalTys" (TyApp (TyCon "OrdMap") (TyCon "LTy"))) (field "lams" (TyApp (TyCon "Ref") (TyApp (TyCon "List") (TyCon "String")))) (field "implEntries" (TyApp (TyCon "Ref") (TyApp (TyCon "List") (TyCon "CImplEntry")))) (field "implGroups" (TyApp (TyCon "Ref") (TyApp (TyCon "List") (TyCon "ImplGroup")))) (field "arities" (TyCon "ArityEnv")) (field "globalsReg" (TyApp (TyCon "Ref") (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyTuple (TyCon "Bool") (TyCon "LTy")))))) (field "gapMode" (TyCon "GapMode")) (field "gapLog" (TyApp (TyCon "Ref") (TyApp (TyCon "List") (TyCon "String")))) (field "curGapBind" (TyApp (TyCon "Ref") (TyCon "String"))) (field "defineCounter" (TyApp (TyCon "Ref") (TyCon "Int"))) (field "closureRetTy" (TyApp (TyCon "Ref") (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "LTy"))))) (field "directFn" (TyApp (TyCon "Ref") (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyTuple (TyCon "String") (TyCon "Int")))))) (field "trmcCtx" (TyApp (TyCon "Ref") (TyCon "TrmcCtx"))) (field "gDispCtx" (TyApp (TyCon "Ref") (TyCon "GDispCtx"))) (field "selfTailCtx" (TyApp (TyCon "Ref") (TyApp (TyCon "Option") (TyCon "TailDefine")))) (field "gDispGroups" (TyApp (TyCon "Ref") (TyApp (TyCon "List") (TyCon "DispGroup")))) (field "gDispBinds" (TyApp (TyCon "Ref") (TyApp (TyCon "List") (TyCon "CBind")))) (field "gDispBindMap" (TyApp (TyCon "Ref") (TyApp (TyCon "OrdMap") (TyCon "CBind")))) (field "curImplTag" (TyApp (TyCon "Ref") (TyCon "String"))) (field "curSelfFnParams" (TyApp (TyCon "Ref") (TyApp (TyCon "List") (TyCon "String")))) (field "knownFnMap" (TyApp (TyCon "Ref") (TyApp (TyCon "Option") (TyApp (TyCon "OrdMap") (TyCon "Unit"))))) (field "lazyGlobalMap" (TyApp (TyCon "Ref") (TyApp (TyCon "Option") (TyApp (TyCon "OrdMap") (TyCon "Unit"))))) (field "constructorFacts" (TyCon "ConstructorFacts")) (field "sigMap" (TyApp (TyCon "Ref") (TyApp (TyCon "Option") (TyApp (TyCon "OrdMap") (TyCon "FnSig"))))) (field "implsByMethod" (TyApp (TyCon "Ref") (TyApp (TyCon "Option") (TyApp (TyCon "OrdMap") (TyApp (TyCon "List") (TyCon "CImplEntry")))))) (field "implMethodSet" (TyApp (TyCon "Ref") (TyApp (TyCon "Option") (TyApp (TyCon "OrdMap") (TyCon "Unit"))))) (field "typeIdMap" (TyApp (TyCon "Ref") (TyApp (TyCon "Option") (TyApp (TyCon "OrdMap") (TyCon "Int"))))) (field "dispCache" (TyApp (TyCon "Ref") (TyApp (TyCon "List") (TyCon "String")))) (field "dictConstCache" (TyApp (TyCon "Ref") (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "String"))))) (field "strLitCache" (TyApp (TyCon "Ref") (TyApp (TyCon "OrdMap") (TyCon "String")))) (field "closConstCache" (TyApp (TyCon "Ref") (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "String"))))) (field "floatFwSet" (TyApp (TyCon "Ref") (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyTuple (TyCon "Int") (TyApp (TyCon "List") (TyCon "Int"))))))) (field "floatClosureFns" (TyApp (TyCon "Ref") (TyApp (TyCon "List") (TyCon "String")))) (field "rawWorkers" (TyApp (TyCon "Ref") (TyApp (TyCon "OrdMap") (TyCon "RawWorker")))) (field "constGlobals" (TyApp (TyCon "Ref") (TyApp (TyCon "OrdMap") (TyCon "Lit")))) (field "inlineOpen" (TyApp (TyCon "Ref") (TyCon "Int"))) (field "inlineSpent" (TyApp (TyCon "Ref") (TyCon "Int"))) (field "siteFileNums" (TyApp (TyCon "Ref") (TyApp (TyCon "OrdMap") (TyCon "Int")))) (field "siteFiles" (TyApp (TyCon "Ref") (TyApp (TyCon "List") (TyCon "String")))) (field "siteTraps" (TyApp (TyCon "Ref") (TyApp (TyCon "List") (TyCon "String")))) (field "symbols" (TyApp (TyCon "Ref") (TyCon "SymbolRegistry"))) (field "coverage" (TyApp (TyCon "Ref") (TyCon "CallCoverage"))) (field "excusedCalls" (TyApp (TyCon "Ref") (TyApp (TyCon "List") (TyCon "LlvmSymbol")))) (field "symbolDefects" (TyApp (TyCon "Ref") (TyApp (TyCon "List") (TyCon "SymbolDefect")))) (field "symOrigin" (TyApp (TyCon "Ref") (TyCon "SymbolOrigin"))) (field "hiddenDefines" (TyApp (TyCon "Ref") (TyApp (TyCon "Option") (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "Prototype")))))) (field "orScope" (TyApp (TyCon "Ref") (TyApp (TyCon "Option") (TyCon "OrScope"))))))) ())
+(DData Private "Emit" () ((variant "Emit" (ConNamed (field "input" (TyCon "EmitInput")) (field "implNames" (TyApp (TyCon "Ref") (TyApp (TyCon "OrdMap") (TyApp (TyCon "OrdMap") (TyCon "String"))))) (field "defaultNames" (TyApp (TyCon "Ref") (TyApp (TyCon "OrdMap") (TyApp (TyCon "OrdMap") (TyApp (TyCon "OrdMap") (TyCon "String")))))) (field "counter0" (TyCon "Int")) (field "trmc" (TyCon "TrmcVerdicts")) (field "methodResults" (TyApp (TyCon "OrdMap") (TyApp (TyCon "OrdMap") (TyCon "MethodResultFact")))) (field "curModule" (TyApp (TyCon "Ref") (TyCon "String"))) (field "counters" (TyApp (TyCon "Ref") (TyApp (TyCon "OrdMap") (TyCon "Int")))) (field "buf" (TyApp (TyCon "Ref") (TyApp (TyCon "List") (TyCon "String")))) (field "fnNames" (TyApp (TyCon "Ref") (TyApp (TyCon "List") (TyCon "String")))) (field "binderRows" (TyApp (TyApp (TyCon "BM.Map") (TyCon "Int")) (TyCon "BinderRow"))) (field "symbolOrigins" (TyApp (TyCon "Option") (TyCon "CoreSymbolOrigins"))) (field "externFacts" (TyApp (TyCon "OrdMap") (TyCon "ExternDeclFact"))) (field "nativePrototypes" (TyApp (TyCon "List") (TyCon "ExternDeclFact"))) (field "superCounts" (TyApp (TyCon "OrdMap") (TyCon "Int"))) (field "globalTys" (TyApp (TyCon "OrdMap") (TyCon "LTy"))) (field "lams" (TyApp (TyCon "Ref") (TyApp (TyCon "List") (TyCon "String")))) (field "implEntries" (TyApp (TyCon "Ref") (TyApp (TyCon "List") (TyCon "CImplEntry")))) (field "implGroups" (TyApp (TyCon "Ref") (TyApp (TyCon "List") (TyCon "ImplGroup")))) (field "arities" (TyCon "ArityEnv")) (field "globalsReg" (TyApp (TyCon "Ref") (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyTuple (TyCon "Bool") (TyCon "LTy")))))) (field "gapMode" (TyCon "GapMode")) (field "gapLog" (TyApp (TyCon "Ref") (TyApp (TyCon "List") (TyCon "String")))) (field "curGapBind" (TyApp (TyCon "Ref") (TyCon "String"))) (field "defineCounter" (TyApp (TyCon "Ref") (TyCon "Int"))) (field "closureRetTy" (TyApp (TyCon "Ref") (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "LTy"))))) (field "directFn" (TyApp (TyCon "Ref") (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyTuple (TyCon "String") (TyCon "Int")))))) (field "trmcCtx" (TyApp (TyCon "Ref") (TyCon "TrmcCtx"))) (field "gDispCtx" (TyApp (TyCon "Ref") (TyCon "GDispCtx"))) (field "selfTailCtx" (TyApp (TyCon "Ref") (TyApp (TyCon "Option") (TyCon "TailDefine")))) (field "gDispGroups" (TyApp (TyCon "Ref") (TyApp (TyCon "List") (TyCon "DispGroup")))) (field "gDispBinds" (TyApp (TyCon "Ref") (TyApp (TyCon "List") (TyCon "CBind")))) (field "gDispBindMap" (TyApp (TyCon "Ref") (TyApp (TyCon "OrdMap") (TyCon "CBind")))) (field "curImplTag" (TyApp (TyCon "Ref") (TyCon "String"))) (field "curSelfFnParams" (TyApp (TyCon "Ref") (TyApp (TyCon "List") (TyCon "String")))) (field "knownFnMap" (TyApp (TyCon "Ref") (TyApp (TyCon "Option") (TyApp (TyCon "OrdMap") (TyCon "Unit"))))) (field "lazyGlobalMap" (TyApp (TyCon "Ref") (TyApp (TyCon "Option") (TyApp (TyCon "OrdMap") (TyCon "Unit"))))) (field "constructorFacts" (TyCon "ConstructorFacts")) (field "sigMap" (TyApp (TyCon "Ref") (TyApp (TyCon "Option") (TyApp (TyCon "OrdMap") (TyCon "FnSig"))))) (field "implsByMethod" (TyApp (TyCon "Ref") (TyApp (TyCon "Option") (TyApp (TyCon "OrdMap") (TyApp (TyCon "List") (TyCon "CImplEntry")))))) (field "implMethodSet" (TyApp (TyCon "Ref") (TyApp (TyCon "Option") (TyApp (TyCon "OrdMap") (TyCon "Unit"))))) (field "typeIdMap" (TyApp (TyCon "Ref") (TyApp (TyCon "Option") (TyApp (TyCon "OrdMap") (TyCon "Int"))))) (field "methodTables" (TyCon "MethodTables")) (field "implGroupAt" (TyApp (TyCon "Ref") (TyApp (TyCon "OrdMap") (TyCon "ImplGroup")))) (field "slotCache" (TyApp (TyCon "Ref") (TyApp (TyCon "OrdMap") (TyCon "String")))) (field "defaultReceiver" (TyApp (TyCon "Ref") (TyApp (TyCon "Option") (TyTuple (TyCon "String") (TyCon "Int") (TyCon "Int"))))) (field "superCountGlobals" (TyApp (TyCon "Ref") (TyApp (TyCon "OrdMap") (TyCon "Unit")))) (field "dictConstCache" (TyApp (TyCon "Ref") (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "String"))))) (field "strLitCache" (TyApp (TyCon "Ref") (TyApp (TyCon "OrdMap") (TyCon "String")))) (field "closConstCache" (TyApp (TyCon "Ref") (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "String"))))) (field "floatFwSet" (TyApp (TyCon "Ref") (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyTuple (TyCon "Int") (TyApp (TyCon "List") (TyCon "Int"))))))) (field "floatClosureFns" (TyApp (TyCon "Ref") (TyApp (TyCon "List") (TyCon "String")))) (field "rawWorkers" (TyApp (TyCon "Ref") (TyApp (TyCon "OrdMap") (TyCon "RawWorker")))) (field "constGlobals" (TyApp (TyCon "Ref") (TyApp (TyCon "OrdMap") (TyCon "Lit")))) (field "inlineOpen" (TyApp (TyCon "Ref") (TyCon "Int"))) (field "inlineSpent" (TyApp (TyCon "Ref") (TyCon "Int"))) (field "siteFileNums" (TyApp (TyCon "Ref") (TyApp (TyCon "OrdMap") (TyCon "Int")))) (field "siteFiles" (TyApp (TyCon "Ref") (TyApp (TyCon "List") (TyCon "String")))) (field "siteTraps" (TyApp (TyCon "Ref") (TyApp (TyCon "List") (TyCon "String")))) (field "symbols" (TyApp (TyCon "Ref") (TyCon "SymbolRegistry"))) (field "coverage" (TyApp (TyCon "Ref") (TyCon "CallCoverage"))) (field "excusedCalls" (TyApp (TyCon "Ref") (TyApp (TyCon "List") (TyCon "LlvmSymbol")))) (field "symbolDefects" (TyApp (TyCon "Ref") (TyApp (TyCon "List") (TyCon "SymbolDefect")))) (field "symOrigin" (TyApp (TyCon "Ref") (TyCon "SymbolOrigin"))) (field "hiddenDefines" (TyApp (TyCon "Ref") (TyApp (TyCon "Option") (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "Prototype")))))) (field "orScope" (TyApp (TyCon "Ref") (TyApp (TyCon "Option") (TyCon "OrScope"))))))) ())
 (DData Private "FnSig" () ((variant "FnSig" (ConPos (TyApp (TyCon "List") (TyCon "LTy")) (TyCon "LTy")))) ())
 (DTypeSig false "freshId" (TyFun (TyCon "Emit") (TyCon "Int")))
 (DFunDef false "freshId" ((PVar "e")) (EBlock (DoLet false false (PVar "k") (EApp (EVar "scopeWord") (EVar "e"))) (DoLet false false (PVar "n") (EApp (EApp (EVar "optionOr") (EFieldAccess (EVar "e") "counter0")) (EApp (EApp (EVar "omLookup") (EVar "k")) (EUnOp "!" (EFieldAccess (EVar "e") "counters"))))) (DoExpr (EApp (EApp (EVar "setRef") (EFieldAccess (EVar "e") "counters")) (EApp (EApp (EApp (EVar "omInsert") (EVar "k")) (EBinOp "+" (EVar "n") (ELit (LInt 1)))) (EUnOp "!" (EFieldAccess (EVar "e") "counters"))))) (DoExpr (EVar "n"))))
@@ -18351,8 +18249,6 @@ runtimeName e symbol = optionOr "" (externRuntimeKey e.externFacts symbol)
 (DTypeSig false "implEntryPositions" (TyFun (TyCon "CImplEntry") (TyApp (TyCon "List") (TyCon "Int"))))
 (DFunDef false "implEntryPositions" ((PCon "CImplEntry" PWild PWild PWild (PCon "CImplTagged" PWild PWild PWild PWild (PVar "positions") PWild PWild))) (EVar "positions"))
 (DFunDef false "implEntryPositions" ((PCon "CImplEntry" PWild PWild PWild (PCon "CImplDefault" PWild PWild PWild PWild (PVar "positions") PWild PWild))) (EVar "positions"))
-(DTypeSig false "implEntryMemoisable" (TyFun (TyCon "CImplEntry") (TyCon "Bool")))
-(DFunDef false "implEntryMemoisable" ((PVar "ent")) (EBinOp "&&" (EApp (EVar "isEmptyL") (EApp (EVar "implEntryPositions") (EVar "ent"))) (EApp (EVar "isEmptyL") (EApp (EVar "implPats") (EVar "ent")))))
 (DTypeSig false "implEntryTag" (TyFun (TyCon "CImplEntry") (TyCon "String")))
 (DFunDef false "implEntryTag" ((PCon "CImplEntry" PWild PWild PWild (PCon "CImplTagged" (PVar "tag") PWild PWild PWild PWild PWild PWild))) (EVar "tag"))
 (DFunDef false "implEntryTag" ((PCon "CImplEntry" PWild PWild PWild (PCon "CImplDefault" PWild (PVar "tag") PWild PWild PWild PWild PWild))) (EVar "tag"))
@@ -19564,7 +19460,7 @@ runtimeName e symbol = optionOr "" (externRuntimeKey e.externFacts symbol)
 (DTypeSig false "emitPapDefineIndirect" (TyFun (TyCon "Emit") (TyFun (TyCon "String") (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyCon "Unit"))))))
 (DFunDef false "emitPapDefineIndirect" ((PVar "e") (PVar "papName") (PVar "supplied") (PVar "remaining")) (EBlock (DoLet false false (PVar "saved") (EFieldAccess (EApp (EVar "bufRef") (EVar "e")) "value")) (DoExpr (EApp (EApp (EVar "setRef") (EApp (EVar "bufRef") (EVar "e"))) (EListLit))) (DoLet false false (PVar "scope") (EApp (EVar "beginDefine") (EVar "e"))) (DoExpr (EApp (EApp (EApp (EApp (EVar "defineHeader") (EVar "e")) (EVar "LiftedDefine")) (EVar "papName")) (EApp (EVar "wordProto") (EApp (EVar "etaParamDecls") (EVar "remaining"))))) (DoExpr (EApp (EApp (EVar "emit") (EVar "e")) (ELit (LString "entry:")))) (DoLet false false (PVar "innerCw") (EApp (EApp (EApp (EVar "loadField") (EVar "e")) (ELit (LString "%clos"))) (ELit (LInt 1)))) (DoLet false false (PVar "capOps") (EApp (EApp (EApp (EVar "loadPapCaptures") (EVar "e")) (EBinOp "+" (EVar "supplied") (ELit (LInt 1)))) (ELit (LInt 1)))) (DoLet false false (PVar "allArgs") (EBinOp "++" (EVar "capOps") (EApp (EApp (EVar "argNames") (EVar "remaining")) (ELit (LInt 0))))) (DoLet false false (PVar "cp") (EApp (EApp (EApp (EVar "loadField") (EVar "e")) (EVar "innerCw")) (ELit (LInt 0)))) (DoLet false false (PVar "fp") (EApp (EVar "freshReg") (EVar "e"))) (DoExpr (EApp (EApp (EVar "emit") (EVar "e")) (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "  ")) (EApp (EMethodRef "display") (EVar "fp"))) (ELit (LString " = inttoptr i64 "))) (EApp (EMethodRef "display") (EVar "cp"))) (ELit (LString " to ptr"))))) (DoLet false false (PVar "r") (EApp (EVar "freshReg") (EVar "e"))) (DoExpr (EApp (EApp (EVar "emit") (EVar "e")) (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "  ")) (EApp (EMethodRef "display") (EVar "r"))) (ELit (LString " = call i64 "))) (EApp (EMethodRef "display") (EVar "fp"))) (ELit (LString "("))) (EApp (EMethodRef "display") (EApp (EVar "argDecls") (EBinOp "::" (EVar "innerCw") (EVar "allArgs"))))) (ELit (LString ")"))))) (DoExpr (EApp (EApp (EVar "emit") (EVar "e")) (EBinOp "++" (ELit (LString "  ret i64 ")) (EVar "r")))) (DoExpr (EApp (EApp (EVar "emit") (EVar "e")) (ELit (LString "}")))) (DoExpr (EApp (EApp (EVar "emit") (EVar "e")) (ELit (LString "")))) (DoLet false false (PVar "lamLines") (EFieldAccess (EApp (EVar "bufRef") (EVar "e")) "value")) (DoExpr (EApp (EApp (EVar "setRef") (EApp (EVar "lamsRef") (EVar "e"))) (EBinOp "++" (EVar "lamLines") (EFieldAccess (EApp (EVar "lamsRef") (EVar "e")) "value")))) (DoExpr (EApp (EApp (EVar "endDefine") (EVar "e")) (EVar "scope"))) (DoExpr (EApp (EApp (EVar "setRef") (EApp (EVar "bufRef") (EVar "e"))) (EVar "saved")))))
 (DTypeSig false "emitMethodDispatch" (TyFun (TyCon "Emit") (TyFun (TyApp (TyCon "OrdMap") (TyTuple (TyCon "String") (TyCon "LTy"))) (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyCon "Int") (TyFun (TyCon "Route") (TyFun (TyApp (TyCon "List") (TyCon "Route")) (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyTuple (TyCon "String") (TyCon "LTy")))))))))))
-(DFunDef false "emitMethodDispatch" ((PVar "e") (PVar "env") (PVar "name") (PVar "iface") (PVar "siteArity") (PVar "dict") (PVar "methRoutes") (PVar "argOps")) (EMatch (EApp (EApp (EApp (EApp (EVar "soleImplDirectSite") (EVar "e")) (EVar "name")) (EVar "iface")) (EVar "siteArity")) (arm (PCon "Some" (PVar "ent")) () (EApp (EApp (EApp (EApp (EApp (EVar "emitArityCall") (EVar "e")) (EApp (EApp (EApp (EVar "implEntryFnName") (EVar "e")) (EVar "name")) (EVar "ent"))) (EVar "argOps")) (EApp (EVar "implSrcValueArity") (EVar "ent"))) (EVar "LTInt"))) (arm PWild () (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EVar "emitMethodDispatchChain") (EVar "e")) (EVar "env")) (EVar "name")) (EVar "iface")) (EVar "siteArity")) (EVar "dict")) (EVar "methRoutes")) (EVar "argOps")))))
+(DFunDef false "emitMethodDispatch" ((PVar "e") (PVar "env") (PVar "name") (PVar "iface") (PVar "siteArity") (PVar "dict") (PVar "methRoutes") (PVar "argOps")) (EMatch (EApp (EApp (EApp (EApp (EVar "soleImplDirectSite") (EVar "e")) (EVar "name")) (EVar "iface")) (EVar "siteArity")) (arm (PCon "Some" (PVar "ent")) () (EApp (EApp (EApp (EApp (EApp (EVar "emitArityCall") (EVar "e")) (EApp (EApp (EApp (EVar "implEntryFnName") (EVar "e")) (EVar "name")) (EVar "ent"))) (EVar "argOps")) (EApp (EVar "implSrcValueArity") (EVar "ent"))) (EVar "LTInt"))) (arm PWild () (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EVar "emitSlotCall") (EVar "e")) (EVar "env")) (EVar "name")) (EVar "iface")) (EVar "dict")) (EVar "methRoutes")) (EVar "argOps")))))
 (DTypeSig false "soleImplDirect" (TyFun (TyCon "Emit") (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyCon "Int") (TyApp (TyCon "Option") (TyCon "CImplEntry")))))))
 (DFunDef false "soleImplDirect" ((PVar "e") (PVar "name") (PVar "iface") (PVar "siteArity")) (EMatch (EApp (EApp (EApp (EApp (EVar "siteImpls") (EVar "e")) (EVar "name")) (EVar "iface")) (EVar "siteArity")) (arm (PList (PVar "ent")) () (EIf (EBinOp "<=" (EApp (EApp (EApp (EVar "implReqCount") (EVar "e")) (EVar "name")) (EVar "ent")) (ELit (LInt 0))) (EApp (EVar "Some") (EVar "ent")) (EVar "None"))) (arm PWild () (EVar "None"))))
 (DTypeSig false "siteImpls" (TyFun (TyCon "Emit") (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyCon "Int") (TyApp (TyCon "List") (TyCon "CImplEntry")))))))
@@ -19597,24 +19493,38 @@ runtimeName e symbol = optionOr "" (externRuntimeKey e.externFacts symbol)
 (DTypeSig false "emitDeclares" (TyFun (TyCon "Emit") (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "Prototype"))) (TyCon "Unit"))))
 (DFunDef false "emitDeclares" (PWild (PList)) (ELit LUnit))
 (DFunDef false "emitDeclares" ((PVar "e") (PCons (PTuple (PVar "sym") (PVar "proto")) (PVar "rest"))) (EBlock (DoExpr (EApp (EApp (EVar "emit") (EVar "e")) (EBinOp "++" (ELit (LString "declare ")) (EApp (EApp (EVar "prototypeText") (EVar "sym")) (EVar "proto"))))) (DoExpr (EApp (EApp (EVar "emitDeclares") (EVar "e")) (EVar "rest")))))
-(DTypeSig false "emitMethodDispatchChain" (TyFun (TyCon "Emit") (TyFun (TyApp (TyCon "OrdMap") (TyTuple (TyCon "String") (TyCon "LTy"))) (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyCon "Int") (TyFun (TyCon "Route") (TyFun (TyApp (TyCon "List") (TyCon "Route")) (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyTuple (TyCon "String") (TyCon "LTy")))))))))))
-(DFunDef false "emitMethodDispatchChain" ((PVar "e") (PVar "env") (PVar "name") (PVar "iface") (PVar "siteArity") (PVar "dict") (PVar "methRoutes") (PVar "argOps")) (EBlock (DoLet false false (PVar "dictPtr") (EApp (EApp (EApp (EVar "dictWordOfRoute") (EVar "e")) (EVar "env")) (EVar "dict"))) (DoLet false false (PVar "methWords") (EApp (EApp (EApp (EVar "dictWordsOf") (EVar "e")) (EVar "env")) (EVar "methRoutes"))) (DoLet false false (PVar "nmw") (EApp (EVar "lengthS") (EVar "methWords"))) (DoLet false false (PVar "nargs") (EApp (EVar "lengthS") (EVar "argOps"))) (DoLet false false (PVar "fname") (EApp (EApp (EApp (EApp (EApp (EVar "dispFnName") (EApp (EApp (EApp (EVar "dispInterfaceWord") (EVar "e")) (EVar "name")) (EVar "iface"))) (EVar "name")) (EVar "nmw")) (EVar "nargs")) (EVar "siteArity"))) (DoExpr (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EVar "ensureDispatcherEmitted") (EVar "e")) (EVar "fname")) (EVar "name")) (EVar "iface")) (EVar "nmw")) (EVar "nargs")) (EVar "siteArity"))) (DoExpr (EApp (EApp (EApp (EApp (EVar "emitImplCall") (EVar "e")) (EVar "fname")) (EBinOp "::" (EVar "dictPtr") (EBinOp "++" (EVar "methWords") (EVar "argOps")))) (EVar "LTInt")))))
-(DTypeSig false "dispFnName" (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyCon "String")))))))
-(DFunDef false "dispFnName" ((PVar "iface") (PVar "name") (PVar "nmw") (PVar "nargs") (PVar "siteArity")) (EApp (EVar "LN.llvmName") (EApp (EApp (EApp (EApp (EApp (EVar "LN.LDispatcher") (EVar "iface")) (EVar "name")) (EVar "nmw")) (EVar "nargs")) (EVar "siteArity"))))
-(DTypeSig false "dispInterfaceWord" (TyFun (TyCon "Emit") (TyFun (TyCon "String") (TyFun (TyCon "String") (TyCon "String")))))
-(DFunDef false "dispInterfaceWord" ((PVar "e") (PVar "name") (PVar "iface")) (EIf (EBinOp "&&" (EBinOp "&&" (EBinOp "/=" (EVar "iface") (ELit (LString ""))) (EApp (EVar "not") (EApp (EApp (EVar "startsWith") (ELit (LString "core::"))) (EVar "iface")))) (EApp (EApp (EVar "omHasKey") (EVar "name")) (EFieldAccess (EFieldAccess (EVar "e") "input") "sharedMethodNames"))) (EVar "iface") (ELit (LString ""))))
-(DTypeSig false "ensureDispatcherEmitted" (TyFun (TyCon "Emit") (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyCon "Unit")))))))))
-(DFunDef false "ensureDispatcherEmitted" ((PVar "e") (PVar "fname") (PVar "name") (PVar "iface") (PVar "nmw") (PVar "nargs") (PVar "siteArity")) (EIf (EApp (EApp (EVar "contains") (EVar "fname")) (EUnOp "!" (EFieldAccess (EVar "e") "dispCache"))) (ELit LUnit) (EBlock (DoExpr (EApp (EApp (EVar "setRef") (EFieldAccess (EVar "e") "dispCache")) (EBinOp "::" (EVar "fname") (EUnOp "!" (EFieldAccess (EVar "e") "dispCache"))))) (DoExpr (EApp (EApp (EVar "withProgramScope") (EVar "e")) (ELam (PWild) (EIf (EBinOp "==" (EFieldAccess (EFieldAccess (EVar "e") "input") "emitHalf") (EVar "emitHalfPrelude")) (EBlock (DoLet false false (PVar "proto") (EApp (EVar "wordProto") (EApp (EApp (EVar "dispParamDecls") (EVar "nmw")) (EVar "nargs")))) (DoExpr (EApp (EApp (EVar "registerL") (EVar "e")) (EApp (EApp (EApp (EVar "declareSymbol") (EApp (EVar "Generated") (EVar "fname"))) (EVar "proto")) (EUnOp "!" (EFieldAccess (EVar "e") "symOrigin"))))) (DoExpr (EApp (EApp (EVar "emitGlobal") (EVar "e")) (EBinOp "++" (ELit (LString "declare ")) (EApp (EApp (EVar "prototypeText") (EVar "fname")) (EVar "proto")))))) (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EVar "emitDispatcherDefine") (EVar "e")) (EVar "fname")) (EVar "name")) (EVar "iface")) (EVar "nmw")) (EVar "nargs")) (EVar "siteArity")))))))))
-(DTypeSig false "emitDispatcherDefine" (TyFun (TyCon "Emit") (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyCon "Unit")))))))))
-(DFunDef false "emitDispatcherDefine" ((PVar "e") (PVar "fname") (PVar "name") (PVar "iface") (PVar "nmw") (PVar "nargs") (PVar "siteArity")) (EBlock (DoLet false false (PVar "saved") (EFieldAccess (EApp (EVar "bufRef") (EVar "e")) "value")) (DoExpr (EApp (EApp (EVar "setRef") (EApp (EVar "bufRef") (EVar "e"))) (EListLit))) (DoLet false false (PVar "scope") (EApp (EVar "beginDefine") (EVar "e"))) (DoExpr (EApp (EApp (EApp (EApp (EVar "defineHeader") (EVar "e")) (EVar "LiftedDefine")) (EVar "fname")) (EApp (EVar "wordProto") (EApp (EApp (EVar "dispParamDecls") (EVar "nmw")) (EVar "nargs"))))) (DoExpr (EApp (EApp (EVar "emit") (EVar "e")) (ELit (LString "entry:")))) (DoLet false false (PTuple (PVar "r") PWild) (EApp (EApp (EApp (EApp (EApp (EApp (EVar "emitDispatcherBody") (EVar "e")) (EVar "name")) (EVar "iface")) (EVar "nmw")) (EVar "nargs")) (EVar "siteArity"))) (DoExpr (EApp (EApp (EVar "emit") (EVar "e")) (EBinOp "++" (ELit (LString "  ret i64 ")) (EVar "r")))) (DoExpr (EApp (EApp (EVar "emit") (EVar "e")) (ELit (LString "}")))) (DoExpr (EApp (EApp (EVar "emit") (EVar "e")) (ELit (LString "")))) (DoLet false false (PVar "lamLines") (EFieldAccess (EApp (EVar "bufRef") (EVar "e")) "value")) (DoExpr (EApp (EApp (EVar "setRef") (EApp (EVar "lamsRef") (EVar "e"))) (EBinOp "++" (EVar "lamLines") (EFieldAccess (EApp (EVar "lamsRef") (EVar "e")) "value")))) (DoExpr (EApp (EApp (EVar "endDefine") (EVar "e")) (EVar "scope"))) (DoExpr (EApp (EApp (EVar "setRef") (EApp (EVar "bufRef") (EVar "e"))) (EVar "saved")))))
-(DTypeSig false "emitDispatcherBody" (TyFun (TyCon "Emit") (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyTuple (TyCon "String") (TyCon "LTy")))))))))
-(DFunDef false "emitDispatcherBody" ((PVar "e") (PVar "name") (PVar "iface") (PVar "nmw") (PVar "nargs") (PVar "siteArity")) (EMatch (EApp (EApp (EApp (EApp (EVar "soleImplDirect") (EVar "e")) (EVar "name")) (EVar "iface")) (EVar "siteArity")) (arm (PCon "Some" (PVar "ent")) () (EApp (EApp (EApp (EApp (EApp (EVar "emitArityCall") (EVar "e")) (EApp (EApp (EApp (EVar "implEntryFnName") (EVar "e")) (EVar "name")) (EVar "ent"))) (EApp (EApp (EApp (EVar "dispWordNames") (ELit (LString "%arg"))) (EVar "nargs")) (ELit (LInt 0)))) (EApp (EVar "implSrcValueArity") (EVar "ent"))) (EVar "LTInt"))) (arm PWild () (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EVar "emitDispatchBody") (EVar "e")) (EVar "name")) (EVar "iface")) (ELit (LString "%dict"))) (EApp (EApp (EApp (EVar "dispWordNames") (ELit (LString "%mw"))) (EVar "nmw")) (ELit (LInt 0)))) (EApp (EApp (EApp (EVar "dispWordNames") (ELit (LString "%arg"))) (EVar "nargs")) (ELit (LInt 0)))) (EVar "siteArity")))))
-(DTypeSig false "dispParamDecls" (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyApp (TyCon "List") (TyCon "LlvmParam")))))
-(DFunDef false "dispParamDecls" ((PVar "nmw") (PVar "nargs")) (EApp (EApp (EMethodRef "map") (ELam ((PVar "r")) (EApp (EApp (EVar "LlvmParam") (ELit (LString "i64"))) (EVar "r")))) (EBinOp "::" (ELit (LString "%dict")) (EBinOp "++" (EApp (EApp (EApp (EVar "dispWordNames") (ELit (LString "%mw"))) (EVar "nmw")) (ELit (LInt 0))) (EApp (EApp (EApp (EVar "dispWordNames") (ELit (LString "%arg"))) (EVar "nargs")) (ELit (LInt 0)))))))
-(DTypeSig false "dispWordNames" (TyFun (TyCon "String") (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyApp (TyCon "List") (TyCon "String"))))))
-(DFunDef false "dispWordNames" ((PVar "pre") (PVar "n") (PVar "i")) (EIf (EBinOp ">=" (EVar "i") (EVar "n")) (EListLit) (EIf (EVar "otherwise") (EBinOp "::" (EBinOp "++" (EVar "pre") (EApp (EVar "intToString") (EVar "i"))) (EApp (EApp (EApp (EVar "dispWordNames") (EVar "pre")) (EVar "n")) (EBinOp "+" (EVar "i") (ELit (LInt 1))))) (EApp (EVar "__fallthrough__") (ELit LUnit)))))
-(DTypeSig false "emitDispatchBody" (TyFun (TyCon "Emit") (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyCon "Int") (TyTuple (TyCon "String") (TyCon "LTy"))))))))))
-(DFunDef false "emitDispatchBody" ((PVar "e") (PVar "name") (PVar "iface") (PVar "dictPtr") (PVar "methWords") (PVar "argOps") (PVar "siteArity")) (EBlock (DoLet false false (PVar "headTag") (EApp (EApp (EVar "loadTag") (EVar "e")) (EVar "dictPtr"))) (DoLet false false (PVar "impls") (EApp (EApp (EApp (EApp (EVar "siteImpls") (EVar "e")) (EVar "name")) (EVar "iface")) (EVar "siteArity"))) (DoLet false false (PVar "groups") (EApp (EApp (EVar "implGroupsForMethod") (EVar "e")) (EVar "name"))) (DoLet false false (PVar "slot") (EApp (EVar "freshReg") (EVar "e"))) (DoExpr (EApp (EApp (EVar "emit") (EVar "e")) (EBinOp "++" (EBinOp "++" (ELit (LString "  ")) (EVar "slot")) (ELit (LString " = alloca i64"))))) (DoLet false false (PVar "endL") (EBinOp "++" (ELit (LString "dispend")) (EApp (EVar "intToString") (EApp (EVar "freshLocal") (EVar "e"))))) (DoExpr (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EVar "emitDispatchChain") (EVar "e")) (EVar "dictPtr")) (EVar "headTag")) (EVar "impls")) (EVar "groups")) (EVar "name")) (EVar "methWords")) (EVar "argOps")) (EVar "slot")) (EVar "endL"))) (DoExpr (EApp (EApp (EVar "emit") (EVar "e")) (EBinOp "++" (EVar "endL") (ELit (LString ":"))))) (DoLet false false (PVar "r") (EApp (EVar "freshReg") (EVar "e"))) (DoExpr (EApp (EApp (EVar "emit") (EVar "e")) (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "  ")) (EApp (EMethodRef "display") (EVar "r"))) (ELit (LString " = load i64, ptr "))) (EApp (EMethodRef "display") (EVar "slot"))) (ELit (LString ""))))) (DoExpr (ETuple (EVar "r") (EVar "LTInt")))))
+(DTypeSig false "emitSlotCall" (TyFun (TyCon "Emit") (TyFun (TyApp (TyCon "OrdMap") (TyTuple (TyCon "String") (TyCon "LTy"))) (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyCon "Route") (TyFun (TyApp (TyCon "List") (TyCon "Route")) (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyTuple (TyCon "String") (TyCon "LTy"))))))))))
+(DFunDef false "emitSlotCall" ((PVar "e") (PVar "env") (PVar "name") (PVar "iface") (PVar "dict") (PVar "methRoutes") (PVar "argOps")) (EBlock (DoLet false false (PVar "dictPtr") (EApp (EApp (EApp (EVar "dictWordOfRoute") (EVar "e")) (EVar "env")) (EVar "dict"))) (DoLet false false (PVar "methWords") (EApp (EApp (EApp (EVar "dictWordsOf") (EVar "e")) (EVar "env")) (EVar "methRoutes"))) (DoExpr (EMatch (EApp (EApp (EApp (EVar "slotOf") (EVar "name")) (EApp (EApp (EVar "interfaceSlots") (EFieldAccess (EVar "e") "methodTables")) (EVar "iface"))) (ELit (LInt 0))) (arm (PCon "Some" (PTuple (PVar "i") PWild)) () (EBlock (DoLet false false (PVar "clos") (EApp (EApp (EApp (EApp (EApp (EVar "loadSlot") (EVar "e")) (EVar "iface")) (EVar "name")) (EVar "dictPtr")) (EVar "i"))) (DoExpr (ETuple (EApp (EApp (EApp (EVar "emitApplyAny") (EVar "e")) (EVar "clos")) (EBinOp "::" (EVar "dictPtr") (EBinOp "++" (EVar "methWords") (EVar "argOps")))) (EVar "LTInt"))))) (arm (PCon "None") () (EApp (EApp (EVar "gapE") (EVar "e")) (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "method '")) (EApp (EMethodRef "display") (EVar "name"))) (ELit (LString "' is not a slot of interface '"))) (EApp (EMethodRef "display") (EVar "iface"))) (ELit (LString "'")))))))))
+(DTypeSig false "slotOf" (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "MethodSlot")) (TyFun (TyCon "Int") (TyApp (TyCon "Option") (TyTuple (TyCon "Int") (TyCon "MethodSlot")))))))
+(DFunDef false "slotOf" (PWild (PList) PWild) (EVar "None"))
+(DFunDef false "slotOf" ((PVar "name") (PCons (PVar "slot") (PVar "rest")) (PVar "i")) (EIf (EBinOp "==" (EFieldAccess (EAnnot (EVar "slot") (TyCon "MethodSlot")) "method") (EVar "name")) (EApp (EVar "Some") (ETuple (EVar "i") (EVar "slot"))) (EApp (EApp (EApp (EVar "slotOf") (EVar "name")) (EVar "rest")) (EBinOp "+" (EVar "i") (ELit (LInt 1))))))
+(DTypeSig false "superCountOf" (TyFun (TyCon "Emit") (TyFun (TyCon "String") (TyCon "Int"))))
+(DFunDef false "superCountOf" ((PVar "e") (PVar "iface")) (EApp (EApp (EVar "optionOr") (ELit (LInt 0))) (EApp (EApp (EVar "omLookup") (EVar "iface")) (EFieldAccess (EVar "e") "superCounts"))))
+(DTypeSig false "loadSlot" (TyFun (TyCon "Emit") (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyCon "Int") (TyCon "String")))))))
+(DFunDef false "loadSlot" ((PVar "e") (PVar "iface") (PVar "method") (PVar "dictPtr") (PVar "i")) (EBlock (DoLet false false (PVar "isNull") (EApp (EVar "freshReg") (EVar "e"))) (DoExpr (EApp (EApp (EVar "emit") (EVar "e")) (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "  ")) (EApp (EMethodRef "display") (EVar "isNull"))) (ELit (LString " = icmp eq i64 "))) (EApp (EMethodRef "display") (EVar "dictPtr"))) (ELit (LString ", 0 ; slot "))) (EApp (EMethodRef "display") (EVar "iface"))) (ELit (LString "."))) (EApp (EMethodRef "display") (EVar "method"))) (ELit (LString ""))))) (DoLet false false (PVar "n") (EApp (EVar "intToString") (EApp (EVar "freshLocal") (EVar "e")))) (DoLet false false (PVar "trapL") (EBinOp "++" (ELit (LString "slotnull")) (EVar "n"))) (DoLet false false (PVar "okL") (EBinOp "++" (ELit (LString "slotok")) (EVar "n"))) (DoExpr (EApp (EApp (EVar "emit") (EVar "e")) (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "  br i1 ")) (EApp (EMethodRef "display") (EVar "isNull"))) (ELit (LString ", label %"))) (EApp (EMethodRef "display") (EVar "trapL"))) (ELit (LString ", label %"))) (EApp (EMethodRef "display") (EVar "okL"))) (ELit (LString ""))))) (DoExpr (EApp (EApp (EVar "emit") (EVar "e")) (EBinOp "++" (EVar "trapL") (ELit (LString ":"))))) (DoExpr (EApp (EApp (EVar "emit") (EVar "e")) (EApp (EApp (EApp (EApp (EApp (EVar "rtLine") (EVar "e")) (ELit (LString ""))) (ELit (LString "void"))) (ELit (LString "mdk_dispatch_no_impl"))) (EListLit)))) (DoExpr (EApp (EApp (EVar "emit") (EVar "e")) (ELit (LString "  unreachable")))) (DoExpr (EApp (EApp (EVar "emit") (EVar "e")) (EBinOp "++" (EVar "okL") (ELit (LString ":"))))) (DoExpr (EIf (EBinOp "==" (EFieldAccess (EFieldAccess (EVar "e") "input") "emitHalf") (EVar "emitHalfPrelude")) (EBlock (DoLet false false (PVar "supers") (EApp (EVar "freshReg") (EVar "e"))) (DoExpr (EApp (EApp (EVar "emit") (EVar "e")) (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "  ")) (EApp (EMethodRef "display") (EVar "supers"))) (ELit (LString " = load i64, ptr @"))) (EApp (EMethodRef "display") (EApp (EApp (EVar "symRef") (EVar "e")) (EApp (EApp (EVar "superCountGlobal") (EVar "e")) (EVar "iface"))))) (ELit (LString ""))))) (DoLet false false (PVar "field") (EApp (EVar "freshReg") (EVar "e"))) (DoExpr (EApp (EApp (EVar "emit") (EVar "e")) (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "  ")) (EApp (EMethodRef "display") (EVar "field"))) (ELit (LString " = add i64 "))) (EApp (EMethodRef "display") (EVar "supers"))) (ELit (LString ", "))) (EApp (EMethodRef "display") (EApp (EVar "intToString") (EVar "i")))) (ELit (LString ""))))) (DoExpr (EApp (EApp (EApp (EVar "loadFieldDyn") (EVar "e")) (EVar "dictPtr")) (EVar "field")))) (EBlock (DoExpr (EIf (EApp (EVar "isSome") (EUnOp "!" (EFieldAccess (EVar "e") "hiddenDefines"))) (EBlock (DoLet false false PWild (EApp (EApp (EVar "superCountGlobal") (EVar "e")) (EVar "iface"))) (DoExpr (ELit LUnit))) (ELit LUnit))) (DoExpr (EApp (EApp (EApp (EVar "loadField") (EVar "e")) (EVar "dictPtr")) (EBinOp "+" (EApp (EApp (EVar "superCountOf") (EVar "e")) (EVar "iface")) (EVar "i")))))))))
+(DTypeSig false "superCountGlobal" (TyFun (TyCon "Emit") (TyFun (TyCon "String") (TyCon "String"))))
+(DFunDef false "superCountGlobal" ((PVar "e") (PVar "iface")) (EBlock (DoLet false false (PVar "sym") (EApp (EVar "LN.llvmName") (EApp (EVar "LN.LSuperCount") (EVar "iface")))) (DoExpr (EIf (EApp (EApp (EVar "omHasKey") (EVar "sym")) (EUnOp "!" (EFieldAccess (EVar "e") "superCountGlobals"))) (EVar "sym") (EBlock (DoExpr (EApp (EApp (EVar "setRef") (EFieldAccess (EVar "e") "superCountGlobals")) (EApp (EApp (EApp (EVar "omInsert") (EVar "sym")) (ELit LUnit)) (EUnOp "!" (EFieldAccess (EVar "e") "superCountGlobals"))))) (DoLet false false (PVar "external") (EBinOp "==" (EFieldAccess (EFieldAccess (EVar "e") "input") "emitHalf") (EVar "emitHalfPrelude"))) (DoExpr (EApp (EApp (EVar "withProgramScope") (EVar "e")) (ELam (PWild) (EBlock (DoExpr (EApp (EApp (EApp (EApp (EVar "registerGlobal") (EVar "e")) (EVar "external")) (EVar "sym")) (ELit (LString "i64")))) (DoExpr (EApp (EApp (EVar "emitGlobal") (EVar "e")) (EIf (EVar "external") (EBinOp "++" (EBinOp "++" (ELit (LString "@")) (EApp (EMethodRef "display") (EVar "sym"))) (ELit (LString " = external constant i64"))) (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "@")) (EApp (EMethodRef "display") (EVar "sym"))) (ELit (LString " = constant i64 "))) (EApp (EMethodRef "display") (EApp (EVar "intToString") (EApp (EApp (EVar "superCountOf") (EVar "e")) (EVar "iface"))))) (ELit (LString "")))))))))) (DoExpr (EVar "sym")))))))
+(DTypeSig false "runtimeCallArgMax" (TyCon "Int"))
+(DFunDef false "runtimeCallArgMax" () (ELit (LInt 8)))
+(DTypeSig false "slotWords" (TyFun (TyCon "Emit") (TyFun (TyCon "String") (TyApp (TyCon "List") (TyCon "String")))))
+(DFunDef false "slotWords" ((PVar "e") (PVar "key")) (EMatch (EApp (EApp (EVar "omLookup") (EVar "key")) (EFieldAccess (EFieldAccess (EVar "e") "methodTables") "instances")) (arm (PCon "Some" (PVar "table")) () (EApp (EApp (EApp (EApp (EApp (EApp (EVar "slotWordsGo") (EVar "e")) (EVar "key")) (EFieldAccess (EVar "table") "iface")) (EApp (EApp (EVar "interfaceSlots") (EFieldAccess (EVar "e") "methodTables")) (EFieldAccess (EVar "table") "iface"))) (EFieldAccess (EVar "table") "fills")) (ELit (LInt 0)))) (arm (PCon "None") () (EIf (EApp (EVar "isEmptyL") (EApp (EApp (EVar "interfaceSlots") (EFieldAccess (EVar "e") "methodTables")) (EApp (EVar "ifaceWordOfKey") (EVar "key")))) (EListLit) (EListLit (EApp (EApp (EVar "gapStr") (EVar "e")) (EBinOp "++" (EBinOp "++" (ELit (LString "no method table for instance '")) (EApp (EMethodRef "display") (EVar "key"))) (ELit (LString "'")))))))))
+(DTypeSig false "slotWordsGo" (TyFun (TyCon "Emit") (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "MethodSlot")) (TyFun (TyApp (TyCon "List") (TyApp (TyCon "List") (TyCon "SlotCallee"))) (TyFun (TyCon "Int") (TyApp (TyCon "List") (TyCon "String")))))))))
+(DFunDef false "slotWordsGo" ((PVar "e") (PVar "key") (PVar "iface") (PCons (PVar "slot") (PVar "slots")) (PCons (PVar "fill") (PVar "fills")) (PVar "i")) (EBinOp "::" (EApp (EApp (EApp (EApp (EApp (EApp (EVar "slotClosureWord") (EVar "e")) (EVar "key")) (EVar "iface")) (EVar "slot")) (EVar "fill")) (EVar "i")) (EApp (EApp (EApp (EApp (EApp (EApp (EVar "slotWordsGo") (EVar "e")) (EVar "key")) (EVar "iface")) (EVar "slots")) (EVar "fills")) (EBinOp "+" (EVar "i") (ELit (LInt 1))))))
+(DFunDef false "slotWordsGo" (PWild PWild PWild PWild PWild PWild) (EListLit))
+(DTypeSig false "slotClosureWord" (TyFun (TyCon "Emit") (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyCon "MethodSlot") (TyFun (TyApp (TyCon "List") (TyCon "SlotCallee")) (TyFun (TyCon "Int") (TyCon "String"))))))))
+(DFunDef false "slotClosureWord" ((PVar "e") (PVar "key") (PVar "iface") (PVar "slot") (PVar "fill") (PVar "i")) (EBlock (DoLet false false (PVar "cacheKey") (EBinOp "++" (EApp (EVar "lenKey") (EVar "key")) (EApp (EVar "intToString") (EVar "i")))) (DoExpr (EMatch (EApp (EApp (EVar "omLookup") (EVar "cacheKey")) (EUnOp "!" (EFieldAccess (EVar "e") "slotCache"))) (arm (PCon "Some" (PVar "closName")) () (EBinOp "++" (EBinOp "++" (ELit (LString "ptrtoint (ptr @")) (EApp (EApp (EVar "symRef") (EVar "e")) (EVar "closName"))) (ELit (LString " to i64)")))) (arm (PCon "None") () (EMatch (EVar "fill") (arm (PList (PVar "callee")) () (EBlock (DoLet false false (PVar "closName") (EApp (EVar "LN.llvmName") (EApp (EApp (EVar "LN.LSlotClosure") (EVar "key")) (EFieldAccess (EVar "slot") "method")))) (DoExpr (EApp (EApp (EVar "setRef") (EFieldAccess (EVar "e") "slotCache")) (EApp (EApp (EApp (EVar "omInsert") (EVar "cacheKey")) (EVar "closName")) (EUnOp "!" (EFieldAccess (EVar "e") "slotCache"))))) (DoExpr (EApp (EApp (EApp (EApp (EApp (EApp (EVar "emitSlotWrapper") (EVar "e")) (EVar "key")) (EVar "iface")) (EVar "slot")) (EVar "callee")) (EVar "closName"))) (DoExpr (EBinOp "++" (EBinOp "++" (ELit (LString "ptrtoint (ptr @")) (EApp (EApp (EVar "symRef") (EVar "e")) (EVar "closName"))) (ELit (LString " to i64)")))))) (arm PWild () (EApp (EApp (EVar "gapStr") (EVar "e")) (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "slot '")) (EApp (EMethodRef "display") (EFieldAccess (EVar "slot") "method"))) (ELit (LString "' of instance '"))) (EApp (EMethodRef "display") (EVar "key"))) (ELit (LString "' has no single callee")))))))))))
+(DTypeSig false "emitSlotWrapper" (TyFun (TyCon "Emit") (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyCon "MethodSlot") (TyFun (TyCon "SlotCallee") (TyFun (TyCon "String") (TyCon "Unit"))))))))
+(DFunDef false "emitSlotWrapper" ((PVar "e") (PVar "key") (PVar "iface") (PVar "slot") (PVar "callee") (PVar "closName")) (EApp (EApp (EVar "withProgramScope") (EVar "e")) (ELam (PWild) (EBlock (DoLet false false (PVar "g") (EApp (EApp (EVar "optionOrPanic") (ELit (LString "llvm: a method table names no impl group"))) (EApp (EApp (EVar "omLookup") (EApp (EVar "intToString") (EFieldAccess (EVar "callee") "group"))) (EUnOp "!" (EFieldAccess (EVar "e") "implGroupAt"))))) (DoLet false false (PVar "cells") (EIf (EFieldAccess (EVar "callee") "inherited") (ELit (LInt 1)) (EApp (EApp (EVar "slotReqCount") (EVar "slot")) (EVar "g")))) (DoLet false false (PVar "values") (EApp (EApp (EVar "maxInt") (ELit (LInt 0))) (EBinOp "-" (EBinOp "-" (EApp (EVar "groupArity") (EVar "g")) (EFieldAccess (EVar "slot") "contextDicts")) (EVar "cells")))) (DoLet false false (PVar "arity") (EBinOp "+" (EBinOp "+" (ELit (LInt 1)) (EFieldAccess (EVar "slot") "contextDicts")) (EVar "values"))) (DoExpr (EIf (EBinOp ">" (EVar "arity") (EVar "runtimeCallArgMax")) (EBlock (DoLet false false PWild (EApp (EApp (EVar "gapStr") (EVar "e")) (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "slot '")) (EApp (EMethodRef "display") (EFieldAccess (EVar "slot") "method"))) (ELit (LString "' of instance '"))) (EApp (EMethodRef "display") (EVar "key"))) (ELit (LString "' takes "))) (EApp (EMethodRef "display") (EApp (EVar "intToString") (EVar "arity")))) (ELit (LString " arguments; a closure of more than "))) (EApp (EMethodRef "display") (EApp (EVar "intToString") (EVar "runtimeCallArgMax")))) (ELit (LString " cannot be applied through the runtime (#4790)"))))) (DoExpr (ELit LUnit))) (ELit LUnit))) (DoLet false false (PVar "fname") (EApp (EVar "LN.llvmName") (EApp (EApp (EVar "LN.LSlotFunction") (EVar "key")) (EFieldAccess (EVar "slot") "method")))) (DoLet false false (PVar "saved") (EFieldAccess (EApp (EVar "bufRef") (EVar "e")) "value")) (DoExpr (EApp (EApp (EVar "setRef") (EApp (EVar "bufRef") (EVar "e"))) (EListLit))) (DoLet false false (PVar "scope") (EApp (EVar "beginDefine") (EVar "e"))) (DoExpr (EApp (EApp (EApp (EApp (EApp (EVar "defineHeaderAs") (EVar "e")) (ELit (LString "define internal"))) (EVar "LiftedDefine")) (EVar "fname")) (EApp (EVar "wordProto") (EBinOp "::" (EVar "closParam") (EApp (EApp (EVar "slotParamDecls") (EFieldAccess (EVar "slot") "contextDicts")) (EVar "values")))))) (DoExpr (EApp (EApp (EVar "emit") (EVar "e")) (ELit (LString "entry:")))) (DoLet false false (PTuple (PVar "r") PWild) (EApp (EApp (EApp (EApp (EApp (EApp (EVar "emitSlotBody") (EVar "e")) (EVar "iface")) (EVar "slot")) (EVar "callee")) (EVar "g")) (EVar "values"))) (DoExpr (EApp (EApp (EVar "emit") (EVar "e")) (EBinOp "++" (ELit (LString "  ret i64 ")) (EVar "r")))) (DoExpr (EApp (EApp (EVar "emit") (EVar "e")) (ELit (LString "}")))) (DoExpr (EApp (EApp (EVar "emit") (EVar "e")) (ELit (LString "")))) (DoLet false false (PVar "lamLines") (EFieldAccess (EApp (EVar "bufRef") (EVar "e")) "value")) (DoExpr (EApp (EApp (EVar "setRef") (EApp (EVar "lamsRef") (EVar "e"))) (EBinOp "++" (EVar "lamLines") (EFieldAccess (EApp (EVar "lamsRef") (EVar "e")) "value")))) (DoExpr (EApp (EApp (EVar "endDefine") (EVar "e")) (EVar "scope"))) (DoExpr (EApp (EApp (EVar "setRef") (EApp (EVar "bufRef") (EVar "e"))) (EVar "saved"))) (DoExpr (EApp (EApp (EApp (EApp (EVar "registerGlobal") (EVar "e")) (EVar "False")) (EVar "closName")) (ELit (LString "[2 x i64]")))) (DoExpr (EApp (EApp (EVar "emitGlobal") (EVar "e")) (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "@")) (EApp (EMethodRef "display") (EVar "closName"))) (ELit (LString " = internal constant [2 x i64] [i64 "))) (EApp (EMethodRef "display") (EApp (EVar "intToString") (EVar "arity")))) (ELit (LString ", i64 ptrtoint (ptr @"))) (EApp (EMethodRef "display") (EApp (EApp (EVar "symRef") (EVar "e")) (EVar "fname")))) (ELit (LString " to i64)]")))))))))
+(DTypeSig false "slotReqCount" (TyFun (TyCon "MethodSlot") (TyFun (TyCon "ImplGroup") (TyCon "Int"))))
+(DFunDef false "slotReqCount" ((PVar "slot") (PVar "g")) (EApp (EApp (EVar "maxInt") (ELit (LInt 0))) (EBinOp "-" (EApp (EVar "leadingDictParams") (EApp (EVar "firstClausePats") (EApp (EVar "groupClauses") (EVar "g")))) (EFieldAccess (EVar "slot") "contextDicts"))))
+(DTypeSig false "slotParamDecls" (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyApp (TyCon "List") (TyCon "LlvmParam")))))
+(DFunDef false "slotParamDecls" ((PVar "dicts") (PVar "values")) (EApp (EApp (EMethodRef "map") (ELam ((PVar "r")) (EApp (EApp (EVar "LlvmParam") (ELit (LString "i64"))) (EVar "r")))) (EBinOp "::" (ELit (LString "%dict")) (EBinOp "++" (EApp (EApp (EApp (EVar "wordNames") (ELit (LString "%mw"))) (EVar "dicts")) (ELit (LInt 0))) (EApp (EApp (EApp (EVar "wordNames") (ELit (LString "%arg"))) (EVar "values")) (ELit (LInt 0)))))))
+(DTypeSig false "wordNames" (TyFun (TyCon "String") (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyApp (TyCon "List") (TyCon "String"))))))
+(DFunDef false "wordNames" ((PVar "pre") (PVar "n") (PVar "i")) (EIf (EBinOp ">=" (EVar "i") (EVar "n")) (EListLit) (EIf (EVar "otherwise") (EBinOp "::" (EBinOp "++" (EVar "pre") (EApp (EVar "intToString") (EVar "i"))) (EApp (EApp (EApp (EVar "wordNames") (EVar "pre")) (EVar "n")) (EBinOp "+" (EVar "i") (ELit (LInt 1))))) (EApp (EVar "__fallthrough__") (ELit LUnit)))))
+(DTypeSig false "emitSlotBody" (TyFun (TyCon "Emit") (TyFun (TyCon "String") (TyFun (TyCon "MethodSlot") (TyFun (TyCon "SlotCallee") (TyFun (TyCon "ImplGroup") (TyFun (TyCon "Int") (TyTuple (TyCon "String") (TyCon "LTy")))))))))
+(DFunDef false "emitSlotBody" ((PVar "e") (PVar "iface") (PVar "slot") (PVar "callee") (PVar "g") (PVar "values")) (EBlock (DoLet false false (PVar "memo") (EApp (EApp (EVar "memoGlobalName") (EApp (EVar "groupSymTag") (EVar "g"))) (EFieldAccess (EVar "slot") "method"))) (DoExpr (EIf (EBinOp "&&" (EBinOp "&&" (EBinOp "&&" (EBinOp "==" (EFieldAccess (EVar "slot") "contextDicts") (ELit (LInt 0))) (EBinOp "==" (EVar "values") (ELit (LInt 0)))) (EApp (EVar "groupMemoisable") (EVar "g"))) (EApp (EApp (EVar "isLazyGlobal") (EVar "e")) (EVar "memo"))) (EBlock (DoLet false false (PVar "rv") (EApp (EVar "freshReg") (EVar "e"))) (DoLet false false (PVar "call") (EApp (EApp (EApp (EVar "wordCall") (EVar "e")) (EApp (EVar "LN.llvmName") (EApp (EVar "LN.LGlobalForcer") (EVar "memo")))) (EListLit))) (DoExpr (EApp (EApp (EVar "emit") (EVar "e")) (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "  ")) (EApp (EMethodRef "display") (EVar "rv"))) (ELit (LString " = "))) (EApp (EMethodRef "display") (EVar "call"))) (ELit (LString ""))))) (DoExpr (ETuple (EVar "rv") (EVar "LTInt")))) (EBlock (DoLet false false (PVar "base") (EBinOp "+" (EApp (EApp (EVar "superCountOf") (EVar "e")) (EVar "iface")) (EApp (EVar "listLen") (EApp (EApp (EVar "interfaceSlots") (EFieldAccess (EVar "e") "methodTables")) (EVar "iface"))))) (DoLet false false (PVar "cellDicts") (EIf (EFieldAccess (EVar "callee") "inherited") (EListLit (ELit (LString "%dict"))) (EApp (EApp (EApp (EApp (EVar "loadReqDicts") (EVar "e")) (ELit (LString "%dict"))) (EBinOp "+" (EVar "base") (EApp (EApp (EVar "slotReqCount") (EVar "slot")) (EVar "g")))) (EVar "base")))) (DoExpr (EApp (EApp (EApp (EApp (EApp (EVar "emitArityCall") (EVar "e")) (EApp (EVar "groupFnName") (EVar "g"))) (EBinOp "++" (EBinOp "++" (EApp (EApp (EApp (EVar "wordNames") (ELit (LString "%mw"))) (EFieldAccess (EVar "slot") "contextDicts")) (ELit (LInt 0))) (EVar "cellDicts")) (EApp (EApp (EApp (EVar "wordNames") (ELit (LString "%arg"))) (EVar "values")) (ELit (LInt 0))))) (EApp (EVar "groupArity") (EVar "g"))) (EVar "LTInt"))))))))
+(DTypeSig false "groupMemoisable" (TyFun (TyCon "ImplGroup") (TyCon "Bool")))
+(DFunDef false "groupMemoisable" ((PVar "g")) (EBinOp "&&" (EApp (EVar "isEmptyL") (EApp (EVar "groupPositionsOf") (EVar "g"))) (EApp (EVar "isEmptyL") (EApp (EVar "firstClausePats") (EApp (EVar "groupClauses") (EVar "g"))))))
 (DTypeSig false "implReqCount" (TyFun (TyCon "Emit") (TyFun (TyCon "String") (TyFun (TyCon "CImplEntry") (TyCon "Int")))))
 (DFunDef false "implReqCount" ((PVar "_e") (PVar "_name") (PVar "ent")) (EApp (EVar "leadingDictParams") (EApp (EVar "implPats") (EVar "ent"))))
 (DTypeSig false "implRoutesForDefine" (TyFun (TyCon "Emit") (TyFun (TyCon "String") (TyFun (TyCon "CImplEntry") (TyFun (TyApp (TyCon "List") (TyCon "Route")) (TyFun (TyApp (TyCon "List") (TyCon "Route")) (TyApp (TyCon "List") (TyCon "Route"))))))))
@@ -19622,21 +19532,10 @@ runtimeName e symbol = optionOr "" (externRuntimeKey e.externFacts symbol)
 (DTypeSig false "takeRoutes" (TyFun (TyCon "Int") (TyFun (TyApp (TyCon "List") (TyCon "Route")) (TyApp (TyCon "List") (TyCon "Route")))))
 (DFunDef false "takeRoutes" ((PVar "n") (PCons (PVar "r") (PVar "rest"))) (EIf (EBinOp ">" (EVar "n") (ELit (LInt 0))) (EBinOp "::" (EVar "r") (EApp (EApp (EVar "takeRoutes") (EBinOp "-" (EVar "n") (ELit (LInt 1)))) (EVar "rest"))) (EApp (EVar "__fallthrough__") (ELit LUnit))))
 (DFunDef false "takeRoutes" (PWild PWild) (EListLit))
-(DTypeSig false "entrySuperCount" (TyFun (TyCon "Emit") (TyFun (TyCon "CImplEntry") (TyCon "Int"))))
-(DFunDef false "entrySuperCount" ((PVar "e") (PVar "ent")) (EApp (EApp (EVar "optionOr") (ELit (LInt 0))) (EApp (EApp (EVar "omLookup") (EApp (EVar "implEntryIfaceWord") (EVar "ent"))) (EFieldAccess (EVar "e") "superCounts"))))
 (DTypeSig false "loadReqDicts" (TyFun (TyCon "Emit") (TyFun (TyCon "String") (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyApp (TyCon "List") (TyCon "String")))))))
 (DFunDef false "loadReqDicts" ((PVar "e") (PVar "dictPtr") (PVar "n") (PVar "i")) (EIf (EBinOp ">=" (EVar "i") (EVar "n")) (EListLit) (EIf (EVar "otherwise") (EBinOp "::" (EApp (EApp (EApp (EVar "loadField") (EVar "e")) (EVar "dictPtr")) (EVar "i")) (EApp (EApp (EApp (EApp (EVar "loadReqDicts") (EVar "e")) (EVar "dictPtr")) (EVar "n")) (EBinOp "+" (EVar "i") (ELit (LInt 1))))) (EApp (EVar "__fallthrough__") (ELit LUnit)))))
-(DTypeSig false "emitDispatchArm" (TyFun (TyCon "Emit") (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyCon "CImplEntry") (TyFun (TyApp (TyCon "List") (TyCon "ImplGroup")) (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyCon "String") (TyFun (TyCon "String") (TyCon "Unit"))))))))))))
-(DFunDef false "emitDispatchArm" ((PVar "e") (PVar "dictPtr") (PVar "headTag") (PVar "ent") (PVar "groups") (PVar "name") (PVar "methWords") (PVar "argOps") (PVar "slot") (PVar "endL")) (EBlock (DoLet false false (PVar "cmp") (EApp (EVar "freshReg") (EVar "e"))) (DoExpr (EApp (EApp (EVar "emit") (EVar "e")) (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "  ")) (EApp (EMethodRef "display") (EVar "cmp"))) (ELit (LString " = icmp eq i64 "))) (EApp (EMethodRef "display") (EVar "headTag"))) (ELit (LString ", "))) (EApp (EMethodRef "display") (EApp (EVar "intToString") (EApp (EVar "hashName") (EApp (EVar "implEntryKey") (EVar "ent")))))) (ELit (LString ""))))) (DoLet false false (PVar "n") (EApp (EVar "intToString") (EApp (EVar "freshLocal") (EVar "e")))) (DoLet false false (PVar "yes") (EBinOp "++" (ELit (LString "dispyes")) (EVar "n"))) (DoLet false false (PVar "next") (EBinOp "++" (ELit (LString "dispnext")) (EVar "n"))) (DoExpr (EApp (EApp (EVar "emit") (EVar "e")) (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "  br i1 ")) (EApp (EMethodRef "display") (EVar "cmp"))) (ELit (LString ", label %"))) (EApp (EMethodRef "display") (EVar "yes"))) (ELit (LString ", label %"))) (EApp (EMethodRef "display") (EVar "next"))) (ELit (LString ""))))) (DoExpr (EApp (EApp (EVar "emit") (EVar "e")) (EBinOp "++" (EVar "yes") (ELit (LString ":"))))) (DoExpr (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EVar "emitDispatchArmBody") (EVar "e")) (EVar "dictPtr")) (EVar "ent")) (EVar "groups")) (EVar "name")) (EVar "methWords")) (EVar "argOps")) (EVar "slot")) (EVar "endL"))) (DoExpr (EApp (EApp (EVar "emit") (EVar "e")) (EBinOp "++" (EVar "next") (ELit (LString ":")))))))
-(DTypeSig false "emitDispatchArmBody" (TyFun (TyCon "Emit") (TyFun (TyCon "String") (TyFun (TyCon "CImplEntry") (TyFun (TyApp (TyCon "List") (TyCon "ImplGroup")) (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyCon "String") (TyFun (TyCon "String") (TyCon "Unit")))))))))))
-(DFunDef false "emitDispatchArmBody" ((PVar "e") (PVar "dictPtr") (PVar "ent") (PVar "groups") (PVar "name") (PVar "methWords") (PVar "argOps") (PVar "slot") (PVar "endL")) (EBlock (DoLet false false (PVar "symTag") (EApp (EVar "implEntrySymTag") (EVar "ent"))) (DoExpr (EIf (EBinOp "&&" (EBinOp "&&" (EBinOp "&&" (EApp (EVar "isEmptyL") (EVar "methWords")) (EApp (EVar "isEmptyL") (EVar "argOps"))) (EApp (EVar "implEntryMemoisable") (EVar "ent"))) (EApp (EApp (EVar "isLazyGlobal") (EVar "e")) (EApp (EApp (EVar "memoGlobalName") (EVar "symTag")) (EVar "name")))) (EBlock (DoLet false false (PVar "rv") (EApp (EVar "freshReg") (EVar "e"))) (DoLet false false (PVar "memoForcer") (EApp (EVar "LN.llvmName") (EApp (EVar "LN.LGlobalForcer") (EApp (EApp (EVar "memoGlobalName") (EVar "symTag")) (EVar "name"))))) (DoLet false false (PVar "call") (EApp (EApp (EApp (EVar "wordCall") (EVar "e")) (EVar "memoForcer")) (EListLit))) (DoExpr (EApp (EApp (EVar "emit") (EVar "e")) (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "  ")) (EApp (EMethodRef "display") (EVar "rv"))) (ELit (LString " = "))) (EApp (EMethodRef "display") (EVar "call"))) (ELit (LString ""))))) (DoExpr (EApp (EApp (EVar "emit") (EVar "e")) (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "  store i64 ")) (EApp (EMethodRef "display") (EVar "rv"))) (ELit (LString ", ptr "))) (EApp (EMethodRef "display") (EVar "slot"))) (ELit (LString ""))))) (DoExpr (EApp (EApp (EVar "emit") (EVar "e")) (EBinOp "++" (ELit (LString "  br label %")) (EVar "endL"))))) (EBlock (DoLet false false (PVar "cellCount") (EApp (EApp (EVar "maxInt") (ELit (LInt 0))) (EBinOp "-" (EApp (EApp (EApp (EVar "implReqCount") (EVar "e")) (EVar "name")) (EVar "ent")) (EApp (EVar "lengthS") (EVar "methWords"))))) (DoLet false false (PVar "superCount") (EApp (EApp (EVar "entrySuperCount") (EVar "e")) (EVar "ent"))) (DoLet false false (PVar "cellDicts") (EIf (EApp (EVar "isInheritedEntry") (EVar "ent")) (EListLit (EVar "dictPtr")) (EApp (EApp (EApp (EApp (EVar "loadReqDicts") (EVar "e")) (EVar "dictPtr")) (EBinOp "+" (EVar "superCount") (EVar "cellCount"))) (EVar "superCount")))) (DoLet false false (PVar "armArity") (EMatch (EApp (EApp (EVar "findGroupBySymTag") (EVar "symTag")) (EVar "groups")) (arm (PCon "Some" (PVar "g")) () (EApp (EVar "groupArity") (EVar "g"))) (arm (PCon "None") () (EBinOp "+" (EBinOp "+" (EApp (EVar "implSrcValueArity") (EVar "ent")) (EApp (EVar "lengthS") (EVar "methWords"))) (EVar "cellCount"))))) (DoLet false false (PTuple (PVar "rv") PWild) (EApp (EApp (EApp (EApp (EApp (EVar "emitArityCall") (EVar "e")) (EApp (EApp (EApp (EVar "implEntryFnName") (EVar "e")) (EVar "name")) (EVar "ent"))) (EBinOp "++" (EBinOp "++" (EVar "methWords") (EVar "cellDicts")) (EVar "argOps"))) (EVar "armArity")) (EVar "LTInt"))) (DoExpr (EApp (EApp (EVar "emit") (EVar "e")) (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "  store i64 ")) (EApp (EMethodRef "display") (EVar "rv"))) (ELit (LString ", ptr "))) (EApp (EMethodRef "display") (EVar "slot"))) (ELit (LString ""))))) (DoExpr (EApp (EApp (EVar "emit") (EVar "e")) (EBinOp "++" (ELit (LString "  br label %")) (EVar "endL")))))))))
 (DTypeSig false "memoGlobalName" (TyFun (TyCon "String") (TyFun (TyCon "String") (TyCon "String"))))
 (DFunDef false "memoGlobalName" ((PVar "symTag") (PVar "method")) (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "$memo_")) (EApp (EMethodRef "display") (EVar "symTag"))) (ELit (LString "_"))) (EApp (EMethodRef "display") (EVar "method"))) (ELit (LString ""))))
-(DTypeSig false "emitDispatchChain" (TyFun (TyCon "Emit") (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "CImplEntry")) (TyFun (TyApp (TyCon "List") (TyCon "ImplGroup")) (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyCon "String") (TyFun (TyCon "String") (TyCon "Unit"))))))))))))
-(DFunDef false "emitDispatchChain" ((PVar "e") (PVar "dictPtr") (PVar "headTag") (PVar "impls") (PVar "groups") (PVar "name") (PVar "methWords") (PVar "argOps") (PVar "slot") (PVar "endL")) (EBlock (DoExpr (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EVar "emitConcreteArms") (EVar "e")) (EVar "dictPtr")) (EVar "headTag")) (EVar "impls")) (EVar "groups")) (EVar "name")) (EVar "methWords")) (EVar "argOps")) (EVar "slot")) (EVar "endL"))) (DoExpr (EApp (EApp (EVar "emit") (EVar "e")) (EApp (EApp (EApp (EApp (EApp (EVar "rtLine") (EVar "e")) (ELit (LString ""))) (ELit (LString "void"))) (ELit (LString "mdk_dispatch_no_impl"))) (EListLit)))) (DoExpr (EApp (EApp (EVar "emit") (EVar "e")) (ELit (LString "  unreachable"))))))
-(DTypeSig false "emitConcreteArms" (TyFun (TyCon "Emit") (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "CImplEntry")) (TyFun (TyApp (TyCon "List") (TyCon "ImplGroup")) (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyCon "String") (TyFun (TyCon "String") (TyCon "Unit"))))))))))))
-(DFunDef false "emitConcreteArms" (PWild PWild PWild (PList) PWild PWild PWild PWild PWild PWild) (ELit LUnit))
-(DFunDef false "emitConcreteArms" ((PVar "e") (PVar "dictPtr") (PVar "headTag") (PCons (PVar "ent") (PVar "rest")) (PVar "groups") (PVar "name") (PVar "methWords") (PVar "argOps") (PVar "slot") (PVar "endL")) (EBlock (DoExpr (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EVar "emitDispatchArm") (EVar "e")) (EVar "dictPtr")) (EVar "headTag")) (EVar "ent")) (EVar "groups")) (EVar "name")) (EVar "methWords")) (EVar "argOps")) (EVar "slot")) (EVar "endL"))) (DoExpr (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EVar "emitConcreteArms") (EVar "e")) (EVar "dictPtr")) (EVar "headTag")) (EVar "rest")) (EVar "groups")) (EVar "name")) (EVar "methWords")) (EVar "argOps")) (EVar "slot")) (EVar "endL")))))
 (DTypeSig false "emitMethodArgDispatch" (TyFun (TyCon "Emit") (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyCon "Int") (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyTuple (TyCon "String") (TyCon "LTy"))))))))
 (DFunDef false "emitMethodArgDispatch" ((PVar "e") (PVar "method") (PVar "iface") (PVar "siteArity") (PVar "argOps")) (EMatch (EApp (EApp (EApp (EApp (EVar "implGroupsForMethodArity") (EVar "e")) (EVar "method")) (EVar "iface")) (EVar "siteArity")) (arm (PList) () (EApp (EApp (EApp (EVar "emitDefaultArgTag") (EVar "e")) (EVar "method")) (EVar "argOps"))) (arm (PList (PVar "g")) () (EApp (EApp (EApp (EApp (EApp (EVar "emitArityCall") (EVar "e")) (EApp (EVar "groupFnName") (EVar "g"))) (EVar "argOps")) (EApp (EVar "groupArity") (EVar "g"))) (EVar "LTInt"))) (arm (PVar "groups") () (EApp (EApp (EApp (EApp (EApp (EVar "emitArgTagDispatch") (EVar "e")) (EVar "method")) (EVar "groups")) (EVar "argOps")) (EApp (EVar "argTagCollidingHeads") (EVar "groups"))))))
 (DTypeSig false "argTagCollidingHeads" (TyFun (TyApp (TyCon "List") (TyCon "ImplGroup")) (TyApp (TyCon "List") (TyCon "String"))))
@@ -19684,11 +19583,12 @@ runtimeName e symbol = optionOr "" (externRuntimeKey e.externFacts symbol)
 (DFunDef false "groupMethodOf" ((PCon "ImplGroup" (PVar "m") PWild PWild PWild PWild PWild PWild PWild)) (EVar "m"))
 (DTypeSig false "groupPositionsOf" (TyFun (TyCon "ImplGroup") (TyApp (TyCon "List") (TyCon "Int"))))
 (DFunDef false "groupPositionsOf" ((PCon "ImplGroup" PWild PWild PWild PWild (PVar "p") PWild PWild PWild)) (EVar "p"))
+(DTypeSig false "groupKey" (TyFun (TyCon "ImplGroup") (TyCon "String")))
+(DFunDef false "groupKey" ((PCon "ImplGroup" PWild PWild (PVar "key") PWild PWild PWild PWild PWild)) (EVar "key"))
+(DTypeSig false "groupClauses" (TyFun (TyCon "ImplGroup") (TyApp (TyCon "List") (TyTuple (TyApp (TyCon "List") (TyCon "Pat")) (TyCon "CExpr")))))
+(DFunDef false "groupClauses" ((PCon "ImplGroup" PWild PWild PWild PWild PWild PWild (PVar "clauses") PWild)) (EVar "clauses"))
 (DTypeSig false "groupArity" (TyFun (TyCon "ImplGroup") (TyCon "Int")))
 (DFunDef false "groupArity" ((PCon "ImplGroup" PWild PWild PWild PWild PWild (PVar "arity") PWild PWild)) (EVar "arity"))
-(DTypeSig false "findGroupBySymTag" (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "ImplGroup")) (TyApp (TyCon "Option") (TyCon "ImplGroup")))))
-(DFunDef false "findGroupBySymTag" (PWild (PList)) (EVar "None"))
-(DFunDef false "findGroupBySymTag" ((PVar "symTag") (PCons (PVar "g") (PVar "rest"))) (EIf (EBinOp "==" (EApp (EVar "groupSymTag") (EVar "g")) (EVar "symTag")) (EApp (EVar "Some") (EVar "g")) (EIf (EVar "otherwise") (EApp (EApp (EVar "findGroupBySymTag") (EVar "symTag")) (EVar "rest")) (EApp (EVar "__fallthrough__") (ELit LUnit)))))
 (DTypeSig false "headGroup" (TyFun (TyApp (TyCon "List") (TyCon "ImplGroup")) (TyCon "ImplGroup")))
 (DFunDef false "headGroup" ((PCons (PVar "g") PWild)) (EVar "g"))
 (DFunDef false "headGroup" ((PList)) (EApp (EVar "panic") (ELit (LString "llvm: no impl group for arg-tag dispatch"))))
@@ -19708,12 +19608,18 @@ runtimeName e symbol = optionOr "" (externRuntimeKey e.externFacts symbol)
 (DTypeSig false "dictWordsOf" (TyFun (TyCon "Emit") (TyFun (TyApp (TyCon "OrdMap") (TyTuple (TyCon "String") (TyCon "LTy"))) (TyFun (TyApp (TyCon "List") (TyCon "Route")) (TyApp (TyCon "List") (TyCon "String"))))))
 (DFunDef false "dictWordsOf" ((PVar "e") (PVar "env") (PVar "rs")) (EApp (EApp (EMethodRef "map") (EApp (EApp (EVar "dictWordOfRoute") (EVar "e")) (EVar "env"))) (EVar "rs")))
 (DTypeSig false "dictWordOfRoute" (TyFun (TyCon "Emit") (TyFun (TyApp (TyCon "OrdMap") (TyTuple (TyCon "String") (TyCon "LTy"))) (TyFun (TyCon "Route") (TyCon "String")))))
-(DFunDef false "dictWordOfRoute" ((PVar "e") (PVar "env") (PCon "RKey" (PVar "key") (PVar "reqs") (PVar "sups"))) (EBlock (DoLet false false (PVar "fieldWords") (EApp (EApp (EApp (EVar "dictWordsOf") (EVar "e")) (EVar "env")) (EBinOp "++" (EVar "sups") (EVar "reqs")))) (DoExpr (EIf (EApp (EVar "allConstWords") (EVar "fieldWords")) (EApp (EApp (EApp (EVar "emitConstDictCell") (EVar "e")) (EApp (EVar "hashName") (EVar "key"))) (EVar "fieldWords")) (EApp (EApp (EApp (EVar "emitDictCell") (EVar "e")) (EApp (EVar "hashName") (EVar "key"))) (EVar "fieldWords"))))))
+(DFunDef false "dictWordOfRoute" ((PVar "e") (PVar "env") (PCon "RKey" (PVar "key") (PVar "reqs") (PVar "sups"))) (EBlock (DoLet false false (PVar "supWords") (EApp (EApp (EApp (EVar "dictWordsOf") (EVar "e")) (EVar "env")) (EVar "sups"))) (DoLet false false (PVar "slots") (EApp (EApp (EVar "slotWords") (EVar "e")) (EVar "key"))) (DoLet false false (PVar "fieldWords") (EBinOp "++" (EBinOp "++" (EVar "supWords") (EVar "slots")) (EApp (EApp (EApp (EVar "dictWordsOf") (EVar "e")) (EVar "env")) (EVar "reqs")))) (DoExpr (EIf (EApp (EVar "allConstWords") (EVar "fieldWords")) (EApp (EApp (EApp (EVar "emitConstDictCell") (EVar "e")) (EApp (EVar "hashName") (EVar "key"))) (EVar "fieldWords")) (EApp (EApp (EApp (EVar "emitDictCell") (EVar "e")) (EApp (EVar "hashName") (EVar "key"))) (EVar "fieldWords"))))))
 (DFunDef false "dictWordOfRoute" ((PVar "e") (PVar "env") (PCon "RDict" (PVar "d"))) (EApp (EApp (EApp (EVar "dictOperand") (EVar "e")) (EVar "env")) (EVar "d")))
 (DFunDef false "dictWordOfRoute" ((PVar "e") (PVar "env") (PCon "RDictFwd" (PVar "d"))) (EApp (EApp (EApp (EVar "dictOperand") (EVar "e")) (EVar "env")) (EVar "d")))
-(DFunDef false "dictWordOfRoute" ((PVar "e") (PVar "env") (PCon "RProj" (PVar "r") (PVar "path"))) (EApp (EApp (EApp (EVar "loadSuperPath") (EVar "e")) (EApp (EApp (EApp (EVar "dictWordOfRoute") (EVar "e")) (EVar "env")) (EVar "r"))) (EVar "path")))
+(DFunDef false "dictWordOfRoute" ((PVar "e") (PVar "env") (PCon "RProj" (PVar "r") (PVar "path"))) (EApp (EApp (EApp (EVar "loadSuperPath") (EVar "e")) (EApp (EApp (EApp (EVar "dictWordOfRoute") (EVar "e")) (EVar "env")) (EVar "r"))) (EApp (EApp (EApp (EVar "receiverPath") (EVar "e")) (EVar "r")) (EVar "path"))))
 (DFunDef false "dictWordOfRoute" (PWild PWild (PCon "RNone")) (ELit (LString "0")))
 (DFunDef false "dictWordOfRoute" (PWild PWild (PCon "RLocal" PWild PWild)) (ELit (LString "0")))
+(DTypeSig false "receiverPath" (TyFun (TyCon "Emit") (TyFun (TyCon "Route") (TyFun (TyApp (TyCon "List") (TyCon "Int")) (TyApp (TyCon "List") (TyCon "Int"))))))
+(DFunDef false "receiverPath" ((PVar "e") (PCon "RDict" (PVar "d")) (PCons (PVar "i") (PVar "rest"))) (EBinOp "::" (EApp (EApp (EApp (EVar "receiverIndex") (EVar "e")) (EVar "d")) (EVar "i")) (EVar "rest")))
+(DFunDef false "receiverPath" ((PVar "e") (PCon "RDictFwd" (PVar "d")) (PCons (PVar "i") (PVar "rest"))) (EBinOp "::" (EApp (EApp (EApp (EVar "receiverIndex") (EVar "e")) (EVar "d")) (EVar "i")) (EVar "rest")))
+(DFunDef false "receiverPath" (PWild PWild (PVar "path")) (EVar "path"))
+(DTypeSig false "receiverIndex" (TyFun (TyCon "Emit") (TyFun (TyCon "String") (TyFun (TyCon "Int") (TyCon "Int")))))
+(DFunDef false "receiverIndex" ((PVar "e") (PVar "d") (PVar "i")) (EMatch (EUnOp "!" (EFieldAccess (EVar "e") "defaultReceiver")) (arm (PCon "Some" (PTuple (PVar "recv") (PVar "supers") (PVar "slots"))) () (EIf (EBinOp "&&" (EBinOp "==" (EVar "d") (EVar "recv")) (EBinOp ">=" (EVar "i") (EVar "supers"))) (EBinOp "+" (EVar "i") (EVar "slots")) (EVar "i"))) (arm (PCon "None") () (EVar "i"))))
 (DTypeSig false "loadSuperPath" (TyFun (TyCon "Emit") (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "Int")) (TyCon "String")))))
 (DFunDef false "loadSuperPath" (PWild (PVar "w") (PList)) (EVar "w"))
 (DFunDef false "loadSuperPath" ((PVar "e") (PVar "w") (PCons (PVar "i") (PVar "rest"))) (EApp (EApp (EApp (EVar "loadSuperPath") (EVar "e")) (EApp (EApp (EApp (EVar "loadField") (EVar "e")) (EVar "w")) (EVar "i"))) (EVar "rest")))
@@ -19742,7 +19648,11 @@ runtimeName e symbol = optionOr "" (externRuntimeKey e.externFacts symbol)
 (DTypeSig false "implGroupOrigin" (TyFun (TyCon "ImplGroup") (TyCon "SymbolOrigin")))
 (DFunDef false "implGroupOrigin" ((PVar "g")) (EApp (EApp (EApp (EApp (EVar "SymbolOrigin") (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "impl ")) (EApp (EMethodRef "display") (EApp (EVar "groupMethodOf") (EVar "g")))) (ELit (LString " for "))) (EApp (EMethodRef "display") (EApp (EVar "groupTag") (EVar "g")))) (ELit (LString "")))) (ELit (LString ""))) (ELit (LInt 0))) (ELit (LInt 0))))
 (DTypeSig false "emitGroup" (TyFun (TyCon "Emit") (TyFun (TyCon "ImplGroup") (TyCon "Unit"))))
-(DFunDef false "emitGroup" ((PVar "e") (PCon "ImplGroup" (PVar "method") (PVar "tag") (PVar "key") PWild (PVar "positions") (PVar "arity") (PVar "clauses") (PVar "fname"))) (EBlock (DoLet false false (PVar "selfFnPos") (EApp (EApp (EApp (EVar "selfFnParamPositions") (EVar "e")) (EApp (EVar "ifaceWordOfKey") (EVar "key"))) (EVar "method"))) (DoExpr (EApp (EApp (EApp (EVar "setCurImplSelfFns") (EVar "e")) (EVar "tag")) (EApp (EApp (EVar "selfFnParamNames") (EVar "clauses")) (EVar "selfFnPos")))) (DoExpr (EIf (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EVar "trmcImplTry") (EVar "e")) (EVar "fname")) (EVar "method")) (EVar "tag")) (EVar "key")) (EVar "positions")) (EVar "arity")) (EVar "clauses")) (EBlock (DoExpr (EApp (EVar "clearCurImplSelfFns") (EVar "e"))) (DoExpr (ELit LUnit))) (EBlock (DoLet false false PWild (EApp (EVar "beginDefine") (EVar "e"))) (DoExpr (EApp (EApp (EApp (EApp (EVar "defineHeader") (EVar "e")) (EVar "TopLevelDefine")) (EVar "fname")) (EApp (EVar "wordProto") (EApp (EApp (EVar "implParamDecls") (EVar "arity")) (ELit (LInt 0)))))) (DoExpr (EApp (EApp (EVar "emit") (EVar "e")) (ELit (LString "entry:")))) (DoExpr (EApp (EApp (EApp (EApp (EApp (EApp (EVar "emitGroupBody") (EVar "e")) (EVar "fname")) (EVar "tag")) (EVar "positions")) (EVar "arity")) (EVar "clauses"))) (DoExpr (EApp (EVar "clearCurImplSelfFns") (EVar "e"))) (DoExpr (EApp (EApp (EVar "emit") (EVar "e")) (ELit (LString "}")))) (DoExpr (EApp (EApp (EVar "emit") (EVar "e")) (ELit (LString "")))))))))
+(DFunDef false "emitGroup" ((PVar "e") (PVar "g")) (EBlock (DoExpr (EApp (EApp (EVar "setRef") (EFieldAccess (EVar "e") "defaultReceiver")) (EApp (EApp (EVar "defaultReceiverOf") (EVar "e")) (EVar "g")))) (DoExpr (EApp (EApp (EVar "emitGroupDefine") (EVar "e")) (EVar "g"))) (DoExpr (EApp (EApp (EVar "setRef") (EFieldAccess (EVar "e") "defaultReceiver")) (EVar "None")))))
+(DTypeSig false "defaultReceiverOf" (TyFun (TyCon "Emit") (TyFun (TyCon "ImplGroup") (TyApp (TyCon "Option") (TyTuple (TyCon "String") (TyCon "Int") (TyCon "Int"))))))
+(DFunDef false "defaultReceiverOf" ((PVar "e") (PVar "g")) (EIf (EApp (EVar "groupInherits") (EVar "g")) (EBlock (DoLet false false (PVar "iface") (EApp (EVar "ifaceWordOfKey") (EApp (EVar "groupKey") (EVar "g")))) (DoLet false false (PVar "slots") (EApp (EApp (EVar "interfaceSlots") (EFieldAccess (EVar "e") "methodTables")) (EVar "iface"))) (DoLet false false (PVar "nmw") (EMatch (EApp (EApp (EApp (EVar "slotOf") (EApp (EVar "groupMethodOf") (EVar "g"))) (EVar "slots")) (ELit (LInt 0))) (arm (PCon "Some" (PTuple PWild (PVar "slot"))) () (EFieldAccess (EVar "slot") "contextDicts")) (arm (PCon "None") () (ELit (LInt 0))))) (DoExpr (EMatch (EApp (EApp (EVar "dropS") (EVar "nmw")) (EApp (EVar "firstClausePats") (EApp (EVar "groupClauses") (EVar "g")))) (arm (PCons (PCon "PVar" (PVar "recv") PWild PWild) PWild) () (EApp (EVar "Some") (ETuple (EVar "recv") (EApp (EApp (EVar "superCountOf") (EVar "e")) (EVar "iface")) (EApp (EVar "listLen") (EVar "slots"))))) (arm PWild () (EVar "None"))))) (EVar "None")))
+(DTypeSig false "emitGroupDefine" (TyFun (TyCon "Emit") (TyFun (TyCon "ImplGroup") (TyCon "Unit"))))
+(DFunDef false "emitGroupDefine" ((PVar "e") (PCon "ImplGroup" (PVar "method") (PVar "tag") (PVar "key") PWild (PVar "positions") (PVar "arity") (PVar "clauses") (PVar "fname"))) (EBlock (DoLet false false (PVar "selfFnPos") (EApp (EApp (EApp (EVar "selfFnParamPositions") (EVar "e")) (EApp (EVar "ifaceWordOfKey") (EVar "key"))) (EVar "method"))) (DoExpr (EApp (EApp (EApp (EVar "setCurImplSelfFns") (EVar "e")) (EVar "tag")) (EApp (EApp (EVar "selfFnParamNames") (EVar "clauses")) (EVar "selfFnPos")))) (DoExpr (EIf (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EVar "trmcImplTry") (EVar "e")) (EVar "fname")) (EVar "method")) (EVar "tag")) (EVar "key")) (EVar "positions")) (EVar "arity")) (EVar "clauses")) (EBlock (DoExpr (EApp (EVar "clearCurImplSelfFns") (EVar "e"))) (DoExpr (ELit LUnit))) (EBlock (DoLet false false PWild (EApp (EVar "beginDefine") (EVar "e"))) (DoExpr (EApp (EApp (EApp (EApp (EVar "defineHeader") (EVar "e")) (EVar "TopLevelDefine")) (EVar "fname")) (EApp (EVar "wordProto") (EApp (EApp (EVar "implParamDecls") (EVar "arity")) (ELit (LInt 0)))))) (DoExpr (EApp (EApp (EVar "emit") (EVar "e")) (ELit (LString "entry:")))) (DoExpr (EApp (EApp (EApp (EApp (EApp (EApp (EVar "emitGroupBody") (EVar "e")) (EVar "fname")) (EVar "tag")) (EVar "positions")) (EVar "arity")) (EVar "clauses"))) (DoExpr (EApp (EVar "clearCurImplSelfFns") (EVar "e"))) (DoExpr (EApp (EApp (EVar "emit") (EVar "e")) (ELit (LString "}")))) (DoExpr (EApp (EApp (EVar "emit") (EVar "e")) (ELit (LString "")))))))))
 (DTypeSig false "trmcImplTry" (TyFun (TyCon "Emit") (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "Int")) (TyFun (TyCon "Int") (TyFun (TyApp (TyCon "List") (TyTuple (TyApp (TyCon "List") (TyCon "Pat")) (TyCon "CExpr"))) (TyCon "Bool"))))))))))
 (DFunDef false "trmcImplTry" ((PVar "e") (PVar "fname") (PVar "method") (PVar "tag") (PVar "key") (PVar "positions") (PVar "arity") (PVar "clauses")) (EBlock (DoLet false false (PVar "self") (EApp (EApp (EApp (EVar "methodSelf") (EVar "method")) (EVar "key")) (EApp (EVar "firstClausePats") (EVar "clauses")))) (DoExpr (EIf (EApp (EApp (EApp (EVar "isTrmcImpl") (EFieldAccess (EVar "e") "trmc")) (EVar "method")) (EVar "key")) (EBlock (DoLet false false (PVar "slotTys") (EApp (EApp (EApp (EApp (EVar "patPosTys") (EVar "tag")) (EVar "positions")) (EVar "arity")) (ELit (LInt 0)))) (DoLet false false (PTuple (PVar "spats") (PVar "sbody")) (EMatch (EVar "clauses") (arm (PCons (PTuple (PVar "ps") (PVar "b")) PWild) () (ETuple (EVar "ps") (EVar "b"))) (arm (PList) () (ETuple (EListLit) (EApp (EVar "CLit") (EVar "LUnit")))))) (DoLet false false (PVar "single") (EBinOp "&&" (EBinOp "==" (EApp (EVar "listLen") (EVar "clauses")) (ELit (LInt 1))) (EApp (EVar "allClausesPVar") (EVar "clauses")))) (DoExpr (EApp (EApp (EApp (EVar "tmcMarker") (EVar "e")) (EVar "fname")) (ELit (LString "trmc")))) (DoExpr (EApp (EApp (EApp (EApp (EVar "emitTrmcHeader") (EVar "e")) (EVar "fname")) (EVar "arity")) (ELit (LString "")))) (DoExpr (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EVar "emitTrmcLoopBody") (EVar "e")) (EVar "self")) (EVar "arity")) (EVar "slotTys")) (EVar "clauses")) (EVar "single")) (EVar "spats")) (EVar "sbody")) (EVar "noDeclLoc"))) (DoExpr (EApp (EApp (EVar "emit") (EVar "e")) (ELit (LString "}")))) (DoExpr (EApp (EApp (EVar "emit") (EVar "e")) (ELit (LString "")))) (DoExpr (EVar "True"))) (EVar "False")))))
 (DTypeSig false "maxInt" (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyCon "Int"))))
@@ -19819,6 +19729,9 @@ runtimeName e symbol = optionOr "" (externRuntimeKey e.externFacts symbol)
 (DFunDef false "indexImplGroupEntries" ((PCons (PVar "entry") (PVar "rest")) (PVar "i") (PVar "acc")) (EApp (EApp (EApp (EVar "indexImplGroupEntries") (EVar "rest")) (EBinOp "+" (EVar "i") (ELit (LInt 1)))) (EApp (EApp (EApp (EVar "omInsert") (EApp (EVar "intToString") (EVar "i"))) (EVar "entry")) (EVar "acc"))))
 (DTypeSig false "resolveImplGroup" (TyFun (TyCon "Emit") (TyFun (TyApp (TyCon "OrdMap") (TyCon "CImplEntry")) (TyFun (TyCon "ImplClauseGroup") (TyCon "ImplGroup")))))
 (DFunDef false "resolveImplGroup" ((PVar "e") (PVar "index") (PVar "group")) (EBlock (DoLet false false (PVar "entries") (EApp (EApp (EMethodRef "map") (ELam ((PVar "i")) (EApp (EApp (EVar "optionOrPanic") (ELit (LString "llvm: invalid impl group ordinal"))) (EApp (EApp (EVar "omLookup") (EApp (EVar "intToString") (EVar "i"))) (EMethodRef "index"))))) (EFieldAccess (EVar "group") "indices"))) (DoExpr (EMatch (EVar "entries") (arm (PCons (PVar "ent") PWild) () (EBlock (DoLet false false (PVar "clauses") (EApp (EApp (EMethodRef "map") (ELam ((PVar "entry")) (ETuple (EApp (EVar "implPats") (EVar "entry")) (EApp (EVar "implBody") (EVar "entry"))))) (EVar "entries"))) (DoExpr (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EVar "ImplGroup") (EFieldAccess (EVar "group") "method")) (EApp (EVar "implEntryTag") (EVar "ent"))) (EFieldAccess (EVar "group") "key")) (EApp (EVar "implEntrySymTag") (EVar "ent"))) (EApp (EVar "implEntryPositions") (EVar "ent"))) (EApp (EVar "clauseArity") (EVar "clauses"))) (EVar "clauses")) (EApp (EApp (EApp (EVar "implEntryFnName") (EVar "e")) (EFieldAccess (EVar "group") "method")) (EVar "ent")))))) (arm (PList) () (EApp (EVar "panic") (ELit (LString "llvm: empty impl group"))))))))
+(DTypeSig false "numberGroups" (TyFun (TyCon "Int") (TyFun (TyApp (TyCon "List") (TyCon "ImplGroup")) (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "ImplGroup"))))))
+(DFunDef false "numberGroups" (PWild (PList)) (EListLit))
+(DFunDef false "numberGroups" ((PVar "i") (PCons (PVar "g") (PVar "rest"))) (EBinOp "::" (ETuple (EApp (EVar "intToString") (EVar "i")) (EVar "g")) (EApp (EApp (EVar "numberGroups") (EBinOp "+" (EVar "i") (ELit (LInt 1)))) (EVar "rest"))))
 (DTypeSig false "clauseArity" (TyFun (TyApp (TyCon "List") (TyTuple (TyApp (TyCon "List") (TyCon "Pat")) (TyCon "CExpr"))) (TyCon "Int")))
 (DFunDef false "clauseArity" ((PCons (PTuple (PVar "pats") PWild) PWild)) (EApp (EVar "lengthS") (EVar "pats")))
 (DFunDef false "clauseArity" ((PList)) (ELit (LInt 0)))
@@ -20735,7 +20648,7 @@ runtimeName e symbol = optionOr "" (externRuntimeKey e.externFacts symbol)
 (DTypeSig false "tableStats" (TyFun (TyCon "Emit") (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "Int")))))
 (DFunDef false "tableStats" ((PVar "e")) (EListLit (ETuple (ELit (LString "implEntries")) (EApp (EVar "listLen") (EUnOp "!" (EFieldAccess (EVar "e") "implEntries")))) (ETuple (ELit (LString "globalsReg")) (EApp (EVar "listLen") (EUnOp "!" (EFieldAccess (EVar "e") "globalsReg")))) (ETuple (ELit (LString "ctorType")) (EApp (EVar "omSize") (EFieldAccess (EFieldAccess (EVar "e") "constructorFacts") "owners"))) (ETuple (ELit (LString "externArity")) (EApp (EVar "omSize") (EFieldAccess (EVar "e") "externFacts"))) (ETuple (ELit (LString "knownFnMap")) (EApp (EVar "optOmSize") (EUnOp "!" (EFieldAccess (EVar "e") "knownFnMap")))) (ETuple (ELit (LString "sigMap")) (EApp (EVar "optOmSize") (EUnOp "!" (EFieldAccess (EVar "e") "sigMap"))))))
 (DTypeSig false "programEmitConfig" (TyFun (TyCon "GapMode") (TyFun (TyCon "EmitInput") (TyFun (TyCon "EmitPlan") (TyFun (TyApp (TyCon "List") (TyCon "CBind")) (TyCon "EmitStateConfig"))))))
-(DFunDef false "programEmitConfig" ((PVar "gapMode") (PVar "input") (PVar "plan") (PVar "groups")) (ERecordCreate "EmitStateConfig" ((fa "counter0" (EIf (EBinOp "==" (EFieldAccess (EVar "input") "emitHalf") (EVar "emitHalfProgram")) (EVar "programHalfIdBase") (ELit (LInt 0)))) (fa "globalsReg0" (EIf (EBinOp "==" (EFieldAccess (EVar "input") "emitHalf") (EVar "emitHalfPrelude")) (EApp (EVar "initGlobalsRegReady") (EApp (EVar "valBinds") (EVar "groups"))) (EApp (EVar "initGlobalsReg") (EApp (EVar "valBinds") (EVar "groups"))))) (fa "gapMode" (EVar "gapMode")) (fa "lazyNames" (EFieldAccess (EVar "plan") "lazyGlobals")) (fa "trmc" (EFieldAccess (EVar "plan") "trmc")) (fa "methodResults" (EFieldAccess (EVar "plan") "methodResults")) (fa "constructorFacts" (EFieldAccess (EVar "plan") "constructorFacts")) (fa "externRequirements" (EFieldAccess (EVar "plan") "externRequirements")) (fa "dispGroups" (EApp (EVar "Some") (EFieldAccess (EVar "plan") "dispGroups"))) (fa "implGroups" (EFieldAccess (EVar "plan") "implGroups")))))
+(DFunDef false "programEmitConfig" ((PVar "gapMode") (PVar "input") (PVar "plan") (PVar "groups")) (ERecordCreate "EmitStateConfig" ((fa "counter0" (EIf (EBinOp "==" (EFieldAccess (EVar "input") "emitHalf") (EVar "emitHalfProgram")) (EVar "programHalfIdBase") (ELit (LInt 0)))) (fa "globalsReg0" (EIf (EBinOp "==" (EFieldAccess (EVar "input") "emitHalf") (EVar "emitHalfPrelude")) (EApp (EVar "initGlobalsRegReady") (EApp (EVar "valBinds") (EVar "groups"))) (EApp (EVar "initGlobalsReg") (EApp (EVar "valBinds") (EVar "groups"))))) (fa "gapMode" (EVar "gapMode")) (fa "lazyNames" (EFieldAccess (EVar "plan") "lazyGlobals")) (fa "trmc" (EFieldAccess (EVar "plan") "trmc")) (fa "methodResults" (EFieldAccess (EVar "plan") "methodResults")) (fa "constructorFacts" (EFieldAccess (EVar "plan") "constructorFacts")) (fa "externRequirements" (EFieldAccess (EVar "plan") "externRequirements")) (fa "dispGroups" (EApp (EVar "Some") (EFieldAccess (EVar "plan") "dispGroups"))) (fa "implGroups" (EFieldAccess (EVar "plan") "implGroups")) (fa "methodTables" (EFieldAccess (EVar "plan") "methodTables")))))
 (DTypeSig false "runStrictEmission" (TyFun (TyCon "Emit") (TyFun (TyCon "EmitInput") (TyFun (TyCon "EmitPlan") (TyFun (TyApp (TyCon "List") (TyCon "CBind")) (TyFun (TyApp (TyCon "List") (TyCon "CImplEntry")) (TyApp (TyApp (TyCon "Result") (TyApp (TyCon "List") (TyCon "SymbolDefect"))) (TyCon "String"))))))))
 (DFunDef false "runStrictEmission" ((PVar "e") (PVar "input") (PVar "plan") (PVar "groups") (PVar "implEntries")) (EBlock (DoExpr (EApp (EVar "emitPreamble") (EVar "e"))) (DoExpr (EApp (EVar "emitFfiDeclares") (EVar "e"))) (DoExpr (EApp (EApp (EVar "emitGlobalDecls") (EVar "e")) (EApp (EVar "valBinds") (EVar "groups")))) (DoLet false false PWild (EIf (EBinOp "==" (EFieldAccess (EVar "input") "emitHalf") (EVar "emitHalfPrelude")) (ELit LUnit) (EApp (EApp (EApp (EVar "emitProgramMain") (EVar "e")) (EVar "plan")) (EVar "groups")))) (DoLet false false PWild (EIf (EBinOp "==" (EFieldAccess (EVar "input") "emitHalf") (EVar "emitHalfPrelude")) (ELit LUnit) (EApp (EApp (EVar "emitLazyForces") (EVar "e")) (EApp (EVar "valBinds") (EVar "groups"))))) (DoExpr (EApp (EApp (EVar "emitFns") (EVar "e")) (EApp (EVar "fnBinds") (EVar "groups")))) (DoExpr (EApp (EApp (EVar "emitImpls") (EVar "e")) (EVar "implEntries"))) (DoExpr (EApp (EVar "preludeIdSpaceGuard") (EVar "e"))) (DoLet false false (PVar "siteFiles") (EApp (EVar "siteFileTable") (EVar "e"))) (DoExpr (EMatch (EApp (EApp (EVar "symbolDefectsL") (EVar "e")) (EVar "True")) (arm (PList) () (EApp (EApp (EApp (EApp (EVar "finishCheckedText") (EApp (EVar "RecordedGaps") (EUnOp "!" (EFieldAccess (EVar "e") "excusedCalls")))) (EUnOp "!" (EFieldAccess (EVar "e") "symbols"))) (EUnOp "!" (EFieldAccess (EVar "e") "coverage"))) (EApp (EVar "joinNl") (EBinOp "++" (EBinOp "++" (EBinOp "++" (EApp (EVar "siteTrapDeclares") (EVar "e")) (EApp (EVar "reverseL") (EUnOp "!" (EFieldAccess (EVar "e") "buf")))) (EApp (EVar "reverseL") (EUnOp "!" (EFieldAccess (EVar "e") "lams")))) (EVar "siteFiles"))))) (arm (PVar "defects") () (EApp (EVar "Err") (EVar "defects")))))))
 (DTypeSig true "emitProgramWithStats" (TyFun (TyCon "EmitInput") (TyFun (TyCon "EmitPlan") (TyFun (TyCon "CProgram") (TyApp (TyApp (TyCon "Result") (TyApp (TyCon "List") (TyCon "SymbolDefect"))) (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "Int")))))))))
@@ -20744,13 +20657,13 @@ runtimeName e symbol = optionOr "" (externRuntimeKey e.externFacts symbol)
 (DFunDef false "emitProgram" ((PVar "input") (PVar "plan") (PVar "cp")) (EApp (EApp (EMethodRef "map") (EVar "fst")) (EApp (EApp (EApp (EApp (EVar "emitProgramMode") (EVar "Strict")) (EVar "input")) (EVar "plan")) (EVar "cp"))))
 (DTypeSig true "emitProgramRecord" (TyFun (TyCon "EmitInput") (TyFun (TyCon "EmitPlan") (TyFun (TyCon "CProgram") (TyApp (TyApp (TyCon "Result") (TyApp (TyCon "List") (TyCon "SymbolDefect"))) (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "String"))))))))
 (DFunDef false "emitProgramRecord" ((PVar "input") (PVar "plan") (PVar "cp")) (EApp (EApp (EApp (EApp (EVar "emitProgramMode") (EVar "Record")) (EVar "input")) (EVar "plan")) (EVar "cp")))
-(DData Private "EmitStateConfig" () ((variant "EmitStateConfig" (ConNamed (field "counter0" (TyCon "Int")) (field "globalsReg0" (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyTuple (TyCon "Bool") (TyCon "LTy"))))) (field "gapMode" (TyCon "GapMode")) (field "lazyNames" (TyApp (TyCon "List") (TyCon "String"))) (field "trmc" (TyCon "TrmcVerdicts")) (field "methodResults" (TyApp (TyCon "OrdMap") (TyApp (TyCon "OrdMap") (TyCon "MethodResultFact")))) (field "constructorFacts" (TyCon "ConstructorFacts")) (field "externRequirements" (TyCon "ExternRequirements")) (field "dispGroups" (TyApp (TyCon "Option") (TyApp (TyCon "List") (TyCon "DispGroup")))) (field "implGroups" (TyApp (TyCon "List") (TyCon "ImplClauseGroup")))))) ())
+(DData Private "EmitStateConfig" () ((variant "EmitStateConfig" (ConNamed (field "counter0" (TyCon "Int")) (field "globalsReg0" (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyTuple (TyCon "Bool") (TyCon "LTy"))))) (field "gapMode" (TyCon "GapMode")) (field "lazyNames" (TyApp (TyCon "List") (TyCon "String"))) (field "trmc" (TyCon "TrmcVerdicts")) (field "methodResults" (TyApp (TyCon "OrdMap") (TyApp (TyCon "OrdMap") (TyCon "MethodResultFact")))) (field "constructorFacts" (TyCon "ConstructorFacts")) (field "externRequirements" (TyCon "ExternRequirements")) (field "dispGroups" (TyApp (TyCon "Option") (TyApp (TyCon "List") (TyCon "DispGroup")))) (field "implGroups" (TyApp (TyCon "List") (TyCon "ImplClauseGroup"))) (field "methodTables" (TyCon "MethodTables"))))) ())
 (DTypeSig false "installDispatchState" (TyFun (TyCon "Emit") (TyFun (TyApp (TyCon "Option") (TyApp (TyCon "List") (TyCon "DispGroup"))) (TyFun (TyApp (TyCon "List") (TyCon "CBind")) (TyCon "Unit")))))
 (DFunDef false "installDispatchState" ((PVar "e") (PVar "dispGroups") (PVar "fnBindsList")) (EBlock (DoLet false false PWild (EMatch (EVar "dispGroups") (arm (PCon "Some" (PVar "groups")) () (EApp (EApp (EApp (EVar "installDispatchGroups") (EVar "e")) (EVar "groups")) (EVar "fnBindsList"))) (arm (PCon "None") () (EApp (EApp (EVar "setRef") (EFieldAccess (EVar "e") "gDispGroups")) (EListLit))))) (DoExpr (EApp (EApp (EVar "setRef") (EFieldAccess (EVar "e") "floatFwSet")) (EApp (EApp (EVar "gDispDropMembers") (EVar "e")) (EApp (EApp (EVar "collectFloatFw") (EVar "e")) (EVar "fnBindsList")))))))
 (DTypeSig false "installDispatchGroups" (TyFun (TyCon "Emit") (TyFun (TyApp (TyCon "List") (TyCon "DispGroup")) (TyFun (TyApp (TyCon "List") (TyCon "CBind")) (TyCon "Unit")))))
 (DFunDef false "installDispatchGroups" ((PVar "e") (PVar "groups") (PVar "fnBindsList")) (EBlock (DoExpr (EApp (EApp (EVar "setRef") (EFieldAccess (EVar "e") "gDispBinds")) (EVar "fnBindsList"))) (DoExpr (EApp (EApp (EVar "setRef") (EFieldAccess (EVar "e") "gDispBindMap")) (EApp (EVar "bindNameMap") (EVar "fnBindsList")))) (DoExpr (EApp (EApp (EVar "setRef") (EFieldAccess (EVar "e") "gDispGroups")) (EVar "groups")))))
 (DTypeSig false "buildEmitState" (TyFun (TyCon "EmitStateConfig") (TyFun (TyCon "EmitInput") (TyFun (TyApp (TyCon "List") (TyCon "CBind")) (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "Int"))) (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "String"))) (TyFun (TyApp (TyCon "List") (TyCon "CImplEntry")) (TyFun (TyCon "DeclFacts") (TyCon "Emit")))))))))
-(DFunDef false "buildEmitState" ((PVar "cfg") (PVar "input") (PVar "groups") (PVar "ctorArs") (PVar "ctorTypes") (PVar "implEntries") (PVar "facts")) (EBlock (DoLet false false (PVar "rows") (EApp (EVar "binderRowsOf") (EFieldAccess (EVar "facts") "factBinders"))) (DoLet false false (PVar "e") (ERecordCreate "Emit" ((fa "input" (EVar "input")) (fa "implNames" (EApp (EVar "Ref") (EVar "omEmpty"))) (fa "defaultNames" (EApp (EVar "Ref") (EVar "omEmpty"))) (fa "counter0" (EFieldAccess (EVar "cfg") "counter0")) (fa "trmc" (EFieldAccess (EVar "cfg") "trmc")) (fa "methodResults" (EFieldAccess (EVar "cfg") "methodResults")) (fa "constructorFacts" (EFieldAccess (EVar "cfg") "constructorFacts")) (fa "curModule" (EApp (EVar "Ref") (EVar "scopeProgram"))) (fa "counters" (EApp (EVar "Ref") (EVar "omEmpty"))) (fa "buf" (EApp (EVar "Ref") (EListLit))) (fa "fnNames" (EApp (EVar "Ref") (EApp (EVar "collectFns") (EVar "groups")))) (fa "binderRows" (EVar "rows")) (fa "symbolOrigins" (EFieldAccess (EVar "facts") "factSymbolOrigins")) (fa "externFacts" (EApp (EVar "requirementFacts") (EFieldAccess (EVar "cfg") "externRequirements"))) (fa "nativePrototypes" (EFieldAccess (EFieldAccess (EVar "cfg") "externRequirements") "nativePrototypes")) (fa "superCounts" (EApp (EApp (EVar "omFromPairs") (EFieldAccess (EVar "facts") "factSupers")) (EVar "omEmpty"))) (fa "globalTys" (EApp (EApp (EVar "globalStampTys") (EVar "rows")) (EApp (EApp (EMethodRef "filter") (ELam ((PVar "b")) (EApp (EVar "not") (EApp (EVar "isFnBind") (EVar "b"))))) (EVar "groups")))) (fa "lams" (EApp (EVar "Ref") (EListLit))) (fa "implEntries" (EApp (EVar "Ref") (EVar "implEntries"))) (fa "implGroups" (EApp (EVar "Ref") (EListLit))) (fa "arities" (EApp (EVar "programArities") (EApp (EApp (EApp (EApp (EApp (EApp (EVar "CProgram") (EVar "groups")) (EVar "ctorArs")) (EVar "ctorTypes")) (EVar "implEntries")) (EListLit)) (EVar "noDeclFacts")))) (fa "globalsReg" (EApp (EVar "Ref") (EFieldAccess (EVar "cfg") "globalsReg0"))) (fa "gapMode" (EFieldAccess (EVar "cfg") "gapMode")) (fa "gapLog" (EApp (EVar "Ref") (EListLit))) (fa "curGapBind" (EApp (EVar "Ref") (ELit (LString "?")))) (fa "defineCounter" (EApp (EVar "Ref") (ELit (LInt 0)))) (fa "closureRetTy" (EApp (EVar "Ref") (EListLit))) (fa "directFn" (EApp (EVar "Ref") (EListLit))) (fa "trmcCtx" (EApp (EVar "Ref") (EVar "TrmcOff"))) (fa "gDispCtx" (EApp (EVar "Ref") (EVar "GDispOff"))) (fa "selfTailCtx" (EApp (EVar "Ref") (EVar "None"))) (fa "gDispGroups" (EApp (EVar "Ref") (EListLit))) (fa "gDispBinds" (EApp (EVar "Ref") (EListLit))) (fa "gDispBindMap" (EApp (EVar "Ref") (EVar "omEmpty"))) (fa "curImplTag" (EApp (EVar "Ref") (ELit (LString "")))) (fa "curSelfFnParams" (EApp (EVar "Ref") (EListLit))) (fa "knownFnMap" (EApp (EVar "Ref") (EVar "None"))) (fa "lazyGlobalMap" (EApp (EVar "Ref") (EVar "None"))) (fa "sigMap" (EApp (EVar "Ref") (EVar "None"))) (fa "implsByMethod" (EApp (EVar "Ref") (EVar "None"))) (fa "implMethodSet" (EApp (EVar "Ref") (EVar "None"))) (fa "typeIdMap" (EApp (EVar "Ref") (EVar "None"))) (fa "dispCache" (EApp (EVar "Ref") (EListLit))) (fa "dictConstCache" (EApp (EVar "Ref") (EListLit))) (fa "strLitCache" (EApp (EVar "Ref") (EVar "omEmpty"))) (fa "closConstCache" (EApp (EVar "Ref") (EListLit))) (fa "floatFwSet" (EApp (EVar "Ref") (EListLit))) (fa "floatClosureFns" (EApp (EVar "Ref") (EListLit))) (fa "rawWorkers" (EApp (EVar "Ref") (EVar "omEmpty"))) (fa "constGlobals" (EApp (EVar "Ref") (EVar "omEmpty"))) (fa "inlineOpen" (EApp (EVar "Ref") (ELit (LInt 0)))) (fa "inlineSpent" (EApp (EVar "Ref") (ELit (LInt 0)))) (fa "siteFileNums" (EApp (EVar "Ref") (EVar "omEmpty"))) (fa "siteFiles" (EApp (EVar "Ref") (EListLit))) (fa "siteTraps" (EApp (EVar "Ref") (EListLit))) (fa "symbols" (EApp (EVar "Ref") (EApp (EVar "emptyRegistry") (EIf (EBinOp "==" (EFieldAccess (EVar "input") "emitHalf") (EVar "emitHalfWhole")) (EVar "WholeModule") (EVar "ModuleHalf"))))) (fa "coverage" (EApp (EVar "Ref") (EVar "emptyCoverage"))) (fa "excusedCalls" (EApp (EVar "Ref") (EListLit))) (fa "symbolDefects" (EApp (EVar "Ref") (EListLit))) (fa "symOrigin" (EApp (EVar "Ref") (EVar "moduleOrigin"))) (fa "hiddenDefines" (EApp (EVar "Ref") (EVar "None"))) (fa "orScope" (EApp (EVar "Ref") (EVar "None")))))) (DoExpr (EApp (EApp (EVar "setRef") (EFieldAccess (EVar "e") "dictConstCache")) (EListLit))) (DoExpr (EApp (EApp (EVar "setRef") (EFieldAccess (EVar "e") "closConstCache")) (EListLit))) (DoExpr (EApp (EApp (EVar "setRef") (EFieldAccess (EVar "e") "dispCache")) (EListLit))) (DoExpr (EApp (EApp (EVar "installKnownFnMap") (EVar "e")) (EApp (EVar "collectFns") (EVar "groups")))) (DoExpr (EApp (EApp (EVar "installLazyGlobalMap") (EVar "e")) (EFieldAccess (EVar "cfg") "lazyNames"))) (DoExpr (EApp (EVar "installTypeIds") (EVar "e"))) (DoExpr (EApp (EApp (EVar "installSigMap") (EVar "e")) (EApp (EApp (EVar "programSigs") (EVar "e")) (EApp (EVar "fnBinds") (EVar "groups"))))) (DoExpr (EApp (EApp (EVar "installImplIndex") (EVar "e")) (EVar "implEntries"))) (DoExpr (EApp (EApp (EVar "installImplMethodSet") (EVar "e")) (EVar "implEntries"))) (DoLet false false (PVar "ordinalEntries") (EApp (EApp (EApp (EVar "indexImplGroupEntries") (EVar "implEntries")) (ELit (LInt 0))) (EVar "omEmpty"))) (DoExpr (EApp (EApp (EVar "setRef") (EFieldAccess (EVar "e") "implGroups")) (EApp (EApp (EMethodRef "map") (EApp (EApp (EVar "resolveImplGroup") (EVar "e")) (EVar "ordinalEntries"))) (EFieldAccess (EVar "cfg") "implGroups")))) (DoExpr (EApp (EApp (EApp (EVar "installDispatchState") (EVar "e")) (EFieldAccess (EVar "cfg") "dispGroups")) (EApp (EVar "fnBinds") (EVar "groups")))) (DoExpr (EApp (EApp (EVar "setRef") (EFieldAccess (EVar "e") "floatClosureFns")) (EApp (EApp (EVar "collectFloatClosureFns") (EVar "e")) (EApp (EVar "fnBinds") (EVar "groups"))))) (DoExpr (EApp (EApp (EVar "setRef") (EFieldAccess (EVar "e") "rawWorkers")) (EApp (EApp (EVar "collectRawWorkers") (EVar "e")) (EApp (EVar "fnBinds") (EVar "groups"))))) (DoExpr (EApp (EApp (EVar "setRef") (EFieldAccess (EVar "e") "constGlobals")) (EApp (EVar "collectConstGlobals") (EApp (EVar "valBinds") (EVar "groups"))))) (DoExpr (EVar "e"))))
+(DFunDef false "buildEmitState" ((PVar "cfg") (PVar "input") (PVar "groups") (PVar "ctorArs") (PVar "ctorTypes") (PVar "implEntries") (PVar "facts")) (EBlock (DoLet false false (PVar "rows") (EApp (EVar "binderRowsOf") (EFieldAccess (EVar "facts") "factBinders"))) (DoLet false false (PVar "e") (ERecordCreate "Emit" ((fa "input" (EVar "input")) (fa "implNames" (EApp (EVar "Ref") (EVar "omEmpty"))) (fa "defaultNames" (EApp (EVar "Ref") (EVar "omEmpty"))) (fa "counter0" (EFieldAccess (EVar "cfg") "counter0")) (fa "trmc" (EFieldAccess (EVar "cfg") "trmc")) (fa "methodResults" (EFieldAccess (EVar "cfg") "methodResults")) (fa "constructorFacts" (EFieldAccess (EVar "cfg") "constructorFacts")) (fa "curModule" (EApp (EVar "Ref") (EVar "scopeProgram"))) (fa "counters" (EApp (EVar "Ref") (EVar "omEmpty"))) (fa "buf" (EApp (EVar "Ref") (EListLit))) (fa "fnNames" (EApp (EVar "Ref") (EApp (EVar "collectFns") (EVar "groups")))) (fa "binderRows" (EVar "rows")) (fa "symbolOrigins" (EFieldAccess (EVar "facts") "factSymbolOrigins")) (fa "externFacts" (EApp (EVar "requirementFacts") (EFieldAccess (EVar "cfg") "externRequirements"))) (fa "nativePrototypes" (EFieldAccess (EFieldAccess (EVar "cfg") "externRequirements") "nativePrototypes")) (fa "superCounts" (EApp (EApp (EVar "omFromPairs") (EFieldAccess (EVar "facts") "factSupers")) (EVar "omEmpty"))) (fa "globalTys" (EApp (EApp (EVar "globalStampTys") (EVar "rows")) (EApp (EApp (EMethodRef "filter") (ELam ((PVar "b")) (EApp (EVar "not") (EApp (EVar "isFnBind") (EVar "b"))))) (EVar "groups")))) (fa "lams" (EApp (EVar "Ref") (EListLit))) (fa "implEntries" (EApp (EVar "Ref") (EVar "implEntries"))) (fa "implGroups" (EApp (EVar "Ref") (EListLit))) (fa "arities" (EApp (EVar "programArities") (EApp (EApp (EApp (EApp (EApp (EApp (EVar "CProgram") (EVar "groups")) (EVar "ctorArs")) (EVar "ctorTypes")) (EVar "implEntries")) (EListLit)) (EVar "noDeclFacts")))) (fa "globalsReg" (EApp (EVar "Ref") (EFieldAccess (EVar "cfg") "globalsReg0"))) (fa "gapMode" (EFieldAccess (EVar "cfg") "gapMode")) (fa "gapLog" (EApp (EVar "Ref") (EListLit))) (fa "curGapBind" (EApp (EVar "Ref") (ELit (LString "?")))) (fa "defineCounter" (EApp (EVar "Ref") (ELit (LInt 0)))) (fa "closureRetTy" (EApp (EVar "Ref") (EListLit))) (fa "directFn" (EApp (EVar "Ref") (EListLit))) (fa "trmcCtx" (EApp (EVar "Ref") (EVar "TrmcOff"))) (fa "gDispCtx" (EApp (EVar "Ref") (EVar "GDispOff"))) (fa "selfTailCtx" (EApp (EVar "Ref") (EVar "None"))) (fa "gDispGroups" (EApp (EVar "Ref") (EListLit))) (fa "gDispBinds" (EApp (EVar "Ref") (EListLit))) (fa "gDispBindMap" (EApp (EVar "Ref") (EVar "omEmpty"))) (fa "curImplTag" (EApp (EVar "Ref") (ELit (LString "")))) (fa "curSelfFnParams" (EApp (EVar "Ref") (EListLit))) (fa "knownFnMap" (EApp (EVar "Ref") (EVar "None"))) (fa "lazyGlobalMap" (EApp (EVar "Ref") (EVar "None"))) (fa "sigMap" (EApp (EVar "Ref") (EVar "None"))) (fa "implsByMethod" (EApp (EVar "Ref") (EVar "None"))) (fa "implMethodSet" (EApp (EVar "Ref") (EVar "None"))) (fa "typeIdMap" (EApp (EVar "Ref") (EVar "None"))) (fa "methodTables" (EFieldAccess (EVar "cfg") "methodTables")) (fa "implGroupAt" (EApp (EVar "Ref") (EVar "omEmpty"))) (fa "slotCache" (EApp (EVar "Ref") (EVar "omEmpty"))) (fa "defaultReceiver" (EApp (EVar "Ref") (EVar "None"))) (fa "superCountGlobals" (EApp (EVar "Ref") (EVar "omEmpty"))) (fa "dictConstCache" (EApp (EVar "Ref") (EListLit))) (fa "strLitCache" (EApp (EVar "Ref") (EVar "omEmpty"))) (fa "closConstCache" (EApp (EVar "Ref") (EListLit))) (fa "floatFwSet" (EApp (EVar "Ref") (EListLit))) (fa "floatClosureFns" (EApp (EVar "Ref") (EListLit))) (fa "rawWorkers" (EApp (EVar "Ref") (EVar "omEmpty"))) (fa "constGlobals" (EApp (EVar "Ref") (EVar "omEmpty"))) (fa "inlineOpen" (EApp (EVar "Ref") (ELit (LInt 0)))) (fa "inlineSpent" (EApp (EVar "Ref") (ELit (LInt 0)))) (fa "siteFileNums" (EApp (EVar "Ref") (EVar "omEmpty"))) (fa "siteFiles" (EApp (EVar "Ref") (EListLit))) (fa "siteTraps" (EApp (EVar "Ref") (EListLit))) (fa "symbols" (EApp (EVar "Ref") (EApp (EVar "emptyRegistry") (EIf (EBinOp "==" (EFieldAccess (EVar "input") "emitHalf") (EVar "emitHalfWhole")) (EVar "WholeModule") (EVar "ModuleHalf"))))) (fa "coverage" (EApp (EVar "Ref") (EVar "emptyCoverage"))) (fa "excusedCalls" (EApp (EVar "Ref") (EListLit))) (fa "symbolDefects" (EApp (EVar "Ref") (EListLit))) (fa "symOrigin" (EApp (EVar "Ref") (EVar "moduleOrigin"))) (fa "hiddenDefines" (EApp (EVar "Ref") (EVar "None"))) (fa "orScope" (EApp (EVar "Ref") (EVar "None")))))) (DoExpr (EApp (EApp (EVar "setRef") (EFieldAccess (EVar "e") "dictConstCache")) (EListLit))) (DoExpr (EApp (EApp (EVar "setRef") (EFieldAccess (EVar "e") "closConstCache")) (EListLit))) (DoExpr (EApp (EApp (EVar "installKnownFnMap") (EVar "e")) (EApp (EVar "collectFns") (EVar "groups")))) (DoExpr (EApp (EApp (EVar "installLazyGlobalMap") (EVar "e")) (EFieldAccess (EVar "cfg") "lazyNames"))) (DoExpr (EApp (EVar "installTypeIds") (EVar "e"))) (DoExpr (EApp (EApp (EVar "installSigMap") (EVar "e")) (EApp (EApp (EVar "programSigs") (EVar "e")) (EApp (EVar "fnBinds") (EVar "groups"))))) (DoExpr (EApp (EApp (EVar "installImplIndex") (EVar "e")) (EVar "implEntries"))) (DoExpr (EApp (EApp (EVar "installImplMethodSet") (EVar "e")) (EVar "implEntries"))) (DoLet false false (PVar "ordinalEntries") (EApp (EApp (EApp (EVar "indexImplGroupEntries") (EVar "implEntries")) (ELit (LInt 0))) (EVar "omEmpty"))) (DoExpr (EApp (EApp (EVar "setRef") (EFieldAccess (EVar "e") "implGroups")) (EApp (EApp (EMethodRef "map") (EApp (EApp (EVar "resolveImplGroup") (EVar "e")) (EVar "ordinalEntries"))) (EFieldAccess (EVar "cfg") "implGroups")))) (DoExpr (EApp (EApp (EVar "setRef") (EFieldAccess (EVar "e") "implGroupAt")) (EApp (EApp (EVar "omFromPairs") (EApp (EApp (EVar "numberGroups") (ELit (LInt 0))) (EUnOp "!" (EFieldAccess (EVar "e") "implGroups")))) (EVar "omEmpty")))) (DoExpr (EApp (EApp (EApp (EVar "installDispatchState") (EVar "e")) (EFieldAccess (EVar "cfg") "dispGroups")) (EApp (EVar "fnBinds") (EVar "groups")))) (DoExpr (EApp (EApp (EVar "setRef") (EFieldAccess (EVar "e") "floatClosureFns")) (EApp (EApp (EVar "collectFloatClosureFns") (EVar "e")) (EApp (EVar "fnBinds") (EVar "groups"))))) (DoExpr (EApp (EApp (EVar "setRef") (EFieldAccess (EVar "e") "rawWorkers")) (EApp (EApp (EVar "collectRawWorkers") (EVar "e")) (EApp (EVar "fnBinds") (EVar "groups"))))) (DoExpr (EApp (EApp (EVar "setRef") (EFieldAccess (EVar "e") "constGlobals")) (EApp (EVar "collectConstGlobals") (EApp (EVar "valBinds") (EVar "groups"))))) (DoExpr (EVar "e"))))
 (DTypeSig false "emitProgramMode" (TyFun (TyCon "GapMode") (TyFun (TyCon "EmitInput") (TyFun (TyCon "EmitPlan") (TyFun (TyCon "CProgram") (TyApp (TyApp (TyCon "Result") (TyApp (TyCon "List") (TyCon "SymbolDefect"))) (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "String")))))))))
 (DFunDef false "emitProgramMode" ((PVar "gapMode") (PVar "input") (PVar "plan") (PAs "cp" (PCon "CProgram" (PVar "groups") (PVar "ctorArs") (PVar "ctorTypes") (PVar "implEntries") PWild (PVar "facts")))) (EBlock (DoLet false false (PVar "found") (EApp (EApp (EApp (EApp (EVar "unprovidedExterns") (EVar "gapMode")) (EVar "input")) (EVar "plan")) (EVar "cp"))) (DoLet false false (PVar "cfg") (EApp (EApp (EApp (EApp (EVar "programEmitConfig") (EVar "gapMode")) (EVar "input")) (EVar "plan")) (EVar "groups"))) (DoLet false false (PVar "e") (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EVar "buildEmitState") (EVar "cfg")) (EVar "input")) (EVar "groups")) (EVar "ctorArs")) (EVar "ctorTypes")) (EVar "implEntries")) (EVar "facts"))) (DoExpr (EApp (EApp (EVar "noteUnprovidedExterns") (EVar "e")) (EVar "found"))) (DoExpr (EApp (EApp (EMethodRef "map") (ELam ((PVar "text")) (ETuple (EVar "text") (EApp (EVar "reverseL") (EUnOp "!" (EFieldAccess (EVar "e") "gapLog")))))) (EApp (EApp (EApp (EApp (EApp (EVar "runStrictEmission") (EVar "e")) (EVar "input")) (EVar "plan")) (EVar "groups")) (EVar "implEntries"))))))
 (DTypeSig false "unprovidedExterns" (TyFun (TyCon "GapMode") (TyFun (TyCon "EmitInput") (TyFun (TyCon "EmitPlan") (TyFun (TyCon "CProgram") (TyApp (TyCon "List") (TyCon "ExternFinding")))))))
@@ -20835,7 +20748,7 @@ runtimeName e symbol = optionOr "" (externRuntimeKey e.externFacts symbol)
 (DFunDef false "ctag" ((PCon "CVariantUpdate" PWild PWild PWild)) (ELit (LString "CVariantUpdate (named-field variant update)")))
 (DFunDef false "ctag" (PWild) (ELit (LString "?")))
 (DTypeSig true "emitProgramGaps" (TyFun (TyCon "EmitInput") (TyFun (TyCon "EmitPlan") (TyFun (TyCon "CProgram") (TyApp (TyApp (TyCon "Result") (TyApp (TyCon "List") (TyCon "SymbolDefect"))) (TyApp (TyCon "List") (TyCon "String")))))))
-(DFunDef false "emitProgramGaps" ((PVar "input") (PVar "plan") (PAs "cp" (PCon "CProgram" (PVar "groups") (PVar "ctorArs") (PVar "ctorTypes") (PVar "implEntries") PWild (PVar "facts")))) (EBlock (DoLet false false (PVar "cfg") (ERecordCreate "EmitStateConfig" ((fa "counter0" (ELit (LInt 0))) (fa "globalsReg0" (EApp (EVar "initGlobalsRegReady") (EApp (EVar "valBinds") (EVar "groups")))) (fa "gapMode" (EVar "Record")) (fa "lazyNames" (EListLit)) (fa "trmc" (EFieldAccess (EVar "plan") "trmc")) (fa "methodResults" (EFieldAccess (EVar "plan") "methodResults")) (fa "constructorFacts" (EFieldAccess (EVar "plan") "constructorFacts")) (fa "externRequirements" (EFieldAccess (EVar "plan") "externRequirements")) (fa "dispGroups" (EVar "None")) (fa "implGroups" (EFieldAccess (EVar "plan") "implGroups"))))) (DoLet false false (PVar "found") (EApp (EApp (EApp (EApp (EVar "unprovidedExterns") (EVar "Record")) (EVar "input")) (EVar "plan")) (EVar "cp"))) (DoLet false false (PVar "e") (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EVar "buildEmitState") (EVar "cfg")) (EVar "input")) (EVar "groups")) (EVar "ctorArs")) (EVar "ctorTypes")) (EVar "implEntries")) (EVar "facts"))) (DoExpr (EApp (EApp (EVar "noteUnprovidedExterns") (EVar "e")) (EVar "found"))) (DoExpr (EApp (EVar "emitPreamble") (EVar "e"))) (DoExpr (EApp (EVar "emitFfiDeclares") (EVar "e"))) (DoExpr (EApp (EApp (EVar "emitGlobalDecls") (EVar "e")) (EApp (EVar "valBinds") (EVar "groups")))) (DoExpr (EApp (EApp (EVar "emitFnsGaps") (EVar "e")) (EApp (EVar "fnBinds") (EVar "groups")))) (DoExpr (EApp (EApp (EVar "emitImplsGaps") (EVar "e")) (EVar "implEntries"))) (DoExpr (EApp (EApp (EApp (EVar "emitTopBindsGaps") (EVar "e")) (EVar "omEmpty")) (EApp (EVar "valBinds") (EVar "groups")))) (DoExpr (EMatch (EApp (EApp (EVar "symbolDefectsL") (EVar "e")) (EVar "False")) (arm (PList) () (EApp (EApp (EMethodRef "map") (ELam (PWild) (EApp (EVar "reverseL") (EUnOp "!" (EFieldAccess (EVar "e") "gapLog"))))) (EApp (EApp (EApp (EApp (EVar "finishCheckedText") (EApp (EVar "RecordedGaps") (EUnOp "!" (EFieldAccess (EVar "e") "excusedCalls")))) (EUnOp "!" (EFieldAccess (EVar "e") "symbols"))) (EUnOp "!" (EFieldAccess (EVar "e") "coverage"))) (EApp (EVar "joinNl") (EBinOp "++" (EBinOp "++" (EBinOp "++" (EApp (EVar "siteTrapDeclares") (EVar "e")) (EApp (EVar "reverseL") (EUnOp "!" (EFieldAccess (EVar "e") "buf")))) (EApp (EVar "reverseL") (EUnOp "!" (EFieldAccess (EVar "e") "lams")))) (EApp (EVar "siteFileTable") (EVar "e"))))))) (arm (PVar "defects") () (EApp (EVar "Err") (EVar "defects")))))))
+(DFunDef false "emitProgramGaps" ((PVar "input") (PVar "plan") (PAs "cp" (PCon "CProgram" (PVar "groups") (PVar "ctorArs") (PVar "ctorTypes") (PVar "implEntries") PWild (PVar "facts")))) (EBlock (DoLet false false (PVar "cfg") (ERecordCreate "EmitStateConfig" ((fa "counter0" (ELit (LInt 0))) (fa "globalsReg0" (EApp (EVar "initGlobalsRegReady") (EApp (EVar "valBinds") (EVar "groups")))) (fa "gapMode" (EVar "Record")) (fa "lazyNames" (EListLit)) (fa "trmc" (EFieldAccess (EVar "plan") "trmc")) (fa "methodResults" (EFieldAccess (EVar "plan") "methodResults")) (fa "constructorFacts" (EFieldAccess (EVar "plan") "constructorFacts")) (fa "externRequirements" (EFieldAccess (EVar "plan") "externRequirements")) (fa "dispGroups" (EVar "None")) (fa "implGroups" (EFieldAccess (EVar "plan") "implGroups")) (fa "methodTables" (EFieldAccess (EVar "plan") "methodTables"))))) (DoLet false false (PVar "found") (EApp (EApp (EApp (EApp (EVar "unprovidedExterns") (EVar "Record")) (EVar "input")) (EVar "plan")) (EVar "cp"))) (DoLet false false (PVar "e") (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EVar "buildEmitState") (EVar "cfg")) (EVar "input")) (EVar "groups")) (EVar "ctorArs")) (EVar "ctorTypes")) (EVar "implEntries")) (EVar "facts"))) (DoExpr (EApp (EApp (EVar "noteUnprovidedExterns") (EVar "e")) (EVar "found"))) (DoExpr (EApp (EVar "emitPreamble") (EVar "e"))) (DoExpr (EApp (EVar "emitFfiDeclares") (EVar "e"))) (DoExpr (EApp (EApp (EVar "emitGlobalDecls") (EVar "e")) (EApp (EVar "valBinds") (EVar "groups")))) (DoExpr (EApp (EApp (EVar "emitFnsGaps") (EVar "e")) (EApp (EVar "fnBinds") (EVar "groups")))) (DoExpr (EApp (EApp (EVar "emitImplsGaps") (EVar "e")) (EVar "implEntries"))) (DoExpr (EApp (EApp (EApp (EVar "emitTopBindsGaps") (EVar "e")) (EVar "omEmpty")) (EApp (EVar "valBinds") (EVar "groups")))) (DoExpr (EMatch (EApp (EApp (EVar "symbolDefectsL") (EVar "e")) (EVar "False")) (arm (PList) () (EApp (EApp (EMethodRef "map") (ELam (PWild) (EApp (EVar "reverseL") (EUnOp "!" (EFieldAccess (EVar "e") "gapLog"))))) (EApp (EApp (EApp (EApp (EVar "finishCheckedText") (EApp (EVar "RecordedGaps") (EUnOp "!" (EFieldAccess (EVar "e") "excusedCalls")))) (EUnOp "!" (EFieldAccess (EVar "e") "symbols"))) (EUnOp "!" (EFieldAccess (EVar "e") "coverage"))) (EApp (EVar "joinNl") (EBinOp "++" (EBinOp "++" (EBinOp "++" (EApp (EVar "siteTrapDeclares") (EVar "e")) (EApp (EVar "reverseL") (EUnOp "!" (EFieldAccess (EVar "e") "buf")))) (EApp (EVar "reverseL") (EUnOp "!" (EFieldAccess (EVar "e") "lams")))) (EApp (EVar "siteFileTable") (EVar "e"))))))) (arm (PVar "defects") () (EApp (EVar "Err") (EVar "defects")))))))
 (DTypeSig false "emitFnsGaps" (TyFun (TyCon "Emit") (TyFun (TyApp (TyCon "List") (TyCon "CBind")) (TyCon "Unit"))))
 (DFunDef false "emitFnsGaps" (PWild (PList)) (ELit LUnit))
 (DFunDef false "emitFnsGaps" ((PVar "e") (PCons (PCon "CBind" (PVar "name") (PVar "cs") (PVar "site") (PVar "bid")) (PVar "rest"))) (EBlock (DoExpr (EApp (EApp (EVar "setGapBind") (EVar "e")) (EBinOp "++" (ELit (LString "fn ")) (EVar "name")))) (DoExpr (EApp (EApp (EApp (EVar "setSymOrigin") (EVar "e")) (EVar "name")) (EVar "site"))) (DoExpr (EApp (EApp (EVar "emitFn") (EVar "e")) (EApp (EApp (EApp (EApp (EVar "CBind") (EVar "name")) (EVar "cs")) (EVar "site")) (EVar "bid")))) (DoExpr (EApp (EApp (EVar "emitFnsGaps") (EVar "e")) (EVar "rest")))))
