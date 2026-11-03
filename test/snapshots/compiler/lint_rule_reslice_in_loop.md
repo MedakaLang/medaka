@@ -1,5 +1,5 @@
 # META
-source_lines=302
+source_lines=308
 stages=DESUGAR,MARK
 # SOURCE
 -- lint rule rule-reslice-in-loop: a loop parameter re-sliced from its start on every step (`stringSlice`, `charAtStr`, `slice`, `drop`). Walk a `StrCursor`, or convert with `toChars` once.
@@ -16,7 +16,7 @@ import frontend.ast_walk.{
   declBodies,
 }
 import frontend.parser.{Positions(..)}
-import list.{findMap, get}
+import list.{findMap, get, nubBy}
 import string.{contains}
 import tools.lint_calls.{lastSegment}
 import tools.lint_core.{
@@ -41,6 +41,7 @@ import tools.lint_recursion.{
   SelfCall(..),
   letOwners,
   selfCalls,
+  spineOf,
 }
 import tools.lint_shared.{
   firstLoc, mentionsVar, ruleNameResliceInLoop, unwrapLoc
@@ -53,9 +54,9 @@ rule =
     RuleMeta {
       name = ruleNameResliceInLoop,
       summary =
-        "a loop parameter re-sliced from its start on every step: quadratic. Walk a `StrCursor`, or convert with `toChars` once",
+        "a loop parameter re-sliced from its start on every step: quadratic on some engines and access patterns. Walk a `StrCursor`, or convert with `toChars` once",
       doc =
-        "A self-recursive loop that passes a `String`, `Array` or `Bytes` parameter on unchanged while another argument advances, and slices that parameter by the advancing index, starts from the front of the parameter on every step. The rule reports the String externs `stringSlice` and `charAtStr` on such a parameter, and `slice`, `sliceClamped`, `drop` and `a.[lo..hi]` on a parameter whose declared type, in the enclosing top-level signature, is `String`, `Array` or `Bytes`. A `List` parameter is skipped (`drop` on a list is the loop itself), and so is a slice whose bounds mention no advancing name. A partial application and a call to a different function (mutual recursion) are not self-calls. `stringSliceBytes` is not reported: it copies only the piece and does not walk the string.\n\nFor a `String`, `stringSlice` copies the tail it is asked for and, on a string with non-ASCII text, walks from the front to find the offset, so the loop is quadratic in the length of the input. Walk a `StrCursor` (`startCursor`, `nextChar`, `sliceBetween`), or convert once with `toChars` and index the `Array`. A loop whose bound is small and fixed can carry a `-- lint-disable-next-line rule-reslice-in-loop` with the bound as its reason.\n\nBefore:\n  go s i = if i < stringLength s then charAtStr s i :: go s (i + 1) else []\nAfter:\n  go cs i = if i < length cs then cs.[i] :: go cs (i + 1) else []  -- with `cs = toChars s`",
+        "A self-recursive loop that passes a `String`, `Array` or `Bytes` parameter on unchanged while another argument advances, and slices that parameter by the advancing index, starts from the front of the parameter on every step. The rule reports the String externs `stringSlice` and `charAtStr` on such a parameter, and `slice`, `sliceClamped`, `drop` and `a.[lo..hi]` on a parameter whose declared type, in the enclosing top-level signature, is `String`, `Array` or `Bytes`. A `List` parameter is skipped (`drop` on a list is the loop itself), and so is a slice whose bounds mention no advancing name. A partial application and a call to a different function (mutual recursion) are not self-calls. `stringSliceBytes` is not reported: it copies only the piece and does not walk the string.\n\nFor a `String`, `stringSlice` and `charAtStr` locate their offset from the front of the string. On the native runtime a forward scan of one string is linear, because the runtime keeps a cursor cache for one string; the loop is quadratic when it alternates between two strings, goes backward or slices the tail, and on the WasmGC engine, which has no cache, even a forward scan is quadratic. Walk a `StrCursor` (`startCursor`, `nextChar`, `sliceBetween`), or convert once with `toChars` and index the `Array`. A loop whose bound is small and fixed can carry a `-- lint-disable-next-line rule-reslice-in-loop` with the bound as its reason.\n\nBefore:\n  go s i = if i < stringLength s then stringSlice i (i + 1) s :: go s (i + 1) else []\nAfter:\n  go cs i = if i < length cs then cs.[i] :: go cs (i + 1) else []  -- with `cs = toChars s`",
       category = Perf,
       scope = Universal,
       ratchet = Gated,
@@ -156,19 +157,14 @@ usesIn loc (ELetGroup _ body) = usesIn loc body
 usesIn loc e = useHere loc e ++ flatMap (usesIn loc) (childExprs e)
 
 useHere : Option Loc -> Expr -> List Use
-useHere loc (EApp f a) = match spine f [a]
+useHere loc (EApp f a) = match spineOf f [a]
   (hd, args) => callUse loc hd args
-useHere loc (EBinOp "|>" l r _) = match spine r []
+useHere loc (EBinOp "|>" l r _) = match spineOf r []
   (hd, args) => callUse loc hd (args ++ [l])
 useHere loc (ESlice c lo hi _) = match unwrapLoc c
   EVar v => [Use (orElseLoc (firstLoc c) loc) Polymorphic "a.[..]" v [lo, hi]]
   _ => []
 useHere _ _ = []
-
-spine : Expr -> List Expr -> (Expr, List Expr)
-spine e args = match unwrapLoc e
-  EApp f a => spine f (a :: args)
-  _ => (e, args)
 
 callUse : Option Loc -> Expr -> List Expr -> List Use
 callUse loc hd args = match unwrapLoc hd
@@ -180,7 +176,7 @@ calleeUse loc "stringSlice" [lo, hi, s] =
   containerUse loc Extern "stringSlice" s [lo, hi]
 calleeUse loc "charAtStr" [s, i] = containerUse loc Extern "charAtStr" s [i]
 calleeUse loc "drop" [n, c] = containerUse loc Polymorphic "drop" c [n]
-calleeUse loc "slice" [lo, hi, c] =
+calleeUse loc "slice" [c, lo, hi] =
   containerUse loc Polymorphic "slice" c [lo, hi]
 calleeUse loc "sliceClamped" [lo, hi, c] =
   containerUse loc Polymorphic "sliceClamped" c [lo, hi]
@@ -274,13 +270,10 @@ formApplies types Polymorphic i = match types i
 
 -- One finding per span.
 dedupe : List Finding -> List Finding
-dedupe fs = dedupeGo [] fs
+dedupe = nubBy sameSpan
 
-dedupeGo : List (Option Loc) -> List Finding -> List Finding
-dedupeGo _ [] = []
-dedupeGo seen ((f@(Finding { loc = l, ... })) :: rest)
-  | any (== l) seen = dedupeGo seen rest
-  | otherwise = f :: dedupeGo (l :: seen) rest
+sameSpan : Finding -> Finding -> Bool
+sameSpan (Finding { loc = a, ... }) (Finding { loc = b, ... }) = a == b
 
 -- ── findings ─────────────────────────────────────────────────────────────────
 
@@ -295,28 +288,41 @@ report loc msg = Finding {
 
 message : Form -> String -> String -> Option String -> String
 message form callee v ty =
-  "`\{callee}` on `\{v}`, which the loop passes on unchanged while another argument advances, starts from the front of `\{v}` on every step, so the loop is quadratic. \{fixTarget form ty}"
+  "`\{callee}` on `\{v}`, which the loop passes on unchanged while another argument advances, starts from the front of `\{v}` on every step. \{costNote form ty} \{fixTarget form ty}"
+
+-- A String is located by walking from its front, so its cost depends on the
+-- engine; an Array or Bytes slice copies the piece on every engine.
+costNote : Form -> Option String -> String
+costNote Extern _ = stringCost
+costNote Polymorphic (Some "String") = stringCost
+costNote Polymorphic _ = "The loop is quadratic."
+
+stringCost : String
+stringCost =
+  "The loop is quadratic on the WasmGC engine and, on the native runtime, when it alternates between strings, goes backward or slices the tail."
 
 fixTarget : Form -> Option String -> String
-fixTarget Extern _ =
-  "Walk a `StrCursor` (`startCursor`, `nextChar`, `sliceBetween`), or convert with `toChars` once and index the `Array`"
-fixTarget Polymorphic (Some "String") =
-  "Walk a `StrCursor` (`startCursor`, `nextChar`, `sliceBetween`), or convert with `toChars` once and index the `Array`"
+fixTarget Extern _ = stringFix
+fixTarget Polymorphic (Some "String") = stringFix
 fixTarget Polymorphic _ =
   "Keep the offset and index the value (`a.[i]`) instead of slicing it again"
+
+stringFix : String
+stringFix =
+  "Walk a `StrCursor` (`startCursor`, `nextChar`, `sliceBetween`), or convert with `toChars` once and index the `Array`"
 # DESUGAR
 (DUse false (UseGroup ("driver" "diagnostics") ((mem "Severity" true))))
 (DUse false (UseGroup ("frontend" "ast") ((mem "Decl" true) (mem "Expr" true) (mem "Loc" false) (mem "Pat" true) (mem "Ty" true) (mem "orElseLoc" false) (mem "patBoundNames" false))))
 (DUse false (UseGroup ("frontend" "ast_walk") ((mem "BodyOwner" true) (mem "DeclBody" true) (mem "ExprKind" true) (mem "childExprs" false) (mem "declBodies" false))))
 (DUse false (UseGroup ("frontend" "parser") ((mem "Positions" true))))
-(DUse false (UseGroup ("list") ((mem "findMap" false) (mem "get" false))))
+(DUse false (UseGroup ("list") ((mem "findMap" false) (mem "get" false) (mem "nubBy" false))))
 (DUse false (UseGroup ("string") ((mem "contains" false))))
 (DUse false (UseGroup ("tools" "lint_calls") ((mem "lastSegment" false))))
 (DUse false (UseGroup ("tools" "lint_core") ((mem "Category" true) (mem "Ctx" true) (mem "FileFacts" false) (mem "Finding" true) (mem "Fixability" true) (mem "Need" true) (mem "Ratchet" true) (mem "Rule" false) (mem "RuleMeta" true) (mem "Scope" true) (mem "StdlibIndex" false) (mem "Visitor" true) (mem "factScopes" false) (mem "mkVisitorRule" false))))
-(DUse false (UseGroup ("tools" "lint_recursion") ((mem "ArgRole" true) (mem "Owner" true) (mem "SelfCall" true) (mem "letOwners" false) (mem "selfCalls" false))))
+(DUse false (UseGroup ("tools" "lint_recursion") ((mem "ArgRole" true) (mem "Owner" true) (mem "SelfCall" true) (mem "letOwners" false) (mem "selfCalls" false) (mem "spineOf" false))))
 (DUse false (UseGroup ("tools" "lint_shared") ((mem "firstLoc" false) (mem "mentionsVar" false) (mem "ruleNameResliceInLoop" false) (mem "unwrapLoc" false))))
 (DTypeSig true "rule" (TyCon "Rule"))
-(DFunDef false "rule" () (EApp (EApp (EApp (EVar "mkVisitorRule") (ERecordCreate "RuleMeta" ((fa "name" (EVar "ruleNameResliceInLoop")) (fa "summary" (ELit (LString "a loop parameter re-sliced from its start on every step: quadratic. Walk a `StrCursor`, or convert with `toChars` once"))) (fa "doc" (ELit (LString "A self-recursive loop that passes a `String`, `Array` or `Bytes` parameter on unchanged while another argument advances, and slices that parameter by the advancing index, starts from the front of the parameter on every step. The rule reports the String externs `stringSlice` and `charAtStr` on such a parameter, and `slice`, `sliceClamped`, `drop` and `a.[lo..hi]` on a parameter whose declared type, in the enclosing top-level signature, is `String`, `Array` or `Bytes`. A `List` parameter is skipped (`drop` on a list is the loop itself), and so is a slice whose bounds mention no advancing name. A partial application and a call to a different function (mutual recursion) are not self-calls. `stringSliceBytes` is not reported: it copies only the piece and does not walk the string.\n\nFor a `String`, `stringSlice` copies the tail it is asked for and, on a string with non-ASCII text, walks from the front to find the offset, so the loop is quadratic in the length of the input. Walk a `StrCursor` (`startCursor`, `nextChar`, `sliceBetween`), or convert once with `toChars` and index the `Array`. A loop whose bound is small and fixed can carry a `-- lint-disable-next-line rule-reslice-in-loop` with the bound as its reason.\n\nBefore:\n  go s i = if i < stringLength s then charAtStr s i :: go s (i + 1) else []\nAfter:\n  go cs i = if i < length cs then cs.[i] :: go cs (i + 1) else []  -- with `cs = toChars s`"))) (fa "category" (EVar "Perf")) (fa "scope" (EVar "Universal")) (fa "ratchet" (EVar "Gated")) (fa "defaultSeverity" (EVar "SevWarning")) (fa "fixability" (EVar "NotFixable")) (fa "needs" (EListLit (EVar "NeedsScopes")))))) (EVar "ruleReslice")) (EVar "None")))
+(DFunDef false "rule" () (EApp (EApp (EApp (EVar "mkVisitorRule") (ERecordCreate "RuleMeta" ((fa "name" (EVar "ruleNameResliceInLoop")) (fa "summary" (ELit (LString "a loop parameter re-sliced from its start on every step: quadratic on some engines and access patterns. Walk a `StrCursor`, or convert with `toChars` once"))) (fa "doc" (ELit (LString "A self-recursive loop that passes a `String`, `Array` or `Bytes` parameter on unchanged while another argument advances, and slices that parameter by the advancing index, starts from the front of the parameter on every step. The rule reports the String externs `stringSlice` and `charAtStr` on such a parameter, and `slice`, `sliceClamped`, `drop` and `a.[lo..hi]` on a parameter whose declared type, in the enclosing top-level signature, is `String`, `Array` or `Bytes`. A `List` parameter is skipped (`drop` on a list is the loop itself), and so is a slice whose bounds mention no advancing name. A partial application and a call to a different function (mutual recursion) are not self-calls. `stringSliceBytes` is not reported: it copies only the piece and does not walk the string.\n\nFor a `String`, `stringSlice` and `charAtStr` locate their offset from the front of the string. On the native runtime a forward scan of one string is linear, because the runtime keeps a cursor cache for one string; the loop is quadratic when it alternates between two strings, goes backward or slices the tail, and on the WasmGC engine, which has no cache, even a forward scan is quadratic. Walk a `StrCursor` (`startCursor`, `nextChar`, `sliceBetween`), or convert once with `toChars` and index the `Array`. A loop whose bound is small and fixed can carry a `-- lint-disable-next-line rule-reslice-in-loop` with the bound as its reason.\n\nBefore:\n  go s i = if i < stringLength s then stringSlice i (i + 1) s :: go s (i + 1) else []\nAfter:\n  go cs i = if i < length cs then cs.[i] :: go cs (i + 1) else []  -- with `cs = toChars s`"))) (fa "category" (EVar "Perf")) (fa "scope" (EVar "Universal")) (fa "ratchet" (EVar "Gated")) (fa "defaultSeverity" (EVar "SevWarning")) (fa "fixability" (EVar "NotFixable")) (fa "needs" (EListLit (EVar "NeedsScopes")))))) (EVar "ruleReslice")) (EVar "None")))
 (DTypeSig false "ruleReslice" (TyFun (TyCon "StdlibIndex") (TyFun (TyCon "String") (TyFun (TyCon "FileFacts") (TyFun (TyCon "Positions") (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyApp (TyCon "List") (TyCon "Visitor"))))))))
 (DFunDef false "ruleReslice" (PWild PWild (PVar "facts") PWild (PVar "decls")) (EIf (EApp (EApp (EVar "any") (ELam ((PVar "w")) (EApp (EApp (EVar "contains") (EVar "w")) (EFieldAccess (EVar "facts") "ffSrc")))) (EVar "mentions")) (EListLit (EApp (EVar "OnDecl") (EApp (EApp (EVar "declFindings") (EVar "facts")) (EVar "decls"))) (EApp (EApp (EVar "OnExpr") (EListLit (EVar "KLetGroup"))) (EApp (EVar "localFindings") (EVar "facts")))) (EIf (EVar "otherwise") (EListLit) (EApp (EVar "__fallthrough__") (ELit LUnit)))))
 (DTypeSig false "mentions" (TyApp (TyCon "List") (TyCon "String")))
@@ -359,19 +365,17 @@ fixTarget Polymorphic _ =
 (DFunDef false "usesIn" ((PVar "loc") (PCon "ELetGroup" PWild (PVar "body"))) (EApp (EApp (EVar "usesIn") (EVar "loc")) (EVar "body")))
 (DFunDef false "usesIn" ((PVar "loc") (PVar "e")) (EBinOp "++" (EApp (EApp (EVar "useHere") (EVar "loc")) (EVar "e")) (EApp (EApp (EVar "flatMap") (EApp (EVar "usesIn") (EVar "loc"))) (EApp (EVar "childExprs") (EVar "e")))))
 (DTypeSig false "useHere" (TyFun (TyApp (TyCon "Option") (TyCon "Loc")) (TyFun (TyCon "Expr") (TyApp (TyCon "List") (TyCon "Use")))))
-(DFunDef false "useHere" ((PVar "loc") (PCon "EApp" (PVar "f") (PVar "a"))) (EMatch (EApp (EApp (EVar "spine") (EVar "f")) (EListLit (EVar "a"))) (arm (PTuple (PVar "hd") (PVar "args")) () (EApp (EApp (EApp (EVar "callUse") (EVar "loc")) (EVar "hd")) (EVar "args")))))
-(DFunDef false "useHere" ((PVar "loc") (PCon "EBinOp" (PLit (LString "|>")) (PVar "l") (PVar "r") PWild)) (EMatch (EApp (EApp (EVar "spine") (EVar "r")) (EListLit)) (arm (PTuple (PVar "hd") (PVar "args")) () (EApp (EApp (EApp (EVar "callUse") (EVar "loc")) (EVar "hd")) (EBinOp "++" (EVar "args") (EListLit (EVar "l")))))))
+(DFunDef false "useHere" ((PVar "loc") (PCon "EApp" (PVar "f") (PVar "a"))) (EMatch (EApp (EApp (EVar "spineOf") (EVar "f")) (EListLit (EVar "a"))) (arm (PTuple (PVar "hd") (PVar "args")) () (EApp (EApp (EApp (EVar "callUse") (EVar "loc")) (EVar "hd")) (EVar "args")))))
+(DFunDef false "useHere" ((PVar "loc") (PCon "EBinOp" (PLit (LString "|>")) (PVar "l") (PVar "r") PWild)) (EMatch (EApp (EApp (EVar "spineOf") (EVar "r")) (EListLit)) (arm (PTuple (PVar "hd") (PVar "args")) () (EApp (EApp (EApp (EVar "callUse") (EVar "loc")) (EVar "hd")) (EBinOp "++" (EVar "args") (EListLit (EVar "l")))))))
 (DFunDef false "useHere" ((PVar "loc") (PCon "ESlice" (PVar "c") (PVar "lo") (PVar "hi") PWild)) (EMatch (EApp (EVar "unwrapLoc") (EVar "c")) (arm (PCon "EVar" (PVar "v")) () (EListLit (EApp (EApp (EApp (EApp (EApp (EVar "Use") (EApp (EApp (EVar "orElseLoc") (EApp (EVar "firstLoc") (EVar "c"))) (EVar "loc"))) (EVar "Polymorphic")) (ELit (LString "a.[..]"))) (EVar "v")) (EListLit (EVar "lo") (EVar "hi"))))) (arm PWild () (EListLit))))
 (DFunDef false "useHere" (PWild PWild) (EListLit))
-(DTypeSig false "spine" (TyFun (TyCon "Expr") (TyFun (TyApp (TyCon "List") (TyCon "Expr")) (TyTuple (TyCon "Expr") (TyApp (TyCon "List") (TyCon "Expr"))))))
-(DFunDef false "spine" ((PVar "e") (PVar "args")) (EMatch (EApp (EVar "unwrapLoc") (EVar "e")) (arm (PCon "EApp" (PVar "f") (PVar "a")) () (EApp (EApp (EVar "spine") (EVar "f")) (EBinOp "::" (EVar "a") (EVar "args")))) (arm PWild () (ETuple (EVar "e") (EVar "args")))))
 (DTypeSig false "callUse" (TyFun (TyApp (TyCon "Option") (TyCon "Loc")) (TyFun (TyCon "Expr") (TyFun (TyApp (TyCon "List") (TyCon "Expr")) (TyApp (TyCon "List") (TyCon "Use"))))))
 (DFunDef false "callUse" ((PVar "loc") (PVar "hd") (PVar "args")) (EMatch (EApp (EVar "unwrapLoc") (EVar "hd")) (arm (PCon "EVar" (PVar "n")) () (EApp (EApp (EApp (EVar "calleeUse") (EApp (EApp (EVar "orElseLoc") (EApp (EVar "firstLoc") (EVar "hd"))) (EVar "loc"))) (EApp (EVar "lastSegment") (EVar "n"))) (EVar "args"))) (arm PWild () (EListLit))))
 (DTypeSig false "calleeUse" (TyFun (TyApp (TyCon "Option") (TyCon "Loc")) (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "Expr")) (TyApp (TyCon "List") (TyCon "Use"))))))
 (DFunDef false "calleeUse" ((PVar "loc") (PLit (LString "stringSlice")) (PList (PVar "lo") (PVar "hi") (PVar "s"))) (EApp (EApp (EApp (EApp (EApp (EVar "containerUse") (EVar "loc")) (EVar "Extern")) (ELit (LString "stringSlice"))) (EVar "s")) (EListLit (EVar "lo") (EVar "hi"))))
 (DFunDef false "calleeUse" ((PVar "loc") (PLit (LString "charAtStr")) (PList (PVar "s") (PVar "i"))) (EApp (EApp (EApp (EApp (EApp (EVar "containerUse") (EVar "loc")) (EVar "Extern")) (ELit (LString "charAtStr"))) (EVar "s")) (EListLit (EVar "i"))))
 (DFunDef false "calleeUse" ((PVar "loc") (PLit (LString "drop")) (PList (PVar "n") (PVar "c"))) (EApp (EApp (EApp (EApp (EApp (EVar "containerUse") (EVar "loc")) (EVar "Polymorphic")) (ELit (LString "drop"))) (EVar "c")) (EListLit (EVar "n"))))
-(DFunDef false "calleeUse" ((PVar "loc") (PLit (LString "slice")) (PList (PVar "lo") (PVar "hi") (PVar "c"))) (EApp (EApp (EApp (EApp (EApp (EVar "containerUse") (EVar "loc")) (EVar "Polymorphic")) (ELit (LString "slice"))) (EVar "c")) (EListLit (EVar "lo") (EVar "hi"))))
+(DFunDef false "calleeUse" ((PVar "loc") (PLit (LString "slice")) (PList (PVar "c") (PVar "lo") (PVar "hi"))) (EApp (EApp (EApp (EApp (EApp (EVar "containerUse") (EVar "loc")) (EVar "Polymorphic")) (ELit (LString "slice"))) (EVar "c")) (EListLit (EVar "lo") (EVar "hi"))))
 (DFunDef false "calleeUse" ((PVar "loc") (PLit (LString "sliceClamped")) (PList (PVar "lo") (PVar "hi") (PVar "c"))) (EApp (EApp (EApp (EApp (EApp (EVar "containerUse") (EVar "loc")) (EVar "Polymorphic")) (ELit (LString "sliceClamped"))) (EVar "c")) (EListLit (EVar "lo") (EVar "hi"))))
 (DFunDef false "calleeUse" (PWild PWild PWild) (EListLit))
 (DTypeSig false "containerUse" (TyFun (TyApp (TyCon "Option") (TyCon "Loc")) (TyFun (TyCon "Form") (TyFun (TyCon "String") (TyFun (TyCon "Expr") (TyFun (TyApp (TyCon "List") (TyCon "Expr")) (TyApp (TyCon "List") (TyCon "Use"))))))))
@@ -394,31 +398,38 @@ fixTarget Polymorphic _ =
 (DFunDef false "formApplies" (PWild (PCon "Extern") PWild) (EVar "True"))
 (DFunDef false "formApplies" ((PVar "types") (PCon "Polymorphic") (PVar "i")) (EMatch (EApp (EVar "types") (EVar "i")) (arm (PCon "Some" (PLit (LString "String"))) () (EVar "True")) (arm (PCon "Some" (PLit (LString "Array"))) () (EVar "True")) (arm (PCon "Some" (PLit (LString "Bytes"))) () (EVar "True")) (arm PWild () (EVar "False"))))
 (DTypeSig false "dedupe" (TyFun (TyApp (TyCon "List") (TyCon "Finding")) (TyApp (TyCon "List") (TyCon "Finding"))))
-(DFunDef false "dedupe" ((PVar "fs")) (EApp (EApp (EVar "dedupeGo") (EListLit)) (EVar "fs")))
-(DTypeSig false "dedupeGo" (TyFun (TyApp (TyCon "List") (TyApp (TyCon "Option") (TyCon "Loc"))) (TyFun (TyApp (TyCon "List") (TyCon "Finding")) (TyApp (TyCon "List") (TyCon "Finding")))))
-(DFunDef false "dedupeGo" (PWild (PList)) (EListLit))
-(DFunDef false "dedupeGo" ((PVar "seen") (PCons (PAs "f" (PRec "Finding" ((rf "loc" (PVar "l"))) true)) (PVar "rest"))) (EIf (EApp (EApp (EVar "any") (ELam ((PVar "_s")) (EBinOp "==" (EVar "_s") (EVar "l")))) (EVar "seen")) (EApp (EApp (EVar "dedupeGo") (EVar "seen")) (EVar "rest")) (EIf (EVar "otherwise") (EBinOp "::" (EVar "f") (EApp (EApp (EVar "dedupeGo") (EBinOp "::" (EVar "l") (EVar "seen"))) (EVar "rest"))) (EApp (EVar "__fallthrough__") (ELit LUnit)))))
+(DFunDef false "dedupe" () (EApp (EVar "nubBy") (EVar "sameSpan")))
+(DTypeSig false "sameSpan" (TyFun (TyCon "Finding") (TyFun (TyCon "Finding") (TyCon "Bool"))))
+(DFunDef false "sameSpan" ((PRec "Finding" ((rf "loc" (PVar "a"))) true) (PRec "Finding" ((rf "loc" (PVar "b"))) true)) (EBinOp "==" (EVar "a") (EVar "b")))
 (DTypeSig false "report" (TyFun (TyApp (TyCon "Option") (TyCon "Loc")) (TyFun (TyCon "String") (TyCon "Finding"))))
 (DFunDef false "report" ((PVar "loc") (PVar "msg")) (ERecordCreate "Finding" ((fa "rule" (EVar "ruleNameResliceInLoop")) (fa "message" (EVar "msg")) (fa "severity" (EVar "SevWarning")) (fa "loc" (EVar "loc")) (fa "fix" (EVar "None")))))
 (DTypeSig false "message" (TyFun (TyCon "Form") (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyApp (TyCon "Option") (TyCon "String")) (TyCon "String"))))))
-(DFunDef false "message" ((PVar "form") (PVar "callee") (PVar "v") (PVar "ty")) (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "`")) (EApp (EVar "display") (EVar "callee"))) (ELit (LString "` on `"))) (EApp (EVar "display") (EVar "v"))) (ELit (LString "`, which the loop passes on unchanged while another argument advances, starts from the front of `"))) (EApp (EVar "display") (EVar "v"))) (ELit (LString "` on every step, so the loop is quadratic. "))) (EApp (EVar "display") (EApp (EApp (EVar "fixTarget") (EVar "form")) (EVar "ty")))) (ELit (LString ""))))
+(DFunDef false "message" ((PVar "form") (PVar "callee") (PVar "v") (PVar "ty")) (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "`")) (EApp (EVar "display") (EVar "callee"))) (ELit (LString "` on `"))) (EApp (EVar "display") (EVar "v"))) (ELit (LString "`, which the loop passes on unchanged while another argument advances, starts from the front of `"))) (EApp (EVar "display") (EVar "v"))) (ELit (LString "` on every step. "))) (EApp (EVar "display") (EApp (EApp (EVar "costNote") (EVar "form")) (EVar "ty")))) (ELit (LString " "))) (EApp (EVar "display") (EApp (EApp (EVar "fixTarget") (EVar "form")) (EVar "ty")))) (ELit (LString ""))))
+(DTypeSig false "costNote" (TyFun (TyCon "Form") (TyFun (TyApp (TyCon "Option") (TyCon "String")) (TyCon "String"))))
+(DFunDef false "costNote" ((PCon "Extern") PWild) (EVar "stringCost"))
+(DFunDef false "costNote" ((PCon "Polymorphic") (PCon "Some" (PLit (LString "String")))) (EVar "stringCost"))
+(DFunDef false "costNote" ((PCon "Polymorphic") PWild) (ELit (LString "The loop is quadratic.")))
+(DTypeSig false "stringCost" (TyCon "String"))
+(DFunDef false "stringCost" () (ELit (LString "The loop is quadratic on the WasmGC engine and, on the native runtime, when it alternates between strings, goes backward or slices the tail.")))
 (DTypeSig false "fixTarget" (TyFun (TyCon "Form") (TyFun (TyApp (TyCon "Option") (TyCon "String")) (TyCon "String"))))
-(DFunDef false "fixTarget" ((PCon "Extern") PWild) (ELit (LString "Walk a `StrCursor` (`startCursor`, `nextChar`, `sliceBetween`), or convert with `toChars` once and index the `Array`")))
-(DFunDef false "fixTarget" ((PCon "Polymorphic") (PCon "Some" (PLit (LString "String")))) (ELit (LString "Walk a `StrCursor` (`startCursor`, `nextChar`, `sliceBetween`), or convert with `toChars` once and index the `Array`")))
+(DFunDef false "fixTarget" ((PCon "Extern") PWild) (EVar "stringFix"))
+(DFunDef false "fixTarget" ((PCon "Polymorphic") (PCon "Some" (PLit (LString "String")))) (EVar "stringFix"))
 (DFunDef false "fixTarget" ((PCon "Polymorphic") PWild) (ELit (LString "Keep the offset and index the value (`a.[i]`) instead of slicing it again")))
+(DTypeSig false "stringFix" (TyCon "String"))
+(DFunDef false "stringFix" () (ELit (LString "Walk a `StrCursor` (`startCursor`, `nextChar`, `sliceBetween`), or convert with `toChars` once and index the `Array`")))
 # MARK
 (DUse false (UseGroup ("driver" "diagnostics") ((mem "Severity" true))))
 (DUse false (UseGroup ("frontend" "ast") ((mem "Decl" true) (mem "Expr" true) (mem "Loc" false) (mem "Pat" true) (mem "Ty" true) (mem "orElseLoc" false) (mem "patBoundNames" false))))
 (DUse false (UseGroup ("frontend" "ast_walk") ((mem "BodyOwner" true) (mem "DeclBody" true) (mem "ExprKind" true) (mem "childExprs" false) (mem "declBodies" false))))
 (DUse false (UseGroup ("frontend" "parser") ((mem "Positions" true))))
-(DUse false (UseGroup ("list") ((mem "findMap" false) (mem "get" false))))
+(DUse false (UseGroup ("list") ((mem "findMap" false) (mem "get" false) (mem "nubBy" false))))
 (DUse false (UseGroup ("string") ((mem "contains" false))))
 (DUse false (UseGroup ("tools" "lint_calls") ((mem "lastSegment" false))))
 (DUse false (UseGroup ("tools" "lint_core") ((mem "Category" true) (mem "Ctx" true) (mem "FileFacts" false) (mem "Finding" true) (mem "Fixability" true) (mem "Need" true) (mem "Ratchet" true) (mem "Rule" false) (mem "RuleMeta" true) (mem "Scope" true) (mem "StdlibIndex" false) (mem "Visitor" true) (mem "factScopes" false) (mem "mkVisitorRule" false))))
-(DUse false (UseGroup ("tools" "lint_recursion") ((mem "ArgRole" true) (mem "Owner" true) (mem "SelfCall" true) (mem "letOwners" false) (mem "selfCalls" false))))
+(DUse false (UseGroup ("tools" "lint_recursion") ((mem "ArgRole" true) (mem "Owner" true) (mem "SelfCall" true) (mem "letOwners" false) (mem "selfCalls" false) (mem "spineOf" false))))
 (DUse false (UseGroup ("tools" "lint_shared") ((mem "firstLoc" false) (mem "mentionsVar" false) (mem "ruleNameResliceInLoop" false) (mem "unwrapLoc" false))))
 (DTypeSig true "rule" (TyCon "Rule"))
-(DFunDef false "rule" () (EApp (EApp (EApp (EVar "mkVisitorRule") (ERecordCreate "RuleMeta" ((fa "name" (EVar "ruleNameResliceInLoop")) (fa "summary" (ELit (LString "a loop parameter re-sliced from its start on every step: quadratic. Walk a `StrCursor`, or convert with `toChars` once"))) (fa "doc" (ELit (LString "A self-recursive loop that passes a `String`, `Array` or `Bytes` parameter on unchanged while another argument advances, and slices that parameter by the advancing index, starts from the front of the parameter on every step. The rule reports the String externs `stringSlice` and `charAtStr` on such a parameter, and `slice`, `sliceClamped`, `drop` and `a.[lo..hi]` on a parameter whose declared type, in the enclosing top-level signature, is `String`, `Array` or `Bytes`. A `List` parameter is skipped (`drop` on a list is the loop itself), and so is a slice whose bounds mention no advancing name. A partial application and a call to a different function (mutual recursion) are not self-calls. `stringSliceBytes` is not reported: it copies only the piece and does not walk the string.\n\nFor a `String`, `stringSlice` copies the tail it is asked for and, on a string with non-ASCII text, walks from the front to find the offset, so the loop is quadratic in the length of the input. Walk a `StrCursor` (`startCursor`, `nextChar`, `sliceBetween`), or convert once with `toChars` and index the `Array`. A loop whose bound is small and fixed can carry a `-- lint-disable-next-line rule-reslice-in-loop` with the bound as its reason.\n\nBefore:\n  go s i = if i < stringLength s then charAtStr s i :: go s (i + 1) else []\nAfter:\n  go cs i = if i < length cs then cs.[i] :: go cs (i + 1) else []  -- with `cs = toChars s`"))) (fa "category" (EVar "Perf")) (fa "scope" (EVar "Universal")) (fa "ratchet" (EVar "Gated")) (fa "defaultSeverity" (EVar "SevWarning")) (fa "fixability" (EVar "NotFixable")) (fa "needs" (EListLit (EVar "NeedsScopes")))))) (EVar "ruleReslice")) (EVar "None")))
+(DFunDef false "rule" () (EApp (EApp (EApp (EVar "mkVisitorRule") (ERecordCreate "RuleMeta" ((fa "name" (EVar "ruleNameResliceInLoop")) (fa "summary" (ELit (LString "a loop parameter re-sliced from its start on every step: quadratic on some engines and access patterns. Walk a `StrCursor`, or convert with `toChars` once"))) (fa "doc" (ELit (LString "A self-recursive loop that passes a `String`, `Array` or `Bytes` parameter on unchanged while another argument advances, and slices that parameter by the advancing index, starts from the front of the parameter on every step. The rule reports the String externs `stringSlice` and `charAtStr` on such a parameter, and `slice`, `sliceClamped`, `drop` and `a.[lo..hi]` on a parameter whose declared type, in the enclosing top-level signature, is `String`, `Array` or `Bytes`. A `List` parameter is skipped (`drop` on a list is the loop itself), and so is a slice whose bounds mention no advancing name. A partial application and a call to a different function (mutual recursion) are not self-calls. `stringSliceBytes` is not reported: it copies only the piece and does not walk the string.\n\nFor a `String`, `stringSlice` and `charAtStr` locate their offset from the front of the string. On the native runtime a forward scan of one string is linear, because the runtime keeps a cursor cache for one string; the loop is quadratic when it alternates between two strings, goes backward or slices the tail, and on the WasmGC engine, which has no cache, even a forward scan is quadratic. Walk a `StrCursor` (`startCursor`, `nextChar`, `sliceBetween`), or convert once with `toChars` and index the `Array`. A loop whose bound is small and fixed can carry a `-- lint-disable-next-line rule-reslice-in-loop` with the bound as its reason.\n\nBefore:\n  go s i = if i < stringLength s then stringSlice i (i + 1) s :: go s (i + 1) else []\nAfter:\n  go cs i = if i < length cs then cs.[i] :: go cs (i + 1) else []  -- with `cs = toChars s`"))) (fa "category" (EVar "Perf")) (fa "scope" (EVar "Universal")) (fa "ratchet" (EVar "Gated")) (fa "defaultSeverity" (EVar "SevWarning")) (fa "fixability" (EVar "NotFixable")) (fa "needs" (EListLit (EVar "NeedsScopes")))))) (EVar "ruleReslice")) (EVar "None")))
 (DTypeSig false "ruleReslice" (TyFun (TyCon "StdlibIndex") (TyFun (TyCon "String") (TyFun (TyCon "FileFacts") (TyFun (TyCon "Positions") (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyApp (TyCon "List") (TyCon "Visitor"))))))))
 (DFunDef false "ruleReslice" (PWild PWild (PVar "facts") PWild (PVar "decls")) (EIf (EApp (EApp (EDictApp "any") (ELam ((PVar "w")) (EApp (EApp (EVar "contains") (EVar "w")) (EFieldAccess (EVar "facts") "ffSrc")))) (EVar "mentions")) (EListLit (EApp (EVar "OnDecl") (EApp (EApp (EVar "declFindings") (EVar "facts")) (EVar "decls"))) (EApp (EApp (EVar "OnExpr") (EListLit (EVar "KLetGroup"))) (EApp (EVar "localFindings") (EVar "facts")))) (EIf (EVar "otherwise") (EListLit) (EApp (EVar "__fallthrough__") (ELit LUnit)))))
 (DTypeSig false "mentions" (TyApp (TyCon "List") (TyCon "String")))
@@ -461,19 +472,17 @@ fixTarget Polymorphic _ =
 (DFunDef false "usesIn" ((PVar "loc") (PCon "ELetGroup" PWild (PVar "body"))) (EApp (EApp (EVar "usesIn") (EVar "loc")) (EVar "body")))
 (DFunDef false "usesIn" ((PVar "loc") (PVar "e")) (EBinOp "++" (EApp (EApp (EVar "useHere") (EVar "loc")) (EVar "e")) (EApp (EApp (EDictApp "flatMap") (EApp (EVar "usesIn") (EVar "loc"))) (EApp (EVar "childExprs") (EVar "e")))))
 (DTypeSig false "useHere" (TyFun (TyApp (TyCon "Option") (TyCon "Loc")) (TyFun (TyCon "Expr") (TyApp (TyCon "List") (TyCon "Use")))))
-(DFunDef false "useHere" ((PVar "loc") (PCon "EApp" (PVar "f") (PVar "a"))) (EMatch (EApp (EApp (EVar "spine") (EVar "f")) (EListLit (EVar "a"))) (arm (PTuple (PVar "hd") (PVar "args")) () (EApp (EApp (EApp (EVar "callUse") (EVar "loc")) (EVar "hd")) (EVar "args")))))
-(DFunDef false "useHere" ((PVar "loc") (PCon "EBinOp" (PLit (LString "|>")) (PVar "l") (PVar "r") PWild)) (EMatch (EApp (EApp (EVar "spine") (EVar "r")) (EListLit)) (arm (PTuple (PVar "hd") (PVar "args")) () (EApp (EApp (EApp (EVar "callUse") (EVar "loc")) (EVar "hd")) (EBinOp "++" (EVar "args") (EListLit (EVar "l")))))))
+(DFunDef false "useHere" ((PVar "loc") (PCon "EApp" (PVar "f") (PVar "a"))) (EMatch (EApp (EApp (EVar "spineOf") (EVar "f")) (EListLit (EVar "a"))) (arm (PTuple (PVar "hd") (PVar "args")) () (EApp (EApp (EApp (EVar "callUse") (EVar "loc")) (EVar "hd")) (EVar "args")))))
+(DFunDef false "useHere" ((PVar "loc") (PCon "EBinOp" (PLit (LString "|>")) (PVar "l") (PVar "r") PWild)) (EMatch (EApp (EApp (EVar "spineOf") (EVar "r")) (EListLit)) (arm (PTuple (PVar "hd") (PVar "args")) () (EApp (EApp (EApp (EVar "callUse") (EVar "loc")) (EVar "hd")) (EBinOp "++" (EVar "args") (EListLit (EVar "l")))))))
 (DFunDef false "useHere" ((PVar "loc") (PCon "ESlice" (PVar "c") (PVar "lo") (PVar "hi") PWild)) (EMatch (EApp (EVar "unwrapLoc") (EVar "c")) (arm (PCon "EVar" (PVar "v")) () (EListLit (EApp (EApp (EApp (EApp (EApp (EVar "Use") (EApp (EApp (EVar "orElseLoc") (EApp (EVar "firstLoc") (EVar "c"))) (EVar "loc"))) (EVar "Polymorphic")) (ELit (LString "a.[..]"))) (EVar "v")) (EListLit (EVar "lo") (EVar "hi"))))) (arm PWild () (EListLit))))
 (DFunDef false "useHere" (PWild PWild) (EListLit))
-(DTypeSig false "spine" (TyFun (TyCon "Expr") (TyFun (TyApp (TyCon "List") (TyCon "Expr")) (TyTuple (TyCon "Expr") (TyApp (TyCon "List") (TyCon "Expr"))))))
-(DFunDef false "spine" ((PVar "e") (PVar "args")) (EMatch (EApp (EVar "unwrapLoc") (EVar "e")) (arm (PCon "EApp" (PVar "f") (PVar "a")) () (EApp (EApp (EVar "spine") (EVar "f")) (EBinOp "::" (EVar "a") (EVar "args")))) (arm PWild () (ETuple (EVar "e") (EVar "args")))))
 (DTypeSig false "callUse" (TyFun (TyApp (TyCon "Option") (TyCon "Loc")) (TyFun (TyCon "Expr") (TyFun (TyApp (TyCon "List") (TyCon "Expr")) (TyApp (TyCon "List") (TyCon "Use"))))))
 (DFunDef false "callUse" ((PVar "loc") (PVar "hd") (PVar "args")) (EMatch (EApp (EVar "unwrapLoc") (EVar "hd")) (arm (PCon "EVar" (PVar "n")) () (EApp (EApp (EApp (EVar "calleeUse") (EApp (EApp (EVar "orElseLoc") (EApp (EVar "firstLoc") (EVar "hd"))) (EVar "loc"))) (EApp (EVar "lastSegment") (EVar "n"))) (EVar "args"))) (arm PWild () (EListLit))))
 (DTypeSig false "calleeUse" (TyFun (TyApp (TyCon "Option") (TyCon "Loc")) (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "Expr")) (TyApp (TyCon "List") (TyCon "Use"))))))
 (DFunDef false "calleeUse" ((PVar "loc") (PLit (LString "stringSlice")) (PList (PVar "lo") (PVar "hi") (PVar "s"))) (EApp (EApp (EApp (EApp (EApp (EVar "containerUse") (EVar "loc")) (EVar "Extern")) (ELit (LString "stringSlice"))) (EVar "s")) (EListLit (EVar "lo") (EVar "hi"))))
 (DFunDef false "calleeUse" ((PVar "loc") (PLit (LString "charAtStr")) (PList (PVar "s") (PVar "i"))) (EApp (EApp (EApp (EApp (EApp (EVar "containerUse") (EVar "loc")) (EVar "Extern")) (ELit (LString "charAtStr"))) (EVar "s")) (EListLit (EVar "i"))))
 (DFunDef false "calleeUse" ((PVar "loc") (PLit (LString "drop")) (PList (PVar "n") (PVar "c"))) (EApp (EApp (EApp (EApp (EApp (EVar "containerUse") (EVar "loc")) (EVar "Polymorphic")) (ELit (LString "drop"))) (EVar "c")) (EListLit (EVar "n"))))
-(DFunDef false "calleeUse" ((PVar "loc") (PLit (LString "slice")) (PList (PVar "lo") (PVar "hi") (PVar "c"))) (EApp (EApp (EApp (EApp (EApp (EVar "containerUse") (EVar "loc")) (EVar "Polymorphic")) (ELit (LString "slice"))) (EVar "c")) (EListLit (EVar "lo") (EVar "hi"))))
+(DFunDef false "calleeUse" ((PVar "loc") (PLit (LString "slice")) (PList (PVar "c") (PVar "lo") (PVar "hi"))) (EApp (EApp (EApp (EApp (EApp (EVar "containerUse") (EVar "loc")) (EVar "Polymorphic")) (ELit (LString "slice"))) (EVar "c")) (EListLit (EVar "lo") (EVar "hi"))))
 (DFunDef false "calleeUse" ((PVar "loc") (PLit (LString "sliceClamped")) (PList (PVar "lo") (PVar "hi") (PVar "c"))) (EApp (EApp (EApp (EApp (EApp (EVar "containerUse") (EVar "loc")) (EVar "Polymorphic")) (ELit (LString "sliceClamped"))) (EVar "c")) (EListLit (EVar "lo") (EVar "hi"))))
 (DFunDef false "calleeUse" (PWild PWild PWild) (EListLit))
 (DTypeSig false "containerUse" (TyFun (TyApp (TyCon "Option") (TyCon "Loc")) (TyFun (TyCon "Form") (TyFun (TyCon "String") (TyFun (TyCon "Expr") (TyFun (TyApp (TyCon "List") (TyCon "Expr")) (TyApp (TyCon "List") (TyCon "Use"))))))))
@@ -496,15 +505,22 @@ fixTarget Polymorphic _ =
 (DFunDef false "formApplies" (PWild (PCon "Extern") PWild) (EVar "True"))
 (DFunDef false "formApplies" ((PVar "types") (PCon "Polymorphic") (PVar "i")) (EMatch (EApp (EVar "types") (EVar "i")) (arm (PCon "Some" (PLit (LString "String"))) () (EVar "True")) (arm (PCon "Some" (PLit (LString "Array"))) () (EVar "True")) (arm (PCon "Some" (PLit (LString "Bytes"))) () (EVar "True")) (arm PWild () (EVar "False"))))
 (DTypeSig false "dedupe" (TyFun (TyApp (TyCon "List") (TyCon "Finding")) (TyApp (TyCon "List") (TyCon "Finding"))))
-(DFunDef false "dedupe" ((PVar "fs")) (EApp (EApp (EVar "dedupeGo") (EListLit)) (EVar "fs")))
-(DTypeSig false "dedupeGo" (TyFun (TyApp (TyCon "List") (TyApp (TyCon "Option") (TyCon "Loc"))) (TyFun (TyApp (TyCon "List") (TyCon "Finding")) (TyApp (TyCon "List") (TyCon "Finding")))))
-(DFunDef false "dedupeGo" (PWild (PList)) (EListLit))
-(DFunDef false "dedupeGo" ((PVar "seen") (PCons (PAs "f" (PRec "Finding" ((rf "loc" (PVar "l"))) true)) (PVar "rest"))) (EIf (EApp (EApp (EDictApp "any") (ELam ((PVar "_s")) (EBinOp "==" (EVar "_s") (EVar "l")))) (EVar "seen")) (EApp (EApp (EVar "dedupeGo") (EVar "seen")) (EVar "rest")) (EIf (EVar "otherwise") (EBinOp "::" (EVar "f") (EApp (EApp (EVar "dedupeGo") (EBinOp "::" (EVar "l") (EVar "seen"))) (EVar "rest"))) (EApp (EVar "__fallthrough__") (ELit LUnit)))))
+(DFunDef false "dedupe" () (EApp (EVar "nubBy") (EVar "sameSpan")))
+(DTypeSig false "sameSpan" (TyFun (TyCon "Finding") (TyFun (TyCon "Finding") (TyCon "Bool"))))
+(DFunDef false "sameSpan" ((PRec "Finding" ((rf "loc" (PVar "a"))) true) (PRec "Finding" ((rf "loc" (PVar "b"))) true)) (EBinOp "==" (EVar "a") (EVar "b")))
 (DTypeSig false "report" (TyFun (TyApp (TyCon "Option") (TyCon "Loc")) (TyFun (TyCon "String") (TyCon "Finding"))))
 (DFunDef false "report" ((PVar "loc") (PVar "msg")) (ERecordCreate "Finding" ((fa "rule" (EVar "ruleNameResliceInLoop")) (fa "message" (EVar "msg")) (fa "severity" (EVar "SevWarning")) (fa "loc" (EVar "loc")) (fa "fix" (EVar "None")))))
 (DTypeSig false "message" (TyFun (TyCon "Form") (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyApp (TyCon "Option") (TyCon "String")) (TyCon "String"))))))
-(DFunDef false "message" ((PVar "form") (PVar "callee") (PVar "v") (PVar "ty")) (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "`")) (EApp (EMethodRef "display") (EVar "callee"))) (ELit (LString "` on `"))) (EApp (EMethodRef "display") (EVar "v"))) (ELit (LString "`, which the loop passes on unchanged while another argument advances, starts from the front of `"))) (EApp (EMethodRef "display") (EVar "v"))) (ELit (LString "` on every step, so the loop is quadratic. "))) (EApp (EMethodRef "display") (EApp (EApp (EVar "fixTarget") (EVar "form")) (EVar "ty")))) (ELit (LString ""))))
+(DFunDef false "message" ((PVar "form") (PVar "callee") (PVar "v") (PVar "ty")) (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "`")) (EApp (EMethodRef "display") (EVar "callee"))) (ELit (LString "` on `"))) (EApp (EMethodRef "display") (EVar "v"))) (ELit (LString "`, which the loop passes on unchanged while another argument advances, starts from the front of `"))) (EApp (EMethodRef "display") (EVar "v"))) (ELit (LString "` on every step. "))) (EApp (EMethodRef "display") (EApp (EApp (EVar "costNote") (EVar "form")) (EVar "ty")))) (ELit (LString " "))) (EApp (EMethodRef "display") (EApp (EApp (EVar "fixTarget") (EVar "form")) (EVar "ty")))) (ELit (LString ""))))
+(DTypeSig false "costNote" (TyFun (TyCon "Form") (TyFun (TyApp (TyCon "Option") (TyCon "String")) (TyCon "String"))))
+(DFunDef false "costNote" ((PCon "Extern") PWild) (EVar "stringCost"))
+(DFunDef false "costNote" ((PCon "Polymorphic") (PCon "Some" (PLit (LString "String")))) (EVar "stringCost"))
+(DFunDef false "costNote" ((PCon "Polymorphic") PWild) (ELit (LString "The loop is quadratic.")))
+(DTypeSig false "stringCost" (TyCon "String"))
+(DFunDef false "stringCost" () (ELit (LString "The loop is quadratic on the WasmGC engine and, on the native runtime, when it alternates between strings, goes backward or slices the tail.")))
 (DTypeSig false "fixTarget" (TyFun (TyCon "Form") (TyFun (TyApp (TyCon "Option") (TyCon "String")) (TyCon "String"))))
-(DFunDef false "fixTarget" ((PCon "Extern") PWild) (ELit (LString "Walk a `StrCursor` (`startCursor`, `nextChar`, `sliceBetween`), or convert with `toChars` once and index the `Array`")))
-(DFunDef false "fixTarget" ((PCon "Polymorphic") (PCon "Some" (PLit (LString "String")))) (ELit (LString "Walk a `StrCursor` (`startCursor`, `nextChar`, `sliceBetween`), or convert with `toChars` once and index the `Array`")))
+(DFunDef false "fixTarget" ((PCon "Extern") PWild) (EVar "stringFix"))
+(DFunDef false "fixTarget" ((PCon "Polymorphic") (PCon "Some" (PLit (LString "String")))) (EVar "stringFix"))
 (DFunDef false "fixTarget" ((PCon "Polymorphic") PWild) (ELit (LString "Keep the offset and index the value (`a.[i]`) instead of slicing it again")))
+(DTypeSig false "stringFix" (TyCon "String"))
+(DFunDef false "stringFix" () (ELit (LString "Walk a `StrCursor` (`startCursor`, `nextChar`, `sliceBetween`), or convert with `toChars` once and index the `Array`")))

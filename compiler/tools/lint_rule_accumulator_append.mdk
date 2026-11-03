@@ -1,7 +1,7 @@
 -- lint rule rule-accumulator-append: `acc ++ e` grown across iterations of a loop (a self-call argument, `r := !r ++ e`, a fold lambda). Cons then `reverse`, collect then join once, or use a builder.
 
 import driver.diagnostics.{Severity(..)}
-import frontend.ast.{Decl, Expr(..), Lit(..), Loc}
+import frontend.ast.{Decl, Expr(..), Lit(..), Loc, orElseLoc}
 import frontend.ast_walk.{
   BodyOwner(..),
   DeclBody(..),
@@ -38,7 +38,9 @@ import tools.lint_recursion.{
   selfCalls,
 }
 import tools.lint_scope.{FileScopes}
-import tools.lint_shared.{firstLoc, ruleNameAccumulatorAppend, unwrapLoc}
+import tools.lint_shared.{
+  appSpineOf, firstLoc, ruleNameAccumulatorAppend, unwrapLoc
+}
 
 export
 rule : Rule
@@ -49,7 +51,7 @@ rule =
       summary =
         "`acc ++ e` grown across a loop: each step copies the whole accumulator. Cons then `reverse`, collect then join once, or use a builder",
       doc =
-        "Appending to the end of an accumulator copies the accumulator, so a loop that does it once per step does work quadratic in the length of the result. The rule reports three shapes: a self-call that passes `acc ++ e` for one of its own parameters, `r := !r ++ e` on a `Ref` inside a self-recursive function, and a fold lambda `acc x => acc ++ ...`. The same holds for a `List`, a `String` and a `Bytes`. `e ++ acc` costs the length of `e` and is not reported. A partial application and a call to a different function (mutual recursion) are not self-calls.\n\nCons the new element and `reverse` once at the end, collect the pieces and join them once (`concat`, `joinWith`), or use a builder. A loop whose bound is small and fixed can carry a `-- lint-disable-next-line rule-accumulator-append` with the bound as its reason.\n\nBefore:\n  go acc (x :: xs) = go (acc ++ [f x]) xs\nAfter:\n  go acc (x :: xs) = go (f x :: acc) xs  -- and `reverse acc` at the end",
+        "Appending to the end of an accumulator copies the accumulator, so a loop that does it once per step does work quadratic in the length of the result. The rule reports three shapes: a self-call that passes `acc ++ e` for one of its own parameters, `r := !r ++ e` on a `Ref` inside a self-recursive function, and a fold lambda `acc x => acc ++ ...`. The same holds for a `List`, a `String` and a `Bytes`. `e ++ acc` is not reported: for a `List` it costs only the length of `e`, while a `String`, `Bytes` or `Array` copies both operands. A partial application and a call to a different function (mutual recursion) are not self-calls.\n\nCons the new element and `reverse` once at the end, collect the pieces and join them once (`concat`, `joinWith`), or use a builder. A loop whose bound is small and fixed can carry a `-- lint-disable-next-line rule-accumulator-append` with the bound as its reason.\n\nBefore:\n  go acc (x :: xs) = go (acc ++ [f x]) xs\nAfter:\n  go acc (x :: xs) = go (f x :: acc) xs  -- and `reverse acc` at the end",
       category = Perf,
       scope = Universal,
       ratchet = Gated,
@@ -113,7 +115,9 @@ callFinding : Option Loc -> SelfCall -> List Finding
 callFinding fallback (SelfCall loc call roles) =
   match appendedArg roles (argsOf call)
     Some a => [
-      report (orLoc (firstLoc a) (orLoc loc fallback)) (callMessage (kindOf a)),
+      report
+        (orElseLoc (firstLoc a) (orElseLoc loc fallback))
+        (callMessage (kindOf a)),
     ]
     None => []
 
@@ -126,11 +130,8 @@ appendedArg roles args = go 0 roles
     go i (_ :: rest) = go (i + 1) rest
 
 argsOf : Expr -> List Expr
-argsOf e = spine e []
-  where
-    spine x acc = match unwrapLoc x
-      EApp f a => spine f (a :: acc)
-      _ => acc
+argsOf e = match appSpineOf e
+  (_, args) => args
 
 -- What the appended operand is, when the source says so.
 data Operand = OpList | OpString | OpUnknown
@@ -173,7 +174,7 @@ sameRef a b = match (unwrapLoc a, unwrapLoc b)
   _ => False
 
 refFinding : Option Loc -> (Option Loc, Operand) -> Finding
-refFinding fallback (loc, op) = report (orLoc loc fallback) (refMessage op)
+refFinding fallback (loc, op) = report (orElseLoc loc fallback) (refMessage op)
 
 -- ── fold lambdas ─────────────────────────────────────────────────────────────
 
@@ -186,16 +187,12 @@ foldFindings ctx e
   | otherwise = match e
     EApp _ a => match unwrapLoc a
       ELam _ _ => match foldVerdict e
-        FoldAppends => [report (orLoc (firstLoc e) ctx.ctxSpan) foldMessage]
+        FoldAppends => [report (orElseLoc (firstLoc e) ctx.ctxSpan) foldMessage]
         _ => []
       _ => []
     _ => []
 
 -- ── findings ─────────────────────────────────────────────────────────────────
-
-orLoc : Option Loc -> Option Loc -> Option Loc
-orLoc (Some l) _ = Some l
-orLoc None fallback = fallback
 
 report : Option Loc -> String -> Finding
 report loc message = Finding {

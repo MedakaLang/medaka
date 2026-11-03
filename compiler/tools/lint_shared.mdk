@@ -866,6 +866,7 @@ calledName e = match unwrapLoc e
   _ => ""
 
 -- The span of the identifier a use stands on: the innermost `ELoc` over an `EVar`.
+export
 varSite : Expr -> Option Loc
 varSite (ELoc l inner) = match varSite inner
   Some inner2 => Some inner2
