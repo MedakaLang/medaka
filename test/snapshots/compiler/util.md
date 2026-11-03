@@ -1,5 +1,5 @@
 # META
-source_lines=634
+source_lines=628
 stages=DESUGAR,MARK
 # SOURCE
 -- Shared internal helpers for the self-hosted compiler stages.  compiler
@@ -396,13 +396,7 @@ endsWith suf s =
 -- which was O(lines × names) before.  Linear in the line's length.
 export
 schemeLineName : String -> Option String
-schemeLineName l = schemeLineNameGo l 0 (stringLength l)
-
-schemeLineNameGo : String -> Int -> Int -> Option String
-schemeLineNameGo l i n
-  | i + 3 > n = None
-  | stringSlice i (i + 3) l == " : " = Some (stringSlice 0 i l)
-  | otherwise = schemeLineNameGo l (i + 1) n
+schemeLineName l = map (i => stringSlice 0 i l) (stringIndexOf " : " l)
 
 export
 mapOption : (a -> b) -> Option a -> Option b
@@ -746,9 +740,7 @@ hexDigits k n acc =
 (DTypeSig true "endsWith" (TyFun (TyCon "String") (TyFun (TyCon "String") (TyCon "Bool"))))
 (DFunDef false "endsWith" ((PVar "suf") (PVar "s")) (EBlock (DoLet false false (PVar "n") (EApp (EVar "stringLength") (EVar "s"))) (DoLet false false (PVar "k") (EApp (EVar "stringLength") (EVar "suf"))) (DoExpr (EBinOp "&&" (EBinOp "<=" (EVar "k") (EVar "n")) (EBinOp "==" (EApp (EApp (EApp (EVar "stringSlice") (EBinOp "-" (EVar "n") (EVar "k"))) (EVar "n")) (EVar "s")) (EVar "suf"))))))
 (DTypeSig true "schemeLineName" (TyFun (TyCon "String") (TyApp (TyCon "Option") (TyCon "String"))))
-(DFunDef false "schemeLineName" ((PVar "l")) (EApp (EApp (EApp (EVar "schemeLineNameGo") (EVar "l")) (ELit (LInt 0))) (EApp (EVar "stringLength") (EVar "l"))))
-(DTypeSig false "schemeLineNameGo" (TyFun (TyCon "String") (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyApp (TyCon "Option") (TyCon "String"))))))
-(DFunDef false "schemeLineNameGo" ((PVar "l") (PVar "i") (PVar "n")) (EIf (EBinOp ">" (EBinOp "+" (EVar "i") (ELit (LInt 3))) (EVar "n")) (EVar "None") (EIf (EBinOp "==" (EApp (EApp (EApp (EVar "stringSlice") (EVar "i")) (EBinOp "+" (EVar "i") (ELit (LInt 3)))) (EVar "l")) (ELit (LString " : "))) (EApp (EVar "Some") (EApp (EApp (EApp (EVar "stringSlice") (ELit (LInt 0))) (EVar "i")) (EVar "l"))) (EIf (EVar "otherwise") (EApp (EApp (EApp (EVar "schemeLineNameGo") (EVar "l")) (EBinOp "+" (EVar "i") (ELit (LInt 1)))) (EVar "n")) (EApp (EVar "__fallthrough__") (ELit LUnit))))))
+(DFunDef false "schemeLineName" ((PVar "l")) (EApp (EApp (EVar "map") (ELam ((PVar "i")) (EApp (EApp (EApp (EVar "stringSlice") (ELit (LInt 0))) (EVar "i")) (EVar "l")))) (EApp (EApp (EVar "stringIndexOf") (ELit (LString " : "))) (EVar "l"))))
 (DTypeSig true "mapOption" (TyFun (TyFun (TyVar "a") (TyVar "b")) (TyFun (TyApp (TyCon "Option") (TyVar "a")) (TyApp (TyCon "Option") (TyVar "b")))))
 (DFunDef false "mapOption" (PWild (PCon "None")) (EVar "None"))
 (DFunDef false "mapOption" ((PVar "f") (PCon "Some" (PVar "x"))) (EApp (EVar "Some") (EApp (EVar "f") (EVar "x"))))
@@ -926,9 +918,7 @@ hexDigits k n acc =
 (DTypeSig true "endsWith" (TyFun (TyCon "String") (TyFun (TyCon "String") (TyCon "Bool"))))
 (DFunDef false "endsWith" ((PVar "suf") (PVar "s")) (EBlock (DoLet false false (PVar "n") (EApp (EVar "stringLength") (EVar "s"))) (DoLet false false (PVar "k") (EApp (EVar "stringLength") (EVar "suf"))) (DoExpr (EBinOp "&&" (EBinOp "<=" (EVar "k") (EVar "n")) (EBinOp "==" (EApp (EApp (EApp (EVar "stringSlice") (EBinOp "-" (EVar "n") (EVar "k"))) (EVar "n")) (EVar "s")) (EVar "suf"))))))
 (DTypeSig true "schemeLineName" (TyFun (TyCon "String") (TyApp (TyCon "Option") (TyCon "String"))))
-(DFunDef false "schemeLineName" ((PVar "l")) (EApp (EApp (EApp (EVar "schemeLineNameGo") (EVar "l")) (ELit (LInt 0))) (EApp (EVar "stringLength") (EVar "l"))))
-(DTypeSig false "schemeLineNameGo" (TyFun (TyCon "String") (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyApp (TyCon "Option") (TyCon "String"))))))
-(DFunDef false "schemeLineNameGo" ((PVar "l") (PVar "i") (PVar "n")) (EIf (EBinOp ">" (EBinOp "+" (EVar "i") (ELit (LInt 3))) (EVar "n")) (EVar "None") (EIf (EBinOp "==" (EApp (EApp (EApp (EVar "stringSlice") (EVar "i")) (EBinOp "+" (EVar "i") (ELit (LInt 3)))) (EVar "l")) (ELit (LString " : "))) (EApp (EVar "Some") (EApp (EApp (EApp (EVar "stringSlice") (ELit (LInt 0))) (EVar "i")) (EVar "l"))) (EIf (EVar "otherwise") (EApp (EApp (EApp (EVar "schemeLineNameGo") (EVar "l")) (EBinOp "+" (EVar "i") (ELit (LInt 1)))) (EVar "n")) (EApp (EVar "__fallthrough__") (ELit LUnit))))))
+(DFunDef false "schemeLineName" ((PVar "l")) (EApp (EApp (EMethodRef "map") (ELam ((PVar "i")) (EApp (EApp (EApp (EVar "stringSlice") (ELit (LInt 0))) (EVar "i")) (EVar "l")))) (EApp (EApp (EVar "stringIndexOf") (ELit (LString " : "))) (EVar "l"))))
 (DTypeSig true "mapOption" (TyFun (TyFun (TyVar "a") (TyVar "b")) (TyFun (TyApp (TyCon "Option") (TyVar "a")) (TyApp (TyCon "Option") (TyVar "b")))))
 (DFunDef false "mapOption" (PWild (PCon "None")) (EVar "None"))
 (DFunDef false "mapOption" ((PVar "f") (PCon "Some" (PVar "x"))) (EApp (EVar "Some") (EApp (EVar "f") (EVar "x"))))

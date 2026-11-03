@@ -1,5 +1,5 @@
 # META
-source_lines=71
+source_lines=51
 stages=DESUGAR,MARK
 # SOURCE
 -- Shared filesystem-path string operations for the self-hosted compiler.
@@ -10,28 +10,16 @@ stages=DESUGAR,MARK
 -- dirname: the path up to (not including) the final "/"; "." if none.
 export
 dirOf : String -> String
-dirOf path = dirGo path (stringLength path)
-
-dirGo : String -> Int -> String
-dirGo _ 0 = "."
-dirGo path i =
-  if stringSlice (i - 1) i path == "/" then
-    stringSlice 0 (i - 1) path
-  else
-    dirGo path (i - 1)
+dirOf path = match stringLastIndexOf "/" path
+  Some i => stringSlice 0 i path
+  None => "."
 
 -- basename: the text after the final "/" (whole string if none).
 export
 baseOf : String -> String
-baseOf path = baseGo path (stringLength path) (stringLength path)
-
-baseGo : String -> Int -> Int -> String
-baseGo path end 0 = stringSlice 0 end path
-baseGo path end i =
-  if stringSlice (i - 1) i path == "/" then
-    stringSlice i end path
-  else
-    baseGo path end (i - 1)
+baseOf path = match stringLastIndexOf "/" path
+  Some i => stringSlice (i + 1) (stringLength path) path
+  None => path
 
 -- Alias of baseOf (kept for call sites that read more naturally as baseName).
 export
@@ -41,19 +29,11 @@ baseName path = baseOf path
 -- Drop a trailing ".ext" from the basename (no-op if the dot is before a "/").
 export
 chopExt : String -> String
-chopExt path = chopGo path (stringLength path)
-
-chopGo : String -> Int -> String
-chopGo path 0 = path
-chopGo path i =
-  let c = stringSlice (i - 1) i path
-  if c == "/" then
-    path
-  else if c == "." then
-    stringSlice 0 (i - 1) path
-  else
-    chopGo path (i - 1)
--- no extension in the basename
+chopExt path = match stringLastIndexOf "." path
+  Some d => match stringLastIndexOf "/" path
+    Some s => if s > d then path else stringSlice 0 d path
+    None => stringSlice 0 d path
+  None => path
 
 export
 joinPath : String -> String -> String
@@ -75,22 +55,13 @@ modIdOf : String -> String
 modIdOf path = stripMdk (baseName path)
 # DESUGAR
 (DTypeSig true "dirOf" (TyFun (TyCon "String") (TyCon "String")))
-(DFunDef false "dirOf" ((PVar "path")) (EApp (EApp (EVar "dirGo") (EVar "path")) (EApp (EVar "stringLength") (EVar "path"))))
-(DTypeSig false "dirGo" (TyFun (TyCon "String") (TyFun (TyCon "Int") (TyCon "String"))))
-(DFunDef false "dirGo" (PWild (PLit (LInt 0))) (ELit (LString ".")))
-(DFunDef false "dirGo" ((PVar "path") (PVar "i")) (EIf (EBinOp "==" (EApp (EApp (EApp (EVar "stringSlice") (EBinOp "-" (EVar "i") (ELit (LInt 1)))) (EVar "i")) (EVar "path")) (ELit (LString "/"))) (EApp (EApp (EApp (EVar "stringSlice") (ELit (LInt 0))) (EBinOp "-" (EVar "i") (ELit (LInt 1)))) (EVar "path")) (EApp (EApp (EVar "dirGo") (EVar "path")) (EBinOp "-" (EVar "i") (ELit (LInt 1))))))
+(DFunDef false "dirOf" ((PVar "path")) (EMatch (EApp (EApp (EVar "stringLastIndexOf") (ELit (LString "/"))) (EVar "path")) (arm (PCon "Some" (PVar "i")) () (EApp (EApp (EApp (EVar "stringSlice") (ELit (LInt 0))) (EVar "i")) (EVar "path"))) (arm (PCon "None") () (ELit (LString ".")))))
 (DTypeSig true "baseOf" (TyFun (TyCon "String") (TyCon "String")))
-(DFunDef false "baseOf" ((PVar "path")) (EApp (EApp (EApp (EVar "baseGo") (EVar "path")) (EApp (EVar "stringLength") (EVar "path"))) (EApp (EVar "stringLength") (EVar "path"))))
-(DTypeSig false "baseGo" (TyFun (TyCon "String") (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyCon "String")))))
-(DFunDef false "baseGo" ((PVar "path") (PVar "end") (PLit (LInt 0))) (EApp (EApp (EApp (EVar "stringSlice") (ELit (LInt 0))) (EVar "end")) (EVar "path")))
-(DFunDef false "baseGo" ((PVar "path") (PVar "end") (PVar "i")) (EIf (EBinOp "==" (EApp (EApp (EApp (EVar "stringSlice") (EBinOp "-" (EVar "i") (ELit (LInt 1)))) (EVar "i")) (EVar "path")) (ELit (LString "/"))) (EApp (EApp (EApp (EVar "stringSlice") (EVar "i")) (EVar "end")) (EVar "path")) (EApp (EApp (EApp (EVar "baseGo") (EVar "path")) (EVar "end")) (EBinOp "-" (EVar "i") (ELit (LInt 1))))))
+(DFunDef false "baseOf" ((PVar "path")) (EMatch (EApp (EApp (EVar "stringLastIndexOf") (ELit (LString "/"))) (EVar "path")) (arm (PCon "Some" (PVar "i")) () (EApp (EApp (EApp (EVar "stringSlice") (EBinOp "+" (EVar "i") (ELit (LInt 1)))) (EApp (EVar "stringLength") (EVar "path"))) (EVar "path"))) (arm (PCon "None") () (EVar "path"))))
 (DTypeSig true "baseName" (TyFun (TyCon "String") (TyCon "String")))
 (DFunDef false "baseName" ((PVar "path")) (EApp (EVar "baseOf") (EVar "path")))
 (DTypeSig true "chopExt" (TyFun (TyCon "String") (TyCon "String")))
-(DFunDef false "chopExt" ((PVar "path")) (EApp (EApp (EVar "chopGo") (EVar "path")) (EApp (EVar "stringLength") (EVar "path"))))
-(DTypeSig false "chopGo" (TyFun (TyCon "String") (TyFun (TyCon "Int") (TyCon "String"))))
-(DFunDef false "chopGo" ((PVar "path") (PLit (LInt 0))) (EVar "path"))
-(DFunDef false "chopGo" ((PVar "path") (PVar "i")) (EBlock (DoLet false false (PVar "c") (EApp (EApp (EApp (EVar "stringSlice") (EBinOp "-" (EVar "i") (ELit (LInt 1)))) (EVar "i")) (EVar "path"))) (DoExpr (EIf (EBinOp "==" (EVar "c") (ELit (LString "/"))) (EVar "path") (EIf (EBinOp "==" (EVar "c") (ELit (LString "."))) (EApp (EApp (EApp (EVar "stringSlice") (ELit (LInt 0))) (EBinOp "-" (EVar "i") (ELit (LInt 1)))) (EVar "path")) (EApp (EApp (EVar "chopGo") (EVar "path")) (EBinOp "-" (EVar "i") (ELit (LInt 1)))))))))
+(DFunDef false "chopExt" ((PVar "path")) (EMatch (EApp (EApp (EVar "stringLastIndexOf") (ELit (LString "."))) (EVar "path")) (arm (PCon "Some" (PVar "d")) () (EMatch (EApp (EApp (EVar "stringLastIndexOf") (ELit (LString "/"))) (EVar "path")) (arm (PCon "Some" (PVar "s")) () (EIf (EBinOp ">" (EVar "s") (EVar "d")) (EVar "path") (EApp (EApp (EApp (EVar "stringSlice") (ELit (LInt 0))) (EVar "d")) (EVar "path")))) (arm (PCon "None") () (EApp (EApp (EApp (EVar "stringSlice") (ELit (LInt 0))) (EVar "d")) (EVar "path"))))) (arm (PCon "None") () (EVar "path"))))
 (DTypeSig true "joinPath" (TyFun (TyCon "String") (TyFun (TyCon "String") (TyCon "String"))))
 (DFunDef false "joinPath" ((PVar "a") (PVar "b")) (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "")) (EApp (EVar "display") (EVar "a"))) (ELit (LString "/"))) (EApp (EVar "display") (EVar "b"))) (ELit (LString ""))))
 (DTypeSig true "stripMdk" (TyFun (TyCon "String") (TyCon "String")))
@@ -99,22 +70,13 @@ modIdOf path = stripMdk (baseName path)
 (DFunDef false "modIdOf" ((PVar "path")) (EApp (EVar "stripMdk") (EApp (EVar "baseName") (EVar "path"))))
 # MARK
 (DTypeSig true "dirOf" (TyFun (TyCon "String") (TyCon "String")))
-(DFunDef false "dirOf" ((PVar "path")) (EApp (EApp (EVar "dirGo") (EVar "path")) (EApp (EVar "stringLength") (EVar "path"))))
-(DTypeSig false "dirGo" (TyFun (TyCon "String") (TyFun (TyCon "Int") (TyCon "String"))))
-(DFunDef false "dirGo" (PWild (PLit (LInt 0))) (ELit (LString ".")))
-(DFunDef false "dirGo" ((PVar "path") (PVar "i")) (EIf (EBinOp "==" (EApp (EApp (EApp (EVar "stringSlice") (EBinOp "-" (EVar "i") (ELit (LInt 1)))) (EVar "i")) (EVar "path")) (ELit (LString "/"))) (EApp (EApp (EApp (EVar "stringSlice") (ELit (LInt 0))) (EBinOp "-" (EVar "i") (ELit (LInt 1)))) (EVar "path")) (EApp (EApp (EVar "dirGo") (EVar "path")) (EBinOp "-" (EVar "i") (ELit (LInt 1))))))
+(DFunDef false "dirOf" ((PVar "path")) (EMatch (EApp (EApp (EVar "stringLastIndexOf") (ELit (LString "/"))) (EVar "path")) (arm (PCon "Some" (PVar "i")) () (EApp (EApp (EApp (EVar "stringSlice") (ELit (LInt 0))) (EVar "i")) (EVar "path"))) (arm (PCon "None") () (ELit (LString ".")))))
 (DTypeSig true "baseOf" (TyFun (TyCon "String") (TyCon "String")))
-(DFunDef false "baseOf" ((PVar "path")) (EApp (EApp (EApp (EVar "baseGo") (EVar "path")) (EApp (EVar "stringLength") (EVar "path"))) (EApp (EVar "stringLength") (EVar "path"))))
-(DTypeSig false "baseGo" (TyFun (TyCon "String") (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyCon "String")))))
-(DFunDef false "baseGo" ((PVar "path") (PVar "end") (PLit (LInt 0))) (EApp (EApp (EApp (EVar "stringSlice") (ELit (LInt 0))) (EVar "end")) (EVar "path")))
-(DFunDef false "baseGo" ((PVar "path") (PVar "end") (PVar "i")) (EIf (EBinOp "==" (EApp (EApp (EApp (EVar "stringSlice") (EBinOp "-" (EVar "i") (ELit (LInt 1)))) (EVar "i")) (EVar "path")) (ELit (LString "/"))) (EApp (EApp (EApp (EVar "stringSlice") (EVar "i")) (EVar "end")) (EVar "path")) (EApp (EApp (EApp (EVar "baseGo") (EVar "path")) (EVar "end")) (EBinOp "-" (EVar "i") (ELit (LInt 1))))))
+(DFunDef false "baseOf" ((PVar "path")) (EMatch (EApp (EApp (EVar "stringLastIndexOf") (ELit (LString "/"))) (EVar "path")) (arm (PCon "Some" (PVar "i")) () (EApp (EApp (EApp (EVar "stringSlice") (EBinOp "+" (EVar "i") (ELit (LInt 1)))) (EApp (EVar "stringLength") (EVar "path"))) (EVar "path"))) (arm (PCon "None") () (EVar "path"))))
 (DTypeSig true "baseName" (TyFun (TyCon "String") (TyCon "String")))
 (DFunDef false "baseName" ((PVar "path")) (EApp (EVar "baseOf") (EVar "path")))
 (DTypeSig true "chopExt" (TyFun (TyCon "String") (TyCon "String")))
-(DFunDef false "chopExt" ((PVar "path")) (EApp (EApp (EVar "chopGo") (EVar "path")) (EApp (EVar "stringLength") (EVar "path"))))
-(DTypeSig false "chopGo" (TyFun (TyCon "String") (TyFun (TyCon "Int") (TyCon "String"))))
-(DFunDef false "chopGo" ((PVar "path") (PLit (LInt 0))) (EVar "path"))
-(DFunDef false "chopGo" ((PVar "path") (PVar "i")) (EBlock (DoLet false false (PVar "c") (EApp (EApp (EApp (EVar "stringSlice") (EBinOp "-" (EVar "i") (ELit (LInt 1)))) (EVar "i")) (EVar "path"))) (DoExpr (EIf (EBinOp "==" (EVar "c") (ELit (LString "/"))) (EVar "path") (EIf (EBinOp "==" (EVar "c") (ELit (LString "."))) (EApp (EApp (EApp (EVar "stringSlice") (ELit (LInt 0))) (EBinOp "-" (EVar "i") (ELit (LInt 1)))) (EVar "path")) (EApp (EApp (EVar "chopGo") (EVar "path")) (EBinOp "-" (EVar "i") (ELit (LInt 1)))))))))
+(DFunDef false "chopExt" ((PVar "path")) (EMatch (EApp (EApp (EVar "stringLastIndexOf") (ELit (LString "."))) (EVar "path")) (arm (PCon "Some" (PVar "d")) () (EMatch (EApp (EApp (EVar "stringLastIndexOf") (ELit (LString "/"))) (EVar "path")) (arm (PCon "Some" (PVar "s")) () (EIf (EBinOp ">" (EVar "s") (EVar "d")) (EVar "path") (EApp (EApp (EApp (EVar "stringSlice") (ELit (LInt 0))) (EVar "d")) (EVar "path")))) (arm (PCon "None") () (EApp (EApp (EApp (EVar "stringSlice") (ELit (LInt 0))) (EVar "d")) (EVar "path"))))) (arm (PCon "None") () (EVar "path"))))
 (DTypeSig true "joinPath" (TyFun (TyCon "String") (TyFun (TyCon "String") (TyCon "String"))))
 (DFunDef false "joinPath" ((PVar "a") (PVar "b")) (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "")) (EApp (EMethodRef "display") (EVar "a"))) (ELit (LString "/"))) (EApp (EMethodRef "display") (EVar "b"))) (ELit (LString ""))))
 (DTypeSig true "stripMdk" (TyFun (TyCon "String") (TyCon "String")))

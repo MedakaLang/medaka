@@ -72,7 +72,7 @@ import support.util.{
 import support.opcount.{setOpCounting, opSnap}
 import support.stage_count.{stageCountInit, stageDump, stageExit}
 import support.ordmap.{OrdMap, omEmpty, omHasKey, omFromNames}
-import support.path.{baseOf, chopExt, joinPath}
+import support.path.{baseOf, chopExt, dirOf, joinPath}
 import support.timer.{
   perfEnabled,
   now,
@@ -774,7 +774,7 @@ runCheckCmd argv =
       carryTargetProfile (lastValue "--target" a) target
       let root = envOr "MEDAKA_ROOT" defaultMedakaRoot
       let stdlibDir = root ++ "/stdlib"
-      let roots = entrySearchRoots (dirOf2 target) ++ [stdlibDir]
+      let roots = entrySearchRoots (dirOf target) ++ [stdlibDir]
       match readPreludeSources stdlibDir
         Err msg => dieMsg msg
         Ok prelude =>
@@ -1282,7 +1282,7 @@ reportKey stdlibDir (CjParts _ triples) path =
   if any ((p, _, _) => p == path) triples then
     path
   else
-    relDiagPath (dirOf2 stdlibDir) path
+    relDiagPath (dirOf stdlibDir) path
 reportKey _ _ path = path
 
 -- `run`'s refusal, against `eval/run` and the selected profile together.  An
@@ -2193,19 +2193,13 @@ splitCodemodArgv (tok :: rest) mode cargs paths =
 -- which names to split).  A leading `=` (`--=v`) is not a flag name; leave it
 -- to the codemod's own `mk` to reject by name.
 codemodFlagEq : String -> Option (String, String)
-codemodFlagEq tok = codemodFlagEqGo tok 0 (stringLength tok)
-
-codemodFlagEqGo : String -> Int -> Int -> Option (String, String)
-codemodFlagEqGo tok i n =
-  if i >= n then
-    None
-  else if stringSlice i (i + 1) tok == "=" then
+codemodFlagEq tok = match stringIndexOf "=" tok
+  Some i =>
     if i <= 2 then
       None
     else
-      Some (stringSlice 0 i tok, stringSlice (i + 1) n tok)
-  else
-    codemodFlagEqGo tok (i + 1) n
+      Some (stringSlice 0 i tok, stringSlice (i + 1) (stringLength tok) tok)
+  None => None
 
 -- --stdout for a single file: parse errors exit 1, otherwise print the rewritten
 -- (or, if unchanged, the original) source.  Advisory warnings go to stderr.
@@ -2863,7 +2857,7 @@ runRunCmd argv =
       carryTargetProfile (runTargetFlag argv) target
       let root = envOr "MEDAKA_ROOT" defaultMedakaRoot
       let stdlibDir = root ++ "/stdlib"
-      let roots = entrySearchRoots (dirOf2 target) ++ [stdlibDir]
+      let roots = entrySearchRoots (dirOf target) ++ [stdlibDir]
       let allowInternal = runFlagGiven "--allow-internal" argv
       -- publish the args AFTER the target for the run-path `args` extern
       -- (eval.mdk's pArgs reads this Ref): `medaka run prog.mdk a b` ⇒ ["a","b"],
@@ -3460,7 +3454,7 @@ runDocTargets (target :: _) =
   carryTargetProfile None target
   let root = envOr "MEDAKA_ROOT" defaultMedakaRoot
   let stdlibDir = root ++ "/stdlib"
-  let roots = entrySearchRoots (dirOf2 target) ++ [stdlibDir]
+  let roots = entrySearchRoots (dirOf target) ++ [stdlibDir]
   let r = do
     prelude <- readPreludeSources stdlibDir
     let _ = seedCheckPrelude prelude
@@ -3533,7 +3527,7 @@ collectModuleDocs rsrc csrc stdlibDir (target :: rest) = match readSource target
   Ok tsrc => match docParseError target tsrc
     Some msg => Err msg
     None =>
-      let roots = entrySearchRoots (dirOf2 target) ++ [stdlibDir]
+      let roots = entrySearchRoots (dirOf target) ++ [stdlibDir]
       let md = computeModuleDoc rsrc csrc tsrc target roots
       map (md :: _) (collectModuleDocs rsrc csrc stdlibDir rest)
 
@@ -3683,7 +3677,7 @@ analyzeTarget target fn =
   carryTargetProfile None target
   let root = envOr "MEDAKA_ROOT" defaultMedakaRoot
   let stdlibDir = root ++ "/stdlib"
-  let roots = entrySearchRoots (dirOf2 target) ++ [stdlibDir]
+  let roots = entrySearchRoots (dirOf target) ++ [stdlibDir]
   -- An unreadable prelude or target is not an analysis result: exit here.
   let prelude = orExit (readPreludeSources stdlibDir)
   let tsrc = orExit (readSource target)
@@ -4492,25 +4486,7 @@ snapshotStages a = match flagValue "--stages" a
 -- the first-occurrence read `snapFlagValue` performed.
 
 hasSlash : String -> Bool
-hasSlash s = hasSlashFrom s (stringLength s)
-
-hasSlashFrom : String -> Int -> Bool
-hasSlashFrom _ 0 = False
-hasSlashFrom s i = stringSlice (i - 1) i s == "/" || hasSlashFrom s (i - 1)
-
--- dirname on a POSIX path.  A deliberate duplicate of `support/path.mdk`'s
--- `dirOf`, on the same license as that file's own `lsp.mdk` duplicate: too
--- small to be worth the coupling.  Keep the two bodies identical.
-dirOf2 : String -> String
-dirOf2 path = dirGo2 path (stringLength path)
-
-dirGo2 : String -> Int -> String
-dirGo2 _path 0 = "."
-dirGo2 path i =
-  if stringSlice (i - 1) i path == "/" then
-    stringSlice 0 (i - 1) path
-  else
-    dirGo2 path (i - 1)
+hasSlash s = isSome (stringIndexOf "/" s)
 
 -- ── repl ──────────────────────────────────────────────────────────────────
 -- Mirrors bin/main.ml's `repl` arm (Repl.run) + repl_main.mdk: read

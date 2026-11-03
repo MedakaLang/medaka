@@ -49,14 +49,18 @@ pieces size pos (r :: rest) =
   else
     SourcePiece kind (SourceSpan pos e) :: pieces size e rest
 
-comments : String -> List RawTok -> List Trivia
+comments : Array Char -> List RawTok -> List Trivia
 comments _ [] = []
-comments src ((RComment s e) :: rest) =
-  let opener = stringSlice s (s + 2) src
+comments chars ((RComment s e) :: rest) =
+  let first = arrayGetUnsafe s chars
+  let second = arrayGetUnsafe (s + 1) chars
   let kind =
-    if opener == "--" || opener == "#!" then LineComment else BlockComment
-  Trivia kind (SourceSpan s e) :: comments src rest
-comments src (_ :: rest) = comments src rest
+    if first == '-' && second == '-' || first == '#' && second == '!' then
+      LineComment
+    else
+      BlockComment
+  Trivia kind (SourceSpan s e) :: comments chars rest
+comments chars (_ :: rest) = comments chars rest
 
 export
 publishSyntax : RecoveryLimits -> String -> Result SyntaxAdmission SyntaxSource
@@ -81,7 +85,8 @@ publishSyntaxPrepared known (limits@(RecoveryLimits maxSource maxTokens maxAttem
     Err (SourceLimit (stringLength src))
   else
     stageBump "syntax.scan_raw"
-    let raw = scanRawChars (stringToChars src)
+    let chars = stringToChars src
+    let raw = scanRawChars chars
     let ranges = applyLayoutRanges raw
     let tokens = map ((t, _, _) => t) ranges
     let offsets = map ((_, s, e) => (s, e)) ranges
@@ -120,7 +125,7 @@ publishSyntaxPrepared known (limits@(RecoveryLimits maxSource maxTokens maxAttem
           index
           (arrayFromList tokens)
           (arrayFromList (map ((s, e) => SourceSpan s e) offsets))
-          (arrayFromList (comments src raw))
+          (arrayFromList (comments chars raw))
           (arrayFromList (pieces (stringLength src) 0 raw))
           strict
           structural

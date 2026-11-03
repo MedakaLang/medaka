@@ -6,7 +6,8 @@ import types.effect_domain.{
 import types.effect_rows.{
   EffLabel, Atom, labelKey, builtinLabel, atomWith, effLabelName
 }
-import support.util.{sortUniqS, filterList, reverseL, contains, joinWith}
+import support.util.{sortUniqS, filterList, contains, joinWith}
+import string.{split}
 
 lookupDomain : String -> List (String, Param) -> Param
 lookupDomain _ [] = PUnit
@@ -71,17 +72,7 @@ decodeSetParam s =
 
 -- split a string on ',' (Set-element separator; authority tokens contain none)
 splitOnComma : String -> List String
-splitOnComma s = splitOnCommaGo s 0 0 []
-
-splitOnCommaGo : String -> Int -> Int -> List String -> List String
-splitOnCommaGo s start i acc =
-  let n = stringLength s
-  if i >= n then
-    reverseL (stringSlice start n s :: acc)
-  else if stringSlice i (i + 1) s == "," then
-    splitOnCommaGo s (i + 1) (i + 1) (stringSlice start i s :: acc)
-  else
-    splitOnCommaGo s start (i + 1) acc
+splitOnComma s = split "," s
 
 -- A written Prefix element is any non-empty string.  A trailing `*` makes it a
 -- pattern; without one it is an exact element and admits only itself, so no
