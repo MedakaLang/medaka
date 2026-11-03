@@ -36,6 +36,9 @@ import tools.interface_cmd.{interfaceHelpText, runInterfaceCmd}
 import tools.new_cmd.{newProject}
 import driver.build_cmd.{
   BuildTarget(..),
+  BuildPaths(..),
+  BuildOptions(..),
+  defaultBuildOptions,
   ppBuildReport,
   runBuild,
   emitRtObj,
@@ -1542,15 +1545,19 @@ runBuildJsonCmd a allowInternal root stdlibDir input outOpt target =
         -- `quietEmitStderr = True`: the child's verdict arrives as the
         -- envelope (`diagEnvelope`), so its human copy is not forwarded.
         match (runBuild
-          root
-          medaka
-          cc
           target
-          input
-          outPath
-          keepIrCli
-          True
-          stampBuild
+          BuildPaths {
+            bpRoot = root,
+            bpMedaka = medaka,
+            bpCc = cc,
+            bpInput = input,
+            bpOut = outPath,
+          }
+          { defaultBuildOptions |
+            boKeepIr = keepIrCli,
+            boQuietEmit = True,
+            boStamp = stampBuild,
+          }
           (Some ask))
           -- #2243: the build's own notes (a failed `--keep-ir` copy) join
           -- the entry file's `diagnostics` array rather than vanishing
@@ -2450,15 +2457,18 @@ runBuildPlainCmd a =
           Ok prelude =>
             nativeTreesReport target prelude
             match (runBuild
-              root
-              medaka
-              cc
               target
-              inputAbs
-              outPath
-              keepIrCli
-              False
-              stampBuild
+              BuildPaths {
+                bpRoot = root,
+                bpMedaka = medaka,
+                bpCc = cc,
+                bpInput = inputAbs,
+                bpOut = outPath,
+              }
+              { defaultBuildOptions |
+                boKeepIr = keepIrCli,
+                boStamp = stampBuild,
+              }
               (Some GateAsk {
                 askAllowInternal = allowInternal,
                 askDiagJson = False,
