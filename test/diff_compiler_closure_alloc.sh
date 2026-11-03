@@ -210,8 +210,10 @@ build_one capture_correctness && check_probe capture_correctness capture-correct
 # eta-closure path.
 build_one lambda_value_nocapture &&
   check_probe lambda_value_nocapture lambda-nocapture 2000000
-# BARE-LAMBDA CAPTURE PARITY: the same construct but the lambda DOES close
-# over an enclosing value, so it must still allocate a fresh cell every call.
+# BARE-LAMBDA CAPTURE PARITY: the same construct but the lambda closes over
+# an enclosing value and outlives the iteration that builds it, so it must
+# still allocate a fresh cell every iteration. A capturing lambda applied only
+# inside its own iteration is no control: -O2 inlines the call and deletes it.
 build_one lambda_value_capture &&
   check_probe lambda_value_capture lambda-capture 1999999000000
 
