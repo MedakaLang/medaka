@@ -1,5 +1,5 @@
 # META
-source_lines=1066
+source_lines=1070
 stages=DESUGAR,MARK
 # SOURCE
 -- compiler/tools/lint_shared.mdk — helpers used by more than one lint module:
@@ -154,6 +154,10 @@ ruleNameLetUnderscoreUnit = "rule-let-underscore-unit"
 export
 ruleNameDiscardedResult : String
 ruleNameDiscardedResult = "rule-discarded-result"
+
+export
+ruleNameAccumulatorAppend : String
+ruleNameAccumulatorAppend = "rule-accumulator-append"
 
 export
 ruleNamePreferAssignOp : String
@@ -1145,6 +1149,8 @@ lastArmSpan arms = match last arms
 (DFunDef false "ruleNameLetUnderscoreUnit" () (ELit (LString "rule-let-underscore-unit")))
 (DTypeSig true "ruleNameDiscardedResult" (TyCon "String"))
 (DFunDef false "ruleNameDiscardedResult" () (ELit (LString "rule-discarded-result")))
+(DTypeSig true "ruleNameAccumulatorAppend" (TyCon "String"))
+(DFunDef false "ruleNameAccumulatorAppend" () (ELit (LString "rule-accumulator-append")))
 (DTypeSig true "ruleNamePreferAssignOp" (TyCon "String"))
 (DFunDef false "ruleNamePreferAssignOp" () (ELit (LString "rule-prefer-assign-op")))
 (DTypeSig true "ruleNamePromissoryReader" (TyCon "String"))
@@ -1500,6 +1506,8 @@ lastArmSpan arms = match last arms
 (DFunDef false "ruleNameLetUnderscoreUnit" () (ELit (LString "rule-let-underscore-unit")))
 (DTypeSig true "ruleNameDiscardedResult" (TyCon "String"))
 (DFunDef false "ruleNameDiscardedResult" () (ELit (LString "rule-discarded-result")))
+(DTypeSig true "ruleNameAccumulatorAppend" (TyCon "String"))
+(DFunDef false "ruleNameAccumulatorAppend" () (ELit (LString "rule-accumulator-append")))
 (DTypeSig true "ruleNamePreferAssignOp" (TyCon "String"))
 (DFunDef false "ruleNamePreferAssignOp" () (ELit (LString "rule-prefer-assign-op")))
 (DTypeSig true "ruleNamePromissoryReader" (TyCon "String"))

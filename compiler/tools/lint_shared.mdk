@@ -152,6 +152,10 @@ ruleNameDiscardedResult : String
 ruleNameDiscardedResult = "rule-discarded-result"
 
 export
+ruleNameAccumulatorAppend : String
+ruleNameAccumulatorAppend = "rule-accumulator-append"
+
+export
 ruleNamePreferAssignOp : String
 ruleNamePreferAssignOp = "rule-prefer-assign-op"
 
