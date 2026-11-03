@@ -967,3 +967,166 @@ test "a user name shadows core only for user code, under both engines" = withScr
             ]
             Err e => [fail e])
           ["eval", "native"]))
+
+-- The stale-binary notice under `--json`.  A copy of the tree's stdlib beside a
+-- `compiler/` holding one file makes `<dir>/root` a MEDAKA_ROOT whose source
+-- fingerprint differs from the one baked into the binary, so the binary is stale
+-- under it.
+
+staleNeedle : String
+staleNeedle = "built from compiler source that differs from"
+
+-- Make `<dir>/root` a stale MEDAKA_ROOT; Err names the step that failed.
+mkStaleRoot : String -> <Exec, IO, FileRead, FileWrite> Result String Unit
+mkStaleRoot dir = match runVerb "mkdir" ["-p", "\{dir}/root/compiler"]
+  Err e => Err e
+  Ok _ => match runVerb "cp" ["-r", underRoot "stdlib", "\{dir}/root/stdlib"]
+    Err e => Err e
+    Ok _ => writeFile "\{dir}/root/compiler/x.mdk" "x = 1\n"
+
+-- `medaka <args>` under `root` with MEDAKA_SEED=7 and `strict` as MEDAKA_STRICT
+-- (cleared when empty).
+underStaleRoot : String ->
+  String ->
+  List String ->
+  <Exec, IO> Result String (Int, String, String)
+underStaleRoot root strict args =
+  runVerb
+    "env"
+    ((if strict == "" then
+        ["-u", "MEDAKA_STRICT"]
+      else
+        ["MEDAKA_STRICT=\{strict}"])
+      ++ ["MEDAKA_ROOT=\{root}", "MEDAKA_SEED=7", medakaBin]
+      ++ args)
+
+withStaleRoot : List (String, String) ->
+  (String -> <Exec, IO, FileRead, FileWrite> Expectation) ->
+  <Exec, IO, FileRead, FileWrite> Expectation
+withStaleRoot files body = withFixtures files (dir => match mkStaleRoot dir
+  Ok _ => body dir
+  Err e => fail e)
+
+badParseSrc : String
+badParseSrc = "f = (\n"
+
+isStringWith : String -> Json -> Bool
+isStringWith needle (JString s) = contains needle s
+isStringWith _ _ = False
+
+test "an aborted --json test run on a stale binary carries the notice and the seed in one envelope" =
+  withStaleRoot
+    [("panic_test.mdk", panicTestSrc)]
+    (dir => withSpawn (underStaleRoot "\{dir}/root" "" [
+      "test",
+      "--json",
+      "--engines",
+      "eval",
+      "\{dir}/panic_test.mdk",
+    ]) ((code, out, err) => expectAll [
+      expectNotEqual 0 code,
+      expectEqual "" (trim out),
+      expectEqual
+        (Some True)
+        (map (isStringWith staleNeedle) (jsonMember "staleBinary" err)),
+      expectEqual (Some (JInt 7)) (jsonMember "seed" err),
+    ]))
+
+test "a passing --json test run on a stale binary reports on stdout and warns as prose" =
+  withStaleRoot
+    [("ok_test.mdk", passTestSrc)]
+    (dir => withSpawn (underStaleRoot "\{dir}/root" "" [
+      "test",
+      "--json",
+      "--engines",
+      "eval",
+      "\{dir}/ok_test.mdk",
+    ]) ((code, out, err) => expectAll [
+      expectEqual 0 code,
+      expectTrue (isSome (jsonMember "summary" out)),
+      expectTrue (contains staleNeedle err),
+      expectEqual None (jsonMember "staleBinary" err),
+    ]))
+
+test "MEDAKA_STRICT stops a --json test run on a stale binary with the warning, no envelope" =
+  withStaleRoot
+    [("panic_test.mdk", panicTestSrc)]
+    (dir => withSpawn (underStaleRoot "\{dir}/root" "1" [
+      "test",
+      "--json",
+      "--engines",
+      "eval",
+      "\{dir}/panic_test.mdk",
+    ]) ((code, out, err) => expectAll [
+      expectNotEqual 0 code,
+      expectEqual "" (trim out),
+      expectTrue (contains staleNeedle err),
+      expectEqual None (jsonMember "files" err),
+    ]))
+
+test "run --json on a stale binary still carries the notice in its envelope" =
+  withStaleRoot
+    [("panic.mdk", panicMainSrc)]
+    (dir => withSpawn (underStaleRoot "\{dir}/root" "" [
+      "run",
+      "--json",
+      "\{dir}/panic.mdk",
+    ]) ((code, _, err) => expectAll [
+      expectNotEqual 0 code,
+      expectEqual
+        (Some True)
+        (map (isStringWith staleNeedle) (jsonMember "staleBinary" err)),
+    ]))
+
+test "a --json type-error refusal on a stale binary prints the notice as prose" =
+  withStaleRoot
+    [("ill.mdk", illTypedSrc)]
+    (dir => withSpawn (underStaleRoot "\{dir}/root" "" [
+      "test",
+      "--json",
+      "\{dir}/ill.mdk",
+    ]) ((code, out, err) => expectAll [
+      expectEqual 1 code,
+      expectEqual None (jsonMember "seed" out),
+      expectTrue (contains staleNeedle err),
+    ]))
+
+-- A parse error under `--json` is the located refusal the human arm prints:
+-- stdout empty, no seed line, the human arm's exit status.
+parseRefusalRow : String ->
+  String ->
+  <Exec, IO, FileRead, FileWrite> Expectation
+parseRefusalRow dir root = withSpawn (underStaleRoot root "" [
+  "test",
+  "\{dir}/bad.mdk",
+]) ((humanCode, _, _) => withSpawn (underStaleRoot root "" [
+  "test",
+  "--json",
+  "\{dir}/bad.mdk",
+]) ((code, out, err) => expectAll [
+  expectEqual humanCode code,
+  expectEqual "" (trim out),
+  expectEqual [] (seedLines (lines err)),
+  expectTrue
+    (contains
+      "error: \{dir}/bad.mdk:2:0: expected a complete parenthesized expression"
+      err),
+]))
+
+test "a parse error under --json is the located refusal, on a normal root" =
+  withFixtures
+    [("bad.mdk", badParseSrc)]
+    (dir => parseRefusalRow dir (underRoot "."))
+
+test "a parse error under --json is the located refusal, with the notice first, on a stale root" =
+  withStaleRoot
+    [("bad.mdk", badParseSrc)]
+    (dir => withSpawn (underStaleRoot "\{dir}/root" "" [
+      "test",
+      "--json",
+      "\{dir}/bad.mdk",
+    ]) ((_, _, err) => expectAll [
+      expectTrue (startsWith "warning: " err),
+      expectTrue (contains staleNeedle err),
+      parseRefusalRow dir "\{dir}/root",
+    ]))
