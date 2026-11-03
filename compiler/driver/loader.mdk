@@ -122,7 +122,7 @@ moduleIdOfPath roots path =
 export
 readSourceE : String -> <FileRead> Result (Option String) String
 readSourceE path =
-  let _ = stageBump "read.source"
+  stageBump "read.source"
   match readFile path
     Ok src => Ok src
     Err e => if endsWith readFileNotUtf8Suffix e then Err None else Err (Some e)
@@ -702,7 +702,7 @@ parsedModule : (String -> String -> Result ParseError (List Decl)) ->
   String ->
   Result LoadError (String, String, List Decl)
 parsedModule parseFn owningRoot path src =
-  let _ = noteLoadedSource path src
+  noteLoadedSource path src
   match parseFn path src
     Err e => Err (LoadParseFailed path src e)
     Ok prog => Ok (owningRoot, path, prog)
@@ -1639,7 +1639,7 @@ loadProgramFilesE : (String -> Option String) ->
   List String ->
   <IO> Result LoadError (List (String, String, List Decl))
 loadProgramFilesE read entry roots =
-  let _ = stageBump "load.plain"
+  stageBump "load.plain"
   let deps = readDeps (findProjectRootOrSelf (parentDir entry))
   finishLoad
     (visitModF
@@ -1664,7 +1664,7 @@ loadProgramFilesLocatedE : (String -> Option String) ->
   List String ->
   <IO> Result LoadError (List (String, String, List Decl))
 loadProgramFilesLocatedE read entry roots =
-  let _ = stageBump "load.located"
+  stageBump "load.located"
   let deps = readDeps (findProjectRootOrSelf (parentDir entry))
   finishLoad
     (visitModF
@@ -1759,7 +1759,7 @@ loadProgramFilesLocatedCachedE : Ref (OrdMap (List Decl)) ->
   List String ->
   <IO> Result LoadError (List (String, String, List Decl))
 loadProgramFilesLocatedCachedE parseCacheRef read entry roots =
-  let _ = stageBump "load.cached"
+  stageBump "load.cached"
   let deps = readDeps (findProjectRootOrSelf (parentDir entry))
   finishCachedLoad
     parseCacheRef
@@ -1787,7 +1787,7 @@ loadProgramFilesLocatedCachedSourcesE parseCacheRef read entry roots =
     path src =>
       sources := omInsert path src !sources
       parseCachedLocated parseCacheRef src
-  let _ = stageBump "load.cached"
+  stageBump "load.cached"
   let deps = readDeps (findProjectRootOrSelf (parentDir entry))
   let result =
     finishCachedLoad

@@ -85,7 +85,7 @@ flushPerfSinkProse _ = putTimerLines (takePerfSink ())
 putTimerLines : List String -> <IO> Unit
 putTimerLines [] = ()
 putTimerLines (l :: ls) =
-  let _ = ePutStrLn l
+  ePutStrLn l
   putTimerLines ls
 
 -- True when MEDAKA_PERF is set to any value in the environment.
@@ -121,7 +121,7 @@ export
 emitStats : Bool -> List (String, Int) -> <IO> Unit
 emitStats _ [] = ()
 emitStats on ((label, count) :: rest) =
-  let _ = emitStat on label count
+  emitStat on label count
   emitStats on rest
 
 -- True when MEDAKA_PERF_WASM is set to any value in the environment.
@@ -259,7 +259,7 @@ emitPhaseAO True label elapsed allocDelta ops opDelta =
 (DFunDef false "flushPerfSinkProse" (PWild) (EApp (EVar "putTimerLines") (EApp (EVar "takePerfSink") (ELit LUnit))))
 (DTypeSig false "putTimerLines" (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyEffect ("IO") None (TyCon "Unit"))))
 (DFunDef false "putTimerLines" ((PList)) (ELit LUnit))
-(DFunDef false "putTimerLines" ((PCons (PVar "l") (PVar "ls"))) (EBlock (DoLet false false PWild (EApp (EVar "ePutStrLn") (EVar "l"))) (DoExpr (EApp (EVar "putTimerLines") (EVar "ls")))))
+(DFunDef false "putTimerLines" ((PCons (PVar "l") (PVar "ls"))) (EBlock (DoExpr (EApp (EVar "ePutStrLn") (EVar "l"))) (DoExpr (EApp (EVar "putTimerLines") (EVar "ls")))))
 (DTypeSig true "perfEnabled" (TyFun (TyCon "Unit") (TyEffect ("IO") None (TyCon "Bool"))))
 (DFunDef false "perfEnabled" ((PLit LUnit)) (EApp (EVar "isSome") (EApp (EVar "getEnv") (ELit (LString "MEDAKA_PERF")))))
 (DTypeSig true "statsEnabled" (TyFun (TyCon "Unit") (TyEffect ("IO") None (TyCon "Bool"))))
@@ -269,7 +269,7 @@ emitPhaseAO True label elapsed allocDelta ops opDelta =
 (DFunDef false "emitStat" ((PCon "True") (PVar "label") (PVar "count")) (EApp (EVar "emitTimerLine") (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "[stats] ")) (EApp (EVar "display") (EVar "label"))) (ELit (LString "\t"))) (EApp (EVar "display") (EApp (EVar "intToString") (EVar "count")))) (ELit (LString "")))))
 (DTypeSig true "emitStats" (TyFun (TyCon "Bool") (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "Int"))) (TyEffect ("IO") None (TyCon "Unit")))))
 (DFunDef false "emitStats" (PWild (PList)) (ELit LUnit))
-(DFunDef false "emitStats" ((PVar "on") (PCons (PTuple (PVar "label") (PVar "count")) (PVar "rest"))) (EBlock (DoLet false false PWild (EApp (EApp (EApp (EVar "emitStat") (EVar "on")) (EVar "label")) (EVar "count"))) (DoExpr (EApp (EApp (EVar "emitStats") (EVar "on")) (EVar "rest")))))
+(DFunDef false "emitStats" ((PVar "on") (PCons (PTuple (PVar "label") (PVar "count")) (PVar "rest"))) (EBlock (DoExpr (EApp (EApp (EApp (EVar "emitStat") (EVar "on")) (EVar "label")) (EVar "count"))) (DoExpr (EApp (EApp (EVar "emitStats") (EVar "on")) (EVar "rest")))))
 (DTypeSig true "perfWasmEnabled" (TyFun (TyCon "Unit") (TyEffect ("IO") None (TyCon "Bool"))))
 (DFunDef false "perfWasmEnabled" ((PLit LUnit)) (EMatch (EApp (EVar "getEnv") (ELit (LString "MEDAKA_PERF_WASM"))) (arm (PCon "Some" (PLit (LString ""))) () (EVar "False")) (arm (PCon "Some" PWild) () (EVar "True")) (arm (PCon "None") () (EVar "False"))))
 (DTypeSig true "now" (TyFun (TyCon "Unit") (TyEffect ("IO") None (TyCon "Float"))))
@@ -316,7 +316,7 @@ emitPhaseAO True label elapsed allocDelta ops opDelta =
 (DFunDef false "flushPerfSinkProse" (PWild) (EApp (EVar "putTimerLines") (EApp (EVar "takePerfSink") (ELit LUnit))))
 (DTypeSig false "putTimerLines" (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyEffect ("IO") None (TyCon "Unit"))))
 (DFunDef false "putTimerLines" ((PList)) (ELit LUnit))
-(DFunDef false "putTimerLines" ((PCons (PVar "l") (PVar "ls"))) (EBlock (DoLet false false PWild (EApp (EVar "ePutStrLn") (EVar "l"))) (DoExpr (EApp (EVar "putTimerLines") (EVar "ls")))))
+(DFunDef false "putTimerLines" ((PCons (PVar "l") (PVar "ls"))) (EBlock (DoExpr (EApp (EVar "ePutStrLn") (EVar "l"))) (DoExpr (EApp (EVar "putTimerLines") (EVar "ls")))))
 (DTypeSig true "perfEnabled" (TyFun (TyCon "Unit") (TyEffect ("IO") None (TyCon "Bool"))))
 (DFunDef false "perfEnabled" ((PLit LUnit)) (EApp (EVar "isSome") (EApp (EVar "getEnv") (ELit (LString "MEDAKA_PERF")))))
 (DTypeSig true "statsEnabled" (TyFun (TyCon "Unit") (TyEffect ("IO") None (TyCon "Bool"))))
@@ -326,7 +326,7 @@ emitPhaseAO True label elapsed allocDelta ops opDelta =
 (DFunDef false "emitStat" ((PCon "True") (PVar "label") (PVar "count")) (EApp (EVar "emitTimerLine") (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "[stats] ")) (EApp (EMethodRef "display") (EVar "label"))) (ELit (LString "\t"))) (EApp (EMethodRef "display") (EApp (EVar "intToString") (EDictApp "count")))) (ELit (LString "")))))
 (DTypeSig true "emitStats" (TyFun (TyCon "Bool") (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "Int"))) (TyEffect ("IO") None (TyCon "Unit")))))
 (DFunDef false "emitStats" (PWild (PList)) (ELit LUnit))
-(DFunDef false "emitStats" ((PVar "on") (PCons (PTuple (PVar "label") (PVar "count")) (PVar "rest"))) (EBlock (DoLet false false PWild (EApp (EApp (EApp (EVar "emitStat") (EVar "on")) (EVar "label")) (EDictApp "count"))) (DoExpr (EApp (EApp (EVar "emitStats") (EVar "on")) (EVar "rest")))))
+(DFunDef false "emitStats" ((PVar "on") (PCons (PTuple (PVar "label") (PVar "count")) (PVar "rest"))) (EBlock (DoExpr (EApp (EApp (EApp (EVar "emitStat") (EVar "on")) (EVar "label")) (EDictApp "count"))) (DoExpr (EApp (EApp (EVar "emitStats") (EVar "on")) (EVar "rest")))))
 (DTypeSig true "perfWasmEnabled" (TyFun (TyCon "Unit") (TyEffect ("IO") None (TyCon "Bool"))))
 (DFunDef false "perfWasmEnabled" ((PLit LUnit)) (EMatch (EApp (EVar "getEnv") (ELit (LString "MEDAKA_PERF_WASM"))) (arm (PCon "Some" (PLit (LString ""))) () (EVar "False")) (arm (PCon "Some" PWild) () (EVar "True")) (arm (PCon "None") () (EVar "False"))))
 (DTypeSig true "now" (TyFun (TyCon "Unit") (TyEffect ("IO") None (TyCon "Float"))))

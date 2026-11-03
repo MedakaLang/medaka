@@ -288,13 +288,13 @@ encodeMatch len dist w =
   let lenIdx = lengthSymbolIdx len 28
   let lenSym = 257 + lenIdx
   let (lcode, lwidth) = fixedLitLenCode lenSym
-  let _ = putCodeMSB lcode lwidth w
+  putCodeMSB lcode lwidth w
   let lbase = tableAt lengthBase lenIdx
   let lextra = tableAt lengthExtra lenIdx
-  let _ = putBits (len - lbase) lextra w
+  putBits (len - lbase) lextra w
   let dsym = distSymbolIdx dist 29
   let (dcode, dwidth) = fixedDistCode dsym
-  let _ = putCodeMSB dcode dwidth w
+  putCodeMSB dcode dwidth w
   let dbase = tableAt distBase dsym
   let dextra = tableAt distExtra dsym
   putBits (dist - dbase) dextra w
@@ -445,8 +445,8 @@ findMatch m pos =
 --   covers, and continue scanning past it.
 deflateEmitMatch : Matcher -> Int -> Int -> Int -> BitWriter -> Unit
 deflateEmitMatch m pos len dist w =
-  let _ = encodeMatch len dist w
-  let _ = insertUpTo m (pos + len)
+  encodeMatch len dist w
+  insertUpTo m (pos + len)
   deflateScan m (pos + len) w
 
 -- | Having found a `>= minMatch` match `(len1, dist1)` at `pos` (and already
@@ -480,7 +480,7 @@ deflateTryLazy m pos len1 dist1 w =
   if len1 < maxMatch && pos + 1 < m.n && hasHash (pos + 1) m.n then
     let (len2, _) = findMatch m (pos + 1)
     if len2 > len1 then
-      let _ = encodeLiteral (byteAt m.input pos) w
+      encodeLiteral (byteAt m.input pos) w
       deflateScan m (pos + 1) w
     else
       deflateEmitMatch m pos len1 dist1 w
@@ -495,13 +495,13 @@ deflateScan : Matcher -> Int -> BitWriter -> Unit
 deflateScan m pos w
   | pos >= m.n = ()
   | not (hasHash pos m.n) =
-    let _ = encodeLiteral (byteAt m.input pos) w
+    encodeLiteral (byteAt m.input pos) w
     deflateScan m (pos + 1) w
   | otherwise =
     let (len1, dist1) = findMatch m pos
-    let _ = insertUpTo m (pos + 1)
+    insertUpTo m (pos + 1)
     if len1 < minMatch then
-      let _ = encodeLiteral (byteAt m.input pos) w
+      encodeLiteral (byteAt m.input pos) w
       deflateScan m (pos + 1) w
     else
       deflateTryLazy m pos len1 dist1 w
@@ -538,21 +538,21 @@ deflateScan m pos w
 deflateFixedBytes : Bytes -> Bytes
 deflateFixedBytes input =
   let w = newBitWriter ()
-  let _ = putBits 1 1 w
-  let _ = putBits btypeFixedHuffman 2 w
+  putBits 1 1 w
+  putBits btypeFixedHuffman 2 w
   let m = newMatcher input
-  let _ = deflateScan m 0 w
-  let _ = encodeEob w
+  deflateScan m 0 w
+  encodeEob w
   finishBitWriter w
 
 emitStoredBlock : Bool -> Int -> Int -> Bytes -> BitWriter -> Unit
 emitStoredBlock isLast offset len input w =
   let bfinal = if isLast then 1 else 0
-  let _ = putBits bfinal 1 w
-  let _ = putBits btypeStored 2 w
-  let _ = alignByteW w
-  let _ = putBits len 16 w
-  let _ = putBits (bitAnd (bitNot len) mask16) 16 w
+  putBits bfinal 1 w
+  putBits btypeStored 2 w
+  alignByteW w
+  putBits len 16 w
+  putBits (bitAnd (bitNot len) mask16) 16 w
   putBytesAligned (B.sliceClamped offset (offset + len) input) w
 
 emitStoredChunks : Bytes -> Int -> Int -> BitWriter -> Unit
@@ -562,7 +562,7 @@ emitStoredChunks input n offset w
     let remaining = n - offset
     let chunkLen = minInt remaining storedChunkMax
     let isLast = offset + chunkLen >= n
-    let _ = emitStoredBlock isLast offset chunkLen input w
+    emitStoredBlock isLast offset chunkLen input w
     emitStoredChunks input n (offset + chunkLen) w
 
 {- | Encode `input` as one or more stored blocks (`BTYPE=00`), chunked at
@@ -824,7 +824,7 @@ prop "fixedLitLenCode round-trips through huffman.decodeSym for every lit/len sy
   let sym = abs symRaw % 288
   let (code, width) = fixedLitLenCode sym
   let w = newBitWriter ()
-  let _ = putCodeMSB code width w
+  putCodeMSB code width w
   let bytes = finishBitWriter w
   decodeSym fixedLitLen (newBitReader bytes) == Ok sym
 
@@ -832,7 +832,7 @@ prop "fixedDistCode round-trips through huffman.decodeSym for every distance sym
   let sym = abs symRaw % 32
   let (code, width) = fixedDistCode sym
   let w = newBitWriter ()
-  let _ = putCodeMSB code width w
+  putCodeMSB code width w
   let bytes = finishBitWriter w
   decodeSym fixedDist (newBitReader bytes) == Ok sym
 

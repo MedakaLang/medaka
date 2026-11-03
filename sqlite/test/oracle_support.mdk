@@ -299,3 +299,20 @@ seedDb db (s :: rest) = match seedSql s
   Ok sql => match spawnOut seedTimeoutSeconds "sqlite3" [db, sql]
     Err e => Err e
     Ok _ => seedDb db rest
+
+-- The cleanup ceiling: `rm -rf` of a few scratch files.
+cleanupTimeoutSeconds : Int
+cleanupTimeoutSeconds = 30
+
+{- | `out`, once the scratch `paths` its row wrote are removed. A removal that
+   fails turns an `Ok` row into an `Err` naming the cleanup, so a row cannot
+   pass while leaving its databases behind; an `Err` row keeps its own error,
+   which is the more useful one. -}
+export
+finishScratch : List String -> Result String a -> <Exec, IO> Result String a
+finishScratch paths out =
+  match spawnOut cleanupTimeoutSeconds "rm" ("-rf" :: paths)
+    Err e => match out
+      Err first => Err first
+      Ok _ => Err "scratch cleanup failed: \{e}"
+    Ok _ => out

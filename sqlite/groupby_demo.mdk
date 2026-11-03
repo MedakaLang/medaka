@@ -55,7 +55,7 @@ runQ : Db -> String -> Select -> RowType a -> (a -> String) -> <IO> Unit
 -- Intentional cross-file duplicate: parallel demo/probe script wiring the same fixture shape (not shared production logic to consolidate).
 -- lint-disable-next-line rule-duplicate-body
 runQ db label sel rt shw =
-  let _ = println label
+  println label
   match query db sel rt
     Err e => println "query error: \{e}"
     Ok rows => printRows shw rows
@@ -78,7 +78,7 @@ main = match args ()
     Ok db =>
       -- A. AGGREGATE OVER A JOIN — count(*) and sum() grouped by a joined
       --    table's column.  The old AggQuery had no joins at all.
-      let _ = runQ
+      runQ
         db
         "-- join+group name: count* sum(amount) --"
         (withOrderBy
@@ -96,7 +96,7 @@ main = match args ()
       -- B. ORDER BY count(*) DESC LIMIT 2 — the classic "top N by frequency".
       --    ORDER BY on an AGGREGATE, over a JOIN, with a LIMIT.  `users.name`
       --    ASC is the tiebreak (two users have the same count).
-      let _ = runQ
+      runQ
         db
         "-- join+group name: order by count* desc, name asc limit 2 --"
         (withLimit
@@ -116,7 +116,7 @@ main = match args ()
       --    engine documented this as a v1 limitation ("ORDER BY cannot reference
       --    a computed column"); ORDER BY keys are expressions now, so it works.
       --    The NULL-amount row sorts last under DESC (SQLite: NULL is smallest).
-      let _ = runQ
+      runQ
         db
         "-- orders: amount, qty, amount*qty order by amount*qty desc --"
         (withOrderByExpr
@@ -133,7 +133,7 @@ main = match args ()
         ((a, q, p) => "\{showOptI a}|\{q}|\{showOptI p}")
       -- D. HAVING + ORDER BY + LIMIT together — HAVING filters on one aggregate
       --    (count) while ORDER BY sorts on a DIFFERENT one (sum), then LIMIT 1.
-      let _ = runQ
+      runQ
         db
         "-- join+group name: having count*>1 order by sum(amount) asc limit 1 --"
         (withLimit
@@ -154,7 +154,7 @@ main = match args ()
         ((n, c, s) => "\{n}|\{c}|\{showOptI s}")
       -- E. A grouped MIN / MAX / AVG / SUM in one row (NULL amounts skipped by
       --    all four, per SQL).
-      let _ = runQ
+      runQ
         db
         "-- group uid: min max avg sum(amount) --"
         (withOrderBy

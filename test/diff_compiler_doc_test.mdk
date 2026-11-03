@@ -15,8 +15,8 @@ import compiler_cli_test_support.{fixtureStems}
 import string.{lines, startsWith, endsWith, replaceAll, split, join}
 import test_process.{medakaBin, underRoot, boundedVerb, withScratchDir}
 import test.{
-  Expectation, expectAll, expectEach, expectGolden, expectAtLeast, expectFalse,
-  expectTextContainsAll, fail, pass
+  Expectation, expectAll, expectEach, expectGolden, expectAtLeast,
+  expectSatisfies, expectTextContainsAll, fail, pass
 }
 
 fixDir : <IO> String
@@ -293,7 +293,10 @@ malformedDocIn dir =
     Ok () => match boundedVerb medakaBin ["doc", path]
       Err e => fail "could not spawn medaka doc: \{e}"
       Ok (1, _, err) => expectAll [
-        expectFalse (hasSubstr "E-PANIC" err),
+        expectSatisfies
+          "the output carries no E-PANIC"
+          (out => not (hasSubstr "E-PANIC" out))
+          err,
         expectTextContainsAll ["\{path}:1:6", "expected an expression"] err,
       ]
       Ok (code, _, err) => fail "doc exited \{intToString code}: \{err}"

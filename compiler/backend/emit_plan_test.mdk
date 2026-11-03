@@ -17,7 +17,7 @@ import backend.extern_catalog.{RuntimeExternDomain(..)}
 -- constructor whose last field is a saturated self-call (at least one such leaf),
 -- and no self-call sits anywhere else, a match guard included.
 
-import backend.emit_target.{Backend(..)}
+import backend.emit_target.{Backend(..), backendName}
 import ir.extern_lower.{lowerExterns, externVar, implicitRuntimeFacts}
 import types.program_facts.{emptyFacts}
 import frontend.parser.{parse, parseResult}
@@ -36,6 +36,7 @@ import test.{
   labelFail,
   expectEach,
   expectTextContainsAll,
+  expectSatisfies,
   expectNoFindings,
   expectFindings,
   expectAtLeast,
@@ -172,19 +173,16 @@ test "the plan carries one source-prioritized value order and its eager filter" 
 test "a cycle's members share one reach set" = expectAll [
   labelFail
     "x reaches y and x"
-    (expectTrue (hasAll ["x", "y"] (reachOf "x" (planOf mixed)))),
-  labelFail
-    "y reaches y and x"
-    (expectTrue (hasAll ["x", "y"] (reachOf "y" (planOf mixed)))),
+    (hasAll ["x", "y"] (reachOf "x" (planOf mixed))),
+  labelFail "y reaches y and x" (hasAll ["x", "y"] (reachOf "y" (planOf mixed))),
 ]
 
 test "the plan carries the target it was built with" = expectAll [
   labelFail
     "wasm"
-    (expectTrue
-      (isWasm
-        (buildEmitPlan WasmBackend PreludeFreeRuntime (program mixed)).target)),
-  labelFail "native" (expectFalse (isWasm (planOf mixed).target)),
+    (isWasm
+      (buildEmitPlan WasmBackend PreludeFreeRuntime (program mixed)).target),
+  labelFail "native" (isNotWasm (planOf mixed).target),
 ]
 
 entryOutcomeProgram : CProgram
@@ -216,19 +214,30 @@ test "LLVM and Wasm plans preserve the entry outcome" =
       ))
       [("LLVM", LlvmBackend), ("Wasm", WasmBackend)])
 
-hasAll : List String -> List String -> Bool
-hasAll wanted have = all (w => any (== w) have) wanted
+hasAll : List String -> List String -> Expectation
+hasAll wanted have =
+  expectSatisfies
+    "holds every wanted name"
+    (h => all (w => any (== w) h) wanted)
+    have
 
-isWasm : Backend -> Bool
-isWasm WasmBackend = True
-isWasm _ = False
+isWasm : Backend -> Expectation
+isWasm target = expectEqual "wasm" (backendName target)
+
+isNotWasm : Backend -> Expectation
+isNotWasm target = expectNotEqual "wasm" (backendName target)
 
 -- The emitters read the global classification, the TRMC verdict and the dispatch
 -- groups from the plan; neither may recompute them.
 -- Comment lines are skipped: they may name the analyses.
-codeMentions : String -> String -> Bool
-codeMentions word text =
-  any (l => not (startsWith "--" (trimLeft l)) && contains word l) (lines text)
+codeLinesMentioning : String -> String -> List String
+codeLinesMentioning word text =
+  filter
+    (l => not (startsWith "--" (trimLeft l)) && contains word l)
+    (lines text)
+
+neverMentions : String -> String -> Expectation
+neverMentions word text = expectEqual [] (codeLinesMentioning word text)
 
 noRecompute : String -> <IO, FileRead> Expectation
 noRecompute file = match readFile "\{medakaRoot}/compiler/backend/\{file}"
@@ -236,19 +245,17 @@ noRecompute file = match readFile "\{medakaRoot}/compiler/backend/\{file}"
   Ok text => expectAll [
     labelFail
       "\{file} calls eagerReachMap"
-      (expectFalse (codeMentions "eagerReachMap" text)),
+      (neverMentions "eagerReachMap" text),
     labelFail
       "\{file} calls lazyGlobalNames"
-      (expectFalse (codeMentions "lazyGlobalNames" text)),
-    labelFail
-      "\{file} calls trmcEligible"
-      (expectFalse (codeMentions "trmcEligible" text)),
+      (neverMentions "lazyGlobalNames" text),
+    labelFail "\{file} calls trmcEligible" (neverMentions "trmcEligible" text),
     labelFail
       "\{file} calls detectDispatchGroups"
-      (expectFalse (codeMentions "detectDispatchGroups" text)),
+      (neverMentions "detectDispatchGroups" text),
     labelFail
       "\{file} calls wasmReachFilter"
-      (expectFalse (codeMentions "wasmReachFilter" text)),
+      (neverMentions "wasmReachFilter" text),
   ]
 
 test "neither emitter recomputes a plan analysis" = expectAll [
@@ -267,11 +274,11 @@ test "each emitter uses the shared validation gateway and owns no collision sequ
             ("gateway", expectTextContainsAll ["validateForEmission"] text),
             (
               "no impl-symbol predicate",
-              expectFalse (codeMentions "validateImplSymbolInjectivity" text),
+              neverMentions "validateImplSymbolInjectivity" text,
             ),
             (
               "no dict-tag predicate",
-              expectFalse (codeMentions "validateDictTags" text),
+              neverMentions "validateDictTags" text,
             ),
           ],
       ))
@@ -295,7 +302,7 @@ noEntryReach file = match readFile "\{medakaRoot}/compiler/entries/\{file}"
   Ok text =>
     labelFail
       "\{file} calls wasmReachFilter"
-      (expectFalse (codeMentions "wasmReachFilter" text))
+      (neverMentions "wasmReachFilter" text)
 
 test "no entry runs reach itself" =
   match listDir "\{medakaRoot}/compiler/entries"
@@ -1046,8 +1053,8 @@ uptoImpl word =
   let pats = map (p => PVar p noDeclLoc noBinderId) ["lo", "hi"]
   CImplEntry "upto" 0 2 (CImplTagged "Int" "K" "Upto" noImplSym [] pats body)
 
-implTrmc : String -> Bool
-implTrmc word =
+implIsTrmc : String -> Bool
+implIsTrmc word =
   let plan =
     buildEmitPlan
       LlvmBackend
@@ -1055,10 +1062,24 @@ implTrmc word =
       (CProgram [] [] [] [uptoImpl word] [] noDeclFacts)
   isTrmcImpl plan.trmc "upto" "K"
 
+implTrmc : String -> Expectation
+implTrmc word =
+  expectSatisfies
+    "an instance word the impl group is TRMC-eligible under"
+    implIsTrmc
+    word
+
+implNotTrmc : String -> Expectation
+implNotTrmc word =
+  expectSatisfies
+    "an instance word the impl group is not TRMC-eligible under"
+    (w => not (implIsTrmc w))
+    word
+
 test "an impl group recursing through its own instance word is TRMC-eligible" = expectAll
   [
-    labelFail "self word" (expectTrue (implTrmc "K")),
-    labelFail "another instance's word" (expectFalse (implTrmc "Other")),
+    labelFail "self word" (implTrmc "K"),
+    labelFail "another instance's word" (implNotTrmc "Other"),
   ]
 
 test "impl plan groups keep clause order for TRMC and prepared programs" =

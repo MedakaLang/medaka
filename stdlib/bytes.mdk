@@ -143,7 +143,7 @@ fromU8ArrayFill : Array U8 -> ByteBlock -> Int -> Unit
 fromU8ArrayFill arr bb i
   | i >= arrayLength arr = ()
   | otherwise =
-    let _ = byteBlockSetUnsafe i (u8ToInt arr[i]) bb
+    byteBlockSetUnsafe i (u8ToInt arr[i]) bb
     fromU8ArrayFill arr bb (i + 1)
 
 {- | The byte string holding the elements of `arr`, in order.
@@ -159,7 +159,7 @@ export
 fromU8Array : Array U8 -> Bytes
 fromU8Array arr =
   let bb = byteBlockMake (arrayLength arr)
-  let _ = fromU8ArrayFill arr bb 0
+  fromU8ArrayFill arr bb 0
   Bytes bb
 
 {- | The bytes of `b` as an array of `U8`, in order.
@@ -240,7 +240,7 @@ export impl Slice Bytes where
       sliceError lo (sliceLastIndex hi)
     else
       let dst = byteBlockMake (hi - lo)
-      let _ = byteBlockBlit bb lo dst 0 (hi - lo)
+      byteBlockBlit bb lo dst 0 (hi - lo)
       Bytes dst
 
 {- | The bytes over `[lo, hi)`, copied into a new byte string, with both
@@ -263,7 +263,7 @@ sliceClamped lo hi (Bytes bb) =
   let lo' = if lo < 0 then 0 else min lo n
   let hi' = if hi < lo' then lo' else min hi n
   let dst = byteBlockMake (hi' - lo')
-  let _ = byteBlockBlit bb lo' dst 0 (hi' - lo')
+  byteBlockBlit bb lo' dst 0 (hi' - lo')
   Bytes dst
 
 {- | The first `n` bytes of `b`, or all of them when `b` is shorter. Empty
@@ -579,7 +579,7 @@ mapGo f src dst i n =
   if i >= n then
     ()
   else
-    let _ = byteBlockSetUnsafe i (u8ToInt (f (byteAt i src))) dst
+    byteBlockSetUnsafe i (u8ToInt (f (byteAt i src))) dst
     mapGo f src dst (i + 1) n
 
 {- | The byte string of the same length holding `f` applied to each byte of
@@ -595,7 +595,7 @@ map : (U8 -> <e> U8) -> Bytes -> <e> Bytes
 map f (Bytes bb) =
   let n = byteBlockLength bb
   let dst = byteBlockMake n
-  let _ = mapGo f bb dst 0 n
+  mapGo f bb dst 0 n
   Bytes dst
 
 -- # Combining
@@ -618,8 +618,8 @@ export impl Semigroup Bytes where
     let na = byteBlockLength a
     let nb = byteBlockLength b
     let dst = byteBlockMake (na + nb)
-    let _ = byteBlockBlit a 0 dst 0 na
-    let _ = byteBlockBlit b 0 dst na nb
+    byteBlockBlit a 0 dst 0 na
+    byteBlockBlit b 0 dst na nb
     Bytes dst
 
 {- | The byte string of no bytes, the identity for `append` and `++`.
@@ -642,7 +642,7 @@ concatFill : List Bytes -> ByteBlock -> Int -> Unit
 concatFill [] _ _ = ()
 concatFill ((Bytes src) :: rest) dst off =
   let n = byteBlockLength src
-  let _ = byteBlockBlit src 0 dst off n
+  byteBlockBlit src 0 dst off n
   concatFill rest dst (off + n)
 
 {- | The byte strings joined end to end, in one new byte string.
@@ -655,7 +655,7 @@ export
 concat : List Bytes -> Bytes
 concat parts =
   let dst = byteBlockMake (concatLength parts 0)
-  let _ = concatFill parts dst 0
+  concatFill parts dst 0
   Bytes dst
 
 -- > toArray (concat ([] : List Bytes))

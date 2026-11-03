@@ -1,0 +1,61 @@
+-- fixture-path: sample_test.mdk
+-- Fixture for rule-test-bool-helper (an internal rule, not fixable).  The rule
+-- reports the line of the helper's signature, so each marker sits above one.
+
+import test.{Expectation, expectTrue, expectFalse, expectEqual}
+
+-- expect-next-line rule-test-bool-helper unfixed
+rejectsTrue : String -> Bool
+rejectsTrue s = s == "x"
+
+-- expect-next-line rule-test-bool-helper unfixed
+rejectsFalse : String -> Int -> Bool
+rejectsFalse s n = n < 0
+
+-- expect-next-line rule-test-bool-helper unfixed
+rejectsPiped : String -> Bool
+rejectsPiped s = s == "y"
+
+-- expect-next-line rule-test-bool-helper unfixed
+ready : Bool
+ready = True
+
+-- expect-next-line rule-test-bool-helper unfixed
+constrained : Eq a => a -> a -> Bool
+constrained a b = a == b
+
+-- prop-referenced helper: stays Bool (R46)
+usedByProp : Int -> Bool
+usedByProp n = n + 0 == n
+
+-- never graded with expectTrue/expectFalse
+neverWrapped : Int -> Bool
+neverWrapped n = n > 0
+
+-- returns an Expect
+alreadyExpect : Int -> Expectation
+alreadyExpect n = expectEqual n n
+
+-- lint-disable-next-line rule-test-bool-helper
+silenced : Int -> Bool
+silenced n = n == 1
+
+test "graded true" = expectTrue (rejectsTrue "x")
+
+test "graded false" = expectFalse (rejectsFalse "a" 1)
+
+test "graded piped" = rejectsPiped "y" |> expectTrue
+
+test "graded zero-arg value" = expectTrue ready
+
+test "graded constrained" = expectTrue (constrained 1 1)
+
+test "prop helper is graded too" = expectTrue (usedByProp 1)
+
+prop "prop oracle" (n : Int) = usedByProp n
+
+test "silenced is graded" = expectTrue (silenced 1)
+
+test "other verbs" = alreadyExpect 1
+
+test "unwrapped bool use" = expectTrue (neverWrapped 1 && True)

@@ -40,13 +40,13 @@ tarjanSCCs names adj =
   tjLow := omEmpty
   tjOn := omEmpty
   tjOut := []
-  let _ = tarjanAll names adj
+  tarjanAll names adj
   reverseL !tjOut
 
 tarjanAll : List String -> OrdMap (List String) -> Unit
 tarjanAll [] _ = ()
 tarjanAll (v :: rest) adj =
-  let _ = tjVisit v adj
+  tjVisit v adj
   tarjanAll rest adj
 
 tjVisit : String -> OrdMap (List String) -> Unit
@@ -62,19 +62,19 @@ strongconnect v adj =
   tjCounter := idx + 1
   tjStack := v :: !tjStack
   tjOn := omInsert v True !tjOn
-  let _ = scEdges v (optionOr [] (omLookup v adj)) adj
+  scEdges v (optionOr [] (omLookup v adj)) adj
   if tjLowOf v == idx then tjPop v []
 
 scEdges : String -> List String -> OrdMap (List String) -> Unit
 scEdges _v [] _adj = ()
 scEdges v (w :: ws) adj =
-  let _ = scEdge v w adj
+  scEdge v w adj
   scEdges v ws adj
 
 scEdge : String -> String -> OrdMap (List String) -> Unit
 scEdge v w adj = match omLookup w !tjIndex
   None =>
-    let _ = strongconnect w adj
+    strongconnect w adj
     tjLow := omInsert v (minI (tjLowOf v) (tjLowOf w)) !tjLow
   Some iw =>
     if tjOnStack w then tjLow := omInsert v (minI (tjLowOf v) iw) !tjLow

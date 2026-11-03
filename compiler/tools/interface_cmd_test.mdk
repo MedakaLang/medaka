@@ -490,7 +490,9 @@ test "a missing or stale elaborated file makes verify name it" = withStagedStdli
   (dir => match runCommandBatch "env" 1 [writeArgv dir]
     [_] =>
       let fresh = verifyOut dir
-      let _ = removeFile "\{dir}/core.mdke"
+      resultOrPanic
+        "test setup: removeFile /core.mdke"
+        (removeFile "\{dir}/core.mdke")
       let missing = verifyOut dir
       match writeFile "\{dir}/core.mdke" "(medaka-elab 99)\n"
         Err e => fail e
@@ -633,19 +635,25 @@ test "a missing or stale declarations file makes verify name it" = withStagedStd
     [_] => match readFile "\{dir}/core.mdkd"
       Err e => fail e
       Ok fresh =>
-        let _ = writeFile "\{dir}/core.mdkd" (S.take (S.length fresh / 2) fresh)
+        resultOrPanic
+          "test setup: writeFile /core.mdkd"
+          (writeFile "\{dir}/core.mdkd" (S.take (S.length fresh / 2) fresh))
         let truncated = verifyOut dir
-        let _ =
-          writeFile
+        resultOrPanic
+          "test setup: writeFile /core.mdkd (foreign compiler)"
+          (writeFile
             "\{dir}/core.mdkd"
-            (S.replace "(compiler " "(compiler 0" fresh)
+            (S.replace "(compiler " "(compiler 0" fresh))
         let foreign = verifyOut dir
-        let _ =
-          writeFile
+        resultOrPanic
+          "test setup: writeFile /core.mdkd (another format)"
+          (writeFile
             "\{dir}/core.mdkd"
-            (S.replace "(medaka-decls 4 " "(medaka-decls 99 " fresh)
+            (S.replace "(medaka-decls 4 " "(medaka-decls 99 " fresh))
         let version = verifyOut dir
-        let _ = removeFile "\{dir}/core.mdkd"
+        resultOrPanic
+          "test setup: removeFile /core.mdkd"
+          (removeFile "\{dir}/core.mdkd")
         expectAll [
           labelFail
             "truncated"
@@ -677,7 +685,9 @@ verifyDecls : String ->
   String ->
   <Exec, IO, FileWrite, Env "MEDAKA_ROOT", Env "MEDAKA"> String
 verifyDecls dir text =
-  let _ = writeFile "\{dir}/core.mdkd" text
+  resultOrPanic
+    "test setup: writeFile /core.mdkd"
+    (writeFile "\{dir}/core.mdkd" text)
   verifyOut dir
 
 test "verify refuses a digest-valid declarations file that the loader would refuse" = withStagedStdlib

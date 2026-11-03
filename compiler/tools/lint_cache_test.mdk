@@ -24,6 +24,7 @@ import test.{
   expectFalse,
   expectEach,
   fail,
+  pass,
 }
 import test_process.{withScratchDir}
 import frontend.ast.{Decl}
@@ -167,6 +168,8 @@ stdPath : Env -> String
 stdPath e = "\{e.std}/list.mdk"
 
 aSource : String
+-- Escaped, not triple-quoted: `gate verify` reads a column-0 `import` inside a
+-- string as an import of this file.
 aSource = "import b.{f}\n\ng : Int -> Int\ng x = f x\n"
 
 bSource : String -> String -> String
@@ -177,16 +180,20 @@ stdSource sig body = "export\nsingleton : \{sig}\nsingleton a = \{body}\n"
 
 setup : Env -> <IO, FileRead, FileWrite, Exec> Unit
 setup e =
-  let _ = runMkdirs [e.proj, e.std, e.shards]
-  let _ = writeFile (aPath e) aSource
-  let _ = writeFile (bPath e) (bSource "Int -> Int" "x + 1")
-  let _ = writeFile (stdPath e) (stdSource "a -> List a" "[a]")
+  runMkdirs [e.proj, e.std, e.shards]
+  resultOrPanic "test setup: writeFile aPath e" (writeFile (aPath e) aSource)
+  resultOrPanic
+    "test setup: writeFile bPath e"
+    (writeFile (bPath e) (bSource "Int -> Int" "x + 1"))
+  resultOrPanic
+    "test setup: writeFile stdPath e"
+    (writeFile (stdPath e) (stdSource "a -> List a" "[a]"))
   ()
 
 runMkdirs : List String -> <IO, FileRead, FileWrite, Exec> Unit
 runMkdirs [] = ()
 runMkdirs (d :: rest) =
-  let _ = makeDir d
+  resultOrPanic "test setup: makeDir d" (makeDir d)
   runMkdirs rest
 
 -- One file's result of one run: whether it was linted this run, and what the
@@ -212,7 +219,7 @@ runWith keyOf indexRoster roster e = match indexOf indexRoster e
     let eb = entryFor keyOf roster idx e (bPath e)
     match (ea, eb)
       (Some xa, Some xb) =>
-        let _ = storeEntries e.cacheDir stampOf [xa, xb]
+        storeEntries e.cacheDir stampOf [xa, xb]
         Some Run { fileA = fileRun xa, fileB = fileRun xb }
       _ => None
 
@@ -255,7 +262,7 @@ probeLine projSig stdSig = "b.f : \{projSig}; list.singleton : \{stdSig}"
 
 put : String -> String -> <IO, FileRead, FileWrite, Exec> Unit
 put path text =
-  let _ = writeFile path text
+  resultOrPanic "test setup: writeFile path text" (writeFile path text)
   ()
 
 -- Populate the cache with a run, apply `edit`, run again, and grade the two.
@@ -266,7 +273,7 @@ afterEdit : (Env -> <IO, FileRead, FileWrite, Exec> Option Run) ->
   <IO, FileRead, FileWrite, Exec> Expectation
 afterEdit go dir edit grade =
   let e = mkEnv dir
-  let _ = setup e
+  setup e
   match go e
     None => fail "the populate run did not complete"
     Some cold =>
@@ -349,15 +356,15 @@ scenarioC2 go dir =
       ),
     ])
 
-isFail : Expectation -> Bool
-isFail (Fail _ _ _) = True
-isFail (Pass _ _) = False
+isFail : Expectation -> Expectation
+isFail (Fail _ _ _) = pass
+isFail (Pass _ _) = fail "the scenario stayed green with the mechanism disabled"
 
 test "(a) a signature edit in B re-lints A and A shows the new signature" =
   withScratchDir (scenarioA run)
 
 test "(a) without the fingerprint A is served stale, so the scenario goes red" =
-  withScratchDir (dir => expectTrue (isFail (scenarioA runNoFingerprint dir)))
+  withScratchDir (dir => isFail (scenarioA runNoFingerprint dir))
 
 test "(b) a body-only edit in B re-lints B alone and A keeps its finding" =
   withScratchDir (scenarioB run)
@@ -369,7 +376,7 @@ test "(c) a stdlib signature edit re-lints A and A shows the new signature" =
   withScratchDir (scenarioC run)
 
 test "(c) without the fingerprint A is served stale, so the scenario goes red" =
-  withScratchDir (dir => expectTrue (isFail (scenarioC runNoFingerprint dir)))
+  withScratchDir (dir => isFail (scenarioC runNoFingerprint dir))
 
 test "(c') a stdlib body-only edit invalidates nothing" =
   withScratchDir (scenarioC2 run)
@@ -386,11 +393,13 @@ test "(d) a rule that declared no need keeps its stamp across a signature edit" 
 blindStampCase : String -> <IO, FileRead, FileWrite, Exec> Expectation
 blindStampCase dir =
   let e = mkEnv dir
-  let _ = setup e
+  setup e
   match indexOf [readerRule] e
     None => fail "the index did not build"
     Some before =>
-      let _ = writeFile (bPath e) (bSource "Int -> String" "intToString x")
+      resultOrPanic
+        "test setup: writeFile bPath e"
+        (writeFile (bPath e) (bSource "Int -> String" "intToString x"))
       match indexOf [readerRule] e
         None => fail "the index did not rebuild"
         Some after => expectEach [
@@ -433,7 +442,7 @@ test "(d) a rule that reads the index undeclared sees it empty on every run" =
 blindSeesNothingCase : String -> <IO, FileRead, FileWrite, Exec> Expectation
 blindSeesNothingCase dir =
   let e = mkEnv dir
-  let _ = setup e
+  setup e
   let blank = probeLine "<none>" "<none>"
   match indexOf [readerRule] e
     None => fail "the index did not build"
@@ -442,7 +451,9 @@ blindSeesNothingCase dir =
       let warmRun = runBlind e
       match (coldRun, warmRun)
         (Some cold, Some warm) =>
-          let _ = writeFile (bPath e) (bSource "Int -> String" "intToString x")
+          resultOrPanic
+            "test setup: writeFile bPath e"
+            (writeFile (bPath e) (bSource "Int -> String" "intToString x"))
           match runBlind e
             None => fail "the run after the edit did not complete"
             Some edited => expectEach [
@@ -480,7 +491,7 @@ damagedCase : (String -> String) ->
   <IO, FileRead, FileWrite, Exec> Expectation
 damagedCase damage dir =
   let e = mkEnv dir
-  let _ = setup e
+  setup e
   match run e
     None => fail "the populate run did not complete"
     Some _ =>
@@ -488,7 +499,9 @@ damagedCase damage dir =
       match readFile shard
         Err _ => fail "A has no shard after the populate run"
         Ok text =>
-          let _ = writeFile shard (damage text)
+          resultOrPanic
+            "test setup: writeFile shard"
+            (writeFile shard (damage text))
           match run e
             None => fail "the run over the damaged shard did not complete"
             Some after => expectEach [
@@ -517,7 +530,7 @@ test "the second run over an unchanged tree re-lints nothing" =
 secondRunCase : String -> <IO, FileRead, FileWrite, Exec> Expectation
 secondRunCase dir =
   let e = mkEnv dir
-  let _ = setup e
+  setup e
   let firstRun = run e
   let secondRun = run e
   match (firstRun, secondRun)
@@ -542,8 +555,10 @@ unwritableCase dir =
     shards = e0.shards,
     cacheDir = "\{dir}/blocked/lint-cache",
   }
-  let _ = setup e
-  let _ = writeFile "\{dir}/blocked" "a file, not a directory"
+  setup e
+  resultOrPanic
+    "test setup: writeFile /blocked"
+    (writeFile "\{dir}/blocked" "a file, not a directory")
   let firstRun = run e
   let secondRun = run e
   match (firstRun, secondRun)
@@ -630,10 +645,18 @@ cPath : Env -> String
 cPath e = "\{e.proj}/c.mdk"
 
 bBase : String
-bBase = "export\nf : Int -> Int\nf x = x + 1\n"
+bBase = """
+export
+f : Int -> Int
+f x = x + 1
+"""
 
 cBase : String
-cBase = "export\nh : Int -> Int\nh x = x\n"
+cBase = """
+export
+h : Int -> Int
+h x = x
+"""
 
 -- One file's new source, or `None` to delete it.
 data Edit = Edit (Env -> String) (Option String)
@@ -653,13 +676,13 @@ askCase : (StdlibIndex -> StdlibIndex) ->
 askCase view questions bSrc cSrc edits dir =
   let e = mkEnv dir
   let rule = askerRule questions
-  let _ = setup e
-  let _ = writeFile (bPath e) bSrc
-  let _ = writeFile (cPath e) cSrc
+  setup e
+  resultOrPanic "test setup: writeFile bPath e" (writeFile (bPath e) bSrc)
+  resultOrPanic "test setup: writeFile cPath e" (writeFile (cPath e) cSrc)
   match runAsk view rule e
     None => None
     Some _ =>
-      let _ = applyEdits e edits
+      applyEdits e edits
       match (runAsk view rule e, indexOf [rule] e)
         (Some warm, Some fresh) => Some Outcome {
           warmA = warm,
@@ -684,7 +707,7 @@ runAsk view rule e = match indexOf [rule] e
   None => None
   Some idx =>
     let found = flatMap (askEntry view rule idx e) [aPath e, bPath e, cPath e]
-    let _ = storeEntries e.cacheDir stampOf (map snd found)
+    storeEntries e.cacheDir stampOf (map snd found)
     match filterList (pe => fst pe == aPath e) found
       [(_, a)] => Some (fileRun a)
       _ => None
@@ -710,17 +733,25 @@ askEntry view rule idx e path = match readFile path
       Err _ => []
       Ok entry => [(path, entry)]
 
--- A is re-linted (or not, as `relint` says) and says what an uncached lint
--- of the edited tree says.
-graded : Bool -> Option Outcome -> <IO, FileRead, FileWrite, Exec> Expectation
-graded _ None = fail "a run did not complete"
-graded relint (Some o) = expectEach [
-  (
-    "A is re-linted exactly when an answer moved",
-    expectEqual relint o.warmA.relinted,
-  ),
-  ("A says what an uncached lint says", expectEqual o.truth o.warmA.texts),
+-- A is re-linted, and says what an uncached lint of the edited tree says.
+relintsA : Option Outcome -> <IO, FileRead, FileWrite, Exec> Expectation
+relintsA None = fail "a run did not complete"
+relintsA (Some o) = expectEach [
+  ("A is re-linted when an answer moved", expectTrue o.warmA.relinted),
+  truthRow o,
 ]
+
+-- A stays warm, and says what an uncached lint of the edited tree says.
+keepsAWarm : Option Outcome -> <IO, FileRead, FileWrite, Exec> Expectation
+keepsAWarm None = fail "a run did not complete"
+keepsAWarm (Some o) = expectEach [
+  ("A is not re-linted when no answer moved", expectFalse o.warmA.relinted),
+  truthRow o,
+]
+
+truthRow : Outcome -> (String, Expectation)
+truthRow o =
+  ("A says what an uncached lint says", expectEqual o.truth o.warmA.texts)
 
 recorded : StdlibIndex -> StdlibIndex
 recorded = recordingStdlibIndex
@@ -733,8 +764,7 @@ caseE : (StdlibIndex -> StdlibIndex) ->
   String ->
   <IO, FileRead, FileWrite, Exec> Expectation
 caseE view dir =
-  graded
-    False
+  keepsAWarm
     (askCase
       view
       [askIn "b" NsValue "f"]
@@ -748,8 +778,7 @@ caseF : (StdlibIndex -> StdlibIndex) ->
   String ->
   <IO, FileRead, FileWrite, Exec> Expectation
 caseF view dir =
-  graded
-    True
+  relintsA
     (askCase
       view
       [askIn "b" NsValue "f"]
@@ -763,8 +792,7 @@ caseFAbsent : (StdlibIndex -> StdlibIndex) ->
   String ->
   <IO, FileRead, FileWrite, Exec> Expectation
 caseFAbsent view dir =
-  graded
-    True
+  relintsA
     (askCase
       view
       [askIn "b" NsValue "g"]
@@ -783,13 +811,14 @@ fingerprintMovesCase : String -> <IO, FileRead, FileWrite, Exec> Expectation
 fingerprintMovesCase dir =
   let e = mkEnv dir
   let rule = askerRule [askIn "b" NsValue "f"]
-  let _ = setup e
-  let _ = writeFile (cPath e) cBase
+  setup e
+  resultOrPanic "test setup: writeFile cPath e" (writeFile (cPath e) cBase)
   match indexOf [rule] e
     None => fail "the index did not build"
     Some before =>
-      let _ =
-        writeFile (cPath e) "export\nh : Int -> String\nh x = intToString x\n"
+      resultOrPanic
+        "test setup: writeFile cPath e (edited signature)"
+        (writeFile (cPath e) "export\nh : Int -> String\nh x = intToString x\n")
       match indexOf [rule] e
         None => fail "the index did not rebuild"
         Some after =>
@@ -803,8 +832,7 @@ test "(f) a name A asked about while absent, then declared, re-lints A" =
 
 test "(g) a second module exporting a name A asked about re-lints A" = withScratchDir
   (dir =>
-    graded
-      True
+    relintsA
       (askCase
         recorded
         [askNamed NsValue "f"]
@@ -815,8 +843,7 @@ test "(g) a second module exporting a name A asked about re-lints A" = withScrat
 
 test "(h) an enumerating question re-lints A on a signature edit anywhere" = withScratchDir
   (dir =>
-    graded
-      True
+    relintsA
       (askCase
         recorded
         [askAll]
@@ -827,8 +854,7 @@ test "(h) an enumerating question re-lints A on a signature edit anywhere" = wit
 
 test "(h) an enumerating question keeps A warm across a body-only edit" = withScratchDir
   (dir =>
-    graded
-      False
+    keepsAWarm
       (askCase
         recorded
         [askAll]
@@ -842,16 +868,15 @@ test "(h) an enumerating question keeps A warm across a body-only edit" = withSc
         dir))
 
 test "(i) without recording, a signature edit to an asked name is served stale" =
-  withScratchDir (dir => expectTrue (isFail (caseF unrecorded dir)))
+  withScratchDir (dir => isFail (caseF unrecorded dir))
 
 test "(i) without recording, a newly declared asked name is served stale" =
-  withScratchDir (dir => expectTrue (isFail (caseFAbsent unrecorded dir)))
+  withScratchDir (dir => isFail (caseFAbsent unrecorded dir))
 
 -- ── adversarial answers ─────────────────────────────────────────────────────
 
 test "an asked name losing its export re-lints A" = withScratchDir (dir =>
-  graded
-    True
+  relintsA
     (askCase
       recorded
       [askIn "b" NsValue "f"]
@@ -861,8 +886,7 @@ test "an asked name losing its export re-lints A" = withScratchDir (dir =>
       dir))
 
 test "an unasked name losing its export keeps A warm" = withScratchDir (dir =>
-  graded
-    False
+  keepsAWarm
     (askCase
       recorded
       [askIn "b" NsValue "f"]
@@ -873,8 +897,7 @@ test "an unasked name losing its export keeps A warm" = withScratchDir (dir =>
 
 test "an asked constructor's field list changing re-lints A" = withScratchDir
   (dir =>
-    graded
-      True
+    relintsA
       (askCase
         recorded
         [askNamed NsValue "P"]
@@ -889,8 +912,7 @@ test "an asked constructor's field list changing re-lints A" = withScratchDir
 
 test "an asked value becoming an interface method re-lints A" = withScratchDir
   (dir =>
-    graded
-      True
+    relintsA
       (askCase
         recorded
         [askIn "b" NsValue "m"]
@@ -905,8 +927,7 @@ test "an asked value becoming an interface method re-lints A" = withScratchDir
 
 test "an asked type alias becoming an interface re-lints A" = withScratchDir
   (dir =>
-    graded
-      True
+    relintsA
       (askCase
         recorded
         [askIn "b" NsType "T"]
@@ -921,8 +942,7 @@ test "an asked type alias becoming an interface re-lints A" = withScratchDir
 
 test "an asked name moving to another module re-lints A" = withScratchDir
   (dir =>
-    graded
-      True
+    relintsA
       (askCase
         recorded
         [askNamed NsValue "f"]
@@ -936,8 +956,7 @@ test "an asked name moving to another module re-lints A" = withScratchDir
 
 test "deleting the file that declared an asked name re-lints A" = withScratchDir
   (dir =>
-    graded
-      True
+    relintsA
       (askCase
         recorded
         [askIn "b" NsValue "f"]
@@ -948,8 +967,7 @@ test "deleting the file that declared an asked name re-lints A" = withScratchDir
 
 test "deleting a file A asked nothing about keeps A warm" = withScratchDir
   (dir =>
-    graded
-      False
+    keepsAWarm
       (askCase
         recorded
         [askIn "b" NsValue "f"]
@@ -990,7 +1008,11 @@ wildSource : String
 wildSource = "import m.*\n\ng : Int -> Int\ng x = x\n"
 
 mSource : String
-mSource = "export\nk : Int\nk = 1\n"
+mSource = """
+export
+k : Int
+k = 1
+"""
 
 mPath : Env -> String
 mPath e = "\{e.proj}/m.mdk"
@@ -1016,15 +1038,15 @@ wildCase : (StdlibIndex -> StdlibIndex) ->
   <IO, FileRead, FileWrite, Exec> Option Outcome
 wildCase view mStart edits dir =
   let e = mkEnv dir
-  let _ = setup e
-  let _ = writeFile (aPath e) wildSource
+  setup e
+  resultOrPanic "test setup: writeFile aPath e" (writeFile (aPath e) wildSource)
   let _ = match mStart
     Some text => writeFile (mPath e) text
     None => Ok ()
   match runAsk view localRule e
     None => None
     Some _ =>
-      let _ = applyEdits e edits
+      applyEdits e edits
       match (runAsk view localRule e, indexOf [localRule] e)
         (Some warm, Some fresh) => Some Outcome {
           warmA = warm,
@@ -1033,7 +1055,7 @@ wildCase view mStart edits dir =
         _ => None
 
 test "(w1) creating the project module A imports with * re-lints A" = withScratchDir
-  (dir => graded True (wildCase recorded None [Edit mPath (Some mSource)] dir))
+  (dir => relintsA (wildCase recorded None [Edit mPath (Some mSource)] dir))
 
 test "(w1) the finding set changes when the module appears" = withScratchDir
   (dir => match wildCase recorded None [Edit mPath (Some mSource)] dir
@@ -1041,7 +1063,7 @@ test "(w1) the finding set changes when the module appears" = withScratchDir
     Some o => expectEqual ["local: m"] o.warmA.texts)
 
 test "(w2) deleting the project module A imports with * re-lints A" = withScratchDir
-  (dir => graded True (wildCase recorded (Some mSource) [Edit mPath None] dir))
+  (dir => relintsA (wildCase recorded (Some mSource) [Edit mPath None] dir))
 
 test "(w2) the finding set changes when the module disappears" = withScratchDir
   (dir => match wildCase recorded (Some mSource) [Edit mPath None] dir
@@ -1049,11 +1071,10 @@ test "(w2) the finding set changes when the module disappears" = withScratchDir
     Some o => expectEqual ["local: "] o.warmA.texts)
 
 test "(w3) creating an unrelated file keeps A warm" = withScratchDir (dir =>
-  graded False (wildCase recorded None [Edit cPath (Some cBase)] dir))
+  keepsAWarm (wildCase recorded None [Edit cPath (Some cBase)] dir))
 
 test "(w3) an edit to the module's body keeps A warm" = withScratchDir (dir =>
-  graded
-    False
+  keepsAWarm
     (wildCase
       recorded
       (Some mSource)
@@ -1062,16 +1083,10 @@ test "(w3) an edit to the module's body keeps A warm" = withScratchDir (dir =>
 
 test "(w4) without recording, a created module is served stale" = withScratchDir
   (dir =>
-    expectTrue
-      (isFail
-        (graded
-          True
-          (wildCase unrecorded None [Edit mPath (Some mSource)] dir))))
+    isFail
+      (relintsA (wildCase unrecorded None [Edit mPath (Some mSource)] dir)))
 
 test "(w4) without recording, a deleted module is served stale" = withScratchDir
   (dir =>
-    expectTrue
-      (isFail
-        (graded
-          True
-          (wildCase unrecorded (Some mSource) [Edit mPath None] dir))))
+    isFail
+      (relintsA (wildCase unrecorded (Some mSource) [Edit mPath None] dir)))

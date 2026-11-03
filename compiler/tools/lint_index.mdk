@@ -181,10 +181,10 @@ sigOf t = SigVal (stripTy t)
 
 sigRowsOf : String -> HashMap String Unit -> Decl -> List IndexRow
 sigRowsOf m signed (DTypeSig pub name ty loc) =
-  let _ = setInPlace name () signed
+  setInPlace name () signed
   [mkRow m name RkValue (sigOf ty) "" [] 0 pub (Some loc)]
 sigRowsOf m signed (DExtern (ExternDecl { edPub = pub, edName = name, edTy = ty, edLoc = loc, ... })) =
-  let _ = setInPlace name () signed
+  setInPlace name () signed
   [mkRow m name RkValue (sigOf ty) "" [] 0 pub (Some loc)]
 sigRowsOf m signed (DAttrib _ d) = sigRowsOf m signed d
 sigRowsOf m _ (DData { dataVis = vis, dataName = name, dataParams = ps, dataCtors = ctors, dataNameLoc = loc, ... }) =
@@ -296,7 +296,7 @@ unsignedRow : String ->
 unsignedRow m signed seen pub name loc
   | has name signed || has name seen = []
   | otherwise =
-    let _ = setInPlace name () seen
+    setInPlace name () seen
     [mkRow m name RkValue NoSig "" [] 0 pub (Some loc)]
 
 -- A signature's own spans point into the file that declared it and answer
@@ -326,13 +326,17 @@ stripAtom a = { a | eatLoc = None }
 stripConstraint : Constraint -> Constraint
 stripConstraint c = { c | constraintArgs = map stripTy c.constraintArgs }
 
--- Rows whose module is visible from outside: the stdlib as a user sees it.
+-- The rows the stdlib scope keeps: the exported ones, plus the host primitives
+-- of `runtime`.  A primitive is in scope in every program though `runtime.mdk`
+-- does not export it, so a call to one has a declared signature to read.  Its
+-- row stays `ixrExported = False`, which keeps it out of `ixsNames` and
+-- `ixsModules` (the names a rule treats as importable stdlib API).
 export
-exportedRows : List IndexRow -> List IndexRow
-exportedRows rows = filterList rowIsExported rows
+stdlibKeptRows : List IndexRow -> List IndexRow
+stdlibKeptRows rows = filterList keptInStdlib rows
 
-rowIsExported : IndexRow -> Bool
-rowIsExported r = r.ixrExported
+keptInStdlib : IndexRow -> Bool
+keptInStdlib r = r.ixrExported || r.ixrModule == "runtime"
 
 -- ── the row digest ──────────────────────────────────────────────────────────
 
@@ -398,16 +402,16 @@ sexpOptLoc (Some (Loc _ a b c d)) = SList [
 -- The location's file is the shard's own path, restored on load.
 readOptLoc : String -> SexpCursor -> Option Loc
 readOptLoc path cur =
-  let _ = cursorOpen cur
+  cursorOpen cur
   if isCloseByte (cursorPeek cur) then
-    let _ = cursorAdvance cur
+    cursorAdvance cur
     None
   else
     let a = cursorInt cur
     let b = cursorInt cur
     let c = cursorInt cur
     let d = cursorInt cur
-    let _ = cursorClose cur
+    cursorClose cur
     Some (Loc path a b c d)
 
 -- The shard text: version, stamp, path, content hash, module id, rows digest,
@@ -444,7 +448,7 @@ readSlot cur =
 
 readRow : String -> String -> SexpCursor -> IndexRow
 readRow path m cur =
-  let _ = cursorOpen cur
+  cursorOpen cur
   let n = cursorAtom cur
   let k = match kindOfTag (cursorChar cur)
     Some kk => kk
@@ -455,18 +459,18 @@ readRow path m cur =
   let arity = cursorInt cur
   let exp = readBoolTF cur
   let loc = readOptLoc path cur
-  let _ = cursorClose cur
+  cursorClose cur
   mkRow m n k sig parent fields arity exp loc
 
 readOptTy : SexpCursor -> Option Ty
 readOptTy cur =
-  let _ = cursorOpen cur
+  cursorOpen cur
   if isCloseByte (cursorPeek cur) then
-    let _ = cursorAdvance cur
+    cursorAdvance cur
     None
   else
     let t = readTy cur
-    let _ = cursorClose cur
+    cursorClose cur
     Some t
 
 -- (module id, rows digest, rows), or `None` on any doubt: a wrong version,
@@ -478,7 +482,7 @@ decodeRowShard : String ->
   Option (String, String, List IndexRow)
 decodeRowShard stamp path hash text =
   let cur = cursorOf text
-  let _ = cursorOpen cur
+  cursorOpen cur
   let v = cursorInt cur
   let st = cursorAtom cur
   let p = cursorAtom cur
@@ -493,7 +497,7 @@ decodeRowShard stamp path hash text =
     let m = cursorAtom cur
     let digest = cursorAtom cur
     let rows = cursorList (readRow path m) cur
-    let _ = cursorClose cur
+    cursorClose cur
     if cursorFailed cur || not (cursorAtEnd cur) then
       None
     else
@@ -550,8 +554,8 @@ rowContentHash src = hashStringHex src
 -- A file's rows and their digest, from its shard when the shard answers for
 -- this exact content, else from a parse (and the shard is rewritten).  `Err`
 -- carries the source and the parse error for the caller's diagnostic.  An
--- unreadable file has no rows.  `dir` "" means no cache.  `exportedOnly` keeps
--- only the exported rows, in the shard and in the result.
+-- unreadable file has no rows.  `dir` "" means no cache.  `stdlibScope` keeps
+-- the exported rows and the `runtime` primitives, in the shard and in the result.
 export
 fileRows : Bool ->
   (String -> Result ParseError (List Decl, Positions)) ->
@@ -560,11 +564,11 @@ fileRows : Bool ->
   String ->
   String ->
   <IO> Result (String, ParseError) (String, List IndexRow)
-fileRows exportedOnly parse dir stamp modId path = match readFile path
+fileRows stdlibScope parse dir stamp modId path = match readFile path
   Err _ => Ok ("", [])
   Ok src =>
     let hash = rowContentHash src
-    let shardStamp = if exportedOnly then "\{stamp}/x" else stamp
+    let shardStamp = if stdlibScope then "\{stamp}/x" else stamp
     let sp = rowShardPath dir path
     let cached =
       if dir == "" then
@@ -578,7 +582,7 @@ fileRows exportedOnly parse dir stamp modId path = match readFile path
         Err e => Err (src, e)
         Ok (decls, _) =>
           let all = map (atPath path) (rowsOfDecls modId decls)
-          let rows = if exportedOnly then exportedRows all else all
+          let rows = if stdlibScope then stdlibKeptRows all else all
           let _ =
             if dir == "" then
               ()
@@ -592,15 +596,18 @@ atPath path r = match r.ixrLoc
   Some (Loc _ a b c d) => { r | ixrLoc = Some (Loc path a b c d) }
   None => r
 
+-- The cache is best-effort: a shard that cannot be written is a miss on the
+-- next run, so a failed `mkdirAll` or `makeStagingDir` is skipped silently.
 writeShard : String -> String -> String -> <IO> Unit
-writeShard dir sp text =
-  let _ = mkdirAll dir
-  match makeStagingDir dir
+writeShard dir sp text = match mkdirAll dir
+  Err _ => ()
+  Ok _ => match makeStagingDir dir
     Err _ => ()
     Ok tmp =>
-      let _ = stageAndRename tmp sp text
-      let _ = removeDir tmp
-      ()
+      stageAndRename tmp sp text
+      bestEffort
+        "removing the staging dir; a failed write leaves the staged file in it, so it is non-empty"
+        (removeDir tmp)
 
 -- A staging dir unique to THIS process, inside `dir`: `rename(2)` fails across
 -- filesystems, so it cannot be in /tmp.  `mktemp -d` makes the name because the
@@ -626,8 +633,9 @@ stageAndRename tmp dest text =
     Err _ => ()
     Ok _ => match rename staged dest
       Err _ =>
-        let _ = removeFile staged
-        ()
+        bestEffort
+          "removing the staged file after a failed rename; the shard is simply not written"
+          (removeFile staged)
       Ok _ => ()
 
 -- ── the index ───────────────────────────────────────────────────────────────
@@ -706,7 +714,7 @@ indexFingerprint ix =
 mkScope : String -> List IndexRow -> IndexScope
 mkScope digest rows =
   let m = new ()
-  let _ = groupInto (reverse rows) m
+  groupInto (reverse rows) m
   let signed = filterList isExportedSigValue rows
   IndexScope {
     ixsByName = m,
@@ -729,7 +737,7 @@ rowModule r = r.ixrModule
 groupInto : List IndexRow -> HashMap String (List IndexRow) -> Unit
 groupInto [] _ = ()
 groupInto (r :: rest) m =
-  let _ = setInPlace r.ixrName (r :: findWithDefault [] r.ixrName m) m
+  setInPlace r.ixrName (r :: findWithDefault [] r.ixrName m) m
   groupInto rest m
 
 sortedUnique : List String -> List String
@@ -967,6 +975,11 @@ rowsNamed ix ns name =
 export
 stdlibRowsNamed : ProjectIndex -> Ns -> String -> List IndexRow
 stdlibRowsNamed ix ns name = rowsAsked ix (QNamed StdlibScope ns name)
+
+-- The project's candidates alone.
+export
+projectRowsNamed : ProjectIndex -> Ns -> String -> List IndexRow
+projectRowsNamed ix ns name = rowsAsked ix (QNamed ProjectScope ns name)
 
 -- Candidates for `name` declared in module `modId` (still a list: a name can
 -- be a value and a constructor, or be declared twice).

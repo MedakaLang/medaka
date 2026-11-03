@@ -855,10 +855,16 @@ lines s
 The lines of `s`, split on `\n`.
 
 A `\r` before the `\n` is removed, so Windows line endings work too.
+Unlike `io.readLines`, this keeps the final empty line when `s` ends in
+a newline.
 
 ```medaka
 > lines "a\nb\nc"
 ["a", "b", "c"]
+> lines "a\n"
+["a", ""]
+> lines ""
+[""]
 ```
 
 ### `stripCR`

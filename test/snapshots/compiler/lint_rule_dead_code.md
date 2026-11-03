@@ -158,7 +158,7 @@ reachableNames facts prog =
       ++ ("main"
         :: flatMap nonDefRefL prog ++ doctestIdents (factComments facts))
   let visited = new ()
-  let _ = bfsReach refMap visited seed
+  bfsReach refMap visited seed
   visited
 
 -- one (defName, bodyRefs) per top-level DFunDef clause; refs are the identifier
@@ -227,7 +227,7 @@ bfsReach _ _ [] = ()
 bfsReach refMap visited (x :: rest)
   | has x visited = bfsReach refMap visited rest
   | otherwise =
-    let _ = setInPlace x () visited
+    setInPlace x () visited
     bfsReach refMap visited (refsOf refMap x ++ rest)
 
 refsOf : HashMap String (List String) -> String -> List String
@@ -242,13 +242,13 @@ refsOf refMap n = findWithDefault [] n refMap
 mergeRefs : List (String, List String) -> HashMap String (List String)
 mergeRefs pairs =
   let m = new ()
-  let _ = mergeRefsGo m pairs
+  mergeRefsGo m pairs
   m
 
 mergeRefsGo : HashMap String (List String) -> List (String, List String) -> Unit
 mergeRefsGo _ [] = ()
 mergeRefsGo acc ((n, rs) :: rest) =
-  let _ = setInPlace n (sortUniqS (findWithDefault [] n acc ++ rs)) acc
+  setInPlace n (sortUniqS (findWithDefault [] n acc ++ rs)) acc
   mergeRefsGo acc rest
 
 -- ── identifier tokeniser ──────────────────────────────────────────────────────
@@ -346,7 +346,7 @@ blockDocLineIdents line =
 (DTypeSig false "isOrdinaryIdent" (TyFun (TyCon "String") (TyCon "Bool")))
 (DFunDef false "isOrdinaryIdent" ((PVar "s")) (EIf (EBinOp "==" (EApp (EVar "stringLength") (EVar "s")) (ELit (LInt 0))) (EVar "False") (EIf (EVar "otherwise") (EApp (EVar "isIdentStart") (EApp (EApp (EVar "arrayGetUnsafe") (ELit (LInt 0))) (EApp (EVar "stringToChars") (EVar "s")))) (EApp (EVar "__fallthrough__") (ELit LUnit)))))
 (DTypeSig false "reachableNames" (TyFun (TyCon "FileFacts") (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyApp (TyApp (TyCon "HashMap") (TyCon "String")) (TyCon "Unit")))))
-(DFunDef false "reachableNames" ((PVar "facts") (PVar "prog")) (EBlock (DoLet false false (PVar "refMap") (EApp (EVar "mergeRefs") (EApp (EApp (EVar "flatMap") (EVar "defRefPair")) (EVar "prog")))) (DoLet false false (PVar "seed") (EBinOp "++" (EApp (EVar "exportedNames") (EVar "prog")) (EBinOp "::" (ELit (LString "main")) (EBinOp "++" (EApp (EApp (EVar "flatMap") (EVar "nonDefRefL")) (EVar "prog")) (EApp (EVar "doctestIdents") (EApp (EVar "factComments") (EVar "facts"))))))) (DoLet false false (PVar "visited") (EApp (EVar "new") (ELit LUnit))) (DoLet false false PWild (EApp (EApp (EApp (EVar "bfsReach") (EVar "refMap")) (EVar "visited")) (EVar "seed"))) (DoExpr (EVar "visited"))))
+(DFunDef false "reachableNames" ((PVar "facts") (PVar "prog")) (EBlock (DoLet false false (PVar "refMap") (EApp (EVar "mergeRefs") (EApp (EApp (EVar "flatMap") (EVar "defRefPair")) (EVar "prog")))) (DoLet false false (PVar "seed") (EBinOp "++" (EApp (EVar "exportedNames") (EVar "prog")) (EBinOp "::" (ELit (LString "main")) (EBinOp "++" (EApp (EApp (EVar "flatMap") (EVar "nonDefRefL")) (EVar "prog")) (EApp (EVar "doctestIdents") (EApp (EVar "factComments") (EVar "facts"))))))) (DoLet false false (PVar "visited") (EApp (EVar "new") (ELit LUnit))) (DoExpr (EApp (EApp (EApp (EVar "bfsReach") (EVar "refMap")) (EVar "visited")) (EVar "seed"))) (DoExpr (EVar "visited"))))
 (DTypeSig false "defRefPair" (TyFun (TyCon "Decl") (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "String"))))))
 (DFunDef false "defRefPair" ((PVar "d")) (EMatch (EApp (EVar "defNameOf") (EVar "d")) (arm (PCon "Some" (PVar "name")) () (EListLit (ETuple (EVar "name") (EApp (EVar "sortUniqS") (EApp (EVar "identTokens") (EApp (EVar "declToString") (EApp (EVar "unAttrib") (EVar "d")))))))) (arm (PCon "None") () (EListLit))))
 (DTypeSig false "defNameOf" (TyFun (TyCon "Decl") (TyApp (TyCon "Option") (TyCon "String"))))
@@ -378,14 +378,14 @@ blockDocLineIdents line =
 (DFunDef false "bodyIdents" ((PVar "d")) (EApp (EVar "sortUniqS") (EApp (EVar "identTokens") (EApp (EVar "declToString") (EVar "d")))))
 (DTypeSig false "bfsReach" (TyFun (TyApp (TyApp (TyCon "HashMap") (TyCon "String")) (TyApp (TyCon "List") (TyCon "String"))) (TyFun (TyApp (TyApp (TyCon "HashMap") (TyCon "String")) (TyCon "Unit")) (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyCon "Unit")))))
 (DFunDef false "bfsReach" (PWild PWild (PList)) (ELit LUnit))
-(DFunDef false "bfsReach" ((PVar "refMap") (PVar "visited") (PCons (PVar "x") (PVar "rest"))) (EIf (EApp (EApp (EVar "has") (EVar "x")) (EVar "visited")) (EApp (EApp (EApp (EVar "bfsReach") (EVar "refMap")) (EVar "visited")) (EVar "rest")) (EIf (EVar "otherwise") (EBlock (DoLet false false PWild (EApp (EApp (EApp (EVar "setInPlace") (EVar "x")) (ELit LUnit)) (EVar "visited"))) (DoExpr (EApp (EApp (EApp (EVar "bfsReach") (EVar "refMap")) (EVar "visited")) (EBinOp "++" (EApp (EApp (EVar "refsOf") (EVar "refMap")) (EVar "x")) (EVar "rest"))))) (EApp (EVar "__fallthrough__") (ELit LUnit)))))
+(DFunDef false "bfsReach" ((PVar "refMap") (PVar "visited") (PCons (PVar "x") (PVar "rest"))) (EIf (EApp (EApp (EVar "has") (EVar "x")) (EVar "visited")) (EApp (EApp (EApp (EVar "bfsReach") (EVar "refMap")) (EVar "visited")) (EVar "rest")) (EIf (EVar "otherwise") (EBlock (DoExpr (EApp (EApp (EApp (EVar "setInPlace") (EVar "x")) (ELit LUnit)) (EVar "visited"))) (DoExpr (EApp (EApp (EApp (EVar "bfsReach") (EVar "refMap")) (EVar "visited")) (EBinOp "++" (EApp (EApp (EVar "refsOf") (EVar "refMap")) (EVar "x")) (EVar "rest"))))) (EApp (EVar "__fallthrough__") (ELit LUnit)))))
 (DTypeSig false "refsOf" (TyFun (TyApp (TyApp (TyCon "HashMap") (TyCon "String")) (TyApp (TyCon "List") (TyCon "String"))) (TyFun (TyCon "String") (TyApp (TyCon "List") (TyCon "String")))))
 (DFunDef false "refsOf" ((PVar "refMap") (PVar "n")) (EApp (EApp (EApp (EVar "findWithDefault") (EListLit)) (EVar "n")) (EVar "refMap")))
 (DTypeSig false "mergeRefs" (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "String")))) (TyApp (TyApp (TyCon "HashMap") (TyCon "String")) (TyApp (TyCon "List") (TyCon "String")))))
-(DFunDef false "mergeRefs" ((PVar "pairs")) (EBlock (DoLet false false (PVar "m") (EApp (EVar "new") (ELit LUnit))) (DoLet false false PWild (EApp (EApp (EVar "mergeRefsGo") (EVar "m")) (EVar "pairs"))) (DoExpr (EVar "m"))))
+(DFunDef false "mergeRefs" ((PVar "pairs")) (EBlock (DoLet false false (PVar "m") (EApp (EVar "new") (ELit LUnit))) (DoExpr (EApp (EApp (EVar "mergeRefsGo") (EVar "m")) (EVar "pairs"))) (DoExpr (EVar "m"))))
 (DTypeSig false "mergeRefsGo" (TyFun (TyApp (TyApp (TyCon "HashMap") (TyCon "String")) (TyApp (TyCon "List") (TyCon "String"))) (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "String")))) (TyCon "Unit"))))
 (DFunDef false "mergeRefsGo" (PWild (PList)) (ELit LUnit))
-(DFunDef false "mergeRefsGo" ((PVar "acc") (PCons (PTuple (PVar "n") (PVar "rs")) (PVar "rest"))) (EBlock (DoLet false false PWild (EApp (EApp (EApp (EVar "setInPlace") (EVar "n")) (EApp (EVar "sortUniqS") (EBinOp "++" (EApp (EApp (EApp (EVar "findWithDefault") (EListLit)) (EVar "n")) (EVar "acc")) (EVar "rs")))) (EVar "acc"))) (DoExpr (EApp (EApp (EVar "mergeRefsGo") (EVar "acc")) (EVar "rest")))))
+(DFunDef false "mergeRefsGo" ((PVar "acc") (PCons (PTuple (PVar "n") (PVar "rs")) (PVar "rest"))) (EBlock (DoExpr (EApp (EApp (EApp (EVar "setInPlace") (EVar "n")) (EApp (EVar "sortUniqS") (EBinOp "++" (EApp (EApp (EApp (EVar "findWithDefault") (EListLit)) (EVar "n")) (EVar "acc")) (EVar "rs")))) (EVar "acc"))) (DoExpr (EApp (EApp (EVar "mergeRefsGo") (EVar "acc")) (EVar "rest")))))
 (DTypeSig false "identTokens" (TyFun (TyCon "String") (TyApp (TyCon "List") (TyCon "String"))))
 (DFunDef false "identTokens" ((PVar "s")) (EBlock (DoLet false false (PVar "cs") (EApp (EVar "stringToChars") (EVar "s"))) (DoExpr (EApp (EApp (EApp (EVar "identTokGo") (EVar "cs")) (EApp (EVar "arrayLength") (EVar "cs"))) (ELit (LInt 0))))))
 (DTypeSig false "identTokGo" (TyFun (TyApp (TyCon "Array") (TyCon "Char")) (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyApp (TyCon "List") (TyCon "String"))))))
@@ -435,7 +435,7 @@ blockDocLineIdents line =
 (DTypeSig false "isOrdinaryIdent" (TyFun (TyCon "String") (TyCon "Bool")))
 (DFunDef false "isOrdinaryIdent" ((PVar "s")) (EIf (EBinOp "==" (EApp (EVar "stringLength") (EVar "s")) (ELit (LInt 0))) (EVar "False") (EIf (EVar "otherwise") (EApp (EVar "isIdentStart") (EApp (EApp (EVar "arrayGetUnsafe") (ELit (LInt 0))) (EApp (EVar "stringToChars") (EVar "s")))) (EApp (EVar "__fallthrough__") (ELit LUnit)))))
 (DTypeSig false "reachableNames" (TyFun (TyCon "FileFacts") (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyApp (TyApp (TyCon "HashMap") (TyCon "String")) (TyCon "Unit")))))
-(DFunDef false "reachableNames" ((PVar "facts") (PVar "prog")) (EBlock (DoLet false false (PVar "refMap") (EApp (EVar "mergeRefs") (EApp (EApp (EDictApp "flatMap") (EVar "defRefPair")) (EVar "prog")))) (DoLet false false (PVar "seed") (EBinOp "++" (EApp (EVar "exportedNames") (EVar "prog")) (EBinOp "::" (ELit (LString "main")) (EBinOp "++" (EApp (EApp (EDictApp "flatMap") (EVar "nonDefRefL")) (EVar "prog")) (EApp (EVar "doctestIdents") (EApp (EVar "factComments") (EVar "facts"))))))) (DoLet false false (PVar "visited") (EApp (EVar "new") (ELit LUnit))) (DoLet false false PWild (EApp (EApp (EApp (EVar "bfsReach") (EVar "refMap")) (EVar "visited")) (EVar "seed"))) (DoExpr (EVar "visited"))))
+(DFunDef false "reachableNames" ((PVar "facts") (PVar "prog")) (EBlock (DoLet false false (PVar "refMap") (EApp (EVar "mergeRefs") (EApp (EApp (EDictApp "flatMap") (EVar "defRefPair")) (EVar "prog")))) (DoLet false false (PVar "seed") (EBinOp "++" (EApp (EVar "exportedNames") (EVar "prog")) (EBinOp "::" (ELit (LString "main")) (EBinOp "++" (EApp (EApp (EDictApp "flatMap") (EVar "nonDefRefL")) (EVar "prog")) (EApp (EVar "doctestIdents") (EApp (EVar "factComments") (EVar "facts"))))))) (DoLet false false (PVar "visited") (EApp (EVar "new") (ELit LUnit))) (DoExpr (EApp (EApp (EApp (EVar "bfsReach") (EVar "refMap")) (EVar "visited")) (EVar "seed"))) (DoExpr (EVar "visited"))))
 (DTypeSig false "defRefPair" (TyFun (TyCon "Decl") (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "String"))))))
 (DFunDef false "defRefPair" ((PVar "d")) (EMatch (EApp (EVar "defNameOf") (EVar "d")) (arm (PCon "Some" (PVar "name")) () (EListLit (ETuple (EVar "name") (EApp (EVar "sortUniqS") (EApp (EVar "identTokens") (EApp (EVar "declToString") (EApp (EVar "unAttrib") (EVar "d")))))))) (arm (PCon "None") () (EListLit))))
 (DTypeSig false "defNameOf" (TyFun (TyCon "Decl") (TyApp (TyCon "Option") (TyCon "String"))))
@@ -467,14 +467,14 @@ blockDocLineIdents line =
 (DFunDef false "bodyIdents" ((PVar "d")) (EApp (EVar "sortUniqS") (EApp (EVar "identTokens") (EApp (EVar "declToString") (EVar "d")))))
 (DTypeSig false "bfsReach" (TyFun (TyApp (TyApp (TyCon "HashMap") (TyCon "String")) (TyApp (TyCon "List") (TyCon "String"))) (TyFun (TyApp (TyApp (TyCon "HashMap") (TyCon "String")) (TyCon "Unit")) (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyCon "Unit")))))
 (DFunDef false "bfsReach" (PWild PWild (PList)) (ELit LUnit))
-(DFunDef false "bfsReach" ((PVar "refMap") (PVar "visited") (PCons (PVar "x") (PVar "rest"))) (EIf (EApp (EApp (EVar "has") (EVar "x")) (EVar "visited")) (EApp (EApp (EApp (EVar "bfsReach") (EVar "refMap")) (EVar "visited")) (EVar "rest")) (EIf (EVar "otherwise") (EBlock (DoLet false false PWild (EApp (EApp (EApp (EVar "setInPlace") (EVar "x")) (ELit LUnit)) (EVar "visited"))) (DoExpr (EApp (EApp (EApp (EVar "bfsReach") (EVar "refMap")) (EVar "visited")) (EBinOp "++" (EApp (EApp (EVar "refsOf") (EVar "refMap")) (EVar "x")) (EVar "rest"))))) (EApp (EVar "__fallthrough__") (ELit LUnit)))))
+(DFunDef false "bfsReach" ((PVar "refMap") (PVar "visited") (PCons (PVar "x") (PVar "rest"))) (EIf (EApp (EApp (EVar "has") (EVar "x")) (EVar "visited")) (EApp (EApp (EApp (EVar "bfsReach") (EVar "refMap")) (EVar "visited")) (EVar "rest")) (EIf (EVar "otherwise") (EBlock (DoExpr (EApp (EApp (EApp (EVar "setInPlace") (EVar "x")) (ELit LUnit)) (EVar "visited"))) (DoExpr (EApp (EApp (EApp (EVar "bfsReach") (EVar "refMap")) (EVar "visited")) (EBinOp "++" (EApp (EApp (EVar "refsOf") (EVar "refMap")) (EVar "x")) (EVar "rest"))))) (EApp (EVar "__fallthrough__") (ELit LUnit)))))
 (DTypeSig false "refsOf" (TyFun (TyApp (TyApp (TyCon "HashMap") (TyCon "String")) (TyApp (TyCon "List") (TyCon "String"))) (TyFun (TyCon "String") (TyApp (TyCon "List") (TyCon "String")))))
 (DFunDef false "refsOf" ((PVar "refMap") (PVar "n")) (EApp (EApp (EApp (EVar "findWithDefault") (EListLit)) (EVar "n")) (EVar "refMap")))
 (DTypeSig false "mergeRefs" (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "String")))) (TyApp (TyApp (TyCon "HashMap") (TyCon "String")) (TyApp (TyCon "List") (TyCon "String")))))
-(DFunDef false "mergeRefs" ((PVar "pairs")) (EBlock (DoLet false false (PVar "m") (EApp (EVar "new") (ELit LUnit))) (DoLet false false PWild (EApp (EApp (EVar "mergeRefsGo") (EVar "m")) (EVar "pairs"))) (DoExpr (EVar "m"))))
+(DFunDef false "mergeRefs" ((PVar "pairs")) (EBlock (DoLet false false (PVar "m") (EApp (EVar "new") (ELit LUnit))) (DoExpr (EApp (EApp (EVar "mergeRefsGo") (EVar "m")) (EVar "pairs"))) (DoExpr (EVar "m"))))
 (DTypeSig false "mergeRefsGo" (TyFun (TyApp (TyApp (TyCon "HashMap") (TyCon "String")) (TyApp (TyCon "List") (TyCon "String"))) (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "String")))) (TyCon "Unit"))))
 (DFunDef false "mergeRefsGo" (PWild (PList)) (ELit LUnit))
-(DFunDef false "mergeRefsGo" ((PVar "acc") (PCons (PTuple (PVar "n") (PVar "rs")) (PVar "rest"))) (EBlock (DoLet false false PWild (EApp (EApp (EApp (EVar "setInPlace") (EVar "n")) (EApp (EVar "sortUniqS") (EBinOp "++" (EApp (EApp (EApp (EVar "findWithDefault") (EListLit)) (EVar "n")) (EVar "acc")) (EVar "rs")))) (EVar "acc"))) (DoExpr (EApp (EApp (EVar "mergeRefsGo") (EVar "acc")) (EVar "rest")))))
+(DFunDef false "mergeRefsGo" ((PVar "acc") (PCons (PTuple (PVar "n") (PVar "rs")) (PVar "rest"))) (EBlock (DoExpr (EApp (EApp (EApp (EVar "setInPlace") (EVar "n")) (EApp (EVar "sortUniqS") (EBinOp "++" (EApp (EApp (EApp (EVar "findWithDefault") (EListLit)) (EVar "n")) (EVar "acc")) (EVar "rs")))) (EVar "acc"))) (DoExpr (EApp (EApp (EVar "mergeRefsGo") (EVar "acc")) (EVar "rest")))))
 (DTypeSig false "identTokens" (TyFun (TyCon "String") (TyApp (TyCon "List") (TyCon "String"))))
 (DFunDef false "identTokens" ((PVar "s")) (EBlock (DoLet false false (PVar "cs") (EApp (EVar "stringToChars") (EVar "s"))) (DoExpr (EApp (EApp (EApp (EVar "identTokGo") (EVar "cs")) (EApp (EVar "arrayLength") (EVar "cs"))) (ELit (LInt 0))))))
 (DTypeSig false "identTokGo" (TyFun (TyApp (TyCon "Array") (TyCon "Char")) (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyApp (TyCon "List") (TyCon "String"))))))

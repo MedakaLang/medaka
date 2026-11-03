@@ -382,9 +382,9 @@ genLet ctx t depth =
   let name = freshName ctx "v"
   let rhs = genExpr ctx bt (depth - 1)
   let saved = ctxScope ctx
-  let _ = setScope ctx ((name, bt) :: saved)
+  setScope ctx ((name, bt) :: saved)
   let body = genExpr ctx t (depth - 1)
-  let _ = setScope ctx saved
+  setScope ctx saved
   ELet noDeclLoc False (PVar name (Loc "" 0 0 0 0) noBinderId) rhs body
 
 -- construct an ADT value: pick a variant, fill positional fields.
@@ -418,9 +418,9 @@ genArm ctx t depth (con, ftys) =
   let vars = freshPVars ctx ftys
   let pat = PCon con (map pvarOf vars)
   let saved = ctxScope ctx
-  let _ = setScope ctx (zipScope vars ftys ++ saved)
+  setScope ctx (zipScope vars ftys ++ saved)
   let body = genExpr ctx t (depth - 1)
-  let _ = setScope ctx saved
+  setScope ctx saved
   Arm pat [] body
 
 genMatch : Ctx -> Gadt -> Gty -> Int -> <Rand> Expr
@@ -482,9 +482,9 @@ genFunDecl ctx =
   let pname = freshName ctx "x"
   let rt = pick baseGtys
   let saved = ctxScope ctx
-  let _ = setScope ctx [(pname, pt)]
+  setScope ctx [(pname, pt)]
   let body = genExpr ctx rt 3
-  let _ = setScope ctx saved
+  setScope ctx saved
   DFunDef
     False
     fname
@@ -565,7 +565,7 @@ genValDecl ctx _i =
   let t = randGty ctx 1
   let name = freshName ctx "g"
   let e = genExpr ctx t 3
-  let _ = setScope ctx ((name, t) :: ctxScope ctx)
+  setScope ctx ((name, t) :: ctxScope ctx)
   DFunDef False name [] e noDeclLoc noBinderId
 
 -- hoist an expr into a fresh top-level binding `oN = e`, recording (name, decl, isInv)
@@ -579,7 +579,7 @@ hoistOut ctx outsRef isInv e =
 hoistAdtInvs : Ctx -> Ref (List Out) -> Gadt -> <Rand> Unit
 hoistAdtInvs ctx outsRef a =
   if adtDerives a then
-    let _ = iterExprs (invEq ctx a) (e => hoistOut ctx outsRef True e)
+    iterExprs (invEq ctx a) (e => hoistOut ctx outsRef True e)
     iterExprs (invOrd ctx a) (e => hoistOut ctx outsRef True e)
 
 -- main-body statement that prints one hoisted output
@@ -598,24 +598,23 @@ outDecl (Out _ d _) = d
 
 genBlock : Ctx -> <Rand> (List Decl, List DoStmt)
 genBlock ctx =
-  let _ = setAdts ctx []
-  let _ = setScope ctx []
+  setAdts ctx []
+  setScope ctx []
   let nAdts = if ctxTier ctx >= 1 then 1 + randBelow 2 else 0
-  let _ = times nAdts (addAdt ctx)
+  times nAdts (addAdt ctx)
   let adtDecls = map adtToDecl (ctxAdts ctx)
   let nFns = randBelow 3
   let fnDecls = listInit nFns (i => genFunDecl ctx)
   let nVals = 2 + randBelow 3
   let valDecls = listInit nVals (genValDecl ctx)
   let outsRef = Ref []
-  let _ =
-    times 4 (i => hoistOut ctx outsRef False (genExpr ctx (randGty ctx 2) 3))
+  times 4 (i => hoistOut ctx outsRef False (genExpr ctx (randGty ctx 2) 3))
   let _ =
     if ctxTier ctx >= 1 then
       iterAdts (ctxAdts ctx) (a =>
         hoistOut ctx outsRef False (genMatch ctx a (pick baseGtys) 3))
-  let _ = iterExprs (invArith ctx) (e => hoistOut ctx outsRef True e)
-  let _ = hoistOut ctx outsRef True (invOrdTrans ctx)
+  iterExprs (invArith ctx) (e => hoistOut ctx outsRef True e)
+  hoistOut ctx outsRef True (invOrdTrans ctx)
   let _ =
     if ctxTier ctx >= 2 then iterAdts (ctxAdts ctx) (hoistAdtInvs ctx outsRef)
   let outs = !outsRef
@@ -656,7 +655,7 @@ genProgram : Ctx -> Int -> <Rand> List Decl
 genProgram ctx nblocks =
   let allDeclsRef = Ref []
   let allBodyRef = Ref []
-  let _ = times nblocks (appendBlock ctx allDeclsRef allBodyRef)
+  times nblocks (appendBlock ctx allDeclsRef allBodyRef)
   let mainDecl =
     DFunDef False "main" [] (EBlock !allBodyRef) noDeclLoc noBinderId
   !allDeclsRef ++ [mainDecl]
@@ -686,7 +685,7 @@ export
 oracleMain : Unit -> <IO, Rand> Unit
 oracleMain () = match parseOpts (args ()) (Opts 0 2 1 False)
   Opts seedVal tier batch noTuple =>
-    let _ = setSeed seedVal
+    setSeed seedVal
     let ctx = Ctx tier noTuple (Ref []) (Ref []) (Ref 0)
     let prog = genProgram ctx (maxI 1 batch)
     putStr (programToString prog)

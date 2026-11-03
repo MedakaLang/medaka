@@ -4,7 +4,7 @@
 -- dce.mdk narrows that rule operationally: only DFunDef declarations may drop;
 -- main and emitting non-function declarations seed reachability.
 
-import test.{expectAll, expectEqual, expectTrue}
+import test.{Expectation, expectAll, expectEqual, expectTrue, labelFail}
 import frontend.ast.{
   noBinderId,
   Attr(..),
@@ -118,11 +118,15 @@ threeNodeMatrixRows from to bits
     (from, to) :: threeNodeMatrixRows from (to + 1) bits
   | otherwise = threeNodeMatrixRows from (to + 1) bits
 
-allThreeNodeGraphsSatisfy : Int -> Bool
-allThreeNodeGraphsSatisfy 512 = True
-allThreeNodeGraphsSatisfy bits =
-  dceGraphLaw (threeNodeMatrixEdges bits)
-    && allThreeNodeGraphsSatisfy (bits + 1)
+allThreeNodeGraphsSatisfy : Int -> Expectation
+allThreeNodeGraphsSatisfy from =
+  expectAll
+    (map
+      (bits =>
+        labelFail
+          "adjacency bits \{bits}"
+          (expectTrue (dceGraphLaw (threeNodeMatrixEdges bits))))
+      [from..=511])
 
 prop "DCE keeps exactly main-reachable functions in generated primitive call graphs" (rawEdges : List (Int, Int)) =
   dceGraphLaw rawEdges
@@ -144,7 +148,7 @@ test "DCE retains a reachable cycle and removes a disconnected cycle" =
 -- Every directed adjacency matrix on main/a/b, while c/d stay disconnected.
 -- This is an exhaustive fixed corpus, not a second random native sampler.
 test "DCE agrees with the independent oracle on every three-node call graph" =
-  expectTrue (allThreeNodeGraphsSatisfy 0)
+  allThreeNodeGraphsSatisfy 0
 
 testLoc : Loc
 testLoc = Loc "<test>" 1 1 1 1

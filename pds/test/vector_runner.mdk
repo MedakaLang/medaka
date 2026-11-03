@@ -40,7 +40,7 @@
 
 import test.vector_ledger.{filesForConsumer, validatePaths}
 import io.{getEnvOr}
-import list.{get, last, nub, reverse, somes, zipWith}
+import list.{get, head, last, nub, reverse, somes, zipWith}
 import path.{stem}
 import string.{
   contains,
@@ -280,9 +280,7 @@ pinKey label = match words label
   g :: rest => (g, join " " rest)
 
 firstLine : String -> String
-firstLine s = match lines s
-  [] => ""
-  l :: _ => l
+firstLine s = optionOr "" (head (lines s))
 
 {- | What a failed spawn said, in one line: the FIRST and LAST non-empty
    lines of its stderr, or of its stdout when stderr is empty.
@@ -794,13 +792,14 @@ inScratch check = match freshScratch ()
   Err e => Err "could not make a scratch directory: \{e}"
   Ok scratch => Ok (reap scratch (check scratch))
 
--- The scratch directory is the caller's to remove. The spawn is
--- wildcard-bound because a cleanup asserts nothing: a failure to reap is
--- not a finding about the gate's subject.
+-- The scratch directory is the caller's to remove. A cleanup asserts
+-- nothing: a failure to reap is not a finding about the gate's subject.
 export
 reap : String -> List String -> <Exec> List String
 reap scratch findings =
-  let _ = spawn 60 [] "rm" ["-rf", scratch]
+  bestEffort
+    "each check has a fresh mktemp directory of its own, so one that survives is a leaked temp directory and never read again"
+    (spawn 60 [] "rm" ["-rf", scratch])
   findings
 
 {- | The row's verdict, for a `test "…"` block in its own module.

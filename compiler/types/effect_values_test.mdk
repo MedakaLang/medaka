@@ -2,7 +2,9 @@
 -- real unification; this harness deliberately provides only enough equality to
 -- expose which positions `joinProduced` asks it to compare.
 
-import test.{expectAll, expectEqual, expectGreaterThan, expectLessThan}
+import test.{
+  expectAll, expectEqual, expectGreaterThan, expectLessThan, fail, pass
+}
 import list.{range, replicate}
 import support.opcount.{opBump, opSnap, setOpCounting}
 import types.effect_domain.{Param(..)}
@@ -194,11 +196,14 @@ test "unknown shaping reports an occurs equation through supplied equality" =
   let harness = newHarness ()
   let variable = TVar (Ref (Unbound 71 0))
   let recursiveBox = TApp (TRigid "Box") variable
-  let _ = joinProduced (ops harness [True] collectRows) [
+  let joined = joinProduced (ops harness [True] collectRows) [
     ("occurs", variable),
     ("box", recursiveBox),
   ]
   expectAll [
+    match joined
+      None => fail "joinProduced returned None for two alternatives"
+      Some _ => pass,
     expectGreaterThan 0 !harness.equalCalls,
     expectEqual ["occurs"] !harness.mismatches,
   ]
@@ -218,11 +223,15 @@ measure alternatives arity =
   setOpCounting True
   let beforeOps = opSnap ()
   let beforeAlloc = allocBytes ()
-  let _ = joinProduced (ops harness (replicate arity False) collectPure) values
+  let joined =
+    joinProduced (ops harness (replicate arity False) collectPure) values
   let allocation = allocBytes () - beforeAlloc
   let operations = opSnap () - beforeOps
   setOpCounting False
-  (operations, allocation)
+  if isSome joined then
+    (operations, allocation)
+  else
+    panic "measure: joinProduced returned None for a nonempty alternative list"
 
 -- The callback counter is intentionally only a service-call census: it proves
 -- that each comparison column is reached, but cannot see a pure rescan inside

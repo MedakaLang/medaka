@@ -87,7 +87,7 @@ runQ : Db -> String -> Select -> RowType a -> (a -> String) -> <IO> Unit
 -- Intentional cross-file duplicate: parallel demo/probe script wiring the same fixture shape (not shared production logic to consolidate).
 -- lint-disable-next-line rule-duplicate-body
 runQ db label sel rt shw =
-  let _ = println label
+  println label
   match query db sel rt
     Err e => println "query error: \{e}"
     Ok rows => printRows shw rows
@@ -104,7 +104,7 @@ joined =
 runAll : Db -> <IO> Unit
 runAll db =
   -- A. aggregate + GROUP BY over a JOIN
-  let _ = runQ
+  runQ
     db
     "-- join+group name: count* sum(amount) --"
     (withOrderBy
@@ -120,7 +120,7 @@ runAll db =
     (t3 tText tInt (tOption tInt))
     ((n, c, s) => "\{n}|\{c}|\{showOptI s}")
   -- B. ORDER BY count(*) DESC LIMIT 2 (name ASC tiebreak)
-  let _ = runQ
+  runQ
     db
     "-- join+group name: order by count* desc, name asc limit 2 --"
     (withLimit
@@ -137,7 +137,7 @@ runAll db =
     (t2 tText tInt)
     ((n, c) => "\{n}|\{c}")
   -- C. ORDER BY a COMPUTED column (the retired v1 limitation)
-  let _ = runQ
+  runQ
     db
     "-- orders: amount, qty, amount*qty order by amount*qty desc --"
     (withOrderByExpr
@@ -153,7 +153,7 @@ runAll db =
     (t3 (tOption tInt) tInt (tOption tInt))
     ((a, q, p) => "\{showOptI a}|\{q}|\{showOptI p}")
   -- D. HAVING (on count) + ORDER BY (on sum) + LIMIT
-  let _ = runQ
+  runQ
     db
     "-- join+group name: having count*>1 order by sum(amount) asc limit 1 --"
     (withLimit
@@ -173,7 +173,7 @@ runAll db =
     (t3 tText tInt (tOption tInt))
     ((n, c, s) => "\{n}|\{c}|\{showOptI s}")
   -- E. grouped MIN / MAX / AVG / SUM
-  let _ = runQ
+  runQ
     db
     "-- group uid: min max avg sum(amount) --"
     (withOrderBy
@@ -209,7 +209,7 @@ specs = [
 
 main : <IO> Unit
 main =
-  let _ = println "-- CREATE users + orders (in-memory) --"
+  println "-- CREATE users + orders (in-memory) --"
   match buildDatabaseMulti specs
     Err e => println "build error: \{e}"
     Ok bytes => match fromBytes bytes

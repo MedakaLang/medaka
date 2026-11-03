@@ -6,7 +6,7 @@ import bytes.{Bytes, decodeUtf8Lossy, encodeUtf8, fromU8Array}
 import hex as Hex
 import list.{filter, reverse, take}
 
-import test.{Expectation, expectEach, expectEqual, expectTrue}
+import test.{Expectation, expectEach, expectEqual, expectTrue, fail, pass}
 import lib.cid.{Cid, cidEqual, cidForDagCbor}
 import lib.mst.{
   Mst,
@@ -28,9 +28,10 @@ import lib.mst.{
 -- `Cid` derives no `Eq` — `lib.cid` designates `cidEqual` as its equality
 -- (`Cid`'s constructor is module-private), so an `Option Cid` result cannot be
 -- compared with `==`.
-lookupIs : Option Cid -> Cid -> Bool
-lookupIs (Some found) want = cidEqual found want
-lookupIs None _ = False
+lookupIs : Option Cid -> Cid -> Expectation
+lookupIs (Some found) want =
+  if cidEqual found want then pass else fail "the lookup found another value"
+lookupIs None _ = fail "the lookup found nothing"
 
 mustTree : Result String Mst -> Mst
 mustTree (Ok tree) = tree
@@ -97,7 +98,7 @@ test "lookup finds exact keys and misses absent keys" =
   expectEach [
     (
       "an inserted key is found",
-      expectTrue (lookupIs (mstLookup key0 tree) value0),
+      lookupIs (mstLookup key0 tree) value0,
     ),
     (
       "a key never inserted is absent",
@@ -115,11 +116,11 @@ test "replace changes only the selected value" =
   expectEach [
     (
       "the replaced key now carries the new value",
-      expectTrue (lookupIs (mstLookup key0 updated) value1),
+      lookupIs (mstLookup key0 updated) value1,
     ),
     (
       "the untouched key still carries its own value",
-      expectTrue (lookupIs (mstLookup key1 updated) value1),
+      lookupIs (mstLookup key1 updated) value1,
     ),
   ]
 
@@ -133,7 +134,7 @@ test "delete removes exactly one key" =
     ("the deleted key is gone", expectTrue (isNone (mstLookup key0 updated))),
     (
       "the other key survives the delete",
-      expectTrue (lookupIs (mstLookup key1 updated) value1),
+      lookupIs (mstLookup key1 updated) value1,
     ),
   ]
 

@@ -52,7 +52,7 @@ runIS : Db -> String -> Select -> <IO> Unit
 -- Intentional cross-file duplicate: parallel demo/probe script wiring the same fixture shape (not shared production logic to consolidate).
 -- lint-disable-next-line rule-duplicate-body
 runIS db label sel =
-  let _ = println label
+  println label
   match query db sel rowIS
     Err e => println "query error: \{e}"
     Ok rows => printLines showIS rows
@@ -61,14 +61,14 @@ runSI : Db -> String -> Select -> <IO> Unit
 -- Intentional cross-file duplicate: parallel demo/probe script wiring the same fixture shape (not shared production logic to consolidate).
 -- lint-disable-next-line rule-duplicate-body
 runSI db label sel =
-  let _ = println label
+  println label
   match query db sel rowSI
     Err e => println "query error: \{e}"
     Ok rows => printLines showSI rows
 
 runIDistinct : Db -> String -> Select -> <IO> Unit
 runIDistinct db label sel =
-  let _ = println label
+  println label
   match queryDistinct db sel tInt
     Err e => println "query error: \{e}"
     Ok rows => printLines showI rows
@@ -80,47 +80,44 @@ main = match args ()
     Err e => println "open error: \{e}"
     Ok db =>
       -- (a) computed arithmetic column (a+b) plus a plain column (name).
-      let _ =
-        runIS
-          db
-          "-- SELECT a+b, name ORDER BY name --"
-          (withOrderBy
-            "name"
-            True
-            (withColumns
-              [
-                unExpr (eAdd (eColInt "a") (eColInt "b")),
-                unExpr (eColText "name"),
-              ]
-              (selectFrom "nums")))
+      runIS
+        db
+        "-- SELECT a+b, name ORDER BY name --"
+        (withOrderBy
+          "name"
+          True
+          (withColumns
+            [
+              unExpr (eAdd (eColInt "a") (eColInt "b")),
+              unExpr (eColText "name"),
+            ]
+            (selectFrom "nums")))
       -- (b) projection reordering/subsetting: table is (id, a, b, name); project name, id.
-      let _ =
-        runSI
-          db
-          "-- SELECT name, id ORDER BY id --"
-          (withOrderBy
-            "id"
-            True
-            (withColumns
-              [unExpr (eColText "name"), unExpr (eColInt "id")]
-              (selectFrom "nums")))
+      runSI
+        db
+        "-- SELECT name, id ORDER BY id --"
+        (withOrderBy
+          "id"
+          True
+          (withColumns
+            [unExpr (eColText "name"), unExpr (eColInt "id")]
+            (selectFrom "nums")))
       -- (c) computed column over a JOIN: users.name, orders.total + 10.
-      let _ =
-        runSI
-          db
-          "-- SELECT users.name, orders.total+10 JOIN ORDER BY orders.total --"
-          (withOrderBy
-            "orders.total"
-            True
-            (withColumns
-              [
-                unExpr (eColText "users.name"),
-                unExpr (eAdd (eColInt "orders.total") (eLitI 10)),
-              ]
-              (innerJoin
-                "orders"
-                (eEq (eColInt "users.id") (eColInt "orders.uid"))
-                (selectFrom "users"))))
+      runSI
+        db
+        "-- SELECT users.name, orders.total+10 JOIN ORDER BY orders.total --"
+        (withOrderBy
+          "orders.total"
+          True
+          (withColumns
+            [
+              unExpr (eColText "users.name"),
+              unExpr (eAdd (eColInt "orders.total") (eLitI 10)),
+            ]
+            (innerJoin
+              "orders"
+              (eEq (eColInt "users.id") (eColInt "orders.uid"))
+              (selectFrom "users"))))
       -- (d) computed projection + DISTINCT: a*0 collapses every row to one 0.
       runIDistinct
         db

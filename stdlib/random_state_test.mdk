@@ -8,9 +8,9 @@ observeRandom _ =
 stateRoundtrip : U64 -> <Rand> Expectation
 stateRoundtrip state =
   let original = randomState ()
-  let _ = restoreRandomState state
+  restoreRandomState state
   let actual = randomState ()
-  let _ = restoreRandomState original
+  restoreRandomState original
   expectEqual state actual
 
 test "random state capture preserves all 64 bits without drawing" =
@@ -21,14 +21,14 @@ test "random state capture preserves all 64 bits without drawing" =
 
 test "restoring an advanced state replays every deterministic random family" =
   let original = randomState ()
-  let _ = setSeed (-1)
+  setSeed (-1)
   let _ = observeRandom ()
   let snapshot = randomState ()
   let expected = observeRandom ()
   let advanced = randomState ()
-  let _ = restoreRandomState snapshot
+  restoreRandomState snapshot
   let actual = observeRandom ()
-  let _ = restoreRandomState original
+  restoreRandomState original
   expectAll [
     expectNotEqual snapshot advanced,
     expectEqual expected actual,
@@ -36,14 +36,14 @@ test "restoring an advanced state replays every deterministic random family" =
 
 test "an isolated random stream leaves the caller continuation intact" =
   let original = randomState ()
-  let _ = setSeed 42
+  setSeed 42
   let expected = observeRandom ()
-  let _ = setSeed 42
+  setSeed 42
   let caller = randomState ()
-  let _ = setSeed 20261005
+  setSeed 20261005
   let _ = observeRandom ()
   let _ = observeRandom ()
-  let _ = restoreRandomState caller
+  restoreRandomState caller
   let actual = observeRandom ()
-  let _ = restoreRandomState original
+  restoreRandomState original
   expectEqual expected actual

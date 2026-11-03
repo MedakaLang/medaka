@@ -8,7 +8,8 @@ import types.capability_manifest.{CapabilityManifest}
 -- `go` is a constrained local abstraction, and it dispatches `compare` at
 -- `Float`, which reaches core's private `compareNaN` and `floatSignBit`.
 import test.{
-  expectAll, expectEqual, expectNotEqual, expectTrue, fail, labelFail
+  Expectation, expectAll, expectEqual, expectNotEqual, expectTrue, fail,
+  labelFail, pass
 }
 import test_process.{underRoot}
 import string as S
@@ -119,9 +120,9 @@ loaded _ =
           (preludeElabFor generation (desugaredPrelude csrc))
     _ => None
 
-isLoaded : FileVerdict -> Bool
-isLoaded FileLoaded = True
-isLoaded _ = False
+isLoaded : FileVerdict -> Expectation
+isLoaded FileLoaded = pass
+isLoaded _ = fail "the file did not load"
 
 -- An evidence row is the prelude's (module "", below the counter) or the
 -- drive's own (at or past it).
@@ -159,7 +160,7 @@ test "drives continuing from the shipped trees agree with in-process ones" =
             _ => False
         let userLocals = localSuffixes userTrees
         expectAll [
-          labelFail "the file loaded" (expectTrue (isLoaded verdict)),
+          labelFail "the file loaded" (isLoaded verdict),
           labelFail
             "core was desugared after the user module, so its binders moved"
             (expectNotEqual 0 pe.peBinderBase),

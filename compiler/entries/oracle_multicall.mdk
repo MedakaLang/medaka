@@ -114,5 +114,5 @@ main = match basename (executablePath ())
   "fuzz_gen_main" => fuzz_gen_main ()
   "refindex_main" => refindex_main ()
   n =>
-    let _ = ePutStrLn "oracle_multicall: unknown oracle name '\{n}'"
+    ePutStrLn "oracle_multicall: unknown oracle name '\{n}'"
     exit 125

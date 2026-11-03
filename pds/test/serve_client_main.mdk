@@ -657,7 +657,10 @@ idleWaitCeiling = seconds 40
 runIdle : Int -> <IO, Net, Clock> Unit
 runIdle port =
   let conn = mustConnect port
-  let _ = setTimeout conn idleWaitCeiling
+  let () =
+    resultOrPanic
+      "test setup: setTimeout on a fresh connection"
+      (setTimeout conn idleWaitCeiling)
   let t0 = monotonic ()
   let result = recv conn 1
   let elapsed = elapsedSince t0
@@ -1339,7 +1342,9 @@ holdUnframedGo port count held =
     held
   else
     let conn = mustConnect port
-    let _ = sendAll conn unterminatedHeaders
+    bestEffort
+      "past either accept-time ceiling the server closes the connection without reading it, which is the behavior under test"
+      (sendAll conn unterminatedHeaders)
     holdUnframedGo port (count - 1) (conn :: held)
 
 -- | How long one probe waits for its own answer, and how long the retry
@@ -1360,8 +1365,13 @@ probeOnce : Int -> <Net> Option Int
 probeOnce port = match connect "127.0.0.1" port
   Err _ => None
   Ok conn =>
-    let _ = setTimeout conn probeReadCeiling
-    let _ = sendAll conn (getRequest atprotoDidPath)
+    let () =
+      resultOrPanic
+        "test setup: setTimeout on a fresh connection"
+        (setTimeout conn probeReadCeiling)
+    bestEffort
+      "a send the server refused is a non-answer: the read below then fails and the probe reports None"
+      (sendAll conn (getRequest atprotoDidPath))
     let result = readResponse conn empty
     let () = ignoreResult (close conn)
     match result
@@ -1436,7 +1446,9 @@ holdBodyStallGo port count held =
     held
   else
     let conn = mustConnect port
-    let _ = sendAll conn declaredBodyNeverSent
+    bestEffort
+      "once the server has closed an over-ceiling connection the send fails, which is the behavior under test"
+      (sendAll conn declaredBodyNeverSent)
     holdBodyStallGo port (count - 1) (conn :: held)
 
 {- | #2815: a stranger holds `sockets` connections open, each having terminated
@@ -2640,11 +2652,14 @@ runGetBlobFile port did cid mimeType file =
   let () = match readTypedResponse conn empty
     Err message => report "GETBLOBFILE" False message
     Ok (status, mediaType, body, _) =>
-      let _ = writeFileBytes "\{file}.got" (B.toArray body)
-      report
-        "GETBLOBFILE"
-        (status == 200 && mediaType == mimeType && body == wanted)
-        "status \{intToString status}, type '\{mediaType}' (wanted '\{mimeType}'), \{intToString (B.length body)} bytes read back, \{intToString (B.length wanted)} sent"
+      match writeFileBytes "\{file}.got" (B.toArray body)
+        Err message =>
+          report "GETBLOBFILE" False "could not write \{file}.got: \{message}"
+        Ok _ =>
+          report
+            "GETBLOBFILE"
+            (status == 200 && mediaType == mimeType && body == wanted)
+            "status \{intToString status}, type '\{mediaType}' (wanted '\{mimeType}'), \{intToString (B.length body)} bytes read back, \{intToString (B.length wanted)} sent"
   ignoreResult (close conn)
 
 {- | POST the JSON text in `file` to `path` with `token` and require status

@@ -32,8 +32,8 @@ export
 startEvalPropWorker : Unit -> <IO> String
 startEvalPropWorker _ =
   let nonce = mintNonce ()
-  let _ = putStrLn "\{bootstrapBase}\{nonce}"
-  let _ = flushStdout ()
+  putStrLn "\{bootstrapBase}\{nonce}"
+  flushStdout ()
   nonce
 
 -- Emit the bootstrap before loading the target, and keep the nonce out of

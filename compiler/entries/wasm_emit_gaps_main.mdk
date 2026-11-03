@@ -102,5 +102,5 @@ runEmit inputs runtimeDecls coreDecls modules =
 printGaps : List String -> <IO> Unit
 printGaps [] = ()
 printGaps (g :: rest) =
-  let _ = putStrLn g
+  putStrLn g
   printGaps rest

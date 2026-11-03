@@ -136,7 +136,7 @@ notATableName _ = True
 runSql : String -> String -> <IO, FileRead, FileWrite> Unit
 runSql path sql = match execSql path sql
   Err e =>
-    let _ = println "error: \{e}"
+    println "error: \{e}"
     -- A schema that is not UTF-8 is not a mistake in the statement: no
     -- statement can write this file without renaming the entry, so the
     -- refusal also fails the process.

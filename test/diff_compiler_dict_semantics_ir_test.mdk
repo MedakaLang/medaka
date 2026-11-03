@@ -30,7 +30,7 @@ import list.{chunks, nub, somes}
 import regex.{Regex, compile, isMatch}
 import string.{lines, split, trim}
 import test.{
-  Expectation, expectAll, expectAtLeast, expectEach, expectTrue, fail, pass
+  expectSatisfies, Expectation, expectAll, expectAtLeast, expectEach, fail, pass
 }
 import test_process.{medakaBin, spawnTimeoutSeconds, testJobs, underRoot}
 
@@ -614,6 +614,20 @@ hitsOk kind hits =
   else
     intToString hits == wantOf kind
 
+expectHitsOk : String -> Int -> Expectation
+expectHitsOk kind hits =
+  expectSatisfies
+    "a (kind, hits) pair the grading accepts"
+    (pair => hitsOk (fst pair) (snd pair))
+    (kind, hits)
+
+expectHitsRejected : String -> Int -> Expectation
+expectHitsRejected kind hits =
+  expectSatisfies
+    "a (kind, hits) pair the grading rejects"
+    (pair => not (hitsOk (fst pair) (snd pair)))
+    (kind, hits)
+
 countHits : Regex -> String -> Int
 countHits re ir = length (filter (l => isMatch re l) (lines ir))
 
@@ -718,12 +732,12 @@ test "diff_compiler_dict_semantics_ir: section 3 emitted-LLVM IR rows" = expectA
 
 test "diff_compiler_dict_semantics_ir: grader decides HAS, LACKS and COUNT= correctly" = expectAll
   [
-    expectTrue (hitsOk "HAS" 1),
-    expectTrue (not (hitsOk "HAS" 0)),
-    expectTrue (hitsOk "LACKS" 0),
-    expectTrue (not (hitsOk "LACKS" 1)),
-    expectTrue (hitsOk "COUNT=2" 2),
-    expectTrue (not (hitsOk "COUNT=2" 1)),
-    expectTrue (not (hitsOk "COUNT=2" 3)),
-    expectTrue (not (hitsOk "MAYBE" 1)),
+    expectHitsOk "HAS" 1,
+    expectHitsRejected "HAS" 0,
+    expectHitsOk "LACKS" 0,
+    expectHitsRejected "LACKS" 1,
+    expectHitsOk "COUNT=2" 2,
+    expectHitsRejected "COUNT=2" 1,
+    expectHitsRejected "COUNT=2" 3,
+    expectHitsRejected "MAYBE" 1,
   ]

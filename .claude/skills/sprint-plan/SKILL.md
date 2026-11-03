@@ -126,6 +126,20 @@ deeper than this measured ~75% rework.
    `oversize.golden` and a header reason (law A8). Record
    `make arch-census` at cut; wrap-up diffs against it
    (`compiler/ARCHITECTURE-PLAYBOOK.md` §10).
+   **Every invariant and every Out row carries its proof.** A line such as "at
+   most one X per drive" or "Y is out because `tc_module` reads it" cites the
+   design section it comes from or the grep that was run, or it is deleted.
+   R35's F3 contract said "at most one sibling pair per drive" against the
+   design and cost a full opus redesign; vis-test-split scoped a probe section
+   out on a relayed "`tc_module` reads them" (the reader was
+   `tc_module_test`), which is why #4767 exists.
+   **A visibility or move migration's census is a name list**, not a per-row
+   class narrative: it misses field reads, aliases and names a sibling borrows
+   through its subject's imports. Slices classify by un-exporting, running the
+   strict directory test, and reverting what breaks. When the first slice
+   defers a row class for a structural obstacle, the orchestrator strikes that
+   class from the remaining packets and sends it to Val, rather than letting
+   each slice re-probe it (R35 migration: 1 of 48 M3 rows over four slices).
 4. **Acceptance shape** — how we'll know it worked ("a `test` case in
    `<module>_test.mdk`", "a `kind = "native"` gate-test row", "IR
    byte-identical"), not exact commands. Pick the vehicle with the

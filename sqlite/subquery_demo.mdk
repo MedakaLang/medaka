@@ -56,7 +56,7 @@ specs = [
 -- Echo the SQL, then its rows (or its error) — so the output names each query.
 runSql : Db -> String -> <IO> Unit
 runSql db sql =
-  let _ = println "-- \{sql}"
+  println "-- \{sql}"
   match queryString db sql tCells
     Err e => println "error: \{e}"
     Ok rows => printRows showCellRow rows
@@ -66,7 +66,7 @@ runAll _ [] = ()
 -- Intentional cross-file duplicate: parallel demo/probe script wiring the same fixture shape (not shared production logic to consolidate).
 -- lint-disable-next-line rule-duplicate-body
 runAll db (sql :: rest) =
-  let _ = runSql db sql
+  runSql db sql
   runAll db rest
 
 queries : List String
@@ -98,12 +98,12 @@ main : <IO> Unit
 -- Intentional cross-file duplicate: parallel demo/probe script wiring the same fixture shape (not shared production logic to consolidate).
 -- lint-disable-next-line rule-duplicate-body
 main =
-  let _ = println "-- CREATE users + orders (in-memory) --"
+  println "-- CREATE users + orders (in-memory) --"
   match buildDatabaseMulti specs
     Err e => println "build error: \{e}"
     Ok bytes => match fromBytes bytes
       Err e => println "fromBytes error: \{e}"
       Ok db =>
-        let _ = runAll db queries
-        let _ = println "-- REJECTIONS (each must be a clean error) --"
+        runAll db queries
+        println "-- REJECTIONS (each must be a clean error) --"
         runAll db rejects
