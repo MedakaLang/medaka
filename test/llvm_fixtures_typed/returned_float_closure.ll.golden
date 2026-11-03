@@ -218,6 +218,10 @@ declare void @mdk_enable_run_stdout_flush(i64)
 ; mdk-module program
 define i32 @mdk_program_main(i32 %argc, ptr %argv) {
 entry:
+  %t11 = alloca i64
+  %t17 = alloca i64, i64 1
+  %t31 = alloca i64
+  %t37 = alloca i64, i64 1
   call void @mdk_set_args(i32 %argc, ptr %argv)
   %t0 = call ptr @mdk_alloc_atomic(i64 16)
   store i64 2, ptr %t0
@@ -233,7 +237,6 @@ entry:
   %t7 = inttoptr i64 %t3 to ptr
   %t8 = load i64, ptr %t7
   %t9 = icmp eq i64 %t8, 1
-  %t11 = alloca i64
   br i1 %t9, label %apfast10, label %apslow10
 apfast10:
   %t12 = inttoptr i64 %t3 to ptr
@@ -244,7 +247,6 @@ apfast10:
   store i64 %t16, ptr %t11
   br label %apend10
 apslow10:
-  %t17 = alloca i64, i64 1
   %t18 = getelementptr i64, ptr %t17, i64 0
   store i64 %t6, ptr %t18
   %t19 = call i64 @__mdk_apply(i64 %t3, i64 1, ptr %t17)
@@ -263,7 +265,6 @@ apend10:
   %t27 = inttoptr i64 %t3 to ptr
   %t28 = load i64, ptr %t27
   %t29 = icmp eq i64 %t28, 1
-  %t31 = alloca i64
   br i1 %t29, label %apfast30, label %apslow30
 apfast30:
   %t32 = inttoptr i64 %t3 to ptr
@@ -274,7 +275,6 @@ apfast30:
   store i64 %t36, ptr %t31
   br label %apend30
 apslow30:
-  %t37 = alloca i64, i64 1
   %t38 = getelementptr i64, ptr %t37, i64 0
   store i64 %t26, ptr %t38
   %t39 = call i64 @__mdk_apply(i64 %t3, i64 1, ptr %t37)

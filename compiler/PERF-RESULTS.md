@@ -31,15 +31,13 @@ gate state, and the numbers (min-of-N, single-threaded, quiet machine).
 ## 2026-11-02 — Method tables: dictionary dispatch (#4786)
 
 Dictionaries are method tables on both backends (`compiler/RUNTIME-DESIGN.md` §8.7). The
-numbers below come from the two slice reports, `/var/tmp/medaka-sprints/interp-v0-1-method-tables/reports/S-method-table-plan.md`
-(native) and `/var/tmp/medaka-sprints/interp-v0-1-method-tables/reports/S-method-table-wasm.md`
-(wasm). They were not re-measured for this section.
+native numbers were re-measured after the entry-block alloca fix below; the wasm numbers come
+from the wasm slice and were not re-measured.
 
 **Method.** Isolated trees, `MEDAKA_STRICT=1`, minimum of 5 runs per binary. The box was at
 load ~22, so expect ±30% on any single number. The `test/bench_fixtures/dispatch` row is folded
 by clang (0.014 s) and cannot measure dictionary dispatch. The measured probe is a polymorphic
-loop with the dictionary as a runtime parameter, `probes/dispatch_rt.mdk` under the sprint
-directory:
+loop with the dictionary as a runtime parameter (`dispatch_rt`):
 
 ```
 gmax : Ord a => a -> a -> a
@@ -56,22 +54,27 @@ main =
   println (loopP 0.0 5.0 50000000)
 ```
 
-**Numbers** (before = the tree before method tables; after = with them):
+**Numbers** (before = the tree before method tables; after = with them and the entry-block
+alloca fix):
 
 | measure | before | after |
 |---|---|---|
-| native `dispatch_rt`, min of 5 | 0.152 s | 0.406 s (2.7x slower) |
-| native binary bytes, dispatch / dispatch_rt / fib | 194528 / 213224 / 196216 | 194528 / 207880 / 196216 |
-| native `medaka` binary bytes | 14675312 | 14365976 |
-| native IR lines, dispatch / dispatch_rt / fib | 14853 / 14869 / 14734 | 17528 / 17666 / 17421 |
+| native `dispatch_rt`, min of 5 back to back | 0.134 s | 0.0147 s |
+| native binary bytes, dispatch / dispatch_rt / fib | 194528 / 213224 / 196280 | 194528 / 196328 / 196264 |
+| native `medaka` binary bytes | 14675312 | 14618904 |
+| native IR lines, dispatch / dispatch_rt / fib | 14853 / 14869 / 14734 | 17529 / 17667 / 17422 |
 | dispatcher defines, dispatch / dispatch_rt | 13 / 12 | 0 / 0 |
 | wasm bytes, dispatch / hello / fib | 68610 / 36630 / 35960 | 19362 / 12312 / 12745 |
 | wasm `dispatch.mdk` under node | 1.314 s | 1.284 s |
 
-Native is **slower** on the dictionary-dispatch probe. A slot call is an indirect call through
-a loaded pointer, which clang cannot inline. The old if-chain was inlined into the loop and the
-loop was unswitched on the loop-invariant header compare. Native binaries are equal or smaller,
-while native IR grows about 18% from the per-site null test and the two paths of `emitApplyAny`.
+The first method-table emitter was 2.7x slower than the dispatchers on `dispatch_rt`
+(0.406 s against 0.152 s). The cause was not the indirect call: `emitApplyAny` and
+`emitApplyRuntime` emitted their result-slot and argv `alloca`s in the block they were
+reached from, which is past the null test of `loadSlot`. An `alloca` outside the entry block
+is dynamic, so LLVM could not promote it to a register, inline the callee, or fold the
+constant table. The emitter now tags those `alloca`s and `hoistEntryAllocas` moves them to
+the define's entry block, with the slot ABI, the null trap and the arity check unchanged.
+Native IR grows about 18% from the per-site null test and the two paths of `emitApplyAny`.
 
 ---
 

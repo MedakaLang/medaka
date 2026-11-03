@@ -1,0 +1,30 @@
+-- Slot closures of 7 and 10 (dictionary, method-level Shown, 8 values) words,
+-- called with every argument through a dictionary parameter.  An exact-count call
+-- reaches the slot's code directly, past the 8-argument cap of the runtime's apply,
+-- so this instance's table must build and both calls must work.  The corpus links
+-- no prelude, so `Shown` stands in for `Display`.
+-- Must print:  121 / 7:121
+interface Shown a where
+  shown : a -> String
+
+impl Shown Int where
+  shown n = intToString n
+
+interface Wide a where
+  w7 : a -> Int -> Int -> Int -> Int -> Int -> Int -> Int
+  w8 : Shown b => a -> b -> Int -> Int -> Int -> Int -> Int -> Int -> String
+
+impl Wide Int where
+  w7 x a b c d e f = x + a + b + c + d + e + f
+  w8 x y a b c d e f = shown y ++ ":" ++ intToString (x + a + b + c + d + e + f)
+
+viaW7 : Wide a => a -> Int
+viaW7 x = w7 x 1 2 3 4 5 6
+
+viaW8 : Wide a => a -> String
+viaW8 x = w8 x (7 : Int) 1 2 3 4 5 6
+
+main : <IO> Unit
+main =
+  let _ = putStrLn (intToString (viaW7 (100 : Int)))
+  putStrLn (viaW8 (100 : Int))

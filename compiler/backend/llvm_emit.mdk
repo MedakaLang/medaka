@@ -7683,8 +7683,15 @@ emitOverApp e sym argOps arity resTy =
 -- takes the runtime path.  Uses an alloca result slot (like emitIf) so no phi
 -- predecessor-label bookkeeping is needed.
 emitApplyAny : Emit -> String -> List String -> String
-emitApplyAny _ cw [] = cw
-emitApplyAny e cw argOps =
+emitApplyAny e cw argOps = emitApplyAnyWide e None cw argOps
+
+-- `emitApplyAny` for a closure that may be wider than the runtime's
+-- [runtimeCallArgMax]-argument cap: the exact-arity fast path calls it directly
+-- with no cap, so only the runtime path is refused, loudly and with [wideMsg], when
+-- the header says the closure is wider than the cap.
+emitApplyAnyWide : Emit -> Option String -> String -> List String -> String
+emitApplyAnyWide _ _ cw [] = cw
+emitApplyAnyWide e wideMsg cw argOps =
   let n = lengthS argOps
   let hdr = loadHeader e cw
   let cmp = freshReg e
@@ -7694,13 +7701,16 @@ emitApplyAny e cw argOps =
   let slowL = "apslow" ++ m
   let endL = "apend" ++ m
   let slot = freshReg e
-  emit e ("  " ++ slot ++ " = alloca i64")
+  emitEntryAlloca e ("  " ++ slot ++ " = alloca i64")
   emit e "  br i1 \{cmp}, label %\{fastL}, label %\{slowL}"
   emit e (fastL ++ ":")
   let rf = emitIndirectCallWords e cw argOps
   emit e "  store i64 \{rf}, ptr \{slot}"
   emit e ("  br label %" ++ endL)
   emit e (slowL ++ ":")
+  match wideMsg
+    Some msg => emitWideRefusal e hdr msg m
+    None => ()
   let rs = emitApplyRuntime e cw argOps
   emit e "  store i64 \{rs}, ptr \{slot}"
   emit e ("  br label %" ++ endL)
@@ -7709,13 +7719,88 @@ emitApplyAny e cw argOps =
   emit e "  \{r} = load i64, ptr \{slot}"
   r
 
+-- A closure whose header (its arity; a PAP's is -1) exceeds [runtimeCallArgMax]
+-- cannot be saturated by `__mdk_apply`, so the runtime path panics with [msg]
+-- instead of calling `code` with the wrong argument count.
+emitWideRefusal : Emit -> String -> String -> String -> Unit
+emitWideRefusal e hdr msg m =
+  let wide = freshReg e
+  emit e "  \{wide} = icmp sgt i64 \{hdr}, \{intToString runtimeCallArgMax}"
+  let wideL = "apwide" ++ m
+  let runL = "aprun" ++ m
+  emit e "  br i1 \{wide}, label %\{wideL}, label %\{runL}"
+  emit e (wideL ++ ":")
+  let (w, _) = emitLit e (LString msg)
+  emit e (rtLine e "" "void" "mdk_panic" (i64Ops [w]))
+  emit e "  unreachable"
+  emit e (runL ++ ":")
+
+-- A constant-size `alloca` is emitted into the define's entry block (see
+-- [hoistEntryAllocas]), where LLVM can promote it to a register.  One emitted
+-- mid-function, past a branch, is a dynamic alloca and blocks promotion and inlining.
+entryAllocaTag : String
+entryAllocaTag = ";entry-alloca;"
+
+emitEntryAlloca : Emit -> String -> Unit
+emitEntryAlloca e line = emit e (entryAllocaTag ++ line)
+
+-- Move every line [emitEntryAlloca] tagged to just after its define's `entry:`
+-- label.  Over the finished text, in order: lines outside a define pass through.
+hoistEntryAllocas : List String -> List String
+hoistEntryAllocas lines = hoistGo lines []
+
+hoistGo : List String -> List String -> List String
+hoistGo [] acc = reverseL acc
+hoistGo (l :: rest) acc =
+  if startsWith "define" l then
+    let (body, after) = takeDefineBody rest []
+    hoistGo after (reverseL (hoistDefine (l :: body)) ++ acc)
+  else
+    hoistGo rest (untagAlloca l :: acc)
+
+-- the lines of a define up to and including its closing `}`, and what follows
+takeDefineBody : List String -> List String -> (List String, List String)
+takeDefineBody [] acc = (reverseL acc, [])
+takeDefineBody (l :: rest) acc =
+  if l == "}" then
+    (reverseL (l :: acc), rest)
+  else
+    takeDefineBody rest (l :: acc)
+
+untagAlloca : String -> String
+untagAlloca l =
+  if startsWith entryAllocaTag l then
+    stringSlice (stringLength entryAllocaTag) (stringLength l) l
+  else
+    l
+
+hoistDefine : List String -> List String
+hoistDefine ls =
+  let tagged = filterList (startsWith entryAllocaTag) ls
+  if isEmptyL tagged then
+    ls
+  else
+    let kept = filterList (l => not (startsWith entryAllocaTag l)) ls
+    if anyList (== "entry:") kept then
+      insertAfterEntry (map untagAlloca tagged) kept
+    else
+      map untagAlloca ls
+
+insertAfterEntry : List String -> List String -> List String
+insertAfterEntry _ [] = []
+insertAfterEntry hoisted (l :: rest) =
+  if l == "entry:" then
+    l :: hoisted ++ rest
+  else
+    l :: insertAfterEntry hoisted rest
+
 -- the runtime-generic path: materialize `argOps` into an [N x i64] alloca and call
 -- @mdk_apply(cw, N, ptr).  Handles partial / over application + PAP flatten.
 emitApplyRuntime : Emit -> String -> List String -> String
 emitApplyRuntime e cw argOps =
   let n = lengthS argOps
   let arr = freshReg e
-  emit e "  \{arr} = alloca i64, i64 \{intToString n}"
+  emitEntryAlloca e "  \{arr} = alloca i64, i64 \{intToString n}"
   storeArgv e arr argOps 0
   let r = freshReg e
   emit
@@ -8075,9 +8160,16 @@ emitSlotCall e env name iface dict methRoutes argOps =
   let dictPtr = dictWordOfRoute e env dict
   let methWords = dictWordsOf e env methRoutes
   match slotOf name (interfaceSlots e.methodTables iface) 0
-    Some (i, _) =>
+    Some (i, slot) =>
       let clos = loadSlot e iface name dictPtr i
-      (emitApplyAny e clos (dictPtr :: methWords ++ argOps), LTInt)
+      (
+        emitApplyAnyWide
+          e
+          (slotWideMessage name slot)
+          clos
+          (dictPtr :: methWords ++ argOps),
+        LTInt,
+      )
     None => gapE e "method '\{name}' is not a slot of interface '\{iface}'"
 
 -- the index of [name]'s slot among [slots], and the slot
@@ -8150,6 +8242,18 @@ superCountGlobal e iface =
 runtimeCallArgMax : Int
 runtimeCallArgMax = 8
 
+-- The refusal text for a runtime application of slot [slot]'s closure, which takes
+-- the dictionary and the method's declared arguments; None when the closure cannot
+-- exceed [runtimeCallArgMax].
+slotWideMessage : String -> MethodSlot -> Option String
+slotWideMessage name slot =
+  let arity = 1 + slot.contextDicts + slot.valueArity
+  if arity > runtimeCallArgMax then
+    Some
+      "method '\{name}' takes \{intToString arity} arguments through a dictionary; a closure of more than \{intToString runtimeCallArgMax} cannot be applied partially or over-applied through the runtime (#4790)"
+  else
+    None
+
 -- the slot closure words of instance [key]'s dictionary, in slot order
 slotWords : Emit -> String -> List String
 slotWords e key = match omLookup key e.methodTables.instances
@@ -8221,12 +8325,6 @@ emitSlotWrapper e key iface slot callee closName = withProgramScope e (_ =>
   let cells = if callee.inherited then 1 else slotReqCount slot g
   let values = maxInt 0 (groupArity g - slot.contextDicts - cells)
   let arity = 1 + slot.contextDicts + values
-  if arity > runtimeCallArgMax then
-    let _ =
-      gapStr
-        e
-        "slot '\{slot.method}' of instance '\{key}' takes \{intToString arity} arguments; a closure of more than \{intToString runtimeCallArgMax} cannot be applied through the runtime (#4790)"
-    ()
   let fname = LN.llvmName (LN.LSlotFunction key slot.method)
   let saved = (bufRef e).value
   bufRef e := []
@@ -14537,8 +14635,7 @@ runStrictEmission e input plan groups implEntries =
         !e.coverage
         (joinNl
           (siteTrapDeclares e
-            ++ reverseL !e.buf
-            ++ reverseL !e.lams
+            ++ hoistEntryAllocas (reverseL !e.buf ++ reverseL !e.lams)
             ++ siteFiles))
     defects => Err defects
 
@@ -15167,8 +15264,7 @@ emitProgramGaps input plan (cp@(CProgram groups ctorArs ctorTypes implEntries _ 
           !e.coverage
           (joinNl
             (siteTrapDeclares e
-              ++ reverseL !e.buf
-              ++ reverseL !e.lams
+              ++ hoistEntryAllocas (reverseL !e.buf ++ reverseL !e.lams)
               ++ siteFileTable e)))
     defects => Err defects
 
