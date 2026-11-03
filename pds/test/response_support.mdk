@@ -7,7 +7,8 @@ import bytes as B
 import bytes.{Bytes, decodeUtf8, encodeUtf8}
 import hex as Hex
 import json.{Json(..), get, parse}
-import net.{Connection, close}
+import list.{reverse}
+import net.{Connection, close, recv}
 import string.{contains, drop, indexOf, split, startsWith, toInt, trim}
 import lib.credential.{
   LoginCheck, LoginVerdict, loginCheckAdvance, loginCheckVerdict
@@ -212,3 +213,23 @@ report label ok detail =
   else
     let () = println "\{label}: FAIL \{detail}"
     exit 1
+
+-- | Receives chunks onto `parts` (newest first) until `have` reaches `need`,
+-- then answers them joined once. `who` prefixes the closed-connection error.
+export
+recvChunks : String ->
+  Connection * ->
+  List Bytes ->
+  Int ->
+  Int ->
+  <Net> Result String Bytes
+recvChunks who conn parts have need =
+  if have >= need then
+    Ok (B.concat (reverse parts))
+  else match recv conn 65536
+    Err message => Err message
+    Ok chunk =>
+      if B.isEmpty chunk then
+        Err "\{who}: connection closed mid-response"
+      else
+        recvChunks who conn (chunk :: parts) (have + B.length chunk) need

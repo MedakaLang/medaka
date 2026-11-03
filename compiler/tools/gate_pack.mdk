@@ -13,6 +13,7 @@
    from it (`budgetToleratedMs`); `gate run` imports it back for its own fuse,
    which is the one direction of traffic that does not point at the packer. -}
 
+import string.{padLeft, padRight}
 import tools.gate_registry.{
   Gate,
   Shard,
@@ -1499,14 +1500,10 @@ balPad3 n
   | otherwise = intToString n
 
 balPadR : Int -> String -> String
-balPadR w s
-  | stringLength s >= w = s
-  | otherwise = balPadR w (s ++ " ")
+balPadR w s = padRight w ' ' s
 
 balPadL : Int -> String -> String
-balPadL w s
-  | stringLength s >= w = s
-  | otherwise = balPadL w (" " ++ s)
+balPadL w s = padLeft w ' ' s
 
 -- A signed millisecond delta as `+14.3s` / `-2.0s`.  `balSecs` alone renders a
 -- negative as `-1.-4s`, because both halves of its integer split carry the

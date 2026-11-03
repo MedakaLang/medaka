@@ -101,6 +101,7 @@ import support.util.{
   joinWith,
   listLen,
   lookupAssoc,
+  reverseL,
   sortUniqS,
 }
 import string.{endsWith}
@@ -824,10 +825,10 @@ aliasRowModule (_, _, m, _, _) = m
 aliasRowIdents : List (String, String, String, Ident, Loc) ->
   List Ident ->
   List Ident
-aliasRowIdents [] acc = acc
+aliasRowIdents [] acc = reverseL acc
 aliasRowIdents ((_, _, _, i, _) :: rest) acc
   | anyList (== i) acc = aliasRowIdents rest acc
-  | otherwise = aliasRowIdents rest (acc ++ [i])
+  | otherwise = aliasRowIdents rest (i :: acc)
 
 -- The LAST colliding import's span — the one a plain insert would let silently overwrite.  Both
 -- orderings of the same two imports land on the same line, so the diagnostic's span is

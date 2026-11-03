@@ -559,6 +559,8 @@ charAtStr s i = arrayGetUnsafe 0 (toChars (stringSlice i (i + 1) s))
 firstNonSpaceStr : (Char -> Bool) -> String -> Int -> Int -> Int
 firstNonSpaceStr blank s i n
   | i >= n = n
+  -- Bound: one string probed one position at a time over its whitespace run; linear on the native runtime (the one-entry cursor cache resumes the codepoint walk) and quadratic on WasmGC for a long run beside non-ASCII text.
+  -- lint-disable-next-line rule-reslice-in-loop
   | blank (charAtStr s i) = firstNonSpaceStr blank s (i + 1) n
   | otherwise = i
 
@@ -569,6 +571,8 @@ firstNonSpaceStr blank s i n
 lastNonSpaceStr : (Char -> Bool) -> String -> Int -> Int -> Int
 lastNonSpaceStr blank s i lo
   | i < lo = lo - 1
+  -- Bound: one string probed backward from the end over its whitespace run; same bound as firstNonSpaceStr, native-linear and WasmGC-quadratic.
+  -- lint-disable-next-line rule-reslice-in-loop
   | blank (charAtStr s i) = lastNonSpaceStr blank s (i - 1) lo
   | otherwise = i
 
@@ -1061,6 +1065,8 @@ leadingIndent l = take (indentRunLength l (length l) 0) l
 -- nor a tab, or `n` when there is none.
 indentRunLength : String -> Int -> Int -> Int
 indentRunLength l n i
+  -- Bound: one string probed forward over its indentation run; same bound as firstNonSpaceStr, native-linear and WasmGC-quadratic.
+  -- lint-disable-next-line rule-reslice-in-loop
   | i < n && isIndentChar (charAtStr l i) = indentRunLength l n (i + 1)
   | otherwise = i
 
@@ -1084,13 +1090,14 @@ sharedMargin m (l :: ls)
 
 -- The longest common leading part of `a` and `b`.
 commonPrefix : String -> String -> String
-commonPrefix a b = take (sharedLength a b 0) a
+commonPrefix a b = take (sharedLength (toChars a) (toChars b) 0) a
 
 -- The number of leading characters `a` and `b` share, counting from `i`.
-sharedLength : String -> String -> Int -> Int
+sharedLength : Array Char -> Array Char -> Int -> Int
 sharedLength a b i
-  | i < length a && i < length b && charAtStr a i == charAtStr b i =
-    sharedLength a b (i + 1)
+  | i < arrayLength a
+    && i < arrayLength b
+    && arrayGetUnsafe i a == arrayGetUnsafe i b = sharedLength a b (i + 1)
   | otherwise = i
 
 -- # Padding

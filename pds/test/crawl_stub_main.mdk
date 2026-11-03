@@ -34,6 +34,7 @@ import http.{
   serializeResponse,
 }
 import json.{Json(..), get, jObject, parse, stringify}
+import list.{reverse}
 import net.{
   Connection, Listener, accept, close, listen, listenPort, recv, sendAll
 }
@@ -50,6 +51,8 @@ recvFrame conn buffer = match findHeaderEnd buffer 0
       if B.isEmpty chunk then
         Err "crawl_stub: call closed before its header terminator"
       else
+        -- Bound: the loop ends at the header terminator, so the buffer is one response head plus at most one chunk.
+        -- lint-disable-next-line rule-accumulator-append
         recvFrame conn (buffer ++ chunk)
   Some at =>
     -- `serializeRequest` always emits `content-length: N` in lowercase, so a
@@ -60,16 +63,24 @@ recvFrame conn buffer = match findHeaderEnd buffer 0
     recvBody conn buffer (at + 4 + declared)
 
 recvBody : Connection * -> Bytes -> Int -> <Net> Result String Bytes
-recvBody conn buffer need =
-  if B.length buffer >= need then
-    Ok (B.take need buffer)
+recvBody conn buffer need = recvBodyChunks conn [buffer] (B.length buffer) need
+
+-- Chunks are collected newest-first with a running length and joined once.
+recvBodyChunks : Connection * ->
+  List Bytes ->
+  Int ->
+  Int ->
+  <Net> Result String Bytes
+recvBodyChunks conn parts have need =
+  if have >= need then
+    Ok (B.take need (B.concat (reverse parts)))
   else match recv conn 65536
     Err message => Err "crawl_stub: read failed: \{message}"
     Ok chunk =>
       if B.isEmpty chunk then
         Err "crawl_stub: call closed before its declared body arrived"
       else
-        recvBody conn (buffer ++ chunk) need
+        recvBodyChunks conn (chunk :: parts) (have + B.length chunk) need
 
 -- ── the answer ───────────────────────────────────────────────────────────
 

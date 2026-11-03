@@ -395,6 +395,7 @@ typeDeclaredIn : String -> String -> (String, String)
 typeOriginExports : Map String (List (String, String)) -> String -> List Decl -> List (String, String)
 unboundVarErrors : Option Loc -> Env -> Scope -> String -> List ResError
 unionStr : List String -> List String -> List String
+unionStrGo : List String -> List String -> List String -> List String
 unmergedDecl : (String -> String) -> (String, String, List String) -> List (String, String)
 unqualAliasDecl : List String -> Map String TyConOrigin -> Decl -> Decl
 unqualAliasTyName : List String -> String -> String

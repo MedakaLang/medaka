@@ -1155,6 +1155,8 @@ positionBindings : List Ty ->
 positionBindings [] [] acc = Some acc
 positionBindings (p :: ps) (c :: cs) acc = match matchTyMono p c
   None => None
+  -- Bound: one step per head position of one instance, so a handful of bindings.
+  -- lint-disable-next-line rule-accumulator-append
   Some s => positionBindings ps cs (acc ++ s)
 positionBindings _ _ _ = None
 

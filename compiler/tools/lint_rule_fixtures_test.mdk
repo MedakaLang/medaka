@@ -96,6 +96,7 @@ import tools.lint.{
 -- `test` block per name below.
 fixtureNames : List String
 fixtureNames = [
+  "accumulator-append",
   "andthen-pure-map",
   "bind-chain-to-do",
   "bind-then-destructure",
@@ -127,6 +128,7 @@ fixtureNames = [
   "promissory-reader",
   "regex-literal",
   "rem-parity",
+  "reslice-in-loop",
   "self-shadow-extern",
   "stdlib-reimpl",
   "test-bool-helper",
@@ -348,6 +350,8 @@ hasPositive name = match readOr "\{fixtureDir}/\{name}.mdk"
   Err e => fail e
   Ok src => expectFalse (isEmpty (expectedLines "rule-\{name}" src))
 
+test "rule-accumulator-append fixture" = fixtureHolds "accumulator-append"
+
 test "rule-andthen-pure-map fixture" = fixtureHolds "andthen-pure-map"
 
 test "rule-bind-chain-to-do fixture" = fixtureHolds "bind-chain-to-do"
@@ -408,6 +412,8 @@ test "rule-promissory-reader fixture" = fixtureHolds "promissory-reader"
 test "rule-regex-literal fixture" = fixtureHolds "regex-literal"
 
 test "rule-rem-parity fixture" = fixtureHolds "rem-parity"
+
+test "rule-reslice-in-loop fixture" = fixtureHolds "reslice-in-loop"
 
 test "rule-self-shadow-extern fixture" = fixtureHolds "self-shadow-extern"
 

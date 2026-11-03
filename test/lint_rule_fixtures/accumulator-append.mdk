@@ -1,0 +1,106 @@
+-- Fixture for rule-accumulator-append.
+
+-- a self-call passing `acc ++ [x]`
+collect : List Int -> List Int -> List Int
+collect acc [] = acc
+collect acc (x :: xs) =
+  -- expect-next-line rule-accumulator-append unfixed
+  collect (acc ++ [x]) xs
+
+-- prepending costs the length of the new piece, not of the accumulator
+prepend : List Int -> List Int -> List Int
+prepend acc [] = acc
+prepend acc (x :: xs) = prepend ([x] ++ acc) xs
+
+-- the usual fix
+consReverse : List Int -> List Int -> List Int
+consReverse acc [] = reverse acc
+consReverse acc (x :: xs) = consReverse (x :: acc) xs
+
+-- a where-local loop
+viaWhere : List Int -> List Int
+viaWhere ys = go [] ys
+  where
+    go acc [] = acc
+    go acc (z :: zs) =
+      -- expect-next-line rule-accumulator-append unfixed
+      go (acc ++ [z + 1]) zs
+
+-- a String accumulator
+joinAll : String -> List String -> String
+joinAll acc [] = acc
+joinAll acc (s :: rest) =
+  -- expect-next-line rule-accumulator-append unfixed
+  joinAll (acc ++ "s") rest
+
+-- a Bytes accumulator
+packBytes : Bytes -> List Bytes -> Bytes
+packBytes acc [] = acc
+packBytes acc (b :: rest) =
+  -- expect-next-line rule-accumulator-append unfixed
+  packBytes (acc ++ b) rest
+
+-- mutual recursion is a call to a different function
+pingList : List Int -> List Int -> List Int
+pingList acc [] = acc
+pingList acc (x :: xs) = pongList (acc ++ [x]) xs
+
+pongList : List Int -> List Int -> List Int
+pongList acc [] = acc
+pongList acc (x :: xs) = pingList acc xs
+
+-- a partial application is not a full-arity self-call
+partialSelf : List Int -> List Int -> List (List Int -> List Int)
+partialSelf acc [] = []
+partialSelf acc (x :: xs) = [partialSelf (acc ++ [x])]
+
+-- a Ref appended to inside a self-recursive function
+drain : Ref (List Int) -> List Int -> <IO> Unit
+drain r [] = ()
+drain r (x :: xs) =
+  -- expect-next-line rule-accumulator-append unfixed
+  r := !r ++ [x]
+  drain r xs
+
+-- the same assignment outside any loop
+once : Ref (List Int) -> Int -> <IO> Unit
+once r x = r := !r ++ [x]
+
+-- a fold lambda that appends
+foldAppend : List Int -> List Int
+foldAppend xs =
+  -- expect-next-line rule-accumulator-append unfixed
+  fold (acc x => acc ++ [x]) [] xs
+
+-- a fold lambda that conses
+foldCons : List Int -> List Int
+foldCons xs = fold (acc x => x :: acc) [] xs
+
+-- a directive silences the finding
+silenced : List Int -> List Int -> List Int
+silenced acc [] = acc
+silenced acc (x :: xs) =
+  -- lint-disable-next-line rule-accumulator-append
+  silenced (acc ++ [x]) xs
+
+-- a loop inside a test body runs over fixed test data and is not reported
+test "loop in a test" =
+  let go acc n = if n == 0 then acc else go (acc ++ [n]) (n - 1)
+  expectEqual [3, 2, 1] (go [] 3)
+
+-- a fold in argument position, a pipeline and a lambda body each report once
+foldNested : List Int -> Int
+foldNested xs =
+  -- expect-next-line rule-accumulator-append unfixed
+  length (fold (acc x => acc ++ [x]) [] xs)
+
+foldPiped : List Int -> List Int
+foldPiped xs =
+  -- expect-next-line rule-accumulator-append unfixed
+  xs |> fold (acc x => acc ++ [x]) []
+
+foldInLambda : List (List Int) -> List (List Int)
+foldInLambda xss =
+  map (ys =>
+    -- expect-next-line rule-accumulator-append unfixed
+    fold (acc x => acc ++ [x]) [] ys) xss

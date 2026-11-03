@@ -1,5 +1,5 @@
 # META
-source_lines=2851
+source_lines=2853
 stages=DESUGAR,MARK
 # SOURCE
 -- Pretty printer for Medaka, producing parseable source from the AST
@@ -1719,6 +1719,8 @@ letInDoc headD rhs e2 =
 
 unwrapLams : List Pat -> Expr -> (List Pat, Expr)
 unwrapLams acc (ELoc _ e) = unwrapLams acc e
+-- Bound: one step per directly nested lambda literal in one expression.
+-- lint-disable-next-line rule-accumulator-append
 unwrapLams acc (ELam pats body) = unwrapLams (acc ++ pats) body
 unwrapLams acc body = (acc, body)
 
