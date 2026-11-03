@@ -176,7 +176,6 @@ import ir.core_ir.{CProgram}
 import ir.core_ir_lower.{
   lowerProgramEmitWith,
   lowerProgramWithFacts,
-  methodIfaceTable,
   ctorFieldTypeNames,
   validateFfiExternTypeNames,
 }
@@ -668,7 +667,6 @@ llvmOf runtimeDecls allDecls cp =
     makeEmitInput
       RawUnchecked
       (runtimeDomain (externDecls runtimeDecls))
-      (methodIfaceTable allDecls)
       (ctorFieldTypeNames allDecls)
       0
       []

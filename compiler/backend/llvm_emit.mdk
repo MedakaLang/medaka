@@ -797,14 +797,13 @@ export type EmitInput = EmitInputData
 export
 makeEmitInput : ManifestRequirement ->
   RuntimeExternDomain ->
-  List (String, (String, String, Int)) ->
   List (String, List String) ->
   Int ->
   List String ->
   List (String, String, String) ->
   String ->
   EmitInput
-makeEmitInput requirement domain _methodIfaces ctorFieldTypes emitHalf preludeBinds preludeImpls srcName = EmitInputData {
+makeEmitInput requirement domain ctorFieldTypes emitHalf preludeBinds preludeImpls srcName = EmitInputData {
   manifestRequirement = requirement,
   ctorFieldIndex = omFromPairs (reverseL ctorFieldTypes) omEmpty,
   emitHalf = emitHalf,

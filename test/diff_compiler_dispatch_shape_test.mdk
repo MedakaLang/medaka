@@ -1,4 +1,4 @@
-{- | Shape gate for typeclass dispatch codegen (issues #118, #4786). Replaces
+{- | Shape gate for typeclass dispatch codegen. Replaces
    test/diff_compiler_dispatch_shape.sh.
 
    Behaviour gates cannot see this property: an if-chain over a method's impls

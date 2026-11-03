@@ -289,15 +289,12 @@ test "each emitter uses the shared validation gateway and owns no collision sequ
       ))
       ["llvm_emit.mdk", "wasm_emit.mdk"])
 
-test "the gateway owns both collision checks before shape checks" =
+test "the gateway owns the impl-symbol check before shape checks" =
   match readFile "\{medakaRoot}/compiler/backend/core_validate.mdk"
     Err e => fail e
     Ok text =>
       expectTextContainsAll
-        [
-          "match implSymbolCollision cp", "match dictTagCollision backend cp",
-          "firstShapeDefect"
-        ]
+        ["match implSymbolCollision cp", "firstShapeDefect"]
         text
 
 -- Reach belongs to the plan builder: no entry calls the filter itself.

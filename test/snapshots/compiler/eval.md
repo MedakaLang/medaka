@@ -1,5 +1,5 @@
 # META
-source_lines=5537
+source_lines=5536
 stages=DESUGAR,MARK
 # SOURCE
 -- Self-hosted eval stage — Stage-1 capstone, the tree-walking
@@ -1411,8 +1411,7 @@ methodAtNarrow env method v (RKey key _ _) = (narrowMethod env method v key, [])
 -- ARGSTAMP-UNIFY Phase 2+3 / genuine #21: under eval dict-threading an arg-position
 -- RDict site's narrowed impl method ALSO carries leading element-dict params
 -- (resolveArgStamps ran on eval too), so forward the dict's nested `reqs` exactly as
--- RDictFwd does — this is what emit's emitDispatchChain does (load fields 1..n, prepend
--- to argOps).  2-level nesting (`debug (List (List a))`) composes through this: the
+-- RDictFwd does, as the emitters do from a dictionary's `requires` fields.  2-level nesting (`debug (List (List a))`) composes through this: the
 -- forwarded inner dict (`Debug (List Int)` = VDict "List" [VDict "Int"]) supplies the
 -- List impl method's leading `Debug Int` param.  Pre-unify RDict impl methods had NO
 -- dict slot (arg-tag), so reqs were discarded; now they need them.

@@ -1,8 +1,7 @@
--- Wasm-only negative control: two impls of ONE method name (`zn`) at head
--- tycons `Dbnfbcp`/`Llzhriz`, dispatched through one dict parameter. Their
--- full i64 `hashName`s differ, so the native dispatcher tells them apart and a
--- native build is correct (`d|l`). Their low 30 bits agree, so the wasm
--- `dictTag`s collide: the wasm emitter must refuse it, at its own width.
+-- Two impls of ONE method name (`zn`) at head tycons `Dbnfbcp`/`Llzhriz`,
+-- dispatched through one dict parameter. Their full i64 `hashName`s differ and
+-- their low 30 bits agree, so the wasm `dictTag` headers are equal words. Both
+-- backends must build it and answer `d|l`.
 interface Zn a where
   zn : a -> String
 

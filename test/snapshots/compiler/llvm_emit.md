@@ -1,5 +1,5 @@
 # META
-source_lines=15386
+source_lines=15385
 stages=DESUGAR,MARK
 # SOURCE
 import ir.constructor_facts.{
@@ -801,14 +801,13 @@ export type EmitInput = EmitInputData
 export
 makeEmitInput : ManifestRequirement ->
   RuntimeExternDomain ->
-  List (String, (String, String, Int)) ->
   List (String, List String) ->
   Int ->
   List String ->
   List (String, String, String) ->
   String ->
   EmitInput
-makeEmitInput requirement domain _methodIfaces ctorFieldTypes emitHalf preludeBinds preludeImpls srcName = EmitInputData {
+makeEmitInput requirement domain ctorFieldTypes emitHalf preludeBinds preludeImpls srcName = EmitInputData {
   manifestRequirement = requirement,
   ctorFieldIndex = omFromPairs (reverseL ctorFieldTypes) omEmpty,
   emitHalf = emitHalf,
@@ -15486,8 +15485,8 @@ runtimeName e symbol = optionOr "" (externRuntimeKey e.externFacts symbol)
 (DUse false (UseGroup ("types" "capability_manifest") ((mem "ManifestRequirement" false))))
 (DData Private "EmitInputData" () ((variant "EmitInputData" (ConNamed (field "manifestRequirement" (TyCon "ManifestRequirement")) (field "ctorFieldIndex" (TyApp (TyCon "OrdMap") (TyApp (TyCon "List") (TyCon "String")))) (field "emitHalf" (TyCon "Int")) (field "preludeBinds" (TyApp (TyCon "List") (TyCon "String"))) (field "preludeImplIndex" (TyApp (TyCon "OrdMap") (TyApp (TyCon "OrdMap") (TyCon "String")))) (field "srcName" (TyCon "String")) (field "runtimeExterns" (TyCon "RuntimeExternDomain")) (field "noInlineFns" (TyApp (TyCon "OrdMap") (TyCon "Unit")))))) ())
 (DTypeAlias true "EmitInput" () (TyCon "EmitInputData"))
-(DTypeSig true "makeEmitInput" (TyFun (TyCon "ManifestRequirement") (TyFun (TyCon "RuntimeExternDomain") (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyTuple (TyCon "String") (TyCon "String") (TyCon "Int")))) (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "String")))) (TyFun (TyCon "Int") (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "String") (TyCon "String"))) (TyFun (TyCon "String") (TyCon "EmitInput"))))))))))
-(DFunDef false "makeEmitInput" ((PVar "requirement") (PVar "domain") (PVar "_methodIfaces") (PVar "ctorFieldTypes") (PVar "emitHalf") (PVar "preludeBinds") (PVar "preludeImpls") (PVar "srcName")) (ERecordCreate "EmitInputData" ((fa "manifestRequirement" (EVar "requirement")) (fa "ctorFieldIndex" (EApp (EApp (EVar "omFromPairs") (EApp (EVar "reverseL") (EVar "ctorFieldTypes"))) (EVar "omEmpty"))) (fa "emitHalf" (EVar "emitHalf")) (fa "preludeBinds" (EVar "preludeBinds")) (fa "preludeImplIndex" (EApp (EApp (EVar "preludeImplIndexOf") (EVar "preludeImpls")) (EVar "omEmpty"))) (fa "srcName" (EVar "srcName")) (fa "runtimeExterns" (EVar "domain")) (fa "noInlineFns" (EVar "omEmpty")))))
+(DTypeSig true "makeEmitInput" (TyFun (TyCon "ManifestRequirement") (TyFun (TyCon "RuntimeExternDomain") (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "String")))) (TyFun (TyCon "Int") (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "String") (TyCon "String"))) (TyFun (TyCon "String") (TyCon "EmitInput")))))))))
+(DFunDef false "makeEmitInput" ((PVar "requirement") (PVar "domain") (PVar "ctorFieldTypes") (PVar "emitHalf") (PVar "preludeBinds") (PVar "preludeImpls") (PVar "srcName")) (ERecordCreate "EmitInputData" ((fa "manifestRequirement" (EVar "requirement")) (fa "ctorFieldIndex" (EApp (EApp (EVar "omFromPairs") (EApp (EVar "reverseL") (EVar "ctorFieldTypes"))) (EVar "omEmpty"))) (fa "emitHalf" (EVar "emitHalf")) (fa "preludeBinds" (EVar "preludeBinds")) (fa "preludeImplIndex" (EApp (EApp (EVar "preludeImplIndexOf") (EVar "preludeImpls")) (EVar "omEmpty"))) (fa "srcName" (EVar "srcName")) (fa "runtimeExterns" (EVar "domain")) (fa "noInlineFns" (EVar "omEmpty")))))
 (DTypeSig true "withNoInlineFns" (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyCon "EmitInput") (TyCon "EmitInput"))))
 (DFunDef false "withNoInlineFns" ((PVar "names") (PVar "input")) (ERecordUpdate (EVar "input") ((fa "noInlineFns" (EApp (EApp (EVar "omFromPairs") (EApp (EApp (EVar "map") (ELam ((PVar "n")) (ETuple (EVar "n") (ELit LUnit)))) (EVar "names"))) (EVar "omEmpty"))))))
 (DTypeSig false "fnAttrs" (TyFun (TyCon "Emit") (TyFun (TyCon "String") (TyCon "String"))))
@@ -18302,8 +18301,8 @@ runtimeName e symbol = optionOr "" (externRuntimeKey e.externFacts symbol)
 (DUse false (UseGroup ("types" "capability_manifest") ((mem "ManifestRequirement" false))))
 (DData Private "EmitInputData" () ((variant "EmitInputData" (ConNamed (field "manifestRequirement" (TyCon "ManifestRequirement")) (field "ctorFieldIndex" (TyApp (TyCon "OrdMap") (TyApp (TyCon "List") (TyCon "String")))) (field "emitHalf" (TyCon "Int")) (field "preludeBinds" (TyApp (TyCon "List") (TyCon "String"))) (field "preludeImplIndex" (TyApp (TyCon "OrdMap") (TyApp (TyCon "OrdMap") (TyCon "String")))) (field "srcName" (TyCon "String")) (field "runtimeExterns" (TyCon "RuntimeExternDomain")) (field "noInlineFns" (TyApp (TyCon "OrdMap") (TyCon "Unit")))))) ())
 (DTypeAlias true "EmitInput" () (TyCon "EmitInputData"))
-(DTypeSig true "makeEmitInput" (TyFun (TyCon "ManifestRequirement") (TyFun (TyCon "RuntimeExternDomain") (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyTuple (TyCon "String") (TyCon "String") (TyCon "Int")))) (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "String")))) (TyFun (TyCon "Int") (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "String") (TyCon "String"))) (TyFun (TyCon "String") (TyCon "EmitInput"))))))))))
-(DFunDef false "makeEmitInput" ((PVar "requirement") (PVar "domain") (PVar "_methodIfaces") (PVar "ctorFieldTypes") (PVar "emitHalf") (PVar "preludeBinds") (PVar "preludeImpls") (PVar "srcName")) (ERecordCreate "EmitInputData" ((fa "manifestRequirement" (EVar "requirement")) (fa "ctorFieldIndex" (EApp (EApp (EVar "omFromPairs") (EApp (EVar "reverseL") (EVar "ctorFieldTypes"))) (EVar "omEmpty"))) (fa "emitHalf" (EVar "emitHalf")) (fa "preludeBinds" (EVar "preludeBinds")) (fa "preludeImplIndex" (EApp (EApp (EVar "preludeImplIndexOf") (EVar "preludeImpls")) (EVar "omEmpty"))) (fa "srcName" (EVar "srcName")) (fa "runtimeExterns" (EVar "domain")) (fa "noInlineFns" (EVar "omEmpty")))))
+(DTypeSig true "makeEmitInput" (TyFun (TyCon "ManifestRequirement") (TyFun (TyCon "RuntimeExternDomain") (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "String")))) (TyFun (TyCon "Int") (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "String") (TyCon "String"))) (TyFun (TyCon "String") (TyCon "EmitInput")))))))))
+(DFunDef false "makeEmitInput" ((PVar "requirement") (PVar "domain") (PVar "ctorFieldTypes") (PVar "emitHalf") (PVar "preludeBinds") (PVar "preludeImpls") (PVar "srcName")) (ERecordCreate "EmitInputData" ((fa "manifestRequirement" (EVar "requirement")) (fa "ctorFieldIndex" (EApp (EApp (EVar "omFromPairs") (EApp (EVar "reverseL") (EVar "ctorFieldTypes"))) (EVar "omEmpty"))) (fa "emitHalf" (EVar "emitHalf")) (fa "preludeBinds" (EVar "preludeBinds")) (fa "preludeImplIndex" (EApp (EApp (EVar "preludeImplIndexOf") (EVar "preludeImpls")) (EVar "omEmpty"))) (fa "srcName" (EVar "srcName")) (fa "runtimeExterns" (EVar "domain")) (fa "noInlineFns" (EVar "omEmpty")))))
 (DTypeSig true "withNoInlineFns" (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyCon "EmitInput") (TyCon "EmitInput"))))
 (DFunDef false "withNoInlineFns" ((PVar "names") (PVar "input")) (ERecordUpdate (EVar "input") ((fa "noInlineFns" (EApp (EApp (EVar "omFromPairs") (EApp (EApp (EMethodRef "map") (ELam ((PVar "n")) (ETuple (EVar "n") (ELit LUnit)))) (EVar "names"))) (EVar "omEmpty"))))))
 (DTypeSig false "fnAttrs" (TyFun (TyCon "Emit") (TyFun (TyCon "String") (TyCon "String"))))

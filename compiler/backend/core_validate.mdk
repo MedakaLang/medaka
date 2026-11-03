@@ -155,6 +155,7 @@ import backend.extern_catalog.{
   rowWasm,
   rowEval,
 }
+import list.{drop, range}
 import support.ordmap.{
   OrdMap,
   omEmpty,
@@ -164,7 +165,6 @@ import support.ordmap.{
   omLookup,
   omKeys,
 }
-import types.private_mangle.{dictTag, hashName}
 import support.util.{dedupBy, isNonEmptyL, joinWith, listLen, reverseL}
 
 -- A free reference to a runtime extern the backend does not lower: the extern,
@@ -229,31 +229,29 @@ emissionDefects backend domain requirement plan cp =
     ]
   else match implSymbolCollision cp
     Some message => [CoreDefect message]
-    None => match dictTagCollision backend cp
-      Some message => [CoreDefect message]
-      None => firstShapeDefect [
-        () => validateManifestCarriage requirement plan cp,
-        () => validateConstructorFacts cp plan.constructorFacts,
-        () => validatePlanImplGroups cp plan,
-        () => validateExternMetadata cp,
-        () =>
-          validateExternRequirements backend domain cp plan.externRequirements,
-        () => validateRequirementProjection backend plan,
-        () => validateGlobalInit cp plan.lazyGlobals plan.globalInit,
-        () => validatePhysicalDemand backend plan cp,
-        () => validateRecords cp,
-        () => validateBinderStamps cp,
-        () => validateSymbolOrigins cp,
-        () =>
-          validateScalarOperators cp
-            ++ validateCalls cp
-            ++ validateImplSymbols cp
-            ++ validateMethodContexts cp
-            ++ validateDispatchEvidence cp
-            ++ validateMethodResults plan cp,
-        () => validateTails cp,
-        () => validateMethodTables backend plan cp,
-      ]
+    None => firstShapeDefect [
+      () => validateManifestCarriage requirement plan cp,
+      () => validateConstructorFacts cp plan.constructorFacts,
+      () => validatePlanImplGroups cp plan,
+      () => validateExternMetadata cp,
+      () =>
+        validateExternRequirements backend domain cp plan.externRequirements,
+      () => validateRequirementProjection backend plan,
+      () => validateGlobalInit cp plan.lazyGlobals plan.globalInit,
+      () => validatePhysicalDemand backend plan cp,
+      () => validateRecords cp,
+      () => validateBinderStamps cp,
+      () => validateSymbolOrigins cp,
+      () =>
+        validateScalarOperators cp
+          ++ validateCalls cp
+          ++ validateImplSymbols cp
+          ++ validateMethodContexts cp
+          ++ validateDispatchEvidence cp
+          ++ validateMethodResults plan cp,
+      () => validateTails cp,
+      () => validateMethodTables backend plan cp,
+    ]
 
 validatePlanImplGroups : CProgram -> EmitPlan -> List String
 validatePlanImplGroups (CProgram _ _ _ impls _ _) plan =
@@ -275,14 +273,41 @@ validateMethodTables _ plan _ =
       (key => (key, optionOr emptyTable (omLookup key tables.instances)))
       (omKeys tables.instances)
   let filled =
-    flatMap (r => flatMap (cs => cs) (snd r : InstanceTable).fills) rows
+    flatMap
+      (r =>
+        map (c => c.group) (flatMap (cs => cs) (snd r : InstanceTable).fills))
+      rows
   flatMap (r => instanceTableFaults tables (fst r) (snd r)) rows
-    ++ (if listLen filled == listLen plan.implGroups then
-      []
-    else
-      [
-        "method table: \{intToString (listLen plan.implGroups)} impl groups fill \{intToString (listLen filled)} slots",
-      ])
+    ++ coverageFaults (listLen plan.implGroups) filled
+
+-- Every impl group index fills exactly one slot across the plan: a count of
+-- fills equal to the count of groups would pass one group filling two slots and
+-- another none.
+coverageFaults : Int -> List Int -> List String
+coverageFaults groups filled =
+  let counts = fillCounts filled omEmpty
+  flatMap
+      (g => match optionOr 0 (omLookup (intToString g) counts)
+        1 => []
+        n => [
+          "method table: impl group \{intToString g} fills \{intToString n} slots, not one",
+        ])
+      (range 0 groups)
+    ++ flatMap
+      (g =>
+        if g < 0 || g >= groups then
+          [
+            "method table: a slot names impl group \{intToString g}, which does not exist",
+          ]
+        else
+          [])
+      filled
+
+fillCounts : List Int -> OrdMap Int -> OrdMap Int
+fillCounts [] acc = acc
+fillCounts (g :: rest) acc =
+  let k = intToString g
+  fillCounts rest (omInsert k (optionOr 0 (omLookup k acc) + 1) acc)
 
 emptyTable : InstanceTable
 emptyTable = InstanceTable { iface = "", fills = [] }
@@ -569,7 +594,7 @@ missingMethodResult index iface method =
 
 noteMethodResult : Ctx -> String -> String -> Walk -> Walk
 noteMethodResult _ _ "" w = w
-noteMethodResult (Ctx _ _ _ _ _ facts _) method iface (Walk seen found bad scalar calls ctxs evs results) =
+noteMethodResult (Ctx _ _ _ _ _ facts _ _) method iface (Walk seen found bad scalar calls ctxs evs results) =
   Walk
     seen
     found
@@ -714,123 +739,6 @@ checkImplSymbolsInjective ((m, tag, key) :: rest) seen native =
       Some
         "emitted impl-symbol collision: two DISTINCT impls of method `\{m}` are emitted under one symbol.\ncollided symbol: \{sym}\nimpl 1 key: \{prev}\nimpl 2 key: \{key}\nTwo distinct impls cannot share one emitted symbol: the backend would define one body twice (the native link fails) or keep one and silently drop the other. The two keys above are the impls' canonical dispatch keys, spelled `<module>::<Interface>|<type arguments>|`. Since #1950 those keys are spelled into the symbol by `private_mangle.injectiveIdent`, which is INJECTIVE, so this is NOT a naming mistake you can rename your way out of -- it means the emitted-symbol scheme itself lost injectivity. Please report this message, with both keys above."
 
--- ── dict-witness TAG injectivity — #348 (native i64), #377 (wasm 30-bit) ──────
---
--- A DIFFERENT failure mode from `validateImplSymbolInjectivity` above, in a
--- different space, and no encoding choice can prevent it.  That check covers the
--- SYMBOL space, where the fix was to spell the key injectively (#1950).  This one
--- covers the DICT-WITNESS TAG space, where the map is `hashName` -- a HASH, a lossy
--- map from an unbounded domain to a fixed width, so the only available discharge is
--- to CHECK that the program's own pre-images do not happen to collide, and refuse
--- if they do.
---
--- Colliding pre-images are CONSTRUCTIBLE in the full i64: djb2 is the radix-33
--- polynomial `5381*33^n + Σ c_i*33^i` and the identifier alphabet spans 74 code
--- points, wider than the radix, so `Δ_{i+1} = +1, Δ_i = −33` at two adjacent
--- positions is an exact zero.  Every `(X, c)` / `(X+1, chr(ord c − 33))` adjacent
--- pair collides: `Az`/`BY`, `Azure`/`BYure`, `Mzone`/`NYone`.  Two impls of one
--- interface at head tycons `Mzone` and `NYone`, dispatched through a dict
--- parameter, under the wasm emitter (which still compares dict tags at dispatch),
--- both tags hash alike, so the first arm wins every call.  The native emitter
--- dispatches through method-table slots and never compares a tag.
---
--- The pre-image population is read off every impl entry, supplied (`CImplTagged`)
--- and inherited (`CImplDefault`) alike: each carries the canonical key
--- (`route_key.implRouteKeyWord`) of its instance, the one word the wasm dispatch arm
--- compares, and the entry's method name is the grouping key of that method's dispatch
--- chain.  A supplied impl and
--- an inherited default of one method share that chain, so their words collide as
--- surely as two supplied impls' do.  Both hashes are imported
--- from `types.private_mangle`, the SAME `hashName` the LLVM emitter stamps and the
--- SAME `dictTag` the wasm emitter stamps, because a guard with its own copy of the
--- hash certifies a property of the copy.
---
--- SCOPE:
---   * partitioned by METHOD NAME.  The wasm dispatch chain compares route words
---     WITHIN one method name's chain, so two impls of unrelated methods
---     whose words hash alike are never compared at runtime; refusing them would be a
---     false positive.  Do not pool route words program-wide.
---   * covers the DICT-WITNESS TAG space of both backends and nothing else.  Native
---     constructor and record cell headers are `llvm_emit.cellTag`'s composite
---     `(typeId, ordinal)`, not a hash.  The wasm symbol namespaces are not
---     observable in Core (#378).
---   * distinct pre-images belonging to DIFFERENT impls: the multi-clause and joint
---     prelude+module duplicates of one impl share its key.
---   * it observes the tag the backends mint; it does not change the tag scheme.
---
--- The backend selects the width.  `LlvmBackend` checks the full `hashName`;
--- `WasmBackend` checks it too (a full-width collision is also a masked collision)
--- and then the 30-bit `dictTag`.  A pair that collides ONLY in the masked width
--- therefore builds under native, where its codegen is correct, and is refused by
--- the wasm emitter.
-export
-validateDictTags : Backend -> CProgram -> Unit
-validateDictTags backend cp = match dictTagCollision backend cp
-  Some message => panic message
-  None => ()
-
--- The refusal text for the first collision, if any: the full-width space first.
-dictTagCollision : Backend -> CProgram -> Option String
-dictTagCollision backend (CProgram _ _ _ impls _ _) =
-  let rows = dedupBy dictRouteWordKey (map dictRouteWordRow impls)
-  match checkDictTagsInjective nativeDictTagSpace hashName rows omEmpty
-    Some message => Some message
-    None => match backend
-      LlvmBackend => None
-      WasmBackend =>
-        checkDictTagsInjective wasmDictTagSpace dictTag rows omEmpty
-      EvalBackend => None
-
-nativeDictTagSpace : String
-nativeDictTagSpace =
-  "native (LLVM) i64 dict-witness word `hashName` -- BOTH backends, since the wasm tag is this hash masked"
-
-wasmDictTagSpace : String
-wasmDictTagSpace =
-  "wasm (WasmGC) 30-bit i31 dict tag `dictTag` (`hashName` masked to the low 30 bits) -- the full i64 tags are DISTINCT, so a native build of this program is correct; the wasm tag is this hash masked to a narrower width, which collides"
-
--- (method, route word) of an impl entry, supplied or inherited: the METHOD NAME that
--- word's dispatch is keyed by, and the word a dict witness for this impl
--- carries (its canonical key, which is also the impl's identity).
-dictRouteWordRow : CImplEntry -> (String, String)
-dictRouteWordRow (CImplEntry m _ _ (CImplTagged _ key _ _ _ _ _)) = (m, key)
-dictRouteWordRow (CImplEntry m _ _ (CImplDefault _ _ key _ _ _ _)) = (m, key)
-
--- Rows are deduplicated by (method, word), first arrival wins, so two DIFFERENT
--- methods' identical word never dedup against each other.  The joint prelude+module
--- decl list duplicates each prelude impl and a multi-clause impl contributes one row
--- per clause; both collapse here, so a word never collides with itself.
-dictRouteWordKey : (String, String) -> String
-dictRouteWordKey (m, w) = "\{m}\n\{w}"
-
--- injectivity of route word -> emitted tag, one pass per space, O(n log n) through
--- the same weight-balanced tree the two guards above use.  `hash` is passed in so
--- the native and wasm passes are ONE predicate over two widths rather than two
--- copies that can disagree about what a collision is.  The map key is
--- METHOD-NAME-SCOPED (`"\{mname}\n\{intToString (hash w)}"`) so injectivity is
--- checked WITHIN one method name's population only — the same partition
--- `dictRouteWordKey` dedups by, and the same grouping key
--- `implsOf` uses to decide what a real dispatch compares.
---
--- The four data lines are UNINDENTED on purpose, for the same reason
--- `checkImplSymbolsInjective`'s three are: they are CONTENT-derived, so a
--- `stdout-line` pin can match them with `grep -qxF` without false-draining on a
--- rewording of the prose around them.
-checkDictTagsInjective : String ->
-  (String -> Int) ->
-  List (String, String) ->
-  OrdMap String ->
-  Option String
-checkDictTagsInjective _ _ [] _ = None
-checkDictTagsInjective space hash ((m, w) :: rest) seen =
-  let t = intToString (hash w)
-  let k = "\{m}\n\{t}"
-  match omLookup k seen
-    None => checkDictTagsInjective space hash rest (omInsert k w seen)
-    Some w0 =>
-      Some
-        "emitted dict-witness tag collision: two DISTINCT impls of method `\{m}` hash to one dispatch tag.\ntag space: \{space}\ncollided tag: \{t}\nroute word 1: \{w0}\nroute word 2: \{w}\nA dict witness carries this tag, and method `\{m}`'s shared dispatcher selects an impl by comparing it against every OTHER impl of that SAME method name -- these two words ARE compared against each other at that dispatcher, so this collision is live: whichever arm the emitter happened to emit FIRST wins every call through a dictionary, silently, at exit 0. The two words above are the impls' route words: either a bare head tycon or a canonical dispatch key spelled `<module>::<Interface>|<type arguments>|`. This is NOT a naming collision you can rename your way out of by making the names more different -- `hashName` is djb2, a radix-33 polynomial over a 74-code-point alphabet, so it is genuinely non-injective (`hashName \"Az\" == hashName \"BY\"`). One of the two words above may name a type or interface from the prelude or stdlib that you do not own -- rename the OTHER one, one of your own types or interfaces involved in this collision. Please also report this message, with both words above."
-
 implBodyTag : CImplBody -> String
 implBodyTag (CImplTagged tag _ _ _ _ _ _) = tag
 implBodyTag (CImplDefault _ tag _ _ _ _ _) = tag
@@ -960,7 +868,7 @@ noFindings = Walk omEmpty [] [] [] [] [] [] []
 -- table, the leading `$dict` parameter count of each top-level binding, the
 -- dictionary facts, and the top-level binding being read.
 data Ctx =
-  Ctx Backend (OrdMap Unit) ArityEnv (OrdMap Int) (OrdMap Int) EvFacts String
+  Ctx Backend (OrdMap Unit) ArityEnv (OrdMap Int) (OrdMap Int) EvFacts String ProjBound
 
 -- What a dictionary built at a site is held to (`DeclFacts`): each instance's
 -- `requires` count and each interface's super count.
@@ -989,6 +897,7 @@ walkProgram backend (prog@(CProgram groups ctors _ impls mctx facts)) =
         efExterns = facts.factExterns,
       }
       ""
+      (ProjBound "" 0 (maxSuperCount facts.factSupers))
   walkImpls ctx impls (walkBinds ctx groups noFindings)
 
 walkBinds : Ctx -> List CBind -> Walk -> Walk
@@ -1001,12 +910,81 @@ walkImpls _ [] w = w
 walkImpls ctx ((CImplEntry method _ _ body) :: rest) w =
   walkImpls ctx rest (walkImplBody (inBinding ctx "impl \{method}") body w)
 
+withBound : Ctx -> ProjBound -> Ctx
+withBound (Ctx backend top env mctx dcounts facts binding _) bound =
+  Ctx backend top env mctx dcounts facts binding bound
+
+-- What a projection may index: the receiver name of the inherited default being
+-- read ("" elsewhere), how many fields that receiver holds before its slots
+-- (supers, then `requires`), and the largest super count of any interface.  A
+-- root other than the receiver cannot name its interface from Core, so it is
+-- held to the largest super count.
+data ProjBound = ProjBound String Int Int
+
+maxSuperCount : List (String, Int) -> Int
+maxSuperCount [] = 0
+maxSuperCount ((_, n) :: rest) = max n (maxSuperCount rest)
+
+-- The receiver of an inherited default is the last of its leading `$dict`
+-- parameters (`core_ir_lower.lowerInheritedDefault`).
+receiverBound : Ctx -> String -> String -> List Pat -> ProjBound
+receiverBound (Ctx _ _ _ _ _ facts _ (ProjBound _ _ cap)) iface key pats =
+  let n = leadingDictParams pats
+  match drop (n - 1) pats
+    (PVar recv _ _) :: _ =>
+      if n > 0 then
+        ProjBound
+          recv
+          (optionOr 0 (omLookup iface facts.efSupers)
+            + optionOr 0 (omLookup key facts.efRequires))
+          cap
+      else
+        ProjBound "" 0 cap
+    _ => ProjBound "" 0 cap
+
+-- One line per projection index at or past the dictionary it reads: the field
+-- count of an inherited default's receiver before its slots, or the largest
+-- super count of any interface for every other root.
+projectionFaults : ProjBound -> CExpr -> List String
+projectionFaults bound (CMethod _ (MethodEvidence _ _ route prereqs meths)) =
+  flatMap (routeProjectionFaults bound) (route :: prereqs ++ meths)
+projectionFaults bound (CDict _ routes) =
+  flatMap (routeProjectionFaults bound) routes
+projectionFaults _ _ = []
+
+routeProjectionFaults : ProjBound -> Route -> List String
+routeProjectionFaults bound (RProj r path) =
+  rootProjectionFaults bound r path ++ routeProjectionFaults bound r
+routeProjectionFaults bound (RKey _ reqs sups) =
+  flatMap (routeProjectionFaults bound) (reqs ++ sups)
+routeProjectionFaults bound (RLocal _ ds) =
+  flatMap (routeProjectionFaults bound) ds
+routeProjectionFaults _ _ = []
+
+rootProjectionFaults : ProjBound -> Route -> List Int -> List String
+rootProjectionFaults (ProjBound recv limit cap) (RDict d) (i :: rest) =
+  projectionIndexFaults (if d == recv then limit else cap) d i
+    ++ flatMap (projectionIndexFaults cap d) rest
+rootProjectionFaults (ProjBound recv limit cap) (RDictFwd d) (i :: rest) =
+  projectionIndexFaults (if d == recv then limit else cap) d i
+    ++ flatMap (projectionIndexFaults cap d) rest
+rootProjectionFaults _ _ _ = []
+
+projectionIndexFaults : Int -> String -> Int -> List String
+projectionIndexFaults limit d i =
+  if i >= 0 && i < limit then
+    []
+  else
+    [
+      "projects field \{intToString i} of dictionary `\{d}`, which has only \{intToString limit} fields before its slots",
+    ]
+
 inBinding : Ctx -> String -> Ctx
-inBinding (Ctx backend top env mctx dcounts facts _) binding =
-  Ctx backend top env mctx dcounts facts binding
+inBinding (Ctx backend top env mctx dcounts facts _ bound) binding =
+  Ctx backend top env mctx dcounts facts binding bound
 
 ctxBinding : Ctx -> String
-ctxBinding (Ctx _ _ _ _ _ _ binding) = binding
+ctxBinding (Ctx _ _ _ _ _ _ binding _) = binding
 
 walkImplBody : Ctx -> CImplBody -> Walk -> Walk
 walkImplBody ctx (CImplTagged tag _ _ _ _ pats body) w =
@@ -1015,9 +993,11 @@ walkImplBody ctx (CImplTagged tag _ _ _ _ pats body) w =
     (bindPatsScope pats omEmpty)
     body
     w
-walkImplBody ctx (CImplDefault _ tag _ _ _ pats body) w =
+walkImplBody ctx (CImplDefault iface tag key _ _ pats body) w =
   walkE
-    (inBinding ctx "\{ctxBinding ctx}@\{tag}")
+    (withBound
+      (inBinding ctx "\{ctxBinding ctx}@\{tag}")
+      (receiverBound ctx iface key pats))
     (bindPatsScope pats omEmpty)
     body
     w
@@ -1091,7 +1071,7 @@ walkE ctx scope (node@(CDict _ _)) w = noteEvidence ctx scope node w
 
 noteScalarOperator : Ctx -> String -> String -> Walk -> Walk
 noteScalarOperator _ _ "" w = w
-noteScalarOperator (Ctx _ _ _ _ _ _ binding) op tag (Walk seen found records scalar calls ctxs evs results) =
+noteScalarOperator (Ctx _ _ _ _ _ _ binding _) op tag (Walk seen found records scalar calls ctxs evs results) =
   if scalarOperatorTagAllowed op tag then
     Walk seen found records scalar calls ctxs evs results
   else
@@ -1146,8 +1126,9 @@ dictParamCounts ((CBind name ((CClause pats _) :: _) _ _) :: rest) acc =
 dictParamCounts (_ :: rest) acc = dictParamCounts rest acc
 
 noteEvidence : Ctx -> CallScope -> CExpr -> Walk -> Walk
-noteEvidence (Ctx _ _ env _ dcounts facts binding) scope node (Walk seen found bad scalar calls ctxs evs results) =
-  let why = evidenceFaults env dcounts facts scope node
+noteEvidence (Ctx _ _ env _ dcounts facts binding bound) scope node (Walk seen found bad scalar calls ctxs evs results) =
+  let why =
+    evidenceFaults env dcounts facts scope node ++ projectionFaults bound node
   Walk
     seen
     found
@@ -1287,7 +1268,7 @@ givenRooted _ = False
 
 -- A method occurrence supplies one route per slot of its declared context.
 noteMethodContext : Ctx -> String -> String -> Int -> Walk -> Walk
-noteMethodContext (Ctx _ _ _ mctx _ _ binding) name iface n (w@(Walk seen found bad scalar calls ctxs evs results)) =
+noteMethodContext (Ctx _ _ _ mctx _ _ binding _) name iface n (w@(Walk seen found bad scalar calls ctxs evs results)) =
   let k = declaredMethodContext mctx iface name
   if n == k then
     w
@@ -1349,7 +1330,7 @@ fieldOrdinalText : CField -> String
 fieldOrdinalText (CField k o _) = "\{k}@\{intToString o}"
 
 noteRecordBad : Ctx -> String -> String -> Walk -> Walk
-noteRecordBad (Ctx _ _ _ _ _ _ binding) node why (Walk seen found bad scalar calls ctxs evs results) =
+noteRecordBad (Ctx _ _ _ _ _ _ binding _) node why (Walk seen found bad scalar calls ctxs evs results) =
   Walk
     seen
     found
@@ -1365,7 +1346,7 @@ noteCall : Ctx -> CallScope -> CExpr -> List CExpr -> CallSite -> Walk -> Walk
 noteCall ctx _ _ [] _ w = noteCallBad ctx "application with no arguments" w
 noteCall ctx _ (CApp _ _ _) _ _ w =
   noteCallBad ctx "application whose head is an application" w
-noteCall (ctx@(Ctx _ _ env _ _ _ _)) scope hd args (CallSite mode _) w =
+noteCall (ctx@(Ctx _ _ env _ _ _ _ _)) scope hd args (CallSite mode _) w =
   let n = listLen args
   let arity = definedArityOf env scope hd
   if sameMode (callModeFor arity n) mode then
@@ -1390,7 +1371,7 @@ sameMode CallDynamic CallDynamic = True
 sameMode _ _ = False
 
 noteCallBad : Ctx -> String -> Walk -> Walk
-noteCallBad (Ctx _ _ _ _ _ _ binding) why (Walk seen found bad scalar calls ctxs evs results) =
+noteCallBad (Ctx _ _ _ _ _ _ binding _) why (Walk seen found bad scalar calls ctxs evs results) =
   Walk
     seen
     found
@@ -1409,7 +1390,7 @@ headText (CLam _ _) = "a lambda"
 headText _ = "an expression"
 
 noteVar : Ctx -> CallScope -> String -> Walk -> Walk
-noteVar (Ctx backend top _ _ _ facts binding) scope x (w@(Walk seen found bad scalar calls ctxs evs results)) =
+noteVar (Ctx backend top _ _ _ facts binding _) scope x (w@(Walk seen found bad scalar calls ctxs evs results)) =
   if omHasKey x scope || omHasKey x seen then
     w
   else match (unprovidedOn

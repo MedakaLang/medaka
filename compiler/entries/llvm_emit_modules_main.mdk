@@ -39,7 +39,6 @@ import ir.core_ir_lower.{
   ifaceImplHeadTable,
   lowerProgramEmitWith,
   lowerProgramEmitPinnedWith,
-  methodIfaceTable,
   ctorFieldTypeNames,
   validateFfiExternTypeNames,
   noInlineFnNames,
@@ -154,7 +153,6 @@ emitTail mods requirement _outputs facts runtimeDecls coreD modules1 =
     makeEmitInput
       (if half == 1 then RawUnchecked else requirement)
       (runtimeDomain (externDecls runtimeDecls))
-      (methodIfaceTable allDecls)
       (ctorFieldTypeNames allDecls)
       half
       preludeBinds
