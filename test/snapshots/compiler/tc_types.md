@@ -1,5 +1,5 @@
 # META
-source_lines=3647
+source_lines=3646
 stages=DESUGAR,MARK
 # SOURCE
 -- Typechecker data declarations and state records: every `data` and `type`
@@ -1469,9 +1469,8 @@ public export data CrossRun = CrossRun {
   --      one `omLookup` by loader module id over `declEnvSeedChain`'s prefix chain.
   --   `universeDataParamKinds` (A-3.2b slice 2, #1512) -- `declEnvsRef.deKindsBefore`,
   --      filled by `kindPublicDataDecl`, a PEER of `publicDataDecl` that also admits
-  --      `VisAbstract` and public `DNewtype` because those are the decls
-  --      `registerOpaqueParamKinds` used to publish separately (#804/#1028).  That pass
-  --      is gone with this cell; re-add neither.
+  --      `VisAbstract` and public `DNewtype`, because no other pass publishes those
+  --      decls' kinds (#804/#1028).  Do not re-add a separate pass beside this cell.
   --   `universeIfaceRequiredRef` (A-3.5a, #1557) -- stage K's `CE` already holds that
   --      value under that key (`ceRowRequired`); its one reader
   --      `implCompletenessMsgsOfMap` now calls `ceRequiredAt`, and the retired arm's

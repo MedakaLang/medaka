@@ -6,7 +6,7 @@ stages=DESUGAR,MARK
 -- builder, diagnostic key (`locKey`, `msgAtKey`, `locGoalKey`) and rewrite of diagnostic text
 -- (`writtenDiag`, `prependDiagOpt`) whose operands are values (`Mono`, `Ty`, atoms, kinds,
 -- `IfaceRef`, `Loc`, AST nodes, names) and whose closure is `tc_types`, `tc_mono`, `repr`, the
--- AST and the effect leaves; no row takes a context record, an environment or a cell (D3).
+-- AST and the effect leaves; no row takes a context record, an environment or a cell.
 --
 -- Spec: ERROR-QUALITY.md; A5. Precedent: GHC.Tc.Errors.Ppr (unsourced here: a leaf that
 -- imports only Tc.Errors, Tc.Types and TcType); Medaka has text builders without a message data

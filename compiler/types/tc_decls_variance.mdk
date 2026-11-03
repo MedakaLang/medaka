@@ -455,7 +455,7 @@ paramOccPolarities tab p pol (TyApp a b) = match tyAppSpine (TyApp a b)
   -- every occurrence reached through such a head as `PInv`.
   --
   -- THIS IS A deliberate, measured acceptance narrowing — the one place in
-  -- this function that can reject a program that used to be accepted.  It is
+  -- this function that can reject a program a less conservative verdict accepts.  It is
   -- the same trade `paramVarianceGuard`'s own "this does narrow acceptance
   -- In the sound direction too" note already documents: equality is the only
   -- symmetric sound rule available without direction, and here invariance is

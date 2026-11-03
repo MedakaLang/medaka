@@ -520,7 +520,7 @@ arrowGo depth cur (c :: rest) =
 
 -- The tokens of every segment of [sig] before its result.
 sigParamTokens : String -> List String
-sigParamTokens sig = flatMap sigTokens (dropLast (splitAtArrows sig))
+sigParamTokens sig = splitAtArrows sig |> dropLast |> flatMap sigTokens
 
 dropLast : List a -> List a
 dropLast xs = take (length xs - 1) xs
@@ -531,7 +531,7 @@ hasContextToken ts = any (t => elem t contextTypes) ts
 -- [sig] with every allowed `Ref` spelling removed, then any `Ref` left over.
 hasDisallowedRef : String -> Bool
 hasDisallowedRef sig =
-  elem "Ref" (sigTokens (fold (acc r => replace r "" acc) sig allowedRefs))
+  allowedRefs |> fold (acc r => replace r "" acc) sig |> sigTokens |> elem "Ref"
 
 diagTextSigs : List (String, String)
 diagTextSigs = topSigs (linesFor "types.tc_diag_text" loadModules)
