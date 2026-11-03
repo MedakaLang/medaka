@@ -1,5 +1,34 @@
 # MCP baseline task contracts
 
+Interactive operation measurements use `operations.py --interactive-root ROOT
+--output PRIVATE_RAW`. `measure_matched` runs five repetitions per case/arm,
+alternates trace order, and uses one pinned compiler/stdlib for both arms. With
+`interactive=True`, `run_process` forwards streaming stdin through the namespace
+supervisor and waits for a validated response with the exact ID before sending
+the next request. `exchange_callback` receives monotonic send/receipt offsets
+and RTTs; initialization stays separate from queries. `before_request` supports
+the same-session changed-file control in the host-owned disposable workspace.
+
+`resource_callback` receives cumulative cgroup CPU nanoseconds and peak memory
+charge bytes, or explicit unavailability reasons. Accounting includes supervisor
+after migration, namespace init, worker and descendants, excluding the external
+collector. Peak memory charge is not RSS. Root-only
+`MEDAKA_MCP_CGROUP_PARENT` can select an existing private cgroup delegation with
+memory enabled; the collector changes only its unique child. Portable worker-only
+resource fields in version-2 Runs retain their existing unavailable meanings.
+
+Budget schema version 2 extends version 1 with measured serial query latency,
+same-binary absolute trace-delta guardrails, `peak_memory_charge_bytes` and
+`input_tokens_context_proxy`. Every measurement requires a supported method,
+nonzero sample count, observed maximum bounded by the limit, and an artifact
+SHA-256. Missing/null evidence and false unavailable claims fail validation.
+Private context occupancy (`context_usage`) stays unavailable; host-accounted
+cumulative input tokens are only a context-cost proxy. `report.py` compacts raw
+interactive evidence by an allowlist and computes ranges/maxima plus signed
+matched deltas. It does not compute p95 from five samples or grade semantics
+from arm parity. [Operation methods](../../docs/findings/mcp-m0-baseline/OPERATIONS.md)
+record host scope, controls and reproduction commands.
+
 `tasks.json` contains six independent tasks. Each `files` mapping is a trial
 workspace, `prompt` and control questions are given to the agent, and `rubric`
 plus control answers and their bases stay outside that workspace. A grader
