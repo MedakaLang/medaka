@@ -9,13 +9,20 @@ import tempfile
 import threading
 import time
 import unittest
-from unittest.mock import patch
+from unittest.mock import Mock, patch
 
 from build_cli_artifact import fingerprint
-from trial_host import Budget, InfrastructureError, Journal, Sandbox, launch, materialize, run_with_retry, verify_distribution
+from trial_host import Budget, InfrastructureError, Journal, Sandbox, launch, materialize, run_with_retry, stop_process_group, verify_distribution
 
 
 class HostTests(unittest.TestCase):
+    def test_process_group_exit_race_is_benign(self):
+        process = Mock(pid=123)
+        process.poll.return_value = None
+        with patch('trial_host.os.killpg', side_effect=ProcessLookupError) as kill:
+            stop_process_group(process)
+        kill.assert_called_once()
+
     def test_missing_authority_returns_before_agent_or_auth_access(self):
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)

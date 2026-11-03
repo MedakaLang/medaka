@@ -242,6 +242,14 @@ def materialize(files, workspace):
         target.write_text(value)
 
 
+def stop_process_group(process):
+    if process and process.poll() is None:
+        try:
+            os.killpg(process.pid, signal.SIGKILL)
+        except ProcessLookupError:
+            pass
+
+
 def launch(spec, output, cli, cli_hashes, original, original_hashes, auth_file, seconds=600):
     """One fresh attempt. Caller owns serial scheduling and independent grading.
 
@@ -370,8 +378,7 @@ def launch(spec, output, cli, cli_hashes, original, original_hashes, auth_file, 
                         pass
                 if sandbox:
                     sandbox.stop()
-                if process and process.poll() is None:
-                    os.killpg(process.pid, signal.SIGKILL)
+                stop_process_group(process)
                 return
 
     monitor = threading.Thread(target=watchdog, daemon=True)
@@ -460,8 +467,7 @@ def launch(spec, output, cli, cli_hashes, original, original_hashes, auth_file, 
         monitor.join(timeout=10)
         budget.close('shutdown')
         if process:
-            if process.poll() is None:
-                os.killpg(process.pid, signal.SIGKILL)
+            stop_process_group(process)
             process.wait(timeout=10)
             reader.join(timeout=10)
         if sandbox:
