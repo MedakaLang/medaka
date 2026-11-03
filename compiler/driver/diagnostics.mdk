@@ -45,6 +45,7 @@ import frontend.resolve.{
   resErrorDidYouMean,
   resErrorIsPrivateName,
   resolveModuleG,
+  ResolveWalk(..),
   resolveModulesErrorsByFile,
   importedCtorDeclsStep,
   importerSubject,
@@ -1032,37 +1033,26 @@ frontEnd exportsFor drive fi = match fi.fiProgram
       fdPairs = pairs,
       fdMods = mods,
     }
+    let walk = ResolveWalk {
+      rwAllowInternal = fi.fiAllowInternal,
+      rwTrusted = fi.fiTrusted,
+      rwSibling = fi.fiInputs.diSibling,
+      rwPreludeKey = preludeKey,
+      rwRuntime = rt,
+      rwPrelude = core,
+    }
     match fi.fiPolicy
       NeverDriveRejected =>
         let resolved =
           hintResErrorPairs
             exportsFor
-            (resolveModulesErrorsByFile
-              (map modIdToPath mods)
-              fi.fiAllowInternal
-              fi.fiTrusted
-              fi.fiInputs.diSibling
-              preludeKey
-              rt
-              core
-              pairs)
+            (resolveModulesErrorsByFile (map modIdToPath mods) walk pairs)
         match anyList (p => not (isEmpty (snd p))) resolved
           True => undrivenOutput (map resolveBucket resolved)
           False =>
             drivenGraph drive None driveIn (seedAll (map midPath mods) [])
       DriveUnblocked chainKey steps =>
-        let buckets =
-          resolvedBuckets
-            exportsFor
-            fi.fiAllowInternal
-            fi.fiTrusted
-            fi.fiInputs.diSibling
-            preludeKey
-            chainKey
-            rt
-            core
-            mods
-            pairs
+        let buckets = resolvedBuckets exportsFor walk chainKey mods pairs
         match bucketsResolveRejected buckets
           True =>
             let (r, outputs, results) =
@@ -1454,7 +1444,7 @@ analyzeProject exportsFor allowInternal trustedMods cacheRef parseCacheRef read 
   results
 
 -- `analyzeProject` also handing back the per-module `(schemes, errs, warns)` the
--- graph driver produced — see `typecheckPassFull`.  A load failure never reaches a
+-- graph driver produced — see `typecheckPassReport`.  A load failure never reaches a
 -- typecheck, so its per-module list is empty and only the diagnostics it attributes
 -- to the entry file carry any verdict.
 analyzeProjectFull : (List String -> <e> List (String, List String)) ->
@@ -1648,65 +1638,6 @@ projectKeyedFromLoad exportsFor allowInternal trustedMods entry roots runtimeSrc
 bucketsResolveRejected : List (String, List Diag) -> Bool
 bucketsResolveRejected buckets = anyList (b => resolveRejected (snd b)) buckets
 
--- `analyzeProject` minus the load: resolve, then typecheck, then bucket — over a
--- graph the caller has already loaded.  `medaka test` loads once and calls this,
--- rather than handing `analyzeProject` an entry it would load a second time.
-export
-projectDiagsLoaded : (List String -> <e> List (String, List String)) ->
-  Bool ->
-  List String ->
-  List Decl ->
-  List Decl ->
-  Option (Int, Int) ->
-  String ->
-  List (String, String, List Decl) ->
-  <e> List (String, List Diag)
-projectDiagsLoaded exportsFor allowInternal trustedMods runtimeP coreP preludeKey chainKey mods =
-  snd
-    (projectDiagsLoadedFull
-      exportsFor
-      allowInternal
-      trustedMods
-      runtimeP
-      coreP
-      preludeKey
-      chainKey
-      mods
-      (desugaredModPairs mods))
-
--- `projectDiagsLoaded` also handing back the per-module `(schemes, errs, warns)` --
--- see `typecheckPassFull`.  `modPairs` is the caller's `desugaredModPairs mods`:
--- the resolve half and the typecheck half read the same trees.
-projectDiagsLoadedFull : (List String -> <e> List (String, List String)) ->
-  Bool ->
-  List String ->
-  List Decl ->
-  List Decl ->
-  Option (Int, Int) ->
-  String ->
-  List (String, String, List Decl) ->
-  List (String, List Decl) ->
-  <e> (List ModDiags, List (String, List Diag))
-projectDiagsLoadedFull exportsFor allowInternal trustedMods runtimeP coreP preludeKey chainKey mods modPairs =
-  typecheckPassFull
-    (driveInputsFor !selectedProfile False [])
-    runtimeP
-    coreP
-    preludeKey
-    chainKey
-    mods
-    modPairs
-    (resolvedBuckets
-      exportsFor
-      allowInternal
-      trustedMods
-      []
-      preludeKey
-      chainKey
-      runtimeP
-      coreP
-      mods
-      modPairs)
 -- A load error (cycle / unknown module / unreadable file) is attributed to the
 -- entry file (the compiler loader returns a single Err string without a per-file
 -- split, unlike the OCaml attribute_load_error; entry is the conservative
@@ -1832,7 +1763,7 @@ foldStale ((path, d) :: rest) buckets =
 -- ── resolve pass (per module, threading exports) ────────────────────────────
 -- Mirror analyze_project's resolve loop: resolveModuleG per module in dependency
 -- order, accumulating ModuleExports, bucketing each module's errors by its file.
--- #1362: guarded via `allowInternal`/`trustedMods` exactly like
+-- #1362: guarded via `rwAllowInternal`/`rwTrusted` exactly like
 -- `resolveModulesErrorsPairsG` (the human check/run/build multi-module gate) —
 -- previously always called the unguarded `resolveModule` (implicit
 -- `internalGuard = []`), so this pass never rejected an internal-extern
@@ -1848,21 +1779,17 @@ foldStale ((path, d) :: rest) buckets =
 -- serves each module's verdict from `passCacheRef`, `None` for one that resolves
 -- every module afresh; [ids] holds the resolve identities of the modules before.
 resolvePass : (List String -> <e> List (String, List String)) ->
-  Bool ->
-  List String ->
+  ResolveWalk ->
   (String -> Option (String, List Decl)) ->
-  Option (Int, Int) ->
-  List Decl ->
-  List Decl ->
   Option String ->
   OrdMap ModuleExports ->
   OrdMap Int ->
   List (String, String, List Decl) ->
   List (String, List Diag) ->
   <e> List (String, List Diag)
-resolvePass _ _ _ _ _ _ _ _ _ _ [] buckets = buckets
-resolvePass exportsFor allowInternal trustedMods subjectOf preludeKey rt core served known ids ((m@(mid, path, desugared)) :: rest) buckets =
-  let trusted = allowInternal || contains mid trustedMods
+resolvePass _ _ _ _ _ _ [] buckets = buckets
+resolvePass exportsFor walk subjectOf served known ids ((m@(mid, path, desugared)) :: rest) buckets =
+  let trusted = walk.rwAllowInternal || contains mid walk.rwTrusted
   -- A module's verdict reads, beside its own decls and its imports' exports, its
   -- trust (#1362), whether any module came before it (a missing import is
   -- `UnknownModule` after the first module and a stub in the first), and whether
@@ -1882,21 +1809,17 @@ resolvePass exportsFor allowInternal trustedMods subjectOf preludeKey rt core se
       resolveModuleG
         (internalGuardFor trusted)
         subject
-        preludeKey
-        rt
-        core
+        walk.rwPreludeKey
+        walk.rwRuntime
+        walk.rwPrelude
         known
         mid
         desugared
     (map diagOfResError (hintResErrors exportsFor errs), exp))
   resolvePass
     exportsFor
-    allowInternal
-    trustedMods
+    walk
     subjectOf
-    preludeKey
-    rt
-    core
     served
     (omInsert exp.modId exp known)
     (withIdentity mid ident ids)
@@ -1921,37 +1844,12 @@ boolKey False = "F"
 -- Guard-exhaustiveness warnings still come from the RAW (pre-desugar) module decls
 -- (checkGuardExhaustiveness needs the surface `EGuards` shape, gone after desugar),
 -- bucketed per file alongside the module's type diagnostics.
--- It hands back the per-module `(schemes, errs, warns)` the driver produced
--- beside the bucketed diagnostics; `medaka test`'s gate takes `snd`.
+-- It hands back the drive's whole report and outputs, whose `trDiagnostics` is
+-- the per-module `(schemes, errs, warns)` list, beside the bucketed diagnostics.
 -- `typecheckDiagsFold` keeps consuming exactly `(errs, warns)`: the schemes are
 -- a projection beside the fold, never an input to it.  `modPairs` is the
--- caller's, so the graph is desugared once per analyze.
-typecheckPassFull : DriveInputs ->
-  List Decl ->
-  List Decl ->
-  Option (Int, Int) ->
-  String ->
-  List (String, String, List Decl) ->
-  List (String, List Decl) ->
-  List (String, List Diag) ->
-  (List ModDiags, List (String, List Diag))
-typecheckPassFull inputs runtimeP coreP preludeKey chainKey mods modPairs buckets =
-  let (r, _, results) =
-    typecheckPassReport
-      NoSteps
-      inputs
-      runtimeP
-      coreP
-      preludeKey
-      chainKey
-      mods
-      modPairs
-      buckets
-  (r.trDiagnostics, results)
-
--- `typecheckPassFull` returning the drive's whole report and outputs, whose
--- `trDiagnostics` is the per-module list.  `frontEnd` runs it over a graph
--- resolve rejected under `DriveUnblocked`.
+-- caller's, so the graph is desugared once per analyze.  `frontEnd` runs it over
+-- a graph resolve rejected under `DriveUnblocked`.
 typecheckPassReport : ChainSteps ->
   DriveInputs ->
   List Decl ->
@@ -2054,7 +1952,7 @@ stepKeysFor : ChainSteps ->
 stepKeysFor RecordSteps mods = map moduleStepKey mods
 stepKeysFor NoSteps _ = []
 
--- The non-typecheck half of `typecheckPassFull`, over per-module `(errs, warns)` a
+-- The non-typecheck half of `typecheckPassReport`, over per-module `(errs, warns)` a
 -- driver already produced: fold in each module's guard-exhaustiveness, `deriving`
 -- and prelude-standalone-shadow diagnostics and bucket the lot by file path.
 -- `frontEnd` reaches it with whatever the verb's drive returned (for `run`,
@@ -2135,35 +2033,25 @@ foldServeKey RecordSteps (Some (rk, ck)) chainKey =
 foldServeKey _ _ _ = None
 
 -- Resolve a graph the caller has already loaded, bucketing each module's errors
--- by its file.  The shared prefix of `projectDiagsLoaded` and `frontEnd`'s
--- `DriveUnblocked` arm, which differ only in where the typecheck half comes
--- from.  They resolve identically so their verdicts agree on a channel that has
--- nothing to do with typing.
+-- by its file.  `frontEnd`'s `DriveUnblocked` arm resolves through it, so the
+-- verdicts on a channel that has nothing to do with typing agree with the
+-- `NeverDriveRejected` arm's `resolveModulesErrorsByFile`.
 resolvedBuckets : (List String -> <e> List (String, List String)) ->
-  Bool ->
-  List String ->
-  List SiblingPair ->
-  Option (Int, Int) ->
+  ResolveWalk ->
   String ->
-  List Decl ->
-  List Decl ->
   List (String, String, List Decl) ->
   List (String, List Decl) ->
   <e> List (String, List Diag)
-resolvedBuckets exportsFor allowInternal trustedMods sibling preludeKey chainKey runtimeP coreP mods modPairs =
+resolvedBuckets exportsFor walk chainKey mods modPairs =
   -- A keyed prelude serves each module's verdict from `passCacheRef`; unkeyed,
   -- nothing is served or recorded, and no key is built.  The caches keep this
   -- graph's modules and no others.
-  if isSome preludeKey then retainPassEntries (map modIdOf mods)
+  if isSome walk.rwPreludeKey then retainPassEntries (map modIdOf mods)
   resolvePass
     exportsFor
-    allowInternal
-    trustedMods
-    (importerSubject sibling modPairs)
-    preludeKey
-    runtimeP
-    coreP
-    (map ((rk, ck) => chainFullKey rk ck chainKey) preludeKey)
+    walk
+    (importerSubject walk.rwSibling modPairs)
+    (map ((rk, ck) => chainFullKey rk ck chainKey) walk.rwPreludeKey)
     omEmpty
     omEmpty
     (desugaredTriples mods modPairs)
