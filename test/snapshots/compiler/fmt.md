@@ -1,5 +1,5 @@
 # META
-source_lines=927
+source_lines=932
 stages=DESUGAR,MARK
 # SOURCE
 -- Self-hosted comment-preserving formatter — `formatProgram`, the driver over
@@ -832,17 +832,22 @@ interpLitBody src _ (_ :: ts) ((_, e) :: ps) = interpLitBody src e ts ps
 
 -- Only whitespace and comments sit between two tokens, so the next literal's
 -- opening quote is the first `"` after `pos` that is not inside a comment.
+--
+-- The scans through applyTripleGo slice one string at ascending offsets. That
+-- is linear on the native runtime, whose one-entry cursor cache resumes the
+-- codepoint walk; this module is not shipped to the WasmGC engine, which has
+-- no such cache.
 openingQuoteAfter : String -> Int -> Int
 openingQuoteAfter src pos
   | pos >= stringLength src = pos
-  -- Bound: one source string scanned forward, linear (fmt of 2000/4000/8000 non-ASCII definitions took 0.28/0.42/0.81s); the runtime resumes its codepoint walk, so the cost is engine-dependent.
+  -- Bound: one source string scanned forward, linear on the native runtime; see the note above openingQuoteAfter.
   -- lint-disable-next-line rule-reslice-in-loop
   | stringSlice pos (pos + 1) src == "\"" = pos
-  -- Bound: one source string scanned forward, linear (fmt of 2000/4000/8000 non-ASCII definitions took 0.28/0.42/0.81s); the runtime resumes its codepoint walk, so the cost is engine-dependent.
+  -- Bound: same forward scan, comment-opener probe.
   -- lint-disable-next-line rule-reslice-in-loop
   | stringSlice pos (pos + 2) src == "--" =
     openingQuoteAfter src (lineEndAfter src pos)
-  -- Bound: one source string scanned forward, linear (fmt of 2000/4000/8000 non-ASCII definitions took 0.28/0.42/0.81s); the runtime resumes its codepoint walk, so the cost is engine-dependent.
+  -- Bound: same forward scan, block-comment-opener probe.
   -- lint-disable-next-line rule-reslice-in-loop
   | stringSlice pos (pos + 2) src == "{-" =
     openingQuoteAfter src (blockCommentEnd src (pos + 2) 1)
@@ -851,7 +856,7 @@ openingQuoteAfter src pos
 lineEndAfter : String -> Int -> Int
 lineEndAfter src pos
   | pos >= stringLength src = pos
-  -- Bound: one source string scanned forward, linear (fmt of 2000/4000/8000 non-ASCII definitions took 0.28/0.42/0.81s); the runtime resumes its codepoint walk, so the cost is engine-dependent.
+  -- Bound: same forward scan, newline probe.
   -- lint-disable-next-line rule-reslice-in-loop
   | stringSlice pos (pos + 1) src == "\n" = pos + 1
   | otherwise = lineEndAfter src (pos + 1)
@@ -860,11 +865,11 @@ lineEndAfter src pos
 blockCommentEnd : String -> Int -> Int -> Int
 blockCommentEnd src pos depth
   | pos >= stringLength src || depth == 0 = pos
-  -- Bound: one source string scanned forward, linear (fmt of 2000/4000/8000 non-ASCII definitions took 0.28/0.42/0.81s); the runtime resumes its codepoint walk, so the cost is engine-dependent.
+  -- Bound: same forward scan, nested comment-opener probe.
   -- lint-disable-next-line rule-reslice-in-loop
   | stringSlice pos (pos + 2) src == "{-" =
     blockCommentEnd src (pos + 2) (depth + 1)
-  -- Bound: one source string scanned forward, linear (fmt of 2000/4000/8000 non-ASCII definitions took 0.28/0.42/0.81s); the runtime resumes its codepoint walk, so the cost is engine-dependent.
+  -- Bound: same forward scan, comment-closer probe.
   -- lint-disable-next-line rule-reslice-in-loop
   | stringSlice pos (pos + 2) src == "-}" =
     blockCommentEnd src (pos + 2) (depth - 1)
@@ -876,7 +881,7 @@ verbatimLitInfo : String -> List (Int, Int) -> List (Bool, String)
 verbatimLitInfo _ [] = []
 verbatimLitInfo src ((s, e) :: ls) =
   let triple = isTripleStringAt src s || isRawStringAt src s
-  -- Bound: one source string scanned forward, linear (fmt of 2000/4000/8000 non-ASCII definitions took 0.28/0.42/0.81s); the runtime resumes its codepoint walk, so the cost is engine-dependent.
+  -- Bound: one slice per literal, at ascending offsets of the same source string.
   -- lint-disable-next-line rule-reslice-in-loop
   (triple, if triple then stringSlice s e src else "") :: verbatimLitInfo src ls
 
@@ -909,7 +914,7 @@ applyTripleGo ((s, e, raw) :: rest) out cursor acc =
   if s < cursor then
     applyTripleGo rest out cursor acc
   else
-    -- Bound: one source string scanned forward, linear (fmt of 2000/4000/8000 non-ASCII definitions took 0.28/0.42/0.81s); the runtime resumes its codepoint walk, so the cost is engine-dependent.
+    -- Bound: one chunk per literal span, at ascending offsets of one output string.
     -- lint-disable-next-line rule-reslice-in-loop
     applyTripleGo rest out e (raw :: stringSlice cursor s out :: acc)
 

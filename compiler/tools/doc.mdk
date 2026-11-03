@@ -1307,7 +1307,7 @@ uniqueDoc (x :: xs) = x :: uniqueDoc (filterDoc (/= x) xs)
 -- runtimeSrc / coreSrc are the prelude sources (runtime.mdk + core.mdk), read
 -- by the caller from MEDAKA_ROOT; src is the target file; filename gives the
 -- module-name basename; roots are the import search roots (mirrors `check`'s
--- `entrySearchRoots (dirOf2 target) ++ [stdlibDir]`, medaka_cli.mdk:583) so an
+-- `entrySearchRoots (dirOf target) ++ [stdlibDir]`, front_gate.mdk) so an
 -- import-bearing target resolves its siblings before inferring schemes.
 export
 runDoc : String -> String -> String -> String -> List String -> <IO> String

@@ -200,7 +200,7 @@ needsMore source =
   if endsWithBlankLine source then
     False
   else
-    let lines = stringSplitNewlines source
+    let lines = splitString "\n" source
     let nonEmpty = filterEmpty lines
     match lastLine nonEmpty
       None => False
@@ -486,7 +486,3 @@ dispatchInput src =
 
 -- ── String utilities ──────────────────────────────────────────────────────
 -- stringTrim lives in `compiler/support/util.mdk` (imported above).
-
--- Split a string on "\n".
-stringSplitNewlines : String -> List String
-stringSplitNewlines s = splitString "\n" s

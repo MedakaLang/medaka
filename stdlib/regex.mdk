@@ -1594,7 +1594,7 @@ stitch : (Match -> <e> String) ->
   <e> List String
 stitch _ s [] beg acc = sliceClamped beg (stringLength s) s :: acc
 stitch f s (m :: rest) beg acc =
-  -- Bound: one subject sliced at ascending offsets, linear (split/replaceAllWith over 20000/40000/80000 non-ASCII pieces took 0.09/0.11/0.19s and 0.09/0.16/0.25s); the cost is engine-dependent.
+  -- Bound: one subject sliced at ascending offsets, linear on the native runtime (cursor cache) and quadratic on WasmGC for long non-ASCII input; the callback f may slice another string, which evicts the cache and makes native quadratic too.
   -- lint-disable-next-line rule-reslice-in-loop
   let piece = sliceClamped beg m.start s
   let replaced = f m
@@ -1647,7 +1647,7 @@ splitGo s [] beg lastStart acc =
   else
     acc
 splitGo s (m :: rest) beg _ acc =
-  -- Bound: one subject sliced at ascending offsets, linear (split/replaceAllWith over 20000/40000/80000 non-ASCII pieces took 0.09/0.11/0.19s and 0.09/0.16/0.25s); the cost is engine-dependent.
+  -- Bound: one subject sliced at ascending offsets, linear on the native runtime (cursor cache) and quadratic on WasmGC for long non-ASCII input.
   -- lint-disable-next-line rule-reslice-in-loop
   let acc2 = if m.end /= 0 then sliceClamped beg m.start s :: acc else acc
   splitGo s rest m.end m.start acc2

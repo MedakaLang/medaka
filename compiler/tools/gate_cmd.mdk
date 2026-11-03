@@ -662,15 +662,12 @@ staleRefusal False root gs =
 shellFor : String -> <IO> String
 shellFor script = match readFile script
   Err _ => "sh"
-  Ok src => if substrIn "bash" (firstLineOf src) then "bash" else "sh"
+  Ok src => if strContains "bash" (firstLineOf src) then "bash" else "sh"
 
 firstLineOf : String -> String
 firstLineOf s = match splitNl s
   [] => ""
   l :: _ => l
-
-substrIn : String -> String -> Bool
-substrIn needle hay = strContains needle hay
 
 -- The invocation.  `runCommand` takes no environment and Medaka has no setEnv,
 -- so the environment goes through POSIX `env` — the same device

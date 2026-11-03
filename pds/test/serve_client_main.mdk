@@ -151,7 +151,7 @@ readTypedResponse conn pending = match findHeaderEnd pending 0
       if B.isEmpty chunk then
         Err "serve_client: connection closed before response headers"
       else
-        -- Bound: the loop ends at the header terminator, so the buffer is one response head plus at most one chunk, and the terminator scan re-reads it each step regardless.
+        -- Bound: the loop ends at the header terminator, so the buffer is one response head plus at most one chunk.
         -- lint-disable-next-line rule-accumulator-append
         readTypedResponse conn (pending ++ chunk)
 
@@ -182,7 +182,7 @@ readHeaderResponse conn pending = match findHeaderEnd pending 0
       if B.isEmpty chunk then
         Err "serve_client: connection closed before response headers"
       else
-        -- Bound: the loop ends at the header terminator, so the buffer is one response head plus at most one chunk, and the terminator scan re-reads it each step regardless.
+        -- Bound: same one-head buffer as the receive loop above.
         -- lint-disable-next-line rule-accumulator-append
         readHeaderResponse conn (pending ++ chunk)
 
