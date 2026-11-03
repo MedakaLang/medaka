@@ -13,6 +13,7 @@ aliasDfsVisitNeighbors : Map String (List String) -> Ref (Map String Unit) -> Re
 aliasExpansionStep : List (TabKey, (List String, Ty)) -> Ty -> Option (TabKey, Ty)
 ambigRowsOf : String -> Map String (List (String, String)) -> List String -> List (String, List String)
 ambiguousExportRows : String -> List (String, (String, String)) -> List (String, List String)
+asWritten : ModuleCtx -> List (String, Mono) -> Ty -> (Ty, List (String, Mono))
 astTypeFreshTbl : ModuleCtx -> Ty -> (Mono, List (String, Mono))
 atSignature : ModuleCtx -> Ty -> (ModuleCtx -> a) -> a
 binderIsPattern : GraphCtx -> List (String, Option EffAtomTy) -> List String -> String -> Bool
@@ -65,6 +66,7 @@ emitCyclicAliasErrors : ModuleCtx -> List Decl -> List (TabKey, (List String, Ty
 existentialCells : ModuleCtx -> List (String, KindAnn) -> List (String, Ref Authvar)
 fieldNameOf : Field -> String
 firstRowPerName : Map String Unit -> List (String, (String, String)) -> List (String, (String, String))
+freshTblWith : (ModuleCtx -> List (String, Mono) -> Ty -> (Ty, List (String, Mono))) -> ModuleCtx -> Ty -> (Mono, List (String, Mono))
 graphAliasRow : Decl -> List (TabKey, (List String, Ty))
 groupDefinerPairs : Map String (List (String, String)) -> List (String, (String, String)) -> Map String (List (String, String))
 headAnnotTy : ModuleCtx -> Ty -> Mono

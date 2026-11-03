@@ -4,7 +4,7 @@ checkGradedImplHead : ModuleCtx -> String -> Ty -> List Kind -> Unit
 checkGradedImplHeadCon : ModuleCtx -> String -> TyConOrigin -> String -> Option Loc -> Int -> List Kind -> Unit
 checkGradedImplHeadDecl : ModuleCtx -> KindScope -> ClassEnv -> Int -> Decl -> Unit
 checkGradedImplHeadKinds : ModuleCtx -> String -> String -> Option Loc -> Int -> List Kind -> List Kind -> Unit
-checkGradedImplHeads : ModuleCtx -> ClassEnv -> Int -> List Decl -> Unit
+checkGradedImplHeads : ModuleCtx -> KindScope -> ClassEnv -> Int -> List Decl -> Unit
 checkGradedImplTys : ModuleCtx -> ClassEnv -> Int -> TyConOrigin -> String -> Int -> List Ty -> Unit
 checkImplCompletenessMap : ModuleCtx -> ClassEnv -> Int -> List Decl -> Unit
 checkImplHeadGoal : SiteCtx -> String -> List (String, Int) -> List PredicateSlot -> (IfaceRef, List Mono, Option Loc) -> Unit

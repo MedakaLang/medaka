@@ -30,6 +30,7 @@ externDataUnresolved : Bool -> String -> List String -> List (Option KindAnn) ->
 externDecls : List Decl -> List ExternDecl
 externRowCons : Bool -> ExternDecl -> a -> List (String, (List (String, String), a)) -> List (String, (List (String, String), a))
 fieldName : Field -> String
+fieldTyOf : Field -> Ty
 firstTyLoc : Ty -> Option Loc
 firstTyLocList : List Ty -> Option Loc
 fixedWidthMask : String -> Option Int
@@ -143,4 +144,5 @@ unminted : EvId
 useMemberAlias : UseMember -> Option String
 useMemberLocal : UseMember -> String
 useMemberOrigin : UseMember -> String
+variantFieldTys : Variant -> List Ty
 variantName : Variant -> String
