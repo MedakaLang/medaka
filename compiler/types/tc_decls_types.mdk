@@ -86,9 +86,7 @@ import types.tc_env.{
   kindOfParams,
   kindParams,
   kindTypeOnly,
-  headKindsIn,
-  tabNameIndex,
-  tabNameLookup,
+  builtinParamKinds,
   varKindsOf,
   anyKRow,
   ceLookupAt,
@@ -144,7 +142,6 @@ import frontend.ast.{
   Decl(..),
   EffAtomTy(..),
   EffParamTy(..),
-  Expr(..),
   ExternDecl(..),
   Field(..),
   IfaceMethod(..),
@@ -201,9 +198,7 @@ import types.effect_param_decode.{
   writtenParam,
 }
 import types.registry.{regKeyOfTab}
-import types.expr_loc.{exprStartLoc}
-import frontend.ast_walk.{DeclBody(..), childExprs, declBodies}
-import support.ordmap.{OrdMap}
+import support.ordmap.{omHasKey, OrdMap}
 export import types.tc_env.{kindsEq}
 
 -- The effect-label domain registry maps a label's identity key (`labelKey`) to the
@@ -507,8 +502,9 @@ zipParamKinds _ _ = []
 -- (d) `requires`-chain agreement (§6.5), for a superinterface declared in the
 --     SAME module: the parameter's resolved kinds must equal the super's.
 -- (e) every written type the declaration holds (a signature, a field, an alias
---     right-hand side, a method, an annotation in a body) agrees with the kinds
---     of what it applies (`reportWrittenKinds`), [sc] the module's.
+--     right-hand side, a method, an extern) agrees with the kinds of what it
+--     applies (`reportWrittenKinds`), [sc] the module's.  An annotation in a
+--     body is judged where it converts (`astTypeFreshTbl`).
 export
 checkDeclaredKinds : ModuleCtx -> KindScope -> List Decl -> Unit
 checkDeclaredKinds mctx sc prog = checkDeclaredKindsGo mctx sc prog prog
@@ -548,7 +544,7 @@ checkDeclaredKindsDecl mctx sc _ (DTypeAlias { tyAliasName = n, tyAliasParams = 
   checkAliasPatternSlots mctx (zipParamKinds ps ks) rhs
   checkHeadKinds mctx n ps ks [rhs]
   reportWrittenKinds mctx sc (headParamKinds sc o n ps) nloc [(Some KType, rhs)]
-checkDeclaredKindsDecl mctx sc prog (d@(DInterface { name, typarams, typaramKinds, supers, methods, ifaceOrigin = o, ... })) =
+checkDeclaredKindsDecl mctx sc prog (DInterface { name, typarams, typaramKinds, supers, methods, ifaceOrigin = o, ... }) =
   checkIfaceHeadKinds mctx name typarams (padAnns typarams typaramKinds) methods
   let declared = zipL typarams (optionOr [] (sc.ksIfaces o name))
   checkSuperKinds mctx sc prog name declared methods supers
@@ -556,12 +552,11 @@ checkDeclaredKindsDecl mctx sc prog (d@(DInterface { name, typarams, typaramKind
     ((IfaceMethod _ mty _ mloc) =>
       reportWrittenKinds mctx sc declared mloc [(Some KType, mty)])
     methods
-  reportBodyKinds mctx sc d
 checkDeclaredKindsDecl mctx sc _ (DTypeSig _ _ ty loc) =
   reportWrittenKinds mctx sc [] (Some loc) [(Some KType, ty)]
 checkDeclaredKindsDecl mctx sc _ (DExtern (ExternDecl { edTy = ty, edLoc = loc })) =
   reportWrittenKinds mctx sc [] (Some loc) [(Some KType, ty)]
-checkDeclaredKindsDecl mctx sc _ d = reportBodyKinds mctx sc d
+checkDeclaredKindsDecl _ _ _ _ = ()
 
 -- An alias parameter of an ordinary `Authority L` kind admits an exact
 -- element, which an `Authority L*` slot of the right-hand side refuses, so
@@ -2295,7 +2290,8 @@ spliceRowTails sub (n :: rest) =
 
 -- The kinds one module's written types are judged against: a head's and an
 -- interface's parameter kinds (`None` for one not known here), and whether a
--- head is an alias.  Built once per module, so a lookup probes a name index.
+-- head is an alias.  A head's kinds are looked up only for a name the head
+-- table holds (`dataParamNameIndexRef`), so a builtin costs no walk of it.
 public export data KindScope = KindScope {
   ksHeads : TyConOrigin -> String -> Option (List Kind),
   ksIfaces : TyConOrigin -> String -> Option (List Kind),
@@ -2314,20 +2310,29 @@ export
 kindScopeOf : ModuleCtx -> KindScope
 kindScopeOf mctx =
   let envs = mctx.mcGraph.declEnvsRef.value
+  let heads = mctx.mcCells.dataParamKindsRef.value
+  let names = mctx.mcCells.dataParamNameIndexRef.value
+  let aliases = mctx.mcCells.aliasTableRef.value
   KindScope {
-    ksHeads = headKindsIn (tabNameIndex mctx.mcCells.dataParamKindsRef.value),
+    ksHeads = o n => headKindsAmong names heads o n,
     ksIfaces =
       ceParamKindsAt
         (declEnvsOrdOf mctx.mcCells.currentModuleRef.value envs)
         envs.deIfaces,
-    ksAlias = aliasAt (tabNameIndex mctx.mcCells.aliasTableRef.value),
+    ksAlias = o n => isSome (lookupTab (tyTabKey o n) aliases),
   }
 
-aliasAt : OrdMap (List (TabKey, (List String, Ty))) ->
+headKindsAmong : OrdMap Unit ->
+  List (TabKey, List Kind) ->
   TyConOrigin ->
   String ->
-  Bool
-aliasAt index o n = isSome (tabNameLookup index (tyTabKey o n))
+  Option (List Kind)
+headKindsAmong names heads o n =
+  if omHasKey n names then match lookupTab (tyTabKey o n) heads
+    Some kinds => Some kinds
+    None => builtinParamKinds o n
+  else
+    builtinParamKinds o n
 
 -- Reports the first kind error of each of [items], a written type with the
 -- kind its position takes.  [declared] are the kinds of the variables a
@@ -2712,24 +2717,6 @@ rejectedAlias mctx kj o n params args =
             (Some KType)
             rhs)
       None => False)
-
--- Every annotation `(e : T)` an expression body writes, with the
--- expression it annotates.  A head pin (`:~`) is desugar's, not written.
-annotationsIn : Expr -> List (Expr, Ty)
-annotationsIn (EAnnot e ty) = (e, ty) :: annotationsIn e
-annotationsIn e = flatMap annotationsIn (childExprs e)
-
--- The annotations of every body [d] holds, each judged on its own.
-reportBodyKinds : ModuleCtx -> KindScope -> Decl -> Unit
-reportBodyKinds mctx sc d =
-  each
-    ((DeclBody _ body) =>
-      each
-        (a => reportWrittenKinds mctx sc [] (Some (exprStartLoc (fst a))) [
-          (Some KType, snd a),
-        ])
-        (annotationsIn body))
-    (declBodies d)
 
 -- The kinds a head of [o]/[n] gives its parameters [ps], as registered.
 headParamKinds : KindScope ->

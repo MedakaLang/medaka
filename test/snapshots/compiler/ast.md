@@ -1,5 +1,5 @@
 # META
-source_lines=3023
+source_lines=3032
 stages=DESUGAR,MARK
 # SOURCE
 -- Medaka AST — the surface (pre-desugar) nodes,
@@ -1013,6 +1013,15 @@ variantName (Variant n _) = n
 export
 fieldName : Field -> String
 fieldName (Field n _) = n
+
+-- The field types of a constructor, in order, positional or named.
+export
+variantFieldTys : Variant -> List Ty
+variantFieldTys (Variant _ (ConPos tys)) = tys
+variantFieldTys (Variant _ (ConNamed fs _)) = map fieldTyOf fs
+
+fieldTyOf : Field -> Ty
+fieldTyOf (Field _ t) = t
 
 export
 implMethodName : ImplMethod -> String
@@ -3229,6 +3238,11 @@ public export data SiblingPair = SiblingPair {
 (DFunDef false "variantName" ((PCon "Variant" (PVar "n") PWild)) (EVar "n"))
 (DTypeSig true "fieldName" (TyFun (TyCon "Field") (TyCon "String")))
 (DFunDef false "fieldName" ((PCon "Field" (PVar "n") PWild)) (EVar "n"))
+(DTypeSig true "variantFieldTys" (TyFun (TyCon "Variant") (TyApp (TyCon "List") (TyCon "Ty"))))
+(DFunDef false "variantFieldTys" ((PCon "Variant" PWild (PCon "ConPos" (PVar "tys")))) (EVar "tys"))
+(DFunDef false "variantFieldTys" ((PCon "Variant" PWild (PCon "ConNamed" (PVar "fs") PWild))) (EApp (EApp (EVar "map") (EVar "fieldTyOf")) (EVar "fs")))
+(DTypeSig false "fieldTyOf" (TyFun (TyCon "Field") (TyCon "Ty")))
+(DFunDef false "fieldTyOf" ((PCon "Field" PWild (PVar "t"))) (EVar "t"))
 (DTypeSig true "implMethodName" (TyFun (TyCon "ImplMethod") (TyCon "String")))
 (DFunDef false "implMethodName" ((PCon "ImplMethod" (PVar "n") PWild PWild)) (EVar "n"))
 (DTypeSig true "ifaceMethodName" (TyFun (TyCon "IfaceMethod") (TyCon "String")))
@@ -3832,6 +3846,11 @@ public export data SiblingPair = SiblingPair {
 (DFunDef false "variantName" ((PCon "Variant" (PVar "n") PWild)) (EVar "n"))
 (DTypeSig true "fieldName" (TyFun (TyCon "Field") (TyCon "String")))
 (DFunDef false "fieldName" ((PCon "Field" (PVar "n") PWild)) (EVar "n"))
+(DTypeSig true "variantFieldTys" (TyFun (TyCon "Variant") (TyApp (TyCon "List") (TyCon "Ty"))))
+(DFunDef false "variantFieldTys" ((PCon "Variant" PWild (PCon "ConPos" (PVar "tys")))) (EVar "tys"))
+(DFunDef false "variantFieldTys" ((PCon "Variant" PWild (PCon "ConNamed" (PVar "fs") PWild))) (EApp (EApp (EMethodRef "map") (EVar "fieldTyOf")) (EVar "fs")))
+(DTypeSig false "fieldTyOf" (TyFun (TyCon "Field") (TyCon "Ty")))
+(DFunDef false "fieldTyOf" ((PCon "Field" PWild (PVar "t"))) (EVar "t"))
 (DTypeSig true "implMethodName" (TyFun (TyCon "ImplMethod") (TyCon "String")))
 (DFunDef false "implMethodName" ((PCon "ImplMethod" (PVar "n") PWild PWild)) (EVar "n"))
 (DTypeSig true "ifaceMethodName" (TyFun (TyCon "IfaceMethod") (TyCon "String")))

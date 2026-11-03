@@ -151,7 +151,9 @@ import types.tc_decls_types.{
   sigVarsWithAuths,
   substAliasArgs,
   writtenBindingForce,
+  kindScopeOf,
   recoveredScope,
+  reportWrittenKinds,
 }
 import types.effect_authority.{Authority(..), Authvar(..), authvarId}
 import types.effect_rows.{
@@ -1024,20 +1026,33 @@ rejectCyclicAliases mctx prog =
 -- like astTypeFresh but also returns the name→fresh-tyvar map (the same fresh
 -- vars used in the Mono), so a caller can check post-unify whether each
 -- annotation tyvar stayed a distinct unbound var (C3 AnnotationTooGeneral).
+-- An annotation is a written type (EFFECTS-SEMANTICS §6.2), judged where it
+-- converts: its kind error is reported here, and what the judgement rejects
+-- converts as a variable (`recoveredScope`).
 export
 astTypeFreshTbl : ModuleCtx -> Ty -> (Mono, List (String, Mono))
-astTypeFreshTbl outer ty = atSignature outer ty (mctx =>
+astTypeFreshTbl mctx ty =
+  reportWrittenKinds mctx (kindScopeOf mctx) [] None [(Some KType, ty)]
+  freshTblWith recoveredScope mctx ty
+
+-- [ty] converted with a fresh variable per written variable, [written] the
+-- form of [ty] that converts with its extra variables.
+freshTblWith : (ModuleCtx -> List (String, Mono) -> Ty -> (Ty, List (String, Mono))) ->
+  ModuleCtx ->
+  Ty ->
+  (Mono, List (String, Mono))
+freshTblWith written outer ty = atSignature outer ty (mctx =>
   let rows = rowArgNames mctx ty
   let auths = authArgBindersIn mctx ty
   let etbl = sigVarsForWith mctx ty (dedup (effTailNames ty ++ rows)) auths
   let tvs = freshTvMap mctx (sigTyVarNames ty rows (map fst auths))
-  let (written, scope) = recoveredScope mctx tvs ty
-  (fromAstTypeE mctx etbl scope written, tvs))
+  let (converted, scope) = written mctx tvs ty
+  (fromAstTypeE mctx etbl scope converted, tvs))
 
 -- The head-pin's target type: if the annotation's head is a TyCon with a known
 -- declared arity (from `dataParamKindsRef`), rebuild it at that arity with fresh
 -- vars (so an empty literal's wrong-arity pin is corrected); otherwise fall back
--- to the literal annotation type.
+-- to the literal annotation type, which desugar wrote, so it is not judged.
 export
 headAnnotTy : ModuleCtx -> Ty -> Mono
 headAnnotTy mctx ty = match tyAppSpine ty
@@ -1046,8 +1061,11 @@ headAnnotTy mctx ty = match tyAppSpine ty
   (TyCon { tyConName = n, tyConOrigin = o }, _) =>
     match lookupTab (tyTabKey o n) mctx.mcCells.dataParamKindsRef.value
       Some kinds => applyParams (tconFrom o n) (freshVars mctx (listLen kinds))
-      None => fst (astTypeFreshTbl mctx ty)
-  _ => fst (astTypeFreshTbl mctx ty)
+      None => fst (freshTblWith asWritten mctx ty)
+  _ => fst (freshTblWith asWritten mctx ty)
+
+asWritten : ModuleCtx -> List (String, Mono) -> Ty -> (Ty, List (String, Mono))
+asWritten _ tvs ty = (ty, tvs)
 
 -- A diagnostic a signature's elaboration raises without a span of its own
 -- lands on the signature, not on whatever the walk last visited.

@@ -67,6 +67,7 @@ import frontend.ast.{
   tabKeyName,
   tabKeyOf,
   tyConBuiltin,
+  variantFieldTys,
   useMemberLocal,
   useMemberOrigin,
 }
@@ -150,7 +151,6 @@ import types.registry.{
   regLookupK,
 }
 import types.route_key.{implRouteKeyWord}
-import frontend.resolve.{primitiveTypes, tupleCtorTyNames, variantFieldTys}
 import types.solver_contract.{GoalOrigin(..)}
 
 -- ── A-3.2b residual (#1512): the alias universe, sourced from stage K ──────
@@ -2393,18 +2393,19 @@ headKindsIn : OrdMap (List (TabKey, List Kind)) ->
   Option (List Kind)
 headKindsIn index o n = match tabNameLookup index (tyTabKey o n)
   Some kinds => Some kinds
-  None => builtinParamKinds n
+  None => builtinParamKinds o n
 
 -- A builtin head's parameter kinds: a tuple takes a `Type` per component,
--- `List`, `Ref` and `Array` take one, and every other primitive none.
+-- `List`, `Ref` and `Array` take one, and every other primitive none.  A head
+-- the language provides carries `OriginBuiltin`, and only such a head does.
 export
-builtinParamKinds : String -> Option (List Kind)
-builtinParamKinds n
+builtinParamKinds : TyConOrigin -> String -> Option (List Kind)
+builtinParamKinds OriginBuiltin n
   | contains n ["List", "Ref", "Array"] = Some [KType]
-  | contains n primitiveTypes = Some []
-  | contains n tupleCtorTyNames =
-    map (k => map (_ => KType) [1..=k]) (tupleTagArity n)
-  | otherwise = None
+  | otherwise = match tupleTagArity n
+    Some k => Some (map (_ => KType) [1..=k])
+    None => Some []
+builtinParamKinds _ _ = None
 
 -- A table indexed by name, each bucket in table order, so a probe answers
 -- what `lookupTab` over the whole table answers.

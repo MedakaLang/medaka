@@ -83,6 +83,7 @@ isInterfaceDecl	Decl	2/14
 isNonexpansive	Expr	14/43
 isOmittedElse	Expr	1/43
 isSyntacticLambda	Expr	1/43
+kindHeadOf	Decl	1/14
 lamUnderLoc	Expr	2/43
 leftmostPart	Expr	1/43
 localAbsCandidate	Expr	14/43
@@ -98,7 +99,7 @@ plainAppHead	Expr	2/43
 polarityDeclInfo	Decl	1/14
 prePassDeclScoped	Decl	5/14
 prependLocalDicts	Expr	2/43
-recordDeclKinds	Decl	1/14
+recordDeclKindsAs	Decl	1/14
 recordNegatedLitRange	Expr	3/43
 recordTopDeclBinderTypes	Decl	3/14
 registerData	Decl	1/14

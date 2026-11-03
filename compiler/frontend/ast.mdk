@@ -1010,6 +1010,15 @@ export
 fieldName : Field -> String
 fieldName (Field n _) = n
 
+-- The field types of a constructor, in order, positional or named.
+export
+variantFieldTys : Variant -> List Ty
+variantFieldTys (Variant _ (ConPos tys)) = tys
+variantFieldTys (Variant _ (ConNamed fs _)) = map fieldTyOf fs
+
+fieldTyOf : Field -> Ty
+fieldTyOf (Field _ t) = t
+
 export
 implMethodName : ImplMethod -> String
 implMethodName (ImplMethod n _ _) = n

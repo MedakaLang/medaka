@@ -1,5 +1,5 @@
 # META
-source_lines=4360
+source_lines=4361
 stages=DESUGAR,MARK
 # SOURCE
 -- tc_env: construction of `ImplEnv`, `ClassEnv`, `MethodEnv` and lookup in every declaration
@@ -71,6 +71,7 @@ import frontend.ast.{
   tabKeyName,
   tabKeyOf,
   tyConBuiltin,
+  variantFieldTys,
   useMemberLocal,
   useMemberOrigin,
 }
@@ -154,7 +155,6 @@ import types.registry.{
   regLookupK,
 }
 import types.route_key.{implRouteKeyWord}
-import frontend.resolve.{primitiveTypes, tupleCtorTyNames, variantFieldTys}
 import types.solver_contract.{GoalOrigin(..)}
 
 -- ── A-3.2b residual (#1512): the alias universe, sourced from stage K ──────
@@ -2397,18 +2397,19 @@ headKindsIn : OrdMap (List (TabKey, List Kind)) ->
   Option (List Kind)
 headKindsIn index o n = match tabNameLookup index (tyTabKey o n)
   Some kinds => Some kinds
-  None => builtinParamKinds n
+  None => builtinParamKinds o n
 
 -- A builtin head's parameter kinds: a tuple takes a `Type` per component,
--- `List`, `Ref` and `Array` take one, and every other primitive none.
+-- `List`, `Ref` and `Array` take one, and every other primitive none.  A head
+-- the language provides carries `OriginBuiltin`, and only such a head does.
 export
-builtinParamKinds : String -> Option (List Kind)
-builtinParamKinds n
+builtinParamKinds : TyConOrigin -> String -> Option (List Kind)
+builtinParamKinds OriginBuiltin n
   | contains n ["List", "Ref", "Array"] = Some [KType]
-  | contains n primitiveTypes = Some []
-  | contains n tupleCtorTyNames =
-    map (k => map (_ => KType) [1..=k]) (tupleTagArity n)
-  | otherwise = None
+  | otherwise = match tupleTagArity n
+    Some k => Some (map (_ => KType) [1..=k])
+    None => Some []
+builtinParamKinds _ _ = None
 
 -- A table indexed by name, each bucket in table order, so a probe answers
 -- what `lookupTab` over the whole table answers.
@@ -4365,7 +4366,7 @@ methodRowSameNameView rows =
 # DESUGAR
 (DUse false (UseGroup ("types" "tc_mono") ((mem "argMentions" false) (mem "entryHeadMatches" false) (mem "headTyconTy" false) (mem "implDeclsWithReqs" false) (mem "nthTy" false) (mem "schemeBodyOf" false) (mem "schemeIds" false) (mem "tyAppSpine" false) (mem "tyVarNames" false))))
 (DUse false (UseGroup ("types" "tc_state") ((mem "builtinCtors" false) (mem "emptyClassEnv" false) (mem "emptyDataEnv" false) (mem "emptyDeclEnvSeedAcc" false) (mem "emptyImplEnv" false) (mem "emptyImplUniverse" false) (mem "emptyMethodEnv" false))))
-(DUse false (UseGroup ("frontend" "ast") ((mem "Constraint" true) (mem "DataVis" true) (mem "Decl" true) (mem "Expr" true) (mem "FunClause" true) (mem "Ident" true) (mem "IfaceMethod" true) (mem "ImplMethod" true) (mem "KindAnn" true) (mem "LetBind" true) (mem "Loc" true) (mem "Ns" true) (mem "Pat" true) (mem "Require" true) (mem "Super" true) (mem "TabKey" true) (mem "Ty" true) (mem "TyConOrigin" true) (mem "UseMember" true) (mem "UsePath" true) (mem "Variant" true) (mem "identOriginOf" false) (mem "lookupTab" false) (mem "mkIdent" false) (mem "orElseLoc" false) (mem "sameTyConHead" false) (mem "tabKeyEq" false) (mem "tabKeyName" false) (mem "tabKeyOf" false) (mem "tyConBuiltin" false) (mem "useMemberLocal" false) (mem "useMemberOrigin" false))))
+(DUse false (UseGroup ("frontend" "ast") ((mem "Constraint" true) (mem "DataVis" true) (mem "Decl" true) (mem "Expr" true) (mem "FunClause" true) (mem "Ident" true) (mem "IfaceMethod" true) (mem "ImplMethod" true) (mem "KindAnn" true) (mem "LetBind" true) (mem "Loc" true) (mem "Ns" true) (mem "Pat" true) (mem "Require" true) (mem "Super" true) (mem "TabKey" true) (mem "Ty" true) (mem "TyConOrigin" true) (mem "UseMember" true) (mem "UsePath" true) (mem "Variant" true) (mem "identOriginOf" false) (mem "lookupTab" false) (mem "mkIdent" false) (mem "orElseLoc" false) (mem "sameTyConHead" false) (mem "tabKeyEq" false) (mem "tabKeyName" false) (mem "tabKeyOf" false) (mem "tyConBuiltin" false) (mem "variantFieldTys" false) (mem "useMemberLocal" false) (mem "useMemberOrigin" false))))
 (DUse false (UseGroup ("types" "repr") ((mem "IfaceRef" true) (mem "Mono" true) (mem "Scheme" true) (mem "tupleTagArity" false))))
 (DUse false (UseGroup ("types" "effect_param_decode") ((mem "dtopIn" false))))
 (DUse false (UseGroup ("types" "effect_domain") ((mem "Param" true))))
@@ -4378,7 +4379,6 @@ methodRowSameNameView rows =
 (DUse false (UseGroup ("support" "util") ((mem "allList" false) (mem "anyList" false) (mem "contains" false) (mem "dedup" false) (mem "filterList" false) (mem "isEmptyL" false) (mem "listLen" false) (mem "lookupAssoc" false) (mem "reverseL" false) (mem "selfBinding" false) (mem "zipL" false))))
 (DUse false (UseGroup ("types" "registry") ((mem "HeadKey" true) (mem "headKeyTag" false) (mem "mregAppendK" false) (mem "mregLookupK" false) (mem "regInsertK" false) (mem "Registry" false) (mem "RegKey" false) (mem "regKeyNTab" false) (mem "regKeyOfTab" false) (mem "regKeyRender" false) (mem "regLookupK" false))))
 (DUse false (UseGroup ("types" "route_key") ((mem "implRouteKeyWord" false))))
-(DUse false (UseGroup ("frontend" "resolve") ((mem "primitiveTypes" false) (mem "tupleCtorTyNames" false) (mem "variantFieldTys" false))))
 (DUse false (UseGroup ("types" "solver_contract") ((mem "GoalOrigin" true))))
 (DTypeSig true "aliasUniverseAt" (TyFun (TyCon "Int") (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "TabKey") (TyCon "AliasDecl"))) (TyApp (TyCon "List") (TyTuple (TyCon "TabKey") (TyTuple (TyApp (TyCon "List") (TyCon "String")) (TyCon "Ty")))))))
 (DFunDef false "aliasUniverseAt" (PWild (PList)) (EListLit))
@@ -4827,9 +4827,10 @@ methodRowSameNameView rows =
 (DFunDef false "declaredPairs" ((PCons PWild (PVar "ps")) (PCons (PCon "None") (PVar "ds"))) (EApp (EApp (EVar "declaredPairs") (EVar "ps")) (EVar "ds")))
 (DFunDef false "declaredPairs" (PWild PWild) (EListLit))
 (DTypeSig true "headKindsIn" (TyFun (TyApp (TyCon "OrdMap") (TyApp (TyCon "List") (TyTuple (TyCon "TabKey") (TyApp (TyCon "List") (TyCon "Kind"))))) (TyFun (TyCon "TyConOrigin") (TyFun (TyCon "String") (TyApp (TyCon "Option") (TyApp (TyCon "List") (TyCon "Kind")))))))
-(DFunDef false "headKindsIn" ((PVar "index") (PVar "o") (PVar "n")) (EMatch (EApp (EApp (EVar "tabNameLookup") (EVar "index")) (EApp (EApp (EVar "tyTabKey") (EVar "o")) (EVar "n"))) (arm (PCon "Some" (PVar "kinds")) () (EApp (EVar "Some") (EVar "kinds"))) (arm (PCon "None") () (EApp (EVar "builtinParamKinds") (EVar "n")))))
-(DTypeSig true "builtinParamKinds" (TyFun (TyCon "String") (TyApp (TyCon "Option") (TyApp (TyCon "List") (TyCon "Kind")))))
-(DFunDef false "builtinParamKinds" ((PVar "n")) (EIf (EApp (EApp (EVar "contains") (EVar "n")) (EListLit (ELit (LString "List")) (ELit (LString "Ref")) (ELit (LString "Array")))) (EApp (EVar "Some") (EListLit (EVar "KType"))) (EIf (EApp (EApp (EVar "contains") (EVar "n")) (EVar "primitiveTypes")) (EApp (EVar "Some") (EListLit)) (EIf (EApp (EApp (EVar "contains") (EVar "n")) (EVar "tupleCtorTyNames")) (EApp (EApp (EVar "map") (ELam ((PVar "k")) (EApp (EApp (EVar "map") (ELam (PWild) (EVar "KType"))) (ERangeList (ELit (LInt 1)) (EVar "k") true)))) (EApp (EVar "tupleTagArity") (EVar "n"))) (EIf (EVar "otherwise") (EVar "None") (EApp (EVar "__fallthrough__") (ELit LUnit)))))))
+(DFunDef false "headKindsIn" ((PVar "index") (PVar "o") (PVar "n")) (EMatch (EApp (EApp (EVar "tabNameLookup") (EVar "index")) (EApp (EApp (EVar "tyTabKey") (EVar "o")) (EVar "n"))) (arm (PCon "Some" (PVar "kinds")) () (EApp (EVar "Some") (EVar "kinds"))) (arm (PCon "None") () (EApp (EApp (EVar "builtinParamKinds") (EVar "o")) (EVar "n")))))
+(DTypeSig true "builtinParamKinds" (TyFun (TyCon "TyConOrigin") (TyFun (TyCon "String") (TyApp (TyCon "Option") (TyApp (TyCon "List") (TyCon "Kind"))))))
+(DFunDef false "builtinParamKinds" ((PCon "OriginBuiltin") (PVar "n")) (EIf (EApp (EApp (EVar "contains") (EVar "n")) (EListLit (ELit (LString "List")) (ELit (LString "Ref")) (ELit (LString "Array")))) (EApp (EVar "Some") (EListLit (EVar "KType"))) (EIf (EVar "otherwise") (EMatch (EApp (EVar "tupleTagArity") (EVar "n")) (arm (PCon "Some" (PVar "k")) () (EApp (EVar "Some") (EApp (EApp (EVar "map") (ELam (PWild) (EVar "KType"))) (ERangeList (ELit (LInt 1)) (EVar "k") true)))) (arm (PCon "None") () (EApp (EVar "Some") (EListLit)))) (EApp (EVar "__fallthrough__") (ELit LUnit)))))
+(DFunDef false "builtinParamKinds" (PWild PWild) (EVar "None"))
 (DTypeSig true "tabNameIndex" (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "TabKey") (TyVar "v"))) (TyApp (TyCon "OrdMap") (TyApp (TyCon "List") (TyTuple (TyCon "TabKey") (TyVar "v"))))))
 (DFunDef false "tabNameIndex" ((PVar "rows")) (EApp (EApp (EApp (EVar "fold") (ELam ((PVar "index") (PVar "row")) (EBlock (DoLet false false (PVar "name") (EApp (EVar "tabKeyName") (EApp (EVar "fst") (EVar "row")))) (DoExpr (EApp (EApp (EApp (EVar "omInsert") (EVar "name")) (EBinOp "::" (EVar "row") (EApp (EApp (EVar "optionOr") (EListLit)) (EApp (EApp (EVar "omLookup") (EVar "name")) (EVar "index"))))) (EVar "index")))))) (EVar "omEmpty")) (EApp (EVar "reverseL") (EVar "rows"))))
 (DTypeSig true "tabNameLookup" (TyFun (TyApp (TyCon "OrdMap") (TyApp (TyCon "List") (TyTuple (TyCon "TabKey") (TyVar "v")))) (TyFun (TyCon "TabKey") (TyApp (TyCon "Option") (TyVar "v")))))
@@ -5195,7 +5196,7 @@ methodRowSameNameView rows =
 # MARK
 (DUse false (UseGroup ("types" "tc_mono") ((mem "argMentions" false) (mem "entryHeadMatches" false) (mem "headTyconTy" false) (mem "implDeclsWithReqs" false) (mem "nthTy" false) (mem "schemeBodyOf" false) (mem "schemeIds" false) (mem "tyAppSpine" false) (mem "tyVarNames" false))))
 (DUse false (UseGroup ("types" "tc_state") ((mem "builtinCtors" false) (mem "emptyClassEnv" false) (mem "emptyDataEnv" false) (mem "emptyDeclEnvSeedAcc" false) (mem "emptyImplEnv" false) (mem "emptyImplUniverse" false) (mem "emptyMethodEnv" false))))
-(DUse false (UseGroup ("frontend" "ast") ((mem "Constraint" true) (mem "DataVis" true) (mem "Decl" true) (mem "Expr" true) (mem "FunClause" true) (mem "Ident" true) (mem "IfaceMethod" true) (mem "ImplMethod" true) (mem "KindAnn" true) (mem "LetBind" true) (mem "Loc" true) (mem "Ns" true) (mem "Pat" true) (mem "Require" true) (mem "Super" true) (mem "TabKey" true) (mem "Ty" true) (mem "TyConOrigin" true) (mem "UseMember" true) (mem "UsePath" true) (mem "Variant" true) (mem "identOriginOf" false) (mem "lookupTab" false) (mem "mkIdent" false) (mem "orElseLoc" false) (mem "sameTyConHead" false) (mem "tabKeyEq" false) (mem "tabKeyName" false) (mem "tabKeyOf" false) (mem "tyConBuiltin" false) (mem "useMemberLocal" false) (mem "useMemberOrigin" false))))
+(DUse false (UseGroup ("frontend" "ast") ((mem "Constraint" true) (mem "DataVis" true) (mem "Decl" true) (mem "Expr" true) (mem "FunClause" true) (mem "Ident" true) (mem "IfaceMethod" true) (mem "ImplMethod" true) (mem "KindAnn" true) (mem "LetBind" true) (mem "Loc" true) (mem "Ns" true) (mem "Pat" true) (mem "Require" true) (mem "Super" true) (mem "TabKey" true) (mem "Ty" true) (mem "TyConOrigin" true) (mem "UseMember" true) (mem "UsePath" true) (mem "Variant" true) (mem "identOriginOf" false) (mem "lookupTab" false) (mem "mkIdent" false) (mem "orElseLoc" false) (mem "sameTyConHead" false) (mem "tabKeyEq" false) (mem "tabKeyName" false) (mem "tabKeyOf" false) (mem "tyConBuiltin" false) (mem "variantFieldTys" false) (mem "useMemberLocal" false) (mem "useMemberOrigin" false))))
 (DUse false (UseGroup ("types" "repr") ((mem "IfaceRef" true) (mem "Mono" true) (mem "Scheme" true) (mem "tupleTagArity" false))))
 (DUse false (UseGroup ("types" "effect_param_decode") ((mem "dtopIn" false))))
 (DUse false (UseGroup ("types" "effect_domain") ((mem "Param" true))))
@@ -5208,7 +5209,6 @@ methodRowSameNameView rows =
 (DUse false (UseGroup ("support" "util") ((mem "allList" false) (mem "anyList" false) (mem "contains" false) (mem "dedup" false) (mem "filterList" false) (mem "isEmptyL" false) (mem "listLen" false) (mem "lookupAssoc" false) (mem "reverseL" false) (mem "selfBinding" false) (mem "zipL" false))))
 (DUse false (UseGroup ("types" "registry") ((mem "HeadKey" true) (mem "headKeyTag" false) (mem "mregAppendK" false) (mem "mregLookupK" false) (mem "regInsertK" false) (mem "Registry" false) (mem "RegKey" false) (mem "regKeyNTab" false) (mem "regKeyOfTab" false) (mem "regKeyRender" false) (mem "regLookupK" false))))
 (DUse false (UseGroup ("types" "route_key") ((mem "implRouteKeyWord" false))))
-(DUse false (UseGroup ("frontend" "resolve") ((mem "primitiveTypes" false) (mem "tupleCtorTyNames" false) (mem "variantFieldTys" false))))
 (DUse false (UseGroup ("types" "solver_contract") ((mem "GoalOrigin" true))))
 (DTypeSig true "aliasUniverseAt" (TyFun (TyCon "Int") (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "TabKey") (TyCon "AliasDecl"))) (TyApp (TyCon "List") (TyTuple (TyCon "TabKey") (TyTuple (TyApp (TyCon "List") (TyCon "String")) (TyCon "Ty")))))))
 (DFunDef false "aliasUniverseAt" (PWild (PList)) (EListLit))
@@ -5657,9 +5657,10 @@ methodRowSameNameView rows =
 (DFunDef false "declaredPairs" ((PCons PWild (PVar "ps")) (PCons (PCon "None") (PVar "ds"))) (EApp (EApp (EVar "declaredPairs") (EVar "ps")) (EVar "ds")))
 (DFunDef false "declaredPairs" (PWild PWild) (EListLit))
 (DTypeSig true "headKindsIn" (TyFun (TyApp (TyCon "OrdMap") (TyApp (TyCon "List") (TyTuple (TyCon "TabKey") (TyApp (TyCon "List") (TyCon "Kind"))))) (TyFun (TyCon "TyConOrigin") (TyFun (TyCon "String") (TyApp (TyCon "Option") (TyApp (TyCon "List") (TyCon "Kind")))))))
-(DFunDef false "headKindsIn" ((PVar "index") (PVar "o") (PVar "n")) (EMatch (EApp (EApp (EVar "tabNameLookup") (EMethodRef "index")) (EApp (EApp (EVar "tyTabKey") (EVar "o")) (EVar "n"))) (arm (PCon "Some" (PVar "kinds")) () (EApp (EVar "Some") (EVar "kinds"))) (arm (PCon "None") () (EApp (EVar "builtinParamKinds") (EVar "n")))))
-(DTypeSig true "builtinParamKinds" (TyFun (TyCon "String") (TyApp (TyCon "Option") (TyApp (TyCon "List") (TyCon "Kind")))))
-(DFunDef false "builtinParamKinds" ((PVar "n")) (EIf (EApp (EApp (EVar "contains") (EVar "n")) (EListLit (ELit (LString "List")) (ELit (LString "Ref")) (ELit (LString "Array")))) (EApp (EVar "Some") (EListLit (EVar "KType"))) (EIf (EApp (EApp (EVar "contains") (EVar "n")) (EVar "primitiveTypes")) (EApp (EVar "Some") (EListLit)) (EIf (EApp (EApp (EVar "contains") (EVar "n")) (EVar "tupleCtorTyNames")) (EApp (EApp (EMethodRef "map") (ELam ((PVar "k")) (EApp (EApp (EMethodRef "map") (ELam (PWild) (EVar "KType"))) (ERangeList (ELit (LInt 1)) (EVar "k") true)))) (EApp (EVar "tupleTagArity") (EVar "n"))) (EIf (EVar "otherwise") (EVar "None") (EApp (EVar "__fallthrough__") (ELit LUnit)))))))
+(DFunDef false "headKindsIn" ((PVar "index") (PVar "o") (PVar "n")) (EMatch (EApp (EApp (EVar "tabNameLookup") (EMethodRef "index")) (EApp (EApp (EVar "tyTabKey") (EVar "o")) (EVar "n"))) (arm (PCon "Some" (PVar "kinds")) () (EApp (EVar "Some") (EVar "kinds"))) (arm (PCon "None") () (EApp (EApp (EVar "builtinParamKinds") (EVar "o")) (EVar "n")))))
+(DTypeSig true "builtinParamKinds" (TyFun (TyCon "TyConOrigin") (TyFun (TyCon "String") (TyApp (TyCon "Option") (TyApp (TyCon "List") (TyCon "Kind"))))))
+(DFunDef false "builtinParamKinds" ((PCon "OriginBuiltin") (PVar "n")) (EIf (EApp (EApp (EVar "contains") (EVar "n")) (EListLit (ELit (LString "List")) (ELit (LString "Ref")) (ELit (LString "Array")))) (EApp (EVar "Some") (EListLit (EVar "KType"))) (EIf (EVar "otherwise") (EMatch (EApp (EVar "tupleTagArity") (EVar "n")) (arm (PCon "Some" (PVar "k")) () (EApp (EVar "Some") (EApp (EApp (EMethodRef "map") (ELam (PWild) (EVar "KType"))) (ERangeList (ELit (LInt 1)) (EVar "k") true)))) (arm (PCon "None") () (EApp (EVar "Some") (EListLit)))) (EApp (EVar "__fallthrough__") (ELit LUnit)))))
+(DFunDef false "builtinParamKinds" (PWild PWild) (EVar "None"))
 (DTypeSig true "tabNameIndex" (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "TabKey") (TyVar "v"))) (TyApp (TyCon "OrdMap") (TyApp (TyCon "List") (TyTuple (TyCon "TabKey") (TyVar "v"))))))
 (DFunDef false "tabNameIndex" ((PVar "rows")) (EApp (EApp (EApp (EMethodRef "fold") (ELam ((PVar "index") (PVar "row")) (EBlock (DoLet false false (PVar "name") (EApp (EVar "tabKeyName") (EApp (EVar "fst") (EVar "row")))) (DoExpr (EApp (EApp (EApp (EVar "omInsert") (EVar "name")) (EBinOp "::" (EVar "row") (EApp (EApp (EVar "optionOr") (EListLit)) (EApp (EApp (EVar "omLookup") (EVar "name")) (EMethodRef "index"))))) (EMethodRef "index")))))) (EVar "omEmpty")) (EApp (EVar "reverseL") (EVar "rows"))))
 (DTypeSig true "tabNameLookup" (TyFun (TyApp (TyCon "OrdMap") (TyApp (TyCon "List") (TyTuple (TyCon "TabKey") (TyVar "v")))) (TyFun (TyCon "TabKey") (TyApp (TyCon "Option") (TyVar "v")))))

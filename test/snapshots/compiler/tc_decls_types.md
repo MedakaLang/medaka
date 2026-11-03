@@ -1,5 +1,5 @@
 # META
-source_lines=2740
+source_lines=2727
 stages=DESUGAR,MARK
 # SOURCE
 -- tc_decls_types: the written-type layer of declaration analysis: AST types to `Mono`
@@ -90,9 +90,7 @@ import types.tc_env.{
   kindOfParams,
   kindParams,
   kindTypeOnly,
-  headKindsIn,
-  tabNameIndex,
-  tabNameLookup,
+  builtinParamKinds,
   varKindsOf,
   anyKRow,
   ceLookupAt,
@@ -148,7 +146,6 @@ import frontend.ast.{
   Decl(..),
   EffAtomTy(..),
   EffParamTy(..),
-  Expr(..),
   ExternDecl(..),
   Field(..),
   IfaceMethod(..),
@@ -205,9 +202,7 @@ import types.effect_param_decode.{
   writtenParam,
 }
 import types.registry.{regKeyOfTab}
-import types.expr_loc.{exprStartLoc}
-import frontend.ast_walk.{DeclBody(..), childExprs, declBodies}
-import support.ordmap.{OrdMap}
+import support.ordmap.{omHasKey, OrdMap}
 export import types.tc_env.{kindsEq}
 
 -- The effect-label domain registry maps a label's identity key (`labelKey`) to the
@@ -511,8 +506,9 @@ zipParamKinds _ _ = []
 -- (d) `requires`-chain agreement (§6.5), for a superinterface declared in the
 --     SAME module: the parameter's resolved kinds must equal the super's.
 -- (e) every written type the declaration holds (a signature, a field, an alias
---     right-hand side, a method, an annotation in a body) agrees with the kinds
---     of what it applies (`reportWrittenKinds`), [sc] the module's.
+--     right-hand side, a method, an extern) agrees with the kinds of what it
+--     applies (`reportWrittenKinds`), [sc] the module's.  An annotation in a
+--     body is judged where it converts (`astTypeFreshTbl`).
 export
 checkDeclaredKinds : ModuleCtx -> KindScope -> List Decl -> Unit
 checkDeclaredKinds mctx sc prog = checkDeclaredKindsGo mctx sc prog prog
@@ -552,7 +548,7 @@ checkDeclaredKindsDecl mctx sc _ (DTypeAlias { tyAliasName = n, tyAliasParams = 
   checkAliasPatternSlots mctx (zipParamKinds ps ks) rhs
   checkHeadKinds mctx n ps ks [rhs]
   reportWrittenKinds mctx sc (headParamKinds sc o n ps) nloc [(Some KType, rhs)]
-checkDeclaredKindsDecl mctx sc prog (d@(DInterface { name, typarams, typaramKinds, supers, methods, ifaceOrigin = o, ... })) =
+checkDeclaredKindsDecl mctx sc prog (DInterface { name, typarams, typaramKinds, supers, methods, ifaceOrigin = o, ... }) =
   checkIfaceHeadKinds mctx name typarams (padAnns typarams typaramKinds) methods
   let declared = zipL typarams (optionOr [] (sc.ksIfaces o name))
   checkSuperKinds mctx sc prog name declared methods supers
@@ -560,12 +556,11 @@ checkDeclaredKindsDecl mctx sc prog (d@(DInterface { name, typarams, typaramKind
     ((IfaceMethod _ mty _ mloc) =>
       reportWrittenKinds mctx sc declared mloc [(Some KType, mty)])
     methods
-  reportBodyKinds mctx sc d
 checkDeclaredKindsDecl mctx sc _ (DTypeSig _ _ ty loc) =
   reportWrittenKinds mctx sc [] (Some loc) [(Some KType, ty)]
 checkDeclaredKindsDecl mctx sc _ (DExtern (ExternDecl { edTy = ty, edLoc = loc })) =
   reportWrittenKinds mctx sc [] (Some loc) [(Some KType, ty)]
-checkDeclaredKindsDecl mctx sc _ d = reportBodyKinds mctx sc d
+checkDeclaredKindsDecl _ _ _ _ = ()
 
 -- An alias parameter of an ordinary `Authority L` kind admits an exact
 -- element, which an `Authority L*` slot of the right-hand side refuses, so
@@ -2299,7 +2294,8 @@ spliceRowTails sub (n :: rest) =
 
 -- The kinds one module's written types are judged against: a head's and an
 -- interface's parameter kinds (`None` for one not known here), and whether a
--- head is an alias.  Built once per module, so a lookup probes a name index.
+-- head is an alias.  A head's kinds are looked up only for a name the head
+-- table holds (`dataParamNameIndexRef`), so a builtin costs no walk of it.
 public export data KindScope = KindScope {
   ksHeads : TyConOrigin -> String -> Option (List Kind),
   ksIfaces : TyConOrigin -> String -> Option (List Kind),
@@ -2318,20 +2314,29 @@ export
 kindScopeOf : ModuleCtx -> KindScope
 kindScopeOf mctx =
   let envs = mctx.mcGraph.declEnvsRef.value
+  let heads = mctx.mcCells.dataParamKindsRef.value
+  let names = mctx.mcCells.dataParamNameIndexRef.value
+  let aliases = mctx.mcCells.aliasTableRef.value
   KindScope {
-    ksHeads = headKindsIn (tabNameIndex mctx.mcCells.dataParamKindsRef.value),
+    ksHeads = o n => headKindsAmong names heads o n,
     ksIfaces =
       ceParamKindsAt
         (declEnvsOrdOf mctx.mcCells.currentModuleRef.value envs)
         envs.deIfaces,
-    ksAlias = aliasAt (tabNameIndex mctx.mcCells.aliasTableRef.value),
+    ksAlias = o n => isSome (lookupTab (tyTabKey o n) aliases),
   }
 
-aliasAt : OrdMap (List (TabKey, (List String, Ty))) ->
+headKindsAmong : OrdMap Unit ->
+  List (TabKey, List Kind) ->
   TyConOrigin ->
   String ->
-  Bool
-aliasAt index o n = isSome (tabNameLookup index (tyTabKey o n))
+  Option (List Kind)
+headKindsAmong names heads o n =
+  if omHasKey n names then match lookupTab (tyTabKey o n) heads
+    Some kinds => Some kinds
+    None => builtinParamKinds o n
+  else
+    builtinParamKinds o n
 
 -- Reports the first kind error of each of [items], a written type with the
 -- kind its position takes.  [declared] are the kinds of the variables a
@@ -2717,24 +2722,6 @@ rejectedAlias mctx kj o n params args =
             rhs)
       None => False)
 
--- Every annotation `(e : T)` an expression body writes, with the
--- expression it annotates.  A head pin (`:~`) is desugar's, not written.
-annotationsIn : Expr -> List (Expr, Ty)
-annotationsIn (EAnnot e ty) = (e, ty) :: annotationsIn e
-annotationsIn e = flatMap annotationsIn (childExprs e)
-
--- The annotations of every body [d] holds, each judged on its own.
-reportBodyKinds : ModuleCtx -> KindScope -> Decl -> Unit
-reportBodyKinds mctx sc d =
-  each
-    ((DeclBody _ body) =>
-      each
-        (a => reportWrittenKinds mctx sc [] (Some (exprStartLoc (fst a))) [
-          (Some KType, snd a),
-        ])
-        (annotationsIn body))
-    (declBodies d)
-
 -- The kinds a head of [o]/[n] gives its parameters [ps], as registered.
 headParamKinds : KindScope ->
   TyConOrigin ->
@@ -2749,22 +2736,20 @@ headParamKinds sc o n ps = zipL ps (optionOr [] (sc.ksHeads o n))
 (DUse false (UseGroup ("types" "tc_diag_text") ((mem "aliasArityMsg" false) (mem "authorityAsTypeMsg" false) (mem "authorityAtomicLabelMsg" false) (mem "authorityParamAsRowMsg" false) (mem "authorityParamAsTypeMsg" false) (mem "authorityTermAsTypeMsg" false) (mem "binderDomainMsg" false) (mem "binderDomainTypeMsg" false) (mem "binderNoDomainMsg" false) (mem "binderTypeMsg" false) (mem "effectArrowOnDataHeadMsg" false) (mem "effectParamAsTypeMsg" false) (mem "exactInPatternSlotMsg" false) (mem "ifaceParamAuthorityKindMsg" false) (mem "ifaceParamEffectKindMsg" false) (mem "ifaceSlotDeclaredTypeMsg" false) (mem "joinDomainMsg" false) (mem "nameNotAuthorityMsg" false) (mem "ordinaryInPatternSlotMsg" false) (mem "patternDomainMsg" false) (mem "phantomExportMsg" false) (mem "qualifierBinderTypeMsg" false) (mem "renderKindArrow" false) (mem "requiresKindMsg" false) (mem "rowKindMismatchMsg" false) (mem "typeAsAuthorityMsg" false) (mem "typeInRowSlotMsg" false) (mem "typeParamAsRowMsg" false) (mem "typeVarAsAuthorityMsg" false) (mem "unannotatedGradedParamMsg" false) (mem "unannotatedRowParamMsg" false) (mem "writtenKindArityMsg" false) (mem "writtenKindMismatchMsg" false))))
 (DUse false (UseGroup ("types" "tc_state") ((mem "emptySigVars" false) (mem "mctxAtIfSome" false) (mem "wAll" false))))
 (DUse false (UseGroup ("types" "publish") ((mem "TcDiag" true))))
-(DUse false (UseGroup ("types" "tc_env") ((mem "KindReads" true) (mem "ceParamKindsAt" false) (mem "kindEq" false) (mem "kindOfParams" false) (mem "kindParams" false) (mem "kindTypeOnly" false) (mem "headKindsIn" false) (mem "tabNameIndex" false) (mem "tabNameLookup" false) (mem "varKindsOf" false) (mem "anyKRow" false) (mem "ceLookupAt" false) (mem "ceRowParamKinds" false) (mem "declEnvsOrdOf" false) (mem "domainHasPatterns" false) (mem "dtopFor" false) (mem "effTailNames" false) (mem "ifaceParamKindsOf" false) (mem "ifaceTabKey" false) (mem "kindAnnSlots" false) (mem "padAnns" false) (mem "tyTabKey" false))))
+(DUse false (UseGroup ("types" "tc_env") ((mem "KindReads" true) (mem "ceParamKindsAt" false) (mem "kindEq" false) (mem "kindOfParams" false) (mem "kindParams" false) (mem "kindTypeOnly" false) (mem "builtinParamKinds" false) (mem "varKindsOf" false) (mem "anyKRow" false) (mem "ceLookupAt" false) (mem "ceRowParamKinds" false) (mem "declEnvsOrdOf" false) (mem "domainHasPatterns" false) (mem "dtopFor" false) (mem "effTailNames" false) (mem "ifaceParamKindsOf" false) (mem "ifaceTabKey" false) (mem "kindAnnSlots" false) (mem "padAnns" false) (mem "tyTabKey" false))))
 (DUse false (UseGroup ("types" "tc_diag") ((mem "pushTypeError" false) (mem "pushTypeErrorAt" false) (mem "pushTypeErrorOnce" false) (mem "pushTypeErrorOnceAt" false) (mem "pushTypeErrorOncePerSite" false))))
 (DUse false (UseGroup ("types" "tc_unify") ((mem "atomBindersIn" false) (mem "authSlotNamesIn" false) (mem "freshAuthvarRanged" false) (mem "freshTvMap" false) (mem "freshVar" false) (mem "openRow" false))))
 (DUse false (UseGroup ("types" "tc_decls_variance") ((mem "payloadAstTypes" false) (mem "variantPayload" false))))
 (DUse false (UseGroup ("types" "effect_authority") ((mem "Authority" true) (mem "Authvar" true) (mem "authJoinAll" false) (mem "authPatternClose" false) (mem "authTop" false) (mem "authvarDomain" false) (mem "authvarIsPattern" false) (mem "isPatternParam" false) (mem "linkAuthvar" false))))
 (DUse false (UseGroup ("types" "effect_rows") ((mem "Atom" true) (mem "EffLabel" true) (mem "EffRow" true) (mem "Effvar" true) (mem "atomsNorm" false) (mem "atomWith" false) (mem "effLabelName" false) (mem "labelKey" false) (mem "pureRow" false))))
-(DUse false (UseGroup ("frontend" "ast") ((mem "ConPayload" true) (mem "Constraint" true) (mem "DataVis" true) (mem "Decl" true) (mem "EffAtomTy" true) (mem "EffParamTy" true) (mem "Expr" true) (mem "ExternDecl" true) (mem "Field" true) (mem "IfaceMethod" true) (mem "KindAnn" true) (mem "Loc" true) (mem "Super" true) (mem "TabKey" true) (mem "Ty" true) (mem "TyConOrigin" true) (mem "Variant" true) (mem "authTermNames" false) (mem "authTermsSurface" false) (mem "firstTyLoc" false) (mem "firstTyLocList" false) (mem "lookupTab" false) (mem "mapTyFull" false) (mem "orElseLoc" false) (mem "patternMark" false) (mem "qualifierSource" false) (mem "tabKeyEq" false) (mem "variantName" false))))
+(DUse false (UseGroup ("frontend" "ast") ((mem "ConPayload" true) (mem "Constraint" true) (mem "DataVis" true) (mem "Decl" true) (mem "EffAtomTy" true) (mem "EffParamTy" true) (mem "ExternDecl" true) (mem "Field" true) (mem "IfaceMethod" true) (mem "KindAnn" true) (mem "Loc" true) (mem "Super" true) (mem "TabKey" true) (mem "Ty" true) (mem "TyConOrigin" true) (mem "Variant" true) (mem "authTermNames" false) (mem "authTermsSurface" false) (mem "firstTyLoc" false) (mem "firstTyLocList" false) (mem "lookupTab" false) (mem "mapTyFull" false) (mem "orElseLoc" false) (mem "patternMark" false) (mem "qualifierSource" false) (mem "tabKeyEq" false) (mem "variantName" false))))
 (DUse false (UseGroup ("types" "repr") ((mem "Mono" true) (mem "ppAuthArg" false) (mem "ppConName" false) (mem "ppTy" false))))
 (DUse false (UseGroup ("types" "effect_domain") ((mem "Param" true) (mem "canonParam" false) (mem "domainKey" false) (mem "extendParam" false) (mem "lookupAxis" false) (mem "subTopOf" false) (mem "writtenSetProblem" false))))
 (DUse false (UseGroup ("support" "util") ((mem "allList" false) (mem "anyList" false) (mem "contains" false) (mem "dedup" false) (mem "escStr" false) (mem "filterList" false) (mem "isEmptyL" false) (mem "isNonEmptyL" false) (mem "listLen" false) (mem "lookupAssoc" false) (mem "reverseL" false) (mem "zipL" false))))
 (DUse false (UseGroup ("list") ((mem "drop" false) (mem "get" false))))
 (DUse false (UseGroup ("types" "effect_param_decode") ((mem "atomicLabelParamText" false) (mem "effectParamMsg" false) (mem "effectParamProblems" false) (mem "repeatedNames" false) (mem "writtenAxis" false) (mem "writtenParam" false))))
 (DUse false (UseGroup ("types" "registry") ((mem "regKeyOfTab" false))))
-(DUse false (UseGroup ("types" "expr_loc") ((mem "exprStartLoc" false))))
-(DUse false (UseGroup ("frontend" "ast_walk") ((mem "DeclBody" true) (mem "childExprs" false) (mem "declBodies" false))))
-(DUse false (UseGroup ("support" "ordmap") ((mem "OrdMap" false))))
+(DUse false (UseGroup ("support" "ordmap") ((mem "omHasKey" false) (mem "OrdMap" false))))
 (DUse true (UseGroup ("types" "tc_env") ((mem "kindsEq" false))))
 (DTypeSig false "seedEffectDomains" (TyFun (TyCon "GraphCtx") (TyFun (TyCon "Unit") (TyCon "Unit"))))
 (DFunDef false "seedEffectDomains" ((PVar "gctx") PWild) (EBlock (DoLet false false (PVar "builtins") (EListLit (ETuple (ELit (LString "Net")) (EApp (EVar "PPrefix") (EVar "None"))) (ETuple (ELit (LString "FileRead")) (EApp (EVar "PPath") (EVar "None"))) (ETuple (ELit (LString "FileWrite")) (EApp (EVar "PPath") (EVar "None"))) (ETuple (ELit (LString "Env")) (EApp (EVar "PSet") (EVar "None"))) (ETuple (ELit (LString "Exec")) (EApp (EVar "PPrefix") (EVar "None"))) (ETuple (ELit (LString "FFI")) (EApp (EVar "PPrefix") (EVar "None"))))) (DoExpr (EApp (EApp (EVar "setRef") (EFieldAccess (EVar "gctx") "effectDomains")) (EVar "builtins")))))
@@ -2844,10 +2829,10 @@ headParamKinds sc o n ps = zipL ps (optionOr [] (sc.ksHeads o n))
 (DFunDef false "checkDeclaredKindsDecl" ((PVar "mctx") (PVar "sc") PWild (PRec "DData" ((rf "dataVis" (PVar "vis")) (rf "dataName" (PVar "n")) (rf "dataParams" (PVar "ps")) (rf "dataParamKinds" (PVar "ks")) (rf "dataCtors" (PVar "vs")) (rf "dataCtorBinders" (PVar "bs")) (rf "dataOrigin" (PVar "o")) (rf "dataNameLoc" (PVar "nloc"))) false)) (EBlock (DoLet false false (PVar "fieldTys") (EApp (EApp (EVar "flatMap") (ELam ((PVar "v")) (EApp (EVar "payloadAstTypes") (EApp (EVar "variantPayload") (EVar "v"))))) (EVar "vs"))) (DoExpr (EApp (EApp (EVar "checkAuthorityKindLabels") (EVar "mctx")) (EBinOp "++" (EVar "ks") (EApp (EApp (EVar "flatMap") (ELam ((PVar "b")) (EApp (EApp (EVar "map") (ELam ((PVar "x")) (EApp (EVar "Some") (EApp (EVar "snd") (EVar "x"))))) (EVar "b")))) (EVar "bs"))))) (DoExpr (EApp (EApp (EApp (EApp (EApp (EVar "checkHeadKinds") (EVar "mctx")) (EVar "n")) (EVar "ps")) (EVar "ks")) (EVar "fieldTys"))) (DoExpr (EApp (EApp (EApp (EApp (EApp (EVar "checkPhantomAuthorityExport") (EVar "mctx")) (EVar "vis")) (EVar "n")) (EApp (EApp (EVar "authorityParamNames") (EVar "ps")) (EVar "ks"))) (EVar "vs"))) (DoExpr (EApp (EApp (EApp (EApp (EApp (EVar "reportWrittenKinds") (EVar "mctx")) (EVar "sc")) (EApp (EApp (EApp (EApp (EVar "headParamKinds") (EVar "sc")) (EVar "o")) (EVar "n")) (EVar "ps"))) (EVar "nloc")) (EApp (EApp (EVar "map") (ELam ((PVar "t")) (ETuple (EApp (EVar "Some") (EVar "KType")) (EVar "t")))) (EVar "fieldTys"))))))
 (DFunDef false "checkDeclaredKindsDecl" ((PVar "mctx") (PVar "sc") PWild (PRec "DNewtype" ((rf "newtypeName" (PVar "n")) (rf "newtypeParams" (PVar "ps")) (rf "newtypeParamKinds" (PVar "ks")) (rf "newtypeFieldTy" (PVar "fty")) (rf "newtypeCtorBinders" (PVar "bs")) (rf "newtypeOrigin" (PVar "o")) (rf "newtypeNameLoc" (PVar "nloc"))) false)) (EBlock (DoExpr (EApp (EApp (EVar "checkAuthorityKindLabels") (EVar "mctx")) (EBinOp "++" (EVar "ks") (EApp (EApp (EVar "map") (ELam ((PVar "b")) (EApp (EVar "Some") (EApp (EVar "snd") (EVar "b"))))) (EVar "bs"))))) (DoExpr (EApp (EApp (EApp (EApp (EApp (EVar "checkHeadKinds") (EVar "mctx")) (EVar "n")) (EVar "ps")) (EVar "ks")) (EListLit (EVar "fty")))) (DoExpr (EApp (EApp (EApp (EApp (EApp (EVar "reportWrittenKinds") (EVar "mctx")) (EVar "sc")) (EApp (EApp (EApp (EApp (EVar "headParamKinds") (EVar "sc")) (EVar "o")) (EVar "n")) (EVar "ps"))) (EVar "nloc")) (EListLit (ETuple (EApp (EVar "Some") (EVar "KType")) (EVar "fty")))))))
 (DFunDef false "checkDeclaredKindsDecl" ((PVar "mctx") (PVar "sc") PWild (PRec "DTypeAlias" ((rf "tyAliasName" (PVar "n")) (rf "tyAliasParams" (PVar "ps")) (rf "tyAliasParamKinds" (PVar "ks")) (rf "tyAliasRhs" (PVar "rhs")) (rf "tyAliasOrigin" (PVar "o")) (rf "tyAliasNameLoc" (PVar "nloc"))) false)) (EBlock (DoExpr (EApp (EApp (EVar "checkAuthorityKindLabels") (EVar "mctx")) (EVar "ks"))) (DoExpr (EApp (EApp (EApp (EVar "checkAliasPatternSlots") (EVar "mctx")) (EApp (EApp (EVar "zipParamKinds") (EVar "ps")) (EVar "ks"))) (EVar "rhs"))) (DoExpr (EApp (EApp (EApp (EApp (EApp (EVar "checkHeadKinds") (EVar "mctx")) (EVar "n")) (EVar "ps")) (EVar "ks")) (EListLit (EVar "rhs")))) (DoExpr (EApp (EApp (EApp (EApp (EApp (EVar "reportWrittenKinds") (EVar "mctx")) (EVar "sc")) (EApp (EApp (EApp (EApp (EVar "headParamKinds") (EVar "sc")) (EVar "o")) (EVar "n")) (EVar "ps"))) (EVar "nloc")) (EListLit (ETuple (EApp (EVar "Some") (EVar "KType")) (EVar "rhs")))))))
-(DFunDef false "checkDeclaredKindsDecl" ((PVar "mctx") (PVar "sc") (PVar "prog") (PAs "d" (PRec "DInterface" ((rf "name" None) (rf "typarams" None) (rf "typaramKinds" None) (rf "supers" None) (rf "methods" None) (rf "ifaceOrigin" (PVar "o"))) true))) (EBlock (DoExpr (EApp (EApp (EApp (EApp (EApp (EVar "checkIfaceHeadKinds") (EVar "mctx")) (EVar "name")) (EVar "typarams")) (EApp (EApp (EVar "padAnns") (EVar "typarams")) (EVar "typaramKinds"))) (EVar "methods"))) (DoLet false false (PVar "declared") (EApp (EApp (EVar "zipL") (EVar "typarams")) (EApp (EApp (EVar "optionOr") (EListLit)) (EApp (EApp (EFieldAccess (EVar "sc") "ksIfaces") (EVar "o")) (EVar "name"))))) (DoExpr (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EVar "checkSuperKinds") (EVar "mctx")) (EVar "sc")) (EVar "prog")) (EVar "name")) (EVar "declared")) (EVar "methods")) (EVar "supers"))) (DoExpr (EApp (EApp (EVar "each") (ELam ((PCon "IfaceMethod" PWild (PVar "mty") PWild (PVar "mloc"))) (EApp (EApp (EApp (EApp (EApp (EVar "reportWrittenKinds") (EVar "mctx")) (EVar "sc")) (EVar "declared")) (EVar "mloc")) (EListLit (ETuple (EApp (EVar "Some") (EVar "KType")) (EVar "mty")))))) (EVar "methods"))) (DoExpr (EApp (EApp (EApp (EVar "reportBodyKinds") (EVar "mctx")) (EVar "sc")) (EVar "d")))))
+(DFunDef false "checkDeclaredKindsDecl" ((PVar "mctx") (PVar "sc") (PVar "prog") (PRec "DInterface" ((rf "name" None) (rf "typarams" None) (rf "typaramKinds" None) (rf "supers" None) (rf "methods" None) (rf "ifaceOrigin" (PVar "o"))) true)) (EBlock (DoExpr (EApp (EApp (EApp (EApp (EApp (EVar "checkIfaceHeadKinds") (EVar "mctx")) (EVar "name")) (EVar "typarams")) (EApp (EApp (EVar "padAnns") (EVar "typarams")) (EVar "typaramKinds"))) (EVar "methods"))) (DoLet false false (PVar "declared") (EApp (EApp (EVar "zipL") (EVar "typarams")) (EApp (EApp (EVar "optionOr") (EListLit)) (EApp (EApp (EFieldAccess (EVar "sc") "ksIfaces") (EVar "o")) (EVar "name"))))) (DoExpr (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EVar "checkSuperKinds") (EVar "mctx")) (EVar "sc")) (EVar "prog")) (EVar "name")) (EVar "declared")) (EVar "methods")) (EVar "supers"))) (DoExpr (EApp (EApp (EVar "each") (ELam ((PCon "IfaceMethod" PWild (PVar "mty") PWild (PVar "mloc"))) (EApp (EApp (EApp (EApp (EApp (EVar "reportWrittenKinds") (EVar "mctx")) (EVar "sc")) (EVar "declared")) (EVar "mloc")) (EListLit (ETuple (EApp (EVar "Some") (EVar "KType")) (EVar "mty")))))) (EVar "methods")))))
 (DFunDef false "checkDeclaredKindsDecl" ((PVar "mctx") (PVar "sc") PWild (PCon "DTypeSig" PWild PWild (PVar "ty") (PVar "loc"))) (EApp (EApp (EApp (EApp (EApp (EVar "reportWrittenKinds") (EVar "mctx")) (EVar "sc")) (EListLit)) (EApp (EVar "Some") (EVar "loc"))) (EListLit (ETuple (EApp (EVar "Some") (EVar "KType")) (EVar "ty")))))
 (DFunDef false "checkDeclaredKindsDecl" ((PVar "mctx") (PVar "sc") PWild (PCon "DExtern" (PRec "ExternDecl" ((rf "edTy" (PVar "ty")) (rf "edLoc" (PVar "loc"))) false))) (EApp (EApp (EApp (EApp (EApp (EVar "reportWrittenKinds") (EVar "mctx")) (EVar "sc")) (EListLit)) (EApp (EVar "Some") (EVar "loc"))) (EListLit (ETuple (EApp (EVar "Some") (EVar "KType")) (EVar "ty")))))
-(DFunDef false "checkDeclaredKindsDecl" ((PVar "mctx") (PVar "sc") PWild (PVar "d")) (EApp (EApp (EApp (EVar "reportBodyKinds") (EVar "mctx")) (EVar "sc")) (EVar "d")))
+(DFunDef false "checkDeclaredKindsDecl" (PWild PWild PWild PWild) (ELit LUnit))
 (DTypeSig false "checkAliasPatternSlots" (TyFun (TyCon "ModuleCtx") (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "Option") (TyCon "KindAnn")))) (TyFun (TyCon "Ty") (TyCon "Unit")))))
 (DFunDef false "checkAliasPatternSlots" ((PVar "mctx") (PVar "params") (PVar "rhs")) (EBlock (DoLet false false (PVar "slots") (EApp (EApp (EVar "patternSlotNamesIn") (EVar "mctx")) (EVar "rhs"))) (DoExpr (EApp (EApp (EApp (EVar "fold") (ELam (PWild (PVar "pk")) (EMatch (EVar "pk") (arm (PTuple (PVar "p") (PCon "Some" (PCon "KindAuthority" (PVar "l") PWild (PCon "False") (PVar "loc")))) () (EIf (EApp (EApp (EVar "contains") (EVar "p")) (EVar "slots")) (EApp (EApp (EApp (EApp (EVar "pushTypeErrorOncePerSite") (EVar "mctx")) (EVar "TAuthorityPattern")) (EVar "loc")) (EApp (EApp (EVar "ordinaryInPatternSlotMsg") (EVar "p")) (EVar "l"))) (ELit LUnit))) (arm PWild () (ELit LUnit))))) (ELit LUnit)) (EVar "params")))))
 (DTypeSig false "checkAuthorityKindLabels" (TyFun (TyCon "ModuleCtx") (TyFun (TyApp (TyCon "List") (TyApp (TyCon "Option") (TyCon "KindAnn"))) (TyCon "Unit"))))
@@ -3227,9 +3212,9 @@ headParamKinds sc o n ps = zipL ps (optionOr [] (sc.ksHeads o n))
 (DTypeSig false "kindReadsOf" (TyFun (TyCon "KindScope") (TyCon "KindReads")))
 (DFunDef false "kindReadsOf" ((PVar "sc")) (ERecordCreate "KindReads" ((fa "krSlots" (EFieldAccess (EVar "sc") "ksHeads")) (fa "krHeads" (EFieldAccess (EVar "sc") "ksHeads")) (fa "krIfaces" (EFieldAccess (EVar "sc") "ksIfaces")))))
 (DTypeSig true "kindScopeOf" (TyFun (TyCon "ModuleCtx") (TyCon "KindScope")))
-(DFunDef false "kindScopeOf" ((PVar "mctx")) (EBlock (DoLet false false (PVar "envs") (EFieldAccess (EFieldAccess (EFieldAccess (EVar "mctx") "mcGraph") "declEnvsRef") "value")) (DoExpr (ERecordCreate "KindScope" ((fa "ksHeads" (EApp (EVar "headKindsIn") (EApp (EVar "tabNameIndex") (EFieldAccess (EFieldAccess (EFieldAccess (EVar "mctx") "mcCells") "dataParamKindsRef") "value")))) (fa "ksIfaces" (EApp (EApp (EVar "ceParamKindsAt") (EApp (EApp (EVar "declEnvsOrdOf") (EFieldAccess (EFieldAccess (EFieldAccess (EVar "mctx") "mcCells") "currentModuleRef") "value")) (EVar "envs"))) (EFieldAccess (EVar "envs") "deIfaces"))) (fa "ksAlias" (EApp (EVar "aliasAt") (EApp (EVar "tabNameIndex") (EFieldAccess (EFieldAccess (EFieldAccess (EVar "mctx") "mcCells") "aliasTableRef") "value")))))))))
-(DTypeSig false "aliasAt" (TyFun (TyApp (TyCon "OrdMap") (TyApp (TyCon "List") (TyTuple (TyCon "TabKey") (TyTuple (TyApp (TyCon "List") (TyCon "String")) (TyCon "Ty"))))) (TyFun (TyCon "TyConOrigin") (TyFun (TyCon "String") (TyCon "Bool")))))
-(DFunDef false "aliasAt" ((PVar "index") (PVar "o") (PVar "n")) (EApp (EVar "isSome") (EApp (EApp (EVar "tabNameLookup") (EVar "index")) (EApp (EApp (EVar "tyTabKey") (EVar "o")) (EVar "n")))))
+(DFunDef false "kindScopeOf" ((PVar "mctx")) (EBlock (DoLet false false (PVar "envs") (EFieldAccess (EFieldAccess (EFieldAccess (EVar "mctx") "mcGraph") "declEnvsRef") "value")) (DoLet false false (PVar "heads") (EFieldAccess (EFieldAccess (EFieldAccess (EVar "mctx") "mcCells") "dataParamKindsRef") "value")) (DoLet false false (PVar "names") (EFieldAccess (EFieldAccess (EFieldAccess (EVar "mctx") "mcCells") "dataParamNameIndexRef") "value")) (DoLet false false (PVar "aliases") (EFieldAccess (EFieldAccess (EFieldAccess (EVar "mctx") "mcCells") "aliasTableRef") "value")) (DoExpr (ERecordCreate "KindScope" ((fa "ksHeads" (ELam ((PVar "o") (PVar "n")) (EApp (EApp (EApp (EApp (EVar "headKindsAmong") (EVar "names")) (EVar "heads")) (EVar "o")) (EVar "n")))) (fa "ksIfaces" (EApp (EApp (EVar "ceParamKindsAt") (EApp (EApp (EVar "declEnvsOrdOf") (EFieldAccess (EFieldAccess (EFieldAccess (EVar "mctx") "mcCells") "currentModuleRef") "value")) (EVar "envs"))) (EFieldAccess (EVar "envs") "deIfaces"))) (fa "ksAlias" (ELam ((PVar "o") (PVar "n")) (EApp (EVar "isSome") (EApp (EApp (EVar "lookupTab") (EApp (EApp (EVar "tyTabKey") (EVar "o")) (EVar "n"))) (EVar "aliases"))))))))))
+(DTypeSig false "headKindsAmong" (TyFun (TyApp (TyCon "OrdMap") (TyCon "Unit")) (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "TabKey") (TyApp (TyCon "List") (TyCon "Kind")))) (TyFun (TyCon "TyConOrigin") (TyFun (TyCon "String") (TyApp (TyCon "Option") (TyApp (TyCon "List") (TyCon "Kind"))))))))
+(DFunDef false "headKindsAmong" ((PVar "names") (PVar "heads") (PVar "o") (PVar "n")) (EIf (EApp (EApp (EVar "omHasKey") (EVar "n")) (EVar "names")) (EMatch (EApp (EApp (EVar "lookupTab") (EApp (EApp (EVar "tyTabKey") (EVar "o")) (EVar "n"))) (EVar "heads")) (arm (PCon "Some" (PVar "kinds")) () (EApp (EVar "Some") (EVar "kinds"))) (arm (PCon "None") () (EApp (EApp (EVar "builtinParamKinds") (EVar "o")) (EVar "n")))) (EApp (EApp (EVar "builtinParamKinds") (EVar "o")) (EVar "n"))))
 (DTypeSig true "reportWrittenKinds" (TyFun (TyCon "ModuleCtx") (TyFun (TyCon "KindScope") (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "Kind"))) (TyFun (TyApp (TyCon "Option") (TyCon "Loc")) (TyFun (TyApp (TyCon "List") (TyTuple (TyApp (TyCon "Option") (TyCon "Kind")) (TyCon "Ty"))) (TyCon "Unit")))))))
 (DFunDef false "reportWrittenKinds" ((PVar "mctx") (PVar "sc") (PVar "declared") (PVar "fallback") (PVar "items")) (EBlock (DoLet false false (PVar "kj") (EApp (EApp (EApp (EVar "kindJudgeOf") (EVar "sc")) (EVar "declared")) (EVar "items"))) (DoExpr (EApp (EApp (EVar "each") (ELam ((PVar "it")) (EMatch (EApp (EApp (EApp (EVar "kindErrorIn") (EVar "kj")) (EApp (EVar "fst") (EVar "it"))) (EApp (EVar "snd") (EVar "it"))) (arm (PCon "Some" (PCon "KindError" (PVar "loc") (PVar "msg"))) () (EApp (EApp (EApp (EApp (EVar "pushTypeErrorOncePerSite") (EVar "mctx")) (EVar "TWrittenKindMismatch")) (EApp (EApp (EVar "orElseLoc") (EVar "loc")) (EApp (EApp (EVar "orElseLoc") (EApp (EVar "firstTyLoc") (EApp (EVar "snd") (EVar "it")))) (EVar "fallback")))) (EVar "msg"))) (arm (PCon "None") () (ELit LUnit))))) (EVar "items")))))
 (DData Private "KindJudge" () ((variant "KindJudge" (ConNamed (field "kjScope" (TyCon "KindScope")) (field "kjVars" (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "Kind")))) (field "kjNames" (TyApp (TyCon "List") (TyCon "String")))))) ())
@@ -3306,11 +3291,6 @@ headParamKinds sc o n ps = zipL ps (optionOr [] (sc.ksHeads o n))
 (DFunDef false "recoverAll" ((PVar "mctx") (PVar "kj") (PVar "n") (PCons (PVar "t") (PVar "rest"))) (EBlock (DoLet false false (PTuple (PVar "t2") (PVar "n2")) (EApp (EApp (EApp (EApp (EApp (EVar "recoverIn") (EVar "mctx")) (EVar "kj")) (EApp (EVar "Some") (EVar "KType"))) (EVar "n")) (EVar "t"))) (DoLet false false (PTuple (PVar "rest2") (PVar "n3")) (EApp (EApp (EApp (EApp (EVar "recoverAll") (EVar "mctx")) (EVar "kj")) (EVar "n2")) (EVar "rest"))) (DoExpr (ETuple (EBinOp "::" (EVar "t2") (EVar "rest2")) (EVar "n3")))))
 (DTypeSig false "rejectedAlias" (TyFun (TyCon "ModuleCtx") (TyFun (TyCon "KindJudge") (TyFun (TyCon "TyConOrigin") (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "Kind")) (TyFun (TyApp (TyCon "List") (TyCon "Ty")) (TyCon "Bool"))))))))
 (DFunDef false "rejectedAlias" ((PVar "mctx") (PVar "kj") (PVar "o") (PVar "n") (PVar "params") (PVar "args")) (EBinOp "&&" (EBinOp "==" (EApp (EVar "listLen") (EVar "params")) (EApp (EVar "listLen") (EVar "args"))) (EMatch (EApp (EApp (EVar "lookupTab") (EApp (EApp (EVar "tyTabKey") (EVar "o")) (EVar "n"))) (EFieldAccess (EFieldAccess (EFieldAccess (EVar "mctx") "mcCells") "aliasTableRef") "value")) (arm (PCon "Some" (PTuple (PVar "ps") (PVar "rhs"))) () (EBlock (DoLet false false (PVar "items") (EListLit (ETuple (EApp (EVar "Some") (EVar "KType")) (EVar "rhs")))) (DoExpr (EApp (EVar "isSome") (EApp (EApp (EApp (EVar "kindErrorIn") (EApp (EApp (EApp (EVar "kindJudgeOf") (EFieldAccess (EVar "kj") "kjScope")) (EApp (EApp (EVar "zipL") (EVar "ps")) (EVar "params"))) (EVar "items"))) (EApp (EVar "Some") (EVar "KType"))) (EVar "rhs")))))) (arm (PCon "None") () (EVar "False")))))
-(DTypeSig false "annotationsIn" (TyFun (TyCon "Expr") (TyApp (TyCon "List") (TyTuple (TyCon "Expr") (TyCon "Ty")))))
-(DFunDef false "annotationsIn" ((PCon "EAnnot" (PVar "e") (PVar "ty"))) (EBinOp "::" (ETuple (EVar "e") (EVar "ty")) (EApp (EVar "annotationsIn") (EVar "e"))))
-(DFunDef false "annotationsIn" ((PVar "e")) (EApp (EApp (EVar "flatMap") (EVar "annotationsIn")) (EApp (EVar "childExprs") (EVar "e"))))
-(DTypeSig false "reportBodyKinds" (TyFun (TyCon "ModuleCtx") (TyFun (TyCon "KindScope") (TyFun (TyCon "Decl") (TyCon "Unit")))))
-(DFunDef false "reportBodyKinds" ((PVar "mctx") (PVar "sc") (PVar "d")) (EApp (EApp (EVar "each") (ELam ((PCon "DeclBody" PWild (PVar "body"))) (EApp (EApp (EVar "each") (ELam ((PVar "a")) (EApp (EApp (EApp (EApp (EApp (EVar "reportWrittenKinds") (EVar "mctx")) (EVar "sc")) (EListLit)) (EApp (EVar "Some") (EApp (EVar "exprStartLoc") (EApp (EVar "fst") (EVar "a"))))) (EListLit (ETuple (EApp (EVar "Some") (EVar "KType")) (EApp (EVar "snd") (EVar "a"))))))) (EApp (EVar "annotationsIn") (EVar "body"))))) (EApp (EVar "declBodies") (EVar "d"))))
 (DTypeSig false "headParamKinds" (TyFun (TyCon "KindScope") (TyFun (TyCon "TyConOrigin") (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "Kind"))))))))
 (DFunDef false "headParamKinds" ((PVar "sc") (PVar "o") (PVar "n") (PVar "ps")) (EApp (EApp (EVar "zipL") (EVar "ps")) (EApp (EApp (EVar "optionOr") (EListLit)) (EApp (EApp (EFieldAccess (EVar "sc") "ksHeads") (EVar "o")) (EVar "n")))))
 # MARK
@@ -3320,22 +3300,20 @@ headParamKinds sc o n ps = zipL ps (optionOr [] (sc.ksHeads o n))
 (DUse false (UseGroup ("types" "tc_diag_text") ((mem "aliasArityMsg" false) (mem "authorityAsTypeMsg" false) (mem "authorityAtomicLabelMsg" false) (mem "authorityParamAsRowMsg" false) (mem "authorityParamAsTypeMsg" false) (mem "authorityTermAsTypeMsg" false) (mem "binderDomainMsg" false) (mem "binderDomainTypeMsg" false) (mem "binderNoDomainMsg" false) (mem "binderTypeMsg" false) (mem "effectArrowOnDataHeadMsg" false) (mem "effectParamAsTypeMsg" false) (mem "exactInPatternSlotMsg" false) (mem "ifaceParamAuthorityKindMsg" false) (mem "ifaceParamEffectKindMsg" false) (mem "ifaceSlotDeclaredTypeMsg" false) (mem "joinDomainMsg" false) (mem "nameNotAuthorityMsg" false) (mem "ordinaryInPatternSlotMsg" false) (mem "patternDomainMsg" false) (mem "phantomExportMsg" false) (mem "qualifierBinderTypeMsg" false) (mem "renderKindArrow" false) (mem "requiresKindMsg" false) (mem "rowKindMismatchMsg" false) (mem "typeAsAuthorityMsg" false) (mem "typeInRowSlotMsg" false) (mem "typeParamAsRowMsg" false) (mem "typeVarAsAuthorityMsg" false) (mem "unannotatedGradedParamMsg" false) (mem "unannotatedRowParamMsg" false) (mem "writtenKindArityMsg" false) (mem "writtenKindMismatchMsg" false))))
 (DUse false (UseGroup ("types" "tc_state") ((mem "emptySigVars" false) (mem "mctxAtIfSome" false) (mem "wAll" false))))
 (DUse false (UseGroup ("types" "publish") ((mem "TcDiag" true))))
-(DUse false (UseGroup ("types" "tc_env") ((mem "KindReads" true) (mem "ceParamKindsAt" false) (mem "kindEq" false) (mem "kindOfParams" false) (mem "kindParams" false) (mem "kindTypeOnly" false) (mem "headKindsIn" false) (mem "tabNameIndex" false) (mem "tabNameLookup" false) (mem "varKindsOf" false) (mem "anyKRow" false) (mem "ceLookupAt" false) (mem "ceRowParamKinds" false) (mem "declEnvsOrdOf" false) (mem "domainHasPatterns" false) (mem "dtopFor" false) (mem "effTailNames" false) (mem "ifaceParamKindsOf" false) (mem "ifaceTabKey" false) (mem "kindAnnSlots" false) (mem "padAnns" false) (mem "tyTabKey" false))))
+(DUse false (UseGroup ("types" "tc_env") ((mem "KindReads" true) (mem "ceParamKindsAt" false) (mem "kindEq" false) (mem "kindOfParams" false) (mem "kindParams" false) (mem "kindTypeOnly" false) (mem "builtinParamKinds" false) (mem "varKindsOf" false) (mem "anyKRow" false) (mem "ceLookupAt" false) (mem "ceRowParamKinds" false) (mem "declEnvsOrdOf" false) (mem "domainHasPatterns" false) (mem "dtopFor" false) (mem "effTailNames" false) (mem "ifaceParamKindsOf" false) (mem "ifaceTabKey" false) (mem "kindAnnSlots" false) (mem "padAnns" false) (mem "tyTabKey" false))))
 (DUse false (UseGroup ("types" "tc_diag") ((mem "pushTypeError" false) (mem "pushTypeErrorAt" false) (mem "pushTypeErrorOnce" false) (mem "pushTypeErrorOnceAt" false) (mem "pushTypeErrorOncePerSite" false))))
 (DUse false (UseGroup ("types" "tc_unify") ((mem "atomBindersIn" false) (mem "authSlotNamesIn" false) (mem "freshAuthvarRanged" false) (mem "freshTvMap" false) (mem "freshVar" false) (mem "openRow" false))))
 (DUse false (UseGroup ("types" "tc_decls_variance") ((mem "payloadAstTypes" false) (mem "variantPayload" false))))
 (DUse false (UseGroup ("types" "effect_authority") ((mem "Authority" true) (mem "Authvar" true) (mem "authJoinAll" false) (mem "authPatternClose" false) (mem "authTop" false) (mem "authvarDomain" false) (mem "authvarIsPattern" false) (mem "isPatternParam" false) (mem "linkAuthvar" false))))
 (DUse false (UseGroup ("types" "effect_rows") ((mem "Atom" true) (mem "EffLabel" true) (mem "EffRow" true) (mem "Effvar" true) (mem "atomsNorm" false) (mem "atomWith" false) (mem "effLabelName" false) (mem "labelKey" false) (mem "pureRow" false))))
-(DUse false (UseGroup ("frontend" "ast") ((mem "ConPayload" true) (mem "Constraint" true) (mem "DataVis" true) (mem "Decl" true) (mem "EffAtomTy" true) (mem "EffParamTy" true) (mem "Expr" true) (mem "ExternDecl" true) (mem "Field" true) (mem "IfaceMethod" true) (mem "KindAnn" true) (mem "Loc" true) (mem "Super" true) (mem "TabKey" true) (mem "Ty" true) (mem "TyConOrigin" true) (mem "Variant" true) (mem "authTermNames" false) (mem "authTermsSurface" false) (mem "firstTyLoc" false) (mem "firstTyLocList" false) (mem "lookupTab" false) (mem "mapTyFull" false) (mem "orElseLoc" false) (mem "patternMark" false) (mem "qualifierSource" false) (mem "tabKeyEq" false) (mem "variantName" false))))
+(DUse false (UseGroup ("frontend" "ast") ((mem "ConPayload" true) (mem "Constraint" true) (mem "DataVis" true) (mem "Decl" true) (mem "EffAtomTy" true) (mem "EffParamTy" true) (mem "ExternDecl" true) (mem "Field" true) (mem "IfaceMethod" true) (mem "KindAnn" true) (mem "Loc" true) (mem "Super" true) (mem "TabKey" true) (mem "Ty" true) (mem "TyConOrigin" true) (mem "Variant" true) (mem "authTermNames" false) (mem "authTermsSurface" false) (mem "firstTyLoc" false) (mem "firstTyLocList" false) (mem "lookupTab" false) (mem "mapTyFull" false) (mem "orElseLoc" false) (mem "patternMark" false) (mem "qualifierSource" false) (mem "tabKeyEq" false) (mem "variantName" false))))
 (DUse false (UseGroup ("types" "repr") ((mem "Mono" true) (mem "ppAuthArg" false) (mem "ppConName" false) (mem "ppTy" false))))
 (DUse false (UseGroup ("types" "effect_domain") ((mem "Param" true) (mem "canonParam" false) (mem "domainKey" false) (mem "extendParam" false) (mem "lookupAxis" false) (mem "subTopOf" false) (mem "writtenSetProblem" false))))
 (DUse false (UseGroup ("support" "util") ((mem "allList" false) (mem "anyList" false) (mem "contains" false) (mem "dedup" false) (mem "escStr" false) (mem "filterList" false) (mem "isEmptyL" false) (mem "isNonEmptyL" false) (mem "listLen" false) (mem "lookupAssoc" false) (mem "reverseL" false) (mem "zipL" false))))
 (DUse false (UseGroup ("list") ((mem "drop" false) (mem "get" false))))
 (DUse false (UseGroup ("types" "effect_param_decode") ((mem "atomicLabelParamText" false) (mem "effectParamMsg" false) (mem "effectParamProblems" false) (mem "repeatedNames" false) (mem "writtenAxis" false) (mem "writtenParam" false))))
 (DUse false (UseGroup ("types" "registry") ((mem "regKeyOfTab" false))))
-(DUse false (UseGroup ("types" "expr_loc") ((mem "exprStartLoc" false))))
-(DUse false (UseGroup ("frontend" "ast_walk") ((mem "DeclBody" true) (mem "childExprs" false) (mem "declBodies" false))))
-(DUse false (UseGroup ("support" "ordmap") ((mem "OrdMap" false))))
+(DUse false (UseGroup ("support" "ordmap") ((mem "omHasKey" false) (mem "OrdMap" false))))
 (DUse true (UseGroup ("types" "tc_env") ((mem "kindsEq" false))))
 (DTypeSig false "seedEffectDomains" (TyFun (TyCon "GraphCtx") (TyFun (TyCon "Unit") (TyCon "Unit"))))
 (DFunDef false "seedEffectDomains" ((PVar "gctx") PWild) (EBlock (DoLet false false (PVar "builtins") (EListLit (ETuple (ELit (LString "Net")) (EApp (EVar "PPrefix") (EVar "None"))) (ETuple (ELit (LString "FileRead")) (EApp (EVar "PPath") (EVar "None"))) (ETuple (ELit (LString "FileWrite")) (EApp (EVar "PPath") (EVar "None"))) (ETuple (ELit (LString "Env")) (EApp (EVar "PSet") (EVar "None"))) (ETuple (ELit (LString "Exec")) (EApp (EVar "PPrefix") (EVar "None"))) (ETuple (ELit (LString "FFI")) (EApp (EVar "PPrefix") (EVar "None"))))) (DoExpr (EApp (EApp (EVar "setRef") (EFieldAccess (EVar "gctx") "effectDomains")) (EVar "builtins")))))
@@ -3415,10 +3393,10 @@ headParamKinds sc o n ps = zipL ps (optionOr [] (sc.ksHeads o n))
 (DFunDef false "checkDeclaredKindsDecl" ((PVar "mctx") (PVar "sc") PWild (PRec "DData" ((rf "dataVis" (PVar "vis")) (rf "dataName" (PVar "n")) (rf "dataParams" (PVar "ps")) (rf "dataParamKinds" (PVar "ks")) (rf "dataCtors" (PVar "vs")) (rf "dataCtorBinders" (PVar "bs")) (rf "dataOrigin" (PVar "o")) (rf "dataNameLoc" (PVar "nloc"))) false)) (EBlock (DoLet false false (PVar "fieldTys") (EApp (EApp (EDictApp "flatMap") (ELam ((PVar "v")) (EApp (EVar "payloadAstTypes") (EApp (EVar "variantPayload") (EVar "v"))))) (EVar "vs"))) (DoExpr (EApp (EApp (EVar "checkAuthorityKindLabels") (EVar "mctx")) (EBinOp "++" (EVar "ks") (EApp (EApp (EDictApp "flatMap") (ELam ((PVar "b")) (EApp (EApp (EMethodRef "map") (ELam ((PVar "x")) (EApp (EVar "Some") (EApp (EVar "snd") (EVar "x"))))) (EVar "b")))) (EVar "bs"))))) (DoExpr (EApp (EApp (EApp (EApp (EApp (EVar "checkHeadKinds") (EVar "mctx")) (EVar "n")) (EVar "ps")) (EVar "ks")) (EVar "fieldTys"))) (DoExpr (EApp (EApp (EApp (EApp (EApp (EVar "checkPhantomAuthorityExport") (EVar "mctx")) (EVar "vis")) (EVar "n")) (EApp (EApp (EVar "authorityParamNames") (EVar "ps")) (EVar "ks"))) (EVar "vs"))) (DoExpr (EApp (EApp (EApp (EApp (EApp (EVar "reportWrittenKinds") (EVar "mctx")) (EVar "sc")) (EApp (EApp (EApp (EApp (EVar "headParamKinds") (EVar "sc")) (EVar "o")) (EVar "n")) (EVar "ps"))) (EVar "nloc")) (EApp (EApp (EMethodRef "map") (ELam ((PVar "t")) (ETuple (EApp (EVar "Some") (EVar "KType")) (EVar "t")))) (EVar "fieldTys"))))))
 (DFunDef false "checkDeclaredKindsDecl" ((PVar "mctx") (PVar "sc") PWild (PRec "DNewtype" ((rf "newtypeName" (PVar "n")) (rf "newtypeParams" (PVar "ps")) (rf "newtypeParamKinds" (PVar "ks")) (rf "newtypeFieldTy" (PVar "fty")) (rf "newtypeCtorBinders" (PVar "bs")) (rf "newtypeOrigin" (PVar "o")) (rf "newtypeNameLoc" (PVar "nloc"))) false)) (EBlock (DoExpr (EApp (EApp (EVar "checkAuthorityKindLabels") (EVar "mctx")) (EBinOp "++" (EVar "ks") (EApp (EApp (EMethodRef "map") (ELam ((PVar "b")) (EApp (EVar "Some") (EApp (EVar "snd") (EVar "b"))))) (EVar "bs"))))) (DoExpr (EApp (EApp (EApp (EApp (EApp (EVar "checkHeadKinds") (EVar "mctx")) (EVar "n")) (EVar "ps")) (EVar "ks")) (EListLit (EVar "fty")))) (DoExpr (EApp (EApp (EApp (EApp (EApp (EVar "reportWrittenKinds") (EVar "mctx")) (EVar "sc")) (EApp (EApp (EApp (EApp (EVar "headParamKinds") (EVar "sc")) (EVar "o")) (EVar "n")) (EVar "ps"))) (EVar "nloc")) (EListLit (ETuple (EApp (EVar "Some") (EVar "KType")) (EVar "fty")))))))
 (DFunDef false "checkDeclaredKindsDecl" ((PVar "mctx") (PVar "sc") PWild (PRec "DTypeAlias" ((rf "tyAliasName" (PVar "n")) (rf "tyAliasParams" (PVar "ps")) (rf "tyAliasParamKinds" (PVar "ks")) (rf "tyAliasRhs" (PVar "rhs")) (rf "tyAliasOrigin" (PVar "o")) (rf "tyAliasNameLoc" (PVar "nloc"))) false)) (EBlock (DoExpr (EApp (EApp (EVar "checkAuthorityKindLabels") (EVar "mctx")) (EVar "ks"))) (DoExpr (EApp (EApp (EApp (EVar "checkAliasPatternSlots") (EVar "mctx")) (EApp (EApp (EVar "zipParamKinds") (EVar "ps")) (EVar "ks"))) (EVar "rhs"))) (DoExpr (EApp (EApp (EApp (EApp (EApp (EVar "checkHeadKinds") (EVar "mctx")) (EVar "n")) (EVar "ps")) (EVar "ks")) (EListLit (EVar "rhs")))) (DoExpr (EApp (EApp (EApp (EApp (EApp (EVar "reportWrittenKinds") (EVar "mctx")) (EVar "sc")) (EApp (EApp (EApp (EApp (EVar "headParamKinds") (EVar "sc")) (EVar "o")) (EVar "n")) (EVar "ps"))) (EVar "nloc")) (EListLit (ETuple (EApp (EVar "Some") (EVar "KType")) (EVar "rhs")))))))
-(DFunDef false "checkDeclaredKindsDecl" ((PVar "mctx") (PVar "sc") (PVar "prog") (PAs "d" (PRec "DInterface" ((rf "name" None) (rf "typarams" None) (rf "typaramKinds" None) (rf "supers" None) (rf "methods" None) (rf "ifaceOrigin" (PVar "o"))) true))) (EBlock (DoExpr (EApp (EApp (EApp (EApp (EApp (EVar "checkIfaceHeadKinds") (EVar "mctx")) (EVar "name")) (EVar "typarams")) (EApp (EApp (EVar "padAnns") (EVar "typarams")) (EVar "typaramKinds"))) (EVar "methods"))) (DoLet false false (PVar "declared") (EApp (EApp (EVar "zipL") (EVar "typarams")) (EApp (EApp (EVar "optionOr") (EListLit)) (EApp (EApp (EFieldAccess (EVar "sc") "ksIfaces") (EVar "o")) (EVar "name"))))) (DoExpr (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EVar "checkSuperKinds") (EVar "mctx")) (EVar "sc")) (EVar "prog")) (EVar "name")) (EVar "declared")) (EVar "methods")) (EVar "supers"))) (DoExpr (EApp (EApp (EVar "each") (ELam ((PCon "IfaceMethod" PWild (PVar "mty") PWild (PVar "mloc"))) (EApp (EApp (EApp (EApp (EApp (EVar "reportWrittenKinds") (EVar "mctx")) (EVar "sc")) (EVar "declared")) (EVar "mloc")) (EListLit (ETuple (EApp (EVar "Some") (EVar "KType")) (EVar "mty")))))) (EVar "methods"))) (DoExpr (EApp (EApp (EApp (EVar "reportBodyKinds") (EVar "mctx")) (EVar "sc")) (EVar "d")))))
+(DFunDef false "checkDeclaredKindsDecl" ((PVar "mctx") (PVar "sc") (PVar "prog") (PRec "DInterface" ((rf "name" None) (rf "typarams" None) (rf "typaramKinds" None) (rf "supers" None) (rf "methods" None) (rf "ifaceOrigin" (PVar "o"))) true)) (EBlock (DoExpr (EApp (EApp (EApp (EApp (EApp (EVar "checkIfaceHeadKinds") (EVar "mctx")) (EVar "name")) (EVar "typarams")) (EApp (EApp (EVar "padAnns") (EVar "typarams")) (EVar "typaramKinds"))) (EVar "methods"))) (DoLet false false (PVar "declared") (EApp (EApp (EVar "zipL") (EVar "typarams")) (EApp (EApp (EVar "optionOr") (EListLit)) (EApp (EApp (EFieldAccess (EVar "sc") "ksIfaces") (EVar "o")) (EVar "name"))))) (DoExpr (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EVar "checkSuperKinds") (EVar "mctx")) (EVar "sc")) (EVar "prog")) (EVar "name")) (EVar "declared")) (EVar "methods")) (EVar "supers"))) (DoExpr (EApp (EApp (EVar "each") (ELam ((PCon "IfaceMethod" PWild (PVar "mty") PWild (PVar "mloc"))) (EApp (EApp (EApp (EApp (EApp (EVar "reportWrittenKinds") (EVar "mctx")) (EVar "sc")) (EVar "declared")) (EVar "mloc")) (EListLit (ETuple (EApp (EVar "Some") (EVar "KType")) (EVar "mty")))))) (EVar "methods")))))
 (DFunDef false "checkDeclaredKindsDecl" ((PVar "mctx") (PVar "sc") PWild (PCon "DTypeSig" PWild PWild (PVar "ty") (PVar "loc"))) (EApp (EApp (EApp (EApp (EApp (EVar "reportWrittenKinds") (EVar "mctx")) (EVar "sc")) (EListLit)) (EApp (EVar "Some") (EVar "loc"))) (EListLit (ETuple (EApp (EVar "Some") (EVar "KType")) (EVar "ty")))))
 (DFunDef false "checkDeclaredKindsDecl" ((PVar "mctx") (PVar "sc") PWild (PCon "DExtern" (PRec "ExternDecl" ((rf "edTy" (PVar "ty")) (rf "edLoc" (PVar "loc"))) false))) (EApp (EApp (EApp (EApp (EApp (EVar "reportWrittenKinds") (EVar "mctx")) (EVar "sc")) (EListLit)) (EApp (EVar "Some") (EVar "loc"))) (EListLit (ETuple (EApp (EVar "Some") (EVar "KType")) (EVar "ty")))))
-(DFunDef false "checkDeclaredKindsDecl" ((PVar "mctx") (PVar "sc") PWild (PVar "d")) (EApp (EApp (EApp (EVar "reportBodyKinds") (EVar "mctx")) (EVar "sc")) (EVar "d")))
+(DFunDef false "checkDeclaredKindsDecl" (PWild PWild PWild PWild) (ELit LUnit))
 (DTypeSig false "checkAliasPatternSlots" (TyFun (TyCon "ModuleCtx") (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "Option") (TyCon "KindAnn")))) (TyFun (TyCon "Ty") (TyCon "Unit")))))
 (DFunDef false "checkAliasPatternSlots" ((PVar "mctx") (PVar "params") (PVar "rhs")) (EBlock (DoLet false false (PVar "slots") (EApp (EApp (EVar "patternSlotNamesIn") (EVar "mctx")) (EVar "rhs"))) (DoExpr (EApp (EApp (EApp (EMethodRef "fold") (ELam (PWild (PVar "pk")) (EMatch (EVar "pk") (arm (PTuple (PVar "p") (PCon "Some" (PCon "KindAuthority" (PVar "l") PWild (PCon "False") (PVar "loc")))) () (EIf (EApp (EApp (EVar "contains") (EVar "p")) (EVar "slots")) (EApp (EApp (EApp (EApp (EVar "pushTypeErrorOncePerSite") (EVar "mctx")) (EVar "TAuthorityPattern")) (EVar "loc")) (EApp (EApp (EVar "ordinaryInPatternSlotMsg") (EVar "p")) (EVar "l"))) (ELit LUnit))) (arm PWild () (ELit LUnit))))) (ELit LUnit)) (EVar "params")))))
 (DTypeSig false "checkAuthorityKindLabels" (TyFun (TyCon "ModuleCtx") (TyFun (TyApp (TyCon "List") (TyApp (TyCon "Option") (TyCon "KindAnn"))) (TyCon "Unit"))))
@@ -3798,9 +3776,9 @@ headParamKinds sc o n ps = zipL ps (optionOr [] (sc.ksHeads o n))
 (DTypeSig false "kindReadsOf" (TyFun (TyCon "KindScope") (TyCon "KindReads")))
 (DFunDef false "kindReadsOf" ((PVar "sc")) (ERecordCreate "KindReads" ((fa "krSlots" (EFieldAccess (EVar "sc") "ksHeads")) (fa "krHeads" (EFieldAccess (EVar "sc") "ksHeads")) (fa "krIfaces" (EFieldAccess (EVar "sc") "ksIfaces")))))
 (DTypeSig true "kindScopeOf" (TyFun (TyCon "ModuleCtx") (TyCon "KindScope")))
-(DFunDef false "kindScopeOf" ((PVar "mctx")) (EBlock (DoLet false false (PVar "envs") (EFieldAccess (EFieldAccess (EFieldAccess (EVar "mctx") "mcGraph") "declEnvsRef") "value")) (DoExpr (ERecordCreate "KindScope" ((fa "ksHeads" (EApp (EVar "headKindsIn") (EApp (EVar "tabNameIndex") (EFieldAccess (EFieldAccess (EFieldAccess (EVar "mctx") "mcCells") "dataParamKindsRef") "value")))) (fa "ksIfaces" (EApp (EApp (EVar "ceParamKindsAt") (EApp (EApp (EVar "declEnvsOrdOf") (EFieldAccess (EFieldAccess (EFieldAccess (EVar "mctx") "mcCells") "currentModuleRef") "value")) (EVar "envs"))) (EFieldAccess (EVar "envs") "deIfaces"))) (fa "ksAlias" (EApp (EVar "aliasAt") (EApp (EVar "tabNameIndex") (EFieldAccess (EFieldAccess (EFieldAccess (EVar "mctx") "mcCells") "aliasTableRef") "value")))))))))
-(DTypeSig false "aliasAt" (TyFun (TyApp (TyCon "OrdMap") (TyApp (TyCon "List") (TyTuple (TyCon "TabKey") (TyTuple (TyApp (TyCon "List") (TyCon "String")) (TyCon "Ty"))))) (TyFun (TyCon "TyConOrigin") (TyFun (TyCon "String") (TyCon "Bool")))))
-(DFunDef false "aliasAt" ((PVar "index") (PVar "o") (PVar "n")) (EApp (EVar "isSome") (EApp (EApp (EVar "tabNameLookup") (EMethodRef "index")) (EApp (EApp (EVar "tyTabKey") (EVar "o")) (EVar "n")))))
+(DFunDef false "kindScopeOf" ((PVar "mctx")) (EBlock (DoLet false false (PVar "envs") (EFieldAccess (EFieldAccess (EFieldAccess (EVar "mctx") "mcGraph") "declEnvsRef") "value")) (DoLet false false (PVar "heads") (EFieldAccess (EFieldAccess (EFieldAccess (EVar "mctx") "mcCells") "dataParamKindsRef") "value")) (DoLet false false (PVar "names") (EFieldAccess (EFieldAccess (EFieldAccess (EVar "mctx") "mcCells") "dataParamNameIndexRef") "value")) (DoLet false false (PVar "aliases") (EFieldAccess (EFieldAccess (EFieldAccess (EVar "mctx") "mcCells") "aliasTableRef") "value")) (DoExpr (ERecordCreate "KindScope" ((fa "ksHeads" (ELam ((PVar "o") (PVar "n")) (EApp (EApp (EApp (EApp (EVar "headKindsAmong") (EVar "names")) (EVar "heads")) (EVar "o")) (EVar "n")))) (fa "ksIfaces" (EApp (EApp (EVar "ceParamKindsAt") (EApp (EApp (EVar "declEnvsOrdOf") (EFieldAccess (EFieldAccess (EFieldAccess (EVar "mctx") "mcCells") "currentModuleRef") "value")) (EVar "envs"))) (EFieldAccess (EVar "envs") "deIfaces"))) (fa "ksAlias" (ELam ((PVar "o") (PVar "n")) (EApp (EVar "isSome") (EApp (EApp (EVar "lookupTab") (EApp (EApp (EVar "tyTabKey") (EVar "o")) (EVar "n"))) (EVar "aliases"))))))))))
+(DTypeSig false "headKindsAmong" (TyFun (TyApp (TyCon "OrdMap") (TyCon "Unit")) (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "TabKey") (TyApp (TyCon "List") (TyCon "Kind")))) (TyFun (TyCon "TyConOrigin") (TyFun (TyCon "String") (TyApp (TyCon "Option") (TyApp (TyCon "List") (TyCon "Kind"))))))))
+(DFunDef false "headKindsAmong" ((PVar "names") (PVar "heads") (PVar "o") (PVar "n")) (EIf (EApp (EApp (EVar "omHasKey") (EVar "n")) (EVar "names")) (EMatch (EApp (EApp (EVar "lookupTab") (EApp (EApp (EVar "tyTabKey") (EVar "o")) (EVar "n"))) (EVar "heads")) (arm (PCon "Some" (PVar "kinds")) () (EApp (EVar "Some") (EVar "kinds"))) (arm (PCon "None") () (EApp (EApp (EVar "builtinParamKinds") (EVar "o")) (EVar "n")))) (EApp (EApp (EVar "builtinParamKinds") (EVar "o")) (EVar "n"))))
 (DTypeSig true "reportWrittenKinds" (TyFun (TyCon "ModuleCtx") (TyFun (TyCon "KindScope") (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "Kind"))) (TyFun (TyApp (TyCon "Option") (TyCon "Loc")) (TyFun (TyApp (TyCon "List") (TyTuple (TyApp (TyCon "Option") (TyCon "Kind")) (TyCon "Ty"))) (TyCon "Unit")))))))
 (DFunDef false "reportWrittenKinds" ((PVar "mctx") (PVar "sc") (PVar "declared") (PVar "fallback") (PVar "items")) (EBlock (DoLet false false (PVar "kj") (EApp (EApp (EApp (EVar "kindJudgeOf") (EVar "sc")) (EVar "declared")) (EVar "items"))) (DoExpr (EApp (EApp (EVar "each") (ELam ((PVar "it")) (EMatch (EApp (EApp (EApp (EVar "kindErrorIn") (EVar "kj")) (EApp (EVar "fst") (EVar "it"))) (EApp (EVar "snd") (EVar "it"))) (arm (PCon "Some" (PCon "KindError" (PVar "loc") (PVar "msg"))) () (EApp (EApp (EApp (EApp (EVar "pushTypeErrorOncePerSite") (EVar "mctx")) (EVar "TWrittenKindMismatch")) (EApp (EApp (EVar "orElseLoc") (EVar "loc")) (EApp (EApp (EVar "orElseLoc") (EApp (EVar "firstTyLoc") (EApp (EVar "snd") (EVar "it")))) (EVar "fallback")))) (EVar "msg"))) (arm (PCon "None") () (ELit LUnit))))) (EVar "items")))))
 (DData Private "KindJudge" () ((variant "KindJudge" (ConNamed (field "kjScope" (TyCon "KindScope")) (field "kjVars" (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "Kind")))) (field "kjNames" (TyApp (TyCon "List") (TyCon "String")))))) ())
@@ -3877,10 +3855,5 @@ headParamKinds sc o n ps = zipL ps (optionOr [] (sc.ksHeads o n))
 (DFunDef false "recoverAll" ((PVar "mctx") (PVar "kj") (PVar "n") (PCons (PVar "t") (PVar "rest"))) (EBlock (DoLet false false (PTuple (PVar "t2") (PVar "n2")) (EApp (EApp (EApp (EApp (EApp (EVar "recoverIn") (EVar "mctx")) (EVar "kj")) (EApp (EVar "Some") (EVar "KType"))) (EVar "n")) (EVar "t"))) (DoLet false false (PTuple (PVar "rest2") (PVar "n3")) (EApp (EApp (EApp (EApp (EVar "recoverAll") (EVar "mctx")) (EVar "kj")) (EVar "n2")) (EVar "rest"))) (DoExpr (ETuple (EBinOp "::" (EVar "t2") (EVar "rest2")) (EVar "n3")))))
 (DTypeSig false "rejectedAlias" (TyFun (TyCon "ModuleCtx") (TyFun (TyCon "KindJudge") (TyFun (TyCon "TyConOrigin") (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "Kind")) (TyFun (TyApp (TyCon "List") (TyCon "Ty")) (TyCon "Bool"))))))))
 (DFunDef false "rejectedAlias" ((PVar "mctx") (PVar "kj") (PVar "o") (PVar "n") (PVar "params") (PVar "args")) (EBinOp "&&" (EBinOp "==" (EApp (EVar "listLen") (EVar "params")) (EApp (EVar "listLen") (EVar "args"))) (EMatch (EApp (EApp (EVar "lookupTab") (EApp (EApp (EVar "tyTabKey") (EVar "o")) (EVar "n"))) (EFieldAccess (EFieldAccess (EFieldAccess (EVar "mctx") "mcCells") "aliasTableRef") "value")) (arm (PCon "Some" (PTuple (PVar "ps") (PVar "rhs"))) () (EBlock (DoLet false false (PVar "items") (EListLit (ETuple (EApp (EVar "Some") (EVar "KType")) (EVar "rhs")))) (DoExpr (EApp (EVar "isSome") (EApp (EApp (EApp (EVar "kindErrorIn") (EApp (EApp (EApp (EVar "kindJudgeOf") (EFieldAccess (EVar "kj") "kjScope")) (EApp (EApp (EVar "zipL") (EVar "ps")) (EVar "params"))) (EVar "items"))) (EApp (EVar "Some") (EVar "KType"))) (EVar "rhs")))))) (arm (PCon "None") () (EVar "False")))))
-(DTypeSig false "annotationsIn" (TyFun (TyCon "Expr") (TyApp (TyCon "List") (TyTuple (TyCon "Expr") (TyCon "Ty")))))
-(DFunDef false "annotationsIn" ((PCon "EAnnot" (PVar "e") (PVar "ty"))) (EBinOp "::" (ETuple (EVar "e") (EVar "ty")) (EApp (EVar "annotationsIn") (EVar "e"))))
-(DFunDef false "annotationsIn" ((PVar "e")) (EApp (EApp (EDictApp "flatMap") (EVar "annotationsIn")) (EApp (EVar "childExprs") (EVar "e"))))
-(DTypeSig false "reportBodyKinds" (TyFun (TyCon "ModuleCtx") (TyFun (TyCon "KindScope") (TyFun (TyCon "Decl") (TyCon "Unit")))))
-(DFunDef false "reportBodyKinds" ((PVar "mctx") (PVar "sc") (PVar "d")) (EApp (EApp (EVar "each") (ELam ((PCon "DeclBody" PWild (PVar "body"))) (EApp (EApp (EVar "each") (ELam ((PVar "a")) (EApp (EApp (EApp (EApp (EApp (EVar "reportWrittenKinds") (EVar "mctx")) (EVar "sc")) (EListLit)) (EApp (EVar "Some") (EApp (EVar "exprStartLoc") (EApp (EVar "fst") (EVar "a"))))) (EListLit (ETuple (EApp (EVar "Some") (EVar "KType")) (EApp (EVar "snd") (EVar "a"))))))) (EApp (EVar "annotationsIn") (EVar "body"))))) (EApp (EVar "declBodies") (EVar "d"))))
 (DTypeSig false "headParamKinds" (TyFun (TyCon "KindScope") (TyFun (TyCon "TyConOrigin") (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "Kind"))))))))
 (DFunDef false "headParamKinds" ((PVar "sc") (PVar "o") (PVar "n") (PVar "ps")) (EApp (EApp (EVar "zipL") (EVar "ps")) (EApp (EApp (EVar "optionOr") (EListLit)) (EApp (EApp (EFieldAccess (EVar "sc") "ksHeads") (EVar "o")) (EVar "n")))))
