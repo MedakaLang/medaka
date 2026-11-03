@@ -14,11 +14,14 @@ and then it arrives in one fixed shape, one at a time.
 
 Not a decision, do not bring it:
 
-- **Already ruled.** Check the decisions index in memory
+- **Already ruled, and nothing new.** Check the decisions index in memory
   (`project_decisions_index`), `compiler/ARCHITECTURE.md` §5 "Settled, and not
   reopened here", the design doc's own rulings, and the epic. A settled ruling is not
-  re-asked. A case it does not cover, or one that conflicts with it, is a new question
-  that names the ruling it would amend.
+  re-asked on the same grounds. It **is** reopened when something new presents itself:
+  a more principled fix than the ruling had available, or a precedent from a mature
+  language (§2, Q2) the ruling did not weigh. Then it is a new question that names the
+  ruling it would amend and says what is new; it goes through §2 like any other and is
+  brought under §4 if it survives (Val, 2026-11-03).
 - **A measurement.** "Cache or not", "which engine for `test`", "is it fast enough":
   take the measurement first; the number decides. Bring it only if the number is
   ambiguous and the stakes are high.
@@ -38,11 +41,17 @@ record it (§3). Bring the decision only if all three leave it unclear.
    playbook, `docs/spec/`) rather than from convenience. A major blocker is a standing
    ruling it would overturn, a measured cost it cannot pay, or a dependency that does
    not exist. "It is more work" is not a blocker.
-2. **Does a mature language or implementation handle this successfully in a way we
-   should emulate?** Name it: OCaml, GHC, rustc, Swift, Scheme, Deno, Go, CPython, Lua.
-   The repo's standing method is precedent-derived (`feedback_phase4_six_principles`,
-   principle 2; "follow Rust unless a good reason", `decided_r35_follow_rust_20261018`).
-   Probe the claim before relying on it; a wrong premise gives a wrong decision.
+2. **Does a mature language handle this successfully in a way we should emulate?**
+   Look at **Rust, OCaml and Haskell first**; Swift, Scheme, Go, Scala, Deno, CPython
+   and Lua are secondary witnesses. Name the language and the mechanism. Then ask the
+   second half, which is the half agents skip: **is that decision regarded as a good
+   one there, or as something they have come to regret or work around?** A precedent
+   that its own community is replacing (Haskell's `String`, lazy IO, OCaml's absence of
+   typeclasses answered by modular implicits, Rust's missing guaranteed tail calls
+   answered by the `become` proposal) is evidence for the *other* side. The repo's
+   standing method is precedent-derived (`feedback_phase4_six_principles`, principle 2;
+   "follow Rust unless a good reason", `decided_r35_follow_rust_20261018`). Probe the
+   claim before relying on it; a wrong premise gives a wrong decision.
 3. **What is best for the long-term maturity of the language?** Prefer the answer that
    leaves one mechanism rather than two, keeps every engine on one rule, makes a
    divergence loud rather than silent, and will still look right in a mature compiler.
@@ -97,19 +106,22 @@ Thirteen decisions were listed for Val. Under triage:
 
 - D2 dictionaries as method tables: Q2 (GHC dictionary records, Swift witness tables,
   rustc vtables) and Q3 (one dispatch mechanism) settle it. Adopted.
-- D10 strict top-level initialisation: Q1 found a major blocker, the standing ruling
-  that top-level nullary bindings are lazy (`lazy-toplevel-nullary-canonical`,
-  2026-06-10), and Q2 found GHC's CAF model matching the current design. Adopted the
-  opposite of the proposal: keep lazy, the VM implements the forcer; the issue that
-  proposed the change was closed with that sentence.
+- D10 strict top-level initialisation: a first pass adopted "keep lazy" on Q1 (the
+  standing ruling of 2026-06-10) and Q2 (GHC's CAF model). Under Q2's second half it
+  does not settle: Haskell's CAFs are lazy and their retention is a known leak, OCaml
+  initialises strictly in textual order and does not regret it, Rust forbids runtime
+  work in a `static` and makes laziness explicit (`LazyLock`) and regards "life before
+  main" as a mistake to avoid. Three mature answers, none clearly ours. It survived and
+  was brought (§4).
 - D11 guaranteed tail calls: Q2 (OCaml, GHC, Scheme) and Q3 (no silent engine
   divergence) settle the goal; whether the native backend can pay for it is a spike,
   not a decision. Adopted, spike first; the spike's result returns as a decision only
   if it finds a blocker.
 - D7 the exec posture: owned by #4414 in the policy epic. Not re-raised.
 
-None survived. That outcome is normal and is reported as a short table of adoptions,
-each with its settling question, so Val can overturn any of them in one line.
+One of thirteen survived. That ratio is normal: the adoptions are reported as a short
+table, each with its settling question, so Val can overturn any of them in one line,
+and the survivor arrives alone in the §4 shape.
 
 ## 6. What this skill does not change
 
