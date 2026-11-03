@@ -47,6 +47,7 @@ import tools.lint_rule_unused_local as UnusedLocal
 import tools.lint_rule_let_underscore_unit as LetUnderscoreUnit
 import tools.lint_rule_discarded_result as DiscardedResult
 import tools.lint_rule_accumulator_append as AccumulatorAppend
+import tools.lint_rule_reslice_in_loop as ResliceInLoop
 
 -- ── the registry ─────────────────────────────────────────────────────────────
 -- The list position is the output order of findings.  Each entry is the `rule`
@@ -95,6 +96,7 @@ allRules = [
   TestEqualInTrue.rule,
   PreludeShadow.rule,
   AccumulatorAppend.rule,
+  ResliceInLoop.rule,
 ]
 
 -- ── the project registry ──────────────────────────────────────────────────────

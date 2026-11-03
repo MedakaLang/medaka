@@ -128,6 +128,7 @@ fixtureNames = [
   "promissory-reader",
   "regex-literal",
   "rem-parity",
+  "reslice-in-loop",
   "self-shadow-extern",
   "stdlib-reimpl",
   "test-bool-helper",
@@ -411,6 +412,8 @@ test "rule-promissory-reader fixture" = fixtureHolds "promissory-reader"
 test "rule-regex-literal fixture" = fixtureHolds "regex-literal"
 
 test "rule-rem-parity fixture" = fixtureHolds "rem-parity"
+
+test "rule-reslice-in-loop fixture" = fixtureHolds "reslice-in-loop"
 
 test "rule-self-shadow-extern fixture" = fixtureHolds "self-shadow-extern"
 
