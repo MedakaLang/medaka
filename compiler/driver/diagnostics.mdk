@@ -621,19 +621,6 @@ analyze : String -> String -> String -> List Diag
 analyze runtimeSrc coreSrc progSrc =
   analyzeFrom noStdlibExports "" runtimeSrc coreSrc (parse progSrc)
 
--- B.10.2b: the target is parsed with `parseLocated`, so the ELoc wrappers carry
--- REAL line/col spans (the pure `parse` carries placeholder locs).  Type-error
--- Diags then surface the true expr-level span; runtime/core stay on `parse`
--- (their locs are never reported).  Unguarded for internal-only externs.
-export
-analyzeLocated : (List String -> <e> List (String, List String)) ->
-  String ->
-  String ->
-  String ->
-  <e> List Diag
-analyzeLocated exportsFor runtimeSrc coreSrc progSrc =
-  analyzeFrom exportsFor "" runtimeSrc coreSrc (parseLocated progSrc)
-
 -- The raw-tree half of a single file's front end, plus the derived trees its
 -- drive consumes.  `surfaceDiags` holds the first groups of the file's fixed
 -- result order (derives, guard exhaustiveness, prelude-standalone shadows,
@@ -652,7 +639,7 @@ data SurfaceAnalysis = SurfaceAnalysis {
 
 -- One file's diagnostics, unguarded, parameterised over the already-parsed
 -- target program (so `analyze` can pass placeholder-loc `parse` decls and
--- `analyzeLocated` real-loc `parseLocated` decls).  `modName` names THIS module
+-- the project drive real-loc `parseLocated` decls).  `modName` names THIS module
 -- in module-scoped diagnostic text (#1499's `W-PRELUDE-METHOD-SHADOW`).
 -- "" = the caller has no module id in hand (the LSP live buffer, the
 -- playground, an inline `source`), and the text falls back to "this module".
@@ -1407,7 +1394,28 @@ parseErrDiag path e = parseDiagnosticToDiag path (parseErrorDiagnostic e)
 preludeDesugared : String -> List Decl
 preludeDesugared src = desugaredPrelude src
 
--- `allowInternal`/`trustedMods` gate the internal-extern guard on the RESOLVE
+-- One project-analysis load: the caches and reader it goes through, the entry and
+-- search roots it walks from, and the runtime/core prelude sources it checks
+-- against.  `plCache` persists last-good sources across calls; `plParseCache` lets
+-- an unchanged module skip re-parsing.
+public export data ProjectLoad = ProjectLoad {
+  plCache : Ref (List (String, String)),
+  plParseCache : Ref (OrdMap (List Decl)),
+  plRead : String -> Option String,
+  plEntry : String,
+  plRoots : List String,
+  plRuntimeSrc : String,
+  plCoreSrc : String,
+}
+
+-- A `ProjectLoad` plus the internal-extern trust the resolve pass applies.
+public export data ProjectQuery = ProjectQuery {
+  pqLoad : ProjectLoad,
+  pqAllowInternal : Bool,
+  pqTrusted : List String,
+}
+
+-- `pqAllowInternal`/`pqTrusted` gate the internal-extern guard on the RESOLVE
 -- pass exactly as `resolveModulesErrorsPairsG` (the human `check`/`run`/`build`
 -- multi-module gate) already does: a module is trusted (no internalExterns
 -- restriction) when `allowInternal` is set OR its modId is in `trustedMods`
@@ -1418,29 +1426,10 @@ preludeDesugared src = desugaredPrelude src
 -- human `check` correctly rejected via the guarded path.
 export
 analyzeProject : (List String -> <e> List (String, List String)) ->
-  Bool ->
-  List String ->
-  Ref (List (String, String)) ->
-  Ref (OrdMap (List Decl)) ->
-  (String -> Option String) ->
-  String ->
-  List String ->
-  String ->
-  String ->
+  ProjectQuery ->
   <IO | e> List (String, List Diag)
-analyzeProject exportsFor allowInternal trustedMods cacheRef parseCacheRef read entry roots runtimeSrc coreSrc =
-  let (_, results) =
-    analyzeProjectFull
-      exportsFor
-      allowInternal
-      trustedMods
-      cacheRef
-      parseCacheRef
-      read
-      entry
-      roots
-      runtimeSrc
-      coreSrc
+analyzeProject exportsFor query =
+  let (_, results) = analyzeProjectFull exportsFor query
   results
 
 -- `analyzeProject` also handing back the per-module `(schemes, errs, warns)` the
@@ -1448,29 +1437,10 @@ analyzeProject exportsFor allowInternal trustedMods cacheRef parseCacheRef read 
 -- typecheck, so its per-module list is empty and only the diagnostics it attributes
 -- to the entry file carry any verdict.
 analyzeProjectFull : (List String -> <e> List (String, List String)) ->
-  Bool ->
-  List String ->
-  Ref (List (String, String)) ->
-  Ref (OrdMap (List Decl)) ->
-  (String -> Option String) ->
-  String ->
-  List String ->
-  String ->
-  String ->
+  ProjectQuery ->
   <IO | e> (List ModDiags, List (String, List Diag))
-analyzeProjectFull exportsFor allowInternal trustedMods cacheRef parseCacheRef read entry roots runtimeSrc coreSrc =
-  let (report, results) =
-    analyzeProjectReport
-      exportsFor
-      allowInternal
-      trustedMods
-      cacheRef
-      parseCacheRef
-      read
-      entry
-      roots
-      runtimeSrc
-      coreSrc
+analyzeProjectFull exportsFor query =
+  let (report, results) = analyzeProjectReport exportsFor query
   match report
     Some r => (r.trDiagnostics, results)
     None => ([], results)
@@ -1479,29 +1449,10 @@ analyzeProjectFull exportsFor allowInternal trustedMods cacheRef parseCacheRef r
 -- on a load failure, which reaches no typecheck).
 export
 analyzeProjectReport : (List String -> <e> List (String, List String)) ->
-  Bool ->
-  List String ->
-  Ref (List (String, String)) ->
-  Ref (OrdMap (List Decl)) ->
-  (String -> Option String) ->
-  String ->
-  List String ->
-  String ->
-  String ->
+  ProjectQuery ->
   <IO | e> (Option TcReport, List (String, List Diag))
-analyzeProjectReport exportsFor allowInternal trustedMods cacheRef parseCacheRef read entry roots runtimeSrc coreSrc =
-  let (keyed, results) =
-    analyzeProjectKeyed
-      exportsFor
-      allowInternal
-      trustedMods
-      cacheRef
-      parseCacheRef
-      read
-      entry
-      roots
-      runtimeSrc
-      coreSrc
+analyzeProjectReport exportsFor query =
+  let (keyed, results) = analyzeProjectKeyed exportsFor query
   (map (k => fst (fst k)) keyed, results)
 
 -- A loaded graph's identity: the entry's module id, and `moduleStepKey` of every
@@ -1534,86 +1485,66 @@ graphIdSame a b =
 -- drive and the identity of the graph its load read.
 export
 analyzeProjectKeyed : (List String -> <e> List (String, List String)) ->
-  Bool ->
-  List String ->
-  Ref (List (String, String)) ->
-  Ref (OrdMap (List Decl)) ->
-  (String -> Option String) ->
-  String ->
-  List String ->
-  String ->
-  String ->
+  ProjectQuery ->
   <IO | e> (Option ((TcReport, DriveOutputs), GraphId), List (String, List Diag))
-analyzeProjectKeyed exportsFor allowInternal trustedMods cacheRef parseCacheRef read entry roots runtimeSrc coreSrc =
+analyzeProjectKeyed exportsFor query =
+  let load = query.pqLoad
   let staleRef = newStale ()
-  let wread = p => wrappedRead cacheRef staleRef parseCacheRef read p
+  let wread =
+    p => wrappedRead load.plCache staleRef load.plParseCache load.plRead p
   projectKeyedFromLoad
     exportsFor
-    allowInternal
-    trustedMods
-    entry
-    roots
-    runtimeSrc
-    coreSrc
+    query
     staleRef
-    (loadProgramFilesLocatedCachedE parseCacheRef wread entry roots)
+    (loadProgramFilesLocatedCachedE
+      load.plParseCache
+      wread
+      load.plEntry
+      load.plRoots)
 
 export
 analyzeProjectKeyedSources : (List String -> <e> List (String, List String)) ->
-  Bool ->
-  List String ->
-  Ref (List (String, String)) ->
-  Ref (OrdMap (List Decl)) ->
-  (String -> Option String) ->
-  String ->
-  List String ->
-  String ->
-  String ->
+  ProjectQuery ->
   <IO | e> (Option ((TcReport, DriveOutputs), GraphId), List (String, List Diag), OrdMap String)
-analyzeProjectKeyedSources exportsFor allowInternal trustedMods cacheRef parseCacheRef read entry roots runtimeSrc coreSrc =
+analyzeProjectKeyedSources exportsFor query =
+  let load = query.pqLoad
   let staleRef = newStale ()
-  let wread = p => wrappedRead cacheRef staleRef parseCacheRef read p
+  let wread =
+    p => wrappedRead load.plCache staleRef load.plParseCache load.plRead p
   let (loaded, sources) =
-    loadProgramFilesLocatedCachedSourcesE parseCacheRef wread entry roots
-  let (keyed, diags) =
-    projectKeyedFromLoad
-      exportsFor
-      allowInternal
-      trustedMods
-      entry
-      roots
-      runtimeSrc
-      coreSrc
-      staleRef
-      loaded
+    loadProgramFilesLocatedCachedSourcesE
+      load.plParseCache
+      wread
+      load.plEntry
+      load.plRoots
+  let (keyed, diags) = projectKeyedFromLoad exportsFor query staleRef loaded
   (keyed, diags, sources)
 
 projectKeyedFromLoad : (List String -> <e> List (String, List String)) ->
-  Bool ->
-  List String ->
-  String ->
-  List String ->
-  String ->
-  String ->
+  ProjectQuery ->
   Ref (List (String, Diag)) ->
   Result LoadError (List (String, String, List Decl)) ->
   <IO | e> (Option ((TcReport, DriveOutputs), GraphId), List (String, List Diag))
 -- Dependency errors keep the destination file and the exact located parser error.
-projectKeyedFromLoad _exportsFor _allowInternal _trustedMods _entry _roots _runtimeSrc _coreSrc staleRef (Err (LoadParseFailed mpath _ pe)) =
+projectKeyedFromLoad _exportsFor _query staleRef (Err (LoadParseFailed mpath _ pe)) =
   (None, appendStale staleRef [(mpath, [parseErrDiag mpath pe])])
-projectKeyedFromLoad _exportsFor _allowInternal _trustedMods entry _roots _runtimeSrc _coreSrc staleRef (Err (LoadMsg e)) = (
+projectKeyedFromLoad _exportsFor query staleRef (Err (LoadMsg e)) = (
   None,
-  appendStale staleRef [(entry, [mkDiag SevError RModuleLoad e None])],
+  appendStale staleRef [
+    (query.pqLoad.plEntry, [mkDiag SevError RModuleLoad e None]),
+  ],
 )
 -- A located cycle or test-module import belongs to the importing module.
-projectKeyedFromLoad _exportsFor _allowInternal _trustedMods entry _roots _runtimeSrc _coreSrc staleRef (Err le) = (
+projectKeyedFromLoad _exportsFor query staleRef (Err le) = (
   None,
-  appendStale staleRef (match loadErrorSite entry le
+  appendStale staleRef (match loadErrorSite query.pqLoad.plEntry le
     Some (code, e, file, _, loc) => [(file, [mkDiag SevError code e loc])]
     None => []),
 )
-projectKeyedFromLoad exportsFor allowInternal trustedMods entry roots runtimeSrc coreSrc staleRef (Ok mods) =
-  let chainKey = chainKeyOf entry roots
+projectKeyedFromLoad exportsFor query staleRef (Ok mods) =
+  let load = query.pqLoad
+  let roots = load.plRoots
+  let chainKey = chainKeyOf load.plEntry roots
   let front =
     frontEnd
       exportsFor
@@ -1622,10 +1553,10 @@ projectKeyedFromLoad exportsFor allowInternal trustedMods entry roots runtimeSrc
         fiInputs = { driveInputsFor !selectedProfile False [] |
           diSibling = siblingPairsOf roots mods,
         },
-        fiAllowInternal = allowInternal,
-        fiTrusted = trustedMods,
-        fiRuntimeSrc = runtimeSrc,
-        fiCoreSrc = coreSrc,
+        fiAllowInternal = query.pqAllowInternal,
+        fiTrusted = query.pqTrusted,
+        fiRuntimeSrc = load.plRuntimeSrc,
+        fiCoreSrc = load.plCoreSrc,
         fiPolicy = DriveUnblocked chainKey RecordSteps,
         fiProgram = FrontGraph mods (desugaredModPairs mods),
       }
@@ -1649,69 +1580,33 @@ bucketsResolveRejected buckets = anyList (b => resolveRejected (snd b)) buckets
 -- prelude's schemes, the entry's locals and seed) is dropped.  None on a load
 -- error (a buffer with an unresolved import).
 export
-projectEntrySchemes : Ref (List (String, String)) ->
-  Ref (OrdMap (List Decl)) ->
-  (String -> Option String) ->
-  String ->
-  List String ->
-  String ->
-  String ->
-  <IO> Option (List (String, PubScheme))
-projectEntrySchemes cacheRef parseCacheRef read entry roots runtimeSrc coreSrc =
-  map
-    (pa => publishedEntrySchemes pa.paSchemes)
-    (projectEntryAnalysis
-      cacheRef
-      parseCacheRef
-      read
-      entry
-      roots
-      runtimeSrc
-      coreSrc)
+projectEntrySchemes : ProjectLoad -> <IO> Option (List (String, PubScheme))
+projectEntrySchemes load =
+  map (pa => publishedEntrySchemes pa.paSchemes) (projectEntryAnalysis load)
 
 -- `projectEntrySchemes` handing back its drive's `PartialAnalysis`: every
 -- module's schemes, the prelude's, and the last-checked module's locals and seed.
-projectEntryAnalysis : Ref (List (String, String)) ->
-  Ref (OrdMap (List Decl)) ->
-  (String -> Option String) ->
-  String ->
-  List String ->
-  String ->
-  String ->
-  <IO> Option PartialAnalysis
-projectEntryAnalysis cacheRef parseCacheRef read entry roots runtimeSrc coreSrc =
-  projectEntryAnalysisOr
-    (_ => None)
-    cacheRef
-    parseCacheRef
-    read
-    entry
-    roots
-    runtimeSrc
-    coreSrc
+projectEntryAnalysis : ProjectLoad -> <IO> Option PartialAnalysis
+projectEntryAnalysis load = projectEntryAnalysisOr (_ => None) load
 
 -- `projectEntryAnalysis` that first asks `kept` for an analysis of the graph it
 -- loaded, and drives only when `kept` has none.
 export
 projectEntryAnalysisOr : (GraphId -> Option PartialAnalysis) ->
-  Ref (List (String, String)) ->
-  Ref (OrdMap (List Decl)) ->
-  (String -> Option String) ->
-  String ->
-  List String ->
-  String ->
-  String ->
+  ProjectLoad ->
   <IO> Option PartialAnalysis
-projectEntryAnalysisOr kept cacheRef parseCacheRef read entry roots runtimeSrc coreSrc =
+projectEntryAnalysisOr kept load =
+  let roots = load.plRoots
   let staleRef = newStale ()
-  let wread = p => wrappedRead cacheRef staleRef parseCacheRef read p
-  let runtimeP = preludeDesugared runtimeSrc
-  let coreP = preludeDesugared coreSrc
+  let wread =
+    p => wrappedRead load.plCache staleRef load.plParseCache load.plRead p
+  let runtimeP = preludeDesugared load.plRuntimeSrc
+  let coreP = preludeDesugared load.plCoreSrc
   -- #2719 (a1): the SAME prelude key `analyzeProject` mints, so hover/completion
   -- shares the process-wide prelude interface instead of re-typechecking and
   -- re-solving runtime + core on every request.
-  let preludeKey = Some (preludeGeneration runtimeSrc coreSrc)
-  match loadProgramFilesLocatedCached parseCacheRef wread entry roots
+  let preludeKey = Some (preludeGeneration load.plRuntimeSrc load.plCoreSrc)
+  match loadProgramFilesLocatedCached load.plParseCache wread load.plEntry roots
     Err _ => None
     Ok mods => match kept (graphIdOf mods)
       Some pa => Some pa
@@ -2454,17 +2349,19 @@ analyzeProjectToLines cacheRef read entry roots runtimeSrc coreSrc =
   let parseCacheRef = Ref omEmpty
   joinNl
     (projectLines
-      (analyzeProject
-        noStdlibExports
-        True
-        []
-        cacheRef
-        parseCacheRef
-        read
-        entry
-        roots
-        runtimeSrc
-        coreSrc))
+      (analyzeProject noStdlibExports ProjectQuery {
+        pqLoad = ProjectLoad {
+          plCache = cacheRef,
+          plParseCache = parseCacheRef,
+          plRead = read,
+          plEntry = entry,
+          plRoots = roots,
+          plRuntimeSrc = runtimeSrc,
+          plCoreSrc = coreSrc,
+        },
+        pqAllowInternal = True,
+        pqTrusted = [],
+      }))
 
 projectLines : List (String, List Diag) -> List String
 projectLines [] = []

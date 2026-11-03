@@ -1,5 +1,5 @@
 # META
-source_lines=1854
+source_lines=1855
 stages=DESUGAR,MARK
 # SOURCE
 -- compiler/tools/doc.mdk — the native `medaka doc` documentation extractor.
@@ -71,7 +71,7 @@ import support.util.{
 import support.path.{baseOf, chopExt}
 import support.stage_count.{stageExit}
 import support.ordmap.{omEmpty}
-import driver.diagnostics.{projectEntrySchemes}
+import driver.diagnostics.{projectEntrySchemes, ProjectLoad(..)}
 import driver.loader.{moduleIdOfPath}
 import frontend.desugar.{dataDerivers, newtypeDerivers, typeKindedParams}
 import json.{Json(..), jObject, jArray}
@@ -852,17 +852,17 @@ originModuleSchemes : String ->
 originModuleSchemes runtimeSrc coreSrc roots path =
   match findOriginFile roots (joinWith "/" path)
     None => []
-    Some p =>
-      match (projectEntrySchemes
-        (Ref [])
-        (Ref omEmpty)
-        (_ => None)
-        p
-        roots
-        runtimeSrc
-        coreSrc)
-        None => []
-        Some ss => pubSchemes ss
+    Some p => match projectEntrySchemes ProjectLoad {
+      plCache = Ref [],
+      plParseCache = Ref omEmpty,
+      plRead = _ => None,
+      plEntry = p,
+      plRoots = roots,
+      plRuntimeSrc = runtimeSrc,
+      plCoreSrc = coreSrc,
+    }
+      None => []
+      Some ss => pubSchemes ss
 
 findOriginFile : List String -> String -> <IO> Option String
 findOriginFile [] _ = None
@@ -1842,14 +1842,15 @@ docSchemesFor : String ->
   List Decl ->
   <IO> List (String, Scheme)
 docSchemesFor runtimeSrc coreSrc filename roots _rawUser =
-  match (projectEntrySchemes
-    (Ref [])
-    (Ref omEmpty)
-    (_ => None)
-    filename
-    roots
-    runtimeSrc
-    coreSrc)
+  match projectEntrySchemes ProjectLoad {
+    plCache = Ref [],
+    plParseCache = Ref omEmpty,
+    plRead = _ => None,
+    plEntry = filename,
+    plRoots = roots,
+    plRuntimeSrc = runtimeSrc,
+    plCoreSrc = coreSrc,
+  }
     None =>
       ePutStrLn
         "medaka doc: '\{filename}' has an unresolved import graph (missing or cyclic import) — signatures unavailable"
@@ -1867,7 +1868,7 @@ docSchemesFor runtimeSrc coreSrc filename roots _rawUser =
 (DUse false (UseGroup ("support" "path") ((mem "baseOf" false) (mem "chopExt" false))))
 (DUse false (UseGroup ("support" "stage_count") ((mem "stageExit" false))))
 (DUse false (UseGroup ("support" "ordmap") ((mem "omEmpty" false))))
-(DUse false (UseGroup ("driver" "diagnostics") ((mem "projectEntrySchemes" false))))
+(DUse false (UseGroup ("driver" "diagnostics") ((mem "projectEntrySchemes" false) (mem "ProjectLoad" true))))
 (DUse false (UseGroup ("driver" "loader") ((mem "moduleIdOfPath" false))))
 (DUse false (UseGroup ("frontend" "desugar") ((mem "dataDerivers" false) (mem "newtypeDerivers" false) (mem "typeKindedParams" false))))
 (DUse false (UseGroup ("json") ((mem "Json" true) (mem "jObject" false) (mem "jArray" false))))
@@ -2071,7 +2072,7 @@ docSchemesFor runtimeSrc coreSrc filename roots _rawUser =
 (DFunDef false "hasOriginEntry" (PWild (PList)) (EVar "False"))
 (DFunDef false "hasOriginEntry" ((PVar "mid") (PCons (PTuple (PVar "m") PWild) (PVar "rest"))) (EIf (EBinOp "==" (EVar "mid") (EVar "m")) (EVar "True") (EIf (EVar "otherwise") (EApp (EApp (EVar "hasOriginEntry") (EVar "mid")) (EVar "rest")) (EApp (EVar "__fallthrough__") (ELit LUnit)))))
 (DTypeSig false "originModuleSchemes" (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyEffect ("IO") None (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "Scheme")))))))))
-(DFunDef false "originModuleSchemes" ((PVar "runtimeSrc") (PVar "coreSrc") (PVar "roots") (PVar "path")) (EMatch (EApp (EApp (EVar "findOriginFile") (EVar "roots")) (EApp (EApp (EVar "joinWith") (ELit (LString "/"))) (EVar "path"))) (arm (PCon "None") () (EListLit)) (arm (PCon "Some" (PVar "p")) () (EMatch (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EVar "projectEntrySchemes") (EApp (EVar "Ref") (EListLit))) (EApp (EVar "Ref") (EVar "omEmpty"))) (ELam (PWild) (EVar "None"))) (EVar "p")) (EVar "roots")) (EVar "runtimeSrc")) (EVar "coreSrc")) (arm (PCon "None") () (EListLit)) (arm (PCon "Some" (PVar "ss")) () (EApp (EVar "pubSchemes") (EVar "ss")))))))
+(DFunDef false "originModuleSchemes" ((PVar "runtimeSrc") (PVar "coreSrc") (PVar "roots") (PVar "path")) (EMatch (EApp (EApp (EVar "findOriginFile") (EVar "roots")) (EApp (EApp (EVar "joinWith") (ELit (LString "/"))) (EVar "path"))) (arm (PCon "None") () (EListLit)) (arm (PCon "Some" (PVar "p")) () (EMatch (EApp (EVar "projectEntrySchemes") (ERecordCreate "ProjectLoad" ((fa "plCache" (EApp (EVar "Ref") (EListLit))) (fa "plParseCache" (EApp (EVar "Ref") (EVar "omEmpty"))) (fa "plRead" (ELam (PWild) (EVar "None"))) (fa "plEntry" (EVar "p")) (fa "plRoots" (EVar "roots")) (fa "plRuntimeSrc" (EVar "runtimeSrc")) (fa "plCoreSrc" (EVar "coreSrc"))))) (arm (PCon "None") () (EListLit)) (arm (PCon "Some" (PVar "ss")) () (EApp (EVar "pubSchemes") (EVar "ss")))))))
 (DTypeSig false "findOriginFile" (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyCon "String") (TyEffect ("IO") None (TyApp (TyCon "Option") (TyCon "String"))))))
 (DFunDef false "findOriginFile" ((PList) PWild) (EVar "None"))
 (DFunDef false "findOriginFile" ((PCons (PVar "r") (PVar "rs")) (PVar "rel")) (EBlock (DoLet false false (PVar "p") (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "")) (EApp (EVar "display") (EVar "r"))) (ELit (LString "/"))) (EApp (EVar "display") (EVar "rel"))) (ELit (LString ".mdk")))) (DoExpr (EIf (EApp (EVar "fileExists") (EVar "p")) (EApp (EVar "Some") (EVar "p")) (EApp (EApp (EVar "findOriginFile") (EVar "rs")) (EVar "rel"))))))
@@ -2312,7 +2313,7 @@ docSchemesFor runtimeSrc coreSrc filename roots _rawUser =
 (DFunDef false "sentenceEndAt" (PWild (PList)) (EVar "None"))
 (DFunDef false "sentenceEndAt" ((PVar "prose") (PCons (PVar "m") (PVar "rest"))) (EIf (EBinOp "||" (EBinOp "||" (EBinOp ">=" (EFieldAccess (EVar "m") "end") (EApp (EVar "dlen") (EVar "prose"))) (EBinOp "==" (EApp (EApp (EApp (EVar "dsub") (EFieldAccess (EVar "m") "end")) (EBinOp "+" (EFieldAccess (EVar "m") "end") (ELit (LInt 1)))) (EVar "prose")) (ELit (LString " ")))) (EBinOp "==" (EApp (EApp (EApp (EVar "dsub") (EFieldAccess (EVar "m") "end")) (EBinOp "+" (EFieldAccess (EVar "m") "end") (ELit (LInt 1)))) (EVar "prose")) (ELit (LString "\n")))) (EApp (EVar "Some") (EFieldAccess (EVar "m") "end")) (EApp (EApp (EVar "sentenceEndAt") (EVar "prose")) (EVar "rest"))))
 (DTypeSig false "docSchemesFor" (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyEffect ("IO") None (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "Scheme"))))))))))
-(DFunDef false "docSchemesFor" ((PVar "runtimeSrc") (PVar "coreSrc") (PVar "filename") (PVar "roots") (PVar "_rawUser")) (EMatch (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EVar "projectEntrySchemes") (EApp (EVar "Ref") (EListLit))) (EApp (EVar "Ref") (EVar "omEmpty"))) (ELam (PWild) (EVar "None"))) (EVar "filename")) (EVar "roots")) (EVar "runtimeSrc")) (EVar "coreSrc")) (arm (PCon "None") () (EBlock (DoExpr (EApp (EVar "ePutStrLn") (EBinOp "++" (EBinOp "++" (ELit (LString "medaka doc: '")) (EApp (EVar "display") (EVar "filename"))) (ELit (LString "' has an unresolved import graph (missing or cyclic import) — signatures unavailable"))))) (DoExpr (EApp (EVar "stageExit") (ELit (LInt 1)))) (DoExpr (EListLit)))) (arm (PCon "Some" (PVar "schemes")) () (EApp (EVar "pubSchemes") (EVar "schemes")))))
+(DFunDef false "docSchemesFor" ((PVar "runtimeSrc") (PVar "coreSrc") (PVar "filename") (PVar "roots") (PVar "_rawUser")) (EMatch (EApp (EVar "projectEntrySchemes") (ERecordCreate "ProjectLoad" ((fa "plCache" (EApp (EVar "Ref") (EListLit))) (fa "plParseCache" (EApp (EVar "Ref") (EVar "omEmpty"))) (fa "plRead" (ELam (PWild) (EVar "None"))) (fa "plEntry" (EVar "filename")) (fa "plRoots" (EVar "roots")) (fa "plRuntimeSrc" (EVar "runtimeSrc")) (fa "plCoreSrc" (EVar "coreSrc"))))) (arm (PCon "None") () (EBlock (DoExpr (EApp (EVar "ePutStrLn") (EBinOp "++" (EBinOp "++" (ELit (LString "medaka doc: '")) (EApp (EVar "display") (EVar "filename"))) (ELit (LString "' has an unresolved import graph (missing or cyclic import) — signatures unavailable"))))) (DoExpr (EApp (EVar "stageExit") (ELit (LInt 1)))) (DoExpr (EListLit)))) (arm (PCon "Some" (PVar "schemes")) () (EApp (EVar "pubSchemes") (EVar "schemes")))))
 # MARK
 (DUse false (UseGroup ("frontend" "lexer") ((mem "Comment" false) (mem "collectComments" false) (mem "commentLine" false) (mem "commentText" false))))
 (DUse false (UseGroup ("frontend" "parser") ((mem "parseWithPositions" false) (mem "parseResult" false) (mem "parseErrorLine" false) (mem "parseErrorCol" false) (mem "parseErrorMessage" false) (mem "DeclPos" false) (mem "positionsDecls" false) (mem "declPosLine" false))))
@@ -2324,7 +2325,7 @@ docSchemesFor runtimeSrc coreSrc filename roots _rawUser =
 (DUse false (UseGroup ("support" "path") ((mem "baseOf" false) (mem "chopExt" false))))
 (DUse false (UseGroup ("support" "stage_count") ((mem "stageExit" false))))
 (DUse false (UseGroup ("support" "ordmap") ((mem "omEmpty" false))))
-(DUse false (UseGroup ("driver" "diagnostics") ((mem "projectEntrySchemes" false))))
+(DUse false (UseGroup ("driver" "diagnostics") ((mem "projectEntrySchemes" false) (mem "ProjectLoad" true))))
 (DUse false (UseGroup ("driver" "loader") ((mem "moduleIdOfPath" false))))
 (DUse false (UseGroup ("frontend" "desugar") ((mem "dataDerivers" false) (mem "newtypeDerivers" false) (mem "typeKindedParams" false))))
 (DUse false (UseGroup ("json") ((mem "Json" true) (mem "jObject" false) (mem "jArray" false))))
@@ -2528,7 +2529,7 @@ docSchemesFor runtimeSrc coreSrc filename roots _rawUser =
 (DFunDef false "hasOriginEntry" (PWild (PList)) (EVar "False"))
 (DFunDef false "hasOriginEntry" ((PVar "mid") (PCons (PTuple (PVar "m") PWild) (PVar "rest"))) (EIf (EBinOp "==" (EVar "mid") (EVar "m")) (EVar "True") (EIf (EVar "otherwise") (EApp (EApp (EVar "hasOriginEntry") (EVar "mid")) (EVar "rest")) (EApp (EVar "__fallthrough__") (ELit LUnit)))))
 (DTypeSig false "originModuleSchemes" (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyEffect ("IO") None (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "Scheme")))))))))
-(DFunDef false "originModuleSchemes" ((PVar "runtimeSrc") (PVar "coreSrc") (PVar "roots") (PVar "path")) (EMatch (EApp (EApp (EVar "findOriginFile") (EVar "roots")) (EApp (EApp (EVar "joinWith") (ELit (LString "/"))) (EVar "path"))) (arm (PCon "None") () (EListLit)) (arm (PCon "Some" (PVar "p")) () (EMatch (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EVar "projectEntrySchemes") (EApp (EVar "Ref") (EListLit))) (EApp (EVar "Ref") (EVar "omEmpty"))) (ELam (PWild) (EVar "None"))) (EVar "p")) (EVar "roots")) (EVar "runtimeSrc")) (EVar "coreSrc")) (arm (PCon "None") () (EListLit)) (arm (PCon "Some" (PVar "ss")) () (EApp (EVar "pubSchemes") (EVar "ss")))))))
+(DFunDef false "originModuleSchemes" ((PVar "runtimeSrc") (PVar "coreSrc") (PVar "roots") (PVar "path")) (EMatch (EApp (EApp (EVar "findOriginFile") (EVar "roots")) (EApp (EApp (EVar "joinWith") (ELit (LString "/"))) (EVar "path"))) (arm (PCon "None") () (EListLit)) (arm (PCon "Some" (PVar "p")) () (EMatch (EApp (EVar "projectEntrySchemes") (ERecordCreate "ProjectLoad" ((fa "plCache" (EApp (EVar "Ref") (EListLit))) (fa "plParseCache" (EApp (EVar "Ref") (EVar "omEmpty"))) (fa "plRead" (ELam (PWild) (EVar "None"))) (fa "plEntry" (EVar "p")) (fa "plRoots" (EVar "roots")) (fa "plRuntimeSrc" (EVar "runtimeSrc")) (fa "plCoreSrc" (EVar "coreSrc"))))) (arm (PCon "None") () (EListLit)) (arm (PCon "Some" (PVar "ss")) () (EApp (EVar "pubSchemes") (EVar "ss")))))))
 (DTypeSig false "findOriginFile" (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyCon "String") (TyEffect ("IO") None (TyApp (TyCon "Option") (TyCon "String"))))))
 (DFunDef false "findOriginFile" ((PList) PWild) (EVar "None"))
 (DFunDef false "findOriginFile" ((PCons (PVar "r") (PVar "rs")) (PVar "rel")) (EBlock (DoLet false false (PVar "p") (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "")) (EApp (EMethodRef "display") (EVar "r"))) (ELit (LString "/"))) (EApp (EMethodRef "display") (EVar "rel"))) (ELit (LString ".mdk")))) (DoExpr (EIf (EApp (EVar "fileExists") (EVar "p")) (EApp (EVar "Some") (EVar "p")) (EApp (EApp (EVar "findOriginFile") (EVar "rs")) (EVar "rel"))))))
@@ -2769,4 +2770,4 @@ docSchemesFor runtimeSrc coreSrc filename roots _rawUser =
 (DFunDef false "sentenceEndAt" (PWild (PList)) (EVar "None"))
 (DFunDef false "sentenceEndAt" ((PVar "prose") (PCons (PVar "m") (PVar "rest"))) (EIf (EBinOp "||" (EBinOp "||" (EBinOp ">=" (EFieldAccess (EVar "m") "end") (EApp (EVar "dlen") (EVar "prose"))) (EBinOp "==" (EApp (EApp (EApp (EVar "dsub") (EFieldAccess (EVar "m") "end")) (EBinOp "+" (EFieldAccess (EVar "m") "end") (ELit (LInt 1)))) (EVar "prose")) (ELit (LString " ")))) (EBinOp "==" (EApp (EApp (EApp (EVar "dsub") (EFieldAccess (EVar "m") "end")) (EBinOp "+" (EFieldAccess (EVar "m") "end") (ELit (LInt 1)))) (EVar "prose")) (ELit (LString "\n")))) (EApp (EVar "Some") (EFieldAccess (EVar "m") "end")) (EApp (EApp (EVar "sentenceEndAt") (EVar "prose")) (EVar "rest"))))
 (DTypeSig false "docSchemesFor" (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyEffect ("IO") None (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "Scheme"))))))))))
-(DFunDef false "docSchemesFor" ((PVar "runtimeSrc") (PVar "coreSrc") (PVar "filename") (PVar "roots") (PVar "_rawUser")) (EMatch (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EVar "projectEntrySchemes") (EApp (EVar "Ref") (EListLit))) (EApp (EVar "Ref") (EVar "omEmpty"))) (ELam (PWild) (EVar "None"))) (EVar "filename")) (EVar "roots")) (EVar "runtimeSrc")) (EVar "coreSrc")) (arm (PCon "None") () (EBlock (DoExpr (EApp (EVar "ePutStrLn") (EBinOp "++" (EBinOp "++" (ELit (LString "medaka doc: '")) (EApp (EMethodRef "display") (EVar "filename"))) (ELit (LString "' has an unresolved import graph (missing or cyclic import) — signatures unavailable"))))) (DoExpr (EApp (EVar "stageExit") (ELit (LInt 1)))) (DoExpr (EListLit)))) (arm (PCon "Some" (PVar "schemes")) () (EApp (EVar "pubSchemes") (EVar "schemes")))))
+(DFunDef false "docSchemesFor" ((PVar "runtimeSrc") (PVar "coreSrc") (PVar "filename") (PVar "roots") (PVar "_rawUser")) (EMatch (EApp (EVar "projectEntrySchemes") (ERecordCreate "ProjectLoad" ((fa "plCache" (EApp (EVar "Ref") (EListLit))) (fa "plParseCache" (EApp (EVar "Ref") (EVar "omEmpty"))) (fa "plRead" (ELam (PWild) (EVar "None"))) (fa "plEntry" (EVar "filename")) (fa "plRoots" (EVar "roots")) (fa "plRuntimeSrc" (EVar "runtimeSrc")) (fa "plCoreSrc" (EVar "coreSrc"))))) (arm (PCon "None") () (EBlock (DoExpr (EApp (EVar "ePutStrLn") (EBinOp "++" (EBinOp "++" (ELit (LString "medaka doc: '")) (EApp (EMethodRef "display") (EVar "filename"))) (ELit (LString "' has an unresolved import graph (missing or cyclic import) — signatures unavailable"))))) (DoExpr (EApp (EVar "stageExit") (ELit (LInt 1)))) (DoExpr (EListLit)))) (arm (PCon "Some" (PVar "schemes")) () (EApp (EVar "pubSchemes") (EVar "schemes")))))

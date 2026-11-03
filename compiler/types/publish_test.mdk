@@ -44,7 +44,9 @@ import types.tc_solve_test_support.{
   drive, rendered, linkCount, numericPreludeSource, accRenderChecked
 }
 import types.tc_test_support.{intM}
-import driver.diagnostics.{analyzeProjectReport, noStdlibExports}
+import driver.diagnostics.{
+  analyzeProjectReport, noStdlibExports, ProjectLoad(..), ProjectQuery(..)
+}
 import tools.lsp.{typeAtPoint}
 import test_process.{withScratchDir}
 import types.capability_manifest.{
@@ -1415,18 +1417,19 @@ projectReport view rsrc csrc dir broken =
     writeFile entry (hoverEntry broken),
   )
     (Ok _, Ok _) =>
-      let (report, _) =
-        analyzeProjectReport
-          noStdlibExports
-          True
-          []
-          (Ref [])
-          (Ref omEmpty)
-          (_ => None)
-          entry
-          [dir, "stdlib"]
-          rsrc
-          csrc
+      let (report, _) = analyzeProjectReport noStdlibExports ProjectQuery {
+        pqLoad = ProjectLoad {
+          plCache = Ref [],
+          plParseCache = Ref omEmpty,
+          plRead = _ => None,
+          plEntry = entry,
+          plRoots = [dir, "stdlib"],
+          plRuntimeSrc = rsrc,
+          plCoreSrc = csrc,
+        },
+        pqAllowInternal = True,
+        pqTrusted = [],
+      }
       match report
         Some r => Ok (view r)
         None => Err "no report"
