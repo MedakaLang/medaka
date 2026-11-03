@@ -68,9 +68,9 @@ import frontend.lexer.{
   lineStartsOf,
   offsetToLineColFast,
 }
-import support.util.{joinNl, reverseL, splitNl, startsWith, stringTrim}
+import support.util.{joinNl, reverseL, splitNl, startsWith}
 import support.ordmap.{OrdMap, omEmpty, omHasKey, omInsert}
-import string.{replaceAll, toInt}
+import string.{replaceAll, toInt, trimAscii}
 
 -- One native arm's part of a merged probe (`tools/native_probe.mdk`): the
 -- sentinel prefix its transcript is read under, its import lines, its
@@ -368,8 +368,8 @@ export
 firstNonEmptyLine : List String -> String
 firstNonEmptyLine [] = ""
 firstNonEmptyLine (l :: rest)
-  | stringTrim l == "" = firstNonEmptyLine rest
-  | otherwise = stringTrim l
+  | trimAscii l == "" = firstNonEmptyLine rest
+  | otherwise = trimAscii l
 
 -- What a target's own top-level `main` is renamed to inside a probe.  Nothing
 -- in a probe references it, so dead-code elimination drops it.
@@ -417,9 +417,9 @@ renameHeads n (h :: hs) (l :: ls)
   | otherwise = l :: renameHeads (n + 1) (h :: hs) ls
 # DESUGAR
 (DUse false (UseGroup ("frontend" "lexer") ((mem "Token" true) (mem "tokenizeWithOffsetPairs" false) (mem "lineStartsOf" false) (mem "offsetToLineColFast" false))))
-(DUse false (UseGroup ("support" "util") ((mem "joinNl" false) (mem "reverseL" false) (mem "splitNl" false) (mem "startsWith" false) (mem "stringTrim" false))))
+(DUse false (UseGroup ("support" "util") ((mem "joinNl" false) (mem "reverseL" false) (mem "splitNl" false) (mem "startsWith" false))))
 (DUse false (UseGroup ("support" "ordmap") ((mem "OrdMap" false) (mem "omEmpty" false) (mem "omHasKey" false) (mem "omInsert" false))))
-(DUse false (UseGroup ("string") ((mem "replaceAll" false) (mem "toInt" false))))
+(DUse false (UseGroup ("string") ((mem "replaceAll" false) (mem "toInt" false) (mem "trimAscii" false))))
 (DData Public "Section" () ((variant "Section" (ConNamed (field "secPrefix" (TyCon "String")) (field "secImports" (TyApp (TyCon "List") (TyCon "String"))) (field "secDecls" (TyApp (TyCon "List") (TyCon "String"))) (field "secEntry" (TyApp (TyCon "List") (TyCon "String")))))) ())
 (DTypeSig true "testSeedRef" (TyApp (TyCon "Ref") (TyApp (TyCon "Option") (TyCon "Int"))))
 (DFunDef false "testSeedRef" () (EApp (EVar "Ref") (EVar "None")))
@@ -505,7 +505,7 @@ renameHeads n (h :: hs) (l :: ls)
 (DFunDef false "lookupChunk" ((PVar "tag") (PCons (PCon "Chunk" (PVar "t") (PVar "ls") (PVar "done")) (PVar "rest"))) (EIf (EBinOp "==" (EVar "t") (EVar "tag")) (EApp (EVar "Some") (EApp (EApp (EApp (EVar "Chunk") (EVar "t")) (EVar "ls")) (EVar "done"))) (EIf (EVar "otherwise") (EApp (EApp (EVar "lookupChunk") (EVar "tag")) (EVar "rest")) (EApp (EVar "__fallthrough__") (ELit LUnit)))))
 (DTypeSig true "firstNonEmptyLine" (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyCon "String")))
 (DFunDef false "firstNonEmptyLine" ((PList)) (ELit (LString "")))
-(DFunDef false "firstNonEmptyLine" ((PCons (PVar "l") (PVar "rest"))) (EIf (EBinOp "==" (EApp (EVar "stringTrim") (EVar "l")) (ELit (LString ""))) (EApp (EVar "firstNonEmptyLine") (EVar "rest")) (EIf (EVar "otherwise") (EApp (EVar "stringTrim") (EVar "l")) (EApp (EVar "__fallthrough__") (ELit LUnit)))))
+(DFunDef false "firstNonEmptyLine" ((PCons (PVar "l") (PVar "rest"))) (EIf (EBinOp "==" (EApp (EVar "trimAscii") (EVar "l")) (ELit (LString ""))) (EApp (EVar "firstNonEmptyLine") (EVar "rest")) (EIf (EVar "otherwise") (EApp (EVar "trimAscii") (EVar "l")) (EApp (EVar "__fallthrough__") (ELit LUnit)))))
 (DTypeSig true "userMainName" (TyCon "String"))
 (DFunDef false "userMainName" () (ELit (LString "__probe_user_main__")))
 (DTypeSig true "renameUserMain" (TyFun (TyCon "String") (TyCon "String")))
@@ -522,9 +522,9 @@ renameHeads n (h :: hs) (l :: ls)
 (DFunDef false "renameHeads" ((PVar "n") (PCons (PVar "h") (PVar "hs")) (PCons (PVar "l") (PVar "ls"))) (EIf (EBinOp "==" (EVar "n") (EVar "h")) (EBinOp "::" (EBinOp "++" (EVar "userMainName") (EApp (EApp (EApp (EVar "stringSlice") (ELit (LInt 4))) (EApp (EVar "stringLength") (EVar "l"))) (EVar "l"))) (EApp (EApp (EApp (EVar "renameHeads") (EBinOp "+" (EVar "n") (ELit (LInt 1)))) (EVar "hs")) (EVar "ls"))) (EIf (EVar "otherwise") (EBinOp "::" (EVar "l") (EApp (EApp (EApp (EVar "renameHeads") (EBinOp "+" (EVar "n") (ELit (LInt 1)))) (EBinOp "::" (EVar "h") (EVar "hs"))) (EVar "ls"))) (EApp (EVar "__fallthrough__") (ELit LUnit)))))
 # MARK
 (DUse false (UseGroup ("frontend" "lexer") ((mem "Token" true) (mem "tokenizeWithOffsetPairs" false) (mem "lineStartsOf" false) (mem "offsetToLineColFast" false))))
-(DUse false (UseGroup ("support" "util") ((mem "joinNl" false) (mem "reverseL" false) (mem "splitNl" false) (mem "startsWith" false) (mem "stringTrim" false))))
+(DUse false (UseGroup ("support" "util") ((mem "joinNl" false) (mem "reverseL" false) (mem "splitNl" false) (mem "startsWith" false))))
 (DUse false (UseGroup ("support" "ordmap") ((mem "OrdMap" false) (mem "omEmpty" false) (mem "omHasKey" false) (mem "omInsert" false))))
-(DUse false (UseGroup ("string") ((mem "replaceAll" false) (mem "toInt" false))))
+(DUse false (UseGroup ("string") ((mem "replaceAll" false) (mem "toInt" false) (mem "trimAscii" false))))
 (DData Public "Section" () ((variant "Section" (ConNamed (field "secPrefix" (TyCon "String")) (field "secImports" (TyApp (TyCon "List") (TyCon "String"))) (field "secDecls" (TyApp (TyCon "List") (TyCon "String"))) (field "secEntry" (TyApp (TyCon "List") (TyCon "String")))))) ())
 (DTypeSig true "testSeedRef" (TyApp (TyCon "Ref") (TyApp (TyCon "Option") (TyCon "Int"))))
 (DFunDef false "testSeedRef" () (EApp (EVar "Ref") (EVar "None")))
@@ -610,7 +610,7 @@ renameHeads n (h :: hs) (l :: ls)
 (DFunDef false "lookupChunk" ((PVar "tag") (PCons (PCon "Chunk" (PVar "t") (PVar "ls") (PVar "done")) (PVar "rest"))) (EIf (EBinOp "==" (EVar "t") (EVar "tag")) (EApp (EVar "Some") (EApp (EApp (EApp (EVar "Chunk") (EVar "t")) (EVar "ls")) (EVar "done"))) (EIf (EVar "otherwise") (EApp (EApp (EVar "lookupChunk") (EVar "tag")) (EVar "rest")) (EApp (EVar "__fallthrough__") (ELit LUnit)))))
 (DTypeSig true "firstNonEmptyLine" (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyCon "String")))
 (DFunDef false "firstNonEmptyLine" ((PList)) (ELit (LString "")))
-(DFunDef false "firstNonEmptyLine" ((PCons (PVar "l") (PVar "rest"))) (EIf (EBinOp "==" (EApp (EVar "stringTrim") (EVar "l")) (ELit (LString ""))) (EApp (EVar "firstNonEmptyLine") (EVar "rest")) (EIf (EVar "otherwise") (EApp (EVar "stringTrim") (EVar "l")) (EApp (EVar "__fallthrough__") (ELit LUnit)))))
+(DFunDef false "firstNonEmptyLine" ((PCons (PVar "l") (PVar "rest"))) (EIf (EBinOp "==" (EApp (EVar "trimAscii") (EVar "l")) (ELit (LString ""))) (EApp (EVar "firstNonEmptyLine") (EVar "rest")) (EIf (EVar "otherwise") (EApp (EVar "trimAscii") (EVar "l")) (EApp (EVar "__fallthrough__") (ELit LUnit)))))
 (DTypeSig true "userMainName" (TyCon "String"))
 (DFunDef false "userMainName" () (ELit (LString "__probe_user_main__")))
 (DTypeSig true "renameUserMain" (TyFun (TyCon "String") (TyCon "String")))

@@ -2770,6 +2770,12 @@ export
 pendingPreludeNotices : Ref (List (String, String))
 pendingPreludeNotices = Ref []
 
+-- Extra top-level members a verb stages for its own aborted-run envelope
+-- (`medaka test --json` stages `seed`); appended after the notices above.
+export
+pendingEnvelopeExtras : Ref (List (String, Json))
+pendingEnvelopeExtras = Ref []
+
 -- The extra top-level envelope fields the deferred notices amount to: the
 -- staleness verdicts staged above, plus whatever `MEDAKA_PERF=1` buffered into
 -- `support.timer`'s sink (verbatim `[perf]` lines — the identical strings the
@@ -2786,7 +2792,7 @@ runEnvelopeFields _ =
   let perfF = match takePerfSink ()
     [] => []
     ls => [("perf", JArray (arrayFromList (map (l => JString l) ls)))]
-  staleF ++ preludeF ++ perfF
+  staleF ++ preludeF ++ perfF ++ !pendingEnvelopeExtras
 
 -- Emit the ONE `run --json` envelope on stderr — or nothing at all when there
 -- is nothing to say (no diagnostics AND no notices), which keeps a clean run on

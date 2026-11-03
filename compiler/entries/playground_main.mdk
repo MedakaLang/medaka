@@ -141,7 +141,8 @@ import entries.entry_support.{
   stampModulePaths,
   failWith,
 }
-import support.util.{joinNl, startsWith, splitOnChar, filterList, stringTrim}
+import support.util.{joinNl, startsWith, splitOnChar, filterList}
+import string.{trimAscii}
 import types.publish.{PubScheme(..), ppPubScheme}
 import types.tc_types.{DriveOutputs(..), emptyDriveOutputs}
 import types.typecheck.{
@@ -374,7 +375,7 @@ seedShippedInterface coreP rsrc csrc =
     Err _ => ()
     Ok fp =>
       let _ =
-        loadPreludeInterface (shippedInputsFor (stringTrim fp) dir rsrc csrc)
+        loadPreludeInterface (shippedInputsFor (trimAscii fp) dir rsrc csrc)
       ()
 
 -- Single module: one unguarded `frontEnd` run over the located parse (correct
