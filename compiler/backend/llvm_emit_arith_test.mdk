@@ -397,9 +397,9 @@ cachedDefaultProgram =
         0
         (CImplTagged
           "T"
-          "I|third|"
-          "I"
-          (ImplSym "tag4" "I" "third")
+          "N|third|"
+          "N"
+          (ImplSym "tag4" "N" "third")
           []
           []
           (CLit (LInt 44))),
@@ -422,7 +422,7 @@ cachedDefaultProgram =
           valueArity = 0,
         },
         MethodResultFact {
-          iface = "I",
+          iface = "N",
           method = "neighbor",
           returnsHead = False,
           callbackPositions = [],

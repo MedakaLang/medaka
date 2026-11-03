@@ -31,6 +31,7 @@ import ir.core_ir.{
   CStmt(..),
   CTBranch(..),
   CTree(..),
+  ifaceMethodArityKey,
 }
 import backend.extern_catalog.{
   RuntimeExternDomain,
@@ -45,6 +46,7 @@ import support.ordmap.{
   omHasKey,
   omFromNames,
   omFromPairs,
+  omMapValues,
 }
 import support.util.{lenKey, reverseL, filterList, listLen}
 import backend.wasm_reach.{wasmReachFilter}
@@ -105,9 +107,141 @@ public export data EmitPlan = EmitPlan {
   wasmPhysical : Option WasmDemandPlan,
   hostKeys : List String,
   jsImports : List JsImport,
+  methodTables : MethodTables,
 }
 
 public export data ReachUnits = ReachUnits { total : Int, kept : Int }
+
+-- A dictionary is a method table: `[hdr | super_0 .. | slot_0 .. | req_0 ..]`.
+-- `slots` gives each interface's slots in declaration order; slot i of a
+-- dictionary of that interface is the word after its supers, at field
+-- `supers + i`.  `instances` gives, per instance key, the impl groups that fill
+-- each slot of its interface, in slot order.  A valid program has exactly one
+-- group per slot (`core_validate.validateMethodTables`).
+public export data MethodTables = MethodTables {
+  slots : OrdMap (List MethodSlot),
+  instances : OrdMap InstanceTable,
+}
+
+-- One slot: the method, the dictionaries its own `=>` context takes, and its
+-- declared value arity.  A slot holds a closure of `1 + contextDicts +
+-- valueArity` arguments, called as `code(clos, dict, mw.., args..)`.
+public export data MethodSlot = MethodSlot {
+  method : String,
+  contextDicts : Int,
+  valueArity : Int,
+} deriving (Eq, Debug)
+
+-- An instance's table: its interface word and, per slot of that interface, the
+-- groups that fill it.
+public export data InstanceTable = InstanceTable {
+  iface : String,
+  fills : List (List SlotCallee),
+}
+
+-- A group that fills a slot: its position in `EmitPlan.implGroups`, whether it
+-- is an inherited default's per-instance body, and the value arity its entries
+-- declare.
+public export data SlotCallee = SlotCallee {
+  group : Int,
+  inherited : Bool,
+  declaredArity : Int,
+} deriving (Eq, Debug)
+
+-- the slots of interface [iface], in declaration order
+export
+interfaceSlots : MethodTables -> String -> List MethodSlot
+interfaceSlots tables iface = optionOr [] (omLookup iface tables.slots)
+
+-- Slot order is the order of the declaration facts; the first declaration of a
+-- method wins, as in `indexMethodResults`.
+planMethodTables : CProgram -> List ImplClauseGroup -> MethodTables
+planMethodTables (CProgram _ _ _ impls mctx facts) groups =
+  let contexts = omFromPairs mctx omEmpty
+  let slots = fold (addSlot contexts) omEmpty facts.factMethodResults
+  let entries = indexImplEntries impls 0 omEmpty
+  let byKey = fillsByKey entries groups 0 omEmpty
+  MethodTables {
+    slots = slots,
+    instances = omMapValues (instanceTable slots) byKey,
+  }
+
+instanceTable : OrdMap (List MethodSlot) ->
+  (String, OrdMap (List SlotCallee)) ->
+  InstanceTable
+instanceTable slots (iface, byMethod) = InstanceTable {
+  iface = iface,
+  fills =
+    map
+      (s => optionOr [] (omLookup (s : MethodSlot).method byMethod))
+      (optionOr [] (omLookup iface slots)),
+}
+
+addSlot : OrdMap Int ->
+  OrdMap (List MethodSlot) ->
+  MethodResultFact ->
+  OrdMap (List MethodSlot)
+addSlot contexts acc row =
+  let have = optionOr [] (omLookup row.iface acc)
+  if any (s => (s : MethodSlot).method == row.method) have then
+    acc
+  else
+    omInsert
+      row.iface
+      (have
+        ++ [
+          MethodSlot {
+            method = row.method,
+            contextDicts =
+              optionOr
+                0
+                (omLookup (ifaceMethodArityKey row.iface row.method) contexts),
+            valueArity = row.valueArity,
+          },
+        ])
+      acc
+
+-- per instance key: its interface word and the callees of each method
+fillsByKey : OrdMap CImplEntry ->
+  List ImplClauseGroup ->
+  Int ->
+  OrdMap (String, OrdMap (List SlotCallee)) ->
+  OrdMap (String, OrdMap (List SlotCallee))
+fillsByKey _ [] _ acc = acc
+fillsByKey entries (g :: rest) i acc = match firstEntryOf entries g
+  Some (CImplEntry method _ declared body) =>
+    let (iface, inherited) = match body
+      CImplTagged _ _ word _ _ _ _ => (word, False)
+      CImplDefault word _ _ _ _ _ _ => (word, True)
+    let key = (g : ImplClauseGroup).key
+    let byMethod = match omLookup key acc
+      Some (_, m) => m
+      None => omEmpty
+    let callee = SlotCallee {
+      group = i,
+      inherited = inherited,
+      declaredArity = declared,
+    }
+    fillsByKey
+      entries
+      rest
+      (i + 1)
+      (omInsert
+        key
+        (
+          iface,
+          omInsert
+            method
+            (optionOr [] (omLookup method byMethod) ++ [callee])
+            byMethod,
+        )
+        acc)
+  None => fillsByKey entries rest (i + 1) acc
+
+firstEntryOf : OrdMap CImplEntry -> ImplClauseGroup -> Option CImplEntry
+firstEntryOf entries g = match (g : ImplClauseGroup).indices
+  i :: _ => omLookup (intToString i) entries
+  [] => None
 
 export
 buildEmitPlan : Backend -> RuntimeExternDomain -> CProgram -> EmitPlan
@@ -203,6 +337,7 @@ planOver target domain reach ctorFields prog =
     jsImports = match physical
       Some p => p.jsImports
       None => [],
+    methodTables = planMethodTables prog implGroups,
   }
 
 export

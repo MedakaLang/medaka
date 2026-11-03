@@ -44,7 +44,7 @@ import test.{
 }
 import frontend.parser.{parse}
 import frontend.desugar.{desugar}
-import list.{take}
+import list.{drop, take}
 import support.util.{dedup, listLen, joinNl, reverseL}
 import support.ordmap.{omEmpty, omInsert}
 import frontend.marker.{declRefs}
@@ -85,8 +85,11 @@ import ir.core_ir_lower.{
 }
 import backend.extern_catalog.{catalogRow, ledgerEntry, rowLlvm, rowWasm}
 import backend.core_validate.{
-  validateForEmission, coreDefectMessage, validateMethodResults
+  validateForEmission, coreDefectMessage, validateMethodResults,
+  validateMethodTables
 }
+import backend.emit_plan.{InstanceTable(..), MethodTables(..), SlotCallee(..)}
+import support.ordmap.{omMapValues}
 import backend.core_validate.{
   CheckedTarget, checkedTarget, checkedTargetOf, ExternFinding(..),
   isUnprovidedOn, missingCatalogRows, missingRowsMessage, renderExternFinding,
@@ -119,7 +122,7 @@ import backend.global_plan.{GlobalInitPlan(..)}
 
 import types.target_profile.{lookupProfile}
 import test_process.{underRoot, boundedVerbSeconds, withScratchDir}
-import string.{contains, split}
+import string.{contains, split, startsWith}
 import types.tc_elab.{grantWholeDomain}
 
 -- The Wasm emitters as these tests read them.  None of the programs here has a
@@ -3459,8 +3462,14 @@ groupDefault tag symbol pattern value =
       [PVar "$dict_n_0" noDeclLoc (BinderId "" 98765), PLit (LInt pattern)]
       (CLit (LInt value)))
 
+-- Every instance a group program names supplies each method its interface
+-- declares in the facts below, so its method table is complete: a method the
+-- test does not exercise gets a constant clause of its own.
 groupProgram : List CImplEntry -> CProgram
-groupProgram entries = match emissionControl
+groupProgram entries = groupProgramOf (entries ++ groupFillers entries)
+
+groupProgramOf : List CImplEntry -> CProgram
+groupProgramOf entries = match emissionControl
   CProgram bs ars tys _ contexts facts => CProgram
     bs
     ars
@@ -3508,6 +3517,28 @@ groupProgram entries = match emissionControl
           }
           :: facts.factBinders,
     }
+
+groupFillers : List CImplEntry -> List CImplEntry
+groupFillers entries =
+  flatMap
+    (key =>
+      map
+        (m => groupTagged m key "Fill" "fill-\{m}-\{key}" 0 0)
+        (filter
+          (m =>
+            not
+              (any
+                (ent => groupEntryKey ent == key && groupEntryMethod ent == m)
+                entries))
+          (if startsWith "XI|" key then ["m"] else ["m", "mX", "n"])))
+    (dedup (map groupEntryKey entries))
+
+groupEntryKey : CImplEntry -> String
+groupEntryKey (CImplEntry _ _ _ (CImplTagged _ key _ _ _ _ _)) = key
+groupEntryKey (CImplEntry _ _ _ (CImplDefault _ _ key _ _ _ _)) = key
+
+groupEntryMethod : CImplEntry -> String
+groupEntryMethod (CImplEntry method _ _ _) = method
 
 test "physical groups preserve interleaved clauses and first symbol in both emitters" =
   let a = groupTagged "m" "I|Box Int|" "Box" "first" 0 11
@@ -3762,3 +3793,85 @@ test "physical groups keep concatenation-colliding method and key pairs distinct
 
 findingExtern : ExternFinding -> String
 findingExtern (ExternFinding name _ _ _ _) = name
+
+-- ── method tables ───────────────────────────────────────────────────────────
+-- `sz` has two instances, so `viaDict`'s call is answered by the dictionary it is
+-- given: a slot load.  `B` supplies `tw`; `A` inherits it.
+tableSrc : String
+tableSrc =
+  "interface Sz a where\n  sz : a -> Int\n  tw : a -> Int\n  tw x = sz x + sz x\ndata A = A\ndata B = B\nimpl Sz A where\n  sz _ = 1\nimpl Sz B where\n  sz _ = 2\n  tw _ = 7\nviaDict : Sz a => a -> Int\nviaDict x = sz x + tw x\nmain = viaDict A + viaDict B"
+
+-- [plan] with every instance table's slot fills rewritten by [f]
+withFills : (List SlotCallee -> List SlotCallee) -> EmitPlan -> EmitPlan
+withFills f plan =
+  let tables = plan.methodTables
+  { plan |
+    methodTables = { tables |
+      instances =
+        omMapValues
+          (t => { t | fills = map f (t : InstanceTable).fills })
+          tables.instances,
+    },
+  }
+
+test "(ag) every slot of a method table has exactly one callee of the declared arity" =
+  let cp = typedLowered "" tableSrc
+  let plan = buildEmitPlan LlvmBackend PreludeFreeRuntime cp
+  let refused f =
+    joinNl (validateMethodTables LlvmBackend (withFills f plan) cp)
+  expectEach [
+    (
+      "the lowered program's tables are accepted",
+      expectEqual [] (validateMethodTables LlvmBackend plan cp),
+    ),
+    (
+      "a slot with no callee is refused",
+      expectTextContainsAll
+        ["method table: slot `sz` of instance", "has 0 callees"]
+        (refused (_ => [])),
+    ),
+    (
+      "a slot with two callees is refused",
+      expectTextContainsAll
+        ["method table: slot `tw` of instance", "has 2 callees"]
+        (refused (cs => cs ++ cs)),
+    ),
+    (
+      "a callee of another arity is refused",
+      expectTextContainsAll
+        ["takes 1 values, its callee declares 2"]
+        (refused (cs =>
+          map
+            (c => { c | declaredArity = (c : SlotCallee).declaredArity + 1 })
+            cs)),
+    ),
+    (
+      "the wasm emitter does not read the tables",
+      expectEqual
+        []
+        (validateMethodTables WasmBackend (withFills (_ => []) plan) cp),
+    ),
+  ]
+
+-- the lines from the first one that starts with [prefix]
+fromLabel : String -> List String -> List String
+fromLabel _ [] = []
+fromLabel prefix (l :: rest) =
+  if startsWith prefix l then l :: rest else fromLabel prefix rest
+
+test "(ah) a slot load tests the dictionary for null and traps through mdk_dispatch_no_impl" =
+  let cp = typedLowered "" tableSrc
+  let li = makeEmitInput RawUnchecked PreludeFreeRuntime [] [] 0 [] [] ""
+  let ir = llvmStrict li (buildEmitPlan LlvmBackend PreludeFreeRuntime cp) cp
+  expectEach [
+    (
+      "the dictionary word is compared with null before the load",
+      expectTextContainsAll ["= icmp eq i64 %arg0, 0", "label %slotnull"] ir,
+    ),
+    (
+      "the null branch traps and does not fall through to the load",
+      expectEqual
+        ["  call void @mdk_dispatch_no_impl()", "  unreachable"]
+        (take 2 (drop 1 (fromLabel "slotnull" (split "\n" ir)))),
+    ),
+  ]

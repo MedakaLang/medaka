@@ -1,0 +1,11 @@
+-- `renderWith` has a context of its own (`Shown b =>`), so a call of it takes a
+-- method-level dictionary besides the receiver's.  The corpus links no prelude,
+-- so `Shown` stands in for `Display`.
+export interface Shown a where
+  shown : a -> String
+
+export impl Shown Int where
+  shown n = intToString n
+
+export interface Render f where
+  renderWith : Shown b => f b -> String

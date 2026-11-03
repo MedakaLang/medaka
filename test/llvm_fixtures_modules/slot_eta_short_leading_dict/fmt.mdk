@@ -1,0 +1,10 @@
+-- `fmtWith` declares two values and a method-level dictionary (`Shown b =>`).  The
+-- corpus links no prelude, so `Shown` stands in for `Display`.
+export interface Shown a where
+  shown : a -> String
+
+export impl Shown Int where
+  shown n = intToString n
+
+export interface Fmt a where
+  fmtWith : Shown b => a -> b -> String

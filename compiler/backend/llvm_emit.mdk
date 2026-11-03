@@ -340,6 +340,11 @@ import types.route_key.{numIntWord}
 import backend.impl_groups.{ImplClauseGroup(..)}
 import backend.emit_plan.{
   EmitPlan(..),
+  MethodSlot(..),
+  MethodTables(..),
+  InstanceTable(..),
+  SlotCallee(..),
+  interfaceSlots,
   lookupMethodResult,
   planEntryMainIsUnit,
   planEntryMainIsFloat,
@@ -924,7 +929,17 @@ data Emit = Emit {
   implsByMethod : Ref (Option (OrdMap (List CImplEntry))),
   implMethodSet : Ref (Option (OrdMap Unit)),
   typeIdMap : Ref (Option (OrdMap Int)),
-  dispCache : Ref (List String),
+  -- the program's method tables (`EmitPlan.methodTables`)
+  methodTables : MethodTables,
+  -- every impl group, keyed by its position in `EmitPlan.implGroups`
+  implGroupAt : Ref (OrdMap ImplGroup),
+  -- the slot closures emitted so far, keyed by instance key and slot index
+  slotCache : Ref (OrdMap String),
+  -- while an inherited default's body is emitted: its receiver parameter and its
+  -- interface's super and slot counts (`receiverIndex`)
+  defaultReceiver : Ref (Option (String, Int, Int)),
+  -- the `@mdk.supers.*` constants written so far (`superCountGlobal`)
+  superCountGlobals : Ref (OrdMap Unit),
   -- constant dict / closure cells already emitted, keyed by `constCellKey`
   -- (scope word + initializer text), so a cell is deduped only WITHIN the scope
   -- that minted it — see `constCellKey`.
@@ -1633,14 +1648,6 @@ implEntryPositions (CImplEntry _ _ _ (CImplTagged _ _ _ _ positions _ _)) =
   positions
 implEntryPositions (CImplEntry _ _ _ (CImplDefault _ _ _ _ positions _ _)) =
   positions
-
--- #747: is this a nullary/return-position/dictionary-free impl — the exact shape
--- core_ir_lower.memoKeys treats as a per-instance CAF (positions == [] && pats == [],
--- mirroring eval's memoThunk gate)?  A dispatch arm for such an impl, reached with no
--- method-level or value args, is memoised via its `$memo_<symTag>_<method>` CAF.
-implEntryMemoisable : CImplEntry -> Bool
-implEntryMemoisable ent =
-  isEmptyL (implEntryPositions ent) && isEmptyL (implPats ent)
 
 implEntryTag : CImplEntry -> String
 implEntryTag (CImplEntry _ _ _ (CImplTagged tag _ _ _ _ _ _)) = tag
@@ -7860,13 +7867,8 @@ emitPapDefineIndirect e papName supplied remaining =
   bufRef e := saved
 
 -- a runtime method dispatch (RDict/RDictFwd/RProj): the dictionary [dict] denotes
--- — the enclosing function's dict PARAMETER or a super projected out of one (a BOXED
--- dict-witness pointer, GAP 1 Option A) — selects the impl at run time.  Load the head tag from the cell's field 0, then emit an if-chain over
--- the method's tagged impls — compare the head tag to each impl's hashName tag, on
--- a match load the matched impl's nested per-instance dicts from the cell's fields
--- 1..n, PREPEND them to argOps (the impl fn's leading element-dict params), call
--- that impl's lifted fn into a result slot and branch to the end; an exhausted
--- chain is `unreachable`.
+-- (the enclosing function's dict PARAMETER or a super projected out of one) holds
+-- the method's slot closure, which the call loads and calls (`emitSlotCall`).
 emitMethodDispatch : Emit ->
   OrdMap (String, LTy) ->
   String ->
@@ -7896,16 +7898,15 @@ emitMethodDispatch e env name iface siteArity dict methRoutes argOps =
         argOps
         (implSrcValueArity ent)
         LTInt
-    _ =>
-      emitMethodDispatchChain e env name iface siteArity dict methRoutes argOps
+    _ => emitSlotCall e env name iface dict methRoutes argOps
 
 -- WS-1b: Some impl iff the occurrence's interface has exactly one entry for [name]
 -- AND that entry takes no leading `requires` element-dict params (reqCount 0) — the
 -- case where a direct call needs nothing from the runtime dict.  Every instance that
 -- inherits the method has its own entry (an inherited default's per-instance body),
 -- so "one entry" is "one possible callee".  A multi-entry method, or a sole entry
--- WITH requires (whose element dicts live in the dict cell), still goes through the
--- tag-switching chain (which reads the dict).
+-- WITH requires (whose element dicts live in the dictionary), still loads its slot
+-- from the dictionary.
 soleImplDirect : Emit -> String -> String -> Int -> Option CImplEntry
 soleImplDirect e name iface siteArity = match siteImpls e name iface siteArity
   [ent] => if implReqCount e name ent <= 0 then Some ent else None
@@ -7927,11 +7928,9 @@ siteImpls e name iface siteArity =
 -- adds one (`impl Bimappable MyPair`).  Baking it there would be a silent
 -- miscompile: `prelude.o` would direct-call the wrong impl forever.
 --
--- So under `MEDAKA_PRELUDE_OBJ` every site routes through the shared dispatcher,
--- and the sole-impl shortcut moves INSIDE the dispatcher body (emitDispatcherDefine),
--- which is re-emitted per program from the WHOLE-program impl table.  The
--- null-dict property WS-1b exists for is preserved exactly: that body still makes
--- a direct call and still never loads `%dict` (see emitDispatcherDefine).
+-- So under `MEDAKA_PRELUDE_OBJ` every such site loads its slot from the dictionary,
+-- which reaches whatever impl the program supplies, and a null dictionary traps
+-- loudly at the load (`loadSlot`) instead of being read.
 --
 -- Mode 0 (every ordinary `medaka build`) keeps the direct call at the site.
 soleImplDirectSite : Emit -> String -> String -> Int -> Option CImplEntry
@@ -8087,128 +8086,195 @@ emitDeclares e ((sym, proto) :: rest) =
   emit e ("declare " ++ prototypeText sym proto)
   emitDeclares e rest
 
--- ── issue #118: the dispatch chain is OUTLINED, one per method ──────────────
--- INLINING the whole impl chain at a runtime-dict dispatch site — one `icmp` +
--- branch + call arm per impl of the method, at EVERY site — makes the emitted IR
--- grow as `Σ over sites of (#impls of that site's method)`, and it is the dominant
--- term in a small program's IR: on `test/wasm/fixtures/adt_enum_nullary.mdk` (9 lines
--- of source) there were 107 dispatch sites but only NINE distinct chains between
--- them — 2,123 emitted arms, ~80% of the module's 32,895 lines, to express 9 chains.
---
--- So the chain now lives ONCE, in a shared `@mdk_disp_<method>_<nMeth>_<nArgs>`
--- define, and the site is a single `call`.  The chain BODY is unchanged — the same
--- head-tag `icmp` arms in the same order, the same
--- `unreachable` tail — so every dispatch decision is byte-for-byte the one the inline
--- chain made; only its PLACEMENT moved.
---
--- The dispatcher's parameters are exactly what the inline chain read out of the
--- enclosing define, in that order:
---   %dict   — the dict-witness word (the enclosing fn's dict PARAM; `loadTag`/
---             `loadField` read the cell's head tag and per-instance `requires`).
---   %mwK    — the METHOD-LEVEL constraint dicts.  These are AMBIENT at the CALL site
---             (a `traverse : Thenable m =>` whose `m` is not the dispatch receiver),
---             so they are still resolved from `env` HERE and passed IN — they are not,
---             and never were, in the dict cell.
---   %argK   — the supplied value args.  Each selected arm compares that count with
---             its own definition-side callable arity and emits an exact call, PAP,
---             or over-application as required.
---
--- Both operand counts and the selected declaration arity are baked into the
--- dispatcher's name.  The arity suffix is omitted when it equals nargs to preserve
--- the established prelude ABI.
-emitMethodDispatchChain : Emit ->
+-- ── method-table dispatch ───────────────────────────────────────────────────
+-- A dictionary is `[hdr | super_0 .. | slot_0 .. | req_0 ..]` (`EmitPlan.
+-- methodTables`).  Slot i of an interface is a constant closure over a
+-- per-(instance, method) wrapper, called as `code(clos, dict, mw.., args..)`.  The
+-- wrapper calls the instance's impl define, reading the instance's `requires` out
+-- of `%dict`, or passing `%dict` itself to an inherited default as its receiver.
+-- It takes as many values as that define does, which is fewer than the method
+-- declares for an eta-short clause, so the define runs as soon as the source
+-- application supplies them.  A dictionary-routed call loads the slot and applies
+-- it, so it names no impl and reaches one the program adds.
+
+-- a dictionary-routed call of [name]: load its slot from the dictionary and call
+-- the slot with the dictionary, the method-level dictionaries and the values
+emitSlotCall : Emit ->
   OrdMap (String, LTy) ->
   String ->
   String ->
-  Int ->
   Route ->
   List Route ->
   List String ->
   (String, LTy)
-emitMethodDispatchChain e env name iface siteArity dict methRoutes argOps =
+emitSlotCall e env name iface dict methRoutes argOps =
   let dictPtr = dictWordOfRoute e env dict
   let methWords = dictWordsOf e env methRoutes
-  let nmw = lengthS methWords
-  let nargs = lengthS argOps
-  let fname =
-    dispFnName (dispInterfaceWord e name iface) name nmw nargs siteArity
-  ensureDispatcherEmitted e fname name iface nmw nargs siteArity
-  emitImplCall e fname (dictPtr :: methWords ++ argOps) LTInt
+  match slotOf name (interfaceSlots e.methodTables iface) 0
+    Some (i, _) =>
+      let clos = loadSlot e iface name dictPtr i
+      (emitApplyAny e clos (dictPtr :: methWords ++ argOps), LTInt)
+    None => gapE e "method '\{name}' is not a slot of interface '\{iface}'"
 
--- the shared dispatcher's symbol: `mdk_disp_<method word>_<nmw>_<nargs>`.  Method
--- names are plain identifiers here (an operator is a `CBinPrim`, never a method
--- name — same assumption `implFnName` already makes).
-dispFnName : String -> String -> Int -> Int -> Int -> String
-dispFnName iface name nmw nargs siteArity =
-  LN.llvmName (LN.LDispatcher iface name nmw nargs siteArity)
-
--- A dispatcher's arm set is its interface's alone (`siteImpls`), so a method two
--- interfaces declare needs one dispatcher per interface: its symbol carries the
--- interface word, `injectiveIdent`-encoded.  A method only one interface declares
--- keeps the bare name, and so does a prelude (`core::`) interface's method in every
--- case — a prelude body's dispatcher symbol must not depend on what the program
--- declares (the `prelude.o` precondition), and the prelude's own interfaces never
--- share a method spelling.
-dispInterfaceWord : Emit -> String -> String -> String
-dispInterfaceWord e name iface =
-  if iface /= ""
-    && not (startsWith "core::" iface)
-    && omHasKey name e.input.sharedMethodNames then
-    iface
+-- the index of [name]'s slot among [slots], and the slot
+slotOf : String -> List MethodSlot -> Int -> Option (Int, MethodSlot)
+slotOf _ [] _ = None
+slotOf name (slot :: rest) i =
+  if (slot : MethodSlot).method == name then
+    Some (i, slot)
   else
-    ""
+    slotOf name rest (i + 1)
 
--- the dispatchers emitted so far, by symbol, scoped to this emission.
+-- the super count of interface [iface]; a word absent from the facts has none
+superCountOf : Emit -> String -> Int
+superCountOf e iface = optionOr 0 (omLookup iface e.superCounts)
 
-ensureDispatcherEmitted : Emit ->
-  String ->
-  String ->
-  String ->
-  Int ->
-  Int ->
-  Int ->
-  Unit
-ensureDispatcherEmitted e fname name iface nmw nargs siteArity =
-  if contains fname !e.dispCache then
-    ()
+-- The closure in slot [i] of dictionary [dictPtr] of interface [iface], the
+-- field after the interface's supers.  A null dictionary traps through
+-- `mdk_dispatch_no_impl` instead of being read.  The test carries a comment naming
+-- the slot's method, which no symbol in the call names.
+--
+-- The prelude half of a prelude-object build knows the super count only of an
+-- interface that has an instance in the prelude (`DeclFacts.factSupers`), so it
+-- reads the count from the interface's `@mdk.supers.*` constant, which the
+-- program half defines for every interface a prelude body loads a slot of.
+loadSlot : Emit -> String -> String -> String -> Int -> String
+loadSlot e iface method dictPtr i =
+  let isNull = freshReg e
+  emit e "  \{isNull} = icmp eq i64 \{dictPtr}, 0 ; slot \{iface}.\{method}"
+  let n = intToString (freshLocal e)
+  let trapL = "slotnull" ++ n
+  let okL = "slotok" ++ n
+  emit e "  br i1 \{isNull}, label %\{trapL}, label %\{okL}"
+  emit e (trapL ++ ":")
+  emit e (rtLine e "" "void" "mdk_dispatch_no_impl" [])
+  emit e "  unreachable"
+  emit e (okL ++ ":")
+  if e.input.emitHalf == emitHalfPrelude then
+    let supers = freshReg e
+    emit e "  \{supers} = load i64, ptr @\{symRef e (superCountGlobal e iface)}"
+    let field = freshReg e
+    emit e "  \{field} = add i64 \{supers}, \{intToString i}"
+    loadFieldDyn e dictPtr field
   else
-    -- Register before emitting, so a dispatcher can never be emitted twice however
-    -- its emission is reached.
-    e.dispCache := fname :: !e.dispCache
-    -- PRELUDE HALF: the dispatcher body enumerates every impl of the method in THIS
-    -- program, so it is inherently per-program and must NOT be baked into the shared
-    -- `prelude.o` — declare it and let the program half define it.  The program half
-    -- re-walks the prelude's own bodies (emitAsDeclares), so it reaches this exact
-    -- (name, nmw, nargs) site and DEFINES every dispatcher the prelude declares: the
-    -- demand set is derived, never encoded, and a mismatch is a LOUD undefined symbol.
+    if isSome !e.hiddenDefines then
+      let _ = superCountGlobal e iface
+      ()
+    loadField e dictPtr (superCountOf e iface + i)
+
+-- The `@mdk.supers.*` constant of interface [iface]: declared by the prelude
+-- half, defined by the program half.
+superCountGlobal : Emit -> String -> String
+superCountGlobal e iface =
+  let sym = LN.llvmName (LN.LSuperCount iface)
+  if omHasKey sym !e.superCountGlobals then
+    sym
+  else
+    e.superCountGlobals := omInsert sym () !e.superCountGlobals
+    let external = e.input.emitHalf == emitHalfPrelude
     withProgramScope e (_ =>
-      if e.input.emitHalf == emitHalfPrelude then
-        let proto = wordProto (dispParamDecls nmw nargs)
-        registerL e (declareSymbol (Generated fname) proto !e.symOrigin)
-        emitGlobal e ("declare " ++ prototypeText fname proto)
+      registerGlobal e external sym "i64"
+      emitGlobal e (if external then
+        "@\{sym} = external constant i64"
       else
-        emitDispatcherDefine e fname name iface nmw nargs siteArity)
+        "@\{sym} = constant i64 \{intToString (superCountOf e iface)}"))
+    sym
 
--- emit the shared dispatcher define.  Same side-buffer swap every other lifted define
--- uses (emitMethodValDefine/emitDictValDefine): redirect `buf`, emit, splice into
--- `lams`, restore.  `beginDefine` resets the per-define `%tN`/label counter, so the
--- dispatcher's text depends only on the method — not on where the first site of it
--- happened to appear (issue #118 step 1).
-emitDispatcherDefine : Emit ->
+-- The most arguments `mdk_call_exact` (runtime/medaka_rt.c) passes a closure's
+-- code.  A call that supplies a slot closure another count goes through
+-- `__mdk_apply`, which saturates through it (#4790).
+runtimeCallArgMax : Int
+runtimeCallArgMax = 8
+
+-- the slot closure words of instance [key]'s dictionary, in slot order
+slotWords : Emit -> String -> List String
+slotWords e key = match omLookup key e.methodTables.instances
+  Some table =>
+    slotWordsGo
+      e
+      key
+      table.iface
+      (interfaceSlots e.methodTables table.iface)
+      table.fills
+      0
+  None =>
+    if isEmptyL (interfaceSlots e.methodTables (ifaceWordOfKey key)) then
+      []
+    else
+      [gapStr e "no method table for instance '\{key}'"]
+
+slotWordsGo : Emit ->
   String ->
   String ->
+  List MethodSlot ->
+  List (List SlotCallee) ->
+  Int ->
+  List String
+slotWordsGo e key iface (slot :: slots) (fill :: fills) i =
+  slotClosureWord e key iface slot fill i
+    :: slotWordsGo e key iface slots fills (i + 1)
+slotWordsGo _ _ _ _ _ _ = []
+
+-- the word of slot [i] of instance [key]: its constant closure, emitted on first
+-- use
+slotClosureWord : Emit ->
   String ->
+  String ->
+  MethodSlot ->
+  List SlotCallee ->
   Int ->
-  Int ->
-  Int ->
+  String
+slotClosureWord e key iface slot fill i =
+  let cacheKey = lenKey key ++ intToString i
+  match omLookup cacheKey !e.slotCache
+    Some closName => "ptrtoint (ptr @" ++ symRef e closName ++ " to i64)"
+    None => match fill
+      [callee] =>
+        let closName = LN.llvmName (LN.LSlotClosure key slot.method)
+        e.slotCache := omInsert cacheKey closName !e.slotCache
+        emitSlotWrapper e key iface slot callee closName
+        "ptrtoint (ptr @" ++ symRef e closName ++ " to i64)"
+      _ =>
+        gapStr
+          e
+          "slot '\{slot.method}' of instance '\{key}' has no single callee"
+
+-- Emit slot [slot]'s wrapper for instance [key] and its constant closure
+-- [closName].  Both are internal: each half of a prelude-object build emits its
+-- own for a prelude instance.
+emitSlotWrapper : Emit ->
+  String ->
+  String ->
+  MethodSlot ->
+  SlotCallee ->
+  String ->
   Unit
-emitDispatcherDefine e fname name iface nmw nargs siteArity =
+emitSlotWrapper e key iface slot callee closName = withProgramScope e (_ =>
+  let g =
+    optionOrPanic
+      "llvm: a method table names no impl group"
+      (omLookup (intToString callee.group) !e.implGroupAt)
+  let cells = if callee.inherited then 1 else slotReqCount slot g
+  let values = maxInt 0 (groupArity g - slot.contextDicts - cells)
+  let arity = 1 + slot.contextDicts + values
+  if arity > runtimeCallArgMax then
+    let _ =
+      gapStr
+        e
+        "slot '\{slot.method}' of instance '\{key}' takes \{intToString arity} arguments; a closure of more than \{intToString runtimeCallArgMax} cannot be applied through the runtime (#4790)"
+    ()
+  let fname = LN.llvmName (LN.LSlotFunction key slot.method)
   let saved = (bufRef e).value
   bufRef e := []
   let scope = beginDefine e
-  defineHeader e LiftedDefine fname (wordProto (dispParamDecls nmw nargs))
+  defineHeaderAs
+    e
+    "define internal"
+    LiftedDefine
+    fname
+    (wordProto (closParam :: slotParamDecls slot.contextDicts values))
   emit e "entry:"
-  let (r, _) = emitDispatcherBody e name iface nmw nargs siteArity
+  let (r, _) = emitSlotBody e iface slot callee g values
   emit e ("  ret i64 " ++ r)
   emit e "}"
   emit e ""
@@ -8216,93 +8282,75 @@ emitDispatcherDefine e fname name iface nmw nargs siteArity =
   lamsRef e := lamLines ++ (lamsRef e).value
   endDefine e scope
   bufRef e := saved
+  registerGlobal e False closName "[2 x i64]"
+  emitGlobal
+    e
+    "@\{closName} = internal constant [2 x i64] [i64 \{intToString arity}, i64 ptrtoint (ptr @\{symRef e fname} to i64)]")
 
--- The dispatcher's body.  Ordinarily (mode 0) this is only ever reached when the
--- method has ≥2 impls — soleImplDirect already diverted the sole-impl case to a
--- direct call at the SITE — so the `Some` arm below is dead and the emitted IR is
--- byte-identical to what it was.
---
--- Under MEDAKA_PRELUDE_OBJ the site no longer takes that shortcut
--- (soleImplDirectSite), so the shortcut lives HERE instead, where it is computed
--- from the whole-program impl table each build.  It reproduces WS-1b exactly: a
--- direct call to the sole impl that never touches `%dict` — which is what keeps an
--- ambiguous return-position superclass constraint's NULL dict from being
--- dereferenced.  `%mw`/`%dict` are simply left unread, as at the direct call site.
-emitDispatcherBody : Emit ->
-  String ->
-  String ->
-  Int ->
-  Int ->
-  Int ->
-  (String, LTy)
-emitDispatcherBody e name iface nmw nargs siteArity =
-  match soleImplDirect e name iface siteArity
-    Some ent =>
-      -- F10: same saturation as emitDispatchArmBody — the selected interface's sole
-      -- impl parameter count can still differ from the occurrence arity.
-      emitArityCall
-        e
-        (implEntryFnName e name ent)
-        (dispWordNames "%arg" nargs 0)
-        (implSrcValueArity ent)
-        LTInt
-    _ =>
-      emitDispatchBody
-        e
-        name
-        iface
-        "%dict"
-        (dispWordNames "%mw" nmw 0)
-        (dispWordNames "%arg" nargs 0)
-        siteArity
+-- the `requires` dictionaries group [g]'s define takes after the method-level ones
+slotReqCount : MethodSlot -> ImplGroup -> Int
+slotReqCount slot g =
+  maxInt
+    0
+    (leadingDictParams (firstClausePats (groupClauses g)) - slot.contextDicts)
 
-dispParamDecls : Int -> Int -> List LlvmParam
-dispParamDecls nmw nargs =
+slotParamDecls : Int -> Int -> List LlvmParam
+slotParamDecls dicts values =
   map
     (r => LlvmParam "i64" r)
-    ("%dict" :: dispWordNames "%mw" nmw 0 ++ dispWordNames "%arg" nargs 0)
+    ("%dict" :: wordNames "%mw" dicts 0 ++ wordNames "%arg" values 0)
 
-dispWordNames : String -> Int -> Int -> List String
-dispWordNames pre n i
+wordNames : String -> Int -> Int -> List String
+wordNames pre n i
   | i >= n = []
-  | otherwise = pre ++ intToString i :: dispWordNames pre n (i + 1)
+  | otherwise = pre ++ intToString i :: wordNames pre n (i + 1)
 
--- the dispatch chain itself, verbatim from the old inline site — now the BODY of the
--- shared dispatcher.  [dictPtr] is the dict-witness word, [methWords] the ambient
--- method-level constraint dicts (`emitDispatchChain` prepends them ahead of the
--- cell-sourced per-instance `requires`, matching the lifted fn's leading dict-param
--- order: dict_pass binds methRoutes ++ implRoutes), [argOps] the saturated value args.
-emitDispatchBody : Emit ->
+-- The wrapper's body: call group [g]'s define with the method-level dictionaries,
+-- the instance's `requires` (stored after the supers and slots) or, for an
+-- inherited default, the dictionary itself, then its [values] value parameters.
+--
+-- #747: a nullary method with no method-level dictionaries whose impl is a
+-- per-instance CAF forces the CAF's `$memo_<symTag>_<name>` lazy global, so its
+-- effect runs once per instance, as eval's memoThunk does.
+emitSlotBody : Emit ->
   String ->
-  String ->
-  String ->
-  List String ->
-  List String ->
+  MethodSlot ->
+  SlotCallee ->
+  ImplGroup ->
   Int ->
   (String, LTy)
-emitDispatchBody e name iface dictPtr methWords argOps siteArity =
-  let headTag = loadTag e dictPtr
-  let impls = siteImpls e name iface siteArity
-  -- Each dispatch arm reads the arity of the same physical group as its define.
-  let groups = implGroupsForMethod e name
-  let slot = freshReg e
-  emit e ("  " ++ slot ++ " = alloca i64")
-  let endL = "dispend" ++ intToString (freshLocal e)
-  emitDispatchChain
-    e
-    dictPtr
-    headTag
-    impls
-    groups
-    name
-    methWords
-    argOps
-    slot
-    endL
-  emit e (endL ++ ":")
-  let r = freshReg e
-  emit e "  \{r} = load i64, ptr \{slot}"
-  (r, LTInt)
+emitSlotBody e iface slot callee g values =
+  let memo = memoGlobalName (groupSymTag g) slot.method
+  if slot.contextDicts == 0
+    && values == 0
+    && groupMemoisable g
+    && isLazyGlobal e memo then
+    let rv = freshReg e
+    let call = wordCall e (LN.llvmName (LN.LGlobalForcer memo)) []
+    emit e "  \{rv} = \{call}"
+    (rv, LTInt)
+  else
+    let base =
+      superCountOf e iface + listLen (interfaceSlots e.methodTables iface)
+    let cellDicts =
+      if callee.inherited then
+        ["%dict"]
+      else
+        loadReqDicts e "%dict" (base + slotReqCount slot g) base
+    emitArityCall
+      e
+      (groupFnName g)
+      (wordNames "%mw" slot.contextDicts 0
+        ++ cellDicts
+        ++ wordNames "%arg" values 0)
+      (groupArity g)
+      LTInt
+
+-- the shape core_ir_lower.memoKeys gives a per-instance CAF: no dispatch positions
+-- and no parameters
+groupMemoisable : ImplGroup -> Bool
+groupMemoisable g =
+  isEmptyL (groupPositionsOf g) && isEmptyL (firstClausePats (groupClauses g))
 
 -- the count of leading element-dict params a matched impl's lifted fn expects:
 -- `leadingDictParams` applied to THIS entry's own clause — a DIRECT count of the
@@ -8365,12 +8413,6 @@ takeRoutes n (r :: rest)
   | n > 0 = r :: takeRoutes (n - 1) rest
 takeRoutes _ _ = []
 
--- The super dictionaries a dictionary of [ent]'s interface stores ahead of its
--- `requires` dictionaries (see `dictWordOfRoute`).
-entrySuperCount : Emit -> CImplEntry -> Int
-entrySuperCount e ent =
-  optionOr 0 (omLookup (implEntryIfaceWord ent) e.superCounts)
-
 -- load dict words [i, n) from the boxed dict cell `dictPtr`.  The head tag is the
 -- cell header (offset 0); field i is loaded by `loadField i` (offset 8*(i+1)), stored
 -- by emitDictCell via storeFields at the same field indices.
@@ -8379,115 +8421,6 @@ loadReqDicts e dictPtr n i
   | i >= n = []
   | otherwise = loadField e dictPtr i :: loadReqDicts e dictPtr n (i + 1)
 
--- emit ONE tagged-impl dispatch arm: test the dict head tag against this impl's route
--- key and, on a match, call the impl fn (prepending method-level + per-instance
--- `requires` dicts) and jump to `endL`; otherwise fall through to the `next` label the
--- caller continues after.
---
--- The matched impl's lifted fn expects `implReqCount` leading dict params, ordered
--- methRoutes ++ implRoutes.  The first `lengthS methWords` are METHOD-LEVEL
--- constraint dicts — already materialized from the caller's ambient args (env);
--- the remaining are this impl's per-instance `requires` dicts, loaded from the
--- runtime dispatch-dict cell's fields 0..k-1.  Sourcing the method-level ones from
--- the cell (the old behavior) was an OUT-OF-BOUNDS load whenever the dispatch dict
--- was a bare tag (no requires) → a garbage dict → SIGSEGV (e.g. `traverse` whose
--- `Thenable m =>` is over a tyvar that is not the `Traversable` receiver).
--- The arm tests the dictionary's word against this entry's canonical key: a word
--- names exactly one instance, the same one in every module, so one comparison
--- selects it.
-emitDispatchArm : Emit ->
-  String ->
-  String ->
-  CImplEntry ->
-  List ImplGroup ->
-  String ->
-  List String ->
-  List String ->
-  String ->
-  String ->
-  Unit
-emitDispatchArm e dictPtr headTag ent groups name methWords argOps slot endL =
-  let cmp = freshReg e
-  emit
-    e
-    "  \{cmp} = icmp eq i64 \{headTag}, \{intToString (hashName (implEntryKey ent))}"
-  let n = intToString (freshLocal e)
-  let yes = "dispyes" ++ n
-  let next = "dispnext" ++ n
-  emit e "  br i1 \{cmp}, label %\{yes}, label %\{next}"
-  emit e (yes ++ ":")
-  emitDispatchArmBody e dictPtr ent groups name methWords argOps slot endL
-  emit e (next ++ ":")
-
--- the matched-arm body (emitDispatchArm): load the impl's per-instance cell
--- `requires` dicts, call its lifted fn, store the result, and jump to the dispatcher
--- exit.
-emitDispatchArmBody : Emit ->
-  String ->
-  CImplEntry ->
-  List ImplGroup ->
-  String ->
-  List String ->
-  List String ->
-  String ->
-  String ->
-  Unit
-emitDispatchArmBody e dictPtr ent groups name methWords argOps slot endL =
-  let symTag = implEntrySymTag ent
-  -- #747: a nullary/return-position/dictionary-free impl reached through this runtime
-  -- dispatch (no method-level or value args) is a per-instance CAF.  core_ir_lower
-  -- synthesized a `$memo_<symTag>_<name>` lazy global for it (a LAZY value global —
-  -- isLazyGlobal confirms it exists); FORCE that shared CAF instead of re-calling the
-  -- impl fn, so the resolved tag's side effect runs once and is shared across every
-  -- occurrence at that tag (matching eval's per-VTypedImpl memoThunk).  Each tag has
-  -- its OWN `$memo` CAF ⇒ distinct tags memoise independently.
-  if isEmptyL methWords
-    && isEmptyL argOps
-    && implEntryMemoisable ent
-    && isLazyGlobal e (memoGlobalName symTag name) then
-    let rv = freshReg e
-    let memoForcer = LN.llvmName (LN.LGlobalForcer (memoGlobalName symTag name))
-    let call = wordCall e memoForcer []
-    emit e "  \{rv} = \{call}"
-    emit e "  store i64 \{rv}, ptr \{slot}"
-    emit e ("  br label %" ++ endL)
-  else
-    -- #1816: `implReqCount` is a direct `leadingDictParams` count and never negative;
-    -- the clamp guards the `- lengthS methWords` subtraction.
-    let cellCount = maxInt 0 (implReqCount e name ent - lengthS methWords)
-    let superCount = entrySuperCount e ent
-    -- an inherited default receives the dictionary that selected it
-    let cellDicts =
-      if isInheritedEntry ent then
-        [dictPtr]
-      else
-        loadReqDicts e dictPtr (superCount + cellCount) superCount
-    -- F10 (#1450/#1668 follow-on): saturate against THIS ARM'S define.  The
-    -- dispatcher is keyed by BARE method name and its `%argK` count is the arity the
-    -- SITE saw, which can differ from the selected impl's own parameter count (an
-    -- arity collision between same-spelled methods of unrelated interfaces, or an
-    -- impl clause that takes fewer parameters than its declaration).  Under-application
-    -- becomes the residual PAP the source `op x` denotes, over-application the
-    -- indirect re-apply.
-    --
-    -- #1818: `armArity` is READ OFF the group's own define arity (`groupArity`,
-    -- matched by `symTag` -- the identity naming the define), not
-    -- recomputed.  Every entry reaching this function has exactly one group in
-    -- `groups`, so the fallback (the same count, assembled from the entry) is not
-    -- expected to fire.
-    let armArity = match findGroupBySymTag symTag groups
-      Some g => groupArity g
-      None => implSrcValueArity ent + lengthS methWords + cellCount
-    let (rv, _) =
-      emitArityCall
-        e
-        (implEntryFnName e name ent)
-        (methWords ++ cellDicts ++ argOps)
-        armArity
-        LTInt
-    emit e "  store i64 \{rv}, ptr \{slot}"
-    emit e ("  br label %" ++ endL)
-
 -- #747: the synthesized per-instance CAF bind name for (symTag, method) — must match
 -- core_ir_lower.memoBindName EXACTLY.  It does NOT re-encode: [symTag] is already
 -- the selected symbol word: either a bare standalone-prelude tag or the encoded
@@ -8495,52 +8428,6 @@ emitDispatchArmBody e dictPtr ent groups name methWords argOps slot endL =
 -- Adding an encode step here would break that agreement, not strengthen it.
 memoGlobalName : String -> String -> String
 memoGlobalName symTag method = "$memo_\{symTag}_\{method}"
-
--- every entry is a guarded arm, a general instance's too: its dictionary carries its
--- own canonical key.  A word no arm claims traps.
-emitDispatchChain : Emit ->
-  String ->
-  String ->
-  List CImplEntry ->
-  List ImplGroup ->
-  String ->
-  List String ->
-  List String ->
-  String ->
-  String ->
-  Unit
-emitDispatchChain e dictPtr headTag impls groups name methWords argOps slot endL =
-  emitConcreteArms
-    e
-    dictPtr
-    headTag
-    impls
-    groups
-    name
-    methWords
-    argOps
-    slot
-    endL
-  -- #1958: no arm matched -- a dict-key mismatch.  Trap loudly instead of a bare
-  -- `unreachable`.
-  emit e (rtLine e "" "void" "mdk_dispatch_no_impl" [])
-  emit e "  unreachable"
-
-emitConcreteArms : Emit ->
-  String ->
-  String ->
-  List CImplEntry ->
-  List ImplGroup ->
-  String ->
-  List String ->
-  List String ->
-  String ->
-  String ->
-  Unit
-emitConcreteArms _ _ _ [] _ _ _ _ _ _ = ()
-emitConcreteArms e dictPtr headTag (ent :: rest) groups name methWords argOps slot endL =
-  emitDispatchArm e dictPtr headTag ent groups name methWords argOps slot endL
-  emitConcreteArms e dictPtr headTag rest groups name methWords argOps slot endL
 
 -- ── arg-position (arg-tag) dispatch at a call site ─────────────────
 -- A method occurrence with no route (RNone), or a bare CVar naming an impl method,
@@ -8765,22 +8652,17 @@ groupMethodOf (ImplGroup m _ _ _ _ _ _ _) = m
 groupPositionsOf : ImplGroup -> List Int
 groupPositionsOf (ImplGroup _ _ _ _ p _ _ _) = p
 
+groupKey : ImplGroup -> String
+groupKey (ImplGroup _ _ key _ _ _ _ _) = key
+
+groupClauses : ImplGroup -> List (List Pat, CExpr)
+groupClauses (ImplGroup _ _ _ _ _ _ clauses _) = clauses
+
 -- #1818: the arity resolved for this group's `define` — the single
 -- number every F10 call site should consult rather than re-derive.  See
 -- `armArityOfEntry` below, the one caller that must not recompute it.
 groupArity : ImplGroup -> Int
 groupArity (ImplGroup _ _ _ _ _ arity _ _) = arity
-
--- the group among [groups] whose lifted define is `@mdk_impl_<symTag>_<method>` —
--- i.e. the group for the same impl an entry-holding call site
--- names.  `symTag` (`implEntrySymTag`) is the entry's stamp, which also names that
--- define, so this is a same-identity lookup, not a second guess: any hit is THE group whose `arity`
--- field is what the define was actually emitted to accept.
-findGroupBySymTag : String -> List ImplGroup -> Option ImplGroup
-findGroupBySymTag _ [] = None
-findGroupBySymTag symTag (g :: rest)
-  | groupSymTag g == symTag = Some g
-  | otherwise = findGroupBySymTag symTag rest
 
 headGroup : List ImplGroup -> ImplGroup
 headGroup (g :: _) = g
@@ -8880,7 +8762,9 @@ dictWordsOf e env rs = map (dictWordOfRoute e env) rs
 -- (already a boxed-cell pointer); RNone is the 0 dict (no cell).
 dictWordOfRoute : Emit -> OrdMap (String, LTy) -> Route -> String
 dictWordOfRoute e env (RKey key reqs sups) =
-  let fieldWords = dictWordsOf e env (sups ++ reqs)
+  let supWords = dictWordsOf e env sups
+  let slots = slotWords e key
+  let fieldWords = supWords ++ slots ++ dictWordsOf e env reqs
   if allConstWords fieldWords then
     emitConstDictCell e (hashName key) fieldWords
   else
@@ -8888,12 +8772,26 @@ dictWordOfRoute e env (RKey key reqs sups) =
 dictWordOfRoute e env (RDict d) = dictOperand e env d
 dictWordOfRoute e env (RDictFwd d) = dictOperand e env d
 dictWordOfRoute e env (RProj r path) =
-  loadSuperPath e (dictWordOfRoute e env r) path
+  loadSuperPath e (dictWordOfRoute e env r) (receiverPath e r path)
 dictWordOfRoute _ _ RNone = "0"
 -- S-1: RLocal's own dicts are the call's leading dict ARGS (emitted by emitMethod's
 -- RLocal arm via emitDictApp), not a dict WITNESS for this route — so as a witness it
 -- stays the no-op 0 dict, mirroring eval's `dictOfRoute (RLocal _ _) = VDict "" []`.
 dictWordOfRoute _ _ (RLocal _ _) = "0"
+
+-- A projection's path.  Its first index reads a `requires` dictionary when it is
+-- past the supers of an inherited default's receiver (`core_ir_lower.
+-- receiverFields`); the table stores those after its slots.
+receiverPath : Emit -> Route -> List Int -> List Int
+receiverPath e (RDict d) (i :: rest) = receiverIndex e d i :: rest
+receiverPath e (RDictFwd d) (i :: rest) = receiverIndex e d i :: rest
+receiverPath _ _ path = path
+
+receiverIndex : Emit -> String -> Int -> Int
+receiverIndex e d i = match !e.defaultReceiver
+  Some (recv, supers, slots) =>
+    if d == recv && i >= supers then i + slots else i
+  None => i
 
 -- the super dictionary at [path] below the dictionary word [w]: a super index i is
 -- cell field i
@@ -9045,7 +8943,29 @@ implGroupOrigin g =
   SymbolOrigin "impl \{groupMethodOf g} for \{groupTag g}" "" 0 0
 
 emitGroup : Emit -> ImplGroup -> Unit
-emitGroup e (ImplGroup method tag key _ positions arity clauses fname) =
+emitGroup e g =
+  e.defaultReceiver := defaultReceiverOf e g
+  emitGroupDefine e g
+  e.defaultReceiver := None
+
+-- An inherited default's receiver parameter (it follows the method-level
+-- dictionaries), with its interface's super and slot counts.
+defaultReceiverOf : Emit -> ImplGroup -> Option (String, Int, Int)
+defaultReceiverOf e g =
+  if groupInherits g then
+    let iface = ifaceWordOfKey (groupKey g)
+    let slots = interfaceSlots e.methodTables iface
+    let nmw = match slotOf (groupMethodOf g) slots 0
+      Some (_, slot) => slot.contextDicts
+      None => 0
+    match dropS nmw (firstClausePats (groupClauses g))
+      (PVar recv _ _) :: _ => Some (recv, superCountOf e iface, listLen slots)
+      _ => None
+  else
+    None
+
+emitGroupDefine : Emit -> ImplGroup -> Unit
+emitGroupDefine e (ImplGroup method tag key _ positions arity clauses fname) =
   let selfFnPos = selfFnParamPositions e (ifaceWordOfKey key) method
   setCurImplSelfFns e tag (selfFnParamNames clauses selfFnPos)
   if trmcImplTry e fname method tag key positions arity clauses then
@@ -9430,6 +9350,11 @@ resolveImplGroup e index group =
         clauses
         (implEntryFnName e group.method ent)
     [] => panic "llvm: empty impl group"
+
+-- each group keyed by its position
+numberGroups : Int -> List ImplGroup -> List (String, ImplGroup)
+numberGroups _ [] = []
+numberGroups i (g :: rest) = (intToString i, g) :: numberGroups (i + 1) rest
 
 clauseArity : List (List Pat, CExpr) -> Int
 clauseArity ((pats, _) :: _) = lengthS pats
@@ -14597,6 +14522,7 @@ programEmitConfig gapMode input plan groups = EmitStateConfig {
   externRequirements = plan.externRequirements,
   dispGroups = Some plan.dispGroups,
   implGroups = plan.implGroups,
+  methodTables = plan.methodTables,
 }
 
 -- The Strict-mode emission body, factored out of `emitProgramMode` so
@@ -14717,6 +14643,7 @@ data EmitStateConfig = EmitStateConfig {
   externRequirements : ExternRequirements,
   dispGroups : Option (List DispGroup),
   implGroups : List ImplClauseGroup,
+  methodTables : MethodTables,
 }
 
 -- Row #5/#6 (RUN-EMIT-002: one disposition, not two): when the caller routes the
@@ -14806,7 +14733,11 @@ buildEmitState cfg input groups ctorArs ctorTypes implEntries facts =
     implsByMethod = Ref None,
     implMethodSet = Ref None,
     typeIdMap = Ref None,
-    dispCache = Ref [],
+    methodTables = cfg.methodTables,
+    implGroupAt = Ref omEmpty,
+    slotCache = Ref omEmpty,
+    defaultReceiver = Ref None,
+    superCountGlobals = Ref omEmpty,
     dictConstCache = Ref [],
     strLitCache = Ref omEmpty,
     closConstCache = Ref [],
@@ -14834,7 +14765,6 @@ buildEmitState cfg input groups ctorArs ctorTypes implEntries facts =
   }
   e.dictConstCache := []
   e.closConstCache := []
-  e.dispCache := []
   installKnownFnMap e (collectFns groups)
   -- #561 PR-A: classify LAZY value globals (dispatch-reaching / cyclic) once per
   -- program.  Reads of these lower to `call @mdk_force_<x>()`; every other global
@@ -14849,6 +14779,7 @@ buildEmitState cfg input groups ctorArs ctorTypes implEntries facts =
   installImplMethodSet e implEntries
   let ordinalEntries = indexImplGroupEntries implEntries 0 omEmpty
   e.implGroups := map (resolveImplGroup e ordinalEntries) cfg.implGroups
+  e.implGroupAt := omFromPairs (numberGroups 0 !e.implGroups) omEmpty
   -- a group member must never be ADVERTISED as having a float `__fw` worker (the
   -- group path emits no standalone defines, so a float-context caller would call
   -- a nonexistent symbol; v3/v4 make external float callers impossible anyway —
@@ -15252,6 +15183,7 @@ emitProgramGaps input plan (cp@(CProgram groups ctorArs ctorTypes implEntries _ 
     externRequirements = plan.externRequirements,
     dispGroups = None,
     implGroups = plan.implGroups,
+    methodTables = plan.methodTables,
   }
   let found = unprovidedExterns Record input plan cp
   let e = buildEmitState cfg input groups ctorArs ctorTypes implEntries facts

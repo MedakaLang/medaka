@@ -27,7 +27,9 @@ public export data LlvmName =
   | LFloatWorker String
   | LImplMethod String String
   | LDefaultMethod String String String
-  | LDispatcher String String Int Int Int
+  | LSlotFunction String String
+  | LSlotClosure String String
+  | LSuperCount String
   | LConstructor String
   | LGeneratedName GeneratedFamily String String Int
 
@@ -61,8 +63,11 @@ llvmName (LImplMethod tag method) =
   "mdk.impl.\{encodeComponent tag}.\{encodeComponent method}"
 llvmName (LDefaultMethod iface method key) =
   "mdk.default.\{encodeComponent iface}.\{encodeComponent method}.\{encodeComponent key}"
-llvmName (LDispatcher iface method dicts args arity) =
-  "mdk.dispatch.\{encodeComponent iface}.\{encodeComponent method}.\{intToString dicts}.\{intToString args}.\{intToString arity}"
+llvmName (LSlotFunction key method) =
+  "mdk.slot.\{encodeComponent key}.\{encodeComponent method}"
+llvmName (LSlotClosure key method) =
+  "mdk.slotclosure.\{encodeComponent key}.\{encodeComponent method}"
+llvmName (LSuperCount iface) = "mdk.supers." ++ encodeComponent iface
 llvmName (LConstructor name) = "mdk.ctor." ++ encodeComponent name
 llvmName (LGeneratedName family scope subject ordinal) =
   "mdk.gen.\{familyTag family}.\{encodeComponent scope}.\{encodeComponent subject}.\{intToString ordinal}"

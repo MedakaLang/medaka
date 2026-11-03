@@ -298,26 +298,58 @@ intovf38:
   unreachable
 intok38:
   %t41 = or i64 %t36, 1
-  %t42 = call i64 @mdk.dispatch..68617368.0.1.1(i64 %arg0, i64 %t29)
-  %t43 = sub i64 %t42, 1
-  %t44 = call { i64, i1 } @llvm.sadd.with.overflow.i64(i64 %t41, i64 %t43)
-  %t45 = extractvalue { i64, i1 } %t44, 0
-  %t46 = extractvalue { i64, i1 } %t44, 1
-  br i1 %t46, label %intovf47, label %intok47
-intovf47:
-  %t48 = ashr i64 %t41, 1
-  %t49 = ashr i64 %t42, 1
-  call void @mdk_int_overflow(i64 0, i64 %t48, i64 %t49)
+  %t42 = icmp eq i64 %arg0, 0 ; slot __user__::Hashable.hash
+  br i1 %t42, label %slotnull43, label %slotok43
+slotnull43:
+  call void @mdk_dispatch_no_impl()
   unreachable
-intok47:
-  %t50 = musttail call i64 @mdk.user.6d356635663735373336353732356635665f5f686173684c6973744974656d73(i64 %arg0, i64 %t45, i64 %t32)
-  ret i64 %t50
+slotok43:
+  %t44 = inttoptr i64 %arg0 to ptr
+  %t45 = getelementptr i8, ptr %t44, i64 8
+  %t46 = load i64, ptr %t45
+  %t47 = inttoptr i64 %t46 to ptr
+  %t48 = load i64, ptr %t47
+  %t49 = icmp eq i64 %t48, 2
+  %t51 = alloca i64
+  br i1 %t49, label %apfast50, label %apslow50
+apfast50:
+  %t52 = inttoptr i64 %t46 to ptr
+  %t53 = getelementptr i8, ptr %t52, i64 8
+  %t54 = load i64, ptr %t53
+  %t55 = inttoptr i64 %t54 to ptr
+  %t56 = call i64 %t55(i64 %t46, i64 %arg0, i64 %t29)
+  store i64 %t56, ptr %t51
+  br label %apend50
+apslow50:
+  %t57 = alloca i64, i64 2
+  %t58 = getelementptr i64, ptr %t57, i64 0
+  store i64 %arg0, ptr %t58
+  %t59 = getelementptr i64, ptr %t57, i64 1
+  store i64 %t29, ptr %t59
+  %t60 = call i64 @__mdk_apply(i64 %t46, i64 2, ptr %t57)
+  store i64 %t60, ptr %t51
+  br label %apend50
+apend50:
+  %t61 = load i64, ptr %t51
+  %t62 = sub i64 %t61, 1
+  %t63 = call { i64, i1 } @llvm.sadd.with.overflow.i64(i64 %t41, i64 %t62)
+  %t64 = extractvalue { i64, i1 } %t63, 0
+  %t65 = extractvalue { i64, i1 } %t63, 1
+  br i1 %t65, label %intovf66, label %intok66
+intovf66:
+  %t67 = ashr i64 %t41, 1
+  %t68 = ashr i64 %t61, 1
+  call void @mdk_int_overflow(i64 0, i64 %t67, i64 %t68)
+  unreachable
+intok66:
+  %t69 = musttail call i64 @mdk.user.6d356635663735373336353732356635665f5f686173684c6973744974656d73(i64 %arg0, i64 %t64, i64 %t32)
+  ret i64 %t69
 connext20:
   call void @mdk_nonexhaustive_match()
   unreachable
 decend1:
-  %t51 = load i64, ptr %t0
-  ret i64 %t51
+  %t70 = load i64, ptr %t0
+  ret i64 %t70
 }
 
 ; mdk-module impl.5f5f757365725f5f3a3a4861736861626c657c496e747c.68617368
@@ -336,33 +368,13 @@ entry:
 ; mdk-module program
 @mdk_disc_none = private unnamed_addr constant i64 -1
 ; mdk-module program
-@mdk.gen.dictcell.70726f6772616d..0 = internal constant [1 x i64] [i64 -3372419640350782897]
-; mdk-module program
-define internal i64 @mdk.dispatch..68617368.0.1.1(i64 %dict, i64 %arg0) {
+define internal i64 @mdk.slot.5f5f757365725f5f3a3a4861736861626c657c496e747c.68617368(i64 %clos, i64 %dict, i64 %arg0) {
 entry:
-  %t0 = inttoptr i64 %dict to ptr
-  %t1 = load i64, ptr %t0
-  %t2 = alloca i64
-  %t4 = icmp eq i64 %t1, -3372419640350782897
-  br i1 %t4, label %dispyes5, label %dispnext5
-dispyes5:
-  %t6 = call i64 @mdk.impl.496e74.68617368(i64 %arg0)
-  store i64 %t6, ptr %t2
-  br label %dispend3
-dispnext5:
-  %t7 = icmp eq i64 %t1, -197414584256919711
-  br i1 %t7, label %dispyes8, label %dispnext8
-dispyes8:
-  %t9 = inttoptr i64 %dict to ptr
-  %t10 = getelementptr i8, ptr %t9, i64 8
-  %t11 = load i64, ptr %t10
-  %t12 = call i64 @mdk.impl.7a5a5f35665f5f35665f757365725f35665f5f35665f5f32655f4d794c697374.68617368(i64 %t11, i64 %arg0)
-  store i64 %t12, ptr %t2
-  br label %dispend3
-dispnext8:
-  call void @mdk_dispatch_no_impl()
-  unreachable
-dispend3:
-  %t13 = load i64, ptr %t2
-  ret i64 %t13
+  %t0 = call i64 @mdk.impl.496e74.68617368(i64 %arg0)
+  ret i64 %t0
 }
+
+; mdk-module program
+@mdk.slotclosure.5f5f757365725f5f3a3a4861736861626c657c496e747c.68617368 = internal constant [2 x i64] [i64 2, i64 ptrtoint (ptr @mdk.slot.5f5f757365725f5f3a3a4861736861626c657c496e747c.68617368 to i64)]
+; mdk-module program
+@mdk.gen.dictcell.70726f6772616d..0 = internal constant [2 x i64] [i64 -3372419640350782897, i64 ptrtoint (ptr @mdk.slotclosure.5f5f757365725f5f3a3a4861736861626c657c496e747c.68617368 to i64)]
