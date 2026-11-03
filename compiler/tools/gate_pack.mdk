@@ -51,8 +51,8 @@ import support.util.{
   splitNl,
   splitOnChar,
   startsWith,
-  stringTrim,
 }
+import string.{trimAscii}
 
 -- ── timeout policy ──────────────────────────────────────────────────────────
 --
@@ -2513,9 +2513,9 @@ budgetOverrideTokens msg = budgetTokensFromLines (splitNl msg)
 budgetTokensFromLines : List String -> List String
 budgetTokensFromLines [] = []
 budgetTokensFromLines (l :: ls)
-  | startsWith budgetOverridePrefix (stringTrim l) =
+  | startsWith budgetOverridePrefix (trimAscii l) =
     budgetFirstWord
-        (stringTrim (budgetDropPrefix budgetOverridePrefix (stringTrim l)))
+        (trimAscii (budgetDropPrefix budgetOverridePrefix (trimAscii l)))
       :: budgetTokensFromLines ls
   | otherwise = budgetTokensFromLines ls
 

@@ -39,7 +39,6 @@ import support.util.{
   joinWith,
   lookupAssoc,
   splitNl,
-  stringTrim,
   sortUniqS,
   testFileSuffix,
 }
@@ -231,7 +230,7 @@ unquote s =
 -- the substring before the first `=` (trimmed); "" if there is no `=`.
 keyBeforeEq : String -> String
 keyBeforeEq line = match stringIndexOf "=" line
-  Some i => stringTrim (stringSlice 0 i line)
+  Some i => Str.trimAscii (stringSlice 0 i line)
   None => ""
 
 -- the substring after the first `=` (trimmed + unquoted); "" if there is no `=`.
@@ -242,7 +241,7 @@ valAfterEq line = unquote (rawValAfterEq line)
 -- that a quoted string cannot impersonate the canonical unquoted boolean.
 rawValAfterEq : String -> String
 rawValAfterEq line = match stringIndexOf "=" line
-  Some i => stringTrim (stringSlice (i + 1) (stringLength line) line)
+  Some i => Str.trimAscii (stringSlice (i + 1) (stringLength line) line)
   None => ""
 
 -- scan the lines of a medaka.toml: once we cross the `[dependencies]` header,
@@ -251,7 +250,7 @@ rawValAfterEq line = match stringIndexOf "=" line
 collectDeps : String -> List String -> List (String, String)
 collectDeps _root [] = []
 collectDeps root (line :: rest) =
-  let t = stringTrim line
+  let t = Str.trimAscii line
   if t == "[dependencies]" then
     collectDepsIn root rest
   else
@@ -260,7 +259,7 @@ collectDeps root (line :: rest) =
 collectDepsIn : String -> List String -> List (String, String)
 collectDepsIn _root [] = []
 collectDepsIn root (line :: rest) =
-  let t = stringTrim line
+  let t = Str.trimAscii line
   if startsWith "[" t then
     collectDeps root (line :: rest)
   else
@@ -320,7 +319,7 @@ readDeps root =
 collectLibs : String -> List String -> List (String, String)
 collectLibs _root [] = []
 collectLibs root (line :: rest) =
-  let t = stringTrim line
+  let t = Str.trimAscii line
   if t == "[foreign-libraries]" then
     collectLibsIn root rest
   else
@@ -329,7 +328,7 @@ collectLibs root (line :: rest) =
 collectLibsIn : String -> List String -> List (String, String)
 collectLibsIn _root [] = []
 collectLibsIn root (line :: rest) =
-  let t = stringTrim line
+  let t = Str.trimAscii line
   if t == "" || startsWith "#" t then
     collectLibsIn root rest
   else if startsWith "[" t then
@@ -1279,9 +1278,9 @@ manifestAllowsInternal root =
 scanAllowInternal : Bool -> List String -> Bool
 scanAllowInternal _ [] = False
 scanAllowInternal inDeps (line :: rest) =
-  let t = stringTrim line
+  let t = Str.trimAscii line
   let header = match splitOnChar "#" t
-    h :: _ => stringTrim h
+    h :: _ => Str.trimAscii h
     [] => t
   if startsWith "[" header then
     scanAllowInternal (header == "[dependencies]") rest
@@ -1289,7 +1288,7 @@ scanAllowInternal inDeps (line :: rest) =
     scanAllowInternal inDeps rest
   else if keyBeforeEq t
     == "allow-internal" then match splitOnChar "#" (rawValAfterEq t)
-    value :: _ => stringTrim value == "true"
+    value :: _ => Str.trimAscii value == "true"
     [] => False
   else
     scanAllowInternal inDeps rest
@@ -1314,9 +1313,9 @@ manifestSiteRoot root =
 scanSiteRoot : Bool -> List String -> Option String
 scanSiteRoot _ [] = None
 scanSiteRoot inDeps (line :: rest) =
-  let t = stringTrim line
+  let t = Str.trimAscii line
   let header = match splitOnChar "#" t
-    h :: _ => stringTrim h
+    h :: _ => Str.trimAscii h
     [] => t
   if startsWith "[" header then
     scanSiteRoot (header == "[dependencies]") rest
@@ -1324,7 +1323,7 @@ scanSiteRoot inDeps (line :: rest) =
     scanSiteRoot inDeps rest
   else if keyBeforeEq t
     == "site-root" then match splitOnChar "#" (rawValAfterEq t)
-    value :: _ => Some (unquote (stringTrim value))
+    value :: _ => Some (unquote (Str.trimAscii value))
     [] => None
   else
     scanSiteRoot inDeps rest
@@ -1347,9 +1346,9 @@ manifestLintInternal root =
 scanLintInternal : Bool -> List String -> Bool
 scanLintInternal _ [] = False
 scanLintInternal inLint (line :: rest) =
-  let t = stringTrim line
+  let t = Str.trimAscii line
   let header = match splitOnChar "#" t
-    h :: _ => stringTrim h
+    h :: _ => Str.trimAscii h
     [] => t
   if startsWith "[" header then
     scanLintInternal (header == "[lint]") rest
@@ -1362,7 +1361,7 @@ scanLintInternal inLint (line :: rest) =
 -- comment is inert.
 lineValueIsTrue : String -> Bool
 lineValueIsTrue t = match splitOnChar "#" (rawValAfterEq t)
-  value :: _ => stringTrim value == "true"
+  value :: _ => Str.trimAscii value == "true"
   [] => False
 
 -- A module is trusted when the root it resolved under is a trusted root, or

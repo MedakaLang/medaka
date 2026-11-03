@@ -55,8 +55,8 @@ import support.util.{
   splitNl,
   splitOnChar,
   startsWith,
-  stringTrim,
 }
+import string.{trimAscii}
 
 -- ── timeout policy ──────────────────────────────────────────────────────────
 --
@@ -2517,9 +2517,9 @@ budgetOverrideTokens msg = budgetTokensFromLines (splitNl msg)
 budgetTokensFromLines : List String -> List String
 budgetTokensFromLines [] = []
 budgetTokensFromLines (l :: ls)
-  | startsWith budgetOverridePrefix (stringTrim l) =
+  | startsWith budgetOverridePrefix (trimAscii l) =
     budgetFirstWord
-        (stringTrim (budgetDropPrefix budgetOverridePrefix (stringTrim l)))
+        (trimAscii (budgetDropPrefix budgetOverridePrefix (trimAscii l)))
       :: budgetTokensFromLines ls
   | otherwise = budgetTokensFromLines ls
 
@@ -2812,7 +2812,8 @@ budgetOutput regPath regSrc baseSrc gateOrcs entries multicall commitMessage =
 (DUse false (UseGroup ("string") ((mem "padLeft" false) (mem "padRight" false))))
 (DUse false (UseGroup ("tools" "gate_registry") ((mem "Gate" false) (mem "Shard" false) (mem "parseRegistry" false) (mem "parseShards" false) (mem "joinSpace" false))))
 (DUse false (UseGroup ("tools" "gate_cost") ((mem "GateCost" false) (mem "OracleCost" false) (mem "RunRecord" false) (mem "baselineKey" false) (mem "costOf" false) (mem "costRowOf" false) (mem "gateSetDigest" false) (mem "latestRunForShard" false) (mem "orphanBaselineNames" false) (mem "packStat" false) (mem "parseCostBaseline" false) (mem "parseCostRuns" false) (mem "parseOracleCosts" false))))
-(DUse false (UseGroup ("support" "util") ((mem "contains" false) (mem "filterList" false) (mem "isEmptyL" false) (mem "isNonEmptyL" false) (mem "joinNl" false) (mem "listLen" false) (mem "lookupAssoc" false) (mem "maxI" false) (mem "minI" false) (mem "reverseL" false) (mem "sortUniqS" false) (mem "splitNl" false) (mem "splitOnChar" false) (mem "startsWith" false) (mem "stringTrim" false))))
+(DUse false (UseGroup ("support" "util") ((mem "contains" false) (mem "filterList" false) (mem "isEmptyL" false) (mem "isNonEmptyL" false) (mem "joinNl" false) (mem "listLen" false) (mem "lookupAssoc" false) (mem "maxI" false) (mem "minI" false) (mem "reverseL" false) (mem "sortUniqS" false) (mem "splitNl" false) (mem "splitOnChar" false) (mem "startsWith" false))))
+(DUse false (UseGroup ("string") ((mem "trimAscii" false))))
 (DTypeSig true "timeoutFor" (TyFun (TyCon "Int") (TyFun (TyCon "String") (TyCon "Int"))))
 (DFunDef false "timeoutFor" ((PVar "override") (PVar "cost")) (EIf (EBinOp ">" (EVar "override") (ELit (LInt 0))) (EVar "override") (EIf (EBinOp "==" (EVar "cost") (ELit (LString "cheap"))) (ELit (LInt 300)) (EIf (EBinOp "==" (EVar "cost") (ELit (LString "medium"))) (ELit (LInt 900)) (EIf (EBinOp "==" (EVar "cost") (ELit (LString "heavy"))) (ELit (LInt 3600)) (EIf (EVar "otherwise") (ELit (LInt 900)) (EApp (EVar "__fallthrough__") (ELit LUnit))))))))
 (DData Private "Cand" () ((variant "Cand" (ConNamed (field "cname" (TyCon "String")) (field "crun" (TyCon "String")) (field "curRow" (TyCon "String")) (field "cms" (TyCon "Int")) (field "needsWasm" (TyCon "Bool")) (field "corcs" (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "Int")))) (field "cwasmOrc" (TyCon "Bool")) (field "csetupMs" (TyCon "Int"))))) ())
@@ -3241,7 +3242,7 @@ budgetOutput regPath regSrc baseSrc gateOrcs entries multicall commitMessage =
 (DFunDef false "budgetOverrideTokens" ((PVar "msg")) (EApp (EVar "budgetTokensFromLines") (EApp (EVar "splitNl") (EVar "msg"))))
 (DTypeSig false "budgetTokensFromLines" (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyApp (TyCon "List") (TyCon "String"))))
 (DFunDef false "budgetTokensFromLines" ((PList)) (EListLit))
-(DFunDef false "budgetTokensFromLines" ((PCons (PVar "l") (PVar "ls"))) (EIf (EApp (EApp (EVar "startsWith") (EVar "budgetOverridePrefix")) (EApp (EVar "stringTrim") (EVar "l"))) (EBinOp "::" (EApp (EVar "budgetFirstWord") (EApp (EVar "stringTrim") (EApp (EApp (EVar "budgetDropPrefix") (EVar "budgetOverridePrefix")) (EApp (EVar "stringTrim") (EVar "l"))))) (EApp (EVar "budgetTokensFromLines") (EVar "ls"))) (EIf (EVar "otherwise") (EApp (EVar "budgetTokensFromLines") (EVar "ls")) (EApp (EVar "__fallthrough__") (ELit LUnit)))))
+(DFunDef false "budgetTokensFromLines" ((PCons (PVar "l") (PVar "ls"))) (EIf (EApp (EApp (EVar "startsWith") (EVar "budgetOverridePrefix")) (EApp (EVar "trimAscii") (EVar "l"))) (EBinOp "::" (EApp (EVar "budgetFirstWord") (EApp (EVar "trimAscii") (EApp (EApp (EVar "budgetDropPrefix") (EVar "budgetOverridePrefix")) (EApp (EVar "trimAscii") (EVar "l"))))) (EApp (EVar "budgetTokensFromLines") (EVar "ls"))) (EIf (EVar "otherwise") (EApp (EVar "budgetTokensFromLines") (EVar "ls")) (EApp (EVar "__fallthrough__") (ELit LUnit)))))
 (DTypeSig false "budgetDropPrefix" (TyFun (TyCon "String") (TyFun (TyCon "String") (TyCon "String"))))
 (DFunDef false "budgetDropPrefix" ((PVar "pre") (PVar "s")) (EApp (EApp (EApp (EVar "stringSlice") (EApp (EVar "stringLength") (EVar "pre"))) (EApp (EVar "stringLength") (EVar "s"))) (EVar "s")))
 (DTypeSig false "budgetFirstWord" (TyFun (TyCon "String") (TyCon "String")))
@@ -3305,7 +3306,8 @@ budgetOutput regPath regSrc baseSrc gateOrcs entries multicall commitMessage =
 (DUse false (UseGroup ("string") ((mem "padLeft" false) (mem "padRight" false))))
 (DUse false (UseGroup ("tools" "gate_registry") ((mem "Gate" false) (mem "Shard" false) (mem "parseRegistry" false) (mem "parseShards" false) (mem "joinSpace" false))))
 (DUse false (UseGroup ("tools" "gate_cost") ((mem "GateCost" false) (mem "OracleCost" false) (mem "RunRecord" false) (mem "baselineKey" false) (mem "costOf" false) (mem "costRowOf" false) (mem "gateSetDigest" false) (mem "latestRunForShard" false) (mem "orphanBaselineNames" false) (mem "packStat" false) (mem "parseCostBaseline" false) (mem "parseCostRuns" false) (mem "parseOracleCosts" false))))
-(DUse false (UseGroup ("support" "util") ((mem "contains" false) (mem "filterList" false) (mem "isEmptyL" false) (mem "isNonEmptyL" false) (mem "joinNl" false) (mem "listLen" false) (mem "lookupAssoc" false) (mem "maxI" false) (mem "minI" false) (mem "reverseL" false) (mem "sortUniqS" false) (mem "splitNl" false) (mem "splitOnChar" false) (mem "startsWith" false) (mem "stringTrim" false))))
+(DUse false (UseGroup ("support" "util") ((mem "contains" false) (mem "filterList" false) (mem "isEmptyL" false) (mem "isNonEmptyL" false) (mem "joinNl" false) (mem "listLen" false) (mem "lookupAssoc" false) (mem "maxI" false) (mem "minI" false) (mem "reverseL" false) (mem "sortUniqS" false) (mem "splitNl" false) (mem "splitOnChar" false) (mem "startsWith" false))))
+(DUse false (UseGroup ("string") ((mem "trimAscii" false))))
 (DTypeSig true "timeoutFor" (TyFun (TyCon "Int") (TyFun (TyCon "String") (TyCon "Int"))))
 (DFunDef false "timeoutFor" ((PVar "override") (PVar "cost")) (EIf (EBinOp ">" (EVar "override") (ELit (LInt 0))) (EVar "override") (EIf (EBinOp "==" (EVar "cost") (ELit (LString "cheap"))) (ELit (LInt 300)) (EIf (EBinOp "==" (EVar "cost") (ELit (LString "medium"))) (ELit (LInt 900)) (EIf (EBinOp "==" (EVar "cost") (ELit (LString "heavy"))) (ELit (LInt 3600)) (EIf (EVar "otherwise") (ELit (LInt 900)) (EApp (EVar "__fallthrough__") (ELit LUnit))))))))
 (DData Private "Cand" () ((variant "Cand" (ConNamed (field "cname" (TyCon "String")) (field "crun" (TyCon "String")) (field "curRow" (TyCon "String")) (field "cms" (TyCon "Int")) (field "needsWasm" (TyCon "Bool")) (field "corcs" (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "Int")))) (field "cwasmOrc" (TyCon "Bool")) (field "csetupMs" (TyCon "Int"))))) ())
@@ -3734,7 +3736,7 @@ budgetOutput regPath regSrc baseSrc gateOrcs entries multicall commitMessage =
 (DFunDef false "budgetOverrideTokens" ((PVar "msg")) (EApp (EVar "budgetTokensFromLines") (EApp (EVar "splitNl") (EVar "msg"))))
 (DTypeSig false "budgetTokensFromLines" (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyApp (TyCon "List") (TyCon "String"))))
 (DFunDef false "budgetTokensFromLines" ((PList)) (EListLit))
-(DFunDef false "budgetTokensFromLines" ((PCons (PVar "l") (PVar "ls"))) (EIf (EApp (EApp (EVar "startsWith") (EVar "budgetOverridePrefix")) (EApp (EVar "stringTrim") (EVar "l"))) (EBinOp "::" (EApp (EVar "budgetFirstWord") (EApp (EVar "stringTrim") (EApp (EApp (EVar "budgetDropPrefix") (EVar "budgetOverridePrefix")) (EApp (EVar "stringTrim") (EVar "l"))))) (EApp (EVar "budgetTokensFromLines") (EVar "ls"))) (EIf (EVar "otherwise") (EApp (EVar "budgetTokensFromLines") (EVar "ls")) (EApp (EVar "__fallthrough__") (ELit LUnit)))))
+(DFunDef false "budgetTokensFromLines" ((PCons (PVar "l") (PVar "ls"))) (EIf (EApp (EApp (EVar "startsWith") (EVar "budgetOverridePrefix")) (EApp (EVar "trimAscii") (EVar "l"))) (EBinOp "::" (EApp (EVar "budgetFirstWord") (EApp (EVar "trimAscii") (EApp (EApp (EVar "budgetDropPrefix") (EVar "budgetOverridePrefix")) (EApp (EVar "trimAscii") (EVar "l"))))) (EApp (EVar "budgetTokensFromLines") (EVar "ls"))) (EIf (EVar "otherwise") (EApp (EVar "budgetTokensFromLines") (EVar "ls")) (EApp (EVar "__fallthrough__") (ELit LUnit)))))
 (DTypeSig false "budgetDropPrefix" (TyFun (TyCon "String") (TyFun (TyCon "String") (TyCon "String"))))
 (DFunDef false "budgetDropPrefix" ((PVar "pre") (PVar "s")) (EApp (EApp (EApp (EVar "stringSlice") (EApp (EVar "stringLength") (EVar "pre"))) (EApp (EVar "stringLength") (EVar "s"))) (EVar "s")))
 (DTypeSig false "budgetFirstWord" (TyFun (TyCon "String") (TyCon "String")))

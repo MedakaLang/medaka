@@ -1,3 +1,4 @@
+abortNote : Ref (Option String)
 addrCell : List (String, Ref (Value a)) -> Int -> String -> Ref (Value a)
 anyAdmits : String -> List String -> <FileRead | a> Bool
 anyTypedImpl : List (Value a) -> Bool

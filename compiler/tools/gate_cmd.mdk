@@ -92,7 +92,6 @@ import support.util.{
   splitNl,
   splitOnChar,
   startsWith,
-  stringTrim,
 }
 import string.{
   contains as strContains,
@@ -101,6 +100,7 @@ import string.{
   isAlphaNum,
   isDigit,
   split as strSplit,
+  trimAscii,
 }
 
 -- `withStrictDash` (`args`): every `ArgSpec` in this file wraps its spec with
@@ -457,7 +457,7 @@ makeGateScratch root = match runCommand "mkdir" ["-p", root]
   Ok _ => match runCommandOk "mktemp" ["-d", "\{root}/medaka_gate_XXXXXX"]
     Err e => Err e
     Ok (out, _) =>
-      let d = stringTrim out
+      let d = trimAscii out
       if d == "" then Err "mktemp -d printed no path" else Ok d
 
 -- Best-effort recursive removal.  A gate writes an arbitrary TREE under its
@@ -551,7 +551,7 @@ scrapedOraclesIn scriptPath =
     Ok (_, out, _) => map stripBinPrefix (filterList nonBlankLine (splitNl out))
 
 nonBlankLine : String -> Bool
-nonBlankLine s = stringTrim s /= ""
+nonBlankLine s = trimAscii s /= ""
 
 scrapedOracles : String -> List Gate -> <IO> List String
 scrapedOracles _ [] = []
@@ -733,7 +733,7 @@ spawnFailure g script msg dt = GateResult {
 -- summary is reported through its exit code exactly as before, not
 -- misreported as vacuous.
 nativeSummaryCounts : String -> Option (Int, Int)
-nativeSummaryCounts out = match parseJson (stringTrim out)
+nativeSummaryCounts out = match parseJson (trimAscii out)
   Err _ => None
   Ok j => summaryPassFail j
 
@@ -864,12 +864,12 @@ failureDetail r =
   let hdr =
     "\n───── \{r.name} — \{r.shell} \{r.script} (exit \{intToString r.exitCode}) ─────\n"
   let o =
-    if stringTrim r.out == "" then
+    if trimAscii r.out == "" then
       "  (stdout: empty)\n"
     else
       "  ── stdout ──\n\{tailLines 200 r.out}\n"
   let e =
-    if stringTrim r.err == "" then
+    if trimAscii r.err == "" then
       "  (stderr: empty)\n"
     else
       "  ── stderr ──\n\{tailLines 200 r.err}\n"
@@ -1155,7 +1155,7 @@ runRunCmdBody argv = match parseRunArgs argv
 -- "Exists on disk" is a question `corpus` can answer and `sources` cannot.
 
 nonBlank : String -> Bool
-nonBlank s = stringTrim s /= ""
+nonBlank s = trimAscii s /= ""
 
 -- The exact two invocations test/preflight.sh's `_gate_candidates` makes,
 -- scoped to THIS worktree (never a bare filesystem walk — this box keeps many
@@ -1226,7 +1226,7 @@ gateCandidates root = match candidatesFor root "*.sh"
 -- tool, keyed by its FIRST whitespace-separated token (repo-relative path,
 -- no `.sh`) — the same `awk 'NF { print $1 }'` preflight.sh runs.
 liveLine : String -> Bool
-liveLine l = nonBlank l && not (startsWith "#" (stringTrim l))
+liveLine l = nonBlank l && not (startsWith "#" (trimAscii l))
 
 firstToken : String -> String
 firstToken l = firstNonBlankTok (splitOnChar ' ' l)
@@ -1719,7 +1719,7 @@ classAfterPrefix prefix m =
 -- is a shell comment, so the tag never starts the raw line.
 stripHash : String -> String
 stripHash s =
-  let t = stringTrim s
+  let t = trimAscii s
   if startsWith "#" t then stripHash (stringSlice 1 (stringLength t) t) else t
 
 -- The class token of a header line, or `None` if the line is not one.
@@ -1731,7 +1731,7 @@ becauseClassOf tag line =
   if startsWith tag t then
     Some
       (firstToken
-        (stringTrim (stringSlice (stringLength tag) (stringLength t) t)))
+        (trimAscii (stringSlice (stringLength tag) (stringLength t) t)))
   else
     None
 

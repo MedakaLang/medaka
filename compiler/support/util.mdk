@@ -404,52 +404,10 @@ orElseOpt : Option a -> Option a -> Option a
 orElseOpt (Some x) _ = Some x
 orElseOpt None y = y
 
--- ── Whitespace trim (O(n) char-array scan) ────────────────────────────────
--- Strip leading + trailing ASCII whitespace (space/tab/newline/CR).  Scans the
--- backing char array once per side rather than recursing on stringSlice (which
--- re-copies the shrinking string each step, O(n^2)).
-
-isWs : String -> Bool
-isWs " " = True
-isWs "\t" = True
-isWs "\n" = True
-isWs "\r" = True
-isWs _ = False
-
+-- Sub-array of [lo, hi) as a char array.
 arraySubChars : Array Char -> Int -> Int -> Array Char
 arraySubChars chars lo hi =
   arrayMakeWith (hi - lo) (i => arrayGetUnsafe (lo + i) chars)
-
-trimLeftGo : Array Char -> Int -> Int -> String
-trimLeftGo chars i len
-  | i >= len = ""
-  | isWs (charToStr (arrayGetUnsafe i chars)) = trimLeftGo chars (i + 1) len
-  | otherwise = stringFromChars (arraySubChars chars i len)
-
-trimRightGo : Array Char -> Int -> String
-trimRightGo chars end
-  | end <= 0 = ""
-  | isWs (charToStr (arrayGetUnsafe (end - 1) chars)) =
-    trimRightGo chars (end - 1)
-  | otherwise = stringFromChars (arraySubChars chars 0 end)
-
-export
-stringTrimLeft : String -> String
-stringTrimLeft s =
-  let chars = stringToChars s
-  let len = arrayLength chars
-  trimLeftGo chars 0 len
-
-export
-stringTrimRight : String -> String
-stringTrimRight s =
-  let chars = stringToChars s
-  let len = arrayLength chars
-  trimRightGo chars len
-
-export
-stringTrim : String -> String
-stringTrim s = stringTrimRight (stringTrimLeft s)
 
 -- ── sorted-unique String list (insertion sort, dedups equal keys) ─────────
 export

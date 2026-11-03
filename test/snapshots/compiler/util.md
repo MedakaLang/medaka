@@ -1,5 +1,5 @@
 # META
-source_lines=628
+source_lines=586
 stages=DESUGAR,MARK
 # SOURCE
 -- Shared internal helpers for the self-hosted compiler stages.  compiler
@@ -408,52 +408,10 @@ orElseOpt : Option a -> Option a -> Option a
 orElseOpt (Some x) _ = Some x
 orElseOpt None y = y
 
--- ── Whitespace trim (O(n) char-array scan) ────────────────────────────────
--- Strip leading + trailing ASCII whitespace (space/tab/newline/CR).  Scans the
--- backing char array once per side rather than recursing on stringSlice (which
--- re-copies the shrinking string each step, O(n^2)).
-
-isWs : String -> Bool
-isWs " " = True
-isWs "\t" = True
-isWs "\n" = True
-isWs "\r" = True
-isWs _ = False
-
+-- Sub-array of [lo, hi) as a char array.
 arraySubChars : Array Char -> Int -> Int -> Array Char
 arraySubChars chars lo hi =
   arrayMakeWith (hi - lo) (i => arrayGetUnsafe (lo + i) chars)
-
-trimLeftGo : Array Char -> Int -> Int -> String
-trimLeftGo chars i len
-  | i >= len = ""
-  | isWs (charToStr (arrayGetUnsafe i chars)) = trimLeftGo chars (i + 1) len
-  | otherwise = stringFromChars (arraySubChars chars i len)
-
-trimRightGo : Array Char -> Int -> String
-trimRightGo chars end
-  | end <= 0 = ""
-  | isWs (charToStr (arrayGetUnsafe (end - 1) chars)) =
-    trimRightGo chars (end - 1)
-  | otherwise = stringFromChars (arraySubChars chars 0 end)
-
-export
-stringTrimLeft : String -> String
-stringTrimLeft s =
-  let chars = stringToChars s
-  let len = arrayLength chars
-  trimLeftGo chars 0 len
-
-export
-stringTrimRight : String -> String
-stringTrimRight s =
-  let chars = stringToChars s
-  let len = arrayLength chars
-  trimRightGo chars len
-
-export
-stringTrim : String -> String
-stringTrim s = stringTrimRight (stringTrimLeft s)
 
 -- ── sorted-unique String list (insertion sort, dedups equal keys) ─────────
 export
@@ -747,24 +705,8 @@ hexDigits k n acc =
 (DTypeSig true "orElseOpt" (TyFun (TyApp (TyCon "Option") (TyVar "a")) (TyFun (TyApp (TyCon "Option") (TyVar "a")) (TyApp (TyCon "Option") (TyVar "a")))))
 (DFunDef false "orElseOpt" ((PCon "Some" (PVar "x")) PWild) (EApp (EVar "Some") (EVar "x")))
 (DFunDef false "orElseOpt" ((PCon "None") (PVar "y")) (EVar "y"))
-(DTypeSig false "isWs" (TyFun (TyCon "String") (TyCon "Bool")))
-(DFunDef false "isWs" ((PLit (LString " "))) (EVar "True"))
-(DFunDef false "isWs" ((PLit (LString "\t"))) (EVar "True"))
-(DFunDef false "isWs" ((PLit (LString "\n"))) (EVar "True"))
-(DFunDef false "isWs" ((PLit (LString "\r"))) (EVar "True"))
-(DFunDef false "isWs" (PWild) (EVar "False"))
 (DTypeSig false "arraySubChars" (TyFun (TyApp (TyCon "Array") (TyCon "Char")) (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyApp (TyCon "Array") (TyCon "Char"))))))
 (DFunDef false "arraySubChars" ((PVar "chars") (PVar "lo") (PVar "hi")) (EApp (EApp (EVar "arrayMakeWith") (EBinOp "-" (EVar "hi") (EVar "lo"))) (ELam ((PVar "i")) (EApp (EApp (EVar "arrayGetUnsafe") (EBinOp "+" (EVar "lo") (EVar "i"))) (EVar "chars")))))
-(DTypeSig false "trimLeftGo" (TyFun (TyApp (TyCon "Array") (TyCon "Char")) (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyCon "String")))))
-(DFunDef false "trimLeftGo" ((PVar "chars") (PVar "i") (PVar "len")) (EIf (EBinOp ">=" (EVar "i") (EVar "len")) (ELit (LString "")) (EIf (EApp (EVar "isWs") (EApp (EVar "charToStr") (EApp (EApp (EVar "arrayGetUnsafe") (EVar "i")) (EVar "chars")))) (EApp (EApp (EApp (EVar "trimLeftGo") (EVar "chars")) (EBinOp "+" (EVar "i") (ELit (LInt 1)))) (EVar "len")) (EIf (EVar "otherwise") (EApp (EVar "stringFromChars") (EApp (EApp (EApp (EVar "arraySubChars") (EVar "chars")) (EVar "i")) (EVar "len"))) (EApp (EVar "__fallthrough__") (ELit LUnit))))))
-(DTypeSig false "trimRightGo" (TyFun (TyApp (TyCon "Array") (TyCon "Char")) (TyFun (TyCon "Int") (TyCon "String"))))
-(DFunDef false "trimRightGo" ((PVar "chars") (PVar "end")) (EIf (EBinOp "<=" (EVar "end") (ELit (LInt 0))) (ELit (LString "")) (EIf (EApp (EVar "isWs") (EApp (EVar "charToStr") (EApp (EApp (EVar "arrayGetUnsafe") (EBinOp "-" (EVar "end") (ELit (LInt 1)))) (EVar "chars")))) (EApp (EApp (EVar "trimRightGo") (EVar "chars")) (EBinOp "-" (EVar "end") (ELit (LInt 1)))) (EIf (EVar "otherwise") (EApp (EVar "stringFromChars") (EApp (EApp (EApp (EVar "arraySubChars") (EVar "chars")) (ELit (LInt 0))) (EVar "end"))) (EApp (EVar "__fallthrough__") (ELit LUnit))))))
-(DTypeSig true "stringTrimLeft" (TyFun (TyCon "String") (TyCon "String")))
-(DFunDef false "stringTrimLeft" ((PVar "s")) (EBlock (DoLet false false (PVar "chars") (EApp (EVar "stringToChars") (EVar "s"))) (DoLet false false (PVar "len") (EApp (EVar "arrayLength") (EVar "chars"))) (DoExpr (EApp (EApp (EApp (EVar "trimLeftGo") (EVar "chars")) (ELit (LInt 0))) (EVar "len")))))
-(DTypeSig true "stringTrimRight" (TyFun (TyCon "String") (TyCon "String")))
-(DFunDef false "stringTrimRight" ((PVar "s")) (EBlock (DoLet false false (PVar "chars") (EApp (EVar "stringToChars") (EVar "s"))) (DoLet false false (PVar "len") (EApp (EVar "arrayLength") (EVar "chars"))) (DoExpr (EApp (EApp (EVar "trimRightGo") (EVar "chars")) (EVar "len")))))
-(DTypeSig true "stringTrim" (TyFun (TyCon "String") (TyCon "String")))
-(DFunDef false "stringTrim" ((PVar "s")) (EApp (EVar "stringTrimRight") (EApp (EVar "stringTrimLeft") (EVar "s"))))
 (DTypeSig true "sortUniqS" (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyApp (TyCon "List") (TyCon "String"))))
 (DFunDef false "sortUniqS" ((PVar "xs")) (EApp (EApp (EVar "sortUniqSGo") (EVar "xs")) (EListLit)))
 (DTypeSig false "sortUniqSGo" (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyApp (TyCon "List") (TyCon "String")))))
@@ -925,24 +867,8 @@ hexDigits k n acc =
 (DTypeSig true "orElseOpt" (TyFun (TyApp (TyCon "Option") (TyVar "a")) (TyFun (TyApp (TyCon "Option") (TyVar "a")) (TyApp (TyCon "Option") (TyVar "a")))))
 (DFunDef false "orElseOpt" ((PCon "Some" (PVar "x")) PWild) (EApp (EVar "Some") (EVar "x")))
 (DFunDef false "orElseOpt" ((PCon "None") (PVar "y")) (EVar "y"))
-(DTypeSig false "isWs" (TyFun (TyCon "String") (TyCon "Bool")))
-(DFunDef false "isWs" ((PLit (LString " "))) (EVar "True"))
-(DFunDef false "isWs" ((PLit (LString "\t"))) (EVar "True"))
-(DFunDef false "isWs" ((PLit (LString "\n"))) (EVar "True"))
-(DFunDef false "isWs" ((PLit (LString "\r"))) (EVar "True"))
-(DFunDef false "isWs" (PWild) (EVar "False"))
 (DTypeSig false "arraySubChars" (TyFun (TyApp (TyCon "Array") (TyCon "Char")) (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyApp (TyCon "Array") (TyCon "Char"))))))
 (DFunDef false "arraySubChars" ((PVar "chars") (PVar "lo") (PVar "hi")) (EApp (EApp (EVar "arrayMakeWith") (EBinOp "-" (EVar "hi") (EVar "lo"))) (ELam ((PVar "i")) (EApp (EApp (EVar "arrayGetUnsafe") (EBinOp "+" (EVar "lo") (EVar "i"))) (EVar "chars")))))
-(DTypeSig false "trimLeftGo" (TyFun (TyApp (TyCon "Array") (TyCon "Char")) (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyCon "String")))))
-(DFunDef false "trimLeftGo" ((PVar "chars") (PVar "i") (PVar "len")) (EIf (EBinOp ">=" (EVar "i") (EVar "len")) (ELit (LString "")) (EIf (EApp (EVar "isWs") (EApp (EVar "charToStr") (EApp (EApp (EVar "arrayGetUnsafe") (EVar "i")) (EVar "chars")))) (EApp (EApp (EApp (EVar "trimLeftGo") (EVar "chars")) (EBinOp "+" (EVar "i") (ELit (LInt 1)))) (EVar "len")) (EIf (EVar "otherwise") (EApp (EVar "stringFromChars") (EApp (EApp (EApp (EVar "arraySubChars") (EVar "chars")) (EVar "i")) (EVar "len"))) (EApp (EVar "__fallthrough__") (ELit LUnit))))))
-(DTypeSig false "trimRightGo" (TyFun (TyApp (TyCon "Array") (TyCon "Char")) (TyFun (TyCon "Int") (TyCon "String"))))
-(DFunDef false "trimRightGo" ((PVar "chars") (PVar "end")) (EIf (EBinOp "<=" (EVar "end") (ELit (LInt 0))) (ELit (LString "")) (EIf (EApp (EVar "isWs") (EApp (EVar "charToStr") (EApp (EApp (EVar "arrayGetUnsafe") (EBinOp "-" (EVar "end") (ELit (LInt 1)))) (EVar "chars")))) (EApp (EApp (EVar "trimRightGo") (EVar "chars")) (EBinOp "-" (EVar "end") (ELit (LInt 1)))) (EIf (EVar "otherwise") (EApp (EVar "stringFromChars") (EApp (EApp (EApp (EVar "arraySubChars") (EVar "chars")) (ELit (LInt 0))) (EVar "end"))) (EApp (EVar "__fallthrough__") (ELit LUnit))))))
-(DTypeSig true "stringTrimLeft" (TyFun (TyCon "String") (TyCon "String")))
-(DFunDef false "stringTrimLeft" ((PVar "s")) (EBlock (DoLet false false (PVar "chars") (EApp (EVar "stringToChars") (EVar "s"))) (DoLet false false (PVar "len") (EApp (EVar "arrayLength") (EVar "chars"))) (DoExpr (EApp (EApp (EApp (EVar "trimLeftGo") (EVar "chars")) (ELit (LInt 0))) (EVar "len")))))
-(DTypeSig true "stringTrimRight" (TyFun (TyCon "String") (TyCon "String")))
-(DFunDef false "stringTrimRight" ((PVar "s")) (EBlock (DoLet false false (PVar "chars") (EApp (EVar "stringToChars") (EVar "s"))) (DoLet false false (PVar "len") (EApp (EVar "arrayLength") (EVar "chars"))) (DoExpr (EApp (EApp (EVar "trimRightGo") (EVar "chars")) (EVar "len")))))
-(DTypeSig true "stringTrim" (TyFun (TyCon "String") (TyCon "String")))
-(DFunDef false "stringTrim" ((PVar "s")) (EApp (EVar "stringTrimRight") (EApp (EVar "stringTrimLeft") (EVar "s"))))
 (DTypeSig true "sortUniqS" (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyApp (TyCon "List") (TyCon "String"))))
 (DFunDef false "sortUniqS" ((PVar "xs")) (EApp (EApp (EVar "sortUniqSGo") (EVar "xs")) (EListLit)))
 (DTypeSig false "sortUniqSGo" (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyApp (TyCon "List") (TyCon "String")))))

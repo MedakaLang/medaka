@@ -37,8 +37,8 @@ import support.ordmap.{
   omEmpty, omFromNames, omHasKey, omKeys, omFromPairs, omLookup, omInsert
 }
 import support.symbol_origin.{SymbolOrigin(..)}
-import string.{replace}
-import support.util.{contains, joinWith, stringTrimLeft, reverseL}
+import string.{replace, trimAscii}
+import support.util.{contains, joinWith, reverseL}
 import test.{
   Expectation, expectAll, expectEach, expectEqual, expectFindings, labelFail
 }
@@ -76,7 +76,7 @@ identEnd line j =
     if contains c [" ", "(", ")", "\""] then j else identEnd line (j + 1)
 
 codeLines : List String -> List String
-codeLines = filter (l => not (stringStartsWith ";;" (stringTrimLeft l)))
+codeLines = filter (l => not (stringStartsWith ";;" (trimAscii l)))
 
 -- each `(func $f` the text writes, with the `(param $…)` count of its line; a
 -- parameter written without a name is counted as -1, so it cannot match a row

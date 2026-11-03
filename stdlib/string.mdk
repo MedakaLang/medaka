@@ -505,7 +505,7 @@ export
 trimLeft : String -> String
 trimLeft s =
   let n = stringLength s
-  stringSlice (firstNonSpaceStr s 0 n) n s
+  stringSlice (firstNonSpaceStr isSpace s 0 n) n s
 
 {- | The string without its trailing whitespace.
 
@@ -513,7 +513,8 @@ trimLeft s =
    "  hi" -}
 export
 trimRight : String -> String
-trimRight s = stringSlice 0 (lastNonSpaceStr s (stringLength s - 1) 0 + 1) s
+trimRight s =
+  stringSlice 0 (lastNonSpaceStr isSpace s (stringLength s - 1) 0 + 1) s
 
 {- | The string without leading or trailing whitespace.
 
@@ -526,32 +527,53 @@ export
 trim : String -> String
 trim s =
   let n = stringLength s
-  let lo = firstNonSpaceStr s 0 n
-  stringSlice lo (lastNonSpaceStr s (n - 1) lo + 1) s
+  let lo = firstNonSpaceStr isSpace s 0 n
+  stringSlice lo (lastNonSpaceStr isSpace s (n - 1) lo + 1) s
+
+{- | The string without leading or trailing ASCII whitespace: code points
+   9 to 13 and 32, and no others.
+
+   Use it for a machine format whose grammar defines ASCII whitespace, not
+   text: TOML keys and table headers, HTTP header values, SQL number text.
+   A no-break space and the separators 28 to 31 are data there, so `trim`,
+   which strips them, is wrong for those formats.
+
+   > trimAscii "\t x \r\n"
+   "x"
+
+   > trimAscii "\u{00A0}x" == "\u{00A0}x"
+   True -}
+export
+trimAscii : String -> String
+trimAscii s =
+  let n = stringLength s
+  let lo = firstNonSpaceStr charIsSpace s 0 n
+  stringSlice lo (lastNonSpaceStr charIsSpace s (n - 1) lo + 1) s
 
 -- Only the characters at the ends are inspected, so trimming costs the
 -- length of the surrounding whitespace, not of the string.
 charAtStr : String -> Int -> Char
 charAtStr s i = arrayGetUnsafe 0 (toChars (stringSlice i (i + 1) s))
 
--- The first index in [i, n) holding a non-space, or n.
-firstNonSpaceStr : String -> Int -> Int -> Int
-firstNonSpaceStr s i n
+-- The first index in [i, n) whose character is not `blank`, or n.
+firstNonSpaceStr : (Char -> Bool) -> String -> Int -> Int -> Int
+firstNonSpaceStr blank s i n
   | i >= n = n
   -- Bound: one string probed one position at a time over its whitespace run; linear on the native runtime (the one-entry cursor cache resumes the codepoint walk) and quadratic on WasmGC for a long run beside non-ASCII text.
   -- lint-disable-next-line rule-reslice-in-loop
-  | isSpace (charAtStr s i) = firstNonSpaceStr s (i + 1) n
+  | blank (charAtStr s i) = firstNonSpaceStr blank s (i + 1) n
   | otherwise = i
 
--- The last index in [lo, i] holding a non-space, or lo - 1 when there is none.
--- Callers pass lo = 0 for a whole string, or a lo that is already a non-space
--- index (or the string length), so the scan never passes a non-space at lo.
-lastNonSpaceStr : String -> Int -> Int -> Int
-lastNonSpaceStr s i lo
+-- The last index in [lo, i] whose character is not `blank`, or lo - 1 when
+-- there is none. Callers pass lo = 0 for a whole string, or a lo that is
+-- already a non-blank index (or the string length), so the scan never passes
+-- a non-blank at lo.
+lastNonSpaceStr : (Char -> Bool) -> String -> Int -> Int -> Int
+lastNonSpaceStr blank s i lo
   | i < lo = lo - 1
   -- Bound: one string probed backward from the end over its whitespace run; same bound as firstNonSpaceStr, native-linear and WasmGC-quadratic.
   -- lint-disable-next-line rule-reslice-in-loop
-  | isSpace (charAtStr s i) = lastNonSpaceStr s (i - 1) lo
+  | blank (charAtStr s i) = lastNonSpaceStr blank s (i - 1) lo
   | otherwise = i
 
 firstNonSpace : Array Char -> Int -> Int -> Int
