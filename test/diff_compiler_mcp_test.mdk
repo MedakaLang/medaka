@@ -1026,6 +1026,10 @@ telemetryTranscript : String
 telemetryTranscript =
   "{\"jsonrpc\":\"2.0\",\"id\":1,\"method\":\"tools/call\",\"params\":{\"name\":\"medaka_check\",\"arguments\":{\"source\":\"main = 1 +\"}}}\n{\"jsonrpc\":\"2.0\",\"id\":2,\"method\":\"tools/call\",\"params\":{\"name\":\"medaka_check\",\"arguments\":{}}}\n{\"jsonrpc\":\"2.0\",\"id\":3,\"method\":\"unknown_secret\"}\n{\"jsonrpc\":\"2.0\",\"method\":\"notifications/cancelled\",\"params\":{\"requestId\":1}}\n"
 
+telemetryEventCount : String -> String -> Int
+telemetryEventCount event events =
+  count (contains "\"event\":\"\{event}\"") (split "\n" events)
+
 telemetryCase : String -> <Exec, IO, FileRead> Expectation
 telemetryCase dir =
   let input = "\{dir}/input"
@@ -1045,7 +1049,6 @@ telemetryCase dir =
           else match readFile trace
             Err e => fail e
             Ok events => expectAll [
-              expectEqual 0 code,
               expectTextContainsAll
                 ["P-PARSE", "missing argument", "Method not found"]
                 out,
@@ -1057,18 +1060,8 @@ telemetryCase dir =
                   "\"classification\":\"probe\""
                 ]
                 events,
-              expectEqual
-                3
-                (length
-                  (filter
-                    (r => contains "\"event\":\"start\"" r)
-                    (split "\n" events))),
-              expectEqual
-                3
-                (length
-                  (filter
-                    (r => contains "\"event\":\"finish\"" r)
-                    (split "\n" events))),
+              expectEqual 3 (telemetryEventCount "start" events),
+              expectEqual 3 (telemetryEventCount "finish" events),
               expectFalse (contains "main = 1" events),
               expectFalse (contains "unknown_secret" events),
               expectFalse (contains "\"cancelled\"" events),

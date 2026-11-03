@@ -13,6 +13,15 @@ public export data TraceToken =
   | TraceDisabled
   | TraceToken TraceContext String String Float
 
+data TraceEvent = TraceEvent {
+  requestId : String,
+  tool : String,
+  event : String,
+  outcome : Json,
+  duration : Json,
+  size : Json,
+}
+
 export
 beginCall : TraceContext -> String -> String -> <IO, Clock> TraceToken
 beginCall context requestId tool = match context.traceSettings
@@ -22,7 +31,14 @@ beginCall context requestId tool = match context.traceSettings
 beginEnabledCall : TraceContext -> String -> String -> <IO, Clock> TraceToken
 beginEnabledCall context requestId tool =
   let started = monotonicSec ()
-  emit context requestId tool "start" JNull JNull JNull
+  emit context TraceEvent {
+    requestId = requestId,
+    tool = tool,
+    event = "start",
+    outcome = JNull,
+    duration = JNull,
+    size = JNull,
+  }
   TraceToken context requestId tool started
 
 export
@@ -30,46 +46,44 @@ finishCall : TraceToken -> String -> Int -> <IO, Clock> Unit
 finishCall TraceDisabled _ _ = ()
 finishCall (TraceToken context requestId tool started) outcome responseBytes =
   let elapsed = floatToInt ((monotonicSec () - started) * 1000000000.0)
-  emit
-    context
-    requestId
-    tool
-    "finish"
-    (JString outcome)
-    (JInt (max 0 elapsed))
-    (JInt responseBytes)
+  emit context TraceEvent {
+    requestId = requestId,
+    tool = tool,
+    event = "finish",
+    outcome = JString outcome,
+    duration = JInt (max 0 elapsed),
+    size = JInt responseBytes,
+  }
 
 export
 recordProtocol : TraceContext -> String -> String -> <IO> Unit
-recordProtocol context event requestId =
-  emit context requestId "protocol" event JNull JNull JNull
+recordProtocol context event requestId = emit context TraceEvent {
+  requestId = requestId,
+  tool = "protocol",
+  event = event,
+  outcome = JNull,
+  duration = JNull,
+  size = JNull,
+}
 
-emit : TraceContext ->
-  String ->
-  String ->
-  String ->
-  Json ->
-  Json ->
-  Json ->
-  <IO> Unit
-emit context requestId tool event outcome duration size =
-  match context.traceSettings
-    None => ()
-    Some settings =>
-      let line =
-        stringify
-            (jObject [
-              ("schema_version", JInt 1),
-              ("session_id", JString settings.traceSession),
-              ("request_id", JString requestId),
-              ("tool", JString tool),
-              ("classification", JString settings.traceClassification),
-              ("event", JString event),
-              ("outcome", outcome),
-              ("duration_ns", duration),
-              ("response_bytes", size),
-            ])
-          ++ "\n"
-      match appendFileExceptStdout settings.tracePath line
-        Ok _ => ()
-        Err _ => ()
+emit : TraceContext -> TraceEvent -> <IO> Unit
+emit context entry = match context.traceSettings
+  None => ()
+  Some settings =>
+    let line =
+      stringify
+          (jObject [
+            ("schema_version", JInt 1),
+            ("session_id", JString settings.traceSession),
+            ("request_id", JString entry.requestId),
+            ("tool", JString entry.tool),
+            ("classification", JString settings.traceClassification),
+            ("event", JString entry.event),
+            ("outcome", entry.outcome),
+            ("duration_ns", entry.duration),
+            ("response_bytes", entry.size),
+          ])
+        ++ "\n"
+    bestEffort
+      "telemetry is advisory and must not interrupt the protocol"
+      (appendFileExceptStdout settings.tracePath line)
