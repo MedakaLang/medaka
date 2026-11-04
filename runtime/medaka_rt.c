@@ -43,7 +43,7 @@
 #ifndef _GNU_SOURCE
 #define _GNU_SOURCE
 #endif
-#include "medaka_abi.h"
+#include "medaka_runtime.h"
 #include <dirent.h>
 #include <errno.h>
 #include <stdio.h>
@@ -2860,6 +2860,10 @@ long long mdk_get_env(long long name) {
  * (a path, a directory entry, an strerror message), so read as outside bytes. */
 static long long mdk_str_cstr(const char *s) {
   return mdk_str_lossy(s, (long long)strlen(s));
+}
+
+long long mdk_runtime_string(const char *s) {
+  return mdk_str_cstr(s);
 }
 
 /* Every file extern whose path is an authority receives, after its value

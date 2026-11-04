@@ -221,7 +221,7 @@ w=$1
 root=$2
 bin=$3
 mkdir -p "$w/root/runtime" "$w/cache" "$w/nosha-cache" "$w/path"
-cp "$root/runtime/medaka_rt.c" "$root/runtime/medaka_abi.h" "$w/root/runtime/"
+cp "$root/runtime/medaka_rt.c" "$root/runtime/medaka_abi.h" "$root/runtime/medaka_runtime.h" "$root/runtime/medaka_process.h" "$root/runtime/medaka_process.c" "$w/root/runtime/"
 cp "$w/root/runtime/medaka_abi.h" "$w/original.h"
 ln -s "$root/stdlib" "$w/root/stdlib"
 printf 'main = println 12345\n' > "$w/probe.mdk"
@@ -236,6 +236,17 @@ test "$(find "$w/cache" -name 'rt-*.o' | wc -l)" -eq 2
 cp "$w/original.h" "$w/root/runtime/medaka_abi.h"
 "$bin" build "$w/probe.mdk" -o "$w/c" >/dev/null
 test "$(find "$w/cache" -name 'rt-*.o' | wc -l)" -eq 2
+cp "$w/root/runtime/medaka_runtime.h" "$w/runtime-original.h"
+printf '\n/* mutation */\n' >> "$w/root/runtime/medaka_runtime.h"
+"$bin" build "$w/probe.mdk" -o "$w/header" >/dev/null
+test "$(find "$w/cache" -name 'rt-*.o' | wc -l)" -eq 3
+cp "$w/runtime-original.h" "$w/root/runtime/medaka_runtime.h"
+for source in medaka_process.c medaka_process.h; do
+  cp "$w/root/runtime/$source" "$w/process-original"
+  printf '\n#error process unit must be compiled\n' >> "$w/root/runtime/$source"
+  if "$bin" build "$w/probe.mdk" -o "$w/broken" >/dev/null 2>&1; then exit 1; fi
+  cp "$w/process-original" "$w/root/runtime/$source"
+done
 MEDAKA_NO_OBJ_CACHE=1 "$bin" build "$w/probe.mdk" -o "$w/uncached" >/dev/null
 "$bin" build --emit-rt-obj "$w/runtime.o" >/dev/null
 MEDAKA_RT_OBJ="$w/runtime.o" "$bin" build "$w/probe.mdk" -o "$w/explicit" >/dev/null

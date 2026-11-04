@@ -50,7 +50,8 @@ def build(repo, destination):
     shutil.copytree(tree / 'stdlib', artifact / 'stdlib',
                     ignore=shutil.ignore_patterns('*.mdki', '*.mdkd', '*.mdke', '*.golden'))
     (artifact / 'runtime').mkdir()
-    shutil.copy2(tree / 'runtime/medaka_rt.c', artifact / 'runtime/medaka_rt.c')
+    for name in ('medaka_rt.c', 'medaka_abi.h', 'medaka_runtime.h', 'medaka_process.h', 'medaka_process.c'):
+        shutil.copy2(tree / 'runtime' / name, artifact / 'runtime' / name)
     manifest = {'base': base, 'source_delta': delta,
                 'source_patch_sha256': digest(destination / 'source.patch'),
                 'compiler_source_sha256': digest(source), 'files': fingerprint(artifact),
