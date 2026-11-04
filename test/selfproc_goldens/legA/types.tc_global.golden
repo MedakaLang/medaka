@@ -116,5 +116,6 @@ substParams : List String -> List (String, Ty) -> List Ty
 superHeadCovers : List Ty -> List Ty -> Bool
 superHeadStep : Ty -> Ty -> MStep String Ty Ty
 superImplExists : List ImplRow -> TabKey -> String -> List Ty -> Bool
+superNamed : SuperCheck -> Ref (List (Int, String))
 superRowExists : List ImplRow -> List (String, Ty) -> Super -> Bool
 uOblIsDecidableNow : GraphCtx -> UObligation -> Bool

@@ -1050,47 +1050,50 @@ checkImplSuperContexts : ModuleCtx ->
   List ImplRow ->
   Decl ->
   Unit
-checkImplSuperContexts mctx decls ce cur rows (DAttrib _ d) =
-  checkImplSuperContexts mctx decls ce cur rows d
-checkImplSuperContexts mctx decls ce cur rows (DImpl { iface, tys, reqs, implOrigin = o, implIfaceLoc = ifaceLoc, ... }) =
-  let derived = isNone ifaceLoc
-  let loc = if derived then derivedImplDeclLoc decls tys else ifaceLoc
-  match ceLookupAt (regKeyOfTab (ifaceTabKey o iface)) cur ce
-    Some r if listLen (ceRowTyparams r) == listLen tys =>
-      let (implTvMap, headMonos) = implHeadMonos mctx tys
-      let roots = implHeadTypeVarRoots implTvMap
-      let headIds = omFromNames (map (p => intToString (snd p)) roots) omEmpty
-      let declared = map (requirePredicateSlot mctx implTvMap) reqs
-      let givens =
-        declared
-          ++ flatMap
-            (s => map fst (predicateSlotKnownSupers mctx.mcGraph s))
+checkImplSuperContexts mctx decls ce cur rows = go
+  where
+    go (DAttrib _ d) = go d
+    go (DImpl { iface, tys, reqs, implOrigin = o, implIfaceLoc = ifaceLoc, ... }) =
+      let derived = isNone ifaceLoc
+      let loc = if derived then derivedImplDeclLoc decls tys else ifaceLoc
+      match ceLookupAt (regKeyOfTab (ifaceTabKey o iface)) cur ce
+        Some r if listLen (ceRowTyparams r) == listLen tys =>
+          let (implTvMap, headMonos) = implHeadMonos mctx tys
+          let roots = implHeadTypeVarRoots implTvMap
+          let headIds =
+            omFromNames (map (p => intToString (snd p)) roots) omEmpty
+          let declared = map (requirePredicateSlot mctx implTvMap) reqs
+          let givens =
             declared
-      let subject = "impl \{iface} \{join " " (map ppTyAtom tys)}"
-      let check = SuperCheck {
-        scSubject = subject,
-        scRoots = roots,
-        scHeadIds = headIds,
-        scGivens = givens,
-        scLoc = loc,
-        scDerived = derived,
-      }
-      let subst = zip (ceRowTyparams r) tys
-      let argsOf =
-        sup =>
-          mapAll
-            (p => lookupPos p (ceRowTyparams r) headMonos)
-            (superParamsOf sup)
-      fold
-        (_ sup => match argsOf sup
-          Some supArgs => checkSuperInstanceContext mctx check (superIfaceRef
-            sup) supArgs (_ =>
-            superRowExists rows subst sup)
-          None => ())
-        ()
-        (ceRowSupers r)
-    _ => ()
-checkImplSuperContexts _mctx _ _ _ _ _ = ()
+              ++ flatMap
+                (s => map fst (predicateSlotKnownSupers mctx.mcGraph s))
+                declared
+          let subject = "impl \{iface} \{join " " (map ppTyAtom tys)}"
+          let check = SuperCheck {
+            scSubject = subject,
+            scRoots = roots,
+            scHeadIds = headIds,
+            scGivens = givens,
+            scLoc = loc,
+            scDerived = derived,
+          }
+          let subst = zip (ceRowTyparams r) tys
+          let argsOf =
+            sup =>
+              mapAll
+                (p => lookupPos p (ceRowTyparams r) headMonos)
+                (superParamsOf sup)
+          fold
+            (_ sup => match argsOf sup
+              Some supArgs =>
+                let supRef = superIfaceRef sup
+                let covered = _ => superRowExists rows subst sup
+                checkSuperInstanceContext mctx check supRef supArgs covered
+              None => ())
+            ()
+            (ceRowSupers r)
+        _ => ()
+    go _ = ()
 
 -- The span of the `data`/`newtype` declaration a derived impl's head names.
 derivedImplDeclLoc : List Decl -> List Ty -> Option Loc
@@ -1137,10 +1140,8 @@ checkSuperInstanceContext mctx sc sup supArgs covered
       None =>
         if not (covered ()) then reportMissingSuperImpl mctx sc sup supArgs
       Some ctx =>
-        let leaves =
-          flatMap
-            (g => superContextLeaves (reqWalkStart ()) (fst g) (snd g))
-            ctx
+        let walk = reqWalkStart ()
+        let leaves = flatMap (g => superContextLeaves walk (fst g) (snd g)) ctx
         fold
           (_ leaf => reportSuperContextLeaf mctx sc sup supArgs leaf)
           ()
@@ -1175,6 +1176,10 @@ superRowExists rows subst (Super { superHead = n, superParams = ps, superOrigin 
   let tys = substParams ps subst
   listLen tys /= listLen ps || superImplExists rows (ifaceTabKey so n) n tys
 
+-- The printed-name table a super-context finding renders its goals with.
+superNamed : SuperCheck -> Ref (List (Int, String))
+superNamed sc = Ref (map (p => (snd p, fst p)) sc.scRoots)
+
 -- The super is named by its spelling, as the checked impl's own interface is, so
 -- the text is the same on every verb and at every head.  A derived impl's remedy is
 -- the `deriving` clause when the super is derivable, else the hand-written impl.
@@ -1186,7 +1191,7 @@ reportMissingSuperImpl : ModuleCtx ->
 reportMissingSuperImpl mctx sc sup supArgs =
   let subject = sc.scSubject
   let derived = sc.scDerived
-  let named = Ref (map (p => (snd p, fst p)) sc.scRoots)
+  let named = superNamed sc
   let goal = "\{sup.irName} \{join " " (ppEach named (Ref 0) 3 supArgs)}"
   let missing = "requires the superinterface `\{goal}`, which no impl covers"
   pushTypeErrorOnceAt mctx TMissingSuperImpl sc.scLoc (if not derived then
@@ -1210,7 +1215,7 @@ reportSuperContextLeaf mctx sc sup supArgs (iface, args) =
   let derived = sc.scDerived
   let loc = sc.scLoc
   let ids = flatMap monoUnboundIds args
-  let named = Ref (map (p => (snd p, fst p)) sc.scRoots)
+  let named = superNamed sc
   let argsText = join " " (ppEach named (Ref 0) 3 args)
   let superGoal =
     "\{qualifiedIfaceLabel sup} \{join " " (ppEach named (Ref 0) 3 supArgs)}"
