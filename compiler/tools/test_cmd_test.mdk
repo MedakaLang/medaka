@@ -778,7 +778,7 @@ abortSeedRowsEnv env src code =
           ]) ((exit, out, err) => expectAll [
             expectNotEqual 0 exit,
             labelFail
-              "exit \{intToString exit}, stdout \{out}, stderr"
+              "exit \{intToString exit}, stdout \{debug out}, stderr \{debug err}"
               (expectTextContainsAll [seedLineFor 7] err),
             expectEqual [] (seedLines (lines out)),
             expectEqual [seedLineFor 7] (seedLines (lines err)),
@@ -847,7 +847,7 @@ test "an allocation failure is reported as out of memory with exit 1, built and 
             ])) ((code, out, err) => expectAll [
           expectEqual 1 code,
           labelFail
-            "exit \{intToString code}, stdout \{out}, stderr"
+            "exit \{intToString code}, stdout \{debug out}, stderr \{debug err}"
             (expectTextContainsAll
               [
                 "runtime error [E-OUT-OF-MEMORY]: out of memory (could not allocate ",
@@ -866,7 +866,7 @@ test "an allocation failure is reported as out of memory with exit 1, built and 
           (heapCap ++ ["\{dir}/oom.bin"])) ((code, out, err) => expectAll [
           expectEqual 1 code,
           labelFail
-            "exit \{intToString code}, stdout \{out}, stderr"
+            "exit \{intToString code}, stdout \{debug out}, stderr \{debug err}"
             (expectTextContainsAll
               [
                 "runtime error [E-OUT-OF-MEMORY]: out of memory (could not allocate ",
