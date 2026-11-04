@@ -1,0 +1,144 @@
+-- lint rule rule-passthrough-arm: a two-arm `match` over an Option/Result with a verbatim `None => None` / `Err e => Err e` arm. Bind in a `do` block instead.
+
+import driver.diagnostics.{Severity(..)}
+import frontend.ast.{
+  Arm(..), Decl(..), DoStmt(..), Expr(..), Loc, Pat(..), Variant(..)
+}
+import frontend.ast_walk.{ExprKind(..)}
+import frontend.parser.{Positions(..)}
+import list.{last}
+import support.util.{anyList, isEmptyL}
+import tools.lint_core.{
+  Category(..),
+  Ctx(..),
+  FileFacts,
+  Finding(..),
+  Fixability(..),
+  Ratchet(..),
+  Rule,
+  RuleMeta(..),
+  Scope(..),
+  StdlibIndex,
+  Visitor(..),
+  mkVisitorRule,
+}
+import tools.lint_shared.{
+  ctorVarPassthru,
+  isEVarNamed,
+  isNilPCon,
+  matchToMapTransform,
+  ruleNamePassthroughArm,
+  unwrapLoc,
+}
+
+-- Flagged at any depth, one level included: a `match` with exactly two arms, no
+-- guards, one a verbatim failure passthrough (`None => None`, or `Err e => Err e`
+-- returning the bound variable unchanged) and the other the success bind
+-- (`Some p => body`, `Ok p => body`). Not flagged: a rebuilt failure value
+-- (`Err e => Err (wrap e)`), a constructor swap, a third arm, a guarded arm, a
+-- success arm that re-wraps in the same constructor (a `map`, owned by
+-- `rule-match-to-map`), and any file that declares its own `None` or `Err`
+-- constructor. A self-recursive tail is flagged too; the message says so, since
+-- the `do` form loses the tail call.
+export
+rule : Rule
+rule =
+  mkVisitorRule
+    RuleMeta {
+      name = ruleNamePassthroughArm,
+      summary =
+        "a two-arm `match` over an Option/Result with a verbatim `None => None` / `Err e => Err e` arm: bind in a `do` block instead",
+      doc =
+        "A `match` that passes a failure straight through (`None => None`, or `Err e => Err e` with the same variable) and continues in the other arm is a monadic bind written by hand. Write it as a `do` block, at any depth: one level is enough, unlike `rule-bind-chain-to-do`, which needs a pyramid of three. The rule only suggests; it has no fixer.\n\nNot reported: a failure arm that rebuilds its value (`Err e => Err (wrap e)`), a match with a third arm or a guard, a success arm that re-wraps in the same constructor (`rule-match-to-map` owns it), and a file that declares its own `None` or `Err` constructor. A self-recursive tail call in the success arm is reported, and the message says so: the `do` form lowers to `andThen` and the call stops being a tail call.\n\nBefore:\n  match catalogRow n\n    Some r => g r\n    None => None\nAfter:\n  do\n    r <- catalogRow n\n    g r",
+      category = Style,
+      scope = Internal,
+      ratchet = Gated,
+      defaultSeverity = SevWarning,
+      fixability = SuggestOnly,
+      needs = [],
+    }
+    rulePassthroughArm
+    None
+
+rulePassthroughArm : StdlibIndex ->
+  String ->
+  FileFacts ->
+  Positions ->
+  List Decl ->
+  List Visitor
+rulePassthroughArm _ _ _ _ prog
+  | declaresCtor prog = []
+  | otherwise = [OnExpr [KMatch] passthroughAt]
+
+-- The file declares a constructor named `None` or `Err`, so the arm names no
+-- longer mean the prelude's.
+declaresCtor : List Decl -> Bool
+declaresCtor prog = anyList declCtor prog
+
+declCtor : Decl -> Bool
+declCtor (DData { dataCtors }) = anyList shadowing dataCtors
+declCtor _ = False
+
+shadowing : Variant -> Bool
+shadowing (Variant n _) = n == "None" || n == "Err"
+
+-- ── the match ────────────────────────────────────────────────────────────────
+
+passthroughAt : Ctx -> Expr -> List Finding
+passthroughAt ctx e = match e
+  EMatch _ [a1, a2] => match bindArm a1 a2
+    Some (kind, body) =>
+      [report ctx.ctxSpan kind (selfTail ctx.ctxDeclName body)]
+    None => match bindArm a2 a1
+      Some (kind, body) =>
+        [report ctx.ctxSpan kind (selfTail ctx.ctxDeclName body)]
+      None => []
+  _ => []
+
+-- `(kind, success body)` when the first arm is the passthrough and the second
+-- the bind.
+bindArm : Arm -> Arm -> Option (String, Expr)
+bindArm (Arm fp fgs fbody) (Arm sp sgs sbody)
+  | not (isEmptyL fgs && isEmptyL sgs) = None
+  | isNilPCon "None" fp && isEVarNamed "None" fbody =
+    success "Some" "Option" sp sbody
+  | ctorVarPassthru "Err" fp fbody = success "Ok" "Result" sp sbody
+  | otherwise = None
+
+success : String -> String -> Pat -> Expr -> Option (String, Expr)
+success ctor kind p body = match p
+  PCon c [_] =>
+    if c == ctor && isNone (matchToMapTransform ctor p body) then
+      Some (kind, body)
+    else
+      None
+  _ => None
+
+-- The success body ends in a call of the enclosing function.
+selfTail : String -> Expr -> Bool
+selfTail name e = match unwrapLoc e
+  EApp f _ => calls name f
+  EBlock stmts => match last stmts
+    Some (DoExpr l) => selfTail name l
+    _ => False
+  _ => False
+
+calls : String -> Expr -> Bool
+calls name f = match unwrapLoc f
+  EVar n => n == name
+  EApp g _ => calls name g
+  _ => False
+
+report : Option Loc -> String -> Bool -> Finding
+report loc kind tailNote = Finding {
+  rule = ruleNamePassthroughArm,
+  message =
+    "`match` over \{kind} passes the failure straight through: bind it in a `do` block (`pat <- scrutinee`, then the success arm)"
+      ++ (if tailNote then
+        "; the success arm is a self-recursive tail call, which `do` does not keep"
+      else
+        ""),
+  severity = SevWarning,
+  loc = loc,
+  fix = None,
+}

@@ -1097,3 +1097,7 @@ ruleNameWalkerWildcard = "rule-walker-wildcard"
 export
 ruleNameThreadedInvariant : String
 ruleNameThreadedInvariant = "rule-threaded-invariant"
+
+export
+ruleNamePassthroughArm : String
+ruleNamePassthroughArm = "rule-passthrough-arm"

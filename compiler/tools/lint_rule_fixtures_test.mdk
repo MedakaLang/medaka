@@ -123,6 +123,7 @@ fixtureNames = [
   "missing-signature",
   "not-eq",
   "option-eliminators",
+  "passthrough-arm",
   "orelse-staircase",
   "prefer-assign-op",
   "prelude-shadow",
@@ -456,6 +457,18 @@ test "rule-test-bool-literal-equal fixture" =
 test "rule-test-equal-in-true fixture" = fixtureHolds "test-equal-in-true"
 
 test "rule-threaded-invariant fixture" = fixtureHolds "threaded-invariant"
+
+test "rule-passthrough-arm fixture" = fixtureHolds "passthrough-arm"
+
+-- A file declaring its own `None` keeps the arm names from meaning the prelude's.
+test "rule-passthrough-arm skips a file declaring its own None" =
+  match (lintLinesAt
+    emptyStdlibIndex
+    "fixture.mdk"
+    "rule-passthrough-arm"
+    "data Slot =\n  | None\n  | Full Int\n\nstep : Slot -> Slot\nstep s = match s\n  Full n => Full n\n  None => None\n")
+    Err e => fail e
+    Ok flagged => expectEqual [] flagged
 
 test "rule-unused-import fixture" = fixtureHolds "unused-import"
 

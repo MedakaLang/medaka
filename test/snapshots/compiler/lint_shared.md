@@ -1,5 +1,5 @@
 # META
-source_lines=1099
+source_lines=1103
 stages=DESUGAR,MARK
 # SOURCE
 -- compiler/tools/lint_shared.mdk — helpers used by more than one lint module:
@@ -1101,6 +1101,10 @@ ruleNameWalkerWildcard = "rule-walker-wildcard"
 export
 ruleNameThreadedInvariant : String
 ruleNameThreadedInvariant = "rule-threaded-invariant"
+
+export
+ruleNamePassthroughArm : String
+ruleNamePassthroughArm = "rule-passthrough-arm"
 # DESUGAR
 (DUse false (UseGroup ("frontend" "ast") ((mem "Loc" true) (mem "Expr" true) (mem "Decl" true) (mem "noBinderId" false) (mem "noDeclLoc" false) (mem "Ty" true) (mem "Pat" true) (mem "UseMember" true) (mem "Guard" true) (mem "Arm" true) (mem "ImplMethod" true) (mem "DoStmt" true) (mem "Section" true) (mem "InterpPart" true) (mem "GuardArm" true) (mem "FieldAssign" true) (mem "LetBind" true) (mem "FunClause" true))))
 (DUse false (UseGroup ("frontend" "parser") ((mem "Positions" true) (mem "DeclPos" false) (mem "positionsDecls" false) (mem "declPosLine" false))))
@@ -1471,6 +1475,8 @@ ruleNameThreadedInvariant = "rule-threaded-invariant"
 (DFunDef false "ruleNameWalkerWildcard" () (ELit (LString "rule-walker-wildcard")))
 (DTypeSig true "ruleNameThreadedInvariant" (TyCon "String"))
 (DFunDef false "ruleNameThreadedInvariant" () (ELit (LString "rule-threaded-invariant")))
+(DTypeSig true "ruleNamePassthroughArm" (TyCon "String"))
+(DFunDef false "ruleNamePassthroughArm" () (ELit (LString "rule-passthrough-arm")))
 # MARK
 (DUse false (UseGroup ("frontend" "ast") ((mem "Loc" true) (mem "Expr" true) (mem "Decl" true) (mem "noBinderId" false) (mem "noDeclLoc" false) (mem "Ty" true) (mem "Pat" true) (mem "UseMember" true) (mem "Guard" true) (mem "Arm" true) (mem "ImplMethod" true) (mem "DoStmt" true) (mem "Section" true) (mem "InterpPart" true) (mem "GuardArm" true) (mem "FieldAssign" true) (mem "LetBind" true) (mem "FunClause" true))))
 (DUse false (UseGroup ("frontend" "parser") ((mem "Positions" true) (mem "DeclPos" false) (mem "positionsDecls" false) (mem "declPosLine" false))))
@@ -1841,3 +1847,5 @@ ruleNameThreadedInvariant = "rule-threaded-invariant"
 (DFunDef false "ruleNameWalkerWildcard" () (ELit (LString "rule-walker-wildcard")))
 (DTypeSig true "ruleNameThreadedInvariant" (TyCon "String"))
 (DFunDef false "ruleNameThreadedInvariant" () (ELit (LString "rule-threaded-invariant")))
+(DTypeSig true "ruleNamePassthroughArm" (TyCon "String"))
+(DFunDef false "ruleNamePassthroughArm" () (ELit (LString "rule-passthrough-arm")))

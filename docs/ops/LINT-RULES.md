@@ -51,6 +51,7 @@ Every rule `medaka lint` knows. `universal` rules are meaningful in any Medaka p
 | [`rule-list-as-set`](#rule-list-as-set) | universal | perf | gated | not-fixable | file |
 | [`rule-walker-wildcard`](#rule-walker-wildcard) | internal | style | gated | not-fixable | file |
 | [`rule-threaded-invariant`](#rule-threaded-invariant) | internal | style | gated | suggest-only | file |
+| [`rule-passthrough-arm`](#rule-passthrough-arm) | internal | style | gated | suggest-only | file |
 
 ## rule-match-on-param
 
@@ -703,4 +704,23 @@ After:
     where
       go acc [] = acc
       go acc (x :: xs) = go (step bare heads acc x) xs
+```
+
+## rule-passthrough-arm
+
+a two-arm `match` over an Option/Result with a verbatim `None => None` / `Err e => Err e` arm: bind in a `do` block instead
+
+A `match` that passes a failure straight through (`None => None`, or `Err e => Err e` with the same variable) and continues in the other arm is a monadic bind written by hand. Write it as a `do` block, at any depth: one level is enough, unlike `rule-bind-chain-to-do`, which needs a pyramid of three. The rule only suggests; it has no fixer.
+
+Not reported: a failure arm that rebuilds its value (`Err e => Err (wrap e)`), a match with a third arm or a guard, a success arm that re-wraps in the same constructor (`rule-match-to-map` owns it), and a file that declares its own `None` or `Err` constructor. A self-recursive tail call in the success arm is reported, and the message says so: the `do` form lowers to `andThen` and the call stops being a tail call.
+
+```
+Before:
+  match catalogRow n
+    Some r => g r
+    None => None
+After:
+  do
+    r <- catalogRow n
+    g r
 ```

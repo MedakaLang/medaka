@@ -1,0 +1,97 @@
+import test.{expectEqual}
+
+-- One level, Option, success arm first.
+lookupDouble : Option Int -> Option Int
+lookupDouble o =
+  -- expect-next-line rule-passthrough-arm unfixed
+  match o
+    Some n => half n
+    None => None
+
+-- Passthrough arm first.
+lookupFirst : Option Int -> Option Int
+lookupFirst o =
+  -- expect-next-line rule-passthrough-arm unfixed
+  match o
+    None => None
+    Some n => half n
+
+-- One level, Result.
+parseThen : Result String Int -> Result String Int
+parseThen r =
+  -- expect-next-line rule-passthrough-arm unfixed
+  match r
+    Err e => Err e
+    Ok n => halfR n
+
+-- Nested one level deeper than the top: each level is reported.
+twice : Result String Int -> Result String Int
+twice r =
+  -- expect-next-line rule-passthrough-arm unfixed
+  match r
+    Ok n =>
+      -- expect-next-line rule-passthrough-arm unfixed
+      match halfR n
+        Ok m => halfR m
+        Err e => Err e
+    Err e => Err e
+
+-- A self-recursive tail is reported too.
+countDown : Int -> Result String Int
+countDown n =
+  -- expect-next-line rule-passthrough-arm unfixed
+  match halfR n
+    Ok m => countDown m
+    Err e => Err e
+
+-- Inside a test body.
+test "passthrough in a test" =
+  expectEqual
+    (Some 1)
+    -- expect-next-line rule-passthrough-arm unfixed
+    (match half 4
+      Some n => half n
+      None => None)
+
+half : Int -> Option Int
+half n = if n % 2 == 0 then Some (n / 2) else None
+
+halfR : Int -> Result String Int
+halfR n = if n % 2 == 0 then Ok (n / 2) else Err "odd"
+
+-- Both arms transform.
+bothTransform : Option Int -> Option Int
+bothTransform o = match o
+  Some n => half n
+  None => Some 0
+
+-- The failure value is rebuilt.
+wrapErr : Result String Int -> Result (List String) Int
+wrapErr r = match r
+  Err e => Err [e]
+  Ok n => Ok n
+
+-- The failure arm swaps the constructor.
+swapCtor : Option Int -> Result String Int
+swapCtor o = match o
+  None => Err "none"
+  Some n => Ok n
+
+-- A same-constructor re-wrap is a map, owned by rule-match-to-map.
+mapped : Option Int -> Option Int
+mapped o = match o
+  Some n => Some (n + 1)
+  None => None
+
+-- Three arms.
+threeArms : Option Int -> Option Int
+threeArms o = match o
+  Some 0 => Some 0
+  Some n => half n
+  None => None
+
+-- A guarded success arm.
+guarded : Option Int -> Option Int
+guarded o = match o
+  Some n if n > 0 => half n
+  _ => None
