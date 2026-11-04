@@ -121,6 +121,7 @@ data ProcessOperation =
   | ExecImage
   | Wait
   | Close
+  | LaunchHandshake
 
 data ProcessError =
   | InvalidSpawn String
@@ -286,6 +287,17 @@ def main():
         + gc_flags() + ["-o", str(lifecycle)])
     native = run([str(lifecycle)], contains="lifecycle controls passed")
     (out / "lifecycle-output.txt").write_text(native.stdout + native.stderr)
+    print(native.stdout, end="", flush=True)
+
+    launch_source = Path(__file__).resolve().with_name("process_launch.c")
+    launch = out / "launch.exe"
+    run(shlex.split(args.cc) + ["-std=c11", "-Wall", "-Wextra", "-Werror", "-O2",
+        "-pthread", str(launch_source), "-o", str(launch)])
+    if os.uname().sysname == "Linux":
+        native = run([str(launch)], contains="launch mechanism controls passed")
+    else:
+        native = run([str(launch)], expected=77, contains="BLOCKED: Linux")
+    (out / "launch-output.txt").write_text(native.stdout + native.stderr)
     print(native.stdout, end="", flush=True)
     print("process contract replay passed; commands and actual verdicts in " + str(out / "results.json"))
 
