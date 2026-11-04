@@ -1,0 +1,67 @@
+import backend.llvm_preamble.{RuntimeDecl(..)}
+import support.util.{startsWith, contains}
+
+public export data AbiType =
+  | AbiWord
+  | AbiInt32
+  | AbiPointer
+  | AbiDouble
+  | AbiVoid
+  deriving (Eq, Debug)
+
+public export data RuntimeAbiRow = RuntimeAbiRow {
+  name : String,
+  result : AbiType,
+  parameters : List AbiType,
+  noReturn : Bool,
+} deriving (Eq, Debug)
+
+abiType : String -> Result String AbiType
+abiType "i64" = Ok AbiWord
+abiType "i32" = Ok AbiInt32
+abiType "ptr" = Ok AbiPointer
+abiType "double" = Ok AbiDouble
+abiType "void" = Ok AbiVoid
+abiType t = Err ("unknown ABI type: " ++ t)
+
+parameterTypes : List String -> Result String (List AbiType)
+parameterTypes [] = Ok []
+parameterTypes (t :: ts) = match abiType t
+  Err e => Err e
+  Ok AbiVoid => Err "void parameter"
+  Ok ty => match parameterTypes ts
+    Err e => Err e
+    Ok rest => Ok (ty :: rest)
+
+intrinsic : String -> Bool
+intrinsic name = contains name [
+  "llvm.sadd.with.overflow.i64",
+  "llvm.ssub.with.overflow.i64",
+  "llvm.smul.with.overflow.i64",
+  "llvm.fptosi.sat.i64.f64",
+  "llvm.arithmetic.fence.f64",
+]
+
+export
+runtimeAbiRows : List RuntimeDecl -> Result String (List RuntimeAbiRow)
+runtimeAbiRows [] = Ok []
+runtimeAbiRows ((RuntimeDecl _ ret name params attrs) :: rest) =
+  if intrinsic name then
+    runtimeAbiRows rest
+  else if startsWith "llvm." name then
+    Err ("unclassified intrinsic: " ++ name)
+  else match abiType ret
+    Err e => Err (name ++ ": " ++ e)
+    Ok result => match parameterTypes params
+      Err e => Err (name ++ ": " ++ e)
+      Ok parameters => match runtimeAbiRows rest
+        Err e => Err e
+        Ok rows =>
+          Ok
+            (RuntimeAbiRow {
+                name = name,
+                result = result,
+                parameters = parameters,
+                noReturn = attrs == " noreturn",
+              }
+              :: rows)

@@ -1,0 +1,164 @@
+import test.{Expectation, expectAll, expectAtLeast, expectEqual, fail, pass}
+import test_process.{medakaBin, medakaRoot, boundedVerbSeconds, withScratchDir}
+import string.{contains, startsWith, lines, words, split, join, replaceOnce}
+
+last : List String -> String
+last [] = ""
+last [x] = x
+last (_ :: xs) = last xs
+
+paramType : String -> String
+paramType s = match words s
+  [] => ""
+  t :: _ => t
+
+signature : String -> Result String String
+signature line = match split "@" line
+  [prefix, suffix] => match split "(" suffix
+    [name, tail] => match split ")" tail
+      params :: _ =>
+        let types =
+          if params == "" then [] else map paramType (split "," params)
+        Ok (name ++ "|" ++ last (words prefix) ++ "|" ++ join "," types)
+      _ => Err ("bad definition: " ++ line)
+    _ => Err ("bad definition: " ++ line)
+  _ => Err ("bad definition: " ++ line)
+
+findDefinition : String -> List String -> Result String String
+findDefinition name ls =
+  match (filter
+    (l => startsWith "define " l && contains ("@" ++ name ++ "(") l)
+    ls)
+    [line] => signature line
+    [] => Err (name ++ ": missing definition")
+    _ => Err (name ++ ": duplicate definition")
+
+compareRow : List String -> String -> Result String String
+compareRow definitions row = match split "|" row
+  [name, _, _] => match findDefinition name definitions
+    Err e => Err e
+    Ok actual =>
+      if row == actual then
+        Ok row
+      else
+        Err (name ++ ": expected " ++ row ++ ", got " ++ actual)
+  _ => Err ("bad descriptor: " ++ row)
+
+compareRows : List String -> List String -> Result String Int
+compareRows _ [] = Ok 0
+compareRows definitions (row :: rest) = match compareRow definitions row
+  Err e => Err e
+  Ok _ => match compareRows definitions rest
+    Err e => Err e
+    Ok n => Ok (n + 1)
+
+compile : String ->
+  String ->
+  String ->
+  <Exec, IO, FileRead, FileWrite> Result String String
+compile dir label source =
+  let c = dir ++ "/" ++ label ++ ".c"
+  let ll = dir ++ "/" ++ label ++ ".ll"
+  match writeFile c source
+    Err e => Err e
+    Ok _ =>
+      match (boundedVerbSeconds 60 "clang" [
+        "-S",
+        "-emit-llvm",
+        "-O0",
+        "-I",
+        medakaRoot ++ "/runtime",
+        c,
+        "-o",
+        ll,
+      ])
+        Err e => Err e
+        Ok (code, out, err) =>
+          if code /= 0 || out /= "" || err /= "" then
+            Err (label ++ ": clang failed: " ++ out ++ err)
+          else
+            readFile ll
+
+expectMismatch : String -> List String -> String -> Expectation
+expectMismatch name rows ir = match compareRows (lines ir) rows
+  Err e => if contains name e then pass else fail ("wrong mismatch: " ++ e)
+  Ok _ => fail (name ++ ": mismatch was accepted")
+
+mutated : String ->
+  String ->
+  String ->
+  String ->
+  List String ->
+  String ->
+  <Exec, IO, FileRead, FileWrite> Expectation
+mutated dir label old new rows source = match replaceOnce old new source
+  Err e => fail (label ++ ": " ++ e)
+  Ok changed => match compile dir label changed
+    Err e => fail e
+    Ok ir => expectMismatch label rows ir
+
+runGate : String -> <Exec, IO, FileRead, FileWrite> Expectation
+runGate dir =
+  match (boundedVerbSeconds 60 medakaBin [
+    "run",
+    medakaRoot ++ "/compiler/entries/runtime_c_abi_main.mdk",
+  ])
+    Err e => fail e
+    Ok (code, out, err) =>
+      if code /= 0 || err /= "" then
+        fail ("descriptor probe failed: " ++ out ++ err)
+      else match readFile (medakaRoot ++ "/runtime/medaka_rt.c")
+        Err e => fail e
+        Ok source => match compile dir "runtime" source
+          Err e => fail e
+          Ok ir =>
+            let rows = filter (r => r /= "") (lines out)
+            let positive = match compareRows (lines ir) rows
+              Err e => fail e
+              Ok n => expectAll [expectAtLeast 1 n, expectEqual (length rows) n]
+            let preamble =
+              match (replaceOnce
+                "mdk_print_unit|void|"
+                "mdk_print_unit|void|i64"
+                out)
+                Err e => fail e
+                Ok changed =>
+                  expectMismatch
+                    "mdk_print_unit"
+                    (filter (r => r /= "") (lines changed))
+                    ir
+            expectAll [
+              positive,
+              preamble,
+              mutated
+                dir
+                "mdk_print_unit"
+                "void mdk_print_unit(void)"
+                "void mdk_print_unit(long long ignored)"
+                rows
+                source,
+              mutated
+                dir
+                "mdk_float_rem"
+                "double mdk_float_rem(double a, double b)"
+                "double mdk_float_rem(long long a, double b)"
+                rows
+                source,
+              mutated
+                dir
+                "mdk_float_rem"
+                "double mdk_float_rem(double a, double b)"
+                "long long mdk_float_rem(double a, double b)"
+                rows
+                source,
+              mutated
+                dir
+                "mdk_float_rem"
+                "double mdk_float_rem(double a, double b)"
+                "double mdk_float_rem_changed(double a, double b)"
+                rows
+                source,
+            ]
+
+test "runtime C definitions match every derived LLVM ABI row" =
+  withScratchDir runGate

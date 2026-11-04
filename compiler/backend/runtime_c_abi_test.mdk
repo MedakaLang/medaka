@@ -1,0 +1,28 @@
+import backend.runtime_c_abi.{AbiType(..), RuntimeAbiRow(..), runtimeAbiRows}
+import backend.llvm_preamble.{
+  RuntimeDecl(..), runtimeDecls, ffiRuntimeDecls, siteTrapDecls
+}
+import test.{
+  expectAll, expectEqual, expectErrContains, expectOkThen, expectAtLeast
+}
+
+test "runtime descriptors classify representations and reject unknown types" = expectAll
+  [
+    expectEqual
+      (Ok [
+        RuntimeAbiRow {
+          name = "f",
+          result = AbiDouble,
+          parameters = [AbiWord, AbiPointer],
+          noReturn = False,
+        },
+      ])
+      (runtimeAbiRows [RuntimeDecl "" "double" "f" ["i64", "ptr"] ""]),
+    expectErrContains "bad" (runtimeAbiRows [RuntimeDecl "" "i16" "bad" [] ""]),
+    expectErrContains
+      "llvm.unknown"
+      (runtimeAbiRows [RuntimeDecl "" "i64" "llvm.unknown" [] ""]),
+    expectOkThen
+      (rows => expectAtLeast 1 (length rows))
+      (runtimeAbiRows (runtimeDecls ++ ffiRuntimeDecls ++ siteTrapDecls)),
+  ]
