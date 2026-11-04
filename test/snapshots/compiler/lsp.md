@@ -1,5 +1,5 @@
 # META
-source_lines=2536
+source_lines=2538
 stages=DESUGAR,MARK
 # SOURCE
 import support.diag_codes.{DiagCode(..), codeText}
