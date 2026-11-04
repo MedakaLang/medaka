@@ -130,6 +130,17 @@ pipeline scratch = do
   _ <- match missing
     None => Ok ()
     Some f => Err "unpacked tree missing \{f}"
+  (ccCode, _, ccErr) <- boundedVerb "clang" [
+    "-D_GNU_SOURCE",
+    "-c",
+    tree ++ "/runtime/medaka_rt.c",
+    "-o",
+    probe ++ "/runtime.o",
+  ]
+  _ <- if ccCode /= 0 then
+    Err "runtime compile with _GNU_SOURCE failed: \{ccErr}"
+  else
+    Ok ()
   _ <- writeFile (probe ++ "/hello.mdk") "main = println 12345\n"
   ran <- runFrom probe (tree ++ "/medaka") ["run", "hello.mdk"]
   _ <- expectOut "12345" ran

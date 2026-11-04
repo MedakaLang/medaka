@@ -1,6 +1,7 @@
 import backend.runtime_layout.{
   siteFileShift, siteLineShift, siteFileBits, siteLineBits, siteColumnBits,
-  ctorTagShift, reservedTypeBase, runtimeCallArgMax
+  ctorTagShift, reservedTypeBase, runtimeCallArgMax, closureCodeSlot,
+  closureCaptureStart
 }
 import ir.constructor_facts.{
   ConstructorFacts, declaredCtorArity, declaredCtorOwner, declaredCtorOrdinal
@@ -6793,7 +6794,7 @@ knotPatch : Emit -> OrdMap (String, LTy) -> List KnotCell -> Unit
 knotPatch _ _ [] = ()
 knotPatch e env ((KnotCell _ cellPtr captureNames) :: rest) =
   let words = capWords e env captureNames
-  storeFields e cellPtr words 1
+  storeFields e cellPtr words (closureCaptureStart - 1)
   knotPatch e env rest
 
 -- allocate a closure cell with the code pointer in field 0 and `nCap` PLACEHOLDER
@@ -7193,7 +7194,7 @@ emitIndirectMode e cw argOps hd CallDynamic =
 -- with the closure word as the leading argument followed by `argOps`.
 emitIndirectCallWords : Emit -> String -> List String -> String
 emitIndirectCallWords e cw argOps =
-  let cp = loadField e cw 0
+  let cp = loadField e cw (closureCodeSlot - 1)
   let fp = freshReg e
   emit e "  \{fp} = inttoptr i64 \{cp} to ptr"
   let r = freshReg e
@@ -7899,7 +7900,9 @@ emitPapDefine e papName fname supplied remaining =
 loadPapCaptures : Emit -> Int -> Int -> List String
 loadPapCaptures e k i
   | i >= k = []
-  | otherwise = loadField e "%clos" (i + 1) :: loadPapCaptures e k (i + 1)
+  | otherwise =
+    loadField e "%clos" (i + closureCaptureStart - 1)
+      :: loadPapCaptures e k (i + 1)
 
 -- UNDER-APPLICATION of an INDIRECT closure VALUE `cw` of arity `arity`, given
 -- `argOps` supplied (1..arity-1).  Unlike emitPapClosure (which closes over a known
@@ -7927,10 +7930,10 @@ emitPapDefineIndirect e papName supplied remaining =
   let scope = beginDefine e
   defineHeader e LiftedDefine papName (wordProto (etaParamDecls remaining))
   emit e "entry:"
-  let innerCw = loadField e "%clos" 1
+  let innerCw = loadField e "%clos" (closureCaptureStart - 1)
   let capOps = loadPapCaptures e (supplied + 1) 1
   let allArgs = capOps ++ argNames remaining 0
-  let cp = loadField e innerCw 0
+  let cp = loadField e innerCw (closureCodeSlot - 1)
   let fp = freshReg e
   emit e "  \{fp} = inttoptr i64 \{cp} to ptr"
   let r = freshReg e
@@ -10197,7 +10200,7 @@ loadCaptures : Emit ->
   OrdMap (String, LTy)
 loadCaptures _ _ [] _ = omEmpty
 loadCaptures e env (c :: rest) i =
-  let r = loadField e "%clos" (i + 1)
+  let r = loadField e "%clos" (i + closureCaptureStart - 1)
   omInsert c (r, capTypeOf env c) (loadCaptures e env rest (i + 1))
 
 -- a captured FLOAT is stored BOXED in the closure cell (capWords/lookupVarG boxes
@@ -14520,7 +14523,7 @@ emitArrayMakeWith e env [nExpr, fExpr] =
   emit e "  br i1 \{cmp}, label %\{doneL}, label %\{bodyL}"
   emit e (bodyL ++ ":")
   let ti = tagInt e iv
-  let cp = loadField e fw 0
+  let cp = loadField e fw (closureCodeSlot - 1)
   let fp = freshReg e
   emit e "  \{fp} = inttoptr i64 \{cp} to ptr"
   let elem = freshReg e

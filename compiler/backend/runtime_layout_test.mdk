@@ -1,11 +1,13 @@
 import backend.runtime_layout.{
   wordBytes, runtimeCallArgMax, applyBufferArity, reservedCellTag,
-  renderAbiHeader
+  closureCodeSlot, closureCaptureStart, renderAbiHeader
 }
 import test.{expectAll, expectEqual, expectOkThen}
 import test_process.{medakaRoot}
 
 test "native ABI facts and generated header agree" = expectAll [
+  expectEqual 1 closureCodeSlot,
+  expectEqual 2 closureCaptureStart,
   expectEqual 8 wordBytes,
   expectEqual 8 runtimeCallArgMax,
   expectEqual 16 applyBufferArity,

@@ -42,8 +42,8 @@
  * Darwin, which uses pthread_get_stackaddr_np instead. */
 #ifndef _GNU_SOURCE
 #define _GNU_SOURCE
-#include "medaka_abi.h"
 #endif
+#include "medaka_abi.h"
 #include <dirent.h>
 #include <errno.h>
 #include <stdio.h>
@@ -531,7 +531,7 @@ void mdk_print_float(double d) {
  * The header sits at offset 0, unlike the array cell, whose word 0 is its raw
  * element count -- so a length-1 array is indistinguishable from a String cell
  * and a byte block must not be given that shape.  The value is a composite in
- * the reserved type-id range (slot 4; see the MDK_TAG block below and
+ * the reserved type-id range (slot 4; see MDK_TAG in runtime/medaka_abi.h and
  * `reservedTag` in compiler/backend/llvm_emit.mdk), which no user constructor
  * tag and no other cell header can reach.  The generated ABI header defines the tag and pins the formula.
  *
