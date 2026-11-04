@@ -62,7 +62,7 @@ import types.repr.{Scheme(..), ppScheme}
 import types.publish.{pubSchemes}
 import frontend.resolve.{internalExterns}
 import support.util.{
-  zipL, joinWith, reverseL, escStr, splitNl, contains, lookupAssoc, startsWith
+  zipL, joinWith, reverseL, escStr, splitNl, lookupAssoc, startsWith
 }
 import support.path.{baseOf, chopExt}
 import support.stage_count.{stageExit}
@@ -71,6 +71,7 @@ import driver.diagnostics.{projectEntrySchemes}
 import driver.loader.{moduleIdOfPath}
 import frontend.desugar.{dataDerivers, newtypeDerivers, typeKindedParams}
 import json.{Json(..), jObject, jArray}
+import set as S
 import string.{toLower, trimAscii}
 import regex.{
   Regex, Match, mustCompile, isMatch, replaceAll, escape, find, findAll
@@ -886,7 +887,8 @@ extractEntries bare decls positions schemes origins comments =
   let tbl = buildCommentTbl comments
   let pairs = zipDoc decls positions
   let heads = clauseHeads decls
-  let result = extractFold bare heads pairs schemes origins tbl [] []
+  let result =
+    extractFold bare heads pairs schemes origins tbl [] (S.fromList [])
   reverseL (fst result)
 
 -- Fold over (decl, pos) pairs.  State: (revEntries, seenNames).  Returns it.
@@ -897,8 +899,8 @@ extractFold : Bool ->
   List (String, List (String, Scheme)) ->
   List CommentRow ->
   List DocEntry ->
-  List String ->
-  (List DocEntry, List String)
+  S.Set String ->
+  (List DocEntry, S.Set String)
 extractFold _ _ [] _ _ _ revEntries seen = (revEntries, seen)
 -- An attribute documents nothing itself: the declaration under it is the
 -- entry, at the attribute's line, which is where its doc comment sits above.
@@ -921,7 +923,7 @@ extractFold bare heads ((decl, dp) :: rest) schemes origins tbl revEntries seen 
     None => match renderSig bare decl schemes
       None => extractFold bare heads rest schemes origins tbl revEntries seen
       Some (name, sigStr) =>
-        if contains name seen then
+        if S.has name seen then
           extractFold bare heads rest schemes origins tbl revEntries seen
         else
           let doc = findDocForLine tbl line
@@ -934,7 +936,7 @@ extractFold bare heads ((decl, dp) :: rest) schemes origins tbl revEntries seen 
             tbl
             (DocEntry name sigStr (headFor name heads) doc (declKind decl) line
               :: revEntries)
-            (name :: seen)
+            (S.insert name seen)
 
 -- Interleave `-- # Title` sections with the entries by source line: a section
 -- precedes the first entry declared after it.  Both lists arrive in
@@ -975,14 +977,14 @@ multiEntriesFor bare decl line schemes origins tbl = match letgroupOf decl
 -- Add each letgroup extra if its name is unseen (first wins).
 foldExtras : List (String, DocEntry) ->
   List DocEntry ->
-  List String ->
-  (List DocEntry, List String)
+  S.Set String ->
+  (List DocEntry, S.Set String)
 foldExtras [] revEntries seen = (revEntries, seen)
 foldExtras ((name, e) :: rest) revEntries seen =
-  if contains name seen then
+  if S.has name seen then
     foldExtras rest revEntries seen
   else
-    foldExtras rest (e :: revEntries) (name :: seen)
+    foldExtras rest (e :: revEntries) (S.insert name seen)
 
 -- Match a DLetGroup, returning (is_pub, bindings) or None.
 letgroupOf : Decl -> Option (Bool, List LetBind)

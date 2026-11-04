@@ -192,6 +192,8 @@ export
 repeatedNames : List String -> List String -> List String
 repeatedNames [] _ = []
 repeatedNames (n :: rest) seen
+  -- Bound: `seen` holds names repeated within the axes of one Product element.
+  -- lint-disable-next-line rule-list-as-set
   | contains n seen = repeatedNames rest seen
   | contains n rest = n :: repeatedNames rest (n :: seen)
   | otherwise = repeatedNames rest seen

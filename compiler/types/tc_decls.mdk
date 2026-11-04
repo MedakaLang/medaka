@@ -1182,6 +1182,8 @@ dedupBinders : List (String, Param) ->
   List (String, Param)
 dedupBinders [] acc = reverseL acc
 dedupBinders ((n, top) :: rest) acc =
+  -- Bound: the input is the authority binders one signature or impl head writes.
+  -- lint-disable-next-line rule-list-as-set
   if isSome (lookupAssoc n acc) then
     dedupBinders rest acc
   else

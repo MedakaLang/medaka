@@ -1,5 +1,5 @@
 # META
-source_lines=4153
+source_lines=4157
 stages=DESUGAR,MARK
 # SOURCE
 import support.symbol_encoding.{encodePair}
@@ -2745,10 +2745,14 @@ distinctImplKeysL [] _ _ acc = acc
 distinctImplKeysL _ _ cap acc
   | listLen acc > cap = acc
 distinctImplKeysL ((CImplEntry n _ _ (CImplTagged _ k _ _ _ _ _)) :: rest) method cap acc
+  -- Bound: the only caller passes `cap = 1`, so the guard above stops the walk once `acc` holds more than 1 key.
+  -- lint-disable-next-line rule-list-as-set
   | n == method && not (contains k acc) =
     distinctImplKeysL rest method cap (k :: acc)
   | otherwise = distinctImplKeysL rest method cap acc
 distinctImplKeysL ((CImplEntry n _ _ (CImplDefault _ _ k _ _ _ _)) :: rest) method cap acc
+  -- Bound: the only caller passes `cap = 1`, so the guard above stops the walk once `acc` holds more than 1 key.
+  -- lint-disable-next-line rule-list-as-set
   | n == method && not (contains k acc) =
     distinctImplKeysL rest method cap (k :: acc)
   | otherwise = distinctImplKeysL rest method cap acc

@@ -1171,6 +1171,8 @@ repeatedBindings : List (String, Mono) ->
   List (String, Mono) ->
   List (Mono, Mono)
 repeatedBindings [] _ = []
+-- Bound: `seen` holds the type-variable bindings of one instance head.
+-- lint-disable-next-line rule-list-as-set
 repeatedBindings ((k, v) :: rest) seen = match lookupAssoc k seen
   Some first => (first, v) :: repeatedBindings rest seen
   None => repeatedBindings rest ((k, v) :: seen)

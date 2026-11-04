@@ -7768,6 +7768,8 @@ wTrmcCtorSet prog self arity pairs =
 wTrmcDedupCtors : List (String, Int) -> List String -> List (String, Int)
 wTrmcDedupCtors [] _ = []
 wTrmcDedupCtors ((n, i) :: rest) seen =
+  -- Bound: `seen` holds the distinct constructor names of the tail leaves of one function's clauses.
+  -- lint-disable-next-line rule-list-as-set
   if contains n seen then
     wTrmcDedupCtors rest seen
   else
@@ -8773,7 +8775,9 @@ emitClosure prog env _d pats body =
   -- subtracts, so the captures are computed over the real bound names.
   let boundVars = flatMap patVars pats
   let captured =
-    filterList (c => envHas c env) (dedupKeep (freeVarsExpr boundVars body))
+    filterList
+      (c => envHas c env)
+      (dedupKeep (freeVarsExpr (omFromNames boundVars omEmpty) body))
   noteFuncRef prog lamName
   addLifted
     prog
@@ -8941,7 +8945,7 @@ emitSelfRecLocalBind prog env x bid pats body =
   let groupCaps =
     filterList
       (c => envHas c env)
-      (dedupKeep (filterList (notIn [x]) (freeVarsClauses [] bind)))
+      (dedupKeep (filterList (notIn [x]) (freeVarsClauses omEmpty bind)))
   let groupEnv = envBind x bid (envRestrict groupCaps env)
   emitLgLifted prog gid [x] groupCaps groupEnv [bind] bind
   -- one-member group: `useSiteRebuilds`'s later-sibling guard is vacuous here, so a
@@ -8965,7 +8969,7 @@ emitLetGroupWith prog env d emitBody binds body =
   let valNames = map lgBindName valBinds
   let names = map lgBindName fnBinds
   let allParams = flatMap lgBindParams fnBinds
-  let valFree = dedupKeep (flatMap (freeVarsClauses []) valBinds)
+  let valFree = dedupKeep (flatMap (freeVarsClauses omEmpty) valBinds)
   if anyOfList names valFree then
     gapLP
       prog
@@ -8977,7 +8981,7 @@ emitLetGroupWith prog env d emitBody binds body =
         (dedupKeep
           (filterList
             (notIn (names ++ valNames ++ allParams))
-            (flatMap (freeVarsClauses []) binds)))
+            (flatMap (freeVarsClauses omEmpty) binds)))
     -- the group's value bindings are shared by every member, so they ride along as caps.
     let groupCaps = freeCaps ++ valNames
     -- emit each lifted top-level fn (drained into the module like other lifted lams).
@@ -9010,7 +9014,8 @@ useSiteRebuilds _ _ _ [] = []
 useSiteRebuilds prog gid groupCaps (b :: rest) =
   let laterNames = map lgBindName rest
   let hoistable =
-    listLen groupCaps == 0 && not (anyOfList laterNames (freeVarsClauses [] b))
+    listLen groupCaps == 0
+      && not (anyOfList laterNames (freeVarsClauses omEmpty b))
   let here =
     if hoistable then
       constLgClosure prog gid b
@@ -9151,8 +9156,8 @@ zipIdx (x :: xs) i = (x, i) :: zipIdx xs (i + 1)
 -- free variables of a lambda body (names referenced, minus the bound params; we
 -- also subtract names bound by inner let/lambda/match so only truly-free names
 -- remain).  Returns names in first-seen order.
-freeVarsExpr : List String -> CExpr -> List String
-freeVarsExpr bound (CVar x _) = if contains x bound then [] else [x]
+freeVarsExpr : OrdMap Unit -> CExpr -> List String
+freeVarsExpr bound (CVar x _) = if omHasKey x bound then [] else [x]
 freeVarsExpr bound (CApp f args _) =
   freeVarsExpr bound f ++ flatMap (freeVarsExpr bound) args
 -- A lambda param may be a DESTRUCTURING pattern (tuple/ctor) — e.g. a `do`-bind
@@ -9161,7 +9166,7 @@ freeVarsExpr bound (CApp f args _) =
 -- accepts PVar/PWild and gaps on any real pattern.  (emitClosure/emitLamDefine
 -- already destructure such params via bindPatRef; only this free-var walk lagged.)
 freeVarsExpr bound (CLam pats b) =
-  freeVarsExpr (flatMap patVars pats ++ bound) b
+  freeVarsExpr (omFromNames (flatMap patVars pats) bound) b
 freeVarsExpr _bound (CLit _) = []
 freeVarsExpr bound (CBinPrim _ l r _ _) =
   freeVarsExpr bound l ++ freeVarsExpr bound r
@@ -9169,7 +9174,7 @@ freeVarsExpr bound (CUnOp _ x) = freeVarsExpr bound x
 freeVarsExpr bound (CIf c t f) =
   freeVarsExpr bound c ++ freeVarsExpr bound t ++ freeVarsExpr bound f
 freeVarsExpr bound (CLet _ pat e1 e2) =
-  freeVarsExpr bound e1 ++ freeVarsExpr (patVars pat ++ bound) e2
+  freeVarsExpr bound e1 ++ freeVarsExpr (omFromNames (patVars pat) bound) e2
 freeVarsExpr bound (CBlock stmts) = freeVarsStmts bound stmts
 freeVarsExpr bound (CDecision scrut arms _) =
   freeVarsExpr bound scrut ++ flatMap (freeVarsArm bound) arms
@@ -9177,7 +9182,7 @@ freeVarsExpr bound (CMatch scrut arms) =
   freeVarsExpr bound scrut ++ flatMap (freeVarsArm bound) arms
 freeVarsExpr bound (CLetGroup binds b) =
   let names = map lgBindName binds
-  let bound2 = names ++ bound
+  let bound2 = omFromNames names bound
   flatMap (freeVarsClauses bound2) binds ++ freeVarsExpr bound2 b
 -- compound value nodes: their sub-expressions can reference outer-bound vars
 -- (e.g. a do-block's `pure (a, b, c)` lowers to CTuple — without this arm the
@@ -9209,41 +9214,41 @@ freeVarsExpr bound (CSlice e lo hi _) =
 freeVarsExpr bound (CMethod _ (MethodEvidence _ _ route implRoutes methRoutes)) =
   freeGivens bound (route :: implRoutes ++ methRoutes)
 freeVarsExpr bound (CDict name routes) =
-  (if contains name bound then [] else [name]) ++ freeGivens bound routes
+  (if omHasKey name bound then [] else [name]) ++ freeGivens bound routes
 freeVarsExpr _bound _ = []
 
 -- free vars of a CLetGroup binding's clauses (each clause's params are locally bound).
-freeVarsClauses : List String -> CBind -> List String
+freeVarsClauses : OrdMap Unit -> CBind -> List String
 freeVarsClauses bound (CBind _ clauses _ _) =
   flatMap (freeVarsClause bound) clauses
 
-freeVarsClause : List String -> CClause -> List String
+freeVarsClause : OrdMap Unit -> CClause -> List String
 freeVarsClause bound (CClause pats body) =
-  freeVarsExpr (flatMap patVars pats ++ bound) body
+  freeVarsExpr (omFromNames (flatMap patVars pats) bound) body
 
 lgBindName : CBind -> String
 lgBindName (CBind n _ _ _) = n
 
-freeVarsStmts : List String -> List CStmt -> List String
+freeVarsStmts : OrdMap Unit -> List CStmt -> List String
 freeVarsStmts _ [] = []
 freeVarsStmts bound ((CSExpr e) :: rest) =
   freeVarsExpr bound e ++ freeVarsStmts bound rest
 freeVarsStmts bound ((CSLet _ pat e) :: rest) =
-  freeVarsExpr bound e ++ freeVarsStmts (patVars pat ++ bound) rest
+  freeVarsExpr bound e ++ freeVarsStmts (omFromNames (patVars pat) bound) rest
 freeVarsStmts bound (_ :: rest) = freeVarsStmts bound rest
 
-freeVarsArm : List String -> CArm -> List String
+freeVarsArm : OrdMap Unit -> CArm -> List String
 freeVarsArm bound (CArm pat guards body) =
-  let bound2 = patVars pat ++ bound
+  let bound2 = omFromNames (patVars pat) bound
   flatMap (freeVarsGuard bound2) guards ++ freeVarsExpr bound2 body
 freeVarsArm bound (CArmAlt pat guards _) =
-  flatMap (freeVarsGuard (patVars pat ++ bound)) guards
+  flatMap (freeVarsGuard (omFromNames (patVars pat) bound)) guards
 
-freeVarsGuard : List String -> CGuard -> List String
+freeVarsGuard : OrdMap Unit -> CGuard -> List String
 freeVarsGuard bound (CGBool g) = freeVarsExpr bound g
 freeVarsGuard bound (CGBind _p e) = freeVarsExpr bound e
 
-freeVarsField : List String -> CField -> List String
+freeVarsField : OrdMap Unit -> CField -> List String
 freeVarsField bound (CField _ _ e) = freeVarsExpr bound e
 
 -- ── ADT construction (§3.4) ──────────────────────────────────────────────────

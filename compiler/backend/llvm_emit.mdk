@@ -8677,14 +8677,22 @@ emitMethodArgDispatch e method iface siteArity argOps =
 -- actually received ambiguous value loud.  The groups are the occurrence's own
 -- interface's, so two unrelated same-spelled interfaces never false-collide.
 argTagCollidingHeads : List ImplGroup -> List String
-argTagCollidingHeads groups = dupStrings (map groupTag groups) [] []
+argTagCollidingHeads groups =
+  dupStrings (map groupTag groups) omEmpty omEmpty []
 
--- the members of [xs] that occur more than once, each reported once.
-dupStrings : List String -> List String -> List String -> List String
-dupStrings [] _ dups = reverseL dups
-dupStrings (x :: rest) seen dups
-  | contains x seen && not (contains x dups) = dupStrings rest seen (x :: dups)
-  | otherwise = dupStrings rest (x :: seen) dups
+-- the members of [xs] that occur more than once, each reported once, in the order
+-- their second occurrence appears.  [seen] holds every member walked so far; [dupSet]
+-- is the membership view of [dups], which keeps the order.
+dupStrings : List String ->
+  OrdMap Unit ->
+  OrdMap Unit ->
+  List String ->
+  List String
+dupStrings [] _ _ dups = reverseL dups
+dupStrings (x :: rest) seen dupSet dups
+  | omHasKey x seen && not (omHasKey x dupSet) =
+    dupStrings rest seen (omInsert x () dupSet) (x :: dups)
+  | otherwise = dupStrings rest (omInsert x () seen) dupSet dups
 
 -- is THIS arm's head tag one the runtime constructor tag cannot decide?
 argTagArmAmbiguous : List String -> String -> Bool

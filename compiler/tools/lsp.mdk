@@ -82,7 +82,9 @@ import driver.loader.{
   findProjectRootOrSelf, parseCachedLocated, retainParsed,
   clearLoadedSourceRecords
 }
-import support.ordmap.{OrdMap, omEmpty, omLookup, omFromNames, omHasKey}
+import support.ordmap.{
+  OrdMap, omEmpty, omLookup, omFromNames, omHasKey, omInsert
+}
 import support.stage_count.{stageBump}
 import support.path.{dirOf}
 import support.source_index.{
@@ -985,14 +987,14 @@ prefixStart arr lineStart i
 -- concatenating them (see `HoverHit`).  Tagging happens at the slice, not here,
 -- because by the time the slices are one flat list the tiers are indistinguishable.
 filterCompletions : String ->
-  List String ->
+  OrdMap Unit ->
   List (String, HoverHit) ->
   List Json
 filterCompletions _ _ [] = []
 filterCompletions prefix seen ((n, hit) :: rest)
-  | startsWith prefix n && not (anyName seen n) =
+  | startsWith prefix n && not (omHasKey n seen) =
     jCompletionItem n (ppHoverScheme hit)
-      :: filterCompletions prefix (n :: seen) rest
+      :: filterCompletions prefix (omInsert n () seen) rest
   | otherwise = filterCompletions prefix seen rest
 
 -- One CompletionItem { label, kind, detail }.  kind 3 = Function (LSP spec).
@@ -1016,7 +1018,7 @@ completionFor runtimeSrc coreSrc uri src params docs =
       None => JNull
       Some env =>
         let prefix = prefixBefore src line col
-        jArray (filterCompletions prefix [] env)
+        jArray (filterCompletions prefix omEmpty env)
     _ => JNull
 
 -- Completion suggests names from the env directly, so for a project buffer the

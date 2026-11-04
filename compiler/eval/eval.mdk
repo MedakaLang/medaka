@@ -2446,12 +2446,12 @@ clauseDef : String -> Loc -> FunClause -> (String, (List Pat, Expr, Loc))
 clauseDef n site clause = (n, funClauseToClause site clause)
 
 funGroupNames : List (String, (List Pat, Expr, Loc)) ->
-  List String ->
+  OrdMap Unit ->
   List String
 funGroupNames [] _ = []
 funGroupNames ((n, _) :: rest) seen
-  | contains n seen = funGroupNames rest seen
-  | otherwise = n :: funGroupNames rest (n :: seen)
+  | omHasKey n seen = funGroupNames rest seen
+  | otherwise = n :: funGroupNames rest (omInsert n () seen)
 
 clausesForName : String ->
   List (String, (List Pat, Expr, Loc)) ->
@@ -4543,6 +4543,8 @@ buildModInfos facts globalFrame runtimeFrame coreExports sibling fulls exportsMa
   let modCtors = collectCtors decls
   let localCells = map (n => (n, Ref VUnit)) (map fst grps ++ map fst modCtors)
   let imports =
+    -- Bound: [fulls] holds one entry per subject module of the graph (a module that has a test sibling), and the lookup inside importsMapFor runs only for a test sibling.
+    -- lint-disable-next-line rule-list-as-set
     importFrameOf coreExports (importsMapFor sibling mid fulls exportsMap) decls
   -- #1542: tag this module's env with its own file, LAST in the frame list so
   -- an ordinary name lookup (which resolves in localCells/imports/globalCells
@@ -4846,7 +4848,7 @@ concatList (x :: xs) = x ++ concatList xs
 groupsOf : List Decl -> List (String, List (List Pat, Expr, Loc))
 groupsOf decls =
   let defs = funDefs decls
-  map (mkGroup defs) (funGroupNames defs [])
+  map (mkGroup defs) (funGroupNames defs omEmpty)
 
 -- ── a module's export surface, as an import frame consumes it ───────────────
 -- ONE record rather than two slot-parallel lists (#994): expanding a `T(..)`

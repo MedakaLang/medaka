@@ -1,5 +1,5 @@
 # META
-source_lines=2806
+source_lines=2811
 stages=DESUGAR,MARK
 # SOURCE
 {- gate_pack.mdk — the gate SCHEDULER: `medaka gate balance`'s bin packing and
@@ -51,11 +51,11 @@ import support.util.{
   maxI,
   minI,
   reverseL,
-  sortUniqS,
   splitNl,
   splitOnChar,
   startsWith,
 }
+import set as S
 import string.{trimAscii}
 
 -- ── timeout policy ──────────────────────────────────────────────────────────
@@ -508,7 +508,7 @@ balSetup ocs gateOrcs entries multicall =
             ps
             (filterList (n => not (contains n multicall)) entries)
             gateOrcs
-            [],
+            (S.fromList []),
         wasmDefaulted = isNone wasm,
         jobsDefaulted = match js
           [] => True
@@ -552,24 +552,24 @@ balOracleMs n (o :: os)
 balUnsampled : List (String, Int) ->
   List String ->
   List (String, List String) ->
-  List String ->
+  S.Set String ->
   List String
-balUnsampled _ _ [] acc = sortUniqS acc
+balUnsampled _ _ [] acc = toList acc
 balUnsampled ps es ((_, names) :: rest) acc =
   balUnsampled ps es rest (balAddMissing ps es names acc)
 
 balAddMissing : List (String, Int) ->
   List String ->
   List String ->
-  List String ->
-  List String
+  S.Set String ->
+  S.Set String
 balAddMissing _ _ [] acc = acc
 balAddMissing ps es (n :: ns) acc
   | not (contains n es) = balAddMissing ps es ns acc
-  | contains n acc = balAddMissing ps es ns acc
+  | S.has n acc = balAddMissing ps es ns acc
   | otherwise = match lookupAssoc n ps
     Some _ => balAddMissing ps es ns acc
-    None => balAddMissing ps es ns (n :: acc)
+    None => balAddMissing ps es ns (S.insert n acc)
 
 -- The oracles one gate's row must build for it, priced: its scrape kept to
 -- what `build_oracles.sh` builds (`--for`'s own filter) and the multicall does
@@ -858,10 +858,17 @@ balAllBuilt ((n, _) :: os) have = match lookupAssoc n have
   None => False
 
 balUnionOrcs : List (String, Int) -> List (String, Int) -> List (String, Int)
-balUnionOrcs [] have = have
-balUnionOrcs ((n, ms) :: os) have = match lookupAssoc n have
-  Some _ => balUnionOrcs os have
-  None => balUnionOrcs os ((n, ms) :: have)
+balUnionOrcs os have = balUnionOrcsGo os have (S.fromList (map fst have))
+
+-- `have` keeps the discovery order; `names` answers membership.
+balUnionOrcsGo : List (String, Int) ->
+  List (String, Int) ->
+  S.Set String ->
+  List (String, Int)
+balUnionOrcsGo [] have _ = have
+balUnionOrcsGo ((n, ms) :: os) have names
+  | S.has n names = balUnionOrcsGo os have names
+  | otherwise = balUnionOrcsGo os ((n, ms) :: have) (S.insert n names)
 
 {- | The row a gate should go on, with the INCUMBENT row given a bounded
    preference over the LPT pick (S-3, #2218).
@@ -2053,16 +2060,14 @@ balDropNth i (x :: xs)
 -- The distinct runIds of `runs[]`, in file order (oldest first) — the same
 -- order `ms` is appended in, which is what makes index i mean run i.
 balRunIds : List RunRecord -> List String -> List String
-balRunIds [] acc = balRevStrs acc []
-balRunIds (r :: rs) acc
-  | balHasStr r.runId acc = balRunIds rs acc
-  | otherwise = balRunIds rs (r.runId :: acc)
+balRunIds runs acc = balRunIdsGo runs acc (S.fromList acc)
 
-balHasStr : String -> List String -> Bool
-balHasStr _ [] = False
-balHasStr s (x :: xs)
-  | x == s = True
-  | otherwise = balHasStr s xs
+-- `acc` is newest-first for the final reversal; `seen` answers membership.
+balRunIdsGo : List RunRecord -> List String -> S.Set String -> List String
+balRunIdsGo [] acc _ = balRevStrs acc []
+balRunIdsGo (r :: rs) acc seen
+  | S.has r.runId seen = balRunIdsGo rs acc seen
+  | otherwise = balRunIdsGo rs (r.runId :: acc) (S.insert r.runId seen)
 
 balRevStrs : List String -> List String -> List String
 balRevStrs [] acc = acc
@@ -2812,7 +2817,8 @@ budgetOutput regPath regSrc baseSrc gateOrcs entries multicall commitMessage =
 (DUse false (UseGroup ("string") ((mem "padLeft" false) (mem "padRight" false))))
 (DUse false (UseGroup ("tools" "gate_registry") ((mem "Gate" false) (mem "Shard" false) (mem "parseRegistry" false) (mem "parseShards" false) (mem "joinSpace" false))))
 (DUse false (UseGroup ("tools" "gate_cost") ((mem "GateCost" false) (mem "OracleCost" false) (mem "RunRecord" false) (mem "baselineKey" false) (mem "costOf" false) (mem "costRowOf" false) (mem "gateSetDigest" false) (mem "latestRunForShard" false) (mem "orphanBaselineNames" false) (mem "packStat" false) (mem "parseCostBaseline" false) (mem "parseCostRuns" false) (mem "parseOracleCosts" false))))
-(DUse false (UseGroup ("support" "util") ((mem "contains" false) (mem "filterList" false) (mem "isEmptyL" false) (mem "isNonEmptyL" false) (mem "joinNl" false) (mem "listLen" false) (mem "lookupAssoc" false) (mem "maxI" false) (mem "minI" false) (mem "reverseL" false) (mem "sortUniqS" false) (mem "splitNl" false) (mem "splitOnChar" false) (mem "startsWith" false))))
+(DUse false (UseGroup ("support" "util") ((mem "contains" false) (mem "filterList" false) (mem "isEmptyL" false) (mem "isNonEmptyL" false) (mem "joinNl" false) (mem "listLen" false) (mem "lookupAssoc" false) (mem "maxI" false) (mem "minI" false) (mem "reverseL" false) (mem "splitNl" false) (mem "splitOnChar" false) (mem "startsWith" false))))
+(DUse false (UseAlias ("set") "S"))
 (DUse false (UseGroup ("string") ((mem "trimAscii" false))))
 (DTypeSig true "timeoutFor" (TyFun (TyCon "Int") (TyFun (TyCon "String") (TyCon "Int"))))
 (DFunDef false "timeoutFor" ((PVar "override") (PVar "cost")) (EIf (EBinOp ">" (EVar "override") (ELit (LInt 0))) (EVar "override") (EIf (EBinOp "==" (EVar "cost") (ELit (LString "cheap"))) (ELit (LInt 300)) (EIf (EBinOp "==" (EVar "cost") (ELit (LString "medium"))) (ELit (LInt 900)) (EIf (EBinOp "==" (EVar "cost") (ELit (LString "heavy"))) (ELit (LInt 3600)) (EIf (EVar "otherwise") (ELit (LInt 900)) (EApp (EVar "__fallthrough__") (ELit LUnit))))))))
@@ -2840,7 +2846,7 @@ budgetOutput regPath regSrc baseSrc gateOrcs entries multicall commitMessage =
 (DFunDef false "balMulticallOracle" () (ELit (LString "oracle_multicall")))
 (DTypeSig false "balSetup" (TyFun (TyApp (TyCon "List") (TyCon "OracleCost")) (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "String")))) (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyApp (TyApp (TyCon "Result") (TyCon "String")) (TyCon "Setup")))))))
 (DFunDef false "balSetup" ((PList) (PVar "gateOrcs") (PVar "entries") (PVar "multicall")) (EApp (EVar "Ok") (ERecordCreate "Setup" ((fa "modelled" (EVar "False")) (fa "price" (ERecordCreate "Price" ((fa "fixedMs" (ELit (LInt 0))) (fa "wasmMs" (ELit (LInt 0))) (fa "buildJobs" (ELit (LInt 1)))))) (fa "sampled" (ELit (LInt 0))) (fa "defaultMs" (ELit (LInt 0))) (fa "defaulted" (EListLit)) (fa "wasmDefaulted" (EVar "False")) (fa "jobsDefaulted" (EVar "False")) (fa "prices" (EListLit)) (fa "gateOrcs" (EVar "gateOrcs")) (fa "entries" (EVar "entries")) (fa "multicall" (EVar "multicall")) (fa "multicallMs" (ELit (LInt 0))) (fa "multicallDefaulted" (EVar "False"))))))
-(DFunDef false "balSetup" ((PVar "ocs") (PVar "gateOrcs") (PVar "entries") (PVar "multicall")) (EBlock (DoLet false false (PVar "ps") (EApp (EApp (EVar "balEntryPrices") (EVar "ocs")) (EVar "entries"))) (DoExpr (EMatch (EVar "ps") (arm (PList) () (EApp (EVar "Err") (ELit (LString "medaka gate balance: the baseline carries oracles[], but none of its rows is an oracle test/build_oracles.sh --list builds, so there is no measured price to default an unsampled oracle to")))) (arm PWild () (EBlock (DoLet false false (PVar "dflt") (EApp (EVar "packStat") (EApp (EApp (EVar "map") (ELam ((PTuple PWild (PVar "ms"))) (EVar "ms"))) (EVar "ps")))) (DoLet false false (PVar "js") (EApp (EApp (EVar "balEntryJobs") (EVar "ocs")) (EVar "entries"))) (DoLet false false (PVar "wasm") (EApp (EApp (EVar "balOracleMs") (EVar "balWasmOracle")) (EVar "ocs"))) (DoLet false false (PVar "mcMs") (EApp (EApp (EVar "balOracleMs") (EVar "balMulticallOracle")) (EVar "ocs"))) (DoExpr (EApp (EVar "Ok") (ERecordCreate "Setup" ((fa "modelled" (EVar "True")) (fa "price" (ERecordCreate "Price" ((fa "fixedMs" (EVar "balFixedSetupMs")) (fa "wasmMs" (EApp (EApp (EVar "optionOr") (EVar "dflt")) (EVar "wasm"))) (fa "buildJobs" (EMatch (EVar "js") (arm (PList) () (ELit (LInt 1))) (arm (PCons (PVar "j") (PVar "rest")) () (EApp (EVar "balMinL") (EBinOp "::" (EVar "j") (EVar "rest"))))))))) (fa "sampled" (EApp (EVar "listLen") (EVar "ps"))) (fa "defaultMs" (EVar "dflt")) (fa "defaulted" (EApp (EApp (EApp (EApp (EVar "balUnsampled") (EVar "ps")) (EApp (EApp (EVar "filterList") (ELam ((PVar "n")) (EApp (EVar "not") (EApp (EApp (EVar "contains") (EVar "n")) (EVar "multicall"))))) (EVar "entries"))) (EVar "gateOrcs")) (EListLit))) (fa "wasmDefaulted" (EApp (EVar "isNone") (EVar "wasm"))) (fa "jobsDefaulted" (EMatch (EVar "js") (arm (PList) () (EVar "True")) (arm PWild () (EVar "False")))) (fa "prices" (EVar "ps")) (fa "gateOrcs" (EVar "gateOrcs")) (fa "entries" (EVar "entries")) (fa "multicall" (EVar "multicall")) (fa "multicallMs" (EMatch (EVar "mcMs") (arm (PCon "Some" (PVar "ms")) () (EVar "ms")) (arm (PCon "None") () (EBinOp "*" (ELit (LInt 2)) (EApp (EVar "balMaxL") (EApp (EApp (EVar "map") (ELam ((PTuple PWild (PVar "ms"))) (EVar "ms"))) (EVar "ps"))))))) (fa "multicallDefaulted" (EApp (EVar "isNone") (EVar "mcMs")))))))))))))
+(DFunDef false "balSetup" ((PVar "ocs") (PVar "gateOrcs") (PVar "entries") (PVar "multicall")) (EBlock (DoLet false false (PVar "ps") (EApp (EApp (EVar "balEntryPrices") (EVar "ocs")) (EVar "entries"))) (DoExpr (EMatch (EVar "ps") (arm (PList) () (EApp (EVar "Err") (ELit (LString "medaka gate balance: the baseline carries oracles[], but none of its rows is an oracle test/build_oracles.sh --list builds, so there is no measured price to default an unsampled oracle to")))) (arm PWild () (EBlock (DoLet false false (PVar "dflt") (EApp (EVar "packStat") (EApp (EApp (EVar "map") (ELam ((PTuple PWild (PVar "ms"))) (EVar "ms"))) (EVar "ps")))) (DoLet false false (PVar "js") (EApp (EApp (EVar "balEntryJobs") (EVar "ocs")) (EVar "entries"))) (DoLet false false (PVar "wasm") (EApp (EApp (EVar "balOracleMs") (EVar "balWasmOracle")) (EVar "ocs"))) (DoLet false false (PVar "mcMs") (EApp (EApp (EVar "balOracleMs") (EVar "balMulticallOracle")) (EVar "ocs"))) (DoExpr (EApp (EVar "Ok") (ERecordCreate "Setup" ((fa "modelled" (EVar "True")) (fa "price" (ERecordCreate "Price" ((fa "fixedMs" (EVar "balFixedSetupMs")) (fa "wasmMs" (EApp (EApp (EVar "optionOr") (EVar "dflt")) (EVar "wasm"))) (fa "buildJobs" (EMatch (EVar "js") (arm (PList) () (ELit (LInt 1))) (arm (PCons (PVar "j") (PVar "rest")) () (EApp (EVar "balMinL") (EBinOp "::" (EVar "j") (EVar "rest"))))))))) (fa "sampled" (EApp (EVar "listLen") (EVar "ps"))) (fa "defaultMs" (EVar "dflt")) (fa "defaulted" (EApp (EApp (EApp (EApp (EVar "balUnsampled") (EVar "ps")) (EApp (EApp (EVar "filterList") (ELam ((PVar "n")) (EApp (EVar "not") (EApp (EApp (EVar "contains") (EVar "n")) (EVar "multicall"))))) (EVar "entries"))) (EVar "gateOrcs")) (EApp (EVar "S.fromList") (EListLit)))) (fa "wasmDefaulted" (EApp (EVar "isNone") (EVar "wasm"))) (fa "jobsDefaulted" (EMatch (EVar "js") (arm (PList) () (EVar "True")) (arm PWild () (EVar "False")))) (fa "prices" (EVar "ps")) (fa "gateOrcs" (EVar "gateOrcs")) (fa "entries" (EVar "entries")) (fa "multicall" (EVar "multicall")) (fa "multicallMs" (EMatch (EVar "mcMs") (arm (PCon "Some" (PVar "ms")) () (EVar "ms")) (arm (PCon "None") () (EBinOp "*" (ELit (LInt 2)) (EApp (EVar "balMaxL") (EApp (EApp (EVar "map") (ELam ((PTuple PWild (PVar "ms"))) (EVar "ms"))) (EVar "ps"))))))) (fa "multicallDefaulted" (EApp (EVar "isNone") (EVar "mcMs")))))))))))))
 (DTypeSig false "balEntryPrices" (TyFun (TyApp (TyCon "List") (TyCon "OracleCost")) (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "Int"))))))
 (DFunDef false "balEntryPrices" ((PList) PWild) (EListLit))
 (DFunDef false "balEntryPrices" ((PCons (PVar "o") (PVar "os")) (PVar "es")) (EIf (EApp (EApp (EVar "contains") (EFieldAccess (EFieldAccess (EVar "o") "row") "name")) (EVar "es")) (EBinOp "::" (ETuple (EFieldAccess (EFieldAccess (EVar "o") "row") "name") (EFieldAccess (EFieldAccess (EVar "o") "row") "medianMs")) (EApp (EApp (EVar "balEntryPrices") (EVar "os")) (EVar "es"))) (EIf (EVar "otherwise") (EApp (EApp (EVar "balEntryPrices") (EVar "os")) (EVar "es")) (EApp (EVar "__fallthrough__") (ELit LUnit)))))
@@ -2853,12 +2859,12 @@ budgetOutput regPath regSrc baseSrc gateOrcs entries multicall commitMessage =
 (DTypeSig false "balOracleMs" (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "OracleCost")) (TyApp (TyCon "Option") (TyCon "Int")))))
 (DFunDef false "balOracleMs" (PWild (PList)) (EVar "None"))
 (DFunDef false "balOracleMs" ((PVar "n") (PCons (PVar "o") (PVar "os"))) (EIf (EBinOp "==" (EFieldAccess (EFieldAccess (EVar "o") "row") "name") (EVar "n")) (EApp (EVar "Some") (EFieldAccess (EFieldAccess (EVar "o") "row") "medianMs")) (EIf (EVar "otherwise") (EApp (EApp (EVar "balOracleMs") (EVar "n")) (EVar "os")) (EApp (EVar "__fallthrough__") (ELit LUnit)))))
-(DTypeSig false "balUnsampled" (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "Int"))) (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "String")))) (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyApp (TyCon "List") (TyCon "String")))))))
-(DFunDef false "balUnsampled" (PWild PWild (PList) (PVar "acc")) (EApp (EVar "sortUniqS") (EVar "acc")))
+(DTypeSig false "balUnsampled" (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "Int"))) (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "String")))) (TyFun (TyApp (TyCon "S.Set") (TyCon "String")) (TyApp (TyCon "List") (TyCon "String")))))))
+(DFunDef false "balUnsampled" (PWild PWild (PList) (PVar "acc")) (EApp (EVar "toList") (EVar "acc")))
 (DFunDef false "balUnsampled" ((PVar "ps") (PVar "es") (PCons (PTuple PWild (PVar "names")) (PVar "rest")) (PVar "acc")) (EApp (EApp (EApp (EApp (EVar "balUnsampled") (EVar "ps")) (EVar "es")) (EVar "rest")) (EApp (EApp (EApp (EApp (EVar "balAddMissing") (EVar "ps")) (EVar "es")) (EVar "names")) (EVar "acc"))))
-(DTypeSig false "balAddMissing" (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "Int"))) (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyApp (TyCon "List") (TyCon "String")))))))
+(DTypeSig false "balAddMissing" (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "Int"))) (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyApp (TyCon "S.Set") (TyCon "String")) (TyApp (TyCon "S.Set") (TyCon "String")))))))
 (DFunDef false "balAddMissing" (PWild PWild (PList) (PVar "acc")) (EVar "acc"))
-(DFunDef false "balAddMissing" ((PVar "ps") (PVar "es") (PCons (PVar "n") (PVar "ns")) (PVar "acc")) (EIf (EApp (EVar "not") (EApp (EApp (EVar "contains") (EVar "n")) (EVar "es"))) (EApp (EApp (EApp (EApp (EVar "balAddMissing") (EVar "ps")) (EVar "es")) (EVar "ns")) (EVar "acc")) (EIf (EApp (EApp (EVar "contains") (EVar "n")) (EVar "acc")) (EApp (EApp (EApp (EApp (EVar "balAddMissing") (EVar "ps")) (EVar "es")) (EVar "ns")) (EVar "acc")) (EIf (EVar "otherwise") (EMatch (EApp (EApp (EVar "lookupAssoc") (EVar "n")) (EVar "ps")) (arm (PCon "Some" PWild) () (EApp (EApp (EApp (EApp (EVar "balAddMissing") (EVar "ps")) (EVar "es")) (EVar "ns")) (EVar "acc"))) (arm (PCon "None") () (EApp (EApp (EApp (EApp (EVar "balAddMissing") (EVar "ps")) (EVar "es")) (EVar "ns")) (EBinOp "::" (EVar "n") (EVar "acc"))))) (EApp (EVar "__fallthrough__") (ELit LUnit))))))
+(DFunDef false "balAddMissing" ((PVar "ps") (PVar "es") (PCons (PVar "n") (PVar "ns")) (PVar "acc")) (EIf (EApp (EVar "not") (EApp (EApp (EVar "contains") (EVar "n")) (EVar "es"))) (EApp (EApp (EApp (EApp (EVar "balAddMissing") (EVar "ps")) (EVar "es")) (EVar "ns")) (EVar "acc")) (EIf (EApp (EApp (EVar "S.has") (EVar "n")) (EVar "acc")) (EApp (EApp (EApp (EApp (EVar "balAddMissing") (EVar "ps")) (EVar "es")) (EVar "ns")) (EVar "acc")) (EIf (EVar "otherwise") (EMatch (EApp (EApp (EVar "lookupAssoc") (EVar "n")) (EVar "ps")) (arm (PCon "Some" PWild) () (EApp (EApp (EApp (EApp (EVar "balAddMissing") (EVar "ps")) (EVar "es")) (EVar "ns")) (EVar "acc"))) (arm (PCon "None") () (EApp (EApp (EApp (EApp (EVar "balAddMissing") (EVar "ps")) (EVar "es")) (EVar "ns")) (EApp (EApp (EVar "S.insert") (EVar "n")) (EVar "acc"))))) (EApp (EVar "__fallthrough__") (ELit LUnit))))))
 (DTypeSig false "balGateOrcs" (TyFun (TyCon "Setup") (TyFun (TyCon "String") (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "Int"))))))
 (DFunDef false "balGateOrcs" ((PVar "s") (PVar "n")) (EIf (EApp (EVar "not") (EFieldAccess (EVar "s") "modelled")) (EListLit) (EIf (EVar "otherwise") (EMatch (EApp (EApp (EVar "lookupAssoc") (EVar "n")) (EFieldAccess (EVar "s") "gateOrcs")) (arm (PCon "None") () (EListLit)) (arm (PCon "Some" (PVar "names")) () (EApp (EApp (EVar "balPriceAll") (EVar "s")) (EVar "names")))) (EApp (EVar "__fallthrough__") (ELit LUnit)))))
 (DTypeSig false "balPriceAll" (TyFun (TyCon "Setup") (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "Int"))))))
@@ -2922,8 +2928,10 @@ budgetOutput regPath regSrc baseSrc gateOrcs entries multicall commitMessage =
 (DFunDef false "balAllBuilt" ((PList) PWild) (EVar "True"))
 (DFunDef false "balAllBuilt" ((PCons (PTuple (PVar "n") PWild) (PVar "os")) (PVar "have")) (EMatch (EApp (EApp (EVar "lookupAssoc") (EVar "n")) (EVar "have")) (arm (PCon "Some" PWild) () (EApp (EApp (EVar "balAllBuilt") (EVar "os")) (EVar "have"))) (arm (PCon "None") () (EVar "False"))))
 (DTypeSig false "balUnionOrcs" (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "Int"))) (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "Int"))) (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "Int"))))))
-(DFunDef false "balUnionOrcs" ((PList) (PVar "have")) (EVar "have"))
-(DFunDef false "balUnionOrcs" ((PCons (PTuple (PVar "n") (PVar "ms")) (PVar "os")) (PVar "have")) (EMatch (EApp (EApp (EVar "lookupAssoc") (EVar "n")) (EVar "have")) (arm (PCon "Some" PWild) () (EApp (EApp (EVar "balUnionOrcs") (EVar "os")) (EVar "have"))) (arm (PCon "None") () (EApp (EApp (EVar "balUnionOrcs") (EVar "os")) (EBinOp "::" (ETuple (EVar "n") (EVar "ms")) (EVar "have"))))))
+(DFunDef false "balUnionOrcs" ((PVar "os") (PVar "have")) (EApp (EApp (EApp (EVar "balUnionOrcsGo") (EVar "os")) (EVar "have")) (EApp (EVar "S.fromList") (EApp (EApp (EVar "map") (EVar "fst")) (EVar "have")))))
+(DTypeSig false "balUnionOrcsGo" (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "Int"))) (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "Int"))) (TyFun (TyApp (TyCon "S.Set") (TyCon "String")) (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "Int")))))))
+(DFunDef false "balUnionOrcsGo" ((PList) (PVar "have") PWild) (EVar "have"))
+(DFunDef false "balUnionOrcsGo" ((PCons (PTuple (PVar "n") (PVar "ms")) (PVar "os")) (PVar "have") (PVar "names")) (EIf (EApp (EApp (EVar "S.has") (EVar "n")) (EVar "names")) (EApp (EApp (EApp (EVar "balUnionOrcsGo") (EVar "os")) (EVar "have")) (EVar "names")) (EIf (EVar "otherwise") (EApp (EApp (EApp (EVar "balUnionOrcsGo") (EVar "os")) (EBinOp "::" (ETuple (EVar "n") (EVar "ms")) (EVar "have"))) (EApp (EApp (EVar "S.insert") (EVar "n")) (EVar "names"))) (EApp (EVar "__fallthrough__") (ELit LUnit)))))
 (DTypeSig false "balPickStable" (TyFun (TyCon "Cand") (TyFun (TyApp (TyCon "List") (TyCon "Row")) (TyApp (TyCon "Option") (TyCon "String")))))
 (DFunDef false "balPickStable" ((PVar "c") (PVar "rs")) (EMatch (EApp (EApp (EVar "balPick") (EVar "c")) (EVar "rs")) (arm (PCon "None") () (EVar "None")) (arm (PCon "Some" (PVar "best")) () (EIf (EApp (EApp (EApp (EVar "balStays") (EVar "c")) (EVar "best")) (EVar "rs")) (EApp (EVar "Some") (EFieldAccess (EVar "c") "curRow")) (EApp (EVar "Some") (EVar "best"))))))
 (DTypeSig false "balStays" (TyFun (TyCon "Cand") (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "Row")) (TyCon "Bool")))))
@@ -3182,11 +3190,10 @@ budgetOutput regPath regSrc baseSrc gateOrcs entries multicall commitMessage =
 (DFunDef false "balDropNth" (PWild (PList)) (EListLit))
 (DFunDef false "balDropNth" ((PVar "i") (PCons (PVar "x") (PVar "xs"))) (EIf (EBinOp "<=" (EVar "i") (ELit (LInt 0))) (EVar "xs") (EIf (EVar "otherwise") (EBinOp "::" (EVar "x") (EApp (EApp (EVar "balDropNth") (EBinOp "-" (EVar "i") (ELit (LInt 1)))) (EVar "xs"))) (EApp (EVar "__fallthrough__") (ELit LUnit)))))
 (DTypeSig false "balRunIds" (TyFun (TyApp (TyCon "List") (TyCon "RunRecord")) (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyApp (TyCon "List") (TyCon "String")))))
-(DFunDef false "balRunIds" ((PList) (PVar "acc")) (EApp (EApp (EVar "balRevStrs") (EVar "acc")) (EListLit)))
-(DFunDef false "balRunIds" ((PCons (PVar "r") (PVar "rs")) (PVar "acc")) (EIf (EApp (EApp (EVar "balHasStr") (EFieldAccess (EVar "r") "runId")) (EVar "acc")) (EApp (EApp (EVar "balRunIds") (EVar "rs")) (EVar "acc")) (EIf (EVar "otherwise") (EApp (EApp (EVar "balRunIds") (EVar "rs")) (EBinOp "::" (EFieldAccess (EVar "r") "runId") (EVar "acc"))) (EApp (EVar "__fallthrough__") (ELit LUnit)))))
-(DTypeSig false "balHasStr" (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyCon "Bool"))))
-(DFunDef false "balHasStr" (PWild (PList)) (EVar "False"))
-(DFunDef false "balHasStr" ((PVar "s") (PCons (PVar "x") (PVar "xs"))) (EIf (EBinOp "==" (EVar "x") (EVar "s")) (EVar "True") (EIf (EVar "otherwise") (EApp (EApp (EVar "balHasStr") (EVar "s")) (EVar "xs")) (EApp (EVar "__fallthrough__") (ELit LUnit)))))
+(DFunDef false "balRunIds" ((PVar "runs") (PVar "acc")) (EApp (EApp (EApp (EVar "balRunIdsGo") (EVar "runs")) (EVar "acc")) (EApp (EVar "S.fromList") (EVar "acc"))))
+(DTypeSig false "balRunIdsGo" (TyFun (TyApp (TyCon "List") (TyCon "RunRecord")) (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyApp (TyCon "S.Set") (TyCon "String")) (TyApp (TyCon "List") (TyCon "String"))))))
+(DFunDef false "balRunIdsGo" ((PList) (PVar "acc") PWild) (EApp (EApp (EVar "balRevStrs") (EVar "acc")) (EListLit)))
+(DFunDef false "balRunIdsGo" ((PCons (PVar "r") (PVar "rs")) (PVar "acc") (PVar "seen")) (EIf (EApp (EApp (EVar "S.has") (EFieldAccess (EVar "r") "runId")) (EVar "seen")) (EApp (EApp (EApp (EVar "balRunIdsGo") (EVar "rs")) (EVar "acc")) (EVar "seen")) (EIf (EVar "otherwise") (EApp (EApp (EApp (EVar "balRunIdsGo") (EVar "rs")) (EBinOp "::" (EFieldAccess (EVar "r") "runId") (EVar "acc"))) (EApp (EApp (EVar "S.insert") (EFieldAccess (EVar "r") "runId")) (EVar "seen"))) (EApp (EVar "__fallthrough__") (ELit LUnit)))))
 (DTypeSig false "balRevStrs" (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyApp (TyCon "List") (TyCon "String")))))
 (DFunDef false "balRevStrs" ((PList) (PVar "acc")) (EVar "acc"))
 (DFunDef false "balRevStrs" ((PCons (PVar "x") (PVar "xs")) (PVar "acc")) (EApp (EApp (EVar "balRevStrs") (EVar "xs")) (EBinOp "::" (EVar "x") (EVar "acc"))))
@@ -3306,7 +3313,8 @@ budgetOutput regPath regSrc baseSrc gateOrcs entries multicall commitMessage =
 (DUse false (UseGroup ("string") ((mem "padLeft" false) (mem "padRight" false))))
 (DUse false (UseGroup ("tools" "gate_registry") ((mem "Gate" false) (mem "Shard" false) (mem "parseRegistry" false) (mem "parseShards" false) (mem "joinSpace" false))))
 (DUse false (UseGroup ("tools" "gate_cost") ((mem "GateCost" false) (mem "OracleCost" false) (mem "RunRecord" false) (mem "baselineKey" false) (mem "costOf" false) (mem "costRowOf" false) (mem "gateSetDigest" false) (mem "latestRunForShard" false) (mem "orphanBaselineNames" false) (mem "packStat" false) (mem "parseCostBaseline" false) (mem "parseCostRuns" false) (mem "parseOracleCosts" false))))
-(DUse false (UseGroup ("support" "util") ((mem "contains" false) (mem "filterList" false) (mem "isEmptyL" false) (mem "isNonEmptyL" false) (mem "joinNl" false) (mem "listLen" false) (mem "lookupAssoc" false) (mem "maxI" false) (mem "minI" false) (mem "reverseL" false) (mem "sortUniqS" false) (mem "splitNl" false) (mem "splitOnChar" false) (mem "startsWith" false))))
+(DUse false (UseGroup ("support" "util") ((mem "contains" false) (mem "filterList" false) (mem "isEmptyL" false) (mem "isNonEmptyL" false) (mem "joinNl" false) (mem "listLen" false) (mem "lookupAssoc" false) (mem "maxI" false) (mem "minI" false) (mem "reverseL" false) (mem "splitNl" false) (mem "splitOnChar" false) (mem "startsWith" false))))
+(DUse false (UseAlias ("set") "S"))
 (DUse false (UseGroup ("string") ((mem "trimAscii" false))))
 (DTypeSig true "timeoutFor" (TyFun (TyCon "Int") (TyFun (TyCon "String") (TyCon "Int"))))
 (DFunDef false "timeoutFor" ((PVar "override") (PVar "cost")) (EIf (EBinOp ">" (EVar "override") (ELit (LInt 0))) (EVar "override") (EIf (EBinOp "==" (EVar "cost") (ELit (LString "cheap"))) (ELit (LInt 300)) (EIf (EBinOp "==" (EVar "cost") (ELit (LString "medium"))) (ELit (LInt 900)) (EIf (EBinOp "==" (EVar "cost") (ELit (LString "heavy"))) (ELit (LInt 3600)) (EIf (EVar "otherwise") (ELit (LInt 900)) (EApp (EVar "__fallthrough__") (ELit LUnit))))))))
@@ -3334,7 +3342,7 @@ budgetOutput regPath regSrc baseSrc gateOrcs entries multicall commitMessage =
 (DFunDef false "balMulticallOracle" () (ELit (LString "oracle_multicall")))
 (DTypeSig false "balSetup" (TyFun (TyApp (TyCon "List") (TyCon "OracleCost")) (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "String")))) (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyApp (TyApp (TyCon "Result") (TyCon "String")) (TyCon "Setup")))))))
 (DFunDef false "balSetup" ((PList) (PVar "gateOrcs") (PVar "entries") (PVar "multicall")) (EApp (EVar "Ok") (ERecordCreate "Setup" ((fa "modelled" (EVar "False")) (fa "price" (ERecordCreate "Price" ((fa "fixedMs" (ELit (LInt 0))) (fa "wasmMs" (ELit (LInt 0))) (fa "buildJobs" (ELit (LInt 1)))))) (fa "sampled" (ELit (LInt 0))) (fa "defaultMs" (ELit (LInt 0))) (fa "defaulted" (EListLit)) (fa "wasmDefaulted" (EVar "False")) (fa "jobsDefaulted" (EVar "False")) (fa "prices" (EListLit)) (fa "gateOrcs" (EVar "gateOrcs")) (fa "entries" (EVar "entries")) (fa "multicall" (EVar "multicall")) (fa "multicallMs" (ELit (LInt 0))) (fa "multicallDefaulted" (EVar "False"))))))
-(DFunDef false "balSetup" ((PVar "ocs") (PVar "gateOrcs") (PVar "entries") (PVar "multicall")) (EBlock (DoLet false false (PVar "ps") (EApp (EApp (EVar "balEntryPrices") (EVar "ocs")) (EVar "entries"))) (DoExpr (EMatch (EVar "ps") (arm (PList) () (EApp (EVar "Err") (ELit (LString "medaka gate balance: the baseline carries oracles[], but none of its rows is an oracle test/build_oracles.sh --list builds, so there is no measured price to default an unsampled oracle to")))) (arm PWild () (EBlock (DoLet false false (PVar "dflt") (EApp (EVar "packStat") (EApp (EApp (EMethodRef "map") (ELam ((PTuple PWild (PVar "ms"))) (EVar "ms"))) (EVar "ps")))) (DoLet false false (PVar "js") (EApp (EApp (EVar "balEntryJobs") (EVar "ocs")) (EVar "entries"))) (DoLet false false (PVar "wasm") (EApp (EApp (EVar "balOracleMs") (EVar "balWasmOracle")) (EVar "ocs"))) (DoLet false false (PVar "mcMs") (EApp (EApp (EVar "balOracleMs") (EVar "balMulticallOracle")) (EVar "ocs"))) (DoExpr (EApp (EVar "Ok") (ERecordCreate "Setup" ((fa "modelled" (EVar "True")) (fa "price" (ERecordCreate "Price" ((fa "fixedMs" (EVar "balFixedSetupMs")) (fa "wasmMs" (EApp (EApp (EVar "optionOr") (EVar "dflt")) (EVar "wasm"))) (fa "buildJobs" (EMatch (EVar "js") (arm (PList) () (ELit (LInt 1))) (arm (PCons (PVar "j") (PVar "rest")) () (EApp (EVar "balMinL") (EBinOp "::" (EVar "j") (EVar "rest"))))))))) (fa "sampled" (EApp (EVar "listLen") (EVar "ps"))) (fa "defaultMs" (EVar "dflt")) (fa "defaulted" (EApp (EApp (EApp (EApp (EVar "balUnsampled") (EVar "ps")) (EApp (EApp (EVar "filterList") (ELam ((PVar "n")) (EApp (EVar "not") (EApp (EApp (EVar "contains") (EVar "n")) (EVar "multicall"))))) (EVar "entries"))) (EVar "gateOrcs")) (EListLit))) (fa "wasmDefaulted" (EApp (EVar "isNone") (EVar "wasm"))) (fa "jobsDefaulted" (EMatch (EVar "js") (arm (PList) () (EVar "True")) (arm PWild () (EVar "False")))) (fa "prices" (EVar "ps")) (fa "gateOrcs" (EVar "gateOrcs")) (fa "entries" (EVar "entries")) (fa "multicall" (EVar "multicall")) (fa "multicallMs" (EMatch (EVar "mcMs") (arm (PCon "Some" (PVar "ms")) () (EVar "ms")) (arm (PCon "None") () (EBinOp "*" (ELit (LInt 2)) (EApp (EVar "balMaxL") (EApp (EApp (EMethodRef "map") (ELam ((PTuple PWild (PVar "ms"))) (EVar "ms"))) (EVar "ps"))))))) (fa "multicallDefaulted" (EApp (EVar "isNone") (EVar "mcMs")))))))))))))
+(DFunDef false "balSetup" ((PVar "ocs") (PVar "gateOrcs") (PVar "entries") (PVar "multicall")) (EBlock (DoLet false false (PVar "ps") (EApp (EApp (EVar "balEntryPrices") (EVar "ocs")) (EVar "entries"))) (DoExpr (EMatch (EVar "ps") (arm (PList) () (EApp (EVar "Err") (ELit (LString "medaka gate balance: the baseline carries oracles[], but none of its rows is an oracle test/build_oracles.sh --list builds, so there is no measured price to default an unsampled oracle to")))) (arm PWild () (EBlock (DoLet false false (PVar "dflt") (EApp (EVar "packStat") (EApp (EApp (EMethodRef "map") (ELam ((PTuple PWild (PVar "ms"))) (EVar "ms"))) (EVar "ps")))) (DoLet false false (PVar "js") (EApp (EApp (EVar "balEntryJobs") (EVar "ocs")) (EVar "entries"))) (DoLet false false (PVar "wasm") (EApp (EApp (EVar "balOracleMs") (EVar "balWasmOracle")) (EVar "ocs"))) (DoLet false false (PVar "mcMs") (EApp (EApp (EVar "balOracleMs") (EVar "balMulticallOracle")) (EVar "ocs"))) (DoExpr (EApp (EVar "Ok") (ERecordCreate "Setup" ((fa "modelled" (EVar "True")) (fa "price" (ERecordCreate "Price" ((fa "fixedMs" (EVar "balFixedSetupMs")) (fa "wasmMs" (EApp (EApp (EVar "optionOr") (EVar "dflt")) (EVar "wasm"))) (fa "buildJobs" (EMatch (EVar "js") (arm (PList) () (ELit (LInt 1))) (arm (PCons (PVar "j") (PVar "rest")) () (EApp (EVar "balMinL") (EBinOp "::" (EVar "j") (EVar "rest"))))))))) (fa "sampled" (EApp (EVar "listLen") (EVar "ps"))) (fa "defaultMs" (EVar "dflt")) (fa "defaulted" (EApp (EApp (EApp (EApp (EVar "balUnsampled") (EVar "ps")) (EApp (EApp (EVar "filterList") (ELam ((PVar "n")) (EApp (EVar "not") (EApp (EApp (EVar "contains") (EVar "n")) (EVar "multicall"))))) (EVar "entries"))) (EVar "gateOrcs")) (EApp (EVar "S.fromList") (EListLit)))) (fa "wasmDefaulted" (EApp (EVar "isNone") (EVar "wasm"))) (fa "jobsDefaulted" (EMatch (EVar "js") (arm (PList) () (EVar "True")) (arm PWild () (EVar "False")))) (fa "prices" (EVar "ps")) (fa "gateOrcs" (EVar "gateOrcs")) (fa "entries" (EVar "entries")) (fa "multicall" (EVar "multicall")) (fa "multicallMs" (EMatch (EVar "mcMs") (arm (PCon "Some" (PVar "ms")) () (EVar "ms")) (arm (PCon "None") () (EBinOp "*" (ELit (LInt 2)) (EApp (EVar "balMaxL") (EApp (EApp (EMethodRef "map") (ELam ((PTuple PWild (PVar "ms"))) (EVar "ms"))) (EVar "ps"))))))) (fa "multicallDefaulted" (EApp (EVar "isNone") (EVar "mcMs")))))))))))))
 (DTypeSig false "balEntryPrices" (TyFun (TyApp (TyCon "List") (TyCon "OracleCost")) (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "Int"))))))
 (DFunDef false "balEntryPrices" ((PList) PWild) (EListLit))
 (DFunDef false "balEntryPrices" ((PCons (PVar "o") (PVar "os")) (PVar "es")) (EIf (EApp (EApp (EVar "contains") (EFieldAccess (EFieldAccess (EVar "o") "row") "name")) (EVar "es")) (EBinOp "::" (ETuple (EFieldAccess (EFieldAccess (EVar "o") "row") "name") (EFieldAccess (EFieldAccess (EVar "o") "row") "medianMs")) (EApp (EApp (EVar "balEntryPrices") (EVar "os")) (EVar "es"))) (EIf (EVar "otherwise") (EApp (EApp (EVar "balEntryPrices") (EVar "os")) (EVar "es")) (EApp (EVar "__fallthrough__") (ELit LUnit)))))
@@ -3347,12 +3355,12 @@ budgetOutput regPath regSrc baseSrc gateOrcs entries multicall commitMessage =
 (DTypeSig false "balOracleMs" (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "OracleCost")) (TyApp (TyCon "Option") (TyCon "Int")))))
 (DFunDef false "balOracleMs" (PWild (PList)) (EVar "None"))
 (DFunDef false "balOracleMs" ((PVar "n") (PCons (PVar "o") (PVar "os"))) (EIf (EBinOp "==" (EFieldAccess (EFieldAccess (EVar "o") "row") "name") (EVar "n")) (EApp (EVar "Some") (EFieldAccess (EFieldAccess (EVar "o") "row") "medianMs")) (EIf (EVar "otherwise") (EApp (EApp (EVar "balOracleMs") (EVar "n")) (EVar "os")) (EApp (EVar "__fallthrough__") (ELit LUnit)))))
-(DTypeSig false "balUnsampled" (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "Int"))) (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "String")))) (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyApp (TyCon "List") (TyCon "String")))))))
-(DFunDef false "balUnsampled" (PWild PWild (PList) (PVar "acc")) (EApp (EVar "sortUniqS") (EVar "acc")))
+(DTypeSig false "balUnsampled" (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "Int"))) (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "String")))) (TyFun (TyApp (TyCon "S.Set") (TyCon "String")) (TyApp (TyCon "List") (TyCon "String")))))))
+(DFunDef false "balUnsampled" (PWild PWild (PList) (PVar "acc")) (EApp (EMethodRef "toList") (EVar "acc")))
 (DFunDef false "balUnsampled" ((PVar "ps") (PVar "es") (PCons (PTuple PWild (PVar "names")) (PVar "rest")) (PVar "acc")) (EApp (EApp (EApp (EApp (EVar "balUnsampled") (EVar "ps")) (EVar "es")) (EVar "rest")) (EApp (EApp (EApp (EApp (EVar "balAddMissing") (EVar "ps")) (EVar "es")) (EVar "names")) (EVar "acc"))))
-(DTypeSig false "balAddMissing" (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "Int"))) (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyApp (TyCon "List") (TyCon "String")))))))
+(DTypeSig false "balAddMissing" (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "Int"))) (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyApp (TyCon "S.Set") (TyCon "String")) (TyApp (TyCon "S.Set") (TyCon "String")))))))
 (DFunDef false "balAddMissing" (PWild PWild (PList) (PVar "acc")) (EVar "acc"))
-(DFunDef false "balAddMissing" ((PVar "ps") (PVar "es") (PCons (PVar "n") (PVar "ns")) (PVar "acc")) (EIf (EApp (EVar "not") (EApp (EApp (EVar "contains") (EVar "n")) (EVar "es"))) (EApp (EApp (EApp (EApp (EVar "balAddMissing") (EVar "ps")) (EVar "es")) (EVar "ns")) (EVar "acc")) (EIf (EApp (EApp (EVar "contains") (EVar "n")) (EVar "acc")) (EApp (EApp (EApp (EApp (EVar "balAddMissing") (EVar "ps")) (EVar "es")) (EVar "ns")) (EVar "acc")) (EIf (EVar "otherwise") (EMatch (EApp (EApp (EVar "lookupAssoc") (EVar "n")) (EVar "ps")) (arm (PCon "Some" PWild) () (EApp (EApp (EApp (EApp (EVar "balAddMissing") (EVar "ps")) (EVar "es")) (EVar "ns")) (EVar "acc"))) (arm (PCon "None") () (EApp (EApp (EApp (EApp (EVar "balAddMissing") (EVar "ps")) (EVar "es")) (EVar "ns")) (EBinOp "::" (EVar "n") (EVar "acc"))))) (EApp (EVar "__fallthrough__") (ELit LUnit))))))
+(DFunDef false "balAddMissing" ((PVar "ps") (PVar "es") (PCons (PVar "n") (PVar "ns")) (PVar "acc")) (EIf (EApp (EVar "not") (EApp (EApp (EVar "contains") (EVar "n")) (EVar "es"))) (EApp (EApp (EApp (EApp (EVar "balAddMissing") (EVar "ps")) (EVar "es")) (EVar "ns")) (EVar "acc")) (EIf (EApp (EApp (EVar "S.has") (EVar "n")) (EVar "acc")) (EApp (EApp (EApp (EApp (EVar "balAddMissing") (EVar "ps")) (EVar "es")) (EVar "ns")) (EVar "acc")) (EIf (EVar "otherwise") (EMatch (EApp (EApp (EVar "lookupAssoc") (EVar "n")) (EVar "ps")) (arm (PCon "Some" PWild) () (EApp (EApp (EApp (EApp (EVar "balAddMissing") (EVar "ps")) (EVar "es")) (EVar "ns")) (EVar "acc"))) (arm (PCon "None") () (EApp (EApp (EApp (EApp (EVar "balAddMissing") (EVar "ps")) (EVar "es")) (EVar "ns")) (EApp (EApp (EVar "S.insert") (EVar "n")) (EVar "acc"))))) (EApp (EVar "__fallthrough__") (ELit LUnit))))))
 (DTypeSig false "balGateOrcs" (TyFun (TyCon "Setup") (TyFun (TyCon "String") (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "Int"))))))
 (DFunDef false "balGateOrcs" ((PVar "s") (PVar "n")) (EIf (EApp (EVar "not") (EFieldAccess (EVar "s") "modelled")) (EListLit) (EIf (EVar "otherwise") (EMatch (EApp (EApp (EVar "lookupAssoc") (EVar "n")) (EFieldAccess (EVar "s") "gateOrcs")) (arm (PCon "None") () (EListLit)) (arm (PCon "Some" (PVar "names")) () (EApp (EApp (EVar "balPriceAll") (EVar "s")) (EVar "names")))) (EApp (EVar "__fallthrough__") (ELit LUnit)))))
 (DTypeSig false "balPriceAll" (TyFun (TyCon "Setup") (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "Int"))))))
@@ -3416,8 +3424,10 @@ budgetOutput regPath regSrc baseSrc gateOrcs entries multicall commitMessage =
 (DFunDef false "balAllBuilt" ((PList) PWild) (EVar "True"))
 (DFunDef false "balAllBuilt" ((PCons (PTuple (PVar "n") PWild) (PVar "os")) (PVar "have")) (EMatch (EApp (EApp (EVar "lookupAssoc") (EVar "n")) (EVar "have")) (arm (PCon "Some" PWild) () (EApp (EApp (EVar "balAllBuilt") (EVar "os")) (EVar "have"))) (arm (PCon "None") () (EVar "False"))))
 (DTypeSig false "balUnionOrcs" (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "Int"))) (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "Int"))) (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "Int"))))))
-(DFunDef false "balUnionOrcs" ((PList) (PVar "have")) (EVar "have"))
-(DFunDef false "balUnionOrcs" ((PCons (PTuple (PVar "n") (PVar "ms")) (PVar "os")) (PVar "have")) (EMatch (EApp (EApp (EVar "lookupAssoc") (EVar "n")) (EVar "have")) (arm (PCon "Some" PWild) () (EApp (EApp (EVar "balUnionOrcs") (EVar "os")) (EVar "have"))) (arm (PCon "None") () (EApp (EApp (EVar "balUnionOrcs") (EVar "os")) (EBinOp "::" (ETuple (EVar "n") (EVar "ms")) (EVar "have"))))))
+(DFunDef false "balUnionOrcs" ((PVar "os") (PVar "have")) (EApp (EApp (EApp (EVar "balUnionOrcsGo") (EVar "os")) (EVar "have")) (EApp (EVar "S.fromList") (EApp (EApp (EMethodRef "map") (EVar "fst")) (EVar "have")))))
+(DTypeSig false "balUnionOrcsGo" (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "Int"))) (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "Int"))) (TyFun (TyApp (TyCon "S.Set") (TyCon "String")) (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "Int")))))))
+(DFunDef false "balUnionOrcsGo" ((PList) (PVar "have") PWild) (EVar "have"))
+(DFunDef false "balUnionOrcsGo" ((PCons (PTuple (PVar "n") (PVar "ms")) (PVar "os")) (PVar "have") (PVar "names")) (EIf (EApp (EApp (EVar "S.has") (EVar "n")) (EVar "names")) (EApp (EApp (EApp (EVar "balUnionOrcsGo") (EVar "os")) (EVar "have")) (EVar "names")) (EIf (EVar "otherwise") (EApp (EApp (EApp (EVar "balUnionOrcsGo") (EVar "os")) (EBinOp "::" (ETuple (EVar "n") (EVar "ms")) (EVar "have"))) (EApp (EApp (EVar "S.insert") (EVar "n")) (EVar "names"))) (EApp (EVar "__fallthrough__") (ELit LUnit)))))
 (DTypeSig false "balPickStable" (TyFun (TyCon "Cand") (TyFun (TyApp (TyCon "List") (TyCon "Row")) (TyApp (TyCon "Option") (TyCon "String")))))
 (DFunDef false "balPickStable" ((PVar "c") (PVar "rs")) (EMatch (EApp (EApp (EVar "balPick") (EVar "c")) (EVar "rs")) (arm (PCon "None") () (EVar "None")) (arm (PCon "Some" (PVar "best")) () (EIf (EApp (EApp (EApp (EVar "balStays") (EVar "c")) (EVar "best")) (EVar "rs")) (EApp (EVar "Some") (EFieldAccess (EVar "c") "curRow")) (EApp (EVar "Some") (EVar "best"))))))
 (DTypeSig false "balStays" (TyFun (TyCon "Cand") (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "Row")) (TyCon "Bool")))))
@@ -3676,11 +3686,10 @@ budgetOutput regPath regSrc baseSrc gateOrcs entries multicall commitMessage =
 (DFunDef false "balDropNth" (PWild (PList)) (EListLit))
 (DFunDef false "balDropNth" ((PVar "i") (PCons (PVar "x") (PVar "xs"))) (EIf (EBinOp "<=" (EVar "i") (ELit (LInt 0))) (EVar "xs") (EIf (EVar "otherwise") (EBinOp "::" (EVar "x") (EApp (EApp (EVar "balDropNth") (EBinOp "-" (EVar "i") (ELit (LInt 1)))) (EVar "xs"))) (EApp (EVar "__fallthrough__") (ELit LUnit)))))
 (DTypeSig false "balRunIds" (TyFun (TyApp (TyCon "List") (TyCon "RunRecord")) (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyApp (TyCon "List") (TyCon "String")))))
-(DFunDef false "balRunIds" ((PList) (PVar "acc")) (EApp (EApp (EVar "balRevStrs") (EVar "acc")) (EListLit)))
-(DFunDef false "balRunIds" ((PCons (PVar "r") (PVar "rs")) (PVar "acc")) (EIf (EApp (EApp (EVar "balHasStr") (EFieldAccess (EVar "r") "runId")) (EVar "acc")) (EApp (EApp (EVar "balRunIds") (EVar "rs")) (EVar "acc")) (EIf (EVar "otherwise") (EApp (EApp (EVar "balRunIds") (EVar "rs")) (EBinOp "::" (EFieldAccess (EVar "r") "runId") (EVar "acc"))) (EApp (EVar "__fallthrough__") (ELit LUnit)))))
-(DTypeSig false "balHasStr" (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyCon "Bool"))))
-(DFunDef false "balHasStr" (PWild (PList)) (EVar "False"))
-(DFunDef false "balHasStr" ((PVar "s") (PCons (PVar "x") (PVar "xs"))) (EIf (EBinOp "==" (EVar "x") (EVar "s")) (EVar "True") (EIf (EVar "otherwise") (EApp (EApp (EVar "balHasStr") (EVar "s")) (EVar "xs")) (EApp (EVar "__fallthrough__") (ELit LUnit)))))
+(DFunDef false "balRunIds" ((PVar "runs") (PVar "acc")) (EApp (EApp (EApp (EVar "balRunIdsGo") (EVar "runs")) (EVar "acc")) (EApp (EVar "S.fromList") (EVar "acc"))))
+(DTypeSig false "balRunIdsGo" (TyFun (TyApp (TyCon "List") (TyCon "RunRecord")) (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyApp (TyCon "S.Set") (TyCon "String")) (TyApp (TyCon "List") (TyCon "String"))))))
+(DFunDef false "balRunIdsGo" ((PList) (PVar "acc") PWild) (EApp (EApp (EVar "balRevStrs") (EVar "acc")) (EListLit)))
+(DFunDef false "balRunIdsGo" ((PCons (PVar "r") (PVar "rs")) (PVar "acc") (PVar "seen")) (EIf (EApp (EApp (EVar "S.has") (EFieldAccess (EVar "r") "runId")) (EVar "seen")) (EApp (EApp (EApp (EVar "balRunIdsGo") (EVar "rs")) (EVar "acc")) (EVar "seen")) (EIf (EVar "otherwise") (EApp (EApp (EApp (EVar "balRunIdsGo") (EVar "rs")) (EBinOp "::" (EFieldAccess (EVar "r") "runId") (EVar "acc"))) (EApp (EApp (EVar "S.insert") (EFieldAccess (EVar "r") "runId")) (EVar "seen"))) (EApp (EVar "__fallthrough__") (ELit LUnit)))))
 (DTypeSig false "balRevStrs" (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyApp (TyCon "List") (TyCon "String")))))
 (DFunDef false "balRevStrs" ((PList) (PVar "acc")) (EVar "acc"))
 (DFunDef false "balRevStrs" ((PCons (PVar "x") (PVar "xs")) (PVar "acc")) (EApp (EApp (EVar "balRevStrs") (EVar "xs")) (EBinOp "::" (EVar "x") (EVar "acc"))))
