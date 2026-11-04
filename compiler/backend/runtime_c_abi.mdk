@@ -29,9 +29,7 @@ parameterTypes [] = Ok []
 parameterTypes (t :: ts) = match abiType t
   Err e => Err e
   Ok AbiVoid => Err "void parameter"
-  Ok ty => match parameterTypes ts
-    Err e => Err e
-    Ok rest => Ok (ty :: rest)
+  Ok ty => map (ty :: _) (parameterTypes ts)
 
 intrinsic : String -> Bool
 intrinsic name = contains name [
@@ -51,17 +49,14 @@ runtimeAbiRows ((RuntimeDecl _ ret name params attrs) :: rest) =
   else if startsWith "llvm." name then
     Err ("unclassified intrinsic: " ++ name)
   else match abiType ret
-    Err e => Err (name ++ ": " ++ e)
+    Err e => Err "\{name}: \{e}"
     Ok result => match parameterTypes params
-      Err e => Err (name ++ ": " ++ e)
-      Ok parameters => match runtimeAbiRows rest
-        Err e => Err e
-        Ok rows =>
-          Ok
-            (RuntimeAbiRow {
-                name = name,
-                result = result,
-                parameters = parameters,
-                noReturn = attrs == " noreturn",
-              }
-              :: rows)
+      Err e => Err "\{name}: \{e}"
+      Ok parameters =>
+        let row = RuntimeAbiRow {
+          name = name,
+          result = result,
+          parameters = parameters,
+          noReturn = attrs == " noreturn",
+        }
+        map (row :: _) (runtimeAbiRows rest)

@@ -11,11 +11,7 @@ typeName AbiVoid = "void"
 
 render : RuntimeAbiRow -> String
 render row =
-  row.name
-    ++ "|"
-    ++ typeName row.result
-    ++ "|"
-    ++ join "," (map typeName row.parameters)
+  "\{row.name}|\{typeName row.result}|\{join "," (map typeName row.parameters)}"
 
 main = match runtimeAbiRows (runtimeDecls ++ ffiRuntimeDecls ++ siteTrapDecls)
   Err e => putStrLn ("ERROR: " ++ e)

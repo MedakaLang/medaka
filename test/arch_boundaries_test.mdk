@@ -696,6 +696,9 @@ test "arch_boundaries: backend.llvm_symbols closure matches its golden" =
 test "arch_boundaries: backend.trmc_analysis closure matches its golden" =
   closurePin "backend.trmc_analysis"
 
+test "arch_boundaries: backend.runtime_c_abi closure matches its golden" =
+  closurePin "backend.runtime_c_abi"
+
 test "arch_boundaries: backend.runtime_layout closure matches its golden" =
   closurePin "backend.runtime_layout"
 

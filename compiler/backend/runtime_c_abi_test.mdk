@@ -1,6 +1,7 @@
 import backend.runtime_c_abi.{AbiType(..), RuntimeAbiRow(..), runtimeAbiRows}
 import backend.llvm_preamble.{
-  RuntimeDecl(..), runtimeDecls, ffiRuntimeDecls, siteTrapDecls
+  RuntimeDecl(..), runtimeDecls, ffiRuntimeDecls, siteTrapDecls, siteTrapDecl,
+  declareLine
 }
 import test.{
   expectAll, expectEqual, expectErrContains, expectOkThen, expectAtLeast
@@ -20,9 +21,57 @@ test "runtime descriptors classify representations and reject unknown types" = e
       (runtimeAbiRows [RuntimeDecl "" "double" "f" ["i64", "ptr"] ""]),
     expectErrContains "bad" (runtimeAbiRows [RuntimeDecl "" "i16" "bad" [] ""]),
     expectErrContains
+      "ordinary"
+      (runtimeAbiRows [
+        RuntimeDecl "" "{ i64, i1 }" "ordinary" ["i64", "i64"] "",
+      ]),
+    expectEqual
+      (Ok [
+        RuntimeAbiRow {
+          name = "argc",
+          result = AbiVoid,
+          parameters = [AbiInt32],
+          noReturn = False,
+        },
+      ])
+      (runtimeAbiRows [RuntimeDecl "" "void" "argc" ["i32"] ""]),
+    expectErrContains
       "llvm.unknown"
       (runtimeAbiRows [RuntimeDecl "" "i64" "llvm.unknown" [] ""]),
     expectOkThen
       (rows => expectAtLeast 1 (length rows))
       (runtimeAbiRows (runtimeDecls ++ ffiRuntimeDecls ++ siteTrapDecls)),
+  ]
+
+test "located traps and panic carry the emitted noreturn prototypes" = expectAll
+  [
+    expectEqual
+      "declare void @mdk_panic_at(i64, i64) noreturn"
+      (declareLine (siteTrapDecl "mdk_panic")),
+    expectEqual
+      "declare void @mdk_oob_at_at(i64, i64) noreturn"
+      (declareLine (siteTrapDecl "mdk_oob_at")),
+    expectEqual
+      "declare void @mdk_int_overflow_at(i64, i64, i64, i64) noreturn"
+      (declareLine (siteTrapDecl "mdk_int_overflow")),
+    expectEqual
+      "declare void @mdk_div_zero_at(i64) noreturn"
+      (declareLine (siteTrapDecl "mdk_div_zero")),
+    expectEqual
+      "declare void @mdk_mod_zero_at(i64) noreturn"
+      (declareLine (siteTrapDecl "mdk_mod_zero")),
+    expectEqual
+      "declare void @mdk_nonexhaustive_match_at(i64) noreturn"
+      (declareLine (siteTrapDecl "mdk_nonexhaustive_match")),
+    expectEqual
+      "declare void @mdk_let_refute_at(i64) noreturn"
+      (declareLine (siteTrapDecl "mdk_let_refute")),
+    expectEqual
+      ["declare void @mdk_panic(i64) noreturn"]
+      (map
+        declareLine
+        (filter
+          (d => match d
+            RuntimeDecl _ _ name _ _ => name == "mdk_panic")
+          runtimeDecls)),
   ]
