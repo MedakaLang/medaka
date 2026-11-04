@@ -1,5 +1,5 @@
 # META
-source_lines=4718
+source_lines=4712
 stages=DESUGAR,MARK
 # SOURCE
 import support.diag_codes.{DiagCode(..), codeText}
@@ -554,14 +554,10 @@ envelopeOnStderrInvocation _ = False
 -- a stack overflow in the front end, a native-only run, which never arms) still
 -- appends it after the abort line.  `armAbortReport` replaces the slots later,
 -- so the envelope carries `staleBinary` and the prose is not printed twice.
--- `earlyNoteRegistered` lets the prose flush clear exactly the slot this wrote.
-earlyNoteRegistered : Ref Bool
-earlyNoteRegistered = Ref False
-
+-- Only `test` ever stores a report, so the prose flush may clear the slot
+-- whenever it prints a notice.
 registerEarlyNotice : List String -> String -> <IO> Unit
-registerEarlyNotice ("test" :: _) msg =
-  earlyNoteRegistered := True
-  setAbortReport msg ""
+registerEarlyNotice ("test" :: _) msg = setAbortReport msg ""
 registerEarlyNotice _ _ = ()
 
 -- Print the deferred staleness notices as prose and clear them.  Called from every
@@ -575,9 +571,7 @@ flushStaleNoticeProse _ =
     None => ()
     Some msg =>
       pendingStaleNotice := None
-      if !earlyNoteRegistered then
-        earlyNoteRegistered := False
-        setAbortReport "" ""
+      setAbortReport "" ""
       ePutStrLn msg
   let notices = !pendingPreludeNotices
   pendingPreludeNotices := []
@@ -4810,13 +4804,11 @@ runMcpServerFromEnv _ =
 (DFunDef false "envelopeOnStderrInvocation" ((PCons (PLit (LString "run")) (PVar "rest"))) (EApp (EApp (EVar "runFlagGiven") (ELit (LString "--json"))) (EVar "rest")))
 (DFunDef false "envelopeOnStderrInvocation" ((PCons (PLit (LString "test")) (PVar "rest"))) (EMatch (EApp (EApp (EVar "parseArgs") (EVar "testArgSpec")) (EVar "rest")) (arm (PCon "Ok" (PVar "a")) () (EApp (EApp (EVar "flag") (ELit (LString "--json"))) (EVar "a"))) (arm (PCon "Err" PWild) () (EVar "False"))))
 (DFunDef false "envelopeOnStderrInvocation" (PWild) (EVar "False"))
-(DTypeSig false "earlyNoteRegistered" (TyApp (TyCon "Ref") (TyCon "Bool")))
-(DFunDef false "earlyNoteRegistered" () (EApp (EVar "Ref") (EVar "False")))
 (DTypeSig false "registerEarlyNotice" (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyCon "String") (TyEffect ("IO") None (TyCon "Unit")))))
-(DFunDef false "registerEarlyNotice" ((PCons (PLit (LString "test")) PWild) (PVar "msg")) (EBlock (DoExpr (EApp (EApp (EVar "setRef") (EVar "earlyNoteRegistered")) (EVar "True"))) (DoExpr (EApp (EApp (EVar "setAbortReport") (EVar "msg")) (ELit (LString ""))))))
+(DFunDef false "registerEarlyNotice" ((PCons (PLit (LString "test")) PWild) (PVar "msg")) (EApp (EApp (EVar "setAbortReport") (EVar "msg")) (ELit (LString ""))))
 (DFunDef false "registerEarlyNotice" (PWild PWild) (ELit LUnit))
 (DTypeSig false "flushStaleNoticeProse" (TyFun (TyCon "Unit") (TyEffect ("IO") None (TyCon "Unit"))))
-(DFunDef false "flushStaleNoticeProse" (PWild) (EBlock (DoLet false false PWild (EMatch (EUnOp "!" (EVar "pendingStaleNotice")) (arm (PCon "None") () (ELit LUnit)) (arm (PCon "Some" (PVar "msg")) () (EBlock (DoExpr (EApp (EApp (EVar "setRef") (EVar "pendingStaleNotice")) (EVar "None"))) (DoExpr (EIf (EUnOp "!" (EVar "earlyNoteRegistered")) (EBlock (DoExpr (EApp (EApp (EVar "setRef") (EVar "earlyNoteRegistered")) (EVar "False"))) (DoExpr (EApp (EApp (EVar "setAbortReport") (ELit (LString ""))) (ELit (LString ""))))) (ELit LUnit))) (DoExpr (EApp (EVar "ePutStrLn") (EVar "msg"))))))) (DoLet false false (PVar "notices") (EUnOp "!" (EVar "pendingPreludeNotices"))) (DoExpr (EApp (EApp (EVar "setRef") (EVar "pendingPreludeNotices")) (EListLit))) (DoExpr (EApp (EVar "emitWarningLines") (EApp (EApp (EVar "map") (EVar "snd")) (EVar "notices"))))))
+(DFunDef false "flushStaleNoticeProse" (PWild) (EBlock (DoLet false false PWild (EMatch (EUnOp "!" (EVar "pendingStaleNotice")) (arm (PCon "None") () (ELit LUnit)) (arm (PCon "Some" (PVar "msg")) () (EBlock (DoExpr (EApp (EApp (EVar "setRef") (EVar "pendingStaleNotice")) (EVar "None"))) (DoExpr (EApp (EApp (EVar "setAbortReport") (ELit (LString ""))) (ELit (LString "")))) (DoExpr (EApp (EVar "ePutStrLn") (EVar "msg"))))))) (DoLet false false (PVar "notices") (EUnOp "!" (EVar "pendingPreludeNotices"))) (DoExpr (EApp (EApp (EVar "setRef") (EVar "pendingPreludeNotices")) (EListLit))) (DoExpr (EApp (EVar "emitWarningLines") (EApp (EApp (EVar "map") (EVar "snd")) (EVar "notices"))))))
 (DTypeSig false "dieMsg" (TyFun (TyCon "String") (TyEffect ("IO") None (TyCon "Unit"))))
 (DFunDef false "dieMsg" ((PVar "msg")) (EBlock (DoExpr (EApp (EVar "emitAbortTotal") (ELit LUnit))) (DoExpr (EApp (EVar "ePutStrLn") (EVar "msg"))) (DoExpr (EApp (EVar "stageExit") (ELit (LInt 1))))))
 (DTypeSig false "testDie" (TyFun (TyCon "String") (TyEffect ("IO") None (TyCon "Unit"))))
@@ -5374,13 +5366,11 @@ runMcpServerFromEnv _ =
 (DFunDef false "envelopeOnStderrInvocation" ((PCons (PLit (LString "run")) (PVar "rest"))) (EApp (EApp (EVar "runFlagGiven") (ELit (LString "--json"))) (EVar "rest")))
 (DFunDef false "envelopeOnStderrInvocation" ((PCons (PLit (LString "test")) (PVar "rest"))) (EMatch (EApp (EApp (EVar "parseArgs") (EVar "testArgSpec")) (EVar "rest")) (arm (PCon "Ok" (PVar "a")) () (EApp (EApp (EVar "flag") (ELit (LString "--json"))) (EVar "a"))) (arm (PCon "Err" PWild) () (EVar "False"))))
 (DFunDef false "envelopeOnStderrInvocation" (PWild) (EVar "False"))
-(DTypeSig false "earlyNoteRegistered" (TyApp (TyCon "Ref") (TyCon "Bool")))
-(DFunDef false "earlyNoteRegistered" () (EApp (EVar "Ref") (EVar "False")))
 (DTypeSig false "registerEarlyNotice" (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyCon "String") (TyEffect ("IO") None (TyCon "Unit")))))
-(DFunDef false "registerEarlyNotice" ((PCons (PLit (LString "test")) PWild) (PVar "msg")) (EBlock (DoExpr (EApp (EApp (EVar "setRef") (EVar "earlyNoteRegistered")) (EVar "True"))) (DoExpr (EApp (EApp (EVar "setAbortReport") (EVar "msg")) (ELit (LString ""))))))
+(DFunDef false "registerEarlyNotice" ((PCons (PLit (LString "test")) PWild) (PVar "msg")) (EApp (EApp (EVar "setAbortReport") (EVar "msg")) (ELit (LString ""))))
 (DFunDef false "registerEarlyNotice" (PWild PWild) (ELit LUnit))
 (DTypeSig false "flushStaleNoticeProse" (TyFun (TyCon "Unit") (TyEffect ("IO") None (TyCon "Unit"))))
-(DFunDef false "flushStaleNoticeProse" (PWild) (EBlock (DoLet false false PWild (EMatch (EUnOp "!" (EVar "pendingStaleNotice")) (arm (PCon "None") () (ELit LUnit)) (arm (PCon "Some" (PVar "msg")) () (EBlock (DoExpr (EApp (EApp (EVar "setRef") (EVar "pendingStaleNotice")) (EVar "None"))) (DoExpr (EIf (EUnOp "!" (EVar "earlyNoteRegistered")) (EBlock (DoExpr (EApp (EApp (EVar "setRef") (EVar "earlyNoteRegistered")) (EVar "False"))) (DoExpr (EApp (EApp (EVar "setAbortReport") (ELit (LString ""))) (ELit (LString ""))))) (ELit LUnit))) (DoExpr (EApp (EVar "ePutStrLn") (EVar "msg"))))))) (DoLet false false (PVar "notices") (EUnOp "!" (EVar "pendingPreludeNotices"))) (DoExpr (EApp (EApp (EVar "setRef") (EVar "pendingPreludeNotices")) (EListLit))) (DoExpr (EApp (EVar "emitWarningLines") (EApp (EApp (EMethodRef "map") (EVar "snd")) (EVar "notices"))))))
+(DFunDef false "flushStaleNoticeProse" (PWild) (EBlock (DoLet false false PWild (EMatch (EUnOp "!" (EVar "pendingStaleNotice")) (arm (PCon "None") () (ELit LUnit)) (arm (PCon "Some" (PVar "msg")) () (EBlock (DoExpr (EApp (EApp (EVar "setRef") (EVar "pendingStaleNotice")) (EVar "None"))) (DoExpr (EApp (EApp (EVar "setAbortReport") (ELit (LString ""))) (ELit (LString "")))) (DoExpr (EApp (EVar "ePutStrLn") (EVar "msg"))))))) (DoLet false false (PVar "notices") (EUnOp "!" (EVar "pendingPreludeNotices"))) (DoExpr (EApp (EApp (EVar "setRef") (EVar "pendingPreludeNotices")) (EListLit))) (DoExpr (EApp (EVar "emitWarningLines") (EApp (EApp (EMethodRef "map") (EVar "snd")) (EVar "notices"))))))
 (DTypeSig false "dieMsg" (TyFun (TyCon "String") (TyEffect ("IO") None (TyCon "Unit"))))
 (DFunDef false "dieMsg" ((PVar "msg")) (EBlock (DoExpr (EApp (EVar "emitAbortTotal") (ELit LUnit))) (DoExpr (EApp (EVar "ePutStrLn") (EVar "msg"))) (DoExpr (EApp (EVar "stageExit") (ELit (LInt 1))))))
 (DTypeSig false "testDie" (TyFun (TyCon "String") (TyEffect ("IO") None (TyCon "Unit"))))

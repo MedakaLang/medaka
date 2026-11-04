@@ -550,14 +550,10 @@ envelopeOnStderrInvocation _ = False
 -- a stack overflow in the front end, a native-only run, which never arms) still
 -- appends it after the abort line.  `armAbortReport` replaces the slots later,
 -- so the envelope carries `staleBinary` and the prose is not printed twice.
--- `earlyNoteRegistered` lets the prose flush clear exactly the slot this wrote.
-earlyNoteRegistered : Ref Bool
-earlyNoteRegistered = Ref False
-
+-- Only `test` ever stores a report, so the prose flush may clear the slot
+-- whenever it prints a notice.
 registerEarlyNotice : List String -> String -> <IO> Unit
-registerEarlyNotice ("test" :: _) msg =
-  earlyNoteRegistered := True
-  setAbortReport msg ""
+registerEarlyNotice ("test" :: _) msg = setAbortReport msg ""
 registerEarlyNotice _ _ = ()
 
 -- Print the deferred staleness notices as prose and clear them.  Called from every
@@ -571,9 +567,7 @@ flushStaleNoticeProse _ =
     None => ()
     Some msg =>
       pendingStaleNotice := None
-      if !earlyNoteRegistered then
-        earlyNoteRegistered := False
-        setAbortReport "" ""
+      setAbortReport "" ""
       ePutStrLn msg
   let notices = !pendingPreludeNotices
   pendingPreludeNotices := []

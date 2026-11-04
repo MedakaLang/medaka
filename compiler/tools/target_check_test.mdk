@@ -54,13 +54,16 @@ verdictOf dir profile row reason =
   let file = "\{dir}/p.mdk"
   match writeFile file "main = let x = \{row} in ()\n"
     Err e => fail "could not write \{file}: \{e}"
-    Ok _ => match boundedVerb medakaBin ["check", "--target", profile, file]
-      Err e => fail "could not spawn: \{e}"
-      Ok (code, out, err) =>
-        if code == 1 then
-          expectTextContainsAll ["`\{row}`", reason] "\{out}\{err}"
-        else
-          fail "expected exit 1, got \{intToString code}: \{out}\{err}"
+    Ok _ =>
+      match (boundedVerb medakaBin [
+        "check", "--target", profile, "--allow-internal", file
+      ])
+        Err e => fail "could not spawn: \{e}"
+        Ok (code, out, err) =>
+          if code == 1 then
+            expectTextContainsAll ["`\{row}`", reason] "\{out}\{err}"
+          else
+            fail "expected exit 1, got \{intToString code}: \{out}\{err}"
 
 test "target_check: every NotProvided row of every profile's column is refused with its reason" = withScratchDir
   (dir =>
