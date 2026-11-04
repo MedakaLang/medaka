@@ -1,5 +1,5 @@
 # META
-source_lines=224
+source_lines=220
 stages=DESUGAR,MARK
 # SOURCE
 -- lint rule rule-accumulator-append: `acc ++ e` grown across iterations of a loop (a self-call argument, `r := !r ++ e`, a fold lambda). Cons then `reverse`, collect then join once, or use a builder.
@@ -43,7 +43,7 @@ import tools.lint_recursion.{
 }
 import tools.lint_scope.{FileScopes}
 import tools.lint_shared.{
-  appSpineOf, firstLoc, ruleNameAccumulatorAppend, unwrapLoc
+  appArgsOf, firstLoc, ruleNameAccumulatorAppend, unwrapLoc
 }
 
 export
@@ -117,7 +117,7 @@ ownerFindings scopes fallback (owner, body) = match selfCalls scopes owner body
 
 callFinding : Option Loc -> SelfCall -> List Finding
 callFinding fallback (SelfCall loc call roles) =
-  match appendedArg roles (argsOf call)
+  match appendedArg roles (appArgsOf call)
     Some a => [
       report
         (orElseLoc (firstLoc a) (orElseLoc loc fallback))
@@ -132,10 +132,6 @@ appendedArg roles args = go 0 roles
     go _ [] = None
     go i ((AppendedTo _) :: _) = get i args
     go i (_ :: rest) = go (i + 1) rest
-
-argsOf : Expr -> List Expr
-argsOf e = match appSpineOf e
-  (_, args) => args
 
 -- What the appended operand is, when the source says so.
 data Operand = OpList | OpString | OpUnknown
@@ -236,7 +232,7 @@ foldMessage =
 (DUse false (UseGroup ("tools" "lint_core") ((mem "Category" true) (mem "Ctx" true) (mem "FileFacts" false) (mem "Finding" true) (mem "Fixability" true) (mem "Need" true) (mem "Ratchet" true) (mem "Rule" false) (mem "RuleMeta" true) (mem "Scope" true) (mem "StdlibIndex" false) (mem "Visitor" true) (mem "factScopes" false) (mem "mkVisitorRule" false))))
 (DUse false (UseGroup ("tools" "lint_recursion") ((mem "ArgRole" true) (mem "FoldVerdict" true) (mem "Owner" true) (mem "SelfCall" true) (mem "foldVerdict" false) (mem "letOwners" false) (mem "selfCalls" false))))
 (DUse false (UseGroup ("tools" "lint_scope") ((mem "FileScopes" false))))
-(DUse false (UseGroup ("tools" "lint_shared") ((mem "appSpineOf" false) (mem "firstLoc" false) (mem "ruleNameAccumulatorAppend" false) (mem "unwrapLoc" false))))
+(DUse false (UseGroup ("tools" "lint_shared") ((mem "appArgsOf" false) (mem "firstLoc" false) (mem "ruleNameAccumulatorAppend" false) (mem "unwrapLoc" false))))
 (DTypeSig true "rule" (TyCon "Rule"))
 (DFunDef false "rule" () (EApp (EApp (EApp (EVar "mkVisitorRule") (ERecordCreate "RuleMeta" ((fa "name" (EVar "ruleNameAccumulatorAppend")) (fa "summary" (ELit (LString "`acc ++ e` grown across a loop: each step copies the whole accumulator. Cons then `reverse`, collect then join once, or use a builder"))) (fa "doc" (ELit (LString "Appending to the end of an accumulator copies the accumulator, so a loop that does it once per step does work quadratic in the length of the result. The rule reports three shapes: a self-call that passes `acc ++ e` for one of its own parameters, `r := !r ++ e` on a `Ref` inside a self-recursive function, and a fold lambda `acc x => acc ++ ...`. The same holds for a `List`, a `String` and a `Bytes`. `e ++ acc` is not reported: for a `List` it costs only the length of `e`, while a `String`, `Bytes` or `Array` copies both operands. A partial application and a call to a different function (mutual recursion) are not self-calls.\n\nCons the new element and `reverse` once at the end, collect the pieces and join them once (`concat`, `joinWith`), or use a builder. A loop whose bound is small and fixed can carry a `-- lint-disable-next-line rule-accumulator-append` with the bound as its reason.\n\nBefore:\n  go acc (x :: xs) = go (acc ++ [f x]) xs\nAfter:\n  go acc (x :: xs) = go (f x :: acc) xs  -- and `reverse acc` at the end"))) (fa "category" (EVar "Perf")) (fa "scope" (EVar "Universal")) (fa "ratchet" (EVar "Gated")) (fa "defaultSeverity" (EVar "SevWarning")) (fa "fixability" (EVar "NotFixable")) (fa "needs" (EListLit (EVar "NeedsScopes")))))) (EVar "ruleAccumulatorAppend")) (EVar "None")))
 (DTypeSig false "ruleAccumulatorAppend" (TyFun (TyCon "StdlibIndex") (TyFun (TyCon "String") (TyFun (TyCon "FileFacts") (TyFun (TyCon "Positions") (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyApp (TyCon "List") (TyCon "Visitor"))))))))
@@ -257,11 +253,9 @@ foldMessage =
 (DTypeSig false "ownerFindings" (TyFun (TyCon "FileScopes") (TyFun (TyApp (TyCon "Option") (TyCon "Loc")) (TyFun (TyTuple (TyCon "Owner") (TyCon "Expr")) (TyApp (TyCon "List") (TyCon "Finding"))))))
 (DFunDef false "ownerFindings" ((PVar "scopes") (PVar "fallback") (PTuple (PVar "owner") (PVar "body"))) (EMatch (EApp (EApp (EApp (EVar "selfCalls") (EVar "scopes")) (EVar "owner")) (EVar "body")) (arm (PList) () (EListLit)) (arm (PVar "calls") () (EBinOp "++" (EApp (EApp (EVar "flatMap") (EApp (EVar "callFinding") (EVar "fallback"))) (EVar "calls")) (EApp (EApp (EVar "map") (EApp (EVar "refFinding") (EVar "fallback"))) (EApp (EApp (EVar "refAppends") (EVar "fallback")) (EVar "body")))))))
 (DTypeSig false "callFinding" (TyFun (TyApp (TyCon "Option") (TyCon "Loc")) (TyFun (TyCon "SelfCall") (TyApp (TyCon "List") (TyCon "Finding")))))
-(DFunDef false "callFinding" ((PVar "fallback") (PCon "SelfCall" (PVar "loc") (PVar "call") (PVar "roles"))) (EMatch (EApp (EApp (EVar "appendedArg") (EVar "roles")) (EApp (EVar "argsOf") (EVar "call"))) (arm (PCon "Some" (PVar "a")) () (EListLit (EApp (EApp (EVar "report") (EApp (EApp (EVar "orElseLoc") (EApp (EVar "firstLoc") (EVar "a"))) (EApp (EApp (EVar "orElseLoc") (EVar "loc")) (EVar "fallback")))) (EApp (EVar "callMessage") (EApp (EVar "kindOf") (EVar "a")))))) (arm (PCon "None") () (EListLit))))
+(DFunDef false "callFinding" ((PVar "fallback") (PCon "SelfCall" (PVar "loc") (PVar "call") (PVar "roles"))) (EMatch (EApp (EApp (EVar "appendedArg") (EVar "roles")) (EApp (EVar "appArgsOf") (EVar "call"))) (arm (PCon "Some" (PVar "a")) () (EListLit (EApp (EApp (EVar "report") (EApp (EApp (EVar "orElseLoc") (EApp (EVar "firstLoc") (EVar "a"))) (EApp (EApp (EVar "orElseLoc") (EVar "loc")) (EVar "fallback")))) (EApp (EVar "callMessage") (EApp (EVar "kindOf") (EVar "a")))))) (arm (PCon "None") () (EListLit))))
 (DTypeSig false "appendedArg" (TyFun (TyApp (TyCon "List") (TyCon "ArgRole")) (TyFun (TyApp (TyCon "List") (TyCon "Expr")) (TyApp (TyCon "Option") (TyCon "Expr")))))
 (DFunDef false "appendedArg" ((PVar "roles") (PVar "args")) (ELetGroup ((lgb "go" (clause (PWild (PList)) (EVar "None")) (clause ((PVar "i") (PCons (PCon "AppendedTo" PWild) PWild)) (EApp (EApp (EVar "get") (EVar "i")) (EVar "args"))) (clause ((PVar "i") (PCons PWild (PVar "rest"))) (EApp (EApp (EVar "go") (EBinOp "+" (EVar "i") (ELit (LInt 1)))) (EVar "rest"))))) (EApp (EApp (EVar "go") (ELit (LInt 0))) (EVar "roles"))))
-(DTypeSig false "argsOf" (TyFun (TyCon "Expr") (TyApp (TyCon "List") (TyCon "Expr"))))
-(DFunDef false "argsOf" ((PVar "e")) (EMatch (EApp (EVar "appSpineOf") (EVar "e")) (arm (PTuple PWild (PVar "args")) () (EVar "args"))))
 (DData Private "Operand" () ((variant "OpList" (ConPos)) (variant "OpString" (ConPos)) (variant "OpUnknown" (ConPos))) ())
 (DTypeSig false "kindOf" (TyFun (TyCon "Expr") (TyCon "Operand")))
 (DFunDef false "kindOf" ((PVar "a")) (EMatch (EApp (EVar "unwrapLoc") (EVar "a")) (arm (PCon "EBinOp" (PLit (LString "++")) PWild (PVar "r") PWild) () (EApp (EVar "kindOfRight") (EVar "r"))) (arm PWild () (EVar "OpUnknown"))))
@@ -304,7 +298,7 @@ foldMessage =
 (DUse false (UseGroup ("tools" "lint_core") ((mem "Category" true) (mem "Ctx" true) (mem "FileFacts" false) (mem "Finding" true) (mem "Fixability" true) (mem "Need" true) (mem "Ratchet" true) (mem "Rule" false) (mem "RuleMeta" true) (mem "Scope" true) (mem "StdlibIndex" false) (mem "Visitor" true) (mem "factScopes" false) (mem "mkVisitorRule" false))))
 (DUse false (UseGroup ("tools" "lint_recursion") ((mem "ArgRole" true) (mem "FoldVerdict" true) (mem "Owner" true) (mem "SelfCall" true) (mem "foldVerdict" false) (mem "letOwners" false) (mem "selfCalls" false))))
 (DUse false (UseGroup ("tools" "lint_scope") ((mem "FileScopes" false))))
-(DUse false (UseGroup ("tools" "lint_shared") ((mem "appSpineOf" false) (mem "firstLoc" false) (mem "ruleNameAccumulatorAppend" false) (mem "unwrapLoc" false))))
+(DUse false (UseGroup ("tools" "lint_shared") ((mem "appArgsOf" false) (mem "firstLoc" false) (mem "ruleNameAccumulatorAppend" false) (mem "unwrapLoc" false))))
 (DTypeSig true "rule" (TyCon "Rule"))
 (DFunDef false "rule" () (EApp (EApp (EApp (EVar "mkVisitorRule") (ERecordCreate "RuleMeta" ((fa "name" (EVar "ruleNameAccumulatorAppend")) (fa "summary" (ELit (LString "`acc ++ e` grown across a loop: each step copies the whole accumulator. Cons then `reverse`, collect then join once, or use a builder"))) (fa "doc" (ELit (LString "Appending to the end of an accumulator copies the accumulator, so a loop that does it once per step does work quadratic in the length of the result. The rule reports three shapes: a self-call that passes `acc ++ e` for one of its own parameters, `r := !r ++ e` on a `Ref` inside a self-recursive function, and a fold lambda `acc x => acc ++ ...`. The same holds for a `List`, a `String` and a `Bytes`. `e ++ acc` is not reported: for a `List` it costs only the length of `e`, while a `String`, `Bytes` or `Array` copies both operands. A partial application and a call to a different function (mutual recursion) are not self-calls.\n\nCons the new element and `reverse` once at the end, collect the pieces and join them once (`concat`, `joinWith`), or use a builder. A loop whose bound is small and fixed can carry a `-- lint-disable-next-line rule-accumulator-append` with the bound as its reason.\n\nBefore:\n  go acc (x :: xs) = go (acc ++ [f x]) xs\nAfter:\n  go acc (x :: xs) = go (f x :: acc) xs  -- and `reverse acc` at the end"))) (fa "category" (EVar "Perf")) (fa "scope" (EVar "Universal")) (fa "ratchet" (EVar "Gated")) (fa "defaultSeverity" (EVar "SevWarning")) (fa "fixability" (EVar "NotFixable")) (fa "needs" (EListLit (EVar "NeedsScopes")))))) (EVar "ruleAccumulatorAppend")) (EVar "None")))
 (DTypeSig false "ruleAccumulatorAppend" (TyFun (TyCon "StdlibIndex") (TyFun (TyCon "String") (TyFun (TyCon "FileFacts") (TyFun (TyCon "Positions") (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyApp (TyCon "List") (TyCon "Visitor"))))))))
@@ -325,11 +319,9 @@ foldMessage =
 (DTypeSig false "ownerFindings" (TyFun (TyCon "FileScopes") (TyFun (TyApp (TyCon "Option") (TyCon "Loc")) (TyFun (TyTuple (TyCon "Owner") (TyCon "Expr")) (TyApp (TyCon "List") (TyCon "Finding"))))))
 (DFunDef false "ownerFindings" ((PVar "scopes") (PVar "fallback") (PTuple (PVar "owner") (PVar "body"))) (EMatch (EApp (EApp (EApp (EVar "selfCalls") (EVar "scopes")) (EVar "owner")) (EVar "body")) (arm (PList) () (EListLit)) (arm (PVar "calls") () (EBinOp "++" (EApp (EApp (EDictApp "flatMap") (EApp (EVar "callFinding") (EVar "fallback"))) (EVar "calls")) (EApp (EApp (EMethodRef "map") (EApp (EVar "refFinding") (EVar "fallback"))) (EApp (EApp (EVar "refAppends") (EVar "fallback")) (EVar "body")))))))
 (DTypeSig false "callFinding" (TyFun (TyApp (TyCon "Option") (TyCon "Loc")) (TyFun (TyCon "SelfCall") (TyApp (TyCon "List") (TyCon "Finding")))))
-(DFunDef false "callFinding" ((PVar "fallback") (PCon "SelfCall" (PVar "loc") (PVar "call") (PVar "roles"))) (EMatch (EApp (EApp (EVar "appendedArg") (EVar "roles")) (EApp (EVar "argsOf") (EVar "call"))) (arm (PCon "Some" (PVar "a")) () (EListLit (EApp (EApp (EVar "report") (EApp (EApp (EVar "orElseLoc") (EApp (EVar "firstLoc") (EVar "a"))) (EApp (EApp (EVar "orElseLoc") (EVar "loc")) (EVar "fallback")))) (EApp (EVar "callMessage") (EApp (EVar "kindOf") (EVar "a")))))) (arm (PCon "None") () (EListLit))))
+(DFunDef false "callFinding" ((PVar "fallback") (PCon "SelfCall" (PVar "loc") (PVar "call") (PVar "roles"))) (EMatch (EApp (EApp (EVar "appendedArg") (EVar "roles")) (EApp (EVar "appArgsOf") (EVar "call"))) (arm (PCon "Some" (PVar "a")) () (EListLit (EApp (EApp (EVar "report") (EApp (EApp (EVar "orElseLoc") (EApp (EVar "firstLoc") (EVar "a"))) (EApp (EApp (EVar "orElseLoc") (EVar "loc")) (EVar "fallback")))) (EApp (EVar "callMessage") (EApp (EVar "kindOf") (EVar "a")))))) (arm (PCon "None") () (EListLit))))
 (DTypeSig false "appendedArg" (TyFun (TyApp (TyCon "List") (TyCon "ArgRole")) (TyFun (TyApp (TyCon "List") (TyCon "Expr")) (TyApp (TyCon "Option") (TyCon "Expr")))))
 (DFunDef false "appendedArg" ((PVar "roles") (PVar "args")) (ELetGroup ((lgb "go" (clause (PWild (PList)) (EVar "None")) (clause ((PVar "i") (PCons (PCon "AppendedTo" PWild) PWild)) (EApp (EApp (EVar "get") (EVar "i")) (EVar "args"))) (clause ((PVar "i") (PCons PWild (PVar "rest"))) (EApp (EApp (EVar "go") (EBinOp "+" (EVar "i") (ELit (LInt 1)))) (EVar "rest"))))) (EApp (EApp (EVar "go") (ELit (LInt 0))) (EVar "roles"))))
-(DTypeSig false "argsOf" (TyFun (TyCon "Expr") (TyApp (TyCon "List") (TyCon "Expr"))))
-(DFunDef false "argsOf" ((PVar "e")) (EMatch (EApp (EVar "appSpineOf") (EVar "e")) (arm (PTuple PWild (PVar "args")) () (EVar "args"))))
 (DData Private "Operand" () ((variant "OpList" (ConPos)) (variant "OpString" (ConPos)) (variant "OpUnknown" (ConPos))) ())
 (DTypeSig false "kindOf" (TyFun (TyCon "Expr") (TyCon "Operand")))
 (DFunDef false "kindOf" ((PVar "a")) (EMatch (EApp (EVar "unwrapLoc") (EVar "a")) (arm (PCon "EBinOp" (PLit (LString "++")) PWild (PVar "r") PWild) () (EApp (EVar "kindOfRight") (EVar "r"))) (arm PWild () (EVar "OpUnknown"))))

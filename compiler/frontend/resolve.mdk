@@ -485,7 +485,7 @@ internalExterns = [
   "intShiftRight", "u64Truncate", "u64TruncateToInt", "u64BitAnd", "u64BitOr",
   "u64BitXor", "u64ShiftLeft", "u64ShiftRight", "u64MulHigh", "i32Truncate",
   "i32ToInt", "i64FromBits", "i64ToBits", "indexErrorAtSite", "panicAt",
-  "stringCodepointAtByte", "stringSliceBytes"
+  "setAbortReport", "stringCodepointAtByte", "stringSliceBytes"
 ]
 
 -- Whether a module is exempt from the internal-extern guard: internal access is
@@ -2594,6 +2594,8 @@ unionStr acc xs = unionStrGo acc [] xs
 unionStrGo : List String -> List String -> List String -> List String
 unionStrGo acc fresh [] = acc ++ reverseL fresh
 unionStrGo acc fresh (x :: xs)
+  -- Bound: `fresh` holds names from one declaration's binders (see `contigGo`).
+  -- lint-disable-next-line rule-list-as-set
   | contains x acc || contains x fresh = unionStrGo acc fresh xs
   | otherwise = unionStrGo acc (x :: fresh) xs
 

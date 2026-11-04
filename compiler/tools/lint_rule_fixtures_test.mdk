@@ -117,6 +117,7 @@ fixtureNames = [
   "if-max-min",
   "lambda-section",
   "let-underscore-unit",
+  "list-as-set",
   "match-on-param",
   "match-to-map",
   "missing-signature",
@@ -390,6 +391,21 @@ test "rule-if-max-min fixture" = fixtureHolds "if-max-min"
 test "rule-lambda-section fixture" = fixtureHolds "lambda-section"
 
 test "rule-let-underscore-unit fixture" = fixtureHolds "let-underscore-unit"
+
+test "rule-list-as-set fixture" = fixtureHolds "list-as-set"
+
+-- A `*_test.mdk` file's loops run over fixed test data.
+test "rule-list-as-set skips a test file" =
+  match readOr "\{fixtureDir}/list-as-set.mdk"
+    Err e => fail e
+    Ok src =>
+      match (lintLinesAt
+        emptyStdlibIndex
+        "fixture_test.mdk"
+        "rule-list-as-set"
+        src)
+        Err e => fail e
+        Ok flagged => expectEqual [] flagged
 
 test "rule-match-on-param fixture" = fixtureHolds "match-on-param"
 

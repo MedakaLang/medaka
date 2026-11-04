@@ -488,6 +488,44 @@ nestedImport tmp =
       else
         fail "nested import printed [\{out}], want 7"
 
+-- setAbortReport is the guest-side abort-note hook: `run` ignores it and a built
+-- binary honours it, so a user program must not reach it without the flag.
+abortReportSrc : String
+abortReportSrc = "main = setAbortReport \"\" \"\"\n"
+
+abortReportCheck : List String ->
+  String ->
+  <Exec, IO, FileRead, FileWrite> Result String (Int, String)
+abortReportCheck flags tmp = match writeFile "\{tmp}/abort.mdk" abortReportSrc
+  Err e => Err "could not write abort.mdk: \{e}"
+  Ok _ => spawn (["check"] ++ flags ++ ["\{tmp}/abort.mdk"])
+
+abortReportRejected : String -> <Exec, IO, FileRead, FileWrite> Expectation
+abortReportRejected tmp = match abortReportCheck [] tmp
+  Err e => fail e
+  Ok (code, out) =>
+    if code /= 1 then
+      fail "check without flag exited \{intToString code}, want 1: [\{out}]"
+    else
+      expectTextContainsAll ["internal-only primitive", "setAbortReport"] out
+
+abortReportAllowed : String -> <Exec, IO, FileRead, FileWrite> Expectation
+abortReportAllowed tmp = match abortReportCheck ["--allow-internal"] tmp
+  Err e => fail e
+  Ok (code, out) =>
+    if code /= 0 then
+      fail "check --allow-internal exited \{intToString code}: [\{out}]"
+    else if contains "internal-only primitive" out then
+      fail "still flagged with --allow-internal: [\{out}]"
+    else
+      pass
+
+test "internal-extern setAbortReport: rejected without the flag, accepted with it" = withScratchDir
+  (tmp => expectEach [
+    ("check-reject", abortReportRejected tmp),
+    ("check-allow", abortReportAllowed tmp),
+  ])
+
 test "internal-extern 11-12: a manifest alone grants nothing; the flag works on a project" = withProject
   (tmp => expectEach [
     ("11 project-reject", projectReject tmp),

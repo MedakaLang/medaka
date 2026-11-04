@@ -1,5 +1,5 @@
 # META
-source_lines=332
+source_lines=340
 stages=DESUGAR,MARK
 # SOURCE
 -- Scoped effect collection. A capture observes performed rows without solving
@@ -116,9 +116,17 @@ alphaSyntax top env lets (e@(EBinOp op a b _))
       else
         concatAuthority top env lets a b
 alphaSyntax _ _ _ (EBinOp _ _ _ _) = None
+-- Bound: `lets` holds the `let` bindings enclosing one expression, one per source `let` on the path to it, so its length is that expression's `let` nesting depth.
+-- lint-disable-next-line rule-list-as-set
 alphaSyntax top env lets (EVar x) = varAuthority top env lets x
+-- Bound: `lets` holds the `let` bindings enclosing one expression, one per source `let` on the path to it, so its length is that expression's `let` nesting depth.
+-- lint-disable-next-line rule-list-as-set
 alphaSyntax top env lets (EVarId x _) = varAuthority top env lets x
+-- Bound: `lets` holds the `let` bindings enclosing one expression, one per source `let` on the path to it, so its length is that expression's `let` nesting depth.
+-- lint-disable-next-line rule-list-as-set
 alphaSyntax top env lets (EVarAt x _) = varAuthority top env lets x
+-- Bound: `lets` holds the `let` bindings enclosing one expression, one per source `let` on the path to it, so its length is that expression's `let` nesting depth.
+-- lint-disable-next-line rule-list-as-set
 alphaSyntax top env lets (EDictAt x _) = varAuthority top env lets x
 alphaSyntax top env lets (ELet _ _ (PVar x _ _) e1 e2) =
   alphaSyntax top env ((x, ALet e1) :: lets) e2

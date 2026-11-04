@@ -2446,12 +2446,12 @@ clauseDef : String -> Loc -> FunClause -> (String, (List Pat, Expr, Loc))
 clauseDef n site clause = (n, funClauseToClause site clause)
 
 funGroupNames : List (String, (List Pat, Expr, Loc)) ->
-  List String ->
+  OrdMap Unit ->
   List String
 funGroupNames [] _ = []
 funGroupNames ((n, _) :: rest) seen
-  | contains n seen = funGroupNames rest seen
-  | otherwise = n :: funGroupNames rest (n :: seen)
+  | omHasKey n seen = funGroupNames rest seen
+  | otherwise = n :: funGroupNames rest (omInsert n () seen)
 
 clausesForName : String ->
   List (String, (List Pat, Expr, Loc)) ->
@@ -3143,13 +3143,6 @@ export
 pendingRunDiags : Ref (List (String, String, List Diag))
 pendingRunDiags = Ref []
 
--- An opaque extra line `runtimePanic` appends to its non-JSON abort text (the
--- `medaka test` driver sets the rerun-seed line here). Read only at the panic
--- chokepoint and set only by that driver, so `run` and `repl` never see one.
-export
-abortNote : Ref (Option String)
-abortNote = Ref None
-
 -- Update currentEvalLoc from an ELoc span, but IGNORE the placeholder span the
 -- non-located `parse` produces (every token collapses to the zero-width
 -- `Loc "" 1 0 1 0`).  The prelude (runtime.mdk/core.mdk) is parsed that way, so
@@ -3213,11 +3206,8 @@ runtimePanic code msg = match !currentEvalLoc
       panic
         "\{fmtSentinel}\{cjAllToJsonWith (runEnvelopeFields ()) (!pendingRunDiags ++ [(ff, "", [diag])])}"
     else
-      let line =
-        "\{ff}:\{intToString sl}:\{intToString sc}: runtime error [\{code}]: \{msg}"
-      match !abortNote
-        Some note => panic "\{fmtSentinel}\{line}\n\{note}"
-        None => panic "\{fmtSentinel}\{line}"
+      panic
+        "\{fmtSentinel}\{ff}:\{intToString sl}:\{intToString sc}: runtime error [\{code}]: \{msg}"
 
 -- 0x01 marker (see runtimePanic / mdk_panic): a preformatted runtime diagnostic
 -- the abort primitive must print verbatim, never re-banner.
@@ -3249,6 +3239,12 @@ pPutStrLn _ = panic "putStrLn: not a String"
 pStashRunStdout : Value e -> <e> Value e
 pStashRunStdout (VString s) = let _ = stashRunStdout s in VUnit
 pStashRunStdout _ = panic "stashRunStdout: not a String"
+
+-- Inert, unlike pStashRunStdout: a guest program under the interpreter must
+-- not rewrite the host's abort report, so this never calls the C function.
+pSetAbortReport : Value e -> Value e -> <e> Value e
+pSetAbortReport (VString _) (VString _) = VUnit
+pSetAbortReport _ _ = panic "setAbortReport: not a String"
 
 pEnableRunStdoutFlush : Value e -> <e> Value e
 pEnableRunStdoutFlush _ = let _ = enableRunStdoutFlush () in VUnit
@@ -3575,6 +3571,7 @@ externBindings _ = [
   ("ePutStr", prim1M pDiscard),
   ("ePutStrLn", prim1M pDiscard),
   ("stashRunStdout", prim1M pStashRunStdout),
+  ("setAbortReport", prim2M pSetAbortReport),
   ("enableRunStdoutFlush", prim1M pEnableRunStdoutFlush),
   ("panic", prim1 pPanic),
   ("indexError", prim1 (s => runtimePanic EIndexOob (unString s))),
@@ -4543,11 +4540,12 @@ buildModInfos facts globalFrame runtimeFrame coreExports sibling fulls exportsMa
       let modCtors = collectCtors decls
       let localCells =
         map (n => (n, Ref VUnit)) (map fst grps ++ map fst modCtors)
-      let imports =
-        importFrameOf
-          coreExports
-          (importsMapFor sibling mid fullsSoFar exportsSoFar)
-          decls
+      -- Bound: [fullsSoFar] holds one entry per subject module of the graph (a module
+      -- that has a test sibling), and the lookup inside importsMapFor runs only for a
+      -- test sibling.
+      -- lint-disable-next-line rule-list-as-set
+      let importsByModule = importsMapFor sibling mid fullsSoFar exportsSoFar
+      let imports = importFrameOf coreExports importsByModule decls
       -- #1542: tag this module's env with its own file, LAST in the frame list so
       -- an ordinary name lookup (which resolves in localCells/imports/globalCells
       -- almost always) never reaches it — only the once-per-call lookup in
@@ -4846,7 +4844,7 @@ concatList (x :: xs) = x ++ concatList xs
 groupsOf : List Decl -> List (String, List (List Pat, Expr, Loc))
 groupsOf decls =
   let defs = funDefs decls
-  map (mkGroup defs) (funGroupNames defs [])
+  map (mkGroup defs) (funGroupNames defs omEmpty)
 
 -- ── a module's export surface, as an import frame consumes it ───────────────
 -- ONE record rather than two slot-parallel lists (#994): expanding a `T(..)`

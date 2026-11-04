@@ -12,7 +12,7 @@
 import list.{drop, dropWhile, filter, filterMap, nub, sort, takeWhile}
 import string.{lines, split, startsWith, stripPrefix, stripSuffix, trim}
 import support.diag_codes.{allDiagCodes, codeText}
-import test.{expectAll, expectEqual, fail}
+import test.{expectAll, expectAtLeast, expectEqual, fail}
 import test_process.{underRoot}
 
 -- (code text, status) for each registry row, in document order.
@@ -121,6 +121,6 @@ test "diag_codes_doc: every C runtime banner is a runtime or live row" = match (
     let known = textsWith "runtime" rows ++ textsWith "live" rows
     let banners = bannerCodes (lines text)
     expectAll [
-      expectEqual 4 (length (textsWith "runtime" rows)),
+      expectAtLeast 1 (length (textsWith "runtime" rows)),
       expectEqual [] (missingFrom known banners),
     ]

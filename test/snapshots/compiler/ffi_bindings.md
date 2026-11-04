@@ -1,5 +1,5 @@
 # META
-source_lines=324
+source_lines=326
 stages=DESUGAR,MARK
 # SOURCE
 -- The declaration rules for a user `extern`'s host bindings and declared row,
@@ -133,6 +133,8 @@ ffiClauseDiags n seen (b :: rest)
   | not (contains b.ebHost ffiHosts) =
     FfiDiag TFfiUnknownHost (Some b.ebLoc) (ffiUnknownHostMsg n b.ebHost)
       :: ffiClauseDiags n seen rest
+  -- Bound: `seen` only takes hosts listed in `ffiHosts`, each at most once.
+  -- lint-disable-next-line rule-list-as-set
   | contains b.ebHost seen =
     FfiDiag TFfiDuplicateHost (Some b.ebLoc) (ffiDuplicateHostMsg n b.ebHost)
       :: ffiClauseDiags n seen rest

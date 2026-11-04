@@ -136,6 +136,8 @@ writeRows dir ((cid, bytes) :: rest) shards = match writeOne dir cid bytes
   Err message => Err message
   Ok () =>
     let shard = shardName cid
+    -- Bound: at most 256 shard directory names exist.
+    -- lint-disable-next-line rule-list-as-set
     if elem shard shards then
       writeRows dir rest shards
     else

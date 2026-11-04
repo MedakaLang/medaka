@@ -1,55 +1,55 @@
 running doctests in stdlib/toml.mdk
-  ok   stdlib/toml.mdk:322: parse "[package]\nname = \"hello\"\nversion = \"0.1.0\""
-  ok   stdlib/toml.mdk:324: parse "[[gate]]\nname = \"a\"\n[[gate]]\nname = \"b\""
-  ok   stdlib/toml.mdk:330: parse "[workspace]\nmembers = [\"pkg-a\", \"pkg-b\"]" == Ok (Toml [("workspace.members", TArray ["pkg-a", "pkg-b"])])
-  ok   stdlib/toml.mdk:332: parse "[limits]\nretries = 3\nverbose = true\noffset = -7" == Ok (Toml [("limits.retries", TInt 3), ("limits.verbose", TBool True), ("limits.offset", TInt (0 - 7))])
-  ok   stdlib/toml.mdk:334: parse "# just a comment\n\nname = \"x\"" == Ok (Toml [("name", TString "x")])
-  ok   stdlib/toml.mdk:336: parse "name = \"hello\" # a comment" == Ok (Toml [("name", TString "hello")])
-  ok   stdlib/toml.mdk:343: parse "bad line no equals"
-  ok   stdlib/toml.mdk:346: parse "[package]\nname = unterminated"
-  ok   stdlib/toml.mdk:351: parse "[server]\naddr = {host = \"h\", port = 1}"
-  ok   stdlib/toml.mdk:357: parse "name = \"abc\" this is garbage"
-  ok   stdlib/toml.mdk:363: parse "name = \"abc\""
-  ok   stdlib/toml.mdk:368: parse "oracles = [\"x\"] junk"
-  ok   stdlib/toml.mdk:374: parse "oracles = [\"x\" \"y\"]"
-  ok   stdlib/toml.mdk:380: parse "oracles = [\"x\", \"y\"]"
-  ok   stdlib/toml.mdk:387: parse "name = \"\"\"x\"\"\""
-  ok   stdlib/toml.mdk:392: parse "foo.bar = \"zzz\""
-  ok   stdlib/toml.mdk:398: parse "[foo]\nbar = \"zzz\""
-  ok   stdlib/toml.mdk:445: parseGetStr "package.name" "[package]\nname = \"medaka\"\nversion = \"1.0.0\"\nentry = \"main.mdk\""
-  ok   stdlib/toml.mdk:447: parseGetStr "missing" "[package]\nname = \"x\""
-  ok   stdlib/toml.mdk:455: parseGetStr "workspace.members" "[workspace]\nmembers = [\"a\"]"
-  ok   stdlib/toml.mdk:457: parseGetStr "server.host" "[package]\nname = \"x\""
-  ok   stdlib/toml.mdk:463: parseGetArr "workspace.members" "[workspace]\nmembers = [\"pkg-a\", \"pkg-b\"]"
-  ok   stdlib/toml.mdk:465: parseGetArr "workspace.members" "[workspace]\nmembers = []"
-  ok   stdlib/toml.mdk:473: parseGetArr "package.name" "[package]\nname = \"x\"\nversion = \"0.1.0\"\nentry = \"main.mdk\""
-  ok   stdlib/toml.mdk:475: parseGetArr "workspace.members" "[package]\nname = \"x\""
-  ok   stdlib/toml.mdk:481: parseGetInt "limits.retries" "[limits]\nretries = 3"
-  ok   stdlib/toml.mdk:483: parseGetInt "package.name" "[package]\nname = \"x\""
-  ok   stdlib/toml.mdk:491: parseGetInt "limits.offset" "[limits]\noffset = -7" == Some (0 - 7)
-  ok   stdlib/toml.mdk:497: parseGetBool "limits.verbose" "[limits]\nverbose = true"
-  ok   stdlib/toml.mdk:499: parseGetBool "limits.retries" "[limits]\nretries = 3"
-  ok   stdlib/toml.mdk:507: parseGetBool "limits.verbose" "[limits]\nverbose = false"
-  ok   stdlib/toml.mdk:534: parseTableCount "gate" "[[gate]]\nname = \"a\"\n[[gate]]\nname = \"b\""
-  ok   stdlib/toml.mdk:536: parseTableCount "gate" "[package]\nname = \"x\""
-  ok   stdlib/toml.mdk:574: parseTableEntryStr "gate" 1 "name" "[[gate]]\nname = \"a\"\n[[gate]]\nname = \"b\""
-  ok   stdlib/toml.mdk:576: parseTableEntryStr "gate" 9 "name" "[[gate]]\nname = \"a\""
-  ok   stdlib/toml.mdk:626: map (map (getString "name")) (tableEntries "gate" (Toml [("gate.0.name", TString "a"), ("gate.1.name", TString "b")]))
-  ok   stdlib/toml.mdk:628: tableEntries "gate" (Toml [("package.name", TString "x")])
-  ok   stdlib/toml.mdk:630: tableEntries "gate" (Toml [("gate.100000.name", TString "x")])
-  ok   stdlib/toml.mdk:648: eqTomlValue (TString "a") (TString "a")
-  ok   stdlib/toml.mdk:651: eqTomlValue (TArray ["a", "b"]) (TArray ["a", "b"])
-  ok   stdlib/toml.mdk:656: eqTomlValue (TString "a") (TArray ["a"])
-  ok   stdlib/toml.mdk:684: debugTomlValue (TString "hi")
-  ok   stdlib/toml.mdk:687: debugTomlValue (TArray ["a", "b"])
-  ok   stdlib/toml.mdk:690: debugTomlValue (TInt 42)
-  ok   stdlib/toml.mdk:693: debugTomlValue (TBool True)
-  ok   stdlib/toml.mdk:751: display (TString "hi")
-  ok   stdlib/toml.mdk:753: display (TBool True)
-  ok   stdlib/toml.mdk:758: display (TInt 42)
-  ok   stdlib/toml.mdk:760: display (TArray ["a", "b"])
-  ok   stdlib/toml.mdk:767: display (Toml [("a.b", TInt 1), ("c", TBool False)])
-  ok   stdlib/toml.mdk:769: display (Toml [])
+  ok   stdlib/toml.mdk:471: parse "[package]\nname = \"hello\"\nversion = \"0.1.0\""
+  ok   stdlib/toml.mdk:473: parse "[[gate]]\nname = \"a\"\n[[gate]]\nname = \"b\""
+  ok   stdlib/toml.mdk:479: parse "[workspace]\nmembers = [\"pkg-a\", \"pkg-b\"]" == Ok (Toml [("workspace.members", TArray ["pkg-a", "pkg-b"])])
+  ok   stdlib/toml.mdk:481: parse "[limits]\nretries = 3\nverbose = true\noffset = -7" == Ok (Toml [("limits.retries", TInt 3), ("limits.verbose", TBool True), ("limits.offset", TInt (0 - 7))])
+  ok   stdlib/toml.mdk:483: parse "# just a comment\n\nname = \"x\"" == Ok (Toml [("name", TString "x")])
+  ok   stdlib/toml.mdk:485: parse "name = \"hello\" # a comment" == Ok (Toml [("name", TString "hello")])
+  ok   stdlib/toml.mdk:492: parse "bad line no equals"
+  ok   stdlib/toml.mdk:495: parse "[package]\nname = unterminated"
+  ok   stdlib/toml.mdk:500: parse "[server]\naddr = {host = \"h\", port = 1}"
+  ok   stdlib/toml.mdk:506: parse "name = \"abc\" this is garbage"
+  ok   stdlib/toml.mdk:512: parse "name = \"abc\""
+  ok   stdlib/toml.mdk:517: parse "oracles = [\"x\"] junk"
+  ok   stdlib/toml.mdk:523: parse "oracles = [\"x\" \"y\"]"
+  ok   stdlib/toml.mdk:529: parse "oracles = [\"x\", \"y\"]"
+  ok   stdlib/toml.mdk:536: parse "name = \"\"\"x\"\"\""
+  ok   stdlib/toml.mdk:541: parse "foo.bar = \"zzz\""
+  ok   stdlib/toml.mdk:547: parse "[foo]\nbar = \"zzz\""
+  ok   stdlib/toml.mdk:594: parseGetStr "package.name" "[package]\nname = \"medaka\"\nversion = \"1.0.0\"\nentry = \"main.mdk\""
+  ok   stdlib/toml.mdk:596: parseGetStr "missing" "[package]\nname = \"x\""
+  ok   stdlib/toml.mdk:604: parseGetStr "workspace.members" "[workspace]\nmembers = [\"a\"]"
+  ok   stdlib/toml.mdk:606: parseGetStr "server.host" "[package]\nname = \"x\""
+  ok   stdlib/toml.mdk:612: parseGetArr "workspace.members" "[workspace]\nmembers = [\"pkg-a\", \"pkg-b\"]"
+  ok   stdlib/toml.mdk:614: parseGetArr "workspace.members" "[workspace]\nmembers = []"
+  ok   stdlib/toml.mdk:622: parseGetArr "package.name" "[package]\nname = \"x\"\nversion = \"0.1.0\"\nentry = \"main.mdk\""
+  ok   stdlib/toml.mdk:624: parseGetArr "workspace.members" "[package]\nname = \"x\""
+  ok   stdlib/toml.mdk:630: parseGetInt "limits.retries" "[limits]\nretries = 3"
+  ok   stdlib/toml.mdk:632: parseGetInt "package.name" "[package]\nname = \"x\""
+  ok   stdlib/toml.mdk:640: parseGetInt "limits.offset" "[limits]\noffset = -7" == Some (0 - 7)
+  ok   stdlib/toml.mdk:646: parseGetBool "limits.verbose" "[limits]\nverbose = true"
+  ok   stdlib/toml.mdk:648: parseGetBool "limits.retries" "[limits]\nretries = 3"
+  ok   stdlib/toml.mdk:656: parseGetBool "limits.verbose" "[limits]\nverbose = false"
+  ok   stdlib/toml.mdk:683: parseTableCount "gate" "[[gate]]\nname = \"a\"\n[[gate]]\nname = \"b\""
+  ok   stdlib/toml.mdk:685: parseTableCount "gate" "[package]\nname = \"x\""
+  ok   stdlib/toml.mdk:723: parseTableEntryStr "gate" 1 "name" "[[gate]]\nname = \"a\"\n[[gate]]\nname = \"b\""
+  ok   stdlib/toml.mdk:725: parseTableEntryStr "gate" 9 "name" "[[gate]]\nname = \"a\""
+  ok   stdlib/toml.mdk:775: map (map (getString "name")) (tableEntries "gate" (Toml [("gate.0.name", TString "a"), ("gate.1.name", TString "b")]))
+  ok   stdlib/toml.mdk:777: tableEntries "gate" (Toml [("package.name", TString "x")])
+  ok   stdlib/toml.mdk:779: tableEntries "gate" (Toml [("gate.100000.name", TString "x")])
+  ok   stdlib/toml.mdk:797: eqTomlValue (TString "a") (TString "a")
+  ok   stdlib/toml.mdk:800: eqTomlValue (TArray ["a", "b"]) (TArray ["a", "b"])
+  ok   stdlib/toml.mdk:805: eqTomlValue (TString "a") (TArray ["a"])
+  ok   stdlib/toml.mdk:833: debugTomlValue (TString "hi")
+  ok   stdlib/toml.mdk:836: debugTomlValue (TArray ["a", "b"])
+  ok   stdlib/toml.mdk:839: debugTomlValue (TInt 42)
+  ok   stdlib/toml.mdk:842: debugTomlValue (TBool True)
+  ok   stdlib/toml.mdk:930: display (TString "hi")
+  ok   stdlib/toml.mdk:932: display (TBool True)
+  ok   stdlib/toml.mdk:937: display (TInt 42)
+  ok   stdlib/toml.mdk:939: display (TArray ["a", "b"])
+  ok   stdlib/toml.mdk:946: display (Toml [("a.b", TInt 1), ("c", TBool False)])
+  ok   stdlib/toml.mdk:948: display (Toml [])
 
 stdlib/toml.mdk: 51/51 passed
 Testing "a section key round-trips an Int-derived value" [eval] ... OK (100 tests passed)

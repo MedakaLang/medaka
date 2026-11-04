@@ -39,7 +39,7 @@ import tools.lint_recursion.{
 }
 import tools.lint_scope.{FileScopes}
 import tools.lint_shared.{
-  appSpineOf, firstLoc, ruleNameAccumulatorAppend, unwrapLoc
+  appArgsOf, firstLoc, ruleNameAccumulatorAppend, unwrapLoc
 }
 
 export
@@ -113,7 +113,7 @@ ownerFindings scopes fallback (owner, body) = match selfCalls scopes owner body
 
 callFinding : Option Loc -> SelfCall -> List Finding
 callFinding fallback (SelfCall loc call roles) =
-  match appendedArg roles (argsOf call)
+  match appendedArg roles (appArgsOf call)
     Some a => [
       report
         (orElseLoc (firstLoc a) (orElseLoc loc fallback))
@@ -128,10 +128,6 @@ appendedArg roles args = go 0 roles
     go _ [] = None
     go i ((AppendedTo _) :: _) = get i args
     go i (_ :: rest) = go (i + 1) rest
-
-argsOf : Expr -> List Expr
-argsOf e = match appSpineOf e
-  (_, args) => args
 
 -- What the appended operand is, when the source says so.
 data Operand = OpList | OpString | OpUnknown

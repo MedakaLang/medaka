@@ -295,6 +295,13 @@ extern sliceError : Int -> Int -> a
 extern stashRunStdout : String -> Unit
 extern enableRunStdoutFlush : Unit -> Unit
 
+-- Internal: hands the C runtime the human note and the `--json` envelope
+-- template an abort prints.  Not for general use: it only stores both
+-- strings, and an empty string clears its slot.  The interpreter binding is a
+-- no-op so a guest program under `medaka run` cannot rewrite its host's abort
+-- report.
+extern setAbortReport : String -> String -> Unit
+
 -- Internal: the terminator of a desugared guard chain.  Raises the same "no
 -- clause matched" signal as a failed pattern, so when a function clause's
 -- guards all fail, dispatch falls through to the next pattern clause

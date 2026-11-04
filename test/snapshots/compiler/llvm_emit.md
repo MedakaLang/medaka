@@ -1,5 +1,5 @@
 # META
-source_lines=15459
+source_lines=15472
 stages=DESUGAR,MARK
 # SOURCE
 import ir.constructor_facts.{
@@ -2393,6 +2393,11 @@ emitIoExtern e env "stashRunStdout" args = match emitArgs e env args
     emit e (rtLine e "" "void" "mdk_stash_run_stdout" (i64Ops [s]))
     ("1", LTUnit)
   _ => panic "llvm: stashRunStdout takes exactly one argument"
+emitIoExtern e env "setAbortReport" args = match emitArgs e env args
+  [note, tmpl] =>
+    emit e (rtLine e "" "void" "mdk_set_abort_report" (i64Ops [note, tmpl]))
+    ("1", LTUnit)
+  _ => panic "llvm: setAbortReport takes exactly two arguments"
 emitIoExtern e env "enableRunStdoutFlush" args = match emitArgs e env args
   [u] =>
     emit e (rtLine e "" "void" "mdk_enable_run_stdout_flush" (i64Ops [u]))
@@ -8687,14 +8692,22 @@ emitMethodArgDispatch e method iface siteArity argOps =
 -- actually received ambiguous value loud.  The groups are the occurrence's own
 -- interface's, so two unrelated same-spelled interfaces never false-collide.
 argTagCollidingHeads : List ImplGroup -> List String
-argTagCollidingHeads groups = dupStrings (map groupTag groups) [] []
+argTagCollidingHeads groups =
+  dupStrings (map groupTag groups) omEmpty omEmpty []
 
--- the members of [xs] that occur more than once, each reported once.
-dupStrings : List String -> List String -> List String -> List String
-dupStrings [] _ dups = reverseL dups
-dupStrings (x :: rest) seen dups
-  | contains x seen && not (contains x dups) = dupStrings rest seen (x :: dups)
-  | otherwise = dupStrings rest (x :: seen) dups
+-- the members of [xs] that occur more than once, each reported once, in the order
+-- their second occurrence appears.  [seen] holds every member walked so far; [dupSet]
+-- is the membership view of [dups], which keeps the order.
+dupStrings : List String ->
+  OrdMap Unit ->
+  OrdMap Unit ->
+  List String ->
+  List String
+dupStrings [] _ _ dups = reverseL dups
+dupStrings (x :: rest) seen dupSet dups
+  | omHasKey x seen && not (omHasKey x dupSet) =
+    dupStrings rest seen (omInsert x () dupSet) (x :: dups)
+  | otherwise = dupStrings rest (omInsert x () seen) dupSet dups
 
 -- is THIS arm's head tag one the runtime constructor tag cannot decide?
 argTagArmAmbiguous : List String -> String -> Bool
@@ -15884,6 +15897,7 @@ runtimeName e symbol = optionOr "" (externRuntimeKey e.externFacts symbol)
 (DFunDef false "emitIoExtern" ((PVar "e") (PVar "env") (PLit (LString "ePutStrLn")) (PVar "args")) (EMatch (EApp (EApp (EApp (EVar "emitArgs") (EVar "e")) (EVar "env")) (EVar "args")) (arm (PList (PVar "s")) () (EBlock (DoExpr (EApp (EApp (EVar "emit") (EVar "e")) (EApp (EApp (EApp (EApp (EApp (EVar "rtLine") (EVar "e")) (ELit (LString ""))) (ELit (LString "void"))) (ELit (LString "mdk_eputstrln"))) (EApp (EVar "i64Ops") (EListLit (EVar "s")))))) (DoExpr (ETuple (ELit (LString "1")) (EVar "LTUnit"))))) (arm PWild () (EApp (EVar "panic") (ELit (LString "llvm: ePutStrLn takes exactly one argument"))))))
 (DFunDef false "emitIoExtern" ((PVar "e") (PVar "env") (PLit (LString "flushStdout")) (PVar "args")) (EMatch (EApp (EApp (EApp (EVar "emitArgs") (EVar "e")) (EVar "env")) (EVar "args")) (arm (PList (PVar "u")) () (EBlock (DoExpr (EApp (EApp (EVar "emit") (EVar "e")) (EApp (EApp (EApp (EApp (EApp (EVar "rtLine") (EVar "e")) (ELit (LString ""))) (ELit (LString "void"))) (ELit (LString "mdk_flushstdout"))) (EApp (EVar "i64Ops") (EListLit (EVar "u")))))) (DoExpr (ETuple (ELit (LString "1")) (EVar "LTUnit"))))) (arm PWild () (EApp (EVar "panic") (ELit (LString "llvm: flushStdout takes exactly one argument"))))))
 (DFunDef false "emitIoExtern" ((PVar "e") (PVar "env") (PLit (LString "stashRunStdout")) (PVar "args")) (EMatch (EApp (EApp (EApp (EVar "emitArgs") (EVar "e")) (EVar "env")) (EVar "args")) (arm (PList (PVar "s")) () (EBlock (DoExpr (EApp (EApp (EVar "emit") (EVar "e")) (EApp (EApp (EApp (EApp (EApp (EVar "rtLine") (EVar "e")) (ELit (LString ""))) (ELit (LString "void"))) (ELit (LString "mdk_stash_run_stdout"))) (EApp (EVar "i64Ops") (EListLit (EVar "s")))))) (DoExpr (ETuple (ELit (LString "1")) (EVar "LTUnit"))))) (arm PWild () (EApp (EVar "panic") (ELit (LString "llvm: stashRunStdout takes exactly one argument"))))))
+(DFunDef false "emitIoExtern" ((PVar "e") (PVar "env") (PLit (LString "setAbortReport")) (PVar "args")) (EMatch (EApp (EApp (EApp (EVar "emitArgs") (EVar "e")) (EVar "env")) (EVar "args")) (arm (PList (PVar "note") (PVar "tmpl")) () (EBlock (DoExpr (EApp (EApp (EVar "emit") (EVar "e")) (EApp (EApp (EApp (EApp (EApp (EVar "rtLine") (EVar "e")) (ELit (LString ""))) (ELit (LString "void"))) (ELit (LString "mdk_set_abort_report"))) (EApp (EVar "i64Ops") (EListLit (EVar "note") (EVar "tmpl")))))) (DoExpr (ETuple (ELit (LString "1")) (EVar "LTUnit"))))) (arm PWild () (EApp (EVar "panic") (ELit (LString "llvm: setAbortReport takes exactly two arguments"))))))
 (DFunDef false "emitIoExtern" ((PVar "e") (PVar "env") (PLit (LString "enableRunStdoutFlush")) (PVar "args")) (EMatch (EApp (EApp (EApp (EVar "emitArgs") (EVar "e")) (EVar "env")) (EVar "args")) (arm (PList (PVar "u")) () (EBlock (DoExpr (EApp (EApp (EVar "emit") (EVar "e")) (EApp (EApp (EApp (EApp (EApp (EVar "rtLine") (EVar "e")) (ELit (LString ""))) (ELit (LString "void"))) (ELit (LString "mdk_enable_run_stdout_flush"))) (EApp (EVar "i64Ops") (EListLit (EVar "u")))))) (DoExpr (ETuple (ELit (LString "1")) (EVar "LTUnit"))))) (arm PWild () (EApp (EVar "panic") (ELit (LString "llvm: enableRunStdoutFlush takes exactly one argument"))))))
 (DFunDef false "emitIoExtern" ((PVar "e") (PVar "env") (PLit (LString "byteBlockWriteStdout")) (PVar "args")) (EMatch (EApp (EApp (EApp (EVar "emitArgs") (EVar "e")) (EVar "env")) (EVar "args")) (arm (PList (PVar "bb")) () (EBlock (DoExpr (EApp (EApp (EVar "emit") (EVar "e")) (EApp (EApp (EApp (EApp (EApp (EVar "rtLine") (EVar "e")) (ELit (LString ""))) (ELit (LString "void"))) (ELit (LString "mdk_byteblock_write_stdout"))) (EApp (EVar "i64Ops") (EListLit (EVar "bb")))))) (DoExpr (ETuple (ELit (LString "1")) (EVar "LTUnit"))))) (arm PWild () (EApp (EVar "panic") (ELit (LString "llvm: byteBlockWriteStdout takes exactly one argument"))))))
 (DFunDef false "emitIoExtern" ((PVar "e") PWild (PVar "name") PWild) (EApp (EApp (EVar "gapE") (EVar "e")) (EBinOp "++" (ELit (LString "unsupported IO extern ")) (EVar "name"))))
@@ -17061,10 +17075,10 @@ runtimeName e symbol = optionOr "" (externRuntimeKey e.externFacts symbol)
 (DTypeSig false "emitMethodArgDispatch" (TyFun (TyCon "Emit") (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyCon "Int") (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyTuple (TyCon "String") (TyCon "LTy"))))))))
 (DFunDef false "emitMethodArgDispatch" ((PVar "e") (PVar "method") (PVar "iface") (PVar "siteArity") (PVar "argOps")) (EMatch (EApp (EApp (EApp (EApp (EVar "implGroupsForMethodArity") (EVar "e")) (EVar "method")) (EVar "iface")) (EVar "siteArity")) (arm (PList) () (EApp (EApp (EApp (EVar "emitDefaultArgTag") (EVar "e")) (EVar "method")) (EVar "argOps"))) (arm (PList (PVar "g")) () (EApp (EApp (EApp (EApp (EApp (EVar "emitArityCall") (EVar "e")) (EApp (EVar "groupFnName") (EVar "g"))) (EVar "argOps")) (EApp (EVar "groupArity") (EVar "g"))) (EVar "LTInt"))) (arm (PVar "groups") () (EApp (EApp (EApp (EApp (EApp (EVar "emitArgTagDispatch") (EVar "e")) (EVar "method")) (EVar "groups")) (EVar "argOps")) (EApp (EVar "argTagCollidingHeads") (EVar "groups"))))))
 (DTypeSig false "argTagCollidingHeads" (TyFun (TyApp (TyCon "List") (TyCon "ImplGroup")) (TyApp (TyCon "List") (TyCon "String"))))
-(DFunDef false "argTagCollidingHeads" ((PVar "groups")) (EApp (EApp (EApp (EVar "dupStrings") (EApp (EApp (EVar "map") (EVar "groupTag")) (EVar "groups"))) (EListLit)) (EListLit)))
-(DTypeSig false "dupStrings" (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyApp (TyCon "List") (TyCon "String"))))))
-(DFunDef false "dupStrings" ((PList) PWild (PVar "dups")) (EApp (EVar "reverseL") (EVar "dups")))
-(DFunDef false "dupStrings" ((PCons (PVar "x") (PVar "rest")) (PVar "seen") (PVar "dups")) (EIf (EBinOp "&&" (EApp (EApp (EVar "contains") (EVar "x")) (EVar "seen")) (EApp (EVar "not") (EApp (EApp (EVar "contains") (EVar "x")) (EVar "dups")))) (EApp (EApp (EApp (EVar "dupStrings") (EVar "rest")) (EVar "seen")) (EBinOp "::" (EVar "x") (EVar "dups"))) (EIf (EVar "otherwise") (EApp (EApp (EApp (EVar "dupStrings") (EVar "rest")) (EBinOp "::" (EVar "x") (EVar "seen"))) (EVar "dups")) (EApp (EVar "__fallthrough__") (ELit LUnit)))))
+(DFunDef false "argTagCollidingHeads" ((PVar "groups")) (EApp (EApp (EApp (EApp (EVar "dupStrings") (EApp (EApp (EVar "map") (EVar "groupTag")) (EVar "groups"))) (EVar "omEmpty")) (EVar "omEmpty")) (EListLit)))
+(DTypeSig false "dupStrings" (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyApp (TyCon "OrdMap") (TyCon "Unit")) (TyFun (TyApp (TyCon "OrdMap") (TyCon "Unit")) (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyApp (TyCon "List") (TyCon "String")))))))
+(DFunDef false "dupStrings" ((PList) PWild PWild (PVar "dups")) (EApp (EVar "reverseL") (EVar "dups")))
+(DFunDef false "dupStrings" ((PCons (PVar "x") (PVar "rest")) (PVar "seen") (PVar "dupSet") (PVar "dups")) (EIf (EBinOp "&&" (EApp (EApp (EVar "omHasKey") (EVar "x")) (EVar "seen")) (EApp (EVar "not") (EApp (EApp (EVar "omHasKey") (EVar "x")) (EVar "dupSet")))) (EApp (EApp (EApp (EApp (EVar "dupStrings") (EVar "rest")) (EVar "seen")) (EApp (EApp (EApp (EVar "omInsert") (EVar "x")) (ELit LUnit)) (EVar "dupSet"))) (EBinOp "::" (EVar "x") (EVar "dups"))) (EIf (EVar "otherwise") (EApp (EApp (EApp (EApp (EVar "dupStrings") (EVar "rest")) (EApp (EApp (EApp (EVar "omInsert") (EVar "x")) (ELit LUnit)) (EVar "seen"))) (EVar "dupSet")) (EVar "dups")) (EApp (EVar "__fallthrough__") (ELit LUnit)))))
 (DTypeSig false "argTagArmAmbiguous" (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyCon "String") (TyCon "Bool"))))
 (DFunDef false "argTagArmAmbiguous" ((PVar "colliding") (PVar "tag")) (EApp (EApp (EVar "contains") (EVar "tag")) (EVar "colliding")))
 (DTypeSig false "emitAmbiguousArm" (TyFun (TyCon "Emit") (TyCon "Unit")))
@@ -18708,6 +18722,7 @@ runtimeName e symbol = optionOr "" (externRuntimeKey e.externFacts symbol)
 (DFunDef false "emitIoExtern" ((PVar "e") (PVar "env") (PLit (LString "ePutStrLn")) (PVar "args")) (EMatch (EApp (EApp (EApp (EVar "emitArgs") (EVar "e")) (EVar "env")) (EVar "args")) (arm (PList (PVar "s")) () (EBlock (DoExpr (EApp (EApp (EVar "emit") (EVar "e")) (EApp (EApp (EApp (EApp (EApp (EVar "rtLine") (EVar "e")) (ELit (LString ""))) (ELit (LString "void"))) (ELit (LString "mdk_eputstrln"))) (EApp (EVar "i64Ops") (EListLit (EVar "s")))))) (DoExpr (ETuple (ELit (LString "1")) (EVar "LTUnit"))))) (arm PWild () (EApp (EVar "panic") (ELit (LString "llvm: ePutStrLn takes exactly one argument"))))))
 (DFunDef false "emitIoExtern" ((PVar "e") (PVar "env") (PLit (LString "flushStdout")) (PVar "args")) (EMatch (EApp (EApp (EApp (EVar "emitArgs") (EVar "e")) (EVar "env")) (EVar "args")) (arm (PList (PVar "u")) () (EBlock (DoExpr (EApp (EApp (EVar "emit") (EVar "e")) (EApp (EApp (EApp (EApp (EApp (EVar "rtLine") (EVar "e")) (ELit (LString ""))) (ELit (LString "void"))) (ELit (LString "mdk_flushstdout"))) (EApp (EVar "i64Ops") (EListLit (EVar "u")))))) (DoExpr (ETuple (ELit (LString "1")) (EVar "LTUnit"))))) (arm PWild () (EApp (EVar "panic") (ELit (LString "llvm: flushStdout takes exactly one argument"))))))
 (DFunDef false "emitIoExtern" ((PVar "e") (PVar "env") (PLit (LString "stashRunStdout")) (PVar "args")) (EMatch (EApp (EApp (EApp (EVar "emitArgs") (EVar "e")) (EVar "env")) (EVar "args")) (arm (PList (PVar "s")) () (EBlock (DoExpr (EApp (EApp (EVar "emit") (EVar "e")) (EApp (EApp (EApp (EApp (EApp (EVar "rtLine") (EVar "e")) (ELit (LString ""))) (ELit (LString "void"))) (ELit (LString "mdk_stash_run_stdout"))) (EApp (EVar "i64Ops") (EListLit (EVar "s")))))) (DoExpr (ETuple (ELit (LString "1")) (EVar "LTUnit"))))) (arm PWild () (EApp (EVar "panic") (ELit (LString "llvm: stashRunStdout takes exactly one argument"))))))
+(DFunDef false "emitIoExtern" ((PVar "e") (PVar "env") (PLit (LString "setAbortReport")) (PVar "args")) (EMatch (EApp (EApp (EApp (EVar "emitArgs") (EVar "e")) (EVar "env")) (EVar "args")) (arm (PList (PVar "note") (PVar "tmpl")) () (EBlock (DoExpr (EApp (EApp (EVar "emit") (EVar "e")) (EApp (EApp (EApp (EApp (EApp (EVar "rtLine") (EVar "e")) (ELit (LString ""))) (ELit (LString "void"))) (ELit (LString "mdk_set_abort_report"))) (EApp (EVar "i64Ops") (EListLit (EVar "note") (EVar "tmpl")))))) (DoExpr (ETuple (ELit (LString "1")) (EVar "LTUnit"))))) (arm PWild () (EApp (EVar "panic") (ELit (LString "llvm: setAbortReport takes exactly two arguments"))))))
 (DFunDef false "emitIoExtern" ((PVar "e") (PVar "env") (PLit (LString "enableRunStdoutFlush")) (PVar "args")) (EMatch (EApp (EApp (EApp (EVar "emitArgs") (EVar "e")) (EVar "env")) (EVar "args")) (arm (PList (PVar "u")) () (EBlock (DoExpr (EApp (EApp (EVar "emit") (EVar "e")) (EApp (EApp (EApp (EApp (EApp (EVar "rtLine") (EVar "e")) (ELit (LString ""))) (ELit (LString "void"))) (ELit (LString "mdk_enable_run_stdout_flush"))) (EApp (EVar "i64Ops") (EListLit (EVar "u")))))) (DoExpr (ETuple (ELit (LString "1")) (EVar "LTUnit"))))) (arm PWild () (EApp (EVar "panic") (ELit (LString "llvm: enableRunStdoutFlush takes exactly one argument"))))))
 (DFunDef false "emitIoExtern" ((PVar "e") (PVar "env") (PLit (LString "byteBlockWriteStdout")) (PVar "args")) (EMatch (EApp (EApp (EApp (EVar "emitArgs") (EVar "e")) (EVar "env")) (EVar "args")) (arm (PList (PVar "bb")) () (EBlock (DoExpr (EApp (EApp (EVar "emit") (EVar "e")) (EApp (EApp (EApp (EApp (EApp (EVar "rtLine") (EVar "e")) (ELit (LString ""))) (ELit (LString "void"))) (ELit (LString "mdk_byteblock_write_stdout"))) (EApp (EVar "i64Ops") (EListLit (EVar "bb")))))) (DoExpr (ETuple (ELit (LString "1")) (EVar "LTUnit"))))) (arm PWild () (EApp (EVar "panic") (ELit (LString "llvm: byteBlockWriteStdout takes exactly one argument"))))))
 (DFunDef false "emitIoExtern" ((PVar "e") PWild (PVar "name") PWild) (EApp (EApp (EVar "gapE") (EVar "e")) (EBinOp "++" (ELit (LString "unsupported IO extern ")) (EVar "name"))))
@@ -19885,10 +19900,10 @@ runtimeName e symbol = optionOr "" (externRuntimeKey e.externFacts symbol)
 (DTypeSig false "emitMethodArgDispatch" (TyFun (TyCon "Emit") (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyCon "Int") (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyTuple (TyCon "String") (TyCon "LTy"))))))))
 (DFunDef false "emitMethodArgDispatch" ((PVar "e") (PVar "method") (PVar "iface") (PVar "siteArity") (PVar "argOps")) (EMatch (EApp (EApp (EApp (EApp (EVar "implGroupsForMethodArity") (EVar "e")) (EVar "method")) (EVar "iface")) (EVar "siteArity")) (arm (PList) () (EApp (EApp (EApp (EVar "emitDefaultArgTag") (EVar "e")) (EVar "method")) (EVar "argOps"))) (arm (PList (PVar "g")) () (EApp (EApp (EApp (EApp (EApp (EVar "emitArityCall") (EVar "e")) (EApp (EVar "groupFnName") (EVar "g"))) (EVar "argOps")) (EApp (EVar "groupArity") (EVar "g"))) (EVar "LTInt"))) (arm (PVar "groups") () (EApp (EApp (EApp (EApp (EApp (EVar "emitArgTagDispatch") (EVar "e")) (EVar "method")) (EVar "groups")) (EVar "argOps")) (EApp (EVar "argTagCollidingHeads") (EVar "groups"))))))
 (DTypeSig false "argTagCollidingHeads" (TyFun (TyApp (TyCon "List") (TyCon "ImplGroup")) (TyApp (TyCon "List") (TyCon "String"))))
-(DFunDef false "argTagCollidingHeads" ((PVar "groups")) (EApp (EApp (EApp (EVar "dupStrings") (EApp (EApp (EMethodRef "map") (EVar "groupTag")) (EVar "groups"))) (EListLit)) (EListLit)))
-(DTypeSig false "dupStrings" (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyApp (TyCon "List") (TyCon "String"))))))
-(DFunDef false "dupStrings" ((PList) PWild (PVar "dups")) (EApp (EVar "reverseL") (EVar "dups")))
-(DFunDef false "dupStrings" ((PCons (PVar "x") (PVar "rest")) (PVar "seen") (PVar "dups")) (EIf (EBinOp "&&" (EApp (EApp (EVar "contains") (EVar "x")) (EVar "seen")) (EApp (EVar "not") (EApp (EApp (EVar "contains") (EVar "x")) (EVar "dups")))) (EApp (EApp (EApp (EVar "dupStrings") (EVar "rest")) (EVar "seen")) (EBinOp "::" (EVar "x") (EVar "dups"))) (EIf (EVar "otherwise") (EApp (EApp (EApp (EVar "dupStrings") (EVar "rest")) (EBinOp "::" (EVar "x") (EVar "seen"))) (EVar "dups")) (EApp (EVar "__fallthrough__") (ELit LUnit)))))
+(DFunDef false "argTagCollidingHeads" ((PVar "groups")) (EApp (EApp (EApp (EApp (EVar "dupStrings") (EApp (EApp (EMethodRef "map") (EVar "groupTag")) (EVar "groups"))) (EVar "omEmpty")) (EVar "omEmpty")) (EListLit)))
+(DTypeSig false "dupStrings" (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyApp (TyCon "OrdMap") (TyCon "Unit")) (TyFun (TyApp (TyCon "OrdMap") (TyCon "Unit")) (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyApp (TyCon "List") (TyCon "String")))))))
+(DFunDef false "dupStrings" ((PList) PWild PWild (PVar "dups")) (EApp (EVar "reverseL") (EVar "dups")))
+(DFunDef false "dupStrings" ((PCons (PVar "x") (PVar "rest")) (PVar "seen") (PVar "dupSet") (PVar "dups")) (EIf (EBinOp "&&" (EApp (EApp (EVar "omHasKey") (EVar "x")) (EVar "seen")) (EApp (EVar "not") (EApp (EApp (EVar "omHasKey") (EVar "x")) (EVar "dupSet")))) (EApp (EApp (EApp (EApp (EVar "dupStrings") (EVar "rest")) (EVar "seen")) (EApp (EApp (EApp (EVar "omInsert") (EVar "x")) (ELit LUnit)) (EVar "dupSet"))) (EBinOp "::" (EVar "x") (EVar "dups"))) (EIf (EVar "otherwise") (EApp (EApp (EApp (EApp (EVar "dupStrings") (EVar "rest")) (EApp (EApp (EApp (EVar "omInsert") (EVar "x")) (ELit LUnit)) (EVar "seen"))) (EVar "dupSet")) (EVar "dups")) (EApp (EVar "__fallthrough__") (ELit LUnit)))))
 (DTypeSig false "argTagArmAmbiguous" (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyCon "String") (TyCon "Bool"))))
 (DFunDef false "argTagArmAmbiguous" ((PVar "colliding") (PVar "tag")) (EApp (EApp (EVar "contains") (EVar "tag")) (EVar "colliding")))
 (DTypeSig false "emitAmbiguousArm" (TyFun (TyCon "Emit") (TyCon "Unit")))

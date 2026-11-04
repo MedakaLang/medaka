@@ -48,6 +48,7 @@ Every rule `medaka lint` knows. `universal` rules are meaningful in any Medaka p
 | [`rule-prelude-shadow`](#rule-prelude-shadow) | universal | suspicious | gated | not-fixable | file |
 | [`rule-accumulator-append`](#rule-accumulator-append) | universal | perf | gated | not-fixable | file |
 | [`rule-reslice-in-loop`](#rule-reslice-in-loop) | universal | perf | gated | not-fixable | file |
+| [`rule-list-as-set`](#rule-list-as-set) | universal | perf | gated | not-fixable | file |
 
 ## rule-match-on-param
 
@@ -648,4 +649,19 @@ Before:
   go s i = if i < stringLength s then stringSlice i (i + 1) s :: go s (i + 1) else []
 After:
   go cs i = if i < length cs then cs.[i] :: go cs (i + 1) else []  -- with `cs = toChars s`
+```
+
+## rule-list-as-set
+
+a `List` a loop grows and membership-tests on every step: each test walks the whole list. Keep a `Set` or `Map` beside it, or build the set once
+
+A membership test on a `List` (`contains`, `elem`, `notElem`, `lookupAssoc`, `lookup`, or a hand-rolled function of the file that walks a list and returns `Bool` or `Option`) walks the list. When a loop grows the list and tests it on every step, the loop does work quadratic in the number of steps. The rule reports a membership test whose container is a parameter that a self-call of the same function passes grown (`x :: seen`, `seen ++ xs`, `xs ++ seen`, a `let` bound to one of those, or a helper of the file that returns its argument grown), and a test on the accumulator of a fold lambda that returns the accumulator grown. A test made by a helper of the same file that the loop calls with the list is reported at the call. A container that is only passed on unchanged or shrinks is not reported, nor is one held in a `Ref`, a record field or a top-level table, nor a test two helpers away. A partial application and a call to a different function (mutual recursion) are not self-calls. `*_test.mdk` files are not checked.
+
+Keep the names in a `Set` (or the pairs in a `Map`) beside the list, or build the set once before the loop. A list whose length is small and fixed can carry a `-- lint-disable-next-line rule-list-as-set` with the bound as its reason.
+
+```
+Before:
+  go seen (x :: xs) = if contains x seen then go seen xs else go (x :: seen) xs
+After:
+  go seen (x :: xs) = if has x seen then go seen xs else go (insert x seen) xs  -- with `seen : Set String`
 ```

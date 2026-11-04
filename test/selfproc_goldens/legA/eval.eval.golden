@@ -1,4 +1,3 @@
-abortNote : Ref (Option String)
 addrCell : List (String, Ref (Value a)) -> Int -> String -> Ref (Value a)
 anyAdmits : String -> List String -> <FileRead | a> Bool
 anyTypedImpl : List (Value a) -> Bool
@@ -168,7 +167,7 @@ frameAtDepth : List (EnvFrame (Value a)) -> Int -> String -> EnvFrame (Value a)
 frameCells : EnvFrame a -> List (String, Ref a)
 funClauseToClause : Loc -> FunClause -> (List Pat, Expr, Loc)
 funDefs : List Decl -> List (String, (List Pat, Expr, Loc))
-funGroupNames : List (String, (List Pat, Expr, Loc)) -> List String -> List String
+funGroupNames : List (String, (List Pat, Expr, Loc)) -> Map String Unit -> List String
 funNamesOf : List Decl -> List String
 getByte64 : Int -> Array (Value a) -> Int -> Int
 globalFramesWith : List (String, Ref (Value a)) -> EnvFrame (Value a) -> List (EnvFrame (Value a))
@@ -415,6 +414,7 @@ pRemoveFile : Value a -> <FileWrite | a> Value a
 pRename : Value a -> Value a -> <FileWrite | a> Value a
 pRestoreRandomState : Ref U64 -> Value a -> <a> Value a
 pRound : Value a -> <a> Value a
+pSetAbortReport : Value a -> Value a -> <a> Value a
 pSetRef : Value a -> Value a -> <a> Value a
 pSetSeed : Ref U64 -> Value a -> <a> Value a
 pSha256Native : Value a -> <a> Value a
