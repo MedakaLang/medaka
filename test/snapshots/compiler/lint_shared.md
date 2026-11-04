@@ -1,5 +1,5 @@
 # META
-source_lines=1085
+source_lines=1091
 stages=DESUGAR,MARK
 # SOURCE
 -- compiler/tools/lint_shared.mdk — helpers used by more than one lint module:
@@ -512,6 +512,12 @@ stripELoc e = e
 export
 appSpineOf : Expr -> (Expr, List Expr)
 appSpineOf e = appSpineGo e []
+
+-- The arguments of a curried application spine.
+export
+appArgsOf : Expr -> List Expr
+appArgsOf e = match appSpineOf e
+  (_, args) => args
 
 appSpineGo : Expr -> List Expr -> (Expr, List Expr)
 appSpineGo e acc = match stripELoc e
@@ -1296,6 +1302,8 @@ ruleNameListAsSet = "rule-list-as-set"
 (DFunDef false "stripELoc" ((PVar "e")) (EVar "e"))
 (DTypeSig true "appSpineOf" (TyFun (TyCon "Expr") (TyTuple (TyCon "Expr") (TyApp (TyCon "List") (TyCon "Expr")))))
 (DFunDef false "appSpineOf" ((PVar "e")) (EApp (EApp (EVar "appSpineGo") (EVar "e")) (EListLit)))
+(DTypeSig true "appArgsOf" (TyFun (TyCon "Expr") (TyApp (TyCon "List") (TyCon "Expr"))))
+(DFunDef false "appArgsOf" ((PVar "e")) (EMatch (EApp (EVar "appSpineOf") (EVar "e")) (arm (PTuple PWild (PVar "args")) () (EVar "args"))))
 (DTypeSig false "appSpineGo" (TyFun (TyCon "Expr") (TyFun (TyApp (TyCon "List") (TyCon "Expr")) (TyTuple (TyCon "Expr") (TyApp (TyCon "List") (TyCon "Expr"))))))
 (DFunDef false "appSpineGo" ((PVar "e") (PVar "acc")) (EMatch (EApp (EVar "stripELoc") (EVar "e")) (arm (PCon "EApp" (PVar "f") (PVar "a")) () (EApp (EApp (EVar "appSpineGo") (EVar "f")) (EBinOp "::" (EVar "a") (EVar "acc")))) (arm (PVar "other") () (ETuple (EVar "other") (EVar "acc")))))
 (DTypeSig true "paramNameOf" (TyFun (TyCon "Pat") (TyApp (TyCon "Option") (TyCon "String"))))
@@ -1660,6 +1668,8 @@ ruleNameListAsSet = "rule-list-as-set"
 (DFunDef false "stripELoc" ((PVar "e")) (EVar "e"))
 (DTypeSig true "appSpineOf" (TyFun (TyCon "Expr") (TyTuple (TyCon "Expr") (TyApp (TyCon "List") (TyCon "Expr")))))
 (DFunDef false "appSpineOf" ((PVar "e")) (EApp (EApp (EVar "appSpineGo") (EVar "e")) (EListLit)))
+(DTypeSig true "appArgsOf" (TyFun (TyCon "Expr") (TyApp (TyCon "List") (TyCon "Expr"))))
+(DFunDef false "appArgsOf" ((PVar "e")) (EMatch (EApp (EVar "appSpineOf") (EVar "e")) (arm (PTuple PWild (PVar "args")) () (EVar "args"))))
 (DTypeSig false "appSpineGo" (TyFun (TyCon "Expr") (TyFun (TyApp (TyCon "List") (TyCon "Expr")) (TyTuple (TyCon "Expr") (TyApp (TyCon "List") (TyCon "Expr"))))))
 (DFunDef false "appSpineGo" ((PVar "e") (PVar "acc")) (EMatch (EApp (EVar "stripELoc") (EVar "e")) (arm (PCon "EApp" (PVar "f") (PVar "a")) () (EApp (EApp (EVar "appSpineGo") (EVar "f")) (EBinOp "::" (EVar "a") (EVar "acc")))) (arm (PVar "other") () (ETuple (EVar "other") (EVar "acc")))))
 (DTypeSig true "paramNameOf" (TyFun (TyCon "Pat") (TyApp (TyCon "Option") (TyCon "String"))))

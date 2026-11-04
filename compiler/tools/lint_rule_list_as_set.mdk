@@ -77,7 +77,7 @@ import tools.lint_recursion.{
 }
 import tools.lint_scope.{BinderKind(..), FileScopes, binderOf}
 import tools.lint_shared.{
-  appSpineOf, firstLoc, ruleNameListAsSet, tyHeadName, unwrapLoc, varSite
+  appArgsOf, firstLoc, ruleNameListAsSet, tyHeadName, unwrapLoc, varSite
 }
 
 export
@@ -259,7 +259,7 @@ consTail _ = None
 
 walksAt : FileScopes -> Int -> (List Pat, SelfCall) -> Bool
 walksAt scopes k (ps, SelfCall _ call roles) =
-  let tailPassed = match (get k ps, get k (argsOf call))
+  let tailPassed = match (get k ps, get k (appArgsOf call))
     (Some p, Some a) => match consTail p
       Some t => isParam scopes t a
       None => False
@@ -485,7 +485,7 @@ clauseGrown (rd@(Reader scopes _)) name site (ps, body) =
 
 callGrown : Reader -> List (Loc, Expr) -> List Pat -> SelfCall -> List Int
 callGrown rd lets ps (SelfCall _ call _) =
-  flatMap (argGrown rd lets ps) (indexed (argsOf call))
+  flatMap (argGrown rd lets ps) (indexed (appArgsOf call))
 
 argGrown : Reader -> List (Loc, Expr) -> List Pat -> (Int, Expr) -> List Int
 argGrown rd lets ps (j, a) = match get j ps
@@ -493,10 +493,6 @@ argGrown rd lets ps (j, a) = match get j ps
     Some param => if grows rd lets param a then [j] else []
     None => []
   None => []
-
-argsOf : Expr -> List Expr
-argsOf e = match appSpineOf e
-  (_, args) => args
 
 -- ── loops ────────────────────────────────────────────────────────────────────
 
