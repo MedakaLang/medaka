@@ -48,15 +48,28 @@ budgets and jobs. Medaka owns lexing, parsing, resolution, inference, diagnostic
 formatting and semantic edits. MCP, CLI and LSP consume shared semantic services;
 the supervisor must not acquire an independent parser or resolver.
 
-M0 prototypes packaging to choose the supervisor language and process adapter.
-The [Linux decision report](../findings/mcp-m0-packaging/REPORT.md) leaves that
-choice open: neither prototype meets the mandatory criteria; macOS remains
-deferred to #4820.
-Compare an installed Medaka supervisor with a small external-runtime supervisor;
-measure startup, install size/dependencies, restart behavior and operational
-complexity. Self-hosting is permitted but must not reintroduce a checkout-build
-dependency. An SDK-backed implementation is permitted but must not create a
-second semantic implementation. Record the decision before M1 implementation.
+The intended production supervisor is Medaka, independently installed without a
+checkout build. The [Linux decision report](../findings/mcp-m0-packaging/REPORT.md)
+retains the original prototype measurements and records the superseding direction;
+neither measured prototype qualified. Python remains an independent measurement
+and test reference. Qualification and the packaging decision remain open; actual
+macOS evidence is deferred to #4820.
+
+[Owned-process supervision](PROCESS-SUPERVISION.md) is the single proposed process
+contract: `core.mdk` carries opaque `Process p`, `process.mdk` owns typed lifecycle
+operations, `runtime.mdk` declares raw externs, and the planned native process C source and header
+own native resources. `process_async.mdk` adapts pipes to the existing Async
+scheduler; `stdio_async.mdk` owns the client stdio lease; `process_scope.mdk`
+coordinates owned cleanup. Their proposed exports and acyclic import limits are
+specified there. These are not implemented APIs. No shell supervisor or second event
+loop is part of this direction.
+
+Launch ticket and wait ownership, the stdio lease and legacy buffering interlock,
+protected broker deployment and worker-origin identity remain SPIKE-FIRST. Indexed
+Exec grants invocation authority, not containment. A Linux protected cgroup broker
+is a candidate without a positive deployment proof; unsupported authority must
+refuse before target spawn. #4811 owns shared VM/ABI coordination, while #4413 and
+#4626 retain their independent eval/policy and scripting-runner obligations.
 
 ### Workspace and toolchain identity
 
@@ -88,9 +101,9 @@ externally run `make medaka`; automatic preparation is not required for M1.
 In-flight results retain their original snapshot identity and are marked obsolete
 if inputs change. A failed worker returns an error without killing the connection;
 reads may be retried once only against the same snapshot, writes are never replayed.
-Worker count, idle lifetime and memory are bounded; cancellation terminates the
-owned job/process group and cleans its scratch directory without killing another
-caller or a shared build it does not own.
+Worker count, idle lifetime and memory are bounded; cancellation requests owned cleanup and scratch removal without killing another
+caller or a shared build it does not own. A process group alone cannot guarantee
+owned-tree cleanup; the protected containment prerequisite above remains open.
 
 ### Results and addressing
 
@@ -211,7 +224,7 @@ Reproduction is required before any bug closure; this audit closes only the two
 superseded planning umbrellas.
 
 M0 must settle packaging/protocol and records baseline tasks. The current
-packaging decision remains open; M1 delivers availability and worktree trust. M2 delivers navigation. M3 adds versioned knowledge and one
+qualification and packaging decision remain open; M1 delivers availability and worktree trust. M2 delivers navigation. M3 adds versioned knowledge and one
 measured compiler explanation. M4 closes the edit/test loop and evaluates adoption.
 These are outcomes, not one giant implementation sprint. Cut bounded sprint
 contracts just in time using the sprint-plan skill; default serial implementation,
