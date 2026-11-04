@@ -1,5 +1,5 @@
 # META
-source_lines=1081
+source_lines=1091
 stages=DESUGAR,MARK
 # SOURCE
 -- compiler/tools/lint_shared.mdk — helpers used by more than one lint module:
@@ -512,6 +512,12 @@ stripELoc e = e
 export
 appSpineOf : Expr -> (Expr, List Expr)
 appSpineOf e = appSpineGo e []
+
+-- The arguments of a curried application spine.
+export
+appArgsOf : Expr -> List Expr
+appArgsOf e = match appSpineOf e
+  (_, args) => args
 
 appSpineGo : Expr -> List Expr -> (Expr, List Expr)
 appSpineGo e acc = match stripELoc e
@@ -1083,6 +1089,10 @@ lastArmSpan arms = match last arms
 export
 ruleNameResliceInLoop : String
 ruleNameResliceInLoop = "rule-reslice-in-loop"
+
+export
+ruleNameListAsSet : String
+ruleNameListAsSet = "rule-list-as-set"
 # DESUGAR
 (DUse false (UseGroup ("frontend" "ast") ((mem "Loc" true) (mem "Expr" true) (mem "Decl" true) (mem "noBinderId" false) (mem "noDeclLoc" false) (mem "Ty" true) (mem "Pat" true) (mem "UseMember" true) (mem "Guard" true) (mem "Arm" true) (mem "ImplMethod" true) (mem "DoStmt" true) (mem "Section" true) (mem "InterpPart" true) (mem "GuardArm" true) (mem "FieldAssign" true) (mem "LetBind" true) (mem "FunClause" true))))
 (DUse false (UseGroup ("frontend" "parser") ((mem "Positions" true) (mem "DeclPos" false) (mem "positionsDecls" false) (mem "declPosLine" false))))
@@ -1292,6 +1302,8 @@ ruleNameResliceInLoop = "rule-reslice-in-loop"
 (DFunDef false "stripELoc" ((PVar "e")) (EVar "e"))
 (DTypeSig true "appSpineOf" (TyFun (TyCon "Expr") (TyTuple (TyCon "Expr") (TyApp (TyCon "List") (TyCon "Expr")))))
 (DFunDef false "appSpineOf" ((PVar "e")) (EApp (EApp (EVar "appSpineGo") (EVar "e")) (EListLit)))
+(DTypeSig true "appArgsOf" (TyFun (TyCon "Expr") (TyApp (TyCon "List") (TyCon "Expr"))))
+(DFunDef false "appArgsOf" ((PVar "e")) (EMatch (EApp (EVar "appSpineOf") (EVar "e")) (arm (PTuple PWild (PVar "args")) () (EVar "args"))))
 (DTypeSig false "appSpineGo" (TyFun (TyCon "Expr") (TyFun (TyApp (TyCon "List") (TyCon "Expr")) (TyTuple (TyCon "Expr") (TyApp (TyCon "List") (TyCon "Expr"))))))
 (DFunDef false "appSpineGo" ((PVar "e") (PVar "acc")) (EMatch (EApp (EVar "stripELoc") (EVar "e")) (arm (PCon "EApp" (PVar "f") (PVar "a")) () (EApp (EApp (EVar "appSpineGo") (EVar "f")) (EBinOp "::" (EVar "a") (EVar "acc")))) (arm (PVar "other") () (ETuple (EVar "other") (EVar "acc")))))
 (DTypeSig true "paramNameOf" (TyFun (TyCon "Pat") (TyApp (TyCon "Option") (TyCon "String"))))
@@ -1445,6 +1457,8 @@ ruleNameResliceInLoop = "rule-reslice-in-loop"
 (DFunDef false "lastArmSpan" ((PVar "arms")) (EMatch (EApp (EVar "last") (EVar "arms")) (arm (PCon "Some" (PCon "Arm" PWild PWild (PVar "body"))) () (EApp (EVar "tightSpan") (EVar "body"))) (arm (PCon "None") () (EVar "None"))))
 (DTypeSig true "ruleNameResliceInLoop" (TyCon "String"))
 (DFunDef false "ruleNameResliceInLoop" () (ELit (LString "rule-reslice-in-loop")))
+(DTypeSig true "ruleNameListAsSet" (TyCon "String"))
+(DFunDef false "ruleNameListAsSet" () (ELit (LString "rule-list-as-set")))
 # MARK
 (DUse false (UseGroup ("frontend" "ast") ((mem "Loc" true) (mem "Expr" true) (mem "Decl" true) (mem "noBinderId" false) (mem "noDeclLoc" false) (mem "Ty" true) (mem "Pat" true) (mem "UseMember" true) (mem "Guard" true) (mem "Arm" true) (mem "ImplMethod" true) (mem "DoStmt" true) (mem "Section" true) (mem "InterpPart" true) (mem "GuardArm" true) (mem "FieldAssign" true) (mem "LetBind" true) (mem "FunClause" true))))
 (DUse false (UseGroup ("frontend" "parser") ((mem "Positions" true) (mem "DeclPos" false) (mem "positionsDecls" false) (mem "declPosLine" false))))
@@ -1654,6 +1668,8 @@ ruleNameResliceInLoop = "rule-reslice-in-loop"
 (DFunDef false "stripELoc" ((PVar "e")) (EVar "e"))
 (DTypeSig true "appSpineOf" (TyFun (TyCon "Expr") (TyTuple (TyCon "Expr") (TyApp (TyCon "List") (TyCon "Expr")))))
 (DFunDef false "appSpineOf" ((PVar "e")) (EApp (EApp (EVar "appSpineGo") (EVar "e")) (EListLit)))
+(DTypeSig true "appArgsOf" (TyFun (TyCon "Expr") (TyApp (TyCon "List") (TyCon "Expr"))))
+(DFunDef false "appArgsOf" ((PVar "e")) (EMatch (EApp (EVar "appSpineOf") (EVar "e")) (arm (PTuple PWild (PVar "args")) () (EVar "args"))))
 (DTypeSig false "appSpineGo" (TyFun (TyCon "Expr") (TyFun (TyApp (TyCon "List") (TyCon "Expr")) (TyTuple (TyCon "Expr") (TyApp (TyCon "List") (TyCon "Expr"))))))
 (DFunDef false "appSpineGo" ((PVar "e") (PVar "acc")) (EMatch (EApp (EVar "stripELoc") (EVar "e")) (arm (PCon "EApp" (PVar "f") (PVar "a")) () (EApp (EApp (EVar "appSpineGo") (EVar "f")) (EBinOp "::" (EVar "a") (EVar "acc")))) (arm (PVar "other") () (ETuple (EVar "other") (EVar "acc")))))
 (DTypeSig true "paramNameOf" (TyFun (TyCon "Pat") (TyApp (TyCon "Option") (TyCon "String"))))
@@ -1807,3 +1823,5 @@ ruleNameResliceInLoop = "rule-reslice-in-loop"
 (DFunDef false "lastArmSpan" ((PVar "arms")) (EMatch (EApp (EVar "last") (EVar "arms")) (arm (PCon "Some" (PCon "Arm" PWild PWild (PVar "body"))) () (EApp (EVar "tightSpan") (EVar "body"))) (arm (PCon "None") () (EVar "None"))))
 (DTypeSig true "ruleNameResliceInLoop" (TyCon "String"))
 (DFunDef false "ruleNameResliceInLoop" () (ELit (LString "rule-reslice-in-loop")))
+(DTypeSig true "ruleNameListAsSet" (TyCon "String"))
+(DFunDef false "ruleNameListAsSet" () (ELit (LString "rule-list-as-set")))

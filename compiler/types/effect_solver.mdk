@@ -1274,10 +1274,10 @@ decideAuthorities solver scope rigid outward binder wanteds =
 -- into the same declaration) is one defect, reported where it was first
 -- recorded.  The two halves of one index equality are one pair, unordered.
 distinctFailures : List (SummaryFailure c) -> List (SummaryFailure c)
-distinctFailures failures = distinctFailuresGo failures []
+distinctFailures failures = distinctFailuresGo failures Tip
 
 distinctFailuresGo : List (SummaryFailure c) ->
-  List String ->
+  Map String Unit ->
   List (SummaryFailure c)
 distinctFailuresGo [] _ = []
 distinctFailuresGo (f :: rest) seen = match f.esfAuthority
@@ -1291,10 +1291,10 @@ distinctFailuresGo (f :: rest) seen = match f.esfAuthority
         "=\{a}\t\{b}"
       else
         "=\{b}\t\{a}"
-    if elem key seen then
+    if M.has key seen then
       distinctFailuresGo rest seen
     else
-      f :: distinctFailuresGo rest (key :: seen)
+      f :: distinctFailuresGo rest (M.set key () seen)
   None => f :: distinctFailuresGo rest seen
 
 -- Once every binding of the module is inferred, the variables no binding
