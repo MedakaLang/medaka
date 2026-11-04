@@ -1,5 +1,5 @@
 # META
-source_lines=101
+source_lines=241
 stages=DESUGAR,MARK
 # SOURCE
 -- Tests for the array-of-tables readers in `stdlib/toml.mdk`.
@@ -8,7 +8,7 @@ import toml.{
   Toml(..), TomlValue(..), parse, tableCount, tableEntry, tableEntries,
   getString
 }
-import test.{expectEqual, expectOkThen}
+import test.{expectEach, expectEqual, expectErrContains, expectOkThen}
 
 multi : String
 multi =
@@ -103,9 +103,149 @@ test "a key followed by a no-break space keeps it in the key" =
 
 test "a table header with a no-break space inside the brackets keeps it" =
   expectEqual (Ok (Toml [("a .k", TString "v")])) (parse "[a ]\nk = \"v\"\n")
+
+-- ── Basic-string escapes ─────────────────────────────────────────────────────
+
+-- The one-character string for a code point.
+codeStr : Int -> String
+codeStr n = match charFromCode n
+  Some c => charToStr c
+  None => ""
+
+str : String -> Result String Toml
+str v = Ok (Toml [("k", TString v)])
+
+test "each TOML escape decodes" = expectEach [
+  ("\\b", expectEqual (str (codeStr 8)) (parse "k = \"\\b\"")),
+  ("\\t", expectEqual (str (codeStr 9)) (parse "k = \"\\t\"")),
+  ("\\n", expectEqual (str (codeStr 10)) (parse "k = \"\\n\"")),
+  ("\\f", expectEqual (str (codeStr 12)) (parse "k = \"\\f\"")),
+  ("\\r", expectEqual (str (codeStr 13)) (parse "k = \"\\r\"")),
+  ("\\\"", expectEqual (str "\"") (parse "k = \"\\\"\"")),
+  ("\\\\", expectEqual (str "\\") (parse "k = \"\\\\\"")),
+  ("\\u00e9", expectEqual (str "é") (parse "k = \"\\u00e9\"")),
+  ("\\u00E9", expectEqual (str "é") (parse "k = \"\\u00E9\"")),
+  (
+    "\\U0001F600",
+    expectEqual (str (codeStr 128512)) (parse "k = \"\\U0001F600\""),
+  ),
+  ("mixed", expectEqual (str "a\nb\"c") (parse "k = \"a\\nb\\\"c\"")),
+  (
+    "a raw tab",
+    expectEqual (str (codeStr 9)) (parse ("k = \"" ++ codeStr 9 ++ "\"")),
+  ),
+]
+
+test "an invalid string is an Err naming the key and the character" = expectEach
+  [
+    (
+      "unknown escape",
+      expectErrContains "key 'k': unknown escape '\\q'" (parse "k = \"a\\qb\""),
+    ),
+    (
+      "surrogate",
+      expectErrContains
+        "key 'k': U+d800 is not a Unicode scalar value"
+        (parse "k = \"\\uD800\""),
+    ),
+    (
+      "past U+10FFFF",
+      expectErrContains
+        "U+110000 is not a Unicode scalar value"
+        (parse "k = \"\\U00110000\""),
+    ),
+    (
+      "short \\u",
+      expectErrContains
+        "key 'k': \\u needs 4 hex digits"
+        (parse "k = \"\\u12\""),
+    ),
+    (
+      "short \\U",
+      expectErrContains
+        "key 'k': \\U needs 8 hex digits"
+        (parse "k = \"\\U0001F60\""),
+    ),
+    (
+      "raw LF",
+      expectErrContains
+        "key 'k': unterminated string"
+        (parse ("k = \"a" ++ codeStr 10 ++ "b\"")),
+    ),
+    (
+      "missing closing quote",
+      expectErrContains
+        "key 'k': unterminated string (a string must close on the same line"
+        (parse "k = \"abc"),
+    ),
+    (
+      "escape of a control character",
+      expectErrContains
+        "key 'k': unknown escape U+0001"
+        (parse ("k = \"a\\" ++ codeStr 1 ++ "b\"")),
+    ),
+    (
+      "raw U+0001",
+      expectErrContains
+        "key 'k': raw control character U+0001"
+        (parse ("k = \"" ++ codeStr 1 ++ "\"")),
+    ),
+    (
+      "raw DEL",
+      expectErrContains
+        "key 'k': raw control character U+007f"
+        (parse ("k = \"" ++ codeStr 127 ++ "\"")),
+    ),
+    (
+      "in an array",
+      expectErrContains
+        "key 'xs': unknown escape '\\q'"
+        (parse "xs = [\"ok\", \"\\q\"]"),
+    ),
+  ]
+
+test "an escaped quote does not end a string or start a comment" = expectEach [
+  ("quote then hash", expectEqual (str "a\"#b") (parse "k = \"a\\\"#b\" # c")),
+  (
+    "escaped backslash closes",
+    expectEqual (str "a\\") (parse "k = \"a\\\\\" # c"),
+  ),
+  (
+    "backslash outside a string is not special",
+    expectEqual (Ok (Toml [("k", TInt 1)])) (parse "k = 1 # \\"),
+  ),
+]
+
+test "an array of strings with escapes parses" =
+  expectEqual
+    (Ok (Toml [("xs", TArray ["a\"b", "c\\d", "e\nf"])]))
+    (parse "xs = [\"a\\\"b\", \"c\\\\d\", \"e\\nf\"] # note")
+
+test "display spells escapes the way parse reads them" = expectEach [
+  (
+    "quote and backslash",
+    expectEqual "\"a\\\"\\\\\"" (display (TString "a\"\\")),
+  ),
+  ("newline", expectEqual "\"\\n\"" (display (TString "\n"))),
+  ("control", expectEqual "\"\\u0001\"" (display (TString (codeStr 1)))),
+  ("array", expectEqual "[\"x\\\"y\", \"z\"]" (display (TArray ["x\"y", "z"]))),
+]
+
+-- A string built from arbitrary code points below U+012C: quotes, backslashes,
+-- newlines and every other control character all occur.
+stringOfCodes : List Int -> String
+stringOfCodes ns = stringConcat (map (n => codeStr ((n % 300 + 300) % 300)) ns)
+
+prop "parse reads back what display writes for a string" (ns : List Int) =
+  let s = stringOfCodes ns
+  parse ("k = " ++ display (TString s)) == str s
+
+prop "parse reads back what display writes for an array of strings" (ns : List Int) (ms : List Int) =
+  let xs = [stringOfCodes ns, stringOfCodes ms]
+  parse ("xs = " ++ display (TArray xs)) == Ok (Toml [("xs", TArray xs)])
 # DESUGAR
 (DUse false (UseGroup ("toml") ((mem "Toml" true) (mem "TomlValue" true) (mem "parse" false) (mem "tableCount" false) (mem "tableEntry" false) (mem "tableEntries" false) (mem "getString" false))))
-(DUse false (UseGroup ("test") ((mem "expectEqual" false) (mem "expectOkThen" false))))
+(DUse false (UseGroup ("test") ((mem "expectEach" false) (mem "expectEqual" false) (mem "expectErrContains" false) (mem "expectOkThen" false))))
 (DTypeSig false "multi" (TyCon "String"))
 (DFunDef false "multi" () (ELit (LString "[package]\nname = \"p\"\n[[gate]]\nname = \"a\"\nshard = 1\n[[other]]\nname = \"x\"\n[[gate]]\nname = \"b\"\n[[other]]\nname = \"y\"\n[[gate]]\nname = \"c\"\nshard = 3\n")))
 (DTypeSig false "load" (TyFun (TyCon "String") (TyCon "Toml")))
@@ -128,9 +268,22 @@ test "a table header with a no-break space inside the brackets keeps it" =
 (DTest false "tableEntry of the last entry is present" (EApp (EApp (EVar "expectEqual") (EApp (EVar "Some") (ELit (LString "c")))) (EBinOp "|>" (EApp (EApp (EApp (EVar "tableEntry") (ELit (LString "gate"))) (ELit (LInt 2))) (EApp (EVar "load") (EVar "multi"))) (EApp (EVar "flatMap") (EApp (EVar "getString") (ELit (LString "name")))))))
 (DTest false "a key followed by a no-break space keeps it in the key" (EApp (EApp (EVar "expectEqual") (EApp (EVar "Ok") (EApp (EVar "Toml") (EListLit (ETuple (ELit (LString "key ")) (EApp (EVar "TInt") (ELit (LInt 1)))))))) (EApp (EVar "parse") (ELit (LString "key = 1\n")))))
 (DTest false "a table header with a no-break space inside the brackets keeps it" (EApp (EApp (EVar "expectEqual") (EApp (EVar "Ok") (EApp (EVar "Toml") (EListLit (ETuple (ELit (LString "a .k")) (EApp (EVar "TString") (ELit (LString "v")))))))) (EApp (EVar "parse") (ELit (LString "[a ]\nk = \"v\"\n")))))
+(DTypeSig false "codeStr" (TyFun (TyCon "Int") (TyCon "String")))
+(DFunDef false "codeStr" ((PVar "n")) (EMatch (EApp (EVar "charFromCode") (EVar "n")) (arm (PCon "Some" (PVar "c")) () (EApp (EVar "charToStr") (EVar "c"))) (arm (PCon "None") () (ELit (LString "")))))
+(DTypeSig false "str" (TyFun (TyCon "String") (TyApp (TyApp (TyCon "Result") (TyCon "String")) (TyCon "Toml"))))
+(DFunDef false "str" ((PVar "v")) (EApp (EVar "Ok") (EApp (EVar "Toml") (EListLit (ETuple (ELit (LString "k")) (EApp (EVar "TString") (EVar "v")))))))
+(DTest false "each TOML escape decodes" (EApp (EVar "expectEach") (EListLit (ETuple (ELit (LString "\\b")) (EApp (EApp (EVar "expectEqual") (EApp (EVar "str") (EApp (EVar "codeStr") (ELit (LInt 8))))) (EApp (EVar "parse") (ELit (LString "k = \"\\b\""))))) (ETuple (ELit (LString "\\t")) (EApp (EApp (EVar "expectEqual") (EApp (EVar "str") (EApp (EVar "codeStr") (ELit (LInt 9))))) (EApp (EVar "parse") (ELit (LString "k = \"\\t\""))))) (ETuple (ELit (LString "\\n")) (EApp (EApp (EVar "expectEqual") (EApp (EVar "str") (EApp (EVar "codeStr") (ELit (LInt 10))))) (EApp (EVar "parse") (ELit (LString "k = \"\\n\""))))) (ETuple (ELit (LString "\\f")) (EApp (EApp (EVar "expectEqual") (EApp (EVar "str") (EApp (EVar "codeStr") (ELit (LInt 12))))) (EApp (EVar "parse") (ELit (LString "k = \"\\f\""))))) (ETuple (ELit (LString "\\r")) (EApp (EApp (EVar "expectEqual") (EApp (EVar "str") (EApp (EVar "codeStr") (ELit (LInt 13))))) (EApp (EVar "parse") (ELit (LString "k = \"\\r\""))))) (ETuple (ELit (LString "\\\"")) (EApp (EApp (EVar "expectEqual") (EApp (EVar "str") (ELit (LString "\"")))) (EApp (EVar "parse") (ELit (LString "k = \"\\\"\""))))) (ETuple (ELit (LString "\\\\")) (EApp (EApp (EVar "expectEqual") (EApp (EVar "str") (ELit (LString "\\")))) (EApp (EVar "parse") (ELit (LString "k = \"\\\\\""))))) (ETuple (ELit (LString "\\u00e9")) (EApp (EApp (EVar "expectEqual") (EApp (EVar "str") (ELit (LString "é")))) (EApp (EVar "parse") (ELit (LString "k = \"\\u00e9\""))))) (ETuple (ELit (LString "\\u00E9")) (EApp (EApp (EVar "expectEqual") (EApp (EVar "str") (ELit (LString "é")))) (EApp (EVar "parse") (ELit (LString "k = \"\\u00E9\""))))) (ETuple (ELit (LString "\\U0001F600")) (EApp (EApp (EVar "expectEqual") (EApp (EVar "str") (EApp (EVar "codeStr") (ELit (LInt 128512))))) (EApp (EVar "parse") (ELit (LString "k = \"\\U0001F600\""))))) (ETuple (ELit (LString "mixed")) (EApp (EApp (EVar "expectEqual") (EApp (EVar "str") (ELit (LString "a\nb\"c")))) (EApp (EVar "parse") (ELit (LString "k = \"a\\nb\\\"c\""))))) (ETuple (ELit (LString "a raw tab")) (EApp (EApp (EVar "expectEqual") (EApp (EVar "str") (EApp (EVar "codeStr") (ELit (LInt 9))))) (EApp (EVar "parse") (EBinOp "++" (EBinOp "++" (ELit (LString "k = \"")) (EApp (EVar "codeStr") (ELit (LInt 9)))) (ELit (LString "\"")))))))))
+(DTest false "an invalid string is an Err naming the key and the character" (EApp (EVar "expectEach") (EListLit (ETuple (ELit (LString "unknown escape")) (EApp (EApp (EVar "expectErrContains") (ELit (LString "key 'k': unknown escape '\\q'"))) (EApp (EVar "parse") (ELit (LString "k = \"a\\qb\""))))) (ETuple (ELit (LString "surrogate")) (EApp (EApp (EVar "expectErrContains") (ELit (LString "key 'k': U+d800 is not a Unicode scalar value"))) (EApp (EVar "parse") (ELit (LString "k = \"\\uD800\""))))) (ETuple (ELit (LString "past U+10FFFF")) (EApp (EApp (EVar "expectErrContains") (ELit (LString "U+110000 is not a Unicode scalar value"))) (EApp (EVar "parse") (ELit (LString "k = \"\\U00110000\""))))) (ETuple (ELit (LString "short \\u")) (EApp (EApp (EVar "expectErrContains") (ELit (LString "key 'k': \\u needs 4 hex digits"))) (EApp (EVar "parse") (ELit (LString "k = \"\\u12\""))))) (ETuple (ELit (LString "short \\U")) (EApp (EApp (EVar "expectErrContains") (ELit (LString "key 'k': \\U needs 8 hex digits"))) (EApp (EVar "parse") (ELit (LString "k = \"\\U0001F60\""))))) (ETuple (ELit (LString "raw LF")) (EApp (EApp (EVar "expectErrContains") (ELit (LString "key 'k': unterminated string"))) (EApp (EVar "parse") (EBinOp "++" (EBinOp "++" (ELit (LString "k = \"a")) (EApp (EVar "codeStr") (ELit (LInt 10)))) (ELit (LString "b\"")))))) (ETuple (ELit (LString "missing closing quote")) (EApp (EApp (EVar "expectErrContains") (ELit (LString "key 'k': unterminated string (a string must close on the same line"))) (EApp (EVar "parse") (ELit (LString "k = \"abc"))))) (ETuple (ELit (LString "escape of a control character")) (EApp (EApp (EVar "expectErrContains") (ELit (LString "key 'k': unknown escape U+0001"))) (EApp (EVar "parse") (EBinOp "++" (EBinOp "++" (ELit (LString "k = \"a\\")) (EApp (EVar "codeStr") (ELit (LInt 1)))) (ELit (LString "b\"")))))) (ETuple (ELit (LString "raw U+0001")) (EApp (EApp (EVar "expectErrContains") (ELit (LString "key 'k': raw control character U+0001"))) (EApp (EVar "parse") (EBinOp "++" (EBinOp "++" (ELit (LString "k = \"")) (EApp (EVar "codeStr") (ELit (LInt 1)))) (ELit (LString "\"")))))) (ETuple (ELit (LString "raw DEL")) (EApp (EApp (EVar "expectErrContains") (ELit (LString "key 'k': raw control character U+007f"))) (EApp (EVar "parse") (EBinOp "++" (EBinOp "++" (ELit (LString "k = \"")) (EApp (EVar "codeStr") (ELit (LInt 127)))) (ELit (LString "\"")))))) (ETuple (ELit (LString "in an array")) (EApp (EApp (EVar "expectErrContains") (ELit (LString "key 'xs': unknown escape '\\q'"))) (EApp (EVar "parse") (ELit (LString "xs = [\"ok\", \"\\q\"]"))))))))
+(DTest false "an escaped quote does not end a string or start a comment" (EApp (EVar "expectEach") (EListLit (ETuple (ELit (LString "quote then hash")) (EApp (EApp (EVar "expectEqual") (EApp (EVar "str") (ELit (LString "a\"#b")))) (EApp (EVar "parse") (ELit (LString "k = \"a\\\"#b\" # c"))))) (ETuple (ELit (LString "escaped backslash closes")) (EApp (EApp (EVar "expectEqual") (EApp (EVar "str") (ELit (LString "a\\")))) (EApp (EVar "parse") (ELit (LString "k = \"a\\\\\" # c"))))) (ETuple (ELit (LString "backslash outside a string is not special")) (EApp (EApp (EVar "expectEqual") (EApp (EVar "Ok") (EApp (EVar "Toml") (EListLit (ETuple (ELit (LString "k")) (EApp (EVar "TInt") (ELit (LInt 1)))))))) (EApp (EVar "parse") (ELit (LString "k = 1 # \\"))))))))
+(DTest false "an array of strings with escapes parses" (EApp (EApp (EVar "expectEqual") (EApp (EVar "Ok") (EApp (EVar "Toml") (EListLit (ETuple (ELit (LString "xs")) (EApp (EVar "TArray") (EListLit (ELit (LString "a\"b")) (ELit (LString "c\\d")) (ELit (LString "e\nf"))))))))) (EApp (EVar "parse") (ELit (LString "xs = [\"a\\\"b\", \"c\\\\d\", \"e\\nf\"] # note")))))
+(DTest false "display spells escapes the way parse reads them" (EApp (EVar "expectEach") (EListLit (ETuple (ELit (LString "quote and backslash")) (EApp (EApp (EVar "expectEqual") (ELit (LString "\"a\\\"\\\\\""))) (EApp (EVar "display") (EApp (EVar "TString") (ELit (LString "a\"\\")))))) (ETuple (ELit (LString "newline")) (EApp (EApp (EVar "expectEqual") (ELit (LString "\"\\n\""))) (EApp (EVar "display") (EApp (EVar "TString") (ELit (LString "\n")))))) (ETuple (ELit (LString "control")) (EApp (EApp (EVar "expectEqual") (ELit (LString "\"\\u0001\""))) (EApp (EVar "display") (EApp (EVar "TString") (EApp (EVar "codeStr") (ELit (LInt 1))))))) (ETuple (ELit (LString "array")) (EApp (EApp (EVar "expectEqual") (ELit (LString "[\"x\\\"y\", \"z\"]"))) (EApp (EVar "display") (EApp (EVar "TArray") (EListLit (ELit (LString "x\"y")) (ELit (LString "z"))))))))))
+(DTypeSig false "stringOfCodes" (TyFun (TyApp (TyCon "List") (TyCon "Int")) (TyCon "String")))
+(DFunDef false "stringOfCodes" ((PVar "ns")) (EApp (EVar "stringConcat") (EApp (EApp (EVar "map") (ELam ((PVar "n")) (EApp (EVar "codeStr") (EBinOp "%" (EBinOp "+" (EBinOp "%" (EVar "n") (ELit (LInt 300))) (ELit (LInt 300))) (ELit (LInt 300)))))) (EVar "ns"))))
+(DProp false "parse reads back what display writes for a string" ((pp "ns" (TyApp (TyCon "List") (TyCon "Int")))) (EBlock (DoLet false false (PVar "s") (EApp (EVar "stringOfCodes") (EVar "ns"))) (DoExpr (EBinOp "==" (EApp (EVar "parse") (EBinOp "++" (ELit (LString "k = ")) (EApp (EVar "display") (EApp (EVar "TString") (EVar "s"))))) (EApp (EVar "str") (EVar "s"))))))
+(DProp false "parse reads back what display writes for an array of strings" ((pp "ns" (TyApp (TyCon "List") (TyCon "Int"))) (pp "ms" (TyApp (TyCon "List") (TyCon "Int")))) (EBlock (DoLet false false (PVar "xs") (EListLit (EApp (EVar "stringOfCodes") (EVar "ns")) (EApp (EVar "stringOfCodes") (EVar "ms")))) (DoExpr (EBinOp "==" (EApp (EVar "parse") (EBinOp "++" (ELit (LString "xs = ")) (EApp (EVar "display") (EApp (EVar "TArray") (EVar "xs"))))) (EApp (EVar "Ok") (EApp (EVar "Toml") (EListLit (ETuple (ELit (LString "xs")) (EApp (EVar "TArray") (EVar "xs"))))))))))
 # MARK
 (DUse false (UseGroup ("toml") ((mem "Toml" true) (mem "TomlValue" true) (mem "parse" false) (mem "tableCount" false) (mem "tableEntry" false) (mem "tableEntries" false) (mem "getString" false))))
-(DUse false (UseGroup ("test") ((mem "expectEqual" false) (mem "expectOkThen" false))))
+(DUse false (UseGroup ("test") ((mem "expectEach" false) (mem "expectEqual" false) (mem "expectErrContains" false) (mem "expectOkThen" false))))
 (DTypeSig false "multi" (TyCon "String"))
 (DFunDef false "multi" () (ELit (LString "[package]\nname = \"p\"\n[[gate]]\nname = \"a\"\nshard = 1\n[[other]]\nname = \"x\"\n[[gate]]\nname = \"b\"\n[[other]]\nname = \"y\"\n[[gate]]\nname = \"c\"\nshard = 3\n")))
 (DTypeSig false "load" (TyFun (TyCon "String") (TyCon "Toml")))
@@ -153,3 +306,16 @@ test "a table header with a no-break space inside the brackets keeps it" =
 (DTest false "tableEntry of the last entry is present" (EApp (EApp (EVar "expectEqual") (EApp (EVar "Some") (ELit (LString "c")))) (EBinOp "|>" (EApp (EApp (EApp (EVar "tableEntry") (ELit (LString "gate"))) (ELit (LInt 2))) (EApp (EVar "load") (EVar "multi"))) (EApp (EDictApp "flatMap") (EApp (EVar "getString") (ELit (LString "name")))))))
 (DTest false "a key followed by a no-break space keeps it in the key" (EApp (EApp (EVar "expectEqual") (EApp (EVar "Ok") (EApp (EVar "Toml") (EListLit (ETuple (ELit (LString "key ")) (EApp (EVar "TInt") (ELit (LInt 1)))))))) (EApp (EVar "parse") (ELit (LString "key = 1\n")))))
 (DTest false "a table header with a no-break space inside the brackets keeps it" (EApp (EApp (EVar "expectEqual") (EApp (EVar "Ok") (EApp (EVar "Toml") (EListLit (ETuple (ELit (LString "a .k")) (EApp (EVar "TString") (ELit (LString "v")))))))) (EApp (EVar "parse") (ELit (LString "[a ]\nk = \"v\"\n")))))
+(DTypeSig false "codeStr" (TyFun (TyCon "Int") (TyCon "String")))
+(DFunDef false "codeStr" ((PVar "n")) (EMatch (EApp (EVar "charFromCode") (EVar "n")) (arm (PCon "Some" (PVar "c")) () (EApp (EVar "charToStr") (EVar "c"))) (arm (PCon "None") () (ELit (LString "")))))
+(DTypeSig false "str" (TyFun (TyCon "String") (TyApp (TyApp (TyCon "Result") (TyCon "String")) (TyCon "Toml"))))
+(DFunDef false "str" ((PVar "v")) (EApp (EVar "Ok") (EApp (EVar "Toml") (EListLit (ETuple (ELit (LString "k")) (EApp (EVar "TString") (EVar "v")))))))
+(DTest false "each TOML escape decodes" (EApp (EVar "expectEach") (EListLit (ETuple (ELit (LString "\\b")) (EApp (EApp (EVar "expectEqual") (EApp (EVar "str") (EApp (EVar "codeStr") (ELit (LInt 8))))) (EApp (EVar "parse") (ELit (LString "k = \"\\b\""))))) (ETuple (ELit (LString "\\t")) (EApp (EApp (EVar "expectEqual") (EApp (EVar "str") (EApp (EVar "codeStr") (ELit (LInt 9))))) (EApp (EVar "parse") (ELit (LString "k = \"\\t\""))))) (ETuple (ELit (LString "\\n")) (EApp (EApp (EVar "expectEqual") (EApp (EVar "str") (EApp (EVar "codeStr") (ELit (LInt 10))))) (EApp (EVar "parse") (ELit (LString "k = \"\\n\""))))) (ETuple (ELit (LString "\\f")) (EApp (EApp (EVar "expectEqual") (EApp (EVar "str") (EApp (EVar "codeStr") (ELit (LInt 12))))) (EApp (EVar "parse") (ELit (LString "k = \"\\f\""))))) (ETuple (ELit (LString "\\r")) (EApp (EApp (EVar "expectEqual") (EApp (EVar "str") (EApp (EVar "codeStr") (ELit (LInt 13))))) (EApp (EVar "parse") (ELit (LString "k = \"\\r\""))))) (ETuple (ELit (LString "\\\"")) (EApp (EApp (EVar "expectEqual") (EApp (EVar "str") (ELit (LString "\"")))) (EApp (EVar "parse") (ELit (LString "k = \"\\\"\""))))) (ETuple (ELit (LString "\\\\")) (EApp (EApp (EVar "expectEqual") (EApp (EVar "str") (ELit (LString "\\")))) (EApp (EVar "parse") (ELit (LString "k = \"\\\\\""))))) (ETuple (ELit (LString "\\u00e9")) (EApp (EApp (EVar "expectEqual") (EApp (EVar "str") (ELit (LString "é")))) (EApp (EVar "parse") (ELit (LString "k = \"\\u00e9\""))))) (ETuple (ELit (LString "\\u00E9")) (EApp (EApp (EVar "expectEqual") (EApp (EVar "str") (ELit (LString "é")))) (EApp (EVar "parse") (ELit (LString "k = \"\\u00E9\""))))) (ETuple (ELit (LString "\\U0001F600")) (EApp (EApp (EVar "expectEqual") (EApp (EVar "str") (EApp (EVar "codeStr") (ELit (LInt 128512))))) (EApp (EVar "parse") (ELit (LString "k = \"\\U0001F600\""))))) (ETuple (ELit (LString "mixed")) (EApp (EApp (EVar "expectEqual") (EApp (EVar "str") (ELit (LString "a\nb\"c")))) (EApp (EVar "parse") (ELit (LString "k = \"a\\nb\\\"c\""))))) (ETuple (ELit (LString "a raw tab")) (EApp (EApp (EVar "expectEqual") (EApp (EVar "str") (EApp (EVar "codeStr") (ELit (LInt 9))))) (EApp (EVar "parse") (EBinOp "++" (EBinOp "++" (ELit (LString "k = \"")) (EApp (EVar "codeStr") (ELit (LInt 9)))) (ELit (LString "\"")))))))))
+(DTest false "an invalid string is an Err naming the key and the character" (EApp (EVar "expectEach") (EListLit (ETuple (ELit (LString "unknown escape")) (EApp (EApp (EVar "expectErrContains") (ELit (LString "key 'k': unknown escape '\\q'"))) (EApp (EVar "parse") (ELit (LString "k = \"a\\qb\""))))) (ETuple (ELit (LString "surrogate")) (EApp (EApp (EVar "expectErrContains") (ELit (LString "key 'k': U+d800 is not a Unicode scalar value"))) (EApp (EVar "parse") (ELit (LString "k = \"\\uD800\""))))) (ETuple (ELit (LString "past U+10FFFF")) (EApp (EApp (EVar "expectErrContains") (ELit (LString "U+110000 is not a Unicode scalar value"))) (EApp (EVar "parse") (ELit (LString "k = \"\\U00110000\""))))) (ETuple (ELit (LString "short \\u")) (EApp (EApp (EVar "expectErrContains") (ELit (LString "key 'k': \\u needs 4 hex digits"))) (EApp (EVar "parse") (ELit (LString "k = \"\\u12\""))))) (ETuple (ELit (LString "short \\U")) (EApp (EApp (EVar "expectErrContains") (ELit (LString "key 'k': \\U needs 8 hex digits"))) (EApp (EVar "parse") (ELit (LString "k = \"\\U0001F60\""))))) (ETuple (ELit (LString "raw LF")) (EApp (EApp (EVar "expectErrContains") (ELit (LString "key 'k': unterminated string"))) (EApp (EVar "parse") (EBinOp "++" (EBinOp "++" (ELit (LString "k = \"a")) (EApp (EVar "codeStr") (ELit (LInt 10)))) (ELit (LString "b\"")))))) (ETuple (ELit (LString "missing closing quote")) (EApp (EApp (EVar "expectErrContains") (ELit (LString "key 'k': unterminated string (a string must close on the same line"))) (EApp (EVar "parse") (ELit (LString "k = \"abc"))))) (ETuple (ELit (LString "escape of a control character")) (EApp (EApp (EVar "expectErrContains") (ELit (LString "key 'k': unknown escape U+0001"))) (EApp (EVar "parse") (EBinOp "++" (EBinOp "++" (ELit (LString "k = \"a\\")) (EApp (EVar "codeStr") (ELit (LInt 1)))) (ELit (LString "b\"")))))) (ETuple (ELit (LString "raw U+0001")) (EApp (EApp (EVar "expectErrContains") (ELit (LString "key 'k': raw control character U+0001"))) (EApp (EVar "parse") (EBinOp "++" (EBinOp "++" (ELit (LString "k = \"")) (EApp (EVar "codeStr") (ELit (LInt 1)))) (ELit (LString "\"")))))) (ETuple (ELit (LString "raw DEL")) (EApp (EApp (EVar "expectErrContains") (ELit (LString "key 'k': raw control character U+007f"))) (EApp (EVar "parse") (EBinOp "++" (EBinOp "++" (ELit (LString "k = \"")) (EApp (EVar "codeStr") (ELit (LInt 127)))) (ELit (LString "\"")))))) (ETuple (ELit (LString "in an array")) (EApp (EApp (EVar "expectErrContains") (ELit (LString "key 'xs': unknown escape '\\q'"))) (EApp (EVar "parse") (ELit (LString "xs = [\"ok\", \"\\q\"]"))))))))
+(DTest false "an escaped quote does not end a string or start a comment" (EApp (EVar "expectEach") (EListLit (ETuple (ELit (LString "quote then hash")) (EApp (EApp (EVar "expectEqual") (EApp (EVar "str") (ELit (LString "a\"#b")))) (EApp (EVar "parse") (ELit (LString "k = \"a\\\"#b\" # c"))))) (ETuple (ELit (LString "escaped backslash closes")) (EApp (EApp (EVar "expectEqual") (EApp (EVar "str") (ELit (LString "a\\")))) (EApp (EVar "parse") (ELit (LString "k = \"a\\\\\" # c"))))) (ETuple (ELit (LString "backslash outside a string is not special")) (EApp (EApp (EVar "expectEqual") (EApp (EVar "Ok") (EApp (EVar "Toml") (EListLit (ETuple (ELit (LString "k")) (EApp (EVar "TInt") (ELit (LInt 1)))))))) (EApp (EVar "parse") (ELit (LString "k = 1 # \\"))))))))
+(DTest false "an array of strings with escapes parses" (EApp (EApp (EVar "expectEqual") (EApp (EVar "Ok") (EApp (EVar "Toml") (EListLit (ETuple (ELit (LString "xs")) (EApp (EVar "TArray") (EListLit (ELit (LString "a\"b")) (ELit (LString "c\\d")) (ELit (LString "e\nf"))))))))) (EApp (EVar "parse") (ELit (LString "xs = [\"a\\\"b\", \"c\\\\d\", \"e\\nf\"] # note")))))
+(DTest false "display spells escapes the way parse reads them" (EApp (EVar "expectEach") (EListLit (ETuple (ELit (LString "quote and backslash")) (EApp (EApp (EVar "expectEqual") (ELit (LString "\"a\\\"\\\\\""))) (EApp (EMethodRef "display") (EApp (EVar "TString") (ELit (LString "a\"\\")))))) (ETuple (ELit (LString "newline")) (EApp (EApp (EVar "expectEqual") (ELit (LString "\"\\n\""))) (EApp (EMethodRef "display") (EApp (EVar "TString") (ELit (LString "\n")))))) (ETuple (ELit (LString "control")) (EApp (EApp (EVar "expectEqual") (ELit (LString "\"\\u0001\""))) (EApp (EMethodRef "display") (EApp (EVar "TString") (EApp (EVar "codeStr") (ELit (LInt 1))))))) (ETuple (ELit (LString "array")) (EApp (EApp (EVar "expectEqual") (ELit (LString "[\"x\\\"y\", \"z\"]"))) (EApp (EMethodRef "display") (EApp (EVar "TArray") (EListLit (ELit (LString "x\"y")) (ELit (LString "z"))))))))))
+(DTypeSig false "stringOfCodes" (TyFun (TyApp (TyCon "List") (TyCon "Int")) (TyCon "String")))
+(DFunDef false "stringOfCodes" ((PVar "ns")) (EApp (EVar "stringConcat") (EApp (EApp (EMethodRef "map") (ELam ((PVar "n")) (EApp (EVar "codeStr") (EBinOp "%" (EBinOp "+" (EBinOp "%" (EVar "n") (ELit (LInt 300))) (ELit (LInt 300))) (ELit (LInt 300)))))) (EVar "ns"))))
+(DProp false "parse reads back what display writes for a string" ((pp "ns" (TyApp (TyCon "List") (TyCon "Int")))) (EBlock (DoLet false false (PVar "s") (EApp (EVar "stringOfCodes") (EVar "ns"))) (DoExpr (EBinOp "==" (EApp (EVar "parse") (EBinOp "++" (ELit (LString "k = ")) (EApp (EMethodRef "display") (EApp (EVar "TString") (EVar "s"))))) (EApp (EVar "str") (EVar "s"))))))
+(DProp false "parse reads back what display writes for an array of strings" ((pp "ns" (TyApp (TyCon "List") (TyCon "Int"))) (pp "ms" (TyApp (TyCon "List") (TyCon "Int")))) (EBlock (DoLet false false (PVar "xs") (EListLit (EApp (EVar "stringOfCodes") (EVar "ns")) (EApp (EVar "stringOfCodes") (EVar "ms")))) (DoExpr (EBinOp "==" (EApp (EVar "parse") (EBinOp "++" (ELit (LString "xs = ")) (EApp (EMethodRef "display") (EApp (EVar "TArray") (EVar "xs"))))) (EApp (EVar "Ok") (EApp (EVar "Toml") (EListLit (ETuple (ELit (LString "xs")) (EApp (EVar "TArray") (EVar "xs"))))))))))

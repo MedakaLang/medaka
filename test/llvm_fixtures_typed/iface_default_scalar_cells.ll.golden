@@ -213,6 +213,7 @@ declare i64 @mdk_monotonic_sec(i64)
 declare void @mdk_sleep_ms(i64)
 declare i64 @mdk_alloc_bytes(i64)
 declare void @mdk_stash_run_stdout(i64)
+declare void @mdk_set_abort_report(i64, i64)
 declare void @mdk_enable_run_stdout_flush(i64)
 
 ; mdk-module program

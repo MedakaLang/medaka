@@ -254,6 +254,8 @@ verb (`sh test/cli_conformance_census.sh`, "usage-error exit code + stream" and
 > belongs in the envelope (the mechanism already exists: `attachStaleness`,
 > `compiler/tools/mcp.mdk`) or on a documented third channel.
 
+`medaka test --json` is the second such verb: a normal run answers on stdout, but a run that aborts after its tests start writes its machine envelope to stderr (the `run --json` shape, plus the top-level `seed`), so stderr is its machine channel too. On both verbs the staleness notice is deferred: it rides inside the envelope on an abort and is printed as prose on stderr on every other exit; `test --json` also registers it with the C abort emitter at startup, so even an abort before the envelope is armed prints it, whereas a `run --json` abort raised in the C runtime drops it.
+
 **Rationale.** A machine consumer reads one stream. A verb that answers on the other one is
 unavailable to it however well-formed its JSON is — and a verb that mixes prose into the
 answer stream is worse, because the consumer parses *most* of the time.
@@ -362,8 +364,8 @@ spawned native probe, props worker and per-file child alike. A run in which test
 properties ran and something failed prints `seed: N (rerun with MEDAKA_SEED=N)` once after the
 summary; a green run, and a refusal before anything ran (a type error, a missing capability, a bad
 target), print nothing extra. A failing `--json` run adds the same N as a top-level integer `seed` member
-(a green run and a refusal add none) and keeps stderr empty. An uncaught panic under the eval engine aborts the run
-without a summary; a single-file run prints the seed line on stderr directly after the runtime-error line, a directory or project run prints it once on stdout, and under `--json` the run prints the `run --json` error envelope on stderr, with the seed as a top-level `seed` member, and nothing on stdout. Only runtime errors raised through the evaluator's runtime-error path carry the seed; a panic raised inside the evaluator's own compiled code does not (tracked in #4821). `medaka repl` draws from the same stream and honours `MEDAKA_SEED`, with no print.
+(a green run and a refusal add none) and keeps stderr empty. An abort under the eval engine (a runtime error, a panic raised in the evaluator's own compiled code, a stack overflow, running out of memory) ends the run
+without a summary; a single-file run prints the seed line on stderr directly after the error line, a directory or project run prints it once on stdout, and under `--json` the run prints the `run --json` error envelope on stderr, with the seed as a top-level `seed` member, and nothing on stdout. An abort before the target's tests start (a parse error, a type error the typechecker reports, a refusal) prints no seed, and neither does `medaka run`. A file with tests and no doctests runs untyped, so a type error in it surfaces as a runtime error after the tests start and prints the seed. The native engine's summary and seed line are unchanged. `medaka repl` draws from the same stream and honours `MEDAKA_SEED`, with no print.
 
 There is no residual C2 cell left in this table — `new` was the last one and S-5 drained it.
 

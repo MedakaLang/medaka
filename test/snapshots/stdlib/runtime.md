@@ -1,5 +1,5 @@
 # META
-source_lines=1098
+source_lines=1105
 stages=DESUGAR,MARK
 # SOURCE
 {- | The host primitives.
@@ -298,6 +298,13 @@ extern sliceError : Int -> Int -> a
 -- output is unaffected.
 extern stashRunStdout : String -> Unit
 extern enableRunStdoutFlush : Unit -> Unit
+
+-- Internal: hands the C runtime the human note and the `--json` envelope
+-- template an abort prints.  Not for general use: it only stores both
+-- strings, and an empty string clears its slot.  The interpreter binding is a
+-- no-op so a guest program under `medaka run` cannot rewrite its host's abort
+-- report.
+extern setAbortReport : String -> String -> Unit
 
 -- Internal: the terminator of a desugared guard chain.  Raises the same "no
 -- clause matched" signal as a failed pattern, so when a function clause's
@@ -1146,6 +1153,7 @@ extern stringToLower : String -> String
 (DExtern false "sliceError" (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyVar "a"))))
 (DExtern false "stashRunStdout" (TyFun (TyCon "String") (TyCon "Unit")))
 (DExtern false "enableRunStdoutFlush" (TyFun (TyCon "Unit") (TyCon "Unit")))
+(DExtern false "setAbortReport" (TyFun (TyCon "String") (TyFun (TyCon "String") (TyCon "Unit"))))
 (DExtern false "__fallthrough__" (TyFun (TyCon "Unit") (TyVar "a")))
 (DExtern false "assertSnapshot" (TyFun (TyCon "String") (TyFun (TyCon "String") (TyEffect ("IO") None (TyCon "Unit")))))
 (DExtern false "netResolve" (TyFun (TyNamed "host" (TyCon "String")) (TyEffect ((atom "Net" (name "host"))) None (TyApp (TyApp (TyCon "Result") (TyCon "String")) (TyApp (TyCon "List") (TyCon "String"))))))
@@ -1364,6 +1372,7 @@ extern stringToLower : String -> String
 (DExtern false "sliceError" (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyVar "a"))))
 (DExtern false "stashRunStdout" (TyFun (TyCon "String") (TyCon "Unit")))
 (DExtern false "enableRunStdoutFlush" (TyFun (TyCon "Unit") (TyCon "Unit")))
+(DExtern false "setAbortReport" (TyFun (TyCon "String") (TyFun (TyCon "String") (TyCon "Unit"))))
 (DExtern false "__fallthrough__" (TyFun (TyCon "Unit") (TyVar "a")))
 (DExtern false "assertSnapshot" (TyFun (TyCon "String") (TyFun (TyCon "String") (TyEffect ("IO") None (TyCon "Unit")))))
 (DExtern false "netResolve" (TyFun (TyNamed "host" (TyCon "String")) (TyEffect ((atom "Net" (name "host"))) None (TyApp (TyApp (TyCon "Result") (TyCon "String")) (TyApp (TyCon "List") (TyCon "String"))))))

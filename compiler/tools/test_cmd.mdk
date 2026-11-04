@@ -109,7 +109,7 @@ import eval.eval.{
   modulePathMap,
   testCapableExterns,
   seedRunRng,
-  abortNote,
+  runJsonMode,
   lookupBinding,
   force,
   ppValue,
@@ -244,6 +244,8 @@ import driver.diagnostics.{
   parseErrDiag,
   Diag,
   diagIsError,
+  cjAllToJsonWith,
+  abortEnvelopeFields,
 }
 export import support.util.{rootsOrDefault}
 import support.util.{
@@ -267,8 +269,7 @@ import args.{
   ArgSpec, Args, spec, switch, value, internal, flag, flagValue, withStrictDash
 }
 import json.{Json(..), jObject, jArray, stringify}
-import tools.lint.{splitLintNames}
-import string.{toInt, replaceAll, trimAscii}
+import string.{toInt, replaceAll, trimAscii, split}
 import list.{take}
 import test_process.{testJobs}
 import support.timer.{perfEnabled, now, emitPhase}
@@ -1456,6 +1457,7 @@ driveMulti engines runtimeDecls rsrc csrc stdlibDir target tsrc roots cases filt
             filterOpt
             file
             index
+        armAbortReport engines
         let doctestsOk =
           runDoctests
             engines
@@ -1545,6 +1547,7 @@ driveSingle engines runtimeDecls coreDecls stdlibDir target tsrc roots cases fil
         filterOpt
         file
         index
+    armAbortReport engines
     let doctestsOk = singleDoctestPhase (_ =>
       runDoctests
         engines
@@ -2891,6 +2894,7 @@ reportMulti engines runtimeDecls rsrc csrc stdlibDir target tsrc roots cases fil
           filterOpt
           file
           index
+      armAbortReport engines
       (
         None,
         doctestReport
@@ -2977,6 +2981,7 @@ reportSingle engines runtimeDecls coreDecls stdlibDir target tsrc roots cases fi
       filterOpt
       file
       index
+  armAbortReport engines
   let doctestRuns = singleDoctestPhase (_ =>
     doctestReport
       engines
@@ -4566,11 +4571,12 @@ testHelpText = stringConcat [
   "Random draws in the program under test use one seed per run: MEDAKA_SEED\n",
   "when set, else OS entropy. A run whose tests failed prints `seed: N (rerun with\n",
   "MEDAKA_SEED=N)` after the summary; a failing --json run adds a top-level\n",
-  "`seed` member instead and keeps stderr empty. An uncaught panic under the\n",
-  "eval engine ends the run with no summary: a single-file run prints the seed\n",
-  "line on stderr after the runtime error, a directory or project run prints it\n",
-  "once on stdout, and under --json the run --json error envelope goes to\n",
-  "stderr with a top-level `seed` (nothing on stdout).\n", "\n",
+  "`seed` member instead and keeps stderr empty. An abort under the eval\n",
+  "engine (a runtime error, a stack overflow, running out of memory) ends the\n",
+  "run with no summary: a single-file run prints the seed line on stderr after\n",
+  "the error, a directory or project run prints it once on stdout, and under\n",
+  "--json the run --json error envelope goes to stderr with a top-level `seed`\n",
+  "(nothing on stdout).\n", "\n",
   "--native and --engines are mutually exclusive. With neither, the default\n",
   "is the native backend alone.\n", "\n",
   "With no target, tests the project containing the current directory: the\n",
@@ -4663,7 +4669,7 @@ parseTestEngines a = match (flagValue "--engines" a, flag "--native" a)
 -- known set, not a silent drop.
 parseEngineList : String -> Result String (List Engine)
 parseEngineList spec =
-  let names = filterList (/= "") (map trimAscii (splitLintNames spec))
+  let names = filterList (/= "") (map trimAscii (split "," spec))
   match names
     [] => Err "--engines requires at least one of: eval, native"
     _ => parseEngineNames names
@@ -4707,12 +4713,37 @@ entropySeed bytes = fold (acc b => acc * 256 + b) 0 (take 7 (toList bytes))
 adoptTestSeed : Int -> Unit
 adoptTestSeed n =
   testSeedRef := Some n
-  abortNote := Some (testSeedLine n)
   seedRunRng n
 
 testSeedLine : Int -> String
 testSeedLine n =
   "seed: \{intToString n} (rerun with MEDAKA_SEED=\{intToString n})"
+
+-- Called where a driver is about to evaluate the target's tests in this process,
+-- after its gate passed: from here an abort the runtime reports (a panic in the
+-- evaluator, a trap, the stack-overflow backstop) prints the seed, under
+-- `--json` inside the envelope.  It arms nothing outside the CLI `test` verb,
+-- which alone adopts a seed, or for a run with no eval engine.
+armAbortReport : List Engine -> Unit
+armAbortReport engines = match !testSeedRef
+  Some n if hasInterpEngine engines =>
+    if !runJsonMode then
+      setAbortReport "" (abortEnvelopeTemplate ())
+    else
+      setAbortReport (testSeedLine n) ""
+  _ => ()
+
+-- The envelope `runtimePanic` writes under `--json`, for a diagnostic of no
+-- location, with its code text replaced by byte 0x01 and its message by byte
+-- 0x02: the runtime writes the code there and the message JSON-escaped.  Each
+-- replaced member is matched with its key, which only the structure can spell
+-- unescaped.
+abortEnvelopeTemplate : Unit -> String
+abortEnvelopeTemplate _ =
+  let diag = mkDiag SevError EPanic "\u{02}" None
+  cjAllToJsonWith (abortEnvelopeFields ()) [(!currentEvalFile, "", [diag])]
+    |> replaceAll "\"code\":\"E-PANIC\"" "\"code\":\"\u{01}\""
+    |> replaceAll "\"message\":\"\\u0002\"" "\"message\":\"\u{02}\""
 
 -- Printed once after the summary of a run in which something failed; a green
 -- run prints nothing.
