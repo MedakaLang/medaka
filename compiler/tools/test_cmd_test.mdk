@@ -27,7 +27,7 @@ import string.{
 import list.{reverse, take}
 import test.{
   Expectation, expectAll, expectEqual, expectFalse, expectLessThan,
-  expectNotEqual, expectTrue, fail, labelFail
+  expectNotEqual, expectTextContainsAll, expectTrue, fail, labelFail
 }
 import json.{Json(..)}
 import json as J
@@ -777,6 +777,9 @@ abortSeedRowsEnv env src code =
             "--engines", "eval", target
           ]) ((exit, out, err) => expectAll [
             expectNotEqual 0 exit,
+            labelFail
+              "exit \{intToString exit}, stdout \{out}, stderr"
+              (expectTextContainsAll [seedLineFor 7] err),
             expectEqual [] (seedLines (lines out)),
             expectEqual [seedLineFor 7] (seedLines (lines err)),
             expectEqual
@@ -843,9 +846,12 @@ test "an allocation failure is reported as out of memory with exit 1, built and 
               "\{dir}/oom.mdk",
             ])) ((code, out, err) => expectAll [
           expectEqual 1 code,
-          expectTrue
-            (contains
-              "runtime error [E-OUT-OF-MEMORY]: out of memory (could not allocate "
+          labelFail
+            "exit \{intToString code}, stdout \{out}, stderr"
+            (expectTextContainsAll
+              [
+                "runtime error [E-OUT-OF-MEMORY]: out of memory (could not allocate ",
+              ]
               err),
           expectEqual [] (seedLines (lines "\{out}\n\{err}")),
         ])),
@@ -857,11 +863,14 @@ test "an allocation failure is reported as out of memory with exit 1, built and 
       ]
         Ok (0, _, _) => withSpawn (runVerb
           "env"
-          (heapCap ++ ["\{dir}/oom.bin"])) ((code, _, err) => expectAll [
+          (heapCap ++ ["\{dir}/oom.bin"])) ((code, out, err) => expectAll [
           expectEqual 1 code,
-          expectTrue
-            (contains
-              "runtime error [E-OUT-OF-MEMORY]: out of memory (could not allocate "
+          labelFail
+            "exit \{intToString code}, stdout \{out}, stderr"
+            (expectTextContainsAll
+              [
+                "runtime error [E-OUT-OF-MEMORY]: out of memory (could not allocate ",
+              ]
               err),
         ])
         Ok (_, _, err) => fail "medaka build failed: \{err}"
