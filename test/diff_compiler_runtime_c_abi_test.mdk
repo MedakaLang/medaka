@@ -8,19 +8,46 @@ paramType s = match words s
   [] => ""
   t :: _ => t
 
-signature : String -> Result String String
-signature line = match split "@" line
+attributeGroup : String -> List String -> Result String Bool
+attributeGroup group ls =
+  match filter (l => startsWith ("attributes " ++ group ++ " = {") l) ls
+    [line] => Ok (any (t => t == "noreturn") (words line))
+    [] => Err ("missing attribute group " ++ group)
+    _ => Err ("duplicate attribute group " ++ group)
+
+returnAttribute : String -> List String -> Result String String
+returnAttribute suffix ls =
+  let tokens = words suffix
+  let groups = filter (startsWith "#") tokens
+  match groups
+    [] =>
+      Ok (if any (t => t == "noreturn") tokens then "noreturn" else "returns")
+    [group] => match attributeGroup group ls
+      Err e => Err e
+      Ok noReturn => Ok (if noReturn || any (t => t == "noreturn") tokens then
+        "noreturn"
+      else
+        "returns")
+    _ => Err ("unsupported definition attributes: " ++ suffix)
+
+signature : List String -> String -> Result String String
+signature ls line = match split "@" line
   [prefix, suffix] => match split "(" suffix
     [name, tail] => match split ")" tail
-      params :: _ =>
+      [params, suffix] =>
         let types =
           if params == "" then [] else map paramType (split "," params)
-        Ok
-          (name
-            ++ "|"
-            ++ optionOr "" (last (words prefix))
-            ++ "|"
-            ++ join "," types)
+        match returnAttribute suffix ls
+          Err e => Err (name ++ ": " ++ e)
+          Ok attr =>
+            Ok
+              (name
+                ++ "|"
+                ++ optionOr "" (last (words prefix))
+                ++ "|"
+                ++ join "," types
+                ++ "|"
+                ++ attr)
       _ => Err ("bad definition: " ++ line)
     _ => Err ("bad definition: " ++ line)
   _ => Err ("bad definition: " ++ line)
@@ -30,13 +57,13 @@ findDefinition name ls =
   match (filter
     (l => startsWith "define " l && contains ("@" ++ name ++ "(") l)
     ls)
-    [line] => signature line
+    [line] => signature ls line
     [] => Err (name ++ ": missing definition")
     _ => Err (name ++ ": duplicate definition")
 
 compareRow : List String -> String -> Result String String
 compareRow definitions row = match split "|" row
-  [name, _, _] => match findDefinition name definitions
+  [name, _, _, _] => match findDefinition name definitions
     Err e => Err e
     Ok actual =>
       if row == actual then
@@ -129,6 +156,21 @@ runGate dir = match boundedVerbSeconds 60 medakaBin [
           expectAll [
             positive,
             preamble,
+            mutated
+              dir
+              "mdk_panic"
+              "noreturn void mdk_panic(long long w)"
+              "void mdk_panic(long long w)"
+              rows
+              source,
+            expectEqual
+              (Ok "mdk_panic|void|i64|noreturn")
+              (signature
+                ["attributes #6 = { noreturn nounwind }"]
+                "define void @mdk_panic(i64 %w) #6 {"),
+            expectEqual
+              (Err "mdk_panic: missing attribute group #6")
+              (signature [] "define void @mdk_panic(i64 %w) #6 {"),
             mutated
               dir
               "mdk_print_unit"
