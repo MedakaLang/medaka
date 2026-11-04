@@ -760,8 +760,8 @@ cBuildModInfos : ProgramFacts ->
   List (String, ModExports (Value e)) ->
   List (String, List Decl) ->
   List (CModInfo (Value e))
-cBuildModInfos facts disp reqCounts arities globalFrame runtimeFrame coreExports fulls0 exportsMap0 mods =
-  let go fulls exportsMap mods = match mods
+cBuildModInfos facts disp reqCounts arities globalFrame runtimeFrame coreExports fulls exportsMap mods =
+  let go fullsSoFar exportsSoFar pending = match pending
     [] => []
     (mid, decls) :: rest =>
       let cbinds = lowerGroupsWith facts decls
@@ -773,21 +773,19 @@ cBuildModInfos facts disp reqCounts arities globalFrame runtimeFrame coreExports
           arities
           facts.pfDispositions
           decls
-      -- P0-9 (Core-IR port of the eval.mdk fix): each module's OWN constructors ALSO
-      -- live in its LOCAL frame — they stay in the shared global too (see
-      -- cevalModules) for by-name / `Type(..)` cross-module ctor imports.  The local
-      -- copy SHADOWS the global, which is keyed by BARE ctor name across every
-      -- module's decls; two modules defining a same-named ctor at different arities
-      -- (`map`'s arity-5 `Bin` vs `set`'s arity-4 `Bin`) collide in that one global
-      -- cell, so a module would otherwise construct via the OTHER module's arity —
-      -- saturating early and applying the surplus arg (E-NOT-A-FUNCTION).
+      -- A module's own constructors also live in its local frame (they stay in the
+      -- shared global for by-name / `Type(..)` cross-module imports).  The local copy
+      -- shadows the global, which is keyed by bare ctor name across every module, so
+      -- two modules defining a same-named ctor at different arities (`map`'s arity-5
+      -- `Bin` vs `set`'s arity-4 `Bin`) would otherwise construct via the other
+      -- module's arity (E-NOT-A-FUNCTION).
       let modCtors = collectCtors decls
       let localCells =
         map (n => (n, Ref VUnit)) (map cBindName cbinds ++ map fst modCtors)
       let imports =
         importFrameOf
           coreExports
-          (importsMapFor facts.pfSibling mid fulls exportsMap)
+          (importsMapFor facts.pfSibling mid fullsSoFar exportsSoFar)
           decls
       let menv = EvalEnv
         facts
@@ -797,13 +795,13 @@ cBuildModInfos facts disp reqCounts arities globalFrame runtimeFrame coreExports
           globalFrame,
           runtimeFrame,
         ]
-      -- IMPORT ALIASING (Core-IR port of the eval.mdk fix — these two module drivers are
-      -- parallel and their frame semantics MUST move in lockstep): a module also exports the
+      -- IMPORT ALIASING (these two module drivers are parallel and their frame
+      -- semantics must move in lockstep): a module also exports the
       -- interface/impl METHODS it declares, bound to the SAME global (coalesced-dispatcher)
       -- cell.  Methods are global-by-name and so appear in no module's localCells; without
       -- this, an ALIASED method import binds to nothing, while an un-aliased one silently
       -- works by falling through to the global frame under its unchanged name.
-      -- `T(..)` CTOR EXPANSION (Core-IR port of the eval.mdk fix — same lockstep rule):
+      -- `T(..)` CTOR EXPANSION (same lockstep rule):
       -- the type→ctors index rides WITH the cells in one `ModExports` so an importing
       -- module's `import m.{T(..)}` binds m's own constructor cells instead of falling
       -- through to the bare-name global frame, which every module's ctors share.
@@ -812,17 +810,21 @@ cBuildModInfos facts disp reqCounts arities globalFrame runtimeFrame coreExports
           moduleExports
             v
             coreExports
-            exportsMap
+            exportsSoFar
             globalFrame
             runtimeFrame
             localCells
             decls
       CModInfo mid decls cbinds cimpls localCells menv
         :: go
-          (withSubjectFull facts.pfSibling mid (exportsUnder FullView) fulls)
-          ((mid, exportsUnder ExportedView) :: exportsMap)
+          (withSubjectFull
+            facts.pfSibling
+            mid
+            (exportsUnder FullView)
+            fullsSoFar)
+          ((mid, exportsUnder ExportedView) :: exportsSoFar)
           rest
-  go fulls0 exportsMap0 mods
+  go fulls exportsMap mods
 
 -- a module's impl methods / interface defaults close over ITS env but coalesce
 -- into the shared global VMulti (mirror of eval.mdk's modImplEntries)
