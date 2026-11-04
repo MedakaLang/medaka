@@ -18,7 +18,7 @@ checkMethodBodyAgainst : TcEnv -> IfaceRef -> MethodBodyKind -> String -> Ty -> 
 checkMethodRigidityCore : ModuleCtx -> String -> String -> Ty -> List Mono -> List (String, Mono) -> List String -> List UObligation -> List (IfaceRef, List Mono, Option Loc) -> Option Loc -> Unit
 checkPhantomMethods : ModuleCtx -> ClassEnv -> Int -> Unit
 checkSuperImpls : ModuleCtx -> List Decl -> ClassEnv -> ImplEnv -> Int -> Unit
-checkSuperInstanceContext : ModuleCtx -> String -> List (String, Int) -> Map String Unit -> List PredicateSlot -> Option Loc -> Bool -> IfaceRef -> List Mono -> (Unit -> Bool) -> Unit
+checkSuperInstanceContext : ModuleCtx -> SuperCheck -> IfaceRef -> List Mono -> (Unit -> Bool) -> Unit
 checkSurvivorCallObligations : ModuleCtx -> String -> String -> List String -> Ty -> List (String, Mono) -> List (IfaceRef, List Mono, Option Loc) -> Option Loc -> Unit
 cohClassify : CohSweep -> CohImpl -> List Mono -> List Mono -> String -> String -> CohScan -> CohScan
 cohFreshTys : ModuleCtx -> List Ty -> List Mono
@@ -105,15 +105,14 @@ pushIncompleteImpl : ModuleCtx -> (Option Loc, String) -> Unit
 registerMethodBodyGivens : GraphCtx -> IfaceRef -> MethodBodyKind -> List String -> Ty -> MethodBodyInstance -> ScopeId -> Unit
 registerMethodBodyGrants : GraphCtx -> IfaceRef -> String -> List Mono -> MethodBodyInstance -> ScopeId -> Unit
 reportImplHeadResidual : ModuleCtx -> String -> List (String, Int) -> Option Loc -> (IfaceRef, List Mono) -> Unit
-reportMissingSuperImpl : ModuleCtx -> String -> List (String, Int) -> Option Loc -> Bool -> IfaceRef -> List Mono -> Unit
-reportSuperContextLeaf : ModuleCtx -> String -> List (String, Int) -> Option Loc -> Bool -> IfaceRef -> List Mono -> (IfaceRef, List Mono) -> Unit
+reportMissingSuperImpl : ModuleCtx -> SuperCheck -> IfaceRef -> List Mono -> Unit
+reportSuperContextLeaf : ModuleCtx -> SuperCheck -> IfaceRef -> List Mono -> (IfaceRef, List Mono) -> Unit
 requireArgsAreRoot : Int -> List (String, Mono) -> List Ty -> Bool
 requirePredicateSlot : ModuleCtx -> List (String, Mono) -> Require -> PredicateSlot
 requireSlotKinds : KindScope -> Require -> List (Option Kind, Ty)
 scopeImplMethods : ModuleCtx -> ScopeId -> List ImplMethod -> List ScopedImplMethod
 slotKindsFor : List Kind -> List Ty -> List (Option Kind, Ty)
 substParams : List String -> List (String, Ty) -> List Ty
-superContextLeaves : ModuleCtx -> ReqWalk -> Map String Unit -> List PredicateSlot -> Option Loc -> IfaceRef -> List Mono -> List (IfaceRef, List Mono)
 superHeadCovers : List Ty -> List Ty -> Bool
 superHeadStep : Ty -> Ty -> MStep String Ty Ty
 superImplExists : List ImplRow -> TabKey -> String -> List Ty -> Bool
