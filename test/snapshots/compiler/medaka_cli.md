@@ -1,5 +1,5 @@
 # META
-source_lines=4695
+source_lines=4697
 stages=DESUGAR,MARK
 # SOURCE
 import support.diag_codes.{DiagCode(..), codeText}
@@ -3584,6 +3584,8 @@ checkDistinctGo : List ModuleDoc -> List String -> <IO> Unit
 checkDistinctGo [] _ = ()
 checkDistinctGo (md :: rest) seen =
   let n = mdName md
+  -- Bound: `seen` gets one name per `medaka doc` target path on the command line; it is as long as the number of targets typed.
+  -- lint-disable-next-line rule-list-as-set
   if elemStrCli n seen then
     ePutStrLn
       "medaka doc --out: two targets share the module name `\{n}` and would write the same page `\{n}.md`; rename one"
