@@ -162,6 +162,12 @@ static void wait_ownership_tests(void) {
   assert(!start("/bin/true",argv,NULL,env,&e) && e.stage==4 && e.error==ECHILD);
   assert(sigaction(SIGCHLD,&old,NULL)==0);
   puts("SIGCHLD-ignore: UnsupportedWaitOwnership before fork; no global disposition rewrite");
+  struct sigaction no_wait={0};
+  no_wait.sa_handler=SIG_DFL; no_wait.sa_flags=SA_NOCLDWAIT; sigemptyset(&no_wait.sa_mask);
+  assert(sigaction(SIGCHLD,&no_wait,&old)==0);
+  assert(!start("/bin/true",argv,NULL,env,&e) && e.stage==4 && e.error==ECHILD);
+  assert(sigaction(SIGCHLD,&old,NULL)==0);
+  puts("SIGCHLD-no-cldwait: UnsupportedWaitOwnership before fork");
   p=shell("exit 5"); assert(waitpid(p->pid,&status,0)==p->pid);
   assert(poll_exit(p)==-2 && p->status==ECHILD && p->pid==-1);
   assert(dispose(p)==-2 && dispose(p)==0 && own_count()==0);

@@ -66,7 +66,7 @@ States: Running(pid, open-stream bits) -> Reaped(cached ExitStatus, pid invalid)
 
 Launch uses a close-on-exec error pipe and async-signal-safe child setup. Parent receives a stage+errno for known setup/exec failures, reaps the failed child, closes every acquired fd, and returns SpawnFailed. Missing executable is Err, while a real program exit 127 is Ok (Some (Exited 127)). wait macros preserve exit 143 vs signal 15. Signalled's Bool is the platform WCOREDUMP flag, not a guessed exit-code translation. EOF on the exec error pipe is not worker-origin identity or application readiness: the child may already have exited or been signaled. Successful start produces an owned pid, not an attested ready worker. The portable experiment uses pipe/fcntl, which has no atomic close-on-exec creation guarantee against another native thread spawning concurrently; production must settle that race.
 
-At preflight, reject SIGCHLD dispositions other than SIG_DFL and SA_NOCLDWAIT; do not change process-global state. An external thread/signal handler that starts reaping after preflight can still violate ownership; detect ECHILD and fail closed. The cooperative scheduler does not by itself grant exclusive native thread/signal ownership.
+At preflight, require the SIGCHLD disposition to be SIG_DFL and require SA_NOCLDWAIT to be absent; do not change process-global state. An external thread/signal handler that starts reaping after preflight can still violate ownership; detect ECHILD and fail closed. The cooperative scheduler does not by itself grant exclusive native thread/signal ownership.
 
 ## Extern/ABI proposal
 
@@ -107,7 +107,7 @@ Linux spike at base `7a1d5e3fc02adbfd91102761bfc2a5c102783170`, 2026-11-03. The 
 | Spawn status | Missing executable is SpawnFailed Exec ENOENT | Real exit 127 remains Exited 127; real exit 143 is distinct from Signalled 15 |
 | Legacy comparison | runCommand still returns Ok 127 for missing executable and exit 127 | Exit 143 and SIGTERM both return Ok 143; no legacy behavior is silently changed |
 | Aliasing | Repeated close shares closed state; disposed alias returns Closed; repeated dispose is Ok | Force a replacement fd into the old number; alias close leaves it open, while a stale raw close closes it |
-| Wait ownership | Repeated terminal poll is cached; unrelated child remains waitable with exit 23 | SIGCHLD ignore refuses before fork; an external reaper causes ECHILD and pid invalidation |
+| Wait ownership | Repeated terminal poll is cached; unrelated child remains waitable with exit 23 | SIGCHLD ignore and SIG_DFL with SA_NOCLDWAIT refuse before fork; an external reaper causes ECHILD and pid invalidation |
 | Lifetime | Running owner stays explicitly rooted across GC; finalizer calls=0; explicit disposal empties registry | Running disposal returns StillRunning; retaining aliases retains tombstone payload |
 | cwd/env | Child prints /tmp\|explicit\|unset from explicit cwd/env | Missing cwd produces Chdir ENOENT; bare sh fails execve instead of searching PATH |
 
