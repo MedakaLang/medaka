@@ -1,6 +1,6 @@
 # MCP M0 packaging: Linux decision deferred
 
-Neither prototype qualifies as the M1 supervisor. Keep [#4770](https://github.com/MedakaLang/medaka/issues/4770) open; no language or distribution has been selected. The macOS experiment remains open as [#4820](https://github.com/MedakaLang/medaka/issues/4820). These are Linux prototype observations, not production behavior. The immutable evidence is the [Linux report](https://github.com/MedakaLang/medaka/blob/ff90d0263cfd643eea7345063a4ac5139df6fe94/docs/findings/mcp-m0-packaging/LINUX.md), [raw observations](https://github.com/MedakaLang/medaka/blob/ff90d0263cfd643eea7345063a4ac5139df6fe94/docs/findings/mcp-m0-packaging/linux-x86_64-raw.json), and [exercise and controls](https://github.com/MedakaLang/medaka/blob/ff90d0263cfd643eea7345063a4ac5139df6fe94/scripts/mcp_bench/prototypes/exercise.py). The [baseline report](https://github.com/MedakaLang/medaka/blob/ff90d0263cfd643eea7345063a4ac5139df6fe94/docs/findings/mcp-m0-baseline/REPORT.md) and [budget definitions](https://github.com/MedakaLang/medaka/blob/ff90d0263cfd643eea7345063a4ac5139df6fe94/scripts/mcp_bench/budgets.json) are separate evidence.
+At the time of this measurement neither prototype qualified as the M1 supervisor. Keep [#4770](https://github.com/MedakaLang/medaka/issues/4770) open; the original experiment did not select a language or distribution. The macOS experiment remains open as [#4820](https://github.com/MedakaLang/medaka/issues/4820). These are Linux prototype observations, not production behavior. The immutable evidence is the [Linux report](https://github.com/MedakaLang/medaka/blob/ff90d0263cfd643eea7345063a4ac5139df6fe94/docs/findings/mcp-m0-packaging/LINUX.md), [raw observations](https://github.com/MedakaLang/medaka/blob/ff90d0263cfd643eea7345063a4ac5139df6fe94/docs/findings/mcp-m0-packaging/linux-x86_64-raw.json), and [exercise and controls](https://github.com/MedakaLang/medaka/blob/ff90d0263cfd643eea7345063a4ac5139df6fe94/scripts/mcp_bench/prototypes/exercise.py). The [baseline report](https://github.com/MedakaLang/medaka/blob/ff90d0263cfd643eea7345063a4ac5139df6fe94/docs/findings/mcp-m0-baseline/REPORT.md) and [budget definitions](https://github.com/MedakaLang/medaka/blob/ff90d0263cfd643eea7345063a4ac5139df6fe94/scripts/mcp_bench/budgets.json) are separate evidence.
 
 | Criterion / cost | Python stdlib prototype | Installed Medaka prototype |
 | --- | --- | --- |
@@ -19,3 +19,16 @@ In a bounded Linux follow-up, extend the Python experiment with a deliberately n
 The [private protocol](../../design/MCP-WORKER-PROTOCOL.md) describes proposed negotiation, request and replacement behavior; it is not evidence that either candidate implements the full contract. Existing MCP clients and wrapper behavior remain available until a separately implemented, documented migration preserves compatibility. M1 module ownership and issue updates await a qualifying decision.
 
 A subsequent bounded repair validates response envelopes and tool-result shape, rejects canonical root aliases, and exercises same-group child cleanup. A protocol-conformant fake can still lie, and detached descendants or process-group escape remain unresolved. The Linux measurements remain those of the original pinned revision.
+
+## 2026-11-03 direction superseding the follow-up
+
+Medaka is the intended production supervisor; Python remains an independent
+measurement and test reference. This direction supersedes the Python-first next
+experiment above, without changing its historical measurements or qualifying either
+prototype. The proposed lifecycle, I/O and cleanup boundaries and Linux spike
+evidence are in [owned-process supervision](../../design/PROCESS-SUPERVISION.md).
+Launch tickets and wait ownership, stdio lease enforcement, protected broker
+deployment and worker-origin identity remain SPIKE-FIRST. Indexed Exec is not
+containment; no positive protected containment deployment has been demonstrated.
+Qualification and #4770 remain open, and actual macOS evidence remains #4820.
+#4413, #4626 and the #4811 VM/ABI arc retain their independent obligations.
