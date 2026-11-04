@@ -87,6 +87,26 @@ test "a lambda parameter that shadows the name is not matched" =
 test "a let binding that shadows the name is not matched" =
   expectEqual (Some []) (rolesOf "f" "f a =\n  let f = x => x\n  f a\n")
 
+test "a block let that rebinds a parameter name is not that parameter" =
+  expectEqual
+    (Some [[Fresh, Unchanged 1]])
+    (rolesOf "f" "f a b =\n  let a = a + 1\n  f a b\n")
+
+test "a do bind that rebinds a parameter name is not that parameter" =
+  expectEqual
+    (Some [[Fresh, Unchanged 1]])
+    (rolesOf "f" "f a b = do\n  a <- Some (a + 1)\n  f a b\n")
+
+test "a let pattern that rebinds a parameter name is not that parameter" =
+  expectEqual
+    (Some [[Fresh, Unchanged 1]])
+    (rolesOf "f" "f a b =\n  let (a, c) = (a + 1, 0)\n  f a b\n")
+
+test "a pattern guard that rebinds a parameter name is not that parameter" =
+  expectEqual
+    (Some [[Fresh, Unchanged 1, Fresh]])
+    (rolesOf "f" "f a b xs\n  | (a :: rest) <- xs = f a b rest\n")
+
 test "a where-local loop is an owner of its own self-calls" =
   expectEqual
     (Some [[Advanced 0, Advanced 1]])

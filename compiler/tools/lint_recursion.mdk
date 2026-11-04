@@ -22,9 +22,11 @@
 
 import frontend.ast.{
   Arm(..),
+  DoStmt(..),
   Expr(..),
   FunClause(..),
   Guard(..),
+  GuardArm(..),
   LetBind(..),
   Loc,
   Pat(..),
@@ -131,11 +133,38 @@ walkNode scopes owner env loc (ELam ps b) =
 walkNode scopes owner env loc (ELet _ _ p e1 e2) =
   let env2 = without (patBoundNames p) env
   walk scopes owner env2 loc e1 ++ walk scopes owner env2 loc e2
+walkNode scopes owner env loc (EBlock stmts) =
+  walkStmts scopes owner env loc stmts
+walkNode scopes owner env loc (EDo _ stmts) =
+  walkStmts scopes owner env loc stmts
+walkNode scopes owner env loc (EGuards arms) =
+  flatMap ((GuardArm gs body) => walkGuarded scopes owner env loc gs body) arms
 walkNode scopes owner env loc (e@(ELetGroup binds _)) =
   let env2 = without (flatMap groupNames binds) env
   flatMap (walk scopes owner env2 loc) (childExprs e)
 walkNode scopes owner env loc e =
   flatMap (walk scopes owner env loc) (childExprs e)
+
+-- A statement's binders scope over the statements after it, so they shadow
+-- the parameters from there on.
+walkStmts : FileScopes ->
+  Owner ->
+  List Bound ->
+  Option Loc ->
+  List DoStmt ->
+  List SelfCall
+walkStmts scopes owner env0 loc stmts0 = go env0 stmts0
+  where
+    go _ [] = []
+    go env ((DoExpr e) :: rest) = walk scopes owner env loc e ++ go env rest
+    go env ((DoBind p e) :: rest) =
+      walk scopes owner env loc e ++ go (without (patBoundNames p) env) rest
+    go env ((DoLet _ isRec p e _) :: rest) =
+      let env2 = without (patBoundNames p) env
+      walk scopes owner (if isRec then env2 else env) loc e ++ go env2 rest
+    go env ((DoAssign _ e) :: rest) = walk scopes owner env loc e ++ go env rest
+    go env ((DoFieldAssign _ _ e) :: rest) =
+      walk scopes owner env loc e ++ go env rest
 
 groupNames : LetBind -> List String
 groupNames (LetBind n clauses _ _) =
@@ -162,8 +191,23 @@ walkArm : FileScopes ->
 walkArm scopes owner env loc scrut (Arm p gs body) =
   let bound = patBoundNames p
   let env2 = without bound env ++ armBounds env scrut bound
-  flatMap (walkGuard scopes owner env2 loc) gs
-    ++ walk scopes owner env2 loc body
+  walkGuarded scopes owner env2 loc gs body
+
+-- Guards run in order; a pattern guard's binders shadow the parameters in the
+-- later guards and in the body.
+walkGuarded : FileScopes ->
+  Owner ->
+  List Bound ->
+  Option Loc ->
+  List Guard ->
+  Expr ->
+  List SelfCall
+walkGuarded scopes owner env0 loc gs0 body = go env0 gs0
+  where
+    go env [] = walk scopes owner env loc body
+    go env ((GBool e) :: gs) = walk scopes owner env loc e ++ go env gs
+    go env ((GBind p e) :: gs) =
+      walk scopes owner env loc e ++ go (without (patBoundNames p) env) gs
 
 armBounds : List Bound -> Expr -> List String -> List Bound
 armBounds env scrut bound = match unwrapLoc scrut
@@ -174,15 +218,6 @@ armBounds env scrut bound = match unwrapLoc scrut
 
 boundIndex : String -> Bound -> Option Int
 boundIndex n (Bound m j _) = if n == m then Some j else None
-
-walkGuard : FileScopes ->
-  Owner ->
-  List Bound ->
-  Option Loc ->
-  Guard ->
-  List SelfCall
-walkGuard scopes owner env loc (GBool e) = walk scopes owner env loc e
-walkGuard scopes owner env loc (GBind _ e) = walk scopes owner env loc e
 
 isSelfCall : FileScopes -> Owner -> Expr -> List Expr -> Bool
 isSelfCall scopes (owner@(Owner name ps _)) hd args =

@@ -1,5 +1,5 @@
 # META
-source_lines=305
+source_lines=340
 stages=DESUGAR,MARK
 # SOURCE
 -- compiler/tools/lint_recursion.mdk — the shared reader of self-recursion: the
@@ -26,9 +26,11 @@ stages=DESUGAR,MARK
 
 import frontend.ast.{
   Arm(..),
+  DoStmt(..),
   Expr(..),
   FunClause(..),
   Guard(..),
+  GuardArm(..),
   LetBind(..),
   Loc,
   Pat(..),
@@ -135,11 +137,38 @@ walkNode scopes owner env loc (ELam ps b) =
 walkNode scopes owner env loc (ELet _ _ p e1 e2) =
   let env2 = without (patBoundNames p) env
   walk scopes owner env2 loc e1 ++ walk scopes owner env2 loc e2
+walkNode scopes owner env loc (EBlock stmts) =
+  walkStmts scopes owner env loc stmts
+walkNode scopes owner env loc (EDo _ stmts) =
+  walkStmts scopes owner env loc stmts
+walkNode scopes owner env loc (EGuards arms) =
+  flatMap ((GuardArm gs body) => walkGuarded scopes owner env loc gs body) arms
 walkNode scopes owner env loc (e@(ELetGroup binds _)) =
   let env2 = without (flatMap groupNames binds) env
   flatMap (walk scopes owner env2 loc) (childExprs e)
 walkNode scopes owner env loc e =
   flatMap (walk scopes owner env loc) (childExprs e)
+
+-- A statement's binders scope over the statements after it, so they shadow
+-- the parameters from there on.
+walkStmts : FileScopes ->
+  Owner ->
+  List Bound ->
+  Option Loc ->
+  List DoStmt ->
+  List SelfCall
+walkStmts scopes owner env0 loc stmts0 = go env0 stmts0
+  where
+    go _ [] = []
+    go env ((DoExpr e) :: rest) = walk scopes owner env loc e ++ go env rest
+    go env ((DoBind p e) :: rest) =
+      walk scopes owner env loc e ++ go (without (patBoundNames p) env) rest
+    go env ((DoLet _ isRec p e _) :: rest) =
+      let env2 = without (patBoundNames p) env
+      walk scopes owner (if isRec then env2 else env) loc e ++ go env2 rest
+    go env ((DoAssign _ e) :: rest) = walk scopes owner env loc e ++ go env rest
+    go env ((DoFieldAssign _ _ e) :: rest) =
+      walk scopes owner env loc e ++ go env rest
 
 groupNames : LetBind -> List String
 groupNames (LetBind n clauses _ _) =
@@ -166,8 +195,23 @@ walkArm : FileScopes ->
 walkArm scopes owner env loc scrut (Arm p gs body) =
   let bound = patBoundNames p
   let env2 = without bound env ++ armBounds env scrut bound
-  flatMap (walkGuard scopes owner env2 loc) gs
-    ++ walk scopes owner env2 loc body
+  walkGuarded scopes owner env2 loc gs body
+
+-- Guards run in order; a pattern guard's binders shadow the parameters in the
+-- later guards and in the body.
+walkGuarded : FileScopes ->
+  Owner ->
+  List Bound ->
+  Option Loc ->
+  List Guard ->
+  Expr ->
+  List SelfCall
+walkGuarded scopes owner env0 loc gs0 body = go env0 gs0
+  where
+    go env [] = walk scopes owner env loc body
+    go env ((GBool e) :: gs) = walk scopes owner env loc e ++ go env gs
+    go env ((GBind p e) :: gs) =
+      walk scopes owner env loc e ++ go (without (patBoundNames p) env) gs
 
 armBounds : List Bound -> Expr -> List String -> List Bound
 armBounds env scrut bound = match unwrapLoc scrut
@@ -178,15 +222,6 @@ armBounds env scrut bound = match unwrapLoc scrut
 
 boundIndex : String -> Bound -> Option Int
 boundIndex n (Bound m j _) = if n == m then Some j else None
-
-walkGuard : FileScopes ->
-  Owner ->
-  List Bound ->
-  Option Loc ->
-  Guard ->
-  List SelfCall
-walkGuard scopes owner env loc (GBool e) = walk scopes owner env loc e
-walkGuard scopes owner env loc (GBind _ e) = walk scopes owner env loc e
 
 isSelfCall : FileScopes -> Owner -> Expr -> List Expr -> Bool
 isSelfCall scopes (owner@(Owner name ps _)) hd args =
@@ -308,7 +343,7 @@ leftIsAcc acc a = match unwrapLoc a
 armAppends : String -> Arm -> Bool
 armAppends acc (Arm _ _ body) = tailAppends acc body
 # DESUGAR
-(DUse false (UseGroup ("frontend" "ast") ((mem "Arm" true) (mem "Expr" true) (mem "FunClause" true) (mem "Guard" true) (mem "LetBind" true) (mem "Loc" false) (mem "Pat" true) (mem "patBoundNames" false))))
+(DUse false (UseGroup ("frontend" "ast") ((mem "Arm" true) (mem "DoStmt" true) (mem "Expr" true) (mem "FunClause" true) (mem "Guard" true) (mem "GuardArm" true) (mem "LetBind" true) (mem "Loc" false) (mem "Pat" true) (mem "patBoundNames" false))))
 (DUse false (UseGroup ("frontend" "ast_walk") ((mem "childExprs" false))))
 (DUse false (UseGroup ("list") ((mem "findMap" false) (mem "get" false))))
 (DUse false (UseGroup ("tools" "lint_calls") ((mem "lastSegment" false))))
@@ -345,8 +380,13 @@ armAppends acc (Arm _ _ body) = tailAppends acc body
 (DFunDef false "walkNode" ((PVar "scopes") (PVar "owner") (PVar "env") (PVar "loc") (PCon "EMatch" (PVar "scrut") (PVar "arms"))) (EBinOp "++" (EApp (EApp (EApp (EApp (EApp (EVar "walk") (EVar "scopes")) (EVar "owner")) (EVar "env")) (EVar "loc")) (EVar "scrut")) (EApp (EApp (EVar "flatMap") (EApp (EApp (EApp (EApp (EApp (EVar "walkArm") (EVar "scopes")) (EVar "owner")) (EVar "env")) (EVar "loc")) (EVar "scrut"))) (EVar "arms"))))
 (DFunDef false "walkNode" ((PVar "scopes") (PVar "owner") (PVar "env") (PVar "loc") (PCon "ELam" (PVar "ps") (PVar "b"))) (EApp (EApp (EApp (EApp (EApp (EVar "walk") (EVar "scopes")) (EVar "owner")) (EApp (EApp (EVar "without") (EApp (EApp (EVar "flatMap") (EVar "patBoundNames")) (EVar "ps"))) (EVar "env"))) (EVar "loc")) (EVar "b")))
 (DFunDef false "walkNode" ((PVar "scopes") (PVar "owner") (PVar "env") (PVar "loc") (PCon "ELet" PWild PWild (PVar "p") (PVar "e1") (PVar "e2"))) (EBlock (DoLet false false (PVar "env2") (EApp (EApp (EVar "without") (EApp (EVar "patBoundNames") (EVar "p"))) (EVar "env"))) (DoExpr (EBinOp "++" (EApp (EApp (EApp (EApp (EApp (EVar "walk") (EVar "scopes")) (EVar "owner")) (EVar "env2")) (EVar "loc")) (EVar "e1")) (EApp (EApp (EApp (EApp (EApp (EVar "walk") (EVar "scopes")) (EVar "owner")) (EVar "env2")) (EVar "loc")) (EVar "e2"))))))
+(DFunDef false "walkNode" ((PVar "scopes") (PVar "owner") (PVar "env") (PVar "loc") (PCon "EBlock" (PVar "stmts"))) (EApp (EApp (EApp (EApp (EApp (EVar "walkStmts") (EVar "scopes")) (EVar "owner")) (EVar "env")) (EVar "loc")) (EVar "stmts")))
+(DFunDef false "walkNode" ((PVar "scopes") (PVar "owner") (PVar "env") (PVar "loc") (PCon "EDo" PWild (PVar "stmts"))) (EApp (EApp (EApp (EApp (EApp (EVar "walkStmts") (EVar "scopes")) (EVar "owner")) (EVar "env")) (EVar "loc")) (EVar "stmts")))
+(DFunDef false "walkNode" ((PVar "scopes") (PVar "owner") (PVar "env") (PVar "loc") (PCon "EGuards" (PVar "arms"))) (EApp (EApp (EVar "flatMap") (ELam ((PCon "GuardArm" (PVar "gs") (PVar "body"))) (EApp (EApp (EApp (EApp (EApp (EApp (EVar "walkGuarded") (EVar "scopes")) (EVar "owner")) (EVar "env")) (EVar "loc")) (EVar "gs")) (EVar "body")))) (EVar "arms")))
 (DFunDef false "walkNode" ((PVar "scopes") (PVar "owner") (PVar "env") (PVar "loc") (PAs "e" (PCon "ELetGroup" (PVar "binds") PWild))) (EBlock (DoLet false false (PVar "env2") (EApp (EApp (EVar "without") (EApp (EApp (EVar "flatMap") (EVar "groupNames")) (EVar "binds"))) (EVar "env"))) (DoExpr (EApp (EApp (EVar "flatMap") (EApp (EApp (EApp (EApp (EVar "walk") (EVar "scopes")) (EVar "owner")) (EVar "env2")) (EVar "loc"))) (EApp (EVar "childExprs") (EVar "e"))))))
 (DFunDef false "walkNode" ((PVar "scopes") (PVar "owner") (PVar "env") (PVar "loc") (PVar "e")) (EApp (EApp (EVar "flatMap") (EApp (EApp (EApp (EApp (EVar "walk") (EVar "scopes")) (EVar "owner")) (EVar "env")) (EVar "loc"))) (EApp (EVar "childExprs") (EVar "e"))))
+(DTypeSig false "walkStmts" (TyFun (TyCon "FileScopes") (TyFun (TyCon "Owner") (TyFun (TyApp (TyCon "List") (TyCon "Bound")) (TyFun (TyApp (TyCon "Option") (TyCon "Loc")) (TyFun (TyApp (TyCon "List") (TyCon "DoStmt")) (TyApp (TyCon "List") (TyCon "SelfCall"))))))))
+(DFunDef false "walkStmts" ((PVar "scopes") (PVar "owner") (PVar "env0") (PVar "loc") (PVar "stmts0")) (ELetGroup ((lgb "go" (clause (PWild (PList)) (EListLit)) (clause ((PVar "env") (PCons (PCon "DoExpr" (PVar "e")) (PVar "rest"))) (EBinOp "++" (EApp (EApp (EApp (EApp (EApp (EVar "walk") (EVar "scopes")) (EVar "owner")) (EVar "env")) (EVar "loc")) (EVar "e")) (EApp (EApp (EVar "go") (EVar "env")) (EVar "rest")))) (clause ((PVar "env") (PCons (PCon "DoBind" (PVar "p") (PVar "e")) (PVar "rest"))) (EBinOp "++" (EApp (EApp (EApp (EApp (EApp (EVar "walk") (EVar "scopes")) (EVar "owner")) (EVar "env")) (EVar "loc")) (EVar "e")) (EApp (EApp (EVar "go") (EApp (EApp (EVar "without") (EApp (EVar "patBoundNames") (EVar "p"))) (EVar "env"))) (EVar "rest")))) (clause ((PVar "env") (PCons (PCon "DoLet" PWild (PVar "isRec") (PVar "p") (PVar "e") PWild) (PVar "rest"))) (EBlock (DoLet false false (PVar "env2") (EApp (EApp (EVar "without") (EApp (EVar "patBoundNames") (EVar "p"))) (EVar "env"))) (DoExpr (EBinOp "++" (EApp (EApp (EApp (EApp (EApp (EVar "walk") (EVar "scopes")) (EVar "owner")) (EIf (EVar "isRec") (EVar "env2") (EVar "env"))) (EVar "loc")) (EVar "e")) (EApp (EApp (EVar "go") (EVar "env2")) (EVar "rest")))))) (clause ((PVar "env") (PCons (PCon "DoAssign" PWild (PVar "e")) (PVar "rest"))) (EBinOp "++" (EApp (EApp (EApp (EApp (EApp (EVar "walk") (EVar "scopes")) (EVar "owner")) (EVar "env")) (EVar "loc")) (EVar "e")) (EApp (EApp (EVar "go") (EVar "env")) (EVar "rest")))) (clause ((PVar "env") (PCons (PCon "DoFieldAssign" PWild PWild (PVar "e")) (PVar "rest"))) (EBinOp "++" (EApp (EApp (EApp (EApp (EApp (EVar "walk") (EVar "scopes")) (EVar "owner")) (EVar "env")) (EVar "loc")) (EVar "e")) (EApp (EApp (EVar "go") (EVar "env")) (EVar "rest")))))) (EApp (EApp (EVar "go") (EVar "env0")) (EVar "stmts0"))))
 (DTypeSig false "groupNames" (TyFun (TyCon "LetBind") (TyApp (TyCon "List") (TyCon "String"))))
 (DFunDef false "groupNames" ((PCon "LetBind" (PVar "n") (PVar "clauses") PWild PWild)) (EBinOp "::" (EVar "n") (EApp (EApp (EVar "flatMap") (ELam ((PVar "c")) (EApp (EApp (EVar "flatMap") (EVar "patBoundNames")) (EApp (EVar "clausePats") (EVar "c"))))) (EVar "clauses"))))
 (DTypeSig false "clausePats" (TyFun (TyCon "FunClause") (TyApp (TyCon "List") (TyCon "Pat"))))
@@ -357,14 +397,13 @@ armAppends acc (Arm _ _ body) = tailAppends acc body
 (DTypeSig false "named" (TyFun (TyCon "Bound") (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyCon "Bool"))))
 (DFunDef false "named" ((PCon "Bound" (PVar "n") PWild PWild) (PVar "names")) (EApp (EApp (EVar "any") (ELam ((PVar "_s")) (EBinOp "==" (EVar "_s") (EVar "n")))) (EVar "names")))
 (DTypeSig false "walkArm" (TyFun (TyCon "FileScopes") (TyFun (TyCon "Owner") (TyFun (TyApp (TyCon "List") (TyCon "Bound")) (TyFun (TyApp (TyCon "Option") (TyCon "Loc")) (TyFun (TyCon "Expr") (TyFun (TyCon "Arm") (TyApp (TyCon "List") (TyCon "SelfCall")))))))))
-(DFunDef false "walkArm" ((PVar "scopes") (PVar "owner") (PVar "env") (PVar "loc") (PVar "scrut") (PCon "Arm" (PVar "p") (PVar "gs") (PVar "body"))) (EBlock (DoLet false false (PVar "bound") (EApp (EVar "patBoundNames") (EVar "p"))) (DoLet false false (PVar "env2") (EBinOp "++" (EApp (EApp (EVar "without") (EVar "bound")) (EVar "env")) (EApp (EApp (EApp (EVar "armBounds") (EVar "env")) (EVar "scrut")) (EVar "bound")))) (DoExpr (EBinOp "++" (EApp (EApp (EVar "flatMap") (EApp (EApp (EApp (EApp (EVar "walkGuard") (EVar "scopes")) (EVar "owner")) (EVar "env2")) (EVar "loc"))) (EVar "gs")) (EApp (EApp (EApp (EApp (EApp (EVar "walk") (EVar "scopes")) (EVar "owner")) (EVar "env2")) (EVar "loc")) (EVar "body"))))))
+(DFunDef false "walkArm" ((PVar "scopes") (PVar "owner") (PVar "env") (PVar "loc") (PVar "scrut") (PCon "Arm" (PVar "p") (PVar "gs") (PVar "body"))) (EBlock (DoLet false false (PVar "bound") (EApp (EVar "patBoundNames") (EVar "p"))) (DoLet false false (PVar "env2") (EBinOp "++" (EApp (EApp (EVar "without") (EVar "bound")) (EVar "env")) (EApp (EApp (EApp (EVar "armBounds") (EVar "env")) (EVar "scrut")) (EVar "bound")))) (DoExpr (EApp (EApp (EApp (EApp (EApp (EApp (EVar "walkGuarded") (EVar "scopes")) (EVar "owner")) (EVar "env2")) (EVar "loc")) (EVar "gs")) (EVar "body")))))
+(DTypeSig false "walkGuarded" (TyFun (TyCon "FileScopes") (TyFun (TyCon "Owner") (TyFun (TyApp (TyCon "List") (TyCon "Bound")) (TyFun (TyApp (TyCon "Option") (TyCon "Loc")) (TyFun (TyApp (TyCon "List") (TyCon "Guard")) (TyFun (TyCon "Expr") (TyApp (TyCon "List") (TyCon "SelfCall")))))))))
+(DFunDef false "walkGuarded" ((PVar "scopes") (PVar "owner") (PVar "env0") (PVar "loc") (PVar "gs0") (PVar "body")) (ELetGroup ((lgb "go" (clause ((PVar "env") (PList)) (EApp (EApp (EApp (EApp (EApp (EVar "walk") (EVar "scopes")) (EVar "owner")) (EVar "env")) (EVar "loc")) (EVar "body"))) (clause ((PVar "env") (PCons (PCon "GBool" (PVar "e")) (PVar "gs"))) (EBinOp "++" (EApp (EApp (EApp (EApp (EApp (EVar "walk") (EVar "scopes")) (EVar "owner")) (EVar "env")) (EVar "loc")) (EVar "e")) (EApp (EApp (EVar "go") (EVar "env")) (EVar "gs")))) (clause ((PVar "env") (PCons (PCon "GBind" (PVar "p") (PVar "e")) (PVar "gs"))) (EBinOp "++" (EApp (EApp (EApp (EApp (EApp (EVar "walk") (EVar "scopes")) (EVar "owner")) (EVar "env")) (EVar "loc")) (EVar "e")) (EApp (EApp (EVar "go") (EApp (EApp (EVar "without") (EApp (EVar "patBoundNames") (EVar "p"))) (EVar "env"))) (EVar "gs")))))) (EApp (EApp (EVar "go") (EVar "env0")) (EVar "gs0"))))
 (DTypeSig false "armBounds" (TyFun (TyApp (TyCon "List") (TyCon "Bound")) (TyFun (TyCon "Expr") (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyApp (TyCon "List") (TyCon "Bound"))))))
 (DFunDef false "armBounds" ((PVar "env") (PVar "scrut") (PVar "bound")) (EMatch (EApp (EVar "unwrapLoc") (EVar "scrut")) (arm (PCon "EVar" (PVar "n")) () (EMatch (EApp (EApp (EVar "findMap") (ELam ((PVar "b")) (EApp (EApp (EVar "boundIndex") (EVar "n")) (EVar "b")))) (EVar "env")) (arm (PCon "Some" (PVar "j")) () (EApp (EApp (EVar "map") (ELam ((PVar "m")) (EApp (EApp (EApp (EVar "Bound") (EVar "m")) (EVar "j")) (EVar "False")))) (EVar "bound"))) (arm (PCon "None") () (EListLit)))) (arm PWild () (EListLit))))
 (DTypeSig false "boundIndex" (TyFun (TyCon "String") (TyFun (TyCon "Bound") (TyApp (TyCon "Option") (TyCon "Int")))))
 (DFunDef false "boundIndex" ((PVar "n") (PCon "Bound" (PVar "m") (PVar "j") PWild)) (EIf (EBinOp "==" (EVar "n") (EVar "m")) (EApp (EVar "Some") (EVar "j")) (EVar "None")))
-(DTypeSig false "walkGuard" (TyFun (TyCon "FileScopes") (TyFun (TyCon "Owner") (TyFun (TyApp (TyCon "List") (TyCon "Bound")) (TyFun (TyApp (TyCon "Option") (TyCon "Loc")) (TyFun (TyCon "Guard") (TyApp (TyCon "List") (TyCon "SelfCall"))))))))
-(DFunDef false "walkGuard" ((PVar "scopes") (PVar "owner") (PVar "env") (PVar "loc") (PCon "GBool" (PVar "e"))) (EApp (EApp (EApp (EApp (EApp (EVar "walk") (EVar "scopes")) (EVar "owner")) (EVar "env")) (EVar "loc")) (EVar "e")))
-(DFunDef false "walkGuard" ((PVar "scopes") (PVar "owner") (PVar "env") (PVar "loc") (PCon "GBind" PWild (PVar "e"))) (EApp (EApp (EApp (EApp (EApp (EVar "walk") (EVar "scopes")) (EVar "owner")) (EVar "env")) (EVar "loc")) (EVar "e")))
 (DTypeSig false "isSelfCall" (TyFun (TyCon "FileScopes") (TyFun (TyCon "Owner") (TyFun (TyCon "Expr") (TyFun (TyApp (TyCon "List") (TyCon "Expr")) (TyCon "Bool"))))))
 (DFunDef false "isSelfCall" ((PVar "scopes") (PAs "owner" (PCon "Owner" (PVar "name") (PVar "ps") PWild)) (PVar "hd") (PVar "args")) (EBinOp "&&" (EBinOp "&&" (EApp (EApp (EVar "isNamed") (EVar "name")) (EVar "hd")) (EBinOp "==" (EApp (EVar "length") (EVar "args")) (EApp (EVar "length") (EVar "ps")))) (EApp (EApp (EApp (EVar "bindsOwner") (EVar "scopes")) (EVar "owner")) (EApp (EVar "varSite") (EVar "hd")))))
 (DTypeSig false "isNamed" (TyFun (TyCon "String") (TyFun (TyCon "Expr") (TyCon "Bool"))))
@@ -411,7 +450,7 @@ armAppends acc (Arm _ _ body) = tailAppends acc body
 (DTypeSig false "armAppends" (TyFun (TyCon "String") (TyFun (TyCon "Arm") (TyCon "Bool"))))
 (DFunDef false "armAppends" ((PVar "acc") (PCon "Arm" PWild PWild (PVar "body"))) (EApp (EApp (EVar "tailAppends") (EVar "acc")) (EVar "body")))
 # MARK
-(DUse false (UseGroup ("frontend" "ast") ((mem "Arm" true) (mem "Expr" true) (mem "FunClause" true) (mem "Guard" true) (mem "LetBind" true) (mem "Loc" false) (mem "Pat" true) (mem "patBoundNames" false))))
+(DUse false (UseGroup ("frontend" "ast") ((mem "Arm" true) (mem "DoStmt" true) (mem "Expr" true) (mem "FunClause" true) (mem "Guard" true) (mem "GuardArm" true) (mem "LetBind" true) (mem "Loc" false) (mem "Pat" true) (mem "patBoundNames" false))))
 (DUse false (UseGroup ("frontend" "ast_walk") ((mem "childExprs" false))))
 (DUse false (UseGroup ("list") ((mem "findMap" false) (mem "get" false))))
 (DUse false (UseGroup ("tools" "lint_calls") ((mem "lastSegment" false))))
@@ -448,8 +487,13 @@ armAppends acc (Arm _ _ body) = tailAppends acc body
 (DFunDef false "walkNode" ((PVar "scopes") (PVar "owner") (PVar "env") (PVar "loc") (PCon "EMatch" (PVar "scrut") (PVar "arms"))) (EBinOp "++" (EApp (EApp (EApp (EApp (EApp (EVar "walk") (EVar "scopes")) (EVar "owner")) (EVar "env")) (EVar "loc")) (EVar "scrut")) (EApp (EApp (EDictApp "flatMap") (EApp (EApp (EApp (EApp (EApp (EVar "walkArm") (EVar "scopes")) (EVar "owner")) (EVar "env")) (EVar "loc")) (EVar "scrut"))) (EVar "arms"))))
 (DFunDef false "walkNode" ((PVar "scopes") (PVar "owner") (PVar "env") (PVar "loc") (PCon "ELam" (PVar "ps") (PVar "b"))) (EApp (EApp (EApp (EApp (EApp (EVar "walk") (EVar "scopes")) (EVar "owner")) (EApp (EApp (EVar "without") (EApp (EApp (EDictApp "flatMap") (EVar "patBoundNames")) (EVar "ps"))) (EVar "env"))) (EVar "loc")) (EVar "b")))
 (DFunDef false "walkNode" ((PVar "scopes") (PVar "owner") (PVar "env") (PVar "loc") (PCon "ELet" PWild PWild (PVar "p") (PVar "e1") (PVar "e2"))) (EBlock (DoLet false false (PVar "env2") (EApp (EApp (EVar "without") (EApp (EVar "patBoundNames") (EVar "p"))) (EVar "env"))) (DoExpr (EBinOp "++" (EApp (EApp (EApp (EApp (EApp (EVar "walk") (EVar "scopes")) (EVar "owner")) (EVar "env2")) (EVar "loc")) (EVar "e1")) (EApp (EApp (EApp (EApp (EApp (EVar "walk") (EVar "scopes")) (EVar "owner")) (EVar "env2")) (EVar "loc")) (EVar "e2"))))))
+(DFunDef false "walkNode" ((PVar "scopes") (PVar "owner") (PVar "env") (PVar "loc") (PCon "EBlock" (PVar "stmts"))) (EApp (EApp (EApp (EApp (EApp (EVar "walkStmts") (EVar "scopes")) (EVar "owner")) (EVar "env")) (EVar "loc")) (EVar "stmts")))
+(DFunDef false "walkNode" ((PVar "scopes") (PVar "owner") (PVar "env") (PVar "loc") (PCon "EDo" PWild (PVar "stmts"))) (EApp (EApp (EApp (EApp (EApp (EVar "walkStmts") (EVar "scopes")) (EVar "owner")) (EVar "env")) (EVar "loc")) (EVar "stmts")))
+(DFunDef false "walkNode" ((PVar "scopes") (PVar "owner") (PVar "env") (PVar "loc") (PCon "EGuards" (PVar "arms"))) (EApp (EApp (EDictApp "flatMap") (ELam ((PCon "GuardArm" (PVar "gs") (PVar "body"))) (EApp (EApp (EApp (EApp (EApp (EApp (EVar "walkGuarded") (EVar "scopes")) (EVar "owner")) (EVar "env")) (EVar "loc")) (EVar "gs")) (EVar "body")))) (EVar "arms")))
 (DFunDef false "walkNode" ((PVar "scopes") (PVar "owner") (PVar "env") (PVar "loc") (PAs "e" (PCon "ELetGroup" (PVar "binds") PWild))) (EBlock (DoLet false false (PVar "env2") (EApp (EApp (EVar "without") (EApp (EApp (EDictApp "flatMap") (EVar "groupNames")) (EVar "binds"))) (EVar "env"))) (DoExpr (EApp (EApp (EDictApp "flatMap") (EApp (EApp (EApp (EApp (EVar "walk") (EVar "scopes")) (EVar "owner")) (EVar "env2")) (EVar "loc"))) (EApp (EVar "childExprs") (EVar "e"))))))
 (DFunDef false "walkNode" ((PVar "scopes") (PVar "owner") (PVar "env") (PVar "loc") (PVar "e")) (EApp (EApp (EDictApp "flatMap") (EApp (EApp (EApp (EApp (EVar "walk") (EVar "scopes")) (EVar "owner")) (EVar "env")) (EVar "loc"))) (EApp (EVar "childExprs") (EVar "e"))))
+(DTypeSig false "walkStmts" (TyFun (TyCon "FileScopes") (TyFun (TyCon "Owner") (TyFun (TyApp (TyCon "List") (TyCon "Bound")) (TyFun (TyApp (TyCon "Option") (TyCon "Loc")) (TyFun (TyApp (TyCon "List") (TyCon "DoStmt")) (TyApp (TyCon "List") (TyCon "SelfCall"))))))))
+(DFunDef false "walkStmts" ((PVar "scopes") (PVar "owner") (PVar "env0") (PVar "loc") (PVar "stmts0")) (ELetGroup ((lgb "go" (clause (PWild (PList)) (EListLit)) (clause ((PVar "env") (PCons (PCon "DoExpr" (PVar "e")) (PVar "rest"))) (EBinOp "++" (EApp (EApp (EApp (EApp (EApp (EVar "walk") (EVar "scopes")) (EVar "owner")) (EVar "env")) (EVar "loc")) (EVar "e")) (EApp (EApp (EVar "go") (EVar "env")) (EVar "rest")))) (clause ((PVar "env") (PCons (PCon "DoBind" (PVar "p") (PVar "e")) (PVar "rest"))) (EBinOp "++" (EApp (EApp (EApp (EApp (EApp (EVar "walk") (EVar "scopes")) (EVar "owner")) (EVar "env")) (EVar "loc")) (EVar "e")) (EApp (EApp (EVar "go") (EApp (EApp (EVar "without") (EApp (EVar "patBoundNames") (EVar "p"))) (EVar "env"))) (EVar "rest")))) (clause ((PVar "env") (PCons (PCon "DoLet" PWild (PVar "isRec") (PVar "p") (PVar "e") PWild) (PVar "rest"))) (EBlock (DoLet false false (PVar "env2") (EApp (EApp (EVar "without") (EApp (EVar "patBoundNames") (EVar "p"))) (EVar "env"))) (DoExpr (EBinOp "++" (EApp (EApp (EApp (EApp (EApp (EVar "walk") (EVar "scopes")) (EVar "owner")) (EIf (EVar "isRec") (EVar "env2") (EVar "env"))) (EVar "loc")) (EVar "e")) (EApp (EApp (EVar "go") (EVar "env2")) (EVar "rest")))))) (clause ((PVar "env") (PCons (PCon "DoAssign" PWild (PVar "e")) (PVar "rest"))) (EBinOp "++" (EApp (EApp (EApp (EApp (EApp (EVar "walk") (EVar "scopes")) (EVar "owner")) (EVar "env")) (EVar "loc")) (EVar "e")) (EApp (EApp (EVar "go") (EVar "env")) (EVar "rest")))) (clause ((PVar "env") (PCons (PCon "DoFieldAssign" PWild PWild (PVar "e")) (PVar "rest"))) (EBinOp "++" (EApp (EApp (EApp (EApp (EApp (EVar "walk") (EVar "scopes")) (EVar "owner")) (EVar "env")) (EVar "loc")) (EVar "e")) (EApp (EApp (EVar "go") (EVar "env")) (EVar "rest")))))) (EApp (EApp (EVar "go") (EVar "env0")) (EVar "stmts0"))))
 (DTypeSig false "groupNames" (TyFun (TyCon "LetBind") (TyApp (TyCon "List") (TyCon "String"))))
 (DFunDef false "groupNames" ((PCon "LetBind" (PVar "n") (PVar "clauses") PWild PWild)) (EBinOp "::" (EVar "n") (EApp (EApp (EDictApp "flatMap") (ELam ((PVar "c")) (EApp (EApp (EDictApp "flatMap") (EVar "patBoundNames")) (EApp (EVar "clausePats") (EVar "c"))))) (EVar "clauses"))))
 (DTypeSig false "clausePats" (TyFun (TyCon "FunClause") (TyApp (TyCon "List") (TyCon "Pat"))))
@@ -460,14 +504,13 @@ armAppends acc (Arm _ _ body) = tailAppends acc body
 (DTypeSig false "named" (TyFun (TyCon "Bound") (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyCon "Bool"))))
 (DFunDef false "named" ((PCon "Bound" (PVar "n") PWild PWild) (PVar "names")) (EApp (EApp (EDictApp "any") (ELam ((PVar "_s")) (EBinOp "==" (EVar "_s") (EVar "n")))) (EVar "names")))
 (DTypeSig false "walkArm" (TyFun (TyCon "FileScopes") (TyFun (TyCon "Owner") (TyFun (TyApp (TyCon "List") (TyCon "Bound")) (TyFun (TyApp (TyCon "Option") (TyCon "Loc")) (TyFun (TyCon "Expr") (TyFun (TyCon "Arm") (TyApp (TyCon "List") (TyCon "SelfCall")))))))))
-(DFunDef false "walkArm" ((PVar "scopes") (PVar "owner") (PVar "env") (PVar "loc") (PVar "scrut") (PCon "Arm" (PVar "p") (PVar "gs") (PVar "body"))) (EBlock (DoLet false false (PVar "bound") (EApp (EVar "patBoundNames") (EVar "p"))) (DoLet false false (PVar "env2") (EBinOp "++" (EApp (EApp (EVar "without") (EVar "bound")) (EVar "env")) (EApp (EApp (EApp (EVar "armBounds") (EVar "env")) (EVar "scrut")) (EVar "bound")))) (DoExpr (EBinOp "++" (EApp (EApp (EDictApp "flatMap") (EApp (EApp (EApp (EApp (EVar "walkGuard") (EVar "scopes")) (EVar "owner")) (EVar "env2")) (EVar "loc"))) (EVar "gs")) (EApp (EApp (EApp (EApp (EApp (EVar "walk") (EVar "scopes")) (EVar "owner")) (EVar "env2")) (EVar "loc")) (EVar "body"))))))
+(DFunDef false "walkArm" ((PVar "scopes") (PVar "owner") (PVar "env") (PVar "loc") (PVar "scrut") (PCon "Arm" (PVar "p") (PVar "gs") (PVar "body"))) (EBlock (DoLet false false (PVar "bound") (EApp (EVar "patBoundNames") (EVar "p"))) (DoLet false false (PVar "env2") (EBinOp "++" (EApp (EApp (EVar "without") (EVar "bound")) (EVar "env")) (EApp (EApp (EApp (EVar "armBounds") (EVar "env")) (EVar "scrut")) (EVar "bound")))) (DoExpr (EApp (EApp (EApp (EApp (EApp (EApp (EVar "walkGuarded") (EVar "scopes")) (EVar "owner")) (EVar "env2")) (EVar "loc")) (EVar "gs")) (EVar "body")))))
+(DTypeSig false "walkGuarded" (TyFun (TyCon "FileScopes") (TyFun (TyCon "Owner") (TyFun (TyApp (TyCon "List") (TyCon "Bound")) (TyFun (TyApp (TyCon "Option") (TyCon "Loc")) (TyFun (TyApp (TyCon "List") (TyCon "Guard")) (TyFun (TyCon "Expr") (TyApp (TyCon "List") (TyCon "SelfCall")))))))))
+(DFunDef false "walkGuarded" ((PVar "scopes") (PVar "owner") (PVar "env0") (PVar "loc") (PVar "gs0") (PVar "body")) (ELetGroup ((lgb "go" (clause ((PVar "env") (PList)) (EApp (EApp (EApp (EApp (EApp (EVar "walk") (EVar "scopes")) (EVar "owner")) (EVar "env")) (EVar "loc")) (EVar "body"))) (clause ((PVar "env") (PCons (PCon "GBool" (PVar "e")) (PVar "gs"))) (EBinOp "++" (EApp (EApp (EApp (EApp (EApp (EVar "walk") (EVar "scopes")) (EVar "owner")) (EVar "env")) (EVar "loc")) (EVar "e")) (EApp (EApp (EVar "go") (EVar "env")) (EVar "gs")))) (clause ((PVar "env") (PCons (PCon "GBind" (PVar "p") (PVar "e")) (PVar "gs"))) (EBinOp "++" (EApp (EApp (EApp (EApp (EApp (EVar "walk") (EVar "scopes")) (EVar "owner")) (EVar "env")) (EVar "loc")) (EVar "e")) (EApp (EApp (EVar "go") (EApp (EApp (EVar "without") (EApp (EVar "patBoundNames") (EVar "p"))) (EVar "env"))) (EVar "gs")))))) (EApp (EApp (EVar "go") (EVar "env0")) (EVar "gs0"))))
 (DTypeSig false "armBounds" (TyFun (TyApp (TyCon "List") (TyCon "Bound")) (TyFun (TyCon "Expr") (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyApp (TyCon "List") (TyCon "Bound"))))))
 (DFunDef false "armBounds" ((PVar "env") (PVar "scrut") (PVar "bound")) (EMatch (EApp (EVar "unwrapLoc") (EVar "scrut")) (arm (PCon "EVar" (PVar "n")) () (EMatch (EApp (EApp (EVar "findMap") (ELam ((PVar "b")) (EApp (EApp (EVar "boundIndex") (EVar "n")) (EVar "b")))) (EVar "env")) (arm (PCon "Some" (PVar "j")) () (EApp (EApp (EMethodRef "map") (ELam ((PVar "m")) (EApp (EApp (EApp (EVar "Bound") (EVar "m")) (EVar "j")) (EVar "False")))) (EVar "bound"))) (arm (PCon "None") () (EListLit)))) (arm PWild () (EListLit))))
 (DTypeSig false "boundIndex" (TyFun (TyCon "String") (TyFun (TyCon "Bound") (TyApp (TyCon "Option") (TyCon "Int")))))
 (DFunDef false "boundIndex" ((PVar "n") (PCon "Bound" (PVar "m") (PVar "j") PWild)) (EIf (EBinOp "==" (EVar "n") (EVar "m")) (EApp (EVar "Some") (EVar "j")) (EVar "None")))
-(DTypeSig false "walkGuard" (TyFun (TyCon "FileScopes") (TyFun (TyCon "Owner") (TyFun (TyApp (TyCon "List") (TyCon "Bound")) (TyFun (TyApp (TyCon "Option") (TyCon "Loc")) (TyFun (TyCon "Guard") (TyApp (TyCon "List") (TyCon "SelfCall"))))))))
-(DFunDef false "walkGuard" ((PVar "scopes") (PVar "owner") (PVar "env") (PVar "loc") (PCon "GBool" (PVar "e"))) (EApp (EApp (EApp (EApp (EApp (EVar "walk") (EVar "scopes")) (EVar "owner")) (EVar "env")) (EVar "loc")) (EVar "e")))
-(DFunDef false "walkGuard" ((PVar "scopes") (PVar "owner") (PVar "env") (PVar "loc") (PCon "GBind" PWild (PVar "e"))) (EApp (EApp (EApp (EApp (EApp (EVar "walk") (EVar "scopes")) (EVar "owner")) (EVar "env")) (EVar "loc")) (EVar "e")))
 (DTypeSig false "isSelfCall" (TyFun (TyCon "FileScopes") (TyFun (TyCon "Owner") (TyFun (TyCon "Expr") (TyFun (TyApp (TyCon "List") (TyCon "Expr")) (TyCon "Bool"))))))
 (DFunDef false "isSelfCall" ((PVar "scopes") (PAs "owner" (PCon "Owner" (PVar "name") (PVar "ps") PWild)) (PVar "hd") (PVar "args")) (EBinOp "&&" (EBinOp "&&" (EApp (EApp (EVar "isNamed") (EVar "name")) (EVar "hd")) (EBinOp "==" (EApp (EMethodRef "length") (EVar "args")) (EApp (EMethodRef "length") (EVar "ps")))) (EApp (EApp (EApp (EVar "bindsOwner") (EVar "scopes")) (EVar "owner")) (EApp (EVar "varSite") (EVar "hd")))))
 (DTypeSig false "isNamed" (TyFun (TyCon "String") (TyFun (TyCon "Expr") (TyCon "Bool"))))

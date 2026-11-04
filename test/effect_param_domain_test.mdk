@@ -157,3 +157,6 @@ test "An effect parameter under a qualifier is domain-checked" = expectCheckReje
 test "An interface parameter applied to a row slot under a named binder needs its kind declared" = expectCheckReject
   (fixture "named_binder_iface_kind_reject.mdk")
   ["is used as an effect-indexed constructor"]
+
+test "An impl head repeating a row argument is more specific than a repeated variable" =
+  expectCheckAccept (fixture "impl_head_row_arg_specific_accept.mdk")

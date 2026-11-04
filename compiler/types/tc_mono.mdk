@@ -1520,7 +1520,8 @@ stripTyWrap (TyQual t _ _) = stripTyWrap t
 stripTyWrap t = t
 
 -- structural equality of two AST type patterns (rigid; TyVar names must match, type
--- constructors compare by identity as in `tyStep`).
+-- constructors compare by identity as in `tyStep`).  Rows and authority
+-- terms are transparent here as in `tyStep`, so two bare rows are equal.
 export
 tyStructEq : Ty -> Ty -> Bool
 tyStructEq (TyCon { tyConName = a, tyConOrigin = oa }) (TyCon { tyConName = b, tyConOrigin = ob }) =
@@ -1531,6 +1532,10 @@ tyStructEq (TyFun a1 b1) (TyFun a2 b2) = tyStructEq a1 a2 && tyStructEq b1 b2
 tyStructEq (TyTuple ts1) (TyTuple ts2) = tyStructEqList ts1 ts2
 tyStructEq (TyEffect _ _ t1) (TyEffect _ _ t2) = tyStructEq t1 t2
 tyStructEq (TyConstrained _ t1) (TyConstrained _ t2) = tyStructEq t1 t2
+tyStructEq (TyNamed _ t1 _) (TyNamed _ t2 _) = tyStructEq t1 t2
+tyStructEq (TyQual t1 _ _) (TyQual t2 _ _) = tyStructEq t1 t2
+tyStructEq (TyRow _ _ _) (TyRow _ _ _) = True
+tyStructEq (TyAuth _ _) (TyAuth _ _) = True
 tyStructEq _ _ = False
 
 tyStructEqList : List Ty -> List Ty -> Bool

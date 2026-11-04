@@ -1,5 +1,5 @@
 # META
-source_lines=2261
+source_lines=2266
 stages=DESUGAR,MARK
 # SOURCE
 -- tc_mono: operations over `Mono`/`Scheme`, pure except for minting effect-variable ids from the
@@ -1524,7 +1524,8 @@ stripTyWrap (TyQual t _ _) = stripTyWrap t
 stripTyWrap t = t
 
 -- structural equality of two AST type patterns (rigid; TyVar names must match, type
--- constructors compare by identity as in `tyStep`).
+-- constructors compare by identity as in `tyStep`).  Rows and authority
+-- terms are transparent here as in `tyStep`, so two bare rows are equal.
 export
 tyStructEq : Ty -> Ty -> Bool
 tyStructEq (TyCon { tyConName = a, tyConOrigin = oa }) (TyCon { tyConName = b, tyConOrigin = ob }) =
@@ -1535,6 +1536,10 @@ tyStructEq (TyFun a1 b1) (TyFun a2 b2) = tyStructEq a1 a2 && tyStructEq b1 b2
 tyStructEq (TyTuple ts1) (TyTuple ts2) = tyStructEqList ts1 ts2
 tyStructEq (TyEffect _ _ t1) (TyEffect _ _ t2) = tyStructEq t1 t2
 tyStructEq (TyConstrained _ t1) (TyConstrained _ t2) = tyStructEq t1 t2
+tyStructEq (TyNamed _ t1 _) (TyNamed _ t2 _) = tyStructEq t1 t2
+tyStructEq (TyQual t1 _ _) (TyQual t2 _ _) = tyStructEq t1 t2
+tyStructEq (TyRow _ _ _) (TyRow _ _ _) = True
+tyStructEq (TyAuth _ _) (TyAuth _ _) = True
 tyStructEq _ _ = False
 
 tyStructEqList : List Ty -> List Ty -> Bool
@@ -2716,6 +2721,10 @@ implDeclWithReqs _ = []
 (DFunDef false "tyStructEq" ((PCon "TyTuple" (PVar "ts1")) (PCon "TyTuple" (PVar "ts2"))) (EApp (EApp (EVar "tyStructEqList") (EVar "ts1")) (EVar "ts2")))
 (DFunDef false "tyStructEq" ((PCon "TyEffect" PWild PWild (PVar "t1")) (PCon "TyEffect" PWild PWild (PVar "t2"))) (EApp (EApp (EVar "tyStructEq") (EVar "t1")) (EVar "t2")))
 (DFunDef false "tyStructEq" ((PCon "TyConstrained" PWild (PVar "t1")) (PCon "TyConstrained" PWild (PVar "t2"))) (EApp (EApp (EVar "tyStructEq") (EVar "t1")) (EVar "t2")))
+(DFunDef false "tyStructEq" ((PCon "TyNamed" PWild (PVar "t1") PWild) (PCon "TyNamed" PWild (PVar "t2") PWild)) (EApp (EApp (EVar "tyStructEq") (EVar "t1")) (EVar "t2")))
+(DFunDef false "tyStructEq" ((PCon "TyQual" (PVar "t1") PWild PWild) (PCon "TyQual" (PVar "t2") PWild PWild)) (EApp (EApp (EVar "tyStructEq") (EVar "t1")) (EVar "t2")))
+(DFunDef false "tyStructEq" ((PCon "TyRow" PWild PWild PWild) (PCon "TyRow" PWild PWild PWild)) (EVar "True"))
+(DFunDef false "tyStructEq" ((PCon "TyAuth" PWild PWild) (PCon "TyAuth" PWild PWild)) (EVar "True"))
 (DFunDef false "tyStructEq" (PWild PWild) (EVar "False"))
 (DTypeSig false "tyStructEqList" (TyFun (TyApp (TyCon "List") (TyCon "Ty")) (TyFun (TyApp (TyCon "List") (TyCon "Ty")) (TyCon "Bool"))))
 (DFunDef false "tyStructEqList" ((PList) (PList)) (EVar "True"))
@@ -3313,6 +3322,10 @@ implDeclWithReqs _ = []
 (DFunDef false "tyStructEq" ((PCon "TyTuple" (PVar "ts1")) (PCon "TyTuple" (PVar "ts2"))) (EApp (EApp (EVar "tyStructEqList") (EVar "ts1")) (EVar "ts2")))
 (DFunDef false "tyStructEq" ((PCon "TyEffect" PWild PWild (PVar "t1")) (PCon "TyEffect" PWild PWild (PVar "t2"))) (EApp (EApp (EVar "tyStructEq") (EVar "t1")) (EVar "t2")))
 (DFunDef false "tyStructEq" ((PCon "TyConstrained" PWild (PVar "t1")) (PCon "TyConstrained" PWild (PVar "t2"))) (EApp (EApp (EVar "tyStructEq") (EVar "t1")) (EVar "t2")))
+(DFunDef false "tyStructEq" ((PCon "TyNamed" PWild (PVar "t1") PWild) (PCon "TyNamed" PWild (PVar "t2") PWild)) (EApp (EApp (EVar "tyStructEq") (EVar "t1")) (EVar "t2")))
+(DFunDef false "tyStructEq" ((PCon "TyQual" (PVar "t1") PWild PWild) (PCon "TyQual" (PVar "t2") PWild PWild)) (EApp (EApp (EVar "tyStructEq") (EVar "t1")) (EVar "t2")))
+(DFunDef false "tyStructEq" ((PCon "TyRow" PWild PWild PWild) (PCon "TyRow" PWild PWild PWild)) (EVar "True"))
+(DFunDef false "tyStructEq" ((PCon "TyAuth" PWild PWild) (PCon "TyAuth" PWild PWild)) (EVar "True"))
 (DFunDef false "tyStructEq" (PWild PWild) (EVar "False"))
 (DTypeSig false "tyStructEqList" (TyFun (TyApp (TyCon "List") (TyCon "Ty")) (TyFun (TyApp (TyCon "List") (TyCon "Ty")) (TyCon "Bool"))))
 (DFunDef false "tyStructEqList" ((PList) (PList)) (EVar "True"))

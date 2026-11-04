@@ -54,3 +54,31 @@ fan lo hi n = if n <= 0 then [] else n :: flatMap (fan lo hi) [n - lo, n - hi]
 scan : Int -> Int -> List Int -> Int
 scan lo hi [] = lo + hi
 scan lo hi (x :: xs) = if x > hi then scan lo x xs else scan lo hi xs
+
+-- A block `let` rebinds `a`, so only `b` rides along unchanged.
+rebindLet : Int -> Int -> Int -> Int
+rebindLet a b 0 = a + b
+rebindLet a b n =
+  let a = a + 1
+  rebindLet a b (n - 1)
+
+-- A `do` bind rebinds `a`.
+rebindBind : Int -> Int -> Int -> Option Int
+rebindBind a b 0 = Some (a + b)
+rebindBind a b n = do
+  a <- Some (a + 1)
+  rebindBind a b (n - 1)
+
+-- A let-pattern rebinds `a`.
+rebindPat : Int -> Int -> Int -> Int
+rebindPat a b 0 = a + b
+rebindPat a b n =
+  let (a, c) = (a + 1, n)
+  rebindPat a b (c - 1)
+
+-- A pattern guard rebinds `a` for the arm body.
+rebindGuard : Int -> Int -> List Int -> Int
+rebindGuard a b [] = a + b
+rebindGuard a b xs
+  | (a :: rest) <- xs = rebindGuard a b rest
+  | otherwise = 0

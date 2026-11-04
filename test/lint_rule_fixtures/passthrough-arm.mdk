@@ -36,13 +36,16 @@ twice r =
         Err e => Err e
     Err e => Err e
 
--- A self-recursive tail is reported too.
-countDown : Int -> Result String Int
-countDown n =
+-- A recursive use that is not a tail call is reported.
+nonTail : Int -> Result String Int
+nonTail n =
   -- expect-next-line rule-passthrough-arm unfixed
   match halfR n
-    Ok m => countDown m
+    Ok m => bump (nonTail m)
     Err e => Err e
+
+bump : Result String Int -> Result String Int
+bump r = r
 
 -- Inside a test body.
 test "passthrough in a test" =
@@ -95,3 +98,34 @@ guarded : Option Int -> Option Int
 guarded o = match o
   Some n if n > 0 => half n
   _ => None
+
+-- A self-recursive tail is not reported.
+countDown : Int -> Result String Int
+countDown n =
+  match halfR n
+    Ok m => countDown m
+    Err e => Err e
+
+-- The tail sits under an `if`.
+countIf : Int -> Result String Int
+countIf n =
+  match halfR n
+    Ok m => if m > 1 then countIf m else Ok m
+    Err e => Err e
+
+-- The tail sits under a `let`.
+countLet : Int -> Result String Int
+countLet n =
+  match halfR n
+    Ok m =>
+      let k = m + 0
+      countLet k
+    Err e => Err e
+
+-- The recursion is a where-local loop.
+countGo : Int -> Result String Int
+countGo n0 = go n0
+  where
+    go n = match halfR n
+      Ok m => go m
+      Err e => Err e

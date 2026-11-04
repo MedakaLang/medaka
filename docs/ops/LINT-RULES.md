@@ -712,7 +712,7 @@ a two-arm `match` over an Option/Result with a verbatim `None => None` / `Err e 
 
 A `match` that passes a failure straight through (`None => None`, or `Err e => Err e` with the same variable) and continues in the other arm is a monadic bind written by hand. Write it as a `do` block, at any depth: one level is enough, unlike `rule-bind-chain-to-do`, which needs a pyramid of three. The rule only suggests; it has no fixer.
 
-Not reported: a failure arm that rebuilds its value (`Err e => Err (wrap e)`), a match with a third arm or a guard, a success arm that re-wraps in the same constructor (`rule-match-to-map` owns it), and a file that declares its own `None` or `Err` constructor. A self-recursive tail call in the success arm is reported, and the message says so: the `do` form lowers to `andThen` and the call stops being a tail call.
+Not reported: a failure arm that rebuilds its value (`Err e => Err (wrap e)`), a match with a third arm or a guard, a success arm that re-wraps in the same constructor (`rule-match-to-map` owns it). A match whose success arm ends, through `if`, `let`, `match` arms and block tails, in a call of the enclosing function (a self-recursive tail, including a where-local `go`) is not reported: the `do` form lowers to `andThen`, which allocates a closure per iteration and measurably slows the loop.
 
 ```
 Before:
