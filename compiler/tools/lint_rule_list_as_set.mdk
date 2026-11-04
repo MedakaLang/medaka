@@ -356,7 +356,7 @@ helperProbes site n (Helper _ search tested _) args =
         None => [])
       tested
 
--- The membership name a callee spells, qualified or not.
+-- The membership name a callee spells, unqualified: a qualified call such as `L.lookup` parses as a field access and never reaches this function.
 membershipName : String -> Option String
 membershipName n
   | isMembership n = Some n

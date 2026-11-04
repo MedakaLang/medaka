@@ -3554,7 +3554,7 @@ checkDistinctGo : List ModuleDoc -> List String -> <IO> Unit
 checkDistinctGo [] _ = ()
 checkDistinctGo (md :: rest) seen =
   let n = mdName md
-  -- Bound: `seen` gets one name per `medaka doc` target path on the command line, and the walk exits at the first repeat.
+  -- Bound: `seen` gets one name per `medaka doc` target path on the command line; it is as long as the number of targets typed.
   -- lint-disable-next-line rule-list-as-set
   if elemStrCli n seen then
     ePutStrLn

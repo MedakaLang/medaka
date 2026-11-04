@@ -777,7 +777,7 @@ mkNamedFrameGo : W ->
   List (String, Loc) ->
   List (String, String)
 mkNamedFrameGo _ acc [] = reverseList acc
--- Bound: `acc` holds the distinct binder names of one pattern.
+-- Bound: `acc` holds the distinct binder names of one binding group: a clause's parameter patterns, a let group's binders, or a property's parameters.
 -- lint-disable-next-line rule-list-as-set
 mkNamedFrameGo w acc ((n, l) :: rest) = match assocFind (ctxOf w) n acc
   Some key =>
