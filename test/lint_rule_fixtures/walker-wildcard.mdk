@@ -94,4 +94,26 @@ dots Dot = 1
 -- lint-disable-next-line rule-walker-wildcard -- every other shape holds no dots
 dots _ = 0
 
+data Lamp = On Lamp | Dim Lamp | Pair Lamp Lamp | Burnt | Dark
+
+-- The wildcard swallows only constructors without fields, which hold no subtree.
+brightness : Lamp -> Int
+brightness (On l) = 1 + brightness l
+brightness (Dim l) = 2 + brightness l
+brightness (Pair a b) = brightness a + brightness b
+brightness _ = 0
+
+-- Here the wildcard swallows `Pair`, which carries fields.
+lit : Lamp -> Int
+lit (On l) = 1 + lit l
+lit (Dim l) = 2 + lit l
+-- expect-next-line rule-walker-wildcard unfixed
+lit _ = 0
+
+-- The recursion reaches no subterm of the constructor it matched.
+restart : Shape -> Int
+restart (Circle _) = restart Dot + 1
+restart (Square _) = restart Blank + 2
+restart _ = 0
+
 main = size (Circle 1) + depth Dot

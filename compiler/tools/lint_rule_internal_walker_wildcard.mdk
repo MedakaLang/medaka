@@ -10,8 +10,10 @@ import frontend.ast.{
   Lit(..),
   Loc,
   Pat(..),
+  ConPayload(..),
   Variant(..),
   orElseLoc,
+  patBoundNames,
 }
 import frontend.ast_walk.{childExprs}
 import frontend.parser.{Positions(..)}
@@ -36,7 +38,14 @@ import tools.lint_core.{
   projectIndexOf,
 }
 import tools.lint_index.{
-  IndexRow, Ns(..), ProjectIndex, RowKind(..), rowsNamed, rowsOfModule
+  IndexRow,
+  Ns(..),
+  ProjectIndex,
+  RowKind(..),
+  projectRows,
+  projectRowsNamed,
+  stdlibRows,
+  stdlibRowsNamed,
 }
 import tools.lint_recursion.{spineOf}
 import tools.lint_shared.{
@@ -53,7 +62,7 @@ rule =
       summary =
         "a self-recursive function over constructor patterns ends in a wildcard that returns a constant or its input without recursing: a new constructor is silently skipped",
       doc =
-        "A function that calls itself, has at least two clauses or match arms on constructors of one sum, and ends in a wildcard whose body is a literal, a constant constructor or its input unchanged, treats every constructor it does not name as a leaf. When the sum later gains a constructor, nothing goes red: the walker skips its subtree. The rule names the constructors the wildcard swallows, found in the file's own `data` declarations or the project index; when the sum cannot be resolved it says so and reports an unknown count.\n\nName the swallowed constructors in an or-pattern, so adding one is a visible edit, or recurse into them. A wildcard that is a deliberate default for three or more constructors takes a `-- lint-disable-next-line rule-walker-wildcard` that says why. A wildcard that recurses, a function with fewer than two constructor clauses, and a function that is not self-recursive are not reported.\n\nBefore:\n  usesVar x (EVar y) = x == y\n  usesVar x (EApp f a) = usesVar x f || usesVar x a\n  usesVar _ _ = False\nAfter:\n  usesVar x (EVar y) = x == y\n  usesVar x (EApp f a) = usesVar x f || usesVar x a\n  usesVar x (ELam _ body) = usesVar x body\n  usesVar _ (ELit _ | EListLit _) = False",
+        "A function that calls itself, has at least two clauses or match arms on constructors of one sum, and ends in a wildcard whose body is a literal, a constant constructor or its input unchanged, treats every constructor it does not name as a leaf. When the sum later gains a constructor, nothing goes red: the walker skips its subtree. The rule names the constructors the wildcard swallows, found in the file's own `data` declarations or the project index; when the sum cannot be resolved it says so and reports an unknown count.\n\nName the swallowed constructors in an or-pattern, so adding one is a visible edit, or recurse into them. A wildcard that is a deliberate default for three or more constructors takes a `-- lint-disable-next-line rule-walker-wildcard` that says why. Recursion counts only in a clause whose body also uses a field its constructor pattern binds. A wildcard that swallows only constructors without fields hides no subtree and is not reported. A wildcard that recurses, a function with fewer than two constructor clauses, and a function that is not self-recursive are not reported.\n\nBefore:\n  usesVar x (EVar y) = x == y\n  usesVar x (EApp f a) = usesVar x f || usesVar x a\n  usesVar _ _ = False\nAfter:\n  usesVar x (EVar y) = x == y\n  usesVar x (EApp f a) = usesVar x f || usesVar x a\n  usesVar x (ELam _ body) = usesVar x body\n  usesVar _ (ELit _ | EListLit _) = False",
       category = Style,
       scope = Internal,
       ratchet = Gated,
@@ -185,7 +194,7 @@ positionFinding env name loc initCs pats body k = match get k pats
     let working = filterList (clauseWorks name) ctorClauses
     if listLen working >= 2
       && wildAt p body (varsOfPats pats)
-      && anyList (clauseRecurses name) working then
+      && anyList (clauseRecurses name k) working then
       Some (report env name loc (flatMap (ctorsAt k) ctorClauses))
     else
       None
@@ -203,8 +212,12 @@ ctorsAt k (FunClause ps _) = match get k ps
 clauseWorks : String -> FunClause -> Bool
 clauseWorks name (FunClause _ body) = not (forwards name body)
 
-clauseRecurses : String -> FunClause -> Bool
-clauseRecurses name (FunClause _ body) = mentionsVar name body
+-- Recursion that reaches a subterm: the body mentions the function and a name
+-- the constructor pattern at position `k` binds.
+clauseRecurses : String -> Int -> FunClause -> Bool
+clauseRecurses name k (FunClause ps body) = match get k ps
+  Some p => reachesSubterm name p body
+  None => False
 
 forwards : String -> Expr -> Bool
 forwards name e = match spineOf e []
@@ -267,7 +280,11 @@ armWorks : String -> Arm -> Bool
 armWorks name (Arm _ _ body) = not (forwards name body)
 
 armRecurses : String -> Arm -> Bool
-armRecurses name (Arm _ _ body) = mentionsVar name body
+armRecurses name (Arm p _ body) = reachesSubterm name p body
+
+reachesSubterm : String -> Pat -> Expr -> Bool
+reachesSubterm name p body =
+  mentionsVar name body && anyList (v => mentionsVar v body) (patBoundNames p)
 
 scrutVar : Expr -> List String
 scrutVar e = match unwrapLoc e
@@ -327,16 +344,17 @@ ctorHead e = match unwrapLoc e
 -- ── the message ──────────────────────────────────────────────────────────────
 
 -- One finding naming what the wildcard swallows.  A sum all of whose
--- constructors the clauses name yields none.
+-- constructors the clauses name yields none, and so does one whose swallowed
+-- constructors are all nullary: they carry no subtree to skip.
 report : Env -> String -> Option Loc -> List String -> List Finding
 report env name loc named = match findMap (sumOf env) named
   None => [finding loc (unknownMessage name)]
   Some (ty, ctors) =>
-    let swallowed = filterList (c => not (anyList (== c) named)) ctors
-    if isEmptyL swallowed then
-      []
+    let swallowed = filterList (c => not (anyList (== fst c) named)) ctors
+    if anyList (c => snd c >= 1) swallowed then
+      [finding loc (swallowMessage name ty (map fst swallowed))]
     else
-      [finding loc (swallowMessage name ty swallowed)]
+      []
 
 finding : Option Loc -> String -> Finding
 finding loc message = Finding {
@@ -361,17 +379,17 @@ countText n = "\{n} constructors"
 
 -- ── the sum of a constructor ─────────────────────────────────────────────────
 
--- The type and every constructor of the sum that declares `c`: the file's own
--- `data` first, then the index.
-sumOf : Env -> String -> Option (String, List String)
+-- The type and every constructor of the sum that declares `c`, each with its
+-- field count: the file's own `data` first, then the index.
+sumOf : Env -> String -> Option (String, List (String, Int))
 sumOf (Env ix decls) c = match findMap (declSum c) decls
   Some s => Some s
   None => indexSum ix c
 
-declSum : String -> Decl -> Option (String, List String)
+declSum : String -> Decl -> Option (String, List (String, Int))
 declSum c (DData { dataName = n, dataCtors = vs, ... }) =
   if anyList (v => variantName v == c) vs then
-    Some (n, map variantName vs)
+    Some (n, map variantArity vs)
   else
     None
 declSum c (DAttrib _ d) = declSum c d
@@ -380,20 +398,34 @@ declSum _ _ = None
 variantName : Variant -> String
 variantName (Variant n _) = n
 
+variantArity : Variant -> (String, Int)
+variantArity (Variant n (ConPos tys)) = (n, listLen tys)
+variantArity (Variant n (ConNamed fields _)) = (n, listLen fields)
+
 -- A constructor name declared once across the project and the stdlib resolves;
--- a name declared more than once, or not at all, does not.
-indexSum : ProjectIndex -> String -> Option (String, List String)
-indexSum ix c = match filterList isCtorRow (rowsNamed ix NsValue c)
-  [r] => Some (
-    r.ixrParent,
-    map
-      (x => x.ixrName)
-      (filterList (siblingOf r) (rowsOfModule ix r.ixrModule)),
-  )
+-- a name declared more than once, or not at all, does not.  The siblings come
+-- from the scope that declares the constructor alone: a whole-scope scan
+-- dominates the rule's cost.
+indexSum : ProjectIndex -> String -> Option (String, List (String, Int))
+indexSum ix c = match (
+  filterList isCtorRow (projectRowsNamed ix NsValue c),
+  filterList isCtorRow (stdlibRowsNamed ix NsValue c),
+)
+  ([r], []) => Some (siblingsIn r (projectRows ix))
+  ([], [r]) => Some (siblingsIn r (stdlibRows ix))
   _ => None
+
+siblingsIn : IndexRow -> List IndexRow -> (String, List (String, Int))
+siblingsIn r rows = (
+  r.ixrParent,
+  map (x => (x.ixrName, x.ixrArity)) (filterList (siblingOf r) rows),
+)
 
 isCtorRow : IndexRow -> Bool
 isCtorRow r = r.ixrKind == RkCtor
 
 siblingOf : IndexRow -> IndexRow -> Bool
-siblingOf r x = x.ixrKind == RkCtor && x.ixrParent == r.ixrParent
+siblingOf r x =
+  x.ixrKind == RkCtor
+    && x.ixrModule == r.ixrModule
+    && x.ixrParent == r.ixrParent
