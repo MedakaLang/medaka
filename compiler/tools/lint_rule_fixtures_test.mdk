@@ -138,6 +138,7 @@ fixtureNames = [
   "unused-import",
   "unused-local",
   "unused-param",
+  "walker-wildcard",
   "when-unless",
 ]
 
@@ -458,6 +459,8 @@ test "rule-unused-import fixture" = fixtureHolds "unused-import"
 test "rule-unused-local fixture" = fixtureHolds "unused-local"
 
 test "rule-unused-param fixture" = fixtureHolds "unused-param"
+
+test "rule-walker-wildcard fixture" = fixtureHolds "walker-wildcard"
 
 test "rule-when-unless fixture" = fixtureHolds "when-unless"
 

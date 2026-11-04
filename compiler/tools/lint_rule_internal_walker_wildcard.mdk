@@ -1,0 +1,399 @@
+-- lint rule rule-walker-wildcard: a self-recursive function over constructor patterns whose final wildcard returns a constant or its input without recursing.
+
+import driver.diagnostics.{Severity(..)}
+import frontend.ast.{
+  Arm(..),
+  Decl(..),
+  Expr(..),
+  FunClause(..),
+  LetBind(..),
+  Lit(..),
+  Loc,
+  Pat(..),
+  Variant(..),
+  orElseLoc,
+}
+import frontend.ast_walk.{childExprs}
+import frontend.parser.{Positions(..)}
+import list.{findMap, get, init, last, takeWhile, dropWhile}
+import support.util.{
+  anyList, allList, filterList, isEmptyL, isNonEmptyL, joinWith, listLen,
+  startsWith
+}
+import tools.lint_calls.{lastSegment}
+import tools.lint_core.{
+  Category(..),
+  FileFacts,
+  Finding(..),
+  Fixability(..),
+  Need(..),
+  Ratchet(..),
+  Rule,
+  RuleMeta(..),
+  Scope(..),
+  StdlibIndex,
+  mkRule,
+  projectIndexOf,
+}
+import tools.lint_index.{
+  IndexRow, Ns(..), ProjectIndex, RowKind(..), rowsNamed, rowsOfModule
+}
+import tools.lint_recursion.{spineOf}
+import tools.lint_shared.{
+  declLocList, firstLoc, isCtorName, mentionsVar, ruleNameWalkerWildcard,
+  unwrapLoc
+}
+
+export
+rule : Rule
+rule =
+  mkRule
+    RuleMeta {
+      name = ruleNameWalkerWildcard,
+      summary =
+        "a self-recursive function over constructor patterns ends in a wildcard that returns a constant or its input without recursing: a new constructor is silently skipped",
+      doc =
+        "A function that calls itself, has at least two clauses or match arms on constructors of one sum, and ends in a wildcard whose body is a literal, a constant constructor or its input unchanged, treats every constructor it does not name as a leaf. When the sum later gains a constructor, nothing goes red: the walker skips its subtree. The rule names the constructors the wildcard swallows, found in the file's own `data` declarations or the project index; when the sum cannot be resolved it says so and reports an unknown count.\n\nName the swallowed constructors in an or-pattern, so adding one is a visible edit, or recurse into them. A wildcard that is a deliberate default for three or more constructors takes a `-- lint-disable-next-line rule-walker-wildcard` that says why. A wildcard that recurses, a function with fewer than two constructor clauses, and a function that is not self-recursive are not reported.\n\nBefore:\n  usesVar x (EVar y) = x == y\n  usesVar x (EApp f a) = usesVar x f || usesVar x a\n  usesVar _ _ = False\nAfter:\n  usesVar x (EVar y) = x == y\n  usesVar x (EApp f a) = usesVar x f || usesVar x a\n  usesVar x (ELam _ body) = usesVar x body\n  usesVar _ (ELit _ | EListLit _) = False",
+      category = Style,
+      scope = Internal,
+      ratchet = Gated,
+      defaultSeverity = SevWarning,
+      fixability = NotFixable,
+      needs = [NeedsProjectIndex],
+    }
+    ruleWalkerWildcard
+    None
+
+-- What the rule reads of one file: the project index and the file's own declarations (their `data` resolves a constructor the index does
+-- not yet hold).
+data Env = Env ProjectIndex (List Decl)
+
+-- One top-level clause with the declaration's start line.
+data TopClause = TopClause String (List Pat) Expr (Option Loc)
+
+ruleWalkerWildcard : StdlibIndex ->
+  String ->
+  FileFacts ->
+  Positions ->
+  List Decl ->
+  List Finding
+ruleWalkerWildcard idx _ _ pos prog =
+  topFindings (Env (projectIndexOf idx) prog) (declLocList pos prog)
+
+-- ── top-level groups ─────────────────────────────────────────────────────────
+
+topFindings : Env -> List (Decl, Option Loc) -> List Finding
+topFindings _ [] = []
+topFindings env (dl :: rest) = match topClause dl
+  None => topFindings env rest
+  Some (TopClause name ps body loc) =>
+    let same = takeWhile (sameTop name) rest
+    let group = TopClause name ps body loc :: flatMap clauseList same
+    groupFindings env name (map toClause group) (clauseLoc (lastOf group))
+      ++ flatMap (topBodyFindings env) group
+      ++ topFindings env (dropWhile (sameTop name) rest)
+
+clauseList : (Decl, Option Loc) -> List TopClause
+clauseList dl = match topClause dl
+  Some c => [c]
+  None => []
+
+toClause : TopClause -> FunClause
+toClause (TopClause _ ps body _) = FunClause ps body
+
+lastOf : List TopClause -> Option TopClause
+lastOf cs = last cs
+
+clauseLoc : Option TopClause -> Option Loc
+clauseLoc (Some (TopClause _ _ _ loc)) = loc
+clauseLoc None = None
+
+topClause : (Decl, Option Loc) -> Option TopClause
+topClause (DFunDef _ name ps body _ _, loc) = Some (TopClause name ps body loc)
+topClause (DAttrib _ d, loc) = topClause (d, loc)
+topClause _ = None
+
+sameTop : String -> (Decl, Option Loc) -> Bool
+sameTop name dl = match topClause dl
+  Some (TopClause n _ _ _) => n == name
+  None => False
+
+topBodyFindings : Env -> TopClause -> List Finding
+topBodyFindings env (TopClause name _ body loc) = walkBody env name loc body
+
+-- ── bodies ───────────────────────────────────────────────────────────────────
+
+-- The `match` forms in a body and the `let`/`where` groups it opens.
+walkBody : Env -> String -> Option Loc -> Expr -> List Finding
+walkBody env name _ (ELoc l inner) = walkBody env name (Some l) inner
+walkBody env name loc e =
+  matchFindings env name loc e
+    ++ (match e
+      ELetGroup binds body =>
+        flatMap (letBindFindings env) binds ++ walkBody env name loc body
+      _ => flatMap (walkBody env name loc) (childExprs e))
+
+letBindFindings : Env -> LetBind -> List Finding
+letBindFindings env (LetBind name clauses site _) =
+  groupFindings env name clauses (Some site)
+    ++ flatMap (letClauseFindings env name site) clauses
+
+letClauseFindings : Env -> String -> Loc -> FunClause -> List Finding
+letClauseFindings env name site (FunClause _ body) =
+  walkBody env name (Some site) body
+
+-- ── the clause form ──────────────────────────────────────────────────────────
+
+-- A function whose clauses name constructors in one parameter position and
+-- whose last clause matches anything there and answers without recursing.
+groupFindings : Env -> String -> List FunClause -> Option Loc -> List Finding
+groupFindings env name clauses loc = match (init clauses, last clauses)
+  (Some initCs, Some (FunClause pats body)) =>
+    if allList irrefutable pats && not (mentionsVar name body) then
+      firstPosition env name loc initCs pats body
+    else
+      []
+  _ => []
+
+firstPosition : Env ->
+  String ->
+  Option Loc ->
+  List FunClause ->
+  List Pat ->
+  Expr ->
+  List Finding
+firstPosition env name loc initCs pats body =
+  let found =
+    findMap (positionFinding env name loc initCs pats body) (positionsOf pats)
+  optionOr [] found
+
+positionsOf : List Pat -> List Int
+positionsOf pats = [0..listLen pats]
+
+positionFinding : Env ->
+  String ->
+  Option Loc ->
+  List FunClause ->
+  List Pat ->
+  Expr ->
+  Int ->
+  Option (List Finding)
+positionFinding env name loc initCs pats body k = match get k pats
+  None => None
+  Some p =>
+    let ctorClauses = filterList (hasCtorAt k) initCs
+    let working = filterList (clauseWorks name) ctorClauses
+    if listLen working >= 2
+      && wildAt p body (varsOfPats pats)
+      && anyList (clauseRecurses name) working then
+      Some (report env name loc (flatMap (ctorsAt k) ctorClauses))
+    else
+      None
+
+hasCtorAt : Int -> FunClause -> Bool
+hasCtorAt k c = isNonEmptyL (ctorsAt k c)
+
+ctorsAt : Int -> FunClause -> List String
+ctorsAt k (FunClause ps _) = match get k ps
+  Some p => ctorsOfPat p
+  None => []
+
+-- A clause that does more than hand its one subterm back to the function: a
+-- peel of a wrapper (`f (ELoc _ e) = f e`) walks nothing.
+clauseWorks : String -> FunClause -> Bool
+clauseWorks name (FunClause _ body) = not (forwards name body)
+
+clauseRecurses : String -> FunClause -> Bool
+clauseRecurses name (FunClause _ body) = mentionsVar name body
+
+forwards : String -> Expr -> Bool
+forwards name e = match spineOf e []
+  (hd, args) => isVar name hd && isNonEmptyL args && allList isAVar args
+
+isAVar : Expr -> Bool
+isAVar e = match unwrapLoc e
+  EVar _ => True
+  _ => False
+
+varsOfPats : List Pat -> List String
+varsOfPats pats = flatMap varOfPat pats
+
+varOfPat : Pat -> List String
+varOfPat (PVar n _ _) = [n]
+varOfPat _ = []
+
+irrefutable : Pat -> Bool
+irrefutable PWild = True
+irrefutable (PVar _ _ _) = True
+irrefutable _ = False
+
+-- ── the match form ───────────────────────────────────────────────────────────
+
+matchFindings : Env -> String -> Option Loc -> Expr -> List Finding
+matchFindings env name loc (EMatch scrut arms) =
+  matchArms env name loc scrut arms
+matchFindings _ _ _ _ = []
+
+matchArms : Env -> String -> Option Loc -> Expr -> List Arm -> List Finding
+matchArms env name loc scrut arms = match (
+  init arms,
+  last arms,
+)
+  (Some initArms, Some (Arm p guards body)) =>
+    let ctorArms = filterList armHasCtor initArms
+    let working = filterList (armWorks name) ctorArms
+    if isEmptyL guards then
+      if listLen working >= 2
+        && wildAt p body (scrutVar scrut ++ varOfPat p)
+        && anyList (armRecurses name) working then
+        report
+          env
+          name
+          (orElseLoc (firstLoc body) loc)
+          (flatMap armCtors ctorArms)
+      else
+        []
+    else
+      []
+  _ => []
+
+armHasCtor : Arm -> Bool
+armHasCtor arm = isNonEmptyL (armCtors arm)
+
+armCtors : Arm -> List String
+armCtors (Arm p _ _) = ctorsOfPat p
+
+armWorks : String -> Arm -> Bool
+armWorks name (Arm _ _ body) = not (forwards name body)
+
+armRecurses : String -> Arm -> Bool
+armRecurses name (Arm _ _ body) = mentionsVar name body
+
+scrutVar : Expr -> List String
+scrutVar e = match unwrapLoc e
+  EVar v => [v]
+  _ => []
+
+-- ── patterns and bodies ──────────────────────────────────────────────────────
+
+-- The constructors a pattern names at its top: through `as`, alternatives and
+-- a type ascription; a list, tuple, literal or variable pattern names none.
+ctorsOfPat : Pat -> List String
+ctorsOfPat (PCon n _) = [lastSegment n]
+ctorsOfPat (PRec n _ _) = [lastSegment n]
+ctorsOfPat (PAs _ _ _ p) = ctorsOfPat p
+ctorsOfPat (PAnn p _) = ctorsOfPat p
+ctorsOfPat (POr ps) = flatMap ctorsOfPat ps
+-- Every other pattern form (variable, wildcard, literal, list, tuple) names no constructor at its top.
+-- lint-disable-next-line rule-walker-wildcard
+ctorsOfPat _ = []
+
+-- A catch-all pattern whose body is a constant or one of `inputs` unchanged.  A
+-- variable pattern is a catch-all when the body ignores it or returns it as is.
+wildAt : Pat -> Expr -> List String -> Bool
+wildAt PWild body inputs = constantOrInput inputs body
+wildAt (PVar n _ _) body inputs =
+  constantOrInput inputs body
+    && (startsWith "_" n || not (mentionsVar n body) || isVar n body)
+wildAt _ _ _ = False
+
+isVar : String -> Expr -> Bool
+isVar n e = match unwrapLoc e
+  EVar v => v == n
+  _ => False
+
+-- A literal, a constant constructor (also applied to constants), an empty list,
+-- a tuple of constants, or one of the input names.
+constantOrInput : List String -> Expr -> Bool
+constantOrInput inputs e = match unwrapLoc e
+  ELit _ => True
+  ENumLit _ _ _ => True
+  EWideLit _ _ _ _ => True
+  EVar v => isCtorName v || anyList (== v) inputs
+  EListLit es => allList (constantOrInput []) es
+  ETuple es => allList (constantOrInput inputs) es
+  EUnOp "-" x _ => constantOrInput [] x
+  EApp _ _ => match spineOf e []
+    (hd, args) => ctorHead hd && allList (constantOrInput []) args
+  -- Only the forms above can be a constant; any other expression computes.
+  -- lint-disable-next-line rule-walker-wildcard
+  _ => False
+
+ctorHead : Expr -> Bool
+ctorHead e = match unwrapLoc e
+  EVar v => isCtorName v
+  _ => False
+
+-- ── the message ──────────────────────────────────────────────────────────────
+
+-- One finding naming what the wildcard swallows.  A sum all of whose
+-- constructors the clauses name yields none.
+report : Env -> String -> Option Loc -> List String -> List Finding
+report env name loc named = match findMap (sumOf env) named
+  None => [finding loc (unknownMessage name)]
+  Some (ty, ctors) =>
+    let swallowed = filterList (c => not (anyList (== c) named)) ctors
+    if isEmptyL swallowed then
+      []
+    else
+      [finding loc (swallowMessage name ty swallowed)]
+
+finding : Option Loc -> String -> Finding
+finding loc message = Finding {
+  rule = ruleNameWalkerWildcard,
+  message = message,
+  severity = SevWarning,
+  loc = loc,
+  fix = None,
+}
+
+swallowMessage : String -> String -> List String -> String
+swallowMessage name ty swallowed =
+  "`\{name}` recurses over `\{ty}` but its final wildcard swallows \{countText (listLen swallowed)} (\{joinWith ", " swallowed}) without recursing; name them in an or-pattern, or recurse"
+
+unknownMessage : String -> String
+unknownMessage name =
+  "`\{name}` recurses over constructor patterns but its final wildcard swallows an unknown number of constructors without recursing; name them in an or-pattern, or recurse"
+
+countText : Int -> String
+countText 1 = "1 constructor"
+countText n = "\{n} constructors"
+
+-- ── the sum of a constructor ─────────────────────────────────────────────────
+
+-- The type and every constructor of the sum that declares `c`: the file's own
+-- `data` first, then the index.
+sumOf : Env -> String -> Option (String, List String)
+sumOf (Env ix decls) c = match findMap (declSum c) decls
+  Some s => Some s
+  None => indexSum ix c
+
+declSum : String -> Decl -> Option (String, List String)
+declSum c (DData { dataName = n, dataCtors = vs, ... }) =
+  if anyList (v => variantName v == c) vs then
+    Some (n, map variantName vs)
+  else
+    None
+declSum c (DAttrib _ d) = declSum c d
+declSum _ _ = None
+
+variantName : Variant -> String
+variantName (Variant n _) = n
+
+-- A constructor name declared once across the project and the stdlib resolves;
+-- a name declared more than once, or not at all, does not.
+indexSum : ProjectIndex -> String -> Option (String, List String)
+indexSum ix c = match filterList isCtorRow (rowsNamed ix NsValue c)
+  [r] => Some (
+    r.ixrParent,
+    map
+      (x => x.ixrName)
+      (filterList (siblingOf r) (rowsOfModule ix r.ixrModule)),
+  )
+  _ => None
+
+isCtorRow : IndexRow -> Bool
+isCtorRow r = r.ixrKind == RkCtor
+
+siblingOf : IndexRow -> IndexRow -> Bool
+siblingOf r x = x.ixrKind == RkCtor && x.ixrParent == r.ixrParent

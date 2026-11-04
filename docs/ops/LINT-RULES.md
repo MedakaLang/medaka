@@ -49,6 +49,7 @@ Every rule `medaka lint` knows. `universal` rules are meaningful in any Medaka p
 | [`rule-accumulator-append`](#rule-accumulator-append) | universal | perf | gated | not-fixable | file |
 | [`rule-reslice-in-loop`](#rule-reslice-in-loop) | universal | perf | gated | not-fixable | file |
 | [`rule-list-as-set`](#rule-list-as-set) | universal | perf | gated | not-fixable | file |
+| [`rule-walker-wildcard`](#rule-walker-wildcard) | internal | style | gated | not-fixable | file |
 
 ## rule-match-on-param
 
@@ -664,4 +665,24 @@ Before:
   go seen (x :: xs) = if contains x seen then go seen xs else go (x :: seen) xs
 After:
   go seen (x :: xs) = if has x seen then go seen xs else go (insert x seen) xs  -- with `seen : Set String`
+```
+
+## rule-walker-wildcard
+
+a self-recursive function over constructor patterns ends in a wildcard that returns a constant or its input without recursing: a new constructor is silently skipped
+
+A function that calls itself, has at least two clauses or match arms on constructors of one sum, and ends in a wildcard whose body is a literal, a constant constructor or its input unchanged, treats every constructor it does not name as a leaf. When the sum later gains a constructor, nothing goes red: the walker skips its subtree. The rule names the constructors the wildcard swallows, found in the file's own `data` declarations or the project index; when the sum cannot be resolved it says so and reports an unknown count.
+
+Name the swallowed constructors in an or-pattern, so adding one is a visible edit, or recurse into them. A wildcard that is a deliberate default for three or more constructors takes a `-- lint-disable-next-line rule-walker-wildcard` that says why. A wildcard that recurses, a function with fewer than two constructor clauses, and a function that is not self-recursive are not reported.
+
+```
+Before:
+  usesVar x (EVar y) = x == y
+  usesVar x (EApp f a) = usesVar x f || usesVar x a
+  usesVar _ _ = False
+After:
+  usesVar x (EVar y) = x == y
+  usesVar x (EApp f a) = usesVar x f || usesVar x a
+  usesVar x (ELam _ body) = usesVar x body
+  usesVar _ (ELit _ | EListLit _) = False
 ```

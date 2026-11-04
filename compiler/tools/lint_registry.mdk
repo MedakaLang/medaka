@@ -49,6 +49,7 @@ import tools.lint_rule_discarded_result as DiscardedResult
 import tools.lint_rule_accumulator_append as AccumulatorAppend
 import tools.lint_rule_reslice_in_loop as ResliceInLoop
 import tools.lint_rule_list_as_set as ListAsSet
+import tools.lint_rule_internal_walker_wildcard as WalkerWildcard
 
 -- ── the registry ─────────────────────────────────────────────────────────────
 -- The list position is the output order of findings.  Each entry is the `rule`
@@ -99,6 +100,7 @@ allRules = [
   AccumulatorAppend.rule,
   ResliceInLoop.rule,
   ListAsSet.rule,
+  WalkerWildcard.rule,
 ]
 
 -- ── the project registry ──────────────────────────────────────────────────────

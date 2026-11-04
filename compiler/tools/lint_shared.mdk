@@ -1089,3 +1089,7 @@ ruleNameResliceInLoop = "rule-reslice-in-loop"
 export
 ruleNameListAsSet : String
 ruleNameListAsSet = "rule-list-as-set"
+
+export
+ruleNameWalkerWildcard : String
+ruleNameWalkerWildcard = "rule-walker-wildcard"

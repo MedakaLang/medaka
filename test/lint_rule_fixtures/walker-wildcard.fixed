@@ -1,0 +1,97 @@
+data Shape =
+  | Circle Int
+  | Square Int
+  | Group (List Shape)
+  | Wrap Shape
+  | Dot
+  | Blank
+
+-- A constant wildcard after two working constructor clauses and a recursive one.
+size : Shape -> Int
+size (Circle r) = r
+size (Square s) = s
+size (Group (s :: rest)) = size s + size (Group rest)
+-- expect-next-line rule-walker-wildcard unfixed
+size _ = 0
+
+-- The wildcard sits in a later parameter position than the constructor.
+usedIn : String -> Shape -> Bool
+usedIn p (Circle _) = p == "c"
+usedIn p (Group (s :: rest)) = usedIn p s || usedIn p (Group rest)
+-- expect-next-line rule-walker-wildcard unfixed
+usedIn _ _ = False
+
+-- The wildcard returns its input unchanged; the recursion is point-free.
+simplify : Shape -> Shape
+simplify (Group ss) = Group (map simplify ss)
+simplify (Circle 0) = Dot
+-- expect-next-line rule-walker-wildcard unfixed
+simplify s = s
+
+-- A match with a constant final arm.
+depth : Shape -> Int
+depth shape = match shape
+  Group (s :: rest) => 1 + depth s + depth (Group rest)
+  Circle _ => 1
+  -- expect-next-line rule-walker-wildcard unfixed
+  _ => 0
+
+-- A local loop is its own function; its finding sits on the first clause.
+countDots : List Shape -> Int
+countDots shapes = go shapes
+  where
+    go [] = 0
+    go (s :: rest) = tally s + go rest
+    -- expect-next-line rule-walker-wildcard unfixed
+    tally (Group (s :: rest)) = tally s + tally (Group rest)
+    tally Dot = 1
+    tally _ = 0
+
+-- The wildcard recurses, so it is not a leaf.
+sizeR : Shape -> Int
+sizeR (Circle r) = r
+sizeR (Square s) = s
+sizeR (Group (s :: rest)) = sizeR s + sizeR (Group rest)
+sizeR other = sizeR (Group [other])
+
+-- A wrapper peeled by one clause walks nothing: one working clause only.
+innerCircle : Shape -> Int
+innerCircle (Wrap s) = innerCircle s
+innerCircle (Circle r) = r
+innerCircle _ = 0
+
+-- One constructor clause only.
+isDot : Shape -> Bool
+isDot Dot = True
+isDot _ = False
+
+-- Not self-recursive.
+label : Shape -> String
+label (Circle _) = "circle"
+label (Square _) = "square"
+label _ = "other"
+
+-- A computed result is not a constant or the input unchanged.
+bump : Int -> Shape -> Int
+bump n (Circle r) = r + n + bump n Dot
+bump n (Group (s :: _)) = bump n s
+bump n _ = n + 1
+
+-- Every constructor of the sum is named, so the wildcard swallows none.
+weight : Shape -> Int
+weight (Circle r) = r
+weight (Square s) = s
+weight (Group (s :: rest)) = weight s + weight (Group rest)
+weight (Wrap s) = weight s
+weight Dot = 1
+weight Blank = 0
+weight _ = 0
+
+-- A directive silences a deliberate default.
+dots : Shape -> Int
+dots (Group (s :: rest)) = dots s + dots (Group rest)
+dots Dot = 1
+-- lint-disable-next-line rule-walker-wildcard -- every other shape holds no dots
+dots _ = 0
+
+main = size (Circle 1) + depth Dot

@@ -1,5 +1,5 @@
 # META
-source_lines=1091
+source_lines=1095
 stages=DESUGAR,MARK
 # SOURCE
 -- compiler/tools/lint_shared.mdk — helpers used by more than one lint module:
@@ -1093,6 +1093,10 @@ ruleNameResliceInLoop = "rule-reslice-in-loop"
 export
 ruleNameListAsSet : String
 ruleNameListAsSet = "rule-list-as-set"
+
+export
+ruleNameWalkerWildcard : String
+ruleNameWalkerWildcard = "rule-walker-wildcard"
 # DESUGAR
 (DUse false (UseGroup ("frontend" "ast") ((mem "Loc" true) (mem "Expr" true) (mem "Decl" true) (mem "noBinderId" false) (mem "noDeclLoc" false) (mem "Ty" true) (mem "Pat" true) (mem "UseMember" true) (mem "Guard" true) (mem "Arm" true) (mem "ImplMethod" true) (mem "DoStmt" true) (mem "Section" true) (mem "InterpPart" true) (mem "GuardArm" true) (mem "FieldAssign" true) (mem "LetBind" true) (mem "FunClause" true))))
 (DUse false (UseGroup ("frontend" "parser") ((mem "Positions" true) (mem "DeclPos" false) (mem "positionsDecls" false) (mem "declPosLine" false))))
@@ -1459,6 +1463,8 @@ ruleNameListAsSet = "rule-list-as-set"
 (DFunDef false "ruleNameResliceInLoop" () (ELit (LString "rule-reslice-in-loop")))
 (DTypeSig true "ruleNameListAsSet" (TyCon "String"))
 (DFunDef false "ruleNameListAsSet" () (ELit (LString "rule-list-as-set")))
+(DTypeSig true "ruleNameWalkerWildcard" (TyCon "String"))
+(DFunDef false "ruleNameWalkerWildcard" () (ELit (LString "rule-walker-wildcard")))
 # MARK
 (DUse false (UseGroup ("frontend" "ast") ((mem "Loc" true) (mem "Expr" true) (mem "Decl" true) (mem "noBinderId" false) (mem "noDeclLoc" false) (mem "Ty" true) (mem "Pat" true) (mem "UseMember" true) (mem "Guard" true) (mem "Arm" true) (mem "ImplMethod" true) (mem "DoStmt" true) (mem "Section" true) (mem "InterpPart" true) (mem "GuardArm" true) (mem "FieldAssign" true) (mem "LetBind" true) (mem "FunClause" true))))
 (DUse false (UseGroup ("frontend" "parser") ((mem "Positions" true) (mem "DeclPos" false) (mem "positionsDecls" false) (mem "declPosLine" false))))
@@ -1825,3 +1831,5 @@ ruleNameListAsSet = "rule-list-as-set"
 (DFunDef false "ruleNameResliceInLoop" () (ELit (LString "rule-reslice-in-loop")))
 (DTypeSig true "ruleNameListAsSet" (TyCon "String"))
 (DFunDef false "ruleNameListAsSet" () (ELit (LString "rule-list-as-set")))
+(DTypeSig true "ruleNameWalkerWildcard" (TyCon "String"))
+(DFunDef false "ruleNameWalkerWildcard" () (ELit (LString "rule-walker-wildcard")))
