@@ -35,6 +35,7 @@ ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 SEED_GZ="$ROOT/compiler/seed/emitter.ll.gz"
 DRIVER="$ROOT/compiler/entries/llvm_emit_modules_main.mdk"
 RT="$ROOT/runtime/medaka_rt.c"
+PROCESS_RT="$ROOT/runtime/medaka_process.c"
 RUNTIME="$ROOT/stdlib/runtime.mdk"
 CORE="$ROOT/stdlib/core.mdk"
 SELFHOST="$ROOT/compiler"
@@ -111,7 +112,7 @@ trim_unit() {
 # ---- STEP 1: clang the SEED into a native emitter ---------------------------
 SEED_EMITTER="$WORK/seed_emitter"
 echo "step 1: clang(seed) -> seed_emitter (stack $STACK_SIZE) ..."
-if ! "$CC" -pthread $GC_CFLAGS "$SEED" "$RT" $GC_LIBS -lm -o "$SEED_EMITTER" 2>"$WORK/cc1.err"; then
+if ! "$CC" -pthread $GC_CFLAGS "$SEED" "$RT" "$PROCESS_RT" $GC_LIBS -lm -o "$SEED_EMITTER" 2>"$WORK/cc1.err"; then
   echo "FAIL (clang seed): $(cat "$WORK/cc1.err")"; exit 1
 fi
 
@@ -143,7 +144,7 @@ fi
 # workhorse emitter, kept as medaka_emitter until the next source change, so a
 # cold-cloned repo gets the ~30%-faster emitter immediately. EMITTER_OPT overrides.
 echo "step 4: clang(emitter2) -> $OUT ..."
-if ! "$CC" -pthread "${EMITTER_OPT:--O2}" $GC_CFLAGS "$EMITTER2" "$RT" $GC_LIBS -lm -o "$OUT" 2>"$WORK/cc2.err"; then
+if ! "$CC" -pthread "${EMITTER_OPT:--O2}" $GC_CFLAGS "$EMITTER2" "$RT" "$PROCESS_RT" $GC_LIBS -lm -o "$OUT" 2>"$WORK/cc2.err"; then
   echo "FAIL (clang medaka_emitter): $(cat "$WORK/cc2.err")"; exit 1
 fi
 

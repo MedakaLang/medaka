@@ -226,7 +226,7 @@ def verify_distribution(root, expected):
     actual = fingerprint(root)
     if actual != expected:
         raise InfrastructureError('artifact fingerprint mismatch')
-    required = {'medaka', 'medaka_emitter', 'runtime/medaka_rt.c', 'stdlib/core.mdk', 'stdlib/runtime.mdk'}
+    required = {'medaka', 'medaka_emitter', 'runtime/medaka_rt.c', 'runtime/medaka_abi.h', 'runtime/medaka_runtime.h', 'runtime/medaka_process.h', 'runtime/medaka_process.c', 'stdlib/core.mdk', 'stdlib/runtime.mdk'}
     if not required <= set(actual) or any(p.startswith('compiler/') for p in actual):
         raise InfrastructureError('invalid installed distribution')
     return root
