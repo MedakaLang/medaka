@@ -1,7 +1,8 @@
 # META
-source_lines=3033
+source_lines=3034
 stages=DESUGAR,MARK
 # SOURCE
+import backend.runtime_layout.{siteLineBits, siteColumnBits}
 import backend.wasm_symbols.{WasmSymbol(..)}
 import backend.wasm_fn_values.{fnValueUses}
 import ir.constructor_facts.{ConstructorFacts, declaredCtorArity}
@@ -1693,9 +1694,9 @@ hasLocation (Loc f sl sc el ec) =
   f /= ""
     && not (sl == 1 && sc == 0 && el == 1 && ec == 0)
     && sl >= 0
-    && sl < 16777216
+    && sl < shiftLeft 1 siteLineBits
     && sc >= 0
-    && sc < 1048576
+    && sc < shiftLeft 1 siteColumnBits
 
 runtimeRoots : WasmTypeContext -> HelperAcc -> String -> List CExpr -> HelperAcc
 runtimeRoots ctx acc symbol args = match externRuntimeKey ctx.externFacts symbol
@@ -3036,6 +3037,7 @@ stmtHasFallthrough (CSExpr e) = exprHasFallthrough e
 stmtHasFallthrough (CSLet _ _ e) = exprHasFallthrough e
 stmtHasFallthrough (CSAssign _ e) = exprHasFallthrough e
 # DESUGAR
+(DUse false (UseGroup ("backend" "runtime_layout") ((mem "siteLineBits" false) (mem "siteColumnBits" false))))
 (DUse false (UseGroup ("backend" "wasm_symbols") ((mem "WasmSymbol" true))))
 (DUse false (UseGroup ("backend" "wasm_fn_values") ((mem "fnValueUses" false))))
 (DUse false (UseGroup ("ir" "constructor_facts") ((mem "ConstructorFacts" false) (mem "declaredCtorArity" false))))
@@ -3500,7 +3502,7 @@ stmtHasFallthrough (CSAssign _ e) = exprHasFallthrough e
 (DTypeSig false "locatedNonexh" (TyFun (TyCon "HelperAcc") (TyFun (TyCon "Loc") (TyCon "HelperAcc"))))
 (DFunDef false "locatedNonexh" ((PVar "acc") (PVar "loc")) (EIf (EApp (EVar "hasLocation") (EVar "loc")) (ERecordUpdate (EApp (EVar "needSite") (EVar "acc")) ((fa "nonexh" (EVar "True")))) (EApp (EVar "needTrap") (EVar "acc"))))
 (DTypeSig false "hasLocation" (TyFun (TyCon "Loc") (TyCon "Bool")))
-(DFunDef false "hasLocation" ((PCon "Loc" (PVar "f") (PVar "sl") (PVar "sc") (PVar "el") (PVar "ec"))) (EBinOp "&&" (EBinOp "&&" (EBinOp "&&" (EBinOp "&&" (EBinOp "&&" (EBinOp "/=" (EVar "f") (ELit (LString ""))) (EApp (EVar "not") (EBinOp "&&" (EBinOp "&&" (EBinOp "&&" (EBinOp "==" (EVar "sl") (ELit (LInt 1))) (EBinOp "==" (EVar "sc") (ELit (LInt 0)))) (EBinOp "==" (EVar "el") (ELit (LInt 1)))) (EBinOp "==" (EVar "ec") (ELit (LInt 0)))))) (EBinOp ">=" (EVar "sl") (ELit (LInt 0)))) (EBinOp "<" (EVar "sl") (ELit (LInt 16777216)))) (EBinOp ">=" (EVar "sc") (ELit (LInt 0)))) (EBinOp "<" (EVar "sc") (ELit (LInt 1048576)))))
+(DFunDef false "hasLocation" ((PCon "Loc" (PVar "f") (PVar "sl") (PVar "sc") (PVar "el") (PVar "ec"))) (EBinOp "&&" (EBinOp "&&" (EBinOp "&&" (EBinOp "&&" (EBinOp "&&" (EBinOp "/=" (EVar "f") (ELit (LString ""))) (EApp (EVar "not") (EBinOp "&&" (EBinOp "&&" (EBinOp "&&" (EBinOp "==" (EVar "sl") (ELit (LInt 1))) (EBinOp "==" (EVar "sc") (ELit (LInt 0)))) (EBinOp "==" (EVar "el") (ELit (LInt 1)))) (EBinOp "==" (EVar "ec") (ELit (LInt 0)))))) (EBinOp ">=" (EVar "sl") (ELit (LInt 0)))) (EBinOp "<" (EVar "sl") (EApp (EApp (EVar "shiftLeft") (ELit (LInt 1))) (EVar "siteLineBits")))) (EBinOp ">=" (EVar "sc") (ELit (LInt 0)))) (EBinOp "<" (EVar "sc") (EApp (EApp (EVar "shiftLeft") (ELit (LInt 1))) (EVar "siteColumnBits")))))
 (DTypeSig false "runtimeRoots" (TyFun (TyCon "WasmTypeContext") (TyFun (TyCon "HelperAcc") (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "CExpr")) (TyCon "HelperAcc"))))))
 (DFunDef false "runtimeRoots" ((PVar "ctx") (PVar "acc") (PVar "symbol") (PVar "args")) (EMatch (EApp (EApp (EVar "externRuntimeKey") (EFieldAccess (EVar "ctx") "externFacts")) (EVar "symbol")) (arm (PCon "Some" (PVar "key")) ((GBool (EApp (EApp (EVar "contains") (EVar "key")) (EListLit (ELit (LString "shiftLeft")) (ELit (LString "intShiftLeft")))))) (EApp (EApp (EVar "needInt") (EVar "acc")) (ELit (LString "left")))) (arm (PCon "Some" (PVar "key")) ((GBool (EApp (EApp (EVar "contains") (EVar "key")) (EListLit (ELit (LString "shiftRight")) (ELit (LString "intShiftRight")))))) (EApp (EApp (EVar "needInt") (EVar "acc")) (ELit (LString "right")))) (arm (PCon "Some" (PVar "key")) ((GBool (EApp (EApp (EVar "contains") (EVar "key")) (EListLit (ELit (LString "panic")) (ELit (LString "indexError")) (ELit (LString "sliceError")))))) (EApp (EVar "needTrap") (EVar "acc"))) (arm (PCon "Some" (PLit (LString "indexErrorAt"))) () (EApp (EApp (EVar "need") (EApp (EVar "needTrap") (EVar "acc"))) (ELit (LString "trapIntRuntimeLines")))) (arm (PCon "Some" (PVar "key")) ((GBool (EBinOp "||" (EBinOp "==" (EVar "key") (ELit (LString "indexErrorAtSite"))) (EBinOp "==" (EVar "key") (ELit (LString "panicAt")))))) (EBlock (DoLet false false (PVar "acc") (EIf (EBinOp "==" (EVar "key") (ELit (LString "indexErrorAtSite"))) (EApp (EApp (EVar "need") (EApp (EVar "needTrap") (EVar "acc"))) (ELit (LString "trapIntRuntimeLines"))) (EApp (EVar "needTrap") (EVar "acc")))) (DoExpr (EMatch (EVar "args") (arm (PCons (PCon "CLit" (PCon "LInt" (PLit (LInt 0)))) PWild) () (EVar "acc")) (arm PWild () (EApp (EVar "needSite") (EVar "acc"))))))) (arm PWild () (EVar "acc"))))
 (DTypeSig false "intOpName" (TyFun (TyCon "String") (TyCon "String")))
@@ -3987,6 +3989,7 @@ stmtHasFallthrough (CSAssign _ e) = exprHasFallthrough e
 (DFunDef false "stmtHasFallthrough" ((PCon "CSLet" PWild PWild (PVar "e"))) (EApp (EVar "exprHasFallthrough") (EVar "e")))
 (DFunDef false "stmtHasFallthrough" ((PCon "CSAssign" PWild (PVar "e"))) (EApp (EVar "exprHasFallthrough") (EVar "e")))
 # MARK
+(DUse false (UseGroup ("backend" "runtime_layout") ((mem "siteLineBits" false) (mem "siteColumnBits" false))))
 (DUse false (UseGroup ("backend" "wasm_symbols") ((mem "WasmSymbol" true))))
 (DUse false (UseGroup ("backend" "wasm_fn_values") ((mem "fnValueUses" false))))
 (DUse false (UseGroup ("ir" "constructor_facts") ((mem "ConstructorFacts" false) (mem "declaredCtorArity" false))))
@@ -4451,7 +4454,7 @@ stmtHasFallthrough (CSAssign _ e) = exprHasFallthrough e
 (DTypeSig false "locatedNonexh" (TyFun (TyCon "HelperAcc") (TyFun (TyCon "Loc") (TyCon "HelperAcc"))))
 (DFunDef false "locatedNonexh" ((PVar "acc") (PVar "loc")) (EIf (EApp (EVar "hasLocation") (EVar "loc")) (ERecordUpdate (EApp (EVar "needSite") (EVar "acc")) ((fa "nonexh" (EVar "True")))) (EApp (EVar "needTrap") (EVar "acc"))))
 (DTypeSig false "hasLocation" (TyFun (TyCon "Loc") (TyCon "Bool")))
-(DFunDef false "hasLocation" ((PCon "Loc" (PVar "f") (PVar "sl") (PVar "sc") (PVar "el") (PVar "ec"))) (EBinOp "&&" (EBinOp "&&" (EBinOp "&&" (EBinOp "&&" (EBinOp "&&" (EBinOp "/=" (EVar "f") (ELit (LString ""))) (EApp (EVar "not") (EBinOp "&&" (EBinOp "&&" (EBinOp "&&" (EBinOp "==" (EVar "sl") (ELit (LInt 1))) (EBinOp "==" (EVar "sc") (ELit (LInt 0)))) (EBinOp "==" (EVar "el") (ELit (LInt 1)))) (EBinOp "==" (EVar "ec") (ELit (LInt 0)))))) (EBinOp ">=" (EVar "sl") (ELit (LInt 0)))) (EBinOp "<" (EVar "sl") (ELit (LInt 16777216)))) (EBinOp ">=" (EVar "sc") (ELit (LInt 0)))) (EBinOp "<" (EVar "sc") (ELit (LInt 1048576)))))
+(DFunDef false "hasLocation" ((PCon "Loc" (PVar "f") (PVar "sl") (PVar "sc") (PVar "el") (PVar "ec"))) (EBinOp "&&" (EBinOp "&&" (EBinOp "&&" (EBinOp "&&" (EBinOp "&&" (EBinOp "/=" (EVar "f") (ELit (LString ""))) (EApp (EVar "not") (EBinOp "&&" (EBinOp "&&" (EBinOp "&&" (EBinOp "==" (EVar "sl") (ELit (LInt 1))) (EBinOp "==" (EVar "sc") (ELit (LInt 0)))) (EBinOp "==" (EVar "el") (ELit (LInt 1)))) (EBinOp "==" (EVar "ec") (ELit (LInt 0)))))) (EBinOp ">=" (EVar "sl") (ELit (LInt 0)))) (EBinOp "<" (EVar "sl") (EApp (EApp (EVar "shiftLeft") (ELit (LInt 1))) (EVar "siteLineBits")))) (EBinOp ">=" (EVar "sc") (ELit (LInt 0)))) (EBinOp "<" (EVar "sc") (EApp (EApp (EVar "shiftLeft") (ELit (LInt 1))) (EVar "siteColumnBits")))))
 (DTypeSig false "runtimeRoots" (TyFun (TyCon "WasmTypeContext") (TyFun (TyCon "HelperAcc") (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "CExpr")) (TyCon "HelperAcc"))))))
 (DFunDef false "runtimeRoots" ((PVar "ctx") (PVar "acc") (PVar "symbol") (PVar "args")) (EMatch (EApp (EApp (EVar "externRuntimeKey") (EFieldAccess (EVar "ctx") "externFacts")) (EVar "symbol")) (arm (PCon "Some" (PVar "key")) ((GBool (EApp (EApp (EVar "contains") (EVar "key")) (EListLit (ELit (LString "shiftLeft")) (ELit (LString "intShiftLeft")))))) (EApp (EApp (EVar "needInt") (EVar "acc")) (ELit (LString "left")))) (arm (PCon "Some" (PVar "key")) ((GBool (EApp (EApp (EVar "contains") (EVar "key")) (EListLit (ELit (LString "shiftRight")) (ELit (LString "intShiftRight")))))) (EApp (EApp (EVar "needInt") (EVar "acc")) (ELit (LString "right")))) (arm (PCon "Some" (PVar "key")) ((GBool (EApp (EApp (EVar "contains") (EVar "key")) (EListLit (ELit (LString "panic")) (ELit (LString "indexError")) (ELit (LString "sliceError")))))) (EApp (EVar "needTrap") (EVar "acc"))) (arm (PCon "Some" (PLit (LString "indexErrorAt"))) () (EApp (EApp (EVar "need") (EApp (EVar "needTrap") (EVar "acc"))) (ELit (LString "trapIntRuntimeLines")))) (arm (PCon "Some" (PVar "key")) ((GBool (EBinOp "||" (EBinOp "==" (EVar "key") (ELit (LString "indexErrorAtSite"))) (EBinOp "==" (EVar "key") (ELit (LString "panicAt")))))) (EBlock (DoLet false false (PVar "acc") (EIf (EBinOp "==" (EVar "key") (ELit (LString "indexErrorAtSite"))) (EApp (EApp (EVar "need") (EApp (EVar "needTrap") (EVar "acc"))) (ELit (LString "trapIntRuntimeLines"))) (EApp (EVar "needTrap") (EVar "acc")))) (DoExpr (EMatch (EVar "args") (arm (PCons (PCon "CLit" (PCon "LInt" (PLit (LInt 0)))) PWild) () (EVar "acc")) (arm PWild () (EApp (EVar "needSite") (EVar "acc"))))))) (arm PWild () (EVar "acc"))))
 (DTypeSig false "intOpName" (TyFun (TyCon "String") (TyCon "String")))

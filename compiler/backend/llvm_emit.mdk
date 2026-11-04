@@ -1,3 +1,8 @@
+import backend.runtime_layout.{
+  siteFileShift, siteLineShift, siteFileBits, siteLineBits, siteColumnBits,
+  ctorTagShift, reservedTypeBase, runtimeCallArgMax, closureCodeSlot,
+  closureCaptureStart
+}
 import ir.constructor_facts.{
   ConstructorFacts, declaredCtorArity, declaredCtorOwner, declaredCtorOrdinal
 }
@@ -263,7 +268,8 @@ import support.util.{
   joinWith,
 }
 import backend.llvm_preamble.{
-  declareLine, declareRuntime, ffiRuntimeDecls, preambleLines, runtimeDecls
+  declareLine, declareRuntime, ffiRuntimeDecls, preambleLines, runtimeDecls,
+  runtimePrototype, siteTrapDecl
 }
 import backend.llvm_symbols.{
   LlvmParam(..),
@@ -5876,9 +5882,13 @@ sitePacked : Emit -> Loc -> Int
 sitePacked e (Loc f sl sc el ec)
   | f == "" || sl == 1 && sc == 0 && el == 1 && ec == 0 = 0
   | e.input.emitHalf == emitHalfPrelude = 0
-  | sl < 0 || sl >= 16777216 || sc < 0 || sc >= 1048576 = 0
+  | sl < 0
+    || sl >= shiftLeft 1 siteLineBits
+    || sc < 0
+    || sc >= shiftLeft 1 siteColumnBits = 0
   | otherwise = match siteFileNumber e f
-    Some n => n * 17592186044416 + sl * 1048576 + sc
+    Some n =>
+      n * shiftLeft 1 siteFileShift + sl * shiftLeft 1 siteLineShift + sc
     None => 0
 
 -- A trap-site literal (`siteSentinelName` applied to a file, a line and a
@@ -5907,7 +5917,7 @@ siteFileNumber e f = match omLookup f !e.siteFileNums
   Some n => Some n
   None =>
     let n = omSize !e.siteFileNums + 1
-    if n >= 65536 then
+    if n >= shiftLeft 1 siteFileBits then
       None
     else
       e.siteFileNums := omInsert f n !e.siteFileNums
@@ -5928,7 +5938,7 @@ emitTrapCall e fn args site
           e
           (declareSymbol
             (Foreign (fn ++ "_at"))
-            (siteTrapPrototype fn)
+            (runtimePrototype (siteTrapDecl fn))
             !e.symOrigin)
         e.siteTraps := fn :: !e.siteTraps
     emit e (rtLine e "" "void" (fn ++ "_at") (i64Ops (args ++ [site])))
@@ -5938,19 +5948,10 @@ emitTrapCall e fn args site
 siteTrapDeclares : Emit -> List String
 siteTrapDeclares e =
   map
-    (fn => "declare " ++ prototypeText (fn ++ "_at") (siteTrapPrototype fn))
+    (fn =>
+      "declare "
+        ++ prototypeText (fn ++ "_at") (runtimePrototype (siteTrapDecl fn)))
     (reverseL !e.siteTraps)
-
--- the `_at` twin of trap entry [fn]: its own operands, then the packed site
-siteTrapPrototype : String -> Prototype
-siteTrapPrototype "mdk_int_overflow" = trapProto 4
-siteTrapPrototype "mdk_panic" = trapProto 2
-siteTrapPrototype "mdk_oob_at" = trapProto 2
-siteTrapPrototype _ = trapProto 1
-
-trapProto : Int -> Prototype
-trapProto n =
-  FuncProto "void" (map (_ => LlvmParam "i64" "") [1..=n]) " noreturn"
 
 -- The site file table, a NULL-terminated array of the files' paths behind the
 -- `mdk_site_files` pointer the runtime reads (a weak null there when a program
@@ -6798,7 +6799,7 @@ knotPatch : Emit -> OrdMap (String, LTy) -> List KnotCell -> Unit
 knotPatch _ _ [] = ()
 knotPatch e env ((KnotCell _ cellPtr captureNames) :: rest) =
   let words = capWords e env captureNames
-  storeFields e cellPtr words 1
+  storeFields e cellPtr words (closureCaptureStart - 1)
   knotPatch e env rest
 
 -- allocate a closure cell with the code pointer in field 0 and `nCap` PLACEHOLDER
@@ -7198,7 +7199,7 @@ emitIndirectMode e cw argOps hd CallDynamic =
 -- with the closure word as the leading argument followed by `argOps`.
 emitIndirectCallWords : Emit -> String -> List String -> String
 emitIndirectCallWords e cw argOps =
-  let cp = loadField e cw 0
+  let cp = loadField e cw (closureCodeSlot - 1)
   let fp = freshReg e
   emit e "  \{fp} = inttoptr i64 \{cp} to ptr"
   let r = freshReg e
@@ -7904,7 +7905,9 @@ emitPapDefine e papName fname supplied remaining =
 loadPapCaptures : Emit -> Int -> Int -> List String
 loadPapCaptures e k i
   | i >= k = []
-  | otherwise = loadField e "%clos" (i + 1) :: loadPapCaptures e k (i + 1)
+  | otherwise =
+    loadField e "%clos" (i + closureCaptureStart - 1)
+      :: loadPapCaptures e k (i + 1)
 
 -- UNDER-APPLICATION of an INDIRECT closure VALUE `cw` of arity `arity`, given
 -- `argOps` supplied (1..arity-1).  Unlike emitPapClosure (which closes over a known
@@ -7932,10 +7935,10 @@ emitPapDefineIndirect e papName supplied remaining =
   let scope = beginDefine e
   defineHeader e LiftedDefine papName (wordProto (etaParamDecls remaining))
   emit e "entry:"
-  let innerCw = loadField e "%clos" 1
+  let innerCw = loadField e "%clos" (closureCaptureStart - 1)
   let capOps = loadPapCaptures e (supplied + 1) 1
   let allArgs = capOps ++ argNames remaining 0
-  let cp = loadField e innerCw 0
+  let cp = loadField e innerCw (closureCodeSlot - 1)
   let fp = freshReg e
   emit e "  \{fp} = inttoptr i64 \{cp} to ptr"
   let r = freshReg e
@@ -8391,12 +8394,6 @@ superCountGlobal e iface =
       else
         "@\{sym} = constant i64 \{intToString (superCountOf e iface)}"))
     sym
-
--- The most arguments `mdk_call_exact` (runtime/medaka_rt.c) passes a closure's
--- code.  A call that supplies a slot closure another count goes through
--- `__mdk_apply`, which saturates through it (#4790).
-runtimeCallArgMax : Int
-runtimeCallArgMax = 8
 
 -- The refusal text for a runtime application of slot [slot]'s closure, which takes
 -- the dictionary and the method's declared arguments; None when the closure cannot
@@ -10208,7 +10205,7 @@ loadCaptures : Emit ->
   OrdMap (String, LTy)
 loadCaptures _ _ [] _ = omEmpty
 loadCaptures e env (c :: rest) i =
-  let r = loadField e "%clos" (i + 1)
+  let r = loadField e "%clos" (i + closureCaptureStart - 1)
   omInsert c (r, capTypeOf env c) (loadCaptures e env rest (i + 1))
 
 -- a captured FLOAT is stored BOXED in the closure cell (capWords/lookupVarG boxes
@@ -10310,8 +10307,6 @@ dedupS xs = reverseL (dedup (reverseL xs))
 -- ordinal.  hashName is gone from every constructor tag — collisions are impossible.
 -- 2^32, the type-id shift.  (Int is 63-bit; type-id × 2^32 + ordinal stays well
 -- under 2^62 for any real program.)
-ctorTagShift : Int
-ctorTagShift = 4294967296
 
 -- the cell-header tag a NAME stamps / is tested against.  Sentinel headers
 -- ("$tuple"/"$ref"/"$closure") keep their hash; every constructor (incl. the
@@ -10327,8 +10322,7 @@ ctorTagShift = 4294967296
 -- reservation `Some` and `Cons` both fall to the "one past" type-id with ordinal 0
 -- and COLLIDE.  Both alloc and every tag test route through `cellTag`, so reserving
 -- here keeps construction and the match-head test consistent by construction.
--- The C side hardcodes the SAME constants (MDK_TAG_* in runtime/medaka_rt.c); keep
--- the two in sync.  Ordinals follow core.mdk: Option = Some|None, Result = Ok|Err,
+-- The C side uses MDK_TAG_* from runtime/medaka_abi.h. Ordinals follow core.mdk: Option = Some|None, Result = Ok|Err,
 -- Ordering = Lt|Eq|Gt; List (synthetic) = Cons|Nil.  #361: a user type reusing
 -- one of these names is not a "spike limitation" that "the real backend resolves
 -- statically" — as if this emitter were the spike and some other, more careful
@@ -10351,8 +10345,6 @@ ctorTagShift = 4294967296
 -- that happened to be spelled `ByteBlock`.  Its one construction site is
 -- mdk_byteblock_alloc in runtime/medaka_rt.c, which spells the same composite as
 -- MDK_BYTEBLOCK_TAG and pins it to `MDK_TAG(4, 0)` with a _Static_assert.
-reservedTypeBase : Int
-reservedTypeBase = 65536
 
 reservedTag : String -> Option Int
 reservedTag name = match namedRuntimeCtor name
@@ -14536,7 +14528,7 @@ emitArrayMakeWith e env [nExpr, fExpr] =
   emit e "  br i1 \{cmp}, label %\{doneL}, label %\{bodyL}"
   emit e (bodyL ++ ":")
   let ti = tagInt e iv
-  let cp = loadField e fw 0
+  let cp = loadField e fw (closureCodeSlot - 1)
   let fp = freshReg e
   emit e "  \{fp} = inttoptr i64 \{cp} to ptr"
   let elem = freshReg e

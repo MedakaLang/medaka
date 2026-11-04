@@ -1,3 +1,4 @@
+import backend.runtime_layout.{siteLineBits, siteColumnBits}
 import backend.wasm_symbols.{WasmSymbol(..)}
 import backend.wasm_fn_values.{fnValueUses}
 import ir.constructor_facts.{ConstructorFacts, declaredCtorArity}
@@ -1689,9 +1690,9 @@ hasLocation (Loc f sl sc el ec) =
   f /= ""
     && not (sl == 1 && sc == 0 && el == 1 && ec == 0)
     && sl >= 0
-    && sl < 16777216
+    && sl < shiftLeft 1 siteLineBits
     && sc >= 0
-    && sc < 1048576
+    && sc < shiftLeft 1 siteColumnBits
 
 runtimeRoots : WasmTypeContext -> HelperAcc -> String -> List CExpr -> HelperAcc
 runtimeRoots ctx acc symbol args = match externRuntimeKey ctx.externFacts symbol
