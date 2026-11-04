@@ -63,6 +63,7 @@ not bound, so the call is rejected or aborts.
 | `exit` | refused | real | refused | real | real |
 | `stashRunStdout` | real | real | real | real | refused |
 | `enableRunStdoutFlush` | real | real | real | real | refused |
+| `setAbortReport` | real | real | real | real | refused |
 | `assertSnapshot` | refused | refused | refused | refused | refused |
 | `netResolve` | refused | refused | refused | real | refused |
 | `netTcpConnect` | refused | refused | refused | real | refused |

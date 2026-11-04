@@ -7,22 +7,27 @@ import frontend.parser.{parse}
 import tools.doctest.{Engine(..)}
 import tools.test_cmd.{
   treesUnread, childJobsPrefix, childGcMarkersPrefix, helperElabDiags, runTest,
-  besideRuntime
+  besideRuntime, abortEnvelopeTemplate
 }
 import frontend.desugar.{desugar}
 import frontend.parser.{parseLocated}
 import types.typecheck.{defaultDriveInputs, elaborateModules}
-import eval.eval.{Value(..), evalOneFacts, force}
+import eval.eval.{Value(..), evalOneFacts, force, currentEvalFile}
+import driver.diagnostics.{
+  cjAllToJsonWith, abortEnvelopeFields, mkDiag, Severity(..)
+}
+import support.diag_codes.{DiagCode(..)}
 import types.program_facts.{factsOfElab}
 import support.util.{lookupAssoc}
 import io.{runVerb}
 import string.{
-  contains, indexOf, toInt, trim, lines, words, startsWith, join, endsWith
+  contains, indexOf, toInt, trim, lines, words, startsWith, join, endsWith,
+  repeat, replaceAll
 }
 import list.{reverse, take}
 import test.{
   Expectation, expectAll, expectEqual, expectFalse, expectLessThan,
-  expectNotEqual, expectTrue, fail, labelFail
+  expectNotEqual, expectTextContainsAll, expectTrue, fail, labelFail
 }
 import json.{Json(..)}
 import json as J
@@ -363,8 +368,15 @@ test "medaka test runs a target against the core.mdk beside runtime.mdk" = withS
 seededTest : Option Int ->
   List String ->
   <Exec, IO> Result String (Int, String, String)
-seededTest seed args =
-  runVerb "env" (seedAssignment seed ++ [medakaBin, "test"] ++ args)
+seededTest = seededTestEnv []
+
+-- [seededTest] with extra `NAME=value` assignments in the environment.
+seededTestEnv : List String ->
+  Option Int ->
+  List String ->
+  <Exec, IO> Result String (Int, String, String)
+seededTestEnv env seed args =
+  runVerb "env" (env ++ seedAssignment seed ++ [medakaBin, "test"] ++ args)
 
 seedAssignment : Option Int -> List String
 seedAssignment (Some n) = ["MEDAKA_SEED=\{intToString n}"]
@@ -708,6 +720,281 @@ test "a panicking medaka run prints no seed line, seeded" =
         expectEqual 0 (length (seedLines (lines combined))),
       ]))
 
+-- A test-only file, so it runs untyped: its test reaches a `panic` in the
+-- evaluator's own compiled code, not `runtimePanic`.
+evalInternalPanicSrc : String
+evalInternalPanicSrc =
+  """
+import test.{expectEqual}
+
+test "bad" = expectEqual 1 "a"
+"""
+
+-- The recursion in `deep` overflows the C stack before the evaluator's depth
+-- limit: sixty nested additions per level.
+deepSrc : String
+deepSrc = join "" [
+  "deep : Int -> Int\ndeep n = if n == 0 then 0 else ",
+  repeat 60 "(1 + ",
+  "deep (n - 1)",
+  repeat 60 ")",
+  "\n",
+]
+
+cStackTestSrc : String
+cStackTestSrc =
+  """
+import test.{expectEqual}
+
+\{deepSrc}
+test "cstack3" =
+  let k = randomInt 20000 20000
+  expectEqual 0 (deep k)
+"""
+
+cStackMainSrc : String
+cStackMainSrc = """
+\{deepSrc}
+main = println (intToString (deep 20000))
+"""
+
+-- The line after the first line of [ls] that contains [needle].
+lineAfter : String -> List String -> Option String
+lineAfter _ [] = None
+lineAfter needle (l :: rest)
+  | contains needle l = match rest
+    next :: _ => Some next
+    [] => None
+  | otherwise = lineAfter needle rest
+
+-- A seeded eval-engine run of [src] aborts with [code] in each of the three
+-- modes: a single file prints the seed on stderr right after the error line,
+-- `--json` writes one envelope holding the seed and the code with stdout empty,
+-- and a directory run prints the one seed line on stdout.
+abortSeedRows : String -> String -> <Exec, IO, FileRead, FileWrite> Expectation
+abortSeedRows = abortSeedRowsEnv []
+
+-- [abortSeedRows] with extra `NAME=value` assignments in the environment.
+abortSeedRowsEnv : List String ->
+  String ->
+  String ->
+  <Exec, IO, FileRead, FileWrite> Expectation
+abortSeedRowsEnv env src code =
+  withFixtures
+    [("abort_test.mdk", src)]
+    (dir =>
+      let target = "\{dir}/abort_test.mdk"
+      expectAll [
+        labelFail
+          "single file"
+          (withSpawn (seededTestEnv env (Some 7) [
+            "--engines", "eval", target
+          ]) ((exit, out, err) => expectAll [
+            expectNotEqual 0 exit,
+            labelFail
+              "exit \{intToString exit}, stdout \{debug out}, stderr \{debug err}"
+              (expectTextContainsAll [seedLineFor 7] err),
+            expectEqual [] (seedLines (lines out)),
+            expectEqual [seedLineFor 7] (seedLines (lines err)),
+            expectEqual
+              (Some (seedLineFor 7))
+              (lineAfter "runtime error [\{code}]" (lines err)),
+          ])),
+        labelFail
+          "--json"
+          (withSpawn (seededTestEnv env (Some 7) [
+            "--json", "--engines", "eval", target
+          ]) ((exit, out, err) => expectAll [
+            expectNotEqual 0 exit,
+            expectEqual "" out,
+            expectEqual 1 (count (l => trim l /= "") (lines err)),
+            expectEqual (Some code) (firstDiagCode err),
+            expectEqual (Some (JInt 7)) (jsonMember "seed" err),
+          ])),
+        labelFail
+          "directory"
+          (withSpawn (seededTestEnv env (Some 7) [
+            "--engines", "eval", dir
+          ]) ((exit, out, err) => expectAll [
+            expectNotEqual 0 exit,
+            expectEqual [seedLineFor 7] (seedLines (lines out)),
+            expectEqual [] (seedLines (lines err)),
+          ])),
+      ])
+
+test "a panic in the evaluator's compiled code prints the run's seed in every mode" =
+  abortSeedRows evalInternalPanicSrc "E-PANIC"
+
+test "a C stack overflow under the eval engine prints the run's seed in every mode" =
+  abortSeedRows cStackTestSrc "E-STACK-OVERFLOW"
+
+-- The heap cap that makes `oomSrc` fail to allocate; Boehm reads it on every
+-- platform, unlike `ulimit -v`. The initial heap is pinned below the cap
+-- because the suite runs with `GC_INITIAL_HEAP_SIZE` at 1 GiB, which Boehm
+-- inherits into the child and which makes it reject a smaller cap at startup.
+heapCap : List String
+heapCap = ["GC_MAXIMUM_HEAP_SIZE=200000000", "GC_INITIAL_HEAP_SIZE=16777216"]
+
+oomSrc : String
+oomSrc =
+  """
+import test.{expectEqual}
+
+test "oom" =
+  let k = randomInt 0 1
+  let a = arrayMake 40000000 k
+  expectEqual 0 (arrayLength a)
+"""
+
+oomMainSrc : String
+oomMainSrc =
+  """
+main =
+  let k = randomInt 0 1
+  let a = arrayMake 40000000 k
+  println (intToString (arrayLength a))
+"""
+
+test "an allocation failure under the eval engine prints the run's seed in every mode" =
+  abortSeedRowsEnv heapCap oomSrc "E-OUT-OF-MEMORY"
+
+test "an allocation failure is reported as out of memory with exit 1, built and run" =
+  withFixtures
+    [("oom.mdk", oomMainSrc)]
+    (dir => expectAll [
+      labelFail
+        "run"
+        (withSpawn (runVerb
+          "env"
+          (["MEDAKA_SEED=7"]
+            ++ heapCap
+            ++ [
+              medakaBin,
+              "run",
+              "\{dir}/oom.mdk",
+            ])) ((code, out, err) => expectAll [
+          expectEqual 1 code,
+          labelFail
+            "exit \{intToString code}, stdout \{debug out}, stderr \{debug err}"
+            (expectTextContainsAll
+              [
+                "runtime error [E-OUT-OF-MEMORY]: out of memory (could not allocate ",
+              ]
+              err),
+          expectEqual [] (seedLines (lines "\{out}\n\{err}")),
+        ])),
+      labelFail "build" (match runVerb medakaBin [
+        "build",
+        "\{dir}/oom.mdk",
+        "-o",
+        "\{dir}/oom.bin",
+      ]
+        Ok (0, _, _) => withSpawn (runVerb
+          "env"
+          (heapCap ++ ["\{dir}/oom.bin"])) ((code, out, err) => expectAll [
+          expectEqual 1 code,
+          labelFail
+            "exit \{intToString code}, stdout \{debug out}, stderr \{debug err}"
+            (expectTextContainsAll
+              [
+                "runtime error [E-OUT-OF-MEMORY]: out of memory (could not allocate ",
+              ]
+              err),
+        ])
+        Ok (_, _, err) => fail "medaka build failed: \{err}"
+        Err e => fail e),
+    ])
+
+test "medaka run of the evaluator-panic and stack-overflow programs prints no seed, seeded" =
+  withFixtures
+    [
+      ("typeerr.mdk", "main = println (debug (1 == \"a\"))\n"),
+      ("cstack.mdk", cStackMainSrc),
+    ]
+    (dir =>
+      expectAll
+        (map
+          (name =>
+            labelFail
+              name
+              (withSpawn (runVerb "env" [
+                "MEDAKA_SEED=7",
+                medakaBin,
+                "run",
+                "\{dir}/\{name}",
+              ]) ((code, out, err) => expectAll [
+                expectNotEqual 0 code,
+                expectEqual [] (seedLines (lines "\{out}\n\{err}")),
+              ])))
+          ["typeerr.mdk", "cstack.mdk"]))
+
+parseTestSrc : String
+parseTestSrc = """
+import test.{expectEqual}
+
+test "p" = expectEqual 1 (1 +)
+"""
+
+test "a --json parse-error refusal prints no seed" =
+  withFixtures
+    [("parse_test.mdk", parseTestSrc)]
+    (dir => withSpawn (seededTest (Some 7) [
+      "--json",
+      "--engines",
+      "eval",
+      "\{dir}/parse_test.mdk",
+    ]) ((code, out, err) => expectAll [
+      expectNotEqual 0 code,
+      expectEqual [] (seedLines (lines "\{out}\n\{err}")),
+      expectEqual None (jsonMember "seed" err),
+      expectEqual None (jsonMember "seed" out),
+    ]))
+
+-- [s] as the body of a Medaka string literal.
+medakaStringBody : String -> String
+medakaStringBody s =
+  s
+    |> replaceAll "\\" "\\\\"
+    |> replaceAll "\"" "\\\""
+    |> replaceAll "\n" "\\n"
+    |> replaceAll "\u{01}" "\\u{01}"
+    |> replaceAll "\u{02}" "\\u{02}"
+
+escSrc : String -> String
+escSrc tmpl =
+  """
+main =
+  setAbortReport "" "\{medakaStringBody tmpl}"
+  panic "\{medakaStringBody hostileMessage}"
+"""
+
+hostileMessage : String
+hostileMessage = "q\"b\\n\nu\u{01}é"
+
+test "the runtime fills the abort template as the envelope serializer renders the diagnostic" =
+  let tmpl = abortEnvelopeTemplate ()
+  let expected = cjAllToJsonWith (abortEnvelopeFields ()) [
+    (!currentEvalFile, "", [mkDiag SevError EPanic hostileMessage None]),
+  ]
+  withFixtures
+    [("esc.mdk", escSrc tmpl)]
+    (dir => match runVerb medakaBin [
+      "build",
+      "--allow-internal",
+      "\{dir}/esc.mdk",
+      "-o",
+      "\{dir}/esc",
+    ]
+      Ok (0, _, _) => withSpawn (runVerb
+        "\{dir}/esc"
+        []) ((code, out, err) => expectAll [
+        expectEqual 1 code,
+        expectEqual "" out,
+        expectEqual "\{expected}\n" err,
+      ])
+      Ok (_, _, err) => fail "medaka build failed: \{err}"
+      Err e => fail e)
+
 siblingFixtureRun : String ->
   String ->
   <Exec, IO> Result String (Int, String, String)
@@ -967,3 +1254,206 @@ test "a user name shadows core only for user code, under both engines" = withScr
             ]
             Err e => [fail e])
           ["eval", "native"]))
+
+-- The stale-binary notice under `--json`.  A copy of the tree's stdlib beside a
+-- `compiler/` holding one file makes `<dir>/root` a MEDAKA_ROOT whose source
+-- fingerprint differs from the one baked into the binary, so the binary is stale
+-- under it.
+
+staleNeedle : String
+staleNeedle = "built from compiler source that differs from"
+
+-- Make `<dir>/root` a stale MEDAKA_ROOT; Err names the step that failed.
+mkStaleRoot : String -> <Exec, IO, FileRead, FileWrite> Result String Unit
+mkStaleRoot dir = match runVerb "mkdir" ["-p", "\{dir}/root/compiler"]
+  Err e => Err e
+  Ok _ => match runVerb "cp" ["-r", underRoot "stdlib", "\{dir}/root/stdlib"]
+    Err e => Err e
+    Ok _ => writeFile "\{dir}/root/compiler/x.mdk" "x = 1\n"
+
+-- `medaka <args>` under `root` with MEDAKA_SEED=7 and `strict` as MEDAKA_STRICT
+-- (cleared when empty).
+underStaleRoot : String ->
+  String ->
+  List String ->
+  <Exec, IO> Result String (Int, String, String)
+underStaleRoot = underStaleRootEnv []
+
+-- [underStaleRoot] with extra `NAME=value` assignments in the environment.
+underStaleRootEnv : List String ->
+  String ->
+  String ->
+  List String ->
+  <Exec, IO> Result String (Int, String, String)
+underStaleRootEnv env root strict args =
+  runVerb
+    "env"
+    ((if strict == "" then
+        ["-u", "MEDAKA_STRICT"]
+      else
+        ["MEDAKA_STRICT=\{strict}"])
+      ++ env
+      ++ ["MEDAKA_ROOT=\{root}", "MEDAKA_SEED=7", medakaBin]
+      ++ args)
+
+withStaleRoot : List (String, String) ->
+  (String -> <Exec, IO, FileRead, FileWrite> Expectation) ->
+  <Exec, IO, FileRead, FileWrite> Expectation
+withStaleRoot files body = withFixtures files (dir => match mkStaleRoot dir
+  Ok _ => body dir
+  Err e => fail e)
+
+badParseSrc : String
+badParseSrc = "f = (\n"
+
+isStringWith : String -> Json -> Bool
+isStringWith needle (JString s) = contains needle s
+isStringWith _ _ = False
+
+test "an aborted --json test run on a stale binary carries the notice and the seed in one envelope" =
+  withStaleRoot
+    [("panic_test.mdk", panicTestSrc)]
+    (dir => withSpawn (underStaleRoot "\{dir}/root" "" [
+      "test",
+      "--json",
+      "--engines",
+      "eval",
+      "\{dir}/panic_test.mdk",
+    ]) ((code, out, err) => expectAll [
+      expectNotEqual 0 code,
+      expectEqual "" (trim out),
+      expectEqual
+        (Some True)
+        (map (isStringWith staleNeedle) (jsonMember "staleBinary" err)),
+      expectEqual (Some (JInt 7)) (jsonMember "seed" err),
+    ]))
+
+-- Some True when `err` holds the abort line and the stale notice after it.
+staleAfterAbort : String -> Option Bool
+staleAfterAbort err = match (
+  indexOf "E-OUT-OF-MEMORY" err,
+  indexOf staleNeedle err,
+)
+  (Some a, Some n) => Some (a < n)
+  _ => None
+
+-- The out-of-memory fires in the front end, before `armAbortReport`; the heap
+-- cap and initial heap are both pinned (Boehm rejects a cap below the initial
+-- heap, and the suite exports a 1 GiB initial heap).
+test "a --json test run that runs out of memory before arming still prints the stale notice after the abort line" =
+  withStaleRoot
+    [("ok_test.mdk", passTestSrc)]
+    (dir => withSpawn (underStaleRootEnv
+      ["GC_MAXIMUM_HEAP_SIZE=20000000", "GC_INITIAL_HEAP_SIZE=8388608"]
+      "\{dir}/root"
+      ""
+      [
+        "test",
+        "--json",
+        "--engines",
+        "eval",
+        "\{dir}/ok_test.mdk",
+      ]) ((code, _, err) => expectAll [
+      expectNotEqual 0 code,
+      expectTextContainsAll ["E-OUT-OF-MEMORY", staleNeedle] err,
+      expectEqual (Some True) (staleAfterAbort err),
+    ]))
+
+test "a passing --json test run on a stale binary reports on stdout and warns as prose" =
+  withStaleRoot
+    [("ok_test.mdk", passTestSrc)]
+    (dir => withSpawn (underStaleRoot "\{dir}/root" "" [
+      "test",
+      "--json",
+      "--engines",
+      "eval",
+      "\{dir}/ok_test.mdk",
+    ]) ((code, out, err) => expectAll [
+      expectEqual 0 code,
+      expectTrue (isSome (jsonMember "summary" out)),
+      expectTrue (contains staleNeedle err),
+      expectEqual None (jsonMember "staleBinary" err),
+    ]))
+
+test "MEDAKA_STRICT stops a --json test run on a stale binary with the warning, no envelope" =
+  withStaleRoot
+    [("panic_test.mdk", panicTestSrc)]
+    (dir => withSpawn (underStaleRoot "\{dir}/root" "1" [
+      "test",
+      "--json",
+      "--engines",
+      "eval",
+      "\{dir}/panic_test.mdk",
+    ]) ((code, out, err) => expectAll [
+      expectNotEqual 0 code,
+      expectEqual "" (trim out),
+      expectTrue (contains staleNeedle err),
+      expectEqual None (jsonMember "files" err),
+    ]))
+
+test "run --json on a stale binary still carries the notice in its envelope" =
+  withStaleRoot
+    [("panic.mdk", panicMainSrc)]
+    (dir => withSpawn (underStaleRoot "\{dir}/root" "" [
+      "run",
+      "--json",
+      "\{dir}/panic.mdk",
+    ]) ((code, _, err) => expectAll [
+      expectNotEqual 0 code,
+      expectEqual
+        (Some True)
+        (map (isStringWith staleNeedle) (jsonMember "staleBinary" err)),
+    ]))
+
+test "a --json type-error refusal on a stale binary prints the notice as prose" =
+  withStaleRoot
+    [("ill.mdk", illTypedSrc)]
+    (dir => withSpawn (underStaleRoot "\{dir}/root" "" [
+      "test",
+      "--json",
+      "\{dir}/ill.mdk",
+    ]) ((code, out, err) => expectAll [
+      expectEqual 1 code,
+      expectEqual None (jsonMember "seed" out),
+      expectTrue (contains staleNeedle err),
+    ]))
+
+-- A parse error under `--json` is the located refusal the human arm prints:
+-- stdout empty, no seed line, the human arm's exit status.
+parseRefusalRow : String ->
+  String ->
+  <Exec, IO, FileRead, FileWrite> Expectation
+parseRefusalRow dir root = withSpawn (underStaleRoot root "" [
+  "test",
+  "\{dir}/bad.mdk",
+]) ((humanCode, _, _) => withSpawn (underStaleRoot root "" [
+  "test",
+  "--json",
+  "\{dir}/bad.mdk",
+]) ((code, out, err) => expectAll [
+  expectEqual humanCode code,
+  expectEqual "" (trim out),
+  expectEqual [] (seedLines (lines err)),
+  expectTrue
+    (contains
+      "error: \{dir}/bad.mdk:2:0: expected a complete parenthesized expression"
+      err),
+]))
+
+test "a parse error under --json is the located refusal, on a normal root" =
+  withFixtures
+    [("bad.mdk", badParseSrc)]
+    (dir => parseRefusalRow dir (underRoot "."))
+
+test "a parse error under --json is the located refusal, with the notice first, on a stale root" =
+  withStaleRoot
+    [("bad.mdk", badParseSrc)]
+    (dir => withSpawn (underStaleRoot "\{dir}/root" "" [
+      "test",
+      "--json",
+      "\{dir}/bad.mdk",
+    ]) ((_, _, err) => expectAll [
+      expectTrue (startsWith "warning: " err),
+      expectTrue (contains staleNeedle err),
+      parseRefusalRow dir "\{dir}/root",
+    ]))

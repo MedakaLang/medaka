@@ -3,10 +3,13 @@
 A reader for a subset of TOML.
 
 `parse` reads a document with `[section]` and `[[table]]` headers and
-keys whose values are double-quoted strings, arrays of strings,
-integers, or booleans, with `#` comments. Anything else (floats, dates,
-multi-line strings, inline tables, dotted keys, and escape sequences) is
-an error, never silently dropped.
+keys whose values are basic strings (double-quoted, with TOML 1.0.0's
+escapes `\b \t \n \f \r \" \\ \uXXXX \UXXXXXXXX`), arrays of basic
+strings, integers, or booleans, with `#` comments. Anything else is an
+error, never silently dropped: literal strings (`'..'`), multi-line
+strings, floats, dates, inline tables, dotted keys, any other escape
+(including TOML 1.1's `\e` and `\xHH`), and a raw control character other
+than tab inside a string.
 
 The parsed `Toml` is a flat list of keys and values, with every key
 qualified by its section: `name` under `[package]` is `"package.name"`,

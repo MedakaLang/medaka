@@ -107,6 +107,16 @@ test "test pins match their complete assertion detail and only that detail" =
     ),
   ]
 
+test "a detail line holding a quote and a backslash reads back unescaped" =
+  let src =
+    replace
+      "[\"first line\", \"second line\"]"
+      "[\"expected \\\"x\\\" in C:\\\\dir\", \"second line\"]"
+      testRow
+  expectEqual
+    (Some "expected \"x\" in C:\\dir\nsecond line")
+    (onePin src).pinDetail
+
 test "native error pins hold only their exact declared error" =
   let pin = onePin errorTestRow
   expectEach [

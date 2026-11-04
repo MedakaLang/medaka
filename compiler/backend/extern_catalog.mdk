@@ -820,6 +820,13 @@ catalogRows = [
       "internal `medaka run` CLI plumbing (interpreter-only chunk-list stash for the \"run drops stdout on panic\" fix) — the compiler is only ever built via the LLVM backend, never wasm, so no WasmGC program ever exercises this")
     Interpreted,
   ExternRow
+    "setAbortReport"
+    (CSymbol LlvmIo "mdk_set_abort_report")
+    (NotProvided
+      GapPermanent
+      "internal abort-report plumbing (hands the C runtime the note and `--json` envelope an abort prints) — the compiler is only ever built via the LLVM backend, never wasm, so no WasmGC program ever exercises this")
+    Interpreted,
+  ExternRow
     "enableRunStdoutFlush"
     (CSymbol LlvmIo "mdk_enable_run_stdout_flush")
     (NotProvided
