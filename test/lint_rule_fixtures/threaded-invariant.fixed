@@ -1,0 +1,56 @@
+-- Two bounds ride along unchanged through every self-call.
+clampAll : Int -> Int -> List Int -> List Int
+-- expect-next-line rule-threaded-invariant unfixed
+clampAll _ _ [] = []
+clampAll lo hi (x :: xs) = max lo (min hi x) :: clampAll lo hi xs
+
+-- Both invariants are threaded through guarded match arms.
+sumBetween : Int -> Int -> Int -> List Int -> Int
+-- expect-next-line rule-threaded-invariant unfixed
+sumBetween lo hi acc xs = match xs
+  [] => acc
+  y :: ys if y >= lo && y <= hi => sumBetween lo hi (acc + y) ys
+  _ :: ys => sumBetween lo hi acc ys
+
+-- The self-call sits under a let.
+countIn : Int -> Int -> List Int -> Int
+-- expect-next-line rule-threaded-invariant unfixed
+countIn _ _ [] = 0
+countIn lo hi (x :: xs) =
+  let rest = countIn lo hi xs
+  if x >= lo && x <= hi then 1 + rest else rest
+
+-- A where-local go already closes over the invariants.
+clampLocal : Int -> Int -> List Int -> List Int
+clampLocal lo hi xs0 = go xs0
+  where
+    go [] = []
+    go (x :: xs) = max lo (min hi x) :: go xs
+
+-- A single constant argument is not enough.
+repeatTo : Int -> Int -> List Int -> List Int
+repeatTo _ _ [] = []
+repeatTo k n (_ :: xs) = k :: repeatTo k (n + 1) xs
+
+-- One call swaps its arguments, so they are not threaded unchanged.
+alternate : Int -> Int -> Int -> Int
+alternate a b 0 = a + b
+alternate a b n = alternate b a (n - 1)
+
+-- Mutual recursion is not a self-call.
+evenSteps : Int -> Int -> Int -> Bool
+evenSteps _ _ 0 = True
+evenSteps a b n = oddSteps a b (n - 1)
+
+oddSteps : Int -> Int -> Int -> Bool
+oddSteps _ _ 0 = False
+oddSteps a b n = evenSteps a b (n - 1)
+
+-- A partial application of the function to itself is not a full-arity call.
+fan : Int -> Int -> Int -> List Int
+fan lo hi n = if n <= 0 then [] else n :: flatMap (fan lo hi) [n - lo, n - hi]
+
+-- One call replaces `hi`, so only `lo` is threaded unchanged through them all.
+scan : Int -> Int -> List Int -> Int
+scan lo hi [] = lo + hi
+scan lo hi (x :: xs) = if x > hi then scan lo x xs else scan lo hi xs

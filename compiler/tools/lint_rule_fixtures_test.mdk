@@ -135,6 +135,7 @@ fixtureNames = [
   "test-bool-helper",
   "test-bool-literal-equal",
   "test-equal-in-true",
+  "threaded-invariant",
   "unused-import",
   "unused-local",
   "unused-param",
@@ -453,6 +454,8 @@ test "rule-test-bool-literal-equal fixture" =
   fixtureHolds "test-bool-literal-equal"
 
 test "rule-test-equal-in-true fixture" = fixtureHolds "test-equal-in-true"
+
+test "rule-threaded-invariant fixture" = fixtureHolds "threaded-invariant"
 
 test "rule-unused-import fixture" = fixtureHolds "unused-import"
 

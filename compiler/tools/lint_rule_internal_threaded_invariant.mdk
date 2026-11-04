@@ -1,0 +1,137 @@
+-- lint rule rule-threaded-invariant: a top-level self-recursive function whose self-calls all pass two or more of its own parameters through unchanged. Close over them in a where-local `go`.
+
+import driver.diagnostics.{Severity(..)}
+import frontend.ast.{Decl(..), Expr, Loc, Pat(..)}
+import frontend.parser.{Positions(..)}
+import list.{get}
+import support.util.{allList, anyList, filterList, joinWith, listLen}
+import tools.lint_core.{
+  Category(..),
+  FileFacts,
+  Finding(..),
+  Fixability(..),
+  Need(..),
+  Ratchet(..),
+  Rule,
+  RuleMeta(..),
+  Scope(..),
+  StdlibIndex,
+  factScopes,
+  mkRule,
+}
+import tools.lint_recursion.{ArgRole(..), Owner(..), SelfCall(..), selfCalls}
+import tools.lint_scope.{FileScopes}
+import tools.lint_shared.{declLocList, mentionsVar, ruleNameThreadedInvariant}
+
+export
+rule : Rule
+rule =
+  mkRule
+    RuleMeta {
+      name = ruleNameThreadedInvariant,
+      summary =
+        "a self-recursive function passes two or more of its parameters through every self-call unchanged: close over them in a where-local `go`",
+      doc =
+        "A top-level function that calls itself with the same two or more parameters, in the same positions, in every self-call carries those parameters through the whole recursion for nothing. A local `go` in a `where` closes over them, so the recursion names only what changes. The rule reads each function as a group of clauses: a position counts when every full-arity self-call of every clause that makes one passes that clause's own parameter there, unchanged. One invariant parameter is not reported, nor is a `go` that already closes over its invariants, a partial application, mutual recursion, or a loop local to a `let` or `where`.\n\nBefore:\n  extractFold bare heads acc (x :: xs) = extractFold bare heads (step bare heads acc x) xs\n  extractFold _ _ acc [] = acc\nAfter:\n  extractFold bare heads acc0 xs0 = go acc0 xs0\n    where\n      go acc [] = acc\n      go acc (x :: xs) = go (step bare heads acc x) xs",
+      category = Style,
+      scope = Internal,
+      ratchet = Gated,
+      defaultSeverity = SevWarning,
+      fixability = SuggestOnly,
+      needs = [NeedsScopes],
+    }
+    ruleThreadedInvariant
+    None
+
+ruleThreadedInvariant : StdlibIndex ->
+  String ->
+  FileFacts ->
+  Positions ->
+  List Decl ->
+  List Finding
+ruleThreadedInvariant _ _ facts pos prog =
+  let scopes = factScopes facts
+  flatMap (functionFindings scopes) (functionGroups (declLocList pos prog))
+
+-- ── the functions of a file ──────────────────────────────────────────────────
+
+-- A top-level function: its name, the start line of its first clause and its
+-- clauses in order.
+data Group = Group String (Option Loc) (List (List Pat, Expr))
+
+-- Adjacent clauses of one name make one function.
+functionGroups : List (Decl, Option Loc) -> List Group
+functionGroups dls = foldRight joinClause [] (flatMap clauseOf dls)
+
+clauseOf : (Decl, Option Loc) -> List (String, Option Loc, (List Pat, Expr))
+clauseOf (DFunDef _ n ps body _ _, loc) = [(n, loc, (ps, body))]
+clauseOf (DAttrib _ d, loc) = clauseOf (d, loc)
+clauseOf _ = []
+
+joinClause : (String, Option Loc, (List Pat, Expr)) -> List Group -> List Group
+joinClause (n, loc, c) ((Group m _ cs) :: rest)
+  | n == m = Group n loc (c :: cs) :: rest
+joinClause (n, loc, c) groups = Group n loc [c] :: groups
+
+-- ── one function ─────────────────────────────────────────────────────────────
+
+-- A clause that makes self-calls, with the positions all of them pass through
+-- unchanged.
+data Threaded = Threaded (List Pat) (List Int)
+
+functionFindings : FileScopes -> Group -> List Finding
+functionFindings scopes (Group name loc clauses) =
+  match flatMap (clauseThreaded scopes name) clauses
+    [] => []
+    ts@((Threaded ps first) :: _) =>
+      let shared = filterList (inAll ts) first
+      if listLen shared >= 2 then
+        [report name loc (map (i => paramName ps i) shared)]
+      else
+        []
+
+-- A clause that never names its own function makes no self-call, and that is
+-- nearly every clause, so the scope-aware walk runs only on the rest.
+clauseThreaded : FileScopes -> String -> (List Pat, Expr) -> List Threaded
+clauseThreaded scopes name (ps, body)
+  | listLen ps < 2 || not (mentionsVar name body) = []
+  | otherwise = match selfCalls scopes (Owner name ps None) body
+    [] => []
+    calls => [Threaded ps (filterList (unchangedIn calls) [0..=listLen ps - 1])]
+
+inAll : List Threaded -> Int -> Bool
+inAll ts i = allList (t => hasPosition i t) ts
+
+hasPosition : Int -> Threaded -> Bool
+hasPosition i (Threaded _ positions) = anyList (== i) positions
+
+unchangedIn : List SelfCall -> Int -> Bool
+unchangedIn calls i = allList (callKeeps i) calls
+
+callKeeps : Int -> SelfCall -> Bool
+callKeeps i (SelfCall _ _ roles) = match get i roles
+  Some (Unchanged j) => j == i
+  _ => False
+
+paramName : List Pat -> Int -> String
+paramName ps i = match get i ps
+  Some (PVar n _ _) => n
+  Some (PAs n _ _ _) => n
+  _ => "_"
+
+-- ── findings ─────────────────────────────────────────────────────────────────
+
+report : String -> Option Loc -> List String -> Finding
+report name loc names =
+  let listed = joinWith ", " (map quoted names)
+  Finding {
+    rule = ruleNameThreadedInvariant,
+    message =
+      "`\{name}` passes \{listed} through every self-call unchanged: close over them in a where-local `go`",
+    severity = SevWarning,
+    loc = loc,
+    fix = None,
+  }
+
+quoted : String -> String
+quoted n = "`\{n}`"

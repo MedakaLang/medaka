@@ -1093,3 +1093,7 @@ ruleNameListAsSet = "rule-list-as-set"
 export
 ruleNameWalkerWildcard : String
 ruleNameWalkerWildcard = "rule-walker-wildcard"
+
+export
+ruleNameThreadedInvariant : String
+ruleNameThreadedInvariant = "rule-threaded-invariant"
