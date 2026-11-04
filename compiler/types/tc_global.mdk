@@ -7,7 +7,7 @@
 --
 -- Placement: declarations are placed by R1-R6 of the Phase 4 module table,
 -- compiler/ARCHITECTURE-PLAYBOOK.md section 6.
--- Closure rule: this module may not import `types.typecheck`, nor any of `tc_module`.
+-- Closure rule: this module may not import `types.typecheck`, nor any of `tc_stamp`, `tc_module`.
 
 import support.diag_codes.{DiagCode(..)}
 import types.tc_types.{
@@ -152,6 +152,7 @@ import types.tc_diag.{
   pushTypeErrorOncePerSite,
 }
 import types.tc_unify.{
+  openScope,
   captureScope,
   closeScope,
   enterLevel,
@@ -204,7 +205,6 @@ import types.tc_solve.{
   dictAppsSince,
   goalsMark,
   improveByUniqueImpl,
-  openScope,
   returnPosMethodNames,
   rigidHeadInstanceContext,
   solvedOnWalk,
@@ -236,11 +236,9 @@ import types.tc_effects.{
   finishEffectContract,
   indexOnlyEffVars,
   launderEscapeFromLog,
-  markSourceless,
-  methodGrantOf,
   performSiteIn,
-  recordClauseFileBound,
 }
+import types.tc_grants.{markSourceless, methodGrantOf, recordClauseFileBound}
 import types.tc_occurrence.{mkMethodOccObl}
 import types.tc_groups.{exprLoc, nestedRequireGoals, sccProtectedSignatureIds}
 import types.tc_infer.{appArgLoc, inferBindingChecked, valueSpanLoc}

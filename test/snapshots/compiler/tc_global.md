@@ -1,5 +1,5 @@
 # META
-source_lines=2998
+source_lines=2996
 stages=DESUGAR,MARK
 # SOURCE
 -- tc_global: the whole-graph and declaration-level checks that need inference: the coherence scan,
@@ -11,7 +11,7 @@ stages=DESUGAR,MARK
 --
 -- Placement: declarations are placed by R1-R6 of the Phase 4 module table,
 -- compiler/ARCHITECTURE-PLAYBOOK.md section 6.
--- Closure rule: this module may not import `types.typecheck`, nor any of `tc_module`.
+-- Closure rule: this module may not import `types.typecheck`, nor any of `tc_stamp`, `tc_module`.
 
 import support.diag_codes.{DiagCode(..)}
 import types.tc_types.{
@@ -156,6 +156,7 @@ import types.tc_diag.{
   pushTypeErrorOncePerSite,
 }
 import types.tc_unify.{
+  openScope,
   captureScope,
   closeScope,
   enterLevel,
@@ -208,7 +209,6 @@ import types.tc_solve.{
   dictAppsSince,
   goalsMark,
   improveByUniqueImpl,
-  openScope,
   returnPosMethodNames,
   rigidHeadInstanceContext,
   solvedOnWalk,
@@ -240,11 +240,9 @@ import types.tc_effects.{
   finishEffectContract,
   indexOnlyEffVars,
   launderEscapeFromLog,
-  markSourceless,
-  methodGrantOf,
   performSiteIn,
-  recordClauseFileBound,
 }
+import types.tc_grants.{markSourceless, methodGrantOf, recordClauseFileBound}
 import types.tc_occurrence.{mkMethodOccObl}
 import types.tc_groups.{exprLoc, nestedRequireGoals, sccProtectedSignatureIds}
 import types.tc_infer.{appArgLoc, inferBindingChecked, valueSpanLoc}
@@ -3008,14 +3006,15 @@ numDictObls gctx (app :: rest) =
 (DUse false (UseGroup ("types" "tc_state") ((mem "callUOblsWindow" false) (mem "currentScopeStore" false) (mem "defaultReceiverOrdinal" false) (mem "dynAtIfSome" false) (mem "emptySigVars" false) (mem "envAtIfSome" false) (mem "mctxAtIfSome" false) (mem "wMark" false) (mem "wPushAll" false) (mem "wRestore" false) (mem "wSnapshot" false) (mem "wWindow" false))))
 (DUse false (UseGroup ("types" "tc_env") ((mem "anyKRow" false) (mem "builtinIfaceRef" false) (mem "ceLookupAt" false) (mem "ceMethodTyAt" false) (mem "ceRequiredAt" false) (mem "ceRowIfaceName" false) (mem "ceRowLoc" false) (mem "ceRowMethods" false) (mem "ceRowsOwnedBy" false) (mem "ceRowSupers" false) (mem "ceRowTyparams" false) (mem "ceSlotKindsAt" false) (mem "kindOfParams" false) (mem "constraintSlotDispatchVar" false) (mem "declGradedScope" false) (mem "effTailNames" false) (mem "extendVars" false) (mem "ieRowInst" false) (mem "ieRowLoc" false) (mem "ieRowOrd" false) (mem "ieRowsAll" false) (mem "ieRowsOwnedBy" false) (mem "ieRowsVisibleAt" false) (mem "ieRowTriple" false) (mem "ifaceTabKey" false) (mem "instRefMid" false) (mem "methodLevelConstraintVarNames" false) (mem "removeAllS" false) (mem "tyTabKey" false))))
 (DUse false (UseGroup ("types" "tc_diag") ((mem "erredDuring" false) (mem "pushTypeError" false) (mem "pushTypeErrorAt" false) (mem "pushTypeErrorOnceAt" false) (mem "pushTypeErrorOncePerSite" false))))
-(DUse false (UseGroup ("types" "tc_unify") ((mem "captureScope" false) (mem "closeScope" false) (mem "enterLevel" false) (mem "exitLevel" false) (mem "freshAuthBinderRanged" false) (mem "freshTvMap" false) (mem "instantiateMethodTracked" false) (mem "rowInto" false) (mem "unifyInto" false))))
+(DUse false (UseGroup ("types" "tc_unify") ((mem "openScope" false) (mem "captureScope" false) (mem "closeScope" false) (mem "enterLevel" false) (mem "exitLevel" false) (mem "freshAuthBinderRanged" false) (mem "freshTvMap" false) (mem "instantiateMethodTracked" false) (mem "rowInto" false) (mem "unifyInto" false))))
 (DUse false (UseGroup ("types" "tc_decls_types") ((mem "KindScope" false) (mem "authArgBindersIn" false) (mem "bindingForceFromAst" false) (mem "fromAstType" false) (mem "fromAstTypeE" false) (mem "kindsEq" false) (mem "recoveredScope" false) (mem "reportWrittenKinds" false) (mem "patternSlotNamesIn" false) (mem "rowArgNamesIn" false) (mem "sigConstraintsOf" false) (mem "sigVarsWithAuths" false))))
 (DUse false (UseGroup ("types" "tc_decls") ((mem "dedupBinders" false) (mem "methodSchemesPure" false) (mem "sigToSchemeTvsIn" false) (mem "sigVarsFor" false) (mem "tyConNamesInTy" false))))
 (DUse false (UseGroup ("types" "tc_solve_givens") ((mem "givenAnswers" false) (mem "predicateSlotKnownSupers" false) (mem "publishMethodPredGivens" false) (mem "registerFunPredGiven" false) (mem "registerImplMethodDicts" false) (mem "registerMethodDictSlots" false))))
 (DUse false (UseGroup ("types" "tc_solve_entail") ((mem "goalCandidates" false) (mem "goalRows" false) (mem "reqWalkEnter" false) (mem "reqWalkStart" false) (mem "superParamsOf" false))))
-(DUse false (UseGroup ("types" "tc_solve") ((mem "answeredOnlyByBindingHead" false) (mem "determineByUniqueInstance" false) (mem "dictAppsSince" false) (mem "goalsMark" false) (mem "improveByUniqueImpl" false) (mem "openScope" false) (mem "returnPosMethodNames" false) (mem "rigidHeadInstanceContext" false) (mem "solvedOnWalk" false) (mem "uOblArgs" false))))
+(DUse false (UseGroup ("types" "tc_solve") ((mem "answeredOnlyByBindingHead" false) (mem "determineByUniqueInstance" false) (mem "dictAppsSince" false) (mem "goalsMark" false) (mem "improveByUniqueImpl" false) (mem "returnPosMethodNames" false) (mem "rigidHeadInstanceContext" false) (mem "solvedOnWalk" false) (mem "uOblArgs" false))))
 (DUse false (UseGroup ("types" "tc_solve_check") ((mem "callOblsWindow" false) (mem "callPredOf" false) (mem "checkSigVarGoals" false) (mem "checkSurvivorDispatchMonos" false) (mem "checkSurvivorObligations" false) (mem "finalizeNumBoundary" false) (mem "ifaceSelfAndSupers" false) (mem "implGoalResiduals" false) (mem "numConstrainedIds" false) (mem "numObligIds" false) (mem "oblPredOf" false) (mem "registerImplRequires" false) (mem "rejectUndeterminedVectors" false) (mem "rejectWithheldAmbiguity" false) (mem "reportUndeterminedNoImpl" false) (mem "reqWalkReported" false) (mem "survivorNameOfId" false))))
-(DUse false (UseGroup ("types" "tc_effects") ((mem "beginEffectContract" false) (mem "checkMethodEffVarRigidity" false) (mem "eagerIndexOnlyVars" false) (mem "finishEffectContract" false) (mem "indexOnlyEffVars" false) (mem "launderEscapeFromLog" false) (mem "markSourceless" false) (mem "methodGrantOf" false) (mem "performSiteIn" false) (mem "recordClauseFileBound" false))))
+(DUse false (UseGroup ("types" "tc_effects") ((mem "beginEffectContract" false) (mem "checkMethodEffVarRigidity" false) (mem "eagerIndexOnlyVars" false) (mem "finishEffectContract" false) (mem "indexOnlyEffVars" false) (mem "launderEscapeFromLog" false) (mem "performSiteIn" false))))
+(DUse false (UseGroup ("types" "tc_grants") ((mem "markSourceless" false) (mem "methodGrantOf" false) (mem "recordClauseFileBound" false))))
 (DUse false (UseGroup ("types" "tc_occurrence") ((mem "mkMethodOccObl" false))))
 (DUse false (UseGroup ("types" "tc_groups") ((mem "exprLoc" false) (mem "nestedRequireGoals" false) (mem "sccProtectedSignatureIds" false))))
 (DUse false (UseGroup ("types" "tc_infer") ((mem "appArgLoc" false) (mem "inferBindingChecked" false) (mem "valueSpanLoc" false))))
@@ -3349,14 +3348,15 @@ numDictObls gctx (app :: rest) =
 (DUse false (UseGroup ("types" "tc_state") ((mem "callUOblsWindow" false) (mem "currentScopeStore" false) (mem "defaultReceiverOrdinal" false) (mem "dynAtIfSome" false) (mem "emptySigVars" false) (mem "envAtIfSome" false) (mem "mctxAtIfSome" false) (mem "wMark" false) (mem "wPushAll" false) (mem "wRestore" false) (mem "wSnapshot" false) (mem "wWindow" false))))
 (DUse false (UseGroup ("types" "tc_env") ((mem "anyKRow" false) (mem "builtinIfaceRef" false) (mem "ceLookupAt" false) (mem "ceMethodTyAt" false) (mem "ceRequiredAt" false) (mem "ceRowIfaceName" false) (mem "ceRowLoc" false) (mem "ceRowMethods" false) (mem "ceRowsOwnedBy" false) (mem "ceRowSupers" false) (mem "ceRowTyparams" false) (mem "ceSlotKindsAt" false) (mem "kindOfParams" false) (mem "constraintSlotDispatchVar" false) (mem "declGradedScope" false) (mem "effTailNames" false) (mem "extendVars" false) (mem "ieRowInst" false) (mem "ieRowLoc" false) (mem "ieRowOrd" false) (mem "ieRowsAll" false) (mem "ieRowsOwnedBy" false) (mem "ieRowsVisibleAt" false) (mem "ieRowTriple" false) (mem "ifaceTabKey" false) (mem "instRefMid" false) (mem "methodLevelConstraintVarNames" false) (mem "removeAllS" false) (mem "tyTabKey" false))))
 (DUse false (UseGroup ("types" "tc_diag") ((mem "erredDuring" false) (mem "pushTypeError" false) (mem "pushTypeErrorAt" false) (mem "pushTypeErrorOnceAt" false) (mem "pushTypeErrorOncePerSite" false))))
-(DUse false (UseGroup ("types" "tc_unify") ((mem "captureScope" false) (mem "closeScope" false) (mem "enterLevel" false) (mem "exitLevel" false) (mem "freshAuthBinderRanged" false) (mem "freshTvMap" false) (mem "instantiateMethodTracked" false) (mem "rowInto" false) (mem "unifyInto" false))))
+(DUse false (UseGroup ("types" "tc_unify") ((mem "openScope" false) (mem "captureScope" false) (mem "closeScope" false) (mem "enterLevel" false) (mem "exitLevel" false) (mem "freshAuthBinderRanged" false) (mem "freshTvMap" false) (mem "instantiateMethodTracked" false) (mem "rowInto" false) (mem "unifyInto" false))))
 (DUse false (UseGroup ("types" "tc_decls_types") ((mem "KindScope" false) (mem "authArgBindersIn" false) (mem "bindingForceFromAst" false) (mem "fromAstType" false) (mem "fromAstTypeE" false) (mem "kindsEq" false) (mem "recoveredScope" false) (mem "reportWrittenKinds" false) (mem "patternSlotNamesIn" false) (mem "rowArgNamesIn" false) (mem "sigConstraintsOf" false) (mem "sigVarsWithAuths" false))))
 (DUse false (UseGroup ("types" "tc_decls") ((mem "dedupBinders" false) (mem "methodSchemesPure" false) (mem "sigToSchemeTvsIn" false) (mem "sigVarsFor" false) (mem "tyConNamesInTy" false))))
 (DUse false (UseGroup ("types" "tc_solve_givens") ((mem "givenAnswers" false) (mem "predicateSlotKnownSupers" false) (mem "publishMethodPredGivens" false) (mem "registerFunPredGiven" false) (mem "registerImplMethodDicts" false) (mem "registerMethodDictSlots" false))))
 (DUse false (UseGroup ("types" "tc_solve_entail") ((mem "goalCandidates" false) (mem "goalRows" false) (mem "reqWalkEnter" false) (mem "reqWalkStart" false) (mem "superParamsOf" false))))
-(DUse false (UseGroup ("types" "tc_solve") ((mem "answeredOnlyByBindingHead" false) (mem "determineByUniqueInstance" false) (mem "dictAppsSince" false) (mem "goalsMark" false) (mem "improveByUniqueImpl" false) (mem "openScope" false) (mem "returnPosMethodNames" false) (mem "rigidHeadInstanceContext" false) (mem "solvedOnWalk" false) (mem "uOblArgs" false))))
+(DUse false (UseGroup ("types" "tc_solve") ((mem "answeredOnlyByBindingHead" false) (mem "determineByUniqueInstance" false) (mem "dictAppsSince" false) (mem "goalsMark" false) (mem "improveByUniqueImpl" false) (mem "returnPosMethodNames" false) (mem "rigidHeadInstanceContext" false) (mem "solvedOnWalk" false) (mem "uOblArgs" false))))
 (DUse false (UseGroup ("types" "tc_solve_check") ((mem "callOblsWindow" false) (mem "callPredOf" false) (mem "checkSigVarGoals" false) (mem "checkSurvivorDispatchMonos" false) (mem "checkSurvivorObligations" false) (mem "finalizeNumBoundary" false) (mem "ifaceSelfAndSupers" false) (mem "implGoalResiduals" false) (mem "numConstrainedIds" false) (mem "numObligIds" false) (mem "oblPredOf" false) (mem "registerImplRequires" false) (mem "rejectUndeterminedVectors" false) (mem "rejectWithheldAmbiguity" false) (mem "reportUndeterminedNoImpl" false) (mem "reqWalkReported" false) (mem "survivorNameOfId" false))))
-(DUse false (UseGroup ("types" "tc_effects") ((mem "beginEffectContract" false) (mem "checkMethodEffVarRigidity" false) (mem "eagerIndexOnlyVars" false) (mem "finishEffectContract" false) (mem "indexOnlyEffVars" false) (mem "launderEscapeFromLog" false) (mem "markSourceless" false) (mem "methodGrantOf" false) (mem "performSiteIn" false) (mem "recordClauseFileBound" false))))
+(DUse false (UseGroup ("types" "tc_effects") ((mem "beginEffectContract" false) (mem "checkMethodEffVarRigidity" false) (mem "eagerIndexOnlyVars" false) (mem "finishEffectContract" false) (mem "indexOnlyEffVars" false) (mem "launderEscapeFromLog" false) (mem "performSiteIn" false))))
+(DUse false (UseGroup ("types" "tc_grants") ((mem "markSourceless" false) (mem "methodGrantOf" false) (mem "recordClauseFileBound" false))))
 (DUse false (UseGroup ("types" "tc_occurrence") ((mem "mkMethodOccObl" false))))
 (DUse false (UseGroup ("types" "tc_groups") ((mem "exprLoc" false) (mem "nestedRequireGoals" false) (mem "sccProtectedSignatureIds" false))))
 (DUse false (UseGroup ("types" "tc_infer") ((mem "appArgLoc" false) (mem "inferBindingChecked" false) (mem "valueSpanLoc" false))))

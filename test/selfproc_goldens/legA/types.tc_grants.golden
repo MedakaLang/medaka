@@ -1,0 +1,46 @@
+appSpineArgCount : Expr -> Int
+calleeTakesGrants : GrantCallee -> Bool
+catalogCallee : GraphCtx -> String -> GrantCallee
+changesFileRow : EffRow -> EffRow -> Bool
+changesPackedFileBound : Bool -> Mono -> Mono -> Bool
+checkFileValueFlow : ModuleCtx -> (Option Loc, Mono, Mono) -> Unit
+clausesAt : String -> Map String (List (List Pat, Expr)) -> List (List Pat, Expr)
+clausesOf : String -> Map String (List (List Pat, Expr)) -> List (List Pat, Expr)
+evOrdinal : EvId -> Int
+externCallee : String -> GrantCallee
+fileBodyLoc : Expr -> Option Loc
+fileBoundKey : Loc -> String
+fileBoundSite : String -> Loc -> String
+fileValueKey : String -> Expr -> Option String
+fileValueShape : Expr -> String
+finishFileValueScope : ModuleCtx -> Unit -> Unit
+grantCalleeOf : ModuleCtx -> String -> GrantCallee
+grantChainAt : GraphCtx -> ScopeId -> List GrantBinder
+grantNameIn : TcEnv -> String -> Bool
+grantOccOf : GraphCtx -> EvId -> Option GrantOcc
+grantOnlyBindingId : ModuleCtx -> String -> Int
+grantOrder : Scheme -> List Int
+grantsEnabled : GraphCtx -> Unit -> Bool
+hasFileBoundValue : Mono -> Bool
+markSourceless : GraphCtx -> List Int -> Unit
+methodGrantOf : GraphCtx -> String -> String -> Option MethodGrant
+methodGrantOfRow : MethodSchemeRow -> Option MethodGrant
+narrowFileAtom : Atom -> Bool
+recordClauseFileBound : ModuleCtx -> Expr -> Int -> Mono -> Unit
+recordFileBound : ModuleCtx -> Expr -> EffRow -> Unit
+recordGrantOcc : ModuleCtx -> String -> EvId -> Scheme -> List (Int, Authority) -> Unit
+recordMethodGrantOcc : ModuleCtx -> String -> EvId -> Scheme -> List (Int, Authority) -> Unit
+recordMethodGrants : GraphCtx -> List MethodSchemeRow -> Unit
+recordOccWith : ModuleCtx -> String -> EvId -> Scheme -> List (Int, Authority) -> Option Int -> Bool -> Unit
+recordRecursiveGrants : GraphCtx -> String -> String -> List (String, List Int) -> Expr -> Unit
+recordStandaloneAt : ModuleCtx -> String -> Expr -> SelectedValueOccurrence -> Unit
+recordStandaloneGrantOcc : ModuleCtx -> String -> EvId -> Scheme -> List (Int, Authority) -> Int -> Unit
+recordTopGrants : GraphCtx -> String -> List (String, Scheme) -> Map String (List (List Pat, Expr)) -> Unit
+recordValueFileBound : ModuleCtx -> Expr -> Mono -> Unit
+registerLocalGrants : GraphCtx -> String -> Scheme -> Unit
+scopeFileBoundModule : ModuleCtx -> Unit -> String
+setGrantOcc : GraphCtx -> EvId -> GrantOcc -> Unit
+spineHeadEv : Expr -> Option EvId
+unsettledFileRow : EffRow -> EffRow -> Bool
+unsettledFileValueFlow : (Option Loc, Mono, Mono) -> Bool
+unsettledPackedFileBound : Bool -> Mono -> Mono -> Bool

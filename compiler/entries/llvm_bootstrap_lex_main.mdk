@@ -47,7 +47,7 @@ import driver.emit_diagnostics.{refuseLlvmSymbolDefects}
 import types.private_mangle.{mangleUnitsEv}
 import types.program_facts.{factsOfElabSources, factsWithEvidence}
 import entries.entry_support.{driveModules}
-import types.tc_occurrence.{constrainedSigNames}
+import types.tc_mark.{constrainedSigNames}
 
 export
 oracleMain : Unit -> <IO> Unit

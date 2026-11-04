@@ -32,14 +32,17 @@ types.tc_solve_entail
 types.tc_solve
 types.tc_solve_check
 types.tc_shadow
+types.tc_grants
 types.tc_effects
 types.tc_occurrence
+types.tc_mark
 types.tc_groups
 types.tc_pat
 types.tc_infer_records
 types.tc_infer
 types.tc_elab
 types.tc_global
+types.tc_stamp
 types.tc_module
 types.program_facts
 eval.eval

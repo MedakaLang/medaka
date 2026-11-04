@@ -114,6 +114,7 @@ occursAdjust : ModuleCtx -> Int -> Int -> Mono -> Unit
 occursAdjustUnbound : ModuleCtx -> Int -> Int -> Ref Tyvar -> Int -> Int -> Unit
 occursAdjustVar : ModuleCtx -> Int -> Int -> Ref Tyvar -> Unit
 openRow : ModuleCtx -> Unit -> EffRow
+openScope : ModuleCtx -> ScopeId -> Unit
 optionOrFresh : ModuleCtx -> Option Mono -> Mono
 ordinaryBoundFailureMsg : ModuleCtx -> String -> Option String -> Authority -> String -> String -> Authority -> String
 paramPolaritiesOf : ModuleCtx -> TabKey -> Option (List Polarity)

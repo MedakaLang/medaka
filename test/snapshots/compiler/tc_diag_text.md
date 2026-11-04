@@ -6,7 +6,7 @@ stages=DESUGAR,MARK
 -- builder, diagnostic key (`locKey`, `msgAtKey`, `locGoalKey`) and rewrite of diagnostic text
 -- (`writtenDiag`, `prependDiagOpt`) whose operands are values (`Mono`, `Ty`, atoms, kinds,
 -- `IfaceRef`, `Loc`, AST nodes, names) and whose closure is `tc_types`, `tc_mono`, `repr`, the
--- AST and the effect leaves; no row takes a context record, an environment or a cell (D3).
+-- AST and the effect leaves; no row takes a context record, an environment or a cell.
 --
 -- Spec: ERROR-QUALITY.md; A5. Precedent: GHC.Tc.Errors.Ppr (unsourced here: a leaf that
 -- imports only Tc.Errors, Tc.Types and TcType); Medaka has text builders without a message data
@@ -17,8 +17,8 @@ stages=DESUGAR,MARK
 -- Closure rule: this module may not import `types.typecheck`, nor any of `tc_state`, `tc_env`,
 -- `tc_diag`, `tc_scope`, `tc_unify`, `tc_decls_variance`, `tc_decls_types`, `tc_decls`,
 -- `tc_foreign`, `tc_solve_givens`, `tc_solve_entail`, `tc_solve`, `tc_solve_check`, `tc_shadow`,
--- `tc_effects`, `tc_occurrence`, `tc_groups`, `tc_pat`, `tc_infer_records`, `tc_infer`, `tc_elab`,
--- `tc_global`, `tc_module`.
+-- `tc_grants`, `tc_effects`, `tc_occurrence`, `tc_mark`, `tc_groups`, `tc_pat`,
+-- `tc_infer_records`, `tc_infer`, `tc_elab`, `tc_global`, `tc_stamp`, `tc_module`.
 
 import types.tc_mono.{
   cohPpPair,

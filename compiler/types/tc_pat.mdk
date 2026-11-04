@@ -8,7 +8,7 @@
 -- Placement: declarations are placed by R1-R6 of the Phase 4 module table,
 -- compiler/ARCHITECTURE-PLAYBOOK.md section 6.
 -- Closure rule: this module may not import `types.typecheck`, nor any of `tc_infer_records`,
--- `tc_infer`, `tc_elab`, `tc_global`, `tc_module`.
+-- `tc_infer`, `tc_elab`, `tc_global`, `tc_stamp`, `tc_module`.
 
 import support.diag_codes.{DiagCode(..)}
 import types.tc_types.{
@@ -60,7 +60,7 @@ import types.tc_unify.{
   unifyIn,
 }
 import types.tc_solve.{localSourceName}
-import types.tc_effects.{markSourceless}
+import types.tc_grants.{markSourceless}
 import types.effect_authority.{
   Authority(..), Authvar(..), authvarId, authvarLevel, authvarName
 }
