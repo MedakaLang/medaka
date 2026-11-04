@@ -50,7 +50,7 @@ declare void @mdk_eputstr(i64)
 declare void @mdk_eputstrln(i64)
 declare void @mdk_flushstdout(i64)
 declare void @mdk_print_unit()
-declare void @mdk_panic(i64)
+declare void @mdk_panic(i64) noreturn
 declare void @mdk_exit(i64)
 declare i64 @mdk_array_make(i64, i64)
 declare i64 @mdk_array_copy(i64)
