@@ -60,14 +60,23 @@ if ! git merge --no-edit origin/main; then
   CONFLICTED=$(git diff --name-only --diff-filter=U)
   SRC=$(printf '%s\n' "$CONFLICTED" | grep -v '^test/snapshots/' | grep -v '^test/selfproc_goldens/' || true)
   if [ -n "$SRC" ]; then
-    printf 'sprint-resync: SOURCE conflict — resolve by hand, then re-run:\n%s\n' "$SRC" >&2
+    printf 'sprint-resync: SOURCE conflict — resolve these by hand:\n%s\n' "$SRC" >&2
+    # Re-running this script after the merge is committed reports "already contains
+    # origin/main" and skips steps 4-5, so finish them by hand, in this order.
+    printf '%s\n' \
+      'sprint-resync: then: (a) git checkout --ours + git add each conflicted test/snapshots and test/selfproc_goldens file;' \
+      '  (b) git add the resolved source; (c) PRECOMMIT_SNAPSHOT_DEFER=1 git commit --no-edit;' \
+      '  (d) make medaka; (e) sh test/capture_goldens.sh --frozen selfproc_legA;' \
+      '  (f) make snapshot-check, then test/snapshot_bless.sh --bless <path> for each file it names.' >&2
     exit 3
   fi
   # Generated-only: take ours as a placeholder, then re-derive from scratch.
   printf '%s\n' "$CONFLICTED" | while read -r f; do
     [ -n "$f" ] && git checkout --ours -- "$f" && git add -- "$f"
   done
-  git commit --no-edit
+  # The snapshot suite is stale until the rebuild in step 4, so the hook's snapshot
+  # check would refuse this commit; step 5 re-derives them. Only that check is deferred.
+  PRECOMMIT_SNAPSHOT_DEFER=1 git commit --no-edit
 fi
 
 # 4. Rebuild BEFORE blessing anything. Capture has no staleness guard, so a
