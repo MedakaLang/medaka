@@ -1,5 +1,5 @@
 # META
-source_lines=2404
+source_lines=2406
 stages=DESUGAR,MARK
 # SOURCE
 -- tc_solve_entail: entailment as routes: the judgment `P ⊢ π ⇝ e` at a site (`entail` and its
@@ -1175,6 +1175,8 @@ repeatedBindings : List (String, Mono) ->
   List (String, Mono) ->
   List (Mono, Mono)
 repeatedBindings [] _ = []
+-- Bound: `seen` holds the type-variable bindings of one instance head.
+-- lint-disable-next-line rule-list-as-set
 repeatedBindings ((k, v) :: rest) seen = match lookupAssoc k seen
   Some first => (first, v) :: repeatedBindings rest seen
   None => repeatedBindings rest ((k, v) :: seen)

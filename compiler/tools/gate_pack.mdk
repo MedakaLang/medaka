@@ -47,11 +47,11 @@ import support.util.{
   maxI,
   minI,
   reverseL,
-  sortUniqS,
   splitNl,
   splitOnChar,
   startsWith,
 }
+import set as S
 import string.{trimAscii}
 
 -- ── timeout policy ──────────────────────────────────────────────────────────
@@ -504,7 +504,7 @@ balSetup ocs gateOrcs entries multicall =
             ps
             (filterList (n => not (contains n multicall)) entries)
             gateOrcs
-            [],
+            (S.fromList []),
         wasmDefaulted = isNone wasm,
         jobsDefaulted = match js
           [] => True
@@ -548,24 +548,24 @@ balOracleMs n (o :: os)
 balUnsampled : List (String, Int) ->
   List String ->
   List (String, List String) ->
-  List String ->
+  S.Set String ->
   List String
-balUnsampled _ _ [] acc = sortUniqS acc
+balUnsampled _ _ [] acc = toList acc
 balUnsampled ps es ((_, names) :: rest) acc =
   balUnsampled ps es rest (balAddMissing ps es names acc)
 
 balAddMissing : List (String, Int) ->
   List String ->
   List String ->
-  List String ->
-  List String
+  S.Set String ->
+  S.Set String
 balAddMissing _ _ [] acc = acc
 balAddMissing ps es (n :: ns) acc
   | not (contains n es) = balAddMissing ps es ns acc
-  | contains n acc = balAddMissing ps es ns acc
+  | S.has n acc = balAddMissing ps es ns acc
   | otherwise = match lookupAssoc n ps
     Some _ => balAddMissing ps es ns acc
-    None => balAddMissing ps es ns (n :: acc)
+    None => balAddMissing ps es ns (S.insert n acc)
 
 -- The oracles one gate's row must build for it, priced: its scrape kept to
 -- what `build_oracles.sh` builds (`--for`'s own filter) and the multicall does
@@ -854,10 +854,17 @@ balAllBuilt ((n, _) :: os) have = match lookupAssoc n have
   None => False
 
 balUnionOrcs : List (String, Int) -> List (String, Int) -> List (String, Int)
-balUnionOrcs [] have = have
-balUnionOrcs ((n, ms) :: os) have = match lookupAssoc n have
-  Some _ => balUnionOrcs os have
-  None => balUnionOrcs os ((n, ms) :: have)
+balUnionOrcs os have = balUnionOrcsGo os have (S.fromList (map fst have))
+
+-- `have` keeps the discovery order; `names` answers membership.
+balUnionOrcsGo : List (String, Int) ->
+  List (String, Int) ->
+  S.Set String ->
+  List (String, Int)
+balUnionOrcsGo [] have _ = have
+balUnionOrcsGo ((n, ms) :: os) have names
+  | S.has n names = balUnionOrcsGo os have names
+  | otherwise = balUnionOrcsGo os ((n, ms) :: have) (S.insert n names)
 
 {- | The row a gate should go on, with the INCUMBENT row given a bounded
    preference over the LPT pick (S-3, #2218).
@@ -2049,16 +2056,14 @@ balDropNth i (x :: xs)
 -- The distinct runIds of `runs[]`, in file order (oldest first) — the same
 -- order `ms` is appended in, which is what makes index i mean run i.
 balRunIds : List RunRecord -> List String -> List String
-balRunIds [] acc = balRevStrs acc []
-balRunIds (r :: rs) acc
-  | balHasStr r.runId acc = balRunIds rs acc
-  | otherwise = balRunIds rs (r.runId :: acc)
+balRunIds runs acc = balRunIdsGo runs acc (S.fromList acc)
 
-balHasStr : String -> List String -> Bool
-balHasStr _ [] = False
-balHasStr s (x :: xs)
-  | x == s = True
-  | otherwise = balHasStr s xs
+-- `acc` is newest-first for the final reversal; `seen` answers membership.
+balRunIdsGo : List RunRecord -> List String -> S.Set String -> List String
+balRunIdsGo [] acc _ = balRevStrs acc []
+balRunIdsGo (r :: rs) acc seen
+  | S.has r.runId seen = balRunIdsGo rs acc seen
+  | otherwise = balRunIdsGo rs (r.runId :: acc) (S.insert r.runId seen)
 
 balRevStrs : List String -> List String -> List String
 balRevStrs [] acc = acc

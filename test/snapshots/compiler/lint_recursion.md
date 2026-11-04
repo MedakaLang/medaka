@@ -1,5 +1,5 @@
 # META
-source_lines=304
+source_lines=305
 stages=DESUGAR,MARK
 # SOURCE
 -- compiler/tools/lint_recursion.mdk — the shared reader of self-recursion: the
@@ -270,6 +270,7 @@ foldVerdict e = match spineOf e []
     _ => NotAFold
 
 -- Position of the accumulator among a fold lambda's parameters, by name.
+export
 foldAccIndex : String -> Option Int
 foldAccIndex "fold" = Some 0
 foldAccIndex "foldThen" = Some 0
@@ -391,7 +392,7 @@ armAppends acc (Arm _ _ body) = tailAppends acc body
 (DFunDef false "mentionedIn" ((PVar "e") (PCon "Bound" (PVar "n") (PVar "j") PWild)) (EIf (EApp (EApp (EVar "mentionsVar") (EVar "n")) (EVar "e")) (EListLit (EVar "j")) (EListLit)))
 (DTypeSig true "foldVerdict" (TyFun (TyCon "Expr") (TyCon "FoldVerdict")))
 (DFunDef false "foldVerdict" ((PVar "e")) (EMatch (EApp (EApp (EVar "spineOf") (EVar "e")) (EListLit)) (arm (PTuple PWild (PList)) () (EVar "NotAFold")) (arm (PTuple (PVar "hd") (PVar "args")) () (EMatch (EApp (EVar "unwrapLoc") (EVar "hd")) (arm (PCon "EVar" (PVar "n")) () (EMatch (EApp (EVar "foldAccIndex") (EApp (EVar "lastSegment") (EVar "n"))) (arm (PCon "None") () (EVar "NotAFold")) (arm (PCon "Some" (PVar "k")) () (EIf (EApp (EApp (EVar "any") (ELam ((PVar "a")) (EApp (EApp (EVar "lamAppends") (EVar "k")) (EVar "a")))) (EVar "args")) (EVar "FoldAppends") (EVar "FoldPlain"))))) (arm PWild () (EVar "NotAFold"))))))
-(DTypeSig false "foldAccIndex" (TyFun (TyCon "String") (TyApp (TyCon "Option") (TyCon "Int"))))
+(DTypeSig true "foldAccIndex" (TyFun (TyCon "String") (TyApp (TyCon "Option") (TyCon "Int"))))
 (DFunDef false "foldAccIndex" ((PLit (LString "fold"))) (EApp (EVar "Some") (ELit (LInt 0))))
 (DFunDef false "foldAccIndex" ((PLit (LString "foldThen"))) (EApp (EVar "Some") (ELit (LInt 0))))
 (DFunDef false "foldAccIndex" ((PLit (LString "foldlSet"))) (EApp (EVar "Some") (ELit (LInt 0))))
@@ -494,7 +495,7 @@ armAppends acc (Arm _ _ body) = tailAppends acc body
 (DFunDef false "mentionedIn" ((PVar "e") (PCon "Bound" (PVar "n") (PVar "j") PWild)) (EIf (EApp (EApp (EVar "mentionsVar") (EVar "n")) (EVar "e")) (EListLit (EVar "j")) (EListLit)))
 (DTypeSig true "foldVerdict" (TyFun (TyCon "Expr") (TyCon "FoldVerdict")))
 (DFunDef false "foldVerdict" ((PVar "e")) (EMatch (EApp (EApp (EVar "spineOf") (EVar "e")) (EListLit)) (arm (PTuple PWild (PList)) () (EVar "NotAFold")) (arm (PTuple (PVar "hd") (PVar "args")) () (EMatch (EApp (EVar "unwrapLoc") (EVar "hd")) (arm (PCon "EVar" (PVar "n")) () (EMatch (EApp (EVar "foldAccIndex") (EApp (EVar "lastSegment") (EVar "n"))) (arm (PCon "None") () (EVar "NotAFold")) (arm (PCon "Some" (PVar "k")) () (EIf (EApp (EApp (EDictApp "any") (ELam ((PVar "a")) (EApp (EApp (EVar "lamAppends") (EVar "k")) (EVar "a")))) (EVar "args")) (EVar "FoldAppends") (EVar "FoldPlain"))))) (arm PWild () (EVar "NotAFold"))))))
-(DTypeSig false "foldAccIndex" (TyFun (TyCon "String") (TyApp (TyCon "Option") (TyCon "Int"))))
+(DTypeSig true "foldAccIndex" (TyFun (TyCon "String") (TyApp (TyCon "Option") (TyCon "Int"))))
 (DFunDef false "foldAccIndex" ((PLit (LString "fold"))) (EApp (EVar "Some") (ELit (LInt 0))))
 (DFunDef false "foldAccIndex" ((PLit (LString "foldThen"))) (EApp (EVar "Some") (ELit (LInt 0))))
 (DFunDef false "foldAccIndex" ((PLit (LString "foldlSet"))) (EApp (EVar "Some") (ELit (LInt 0))))

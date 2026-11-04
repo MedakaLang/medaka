@@ -109,6 +109,7 @@ import lib.select.{
   containsInSubquery,
 }
 import list.{reverse, get, sortBy, zip}
+import set as S
 import string.{contains, startsWith}
 import bytes.{fromArrayAssumeByteDomain}
 import hex.{encodeUpper}
@@ -566,7 +567,7 @@ insertRows sql existing cols rows = do
     ct
     (ctIpkIndex ct)
     (nextRowid existing)
-    (rowidsOf existing)
+    (S.fromList (rowidsOf existing))
     positional
     []
   Ok (sortBy byRowid (existing ++ built), length built)
@@ -638,6 +639,8 @@ resolveColNames _ [] acc = Ok (reverse acc)
 resolveColNames ct (n :: rest) acc = match ctColIndex ct n
   None => Err "table \{ctTable ct} has no column named '\{n}'"
   Some i =>
+    -- Bound: `acc` holds distinct column indexes of one table, so at most its column count.
+    -- lint-disable-next-line rule-list-as-set
     if elem i acc then
       Err "column '\{n}' named more than once"
     else
@@ -661,7 +664,7 @@ scatterGo width pairs i acc =
 assignRowids : CreateTable ->
   Option Int ->
   Int ->
-  List Int ->
+  S.Set Int ->
   List (List Cell) ->
   List (Int, List Cell) ->
   Result String (List (Int, List Cell))
@@ -674,7 +677,7 @@ assignRowids ct ipk next taken (row :: rest) acc = do
     ct
     ipk
     (max next rid + 1)
-    (rid :: taken)
+    (S.insert rid taken)
     rest
     ((rid, cells) :: acc)
 
@@ -704,10 +707,10 @@ ipkName ct i = match get i (ctCols ct)
 refuseDuplicate : CreateTable ->
   Option Int ->
   Int ->
-  List Int ->
+  S.Set Int ->
   Result String Unit
 refuseDuplicate ct ipk rid taken =
-  if elem rid taken then
+  if S.has rid taken then
     Err "UNIQUE constraint failed: \{ctTable ct}.\{dupKeyName ct ipk}"
   else
     Ok ()

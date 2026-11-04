@@ -509,6 +509,12 @@ export
 appSpineOf : Expr -> (Expr, List Expr)
 appSpineOf e = appSpineGo e []
 
+-- The arguments of a curried application spine.
+export
+appArgsOf : Expr -> List Expr
+appArgsOf e = match appSpineOf e
+  (_, args) => args
+
 appSpineGo : Expr -> List Expr -> (Expr, List Expr)
 appSpineGo e acc = match stripELoc e
   EApp f a => appSpineGo f (a :: acc)
@@ -1079,3 +1085,7 @@ lastArmSpan arms = match last arms
 export
 ruleNameResliceInLoop : String
 ruleNameResliceInLoop = "rule-reslice-in-loop"
+
+export
+ruleNameListAsSet : String
+ruleNameListAsSet = "rule-list-as-set"
