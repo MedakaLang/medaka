@@ -1,0 +1,14 @@
+interface Sizeable a where
+  size : a -> Int
+
+size : Eq a => a -> Int
+size x = if x == x then 7 else 0
+
+data Box a = Box a
+
+impl Eq (Box a) requires Eq a where
+  eq (Box x) (Box y) = size x == 7
+
+main : <IO> Unit
+main =
+  println (debug (eq (Box 1) (Box 1)))

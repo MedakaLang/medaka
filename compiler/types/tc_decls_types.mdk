@@ -679,7 +679,8 @@ tyCarries gctx seen p (TyApp a b) = match tyAppSpine (TyApp a b)
   (TyCon { tyConName = n, tyConOrigin = o }, args) =>
     argsCarry gctx seen p (tyTabKey o n) 0 args
   _ => False
-tyCarries _gctx _ _ _ = False
+tyCarries _gctx _ _ (TyCon {  } | TyFun _ _ | TyEffect _ _ _ | TyRow _ _ _ | TyAuth _ _) =
+  False
 
 -- Argument [i] of head [key] carries [p] when the head's parameter [i]
 -- carries and the argument is [p] itself or carries it.
@@ -797,7 +798,7 @@ tyVarTypeOcc mctx p (TyApp a b) = match tyAppSpine (TyApp a b)
         tyVarTypeOccSlots mctx p kinds args
       _ => anyList (tyVarTypeOcc mctx p) args
   (hd, args) => tyVarTypeOcc mctx p hd || anyList (tyVarTypeOcc mctx p) args
-tyVarTypeOcc _mctx _ _ = False
+tyVarTypeOcc _mctx _ (TyCon {  } | TyAuth _ _) = False
 
 -- per slot: a bare `p` at a KRow slot is a ROW occurrence (skipped); anything
 -- else is walked as a type.
@@ -1178,7 +1179,7 @@ writtenQualifiers (TyFun a b) = writtenQualifiers a ++ writtenQualifiers b
 writtenQualifiers (TyTuple ts) = flatMap writtenQualifiers ts
 writtenQualifiers (TyConstrained _ t) = writtenQualifiers t
 writtenQualifiers (TyNamed _ t _) = writtenQualifiers t
-writtenQualifiers _ = []
+writtenQualifiers (TyCon {  } | TyVar _ | TyRow _ _ _ | TyAuth _ _) = []
 
 -- The names written in authority position, atom parameters and qualifiers,
 -- each with the span of the atom or qualifier that writes it.
@@ -1197,7 +1198,7 @@ authorityNamesWritten gctx (TyTuple ts) =
   flatMap (authorityNamesWritten gctx) ts
 authorityNamesWritten gctx (TyConstrained _ t) = authorityNamesWritten gctx t
 authorityNamesWritten gctx (TyNamed _ t _) = authorityNamesWritten gctx t
-authorityNamesWritten _gctx _ = []
+authorityNamesWritten _gctx (TyCon {  } | TyVar _ | TyAuth _ _) = []
 
 atomAuthorityName : GraphCtx -> EffAtomTy -> List (String, Option Loc)
 atomAuthorityName gctx a = map (b => (fst b, a.eatLoc)) (namedAtomBinder gctx a)
@@ -1240,7 +1241,7 @@ binderDomainsIn gctx (TyTuple ts) = flatMap (binderDomainsIn gctx) ts
 binderDomainsIn gctx (TyEffect _ _ t) = binderDomainsIn gctx t
 binderDomainsIn gctx (TyConstrained _ t) = binderDomainsIn gctx t
 binderDomainsIn gctx (TyQual t _ _) = binderDomainsIn gctx t
-binderDomainsIn _gctx _ = []
+binderDomainsIn _gctx (TyCon {  } | TyVar _ | TyRow _ _ _ | TyAuth _ _) = []
 
 -- The bare names sitting in `Authority`-kinded argument slots of registered
 -- heads, with the slot's domain: the twin of `rowArgNamesIn` for authorities.
@@ -2216,7 +2217,8 @@ expandAliasHeadTyWith aliases (t@(TyApp _ _)) = match tyAppSpine t
         expandAliasHeadTyWith aliases (substAliasArgs (zipL params args) rhs)
       _ => t
   _ => t
-expandAliasHeadTyWith _ t = t
+expandAliasHeadTyWith _ (t@(TyVar _ | TyFun _ _ | TyTuple _ | TyEffect _ _ _ | TyConstrained _ _ | TyNamed _ _ _ | TyQual _ _ _ | TyRow _ _ _ | TyAuth _ _)) =
+  t
 
 -- substitute interface-typaram NAMES → impl type PATTERNS inside a declared Ty.
 --

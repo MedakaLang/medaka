@@ -1,0 +1,11 @@
+import set.{Set, size}
+
+data Box a = Box a
+
+impl Eq (Box a) requires Eq a where
+  eq (Box x) (Box y) = size (Set { 1, if x == y then 1 else 2 }) == 1
+
+main : <IO> Unit
+main =
+  println (debug (eq (Box 1) (Box 1)))
+  println (debug (eq (Box 1) (Box 2)))

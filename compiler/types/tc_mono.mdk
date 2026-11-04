@@ -737,7 +737,7 @@ substAuth asub q = match authNorm q
   AJoin ms => authJoinAll (map (substAuth asub) ms)
   AProduct axes =>
     authNorm (AProduct (map (a => (fst a, substAuth asub (snd a))) axes))
-  c => c
+  c@(AConst _) => c
 
 substMember : List (Int, Ref Effvar) -> Ref Effvar -> Ref Effvar
 substMember esub m = match !m
@@ -771,7 +771,7 @@ monoSize m = match normalize m
   TApp f a => 1 + monoSize f + monoSize a
   TFun a _ r => 1 + monoSize a + monoSize r
   TQual a _ => 1 + monoSize a
-  _ => 1
+  TVar _ | TCon _ _ | TRigid _ | TEff _ | TAuth _ => 1
 
 -- A predicate's goal is its whole ARGUMENT VECTOR (§3 `match(IE, C τ̄)`), so the size
 -- the shrinking test compares is the vector's, not arg 0's.
@@ -794,7 +794,7 @@ monoMintedBefore tyvars effvars m = match normalize m
       && monoMintedBefore tyvars effvars b
   TEff r => rowMintedBefore effvars r
   TQual a _ => monoMintedBefore tyvars effvars a
-  _ => True
+  TCon _ _ | TRigid _ | TAuth _ => True
 
 rowMintedBefore : Int -> EffRow -> Bool
 rowMintedBefore effvars r =
@@ -1069,13 +1069,13 @@ monoHasArrowInSlot : Mono -> Bool
 monoHasArrowInSlot t = match normalize t
   TApp a b => monoHasArrow b || monoHasArrowInSlot a
   TFun a _ b => monoHasArrowInSlot a || monoHasArrowInSlot b
-  _ => False
+  TVar _ | TCon _ _ | TRigid _ | TEff _ | TQual _ _ | TAuth _ => False
 
 monoHasArrow : Mono -> Bool
 monoHasArrow t = match normalize t
   TFun _ _ _ => True
   TApp a b => monoHasArrow a || monoHasArrow b
-  _ => False
+  TVar _ | TCon _ _ | TRigid _ | TEff _ | TQual _ _ | TAuth _ => False
 
 export
 monoIsTyvarId : Mono -> Int -> Bool
@@ -1228,7 +1228,8 @@ patVarsTc (PList ps) = patVarsListTc ps
 patVarsTc (PAs x _ _ p) = x :: patVarsTc p
 patVarsTc (POr (p :: _)) = patVarsTc p
 patVarsTc (PRec _ fields _) = flatMap recPatFieldVarsTc fields
-patVarsTc _ = []
+patVarsTc (PAnn p _) = patVarsTc p
+patVarsTc (PWild | PLit _ | PRng _ _ _) = []
 
 export
 patVarsListTc : List Pat -> List String
@@ -1324,7 +1325,7 @@ cohOccurs subst id m = match cohResolve subst m
   TApp f a => cohOccurs subst id f || cohOccurs subst id a
   TFun a _ b => cohOccurs subst id a || cohOccurs subst id b
   TQual a _ => cohOccurs subst id a
-  _ => False
+  TCon _ _ | TRigid _ | TEff _ | TAuth _ => False
 
 export
 matchOneSided : (g -> s -> MStep k g s) ->
@@ -1915,7 +1916,7 @@ cohApply subst m = match cohResolve subst m
   TApp a b => TApp (cohApply subst a) (cohApply subst b)
   TFun a eff b => TFun (cohApply subst a) eff (cohApply subst b)
   TQual a q => TQual (cohApply subst a) q
-  other => other
+  other@(TVar _ | TCon _ _ | TRigid _ | TEff _ | TAuth _) => other
 
 -- A name no type or type variable can spell, standing in for a signature variable.
 sigStandIn : Ref Tyvar -> String
@@ -1957,7 +1958,7 @@ monoVarCells t = match normalize t
   TApp a b => monoVarCells a ++ monoVarCells b
   TFun a _ b => monoVarCells a ++ monoVarCells b
   TQual a _ => monoVarCells a
-  _ => []
+  TCon _ _ | TRigid _ | TEff _ | TAuth _ => []
 
 export
 spineHeadMono : Mono -> Mono
@@ -1997,8 +1998,7 @@ monoIndexEffvarIds m = match normalize m
   TFun a r b => monoIndexEffvarIds a ++ rowTailId r ++ monoIndexEffvarIds b
   TEff r => rowTailId r
   TQual a _ => monoIndexEffvarIds a
-  TAuth _ => []
-  _ => []
+  TVar _ | TCon _ _ | TRigid _ | TAuth _ => []
 
 -- every unbound tail id the row reaches — a join contributes each member.
 export
@@ -2045,7 +2045,7 @@ monoSameGiven a b = match peelQual a
   TEff _ => match peelQual b
     TEff _ => True
     _ => False
-  _ => False
+  TQual _ _ => False
 
 -- #1956: the answer to "when are two predicate argument vectors the same predicate?" —
 -- pointwise structural identity: equal length, and `monoSameGiven` at every position, in
@@ -2068,7 +2068,7 @@ monoTyvarIds m = match normalize m
   TApp a b => monoTyvarIds a ++ monoTyvarIds b
   TFun a _ b => monoTyvarIds a ++ monoTyvarIds b
   TQual a _ => monoTyvarIds a
-  _ => []
+  TCon _ _ | TRigid _ | TEff _ | TAuth _ => []
 
 -- peel up to [n] arrow domains off [t], normalizing at each level.  A signature
 -- with fewer arrows than the clause has params stops early and returns fewer
@@ -2168,7 +2168,7 @@ unrigidSig sigCells t = match normalize t
   TApp a b => TApp (unrigidSig sigCells a) (unrigidSig sigCells b)
   TFun a eff b => TFun (unrigidSig sigCells a) eff (unrigidSig sigCells b)
   TQual a q => TQual (unrigidSig sigCells a) q
-  other => other
+  other@(TVar _ | TCon _ _ | TEff _ | TAuth _) => other
 
 -- the ids of [monos] that are still ABSTRACT type variables, in order.  The filter
 -- `declaredPredicateSlots` keeps a slot by, factored so that the slot's existence and
@@ -2237,7 +2237,7 @@ oblArgKey m = match normalize m
   TApp a b => "a\{oblArgKey a}\{oblArgKey b}"
   TFun a _ b => "f\{oblArgKey a}\{oblArgKey b}"
   TQual a _ => oblArgKey a
-  _ => "*"
+  TEff _ | TAuth _ => "*"
 
 -- test-only observation: declarations whose only callers are tests and probes.
 

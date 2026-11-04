@@ -1047,7 +1047,8 @@ displayOperands (ELoc _ e) = displayOperands e
 displayOperands (EBinOp op a b _)
   | op == "++" = displayOperands a ++ displayOperands b
 displayOperands (EApp f x) = if isDisplayHead f then [x] else []
-displayOperands _ = []
+displayOperands (EBinOp _ _ _ _ | ELit _ | EVar _ | ELam _ _ | ELet _ _ _ _ _ | EMatch _ _ | EIf _ _ _ | EUnOp _ _ _ | EInfix _ _ _ | EFieldAccess _ _ _ | ETuple _ | EListLit _ | EArrayLit _ | ERangeList _ _ _ | ERangeArray _ _ _ | ESlice _ _ _ _ | ELetGroup _ _ | ESection _ | EIndex _ _ | EAnnot _ _ | EHeadAnnot _ _ | EBlock _ | EDo _ _ | EStringInterp _ | EGuards _ | ERecordCreate _ _ | ERecordUpdate _ _ _ | EVariantUpdate _ _ _ | EMapLit _ _ | ESetLit _ _ | EAsPat _ _ | EOrPat _ | EMethodRef _ | EDictApp _ | EVarAt _ _ | EVarId _ _ | EMethodAt _ _ _ | EDictAt _ _ | EDoOrigin _ _ | ENumLit _ _ _ | EWideLit _ _ _ _) =
+  []
 
 isDisplayHead : Expr -> Bool
 isDisplayHead (ELoc _ f) = isDisplayHead f
@@ -1339,7 +1340,7 @@ pairRowCells d a = match peelQual d
   TEff dr => match peelQual a
     TEff ar => pairRows dr ar
     _ => []
-  _ => []
+  TVar _ | TCon _ _ | TRigid _ | TQual _ _ | TAuth _ => []
 
 pairRows : EffRow -> EffRow -> List (Int, Int)
 pairRows dr ar = match rowTailId dr

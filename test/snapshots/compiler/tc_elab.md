@@ -1,5 +1,5 @@
 # META
-source_lines=2056
+source_lines=2063
 stages=DESUGAR,MARK
 # SOURCE
 -- tc_elab: dict-passing elaboration (`dictPass`), the grant rewrite (`grantWholeDomain`),
@@ -330,7 +330,8 @@ mapDeclBodies f (DProp pub name params body) = DProp pub name params (f body)
 mapDeclBodies f (DTest pub name body) = DTest pub name (f body)
 mapDeclBodies f (DAttrib attrs d) = DAttrib attrs (mapDeclBodies f d)
 -- a declaration with no expression body (data, signatures, imports, externs)
-mapDeclBodies _ d = d
+mapDeclBodies _ (d@(DTypeSig _ _ _ _ | DExtern _ | DData {  } | DUse _ _ _ | DEffect _ _ _ _ _ _ | DTypeAlias {  } | DNewtype {  })) =
+  d
 
 isSourceless : GraphCtx -> Int -> Bool
 isSourceless gctx i = IdMap.has i gctx.graphRun.grants.gsSourceless.value
@@ -774,7 +775,8 @@ grantDecl gctx pe _ (DTest pub name body) =
 grantDecl gctx pe mid (DAttrib attrs d) =
   DAttrib attrs (grantDecl gctx pe mid d)
 -- a declaration with no expression body (data, signatures, imports, externs)
-grantDecl _gctx _ _ d = d
+grantDecl _gctx _ _ (d@(DTypeSig _ _ _ _ | DExtern _ | DData {  } | DUse _ _ _ | DEffect _ _ _ _ _ _ | DTypeAlias {  } | DNewtype {  })) =
+  d
 
 -- A method that takes grants declares them after its value arguments, so the
 -- arity every backend reads off the declaration counts them.
@@ -1495,7 +1497,8 @@ dictPassDecl _mctx _ _ _ (d@(DInterface { typarams, methods, ... })) =
   DInterface { d | methods = map (ifaceDictPassMethod typarams) methods }
 dictPassDecl mctx pe names ret (DAttrib attrs d) =
   DAttrib attrs (dictPassDecl mctx pe names ret d)
-dictPassDecl _mctx _ _ _ d = d
+dictPassDecl _mctx _ _ _ (d@(DTypeSig _ _ _ _ | DExtern _ | DData {  } | DUse _ _ _ | DEffect _ _ _ _ _ _ | DProp _ _ _ _ | DTest _ _ _ | DTypeAlias {  } | DNewtype {  })) =
+  d
 
 -- DLetGroup binding dict-pass: prepend the member's dict params to every clause.
 -- `dictArityOf n` is 0 for an unconstrained member (no change), matching the
@@ -1623,6 +1626,7 @@ siteRDictName : Route -> List String
 siteRDictName (RDict d) = [d]
 siteRDictName (RDictFwd d) = [d]
 siteRDictName (RProj inner _) = routeRDictName inner
+siteRDictName (RLocal _ dicts) = siteRDictNamesL dicts
 siteRDictName _ = []
 
 siteRDictNamesL : List Route -> List String
@@ -1640,7 +1644,8 @@ routeRDictName (RDictFwd d) = [d]
 routeRDictName (RKey _ reqs sups) =
   flatMap routeRDictName reqs ++ flatMap routeRDictName sups
 routeRDictName (RProj r _) = routeRDictName r
-routeRDictName _ = []
+routeRDictName (RLocal _ dicts) = flatMap routeRDictName dicts
+routeRDictName (RNone | RScalar _) = []
 
 -- The dict-param names the method occurrences and dictionary applications in [e]
 -- route to: an `EMethodAt`'s dispatch route (RDict/RDictFwd, post-resolveSites)
@@ -1662,6 +1667,7 @@ collectDictSites pe (EMethodAt _ _ ev) =
   siteRDictName tag ++ siteRDictNamesL dicts
 collectDictSites pe (ELoc _ e) = collectDictSites pe e
 collectDictSites pe (EDoOrigin _ e) = collectDictSites pe e
+collectDictSites pe (EHeadAnnot e _) = collectDictSites pe e
 collectDictSites pe (EApp f x) = collectDictSites pe f ++ collectDictSites pe x
 collectDictSites pe (ELam _ b) = collectDictSites pe b
 collectDictSites pe (ELet _ _ _ e1 e2) =
@@ -1696,7 +1702,8 @@ collectDictSites pe (ERecordUpdate e fs _) =
   collectDictSites pe e ++ flatMap (fieldAssignDictSites pe) fs
 collectDictSites pe (EVariantUpdate _ e fs) =
   collectDictSites pe e ++ flatMap (fieldAssignDictSites pe) fs
-collectDictSites _ _ = []
+collectDictSites _ (ELit _ | EVar _ | ESection _ | EDo _ _ | EStringInterp _ | EGuards _ | EMapLit _ _ | ESetLit _ _ | EAsPat _ _ | EOrPat _ | EMethodRef _ | EDictApp _ | EVarAt _ _ | EVarId _ _ | ENumLit _ _ _ | EWideLit _ _ _ _) =
+  []
 
 letBindDictSites : PassEvidence -> LetBind -> List String
 letBindDictSites pe (LetBind _ clauses _ _) =
@@ -2131,7 +2138,7 @@ sigPredicateSlot (iface, _) =
 (DFunDef false "mapDeclBodies" ((PVar "f") (PCon "DProp" (PVar "pub") (PVar "name") (PVar "params") (PVar "body"))) (EApp (EApp (EApp (EApp (EVar "DProp") (EVar "pub")) (EVar "name")) (EVar "params")) (EApp (EVar "f") (EVar "body"))))
 (DFunDef false "mapDeclBodies" ((PVar "f") (PCon "DTest" (PVar "pub") (PVar "name") (PVar "body"))) (EApp (EApp (EApp (EVar "DTest") (EVar "pub")) (EVar "name")) (EApp (EVar "f") (EVar "body"))))
 (DFunDef false "mapDeclBodies" ((PVar "f") (PCon "DAttrib" (PVar "attrs") (PVar "d"))) (EApp (EApp (EVar "DAttrib") (EVar "attrs")) (EApp (EApp (EVar "mapDeclBodies") (EVar "f")) (EVar "d"))))
-(DFunDef false "mapDeclBodies" (PWild (PVar "d")) (EVar "d"))
+(DFunDef false "mapDeclBodies" (PWild (PAs "d" (POr (PCon "DTypeSig" PWild PWild PWild PWild) (PCon "DExtern" PWild) (PRec "DData" () false) (PCon "DUse" PWild PWild PWild) (PCon "DEffect" PWild PWild PWild PWild PWild PWild) (PRec "DTypeAlias" () false) (PRec "DNewtype" () false)))) (EVar "d"))
 (DTypeSig false "isSourceless" (TyFun (TyCon "GraphCtx") (TyFun (TyCon "Int") (TyCon "Bool"))))
 (DFunDef false "isSourceless" ((PVar "gctx") (PVar "i")) (EApp (EApp (EVar "IdMap.has") (EVar "i")) (EFieldAccess (EFieldAccess (EFieldAccess (EFieldAccess (EVar "gctx") "graphRun") "grants") "gsSourceless") "value")))
 (DTypeSig false "builtinMethodIfaceWord" (TyFun (TyCon "GraphCtx") (TyFun (TyCon "String") (TyCon "String"))))
@@ -2189,7 +2196,7 @@ sigPredicateSlot (iface, _) =
 (DFunDef false "grantDecl" ((PVar "gctx") (PVar "pe") PWild (PCon "DProp" (PVar "pub") (PVar "name") (PVar "params") (PVar "body"))) (EApp (EApp (EApp (EApp (EVar "DProp") (EVar "pub")) (EVar "name")) (EVar "params")) (EApp (EApp (EApp (EVar "grantExpr") (EVar "gctx")) (EVar "pe")) (EVar "body"))))
 (DFunDef false "grantDecl" ((PVar "gctx") (PVar "pe") PWild (PCon "DTest" (PVar "pub") (PVar "name") (PVar "body"))) (EApp (EApp (EApp (EVar "DTest") (EVar "pub")) (EVar "name")) (EApp (EApp (EApp (EVar "grantExpr") (EVar "gctx")) (EVar "pe")) (EVar "body"))))
 (DFunDef false "grantDecl" ((PVar "gctx") (PVar "pe") (PVar "mid") (PCon "DAttrib" (PVar "attrs") (PVar "d"))) (EApp (EApp (EVar "DAttrib") (EVar "attrs")) (EApp (EApp (EApp (EApp (EVar "grantDecl") (EVar "gctx")) (EVar "pe")) (EVar "mid")) (EVar "d"))))
-(DFunDef false "grantDecl" ((PVar "_gctx") PWild PWild (PVar "d")) (EVar "d"))
+(DFunDef false "grantDecl" ((PVar "_gctx") PWild PWild (PAs "d" (POr (PCon "DTypeSig" PWild PWild PWild PWild) (PCon "DExtern" PWild) (PRec "DData" () false) (PCon "DUse" PWild PWild PWild) (PCon "DEffect" PWild PWild PWild PWild PWild PWild) (PRec "DTypeAlias" () false) (PRec "DNewtype" () false)))) (EVar "d"))
 (DTypeSig false "grantIfaceMethod" (TyFun (TyCon "GraphCtx") (TyFun (TyCon "PassEvidence") (TyFun (TyCon "String") (TyFun (TyCon "IfaceMethod") (TyCon "IfaceMethod"))))))
 (DFunDef false "grantIfaceMethod" ((PVar "gctx") (PVar "pe") (PVar "word") (PCon "IfaceMethod" (PVar "n") (PVar "ty") (PVar "def") (PVar "mloc"))) (EMatch (EApp (EApp (EApp (EVar "methodGrantOf") (EVar "gctx")) (EVar "word")) (EVar "n")) (arm (PCon "None") () (EApp (EApp (EApp (EApp (EVar "IfaceMethod") (EVar "n")) (EVar "ty")) (EApp (EApp (EVar "map") (ELam ((PVar "d")) (EMatch (EVar "d") (arm (PCon "MethodDefault" (PVar "ps") (PVar "e")) () (EApp (EApp (EVar "MethodDefault") (EVar "ps")) (EApp (EApp (EApp (EVar "grantBody") (EVar "gctx")) (EVar "pe")) (EVar "e"))))))) (EVar "def"))) (EVar "mloc"))) (arm (PCon "Some" (PVar "mg")) () (EApp (EApp (EApp (EApp (EVar "IfaceMethod") (EVar "n")) (EApp (EApp (EApp (EVar "insertGrantArrows") (EFieldAccess (EVar "mg") "mgArity")) (EApp (EVar "listLen") (EFieldAccess (EVar "mg") "mgNames"))) (EVar "ty"))) (EApp (EApp (EVar "map") (ELam ((PVar "d")) (EMatch (EVar "d") (arm (PCon "MethodDefault" (PVar "ps") (PVar "e")) () (EBlock (DoLet false false (PTuple (PVar "ps2") (PVar "e2")) (EApp (EApp (EApp (EApp (EApp (EVar "grantMethodParams") (EVar "gctx")) (EVar "mg")) (EVar "n")) (EVar "ps")) (EApp (EApp (EApp (EVar "grantBody") (EVar "gctx")) (EVar "pe")) (EVar "e")))) (DoExpr (EApp (EApp (EVar "MethodDefault") (EVar "ps2")) (EVar "e2")))))))) (EVar "def"))) (EVar "mloc")))))
 (DTypeSig false "grantImplMethod" (TyFun (TyCon "GraphCtx") (TyFun (TyCon "PassEvidence") (TyFun (TyCon "String") (TyFun (TyCon "ImplMethod") (TyCon "ImplMethod"))))))
@@ -2312,7 +2319,7 @@ sigPredicateSlot (iface, _) =
 (DFunDef false "dictPassDecl" ((PVar "mctx") (PVar "pe") PWild PWild (PAs "d" (PRec "DImpl" ((rf "iface" None) (rf "implOrigin" None) (rf "reqs" None) (rf "methods" None)) true))) (EVariantUpdate "DImpl" (EVar "d") ((fa "methods" (EApp (EApp (EApp (EApp (EApp (EVar "implDictPassMethods") (EVar "mctx")) (EVar "pe")) (ERecordCreate "IfaceRef" ((fa "irName" (EVar "iface")) (fa "irOrigin" (EVar "implOrigin"))))) (EApp (EVar "listLen") (EVar "reqs"))) (EVar "methods"))))))
 (DFunDef false "dictPassDecl" ((PVar "_mctx") PWild PWild PWild (PAs "d" (PRec "DInterface" ((rf "typarams" None) (rf "methods" None)) true))) (EVariantUpdate "DInterface" (EVar "d") ((fa "methods" (EApp (EApp (EVar "map") (EApp (EVar "ifaceDictPassMethod") (EVar "typarams"))) (EVar "methods"))))))
 (DFunDef false "dictPassDecl" ((PVar "mctx") (PVar "pe") (PVar "names") (PVar "ret") (PCon "DAttrib" (PVar "attrs") (PVar "d"))) (EApp (EApp (EVar "DAttrib") (EVar "attrs")) (EApp (EApp (EApp (EApp (EApp (EVar "dictPassDecl") (EVar "mctx")) (EVar "pe")) (EVar "names")) (EVar "ret")) (EVar "d"))))
-(DFunDef false "dictPassDecl" ((PVar "_mctx") PWild PWild PWild (PVar "d")) (EVar "d"))
+(DFunDef false "dictPassDecl" ((PVar "_mctx") PWild PWild PWild (PAs "d" (POr (PCon "DTypeSig" PWild PWild PWild PWild) (PCon "DExtern" PWild) (PRec "DData" () false) (PCon "DUse" PWild PWild PWild) (PCon "DEffect" PWild PWild PWild PWild PWild PWild) (PCon "DProp" PWild PWild PWild PWild) (PCon "DTest" PWild PWild PWild) (PRec "DTypeAlias" () false) (PRec "DNewtype" () false)))) (EVar "d"))
 (DTypeSig false "dictPassLetBind" (TyFun (TyCon "ModuleCtx") (TyFun (TyApp (TyCon "OrdMap") (TyCon "Unit")) (TyFun (TyCon "LetBind") (TyCon "LetBind")))))
 (DFunDef false "dictPassLetBind" ((PVar "mctx") (PVar "names") (PCon "LetBind" (PVar "n") (PVar "clauses") (PVar "site") (PVar "bid"))) (EIf (EApp (EApp (EVar "omHasKey") (EVar "n")) (EVar "names")) (EApp (EApp (EApp (EApp (EVar "LetBind") (EVar "n")) (EApp (EApp (EVar "map") (EApp (EApp (EVar "prependDictClause") (EVar "n")) (EApp (EApp (EVar "dictArityOf") (EVar "mctx")) (EVar "n")))) (EVar "clauses"))) (EVar "site")) (EVar "bid")) (EIf (EVar "otherwise") (EApp (EApp (EApp (EApp (EVar "LetBind") (EVar "n")) (EVar "clauses")) (EVar "site")) (EVar "bid")) (EApp (EVar "__fallthrough__") (ELit LUnit)))))
 (DTypeSig false "prependDictClause" (TyFun (TyCon "String") (TyFun (TyCon "Int") (TyFun (TyCon "FunClause") (TyCon "FunClause")))))
@@ -2341,6 +2348,7 @@ sigPredicateSlot (iface, _) =
 (DFunDef false "siteRDictName" ((PCon "RDict" (PVar "d"))) (EListLit (EVar "d")))
 (DFunDef false "siteRDictName" ((PCon "RDictFwd" (PVar "d"))) (EListLit (EVar "d")))
 (DFunDef false "siteRDictName" ((PCon "RProj" (PVar "inner") PWild)) (EApp (EVar "routeRDictName") (EVar "inner")))
+(DFunDef false "siteRDictName" ((PCon "RLocal" PWild (PVar "dicts"))) (EApp (EVar "siteRDictNamesL") (EVar "dicts")))
 (DFunDef false "siteRDictName" (PWild) (EListLit))
 (DTypeSig false "siteRDictNamesL" (TyFun (TyApp (TyCon "List") (TyCon "Route")) (TyApp (TyCon "List") (TyCon "String"))))
 (DFunDef false "siteRDictNamesL" ((PVar "rs")) (EApp (EApp (EVar "flatMap") (EVar "routeRDictName")) (EVar "rs")))
@@ -2349,12 +2357,14 @@ sigPredicateSlot (iface, _) =
 (DFunDef false "routeRDictName" ((PCon "RDictFwd" (PVar "d"))) (EListLit (EVar "d")))
 (DFunDef false "routeRDictName" ((PCon "RKey" PWild (PVar "reqs") (PVar "sups"))) (EBinOp "++" (EApp (EApp (EVar "flatMap") (EVar "routeRDictName")) (EVar "reqs")) (EApp (EApp (EVar "flatMap") (EVar "routeRDictName")) (EVar "sups"))))
 (DFunDef false "routeRDictName" ((PCon "RProj" (PVar "r") PWild)) (EApp (EVar "routeRDictName") (EVar "r")))
-(DFunDef false "routeRDictName" (PWild) (EListLit))
+(DFunDef false "routeRDictName" ((PCon "RLocal" PWild (PVar "dicts"))) (EApp (EApp (EVar "flatMap") (EVar "routeRDictName")) (EVar "dicts")))
+(DFunDef false "routeRDictName" ((POr (PCon "RNone") (PCon "RScalar" PWild))) (EListLit))
 (DTypeSig false "collectDictSites" (TyFun (TyCon "PassEvidence") (TyFun (TyCon "Expr") (TyApp (TyCon "List") (TyCon "String")))))
 (DFunDef false "collectDictSites" ((PVar "pe") (PCon "EDictAt" PWild (PVar "ev"))) (EApp (EVar "siteRDictNamesL") (EApp (EApp (EVar "evDictRoutesIn") (EApp (EVar "passIndex") (EVar "pe"))) (EVar "ev"))))
 (DFunDef false "collectDictSites" ((PVar "pe") (PCon "EMethodAt" PWild PWild (PVar "ev"))) (EBlock (DoLet false false (PCon "PassMethod" PWild (PVar "tag") (PVar "dicts")) (EApp (EApp (EVar "passMethodOf") (EVar "pe")) (EVar "ev"))) (DoExpr (EBinOp "++" (EApp (EVar "siteRDictName") (EVar "tag")) (EApp (EVar "siteRDictNamesL") (EVar "dicts"))))))
 (DFunDef false "collectDictSites" ((PVar "pe") (PCon "ELoc" PWild (PVar "e"))) (EApp (EApp (EVar "collectDictSites") (EVar "pe")) (EVar "e")))
 (DFunDef false "collectDictSites" ((PVar "pe") (PCon "EDoOrigin" PWild (PVar "e"))) (EApp (EApp (EVar "collectDictSites") (EVar "pe")) (EVar "e")))
+(DFunDef false "collectDictSites" ((PVar "pe") (PCon "EHeadAnnot" (PVar "e") PWild)) (EApp (EApp (EVar "collectDictSites") (EVar "pe")) (EVar "e")))
 (DFunDef false "collectDictSites" ((PVar "pe") (PCon "EApp" (PVar "f") (PVar "x"))) (EBinOp "++" (EApp (EApp (EVar "collectDictSites") (EVar "pe")) (EVar "f")) (EApp (EApp (EVar "collectDictSites") (EVar "pe")) (EVar "x"))))
 (DFunDef false "collectDictSites" ((PVar "pe") (PCon "ELam" PWild (PVar "b"))) (EApp (EApp (EVar "collectDictSites") (EVar "pe")) (EVar "b")))
 (DFunDef false "collectDictSites" ((PVar "pe") (PCon "ELet" PWild PWild PWild (PVar "e1") (PVar "e2"))) (EBinOp "++" (EApp (EApp (EVar "collectDictSites") (EVar "pe")) (EVar "e1")) (EApp (EApp (EVar "collectDictSites") (EVar "pe")) (EVar "e2"))))
@@ -2377,7 +2387,7 @@ sigPredicateSlot (iface, _) =
 (DFunDef false "collectDictSites" ((PVar "pe") (PCon "ERecordCreate" PWild (PVar "fs"))) (EApp (EApp (EVar "flatMap") (EApp (EVar "fieldAssignDictSites") (EVar "pe"))) (EVar "fs")))
 (DFunDef false "collectDictSites" ((PVar "pe") (PCon "ERecordUpdate" (PVar "e") (PVar "fs") PWild)) (EBinOp "++" (EApp (EApp (EVar "collectDictSites") (EVar "pe")) (EVar "e")) (EApp (EApp (EVar "flatMap") (EApp (EVar "fieldAssignDictSites") (EVar "pe"))) (EVar "fs"))))
 (DFunDef false "collectDictSites" ((PVar "pe") (PCon "EVariantUpdate" PWild (PVar "e") (PVar "fs"))) (EBinOp "++" (EApp (EApp (EVar "collectDictSites") (EVar "pe")) (EVar "e")) (EApp (EApp (EVar "flatMap") (EApp (EVar "fieldAssignDictSites") (EVar "pe"))) (EVar "fs"))))
-(DFunDef false "collectDictSites" (PWild PWild) (EListLit))
+(DFunDef false "collectDictSites" (PWild (POr (PCon "ELit" PWild) (PCon "EVar" PWild) (PCon "ESection" PWild) (PCon "EDo" PWild PWild) (PCon "EStringInterp" PWild) (PCon "EGuards" PWild) (PCon "EMapLit" PWild PWild) (PCon "ESetLit" PWild PWild) (PCon "EAsPat" PWild PWild) (PCon "EOrPat" PWild) (PCon "EMethodRef" PWild) (PCon "EDictApp" PWild) (PCon "EVarAt" PWild PWild) (PCon "EVarId" PWild PWild) (PCon "ENumLit" PWild PWild PWild) (PCon "EWideLit" PWild PWild PWild PWild))) (EListLit))
 (DTypeSig false "letBindDictSites" (TyFun (TyCon "PassEvidence") (TyFun (TyCon "LetBind") (TyApp (TyCon "List") (TyCon "String")))))
 (DFunDef false "letBindDictSites" ((PVar "pe") (PCon "LetBind" PWild (PVar "clauses") PWild PWild)) (EApp (EApp (EVar "flatMap") (EApp (EVar "funClauseDictSites") (EVar "pe"))) (EVar "clauses")))
 (DTypeSig false "funClauseDictSites" (TyFun (TyCon "PassEvidence") (TyFun (TyCon "FunClause") (TyApp (TyCon "List") (TyCon "String")))))
@@ -2499,7 +2509,7 @@ sigPredicateSlot (iface, _) =
 (DFunDef false "mapDeclBodies" ((PVar "f") (PCon "DProp" (PVar "pub") (PVar "name") (PVar "params") (PVar "body"))) (EApp (EApp (EApp (EApp (EVar "DProp") (EVar "pub")) (EVar "name")) (EVar "params")) (EApp (EVar "f") (EVar "body"))))
 (DFunDef false "mapDeclBodies" ((PVar "f") (PCon "DTest" (PVar "pub") (PVar "name") (PVar "body"))) (EApp (EApp (EApp (EVar "DTest") (EVar "pub")) (EVar "name")) (EApp (EVar "f") (EVar "body"))))
 (DFunDef false "mapDeclBodies" ((PVar "f") (PCon "DAttrib" (PVar "attrs") (PVar "d"))) (EApp (EApp (EVar "DAttrib") (EVar "attrs")) (EApp (EApp (EVar "mapDeclBodies") (EVar "f")) (EVar "d"))))
-(DFunDef false "mapDeclBodies" (PWild (PVar "d")) (EVar "d"))
+(DFunDef false "mapDeclBodies" (PWild (PAs "d" (POr (PCon "DTypeSig" PWild PWild PWild PWild) (PCon "DExtern" PWild) (PRec "DData" () false) (PCon "DUse" PWild PWild PWild) (PCon "DEffect" PWild PWild PWild PWild PWild PWild) (PRec "DTypeAlias" () false) (PRec "DNewtype" () false)))) (EVar "d"))
 (DTypeSig false "isSourceless" (TyFun (TyCon "GraphCtx") (TyFun (TyCon "Int") (TyCon "Bool"))))
 (DFunDef false "isSourceless" ((PVar "gctx") (PVar "i")) (EApp (EApp (EVar "IdMap.has") (EVar "i")) (EFieldAccess (EFieldAccess (EFieldAccess (EFieldAccess (EVar "gctx") "graphRun") "grants") "gsSourceless") "value")))
 (DTypeSig false "builtinMethodIfaceWord" (TyFun (TyCon "GraphCtx") (TyFun (TyCon "String") (TyCon "String"))))
@@ -2557,7 +2567,7 @@ sigPredicateSlot (iface, _) =
 (DFunDef false "grantDecl" ((PVar "gctx") (PVar "pe") PWild (PCon "DProp" (PVar "pub") (PVar "name") (PVar "params") (PVar "body"))) (EApp (EApp (EApp (EApp (EVar "DProp") (EVar "pub")) (EVar "name")) (EVar "params")) (EApp (EApp (EApp (EVar "grantExpr") (EVar "gctx")) (EVar "pe")) (EVar "body"))))
 (DFunDef false "grantDecl" ((PVar "gctx") (PVar "pe") PWild (PCon "DTest" (PVar "pub") (PVar "name") (PVar "body"))) (EApp (EApp (EApp (EVar "DTest") (EVar "pub")) (EVar "name")) (EApp (EApp (EApp (EVar "grantExpr") (EVar "gctx")) (EVar "pe")) (EVar "body"))))
 (DFunDef false "grantDecl" ((PVar "gctx") (PVar "pe") (PVar "mid") (PCon "DAttrib" (PVar "attrs") (PVar "d"))) (EApp (EApp (EVar "DAttrib") (EVar "attrs")) (EApp (EApp (EApp (EApp (EVar "grantDecl") (EVar "gctx")) (EVar "pe")) (EVar "mid")) (EVar "d"))))
-(DFunDef false "grantDecl" ((PVar "_gctx") PWild PWild (PVar "d")) (EVar "d"))
+(DFunDef false "grantDecl" ((PVar "_gctx") PWild PWild (PAs "d" (POr (PCon "DTypeSig" PWild PWild PWild PWild) (PCon "DExtern" PWild) (PRec "DData" () false) (PCon "DUse" PWild PWild PWild) (PCon "DEffect" PWild PWild PWild PWild PWild PWild) (PRec "DTypeAlias" () false) (PRec "DNewtype" () false)))) (EVar "d"))
 (DTypeSig false "grantIfaceMethod" (TyFun (TyCon "GraphCtx") (TyFun (TyCon "PassEvidence") (TyFun (TyCon "String") (TyFun (TyCon "IfaceMethod") (TyCon "IfaceMethod"))))))
 (DFunDef false "grantIfaceMethod" ((PVar "gctx") (PVar "pe") (PVar "word") (PCon "IfaceMethod" (PVar "n") (PVar "ty") (PVar "def") (PVar "mloc"))) (EMatch (EApp (EApp (EApp (EVar "methodGrantOf") (EVar "gctx")) (EVar "word")) (EVar "n")) (arm (PCon "None") () (EApp (EApp (EApp (EApp (EVar "IfaceMethod") (EVar "n")) (EVar "ty")) (EApp (EApp (EMethodRef "map") (ELam ((PVar "d")) (EMatch (EVar "d") (arm (PCon "MethodDefault" (PVar "ps") (PVar "e")) () (EApp (EApp (EVar "MethodDefault") (EVar "ps")) (EApp (EApp (EApp (EVar "grantBody") (EVar "gctx")) (EVar "pe")) (EVar "e"))))))) (EVar "def"))) (EVar "mloc"))) (arm (PCon "Some" (PVar "mg")) () (EApp (EApp (EApp (EApp (EVar "IfaceMethod") (EVar "n")) (EApp (EApp (EApp (EVar "insertGrantArrows") (EFieldAccess (EVar "mg") "mgArity")) (EApp (EVar "listLen") (EFieldAccess (EVar "mg") "mgNames"))) (EVar "ty"))) (EApp (EApp (EMethodRef "map") (ELam ((PVar "d")) (EMatch (EVar "d") (arm (PCon "MethodDefault" (PVar "ps") (PVar "e")) () (EBlock (DoLet false false (PTuple (PVar "ps2") (PVar "e2")) (EApp (EApp (EApp (EApp (EApp (EVar "grantMethodParams") (EVar "gctx")) (EVar "mg")) (EVar "n")) (EVar "ps")) (EApp (EApp (EApp (EVar "grantBody") (EVar "gctx")) (EVar "pe")) (EVar "e")))) (DoExpr (EApp (EApp (EVar "MethodDefault") (EVar "ps2")) (EVar "e2")))))))) (EVar "def"))) (EVar "mloc")))))
 (DTypeSig false "grantImplMethod" (TyFun (TyCon "GraphCtx") (TyFun (TyCon "PassEvidence") (TyFun (TyCon "String") (TyFun (TyCon "ImplMethod") (TyCon "ImplMethod"))))))
@@ -2680,7 +2690,7 @@ sigPredicateSlot (iface, _) =
 (DFunDef false "dictPassDecl" ((PVar "mctx") (PVar "pe") PWild PWild (PAs "d" (PRec "DImpl" ((rf "iface" None) (rf "implOrigin" None) (rf "reqs" None) (rf "methods" None)) true))) (EVariantUpdate "DImpl" (EVar "d") ((fa "methods" (EApp (EApp (EApp (EApp (EApp (EVar "implDictPassMethods") (EVar "mctx")) (EVar "pe")) (ERecordCreate "IfaceRef" ((fa "irName" (EVar "iface")) (fa "irOrigin" (EVar "implOrigin"))))) (EApp (EVar "listLen") (EVar "reqs"))) (EVar "methods"))))))
 (DFunDef false "dictPassDecl" ((PVar "_mctx") PWild PWild PWild (PAs "d" (PRec "DInterface" ((rf "typarams" None) (rf "methods" None)) true))) (EVariantUpdate "DInterface" (EVar "d") ((fa "methods" (EApp (EApp (EMethodRef "map") (EApp (EVar "ifaceDictPassMethod") (EVar "typarams"))) (EVar "methods"))))))
 (DFunDef false "dictPassDecl" ((PVar "mctx") (PVar "pe") (PVar "names") (PVar "ret") (PCon "DAttrib" (PVar "attrs") (PVar "d"))) (EApp (EApp (EVar "DAttrib") (EVar "attrs")) (EApp (EApp (EApp (EApp (EApp (EVar "dictPassDecl") (EVar "mctx")) (EVar "pe")) (EVar "names")) (EVar "ret")) (EVar "d"))))
-(DFunDef false "dictPassDecl" ((PVar "_mctx") PWild PWild PWild (PVar "d")) (EVar "d"))
+(DFunDef false "dictPassDecl" ((PVar "_mctx") PWild PWild PWild (PAs "d" (POr (PCon "DTypeSig" PWild PWild PWild PWild) (PCon "DExtern" PWild) (PRec "DData" () false) (PCon "DUse" PWild PWild PWild) (PCon "DEffect" PWild PWild PWild PWild PWild PWild) (PCon "DProp" PWild PWild PWild PWild) (PCon "DTest" PWild PWild PWild) (PRec "DTypeAlias" () false) (PRec "DNewtype" () false)))) (EVar "d"))
 (DTypeSig false "dictPassLetBind" (TyFun (TyCon "ModuleCtx") (TyFun (TyApp (TyCon "OrdMap") (TyCon "Unit")) (TyFun (TyCon "LetBind") (TyCon "LetBind")))))
 (DFunDef false "dictPassLetBind" ((PVar "mctx") (PVar "names") (PCon "LetBind" (PVar "n") (PVar "clauses") (PVar "site") (PVar "bid"))) (EIf (EApp (EApp (EVar "omHasKey") (EVar "n")) (EVar "names")) (EApp (EApp (EApp (EApp (EVar "LetBind") (EVar "n")) (EApp (EApp (EMethodRef "map") (EApp (EApp (EVar "prependDictClause") (EVar "n")) (EApp (EApp (EVar "dictArityOf") (EVar "mctx")) (EVar "n")))) (EVar "clauses"))) (EVar "site")) (EVar "bid")) (EIf (EVar "otherwise") (EApp (EApp (EApp (EApp (EVar "LetBind") (EVar "n")) (EVar "clauses")) (EVar "site")) (EVar "bid")) (EApp (EVar "__fallthrough__") (ELit LUnit)))))
 (DTypeSig false "prependDictClause" (TyFun (TyCon "String") (TyFun (TyCon "Int") (TyFun (TyCon "FunClause") (TyCon "FunClause")))))
@@ -2709,6 +2719,7 @@ sigPredicateSlot (iface, _) =
 (DFunDef false "siteRDictName" ((PCon "RDict" (PVar "d"))) (EListLit (EVar "d")))
 (DFunDef false "siteRDictName" ((PCon "RDictFwd" (PVar "d"))) (EListLit (EVar "d")))
 (DFunDef false "siteRDictName" ((PCon "RProj" (PVar "inner") PWild)) (EApp (EVar "routeRDictName") (EVar "inner")))
+(DFunDef false "siteRDictName" ((PCon "RLocal" PWild (PVar "dicts"))) (EApp (EVar "siteRDictNamesL") (EVar "dicts")))
 (DFunDef false "siteRDictName" (PWild) (EListLit))
 (DTypeSig false "siteRDictNamesL" (TyFun (TyApp (TyCon "List") (TyCon "Route")) (TyApp (TyCon "List") (TyCon "String"))))
 (DFunDef false "siteRDictNamesL" ((PVar "rs")) (EApp (EApp (EDictApp "flatMap") (EVar "routeRDictName")) (EVar "rs")))
@@ -2717,12 +2728,14 @@ sigPredicateSlot (iface, _) =
 (DFunDef false "routeRDictName" ((PCon "RDictFwd" (PVar "d"))) (EListLit (EVar "d")))
 (DFunDef false "routeRDictName" ((PCon "RKey" PWild (PVar "reqs") (PVar "sups"))) (EBinOp "++" (EApp (EApp (EDictApp "flatMap") (EVar "routeRDictName")) (EVar "reqs")) (EApp (EApp (EDictApp "flatMap") (EVar "routeRDictName")) (EVar "sups"))))
 (DFunDef false "routeRDictName" ((PCon "RProj" (PVar "r") PWild)) (EApp (EVar "routeRDictName") (EVar "r")))
-(DFunDef false "routeRDictName" (PWild) (EListLit))
+(DFunDef false "routeRDictName" ((PCon "RLocal" PWild (PVar "dicts"))) (EApp (EApp (EDictApp "flatMap") (EVar "routeRDictName")) (EVar "dicts")))
+(DFunDef false "routeRDictName" ((POr (PCon "RNone") (PCon "RScalar" PWild))) (EListLit))
 (DTypeSig false "collectDictSites" (TyFun (TyCon "PassEvidence") (TyFun (TyCon "Expr") (TyApp (TyCon "List") (TyCon "String")))))
 (DFunDef false "collectDictSites" ((PVar "pe") (PCon "EDictAt" PWild (PVar "ev"))) (EApp (EVar "siteRDictNamesL") (EApp (EApp (EVar "evDictRoutesIn") (EApp (EVar "passIndex") (EVar "pe"))) (EVar "ev"))))
 (DFunDef false "collectDictSites" ((PVar "pe") (PCon "EMethodAt" PWild PWild (PVar "ev"))) (EBlock (DoLet false false (PCon "PassMethod" PWild (PVar "tag") (PVar "dicts")) (EApp (EApp (EVar "passMethodOf") (EVar "pe")) (EVar "ev"))) (DoExpr (EBinOp "++" (EApp (EVar "siteRDictName") (EVar "tag")) (EApp (EVar "siteRDictNamesL") (EVar "dicts"))))))
 (DFunDef false "collectDictSites" ((PVar "pe") (PCon "ELoc" PWild (PVar "e"))) (EApp (EApp (EVar "collectDictSites") (EVar "pe")) (EVar "e")))
 (DFunDef false "collectDictSites" ((PVar "pe") (PCon "EDoOrigin" PWild (PVar "e"))) (EApp (EApp (EVar "collectDictSites") (EVar "pe")) (EVar "e")))
+(DFunDef false "collectDictSites" ((PVar "pe") (PCon "EHeadAnnot" (PVar "e") PWild)) (EApp (EApp (EVar "collectDictSites") (EVar "pe")) (EVar "e")))
 (DFunDef false "collectDictSites" ((PVar "pe") (PCon "EApp" (PVar "f") (PVar "x"))) (EBinOp "++" (EApp (EApp (EVar "collectDictSites") (EVar "pe")) (EVar "f")) (EApp (EApp (EVar "collectDictSites") (EVar "pe")) (EVar "x"))))
 (DFunDef false "collectDictSites" ((PVar "pe") (PCon "ELam" PWild (PVar "b"))) (EApp (EApp (EVar "collectDictSites") (EVar "pe")) (EVar "b")))
 (DFunDef false "collectDictSites" ((PVar "pe") (PCon "ELet" PWild PWild PWild (PVar "e1") (PVar "e2"))) (EBinOp "++" (EApp (EApp (EVar "collectDictSites") (EVar "pe")) (EVar "e1")) (EApp (EApp (EVar "collectDictSites") (EVar "pe")) (EVar "e2"))))
@@ -2745,7 +2758,7 @@ sigPredicateSlot (iface, _) =
 (DFunDef false "collectDictSites" ((PVar "pe") (PCon "ERecordCreate" PWild (PVar "fs"))) (EApp (EApp (EDictApp "flatMap") (EApp (EVar "fieldAssignDictSites") (EVar "pe"))) (EVar "fs")))
 (DFunDef false "collectDictSites" ((PVar "pe") (PCon "ERecordUpdate" (PVar "e") (PVar "fs") PWild)) (EBinOp "++" (EApp (EApp (EVar "collectDictSites") (EVar "pe")) (EVar "e")) (EApp (EApp (EDictApp "flatMap") (EApp (EVar "fieldAssignDictSites") (EVar "pe"))) (EVar "fs"))))
 (DFunDef false "collectDictSites" ((PVar "pe") (PCon "EVariantUpdate" PWild (PVar "e") (PVar "fs"))) (EBinOp "++" (EApp (EApp (EVar "collectDictSites") (EVar "pe")) (EVar "e")) (EApp (EApp (EDictApp "flatMap") (EApp (EVar "fieldAssignDictSites") (EVar "pe"))) (EVar "fs"))))
-(DFunDef false "collectDictSites" (PWild PWild) (EListLit))
+(DFunDef false "collectDictSites" (PWild (POr (PCon "ELit" PWild) (PCon "EVar" PWild) (PCon "ESection" PWild) (PCon "EDo" PWild PWild) (PCon "EStringInterp" PWild) (PCon "EGuards" PWild) (PCon "EMapLit" PWild PWild) (PCon "ESetLit" PWild PWild) (PCon "EAsPat" PWild PWild) (PCon "EOrPat" PWild) (PCon "EMethodRef" PWild) (PCon "EDictApp" PWild) (PCon "EVarAt" PWild PWild) (PCon "EVarId" PWild PWild) (PCon "ENumLit" PWild PWild PWild) (PCon "EWideLit" PWild PWild PWild PWild))) (EListLit))
 (DTypeSig false "letBindDictSites" (TyFun (TyCon "PassEvidence") (TyFun (TyCon "LetBind") (TyApp (TyCon "List") (TyCon "String")))))
 (DFunDef false "letBindDictSites" ((PVar "pe") (PCon "LetBind" PWild (PVar "clauses") PWild PWild)) (EApp (EApp (EDictApp "flatMap") (EApp (EVar "funClauseDictSites") (EVar "pe"))) (EVar "clauses")))
 (DTypeSig false "funClauseDictSites" (TyFun (TyCon "PassEvidence") (TyFun (TyCon "FunClause") (TyApp (TyCon "List") (TyCon "String")))))
