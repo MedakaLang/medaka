@@ -47,9 +47,10 @@ import driver.build_cmd.{
   scratchProbeManifest,
   cleanupTempDir,
   runBuildNativeRoots,
-  BuildProfile(..),
+  probeBuildPaths,
+  BuildOptions(..),
+  probeBuildOptions,
   envOr,
-  defaultMedakaRoot,
 }
 import driver.loader.{entrySearchRoots}
 import support.path.{joinPath, baseOf, dirOf}
@@ -190,31 +191,22 @@ buildAndRun : String ->
   String ->
   <IO> Result String (List ExResult)
 buildAndRun target entryPath outPath tmpDir tests nonce =
-  let root = envOr "MEDAKA_ROOT" defaultMedakaRoot
-  let medaka = envOr "MEDAKA" (joinPath root "medaka")
+  let paths = probeBuildPaths entryPath outPath
+  let root = paths.bpRoot
+  let medaka = paths.bpMedaka
   let emitter = envOr "MEDAKA_EMITTER" (joinPath root "medaka_emitter")
-  let cc = envOr "CC" "clang"
   -- The scratch entry sits in a `mktemp -d`, so its own search roots resolve
   -- nothing; the target's real roots are passed as extraRoots.
   let extraRoots = entrySearchRoots (dirOf target)
-  -- strictEmit = True (#2679): the probe is written, built and RUN in one
+  -- boStrictEmit = True (#2679): the probe is written, built and RUN in one
   -- breath, so the emitter's warn-first #2089 note reaches no reader — without
   -- the gate armed, a target the emitter records type errors for still links and
   -- reports `pass`.
-  match (runBuildNativeRoots
-    root
-    medaka
-    cc
-    entryPath
-    outPath
-    tmpDir
-    False
-    extraRoots
-    True
-    False
-    False
-    BuildProbe
-    (Some target))
+  let options = { probeBuildOptions |
+    boExtraRoots = extraRoots,
+    boRealTarget = Some target,
+  }
+  match runBuildNativeRoots paths tmpDir options
     Err rep =>
       Err
         "native test runner: could not build \{target} natively\n\{ppBuildReport rep}"

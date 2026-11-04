@@ -488,6 +488,12 @@ internalExterns = [
   "setAbortReport", "stringCodepointAtByte", "stringSliceBytes"
 ]
 
+-- Whether a module is exempt from the internal-extern guard: internal access is
+-- allowed outright, or the module is among the stdlib-owned `trusted` ones.
+export
+moduleTrusted : Bool -> List String -> String -> Bool
+moduleTrusted allowInternal trusted mid = allowInternal || contains mid trusted
+
 -- The internal-extern guard list for a module given whether internal access is
 -- permitted (a trusted module / `--allow-internal`): empty ⇒ no restriction.
 export
@@ -3556,26 +3562,17 @@ importedCtorDecls : List Decl ->
   List (String, List Decl) ->
   List (String, List Decl) ->
   List (String, List Decl)
-importedCtorDecls preludeDecls sibling mods pool =
-  importedCtorDeclsGo
-    (importedCtorDeclsStep
-      (coreExports preludeDecls)
-      (omFromPairs pool omEmpty))
-    (importerSubject sibling mods)
-    omEmpty
-    mods
-
--- [step] is `importedCtorDeclsStep` with the prelude's exports and the pool bound.
-importedCtorDeclsGo : (Option (String, List Decl) -> OrdMap ModuleExports -> (String, List Decl) -> (List Decl, ModuleExports)) ->
-  (String -> Option (String, List Decl)) ->
-  OrdMap ModuleExports ->
-  List (String, List Decl) ->
-  List (String, List Decl)
-importedCtorDeclsGo _ _ _ [] = []
-importedCtorDeclsGo step subjectOf known ((mid, prog) :: rest) =
-  let (decls, exp) = step (subjectOf mid) known (mid, prog)
-  (mid, decls)
-    :: importedCtorDeclsGo step subjectOf (omInsert exp.modId exp known) rest
+importedCtorDecls preludeDecls sibling mods pool = go omEmpty mods
+  where
+    step =
+      importedCtorDeclsStep
+        (coreExports preludeDecls)
+        (omFromPairs pool omEmpty)
+    subjectOf = importerSubject sibling mods
+    go _ [] = []
+    go known ((mid, prog) :: rest) =
+      let (decls, exp) = step (subjectOf mid) known (mid, prog)
+      (mid, decls) :: go (omInsert exp.modId exp known) rest
 
 -- One module of `importedCtorDecls`: the decls declaring a constructor its imports
 -- bind, and its exports, which the modules after it read through [known].  A test
@@ -4417,6 +4414,20 @@ reexportLeaks exported full (path, loc) =
     (n => PrivilegedReexport n full.modId (Some loc))
     (privilegedCarry exported full path)
 
+-- The per-graph inputs of the multi-module resolve walk.  A module is trusted
+-- (no internal-extern restriction) when `rwAllowInternal` is set OR its modId is
+-- in `rwTrusted` (the stdlib-owned modules, per the loader's owning-root);
+-- untrusted modules get the `internalExterns` guard list.  `rwSibling` is the
+-- graph's test sibling pairs.
+public export data ResolveWalk = ResolveWalk {
+  rwAllowInternal : Bool,
+  rwTrusted : List String,
+  rwSibling : List SiblingPair,
+  rwPreludeKey : Option (Int, Int),
+  rwRuntime : List Decl,
+  rwPrelude : List Decl,
+}
+
 -- thread resolveModule over modules in dependency-first order, accumulating
 -- exports; collect the union of every module's errors (the harness sorts).
 resolveModulesErrors : List Decl ->
@@ -4425,12 +4436,19 @@ resolveModulesErrors : List Decl ->
   List (String, List Decl) ->
   List ResError
 resolveModulesErrors rt pre known mods =
-  resolveModulesErrorsG True [] [] None rt pre known mods
+  resolveModulesErrorsG
+    ResolveWalk {
+      rwAllowInternal = True,
+      rwTrusted = [],
+      rwSibling = [],
+      rwPreludeKey = None,
+      rwRuntime = rt,
+      rwPrelude = pre,
+    }
+    known
+    mods
 
--- Guarded variant: a module is trusted (no internal-extern restriction) when
--- `allowInternal` is set OR its modId is in `trustedMods` (the stdlib-owned
--- modules, per the loader's owning-root).  Untrusted modules get the
--- internalExterns guard list.
+-- Guarded variant: trust is decided per module by the `ResolveWalk`.
 --
 -- The ONE recursive walker (#1440 dedup): `resolveModulesErrorsG` and
 -- `resolveModulesErrorsByPathGo` must not fork into two verbatim-identical copies of
@@ -4438,76 +4456,38 @@ resolveModulesErrors rt pre known mods =
 -- There is one walker returning each module's RAW `(modId, errs)` pair;
 -- the two renderers (flat union of raw errors vs per-module `file:L:C:`
 -- located-by-path) are lifted to the two callers below instead of duplicated
--- here.  [sibling] is the graph's test sibling pairs.
-resolveModulesErrorsPairsG : Bool ->
-  List String ->
-  List SiblingPair ->
-  Option (Int, Int) ->
-  List Decl ->
-  List Decl ->
+-- here.
+resolveModulesErrorsPairsG : ResolveWalk ->
   OrdMap ModuleExports ->
   List (String, List Decl) ->
   List (String, List ResError)
-resolveModulesErrorsPairsG allowInternal trustedMods sibling preludeKey rt pre known mods =
-  resolvePairsGo
-    allowInternal
-    trustedMods
-    (importerSubject sibling mods)
-    preludeKey
-    rt
-    pre
-    known
-    mods
-
-resolvePairsGo : Bool ->
-  List String ->
-  (String -> Option (String, List Decl)) ->
-  Option (Int, Int) ->
-  List Decl ->
-  List Decl ->
-  OrdMap ModuleExports ->
-  List (String, List Decl) ->
-  List (String, List ResError)
-resolvePairsGo _ _ _ _ _ _ _ [] = []
-resolvePairsGo allowInternal trustedMods subjectOf preludeKey rt pre known ((mid, prog) :: rest) =
-  let guard =
-    if allowInternal || contains mid trustedMods then [] else internalExterns
-  let (exp, errs) =
-    resolveModuleG guard (subjectOf mid) preludeKey rt pre known mid prog
-  (mid, errs)
-    :: resolvePairsGo
-      allowInternal
-      trustedMods
-      subjectOf
-      preludeKey
-      rt
-      pre
-      (omInsert exp.modId exp known)
-      rest
+resolveModulesErrorsPairsG walk known0 mods = go known0 mods
+  where
+    subjectOf = importerSubject walk.rwSibling mods
+    go _ [] = []
+    go known ((mid, prog) :: rest) =
+      let guard =
+        internalGuardFor (moduleTrusted walk.rwAllowInternal walk.rwTrusted mid)
+      let (exp, errs) =
+        resolveModuleG
+          guard
+          (subjectOf mid)
+          walk.rwPreludeKey
+          walk.rwRuntime
+          walk.rwPrelude
+          known
+          mid
+          prog
+      (mid, errs) :: go (omInsert exp.modId exp known) rest
 
 -- Flat union of every module's raw errors, in dependency-first order — the shape
 -- `resolveModulesErrors` wants.
-resolveModulesErrorsG : Bool ->
-  List String ->
-  List SiblingPair ->
-  Option (Int, Int) ->
-  List Decl ->
-  List Decl ->
+resolveModulesErrorsG : ResolveWalk ->
   OrdMap ModuleExports ->
   List (String, List Decl) ->
   List ResError
-resolveModulesErrorsG allowInternal trustedMods sibling preludeKey rt pre known mods =
-  flatMap
-    snd
-    (resolveModulesErrorsPairsG
-      allowInternal
-      trustedMods
-      sibling
-      preludeKey
-      rt
-      pre
-      known
-      mods)
+resolveModulesErrorsG walk known mods =
+  flatMap snd (resolveModulesErrorsPairsG walk known mods)
 
 -- one S-expression per diagnostic (the harness sorts); matches
 -- `diagdump --resolve-modules` over the same ordered module list.
@@ -4578,26 +4558,13 @@ resolveModulesToLines runtimeDecls preludeDecls mods =
 -- single-`target` fallback.
 export
 resolveModulesErrorsByFile : List (String, String) ->
-  Bool ->
-  List String ->
-  List SiblingPair ->
-  Option (Int, Int) ->
-  List Decl ->
-  List Decl ->
+  ResolveWalk ->
   List (String, List Decl) ->
   List (String, List ResError)
-resolveModulesErrorsByFile modPaths allowInternal trustedMods sibling preludeKey runtimeDecls preludeDecls mods =
+resolveModulesErrorsByFile modPaths walk mods =
   map
     (fileOfModuleErrors modPaths)
-    (resolveModulesErrorsPairsG
-      allowInternal
-      trustedMods
-      sibling
-      preludeKey
-      runtimeDecls
-      preludeDecls
-      omEmpty
-      mods)
+    (resolveModulesErrorsPairsG walk omEmpty mods)
 
 fileOfModuleErrors : List (String, String) ->
   (String, List ResError) ->
@@ -6064,13 +6031,14 @@ fillIfaceOccOrigin _ _ _ (o@(OriginModule _)) = o
 -- this language — one file may declare both `data Foo = Foo` and `interface Foo a
 -- where …` and check clean — so the two populations must never meet on one key.
 -- Every table in this section that mixes them (`tyOriginScope` and its layers, the
--- `known` export map threaded through `stampModulesGo`) stores an interface under
+-- `known` export map threaded through `stampGraphTyOrigins`'s walk) stores an interface under
 -- `iface:<Name>` and a type under the bare name.
 --
 -- ⚠️ ONE TAGGED MAP RATHER THAN TWO MAPS IS DELIBERATE, and it is what keeps the
 -- change ADDITIVE for `test/selfproc_goldens/legA/frontend.resolve.golden`: a second
 -- map would have to be threaded as a new parameter through `stampOneModule` /
--- `stampModulesGo` / `tyOriginScope`, changing three PINNED signatures for plumbing.
+-- `tyOriginScope` (two PINNED signatures) and the `go` walk inside
+-- `stampGraphTyOrigins`, for plumbing.
 -- The tag gets the same separation with no signature movement — and it is the same
 -- shape `insertIfaceParamKinds`'s `<iface>@<slot>` key already uses in
 -- `types/typecheck.mdk` for exactly this reason.
@@ -6158,10 +6126,20 @@ stampGraphTyOrigins sibling coreDecls modules =
       ++ map (ifaceDeclaredIn "core") (interfaceNamesOf coreDecls)
       ++ map (effectDeclaredIn "core") (effectNames coreDecls)
   let coreS = stampOneModule coreTypes omEmpty "core" coreDecls
-  (
-    coreS,
-    stampModulesGo coreTypes (importerSubject sibling modules) omEmpty modules,
-  )
+  -- A test sibling's occurrences are stamped against its subject's full view
+  -- (`importerSubject`); every module's exports for the modules after it are
+  -- its exported view.
+  let subjectOf = importerSubject sibling modules
+  let go known ms = match ms
+    [] => []
+    (mid, prog) :: rest =>
+      let seen = match subjectOf mid
+        None => known
+        Some (subject, sprog) =>
+          omInsert subject (originsUnder FullView known subject sprog) known
+      (mid, stampOneModule coreTypes seen mid prog)
+        :: go (omInsert mid (typeOriginExports known mid prog) known) rest
+  (coreS, go omEmpty modules)
 
 -- Both identity layers for ONE module, in one place so the prelude pass above and
 -- the per-module walk below cannot drift apart — the `evalModulesWith`/`cevalModules`
@@ -6178,27 +6156,6 @@ stampOneModule coreTypes known mid prog =
   stampTyOrigins
     (tyOriginScope coreTypes known mid prog)
     (stampDeclOrigins mid prog)
-
--- A test sibling's occurrences are stamped against its subject's full view
--- ([subjectOf], `importerSubject`); every module's exports for the modules after it
--- are its exported view.
-stampModulesGo : List (String, String) ->
-  (String -> Option (String, List Decl)) ->
-  OrdMap (List (String, String)) ->
-  List (String, List Decl) ->
-  List (String, List Decl)
-stampModulesGo _ _ _ [] = []
-stampModulesGo coreTypes subjectOf known ((mid, prog) :: rest) =
-  let seen = match subjectOf mid
-    None => known
-    Some (subject, sprog) =>
-      omInsert subject (originsUnder FullView known subject sprog) known
-  (mid, stampOneModule coreTypes seen mid prog)
-    :: stampModulesGo
-      coreTypes
-      subjectOf
-      (omInsert mid (typeOriginExports known mid prog) known)
-      rest
 
 -- The FLAT (loader-less) analogue, for the entries that typecheck a program with
 -- no module graph.  ⚠️ THE CONSUMER LIST HERE MOVED, 2026-08-26: it used to read

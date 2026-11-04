@@ -41,7 +41,6 @@ import types.tc_types.{
   ImplRow,
   ModuleCtx,
   PendingDictApp,
-  ReqWalk,
   siteFor,
 }
 import types.tc_mono.{
@@ -1051,6 +1050,9 @@ checkImplSuperContexts : ModuleCtx ->
   List ImplRow ->
   Decl ->
   Unit
+-- Top level, not a local `go`: `test/catch_all_census.ledger` lists top-level
+-- functions only, so a local walker would hide the wildcard arm over `Decl` from the
+-- audit that visits every catch-all when an AST constructor is added.
 checkImplSuperContexts mctx decls ce cur rows (DAttrib _ d) =
   checkImplSuperContexts mctx decls ce cur rows d
 checkImplSuperContexts mctx decls ce cur rows (DImpl { iface, tys, reqs, implOrigin = o, implIfaceLoc = ifaceLoc, ... }) =
@@ -1068,6 +1070,14 @@ checkImplSuperContexts mctx decls ce cur rows (DImpl { iface, tys, reqs, implOri
             (s => map fst (predicateSlotKnownSupers mctx.mcGraph s))
             declared
       let subject = "impl \{iface} \{join " " (map ppTyAtom tys)}"
+      let check = SuperCheck {
+        scSubject = subject,
+        scRoots = roots,
+        scHeadIds = headIds,
+        scGivens = givens,
+        scLoc = loc,
+        scDerived = derived,
+      }
       let subst = zip (ceRowTyparams r) tys
       let argsOf =
         sup =>
@@ -1076,17 +1086,10 @@ checkImplSuperContexts mctx decls ce cur rows (DImpl { iface, tys, reqs, implOri
             (superParamsOf sup)
       fold
         (_ sup => match argsOf sup
-          Some supArgs => checkSuperInstanceContext
-            mctx
-            subject
-            roots
-            headIds
-            givens
-            loc
-            derived
-            (superIfaceRef sup)
-            supArgs
-            (_ => superRowExists rows subst sup)
+          Some supArgs =>
+            let supRef = superIfaceRef sup
+            let covered = _ => superRowExists rows subst sup
+            checkSuperInstanceContext mctx check supRef supArgs covered
           None => ())
         ()
         (ceRowSupers r)
@@ -1109,44 +1112,62 @@ declNameLocs n (DNewtype { newtypeName, newtypeNameLoc = (Some l), ... })
   | newtypeName == n = [l]
 declNameLocs _ _ = []
 
+-- What one impl's super-context check reads at every goal: how the impl is named,
+-- the head variables and their printed names, the `requires` it declares (with their
+-- supers), and where a finding is reported.
+data SuperCheck = SuperCheck {
+  scSubject : String,
+  scRoots : List (String, Int),
+  scHeadIds : OrdMap Unit,
+  scGivens : List PredicateSlot,
+  scLoc : Option Loc,
+  scDerived : Bool,
+}
+
+-- The goals below [iface] [args] that no given answers: a goal over variables alone,
+-- or one no instance selects with the head variables rigid.  Bounded by the shared
+-- `requires` measure, a cycle or a runaway chain reported at the impl's span.  Each
+-- goal is solved once per walk (`solvedOnWalk`).
 checkSuperInstanceContext : ModuleCtx ->
-  String ->
-  List (String, Int) ->
-  OrdMap Unit ->
-  List PredicateSlot ->
-  Option Loc ->
-  Bool ->
+  SuperCheck ->
   IfaceRef ->
   List Mono ->
   (Unit -> Bool) ->
   Unit
-checkSuperInstanceContext mctx subject roots headIds givens loc derived sup supArgs covered
-  | anyList (givenAnswers sup supArgs) givens = ()
+checkSuperInstanceContext mctx sc sup supArgs covered
+  | anyList (givenAnswers sup supArgs) sc.scGivens = ()
   | otherwise =
-    match rigidHeadInstanceContext (siteFor mctx) headIds sup supArgs
+    match rigidHeadInstanceContext (siteFor mctx) sc.scHeadIds sup supArgs
       None =>
-        if not (covered ()) then
-          reportMissingSuperImpl mctx subject roots loc derived sup supArgs
+        if not (covered ()) then reportMissingSuperImpl mctx sc sup supArgs
       Some ctx =>
         let walk = reqWalkStart ()
-        let leaves =
-          flatMap
-            (g =>
-              superContextLeaves mctx walk headIds givens loc (fst g) (snd g))
-            ctx
+        let leaves = flatMap (g => superContextLeaves walk (fst g) (snd g)) ctx
         fold
-          (_ leaf =>
-            reportSuperContextLeaf
-              mctx
-              subject
-              roots
-              loc
-              derived
-              sup
-              supArgs
-              leaf)
+          (_ leaf => reportSuperContextLeaf mctx sc sup supArgs leaf)
           ()
           leaves
+  where
+    superContextLeaves walk iface args
+      | anyList (givenAnswers iface args) sc.scGivens = []
+      | not (anyConcreteHead args) = [(iface, args)]
+      | otherwise =
+        match reqWalkReported mctx sc.scLoc (reqWalkEnter walk iface args)
+          None => []
+          Some next => solvedOnWalk
+            mctx
+            next
+            iface
+            args
+            (_ =>
+              match (rigidHeadInstanceContext
+                (siteFor mctx)
+                sc.scHeadIds
+                iface
+                args)
+                None => [(iface, args)]
+                Some ctx =>
+                  flatMap (g => superContextLeaves next (fst g) (snd g)) ctx)
 
 -- Whether some impl row of the super covers the super goal at the impl's head
 -- (`superHeadCovers`).  Rows are graph-wide, so a super impl declared downstream
@@ -1156,74 +1177,46 @@ superRowExists rows subst (Super { superHead = n, superParams = ps, superOrigin 
   let tys = substParams ps subst
   listLen tys /= listLen ps || superImplExists rows (ifaceTabKey so n) n tys
 
+-- The printed-name table a super-context finding renders its goals with.
+superNamed : SuperCheck -> Ref (List (Int, String))
+superNamed sc = Ref (map (p => (snd p, fst p)) sc.scRoots)
+
 -- The super is named by its spelling, as the checked impl's own interface is, so
 -- the text is the same on every verb and at every head.  A derived impl's remedy is
 -- the `deriving` clause when the super is derivable, else the hand-written impl.
 reportMissingSuperImpl : ModuleCtx ->
-  String ->
-  List (String, Int) ->
-  Option Loc ->
-  Bool ->
+  SuperCheck ->
   IfaceRef ->
   List Mono ->
   Unit
-reportMissingSuperImpl mctx subject roots loc derived sup supArgs =
-  let named = Ref (map (p => (snd p, fst p)) roots)
+reportMissingSuperImpl mctx sc sup supArgs =
+  let subject = sc.scSubject
+  let derived = sc.scDerived
+  let named = superNamed sc
   let goal = "\{sup.irName} \{join " " (ppEach named (Ref 0) 3 supArgs)}"
   let missing = "requires the superinterface `\{goal}`, which no impl covers"
-  pushTypeErrorOnceAt mctx TMissingSuperImpl loc (if not derived then
+  pushTypeErrorOnceAt mctx TMissingSuperImpl sc.scLoc (if not derived then
     "`\{subject}` \{missing}; add an `impl \{goal}` covering it, or add `requires \{goal}` to the impl"
   else if derivableIface sup.irName then
     "`\{subject}` (derived) \{missing}; add `\{sup.irName}` to the type's `deriving` clause, or add an `impl \{goal}`"
   else
     "`\{subject}` (derived) \{missing}; add an `impl \{goal}`")
 
--- The goals below [iface] [args] that no given answers: a goal over variables alone,
--- or one no instance selects with the head variables rigid.  Bounded by the shared
--- `requires` measure, a cycle or a runaway chain reported at [loc].  Each goal is
--- solved once per walk (`solvedOnWalk`); [headIds], [givens] and [loc] are fixed for
--- the walk `checkSuperInstanceContext` starts.
-superContextLeaves : ModuleCtx ->
-  ReqWalk ->
-  OrdMap Unit ->
-  List PredicateSlot ->
-  Option Loc ->
-  IfaceRef ->
-  List Mono ->
-  List (IfaceRef, List Mono)
-superContextLeaves mctx walk headIds givens loc iface args
-  | anyList (givenAnswers iface args) givens = []
-  | not (anyConcreteHead args) = [(iface, args)]
-  | otherwise = match reqWalkReported mctx loc (reqWalkEnter walk iface args)
-    None => []
-    Some next => solvedOnWalk
-      mctx
-      next
-      iface
-      args
-      (_ => match rigidHeadInstanceContext (siteFor mctx) headIds iface args
-        None => [(iface, args)]
-        Some ctx =>
-          flatMap
-            (g =>
-              superContextLeaves mctx next headIds givens loc (fst g) (snd g))
-            ctx)
-
 -- A leaf over head variables names the `requires` to add; a ground one names the
 -- missing instance.  A leaf mentioning a variable the head does not bind has no
 -- `requires` to name and is left to the goal's use.
 reportSuperContextLeaf : ModuleCtx ->
-  String ->
-  List (String, Int) ->
-  Option Loc ->
-  Bool ->
+  SuperCheck ->
   IfaceRef ->
   List Mono ->
   (IfaceRef, List Mono) ->
   Unit
-reportSuperContextLeaf mctx subject roots loc derived sup supArgs (iface, args) =
+reportSuperContextLeaf mctx sc sup supArgs (iface, args) =
+  let subject = sc.scSubject
+  let derived = sc.scDerived
+  let loc = sc.scLoc
   let ids = flatMap monoUnboundIds args
-  let named = Ref (map (p => (snd p, fst p)) roots)
+  let named = superNamed sc
   let argsText = join " " (ppEach named (Ref 0) 3 args)
   let superGoal =
     "\{qualifiedIfaceLabel sup} \{join " " (ppEach named (Ref 0) 3 supArgs)}"
@@ -1235,7 +1228,7 @@ reportSuperContextLeaf mctx subject roots loc derived sup supArgs (iface, args) 
       TNoImpl
       loc
       (superContextNoImplMsg subject derived superGoal pred predBare)
-  else if allList (i => containsI i (map snd roots)) ids then
+  else if allList (i => containsI i (map snd sc.scRoots)) ids then
     pushTypeErrorOnceAt
       mctx
       TImplMissingRequires

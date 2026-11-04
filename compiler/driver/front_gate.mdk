@@ -17,7 +17,9 @@ import frontend.parser.{
 }
 import frontend.desugar.{desugarIn}
 import frontend.desugar_cache.{desugaredPrelude, preludeGeneration}
-import frontend.resolve.{internalGuardFor, resolveModulesErrorsByFile}
+import frontend.resolve.{
+  ResolveWalk(..), internalGuardFor, moduleTrusted, resolveModulesErrorsByFile
+}
 import driver.diagnostics.{
   CheckJson(..),
   Diag(..),
@@ -55,7 +57,7 @@ import driver.loader.{
   availableModulesHint,
 }
 import support.path.{dirOf}
-import support.util.{contains, joinNl, splitLast}
+import support.util.{joinNl, splitLast}
 import support.stage_count.{stageExit}
 import tools.target_check.{foldTargetDiags}
 
@@ -232,7 +234,7 @@ resolveRefusal allowInternal stdlibDir trusted rsrc csrc entry g =
           g.fgCoreD
           raw
           desugared
-          (internalGuardFor (allowInternal || contains mid trusted))
+          (internalGuardFor (moduleTrusted allowInternal trusted mid))
       match errs
         [] => None
         _ =>
@@ -245,12 +247,14 @@ resolveRefusal allowInternal stdlibDir trusted rsrc csrc entry g =
             (cliStdlibExports stdlibDir)
             (resolveModulesErrorsByFile
               (map modIdToPath g.fgMods)
-              allowInternal
-              trusted
-              (siblingPairsOf g.fgRoots g.fgMods)
-              (Some (preludeGeneration rsrc csrc))
-              g.fgRuntimeD
-              g.fgCoreD
+              ResolveWalk {
+                rwAllowInternal = allowInternal,
+                rwTrusted = trusted,
+                rwSibling = siblingPairsOf g.fgRoots g.fgMods,
+                rwPreludeKey = Some (preludeGeneration rsrc csrc),
+                rwRuntime = g.fgRuntimeD,
+                rwPrelude = g.fgCoreD,
+              }
               g.fgModsD))
       if text == "" then None else Some text
 

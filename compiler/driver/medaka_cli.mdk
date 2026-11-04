@@ -36,6 +36,9 @@ import tools.interface_cmd.{interfaceHelpText, runInterfaceCmd}
 import tools.new_cmd.{newProject}
 import driver.build_cmd.{
   BuildTarget(..),
+  BuildPaths(..),
+  BuildOptions(..),
+  defaultBuildOptions,
   ppBuildReport,
   runBuild,
   emitRtObj,
@@ -1573,18 +1576,22 @@ runBuildJsonCmd a allowInternal root stdlibDir input outOpt target =
           None => defaultOutPath target input
         let ask =
           GateAsk { askAllowInternal = allowInternal, askDiagJson = True }
-        -- `quietEmitStderr = True`: the child's verdict arrives as the
+        -- `boQuietEmit = True`: the child's verdict arrives as the
         -- envelope (`diagEnvelope`), so its human copy is not forwarded.
         match (runBuild
-          root
-          medaka
-          cc
           target
-          input
-          outPath
-          keepIrCli
-          True
-          stampBuild
+          BuildPaths {
+            bpRoot = root,
+            bpMedaka = medaka,
+            bpCc = cc,
+            bpInput = input,
+            bpOut = outPath,
+          }
+          { defaultBuildOptions |
+            boKeepIr = keepIrCli,
+            boQuietEmit = True,
+            boStamp = stampBuild,
+          }
           (Some ask))
           -- #2243: the build's own notes (a failed `--keep-ir` copy) join
           -- the entry file's `diagnostics` array rather than vanishing
@@ -1794,7 +1801,7 @@ emitHiddenDiagNote n =
 --      Not to the same `diags` VALUE: `check` passes its `trusted` set as
 --      `fiTrusted` and `run`'s single-file arm passes `[]`, a pre-existing
 --      asymmetry that `run`'s own arm documents.  The front end's guard is
---      `internalGuardFor (fiAllowInternal || contains mid fiTrusted)`, which
+--      `internalGuardFor (moduleTrusted fiAllowInternal fiTrusted mid)`, which
 --      decides only which constructs count as "internal" for `ResError` gating,
 --      and every `ResError` reaches `diags` as a `SevError` via `diagOfResError`,
 --      so the two results can differ ONLY in their ERROR set, never in the
@@ -2484,15 +2491,18 @@ runBuildPlainCmd a =
           Ok prelude =>
             nativeTreesReport target prelude
             match (runBuild
-              root
-              medaka
-              cc
               target
-              inputAbs
-              outPath
-              keepIrCli
-              False
-              stampBuild
+              BuildPaths {
+                bpRoot = root,
+                bpMedaka = medaka,
+                bpCc = cc,
+                bpInput = inputAbs,
+                bpOut = outPath,
+              }
+              { defaultBuildOptions |
+                boKeepIr = keepIrCli,
+                boStamp = stampBuild,
+              }
               (Some GateAsk {
                 askAllowInternal = allowInternal,
                 askDiagJson = False,

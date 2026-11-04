@@ -1310,7 +1310,7 @@ both landed — see item 9. #2549 is landed for its first half only — see item
    runs `checkJsonFileParts` in the parent plus the child (`runBuildJsonCmd`), because the
    child has no machine channel and `runCommand` takes no environment — item 16's reading,
    unchanged. The parent therefore still typechecks on the `--json` route alone, and that
-   double render is why the route passes `quietEmitStderr`: the envelope already carries
+   double render is why the route passes `boQuietEmit`: the envelope already carries
    every diagnostic, so forwarding the child's human copy would report one diagnostic twice
    on two channels, against `docs/ops/CLI-CONFORMANCE.md` §4's exemplar X9. A FAILING emit
    is unaffected — its text still rides `ppBuildReport` into `cjBuildFailedJson`.
