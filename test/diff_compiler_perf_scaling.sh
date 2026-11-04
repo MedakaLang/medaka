@@ -1561,7 +1561,7 @@ gen_reexports() {
 # fixture in this file typechecked 0-DIAGNOSTIC by design, so the error path was
 # measured NOWHERE — which is exactly how resolve's did-you-mean search stayed
 # O(unbound names x in-scope names) unnoticed, on the path `medaka check` and the LSP
-# (lsp.mdk's analyzeLocated, recomputed on every document change) both run. A
+# (lsp.mdk's `fileFront` run, recomputed on every document change) both run. A
 # half-typed buffer is the single most common input an editor ever sends, and a
 # half-typed buffer IS "many unbound names".
 #

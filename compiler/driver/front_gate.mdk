@@ -18,7 +18,7 @@ import frontend.parser.{
 import frontend.desugar.{desugarIn}
 import frontend.desugar_cache.{desugaredPrelude, preludeGeneration}
 import frontend.resolve.{
-  ResolveWalk(..), internalGuardFor, resolveModulesErrorsByFile
+  ResolveWalk(..), internalGuardFor, moduleTrusted, resolveModulesErrorsByFile
 }
 import driver.diagnostics.{
   CheckJson(..),
@@ -57,7 +57,7 @@ import driver.loader.{
   availableModulesHint,
 }
 import support.path.{dirOf}
-import support.util.{contains, joinNl, splitLast}
+import support.util.{joinNl, splitLast}
 import support.stage_count.{stageExit}
 import tools.target_check.{foldTargetDiags}
 
@@ -234,7 +234,7 @@ resolveRefusal allowInternal stdlibDir trusted rsrc csrc entry g =
           g.fgCoreD
           raw
           desugared
-          (internalGuardFor (allowInternal || contains mid trusted))
+          (internalGuardFor (moduleTrusted allowInternal trusted mid))
       match errs
         [] => None
         _ =>

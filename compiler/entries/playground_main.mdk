@@ -106,7 +106,8 @@ import driver.loader.{
 import driver.diagnostics.{
   analyzeProjectKeyed,
   ProjectLoad(..),
-  ProjectQuery(..),
+  freshLoad,
+  openQuery,
   fileFront,
   FrontOutput(..),
   exportsAmong,
@@ -424,20 +425,10 @@ analyzeMulti : Bool ->
 analyzeMulti emit rsrc csrc tsrc entry _runtimeP _coreP roots loaded exportsFor =
   let mods = map dropPath loaded
   let paths = map ((mid, path, _) => (mid, path)) loaded
-  let cacheRef = Ref []
-  let (keyed, results) = analyzeProjectKeyed exportsFor ProjectQuery {
-    pqLoad = ProjectLoad {
-      plCache = cacheRef,
-      plParseCache = playgroundParseCache,
-      plRead = _ => None,
-      plEntry = entry,
-      plRoots = roots,
-      plRuntimeSrc = rsrc,
-      plCoreSrc = csrc,
-    },
-    pqAllowInternal = True,
-    pqTrusted = [],
+  let load = { freshLoad (_ => None) entry roots rsrc csrc |
+    plParseCache = playgroundParseCache,
   }
+  let (keyed, results) = analyzeProjectKeyed exportsFor (openQuery load)
   let outputs = match keyed
     Some ((_, o), _) => o
     None => emptyDriveOutputs ()
@@ -566,7 +557,7 @@ mainShapeError decls = match findMainFunDef decls
 -- producer on BOTH arms that reach here, after this call site was written:
 --   * single module — `analyzeFrom` → `checkOneDiags` → `checkModulesEntryFullSplit`
 --     (#2155's SET-OR-CLEAR write);
---   * multi module  — `analyzeProject` → `typecheckPassReport` → `graphCollect` →
+--   * multi module  — `analyzeProject` → `checkChainReport` → `graphCollect` →
 --     `setMainSchemeIfEntry` (#2246's).
 -- Both run BEFORE this point on every path that reaches it and hand their drive's
 -- outputs down (`analyzeSingle`, `analyzeMulti`), which is what `doEmit`'s

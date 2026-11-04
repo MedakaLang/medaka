@@ -6,7 +6,6 @@ import list.{take, drop}
 -- over hand-built values; a scheme's context surviving a later drive and a
 -- shadowing binding's context (#2054); published schemes holding no Link; and
 -- the partial analysis a drive returns (locals, seed, module).
-import support.ordmap.{omEmpty}
 import test.{
   expectEqual, expectNotEqual, expectEach, expectTrue, expectFalse,
   expectGreaterThan, Expectation, fail
@@ -45,7 +44,7 @@ import types.tc_solve_test_support.{
 }
 import types.tc_test_support.{intM}
 import driver.diagnostics.{
-  analyzeProjectReport, noStdlibExports, ProjectLoad(..), ProjectQuery(..)
+  analyzeProjectReport, noStdlibExports, freshLoad, openQuery
 }
 import tools.lsp.{typeAtPoint}
 import test_process.{withScratchDir}
@@ -1417,19 +1416,10 @@ projectReport view rsrc csrc dir broken =
     writeFile entry (hoverEntry broken),
   )
     (Ok _, Ok _) =>
-      let (report, _) = analyzeProjectReport noStdlibExports ProjectQuery {
-        pqLoad = ProjectLoad {
-          plCache = Ref [],
-          plParseCache = Ref omEmpty,
-          plRead = _ => None,
-          plEntry = entry,
-          plRoots = [dir, "stdlib"],
-          plRuntimeSrc = rsrc,
-          plCoreSrc = csrc,
-        },
-        pqAllowInternal = True,
-        pqTrusted = [],
-      }
+      let (report, _) =
+        analyzeProjectReport
+          noStdlibExports
+          (openQuery (freshLoad (_ => None) entry [dir, "stdlib"] rsrc csrc))
       match report
         Some r => Ok (view r)
         None => Err "no report"

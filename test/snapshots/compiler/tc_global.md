@@ -1,5 +1,5 @@
 # META
-source_lines=2988
+source_lines=2989
 stages=DESUGAR,MARK
 # SOURCE
 -- tc_global: the whole-graph and declaration-level checks that need inference: the coherence scan,
@@ -1054,50 +1054,51 @@ checkImplSuperContexts : ModuleCtx ->
   List ImplRow ->
   Decl ->
   Unit
-checkImplSuperContexts mctx decls ce cur rows = go
-  where
-    go (DAttrib _ d) = go d
-    go (DImpl { iface, tys, reqs, implOrigin = o, implIfaceLoc = ifaceLoc, ... }) =
-      let derived = isNone ifaceLoc
-      let loc = if derived then derivedImplDeclLoc decls tys else ifaceLoc
-      match ceLookupAt (regKeyOfTab (ifaceTabKey o iface)) cur ce
-        Some r if listLen (ceRowTyparams r) == listLen tys =>
-          let (implTvMap, headMonos) = implHeadMonos mctx tys
-          let roots = implHeadTypeVarRoots implTvMap
-          let headIds =
-            omFromNames (map (p => intToString (snd p)) roots) omEmpty
-          let declared = map (requirePredicateSlot mctx implTvMap) reqs
-          let givens =
+-- Top level, not a local `go`: `test/catch_all_census.ledger` lists top-level
+-- functions only, so a local walker would hide the wildcard arm over `Decl` from the
+-- audit that visits every catch-all when an AST constructor is added.
+checkImplSuperContexts mctx decls ce cur rows (DAttrib _ d) =
+  checkImplSuperContexts mctx decls ce cur rows d
+checkImplSuperContexts mctx decls ce cur rows (DImpl { iface, tys, reqs, implOrigin = o, implIfaceLoc = ifaceLoc, ... }) =
+  let derived = isNone ifaceLoc
+  let loc = if derived then derivedImplDeclLoc decls tys else ifaceLoc
+  match ceLookupAt (regKeyOfTab (ifaceTabKey o iface)) cur ce
+    Some r if listLen (ceRowTyparams r) == listLen tys =>
+      let (implTvMap, headMonos) = implHeadMonos mctx tys
+      let roots = implHeadTypeVarRoots implTvMap
+      let headIds = omFromNames (map (p => intToString (snd p)) roots) omEmpty
+      let declared = map (requirePredicateSlot mctx implTvMap) reqs
+      let givens =
+        declared
+          ++ flatMap
+            (s => map fst (predicateSlotKnownSupers mctx.mcGraph s))
             declared
-              ++ flatMap
-                (s => map fst (predicateSlotKnownSupers mctx.mcGraph s))
-                declared
-          let subject = "impl \{iface} \{join " " (map ppTyAtom tys)}"
-          let check = SuperCheck {
-            scSubject = subject,
-            scRoots = roots,
-            scHeadIds = headIds,
-            scGivens = givens,
-            scLoc = loc,
-            scDerived = derived,
-          }
-          let subst = zip (ceRowTyparams r) tys
-          let argsOf =
-            sup =>
-              mapAll
-                (p => lookupPos p (ceRowTyparams r) headMonos)
-                (superParamsOf sup)
-          fold
-            (_ sup => match argsOf sup
-              Some supArgs =>
-                let supRef = superIfaceRef sup
-                let covered = _ => superRowExists rows subst sup
-                checkSuperInstanceContext mctx check supRef supArgs covered
-              None => ())
-            ()
-            (ceRowSupers r)
-        _ => ()
-    go _ = ()
+      let subject = "impl \{iface} \{join " " (map ppTyAtom tys)}"
+      let check = SuperCheck {
+        scSubject = subject,
+        scRoots = roots,
+        scHeadIds = headIds,
+        scGivens = givens,
+        scLoc = loc,
+        scDerived = derived,
+      }
+      let subst = zip (ceRowTyparams r) tys
+      let argsOf =
+        sup =>
+          mapAll
+            (p => lookupPos p (ceRowTyparams r) headMonos)
+            (superParamsOf sup)
+      fold
+        (_ sup => match argsOf sup
+          Some supArgs =>
+            let supRef = superIfaceRef sup
+            let covered = _ => superRowExists rows subst sup
+            checkSuperInstanceContext mctx check supRef supArgs covered
+          None => ())
+        ()
+        (ceRowSupers r)
+    _ => ()
+checkImplSuperContexts _mctx _ _ _ _ _ = ()
 
 -- The span of the `data`/`newtype` declaration a derived impl's head names.
 derivedImplDeclLoc : List Decl -> List Ty -> Option Loc
@@ -3137,7 +3138,9 @@ numDictObls gctx (app :: rest) =
 (DTypeSig true "checkSuperImpls" (TyFun (TyCon "ModuleCtx") (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyFun (TyCon "ClassEnv") (TyFun (TyCon "ImplEnv") (TyFun (TyCon "Int") (TyCon "Unit")))))))
 (DFunDef false "checkSuperImpls" ((PVar "mctx") (PVar "userDecls") (PVar "ce") (PVar "ie") (PVar "cur")) (EBlock (DoLet false false (PVar "rows") (EApp (EApp (EVar "ieRowsVisibleAt") (EVar "cur")) (EVar "ie"))) (DoExpr (EApp (EApp (EVar "each") (EApp (EApp (EApp (EApp (EApp (EVar "checkImplSuperContexts") (EVar "mctx")) (EVar "userDecls")) (EVar "ce")) (EVar "cur")) (EVar "rows"))) (EVar "userDecls")))))
 (DTypeSig false "checkImplSuperContexts" (TyFun (TyCon "ModuleCtx") (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyFun (TyCon "ClassEnv") (TyFun (TyCon "Int") (TyFun (TyApp (TyCon "List") (TyCon "ImplRow")) (TyFun (TyCon "Decl") (TyCon "Unit"))))))))
-(DFunDef false "checkImplSuperContexts" ((PVar "mctx") (PVar "decls") (PVar "ce") (PVar "cur") (PVar "rows")) (ELetGroup ((lgb "go" (clause ((PCon "DAttrib" PWild (PVar "d"))) (EApp (EVar "go") (EVar "d"))) (clause ((PRec "DImpl" ((rf "iface" None) (rf "tys" None) (rf "reqs" None) (rf "implOrigin" (PVar "o")) (rf "implIfaceLoc" (PVar "ifaceLoc"))) true)) (EBlock (DoLet false false (PVar "derived") (EApp (EVar "isNone") (EVar "ifaceLoc"))) (DoLet false false (PVar "loc") (EIf (EVar "derived") (EApp (EApp (EVar "derivedImplDeclLoc") (EVar "decls")) (EVar "tys")) (EVar "ifaceLoc"))) (DoExpr (EMatch (EApp (EApp (EApp (EVar "ceLookupAt") (EApp (EVar "regKeyOfTab") (EApp (EApp (EVar "ifaceTabKey") (EVar "o")) (EVar "iface")))) (EVar "cur")) (EVar "ce")) (arm (PCon "Some" (PVar "r")) ((GBool (EBinOp "==" (EApp (EVar "listLen") (EApp (EVar "ceRowTyparams") (EVar "r"))) (EApp (EVar "listLen") (EVar "tys"))))) (EBlock (DoLet false false (PTuple (PVar "implTvMap") (PVar "headMonos")) (EApp (EApp (EVar "implHeadMonos") (EVar "mctx")) (EVar "tys"))) (DoLet false false (PVar "roots") (EApp (EVar "implHeadTypeVarRoots") (EVar "implTvMap"))) (DoLet false false (PVar "headIds") (EApp (EApp (EVar "omFromNames") (EApp (EApp (EVar "map") (ELam ((PVar "p")) (EApp (EVar "intToString") (EApp (EVar "snd") (EVar "p"))))) (EVar "roots"))) (EVar "omEmpty"))) (DoLet false false (PVar "declared") (EApp (EApp (EVar "map") (EApp (EApp (EVar "requirePredicateSlot") (EVar "mctx")) (EVar "implTvMap"))) (EVar "reqs"))) (DoLet false false (PVar "givens") (EBinOp "++" (EVar "declared") (EApp (EApp (EVar "flatMap") (ELam ((PVar "s")) (EApp (EApp (EVar "map") (EVar "fst")) (EApp (EApp (EVar "predicateSlotKnownSupers") (EFieldAccess (EVar "mctx") "mcGraph")) (EVar "s"))))) (EVar "declared")))) (DoLet false false (PVar "subject") (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "impl ")) (EApp (EVar "display") (EVar "iface"))) (ELit (LString " "))) (EApp (EVar "display") (EApp (EApp (EVar "join") (ELit (LString " "))) (EApp (EApp (EVar "map") (EVar "ppTyAtom")) (EVar "tys"))))) (ELit (LString "")))) (DoLet false false (PVar "check") (ERecordCreate "SuperCheck" ((fa "scSubject" (EVar "subject")) (fa "scRoots" (EVar "roots")) (fa "scHeadIds" (EVar "headIds")) (fa "scGivens" (EVar "givens")) (fa "scLoc" (EVar "loc")) (fa "scDerived" (EVar "derived"))))) (DoLet false false (PVar "subst") (EApp (EApp (EVar "zip") (EApp (EVar "ceRowTyparams") (EVar "r"))) (EVar "tys"))) (DoLet false false (PVar "argsOf") (ELam ((PVar "sup")) (EApp (EApp (EVar "mapAll") (ELam ((PVar "p")) (EApp (EApp (EApp (EVar "lookupPos") (EVar "p")) (EApp (EVar "ceRowTyparams") (EVar "r"))) (EVar "headMonos")))) (EApp (EVar "superParamsOf") (EVar "sup"))))) (DoExpr (EApp (EApp (EApp (EVar "fold") (ELam (PWild (PVar "sup")) (EMatch (EApp (EVar "argsOf") (EVar "sup")) (arm (PCon "Some" (PVar "supArgs")) () (EBlock (DoLet false false (PVar "supRef") (EApp (EVar "superIfaceRef") (EVar "sup"))) (DoLet false false (PVar "covered") (ELam (PWild) (EApp (EApp (EApp (EVar "superRowExists") (EVar "rows")) (EVar "subst")) (EVar "sup")))) (DoExpr (EApp (EApp (EApp (EApp (EApp (EVar "checkSuperInstanceContext") (EVar "mctx")) (EVar "check")) (EVar "supRef")) (EVar "supArgs")) (EVar "covered"))))) (arm (PCon "None") () (ELit LUnit))))) (ELit LUnit)) (EApp (EVar "ceRowSupers") (EVar "r")))))) (arm PWild () (ELit LUnit)))))) (clause (PWild) (ELit LUnit)))) (EVar "go")))
+(DFunDef false "checkImplSuperContexts" ((PVar "mctx") (PVar "decls") (PVar "ce") (PVar "cur") (PVar "rows") (PCon "DAttrib" PWild (PVar "d"))) (EApp (EApp (EApp (EApp (EApp (EApp (EVar "checkImplSuperContexts") (EVar "mctx")) (EVar "decls")) (EVar "ce")) (EVar "cur")) (EVar "rows")) (EVar "d")))
+(DFunDef false "checkImplSuperContexts" ((PVar "mctx") (PVar "decls") (PVar "ce") (PVar "cur") (PVar "rows") (PRec "DImpl" ((rf "iface" None) (rf "tys" None) (rf "reqs" None) (rf "implOrigin" (PVar "o")) (rf "implIfaceLoc" (PVar "ifaceLoc"))) true)) (EBlock (DoLet false false (PVar "derived") (EApp (EVar "isNone") (EVar "ifaceLoc"))) (DoLet false false (PVar "loc") (EIf (EVar "derived") (EApp (EApp (EVar "derivedImplDeclLoc") (EVar "decls")) (EVar "tys")) (EVar "ifaceLoc"))) (DoExpr (EMatch (EApp (EApp (EApp (EVar "ceLookupAt") (EApp (EVar "regKeyOfTab") (EApp (EApp (EVar "ifaceTabKey") (EVar "o")) (EVar "iface")))) (EVar "cur")) (EVar "ce")) (arm (PCon "Some" (PVar "r")) ((GBool (EBinOp "==" (EApp (EVar "listLen") (EApp (EVar "ceRowTyparams") (EVar "r"))) (EApp (EVar "listLen") (EVar "tys"))))) (EBlock (DoLet false false (PTuple (PVar "implTvMap") (PVar "headMonos")) (EApp (EApp (EVar "implHeadMonos") (EVar "mctx")) (EVar "tys"))) (DoLet false false (PVar "roots") (EApp (EVar "implHeadTypeVarRoots") (EVar "implTvMap"))) (DoLet false false (PVar "headIds") (EApp (EApp (EVar "omFromNames") (EApp (EApp (EVar "map") (ELam ((PVar "p")) (EApp (EVar "intToString") (EApp (EVar "snd") (EVar "p"))))) (EVar "roots"))) (EVar "omEmpty"))) (DoLet false false (PVar "declared") (EApp (EApp (EVar "map") (EApp (EApp (EVar "requirePredicateSlot") (EVar "mctx")) (EVar "implTvMap"))) (EVar "reqs"))) (DoLet false false (PVar "givens") (EBinOp "++" (EVar "declared") (EApp (EApp (EVar "flatMap") (ELam ((PVar "s")) (EApp (EApp (EVar "map") (EVar "fst")) (EApp (EApp (EVar "predicateSlotKnownSupers") (EFieldAccess (EVar "mctx") "mcGraph")) (EVar "s"))))) (EVar "declared")))) (DoLet false false (PVar "subject") (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "impl ")) (EApp (EVar "display") (EVar "iface"))) (ELit (LString " "))) (EApp (EVar "display") (EApp (EApp (EVar "join") (ELit (LString " "))) (EApp (EApp (EVar "map") (EVar "ppTyAtom")) (EVar "tys"))))) (ELit (LString "")))) (DoLet false false (PVar "check") (ERecordCreate "SuperCheck" ((fa "scSubject" (EVar "subject")) (fa "scRoots" (EVar "roots")) (fa "scHeadIds" (EVar "headIds")) (fa "scGivens" (EVar "givens")) (fa "scLoc" (EVar "loc")) (fa "scDerived" (EVar "derived"))))) (DoLet false false (PVar "subst") (EApp (EApp (EVar "zip") (EApp (EVar "ceRowTyparams") (EVar "r"))) (EVar "tys"))) (DoLet false false (PVar "argsOf") (ELam ((PVar "sup")) (EApp (EApp (EVar "mapAll") (ELam ((PVar "p")) (EApp (EApp (EApp (EVar "lookupPos") (EVar "p")) (EApp (EVar "ceRowTyparams") (EVar "r"))) (EVar "headMonos")))) (EApp (EVar "superParamsOf") (EVar "sup"))))) (DoExpr (EApp (EApp (EApp (EVar "fold") (ELam (PWild (PVar "sup")) (EMatch (EApp (EVar "argsOf") (EVar "sup")) (arm (PCon "Some" (PVar "supArgs")) () (EBlock (DoLet false false (PVar "supRef") (EApp (EVar "superIfaceRef") (EVar "sup"))) (DoLet false false (PVar "covered") (ELam (PWild) (EApp (EApp (EApp (EVar "superRowExists") (EVar "rows")) (EVar "subst")) (EVar "sup")))) (DoExpr (EApp (EApp (EApp (EApp (EApp (EVar "checkSuperInstanceContext") (EVar "mctx")) (EVar "check")) (EVar "supRef")) (EVar "supArgs")) (EVar "covered"))))) (arm (PCon "None") () (ELit LUnit))))) (ELit LUnit)) (EApp (EVar "ceRowSupers") (EVar "r")))))) (arm PWild () (ELit LUnit))))))
+(DFunDef false "checkImplSuperContexts" ((PVar "_mctx") PWild PWild PWild PWild PWild) (ELit LUnit))
 (DTypeSig false "derivedImplDeclLoc" (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyFun (TyApp (TyCon "List") (TyCon "Ty")) (TyApp (TyCon "Option") (TyCon "Loc")))))
 (DFunDef false "derivedImplDeclLoc" ((PVar "decls") (PVar "tys")) (EMatch (EApp (EApp (EVar "flatMap") (EVar "tyConNamesInTy")) (EVar "tys")) (arm (PList (PVar "n")) () (EMatch (EApp (EApp (EVar "flatMap") (EApp (EVar "declNameLocs") (EVar "n"))) (EVar "decls")) (arm (PCons (PVar "l") PWild) () (EApp (EVar "Some") (EVar "l"))) (arm (PList) () (EVar "None")))) (arm PWild () (EVar "None"))))
 (DTypeSig false "declNameLocs" (TyFun (TyCon "String") (TyFun (TyCon "Decl") (TyApp (TyCon "List") (TyCon "Loc")))))
@@ -3478,7 +3481,9 @@ numDictObls gctx (app :: rest) =
 (DTypeSig true "checkSuperImpls" (TyFun (TyCon "ModuleCtx") (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyFun (TyCon "ClassEnv") (TyFun (TyCon "ImplEnv") (TyFun (TyCon "Int") (TyCon "Unit")))))))
 (DFunDef false "checkSuperImpls" ((PVar "mctx") (PVar "userDecls") (PVar "ce") (PVar "ie") (PVar "cur")) (EBlock (DoLet false false (PVar "rows") (EApp (EApp (EVar "ieRowsVisibleAt") (EVar "cur")) (EVar "ie"))) (DoExpr (EApp (EApp (EVar "each") (EApp (EApp (EApp (EApp (EApp (EVar "checkImplSuperContexts") (EVar "mctx")) (EVar "userDecls")) (EVar "ce")) (EVar "cur")) (EVar "rows"))) (EVar "userDecls")))))
 (DTypeSig false "checkImplSuperContexts" (TyFun (TyCon "ModuleCtx") (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyFun (TyCon "ClassEnv") (TyFun (TyCon "Int") (TyFun (TyApp (TyCon "List") (TyCon "ImplRow")) (TyFun (TyCon "Decl") (TyCon "Unit"))))))))
-(DFunDef false "checkImplSuperContexts" ((PVar "mctx") (PVar "decls") (PVar "ce") (PVar "cur") (PVar "rows")) (ELetGroup ((lgb "go" (clause ((PCon "DAttrib" PWild (PVar "d"))) (EApp (EVar "go") (EVar "d"))) (clause ((PRec "DImpl" ((rf "iface" None) (rf "tys" None) (rf "reqs" None) (rf "implOrigin" (PVar "o")) (rf "implIfaceLoc" (PVar "ifaceLoc"))) true)) (EBlock (DoLet false false (PVar "derived") (EApp (EVar "isNone") (EVar "ifaceLoc"))) (DoLet false false (PVar "loc") (EIf (EVar "derived") (EApp (EApp (EVar "derivedImplDeclLoc") (EVar "decls")) (EVar "tys")) (EVar "ifaceLoc"))) (DoExpr (EMatch (EApp (EApp (EApp (EVar "ceLookupAt") (EApp (EVar "regKeyOfTab") (EApp (EApp (EVar "ifaceTabKey") (EVar "o")) (EVar "iface")))) (EVar "cur")) (EVar "ce")) (arm (PCon "Some" (PVar "r")) ((GBool (EBinOp "==" (EApp (EVar "listLen") (EApp (EVar "ceRowTyparams") (EVar "r"))) (EApp (EVar "listLen") (EVar "tys"))))) (EBlock (DoLet false false (PTuple (PVar "implTvMap") (PVar "headMonos")) (EApp (EApp (EVar "implHeadMonos") (EVar "mctx")) (EVar "tys"))) (DoLet false false (PVar "roots") (EApp (EVar "implHeadTypeVarRoots") (EVar "implTvMap"))) (DoLet false false (PVar "headIds") (EApp (EApp (EVar "omFromNames") (EApp (EApp (EMethodRef "map") (ELam ((PVar "p")) (EApp (EVar "intToString") (EApp (EVar "snd") (EVar "p"))))) (EVar "roots"))) (EVar "omEmpty"))) (DoLet false false (PVar "declared") (EApp (EApp (EMethodRef "map") (EApp (EApp (EVar "requirePredicateSlot") (EVar "mctx")) (EVar "implTvMap"))) (EVar "reqs"))) (DoLet false false (PVar "givens") (EBinOp "++" (EVar "declared") (EApp (EApp (EDictApp "flatMap") (ELam ((PVar "s")) (EApp (EApp (EMethodRef "map") (EVar "fst")) (EApp (EApp (EVar "predicateSlotKnownSupers") (EFieldAccess (EVar "mctx") "mcGraph")) (EVar "s"))))) (EVar "declared")))) (DoLet false false (PVar "subject") (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "impl ")) (EApp (EMethodRef "display") (EVar "iface"))) (ELit (LString " "))) (EApp (EMethodRef "display") (EApp (EApp (EVar "join") (ELit (LString " "))) (EApp (EApp (EMethodRef "map") (EVar "ppTyAtom")) (EVar "tys"))))) (ELit (LString "")))) (DoLet false false (PVar "check") (ERecordCreate "SuperCheck" ((fa "scSubject" (EVar "subject")) (fa "scRoots" (EVar "roots")) (fa "scHeadIds" (EVar "headIds")) (fa "scGivens" (EVar "givens")) (fa "scLoc" (EVar "loc")) (fa "scDerived" (EVar "derived"))))) (DoLet false false (PVar "subst") (EApp (EApp (EVar "zip") (EApp (EVar "ceRowTyparams") (EVar "r"))) (EVar "tys"))) (DoLet false false (PVar "argsOf") (ELam ((PVar "sup")) (EApp (EApp (EVar "mapAll") (ELam ((PVar "p")) (EApp (EApp (EApp (EVar "lookupPos") (EVar "p")) (EApp (EVar "ceRowTyparams") (EVar "r"))) (EVar "headMonos")))) (EApp (EVar "superParamsOf") (EVar "sup"))))) (DoExpr (EApp (EApp (EApp (EMethodRef "fold") (ELam (PWild (PVar "sup")) (EMatch (EApp (EVar "argsOf") (EVar "sup")) (arm (PCon "Some" (PVar "supArgs")) () (EBlock (DoLet false false (PVar "supRef") (EApp (EVar "superIfaceRef") (EVar "sup"))) (DoLet false false (PVar "covered") (ELam (PWild) (EApp (EApp (EApp (EVar "superRowExists") (EVar "rows")) (EVar "subst")) (EVar "sup")))) (DoExpr (EApp (EApp (EApp (EApp (EApp (EVar "checkSuperInstanceContext") (EVar "mctx")) (EVar "check")) (EVar "supRef")) (EVar "supArgs")) (EVar "covered"))))) (arm (PCon "None") () (ELit LUnit))))) (ELit LUnit)) (EApp (EVar "ceRowSupers") (EVar "r")))))) (arm PWild () (ELit LUnit)))))) (clause (PWild) (ELit LUnit)))) (EVar "go")))
+(DFunDef false "checkImplSuperContexts" ((PVar "mctx") (PVar "decls") (PVar "ce") (PVar "cur") (PVar "rows") (PCon "DAttrib" PWild (PVar "d"))) (EApp (EApp (EApp (EApp (EApp (EApp (EVar "checkImplSuperContexts") (EVar "mctx")) (EVar "decls")) (EVar "ce")) (EVar "cur")) (EVar "rows")) (EVar "d")))
+(DFunDef false "checkImplSuperContexts" ((PVar "mctx") (PVar "decls") (PVar "ce") (PVar "cur") (PVar "rows") (PRec "DImpl" ((rf "iface" None) (rf "tys" None) (rf "reqs" None) (rf "implOrigin" (PVar "o")) (rf "implIfaceLoc" (PVar "ifaceLoc"))) true)) (EBlock (DoLet false false (PVar "derived") (EApp (EVar "isNone") (EVar "ifaceLoc"))) (DoLet false false (PVar "loc") (EIf (EVar "derived") (EApp (EApp (EVar "derivedImplDeclLoc") (EVar "decls")) (EVar "tys")) (EVar "ifaceLoc"))) (DoExpr (EMatch (EApp (EApp (EApp (EVar "ceLookupAt") (EApp (EVar "regKeyOfTab") (EApp (EApp (EVar "ifaceTabKey") (EVar "o")) (EVar "iface")))) (EVar "cur")) (EVar "ce")) (arm (PCon "Some" (PVar "r")) ((GBool (EBinOp "==" (EApp (EVar "listLen") (EApp (EVar "ceRowTyparams") (EVar "r"))) (EApp (EVar "listLen") (EVar "tys"))))) (EBlock (DoLet false false (PTuple (PVar "implTvMap") (PVar "headMonos")) (EApp (EApp (EVar "implHeadMonos") (EVar "mctx")) (EVar "tys"))) (DoLet false false (PVar "roots") (EApp (EVar "implHeadTypeVarRoots") (EVar "implTvMap"))) (DoLet false false (PVar "headIds") (EApp (EApp (EVar "omFromNames") (EApp (EApp (EMethodRef "map") (ELam ((PVar "p")) (EApp (EVar "intToString") (EApp (EVar "snd") (EVar "p"))))) (EVar "roots"))) (EVar "omEmpty"))) (DoLet false false (PVar "declared") (EApp (EApp (EMethodRef "map") (EApp (EApp (EVar "requirePredicateSlot") (EVar "mctx")) (EVar "implTvMap"))) (EVar "reqs"))) (DoLet false false (PVar "givens") (EBinOp "++" (EVar "declared") (EApp (EApp (EDictApp "flatMap") (ELam ((PVar "s")) (EApp (EApp (EMethodRef "map") (EVar "fst")) (EApp (EApp (EVar "predicateSlotKnownSupers") (EFieldAccess (EVar "mctx") "mcGraph")) (EVar "s"))))) (EVar "declared")))) (DoLet false false (PVar "subject") (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "impl ")) (EApp (EMethodRef "display") (EVar "iface"))) (ELit (LString " "))) (EApp (EMethodRef "display") (EApp (EApp (EVar "join") (ELit (LString " "))) (EApp (EApp (EMethodRef "map") (EVar "ppTyAtom")) (EVar "tys"))))) (ELit (LString "")))) (DoLet false false (PVar "check") (ERecordCreate "SuperCheck" ((fa "scSubject" (EVar "subject")) (fa "scRoots" (EVar "roots")) (fa "scHeadIds" (EVar "headIds")) (fa "scGivens" (EVar "givens")) (fa "scLoc" (EVar "loc")) (fa "scDerived" (EVar "derived"))))) (DoLet false false (PVar "subst") (EApp (EApp (EVar "zip") (EApp (EVar "ceRowTyparams") (EVar "r"))) (EVar "tys"))) (DoLet false false (PVar "argsOf") (ELam ((PVar "sup")) (EApp (EApp (EVar "mapAll") (ELam ((PVar "p")) (EApp (EApp (EApp (EVar "lookupPos") (EVar "p")) (EApp (EVar "ceRowTyparams") (EVar "r"))) (EVar "headMonos")))) (EApp (EVar "superParamsOf") (EVar "sup"))))) (DoExpr (EApp (EApp (EApp (EMethodRef "fold") (ELam (PWild (PVar "sup")) (EMatch (EApp (EVar "argsOf") (EVar "sup")) (arm (PCon "Some" (PVar "supArgs")) () (EBlock (DoLet false false (PVar "supRef") (EApp (EVar "superIfaceRef") (EVar "sup"))) (DoLet false false (PVar "covered") (ELam (PWild) (EApp (EApp (EApp (EVar "superRowExists") (EVar "rows")) (EVar "subst")) (EVar "sup")))) (DoExpr (EApp (EApp (EApp (EApp (EApp (EVar "checkSuperInstanceContext") (EVar "mctx")) (EVar "check")) (EVar "supRef")) (EVar "supArgs")) (EVar "covered"))))) (arm (PCon "None") () (ELit LUnit))))) (ELit LUnit)) (EApp (EVar "ceRowSupers") (EVar "r")))))) (arm PWild () (ELit LUnit))))))
+(DFunDef false "checkImplSuperContexts" ((PVar "_mctx") PWild PWild PWild PWild PWild) (ELit LUnit))
 (DTypeSig false "derivedImplDeclLoc" (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyFun (TyApp (TyCon "List") (TyCon "Ty")) (TyApp (TyCon "Option") (TyCon "Loc")))))
 (DFunDef false "derivedImplDeclLoc" ((PVar "decls") (PVar "tys")) (EMatch (EApp (EApp (EDictApp "flatMap") (EVar "tyConNamesInTy")) (EVar "tys")) (arm (PList (PVar "n")) () (EMatch (EApp (EApp (EDictApp "flatMap") (EApp (EVar "declNameLocs") (EVar "n"))) (EVar "decls")) (arm (PCons (PVar "l") PWild) () (EApp (EVar "Some") (EVar "l"))) (arm (PList) () (EVar "None")))) (arm PWild () (EVar "None"))))
 (DTypeSig false "declNameLocs" (TyFun (TyCon "String") (TyFun (TyCon "Decl") (TyApp (TyCon "List") (TyCon "Loc")))))
