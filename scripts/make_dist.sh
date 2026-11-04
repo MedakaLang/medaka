@@ -60,7 +60,7 @@ esac
 
 ARTIFACT="medaka-${VERSION}-${OS_NAME}-${ARCH_NAME}"
 
-for f in "$REPO_ROOT/medaka" "$REPO_ROOT/medaka_emitter" "$REPO_ROOT/stdlib" "$REPO_ROOT/runtime/medaka_rt.c" "$REPO_ROOT/LICENSE" "$REPO_ROOT/LICENSE-bdwgc"; do
+for f in "$REPO_ROOT/medaka" "$REPO_ROOT/medaka_emitter" "$REPO_ROOT/stdlib" "$REPO_ROOT/runtime/medaka_rt.c" "$REPO_ROOT/runtime/medaka_abi.h" "$REPO_ROOT/LICENSE" "$REPO_ROOT/LICENSE-bdwgc"; do
   if [ ! -e "$f" ]; then
     echo "make_dist.sh: missing $f — run 'make medaka' first" >&2
     exit 1
@@ -77,6 +77,7 @@ cp "$REPO_ROOT/medaka" "$TREE/medaka"
 cp "$REPO_ROOT/medaka_emitter" "$TREE/medaka_emitter"
 cp -R "$REPO_ROOT/stdlib" "$TREE/stdlib"
 cp "$REPO_ROOT/runtime/medaka_rt.c" "$TREE/runtime/medaka_rt.c"
+cp "$REPO_ROOT/runtime/medaka_abi.h" "$TREE/runtime/medaka_abi.h"
 cp "$REPO_ROOT/LICENSE" "$TREE/LICENSE"
 cp "$REPO_ROOT/LICENSE-bdwgc" "$TREE/LICENSE-bdwgc"
 

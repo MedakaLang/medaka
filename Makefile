@@ -272,6 +272,9 @@ inlang-backend-extern-catalog-test:
 ## compiler/backend/hash_digest_test.mdk pins the `hashStringHex` / `hashFile`
 ## digests against vectors computed outside the engine; no entry imports it.
 ## `--native`: the file cases write real files.
+inlang-backend-runtime-layout-test:
+	./medaka test compiler/backend/runtime_layout_test.mdk
+
 inlang-backend-hash-digest-test:
 	./medaka test --native compiler/backend/hash_digest_test.mdk
 

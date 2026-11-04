@@ -360,6 +360,7 @@ SRC_STAMP="$ROOT/.medaka_emitter.srcstamp"
 # a stale-binary skip, precisely the silent wrongness the stamp exists to prevent. So
 # both the read and the write below are gated on $OUT being the default path.
 CLI_STAMP="$ROOT/.medaka.srcstamp"
+CLI_RUNTIME_STAMP="$ROOT/.medaka/cli-runtime.srcstamp"
 CLI_STAMP_APPLIES=0
 [ "$OUT" = "$ROOT/medaka" ] && CLI_STAMP_APPLIES=1
 
@@ -466,7 +467,7 @@ fp_full_file_list() {
   fi
   { printf '%s\n' "$_closure"
     find stdlib -name '*.mdk' -not -name '*_test.mdk' -print
-    find runtime -name '*.c' -print
+    find runtime \( -name '*.c' -o -name '*.h' \) -print
   } | LC_ALL=C sort -u
 }
 
@@ -477,8 +478,7 @@ src_fingerprint_full() {
     done ) | hash_stream | cut -d' ' -f1
 }
 
-# runtime/*.c ALONE. Not a build input to any stage-skip decision — FP_FULL already
-# covers runtime/*.c for the emitter, and FP_COMPILER deliberately excludes it because
+# Runtime C sources and headers are separate from FP_COMPILER, because
 # `liveSourceFingerprint` (a Medaka mirror) cannot read C. Its one consumer is $CLI_KEY
 # below: stage B LINKS $RT into ./medaka, so two trees differing only in an uncommitted
 # runtime/medaka_rt.c produce different binaries while sharing a FP_COMPILER, a
@@ -486,7 +486,7 @@ src_fingerprint_full() {
 # Keying the CLI on $FP_FULL instead would be correct but over-broad: the CLI cache
 # would then miss on every compiler edit outside the emitter's own closure.
 src_fingerprint_runtime() {
-  ( cd "$ROOT" && find runtime -name '*.c' -print | LC_ALL=C sort | while IFS= read -r f; do
+  ( cd "$ROOT" && find runtime \( -name '*.c' -o -name '*.h' \) -print | LC_ALL=C sort | while IFS= read -r f; do
       printf '%s\n' "$f"
       cat "$f"
     done ) | hash_stream | cut -d' ' -f1
@@ -1078,15 +1078,20 @@ fi
 # and every other caller keep relinking exactly as before. The opt-in skip below is
 # symmetric with stage A's — same fingerprint helpers, same stamp file pattern, same
 # "no stamp = unknown provenance = rebuild" fallback — but it compares FP_COMPILER,
-# because that is what stage B actually stamps into the binary.
+# and also checks the runtime fingerprint for the linked C runtime.
 CLI_STAMP_FP=""
+CLI_RUNTIME_STAMP_FP=""
+if [ -f "$CLI_RUNTIME_STAMP" ]; then
+  CLI_RUNTIME_STAMP_FP="$(cat "$CLI_RUNTIME_STAMP" 2>/dev/null)"
+fi
 if [ "$CLI_STAMP_APPLIES" = "1" ] && [ -f "$CLI_STAMP" ]; then
   CLI_STAMP_FP="$(cat "$CLI_STAMP" 2>/dev/null)"
 fi
 if [ "$FORCE_EMITTER_REBUILD" != "1" ] && [ "$SKIP_CLI_LINK_IF_FRESH" = "1" ] \
    && [ "$CLI_STAMP_APPLIES" = "1" ] \
-   && [ -x "$OUT" ] && [ -n "$CLI_STAMP_FP" ] && [ "$CLI_STAMP_FP" = "$FP_COMPILER" ]; then
-  echo "stage B: medaka up-to-date (compiler source fingerprint unchanged) — skipping rebuild."
+   && [ -x "$OUT" ] && [ -n "$CLI_STAMP_FP" ] && [ "$CLI_STAMP_FP" = "$FP_COMPILER" ] \
+   && [ -n "$CLI_RUNTIME_STAMP_FP" ] && [ "$CLI_RUNTIME_STAMP_FP" = "$FP_RUNTIME" ]; then
+  echo "stage B: medaka up-to-date (compiler and runtime fingerprints unchanged) — skipping rebuild."
 elif [ "$FORCE_EMITTER_REBUILD" != "1" ] && cache_get "$CLI_KEY" "$OUT"; then
   # Reached even with SKIP_CLI_LINK_IF_FRESH unset: a cache hit costs a file copy, so
   # there is nothing for the default "always relink" policy to buy here. The key pins
@@ -1226,6 +1231,10 @@ if [ "$CLI_STAMP_APPLIES" = "1" ]; then
   CLI_STAMP_NEW="$CLI_STAMP.new.$$"
   printf '%s\n' "$FP_COMPILER" > "$CLI_STAMP_NEW"
   mv "$CLI_STAMP_NEW" "$CLI_STAMP"
+  mkdir -p "$(dirname "$CLI_RUNTIME_STAMP")"
+  CLI_RUNTIME_STAMP_NEW="$CLI_RUNTIME_STAMP.new.$$"
+  printf '%s\n' "$FP_RUNTIME" > "$CLI_RUNTIME_STAMP_NEW"
+  mv "$CLI_RUNTIME_STAMP_NEW" "$CLI_RUNTIME_STAMP"
 fi
 
 echo

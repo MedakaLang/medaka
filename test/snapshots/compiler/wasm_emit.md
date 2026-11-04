@@ -1,7 +1,10 @@
 # META
-source_lines=11276
+source_lines=11283
 stages=DESUGAR,MARK
 # SOURCE
+import backend.runtime_layout.{
+  siteFileShift, siteLineShift, siteFileBits, siteLineBits, siteColumnBits
+}
 import ir.constructor_facts.{
   ConstructorFacts, declaredCtorArity, declaredCtorOwner, declaredCtorOrdinal
 }
@@ -5223,9 +5226,13 @@ valueArithName op = panic ("wasm A0: not a value-arith op '" ++ op ++ "'")
 sitePackedW : WasmEmit -> Loc -> Int
 sitePackedW emit (Loc f sl sc el ec)
   | f == "" || sl == 1 && sc == 0 && el == 1 && ec == 0 = 0
-  | sl < 0 || sl >= 16777216 || sc < 0 || sc >= 1048576 = 0
+  | sl < 0
+    || sl >= shiftLeft 1 siteLineBits
+    || sc < 0
+    || sc >= shiftLeft 1 siteColumnBits = 0
   | otherwise = match siteFileNumW emit f
-    Some n => n * 17592186044416 + sl * 1048576 + sc
+    Some n =>
+      n * shiftLeft 1 siteFileShift + sl * shiftLeft 1 siteLineShift + sc
     None => 0
 
 siteFileNumW : WasmEmit -> String -> Option Int
@@ -5233,7 +5240,7 @@ siteFileNumW emit f = match omLookup f !emit.siteFileNums
   Some n => Some n
   None =>
     let n = omSize !emit.siteFileNums + 1
-    if n >= 65536 then
+    if n >= shiftLeft 1 siteFileBits then
       None
     else
       setRef emit.siteFileNums (omInsert f n !emit.siteFileNums)
@@ -11279,6 +11286,7 @@ hasFamilyW prog symbol tag =
     Some family => WD.wasmFamilyTag family == tag
     None => False
 # DESUGAR
+(DUse false (UseGroup ("backend" "runtime_layout") ((mem "siteFileShift" false) (mem "siteLineShift" false) (mem "siteFileBits" false) (mem "siteLineBits" false) (mem "siteColumnBits" false))))
 (DUse false (UseGroup ("ir" "constructor_facts") ((mem "ConstructorFacts" false) (mem "declaredCtorArity" false) (mem "declaredCtorOwner" false) (mem "declaredCtorOrdinal" false))))
 (DUse false (UseGroup ("frontend" "runtime_constructors") ((mem "RuntimeOwner" true) (mem "RuntimeCtorId" true) (mem "namedRuntimeCtor" false) (mem "runtimeCtorFact" false) (mem "runtimeRoster" false) (mem "runtimeCtorName" false) (mem "runtimeOwnerWord" false))))
 (DUse false (UseAlias ("backend" "wasm_symbol_names") "WN"))
@@ -12177,9 +12185,9 @@ hasFamilyW prog symbol tag =
 (DFunDef false "valueArithName" ((PLit (LString "%"))) (ELit (LString "mod")))
 (DFunDef false "valueArithName" ((PVar "op")) (EApp (EVar "panic") (EBinOp "++" (EBinOp "++" (ELit (LString "wasm A0: not a value-arith op '")) (EVar "op")) (ELit (LString "'")))))
 (DTypeSig false "sitePackedW" (TyFun (TyCon "WasmEmit") (TyFun (TyCon "Loc") (TyCon "Int"))))
-(DFunDef false "sitePackedW" ((PVar "emit") (PCon "Loc" (PVar "f") (PVar "sl") (PVar "sc") (PVar "el") (PVar "ec"))) (EIf (EBinOp "||" (EBinOp "==" (EVar "f") (ELit (LString ""))) (EBinOp "&&" (EBinOp "&&" (EBinOp "&&" (EBinOp "==" (EVar "sl") (ELit (LInt 1))) (EBinOp "==" (EVar "sc") (ELit (LInt 0)))) (EBinOp "==" (EVar "el") (ELit (LInt 1)))) (EBinOp "==" (EVar "ec") (ELit (LInt 0))))) (ELit (LInt 0)) (EIf (EBinOp "||" (EBinOp "||" (EBinOp "||" (EBinOp "<" (EVar "sl") (ELit (LInt 0))) (EBinOp ">=" (EVar "sl") (ELit (LInt 16777216)))) (EBinOp "<" (EVar "sc") (ELit (LInt 0)))) (EBinOp ">=" (EVar "sc") (ELit (LInt 1048576)))) (ELit (LInt 0)) (EIf (EVar "otherwise") (EMatch (EApp (EApp (EVar "siteFileNumW") (EVar "emit")) (EVar "f")) (arm (PCon "Some" (PVar "n")) () (EBinOp "+" (EBinOp "+" (EBinOp "*" (EVar "n") (ELit (LInt 17592186044416))) (EBinOp "*" (EVar "sl") (ELit (LInt 1048576)))) (EVar "sc"))) (arm (PCon "None") () (ELit (LInt 0)))) (EApp (EVar "__fallthrough__") (ELit LUnit))))))
+(DFunDef false "sitePackedW" ((PVar "emit") (PCon "Loc" (PVar "f") (PVar "sl") (PVar "sc") (PVar "el") (PVar "ec"))) (EIf (EBinOp "||" (EBinOp "==" (EVar "f") (ELit (LString ""))) (EBinOp "&&" (EBinOp "&&" (EBinOp "&&" (EBinOp "==" (EVar "sl") (ELit (LInt 1))) (EBinOp "==" (EVar "sc") (ELit (LInt 0)))) (EBinOp "==" (EVar "el") (ELit (LInt 1)))) (EBinOp "==" (EVar "ec") (ELit (LInt 0))))) (ELit (LInt 0)) (EIf (EBinOp "||" (EBinOp "||" (EBinOp "||" (EBinOp "<" (EVar "sl") (ELit (LInt 0))) (EBinOp ">=" (EVar "sl") (EApp (EApp (EVar "shiftLeft") (ELit (LInt 1))) (EVar "siteLineBits")))) (EBinOp "<" (EVar "sc") (ELit (LInt 0)))) (EBinOp ">=" (EVar "sc") (EApp (EApp (EVar "shiftLeft") (ELit (LInt 1))) (EVar "siteColumnBits")))) (ELit (LInt 0)) (EIf (EVar "otherwise") (EMatch (EApp (EApp (EVar "siteFileNumW") (EVar "emit")) (EVar "f")) (arm (PCon "Some" (PVar "n")) () (EBinOp "+" (EBinOp "+" (EBinOp "*" (EVar "n") (EApp (EApp (EVar "shiftLeft") (ELit (LInt 1))) (EVar "siteFileShift"))) (EBinOp "*" (EVar "sl") (EApp (EApp (EVar "shiftLeft") (ELit (LInt 1))) (EVar "siteLineShift")))) (EVar "sc"))) (arm (PCon "None") () (ELit (LInt 0)))) (EApp (EVar "__fallthrough__") (ELit LUnit))))))
 (DTypeSig false "siteFileNumW" (TyFun (TyCon "WasmEmit") (TyFun (TyCon "String") (TyApp (TyCon "Option") (TyCon "Int")))))
-(DFunDef false "siteFileNumW" ((PVar "emit") (PVar "f")) (EMatch (EApp (EApp (EVar "omLookup") (EVar "f")) (EUnOp "!" (EFieldAccess (EVar "emit") "siteFileNums"))) (arm (PCon "Some" (PVar "n")) () (EApp (EVar "Some") (EVar "n"))) (arm (PCon "None") () (EBlock (DoLet false false (PVar "n") (EBinOp "+" (EApp (EVar "omSize") (EUnOp "!" (EFieldAccess (EVar "emit") "siteFileNums"))) (ELit (LInt 1)))) (DoExpr (EIf (EBinOp ">=" (EVar "n") (ELit (LInt 65536))) (EVar "None") (EBlock (DoExpr (EApp (EApp (EVar "setRef") (EFieldAccess (EVar "emit") "siteFileNums")) (EApp (EApp (EApp (EVar "omInsert") (EVar "f")) (EVar "n")) (EUnOp "!" (EFieldAccess (EVar "emit") "siteFileNums"))))) (DoExpr (EApp (EApp (EVar "setRef") (EFieldAccess (EVar "emit") "siteFiles")) (EBinOp "::" (EVar "f") (EUnOp "!" (EFieldAccess (EVar "emit") "siteFiles"))))) (DoExpr (EApp (EVar "Some") (EVar "n"))))))))))
+(DFunDef false "siteFileNumW" ((PVar "emit") (PVar "f")) (EMatch (EApp (EApp (EVar "omLookup") (EVar "f")) (EUnOp "!" (EFieldAccess (EVar "emit") "siteFileNums"))) (arm (PCon "Some" (PVar "n")) () (EApp (EVar "Some") (EVar "n"))) (arm (PCon "None") () (EBlock (DoLet false false (PVar "n") (EBinOp "+" (EApp (EVar "omSize") (EUnOp "!" (EFieldAccess (EVar "emit") "siteFileNums"))) (ELit (LInt 1)))) (DoExpr (EIf (EBinOp ">=" (EVar "n") (EApp (EApp (EVar "shiftLeft") (ELit (LInt 1))) (EVar "siteFileBits"))) (EVar "None") (EBlock (DoExpr (EApp (EApp (EVar "setRef") (EFieldAccess (EVar "emit") "siteFileNums")) (EApp (EApp (EApp (EVar "omInsert") (EVar "f")) (EVar "n")) (EUnOp "!" (EFieldAccess (EVar "emit") "siteFileNums"))))) (DoExpr (EApp (EApp (EVar "setRef") (EFieldAccess (EVar "emit") "siteFiles")) (EBinOp "::" (EVar "f") (EUnOp "!" (EFieldAccess (EVar "emit") "siteFiles"))))) (DoExpr (EApp (EVar "Some") (EVar "n"))))))))))
 (DTypeSig false "siteLocInstrs" (TyFun (TyCon "WasmEmit") (TyFun (TyCon "Int") (TyApp (TyCon "List") (TyCon "String")))))
 (DFunDef false "siteLocInstrs" (PWild (PLit (LInt 0))) (EListLit))
 (DFunDef false "siteLocInstrs" ((PVar "emit") (PVar "site")) (EListLit (EBinOp "++" (ELit (LString "i64.const ")) (EApp (EVar "intToString") (EVar "site"))) (EApp (EApp (EApp (EVar "trapCallW") (EVar "emit")) (ELit (LString "mdk_write_err_loc"))) (ELit (LInt 1)))))
@@ -13335,6 +13343,7 @@ hasFamilyW prog symbol tag =
 (DTypeSig false "hasFamilyW" (TyFun (TyCon "Prog") (TyFun (TyCon "String") (TyFun (TyCon "String") (TyCon "Bool")))))
 (DFunDef false "hasFamilyW" ((PVar "prog") (PVar "symbol") (PVar "tag")) (EMatch (EApp (EApp (EVar "lookupAssoc") (EApp (EApp (EVar "runtimeNameW") (EVar "prog")) (EVar "symbol"))) (EFieldAccess (EApp (EVar "emitDemandW") (EApp (EVar "progEmit") (EVar "prog"))) "catalogFamilies")) (arm (PCon "Some" (PVar "family")) () (EBinOp "==" (EApp (EVar "WD.wasmFamilyTag") (EVar "family")) (EVar "tag"))) (arm (PCon "None") () (EVar "False"))))
 # MARK
+(DUse false (UseGroup ("backend" "runtime_layout") ((mem "siteFileShift" false) (mem "siteLineShift" false) (mem "siteFileBits" false) (mem "siteLineBits" false) (mem "siteColumnBits" false))))
 (DUse false (UseGroup ("ir" "constructor_facts") ((mem "ConstructorFacts" false) (mem "declaredCtorArity" false) (mem "declaredCtorOwner" false) (mem "declaredCtorOrdinal" false))))
 (DUse false (UseGroup ("frontend" "runtime_constructors") ((mem "RuntimeOwner" true) (mem "RuntimeCtorId" true) (mem "namedRuntimeCtor" false) (mem "runtimeCtorFact" false) (mem "runtimeRoster" false) (mem "runtimeCtorName" false) (mem "runtimeOwnerWord" false))))
 (DUse false (UseAlias ("backend" "wasm_symbol_names") "WN"))
@@ -14233,9 +14242,9 @@ hasFamilyW prog symbol tag =
 (DFunDef false "valueArithName" ((PLit (LString "%"))) (ELit (LString "mod")))
 (DFunDef false "valueArithName" ((PVar "op")) (EApp (EVar "panic") (EBinOp "++" (EBinOp "++" (ELit (LString "wasm A0: not a value-arith op '")) (EVar "op")) (ELit (LString "'")))))
 (DTypeSig false "sitePackedW" (TyFun (TyCon "WasmEmit") (TyFun (TyCon "Loc") (TyCon "Int"))))
-(DFunDef false "sitePackedW" ((PVar "emit") (PCon "Loc" (PVar "f") (PVar "sl") (PVar "sc") (PVar "el") (PVar "ec"))) (EIf (EBinOp "||" (EBinOp "==" (EVar "f") (ELit (LString ""))) (EBinOp "&&" (EBinOp "&&" (EBinOp "&&" (EBinOp "==" (EVar "sl") (ELit (LInt 1))) (EBinOp "==" (EVar "sc") (ELit (LInt 0)))) (EBinOp "==" (EVar "el") (ELit (LInt 1)))) (EBinOp "==" (EVar "ec") (ELit (LInt 0))))) (ELit (LInt 0)) (EIf (EBinOp "||" (EBinOp "||" (EBinOp "||" (EBinOp "<" (EVar "sl") (ELit (LInt 0))) (EBinOp ">=" (EVar "sl") (ELit (LInt 16777216)))) (EBinOp "<" (EVar "sc") (ELit (LInt 0)))) (EBinOp ">=" (EVar "sc") (ELit (LInt 1048576)))) (ELit (LInt 0)) (EIf (EVar "otherwise") (EMatch (EApp (EApp (EVar "siteFileNumW") (EVar "emit")) (EVar "f")) (arm (PCon "Some" (PVar "n")) () (EBinOp "+" (EBinOp "+" (EBinOp "*" (EVar "n") (ELit (LInt 17592186044416))) (EBinOp "*" (EVar "sl") (ELit (LInt 1048576)))) (EVar "sc"))) (arm (PCon "None") () (ELit (LInt 0)))) (EApp (EVar "__fallthrough__") (ELit LUnit))))))
+(DFunDef false "sitePackedW" ((PVar "emit") (PCon "Loc" (PVar "f") (PVar "sl") (PVar "sc") (PVar "el") (PVar "ec"))) (EIf (EBinOp "||" (EBinOp "==" (EVar "f") (ELit (LString ""))) (EBinOp "&&" (EBinOp "&&" (EBinOp "&&" (EBinOp "==" (EVar "sl") (ELit (LInt 1))) (EBinOp "==" (EVar "sc") (ELit (LInt 0)))) (EBinOp "==" (EVar "el") (ELit (LInt 1)))) (EBinOp "==" (EVar "ec") (ELit (LInt 0))))) (ELit (LInt 0)) (EIf (EBinOp "||" (EBinOp "||" (EBinOp "||" (EBinOp "<" (EVar "sl") (ELit (LInt 0))) (EBinOp ">=" (EVar "sl") (EApp (EApp (EVar "shiftLeft") (ELit (LInt 1))) (EVar "siteLineBits")))) (EBinOp "<" (EVar "sc") (ELit (LInt 0)))) (EBinOp ">=" (EVar "sc") (EApp (EApp (EVar "shiftLeft") (ELit (LInt 1))) (EVar "siteColumnBits")))) (ELit (LInt 0)) (EIf (EVar "otherwise") (EMatch (EApp (EApp (EVar "siteFileNumW") (EVar "emit")) (EVar "f")) (arm (PCon "Some" (PVar "n")) () (EBinOp "+" (EBinOp "+" (EBinOp "*" (EVar "n") (EApp (EApp (EVar "shiftLeft") (ELit (LInt 1))) (EVar "siteFileShift"))) (EBinOp "*" (EVar "sl") (EApp (EApp (EVar "shiftLeft") (ELit (LInt 1))) (EVar "siteLineShift")))) (EVar "sc"))) (arm (PCon "None") () (ELit (LInt 0)))) (EApp (EVar "__fallthrough__") (ELit LUnit))))))
 (DTypeSig false "siteFileNumW" (TyFun (TyCon "WasmEmit") (TyFun (TyCon "String") (TyApp (TyCon "Option") (TyCon "Int")))))
-(DFunDef false "siteFileNumW" ((PVar "emit") (PVar "f")) (EMatch (EApp (EApp (EVar "omLookup") (EVar "f")) (EUnOp "!" (EFieldAccess (EVar "emit") "siteFileNums"))) (arm (PCon "Some" (PVar "n")) () (EApp (EVar "Some") (EVar "n"))) (arm (PCon "None") () (EBlock (DoLet false false (PVar "n") (EBinOp "+" (EApp (EVar "omSize") (EUnOp "!" (EFieldAccess (EVar "emit") "siteFileNums"))) (ELit (LInt 1)))) (DoExpr (EIf (EBinOp ">=" (EVar "n") (ELit (LInt 65536))) (EVar "None") (EBlock (DoExpr (EApp (EApp (EVar "setRef") (EFieldAccess (EVar "emit") "siteFileNums")) (EApp (EApp (EApp (EVar "omInsert") (EVar "f")) (EVar "n")) (EUnOp "!" (EFieldAccess (EVar "emit") "siteFileNums"))))) (DoExpr (EApp (EApp (EVar "setRef") (EFieldAccess (EVar "emit") "siteFiles")) (EBinOp "::" (EVar "f") (EUnOp "!" (EFieldAccess (EVar "emit") "siteFiles"))))) (DoExpr (EApp (EVar "Some") (EVar "n"))))))))))
+(DFunDef false "siteFileNumW" ((PVar "emit") (PVar "f")) (EMatch (EApp (EApp (EVar "omLookup") (EVar "f")) (EUnOp "!" (EFieldAccess (EVar "emit") "siteFileNums"))) (arm (PCon "Some" (PVar "n")) () (EApp (EVar "Some") (EVar "n"))) (arm (PCon "None") () (EBlock (DoLet false false (PVar "n") (EBinOp "+" (EApp (EVar "omSize") (EUnOp "!" (EFieldAccess (EVar "emit") "siteFileNums"))) (ELit (LInt 1)))) (DoExpr (EIf (EBinOp ">=" (EVar "n") (EApp (EApp (EVar "shiftLeft") (ELit (LInt 1))) (EVar "siteFileBits"))) (EVar "None") (EBlock (DoExpr (EApp (EApp (EVar "setRef") (EFieldAccess (EVar "emit") "siteFileNums")) (EApp (EApp (EApp (EVar "omInsert") (EVar "f")) (EVar "n")) (EUnOp "!" (EFieldAccess (EVar "emit") "siteFileNums"))))) (DoExpr (EApp (EApp (EVar "setRef") (EFieldAccess (EVar "emit") "siteFiles")) (EBinOp "::" (EVar "f") (EUnOp "!" (EFieldAccess (EVar "emit") "siteFiles"))))) (DoExpr (EApp (EVar "Some") (EVar "n"))))))))))
 (DTypeSig false "siteLocInstrs" (TyFun (TyCon "WasmEmit") (TyFun (TyCon "Int") (TyApp (TyCon "List") (TyCon "String")))))
 (DFunDef false "siteLocInstrs" (PWild (PLit (LInt 0))) (EListLit))
 (DFunDef false "siteLocInstrs" ((PVar "emit") (PVar "site")) (EListLit (EBinOp "++" (ELit (LString "i64.const ")) (EApp (EVar "intToString") (EVar "site"))) (EApp (EApp (EApp (EVar "trapCallW") (EVar "emit")) (ELit (LString "mdk_write_err_loc"))) (ELit (LInt 1)))))

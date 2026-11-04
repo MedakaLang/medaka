@@ -1,3 +1,7 @@
+import backend.runtime_layout.{
+  siteFileShift, siteLineShift, siteFileBits, siteLineBits, siteColumnBits,
+  ctorTagShift, reservedTypeBase, runtimeCallArgMax
+}
 import ir.constructor_facts.{
   ConstructorFacts, declaredCtorArity, declaredCtorOwner, declaredCtorOrdinal
 }
@@ -5871,9 +5875,13 @@ sitePacked : Emit -> Loc -> Int
 sitePacked e (Loc f sl sc el ec)
   | f == "" || sl == 1 && sc == 0 && el == 1 && ec == 0 = 0
   | e.input.emitHalf == emitHalfPrelude = 0
-  | sl < 0 || sl >= 16777216 || sc < 0 || sc >= 1048576 = 0
+  | sl < 0
+    || sl >= shiftLeft 1 siteLineBits
+    || sc < 0
+    || sc >= shiftLeft 1 siteColumnBits = 0
   | otherwise = match siteFileNumber e f
-    Some n => n * 17592186044416 + sl * 1048576 + sc
+    Some n =>
+      n * shiftLeft 1 siteFileShift + sl * shiftLeft 1 siteLineShift + sc
     None => 0
 
 -- A trap-site literal (`siteSentinelName` applied to a file, a line and a
@@ -5902,7 +5910,7 @@ siteFileNumber e f = match omLookup f !e.siteFileNums
   Some n => Some n
   None =>
     let n = omSize !e.siteFileNums + 1
-    if n >= 65536 then
+    if n >= shiftLeft 1 siteFileBits then
       None
     else
       e.siteFileNums := omInsert f n !e.siteFileNums
@@ -8387,12 +8395,6 @@ superCountGlobal e iface =
         "@\{sym} = constant i64 \{intToString (superCountOf e iface)}"))
     sym
 
--- The most arguments `mdk_call_exact` (runtime/medaka_rt.c) passes a closure's
--- code.  A call that supplies a slot closure another count goes through
--- `__mdk_apply`, which saturates through it (#4790).
-runtimeCallArgMax : Int
-runtimeCallArgMax = 8
-
 -- The refusal text for a runtime application of slot [slot]'s closure, which takes
 -- the dictionary and the method's declared arguments; None when the closure cannot
 -- exceed [runtimeCallArgMax].
@@ -10297,8 +10299,6 @@ dedupS xs = reverseL (dedup (reverseL xs))
 -- ordinal.  hashName is gone from every constructor tag — collisions are impossible.
 -- 2^32, the type-id shift.  (Int is 63-bit; type-id × 2^32 + ordinal stays well
 -- under 2^62 for any real program.)
-ctorTagShift : Int
-ctorTagShift = 4294967296
 
 -- the cell-header tag a NAME stamps / is tested against.  Sentinel headers
 -- ("$tuple"/"$ref"/"$closure") keep their hash; every constructor (incl. the
@@ -10314,8 +10314,7 @@ ctorTagShift = 4294967296
 -- reservation `Some` and `Cons` both fall to the "one past" type-id with ordinal 0
 -- and COLLIDE.  Both alloc and every tag test route through `cellTag`, so reserving
 -- here keeps construction and the match-head test consistent by construction.
--- The C side hardcodes the SAME constants (MDK_TAG_* in runtime/medaka_rt.c); keep
--- the two in sync.  Ordinals follow core.mdk: Option = Some|None, Result = Ok|Err,
+-- The C side uses MDK_TAG_* from runtime/medaka_abi.h. Ordinals follow core.mdk: Option = Some|None, Result = Ok|Err,
 -- Ordering = Lt|Eq|Gt; List (synthetic) = Cons|Nil.  #361: a user type reusing
 -- one of these names is not a "spike limitation" that "the real backend resolves
 -- statically" — as if this emitter were the spike and some other, more careful
@@ -10338,8 +10337,6 @@ ctorTagShift = 4294967296
 -- that happened to be spelled `ByteBlock`.  Its one construction site is
 -- mdk_byteblock_alloc in runtime/medaka_rt.c, which spells the same composite as
 -- MDK_BYTEBLOCK_TAG and pins it to `MDK_TAG(4, 0)` with a _Static_assert.
-reservedTypeBase : Int
-reservedTypeBase = 65536
 
 reservedTag : String -> Option Int
 reservedTag name = match namedRuntimeCtor name
