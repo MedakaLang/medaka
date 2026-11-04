@@ -105,6 +105,7 @@ Live design docs: **OPEN** = not started, **PARTIAL** = in progress. Read before
 | [`INTERPRETER-DESIGN.md`](design/INTERPRETER-DESIGN.md) | The interpreter: a bytecode VM over the native runtime | PROPOSED 2026-11-02; direction chosen by Val the same day |
 | [`LANGUAGE-SURFACE-AUDIT.md`](design/LANGUAGE-SURFACE-AUDIT.md) | LANGUAGE-SURFACE-AUDIT.md | OPEN |
 | [`MCP-AGENT-SERVICE.md`](design/MCP-AGENT-SERVICE.md) | MCP agent service: architecture and execution plan | PLANNED |
+| [`MCP-WORKER-PROTOCOL.md`](design/MCP-WORKER-PROTOCOL.md) | Private worker boundary, version 1 | — |
 | [`MESSAGE-AUDIT.md`](design/MESSAGE-AUDIT.md) | MESSAGE-AUDIT.md | PARTIAL |
 | [`MUT-SCOPING-DESIGN.md`](design/MUT-SCOPING-DESIGN.md) | `<Mut>` scoping — effect masking for allocate→fill→freeze | CLOSED |
 | [`PERF-CI-COVERAGE.md`](design/PERF-CI-COVERAGE.md) | PERF-CI-COVERAGE.md — a comprehensive design for catching quadratics in CI | DESIGN |

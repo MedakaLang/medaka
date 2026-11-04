@@ -13,7 +13,7 @@
 import fs.{walkDir}
 import list.{
   drop, take, dropWhile, dropWhileEnd, filterMap, last, lookup, nub, partition,
-  reverse, sort, takeWhile
+  reverse, sort, takeWhile, zip
 }
 import map as M
 import set as S
@@ -520,7 +520,7 @@ arrowGo depth cur (c :: rest) =
 
 -- The tokens of every segment of [sig] before its result.
 sigParamTokens : String -> List String
-sigParamTokens sig = flatMap sigTokens (dropLast (splitAtArrows sig))
+sigParamTokens sig = splitAtArrows sig |> dropLast |> flatMap sigTokens
 
 dropLast : List a -> List a
 dropLast xs = take (length xs - 1) xs
@@ -531,7 +531,7 @@ hasContextToken ts = any (t => elem t contextTypes) ts
 -- [sig] with every allowed `Ref` spelling removed, then any `Ref` left over.
 hasDisallowedRef : String -> Bool
 hasDisallowedRef sig =
-  elem "Ref" (sigTokens (fold (acc r => replace r "" acc) sig allowedRefs))
+  allowedRefs |> fold (acc r => replace r "" acc) sig |> sigTokens |> elem "Ref"
 
 diagTextSigs : List (String, String)
 diagTextSigs = topSigs (linesFor "types.tc_diag_text" loadModules)
@@ -612,11 +612,17 @@ test "arch_boundaries: types.tc_solve_check closure matches its golden" =
 test "arch_boundaries: types.tc_shadow closure matches its golden" =
   closurePin "types.tc_shadow"
 
+test "arch_boundaries: types.tc_grants closure matches its golden" =
+  closurePin "types.tc_grants"
+
 test "arch_boundaries: types.tc_effects closure matches its golden" =
   closurePin "types.tc_effects"
 
 test "arch_boundaries: types.tc_occurrence closure matches its golden" =
   closurePin "types.tc_occurrence"
+
+test "arch_boundaries: types.tc_mark closure matches its golden" =
+  closurePin "types.tc_mark"
 
 test "arch_boundaries: types.tc_groups closure matches its golden" =
   closurePin "types.tc_groups"
@@ -635,6 +641,9 @@ test "arch_boundaries: types.tc_elab closure matches its golden" =
 
 test "arch_boundaries: types.tc_global closure matches its golden" =
   closurePin "types.tc_global"
+
+test "arch_boundaries: types.tc_stamp closure matches its golden" =
+  closurePin "types.tc_stamp"
 
 test "arch_boundaries: types.tc_module closure matches its golden" =
   closurePin "types.tc_module"
@@ -988,13 +997,10 @@ test "arch_boundaries: identical-body names match dupbodies.golden" =
   -- `println` when the number is wanted.
   pin "dupbodies.golden" (identicalNames idx)
 
--- The `## Typechecker cells` section of CELL-LIFETIMES.md: from its heading to
--- the next `## ` heading.
-typecheckerSection : List String -> List String
-typecheckerSection ls =
-  takeWhile
-    (l => not (startsWith "## " l))
-    (drop 1 (dropWhile (/= "## Typechecker cells") ls))
+-- The lines under one `## ` heading: from the heading to the next `## ` heading.
+sectionUnder : String -> List String -> List String
+sectionUnder heading ls =
+  takeWhile (l => not (startsWith "## " l)) (drop 1 (dropWhile (/= heading) ls))
 
 -- Data rows of a markdown table: the header and the `|---|` separator are not.
 isDataRow : String -> Bool
@@ -1093,13 +1099,6 @@ badWidth cells =
   else
     Some "\{nameOf cells}: \{length cells} cells, not 10"
 
--- The `## Cells outside the file` section: from its heading to the next `## `.
-sideSection : List String -> List String
-sideSection ls =
-  takeWhile
-    (l => not (startsWith "## " l))
-    (drop 1 (dropWhile (/= "## Cells outside the file") ls))
-
 sideNames : List String
 sideNames = [
   "selectedProfile",
@@ -1178,14 +1177,17 @@ typecheckFamily = [
   "types.tc_solve",
   "types.tc_solve_check",
   "types.tc_shadow",
+  "types.tc_grants",
   "types.tc_effects",
   "types.tc_occurrence",
+  "types.tc_mark",
   "types.tc_groups",
   "types.tc_pat",
   "types.tc_infer_records",
   "types.tc_infer",
   "types.tc_elab",
   "types.tc_global",
+  "types.tc_stamp",
   "types.tc_module",
 ]
 
@@ -1216,8 +1218,15 @@ test "arch_boundaries: CELL-LIFETIMES rows equal the cell census" =
     Err e => fail "could not read CELL-LIFETIMES.md: \{e}"
     Ok text =>
       let rows =
-        map rowCells (filter isDataRow (typecheckerSection (lines text)))
-      let sideRows = map rowCells (filter isDataRow (sideSection (lines text)))
+        map
+          rowCells
+          (filter isDataRow (sectionUnder "## Typechecker cells" (lines text)))
+      let sideRows =
+        map
+          rowCells
+          (filter
+            isDataRow
+            (sectionUnder "## Cells outside the file" (lines text)))
       let allRows = rows ++ sideRows
       let census = cellCensus loadModules
       expectAll [
@@ -1309,3 +1318,134 @@ test "arch_boundaries: LLVM text coverage remains a target-local leaf" =
 
 test "arch_boundaries: Wasm text coverage remains a target-local leaf" =
   closurePin "backend.wasm_text_coverage"
+
+-- The Layer order table of `compiler/types/ARCHITECTURE.md`. A row is a column-0
+-- `| <order> | `types/<module>.mdk` ...` line under the "## Layer order" heading;
+-- the module is the first backticked span of the second cell. A row's order is its
+-- position in the table, never the label in its first cell.
+layerRowId : String -> Option String
+layerRowId l = match split " | " l
+  first :: cell :: _ if startsWith "| " first
+    && startsWith "`types/" cell => match split "`" cell
+    _ :: path :: _ => Some (replace "/" "." (replace ".mdk" "" path))
+    _ => None
+  _ => None
+
+layerTableIds : List String -> List String
+layerTableIds ls = filterMap layerRowId (sectionUnder "## Layer order" ls)
+
+-- The modules a table row must exist for: every `types/tc_*.mdk` on disk but the
+-- `*_test_support` siblings, plus the entry. `loadModules` already drops `*_test`.
+layerDiskIds : List (String, List String) -> List String
+layerDiskIds mods =
+  filter
+    (m =>
+      m == "types.typecheck"
+        || startsWith "types.tc_" m && not (endsWith "_test_support" m))
+    (map fst mods)
+
+-- Rows whose module is missing on disk, modules with no row, and repeated rows.
+layerCoverageProblems : List String -> List (String, List String) -> List String
+layerCoverageProblems ids mods =
+  let disk = layerDiskIds mods
+  map
+      (m => "\{m}: on disk, no row in the layer table")
+      (filter (m => not (elem m ids)) disk)
+    ++ map
+      (m => "\{m}: a row in the layer table, no such module on disk")
+      (filter (m => not (elem m disk)) ids)
+    ++ map
+      (m => "\{m}: more than one row in the layer table")
+      (nub (filter (m => count (== m) ids > 1) ids))
+
+-- A row's import closure may hold only rows at or below it in the table.
+layerOrderProblems : List String -> List (String, List String) -> List String
+layerOrderProblems ids mods =
+  let g = buildGraph mods
+  let rank = M.fromList (zip ids [0..=length ids])
+  let at m = optionOr 0 (M.get m rank)
+  flatMap
+    (m =>
+      map
+        (c => "\{m} (row \{at m}) imports \{c} (row \{at c}), a row above it")
+        (filter (c => M.has c rank && at c > at m) (closureOf g m)))
+    ids
+
+-- The `forced above `X`` / `forced below `Y`` claims of a row's Position cell (its
+-- last cell), as (direction, module id). `forced below everything` names no module
+-- and is not a claim.
+layerPositionClaims : String -> List (String, String)
+layerPositionClaims l =
+  let cell = optionOr "" (last (split " | " l))
+  filterMap
+    (seg =>
+      if startsWith "above `" seg then
+        claimOf "above" seg
+      else if startsWith "below `" seg then
+        claimOf "below" seg
+      else
+        None)
+    (drop 1 (split "forced " cell))
+
+claimOf : String -> String -> Option (String, String)
+claimOf dir seg = match split "`" seg
+  _ :: name :: _ => Some (dir, "types." ++ name)
+  _ => None
+
+-- A `forced above X` row must have X in its import closure and X in a lower row;
+-- a `forced below Y` row must sit in Y's import closure and Y in a higher row.
+layerPositionProblems : List String ->
+  List String ->
+  List (String, List String) ->
+  List String
+layerPositionProblems ids rowLines mods =
+  let g = buildGraph mods
+  let rank = M.fromList (zip ids [0..=length ids])
+  let at m = optionOr 0 (M.get m rank)
+  flatMap
+    (l => match layerRowId l
+      None => []
+      Some m => filterMap (claimProblem g at m) (layerPositionClaims l))
+    rowLines
+
+claimProblem : Graph ->
+  (String -> Int) ->
+  String ->
+  (String, String) ->
+  Option String
+claimProblem g at m (dir, x) =
+  if dir == "above" && not (elem x (closureOf g m) && at x < at m) then
+    Some
+      "\{m}: Position says forced above \{x}, which \{m} does not import from a lower row"
+  else if dir == "below" && not (elem m (closureOf g x) && at x > at m) then
+    Some
+      "\{m}: Position says forced below \{x}, which does not import \{m} from a higher row"
+  else
+    None
+
+layerTableText : <IO> Result String (List String)
+layerTableText = match readFile (underRoot "compiler/types/ARCHITECTURE.md")
+  Err e => Err "could not read compiler/types/ARCHITECTURE.md: \{e}"
+  Ok text => Ok (lines text)
+
+test "arch_boundaries: the layer table lists exactly the tc_* modules on disk and the entry" =
+  match layerTableText
+    Err e => fail e
+    Ok ls =>
+      let ids = layerTableIds ls
+      expectAll [
+        expectAtLeast 20 (length ids),
+        expectEqual [] (layerCoverageProblems ids loadModules),
+      ]
+
+test "arch_boundaries: no layer table row imports a row above it" =
+  match layerTableText
+    Err e => fail e
+    Ok ls => expectEqual [] (layerOrderProblems (layerTableIds ls) loadModules)
+
+test "arch_boundaries: every forced-above and forced-below Position cell names a real import edge" =
+  match layerTableText
+    Err e => fail e
+    Ok ls =>
+      let rows = sectionUnder "## Layer order" ls
+      expectEqual [] (layerPositionProblems (layerTableIds ls) rows loadModules)

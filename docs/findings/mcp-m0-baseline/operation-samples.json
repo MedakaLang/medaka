@@ -1,0 +1,708 @@
+{
+  "baseline": {
+    "import-definition": [
+      {
+        "outcome": "success",
+        "wall_ns": 272306824,
+        "arrival_ns": [
+          143829959,
+          173104696,
+          200634399
+        ]
+      },
+      {
+        "outcome": "success",
+        "wall_ns": 270002516,
+        "arrival_ns": [
+          163896806,
+          191184400,
+          220083478
+        ]
+      },
+      {
+        "outcome": "success",
+        "wall_ns": 285600885,
+        "arrival_ns": [
+          178556114,
+          206255814,
+          238748500
+        ]
+      },
+      {
+        "outcome": "success",
+        "wall_ns": 267655159,
+        "arrival_ns": [
+          150986947,
+          188510933,
+          215621381
+        ]
+      },
+      {
+        "outcome": "success",
+        "wall_ns": 266805920,
+        "arrival_ns": [
+          148966494,
+          189089430,
+          228429370
+        ]
+      }
+    ],
+    "shadow-references": [
+      {
+        "outcome": "success",
+        "wall_ns": 317034051,
+        "arrival_ns": [
+          161882341,
+          241374633,
+          276829838
+        ]
+      },
+      {
+        "outcome": "success",
+        "wall_ns": 269753076,
+        "arrival_ns": [
+          143837072,
+          203295729,
+          233006408
+        ]
+      },
+      {
+        "outcome": "success",
+        "wall_ns": 317425456,
+        "arrival_ns": [
+          139743270,
+          217996512,
+          255156648
+        ]
+      },
+      {
+        "outcome": "success",
+        "wall_ns": 276594639,
+        "arrival_ns": [
+          149319676,
+          207962214,
+          246863177
+        ]
+      },
+      {
+        "outcome": "success",
+        "wall_ns": 316664943,
+        "arrival_ns": [
+          143537451,
+          218787038,
+          250962068
+        ]
+      }
+    ],
+    "stdlib-filter": [
+      {
+        "outcome": "success",
+        "wall_ns": 374116867,
+        "arrival_ns": [
+          168327033,
+          273796516,
+          325648382
+        ]
+      },
+      {
+        "outcome": "success",
+        "wall_ns": 428739762,
+        "arrival_ns": [
+          159065921,
+          289481452,
+          360218243
+        ]
+      },
+      {
+        "outcome": "success",
+        "wall_ns": 430917763,
+        "arrival_ns": [
+          186360455,
+          300530425,
+          351142298
+        ]
+      },
+      {
+        "outcome": "success",
+        "wall_ns": 419278034,
+        "arrival_ns": [
+          175254172,
+          274642392,
+          333455920
+        ]
+      },
+      {
+        "outcome": "success",
+        "wall_ns": 385750387,
+        "arrival_ns": [
+          158837883,
+          262510032,
+          316707169
+        ]
+      }
+    ],
+    "repair-diagnostic": [
+      {
+        "outcome": "success",
+        "wall_ns": 325892113,
+        "arrival_ns": [
+          144943943,
+          194382769,
+          225247886,
+          269253943
+        ]
+      },
+      {
+        "outcome": "success",
+        "wall_ns": 320133466,
+        "arrival_ns": [
+          142342650,
+          192155341,
+          231094283,
+          294843330
+        ]
+      },
+      {
+        "outcome": "success",
+        "wall_ns": 321902897,
+        "arrival_ns": [
+          129204225,
+          174199261,
+          210957628,
+          261557111
+        ]
+      },
+      {
+        "outcome": "success",
+        "wall_ns": 317250160,
+        "arrival_ns": [
+          149173919,
+          211832567,
+          253869471,
+          293921275
+        ]
+      },
+      {
+        "outcome": "success",
+        "wall_ns": 367934024,
+        "arrival_ns": [
+          185118881,
+          226930200,
+          273391383,
+          315711510
+        ]
+      }
+    ],
+    "changed-source": [
+      {
+        "outcome": "success",
+        "wall_ns": 268051761,
+        "arrival_ns": [
+          162473566,
+          219166152
+        ]
+      },
+      {
+        "outcome": "success",
+        "wall_ns": 267205547,
+        "arrival_ns": [
+          150350891,
+          210048364
+        ]
+      },
+      {
+        "outcome": "success",
+        "wall_ns": 326854451,
+        "arrival_ns": [
+          178527278,
+          261816497
+        ]
+      },
+      {
+        "outcome": "success",
+        "wall_ns": 267082373,
+        "arrival_ns": [
+          168208548,
+          243204237
+        ]
+      },
+      {
+        "outcome": "success",
+        "wall_ns": 266997840,
+        "arrival_ns": [
+          177069494,
+          233549947
+        ]
+      }
+    ],
+    "dispatch": [
+      {
+        "outcome": "success",
+        "wall_ns": 317638327,
+        "arrival_ns": [
+          177916902,
+          219296517,
+          273206104
+        ]
+      },
+      {
+        "outcome": "success",
+        "wall_ns": 267073048,
+        "arrival_ns": [
+          152188089,
+          199601993,
+          241435959
+        ]
+      },
+      {
+        "outcome": "success",
+        "wall_ns": 317537039,
+        "arrival_ns": [
+          159531810,
+          231565471,
+          286894911
+        ]
+      },
+      {
+        "outcome": "success",
+        "wall_ns": 318948469,
+        "arrival_ns": [
+          145325271,
+          202066343,
+          244144690
+        ]
+      },
+      {
+        "outcome": "success",
+        "wall_ns": 317674164,
+        "arrival_ns": [
+          156268819,
+          209298919,
+          267228461
+        ]
+      }
+    ],
+    "worktree-validation": [
+      {
+        "outcome": "success",
+        "wall_ns": 266760941,
+        "arrival_ns": [
+          174503378,
+          242750659
+        ]
+      },
+      {
+        "outcome": "success",
+        "wall_ns": 266543859,
+        "arrival_ns": [
+          167087913,
+          218085319
+        ]
+      },
+      {
+        "outcome": "success",
+        "wall_ns": 268890404,
+        "arrival_ns": [
+          150491493,
+          210703028
+        ]
+      },
+      {
+        "outcome": "success",
+        "wall_ns": 217060515,
+        "arrival_ns": [
+          133588170,
+          176092456
+        ]
+      },
+      {
+        "outcome": "success",
+        "wall_ns": 222050098,
+        "arrival_ns": [
+          145418497,
+          206427783
+        ]
+      }
+    ],
+    "missing-binary": [
+      {
+        "outcome": "startup_failure",
+        "wall_ns": 127660046,
+        "arrival_ns": []
+      },
+      {
+        "outcome": "startup_failure",
+        "wall_ns": 116039739,
+        "arrival_ns": []
+      },
+      {
+        "outcome": "startup_failure",
+        "wall_ns": 116256878,
+        "arrival_ns": []
+      },
+      {
+        "outcome": "startup_failure",
+        "wall_ns": 166563142,
+        "arrival_ns": []
+      },
+      {
+        "outcome": "startup_failure",
+        "wall_ns": 116304482,
+        "arrival_ns": []
+      }
+    ]
+  },
+  "instrumented": {
+    "import-definition": [
+      {
+        "outcome": "success",
+        "wall_ns": 267338004,
+        "arrival_ns": [
+          157122697,
+          192848206,
+          243117553
+        ]
+      },
+      {
+        "outcome": "success",
+        "wall_ns": 271606027,
+        "arrival_ns": [
+          144212037,
+          181192051,
+          212951299
+        ]
+      },
+      {
+        "outcome": "success",
+        "wall_ns": 267678807,
+        "arrival_ns": [
+          152301497,
+          185024143,
+          215487500
+        ]
+      },
+      {
+        "outcome": "success",
+        "wall_ns": 267497652,
+        "arrival_ns": [
+          165629278,
+          197367052,
+          240565625
+        ]
+      },
+      {
+        "outcome": "success",
+        "wall_ns": 277322139,
+        "arrival_ns": [
+          138392013,
+          171628123,
+          202176135
+        ]
+      }
+    ],
+    "shadow-references": [
+      {
+        "outcome": "success",
+        "wall_ns": 269793139,
+        "arrival_ns": [
+          129220740,
+          183547961,
+          204968547
+        ]
+      },
+      {
+        "outcome": "success",
+        "wall_ns": 267051245,
+        "arrival_ns": [
+          131349914,
+          189608653,
+          244080099
+        ]
+      },
+      {
+        "outcome": "success",
+        "wall_ns": 332548018,
+        "arrival_ns": [
+          175771923,
+          238649365,
+          268855751
+        ]
+      },
+      {
+        "outcome": "success",
+        "wall_ns": 283400729,
+        "arrival_ns": [
+          128569761,
+          197274408,
+          231622100
+        ]
+      },
+      {
+        "outcome": "success",
+        "wall_ns": 317125586,
+        "arrival_ns": [
+          149279215,
+          238383278,
+          268524683
+        ]
+      }
+    ],
+    "stdlib-filter": [
+      {
+        "outcome": "success",
+        "wall_ns": 373766520,
+        "arrival_ns": [
+          175853131,
+          293393500,
+          348311286
+        ]
+      },
+      {
+        "outcome": "success",
+        "wall_ns": 320305795,
+        "arrival_ns": [
+          139374521,
+          213758023,
+          265689091
+        ]
+      },
+      {
+        "outcome": "success",
+        "wall_ns": 369029962,
+        "arrival_ns": [
+          142993620,
+          258253417,
+          317230079
+        ]
+      },
+      {
+        "outcome": "success",
+        "wall_ns": 370924919,
+        "arrival_ns": [
+          128501255,
+          258050949,
+          336342139
+        ]
+      },
+      {
+        "outcome": "success",
+        "wall_ns": 419150545,
+        "arrival_ns": [
+          157910811,
+          283111497,
+          363292627
+        ]
+      }
+    ],
+    "repair-diagnostic": [
+      {
+        "outcome": "success",
+        "wall_ns": 320808022,
+        "arrival_ns": [
+          150821389,
+          214348097,
+          249491123,
+          293835441
+        ]
+      },
+      {
+        "outcome": "success",
+        "wall_ns": 266558793,
+        "arrival_ns": [
+          137834961,
+          181023788,
+          207169805,
+          248182014
+        ]
+      },
+      {
+        "outcome": "success",
+        "wall_ns": 318549345,
+        "arrival_ns": [
+          146327951,
+          190906135,
+          224579700,
+          275594073
+        ]
+      },
+      {
+        "outcome": "success",
+        "wall_ns": 372438039,
+        "arrival_ns": [
+          152911442,
+          213114314,
+          263039181,
+          305681212
+        ]
+      },
+      {
+        "outcome": "success",
+        "wall_ns": 367655480,
+        "arrival_ns": [
+          168998976,
+          221186377,
+          261421127,
+          313013335
+        ]
+      }
+    ],
+    "changed-source": [
+      {
+        "outcome": "success",
+        "wall_ns": 216914446,
+        "arrival_ns": [
+          120709542,
+          167711420
+        ]
+      },
+      {
+        "outcome": "success",
+        "wall_ns": 266870771,
+        "arrival_ns": [
+          141640140,
+          209188636
+        ]
+      },
+      {
+        "outcome": "success",
+        "wall_ns": 268181033,
+        "arrival_ns": [
+          173515459,
+          233648332
+        ]
+      },
+      {
+        "outcome": "success",
+        "wall_ns": 269701175,
+        "arrival_ns": [
+          148445979,
+          198384167
+        ]
+      },
+      {
+        "outcome": "success",
+        "wall_ns": 266781402,
+        "arrival_ns": [
+          152262605,
+          210918756
+        ]
+      }
+    ],
+    "dispatch": [
+      {
+        "outcome": "success",
+        "wall_ns": 269519679,
+        "arrival_ns": [
+          141143101,
+          184750543,
+          238383016
+        ]
+      },
+      {
+        "outcome": "success",
+        "wall_ns": 326323170,
+        "arrival_ns": [
+          159789945,
+          213722938,
+          275693539
+        ]
+      },
+      {
+        "outcome": "success",
+        "wall_ns": 317242057,
+        "arrival_ns": [
+          150548201,
+          197635423,
+          256052789
+        ]
+      },
+      {
+        "outcome": "success",
+        "wall_ns": 266731934,
+        "arrival_ns": [
+          154452526,
+          206430107,
+          250709832
+        ]
+      },
+      {
+        "outcome": "success",
+        "wall_ns": 320630334,
+        "arrival_ns": [
+          150818825,
+          207979133,
+          251464855
+        ]
+      }
+    ],
+    "worktree-validation": [
+      {
+        "outcome": "success",
+        "wall_ns": 220051369,
+        "arrival_ns": [
+          140781786,
+          191681268
+        ]
+      },
+      {
+        "outcome": "success",
+        "wall_ns": 219863565,
+        "arrival_ns": [
+          129481308,
+          185794129
+        ]
+      },
+      {
+        "outcome": "success",
+        "wall_ns": 272231407,
+        "arrival_ns": [
+          157894676,
+          220433266
+        ]
+      },
+      {
+        "outcome": "success",
+        "wall_ns": 267842805,
+        "arrival_ns": [
+          155307255,
+          208563278
+        ]
+      },
+      {
+        "outcome": "success",
+        "wall_ns": 267549634,
+        "arrival_ns": [
+          158613692,
+          220610865
+        ]
+      }
+    ],
+    "missing-binary": [
+      {
+        "outcome": "startup_failure",
+        "wall_ns": 116399901,
+        "arrival_ns": []
+      },
+      {
+        "outcome": "startup_failure",
+        "wall_ns": 125191230,
+        "arrival_ns": []
+      },
+      {
+        "outcome": "startup_failure",
+        "wall_ns": 119840651,
+        "arrival_ns": []
+      },
+      {
+        "outcome": "startup_failure",
+        "wall_ns": 119977524,
+        "arrival_ns": []
+      },
+      {
+        "outcome": "startup_failure",
+        "wall_ns": 119827359,
+        "arrival_ns": []
+      }
+    ]
+  }
+}

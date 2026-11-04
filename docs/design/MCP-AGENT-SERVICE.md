@@ -48,7 +48,10 @@ budgets and jobs. Medaka owns lexing, parsing, resolution, inference, diagnostic
 formatting and semantic edits. MCP, CLI and LSP consume shared semantic services;
 the supervisor must not acquire an independent parser or resolver.
 
-M0 prototypes packaging and chooses the supervisor language and process adapter.
+M0 prototypes packaging to choose the supervisor language and process adapter.
+The [Linux decision report](../findings/mcp-m0-packaging/REPORT.md) leaves that
+choice open: neither prototype meets the mandatory criteria; macOS remains
+deferred to #4820.
 Compare an installed Medaka supervisor with a small external-runtime supervisor;
 measure startup, install size/dependencies, restart behavior and operational
 complexity. Self-hosting is permitted but must not reintroduce a checkout-build
@@ -207,8 +210,8 @@ and mcp.mdk debt query on 2026-11-02. Shared defects keep their owning milestone
 Reproduction is required before any bug closure; this audit closes only the two
 superseded planning umbrellas.
 
-M0 settles packaging/protocol and records baseline tasks. M1 delivers availability
-and worktree trust. M2 delivers navigation. M3 adds versioned knowledge and one
+M0 must settle packaging/protocol and records baseline tasks. The current
+packaging decision remains open; M1 delivers availability and worktree trust. M2 delivers navigation. M3 adds versioned knowledge and one
 measured compiler explanation. M4 closes the edit/test loop and evaluates adoption.
 These are outcomes, not one giant implementation sprint. Cut bounded sprint
 contracts just in time using the sprint-plan skill; default serial implementation,
@@ -276,3 +279,11 @@ supervisor-owned worktree routing and an explicit baseline-toolchain mode. Local
 matching semantics remain required for compiler-edit validation. Optional source
 application is deferred behind a safe protocol; historical read-only tools do not
 silently become writers.
+
+The [M0 baseline report](../findings/mcp-m0-baseline/REPORT.md) records the pilot and
+versioned budgets. Version 2 records serial query round trips, an absolute matched
+trace-delta guardrail on the same binary, cgroup peak memory charge, and cumulative
+input tokens as a context-cost proxy on the stated Linux host. Trace deltas include
+measurement noise; memory charge is distinct from RSS and input tokens are distinct
+from private context occupancy. Five repetitions per case support observed maxima,
+not percentile claims. The two-second offline handshake remains a hypothesis to test.

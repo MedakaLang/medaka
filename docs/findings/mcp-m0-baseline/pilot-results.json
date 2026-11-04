@@ -1,0 +1,857 @@
+{
+  "schema_version": 1,
+  "denominator": 12,
+  "manifest_sha256": "96df2362ab4ac1c0fd59c13b54a62f0cdbfb9b10348ba444cdb4cd4d93ba0186",
+  "rows": [
+    {
+      "index": 0,
+      "task": "import-definition",
+      "arm": "shell-only",
+      "model": "gpt-6.1-terra",
+      "effort": "high",
+      "host_version": "codex-cli 0.166.0",
+      "start_timestamp": null,
+      "end_timestamp": null,
+      "wall_ns": 11842011793,
+      "attempts": 1,
+      "operations_attempted": 2,
+      "operations_admitted": 2,
+      "operations_denied": 0,
+      "tools": {
+        "shell": 2
+      },
+      "shell_used_in_mcp_arm": false,
+      "host_outcome": "success",
+      "usage": {
+        "totalTokens": 16459,
+        "inputTokens": 16308,
+        "cachedInputTokens": 10368,
+        "cacheWriteInputTokens": 0,
+        "outputTokens": 151,
+        "reasoningOutputTokens": 8
+      },
+      "usage_complete": true,
+      "result_bytes": 756,
+      "read_count": null,
+      "cpu_ns": null,
+      "peak_rss_bytes": null,
+      "artifact_maps_match": true,
+      "workspace_matches_initial_task": true,
+      "evidence_ref": "sha256:94ae4e1b007644f09ba628376118cc28b61314d701d525f3a34bd4560f976e21",
+      "host_evidence_ref": "sha256:3a0cafbec5ce245d7bb1ae170e3371c8ff4e2e052d0afa956df5e429e5b8d519",
+      "verdict": {
+        "outcome": "success",
+        "attempted": 2,
+        "completed": 2,
+        "passed": 2,
+        "failed": 0,
+        "skipped": 0,
+        "results": [
+          {
+            "group": "criteria",
+            "id": "definition",
+            "passed": true,
+            "basis": "docs/spec/SYNTAX.md \u00a7 Modules \u2014 import / export; A is alpha, B is beta",
+            "evidence_ref": "sha256:94ae4e1b007644f09ba628376118cc28b61314d701d525f3a34bd4560f976e21",
+            "rationale": "Names alpha and its value."
+          },
+          {
+            "group": "controls",
+            "id": "same-name-alias",
+            "passed": true,
+            "basis": "docs/spec/SYNTAX.md \u00a7 Modules \u2014 import / export",
+            "evidence_ref": "sha256:94ae4e1b007644f09ba628376118cc28b61314d701d525f3a34bd4560f976e21",
+            "rationale": "Names beta and its value."
+          }
+        ]
+      },
+      "observations": []
+    },
+    {
+      "index": 1,
+      "task": "import-definition",
+      "arm": "mcp",
+      "model": "gpt-6.1-terra",
+      "effort": "high",
+      "host_version": "codex-cli 0.166.0",
+      "start_timestamp": null,
+      "end_timestamp": null,
+      "wall_ns": 10827442305,
+      "attempts": 1,
+      "operations_attempted": 4,
+      "operations_admitted": 4,
+      "operations_denied": 0,
+      "tools": {
+        "shell": 2,
+        "medaka_references": 2
+      },
+      "shell_used_in_mcp_arm": true,
+      "host_outcome": "success",
+      "usage": {
+        "totalTokens": 28140,
+        "inputTokens": 27904,
+        "cachedInputTokens": 25344,
+        "cacheWriteInputTokens": 0,
+        "outputTokens": 236,
+        "reasoningOutputTokens": 26
+      },
+      "usage_complete": true,
+      "result_bytes": 730,
+      "read_count": null,
+      "cpu_ns": null,
+      "peak_rss_bytes": null,
+      "artifact_maps_match": true,
+      "workspace_matches_initial_task": true,
+      "evidence_ref": "sha256:664f5f8f15ea1ee674c74ba77f9a33297dd08106d27199ecc7e1e998ce9b67b3",
+      "host_evidence_ref": "sha256:e68babaff952f9cb2af4bedbc5e7c72a235523498b8f8237fe01fe05a1be1ffe",
+      "verdict": {
+        "outcome": "success",
+        "attempted": 2,
+        "completed": 2,
+        "passed": 2,
+        "failed": 0,
+        "skipped": 0,
+        "results": [
+          {
+            "group": "criteria",
+            "id": "definition",
+            "passed": true,
+            "basis": "docs/spec/SYNTAX.md \u00a7 Modules \u2014 import / export; A is alpha, B is beta",
+            "evidence_ref": "sha256:664f5f8f15ea1ee674c74ba77f9a33297dd08106d27199ecc7e1e998ce9b67b3",
+            "rationale": "Names alpha and its value."
+          },
+          {
+            "group": "controls",
+            "id": "same-name-alias",
+            "passed": true,
+            "basis": "docs/spec/SYNTAX.md \u00a7 Modules \u2014 import / export",
+            "evidence_ref": "sha256:664f5f8f15ea1ee674c74ba77f9a33297dd08106d27199ecc7e1e998ce9b67b3",
+            "rationale": "Names beta and its value."
+          }
+        ]
+      },
+      "observations": [
+        "Two MCP references requests returned empty arrays; shell was also used."
+      ]
+    },
+    {
+      "index": 2,
+      "task": "shadow-references",
+      "arm": "mcp",
+      "model": "gpt-6.1-terra",
+      "effort": "high",
+      "host_version": "codex-cli 0.166.0",
+      "start_timestamp": null,
+      "end_timestamp": null,
+      "wall_ns": 7410501495,
+      "attempts": 1,
+      "operations_attempted": 2,
+      "operations_admitted": 2,
+      "operations_denied": 0,
+      "tools": {
+        "shell": 1,
+        "medaka_references": 1
+      },
+      "shell_used_in_mcp_arm": true,
+      "host_outcome": "success",
+      "usage": {
+        "totalTokens": 20633,
+        "inputTokens": 20457,
+        "cachedInputTokens": 18304,
+        "cacheWriteInputTokens": 0,
+        "outputTokens": 176,
+        "reasoningOutputTokens": 25
+      },
+      "usage_complete": true,
+      "result_bytes": 467,
+      "read_count": null,
+      "cpu_ns": null,
+      "peak_rss_bytes": null,
+      "artifact_maps_match": true,
+      "workspace_matches_initial_task": true,
+      "evidence_ref": "sha256:25f7f28c9051afc67872eebdeb5d2caad6ba58c88da40562701b96b60c47849c",
+      "host_evidence_ref": "sha256:6e0a97bb37ef612485663add4160aa2939f933f7b3c749a045115e54e393f7ec",
+      "verdict": {
+        "outcome": "success",
+        "attempted": 2,
+        "completed": 2,
+        "passed": 2,
+        "failed": 0,
+        "skipped": 0,
+        "results": [
+          {
+            "group": "criteria",
+            "id": "references",
+            "passed": true,
+            "basis": "Lexical binding: parameter x shadows top-level x inside f",
+            "evidence_ref": "sha256:25f7f28c9051afc67872eebdeb5d2caad6ba58c88da40562701b96b60c47849c",
+            "rationale": "Only g reference named."
+          },
+          {
+            "group": "controls",
+            "id": "parameter",
+            "passed": true,
+            "basis": "Lexical binding: function parameters bind their body; docs/spec/SYNTAX.md functions",
+            "evidence_ref": "sha256:25f7f28c9051afc67872eebdeb5d2caad6ba58c88da40562701b96b60c47849c",
+            "rationale": "Identifies parameter binding."
+          }
+        ]
+      },
+      "observations": [
+        "MCP references returned the g reference; shell was also used."
+      ]
+    },
+    {
+      "index": 3,
+      "task": "shadow-references",
+      "arm": "shell-only",
+      "model": "gpt-6.1-terra",
+      "effort": "high",
+      "host_version": "codex-cli 0.166.0",
+      "start_timestamp": null,
+      "end_timestamp": null,
+      "wall_ns": 8469879214,
+      "attempts": 1,
+      "operations_attempted": 1,
+      "operations_admitted": 1,
+      "operations_denied": 0,
+      "tools": {
+        "shell": 1
+      },
+      "shell_used_in_mcp_arm": false,
+      "host_outcome": "success",
+      "usage": {
+        "totalTokens": 10615,
+        "inputTokens": 10491,
+        "cachedInputTokens": 4992,
+        "cacheWriteInputTokens": 0,
+        "outputTokens": 124,
+        "reasoningOutputTokens": 30
+      },
+      "usage_complete": true,
+      "result_bytes": 276,
+      "read_count": null,
+      "cpu_ns": null,
+      "peak_rss_bytes": null,
+      "artifact_maps_match": true,
+      "workspace_matches_initial_task": true,
+      "evidence_ref": "sha256:828ef96562be1f1e247a1dbb58a2b91163eedd5f0e202220bc38378121b0aceb",
+      "host_evidence_ref": "sha256:7436f6fb3904ae18f2a5b07873512e1d29acf090beb9080ac309cb7e783ab0d8",
+      "verdict": {
+        "outcome": "success",
+        "attempted": 2,
+        "completed": 2,
+        "passed": 2,
+        "failed": 0,
+        "skipped": 0,
+        "results": [
+          {
+            "group": "criteria",
+            "id": "references",
+            "passed": true,
+            "basis": "Lexical binding: parameter x shadows top-level x inside f",
+            "evidence_ref": "sha256:828ef96562be1f1e247a1dbb58a2b91163eedd5f0e202220bc38378121b0aceb",
+            "rationale": "Only g reference named."
+          },
+          {
+            "group": "controls",
+            "id": "parameter",
+            "passed": true,
+            "basis": "Lexical binding: function parameters bind their body; docs/spec/SYNTAX.md functions",
+            "evidence_ref": "sha256:828ef96562be1f1e247a1dbb58a2b91163eedd5f0e202220bc38378121b0aceb",
+            "rationale": "Identifies parameter binding."
+          }
+        ]
+      },
+      "observations": []
+    },
+    {
+      "index": 4,
+      "task": "stdlib-filter",
+      "arm": "shell-only",
+      "model": "gpt-6.1-terra",
+      "effort": "high",
+      "host_version": "codex-cli 0.166.0",
+      "start_timestamp": null,
+      "end_timestamp": null,
+      "wall_ns": 20069666243,
+      "attempts": 1,
+      "operations_attempted": 6,
+      "operations_admitted": 6,
+      "operations_denied": 0,
+      "tools": {
+        "shell": 6
+      },
+      "shell_used_in_mcp_arm": false,
+      "host_outcome": "success",
+      "usage": {
+        "totalTokens": 71342,
+        "inputTokens": 70893,
+        "cachedInputTokens": 55936,
+        "cacheWriteInputTokens": 0,
+        "outputTokens": 449,
+        "reasoningOutputTokens": 17
+      },
+      "usage_complete": true,
+      "result_bytes": 12612,
+      "read_count": null,
+      "cpu_ns": null,
+      "peak_rss_bytes": null,
+      "artifact_maps_match": true,
+      "workspace_matches_initial_task": true,
+      "evidence_ref": "sha256:8700691a685e7aaf3029eff91c4fe4a01657e084b7d0dc3d547e217a1eaf1d12",
+      "host_evidence_ref": "sha256:6e5dff72e5d03b5c9d581d633bac5c7a47b8876c8e43212181f36d0dda4b9245",
+      "verdict": {
+        "outcome": "incorrect",
+        "attempted": 2,
+        "completed": 2,
+        "passed": 1,
+        "failed": 1,
+        "skipped": 0,
+        "results": [
+          {
+            "group": "criteria",
+            "id": "api",
+            "passed": true,
+            "basis": "stdlib/core.mdk Filterable interface; stdlib/list.mdk:19",
+            "evidence_ref": "sha256:8700691a685e7aaf3029eff91c4fe4a01657e084b7d0dc3d547e217a1eaf1d12",
+            "rationale": "Identifies core Filterable.filter and list re-export."
+          },
+          {
+            "group": "controls",
+            "id": "reexport",
+            "passed": false,
+            "basis": "stdlib/list.mdk:19",
+            "evidence_ref": "sha256:8700691a685e7aaf3029eff91c4fe4a01657e084b7d0dc3d547e217a1eaf1d12",
+            "rationale": "Claims bare import makes list.filter available; bare imports bind no names."
+          }
+        ]
+      },
+      "observations": []
+    },
+    {
+      "index": 5,
+      "task": "stdlib-filter",
+      "arm": "mcp",
+      "model": "gpt-6.1-terra",
+      "effort": "high",
+      "host_version": "codex-cli 0.166.0",
+      "start_timestamp": null,
+      "end_timestamp": null,
+      "wall_ns": 10190300839,
+      "attempts": 1,
+      "operations_attempted": 3,
+      "operations_admitted": 3,
+      "operations_denied": 0,
+      "tools": {
+        "shell": 3
+      },
+      "shell_used_in_mcp_arm": true,
+      "host_outcome": "success",
+      "usage": {
+        "totalTokens": 37713,
+        "inputTokens": 37462,
+        "cachedInputTokens": 26752,
+        "cacheWriteInputTokens": 0,
+        "outputTokens": 251,
+        "reasoningOutputTokens": 20
+      },
+      "usage_complete": true,
+      "result_bytes": 13476,
+      "read_count": null,
+      "cpu_ns": null,
+      "peak_rss_bytes": null,
+      "artifact_maps_match": true,
+      "workspace_matches_initial_task": true,
+      "evidence_ref": "sha256:4f2e38343c7f92e656184f6df62ba53366049dc430b3a30ecb2ea5578573a914",
+      "host_evidence_ref": "sha256:af64b59417d9034001e02a51bcd3f937df98253996db33d90b7df0f5ae89efa2",
+      "verdict": {
+        "outcome": "incorrect",
+        "attempted": 2,
+        "completed": 2,
+        "passed": 1,
+        "failed": 1,
+        "skipped": 0,
+        "results": [
+          {
+            "group": "criteria",
+            "id": "api",
+            "passed": true,
+            "basis": "stdlib/core.mdk Filterable interface; stdlib/list.mdk:19",
+            "evidence_ref": "sha256:4f2e38343c7f92e656184f6df62ba53366049dc430b3a30ecb2ea5578573a914",
+            "rationale": "Identifies core Filterable.filter and list re-export."
+          },
+          {
+            "group": "controls",
+            "id": "reexport",
+            "passed": false,
+            "basis": "stdlib/list.mdk:19",
+            "evidence_ref": "sha256:4f2e38343c7f92e656184f6df62ba53366049dc430b3a30ecb2ea5578573a914",
+            "rationale": "Claims bare import makes list.filter available; bare imports bind no names."
+          }
+        ]
+      },
+      "observations": [
+        "No MCP operation was attempted; shell was used."
+      ]
+    },
+    {
+      "index": 6,
+      "task": "repair-diagnostic",
+      "arm": "mcp",
+      "model": "gpt-6.1-terra",
+      "effort": "high",
+      "host_version": "codex-cli 0.166.0",
+      "start_timestamp": null,
+      "end_timestamp": null,
+      "wall_ns": 10572000264,
+      "attempts": 1,
+      "operations_attempted": 4,
+      "operations_admitted": 4,
+      "operations_denied": 0,
+      "tools": {
+        "shell": 1,
+        "medaka_check": 3
+      },
+      "shell_used_in_mcp_arm": true,
+      "host_outcome": "success",
+      "usage": {
+        "totalTokens": 21314,
+        "inputTokens": 21043,
+        "cachedInputTokens": 18432,
+        "cacheWriteInputTokens": 0,
+        "outputTokens": 271,
+        "reasoningOutputTokens": 31
+      },
+      "usage_complete": true,
+      "result_bytes": 1208,
+      "read_count": null,
+      "cpu_ns": null,
+      "peak_rss_bytes": null,
+      "artifact_maps_match": true,
+      "workspace_matches_initial_task": true,
+      "evidence_ref": "sha256:5590a09f920d5ea200cf8188af1f391e421c0119e6a1e8037f8e67ce5cca3a8b",
+      "host_evidence_ref": "sha256:dabb2d046e496890be057634302f402d1c863a991bf4406468c5e817c835737d",
+      "verdict": {
+        "outcome": "incorrect",
+        "attempted": 3,
+        "completed": 3,
+        "passed": 1,
+        "failed": 2,
+        "skipped": 0,
+        "results": [
+          {
+            "group": "criteria",
+            "id": "repair",
+            "passed": false,
+            "basis": "Integer addition requires integer operands; docs/spec/SYNTAX.md numeric types",
+            "evidence_ref": "sha256:5590a09f920d5ea200cf8188af1f391e421c0119e6a1e8037f8e67ce5cca3a8b",
+            "rationale": "Answer and retained workspace show no repair applied."
+          },
+          {
+            "group": "criteria",
+            "id": "result",
+            "passed": false,
+            "basis": "Integer arithmetic",
+            "evidence_ref": "sha256:5590a09f920d5ea200cf8188af1f391e421c0119e6a1e8037f8e67ce5cca3a8b",
+            "rationale": "No result 3 established for the requested repaired file."
+          },
+          {
+            "group": "controls",
+            "id": "incomplete-source",
+            "passed": true,
+            "basis": "docs/spec/SYNTAX.md expressions and binary operators",
+            "evidence_ref": "sha256:5590a09f920d5ea200cf8188af1f391e421c0119e6a1e8037f8e67ce5cca3a8b",
+            "rationale": "Identifies missing operand; control file unchanged."
+          }
+        ]
+      },
+      "observations": [
+        "MCP check reported parse and type errors on the original files and no diagnostics on supplied source; the file remained unchanged."
+      ]
+    },
+    {
+      "index": 7,
+      "task": "repair-diagnostic",
+      "arm": "shell-only",
+      "model": "gpt-6.1-terra",
+      "effort": "high",
+      "host_version": "codex-cli 0.166.0",
+      "start_timestamp": null,
+      "end_timestamp": null,
+      "wall_ns": 6153612609,
+      "attempts": 1,
+      "operations_attempted": 1,
+      "operations_admitted": 1,
+      "operations_denied": 0,
+      "tools": {
+        "shell": 1
+      },
+      "shell_used_in_mcp_arm": false,
+      "host_outcome": "success",
+      "usage": {
+        "totalTokens": 10879,
+        "inputTokens": 10648,
+        "cachedInputTokens": 4992,
+        "cacheWriteInputTokens": 0,
+        "outputTokens": 231,
+        "reasoningOutputTokens": 61
+      },
+      "usage_complete": true,
+      "result_bytes": 424,
+      "read_count": null,
+      "cpu_ns": null,
+      "peak_rss_bytes": null,
+      "artifact_maps_match": true,
+      "workspace_matches_initial_task": true,
+      "evidence_ref": "sha256:a3724cebcbec8bb996a5c21ddbcc23b1df2d94005a675ad274570560dce8e506",
+      "host_evidence_ref": "sha256:1643d89555bc582cf2a9993f0ae5c89fa8328aa8c11caf81b708bcad3aa39cbc",
+      "verdict": {
+        "outcome": "incorrect",
+        "attempted": 3,
+        "completed": 3,
+        "passed": 1,
+        "failed": 2,
+        "skipped": 0,
+        "results": [
+          {
+            "group": "criteria",
+            "id": "repair",
+            "passed": false,
+            "basis": "Integer addition requires integer operands; docs/spec/SYNTAX.md numeric types",
+            "evidence_ref": "sha256:a3724cebcbec8bb996a5c21ddbcc23b1df2d94005a675ad274570560dce8e506",
+            "rationale": "Answer and retained workspace show no repair applied."
+          },
+          {
+            "group": "criteria",
+            "id": "result",
+            "passed": false,
+            "basis": "Integer arithmetic",
+            "evidence_ref": "sha256:a3724cebcbec8bb996a5c21ddbcc23b1df2d94005a675ad274570560dce8e506",
+            "rationale": "No result 3 established for the requested repaired file."
+          },
+          {
+            "group": "controls",
+            "id": "incomplete-source",
+            "passed": true,
+            "basis": "docs/spec/SYNTAX.md expressions and binary operators",
+            "evidence_ref": "sha256:a3724cebcbec8bb996a5c21ddbcc23b1df2d94005a675ad274570560dce8e506",
+            "rationale": "Identifies missing operand; control file unchanged."
+          }
+        ]
+      },
+      "observations": [
+        "The file remained unchanged; the agent reported a read-only workspace."
+      ]
+    },
+    {
+      "index": 8,
+      "task": "dispatch",
+      "arm": "shell-only",
+      "model": "gpt-6.1-terra",
+      "effort": "high",
+      "host_version": "codex-cli 0.166.0",
+      "start_timestamp": null,
+      "end_timestamp": null,
+      "wall_ns": 10758419457,
+      "attempts": 1,
+      "operations_attempted": 3,
+      "operations_admitted": 3,
+      "operations_denied": 0,
+      "tools": {
+        "shell": 3
+      },
+      "shell_used_in_mcp_arm": false,
+      "host_outcome": "success",
+      "usage": {
+        "totalTokens": 25632,
+        "inputTokens": 25329,
+        "cachedInputTokens": 15744,
+        "cacheWriteInputTokens": 0,
+        "outputTokens": 303,
+        "reasoningOutputTokens": 27
+      },
+      "usage_complete": true,
+      "result_bytes": 3452,
+      "read_count": null,
+      "cpu_ns": null,
+      "peak_rss_bytes": null,
+      "artifact_maps_match": true,
+      "workspace_matches_initial_task": true,
+      "evidence_ref": "sha256:e6ecaac57e40295411932eadb3c62366a9e1e7cf52521b50ea3e9cc95435fbd0",
+      "host_evidence_ref": "sha256:c751114a68ebd07d686d0ee522ea7137651fc97b64bae9a543dddb0b5b5e58b2",
+      "verdict": {
+        "outcome": "success",
+        "attempted": 3,
+        "completed": 3,
+        "passed": 3,
+        "failed": 0,
+        "skipped": 0,
+        "results": [
+          {
+            "group": "criteria",
+            "id": "implementation",
+            "passed": true,
+            "basis": "docs/spec/SYNTAX.md interfaces; impl selection follows receiver type",
+            "evidence_ref": "sha256:e6ecaac57e40295411932eadb3c62366a9e1e7cf52521b50ea3e9cc95435fbd0",
+            "rationale": "Names Int implementation and argument type."
+          },
+          {
+            "group": "criteria",
+            "id": "result",
+            "passed": true,
+            "basis": "Describe Int method body in main.mdk",
+            "evidence_ref": "sha256:e6ecaac57e40295411932eadb3c62366a9e1e7cf52521b50ea3e9cc95435fbd0",
+            "rationale": "States integer result."
+          },
+          {
+            "group": "controls",
+            "id": "other-type",
+            "passed": true,
+            "basis": "Argument has type String; docs/spec/SYNTAX.md interfaces",
+            "evidence_ref": "sha256:e6ecaac57e40295411932eadb3c62366a9e1e7cf52521b50ea3e9cc95435fbd0",
+            "rationale": "Names String implementation."
+          }
+        ]
+      },
+      "observations": []
+    },
+    {
+      "index": 9,
+      "task": "dispatch",
+      "arm": "mcp",
+      "model": "gpt-6.1-terra",
+      "effort": "high",
+      "host_version": "codex-cli 0.166.0",
+      "start_timestamp": null,
+      "end_timestamp": null,
+      "wall_ns": 9776332888,
+      "attempts": 1,
+      "operations_attempted": 3,
+      "operations_admitted": 3,
+      "operations_denied": 0,
+      "tools": {
+        "shell": 2,
+        "medaka_type_at": 1
+      },
+      "shell_used_in_mcp_arm": true,
+      "host_outcome": "success",
+      "usage": {
+        "totalTokens": 27748,
+        "inputTokens": 27550,
+        "cachedInputTokens": 20096,
+        "cacheWriteInputTokens": 0,
+        "outputTokens": 198,
+        "reasoningOutputTokens": 24
+      },
+      "usage_complete": true,
+      "result_bytes": 591,
+      "read_count": null,
+      "cpu_ns": null,
+      "peak_rss_bytes": null,
+      "artifact_maps_match": true,
+      "workspace_matches_initial_task": true,
+      "evidence_ref": "sha256:0daa570039044844ae75297896f5a5fcccc23ce2907dded8f5cc213a7f8f4b5c",
+      "host_evidence_ref": "sha256:73e17aaf3dd04b2a5264e1075aa0d9b56aaef2c94055c58aae9961400e2d56ea",
+      "verdict": {
+        "outcome": "success",
+        "attempted": 3,
+        "completed": 3,
+        "passed": 3,
+        "failed": 0,
+        "skipped": 0,
+        "results": [
+          {
+            "group": "criteria",
+            "id": "implementation",
+            "passed": true,
+            "basis": "docs/spec/SYNTAX.md interfaces; impl selection follows receiver type",
+            "evidence_ref": "sha256:0daa570039044844ae75297896f5a5fcccc23ce2907dded8f5cc213a7f8f4b5c",
+            "rationale": "Names Int implementation and argument type."
+          },
+          {
+            "group": "criteria",
+            "id": "result",
+            "passed": true,
+            "basis": "Describe Int method body in main.mdk",
+            "evidence_ref": "sha256:0daa570039044844ae75297896f5a5fcccc23ce2907dded8f5cc213a7f8f4b5c",
+            "rationale": "States integer result."
+          },
+          {
+            "group": "controls",
+            "id": "other-type",
+            "passed": true,
+            "basis": "Argument has type String; docs/spec/SYNTAX.md interfaces",
+            "evidence_ref": "sha256:0daa570039044844ae75297896f5a5fcccc23ce2907dded8f5cc213a7f8f4b5c",
+            "rationale": "Names String implementation."
+          }
+        ]
+      },
+      "observations": [
+        "MCP type-at returned a generic signature; shell was also used."
+      ]
+    },
+    {
+      "index": 10,
+      "task": "worktree-validation",
+      "arm": "mcp",
+      "model": "gpt-6.1-terra",
+      "effort": "high",
+      "host_version": "codex-cli 0.166.0",
+      "start_timestamp": null,
+      "end_timestamp": null,
+      "wall_ns": 14923314313,
+      "attempts": 1,
+      "operations_attempted": 2,
+      "operations_admitted": 2,
+      "operations_denied": 0,
+      "tools": {
+        "shell": 2
+      },
+      "shell_used_in_mcp_arm": true,
+      "host_outcome": "success",
+      "usage": {
+        "totalTokens": 20956,
+        "inputTokens": 20579,
+        "cachedInputTokens": 13312,
+        "cacheWriteInputTokens": 0,
+        "outputTokens": 377,
+        "reasoningOutputTokens": 73
+      },
+      "usage_complete": true,
+      "result_bytes": 456,
+      "read_count": null,
+      "cpu_ns": null,
+      "peak_rss_bytes": null,
+      "artifact_maps_match": true,
+      "workspace_matches_initial_task": true,
+      "evidence_ref": "sha256:f6e509502d3e06ca408a2b1c17b6bda24cdb108c835d226bd2e530acd5fb7436",
+      "host_evidence_ref": "sha256:5aa1096261c9c778aaf55a27b30ecdb67ca4f1d6dd51c7d3ce37716ff52c229c",
+      "verdict": {
+        "outcome": "incorrect",
+        "attempted": 4,
+        "completed": 4,
+        "passed": 2,
+        "failed": 2,
+        "skipped": 0,
+        "results": [
+          {
+            "group": "criteria",
+            "id": "build",
+            "passed": true,
+            "basis": "AGENTS.md B-NO-BORROW-ISOLATED and B-STALENESS",
+            "evidence_ref": "sha256:f6e509502d3e06ca408a2b1c17b6bda24cdb108c835d226bd2e530acd5fb7436",
+            "rationale": "Rebuilds and tests B."
+          },
+          {
+            "group": "criteria",
+            "id": "identity",
+            "passed": false,
+            "basis": "docs/design/MCP-AGENT-SERVICE.md \u00a7 Workspace and toolchain identity",
+            "evidence_ref": "sha256:f6e509502d3e06ca408a2b1c17b6bda24cdb108c835d226bd2e530acd5fb7436",
+            "rationale": "Rejects A as proof but does not check B stdlib identity."
+          },
+          {
+            "group": "criteria",
+            "id": "staleness",
+            "passed": false,
+            "basis": "compiler/driver/medaka_cli.mdk checkSourceStaleness",
+            "evidence_ref": "sha256:f6e509502d3e06ca408a2b1c17b6bda24cdb108c835d226bd2e530acd5fb7436",
+            "rationale": "Does not specify MEDAKA_STRICT=1."
+          },
+          {
+            "group": "controls",
+            "id": "same-path",
+            "passed": true,
+            "basis": "docs/design/MCP-AGENT-SERVICE.md \u00a7 Workspace and toolchain identity",
+            "evidence_ref": "sha256:f6e509502d3e06ca408a2b1c17b6bda24cdb108c835d226bd2e530acd5fb7436",
+            "rationale": "Explains relative paths do not establish build identity."
+          }
+        ]
+      },
+      "observations": [
+        "No MCP operation was attempted; shell was used."
+      ]
+    },
+    {
+      "index": 11,
+      "task": "worktree-validation",
+      "arm": "shell-only",
+      "model": "gpt-6.1-terra",
+      "effort": "high",
+      "host_version": "codex-cli 0.166.0",
+      "start_timestamp": null,
+      "end_timestamp": null,
+      "wall_ns": 12453169771,
+      "attempts": 1,
+      "operations_attempted": 3,
+      "operations_admitted": 3,
+      "operations_denied": 0,
+      "tools": {
+        "shell": 3
+      },
+      "shell_used_in_mcp_arm": false,
+      "host_outcome": "success",
+      "usage": {
+        "totalTokens": 22228,
+        "inputTokens": 21722,
+        "cachedInputTokens": 19072,
+        "cacheWriteInputTokens": 0,
+        "outputTokens": 506,
+        "reasoningOutputTokens": 109
+      },
+      "usage_complete": true,
+      "result_bytes": 696,
+      "read_count": null,
+      "cpu_ns": null,
+      "peak_rss_bytes": null,
+      "artifact_maps_match": true,
+      "workspace_matches_initial_task": true,
+      "evidence_ref": "sha256:a652da7959a24e7299c5af7d90d58a487b8b5fd48026222612d908dffb138be9",
+      "host_evidence_ref": "sha256:89535f34225af9a0d78819d10d752e655eebf4a9095c070b8ccfb26a87ad60be",
+      "verdict": {
+        "outcome": "incorrect",
+        "attempted": 4,
+        "completed": 4,
+        "passed": 2,
+        "failed": 2,
+        "skipped": 0,
+        "results": [
+          {
+            "group": "criteria",
+            "id": "build",
+            "passed": true,
+            "basis": "AGENTS.md B-NO-BORROW-ISOLATED and B-STALENESS",
+            "evidence_ref": "sha256:a652da7959a24e7299c5af7d90d58a487b8b5fd48026222612d908dffb138be9",
+            "rationale": "Rebuilds and tests B."
+          },
+          {
+            "group": "criteria",
+            "id": "identity",
+            "passed": false,
+            "basis": "docs/design/MCP-AGENT-SERVICE.md \u00a7 Workspace and toolchain identity",
+            "evidence_ref": "sha256:a652da7959a24e7299c5af7d90d58a487b8b5fd48026222612d908dffb138be9",
+            "rationale": "Rejects A as proof but does not check B stdlib identity."
+          },
+          {
+            "group": "criteria",
+            "id": "staleness",
+            "passed": false,
+            "basis": "compiler/driver/medaka_cli.mdk checkSourceStaleness",
+            "evidence_ref": "sha256:a652da7959a24e7299c5af7d90d58a487b8b5fd48026222612d908dffb138be9",
+            "rationale": "Does not specify MEDAKA_STRICT=1."
+          },
+          {
+            "group": "controls",
+            "id": "same-path",
+            "passed": true,
+            "basis": "docs/design/MCP-AGENT-SERVICE.md \u00a7 Workspace and toolchain identity",
+            "evidence_ref": "sha256:a652da7959a24e7299c5af7d90d58a487b8b5fd48026222612d908dffb138be9",
+            "rationale": "Explains relative paths do not establish build identity."
+          }
+        ]
+      },
+      "observations": []
+    }
+  ]
+}

@@ -1,5 +1,5 @@
 # META
-source_lines=2225
+source_lines=2183
 stages=DESUGAR,MARK
 # SOURCE
 -- tc_groups: binding-group analysis and the generalization policy at a binding boundary: the
@@ -15,7 +15,7 @@ stages=DESUGAR,MARK
 -- Placement: declarations are placed by R1-R6 of the Phase 4 module table,
 -- compiler/ARCHITECTURE-PLAYBOOK.md section 6.
 -- Closure rule: this module may not import `types.typecheck`, nor any of `tc_pat`,
--- `tc_infer_records`, `tc_infer`, `tc_elab`, `tc_global`, `tc_module`.
+-- `tc_infer_records`, `tc_infer`, `tc_elab`, `tc_global`, `tc_stamp`, `tc_module`.
 
 import support.diag_codes.{DiagCode(..)}
 import list.{reverse}
@@ -39,7 +39,6 @@ import types.tc_types.{
 import types.tc_mono.{
   abstractSlotIds,
   anyMember,
-  authIdsIn,
   boundTyvarIds,
   cohApply,
   containsI,
@@ -54,7 +53,6 @@ import types.tc_mono.{
   oblArgKey,
   patVarsListTc,
   patVarsTc,
-  qualifierAuthIds,
   schemeIds,
   schemeMono,
   sigCellsOf,
@@ -127,7 +125,8 @@ import types.tc_solve_check.{
   undeterminedGoalExempt,
   prerequisiteOnWalk,
 }
-import types.tc_effects.{clausesAt, clausesOf}
+import types.tc_effects.{scopeRolesOf}
+import types.tc_grants.{clausesAt, clausesOf}
 import types.tc_occurrence.{ctorHeadShaped}
 import frontend.ast.{
   Arm(..),
@@ -1463,47 +1462,6 @@ memberRole True _ = RoleDeclared
 memberRole False True = RoleQuantifies
 memberRole False False = RoleMonomorphic
 
--- [members] in group order, each with its role and type.  A quantifying
--- member's argument-position authorities are quantified (a variable two
--- members share is a recursive group's monomorphic link and is solved as
--- before); a monomorphic member hands every authority of its type outward.
-export
-scopeRolesOf : List (BindingRole, Mono) -> ScopeRoles
-scopeRolesOf members =
-  let owners =
-    fold
-      ((acc, index) (role, mono) =>
-        let ids = match role
-          RoleQuantifies => IdMap.keys (qualifierAuthIds mono Tip)
-          _ => []
-        (
-          fold
-            (m id => IdMap.set id (index :: optionOr [] (IdMap.get id m)) m)
-            acc
-            ids,
-          index + 1,
-        ))
-      (Tip, 0)
-      members
-  ScopeRoles {
-    rlQuantified =
-      IdMap.foldlWithKey
-        (acc id indices => match indices
-          [index] => IdMap.set id index acc
-          _ => acc)
-        Tip
-        (fst owners),
-    rlOutward =
-      fold
-        (acc (role, mono) => match role
-          RoleMonomorphic => authIdsIn mono acc
-          _ => acc)
-        Tip
-        members,
-    rlTyped = Some (fold (acc (_, mono) => authIdsIn mono acc) Tip members),
-    rlMemberAuths = _ => map ((_, mono) => authIdsIn mono Tip) members,
-  }
-
 export
 residualsOf : Int -> List (Int, AuthResidual) -> List AuthResidual
 residualsOf index residuals =
@@ -2231,7 +2189,7 @@ ifaceMethodEVars (IfaceMethod _ _ d _) = match d
 (DUse false (UseGroup ("support" "diag_codes") ((mem "DiagCode" true))))
 (DUse false (UseGroup ("list") ((mem "reverse" false))))
 (DUse false (UseGroup ("types" "tc_types") ((mem "OblProjection" true) (mem "GoalReach" true) (mem "BindingRole" true) (mem "Predicate" true) (mem "UObligation" true) (mem "ConstraintReg" false) (mem "DynCtx" false) (mem "GraphCtx" false) (mem "ImplRow" false) (mem "ModuleCtx" false) (mem "ReqWalk" false) (mem "ScopedMember" false) (mem "siteFor" false) (mem "TcEnv" false) (mem "ReqStep" true))))
-(DUse false (UseGroup ("types" "tc_mono") ((mem "abstractSlotIds" false) (mem "anyMember" false) (mem "authIdsIn" false) (mem "boundTyvarIds" false) (mem "cohApply" false) (mem "containsI" false) (mem "declaredOblArgId" false) (mem "declaredOblArgOk" false) (mem "hasDupI" false) (mem "headsUnifier" false) (mem "isBareTyvarMono" false) (mem "monoUnboundIds" false) (mem "monoVarCells" false) (mem "monoVectorClosed" false) (mem "oblArgKey" false) (mem "patVarsListTc" false) (mem "patVarsTc" false) (mem "qualifierAuthIds" false) (mem "schemeIds" false) (mem "schemeMono" false) (mem "sigCellsOf" false) (mem "sigTvarIds" false) (mem "tyvarId" false) (mem "tyVarNames" false) (mem "unrigidSig" false))))
+(DUse false (UseGroup ("types" "tc_mono") ((mem "abstractSlotIds" false) (mem "anyMember" false) (mem "boundTyvarIds" false) (mem "cohApply" false) (mem "containsI" false) (mem "declaredOblArgId" false) (mem "declaredOblArgOk" false) (mem "hasDupI" false) (mem "headsUnifier" false) (mem "isBareTyvarMono" false) (mem "monoUnboundIds" false) (mem "monoVarCells" false) (mem "monoVectorClosed" false) (mem "oblArgKey" false) (mem "patVarsListTc" false) (mem "patVarsTc" false) (mem "schemeIds" false) (mem "schemeMono" false) (mem "sigCellsOf" false) (mem "sigTvarIds" false) (mem "tyvarId" false) (mem "tyVarNames" false) (mem "unrigidSig" false))))
 (DUse false (UseGroup ("types" "tc_diag_text") ((mem "annotTooGeneralMsg" false) (mem "groundedSigVarMsg" false) (mem "letRecNonFunctionMsg" false) (mem "missingConstraintMsg" false) (mem "missingConstraintVecMsg" false) (mem "sigOverExpansiveMsg" false) (mem "sigTooGeneralMsg" false) (mem "siblingSharedSigVarMsg" false) (mem "varNameForId" false))))
 (DUse false (UseGroup ("types" "tc_state") ((mem "mctxAtIfSome" false))))
 (DUse false (UseGroup ("types" "tc_env") ((mem "extendLocalVar" false) (mem "funClausePair" false) (mem "lookupCtor" false) (mem "namesToSet" false) (mem "oblIfaceKey" false) (mem "sameIfaceDecl" false) (mem "seedAlphaLets" false) (mem "superLookup" false))))
@@ -2243,7 +2201,8 @@ ifaceMethodEVars (IfaceMethod _ _ d _) = match d
 (DUse false (UseGroup ("types" "tc_solve_entail") ((mem "freshRowHeadsTvs" false) (mem "goalCandidates" false) (mem "goalIsProjection" false) (mem "goalReach" false) (mem "goalRows" false) (mem "selectedRowReqMatch" false) (mem "reqWalkEnter" false) (mem "reqWalkMemo" false) (mem "reqWalkSeed" false))))
 (DUse false (UseGroup ("types" "tc_solve") ((mem "goalVarsAllHeld" false) (mem "reqToObligation" false) (mem "uOblArgs" false) (mem "noteWalkGoalFollowed" false) (mem "solvedCleanly" false) (mem "walkGoalFollowed" false))))
 (DUse false (UseGroup ("types" "tc_solve_check") ((mem "callPredOf" false) (mem "ifaceForInferredId" false) (mem "inferredConstraintIds" false) (mem "oblPredOf" false) (mem "residualBoundPreds" false) (mem "undeterminedGoalExempt" false) (mem "prerequisiteOnWalk" false))))
-(DUse false (UseGroup ("types" "tc_effects") ((mem "clausesAt" false) (mem "clausesOf" false))))
+(DUse false (UseGroup ("types" "tc_effects") ((mem "scopeRolesOf" false))))
+(DUse false (UseGroup ("types" "tc_grants") ((mem "clausesAt" false) (mem "clausesOf" false))))
 (DUse false (UseGroup ("types" "tc_occurrence") ((mem "ctorHeadShaped" false))))
 (DUse false (UseGroup ("frontend" "ast") ((mem "Arm" true) (mem "Constraint" true) (mem "Decl" true) (mem "DoStmt" true) (mem "Expr" true) (mem "FieldAssign" true) (mem "FunClause" true) (mem "Guard" true) (mem "GuardArm" true) (mem "IfaceMethod" true) (mem "ImplMethod" true) (mem "InterpPart" true) (mem "LetBind" true) (mem "Loc" true) (mem "MethodDefault" true) (mem "Pat" true) (mem "Require" true) (mem "Section" true) (mem "Super" true) (mem "Ty" true) (mem "firstTyLoc" false) (mem "letBindName" false))))
 (DUse false (UseGroup ("types" "repr") ((mem "AuthResidual" true) (mem "IfaceRef" true) (mem "Mono" true) (mem "Scheme" true) (mem "VecObl" true) (mem "normalize" false))))
@@ -2641,8 +2600,6 @@ ifaceMethodEVars (IfaceMethod _ _ d _) = match d
 (DFunDef false "memberRole" ((PCon "True") PWild) (EVar "RoleDeclared"))
 (DFunDef false "memberRole" ((PCon "False") (PCon "True")) (EVar "RoleQuantifies"))
 (DFunDef false "memberRole" ((PCon "False") (PCon "False")) (EVar "RoleMonomorphic"))
-(DTypeSig true "scopeRolesOf" (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "BindingRole") (TyCon "Mono"))) (TyCon "ScopeRoles")))
-(DFunDef false "scopeRolesOf" ((PVar "members")) (EBlock (DoLet false false (PVar "owners") (EApp (EApp (EApp (EVar "fold") (ELam ((PTuple (PVar "acc") (PVar "index")) (PTuple (PVar "role") (PVar "mono"))) (EBlock (DoLet false false (PVar "ids") (EMatch (EVar "role") (arm (PCon "RoleQuantifies") () (EApp (EVar "IdMap.keys") (EApp (EApp (EVar "qualifierAuthIds") (EVar "mono")) (EVar "Tip")))) (arm PWild () (EListLit)))) (DoExpr (ETuple (EApp (EApp (EApp (EVar "fold") (ELam ((PVar "m") (PVar "id")) (EApp (EApp (EApp (EVar "IdMap.set") (EVar "id")) (EBinOp "::" (EVar "index") (EApp (EApp (EVar "optionOr") (EListLit)) (EApp (EApp (EVar "IdMap.get") (EVar "id")) (EVar "m"))))) (EVar "m")))) (EVar "acc")) (EVar "ids")) (EBinOp "+" (EVar "index") (ELit (LInt 1)))))))) (ETuple (EVar "Tip") (ELit (LInt 0)))) (EVar "members"))) (DoExpr (ERecordCreate "ScopeRoles" ((fa "rlQuantified" (EApp (EApp (EApp (EVar "IdMap.foldlWithKey") (ELam ((PVar "acc") (PVar "id") (PVar "indices")) (EMatch (EVar "indices") (arm (PList (PVar "index")) () (EApp (EApp (EApp (EVar "IdMap.set") (EVar "id")) (EVar "index")) (EVar "acc"))) (arm PWild () (EVar "acc"))))) (EVar "Tip")) (EApp (EVar "fst") (EVar "owners")))) (fa "rlOutward" (EApp (EApp (EApp (EVar "fold") (ELam ((PVar "acc") (PTuple (PVar "role") (PVar "mono"))) (EMatch (EVar "role") (arm (PCon "RoleMonomorphic") () (EApp (EApp (EVar "authIdsIn") (EVar "mono")) (EVar "acc"))) (arm PWild () (EVar "acc"))))) (EVar "Tip")) (EVar "members"))) (fa "rlTyped" (EApp (EVar "Some") (EApp (EApp (EApp (EVar "fold") (ELam ((PVar "acc") (PTuple PWild (PVar "mono"))) (EApp (EApp (EVar "authIdsIn") (EVar "mono")) (EVar "acc")))) (EVar "Tip")) (EVar "members")))) (fa "rlMemberAuths" (ELam (PWild) (EApp (EApp (EVar "map") (ELam ((PTuple PWild (PVar "mono"))) (EApp (EApp (EVar "authIdsIn") (EVar "mono")) (EVar "Tip")))) (EVar "members")))))))))
 (DTypeSig true "residualsOf" (TyFun (TyCon "Int") (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "Int") (TyCon "AuthResidual"))) (TyApp (TyCon "List") (TyCon "AuthResidual")))))
 (DFunDef false "residualsOf" ((PVar "index") (PVar "residuals")) (EApp (EApp (EVar "flatMap") (ELam ((PTuple (PVar "owner") (PVar "r"))) (EIf (EBinOp "==" (EVar "owner") (EVar "index")) (EListLit (EVar "r")) (EListLit)))) (EVar "residuals")))
 (DTypeSig false "memberClauseIsValue" (TyFun (TyCon "TcEnv") (TyFun (TyTuple (TyApp (TyCon "List") (TyCon "Pat")) (TyCon "Expr")) (TyCon "Bool"))))
@@ -2769,7 +2726,7 @@ ifaceMethodEVars (IfaceMethod _ _ d _) = match d
 (DUse false (UseGroup ("support" "diag_codes") ((mem "DiagCode" true))))
 (DUse false (UseGroup ("list") ((mem "reverse" false))))
 (DUse false (UseGroup ("types" "tc_types") ((mem "OblProjection" true) (mem "GoalReach" true) (mem "BindingRole" true) (mem "Predicate" true) (mem "UObligation" true) (mem "ConstraintReg" false) (mem "DynCtx" false) (mem "GraphCtx" false) (mem "ImplRow" false) (mem "ModuleCtx" false) (mem "ReqWalk" false) (mem "ScopedMember" false) (mem "siteFor" false) (mem "TcEnv" false) (mem "ReqStep" true))))
-(DUse false (UseGroup ("types" "tc_mono") ((mem "abstractSlotIds" false) (mem "anyMember" false) (mem "authIdsIn" false) (mem "boundTyvarIds" false) (mem "cohApply" false) (mem "containsI" false) (mem "declaredOblArgId" false) (mem "declaredOblArgOk" false) (mem "hasDupI" false) (mem "headsUnifier" false) (mem "isBareTyvarMono" false) (mem "monoUnboundIds" false) (mem "monoVarCells" false) (mem "monoVectorClosed" false) (mem "oblArgKey" false) (mem "patVarsListTc" false) (mem "patVarsTc" false) (mem "qualifierAuthIds" false) (mem "schemeIds" false) (mem "schemeMono" false) (mem "sigCellsOf" false) (mem "sigTvarIds" false) (mem "tyvarId" false) (mem "tyVarNames" false) (mem "unrigidSig" false))))
+(DUse false (UseGroup ("types" "tc_mono") ((mem "abstractSlotIds" false) (mem "anyMember" false) (mem "boundTyvarIds" false) (mem "cohApply" false) (mem "containsI" false) (mem "declaredOblArgId" false) (mem "declaredOblArgOk" false) (mem "hasDupI" false) (mem "headsUnifier" false) (mem "isBareTyvarMono" false) (mem "monoUnboundIds" false) (mem "monoVarCells" false) (mem "monoVectorClosed" false) (mem "oblArgKey" false) (mem "patVarsListTc" false) (mem "patVarsTc" false) (mem "schemeIds" false) (mem "schemeMono" false) (mem "sigCellsOf" false) (mem "sigTvarIds" false) (mem "tyvarId" false) (mem "tyVarNames" false) (mem "unrigidSig" false))))
 (DUse false (UseGroup ("types" "tc_diag_text") ((mem "annotTooGeneralMsg" false) (mem "groundedSigVarMsg" false) (mem "letRecNonFunctionMsg" false) (mem "missingConstraintMsg" false) (mem "missingConstraintVecMsg" false) (mem "sigOverExpansiveMsg" false) (mem "sigTooGeneralMsg" false) (mem "siblingSharedSigVarMsg" false) (mem "varNameForId" false))))
 (DUse false (UseGroup ("types" "tc_state") ((mem "mctxAtIfSome" false))))
 (DUse false (UseGroup ("types" "tc_env") ((mem "extendLocalVar" false) (mem "funClausePair" false) (mem "lookupCtor" false) (mem "namesToSet" false) (mem "oblIfaceKey" false) (mem "sameIfaceDecl" false) (mem "seedAlphaLets" false) (mem "superLookup" false))))
@@ -2781,7 +2738,8 @@ ifaceMethodEVars (IfaceMethod _ _ d _) = match d
 (DUse false (UseGroup ("types" "tc_solve_entail") ((mem "freshRowHeadsTvs" false) (mem "goalCandidates" false) (mem "goalIsProjection" false) (mem "goalReach" false) (mem "goalRows" false) (mem "selectedRowReqMatch" false) (mem "reqWalkEnter" false) (mem "reqWalkMemo" false) (mem "reqWalkSeed" false))))
 (DUse false (UseGroup ("types" "tc_solve") ((mem "goalVarsAllHeld" false) (mem "reqToObligation" false) (mem "uOblArgs" false) (mem "noteWalkGoalFollowed" false) (mem "solvedCleanly" false) (mem "walkGoalFollowed" false))))
 (DUse false (UseGroup ("types" "tc_solve_check") ((mem "callPredOf" false) (mem "ifaceForInferredId" false) (mem "inferredConstraintIds" false) (mem "oblPredOf" false) (mem "residualBoundPreds" false) (mem "undeterminedGoalExempt" false) (mem "prerequisiteOnWalk" false))))
-(DUse false (UseGroup ("types" "tc_effects") ((mem "clausesAt" false) (mem "clausesOf" false))))
+(DUse false (UseGroup ("types" "tc_effects") ((mem "scopeRolesOf" false))))
+(DUse false (UseGroup ("types" "tc_grants") ((mem "clausesAt" false) (mem "clausesOf" false))))
 (DUse false (UseGroup ("types" "tc_occurrence") ((mem "ctorHeadShaped" false))))
 (DUse false (UseGroup ("frontend" "ast") ((mem "Arm" true) (mem "Constraint" true) (mem "Decl" true) (mem "DoStmt" true) (mem "Expr" true) (mem "FieldAssign" true) (mem "FunClause" true) (mem "Guard" true) (mem "GuardArm" true) (mem "IfaceMethod" true) (mem "ImplMethod" true) (mem "InterpPart" true) (mem "LetBind" true) (mem "Loc" true) (mem "MethodDefault" true) (mem "Pat" true) (mem "Require" true) (mem "Section" true) (mem "Super" true) (mem "Ty" true) (mem "firstTyLoc" false) (mem "letBindName" false))))
 (DUse false (UseGroup ("types" "repr") ((mem "AuthResidual" true) (mem "IfaceRef" true) (mem "Mono" true) (mem "Scheme" true) (mem "VecObl" true) (mem "normalize" false))))
@@ -3179,8 +3137,6 @@ ifaceMethodEVars (IfaceMethod _ _ d _) = match d
 (DFunDef false "memberRole" ((PCon "True") PWild) (EVar "RoleDeclared"))
 (DFunDef false "memberRole" ((PCon "False") (PCon "True")) (EVar "RoleQuantifies"))
 (DFunDef false "memberRole" ((PCon "False") (PCon "False")) (EVar "RoleMonomorphic"))
-(DTypeSig true "scopeRolesOf" (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "BindingRole") (TyCon "Mono"))) (TyCon "ScopeRoles")))
-(DFunDef false "scopeRolesOf" ((PVar "members")) (EBlock (DoLet false false (PVar "owners") (EApp (EApp (EApp (EMethodRef "fold") (ELam ((PTuple (PVar "acc") (PVar "index")) (PTuple (PVar "role") (PVar "mono"))) (EBlock (DoLet false false (PVar "ids") (EMatch (EVar "role") (arm (PCon "RoleQuantifies") () (EApp (EVar "IdMap.keys") (EApp (EApp (EVar "qualifierAuthIds") (EVar "mono")) (EVar "Tip")))) (arm PWild () (EListLit)))) (DoExpr (ETuple (EApp (EApp (EApp (EMethodRef "fold") (ELam ((PVar "m") (PVar "id")) (EApp (EApp (EApp (EVar "IdMap.set") (EVar "id")) (EBinOp "::" (EMethodRef "index") (EApp (EApp (EVar "optionOr") (EListLit)) (EApp (EApp (EVar "IdMap.get") (EVar "id")) (EVar "m"))))) (EVar "m")))) (EVar "acc")) (EVar "ids")) (EBinOp "+" (EMethodRef "index") (ELit (LInt 1)))))))) (ETuple (EVar "Tip") (ELit (LInt 0)))) (EVar "members"))) (DoExpr (ERecordCreate "ScopeRoles" ((fa "rlQuantified" (EApp (EApp (EApp (EVar "IdMap.foldlWithKey") (ELam ((PVar "acc") (PVar "id") (PVar "indices")) (EMatch (EVar "indices") (arm (PList (PVar "index")) () (EApp (EApp (EApp (EVar "IdMap.set") (EVar "id")) (EMethodRef "index")) (EVar "acc"))) (arm PWild () (EVar "acc"))))) (EVar "Tip")) (EApp (EVar "fst") (EVar "owners")))) (fa "rlOutward" (EApp (EApp (EApp (EMethodRef "fold") (ELam ((PVar "acc") (PTuple (PVar "role") (PVar "mono"))) (EMatch (EVar "role") (arm (PCon "RoleMonomorphic") () (EApp (EApp (EVar "authIdsIn") (EVar "mono")) (EVar "acc"))) (arm PWild () (EVar "acc"))))) (EVar "Tip")) (EVar "members"))) (fa "rlTyped" (EApp (EVar "Some") (EApp (EApp (EApp (EMethodRef "fold") (ELam ((PVar "acc") (PTuple PWild (PVar "mono"))) (EApp (EApp (EVar "authIdsIn") (EVar "mono")) (EVar "acc")))) (EVar "Tip")) (EVar "members")))) (fa "rlMemberAuths" (ELam (PWild) (EApp (EApp (EMethodRef "map") (ELam ((PTuple PWild (PVar "mono"))) (EApp (EApp (EVar "authIdsIn") (EVar "mono")) (EVar "Tip")))) (EVar "members")))))))))
 (DTypeSig true "residualsOf" (TyFun (TyCon "Int") (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "Int") (TyCon "AuthResidual"))) (TyApp (TyCon "List") (TyCon "AuthResidual")))))
 (DFunDef false "residualsOf" ((PVar "index") (PVar "residuals")) (EApp (EApp (EDictApp "flatMap") (ELam ((PTuple (PVar "owner") (PVar "r"))) (EIf (EBinOp "==" (EVar "owner") (EMethodRef "index")) (EListLit (EVar "r")) (EListLit)))) (EVar "residuals")))
 (DTypeSig false "memberClauseIsValue" (TyFun (TyCon "TcEnv") (TyFun (TyTuple (TyApp (TyCon "List") (TyCon "Pat")) (TyCon "Expr")) (TyCon "Bool"))))

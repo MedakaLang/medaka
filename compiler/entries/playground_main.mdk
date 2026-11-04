@@ -169,7 +169,7 @@ import backend.wasm_emit.{
   makeWasmEmitInput,
 }
 import backend.emit_plan.{buildEmitPlanReached}
-import types.tc_occurrence.{constrainedSigNames}
+import types.tc_mark.{constrainedSigNames}
 
 -- ARG CONTRACT (Stage 3): the FIRST arg is a MODE, dispatched below.
 --   compile  <runtime> <core> <entry> [root ...]      → analyze→emit (today's behavior)
