@@ -38,6 +38,8 @@ COMMA
 IDENT "fromDigit"
 COMMA
 IDENT "toDigit"
+COMMA
+IDENT "padLeft"
 RBRACE
 NEWLINE
 IMPORT
@@ -550,7 +552,7 @@ STRING "invalid string for key '"
 COMMA
 IDENT "key"
 COMMA
-STRING "': unterminated string (a newline inside a string must be written \\n)"
+STRING "': unterminated string (a string must close on the same line; write a newline as \\n)"
 RBRACKET
 NEWLINE
 IDENT "isRawControl"
@@ -642,41 +644,13 @@ IDENT "hexPad"
 IDENT "width"
 IDENT "n"
 EQUAL
-INDENT
-LET
-IDENT "digits"
-EQUAL
+IDENT "padLeft"
+IDENT "width"
+CHAR "0"
+LPAREN
 IDENT "hexDigits"
 IDENT "n"
-NEWLINE
-IDENT "stringConcat"
-LBRACKET
-IDENT "stringConcat"
-LPAREN
-IDENT "map"
-LPAREN
-UNDERSCORE
-FAT_ARROW
-STRING "0"
 RPAREN
-LBRACKET
-INT 0
-DOTDOT
-IDENT "width"
-MINUS
-IDENT "arrayLength"
-LPAREN
-IDENT "stringToChars"
-IDENT "digits"
-RPAREN
-RBRACKET
-RPAREN
-COMMA
-IDENT "digits"
-COMMA
-RBRACKET
-NEWLINE
-DEDENT
 NEWLINE
 IDENT "hexDigits"
 COLON
@@ -853,12 +827,31 @@ STRING "invalid string for key '"
 COMMA
 IDENT "key"
 COMMA
-STRING "': unknown escape '\\"
+STRING "': unknown escape "
+COMMA
+IF
+IDENT "charCode"
+IDENT "c"
+GT
+INT 32
+AND
+IDENT "charCode"
+IDENT "c"
+LT
+INT 127
+THEN
+IDENT "stringConcat"
+LBRACKET
+STRING "'\\"
 COMMA
 IDENT "charToStr"
 IDENT "c"
 COMMA
 STRING "'"
+RBRACKET
+ELSE
+IDENT "describeChar"
+IDENT "c"
 COMMA
 RBRACKET
 RPAREN

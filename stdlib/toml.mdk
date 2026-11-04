@@ -24,7 +24,7 @@ import list.{reverse}
 import map.{Map(..), get, insertWith}
 import string.{
   lines, toInt, startsWith, drop, indexOf, contains, trimAscii, fromDigit,
-  toDigit
+  toDigit, padLeft
 }
 import core.{Display}
 import regex.{Regex, mustCompile, find as reFind}
@@ -107,12 +107,12 @@ parseQuotedBody key arr i acc
   where
     c = arrayGetUnsafe i arr
 
--- A basic string closes on its own line, so a raw newline inside one shows up
--- here as the line ending early.
+-- The reader is line-based, so a missing closing quote and a string broken
+-- across lines both reach here as the line ending early.
 unterminatedMsg : String -> String
 unterminatedMsg key = stringConcat [
   "invalid string for key '", key,
-  "': unterminated string (a newline inside a string must be written \\n)"
+  "': unterminated string (a string must close on the same line; write a newline as \\n)"
 ]
 
 -- TOML forbids every control character but tab raw inside a basic string.
@@ -130,13 +130,7 @@ describeChar c
 
 -- `n` in lowercase hexadecimal, left-padded with zeros to `width` digits.
 hexPad : Int -> Int -> String
-hexPad width n =
-  let digits = hexDigits n
-  stringConcat [
-    stringConcat
-      (map (_ => "0") [0..width - arrayLength (stringToChars digits)]),
-    digits,
-  ]
+hexPad width n = padLeft width '0' (hexDigits n)
 
 hexDigits : Int -> String
 hexDigits n
@@ -165,9 +159,11 @@ parseEscape key arr i acc
         (stringConcat [
           "invalid string for key '",
           key,
-          "': unknown escape '\\",
-          charToStr c,
-          "'",
+          "': unknown escape ",
+          if charCode c > 32 && charCode c < 127 then
+            stringConcat ["'\\", charToStr c, "'"]
+          else
+            describeChar c,
         ])
   where
     c = arrayGetUnsafe i arr

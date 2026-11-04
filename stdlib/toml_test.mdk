@@ -169,6 +169,18 @@ test "an invalid string is an Err naming the key and the character" = expectEach
         (parse ("k = \"a" ++ codeStr 10 ++ "b\"")),
     ),
     (
+      "missing closing quote",
+      expectErrContains
+        "key 'k': unterminated string (a string must close on the same line"
+        (parse "k = \"abc"),
+    ),
+    (
+      "escape of a control character",
+      expectErrContains
+        "key 'k': unknown escape U+0001"
+        (parse ("k = \"a\\" ++ codeStr 1 ++ "b\"")),
+    ),
+    (
       "raw U+0001",
       expectErrContains
         "key 'k': raw control character U+0001"

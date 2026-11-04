@@ -724,7 +724,11 @@ test "a panicking medaka run prints no seed line, seeded" =
 -- evaluator's own compiled code, not `runtimePanic`.
 evalInternalPanicSrc : String
 evalInternalPanicSrc =
-  "import test.{expectEqual}\n\ntest \"bad\" = expectEqual 1 \"a\"\n"
+  """
+import test.{expectEqual}
+
+test "bad" = expectEqual 1 "a"
+"""
 
 -- The recursion in `deep` overflows the C stack before the evaluator's depth
 -- limit: sixty nested additions per level.
@@ -739,10 +743,20 @@ deepSrc = join "" [
 
 cStackTestSrc : String
 cStackTestSrc =
-  "import test.{expectEqual}\n\n\{deepSrc}\ntest \"cstack3\" =\n  let k = randomInt 20000 20000\n  expectEqual 0 (deep k)\n"
+  """
+import test.{expectEqual}
+
+\{deepSrc}
+test "cstack3" =
+  let k = randomInt 20000 20000
+  expectEqual 0 (deep k)
+"""
 
 cStackMainSrc : String
-cStackMainSrc = "\{deepSrc}\nmain = println (intToString (deep 20000))\n"
+cStackMainSrc = """
+\{deepSrc}
+main = println (intToString (deep 20000))
+"""
 
 -- The line after the first line of [ls] that contains [needle].
 lineAfter : String -> List String -> Option String
@@ -823,11 +837,23 @@ heapCap = ["GC_MAXIMUM_HEAP_SIZE=200000000", "GC_INITIAL_HEAP_SIZE=16777216"]
 
 oomSrc : String
 oomSrc =
-  "import test.{expectEqual}\n\ntest \"oom\" =\n  let k = randomInt 0 1\n  let a = arrayMake 40000000 k\n  expectEqual 0 (arrayLength a)\n"
+  """
+import test.{expectEqual}
+
+test "oom" =
+  let k = randomInt 0 1
+  let a = arrayMake 40000000 k
+  expectEqual 0 (arrayLength a)
+"""
 
 oomMainSrc : String
 oomMainSrc =
-  "main =\n  let k = randomInt 0 1\n  let a = arrayMake 40000000 k\n  println (intToString (arrayLength a))\n"
+  """
+main =
+  let k = randomInt 0 1
+  let a = arrayMake 40000000 k
+  println (intToString (arrayLength a))
+"""
 
 test "an allocation failure under the eval engine prints the run's seed in every mode" =
   abortSeedRowsEnv heapCap oomSrc "E-OUT-OF-MEMORY"
@@ -902,14 +928,16 @@ test "medaka run of the evaluator-panic and stack-overflow programs prints no se
               ])))
           ["typeerr.mdk", "cstack.mdk"]))
 
+parseTestSrc : String
+parseTestSrc = """
+import test.{expectEqual}
+
+test "p" = expectEqual 1 (1 +)
+"""
+
 test "a --json parse-error refusal prints no seed" =
   withFixtures
-    [
-      (
-        "parse_test.mdk",
-        "import test.{expectEqual}\n\ntest \"p\" = expectEqual 1 (1 +)\n",
-      ),
-    ]
+    [("parse_test.mdk", parseTestSrc)]
     (dir => withSpawn (seededTest (Some 7) [
       "--json",
       "--engines",
@@ -932,6 +960,14 @@ medakaStringBody s =
     |> replaceAll "\u{01}" "\\u{01}"
     |> replaceAll "\u{02}" "\\u{02}"
 
+escSrc : String -> String
+escSrc tmpl =
+  """
+main =
+  setAbortReport "" "\{medakaStringBody tmpl}"
+  panic "\{medakaStringBody hostileMessage}"
+"""
+
 hostileMessage : String
 hostileMessage = "q\"b\\n\nu\u{01}é"
 
@@ -941,14 +977,10 @@ test "the runtime fills the abort template as the envelope serializer renders th
     (!currentEvalFile, "", [mkDiag SevError EPanic hostileMessage None]),
   ]
   withFixtures
-    [
-      (
-        "esc.mdk",
-        "main =\n  setAbortReport \"\" \"\{medakaStringBody tmpl}\"\n  panic \"\{medakaStringBody hostileMessage}\"\n",
-      ),
-    ]
+    [("esc.mdk", escSrc tmpl)]
     (dir => match runVerb medakaBin [
       "build",
+      "--allow-internal",
       "\{dir}/esc.mdk",
       "-o",
       "\{dir}/esc",
