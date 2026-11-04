@@ -1767,7 +1767,7 @@ emitHiddenDiagNote n =
 --      Not to the same `diags` VALUE: `check` passes its `trusted` set as
 --      `fiTrusted` and `run`'s single-file arm passes `[]`, a pre-existing
 --      asymmetry that `run`'s own arm documents.  The front end's guard is
---      `internalGuardFor (fiAllowInternal || contains mid fiTrusted)`, which
+--      `internalGuardFor (moduleTrusted fiAllowInternal fiTrusted mid)`, which
 --      decides only which constructs count as "internal" for `ResError` gating,
 --      and every `ResError` reaches `diags` as a `SevError` via `diagOfResError`,
 --      so the two results can differ ONLY in their ERROR set, never in the

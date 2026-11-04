@@ -39,6 +39,7 @@ import frontend.resolve.{
   ResError,
   resolveProgramG2,
   internalGuardFor,
+  moduleTrusted,
   ppResError,
   resErrorLoc,
   resErrorCode,
@@ -994,7 +995,7 @@ frontEnd exportsFor drive fi = match fi.fiProgram
         fi.fiRuntimeSrc
         fi.fiCoreSrc
         raw
-        (internalGuardFor (fi.fiAllowInternal || contains mid fi.fiTrusted))
+        (internalGuardFor (moduleTrusted fi.fiAllowInternal fi.fiTrusted mid))
     match s.resolveClean
       False => undrivenOutput [(path, s.surfaceDiags)]
       True =>
@@ -1368,6 +1369,14 @@ wrappedRead cacheRef staleRef parseCacheRef read path = match read path
         None => Some src  -- no cached version → use the broken one
 -- fall back to the last source that parsed
 
+-- `wrappedRead` over a load's own caches and reader, collecting into `staleRef`.
+wrappedReadFor : ProjectLoad ->
+  Ref (List (String, Diag)) ->
+  String ->
+  Option String
+wrappedReadFor load staleRef path =
+  wrappedRead load.plCache staleRef load.plParseCache load.plRead path
+
 export
 parseErrDiag : String -> ParseError -> Diag
 parseErrDiag path e = parseDiagnosticToDiag path (parseErrorDiagnostic e)
@@ -1413,6 +1422,34 @@ public export data ProjectQuery = ProjectQuery {
   pqLoad : ProjectLoad,
   pqAllowInternal : Bool,
   pqTrusted : List String,
+}
+
+-- A load with fresh, call-private caches.  A caller whose caches must outlive the
+-- call (the LSP's session caches) builds its own `ProjectLoad`.
+export
+freshLoad : (String -> Option String) ->
+  String ->
+  List String ->
+  String ->
+  String ->
+  ProjectLoad
+freshLoad read entry roots runtimeSrc coreSrc = ProjectLoad {
+  plCache = Ref [],
+  plParseCache = Ref omEmpty,
+  plRead = read,
+  plEntry = entry,
+  plRoots = roots,
+  plRuntimeSrc = runtimeSrc,
+  plCoreSrc = coreSrc,
+}
+
+-- The query that trusts every module: `allowInternal` set, no trusted-module list.
+export
+openQuery : ProjectLoad -> ProjectQuery
+openQuery load = ProjectQuery {
+  pqLoad = load,
+  pqAllowInternal = True,
+  pqTrusted = [],
 }
 
 -- `pqAllowInternal`/`pqTrusted` gate the internal-extern guard on the RESOLVE
@@ -1490,8 +1527,7 @@ analyzeProjectKeyed : (List String -> <e> List (String, List String)) ->
 analyzeProjectKeyed exportsFor query =
   let load = query.pqLoad
   let staleRef = newStale ()
-  let wread =
-    p => wrappedRead load.plCache staleRef load.plParseCache load.plRead p
+  let wread = wrappedReadFor load staleRef
   projectKeyedFromLoad
     exportsFor
     query
@@ -1509,8 +1545,7 @@ analyzeProjectKeyedSources : (List String -> <e> List (String, List String)) ->
 analyzeProjectKeyedSources exportsFor query =
   let load = query.pqLoad
   let staleRef = newStale ()
-  let wread =
-    p => wrappedRead load.plCache staleRef load.plParseCache load.plRead p
+  let wread = wrappedReadFor load staleRef
   let (loaded, sources) =
     loadProgramFilesLocatedCachedSourcesE
       load.plParseCache
@@ -1598,8 +1633,7 @@ projectEntryAnalysisOr : (GraphId -> Option PartialAnalysis) ->
 projectEntryAnalysisOr kept load =
   let roots = load.plRoots
   let staleRef = newStale ()
-  let wread =
-    p => wrappedRead load.plCache staleRef load.plParseCache load.plRead p
+  let wread = wrappedReadFor load staleRef
   let runtimeP = preludeDesugared load.plRuntimeSrc
   let coreP = preludeDesugared load.plCoreSrc
   -- #2719 (a1): the SAME prelude key `analyzeProject` mints, so hover/completion
@@ -1658,16 +1692,13 @@ foldStale ((path, d) :: rest) buckets =
 -- ── resolve pass (per module, threading exports) ────────────────────────────
 -- Mirror analyze_project's resolve loop: resolveModuleG per module in dependency
 -- order, accumulating ModuleExports, bucketing each module's errors by its file.
--- #1362: guarded via `rwAllowInternal`/`rwTrusted` exactly like
--- `resolveModulesErrorsPairsG` (the human check/run/build multi-module gate) —
--- previously always called the unguarded `resolveModule` (implicit
--- `internalGuard = []`), so this pass never rejected an internal-extern
--- violation regardless of caller intent.
+-- Guarded via `rwAllowInternal`/`rwTrusted` exactly like
+-- `resolveModulesErrorsPairsG` (the human check/run/build multi-module gate), so
+-- this pass rejects an internal-extern violation the way that gate does (#1362).
 -- Resolve errors have no per-error loc in the compiler pipeline → None.
--- #926: `known` is now a Map keyed by module id (mirrors resolve.mdk's driver),
--- so each module's imports resolve via an O(log n) `findExports` lookup instead of a
--- linear scan of a growing `List ModuleExports`.  Threaded byte-identically:
--- `omInsert exp.modId exp known` replaces the `exp :: known` prepend.
+-- `known` is a Map keyed by module id (as in resolve.mdk's driver): each module's
+-- imports resolve via an O(log n) `findExports` lookup, and `omInsert exp.modId
+-- exp known` threads each module's exports to the next.
 --
 -- `mods`' decls are already DESUGARED (the caller shares one `desugarModule` per
 -- module with the typecheck half).  [served] is the chain key of an analyze that
@@ -1684,7 +1715,7 @@ resolvePass : (List String -> <e> List (String, List String)) ->
   <e> List (String, List Diag)
 resolvePass _ _ _ _ _ _ [] buckets = buckets
 resolvePass exportsFor walk subjectOf served known ids ((m@(mid, path, desugared)) :: rest) buckets =
-  let trusted = walk.rwAllowInternal || contains mid walk.rwTrusted
+  let trusted = moduleTrusted walk.rwAllowInternal walk.rwTrusted mid
   -- A module's verdict reads, beside its own decls and its imports' exports, its
   -- trust (#1362), whether any module came before it (a missing import is
   -- `UnknownModule` after the first module and a stub in the first), and whether
@@ -2346,22 +2377,9 @@ analyzeProjectToLines : Ref (List (String, String)) ->
   String ->
   <IO> String
 analyzeProjectToLines cacheRef read entry roots runtimeSrc coreSrc =
-  let parseCacheRef = Ref omEmpty
-  joinNl
-    (projectLines
-      (analyzeProject noStdlibExports ProjectQuery {
-        pqLoad = ProjectLoad {
-          plCache = cacheRef,
-          plParseCache = parseCacheRef,
-          plRead = read,
-          plEntry = entry,
-          plRoots = roots,
-          plRuntimeSrc = runtimeSrc,
-          plCoreSrc = coreSrc,
-        },
-        pqAllowInternal = True,
-        pqTrusted = [],
-      }))
+  let load =
+    { freshLoad read entry roots runtimeSrc coreSrc | plCache = cacheRef }
+  analyzeProject noStdlibExports (openQuery load) |> projectLines |> joinNl
 
 projectLines : List (String, List Diag) -> List String
 projectLines [] = []

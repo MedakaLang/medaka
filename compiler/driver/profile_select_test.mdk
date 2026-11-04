@@ -7,11 +7,9 @@
    The same program is clean under no profile and refused under `wasmgc/edge`,
    and the refusal is the one `medaka check` prints. -}
 
-import support.ordmap.{omEmpty}
 import driver.build_cmd.{makeTempDir, cleanupTempDir}
 import driver.diagnostics.{
-  analyzeProject, stdlibExportsReader, Diag(..), ProjectLoad(..),
-  ProjectQuery(..)
+  analyzeProject, stdlibExportsReader, Diag(..), freshLoad, openQuery
 }
 import driver.profile_select.{carryProjectProfile}
 import test.{Expectation, expectAll, expectEqual, fail}
@@ -44,19 +42,10 @@ analyzedIn rsrc csrc manifestText = match makeTempDir ()
       writeFile entry program)
     let stdlibDir = "stdlib"
     let selected = carryProjectProfile None entry
-    let results = analyzeProject (stdlibExportsReader stdlibDir) ProjectQuery {
-      pqLoad = ProjectLoad {
-        plCache = Ref [],
-        plParseCache = Ref omEmpty,
-        plRead = _ => None,
-        plEntry = entry,
-        plRoots = [dir, stdlibDir],
-        plRuntimeSrc = rsrc,
-        plCoreSrc = csrc,
-      },
-      pqAllowInternal = True,
-      pqTrusted = [],
-    }
+    let results =
+      analyzeProject
+        (stdlibExportsReader stdlibDir)
+        (openQuery (freshLoad (_ => None) entry [dir, stdlibDir] rsrc csrc))
     let msgs = flatMap (r => map diagMessage (snd r)) results
     cleanupTempDir dir
     andThen written (_ => map (_ => msgs) selected)

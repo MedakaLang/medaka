@@ -74,7 +74,7 @@ import driver.diagnostics.{
   analyzeProjectKeyedSources,
   projectEntryAnalysisOr,
   ProjectLoad(..),
-  ProjectQuery(..),
+  openQuery,
   GraphId,
   graphIdSame,
   stdlibExportsReader,
@@ -1718,12 +1718,12 @@ publishProjectDiagnostics runtimeSrc coreSrc uri text docs =
   let read = path => docsGet (uriOfPath path) docs
   -- #1362: the single-doc path (`publishDiagnosticsFrom`) runs `fileFront` UNGUARDED
   -- (no internal-extern restriction, no `--allow-internal` concept in the
-  -- LSP); kept unguarded here too (`allowInternal = True`, `trustedMods = []`)
+  -- LSP); kept unguarded here too (`openQuery`: allowInternal set, no trusted modules)
   -- so a live-edit session never flags what a build-time `check` wouldn't.
-  let (keyed, results, sources) = analyzeProjectKeyedSources
-    (stdlibExportsReader stdlibDir)
-    ProjectQuery {
-      pqLoad = ProjectLoad {
+  let (keyed, results, sources) =
+    analyzeProjectKeyedSources
+      (stdlibExportsReader stdlibDir)
+      (openQuery ProjectLoad {
         plCache = projectCache,
         plParseCache = projectParseCache,
         plRead = read,
@@ -1731,10 +1731,7 @@ publishProjectDiagnostics runtimeSrc coreSrc uri text docs =
         plRoots = [projectDir, stdlibDir],
         plRuntimeSrc = runtimeSrc,
         plCoreSrc = coreSrc,
-      },
-      pqAllowInternal = True,
-      pqTrusted = [],
-    }
+      })
   publishEach docs sources results
   -- A resolve-blocked entry is not the last module the drive checked, so its
   -- report holds another module's locals and seed: nothing is kept.

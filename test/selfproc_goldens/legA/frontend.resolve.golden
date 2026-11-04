@@ -242,6 +242,7 @@ matchesExport : String -> (String, List String) -> List String
 mergeAdds : ImportAdds -> ImportAdds -> ImportAdds
 mkScope : List String -> Scope
 moduleAliasNames : List Decl -> List String
+moduleTrusted : Bool -> List String -> String -> Bool
 modulesExportingName : Env -> String -> List String
 namedLocs : (List Decl -> List String) -> List Decl -> List (String, Option Loc)
 newlyDuplicated : Option Loc -> Map String Unit -> List String -> List ResError

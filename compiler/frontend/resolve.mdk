@@ -488,6 +488,12 @@ internalExterns = [
   "stringCodepointAtByte", "stringSliceBytes"
 ]
 
+-- Whether a module is exempt from the internal-extern guard: internal access is
+-- allowed outright, or the module is among the stdlib-owned `trusted` ones.
+export
+moduleTrusted : Bool -> List String -> String -> Bool
+moduleTrusted allowInternal trusted mid = allowInternal || contains mid trusted
+
 -- The internal-extern guard list for a module given whether internal access is
 -- permitted (a trusted module / `--allow-internal`): empty ⇒ no restriction.
 export
@@ -4428,7 +4434,17 @@ resolveModulesErrors : List Decl ->
   List (String, List Decl) ->
   List ResError
 resolveModulesErrors rt pre known mods =
-  resolveModulesErrorsG (ResolveWalk True [] [] None rt pre) known mods
+  resolveModulesErrorsG
+    ResolveWalk {
+      rwAllowInternal = True,
+      rwTrusted = [],
+      rwSibling = [],
+      rwPreludeKey = None,
+      rwRuntime = rt,
+      rwPrelude = pre,
+    }
+    known
+    mods
 
 -- Guarded variant: trust is decided per module by the `ResolveWalk`.
 --
@@ -4449,10 +4465,7 @@ resolveModulesErrorsPairsG walk known0 mods = go known0 mods
     go _ [] = []
     go known ((mid, prog) :: rest) =
       let guard =
-        if walk.rwAllowInternal || contains mid walk.rwTrusted then
-          []
-        else
-          internalExterns
+        internalGuardFor (moduleTrusted walk.rwAllowInternal walk.rwTrusted mid)
       let (exp, errs) =
         resolveModuleG
           guard
@@ -6022,7 +6035,8 @@ fillIfaceOccOrigin _ _ _ (o@(OriginModule _)) = o
 -- ⚠️ ONE TAGGED MAP RATHER THAN TWO MAPS IS DELIBERATE, and it is what keeps the
 -- change ADDITIVE for `test/selfproc_goldens/legA/frontend.resolve.golden`: a second
 -- map would have to be threaded as a new parameter through `stampOneModule` /
--- the graph walk / `tyOriginScope`, changing three PINNED signatures for plumbing.
+-- `tyOriginScope` (two PINNED signatures) and the `go` walk inside
+-- `stampGraphTyOrigins`, for plumbing.
 -- The tag gets the same separation with no signature movement — and it is the same
 -- shape `insertIfaceParamKinds`'s `<iface>@<slot>` key already uses in
 -- `types/typecheck.mdk` for exactly this reason.

@@ -1050,50 +1050,51 @@ checkImplSuperContexts : ModuleCtx ->
   List ImplRow ->
   Decl ->
   Unit
-checkImplSuperContexts mctx decls ce cur rows = go
-  where
-    go (DAttrib _ d) = go d
-    go (DImpl { iface, tys, reqs, implOrigin = o, implIfaceLoc = ifaceLoc, ... }) =
-      let derived = isNone ifaceLoc
-      let loc = if derived then derivedImplDeclLoc decls tys else ifaceLoc
-      match ceLookupAt (regKeyOfTab (ifaceTabKey o iface)) cur ce
-        Some r if listLen (ceRowTyparams r) == listLen tys =>
-          let (implTvMap, headMonos) = implHeadMonos mctx tys
-          let roots = implHeadTypeVarRoots implTvMap
-          let headIds =
-            omFromNames (map (p => intToString (snd p)) roots) omEmpty
-          let declared = map (requirePredicateSlot mctx implTvMap) reqs
-          let givens =
+-- Top level, not a local `go`: `test/catch_all_census.ledger` lists top-level
+-- functions only, so a local walker would hide the wildcard arm over `Decl` from the
+-- audit that visits every catch-all when an AST constructor is added.
+checkImplSuperContexts mctx decls ce cur rows (DAttrib _ d) =
+  checkImplSuperContexts mctx decls ce cur rows d
+checkImplSuperContexts mctx decls ce cur rows (DImpl { iface, tys, reqs, implOrigin = o, implIfaceLoc = ifaceLoc, ... }) =
+  let derived = isNone ifaceLoc
+  let loc = if derived then derivedImplDeclLoc decls tys else ifaceLoc
+  match ceLookupAt (regKeyOfTab (ifaceTabKey o iface)) cur ce
+    Some r if listLen (ceRowTyparams r) == listLen tys =>
+      let (implTvMap, headMonos) = implHeadMonos mctx tys
+      let roots = implHeadTypeVarRoots implTvMap
+      let headIds = omFromNames (map (p => intToString (snd p)) roots) omEmpty
+      let declared = map (requirePredicateSlot mctx implTvMap) reqs
+      let givens =
+        declared
+          ++ flatMap
+            (s => map fst (predicateSlotKnownSupers mctx.mcGraph s))
             declared
-              ++ flatMap
-                (s => map fst (predicateSlotKnownSupers mctx.mcGraph s))
-                declared
-          let subject = "impl \{iface} \{join " " (map ppTyAtom tys)}"
-          let check = SuperCheck {
-            scSubject = subject,
-            scRoots = roots,
-            scHeadIds = headIds,
-            scGivens = givens,
-            scLoc = loc,
-            scDerived = derived,
-          }
-          let subst = zip (ceRowTyparams r) tys
-          let argsOf =
-            sup =>
-              mapAll
-                (p => lookupPos p (ceRowTyparams r) headMonos)
-                (superParamsOf sup)
-          fold
-            (_ sup => match argsOf sup
-              Some supArgs =>
-                let supRef = superIfaceRef sup
-                let covered = _ => superRowExists rows subst sup
-                checkSuperInstanceContext mctx check supRef supArgs covered
-              None => ())
-            ()
-            (ceRowSupers r)
-        _ => ()
-    go _ = ()
+      let subject = "impl \{iface} \{join " " (map ppTyAtom tys)}"
+      let check = SuperCheck {
+        scSubject = subject,
+        scRoots = roots,
+        scHeadIds = headIds,
+        scGivens = givens,
+        scLoc = loc,
+        scDerived = derived,
+      }
+      let subst = zip (ceRowTyparams r) tys
+      let argsOf =
+        sup =>
+          mapAll
+            (p => lookupPos p (ceRowTyparams r) headMonos)
+            (superParamsOf sup)
+      fold
+        (_ sup => match argsOf sup
+          Some supArgs =>
+            let supRef = superIfaceRef sup
+            let covered = _ => superRowExists rows subst sup
+            checkSuperInstanceContext mctx check supRef supArgs covered
+          None => ())
+        ()
+        (ceRowSupers r)
+    _ => ()
+checkImplSuperContexts _mctx _ _ _ _ _ = ()
 
 -- The span of the `data`/`newtype` declaration a derived impl's head names.
 derivedImplDeclLoc : List Decl -> List Ty -> Option Loc

@@ -1,5 +1,5 @@
 # META
-source_lines=2539
+source_lines=2536
 stages=DESUGAR,MARK
 # SOURCE
 import support.diag_codes.{DiagCode(..), codeText}
@@ -78,7 +78,7 @@ import driver.diagnostics.{
   analyzeProjectKeyedSources,
   projectEntryAnalysisOr,
   ProjectLoad(..),
-  ProjectQuery(..),
+  openQuery,
   GraphId,
   graphIdSame,
   stdlibExportsReader,
@@ -1722,12 +1722,12 @@ publishProjectDiagnostics runtimeSrc coreSrc uri text docs =
   let read = path => docsGet (uriOfPath path) docs
   -- #1362: the single-doc path (`publishDiagnosticsFrom`) runs `fileFront` UNGUARDED
   -- (no internal-extern restriction, no `--allow-internal` concept in the
-  -- LSP); kept unguarded here too (`allowInternal = True`, `trustedMods = []`)
+  -- LSP); kept unguarded here too (`openQuery`: allowInternal set, no trusted modules)
   -- so a live-edit session never flags what a build-time `check` wouldn't.
-  let (keyed, results, sources) = analyzeProjectKeyedSources
-    (stdlibExportsReader stdlibDir)
-    ProjectQuery {
-      pqLoad = ProjectLoad {
+  let (keyed, results, sources) =
+    analyzeProjectKeyedSources
+      (stdlibExportsReader stdlibDir)
+      (openQuery ProjectLoad {
         plCache = projectCache,
         plParseCache = projectParseCache,
         plRead = read,
@@ -1735,10 +1735,7 @@ publishProjectDiagnostics runtimeSrc coreSrc uri text docs =
         plRoots = [projectDir, stdlibDir],
         plRuntimeSrc = runtimeSrc,
         plCoreSrc = coreSrc,
-      },
-      pqAllowInternal = True,
-      pqTrusted = [],
-    }
+      })
   publishEach docs sources results
   -- A resolve-blocked entry is not the last module the drive checked, so its
   -- report holds another module's locals and seed: nothing is kept.
@@ -2554,7 +2551,7 @@ unit = ()
 (DUse false (UseGroup ("driver" "parse_diag_adapter") ((mem "parseDiagnosticToDiag" false))))
 (DUse false (UseGroup ("array") ((mem "sliceClamped" false))))
 (DUse false (UseGroup ("json") ((mem "Json" true) (mem "jObject" false) (mem "jArray" false) (mem "stringify" false) (mem "parse" false) (mem "get" false) (mem "asString" false) (mem "asInt" false) (mem "asArray" false))))
-(DUse false (UseGroup ("driver" "diagnostics") ((mem "Diag" false) (mem "diagIdIsSyntax" false) (mem "Severity" true) (mem "mkDiag" false) (mem "fileFront" false) (mem "FrontOutput" true) (mem "analyzeProjectKeyedSources" false) (mem "projectEntryAnalysisOr" false) (mem "ProjectLoad" true) (mem "ProjectQuery" true) (mem "GraphId" false) (mem "graphIdSame" false) (mem "stdlibExportsReader" false) (mem "clearProjectPassEntries" false))))
+(DUse false (UseGroup ("driver" "diagnostics") ((mem "Diag" false) (mem "diagIdIsSyntax" false) (mem "Severity" true) (mem "mkDiag" false) (mem "fileFront" false) (mem "FrontOutput" true) (mem "analyzeProjectKeyedSources" false) (mem "projectEntryAnalysisOr" false) (mem "ProjectLoad" true) (mem "openQuery" false) (mem "GraphId" false) (mem "graphIdSame" false) (mem "stdlibExportsReader" false) (mem "clearProjectPassEntries" false))))
 (DUse false (UseGroup ("driver" "loader") ((mem "findProjectRootOrSelf" false) (mem "parseCachedLocated" false) (mem "retainParsed" false) (mem "clearLoadedSourceRecords" false))))
 (DUse false (UseGroup ("support" "ordmap") ((mem "OrdMap" false) (mem "omEmpty" false) (mem "omLookup" false) (mem "omFromNames" false) (mem "omHasKey" false))))
 (DUse false (UseGroup ("support" "stage_count") ((mem "stageBump" false))))
@@ -2929,7 +2926,7 @@ unit = ()
 (DFunDef false "headOr" ((PVar "d") (PList)) (EVar "d"))
 (DFunDef false "headOr" (PWild (PCons (PVar "x") PWild)) (EVar "x"))
 (DTypeSig false "publishProjectDiagnostics" (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyCon "Docs") (TyEffect ("IO") None (TyApp (TyCon "Option") (TyCon "Kept")))))))))
-(DFunDef false "publishProjectDiagnostics" ((PVar "runtimeSrc") (PVar "coreSrc") (PVar "uri") (PVar "text") (PVar "docs")) (EBlock (DoLet false false (PVar "rootFile") (EApp (EVar "pathOfUri") (EVar "uri"))) (DoLet false false (PVar "projectDir") (EApp (EVar "findProjectRootOrSelf") (EApp (EVar "dirOf") (EVar "rootFile")))) (DoLet false false (PVar "stdlibDir") (EBinOp "++" (EApp (EVar "lspMedakaRoot") (ELit (LString "."))) (ELit (LString "/stdlib")))) (DoLet false false (PVar "read") (ELam ((PVar "path")) (EApp (EApp (EVar "docsGet") (EApp (EVar "uriOfPath") (EVar "path"))) (EVar "docs")))) (DoLet false false (PTuple (PVar "keyed") (PVar "results") (PVar "sources")) (EApp (EApp (EVar "analyzeProjectKeyedSources") (EApp (EVar "stdlibExportsReader") (EVar "stdlibDir"))) (ERecordCreate "ProjectQuery" ((fa "pqLoad" (ERecordCreate "ProjectLoad" ((fa "plCache" (EVar "projectCache")) (fa "plParseCache" (EVar "projectParseCache")) (fa "plRead" (EVar "read")) (fa "plEntry" (EVar "rootFile")) (fa "plRoots" (EListLit (EVar "projectDir") (EVar "stdlibDir"))) (fa "plRuntimeSrc" (EVar "runtimeSrc")) (fa "plCoreSrc" (EVar "coreSrc"))))) (fa "pqAllowInternal" (EVar "True")) (fa "pqTrusted" (EListLit)))))) (DoExpr (EApp (EApp (EApp (EVar "publishEach") (EVar "docs")) (EVar "sources")) (EVar "results"))) (DoExpr (EMatch (EVar "keyed") (arm (PCon "Some" (PTuple (PTuple (PVar "report") PWild) (PVar "graph"))) () (EIf (EBinOp "==" (EFieldAccess (EFieldAccess (EVar "report") "trPartial") "paModule") (EFieldAccess (EVar "graph") "giEntry")) (EApp (EVar "Some") (EApp (EApp (EApp (EVar "KeptGraph") (EVar "text")) (EVar "graph")) (EFieldAccess (EVar "report") "trPartial"))) (EVar "None"))) (arm (PCon "None") () (EVar "None"))))))
+(DFunDef false "publishProjectDiagnostics" ((PVar "runtimeSrc") (PVar "coreSrc") (PVar "uri") (PVar "text") (PVar "docs")) (EBlock (DoLet false false (PVar "rootFile") (EApp (EVar "pathOfUri") (EVar "uri"))) (DoLet false false (PVar "projectDir") (EApp (EVar "findProjectRootOrSelf") (EApp (EVar "dirOf") (EVar "rootFile")))) (DoLet false false (PVar "stdlibDir") (EBinOp "++" (EApp (EVar "lspMedakaRoot") (ELit (LString "."))) (ELit (LString "/stdlib")))) (DoLet false false (PVar "read") (ELam ((PVar "path")) (EApp (EApp (EVar "docsGet") (EApp (EVar "uriOfPath") (EVar "path"))) (EVar "docs")))) (DoLet false false (PTuple (PVar "keyed") (PVar "results") (PVar "sources")) (EApp (EApp (EVar "analyzeProjectKeyedSources") (EApp (EVar "stdlibExportsReader") (EVar "stdlibDir"))) (EApp (EVar "openQuery") (ERecordCreate "ProjectLoad" ((fa "plCache" (EVar "projectCache")) (fa "plParseCache" (EVar "projectParseCache")) (fa "plRead" (EVar "read")) (fa "plEntry" (EVar "rootFile")) (fa "plRoots" (EListLit (EVar "projectDir") (EVar "stdlibDir"))) (fa "plRuntimeSrc" (EVar "runtimeSrc")) (fa "plCoreSrc" (EVar "coreSrc"))))))) (DoExpr (EApp (EApp (EApp (EVar "publishEach") (EVar "docs")) (EVar "sources")) (EVar "results"))) (DoExpr (EMatch (EVar "keyed") (arm (PCon "Some" (PTuple (PTuple (PVar "report") PWild) (PVar "graph"))) () (EIf (EBinOp "==" (EFieldAccess (EFieldAccess (EVar "report") "trPartial") "paModule") (EFieldAccess (EVar "graph") "giEntry")) (EApp (EVar "Some") (EApp (EApp (EApp (EVar "KeptGraph") (EVar "text")) (EVar "graph")) (EFieldAccess (EVar "report") "trPartial"))) (EVar "None"))) (arm (PCon "None") () (EVar "None"))))))
 (DTypeSig false "lspMedakaRoot" (TyFun (TyCon "String") (TyEffect ("IO") None (TyCon "String"))))
 (DFunDef false "lspMedakaRoot" ((PVar "dflt")) (EMatch (EApp (EVar "getEnv") (ELit (LString "MEDAKA_ROOT"))) (arm (PCon "Some" (PVar "v")) () (EIf (EBinOp "==" (EVar "v") (ELit (LString ""))) (EVar "dflt") (EVar "v"))) (arm (PCon "None") () (EVar "dflt"))))
 (DTypeSig false "hasParseDiagnosticFix" (TyFun (TyCon "Diag") (TyCon "Bool")))
@@ -3046,7 +3043,7 @@ unit = ()
 (DUse false (UseGroup ("driver" "parse_diag_adapter") ((mem "parseDiagnosticToDiag" false))))
 (DUse false (UseGroup ("array") ((mem "sliceClamped" false))))
 (DUse false (UseGroup ("json") ((mem "Json" true) (mem "jObject" false) (mem "jArray" false) (mem "stringify" false) (mem "parse" false) (mem "get" false) (mem "asString" false) (mem "asInt" false) (mem "asArray" false))))
-(DUse false (UseGroup ("driver" "diagnostics") ((mem "Diag" false) (mem "diagIdIsSyntax" false) (mem "Severity" true) (mem "mkDiag" false) (mem "fileFront" false) (mem "FrontOutput" true) (mem "analyzeProjectKeyedSources" false) (mem "projectEntryAnalysisOr" false) (mem "ProjectLoad" true) (mem "ProjectQuery" true) (mem "GraphId" false) (mem "graphIdSame" false) (mem "stdlibExportsReader" false) (mem "clearProjectPassEntries" false))))
+(DUse false (UseGroup ("driver" "diagnostics") ((mem "Diag" false) (mem "diagIdIsSyntax" false) (mem "Severity" true) (mem "mkDiag" false) (mem "fileFront" false) (mem "FrontOutput" true) (mem "analyzeProjectKeyedSources" false) (mem "projectEntryAnalysisOr" false) (mem "ProjectLoad" true) (mem "openQuery" false) (mem "GraphId" false) (mem "graphIdSame" false) (mem "stdlibExportsReader" false) (mem "clearProjectPassEntries" false))))
 (DUse false (UseGroup ("driver" "loader") ((mem "findProjectRootOrSelf" false) (mem "parseCachedLocated" false) (mem "retainParsed" false) (mem "clearLoadedSourceRecords" false))))
 (DUse false (UseGroup ("support" "ordmap") ((mem "OrdMap" false) (mem "omEmpty" false) (mem "omLookup" false) (mem "omFromNames" false) (mem "omHasKey" false))))
 (DUse false (UseGroup ("support" "stage_count") ((mem "stageBump" false))))
@@ -3421,7 +3418,7 @@ unit = ()
 (DFunDef false "headOr" ((PVar "d") (PList)) (EVar "d"))
 (DFunDef false "headOr" (PWild (PCons (PVar "x") PWild)) (EVar "x"))
 (DTypeSig false "publishProjectDiagnostics" (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyCon "Docs") (TyEffect ("IO") None (TyApp (TyCon "Option") (TyCon "Kept")))))))))
-(DFunDef false "publishProjectDiagnostics" ((PVar "runtimeSrc") (PVar "coreSrc") (PVar "uri") (PVar "text") (PVar "docs")) (EBlock (DoLet false false (PVar "rootFile") (EApp (EVar "pathOfUri") (EVar "uri"))) (DoLet false false (PVar "projectDir") (EApp (EVar "findProjectRootOrSelf") (EApp (EVar "dirOf") (EVar "rootFile")))) (DoLet false false (PVar "stdlibDir") (EBinOp "++" (EApp (EVar "lspMedakaRoot") (ELit (LString "."))) (ELit (LString "/stdlib")))) (DoLet false false (PVar "read") (ELam ((PVar "path")) (EApp (EApp (EVar "docsGet") (EApp (EVar "uriOfPath") (EVar "path"))) (EVar "docs")))) (DoLet false false (PTuple (PVar "keyed") (PVar "results") (PVar "sources")) (EApp (EApp (EVar "analyzeProjectKeyedSources") (EApp (EVar "stdlibExportsReader") (EVar "stdlibDir"))) (ERecordCreate "ProjectQuery" ((fa "pqLoad" (ERecordCreate "ProjectLoad" ((fa "plCache" (EVar "projectCache")) (fa "plParseCache" (EVar "projectParseCache")) (fa "plRead" (EVar "read")) (fa "plEntry" (EVar "rootFile")) (fa "plRoots" (EListLit (EVar "projectDir") (EVar "stdlibDir"))) (fa "plRuntimeSrc" (EVar "runtimeSrc")) (fa "plCoreSrc" (EVar "coreSrc"))))) (fa "pqAllowInternal" (EVar "True")) (fa "pqTrusted" (EListLit)))))) (DoExpr (EApp (EApp (EApp (EVar "publishEach") (EVar "docs")) (EVar "sources")) (EVar "results"))) (DoExpr (EMatch (EVar "keyed") (arm (PCon "Some" (PTuple (PTuple (PVar "report") PWild) (PVar "graph"))) () (EIf (EBinOp "==" (EFieldAccess (EFieldAccess (EVar "report") "trPartial") "paModule") (EFieldAccess (EVar "graph") "giEntry")) (EApp (EVar "Some") (EApp (EApp (EApp (EVar "KeptGraph") (EVar "text")) (EVar "graph")) (EFieldAccess (EVar "report") "trPartial"))) (EVar "None"))) (arm (PCon "None") () (EVar "None"))))))
+(DFunDef false "publishProjectDiagnostics" ((PVar "runtimeSrc") (PVar "coreSrc") (PVar "uri") (PVar "text") (PVar "docs")) (EBlock (DoLet false false (PVar "rootFile") (EApp (EVar "pathOfUri") (EVar "uri"))) (DoLet false false (PVar "projectDir") (EApp (EVar "findProjectRootOrSelf") (EApp (EVar "dirOf") (EVar "rootFile")))) (DoLet false false (PVar "stdlibDir") (EBinOp "++" (EApp (EVar "lspMedakaRoot") (ELit (LString "."))) (ELit (LString "/stdlib")))) (DoLet false false (PVar "read") (ELam ((PVar "path")) (EApp (EApp (EVar "docsGet") (EApp (EVar "uriOfPath") (EVar "path"))) (EVar "docs")))) (DoLet false false (PTuple (PVar "keyed") (PVar "results") (PVar "sources")) (EApp (EApp (EVar "analyzeProjectKeyedSources") (EApp (EVar "stdlibExportsReader") (EVar "stdlibDir"))) (EApp (EVar "openQuery") (ERecordCreate "ProjectLoad" ((fa "plCache" (EVar "projectCache")) (fa "plParseCache" (EVar "projectParseCache")) (fa "plRead" (EVar "read")) (fa "plEntry" (EVar "rootFile")) (fa "plRoots" (EListLit (EVar "projectDir") (EVar "stdlibDir"))) (fa "plRuntimeSrc" (EVar "runtimeSrc")) (fa "plCoreSrc" (EVar "coreSrc"))))))) (DoExpr (EApp (EApp (EApp (EVar "publishEach") (EVar "docs")) (EVar "sources")) (EVar "results"))) (DoExpr (EMatch (EVar "keyed") (arm (PCon "Some" (PTuple (PTuple (PVar "report") PWild) (PVar "graph"))) () (EIf (EBinOp "==" (EFieldAccess (EFieldAccess (EVar "report") "trPartial") "paModule") (EFieldAccess (EVar "graph") "giEntry")) (EApp (EVar "Some") (EApp (EApp (EApp (EVar "KeptGraph") (EVar "text")) (EVar "graph")) (EFieldAccess (EVar "report") "trPartial"))) (EVar "None"))) (arm (PCon "None") () (EVar "None"))))))
 (DTypeSig false "lspMedakaRoot" (TyFun (TyCon "String") (TyEffect ("IO") None (TyCon "String"))))
 (DFunDef false "lspMedakaRoot" ((PVar "dflt")) (EMatch (EApp (EVar "getEnv") (ELit (LString "MEDAKA_ROOT"))) (arm (PCon "Some" (PVar "v")) () (EIf (EBinOp "==" (EVar "v") (ELit (LString ""))) (EVar "dflt") (EVar "v"))) (arm (PCon "None") () (EVar "dflt"))))
 (DTypeSig false "hasParseDiagnosticFix" (TyFun (TyCon "Diag") (TyCon "Bool")))
