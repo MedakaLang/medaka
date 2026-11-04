@@ -645,6 +645,15 @@ ARROW
 UPPER "Unit"
 NEWLINE
 EXTERN
+IDENT "setAbortReport"
+COLON
+UPPER "String"
+ARROW
+UPPER "String"
+ARROW
+UPPER "Unit"
+NEWLINE
+EXTERN
 IDENT "__fallthrough__"
 COLON
 UPPER "Unit"

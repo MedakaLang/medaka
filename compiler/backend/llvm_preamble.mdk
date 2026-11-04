@@ -342,5 +342,6 @@ runtimeDecls = [
   fn "void" "mdk_sleep_ms" ["i64"],
   fn "i64" "mdk_alloc_bytes" ["i64"],
   fn "void" "mdk_stash_run_stdout" ["i64"],
+  fn "void" "mdk_set_abort_report" ["i64", "i64"],
   fn "void" "mdk_enable_run_stdout_flush" ["i64"],
 ]

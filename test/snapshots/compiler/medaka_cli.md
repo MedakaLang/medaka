@@ -1,5 +1,5 @@
 # META
-source_lines=4671
+source_lines=4712
 stages=DESUGAR,MARK
 # SOURCE
 import support.diag_codes.{DiagCode(..), codeText}
@@ -129,7 +129,7 @@ import frontend.parser.{
 import frontend.lexer.{tokenizeWithOffsetPairs}
 import frontend.desugar_cache.{desugaredPrelude, preludeGeneration}
 import frontend.desugar.{desugarIn}
-import tools.target_parse.{targetDesugared}
+import tools.target_parse.{targetDesugared, parseTargetResult}
 import driver.loader.{
   loadProgramFilesLocatedE,
   stdinEntry,
@@ -164,6 +164,7 @@ import driver.diagnostics.{
   FrontPolicy(..),
   FrontOutput(..),
   ppDiagCliSrc,
+  parseErrDiag,
   ppDiagCliLines,
   ppDiagBuckets,
   stdlibExportsReader,
@@ -416,16 +417,17 @@ sourceStalenessVerdict _ =
       None => None
       Some live => if live == baked then None else Some compilerDir
 
--- C4 (docs/ops/CLI-CONFORMANCE.md §4): `run --json` is the ONE invocation whose
--- MACHINE channel is stderr — `run`'s stdout belongs to the user program — and
--- this warning is written to stderr.  Emitting it as prose there corrupts the
+-- C4 (docs/ops/CLI-CONFORMANCE.md §4): `run --json` and `test --json` are the
+-- invocations whose aborted run writes its envelope to stderr — `run`'s stdout
+-- belongs to the user program, `test --json`'s to its report — and this warning
+-- is written to stderr.  Emitting it as prose there corrupts the
 -- envelope; SILENCING it would hide a stale binary from every MCP/LSP consumer,
--- a severity INCREASE dressed as a fix ([W-QUIETER]).  So on that one path the
+-- a severity INCREASE dressed as a fix ([W-QUIETER]).  So on those paths the
 -- verdict is DEFERRED into `pendingStaleNotice` and rides INSIDE the envelope
 -- as a `staleBinary` field — the same shape `attachStaleness` already uses for
--- MCP results.  Every `run --json` arm that leaves WITHOUT an envelope flushes
--- it back out as prose (`runAbort`), so it is relocated on every path, dropped
--- on none.
+-- MCP results.  Every such arm that leaves WITHOUT an envelope flushes it back
+-- out as prose (`runAbort`, `testDie`, `testExit`), so it is relocated on every
+-- path, dropped on none.
 --
 -- MEDAKA_STRICT keeps its hard stop and keeps printing prose: it exits before
 -- any envelope can exist, so prose is the only channel there is.
@@ -439,8 +441,9 @@ checkSourceStaleness argv = match sourceStalenessVerdict ()
         ++ "; rebuild with `make medaka`"
     if envOr "MEDAKA_STRICT" "" /= "" then
       dieMsg msg
-    else if runJsonInvocation argv then
+    else if envelopeOnStderrInvocation argv then
       pendingStaleNotice := Some msg
+      registerEarlyNotice argv msg
     else
       ePutStrLn msg
 
@@ -531,25 +534,44 @@ reportChildTrees prelude =
   reportTrees None dieMsg (checkPreludeElab prelude)
   reportDecls None dieMsg prelude
 
--- Is this argv `medaka run … --json …`?  The predicate is deliberately the
--- BYTE-IDENTICAL one `runRunCmd` uses to compute its own `jsonMode`
--- (`runFlagGiven "--json"` over the whole post-verb argv, program passthrough args
--- included).  If the two ever disagreed, a deferred notice would be staged for
--- an invocation that never emits an envelope — i.e. suppression — so they are
--- kept the same predicate on purpose, imprecision included.
-runJsonInvocation : List String -> Bool
-runJsonInvocation ("run" :: rest) = runFlagGiven "--json" rest
-runJsonInvocation _ = False
+-- Is this argv one whose aborted run writes its envelope to stderr: `medaka run
+-- … --json …` or `medaka test … --json …`?  Each arm is deliberately the
+-- BYTE-IDENTICAL predicate its verb uses to compute its own `jsonMode`
+-- (`runFlagGiven "--json"` over the post-verb argv for `run`, program passthrough
+-- args included; `parseArgs testArgSpec` for `test`, which never dies here).  If
+-- the two ever disagreed, a deferred notice would be staged for an invocation
+-- that never emits an envelope — i.e. suppression — so they are kept the same
+-- predicate on purpose, imprecision included.
+envelopeOnStderrInvocation : List String -> Bool
+envelopeOnStderrInvocation ("run" :: rest) = runFlagGiven "--json" rest
+envelopeOnStderrInvocation ("test" :: rest) = match parseArgs testArgSpec rest
+  Ok a => flag "--json" a
+  Err _ => False
+envelopeOnStderrInvocation _ = False
+
+-- `test --json` also hands the deferred notice to the C abort emitter as a
+-- prose note, so an abort that fires before `armAbortReport` (out of memory or
+-- a stack overflow in the front end, a native-only run, which never arms) still
+-- appends it after the abort line.  `armAbortReport` replaces the slots later,
+-- so the envelope carries `staleBinary` and the prose is not printed twice.
+-- Only `test` ever stores a report, so the prose flush may clear the slot
+-- whenever it prints a notice.
+registerEarlyNotice : List String -> String -> <IO> Unit
+registerEarlyNotice ("test" :: _) msg = setAbortReport msg ""
+registerEarlyNotice _ _ = ()
 
 -- Print the deferred staleness notices as prose and clear them.  Called from every
--- exit that is NOT the envelope: `run`'s error arms (via `runAbort`) and
--- `dispatchSub`'s `--help`.  A no-op whenever nothing was deferred.
+-- exit that is NOT the envelope: `run`'s error arms (via `runAbort`), the `test`
+-- exits (`testDie`, `testExit`, the props-worker arm of `runTestCmd` and the
+-- passing `--json` report) and `dispatchSub`'s `--help`.  A no-op whenever
+-- nothing was deferred.
 flushStaleNoticeProse : Unit -> <IO> Unit
 flushStaleNoticeProse _ =
   let _ = match !pendingStaleNotice
     None => ()
     Some msg =>
       pendingStaleNotice := None
+      setAbortReport "" ""
       ePutStrLn msg
   let notices = !pendingPreludeNotices
   pendingPreludeNotices := []
@@ -578,6 +600,18 @@ dieMsg msg =
   emitAbortTotal ()
   ePutStrLn msg
   stageExit 1
+
+-- `test --json`'s exits that write no stderr envelope: flush the deferred
+-- notice as prose first, so a stale-binary verdict is never dropped.
+testDie : String -> <IO> Unit
+testDie msg =
+  flushStaleNoticeProse ()
+  dieMsg msg
+
+testExit : Int -> <IO> Unit
+testExit code =
+  flushStaleNoticeProse ()
+  stageExit code
 
 runAbort : String -> <IO> Unit
 runAbort msg =
@@ -1379,7 +1413,7 @@ carryTargetProfile flagValue entry = match carryProjectProfile flagValue entry
 
 -- True if the flag appears in `run`'s PRE-positional prefix ONLY — the same
 -- prefix `runArgvFilter` consumes, program passthrough args (after the first
--- positional) excluded.  `runJsonInvocation` is required to match this
+-- positional) excluded.  `envelopeOnStderrInvocation` is required to match this
 -- byte-for-byte (see its note); both now agree on the fixed, precise scope.
 runFlagGiven : String -> List String -> Bool
 runFlagGiven _ [] = False
@@ -3173,13 +3207,14 @@ runTestCmd argv0 =
   -- check and that normalisation are both `args.mdk`'s job now.
   let a = requireArgs testArgSpec argv0
   if flag "--props-worker" a then
+    flushStaleNoticeProse ()
     runPropsWorkerCmd a
   else match parseTestEngines a
-    Err msg => dieMsg "medaka test: \{msg}"
+    Err msg => testDie "medaka test: \{msg}"
     Ok engines => match parseTestCasesFlag a
-      Err msg => dieMsg "medaka test: \{msg}"
+      Err msg => testDie "medaka test: \{msg}"
       Ok casesOpt => match parseTestIntFlag "--seed" a
-        Err msg => dieMsg "medaka test: \{msg}"
+        Err msg => testDie "medaka test: \{msg}"
         Ok seedOpt =>
           let _ = match seedOpt
             Some s => seedPropRng s
@@ -3188,7 +3223,7 @@ runTestCmd argv0 =
           let filterOpt = flagValue "--filter" a
           let jsonMode = flag "--json" a
           match initTestSeed ()
-            Err msg => dieMsg "medaka test: \{msg}"
+            Err msg => testDie "medaka test: \{msg}"
             Ok _ => runTestTargets engines cases filterOpt seedOpt jsonMode a
 
 runTestTargets : List Engine ->
@@ -3201,9 +3236,8 @@ runTestTargets : List Engine ->
 runTestTargets engines cases filterOpt seedOpt jsonMode a = match a.positionals
   [] =>
     if jsonMode then
-      ePutStrLn
+      testDie
         "medaka test --json: needs a single file.mdk target; with no target, medaka test runs the whole enclosing project"
-      stageExit 1
     else
       runTestProjectCmd engines cases filterOpt seedOpt
   [target] => match listDir target
@@ -3214,15 +3248,13 @@ runTestTargets engines cases filterOpt seedOpt jsonMode a = match a.positionals
         runTestOne engines cases filterOpt target
     Ok _ =>
       if jsonMode then
-        ePutStrLn
+        testDie
           "medaka test --json: directory targets are not supported; pass a single file.mdk target"
-        stageExit 1
       else
         runTestManyTargets engines cases filterOpt seedOpt [target]
   targets =>
     if jsonMode then
-      ePutStrLn "medaka test --json: exactly one file.mdk target is supported"
-      stageExit 1
+      testDie "medaka test --json: exactly one file.mdk target is supported"
     else
       runTestManyTargets engines cases filterOpt seedOpt targets
 
@@ -3326,6 +3358,7 @@ runTestJsonCmd engines cases filterOpt target =
     prelude <- readPreludeSources stdlibDir
     let _ = seedCheckPrelude prelude
     tsrc <- readSource target
+    _ <- parseTargetOrRefuse target tsrc
     let userDecls = targetDesugared tsrc
     if filterMatchedNothing filterOpt tsrc userDecls then
       Err
@@ -3356,8 +3389,16 @@ runTestJsonCmd engines cases filterOpt target =
       putStrLn (stringify (cliSeedOnFailure typeError ok report))
       Ok ok
   match r
-    Err e => dieMsg e
-    Ok ok => if ok then () else stageExit 1
+    Err e => testDie e
+    Ok ok => if ok then flushStaleNoticeProse () else testExit 1
+
+-- The located parse refusal the human arm prints (`runTestUnderProfile`), as an
+-- `Err`, so a parse error under `--json` never reaches the panicking
+-- `targetDesugared`.
+parseTargetOrRefuse : String -> String -> Result String Unit
+parseTargetOrRefuse target tsrc = match parseTargetResult tsrc
+  Err e => Err (ppDiagCliSrc tsrc target (parseErrDiag target e))
+  Ok _ => Ok ()
 
 -- Directory/project/multi-target path: expand every target to concrete .mdk
 -- files (SAME walk as lint/fmt), then run+aggregate.  C3
@@ -4701,11 +4742,11 @@ runMcpServerFromEnv _ =
 (DUse false (UseGroup ("frontend" "lexer") ((mem "tokenizeWithOffsetPairs" false))))
 (DUse false (UseGroup ("frontend" "desugar_cache") ((mem "desugaredPrelude" false) (mem "preludeGeneration" false))))
 (DUse false (UseGroup ("frontend" "desugar") ((mem "desugarIn" false))))
-(DUse false (UseGroup ("tools" "target_parse") ((mem "targetDesugared" false))))
+(DUse false (UseGroup ("tools" "target_parse") ((mem "targetDesugared" false) (mem "parseTargetResult" false))))
 (DUse false (UseGroup ("driver" "loader") ((mem "loadProgramFilesLocatedE" false) (mem "stdinEntry" false) (mem "readStdinProgram" false) (mem "stdinReadOverride" false) (mem "readSource" false) (mem "readSourceE" false) (mem "sourceNotUtf8Message" false) (mem "dropPathTriple" false) (mem "modIdToPath" false) (mem "findProjectRoot" false) (mem "entrySearchRoots" false) (mem "projectTrustedMods" false) (mem "stdlibOwnership" false))))
 (DUse false (UseGroup ("driver" "front_gate") ((mem "GateAsk" true) (mem "cliStdlibExports" false) (mem "envelopeWithNotes" false) (mem "moduleLoadErrText" false) (mem "ppParseError" false))))
 (DUse false (UseGroup ("frontend" "ast") ((mem "SiblingPair" false))))
-(DUse false (UseGroup ("driver" "diagnostics") ((mem "desugaredModPairs" false) (mem "CheckDrive" true) (mem "CheckDump" true) (mem "frontEnd" false) (mem "checkFrontDrive" false) (mem "FrontProgram" true) (mem "FrontInput" true) (mem "FrontPolicy" true) (mem "FrontOutput" true) (mem "ppDiagCliSrc" false) (mem "ppDiagCliLines" false) (mem "ppDiagBuckets" false) (mem "stdlibExportsReader" false) (mem "diagOfTypeError" false) (mem "relDiagPath" false) (mem "srcLinesArr" false) (mem "Diag" true) (mem "DiagId" true) (mem "diagIdIsSyntax" false) (mem "Severity" true) (mem "Severity" true) (mem "cjAllToJson" false) (mem "flushRunEnvelope" false) (mem "pendingStaleNotice" false) (mem "pendingEnvelopeExtras" false) (mem "pendingPreludeNotices" false) (mem "readDiagSrc" false) (mem "mkDiag" false) (mem "checkJsonFileParts" false) (mem "siblingPairsOf" false) (mem "CheckJson" true) (mem "ppCheckJson" false) (mem "readFileSafe" false) (mem "diagIsError" false) (mem "diagIsWarn" false) (mem "cohWarnsOfTriple" false) (mem "joinedOrNone" false) (mem "renderTripleErrors" false) (mem "renderTripleWarnings" false) (mem "residualOrGeneric" false) (mem "coherenceWarnCode" false) (mem "isCoherenceWarn" false) (mem "mainShapeWarnings" false) (mem "mainEntryError" false) (mem "ppMainEntryError" false))))
+(DUse false (UseGroup ("driver" "diagnostics") ((mem "desugaredModPairs" false) (mem "CheckDrive" true) (mem "CheckDump" true) (mem "frontEnd" false) (mem "checkFrontDrive" false) (mem "FrontProgram" true) (mem "FrontInput" true) (mem "FrontPolicy" true) (mem "FrontOutput" true) (mem "ppDiagCliSrc" false) (mem "parseErrDiag" false) (mem "ppDiagCliLines" false) (mem "ppDiagBuckets" false) (mem "stdlibExportsReader" false) (mem "diagOfTypeError" false) (mem "relDiagPath" false) (mem "srcLinesArr" false) (mem "Diag" true) (mem "DiagId" true) (mem "diagIdIsSyntax" false) (mem "Severity" true) (mem "Severity" true) (mem "cjAllToJson" false) (mem "flushRunEnvelope" false) (mem "pendingStaleNotice" false) (mem "pendingEnvelopeExtras" false) (mem "pendingPreludeNotices" false) (mem "readDiagSrc" false) (mem "mkDiag" false) (mem "checkJsonFileParts" false) (mem "siblingPairsOf" false) (mem "CheckJson" true) (mem "ppCheckJson" false) (mem "readFileSafe" false) (mem "diagIsError" false) (mem "diagIsWarn" false) (mem "cohWarnsOfTriple" false) (mem "joinedOrNone" false) (mem "renderTripleErrors" false) (mem "renderTripleWarnings" false) (mem "residualOrGeneric" false) (mem "coherenceWarnCode" false) (mem "isCoherenceWarn" false) (mem "mainShapeWarnings" false) (mem "mainEntryError" false) (mem "ppMainEntryError" false))))
 (DUse false (UseGroup ("json") ((mem "Json" true) (mem "jObject" false) (mem "jArray" false) (mem "stringify" false) (mem "parse" false "parseJson") (mem "asString" false))))
 (DUse false (UseGroup ("types" "publish") ((mem "TcReport" true) (mem "tcCode" false))))
 (DUse false (UseGroup ("types" "program_facts") ((mem "ProgramFacts" false) (mem "factsOfChecked" false) (mem "withSibling" false))))
@@ -4739,7 +4780,7 @@ runMcpServerFromEnv _ =
 (DTypeSig false "sourceStalenessVerdict" (TyFun (TyCon "Unit") (TyEffect ("IO") None (TyApp (TyCon "Option") (TyCon "String")))))
 (DFunDef false "sourceStalenessVerdict" (PWild) (EBlock (DoLet false false (PVar "baked") (EApp (EVar "buildFingerprint") (ELit LUnit))) (DoExpr (EIf (EBinOp "==" (EVar "baked") (ELit (LString ""))) (EVar "None") (EBlock (DoLet false false (PVar "root") (EApp (EApp (EVar "envOr") (ELit (LString "MEDAKA_ROOT"))) (EVar "defaultMedakaRoot"))) (DoLet false false (PVar "compilerDir") (EApp (EApp (EVar "joinPath") (EVar "root")) (ELit (LString "compiler")))) (DoExpr (EIf (EApp (EVar "not") (EApp (EVar "fileExists") (EVar "compilerDir"))) (EVar "None") (EMatch (EApp (EVar "liveSourceFingerprint") (EVar "root")) (arm (PCon "None") () (EVar "None")) (arm (PCon "Some" (PVar "live")) () (EIf (EBinOp "==" (EVar "live") (EVar "baked")) (EVar "None") (EApp (EVar "Some") (EVar "compilerDir"))))))))))))
 (DTypeSig false "checkSourceStaleness" (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyEffect ("IO") None (TyCon "Unit"))))
-(DFunDef false "checkSourceStaleness" ((PVar "argv")) (EMatch (EApp (EVar "sourceStalenessVerdict") (ELit LUnit)) (arm (PCon "None") () (ELit LUnit)) (arm (PCon "Some" (PVar "compilerDir")) () (EBlock (DoLet false false (PVar "msg") (EBinOp "++" (EBinOp "++" (ELit (LString "warning: this ./medaka was built from compiler source that differs from ")) (EVar "compilerDir")) (ELit (LString "; rebuild with `make medaka`")))) (DoExpr (EIf (EBinOp "/=" (EApp (EApp (EVar "envOr") (ELit (LString "MEDAKA_STRICT"))) (ELit (LString ""))) (ELit (LString ""))) (EApp (EVar "dieMsg") (EVar "msg")) (EIf (EApp (EVar "runJsonInvocation") (EVar "argv")) (EApp (EApp (EVar "setRef") (EVar "pendingStaleNotice")) (EApp (EVar "Some") (EVar "msg"))) (EApp (EVar "ePutStrLn") (EVar "msg")))))))))
+(DFunDef false "checkSourceStaleness" ((PVar "argv")) (EMatch (EApp (EVar "sourceStalenessVerdict") (ELit LUnit)) (arm (PCon "None") () (ELit LUnit)) (arm (PCon "Some" (PVar "compilerDir")) () (EBlock (DoLet false false (PVar "msg") (EBinOp "++" (EBinOp "++" (ELit (LString "warning: this ./medaka was built from compiler source that differs from ")) (EVar "compilerDir")) (ELit (LString "; rebuild with `make medaka`")))) (DoExpr (EIf (EBinOp "/=" (EApp (EApp (EVar "envOr") (ELit (LString "MEDAKA_STRICT"))) (ELit (LString ""))) (ELit (LString ""))) (EApp (EVar "dieMsg") (EVar "msg")) (EIf (EApp (EVar "envelopeOnStderrInvocation") (EVar "argv")) (EBlock (DoExpr (EApp (EApp (EVar "setRef") (EVar "pendingStaleNotice")) (EApp (EVar "Some") (EVar "msg")))) (DoExpr (EApp (EApp (EVar "registerEarlyNotice") (EVar "argv")) (EVar "msg")))) (EApp (EVar "ePutStrLn") (EVar "msg")))))))))
 (DTypeSig false "loadCheckPrelude" (TyFun (TyCon "PreludeInputs") (TyEffect ("IO") None (TyCon "Unit"))))
 (DFunDef false "loadCheckPrelude" ((PVar "prelude")) (EBlock (DoLet false false (PVar "verdict") (EApp (EVar "loadPreludeInterface") (EVar "prelude"))) (DoExpr (EApp (EApp (EApp (EVar "reportStaleLine") (EVar "dieMsg")) (EVar "None")) (EApp (EApp (EVar "staleLine") (EVar "InterfaceFile")) (EVar "verdict")))) (DoExpr (EApp (EApp (EApp (EVar "reportDecls") (EVar "None")) (EVar "dieMsg")) (EVar "prelude")))))
 (DTypeSig false "seedCheckPrelude" (TyFun (TyCon "PreludeInputs") (TyEffect ("IO") None (TyCon "Unit"))))
@@ -4759,13 +4800,21 @@ runMcpServerFromEnv _ =
 (DFunDef false "reportShippedHeaders" ((PVar "stagingFor") (PVar "prelude")) (EBlock (DoExpr (EApp (EApp (EApp (EVar "reportTrees") (EApp (EVar "stagingFor") (ELit (LString "stalePreludeTrees")))) (EVar "runAbort")) (EApp (EVar "checkPreludeElab") (EVar "prelude")))) (DoExpr (EApp (EApp (EApp (EVar "reportDecls") (EApp (EVar "stagingFor") (ELit (LString "stalePreludeDecls")))) (EVar "runAbort")) (EVar "prelude")))))
 (DTypeSig false "reportChildTrees" (TyFun (TyCon "PreludeInputs") (TyEffect ("IO") None (TyCon "Unit"))))
 (DFunDef false "reportChildTrees" ((PVar "prelude")) (EBlock (DoExpr (EApp (EApp (EApp (EVar "reportTrees") (EVar "None")) (EVar "dieMsg")) (EApp (EVar "checkPreludeElab") (EVar "prelude")))) (DoExpr (EApp (EApp (EApp (EVar "reportDecls") (EVar "None")) (EVar "dieMsg")) (EVar "prelude")))))
-(DTypeSig false "runJsonInvocation" (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyCon "Bool")))
-(DFunDef false "runJsonInvocation" ((PCons (PLit (LString "run")) (PVar "rest"))) (EApp (EApp (EVar "runFlagGiven") (ELit (LString "--json"))) (EVar "rest")))
-(DFunDef false "runJsonInvocation" (PWild) (EVar "False"))
+(DTypeSig false "envelopeOnStderrInvocation" (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyCon "Bool")))
+(DFunDef false "envelopeOnStderrInvocation" ((PCons (PLit (LString "run")) (PVar "rest"))) (EApp (EApp (EVar "runFlagGiven") (ELit (LString "--json"))) (EVar "rest")))
+(DFunDef false "envelopeOnStderrInvocation" ((PCons (PLit (LString "test")) (PVar "rest"))) (EMatch (EApp (EApp (EVar "parseArgs") (EVar "testArgSpec")) (EVar "rest")) (arm (PCon "Ok" (PVar "a")) () (EApp (EApp (EVar "flag") (ELit (LString "--json"))) (EVar "a"))) (arm (PCon "Err" PWild) () (EVar "False"))))
+(DFunDef false "envelopeOnStderrInvocation" (PWild) (EVar "False"))
+(DTypeSig false "registerEarlyNotice" (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyCon "String") (TyEffect ("IO") None (TyCon "Unit")))))
+(DFunDef false "registerEarlyNotice" ((PCons (PLit (LString "test")) PWild) (PVar "msg")) (EApp (EApp (EVar "setAbortReport") (EVar "msg")) (ELit (LString ""))))
+(DFunDef false "registerEarlyNotice" (PWild PWild) (ELit LUnit))
 (DTypeSig false "flushStaleNoticeProse" (TyFun (TyCon "Unit") (TyEffect ("IO") None (TyCon "Unit"))))
-(DFunDef false "flushStaleNoticeProse" (PWild) (EBlock (DoLet false false PWild (EMatch (EUnOp "!" (EVar "pendingStaleNotice")) (arm (PCon "None") () (ELit LUnit)) (arm (PCon "Some" (PVar "msg")) () (EBlock (DoExpr (EApp (EApp (EVar "setRef") (EVar "pendingStaleNotice")) (EVar "None"))) (DoExpr (EApp (EVar "ePutStrLn") (EVar "msg"))))))) (DoLet false false (PVar "notices") (EUnOp "!" (EVar "pendingPreludeNotices"))) (DoExpr (EApp (EApp (EVar "setRef") (EVar "pendingPreludeNotices")) (EListLit))) (DoExpr (EApp (EVar "emitWarningLines") (EApp (EApp (EVar "map") (EVar "snd")) (EVar "notices"))))))
+(DFunDef false "flushStaleNoticeProse" (PWild) (EBlock (DoLet false false PWild (EMatch (EUnOp "!" (EVar "pendingStaleNotice")) (arm (PCon "None") () (ELit LUnit)) (arm (PCon "Some" (PVar "msg")) () (EBlock (DoExpr (EApp (EApp (EVar "setRef") (EVar "pendingStaleNotice")) (EVar "None"))) (DoExpr (EApp (EApp (EVar "setAbortReport") (ELit (LString ""))) (ELit (LString "")))) (DoExpr (EApp (EVar "ePutStrLn") (EVar "msg"))))))) (DoLet false false (PVar "notices") (EUnOp "!" (EVar "pendingPreludeNotices"))) (DoExpr (EApp (EApp (EVar "setRef") (EVar "pendingPreludeNotices")) (EListLit))) (DoExpr (EApp (EVar "emitWarningLines") (EApp (EApp (EVar "map") (EVar "snd")) (EVar "notices"))))))
 (DTypeSig false "dieMsg" (TyFun (TyCon "String") (TyEffect ("IO") None (TyCon "Unit"))))
 (DFunDef false "dieMsg" ((PVar "msg")) (EBlock (DoExpr (EApp (EVar "emitAbortTotal") (ELit LUnit))) (DoExpr (EApp (EVar "ePutStrLn") (EVar "msg"))) (DoExpr (EApp (EVar "stageExit") (ELit (LInt 1))))))
+(DTypeSig false "testDie" (TyFun (TyCon "String") (TyEffect ("IO") None (TyCon "Unit"))))
+(DFunDef false "testDie" ((PVar "msg")) (EBlock (DoExpr (EApp (EVar "flushStaleNoticeProse") (ELit LUnit))) (DoExpr (EApp (EVar "dieMsg") (EVar "msg")))))
+(DTypeSig false "testExit" (TyFun (TyCon "Int") (TyEffect ("IO") None (TyCon "Unit"))))
+(DFunDef false "testExit" ((PVar "code")) (EBlock (DoExpr (EApp (EVar "flushStaleNoticeProse") (ELit LUnit))) (DoExpr (EApp (EVar "stageExit") (EVar "code")))))
 (DTypeSig false "runAbort" (TyFun (TyCon "String") (TyEffect ("IO") None (TyCon "Unit"))))
 (DFunDef false "runAbort" ((PVar "msg")) (EBlock (DoExpr (EApp (EVar "flushStaleNoticeProse") (ELit LUnit))) (DoExpr (EApp (EVar "emitAbortTotal") (ELit LUnit))) (DoExpr (EApp (EVar "flushPerfSinkProse") (ELit LUnit))) (DoExpr (EApp (EVar "dieMsg") (EVar "msg")))))
 (DTypeSig false "orExit" (TyFun (TyApp (TyApp (TyCon "Result") (TyCon "String")) (TyVar "a")) (TyEffect ("IO") None (TyVar "a"))))
@@ -5043,9 +5092,9 @@ runMcpServerFromEnv _ =
 (DTypeSig false "checkedFacts" (TyFun (TyCon "TcReport") (TyCon "ProgramFacts")))
 (DFunDef false "checkedFacts" ((PVar "report")) (EMatch (EFieldAccess (EVar "report") "trChecked") (arm (PCon "Some" (PVar "checked")) () (EApp (EVar "factsOfChecked") (EVar "checked"))) (arm (PCon "None") () (EApp (EVar "panic") (ELit (LString "internal error: the typecheck published no checked program to run"))))))
 (DTypeSig false "runTestCmd" (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyEffect ("IO") None (TyCon "Unit"))))
-(DFunDef false "runTestCmd" ((PVar "argv0")) (EBlock (DoLet false false (PVar "a") (EApp (EApp (EVar "requireArgs") (EVar "testArgSpec")) (EVar "argv0"))) (DoExpr (EIf (EApp (EApp (EVar "flag") (ELit (LString "--props-worker"))) (EVar "a")) (EApp (EVar "runPropsWorkerCmd") (EVar "a")) (EMatch (EApp (EVar "parseTestEngines") (EVar "a")) (arm (PCon "Err" (PVar "msg")) () (EApp (EVar "dieMsg") (EBinOp "++" (EBinOp "++" (ELit (LString "medaka test: ")) (EApp (EVar "display") (EVar "msg"))) (ELit (LString ""))))) (arm (PCon "Ok" (PVar "engines")) () (EMatch (EApp (EVar "parseTestCasesFlag") (EVar "a")) (arm (PCon "Err" (PVar "msg")) () (EApp (EVar "dieMsg") (EBinOp "++" (EBinOp "++" (ELit (LString "medaka test: ")) (EApp (EVar "display") (EVar "msg"))) (ELit (LString ""))))) (arm (PCon "Ok" (PVar "casesOpt")) () (EMatch (EApp (EApp (EVar "parseTestIntFlag") (ELit (LString "--seed"))) (EVar "a")) (arm (PCon "Err" (PVar "msg")) () (EApp (EVar "dieMsg") (EBinOp "++" (EBinOp "++" (ELit (LString "medaka test: ")) (EApp (EVar "display") (EVar "msg"))) (ELit (LString ""))))) (arm (PCon "Ok" (PVar "seedOpt")) () (EBlock (DoLet false false PWild (EMatch (EVar "seedOpt") (arm (PCon "Some" (PVar "s")) () (EApp (EVar "seedPropRng") (EVar "s"))) (arm (PCon "None") () (ELit LUnit)))) (DoLet false false (PVar "cases") (EApp (EApp (EVar "optionOr") (ELit (LInt 100))) (EVar "casesOpt"))) (DoLet false false (PVar "filterOpt") (EApp (EApp (EVar "flagValue") (ELit (LString "--filter"))) (EVar "a"))) (DoLet false false (PVar "jsonMode") (EApp (EApp (EVar "flag") (ELit (LString "--json"))) (EVar "a"))) (DoExpr (EMatch (EApp (EVar "initTestSeed") (ELit LUnit)) (arm (PCon "Err" (PVar "msg")) () (EApp (EVar "dieMsg") (EBinOp "++" (EBinOp "++" (ELit (LString "medaka test: ")) (EApp (EVar "display") (EVar "msg"))) (ELit (LString ""))))) (arm (PCon "Ok" PWild) () (EApp (EApp (EApp (EApp (EApp (EApp (EVar "runTestTargets") (EVar "engines")) (EVar "cases")) (EVar "filterOpt")) (EVar "seedOpt")) (EVar "jsonMode")) (EVar "a"))))))))))))))))
+(DFunDef false "runTestCmd" ((PVar "argv0")) (EBlock (DoLet false false (PVar "a") (EApp (EApp (EVar "requireArgs") (EVar "testArgSpec")) (EVar "argv0"))) (DoExpr (EIf (EApp (EApp (EVar "flag") (ELit (LString "--props-worker"))) (EVar "a")) (EBlock (DoExpr (EApp (EVar "flushStaleNoticeProse") (ELit LUnit))) (DoExpr (EApp (EVar "runPropsWorkerCmd") (EVar "a")))) (EMatch (EApp (EVar "parseTestEngines") (EVar "a")) (arm (PCon "Err" (PVar "msg")) () (EApp (EVar "testDie") (EBinOp "++" (EBinOp "++" (ELit (LString "medaka test: ")) (EApp (EVar "display") (EVar "msg"))) (ELit (LString ""))))) (arm (PCon "Ok" (PVar "engines")) () (EMatch (EApp (EVar "parseTestCasesFlag") (EVar "a")) (arm (PCon "Err" (PVar "msg")) () (EApp (EVar "testDie") (EBinOp "++" (EBinOp "++" (ELit (LString "medaka test: ")) (EApp (EVar "display") (EVar "msg"))) (ELit (LString ""))))) (arm (PCon "Ok" (PVar "casesOpt")) () (EMatch (EApp (EApp (EVar "parseTestIntFlag") (ELit (LString "--seed"))) (EVar "a")) (arm (PCon "Err" (PVar "msg")) () (EApp (EVar "testDie") (EBinOp "++" (EBinOp "++" (ELit (LString "medaka test: ")) (EApp (EVar "display") (EVar "msg"))) (ELit (LString ""))))) (arm (PCon "Ok" (PVar "seedOpt")) () (EBlock (DoLet false false PWild (EMatch (EVar "seedOpt") (arm (PCon "Some" (PVar "s")) () (EApp (EVar "seedPropRng") (EVar "s"))) (arm (PCon "None") () (ELit LUnit)))) (DoLet false false (PVar "cases") (EApp (EApp (EVar "optionOr") (ELit (LInt 100))) (EVar "casesOpt"))) (DoLet false false (PVar "filterOpt") (EApp (EApp (EVar "flagValue") (ELit (LString "--filter"))) (EVar "a"))) (DoLet false false (PVar "jsonMode") (EApp (EApp (EVar "flag") (ELit (LString "--json"))) (EVar "a"))) (DoExpr (EMatch (EApp (EVar "initTestSeed") (ELit LUnit)) (arm (PCon "Err" (PVar "msg")) () (EApp (EVar "testDie") (EBinOp "++" (EBinOp "++" (ELit (LString "medaka test: ")) (EApp (EVar "display") (EVar "msg"))) (ELit (LString ""))))) (arm (PCon "Ok" PWild) () (EApp (EApp (EApp (EApp (EApp (EApp (EVar "runTestTargets") (EVar "engines")) (EVar "cases")) (EVar "filterOpt")) (EVar "seedOpt")) (EVar "jsonMode")) (EVar "a"))))))))))))))))
 (DTypeSig false "runTestTargets" (TyFun (TyApp (TyCon "List") (TyCon "Engine")) (TyFun (TyCon "Int") (TyFun (TyApp (TyCon "Option") (TyCon "String")) (TyFun (TyApp (TyCon "Option") (TyCon "Int")) (TyFun (TyCon "Bool") (TyFun (TyCon "Args") (TyEffect ("IO") None (TyCon "Unit")))))))))
-(DFunDef false "runTestTargets" ((PVar "engines") (PVar "cases") (PVar "filterOpt") (PVar "seedOpt") (PVar "jsonMode") (PVar "a")) (EMatch (EFieldAccess (EVar "a") "positionals") (arm (PList) () (EIf (EVar "jsonMode") (EBlock (DoExpr (EApp (EVar "ePutStrLn") (ELit (LString "medaka test --json: needs a single file.mdk target; with no target, medaka test runs the whole enclosing project")))) (DoExpr (EApp (EVar "stageExit") (ELit (LInt 1))))) (EApp (EApp (EApp (EApp (EVar "runTestProjectCmd") (EVar "engines")) (EVar "cases")) (EVar "filterOpt")) (EVar "seedOpt")))) (arm (PList (PVar "target")) () (EMatch (EApp (EVar "listDir") (EVar "target")) (arm (PCon "Err" PWild) () (EIf (EVar "jsonMode") (EApp (EApp (EApp (EApp (EVar "runTestJsonCmd") (EVar "engines")) (EVar "cases")) (EVar "filterOpt")) (EVar "target")) (EApp (EApp (EApp (EApp (EVar "runTestOne") (EVar "engines")) (EVar "cases")) (EVar "filterOpt")) (EVar "target")))) (arm (PCon "Ok" PWild) () (EIf (EVar "jsonMode") (EBlock (DoExpr (EApp (EVar "ePutStrLn") (ELit (LString "medaka test --json: directory targets are not supported; pass a single file.mdk target")))) (DoExpr (EApp (EVar "stageExit") (ELit (LInt 1))))) (EApp (EApp (EApp (EApp (EApp (EVar "runTestManyTargets") (EVar "engines")) (EVar "cases")) (EVar "filterOpt")) (EVar "seedOpt")) (EListLit (EVar "target"))))))) (arm (PVar "targets") () (EIf (EVar "jsonMode") (EBlock (DoExpr (EApp (EVar "ePutStrLn") (ELit (LString "medaka test --json: exactly one file.mdk target is supported")))) (DoExpr (EApp (EVar "stageExit") (ELit (LInt 1))))) (EApp (EApp (EApp (EApp (EApp (EVar "runTestManyTargets") (EVar "engines")) (EVar "cases")) (EVar "filterOpt")) (EVar "seedOpt")) (EVar "targets"))))))
+(DFunDef false "runTestTargets" ((PVar "engines") (PVar "cases") (PVar "filterOpt") (PVar "seedOpt") (PVar "jsonMode") (PVar "a")) (EMatch (EFieldAccess (EVar "a") "positionals") (arm (PList) () (EIf (EVar "jsonMode") (EApp (EVar "testDie") (ELit (LString "medaka test --json: needs a single file.mdk target; with no target, medaka test runs the whole enclosing project"))) (EApp (EApp (EApp (EApp (EVar "runTestProjectCmd") (EVar "engines")) (EVar "cases")) (EVar "filterOpt")) (EVar "seedOpt")))) (arm (PList (PVar "target")) () (EMatch (EApp (EVar "listDir") (EVar "target")) (arm (PCon "Err" PWild) () (EIf (EVar "jsonMode") (EApp (EApp (EApp (EApp (EVar "runTestJsonCmd") (EVar "engines")) (EVar "cases")) (EVar "filterOpt")) (EVar "target")) (EApp (EApp (EApp (EApp (EVar "runTestOne") (EVar "engines")) (EVar "cases")) (EVar "filterOpt")) (EVar "target")))) (arm (PCon "Ok" PWild) () (EIf (EVar "jsonMode") (EApp (EVar "testDie") (ELit (LString "medaka test --json: directory targets are not supported; pass a single file.mdk target"))) (EApp (EApp (EApp (EApp (EApp (EVar "runTestManyTargets") (EVar "engines")) (EVar "cases")) (EVar "filterOpt")) (EVar "seedOpt")) (EListLit (EVar "target"))))))) (arm (PVar "targets") () (EIf (EVar "jsonMode") (EApp (EVar "testDie") (ELit (LString "medaka test --json: exactly one file.mdk target is supported"))) (EApp (EApp (EApp (EApp (EApp (EVar "runTestManyTargets") (EVar "engines")) (EVar "cases")) (EVar "filterOpt")) (EVar "seedOpt")) (EVar "targets"))))))
 (DTypeSig false "runPropsWorkerCmd" (TyFun (TyCon "Args") (TyEffect ("IO") None (TyCon "Unit"))))
 (DFunDef false "runPropsWorkerCmd" ((PVar "a")) (EMatch (EApp (EVar "parsePropsWorkerPositionals") (EFieldAccess (EVar "a") "positionals")) (arm (PCon "Err" (PVar "message")) () (EApp (EVar "dieMsg") (EBinOp "++" (EBinOp "++" (ELit (LString "medaka test --props-worker: ")) (EApp (EVar "display") (EVar "message"))) (ELit (LString ""))))) (arm (PCon "Ok" (PTuple (PVar "target") (PVar "requests"))) () (EApp (EApp (EVar "runEvalPropsWorker") (EVar "target")) (EVar "requests")))))
 (DTypeSig false "parsePropsWorkerPositionals" (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyApp (TyApp (TyCon "Result") (TyCon "String")) (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "PropRequest"))))))
@@ -5062,7 +5111,9 @@ runMcpServerFromEnv _ =
 (DTypeSig false "runTestProjectCmd" (TyFun (TyApp (TyCon "List") (TyCon "Engine")) (TyFun (TyCon "Int") (TyFun (TyApp (TyCon "Option") (TyCon "String")) (TyFun (TyApp (TyCon "Option") (TyCon "Int")) (TyEffect ("IO") None (TyCon "Unit")))))))
 (DFunDef false "runTestProjectCmd" ((PVar "engines") (PVar "cases") (PVar "filterOpt") (PVar "seedOpt")) (EBlock (DoLet false false (PVar "cwd") (EApp (EVar "canonicalizePath") (ELit (LString ".")))) (DoExpr (EMatch (EApp (EVar "findProjectRoot") (EVar "cwd")) (arm (PCon "None") () (EApp (EVar "dieMsg") (EBinOp "++" (EBinOp "++" (ELit (LString "medaka test: no target given and no medaka.toml in ")) (EApp (EVar "display") (EVar "cwd"))) (ELit (LString " or any directory above it; pass a file.mdk or directory target, or run inside a project"))))) (arm (PCon "Some" (PVar "root")) () (EBlock (DoExpr (EApp (EVar "ePutStrLn") (EBinOp "++" (EBinOp "++" (ELit (LString "medaka test: no target given; testing the project at ")) (EApp (EVar "display") (EVar "root"))) (ELit (LString ""))))) (DoExpr (EApp (EApp (EApp (EApp (EApp (EVar "runTestManyTargets") (EVar "engines")) (EVar "cases")) (EVar "filterOpt")) (EVar "seedOpt")) (EListLit (EVar "root"))))))))))
 (DTypeSig false "runTestJsonCmd" (TyFun (TyApp (TyCon "List") (TyCon "Engine")) (TyFun (TyCon "Int") (TyFun (TyApp (TyCon "Option") (TyCon "String")) (TyFun (TyCon "String") (TyEffect ("IO") None (TyCon "Unit")))))))
-(DFunDef false "runTestJsonCmd" ((PVar "engines") (PVar "cases") (PVar "filterOpt") (PVar "target")) (EBlock (DoExpr (EApp (EApp (EVar "setRef") (EVar "runJsonMode")) (EVar "True"))) (DoExpr (EApp (EApp (EVar "setRef") (EVar "pendingEnvelopeExtras")) (EMatch (EUnOp "!" (EVar "testSeedRef")) (arm (PCon "Some" (PVar "n")) () (EListLit (ETuple (ELit (LString "seed")) (EApp (EVar "JInt") (EVar "n"))))) (arm (PCon "None") () (EListLit))))) (DoLet false false (PVar "root") (EApp (EApp (EVar "envOr") (ELit (LString "MEDAKA_ROOT"))) (EVar "defaultMedakaRoot"))) (DoLet false false (PVar "stdlibDir") (EBinOp "++" (EVar "root") (ELit (LString "/stdlib")))) (DoLet false false (PVar "r") (EApp (EApp (EVar "andThen") (EApp (EVar "readPreludeSources") (EVar "stdlibDir"))) (ELam ((PVar "prelude")) (ELet false PWild (EApp (EVar "seedCheckPrelude") (EVar "prelude")) (EApp (EApp (EVar "andThen") (EApp (EVar "readSource") (EVar "target"))) (ELam ((PVar "tsrc")) (ELet false (PVar "userDecls") (EApp (EVar "targetDesugared") (EVar "tsrc")) (EIf (EApp (EApp (EApp (EVar "filterMatchedNothing") (EVar "filterOpt")) (EVar "tsrc")) (EVar "userDecls")) (EApp (EVar "Err") (EBinOp "++" (EBinOp "++" (ELit (LString "medaka test: ")) (EApp (EVar "display") (EVar "target"))) (ELit (LString ": --filter matched no doctests, props, or `test \"…\"` decls")))) (EBlock (DoLet false false (PTuple (PVar "typeError") (PVar "runs") (PVar "props") (PVar "tests") (PVar "typecheckSkipped")) (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EVar "runTestGradedReport") (EVar "engines")) (EFieldAccess (EVar "prelude") "pnRuntimeSrc")) (EFieldAccess (EVar "prelude") "pnCoreSrc")) (EVar "target")) (EVar "tsrc")) (EVar "userDecls")) (EVar "stdlibDir")) (EVar "cases")) (EVar "filterOpt")) (EVar "True"))) (DoLet false false (PVar "ok") (EApp (EApp (EApp (EApp (EVar "cliGradedTestReportOk") (EVar "typeError")) (EVar "runs")) (EVar "props")) (EVar "tests"))) (DoLet false false (PVar "report") (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EVar "cliGradedTestReportJson") (EVar "target")) (EVar "typeError")) (EVar "engines")) (EVar "runs")) (EVar "props")) (EVar "tests")) (EVar "typecheckSkipped"))) (DoExpr (EApp (EVar "putStrLn") (EApp (EVar "stringify") (EApp (EApp (EApp (EVar "cliSeedOnFailure") (EVar "typeError")) (EVar "ok")) (EVar "report"))))) (DoExpr (EApp (EVar "Ok") (EVar "ok")))))))))))) (DoExpr (EMatch (EVar "r") (arm (PCon "Err" (PVar "e")) () (EApp (EVar "dieMsg") (EVar "e"))) (arm (PCon "Ok" (PVar "ok")) () (EIf (EVar "ok") (ELit LUnit) (EApp (EVar "stageExit") (ELit (LInt 1)))))))))
+(DFunDef false "runTestJsonCmd" ((PVar "engines") (PVar "cases") (PVar "filterOpt") (PVar "target")) (EBlock (DoExpr (EApp (EApp (EVar "setRef") (EVar "runJsonMode")) (EVar "True"))) (DoExpr (EApp (EApp (EVar "setRef") (EVar "pendingEnvelopeExtras")) (EMatch (EUnOp "!" (EVar "testSeedRef")) (arm (PCon "Some" (PVar "n")) () (EListLit (ETuple (ELit (LString "seed")) (EApp (EVar "JInt") (EVar "n"))))) (arm (PCon "None") () (EListLit))))) (DoLet false false (PVar "root") (EApp (EApp (EVar "envOr") (ELit (LString "MEDAKA_ROOT"))) (EVar "defaultMedakaRoot"))) (DoLet false false (PVar "stdlibDir") (EBinOp "++" (EVar "root") (ELit (LString "/stdlib")))) (DoLet false false (PVar "r") (EApp (EApp (EVar "andThen") (EApp (EVar "readPreludeSources") (EVar "stdlibDir"))) (ELam ((PVar "prelude")) (ELet false PWild (EApp (EVar "seedCheckPrelude") (EVar "prelude")) (EApp (EApp (EVar "andThen") (EApp (EVar "readSource") (EVar "target"))) (ELam ((PVar "tsrc")) (EApp (EApp (EVar "andThen") (EApp (EApp (EVar "parseTargetOrRefuse") (EVar "target")) (EVar "tsrc"))) (ELam (PWild) (ELet false (PVar "userDecls") (EApp (EVar "targetDesugared") (EVar "tsrc")) (EIf (EApp (EApp (EApp (EVar "filterMatchedNothing") (EVar "filterOpt")) (EVar "tsrc")) (EVar "userDecls")) (EApp (EVar "Err") (EBinOp "++" (EBinOp "++" (ELit (LString "medaka test: ")) (EApp (EVar "display") (EVar "target"))) (ELit (LString ": --filter matched no doctests, props, or `test \"…\"` decls")))) (EBlock (DoLet false false (PTuple (PVar "typeError") (PVar "runs") (PVar "props") (PVar "tests") (PVar "typecheckSkipped")) (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EVar "runTestGradedReport") (EVar "engines")) (EFieldAccess (EVar "prelude") "pnRuntimeSrc")) (EFieldAccess (EVar "prelude") "pnCoreSrc")) (EVar "target")) (EVar "tsrc")) (EVar "userDecls")) (EVar "stdlibDir")) (EVar "cases")) (EVar "filterOpt")) (EVar "True"))) (DoLet false false (PVar "ok") (EApp (EApp (EApp (EApp (EVar "cliGradedTestReportOk") (EVar "typeError")) (EVar "runs")) (EVar "props")) (EVar "tests"))) (DoLet false false (PVar "report") (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EVar "cliGradedTestReportJson") (EVar "target")) (EVar "typeError")) (EVar "engines")) (EVar "runs")) (EVar "props")) (EVar "tests")) (EVar "typecheckSkipped"))) (DoExpr (EApp (EVar "putStrLn") (EApp (EVar "stringify") (EApp (EApp (EApp (EVar "cliSeedOnFailure") (EVar "typeError")) (EVar "ok")) (EVar "report"))))) (DoExpr (EApp (EVar "Ok") (EVar "ok")))))))))))))) (DoExpr (EMatch (EVar "r") (arm (PCon "Err" (PVar "e")) () (EApp (EVar "testDie") (EVar "e"))) (arm (PCon "Ok" (PVar "ok")) () (EIf (EVar "ok") (EApp (EVar "flushStaleNoticeProse") (ELit LUnit)) (EApp (EVar "testExit") (ELit (LInt 1)))))))))
+(DTypeSig false "parseTargetOrRefuse" (TyFun (TyCon "String") (TyFun (TyCon "String") (TyApp (TyApp (TyCon "Result") (TyCon "String")) (TyCon "Unit")))))
+(DFunDef false "parseTargetOrRefuse" ((PVar "target") (PVar "tsrc")) (EMatch (EApp (EVar "parseTargetResult") (EVar "tsrc")) (arm (PCon "Err" (PVar "e")) () (EApp (EVar "Err") (EApp (EApp (EApp (EVar "ppDiagCliSrc") (EVar "tsrc")) (EVar "target")) (EApp (EApp (EVar "parseErrDiag") (EVar "target")) (EVar "e"))))) (arm (PCon "Ok" PWild) () (EApp (EVar "Ok") (ELit LUnit)))))
 (DTypeSig false "runTestManyTargets" (TyFun (TyApp (TyCon "List") (TyCon "Engine")) (TyFun (TyCon "Int") (TyFun (TyApp (TyCon "Option") (TyCon "String")) (TyFun (TyApp (TyCon "Option") (TyCon "Int")) (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyEffect ("IO") None (TyCon "Unit"))))))))
 (DFunDef false "runTestManyTargets" ((PVar "engines") (PVar "cases") (PVar "filterOpt") (PVar "seedOpt") (PVar "targets")) (EBlock (DoLet false false (PVar "files") (EApp (EApp (EVar "flatMap") (EVar "expandLintTarget")) (EVar "targets"))) (DoExpr (EMatch (EVar "files") (arm (PList) () (EApp (EVar "dieMsg") (ELit (LString "medaka test: no .mdk files found")))) (arm PWild () (EBlock (DoLet false false (PVar "root") (EApp (EApp (EVar "envOr") (ELit (LString "MEDAKA_ROOT"))) (EVar "defaultMedakaRoot"))) (DoLet false false (PVar "rtPath") (EBinOp "++" (EVar "root") (ELit (LString "/stdlib/runtime.mdk")))) (DoLet false false (PVar "corePath") (EBinOp "++" (EVar "root") (ELit (LString "/stdlib/core.mdk")))) (DoLet false false (PVar "stdlibDir") (EBinOp "++" (EVar "root") (ELit (LString "/stdlib")))) (DoLet false false (PVar "rosterOk") (EApp (EApp (EApp (EVar "checkTestMdkRoster") (EVar "root")) (EVar "targets")) (EVar "files"))) (DoExpr (EApp (EApp (EApp (EVar "reportSupervisedTrees") (EVar "stdlibDir")) (EVar "rtPath")) (EVar "corePath"))) (DoLet false false (PTuple (PVar "anyFailed") (PVar "seedSeen")) (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EVar "testFilesGo") (EVar "engines")) (EVar "rtPath")) (EVar "corePath")) (EVar "stdlibDir")) (EVar "cases")) (EVar "filterOpt")) (EVar "seedOpt")) (EVar "files")) (ETuple (EVar "False") (EVar "False")))) (DoExpr (EIf (EBinOp "||" (EVar "anyFailed") (EApp (EVar "not") (EVar "rosterOk"))) (EBlock (DoExpr (EIf (EVar "seedSeen") (EApp (EVar "printTestSeedLine") (ELit LUnit)) (ELit LUnit))) (DoExpr (EApp (EVar "stageExit") (ELit (LInt 1))))) (ELit LUnit)))))))))
 (DTypeSig false "reportSupervisedTrees" (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyCon "String") (TyEffect ("IO") None (TyCon "Unit"))))))
@@ -5253,11 +5304,11 @@ runMcpServerFromEnv _ =
 (DUse false (UseGroup ("frontend" "lexer") ((mem "tokenizeWithOffsetPairs" false))))
 (DUse false (UseGroup ("frontend" "desugar_cache") ((mem "desugaredPrelude" false) (mem "preludeGeneration" false))))
 (DUse false (UseGroup ("frontend" "desugar") ((mem "desugarIn" false))))
-(DUse false (UseGroup ("tools" "target_parse") ((mem "targetDesugared" false))))
+(DUse false (UseGroup ("tools" "target_parse") ((mem "targetDesugared" false) (mem "parseTargetResult" false))))
 (DUse false (UseGroup ("driver" "loader") ((mem "loadProgramFilesLocatedE" false) (mem "stdinEntry" false) (mem "readStdinProgram" false) (mem "stdinReadOverride" false) (mem "readSource" false) (mem "readSourceE" false) (mem "sourceNotUtf8Message" false) (mem "dropPathTriple" false) (mem "modIdToPath" false) (mem "findProjectRoot" false) (mem "entrySearchRoots" false) (mem "projectTrustedMods" false) (mem "stdlibOwnership" false))))
 (DUse false (UseGroup ("driver" "front_gate") ((mem "GateAsk" true) (mem "cliStdlibExports" false) (mem "envelopeWithNotes" false) (mem "moduleLoadErrText" false) (mem "ppParseError" false))))
 (DUse false (UseGroup ("frontend" "ast") ((mem "SiblingPair" false))))
-(DUse false (UseGroup ("driver" "diagnostics") ((mem "desugaredModPairs" false) (mem "CheckDrive" true) (mem "CheckDump" true) (mem "frontEnd" false) (mem "checkFrontDrive" false) (mem "FrontProgram" true) (mem "FrontInput" true) (mem "FrontPolicy" true) (mem "FrontOutput" true) (mem "ppDiagCliSrc" false) (mem "ppDiagCliLines" false) (mem "ppDiagBuckets" false) (mem "stdlibExportsReader" false) (mem "diagOfTypeError" false) (mem "relDiagPath" false) (mem "srcLinesArr" false) (mem "Diag" true) (mem "DiagId" true) (mem "diagIdIsSyntax" false) (mem "Severity" true) (mem "Severity" true) (mem "cjAllToJson" false) (mem "flushRunEnvelope" false) (mem "pendingStaleNotice" false) (mem "pendingEnvelopeExtras" false) (mem "pendingPreludeNotices" false) (mem "readDiagSrc" false) (mem "mkDiag" false) (mem "checkJsonFileParts" false) (mem "siblingPairsOf" false) (mem "CheckJson" true) (mem "ppCheckJson" false) (mem "readFileSafe" false) (mem "diagIsError" false) (mem "diagIsWarn" false) (mem "cohWarnsOfTriple" false) (mem "joinedOrNone" false) (mem "renderTripleErrors" false) (mem "renderTripleWarnings" false) (mem "residualOrGeneric" false) (mem "coherenceWarnCode" false) (mem "isCoherenceWarn" false) (mem "mainShapeWarnings" false) (mem "mainEntryError" false) (mem "ppMainEntryError" false))))
+(DUse false (UseGroup ("driver" "diagnostics") ((mem "desugaredModPairs" false) (mem "CheckDrive" true) (mem "CheckDump" true) (mem "frontEnd" false) (mem "checkFrontDrive" false) (mem "FrontProgram" true) (mem "FrontInput" true) (mem "FrontPolicy" true) (mem "FrontOutput" true) (mem "ppDiagCliSrc" false) (mem "parseErrDiag" false) (mem "ppDiagCliLines" false) (mem "ppDiagBuckets" false) (mem "stdlibExportsReader" false) (mem "diagOfTypeError" false) (mem "relDiagPath" false) (mem "srcLinesArr" false) (mem "Diag" true) (mem "DiagId" true) (mem "diagIdIsSyntax" false) (mem "Severity" true) (mem "Severity" true) (mem "cjAllToJson" false) (mem "flushRunEnvelope" false) (mem "pendingStaleNotice" false) (mem "pendingEnvelopeExtras" false) (mem "pendingPreludeNotices" false) (mem "readDiagSrc" false) (mem "mkDiag" false) (mem "checkJsonFileParts" false) (mem "siblingPairsOf" false) (mem "CheckJson" true) (mem "ppCheckJson" false) (mem "readFileSafe" false) (mem "diagIsError" false) (mem "diagIsWarn" false) (mem "cohWarnsOfTriple" false) (mem "joinedOrNone" false) (mem "renderTripleErrors" false) (mem "renderTripleWarnings" false) (mem "residualOrGeneric" false) (mem "coherenceWarnCode" false) (mem "isCoherenceWarn" false) (mem "mainShapeWarnings" false) (mem "mainEntryError" false) (mem "ppMainEntryError" false))))
 (DUse false (UseGroup ("json") ((mem "Json" true) (mem "jObject" false) (mem "jArray" false) (mem "stringify" false) (mem "parse" false "parseJson") (mem "asString" false))))
 (DUse false (UseGroup ("types" "publish") ((mem "TcReport" true) (mem "tcCode" false))))
 (DUse false (UseGroup ("types" "program_facts") ((mem "ProgramFacts" false) (mem "factsOfChecked" false) (mem "withSibling" false))))
@@ -5291,7 +5342,7 @@ runMcpServerFromEnv _ =
 (DTypeSig false "sourceStalenessVerdict" (TyFun (TyCon "Unit") (TyEffect ("IO") None (TyApp (TyCon "Option") (TyCon "String")))))
 (DFunDef false "sourceStalenessVerdict" (PWild) (EBlock (DoLet false false (PVar "baked") (EApp (EVar "buildFingerprint") (ELit LUnit))) (DoExpr (EIf (EBinOp "==" (EVar "baked") (ELit (LString ""))) (EVar "None") (EBlock (DoLet false false (PVar "root") (EApp (EApp (EVar "envOr") (ELit (LString "MEDAKA_ROOT"))) (EVar "defaultMedakaRoot"))) (DoLet false false (PVar "compilerDir") (EApp (EApp (EVar "joinPath") (EVar "root")) (ELit (LString "compiler")))) (DoExpr (EIf (EApp (EVar "not") (EApp (EVar "fileExists") (EVar "compilerDir"))) (EVar "None") (EMatch (EApp (EVar "liveSourceFingerprint") (EVar "root")) (arm (PCon "None") () (EVar "None")) (arm (PCon "Some" (PVar "live")) () (EIf (EBinOp "==" (EVar "live") (EVar "baked")) (EVar "None") (EApp (EVar "Some") (EVar "compilerDir"))))))))))))
 (DTypeSig false "checkSourceStaleness" (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyEffect ("IO") None (TyCon "Unit"))))
-(DFunDef false "checkSourceStaleness" ((PVar "argv")) (EMatch (EApp (EVar "sourceStalenessVerdict") (ELit LUnit)) (arm (PCon "None") () (ELit LUnit)) (arm (PCon "Some" (PVar "compilerDir")) () (EBlock (DoLet false false (PVar "msg") (EBinOp "++" (EBinOp "++" (ELit (LString "warning: this ./medaka was built from compiler source that differs from ")) (EVar "compilerDir")) (ELit (LString "; rebuild with `make medaka`")))) (DoExpr (EIf (EBinOp "/=" (EApp (EApp (EVar "envOr") (ELit (LString "MEDAKA_STRICT"))) (ELit (LString ""))) (ELit (LString ""))) (EApp (EVar "dieMsg") (EVar "msg")) (EIf (EApp (EVar "runJsonInvocation") (EVar "argv")) (EApp (EApp (EVar "setRef") (EVar "pendingStaleNotice")) (EApp (EVar "Some") (EVar "msg"))) (EApp (EVar "ePutStrLn") (EVar "msg")))))))))
+(DFunDef false "checkSourceStaleness" ((PVar "argv")) (EMatch (EApp (EVar "sourceStalenessVerdict") (ELit LUnit)) (arm (PCon "None") () (ELit LUnit)) (arm (PCon "Some" (PVar "compilerDir")) () (EBlock (DoLet false false (PVar "msg") (EBinOp "++" (EBinOp "++" (ELit (LString "warning: this ./medaka was built from compiler source that differs from ")) (EVar "compilerDir")) (ELit (LString "; rebuild with `make medaka`")))) (DoExpr (EIf (EBinOp "/=" (EApp (EApp (EVar "envOr") (ELit (LString "MEDAKA_STRICT"))) (ELit (LString ""))) (ELit (LString ""))) (EApp (EVar "dieMsg") (EVar "msg")) (EIf (EApp (EVar "envelopeOnStderrInvocation") (EVar "argv")) (EBlock (DoExpr (EApp (EApp (EVar "setRef") (EVar "pendingStaleNotice")) (EApp (EVar "Some") (EVar "msg")))) (DoExpr (EApp (EApp (EVar "registerEarlyNotice") (EVar "argv")) (EVar "msg")))) (EApp (EVar "ePutStrLn") (EVar "msg")))))))))
 (DTypeSig false "loadCheckPrelude" (TyFun (TyCon "PreludeInputs") (TyEffect ("IO") None (TyCon "Unit"))))
 (DFunDef false "loadCheckPrelude" ((PVar "prelude")) (EBlock (DoLet false false (PVar "verdict") (EApp (EVar "loadPreludeInterface") (EVar "prelude"))) (DoExpr (EApp (EApp (EApp (EVar "reportStaleLine") (EVar "dieMsg")) (EVar "None")) (EApp (EApp (EVar "staleLine") (EVar "InterfaceFile")) (EVar "verdict")))) (DoExpr (EApp (EApp (EApp (EVar "reportDecls") (EVar "None")) (EVar "dieMsg")) (EVar "prelude")))))
 (DTypeSig false "seedCheckPrelude" (TyFun (TyCon "PreludeInputs") (TyEffect ("IO") None (TyCon "Unit"))))
@@ -5311,13 +5362,21 @@ runMcpServerFromEnv _ =
 (DFunDef false "reportShippedHeaders" ((PVar "stagingFor") (PVar "prelude")) (EBlock (DoExpr (EApp (EApp (EApp (EVar "reportTrees") (EApp (EVar "stagingFor") (ELit (LString "stalePreludeTrees")))) (EVar "runAbort")) (EApp (EVar "checkPreludeElab") (EVar "prelude")))) (DoExpr (EApp (EApp (EApp (EVar "reportDecls") (EApp (EVar "stagingFor") (ELit (LString "stalePreludeDecls")))) (EVar "runAbort")) (EVar "prelude")))))
 (DTypeSig false "reportChildTrees" (TyFun (TyCon "PreludeInputs") (TyEffect ("IO") None (TyCon "Unit"))))
 (DFunDef false "reportChildTrees" ((PVar "prelude")) (EBlock (DoExpr (EApp (EApp (EApp (EVar "reportTrees") (EVar "None")) (EVar "dieMsg")) (EApp (EVar "checkPreludeElab") (EVar "prelude")))) (DoExpr (EApp (EApp (EApp (EVar "reportDecls") (EVar "None")) (EVar "dieMsg")) (EVar "prelude")))))
-(DTypeSig false "runJsonInvocation" (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyCon "Bool")))
-(DFunDef false "runJsonInvocation" ((PCons (PLit (LString "run")) (PVar "rest"))) (EApp (EApp (EVar "runFlagGiven") (ELit (LString "--json"))) (EVar "rest")))
-(DFunDef false "runJsonInvocation" (PWild) (EVar "False"))
+(DTypeSig false "envelopeOnStderrInvocation" (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyCon "Bool")))
+(DFunDef false "envelopeOnStderrInvocation" ((PCons (PLit (LString "run")) (PVar "rest"))) (EApp (EApp (EVar "runFlagGiven") (ELit (LString "--json"))) (EVar "rest")))
+(DFunDef false "envelopeOnStderrInvocation" ((PCons (PLit (LString "test")) (PVar "rest"))) (EMatch (EApp (EApp (EVar "parseArgs") (EVar "testArgSpec")) (EVar "rest")) (arm (PCon "Ok" (PVar "a")) () (EApp (EApp (EVar "flag") (ELit (LString "--json"))) (EVar "a"))) (arm (PCon "Err" PWild) () (EVar "False"))))
+(DFunDef false "envelopeOnStderrInvocation" (PWild) (EVar "False"))
+(DTypeSig false "registerEarlyNotice" (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyCon "String") (TyEffect ("IO") None (TyCon "Unit")))))
+(DFunDef false "registerEarlyNotice" ((PCons (PLit (LString "test")) PWild) (PVar "msg")) (EApp (EApp (EVar "setAbortReport") (EVar "msg")) (ELit (LString ""))))
+(DFunDef false "registerEarlyNotice" (PWild PWild) (ELit LUnit))
 (DTypeSig false "flushStaleNoticeProse" (TyFun (TyCon "Unit") (TyEffect ("IO") None (TyCon "Unit"))))
-(DFunDef false "flushStaleNoticeProse" (PWild) (EBlock (DoLet false false PWild (EMatch (EUnOp "!" (EVar "pendingStaleNotice")) (arm (PCon "None") () (ELit LUnit)) (arm (PCon "Some" (PVar "msg")) () (EBlock (DoExpr (EApp (EApp (EVar "setRef") (EVar "pendingStaleNotice")) (EVar "None"))) (DoExpr (EApp (EVar "ePutStrLn") (EVar "msg"))))))) (DoLet false false (PVar "notices") (EUnOp "!" (EVar "pendingPreludeNotices"))) (DoExpr (EApp (EApp (EVar "setRef") (EVar "pendingPreludeNotices")) (EListLit))) (DoExpr (EApp (EVar "emitWarningLines") (EApp (EApp (EMethodRef "map") (EVar "snd")) (EVar "notices"))))))
+(DFunDef false "flushStaleNoticeProse" (PWild) (EBlock (DoLet false false PWild (EMatch (EUnOp "!" (EVar "pendingStaleNotice")) (arm (PCon "None") () (ELit LUnit)) (arm (PCon "Some" (PVar "msg")) () (EBlock (DoExpr (EApp (EApp (EVar "setRef") (EVar "pendingStaleNotice")) (EVar "None"))) (DoExpr (EApp (EApp (EVar "setAbortReport") (ELit (LString ""))) (ELit (LString "")))) (DoExpr (EApp (EVar "ePutStrLn") (EVar "msg"))))))) (DoLet false false (PVar "notices") (EUnOp "!" (EVar "pendingPreludeNotices"))) (DoExpr (EApp (EApp (EVar "setRef") (EVar "pendingPreludeNotices")) (EListLit))) (DoExpr (EApp (EVar "emitWarningLines") (EApp (EApp (EMethodRef "map") (EVar "snd")) (EVar "notices"))))))
 (DTypeSig false "dieMsg" (TyFun (TyCon "String") (TyEffect ("IO") None (TyCon "Unit"))))
 (DFunDef false "dieMsg" ((PVar "msg")) (EBlock (DoExpr (EApp (EVar "emitAbortTotal") (ELit LUnit))) (DoExpr (EApp (EVar "ePutStrLn") (EVar "msg"))) (DoExpr (EApp (EVar "stageExit") (ELit (LInt 1))))))
+(DTypeSig false "testDie" (TyFun (TyCon "String") (TyEffect ("IO") None (TyCon "Unit"))))
+(DFunDef false "testDie" ((PVar "msg")) (EBlock (DoExpr (EApp (EVar "flushStaleNoticeProse") (ELit LUnit))) (DoExpr (EApp (EVar "dieMsg") (EVar "msg")))))
+(DTypeSig false "testExit" (TyFun (TyCon "Int") (TyEffect ("IO") None (TyCon "Unit"))))
+(DFunDef false "testExit" ((PVar "code")) (EBlock (DoExpr (EApp (EVar "flushStaleNoticeProse") (ELit LUnit))) (DoExpr (EApp (EVar "stageExit") (EVar "code")))))
 (DTypeSig false "runAbort" (TyFun (TyCon "String") (TyEffect ("IO") None (TyCon "Unit"))))
 (DFunDef false "runAbort" ((PVar "msg")) (EBlock (DoExpr (EApp (EVar "flushStaleNoticeProse") (ELit LUnit))) (DoExpr (EApp (EVar "emitAbortTotal") (ELit LUnit))) (DoExpr (EApp (EVar "flushPerfSinkProse") (ELit LUnit))) (DoExpr (EApp (EVar "dieMsg") (EVar "msg")))))
 (DTypeSig false "orExit" (TyFun (TyApp (TyApp (TyCon "Result") (TyCon "String")) (TyVar "a")) (TyEffect ("IO") None (TyVar "a"))))
@@ -5595,9 +5654,9 @@ runMcpServerFromEnv _ =
 (DTypeSig false "checkedFacts" (TyFun (TyCon "TcReport") (TyCon "ProgramFacts")))
 (DFunDef false "checkedFacts" ((PVar "report")) (EMatch (EFieldAccess (EVar "report") "trChecked") (arm (PCon "Some" (PVar "checked")) () (EApp (EVar "factsOfChecked") (EVar "checked"))) (arm (PCon "None") () (EApp (EVar "panic") (ELit (LString "internal error: the typecheck published no checked program to run"))))))
 (DTypeSig false "runTestCmd" (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyEffect ("IO") None (TyCon "Unit"))))
-(DFunDef false "runTestCmd" ((PVar "argv0")) (EBlock (DoLet false false (PVar "a") (EApp (EApp (EVar "requireArgs") (EVar "testArgSpec")) (EVar "argv0"))) (DoExpr (EIf (EApp (EApp (EVar "flag") (ELit (LString "--props-worker"))) (EVar "a")) (EApp (EVar "runPropsWorkerCmd") (EVar "a")) (EMatch (EApp (EVar "parseTestEngines") (EVar "a")) (arm (PCon "Err" (PVar "msg")) () (EApp (EVar "dieMsg") (EBinOp "++" (EBinOp "++" (ELit (LString "medaka test: ")) (EApp (EMethodRef "display") (EVar "msg"))) (ELit (LString ""))))) (arm (PCon "Ok" (PVar "engines")) () (EMatch (EApp (EVar "parseTestCasesFlag") (EVar "a")) (arm (PCon "Err" (PVar "msg")) () (EApp (EVar "dieMsg") (EBinOp "++" (EBinOp "++" (ELit (LString "medaka test: ")) (EApp (EMethodRef "display") (EVar "msg"))) (ELit (LString ""))))) (arm (PCon "Ok" (PVar "casesOpt")) () (EMatch (EApp (EApp (EVar "parseTestIntFlag") (ELit (LString "--seed"))) (EVar "a")) (arm (PCon "Err" (PVar "msg")) () (EApp (EVar "dieMsg") (EBinOp "++" (EBinOp "++" (ELit (LString "medaka test: ")) (EApp (EMethodRef "display") (EVar "msg"))) (ELit (LString ""))))) (arm (PCon "Ok" (PVar "seedOpt")) () (EBlock (DoLet false false PWild (EMatch (EVar "seedOpt") (arm (PCon "Some" (PVar "s")) () (EApp (EVar "seedPropRng") (EVar "s"))) (arm (PCon "None") () (ELit LUnit)))) (DoLet false false (PVar "cases") (EApp (EApp (EVar "optionOr") (ELit (LInt 100))) (EVar "casesOpt"))) (DoLet false false (PVar "filterOpt") (EApp (EApp (EVar "flagValue") (ELit (LString "--filter"))) (EVar "a"))) (DoLet false false (PVar "jsonMode") (EApp (EApp (EVar "flag") (ELit (LString "--json"))) (EVar "a"))) (DoExpr (EMatch (EApp (EVar "initTestSeed") (ELit LUnit)) (arm (PCon "Err" (PVar "msg")) () (EApp (EVar "dieMsg") (EBinOp "++" (EBinOp "++" (ELit (LString "medaka test: ")) (EApp (EMethodRef "display") (EVar "msg"))) (ELit (LString ""))))) (arm (PCon "Ok" PWild) () (EApp (EApp (EApp (EApp (EApp (EApp (EVar "runTestTargets") (EVar "engines")) (EVar "cases")) (EVar "filterOpt")) (EVar "seedOpt")) (EVar "jsonMode")) (EVar "a"))))))))))))))))
+(DFunDef false "runTestCmd" ((PVar "argv0")) (EBlock (DoLet false false (PVar "a") (EApp (EApp (EVar "requireArgs") (EVar "testArgSpec")) (EVar "argv0"))) (DoExpr (EIf (EApp (EApp (EVar "flag") (ELit (LString "--props-worker"))) (EVar "a")) (EBlock (DoExpr (EApp (EVar "flushStaleNoticeProse") (ELit LUnit))) (DoExpr (EApp (EVar "runPropsWorkerCmd") (EVar "a")))) (EMatch (EApp (EVar "parseTestEngines") (EVar "a")) (arm (PCon "Err" (PVar "msg")) () (EApp (EVar "testDie") (EBinOp "++" (EBinOp "++" (ELit (LString "medaka test: ")) (EApp (EMethodRef "display") (EVar "msg"))) (ELit (LString ""))))) (arm (PCon "Ok" (PVar "engines")) () (EMatch (EApp (EVar "parseTestCasesFlag") (EVar "a")) (arm (PCon "Err" (PVar "msg")) () (EApp (EVar "testDie") (EBinOp "++" (EBinOp "++" (ELit (LString "medaka test: ")) (EApp (EMethodRef "display") (EVar "msg"))) (ELit (LString ""))))) (arm (PCon "Ok" (PVar "casesOpt")) () (EMatch (EApp (EApp (EVar "parseTestIntFlag") (ELit (LString "--seed"))) (EVar "a")) (arm (PCon "Err" (PVar "msg")) () (EApp (EVar "testDie") (EBinOp "++" (EBinOp "++" (ELit (LString "medaka test: ")) (EApp (EMethodRef "display") (EVar "msg"))) (ELit (LString ""))))) (arm (PCon "Ok" (PVar "seedOpt")) () (EBlock (DoLet false false PWild (EMatch (EVar "seedOpt") (arm (PCon "Some" (PVar "s")) () (EApp (EVar "seedPropRng") (EVar "s"))) (arm (PCon "None") () (ELit LUnit)))) (DoLet false false (PVar "cases") (EApp (EApp (EVar "optionOr") (ELit (LInt 100))) (EVar "casesOpt"))) (DoLet false false (PVar "filterOpt") (EApp (EApp (EVar "flagValue") (ELit (LString "--filter"))) (EVar "a"))) (DoLet false false (PVar "jsonMode") (EApp (EApp (EVar "flag") (ELit (LString "--json"))) (EVar "a"))) (DoExpr (EMatch (EApp (EVar "initTestSeed") (ELit LUnit)) (arm (PCon "Err" (PVar "msg")) () (EApp (EVar "testDie") (EBinOp "++" (EBinOp "++" (ELit (LString "medaka test: ")) (EApp (EMethodRef "display") (EVar "msg"))) (ELit (LString ""))))) (arm (PCon "Ok" PWild) () (EApp (EApp (EApp (EApp (EApp (EApp (EVar "runTestTargets") (EVar "engines")) (EVar "cases")) (EVar "filterOpt")) (EVar "seedOpt")) (EVar "jsonMode")) (EVar "a"))))))))))))))))
 (DTypeSig false "runTestTargets" (TyFun (TyApp (TyCon "List") (TyCon "Engine")) (TyFun (TyCon "Int") (TyFun (TyApp (TyCon "Option") (TyCon "String")) (TyFun (TyApp (TyCon "Option") (TyCon "Int")) (TyFun (TyCon "Bool") (TyFun (TyCon "Args") (TyEffect ("IO") None (TyCon "Unit")))))))))
-(DFunDef false "runTestTargets" ((PVar "engines") (PVar "cases") (PVar "filterOpt") (PVar "seedOpt") (PVar "jsonMode") (PVar "a")) (EMatch (EFieldAccess (EVar "a") "positionals") (arm (PList) () (EIf (EVar "jsonMode") (EBlock (DoExpr (EApp (EVar "ePutStrLn") (ELit (LString "medaka test --json: needs a single file.mdk target; with no target, medaka test runs the whole enclosing project")))) (DoExpr (EApp (EVar "stageExit") (ELit (LInt 1))))) (EApp (EApp (EApp (EApp (EVar "runTestProjectCmd") (EVar "engines")) (EVar "cases")) (EVar "filterOpt")) (EVar "seedOpt")))) (arm (PList (PVar "target")) () (EMatch (EApp (EVar "listDir") (EVar "target")) (arm (PCon "Err" PWild) () (EIf (EVar "jsonMode") (EApp (EApp (EApp (EApp (EVar "runTestJsonCmd") (EVar "engines")) (EVar "cases")) (EVar "filterOpt")) (EVar "target")) (EApp (EApp (EApp (EApp (EVar "runTestOne") (EVar "engines")) (EVar "cases")) (EVar "filterOpt")) (EVar "target")))) (arm (PCon "Ok" PWild) () (EIf (EVar "jsonMode") (EBlock (DoExpr (EApp (EVar "ePutStrLn") (ELit (LString "medaka test --json: directory targets are not supported; pass a single file.mdk target")))) (DoExpr (EApp (EVar "stageExit") (ELit (LInt 1))))) (EApp (EApp (EApp (EApp (EApp (EVar "runTestManyTargets") (EVar "engines")) (EVar "cases")) (EVar "filterOpt")) (EVar "seedOpt")) (EListLit (EVar "target"))))))) (arm (PVar "targets") () (EIf (EVar "jsonMode") (EBlock (DoExpr (EApp (EVar "ePutStrLn") (ELit (LString "medaka test --json: exactly one file.mdk target is supported")))) (DoExpr (EApp (EVar "stageExit") (ELit (LInt 1))))) (EApp (EApp (EApp (EApp (EApp (EVar "runTestManyTargets") (EVar "engines")) (EVar "cases")) (EVar "filterOpt")) (EVar "seedOpt")) (EVar "targets"))))))
+(DFunDef false "runTestTargets" ((PVar "engines") (PVar "cases") (PVar "filterOpt") (PVar "seedOpt") (PVar "jsonMode") (PVar "a")) (EMatch (EFieldAccess (EVar "a") "positionals") (arm (PList) () (EIf (EVar "jsonMode") (EApp (EVar "testDie") (ELit (LString "medaka test --json: needs a single file.mdk target; with no target, medaka test runs the whole enclosing project"))) (EApp (EApp (EApp (EApp (EVar "runTestProjectCmd") (EVar "engines")) (EVar "cases")) (EVar "filterOpt")) (EVar "seedOpt")))) (arm (PList (PVar "target")) () (EMatch (EApp (EVar "listDir") (EVar "target")) (arm (PCon "Err" PWild) () (EIf (EVar "jsonMode") (EApp (EApp (EApp (EApp (EVar "runTestJsonCmd") (EVar "engines")) (EVar "cases")) (EVar "filterOpt")) (EVar "target")) (EApp (EApp (EApp (EApp (EVar "runTestOne") (EVar "engines")) (EVar "cases")) (EVar "filterOpt")) (EVar "target")))) (arm (PCon "Ok" PWild) () (EIf (EVar "jsonMode") (EApp (EVar "testDie") (ELit (LString "medaka test --json: directory targets are not supported; pass a single file.mdk target"))) (EApp (EApp (EApp (EApp (EApp (EVar "runTestManyTargets") (EVar "engines")) (EVar "cases")) (EVar "filterOpt")) (EVar "seedOpt")) (EListLit (EVar "target"))))))) (arm (PVar "targets") () (EIf (EVar "jsonMode") (EApp (EVar "testDie") (ELit (LString "medaka test --json: exactly one file.mdk target is supported"))) (EApp (EApp (EApp (EApp (EApp (EVar "runTestManyTargets") (EVar "engines")) (EVar "cases")) (EVar "filterOpt")) (EVar "seedOpt")) (EVar "targets"))))))
 (DTypeSig false "runPropsWorkerCmd" (TyFun (TyCon "Args") (TyEffect ("IO") None (TyCon "Unit"))))
 (DFunDef false "runPropsWorkerCmd" ((PVar "a")) (EMatch (EApp (EVar "parsePropsWorkerPositionals") (EFieldAccess (EVar "a") "positionals")) (arm (PCon "Err" (PVar "message")) () (EApp (EVar "dieMsg") (EBinOp "++" (EBinOp "++" (ELit (LString "medaka test --props-worker: ")) (EApp (EMethodRef "display") (EVar "message"))) (ELit (LString ""))))) (arm (PCon "Ok" (PTuple (PVar "target") (PVar "requests"))) () (EApp (EApp (EVar "runEvalPropsWorker") (EVar "target")) (EVar "requests")))))
 (DTypeSig false "parsePropsWorkerPositionals" (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyApp (TyApp (TyCon "Result") (TyCon "String")) (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "PropRequest"))))))
@@ -5614,7 +5673,9 @@ runMcpServerFromEnv _ =
 (DTypeSig false "runTestProjectCmd" (TyFun (TyApp (TyCon "List") (TyCon "Engine")) (TyFun (TyCon "Int") (TyFun (TyApp (TyCon "Option") (TyCon "String")) (TyFun (TyApp (TyCon "Option") (TyCon "Int")) (TyEffect ("IO") None (TyCon "Unit")))))))
 (DFunDef false "runTestProjectCmd" ((PVar "engines") (PVar "cases") (PVar "filterOpt") (PVar "seedOpt")) (EBlock (DoLet false false (PVar "cwd") (EApp (EVar "canonicalizePath") (ELit (LString ".")))) (DoExpr (EMatch (EApp (EVar "findProjectRoot") (EVar "cwd")) (arm (PCon "None") () (EApp (EVar "dieMsg") (EBinOp "++" (EBinOp "++" (ELit (LString "medaka test: no target given and no medaka.toml in ")) (EApp (EMethodRef "display") (EVar "cwd"))) (ELit (LString " or any directory above it; pass a file.mdk or directory target, or run inside a project"))))) (arm (PCon "Some" (PVar "root")) () (EBlock (DoExpr (EApp (EVar "ePutStrLn") (EBinOp "++" (EBinOp "++" (ELit (LString "medaka test: no target given; testing the project at ")) (EApp (EMethodRef "display") (EVar "root"))) (ELit (LString ""))))) (DoExpr (EApp (EApp (EApp (EApp (EApp (EVar "runTestManyTargets") (EVar "engines")) (EVar "cases")) (EVar "filterOpt")) (EVar "seedOpt")) (EListLit (EVar "root"))))))))))
 (DTypeSig false "runTestJsonCmd" (TyFun (TyApp (TyCon "List") (TyCon "Engine")) (TyFun (TyCon "Int") (TyFun (TyApp (TyCon "Option") (TyCon "String")) (TyFun (TyCon "String") (TyEffect ("IO") None (TyCon "Unit")))))))
-(DFunDef false "runTestJsonCmd" ((PVar "engines") (PVar "cases") (PVar "filterOpt") (PVar "target")) (EBlock (DoExpr (EApp (EApp (EVar "setRef") (EVar "runJsonMode")) (EVar "True"))) (DoExpr (EApp (EApp (EVar "setRef") (EVar "pendingEnvelopeExtras")) (EMatch (EUnOp "!" (EVar "testSeedRef")) (arm (PCon "Some" (PVar "n")) () (EListLit (ETuple (ELit (LString "seed")) (EApp (EVar "JInt") (EVar "n"))))) (arm (PCon "None") () (EListLit))))) (DoLet false false (PVar "root") (EApp (EApp (EVar "envOr") (ELit (LString "MEDAKA_ROOT"))) (EVar "defaultMedakaRoot"))) (DoLet false false (PVar "stdlibDir") (EBinOp "++" (EVar "root") (ELit (LString "/stdlib")))) (DoLet false false (PVar "r") (EApp (EApp (EMethodRef "andThen") (EApp (EVar "readPreludeSources") (EVar "stdlibDir"))) (ELam ((PVar "prelude")) (ELet false PWild (EApp (EVar "seedCheckPrelude") (EVar "prelude")) (EApp (EApp (EMethodRef "andThen") (EApp (EVar "readSource") (EVar "target"))) (ELam ((PVar "tsrc")) (ELet false (PVar "userDecls") (EApp (EVar "targetDesugared") (EVar "tsrc")) (EIf (EApp (EApp (EApp (EVar "filterMatchedNothing") (EVar "filterOpt")) (EVar "tsrc")) (EVar "userDecls")) (EApp (EVar "Err") (EBinOp "++" (EBinOp "++" (ELit (LString "medaka test: ")) (EApp (EMethodRef "display") (EVar "target"))) (ELit (LString ": --filter matched no doctests, props, or `test \"…\"` decls")))) (EBlock (DoLet false false (PTuple (PVar "typeError") (PVar "runs") (PVar "props") (PVar "tests") (PVar "typecheckSkipped")) (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EVar "runTestGradedReport") (EVar "engines")) (EFieldAccess (EVar "prelude") "pnRuntimeSrc")) (EFieldAccess (EVar "prelude") "pnCoreSrc")) (EVar "target")) (EVar "tsrc")) (EVar "userDecls")) (EVar "stdlibDir")) (EVar "cases")) (EVar "filterOpt")) (EVar "True"))) (DoLet false false (PVar "ok") (EApp (EApp (EApp (EApp (EVar "cliGradedTestReportOk") (EVar "typeError")) (EVar "runs")) (EVar "props")) (EVar "tests"))) (DoLet false false (PVar "report") (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EVar "cliGradedTestReportJson") (EVar "target")) (EVar "typeError")) (EVar "engines")) (EVar "runs")) (EVar "props")) (EVar "tests")) (EVar "typecheckSkipped"))) (DoExpr (EApp (EVar "putStrLn") (EApp (EVar "stringify") (EApp (EApp (EApp (EVar "cliSeedOnFailure") (EVar "typeError")) (EVar "ok")) (EVar "report"))))) (DoExpr (EApp (EVar "Ok") (EVar "ok")))))))))))) (DoExpr (EMatch (EVar "r") (arm (PCon "Err" (PVar "e")) () (EApp (EVar "dieMsg") (EVar "e"))) (arm (PCon "Ok" (PVar "ok")) () (EIf (EVar "ok") (ELit LUnit) (EApp (EVar "stageExit") (ELit (LInt 1)))))))))
+(DFunDef false "runTestJsonCmd" ((PVar "engines") (PVar "cases") (PVar "filterOpt") (PVar "target")) (EBlock (DoExpr (EApp (EApp (EVar "setRef") (EVar "runJsonMode")) (EVar "True"))) (DoExpr (EApp (EApp (EVar "setRef") (EVar "pendingEnvelopeExtras")) (EMatch (EUnOp "!" (EVar "testSeedRef")) (arm (PCon "Some" (PVar "n")) () (EListLit (ETuple (ELit (LString "seed")) (EApp (EVar "JInt") (EVar "n"))))) (arm (PCon "None") () (EListLit))))) (DoLet false false (PVar "root") (EApp (EApp (EVar "envOr") (ELit (LString "MEDAKA_ROOT"))) (EVar "defaultMedakaRoot"))) (DoLet false false (PVar "stdlibDir") (EBinOp "++" (EVar "root") (ELit (LString "/stdlib")))) (DoLet false false (PVar "r") (EApp (EApp (EMethodRef "andThen") (EApp (EVar "readPreludeSources") (EVar "stdlibDir"))) (ELam ((PVar "prelude")) (ELet false PWild (EApp (EVar "seedCheckPrelude") (EVar "prelude")) (EApp (EApp (EMethodRef "andThen") (EApp (EVar "readSource") (EVar "target"))) (ELam ((PVar "tsrc")) (EApp (EApp (EMethodRef "andThen") (EApp (EApp (EVar "parseTargetOrRefuse") (EVar "target")) (EVar "tsrc"))) (ELam (PWild) (ELet false (PVar "userDecls") (EApp (EVar "targetDesugared") (EVar "tsrc")) (EIf (EApp (EApp (EApp (EVar "filterMatchedNothing") (EVar "filterOpt")) (EVar "tsrc")) (EVar "userDecls")) (EApp (EVar "Err") (EBinOp "++" (EBinOp "++" (ELit (LString "medaka test: ")) (EApp (EMethodRef "display") (EVar "target"))) (ELit (LString ": --filter matched no doctests, props, or `test \"…\"` decls")))) (EBlock (DoLet false false (PTuple (PVar "typeError") (PVar "runs") (PVar "props") (PVar "tests") (PVar "typecheckSkipped")) (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EVar "runTestGradedReport") (EVar "engines")) (EFieldAccess (EVar "prelude") "pnRuntimeSrc")) (EFieldAccess (EVar "prelude") "pnCoreSrc")) (EVar "target")) (EVar "tsrc")) (EVar "userDecls")) (EVar "stdlibDir")) (EVar "cases")) (EVar "filterOpt")) (EVar "True"))) (DoLet false false (PVar "ok") (EApp (EApp (EApp (EApp (EVar "cliGradedTestReportOk") (EVar "typeError")) (EVar "runs")) (EVar "props")) (EVar "tests"))) (DoLet false false (PVar "report") (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EVar "cliGradedTestReportJson") (EVar "target")) (EVar "typeError")) (EVar "engines")) (EVar "runs")) (EVar "props")) (EVar "tests")) (EVar "typecheckSkipped"))) (DoExpr (EApp (EVar "putStrLn") (EApp (EVar "stringify") (EApp (EApp (EApp (EVar "cliSeedOnFailure") (EVar "typeError")) (EVar "ok")) (EVar "report"))))) (DoExpr (EApp (EVar "Ok") (EVar "ok")))))))))))))) (DoExpr (EMatch (EVar "r") (arm (PCon "Err" (PVar "e")) () (EApp (EVar "testDie") (EVar "e"))) (arm (PCon "Ok" (PVar "ok")) () (EIf (EVar "ok") (EApp (EVar "flushStaleNoticeProse") (ELit LUnit)) (EApp (EVar "testExit") (ELit (LInt 1)))))))))
+(DTypeSig false "parseTargetOrRefuse" (TyFun (TyCon "String") (TyFun (TyCon "String") (TyApp (TyApp (TyCon "Result") (TyCon "String")) (TyCon "Unit")))))
+(DFunDef false "parseTargetOrRefuse" ((PVar "target") (PVar "tsrc")) (EMatch (EApp (EVar "parseTargetResult") (EVar "tsrc")) (arm (PCon "Err" (PVar "e")) () (EApp (EVar "Err") (EApp (EApp (EApp (EVar "ppDiagCliSrc") (EVar "tsrc")) (EVar "target")) (EApp (EApp (EVar "parseErrDiag") (EVar "target")) (EVar "e"))))) (arm (PCon "Ok" PWild) () (EApp (EVar "Ok") (ELit LUnit)))))
 (DTypeSig false "runTestManyTargets" (TyFun (TyApp (TyCon "List") (TyCon "Engine")) (TyFun (TyCon "Int") (TyFun (TyApp (TyCon "Option") (TyCon "String")) (TyFun (TyApp (TyCon "Option") (TyCon "Int")) (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyEffect ("IO") None (TyCon "Unit"))))))))
 (DFunDef false "runTestManyTargets" ((PVar "engines") (PVar "cases") (PVar "filterOpt") (PVar "seedOpt") (PVar "targets")) (EBlock (DoLet false false (PVar "files") (EApp (EApp (EDictApp "flatMap") (EVar "expandLintTarget")) (EVar "targets"))) (DoExpr (EMatch (EVar "files") (arm (PList) () (EApp (EVar "dieMsg") (ELit (LString "medaka test: no .mdk files found")))) (arm PWild () (EBlock (DoLet false false (PVar "root") (EApp (EApp (EVar "envOr") (ELit (LString "MEDAKA_ROOT"))) (EVar "defaultMedakaRoot"))) (DoLet false false (PVar "rtPath") (EBinOp "++" (EVar "root") (ELit (LString "/stdlib/runtime.mdk")))) (DoLet false false (PVar "corePath") (EBinOp "++" (EVar "root") (ELit (LString "/stdlib/core.mdk")))) (DoLet false false (PVar "stdlibDir") (EBinOp "++" (EVar "root") (ELit (LString "/stdlib")))) (DoLet false false (PVar "rosterOk") (EApp (EApp (EApp (EVar "checkTestMdkRoster") (EVar "root")) (EVar "targets")) (EVar "files"))) (DoExpr (EApp (EApp (EApp (EVar "reportSupervisedTrees") (EVar "stdlibDir")) (EVar "rtPath")) (EVar "corePath"))) (DoLet false false (PTuple (PVar "anyFailed") (PVar "seedSeen")) (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EVar "testFilesGo") (EVar "engines")) (EVar "rtPath")) (EVar "corePath")) (EVar "stdlibDir")) (EVar "cases")) (EVar "filterOpt")) (EVar "seedOpt")) (EVar "files")) (ETuple (EVar "False") (EVar "False")))) (DoExpr (EIf (EBinOp "||" (EVar "anyFailed") (EApp (EVar "not") (EVar "rosterOk"))) (EBlock (DoExpr (EIf (EVar "seedSeen") (EApp (EVar "printTestSeedLine") (ELit LUnit)) (ELit LUnit))) (DoExpr (EApp (EVar "stageExit") (ELit (LInt 1))))) (ELit LUnit)))))))))
 (DTypeSig false "reportSupervisedTrees" (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyCon "String") (TyEffect ("IO") None (TyCon "Unit"))))))

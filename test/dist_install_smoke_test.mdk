@@ -130,7 +130,19 @@ pipeline scratch = do
   _ <- match missing
     None => Ok ()
     Some f => Err "unpacked tree missing \{f}"
-  (ccCode, _, ccErr) <- boundedVerb "clang" [
+  (ccCode, _, ccErr) <- boundedVerb "sh" [
+    "-c",
+    """
+    if [ -n "${GC_PREFIX:-}" ]; then
+      set -- -I"$GC_PREFIX/include" "$@"
+    elif pkg-config --exists bdw-gc 2>/dev/null; then
+      set -- $(pkg-config --cflags bdw-gc) "$@"
+    elif gc_prefix=$(brew --prefix bdw-gc 2>/dev/null) && [ -f "$gc_prefix/include/gc.h" ]; then
+      set -- -I"$gc_prefix/include" "$@"
+    fi
+    exec clang "$@"
+    """,
+    "runtime-compile",
     "-D_GNU_SOURCE",
     "-c",
     tree ++ "/runtime/medaka_rt.c",
