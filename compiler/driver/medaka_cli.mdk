@@ -1542,7 +1542,7 @@ runBuildJsonCmd a allowInternal root stdlibDir input outOpt target =
           None => defaultOutPath target input
         let ask =
           GateAsk { askAllowInternal = allowInternal, askDiagJson = True }
-        -- `quietEmitStderr = True`: the child's verdict arrives as the
+        -- `boQuietEmit = True`: the child's verdict arrives as the
         -- envelope (`diagEnvelope`), so its human copy is not forwarded.
         match (runBuild
           target

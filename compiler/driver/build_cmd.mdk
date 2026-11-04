@@ -1273,6 +1273,20 @@ defaultBuildOptions = BuildOptions {
   boRealTarget = None,
 }
 
+-- The `BuildPaths` of a native engine's probe build: root, `medaka` and `cc`
+-- come from the environment, the entry and output vary per caller.
+export
+probeBuildPaths : String -> String -> <IO> BuildPaths
+probeBuildPaths input out =
+  let root = envOr "MEDAKA_ROOT" defaultMedakaRoot
+  BuildPaths {
+    bpRoot = root,
+    bpMedaka = envOr "MEDAKA" (joinPath root "medaka"),
+    bpCc = envOr "CC" "clang",
+    bpInput = input,
+    bpOut = out,
+  }
+
 -- What `medaka test`'s native engines ask for: a probe link, with the child's
 -- staleness check strict.
 export
@@ -1283,6 +1297,11 @@ probeBuildOptions = { defaultBuildOptions |
 }
 
 -- target = TNative (LLVM/clang) | TWasm (WasmGC + wasm-tools)
+-- options = this verb path honours only `boKeepIr`, `boQuietEmit` and `boStamp`
+--           (wasm: `boKeepIr` and `boQuietEmit`); every other field is ignored
+--           and exists for the engine entry `runBuildNativeRoots`.  The wasm path
+--           passes `boRealTarget = None` to `runEmitterFor`: the sibling target
+--           stays unset there.
 -- frontGate = `Some ask` when the emitter child runs the program's front-end
 --             gate (`driver/front_gate.frontGate`): the `build` verb, whose
 --             process does no front-end work of its own.  `askDiagJson` (the
@@ -1303,19 +1322,26 @@ runBuild TWasm paths options frontGate =
   runBuildWasm paths options frontGate
 
 -- ---- native (LLVM/clang) target — the original path ----
--- Wrapper: allocate the per-invocation scratch dir (see makeTempDir), run the
--- build inside it, then tear it down whatever the outcome.  `res` is bound (and
--- so fully forced — Medaka is strict) BEFORE cleanupTempDir runs, so the .ll is
--- still on disk while clang reads it.
+-- Wrapper: the per-invocation scratch dir (see makeTempDir) comes from
+-- withBuildScratch, so the .ll is still on disk while clang reads it.
 runBuildNative : BuildPaths ->
   BuildOptions ->
   Option GateAsk ->
   <IO> Result BuildReport BuildReport
-runBuildNative paths options frontGate = match makeTempDir ()
+runBuildNative paths options frontGate =
+  withBuildScratch (tmpDir => runBuildNativeIn paths tmpDir options frontGate)
+
+-- Runs `build` in a fresh scratch dir and tears it down after, whatever the
+-- outcome.  `res` is bound (and so fully forced: Medaka is strict) BEFORE
+-- cleanupTempDir runs, so the scratch files are still on disk while the
+-- build's last child reads them.
+withBuildScratch : (String -> <IO> Result BuildReport BuildReport) ->
+  <IO> Result BuildReport BuildReport
+withBuildScratch build = match makeTempDir ()
   Err e =>
     buildErr "error: could not create a scratch directory for the build: \{e}"
   Ok tmpDir =>
-    let res = runBuildNativeIn paths tmpDir options frontGate
+    let res = build tmpDir
     cleanupTempDir tmpDir
     res
 
@@ -1329,11 +1355,10 @@ runBuildNativeIn paths tmpDir options frontGate =
   runBuildNativeRootsGo
     paths
     tmpDir
-    { options |
-      boExtraRoots = [],
-      boStrictEmit = False,
-      boProfile = BuildNormal,
-      boRealTarget = None,
+    { defaultBuildOptions |
+      boKeepIr = options.boKeepIr,
+      boQuietEmit = options.boQuietEmit,
+      boStamp = options.boStamp,
     }
     frontGate
 
@@ -1367,9 +1392,10 @@ clangMissingError cc = match runCommand "uname" ["-s"]
 -- Like runBuildNativeIn, but callers may supply `boExtraRoots` — additional
 -- search roots appended AFTER the P0-13 inputRoots set. Needed by a caller
 -- whose entry file lives in a mktemp -d scratch dir, where entrySearchRoots
--- (walking up from the entry's own dir) resolves nothing useful: a future
--- native test-execution engine builds a synthesized doctest entry there and
--- must still see the real project's import roots.
+-- (walking up from the entry's own dir) resolves nothing useful: the native
+-- test engines (`native_doctest`, `native_props`, `native_probe`,
+-- `native_test_decls`) build a synthesized entry there and must still see the
+-- real project's import roots.
 --
 -- `boStrictEmit` arms `MEDAKA_STRICT=1` for the emit subprocess only (#2679).
 -- What it bought is now the default: under ruling 3 shape (a) the child's
@@ -1569,13 +1595,8 @@ runBuildWasm : BuildPaths ->
   BuildOptions ->
   Option GateAsk ->
   <IO> Result BuildReport BuildReport
-runBuildWasm paths options frontGate = match makeTempDir ()
-  Err e =>
-    buildErr "error: could not create a scratch directory for the build: \{e}"
-  Ok tmpDir =>
-    let res = runBuildWasmIn paths tmpDir options frontGate
-    cleanupTempDir tmpDir
-    res
+runBuildWasm paths options frontGate =
+  withBuildScratch (tmpDir => runBuildWasmIn paths tmpDir options frontGate)
 
 -- The front-end gate runs in the wasm emitter child, so an unset or missing
 -- `MEDAKA_WASM_EMITTER`, or a missing `wasm-tools`, is reported before any
@@ -1860,6 +1881,7 @@ clangLink job projRoot libs stampBuild =
   else match provenanceObject stampBuild job.ljCc job.ljTmpDir projRoot
     Err e => buildErr e
     Ok provObj => clangLinkGo job (libLinkFlags libs) provObj
+
 -- `-L<dir>`/`-l<name>` for each declared library, in declaration order.  A
 -- library with no search directory contributes `-l<name>` alone.
 libLinkFlags : List (String, String) -> List String
