@@ -1,5 +1,5 @@
 # META
-source_lines=2756
+source_lines=2760
 stages=DESUGAR,MARK
 # SOURCE
 -- tc_decls_types: the written-type layer of declaration analysis: AST types to `Mono`
@@ -930,7 +930,9 @@ checkEffectParamsTy mctx (TyEffect labels _ t) =
 -- no other spelling admits).
 checkEffectParamsTy mctx (TyRow labels _ _) = checkEffectAtoms mctx labels
 checkEffectParamsTy mctx (TyConstrained _ t) = checkEffectParamsTy mctx t
-checkEffectParamsTy _mctx _ = ()
+checkEffectParamsTy mctx (TyNamed _ t _) = checkEffectParamsTy mctx t
+checkEffectParamsTy mctx (TyQual t _ _) = checkEffectParamsTy mctx t
+checkEffectParamsTy _mctx (TyCon {  } | TyVar _) = ()
 
 checkEffectParamsTys : ModuleCtx -> List Ty -> Unit
 checkEffectParamsTys _mctx [] = ()
@@ -2056,7 +2058,9 @@ rowArgNamesIn mctx scope (TyFun a b) =
 rowArgNamesIn mctx scope (TyTuple ts) = flatMap (rowArgNamesIn mctx scope) ts
 rowArgNamesIn mctx scope (TyEffect _ _ t) = rowArgNamesIn mctx scope t
 rowArgNamesIn mctx scope (TyConstrained _ t) = rowArgNamesIn mctx scope t
-rowArgNamesIn _mctx _ _ = []
+rowArgNamesIn mctx scope (TyNamed _ t _) = rowArgNamesIn mctx scope t
+rowArgNamesIn mctx scope (TyQual t _ _) = rowArgNamesIn mctx scope t
+rowArgNamesIn _mctx _ (TyCon {  } | TyVar _ | TyRow _ _ _ | TyAuth _ _) = []
 
 rowArgNamesApp : ModuleCtx ->
   List (String, List Kind) ->
@@ -2937,7 +2941,9 @@ headParamKinds sc o n ps = zipL ps (optionOr [] (sc.ksHeads o n))
 (DFunDef false "checkEffectParamsTy" ((PVar "mctx") (PCon "TyEffect" (PVar "labels") PWild (PVar "t"))) (EBlock (DoExpr (EApp (EApp (EVar "checkEffectAtoms") (EVar "mctx")) (EVar "labels"))) (DoExpr (EApp (EApp (EVar "checkEffectParamsTy") (EVar "mctx")) (EVar "t")))))
 (DFunDef false "checkEffectParamsTy" ((PVar "mctx") (PCon "TyRow" (PVar "labels") PWild PWild)) (EApp (EApp (EVar "checkEffectAtoms") (EVar "mctx")) (EVar "labels")))
 (DFunDef false "checkEffectParamsTy" ((PVar "mctx") (PCon "TyConstrained" PWild (PVar "t"))) (EApp (EApp (EVar "checkEffectParamsTy") (EVar "mctx")) (EVar "t")))
-(DFunDef false "checkEffectParamsTy" ((PVar "_mctx") PWild) (ELit LUnit))
+(DFunDef false "checkEffectParamsTy" ((PVar "mctx") (PCon "TyNamed" PWild (PVar "t") PWild)) (EApp (EApp (EVar "checkEffectParamsTy") (EVar "mctx")) (EVar "t")))
+(DFunDef false "checkEffectParamsTy" ((PVar "mctx") (PCon "TyQual" (PVar "t") PWild PWild)) (EApp (EApp (EVar "checkEffectParamsTy") (EVar "mctx")) (EVar "t")))
+(DFunDef false "checkEffectParamsTy" ((PVar "_mctx") (POr (PRec "TyCon" () false) (PCon "TyVar" PWild))) (ELit LUnit))
 (DTypeSig false "checkEffectParamsTys" (TyFun (TyCon "ModuleCtx") (TyFun (TyApp (TyCon "List") (TyCon "Ty")) (TyCon "Unit"))))
 (DFunDef false "checkEffectParamsTys" ((PVar "_mctx") (PList)) (ELit LUnit))
 (DFunDef false "checkEffectParamsTys" ((PVar "mctx") (PCons (PVar "t") (PVar "ts"))) (EBlock (DoExpr (EApp (EApp (EVar "checkEffectParamsTy") (EVar "mctx")) (EVar "t"))) (DoExpr (EApp (EApp (EVar "checkEffectParamsTys") (EVar "mctx")) (EVar "ts")))))
@@ -3171,7 +3177,9 @@ headParamKinds sc o n ps = zipL ps (optionOr [] (sc.ksHeads o n))
 (DFunDef false "rowArgNamesIn" ((PVar "mctx") (PVar "scope") (PCon "TyTuple" (PVar "ts"))) (EApp (EApp (EVar "flatMap") (EApp (EApp (EVar "rowArgNamesIn") (EVar "mctx")) (EVar "scope"))) (EVar "ts")))
 (DFunDef false "rowArgNamesIn" ((PVar "mctx") (PVar "scope") (PCon "TyEffect" PWild PWild (PVar "t"))) (EApp (EApp (EApp (EVar "rowArgNamesIn") (EVar "mctx")) (EVar "scope")) (EVar "t")))
 (DFunDef false "rowArgNamesIn" ((PVar "mctx") (PVar "scope") (PCon "TyConstrained" PWild (PVar "t"))) (EApp (EApp (EApp (EVar "rowArgNamesIn") (EVar "mctx")) (EVar "scope")) (EVar "t")))
-(DFunDef false "rowArgNamesIn" ((PVar "_mctx") PWild PWild) (EListLit))
+(DFunDef false "rowArgNamesIn" ((PVar "mctx") (PVar "scope") (PCon "TyNamed" PWild (PVar "t") PWild)) (EApp (EApp (EApp (EVar "rowArgNamesIn") (EVar "mctx")) (EVar "scope")) (EVar "t")))
+(DFunDef false "rowArgNamesIn" ((PVar "mctx") (PVar "scope") (PCon "TyQual" (PVar "t") PWild PWild)) (EApp (EApp (EApp (EVar "rowArgNamesIn") (EVar "mctx")) (EVar "scope")) (EVar "t")))
+(DFunDef false "rowArgNamesIn" ((PVar "_mctx") PWild (POr (PRec "TyCon" () false) (PCon "TyVar" PWild) (PCon "TyRow" PWild PWild PWild) (PCon "TyAuth" PWild PWild))) (EListLit))
 (DTypeSig false "rowArgNamesApp" (TyFun (TyCon "ModuleCtx") (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "Kind")))) (TyFun (TyCon "TyConOrigin") (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "Ty")) (TyApp (TyCon "Option") (TyApp (TyCon "List") (TyCon "String")))))))))
 (DFunDef false "rowArgNamesApp" ((PVar "mctx") (PVar "scope") (PVar "o") (PVar "n") (PVar "args")) (EMatch (EApp (EApp (EVar "lookupTab") (EApp (EApp (EVar "tyTabKey") (EVar "o")) (EVar "n"))) (EFieldAccess (EFieldAccess (EFieldAccess (EVar "mctx") "mcCells") "dataParamKindsRef") "value")) (arm (PCon "Some" (PVar "kinds")) ((GBool (EBinOp "==" (EApp (EVar "listLen") (EVar "kinds")) (EApp (EVar "listLen") (EVar "args"))))) (EApp (EVar "Some") (EBinOp "++" (EApp (EApp (EVar "krowArgVarNames") (EVar "kinds")) (EVar "args")) (EApp (EApp (EVar "flatMap") (EApp (EApp (EVar "rowArgNamesIn") (EVar "mctx")) (EVar "scope"))) (EVar "args"))))) (arm PWild () (EVar "None"))))
 (DTypeSig false "rowArgNamesVarApp" (TyFun (TyCon "ModuleCtx") (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "Kind")))) (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "Ty")) (TyApp (TyCon "Option") (TyApp (TyCon "List") (TyCon "String"))))))))
@@ -3510,7 +3518,9 @@ headParamKinds sc o n ps = zipL ps (optionOr [] (sc.ksHeads o n))
 (DFunDef false "checkEffectParamsTy" ((PVar "mctx") (PCon "TyEffect" (PVar "labels") PWild (PVar "t"))) (EBlock (DoExpr (EApp (EApp (EVar "checkEffectAtoms") (EVar "mctx")) (EVar "labels"))) (DoExpr (EApp (EApp (EVar "checkEffectParamsTy") (EVar "mctx")) (EVar "t")))))
 (DFunDef false "checkEffectParamsTy" ((PVar "mctx") (PCon "TyRow" (PVar "labels") PWild PWild)) (EApp (EApp (EVar "checkEffectAtoms") (EVar "mctx")) (EVar "labels")))
 (DFunDef false "checkEffectParamsTy" ((PVar "mctx") (PCon "TyConstrained" PWild (PVar "t"))) (EApp (EApp (EVar "checkEffectParamsTy") (EVar "mctx")) (EVar "t")))
-(DFunDef false "checkEffectParamsTy" ((PVar "_mctx") PWild) (ELit LUnit))
+(DFunDef false "checkEffectParamsTy" ((PVar "mctx") (PCon "TyNamed" PWild (PVar "t") PWild)) (EApp (EApp (EVar "checkEffectParamsTy") (EVar "mctx")) (EVar "t")))
+(DFunDef false "checkEffectParamsTy" ((PVar "mctx") (PCon "TyQual" (PVar "t") PWild PWild)) (EApp (EApp (EVar "checkEffectParamsTy") (EVar "mctx")) (EVar "t")))
+(DFunDef false "checkEffectParamsTy" ((PVar "_mctx") (POr (PRec "TyCon" () false) (PCon "TyVar" PWild))) (ELit LUnit))
 (DTypeSig false "checkEffectParamsTys" (TyFun (TyCon "ModuleCtx") (TyFun (TyApp (TyCon "List") (TyCon "Ty")) (TyCon "Unit"))))
 (DFunDef false "checkEffectParamsTys" ((PVar "_mctx") (PList)) (ELit LUnit))
 (DFunDef false "checkEffectParamsTys" ((PVar "mctx") (PCons (PVar "t") (PVar "ts"))) (EBlock (DoExpr (EApp (EApp (EVar "checkEffectParamsTy") (EVar "mctx")) (EVar "t"))) (DoExpr (EApp (EApp (EVar "checkEffectParamsTys") (EVar "mctx")) (EVar "ts")))))
@@ -3744,7 +3754,9 @@ headParamKinds sc o n ps = zipL ps (optionOr [] (sc.ksHeads o n))
 (DFunDef false "rowArgNamesIn" ((PVar "mctx") (PVar "scope") (PCon "TyTuple" (PVar "ts"))) (EApp (EApp (EDictApp "flatMap") (EApp (EApp (EVar "rowArgNamesIn") (EVar "mctx")) (EVar "scope"))) (EVar "ts")))
 (DFunDef false "rowArgNamesIn" ((PVar "mctx") (PVar "scope") (PCon "TyEffect" PWild PWild (PVar "t"))) (EApp (EApp (EApp (EVar "rowArgNamesIn") (EVar "mctx")) (EVar "scope")) (EVar "t")))
 (DFunDef false "rowArgNamesIn" ((PVar "mctx") (PVar "scope") (PCon "TyConstrained" PWild (PVar "t"))) (EApp (EApp (EApp (EVar "rowArgNamesIn") (EVar "mctx")) (EVar "scope")) (EVar "t")))
-(DFunDef false "rowArgNamesIn" ((PVar "_mctx") PWild PWild) (EListLit))
+(DFunDef false "rowArgNamesIn" ((PVar "mctx") (PVar "scope") (PCon "TyNamed" PWild (PVar "t") PWild)) (EApp (EApp (EApp (EVar "rowArgNamesIn") (EVar "mctx")) (EVar "scope")) (EVar "t")))
+(DFunDef false "rowArgNamesIn" ((PVar "mctx") (PVar "scope") (PCon "TyQual" (PVar "t") PWild PWild)) (EApp (EApp (EApp (EVar "rowArgNamesIn") (EVar "mctx")) (EVar "scope")) (EVar "t")))
+(DFunDef false "rowArgNamesIn" ((PVar "_mctx") PWild (POr (PRec "TyCon" () false) (PCon "TyVar" PWild) (PCon "TyRow" PWild PWild PWild) (PCon "TyAuth" PWild PWild))) (EListLit))
 (DTypeSig false "rowArgNamesApp" (TyFun (TyCon "ModuleCtx") (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "Kind")))) (TyFun (TyCon "TyConOrigin") (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "Ty")) (TyApp (TyCon "Option") (TyApp (TyCon "List") (TyCon "String")))))))))
 (DFunDef false "rowArgNamesApp" ((PVar "mctx") (PVar "scope") (PVar "o") (PVar "n") (PVar "args")) (EMatch (EApp (EApp (EVar "lookupTab") (EApp (EApp (EVar "tyTabKey") (EVar "o")) (EVar "n"))) (EFieldAccess (EFieldAccess (EFieldAccess (EVar "mctx") "mcCells") "dataParamKindsRef") "value")) (arm (PCon "Some" (PVar "kinds")) ((GBool (EBinOp "==" (EApp (EVar "listLen") (EVar "kinds")) (EApp (EVar "listLen") (EVar "args"))))) (EApp (EVar "Some") (EBinOp "++" (EApp (EApp (EVar "krowArgVarNames") (EVar "kinds")) (EVar "args")) (EApp (EApp (EDictApp "flatMap") (EApp (EApp (EVar "rowArgNamesIn") (EVar "mctx")) (EVar "scope"))) (EVar "args"))))) (arm PWild () (EVar "None"))))
 (DTypeSig false "rowArgNamesVarApp" (TyFun (TyCon "ModuleCtx") (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "Kind")))) (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "Ty")) (TyApp (TyCon "Option") (TyApp (TyCon "List") (TyCon "String"))))))))

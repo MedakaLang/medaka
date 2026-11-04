@@ -926,7 +926,9 @@ checkEffectParamsTy mctx (TyEffect labels _ t) =
 -- no other spelling admits).
 checkEffectParamsTy mctx (TyRow labels _ _) = checkEffectAtoms mctx labels
 checkEffectParamsTy mctx (TyConstrained _ t) = checkEffectParamsTy mctx t
-checkEffectParamsTy _mctx _ = ()
+checkEffectParamsTy mctx (TyNamed _ t _) = checkEffectParamsTy mctx t
+checkEffectParamsTy mctx (TyQual t _ _) = checkEffectParamsTy mctx t
+checkEffectParamsTy _mctx (TyCon {  } | TyVar _) = ()
 
 checkEffectParamsTys : ModuleCtx -> List Ty -> Unit
 checkEffectParamsTys _mctx [] = ()
@@ -2052,7 +2054,9 @@ rowArgNamesIn mctx scope (TyFun a b) =
 rowArgNamesIn mctx scope (TyTuple ts) = flatMap (rowArgNamesIn mctx scope) ts
 rowArgNamesIn mctx scope (TyEffect _ _ t) = rowArgNamesIn mctx scope t
 rowArgNamesIn mctx scope (TyConstrained _ t) = rowArgNamesIn mctx scope t
-rowArgNamesIn _mctx _ _ = []
+rowArgNamesIn mctx scope (TyNamed _ t _) = rowArgNamesIn mctx scope t
+rowArgNamesIn mctx scope (TyQual t _ _) = rowArgNamesIn mctx scope t
+rowArgNamesIn _mctx _ (TyCon {  } | TyVar _ | TyRow _ _ _ | TyAuth _ _) = []
 
 rowArgNamesApp : ModuleCtx ->
   List (String, List Kind) ->

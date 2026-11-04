@@ -1,0 +1,6 @@
+-- The only string-mode extern sits inside a tuple, so only the structural
+-- string-demand walk sees it; the emitted module must still define its helpers.
+pick p = match p
+  (a, _) => a
+
+main = pick (stringLength (intToString 123), 1)

@@ -1,5 +1,5 @@
 # META
-source_lines=4457
+source_lines=4459
 stages=DESUGAR,MARK
 # SOURCE
 -- tc_env: construction of `ImplEnv`, `ClassEnv`, `MethodEnv` and lookup in every declaration
@@ -2736,7 +2736,9 @@ varHeadApps p (TyFun a b) = varHeadApps p a ++ varHeadApps p b
 varHeadApps p (TyTuple ts) = flatMap (varHeadApps p) ts
 varHeadApps p (TyEffect _ _ t) = varHeadApps p t
 varHeadApps p (TyConstrained _ t) = varHeadApps p t
-varHeadApps _ _ = []
+varHeadApps p (TyNamed _ t _) = varHeadApps p t
+varHeadApps p (TyQual t _ _) = varHeadApps p t
+varHeadApps _ (TyCon {  } | TyVar _ | TyRow _ _ _ | TyAuth _ _) = []
 
 varHeadHere : String -> Ty -> List Ty -> List (List Ty)
 varHeadHere p (TyVar h) args
@@ -5008,7 +5010,9 @@ methodRowSameNameView rows =
 (DFunDef false "varHeadApps" ((PVar "p") (PCon "TyTuple" (PVar "ts"))) (EApp (EApp (EVar "flatMap") (EApp (EVar "varHeadApps") (EVar "p"))) (EVar "ts")))
 (DFunDef false "varHeadApps" ((PVar "p") (PCon "TyEffect" PWild PWild (PVar "t"))) (EApp (EApp (EVar "varHeadApps") (EVar "p")) (EVar "t")))
 (DFunDef false "varHeadApps" ((PVar "p") (PCon "TyConstrained" PWild (PVar "t"))) (EApp (EApp (EVar "varHeadApps") (EVar "p")) (EVar "t")))
-(DFunDef false "varHeadApps" (PWild PWild) (EListLit))
+(DFunDef false "varHeadApps" ((PVar "p") (PCon "TyNamed" PWild (PVar "t") PWild)) (EApp (EApp (EVar "varHeadApps") (EVar "p")) (EVar "t")))
+(DFunDef false "varHeadApps" ((PVar "p") (PCon "TyQual" (PVar "t") PWild PWild)) (EApp (EApp (EVar "varHeadApps") (EVar "p")) (EVar "t")))
+(DFunDef false "varHeadApps" (PWild (POr (PRec "TyCon" () false) (PCon "TyVar" PWild) (PCon "TyRow" PWild PWild PWild) (PCon "TyAuth" PWild PWild))) (EListLit))
 (DTypeSig false "varHeadHere" (TyFun (TyCon "String") (TyFun (TyCon "Ty") (TyFun (TyApp (TyCon "List") (TyCon "Ty")) (TyApp (TyCon "List") (TyApp (TyCon "List") (TyCon "Ty")))))))
 (DFunDef false "varHeadHere" ((PVar "p") (PCon "TyVar" (PVar "h")) (PVar "args")) (EIf (EBinOp "==" (EVar "h") (EVar "p")) (EListLit (EVar "args")) (EIf (EVar "otherwise") (EListLit) (EApp (EVar "__fallthrough__") (ELit LUnit)))))
 (DFunDef false "varHeadHere" (PWild PWild PWild) (EListLit))
@@ -5867,7 +5871,9 @@ methodRowSameNameView rows =
 (DFunDef false "varHeadApps" ((PVar "p") (PCon "TyTuple" (PVar "ts"))) (EApp (EApp (EDictApp "flatMap") (EApp (EVar "varHeadApps") (EVar "p"))) (EVar "ts")))
 (DFunDef false "varHeadApps" ((PVar "p") (PCon "TyEffect" PWild PWild (PVar "t"))) (EApp (EApp (EVar "varHeadApps") (EVar "p")) (EVar "t")))
 (DFunDef false "varHeadApps" ((PVar "p") (PCon "TyConstrained" PWild (PVar "t"))) (EApp (EApp (EVar "varHeadApps") (EVar "p")) (EVar "t")))
-(DFunDef false "varHeadApps" (PWild PWild) (EListLit))
+(DFunDef false "varHeadApps" ((PVar "p") (PCon "TyNamed" PWild (PVar "t") PWild)) (EApp (EApp (EVar "varHeadApps") (EVar "p")) (EVar "t")))
+(DFunDef false "varHeadApps" ((PVar "p") (PCon "TyQual" (PVar "t") PWild PWild)) (EApp (EApp (EVar "varHeadApps") (EVar "p")) (EVar "t")))
+(DFunDef false "varHeadApps" (PWild (POr (PRec "TyCon" () false) (PCon "TyVar" PWild) (PCon "TyRow" PWild PWild PWild) (PCon "TyAuth" PWild PWild))) (EListLit))
 (DTypeSig false "varHeadHere" (TyFun (TyCon "String") (TyFun (TyCon "Ty") (TyFun (TyApp (TyCon "List") (TyCon "Ty")) (TyApp (TyCon "List") (TyApp (TyCon "List") (TyCon "Ty")))))))
 (DFunDef false "varHeadHere" ((PVar "p") (PCon "TyVar" (PVar "h")) (PVar "args")) (EIf (EBinOp "==" (EVar "h") (EVar "p")) (EListLit (EVar "args")) (EIf (EVar "otherwise") (EListLit) (EApp (EVar "__fallthrough__") (ELit LUnit)))))
 (DFunDef false "varHeadHere" (PWild PWild PWild) (EListLit))

@@ -138,3 +138,22 @@ test "An imported qualified value does not fit a bound on another subtree" = exp
   [
     "performs <FileRead \"cfg/*\"> where only <FileRead \"secrets/*\"> is allowed",
   ]
+
+test "A named binder around a row-kinded slot leaves the row variable open" =
+  expectCheckAccept (fixture "named_binder_row_slot_accept.mdk")
+
+test "A named binder in a data field still counts the parameter's occurrence" = expectCheckReject
+  (fixture "named_binder_field_reject.mdk")
+  ["carries <Stdout> at an argument position"]
+
+test "A named binder's slot is read by the argument-side coverage rule" = expectCheckReject
+  (fixture "named_binder_arg_slot_reject.mdk")
+  ["carries <Stdout> at an argument position"]
+
+test "An effect parameter under a qualifier is domain-checked" = expectCheckReject
+  (fixture "qualified_type_domain_reject.mdk")
+  ["pattern is empty"]
+
+test "An interface parameter applied to a row slot under a named binder needs its kind declared" = expectCheckReject
+  (fixture "named_binder_iface_kind_reject.mdk")
+  ["is used as an effect-indexed constructor"]

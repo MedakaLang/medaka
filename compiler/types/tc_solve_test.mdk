@@ -287,6 +287,10 @@ test "walkDispatch binds the interface parameter wherever the declared type has 
     expectEqual [[]] (walked ["a"] "x : a -> Int" intM),
   ]
 
+test "walkDispatch binds the interface parameter through a named binder" =
+  let occurrence = TFun boolM pureRow (TApp intM boolM)
+  expectEqual [[("a", "Bool")]] (walked ["a"] "x : (n : a) -> Box b" occurrence)
+
 test "an occurrence's dispatch monos keep every interface position, an omitted one read from the occurrence" =
   let occurrence = TFun boolM pureRow intM
   expectEqual

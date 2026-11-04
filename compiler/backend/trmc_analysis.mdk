@@ -195,7 +195,10 @@ patVars (PCons h t) = patVars h ++ patVars t
 patVars (PTuple ps) = patVarsList ps
 patVars (PList ps) = patVarsList ps
 patVars (PAs x _ _ p) = x :: patVars p
-patVars _ = []
+-- `PRec` of a declared record is rewritten to `PCon` (`rewriteProgramRecPats`),
+-- `POr` is expanded into arm candidates (`lowerOrArms`) and desugar lifts `PAnn`
+-- out, so none of them reaches a backend.
+patVars (PWild | PLit _ | PRng _ _ _ | PRec _ _ _ | POr _ | PAnn _ _) = []
 
 export
 patVarsList : List Pat -> List String

@@ -1900,7 +1900,10 @@ walkDispatch typarams (TyApp a b) m = match peelQual m
 walkDispatch typarams (TyTuple ts) m = match tupleSpine m
   Some ms => flatMap (p => walkDispatch typarams (fst p) (snd p)) (zip ts ms)
   _ => []
-walkDispatch _ _ _ = []
+walkDispatch typarams (TyNamed _ t _) m = walkDispatch typarams t m
+walkDispatch typarams (TyQual t _ _) m = walkDispatch typarams t m
+walkDispatch _ (TyCon {  } | TyEffect _ _ _ | TyConstrained _ _ | TyRow _ _ _ | TyAuth _ _) _ =
+  []
 
 -- one mono per interface param, in declaration order; if ANY param has no
 -- recovered binding the whole obligation is abandoned (return [] → caller skips).

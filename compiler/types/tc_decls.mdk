@@ -1230,7 +1230,9 @@ rowArgAtomsIn mctx scope (TyFun a b) =
 rowArgAtomsIn mctx scope (TyTuple ts) = flatMap (rowArgAtomsIn mctx scope) ts
 rowArgAtomsIn mctx scope (TyEffect _ _ t) = rowArgAtomsIn mctx scope t
 rowArgAtomsIn mctx scope (TyConstrained _ t) = rowArgAtomsIn mctx scope t
-rowArgAtomsIn _mctx _ _ = []
+rowArgAtomsIn mctx scope (TyNamed _ t _) = rowArgAtomsIn mctx scope t
+rowArgAtomsIn mctx scope (TyQual t _ _) = rowArgAtomsIn mctx scope t
+rowArgAtomsIn _mctx _ (TyCon {  } | TyVar _ | TyRow _ _ _ | TyAuth _ _) = []
 
 rowArgAtomsApp : ModuleCtx ->
   List (String, List Kind) ->
@@ -1633,7 +1635,9 @@ paramRowAtomOccs gctx p (TyTuple ts) = flatMap (paramRowAtomOccs gctx p) ts
 paramRowAtomOccs gctx p (TyApp a b) =
   paramRowAtomOccs gctx p a ++ paramRowAtomOccs gctx p b
 paramRowAtomOccs gctx p (TyConstrained _ t) = paramRowAtomOccs gctx p t
-paramRowAtomOccs _gctx _ _ = []
+paramRowAtomOccs gctx p (TyNamed _ t _) = paramRowAtomOccs gctx p t
+paramRowAtomOccs gctx p (TyQual t _ _) = paramRowAtomOccs gctx p t
+paramRowAtomOccs _gctx _ (TyAuth _ _) = []
 
 -- The row's written atoms, once per tail var that IS [p] (a join names several).
 paramRowAtomsFor : GraphCtx ->

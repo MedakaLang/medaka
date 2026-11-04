@@ -1,0 +1,6 @@
+-- An interface parameter applied to a row slot only under a named binder is
+-- still an effect-indexed constructor, so its head must say so.
+interface GDrop f where
+  gdrop : (x : f e a) -> (Unit -> <e> Unit) -> Unit
+
+main = println 1

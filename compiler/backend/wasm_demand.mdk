@@ -390,7 +390,11 @@ dPat acc (PList ps) = walkEach dPat (noteUse acc UseList) ps
 dPat acc (PTuple ps) = walkEach dPat (noteArity acc (listLen ps)) ps
 dPat acc (PCon _ args) = walkEach dPat acc args
 dPat acc (PAs _ _ _ p) = dPat acc p
-dPat acc _ = acc
+-- `PRec` of a declared record is rewritten to `PCon` (`rewriteProgramRecPats`),
+-- `POr` is expanded into arm candidates (`lowerOrArms`) and desugar lifts `PAnn`
+-- out, so none of them reaches a backend.
+dPat acc (PVar _ _ _ | PWild | PLit _ | PRng _ _ _ | PRec _ _ _ | POr _ | PAnn _ _) =
+  acc
 
 -- a decision tree's switch heads, the lowered shape of list and tuple patterns
 dTree : DemandAcc -> CTree -> DemandAcc
@@ -446,7 +450,35 @@ exprUsesStr facts (CDecision scrut arms _) =
   exprUsesStr facts scrut || anyList (a => exprUsesStr facts (armBody a)) arms
 exprUsesStr facts (CMatch scrut arms) =
   exprUsesStr facts scrut || anyList (a => exprUsesStr facts (armBody a)) arms
-exprUsesStr _ _ = False
+exprUsesStr facts (CTuple es) = anyList (exprUsesStr facts) es
+exprUsesStr facts (CList es) = anyList (exprUsesStr facts) es
+exprUsesStr facts (CArray es) = anyList (exprUsesStr facts) es
+exprUsesStr facts (CRecord _ fields) = anyList (fieldUsesStr facts) fields
+exprUsesStr facts (CFieldAccess ex _ _ _) = exprUsesStr facts ex
+exprUsesStr facts (CRecordUpdate _ base fields) =
+  exprUsesStr facts base || anyList (fieldUsesStr facts) fields
+exprUsesStr facts (CVariantUpdate _ base fields) =
+  exprUsesStr facts base || anyList (fieldUsesStr facts) fields
+exprUsesStr facts (CRangeList lo hi _) =
+  exprUsesStr facts lo || exprUsesStr facts hi
+exprUsesStr facts (CRangeArray lo hi _) =
+  exprUsesStr facts lo || exprUsesStr facts hi
+exprUsesStr facts (CIndex a i) = exprUsesStr facts a || exprUsesStr facts i
+exprUsesStr facts (CSlice a lo hi _) =
+  exprUsesStr facts a || exprUsesStr facts lo || exprUsesStr facts hi
+exprUsesStr facts (CStringIndex a i) =
+  exprUsesStr facts a || exprUsesStr facts i
+exprUsesStr facts (CStringSlice a lo hi _) =
+  exprUsesStr facts a || exprUsesStr facts lo || exprUsesStr facts hi
+exprUsesStr facts (CListIndex a i) = exprUsesStr facts a || exprUsesStr facts i
+exprUsesStr facts (CListSlice a lo hi _) =
+  exprUsesStr facts a || exprUsesStr facts lo || exprUsesStr facts hi
+-- A where-bound helper alone keeps a program in the legacy scalar mode
+-- (pinned by wasm_demand_test); evidence nodes hold no expressions.
+exprUsesStr _ (CLetGroup _ _ | CMethod _ _ | CDict _ _) = False
+
+fieldUsesStr : OrdMap ExternDeclFact -> CField -> Bool
+fieldUsesStr facts (CField _ _ e) = exprUsesStr facts e
 
 stmtUsesStr : OrdMap ExternDeclFact -> CStmt -> Bool
 stmtUsesStr facts (CSExpr e) = exprUsesStr facts e
@@ -527,7 +559,8 @@ exprUsesClosures fnNames ctorArs locals (CDecision scrut arms _) =
 exprUsesClosures fnNames ctorArs locals (CMatch scrut arms) =
   exprUsesClosures fnNames ctorArs locals scrut
     || anyList (a => exprUsesClosures fnNames ctorArs locals (armBody a)) arms
-exprUsesClosures _fnNames _ctorArs _locals _ = False
+exprUsesClosures _fnNames _ctorArs _locals (CLetGroup _ _ | CTuple _ | CList _ | CArray _ | CRecord _ _ | CFieldAccess _ _ _ _ | CRecordUpdate _ _ _ | CVariantUpdate _ _ _ | CRangeList _ _ _ | CRangeArray _ _ _ | CIndex _ _ | CSlice _ _ _ _ | CStringIndex _ _ | CStringSlice _ _ _ _ | CListIndex _ _ | CListSlice _ _ _ _ | CMethod _ _ | CDict _ _) =
+  False
 
 -- thread let-bound names through a block so a later statement's shadowing local is seen.
 blockUsesClosures : OrdMap Unit ->
@@ -748,7 +781,10 @@ patBinders (PCon _ args) = flatMap patBinders args
 patBinders (PTuple ps) = flatMap patBinders ps
 patBinders (PCons h t) = patBinders h ++ patBinders t
 patBinders (PList ps) = flatMap patBinders ps
-patBinders _ = []
+-- `PRec` of a declared record is rewritten to `PCon` (`rewriteProgramRecPats`),
+-- `POr` is expanded into arm candidates (`lowerOrArms`) and desugar lifts `PAnn`
+-- out, so none of them reaches a backend.
+patBinders (PWild | PLit _ | PRng _ _ _ | PRec _ _ _ | POr _ | PAnn _ _) = []
 
 -- [env] extended with every variable [pat] binds
 export
@@ -874,7 +910,9 @@ cexprStamp prog _ (CFieldAccess _ _ recName ord) =
     RTFloat
   else
     RTValue
-cexprStamp _ _ _ = RTValue
+-- These nodes state no scalar type.
+cexprStamp _ _ (CUnOp _ _ | CLam _ _ | CTuple _ | CList _ | CArray _ | CRecord _ _ | CRecordUpdate _ _ _ | CVariantUpdate _ _ _ | CRangeList _ _ _ | CRangeArray _ _ _ | CIndex _ _ | CSlice _ _ _ _ | CStringIndex _ _ | CStringSlice _ _ _ _ | CListIndex _ _ | CListSlice _ _ _ _ | CMethod _ _ | CDict _ _) =
+  RTValue
 
 -- `++` appends two Strings or two Lists.  Where neither operand states which,
 -- the result prints as a String: a List-valued `main` has no print.
@@ -1415,7 +1453,11 @@ hPat refMode acc (PList ps) =
 hPat refMode acc (PCons a b) =
   hPat refMode (hPat refMode { acc | patternList = True } a) b
 hPat refMode acc (PAs _ _ _ p) = hPat refMode acc p
-hPat _ acc _ = acc
+-- `PRec` of a declared record is rewritten to `PCon` (`rewriteProgramRecPats`),
+-- `POr` is expanded into arm candidates (`lowerOrArms`) and desugar lifts `PAnn`
+-- out, so none of them reaches a backend.
+hPat _ acc (PVar _ _ _ | PWild | PLit _ | PRng _ _ _ | PRec _ _ _ | POr _ | PAnn _ _) =
+  acc
 
 hExpr : WasmTypeContext ->
   Bool ->

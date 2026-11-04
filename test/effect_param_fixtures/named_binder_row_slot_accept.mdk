@@ -1,0 +1,15 @@
+-- A named binder around a row-kinded data slot leaves the row variable open,
+-- exactly like the unnamed spelling: the effectful Box is accepted.
+data Box (e : Effect) = Box (Unit -> <e> Unit)
+
+fNamed : (b : Box e) -> Int
+fNamed _ = 1
+
+fPlain : Box e -> Int
+fPlain _ = 1
+
+main : <Stdout> Int
+main =
+  let x = fPlain (Box (_ => println "p"))
+  let y = fNamed (Box (_ => println "n"))
+  x + y

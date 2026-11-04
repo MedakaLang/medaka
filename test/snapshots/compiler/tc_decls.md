@@ -1,5 +1,5 @@
 # META
-source_lines=2840
+source_lines=2844
 stages=DESUGAR,MARK
 # SOURCE
 -- tc_decls: declaration analysis above the written-type layer: building `DataEnv` and `DeclEnvs`
@@ -1234,7 +1234,9 @@ rowArgAtomsIn mctx scope (TyFun a b) =
 rowArgAtomsIn mctx scope (TyTuple ts) = flatMap (rowArgAtomsIn mctx scope) ts
 rowArgAtomsIn mctx scope (TyEffect _ _ t) = rowArgAtomsIn mctx scope t
 rowArgAtomsIn mctx scope (TyConstrained _ t) = rowArgAtomsIn mctx scope t
-rowArgAtomsIn _mctx _ _ = []
+rowArgAtomsIn mctx scope (TyNamed _ t _) = rowArgAtomsIn mctx scope t
+rowArgAtomsIn mctx scope (TyQual t _ _) = rowArgAtomsIn mctx scope t
+rowArgAtomsIn _mctx _ (TyCon {  } | TyVar _ | TyRow _ _ _ | TyAuth _ _) = []
 
 rowArgAtomsApp : ModuleCtx ->
   List (String, List Kind) ->
@@ -1637,7 +1639,9 @@ paramRowAtomOccs gctx p (TyTuple ts) = flatMap (paramRowAtomOccs gctx p) ts
 paramRowAtomOccs gctx p (TyApp a b) =
   paramRowAtomOccs gctx p a ++ paramRowAtomOccs gctx p b
 paramRowAtomOccs gctx p (TyConstrained _ t) = paramRowAtomOccs gctx p t
-paramRowAtomOccs _gctx _ _ = []
+paramRowAtomOccs gctx p (TyNamed _ t _) = paramRowAtomOccs gctx p t
+paramRowAtomOccs gctx p (TyQual t _ _) = paramRowAtomOccs gctx p t
+paramRowAtomOccs _gctx _ (TyAuth _ _) = []
 
 -- The row's written atoms, once per tail var that IS [p] (a join names several).
 paramRowAtomsFor : GraphCtx ->
@@ -3020,7 +3024,9 @@ methodRowNumObservation saved caseName builtinDecls decls =
 (DFunDef false "rowArgAtomsIn" ((PVar "mctx") (PVar "scope") (PCon "TyTuple" (PVar "ts"))) (EApp (EApp (EVar "flatMap") (EApp (EApp (EVar "rowArgAtomsIn") (EVar "mctx")) (EVar "scope"))) (EVar "ts")))
 (DFunDef false "rowArgAtomsIn" ((PVar "mctx") (PVar "scope") (PCon "TyEffect" PWild PWild (PVar "t"))) (EApp (EApp (EApp (EVar "rowArgAtomsIn") (EVar "mctx")) (EVar "scope")) (EVar "t")))
 (DFunDef false "rowArgAtomsIn" ((PVar "mctx") (PVar "scope") (PCon "TyConstrained" PWild (PVar "t"))) (EApp (EApp (EApp (EVar "rowArgAtomsIn") (EVar "mctx")) (EVar "scope")) (EVar "t")))
-(DFunDef false "rowArgAtomsIn" ((PVar "_mctx") PWild PWild) (EListLit))
+(DFunDef false "rowArgAtomsIn" ((PVar "mctx") (PVar "scope") (PCon "TyNamed" PWild (PVar "t") PWild)) (EApp (EApp (EApp (EVar "rowArgAtomsIn") (EVar "mctx")) (EVar "scope")) (EVar "t")))
+(DFunDef false "rowArgAtomsIn" ((PVar "mctx") (PVar "scope") (PCon "TyQual" (PVar "t") PWild PWild)) (EApp (EApp (EApp (EVar "rowArgAtomsIn") (EVar "mctx")) (EVar "scope")) (EVar "t")))
+(DFunDef false "rowArgAtomsIn" ((PVar "_mctx") PWild (POr (PRec "TyCon" () false) (PCon "TyVar" PWild) (PCon "TyRow" PWild PWild PWild) (PCon "TyAuth" PWild PWild))) (EListLit))
 (DTypeSig false "rowArgAtomsApp" (TyFun (TyCon "ModuleCtx") (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "Kind")))) (TyFun (TyCon "TyConOrigin") (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "Ty")) (TyApp (TyCon "Option") (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "Atom")))))))))))
 (DFunDef false "rowArgAtomsApp" ((PVar "mctx") (PVar "scope") (PVar "o") (PVar "n") (PVar "args")) (EMatch (EApp (EApp (EVar "lookupTab") (EApp (EApp (EVar "tyTabKey") (EVar "o")) (EVar "n"))) (EFieldAccess (EFieldAccess (EFieldAccess (EVar "mctx") "mcCells") "dataParamKindsRef") "value")) (arm (PCon "Some" (PVar "kinds")) ((GBool (EBinOp "==" (EApp (EVar "listLen") (EVar "kinds")) (EApp (EVar "listLen") (EVar "args"))))) (EApp (EVar "Some") (EBinOp "++" (EApp (EApp (EApp (EApp (EVar "krowArgVarAtoms") (EFieldAccess (EVar "mctx") "mcGraph")) (EVar "kinds")) (EApp (EApp (EVar "optionOr") (EListLit)) (EApp (EApp (EVar "paramRowAtomsOf") (EVar "mctx")) (EApp (EApp (EVar "tyTabKey") (EVar "o")) (EVar "n"))))) (EVar "args")) (EApp (EApp (EVar "flatMap") (EApp (EApp (EVar "rowArgAtomsIn") (EVar "mctx")) (EVar "scope"))) (EVar "args"))))) (arm PWild () (EVar "None"))))
 (DTypeSig false "rowArgAtomsVarApp" (TyFun (TyCon "ModuleCtx") (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "Kind")))) (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "Ty")) (TyApp (TyCon "Option") (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "Atom"))))))))))
@@ -3081,7 +3087,9 @@ methodRowNumObservation saved caseName builtinDecls decls =
 (DFunDef false "paramRowAtomOccs" ((PVar "gctx") (PVar "p") (PCon "TyTuple" (PVar "ts"))) (EApp (EApp (EVar "flatMap") (EApp (EApp (EVar "paramRowAtomOccs") (EVar "gctx")) (EVar "p"))) (EVar "ts")))
 (DFunDef false "paramRowAtomOccs" ((PVar "gctx") (PVar "p") (PCon "TyApp" (PVar "a") (PVar "b"))) (EBinOp "++" (EApp (EApp (EApp (EVar "paramRowAtomOccs") (EVar "gctx")) (EVar "p")) (EVar "a")) (EApp (EApp (EApp (EVar "paramRowAtomOccs") (EVar "gctx")) (EVar "p")) (EVar "b"))))
 (DFunDef false "paramRowAtomOccs" ((PVar "gctx") (PVar "p") (PCon "TyConstrained" PWild (PVar "t"))) (EApp (EApp (EApp (EVar "paramRowAtomOccs") (EVar "gctx")) (EVar "p")) (EVar "t")))
-(DFunDef false "paramRowAtomOccs" ((PVar "_gctx") PWild PWild) (EListLit))
+(DFunDef false "paramRowAtomOccs" ((PVar "gctx") (PVar "p") (PCon "TyNamed" PWild (PVar "t") PWild)) (EApp (EApp (EApp (EVar "paramRowAtomOccs") (EVar "gctx")) (EVar "p")) (EVar "t")))
+(DFunDef false "paramRowAtomOccs" ((PVar "gctx") (PVar "p") (PCon "TyQual" (PVar "t") PWild PWild)) (EApp (EApp (EApp (EVar "paramRowAtomOccs") (EVar "gctx")) (EVar "p")) (EVar "t")))
+(DFunDef false "paramRowAtomOccs" ((PVar "_gctx") PWild (PCon "TyAuth" PWild PWild)) (EListLit))
 (DTypeSig false "paramRowAtomsFor" (TyFun (TyCon "GraphCtx") (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyApp (TyCon "List") (TyCon "EffAtomTy")) (TyApp (TyCon "List") (TyApp (TyCon "List") (TyCon "Atom"))))))))
 (DFunDef false "paramRowAtomsFor" ((PVar "gctx") (PVar "p") (PVar "tails") (PVar "labels")) (EApp (EApp (EVar "map") (ELam (PWild) (EApp (EApp (EVar "atomsOfWritten") (EVar "gctx")) (EVar "labels")))) (EApp (EApp (EVar "filterList") (ELam ((PVar "_s")) (EBinOp "==" (EVar "_s") (EVar "p")))) (EVar "tails"))))
 (DTypeSig false "intersectDeclAtoms" (TyFun (TyCon "GraphCtx") (TyFun (TyApp (TyCon "List") (TyApp (TyCon "List") (TyCon "Atom"))) (TyApp (TyCon "List") (TyCon "Atom")))))
@@ -3500,7 +3508,9 @@ methodRowNumObservation saved caseName builtinDecls decls =
 (DFunDef false "rowArgAtomsIn" ((PVar "mctx") (PVar "scope") (PCon "TyTuple" (PVar "ts"))) (EApp (EApp (EDictApp "flatMap") (EApp (EApp (EVar "rowArgAtomsIn") (EVar "mctx")) (EVar "scope"))) (EVar "ts")))
 (DFunDef false "rowArgAtomsIn" ((PVar "mctx") (PVar "scope") (PCon "TyEffect" PWild PWild (PVar "t"))) (EApp (EApp (EApp (EVar "rowArgAtomsIn") (EVar "mctx")) (EVar "scope")) (EVar "t")))
 (DFunDef false "rowArgAtomsIn" ((PVar "mctx") (PVar "scope") (PCon "TyConstrained" PWild (PVar "t"))) (EApp (EApp (EApp (EVar "rowArgAtomsIn") (EVar "mctx")) (EVar "scope")) (EVar "t")))
-(DFunDef false "rowArgAtomsIn" ((PVar "_mctx") PWild PWild) (EListLit))
+(DFunDef false "rowArgAtomsIn" ((PVar "mctx") (PVar "scope") (PCon "TyNamed" PWild (PVar "t") PWild)) (EApp (EApp (EApp (EVar "rowArgAtomsIn") (EVar "mctx")) (EVar "scope")) (EVar "t")))
+(DFunDef false "rowArgAtomsIn" ((PVar "mctx") (PVar "scope") (PCon "TyQual" (PVar "t") PWild PWild)) (EApp (EApp (EApp (EVar "rowArgAtomsIn") (EVar "mctx")) (EVar "scope")) (EVar "t")))
+(DFunDef false "rowArgAtomsIn" ((PVar "_mctx") PWild (POr (PRec "TyCon" () false) (PCon "TyVar" PWild) (PCon "TyRow" PWild PWild PWild) (PCon "TyAuth" PWild PWild))) (EListLit))
 (DTypeSig false "rowArgAtomsApp" (TyFun (TyCon "ModuleCtx") (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "Kind")))) (TyFun (TyCon "TyConOrigin") (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "Ty")) (TyApp (TyCon "Option") (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "Atom")))))))))))
 (DFunDef false "rowArgAtomsApp" ((PVar "mctx") (PVar "scope") (PVar "o") (PVar "n") (PVar "args")) (EMatch (EApp (EApp (EVar "lookupTab") (EApp (EApp (EVar "tyTabKey") (EVar "o")) (EVar "n"))) (EFieldAccess (EFieldAccess (EFieldAccess (EVar "mctx") "mcCells") "dataParamKindsRef") "value")) (arm (PCon "Some" (PVar "kinds")) ((GBool (EBinOp "==" (EApp (EVar "listLen") (EVar "kinds")) (EApp (EVar "listLen") (EVar "args"))))) (EApp (EVar "Some") (EBinOp "++" (EApp (EApp (EApp (EApp (EVar "krowArgVarAtoms") (EFieldAccess (EVar "mctx") "mcGraph")) (EVar "kinds")) (EApp (EApp (EVar "optionOr") (EListLit)) (EApp (EApp (EVar "paramRowAtomsOf") (EVar "mctx")) (EApp (EApp (EVar "tyTabKey") (EVar "o")) (EVar "n"))))) (EVar "args")) (EApp (EApp (EDictApp "flatMap") (EApp (EApp (EVar "rowArgAtomsIn") (EVar "mctx")) (EVar "scope"))) (EVar "args"))))) (arm PWild () (EVar "None"))))
 (DTypeSig false "rowArgAtomsVarApp" (TyFun (TyCon "ModuleCtx") (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "Kind")))) (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "Ty")) (TyApp (TyCon "Option") (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "Atom"))))))))))
@@ -3561,7 +3571,9 @@ methodRowNumObservation saved caseName builtinDecls decls =
 (DFunDef false "paramRowAtomOccs" ((PVar "gctx") (PVar "p") (PCon "TyTuple" (PVar "ts"))) (EApp (EApp (EDictApp "flatMap") (EApp (EApp (EVar "paramRowAtomOccs") (EVar "gctx")) (EVar "p"))) (EVar "ts")))
 (DFunDef false "paramRowAtomOccs" ((PVar "gctx") (PVar "p") (PCon "TyApp" (PVar "a") (PVar "b"))) (EBinOp "++" (EApp (EApp (EApp (EVar "paramRowAtomOccs") (EVar "gctx")) (EVar "p")) (EVar "a")) (EApp (EApp (EApp (EVar "paramRowAtomOccs") (EVar "gctx")) (EVar "p")) (EVar "b"))))
 (DFunDef false "paramRowAtomOccs" ((PVar "gctx") (PVar "p") (PCon "TyConstrained" PWild (PVar "t"))) (EApp (EApp (EApp (EVar "paramRowAtomOccs") (EVar "gctx")) (EVar "p")) (EVar "t")))
-(DFunDef false "paramRowAtomOccs" ((PVar "_gctx") PWild PWild) (EListLit))
+(DFunDef false "paramRowAtomOccs" ((PVar "gctx") (PVar "p") (PCon "TyNamed" PWild (PVar "t") PWild)) (EApp (EApp (EApp (EVar "paramRowAtomOccs") (EVar "gctx")) (EVar "p")) (EVar "t")))
+(DFunDef false "paramRowAtomOccs" ((PVar "gctx") (PVar "p") (PCon "TyQual" (PVar "t") PWild PWild)) (EApp (EApp (EApp (EVar "paramRowAtomOccs") (EVar "gctx")) (EVar "p")) (EVar "t")))
+(DFunDef false "paramRowAtomOccs" ((PVar "_gctx") PWild (PCon "TyAuth" PWild PWild)) (EListLit))
 (DTypeSig false "paramRowAtomsFor" (TyFun (TyCon "GraphCtx") (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyApp (TyCon "List") (TyCon "EffAtomTy")) (TyApp (TyCon "List") (TyApp (TyCon "List") (TyCon "Atom"))))))))
 (DFunDef false "paramRowAtomsFor" ((PVar "gctx") (PVar "p") (PVar "tails") (PVar "labels")) (EApp (EApp (EMethodRef "map") (ELam (PWild) (EApp (EApp (EVar "atomsOfWritten") (EVar "gctx")) (EVar "labels")))) (EApp (EApp (EVar "filterList") (ELam ((PVar "_s")) (EBinOp "==" (EVar "_s") (EVar "p")))) (EVar "tails"))))
 (DTypeSig false "intersectDeclAtoms" (TyFun (TyCon "GraphCtx") (TyFun (TyApp (TyCon "List") (TyApp (TyCon "List") (TyCon "Atom"))) (TyApp (TyCon "List") (TyCon "Atom")))))

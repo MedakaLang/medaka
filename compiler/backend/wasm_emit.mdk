@@ -10643,7 +10643,10 @@ patVars (PTuple ps) = flatMap patVars ps
 patVars (PCons h t) = patVars h ++ patVars t
 patVars (PList ps) = flatMap patVars ps
 patVars (PAs x _ _ p) = x :: patVars p
-patVars _ = []
+-- `PRec` of a declared record is rewritten to `PCon` (`rewriteProgramRecPats`),
+-- `POr` is expanded into arm candidates (`lowerOrArms`) and desugar lifts `PAnn`
+-- out, so none of them reaches a backend.
+patVars (PRng _ _ _ | PRec _ _ _ | POr _ | PAnn _ _) = []
 
 -- ── operator tables (both modes) ─────────────────────────────────────────────
 

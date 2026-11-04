@@ -1,5 +1,5 @@
 # META
-source_lines=11281
+source_lines=11284
 stages=DESUGAR,MARK
 # SOURCE
 import ir.constructor_facts.{
@@ -10647,7 +10647,10 @@ patVars (PTuple ps) = flatMap patVars ps
 patVars (PCons h t) = patVars h ++ patVars t
 patVars (PList ps) = flatMap patVars ps
 patVars (PAs x _ _ p) = x :: patVars p
-patVars _ = []
+-- `PRec` of a declared record is rewritten to `PCon` (`rewriteProgramRecPats`),
+-- `POr` is expanded into arm candidates (`lowerOrArms`) and desugar lifts `PAnn`
+-- out, so none of them reaches a backend.
+patVars (PRng _ _ _ | PRec _ _ _ | POr _ | PAnn _ _) = []
 
 -- ── operator tables (both modes) ─────────────────────────────────────────────
 
@@ -13097,7 +13100,7 @@ hasFamilyW prog symbol tag =
 (DFunDef false "patVars" ((PCon "PCons" (PVar "h") (PVar "t"))) (EBinOp "++" (EApp (EVar "patVars") (EVar "h")) (EApp (EVar "patVars") (EVar "t"))))
 (DFunDef false "patVars" ((PCon "PList" (PVar "ps"))) (EApp (EApp (EVar "flatMap") (EVar "patVars")) (EVar "ps")))
 (DFunDef false "patVars" ((PCon "PAs" (PVar "x") PWild PWild (PVar "p"))) (EBinOp "::" (EVar "x") (EApp (EVar "patVars") (EVar "p"))))
-(DFunDef false "patVars" (PWild) (EListLit))
+(DFunDef false "patVars" ((POr (PCon "PRng" PWild PWild PWild) (PCon "PRec" PWild PWild PWild) (PCon "POr" PWild) (PCon "PAnn" PWild PWild))) (EListLit))
 (DTypeSig false "wasmBinOp64" (TyFun (TyCon "WasmEmit") (TyFun (TyCon "String") (TyCon "String"))))
 (DFunDef false "wasmBinOp64" (PWild (PLit (LString "+"))) (ELit (LString "i64.add")))
 (DFunDef false "wasmBinOp64" (PWild (PLit (LString "-"))) (ELit (LString "i64.sub")))
@@ -15153,7 +15156,7 @@ hasFamilyW prog symbol tag =
 (DFunDef false "patVars" ((PCon "PCons" (PVar "h") (PVar "t"))) (EBinOp "++" (EApp (EVar "patVars") (EVar "h")) (EApp (EVar "patVars") (EVar "t"))))
 (DFunDef false "patVars" ((PCon "PList" (PVar "ps"))) (EApp (EApp (EDictApp "flatMap") (EVar "patVars")) (EVar "ps")))
 (DFunDef false "patVars" ((PCon "PAs" (PVar "x") PWild PWild (PVar "p"))) (EBinOp "::" (EVar "x") (EApp (EVar "patVars") (EVar "p"))))
-(DFunDef false "patVars" (PWild) (EListLit))
+(DFunDef false "patVars" ((POr (PCon "PRng" PWild PWild PWild) (PCon "PRec" PWild PWild PWild) (PCon "POr" PWild) (PCon "PAnn" PWild PWild))) (EListLit))
 (DTypeSig false "wasmBinOp64" (TyFun (TyCon "WasmEmit") (TyFun (TyCon "String") (TyCon "String"))))
 (DFunDef false "wasmBinOp64" (PWild (PLit (LString "+"))) (ELit (LString "i64.add")))
 (DFunDef false "wasmBinOp64" (PWild (PLit (LString "-"))) (ELit (LString "i64.sub")))

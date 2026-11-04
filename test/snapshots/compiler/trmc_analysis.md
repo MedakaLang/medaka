@@ -1,5 +1,5 @@
 # META
-source_lines=1763
+source_lines=1766
 stages=DESUGAR,MARK
 # SOURCE
 -- TRMC eligibility analysis (TRMC-DESIGN.md §"Phase 1 scope" + §"Backend portability").
@@ -199,7 +199,10 @@ patVars (PCons h t) = patVars h ++ patVars t
 patVars (PTuple ps) = patVarsList ps
 patVars (PList ps) = patVarsList ps
 patVars (PAs x _ _ p) = x :: patVars p
-patVars _ = []
+-- `PRec` of a declared record is rewritten to `PCon` (`rewriteProgramRecPats`),
+-- `POr` is expanded into arm candidates (`lowerOrArms`) and desugar lifts `PAnn`
+-- out, so none of them reaches a backend.
+patVars (PWild | PLit _ | PRng _ _ _ | PRec _ _ _ | POr _ | PAnn _ _) = []
 
 export
 patVarsList : List Pat -> List String
@@ -1845,7 +1848,7 @@ isTrmcImpl v method key = omHasKey (lenKey method ++ key) v.eligibleImpls
 (DFunDef false "patVars" ((PCon "PTuple" (PVar "ps"))) (EApp (EVar "patVarsList") (EVar "ps")))
 (DFunDef false "patVars" ((PCon "PList" (PVar "ps"))) (EApp (EVar "patVarsList") (EVar "ps")))
 (DFunDef false "patVars" ((PCon "PAs" (PVar "x") PWild PWild (PVar "p"))) (EBinOp "::" (EVar "x") (EApp (EVar "patVars") (EVar "p"))))
-(DFunDef false "patVars" (PWild) (EListLit))
+(DFunDef false "patVars" ((POr (PCon "PWild") (PCon "PLit" PWild) (PCon "PRng" PWild PWild PWild) (PCon "PRec" PWild PWild PWild) (PCon "POr" PWild) (PCon "PAnn" PWild PWild))) (EListLit))
 (DTypeSig true "patVarsList" (TyFun (TyApp (TyCon "List") (TyCon "Pat")) (TyApp (TyCon "List") (TyCon "String"))))
 (DFunDef false "patVarsList" ((PList)) (EListLit))
 (DFunDef false "patVarsList" ((PCons (PVar "p") (PVar "rest"))) (EBinOp "++" (EApp (EVar "patVars") (EVar "p")) (EApp (EVar "patVarsList") (EVar "rest"))))
@@ -2318,7 +2321,7 @@ isTrmcImpl v method key = omHasKey (lenKey method ++ key) v.eligibleImpls
 (DFunDef false "patVars" ((PCon "PTuple" (PVar "ps"))) (EApp (EVar "patVarsList") (EVar "ps")))
 (DFunDef false "patVars" ((PCon "PList" (PVar "ps"))) (EApp (EVar "patVarsList") (EVar "ps")))
 (DFunDef false "patVars" ((PCon "PAs" (PVar "x") PWild PWild (PVar "p"))) (EBinOp "::" (EVar "x") (EApp (EVar "patVars") (EVar "p"))))
-(DFunDef false "patVars" (PWild) (EListLit))
+(DFunDef false "patVars" ((POr (PCon "PWild") (PCon "PLit" PWild) (PCon "PRng" PWild PWild PWild) (PCon "PRec" PWild PWild PWild) (PCon "POr" PWild) (PCon "PAnn" PWild PWild))) (EListLit))
 (DTypeSig true "patVarsList" (TyFun (TyApp (TyCon "List") (TyCon "Pat")) (TyApp (TyCon "List") (TyCon "String"))))
 (DFunDef false "patVarsList" ((PList)) (EListLit))
 (DFunDef false "patVarsList" ((PCons (PVar "p") (PVar "rest"))) (EBinOp "++" (EApp (EVar "patVars") (EVar "p")) (EApp (EVar "patVarsList") (EVar "rest"))))

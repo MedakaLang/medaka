@@ -686,7 +686,11 @@ argPerformableOccs mctx scope perf (TyApp a b) = match tyAppSpine (TyApp a b)
     argPerformableOccs mctx scope perf a ++ argPerformableOccs mctx scope perf b
 argPerformableOccs mctx scope perf (TyConstrained _ t) =
   argPerformableOccs mctx scope perf t
-argPerformableOccs _mctx _ _ _ = []
+argPerformableOccs mctx scope perf (TyNamed _ t _) =
+  argPerformableOccs mctx scope perf t
+argPerformableOccs mctx scope perf (TyQual t _ _) =
+  argPerformableOccs mctx scope perf t
+argPerformableOccs _mctx _ _ (TyCon {  } | TyVar _ | TyAuth _ _) = []
 
 -- one ctor node: its bare row-kinded slots (if performable) + recurse the args
 --
@@ -1422,7 +1426,9 @@ effVarChargedOccs gctx (TyFun a b) =
   effVarChargedOccs gctx a ++ effVarChargedOccs gctx b
 effVarChargedOccs gctx (TyTuple ts) = flatMap (effVarChargedOccs gctx) ts
 effVarChargedOccs gctx (TyConstrained _ t) = effVarChargedOccs gctx t
-effVarChargedOccs _gctx _ = []
+effVarChargedOccs gctx (TyNamed _ t _) = effVarChargedOccs gctx t
+effVarChargedOccs gctx (TyQual t _ _) = effVarChargedOccs gctx t
+effVarChargedOccs _gctx (TyCon {  } | TyVar _ | TyRow _ _ _ | TyAuth _ _) = []
 
 checkEffVarAtoms : ModuleCtx ->
   String ->
@@ -1472,7 +1478,9 @@ effVarOccAtoms gctx (TyApp a b) = effVarOccAtoms gctx a ++ effVarOccAtoms gctx b
 effVarOccAtoms gctx (TyFun a b) = effVarOccAtoms gctx a ++ effVarOccAtoms gctx b
 effVarOccAtoms gctx (TyTuple ts) = flatMap (effVarOccAtoms gctx) ts
 effVarOccAtoms gctx (TyConstrained _ t) = effVarOccAtoms gctx t
-effVarOccAtoms _gctx _ = []
+effVarOccAtoms gctx (TyNamed _ t _) = effVarOccAtoms gctx t
+effVarOccAtoms gctx (TyQual t _ _) = effVarOccAtoms gctx t
+effVarOccAtoms _gctx (TyCon {  } | TyVar _ | TyAuth _ _) = []
 
 export
 memberEffectRoots : ScopedMember -> Map Int Unit -> Map Int Unit

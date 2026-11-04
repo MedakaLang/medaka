@@ -1,5 +1,5 @@
 # META
-source_lines=2233
+source_lines=2236
 stages=DESUGAR,MARK
 # SOURCE
 -- tc_solve: one solving judgment over one goal store, above the entailment core: the exact-return
@@ -1904,7 +1904,10 @@ walkDispatch typarams (TyApp a b) m = match peelQual m
 walkDispatch typarams (TyTuple ts) m = match tupleSpine m
   Some ms => flatMap (p => walkDispatch typarams (fst p) (snd p)) (zip ts ms)
   _ => []
-walkDispatch _ _ _ = []
+walkDispatch typarams (TyNamed _ t _) m = walkDispatch typarams t m
+walkDispatch typarams (TyQual t _ _) m = walkDispatch typarams t m
+walkDispatch _ (TyCon {  } | TyEffect _ _ _ | TyConstrained _ _ | TyRow _ _ _ | TyAuth _ _) _ =
+  []
 
 -- one mono per interface param, in declaration order; if ANY param has no
 -- recovered binding the whole obligation is abandoned (return [] → caller skips).
@@ -2574,7 +2577,9 @@ methodReturnProbeOblIfaces (obl :: rest) =
 (DFunDef false "walkDispatch" ((PVar "typarams") (PCon "TyFun" (PVar "a") (PVar "b")) (PVar "m")) (EMatch (EApp (EVar "peelQual") (EVar "m")) (arm (PCon "TFun" (PVar "ma") PWild (PVar "mb")) () (EBinOp "++" (EApp (EApp (EApp (EVar "walkDispatch") (EVar "typarams")) (EApp (EVar "stripTyConstraints") (EVar "a"))) (EVar "ma")) (EApp (EApp (EApp (EVar "walkDispatch") (EVar "typarams")) (EApp (EVar "stripTyConstraints") (EVar "b"))) (EVar "mb")))) (arm PWild () (EListLit))))
 (DFunDef false "walkDispatch" ((PVar "typarams") (PCon "TyApp" (PVar "a") (PVar "b")) (PVar "m")) (EMatch (EApp (EVar "peelQual") (EVar "m")) (arm (PCon "TApp" (PVar "ma") (PVar "mb")) () (EBinOp "++" (EApp (EApp (EApp (EVar "walkDispatch") (EVar "typarams")) (EVar "a")) (EVar "ma")) (EApp (EApp (EApp (EVar "walkDispatch") (EVar "typarams")) (EVar "b")) (EVar "mb")))) (arm PWild () (EListLit))))
 (DFunDef false "walkDispatch" ((PVar "typarams") (PCon "TyTuple" (PVar "ts")) (PVar "m")) (EMatch (EApp (EVar "tupleSpine") (EVar "m")) (arm (PCon "Some" (PVar "ms")) () (EApp (EApp (EVar "flatMap") (ELam ((PVar "p")) (EApp (EApp (EApp (EVar "walkDispatch") (EVar "typarams")) (EApp (EVar "fst") (EVar "p"))) (EApp (EVar "snd") (EVar "p"))))) (EApp (EApp (EVar "zip") (EVar "ts")) (EVar "ms")))) (arm PWild () (EListLit))))
-(DFunDef false "walkDispatch" (PWild PWild PWild) (EListLit))
+(DFunDef false "walkDispatch" ((PVar "typarams") (PCon "TyNamed" PWild (PVar "t") PWild) (PVar "m")) (EApp (EApp (EApp (EVar "walkDispatch") (EVar "typarams")) (EVar "t")) (EVar "m")))
+(DFunDef false "walkDispatch" ((PVar "typarams") (PCon "TyQual" (PVar "t") PWild PWild) (PVar "m")) (EApp (EApp (EApp (EVar "walkDispatch") (EVar "typarams")) (EVar "t")) (EVar "m")))
+(DFunDef false "walkDispatch" (PWild (POr (PRec "TyCon" () false) (PCon "TyEffect" PWild PWild PWild) (PCon "TyConstrained" PWild PWild) (PCon "TyRow" PWild PWild PWild) (PCon "TyAuth" PWild PWild)) PWild) (EListLit))
 (DTypeSig true "collectByParam" (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "Mono"))) (TyApp (TyCon "List") (TyCon "Mono")))))
 (DFunDef false "collectByParam" ((PVar "typarams") (PVar "pairs")) (EMatch (EApp (EApp (EVar "collectByParamGo") (EVar "typarams")) (EVar "pairs")) (arm (PCon "None") () (EListLit)) (arm (PCon "Some" (PVar "ms")) () (EVar "ms"))))
 (DTypeSig false "collectByParamGo" (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "Mono"))) (TyApp (TyCon "Option") (TyApp (TyCon "List") (TyCon "Mono"))))))
@@ -2984,7 +2989,9 @@ methodReturnProbeOblIfaces (obl :: rest) =
 (DFunDef false "walkDispatch" ((PVar "typarams") (PCon "TyFun" (PVar "a") (PVar "b")) (PVar "m")) (EMatch (EApp (EVar "peelQual") (EVar "m")) (arm (PCon "TFun" (PVar "ma") PWild (PVar "mb")) () (EBinOp "++" (EApp (EApp (EApp (EVar "walkDispatch") (EVar "typarams")) (EApp (EVar "stripTyConstraints") (EVar "a"))) (EVar "ma")) (EApp (EApp (EApp (EVar "walkDispatch") (EVar "typarams")) (EApp (EVar "stripTyConstraints") (EVar "b"))) (EVar "mb")))) (arm PWild () (EListLit))))
 (DFunDef false "walkDispatch" ((PVar "typarams") (PCon "TyApp" (PVar "a") (PVar "b")) (PVar "m")) (EMatch (EApp (EVar "peelQual") (EVar "m")) (arm (PCon "TApp" (PVar "ma") (PVar "mb")) () (EBinOp "++" (EApp (EApp (EApp (EVar "walkDispatch") (EVar "typarams")) (EVar "a")) (EVar "ma")) (EApp (EApp (EApp (EVar "walkDispatch") (EVar "typarams")) (EVar "b")) (EVar "mb")))) (arm PWild () (EListLit))))
 (DFunDef false "walkDispatch" ((PVar "typarams") (PCon "TyTuple" (PVar "ts")) (PVar "m")) (EMatch (EApp (EVar "tupleSpine") (EVar "m")) (arm (PCon "Some" (PVar "ms")) () (EApp (EApp (EDictApp "flatMap") (ELam ((PVar "p")) (EApp (EApp (EApp (EVar "walkDispatch") (EVar "typarams")) (EApp (EVar "fst") (EVar "p"))) (EApp (EVar "snd") (EVar "p"))))) (EApp (EApp (EVar "zip") (EVar "ts")) (EVar "ms")))) (arm PWild () (EListLit))))
-(DFunDef false "walkDispatch" (PWild PWild PWild) (EListLit))
+(DFunDef false "walkDispatch" ((PVar "typarams") (PCon "TyNamed" PWild (PVar "t") PWild) (PVar "m")) (EApp (EApp (EApp (EVar "walkDispatch") (EVar "typarams")) (EVar "t")) (EVar "m")))
+(DFunDef false "walkDispatch" ((PVar "typarams") (PCon "TyQual" (PVar "t") PWild PWild) (PVar "m")) (EApp (EApp (EApp (EVar "walkDispatch") (EVar "typarams")) (EVar "t")) (EVar "m")))
+(DFunDef false "walkDispatch" (PWild (POr (PRec "TyCon" () false) (PCon "TyEffect" PWild PWild PWild) (PCon "TyConstrained" PWild PWild) (PCon "TyRow" PWild PWild PWild) (PCon "TyAuth" PWild PWild)) PWild) (EListLit))
 (DTypeSig true "collectByParam" (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "Mono"))) (TyApp (TyCon "List") (TyCon "Mono")))))
 (DFunDef false "collectByParam" ((PVar "typarams") (PVar "pairs")) (EMatch (EApp (EApp (EVar "collectByParamGo") (EVar "typarams")) (EVar "pairs")) (arm (PCon "None") () (EListLit)) (arm (PCon "Some" (PVar "ms")) () (EVar "ms"))))
 (DTypeSig false "collectByParamGo" (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "Mono"))) (TyApp (TyCon "Option") (TyApp (TyCon "List") (TyCon "Mono"))))))
