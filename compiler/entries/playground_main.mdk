@@ -132,7 +132,7 @@ import json.{
   stringify,
 }
 import support.path.{dirOf, joinPath}
-import support.ordmap.{OrdMap, omEmpty}
+import support.ordmap.{OrdMap, omEmpty, omInsert, omHasKey}
 import driver.build_cmd.{loadPreludeInterface, shippedInputsFor}
 import support.char.{isIdentChar, isDigit}
 import entries.entry_support.{
@@ -882,7 +882,7 @@ queryResult isHover rsrc csrc tsrc line col = match parseResult tsrc
     if isHover then
       hoverResult tsrc line col env
     else
-      jArray (filterCompletions (prefixBefore tsrc line col) [] env)
+      jArray (filterCompletions (prefixBefore tsrc line col) omEmpty env)
 
 hoverResult : String -> Int -> Int -> List (String, PubScheme) -> Json
 hoverResult src line col env = match identifierAt src line col
@@ -982,19 +982,15 @@ lookupSchemeL name ((n, s) :: rest)
   | name == n = Some s
   | otherwise = lookupSchemeL name rest
 
-anyName : List String -> String -> Bool
-anyName [] _ = False
-anyName (x :: xs) name = x == name || anyName xs name
-
 filterCompletions : String ->
-  List String ->
+  OrdMap Unit ->
   List (String, PubScheme) ->
   List Json
 filterCompletions _ _ [] = []
 filterCompletions prefix seen ((n, p) :: rest)
-  | startsWith prefix n && not (anyName seen n) =
+  | startsWith prefix n && not (omHasKey n seen) =
     jCompletionItem n (ppPubScheme p)
-      :: filterCompletions prefix (n :: seen) rest
+      :: filterCompletions prefix (omInsert n () seen) rest
   | otherwise = filterCompletions prefix seen rest
 
 jCompletionItem : String -> String -> Json

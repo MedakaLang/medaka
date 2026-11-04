@@ -1,5 +1,5 @@
 # META
-source_lines=1754
+source_lines=1763
 stages=DESUGAR,MARK
 # SOURCE
 -- TRMC eligibility analysis (TRMC-DESIGN.md §"Phase 1 scope" + §"Backend portability").
@@ -80,87 +80,94 @@ lengthS : List a -> Int
 lengthS [] = 0
 lengthS (_ :: xs) = 1 + lengthS xs
 
+-- the names [ex] reads that the list [b] does not bind
 export
 freeVars : List String -> CExpr -> List String
-freeVars _ (CLit _) = []
-freeVars b (CVar x _) = if contains x b then [] else [x]
-freeVars b (CApp f args _) = freeVars b f ++ flatMap (freeVars b) args
-freeVars b (CLam ps body) = freeVars (patVarNames ps ++ b) body
-freeVars b (CLet recF pat e1 e2) =
-  let b2 = patVars pat ++ b
-  let fe1 = if recF then freeVars b2 e1 else freeVars b e1
-  fe1 ++ freeVars b2 e2
-freeVars b (CLetGroup binds body) =
-  let b2 = bindNames binds ++ b
-  freeVarsBinds b2 binds ++ freeVars b2 body
-freeVars b (CBlock stmts) = freeVarsStmts b stmts
-freeVars b (CIf c t f) = freeVars b c ++ freeVars b t ++ freeVars b f
-freeVars b (CBinPrim _ l r _ _) = freeVars b l ++ freeVars b r
-freeVars b (CUnOp _ x) = freeVars b x
-freeVars b (CMatch scrut arms) = freeVars b scrut ++ freeVarsArms b arms
-freeVars b (CDecision scrut arms _) = freeVars b scrut ++ freeVarsArms b arms
-freeVars b (CTuple es) = freeVarsList b es
-freeVars b (CList es) = freeVarsList b es
-freeVars b (CRangeList lo hi _) = freeVars b lo ++ freeVars b hi
-freeVars b (CRecord _ fields) = freeVarsFields b fields
-freeVars b (CFieldAccess ex _ _ _) = freeVars b ex
-freeVars b (CRecordUpdate _ base updates) =
-  freeVars b base ++ freeVarsFields b updates
-freeVars b (CVariantUpdate _ base updates) =
-  freeVars b base ++ freeVarsFields b updates
-freeVars b (CArray es) = freeVarsList b es
-freeVars b (CRangeArray lo hi _) = freeVars b lo ++ freeVars b hi
-freeVars b (CIndex a i) = freeVars b a ++ freeVars b i
-freeVars b (CSlice a lo hi _) = freeVars b a ++ freeVars b lo ++ freeVars b hi
-freeVars b (CStringIndex a i) = freeVars b a ++ freeVars b i
-freeVars b (CStringSlice a lo hi _) =
-  freeVars b a ++ freeVars b lo ++ freeVars b hi
-freeVars b (CListIndex a i) = freeVars b a ++ freeVars b i
-freeVars b (CListSlice a lo hi _) =
-  freeVars b a ++ freeVars b lo ++ freeVars b hi
-freeVars b (CMethod _ (MethodEvidence _ _ route implRoutes methRoutes)) =
+freeVars b ex = freeVarsIn (omFromNames b omEmpty) ex
+
+-- [freeVars] over a set of bound names: membership is one lookup, not a list scan
+freeVarsIn : OrdMap Unit -> CExpr -> List String
+freeVarsIn _ (CLit _) = []
+freeVarsIn b (CVar x _) = if omHasKey x b then [] else [x]
+freeVarsIn b (CApp f args _) = freeVarsIn b f ++ flatMap (freeVarsIn b) args
+freeVarsIn b (CLam ps body) = freeVarsIn (omFromNames (patVarNames ps) b) body
+freeVarsIn b (CLet recF pat e1 e2) =
+  let b2 = omFromNames (patVars pat) b
+  let fe1 = if recF then freeVarsIn b2 e1 else freeVarsIn b e1
+  fe1 ++ freeVarsIn b2 e2
+freeVarsIn b (CLetGroup binds body) =
+  let b2 = omFromNames (bindNames binds) b
+  freeVarsBinds b2 binds ++ freeVarsIn b2 body
+freeVarsIn b (CBlock stmts) = freeVarsStmts b stmts
+freeVarsIn b (CIf c t f) = freeVarsIn b c ++ freeVarsIn b t ++ freeVarsIn b f
+freeVarsIn b (CBinPrim _ l r _ _) = freeVarsIn b l ++ freeVarsIn b r
+freeVarsIn b (CUnOp _ x) = freeVarsIn b x
+freeVarsIn b (CMatch scrut arms) = freeVarsIn b scrut ++ freeVarsArms b arms
+freeVarsIn b (CDecision scrut arms _) =
+  freeVarsIn b scrut ++ freeVarsArms b arms
+freeVarsIn b (CTuple es) = freeVarsList b es
+freeVarsIn b (CList es) = freeVarsList b es
+freeVarsIn b (CRangeList lo hi _) = freeVarsIn b lo ++ freeVarsIn b hi
+freeVarsIn b (CRecord _ fields) = freeVarsFields b fields
+freeVarsIn b (CFieldAccess ex _ _ _) = freeVarsIn b ex
+freeVarsIn b (CRecordUpdate _ base updates) =
+  freeVarsIn b base ++ freeVarsFields b updates
+freeVarsIn b (CVariantUpdate _ base updates) =
+  freeVarsIn b base ++ freeVarsFields b updates
+freeVarsIn b (CArray es) = freeVarsList b es
+freeVarsIn b (CRangeArray lo hi _) = freeVarsIn b lo ++ freeVarsIn b hi
+freeVarsIn b (CIndex a i) = freeVarsIn b a ++ freeVarsIn b i
+freeVarsIn b (CSlice a lo hi _) =
+  freeVarsIn b a ++ freeVarsIn b lo ++ freeVarsIn b hi
+freeVarsIn b (CStringIndex a i) = freeVarsIn b a ++ freeVarsIn b i
+freeVarsIn b (CStringSlice a lo hi _) =
+  freeVarsIn b a ++ freeVarsIn b lo ++ freeVarsIn b hi
+freeVarsIn b (CListIndex a i) = freeVarsIn b a ++ freeVarsIn b i
+freeVarsIn b (CListSlice a lo hi _) =
+  freeVarsIn b a ++ freeVarsIn b lo ++ freeVarsIn b hi
+freeVarsIn b (CMethod _ (MethodEvidence _ _ route implRoutes methRoutes)) =
   freeGivens b (route :: implRoutes ++ methRoutes)
 -- The head names a local closure when a let binder abstracted dictionaries.
-freeVars b (CDict n routes) =
-  (if contains n b then [] else [n]) ++ freeGivens b routes
-freeVars _ _ = []
+freeVarsIn b (CDict n routes) =
+  (if omHasKey n b then [] else [n]) ++ freeGivens b routes
+freeVarsIn _ _ = []
 
 -- the given dictionary names [routes] read that [b] does not bind
 export
-freeGivens : List String -> List Route -> List String
+freeGivens : OrdMap Unit -> List Route -> List String
 freeGivens b routes =
-  filterList (d => not (contains d b)) (flatMap givenNames routes)
+  filterList (d => not (omHasKey d b)) (flatMap givenNames routes)
 
 export
-freeVarsFields : List String -> List CField -> List String
+freeVarsFields : OrdMap Unit -> List CField -> List String
 freeVarsFields _ [] = []
 freeVarsFields b ((CField _ _ ex) :: rest) =
-  freeVars b ex ++ freeVarsFields b rest
+  freeVarsIn b ex ++ freeVarsFields b rest
 
 export
-freeVarsList : List String -> List CExpr -> List String
+freeVarsList : OrdMap Unit -> List CExpr -> List String
 freeVarsList _ [] = []
-freeVarsList b (e :: rest) = freeVars b e ++ freeVarsList b rest
+freeVarsList b (e :: rest) = freeVarsIn b e ++ freeVarsList b rest
 
 export
-freeVarsArms : List String -> List CArm -> List String
+freeVarsArms : OrdMap Unit -> List CArm -> List String
 freeVarsArms _ [] = []
 freeVarsArms b ((CArm pat _ body) :: rest) =
-  freeVars (patVars pat ++ b) body ++ freeVarsArms b rest
+  freeVarsIn (omFromNames (patVars pat) b) body ++ freeVarsArms b rest
 freeVarsArms b ((CArmAlt _ _ _) :: rest) = freeVarsArms b rest
 
 export
-freeVarsStmts : List String -> List CStmt -> List String
+freeVarsStmts : OrdMap Unit -> List CStmt -> List String
 freeVarsStmts _ [] = []
-freeVarsStmts b ((CSExpr ex) :: rest) = freeVars b ex ++ freeVarsStmts b rest
+freeVarsStmts b ((CSExpr ex) :: rest) = freeVarsIn b ex ++ freeVarsStmts b rest
 freeVarsStmts b ((CSLet _ pat ex) :: rest) =
-  freeVars b ex ++ freeVarsStmts (patVars pat ++ b) rest
+  freeVarsIn b ex ++ freeVarsStmts (omFromNames (patVars pat) b) rest
 freeVarsStmts b ((CSAssign _ ex) :: rest) =
-  freeVars b ex ++ freeVarsStmts b rest
+  freeVarsIn b ex ++ freeVarsStmts b rest
 freeVarsStmts b (_ :: rest) = freeVarsStmts b rest
 
 export
-freeVarsBinds : List String -> List CBind -> List String
+freeVarsBinds : OrdMap Unit -> List CBind -> List String
 freeVarsBinds _ [] = []
 freeVarsBinds b ((CBind _ clauses _ _) :: rest) =
   freeVarsClauses b clauses ++ freeVarsBinds b rest
@@ -170,10 +177,10 @@ freeVarsBinds b ((CBind _ clauses _ _) :: rest) =
 -- outer value or dictionary mentioned by any clause is free in the group.
 -- An enclosing lambda must capture these names even when the group body does
 -- not refer to them directly.
-freeVarsClauses : List String -> List CClause -> List String
+freeVarsClauses : OrdMap Unit -> List CClause -> List String
 freeVarsClauses _ [] = []
 freeVarsClauses b ((CClause pats body) :: rest) =
-  freeVars (patVarNames pats ++ b) body ++ freeVarsClauses b rest
+  freeVarsIn (omFromNames (patVarNames pats) b) body ++ freeVarsClauses b rest
 
 export
 bindNames : List CBind -> List String
@@ -1184,6 +1191,8 @@ dispEntryRefs memberSet innerSet (name, heads) =
 dispBfs : OrdMap (List String) -> List String -> List String -> List String
 dispBfs _ [] visited = visited
 dispBfs headsIx (h :: rest) visited =
+  -- Bound: `visited` only grows while `listLen visited` is at most 256; past that every step skips.
+  -- lint-disable-next-line rule-list-as-set
   if contains h visited || listLen visited > 256 then
     dispBfs headsIx rest visited
   else
@@ -1769,60 +1778,62 @@ isTrmcImpl v method key = omHasKey (lenKey method ++ key) v.eligibleImpls
 (DFunDef false "lengthS" ((PList)) (ELit (LInt 0)))
 (DFunDef false "lengthS" ((PCons PWild (PVar "xs"))) (EBinOp "+" (ELit (LInt 1)) (EApp (EVar "lengthS") (EVar "xs"))))
 (DTypeSig true "freeVars" (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyCon "CExpr") (TyApp (TyCon "List") (TyCon "String")))))
-(DFunDef false "freeVars" (PWild (PCon "CLit" PWild)) (EListLit))
-(DFunDef false "freeVars" ((PVar "b") (PCon "CVar" (PVar "x") PWild)) (EIf (EApp (EApp (EVar "contains") (EVar "x")) (EVar "b")) (EListLit) (EListLit (EVar "x"))))
-(DFunDef false "freeVars" ((PVar "b") (PCon "CApp" (PVar "f") (PVar "args") PWild)) (EBinOp "++" (EApp (EApp (EVar "freeVars") (EVar "b")) (EVar "f")) (EApp (EApp (EVar "flatMap") (EApp (EVar "freeVars") (EVar "b"))) (EVar "args"))))
-(DFunDef false "freeVars" ((PVar "b") (PCon "CLam" (PVar "ps") (PVar "body"))) (EApp (EApp (EVar "freeVars") (EBinOp "++" (EApp (EVar "patVarNames") (EVar "ps")) (EVar "b"))) (EVar "body")))
-(DFunDef false "freeVars" ((PVar "b") (PCon "CLet" (PVar "recF") (PVar "pat") (PVar "e1") (PVar "e2"))) (EBlock (DoLet false false (PVar "b2") (EBinOp "++" (EApp (EVar "patVars") (EVar "pat")) (EVar "b"))) (DoLet false false (PVar "fe1") (EIf (EVar "recF") (EApp (EApp (EVar "freeVars") (EVar "b2")) (EVar "e1")) (EApp (EApp (EVar "freeVars") (EVar "b")) (EVar "e1")))) (DoExpr (EBinOp "++" (EVar "fe1") (EApp (EApp (EVar "freeVars") (EVar "b2")) (EVar "e2"))))))
-(DFunDef false "freeVars" ((PVar "b") (PCon "CLetGroup" (PVar "binds") (PVar "body"))) (EBlock (DoLet false false (PVar "b2") (EBinOp "++" (EApp (EVar "bindNames") (EVar "binds")) (EVar "b"))) (DoExpr (EBinOp "++" (EApp (EApp (EVar "freeVarsBinds") (EVar "b2")) (EVar "binds")) (EApp (EApp (EVar "freeVars") (EVar "b2")) (EVar "body"))))))
-(DFunDef false "freeVars" ((PVar "b") (PCon "CBlock" (PVar "stmts"))) (EApp (EApp (EVar "freeVarsStmts") (EVar "b")) (EVar "stmts")))
-(DFunDef false "freeVars" ((PVar "b") (PCon "CIf" (PVar "c") (PVar "t") (PVar "f"))) (EBinOp "++" (EBinOp "++" (EApp (EApp (EVar "freeVars") (EVar "b")) (EVar "c")) (EApp (EApp (EVar "freeVars") (EVar "b")) (EVar "t"))) (EApp (EApp (EVar "freeVars") (EVar "b")) (EVar "f"))))
-(DFunDef false "freeVars" ((PVar "b") (PCon "CBinPrim" PWild (PVar "l") (PVar "r") PWild PWild)) (EBinOp "++" (EApp (EApp (EVar "freeVars") (EVar "b")) (EVar "l")) (EApp (EApp (EVar "freeVars") (EVar "b")) (EVar "r"))))
-(DFunDef false "freeVars" ((PVar "b") (PCon "CUnOp" PWild (PVar "x"))) (EApp (EApp (EVar "freeVars") (EVar "b")) (EVar "x")))
-(DFunDef false "freeVars" ((PVar "b") (PCon "CMatch" (PVar "scrut") (PVar "arms"))) (EBinOp "++" (EApp (EApp (EVar "freeVars") (EVar "b")) (EVar "scrut")) (EApp (EApp (EVar "freeVarsArms") (EVar "b")) (EVar "arms"))))
-(DFunDef false "freeVars" ((PVar "b") (PCon "CDecision" (PVar "scrut") (PVar "arms") PWild)) (EBinOp "++" (EApp (EApp (EVar "freeVars") (EVar "b")) (EVar "scrut")) (EApp (EApp (EVar "freeVarsArms") (EVar "b")) (EVar "arms"))))
-(DFunDef false "freeVars" ((PVar "b") (PCon "CTuple" (PVar "es"))) (EApp (EApp (EVar "freeVarsList") (EVar "b")) (EVar "es")))
-(DFunDef false "freeVars" ((PVar "b") (PCon "CList" (PVar "es"))) (EApp (EApp (EVar "freeVarsList") (EVar "b")) (EVar "es")))
-(DFunDef false "freeVars" ((PVar "b") (PCon "CRangeList" (PVar "lo") (PVar "hi") PWild)) (EBinOp "++" (EApp (EApp (EVar "freeVars") (EVar "b")) (EVar "lo")) (EApp (EApp (EVar "freeVars") (EVar "b")) (EVar "hi"))))
-(DFunDef false "freeVars" ((PVar "b") (PCon "CRecord" PWild (PVar "fields"))) (EApp (EApp (EVar "freeVarsFields") (EVar "b")) (EVar "fields")))
-(DFunDef false "freeVars" ((PVar "b") (PCon "CFieldAccess" (PVar "ex") PWild PWild PWild)) (EApp (EApp (EVar "freeVars") (EVar "b")) (EVar "ex")))
-(DFunDef false "freeVars" ((PVar "b") (PCon "CRecordUpdate" PWild (PVar "base") (PVar "updates"))) (EBinOp "++" (EApp (EApp (EVar "freeVars") (EVar "b")) (EVar "base")) (EApp (EApp (EVar "freeVarsFields") (EVar "b")) (EVar "updates"))))
-(DFunDef false "freeVars" ((PVar "b") (PCon "CVariantUpdate" PWild (PVar "base") (PVar "updates"))) (EBinOp "++" (EApp (EApp (EVar "freeVars") (EVar "b")) (EVar "base")) (EApp (EApp (EVar "freeVarsFields") (EVar "b")) (EVar "updates"))))
-(DFunDef false "freeVars" ((PVar "b") (PCon "CArray" (PVar "es"))) (EApp (EApp (EVar "freeVarsList") (EVar "b")) (EVar "es")))
-(DFunDef false "freeVars" ((PVar "b") (PCon "CRangeArray" (PVar "lo") (PVar "hi") PWild)) (EBinOp "++" (EApp (EApp (EVar "freeVars") (EVar "b")) (EVar "lo")) (EApp (EApp (EVar "freeVars") (EVar "b")) (EVar "hi"))))
-(DFunDef false "freeVars" ((PVar "b") (PCon "CIndex" (PVar "a") (PVar "i"))) (EBinOp "++" (EApp (EApp (EVar "freeVars") (EVar "b")) (EVar "a")) (EApp (EApp (EVar "freeVars") (EVar "b")) (EVar "i"))))
-(DFunDef false "freeVars" ((PVar "b") (PCon "CSlice" (PVar "a") (PVar "lo") (PVar "hi") PWild)) (EBinOp "++" (EBinOp "++" (EApp (EApp (EVar "freeVars") (EVar "b")) (EVar "a")) (EApp (EApp (EVar "freeVars") (EVar "b")) (EVar "lo"))) (EApp (EApp (EVar "freeVars") (EVar "b")) (EVar "hi"))))
-(DFunDef false "freeVars" ((PVar "b") (PCon "CStringIndex" (PVar "a") (PVar "i"))) (EBinOp "++" (EApp (EApp (EVar "freeVars") (EVar "b")) (EVar "a")) (EApp (EApp (EVar "freeVars") (EVar "b")) (EVar "i"))))
-(DFunDef false "freeVars" ((PVar "b") (PCon "CStringSlice" (PVar "a") (PVar "lo") (PVar "hi") PWild)) (EBinOp "++" (EBinOp "++" (EApp (EApp (EVar "freeVars") (EVar "b")) (EVar "a")) (EApp (EApp (EVar "freeVars") (EVar "b")) (EVar "lo"))) (EApp (EApp (EVar "freeVars") (EVar "b")) (EVar "hi"))))
-(DFunDef false "freeVars" ((PVar "b") (PCon "CListIndex" (PVar "a") (PVar "i"))) (EBinOp "++" (EApp (EApp (EVar "freeVars") (EVar "b")) (EVar "a")) (EApp (EApp (EVar "freeVars") (EVar "b")) (EVar "i"))))
-(DFunDef false "freeVars" ((PVar "b") (PCon "CListSlice" (PVar "a") (PVar "lo") (PVar "hi") PWild)) (EBinOp "++" (EBinOp "++" (EApp (EApp (EVar "freeVars") (EVar "b")) (EVar "a")) (EApp (EApp (EVar "freeVars") (EVar "b")) (EVar "lo"))) (EApp (EApp (EVar "freeVars") (EVar "b")) (EVar "hi"))))
-(DFunDef false "freeVars" ((PVar "b") (PCon "CMethod" PWild (PCon "MethodEvidence" PWild PWild (PVar "route") (PVar "implRoutes") (PVar "methRoutes")))) (EApp (EApp (EVar "freeGivens") (EVar "b")) (EBinOp "::" (EVar "route") (EBinOp "++" (EVar "implRoutes") (EVar "methRoutes")))))
-(DFunDef false "freeVars" ((PVar "b") (PCon "CDict" (PVar "n") (PVar "routes"))) (EBinOp "++" (EIf (EApp (EApp (EVar "contains") (EVar "n")) (EVar "b")) (EListLit) (EListLit (EVar "n"))) (EApp (EApp (EVar "freeGivens") (EVar "b")) (EVar "routes"))))
-(DFunDef false "freeVars" (PWild PWild) (EListLit))
-(DTypeSig true "freeGivens" (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyApp (TyCon "List") (TyCon "Route")) (TyApp (TyCon "List") (TyCon "String")))))
-(DFunDef false "freeGivens" ((PVar "b") (PVar "routes")) (EApp (EApp (EVar "filterList") (ELam ((PVar "d")) (EApp (EVar "not") (EApp (EApp (EVar "contains") (EVar "d")) (EVar "b"))))) (EApp (EApp (EVar "flatMap") (EVar "givenNames")) (EVar "routes"))))
-(DTypeSig true "freeVarsFields" (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyApp (TyCon "List") (TyCon "CField")) (TyApp (TyCon "List") (TyCon "String")))))
+(DFunDef false "freeVars" ((PVar "b") (PVar "ex")) (EApp (EApp (EVar "freeVarsIn") (EApp (EApp (EVar "omFromNames") (EVar "b")) (EVar "omEmpty"))) (EVar "ex")))
+(DTypeSig false "freeVarsIn" (TyFun (TyApp (TyCon "OrdMap") (TyCon "Unit")) (TyFun (TyCon "CExpr") (TyApp (TyCon "List") (TyCon "String")))))
+(DFunDef false "freeVarsIn" (PWild (PCon "CLit" PWild)) (EListLit))
+(DFunDef false "freeVarsIn" ((PVar "b") (PCon "CVar" (PVar "x") PWild)) (EIf (EApp (EApp (EVar "omHasKey") (EVar "x")) (EVar "b")) (EListLit) (EListLit (EVar "x"))))
+(DFunDef false "freeVarsIn" ((PVar "b") (PCon "CApp" (PVar "f") (PVar "args") PWild)) (EBinOp "++" (EApp (EApp (EVar "freeVarsIn") (EVar "b")) (EVar "f")) (EApp (EApp (EVar "flatMap") (EApp (EVar "freeVarsIn") (EVar "b"))) (EVar "args"))))
+(DFunDef false "freeVarsIn" ((PVar "b") (PCon "CLam" (PVar "ps") (PVar "body"))) (EApp (EApp (EVar "freeVarsIn") (EApp (EApp (EVar "omFromNames") (EApp (EVar "patVarNames") (EVar "ps"))) (EVar "b"))) (EVar "body")))
+(DFunDef false "freeVarsIn" ((PVar "b") (PCon "CLet" (PVar "recF") (PVar "pat") (PVar "e1") (PVar "e2"))) (EBlock (DoLet false false (PVar "b2") (EApp (EApp (EVar "omFromNames") (EApp (EVar "patVars") (EVar "pat"))) (EVar "b"))) (DoLet false false (PVar "fe1") (EIf (EVar "recF") (EApp (EApp (EVar "freeVarsIn") (EVar "b2")) (EVar "e1")) (EApp (EApp (EVar "freeVarsIn") (EVar "b")) (EVar "e1")))) (DoExpr (EBinOp "++" (EVar "fe1") (EApp (EApp (EVar "freeVarsIn") (EVar "b2")) (EVar "e2"))))))
+(DFunDef false "freeVarsIn" ((PVar "b") (PCon "CLetGroup" (PVar "binds") (PVar "body"))) (EBlock (DoLet false false (PVar "b2") (EApp (EApp (EVar "omFromNames") (EApp (EVar "bindNames") (EVar "binds"))) (EVar "b"))) (DoExpr (EBinOp "++" (EApp (EApp (EVar "freeVarsBinds") (EVar "b2")) (EVar "binds")) (EApp (EApp (EVar "freeVarsIn") (EVar "b2")) (EVar "body"))))))
+(DFunDef false "freeVarsIn" ((PVar "b") (PCon "CBlock" (PVar "stmts"))) (EApp (EApp (EVar "freeVarsStmts") (EVar "b")) (EVar "stmts")))
+(DFunDef false "freeVarsIn" ((PVar "b") (PCon "CIf" (PVar "c") (PVar "t") (PVar "f"))) (EBinOp "++" (EBinOp "++" (EApp (EApp (EVar "freeVarsIn") (EVar "b")) (EVar "c")) (EApp (EApp (EVar "freeVarsIn") (EVar "b")) (EVar "t"))) (EApp (EApp (EVar "freeVarsIn") (EVar "b")) (EVar "f"))))
+(DFunDef false "freeVarsIn" ((PVar "b") (PCon "CBinPrim" PWild (PVar "l") (PVar "r") PWild PWild)) (EBinOp "++" (EApp (EApp (EVar "freeVarsIn") (EVar "b")) (EVar "l")) (EApp (EApp (EVar "freeVarsIn") (EVar "b")) (EVar "r"))))
+(DFunDef false "freeVarsIn" ((PVar "b") (PCon "CUnOp" PWild (PVar "x"))) (EApp (EApp (EVar "freeVarsIn") (EVar "b")) (EVar "x")))
+(DFunDef false "freeVarsIn" ((PVar "b") (PCon "CMatch" (PVar "scrut") (PVar "arms"))) (EBinOp "++" (EApp (EApp (EVar "freeVarsIn") (EVar "b")) (EVar "scrut")) (EApp (EApp (EVar "freeVarsArms") (EVar "b")) (EVar "arms"))))
+(DFunDef false "freeVarsIn" ((PVar "b") (PCon "CDecision" (PVar "scrut") (PVar "arms") PWild)) (EBinOp "++" (EApp (EApp (EVar "freeVarsIn") (EVar "b")) (EVar "scrut")) (EApp (EApp (EVar "freeVarsArms") (EVar "b")) (EVar "arms"))))
+(DFunDef false "freeVarsIn" ((PVar "b") (PCon "CTuple" (PVar "es"))) (EApp (EApp (EVar "freeVarsList") (EVar "b")) (EVar "es")))
+(DFunDef false "freeVarsIn" ((PVar "b") (PCon "CList" (PVar "es"))) (EApp (EApp (EVar "freeVarsList") (EVar "b")) (EVar "es")))
+(DFunDef false "freeVarsIn" ((PVar "b") (PCon "CRangeList" (PVar "lo") (PVar "hi") PWild)) (EBinOp "++" (EApp (EApp (EVar "freeVarsIn") (EVar "b")) (EVar "lo")) (EApp (EApp (EVar "freeVarsIn") (EVar "b")) (EVar "hi"))))
+(DFunDef false "freeVarsIn" ((PVar "b") (PCon "CRecord" PWild (PVar "fields"))) (EApp (EApp (EVar "freeVarsFields") (EVar "b")) (EVar "fields")))
+(DFunDef false "freeVarsIn" ((PVar "b") (PCon "CFieldAccess" (PVar "ex") PWild PWild PWild)) (EApp (EApp (EVar "freeVarsIn") (EVar "b")) (EVar "ex")))
+(DFunDef false "freeVarsIn" ((PVar "b") (PCon "CRecordUpdate" PWild (PVar "base") (PVar "updates"))) (EBinOp "++" (EApp (EApp (EVar "freeVarsIn") (EVar "b")) (EVar "base")) (EApp (EApp (EVar "freeVarsFields") (EVar "b")) (EVar "updates"))))
+(DFunDef false "freeVarsIn" ((PVar "b") (PCon "CVariantUpdate" PWild (PVar "base") (PVar "updates"))) (EBinOp "++" (EApp (EApp (EVar "freeVarsIn") (EVar "b")) (EVar "base")) (EApp (EApp (EVar "freeVarsFields") (EVar "b")) (EVar "updates"))))
+(DFunDef false "freeVarsIn" ((PVar "b") (PCon "CArray" (PVar "es"))) (EApp (EApp (EVar "freeVarsList") (EVar "b")) (EVar "es")))
+(DFunDef false "freeVarsIn" ((PVar "b") (PCon "CRangeArray" (PVar "lo") (PVar "hi") PWild)) (EBinOp "++" (EApp (EApp (EVar "freeVarsIn") (EVar "b")) (EVar "lo")) (EApp (EApp (EVar "freeVarsIn") (EVar "b")) (EVar "hi"))))
+(DFunDef false "freeVarsIn" ((PVar "b") (PCon "CIndex" (PVar "a") (PVar "i"))) (EBinOp "++" (EApp (EApp (EVar "freeVarsIn") (EVar "b")) (EVar "a")) (EApp (EApp (EVar "freeVarsIn") (EVar "b")) (EVar "i"))))
+(DFunDef false "freeVarsIn" ((PVar "b") (PCon "CSlice" (PVar "a") (PVar "lo") (PVar "hi") PWild)) (EBinOp "++" (EBinOp "++" (EApp (EApp (EVar "freeVarsIn") (EVar "b")) (EVar "a")) (EApp (EApp (EVar "freeVarsIn") (EVar "b")) (EVar "lo"))) (EApp (EApp (EVar "freeVarsIn") (EVar "b")) (EVar "hi"))))
+(DFunDef false "freeVarsIn" ((PVar "b") (PCon "CStringIndex" (PVar "a") (PVar "i"))) (EBinOp "++" (EApp (EApp (EVar "freeVarsIn") (EVar "b")) (EVar "a")) (EApp (EApp (EVar "freeVarsIn") (EVar "b")) (EVar "i"))))
+(DFunDef false "freeVarsIn" ((PVar "b") (PCon "CStringSlice" (PVar "a") (PVar "lo") (PVar "hi") PWild)) (EBinOp "++" (EBinOp "++" (EApp (EApp (EVar "freeVarsIn") (EVar "b")) (EVar "a")) (EApp (EApp (EVar "freeVarsIn") (EVar "b")) (EVar "lo"))) (EApp (EApp (EVar "freeVarsIn") (EVar "b")) (EVar "hi"))))
+(DFunDef false "freeVarsIn" ((PVar "b") (PCon "CListIndex" (PVar "a") (PVar "i"))) (EBinOp "++" (EApp (EApp (EVar "freeVarsIn") (EVar "b")) (EVar "a")) (EApp (EApp (EVar "freeVarsIn") (EVar "b")) (EVar "i"))))
+(DFunDef false "freeVarsIn" ((PVar "b") (PCon "CListSlice" (PVar "a") (PVar "lo") (PVar "hi") PWild)) (EBinOp "++" (EBinOp "++" (EApp (EApp (EVar "freeVarsIn") (EVar "b")) (EVar "a")) (EApp (EApp (EVar "freeVarsIn") (EVar "b")) (EVar "lo"))) (EApp (EApp (EVar "freeVarsIn") (EVar "b")) (EVar "hi"))))
+(DFunDef false "freeVarsIn" ((PVar "b") (PCon "CMethod" PWild (PCon "MethodEvidence" PWild PWild (PVar "route") (PVar "implRoutes") (PVar "methRoutes")))) (EApp (EApp (EVar "freeGivens") (EVar "b")) (EBinOp "::" (EVar "route") (EBinOp "++" (EVar "implRoutes") (EVar "methRoutes")))))
+(DFunDef false "freeVarsIn" ((PVar "b") (PCon "CDict" (PVar "n") (PVar "routes"))) (EBinOp "++" (EIf (EApp (EApp (EVar "omHasKey") (EVar "n")) (EVar "b")) (EListLit) (EListLit (EVar "n"))) (EApp (EApp (EVar "freeGivens") (EVar "b")) (EVar "routes"))))
+(DFunDef false "freeVarsIn" (PWild PWild) (EListLit))
+(DTypeSig true "freeGivens" (TyFun (TyApp (TyCon "OrdMap") (TyCon "Unit")) (TyFun (TyApp (TyCon "List") (TyCon "Route")) (TyApp (TyCon "List") (TyCon "String")))))
+(DFunDef false "freeGivens" ((PVar "b") (PVar "routes")) (EApp (EApp (EVar "filterList") (ELam ((PVar "d")) (EApp (EVar "not") (EApp (EApp (EVar "omHasKey") (EVar "d")) (EVar "b"))))) (EApp (EApp (EVar "flatMap") (EVar "givenNames")) (EVar "routes"))))
+(DTypeSig true "freeVarsFields" (TyFun (TyApp (TyCon "OrdMap") (TyCon "Unit")) (TyFun (TyApp (TyCon "List") (TyCon "CField")) (TyApp (TyCon "List") (TyCon "String")))))
 (DFunDef false "freeVarsFields" (PWild (PList)) (EListLit))
-(DFunDef false "freeVarsFields" ((PVar "b") (PCons (PCon "CField" PWild PWild (PVar "ex")) (PVar "rest"))) (EBinOp "++" (EApp (EApp (EVar "freeVars") (EVar "b")) (EVar "ex")) (EApp (EApp (EVar "freeVarsFields") (EVar "b")) (EVar "rest"))))
-(DTypeSig true "freeVarsList" (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyApp (TyCon "List") (TyCon "CExpr")) (TyApp (TyCon "List") (TyCon "String")))))
+(DFunDef false "freeVarsFields" ((PVar "b") (PCons (PCon "CField" PWild PWild (PVar "ex")) (PVar "rest"))) (EBinOp "++" (EApp (EApp (EVar "freeVarsIn") (EVar "b")) (EVar "ex")) (EApp (EApp (EVar "freeVarsFields") (EVar "b")) (EVar "rest"))))
+(DTypeSig true "freeVarsList" (TyFun (TyApp (TyCon "OrdMap") (TyCon "Unit")) (TyFun (TyApp (TyCon "List") (TyCon "CExpr")) (TyApp (TyCon "List") (TyCon "String")))))
 (DFunDef false "freeVarsList" (PWild (PList)) (EListLit))
-(DFunDef false "freeVarsList" ((PVar "b") (PCons (PVar "e") (PVar "rest"))) (EBinOp "++" (EApp (EApp (EVar "freeVars") (EVar "b")) (EVar "e")) (EApp (EApp (EVar "freeVarsList") (EVar "b")) (EVar "rest"))))
-(DTypeSig true "freeVarsArms" (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyApp (TyCon "List") (TyCon "CArm")) (TyApp (TyCon "List") (TyCon "String")))))
+(DFunDef false "freeVarsList" ((PVar "b") (PCons (PVar "e") (PVar "rest"))) (EBinOp "++" (EApp (EApp (EVar "freeVarsIn") (EVar "b")) (EVar "e")) (EApp (EApp (EVar "freeVarsList") (EVar "b")) (EVar "rest"))))
+(DTypeSig true "freeVarsArms" (TyFun (TyApp (TyCon "OrdMap") (TyCon "Unit")) (TyFun (TyApp (TyCon "List") (TyCon "CArm")) (TyApp (TyCon "List") (TyCon "String")))))
 (DFunDef false "freeVarsArms" (PWild (PList)) (EListLit))
-(DFunDef false "freeVarsArms" ((PVar "b") (PCons (PCon "CArm" (PVar "pat") PWild (PVar "body")) (PVar "rest"))) (EBinOp "++" (EApp (EApp (EVar "freeVars") (EBinOp "++" (EApp (EVar "patVars") (EVar "pat")) (EVar "b"))) (EVar "body")) (EApp (EApp (EVar "freeVarsArms") (EVar "b")) (EVar "rest"))))
+(DFunDef false "freeVarsArms" ((PVar "b") (PCons (PCon "CArm" (PVar "pat") PWild (PVar "body")) (PVar "rest"))) (EBinOp "++" (EApp (EApp (EVar "freeVarsIn") (EApp (EApp (EVar "omFromNames") (EApp (EVar "patVars") (EVar "pat"))) (EVar "b"))) (EVar "body")) (EApp (EApp (EVar "freeVarsArms") (EVar "b")) (EVar "rest"))))
 (DFunDef false "freeVarsArms" ((PVar "b") (PCons (PCon "CArmAlt" PWild PWild PWild) (PVar "rest"))) (EApp (EApp (EVar "freeVarsArms") (EVar "b")) (EVar "rest")))
-(DTypeSig true "freeVarsStmts" (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyApp (TyCon "List") (TyCon "CStmt")) (TyApp (TyCon "List") (TyCon "String")))))
+(DTypeSig true "freeVarsStmts" (TyFun (TyApp (TyCon "OrdMap") (TyCon "Unit")) (TyFun (TyApp (TyCon "List") (TyCon "CStmt")) (TyApp (TyCon "List") (TyCon "String")))))
 (DFunDef false "freeVarsStmts" (PWild (PList)) (EListLit))
-(DFunDef false "freeVarsStmts" ((PVar "b") (PCons (PCon "CSExpr" (PVar "ex")) (PVar "rest"))) (EBinOp "++" (EApp (EApp (EVar "freeVars") (EVar "b")) (EVar "ex")) (EApp (EApp (EVar "freeVarsStmts") (EVar "b")) (EVar "rest"))))
-(DFunDef false "freeVarsStmts" ((PVar "b") (PCons (PCon "CSLet" PWild (PVar "pat") (PVar "ex")) (PVar "rest"))) (EBinOp "++" (EApp (EApp (EVar "freeVars") (EVar "b")) (EVar "ex")) (EApp (EApp (EVar "freeVarsStmts") (EBinOp "++" (EApp (EVar "patVars") (EVar "pat")) (EVar "b"))) (EVar "rest"))))
-(DFunDef false "freeVarsStmts" ((PVar "b") (PCons (PCon "CSAssign" PWild (PVar "ex")) (PVar "rest"))) (EBinOp "++" (EApp (EApp (EVar "freeVars") (EVar "b")) (EVar "ex")) (EApp (EApp (EVar "freeVarsStmts") (EVar "b")) (EVar "rest"))))
+(DFunDef false "freeVarsStmts" ((PVar "b") (PCons (PCon "CSExpr" (PVar "ex")) (PVar "rest"))) (EBinOp "++" (EApp (EApp (EVar "freeVarsIn") (EVar "b")) (EVar "ex")) (EApp (EApp (EVar "freeVarsStmts") (EVar "b")) (EVar "rest"))))
+(DFunDef false "freeVarsStmts" ((PVar "b") (PCons (PCon "CSLet" PWild (PVar "pat") (PVar "ex")) (PVar "rest"))) (EBinOp "++" (EApp (EApp (EVar "freeVarsIn") (EVar "b")) (EVar "ex")) (EApp (EApp (EVar "freeVarsStmts") (EApp (EApp (EVar "omFromNames") (EApp (EVar "patVars") (EVar "pat"))) (EVar "b"))) (EVar "rest"))))
+(DFunDef false "freeVarsStmts" ((PVar "b") (PCons (PCon "CSAssign" PWild (PVar "ex")) (PVar "rest"))) (EBinOp "++" (EApp (EApp (EVar "freeVarsIn") (EVar "b")) (EVar "ex")) (EApp (EApp (EVar "freeVarsStmts") (EVar "b")) (EVar "rest"))))
 (DFunDef false "freeVarsStmts" ((PVar "b") (PCons PWild (PVar "rest"))) (EApp (EApp (EVar "freeVarsStmts") (EVar "b")) (EVar "rest")))
-(DTypeSig true "freeVarsBinds" (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyApp (TyCon "List") (TyCon "CBind")) (TyApp (TyCon "List") (TyCon "String")))))
+(DTypeSig true "freeVarsBinds" (TyFun (TyApp (TyCon "OrdMap") (TyCon "Unit")) (TyFun (TyApp (TyCon "List") (TyCon "CBind")) (TyApp (TyCon "List") (TyCon "String")))))
 (DFunDef false "freeVarsBinds" (PWild (PList)) (EListLit))
 (DFunDef false "freeVarsBinds" ((PVar "b") (PCons (PCon "CBind" PWild (PVar "clauses") PWild PWild) (PVar "rest"))) (EBinOp "++" (EApp (EApp (EVar "freeVarsClauses") (EVar "b")) (EVar "clauses")) (EApp (EApp (EVar "freeVarsBinds") (EVar "b")) (EVar "rest"))))
-(DTypeSig false "freeVarsClauses" (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyApp (TyCon "List") (TyCon "CClause")) (TyApp (TyCon "List") (TyCon "String")))))
+(DTypeSig false "freeVarsClauses" (TyFun (TyApp (TyCon "OrdMap") (TyCon "Unit")) (TyFun (TyApp (TyCon "List") (TyCon "CClause")) (TyApp (TyCon "List") (TyCon "String")))))
 (DFunDef false "freeVarsClauses" (PWild (PList)) (EListLit))
-(DFunDef false "freeVarsClauses" ((PVar "b") (PCons (PCon "CClause" (PVar "pats") (PVar "body")) (PVar "rest"))) (EBinOp "++" (EApp (EApp (EVar "freeVars") (EBinOp "++" (EApp (EVar "patVarNames") (EVar "pats")) (EVar "b"))) (EVar "body")) (EApp (EApp (EVar "freeVarsClauses") (EVar "b")) (EVar "rest"))))
+(DFunDef false "freeVarsClauses" ((PVar "b") (PCons (PCon "CClause" (PVar "pats") (PVar "body")) (PVar "rest"))) (EBinOp "++" (EApp (EApp (EVar "freeVarsIn") (EApp (EApp (EVar "omFromNames") (EApp (EVar "patVarNames") (EVar "pats"))) (EVar "b"))) (EVar "body")) (EApp (EApp (EVar "freeVarsClauses") (EVar "b")) (EVar "rest"))))
 (DTypeSig true "bindNames" (TyFun (TyApp (TyCon "List") (TyCon "CBind")) (TyApp (TyCon "List") (TyCon "String"))))
 (DFunDef false "bindNames" ((PVar "bs")) (EApp (EApp (EVar "map") (EVar "bindName")) (EVar "bs")))
 (DTypeSig true "bindName" (TyFun (TyCon "CBind") (TyCon "String")))
@@ -2240,60 +2251,62 @@ isTrmcImpl v method key = omHasKey (lenKey method ++ key) v.eligibleImpls
 (DFunDef false "lengthS" ((PList)) (ELit (LInt 0)))
 (DFunDef false "lengthS" ((PCons PWild (PVar "xs"))) (EBinOp "+" (ELit (LInt 1)) (EApp (EVar "lengthS") (EVar "xs"))))
 (DTypeSig true "freeVars" (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyCon "CExpr") (TyApp (TyCon "List") (TyCon "String")))))
-(DFunDef false "freeVars" (PWild (PCon "CLit" PWild)) (EListLit))
-(DFunDef false "freeVars" ((PVar "b") (PCon "CVar" (PVar "x") PWild)) (EIf (EApp (EApp (EVar "contains") (EVar "x")) (EVar "b")) (EListLit) (EListLit (EVar "x"))))
-(DFunDef false "freeVars" ((PVar "b") (PCon "CApp" (PVar "f") (PVar "args") PWild)) (EBinOp "++" (EApp (EApp (EVar "freeVars") (EVar "b")) (EVar "f")) (EApp (EApp (EDictApp "flatMap") (EApp (EVar "freeVars") (EVar "b"))) (EVar "args"))))
-(DFunDef false "freeVars" ((PVar "b") (PCon "CLam" (PVar "ps") (PVar "body"))) (EApp (EApp (EVar "freeVars") (EBinOp "++" (EApp (EVar "patVarNames") (EVar "ps")) (EVar "b"))) (EVar "body")))
-(DFunDef false "freeVars" ((PVar "b") (PCon "CLet" (PVar "recF") (PVar "pat") (PVar "e1") (PVar "e2"))) (EBlock (DoLet false false (PVar "b2") (EBinOp "++" (EApp (EVar "patVars") (EVar "pat")) (EVar "b"))) (DoLet false false (PVar "fe1") (EIf (EVar "recF") (EApp (EApp (EVar "freeVars") (EVar "b2")) (EVar "e1")) (EApp (EApp (EVar "freeVars") (EVar "b")) (EVar "e1")))) (DoExpr (EBinOp "++" (EVar "fe1") (EApp (EApp (EVar "freeVars") (EVar "b2")) (EVar "e2"))))))
-(DFunDef false "freeVars" ((PVar "b") (PCon "CLetGroup" (PVar "binds") (PVar "body"))) (EBlock (DoLet false false (PVar "b2") (EBinOp "++" (EApp (EVar "bindNames") (EVar "binds")) (EVar "b"))) (DoExpr (EBinOp "++" (EApp (EApp (EVar "freeVarsBinds") (EVar "b2")) (EVar "binds")) (EApp (EApp (EVar "freeVars") (EVar "b2")) (EVar "body"))))))
-(DFunDef false "freeVars" ((PVar "b") (PCon "CBlock" (PVar "stmts"))) (EApp (EApp (EVar "freeVarsStmts") (EVar "b")) (EVar "stmts")))
-(DFunDef false "freeVars" ((PVar "b") (PCon "CIf" (PVar "c") (PVar "t") (PVar "f"))) (EBinOp "++" (EBinOp "++" (EApp (EApp (EVar "freeVars") (EVar "b")) (EVar "c")) (EApp (EApp (EVar "freeVars") (EVar "b")) (EVar "t"))) (EApp (EApp (EVar "freeVars") (EVar "b")) (EVar "f"))))
-(DFunDef false "freeVars" ((PVar "b") (PCon "CBinPrim" PWild (PVar "l") (PVar "r") PWild PWild)) (EBinOp "++" (EApp (EApp (EVar "freeVars") (EVar "b")) (EVar "l")) (EApp (EApp (EVar "freeVars") (EVar "b")) (EVar "r"))))
-(DFunDef false "freeVars" ((PVar "b") (PCon "CUnOp" PWild (PVar "x"))) (EApp (EApp (EVar "freeVars") (EVar "b")) (EVar "x")))
-(DFunDef false "freeVars" ((PVar "b") (PCon "CMatch" (PVar "scrut") (PVar "arms"))) (EBinOp "++" (EApp (EApp (EVar "freeVars") (EVar "b")) (EVar "scrut")) (EApp (EApp (EVar "freeVarsArms") (EVar "b")) (EVar "arms"))))
-(DFunDef false "freeVars" ((PVar "b") (PCon "CDecision" (PVar "scrut") (PVar "arms") PWild)) (EBinOp "++" (EApp (EApp (EVar "freeVars") (EVar "b")) (EVar "scrut")) (EApp (EApp (EVar "freeVarsArms") (EVar "b")) (EVar "arms"))))
-(DFunDef false "freeVars" ((PVar "b") (PCon "CTuple" (PVar "es"))) (EApp (EApp (EVar "freeVarsList") (EVar "b")) (EVar "es")))
-(DFunDef false "freeVars" ((PVar "b") (PCon "CList" (PVar "es"))) (EApp (EApp (EVar "freeVarsList") (EVar "b")) (EVar "es")))
-(DFunDef false "freeVars" ((PVar "b") (PCon "CRangeList" (PVar "lo") (PVar "hi") PWild)) (EBinOp "++" (EApp (EApp (EVar "freeVars") (EVar "b")) (EVar "lo")) (EApp (EApp (EVar "freeVars") (EVar "b")) (EVar "hi"))))
-(DFunDef false "freeVars" ((PVar "b") (PCon "CRecord" PWild (PVar "fields"))) (EApp (EApp (EVar "freeVarsFields") (EVar "b")) (EVar "fields")))
-(DFunDef false "freeVars" ((PVar "b") (PCon "CFieldAccess" (PVar "ex") PWild PWild PWild)) (EApp (EApp (EVar "freeVars") (EVar "b")) (EVar "ex")))
-(DFunDef false "freeVars" ((PVar "b") (PCon "CRecordUpdate" PWild (PVar "base") (PVar "updates"))) (EBinOp "++" (EApp (EApp (EVar "freeVars") (EVar "b")) (EVar "base")) (EApp (EApp (EVar "freeVarsFields") (EVar "b")) (EVar "updates"))))
-(DFunDef false "freeVars" ((PVar "b") (PCon "CVariantUpdate" PWild (PVar "base") (PVar "updates"))) (EBinOp "++" (EApp (EApp (EVar "freeVars") (EVar "b")) (EVar "base")) (EApp (EApp (EVar "freeVarsFields") (EVar "b")) (EVar "updates"))))
-(DFunDef false "freeVars" ((PVar "b") (PCon "CArray" (PVar "es"))) (EApp (EApp (EVar "freeVarsList") (EVar "b")) (EVar "es")))
-(DFunDef false "freeVars" ((PVar "b") (PCon "CRangeArray" (PVar "lo") (PVar "hi") PWild)) (EBinOp "++" (EApp (EApp (EVar "freeVars") (EVar "b")) (EVar "lo")) (EApp (EApp (EVar "freeVars") (EVar "b")) (EVar "hi"))))
-(DFunDef false "freeVars" ((PVar "b") (PCon "CIndex" (PVar "a") (PVar "i"))) (EBinOp "++" (EApp (EApp (EVar "freeVars") (EVar "b")) (EVar "a")) (EApp (EApp (EVar "freeVars") (EVar "b")) (EVar "i"))))
-(DFunDef false "freeVars" ((PVar "b") (PCon "CSlice" (PVar "a") (PVar "lo") (PVar "hi") PWild)) (EBinOp "++" (EBinOp "++" (EApp (EApp (EVar "freeVars") (EVar "b")) (EVar "a")) (EApp (EApp (EVar "freeVars") (EVar "b")) (EVar "lo"))) (EApp (EApp (EVar "freeVars") (EVar "b")) (EVar "hi"))))
-(DFunDef false "freeVars" ((PVar "b") (PCon "CStringIndex" (PVar "a") (PVar "i"))) (EBinOp "++" (EApp (EApp (EVar "freeVars") (EVar "b")) (EVar "a")) (EApp (EApp (EVar "freeVars") (EVar "b")) (EVar "i"))))
-(DFunDef false "freeVars" ((PVar "b") (PCon "CStringSlice" (PVar "a") (PVar "lo") (PVar "hi") PWild)) (EBinOp "++" (EBinOp "++" (EApp (EApp (EVar "freeVars") (EVar "b")) (EVar "a")) (EApp (EApp (EVar "freeVars") (EVar "b")) (EVar "lo"))) (EApp (EApp (EVar "freeVars") (EVar "b")) (EVar "hi"))))
-(DFunDef false "freeVars" ((PVar "b") (PCon "CListIndex" (PVar "a") (PVar "i"))) (EBinOp "++" (EApp (EApp (EVar "freeVars") (EVar "b")) (EVar "a")) (EApp (EApp (EVar "freeVars") (EVar "b")) (EVar "i"))))
-(DFunDef false "freeVars" ((PVar "b") (PCon "CListSlice" (PVar "a") (PVar "lo") (PVar "hi") PWild)) (EBinOp "++" (EBinOp "++" (EApp (EApp (EVar "freeVars") (EVar "b")) (EVar "a")) (EApp (EApp (EVar "freeVars") (EVar "b")) (EVar "lo"))) (EApp (EApp (EVar "freeVars") (EVar "b")) (EVar "hi"))))
-(DFunDef false "freeVars" ((PVar "b") (PCon "CMethod" PWild (PCon "MethodEvidence" PWild PWild (PVar "route") (PVar "implRoutes") (PVar "methRoutes")))) (EApp (EApp (EVar "freeGivens") (EVar "b")) (EBinOp "::" (EVar "route") (EBinOp "++" (EVar "implRoutes") (EVar "methRoutes")))))
-(DFunDef false "freeVars" ((PVar "b") (PCon "CDict" (PVar "n") (PVar "routes"))) (EBinOp "++" (EIf (EApp (EApp (EVar "contains") (EVar "n")) (EVar "b")) (EListLit) (EListLit (EVar "n"))) (EApp (EApp (EVar "freeGivens") (EVar "b")) (EVar "routes"))))
-(DFunDef false "freeVars" (PWild PWild) (EListLit))
-(DTypeSig true "freeGivens" (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyApp (TyCon "List") (TyCon "Route")) (TyApp (TyCon "List") (TyCon "String")))))
-(DFunDef false "freeGivens" ((PVar "b") (PVar "routes")) (EApp (EApp (EVar "filterList") (ELam ((PVar "d")) (EApp (EVar "not") (EApp (EApp (EVar "contains") (EVar "d")) (EVar "b"))))) (EApp (EApp (EDictApp "flatMap") (EVar "givenNames")) (EVar "routes"))))
-(DTypeSig true "freeVarsFields" (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyApp (TyCon "List") (TyCon "CField")) (TyApp (TyCon "List") (TyCon "String")))))
+(DFunDef false "freeVars" ((PVar "b") (PVar "ex")) (EApp (EApp (EVar "freeVarsIn") (EApp (EApp (EVar "omFromNames") (EVar "b")) (EVar "omEmpty"))) (EVar "ex")))
+(DTypeSig false "freeVarsIn" (TyFun (TyApp (TyCon "OrdMap") (TyCon "Unit")) (TyFun (TyCon "CExpr") (TyApp (TyCon "List") (TyCon "String")))))
+(DFunDef false "freeVarsIn" (PWild (PCon "CLit" PWild)) (EListLit))
+(DFunDef false "freeVarsIn" ((PVar "b") (PCon "CVar" (PVar "x") PWild)) (EIf (EApp (EApp (EVar "omHasKey") (EVar "x")) (EVar "b")) (EListLit) (EListLit (EVar "x"))))
+(DFunDef false "freeVarsIn" ((PVar "b") (PCon "CApp" (PVar "f") (PVar "args") PWild)) (EBinOp "++" (EApp (EApp (EVar "freeVarsIn") (EVar "b")) (EVar "f")) (EApp (EApp (EDictApp "flatMap") (EApp (EVar "freeVarsIn") (EVar "b"))) (EVar "args"))))
+(DFunDef false "freeVarsIn" ((PVar "b") (PCon "CLam" (PVar "ps") (PVar "body"))) (EApp (EApp (EVar "freeVarsIn") (EApp (EApp (EVar "omFromNames") (EApp (EVar "patVarNames") (EVar "ps"))) (EVar "b"))) (EVar "body")))
+(DFunDef false "freeVarsIn" ((PVar "b") (PCon "CLet" (PVar "recF") (PVar "pat") (PVar "e1") (PVar "e2"))) (EBlock (DoLet false false (PVar "b2") (EApp (EApp (EVar "omFromNames") (EApp (EVar "patVars") (EVar "pat"))) (EVar "b"))) (DoLet false false (PVar "fe1") (EIf (EVar "recF") (EApp (EApp (EVar "freeVarsIn") (EVar "b2")) (EVar "e1")) (EApp (EApp (EVar "freeVarsIn") (EVar "b")) (EVar "e1")))) (DoExpr (EBinOp "++" (EVar "fe1") (EApp (EApp (EVar "freeVarsIn") (EVar "b2")) (EVar "e2"))))))
+(DFunDef false "freeVarsIn" ((PVar "b") (PCon "CLetGroup" (PVar "binds") (PVar "body"))) (EBlock (DoLet false false (PVar "b2") (EApp (EApp (EVar "omFromNames") (EApp (EVar "bindNames") (EVar "binds"))) (EVar "b"))) (DoExpr (EBinOp "++" (EApp (EApp (EVar "freeVarsBinds") (EVar "b2")) (EVar "binds")) (EApp (EApp (EVar "freeVarsIn") (EVar "b2")) (EVar "body"))))))
+(DFunDef false "freeVarsIn" ((PVar "b") (PCon "CBlock" (PVar "stmts"))) (EApp (EApp (EVar "freeVarsStmts") (EVar "b")) (EVar "stmts")))
+(DFunDef false "freeVarsIn" ((PVar "b") (PCon "CIf" (PVar "c") (PVar "t") (PVar "f"))) (EBinOp "++" (EBinOp "++" (EApp (EApp (EVar "freeVarsIn") (EVar "b")) (EVar "c")) (EApp (EApp (EVar "freeVarsIn") (EVar "b")) (EVar "t"))) (EApp (EApp (EVar "freeVarsIn") (EVar "b")) (EVar "f"))))
+(DFunDef false "freeVarsIn" ((PVar "b") (PCon "CBinPrim" PWild (PVar "l") (PVar "r") PWild PWild)) (EBinOp "++" (EApp (EApp (EVar "freeVarsIn") (EVar "b")) (EVar "l")) (EApp (EApp (EVar "freeVarsIn") (EVar "b")) (EVar "r"))))
+(DFunDef false "freeVarsIn" ((PVar "b") (PCon "CUnOp" PWild (PVar "x"))) (EApp (EApp (EVar "freeVarsIn") (EVar "b")) (EVar "x")))
+(DFunDef false "freeVarsIn" ((PVar "b") (PCon "CMatch" (PVar "scrut") (PVar "arms"))) (EBinOp "++" (EApp (EApp (EVar "freeVarsIn") (EVar "b")) (EVar "scrut")) (EApp (EApp (EVar "freeVarsArms") (EVar "b")) (EVar "arms"))))
+(DFunDef false "freeVarsIn" ((PVar "b") (PCon "CDecision" (PVar "scrut") (PVar "arms") PWild)) (EBinOp "++" (EApp (EApp (EVar "freeVarsIn") (EVar "b")) (EVar "scrut")) (EApp (EApp (EVar "freeVarsArms") (EVar "b")) (EVar "arms"))))
+(DFunDef false "freeVarsIn" ((PVar "b") (PCon "CTuple" (PVar "es"))) (EApp (EApp (EVar "freeVarsList") (EVar "b")) (EVar "es")))
+(DFunDef false "freeVarsIn" ((PVar "b") (PCon "CList" (PVar "es"))) (EApp (EApp (EVar "freeVarsList") (EVar "b")) (EVar "es")))
+(DFunDef false "freeVarsIn" ((PVar "b") (PCon "CRangeList" (PVar "lo") (PVar "hi") PWild)) (EBinOp "++" (EApp (EApp (EVar "freeVarsIn") (EVar "b")) (EVar "lo")) (EApp (EApp (EVar "freeVarsIn") (EVar "b")) (EVar "hi"))))
+(DFunDef false "freeVarsIn" ((PVar "b") (PCon "CRecord" PWild (PVar "fields"))) (EApp (EApp (EVar "freeVarsFields") (EVar "b")) (EVar "fields")))
+(DFunDef false "freeVarsIn" ((PVar "b") (PCon "CFieldAccess" (PVar "ex") PWild PWild PWild)) (EApp (EApp (EVar "freeVarsIn") (EVar "b")) (EVar "ex")))
+(DFunDef false "freeVarsIn" ((PVar "b") (PCon "CRecordUpdate" PWild (PVar "base") (PVar "updates"))) (EBinOp "++" (EApp (EApp (EVar "freeVarsIn") (EVar "b")) (EVar "base")) (EApp (EApp (EVar "freeVarsFields") (EVar "b")) (EVar "updates"))))
+(DFunDef false "freeVarsIn" ((PVar "b") (PCon "CVariantUpdate" PWild (PVar "base") (PVar "updates"))) (EBinOp "++" (EApp (EApp (EVar "freeVarsIn") (EVar "b")) (EVar "base")) (EApp (EApp (EVar "freeVarsFields") (EVar "b")) (EVar "updates"))))
+(DFunDef false "freeVarsIn" ((PVar "b") (PCon "CArray" (PVar "es"))) (EApp (EApp (EVar "freeVarsList") (EVar "b")) (EVar "es")))
+(DFunDef false "freeVarsIn" ((PVar "b") (PCon "CRangeArray" (PVar "lo") (PVar "hi") PWild)) (EBinOp "++" (EApp (EApp (EVar "freeVarsIn") (EVar "b")) (EVar "lo")) (EApp (EApp (EVar "freeVarsIn") (EVar "b")) (EVar "hi"))))
+(DFunDef false "freeVarsIn" ((PVar "b") (PCon "CIndex" (PVar "a") (PVar "i"))) (EBinOp "++" (EApp (EApp (EVar "freeVarsIn") (EVar "b")) (EVar "a")) (EApp (EApp (EVar "freeVarsIn") (EVar "b")) (EVar "i"))))
+(DFunDef false "freeVarsIn" ((PVar "b") (PCon "CSlice" (PVar "a") (PVar "lo") (PVar "hi") PWild)) (EBinOp "++" (EBinOp "++" (EApp (EApp (EVar "freeVarsIn") (EVar "b")) (EVar "a")) (EApp (EApp (EVar "freeVarsIn") (EVar "b")) (EVar "lo"))) (EApp (EApp (EVar "freeVarsIn") (EVar "b")) (EVar "hi"))))
+(DFunDef false "freeVarsIn" ((PVar "b") (PCon "CStringIndex" (PVar "a") (PVar "i"))) (EBinOp "++" (EApp (EApp (EVar "freeVarsIn") (EVar "b")) (EVar "a")) (EApp (EApp (EVar "freeVarsIn") (EVar "b")) (EVar "i"))))
+(DFunDef false "freeVarsIn" ((PVar "b") (PCon "CStringSlice" (PVar "a") (PVar "lo") (PVar "hi") PWild)) (EBinOp "++" (EBinOp "++" (EApp (EApp (EVar "freeVarsIn") (EVar "b")) (EVar "a")) (EApp (EApp (EVar "freeVarsIn") (EVar "b")) (EVar "lo"))) (EApp (EApp (EVar "freeVarsIn") (EVar "b")) (EVar "hi"))))
+(DFunDef false "freeVarsIn" ((PVar "b") (PCon "CListIndex" (PVar "a") (PVar "i"))) (EBinOp "++" (EApp (EApp (EVar "freeVarsIn") (EVar "b")) (EVar "a")) (EApp (EApp (EVar "freeVarsIn") (EVar "b")) (EVar "i"))))
+(DFunDef false "freeVarsIn" ((PVar "b") (PCon "CListSlice" (PVar "a") (PVar "lo") (PVar "hi") PWild)) (EBinOp "++" (EBinOp "++" (EApp (EApp (EVar "freeVarsIn") (EVar "b")) (EVar "a")) (EApp (EApp (EVar "freeVarsIn") (EVar "b")) (EVar "lo"))) (EApp (EApp (EVar "freeVarsIn") (EVar "b")) (EVar "hi"))))
+(DFunDef false "freeVarsIn" ((PVar "b") (PCon "CMethod" PWild (PCon "MethodEvidence" PWild PWild (PVar "route") (PVar "implRoutes") (PVar "methRoutes")))) (EApp (EApp (EVar "freeGivens") (EVar "b")) (EBinOp "::" (EVar "route") (EBinOp "++" (EVar "implRoutes") (EVar "methRoutes")))))
+(DFunDef false "freeVarsIn" ((PVar "b") (PCon "CDict" (PVar "n") (PVar "routes"))) (EBinOp "++" (EIf (EApp (EApp (EVar "omHasKey") (EVar "n")) (EVar "b")) (EListLit) (EListLit (EVar "n"))) (EApp (EApp (EVar "freeGivens") (EVar "b")) (EVar "routes"))))
+(DFunDef false "freeVarsIn" (PWild PWild) (EListLit))
+(DTypeSig true "freeGivens" (TyFun (TyApp (TyCon "OrdMap") (TyCon "Unit")) (TyFun (TyApp (TyCon "List") (TyCon "Route")) (TyApp (TyCon "List") (TyCon "String")))))
+(DFunDef false "freeGivens" ((PVar "b") (PVar "routes")) (EApp (EApp (EVar "filterList") (ELam ((PVar "d")) (EApp (EVar "not") (EApp (EApp (EVar "omHasKey") (EVar "d")) (EVar "b"))))) (EApp (EApp (EDictApp "flatMap") (EVar "givenNames")) (EVar "routes"))))
+(DTypeSig true "freeVarsFields" (TyFun (TyApp (TyCon "OrdMap") (TyCon "Unit")) (TyFun (TyApp (TyCon "List") (TyCon "CField")) (TyApp (TyCon "List") (TyCon "String")))))
 (DFunDef false "freeVarsFields" (PWild (PList)) (EListLit))
-(DFunDef false "freeVarsFields" ((PVar "b") (PCons (PCon "CField" PWild PWild (PVar "ex")) (PVar "rest"))) (EBinOp "++" (EApp (EApp (EVar "freeVars") (EVar "b")) (EVar "ex")) (EApp (EApp (EVar "freeVarsFields") (EVar "b")) (EVar "rest"))))
-(DTypeSig true "freeVarsList" (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyApp (TyCon "List") (TyCon "CExpr")) (TyApp (TyCon "List") (TyCon "String")))))
+(DFunDef false "freeVarsFields" ((PVar "b") (PCons (PCon "CField" PWild PWild (PVar "ex")) (PVar "rest"))) (EBinOp "++" (EApp (EApp (EVar "freeVarsIn") (EVar "b")) (EVar "ex")) (EApp (EApp (EVar "freeVarsFields") (EVar "b")) (EVar "rest"))))
+(DTypeSig true "freeVarsList" (TyFun (TyApp (TyCon "OrdMap") (TyCon "Unit")) (TyFun (TyApp (TyCon "List") (TyCon "CExpr")) (TyApp (TyCon "List") (TyCon "String")))))
 (DFunDef false "freeVarsList" (PWild (PList)) (EListLit))
-(DFunDef false "freeVarsList" ((PVar "b") (PCons (PVar "e") (PVar "rest"))) (EBinOp "++" (EApp (EApp (EVar "freeVars") (EVar "b")) (EVar "e")) (EApp (EApp (EVar "freeVarsList") (EVar "b")) (EVar "rest"))))
-(DTypeSig true "freeVarsArms" (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyApp (TyCon "List") (TyCon "CArm")) (TyApp (TyCon "List") (TyCon "String")))))
+(DFunDef false "freeVarsList" ((PVar "b") (PCons (PVar "e") (PVar "rest"))) (EBinOp "++" (EApp (EApp (EVar "freeVarsIn") (EVar "b")) (EVar "e")) (EApp (EApp (EVar "freeVarsList") (EVar "b")) (EVar "rest"))))
+(DTypeSig true "freeVarsArms" (TyFun (TyApp (TyCon "OrdMap") (TyCon "Unit")) (TyFun (TyApp (TyCon "List") (TyCon "CArm")) (TyApp (TyCon "List") (TyCon "String")))))
 (DFunDef false "freeVarsArms" (PWild (PList)) (EListLit))
-(DFunDef false "freeVarsArms" ((PVar "b") (PCons (PCon "CArm" (PVar "pat") PWild (PVar "body")) (PVar "rest"))) (EBinOp "++" (EApp (EApp (EVar "freeVars") (EBinOp "++" (EApp (EVar "patVars") (EVar "pat")) (EVar "b"))) (EVar "body")) (EApp (EApp (EVar "freeVarsArms") (EVar "b")) (EVar "rest"))))
+(DFunDef false "freeVarsArms" ((PVar "b") (PCons (PCon "CArm" (PVar "pat") PWild (PVar "body")) (PVar "rest"))) (EBinOp "++" (EApp (EApp (EVar "freeVarsIn") (EApp (EApp (EVar "omFromNames") (EApp (EVar "patVars") (EVar "pat"))) (EVar "b"))) (EVar "body")) (EApp (EApp (EVar "freeVarsArms") (EVar "b")) (EVar "rest"))))
 (DFunDef false "freeVarsArms" ((PVar "b") (PCons (PCon "CArmAlt" PWild PWild PWild) (PVar "rest"))) (EApp (EApp (EVar "freeVarsArms") (EVar "b")) (EVar "rest")))
-(DTypeSig true "freeVarsStmts" (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyApp (TyCon "List") (TyCon "CStmt")) (TyApp (TyCon "List") (TyCon "String")))))
+(DTypeSig true "freeVarsStmts" (TyFun (TyApp (TyCon "OrdMap") (TyCon "Unit")) (TyFun (TyApp (TyCon "List") (TyCon "CStmt")) (TyApp (TyCon "List") (TyCon "String")))))
 (DFunDef false "freeVarsStmts" (PWild (PList)) (EListLit))
-(DFunDef false "freeVarsStmts" ((PVar "b") (PCons (PCon "CSExpr" (PVar "ex")) (PVar "rest"))) (EBinOp "++" (EApp (EApp (EVar "freeVars") (EVar "b")) (EVar "ex")) (EApp (EApp (EVar "freeVarsStmts") (EVar "b")) (EVar "rest"))))
-(DFunDef false "freeVarsStmts" ((PVar "b") (PCons (PCon "CSLet" PWild (PVar "pat") (PVar "ex")) (PVar "rest"))) (EBinOp "++" (EApp (EApp (EVar "freeVars") (EVar "b")) (EVar "ex")) (EApp (EApp (EVar "freeVarsStmts") (EBinOp "++" (EApp (EVar "patVars") (EVar "pat")) (EVar "b"))) (EVar "rest"))))
-(DFunDef false "freeVarsStmts" ((PVar "b") (PCons (PCon "CSAssign" PWild (PVar "ex")) (PVar "rest"))) (EBinOp "++" (EApp (EApp (EVar "freeVars") (EVar "b")) (EVar "ex")) (EApp (EApp (EVar "freeVarsStmts") (EVar "b")) (EVar "rest"))))
+(DFunDef false "freeVarsStmts" ((PVar "b") (PCons (PCon "CSExpr" (PVar "ex")) (PVar "rest"))) (EBinOp "++" (EApp (EApp (EVar "freeVarsIn") (EVar "b")) (EVar "ex")) (EApp (EApp (EVar "freeVarsStmts") (EVar "b")) (EVar "rest"))))
+(DFunDef false "freeVarsStmts" ((PVar "b") (PCons (PCon "CSLet" PWild (PVar "pat") (PVar "ex")) (PVar "rest"))) (EBinOp "++" (EApp (EApp (EVar "freeVarsIn") (EVar "b")) (EVar "ex")) (EApp (EApp (EVar "freeVarsStmts") (EApp (EApp (EVar "omFromNames") (EApp (EVar "patVars") (EVar "pat"))) (EVar "b"))) (EVar "rest"))))
+(DFunDef false "freeVarsStmts" ((PVar "b") (PCons (PCon "CSAssign" PWild (PVar "ex")) (PVar "rest"))) (EBinOp "++" (EApp (EApp (EVar "freeVarsIn") (EVar "b")) (EVar "ex")) (EApp (EApp (EVar "freeVarsStmts") (EVar "b")) (EVar "rest"))))
 (DFunDef false "freeVarsStmts" ((PVar "b") (PCons PWild (PVar "rest"))) (EApp (EApp (EVar "freeVarsStmts") (EVar "b")) (EVar "rest")))
-(DTypeSig true "freeVarsBinds" (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyApp (TyCon "List") (TyCon "CBind")) (TyApp (TyCon "List") (TyCon "String")))))
+(DTypeSig true "freeVarsBinds" (TyFun (TyApp (TyCon "OrdMap") (TyCon "Unit")) (TyFun (TyApp (TyCon "List") (TyCon "CBind")) (TyApp (TyCon "List") (TyCon "String")))))
 (DFunDef false "freeVarsBinds" (PWild (PList)) (EListLit))
 (DFunDef false "freeVarsBinds" ((PVar "b") (PCons (PCon "CBind" PWild (PVar "clauses") PWild PWild) (PVar "rest"))) (EBinOp "++" (EApp (EApp (EVar "freeVarsClauses") (EVar "b")) (EVar "clauses")) (EApp (EApp (EVar "freeVarsBinds") (EVar "b")) (EVar "rest"))))
-(DTypeSig false "freeVarsClauses" (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyApp (TyCon "List") (TyCon "CClause")) (TyApp (TyCon "List") (TyCon "String")))))
+(DTypeSig false "freeVarsClauses" (TyFun (TyApp (TyCon "OrdMap") (TyCon "Unit")) (TyFun (TyApp (TyCon "List") (TyCon "CClause")) (TyApp (TyCon "List") (TyCon "String")))))
 (DFunDef false "freeVarsClauses" (PWild (PList)) (EListLit))
-(DFunDef false "freeVarsClauses" ((PVar "b") (PCons (PCon "CClause" (PVar "pats") (PVar "body")) (PVar "rest"))) (EBinOp "++" (EApp (EApp (EVar "freeVars") (EBinOp "++" (EApp (EVar "patVarNames") (EVar "pats")) (EVar "b"))) (EVar "body")) (EApp (EApp (EVar "freeVarsClauses") (EVar "b")) (EVar "rest"))))
+(DFunDef false "freeVarsClauses" ((PVar "b") (PCons (PCon "CClause" (PVar "pats") (PVar "body")) (PVar "rest"))) (EBinOp "++" (EApp (EApp (EVar "freeVarsIn") (EApp (EApp (EVar "omFromNames") (EApp (EVar "patVarNames") (EVar "pats"))) (EVar "b"))) (EVar "body")) (EApp (EApp (EVar "freeVarsClauses") (EVar "b")) (EVar "rest"))))
 (DTypeSig true "bindNames" (TyFun (TyApp (TyCon "List") (TyCon "CBind")) (TyApp (TyCon "List") (TyCon "String"))))
 (DFunDef false "bindNames" ((PVar "bs")) (EApp (EApp (EMethodRef "map") (EVar "bindName")) (EVar "bs")))
 (DTypeSig true "bindName" (TyFun (TyCon "CBind") (TyCon "String")))

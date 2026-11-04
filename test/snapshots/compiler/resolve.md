@@ -1,5 +1,5 @@
 # META
-source_lines=6431
+source_lines=6433
 stages=DESUGAR,MARK
 # SOURCE
 -- Self-hosted resolve stage (single-file
@@ -2592,6 +2592,8 @@ unionStr acc xs = unionStrGo acc [] xs
 unionStrGo : List String -> List String -> List String -> List String
 unionStrGo acc fresh [] = acc ++ reverseL fresh
 unionStrGo acc fresh (x :: xs)
+  -- Bound: `fresh` holds names from one declaration's binders (see `contigGo`).
+  -- lint-disable-next-line rule-list-as-set
   | contains x acc || contains x fresh = unionStrGo acc fresh xs
   | otherwise = unionStrGo acc (x :: fresh) xs
 

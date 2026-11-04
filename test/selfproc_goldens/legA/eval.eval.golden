@@ -167,7 +167,7 @@ frameAtDepth : List (EnvFrame (Value a)) -> Int -> String -> EnvFrame (Value a)
 frameCells : EnvFrame a -> List (String, Ref a)
 funClauseToClause : Loc -> FunClause -> (List Pat, Expr, Loc)
 funDefs : List Decl -> List (String, (List Pat, Expr, Loc))
-funGroupNames : List (String, (List Pat, Expr, Loc)) -> List String -> List String
+funGroupNames : List (String, (List Pat, Expr, Loc)) -> Map String Unit -> List String
 funNamesOf : List Decl -> List String
 getByte64 : Int -> Array (Value a) -> Int -> Int
 globalFramesWith : List (String, Ref (Value a)) -> EnvFrame (Value a) -> List (EnvFrame (Value a))

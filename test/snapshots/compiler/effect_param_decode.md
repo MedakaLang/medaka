@@ -1,5 +1,5 @@
 # META
-source_lines=215
+source_lines=217
 stages=DESUGAR,MARK
 # SOURCE
 -- Written effect parameters decoded against declared domains, without inference state.
@@ -196,6 +196,8 @@ export
 repeatedNames : List String -> List String -> List String
 repeatedNames [] _ = []
 repeatedNames (n :: rest) seen
+  -- Bound: `seen` holds names repeated within the axes of one Product element.
+  -- lint-disable-next-line rule-list-as-set
   | contains n seen = repeatedNames rest seen
   | contains n rest = n :: repeatedNames rest (n :: seen)
   | otherwise = repeatedNames rest seen
