@@ -815,9 +815,11 @@ test "a C stack overflow under the eval engine prints the run's seed in every mo
   abortSeedRows cStackTestSrc "E-STACK-OVERFLOW"
 
 -- The heap cap that makes `oomSrc` fail to allocate; Boehm reads it on every
--- platform, unlike `ulimit -v`.
+-- platform, unlike `ulimit -v`. The initial heap is pinned below the cap
+-- because the suite runs with `GC_INITIAL_HEAP_SIZE` at 1 GiB, which Boehm
+-- inherits into the child and which makes it reject a smaller cap at startup.
 heapCap : List String
-heapCap = ["GC_MAXIMUM_HEAP_SIZE=200000000"]
+heapCap = ["GC_MAXIMUM_HEAP_SIZE=200000000", "GC_INITIAL_HEAP_SIZE=16777216"]
 
 oomSrc : String
 oomSrc =
