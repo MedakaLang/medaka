@@ -267,7 +267,8 @@ import support.util.{
   joinWith,
 }
 import backend.llvm_preamble.{
-  declareLine, declareRuntime, ffiRuntimeDecls, preambleLines, runtimeDecls
+  declareLine, declareRuntime, ffiRuntimeDecls, preambleLines, runtimeDecls,
+  runtimePrototype, siteTrapDecl
 }
 import backend.llvm_symbols.{
   LlvmParam(..),
@@ -5931,7 +5932,7 @@ emitTrapCall e fn args site
           e
           (declareSymbol
             (Foreign (fn ++ "_at"))
-            (siteTrapPrototype fn)
+            (runtimePrototype (siteTrapDecl fn))
             !e.symOrigin)
         e.siteTraps := fn :: !e.siteTraps
     emit e (rtLine e "" "void" (fn ++ "_at") (i64Ops (args ++ [site])))
@@ -5941,19 +5942,10 @@ emitTrapCall e fn args site
 siteTrapDeclares : Emit -> List String
 siteTrapDeclares e =
   map
-    (fn => "declare " ++ prototypeText (fn ++ "_at") (siteTrapPrototype fn))
+    (fn =>
+      "declare "
+        ++ prototypeText (fn ++ "_at") (runtimePrototype (siteTrapDecl fn)))
     (reverseL !e.siteTraps)
-
--- the `_at` twin of trap entry [fn]: its own operands, then the packed site
-siteTrapPrototype : String -> Prototype
-siteTrapPrototype "mdk_int_overflow" = trapProto 4
-siteTrapPrototype "mdk_panic" = trapProto 2
-siteTrapPrototype "mdk_oob_at" = trapProto 2
-siteTrapPrototype _ = trapProto 1
-
-trapProto : Int -> Prototype
-trapProto n =
-  FuncProto "void" (map (_ => LlvmParam "i64" "") [1..=n]) " noreturn"
 
 -- The site file table, a NULL-terminated array of the files' paths behind the
 -- `mdk_site_files` pointer the runtime reads (a weak null there when a program
