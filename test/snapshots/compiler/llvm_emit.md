@@ -1,5 +1,5 @@
 # META
-source_lines=15464
+source_lines=15467
 stages=DESUGAR,MARK
 # SOURCE
 import backend.runtime_layout.{
@@ -5933,28 +5933,31 @@ siteFileNumber e f = match omLookup f !e.siteFileNums
 emitTrapCall : Emit -> String -> List String -> String -> Unit
 emitTrapCall e fn args site
   | site == "0" = emit e (rtLine e "" "void" fn (i64Ops args))
-  | otherwise =
-    let _ =
-      if contains fn !e.siteTraps then
-        ()
-      else
-        registerL
-          e
-          (declareSymbol
-            (Foreign (fn ++ "_at"))
-            (runtimePrototype (siteTrapDecl fn))
-            !e.symOrigin)
-        e.siteTraps := fn :: !e.siteTraps
-    emit e (rtLine e "" "void" (fn ++ "_at") (i64Ops (args ++ [site])))
+  | otherwise = match siteTrapDecl fn
+    None => gapU e ("unknown located trap: " ++ fn)
+    Some decl =>
+      let _ =
+        if contains fn !e.siteTraps then
+          ()
+        else
+          registerL
+            e
+            (declareSymbol
+              (Foreign (fn ++ "_at"))
+              (runtimePrototype decl)
+              !e.symOrigin)
+          e.siteTraps := fn :: !e.siteTraps
+      emit e (rtLine e "" "void" (fn ++ "_at") (i64Ops (args ++ [site])))
 
 -- The `declare` of each `_at` twin the program calls.  They go ahead of the
 -- preamble, so every partition sees them.
 siteTrapDeclares : Emit -> List String
 siteTrapDeclares e =
   map
-    (fn =>
-      "declare "
-        ++ prototypeText (fn ++ "_at") (runtimePrototype (siteTrapDecl fn)))
+    (fn => match siteTrapDecl fn
+      Some decl =>
+        "declare " ++ prototypeText (fn ++ "_at") (runtimePrototype decl)
+      None => gapStr e ("unknown located trap: " ++ fn))
     (reverseL !e.siteTraps)
 
 -- The site file table, a NULL-terminated array of the files' paths behind the
@@ -16620,9 +16623,9 @@ runtimeName e symbol = optionOr "" (externRuntimeKey e.externFacts symbol)
 (DTypeSig false "siteFileNumber" (TyFun (TyCon "Emit") (TyFun (TyCon "String") (TyApp (TyCon "Option") (TyCon "Int")))))
 (DFunDef false "siteFileNumber" ((PVar "e") (PVar "f")) (EMatch (EApp (EApp (EVar "omLookup") (EVar "f")) (EUnOp "!" (EFieldAccess (EVar "e") "siteFileNums"))) (arm (PCon "Some" (PVar "n")) () (EApp (EVar "Some") (EVar "n"))) (arm (PCon "None") () (EBlock (DoLet false false (PVar "n") (EBinOp "+" (EApp (EVar "omSize") (EUnOp "!" (EFieldAccess (EVar "e") "siteFileNums"))) (ELit (LInt 1)))) (DoExpr (EIf (EBinOp ">=" (EVar "n") (EApp (EApp (EVar "shiftLeft") (ELit (LInt 1))) (EVar "siteFileBits"))) (EVar "None") (EBlock (DoExpr (EApp (EApp (EVar "setRef") (EFieldAccess (EVar "e") "siteFileNums")) (EApp (EApp (EApp (EVar "omInsert") (EVar "f")) (EVar "n")) (EUnOp "!" (EFieldAccess (EVar "e") "siteFileNums"))))) (DoExpr (EApp (EApp (EVar "setRef") (EFieldAccess (EVar "e") "siteFiles")) (EBinOp "::" (EVar "f") (EUnOp "!" (EFieldAccess (EVar "e") "siteFiles"))))) (DoExpr (EApp (EVar "Some") (EVar "n"))))))))))
 (DTypeSig false "emitTrapCall" (TyFun (TyCon "Emit") (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyCon "String") (TyCon "Unit"))))))
-(DFunDef false "emitTrapCall" ((PVar "e") (PVar "fn") (PVar "args") (PVar "site")) (EIf (EBinOp "==" (EVar "site") (ELit (LString "0"))) (EApp (EApp (EVar "emit") (EVar "e")) (EApp (EApp (EApp (EApp (EApp (EVar "rtLine") (EVar "e")) (ELit (LString ""))) (ELit (LString "void"))) (EVar "fn")) (EApp (EVar "i64Ops") (EVar "args")))) (EIf (EVar "otherwise") (EBlock (DoLet false false PWild (EIf (EApp (EApp (EVar "contains") (EVar "fn")) (EUnOp "!" (EFieldAccess (EVar "e") "siteTraps"))) (ELit LUnit) (EBlock (DoExpr (EApp (EApp (EVar "registerL") (EVar "e")) (EApp (EApp (EApp (EVar "declareSymbol") (EApp (EVar "Foreign") (EBinOp "++" (EVar "fn") (ELit (LString "_at"))))) (EApp (EVar "runtimePrototype") (EApp (EVar "siteTrapDecl") (EVar "fn")))) (EUnOp "!" (EFieldAccess (EVar "e") "symOrigin"))))) (DoExpr (EApp (EApp (EVar "setRef") (EFieldAccess (EVar "e") "siteTraps")) (EBinOp "::" (EVar "fn") (EUnOp "!" (EFieldAccess (EVar "e") "siteTraps")))))))) (DoExpr (EApp (EApp (EVar "emit") (EVar "e")) (EApp (EApp (EApp (EApp (EApp (EVar "rtLine") (EVar "e")) (ELit (LString ""))) (ELit (LString "void"))) (EBinOp "++" (EVar "fn") (ELit (LString "_at")))) (EApp (EVar "i64Ops") (EBinOp "++" (EVar "args") (EListLit (EVar "site")))))))) (EApp (EVar "__fallthrough__") (ELit LUnit)))))
+(DFunDef false "emitTrapCall" ((PVar "e") (PVar "fn") (PVar "args") (PVar "site")) (EIf (EBinOp "==" (EVar "site") (ELit (LString "0"))) (EApp (EApp (EVar "emit") (EVar "e")) (EApp (EApp (EApp (EApp (EApp (EVar "rtLine") (EVar "e")) (ELit (LString ""))) (ELit (LString "void"))) (EVar "fn")) (EApp (EVar "i64Ops") (EVar "args")))) (EIf (EVar "otherwise") (EMatch (EApp (EVar "siteTrapDecl") (EVar "fn")) (arm (PCon "None") () (EApp (EApp (EVar "gapU") (EVar "e")) (EBinOp "++" (ELit (LString "unknown located trap: ")) (EVar "fn")))) (arm (PCon "Some" (PVar "decl")) () (EBlock (DoLet false false PWild (EIf (EApp (EApp (EVar "contains") (EVar "fn")) (EUnOp "!" (EFieldAccess (EVar "e") "siteTraps"))) (ELit LUnit) (EBlock (DoExpr (EApp (EApp (EVar "registerL") (EVar "e")) (EApp (EApp (EApp (EVar "declareSymbol") (EApp (EVar "Foreign") (EBinOp "++" (EVar "fn") (ELit (LString "_at"))))) (EApp (EVar "runtimePrototype") (EVar "decl"))) (EUnOp "!" (EFieldAccess (EVar "e") "symOrigin"))))) (DoExpr (EApp (EApp (EVar "setRef") (EFieldAccess (EVar "e") "siteTraps")) (EBinOp "::" (EVar "fn") (EUnOp "!" (EFieldAccess (EVar "e") "siteTraps")))))))) (DoExpr (EApp (EApp (EVar "emit") (EVar "e")) (EApp (EApp (EApp (EApp (EApp (EVar "rtLine") (EVar "e")) (ELit (LString ""))) (ELit (LString "void"))) (EBinOp "++" (EVar "fn") (ELit (LString "_at")))) (EApp (EVar "i64Ops") (EBinOp "++" (EVar "args") (EListLit (EVar "site")))))))))) (EApp (EVar "__fallthrough__") (ELit LUnit)))))
 (DTypeSig false "siteTrapDeclares" (TyFun (TyCon "Emit") (TyApp (TyCon "List") (TyCon "String"))))
-(DFunDef false "siteTrapDeclares" ((PVar "e")) (EApp (EApp (EVar "map") (ELam ((PVar "fn")) (EBinOp "++" (ELit (LString "declare ")) (EApp (EApp (EVar "prototypeText") (EBinOp "++" (EVar "fn") (ELit (LString "_at")))) (EApp (EVar "runtimePrototype") (EApp (EVar "siteTrapDecl") (EVar "fn"))))))) (EApp (EVar "reverseL") (EUnOp "!" (EFieldAccess (EVar "e") "siteTraps")))))
+(DFunDef false "siteTrapDeclares" ((PVar "e")) (EApp (EApp (EVar "map") (ELam ((PVar "fn")) (EMatch (EApp (EVar "siteTrapDecl") (EVar "fn")) (arm (PCon "Some" (PVar "decl")) () (EBinOp "++" (ELit (LString "declare ")) (EApp (EApp (EVar "prototypeText") (EBinOp "++" (EVar "fn") (ELit (LString "_at")))) (EApp (EVar "runtimePrototype") (EVar "decl"))))) (arm (PCon "None") () (EApp (EApp (EVar "gapStr") (EVar "e")) (EBinOp "++" (ELit (LString "unknown located trap: ")) (EVar "fn"))))))) (EApp (EVar "reverseL") (EUnOp "!" (EFieldAccess (EVar "e") "siteTraps")))))
 (DTypeSig false "siteFileTable" (TyFun (TyCon "Emit") (TyApp (TyCon "List") (TyCon "String"))))
 (DFunDef false "siteFileTable" ((PVar "e")) (EMatch (EApp (EVar "reverseL") (EUnOp "!" (EFieldAccess (EVar "e") "siteFiles"))) (arm (PList) () (EListLit)) (arm (PVar "files") () (EBlock (DoLet false false (PVar "n") (EApp (EVar "listLen") (EVar "files"))) (DoExpr (EApp (EApp (EApp (EApp (EVar "registerGlobal") (EVar "e")) (EVar "False")) (ELit (LString ".sitefiles"))) (EBinOp "++" (EBinOp "++" (ELit (LString "[")) (EApp (EVar "display") (EApp (EVar "intToString") (EBinOp "+" (EVar "n") (ELit (LInt 1)))))) (ELit (LString " x ptr]"))))) (DoExpr (EApp (EApp (EApp (EApp (EVar "registerGlobal") (EVar "e")) (EVar "False")) (ELit (LString "mdk_site_files"))) (ELit (LString "ptr")))) (DoExpr (EBinOp "++" (EBinOp "++" (EListLit (EBinOp "++" (EBinOp "++" (ELit (LString "; mdk-module ")) (EApp (EVar "display") (EVar "scopeProgram"))) (ELit (LString "")))) (EApp (EApp (EApp (EVar "siteFileStrings") (EVar "e")) (ELit (LInt 0))) (EVar "files"))) (EListLit (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "@.sitefiles = private unnamed_addr constant [")) (EApp (EVar "display") (EApp (EVar "intToString") (EBinOp "+" (EVar "n") (ELit (LInt 1)))))) (ELit (LString " x ptr] ["))) (EApp (EVar "display") (EApp (EApp (EVar "siteFileElems") (ELit (LInt 0))) (EVar "n")))) (ELit (LString "ptr null]"))) (ELit (LString "@mdk_site_files = constant ptr @.sitefiles")))))))))
 (DTypeSig false "siteFileElems" (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyCon "String"))))
@@ -19433,9 +19436,9 @@ runtimeName e symbol = optionOr "" (externRuntimeKey e.externFacts symbol)
 (DTypeSig false "siteFileNumber" (TyFun (TyCon "Emit") (TyFun (TyCon "String") (TyApp (TyCon "Option") (TyCon "Int")))))
 (DFunDef false "siteFileNumber" ((PVar "e") (PVar "f")) (EMatch (EApp (EApp (EVar "omLookup") (EVar "f")) (EUnOp "!" (EFieldAccess (EVar "e") "siteFileNums"))) (arm (PCon "Some" (PVar "n")) () (EApp (EVar "Some") (EVar "n"))) (arm (PCon "None") () (EBlock (DoLet false false (PVar "n") (EBinOp "+" (EApp (EVar "omSize") (EUnOp "!" (EFieldAccess (EVar "e") "siteFileNums"))) (ELit (LInt 1)))) (DoExpr (EIf (EBinOp ">=" (EVar "n") (EApp (EApp (EVar "shiftLeft") (ELit (LInt 1))) (EVar "siteFileBits"))) (EVar "None") (EBlock (DoExpr (EApp (EApp (EVar "setRef") (EFieldAccess (EVar "e") "siteFileNums")) (EApp (EApp (EApp (EVar "omInsert") (EVar "f")) (EVar "n")) (EUnOp "!" (EFieldAccess (EVar "e") "siteFileNums"))))) (DoExpr (EApp (EApp (EVar "setRef") (EFieldAccess (EVar "e") "siteFiles")) (EBinOp "::" (EVar "f") (EUnOp "!" (EFieldAccess (EVar "e") "siteFiles"))))) (DoExpr (EApp (EVar "Some") (EVar "n"))))))))))
 (DTypeSig false "emitTrapCall" (TyFun (TyCon "Emit") (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyCon "String") (TyCon "Unit"))))))
-(DFunDef false "emitTrapCall" ((PVar "e") (PVar "fn") (PVar "args") (PVar "site")) (EIf (EBinOp "==" (EVar "site") (ELit (LString "0"))) (EApp (EApp (EVar "emit") (EVar "e")) (EApp (EApp (EApp (EApp (EApp (EVar "rtLine") (EVar "e")) (ELit (LString ""))) (ELit (LString "void"))) (EVar "fn")) (EApp (EVar "i64Ops") (EVar "args")))) (EIf (EVar "otherwise") (EBlock (DoLet false false PWild (EIf (EApp (EApp (EVar "contains") (EVar "fn")) (EUnOp "!" (EFieldAccess (EVar "e") "siteTraps"))) (ELit LUnit) (EBlock (DoExpr (EApp (EApp (EVar "registerL") (EVar "e")) (EApp (EApp (EApp (EVar "declareSymbol") (EApp (EVar "Foreign") (EBinOp "++" (EVar "fn") (ELit (LString "_at"))))) (EApp (EVar "runtimePrototype") (EApp (EVar "siteTrapDecl") (EVar "fn")))) (EUnOp "!" (EFieldAccess (EVar "e") "symOrigin"))))) (DoExpr (EApp (EApp (EVar "setRef") (EFieldAccess (EVar "e") "siteTraps")) (EBinOp "::" (EVar "fn") (EUnOp "!" (EFieldAccess (EVar "e") "siteTraps")))))))) (DoExpr (EApp (EApp (EVar "emit") (EVar "e")) (EApp (EApp (EApp (EApp (EApp (EVar "rtLine") (EVar "e")) (ELit (LString ""))) (ELit (LString "void"))) (EBinOp "++" (EVar "fn") (ELit (LString "_at")))) (EApp (EVar "i64Ops") (EBinOp "++" (EVar "args") (EListLit (EVar "site")))))))) (EApp (EVar "__fallthrough__") (ELit LUnit)))))
+(DFunDef false "emitTrapCall" ((PVar "e") (PVar "fn") (PVar "args") (PVar "site")) (EIf (EBinOp "==" (EVar "site") (ELit (LString "0"))) (EApp (EApp (EVar "emit") (EVar "e")) (EApp (EApp (EApp (EApp (EApp (EVar "rtLine") (EVar "e")) (ELit (LString ""))) (ELit (LString "void"))) (EVar "fn")) (EApp (EVar "i64Ops") (EVar "args")))) (EIf (EVar "otherwise") (EMatch (EApp (EVar "siteTrapDecl") (EVar "fn")) (arm (PCon "None") () (EApp (EApp (EVar "gapU") (EVar "e")) (EBinOp "++" (ELit (LString "unknown located trap: ")) (EVar "fn")))) (arm (PCon "Some" (PVar "decl")) () (EBlock (DoLet false false PWild (EIf (EApp (EApp (EVar "contains") (EVar "fn")) (EUnOp "!" (EFieldAccess (EVar "e") "siteTraps"))) (ELit LUnit) (EBlock (DoExpr (EApp (EApp (EVar "registerL") (EVar "e")) (EApp (EApp (EApp (EVar "declareSymbol") (EApp (EVar "Foreign") (EBinOp "++" (EVar "fn") (ELit (LString "_at"))))) (EApp (EVar "runtimePrototype") (EVar "decl"))) (EUnOp "!" (EFieldAccess (EVar "e") "symOrigin"))))) (DoExpr (EApp (EApp (EVar "setRef") (EFieldAccess (EVar "e") "siteTraps")) (EBinOp "::" (EVar "fn") (EUnOp "!" (EFieldAccess (EVar "e") "siteTraps")))))))) (DoExpr (EApp (EApp (EVar "emit") (EVar "e")) (EApp (EApp (EApp (EApp (EApp (EVar "rtLine") (EVar "e")) (ELit (LString ""))) (ELit (LString "void"))) (EBinOp "++" (EVar "fn") (ELit (LString "_at")))) (EApp (EVar "i64Ops") (EBinOp "++" (EVar "args") (EListLit (EVar "site")))))))))) (EApp (EVar "__fallthrough__") (ELit LUnit)))))
 (DTypeSig false "siteTrapDeclares" (TyFun (TyCon "Emit") (TyApp (TyCon "List") (TyCon "String"))))
-(DFunDef false "siteTrapDeclares" ((PVar "e")) (EApp (EApp (EMethodRef "map") (ELam ((PVar "fn")) (EBinOp "++" (ELit (LString "declare ")) (EApp (EApp (EVar "prototypeText") (EBinOp "++" (EVar "fn") (ELit (LString "_at")))) (EApp (EVar "runtimePrototype") (EApp (EVar "siteTrapDecl") (EVar "fn"))))))) (EApp (EVar "reverseL") (EUnOp "!" (EFieldAccess (EVar "e") "siteTraps")))))
+(DFunDef false "siteTrapDeclares" ((PVar "e")) (EApp (EApp (EMethodRef "map") (ELam ((PVar "fn")) (EMatch (EApp (EVar "siteTrapDecl") (EVar "fn")) (arm (PCon "Some" (PVar "decl")) () (EBinOp "++" (ELit (LString "declare ")) (EApp (EApp (EVar "prototypeText") (EBinOp "++" (EVar "fn") (ELit (LString "_at")))) (EApp (EVar "runtimePrototype") (EVar "decl"))))) (arm (PCon "None") () (EApp (EApp (EVar "gapStr") (EVar "e")) (EBinOp "++" (ELit (LString "unknown located trap: ")) (EVar "fn"))))))) (EApp (EVar "reverseL") (EUnOp "!" (EFieldAccess (EVar "e") "siteTraps")))))
 (DTypeSig false "siteFileTable" (TyFun (TyCon "Emit") (TyApp (TyCon "List") (TyCon "String"))))
 (DFunDef false "siteFileTable" ((PVar "e")) (EMatch (EApp (EVar "reverseL") (EUnOp "!" (EFieldAccess (EVar "e") "siteFiles"))) (arm (PList) () (EListLit)) (arm (PVar "files") () (EBlock (DoLet false false (PVar "n") (EApp (EVar "listLen") (EVar "files"))) (DoExpr (EApp (EApp (EApp (EApp (EVar "registerGlobal") (EVar "e")) (EVar "False")) (ELit (LString ".sitefiles"))) (EBinOp "++" (EBinOp "++" (ELit (LString "[")) (EApp (EMethodRef "display") (EApp (EVar "intToString") (EBinOp "+" (EVar "n") (ELit (LInt 1)))))) (ELit (LString " x ptr]"))))) (DoExpr (EApp (EApp (EApp (EApp (EVar "registerGlobal") (EVar "e")) (EVar "False")) (ELit (LString "mdk_site_files"))) (ELit (LString "ptr")))) (DoExpr (EBinOp "++" (EBinOp "++" (EListLit (EBinOp "++" (EBinOp "++" (ELit (LString "; mdk-module ")) (EApp (EMethodRef "display") (EVar "scopeProgram"))) (ELit (LString "")))) (EApp (EApp (EApp (EVar "siteFileStrings") (EVar "e")) (ELit (LInt 0))) (EVar "files"))) (EListLit (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "@.sitefiles = private unnamed_addr constant [")) (EApp (EMethodRef "display") (EApp (EVar "intToString") (EBinOp "+" (EVar "n") (ELit (LInt 1)))))) (ELit (LString " x ptr] ["))) (EApp (EMethodRef "display") (EApp (EApp (EVar "siteFileElems") (ELit (LInt 0))) (EVar "n")))) (ELit (LString "ptr null]"))) (ELit (LString "@mdk_site_files = constant ptr @.sitefiles")))))))))
 (DTypeSig false "siteFileElems" (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyCon "String"))))

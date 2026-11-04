@@ -77,11 +77,11 @@ siteTrapDecls = [
 ]
 
 export
-siteTrapDecl : String -> RuntimeDecl
+siteTrapDecl : String -> Option RuntimeDecl
 siteTrapDecl name =
   match filter (d => runtimeName d == name ++ "_at") siteTrapDecls
-    [d] => d
-    _ => noReturn (name ++ "_at") ["i64"]
+    [d] => Some d
+    _ => None
 
 -- The preamble: two comment lines, one `declare` per row, then a blank line.
 export

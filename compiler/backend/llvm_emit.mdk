@@ -5929,28 +5929,31 @@ siteFileNumber e f = match omLookup f !e.siteFileNums
 emitTrapCall : Emit -> String -> List String -> String -> Unit
 emitTrapCall e fn args site
   | site == "0" = emit e (rtLine e "" "void" fn (i64Ops args))
-  | otherwise =
-    let _ =
-      if contains fn !e.siteTraps then
-        ()
-      else
-        registerL
-          e
-          (declareSymbol
-            (Foreign (fn ++ "_at"))
-            (runtimePrototype (siteTrapDecl fn))
-            !e.symOrigin)
-        e.siteTraps := fn :: !e.siteTraps
-    emit e (rtLine e "" "void" (fn ++ "_at") (i64Ops (args ++ [site])))
+  | otherwise = match siteTrapDecl fn
+    None => gapU e ("unknown located trap: " ++ fn)
+    Some decl =>
+      let _ =
+        if contains fn !e.siteTraps then
+          ()
+        else
+          registerL
+            e
+            (declareSymbol
+              (Foreign (fn ++ "_at"))
+              (runtimePrototype decl)
+              !e.symOrigin)
+          e.siteTraps := fn :: !e.siteTraps
+      emit e (rtLine e "" "void" (fn ++ "_at") (i64Ops (args ++ [site])))
 
 -- The `declare` of each `_at` twin the program calls.  They go ahead of the
 -- preamble, so every partition sees them.
 siteTrapDeclares : Emit -> List String
 siteTrapDeclares e =
   map
-    (fn =>
-      "declare "
-        ++ prototypeText (fn ++ "_at") (runtimePrototype (siteTrapDecl fn)))
+    (fn => match siteTrapDecl fn
+      Some decl =>
+        "declare " ++ prototypeText (fn ++ "_at") (runtimePrototype decl)
+      None => gapStr e ("unknown located trap: " ++ fn))
     (reverseL !e.siteTraps)
 
 -- The site file table, a NULL-terminated array of the files' paths behind the
