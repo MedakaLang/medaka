@@ -16,20 +16,34 @@ public export data RuntimeAbiRow = RuntimeAbiRow {
   noReturn : Bool,
 } deriving (Eq, Debug)
 
-abiType : String -> Result String AbiType
-abiType "i64" = Ok AbiWord
-abiType "i32" = Ok AbiInt32
-abiType "ptr" = Ok AbiPointer
-abiType "double" = Ok AbiDouble
-abiType "void" = Ok AbiVoid
-abiType t = Err ("unknown ABI type: " ++ t)
+public export data AbiError =
+  | UnknownAbiType String String
+  | VoidAbiParameter String
+  | UnclassifiedIntrinsic String
+  deriving (Eq, Debug, Display)
 
-parameterTypes : List String -> Result String (List AbiType)
-parameterTypes [] = Ok []
-parameterTypes (t :: ts) = match abiType t
-  Err e => Err e
-  Ok AbiVoid => Err "void parameter"
-  Ok ty => map (ty :: _) (parameterTypes ts)
+export
+renderAbiError : AbiError -> String
+renderAbiError (UnknownAbiType name ty) = "\{name}: unknown ABI type: \{ty}"
+renderAbiError (VoidAbiParameter name) = "\{name}: void parameter"
+renderAbiError (UnclassifiedIntrinsic name) = "unclassified intrinsic: " ++ name
+
+abiType : String -> String -> Result AbiError AbiType
+abiType _ "i64" = Ok AbiWord
+abiType _ "i32" = Ok AbiInt32
+abiType _ "ptr" = Ok AbiPointer
+abiType _ "double" = Ok AbiDouble
+abiType _ "void" = Ok AbiVoid
+abiType name ty = Err (UnknownAbiType name ty)
+
+parameterTypes : String -> List String -> Result AbiError (List AbiType)
+parameterTypes _ [] = Ok []
+parameterTypes name (t :: ts) = do
+  ty <- abiType name t
+  if ty == AbiVoid then
+    Err (VoidAbiParameter name)
+  else
+    map (ty :: _) (parameterTypes name ts)
 
 intrinsic : String -> Bool
 intrinsic name = contains name [
@@ -41,22 +55,20 @@ intrinsic name = contains name [
 ]
 
 export
-runtimeAbiRows : List RuntimeDecl -> Result String (List RuntimeAbiRow)
+runtimeAbiRows : List RuntimeDecl -> Result AbiError (List RuntimeAbiRow)
 runtimeAbiRows [] = Ok []
 runtimeAbiRows ((RuntimeDecl _ ret name params attrs) :: rest) =
   if intrinsic name then
     runtimeAbiRows rest
   else if startsWith "llvm." name then
-    Err ("unclassified intrinsic: " ++ name)
-  else match abiType ret
-    Err e => Err "\{name}: \{e}"
-    Ok result => match parameterTypes params
-      Err e => Err "\{name}: \{e}"
-      Ok parameters =>
-        let row = RuntimeAbiRow {
-          name = name,
-          result = result,
-          parameters = parameters,
-          noReturn = attrs == " noreturn",
-        }
-        map (row :: _) (runtimeAbiRows rest)
+    Err (UnclassifiedIntrinsic name)
+  else do
+    result <- abiType name ret
+    parameters <- parameterTypes name params
+    let row = RuntimeAbiRow {
+      name = name,
+      result = result,
+      parameters = parameters,
+      noReturn = attrs == " noreturn",
+    }
+    map (row :: _) (runtimeAbiRows rest)
