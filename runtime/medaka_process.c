@@ -4,6 +4,7 @@
 #include <errno.h>
 #include <fcntl.h>
 #include <pthread.h>
+#include <poll.h>
 #include <signal.h>
 #include <stdint.h>
 #include <stdlib.h>
@@ -26,24 +27,50 @@ typedef enum { LAUNCHING, FAILING, ABORTING, RUNNING, REAPED, LOST, DISPOSED } S
 struct MdkProcess {
   struct MdkProcess *next;
   State state;
-  int pidfd, error_fd, streams[3], signalled, transferred;
+  MdkLaunchStep launch_step;
+  int pidfd, error_fd, streams[3], signalled;
   int status_kind, status_value, status_core;
   unsigned char record[2 * sizeof(int)];
   size_t record_len;
   MdkProcessError failure;
+#ifdef MDK_PROCESS_TESTING
+  pid_t test_pid;
+#endif
 };
 static pthread_mutex_t process_lock = PTHREAD_MUTEX_INITIALIZER;
 static MdkProcess *process_roots;
 #ifdef MDK_PROCESS_TESTING
 static int test_gate = -1, test_ready = -1;
+static int test_signal_error, test_wait_error, test_poll_error;
+static int test_signals, test_waits, test_polls;
 #endif
 
 static long long box_int(int n) { return (long long)n * 2 + 1; }
-static long long error_result(int op, int err, const char *message) {
+static long long error_tuple(int op, int err, const char *message) {
   long long *tuple = mdk_alloc(4 * sizeof(long long));
   tuple[0] = MDK_TUPLE_TAG; tuple[1] = box_int(op); tuple[2] = box_int(err);
   tuple[3] = mdk_runtime_string(message);
+  return (long long)tuple;
+}
+static long long error_result(int op, int err, const char *message) {
+  return mdk_err(error_tuple(op, err, message));
+}
+static long long start_error(MdkProcessError error, MdkProcess *ticket) {
+  long long *tuple = mdk_alloc(5 * sizeof(long long));
+  tuple[0] = MDK_TUPLE_TAG; tuple[1] = box_int(error.operation);
+  tuple[2] = box_int(error.error); tuple[3] = mdk_runtime_string(error.message);
+  tuple[4] = ticket ? mdk_some((long long)ticket) : mdk_none();
   return mdk_err((long long)tuple);
+}
+static long long launch_result(MdkLaunchStep step, MdkProcess *p, MdkProcessError error) {
+  if (step == MDK_LAUNCH_ERROR) return error_result(error.operation, error.error, error.message);
+  int kind = step == MDK_LAUNCH_OWNED ? 1 : step == MDK_LAUNCH_ABORTED ? 3 :
+             step == MDK_LAUNCH_PENDING ? 0 : 2;
+  long long *tuple = mdk_alloc(4 * sizeof(long long));
+  tuple[0] = MDK_TUPLE_TAG; tuple[1] = box_int(kind);
+  tuple[2] = kind == 1 ? mdk_some((long long)p) : mdk_none();
+  tuple[3] = kind == 2 ? mdk_some(error_tuple(error.operation, error.error, error.message)) : mdk_none();
+  return mdk_ok((long long)tuple);
 }
 static void root(MdkProcess *p) { p->next = process_roots; process_roots = p; }
 static void unroot(MdkProcess *p) {
@@ -141,6 +168,7 @@ static MdkProcess *process_begin(const MdkSpawnSpec *s, MdkProcessError *error) 
   }
   if (capability()) { *error = (MdkProcessError){10, errno, "required process facility unavailable"}; return NULL; }
   MdkProcess *p = mdk_alloc(sizeof(*p));
+  memset(p, 0, sizeof(*p));
   p->pidfd = p->error_fd = -1;
   for (int i = 0; i < 3; ++i) p->streams[i] = -1;
   root(p);
@@ -198,6 +226,9 @@ static MdkProcess *process_begin(const MdkSpawnSpec *s, MdkProcessError *error) 
   }
   for (int i = 0; i < 3; ++i) close(child[i]);
   close(ep[1]); p->error_fd = ep[0]; p->state = LAUNCHING;
+#ifdef MDK_PROCESS_TESTING
+  p->test_pid = (pid_t)pid;
+#endif
   return p;
 fail:
   *error = (MdkProcessError){1, errno, "pipe or descriptor setup"};
@@ -208,7 +239,14 @@ cleanup:
 }
 static int observe(MdkProcess *p, MdkProcessError *error) {
   siginfo_t info = {0};
-  if (waitid(P_PIDFD, p->pidfd, &info, WEXITED | WNOHANG)) {
+  int result;
+#ifdef MDK_PROCESS_TESTING
+  ++test_waits;
+  if (test_wait_error) { errno = test_wait_error; result = -1; }
+  else
+#endif
+  result = waitid(P_PIDFD, p->pidfd, &info, WEXITED | WNOHANG);
+  if (result) {
     if (errno == EINTR) return 0;
     *error = (MdkProcessError){5, errno, "waitid"};
     if (errno == ECHILD) { close_once(&p->pidfd); p->state = LOST; return -1; }
@@ -220,6 +258,13 @@ static int observe(MdkProcess *p, MdkProcessError *error) {
   close_once(&p->pidfd); p->state = REAPED; return 1;
 }
 static MdkLaunchStep process_check_start(MdkProcess *p, MdkProcessError *error) {
+  if (p->launch_step == MDK_LAUNCH_OWNED) {
+    if (p->state != DISPOSED) return MDK_LAUNCH_OWNED;
+    *error = (MdkProcessError){8, 0, "process closed"}; return MDK_LAUNCH_ERROR;
+  }
+  if (p->launch_step != MDK_LAUNCH_PENDING) {
+    *error = p->failure; return p->launch_step;
+  }
   if (p->state == LAUNCHING) {
     ssize_t n = read(p->error_fd, p->record + p->record_len, sizeof(p->record) - p->record_len);
     if (n < 0 && (errno == EAGAIN || errno == EINTR)) return MDK_LAUNCH_PENDING;
@@ -230,7 +275,7 @@ static MdkLaunchStep process_check_start(MdkProcess *p, MdkProcessError *error) 
       close_once(&p->error_fd); close_streams(p); p->state = FAILING;
     } else if (!n) {
       close_once(&p->error_fd);
-      if (!p->record_len) { p->state = RUNNING; p->transferred = 1; return MDK_LAUNCH_OWNED; }
+      if (!p->record_len) { p->state = RUNNING; p->launch_step = MDK_LAUNCH_OWNED; return MDK_LAUNCH_OWNED; }
       p->failure = (MdkProcessError){11, 0, "partial launch record"}; close_streams(p); p->state = FAILING;
     } else if (n < 0) {
       p->failure = (MdkProcessError){11, errno, "launch handshake"}; close_once(&p->error_fd); close_streams(p); p->state = FAILING;
@@ -238,27 +283,65 @@ static MdkLaunchStep process_check_start(MdkProcess *p, MdkProcessError *error) 
   }
   if (p->state == FAILING || p->state == ABORTING) {
     State before = p->state;
+    int signal_error = 0;
     if (!p->signalled) {
-      if (syscall(SYS_pidfd_send_signal, p->pidfd, SIGKILL, NULL, 0) && errno != ESRCH) { *error = (MdkProcessError){5, errno, "pidfd_send_signal"}; return MDK_LAUNCH_ERROR; }
-      p->signalled = 1;
+      int result;
+#ifdef MDK_PROCESS_TESTING
+      ++test_signals;
+      if (test_signal_error) { errno = test_signal_error; result = -1; }
+      else
+#endif
+      result = (int)syscall(SYS_pidfd_send_signal, p->pidfd, SIGKILL, NULL, 0);
+      if (result && errno != ESRCH) signal_error = errno;
+      else p->signalled = 1;
     }
     int r = observe(p, error);
-    if (!r) return MDK_LAUNCH_PENDING;
+    if (!r) {
+      if (!signal_error) return MDK_LAUNCH_PENDING;
+      *error = (MdkProcessError){5, signal_error, "pidfd_send_signal"}; return MDK_LAUNCH_ERROR;
+    }
     if (r == -2) return MDK_LAUNCH_ERROR;
     close_once(&p->error_fd); close_streams(p); unroot(p);
-    if (r == -1) return MDK_LAUNCH_LOST_WAIT;
-    if (before == ABORTING) return MDK_LAUNCH_ABORTED;
-    *error = p->failure; return MDK_LAUNCH_FAILED;
+    if (r == -1) { p->failure = *error; p->launch_step = MDK_LAUNCH_LOST_WAIT; }
+    else if (before == ABORTING) {
+      p->failure = (MdkProcessError){12, 0, "launch cancelled"}; p->launch_step = MDK_LAUNCH_ABORTED;
+    } else p->launch_step = MDK_LAUNCH_FAILED;
+    *error = p->failure; return p->launch_step;
   }
+  *error = (MdkProcessError){0, 0, "invalid launch state"};
   return MDK_LAUNCH_ERROR;
 }
 static MdkLaunchStep process_abort_start(MdkProcess *p, MdkProcessError *error) {
-  if (p->transferred) { *error = (MdkProcessError){0, 0, "launch ownership already transferred"}; return MDK_LAUNCH_ERROR; }
+  if (p->launch_step == MDK_LAUNCH_OWNED) { *error = (MdkProcessError){0, 0, "launch ownership already transferred"}; return MDK_LAUNCH_ERROR; }
   if (p->state == LAUNCHING || p->state == FAILING) { p->state = ABORTING; close_once(&p->error_fd); close_streams(p); }
-  if (p->state == ABORTING) return process_check_start(p, error);
-  if (p->state == REAPED) return MDK_LAUNCH_ABORTED;
-  if (p->state == LOST) return MDK_LAUNCH_LOST_WAIT;
-  *error = (MdkProcessError){0, 0, "launch ownership already transferred"}; return MDK_LAUNCH_ERROR;
+  return process_check_start(p, error);
+}
+static MdkLaunchStep drive_start(MdkProcess *p, MdkProcessError *error) {
+  MdkLaunchStep step;
+  while ((step = process_check_start(p, error)) == MDK_LAUNCH_PENDING) {
+    int operation = p->state == LAUNCHING ? 11 : 5;
+    int fd = p->state == LAUNCHING ? p->error_fd : p->pidfd;
+    int held = fcntl(fd, F_DUPFD_CLOEXEC, 3);
+    if (held < 0) { *error = (MdkProcessError){operation, errno, "launch readiness duplicate"}; return MDK_LAUNCH_ERROR; }
+    struct pollfd ready = {held, POLLIN, 0};
+    int injected = 0;
+#ifdef MDK_PROCESS_TESTING
+    ++test_polls; injected = test_poll_error;
+#endif
+    /* An alias may release the original fd while this caller waits without the mutex. */
+    pthread_mutex_unlock(&process_lock);
+    int result = injected ? -1 : poll(&ready, 1, -1);
+    int saved = injected ? injected : errno;
+    close(held);
+    pthread_mutex_lock(&process_lock);
+    if (p->launch_step != MDK_LAUNCH_PENDING) continue;
+    if (result < 0 && saved == EINTR) continue;
+    if (result < 0 || (ready.revents & (POLLERR | POLLNVAL))) {
+      *error = (MdkProcessError){operation, result < 0 ? saved : EIO, "launch readiness wait"};
+      return MDK_LAUNCH_ERROR;
+    }
+  }
+  return step;
 }
 #ifdef MDK_PROCESS_TESTING
 int mdk_process_test_roots(void) {
@@ -274,6 +357,19 @@ int mdk_process_test_fd(long long word, int stream) {
 int mdk_process_test_flags(long long word, int stream) {
   MdkProcess *p = (MdkProcess *)word;
   return fcntl(p->streams[stream], F_GETFL);
+}
+int mdk_process_test_pidfd(long long word) { return ((MdkProcess *)word)->pidfd; }
+int mdk_process_test_pid(long long word) { return ((MdkProcess *)word)->test_pid; }
+void mdk_process_test_faults(int signal_error, int wait_error, int poll_error) {
+  pthread_mutex_lock(&process_lock);
+  test_signal_error = signal_error; test_wait_error = wait_error; test_poll_error = poll_error;
+  pthread_mutex_unlock(&process_lock);
+}
+int mdk_process_test_calls(int operation) {
+  pthread_mutex_lock(&process_lock);
+  int n = operation == 0 ? test_signals : operation == 1 ? test_waits : test_polls;
+  pthread_mutex_unlock(&process_lock);
+  return n;
 }
 long long mdk_process_test_begin(int gate, int ready) {
   char *argv[] = {"/bin/true", NULL};
@@ -300,26 +396,68 @@ long long mdk_process_start(long long program, long long argv, long long cwd, lo
                             long long in, long long out, long long err) {
   MdkSpawnSpec spec = {0};
   if (!fill_spec(&spec, program, argv, cwd, env, in, out, err)) {
-    free_spec(&spec); return error_result(0, 0, "invalid spawn options");
+    free_spec(&spec); return start_error((MdkProcessError){0, 0, "invalid spawn options"}, NULL);
   }
 #ifndef __linux__
-  free_spec(&spec); return error_result(10, 0, "native process unsupported");
+  free_spec(&spec); return start_error((MdkProcessError){10, 0, "native process unsupported"}, NULL);
 #else
   MdkProcessError error = {0};
   pthread_mutex_lock(&process_lock);
   MdkProcess *p = process_begin(&spec, &error);
   free_spec(&spec);
-  if (!p) { pthread_mutex_unlock(&process_lock); return error_result(error.operation, error.error, error.message); }
-  MdkLaunchStep step;
-  do { step = process_check_start(p, &error); } while (step == MDK_LAUNCH_PENDING || step == MDK_LAUNCH_ERROR);
+  if (!p) { pthread_mutex_unlock(&process_lock); return start_error(error, NULL); }
+  MdkLaunchStep step = drive_start(p, &error);
+  MdkProcess *ticket = step == MDK_LAUNCH_ERROR && p->launch_step == MDK_LAUNCH_PENDING ? p : NULL;
   pthread_mutex_unlock(&process_lock);
   if (step == MDK_LAUNCH_OWNED) return mdk_ok((long long)p);
-  return error_result(error.operation, error.error, error.message);
+  return start_error(error, ticket);
+#endif
+}
+long long mdk_process_retry_start(long long word) {
+#ifndef __linux__
+  (void)word;
+  return start_error((MdkProcessError){10, 0, "native process unsupported"}, NULL);
+#else
+  MdkProcess *p = (MdkProcess *)word;
+  MdkProcessError error = {0};
+  pthread_mutex_lock(&process_lock);
+  MdkLaunchStep step = drive_start(p, &error);
+  MdkProcess *ticket = step == MDK_LAUNCH_ERROR && p->launch_step == MDK_LAUNCH_PENDING ? p : NULL;
+  pthread_mutex_unlock(&process_lock);
+  if (step == MDK_LAUNCH_OWNED) return mdk_ok(word);
+  return start_error(error, ticket);
+#endif
+}
+long long mdk_process_check_start(long long word) {
+#ifndef __linux__
+  (void)word;
+  return error_result(10, 0, "native process unsupported");
+#else
+  MdkProcess *p = (MdkProcess *)word;
+  MdkProcessError error = {0};
+  pthread_mutex_lock(&process_lock);
+  MdkLaunchStep step = process_check_start(p, &error);
+  pthread_mutex_unlock(&process_lock);
+  return launch_result(step, p, error);
+#endif
+}
+long long mdk_process_abort_start(long long word) {
+#ifndef __linux__
+  (void)word;
+  return error_result(10, 0, "native process unsupported");
+#else
+  MdkProcess *p = (MdkProcess *)word;
+  MdkProcessError error = {0};
+  pthread_mutex_lock(&process_lock);
+  MdkLaunchStep step = process_abort_start(p, &error);
+  pthread_mutex_unlock(&process_lock);
+  return launch_result(step, p, error);
 #endif
 }
 long long mdk_process_poll_exit(long long word) {
   MdkProcess *p = (MdkProcess *)word;
   pthread_mutex_lock(&process_lock);
+  if (p->launch_step != MDK_LAUNCH_OWNED) { pthread_mutex_unlock(&process_lock); return error_result(0, 0, "launch ownership not transferred"); }
   if (p->state == DISPOSED) { pthread_mutex_unlock(&process_lock); return error_result(8, 0, "process closed"); }
 #ifdef __linux__
   if (p->state == RUNNING) {
@@ -338,6 +476,7 @@ long long mdk_process_poll_exit(long long word) {
 long long mdk_process_close_stdin(long long word) {
   MdkProcess *p = (MdkProcess *)word;
   pthread_mutex_lock(&process_lock);
+  if (p->launch_step != MDK_LAUNCH_OWNED) { pthread_mutex_unlock(&process_lock); return error_result(0, 0, "launch ownership not transferred"); }
   if (p->state == DISPOSED) { pthread_mutex_unlock(&process_lock); return error_result(8, 0, "process closed"); }
   int r = close_once(&p->streams[0]), e = errno;
   pthread_mutex_unlock(&process_lock);
@@ -346,6 +485,7 @@ long long mdk_process_close_stdin(long long word) {
 long long mdk_process_dispose(long long word) {
   MdkProcess *p = (MdkProcess *)word;
   pthread_mutex_lock(&process_lock);
+  if (p->launch_step != MDK_LAUNCH_OWNED) { pthread_mutex_unlock(&process_lock); return error_result(0, 0, "launch ownership not transferred"); }
   if (p->state == DISPOSED) { pthread_mutex_unlock(&process_lock); return mdk_ok(1); }
   if (p->state == RUNNING) { pthread_mutex_unlock(&process_lock); return error_result(9, 0, "process still running"); }
   int lost = p->state == LOST, e = 0;

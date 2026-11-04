@@ -32,7 +32,9 @@ static long long cons(long long head, long long tail) { long long *p=mdk_alloc(2
 static long long field(long long v, int i) { return ((long long *)v)[i]; }
 static long long str(const char *s) { return mdk_runtime_string(s); }
 static long long start(const char *program, long long args, const char *cwd, long long env, int in) {
-  return mdk_process_start(str(program), args, str(cwd), env, in ? 1 : 3, 3, 3);
+  long long r=mdk_process_start(str(program), args, str(cwd), env, in ? 1 : 3, 3, 3);
+  if (field(r,0)==MDK_TAG_ERR) CHECK(field(field(r,1),4)==(MDK_TAG_NONE<<1|1));
+  return r;
 }
 static long long must_start(const char *program, long long args, int in) {
   long long r=start(program,args,"/tmp",nil(),in); CHECK(field(r,0)==MDK_TAG_OK); return field(r,1);
