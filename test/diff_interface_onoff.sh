@@ -283,7 +283,7 @@ xargs -P "$JOBS" -L 1 sh "$OUT/mone.sh" < "$OUT/mjobs"
 mbad=0
 # A test that makes its own scratch directory prints its random name.
 for f in "$OUT"/m.[ab].*.out "$OUT"/m.[ab].*.err; do
-  sed -i 's#tmp\.[A-Za-z0-9]\{6,\}#tmp.X#g' "$f"
+  sed -i -e 's#tmp\.[A-Za-z0-9]\{6,\}#tmp.X#g' -e 's#medaka_build_[A-Za-z0-9]\{6,\}#medaka_build_X#g' "$f"
 done
 while IFS= read -r line; do
   name=${line%% *}
