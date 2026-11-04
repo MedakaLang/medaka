@@ -1,5 +1,5 @@
 # META
-source_lines=4697
+source_lines=4718
 stages=DESUGAR,MARK
 # SOURCE
 import support.diag_codes.{DiagCode(..), codeText}
@@ -443,6 +443,7 @@ checkSourceStaleness argv = match sourceStalenessVerdict ()
       dieMsg msg
     else if envelopeOnStderrInvocation argv then
       pendingStaleNotice := Some msg
+      registerEarlyNotice argv msg
     else
       ePutStrLn msg
 
@@ -548,15 +549,35 @@ envelopeOnStderrInvocation ("test" :: rest) = match parseArgs testArgSpec rest
   Err _ => False
 envelopeOnStderrInvocation _ = False
 
+-- `test --json` also hands the deferred notice to the C abort emitter as a
+-- prose note, so an abort that fires before `armAbortReport` (out of memory or
+-- a stack overflow in the front end, a native-only run, which never arms) still
+-- appends it after the abort line.  `armAbortReport` replaces the slots later,
+-- so the envelope carries `staleBinary` and the prose is not printed twice.
+-- `earlyNoteRegistered` lets the prose flush clear exactly the slot this wrote.
+earlyNoteRegistered : Ref Bool
+earlyNoteRegistered = Ref False
+
+registerEarlyNotice : List String -> String -> <IO> Unit
+registerEarlyNotice ("test" :: _) msg =
+  earlyNoteRegistered := True
+  setAbortReport msg ""
+registerEarlyNotice _ _ = ()
+
 -- Print the deferred staleness notices as prose and clear them.  Called from every
--- exit that is NOT the envelope: `run`'s error arms (via `runAbort`) and
--- `dispatchSub`'s `--help`.  A no-op whenever nothing was deferred.
+-- exit that is NOT the envelope: `run`'s error arms (via `runAbort`), the `test`
+-- exits (`testDie`, `testExit`, the props-worker arm of `runTestCmd` and the
+-- passing `--json` report) and `dispatchSub`'s `--help`.  A no-op whenever
+-- nothing was deferred.
 flushStaleNoticeProse : Unit -> <IO> Unit
 flushStaleNoticeProse _ =
   let _ = match !pendingStaleNotice
     None => ()
     Some msg =>
       pendingStaleNotice := None
+      if !earlyNoteRegistered then
+        earlyNoteRegistered := False
+        setAbortReport "" ""
       ePutStrLn msg
   let notices = !pendingPreludeNotices
   pendingPreludeNotices := []
@@ -4765,7 +4786,7 @@ runMcpServerFromEnv _ =
 (DTypeSig false "sourceStalenessVerdict" (TyFun (TyCon "Unit") (TyEffect ("IO") None (TyApp (TyCon "Option") (TyCon "String")))))
 (DFunDef false "sourceStalenessVerdict" (PWild) (EBlock (DoLet false false (PVar "baked") (EApp (EVar "buildFingerprint") (ELit LUnit))) (DoExpr (EIf (EBinOp "==" (EVar "baked") (ELit (LString ""))) (EVar "None") (EBlock (DoLet false false (PVar "root") (EApp (EApp (EVar "envOr") (ELit (LString "MEDAKA_ROOT"))) (EVar "defaultMedakaRoot"))) (DoLet false false (PVar "compilerDir") (EApp (EApp (EVar "joinPath") (EVar "root")) (ELit (LString "compiler")))) (DoExpr (EIf (EApp (EVar "not") (EApp (EVar "fileExists") (EVar "compilerDir"))) (EVar "None") (EMatch (EApp (EVar "liveSourceFingerprint") (EVar "root")) (arm (PCon "None") () (EVar "None")) (arm (PCon "Some" (PVar "live")) () (EIf (EBinOp "==" (EVar "live") (EVar "baked")) (EVar "None") (EApp (EVar "Some") (EVar "compilerDir"))))))))))))
 (DTypeSig false "checkSourceStaleness" (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyEffect ("IO") None (TyCon "Unit"))))
-(DFunDef false "checkSourceStaleness" ((PVar "argv")) (EMatch (EApp (EVar "sourceStalenessVerdict") (ELit LUnit)) (arm (PCon "None") () (ELit LUnit)) (arm (PCon "Some" (PVar "compilerDir")) () (EBlock (DoLet false false (PVar "msg") (EBinOp "++" (EBinOp "++" (ELit (LString "warning: this ./medaka was built from compiler source that differs from ")) (EVar "compilerDir")) (ELit (LString "; rebuild with `make medaka`")))) (DoExpr (EIf (EBinOp "/=" (EApp (EApp (EVar "envOr") (ELit (LString "MEDAKA_STRICT"))) (ELit (LString ""))) (ELit (LString ""))) (EApp (EVar "dieMsg") (EVar "msg")) (EIf (EApp (EVar "envelopeOnStderrInvocation") (EVar "argv")) (EApp (EApp (EVar "setRef") (EVar "pendingStaleNotice")) (EApp (EVar "Some") (EVar "msg"))) (EApp (EVar "ePutStrLn") (EVar "msg")))))))))
+(DFunDef false "checkSourceStaleness" ((PVar "argv")) (EMatch (EApp (EVar "sourceStalenessVerdict") (ELit LUnit)) (arm (PCon "None") () (ELit LUnit)) (arm (PCon "Some" (PVar "compilerDir")) () (EBlock (DoLet false false (PVar "msg") (EBinOp "++" (EBinOp "++" (ELit (LString "warning: this ./medaka was built from compiler source that differs from ")) (EVar "compilerDir")) (ELit (LString "; rebuild with `make medaka`")))) (DoExpr (EIf (EBinOp "/=" (EApp (EApp (EVar "envOr") (ELit (LString "MEDAKA_STRICT"))) (ELit (LString ""))) (ELit (LString ""))) (EApp (EVar "dieMsg") (EVar "msg")) (EIf (EApp (EVar "envelopeOnStderrInvocation") (EVar "argv")) (EBlock (DoExpr (EApp (EApp (EVar "setRef") (EVar "pendingStaleNotice")) (EApp (EVar "Some") (EVar "msg")))) (DoExpr (EApp (EApp (EVar "registerEarlyNotice") (EVar "argv")) (EVar "msg")))) (EApp (EVar "ePutStrLn") (EVar "msg")))))))))
 (DTypeSig false "loadCheckPrelude" (TyFun (TyCon "PreludeInputs") (TyEffect ("IO") None (TyCon "Unit"))))
 (DFunDef false "loadCheckPrelude" ((PVar "prelude")) (EBlock (DoLet false false (PVar "verdict") (EApp (EVar "loadPreludeInterface") (EVar "prelude"))) (DoExpr (EApp (EApp (EApp (EVar "reportStaleLine") (EVar "dieMsg")) (EVar "None")) (EApp (EApp (EVar "staleLine") (EVar "InterfaceFile")) (EVar "verdict")))) (DoExpr (EApp (EApp (EApp (EVar "reportDecls") (EVar "None")) (EVar "dieMsg")) (EVar "prelude")))))
 (DTypeSig false "seedCheckPrelude" (TyFun (TyCon "PreludeInputs") (TyEffect ("IO") None (TyCon "Unit"))))
@@ -4789,8 +4810,13 @@ runMcpServerFromEnv _ =
 (DFunDef false "envelopeOnStderrInvocation" ((PCons (PLit (LString "run")) (PVar "rest"))) (EApp (EApp (EVar "runFlagGiven") (ELit (LString "--json"))) (EVar "rest")))
 (DFunDef false "envelopeOnStderrInvocation" ((PCons (PLit (LString "test")) (PVar "rest"))) (EMatch (EApp (EApp (EVar "parseArgs") (EVar "testArgSpec")) (EVar "rest")) (arm (PCon "Ok" (PVar "a")) () (EApp (EApp (EVar "flag") (ELit (LString "--json"))) (EVar "a"))) (arm (PCon "Err" PWild) () (EVar "False"))))
 (DFunDef false "envelopeOnStderrInvocation" (PWild) (EVar "False"))
+(DTypeSig false "earlyNoteRegistered" (TyApp (TyCon "Ref") (TyCon "Bool")))
+(DFunDef false "earlyNoteRegistered" () (EApp (EVar "Ref") (EVar "False")))
+(DTypeSig false "registerEarlyNotice" (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyCon "String") (TyEffect ("IO") None (TyCon "Unit")))))
+(DFunDef false "registerEarlyNotice" ((PCons (PLit (LString "test")) PWild) (PVar "msg")) (EBlock (DoExpr (EApp (EApp (EVar "setRef") (EVar "earlyNoteRegistered")) (EVar "True"))) (DoExpr (EApp (EApp (EVar "setAbortReport") (EVar "msg")) (ELit (LString ""))))))
+(DFunDef false "registerEarlyNotice" (PWild PWild) (ELit LUnit))
 (DTypeSig false "flushStaleNoticeProse" (TyFun (TyCon "Unit") (TyEffect ("IO") None (TyCon "Unit"))))
-(DFunDef false "flushStaleNoticeProse" (PWild) (EBlock (DoLet false false PWild (EMatch (EUnOp "!" (EVar "pendingStaleNotice")) (arm (PCon "None") () (ELit LUnit)) (arm (PCon "Some" (PVar "msg")) () (EBlock (DoExpr (EApp (EApp (EVar "setRef") (EVar "pendingStaleNotice")) (EVar "None"))) (DoExpr (EApp (EVar "ePutStrLn") (EVar "msg"))))))) (DoLet false false (PVar "notices") (EUnOp "!" (EVar "pendingPreludeNotices"))) (DoExpr (EApp (EApp (EVar "setRef") (EVar "pendingPreludeNotices")) (EListLit))) (DoExpr (EApp (EVar "emitWarningLines") (EApp (EApp (EVar "map") (EVar "snd")) (EVar "notices"))))))
+(DFunDef false "flushStaleNoticeProse" (PWild) (EBlock (DoLet false false PWild (EMatch (EUnOp "!" (EVar "pendingStaleNotice")) (arm (PCon "None") () (ELit LUnit)) (arm (PCon "Some" (PVar "msg")) () (EBlock (DoExpr (EApp (EApp (EVar "setRef") (EVar "pendingStaleNotice")) (EVar "None"))) (DoExpr (EIf (EUnOp "!" (EVar "earlyNoteRegistered")) (EBlock (DoExpr (EApp (EApp (EVar "setRef") (EVar "earlyNoteRegistered")) (EVar "False"))) (DoExpr (EApp (EApp (EVar "setAbortReport") (ELit (LString ""))) (ELit (LString ""))))) (ELit LUnit))) (DoExpr (EApp (EVar "ePutStrLn") (EVar "msg"))))))) (DoLet false false (PVar "notices") (EUnOp "!" (EVar "pendingPreludeNotices"))) (DoExpr (EApp (EApp (EVar "setRef") (EVar "pendingPreludeNotices")) (EListLit))) (DoExpr (EApp (EVar "emitWarningLines") (EApp (EApp (EVar "map") (EVar "snd")) (EVar "notices"))))))
 (DTypeSig false "dieMsg" (TyFun (TyCon "String") (TyEffect ("IO") None (TyCon "Unit"))))
 (DFunDef false "dieMsg" ((PVar "msg")) (EBlock (DoExpr (EApp (EVar "emitAbortTotal") (ELit LUnit))) (DoExpr (EApp (EVar "ePutStrLn") (EVar "msg"))) (DoExpr (EApp (EVar "stageExit") (ELit (LInt 1))))))
 (DTypeSig false "testDie" (TyFun (TyCon "String") (TyEffect ("IO") None (TyCon "Unit"))))
@@ -5324,7 +5350,7 @@ runMcpServerFromEnv _ =
 (DTypeSig false "sourceStalenessVerdict" (TyFun (TyCon "Unit") (TyEffect ("IO") None (TyApp (TyCon "Option") (TyCon "String")))))
 (DFunDef false "sourceStalenessVerdict" (PWild) (EBlock (DoLet false false (PVar "baked") (EApp (EVar "buildFingerprint") (ELit LUnit))) (DoExpr (EIf (EBinOp "==" (EVar "baked") (ELit (LString ""))) (EVar "None") (EBlock (DoLet false false (PVar "root") (EApp (EApp (EVar "envOr") (ELit (LString "MEDAKA_ROOT"))) (EVar "defaultMedakaRoot"))) (DoLet false false (PVar "compilerDir") (EApp (EApp (EVar "joinPath") (EVar "root")) (ELit (LString "compiler")))) (DoExpr (EIf (EApp (EVar "not") (EApp (EVar "fileExists") (EVar "compilerDir"))) (EVar "None") (EMatch (EApp (EVar "liveSourceFingerprint") (EVar "root")) (arm (PCon "None") () (EVar "None")) (arm (PCon "Some" (PVar "live")) () (EIf (EBinOp "==" (EVar "live") (EVar "baked")) (EVar "None") (EApp (EVar "Some") (EVar "compilerDir"))))))))))))
 (DTypeSig false "checkSourceStaleness" (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyEffect ("IO") None (TyCon "Unit"))))
-(DFunDef false "checkSourceStaleness" ((PVar "argv")) (EMatch (EApp (EVar "sourceStalenessVerdict") (ELit LUnit)) (arm (PCon "None") () (ELit LUnit)) (arm (PCon "Some" (PVar "compilerDir")) () (EBlock (DoLet false false (PVar "msg") (EBinOp "++" (EBinOp "++" (ELit (LString "warning: this ./medaka was built from compiler source that differs from ")) (EVar "compilerDir")) (ELit (LString "; rebuild with `make medaka`")))) (DoExpr (EIf (EBinOp "/=" (EApp (EApp (EVar "envOr") (ELit (LString "MEDAKA_STRICT"))) (ELit (LString ""))) (ELit (LString ""))) (EApp (EVar "dieMsg") (EVar "msg")) (EIf (EApp (EVar "envelopeOnStderrInvocation") (EVar "argv")) (EApp (EApp (EVar "setRef") (EVar "pendingStaleNotice")) (EApp (EVar "Some") (EVar "msg"))) (EApp (EVar "ePutStrLn") (EVar "msg")))))))))
+(DFunDef false "checkSourceStaleness" ((PVar "argv")) (EMatch (EApp (EVar "sourceStalenessVerdict") (ELit LUnit)) (arm (PCon "None") () (ELit LUnit)) (arm (PCon "Some" (PVar "compilerDir")) () (EBlock (DoLet false false (PVar "msg") (EBinOp "++" (EBinOp "++" (ELit (LString "warning: this ./medaka was built from compiler source that differs from ")) (EVar "compilerDir")) (ELit (LString "; rebuild with `make medaka`")))) (DoExpr (EIf (EBinOp "/=" (EApp (EApp (EVar "envOr") (ELit (LString "MEDAKA_STRICT"))) (ELit (LString ""))) (ELit (LString ""))) (EApp (EVar "dieMsg") (EVar "msg")) (EIf (EApp (EVar "envelopeOnStderrInvocation") (EVar "argv")) (EBlock (DoExpr (EApp (EApp (EVar "setRef") (EVar "pendingStaleNotice")) (EApp (EVar "Some") (EVar "msg")))) (DoExpr (EApp (EApp (EVar "registerEarlyNotice") (EVar "argv")) (EVar "msg")))) (EApp (EVar "ePutStrLn") (EVar "msg")))))))))
 (DTypeSig false "loadCheckPrelude" (TyFun (TyCon "PreludeInputs") (TyEffect ("IO") None (TyCon "Unit"))))
 (DFunDef false "loadCheckPrelude" ((PVar "prelude")) (EBlock (DoLet false false (PVar "verdict") (EApp (EVar "loadPreludeInterface") (EVar "prelude"))) (DoExpr (EApp (EApp (EApp (EVar "reportStaleLine") (EVar "dieMsg")) (EVar "None")) (EApp (EApp (EVar "staleLine") (EVar "InterfaceFile")) (EVar "verdict")))) (DoExpr (EApp (EApp (EApp (EVar "reportDecls") (EVar "None")) (EVar "dieMsg")) (EVar "prelude")))))
 (DTypeSig false "seedCheckPrelude" (TyFun (TyCon "PreludeInputs") (TyEffect ("IO") None (TyCon "Unit"))))
@@ -5348,8 +5374,13 @@ runMcpServerFromEnv _ =
 (DFunDef false "envelopeOnStderrInvocation" ((PCons (PLit (LString "run")) (PVar "rest"))) (EApp (EApp (EVar "runFlagGiven") (ELit (LString "--json"))) (EVar "rest")))
 (DFunDef false "envelopeOnStderrInvocation" ((PCons (PLit (LString "test")) (PVar "rest"))) (EMatch (EApp (EApp (EVar "parseArgs") (EVar "testArgSpec")) (EVar "rest")) (arm (PCon "Ok" (PVar "a")) () (EApp (EApp (EVar "flag") (ELit (LString "--json"))) (EVar "a"))) (arm (PCon "Err" PWild) () (EVar "False"))))
 (DFunDef false "envelopeOnStderrInvocation" (PWild) (EVar "False"))
+(DTypeSig false "earlyNoteRegistered" (TyApp (TyCon "Ref") (TyCon "Bool")))
+(DFunDef false "earlyNoteRegistered" () (EApp (EVar "Ref") (EVar "False")))
+(DTypeSig false "registerEarlyNotice" (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyCon "String") (TyEffect ("IO") None (TyCon "Unit")))))
+(DFunDef false "registerEarlyNotice" ((PCons (PLit (LString "test")) PWild) (PVar "msg")) (EBlock (DoExpr (EApp (EApp (EVar "setRef") (EVar "earlyNoteRegistered")) (EVar "True"))) (DoExpr (EApp (EApp (EVar "setAbortReport") (EVar "msg")) (ELit (LString ""))))))
+(DFunDef false "registerEarlyNotice" (PWild PWild) (ELit LUnit))
 (DTypeSig false "flushStaleNoticeProse" (TyFun (TyCon "Unit") (TyEffect ("IO") None (TyCon "Unit"))))
-(DFunDef false "flushStaleNoticeProse" (PWild) (EBlock (DoLet false false PWild (EMatch (EUnOp "!" (EVar "pendingStaleNotice")) (arm (PCon "None") () (ELit LUnit)) (arm (PCon "Some" (PVar "msg")) () (EBlock (DoExpr (EApp (EApp (EVar "setRef") (EVar "pendingStaleNotice")) (EVar "None"))) (DoExpr (EApp (EVar "ePutStrLn") (EVar "msg"))))))) (DoLet false false (PVar "notices") (EUnOp "!" (EVar "pendingPreludeNotices"))) (DoExpr (EApp (EApp (EVar "setRef") (EVar "pendingPreludeNotices")) (EListLit))) (DoExpr (EApp (EVar "emitWarningLines") (EApp (EApp (EMethodRef "map") (EVar "snd")) (EVar "notices"))))))
+(DFunDef false "flushStaleNoticeProse" (PWild) (EBlock (DoLet false false PWild (EMatch (EUnOp "!" (EVar "pendingStaleNotice")) (arm (PCon "None") () (ELit LUnit)) (arm (PCon "Some" (PVar "msg")) () (EBlock (DoExpr (EApp (EApp (EVar "setRef") (EVar "pendingStaleNotice")) (EVar "None"))) (DoExpr (EIf (EUnOp "!" (EVar "earlyNoteRegistered")) (EBlock (DoExpr (EApp (EApp (EVar "setRef") (EVar "earlyNoteRegistered")) (EVar "False"))) (DoExpr (EApp (EApp (EVar "setAbortReport") (ELit (LString ""))) (ELit (LString ""))))) (ELit LUnit))) (DoExpr (EApp (EVar "ePutStrLn") (EVar "msg"))))))) (DoLet false false (PVar "notices") (EUnOp "!" (EVar "pendingPreludeNotices"))) (DoExpr (EApp (EApp (EVar "setRef") (EVar "pendingPreludeNotices")) (EListLit))) (DoExpr (EApp (EVar "emitWarningLines") (EApp (EApp (EMethodRef "map") (EVar "snd")) (EVar "notices"))))))
 (DTypeSig false "dieMsg" (TyFun (TyCon "String") (TyEffect ("IO") None (TyCon "Unit"))))
 (DFunDef false "dieMsg" ((PVar "msg")) (EBlock (DoExpr (EApp (EVar "emitAbortTotal") (ELit LUnit))) (DoExpr (EApp (EVar "ePutStrLn") (EVar "msg"))) (DoExpr (EApp (EVar "stageExit") (ELit (LInt 1))))))
 (DTypeSig false "testDie" (TyFun (TyCon "String") (TyEffect ("IO") None (TyCon "Unit"))))

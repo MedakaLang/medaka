@@ -51,6 +51,7 @@
 #include <math.h>
 #include <string.h>
 #include <stdnoreturn.h>
+#include <stdatomic.h>
 #include <sys/stat.h>
 #include <sys/time.h>
 #include <time.h>
@@ -338,12 +339,13 @@ __attribute__((weak)) const char *const *const mdk_site_files = 0;
  * stdlib/json.mdk's `escapeChar` escapes a string.  A pre-formatted line is
  * written as it is, then the note.  Each slot is cleared before it is written,
  * so an abort during the write adds no second report. */
-static char *mdk_abort_note = 0;
-static char *mdk_abort_tmpl = 0;
+static char *volatile mdk_abort_note = 0;
+static char *volatile mdk_abort_tmpl = 0;
 
-static char *mdk_take_abort_slot(char **slot) {
+static char *mdk_take_abort_slot(char *volatile *slot) {
   char *p = *slot;
   *slot = 0;
+  atomic_signal_fence(memory_order_seq_cst);
   return p;
 }
 
@@ -351,6 +353,7 @@ struct mdk_abort_buf {
   char b[192];
   size_t n;
 };
+#define MDK_ABORT_BUF_INIT {.b = {0}, .n = 0}
 
 static void mdk_abort_write(const char *p, size_t n) {
   while (n > 0) {
@@ -407,9 +410,7 @@ static void mdk_abort_put_site(unsigned long long site) {
   for (unsigned long long i = 0; i + 1 < file; i++)
     if (table[i] == 0) return;
   if (table[file - 1] == 0) return;
-  struct mdk_abort_buf a;
-  a.n = 0;
-  a.b[0] = 0;
+  struct mdk_abort_buf a = MDK_ABORT_BUF_INIT;
   mdk_abort_write(table[file - 1], strlen(table[file - 1]));
   mdk_abuf_str(&a, ":");
   mdk_abuf_u64(&a, (site >> 20) & 0xFFFFFF);
@@ -570,9 +571,7 @@ noreturn void mdk_oob_at(long long idx) { mdk_oob_at_at(idx, 0); }
  * path, so the two extra argument words cost nothing on the hot path. */
 noreturn void mdk_slice_oob(long long lo, long long hi_incl) {
   mdk_flush_run_stdout_on_abort();
-  struct mdk_abort_buf a;
-  a.n = 0;
-  a.b[0] = 0;
+  struct mdk_abort_buf a = MDK_ABORT_BUF_INIT;
   mdk_abuf_str(&a, "slice [");
   mdk_abuf_int(&a, lo);
   mdk_abuf_str(&a, "..");
@@ -1302,8 +1301,10 @@ void mdk_set_abort_report(long long note, long long tmpl) {
   char *new_tmpl = mdk_copy_abort_string(tmpl);
   char *old_note = mdk_abort_note;
   char *old_tmpl = mdk_abort_tmpl;
+  atomic_signal_fence(memory_order_seq_cst);
   mdk_abort_note = new_note;
   mdk_abort_tmpl = new_tmpl;
+  atomic_signal_fence(memory_order_seq_cst);
   free(old_note);
   free(old_tmpl);
 }
@@ -1334,9 +1335,7 @@ static void mdk_flush_run_stdout_on_abort(void) {
    emitter and leaves with _exit. A returned NULL would be dereferenced and
    misreported as a segmentation fault. */
 static void *mdk_gc_oom(size_t bytes) {
-  struct mdk_abort_buf a;
-  a.n = 0;
-  a.b[0] = 0;
+  struct mdk_abort_buf a = MDK_ABORT_BUF_INIT;
   mdk_abuf_u64(&a, (unsigned long long)bytes);
   mdk_flush_run_stdout_on_abort();
   mdk_flush_build_stdout_on_fatal_signal();
@@ -1462,9 +1461,7 @@ noreturn void mdk_mod_zero_at(unsigned long long site) {
 noreturn void mdk_int_overflow_at(long long op, long long a, long long b,
                                   unsigned long long site) {
   static const char ops[] = "+-*/";
-  struct mdk_abort_buf buf;
-  buf.n = 0;
-  buf.b[0] = 0;
+  struct mdk_abort_buf buf = MDK_ABORT_BUF_INIT;
   if (op == 4) {
     mdk_abuf_str(&buf, "-");
     mdk_abuf_operand(&buf, a);
@@ -1490,9 +1487,7 @@ noreturn void mdk_let_refute_at(unsigned long long site) {
   exit(1);
 }
 noreturn void mdk_oob_at_at(long long idx, unsigned long long site) {
-  struct mdk_abort_buf buf;
-  buf.n = 0;
-  buf.b[0] = 0;
+  struct mdk_abort_buf buf = MDK_ABORT_BUF_INIT;
   mdk_abuf_str(&buf, "index ");
   mdk_abuf_int(&buf, idx);
   mdk_abuf_str(&buf, " out of bounds");
@@ -3257,9 +3252,7 @@ long long mdk_bit_not(long long a)                 { return ~a; }
    `shiftRight` is arithmetic: the vacated bits copy the sign. */
 static noreturn void mdk_negative_shift(const char *name, long long k) {
   mdk_flush_run_stdout_on_abort();
-  struct mdk_abort_buf a;
-  a.n = 0;
-  a.b[0] = 0;
+  struct mdk_abort_buf a = MDK_ABORT_BUF_INIT;
   mdk_abuf_str(&a, name);
   mdk_abuf_str(&a, ": negative shift ");
   mdk_abuf_int(&a, k);

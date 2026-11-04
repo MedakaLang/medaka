@@ -439,6 +439,7 @@ checkSourceStaleness argv = match sourceStalenessVerdict ()
       dieMsg msg
     else if envelopeOnStderrInvocation argv then
       pendingStaleNotice := Some msg
+      registerEarlyNotice argv msg
     else
       ePutStrLn msg
 
@@ -544,15 +545,35 @@ envelopeOnStderrInvocation ("test" :: rest) = match parseArgs testArgSpec rest
   Err _ => False
 envelopeOnStderrInvocation _ = False
 
+-- `test --json` also hands the deferred notice to the C abort emitter as a
+-- prose note, so an abort that fires before `armAbortReport` (out of memory or
+-- a stack overflow in the front end, a native-only run, which never arms) still
+-- appends it after the abort line.  `armAbortReport` replaces the slots later,
+-- so the envelope carries `staleBinary` and the prose is not printed twice.
+-- `earlyNoteRegistered` lets the prose flush clear exactly the slot this wrote.
+earlyNoteRegistered : Ref Bool
+earlyNoteRegistered = Ref False
+
+registerEarlyNotice : List String -> String -> <IO> Unit
+registerEarlyNotice ("test" :: _) msg =
+  earlyNoteRegistered := True
+  setAbortReport msg ""
+registerEarlyNotice _ _ = ()
+
 -- Print the deferred staleness notices as prose and clear them.  Called from every
--- exit that is NOT the envelope: `run`'s error arms (via `runAbort`) and
--- `dispatchSub`'s `--help`.  A no-op whenever nothing was deferred.
+-- exit that is NOT the envelope: `run`'s error arms (via `runAbort`), the `test`
+-- exits (`testDie`, `testExit`, the props-worker arm of `runTestCmd` and the
+-- passing `--json` report) and `dispatchSub`'s `--help`.  A no-op whenever
+-- nothing was deferred.
 flushStaleNoticeProse : Unit -> <IO> Unit
 flushStaleNoticeProse _ =
   let _ = match !pendingStaleNotice
     None => ()
     Some msg =>
       pendingStaleNotice := None
+      if !earlyNoteRegistered then
+        earlyNoteRegistered := False
+        setAbortReport "" ""
       ePutStrLn msg
   let notices = !pendingPreludeNotices
   pendingPreludeNotices := []

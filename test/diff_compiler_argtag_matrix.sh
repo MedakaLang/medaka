@@ -88,8 +88,10 @@ norm() {
     | awk '{ printf "%s\\n", $0 }' | sed -e 's/\\n$//'
 }
 
-# A5_open_head__B1 reads a missing dictionary word as an allocation size before its
-# pinned allocation failure.  Boehm may print this exact three-line preamble, with
+# A5_open_head__B1 once read a missing dictionary word as an allocation size and
+# failed to allocate; its expected.txt now pins `exec: 0`, so no fixture pins an
+# allocation failure and this normalizer guards a cell that no longer crashes.  Its
+# self-tests exercise it synthetically.  Boehm may print this exact three-line preamble, with
 # address-derived KiB counts, before the runtime's out-of-memory marker.  It is allocator noise, not a
 # different #2032 classification.  Strip it only from this exact cell's native execution
 # when it retains BOTH semantic pins: exit 1 and an E-OUT-OF-MEMORY line (whose byte

@@ -1245,13 +1245,22 @@ underStaleRoot : String ->
   String ->
   List String ->
   <Exec, IO> Result String (Int, String, String)
-underStaleRoot root strict args =
+underStaleRoot = underStaleRootEnv []
+
+-- [underStaleRoot] with extra `NAME=value` assignments in the environment.
+underStaleRootEnv : List String ->
+  String ->
+  String ->
+  List String ->
+  <Exec, IO> Result String (Int, String, String)
+underStaleRootEnv env root strict args =
   runVerb
     "env"
     ((if strict == "" then
         ["-u", "MEDAKA_STRICT"]
       else
         ["MEDAKA_STRICT=\{strict}"])
+      ++ env
       ++ ["MEDAKA_ROOT=\{root}", "MEDAKA_SEED=7", medakaBin]
       ++ args)
 
@@ -1285,6 +1294,37 @@ test "an aborted --json test run on a stale binary carries the notice and the se
         (Some True)
         (map (isStringWith staleNeedle) (jsonMember "staleBinary" err)),
       expectEqual (Some (JInt 7)) (jsonMember "seed" err),
+    ]))
+
+-- Some True when `err` holds the abort line and the stale notice after it.
+staleAfterAbort : String -> Option Bool
+staleAfterAbort err = match (
+  indexOf "E-OUT-OF-MEMORY" err,
+  indexOf staleNeedle err,
+)
+  (Some a, Some n) => Some (a < n)
+  _ => None
+
+-- The out-of-memory fires in the front end, before `armAbortReport`; the heap
+-- cap and initial heap are both pinned (Boehm rejects a cap below the initial
+-- heap, and the suite exports a 1 GiB initial heap).
+test "a --json test run that runs out of memory before arming still prints the stale notice after the abort line" =
+  withStaleRoot
+    [("ok_test.mdk", passTestSrc)]
+    (dir => withSpawn (underStaleRootEnv
+      ["GC_MAXIMUM_HEAP_SIZE=20000000", "GC_INITIAL_HEAP_SIZE=8388608"]
+      "\{dir}/root"
+      ""
+      [
+        "test",
+        "--json",
+        "--engines",
+        "eval",
+        "\{dir}/ok_test.mdk",
+      ]) ((code, _, err) => expectAll [
+      expectNotEqual 0 code,
+      expectTextContainsAll ["E-OUT-OF-MEMORY", staleNeedle] err,
+      expectEqual (Some True) (staleAfterAbort err),
     ]))
 
 test "a passing --json test run on a stale binary reports on stdout and warns as prose" =

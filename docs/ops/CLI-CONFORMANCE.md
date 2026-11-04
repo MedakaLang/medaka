@@ -254,7 +254,7 @@ verb (`sh test/cli_conformance_census.sh`, "usage-error exit code + stream" and
 > belongs in the envelope (the mechanism already exists: `attachStaleness`,
 > `compiler/tools/mcp.mdk`) or on a documented third channel.
 
-`medaka test --json` is the second such verb: a normal run answers on stdout, but a run that aborts after its tests start writes its machine envelope to stderr (the `run --json` shape, plus the top-level `seed`), so stderr is its machine channel too. On both verbs the staleness notice is deferred: it rides inside the envelope on an abort and is printed as prose on stderr on every other exit, never dropped.
+`medaka test --json` is the second such verb: a normal run answers on stdout, but a run that aborts after its tests start writes its machine envelope to stderr (the `run --json` shape, plus the top-level `seed`), so stderr is its machine channel too. On both verbs the staleness notice is deferred: it rides inside the envelope on an abort and is printed as prose on stderr on every other exit; `test --json` also registers it with the C abort emitter at startup, so even an abort before the envelope is armed prints it, whereas a `run --json` abort raised in the C runtime drops it.
 
 **Rationale.** A machine consumer reads one stream. A verb that answers on the other one is
 unavailable to it however well-formed its JSON is — and a verb that mixes prose into the
