@@ -42,6 +42,7 @@
  * Darwin, which uses pthread_get_stackaddr_np instead. */
 #ifndef _GNU_SOURCE
 #define _GNU_SOURCE
+#include "medaka_abi.h"
 #endif
 #include <dirent.h>
 #include <errno.h>
@@ -227,7 +228,7 @@ void *mdk_alloc_atomic(long long n) { return GC_malloc_atomic((size_t)n); }
  * >= 1) forces every application of a PAP through __mdk_apply, which FLATTENS it —
  * re-dispatching the original closure against (already-supplied ++ new) args.  So a
  * PAP is never called via the inline fast path and needs no per-arity trampoline. */
-#define MDK_MAX_ARITY 16
+
 
 typedef long long mdk_i64;
 
@@ -259,10 +260,10 @@ static mdk_i64 mdk_call_exact(mdk_i64 code, mdk_i64 cw, mdk_i64 argc,
 /* build a PAP capturing `cw` plus the `argc` args already supplied. */
 static mdk_i64 mdk_make_pap(mdk_i64 cw, mdk_i64 argc, const mdk_i64 *argv) {
   mdk_i64 *cell = (mdk_i64 *)mdk_alloc((long long)(8 * (3 + argc)));
-  cell[0] = -1;         /* PAP sentinel header */
-  cell[1] = cw;         /* the original closure */
-  cell[2] = argc;       /* number of args captured so far */
-  for (mdk_i64 i = 0; i < argc; i++) cell[3 + i] = argv[i];
+  cell[0] = MDK_PAP_HEADER;         /* PAP sentinel header */
+  cell[MDK_PAP_CLOSURE_SLOT] = cw;         /* the original closure */
+  cell[MDK_PAP_COUNT_SLOT] = argc;       /* number of args captured so far */
+  for (mdk_i64 i = 0; i < argc; i++) cell[MDK_PAP_ARGS_SLOT + i] = argv[i];
   return (mdk_i64)cell;
 }
 
@@ -271,23 +272,23 @@ static mdk_i64 mdk_make_pap(mdk_i64 cw, mdk_i64 argc, const mdk_i64 *argv) {
  * exact-arity inline call. */
 mdk_i64 __mdk_apply(mdk_i64 cw, mdk_i64 argc, const mdk_i64 *argv) {
   mdk_i64 *cell = (mdk_i64 *)cw;
-  if (cell[0] == -1) {
+  if (cell[0] == MDK_PAP_HEADER) {
     /* PAP: flatten — combine already-supplied args with the new ones and
      * re-dispatch against the underlying closure. */
-    mdk_i64 orig = cell[1];
-    mdk_i64 nsup = cell[2];
+    mdk_i64 orig = cell[MDK_PAP_CLOSURE_SLOT];
+    mdk_i64 nsup = cell[MDK_PAP_COUNT_SLOT];
     mdk_i64 total = nsup + argc;
     mdk_i64 stackbuf[2 * MDK_MAX_ARITY];
     mdk_i64 *buf = stackbuf;
     if (total > (mdk_i64)(2 * MDK_MAX_ARITY))
       buf = (mdk_i64 *)mdk_alloc((long long)(8 * total));
-    for (mdk_i64 i = 0; i < nsup; i++) buf[i] = ((mdk_i64 *)cw)[3 + i];
+    for (mdk_i64 i = 0; i < nsup; i++) buf[i] = ((mdk_i64 *)cw)[MDK_PAP_ARGS_SLOT + i];
     for (mdk_i64 i = 0; i < argc; i++) buf[nsup + i] = argv[i];
     return __mdk_apply(orig, total, buf);
   }
   {
     mdk_i64 arity = cell[0];
-    mdk_i64 code = cell[1];
+    mdk_i64 code = cell[MDK_CLOSURE_CODE_SLOT];
     if (argc == arity) return mdk_call_exact(code, cw, argc, argv);
     if (argc < arity) return mdk_make_pap(cw, argc, argv);
     /* over-application: saturate `arity`, then apply the surplus to the result. */
@@ -518,7 +519,7 @@ void mdk_print_float(double d) {
  * Per §2a, every extern that RETURNS a Medaka String allocates it here, through
  * mdk_alloc, with this exact layout — it never hands back a
  * native-owned buffer.  mdk_int_to_string is the first such extern. */
-#define MDK_STR_TAG 1
+
 
 /* BYTEBLOCK REPRESENTATION — the packed byte buffer behind the `ByteBlock`
  * builtin (stdlib/runtime.mdk, "Byte blocks"), boxed as one GC cell:
@@ -532,13 +533,12 @@ void mdk_print_float(double d) {
  * and a byte block must not be given that shape.  The value is a composite in
  * the reserved type-id range (slot 4; see the MDK_TAG block below and
  * `reservedTag` in compiler/backend/llvm_emit.mdk), which no user constructor
- * tag and no other cell header can reach.  The _Static_assert beside MDK_TAG
- * pins this spelling to that formula.
+ * tag and no other cell header can reach.  The generated ABI header defines the tag and pins the formula.
  *
  * The payload holds no pointers and the two header words are integers, so the
  * cell is allocated pointer-free through mdk_alloc_atomic, exactly as a String
  * cell is; mdk_alloc_atomic does not zero, so mdk_byteblock_alloc memsets. */
-#define MDK_BYTEBLOCK_TAG ((65536LL + 4LL) * 4294967296LL)
+
 
 /* U64 REPRESENTATION — the boxed 64-bit unsigned integer behind the `U64`
  * builtin (docs/design/INTEGER-TYPES-DESIGN.md section 6.2), Float's cell shape:
@@ -547,13 +547,12 @@ void mdk_print_float(double d) {
  *   offset  8:  u64 payload    the value, all 64 bits
  *
  * The header is reserved type-id 5 (`u64CellTag` in
- * compiler/backend/llvm_emit.mdk), pinned to MDK_TAG(5, 0) beside the byte
- * block's assertion.  The cell holds no pointers, so it is allocated through
+ * compiler/backend/llvm_emit.mdk), pinned to MDK_TAG(5, 0) in the ABI header.  The cell holds no pointers, so it is allocated through
  * mdk_alloc_atomic; a literal is a private constant cell the emitter lays out
  * the same way, so nothing may write through a U64 word.  The type-lost
  * discriminators below (mdk_value_eq, mdk_value_cmp_raw, mdk_value_lt/le/gt/ge,
  * mdk_num_*, mdk_print_num) order and compute on the unsigned payload. */
-#define MDK_U64_TAG ((65536LL + 5LL) * 4294967296LL)
+
 
 static int mdk_is_u64(long long w) {
   return ((w & 1) == 0) && ((const long long *)w)[0] == MDK_U64_TAG;
@@ -577,10 +576,10 @@ void mdk_print_u64(long long w) { printf("%llu\n", mdk_u64_payload(w)); }
 /* I64 REPRESENTATION — the boxed 64-bit signed integer behind the `I64` builtin:
  * U64's cell shape and payload, the 64 bits read in two's complement, under a
  * header of its own (reserved type-id 6, `i64CellTag` in
- * compiler/backend/llvm_emit.mdk, pinned to MDK_TAG(6, 0) below).  The distinct
+ * compiler/backend/llvm_emit.mdk, pinned to MDK_TAG(6, 0) in the ABI header).  The distinct
  * header is what lets the type-lost discriminators order, divide and print an
  * I64 signed where a U64 is unsigned. */
-#define MDK_I64_TAG ((65536LL + 6LL) * 4294967296LL)
+
 
 static int mdk_is_i64(long long w) {
   return ((w & 1) == 0) && ((const long long *)w)[0] == MDK_I64_TAG;
@@ -619,7 +618,7 @@ noreturn static void mdk_byteblock_append_unsupported(void);
 
 /* mdk_append's fail-closed arm: a left operand that is neither String, byte block,
  * Nil nor Cons must not be walked as a Cons chain.  Both read the reserved ADT tags
- * MDK_TAG_CONS/MDK_TAG_NIL, so they are defined down beside those. */
+ * MDK_TAG_CONS/MDK_TAG_NIL, defined in the ABI header. */
 static int mdk_is_list_word(long long w);
 noreturn static void mdk_append_unsupported(void);
 
@@ -796,7 +795,7 @@ long long mdk_value_eq(long long a, long long b) {
    * addresses. */
   if (mdk_is_u64(a)) return mdk_u64_payload(a) == mdk_u64_payload(b) ? 3 : 1;
   if (mdk_is_i64(a)) return mdk_i64_payload(a) == mdk_i64_payload(b) ? 3 : 1;
-  int a_flt = ((a & 1) == 0) && ((const long long *)a)[0] == 2;
+  int a_flt = ((a & 1) == 0) && ((const long long *)a)[0] == MDK_FLOAT_TAG;
   if (a_flt) {
     double da = ((const double *)a)[1], db = ((const double *)b)[1];
     return da == db ? 3 : 1;
@@ -1239,14 +1238,14 @@ noreturn void mdk_let_refute(void) {
 __attribute__((weak)) const char *const *const mdk_site_files = 0;
 
 static void mdk_put_site(unsigned long long site) {
-  unsigned long long file = site >> 44;
+  unsigned long long file = site >> MDK_SITE_FILE_SHIFT;
   const char *const *table = mdk_site_files;
   if (file == 0 || table == 0) return;
   for (unsigned long long i = 0; i + 1 < file; i++)
     if (table[i] == 0) return;
   if (table[file - 1] == 0) return;
-  fprintf(stderr, "%s:%llu:%llu: ", table[file - 1], (site >> 20) & 0xFFFFFF,
-          site & 0xFFFFF);
+  fprintf(stderr, "%s:%llu:%llu: ", table[file - 1], (site >> MDK_SITE_LINE_SHIFT) & MDK_SITE_LINE_MASK,
+          site & MDK_SITE_COLUMN_MASK);
 }
 
 noreturn void mdk_div_zero_at(unsigned long long site) {
@@ -2122,31 +2121,6 @@ long long mdk_string_to_lower(long long s) {
  * are boxed cells [i64 tag | field… ] (fields at offset 8*(i+1)), matching
  * emitCtorAlloc.  Ordinals follow core.mdk: Option = Some|None, Result = Ok|Err,
  * Ordering = Lt|Eq|Gt; List = Cons|Nil. */
-#define MDK_TAG_SHIFT     4294967296LL          /* 2^32 — ctorTagShift */
-#define MDK_RESERVED_BASE 65536LL               /* reservedTypeBase */
-#define MDK_TAG(tid, ord) (((MDK_RESERVED_BASE + (tid)) * MDK_TAG_SHIFT) + (ord))
-#define MDK_TAG_CONS MDK_TAG(0, 0)
-#define MDK_TAG_NIL  MDK_TAG(0, 1)
-#define MDK_TAG_SOME MDK_TAG(1, 0)
-#define MDK_TAG_NONE MDK_TAG(1, 1)
-#define MDK_TAG_OK   MDK_TAG(2, 0)
-#define MDK_TAG_ERR  MDK_TAG(2, 1)
-#define MDK_TAG_LT   MDK_TAG(3, 0)
-#define MDK_TAG_EQ   MDK_TAG(3, 1)
-#define MDK_TAG_GT   MDK_TAG(3, 2)
-
-/* Reserved type-id 4 is the `ByteBlock` cell header, not an ADT: it is stamped by
- * mdk_byteblock_alloc, which runs long before this block, so it carries its own
- * spelling.  The two must be the same word, and the next runtime ADT takes id 7. */
-_Static_assert(MDK_BYTEBLOCK_TAG == MDK_TAG(4, 0),
-               "ByteBlock header must be reserved type-id 4, ordinal 0");
-/* Reserved type-id 5 is the `U64` cell header, likewise not an ADT, and 6 the
- * `I64` cell header. */
-_Static_assert(MDK_U64_TAG == MDK_TAG(5, 0),
-               "U64 header must be reserved type-id 5, ordinal 0");
-_Static_assert(MDK_I64_TAG == MDK_TAG(6, 0),
-               "I64 header must be reserved type-id 6, ordinal 0");
-
 /* mdk_append's list discriminator and its fail-closed arm (forward-declared with
  * the byte-block ones, up beside MDK_STR_TAG): a List word is either the Nil
  * immediate or a boxed cell whose header is the reserved Cons tag.  A nullary
@@ -2206,7 +2180,7 @@ long long mdk_char_from_code(long long n_tagged) {
 /* Box a double as a Float cell [header=2 | double], matching emitter boxFloat. */
 static long long mdk_box_float(double d) {
   long long *c = (long long *)mdk_alloc(16);
-  c[0] = 2; ((double *)c)[1] = d; return (long long)c;
+  c[0] = MDK_FLOAT_TAG; ((double *)c)[1] = d; return (long long)c;
 }
 
 /* ── G3: polymorphic `Num a =>` arithmetic (runtime numeric dispatch) ─────────
@@ -2607,7 +2581,7 @@ long long mdk_value_cmp_raw(long long a, long long b) {
     long long sa = mdk_i64_payload(a), sb = mdk_i64_payload(b);
     return sa < sb ? -1 : sa > sb ? 1 : 0;
   }
-  int a_flt = ((a & 1) == 0) && ((const long long *)a)[0] == 2;
+  int a_flt = ((a & 1) == 0) && ((const long long *)a)[0] == MDK_FLOAT_TAG;
   if (a_flt) {
     double da = ((const double *)a)[1], db = ((const double *)b)[1];
     return da < db ? -1 : da > db ? 1 : 0;
@@ -2635,7 +2609,7 @@ long long mdk_value_cmp_raw(long long a, long long b) {
  * (`compare`/`min`/`max`/`sort` never route here; they go through the Ord
  * dict.  Whether `compare` at NaN should be IEEE totalOrder is issue #360.) */
 static int mdk_value_is_float(long long a) {
-  return ((a & 1) == 0) && ((const long long *)a)[0] == 2;
+  return ((a & 1) == 0) && ((const long long *)a)[0] == MDK_FLOAT_TAG;
 }
 
 long long mdk_value_lt(long long a, long long b) {
@@ -3285,7 +3259,7 @@ long long mdk_fsync(long long path, long long grant) {
  * fork fails.  A program that cannot be executed is Ok (127, "", strerror).
  * Tuple cell layout: [header=TUPLE_TAG, tagged_exitcode, stdout_str, stderr_str].
  * TUPLE_TAG = hashName("$tuple") = djb2 of "$tuple" = 6950939912435. */
-#define MDK_TUPLE_TAG 6950939912435LL
+
 
 static long long mdk_read_temp(const char *path) {
   FILE *f = fopen(path, "rb");

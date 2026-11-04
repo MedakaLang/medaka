@@ -113,7 +113,7 @@ echo "liveSourceFingerprint on $ROOT/compiler — PASS (mirror agrees)."
 # ── ARM 2: the FP_FULL import-closure walker vs. the loader's real module graph ──
 #
 # FP_FULL no longer hashes all of compiler/ (#2680): it hashes the emitter's OWN
-# import closure, plus stdlib/**.mdk (#2682) and runtime/*.c. That closure is
+# import closure, plus stdlib/**.mdk (#2682) and runtime C sources and headers. That closure is
 # computed by test/emitter_source_set.awk, a STATIC walker — src_fingerprint_full()
 # runs on the cold path with no ./medaka in existence, so it cannot ask the real
 # loader. So this is the SAME hand-synced-implementations hazard as arm 1, one
@@ -208,4 +208,44 @@ fi
 
 echo "checked: test/emitter_source_set.awk == driver.loader's real closure of"
 echo "$FP_ENTRY ($(wc -l < "$STATIC" | tr -d ' ') modules) — PASS."
-exit 0
+
+# Exercise the actual build-key functions in an isolated tree with a header-only edit.
+mkdir "$WORK/key-tree"
+cp -R "$ROOT/compiler" "$ROOT/stdlib" "$WORK/key-tree/"
+mkdir "$WORK/key-tree/runtime" "$WORK/key-tree/test"
+cp "$ROOT/runtime/medaka_rt.c" "$ROOT/runtime/medaka_abi.h" "$WORK/key-tree/runtime/"
+cp "$ROOT/test/emitter_source_set.awk" "$WORK/key-tree/test/"
+KEY_SCRIPT="$WORK/key-functions.sh"
+sed -n '/^hash_stream() {/,/^}/p; /^fp_full_file_list() {/,/^}/p; /^src_fingerprint_full() {/,/^}/p; /^src_fingerprint_runtime() {/,/^}/p; /^cache_tag() /p; /^emitter_key_for() {/,/^}/p; /^cli_key_for() {/,/^}/p' "$ROOT/test/build_native_medaka.sh" > "$KEY_SCRIPT"
+# shellcheck disable=SC1090
+. "$KEY_SCRIPT"
+KEY_TREE="$WORK/key-tree"
+REAL_ROOT="$ROOT"
+ROOT="$KEY_TREE"
+if command -v sha256sum >/dev/null 2>&1; then HASH_KIND=sha256sum; else HASH_KIND=shasum; fi
+GC_LINK=static BUILD_COMMIT=test BUILD_DATE=test FP_COMPILER=unchanged
+FP_FULL=$(src_fingerprint_full)
+FP_RUNTIME=$(src_fingerprint_runtime)
+full_before=$FP_FULL
+runtime_before=$FP_RUNTIME
+emitter_before=$(emitter_key_for test)
+cli_before=$(cli_key_for test)
+cp "$ROOT/runtime/medaka_abi.h" "$WORK/header-original"
+printf '\n/* mutation */\n' >> "$ROOT/runtime/medaka_abi.h"
+FP_FULL=$(src_fingerprint_full)
+FP_RUNTIME=$(src_fingerprint_runtime)
+[ "$FP_FULL" != "$full_before" ] && [ "$FP_RUNTIME" != "$runtime_before" ] && \
+  [ "$(emitter_key_for test)" != "$emitter_before" ] && [ "$(cli_key_for test)" != "$cli_before" ] || {
+  echo 'FAIL: header-only edit did not change both runtime fingerprints and build keys.'
+  exit 1
+}
+cp "$WORK/header-original" "$ROOT/runtime/medaka_abi.h"
+FP_FULL=$(src_fingerprint_full)
+FP_RUNTIME=$(src_fingerprint_runtime)
+[ "$FP_FULL" = "$full_before" ] && [ "$FP_RUNTIME" = "$runtime_before" ] && \
+  [ "$(emitter_key_for test)" = "$emitter_before" ] && [ "$(cli_key_for test)" = "$cli_before" ] || {
+  echo 'FAIL: restoring the header did not restore fingerprints and build keys.'
+  exit 1
+}
+ROOT="$REAL_ROOT"
+echo 'checked: header-only mutation and restore move emitter and CLI keys — PASS.'

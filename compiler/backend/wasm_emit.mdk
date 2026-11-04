@@ -1,3 +1,6 @@
+import backend.runtime_layout.{
+  siteFileShift, siteLineShift, siteFileBits, siteLineBits, siteColumnBits
+}
 import ir.constructor_facts.{
   ConstructorFacts, declaredCtorArity, declaredCtorOwner, declaredCtorOrdinal
 }
@@ -5219,9 +5222,13 @@ valueArithName op = panic ("wasm A0: not a value-arith op '" ++ op ++ "'")
 sitePackedW : WasmEmit -> Loc -> Int
 sitePackedW emit (Loc f sl sc el ec)
   | f == "" || sl == 1 && sc == 0 && el == 1 && ec == 0 = 0
-  | sl < 0 || sl >= 16777216 || sc < 0 || sc >= 1048576 = 0
+  | sl < 0
+    || sl >= shiftLeft 1 siteLineBits
+    || sc < 0
+    || sc >= shiftLeft 1 siteColumnBits = 0
   | otherwise = match siteFileNumW emit f
-    Some n => n * 17592186044416 + sl * 1048576 + sc
+    Some n =>
+      n * shiftLeft 1 siteFileShift + sl * shiftLeft 1 siteLineShift + sc
     None => 0
 
 siteFileNumW : WasmEmit -> String -> Option Int
@@ -5229,7 +5236,7 @@ siteFileNumW emit f = match omLookup f !emit.siteFileNums
   Some n => Some n
   None =>
     let n = omSize !emit.siteFileNums + 1
-    if n >= 65536 then
+    if n >= shiftLeft 1 siteFileBits then
       None
     else
       setRef emit.siteFileNums (omInsert f n !emit.siteFileNums)
