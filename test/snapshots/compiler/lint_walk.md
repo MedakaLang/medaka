@@ -1317,9 +1317,9 @@ firstFix orc (r :: rs) d = match applyRuleFix orc r d
   None => firstFix orc rs d
 
 applyRuleFix : Oracle -> Rule -> Decl -> Option (List Decl)
-applyRuleFix orc r d = match r.fix
-  Some f => f orc d
-  None => None
+applyRuleFix orc r d = do
+  f <- r.fix
+  f orc d
 
 -- render replacement decls, one per line (printer emits a single decl, no NL).
 renderDecls : List Decl -> String
@@ -2053,7 +2053,7 @@ appendIfPath file diag (path, src, diags) =
 (DFunDef false "firstFix" (PWild (PList) PWild) (EVar "None"))
 (DFunDef false "firstFix" ((PVar "orc") (PCons (PVar "r") (PVar "rs")) (PVar "d")) (EMatch (EApp (EApp (EApp (EVar "applyRuleFix") (EVar "orc")) (EVar "r")) (EVar "d")) (arm (PCon "Some" (PVar "newDecls")) () (EApp (EVar "Some") (EVar "newDecls"))) (arm (PCon "None") () (EApp (EApp (EApp (EVar "firstFix") (EVar "orc")) (EVar "rs")) (EVar "d")))))
 (DTypeSig false "applyRuleFix" (TyFun (TyCon "Oracle") (TyFun (TyCon "Rule") (TyFun (TyCon "Decl") (TyApp (TyCon "Option") (TyApp (TyCon "List") (TyCon "Decl")))))))
-(DFunDef false "applyRuleFix" ((PVar "orc") (PVar "r") (PVar "d")) (EMatch (EFieldAccess (EVar "r") "fix") (arm (PCon "Some" (PVar "f")) () (EApp (EApp (EVar "f") (EVar "orc")) (EVar "d"))) (arm (PCon "None") () (EVar "None"))))
+(DFunDef false "applyRuleFix" ((PVar "orc") (PVar "r") (PVar "d")) (EApp (EApp (EVar "andThen") (EFieldAccess (EVar "r") "fix")) (ELam ((PVar "f")) (EApp (EApp (EVar "f") (EVar "orc")) (EVar "d")))))
 (DTypeSig false "renderDecls" (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyCon "String")))
 (DFunDef false "renderDecls" ((PVar "ds")) (EApp (EVar "joinNl") (EApp (EApp (EVar "map") (EVar "declToString")) (EVar "ds"))))
 (DTypeSig false "applySplices" (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "Int") (TyCon "Int") (TyCon "String"))) (TyCon "String"))))
@@ -2454,7 +2454,7 @@ appendIfPath file diag (path, src, diags) =
 (DFunDef false "firstFix" (PWild (PList) PWild) (EVar "None"))
 (DFunDef false "firstFix" ((PVar "orc") (PCons (PVar "r") (PVar "rs")) (PVar "d")) (EMatch (EApp (EApp (EApp (EVar "applyRuleFix") (EVar "orc")) (EVar "r")) (EVar "d")) (arm (PCon "Some" (PVar "newDecls")) () (EApp (EVar "Some") (EVar "newDecls"))) (arm (PCon "None") () (EApp (EApp (EApp (EVar "firstFix") (EVar "orc")) (EVar "rs")) (EVar "d")))))
 (DTypeSig false "applyRuleFix" (TyFun (TyCon "Oracle") (TyFun (TyCon "Rule") (TyFun (TyCon "Decl") (TyApp (TyCon "Option") (TyApp (TyCon "List") (TyCon "Decl")))))))
-(DFunDef false "applyRuleFix" ((PVar "orc") (PVar "r") (PVar "d")) (EMatch (EFieldAccess (EVar "r") "fix") (arm (PCon "Some" (PVar "f")) () (EApp (EApp (EVar "f") (EVar "orc")) (EVar "d"))) (arm (PCon "None") () (EVar "None"))))
+(DFunDef false "applyRuleFix" ((PVar "orc") (PVar "r") (PVar "d")) (EApp (EApp (EMethodRef "andThen") (EFieldAccess (EVar "r") "fix")) (ELam ((PVar "f")) (EApp (EApp (EVar "f") (EVar "orc")) (EVar "d")))))
 (DTypeSig false "renderDecls" (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyCon "String")))
 (DFunDef false "renderDecls" ((PVar "ds")) (EApp (EVar "joinNl") (EApp (EApp (EMethodRef "map") (EVar "declToString")) (EVar "ds"))))
 (DTypeSig false "applySplices" (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "Int") (TyCon "Int") (TyCon "String"))) (TyCon "String"))))

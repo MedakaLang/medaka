@@ -68,9 +68,9 @@ boolSimplifyOf : Expr -> Option Expr
 boolSimplifyOf (EIf c t el) = boolSimplifyIf c (unwrapLoc t) (unwrapLoc el)
 boolSimplifyOf (EBinOp op a b _)
   | op == "==" || op == "/=" = boolSimplifyEq op a b
-boolSimplifyOf e = match notArgOf e
-  Some inner => map (y => y) (notArgOf (unwrapLoc inner))
-  None => None
+boolSimplifyOf e = do
+  inner <- notArgOf e
+  map (y => y) (notArgOf (unwrapLoc inner))
 
 boolSimplifyIf : Expr -> Expr -> Expr -> Option Expr
 boolSimplifyIf c t el

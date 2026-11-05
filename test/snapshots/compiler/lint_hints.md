@@ -249,9 +249,9 @@ public export data Found = Found {
 
 -- The subject against the template; a bound subexpression keeps its wrappers.
 matchHint : Hint -> Expr -> Option Found
-matchHint h subject = match matchT h.hintLhs subject (Found [] [])
-  Some found => if condsHold h.hintRow.rowConds found then Some found else None
-  None => None
+matchHint h subject = do
+  found <- matchT h.hintLhs subject (Found [] [])
+  if condsHold h.hintRow.rowConds found then Some found else None
 
 condsHold : List HintCond -> Found -> Bool
 condsHold conds found = all (condHolds found) conds
@@ -291,9 +291,9 @@ matchT (TLeaf sexp) subject found =
   if sexp == exprSexp (unwrapLoc subject) then Some found else None
 
 matchBoth : Tmpl -> Expr -> Tmpl -> Expr -> Found -> Option Found
-matchBoth p1 s1 p2 s2 found = match matchT p1 s1 found
-  Some found2 => matchT p2 s2 found2
-  None => None
+matchBoth p1 s1 p2 s2 found = do
+  found2 <- matchT p1 s1 found
+  matchT p2 s2 found2
 
 bindMeta : String -> Expr -> Found -> Option Found
 bindMeta n subject found = match lookupAssoc n found.foundBinds
@@ -493,7 +493,7 @@ ownsName _ _ = False
 (DFunDef false "compileOrPanic" ((PVar "row")) (EMatch (EApp (EVar "compileHint") (EVar "row")) (arm (PCon "Ok" (PVar "h")) () (EVar "h")) (arm (PCon "Err" (PVar "m")) () (EApp (EVar "panic") (EVar "m")))))
 (DData Public "Found" () ((variant "Found" (ConNamed (field "foundBinds" (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "Expr")))) (field "foundHeads" (TyApp (TyCon "List") (TyCon "Expr")))))) ())
 (DTypeSig false "matchHint" (TyFun (TyCon "Hint") (TyFun (TyCon "Expr") (TyApp (TyCon "Option") (TyCon "Found")))))
-(DFunDef false "matchHint" ((PVar "h") (PVar "subject")) (EMatch (EApp (EApp (EApp (EVar "matchT") (EFieldAccess (EVar "h") "hintLhs")) (EVar "subject")) (EApp (EApp (EVar "Found") (EListLit)) (EListLit))) (arm (PCon "Some" (PVar "found")) () (EIf (EApp (EApp (EVar "condsHold") (EFieldAccess (EFieldAccess (EVar "h") "hintRow") "rowConds")) (EVar "found")) (EApp (EVar "Some") (EVar "found")) (EVar "None"))) (arm (PCon "None") () (EVar "None"))))
+(DFunDef false "matchHint" ((PVar "h") (PVar "subject")) (EApp (EApp (EVar "andThen") (EApp (EApp (EApp (EVar "matchT") (EFieldAccess (EVar "h") "hintLhs")) (EVar "subject")) (EApp (EApp (EVar "Found") (EListLit)) (EListLit)))) (ELam ((PVar "found")) (EIf (EApp (EApp (EVar "condsHold") (EFieldAccess (EFieldAccess (EVar "h") "hintRow") "rowConds")) (EVar "found")) (EApp (EVar "Some") (EVar "found")) (EVar "None")))))
 (DTypeSig false "condsHold" (TyFun (TyApp (TyCon "List") (TyCon "HintCond")) (TyFun (TyCon "Found") (TyCon "Bool"))))
 (DFunDef false "condsHold" ((PVar "conds") (PVar "found")) (EApp (EApp (EVar "all") (EApp (EVar "condHolds") (EVar "found"))) (EVar "conds")))
 (DTypeSig false "condHolds" (TyFun (TyCon "Found") (TyFun (TyCon "HintCond") (TyCon "Bool"))))
@@ -508,7 +508,7 @@ ownsName _ _ = False
 (DFunDef false "matchT" ((PCon "TBin" (PVar "op") (PVar "pa") (PVar "pb")) (PVar "subject") (PVar "found")) (EMatch (EApp (EVar "unwrapLoc") (EVar "subject")) (arm (PCon "EBinOp" (PVar "op2") (PVar "sa") (PVar "sb") PWild) () (EIf (EBinOp "==" (EVar "op") (EVar "op2")) (EApp (EApp (EApp (EApp (EApp (EVar "matchBoth") (EVar "pa")) (EVar "sa")) (EVar "pb")) (EVar "sb")) (EVar "found")) (EVar "None"))) (arm PWild () (EVar "None"))))
 (DFunDef false "matchT" ((PCon "TLeaf" (PVar "sexp")) (PVar "subject") (PVar "found")) (EIf (EBinOp "==" (EVar "sexp") (EApp (EVar "exprSexp") (EApp (EVar "unwrapLoc") (EVar "subject")))) (EApp (EVar "Some") (EVar "found")) (EVar "None")))
 (DTypeSig false "matchBoth" (TyFun (TyCon "Tmpl") (TyFun (TyCon "Expr") (TyFun (TyCon "Tmpl") (TyFun (TyCon "Expr") (TyFun (TyCon "Found") (TyApp (TyCon "Option") (TyCon "Found"))))))))
-(DFunDef false "matchBoth" ((PVar "p1") (PVar "s1") (PVar "p2") (PVar "s2") (PVar "found")) (EMatch (EApp (EApp (EApp (EVar "matchT") (EVar "p1")) (EVar "s1")) (EVar "found")) (arm (PCon "Some" (PVar "found2")) () (EApp (EApp (EApp (EVar "matchT") (EVar "p2")) (EVar "s2")) (EVar "found2"))) (arm (PCon "None") () (EVar "None"))))
+(DFunDef false "matchBoth" ((PVar "p1") (PVar "s1") (PVar "p2") (PVar "s2") (PVar "found")) (EApp (EApp (EVar "andThen") (EApp (EApp (EApp (EVar "matchT") (EVar "p1")) (EVar "s1")) (EVar "found"))) (ELam ((PVar "found2")) (EApp (EApp (EApp (EVar "matchT") (EVar "p2")) (EVar "s2")) (EVar "found2")))))
 (DTypeSig false "bindMeta" (TyFun (TyCon "String") (TyFun (TyCon "Expr") (TyFun (TyCon "Found") (TyApp (TyCon "Option") (TyCon "Found"))))))
 (DFunDef false "bindMeta" ((PVar "n") (PVar "subject") (PVar "found")) (EMatch (EApp (EApp (EVar "lookupAssoc") (EVar "n")) (EFieldAccess (EVar "found") "foundBinds")) (arm (PCon "Some" (PVar "prev")) () (EIf (EBinOp "==" (EApp (EVar "exprSexp") (EApp (EVar "unwrapLoc") (EVar "prev"))) (EApp (EVar "exprSexp") (EApp (EVar "unwrapLoc") (EVar "subject")))) (EApp (EVar "Some") (EVar "found")) (EVar "None"))) (arm (PCon "None") () (EApp (EVar "Some") (EApp (EApp (EVar "Found") (EBinOp "::" (ETuple (EVar "n") (EVar "subject")) (EFieldAccess (EVar "found") "foundBinds"))) (EFieldAccess (EVar "found") "foundHeads"))))))
 (DTypeSig true "instantiate" (TyFun (TyCon "Hint") (TyFun (TyCon "Found") (TyCon "Expr"))))
@@ -616,7 +616,7 @@ ownsName _ _ = False
 (DFunDef false "compileOrPanic" ((PVar "row")) (EMatch (EApp (EVar "compileHint") (EVar "row")) (arm (PCon "Ok" (PVar "h")) () (EVar "h")) (arm (PCon "Err" (PVar "m")) () (EApp (EVar "panic") (EVar "m")))))
 (DData Public "Found" () ((variant "Found" (ConNamed (field "foundBinds" (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "Expr")))) (field "foundHeads" (TyApp (TyCon "List") (TyCon "Expr")))))) ())
 (DTypeSig false "matchHint" (TyFun (TyCon "Hint") (TyFun (TyCon "Expr") (TyApp (TyCon "Option") (TyCon "Found")))))
-(DFunDef false "matchHint" ((PVar "h") (PVar "subject")) (EMatch (EApp (EApp (EApp (EVar "matchT") (EFieldAccess (EVar "h") "hintLhs")) (EVar "subject")) (EApp (EApp (EVar "Found") (EListLit)) (EListLit))) (arm (PCon "Some" (PVar "found")) () (EIf (EApp (EApp (EVar "condsHold") (EFieldAccess (EFieldAccess (EVar "h") "hintRow") "rowConds")) (EVar "found")) (EApp (EVar "Some") (EVar "found")) (EVar "None"))) (arm (PCon "None") () (EVar "None"))))
+(DFunDef false "matchHint" ((PVar "h") (PVar "subject")) (EApp (EApp (EMethodRef "andThen") (EApp (EApp (EApp (EVar "matchT") (EFieldAccess (EVar "h") "hintLhs")) (EVar "subject")) (EApp (EApp (EVar "Found") (EListLit)) (EListLit)))) (ELam ((PVar "found")) (EIf (EApp (EApp (EVar "condsHold") (EFieldAccess (EFieldAccess (EVar "h") "hintRow") "rowConds")) (EVar "found")) (EApp (EVar "Some") (EVar "found")) (EVar "None")))))
 (DTypeSig false "condsHold" (TyFun (TyApp (TyCon "List") (TyCon "HintCond")) (TyFun (TyCon "Found") (TyCon "Bool"))))
 (DFunDef false "condsHold" ((PVar "conds") (PVar "found")) (EApp (EApp (EDictApp "all") (EApp (EVar "condHolds") (EVar "found"))) (EVar "conds")))
 (DTypeSig false "condHolds" (TyFun (TyCon "Found") (TyFun (TyCon "HintCond") (TyCon "Bool"))))
@@ -631,7 +631,7 @@ ownsName _ _ = False
 (DFunDef false "matchT" ((PCon "TBin" (PVar "op") (PVar "pa") (PVar "pb")) (PVar "subject") (PVar "found")) (EMatch (EApp (EVar "unwrapLoc") (EVar "subject")) (arm (PCon "EBinOp" (PVar "op2") (PVar "sa") (PVar "sb") PWild) () (EIf (EBinOp "==" (EVar "op") (EVar "op2")) (EApp (EApp (EApp (EApp (EApp (EVar "matchBoth") (EVar "pa")) (EVar "sa")) (EVar "pb")) (EVar "sb")) (EVar "found")) (EVar "None"))) (arm PWild () (EVar "None"))))
 (DFunDef false "matchT" ((PCon "TLeaf" (PVar "sexp")) (PVar "subject") (PVar "found")) (EIf (EBinOp "==" (EVar "sexp") (EApp (EVar "exprSexp") (EApp (EVar "unwrapLoc") (EVar "subject")))) (EApp (EVar "Some") (EVar "found")) (EVar "None")))
 (DTypeSig false "matchBoth" (TyFun (TyCon "Tmpl") (TyFun (TyCon "Expr") (TyFun (TyCon "Tmpl") (TyFun (TyCon "Expr") (TyFun (TyCon "Found") (TyApp (TyCon "Option") (TyCon "Found"))))))))
-(DFunDef false "matchBoth" ((PVar "p1") (PVar "s1") (PVar "p2") (PVar "s2") (PVar "found")) (EMatch (EApp (EApp (EApp (EVar "matchT") (EVar "p1")) (EVar "s1")) (EVar "found")) (arm (PCon "Some" (PVar "found2")) () (EApp (EApp (EApp (EVar "matchT") (EVar "p2")) (EVar "s2")) (EVar "found2"))) (arm (PCon "None") () (EVar "None"))))
+(DFunDef false "matchBoth" ((PVar "p1") (PVar "s1") (PVar "p2") (PVar "s2") (PVar "found")) (EApp (EApp (EMethodRef "andThen") (EApp (EApp (EApp (EVar "matchT") (EVar "p1")) (EVar "s1")) (EVar "found"))) (ELam ((PVar "found2")) (EApp (EApp (EApp (EVar "matchT") (EVar "p2")) (EVar "s2")) (EVar "found2")))))
 (DTypeSig false "bindMeta" (TyFun (TyCon "String") (TyFun (TyCon "Expr") (TyFun (TyCon "Found") (TyApp (TyCon "Option") (TyCon "Found"))))))
 (DFunDef false "bindMeta" ((PVar "n") (PVar "subject") (PVar "found")) (EMatch (EApp (EApp (EVar "lookupAssoc") (EVar "n")) (EFieldAccess (EVar "found") "foundBinds")) (arm (PCon "Some" (PVar "prev")) () (EIf (EBinOp "==" (EApp (EVar "exprSexp") (EApp (EVar "unwrapLoc") (EVar "prev"))) (EApp (EVar "exprSexp") (EApp (EVar "unwrapLoc") (EVar "subject")))) (EApp (EVar "Some") (EVar "found")) (EVar "None"))) (arm (PCon "None") () (EApp (EVar "Some") (EApp (EApp (EVar "Found") (EBinOp "::" (ETuple (EVar "n") (EVar "subject")) (EFieldAccess (EVar "found") "foundBinds"))) (EFieldAccess (EVar "found") "foundHeads"))))))
 (DTypeSig true "instantiate" (TyFun (TyCon "Hint") (TyFun (TyCon "Found") (TyCon "Expr"))))

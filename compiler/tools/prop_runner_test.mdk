@@ -453,11 +453,11 @@ runtimeNewtype _ (decl@(DTypeSig _ _ _ _ | DExtern _ | DFunDef _ _ _ _ _ _ | DDa
 wrappedPlan : String -> Result PlanError GenPlan
 wrappedPlan root =
   let raw = parse "export newtype Wrapped = Wrapped Int\n"
-  match (buildPlanEnvModules root [
-    PlanModule "owner" raw (map (runtimeNewtype "owner") raw),
-  ])
-    Ok env => planFor env "policy" "value" wrappedTy
-    Err e => Err e
+  do
+    env <- buildPlanEnvModules root [
+      PlanModule "owner" raw (map (runtimeNewtype "owner") raw),
+    ]
+    planFor env "policy" "value" wrappedTy
 
 wrappedDetail : String -> String
 wrappedDetail root = match wrappedPlan root

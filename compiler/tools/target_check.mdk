@@ -233,17 +233,15 @@ unboundReached : TargetProfile ->
   List ((String, String), List String) ->
   (String, ExternDecl) ->
   Option Diag
-unboundReached profile paths chains (mid, ed) =
-  match lookup (mid, ed.edName) chains
-    None => None
-    Some chain =>
-      let bound = match profileBindingHost profile
-        Some h => anyList (b => b.ebHost == h) (externBindings ed)
-        None => False
-      if bound then
-        None
-      else
-        Some (noBindingDiag profile (lookupAssoc mid paths) (ed, chain))
+unboundReached profile paths chains (mid, ed) = do
+  chain <- lookup (mid, ed.edName) chains
+  let bound = match profileBindingHost profile
+    Some h => anyList (b => b.ebHost == h) (externBindings ed)
+    None => False
+  if bound then
+    None
+  else
+    Some (noBindingDiag profile (lookupAssoc mid paths) (ed, chain))
 
 noBindingDiag : TargetProfile ->
   Option String ->

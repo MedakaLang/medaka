@@ -37,10 +37,9 @@ validateOverlap ((SourceEdit _ (SourceSpan a b) _ _) :: (next@(SourceEdit _ (Sou
 
 export
 validateSourceEdits : SourceSnapshot -> List SourceEdit -> Result EditError Unit
-validateSourceEdits (snapshot@(SourceSnapshot _ _ _ text _)) edits =
-  match validateEach snapshot text edits
-    Err e => Err e
-    Ok _ => validateOverlap (sortBy compareEdit edits)
+validateSourceEdits (snapshot@(SourceSnapshot _ _ _ text _)) edits = do
+  _ <- validateEach snapshot text edits
+  validateOverlap (sortBy compareEdit edits)
 
 editParts : String -> Int -> List SourceEdit -> List String
 editParts text pos [] = [stringSlice pos (stringLength text) text]

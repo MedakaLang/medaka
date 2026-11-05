@@ -203,9 +203,9 @@ errorMsg idJson code message = jObject [
 -- Integer field accessor (for tool args like `line`/`col`).  None when absent or
 -- not a JInt — the caller reports the missing/invalid argument as an isError result.
 fieldInt : String -> Json -> Option Int
-fieldInt key j = match get key j
-  Some v => asInt v
-  None => None
+fieldInt key j = do
+  v <- get key j
+  asInt v
 
 -- ── stdio transport ──────────────────────────────────────────────────────────
 
@@ -1456,11 +1456,11 @@ jsonArrToListGo arr i n
 -- containing any non-string element — a malformed `paths` is reported as an
 -- argument error, never silently dropped/skipped element-by-element.
 pathsArg : Json -> Option (List String)
-pathsArg args = match get "paths" args
-  None => None
-  Some v => match asArray v
-    None => None
-    Some arr => allJsonStrings (jsonArrToList arr)
+pathsArg args = do
+  v <- get "paths" args
+  do
+    arr <- asArray v
+    allJsonStrings (jsonArrToList arr)
 
 allJsonStrings : List Json -> Option (List String)
 allJsonStrings [] = Some []

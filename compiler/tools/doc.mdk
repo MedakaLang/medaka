@@ -1550,9 +1550,9 @@ ownerOfType owners mentions tyName = match lookupStrDoc tyName owners
   Some m => Some m
   None =>
     let lowered = toLower tyName
-    match lookupSigsDoc lowered mentions
-      None => None
-      Some sigs => if anyMentions tyName sigs then Some lowered else None
+    do
+      sigs <- lookupSigsDoc lowered mentions
+      if anyMentions tyName sigs then Some lowered else None
 
 lookupSigsDoc : String -> List (String, List String) -> Option (List String)
 lookupSigsDoc _ [] = None
@@ -1590,10 +1590,9 @@ entryTarget : List (String, String) ->
   String ->
   DocEntry ->
   Option String
-entryTarget owners mentions here (DocEntry _ _ _ _ (KImplOn (Some hd)) _) =
-  match ownerOfType owners mentions hd
-    Some m => if m == here then None else Some m
-    None => None
+entryTarget owners mentions here (DocEntry _ _ _ _ (KImplOn (Some hd)) _) = do
+  m <- ownerOfType owners mentions hd
+  if m == here then None else Some m
 entryTarget _ _ _ _ = None
 
 movedFrom : List (String, String) ->

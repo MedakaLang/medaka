@@ -217,12 +217,9 @@ docsSetVersion uri version (Docs xs flagged kept versions generations next cache
 
 docsSnapshot : String -> Docs -> Option SourceSnapshot
 docsSnapshot uri docs = match docs
-  Docs _ _ _ _ generations _ _ => match docsLookup uri generations
-    Some generation =>
-      map
-        (makeSnapshot uri (docsVersion uri docs) generation)
-        (docsGet uri docs)
-    None => None
+  Docs _ _ _ _ generations _ _ => do
+    generation <- docsLookup uri generations
+    map (makeSnapshot uri (docsVersion uri docs) generation) (docsGet uri docs)
 
 docsRevision : String -> Docs -> Option SourceRevision
 docsRevision uri (docs@(Docs _ _ _ _ generations _ _)) = do
@@ -350,15 +347,14 @@ identifierAt src line col =
 identifierAtIndexed : SourceIndex -> Array Char -> Int -> Int -> Option String
 identifierAtIndexed index arr line col =
   let len = arrayLength arr
-  match sourcePositionToOffset index (line + 1) col
-    None => None
-    Some pos =>
-      if pos >= len || not (isIdentChar (arrayGetUnsafe pos arr)) then
-        None
-      else
-        let s = identStart arr pos
-        let e = identStop arr len pos
-        Some (stringFromChars (sliceClamped s e arr))
+  do
+    pos <- sourcePositionToOffset index (line + 1) col
+    if pos >= len || not (isIdentChar (arrayGetUnsafe pos arr)) then
+      None
+    else
+      let s = identStart arr pos
+      let e = identStop arr len pos
+      Some (stringFromChars (sliceClamped s e arr))
 
 -- A whole-source word-boundary occurrence scan: every offset where `name`
 -- appears as a standalone identifier.  Returns the offsets in source order.
@@ -873,9 +869,9 @@ localSchemeAt _ _ _ None _ = None
 localSchemeAt name line col (Some pos) locals =
   let decls = positionsDecls pos
   let cl = line + 1
-  match declIndexAt decls 0 cl
-    None => None
-    Some di => latestLocal None (localCandidates name cl col di decls locals)
+  do
+    di <- declIndexAt decls 0 cl
+    latestLocal None (localCandidates name cl col di decls locals)
 
 -- Index of the top-level decl whose start..end line range contains `l` (1-based).
 declIndexAt : List DeclPos -> Int -> Int -> Option Int
@@ -1287,9 +1283,9 @@ contentLengthRe : Regex
 contentLengthRe = mustCompile "^Content-Length: *([0-9]+)"
 
 parseContentLength : String -> Option Int
-parseContentLength line = match find contentLengthRe line
-  None => None
-  Some m => match m.groups
+parseContentLength line = do
+  m <- find contentLengthRe line
+  match m.groups
     [Some g] => toInt g.text
     _ => None
 
@@ -1735,13 +1731,12 @@ publishProjectDiagnostics runtimeSrc coreSrc uri text docs =
   publishEach docs sources results
   -- A resolve-blocked entry is not the last module the drive checked, so its
   -- report holds another module's locals and seed: nothing is kept.
-  match keyed
-    Some ((report, _), graph) =>
-      if report.trPartial.paModule == graph.giEntry then
-        Some (KeptGraph text graph report.trPartial)
-      else
-        None
-    None => None
+  do
+    ((report, _), graph) <- keyed
+    if report.trPartial.paModule == graph.giEntry then
+      Some (KeptGraph text graph report.trPartial)
+    else
+      None
 -- Module root = nearest ancestor with medaka.toml (NOT the file's own dir), so
 -- a nested module's imports (rooted at the project dir) resolve.  Falls back to
 -- the file's dir when there's no medaka.toml.
@@ -1866,13 +1861,12 @@ publishForSelected runtimeSrc coreSrc uri text docs =
       else
         -- a one-module graph: the parse memo keeps this buffer's parse alone
         retainParsed projectParseCache [text]
-        match publishDiagnosticsFrom runtimeSrc coreSrc uri text decls
-          Some report =>
-            if report.trPartial.paModule == "__user__" then
-              Some (KeptOne text (reportEnv report))
-            else
-              None
-          None => None
+        do
+          report <- publishDiagnosticsFrom runtimeSrc coreSrc uri text decls
+          if report.trPartial.paModule == "__user__" then
+            Some (KeptOne text (reportEnv report))
+          else
+            None
 
 -- Extract a textDocument/{didOpen,didChange} uri + text and publish.
 -- didOpen:   params.textDocument.{uri,text}
@@ -2364,9 +2358,9 @@ fieldOr key j = optionOr JNull (get key j)
 
 export
 fieldStr : String -> Json -> Option String
-fieldStr key j = match get key j
-  Some v => asString v
-  None => None
+fieldStr key j = do
+  v <- get key j
+  asString v
 
 -- The request `id` (number or string), passed through verbatim into responses.
 -- We keep it as the raw Json so a string id round-trips unchanged.

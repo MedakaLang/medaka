@@ -1941,9 +1941,9 @@ usesOf idx key = match hmGet key idx.refs
 -- 1-based, `col` 0-based (the `Loc` convention).
 export
 binderAt : RefIndex -> String -> Int -> Int -> Option String
-binderAt idx uri line col = match hmGet uri idx.occ
-  Some r => scanOcc line col !r
-  None => None
+binderAt idx uri line col = do
+  r <- hmGet uri idx.occ
+  scanOcc line col !r
 
 scanOcc : Int -> Int -> List (Loc, String) -> Option String
 scanOcc _ _ [] = None

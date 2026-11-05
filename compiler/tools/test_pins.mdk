@@ -250,20 +250,18 @@ readPin entry i = do
   kind <- requiredString i "kind" entry
   if not (validKind kind) then
     Err "\{rowPrefix i}: kind must be 'prop' or 'test'"
-  else match validateFields i kind entry
-    Err err => Err err
-    Ok _ => do
-      file <- requiredString i "file" entry
-      name <- requiredString i "name" entry
-      engine <- requiredString i "engine" entry
-      issue <- requiredInt i "issue" entry
-      match validateBase i file name engine issue
-        Err err => Err err
-        Ok _ =>
-          if kind == "prop" then
-            readPropPin i file name engine issue entry
-          else
-            readTestPin i file name engine issue entry
+  else do
+    _ <- validateFields i kind entry
+    file <- requiredString i "file" entry
+    name <- requiredString i "name" entry
+    engine <- requiredString i "engine" entry
+    issue <- requiredInt i "issue" entry
+    do
+      _ <- validateBase i file name engine issue
+      if kind == "prop" then
+        readPropPin i file name engine issue entry
+      else
+        readTestPin i file name engine issue entry
 
 -- TOML stores array tables as flat qualified keys. Build this index once so
 -- reading N pin rows does not scan the whole document N times.
@@ -288,14 +286,13 @@ pinFieldKey key =
     None
   else
     let tail = drop 4 key
-    match indexOf "." tail
-      None => None
-      Some dot =>
-        let row = stringSlice 0 dot tail
-        let field = drop (dot + 1) tail
-        match toInt row
-          Some _ => if field == "" then None else Some (row, field)
-          None => None
+    do
+      dot <- indexOf "." tail
+      let row = stringSlice 0 dot tail
+      let field = drop (dot + 1) tail
+      do
+        _ <- toInt row
+        if field == "" then None else Some (row, field)
 
 readPinsGo : OrdMap (List (String, TomlValue)) ->
   Int ->
@@ -335,9 +332,9 @@ parsePinsDoc src (Toml fields) =
   else match getInt "version" doc
     Some 1 =>
       let n = pinHeaderCount (lines src)
-      match readPinsGo (pinRows fields) 0 n []
-        Err err => Err err
-        Ok pins => map (_ => pins) (buildPinIndex pins)
+      do
+        pins <- readPinsGo (pinRows fields) 0 n []
+        map (_ => pins) (buildPinIndex pins)
     Some _ => Err "\{pinOrigin}: version must be 1"
     None => Err "\{pinOrigin}: exactly one integer version field is required"
 

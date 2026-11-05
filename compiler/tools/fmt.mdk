@@ -812,18 +812,16 @@ interpLitBody src _ ((TString _) :: ts) ((s, e) :: ps) =
   map
     ((end, inner, ts2, ps2) => (end, (s, e) :: inner, ts2, ps2))
     (interpLitBody src e ts ps)
-interpLitBody src prevEnd ((TInterpOpen _) :: ts) (_ :: ps) =
-  match interpLitBody src prevEnd ts ps
-    None => None
-    Some (nend, nested, ts2, ps2) =>
-      map
-        ((end, inner, ts3, ps3) => (
-          end,
-          (openingQuoteAfter src prevEnd, nend) :: nested ++ inner,
-          ts3,
-          ps3,
-        ))
-        (interpLitBody src nend ts2 ps2)
+interpLitBody src prevEnd ((TInterpOpen _) :: ts) (_ :: ps) = do
+  (nend, nested, ts2, ps2) <- interpLitBody src prevEnd ts ps
+  map
+    ((end, inner, ts3, ps3) => (
+      end,
+      (openingQuoteAfter src prevEnd, nend) :: nested ++ inner,
+      ts3,
+      ps3,
+    ))
+    (interpLitBody src nend ts2 ps2)
 interpLitBody src _ (_ :: ts) ((_, e) :: ps) = interpLitBody src e ts ps
 
 -- Only whitespace and comments sit between two tokens, so the next literal's

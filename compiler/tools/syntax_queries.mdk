@@ -259,9 +259,9 @@ strictDocumentSymbols src = match parseWithPositionsOpt src
 barrierLines : SourceIndex -> List InvalidRegion -> Option (List Int)
 barrierLines _ [] = Some []
 barrierLines index (region :: rest) = match invalidExtent region
-  SourceExtent start _ => match offsetToUtf16Position index start
-    None => None
-    Some (line, _) => map (line :: _) (barrierLines index rest)
+  SourceExtent start _ => do
+    (line, _) <- offsetToUtf16Position index start
+    map (line :: _) (barrierLines index rest)
 
 collapseRecovered : List Int -> List SymRow -> List SymRow
 collapseRecovered barriers rows = go barriers rows []

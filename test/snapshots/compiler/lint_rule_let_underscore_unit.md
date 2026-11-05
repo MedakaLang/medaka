@@ -1,5 +1,5 @@
 # META
-source_lines=113
+source_lines=112
 stages=DESUGAR,MARK
 # SOURCE
 -- lint rule rule-let-underscore-unit: `let _ = e` on a call whose declared result is Unit, in a plain block. Write the bare statement `e`.
@@ -82,17 +82,16 @@ finding loc fix = Finding {
 -- a later line keeps every continuation line deeper than the statement.  The
 -- edit is withheld where the call's start is not known.
 dropFix : String -> Int -> Int -> Expr -> Option Fix
-dropFix f sl sc rhs = match callStart rhs
-  Some (Loc _ rl rc _ _) =>
-    if rl > sl || rc > sc then
-      Some Fix {
-        fixApplicability = Safe,
-        fixEdits = [FixEdit (Loc f sl sc rl rc) ""],
-        fixMessage = "drop the `let _ =`",
-      }
-    else
-      None
-  None => None
+dropFix f sl sc rhs = do
+  (Loc _ rl rc _ _) <- callStart rhs
+  if rl > sl || rc > sc then
+    Some Fix {
+      fixApplicability = Safe,
+      fixEdits = [FixEdit (Loc f sl sc rl rc) ""],
+      fixMessage = "drop the `let _ =`",
+    }
+  else
+    None
 
 -- Where the call's text starts: its head, or the enclosing brackets when the
 -- call is parenthesised, whichever comes first.
@@ -133,7 +132,7 @@ earlier a b = match (a, b)
 (DTypeSig false "finding" (TyFun (TyCon "Loc") (TyFun (TyApp (TyCon "Option") (TyCon "Fix")) (TyCon "Finding"))))
 (DFunDef false "finding" ((PVar "loc") (PVar "fix")) (ERecordCreate "Finding" ((fa "rule" (EVar "ruleNameLetUnderscoreUnit")) (fa "message" (ELit (LString "`let _ = e` binds a Unit result to nothing. In a plain block write the bare statement `e` (`do` blocks keep `let _ =`). Before: `let _ = f x`; after: `f x`"))) (fa "severity" (EVar "SevWarning")) (fa "loc" (EApp (EVar "Some") (EVar "loc"))) (fa "fix" (EVar "fix")))))
 (DTypeSig false "dropFix" (TyFun (TyCon "String") (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyFun (TyCon "Expr") (TyApp (TyCon "Option") (TyCon "Fix")))))))
-(DFunDef false "dropFix" ((PVar "f") (PVar "sl") (PVar "sc") (PVar "rhs")) (EMatch (EApp (EVar "callStart") (EVar "rhs")) (arm (PCon "Some" (PCon "Loc" PWild (PVar "rl") (PVar "rc") PWild PWild)) () (EIf (EBinOp "||" (EBinOp ">" (EVar "rl") (EVar "sl")) (EBinOp ">" (EVar "rc") (EVar "sc"))) (EApp (EVar "Some") (ERecordCreate "Fix" ((fa "fixApplicability" (EVar "Safe")) (fa "fixEdits" (EListLit (EApp (EApp (EVar "FixEdit") (EApp (EApp (EApp (EApp (EApp (EVar "Loc") (EVar "f")) (EVar "sl")) (EVar "sc")) (EVar "rl")) (EVar "rc"))) (ELit (LString ""))))) (fa "fixMessage" (ELit (LString "drop the `let _ =`")))))) (EVar "None"))) (arm (PCon "None") () (EVar "None"))))
+(DFunDef false "dropFix" ((PVar "f") (PVar "sl") (PVar "sc") (PVar "rhs")) (EApp (EApp (EVar "andThen") (EApp (EVar "callStart") (EVar "rhs"))) (ELam ((PVar "__do_x")) (EMatch (EVar "__do_x") (arm (PCon "Loc" PWild (PVar "rl") (PVar "rc") PWild PWild) () (EIf (EBinOp "||" (EBinOp ">" (EVar "rl") (EVar "sl")) (EBinOp ">" (EVar "rc") (EVar "sc"))) (EApp (EVar "Some") (ERecordCreate "Fix" ((fa "fixApplicability" (EVar "Safe")) (fa "fixEdits" (EListLit (EApp (EApp (EVar "FixEdit") (EApp (EApp (EApp (EApp (EApp (EVar "Loc") (EVar "f")) (EVar "sl")) (EVar "sc")) (EVar "rl")) (EVar "rc"))) (ELit (LString ""))))) (fa "fixMessage" (ELit (LString "drop the `let _ =`")))))) (EVar "None")))))))
 (DTypeSig false "callStart" (TyFun (TyCon "Expr") (TyApp (TyCon "Option") (TyCon "Loc"))))
 (DFunDef false "callStart" ((PVar "rhs")) (EMatch (ETuple (EApp (EVar "outerStart") (EVar "rhs")) (EApp (EVar "headStart") (EApp (EVar "unwrapLoc") (EVar "rhs")))) (arm (PTuple (PCon "Some" (PVar "a")) (PCon "Some" (PVar "b"))) () (EApp (EVar "Some") (EApp (EApp (EVar "earlier") (EVar "a")) (EVar "b")))) (arm (PTuple (PCon "Some" (PVar "a")) (PCon "None")) () (EApp (EVar "Some") (EVar "a"))) (arm (PTuple (PCon "None") (PVar "b")) () (EVar "b"))))
 (DTypeSig false "headStart" (TyFun (TyCon "Expr") (TyApp (TyCon "Option") (TyCon "Loc"))))
@@ -163,7 +162,7 @@ earlier a b = match (a, b)
 (DTypeSig false "finding" (TyFun (TyCon "Loc") (TyFun (TyApp (TyCon "Option") (TyCon "Fix")) (TyCon "Finding"))))
 (DFunDef false "finding" ((PVar "loc") (PVar "fix")) (ERecordCreate "Finding" ((fa "rule" (EVar "ruleNameLetUnderscoreUnit")) (fa "message" (ELit (LString "`let _ = e` binds a Unit result to nothing. In a plain block write the bare statement `e` (`do` blocks keep `let _ =`). Before: `let _ = f x`; after: `f x`"))) (fa "severity" (EVar "SevWarning")) (fa "loc" (EApp (EVar "Some") (EVar "loc"))) (fa "fix" (EVar "fix")))))
 (DTypeSig false "dropFix" (TyFun (TyCon "String") (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyFun (TyCon "Expr") (TyApp (TyCon "Option") (TyCon "Fix")))))))
-(DFunDef false "dropFix" ((PVar "f") (PVar "sl") (PVar "sc") (PVar "rhs")) (EMatch (EApp (EVar "callStart") (EVar "rhs")) (arm (PCon "Some" (PCon "Loc" PWild (PVar "rl") (PVar "rc") PWild PWild)) () (EIf (EBinOp "||" (EBinOp ">" (EVar "rl") (EVar "sl")) (EBinOp ">" (EVar "rc") (EVar "sc"))) (EApp (EVar "Some") (ERecordCreate "Fix" ((fa "fixApplicability" (EVar "Safe")) (fa "fixEdits" (EListLit (EApp (EApp (EVar "FixEdit") (EApp (EApp (EApp (EApp (EApp (EVar "Loc") (EVar "f")) (EVar "sl")) (EVar "sc")) (EVar "rl")) (EVar "rc"))) (ELit (LString ""))))) (fa "fixMessage" (ELit (LString "drop the `let _ =`")))))) (EVar "None"))) (arm (PCon "None") () (EVar "None"))))
+(DFunDef false "dropFix" ((PVar "f") (PVar "sl") (PVar "sc") (PVar "rhs")) (EApp (EApp (EMethodRef "andThen") (EApp (EVar "callStart") (EVar "rhs"))) (ELam ((PVar "__do_x")) (EMatch (EVar "__do_x") (arm (PCon "Loc" PWild (PVar "rl") (PVar "rc") PWild PWild) () (EIf (EBinOp "||" (EBinOp ">" (EVar "rl") (EVar "sl")) (EBinOp ">" (EVar "rc") (EVar "sc"))) (EApp (EVar "Some") (ERecordCreate "Fix" ((fa "fixApplicability" (EVar "Safe")) (fa "fixEdits" (EListLit (EApp (EApp (EVar "FixEdit") (EApp (EApp (EApp (EApp (EApp (EVar "Loc") (EVar "f")) (EVar "sl")) (EVar "sc")) (EVar "rl")) (EVar "rc"))) (ELit (LString ""))))) (fa "fixMessage" (ELit (LString "drop the `let _ =`")))))) (EVar "None")))))))
 (DTypeSig false "callStart" (TyFun (TyCon "Expr") (TyApp (TyCon "Option") (TyCon "Loc"))))
 (DFunDef false "callStart" ((PVar "rhs")) (EMatch (ETuple (EApp (EVar "outerStart") (EVar "rhs")) (EApp (EVar "headStart") (EApp (EVar "unwrapLoc") (EVar "rhs")))) (arm (PTuple (PCon "Some" (PVar "a")) (PCon "Some" (PVar "b"))) () (EApp (EVar "Some") (EApp (EApp (EVar "earlier") (EVar "a")) (EVar "b")))) (arm (PTuple (PCon "Some" (PVar "a")) (PCon "None")) () (EApp (EVar "Some") (EVar "a"))) (arm (PTuple (PCon "None") (PVar "b")) () (EVar "b"))))
 (DTypeSig false "headStart" (TyFun (TyCon "Expr") (TyApp (TyCon "Option") (TyCon "Loc"))))

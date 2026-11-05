@@ -421,12 +421,10 @@ pinIndexForTarget target userDecls = do
       context.contextFile
       (propNamesOf userDecls)
       (testNamesOf userDecls)
-  match names
-    Err err => Err err
-    Ok () =>
-      map
-        (index => (context.contextFile, index))
-        (buildPinIndex context.contextPins)
+  _ <- names
+  map
+    (index => (context.contextFile, index))
+    (buildPinIndex context.contextPins)
 
 -- ── typecheck gate (issues #260, #1229) ──────────────────────────────────────
 -- `medaka test` must not GREEN-LIGHT a module whose DOCTESTS `medaka check`

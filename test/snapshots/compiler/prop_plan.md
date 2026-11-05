@@ -1,5 +1,5 @@
 # META
-source_lines=1688
+source_lines=1685
 stages=DESUGAR,MARK
 # SOURCE
 -- The engine-neutral property planning layer.
@@ -683,10 +683,9 @@ instantiateCtor : PlanEnv ->
   GenPlan ->
   PlanCtor ->
   Result PlanError (List (Option String, GenPlan))
-instantiateCtor env (GNominal key args) (PlanCtor _ _ fields) =
-  match planDef env key
-    Ok (PlanDef _ _ params _ _) => instantiateFields env params args fields
-    Err e => Err e
+instantiateCtor env (GNominal key args) (PlanCtor _ _ fields) = do
+  (PlanDef _ _ params _ _) <- planDef env key
+  instantiateFields env params args fields
 instantiateCtor _ p _ =
   Err
     (PlanError
@@ -1288,23 +1287,22 @@ allPlansBelow env height (plan :: rest) = match planFiniteHeight env plan []
 
 export
 planFor : PlanEnv -> String -> String -> Ty -> Result PlanError GenPlan
-planFor env propName param ty = match planForGo env propName param ty
-  Ok plan =>
-    match validateReachableFields env (finiteTruth env plan) plan omEmpty
-      Err (PlanError _ _ badTy reason detail) =>
-        Err (PlanError propName param badTy reason detail)
-      Ok _ =>
-        if planHasFiniteValue env plan then
-          Ok plan
-        else
-          Err
-            (PlanError
-              propName
-              param
-              ty
-              PENoFiniteValue
-              "no constructor path reaches finite values")
-  Err e => Err e
+planFor env propName param ty = do
+  plan <- planForGo env propName param ty
+  match validateReachableFields env (finiteTruth env plan) plan omEmpty
+    Err (PlanError _ _ badTy reason detail) =>
+      Err (PlanError propName param badTy reason detail)
+    Ok _ =>
+      if planHasFiniteValue env plan then
+        Ok plan
+      else
+        Err
+          (PlanError
+            propName
+            param
+            ty
+            PENoFiniteValue
+            "no constructor path reaches finite values")
 
 -- A property may have one finite constructor while another reachable
 -- constructor contains a function or another unsupported field. The selected
@@ -1343,10 +1341,9 @@ validateReachableFields env truth (nominal@(GNominal key args)) seen =
   let word = stateWord env truth key args
   if omHasKey word seen then
     Ok ()
-  else match planDef env key
-    Ok (PlanDef _ _ _ _ ctors) =>
-      validateReachableCtors env truth nominal ctors (omInsert word () seen)
-    Err e => Err e
+  else do
+    (PlanDef _ _ _ _ ctors) <- planDef env key
+    validateReachableCtors env truth nominal ctors (omInsert word () seen)
 
 validateReachablePlans : PlanEnv ->
   OrdMap Unit ->
@@ -1931,7 +1928,7 @@ intShrinkSteps = [IntToZero, IntHalf, IntTowardZero]
 (DTypeSig true "planDef" (TyFun (TyCon "PlanEnv") (TyFun (TyCon "TypeKey") (TyApp (TyApp (TyCon "Result") (TyCon "PlanError")) (TyCon "PlanDef")))))
 (DFunDef false "planDef" ((PCon "PlanEnv" PWild (PVar "defs") PWild PWild PWild) (PVar "key")) (EMatch (EApp (EApp (EVar "matchingDef") (EVar "key")) (EApp (EVar "optionList") (EApp (EApp (EVar "omLookup") (EApp (EVar "typeKeyWord") (EVar "key"))) (EVar "defs")))) (arm (PCon "Some" (PVar "d")) () (EApp (EVar "Ok") (EVar "d"))) (arm (PCon "None") () (EApp (EVar "Err") (EApp (EApp (EApp (EApp (EApp (EVar "PlanError") (ELit (LString ""))) (ELit (LString ""))) (EApp (EApp (EVar "rebuildTy") (EVar "key")) (EListLit))) (EVar "PEAmbiguousNominal")) (ELit (LString "")))))))
 (DTypeSig true "instantiateCtor" (TyFun (TyCon "PlanEnv") (TyFun (TyCon "GenPlan") (TyFun (TyCon "PlanCtor") (TyApp (TyApp (TyCon "Result") (TyCon "PlanError")) (TyApp (TyCon "List") (TyTuple (TyApp (TyCon "Option") (TyCon "String")) (TyCon "GenPlan"))))))))
-(DFunDef false "instantiateCtor" ((PVar "env") (PCon "GNominal" (PVar "key") (PVar "args")) (PCon "PlanCtor" PWild PWild (PVar "fields"))) (EMatch (EApp (EApp (EVar "planDef") (EVar "env")) (EVar "key")) (arm (PCon "Ok" (PCon "PlanDef" PWild PWild (PVar "params") PWild PWild)) () (EApp (EApp (EApp (EApp (EVar "instantiateFields") (EVar "env")) (EVar "params")) (EVar "args")) (EVar "fields"))) (arm (PCon "Err" (PVar "e")) () (EApp (EVar "Err") (EVar "e")))))
+(DFunDef false "instantiateCtor" ((PVar "env") (PCon "GNominal" (PVar "key") (PVar "args")) (PCon "PlanCtor" PWild PWild (PVar "fields"))) (EApp (EApp (EVar "andThen") (EApp (EApp (EVar "planDef") (EVar "env")) (EVar "key"))) (ELam ((PVar "__do_x")) (EMatch (EVar "__do_x") (arm (PCon "PlanDef" PWild PWild (PVar "params") PWild PWild) () (EApp (EApp (EApp (EApp (EVar "instantiateFields") (EVar "env")) (EVar "params")) (EVar "args")) (EVar "fields")))))))
 (DFunDef false "instantiateCtor" (PWild (PVar "p") PWild) (EApp (EVar "Err") (EApp (EApp (EApp (EApp (EApp (EVar "PlanError") (ELit (LString ""))) (ELit (LString ""))) (EApp (EVar "TyVar") (ELit (LString "")))) (EVar "PEUnsupportedType")) (EBinOp "++" (ELit (LString "not nominal: ")) (EApp (EVar "planKind") (EVar "p"))))))
 (DTypeSig true "customPlansReachable" (TyFun (TyCon "PlanEnv") (TyFun (TyApp (TyCon "List") (TyCon "GenPlan")) (TyApp (TyCon "List") (TyCon "CustomPlan")))))
 (DFunDef false "customPlansReachable" ((PVar "env") (PVar "plans")) (EApp (EVar "reverseCustomPlans") (EApp (EApp (EApp (EApp (EVar "customPlansGo") (EVar "env")) (EVar "plans")) (EVar "omEmpty")) (EListLit))))
@@ -2174,7 +2171,7 @@ intShrinkSteps = [IntToZero, IntHalf, IntTowardZero]
 (DFunDef false "allPlansBelow" (PWild PWild (PList)) (EVar "True"))
 (DFunDef false "allPlansBelow" ((PVar "env") (PVar "height") (PCons (PVar "plan") (PVar "rest"))) (EMatch (EApp (EApp (EApp (EVar "planFiniteHeight") (EVar "env")) (EVar "plan")) (EListLit)) (arm (PCon "Some" (PVar "planHeight")) () (EBinOp "&&" (EBinOp "<" (EVar "planHeight") (EVar "height")) (EApp (EApp (EApp (EVar "allPlansBelow") (EVar "env")) (EVar "height")) (EVar "rest")))) (arm (PCon "None") () (EVar "False"))))
 (DTypeSig true "planFor" (TyFun (TyCon "PlanEnv") (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyCon "Ty") (TyApp (TyApp (TyCon "Result") (TyCon "PlanError")) (TyCon "GenPlan")))))))
-(DFunDef false "planFor" ((PVar "env") (PVar "propName") (PVar "param") (PVar "ty")) (EMatch (EApp (EApp (EApp (EApp (EVar "planForGo") (EVar "env")) (EVar "propName")) (EVar "param")) (EVar "ty")) (arm (PCon "Ok" (PVar "plan")) () (EMatch (EApp (EApp (EApp (EApp (EVar "validateReachableFields") (EVar "env")) (EApp (EApp (EVar "finiteTruth") (EVar "env")) (EVar "plan"))) (EVar "plan")) (EVar "omEmpty")) (arm (PCon "Err" (PCon "PlanError" PWild PWild (PVar "badTy") (PVar "reason") (PVar "detail"))) () (EApp (EVar "Err") (EApp (EApp (EApp (EApp (EApp (EVar "PlanError") (EVar "propName")) (EVar "param")) (EVar "badTy")) (EVar "reason")) (EVar "detail")))) (arm (PCon "Ok" PWild) () (EIf (EApp (EApp (EVar "planHasFiniteValue") (EVar "env")) (EVar "plan")) (EApp (EVar "Ok") (EVar "plan")) (EApp (EVar "Err") (EApp (EApp (EApp (EApp (EApp (EVar "PlanError") (EVar "propName")) (EVar "param")) (EVar "ty")) (EVar "PENoFiniteValue")) (ELit (LString "no constructor path reaches finite values")))))))) (arm (PCon "Err" (PVar "e")) () (EApp (EVar "Err") (EVar "e")))))
+(DFunDef false "planFor" ((PVar "env") (PVar "propName") (PVar "param") (PVar "ty")) (EApp (EApp (EVar "andThen") (EApp (EApp (EApp (EApp (EVar "planForGo") (EVar "env")) (EVar "propName")) (EVar "param")) (EVar "ty"))) (ELam ((PVar "plan")) (EMatch (EApp (EApp (EApp (EApp (EVar "validateReachableFields") (EVar "env")) (EApp (EApp (EVar "finiteTruth") (EVar "env")) (EVar "plan"))) (EVar "plan")) (EVar "omEmpty")) (arm (PCon "Err" (PCon "PlanError" PWild PWild (PVar "badTy") (PVar "reason") (PVar "detail"))) () (EApp (EVar "Err") (EApp (EApp (EApp (EApp (EApp (EVar "PlanError") (EVar "propName")) (EVar "param")) (EVar "badTy")) (EVar "reason")) (EVar "detail")))) (arm (PCon "Ok" PWild) () (EIf (EApp (EApp (EVar "planHasFiniteValue") (EVar "env")) (EVar "plan")) (EApp (EVar "Ok") (EVar "plan")) (EApp (EVar "Err") (EApp (EApp (EApp (EApp (EApp (EVar "PlanError") (EVar "propName")) (EVar "param")) (EVar "ty")) (EVar "PENoFiniteValue")) (ELit (LString "no constructor path reaches finite values"))))))))))
 (DTypeSig false "validateReachableFields" (TyFun (TyCon "PlanEnv") (TyFun (TyApp (TyCon "OrdMap") (TyCon "Unit")) (TyFun (TyCon "GenPlan") (TyFun (TyApp (TyCon "OrdMap") (TyCon "Unit")) (TyApp (TyApp (TyCon "Result") (TyCon "PlanError")) (TyCon "Unit")))))))
 (DFunDef false "validateReachableFields" (PWild PWild (PCon "GInt") PWild) (EApp (EVar "Ok") (ELit LUnit)))
 (DFunDef false "validateReachableFields" (PWild PWild (PCon "GBool") PWild) (EApp (EVar "Ok") (ELit LUnit)))
@@ -2188,7 +2185,7 @@ intShrinkSteps = [IntToZero, IntHalf, IntTowardZero]
 (DFunDef false "validateReachableFields" ((PVar "env") (PVar "truth") (PCon "GResult" (PVar "err") (PVar "ok")) (PVar "seen")) (EMatch (ETuple (EApp (EApp (EApp (EApp (EVar "validateReachableFields") (EVar "env")) (EVar "truth")) (EVar "err")) (EVar "seen")) (EApp (EApp (EApp (EApp (EVar "validateReachableFields") (EVar "env")) (EVar "truth")) (EVar "ok")) (EVar "seen"))) (arm (PTuple (PCon "Ok" PWild) (PCon "Ok" PWild)) () (EApp (EVar "Ok") (ELit LUnit))) (arm (PTuple (PCon "Err" (PVar "e")) PWild) () (EApp (EVar "Err") (EVar "e"))) (arm (PTuple PWild (PCon "Err" (PVar "e"))) () (EApp (EVar "Err") (EVar "e")))))
 (DFunDef false "validateReachableFields" ((PVar "env") (PVar "truth") (PCon "GTuple" (PVar "plans")) (PVar "seen")) (EApp (EApp (EApp (EApp (EVar "validateReachablePlans") (EVar "env")) (EVar "truth")) (EVar "plans")) (EVar "seen")))
 (DFunDef false "validateReachableFields" (PWild PWild (PCon "GCustom" PWild) PWild) (EApp (EVar "Ok") (ELit LUnit)))
-(DFunDef false "validateReachableFields" ((PVar "env") (PVar "truth") (PAs "nominal" (PCon "GNominal" (PVar "key") (PVar "args"))) (PVar "seen")) (EBlock (DoLet false false (PVar "word") (EApp (EApp (EApp (EApp (EVar "stateWord") (EVar "env")) (EVar "truth")) (EVar "key")) (EVar "args"))) (DoExpr (EIf (EApp (EApp (EVar "omHasKey") (EVar "word")) (EVar "seen")) (EApp (EVar "Ok") (ELit LUnit)) (EMatch (EApp (EApp (EVar "planDef") (EVar "env")) (EVar "key")) (arm (PCon "Ok" (PCon "PlanDef" PWild PWild PWild PWild (PVar "ctors"))) () (EApp (EApp (EApp (EApp (EApp (EVar "validateReachableCtors") (EVar "env")) (EVar "truth")) (EVar "nominal")) (EVar "ctors")) (EApp (EApp (EApp (EVar "omInsert") (EVar "word")) (ELit LUnit)) (EVar "seen")))) (arm (PCon "Err" (PVar "e")) () (EApp (EVar "Err") (EVar "e"))))))))
+(DFunDef false "validateReachableFields" ((PVar "env") (PVar "truth") (PAs "nominal" (PCon "GNominal" (PVar "key") (PVar "args"))) (PVar "seen")) (EBlock (DoLet false false (PVar "word") (EApp (EApp (EApp (EApp (EVar "stateWord") (EVar "env")) (EVar "truth")) (EVar "key")) (EVar "args"))) (DoExpr (EIf (EApp (EApp (EVar "omHasKey") (EVar "word")) (EVar "seen")) (EApp (EVar "Ok") (ELit LUnit)) (EApp (EApp (EVar "andThen") (EApp (EApp (EVar "planDef") (EVar "env")) (EVar "key"))) (ELam ((PVar "__do_x")) (EMatch (EVar "__do_x") (arm (PCon "PlanDef" PWild PWild PWild PWild (PVar "ctors")) () (EApp (EApp (EApp (EApp (EApp (EVar "validateReachableCtors") (EVar "env")) (EVar "truth")) (EVar "nominal")) (EVar "ctors")) (EApp (EApp (EApp (EVar "omInsert") (EVar "word")) (ELit LUnit)) (EVar "seen")))))))))))
 (DTypeSig false "validateReachablePlans" (TyFun (TyCon "PlanEnv") (TyFun (TyApp (TyCon "OrdMap") (TyCon "Unit")) (TyFun (TyApp (TyCon "List") (TyCon "GenPlan")) (TyFun (TyApp (TyCon "OrdMap") (TyCon "Unit")) (TyApp (TyApp (TyCon "Result") (TyCon "PlanError")) (TyCon "Unit")))))))
 (DFunDef false "validateReachablePlans" (PWild PWild (PList) PWild) (EApp (EVar "Ok") (ELit LUnit)))
 (DFunDef false "validateReachablePlans" ((PVar "env") (PVar "truth") (PCons (PVar "plan") (PVar "rest")) (PVar "seen")) (EMatch (ETuple (EApp (EApp (EApp (EApp (EVar "validateReachableFields") (EVar "env")) (EVar "truth")) (EVar "plan")) (EVar "seen")) (EApp (EApp (EApp (EApp (EVar "validateReachablePlans") (EVar "env")) (EVar "truth")) (EVar "rest")) (EVar "seen"))) (arm (PTuple (PCon "Ok" PWild) (PCon "Ok" PWild)) () (EApp (EVar "Ok") (ELit LUnit))) (arm (PTuple (PCon "Err" (PVar "e")) PWild) () (EApp (EVar "Err") (EVar "e"))) (arm (PTuple PWild (PCon "Err" (PVar "e"))) () (EApp (EVar "Err") (EVar "e")))))
@@ -2560,7 +2557,7 @@ intShrinkSteps = [IntToZero, IntHalf, IntTowardZero]
 (DTypeSig true "planDef" (TyFun (TyCon "PlanEnv") (TyFun (TyCon "TypeKey") (TyApp (TyApp (TyCon "Result") (TyCon "PlanError")) (TyCon "PlanDef")))))
 (DFunDef false "planDef" ((PCon "PlanEnv" PWild (PVar "defs") PWild PWild PWild) (PVar "key")) (EMatch (EApp (EApp (EVar "matchingDef") (EVar "key")) (EApp (EVar "optionList") (EApp (EApp (EVar "omLookup") (EApp (EVar "typeKeyWord") (EVar "key"))) (EVar "defs")))) (arm (PCon "Some" (PVar "d")) () (EApp (EVar "Ok") (EVar "d"))) (arm (PCon "None") () (EApp (EVar "Err") (EApp (EApp (EApp (EApp (EApp (EVar "PlanError") (ELit (LString ""))) (ELit (LString ""))) (EApp (EApp (EVar "rebuildTy") (EVar "key")) (EListLit))) (EVar "PEAmbiguousNominal")) (ELit (LString "")))))))
 (DTypeSig true "instantiateCtor" (TyFun (TyCon "PlanEnv") (TyFun (TyCon "GenPlan") (TyFun (TyCon "PlanCtor") (TyApp (TyApp (TyCon "Result") (TyCon "PlanError")) (TyApp (TyCon "List") (TyTuple (TyApp (TyCon "Option") (TyCon "String")) (TyCon "GenPlan"))))))))
-(DFunDef false "instantiateCtor" ((PVar "env") (PCon "GNominal" (PVar "key") (PVar "args")) (PCon "PlanCtor" PWild PWild (PVar "fields"))) (EMatch (EApp (EApp (EVar "planDef") (EVar "env")) (EVar "key")) (arm (PCon "Ok" (PCon "PlanDef" PWild PWild (PVar "params") PWild PWild)) () (EApp (EApp (EApp (EApp (EVar "instantiateFields") (EVar "env")) (EVar "params")) (EVar "args")) (EVar "fields"))) (arm (PCon "Err" (PVar "e")) () (EApp (EVar "Err") (EVar "e")))))
+(DFunDef false "instantiateCtor" ((PVar "env") (PCon "GNominal" (PVar "key") (PVar "args")) (PCon "PlanCtor" PWild PWild (PVar "fields"))) (EApp (EApp (EMethodRef "andThen") (EApp (EApp (EVar "planDef") (EVar "env")) (EVar "key"))) (ELam ((PVar "__do_x")) (EMatch (EVar "__do_x") (arm (PCon "PlanDef" PWild PWild (PVar "params") PWild PWild) () (EApp (EApp (EApp (EApp (EVar "instantiateFields") (EVar "env")) (EVar "params")) (EVar "args")) (EVar "fields")))))))
 (DFunDef false "instantiateCtor" (PWild (PVar "p") PWild) (EApp (EVar "Err") (EApp (EApp (EApp (EApp (EApp (EVar "PlanError") (ELit (LString ""))) (ELit (LString ""))) (EApp (EVar "TyVar") (ELit (LString "")))) (EVar "PEUnsupportedType")) (EBinOp "++" (ELit (LString "not nominal: ")) (EApp (EVar "planKind") (EVar "p"))))))
 (DTypeSig true "customPlansReachable" (TyFun (TyCon "PlanEnv") (TyFun (TyApp (TyCon "List") (TyCon "GenPlan")) (TyApp (TyCon "List") (TyCon "CustomPlan")))))
 (DFunDef false "customPlansReachable" ((PVar "env") (PVar "plans")) (EApp (EVar "reverseCustomPlans") (EApp (EApp (EApp (EApp (EVar "customPlansGo") (EVar "env")) (EVar "plans")) (EVar "omEmpty")) (EListLit))))
@@ -2803,7 +2800,7 @@ intShrinkSteps = [IntToZero, IntHalf, IntTowardZero]
 (DFunDef false "allPlansBelow" (PWild PWild (PList)) (EVar "True"))
 (DFunDef false "allPlansBelow" ((PVar "env") (PVar "height") (PCons (PVar "plan") (PVar "rest"))) (EMatch (EApp (EApp (EApp (EVar "planFiniteHeight") (EVar "env")) (EVar "plan")) (EListLit)) (arm (PCon "Some" (PVar "planHeight")) () (EBinOp "&&" (EBinOp "<" (EVar "planHeight") (EVar "height")) (EApp (EApp (EApp (EVar "allPlansBelow") (EVar "env")) (EVar "height")) (EVar "rest")))) (arm (PCon "None") () (EVar "False"))))
 (DTypeSig true "planFor" (TyFun (TyCon "PlanEnv") (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyCon "Ty") (TyApp (TyApp (TyCon "Result") (TyCon "PlanError")) (TyCon "GenPlan")))))))
-(DFunDef false "planFor" ((PVar "env") (PVar "propName") (PVar "param") (PVar "ty")) (EMatch (EApp (EApp (EApp (EApp (EVar "planForGo") (EVar "env")) (EVar "propName")) (EVar "param")) (EVar "ty")) (arm (PCon "Ok" (PVar "plan")) () (EMatch (EApp (EApp (EApp (EApp (EVar "validateReachableFields") (EVar "env")) (EApp (EApp (EVar "finiteTruth") (EVar "env")) (EVar "plan"))) (EVar "plan")) (EVar "omEmpty")) (arm (PCon "Err" (PCon "PlanError" PWild PWild (PVar "badTy") (PVar "reason") (PVar "detail"))) () (EApp (EVar "Err") (EApp (EApp (EApp (EApp (EApp (EVar "PlanError") (EVar "propName")) (EVar "param")) (EVar "badTy")) (EVar "reason")) (EVar "detail")))) (arm (PCon "Ok" PWild) () (EIf (EApp (EApp (EVar "planHasFiniteValue") (EVar "env")) (EVar "plan")) (EApp (EVar "Ok") (EVar "plan")) (EApp (EVar "Err") (EApp (EApp (EApp (EApp (EApp (EVar "PlanError") (EVar "propName")) (EVar "param")) (EVar "ty")) (EVar "PENoFiniteValue")) (ELit (LString "no constructor path reaches finite values")))))))) (arm (PCon "Err" (PVar "e")) () (EApp (EVar "Err") (EVar "e")))))
+(DFunDef false "planFor" ((PVar "env") (PVar "propName") (PVar "param") (PVar "ty")) (EApp (EApp (EMethodRef "andThen") (EApp (EApp (EApp (EApp (EVar "planForGo") (EVar "env")) (EVar "propName")) (EVar "param")) (EVar "ty"))) (ELam ((PVar "plan")) (EMatch (EApp (EApp (EApp (EApp (EVar "validateReachableFields") (EVar "env")) (EApp (EApp (EVar "finiteTruth") (EVar "env")) (EVar "plan"))) (EVar "plan")) (EVar "omEmpty")) (arm (PCon "Err" (PCon "PlanError" PWild PWild (PVar "badTy") (PVar "reason") (PVar "detail"))) () (EApp (EVar "Err") (EApp (EApp (EApp (EApp (EApp (EVar "PlanError") (EVar "propName")) (EVar "param")) (EVar "badTy")) (EVar "reason")) (EVar "detail")))) (arm (PCon "Ok" PWild) () (EIf (EApp (EApp (EVar "planHasFiniteValue") (EVar "env")) (EVar "plan")) (EApp (EVar "Ok") (EVar "plan")) (EApp (EVar "Err") (EApp (EApp (EApp (EApp (EApp (EVar "PlanError") (EVar "propName")) (EVar "param")) (EVar "ty")) (EVar "PENoFiniteValue")) (ELit (LString "no constructor path reaches finite values"))))))))))
 (DTypeSig false "validateReachableFields" (TyFun (TyCon "PlanEnv") (TyFun (TyApp (TyCon "OrdMap") (TyCon "Unit")) (TyFun (TyCon "GenPlan") (TyFun (TyApp (TyCon "OrdMap") (TyCon "Unit")) (TyApp (TyApp (TyCon "Result") (TyCon "PlanError")) (TyCon "Unit")))))))
 (DFunDef false "validateReachableFields" (PWild PWild (PCon "GInt") PWild) (EApp (EVar "Ok") (ELit LUnit)))
 (DFunDef false "validateReachableFields" (PWild PWild (PCon "GBool") PWild) (EApp (EVar "Ok") (ELit LUnit)))
@@ -2817,7 +2814,7 @@ intShrinkSteps = [IntToZero, IntHalf, IntTowardZero]
 (DFunDef false "validateReachableFields" ((PVar "env") (PVar "truth") (PCon "GResult" (PVar "err") (PVar "ok")) (PVar "seen")) (EMatch (ETuple (EApp (EApp (EApp (EApp (EVar "validateReachableFields") (EVar "env")) (EVar "truth")) (EVar "err")) (EVar "seen")) (EApp (EApp (EApp (EApp (EVar "validateReachableFields") (EVar "env")) (EVar "truth")) (EVar "ok")) (EVar "seen"))) (arm (PTuple (PCon "Ok" PWild) (PCon "Ok" PWild)) () (EApp (EVar "Ok") (ELit LUnit))) (arm (PTuple (PCon "Err" (PVar "e")) PWild) () (EApp (EVar "Err") (EVar "e"))) (arm (PTuple PWild (PCon "Err" (PVar "e"))) () (EApp (EVar "Err") (EVar "e")))))
 (DFunDef false "validateReachableFields" ((PVar "env") (PVar "truth") (PCon "GTuple" (PVar "plans")) (PVar "seen")) (EApp (EApp (EApp (EApp (EVar "validateReachablePlans") (EVar "env")) (EVar "truth")) (EVar "plans")) (EVar "seen")))
 (DFunDef false "validateReachableFields" (PWild PWild (PCon "GCustom" PWild) PWild) (EApp (EVar "Ok") (ELit LUnit)))
-(DFunDef false "validateReachableFields" ((PVar "env") (PVar "truth") (PAs "nominal" (PCon "GNominal" (PVar "key") (PVar "args"))) (PVar "seen")) (EBlock (DoLet false false (PVar "word") (EApp (EApp (EApp (EApp (EVar "stateWord") (EVar "env")) (EVar "truth")) (EVar "key")) (EVar "args"))) (DoExpr (EIf (EApp (EApp (EVar "omHasKey") (EVar "word")) (EVar "seen")) (EApp (EVar "Ok") (ELit LUnit)) (EMatch (EApp (EApp (EVar "planDef") (EVar "env")) (EVar "key")) (arm (PCon "Ok" (PCon "PlanDef" PWild PWild PWild PWild (PVar "ctors"))) () (EApp (EApp (EApp (EApp (EApp (EVar "validateReachableCtors") (EVar "env")) (EVar "truth")) (EVar "nominal")) (EVar "ctors")) (EApp (EApp (EApp (EVar "omInsert") (EVar "word")) (ELit LUnit)) (EVar "seen")))) (arm (PCon "Err" (PVar "e")) () (EApp (EVar "Err") (EVar "e"))))))))
+(DFunDef false "validateReachableFields" ((PVar "env") (PVar "truth") (PAs "nominal" (PCon "GNominal" (PVar "key") (PVar "args"))) (PVar "seen")) (EBlock (DoLet false false (PVar "word") (EApp (EApp (EApp (EApp (EVar "stateWord") (EVar "env")) (EVar "truth")) (EVar "key")) (EVar "args"))) (DoExpr (EIf (EApp (EApp (EVar "omHasKey") (EVar "word")) (EVar "seen")) (EApp (EVar "Ok") (ELit LUnit)) (EApp (EApp (EMethodRef "andThen") (EApp (EApp (EVar "planDef") (EVar "env")) (EVar "key"))) (ELam ((PVar "__do_x")) (EMatch (EVar "__do_x") (arm (PCon "PlanDef" PWild PWild PWild PWild (PVar "ctors")) () (EApp (EApp (EApp (EApp (EApp (EVar "validateReachableCtors") (EVar "env")) (EVar "truth")) (EVar "nominal")) (EVar "ctors")) (EApp (EApp (EApp (EVar "omInsert") (EVar "word")) (ELit LUnit)) (EVar "seen")))))))))))
 (DTypeSig false "validateReachablePlans" (TyFun (TyCon "PlanEnv") (TyFun (TyApp (TyCon "OrdMap") (TyCon "Unit")) (TyFun (TyApp (TyCon "List") (TyCon "GenPlan")) (TyFun (TyApp (TyCon "OrdMap") (TyCon "Unit")) (TyApp (TyApp (TyCon "Result") (TyCon "PlanError")) (TyCon "Unit")))))))
 (DFunDef false "validateReachablePlans" (PWild PWild (PList) PWild) (EApp (EVar "Ok") (ELit LUnit)))
 (DFunDef false "validateReachablePlans" ((PVar "env") (PVar "truth") (PCons (PVar "plan") (PVar "rest")) (PVar "seen")) (EMatch (ETuple (EApp (EApp (EApp (EApp (EVar "validateReachableFields") (EVar "env")) (EVar "truth")) (EVar "plan")) (EVar "seen")) (EApp (EApp (EApp (EApp (EVar "validateReachablePlans") (EVar "env")) (EVar "truth")) (EVar "rest")) (EVar "seen"))) (arm (PTuple (PCon "Ok" PWild) (PCon "Ok" PWild)) () (EApp (EVar "Ok") (ELit LUnit))) (arm (PTuple (PCon "Err" (PVar "e")) PWild) () (EApp (EVar "Err") (EVar "e"))) (arm (PTuple PWild (PCon "Err" (PVar "e"))) () (EApp (EVar "Err") (EVar "e")))))

@@ -1,5 +1,5 @@
 # META
-source_lines=932
+source_lines=930
 stages=DESUGAR,MARK
 # SOURCE
 -- Self-hosted comment-preserving formatter — `formatProgram`, the driver over
@@ -816,18 +816,16 @@ interpLitBody src _ ((TString _) :: ts) ((s, e) :: ps) =
   map
     ((end, inner, ts2, ps2) => (end, (s, e) :: inner, ts2, ps2))
     (interpLitBody src e ts ps)
-interpLitBody src prevEnd ((TInterpOpen _) :: ts) (_ :: ps) =
-  match interpLitBody src prevEnd ts ps
-    None => None
-    Some (nend, nested, ts2, ps2) =>
-      map
-        ((end, inner, ts3, ps3) => (
-          end,
-          (openingQuoteAfter src prevEnd, nend) :: nested ++ inner,
-          ts3,
-          ps3,
-        ))
-        (interpLitBody src nend ts2 ps2)
+interpLitBody src prevEnd ((TInterpOpen _) :: ts) (_ :: ps) = do
+  (nend, nested, ts2, ps2) <- interpLitBody src prevEnd ts ps
+  map
+    ((end, inner, ts3, ps3) => (
+      end,
+      (openingQuoteAfter src prevEnd, nend) :: nested ++ inner,
+      ts3,
+      ps3,
+    ))
+    (interpLitBody src nend ts2 ps2)
 interpLitBody src _ (_ :: ts) ((_, e) :: ps) = interpLitBody src e ts ps
 
 -- Only whitespace and comments sit between two tokens, so the next literal's
@@ -1118,7 +1116,7 @@ restoreVerbatimLiterals src formatted = match mayHaveRestorable src
 (DFunDef false "interpLitBody" (PWild PWild PWild (PList)) (EVar "None"))
 (DFunDef false "interpLitBody" (PWild PWild (PCons (PCon "TInterpEnd" PWild) (PVar "ts")) (PCons (PTuple PWild (PVar "e")) (PVar "ps"))) (EApp (EVar "Some") (ETuple (EVar "e") (EListLit) (EVar "ts") (EVar "ps"))))
 (DFunDef false "interpLitBody" ((PVar "src") PWild (PCons (PCon "TString" PWild) (PVar "ts")) (PCons (PTuple (PVar "s") (PVar "e")) (PVar "ps"))) (EApp (EApp (EVar "map") (ELam ((PTuple (PVar "end") (PVar "inner") (PVar "ts2") (PVar "ps2"))) (ETuple (EVar "end") (EBinOp "::" (ETuple (EVar "s") (EVar "e")) (EVar "inner")) (EVar "ts2") (EVar "ps2")))) (EApp (EApp (EApp (EApp (EVar "interpLitBody") (EVar "src")) (EVar "e")) (EVar "ts")) (EVar "ps"))))
-(DFunDef false "interpLitBody" ((PVar "src") (PVar "prevEnd") (PCons (PCon "TInterpOpen" PWild) (PVar "ts")) (PCons PWild (PVar "ps"))) (EMatch (EApp (EApp (EApp (EApp (EVar "interpLitBody") (EVar "src")) (EVar "prevEnd")) (EVar "ts")) (EVar "ps")) (arm (PCon "None") () (EVar "None")) (arm (PCon "Some" (PTuple (PVar "nend") (PVar "nested") (PVar "ts2") (PVar "ps2"))) () (EApp (EApp (EVar "map") (ELam ((PTuple (PVar "end") (PVar "inner") (PVar "ts3") (PVar "ps3"))) (ETuple (EVar "end") (EBinOp "::" (ETuple (EApp (EApp (EVar "openingQuoteAfter") (EVar "src")) (EVar "prevEnd")) (EVar "nend")) (EBinOp "++" (EVar "nested") (EVar "inner"))) (EVar "ts3") (EVar "ps3")))) (EApp (EApp (EApp (EApp (EVar "interpLitBody") (EVar "src")) (EVar "nend")) (EVar "ts2")) (EVar "ps2"))))))
+(DFunDef false "interpLitBody" ((PVar "src") (PVar "prevEnd") (PCons (PCon "TInterpOpen" PWild) (PVar "ts")) (PCons PWild (PVar "ps"))) (EApp (EApp (EVar "andThen") (EApp (EApp (EApp (EApp (EVar "interpLitBody") (EVar "src")) (EVar "prevEnd")) (EVar "ts")) (EVar "ps"))) (ELam ((PVar "__do_x")) (EMatch (EVar "__do_x") (arm (PTuple (PVar "nend") (PVar "nested") (PVar "ts2") (PVar "ps2")) () (EApp (EApp (EVar "map") (ELam ((PTuple (PVar "end") (PVar "inner") (PVar "ts3") (PVar "ps3"))) (ETuple (EVar "end") (EBinOp "::" (ETuple (EApp (EApp (EVar "openingQuoteAfter") (EVar "src")) (EVar "prevEnd")) (EVar "nend")) (EBinOp "++" (EVar "nested") (EVar "inner"))) (EVar "ts3") (EVar "ps3")))) (EApp (EApp (EApp (EApp (EVar "interpLitBody") (EVar "src")) (EVar "nend")) (EVar "ts2")) (EVar "ps2"))))))))
 (DFunDef false "interpLitBody" ((PVar "src") PWild (PCons PWild (PVar "ts")) (PCons (PTuple PWild (PVar "e")) (PVar "ps"))) (EApp (EApp (EApp (EApp (EVar "interpLitBody") (EVar "src")) (EVar "e")) (EVar "ts")) (EVar "ps")))
 (DTypeSig false "openingQuoteAfter" (TyFun (TyCon "String") (TyFun (TyCon "Int") (TyCon "Int"))))
 (DFunDef false "openingQuoteAfter" ((PVar "src") (PVar "pos")) (EIf (EBinOp ">=" (EVar "pos") (EApp (EVar "stringLength") (EVar "src"))) (EVar "pos") (EIf (EBinOp "==" (EApp (EApp (EApp (EVar "stringSlice") (EVar "pos")) (EBinOp "+" (EVar "pos") (ELit (LInt 1)))) (EVar "src")) (ELit (LString "\""))) (EVar "pos") (EIf (EBinOp "==" (EApp (EApp (EApp (EVar "stringSlice") (EVar "pos")) (EBinOp "+" (EVar "pos") (ELit (LInt 2)))) (EVar "src")) (ELit (LString "--"))) (EApp (EApp (EVar "openingQuoteAfter") (EVar "src")) (EApp (EApp (EVar "lineEndAfter") (EVar "src")) (EVar "pos"))) (EIf (EBinOp "==" (EApp (EApp (EApp (EVar "stringSlice") (EVar "pos")) (EBinOp "+" (EVar "pos") (ELit (LInt 2)))) (EVar "src")) (ELit (LString "{-"))) (EApp (EApp (EVar "openingQuoteAfter") (EVar "src")) (EApp (EApp (EApp (EVar "blockCommentEnd") (EVar "src")) (EBinOp "+" (EVar "pos") (ELit (LInt 2)))) (ELit (LInt 1)))) (EIf (EVar "otherwise") (EApp (EApp (EVar "openingQuoteAfter") (EVar "src")) (EBinOp "+" (EVar "pos") (ELit (LInt 1)))) (EApp (EVar "__fallthrough__") (ELit LUnit))))))))
@@ -1326,7 +1324,7 @@ restoreVerbatimLiterals src formatted = match mayHaveRestorable src
 (DFunDef false "interpLitBody" (PWild PWild PWild (PList)) (EVar "None"))
 (DFunDef false "interpLitBody" (PWild PWild (PCons (PCon "TInterpEnd" PWild) (PVar "ts")) (PCons (PTuple PWild (PVar "e")) (PVar "ps"))) (EApp (EVar "Some") (ETuple (EVar "e") (EListLit) (EVar "ts") (EVar "ps"))))
 (DFunDef false "interpLitBody" ((PVar "src") PWild (PCons (PCon "TString" PWild) (PVar "ts")) (PCons (PTuple (PVar "s") (PVar "e")) (PVar "ps"))) (EApp (EApp (EMethodRef "map") (ELam ((PTuple (PVar "end") (PVar "inner") (PVar "ts2") (PVar "ps2"))) (ETuple (EVar "end") (EBinOp "::" (ETuple (EVar "s") (EVar "e")) (EVar "inner")) (EVar "ts2") (EVar "ps2")))) (EApp (EApp (EApp (EApp (EVar "interpLitBody") (EVar "src")) (EVar "e")) (EVar "ts")) (EVar "ps"))))
-(DFunDef false "interpLitBody" ((PVar "src") (PVar "prevEnd") (PCons (PCon "TInterpOpen" PWild) (PVar "ts")) (PCons PWild (PVar "ps"))) (EMatch (EApp (EApp (EApp (EApp (EVar "interpLitBody") (EVar "src")) (EVar "prevEnd")) (EVar "ts")) (EVar "ps")) (arm (PCon "None") () (EVar "None")) (arm (PCon "Some" (PTuple (PVar "nend") (PVar "nested") (PVar "ts2") (PVar "ps2"))) () (EApp (EApp (EMethodRef "map") (ELam ((PTuple (PVar "end") (PVar "inner") (PVar "ts3") (PVar "ps3"))) (ETuple (EVar "end") (EBinOp "::" (ETuple (EApp (EApp (EVar "openingQuoteAfter") (EVar "src")) (EVar "prevEnd")) (EVar "nend")) (EBinOp "++" (EVar "nested") (EVar "inner"))) (EVar "ts3") (EVar "ps3")))) (EApp (EApp (EApp (EApp (EVar "interpLitBody") (EVar "src")) (EVar "nend")) (EVar "ts2")) (EVar "ps2"))))))
+(DFunDef false "interpLitBody" ((PVar "src") (PVar "prevEnd") (PCons (PCon "TInterpOpen" PWild) (PVar "ts")) (PCons PWild (PVar "ps"))) (EApp (EApp (EMethodRef "andThen") (EApp (EApp (EApp (EApp (EVar "interpLitBody") (EVar "src")) (EVar "prevEnd")) (EVar "ts")) (EVar "ps"))) (ELam ((PVar "__do_x")) (EMatch (EVar "__do_x") (arm (PTuple (PVar "nend") (PVar "nested") (PVar "ts2") (PVar "ps2")) () (EApp (EApp (EMethodRef "map") (ELam ((PTuple (PVar "end") (PVar "inner") (PVar "ts3") (PVar "ps3"))) (ETuple (EVar "end") (EBinOp "::" (ETuple (EApp (EApp (EVar "openingQuoteAfter") (EVar "src")) (EVar "prevEnd")) (EVar "nend")) (EBinOp "++" (EVar "nested") (EVar "inner"))) (EVar "ts3") (EVar "ps3")))) (EApp (EApp (EApp (EApp (EVar "interpLitBody") (EVar "src")) (EVar "nend")) (EVar "ts2")) (EVar "ps2"))))))))
 (DFunDef false "interpLitBody" ((PVar "src") PWild (PCons PWild (PVar "ts")) (PCons (PTuple PWild (PVar "e")) (PVar "ps"))) (EApp (EApp (EApp (EApp (EVar "interpLitBody") (EVar "src")) (EVar "e")) (EVar "ts")) (EVar "ps")))
 (DTypeSig false "openingQuoteAfter" (TyFun (TyCon "String") (TyFun (TyCon "Int") (TyCon "Int"))))
 (DFunDef false "openingQuoteAfter" ((PVar "src") (PVar "pos")) (EIf (EBinOp ">=" (EVar "pos") (EApp (EVar "stringLength") (EVar "src"))) (EVar "pos") (EIf (EBinOp "==" (EApp (EApp (EApp (EVar "stringSlice") (EVar "pos")) (EBinOp "+" (EVar "pos") (ELit (LInt 1)))) (EVar "src")) (ELit (LString "\""))) (EVar "pos") (EIf (EBinOp "==" (EApp (EApp (EApp (EVar "stringSlice") (EVar "pos")) (EBinOp "+" (EVar "pos") (ELit (LInt 2)))) (EVar "src")) (ELit (LString "--"))) (EApp (EApp (EVar "openingQuoteAfter") (EVar "src")) (EApp (EApp (EVar "lineEndAfter") (EVar "src")) (EVar "pos"))) (EIf (EBinOp "==" (EApp (EApp (EApp (EVar "stringSlice") (EVar "pos")) (EBinOp "+" (EVar "pos") (ELit (LInt 2)))) (EVar "src")) (ELit (LString "{-"))) (EApp (EApp (EVar "openingQuoteAfter") (EVar "src")) (EApp (EApp (EApp (EVar "blockCommentEnd") (EVar "src")) (EBinOp "+" (EVar "pos") (ELit (LInt 2)))) (ELit (LInt 1)))) (EIf (EVar "otherwise") (EApp (EApp (EVar "openingQuoteAfter") (EVar "src")) (EBinOp "+" (EVar "pos") (ELit (LInt 1)))) (EApp (EVar "__fallthrough__") (ELit LUnit))))))))

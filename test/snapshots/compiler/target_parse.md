@@ -1,5 +1,5 @@
 # META
-source_lines=73
+source_lines=72
 stages=DESUGAR,MARK
 # SOURCE
 -- One parse, one desugar and one comment scan of a `medaka test` target per process.
@@ -29,20 +29,19 @@ targetRef : Ref (Option (String, List Decl, Option (List Decl)))
 targetRef = Ref None
 
 cachedFor : String -> Option (List Decl, Option (List Decl))
-cachedFor src = match !targetRef
-  Some (key, decls, ds) => if key == src then Some (decls, ds) else None
-  None => None
+cachedFor src = do
+  (key, decls, ds) <- !targetRef
+  if key == src then Some (decls, ds) else None
 
 -- The located parse of `src`, non-panicking; a success is memoized.
 export
 parseTargetResult : String -> Result ParseError (List Decl)
 parseTargetResult src = match cachedFor src
   Some (decls, _) => Ok decls
-  None => match parseLocatedResult src
-    Err e => Err e
-    Ok decls =>
-      targetRef := Some (src, decls, None)
-      Ok decls
+  None => do
+    decls <- parseLocatedResult src
+    let _ = targetRef := Some (src, decls, None)
+    Ok decls
 
 -- The located decls, panicking on a parse error exactly as `parse` does.
 export
@@ -84,9 +83,9 @@ targetExamples src = match !examplesRef
 (DTypeSig false "targetRef" (TyApp (TyCon "Ref") (TyApp (TyCon "Option") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "Decl")) (TyApp (TyCon "Option") (TyApp (TyCon "List") (TyCon "Decl")))))))
 (DFunDef false "targetRef" () (EApp (EVar "Ref") (EVar "None")))
 (DTypeSig false "cachedFor" (TyFun (TyCon "String") (TyApp (TyCon "Option") (TyTuple (TyApp (TyCon "List") (TyCon "Decl")) (TyApp (TyCon "Option") (TyApp (TyCon "List") (TyCon "Decl")))))))
-(DFunDef false "cachedFor" ((PVar "src")) (EMatch (EUnOp "!" (EVar "targetRef")) (arm (PCon "Some" (PTuple (PVar "key") (PVar "decls") (PVar "ds"))) () (EIf (EBinOp "==" (EVar "key") (EVar "src")) (EApp (EVar "Some") (ETuple (EVar "decls") (EVar "ds"))) (EVar "None"))) (arm (PCon "None") () (EVar "None"))))
+(DFunDef false "cachedFor" ((PVar "src")) (EApp (EApp (EVar "andThen") (EUnOp "!" (EVar "targetRef"))) (ELam ((PVar "__do_x")) (EMatch (EVar "__do_x") (arm (PTuple (PVar "key") (PVar "decls") (PVar "ds")) () (EIf (EBinOp "==" (EVar "key") (EVar "src")) (EApp (EVar "Some") (ETuple (EVar "decls") (EVar "ds"))) (EVar "None")))))))
 (DTypeSig true "parseTargetResult" (TyFun (TyCon "String") (TyApp (TyApp (TyCon "Result") (TyCon "ParseError")) (TyApp (TyCon "List") (TyCon "Decl")))))
-(DFunDef false "parseTargetResult" ((PVar "src")) (EMatch (EApp (EVar "cachedFor") (EVar "src")) (arm (PCon "Some" (PTuple (PVar "decls") PWild)) () (EApp (EVar "Ok") (EVar "decls"))) (arm (PCon "None") () (EMatch (EApp (EVar "parseLocatedResult") (EVar "src")) (arm (PCon "Err" (PVar "e")) () (EApp (EVar "Err") (EVar "e"))) (arm (PCon "Ok" (PVar "decls")) () (EBlock (DoExpr (EApp (EApp (EVar "setRef") (EVar "targetRef")) (EApp (EVar "Some") (ETuple (EVar "src") (EVar "decls") (EVar "None"))))) (DoExpr (EApp (EVar "Ok") (EVar "decls")))))))))
+(DFunDef false "parseTargetResult" ((PVar "src")) (EMatch (EApp (EVar "cachedFor") (EVar "src")) (arm (PCon "Some" (PTuple (PVar "decls") PWild)) () (EApp (EVar "Ok") (EVar "decls"))) (arm (PCon "None") () (EApp (EApp (EVar "andThen") (EApp (EVar "parseLocatedResult") (EVar "src"))) (ELam ((PVar "decls")) (ELet false PWild (EApp (EApp (EVar "setRef") (EVar "targetRef")) (EApp (EVar "Some") (ETuple (EVar "src") (EVar "decls") (EVar "None")))) (EApp (EVar "Ok") (EVar "decls"))))))))
 (DTypeSig true "targetRaw" (TyFun (TyCon "String") (TyApp (TyCon "List") (TyCon "Decl"))))
 (DFunDef false "targetRaw" ((PVar "src")) (EMatch (EApp (EVar "parseTargetResult") (EVar "src")) (arm (PCon "Ok" (PVar "decls")) () (EVar "decls")) (arm (PCon "Err" PWild) () (EApp (EVar "parse") (EVar "src")))))
 (DTypeSig true "targetDesugared" (TyFun (TyCon "String") (TyApp (TyCon "List") (TyCon "Decl"))))
@@ -104,9 +103,9 @@ targetExamples src = match !examplesRef
 (DTypeSig false "targetRef" (TyApp (TyCon "Ref") (TyApp (TyCon "Option") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "Decl")) (TyApp (TyCon "Option") (TyApp (TyCon "List") (TyCon "Decl")))))))
 (DFunDef false "targetRef" () (EApp (EVar "Ref") (EVar "None")))
 (DTypeSig false "cachedFor" (TyFun (TyCon "String") (TyApp (TyCon "Option") (TyTuple (TyApp (TyCon "List") (TyCon "Decl")) (TyApp (TyCon "Option") (TyApp (TyCon "List") (TyCon "Decl")))))))
-(DFunDef false "cachedFor" ((PVar "src")) (EMatch (EUnOp "!" (EVar "targetRef")) (arm (PCon "Some" (PTuple (PVar "key") (PVar "decls") (PVar "ds"))) () (EIf (EBinOp "==" (EVar "key") (EVar "src")) (EApp (EVar "Some") (ETuple (EVar "decls") (EVar "ds"))) (EVar "None"))) (arm (PCon "None") () (EVar "None"))))
+(DFunDef false "cachedFor" ((PVar "src")) (EApp (EApp (EMethodRef "andThen") (EUnOp "!" (EVar "targetRef"))) (ELam ((PVar "__do_x")) (EMatch (EVar "__do_x") (arm (PTuple (PVar "key") (PVar "decls") (PVar "ds")) () (EIf (EBinOp "==" (EVar "key") (EVar "src")) (EApp (EVar "Some") (ETuple (EVar "decls") (EVar "ds"))) (EVar "None")))))))
 (DTypeSig true "parseTargetResult" (TyFun (TyCon "String") (TyApp (TyApp (TyCon "Result") (TyCon "ParseError")) (TyApp (TyCon "List") (TyCon "Decl")))))
-(DFunDef false "parseTargetResult" ((PVar "src")) (EMatch (EApp (EVar "cachedFor") (EVar "src")) (arm (PCon "Some" (PTuple (PVar "decls") PWild)) () (EApp (EVar "Ok") (EVar "decls"))) (arm (PCon "None") () (EMatch (EApp (EVar "parseLocatedResult") (EVar "src")) (arm (PCon "Err" (PVar "e")) () (EApp (EVar "Err") (EVar "e"))) (arm (PCon "Ok" (PVar "decls")) () (EBlock (DoExpr (EApp (EApp (EVar "setRef") (EVar "targetRef")) (EApp (EVar "Some") (ETuple (EVar "src") (EVar "decls") (EVar "None"))))) (DoExpr (EApp (EVar "Ok") (EVar "decls")))))))))
+(DFunDef false "parseTargetResult" ((PVar "src")) (EMatch (EApp (EVar "cachedFor") (EVar "src")) (arm (PCon "Some" (PTuple (PVar "decls") PWild)) () (EApp (EVar "Ok") (EVar "decls"))) (arm (PCon "None") () (EApp (EApp (EMethodRef "andThen") (EApp (EVar "parseLocatedResult") (EVar "src"))) (ELam ((PVar "decls")) (ELet false PWild (EApp (EApp (EVar "setRef") (EVar "targetRef")) (EApp (EVar "Some") (ETuple (EVar "src") (EVar "decls") (EVar "None")))) (EApp (EVar "Ok") (EVar "decls"))))))))
 (DTypeSig true "targetRaw" (TyFun (TyCon "String") (TyApp (TyCon "List") (TyCon "Decl"))))
 (DFunDef false "targetRaw" ((PVar "src")) (EMatch (EApp (EVar "parseTargetResult") (EVar "src")) (arm (PCon "Ok" (PVar "decls")) () (EVar "decls")) (arm (PCon "Err" PWild) () (EApp (EVar "parse") (EVar "src")))))
 (DTypeSig true "targetDesugared" (TyFun (TyCon "String") (TyApp (TyCon "List") (TyCon "Decl"))))

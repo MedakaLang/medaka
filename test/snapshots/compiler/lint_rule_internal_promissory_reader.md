@@ -1,5 +1,5 @@
 # META
-source_lines=340
+source_lines=339
 stages=DESUGAR,MARK
 # SOURCE
 -- lint rule rule-promissory-reader: a comment says a symbol has no reader yet, but the file reads it (#2550).
@@ -187,12 +187,11 @@ claimSubject codeLines (line, text, CommentBlock _ last trailing _) =
 backtickedAfterReads : String -> Option String
 backtickedAfterReads t =
   let lower = stringToLower t
-  match stringIndexOf "reads `" lower
-    None => None
-    Some i =>
-      let start = i + stringLength "reads `"
-      let rest = stringSlice start (stringLength t) t
-      map (j => stringSlice 0 j rest) (stringIndexOf "`" rest)
+  do
+    i <- stringIndexOf "reads `" lower
+    let start = i + stringLength "reads `"
+    let rest = stringSlice start (stringLength t) t
+    map (j => stringSlice 0 j rest) (stringIndexOf "`" rest)
 
 -- The first declaration at or after `line`: a signature, clause head, field or
 -- data/type name; `export` lines are skipped; a blank line ends the search (the
@@ -382,7 +381,7 @@ assignFollows cs n i
 (DTypeSig false "claimSubject" (TyFun (TyApp (TyCon "Array") (TyCon "String")) (TyFun (TyTuple (TyCon "Int") (TyCon "String") (TyCon "CommentBlock")) (TyApp (TyCon "Option") (TyCon "String")))))
 (DFunDef false "claimSubject" ((PVar "codeLines") (PTuple (PVar "line") (PVar "text") (PCon "CommentBlock" PWild (PVar "last") (PVar "trailing") PWild))) (EMatch (EApp (EVar "backtickedAfterReads") (EVar "text")) (arm (PCon "Some" (PVar "n")) () (EApp (EVar "Some") (EVar "n"))) (arm (PCon "None") () (EIf (EVar "trailing") (EApp (EVar "declaredNameOf") (EApp (EApp (EVar "codeLineAt") (EVar "codeLines")) (EVar "line"))) (EApp (EApp (EVar "nextDeclaredName") (EVar "codeLines")) (EBinOp "+" (EVar "last") (ELit (LInt 1))))))))
 (DTypeSig false "backtickedAfterReads" (TyFun (TyCon "String") (TyApp (TyCon "Option") (TyCon "String"))))
-(DFunDef false "backtickedAfterReads" ((PVar "t")) (EBlock (DoLet false false (PVar "lower") (EApp (EVar "stringToLower") (EVar "t"))) (DoExpr (EMatch (EApp (EApp (EVar "stringIndexOf") (ELit (LString "reads `"))) (EVar "lower")) (arm (PCon "None") () (EVar "None")) (arm (PCon "Some" (PVar "i")) () (EBlock (DoLet false false (PVar "start") (EBinOp "+" (EVar "i") (EApp (EVar "stringLength") (ELit (LString "reads `"))))) (DoLet false false (PVar "rest") (EApp (EApp (EApp (EVar "stringSlice") (EVar "start")) (EApp (EVar "stringLength") (EVar "t"))) (EVar "t"))) (DoExpr (EApp (EApp (EVar "map") (ELam ((PVar "j")) (EApp (EApp (EApp (EVar "stringSlice") (ELit (LInt 0))) (EVar "j")) (EVar "rest")))) (EApp (EApp (EVar "stringIndexOf") (ELit (LString "`"))) (EVar "rest"))))))))))
+(DFunDef false "backtickedAfterReads" ((PVar "t")) (EBlock (DoLet false false (PVar "lower") (EApp (EVar "stringToLower") (EVar "t"))) (DoExpr (EApp (EApp (EVar "andThen") (EApp (EApp (EVar "stringIndexOf") (ELit (LString "reads `"))) (EVar "lower"))) (ELam ((PVar "i")) (ELet false (PVar "start") (EBinOp "+" (EVar "i") (EApp (EVar "stringLength") (ELit (LString "reads `")))) (ELet false (PVar "rest") (EApp (EApp (EApp (EVar "stringSlice") (EVar "start")) (EApp (EVar "stringLength") (EVar "t"))) (EVar "t")) (EApp (EApp (EVar "map") (ELam ((PVar "j")) (EApp (EApp (EApp (EVar "stringSlice") (ELit (LInt 0))) (EVar "j")) (EVar "rest")))) (EApp (EApp (EVar "stringIndexOf") (ELit (LString "`"))) (EVar "rest"))))))))))
 (DTypeSig false "nextDeclaredName" (TyFun (TyApp (TyCon "Array") (TyCon "String")) (TyFun (TyCon "Int") (TyApp (TyCon "Option") (TyCon "String")))))
 (DFunDef false "nextDeclaredName" ((PVar "codeLines") (PVar "line")) (EIf (EBinOp ">" (EVar "line") (EApp (EVar "arrayLength") (EVar "codeLines"))) (EVar "None") (EIf (EVar "otherwise") (EBlock (DoLet false false (PVar "t") (EApp (EVar "trimWs") (EApp (EApp (EVar "codeLineAt") (EVar "codeLines")) (EVar "line")))) (DoExpr (EIf (EBinOp "||" (EBinOp "==" (EVar "t") (ELit (LString "export"))) (EBinOp "==" (EVar "t") (ELit (LString "public export")))) (EApp (EApp (EVar "nextDeclaredName") (EVar "codeLines")) (EBinOp "+" (EVar "line") (ELit (LInt 1)))) (EApp (EVar "declaredNameOf") (EVar "t"))))) (EApp (EVar "__fallthrough__") (ELit LUnit)))))
 (DTypeSig false "declaredNameOf" (TyFun (TyCon "String") (TyApp (TyCon "Option") (TyCon "String"))))
@@ -463,7 +462,7 @@ assignFollows cs n i
 (DTypeSig false "claimSubject" (TyFun (TyApp (TyCon "Array") (TyCon "String")) (TyFun (TyTuple (TyCon "Int") (TyCon "String") (TyCon "CommentBlock")) (TyApp (TyCon "Option") (TyCon "String")))))
 (DFunDef false "claimSubject" ((PVar "codeLines") (PTuple (PVar "line") (PVar "text") (PCon "CommentBlock" PWild (PVar "last") (PVar "trailing") PWild))) (EMatch (EApp (EVar "backtickedAfterReads") (EVar "text")) (arm (PCon "Some" (PVar "n")) () (EApp (EVar "Some") (EVar "n"))) (arm (PCon "None") () (EIf (EVar "trailing") (EApp (EVar "declaredNameOf") (EApp (EApp (EVar "codeLineAt") (EVar "codeLines")) (EVar "line"))) (EApp (EApp (EVar "nextDeclaredName") (EVar "codeLines")) (EBinOp "+" (EVar "last") (ELit (LInt 1))))))))
 (DTypeSig false "backtickedAfterReads" (TyFun (TyCon "String") (TyApp (TyCon "Option") (TyCon "String"))))
-(DFunDef false "backtickedAfterReads" ((PVar "t")) (EBlock (DoLet false false (PVar "lower") (EApp (EVar "stringToLower") (EVar "t"))) (DoExpr (EMatch (EApp (EApp (EVar "stringIndexOf") (ELit (LString "reads `"))) (EVar "lower")) (arm (PCon "None") () (EVar "None")) (arm (PCon "Some" (PVar "i")) () (EBlock (DoLet false false (PVar "start") (EBinOp "+" (EVar "i") (EApp (EVar "stringLength") (ELit (LString "reads `"))))) (DoLet false false (PVar "rest") (EApp (EApp (EApp (EVar "stringSlice") (EVar "start")) (EApp (EVar "stringLength") (EVar "t"))) (EVar "t"))) (DoExpr (EApp (EApp (EMethodRef "map") (ELam ((PVar "j")) (EApp (EApp (EApp (EVar "stringSlice") (ELit (LInt 0))) (EVar "j")) (EVar "rest")))) (EApp (EApp (EVar "stringIndexOf") (ELit (LString "`"))) (EVar "rest"))))))))))
+(DFunDef false "backtickedAfterReads" ((PVar "t")) (EBlock (DoLet false false (PVar "lower") (EApp (EVar "stringToLower") (EVar "t"))) (DoExpr (EApp (EApp (EMethodRef "andThen") (EApp (EApp (EVar "stringIndexOf") (ELit (LString "reads `"))) (EVar "lower"))) (ELam ((PVar "i")) (ELet false (PVar "start") (EBinOp "+" (EVar "i") (EApp (EVar "stringLength") (ELit (LString "reads `")))) (ELet false (PVar "rest") (EApp (EApp (EApp (EVar "stringSlice") (EVar "start")) (EApp (EVar "stringLength") (EVar "t"))) (EVar "t")) (EApp (EApp (EMethodRef "map") (ELam ((PVar "j")) (EApp (EApp (EApp (EVar "stringSlice") (ELit (LInt 0))) (EVar "j")) (EVar "rest")))) (EApp (EApp (EVar "stringIndexOf") (ELit (LString "`"))) (EVar "rest"))))))))))
 (DTypeSig false "nextDeclaredName" (TyFun (TyApp (TyCon "Array") (TyCon "String")) (TyFun (TyCon "Int") (TyApp (TyCon "Option") (TyCon "String")))))
 (DFunDef false "nextDeclaredName" ((PVar "codeLines") (PVar "line")) (EIf (EBinOp ">" (EVar "line") (EApp (EVar "arrayLength") (EVar "codeLines"))) (EVar "None") (EIf (EVar "otherwise") (EBlock (DoLet false false (PVar "t") (EApp (EVar "trimWs") (EApp (EApp (EVar "codeLineAt") (EVar "codeLines")) (EVar "line")))) (DoExpr (EIf (EBinOp "||" (EBinOp "==" (EVar "t") (ELit (LString "export"))) (EBinOp "==" (EVar "t") (ELit (LString "public export")))) (EApp (EApp (EVar "nextDeclaredName") (EVar "codeLines")) (EBinOp "+" (EVar "line") (ELit (LInt 1)))) (EApp (EVar "declaredNameOf") (EVar "t"))))) (EApp (EVar "__fallthrough__") (ELit LUnit)))))
 (DTypeSig false "declaredNameOf" (TyFun (TyCon "String") (TyApp (TyCon "Option") (TyCon "String"))))

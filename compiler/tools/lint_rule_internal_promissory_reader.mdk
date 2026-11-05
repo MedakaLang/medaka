@@ -183,12 +183,11 @@ claimSubject codeLines (line, text, CommentBlock _ last trailing _) =
 backtickedAfterReads : String -> Option String
 backtickedAfterReads t =
   let lower = stringToLower t
-  match stringIndexOf "reads `" lower
-    None => None
-    Some i =>
-      let start = i + stringLength "reads `"
-      let rest = stringSlice start (stringLength t) t
-      map (j => stringSlice 0 j rest) (stringIndexOf "`" rest)
+  do
+    i <- stringIndexOf "reads `" lower
+    let start = i + stringLength "reads `"
+    let rest = stringSlice start (stringLength t) t
+    map (j => stringSlice 0 j rest) (stringIndexOf "`" rest)
 
 -- The first declaration at or after `line`: a signature, clause head, field or
 -- data/type name; `export` lines are skipped; a blank line ends the search (the

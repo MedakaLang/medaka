@@ -338,9 +338,9 @@ parseCostBaseline src = match parse src
 public export data OracleCost = OracleCost { row : GateCost, jobs : List Int }
 
 oracleEntry : Int -> Json -> Result String OracleCost
-oracleEntry i e = match costEntry "oracles" i e
-  Err m => Err m
-  Ok c => match get "jobs" e
+oracleEntry i e = do
+  c <- costEntry "oracles" i e
+  match get "jobs" e
     None => Ok OracleCost { row = c, jobs = [] }
     Some JNull => Ok OracleCost { row = c, jobs = [] }
     Some j => match asArray j

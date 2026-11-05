@@ -48,22 +48,20 @@ runReportIn options target =
       ]
       ++ options
       ++ ["main.mdk"]
-  match boundedVerbSeconds 120 "sh" args
-    Err message => Err message
-    Ok (code, out, err) =>
-      if err /= "" then
-        Err "unexpected runner stderr: \{err}"
-      else
-        map (report => (code, report)) (parse out)
-
-runReport : List String -> String -> <Exec, IO> Result String (Int, Json)
-runReport options target = match runInvocation options target
-  Err message => Err message
-  Ok (code, out, err) =>
+  do
+    (code, out, err) <- boundedVerbSeconds 120 "sh" args
     if err /= "" then
       Err "unexpected runner stderr: \{err}"
     else
       map (report => (code, report)) (parse out)
+
+runReport : List String -> String -> <Exec, IO> Result String (Int, Json)
+runReport options target = do
+  (code, out, err) <- runInvocation options target
+  if err /= "" then
+    Err "unexpected runner stderr: \{err}"
+  else
+    map (report => (code, report)) (parse out)
 
 propertyReports : Json -> List Json
 propertyReports report = match flatMap asArray (get "properties" report)
@@ -522,30 +520,29 @@ test "unsupported property parameters produce a named capability error" =
       ])
 
 runSeededReport : Int -> String -> <Exec, IO> Result String (Int, Json)
-runSeededReport seed target = match boundedVerbSeconds 120 medakaBin [
-  "test",
-  "--json",
-  "--engines",
-  "eval,native",
-  "--cases",
-  "20",
-  "--seed",
-  intToString seed,
-  target,
-]
-  Err message => Err message
-  Ok (code, out, err) =>
-    if err /= "" then
-      Err "unexpected runner stderr: \{err}"
-    else
-      map (report => (code, report)) (parse out)
+runSeededReport seed target = do
+  (code, out, err) <- boundedVerbSeconds 120 medakaBin [
+    "test",
+    "--json",
+    "--engines",
+    "eval,native",
+    "--cases",
+    "20",
+    "--seed",
+    intToString seed,
+    target,
+  ]
+  if err /= "" then
+    Err "unexpected runner stderr: \{err}"
+  else
+    map (report => (code, report)) (parse out)
 
 runSingleSeededReport : Int ->
   String ->
   String ->
   <Exec, IO> Result String (Int, Json)
-runSingleSeededReport seed filter target =
-  match boundedVerbSeconds 120 medakaBin [
+runSingleSeededReport seed filter target = do
+  (code, out, err) <- boundedVerbSeconds 120 medakaBin [
     "test",
     "--json",
     "--engines",
@@ -558,12 +555,10 @@ runSingleSeededReport seed filter target =
     filter,
     target,
   ]
-    Err message => Err message
-    Ok (code, out, err) =>
-      if err /= "" then
-        Err "unexpected runner stderr: \{err}"
-      else
-        map (report => (code, report)) (parse out)
+  if err /= "" then
+    Err "unexpected runner stderr: \{err}"
+  else
+    map (report => (code, report)) (parse out)
 
 exactSeedReport : String -> Int -> <Exec, IO> Expectation
 exactSeedReport target seed = match runSeededReport seed target

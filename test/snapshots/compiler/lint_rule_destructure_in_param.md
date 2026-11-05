@@ -1,5 +1,5 @@
 # META
-source_lines=181
+source_lines=180
 stages=DESUGAR,MARK
 # SOURCE
 -- lint rule rule-destructure-in-param: a single-arm irrefutable `match` on a bare parameter. Destructure in the parameter position.
@@ -163,10 +163,9 @@ recPatFieldIrrefutable orc (RecPatField _ _ _ (Some p)) = patIrrefutable orc p
 -- already proved the pattern irrefutable and the param unreferenced, so
 -- `armToClause`'s PWild re-bind special-case never triggers here.
 destructureInParamFix : Oracle -> Decl -> Option (List Decl)
-destructureInParamFix orc (DFunDef vis name pats body _ _) =
-  match matchBodyOnBareParam pats body
-    Some (p, k, arms) => destructureInParamFixArms orc vis name pats p k arms
-    None => None
+destructureInParamFix orc (DFunDef vis name pats body _ _) = do
+  (p, k, arms) <- matchBodyOnBareParam pats body
+  destructureInParamFixArms orc vis name pats p k arms
 destructureInParamFix _ _ = None
 
 destructureInParamFixArms : Oracle ->
@@ -222,7 +221,7 @@ destructureInParamFixArms _ _ _ _ _ _ _ = None
 (DFunDef false "recPatFieldIrrefutable" (PWild (PCon "RecPatField" PWild PWild PWild (PCon "None"))) (EVar "True"))
 (DFunDef false "recPatFieldIrrefutable" ((PVar "orc") (PCon "RecPatField" PWild PWild PWild (PCon "Some" (PVar "p")))) (EApp (EApp (EVar "patIrrefutable") (EVar "orc")) (EVar "p")))
 (DTypeSig false "destructureInParamFix" (TyFun (TyCon "Oracle") (TyFun (TyCon "Decl") (TyApp (TyCon "Option") (TyApp (TyCon "List") (TyCon "Decl"))))))
-(DFunDef false "destructureInParamFix" ((PVar "orc") (PCon "DFunDef" (PVar "vis") (PVar "name") (PVar "pats") (PVar "body") PWild PWild)) (EMatch (EApp (EApp (EVar "matchBodyOnBareParam") (EVar "pats")) (EVar "body")) (arm (PCon "Some" (PTuple (PVar "p") (PVar "k") (PVar "arms"))) () (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EVar "destructureInParamFixArms") (EVar "orc")) (EVar "vis")) (EVar "name")) (EVar "pats")) (EVar "p")) (EVar "k")) (EVar "arms"))) (arm (PCon "None") () (EVar "None"))))
+(DFunDef false "destructureInParamFix" ((PVar "orc") (PCon "DFunDef" (PVar "vis") (PVar "name") (PVar "pats") (PVar "body") PWild PWild)) (EApp (EApp (EVar "andThen") (EApp (EApp (EVar "matchBodyOnBareParam") (EVar "pats")) (EVar "body"))) (ELam ((PVar "__do_x")) (EMatch (EVar "__do_x") (arm (PTuple (PVar "p") (PVar "k") (PVar "arms")) () (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EVar "destructureInParamFixArms") (EVar "orc")) (EVar "vis")) (EVar "name")) (EVar "pats")) (EVar "p")) (EVar "k")) (EVar "arms")))))))
 (DFunDef false "destructureInParamFix" (PWild PWild) (EVar "None"))
 (DTypeSig false "destructureInParamFixArms" (TyFun (TyCon "Oracle") (TyFun (TyCon "Bool") (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "Pat")) (TyFun (TyCon "String") (TyFun (TyCon "Int") (TyFun (TyApp (TyCon "List") (TyCon "Arm")) (TyApp (TyCon "Option") (TyApp (TyCon "List") (TyCon "Decl")))))))))))
 (DFunDef false "destructureInParamFixArms" ((PVar "orc") (PVar "vis") (PVar "name") (PVar "pats") (PVar "p") (PVar "k") (PList (PVar "arm"))) (EIf (EApp (EApp (EApp (EVar "destructureArmFires") (EVar "orc")) (EVar "p")) (EVar "arm")) (EApp (EVar "Some") (EListLit (EApp (EApp (EApp (EApp (EApp (EApp (EVar "armToClause") (EVar "vis")) (EVar "name")) (EVar "p")) (EVar "pats")) (EVar "k")) (EVar "arm")))) (EVar "None")))
@@ -266,7 +265,7 @@ destructureInParamFixArms _ _ _ _ _ _ _ = None
 (DFunDef false "recPatFieldIrrefutable" (PWild (PCon "RecPatField" PWild PWild PWild (PCon "None"))) (EVar "True"))
 (DFunDef false "recPatFieldIrrefutable" ((PVar "orc") (PCon "RecPatField" PWild PWild PWild (PCon "Some" (PVar "p")))) (EApp (EApp (EVar "patIrrefutable") (EVar "orc")) (EVar "p")))
 (DTypeSig false "destructureInParamFix" (TyFun (TyCon "Oracle") (TyFun (TyCon "Decl") (TyApp (TyCon "Option") (TyApp (TyCon "List") (TyCon "Decl"))))))
-(DFunDef false "destructureInParamFix" ((PVar "orc") (PCon "DFunDef" (PVar "vis") (PVar "name") (PVar "pats") (PVar "body") PWild PWild)) (EMatch (EApp (EApp (EVar "matchBodyOnBareParam") (EVar "pats")) (EVar "body")) (arm (PCon "Some" (PTuple (PVar "p") (PVar "k") (PVar "arms"))) () (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EVar "destructureInParamFixArms") (EVar "orc")) (EVar "vis")) (EVar "name")) (EVar "pats")) (EVar "p")) (EVar "k")) (EVar "arms"))) (arm (PCon "None") () (EVar "None"))))
+(DFunDef false "destructureInParamFix" ((PVar "orc") (PCon "DFunDef" (PVar "vis") (PVar "name") (PVar "pats") (PVar "body") PWild PWild)) (EApp (EApp (EMethodRef "andThen") (EApp (EApp (EVar "matchBodyOnBareParam") (EVar "pats")) (EVar "body"))) (ELam ((PVar "__do_x")) (EMatch (EVar "__do_x") (arm (PTuple (PVar "p") (PVar "k") (PVar "arms")) () (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EVar "destructureInParamFixArms") (EVar "orc")) (EVar "vis")) (EVar "name")) (EVar "pats")) (EVar "p")) (EVar "k")) (EVar "arms")))))))
 (DFunDef false "destructureInParamFix" (PWild PWild) (EVar "None"))
 (DTypeSig false "destructureInParamFixArms" (TyFun (TyCon "Oracle") (TyFun (TyCon "Bool") (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "Pat")) (TyFun (TyCon "String") (TyFun (TyCon "Int") (TyFun (TyApp (TyCon "List") (TyCon "Arm")) (TyApp (TyCon "Option") (TyApp (TyCon "List") (TyCon "Decl")))))))))))
 (DFunDef false "destructureInParamFixArms" ((PVar "orc") (PVar "vis") (PVar "name") (PVar "pats") (PVar "p") (PVar "k") (PList (PVar "arm"))) (EIf (EApp (EApp (EApp (EVar "destructureArmFires") (EVar "orc")) (EVar "p")) (EVar "arm")) (EApp (EVar "Some") (EListLit (EApp (EApp (EApp (EApp (EApp (EApp (EVar "armToClause") (EVar "vis")) (EVar "name")) (EVar "p")) (EVar "pats")) (EVar "k")) (EVar "arm")))) (EVar "None")))

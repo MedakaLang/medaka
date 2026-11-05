@@ -187,17 +187,16 @@ positionFinding : Env ->
   Expr ->
   Int ->
   Option (List Finding)
-positionFinding env name loc initCs pats body k = match get k pats
-  None => None
-  Some p =>
-    let ctorClauses = filterList (hasCtorAt k) initCs
-    let working = filterList (clauseWorks name) ctorClauses
-    if listLen working >= 2
-      && wildAt p body (varsOfPats pats)
-      && anyList (clauseRecurses name k) working then
-      Some (report env name loc (flatMap (ctorsAt k) ctorClauses))
-    else
-      None
+positionFinding env name loc initCs pats body k = do
+  p <- get k pats
+  let ctorClauses = filterList (hasCtorAt k) initCs
+  let working = filterList (clauseWorks name) ctorClauses
+  if listLen working >= 2
+    && wildAt p body (varsOfPats pats)
+    && anyList (clauseRecurses name k) working then
+    Some (report env name loc (flatMap (ctorsAt k) ctorClauses))
+  else
+    None
 
 hasCtorAt : Int -> FunClause -> Bool
 hasCtorAt k c = isNonEmptyL (ctorsAt k c)

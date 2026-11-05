@@ -1,5 +1,5 @@
 # META
-source_lines=5281
+source_lines=5279
 stages=DESUGAR,MARK
 # SOURCE
 -- compiler/tools/test_cmd.mdk — `medaka test` logic (doctests + property tests),
@@ -425,12 +425,10 @@ pinIndexForTarget target userDecls = do
       context.contextFile
       (propNamesOf userDecls)
       (testNamesOf userDecls)
-  match names
-    Err err => Err err
-    Ok () =>
-      map
-        (index => (context.contextFile, index))
-        (buildPinIndex context.contextPins)
+  _ <- names
+  map
+    (index => (context.contextFile, index))
+    (buildPinIndex context.contextPins)
 
 -- ── typecheck gate (issues #260, #1229) ──────────────────────────────────────
 -- `medaka test` must not GREEN-LIGHT a module whose DOCTESTS `medaka check`
@@ -5347,7 +5345,7 @@ testFilesReport _ _ acc = acc
 (DTypeSig false "testDriveInputs" (TyFun (TyApp (TyCon "List") (TyCon "SiblingPair")) (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyCon "DriveInputs"))))
 (DFunDef false "testDriveInputs" ((PVar "sibling") (PVar "coreDecls")) (EBlock (DoLet false false (PVar "held") (EApp (EApp (EVar "withHeldPrelude") (EVar "coreDecls")) (EApp (EApp (EApp (EVar "driveInputsFor") (EUnOp "!" (EVar "selectedProfile"))) (EVar "False")) (EListLit)))) (DoExpr (ERecordUpdate (EVar "held") ((fa "diSibling" (EVar "sibling")))))))
 (DTypeSig false "pinIndexForTarget" (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyEffect ("IO") None (TyApp (TyApp (TyCon "Result") (TyCon "String")) (TyTuple (TyCon "String") (TyCon "PinIndex")))))))
-(DFunDef false "pinIndexForTarget" ((PVar "target") (PVar "userDecls")) (EApp (EApp (EVar "andThen") (EApp (EVar "loadPinContext") (EVar "target"))) (ELam ((PVar "context")) (ELet false (PVar "names") (EApp (EApp (EApp (EApp (EVar "validatePinNames") (EFieldAccess (EVar "context") "contextPins")) (EFieldAccess (EVar "context") "contextFile")) (EApp (EVar "propNamesOf") (EVar "userDecls"))) (EApp (EVar "testNamesOf") (EVar "userDecls"))) (EMatch (EVar "names") (arm (PCon "Err" (PVar "err")) () (EApp (EVar "Err") (EVar "err"))) (arm (PCon "Ok" (PLit LUnit)) () (EApp (EApp (EVar "map") (ELam ((PVar "index")) (ETuple (EFieldAccess (EVar "context") "contextFile") (EVar "index")))) (EApp (EVar "buildPinIndex") (EFieldAccess (EVar "context") "contextPins")))))))))
+(DFunDef false "pinIndexForTarget" ((PVar "target") (PVar "userDecls")) (EApp (EApp (EVar "andThen") (EApp (EVar "loadPinContext") (EVar "target"))) (ELam ((PVar "context")) (ELet false (PVar "names") (EApp (EApp (EApp (EApp (EVar "validatePinNames") (EFieldAccess (EVar "context") "contextPins")) (EFieldAccess (EVar "context") "contextFile")) (EApp (EVar "propNamesOf") (EVar "userDecls"))) (EApp (EVar "testNamesOf") (EVar "userDecls"))) (EApp (EApp (EVar "andThen") (EVar "names")) (ELam (PWild) (EApp (EApp (EVar "map") (ELam ((PVar "index")) (ETuple (EFieldAccess (EVar "context") "contextFile") (EVar "index")))) (EApp (EVar "buildPinIndex") (EFieldAccess (EVar "context") "contextPins")))))))))
 (DTypeSig false "typecheckExempt" (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyFun (TyCon "String") (TyEffect ("IO") None (TyCon "Bool"))))))
 (DFunDef false "typecheckExempt" ((PVar "target") (PVar "userDecls") (PVar "tsrc")) (EIf (EApp (EVar "isNonEmptyL") (EApp (EVar "targetExamples") (EVar "tsrc"))) (EVar "False") (EIf (EApp (EVar "isNewVehiclePath") (EVar "target")) (EVar "False") (EIf (EVar "otherwise") (EBinOp "||" (EApp (EVar "hasProps") (EVar "userDecls")) (EApp (EVar "hasTests") (EVar "userDecls"))) (EApp (EVar "__fallthrough__") (ELit LUnit))))))
 (DTypeSig false "isNewVehiclePath" (TyFun (TyCon "String") (TyEffect ("IO") None (TyCon "Bool"))))
@@ -6063,7 +6061,7 @@ testFilesReport _ _ acc = acc
 (DTypeSig false "testDriveInputs" (TyFun (TyApp (TyCon "List") (TyCon "SiblingPair")) (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyCon "DriveInputs"))))
 (DFunDef false "testDriveInputs" ((PVar "sibling") (PVar "coreDecls")) (EBlock (DoLet false false (PVar "held") (EApp (EApp (EVar "withHeldPrelude") (EVar "coreDecls")) (EApp (EApp (EApp (EVar "driveInputsFor") (EUnOp "!" (EVar "selectedProfile"))) (EVar "False")) (EListLit)))) (DoExpr (ERecordUpdate (EVar "held") ((fa "diSibling" (EVar "sibling")))))))
 (DTypeSig false "pinIndexForTarget" (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyEffect ("IO") None (TyApp (TyApp (TyCon "Result") (TyCon "String")) (TyTuple (TyCon "String") (TyCon "PinIndex")))))))
-(DFunDef false "pinIndexForTarget" ((PVar "target") (PVar "userDecls")) (EApp (EApp (EMethodRef "andThen") (EApp (EVar "loadPinContext") (EVar "target"))) (ELam ((PVar "context")) (ELet false (PVar "names") (EApp (EApp (EApp (EApp (EVar "validatePinNames") (EFieldAccess (EVar "context") "contextPins")) (EFieldAccess (EVar "context") "contextFile")) (EApp (EVar "propNamesOf") (EVar "userDecls"))) (EApp (EVar "testNamesOf") (EVar "userDecls"))) (EMatch (EVar "names") (arm (PCon "Err" (PVar "err")) () (EApp (EVar "Err") (EVar "err"))) (arm (PCon "Ok" (PLit LUnit)) () (EApp (EApp (EMethodRef "map") (ELam ((PVar "index")) (ETuple (EFieldAccess (EVar "context") "contextFile") (EMethodRef "index")))) (EApp (EVar "buildPinIndex") (EFieldAccess (EVar "context") "contextPins")))))))))
+(DFunDef false "pinIndexForTarget" ((PVar "target") (PVar "userDecls")) (EApp (EApp (EMethodRef "andThen") (EApp (EVar "loadPinContext") (EVar "target"))) (ELam ((PVar "context")) (ELet false (PVar "names") (EApp (EApp (EApp (EApp (EVar "validatePinNames") (EFieldAccess (EVar "context") "contextPins")) (EFieldAccess (EVar "context") "contextFile")) (EApp (EVar "propNamesOf") (EVar "userDecls"))) (EApp (EVar "testNamesOf") (EVar "userDecls"))) (EApp (EApp (EMethodRef "andThen") (EVar "names")) (ELam (PWild) (EApp (EApp (EMethodRef "map") (ELam ((PVar "index")) (ETuple (EFieldAccess (EVar "context") "contextFile") (EMethodRef "index")))) (EApp (EVar "buildPinIndex") (EFieldAccess (EVar "context") "contextPins")))))))))
 (DTypeSig false "typecheckExempt" (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyFun (TyCon "String") (TyEffect ("IO") None (TyCon "Bool"))))))
 (DFunDef false "typecheckExempt" ((PVar "target") (PVar "userDecls") (PVar "tsrc")) (EIf (EApp (EVar "isNonEmptyL") (EApp (EVar "targetExamples") (EVar "tsrc"))) (EVar "False") (EIf (EApp (EVar "isNewVehiclePath") (EVar "target")) (EVar "False") (EIf (EVar "otherwise") (EBinOp "||" (EApp (EVar "hasProps") (EVar "userDecls")) (EApp (EVar "hasTests") (EVar "userDecls"))) (EApp (EVar "__fallthrough__") (ELit LUnit))))))
 (DTypeSig false "isNewVehiclePath" (TyFun (TyCon "String") (TyEffect ("IO") None (TyCon "Bool"))))

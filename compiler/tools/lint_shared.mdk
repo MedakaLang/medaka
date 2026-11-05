@@ -307,11 +307,11 @@ parseDirectiveKeyword line s = match matchKeyword lintDisableNextLineRe s
 -- If `s` matches `re` (`keywordRe`'s keyword-plus-boundary shape), return the
 -- trimmed remainder (the rule-name list) captured in group 1; else None.
 matchKeyword : Regex -> String -> Option String
-matchKeyword re s = match reFind re s
-  Some m => match m.groups
+matchKeyword re s = do
+  m <- reFind re s
+  match m.groups
     (Some g) :: _ => Some (trimWs g.text)
     _ => None
-  None => None
 
 -- Split a rule-name list on commas and/or spaces, dropping empty fragments.
 parseRuleNames : String -> List String
@@ -1080,9 +1080,9 @@ matchSpan facts ctx (EMatch _ arms) = match (ctx.ctxOwn, lastArmSpan arms)
 matchSpan _ _ _ = None
 
 lastArmSpan : List Arm -> Option Loc
-lastArmSpan arms = match last arms
-  Some (Arm _ _ body) => tightSpan body
-  None => None
+lastArmSpan arms = do
+  (Arm _ _ body) <- last arms
+  tightSpan body
 
 export
 ruleNameResliceInLoop : String

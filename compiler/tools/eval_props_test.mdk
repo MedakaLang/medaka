@@ -105,44 +105,42 @@ withFixture source inspect = match makeTempDir ()
     result
 
 runReport : String -> <Exec, IO> Result String (Int, Json)
-runReport target = match boundedVerbSeconds 120 "env" [
-  medakaBin,
-  "test",
-  "--json",
-  "--engines",
-  "eval,native",
-  "--seed",
-  "91",
-  "--cases",
-  "20",
-  target,
-]
-  Err message => Err message
-  Ok (code, stdout, stderr) =>
-    if stderr == "" then
-      map (report => (code, report)) (parse stdout)
-    else
-      Err "unexpected stderr: \{stderr}"
+runReport target = do
+  (code, stdout, stderr) <- boundedVerbSeconds 120 "env" [
+    medakaBin,
+    "test",
+    "--json",
+    "--engines",
+    "eval,native",
+    "--seed",
+    "91",
+    "--cases",
+    "20",
+    target,
+  ]
+  if stderr == "" then
+    map (report => (code, report)) (parse stdout)
+  else
+    Err "unexpected stderr: \{stderr}"
 
 runReversedReport : String -> <Exec, IO> Result String (Int, Json)
-runReversedReport target = match boundedVerbSeconds 120 "env" [
-  medakaBin,
-  "test",
-  "--json",
-  "--engines",
-  "native,eval",
-  "--seed",
-  "91",
-  "--cases",
-  "20",
-  target,
-]
-  Err message => Err message
-  Ok (code, stdout, stderr) =>
-    if stderr == "" then
-      map (report => (code, report)) (parse stdout)
-    else
-      Err "unexpected stderr: \{stderr}"
+runReversedReport target = do
+  (code, stdout, stderr) <- boundedVerbSeconds 120 "env" [
+    medakaBin,
+    "test",
+    "--json",
+    "--engines",
+    "native,eval",
+    "--seed",
+    "91",
+    "--cases",
+    "20",
+    target,
+  ]
+  if stderr == "" then
+    map (report => (code, report)) (parse stdout)
+  else
+    Err "unexpected stderr: \{stderr}"
 
 propertyRows : Json -> List Json
 propertyRows report = match flatMap asArray (get "properties" report)

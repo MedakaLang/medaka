@@ -302,11 +302,11 @@ strContainsGo h hlen needle i
 -- result.data of response `idn` as a List Int, or None.
 export
 semanticData : Int -> List Frame -> Option (List Int)
-semanticData idn frames = match responseById idn frames
-  None => None
-  Some j => match get "result" j
-    None => None
-    Some res => match get "data" res
+semanticData idn frames = do
+  j <- responseById idn frames
+  do
+    res <- get "result" j
+    match get "data" res
       Some (JArray a) => Some (jIntArrayToList a 0 (arrayLength a))
       _ => None
 

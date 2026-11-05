@@ -70,12 +70,11 @@ isDiscard _ = False
 -- The block kind and verdict of the first `let _ =` in the first block of
 -- `decls`, read against `ix`.
 verdictIn : ProjectIndex -> List Decl -> Option (BlockKind, Verdict)
-verdictIn ix decls = match mainBlock decls
-  None => None
-  Some (kind, stmts) =>
-    map
-      (s => (kind, discardVerdict ix (buildScopes decls) "" s))
-      (firstDiscard stmts)
+verdictIn ix decls = do
+  (kind, stmts) <- mainBlock decls
+  map
+    (s => (kind, discardVerdict ix (buildScopes decls) "" s))
+    (firstDiscard stmts)
 
 -- The block kind and verdict of the first `let _ =` in `body`, the program
 -- being `header` followed by `body`.  `stdlib` rows come from `lib` instead.
@@ -328,12 +327,9 @@ probeProject others src = match lintParseSource src
           Err _ => [])
         others
     let ix = mkProjectIndex [] (declRows "m" decls ++ otherRows)
-    match mainBlock decls
-      None => None
-      Some (_, stmts) =>
-        map
-          (s => discardVerdict ix (buildScopes decls) "" s)
-          (firstDiscard stmts)
+    do
+      (_, stmts) <- mainBlock decls
+      map (s => discardVerdict ix (buildScopes decls) "" s) (firstDiscard stmts)
 
 wildCaller : String
 wildCaller = """

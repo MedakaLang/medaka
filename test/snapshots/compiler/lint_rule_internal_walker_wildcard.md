@@ -1,5 +1,5 @@
 # META
-source_lines=431
+source_lines=430
 stages=DESUGAR,MARK
 # SOURCE
 -- lint rule rule-walker-wildcard: a self-recursive function over constructor patterns whose final wildcard returns a constant or its input without recursing.
@@ -191,17 +191,16 @@ positionFinding : Env ->
   Expr ->
   Int ->
   Option (List Finding)
-positionFinding env name loc initCs pats body k = match get k pats
-  None => None
-  Some p =>
-    let ctorClauses = filterList (hasCtorAt k) initCs
-    let working = filterList (clauseWorks name) ctorClauses
-    if listLen working >= 2
-      && wildAt p body (varsOfPats pats)
-      && anyList (clauseRecurses name k) working then
-      Some (report env name loc (flatMap (ctorsAt k) ctorClauses))
-    else
-      None
+positionFinding env name loc initCs pats body k = do
+  p <- get k pats
+  let ctorClauses = filterList (hasCtorAt k) initCs
+  let working = filterList (clauseWorks name) ctorClauses
+  if listLen working >= 2
+    && wildAt p body (varsOfPats pats)
+    && anyList (clauseRecurses name k) working then
+    Some (report env name loc (flatMap (ctorsAt k) ctorClauses))
+  else
+    None
 
 hasCtorAt : Int -> FunClause -> Bool
 hasCtorAt k c = isNonEmptyL (ctorsAt k c)
@@ -485,7 +484,7 @@ siblingOf r x =
 (DTypeSig false "positionsOf" (TyFun (TyApp (TyCon "List") (TyCon "Pat")) (TyApp (TyCon "List") (TyCon "Int"))))
 (DFunDef false "positionsOf" ((PVar "pats")) (ERangeList (ELit (LInt 0)) (EApp (EVar "listLen") (EVar "pats")) false))
 (DTypeSig false "positionFinding" (TyFun (TyCon "Env") (TyFun (TyCon "String") (TyFun (TyApp (TyCon "Option") (TyCon "Loc")) (TyFun (TyApp (TyCon "List") (TyCon "FunClause")) (TyFun (TyApp (TyCon "List") (TyCon "Pat")) (TyFun (TyCon "Expr") (TyFun (TyCon "Int") (TyApp (TyCon "Option") (TyApp (TyCon "List") (TyCon "Finding")))))))))))
-(DFunDef false "positionFinding" ((PVar "env") (PVar "name") (PVar "loc") (PVar "initCs") (PVar "pats") (PVar "body") (PVar "k")) (EMatch (EApp (EApp (EVar "get") (EVar "k")) (EVar "pats")) (arm (PCon "None") () (EVar "None")) (arm (PCon "Some" (PVar "p")) () (EBlock (DoLet false false (PVar "ctorClauses") (EApp (EApp (EVar "filterList") (EApp (EVar "hasCtorAt") (EVar "k"))) (EVar "initCs"))) (DoLet false false (PVar "working") (EApp (EApp (EVar "filterList") (EApp (EVar "clauseWorks") (EVar "name"))) (EVar "ctorClauses"))) (DoExpr (EIf (EBinOp "&&" (EBinOp "&&" (EBinOp ">=" (EApp (EVar "listLen") (EVar "working")) (ELit (LInt 2))) (EApp (EApp (EApp (EVar "wildAt") (EVar "p")) (EVar "body")) (EApp (EVar "varsOfPats") (EVar "pats")))) (EApp (EApp (EVar "anyList") (EApp (EApp (EVar "clauseRecurses") (EVar "name")) (EVar "k"))) (EVar "working"))) (EApp (EVar "Some") (EApp (EApp (EApp (EApp (EVar "report") (EVar "env")) (EVar "name")) (EVar "loc")) (EApp (EApp (EVar "flatMap") (EApp (EVar "ctorsAt") (EVar "k"))) (EVar "ctorClauses")))) (EVar "None")))))))
+(DFunDef false "positionFinding" ((PVar "env") (PVar "name") (PVar "loc") (PVar "initCs") (PVar "pats") (PVar "body") (PVar "k")) (EApp (EApp (EVar "andThen") (EApp (EApp (EVar "get") (EVar "k")) (EVar "pats"))) (ELam ((PVar "p")) (ELet false (PVar "ctorClauses") (EApp (EApp (EVar "filterList") (EApp (EVar "hasCtorAt") (EVar "k"))) (EVar "initCs")) (ELet false (PVar "working") (EApp (EApp (EVar "filterList") (EApp (EVar "clauseWorks") (EVar "name"))) (EVar "ctorClauses")) (EIf (EBinOp "&&" (EBinOp "&&" (EBinOp ">=" (EApp (EVar "listLen") (EVar "working")) (ELit (LInt 2))) (EApp (EApp (EApp (EVar "wildAt") (EVar "p")) (EVar "body")) (EApp (EVar "varsOfPats") (EVar "pats")))) (EApp (EApp (EVar "anyList") (EApp (EApp (EVar "clauseRecurses") (EVar "name")) (EVar "k"))) (EVar "working"))) (EApp (EVar "Some") (EApp (EApp (EApp (EApp (EVar "report") (EVar "env")) (EVar "name")) (EVar "loc")) (EApp (EApp (EVar "flatMap") (EApp (EVar "ctorsAt") (EVar "k"))) (EVar "ctorClauses")))) (EVar "None")))))))
 (DTypeSig false "hasCtorAt" (TyFun (TyCon "Int") (TyFun (TyCon "FunClause") (TyCon "Bool"))))
 (DFunDef false "hasCtorAt" ((PVar "k") (PVar "c")) (EApp (EVar "isNonEmptyL") (EApp (EApp (EVar "ctorsAt") (EVar "k")) (EVar "c"))))
 (DTypeSig false "ctorsAt" (TyFun (TyCon "Int") (TyFun (TyCon "FunClause") (TyApp (TyCon "List") (TyCon "String")))))
@@ -623,7 +622,7 @@ siblingOf r x =
 (DTypeSig false "positionsOf" (TyFun (TyApp (TyCon "List") (TyCon "Pat")) (TyApp (TyCon "List") (TyCon "Int"))))
 (DFunDef false "positionsOf" ((PVar "pats")) (ERangeList (ELit (LInt 0)) (EApp (EVar "listLen") (EVar "pats")) false))
 (DTypeSig false "positionFinding" (TyFun (TyCon "Env") (TyFun (TyCon "String") (TyFun (TyApp (TyCon "Option") (TyCon "Loc")) (TyFun (TyApp (TyCon "List") (TyCon "FunClause")) (TyFun (TyApp (TyCon "List") (TyCon "Pat")) (TyFun (TyCon "Expr") (TyFun (TyCon "Int") (TyApp (TyCon "Option") (TyApp (TyCon "List") (TyCon "Finding")))))))))))
-(DFunDef false "positionFinding" ((PVar "env") (PVar "name") (PVar "loc") (PVar "initCs") (PVar "pats") (PVar "body") (PVar "k")) (EMatch (EApp (EApp (EVar "get") (EVar "k")) (EVar "pats")) (arm (PCon "None") () (EVar "None")) (arm (PCon "Some" (PVar "p")) () (EBlock (DoLet false false (PVar "ctorClauses") (EApp (EApp (EVar "filterList") (EApp (EVar "hasCtorAt") (EVar "k"))) (EVar "initCs"))) (DoLet false false (PVar "working") (EApp (EApp (EVar "filterList") (EApp (EVar "clauseWorks") (EVar "name"))) (EVar "ctorClauses"))) (DoExpr (EIf (EBinOp "&&" (EBinOp "&&" (EBinOp ">=" (EApp (EVar "listLen") (EVar "working")) (ELit (LInt 2))) (EApp (EApp (EApp (EVar "wildAt") (EVar "p")) (EVar "body")) (EApp (EVar "varsOfPats") (EVar "pats")))) (EApp (EApp (EVar "anyList") (EApp (EApp (EVar "clauseRecurses") (EVar "name")) (EVar "k"))) (EVar "working"))) (EApp (EVar "Some") (EApp (EApp (EApp (EApp (EVar "report") (EVar "env")) (EVar "name")) (EVar "loc")) (EApp (EApp (EDictApp "flatMap") (EApp (EVar "ctorsAt") (EVar "k"))) (EVar "ctorClauses")))) (EVar "None")))))))
+(DFunDef false "positionFinding" ((PVar "env") (PVar "name") (PVar "loc") (PVar "initCs") (PVar "pats") (PVar "body") (PVar "k")) (EApp (EApp (EMethodRef "andThen") (EApp (EApp (EVar "get") (EVar "k")) (EVar "pats"))) (ELam ((PVar "p")) (ELet false (PVar "ctorClauses") (EApp (EApp (EVar "filterList") (EApp (EVar "hasCtorAt") (EVar "k"))) (EVar "initCs")) (ELet false (PVar "working") (EApp (EApp (EVar "filterList") (EApp (EVar "clauseWorks") (EVar "name"))) (EVar "ctorClauses")) (EIf (EBinOp "&&" (EBinOp "&&" (EBinOp ">=" (EApp (EVar "listLen") (EVar "working")) (ELit (LInt 2))) (EApp (EApp (EApp (EVar "wildAt") (EVar "p")) (EVar "body")) (EApp (EVar "varsOfPats") (EVar "pats")))) (EApp (EApp (EVar "anyList") (EApp (EApp (EVar "clauseRecurses") (EVar "name")) (EVar "k"))) (EVar "working"))) (EApp (EVar "Some") (EApp (EApp (EApp (EApp (EVar "report") (EVar "env")) (EVar "name")) (EVar "loc")) (EApp (EApp (EDictApp "flatMap") (EApp (EVar "ctorsAt") (EVar "k"))) (EVar "ctorClauses")))) (EVar "None")))))))
 (DTypeSig false "hasCtorAt" (TyFun (TyCon "Int") (TyFun (TyCon "FunClause") (TyCon "Bool"))))
 (DFunDef false "hasCtorAt" ((PVar "k") (PVar "c")) (EApp (EVar "isNonEmptyL") (EApp (EApp (EVar "ctorsAt") (EVar "k")) (EVar "c"))))
 (DTypeSig false "ctorsAt" (TyFun (TyCon "Int") (TyFun (TyCon "FunClause") (TyApp (TyCon "List") (TyCon "String")))))

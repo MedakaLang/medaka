@@ -1,5 +1,5 @@
 # META
-source_lines=320
+source_lines=319
 stages=DESUGAR,MARK
 # SOURCE
 -- compiler/tools/codemod.mdk — the `medaka codemod` framework + registry.
@@ -153,30 +153,29 @@ export
 codemodSource : (Decl -> (Decl, Bool)) ->
   String ->
   Result ParseError (Option String)
-codemodSource xf src = match parseResult src
-  Err e => Err e
-  Ok _ =>
-    let (toks, pairs) = tokenizeWithOffsetPairs src
-    let parsed =
-      optionOrPanic "parse error" (parseSourceSyntaxPairs src toks pairs)
-    let decls = parsedDecls parsed
-    let pos = parsedPositions parsed
-    let metadata = parsedMetadata parsed
-    let (decls2, changed) = mapDeclsChanged xf decls
-    if not changed then
-      Ok None
-    else
-      let comments = collectComments src
-      Ok
-        (Some
-          (formatProgram
-            decls2
-            (positionsDecls pos)
-            (positionsVariantLines pos)
-            (metadataTrailingCommas metadata)
-            (metadataUnitStarts metadata)
-            comments
-            src))
+codemodSource xf src = do
+  _ <- parseResult src
+  let (toks, pairs) = tokenizeWithOffsetPairs src
+  let parsed =
+    optionOrPanic "parse error" (parseSourceSyntaxPairs src toks pairs)
+  let decls = parsedDecls parsed
+  let pos = parsedPositions parsed
+  let metadata = parsedMetadata parsed
+  let (decls2, changed) = mapDeclsChanged xf decls
+  if not changed then
+    Ok None
+  else
+    let comments = collectComments src
+    Ok
+      (Some
+        (formatProgram
+          decls2
+          (positionsDecls pos)
+          (positionsVariantLines pos)
+          (metadataTrailingCommas metadata)
+          (metadataUnitStarts metadata)
+          comments
+          src))
 
 mapDeclsChanged : (Decl -> (Decl, Bool)) -> List Decl -> (List Decl, Bool)
 mapDeclsChanged _ [] = ([], False)
@@ -355,7 +354,7 @@ declEffectWarn _ _ = []
 (DTypeSig false "codemodListingLine" (TyFun (TyCon "Codemod") (TyCon "String")))
 (DFunDef false "codemodListingLine" ((PVar "c")) (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "  ")) (EApp (EVar "display") (EApp (EVar "codemodName") (EVar "c")))) (ELit (LString " — "))) (EApp (EVar "display") (EApp (EVar "codemodDescr") (EVar "c")))) (ELit (LString "\n    "))) (EApp (EVar "display") (EApp (EVar "codemodArgHelp") (EVar "c")))) (ELit (LString ""))))
 (DTypeSig true "codemodSource" (TyFun (TyFun (TyCon "Decl") (TyTuple (TyCon "Decl") (TyCon "Bool"))) (TyFun (TyCon "String") (TyApp (TyApp (TyCon "Result") (TyCon "ParseError")) (TyApp (TyCon "Option") (TyCon "String"))))))
-(DFunDef false "codemodSource" ((PVar "xf") (PVar "src")) (EMatch (EApp (EVar "parseResult") (EVar "src")) (arm (PCon "Err" (PVar "e")) () (EApp (EVar "Err") (EVar "e"))) (arm (PCon "Ok" PWild) () (EBlock (DoLet false false (PTuple (PVar "toks") (PVar "pairs")) (EApp (EVar "tokenizeWithOffsetPairs") (EVar "src"))) (DoLet false false (PVar "parsed") (EApp (EApp (EVar "optionOrPanic") (ELit (LString "parse error"))) (EApp (EApp (EApp (EVar "parseSourceSyntaxPairs") (EVar "src")) (EVar "toks")) (EVar "pairs")))) (DoLet false false (PVar "decls") (EApp (EVar "parsedDecls") (EVar "parsed"))) (DoLet false false (PVar "pos") (EApp (EVar "parsedPositions") (EVar "parsed"))) (DoLet false false (PVar "metadata") (EApp (EVar "parsedMetadata") (EVar "parsed"))) (DoLet false false (PTuple (PVar "decls2") (PVar "changed")) (EApp (EApp (EVar "mapDeclsChanged") (EVar "xf")) (EVar "decls"))) (DoExpr (EIf (EApp (EVar "not") (EVar "changed")) (EApp (EVar "Ok") (EVar "None")) (EBlock (DoLet false false (PVar "comments") (EApp (EVar "collectComments") (EVar "src"))) (DoExpr (EApp (EVar "Ok") (EApp (EVar "Some") (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EVar "formatProgram") (EVar "decls2")) (EApp (EVar "positionsDecls") (EVar "pos"))) (EApp (EVar "positionsVariantLines") (EVar "pos"))) (EApp (EVar "metadataTrailingCommas") (EVar "metadata"))) (EApp (EVar "metadataUnitStarts") (EVar "metadata"))) (EVar "comments")) (EVar "src"))))))))))))
+(DFunDef false "codemodSource" ((PVar "xf") (PVar "src")) (EApp (EApp (EVar "andThen") (EApp (EVar "parseResult") (EVar "src"))) (ELam (PWild) (ELet false (PTuple (PVar "toks") (PVar "pairs")) (EApp (EVar "tokenizeWithOffsetPairs") (EVar "src")) (ELet false (PVar "parsed") (EApp (EApp (EVar "optionOrPanic") (ELit (LString "parse error"))) (EApp (EApp (EApp (EVar "parseSourceSyntaxPairs") (EVar "src")) (EVar "toks")) (EVar "pairs"))) (ELet false (PVar "decls") (EApp (EVar "parsedDecls") (EVar "parsed")) (ELet false (PVar "pos") (EApp (EVar "parsedPositions") (EVar "parsed")) (ELet false (PVar "metadata") (EApp (EVar "parsedMetadata") (EVar "parsed")) (ELet false (PTuple (PVar "decls2") (PVar "changed")) (EApp (EApp (EVar "mapDeclsChanged") (EVar "xf")) (EVar "decls")) (EIf (EApp (EVar "not") (EVar "changed")) (EApp (EVar "Ok") (EVar "None")) (EBlock (DoLet false false (PVar "comments") (EApp (EVar "collectComments") (EVar "src"))) (DoExpr (EApp (EVar "Ok") (EApp (EVar "Some") (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EVar "formatProgram") (EVar "decls2")) (EApp (EVar "positionsDecls") (EVar "pos"))) (EApp (EVar "positionsVariantLines") (EVar "pos"))) (EApp (EVar "metadataTrailingCommas") (EVar "metadata"))) (EApp (EVar "metadataUnitStarts") (EVar "metadata"))) (EVar "comments")) (EVar "src"))))))))))))))))
 (DTypeSig false "mapDeclsChanged" (TyFun (TyFun (TyCon "Decl") (TyTuple (TyCon "Decl") (TyCon "Bool"))) (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyTuple (TyApp (TyCon "List") (TyCon "Decl")) (TyCon "Bool")))))
 (DFunDef false "mapDeclsChanged" (PWild (PList)) (ETuple (EListLit) (EVar "False")))
 (DFunDef false "mapDeclsChanged" ((PVar "xf") (PCons (PVar "d") (PVar "ds"))) (EBlock (DoLet false false (PTuple (PVar "d2") (PVar "c1")) (EApp (EVar "xf") (EVar "d"))) (DoLet false false (PTuple (PVar "ds2") (PVar "c2")) (EApp (EApp (EVar "mapDeclsChanged") (EVar "xf")) (EVar "ds"))) (DoExpr (ETuple (EBinOp "::" (EVar "d2") (EVar "ds2")) (EBinOp "||" (EVar "c1") (EVar "c2"))))))
@@ -436,7 +435,7 @@ declEffectWarn _ _ = []
 (DTypeSig false "codemodListingLine" (TyFun (TyCon "Codemod") (TyCon "String")))
 (DFunDef false "codemodListingLine" ((PVar "c")) (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "  ")) (EApp (EMethodRef "display") (EApp (EVar "codemodName") (EVar "c")))) (ELit (LString " — "))) (EApp (EMethodRef "display") (EApp (EVar "codemodDescr") (EVar "c")))) (ELit (LString "\n    "))) (EApp (EMethodRef "display") (EApp (EVar "codemodArgHelp") (EVar "c")))) (ELit (LString ""))))
 (DTypeSig true "codemodSource" (TyFun (TyFun (TyCon "Decl") (TyTuple (TyCon "Decl") (TyCon "Bool"))) (TyFun (TyCon "String") (TyApp (TyApp (TyCon "Result") (TyCon "ParseError")) (TyApp (TyCon "Option") (TyCon "String"))))))
-(DFunDef false "codemodSource" ((PVar "xf") (PVar "src")) (EMatch (EApp (EVar "parseResult") (EVar "src")) (arm (PCon "Err" (PVar "e")) () (EApp (EVar "Err") (EVar "e"))) (arm (PCon "Ok" PWild) () (EBlock (DoLet false false (PTuple (PVar "toks") (PVar "pairs")) (EApp (EVar "tokenizeWithOffsetPairs") (EVar "src"))) (DoLet false false (PVar "parsed") (EApp (EApp (EVar "optionOrPanic") (ELit (LString "parse error"))) (EApp (EApp (EApp (EVar "parseSourceSyntaxPairs") (EVar "src")) (EVar "toks")) (EVar "pairs")))) (DoLet false false (PVar "decls") (EApp (EVar "parsedDecls") (EVar "parsed"))) (DoLet false false (PVar "pos") (EApp (EVar "parsedPositions") (EVar "parsed"))) (DoLet false false (PVar "metadata") (EApp (EVar "parsedMetadata") (EVar "parsed"))) (DoLet false false (PTuple (PVar "decls2") (PVar "changed")) (EApp (EApp (EVar "mapDeclsChanged") (EVar "xf")) (EVar "decls"))) (DoExpr (EIf (EApp (EVar "not") (EVar "changed")) (EApp (EVar "Ok") (EVar "None")) (EBlock (DoLet false false (PVar "comments") (EApp (EVar "collectComments") (EVar "src"))) (DoExpr (EApp (EVar "Ok") (EApp (EVar "Some") (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EVar "formatProgram") (EVar "decls2")) (EApp (EVar "positionsDecls") (EVar "pos"))) (EApp (EVar "positionsVariantLines") (EVar "pos"))) (EApp (EVar "metadataTrailingCommas") (EVar "metadata"))) (EApp (EVar "metadataUnitStarts") (EVar "metadata"))) (EVar "comments")) (EVar "src"))))))))))))
+(DFunDef false "codemodSource" ((PVar "xf") (PVar "src")) (EApp (EApp (EMethodRef "andThen") (EApp (EVar "parseResult") (EVar "src"))) (ELam (PWild) (ELet false (PTuple (PVar "toks") (PVar "pairs")) (EApp (EVar "tokenizeWithOffsetPairs") (EVar "src")) (ELet false (PVar "parsed") (EApp (EApp (EVar "optionOrPanic") (ELit (LString "parse error"))) (EApp (EApp (EApp (EVar "parseSourceSyntaxPairs") (EVar "src")) (EVar "toks")) (EVar "pairs"))) (ELet false (PVar "decls") (EApp (EVar "parsedDecls") (EVar "parsed")) (ELet false (PVar "pos") (EApp (EVar "parsedPositions") (EVar "parsed")) (ELet false (PVar "metadata") (EApp (EVar "parsedMetadata") (EVar "parsed")) (ELet false (PTuple (PVar "decls2") (PVar "changed")) (EApp (EApp (EVar "mapDeclsChanged") (EVar "xf")) (EVar "decls")) (EIf (EApp (EVar "not") (EVar "changed")) (EApp (EVar "Ok") (EVar "None")) (EBlock (DoLet false false (PVar "comments") (EApp (EVar "collectComments") (EVar "src"))) (DoExpr (EApp (EVar "Ok") (EApp (EVar "Some") (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EVar "formatProgram") (EVar "decls2")) (EApp (EVar "positionsDecls") (EVar "pos"))) (EApp (EVar "positionsVariantLines") (EVar "pos"))) (EApp (EVar "metadataTrailingCommas") (EVar "metadata"))) (EApp (EVar "metadataUnitStarts") (EVar "metadata"))) (EVar "comments")) (EVar "src"))))))))))))))))
 (DTypeSig false "mapDeclsChanged" (TyFun (TyFun (TyCon "Decl") (TyTuple (TyCon "Decl") (TyCon "Bool"))) (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyTuple (TyApp (TyCon "List") (TyCon "Decl")) (TyCon "Bool")))))
 (DFunDef false "mapDeclsChanged" (PWild (PList)) (ETuple (EListLit) (EVar "False")))
 (DFunDef false "mapDeclsChanged" ((PVar "xf") (PCons (PVar "d") (PVar "ds"))) (EBlock (DoLet false false (PTuple (PVar "d2") (PVar "c1")) (EApp (EVar "xf") (EVar "d"))) (DoLet false false (PTuple (PVar "ds2") (PVar "c2")) (EApp (EApp (EVar "mapDeclsChanged") (EVar "xf")) (EVar "ds"))) (DoExpr (ETuple (EBinOp "::" (EVar "d2") (EVar "ds2")) (EBinOp "||" (EVar "c1") (EVar "c2"))))))

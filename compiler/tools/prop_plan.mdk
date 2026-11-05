@@ -679,10 +679,9 @@ instantiateCtor : PlanEnv ->
   GenPlan ->
   PlanCtor ->
   Result PlanError (List (Option String, GenPlan))
-instantiateCtor env (GNominal key args) (PlanCtor _ _ fields) =
-  match planDef env key
-    Ok (PlanDef _ _ params _ _) => instantiateFields env params args fields
-    Err e => Err e
+instantiateCtor env (GNominal key args) (PlanCtor _ _ fields) = do
+  (PlanDef _ _ params _ _) <- planDef env key
+  instantiateFields env params args fields
 instantiateCtor _ p _ =
   Err
     (PlanError
@@ -1284,23 +1283,22 @@ allPlansBelow env height (plan :: rest) = match planFiniteHeight env plan []
 
 export
 planFor : PlanEnv -> String -> String -> Ty -> Result PlanError GenPlan
-planFor env propName param ty = match planForGo env propName param ty
-  Ok plan =>
-    match validateReachableFields env (finiteTruth env plan) plan omEmpty
-      Err (PlanError _ _ badTy reason detail) =>
-        Err (PlanError propName param badTy reason detail)
-      Ok _ =>
-        if planHasFiniteValue env plan then
-          Ok plan
-        else
-          Err
-            (PlanError
-              propName
-              param
-              ty
-              PENoFiniteValue
-              "no constructor path reaches finite values")
-  Err e => Err e
+planFor env propName param ty = do
+  plan <- planForGo env propName param ty
+  match validateReachableFields env (finiteTruth env plan) plan omEmpty
+    Err (PlanError _ _ badTy reason detail) =>
+      Err (PlanError propName param badTy reason detail)
+    Ok _ =>
+      if planHasFiniteValue env plan then
+        Ok plan
+      else
+        Err
+          (PlanError
+            propName
+            param
+            ty
+            PENoFiniteValue
+            "no constructor path reaches finite values")
 
 -- A property may have one finite constructor while another reachable
 -- constructor contains a function or another unsupported field. The selected
@@ -1339,10 +1337,9 @@ validateReachableFields env truth (nominal@(GNominal key args)) seen =
   let word = stateWord env truth key args
   if omHasKey word seen then
     Ok ()
-  else match planDef env key
-    Ok (PlanDef _ _ _ _ ctors) =>
-      validateReachableCtors env truth nominal ctors (omInsert word () seen)
-    Err e => Err e
+  else do
+    (PlanDef _ _ _ _ ctors) <- planDef env key
+    validateReachableCtors env truth nominal ctors (omInsert word () seen)
 
 validateReachablePlans : PlanEnv ->
   OrdMap Unit ->

@@ -159,10 +159,9 @@ recPatFieldIrrefutable orc (RecPatField _ _ _ (Some p)) = patIrrefutable orc p
 -- already proved the pattern irrefutable and the param unreferenced, so
 -- `armToClause`'s PWild re-bind special-case never triggers here.
 destructureInParamFix : Oracle -> Decl -> Option (List Decl)
-destructureInParamFix orc (DFunDef vis name pats body _ _) =
-  match matchBodyOnBareParam pats body
-    Some (p, k, arms) => destructureInParamFixArms orc vis name pats p k arms
-    None => None
+destructureInParamFix orc (DFunDef vis name pats body _ _) = do
+  (p, k, arms) <- matchBodyOnBareParam pats body
+  destructureInParamFixArms orc vis name pats p k arms
 destructureInParamFix _ _ = None
 
 destructureInParamFixArms : Oracle ->

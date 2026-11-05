@@ -245,9 +245,9 @@ public export data Found = Found {
 
 -- The subject against the template; a bound subexpression keeps its wrappers.
 matchHint : Hint -> Expr -> Option Found
-matchHint h subject = match matchT h.hintLhs subject (Found [] [])
-  Some found => if condsHold h.hintRow.rowConds found then Some found else None
-  None => None
+matchHint h subject = do
+  found <- matchT h.hintLhs subject (Found [] [])
+  if condsHold h.hintRow.rowConds found then Some found else None
 
 condsHold : List HintCond -> Found -> Bool
 condsHold conds found = all (condHolds found) conds
@@ -287,9 +287,9 @@ matchT (TLeaf sexp) subject found =
   if sexp == exprSexp (unwrapLoc subject) then Some found else None
 
 matchBoth : Tmpl -> Expr -> Tmpl -> Expr -> Found -> Option Found
-matchBoth p1 s1 p2 s2 found = match matchT p1 s1 found
-  Some found2 => matchT p2 s2 found2
-  None => None
+matchBoth p1 s1 p2 s2 found = do
+  found2 <- matchT p1 s1 found
+  matchT p2 s2 found2
 
 bindMeta : String -> Expr -> Found -> Option Found
 bindMeta n subject found = match lookupAssoc n found.foundBinds

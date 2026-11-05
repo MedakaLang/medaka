@@ -1,5 +1,5 @@
 # META
-source_lines=152
+source_lines=151
 stages=DESUGAR,MARK
 # SOURCE
 -- lint rule rule-eager-default: a call passed as an always-evaluated default. `optionOr d o` and `resultOr d r` evaluate `d` even when `o` holds a value; `optionOrElse` and `resultOrElse` take a function and run it only on the miss.
@@ -95,13 +95,12 @@ eagerOf : StdlibIndex -> FileFacts -> Expr -> Option Expr
 eagerOf idx facts (EApp f x) = match unwrapLoc f
   EApp hd d => match unwrapLoc hd
     EVar "whenL" => if isFalseLit d && isCall x then Some (EApp f x) else None
-    EVar n => match lazyName n
-      Some lazy =>
-        if isCall d && usesPreludeName idx facts hd then
-          Some (EApp (EVar lazy) (ELam [PWild] d))
-        else
-          None
-      None => None
+    EVar n => do
+      lazy <- lazyName n
+      if isCall d && usesPreludeName idx facts hd then
+        Some (EApp (EVar lazy) (ELam [PWild] d))
+      else
+        None
     _ => None
   _ => None
 eagerOf _ _ _ = None
@@ -173,7 +172,7 @@ ruleEagerDefault idx _ facts _ _ =
 (DFunDef false "lazyName" ((PLit (LString "resultOr"))) (EApp (EVar "Some") (ELit (LString "resultOrElse"))))
 (DFunDef false "lazyName" (PWild) (EVar "None"))
 (DTypeSig false "eagerOf" (TyFun (TyCon "StdlibIndex") (TyFun (TyCon "FileFacts") (TyFun (TyCon "Expr") (TyApp (TyCon "Option") (TyCon "Expr"))))))
-(DFunDef false "eagerOf" ((PVar "idx") (PVar "facts") (PCon "EApp" (PVar "f") (PVar "x"))) (EMatch (EApp (EVar "unwrapLoc") (EVar "f")) (arm (PCon "EApp" (PVar "hd") (PVar "d")) () (EMatch (EApp (EVar "unwrapLoc") (EVar "hd")) (arm (PCon "EVar" (PLit (LString "whenL"))) () (EIf (EBinOp "&&" (EApp (EVar "isFalseLit") (EVar "d")) (EApp (EVar "isCall") (EVar "x"))) (EApp (EVar "Some") (EApp (EApp (EVar "EApp") (EVar "f")) (EVar "x"))) (EVar "None"))) (arm (PCon "EVar" (PVar "n")) () (EMatch (EApp (EVar "lazyName") (EVar "n")) (arm (PCon "Some" (PVar "lazy")) () (EIf (EBinOp "&&" (EApp (EVar "isCall") (EVar "d")) (EApp (EApp (EApp (EVar "usesPreludeName") (EVar "idx")) (EVar "facts")) (EVar "hd"))) (EApp (EVar "Some") (EApp (EApp (EVar "EApp") (EApp (EVar "EVar") (EVar "lazy"))) (EApp (EApp (EVar "ELam") (EListLit (EVar "PWild"))) (EVar "d")))) (EVar "None"))) (arm (PCon "None") () (EVar "None")))) (arm PWild () (EVar "None")))) (arm PWild () (EVar "None"))))
+(DFunDef false "eagerOf" ((PVar "idx") (PVar "facts") (PCon "EApp" (PVar "f") (PVar "x"))) (EMatch (EApp (EVar "unwrapLoc") (EVar "f")) (arm (PCon "EApp" (PVar "hd") (PVar "d")) () (EMatch (EApp (EVar "unwrapLoc") (EVar "hd")) (arm (PCon "EVar" (PLit (LString "whenL"))) () (EIf (EBinOp "&&" (EApp (EVar "isFalseLit") (EVar "d")) (EApp (EVar "isCall") (EVar "x"))) (EApp (EVar "Some") (EApp (EApp (EVar "EApp") (EVar "f")) (EVar "x"))) (EVar "None"))) (arm (PCon "EVar" (PVar "n")) () (EApp (EApp (EVar "andThen") (EApp (EVar "lazyName") (EVar "n"))) (ELam ((PVar "lazy")) (EIf (EBinOp "&&" (EApp (EVar "isCall") (EVar "d")) (EApp (EApp (EApp (EVar "usesPreludeName") (EVar "idx")) (EVar "facts")) (EVar "hd"))) (EApp (EVar "Some") (EApp (EApp (EVar "EApp") (EApp (EVar "EVar") (EVar "lazy"))) (EApp (EApp (EVar "ELam") (EListLit (EVar "PWild"))) (EVar "d")))) (EVar "None"))))) (arm PWild () (EVar "None")))) (arm PWild () (EVar "None"))))
 (DFunDef false "eagerOf" (PWild PWild PWild) (EVar "None"))
 (DTypeSig false "isWhenL" (TyFun (TyCon "Expr") (TyCon "Bool")))
 (DFunDef false "isWhenL" ((PVar "e")) (EBinOp "==" (EApp (EVar "calledName") (EVar "e")) (ELit (LString "whenL"))))
@@ -203,7 +202,7 @@ ruleEagerDefault idx _ facts _ _ =
 (DFunDef false "lazyName" ((PLit (LString "resultOr"))) (EApp (EVar "Some") (ELit (LString "resultOrElse"))))
 (DFunDef false "lazyName" (PWild) (EVar "None"))
 (DTypeSig false "eagerOf" (TyFun (TyCon "StdlibIndex") (TyFun (TyCon "FileFacts") (TyFun (TyCon "Expr") (TyApp (TyCon "Option") (TyCon "Expr"))))))
-(DFunDef false "eagerOf" ((PVar "idx") (PVar "facts") (PCon "EApp" (PVar "f") (PVar "x"))) (EMatch (EApp (EVar "unwrapLoc") (EVar "f")) (arm (PCon "EApp" (PVar "hd") (PVar "d")) () (EMatch (EApp (EVar "unwrapLoc") (EVar "hd")) (arm (PCon "EVar" (PLit (LString "whenL"))) () (EIf (EBinOp "&&" (EApp (EVar "isFalseLit") (EVar "d")) (EApp (EVar "isCall") (EVar "x"))) (EApp (EVar "Some") (EApp (EApp (EVar "EApp") (EVar "f")) (EVar "x"))) (EVar "None"))) (arm (PCon "EVar" (PVar "n")) () (EMatch (EApp (EVar "lazyName") (EVar "n")) (arm (PCon "Some" (PVar "lazy")) () (EIf (EBinOp "&&" (EApp (EVar "isCall") (EVar "d")) (EApp (EApp (EApp (EVar "usesPreludeName") (EVar "idx")) (EVar "facts")) (EVar "hd"))) (EApp (EVar "Some") (EApp (EApp (EVar "EApp") (EApp (EVar "EVar") (EVar "lazy"))) (EApp (EApp (EVar "ELam") (EListLit (EVar "PWild"))) (EVar "d")))) (EVar "None"))) (arm (PCon "None") () (EVar "None")))) (arm PWild () (EVar "None")))) (arm PWild () (EVar "None"))))
+(DFunDef false "eagerOf" ((PVar "idx") (PVar "facts") (PCon "EApp" (PVar "f") (PVar "x"))) (EMatch (EApp (EVar "unwrapLoc") (EVar "f")) (arm (PCon "EApp" (PVar "hd") (PVar "d")) () (EMatch (EApp (EVar "unwrapLoc") (EVar "hd")) (arm (PCon "EVar" (PLit (LString "whenL"))) () (EIf (EBinOp "&&" (EApp (EVar "isFalseLit") (EVar "d")) (EApp (EVar "isCall") (EVar "x"))) (EApp (EVar "Some") (EApp (EApp (EVar "EApp") (EVar "f")) (EVar "x"))) (EVar "None"))) (arm (PCon "EVar" (PVar "n")) () (EApp (EApp (EMethodRef "andThen") (EApp (EVar "lazyName") (EVar "n"))) (ELam ((PVar "lazy")) (EIf (EBinOp "&&" (EApp (EVar "isCall") (EVar "d")) (EApp (EApp (EApp (EVar "usesPreludeName") (EVar "idx")) (EVar "facts")) (EVar "hd"))) (EApp (EVar "Some") (EApp (EApp (EVar "EApp") (EApp (EVar "EVar") (EVar "lazy"))) (EApp (EApp (EVar "ELam") (EListLit (EVar "PWild"))) (EVar "d")))) (EVar "None"))))) (arm PWild () (EVar "None")))) (arm PWild () (EVar "None"))))
 (DFunDef false "eagerOf" (PWild PWild PWild) (EVar "None"))
 (DTypeSig false "isWhenL" (TyFun (TyCon "Expr") (TyCon "Bool")))
 (DFunDef false "isWhenL" ((PVar "e")) (EBinOp "==" (EApp (EVar "calledName") (EVar "e")) (ELit (LString "whenL"))))

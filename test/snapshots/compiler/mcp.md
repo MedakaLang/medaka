@@ -207,9 +207,9 @@ errorMsg idJson code message = jObject [
 -- Integer field accessor (for tool args like `line`/`col`).  None when absent or
 -- not a JInt — the caller reports the missing/invalid argument as an isError result.
 fieldInt : String -> Json -> Option Int
-fieldInt key j = match get key j
-  Some v => asInt v
-  None => None
+fieldInt key j = do
+  v <- get key j
+  asInt v
 
 -- ── stdio transport ──────────────────────────────────────────────────────────
 
@@ -1460,11 +1460,11 @@ jsonArrToListGo arr i n
 -- containing any non-string element — a malformed `paths` is reported as an
 -- argument error, never silently dropped/skipped element-by-element.
 pathsArg : Json -> Option (List String)
-pathsArg args = match get "paths" args
-  None => None
-  Some v => match asArray v
-    None => None
-    Some arr => allJsonStrings (jsonArrToList arr)
+pathsArg args = do
+  v <- get "paths" args
+  do
+    arr <- asArray v
+    allJsonStrings (jsonArrToList arr)
 
 allJsonStrings : List Json -> Option (List String)
 allJsonStrings [] = Some []
@@ -2231,7 +2231,7 @@ runMcpServer runtimeSrc coreSrc stdlibDir stalenessCheck serverVersion =
 (DTypeSig false "errorMsg" (TyFun (TyCon "Json") (TyFun (TyCon "Int") (TyFun (TyCon "String") (TyCon "Json")))))
 (DFunDef false "errorMsg" ((PVar "idJson") (PVar "code") (PVar "message")) (EApp (EVar "jObject") (EListLit (ETuple (ELit (LString "jsonrpc")) (EApp (EVar "JString") (ELit (LString "2.0")))) (ETuple (ELit (LString "id")) (EVar "idJson")) (ETuple (ELit (LString "error")) (EApp (EVar "jObject") (EListLit (ETuple (ELit (LString "code")) (EApp (EVar "JInt") (EVar "code"))) (ETuple (ELit (LString "message")) (EApp (EVar "JString") (EVar "message")))))))))
 (DTypeSig false "fieldInt" (TyFun (TyCon "String") (TyFun (TyCon "Json") (TyApp (TyCon "Option") (TyCon "Int")))))
-(DFunDef false "fieldInt" ((PVar "key") (PVar "j")) (EMatch (EApp (EApp (EVar "get") (EVar "key")) (EVar "j")) (arm (PCon "Some" (PVar "v")) () (EApp (EVar "asInt") (EVar "v"))) (arm (PCon "None") () (EVar "None"))))
+(DFunDef false "fieldInt" ((PVar "key") (PVar "j")) (EApp (EApp (EVar "andThen") (EApp (EApp (EVar "get") (EVar "key")) (EVar "j"))) (ELam ((PVar "v")) (EApp (EVar "asInt") (EVar "v")))))
 (DTypeSig false "writeMessage" (TyFun (TyCon "Json") (TyEffect ("IO") None (TyCon "Unit"))))
 (DFunDef false "writeMessage" ((PVar "j")) (EBlock (DoExpr (EApp (EVar "putStr") (EApp (EVar "stringify") (EVar "j")))) (DoExpr (EApp (EVar "putStr") (ELit (LString "\n")))) (DoExpr (EApp (EVar "flushStdout") (ELit LUnit)))))
 (DTypeSig false "logMcp" (TyFun (TyCon "String") (TyEffect ("IO") None (TyCon "Unit"))))
@@ -2379,7 +2379,7 @@ runMcpServer runtimeSrc coreSrc stdlibDir stalenessCheck serverVersion =
 (DTypeSig false "jsonArrToListGo" (TyFun (TyApp (TyCon "Array") (TyCon "Json")) (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyApp (TyCon "List") (TyCon "Json"))))))
 (DFunDef false "jsonArrToListGo" ((PVar "arr") (PVar "i") (PVar "n")) (EIf (EBinOp ">=" (EVar "i") (EVar "n")) (EListLit) (EIf (EVar "otherwise") (EBinOp "::" (EApp (EApp (EVar "arrayGetUnsafe") (EVar "i")) (EVar "arr")) (EApp (EApp (EApp (EVar "jsonArrToListGo") (EVar "arr")) (EBinOp "+" (EVar "i") (ELit (LInt 1)))) (EVar "n"))) (EApp (EVar "__fallthrough__") (ELit LUnit)))))
 (DTypeSig false "pathsArg" (TyFun (TyCon "Json") (TyApp (TyCon "Option") (TyApp (TyCon "List") (TyCon "String")))))
-(DFunDef false "pathsArg" ((PVar "args")) (EMatch (EApp (EApp (EVar "get") (ELit (LString "paths"))) (EVar "args")) (arm (PCon "None") () (EVar "None")) (arm (PCon "Some" (PVar "v")) () (EMatch (EApp (EVar "asArray") (EVar "v")) (arm (PCon "None") () (EVar "None")) (arm (PCon "Some" (PVar "arr")) () (EApp (EVar "allJsonStrings") (EApp (EVar "jsonArrToList") (EVar "arr"))))))))
+(DFunDef false "pathsArg" ((PVar "args")) (EApp (EApp (EVar "andThen") (EApp (EApp (EVar "get") (ELit (LString "paths"))) (EVar "args"))) (ELam ((PVar "v")) (EApp (EApp (EVar "andThen") (EApp (EVar "asArray") (EVar "v"))) (ELam ((PVar "arr")) (EApp (EVar "allJsonStrings") (EApp (EVar "jsonArrToList") (EVar "arr"))))))))
 (DTypeSig false "allJsonStrings" (TyFun (TyApp (TyCon "List") (TyCon "Json")) (TyApp (TyCon "Option") (TyApp (TyCon "List") (TyCon "String")))))
 (DFunDef false "allJsonStrings" ((PList)) (EApp (EVar "Some") (EListLit)))
 (DFunDef false "allJsonStrings" ((PCons (PVar "j") (PVar "rest"))) (EMatch (ETuple (EApp (EVar "asString") (EVar "j")) (EApp (EVar "allJsonStrings") (EVar "rest"))) (arm (PTuple (PCon "Some" (PVar "s")) (PCon "Some" (PVar "ss"))) () (EApp (EVar "Some") (EBinOp "::" (EVar "s") (EVar "ss")))) (arm PWild () (EVar "None"))))
@@ -2525,7 +2525,7 @@ runMcpServer runtimeSrc coreSrc stdlibDir stalenessCheck serverVersion =
 (DTypeSig false "errorMsg" (TyFun (TyCon "Json") (TyFun (TyCon "Int") (TyFun (TyCon "String") (TyCon "Json")))))
 (DFunDef false "errorMsg" ((PVar "idJson") (PVar "code") (PVar "message")) (EApp (EVar "jObject") (EListLit (ETuple (ELit (LString "jsonrpc")) (EApp (EVar "JString") (ELit (LString "2.0")))) (ETuple (ELit (LString "id")) (EVar "idJson")) (ETuple (ELit (LString "error")) (EApp (EVar "jObject") (EListLit (ETuple (ELit (LString "code")) (EApp (EVar "JInt") (EVar "code"))) (ETuple (ELit (LString "message")) (EApp (EVar "JString") (EVar "message")))))))))
 (DTypeSig false "fieldInt" (TyFun (TyCon "String") (TyFun (TyCon "Json") (TyApp (TyCon "Option") (TyCon "Int")))))
-(DFunDef false "fieldInt" ((PVar "key") (PVar "j")) (EMatch (EApp (EApp (EVar "get") (EVar "key")) (EVar "j")) (arm (PCon "Some" (PVar "v")) () (EApp (EVar "asInt") (EVar "v"))) (arm (PCon "None") () (EVar "None"))))
+(DFunDef false "fieldInt" ((PVar "key") (PVar "j")) (EApp (EApp (EMethodRef "andThen") (EApp (EApp (EVar "get") (EVar "key")) (EVar "j"))) (ELam ((PVar "v")) (EApp (EVar "asInt") (EVar "v")))))
 (DTypeSig false "writeMessage" (TyFun (TyCon "Json") (TyEffect ("IO") None (TyCon "Unit"))))
 (DFunDef false "writeMessage" ((PVar "j")) (EBlock (DoExpr (EApp (EVar "putStr") (EApp (EVar "stringify") (EVar "j")))) (DoExpr (EApp (EVar "putStr") (ELit (LString "\n")))) (DoExpr (EApp (EVar "flushStdout") (ELit LUnit)))))
 (DTypeSig false "logMcp" (TyFun (TyCon "String") (TyEffect ("IO") None (TyCon "Unit"))))
@@ -2673,7 +2673,7 @@ runMcpServer runtimeSrc coreSrc stdlibDir stalenessCheck serverVersion =
 (DTypeSig false "jsonArrToListGo" (TyFun (TyApp (TyCon "Array") (TyCon "Json")) (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyApp (TyCon "List") (TyCon "Json"))))))
 (DFunDef false "jsonArrToListGo" ((PVar "arr") (PVar "i") (PVar "n")) (EIf (EBinOp ">=" (EVar "i") (EVar "n")) (EListLit) (EIf (EVar "otherwise") (EBinOp "::" (EApp (EApp (EVar "arrayGetUnsafe") (EVar "i")) (EVar "arr")) (EApp (EApp (EApp (EVar "jsonArrToListGo") (EVar "arr")) (EBinOp "+" (EVar "i") (ELit (LInt 1)))) (EVar "n"))) (EApp (EVar "__fallthrough__") (ELit LUnit)))))
 (DTypeSig false "pathsArg" (TyFun (TyCon "Json") (TyApp (TyCon "Option") (TyApp (TyCon "List") (TyCon "String")))))
-(DFunDef false "pathsArg" ((PVar "args")) (EMatch (EApp (EApp (EVar "get") (ELit (LString "paths"))) (EVar "args")) (arm (PCon "None") () (EVar "None")) (arm (PCon "Some" (PVar "v")) () (EMatch (EApp (EVar "asArray") (EVar "v")) (arm (PCon "None") () (EVar "None")) (arm (PCon "Some" (PVar "arr")) () (EApp (EVar "allJsonStrings") (EApp (EVar "jsonArrToList") (EVar "arr"))))))))
+(DFunDef false "pathsArg" ((PVar "args")) (EApp (EApp (EMethodRef "andThen") (EApp (EApp (EVar "get") (ELit (LString "paths"))) (EVar "args"))) (ELam ((PVar "v")) (EApp (EApp (EMethodRef "andThen") (EApp (EVar "asArray") (EVar "v"))) (ELam ((PVar "arr")) (EApp (EVar "allJsonStrings") (EApp (EVar "jsonArrToList") (EVar "arr"))))))))
 (DTypeSig false "allJsonStrings" (TyFun (TyApp (TyCon "List") (TyCon "Json")) (TyApp (TyCon "Option") (TyApp (TyCon "List") (TyCon "String")))))
 (DFunDef false "allJsonStrings" ((PList)) (EApp (EVar "Some") (EListLit)))
 (DFunDef false "allJsonStrings" ((PCons (PVar "j") (PVar "rest"))) (EMatch (ETuple (EApp (EVar "asString") (EVar "j")) (EApp (EVar "allJsonStrings") (EVar "rest"))) (arm (PTuple (PCon "Some" (PVar "s")) (PCon "Some" (PVar "ss"))) () (EApp (EVar "Some") (EBinOp "::" (EVar "s") (EVar "ss")))) (arm PWild () (EVar "None"))))

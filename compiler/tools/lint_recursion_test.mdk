@@ -45,14 +45,13 @@ callRoles (SelfCall _ _ roles) = roles
 localRolesOf : String -> String -> Option (List (List ArgRole))
 localRolesOf name src = match lintParseSource src
   Err _ => None
-  Ok (decls, _) => match findMap (clauseOf name) decls
-    None => None
-    Some (_, body) =>
-      let scopes = buildScopes decls
-      Some
-        (flatMap
-          (o => map callRoles (selfCalls scopes (fst o) (snd o)))
-          (groupOwners body))
+  Ok (decls, _) => do
+    (_, body) <- findMap (clauseOf name) decls
+    let scopes = buildScopes decls
+    Some
+      (flatMap
+        (o => map callRoles (selfCalls scopes (fst o) (snd o)))
+        (groupOwners body))
 
 groupOwners : Expr -> List (Owner, Expr)
 groupOwners e = match letOwners e

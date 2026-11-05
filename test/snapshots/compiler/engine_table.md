@@ -1,5 +1,5 @@
 # META
-source_lines=243
+source_lines=238
 stages=DESUGAR,MARK
 # SOURCE
 -- The per-extern engine matrix: for every `stdlib/runtime.mdk` extern, what the
@@ -131,25 +131,20 @@ mkRow : S.Set String ->
   S.Set String ->
   (String, Bool) ->
   Option EngineRow
-mkRow oracle run tst (name, effectful) =
-  match find (r => rowName r == name) catalogRows
-    None => None
-    Some r =>
-      let oracleCell =
-        if S.has name oracle then
-          if effectful then Canned else Real
-        else
-          Refused
-      let runCell = if S.has name run then Real else oracleCell
-      let testCell = if S.has name tst then Real else oracleCell
-      Some
-        (EngineRow
-          name
-          oracleCell
-          runCell
-          testCell
-          (cellOfDisposition (rowLlvm r))
-          (cellOfDisposition (rowWasm r)))
+mkRow oracle run tst (name, effectful) = do
+  r <- find (r => rowName r == name) catalogRows
+  let oracleCell =
+    if S.has name oracle then if effectful then Canned else Real else Refused
+  let runCell = if S.has name run then Real else oracleCell
+  let testCell = if S.has name tst then Real else oracleCell
+  Some
+    (EngineRow
+      name
+      oracleCell
+      runCell
+      testCell
+      (cellOfDisposition (rowLlvm r))
+      (cellOfDisposition (rowWasm r)))
 
 -- (name, has an effect row) for every extern declared in runtime.mdk.
 declaredExterns : List Decl -> List (String, Bool)
@@ -286,7 +281,7 @@ renderEngineTable rows =
 (DFunDef false "cellOfDisposition" ((PCon "FrozenConstant" PWild PWild)) (EVar "Canned"))
 (DFunDef false "cellOfDisposition" (PWild) (EVar "Real"))
 (DTypeSig false "mkRow" (TyFun (TyApp (TyCon "S.Set") (TyCon "String")) (TyFun (TyApp (TyCon "S.Set") (TyCon "String")) (TyFun (TyApp (TyCon "S.Set") (TyCon "String")) (TyFun (TyTuple (TyCon "String") (TyCon "Bool")) (TyApp (TyCon "Option") (TyCon "EngineRow")))))))
-(DFunDef false "mkRow" ((PVar "oracle") (PVar "run") (PVar "tst") (PTuple (PVar "name") (PVar "effectful"))) (EMatch (EApp (EApp (EVar "find") (ELam ((PVar "r")) (EBinOp "==" (EApp (EVar "rowName") (EVar "r")) (EVar "name")))) (EVar "catalogRows")) (arm (PCon "None") () (EVar "None")) (arm (PCon "Some" (PVar "r")) () (EBlock (DoLet false false (PVar "oracleCell") (EIf (EApp (EApp (EVar "S.has") (EVar "name")) (EVar "oracle")) (EIf (EVar "effectful") (EVar "Canned") (EVar "Real")) (EVar "Refused"))) (DoLet false false (PVar "runCell") (EIf (EApp (EApp (EVar "S.has") (EVar "name")) (EVar "run")) (EVar "Real") (EVar "oracleCell"))) (DoLet false false (PVar "testCell") (EIf (EApp (EApp (EVar "S.has") (EVar "name")) (EVar "tst")) (EVar "Real") (EVar "oracleCell"))) (DoExpr (EApp (EVar "Some") (EApp (EApp (EApp (EApp (EApp (EApp (EVar "EngineRow") (EVar "name")) (EVar "oracleCell")) (EVar "runCell")) (EVar "testCell")) (EApp (EVar "cellOfDisposition") (EApp (EVar "rowLlvm") (EVar "r")))) (EApp (EVar "cellOfDisposition") (EApp (EVar "rowWasm") (EVar "r"))))))))))
+(DFunDef false "mkRow" ((PVar "oracle") (PVar "run") (PVar "tst") (PTuple (PVar "name") (PVar "effectful"))) (EApp (EApp (EVar "andThen") (EApp (EApp (EVar "find") (ELam ((PVar "r")) (EBinOp "==" (EApp (EVar "rowName") (EVar "r")) (EVar "name")))) (EVar "catalogRows"))) (ELam ((PVar "r")) (ELet false (PVar "oracleCell") (EIf (EApp (EApp (EVar "S.has") (EVar "name")) (EVar "oracle")) (EIf (EVar "effectful") (EVar "Canned") (EVar "Real")) (EVar "Refused")) (ELet false (PVar "runCell") (EIf (EApp (EApp (EVar "S.has") (EVar "name")) (EVar "run")) (EVar "Real") (EVar "oracleCell")) (ELet false (PVar "testCell") (EIf (EApp (EApp (EVar "S.has") (EVar "name")) (EVar "tst")) (EVar "Real") (EVar "oracleCell")) (EApp (EVar "Some") (EApp (EApp (EApp (EApp (EApp (EApp (EVar "EngineRow") (EVar "name")) (EVar "oracleCell")) (EVar "runCell")) (EVar "testCell")) (EApp (EVar "cellOfDisposition") (EApp (EVar "rowLlvm") (EVar "r")))) (EApp (EVar "cellOfDisposition") (EApp (EVar "rowWasm") (EVar "r")))))))))))
 (DTypeSig false "declaredExterns" (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "Bool")))))
 (DFunDef false "declaredExterns" ((PVar "decls")) (EApp (EApp (EVar "map") (ELam ((PVar "ed")) (ETuple (EFieldAccess (EVar "ed") "edName") (EApp (EVar "hasEffect") (EFieldAccess (EVar "ed") "edTy"))))) (EApp (EVar "externDeclsOf") (EVar "decls"))))
 (DTypeSig false "rowsOf" (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyApp (TyCon "List") (TyCon "EngineRow"))))
@@ -350,7 +345,7 @@ renderEngineTable rows =
 (DFunDef false "cellOfDisposition" ((PCon "FrozenConstant" PWild PWild)) (EVar "Canned"))
 (DFunDef false "cellOfDisposition" (PWild) (EVar "Real"))
 (DTypeSig false "mkRow" (TyFun (TyApp (TyCon "S.Set") (TyCon "String")) (TyFun (TyApp (TyCon "S.Set") (TyCon "String")) (TyFun (TyApp (TyCon "S.Set") (TyCon "String")) (TyFun (TyTuple (TyCon "String") (TyCon "Bool")) (TyApp (TyCon "Option") (TyCon "EngineRow")))))))
-(DFunDef false "mkRow" ((PVar "oracle") (PVar "run") (PVar "tst") (PTuple (PVar "name") (PVar "effectful"))) (EMatch (EApp (EApp (EDictApp "find") (ELam ((PVar "r")) (EBinOp "==" (EApp (EVar "rowName") (EVar "r")) (EVar "name")))) (EVar "catalogRows")) (arm (PCon "None") () (EVar "None")) (arm (PCon "Some" (PVar "r")) () (EBlock (DoLet false false (PVar "oracleCell") (EIf (EApp (EApp (EVar "S.has") (EVar "name")) (EVar "oracle")) (EIf (EVar "effectful") (EVar "Canned") (EVar "Real")) (EVar "Refused"))) (DoLet false false (PVar "runCell") (EIf (EApp (EApp (EVar "S.has") (EVar "name")) (EVar "run")) (EVar "Real") (EVar "oracleCell"))) (DoLet false false (PVar "testCell") (EIf (EApp (EApp (EVar "S.has") (EVar "name")) (EVar "tst")) (EVar "Real") (EVar "oracleCell"))) (DoExpr (EApp (EVar "Some") (EApp (EApp (EApp (EApp (EApp (EApp (EVar "EngineRow") (EVar "name")) (EVar "oracleCell")) (EVar "runCell")) (EVar "testCell")) (EApp (EVar "cellOfDisposition") (EApp (EVar "rowLlvm") (EVar "r")))) (EApp (EVar "cellOfDisposition") (EApp (EVar "rowWasm") (EVar "r"))))))))))
+(DFunDef false "mkRow" ((PVar "oracle") (PVar "run") (PVar "tst") (PTuple (PVar "name") (PVar "effectful"))) (EApp (EApp (EMethodRef "andThen") (EApp (EApp (EDictApp "find") (ELam ((PVar "r")) (EBinOp "==" (EApp (EVar "rowName") (EVar "r")) (EVar "name")))) (EVar "catalogRows"))) (ELam ((PVar "r")) (ELet false (PVar "oracleCell") (EIf (EApp (EApp (EVar "S.has") (EVar "name")) (EVar "oracle")) (EIf (EVar "effectful") (EVar "Canned") (EVar "Real")) (EVar "Refused")) (ELet false (PVar "runCell") (EIf (EApp (EApp (EVar "S.has") (EVar "name")) (EVar "run")) (EVar "Real") (EVar "oracleCell")) (ELet false (PVar "testCell") (EIf (EApp (EApp (EVar "S.has") (EVar "name")) (EVar "tst")) (EVar "Real") (EVar "oracleCell")) (EApp (EVar "Some") (EApp (EApp (EApp (EApp (EApp (EApp (EVar "EngineRow") (EVar "name")) (EVar "oracleCell")) (EVar "runCell")) (EVar "testCell")) (EApp (EVar "cellOfDisposition") (EApp (EVar "rowLlvm") (EVar "r")))) (EApp (EVar "cellOfDisposition") (EApp (EVar "rowWasm") (EVar "r")))))))))))
 (DTypeSig false "declaredExterns" (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "Bool")))))
 (DFunDef false "declaredExterns" ((PVar "decls")) (EApp (EApp (EMethodRef "map") (ELam ((PVar "ed")) (ETuple (EFieldAccess (EVar "ed") "edName") (EApp (EVar "hasEffect") (EFieldAccess (EVar "ed") "edTy"))))) (EApp (EVar "externDeclsOf") (EVar "decls"))))
 (DTypeSig false "rowsOf" (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyApp (TyCon "List") (TyCon "EngineRow"))))

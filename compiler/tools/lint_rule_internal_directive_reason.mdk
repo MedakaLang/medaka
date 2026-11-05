@@ -169,9 +169,9 @@ declGapReasoned comments blocks declZips targetName line =
 -- different decl kind, or the directive is the last thing in the file), in
 -- which case `declGapNameMatches` below never credits a gap hop.
 declZipNameAt : List (Decl, DeclPos) -> Int -> Option String
-declZipNameAt declZips line = match find (declZipContainsLine line) declZips
-  Some (d, _) => declBridgeName d
-  None => None
+declZipNameAt declZips line = do
+  (d, _) <- find (declZipContainsLine line) declZips
+  declBridgeName d
 
 declZipContainsLine : Int -> (Decl, DeclPos) -> Bool
 declZipContainsLine line (_, dp) =

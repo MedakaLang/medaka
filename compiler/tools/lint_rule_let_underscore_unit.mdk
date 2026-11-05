@@ -78,17 +78,16 @@ finding loc fix = Finding {
 -- a later line keeps every continuation line deeper than the statement.  The
 -- edit is withheld where the call's start is not known.
 dropFix : String -> Int -> Int -> Expr -> Option Fix
-dropFix f sl sc rhs = match callStart rhs
-  Some (Loc _ rl rc _ _) =>
-    if rl > sl || rc > sc then
-      Some Fix {
-        fixApplicability = Safe,
-        fixEdits = [FixEdit (Loc f sl sc rl rc) ""],
-        fixMessage = "drop the `let _ =`",
-      }
-    else
-      None
-  None => None
+dropFix f sl sc rhs = do
+  (Loc _ rl rc _ _) <- callStart rhs
+  if rl > sl || rc > sc then
+    Some Fix {
+      fixApplicability = Safe,
+      fixEdits = [FixEdit (Loc f sl sc rl rc) ""],
+      fixMessage = "drop the `let _ =`",
+    }
+  else
+    None
 
 -- Where the call's text starts: its head, or the enclosing brackets when the
 -- call is parenthesised, whichever comes first.

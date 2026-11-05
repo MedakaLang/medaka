@@ -72,9 +72,9 @@ boolSimplifyOf : Expr -> Option Expr
 boolSimplifyOf (EIf c t el) = boolSimplifyIf c (unwrapLoc t) (unwrapLoc el)
 boolSimplifyOf (EBinOp op a b _)
   | op == "==" || op == "/=" = boolSimplifyEq op a b
-boolSimplifyOf e = match notArgOf e
-  Some inner => map (y => y) (notArgOf (unwrapLoc inner))
-  None => None
+boolSimplifyOf e = do
+  inner <- notArgOf e
+  map (y => y) (notArgOf (unwrapLoc inner))
 
 boolSimplifyIf : Expr -> Expr -> Expr -> Option Expr
 boolSimplifyIf c t el
@@ -152,7 +152,7 @@ touchesNot e rewritten = isSome (notArgOf e) || isSome (notArgOf rewritten)
 (DTypeSig false "boolSimplifyOf" (TyFun (TyCon "Expr") (TyApp (TyCon "Option") (TyCon "Expr"))))
 (DFunDef false "boolSimplifyOf" ((PCon "EIf" (PVar "c") (PVar "t") (PVar "el"))) (EApp (EApp (EApp (EVar "boolSimplifyIf") (EVar "c")) (EApp (EVar "unwrapLoc") (EVar "t"))) (EApp (EVar "unwrapLoc") (EVar "el"))))
 (DFunDef false "boolSimplifyOf" ((PCon "EBinOp" (PVar "op") (PVar "a") (PVar "b") PWild)) (EIf (EBinOp "||" (EBinOp "==" (EVar "op") (ELit (LString "=="))) (EBinOp "==" (EVar "op") (ELit (LString "/=")))) (EApp (EApp (EApp (EVar "boolSimplifyEq") (EVar "op")) (EVar "a")) (EVar "b")) (EApp (EVar "__fallthrough__") (ELit LUnit))))
-(DFunDef false "boolSimplifyOf" ((PVar "e")) (EMatch (EApp (EVar "notArgOf") (EVar "e")) (arm (PCon "Some" (PVar "inner")) () (EApp (EApp (EVar "map") (ELam ((PVar "y")) (EVar "y"))) (EApp (EVar "notArgOf") (EApp (EVar "unwrapLoc") (EVar "inner"))))) (arm (PCon "None") () (EVar "None"))))
+(DFunDef false "boolSimplifyOf" ((PVar "e")) (EApp (EApp (EVar "andThen") (EApp (EVar "notArgOf") (EVar "e"))) (ELam ((PVar "inner")) (EApp (EApp (EVar "map") (ELam ((PVar "y")) (EVar "y"))) (EApp (EVar "notArgOf") (EApp (EVar "unwrapLoc") (EVar "inner")))))))
 (DTypeSig false "boolSimplifyIf" (TyFun (TyCon "Expr") (TyFun (TyCon "Expr") (TyFun (TyCon "Expr") (TyApp (TyCon "Option") (TyCon "Expr"))))))
 (DFunDef false "boolSimplifyIf" ((PVar "c") (PVar "t") (PVar "el")) (EIf (EBinOp "&&" (EApp (EVar "isTrueLit") (EVar "t")) (EApp (EVar "isFalseLit") (EVar "el"))) (EApp (EVar "Some") (EVar "c")) (EIf (EBinOp "&&" (EApp (EVar "isFalseLit") (EVar "t")) (EApp (EVar "isTrueLit") (EVar "el"))) (EApp (EVar "Some") (EApp (EVar "mkNot") (EVar "c"))) (EIf (EVar "otherwise") (EVar "None") (EApp (EVar "__fallthrough__") (ELit LUnit))))))
 (DTypeSig false "boolSimplifyEq" (TyFun (TyCon "String") (TyFun (TyCon "Expr") (TyFun (TyCon "Expr") (TyApp (TyCon "Option") (TyCon "Expr"))))))
@@ -183,7 +183,7 @@ touchesNot e rewritten = isSome (notArgOf e) || isSome (notArgOf rewritten)
 (DTypeSig false "boolSimplifyOf" (TyFun (TyCon "Expr") (TyApp (TyCon "Option") (TyCon "Expr"))))
 (DFunDef false "boolSimplifyOf" ((PCon "EIf" (PVar "c") (PVar "t") (PVar "el"))) (EApp (EApp (EApp (EVar "boolSimplifyIf") (EVar "c")) (EApp (EVar "unwrapLoc") (EVar "t"))) (EApp (EVar "unwrapLoc") (EVar "el"))))
 (DFunDef false "boolSimplifyOf" ((PCon "EBinOp" (PVar "op") (PVar "a") (PVar "b") PWild)) (EIf (EBinOp "||" (EBinOp "==" (EVar "op") (ELit (LString "=="))) (EBinOp "==" (EVar "op") (ELit (LString "/=")))) (EApp (EApp (EApp (EVar "boolSimplifyEq") (EVar "op")) (EVar "a")) (EVar "b")) (EApp (EVar "__fallthrough__") (ELit LUnit))))
-(DFunDef false "boolSimplifyOf" ((PVar "e")) (EMatch (EApp (EVar "notArgOf") (EVar "e")) (arm (PCon "Some" (PVar "inner")) () (EApp (EApp (EMethodRef "map") (ELam ((PVar "y")) (EVar "y"))) (EApp (EVar "notArgOf") (EApp (EVar "unwrapLoc") (EVar "inner"))))) (arm (PCon "None") () (EVar "None"))))
+(DFunDef false "boolSimplifyOf" ((PVar "e")) (EApp (EApp (EMethodRef "andThen") (EApp (EVar "notArgOf") (EVar "e"))) (ELam ((PVar "inner")) (EApp (EApp (EMethodRef "map") (ELam ((PVar "y")) (EVar "y"))) (EApp (EVar "notArgOf") (EApp (EVar "unwrapLoc") (EVar "inner")))))))
 (DTypeSig false "boolSimplifyIf" (TyFun (TyCon "Expr") (TyFun (TyCon "Expr") (TyFun (TyCon "Expr") (TyApp (TyCon "Option") (TyCon "Expr"))))))
 (DFunDef false "boolSimplifyIf" ((PVar "c") (PVar "t") (PVar "el")) (EIf (EBinOp "&&" (EApp (EVar "isTrueLit") (EVar "t")) (EApp (EVar "isFalseLit") (EVar "el"))) (EApp (EVar "Some") (EVar "c")) (EIf (EBinOp "&&" (EApp (EVar "isFalseLit") (EVar "t")) (EApp (EVar "isTrueLit") (EVar "el"))) (EApp (EVar "Some") (EApp (EVar "mkNot") (EVar "c"))) (EIf (EVar "otherwise") (EVar "None") (EApp (EVar "__fallthrough__") (ELit LUnit))))))
 (DTypeSig false "boolSimplifyEq" (TyFun (TyCon "String") (TyFun (TyCon "Expr") (TyFun (TyCon "Expr") (TyApp (TyCon "Option") (TyCon "Expr"))))))

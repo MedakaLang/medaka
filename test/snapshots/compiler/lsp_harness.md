@@ -306,11 +306,11 @@ strContainsGo h hlen needle i
 -- result.data of response `idn` as a List Int, or None.
 export
 semanticData : Int -> List Frame -> Option (List Int)
-semanticData idn frames = match responseById idn frames
-  None => None
-  Some j => match get "result" j
-    None => None
-    Some res => match get "data" res
+semanticData idn frames = do
+  j <- responseById idn frames
+  do
+    res <- get "result" j
+    match get "data" res
       Some (JArray a) => Some (jIntArrayToList a 0 (arrayLength a))
       _ => None
 
@@ -528,7 +528,7 @@ summary total =
 (DTypeSig false "strContainsGo" (TyFun (TyApp (TyCon "Array") (TyCon "Char")) (TyFun (TyCon "Int") (TyFun (TyCon "String") (TyFun (TyCon "Int") (TyCon "Bool"))))))
 (DFunDef false "strContainsGo" ((PVar "h") (PVar "hlen") (PVar "needle") (PVar "i")) (EIf (EBinOp ">=" (EVar "i") (EVar "hlen")) (EVar "False") (EIf (EApp (EApp (EApp (EApp (EVar "matchesAt") (EVar "h")) (EVar "hlen")) (EVar "i")) (EVar "needle")) (EVar "True") (EIf (EVar "otherwise") (EApp (EApp (EApp (EApp (EVar "strContainsGo") (EVar "h")) (EVar "hlen")) (EVar "needle")) (EBinOp "+" (EVar "i") (ELit (LInt 1)))) (EApp (EVar "__fallthrough__") (ELit LUnit))))))
 (DTypeSig true "semanticData" (TyFun (TyCon "Int") (TyFun (TyApp (TyCon "List") (TyCon "Frame")) (TyApp (TyCon "Option") (TyApp (TyCon "List") (TyCon "Int"))))))
-(DFunDef false "semanticData" ((PVar "idn") (PVar "frames")) (EMatch (EApp (EApp (EVar "responseById") (EVar "idn")) (EVar "frames")) (arm (PCon "None") () (EVar "None")) (arm (PCon "Some" (PVar "j")) () (EMatch (EApp (EApp (EVar "get") (ELit (LString "result"))) (EVar "j")) (arm (PCon "None") () (EVar "None")) (arm (PCon "Some" (PVar "res")) () (EMatch (EApp (EApp (EVar "get") (ELit (LString "data"))) (EVar "res")) (arm (PCon "Some" (PCon "JArray" (PVar "a"))) () (EApp (EVar "Some") (EApp (EApp (EApp (EVar "jIntArrayToList") (EVar "a")) (ELit (LInt 0))) (EApp (EVar "arrayLength") (EVar "a"))))) (arm PWild () (EVar "None"))))))))
+(DFunDef false "semanticData" ((PVar "idn") (PVar "frames")) (EApp (EApp (EVar "andThen") (EApp (EApp (EVar "responseById") (EVar "idn")) (EVar "frames"))) (ELam ((PVar "j")) (EApp (EApp (EVar "andThen") (EApp (EApp (EVar "get") (ELit (LString "result"))) (EVar "j"))) (ELam ((PVar "res")) (EMatch (EApp (EApp (EVar "get") (ELit (LString "data"))) (EVar "res")) (arm (PCon "Some" (PCon "JArray" (PVar "a"))) () (EApp (EVar "Some") (EApp (EApp (EApp (EVar "jIntArrayToList") (EVar "a")) (ELit (LInt 0))) (EApp (EVar "arrayLength") (EVar "a"))))) (arm PWild () (EVar "None"))))))))
 (DTypeSig false "jIntArrayToList" (TyFun (TyApp (TyCon "Array") (TyCon "Json")) (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyApp (TyCon "List") (TyCon "Int"))))))
 (DFunDef false "jIntArrayToList" ((PVar "a") (PVar "i") (PVar "n")) (EIf (EBinOp ">=" (EVar "i") (EVar "n")) (EListLit) (EIf (EVar "otherwise") (EMatch (EApp (EVar "asInt") (EApp (EApp (EVar "arrayGetUnsafe") (EVar "i")) (EVar "a"))) (arm (PCon "Some" (PVar "k")) () (EBinOp "::" (EVar "k") (EApp (EApp (EApp (EVar "jIntArrayToList") (EVar "a")) (EBinOp "+" (EVar "i") (ELit (LInt 1)))) (EVar "n")))) (arm (PCon "None") () (EApp (EApp (EApp (EVar "jIntArrayToList") (EVar "a")) (EBinOp "+" (EVar "i") (ELit (LInt 1)))) (EVar "n")))) (EApp (EVar "__fallthrough__") (ELit LUnit)))))
 (DData Public "DecTok" () ((variant "DecTok" (ConPos (TyCon "Int") (TyCon "Int") (TyCon "Int") (TyCon "Int")))) ())
@@ -639,7 +639,7 @@ summary total =
 (DTypeSig false "strContainsGo" (TyFun (TyApp (TyCon "Array") (TyCon "Char")) (TyFun (TyCon "Int") (TyFun (TyCon "String") (TyFun (TyCon "Int") (TyCon "Bool"))))))
 (DFunDef false "strContainsGo" ((PVar "h") (PVar "hlen") (PVar "needle") (PVar "i")) (EIf (EBinOp ">=" (EVar "i") (EVar "hlen")) (EVar "False") (EIf (EApp (EApp (EApp (EApp (EVar "matchesAt") (EVar "h")) (EVar "hlen")) (EVar "i")) (EVar "needle")) (EVar "True") (EIf (EVar "otherwise") (EApp (EApp (EApp (EApp (EVar "strContainsGo") (EVar "h")) (EVar "hlen")) (EVar "needle")) (EBinOp "+" (EVar "i") (ELit (LInt 1)))) (EApp (EVar "__fallthrough__") (ELit LUnit))))))
 (DTypeSig true "semanticData" (TyFun (TyCon "Int") (TyFun (TyApp (TyCon "List") (TyCon "Frame")) (TyApp (TyCon "Option") (TyApp (TyCon "List") (TyCon "Int"))))))
-(DFunDef false "semanticData" ((PVar "idn") (PVar "frames")) (EMatch (EApp (EApp (EVar "responseById") (EVar "idn")) (EVar "frames")) (arm (PCon "None") () (EVar "None")) (arm (PCon "Some" (PVar "j")) () (EMatch (EApp (EApp (EVar "get") (ELit (LString "result"))) (EVar "j")) (arm (PCon "None") () (EVar "None")) (arm (PCon "Some" (PVar "res")) () (EMatch (EApp (EApp (EVar "get") (ELit (LString "data"))) (EVar "res")) (arm (PCon "Some" (PCon "JArray" (PVar "a"))) () (EApp (EVar "Some") (EApp (EApp (EApp (EVar "jIntArrayToList") (EVar "a")) (ELit (LInt 0))) (EApp (EVar "arrayLength") (EVar "a"))))) (arm PWild () (EVar "None"))))))))
+(DFunDef false "semanticData" ((PVar "idn") (PVar "frames")) (EApp (EApp (EMethodRef "andThen") (EApp (EApp (EVar "responseById") (EVar "idn")) (EVar "frames"))) (ELam ((PVar "j")) (EApp (EApp (EMethodRef "andThen") (EApp (EApp (EVar "get") (ELit (LString "result"))) (EVar "j"))) (ELam ((PVar "res")) (EMatch (EApp (EApp (EVar "get") (ELit (LString "data"))) (EVar "res")) (arm (PCon "Some" (PCon "JArray" (PVar "a"))) () (EApp (EVar "Some") (EApp (EApp (EApp (EVar "jIntArrayToList") (EVar "a")) (ELit (LInt 0))) (EApp (EVar "arrayLength") (EVar "a"))))) (arm PWild () (EVar "None"))))))))
 (DTypeSig false "jIntArrayToList" (TyFun (TyApp (TyCon "Array") (TyCon "Json")) (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyApp (TyCon "List") (TyCon "Int"))))))
 (DFunDef false "jIntArrayToList" ((PVar "a") (PVar "i") (PVar "n")) (EIf (EBinOp ">=" (EVar "i") (EVar "n")) (EListLit) (EIf (EVar "otherwise") (EMatch (EApp (EVar "asInt") (EApp (EApp (EVar "arrayGetUnsafe") (EVar "i")) (EVar "a"))) (arm (PCon "Some" (PVar "k")) () (EBinOp "::" (EVar "k") (EApp (EApp (EApp (EVar "jIntArrayToList") (EVar "a")) (EBinOp "+" (EVar "i") (ELit (LInt 1)))) (EVar "n")))) (arm (PCon "None") () (EApp (EApp (EApp (EVar "jIntArrayToList") (EVar "a")) (EBinOp "+" (EVar "i") (ELit (LInt 1)))) (EVar "n")))) (EApp (EVar "__fallthrough__") (ELit LUnit)))))
 (DData Public "DecTok" () ((variant "DecTok" (ConPos (TyCon "Int") (TyCon "Int") (TyCon "Int") (TyCon "Int")))) ())

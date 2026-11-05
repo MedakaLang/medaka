@@ -1313,9 +1313,9 @@ firstFix orc (r :: rs) d = match applyRuleFix orc r d
   None => firstFix orc rs d
 
 applyRuleFix : Oracle -> Rule -> Decl -> Option (List Decl)
-applyRuleFix orc r d = match r.fix
-  Some f => f orc d
-  None => None
+applyRuleFix orc r d = do
+  f <- r.fix
+  f orc d
 
 -- render replacement decls, one per line (printer emits a single decl, no NL).
 renderDecls : List Decl -> String

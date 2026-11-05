@@ -176,9 +176,9 @@ helperEntry : Reader ->
   (String, List Def) ->
   List (String, Helper)
 helperEntry (rd@(Reader scopes _)) searches (name, ds) =
-  let search = match M.get name searches
-    Some (Helper _ k _ _) => k
-    None => None
+  let search = do
+    (Helper _ k _ _) <- M.get name searches
+    k
   let tested =
     nub
       (flatMap
@@ -406,9 +406,9 @@ probeParam scopes ps (probe@(Probe _ _ _ c)) =
     None => []
 
 atParam : FileScopes -> Expr -> (Int, Pat) -> Option Int
-atParam scopes c (j, p) = match wholeParam p
-  Some param => if isParam scopes param c then Some j else None
-  None => None
+atParam scopes c (j, p) = do
+  param <- wholeParam p
+  if isParam scopes param c then Some j else None
 
 -- ── growth ───────────────────────────────────────────────────────────────────
 
@@ -449,12 +449,11 @@ helperGrows (rd@(Reader scopes _)) param e = match spineOf e []
     None => False
 
 aliasOf : FileScopes -> List (Loc, Expr) -> Expr -> Option Expr
-aliasOf scopes lets e = match varSite e
-  None => None
-  Some site => match binderOf scopes site
-    Some b =>
-      findMap ((l, rhs) => if l == b.binderSpan then Some rhs else None) lets
-    None => None
+aliasOf scopes lets e = do
+  site <- varSite e
+  do
+    b <- binderOf scopes site
+    findMap ((l, rhs) => if l == b.binderSpan then Some rhs else None) lets
 
 -- The `let x = rhs` bindings of a body, by the span of `x`.
 letsIn : Expr -> List (Loc, Expr)
@@ -586,11 +585,11 @@ foldFindings rd ctx e
 foldAccOf : Expr -> List Pat -> Option Param
 foldAccOf e ps = match spineOf e []
   (hd, _) => match unwrapLoc hd
-    EVar n => match foldAccIndex (lastSegment n)
-      Some k => match get k ps
-        Some p => wholeParam p
-        None => None
-      None => None
+    EVar n => do
+      k <- foldAccIndex (lastSegment n)
+      do
+        p <- get k ps
+        wholeParam p
     _ => None
 
 accProbes : Reader -> Param -> Expr -> List Probe

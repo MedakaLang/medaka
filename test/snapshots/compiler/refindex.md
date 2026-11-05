@@ -1945,9 +1945,9 @@ usesOf idx key = match hmGet key idx.refs
 -- 1-based, `col` 0-based (the `Loc` convention).
 export
 binderAt : RefIndex -> String -> Int -> Int -> Option String
-binderAt idx uri line col = match hmGet uri idx.occ
-  Some r => scanOcc line col !r
-  None => None
+binderAt idx uri line col = do
+  r <- hmGet uri idx.occ
+  scanOcc line col !r
 
 scanOcc : Int -> Int -> List (Loc, String) -> Option String
 scanOcc _ _ [] = None
@@ -2541,7 +2541,7 @@ splitLastL (x :: rest) = map ((pre, last) => (x :: pre, last)) (splitLastL rest)
 (DTypeSig true "usesOf" (TyFun (TyCon "RefIndex") (TyFun (TyCon "String") (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "Loc"))))))
 (DFunDef false "usesOf" ((PVar "idx") (PVar "key")) (EMatch (EApp (EApp (EVar "hmGet") (EVar "key")) (EFieldAccess (EVar "idx") "refs")) (arm (PCon "Some" (PVar "r")) () (EApp (EVar "reverseList") (EUnOp "!" (EVar "r")))) (arm (PCon "None") () (EListLit))))
 (DTypeSig true "binderAt" (TyFun (TyCon "RefIndex") (TyFun (TyCon "String") (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyApp (TyCon "Option") (TyCon "String")))))))
-(DFunDef false "binderAt" ((PVar "idx") (PVar "uri") (PVar "line") (PVar "col")) (EMatch (EApp (EApp (EVar "hmGet") (EVar "uri")) (EFieldAccess (EVar "idx") "occ")) (arm (PCon "Some" (PVar "r")) () (EApp (EApp (EApp (EVar "scanOcc") (EVar "line")) (EVar "col")) (EUnOp "!" (EVar "r")))) (arm (PCon "None") () (EVar "None"))))
+(DFunDef false "binderAt" ((PVar "idx") (PVar "uri") (PVar "line") (PVar "col")) (EApp (EApp (EVar "andThen") (EApp (EApp (EVar "hmGet") (EVar "uri")) (EFieldAccess (EVar "idx") "occ"))) (ELam ((PVar "r")) (EApp (EApp (EApp (EVar "scanOcc") (EVar "line")) (EVar "col")) (EUnOp "!" (EVar "r"))))))
 (DTypeSig false "scanOcc" (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "Loc") (TyCon "String"))) (TyApp (TyCon "Option") (TyCon "String"))))))
 (DFunDef false "scanOcc" (PWild PWild (PList)) (EVar "None"))
 (DFunDef false "scanOcc" ((PVar "line") (PVar "col") (PCons (PTuple (PVar "loc") (PVar "key")) (PVar "rest"))) (EIf (EApp (EApp (EApp (EVar "locContains") (EVar "loc")) (EVar "line")) (EVar "col")) (EApp (EVar "Some") (EVar "key")) (EIf (EVar "otherwise") (EApp (EApp (EApp (EVar "scanOcc") (EVar "line")) (EVar "col")) (EVar "rest")) (EApp (EVar "__fallthrough__") (ELit LUnit)))))
@@ -3099,7 +3099,7 @@ splitLastL (x :: rest) = map ((pre, last) => (x :: pre, last)) (splitLastL rest)
 (DTypeSig true "usesOf" (TyFun (TyCon "RefIndex") (TyFun (TyCon "String") (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "Loc"))))))
 (DFunDef false "usesOf" ((PVar "idx") (PVar "key")) (EMatch (EApp (EApp (EVar "hmGet") (EVar "key")) (EFieldAccess (EVar "idx") "refs")) (arm (PCon "Some" (PVar "r")) () (EApp (EVar "reverseList") (EUnOp "!" (EVar "r")))) (arm (PCon "None") () (EListLit))))
 (DTypeSig true "binderAt" (TyFun (TyCon "RefIndex") (TyFun (TyCon "String") (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyApp (TyCon "Option") (TyCon "String")))))))
-(DFunDef false "binderAt" ((PVar "idx") (PVar "uri") (PVar "line") (PVar "col")) (EMatch (EApp (EApp (EVar "hmGet") (EVar "uri")) (EFieldAccess (EVar "idx") "occ")) (arm (PCon "Some" (PVar "r")) () (EApp (EApp (EApp (EVar "scanOcc") (EVar "line")) (EVar "col")) (EUnOp "!" (EVar "r")))) (arm (PCon "None") () (EVar "None"))))
+(DFunDef false "binderAt" ((PVar "idx") (PVar "uri") (PVar "line") (PVar "col")) (EApp (EApp (EMethodRef "andThen") (EApp (EApp (EVar "hmGet") (EVar "uri")) (EFieldAccess (EVar "idx") "occ"))) (ELam ((PVar "r")) (EApp (EApp (EApp (EVar "scanOcc") (EVar "line")) (EVar "col")) (EUnOp "!" (EVar "r"))))))
 (DTypeSig false "scanOcc" (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "Loc") (TyCon "String"))) (TyApp (TyCon "Option") (TyCon "String"))))))
 (DFunDef false "scanOcc" (PWild PWild (PList)) (EVar "None"))
 (DFunDef false "scanOcc" ((PVar "line") (PVar "col") (PCons (PTuple (PVar "loc") (PVar "key")) (PVar "rest"))) (EIf (EApp (EApp (EApp (EVar "locContains") (EVar "loc")) (EVar "line")) (EVar "col")) (EApp (EVar "Some") (EVar "key")) (EIf (EVar "otherwise") (EApp (EApp (EApp (EVar "scanOcc") (EVar "line")) (EVar "col")) (EVar "rest")) (EApp (EVar "__fallthrough__") (ELit LUnit)))))
