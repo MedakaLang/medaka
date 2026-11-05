@@ -33,9 +33,9 @@ oracleMain () = match args ()
 -- read + parse + desugar each module into a (modId, decls) pair, in order
 readModules : List String -> <IO> Result String (List (String, List Decl))
 readModules [] = Ok []
-readModules (f :: rest) = match readFile f
-  Err e => Err e
-  Ok src => map ((modIdOf f, desugar (parse src)) :: _) (readModules rest)
+readModules (f :: rest) = do
+  src <- readFile f
+  map ((modIdOf f, desugar (parse src)) :: _) (readModules rest)
 
 run : String -> String -> List String -> <IO> Unit
 run runtimeP coreP files = match readFile runtimeP

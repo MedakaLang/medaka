@@ -294,9 +294,9 @@ run emit runtimeP coreP entry roots exportsFor = match readFile runtimeP
               -- bad `import` line, not line 1 (mirrors medaka_cli's F3 Chunk B
               -- entry-scan). Available-modules help is CLI-only (needs a stdlib dir
               -- listing, unavailable over the browser vfs).
-              let mloc = match unknownModuleIdOf lmsg
-                None => None
-                Some mid => findImportLoc mid (parseLocated tsrc)
+              let mloc = do
+                mid <- unknownModuleIdOf lmsg
+                findImportLoc mid (parseLocated tsrc)
               emitDiagnostics
                 (cjAllToJson [
                   (
@@ -358,11 +358,10 @@ playgroundParseCache = Ref omEmpty
 -- Read core.mdk, seeding the prelude cache first when the host shipped an
 -- interface for it.
 readCoreSeeding : String -> String -> <IO> Result String String
-readCoreSeeding coreP rsrc = match readFile coreP
-  Err e => Err e
-  Ok csrc =>
-    seedShippedInterface coreP rsrc csrc
-    Ok csrc
+readCoreSeeding coreP rsrc = do
+  csrc <- readFile coreP
+  let _ = seedShippedInterface coreP rsrc csrc
+  Ok csrc
 
 -- Seed the prelude cache from the `core.mdki` and `compiler_fingerprint.txt`
 -- beside [coreP], when the host supplied both.  The browser has no build
@@ -932,13 +931,12 @@ identifierAt : String -> Int -> Int -> Option String
 identifierAt src line col =
   let arr = stringToChars src
   let len = arrayLength arr
-  match offsetOfLineCol arr line col
-    None => None
-    Some pos =>
-      if not (isIdentChar (arrayGetUnsafe pos arr)) then
-        None
-      else
-        Some (stringSlice (identStart arr pos) (identStop arr len pos) src)
+  do
+    pos <- offsetOfLineCol arr line col
+    if not (isIdentChar (arrayGetUnsafe pos arr)) then
+      None
+    else
+      Some (stringSlice (identStart arr pos) (identStop arr len pos) src)
 
 -- The identifier prefix ending just before the cursor (for completion).
 prefixBefore : String -> Int -> Int -> String

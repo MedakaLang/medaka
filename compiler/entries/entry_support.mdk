@@ -137,18 +137,18 @@ failWith msg =
 export
 readAllDecls : List String -> <IO> Result String (List Decl)
 readAllDecls [] = Ok []
-readAllDecls (p :: rest) = match readFile p
-  Err msg => Err msg
-  Ok src => map (desugar (parse src) ++ _) (readAllDecls rest)
+readAllDecls (p :: rest) = do
+  src <- readFile p
+  map (desugar (parse src) ++ _) (readAllDecls rest)
 
 -- read each target file, keeping (path, source) pairs in order (for batch harnesses
 -- that need the path to prefix each section's sentinel).
 export
 readAllSources : List String -> <IO> Result String (List (String, String))
 readAllSources [] = Ok []
-readAllSources (p :: rest) = match readFile p
-  Err msg => Err msg
-  Ok src => map ((p, src) :: _) (readAllSources rest)
+readAllSources (p :: rest) = do
+  src <- readFile p
+  map ((p, src) :: _) (readAllSources rest)
 
 -- ── single-target drivers ────────────────────────────────────────────────────
 
@@ -919,9 +919,9 @@ modulePath base (mid, path, _) = (mid, sitePath base path)
 
 -- The canonical `site-root` directory of [entry]'s project, if it names one.
 siteBaseOf : String -> <IO> Option String
-siteBaseOf entry = match findProjectRoot (dirOf entry)
-  None => None
-  Some root => siteBaseUnder root (manifestSiteRoot root)
+siteBaseOf entry = do
+  root <- findProjectRoot (dirOf entry)
+  siteBaseUnder root (manifestSiteRoot root)
 
 siteBaseUnder : String -> Option String -> <IO> Option String
 siteBaseUnder _ None = None
