@@ -1,0 +1,306 @@
+import frontend.ast.{Loc(..), Lit(..)}
+import ir.core_ir.{
+  CProgram(..), CBind(..), CClause(..), CExpr(..), CField(..), CArm(..),
+  CGuard(..), CTree(..), CTBranch(..), FailSite(..), CStmt(..), CImplEntry(..),
+  CImplBody(..), siteSentinelName
+}
+import ir.constructor_facts.{planConstructors}
+import backend.runtime_layout.{
+  abiVersion, reservedTypeBase, siteFileBits, siteLineBits, siteColumnBits,
+  siteFileShift, siteLineShift
+}
+import support.ordmap.{
+  OrdMap, omEmpty, omLookup, omInsert, omHasKey, omFromNames
+}
+import map.{entries, fromList, get}
+
+public export data PackageIdentity = PackageIdentity {
+  fingerprint : String,
+  abi : Int,
+  types : OrdMap Int,
+  files : OrdMap Int,
+  typeHigh : Int,
+  fileHigh : Int,
+}
+
+public export data IdentityPlan = IdentityPlan {
+  imported : PackageIdentity,
+  types : OrdMap Int,
+  files : OrdMap Int,
+  orderedFiles : List String,
+}
+
+export
+emptyPackage : PackageIdentity
+emptyPackage = PackageIdentity {
+  fingerprint = "",
+  abi = abiVersion,
+  types = omEmpty,
+  files = omEmpty,
+  typeHigh = 0,
+  fileHigh = 0,
+}
+
+export
+sitePackable : Loc -> Bool
+sitePackable (Loc f sl sc el ec) =
+  f /= ""
+    && not (sl == 1 && sc == 0 && el == 1 && ec == 0)
+    && sl >= 0
+    && sl < shiftLeft 1 siteLineBits
+    && sc >= 0
+    && sc < shiftLeft 1 siteColumnBits
+
+fileOf : Loc -> List String
+fileOf (l@(Loc f _ _ _ _)) = if sitePackable l then [f] else []
+
+bindFiles : CBind -> List String
+bindFiles (CBind _ clauses loc _) = fileOf loc ++ flatMap clauseFiles clauses
+clauseFiles : CClause -> List String
+clauseFiles (CClause _ body) = exprFiles body
+fieldFiles : CField -> List String
+fieldFiles (CField _ _ e) = exprFiles e
+armFiles : CArm -> List String
+armFiles (CArm _ guards body) = flatMap guardFiles guards ++ exprFiles body
+armFiles (CArmAlt _ guards _) = flatMap guardFiles guards
+guardFiles : CGuard -> List String
+guardFiles (CGBool e) = exprFiles e
+guardFiles (CGBind _ e) = exprFiles e
+stmtFiles : CStmt -> List String
+stmtFiles (CSExpr e) = exprFiles e
+stmtFiles (CSLet _ _ e) = exprFiles e
+stmtFiles (CSAssign _ e) = exprFiles e
+treeFiles : CTree -> List String
+treeFiles (CTFail (NoArm loc)) = fileOf loc
+treeFiles (CTFail (LetRefuted loc)) = fileOf loc
+treeFiles (CTLeaf _) = []
+treeFiles (CTGuard _ tree) = treeFiles tree
+treeFiles (CTSwitch branches fallback) =
+  flatMap branchFiles branches ++ treeFiles fallback
+treeFiles (CTDrop tree) = treeFiles tree
+branchFiles : CTBranch -> List String
+branchFiles (CTBranch _ tree) = treeFiles tree
+implFiles : CImplEntry -> List String
+implFiles (CImplEntry _ _ _ (CImplTagged _ _ _ _ _ _ body)) = exprFiles body
+implFiles (CImplEntry _ _ _ (CImplDefault _ _ _ _ _ _ body)) = exprFiles body
+
+exprFiles : CExpr -> List String
+exprFiles (CLit _) = []
+exprFiles (CVar _ _) = []
+exprFiles (CApp (CVar name _) [CLit (LString f), CLit (LInt line), CLit (LInt col)] _) =
+  if name == siteSentinelName then
+    fileOf (Loc f line col line (col + 1))
+  else
+    []
+exprFiles (CApp head args _) = exprFiles head ++ flatMap exprFiles args
+exprFiles (CLam _ body) = exprFiles body
+exprFiles (CLet _ _ rhs body) = exprFiles rhs ++ exprFiles body
+exprFiles (CLetGroup binds body) = flatMap bindFiles binds ++ exprFiles body
+exprFiles (CMatch e arms) = exprFiles e ++ flatMap armFiles arms
+exprFiles (CDecision e arms tree) =
+  exprFiles e ++ flatMap armFiles arms ++ treeFiles tree
+exprFiles (CIf a b c) = exprFiles a ++ exprFiles b ++ exprFiles c
+exprFiles (CBinPrim _ a b _ loc) = fileOf loc ++ exprFiles a ++ exprFiles b
+exprFiles (CUnOp _ e) = exprFiles e
+exprFiles (CTuple es) = flatMap exprFiles es
+exprFiles (CList es) = flatMap exprFiles es
+exprFiles (CRecord _ fs) = flatMap fieldFiles fs
+exprFiles (CFieldAccess e _ _ _) = exprFiles e
+exprFiles (CRecordUpdate _ e fs) = exprFiles e ++ flatMap fieldFiles fs
+exprFiles (CVariantUpdate _ e fs) = exprFiles e ++ flatMap fieldFiles fs
+exprFiles (CArray es) = flatMap exprFiles es
+exprFiles (CRangeList a b _) = exprFiles a ++ exprFiles b
+exprFiles (CRangeArray a b _) = exprFiles a ++ exprFiles b
+exprFiles (CIndex a b) = exprFiles a ++ exprFiles b
+exprFiles (CSlice a b c _) = exprFiles a ++ exprFiles b ++ exprFiles c
+exprFiles (CStringIndex a b) = exprFiles a ++ exprFiles b
+exprFiles (CStringSlice a b c _) = exprFiles a ++ exprFiles b ++ exprFiles c
+exprFiles (CListIndex a b) = exprFiles a ++ exprFiles b
+exprFiles (CListSlice a b c _) = exprFiles a ++ exprFiles b ++ exprFiles c
+exprFiles (CBlock stmts) = flatMap stmtFiles stmts
+exprFiles (CMethod _ _) = []
+exprFiles (CDict _ _) = []
+
+programFiles : CProgram -> List String
+programFiles (CProgram binds _ _ impls _ _) =
+  map
+    fst
+    (entries
+      (omFromNames
+        (flatMap bindFiles binds ++ flatMap implFiles impls)
+        omEmpty))
+
+assign : List String -> Int -> OrdMap Int -> (OrdMap Int, Int)
+assign [] high table = (table, high)
+assign (name :: rest) high table =
+  if omHasKey name table then
+    assign rest high table
+  else
+    assign rest (high + 1) (omInsert name (high + 1) table)
+
+ordered : Int -> OrdMap Int -> List String
+ordered high files =
+  let reverse = fromList (map (pair => (snd pair, fst pair)) (entries files))
+  if high < 1 then [] else map (n => optionOr "" (get n reverse)) [1..=high]
+
+mapDefects : String -> Int -> Int -> Int -> OrdMap Int -> List String
+mapDefects label low limit high table =
+  let rows = entries table
+  let invalid = flatMap (assignmentDefect label low limit high) rows
+  let nums = map (p => intToString (snd p)) rows
+  invalid
+    ++ (if length (entries (omFromNames nums omEmpty)) /= length nums then
+      ["identity: duplicate " ++ label ++ " number"]
+    else
+      [])
+
+assignmentDefect : String -> Int -> Int -> Int -> (String, Int) -> List String
+assignmentDefect label low limit high (name, n) =
+  if name == "" || n < low || n >= limit || n > high then
+    ["identity: invalid \{label} assignment \{name}"]
+  else
+    []
+
+packageDefects : PackageIdentity -> List String
+packageDefects p =
+  (if p.abi == abiVersion then [] else ["identity: incompatible ABI"])
+    ++ (if p.typeHigh >= 0 && p.typeHigh < reservedTypeBase then
+      []
+    else
+      ["identity: invalid type high-water mark"])
+    ++ (if p.fileHigh >= 0 && p.fileHigh < shiftLeft 1 siteFileBits then
+      []
+    else
+      ["identity: invalid file high-water mark"])
+    ++ mapDefects "type" 1 reservedTypeBase p.typeHigh p.types
+    ++ mapDefects "file" 1 (shiftLeft 1 siteFileBits) p.fileHigh p.files
+
+export
+planProgramIdentity : PackageIdentity ->
+  CProgram ->
+  Result (List String) IdentityPlan
+planProgramIdentity imported cp =
+  let (types, typeHigh) =
+    assign
+      (map fst (entries (omFromNames (planConstructors cp).typeOrder omEmpty)))
+      imported.typeHigh
+      imported.types
+  let (files, fileHigh) =
+    assign (programFiles cp) imported.fileHigh imported.files
+  let defects =
+    packageDefects imported
+      ++ (if typeHigh < reservedTypeBase then
+        []
+      else
+        ["identity: type IDs exhausted"])
+      ++ (if fileHigh < shiftLeft 1 siteFileBits then
+        []
+      else
+        ["identity: file IDs exhausted"])
+  if isEmpty defects then
+    Ok IdentityPlan {
+      imported = imported,
+      types = types,
+      files = files,
+      orderedFiles = ordered fileHigh files,
+    }
+  else
+    Err defects
+
+export
+planPackageIdentity : String -> CProgram -> Result (List String) PackageIdentity
+planPackageIdentity fingerprint cp =
+  map
+    (plan => PackageIdentity {
+      fingerprint = fingerprint,
+      abi = abiVersion,
+      types = (plan : IdentityPlan).types,
+      files = (plan : IdentityPlan).files,
+      typeHigh =
+        fold
+          (n pair => max n (snd pair))
+          0
+          (entries (plan : IdentityPlan).types),
+      fileHigh =
+        fold
+          (n pair => max n (snd pair))
+          0
+          (entries (plan : IdentityPlan).files),
+    })
+    (planProgramIdentity emptyPackage cp)
+
+export
+validateIdentityPlan : CProgram -> IdentityPlan -> List String
+validateIdentityPlan cp plan =
+  let imported = plan.imported
+  let typeHigh =
+    fold (n pair => max n (snd pair)) imported.typeHigh (entries plan.types)
+  let fileHigh =
+    fold (n pair => max n (snd pair)) imported.fileHigh (entries plan.files)
+  let (expectedTypes, _) =
+    assign (map fst (entries plan.types)) imported.typeHigh imported.types
+  let (expectedFiles, _) =
+    assign (map fst (entries plan.files)) imported.fileHigh imported.files
+  packageDefects imported
+    ++ mapDefects "type" 1 reservedTypeBase typeHigh plan.types
+    ++ mapDefects "file" 1 (shiftLeft 1 siteFileBits) fileHigh plan.files
+    ++ flatMap (importDefect "type" plan.types) (entries imported.types)
+    ++ flatMap (importDefect "file" plan.files) (entries imported.files)
+    ++ flatMap
+      (name =>
+        if omHasKey name plan.types then
+          []
+        else
+          ["identity: missing type " ++ name])
+      (planConstructors cp).typeOrder
+    ++ flatMap
+      (name =>
+        if omHasKey name plan.files then
+          []
+        else
+          ["identity: missing file " ++ name])
+      (programFiles cp)
+    ++ (if entries expectedTypes == entries plan.types then
+      []
+    else
+      ["identity: type allocation disagrees"])
+    ++ (if entries expectedFiles == entries plan.files then
+      []
+    else
+      ["identity: file allocation disagrees"])
+    ++ flatMap
+      (localDefect "type" imported.typeHigh imported.types)
+      (entries plan.types)
+    ++ flatMap
+      (localDefect "file" imported.fileHigh imported.files)
+      (entries plan.files)
+    ++ (if fileHigh >= 0
+      && fileHigh < shiftLeft 1 siteFileBits
+      && plan.orderedFiles == ordered fileHigh plan.files then
+      []
+    else
+      ["identity: file table disagrees"])
+
+localDefect : String -> Int -> OrdMap Int -> (String, Int) -> List String
+localDefect label high imported (name, n) =
+  if not (omHasKey name imported) && n <= high then
+    ["identity: local \{label} uses reserved hole \{name}"]
+  else
+    []
+
+importDefect : String -> OrdMap Int -> (String, Int) -> List String
+importDefect label table (name, n) =
+  if omLookup name table == Some n then
+    []
+  else
+    ["identity: imported \{label} changed \{name}"]
+
+export
+packSite : IdentityPlan -> Loc -> Int
+packSite plan (loc@(Loc f line col _ _)) =
+  if not (sitePackable loc) then
+    0
+  else match omLookup f plan.files
+    None => 0
+    Some n =>
+      n * shiftLeft 1 siteFileShift + line * shiftLeft 1 siteLineShift + col
