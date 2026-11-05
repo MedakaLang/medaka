@@ -228,7 +228,7 @@ define i32 @mdk_program_main(i32 %argc, ptr %argv) {
 entry:
   call void @mdk_set_args(i32 %argc, ptr %argv)
   %t0 = call i64 @mdk.user.6d356635663735373336353732356635665f5f69734e696c(i64 562949953421315)
-  %t1 = call i64 @mdk.user.6d356635663735373336353732356635665f5f69734e696c(i64 3)
+  %t1 = call i64 @mdk.user.6d356635663735373336353732356635665f5f69734e696c(i64 8589934595)
   %t2 = sub i64 21, 1
   %t3 = ashr i64 %t1, 1
   %t4 = call { i64, i1 } @llvm.smul.with.overflow.i64(i64 %t3, i64 %t2)
@@ -254,7 +254,7 @@ intovf15:
   unreachable
 intok15:
   %t18 = call ptr @mdk_alloc(i64 16)
-  store i64 3, ptr %t18
+  store i64 4294967299, ptr %t18
   %t19 = getelementptr i8, ptr %t18, i64 8
   store i64 ptrtoint (ptr @mdk.gen.string.70726f6772616d..0 to i64), ptr %t19
   %t20 = ptrtoint ptr %t18 to i64
@@ -308,7 +308,7 @@ intovf52:
   call void @mdk_int_overflow(i64 0, i64 %t53, i64 %t54)
   unreachable
 intok52:
-  %t55 = call i64 @mdk.user.6d356635663735373336353732356635665f5f72656e646572(i64 3)
+  %t55 = call i64 @mdk.user.6d356635663735373336353732356635665f5f72656e646572(i64 8589934595)
   %t56 = sub i64 20001, 1
   %t57 = ashr i64 %t55, 1
   %t58 = call { i64, i1 } @llvm.smul.with.overflow.i64(i64 %t57, i64 %t56)
@@ -333,7 +333,7 @@ intovf69:
   call void @mdk_int_overflow(i64 0, i64 %t70, i64 %t71)
   unreachable
 intok69:
-  %t72 = call i64 @mdk.user.6d356635663735373336353732356635665f5f72656e646572(i64 5)
+  %t72 = call i64 @mdk.user.6d356635663735373336353732356635665f5f72656e646572(i64 8589934597)
   %t73 = sub i64 200001, 1
   %t74 = ashr i64 %t72, 1
   %t75 = call { i64, i1 } @llvm.smul.with.overflow.i64(i64 %t74, i64 %t73)
@@ -359,7 +359,7 @@ intovf86:
   unreachable
 intok86:
   %t89 = call ptr @mdk_alloc(i64 16)
-  store i64 3, ptr %t89
+  store i64 4294967299, ptr %t89
   %t90 = getelementptr i8, ptr %t89, i64 8
   store i64 ptrtoint (ptr @mdk.gen.string.70726f6772616d..1 to i64), ptr %t90
   %t91 = ptrtoint ptr %t89 to i64
@@ -389,11 +389,11 @@ intovf106:
   unreachable
 intok106:
   %t109 = call ptr @mdk_alloc(i64 24)
-  store i64 4, ptr %t109
+  store i64 4294967300, ptr %t109
   %t110 = getelementptr i8, ptr %t109, i64 8
   store i64 562949953421315, ptr %t110
   %t111 = getelementptr i8, ptr %t109, i64 16
-  store i64 3, ptr %t111
+  store i64 8589934595, ptr %t111
   %t112 = ptrtoint ptr %t109 to i64
   %t113 = call i64 @mdk.user.6d356635663735373336353732356635665f5f72656e646572(i64 %t112)
   %t114 = sub i64 20000001, 1
@@ -516,7 +516,7 @@ discbox13:
   br label %disccont13
 disccont13:
   %t19 = phi i64 [ %t16, %discimm13 ], [ %t18, %discbox13 ]
-  %t20 = icmp eq i64 %t19, 1
+  %t20 = icmp eq i64 %t19, 4294967297
   br i1 %t20, label %conyes21, label %connext21
 conyes21:
   store i64 3, ptr %t0
@@ -536,7 +536,7 @@ discbox23:
   br label %disccont23
 disccont23:
   %t29 = phi i64 [ %t26, %discimm23 ], [ %t28, %discbox23 ]
-  %t30 = icmp eq i64 %t29, 2
+  %t30 = icmp eq i64 %t29, 4294967298
   br i1 %t30, label %conyes31, label %connext31
 conyes31:
   store i64 5, ptr %t0
@@ -556,7 +556,7 @@ discbox33:
   br label %disccont33
 disccont33:
   %t39 = phi i64 [ %t36, %discimm33 ], [ %t38, %discbox33 ]
-  %t40 = icmp eq i64 %t39, 3
+  %t40 = icmp eq i64 %t39, 4294967299
   br i1 %t40, label %conyes41, label %connext41
 conyes41:
   %t42 = inttoptr i64 %arg0 to ptr
@@ -582,7 +582,7 @@ discbox48:
   br label %disccont48
 disccont48:
   %t54 = phi i64 [ %t51, %discimm48 ], [ %t53, %discbox48 ]
-  %t55 = icmp eq i64 %t54, 4
+  %t55 = icmp eq i64 %t54, 4294967300
   br i1 %t55, label %conyes56, label %connext56
 conyes56:
   %t57 = inttoptr i64 %arg0 to ptr

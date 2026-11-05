@@ -228,13 +228,13 @@ define i32 @mdk_program_main(i32 %argc, ptr %argv) {
 entry:
   call void @mdk_set_args(i32 %argc, ptr %argv)
   %t0 = call ptr @mdk_alloc(i64 16)
-  store i64 0, ptr %t0
+  store i64 4294967296, ptr %t0
   %t1 = getelementptr i8, ptr %t0, i64 8
   store i64 ptrtoint (ptr @mdk.gen.string.70726f6772616d..0 to i64), ptr %t1
   %t2 = ptrtoint ptr %t0 to i64
   %t3 = call i64 @mdk.impl.7a5a5f35665f5f35665f757365725f35665f5f35665f5f32655f426f78.646973706c6179(i64 %t2)
   %t4 = call ptr @mdk_alloc(i64 16)
-  store i64 0, ptr %t4
+  store i64 4294967296, ptr %t4
   %t5 = getelementptr i8, ptr %t4, i64 8
   store i64 ptrtoint (ptr @mdk.gen.string.70726f6772616d..1 to i64), ptr %t5
   %t6 = ptrtoint ptr %t4 to i64
@@ -272,7 +272,7 @@ entry:
   %t4 = inttoptr i64 %arg0 to ptr
   %t5 = select i1 %t3, ptr %t4, ptr @mdk_disc_none
   %t6 = load i64, ptr %t5
-  %t7 = icmp eq i64 %t6, 0
+  %t7 = icmp eq i64 %t6, 4294967296
   br i1 %t7, label %conyes8, label %connext8
 conyes8:
   %t9 = inttoptr i64 %arg0 to ptr

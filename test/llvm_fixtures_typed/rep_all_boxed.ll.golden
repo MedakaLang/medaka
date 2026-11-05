@@ -228,13 +228,13 @@ define i32 @mdk_program_main(i32 %argc, ptr %argv) {
 entry:
   call void @mdk_set_args(i32 %argc, ptr %argv)
   %t0 = call ptr @mdk_alloc(i64 16)
-  store i64 0, ptr %t0
+  store i64 4294967296, ptr %t0
   %t1 = getelementptr i8, ptr %t0, i64 8
   store i64 5, ptr %t1
   %t2 = ptrtoint ptr %t0 to i64
   %t3 = call i64 @mdk.user.6d356635663735373336353732356635665f5f61726561(i64 %t2)
   %t4 = call ptr @mdk_alloc(i64 24)
-  store i64 1, ptr %t4
+  store i64 4294967297, ptr %t4
   %t5 = getelementptr i8, ptr %t4, i64 8
   store i64 7, ptr %t5
   %t6 = getelementptr i8, ptr %t4, i64 16
@@ -303,7 +303,7 @@ entry:
   %t5 = inttoptr i64 %arg0 to ptr
   %t6 = select i1 %t4, ptr %t5, ptr @mdk_disc_none
   %t7 = load i64, ptr %t6
-  %t8 = icmp eq i64 %t7, 0
+  %t8 = icmp eq i64 %t7, 4294967296
   br i1 %t8, label %conyes9, label %connext9
 conyes9:
   %t10 = inttoptr i64 %arg0 to ptr
@@ -348,7 +348,7 @@ clause2:
   %t36 = inttoptr i64 %arg0 to ptr
   %t37 = select i1 %t35, ptr %t36, ptr @mdk_disc_none
   %t38 = load i64, ptr %t37
-  %t39 = icmp eq i64 %t38, 1
+  %t39 = icmp eq i64 %t38, 4294967297
   br i1 %t39, label %conyes40, label %connext40
 conyes40:
   %t41 = inttoptr i64 %arg0 to ptr

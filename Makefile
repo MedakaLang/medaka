@@ -311,7 +311,7 @@ inlang-backend-emit-binder-refusal-test:
 inlang-backend-emit-plan-test:
 	./medaka test --native compiler/backend/emit_plan_test.mdk
 	./medaka test --native compiler/backend/extern_requirements_test.mdk compiler/backend/wasm_demand_test.mdk compiler/backend/wasm_fn_values_test.mdk
-	./medaka test compiler/backend/global_plan_test.mdk
+	./medaka test compiler/backend/global_plan_test.mdk compiler/backend/package_identity_test.mdk compiler/backend/package_identity_sexp_test.mdk
 
 ## The immutable implementation-clause partition consumed by both emitters;
 ## no entry imports this data-only sibling.
