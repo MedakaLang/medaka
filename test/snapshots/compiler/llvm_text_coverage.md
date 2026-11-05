@@ -1,5 +1,5 @@
 # META
-source_lines=813
+source_lines=817
 stages=DESUGAR,MARK
 # SOURCE
 -- Receipts are reusable values: their presence in a buffer, rather than the
@@ -207,6 +207,8 @@ scan : String ->
   List Token ->
   List String ->
   Result SymbolDefect (List Token, String)
+-- Bound: hot compiler path: the where-go form allocates one closure per call until the lambda-lift pass (#4878); convert then.
+-- lint-disable-next-line rule-threaded-invariant
 scan text bytes entries markers registry i copied tokens chunks =
   let c = byte bytes i
   if c == -1 then
@@ -734,12 +736,14 @@ referencesGo : List Token ->
   OrdMap Unit ->
   List SymbolDefect ->
   List SymbolDefect
-referencesGo [] _ _ acc = acc
-referencesGo ((Token name _ at) :: rest) seen gaps acc =
-  if isGlobal name && not (omHasKey name seen || omHasKey name gaps) then
-    referencesGo rest seen gaps (UndefinedReference (errorName name) at :: acc)
-  else
-    referencesGo rest seen gaps acc
+referencesGo xs0 seen gaps acc0 = go xs0 acc0
+  where
+    go [] acc = acc
+    go ((Token name _ at) :: rest) acc =
+      if isGlobal name && not (omHasKey name seen || omHasKey name gaps) then
+        go rest (UndefinedReference (errorName name) at :: acc)
+      else
+        go rest acc
 
 attributeOrigins : List Token ->
   OrdMap Expected ->
@@ -965,8 +969,7 @@ finishCheckedText policy reg (CallCoverage _ entries) text =
 (DFunDef false "wholeDeclarations" ((PCon "ModuleHalf") PWild PWild) (EListLit))
 (DFunDef false "wholeDeclarations" ((PCon "WholeModule") (PVar "entries") (PVar "gaps")) (EApp (EApp (EVar "flatMap") (ELam ((PVar "entry")) (EMatch (EVar "entry") (arm (PCon "SymbolDeclaration" (PAs "sym" (PCon "Generated" PWild)) PWild (PCon "SymbolDeclared") (PVar "at")) () (EIf (EApp (EApp (EVar "omHasKey") (EApp (EVar "canonicalName") (EBinOp "++" (ELit (LString "@")) (EApp (EVar "symbolName") (EVar "sym"))))) (EVar "gaps")) (EListLit) (EListLit (EApp (EApp (EVar "UndefinedReference") (EApp (EVar "symbolName") (EVar "sym"))) (EVar "at"))))) (arm PWild () (EListLit))))) (EVar "entries")))
 (DTypeSig false "referencesGo" (TyFun (TyApp (TyCon "List") (TyCon "Token")) (TyFun (TyApp (TyCon "OrdMap") (TyCon "Unit")) (TyFun (TyApp (TyCon "OrdMap") (TyCon "Unit")) (TyFun (TyApp (TyCon "List") (TyCon "SymbolDefect")) (TyApp (TyCon "List") (TyCon "SymbolDefect")))))))
-(DFunDef false "referencesGo" ((PList) PWild PWild (PVar "acc")) (EVar "acc"))
-(DFunDef false "referencesGo" ((PCons (PCon "Token" (PVar "name") PWild (PVar "at")) (PVar "rest")) (PVar "seen") (PVar "gaps") (PVar "acc")) (EIf (EBinOp "&&" (EApp (EVar "isGlobal") (EVar "name")) (EApp (EVar "not") (EBinOp "||" (EApp (EApp (EVar "omHasKey") (EVar "name")) (EVar "seen")) (EApp (EApp (EVar "omHasKey") (EVar "name")) (EVar "gaps"))))) (EApp (EApp (EApp (EApp (EVar "referencesGo") (EVar "rest")) (EVar "seen")) (EVar "gaps")) (EBinOp "::" (EApp (EApp (EVar "UndefinedReference") (EApp (EVar "errorName") (EVar "name"))) (EVar "at")) (EVar "acc"))) (EApp (EApp (EApp (EApp (EVar "referencesGo") (EVar "rest")) (EVar "seen")) (EVar "gaps")) (EVar "acc"))))
+(DFunDef false "referencesGo" ((PVar "xs0") (PVar "seen") (PVar "gaps") (PVar "acc0")) (ELetGroup ((lgb "go" (clause ((PList) (PVar "acc")) (EVar "acc")) (clause ((PCons (PCon "Token" (PVar "name") PWild (PVar "at")) (PVar "rest")) (PVar "acc")) (EIf (EBinOp "&&" (EApp (EVar "isGlobal") (EVar "name")) (EApp (EVar "not") (EBinOp "||" (EApp (EApp (EVar "omHasKey") (EVar "name")) (EVar "seen")) (EApp (EApp (EVar "omHasKey") (EVar "name")) (EVar "gaps"))))) (EApp (EApp (EVar "go") (EVar "rest")) (EBinOp "::" (EApp (EApp (EVar "UndefinedReference") (EApp (EVar "errorName") (EVar "name"))) (EVar "at")) (EVar "acc"))) (EApp (EApp (EVar "go") (EVar "rest")) (EVar "acc")))))) (EApp (EApp (EVar "go") (EVar "xs0")) (EVar "acc0"))))
 (DTypeSig false "attributeOrigins" (TyFun (TyApp (TyCon "List") (TyCon "Token")) (TyFun (TyApp (TyCon "OrdMap") (TyCon "Expected")) (TyFun (TyCon "SymbolOrigin") (TyFun (TyApp (TyCon "List") (TyCon "Token")) (TyApp (TyCon "List") (TyCon "Token")))))))
 (DFunDef false "attributeOrigins" ((PList) PWild PWild (PVar "acc")) (EApp (EVar "reverseL") (EVar "acc")))
 (DFunDef false "attributeOrigins" ((PCons (PCon "Token" (PLit (LString "define")) (PVar "covered") (PVar "origin")) (PVar "rest")) (PVar "expected") (PVar "current") (PVar "acc")) (EBlock (DoLet false false (PVar "next") (EMatch (EApp (EApp (EVar "functionHead") (EVar "rest")) (EListLit)) (arm (PCon "Ok" (PTuple (PVar "name") PWild PWild PWild)) () (EMatch (EApp (EApp (EVar "omLookup") (EVar "name")) (EVar "expected")) (arm (PCon "Some" (PCon "Expected" PWild PWild PWild (PVar "at"))) () (EVar "at")) (arm (PCon "None") () (EVar "moduleOrigin")))) (arm (PCon "Err" PWild) () (EVar "current")))) (DoExpr (EApp (EApp (EApp (EApp (EVar "attributeOrigins") (EVar "rest")) (EVar "expected")) (EVar "next")) (EBinOp "::" (EApp (EApp (EApp (EVar "Token") (ELit (LString "define"))) (EVar "covered")) (EIf (EVar "covered") (EVar "origin") (EVar "next"))) (EVar "acc"))))))
@@ -1124,8 +1127,7 @@ finishCheckedText policy reg (CallCoverage _ entries) text =
 (DFunDef false "wholeDeclarations" ((PCon "ModuleHalf") PWild PWild) (EListLit))
 (DFunDef false "wholeDeclarations" ((PCon "WholeModule") (PVar "entries") (PVar "gaps")) (EApp (EApp (EDictApp "flatMap") (ELam ((PVar "entry")) (EMatch (EVar "entry") (arm (PCon "SymbolDeclaration" (PAs "sym" (PCon "Generated" PWild)) PWild (PCon "SymbolDeclared") (PVar "at")) () (EIf (EApp (EApp (EVar "omHasKey") (EApp (EVar "canonicalName") (EBinOp "++" (ELit (LString "@")) (EApp (EVar "symbolName") (EVar "sym"))))) (EVar "gaps")) (EListLit) (EListLit (EApp (EApp (EVar "UndefinedReference") (EApp (EVar "symbolName") (EVar "sym"))) (EVar "at"))))) (arm PWild () (EListLit))))) (EVar "entries")))
 (DTypeSig false "referencesGo" (TyFun (TyApp (TyCon "List") (TyCon "Token")) (TyFun (TyApp (TyCon "OrdMap") (TyCon "Unit")) (TyFun (TyApp (TyCon "OrdMap") (TyCon "Unit")) (TyFun (TyApp (TyCon "List") (TyCon "SymbolDefect")) (TyApp (TyCon "List") (TyCon "SymbolDefect")))))))
-(DFunDef false "referencesGo" ((PList) PWild PWild (PVar "acc")) (EVar "acc"))
-(DFunDef false "referencesGo" ((PCons (PCon "Token" (PVar "name") PWild (PVar "at")) (PVar "rest")) (PVar "seen") (PVar "gaps") (PVar "acc")) (EIf (EBinOp "&&" (EApp (EVar "isGlobal") (EVar "name")) (EApp (EVar "not") (EBinOp "||" (EApp (EApp (EVar "omHasKey") (EVar "name")) (EVar "seen")) (EApp (EApp (EVar "omHasKey") (EVar "name")) (EVar "gaps"))))) (EApp (EApp (EApp (EApp (EVar "referencesGo") (EVar "rest")) (EVar "seen")) (EVar "gaps")) (EBinOp "::" (EApp (EApp (EVar "UndefinedReference") (EApp (EVar "errorName") (EVar "name"))) (EVar "at")) (EVar "acc"))) (EApp (EApp (EApp (EApp (EVar "referencesGo") (EVar "rest")) (EVar "seen")) (EVar "gaps")) (EVar "acc"))))
+(DFunDef false "referencesGo" ((PVar "xs0") (PVar "seen") (PVar "gaps") (PVar "acc0")) (ELetGroup ((lgb "go" (clause ((PList) (PVar "acc")) (EVar "acc")) (clause ((PCons (PCon "Token" (PVar "name") PWild (PVar "at")) (PVar "rest")) (PVar "acc")) (EIf (EBinOp "&&" (EApp (EVar "isGlobal") (EVar "name")) (EApp (EVar "not") (EBinOp "||" (EApp (EApp (EVar "omHasKey") (EVar "name")) (EVar "seen")) (EApp (EApp (EVar "omHasKey") (EVar "name")) (EVar "gaps"))))) (EApp (EApp (EVar "go") (EVar "rest")) (EBinOp "::" (EApp (EApp (EVar "UndefinedReference") (EApp (EVar "errorName") (EVar "name"))) (EVar "at")) (EVar "acc"))) (EApp (EApp (EVar "go") (EVar "rest")) (EVar "acc")))))) (EApp (EApp (EVar "go") (EVar "xs0")) (EVar "acc0"))))
 (DTypeSig false "attributeOrigins" (TyFun (TyApp (TyCon "List") (TyCon "Token")) (TyFun (TyApp (TyCon "OrdMap") (TyCon "Expected")) (TyFun (TyCon "SymbolOrigin") (TyFun (TyApp (TyCon "List") (TyCon "Token")) (TyApp (TyCon "List") (TyCon "Token")))))))
 (DFunDef false "attributeOrigins" ((PList) PWild PWild (PVar "acc")) (EApp (EVar "reverseL") (EVar "acc")))
 (DFunDef false "attributeOrigins" ((PCons (PCon "Token" (PLit (LString "define")) (PVar "covered") (PVar "origin")) (PVar "rest")) (PVar "expected") (PVar "current") (PVar "acc")) (EBlock (DoLet false false (PVar "next") (EMatch (EApp (EApp (EVar "functionHead") (EVar "rest")) (EListLit)) (arm (PCon "Ok" (PTuple (PVar "name") PWild PWild PWild)) () (EMatch (EApp (EApp (EVar "omLookup") (EVar "name")) (EVar "expected")) (arm (PCon "Some" (PCon "Expected" PWild PWild PWild (PVar "at"))) () (EVar "at")) (arm (PCon "None") () (EVar "moduleOrigin")))) (arm (PCon "Err" PWild) () (EVar "current")))) (DoExpr (EApp (EApp (EApp (EApp (EVar "attributeOrigins") (EVar "rest")) (EVar "expected")) (EVar "next")) (EBinOp "::" (EApp (EApp (EApp (EVar "Token") (ELit (LString "define"))) (EVar "covered")) (EIf (EVar "covered") (EVar "origin") (EVar "next"))) (EVar "acc"))))))

@@ -1,5 +1,5 @@
 # META
-source_lines=794
+source_lines=773
 stages=DESUGAR,MARK
 # SOURCE
 -- This audits named identities and checked descriptors. It does not reconstruct
@@ -166,91 +166,68 @@ scan : String ->
   List Token ->
   List String ->
   Result SymbolDefect (List Token, String)
-scan text bytes entries markers registry i copied tokens chunks =
-  let c = byte bytes i
-  if c == -1 then
-    Ok (
-      reverseL tokens,
-      joinWith "" (reverseL (stringSliceBytes copied i text :: chunks)),
-    )
-  else if c == 30 then
-    if not markers
-      || byte bytes (i + 1) /= 87
-      || not (boundary (byte bytes (i - 1))) then
-      Err (UncheckedText "malformed or nested receipt" moduleOrigin)
-    else
-      let endKey = keyEnd bytes (i + 2)
-      let key = stringSliceBytes (i + 2) endKey text
-      if key == "" || byte bytes endKey /= 58 then
-        Err (UncheckedText "malformed receipt key" moduleOrigin)
-      else match omLookup key entries
-        None => Err (UncheckedText "unknown receipt" moduleOrigin)
-        Some receipt =>
-          let start = endKey + 1
-          let end = start + stringByteLength receipt.text
-          if end >= arrayLength bytes
-            || byte bytes end /= 31
-            || not (boundary (byte bytes (end + 1))) then
-            Err (UncheckedText "changed or unterminated receipt" receipt.origin)
-          else if stringSliceBytes start end text /= receipt.text then
-            Err (UncheckedText "changed receipt text" receipt.origin)
-          else match recheck registry receipt
-            Err d => Err d
-            Ok _ =>
-              scan
-                text
-                bytes
-                entries
-                markers
-                registry
-                (end + 1)
-                (end + 1)
-                (prependChecked receipt.tokens receipt.origin tokens)
-                (receipt.text :: stringSliceBytes copied i text :: chunks)
-  else if c == 31 then
-    Err (UncheckedText "unmatched receipt end" moduleOrigin)
-  else if space c then
-    scan text bytes entries markers registry (i + 1) copied tokens chunks
-  else if c == 59 && byte bytes (i + 1) == 59 then
-    scan
-      text
-      bytes
-      entries
-      markers
-      registry
-      (lineEnd bytes i)
-      copied
-      tokens
-      chunks
-  else if c == 40 && byte bytes (i + 1) == 59 then do
-    end <- commentEnd bytes (i + 2) 1
-    scan text bytes entries markers registry end copied tokens chunks
-  else if c == 34 then do
-    end <- quotedEnd bytes (i + 1)
-    scan
-      text
-      bytes
-      entries
-      markers
-      registry
-      end
-      copied
-      (Token "\"\"" False moduleOrigin :: tokens)
-      chunks
-  else if c == 59 then
-    Err (UncheckedText "invalid comment delimiter" moduleOrigin)
-  else
-    let end = if c == 40 || c == 41 then i + 1 else wordEnd bytes i
-    scan
-      text
-      bytes
-      entries
-      markers
-      registry
-      end
-      copied
-      (Token (stringSliceBytes i end text) False moduleOrigin :: tokens)
-      chunks
+scan text bytes entries markers registry i0 cp0 tk0 ch0 = go i0 cp0 tk0 ch0
+  where
+    go i copied tokens chunks =
+      let c = byte bytes i
+      if c == -1 then
+        Ok (
+          reverseL tokens,
+          joinWith "" (reverseL (stringSliceBytes copied i text :: chunks)),
+        )
+      else if c == 30 then
+        if not markers
+          || byte bytes (i + 1) /= 87
+          || not (boundary (byte bytes (i - 1))) then
+          Err (UncheckedText "malformed or nested receipt" moduleOrigin)
+        else
+          let endKey = keyEnd bytes (i + 2)
+          let key = stringSliceBytes (i + 2) endKey text
+          if key == "" || byte bytes endKey /= 58 then
+            Err (UncheckedText "malformed receipt key" moduleOrigin)
+          else match omLookup key entries
+            None => Err (UncheckedText "unknown receipt" moduleOrigin)
+            Some receipt =>
+              let start = endKey + 1
+              let end = start + stringByteLength receipt.text
+              if end >= arrayLength bytes
+                || byte bytes end /= 31
+                || not (boundary (byte bytes (end + 1))) then
+                Err
+                  (UncheckedText
+                    "changed or unterminated receipt"
+                    receipt.origin)
+              else if stringSliceBytes start end text /= receipt.text then
+                Err (UncheckedText "changed receipt text" receipt.origin)
+              else match recheck registry receipt
+                Err d => Err d
+                Ok _ =>
+                  go
+                    (end + 1)
+                    (end + 1)
+                    (prependChecked receipt.tokens receipt.origin tokens)
+                    (receipt.text :: stringSliceBytes copied i text :: chunks)
+      else if c == 31 then
+        Err (UncheckedText "unmatched receipt end" moduleOrigin)
+      else if space c then
+        go (i + 1) copied tokens chunks
+      else if c == 59 && byte bytes (i + 1) == 59 then
+        go (lineEnd bytes i) copied tokens chunks
+      else if c == 40 && byte bytes (i + 1) == 59 then do
+        end <- commentEnd bytes (i + 2) 1
+        go end copied tokens chunks
+      else if c == 34 then do
+        end <- quotedEnd bytes (i + 1)
+        go end copied (Token "\"\"" False moduleOrigin :: tokens) chunks
+      else if c == 59 then
+        Err (UncheckedText "invalid comment delimiter" moduleOrigin)
+      else
+        let end = if c == 40 || c == 41 then i + 1 else wordEnd bytes i
+        go
+          end
+          copied
+          (Token (stringSliceBytes i end text) False moduleOrigin :: tokens)
+          chunks
 
 recheck : Option SymbolRegistry -> Receipt -> Result SymbolDefect Unit
 recheck None _ = Ok ()
@@ -639,32 +616,34 @@ usesGo : List Token ->
   SymbolIndex Unit ->
   List SymbolDefect ->
   List SymbolDefect
-usesGo [] _ _ acc = acc
-usesGo ((Token op covered origin) :: rest) seen gaps acc = match rest
-  [] =>
-    if (op == "call" || op == "return_call") && not covered then
-      UncheckedText "uncovered direct call" origin :: acc
-    else
-      acc
-  (Token name _ _) :: after =>
-    let uncovered =
-      if (op == "call" || op == "return_call") && not covered then
-        [UncheckedText "uncovered direct call" origin]
-      else
-        []
-    let absent =
-      if named name then
-        flatMap (missingUse seen gaps origin) (useOf op (bare name))
-      else
-        []
-    let extra = match after
-      (Token second _ _) :: _ if named second
-        && (op == "array.new_data" || op == "array.init_data") =>
-        missingUse seen gaps origin (WasmData (bare second))
-      (Token second _ _) :: _ if named second && op == "array.copy" =>
-        missingUse seen gaps origin (WasmType (bare second))
-      _ => []
-    usesGo rest seen gaps (reverseL (uncovered ++ absent ++ extra) ++ acc)
+usesGo xs0 seen gaps acc0 = go xs0 acc0
+  where
+    go [] acc = acc
+    go ((Token op covered origin) :: rest) acc = match rest
+      [] =>
+        if (op == "call" || op == "return_call") && not covered then
+          UncheckedText "uncovered direct call" origin :: acc
+        else
+          acc
+      (Token name _ _) :: after =>
+        let uncovered =
+          if (op == "call" || op == "return_call") && not covered then
+            [UncheckedText "uncovered direct call" origin]
+          else
+            []
+        let absent =
+          if named name then
+            flatMap (missingUse seen gaps origin) (useOf op (bare name))
+          else
+            []
+        let extra = match after
+          (Token second _ _) :: _ if named second
+            && (op == "array.new_data" || op == "array.init_data") =>
+            missingUse seen gaps origin (WasmData (bare second))
+          (Token second _ _) :: _ if named second && op == "array.copy" =>
+            missingUse seen gaps origin (WasmType (bare second))
+          _ => []
+        go rest (reverseL (uncovered ++ absent ++ extra) ++ acc)
 
 -- Count code dependencies for manifest drift checks; comments and literals are
 -- inert, and namespaces keep a global and a type with the same name distinct.
@@ -833,7 +812,7 @@ finishCheckedText policy reg (CallCoverage _ entries) text =
 (DTypeSig false "rawTokens" (TyFun (TyCon "String") (TyApp (TyApp (TyCon "Result") (TyCon "SymbolDefect")) (TyApp (TyCon "List") (TyCon "Token")))))
 (DFunDef false "rawTokens" ((PVar "text")) (EApp (EApp (EVar "andThen") (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EVar "scan") (EVar "text")) (EApp (EVar "stringToUtf8Bytes") (EVar "text"))) (EVar "omEmpty")) (EVar "False")) (EVar "None")) (ELit (LInt 0))) (ELit (LInt 0))) (EListLit)) (EListLit))) (ELam ((PVar "__do_x")) (EMatch (EVar "__do_x") (arm (PTuple (PVar "tokens") PWild) () (EApp (EVar "Ok") (EVar "tokens")))))))
 (DTypeSig false "scan" (TyFun (TyCon "String") (TyFun (TyApp (TyCon "Array") (TyCon "Int")) (TyFun (TyApp (TyCon "OrdMap") (TyCon "Receipt")) (TyFun (TyCon "Bool") (TyFun (TyApp (TyCon "Option") (TyCon "SymbolRegistry")) (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyFun (TyApp (TyCon "List") (TyCon "Token")) (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyApp (TyApp (TyCon "Result") (TyCon "SymbolDefect")) (TyTuple (TyApp (TyCon "List") (TyCon "Token")) (TyCon "String")))))))))))))
-(DFunDef false "scan" ((PVar "text") (PVar "bytes") (PVar "entries") (PVar "markers") (PVar "registry") (PVar "i") (PVar "copied") (PVar "tokens") (PVar "chunks")) (EBlock (DoLet false false (PVar "c") (EApp (EApp (EVar "byte") (EVar "bytes")) (EVar "i"))) (DoExpr (EIf (EBinOp "==" (EVar "c") (EUnOp "-" (ELit (LInt 1)))) (EApp (EVar "Ok") (ETuple (EApp (EVar "reverseL") (EVar "tokens")) (EApp (EApp (EVar "joinWith") (ELit (LString ""))) (EApp (EVar "reverseL") (EBinOp "::" (EApp (EApp (EApp (EVar "stringSliceBytes") (EVar "copied")) (EVar "i")) (EVar "text")) (EVar "chunks")))))) (EIf (EBinOp "==" (EVar "c") (ELit (LInt 30))) (EIf (EBinOp "||" (EBinOp "||" (EApp (EVar "not") (EVar "markers")) (EBinOp "/=" (EApp (EApp (EVar "byte") (EVar "bytes")) (EBinOp "+" (EVar "i") (ELit (LInt 1)))) (ELit (LInt 87)))) (EApp (EVar "not") (EApp (EVar "boundary") (EApp (EApp (EVar "byte") (EVar "bytes")) (EBinOp "-" (EVar "i") (ELit (LInt 1))))))) (EApp (EVar "Err") (EApp (EApp (EVar "UncheckedText") (ELit (LString "malformed or nested receipt"))) (EVar "moduleOrigin"))) (EBlock (DoLet false false (PVar "endKey") (EApp (EApp (EVar "keyEnd") (EVar "bytes")) (EBinOp "+" (EVar "i") (ELit (LInt 2))))) (DoLet false false (PVar "key") (EApp (EApp (EApp (EVar "stringSliceBytes") (EBinOp "+" (EVar "i") (ELit (LInt 2)))) (EVar "endKey")) (EVar "text"))) (DoExpr (EIf (EBinOp "||" (EBinOp "==" (EVar "key") (ELit (LString ""))) (EBinOp "/=" (EApp (EApp (EVar "byte") (EVar "bytes")) (EVar "endKey")) (ELit (LInt 58)))) (EApp (EVar "Err") (EApp (EApp (EVar "UncheckedText") (ELit (LString "malformed receipt key"))) (EVar "moduleOrigin"))) (EMatch (EApp (EApp (EVar "omLookup") (EVar "key")) (EVar "entries")) (arm (PCon "None") () (EApp (EVar "Err") (EApp (EApp (EVar "UncheckedText") (ELit (LString "unknown receipt"))) (EVar "moduleOrigin")))) (arm (PCon "Some" (PVar "receipt")) () (EBlock (DoLet false false (PVar "start") (EBinOp "+" (EVar "endKey") (ELit (LInt 1)))) (DoLet false false (PVar "end") (EBinOp "+" (EVar "start") (EApp (EVar "stringByteLength") (EFieldAccess (EVar "receipt") "text")))) (DoExpr (EIf (EBinOp "||" (EBinOp "||" (EBinOp ">=" (EVar "end") (EApp (EVar "arrayLength") (EVar "bytes"))) (EBinOp "/=" (EApp (EApp (EVar "byte") (EVar "bytes")) (EVar "end")) (ELit (LInt 31)))) (EApp (EVar "not") (EApp (EVar "boundary") (EApp (EApp (EVar "byte") (EVar "bytes")) (EBinOp "+" (EVar "end") (ELit (LInt 1))))))) (EApp (EVar "Err") (EApp (EApp (EVar "UncheckedText") (ELit (LString "changed or unterminated receipt"))) (EFieldAccess (EVar "receipt") "origin"))) (EIf (EBinOp "/=" (EApp (EApp (EApp (EVar "stringSliceBytes") (EVar "start")) (EVar "end")) (EVar "text")) (EFieldAccess (EVar "receipt") "text")) (EApp (EVar "Err") (EApp (EApp (EVar "UncheckedText") (ELit (LString "changed receipt text"))) (EFieldAccess (EVar "receipt") "origin"))) (EMatch (EApp (EApp (EVar "recheck") (EVar "registry")) (EVar "receipt")) (arm (PCon "Err" (PVar "d")) () (EApp (EVar "Err") (EVar "d"))) (arm (PCon "Ok" PWild) () (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EVar "scan") (EVar "text")) (EVar "bytes")) (EVar "entries")) (EVar "markers")) (EVar "registry")) (EBinOp "+" (EVar "end") (ELit (LInt 1)))) (EBinOp "+" (EVar "end") (ELit (LInt 1)))) (EApp (EApp (EApp (EVar "prependChecked") (EFieldAccess (EVar "receipt") "tokens")) (EFieldAccess (EVar "receipt") "origin")) (EVar "tokens"))) (EBinOp "::" (EFieldAccess (EVar "receipt") "text") (EBinOp "::" (EApp (EApp (EApp (EVar "stringSliceBytes") (EVar "copied")) (EVar "i")) (EVar "text")) (EVar "chunks")))))))))))))))) (EIf (EBinOp "==" (EVar "c") (ELit (LInt 31))) (EApp (EVar "Err") (EApp (EApp (EVar "UncheckedText") (ELit (LString "unmatched receipt end"))) (EVar "moduleOrigin"))) (EIf (EApp (EVar "space") (EVar "c")) (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EVar "scan") (EVar "text")) (EVar "bytes")) (EVar "entries")) (EVar "markers")) (EVar "registry")) (EBinOp "+" (EVar "i") (ELit (LInt 1)))) (EVar "copied")) (EVar "tokens")) (EVar "chunks")) (EIf (EBinOp "&&" (EBinOp "==" (EVar "c") (ELit (LInt 59))) (EBinOp "==" (EApp (EApp (EVar "byte") (EVar "bytes")) (EBinOp "+" (EVar "i") (ELit (LInt 1)))) (ELit (LInt 59)))) (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EVar "scan") (EVar "text")) (EVar "bytes")) (EVar "entries")) (EVar "markers")) (EVar "registry")) (EApp (EApp (EVar "lineEnd") (EVar "bytes")) (EVar "i"))) (EVar "copied")) (EVar "tokens")) (EVar "chunks")) (EIf (EBinOp "&&" (EBinOp "==" (EVar "c") (ELit (LInt 40))) (EBinOp "==" (EApp (EApp (EVar "byte") (EVar "bytes")) (EBinOp "+" (EVar "i") (ELit (LInt 1)))) (ELit (LInt 59)))) (EApp (EApp (EVar "andThen") (EApp (EApp (EApp (EVar "commentEnd") (EVar "bytes")) (EBinOp "+" (EVar "i") (ELit (LInt 2)))) (ELit (LInt 1)))) (ELam ((PVar "end")) (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EVar "scan") (EVar "text")) (EVar "bytes")) (EVar "entries")) (EVar "markers")) (EVar "registry")) (EVar "end")) (EVar "copied")) (EVar "tokens")) (EVar "chunks")))) (EIf (EBinOp "==" (EVar "c") (ELit (LInt 34))) (EApp (EApp (EVar "andThen") (EApp (EApp (EVar "quotedEnd") (EVar "bytes")) (EBinOp "+" (EVar "i") (ELit (LInt 1))))) (ELam ((PVar "end")) (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EVar "scan") (EVar "text")) (EVar "bytes")) (EVar "entries")) (EVar "markers")) (EVar "registry")) (EVar "end")) (EVar "copied")) (EBinOp "::" (EApp (EApp (EApp (EVar "Token") (ELit (LString "\"\""))) (EVar "False")) (EVar "moduleOrigin")) (EVar "tokens"))) (EVar "chunks")))) (EIf (EBinOp "==" (EVar "c") (ELit (LInt 59))) (EApp (EVar "Err") (EApp (EApp (EVar "UncheckedText") (ELit (LString "invalid comment delimiter"))) (EVar "moduleOrigin"))) (EBlock (DoLet false false (PVar "end") (EIf (EBinOp "||" (EBinOp "==" (EVar "c") (ELit (LInt 40))) (EBinOp "==" (EVar "c") (ELit (LInt 41)))) (EBinOp "+" (EVar "i") (ELit (LInt 1))) (EApp (EApp (EVar "wordEnd") (EVar "bytes")) (EVar "i")))) (DoExpr (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EVar "scan") (EVar "text")) (EVar "bytes")) (EVar "entries")) (EVar "markers")) (EVar "registry")) (EVar "end")) (EVar "copied")) (EBinOp "::" (EApp (EApp (EApp (EVar "Token") (EApp (EApp (EApp (EVar "stringSliceBytes") (EVar "i")) (EVar "end")) (EVar "text"))) (EVar "False")) (EVar "moduleOrigin")) (EVar "tokens"))) (EVar "chunks")))))))))))))))
+(DFunDef false "scan" ((PVar "text") (PVar "bytes") (PVar "entries") (PVar "markers") (PVar "registry") (PVar "i0") (PVar "cp0") (PVar "tk0") (PVar "ch0")) (ELetGroup ((lgb "go" (clause ((PVar "i") (PVar "copied") (PVar "tokens") (PVar "chunks")) (EBlock (DoLet false false (PVar "c") (EApp (EApp (EVar "byte") (EVar "bytes")) (EVar "i"))) (DoExpr (EIf (EBinOp "==" (EVar "c") (EUnOp "-" (ELit (LInt 1)))) (EApp (EVar "Ok") (ETuple (EApp (EVar "reverseL") (EVar "tokens")) (EApp (EApp (EVar "joinWith") (ELit (LString ""))) (EApp (EVar "reverseL") (EBinOp "::" (EApp (EApp (EApp (EVar "stringSliceBytes") (EVar "copied")) (EVar "i")) (EVar "text")) (EVar "chunks")))))) (EIf (EBinOp "==" (EVar "c") (ELit (LInt 30))) (EIf (EBinOp "||" (EBinOp "||" (EApp (EVar "not") (EVar "markers")) (EBinOp "/=" (EApp (EApp (EVar "byte") (EVar "bytes")) (EBinOp "+" (EVar "i") (ELit (LInt 1)))) (ELit (LInt 87)))) (EApp (EVar "not") (EApp (EVar "boundary") (EApp (EApp (EVar "byte") (EVar "bytes")) (EBinOp "-" (EVar "i") (ELit (LInt 1))))))) (EApp (EVar "Err") (EApp (EApp (EVar "UncheckedText") (ELit (LString "malformed or nested receipt"))) (EVar "moduleOrigin"))) (EBlock (DoLet false false (PVar "endKey") (EApp (EApp (EVar "keyEnd") (EVar "bytes")) (EBinOp "+" (EVar "i") (ELit (LInt 2))))) (DoLet false false (PVar "key") (EApp (EApp (EApp (EVar "stringSliceBytes") (EBinOp "+" (EVar "i") (ELit (LInt 2)))) (EVar "endKey")) (EVar "text"))) (DoExpr (EIf (EBinOp "||" (EBinOp "==" (EVar "key") (ELit (LString ""))) (EBinOp "/=" (EApp (EApp (EVar "byte") (EVar "bytes")) (EVar "endKey")) (ELit (LInt 58)))) (EApp (EVar "Err") (EApp (EApp (EVar "UncheckedText") (ELit (LString "malformed receipt key"))) (EVar "moduleOrigin"))) (EMatch (EApp (EApp (EVar "omLookup") (EVar "key")) (EVar "entries")) (arm (PCon "None") () (EApp (EVar "Err") (EApp (EApp (EVar "UncheckedText") (ELit (LString "unknown receipt"))) (EVar "moduleOrigin")))) (arm (PCon "Some" (PVar "receipt")) () (EBlock (DoLet false false (PVar "start") (EBinOp "+" (EVar "endKey") (ELit (LInt 1)))) (DoLet false false (PVar "end") (EBinOp "+" (EVar "start") (EApp (EVar "stringByteLength") (EFieldAccess (EVar "receipt") "text")))) (DoExpr (EIf (EBinOp "||" (EBinOp "||" (EBinOp ">=" (EVar "end") (EApp (EVar "arrayLength") (EVar "bytes"))) (EBinOp "/=" (EApp (EApp (EVar "byte") (EVar "bytes")) (EVar "end")) (ELit (LInt 31)))) (EApp (EVar "not") (EApp (EVar "boundary") (EApp (EApp (EVar "byte") (EVar "bytes")) (EBinOp "+" (EVar "end") (ELit (LInt 1))))))) (EApp (EVar "Err") (EApp (EApp (EVar "UncheckedText") (ELit (LString "changed or unterminated receipt"))) (EFieldAccess (EVar "receipt") "origin"))) (EIf (EBinOp "/=" (EApp (EApp (EApp (EVar "stringSliceBytes") (EVar "start")) (EVar "end")) (EVar "text")) (EFieldAccess (EVar "receipt") "text")) (EApp (EVar "Err") (EApp (EApp (EVar "UncheckedText") (ELit (LString "changed receipt text"))) (EFieldAccess (EVar "receipt") "origin"))) (EMatch (EApp (EApp (EVar "recheck") (EVar "registry")) (EVar "receipt")) (arm (PCon "Err" (PVar "d")) () (EApp (EVar "Err") (EVar "d"))) (arm (PCon "Ok" PWild) () (EApp (EApp (EApp (EApp (EVar "go") (EBinOp "+" (EVar "end") (ELit (LInt 1)))) (EBinOp "+" (EVar "end") (ELit (LInt 1)))) (EApp (EApp (EApp (EVar "prependChecked") (EFieldAccess (EVar "receipt") "tokens")) (EFieldAccess (EVar "receipt") "origin")) (EVar "tokens"))) (EBinOp "::" (EFieldAccess (EVar "receipt") "text") (EBinOp "::" (EApp (EApp (EApp (EVar "stringSliceBytes") (EVar "copied")) (EVar "i")) (EVar "text")) (EVar "chunks")))))))))))))))) (EIf (EBinOp "==" (EVar "c") (ELit (LInt 31))) (EApp (EVar "Err") (EApp (EApp (EVar "UncheckedText") (ELit (LString "unmatched receipt end"))) (EVar "moduleOrigin"))) (EIf (EApp (EVar "space") (EVar "c")) (EApp (EApp (EApp (EApp (EVar "go") (EBinOp "+" (EVar "i") (ELit (LInt 1)))) (EVar "copied")) (EVar "tokens")) (EVar "chunks")) (EIf (EBinOp "&&" (EBinOp "==" (EVar "c") (ELit (LInt 59))) (EBinOp "==" (EApp (EApp (EVar "byte") (EVar "bytes")) (EBinOp "+" (EVar "i") (ELit (LInt 1)))) (ELit (LInt 59)))) (EApp (EApp (EApp (EApp (EVar "go") (EApp (EApp (EVar "lineEnd") (EVar "bytes")) (EVar "i"))) (EVar "copied")) (EVar "tokens")) (EVar "chunks")) (EIf (EBinOp "&&" (EBinOp "==" (EVar "c") (ELit (LInt 40))) (EBinOp "==" (EApp (EApp (EVar "byte") (EVar "bytes")) (EBinOp "+" (EVar "i") (ELit (LInt 1)))) (ELit (LInt 59)))) (EApp (EApp (EVar "andThen") (EApp (EApp (EApp (EVar "commentEnd") (EVar "bytes")) (EBinOp "+" (EVar "i") (ELit (LInt 2)))) (ELit (LInt 1)))) (ELam ((PVar "end")) (EApp (EApp (EApp (EApp (EVar "go") (EVar "end")) (EVar "copied")) (EVar "tokens")) (EVar "chunks")))) (EIf (EBinOp "==" (EVar "c") (ELit (LInt 34))) (EApp (EApp (EVar "andThen") (EApp (EApp (EVar "quotedEnd") (EVar "bytes")) (EBinOp "+" (EVar "i") (ELit (LInt 1))))) (ELam ((PVar "end")) (EApp (EApp (EApp (EApp (EVar "go") (EVar "end")) (EVar "copied")) (EBinOp "::" (EApp (EApp (EApp (EVar "Token") (ELit (LString "\"\""))) (EVar "False")) (EVar "moduleOrigin")) (EVar "tokens"))) (EVar "chunks")))) (EIf (EBinOp "==" (EVar "c") (ELit (LInt 59))) (EApp (EVar "Err") (EApp (EApp (EVar "UncheckedText") (ELit (LString "invalid comment delimiter"))) (EVar "moduleOrigin"))) (EBlock (DoLet false false (PVar "end") (EIf (EBinOp "||" (EBinOp "==" (EVar "c") (ELit (LInt 40))) (EBinOp "==" (EVar "c") (ELit (LInt 41)))) (EBinOp "+" (EVar "i") (ELit (LInt 1))) (EApp (EApp (EVar "wordEnd") (EVar "bytes")) (EVar "i")))) (DoExpr (EApp (EApp (EApp (EApp (EVar "go") (EVar "end")) (EVar "copied")) (EBinOp "::" (EApp (EApp (EApp (EVar "Token") (EApp (EApp (EApp (EVar "stringSliceBytes") (EVar "i")) (EVar "end")) (EVar "text"))) (EVar "False")) (EVar "moduleOrigin")) (EVar "tokens"))) (EVar "chunks"))))))))))))))))) (EApp (EApp (EApp (EApp (EVar "go") (EVar "i0")) (EVar "cp0")) (EVar "tk0")) (EVar "ch0"))))
 (DTypeSig false "recheck" (TyFun (TyApp (TyCon "Option") (TyCon "SymbolRegistry")) (TyFun (TyCon "Receipt") (TyApp (TyApp (TyCon "Result") (TyCon "SymbolDefect")) (TyCon "Unit")))))
 (DFunDef false "recheck" ((PCon "None") PWild) (EApp (EVar "Ok") (ELit LUnit)))
 (DFunDef false "recheck" ((PCon "Some" (PVar "reg")) (PVar "receipt")) (EApp (EApp (EVar "andThen") (EApp (EApp (EApp (EApp (EVar "checkCall") (EApp (EVar "WasmFunc") (EFieldAccess (EVar "receipt") "name"))) (EFieldAccess (EVar "receipt") "operands")) (EFieldAccess (EVar "receipt") "origin")) (EVar "reg"))) (ELam (PWild) (EApp (EVar "Ok") (ELit LUnit)))))
@@ -951,8 +930,7 @@ finishCheckedText policy reg (CallCoverage _ entries) text =
 (DTypeSig false "uses" (TyFun (TyApp (TyCon "List") (TyCon "Token")) (TyFun (TyApp (TyCon "SymbolIndex") (TyCon "Materialized")) (TyFun (TyApp (TyCon "SymbolIndex") (TyCon "Unit")) (TyApp (TyCon "List") (TyCon "SymbolDefect"))))))
 (DFunDef false "uses" ((PVar "tokens") (PVar "seen") (PVar "gaps")) (EApp (EVar "reverseL") (EApp (EApp (EApp (EApp (EVar "usesGo") (EVar "tokens")) (EVar "seen")) (EVar "gaps")) (EListLit))))
 (DTypeSig false "usesGo" (TyFun (TyApp (TyCon "List") (TyCon "Token")) (TyFun (TyApp (TyCon "SymbolIndex") (TyCon "Materialized")) (TyFun (TyApp (TyCon "SymbolIndex") (TyCon "Unit")) (TyFun (TyApp (TyCon "List") (TyCon "SymbolDefect")) (TyApp (TyCon "List") (TyCon "SymbolDefect")))))))
-(DFunDef false "usesGo" ((PList) PWild PWild (PVar "acc")) (EVar "acc"))
-(DFunDef false "usesGo" ((PCons (PCon "Token" (PVar "op") (PVar "covered") (PVar "origin")) (PVar "rest")) (PVar "seen") (PVar "gaps") (PVar "acc")) (EMatch (EVar "rest") (arm (PList) () (EIf (EBinOp "&&" (EBinOp "||" (EBinOp "==" (EVar "op") (ELit (LString "call"))) (EBinOp "==" (EVar "op") (ELit (LString "return_call")))) (EApp (EVar "not") (EVar "covered"))) (EBinOp "::" (EApp (EApp (EVar "UncheckedText") (ELit (LString "uncovered direct call"))) (EVar "origin")) (EVar "acc")) (EVar "acc"))) (arm (PCons (PCon "Token" (PVar "name") PWild PWild) (PVar "after")) () (EBlock (DoLet false false (PVar "uncovered") (EIf (EBinOp "&&" (EBinOp "||" (EBinOp "==" (EVar "op") (ELit (LString "call"))) (EBinOp "==" (EVar "op") (ELit (LString "return_call")))) (EApp (EVar "not") (EVar "covered"))) (EListLit (EApp (EApp (EVar "UncheckedText") (ELit (LString "uncovered direct call"))) (EVar "origin"))) (EListLit))) (DoLet false false (PVar "absent") (EIf (EApp (EVar "named") (EVar "name")) (EApp (EApp (EVar "flatMap") (EApp (EApp (EApp (EVar "missingUse") (EVar "seen")) (EVar "gaps")) (EVar "origin"))) (EApp (EApp (EVar "useOf") (EVar "op")) (EApp (EVar "bare") (EVar "name")))) (EListLit))) (DoLet false false (PVar "extra") (EMatch (EVar "after") (arm (PCons (PCon "Token" (PVar "second") PWild PWild) PWild) ((GBool (EBinOp "&&" (EApp (EVar "named") (EVar "second")) (EBinOp "||" (EBinOp "==" (EVar "op") (ELit (LString "array.new_data"))) (EBinOp "==" (EVar "op") (ELit (LString "array.init_data"))))))) (EApp (EApp (EApp (EApp (EVar "missingUse") (EVar "seen")) (EVar "gaps")) (EVar "origin")) (EApp (EVar "WasmData") (EApp (EVar "bare") (EVar "second"))))) (arm (PCons (PCon "Token" (PVar "second") PWild PWild) PWild) ((GBool (EBinOp "&&" (EApp (EVar "named") (EVar "second")) (EBinOp "==" (EVar "op") (ELit (LString "array.copy")))))) (EApp (EApp (EApp (EApp (EVar "missingUse") (EVar "seen")) (EVar "gaps")) (EVar "origin")) (EApp (EVar "WasmType") (EApp (EVar "bare") (EVar "second"))))) (arm PWild () (EListLit)))) (DoExpr (EApp (EApp (EApp (EApp (EVar "usesGo") (EVar "rest")) (EVar "seen")) (EVar "gaps")) (EBinOp "++" (EApp (EVar "reverseL") (EBinOp "++" (EBinOp "++" (EVar "uncovered") (EVar "absent")) (EVar "extra"))) (EVar "acc"))))))))
+(DFunDef false "usesGo" ((PVar "xs0") (PVar "seen") (PVar "gaps") (PVar "acc0")) (ELetGroup ((lgb "go" (clause ((PList) (PVar "acc")) (EVar "acc")) (clause ((PCons (PCon "Token" (PVar "op") (PVar "covered") (PVar "origin")) (PVar "rest")) (PVar "acc")) (EMatch (EVar "rest") (arm (PList) () (EIf (EBinOp "&&" (EBinOp "||" (EBinOp "==" (EVar "op") (ELit (LString "call"))) (EBinOp "==" (EVar "op") (ELit (LString "return_call")))) (EApp (EVar "not") (EVar "covered"))) (EBinOp "::" (EApp (EApp (EVar "UncheckedText") (ELit (LString "uncovered direct call"))) (EVar "origin")) (EVar "acc")) (EVar "acc"))) (arm (PCons (PCon "Token" (PVar "name") PWild PWild) (PVar "after")) () (EBlock (DoLet false false (PVar "uncovered") (EIf (EBinOp "&&" (EBinOp "||" (EBinOp "==" (EVar "op") (ELit (LString "call"))) (EBinOp "==" (EVar "op") (ELit (LString "return_call")))) (EApp (EVar "not") (EVar "covered"))) (EListLit (EApp (EApp (EVar "UncheckedText") (ELit (LString "uncovered direct call"))) (EVar "origin"))) (EListLit))) (DoLet false false (PVar "absent") (EIf (EApp (EVar "named") (EVar "name")) (EApp (EApp (EVar "flatMap") (EApp (EApp (EApp (EVar "missingUse") (EVar "seen")) (EVar "gaps")) (EVar "origin"))) (EApp (EApp (EVar "useOf") (EVar "op")) (EApp (EVar "bare") (EVar "name")))) (EListLit))) (DoLet false false (PVar "extra") (EMatch (EVar "after") (arm (PCons (PCon "Token" (PVar "second") PWild PWild) PWild) ((GBool (EBinOp "&&" (EApp (EVar "named") (EVar "second")) (EBinOp "||" (EBinOp "==" (EVar "op") (ELit (LString "array.new_data"))) (EBinOp "==" (EVar "op") (ELit (LString "array.init_data"))))))) (EApp (EApp (EApp (EApp (EVar "missingUse") (EVar "seen")) (EVar "gaps")) (EVar "origin")) (EApp (EVar "WasmData") (EApp (EVar "bare") (EVar "second"))))) (arm (PCons (PCon "Token" (PVar "second") PWild PWild) PWild) ((GBool (EBinOp "&&" (EApp (EVar "named") (EVar "second")) (EBinOp "==" (EVar "op") (ELit (LString "array.copy")))))) (EApp (EApp (EApp (EApp (EVar "missingUse") (EVar "seen")) (EVar "gaps")) (EVar "origin")) (EApp (EVar "WasmType") (EApp (EVar "bare") (EVar "second"))))) (arm PWild () (EListLit)))) (DoExpr (EApp (EApp (EVar "go") (EVar "rest")) (EBinOp "++" (EApp (EVar "reverseL") (EBinOp "++" (EBinOp "++" (EVar "uncovered") (EVar "absent")) (EVar "extra"))) (EVar "acc")))))))))) (EApp (EApp (EVar "go") (EVar "xs0")) (EVar "acc0"))))
 (DTypeSig true "namedUses" (TyFun (TyCon "String") (TyApp (TyApp (TyCon "Result") (TyCon "SymbolDefect")) (TyApp (TyCon "List") (TyTuple (TyCon "WasmSymbol") (TyCon "Int"))))))
 (DFunDef false "namedUses" ((PVar "text")) (EApp (EApp (EVar "andThen") (EApp (EVar "rawTokens") (EVar "text"))) (ELam ((PVar "tokens")) (ELet false (PVar "counts") (EApp (EApp (EVar "namedUseCounts") (EVar "tokens")) (EVar "omEmpty")) (EApp (EVar "Ok") (EApp (EApp (EVar "map") (ELam ((PVar "sym")) (ETuple (EVar "sym") (EApp (EApp (EVar "optionOr") (ELit (LInt 0))) (EApp (EApp (EVar "symbolLookup") (EVar "sym")) (EVar "counts")))))) (EApp (EVar "symbolKeys") (EVar "counts"))))))))
 (DTypeSig false "namedUseCounts" (TyFun (TyApp (TyCon "List") (TyCon "Token")) (TyFun (TyApp (TyCon "SymbolIndex") (TyCon "Int")) (TyApp (TyCon "SymbolIndex") (TyCon "Int")))))
@@ -1014,7 +992,7 @@ finishCheckedText policy reg (CallCoverage _ entries) text =
 (DTypeSig false "rawTokens" (TyFun (TyCon "String") (TyApp (TyApp (TyCon "Result") (TyCon "SymbolDefect")) (TyApp (TyCon "List") (TyCon "Token")))))
 (DFunDef false "rawTokens" ((PVar "text")) (EApp (EApp (EMethodRef "andThen") (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EVar "scan") (EVar "text")) (EApp (EVar "stringToUtf8Bytes") (EVar "text"))) (EVar "omEmpty")) (EVar "False")) (EVar "None")) (ELit (LInt 0))) (ELit (LInt 0))) (EListLit)) (EListLit))) (ELam ((PVar "__do_x")) (EMatch (EVar "__do_x") (arm (PTuple (PVar "tokens") PWild) () (EApp (EVar "Ok") (EVar "tokens")))))))
 (DTypeSig false "scan" (TyFun (TyCon "String") (TyFun (TyApp (TyCon "Array") (TyCon "Int")) (TyFun (TyApp (TyCon "OrdMap") (TyCon "Receipt")) (TyFun (TyCon "Bool") (TyFun (TyApp (TyCon "Option") (TyCon "SymbolRegistry")) (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyFun (TyApp (TyCon "List") (TyCon "Token")) (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyApp (TyApp (TyCon "Result") (TyCon "SymbolDefect")) (TyTuple (TyApp (TyCon "List") (TyCon "Token")) (TyCon "String")))))))))))))
-(DFunDef false "scan" ((PVar "text") (PVar "bytes") (PVar "entries") (PVar "markers") (PVar "registry") (PVar "i") (PVar "copied") (PVar "tokens") (PVar "chunks")) (EBlock (DoLet false false (PVar "c") (EApp (EApp (EVar "byte") (EVar "bytes")) (EVar "i"))) (DoExpr (EIf (EBinOp "==" (EVar "c") (EUnOp "-" (ELit (LInt 1)))) (EApp (EVar "Ok") (ETuple (EApp (EVar "reverseL") (EVar "tokens")) (EApp (EApp (EVar "joinWith") (ELit (LString ""))) (EApp (EVar "reverseL") (EBinOp "::" (EApp (EApp (EApp (EVar "stringSliceBytes") (EVar "copied")) (EVar "i")) (EVar "text")) (EVar "chunks")))))) (EIf (EBinOp "==" (EVar "c") (ELit (LInt 30))) (EIf (EBinOp "||" (EBinOp "||" (EApp (EVar "not") (EVar "markers")) (EBinOp "/=" (EApp (EApp (EVar "byte") (EVar "bytes")) (EBinOp "+" (EVar "i") (ELit (LInt 1)))) (ELit (LInt 87)))) (EApp (EVar "not") (EApp (EVar "boundary") (EApp (EApp (EVar "byte") (EVar "bytes")) (EBinOp "-" (EVar "i") (ELit (LInt 1))))))) (EApp (EVar "Err") (EApp (EApp (EVar "UncheckedText") (ELit (LString "malformed or nested receipt"))) (EVar "moduleOrigin"))) (EBlock (DoLet false false (PVar "endKey") (EApp (EApp (EVar "keyEnd") (EVar "bytes")) (EBinOp "+" (EVar "i") (ELit (LInt 2))))) (DoLet false false (PVar "key") (EApp (EApp (EApp (EVar "stringSliceBytes") (EBinOp "+" (EVar "i") (ELit (LInt 2)))) (EVar "endKey")) (EVar "text"))) (DoExpr (EIf (EBinOp "||" (EBinOp "==" (EVar "key") (ELit (LString ""))) (EBinOp "/=" (EApp (EApp (EVar "byte") (EVar "bytes")) (EVar "endKey")) (ELit (LInt 58)))) (EApp (EVar "Err") (EApp (EApp (EVar "UncheckedText") (ELit (LString "malformed receipt key"))) (EVar "moduleOrigin"))) (EMatch (EApp (EApp (EVar "omLookup") (EVar "key")) (EVar "entries")) (arm (PCon "None") () (EApp (EVar "Err") (EApp (EApp (EVar "UncheckedText") (ELit (LString "unknown receipt"))) (EVar "moduleOrigin")))) (arm (PCon "Some" (PVar "receipt")) () (EBlock (DoLet false false (PVar "start") (EBinOp "+" (EVar "endKey") (ELit (LInt 1)))) (DoLet false false (PVar "end") (EBinOp "+" (EVar "start") (EApp (EVar "stringByteLength") (EFieldAccess (EVar "receipt") "text")))) (DoExpr (EIf (EBinOp "||" (EBinOp "||" (EBinOp ">=" (EVar "end") (EApp (EVar "arrayLength") (EVar "bytes"))) (EBinOp "/=" (EApp (EApp (EVar "byte") (EVar "bytes")) (EVar "end")) (ELit (LInt 31)))) (EApp (EVar "not") (EApp (EVar "boundary") (EApp (EApp (EVar "byte") (EVar "bytes")) (EBinOp "+" (EVar "end") (ELit (LInt 1))))))) (EApp (EVar "Err") (EApp (EApp (EVar "UncheckedText") (ELit (LString "changed or unterminated receipt"))) (EFieldAccess (EVar "receipt") "origin"))) (EIf (EBinOp "/=" (EApp (EApp (EApp (EVar "stringSliceBytes") (EVar "start")) (EVar "end")) (EVar "text")) (EFieldAccess (EVar "receipt") "text")) (EApp (EVar "Err") (EApp (EApp (EVar "UncheckedText") (ELit (LString "changed receipt text"))) (EFieldAccess (EVar "receipt") "origin"))) (EMatch (EApp (EApp (EVar "recheck") (EVar "registry")) (EVar "receipt")) (arm (PCon "Err" (PVar "d")) () (EApp (EVar "Err") (EVar "d"))) (arm (PCon "Ok" PWild) () (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EVar "scan") (EVar "text")) (EVar "bytes")) (EVar "entries")) (EVar "markers")) (EVar "registry")) (EBinOp "+" (EVar "end") (ELit (LInt 1)))) (EBinOp "+" (EVar "end") (ELit (LInt 1)))) (EApp (EApp (EApp (EVar "prependChecked") (EFieldAccess (EVar "receipt") "tokens")) (EFieldAccess (EVar "receipt") "origin")) (EVar "tokens"))) (EBinOp "::" (EFieldAccess (EVar "receipt") "text") (EBinOp "::" (EApp (EApp (EApp (EVar "stringSliceBytes") (EVar "copied")) (EVar "i")) (EVar "text")) (EVar "chunks")))))))))))))))) (EIf (EBinOp "==" (EVar "c") (ELit (LInt 31))) (EApp (EVar "Err") (EApp (EApp (EVar "UncheckedText") (ELit (LString "unmatched receipt end"))) (EVar "moduleOrigin"))) (EIf (EApp (EVar "space") (EVar "c")) (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EVar "scan") (EVar "text")) (EVar "bytes")) (EVar "entries")) (EVar "markers")) (EVar "registry")) (EBinOp "+" (EVar "i") (ELit (LInt 1)))) (EVar "copied")) (EVar "tokens")) (EVar "chunks")) (EIf (EBinOp "&&" (EBinOp "==" (EVar "c") (ELit (LInt 59))) (EBinOp "==" (EApp (EApp (EVar "byte") (EVar "bytes")) (EBinOp "+" (EVar "i") (ELit (LInt 1)))) (ELit (LInt 59)))) (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EVar "scan") (EVar "text")) (EVar "bytes")) (EVar "entries")) (EVar "markers")) (EVar "registry")) (EApp (EApp (EVar "lineEnd") (EVar "bytes")) (EVar "i"))) (EVar "copied")) (EVar "tokens")) (EVar "chunks")) (EIf (EBinOp "&&" (EBinOp "==" (EVar "c") (ELit (LInt 40))) (EBinOp "==" (EApp (EApp (EVar "byte") (EVar "bytes")) (EBinOp "+" (EVar "i") (ELit (LInt 1)))) (ELit (LInt 59)))) (EApp (EApp (EMethodRef "andThen") (EApp (EApp (EApp (EVar "commentEnd") (EVar "bytes")) (EBinOp "+" (EVar "i") (ELit (LInt 2)))) (ELit (LInt 1)))) (ELam ((PVar "end")) (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EVar "scan") (EVar "text")) (EVar "bytes")) (EVar "entries")) (EVar "markers")) (EVar "registry")) (EVar "end")) (EVar "copied")) (EVar "tokens")) (EVar "chunks")))) (EIf (EBinOp "==" (EVar "c") (ELit (LInt 34))) (EApp (EApp (EMethodRef "andThen") (EApp (EApp (EVar "quotedEnd") (EVar "bytes")) (EBinOp "+" (EVar "i") (ELit (LInt 1))))) (ELam ((PVar "end")) (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EVar "scan") (EVar "text")) (EVar "bytes")) (EVar "entries")) (EVar "markers")) (EVar "registry")) (EVar "end")) (EVar "copied")) (EBinOp "::" (EApp (EApp (EApp (EVar "Token") (ELit (LString "\"\""))) (EVar "False")) (EVar "moduleOrigin")) (EVar "tokens"))) (EVar "chunks")))) (EIf (EBinOp "==" (EVar "c") (ELit (LInt 59))) (EApp (EVar "Err") (EApp (EApp (EVar "UncheckedText") (ELit (LString "invalid comment delimiter"))) (EVar "moduleOrigin"))) (EBlock (DoLet false false (PVar "end") (EIf (EBinOp "||" (EBinOp "==" (EVar "c") (ELit (LInt 40))) (EBinOp "==" (EVar "c") (ELit (LInt 41)))) (EBinOp "+" (EVar "i") (ELit (LInt 1))) (EApp (EApp (EVar "wordEnd") (EVar "bytes")) (EVar "i")))) (DoExpr (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EVar "scan") (EVar "text")) (EVar "bytes")) (EVar "entries")) (EVar "markers")) (EVar "registry")) (EVar "end")) (EVar "copied")) (EBinOp "::" (EApp (EApp (EApp (EVar "Token") (EApp (EApp (EApp (EVar "stringSliceBytes") (EVar "i")) (EVar "end")) (EVar "text"))) (EVar "False")) (EVar "moduleOrigin")) (EVar "tokens"))) (EVar "chunks")))))))))))))))
+(DFunDef false "scan" ((PVar "text") (PVar "bytes") (PVar "entries") (PVar "markers") (PVar "registry") (PVar "i0") (PVar "cp0") (PVar "tk0") (PVar "ch0")) (ELetGroup ((lgb "go" (clause ((PVar "i") (PVar "copied") (PVar "tokens") (PVar "chunks")) (EBlock (DoLet false false (PVar "c") (EApp (EApp (EVar "byte") (EVar "bytes")) (EVar "i"))) (DoExpr (EIf (EBinOp "==" (EVar "c") (EUnOp "-" (ELit (LInt 1)))) (EApp (EVar "Ok") (ETuple (EApp (EVar "reverseL") (EVar "tokens")) (EApp (EApp (EVar "joinWith") (ELit (LString ""))) (EApp (EVar "reverseL") (EBinOp "::" (EApp (EApp (EApp (EVar "stringSliceBytes") (EVar "copied")) (EVar "i")) (EVar "text")) (EVar "chunks")))))) (EIf (EBinOp "==" (EVar "c") (ELit (LInt 30))) (EIf (EBinOp "||" (EBinOp "||" (EApp (EVar "not") (EVar "markers")) (EBinOp "/=" (EApp (EApp (EVar "byte") (EVar "bytes")) (EBinOp "+" (EVar "i") (ELit (LInt 1)))) (ELit (LInt 87)))) (EApp (EVar "not") (EApp (EVar "boundary") (EApp (EApp (EVar "byte") (EVar "bytes")) (EBinOp "-" (EVar "i") (ELit (LInt 1))))))) (EApp (EVar "Err") (EApp (EApp (EVar "UncheckedText") (ELit (LString "malformed or nested receipt"))) (EVar "moduleOrigin"))) (EBlock (DoLet false false (PVar "endKey") (EApp (EApp (EVar "keyEnd") (EVar "bytes")) (EBinOp "+" (EVar "i") (ELit (LInt 2))))) (DoLet false false (PVar "key") (EApp (EApp (EApp (EVar "stringSliceBytes") (EBinOp "+" (EVar "i") (ELit (LInt 2)))) (EVar "endKey")) (EVar "text"))) (DoExpr (EIf (EBinOp "||" (EBinOp "==" (EVar "key") (ELit (LString ""))) (EBinOp "/=" (EApp (EApp (EVar "byte") (EVar "bytes")) (EVar "endKey")) (ELit (LInt 58)))) (EApp (EVar "Err") (EApp (EApp (EVar "UncheckedText") (ELit (LString "malformed receipt key"))) (EVar "moduleOrigin"))) (EMatch (EApp (EApp (EVar "omLookup") (EVar "key")) (EVar "entries")) (arm (PCon "None") () (EApp (EVar "Err") (EApp (EApp (EVar "UncheckedText") (ELit (LString "unknown receipt"))) (EVar "moduleOrigin")))) (arm (PCon "Some" (PVar "receipt")) () (EBlock (DoLet false false (PVar "start") (EBinOp "+" (EVar "endKey") (ELit (LInt 1)))) (DoLet false false (PVar "end") (EBinOp "+" (EVar "start") (EApp (EVar "stringByteLength") (EFieldAccess (EVar "receipt") "text")))) (DoExpr (EIf (EBinOp "||" (EBinOp "||" (EBinOp ">=" (EVar "end") (EApp (EVar "arrayLength") (EVar "bytes"))) (EBinOp "/=" (EApp (EApp (EVar "byte") (EVar "bytes")) (EVar "end")) (ELit (LInt 31)))) (EApp (EVar "not") (EApp (EVar "boundary") (EApp (EApp (EVar "byte") (EVar "bytes")) (EBinOp "+" (EVar "end") (ELit (LInt 1))))))) (EApp (EVar "Err") (EApp (EApp (EVar "UncheckedText") (ELit (LString "changed or unterminated receipt"))) (EFieldAccess (EVar "receipt") "origin"))) (EIf (EBinOp "/=" (EApp (EApp (EApp (EVar "stringSliceBytes") (EVar "start")) (EVar "end")) (EVar "text")) (EFieldAccess (EVar "receipt") "text")) (EApp (EVar "Err") (EApp (EApp (EVar "UncheckedText") (ELit (LString "changed receipt text"))) (EFieldAccess (EVar "receipt") "origin"))) (EMatch (EApp (EApp (EVar "recheck") (EVar "registry")) (EVar "receipt")) (arm (PCon "Err" (PVar "d")) () (EApp (EVar "Err") (EVar "d"))) (arm (PCon "Ok" PWild) () (EApp (EApp (EApp (EApp (EVar "go") (EBinOp "+" (EVar "end") (ELit (LInt 1)))) (EBinOp "+" (EVar "end") (ELit (LInt 1)))) (EApp (EApp (EApp (EVar "prependChecked") (EFieldAccess (EVar "receipt") "tokens")) (EFieldAccess (EVar "receipt") "origin")) (EVar "tokens"))) (EBinOp "::" (EFieldAccess (EVar "receipt") "text") (EBinOp "::" (EApp (EApp (EApp (EVar "stringSliceBytes") (EVar "copied")) (EVar "i")) (EVar "text")) (EVar "chunks")))))))))))))))) (EIf (EBinOp "==" (EVar "c") (ELit (LInt 31))) (EApp (EVar "Err") (EApp (EApp (EVar "UncheckedText") (ELit (LString "unmatched receipt end"))) (EVar "moduleOrigin"))) (EIf (EApp (EVar "space") (EVar "c")) (EApp (EApp (EApp (EApp (EVar "go") (EBinOp "+" (EVar "i") (ELit (LInt 1)))) (EVar "copied")) (EVar "tokens")) (EVar "chunks")) (EIf (EBinOp "&&" (EBinOp "==" (EVar "c") (ELit (LInt 59))) (EBinOp "==" (EApp (EApp (EVar "byte") (EVar "bytes")) (EBinOp "+" (EVar "i") (ELit (LInt 1)))) (ELit (LInt 59)))) (EApp (EApp (EApp (EApp (EVar "go") (EApp (EApp (EVar "lineEnd") (EVar "bytes")) (EVar "i"))) (EVar "copied")) (EVar "tokens")) (EVar "chunks")) (EIf (EBinOp "&&" (EBinOp "==" (EVar "c") (ELit (LInt 40))) (EBinOp "==" (EApp (EApp (EVar "byte") (EVar "bytes")) (EBinOp "+" (EVar "i") (ELit (LInt 1)))) (ELit (LInt 59)))) (EApp (EApp (EMethodRef "andThen") (EApp (EApp (EApp (EVar "commentEnd") (EVar "bytes")) (EBinOp "+" (EVar "i") (ELit (LInt 2)))) (ELit (LInt 1)))) (ELam ((PVar "end")) (EApp (EApp (EApp (EApp (EVar "go") (EVar "end")) (EVar "copied")) (EVar "tokens")) (EVar "chunks")))) (EIf (EBinOp "==" (EVar "c") (ELit (LInt 34))) (EApp (EApp (EMethodRef "andThen") (EApp (EApp (EVar "quotedEnd") (EVar "bytes")) (EBinOp "+" (EVar "i") (ELit (LInt 1))))) (ELam ((PVar "end")) (EApp (EApp (EApp (EApp (EVar "go") (EVar "end")) (EVar "copied")) (EBinOp "::" (EApp (EApp (EApp (EVar "Token") (ELit (LString "\"\""))) (EVar "False")) (EVar "moduleOrigin")) (EVar "tokens"))) (EVar "chunks")))) (EIf (EBinOp "==" (EVar "c") (ELit (LInt 59))) (EApp (EVar "Err") (EApp (EApp (EVar "UncheckedText") (ELit (LString "invalid comment delimiter"))) (EVar "moduleOrigin"))) (EBlock (DoLet false false (PVar "end") (EIf (EBinOp "||" (EBinOp "==" (EVar "c") (ELit (LInt 40))) (EBinOp "==" (EVar "c") (ELit (LInt 41)))) (EBinOp "+" (EVar "i") (ELit (LInt 1))) (EApp (EApp (EVar "wordEnd") (EVar "bytes")) (EVar "i")))) (DoExpr (EApp (EApp (EApp (EApp (EVar "go") (EVar "end")) (EVar "copied")) (EBinOp "::" (EApp (EApp (EApp (EVar "Token") (EApp (EApp (EApp (EVar "stringSliceBytes") (EVar "i")) (EVar "end")) (EVar "text"))) (EVar "False")) (EVar "moduleOrigin")) (EVar "tokens"))) (EVar "chunks"))))))))))))))))) (EApp (EApp (EApp (EApp (EVar "go") (EVar "i0")) (EVar "cp0")) (EVar "tk0")) (EVar "ch0"))))
 (DTypeSig false "recheck" (TyFun (TyApp (TyCon "Option") (TyCon "SymbolRegistry")) (TyFun (TyCon "Receipt") (TyApp (TyApp (TyCon "Result") (TyCon "SymbolDefect")) (TyCon "Unit")))))
 (DFunDef false "recheck" ((PCon "None") PWild) (EApp (EVar "Ok") (ELit LUnit)))
 (DFunDef false "recheck" ((PCon "Some" (PVar "reg")) (PVar "receipt")) (EApp (EApp (EMethodRef "andThen") (EApp (EApp (EApp (EApp (EVar "checkCall") (EApp (EVar "WasmFunc") (EFieldAccess (EVar "receipt") "name"))) (EFieldAccess (EVar "receipt") "operands")) (EFieldAccess (EVar "receipt") "origin")) (EVar "reg"))) (ELam (PWild) (EApp (EVar "Ok") (ELit LUnit)))))
@@ -1132,8 +1110,7 @@ finishCheckedText policy reg (CallCoverage _ entries) text =
 (DTypeSig false "uses" (TyFun (TyApp (TyCon "List") (TyCon "Token")) (TyFun (TyApp (TyCon "SymbolIndex") (TyCon "Materialized")) (TyFun (TyApp (TyCon "SymbolIndex") (TyCon "Unit")) (TyApp (TyCon "List") (TyCon "SymbolDefect"))))))
 (DFunDef false "uses" ((PVar "tokens") (PVar "seen") (PVar "gaps")) (EApp (EVar "reverseL") (EApp (EApp (EApp (EApp (EVar "usesGo") (EVar "tokens")) (EVar "seen")) (EVar "gaps")) (EListLit))))
 (DTypeSig false "usesGo" (TyFun (TyApp (TyCon "List") (TyCon "Token")) (TyFun (TyApp (TyCon "SymbolIndex") (TyCon "Materialized")) (TyFun (TyApp (TyCon "SymbolIndex") (TyCon "Unit")) (TyFun (TyApp (TyCon "List") (TyCon "SymbolDefect")) (TyApp (TyCon "List") (TyCon "SymbolDefect")))))))
-(DFunDef false "usesGo" ((PList) PWild PWild (PVar "acc")) (EVar "acc"))
-(DFunDef false "usesGo" ((PCons (PCon "Token" (PVar "op") (PVar "covered") (PVar "origin")) (PVar "rest")) (PVar "seen") (PVar "gaps") (PVar "acc")) (EMatch (EVar "rest") (arm (PList) () (EIf (EBinOp "&&" (EBinOp "||" (EBinOp "==" (EVar "op") (ELit (LString "call"))) (EBinOp "==" (EVar "op") (ELit (LString "return_call")))) (EApp (EVar "not") (EVar "covered"))) (EBinOp "::" (EApp (EApp (EVar "UncheckedText") (ELit (LString "uncovered direct call"))) (EVar "origin")) (EVar "acc")) (EVar "acc"))) (arm (PCons (PCon "Token" (PVar "name") PWild PWild) (PVar "after")) () (EBlock (DoLet false false (PVar "uncovered") (EIf (EBinOp "&&" (EBinOp "||" (EBinOp "==" (EVar "op") (ELit (LString "call"))) (EBinOp "==" (EVar "op") (ELit (LString "return_call")))) (EApp (EVar "not") (EVar "covered"))) (EListLit (EApp (EApp (EVar "UncheckedText") (ELit (LString "uncovered direct call"))) (EVar "origin"))) (EListLit))) (DoLet false false (PVar "absent") (EIf (EApp (EVar "named") (EVar "name")) (EApp (EApp (EDictApp "flatMap") (EApp (EApp (EApp (EVar "missingUse") (EVar "seen")) (EVar "gaps")) (EVar "origin"))) (EApp (EApp (EVar "useOf") (EVar "op")) (EApp (EVar "bare") (EVar "name")))) (EListLit))) (DoLet false false (PVar "extra") (EMatch (EVar "after") (arm (PCons (PCon "Token" (PVar "second") PWild PWild) PWild) ((GBool (EBinOp "&&" (EApp (EVar "named") (EVar "second")) (EBinOp "||" (EBinOp "==" (EVar "op") (ELit (LString "array.new_data"))) (EBinOp "==" (EVar "op") (ELit (LString "array.init_data"))))))) (EApp (EApp (EApp (EApp (EVar "missingUse") (EVar "seen")) (EVar "gaps")) (EVar "origin")) (EApp (EVar "WasmData") (EApp (EVar "bare") (EVar "second"))))) (arm (PCons (PCon "Token" (PVar "second") PWild PWild) PWild) ((GBool (EBinOp "&&" (EApp (EVar "named") (EVar "second")) (EBinOp "==" (EVar "op") (ELit (LString "array.copy")))))) (EApp (EApp (EApp (EApp (EVar "missingUse") (EVar "seen")) (EVar "gaps")) (EVar "origin")) (EApp (EVar "WasmType") (EApp (EVar "bare") (EVar "second"))))) (arm PWild () (EListLit)))) (DoExpr (EApp (EApp (EApp (EApp (EVar "usesGo") (EVar "rest")) (EVar "seen")) (EVar "gaps")) (EBinOp "++" (EApp (EVar "reverseL") (EBinOp "++" (EBinOp "++" (EVar "uncovered") (EVar "absent")) (EVar "extra"))) (EVar "acc"))))))))
+(DFunDef false "usesGo" ((PVar "xs0") (PVar "seen") (PVar "gaps") (PVar "acc0")) (ELetGroup ((lgb "go" (clause ((PList) (PVar "acc")) (EVar "acc")) (clause ((PCons (PCon "Token" (PVar "op") (PVar "covered") (PVar "origin")) (PVar "rest")) (PVar "acc")) (EMatch (EVar "rest") (arm (PList) () (EIf (EBinOp "&&" (EBinOp "||" (EBinOp "==" (EVar "op") (ELit (LString "call"))) (EBinOp "==" (EVar "op") (ELit (LString "return_call")))) (EApp (EVar "not") (EVar "covered"))) (EBinOp "::" (EApp (EApp (EVar "UncheckedText") (ELit (LString "uncovered direct call"))) (EVar "origin")) (EVar "acc")) (EVar "acc"))) (arm (PCons (PCon "Token" (PVar "name") PWild PWild) (PVar "after")) () (EBlock (DoLet false false (PVar "uncovered") (EIf (EBinOp "&&" (EBinOp "||" (EBinOp "==" (EVar "op") (ELit (LString "call"))) (EBinOp "==" (EVar "op") (ELit (LString "return_call")))) (EApp (EVar "not") (EVar "covered"))) (EListLit (EApp (EApp (EVar "UncheckedText") (ELit (LString "uncovered direct call"))) (EVar "origin"))) (EListLit))) (DoLet false false (PVar "absent") (EIf (EApp (EVar "named") (EVar "name")) (EApp (EApp (EDictApp "flatMap") (EApp (EApp (EApp (EVar "missingUse") (EVar "seen")) (EVar "gaps")) (EVar "origin"))) (EApp (EApp (EVar "useOf") (EVar "op")) (EApp (EVar "bare") (EVar "name")))) (EListLit))) (DoLet false false (PVar "extra") (EMatch (EVar "after") (arm (PCons (PCon "Token" (PVar "second") PWild PWild) PWild) ((GBool (EBinOp "&&" (EApp (EVar "named") (EVar "second")) (EBinOp "||" (EBinOp "==" (EVar "op") (ELit (LString "array.new_data"))) (EBinOp "==" (EVar "op") (ELit (LString "array.init_data"))))))) (EApp (EApp (EApp (EApp (EVar "missingUse") (EVar "seen")) (EVar "gaps")) (EVar "origin")) (EApp (EVar "WasmData") (EApp (EVar "bare") (EVar "second"))))) (arm (PCons (PCon "Token" (PVar "second") PWild PWild) PWild) ((GBool (EBinOp "&&" (EApp (EVar "named") (EVar "second")) (EBinOp "==" (EVar "op") (ELit (LString "array.copy")))))) (EApp (EApp (EApp (EApp (EVar "missingUse") (EVar "seen")) (EVar "gaps")) (EVar "origin")) (EApp (EVar "WasmType") (EApp (EVar "bare") (EVar "second"))))) (arm PWild () (EListLit)))) (DoExpr (EApp (EApp (EVar "go") (EVar "rest")) (EBinOp "++" (EApp (EVar "reverseL") (EBinOp "++" (EBinOp "++" (EVar "uncovered") (EVar "absent")) (EVar "extra"))) (EVar "acc")))))))))) (EApp (EApp (EVar "go") (EVar "xs0")) (EVar "acc0"))))
 (DTypeSig true "namedUses" (TyFun (TyCon "String") (TyApp (TyApp (TyCon "Result") (TyCon "SymbolDefect")) (TyApp (TyCon "List") (TyTuple (TyCon "WasmSymbol") (TyCon "Int"))))))
 (DFunDef false "namedUses" ((PVar "text")) (EApp (EApp (EMethodRef "andThen") (EApp (EVar "rawTokens") (EVar "text"))) (ELam ((PVar "tokens")) (ELet false (PVar "counts") (EApp (EApp (EVar "namedUseCounts") (EVar "tokens")) (EVar "omEmpty")) (EApp (EVar "Ok") (EApp (EApp (EMethodRef "map") (ELam ((PVar "sym")) (ETuple (EVar "sym") (EApp (EApp (EVar "optionOr") (ELit (LInt 0))) (EApp (EApp (EVar "symbolLookup") (EVar "sym")) (EVar "counts")))))) (EApp (EVar "symbolKeys") (EVar "counts"))))))))
 (DTypeSig false "namedUseCounts" (TyFun (TyApp (TyCon "List") (TyCon "Token")) (TyFun (TyApp (TyCon "SymbolIndex") (TyCon "Int")) (TyApp (TyCon "SymbolIndex") (TyCon "Int")))))

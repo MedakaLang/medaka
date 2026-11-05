@@ -1,5 +1,5 @@
 # META
-source_lines=274
+source_lines=276
 stages=DESUGAR,MARK
 # SOURCE
 import support.symbol_encoding.{encodePair}
@@ -192,12 +192,14 @@ closure : HashMap String (List String) ->
   HashMap String Unit ->
   List String ->
   Unit
-closure _ _ [] = ()
-closure graph seen (w :: work)
-  | has w seen = closure graph seen work
-  | otherwise =
-    setInPlace w () seen
-    closure graph seen (findWithDefault [] w graph ++ work)
+closure graph seen xs0 = go xs0
+  where
+    go [] = ()
+    go (w :: work)
+      | has w seen = go work
+      | otherwise =
+        setInPlace w () seen
+        go (findWithDefault [] w graph ++ work)
 
 -- ── structural reference collection ────────────────────────────────────────
 -- Every name a body can turn into a call/global reference at emit time.  Binder
@@ -306,8 +308,7 @@ refsImplBody (CImplDefault _ _ _ _ _ _ body) = refsE body
 (DTypeSig false "addEdges" (TyFun (TyApp (TyApp (TyCon "HashMap") (TyCon "String")) (TyCon "Unit")) (TyFun (TyApp (TyApp (TyCon "HashMap") (TyCon "String")) (TyApp (TyCon "List") (TyCon "String"))) (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyCon "Unit"))))))
 (DFunDef false "addEdges" ((PVar "defined") (PVar "g") (PVar "key") (PVar "refs")) (EApp (EApp (EApp (EVar "setInPlace") (EVar "key")) (EBinOp "++" (EApp (EApp (EVar "map") (EApp (EVar "canonKey") (EVar "defined"))) (EVar "refs")) (EApp (EApp (EApp (EVar "findWithDefault") (EListLit)) (EVar "key")) (EVar "g")))) (EVar "g")))
 (DTypeSig false "closure" (TyFun (TyApp (TyApp (TyCon "HashMap") (TyCon "String")) (TyApp (TyCon "List") (TyCon "String"))) (TyFun (TyApp (TyApp (TyCon "HashMap") (TyCon "String")) (TyCon "Unit")) (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyCon "Unit")))))
-(DFunDef false "closure" (PWild PWild (PList)) (ELit LUnit))
-(DFunDef false "closure" ((PVar "graph") (PVar "seen") (PCons (PVar "w") (PVar "work"))) (EIf (EApp (EApp (EVar "has") (EVar "w")) (EVar "seen")) (EApp (EApp (EApp (EVar "closure") (EVar "graph")) (EVar "seen")) (EVar "work")) (EIf (EVar "otherwise") (EBlock (DoExpr (EApp (EApp (EApp (EVar "setInPlace") (EVar "w")) (ELit LUnit)) (EVar "seen"))) (DoExpr (EApp (EApp (EApp (EVar "closure") (EVar "graph")) (EVar "seen")) (EBinOp "++" (EApp (EApp (EApp (EVar "findWithDefault") (EListLit)) (EVar "w")) (EVar "graph")) (EVar "work"))))) (EApp (EVar "__fallthrough__") (ELit LUnit)))))
+(DFunDef false "closure" ((PVar "graph") (PVar "seen") (PVar "xs0")) (ELetGroup ((lgb "go" (clause ((PList)) (ELit LUnit)) (clause ((PCons (PVar "w") (PVar "work"))) (EIf (EApp (EApp (EVar "has") (EVar "w")) (EVar "seen")) (EApp (EVar "go") (EVar "work")) (EIf (EVar "otherwise") (EBlock (DoExpr (EApp (EApp (EApp (EVar "setInPlace") (EVar "w")) (ELit LUnit)) (EVar "seen"))) (DoExpr (EApp (EVar "go") (EBinOp "++" (EApp (EApp (EApp (EVar "findWithDefault") (EListLit)) (EVar "w")) (EVar "graph")) (EVar "work"))))) (EApp (EVar "__fallthrough__") (ELit LUnit))))))) (EApp (EVar "go") (EVar "xs0"))))
 (DTypeSig false "refsE" (TyFun (TyCon "CExpr") (TyApp (TyCon "List") (TyCon "String"))))
 (DFunDef false "refsE" ((PCon "CLit" PWild)) (EListLit))
 (DFunDef false "refsE" ((PCon "CVar" (PVar "x") PWild)) (EListLit (EVar "x")))
@@ -395,8 +396,7 @@ refsImplBody (CImplDefault _ _ _ _ _ _ body) = refsE body
 (DTypeSig false "addEdges" (TyFun (TyApp (TyApp (TyCon "HashMap") (TyCon "String")) (TyCon "Unit")) (TyFun (TyApp (TyApp (TyCon "HashMap") (TyCon "String")) (TyApp (TyCon "List") (TyCon "String"))) (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyCon "Unit"))))))
 (DFunDef false "addEdges" ((PVar "defined") (PVar "g") (PVar "key") (PVar "refs")) (EApp (EApp (EApp (EVar "setInPlace") (EVar "key")) (EBinOp "++" (EApp (EApp (EMethodRef "map") (EApp (EVar "canonKey") (EVar "defined"))) (EVar "refs")) (EApp (EApp (EApp (EVar "findWithDefault") (EListLit)) (EVar "key")) (EVar "g")))) (EVar "g")))
 (DTypeSig false "closure" (TyFun (TyApp (TyApp (TyCon "HashMap") (TyCon "String")) (TyApp (TyCon "List") (TyCon "String"))) (TyFun (TyApp (TyApp (TyCon "HashMap") (TyCon "String")) (TyCon "Unit")) (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyCon "Unit")))))
-(DFunDef false "closure" (PWild PWild (PList)) (ELit LUnit))
-(DFunDef false "closure" ((PVar "graph") (PVar "seen") (PCons (PVar "w") (PVar "work"))) (EIf (EApp (EApp (EVar "has") (EVar "w")) (EVar "seen")) (EApp (EApp (EApp (EVar "closure") (EVar "graph")) (EVar "seen")) (EVar "work")) (EIf (EVar "otherwise") (EBlock (DoExpr (EApp (EApp (EApp (EVar "setInPlace") (EVar "w")) (ELit LUnit)) (EVar "seen"))) (DoExpr (EApp (EApp (EApp (EVar "closure") (EVar "graph")) (EVar "seen")) (EBinOp "++" (EApp (EApp (EApp (EVar "findWithDefault") (EListLit)) (EVar "w")) (EVar "graph")) (EVar "work"))))) (EApp (EVar "__fallthrough__") (ELit LUnit)))))
+(DFunDef false "closure" ((PVar "graph") (PVar "seen") (PVar "xs0")) (ELetGroup ((lgb "go" (clause ((PList)) (ELit LUnit)) (clause ((PCons (PVar "w") (PVar "work"))) (EIf (EApp (EApp (EVar "has") (EVar "w")) (EVar "seen")) (EApp (EVar "go") (EVar "work")) (EIf (EVar "otherwise") (EBlock (DoExpr (EApp (EApp (EApp (EVar "setInPlace") (EVar "w")) (ELit LUnit)) (EVar "seen"))) (DoExpr (EApp (EVar "go") (EBinOp "++" (EApp (EApp (EApp (EVar "findWithDefault") (EListLit)) (EVar "w")) (EVar "graph")) (EVar "work"))))) (EApp (EVar "__fallthrough__") (ELit LUnit))))))) (EApp (EVar "go") (EVar "xs0"))))
 (DTypeSig false "refsE" (TyFun (TyCon "CExpr") (TyApp (TyCon "List") (TyCon "String"))))
 (DFunDef false "refsE" ((PCon "CLit" PWild)) (EListLit))
 (DFunDef false "refsE" ((PCon "CVar" (PVar "x") PWild)) (EListLit (EVar "x")))

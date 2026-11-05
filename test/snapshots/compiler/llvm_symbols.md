@@ -1,5 +1,5 @@
 # META
-source_lines=371
+source_lines=372
 stages=DESUGAR,MARK
 # SOURCE
 -- The physical symbols of one LLVM module under emission: each function and
@@ -202,13 +202,14 @@ judgeWaiting : String ->
   List Waiting ->
   SymbolRegistry ->
   Result SymbolDefect SymbolRegistry
-judgeWaiting _ _ [] reg = Ok reg
-judgeWaiting name entry ((Waiting (Some shape) at) :: rest) reg =
-  match callDefect name shape at entry
-    Some d => Err d
-    None => judgeWaiting name entry rest reg
-judgeWaiting name entry ((Waiting None _) :: rest) reg =
-  judgeWaiting name entry rest reg
+judgeWaiting name entry xs0 reg = go xs0
+  where
+    go [] = Ok reg
+    go ((Waiting (Some shape) at) :: rest) =
+      match callDefect name shape at entry
+        Some d => Err d
+        None => go rest
+    go ((Waiting None _) :: rest) = go rest
 
 callDefect : String -> CallShape -> SymbolOrigin -> Entry -> Option SymbolDefect
 callDefect name (shape@(CallShape ret operands)) at (Entry _ _ proto declared) =
@@ -429,9 +430,7 @@ registryScope reg = reg.scope
 (DTypeSig false "settle" (TyFun (TyCon "String") (TyFun (TyCon "Entry") (TyFun (TyCon "SymbolRegistry") (TyApp (TyApp (TyCon "Result") (TyCon "SymbolDefect")) (TyCon "SymbolRegistry"))))))
 (DFunDef false "settle" ((PVar "name") (PVar "entry") (PVar "reg")) (EBlock (DoLet false false (PVar "reg2") (ERecordUpdate (EVar "reg") ((fa "entries" (EApp (EApp (EApp (EVar "omInsert") (EVar "name")) (EVar "entry")) (EFieldAccess (EVar "reg") "entries"))) (fa "waiting" (EApp (EApp (EVar "omDelete") (EVar "name")) (EFieldAccess (EVar "reg") "waiting")))))) (DoExpr (EMatch (EApp (EApp (EVar "omLookup") (EVar "name")) (EFieldAccess (EVar "reg") "waiting")) (arm (PCon "None") () (EApp (EVar "Ok") (EVar "reg2"))) (arm (PCon "Some" (PVar "calls")) () (EApp (EApp (EApp (EApp (EVar "judgeWaiting") (EVar "name")) (EVar "entry")) (EApp (EVar "reverseL") (EVar "calls"))) (EVar "reg2")))))))
 (DTypeSig false "judgeWaiting" (TyFun (TyCon "String") (TyFun (TyCon "Entry") (TyFun (TyApp (TyCon "List") (TyCon "Waiting")) (TyFun (TyCon "SymbolRegistry") (TyApp (TyApp (TyCon "Result") (TyCon "SymbolDefect")) (TyCon "SymbolRegistry")))))))
-(DFunDef false "judgeWaiting" (PWild PWild (PList) (PVar "reg")) (EApp (EVar "Ok") (EVar "reg")))
-(DFunDef false "judgeWaiting" ((PVar "name") (PVar "entry") (PCons (PCon "Waiting" (PCon "Some" (PVar "shape")) (PVar "at")) (PVar "rest")) (PVar "reg")) (EMatch (EApp (EApp (EApp (EApp (EVar "callDefect") (EVar "name")) (EVar "shape")) (EVar "at")) (EVar "entry")) (arm (PCon "Some" (PVar "d")) () (EApp (EVar "Err") (EVar "d"))) (arm (PCon "None") () (EApp (EApp (EApp (EApp (EVar "judgeWaiting") (EVar "name")) (EVar "entry")) (EVar "rest")) (EVar "reg")))))
-(DFunDef false "judgeWaiting" ((PVar "name") (PVar "entry") (PCons (PCon "Waiting" (PCon "None") PWild) (PVar "rest")) (PVar "reg")) (EApp (EApp (EApp (EApp (EVar "judgeWaiting") (EVar "name")) (EVar "entry")) (EVar "rest")) (EVar "reg")))
+(DFunDef false "judgeWaiting" ((PVar "name") (PVar "entry") (PVar "xs0") (PVar "reg")) (ELetGroup ((lgb "go" (clause ((PList)) (EApp (EVar "Ok") (EVar "reg"))) (clause ((PCons (PCon "Waiting" (PCon "Some" (PVar "shape")) (PVar "at")) (PVar "rest"))) (EMatch (EApp (EApp (EApp (EApp (EVar "callDefect") (EVar "name")) (EVar "shape")) (EVar "at")) (EVar "entry")) (arm (PCon "Some" (PVar "d")) () (EApp (EVar "Err") (EVar "d"))) (arm (PCon "None") () (EApp (EVar "go") (EVar "rest"))))) (clause ((PCons (PCon "Waiting" (PCon "None") PWild) (PVar "rest"))) (EApp (EVar "go") (EVar "rest"))))) (EApp (EVar "go") (EVar "xs0"))))
 (DTypeSig false "callDefect" (TyFun (TyCon "String") (TyFun (TyCon "CallShape") (TyFun (TyCon "SymbolOrigin") (TyFun (TyCon "Entry") (TyApp (TyCon "Option") (TyCon "SymbolDefect")))))))
 (DFunDef false "callDefect" ((PVar "name") (PAs "shape" (PCon "CallShape" (PVar "ret") (PVar "operands"))) (PVar "at") (PCon "Entry" PWild PWild (PVar "proto") (PVar "declared"))) (EMatch (EVar "proto") (arm (PCon "FuncProto" (PVar "r") (PVar "ps") PWild) () (EIf (EBinOp "&&" (EBinOp "==" (EVar "r") (EVar "ret")) (EBinOp "==" (EApp (EApp (EVar "map") (EVar "paramType")) (EVar "ps")) (EVar "operands"))) (EVar "None") (EApp (EVar "Some") (EApp (EApp (EApp (EApp (EApp (EVar "ShapeMismatch") (EVar "name")) (EVar "shape")) (EVar "proto")) (EVar "at")) (EVar "declared"))))) (arm (PCon "DataProto" PWild) () (EApp (EVar "Some") (EApp (EApp (EApp (EApp (EApp (EVar "ShapeMismatch") (EVar "name")) (EVar "shape")) (EVar "proto")) (EVar "at")) (EVar "declared"))))))
 (DTypeSig true "checkCall" (TyFun (TyCon "LlvmSymbol") (TyFun (TyCon "CallShape") (TyFun (TyCon "SymbolOrigin") (TyFun (TyCon "SymbolRegistry") (TyApp (TyApp (TyCon "Result") (TyCon "SymbolDefect")) (TyCon "SymbolRegistry")))))))
@@ -544,9 +543,7 @@ registryScope reg = reg.scope
 (DTypeSig false "settle" (TyFun (TyCon "String") (TyFun (TyCon "Entry") (TyFun (TyCon "SymbolRegistry") (TyApp (TyApp (TyCon "Result") (TyCon "SymbolDefect")) (TyCon "SymbolRegistry"))))))
 (DFunDef false "settle" ((PVar "name") (PVar "entry") (PVar "reg")) (EBlock (DoLet false false (PVar "reg2") (ERecordUpdate (EVar "reg") ((fa "entries" (EApp (EApp (EApp (EVar "omInsert") (EVar "name")) (EVar "entry")) (EFieldAccess (EVar "reg") "entries"))) (fa "waiting" (EApp (EApp (EVar "omDelete") (EVar "name")) (EFieldAccess (EVar "reg") "waiting")))))) (DoExpr (EMatch (EApp (EApp (EVar "omLookup") (EVar "name")) (EFieldAccess (EVar "reg") "waiting")) (arm (PCon "None") () (EApp (EVar "Ok") (EVar "reg2"))) (arm (PCon "Some" (PVar "calls")) () (EApp (EApp (EApp (EApp (EVar "judgeWaiting") (EVar "name")) (EVar "entry")) (EApp (EVar "reverseL") (EVar "calls"))) (EVar "reg2")))))))
 (DTypeSig false "judgeWaiting" (TyFun (TyCon "String") (TyFun (TyCon "Entry") (TyFun (TyApp (TyCon "List") (TyCon "Waiting")) (TyFun (TyCon "SymbolRegistry") (TyApp (TyApp (TyCon "Result") (TyCon "SymbolDefect")) (TyCon "SymbolRegistry")))))))
-(DFunDef false "judgeWaiting" (PWild PWild (PList) (PVar "reg")) (EApp (EVar "Ok") (EVar "reg")))
-(DFunDef false "judgeWaiting" ((PVar "name") (PVar "entry") (PCons (PCon "Waiting" (PCon "Some" (PVar "shape")) (PVar "at")) (PVar "rest")) (PVar "reg")) (EMatch (EApp (EApp (EApp (EApp (EVar "callDefect") (EVar "name")) (EVar "shape")) (EVar "at")) (EVar "entry")) (arm (PCon "Some" (PVar "d")) () (EApp (EVar "Err") (EVar "d"))) (arm (PCon "None") () (EApp (EApp (EApp (EApp (EVar "judgeWaiting") (EVar "name")) (EVar "entry")) (EVar "rest")) (EVar "reg")))))
-(DFunDef false "judgeWaiting" ((PVar "name") (PVar "entry") (PCons (PCon "Waiting" (PCon "None") PWild) (PVar "rest")) (PVar "reg")) (EApp (EApp (EApp (EApp (EVar "judgeWaiting") (EVar "name")) (EVar "entry")) (EVar "rest")) (EVar "reg")))
+(DFunDef false "judgeWaiting" ((PVar "name") (PVar "entry") (PVar "xs0") (PVar "reg")) (ELetGroup ((lgb "go" (clause ((PList)) (EApp (EVar "Ok") (EVar "reg"))) (clause ((PCons (PCon "Waiting" (PCon "Some" (PVar "shape")) (PVar "at")) (PVar "rest"))) (EMatch (EApp (EApp (EApp (EApp (EVar "callDefect") (EVar "name")) (EVar "shape")) (EVar "at")) (EVar "entry")) (arm (PCon "Some" (PVar "d")) () (EApp (EVar "Err") (EVar "d"))) (arm (PCon "None") () (EApp (EVar "go") (EVar "rest"))))) (clause ((PCons (PCon "Waiting" (PCon "None") PWild) (PVar "rest"))) (EApp (EVar "go") (EVar "rest"))))) (EApp (EVar "go") (EVar "xs0"))))
 (DTypeSig false "callDefect" (TyFun (TyCon "String") (TyFun (TyCon "CallShape") (TyFun (TyCon "SymbolOrigin") (TyFun (TyCon "Entry") (TyApp (TyCon "Option") (TyCon "SymbolDefect")))))))
 (DFunDef false "callDefect" ((PVar "name") (PAs "shape" (PCon "CallShape" (PVar "ret") (PVar "operands"))) (PVar "at") (PCon "Entry" PWild PWild (PVar "proto") (PVar "declared"))) (EMatch (EVar "proto") (arm (PCon "FuncProto" (PVar "r") (PVar "ps") PWild) () (EIf (EBinOp "&&" (EBinOp "==" (EVar "r") (EVar "ret")) (EBinOp "==" (EApp (EApp (EMethodRef "map") (EVar "paramType")) (EVar "ps")) (EVar "operands"))) (EVar "None") (EApp (EVar "Some") (EApp (EApp (EApp (EApp (EApp (EVar "ShapeMismatch") (EVar "name")) (EVar "shape")) (EVar "proto")) (EVar "at")) (EVar "declared"))))) (arm (PCon "DataProto" PWild) () (EApp (EVar "Some") (EApp (EApp (EApp (EApp (EApp (EVar "ShapeMismatch") (EVar "name")) (EVar "shape")) (EVar "proto")) (EVar "at")) (EVar "declared"))))))
 (DTypeSig true "checkCall" (TyFun (TyCon "LlvmSymbol") (TyFun (TyCon "CallShape") (TyFun (TyCon "SymbolOrigin") (TyFun (TyCon "SymbolRegistry") (TyApp (TyApp (TyCon "Result") (TyCon "SymbolDefect")) (TyCon "SymbolRegistry")))))))

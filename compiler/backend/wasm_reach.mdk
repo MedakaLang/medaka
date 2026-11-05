@@ -188,12 +188,14 @@ closure : HashMap String (List String) ->
   HashMap String Unit ->
   List String ->
   Unit
-closure _ _ [] = ()
-closure graph seen (w :: work)
-  | has w seen = closure graph seen work
-  | otherwise =
-    setInPlace w () seen
-    closure graph seen (findWithDefault [] w graph ++ work)
+closure graph seen xs0 = go xs0
+  where
+    go [] = ()
+    go (w :: work)
+      | has w seen = go work
+      | otherwise =
+        setInPlace w () seen
+        go (findWithDefault [] w graph ++ work)
 
 -- ── structural reference collection ────────────────────────────────────────
 -- Every name a body can turn into a call/global reference at emit time.  Binder

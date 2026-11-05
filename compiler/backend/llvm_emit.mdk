@@ -1453,26 +1453,18 @@ narrowImplsByArity _ _ impls siteArity =
 -- internal error — the typechecker only stamps words it selected an instance for).
 implForSite : Emit -> String -> String -> String -> Int -> Option CImplEntry
 implForSite e method iface tag siteArity =
-  findByTagArity
-    e
-    method
-    tag
-    siteArity
-    (narrowImplsByIface iface (implsOf e method))
+  findByTagArity tag siteArity (narrowImplsByIface iface (implsOf e method))
 
-findByTagArity : Emit ->
-  String ->
-  String ->
-  Int ->
-  List CImplEntry ->
-  Option CImplEntry
-findByTagArity _ _ _ _ [] = None
-findByTagArity e method tag siteArity (entry :: rest) =
-  if implEntryAnswers tag entry
-    && implEntryDeclaredArity entry == siteArity then
-    Some entry
-  else
-    findByTagArity e method tag siteArity rest
+findByTagArity : String -> Int -> List CImplEntry -> Option CImplEntry
+findByTagArity tag siteArity xs0 = go xs0
+  where
+    go [] = None
+    go (entry :: rest) =
+      if implEntryAnswers tag entry
+        && implEntryDeclaredArity entry == siteArity then
+        Some entry
+      else
+        go rest
 
 -- does [entry] answer to the route word [word]?  A word names exactly one instance.
 implEntryAnswers : String -> CImplEntry -> Bool
@@ -3313,25 +3305,27 @@ emitBitExtern : Emit ->
   String ->
   List CExpr ->
   (String, LTy)
-emitBitExtern e env "bitAnd" args = emitBitBin e env "mdk_bit_and" args
-emitBitExtern e env "bitOr" args = emitBitBin e env "mdk_bit_or" args
-emitBitExtern e env "bitXor" args = emitBitBin e env "mdk_bit_xor" args
-emitBitExtern e env "shiftLeft" args = emitBitBin e env "mdk_shift_left" args
-emitBitExtern e env "shiftRight" args = emitBitBin e env "mdk_shift_right" args
-emitBitExtern e env "intBitAnd" args = emitBitExtern e env "bitAnd" args
-emitBitExtern e env "intBitOr" args = emitBitExtern e env "bitOr" args
-emitBitExtern e env "intBitXor" args = emitBitExtern e env "bitXor" args
-emitBitExtern e env "intShiftLeft" args = emitBitExtern e env "shiftLeft" args
-emitBitExtern e env "intShiftRight" args = emitBitExtern e env "shiftRight" args
-emitBitExtern e env "intBitNot" args = emitBitExtern e env "bitNot" args
-emitBitExtern e env "bitNot" args = match emitArgs e env args
-  [a] =>
-    let x = untagInt e a
-    let r = freshReg e
-    emit e (rtLine e r "i64" "mdk_bit_not" (i64Ops [x]))
-    (tagInt e r, LTInt)
-  _ => panic "llvm: bitNot takes one argument"
-emitBitExtern e _ name _ = gapE e ("unsupported bit extern " ++ name)
+emitBitExtern e env name0 args = go name0
+  where
+    go "bitAnd" = emitBitBin e env "mdk_bit_and" args
+    go "bitOr" = emitBitBin e env "mdk_bit_or" args
+    go "bitXor" = emitBitBin e env "mdk_bit_xor" args
+    go "shiftLeft" = emitBitBin e env "mdk_shift_left" args
+    go "shiftRight" = emitBitBin e env "mdk_shift_right" args
+    go "intBitAnd" = go "bitAnd"
+    go "intBitOr" = go "bitOr"
+    go "intBitXor" = go "bitXor"
+    go "intShiftLeft" = go "shiftLeft"
+    go "intShiftRight" = go "shiftRight"
+    go "intBitNot" = go "bitNot"
+    go "bitNot" = match emitArgs e env args
+      [a] =>
+        let x = untagInt e a
+        let r = freshReg e
+        emit e (rtLine e r "i64" "mdk_bit_not" (i64Ops [x]))
+        (tagInt e r, LTInt)
+      _ => panic "llvm: bitNot takes one argument"
+    go name = gapE e ("unsupported bit extern " ++ name)
 
 -- Fixed-width integer conversions (PURE).  A `U8`/`U16`/`U32` is Int's tagged
 -- word, so `uNToInt` is the identity on it, and `uNTruncate` keeps the low `n`
@@ -3567,6 +3561,8 @@ emitRawArgs : Emit ->
   List RawKind ->
   List CExpr ->
   List (String, String)
+-- Bound: list built in tail position modulo cons: a where-local go loses the constant-stack loop until the lambda-lift pass (#4878); convert then.
+-- lint-disable-next-line rule-threaded-invariant
 emitRawArgs e env (k :: ks) (a :: rest) =
   let op = emitRawAs e env k a
   (rawKindTy k, op) :: emitRawArgs e env ks rest
@@ -3614,11 +3610,13 @@ emitRawIf e env k c t f =
   r
 
 emitRawBlock : Emit -> OrdMap (String, LTy) -> RawKind -> List CStmt -> String
-emitRawBlock e env k [CSExpr ex] = emitRawAs e env k ex
-emitRawBlock e env k (s :: rest) = match rest
-  [] => rawOfWord e k (fst (emitBlockLast e env s))
-  _ => emitRawBlock e (emitBlockLead e env s rest) k rest
-emitRawBlock e _ k [] = rawOfWord e k (fst (gapE e "empty block"))
+emitRawBlock e env0 k xs0 = go env0 xs0
+  where
+    go env [CSExpr ex] = emitRawAs e env k ex
+    go env (s :: rest) = match rest
+      [] => rawOfWord e k (fst (emitBlockLast e env s))
+      _ => go (emitBlockLead e env s rest) rest
+    go _ [] = rawOfWord e k (fst (gapE e "empty block"))
 
 -- a word as a value of kind `k`: a U64 cell's payload, a U32 word's `i32`.
 rawOfWord : Emit -> RawKind -> String -> String
@@ -3657,23 +3655,25 @@ emitRawWorkerCallW e env sym w args resTy =
 -- U64, and a saturated call of a worker with a raw result.  A false negative only
 -- keeps the boxed path.
 staticIsU64 : Emit -> OrdMap (String, LTy) -> CExpr -> Bool
-staticIsU64 _ _ (CLit (LU64 _ _)) = True
-staticIsU64 _ env (CVar x _) = match omLookup x env
-  Some (_, LTU64U) => True
-  Some (_, LTU64) => True
-  _ => False
-staticIsU64 _ _ (CBinPrim op _ _ tag _) = isU64Head tag && isArithOp op
-staticIsU64 e env (CIf _ t f) = staticIsU64 e env t && staticIsU64 e env f
-staticIsU64 e env ex = match flattenApp ex []
-  (CVar f _, args) =>
-    if isLocal env f then
-      False
-    else if isU64RawKernel (runtimeName e f) (lengthS args) then
-      True
-    else match u64KernelAlias e f args
-      Some k => isU64RawKernel k (lengthS args)
-      None => isSome (rawWorkerReturning e f (lengthS args) RawU64)
-  _ => False
+staticIsU64 e env ex0 = go ex0
+  where
+    go (CLit (LU64 _ _)) = True
+    go (CVar x _) = match omLookup x env
+      Some (_, LTU64U) => True
+      Some (_, LTU64) => True
+      _ => False
+    go (CBinPrim op _ _ tag _) = isU64Head tag && isArithOp op
+    go (CIf _ t f) = go t && go f
+    go ex = match flattenApp ex []
+      (CVar f _, args) =>
+        if isLocal env f then
+          False
+        else if isU64RawKernel (runtimeName e f) (lengthS args) then
+          True
+        else match u64KernelAlias e f args
+          Some k => isU64RawKernel k (lengthS args)
+          None => isSome (rawWorkerReturning e f (lengthS args) RawU64)
+      _ => False
 
 -- ── U32 as native i32 (N5) ──────────────────────────────────────────────────
 -- A `U32` is Int's tagged word at every boundary (argument, result, array
@@ -3881,35 +3881,37 @@ u32TruncateRaw e env x =
 -- which have no overflow and no domain check.  Anything else is emitted as usual
 -- and untagged.
 intRaw : Emit -> OrdMap (String, LTy) -> CExpr -> String
-intRaw e env x = match flattenApp x []
-  (CVar f _, args) =>
-    if isLocal env f then
-      untagInt e (fst (emitExpr e env x))
-    else match (intRawBitOp (runtimeName e f), args)
-      (Some instr, [a, b]) =>
-        let p = intRaw e env a
-        let q = intRaw e env b
-        let r = freshReg e
-        emit e "  \{r} = \{instr} i64 \{p}, \{q}"
-        r
-      _ => match (runtimeName e f, args)
-        ("u32ToInt", [a]) =>
-          let v = emitU32Raw e env a
-          let z = freshReg e
-          emit e "  \{z} = zext i32 \{v} to i64"
-          z
-        ("i32ToInt", [a]) =>
-          let v = emitU32Raw e env a
-          let z = freshReg e
-          emit e "  \{z} = sext i32 \{v} to i64"
-          z
-        ("intBitNot", [a]) =>
-          let p = intRaw e env a
-          let r = freshReg e
-          emit e "  \{r} = xor i64 \{p}, -1"
-          r
-        _ => untagInt e (fst (emitExpr e env x))
-  _ => untagInt e (fst (emitExpr e env x))
+intRaw e env x0 = go x0
+  where
+    go x = match flattenApp x []
+      (CVar f _, args) =>
+        if isLocal env f then
+          untagInt e (fst (emitExpr e env x))
+        else match (intRawBitOp (runtimeName e f), args)
+          (Some instr, [a, b]) =>
+            let p = go a
+            let q = go b
+            let r = freshReg e
+            emit e "  \{r} = \{instr} i64 \{p}, \{q}"
+            r
+          _ => match (runtimeName e f, args)
+            ("u32ToInt", [a]) =>
+              let v = emitU32Raw e env a
+              let z = freshReg e
+              emit e "  \{z} = zext i32 \{v} to i64"
+              z
+            ("i32ToInt", [a]) =>
+              let v = emitU32Raw e env a
+              let z = freshReg e
+              emit e "  \{z} = sext i32 \{v} to i64"
+              z
+            ("intBitNot", [a]) =>
+              let p = go a
+              let r = freshReg e
+              emit e "  \{r} = xor i64 \{p}, -1"
+              r
+            _ => untagInt e (fst (emitExpr e env x))
+      _ => untagInt e (fst (emitExpr e env x))
 
 intRawBitOp : String -> Option String
 intRawBitOp "intBitAnd" = Some "and"
@@ -3922,30 +3924,32 @@ intRawBitOp _ = None
 -- whose arms agree, `u32Truncate`/`i32Truncate`, a call `u32Inline` inlines, and
 -- a call of a worker with an `i32` result.  RawWord when it is neither.
 static32Kind : Emit -> OrdMap (String, LTy) -> CExpr -> RawKind
-static32Kind _ env (CVar x _) = match omLookup x env
-  Some (_, LTU32U) => RawU32
-  Some (_, LTI32U) => RawI32
-  _ => RawWord
-static32Kind _ _ (CBinPrim op _ _ tag _) =
-  if isArithOp op then rawKindOfHead32 tag else RawWord
-static32Kind e env (CIf _ t f) =
-  let k = static32Kind e env t
-  if sameRawKind k (static32Kind e env f) then k else RawWord
-static32Kind e env ex = match flattenApp ex []
-  (CVar f _, args) =>
-    if isLocal env f then
-      RawWord
-    else if isTruncate32 (runtimeName e f) then
-      if lengthS args == 1 then
-        if runtimeName e f == "i32Truncate" then RawI32 else RawU32
-      else
-        RawWord
-    else match u32Inline e env f args
-      Some (k, _, _) => k
-      None => match rawWorkerReturning32 e f (lengthS args)
-        Some (_, w) => rawWorkerRet w
-        None => RawWord
-  _ => RawWord
+static32Kind e env ex0 = go ex0
+  where
+    go (CVar x _) = match omLookup x env
+      Some (_, LTU32U) => RawU32
+      Some (_, LTI32U) => RawI32
+      _ => RawWord
+    go (CBinPrim op _ _ tag _) =
+      if isArithOp op then rawKindOfHead32 tag else RawWord
+    go (CIf _ t f) =
+      let k = go t
+      if sameRawKind k (go f) then k else RawWord
+    go ex = match flattenApp ex []
+      (CVar f _, args) =>
+        if isLocal env f then
+          RawWord
+        else if isTruncate32 (runtimeName e f) then
+          if lengthS args == 1 then
+            if runtimeName e f == "i32Truncate" then RawI32 else RawU32
+          else
+            RawWord
+        else match u32Inline e env f args
+          Some (k, _, _) => k
+          None => match rawWorkerReturning32 e f (lengthS args)
+            Some (_, w) => rawWorkerRet w
+            None => RawWord
+      _ => RawWord
 
 -- the `i32` kind of a head: RawWord unless it is `U32` or `I32`.
 rawKindOfHead32 : String -> RawKind
@@ -4048,9 +4052,11 @@ bindInlineArgs : Emit ->
   List CExpr ->
   OrdMap (String, LTy) ->
   OrdMap (String, LTy)
-bindInlineArgs e env ((PVar x _ _) :: ps) (a :: rest) acc =
-  bindInlineArgs e env ps rest (omInsert x (emitRawOrWord e env a) acc)
-bindInlineArgs _ _ _ _ acc = acc
+bindInlineArgs e env xs0 xs1 acc0 = go xs0 xs1 acc0
+  where
+    go ((PVar x _ _) :: ps) (a :: rest) acc =
+      go ps rest (omInsert x (emitRawOrWord e env a) acc)
+    go _ _ acc = acc
 
 -- `a`'s value in the register its static type allows: a U64 payload, a U32 or
 -- I32 `i32`, a Float `double`, or the word.
@@ -4111,52 +4117,52 @@ stmtExprs ((CSAssign _ x) :: rest) = x :: stmtExprs rest
 -- only keeps a value boxed.  A worker parameter is held raw only at zero
 -- (`rawWorkerOf`), a `let` at one or fewer (`bindLetRaw`).
 u64Escapes : Emit -> String -> Bool -> CExpr -> Int
-u64Escapes _ x raw (CVar y _) = if y == x && not raw then 1 else 0
-u64Escapes _ _ _ (CLit _) = 0
-u64Escapes e x _ (CBinPrim op l r tag _) =
-  let inner = isBoxed64Head tag && (isArithOp op || isCmpOp op)
-  u64Escapes e x inner l + u64Escapes e x inner r
-u64Escapes e x raw (CIf c t f) =
-  u64Escapes e x False c + u64Escapes e x raw t + u64Escapes e x raw f
-u64Escapes e x raw (CLet False (PVar y a bid) e1 e2) = match e1
-  CLam _ _ => occurrencesOf x (CLet False (PVar y a bid) e1 e2)
-  _ =>
-    u64Escapes e x (u64Shaped e e1) e1
-      + (if y == x then 0 else u64Escapes e x raw e2)
-u64Escapes e x raw (CLet False pat e1 e2) =
-  u64EscapesBound e x pat e1
-    + (if contains x (patVars pat) then 0 else u64Escapes e x raw e2)
-u64Escapes e x raw (CBlock stmts) = u64EscapesBlock e x raw stmts
--- a container literal or an access binds nothing, so its parts are read as
--- words (`U64.toIntTruncating x` inside one reads `x` as a payload).
-u64Escapes e x _ (CArray es) = u64EscapesWords e x es
-u64Escapes e x _ (CTuple es) = u64EscapesWords e x es
-u64Escapes e x _ (CList es) = u64EscapesWords e x es
-u64Escapes e x _ (CIndex a i) = u64EscapesWords e x [a, i]
-u64Escapes e x _ (CUnOp _ a) = u64Escapes e x False a
-u64Escapes e x _raw ex = match flattenApp ex []
-  (CVar f _, args) =>
-    if f == x then
-      occurrencesOf x ex
-    else
-      u64EscapesArgs e x (u64ArgRaw e f args) args
-  _ => occurrencesOf x ex
+u64Escapes e x raw0 ex0 = go raw0 ex0
+  where
+    go raw (CVar y _) = if y == x && not raw then 1 else 0
+    go _ (CLit _) = 0
+    go _ (CBinPrim op l r tag _) =
+      let inner = isBoxed64Head tag && (isArithOp op || isCmpOp op)
+      go inner l + go inner r
+    go raw (CIf c t f) = go False c + go raw t + go raw f
+    go raw (CLet False (PVar y a bid) e1 e2) = match e1
+      CLam _ _ => occurrencesOf x (CLet False (PVar y a bid) e1 e2)
+      _ => go (u64Shaped e e1) e1 + (if y == x then 0 else go raw e2)
+    go raw (CLet False pat e1 e2) =
+      u64EscapesBound e x pat e1
+        + (if contains x (patVars pat) then 0 else go raw e2)
+    go raw (CBlock stmts) = u64EscapesBlock e x raw stmts
+    -- a container literal or an access binds nothing, so its parts are read as
+    -- words (`U64.toIntTruncating x` inside one reads `x` as a payload).
+    go _ (CArray es) = u64EscapesWords e x es
+    go _ (CTuple es) = u64EscapesWords e x es
+    go _ (CList es) = u64EscapesWords e x es
+    go _ (CIndex a i) = u64EscapesWords e x [a, i]
+    go _ (CUnOp _ a) = go False a
+    go _raw ex = match flattenApp ex []
+      (CVar f _, args) =>
+        if f == x then
+          occurrencesOf x ex
+        else
+          u64EscapesArgs e x (u64ArgRaw e f args) args
+      _ => occurrencesOf x ex
 
 u64EscapesBlock : Emit -> String -> Bool -> List CStmt -> Int
-u64EscapesBlock e x raw [CSExpr ex] = u64Escapes e x raw ex
-u64EscapesBlock e x _ ((CSExpr ex) :: rest) =
-  u64Escapes e x False ex + u64EscapesBlock e x False rest
-u64EscapesBlock e x raw ((CSLet _ (PVar y a bid) ex) :: rest) = match ex
-  CLam _ _ => occurrencesOf x (CBlock (CSLet False (PVar y a bid) ex :: rest))
-  _ =>
-    u64Escapes e x (u64Shaped e ex) ex
-      + (if y == x then 0 else u64EscapesBlock e x raw rest)
-u64EscapesBlock e x raw ((CSLet _ pat ex) :: rest) =
-  u64EscapesBound e x pat ex
-    + (if contains x (patVars pat) then 0 else u64EscapesBlock e x raw rest)
-u64EscapesBlock e x raw ((CSAssign y ex) :: rest) =
-  u64Escapes e x False ex + (if y == x then 0 else u64EscapesBlock e x raw rest)
-u64EscapesBlock _ _ _ [] = 0
+u64EscapesBlock e x raw0 xs0 = go raw0 xs0
+  where
+    go raw [CSExpr ex] = u64Escapes e x raw ex
+    go _ ((CSExpr ex) :: rest) = u64Escapes e x False ex + go False rest
+    go raw ((CSLet _ (PVar y a bid) ex) :: rest) = match ex
+      CLam _ _ =>
+        occurrencesOf x (CBlock (CSLet False (PVar y a bid) ex :: rest))
+      _ =>
+        u64Escapes e x (u64Shaped e ex) ex + (if y == x then 0 else go raw rest)
+    go raw ((CSLet _ pat ex) :: rest) =
+      u64EscapesBound e x pat ex
+        + (if contains x (patVars pat) then 0 else go raw rest)
+    go raw ((CSAssign y ex) :: rest) =
+      u64Escapes e x False ex + (if y == x then 0 else go raw rest)
+    go _ [] = 0
 
 -- the right side of a destructuring `let`: a call `bindTupleInline` inlines
 -- binds each argument in its raw register, anything else is read as a word.
@@ -4174,11 +4180,11 @@ u64EscapesWords : Emit -> String -> List CExpr -> Int
 u64EscapesWords e x es = u64EscapesArgs e x [] es
 
 u64EscapesArgs : Emit -> String -> List Bool -> List CExpr -> Int
-u64EscapesArgs e x (r :: rs) (a :: as_) =
-  u64Escapes e x r a + u64EscapesArgs e x rs as_
-u64EscapesArgs e x [] (a :: as_) =
-  u64Escapes e x False a + u64EscapesArgs e x [] as_
-u64EscapesArgs _ _ _ [] = 0
+u64EscapesArgs e x xs0 xs1 = go xs0 xs1
+  where
+    go (r :: rs) (a :: as_) = u64Escapes e x r a + go rs as_
+    go [] (a :: as_) = u64Escapes e x False a + go [] as_
+    go _ [] = 0
 
 -- which arguments of a call of `f` are read as payloads: a kernel's U64
 -- operands (directly or through its `u64` wrapper), and a raw worker's U64
@@ -4261,6 +4267,8 @@ emitRawOrWords : Emit ->
   OrdMap (String, LTy) ->
   List CExpr ->
   List (String, LTy)
+-- Bound: list built in tail position modulo cons: a where-local go loses the constant-stack loop until the lambda-lift pass (#4878); convert then.
+-- lint-disable-next-line rule-threaded-invariant
 emitRawOrWords _ _ [] = []
 emitRawOrWords e env (c :: rest) =
   let v = emitRawOrWord e env c
@@ -5187,20 +5195,22 @@ concatFoldEmit : Emit ->
   LTy ->
   List CExpr ->
   (String, LTy)
-concatFoldEmit _ _ v t [] = (v, t)
-concatFoldEmit e env v t (x :: xs) =
-  let (rv, _) = emitExpr e env x
-  let r2 = freshReg e
-  match t
-    LTStr =>
-      emit e (rtLine e r2 "i64" "mdk_string_append" (i64Ops [v, rv]))
-      concatFoldEmit e env r2 LTStr xs
-    LTCon =>
-      emit e (rtLine e r2 "i64" "mdk_list_append" (i64Ops [v, rv]))
-      concatFoldEmit e env r2 LTCon xs
-    _ =>
-      emit e (rtLine e r2 "i64" "mdk_append" (i64Ops [v, rv]))
-      concatFoldEmit e env r2 LTUnknown xs
+concatFoldEmit e env v0 t0 xs0 = go v0 t0 xs0
+  where
+    go v t [] = (v, t)
+    go v t (x :: xs) =
+      let (rv, _) = emitExpr e env x
+      let r2 = freshReg e
+      match t
+        LTStr =>
+          emit e (rtLine e r2 "i64" "mdk_string_append" (i64Ops [v, rv]))
+          go r2 LTStr xs
+        LTCon =>
+          emit e (rtLine e r2 "i64" "mdk_list_append" (i64Ops [v, rv]))
+          go r2 LTCon xs
+        _ =>
+          emit e (rtLine e r2 "i64" "mdk_append" (i64Ops [v, rv]))
+          go r2 LTUnknown xs
 
 -- the N-ary String chain: operands emitted in order (the head already is `v0`),
 -- their words stored in an argv alloca, then one runtime call.  Same shape as
@@ -5227,6 +5237,8 @@ emitStrConcatN e env v0 rest =
 
 -- emit each expression strictly left to right, returning the operand words.
 emitOperandWords : Emit -> OrdMap (String, LTy) -> List CExpr -> List String
+-- Bound: list built in tail position modulo cons: a where-local go loses the constant-stack loop until the lambda-lift pass (#4878); convert then.
+-- lint-disable-next-line rule-threaded-invariant
 emitOperandWords _ _ [] = []
 emitOperandWords e env (x :: xs) =
   let (v, _) = emitExpr e env x
@@ -5413,22 +5425,24 @@ bytesHexBE arr i =
 -- (matching emitArith's existing LTFloat branch, which already unboxes operands on
 -- the strength of the left's type).  Only called in statically-Float context.
 emitFloatD : Emit -> OrdMap (String, LTy) -> CExpr -> String
-emitFloatD _ _env (CLit (LFloat f)) = ensureFloatDot (floatToString f)
-emitFloatD e env (ex@(CBinPrim op l r _ _)) =
-  if isArithOp op then match constNanFold op l r
-    -- #672: a compile-time-constant NaN → the host's exact NaN bits (a valid
-    -- `double` operand), so clang keeps −NaN instead of re-folding to +NaN.
-    Some hexC => hexC
-    None =>
-      let ld = emitFloatD e env l
-      let rd = emitFloatD e env r
-      let ldf = fenceFloatOperand e l r ld
-      let res = freshReg e
-      emit e "  \{res} = \{floatOp op} double \{ldf}, \{rd}"
-      res
-  else
-    emitFloatLeaf e env ex
-emitFloatD e env ex = emitFloatLeaf e env ex
+emitFloatD e env ex0 = go ex0
+  where
+    go (CLit (LFloat f)) = ensureFloatDot (floatToString f)
+    go (ex@(CBinPrim op l r _ _)) =
+      if isArithOp op then match constNanFold op l r
+        -- #672: a compile-time-constant NaN → the host's exact NaN bits (a valid
+        -- `double` operand), so clang keeps −NaN instead of re-folding to +NaN.
+        Some hexC => hexC
+        None =>
+          let ld = go l
+          let rd = go r
+          let ldf = fenceFloatOperand e l r ld
+          let res = freshReg e
+          emit e "  \{res} = \{floatOp op} double \{ldf}, \{rd}"
+          res
+      else
+        emitFloatLeaf e env ex
+    go ex = emitFloatLeaf e env ex
 
 emitFloatLeaf : Emit -> OrdMap (String, LTy) -> CExpr -> String
 emitFloatLeaf e env ex = match floatFromIntArg e env ex
@@ -6417,21 +6431,24 @@ bindLetGroup : Emit ->
   List CBind ->
   CExpr ->
   Option (OrdMap (String, LTy))
-bindLetGroup _ env [] _ = Some env
-bindLetGroup e env ((CBind name [CClause [] rhs] _ bid) :: rest) body =
-  let vt = stampWord e bid (emitExpr e env rhs)
-  bindLetGroup e (omInsert name vt env) rest body
-bindLetGroup e env ((CBind name clauses site bid) :: rest) body
-  | refsLater name clauses (bindNames rest) =
-    emitKnotRun e env (CBind name clauses site bid :: rest) body
-  | otherwise =
-    -- The region this binding is in scope over is exactly the rest of the group
-    -- plus the body, i.e. `CLetGroup rest body`.  When every occurrence of `name`
-    -- there is the head of an application of exactly its arity, its call sites
-    -- may skip the closure's code_ptr load (`e.directFn`).
-    let direct = satOnlyUses name (clauseArityC clauses) (CLetGroup rest body)
-    let (w, ty) = emitGroupBind e env (CBind name clauses site bid) direct
-    bindLetGroup e (omInsert name (w, ty) env) rest body
+bindLetGroup e env0 xs0 body = go env0 xs0
+  where
+    go env [] = Some env
+    go env ((CBind name [CClause [] rhs] _ bid) :: rest) =
+      let vt = stampWord e bid (emitExpr e env rhs)
+      go (omInsert name vt env) rest
+    go env ((CBind name clauses site bid) :: rest)
+      | refsLater name clauses (bindNames rest) =
+        emitKnotRun e env (CBind name clauses site bid :: rest) body
+      | otherwise =
+        -- The region this binding is in scope over is exactly the rest of the group
+        -- plus the body, i.e. `CLetGroup rest body`.  When every occurrence of `name`
+        -- there is the head of an application of exactly its arity, its call sites
+        -- may skip the closure's code_ptr load (`e.directFn`).
+        let direct =
+          satOnlyUses name (clauseArityC clauses) (CLetGroup rest body)
+        let (w, ty) = emitGroupBind e env (CBind name clauses site bid) direct
+        go (omInsert name (w, ty) env) rest
 
 letGroupGap : Emit -> (String, LTy)
 letGroupGap e =
@@ -6451,7 +6468,7 @@ emitKnotRun e env binds body =
   let run = takeFnRun binds
   let after = dropS (lengthS run) binds
   let runNames = bindNames run
-  if anyRefsOutsideRun run runNames (bindNames after) then
+  if anyRefsOutsideRun run (bindNames after) then
     None
   else
     let env2 = emitLetGroupKnot e env run runNames
@@ -6470,13 +6487,12 @@ dropS n (x :: xs) = if n <= 0 then x :: xs else dropS (n - 1) xs
 
 -- True if any binding in the run references a name bound LATER but OUTSIDE the run
 -- (i.e. a later value binding) — the case knot-tying cannot tie.
-anyRefsOutsideRun : List CBind -> List String -> List String -> Bool
-anyRefsOutsideRun [] _ _ = False
-anyRefsOutsideRun ((CBind name clauses _ _) :: rest) runNames laterOutside
+anyRefsOutsideRun : List CBind -> List String -> Bool
+anyRefsOutsideRun [] _ = False
+anyRefsOutsideRun ((CBind name clauses _ _) :: rest) laterOutside
   | anyInList (dedupS (clausesFreeVars name clauses)) laterOutside = True
-  | otherwise = anyRefsOutsideRun rest runNames laterOutside
-anyRefsOutsideRun (_ :: rest) runNames laterOutside =
-  anyRefsOutsideRun rest runNames laterOutside
+  | otherwise = anyRefsOutsideRun rest laterOutside
+anyRefsOutsideRun (_ :: rest) laterOutside = anyRefsOutsideRun rest laterOutside
 
 -- True when any clause of a local-function binding references a sibling bound
 -- LATER in the same group (a forward or mutually-recursive reference whose
@@ -6544,131 +6560,114 @@ emitGroupBind e env (CBind name clauses site _) direct =
 -- optimization inside it rather than silently claiming the name does not escape
 -- there.
 satOnlyUses : String -> Int -> CExpr -> Bool
-satOnlyUses _ _ (CLit _) = True
-satOnlyUses name _ (CVar x _) = x /= name
-satOnlyUses name arity (app@(CApp _ _ _)) =
-  let (hd, args) = flattenApp app []
-  match hd
-    CVar n _ =>
-      if n == name && lengthS args /= arity then
-        False
-      else
-        satOnlyList name arity args
-    _ => satOnlyUses name arity hd && satOnlyList name arity args
-satOnlyUses name arity (CLam ps b) =
-  contains name (patVarNames ps) || satOnlyUses name arity b
-satOnlyUses name arity (CLet recF pat e1 e2) =
-  let shadow = contains name (patVars pat)
-  let ok1 =
-    if recF then
-      shadow || satOnlyUses name arity e1
-    else
-      satOnlyUses name arity e1
-  ok1 && (shadow || satOnlyUses name arity e2)
-satOnlyUses name arity (CLetGroup binds b) =
-  contains name (bindNames binds)
-    || satOnlyBinds name arity binds && satOnlyUses name arity b
-satOnlyUses name arity (CMatch scrut arms) =
-  satOnlyUses name arity scrut && satOnlyArms name arity arms
-satOnlyUses name arity (CDecision scrut arms _) =
-  satOnlyUses name arity scrut && satOnlyArms name arity arms
-satOnlyUses name arity (CIf c t f) =
-  satOnlyUses name arity c
-    && satOnlyUses name arity t
-    && satOnlyUses name arity f
-satOnlyUses name arity (CBinPrim _ l r _ _) =
-  satOnlyUses name arity l && satOnlyUses name arity r
-satOnlyUses name arity (CUnOp _ x) = satOnlyUses name arity x
-satOnlyUses name arity (CTuple es) = satOnlyList name arity es
-satOnlyUses name arity (CList es) = satOnlyList name arity es
-satOnlyUses name arity (CArray es) = satOnlyList name arity es
-satOnlyUses name arity (CRangeList lo hi _) =
-  satOnlyUses name arity lo && satOnlyUses name arity hi
-satOnlyUses name arity (CRangeArray lo hi _) =
-  satOnlyUses name arity lo && satOnlyUses name arity hi
-satOnlyUses name arity (CRecord _ fields) = satOnlyFields name arity fields
-satOnlyUses name arity (CFieldAccess ex _ _ _) = satOnlyUses name arity ex
-satOnlyUses name arity (CRecordUpdate _ base updates) =
-  satOnlyUses name arity base && satOnlyFields name arity updates
-satOnlyUses name arity (CVariantUpdate _ base updates) =
-  satOnlyUses name arity base && satOnlyFields name arity updates
-satOnlyUses name arity (CIndex a i) =
-  satOnlyUses name arity a && satOnlyUses name arity i
-satOnlyUses name arity (CStringIndex a i) =
-  satOnlyUses name arity a && satOnlyUses name arity i
-satOnlyUses name arity (CListIndex a i) =
-  satOnlyUses name arity a && satOnlyUses name arity i
-satOnlyUses name arity (CSlice a lo hi _) =
-  satOnlyUses name arity a
-    && satOnlyUses name arity lo
-    && satOnlyUses name arity hi
-satOnlyUses name arity (CStringSlice a lo hi _) =
-  satOnlyUses name arity a
-    && satOnlyUses name arity lo
-    && satOnlyUses name arity hi
-satOnlyUses name arity (CListSlice a lo hi _) =
-  satOnlyUses name arity a
-    && satOnlyUses name arity lo
-    && satOnlyUses name arity hi
-satOnlyUses name arity (CBlock stmts) = satOnlyStmts name arity stmts
--- a dict/method occurrence names its captured dict PARAMS, never a local
--- function binding — but read them anyway rather than assume it.
-satOnlyUses name _ (CMethod _ (MethodEvidence _ _ route implRoutes methRoutes)) =
-  not (contains name (flatMap givenNames (route :: implRoutes ++ methRoutes)))
-satOnlyUses name _ (CDict _ routes) =
-  not (contains name (flatMap givenNames routes))
-satOnlyUses _ _ _ = False
+satOnlyUses name arity app0 = go app0
+  where
+    go (CLit _) = True
+    go (CVar x _) = x /= name
+    go (app@(CApp _ _ _)) =
+      let (hd, args) = flattenApp app []
+      match hd
+        CVar n _ =>
+          if n == name && lengthS args /= arity then
+            False
+          else
+            satOnlyList name arity args
+        _ => go hd && satOnlyList name arity args
+    go (CLam ps b) = contains name (patVarNames ps) || go b
+    go (CLet recF pat e1 e2) =
+      let shadow = contains name (patVars pat)
+      let ok1 = if recF then shadow || go e1 else go e1
+      ok1 && (shadow || go e2)
+    go (CLetGroup binds b) =
+      contains name (bindNames binds) || satOnlyBinds name arity binds && go b
+    go (CMatch scrut arms) = go scrut && satOnlyArms name arity arms
+    go (CDecision scrut arms _) = go scrut && satOnlyArms name arity arms
+    go (CIf c t f) = go c && go t && go f
+    go (CBinPrim _ l r _ _) = go l && go r
+    go (CUnOp _ x) = go x
+    go (CTuple es) = satOnlyList name arity es
+    go (CList es) = satOnlyList name arity es
+    go (CArray es) = satOnlyList name arity es
+    go (CRangeList lo hi _) = go lo && go hi
+    go (CRangeArray lo hi _) = go lo && go hi
+    go (CRecord _ fields) = satOnlyFields name arity fields
+    go (CFieldAccess ex _ _ _) = go ex
+    go (CRecordUpdate _ base updates) =
+      go base && satOnlyFields name arity updates
+    go (CVariantUpdate _ base updates) =
+      go base && satOnlyFields name arity updates
+    go (CIndex a i) = go a && go i
+    go (CStringIndex a i) = go a && go i
+    go (CListIndex a i) = go a && go i
+    go (CSlice a lo hi _) = go a && go lo && go hi
+    go (CStringSlice a lo hi _) = go a && go lo && go hi
+    go (CListSlice a lo hi _) = go a && go lo && go hi
+    go (CBlock stmts) = satOnlyStmts name arity stmts
+    -- a dict/method occurrence names its captured dict PARAMS, never a local
+    -- function binding — but read them anyway rather than assume it.
+    go (CMethod _ (MethodEvidence _ _ route implRoutes methRoutes)) =
+      not
+        (contains name (flatMap givenNames (route :: implRoutes ++ methRoutes)))
+    go (CDict _ routes) = not (contains name (flatMap givenNames routes))
+    go _ = False
 
 satOnlyList : String -> Int -> List CExpr -> Bool
-satOnlyList _ _ [] = True
-satOnlyList name arity (x :: rest) =
-  satOnlyUses name arity x && satOnlyList name arity rest
+satOnlyList name arity xs0 = go xs0
+  where
+    go [] = True
+    go (x :: rest) = satOnlyUses name arity x && go rest
 
 satOnlyFields : String -> Int -> List CField -> Bool
-satOnlyFields _ _ [] = True
-satOnlyFields name arity ((CField _ _ ex) :: rest) =
-  satOnlyUses name arity ex && satOnlyFields name arity rest
+satOnlyFields name arity xs0 = go xs0
+  where
+    go [] = True
+    go ((CField _ _ ex) :: rest) = satOnlyUses name arity ex && go rest
 
 satOnlyArms : String -> Int -> List CArm -> Bool
-satOnlyArms _ _ [] = True
-satOnlyArms name arity ((CArm pat guards b) :: rest) =
-  let shadow = contains name (patVars pat)
-  satOnlyGuards name arity guards
-    && (shadow || satOnlyUses name arity b)
-    && satOnlyArms name arity rest
-satOnlyArms name arity ((CArmAlt _ guards _) :: rest) =
-  satOnlyGuards name arity guards && satOnlyArms name arity rest
+satOnlyArms name arity xs0 = go xs0
+  where
+    go [] = True
+    go ((CArm pat guards b) :: rest) =
+      let shadow = contains name (patVars pat)
+      satOnlyGuards name arity guards
+        && (shadow || satOnlyUses name arity b)
+        && go rest
+    go ((CArmAlt _ guards _) :: rest) =
+      satOnlyGuards name arity guards && go rest
 
 satOnlyGuards : String -> Int -> List CGuard -> Bool
-satOnlyGuards _ _ [] = True
-satOnlyGuards name arity ((CGBool ex) :: rest) =
-  satOnlyUses name arity ex && satOnlyGuards name arity rest
-satOnlyGuards name arity ((CGBind _ ex) :: rest) =
-  satOnlyUses name arity ex && satOnlyGuards name arity rest
+satOnlyGuards name arity xs0 = go xs0
+  where
+    go [] = True
+    go ((CGBool ex) :: rest) = satOnlyUses name arity ex && go rest
+    go ((CGBind _ ex) :: rest) = satOnlyUses name arity ex && go rest
 
 satOnlyStmts : String -> Int -> List CStmt -> Bool
-satOnlyStmts _ _ [] = True
-satOnlyStmts name arity ((CSExpr ex) :: rest) =
-  satOnlyUses name arity ex && satOnlyStmts name arity rest
-satOnlyStmts name arity ((CSLet _ pat ex) :: rest) =
-  satOnlyUses name arity ex
-    && (contains name (patVars pat) || satOnlyStmts name arity rest)
--- an assignment TO the name would replace the value its call sites resolve to.
-satOnlyStmts name arity ((CSAssign target ex) :: rest) =
-  target /= name && satOnlyUses name arity ex && satOnlyStmts name arity rest
+satOnlyStmts name arity xs0 = go xs0
+  where
+    go [] = True
+    go ((CSExpr ex) :: rest) = satOnlyUses name arity ex && go rest
+    go ((CSLet _ pat ex) :: rest) =
+      satOnlyUses name arity ex && (contains name (patVars pat) || go rest)
+    -- an assignment TO the name would replace the value its call sites resolve to.
+    go ((CSAssign target ex) :: rest) =
+      target /= name && satOnlyUses name arity ex && go rest
 
 -- every clause body of a nested group's bindings, with that clause's parameter
 -- patterns treated as shadowing binders.
 satOnlyBinds : String -> Int -> List CBind -> Bool
-satOnlyBinds _ _ [] = True
-satOnlyBinds name arity ((CBind _ clauses _ _) :: rest) =
-  satOnlyClauses name arity clauses && satOnlyBinds name arity rest
+satOnlyBinds name arity xs0 = go xs0
+  where
+    go [] = True
+    go ((CBind _ clauses _ _) :: rest) =
+      satOnlyClauses name arity clauses && go rest
 
 satOnlyClauses : String -> Int -> List CClause -> Bool
-satOnlyClauses _ _ [] = True
-satOnlyClauses name arity ((CClause pats b) :: rest) =
-  (contains name (patVarNames pats) || satOnlyUses name arity b)
-    && satOnlyClauses name arity rest
+satOnlyClauses name arity xs0 = go xs0
+  where
+    go [] = True
+    go ((CClause pats b) :: rest) =
+      (contains name (patVarNames pats) || satOnlyUses name arity b) && go rest
 
 -- emit the lifted multi-clause `define` for a let-group local function into the
 -- SIDE buffer (same swap discipline as emitPatLamDefine).  Captures load from
@@ -6769,28 +6768,33 @@ knotAlloc : Emit ->
   OrdMap (String, LTy) ->
   List CBind ->
   (List KnotCell, OrdMap (String, LTy))
-knotAlloc _ env _ [] = ([], env)
-knotAlloc e env cellEnv ((CBind name clauses site _) :: rest) =
-  let lamName = generatedName e LN.GenLambda ""
-  let arity = clauseArity (clauseList clauses)
-  let captured =
-    keepInEnv cellEnv (removeStr name (dedupS (clausesFreeVars name clauses)))
-  emitGroupBindDefine e cellEnv lamName name arity clauses captured site
-  let (cellPtr, cellWord) =
-    emitClosureAllocPatch e lamName arity (lengthS captured)
-  let (cells, env2) =
-    knotAlloc e (omInsert name (cellWord, LTClosure) env) cellEnv rest
-  (KnotCell name cellPtr captured :: cells, env2)
-knotAlloc e env cellEnv (_ :: rest) = knotAlloc e env cellEnv rest
+knotAlloc e env0 cellEnv xs0 = go env0 xs0
+  where
+    go env [] = ([], env)
+    go env ((CBind name clauses site _) :: rest) =
+      let lamName = generatedName e LN.GenLambda ""
+      let arity = clauseArity (clauseList clauses)
+      let captured =
+        keepInEnv
+          cellEnv
+          (removeStr name (dedupS (clausesFreeVars name clauses)))
+      emitGroupBindDefine e cellEnv lamName name arity clauses captured site
+      let (cellPtr, cellWord) =
+        emitClosureAllocPatch e lamName arity (lengthS captured)
+      let (cells, env2) = go (omInsert name (cellWord, LTClosure) env) rest
+      (KnotCell name cellPtr captured :: cells, env2)
+    go env (_ :: rest) = go env rest
 
 -- pass 2: store each cell's real capture words (from the fully-bound env) into its
 -- capture fields (offset 8*(i+1), field 0 holds the code pointer).
 knotPatch : Emit -> OrdMap (String, LTy) -> List KnotCell -> Unit
-knotPatch _ _ [] = ()
-knotPatch e env ((KnotCell _ cellPtr captureNames) :: rest) =
-  let words = capWords e env captureNames
-  storeFields e cellPtr words 1
-  knotPatch e env rest
+knotPatch e env xs0 = go xs0
+  where
+    go [] = ()
+    go ((KnotCell _ cellPtr captureNames) :: rest) =
+      let words = capWords e env captureNames
+      storeFields e cellPtr words 1
+      go rest
 
 -- allocate a closure cell with the code pointer in field 0 and `nCap` PLACEHOLDER
 -- zero capture words, returning BOTH the raw cell pointer (for later stores) and
@@ -7217,6 +7221,8 @@ hasArgs _ = True
 
 -- emit each argument expression (left-to-right); collect the i64 operand words.
 emitArgs : Emit -> OrdMap (String, LTy) -> List CExpr -> List String
+-- Bound: list built in tail position modulo cons: a where-local go loses the constant-stack loop until the lambda-lift pass (#4878); convert then.
+-- lint-disable-next-line rule-threaded-invariant
 emitArgs _ _ [] = []
 emitArgs e env (a :: rest) =
   let (v, _) = emitExpr e env a
@@ -7837,12 +7843,14 @@ emitApplyRuntime e cw argOps =
 
 -- store each arg word into the argv alloca at index `i` (getelementptr i64 stride).
 storeArgv : Emit -> String -> List String -> Int -> Unit
-storeArgv _ _ [] _ = ()
-storeArgv e arr (a :: rest) i =
-  let p = freshReg e
-  emit e "  \{p} = getelementptr i64, ptr \{arr}, i64 \{intToString i}"
-  emit e "  store i64 \{a}, ptr \{p}"
-  storeArgv e arr rest (i + 1)
+storeArgv e arr xs0 i0 = go xs0 i0
+  where
+    go [] _ = ()
+    go (a :: rest) i =
+      let p = freshReg e
+      emit e "  \{p} = getelementptr i64, ptr \{arr}, i64 \{intToString i}"
+      emit e "  store i64 \{a}, ptr \{p}"
+      go rest (i + 1)
 
 -- load the header word (field 0, offset 0 — the closure arity) of a boxed cell.
 loadHeader : Emit -> String -> String
@@ -7893,6 +7901,8 @@ emitPapDefine e papName fname supplied remaining =
 
 -- load the `k` captured argument words from %clos fields 1..k (code_ptr is 0).
 loadPapCaptures : Emit -> Int -> Int -> List String
+-- Bound: list built in tail position modulo cons: a where-local go loses the constant-stack loop until the lambda-lift pass (#4878); convert then.
+-- lint-disable-next-line rule-threaded-invariant
 loadPapCaptures e k i
   | i >= k = []
   | otherwise = loadField e "%clos" (i + 1) :: loadPapCaptures e k (i + 1)
@@ -8425,6 +8435,8 @@ slotWordsGo : Emit ->
   List (List SlotCallee) ->
   Int ->
   List String
+-- Bound: list built in tail position modulo cons: a where-local go loses the constant-stack loop until the lambda-lift pass (#4878); convert then.
+-- lint-disable-next-line rule-threaded-invariant
 slotWordsGo e key iface (slot :: slots) (fill :: fills) i =
   slotClosureWord e key iface slot fill i
     :: slotWordsGo e key iface slots fills (i + 1)
@@ -8510,6 +8522,8 @@ slotParamDecls dicts values =
     ("%dict" :: wordNames "%mw" dicts 0 ++ wordNames "%arg" values 0)
 
 wordNames : String -> Int -> Int -> List String
+-- Bound: list built in tail position modulo cons: a where-local go loses the constant-stack loop until the lambda-lift pass (#4878); convert then.
+-- lint-disable-next-line rule-threaded-invariant
 wordNames pre n i
   | i >= n = []
   | otherwise = pre ++ intToString i :: wordNames pre n (i + 1)
@@ -8626,6 +8640,8 @@ takeRoutes _ _ = []
 -- cell header (offset 0); field i is loaded by `loadField i` (offset 8*(i+1)), stored
 -- by emitDictCell via storeFields at the same field indices.
 loadReqDicts : Emit -> String -> Int -> Int -> List String
+-- Bound: list built in tail position modulo cons: a where-local go loses the constant-stack loop until the lambda-lift pass (#4878); convert then.
+-- lint-disable-next-line rule-threaded-invariant
 loadReqDicts e dictPtr n i
   | i >= n = []
   | otherwise = loadField e dictPtr i :: loadReqDicts e dictPtr n (i + 1)
@@ -8766,59 +8782,63 @@ emitArgDispatchChain : Emit ->
   Unit
 -- the arms are exhausted: #1958's loud trap, never a bare `unreachable`, which is UB
 -- that `clang -O1+` may fold the preceding tests away against.
-emitArgDispatchChain e _ [] _ _ _ _ =
-  emit e (rtLine e "" "void" "mdk_dispatch_no_impl" [])
-  emit e "  unreachable"
--- An inherited default at a head that owns no runtime constructors (a primitive)
--- cannot be tag-tested, so it gets no arm and a receiver of that head reaches the
--- trap (#1075).
-emitArgDispatchChain e tagReg (g :: rest) argOps colliding slot endL
-  | groupInherits g && isEmptyL (ctorsOfType e (groupTag g)) =
-    emitArgDispatchChain e tagReg rest argOps colliding slot endL
-emitArgDispatchChain e tagReg (g :: rest) argOps colliding slot endL =
-  let tag = groupTag g
-  let cond = emitTagMatch e tagReg (ctorsOfType e tag)
-  let n = intToString (freshLocal e)
-  let yes = "argyes" ++ n
-  let next = "argnext" ++ n
-  emit e "  br i1 \{cond}, label %\{yes}, label %\{next}"
-  emit e (yes ++ ":")
-  -- #2445: the tag TEST is still emitted — it is what scopes the trap to the receivers
-  -- that actually reach this head — but the arm body becomes the loud trap, because two
-  -- or more declared impls answer to this one constant and the call this arm would make
-  -- is a coin-flip between them.  Every sibling arm at a non-colliding head is
-  -- untouched.  The trap is `noreturn`, so this block terminates and no `store`/`br` to
-  -- the join label follows.
-  let _ =
-    if argTagArmAmbiguous colliding tag then
-      emitAmbiguousArm e
-    else
-      -- F10: saturate against this group's own declared arity, the same answer the
-      -- single-group site above already takes (see `emitArityCall`).
-      let (rv, _) = emitArityCall e (groupFnName g) argOps (groupArity g) LTInt
-      emit e "  store i64 \{rv}, ptr \{slot}"
-      emit e ("  br label %" ++ endL)
-  emit e (next ++ ":")
-  emitArgDispatchChain e tagReg rest argOps colliding slot endL
+emitArgDispatchChain e tagReg xs0 argOps colliding slot endL = go xs0
+  where
+    go [] =
+      emit e (rtLine e "" "void" "mdk_dispatch_no_impl" [])
+      emit e "  unreachable"
+    -- An inherited default at a head that owns no runtime constructors (a primitive)
+    -- cannot be tag-tested, so it gets no arm and a receiver of that head reaches the
+    -- trap (#1075).
+    go (g :: rest)
+      | groupInherits g && isEmptyL (ctorsOfType e (groupTag g)) = go rest
+    go (g :: rest) =
+      let tag = groupTag g
+      let cond = emitTagMatch e tagReg (ctorsOfType e tag)
+      let n = intToString (freshLocal e)
+      let yes = "argyes" ++ n
+      let next = "argnext" ++ n
+      emit e "  br i1 \{cond}, label %\{yes}, label %\{next}"
+      emit e (yes ++ ":")
+      -- #2445: the tag TEST is still emitted — it is what scopes the trap to the receivers
+      -- that actually reach this head — but the arm body becomes the loud trap, because two
+      -- or more declared impls answer to this one constant and the call this arm would make
+      -- is a coin-flip between them.  Every sibling arm at a non-colliding head is
+      -- untouched.  The trap is `noreturn`, so this block terminates and no `store`/`br` to
+      -- the join label follows.
+      let _ =
+        if argTagArmAmbiguous colliding tag then
+          emitAmbiguousArm e
+        else
+          -- F10: saturate against this group's own declared arity, the same answer the
+          -- single-group site above already takes (see `emitArityCall`).
+          let (rv, _) =
+            emitArityCall e (groupFnName g) argOps (groupArity g) LTInt
+          emit e "  store i64 \{rv}, ptr \{slot}"
+          emit e ("  br label %" ++ endL)
+      emit e (next ++ ":")
+      go rest
 
 -- an i1 that is true when the loaded ctor tag equals ANY of a type's constructor
 -- tags (OR-chain of icmp eq against each hashName).
 emitTagMatch : Emit -> String -> List String -> String
-emitTagMatch e _ [] =
-  gapStr
-    e
-    "arg-tag dispatch on impl type that owns no constructors (primitive receiver carries no cell tag)"
-emitTagMatch e tagReg [c] =
-  let r = freshReg e
-  emit e "  \{r} = icmp eq i64 \{tagReg}, \{intToString (cellTag e c)}"
-  r
-emitTagMatch e tagReg (c :: rest) =
-  let r = freshReg e
-  emit e "  \{r} = icmp eq i64 \{tagReg}, \{intToString (cellTag e c)}"
-  let rrest = emitTagMatch e tagReg rest
-  let o = freshReg e
-  emit e "  \{o} = or i1 \{r}, \{rrest}"
-  o
+emitTagMatch e tagReg xs0 = go xs0
+  where
+    go [] =
+      gapStr
+        e
+        "arg-tag dispatch on impl type that owns no constructors (primitive receiver carries no cell tag)"
+    go [c] =
+      let r = freshReg e
+      emit e "  \{r} = icmp eq i64 \{tagReg}, \{intToString (cellTag e c)}"
+      r
+    go (c :: rest) =
+      let r = freshReg e
+      emit e "  \{r} = icmp eq i64 \{tagReg}, \{intToString (cellTag e c)}"
+      let rrest = go rest
+      let o = freshReg e
+      emit e "  \{o} = or i1 \{r}, \{rrest}"
+      o
 
 -- the impl groups of one method, in program order.
 implGroupsForMethod : Emit -> String -> List ImplGroup
@@ -8834,6 +8854,8 @@ filterGroupsForEntries : Emit ->
   List CImplEntry ->
   List ImplGroup ->
   List ImplGroup
+-- Bound: list built in tail position modulo cons: a where-local go loses the constant-stack loop until the lambda-lift pass (#4878); convert then.
+-- lint-disable-next-line rule-threaded-invariant
 filterGroupsForEntries _ _ _ [] = []
 filterGroupsForEntries e method entries (g :: rest) =
   if anyList
@@ -8977,23 +8999,24 @@ dictWordsOf e env rs = map (dictWordOfRoute e env) rs
 -- the cell's supers and slots.  RDict/RDictFwd forward the enclosing dict parameter's word
 -- (already a boxed-cell pointer); RNone is the 0 dict (no cell).
 dictWordOfRoute : Emit -> OrdMap (String, LTy) -> Route -> String
-dictWordOfRoute e env (RKey key reqs sups) =
-  let supWords = dictWordsOf e env sups
-  let slots = slotWords e key
-  let fieldWords = supWords ++ slots ++ dictWordsOf e env reqs
-  if allConstWords fieldWords then
-    emitConstDictCell e (hashName key) fieldWords
-  else
-    emitDictCell e (hashName key) fieldWords
-dictWordOfRoute e env (RDict d) = dictOperand e env d
-dictWordOfRoute e env (RDictFwd d) = dictOperand e env d
-dictWordOfRoute e env (RProj r path) =
-  loadSuperPath e (dictWordOfRoute e env r) (receiverPath e r path)
-dictWordOfRoute _ _ RNone = "0"
--- S-1: RLocal's own dicts are the call's leading dict ARGS (emitted by emitMethod's
--- RLocal arm via emitDictApp), not a dict WITNESS for this route — so as a witness it
--- stays the no-op 0 dict, mirroring eval's `dictOfRoute (RLocal _ _) = VDict "" []`.
-dictWordOfRoute _ _ (RLocal _ _) = "0"
+dictWordOfRoute e env x0 = go x0
+  where
+    go (RKey key reqs sups) =
+      let supWords = dictWordsOf e env sups
+      let slots = slotWords e key
+      let fieldWords = supWords ++ slots ++ dictWordsOf e env reqs
+      if allConstWords fieldWords then
+        emitConstDictCell e (hashName key) fieldWords
+      else
+        emitDictCell e (hashName key) fieldWords
+    go (RDict d) = dictOperand e env d
+    go (RDictFwd d) = dictOperand e env d
+    go (RProj r path) = loadSuperPath e (go r) (receiverPath e r path)
+    go RNone = "0"
+    -- S-1: RLocal's own dicts are the call's leading dict ARGS (emitted by emitMethod's
+    -- RLocal arm via emitDictApp), not a dict WITNESS for this route — so as a witness it
+    -- stays the no-op 0 dict, mirroring eval's `dictOfRoute (RLocal _ _) = VDict "" []`.
+    go (RLocal _ _) = "0"
 
 -- A projection's path.  Its first index reads a `requires` dictionary when it is
 -- past the supers of an inherited default's receiver (`core_ir_lower.
@@ -9319,14 +9342,13 @@ tagToLTy t = if isTaggedFixedHead t then LTInt else LTCon
 -- LTCon → mdk_list_append, and in impl Semigroup String emit them as LTStr →
 -- mdk_string_append — without touching emitBin.
 implParamEnvByPos : String -> List Int -> Int -> Int -> OrdMap (String, LTy)
-implParamEnvByPos _ _ n i
-  | i >= n = omEmpty
-implParamEnvByPos tag positions n i =
-  let ty = if listContains positions i then tagToLTy tag else LTInt
-  omInsert
-    ("a" ++ intToString i)
-    ("%arg" ++ intToString i, ty)
-    (implParamEnvByPos tag positions n (i + 1))
+implParamEnvByPos tag positions n i0 = go i0
+  where
+    go i
+      | i >= n = omEmpty
+    go i =
+      let ty = if listContains positions i then tagToLTy tag else LTInt
+      omInsert ("a" ++ intToString i) ("%arg" ++ intToString i, ty) (go (i + 1))
 
 listContains : List Int -> Int -> Bool
 listContains [] _ = False
@@ -9383,6 +9405,8 @@ emitGroupBody e fname tag positions arity clauses =
 -- build a LTy list of length n, typed as tagToLTy tag at positions ∈ positions,
 -- LTInt elsewhere.
 patPosTys : String -> List Int -> Int -> Int -> List LTy
+-- Bound: list built in tail position modulo cons: a where-local go loses the constant-stack loop until the lambda-lift pass (#4878); convert then.
+-- lint-disable-next-line rule-threaded-invariant
 patPosTys _ _ n i
   | i >= n = []
 patPosTys tag positions n i =
@@ -9468,29 +9492,31 @@ emitClauseChain : Emit ->
   String ->
   Loc ->
   Unit
-emitClauseChain _ _ _ [] _ _ _ _ _ _ = ()
-emitClauseChain e env arity (c :: rest) roots slot endL rty outer site =
-  let nextL = chainNextLabel e rest outer
-  -- Stamp this clause's next-clause label INTO its `__fallthrough__` sentinels
-  -- (emit_support's labelFallthrough) before building the arms, so the sentinel
-  -- lowers to `br %nextL` from the var name alone.  Leaving the sentinel
-  -- bare and having emitFallthrough read a module-level fallthrough Ref — which
-  -- emitDecision NULLED, so a refutable pattern-guard clause (whose guard chain
-  -- desugars to a body-level CDecision) fell through to `@mdk_oob` instead of the
-  -- next clause.  (That Ref is gone as of issue #354; the label is now threaded.)
-  let c2 = ftClause (if nextL == "" then siteFtLabel e site else nextL) c
-  let arms = [clauseArm arity c2]
-  let tree = compileTree (NoArm site) [False] (implRows [c2] 0)
-  -- This tree is SINGLE-ROW (one clause), so its CTFail means "this clause's pattern
-  -- missed" → resume at nextL.  Handed to emitTree as an argument (issue #354); it is
-  -- the only emitTree entry point with a live fallthrough — the other three (a
-  -- self-contained expression match, and the two tail-match descents) pass "".
-  emitTreeShared e env roots arms roots slot endL nextL rty tree
-  if isEmptyL rest then
-    ()
-  else
-    emit e (nextL ++ ":")
-    emitClauseChain e env arity rest roots slot endL rty outer site
+emitClauseChain e env arity xs0 roots slot endL rty outer site = go xs0
+  where
+    go [] = ()
+    go (c :: rest) =
+      let nextL = chainNextLabel e rest outer
+      -- Stamp this clause's next-clause label INTO its `__fallthrough__` sentinels
+      -- (emit_support's labelFallthrough) before building the arms, so the sentinel
+      -- lowers to `br %nextL` from the var name alone.  Leaving the sentinel
+      -- bare and having emitFallthrough read a module-level fallthrough Ref — which
+      -- emitDecision NULLED, so a refutable pattern-guard clause (whose guard chain
+      -- desugars to a body-level CDecision) fell through to `@mdk_oob` instead of the
+      -- next clause.  (That Ref is gone as of issue #354; the label is now threaded.)
+      let c2 = ftClause (if nextL == "" then siteFtLabel e site else nextL) c
+      let arms = [clauseArm arity c2]
+      let tree = compileTree (NoArm site) [False] (implRows [c2] 0)
+      -- This tree is SINGLE-ROW (one clause), so its CTFail means "this clause's pattern
+      -- missed" → resume at nextL.  Handed to emitTree as an argument (issue #354); it is
+      -- the only emitTree entry point with a live fallthrough — the other three (a
+      -- self-contained expression match, and the two tail-match descents) pass "".
+      emitTreeShared e env roots arms roots slot endL nextL rty tree
+      if isEmptyL rest then
+        ()
+      else
+        emit e (nextL ++ ":")
+        go rest
 
 -- label a clause's fall-through sentinels with the block to resume at.  An EMPTY
 -- label means "no next clause" and no site to report (an impl method's last
@@ -10197,10 +10223,12 @@ loadCaptures : Emit ->
   List String ->
   Int ->
   OrdMap (String, LTy)
-loadCaptures _ _ [] _ = omEmpty
-loadCaptures e env (c :: rest) i =
-  let r = loadField e "%clos" (i + 1)
-  omInsert c (r, capTypeOf env c) (loadCaptures e env rest (i + 1))
+loadCaptures e env xs0 i0 = go xs0 i0
+  where
+    go [] _ = omEmpty
+    go (c :: rest) i =
+      let r = loadField e "%clos" (i + 1)
+      omInsert c (r, capTypeOf env c) (go rest (i + 1))
 
 -- a captured FLOAT is stored BOXED in the closure cell (capWords/lookupVarG boxes
 -- an unboxed LTFloatU on escape), so bind it LTFloat inside the lifted body —
@@ -10226,6 +10254,8 @@ capTypeOf env c = match omLookup c env
 -- i64 word before being stored into a closure capture slot (escape coercion) —
 -- the closure ABI is uniform i64, and loadCaptures reads captures back as words.
 capWords : Emit -> OrdMap (String, LTy) -> List String -> List String
+-- Bound: list built in tail position modulo cons: a where-local go loses the constant-stack loop until the lambda-lift pass (#4878); convert then.
+-- lint-disable-next-line rule-threaded-invariant
 capWords _ _ [] = []
 capWords e env (c :: rest) =
   let (op, _) = lookupVarG e env c
@@ -10252,10 +10282,12 @@ envMergeLKeys : List String ->
   OrdMap (String, LTy) ->
   OrdMap (String, LTy) ->
   OrdMap (String, LTy)
-envMergeLKeys [] _ right = right
-envMergeLKeys (k :: rest) left right = match omLookup k left
-  Some v => omInsert k v (envMergeLKeys rest left right)
-  None => envMergeLKeys rest left right
+envMergeLKeys xs0 left right = go xs0
+  where
+    go [] = right
+    go (k :: rest) = match omLookup k left
+      Some v => omInsert k v (go rest)
+      None => go rest
 
 -- #242/#623: order-preserving dedup keeping the LAST occurrence of each name —
 -- NOT the same function as `support.util.dedup`, which keeps the FIRST (#623's
@@ -10415,14 +10447,16 @@ emitCtorAlloc e name fields =
 
 -- store each field at offset 8*(i+1) (field 0 follows the one-word header).
 storeFields : Emit -> String -> List String -> Int -> Unit
-storeFields _ _ [] _ = ()
-storeFields e p (f :: rest) i =
-  let fp = freshReg e
-  emit
-    e
-    "  \{fp} = getelementptr i8, ptr \{p}, i64 \{intToString (8 * (i + 1))}"
-  emit e "  store i64 \{f}, ptr \{fp}"
-  storeFields e p rest (i + 1)
+storeFields e p xs0 i0 = go xs0 i0
+  where
+    go [] _ = ()
+    go (f :: rest) i =
+      let fp = freshReg e
+      emit
+        e
+        "  \{fp} = getelementptr i8, ptr \{p}, i64 \{intToString (8 * (i + 1))}"
+      emit e "  store i64 \{f}, ptr \{fp}"
+      go rest (i + 1)
 
 -- load a cell's tag (header word at offset 0) given the cell's pointer word.
 loadTag : Emit -> String -> String
@@ -10525,6 +10559,8 @@ loadField e ptrWord idx =
 
 -- load the first `a` fields of a cell as a list of operand words.
 loadFields : Emit -> String -> Int -> Int -> List String
+-- Bound: list built in tail position modulo cons: a where-local go loses the constant-stack loop until the lambda-lift pass (#4878); convert then.
+-- lint-disable-next-line rule-threaded-invariant
 loadFields e foc a i
   | i >= a = []
   | otherwise =
@@ -10614,51 +10650,51 @@ emitTree : Emit ->
 -- miscompile, fixed 2026-07-13 by moving THAT label into the node).  Threading it makes
 -- the answer local and the hazard structurally impossible: an entry point that means
 -- "a miss here is a genuine abort" passes "" and cannot forget to restore.
-emitTree e _ _ _ _ _ _ "" _ (CTFail site) = emitFailTrap e site
-emitTree e _ _ _ _ _ _ lbl _ (CTFail _) = emit e ("  br label %" ++ lbl)
-emitTree e env roots arms _ slot endL _ rty (CTLeaf i) =
-  emitLeaf e env roots arms i slot endL rty
--- CTGuard i fail: arm i matched but is GUARDED.  Re-bind its pattern (like a
--- leaf), evaluate its guards; all pass → eval the body (emitLeaf-style); any
--- guard fails → branch to the `fail` subtree, which resumes the ordered match at
--- the same column context `occs` (mirrors core_ir_eval's `cevalGuardedBody`).
--- This CLOSES the historical CTGuard emitter gap — `compiler/` code on the native
--- self-compile path no longer needs the guard-free convention for `CGBool`
--- guards.  A refutable `p <- e` pattern guard stays a contained gap (not produced
--- by current source); a bad arm index likewise.
-emitTree e env roots arms occs slot endL ftL rty (CTGuard i fail) =
-  match leafArm e arms i
-    Some (pat, guards, body, share) =>
-      if allGuardsEmittable guards then
-        emitGuardedArm
-          e
-          env
-          roots
-          arms
-          occs
-          pat
-          guards
-          body
-          share
-          fail
-          slot
-          endL
-          ftL
-          rty
-      else
-        gapU
-          e
-          "refutable pattern guard (`p <- e`) in a match arm (CTGuard) — not yet lowered"
+emitTree e env roots arms occs0 slot endL ftL rty tr0 = go occs0 tr0
+  where
+    go _ (CTFail site) = match ftL
+      "" => emitFailTrap e site
+      lbl => emit e ("  br label %" ++ lbl)
+    go _ (CTLeaf i) = emitLeaf e env roots arms i slot endL rty
+    -- CTGuard i fail: arm i matched but is GUARDED.  Re-bind its pattern (like a
+    -- leaf), evaluate its guards; all pass → eval the body (emitLeaf-style); any
+    -- guard fails → branch to the `fail` subtree, which resumes the ordered match at
+    -- the same column context `occs` (mirrors core_ir_eval's `cevalGuardedBody`).
+    -- This CLOSES the historical CTGuard emitter gap — `compiler/` code on the native
+    -- self-compile path no longer needs the guard-free convention for `CGBool`
+    -- guards.  A refutable `p <- e` pattern guard stays a contained gap (not produced
+    -- by current source); a bad arm index likewise.
+    go occs (CTGuard i fail) = match leafArm e arms i
+      Some (pat, guards, body, share) =>
+        if allGuardsEmittable guards then
+          emitGuardedArm
+            e
+            env
+            roots
+            arms
+            occs
+            pat
+            guards
+            body
+            share
+            fail
+            slot
+            endL
+            ftL
+            rty
+        else
+          gapU
+            e
+            "refutable pattern guard (`p <- e`) in a match arm (CTGuard) — not yet lowered"
+          emit e ("  store i64 0, ptr " ++ slot)
+          emit e ("  br label %" ++ endL)
+      None =>
+        gapU e "guarded arm index out of range (CTGuard)"
         emit e ("  store i64 0, ptr " ++ slot)
         emit e ("  br label %" ++ endL)
-    None =>
-      gapU e "guarded arm index out of range (CTGuard)"
-      emit e ("  store i64 0, ptr " ++ slot)
-      emit e ("  br label %" ++ endL)
-emitTree e env roots arms occs slot endL ftL rty (CTDrop sub) =
-  emitTree e env roots arms (tailS occs) slot endL ftL rty sub
-emitTree e env roots arms occs slot endL ftL rty (CTSwitch branches dft) =
-  emitSwitch e env roots arms occs branches dft slot endL ftL rty
+    go occs (CTDrop sub) = go (tailS occs) sub
+    go occs (CTSwitch branches dft) =
+      emitSwitch e env roots arms occs branches dft slot endL ftL rty
 
 -- a terminal leaf: re-match the selected arm's ORIGINAL pattern against the leaf's
 -- root word(s) — `roots` (the tree path guarantees it matches) to bind its
@@ -10867,24 +10903,26 @@ addOrEdge : Emit ->
   CExpr ->
   (String, List String) ->
   (List OrJoin, String)
-addOrEdge e [] owner names bound env body edge =
-  let label = "orjoin" ++ intToString (freshLocal e)
-  let j = OrJoin {
-    ojOwner = owner,
-    ojLabel = label,
-    ojNames = names,
-    ojTys = map snd bound,
-    ojEnv = env,
-    ojBody = body,
-    ojEdges = [edge],
-  }
-  ([j], label)
-addOrEdge e (j :: rest) owner names bound env body edge
-  | j.ojOwner == owner =
-    ({ j | ojEdges = edge :: j.ojEdges } :: rest, j.ojLabel)
-  | otherwise =
-    let (rest2, label) = addOrEdge e rest owner names bound env body edge
-    (j :: rest2, label)
+addOrEdge e js0 owner names bound env body edge = go js0
+  where
+    go [] =
+      let label = "orjoin" ++ intToString (freshLocal e)
+      let j = OrJoin {
+        ojOwner = owner,
+        ojLabel = label,
+        ojNames = names,
+        ojTys = map snd bound,
+        ojEnv = env,
+        ojBody = body,
+        ojEdges = [edge],
+      }
+      ([j], label)
+    go (j :: rest)
+      | j.ojOwner == owner =
+        ({ j | ojEdges = edge :: j.ojEdges } :: rest, j.ojLabel)
+      | otherwise =
+        let (rest2, label) = go rest
+        (j :: rest2, label)
 
 -- A join block: one `phi` per variable over the block's edges, then the body.
 emitOrJoin : Emit -> String -> String -> Ref LTy -> OrJoin -> Unit
@@ -10900,15 +10938,17 @@ orPhis : Emit ->
   List (String, LTy) ->
   OrdMap (String, LTy) ->
   OrdMap (String, LTy)
-orPhis _ _ _ [] env = env
-orPhis e edges k ((name, ty) :: rest) env =
-  let r = freshReg e
-  let incoming =
-    joinWith
-      ", "
-      (map (ed => "[ \{orOperand e k (snd ed)}, %\{fst ed} ]") edges)
-  emit e "  \{r} = phi i64 \{incoming}"
-  orPhis e edges (k + 1) rest (omInsert name (r, ty) env)
+orPhis e edges k0 xs0 env0 = go k0 xs0 env0
+  where
+    go _ [] env = env
+    go k ((name, ty) :: rest) env =
+      let r = freshReg e
+      let incoming =
+        joinWith
+          ", "
+          (map (ed => "[ \{orOperand e k (snd ed)}, %\{fst ed} ]") edges)
+      emit e "  \{r} = phi i64 \{incoming}"
+      go (k + 1) rest (omInsert name (r, ty) env)
 
 -- Edge operands are built one per owner variable, so k is always in range; an
 -- out-of-range k reports a gap rather than emitting a bogus phi operand.
@@ -10968,31 +11008,30 @@ emitSelfTailArm : Emit ->
   String ->
   Ref LTy ->
   Unit
-emitSelfTailArm e env self (CIf c t f) slot endL rty =
-  let (thenL, elseL) = emitTailIfHead e env c
-  emit e (thenL ++ ":")
-  emitSelfTailArm e env self t slot endL rty
-  emit e (elseL ++ ":")
-  emitSelfTailArm e env self f slot endL rty
-emitSelfTailArm e env _ (CDecision scrut arms tree) slot endL rty =
-  let (sv, _) = emitExpr e env scrut
-  emitTreeShared e env [sv] arms [sv] slot endL "" rty tree
-emitSelfTailArm e env self (CLet recF pat e1 e2) slot endL rty =
-  if letBinds recF pat e1 then
-    emitSelfTailArm e (bindLet e env recF pat e1 e2) self e2 slot endL rty
-  else
-    emitArmValue e env (CLet recF pat e1 e2) slot endL rty
-emitSelfTailArm e env self (CLetGroup binds body) slot endL rty =
-  match bindLetGroup e env binds body
-    Some env2 => emitSelfTailArm e env2 self body slot endL rty
-    None => emitArmWord e (letGroupGap e) slot endL rty
-emitSelfTailArm e env self (CBlock stmts) slot endL rty =
-  match lastStmtExpr stmts
-    Some last =>
-      emitSelfTailArm e (emitBlockInit e env stmts) self last slot endL rty
-    None => emitArmValue e env (CBlock stmts) slot endL rty
-emitSelfTailArm e env self body slot endL rty =
-  emitTailLeaf e env self body (_ => emitArmValue e env body slot endL rty)
+emitSelfTailArm e env0 self body0 slot endL rty = go env0 body0
+  where
+    go env (CIf c t f) =
+      let (thenL, elseL) = emitTailIfHead e env c
+      emit e (thenL ++ ":")
+      go env t
+      emit e (elseL ++ ":")
+      go env f
+    go env (CDecision scrut arms tree) =
+      let (sv, _) = emitExpr e env scrut
+      emitTreeShared e env [sv] arms [sv] slot endL "" rty tree
+    go env (CLet recF pat e1 e2) =
+      if letBinds recF pat e1 then
+        go (bindLet e env recF pat e1 e2) e2
+      else
+        emitArmValue e env (CLet recF pat e1 e2) slot endL rty
+    go env (CLetGroup binds body) = match bindLetGroup e env binds body
+      Some env2 => go env2 body
+      None => emitArmWord e (letGroupGap e) slot endL rty
+    go env (CBlock stmts) = match lastStmtExpr stmts
+      Some last => go (emitBlockInit e env stmts) last
+      None => emitArmValue e env (CBlock stmts) slot endL rty
+    go env body =
+      emitTailLeaf e env self body (_ => emitArmValue e env body slot endL rty)
 
 -- emit the guard tests left-to-right: a `CGBool` tests a Bool (`True` = the word
 -- 3) and branches to `failL` on failure, falling through on success; a
@@ -11007,19 +11046,21 @@ emitGuardChain : Emit ->
   CExpr ->
   String ->
   OrdMap (String, LTy)
-emitGuardChain _ env [] _ _ = env
-emitGuardChain e env ((CGBool g) :: rest) body failL =
-  let (bw, _) = emitExpr e env g
-  let cmp = freshReg e
-  emit e "  \{cmp} = icmp eq i64 \{bw}, 3"
-  let pass = "guardok" ++ intToString (freshLocal e)
-  emit e "  br i1 \{cmp}, label %\{pass}, label %\{failL}"
-  emit e (pass ++ ":")
-  emitGuardChain e env rest body failL
-emitGuardChain e env ((CGBind p ex) :: rest) body failL =
-  let (v, _) = emitExpr e env ex
-  let env2 = emitRefutMatch e env p v body failL
-  emitGuardChain e env2 rest body failL
+emitGuardChain e env0 xs0 body failL = go env0 xs0
+  where
+    go env [] = env
+    go env ((CGBool g) :: rest) =
+      let (bw, _) = emitExpr e env g
+      let cmp = freshReg e
+      emit e "  \{cmp} = icmp eq i64 \{bw}, 3"
+      let pass = "guardok" ++ intToString (freshLocal e)
+      emit e "  br i1 \{cmp}, label %\{pass}, label %\{failL}"
+      emit e (pass ++ ":")
+      go env rest
+    go env ((CGBind p ex) :: rest) =
+      let (v, _) = emitExpr e env ex
+      let env2 = emitRefutMatch e env p v body failL
+      go env2 rest
 
 -- a clause's guards are now ALL emittable: `CGBool` guards always were; a
 -- `CGBind p <- e` is lowered via `emitRefutMatch` whether `p` is irrefutable
@@ -11057,10 +11098,12 @@ bindEach : Emit ->
   List String ->
   CExpr ->
   OrdMap (String, LTy)
-bindEach e env (p :: ps) (v :: vs) body =
-  let env2 = bindPattern e env p v body
-  bindEach e env2 ps vs body
-bindEach _ env _ _ _ = env
+bindEach e env0 xs0 xs1 body = go env0 xs0 xs1
+  where
+    go env (p :: ps) (v :: vs) =
+      let env2 = bindPattern e env p v body
+      go env2 ps vs
+    go env _ _ = env
 
 -- the refutable counterpart of `bindArm` (guarded / range-pattern clause): test +
 -- bind each param pattern against its own word, branching to `failL` on a miss.
@@ -11085,10 +11128,12 @@ emitRefutEach : Emit ->
   CExpr ->
   String ->
   OrdMap (String, LTy)
-emitRefutEach e env (p :: ps) (v :: vs) body failL =
-  let env2 = emitRefutMatch e env p v body failL
-  emitRefutEach e env2 ps vs body failL
-emitRefutEach _ env _ _ _ _ = env
+emitRefutEach e env0 xs0 xs1 body failL = go env0 xs0 xs1
+  where
+    go env (p :: ps) (v :: vs) =
+      let env2 = emitRefutMatch e env p v body failL
+      go env2 ps vs
+    go env _ _ = env
 
 -- bind a pattern's variables against a value word, emitting field loads for the
 -- constructor sub-patterns.  Mirrors the binding half of eval.mdk's matchPat, but
@@ -11100,32 +11145,33 @@ bindPattern : Emit ->
   String ->
   CExpr ->
   OrdMap (String, LTy)
-bindPattern _ env PWild _ _ = env
-bindPattern _ env (PLit _) _ _ = env
-bindPattern e env (PVar x _ bid) v _ = bindVarTy e env x bid v
-bindPattern e env (PCon _ args) v body = bindFields e env args v body 0
-bindPattern e env (PTuple ps) v body = bindFields e env ps v body 0
--- built-in list patterns: a cons cell is a 2-field "Cons" constructor
--- (head = field 0, tail = field 1); the empty-list pattern (a "Nil" cell) binds
--- nothing.  The decision tree already proved the shape (HCons/HNil switch), so
--- this only EXTRACTS — same as the PCon binding path, with [head, tail] fields.
-bindPattern e env (PCons h t) v body = bindFields e env [h, t] v body 0
-bindPattern _ env (PList []) _ _ = env
--- as-pattern `x@p`: bind `x` to the WHOLE value v (at its stamp, like PVar),
--- then descend into `p` so its inner vars also bind.
-bindPattern e env (PAs x _ bid p) v body =
-  let env2 = bindVarTy e env x bid v
-  bindPattern e env2 p v body
--- non-empty list-literal pattern `[p::ps]`: v is a Cons cell (the switch proved
--- it); bind the head element (field 0) to `p` and the tail (field 1) to `PList ps`.
-bindPattern e env (PList (p :: ps)) v body =
-  bindFields e env [p, PList ps] v body 0
-bindPattern e env p _ _ =
-  gapEnv
-    e
-    ("unsupported pattern in match arm (variable / wildcard / constructor / tuple / cons / nil / int-literal only): "
-      ++ ptag p)
-    env
+bindPattern e env0 p0 v body = go env0 p0
+  where
+    go env PWild = env
+    go env (PLit _) = env
+    go env (PVar x _ bid) = bindVarTy e env x bid v
+    go env (PCon _ args) = bindFields e env args v body 0
+    go env (PTuple ps) = bindFields e env ps v body 0
+    -- built-in list patterns: a cons cell is a 2-field "Cons" constructor
+    -- (head = field 0, tail = field 1); the empty-list pattern (a "Nil" cell) binds
+    -- nothing.  The decision tree already proved the shape (HCons/HNil switch), so
+    -- this only EXTRACTS — same as the PCon binding path, with [head, tail] fields.
+    go env (PCons h t) = bindFields e env [h, t] v body 0
+    go env (PList []) = env
+    -- as-pattern `x@p`: bind `x` to the WHOLE value v (at its stamp, like PVar),
+    -- then descend into `p` so its inner vars also bind.
+    go env (PAs x _ bid p) =
+      let env2 = bindVarTy e env x bid v
+      go env2 p
+    -- non-empty list-literal pattern `[p::ps]`: v is a Cons cell (the switch proved
+    -- it); bind the head element (field 0) to `p` and the tail (field 1) to `PList ps`.
+    go env (PList (p :: ps)) = bindFields e env [p, PList ps] v body 0
+    go env p =
+      gapEnv
+        e
+        ("unsupported pattern in match arm (variable / wildcard / constructor / tuple / cons / nil / int-literal only): "
+          ++ ptag p)
+        env
 
 -- bind variable `x`, binder [bid], to word `v` at the binder's stamped type.
 bindVarTy : Emit ->
@@ -11143,11 +11189,13 @@ bindFields : Emit ->
   CExpr ->
   Int ->
   OrdMap (String, LTy)
-bindFields _ env [] _ _ _ = env
-bindFields e env (p :: rest) v body i =
-  let f = loadField e v i
-  let env2 = bindPattern e env p f body
-  bindFields e env2 rest v body (i + 1)
+bindFields e env0 xs0 v body i0 = go env0 xs0 i0
+  where
+    go env [] _ = env
+    go env (p :: rest) i =
+      let f = loadField e v i
+      let env2 = bindPattern e env p f body
+      go env2 rest (i + 1)
 
 -- ── refutable pattern match (G5 refutable pattern-guards / G6 range patterns) ──
 -- Test pattern `p` against value word `v`, branching to `failL` on a MISMATCH;
@@ -11171,74 +11219,72 @@ emitRefutMatch : Emit ->
   String ->
   OrdMap (String, LTy)
 -- irrefutable: no test, just bind (delegates to bindPattern's extraction).
-emitRefutMatch e env PWild v body _ = bindPattern e env PWild v body
-emitRefutMatch e env (PVar x l bid) v body _ =
-  bindPattern e env (PVar x l bid) v body
-emitRefutMatch e env (PAs x _ bid p) v body failL =
-  let env2 = bindVarTy e env x bid v
-  emitRefutMatch e env2 p v body failL
--- a tuple is irrefutable in SHAPE (the type fixes the arity), but its element
--- patterns can be refutable — recurse element-wise on the loaded fields.
-emitRefutMatch e env (PTuple ps) v body failL =
-  emitRefutFields e env ps v body failL 0
--- integer / char literal: compare the tagged immediate word directly (both are
--- `n*2+1`); String literal via @mdk_string_eq (tagged Bool result); Bool literal
--- compares the immediate (3/1).
-emitRefutMatch e env (PLit (LInt k)) v _ failL =
-  -- full-width tag via emitLit (see emitLitChain / #759): a `k*2+1` head wraps for
-  -- |k| >= 2^61 and bakes the wrong comparison constant.
-  let (kw, _) = emitLit e (LInt k)
-  emitWordEqTest e v kw failL
-  env
-emitRefutMatch e env (PLit (LChar c)) v _ failL =
-  let cp = charCode (arrayGetUnsafe 0 (stringToChars c))
-  emitWordEqTest e v (intToString (cp * 2 + 1)) failL
-  env
-emitRefutMatch e env (PLit (LBool b)) v _ failL =
-  emitWordEqTest e v (if b then "3" else "1") failL
-  env
-emitRefutMatch e env (PLit (LString s)) v _ failL =
-  let (lit, _) = emitLit e (LString s)
-  let r = freshReg e
-  emit e (rtLine e r "i64" "mdk_string_eq" (i64Ops [v, lit]))
-  emitWordEqTest e r "3" failL
-  env
--- range pattern (G6): `lo <= v && v <= hi` (`..=`) or `lo <= v && v < hi` (`..`),
--- on the tagged immediate words (the `n*2+1` transform is strictly monotonic for
--- both Int and Char, so the tagged comparison matches the untagged one).  Mirrors
--- eval.mdk's inIntRange/inCharRange: incl ⇒ `<= hi`, else `<= hi-1` ≡ `< hi`.
-emitRefutMatch e env (PRng lo hi incl) v _ failL =
-  emitRangeTest e v (rngBound lo) (rngBound hi) incl failL
-  env
--- constructor: test the discriminant against the ctor's composite tag; on
--- mismatch branch to failL, on match load fields and recurse element-wise.
-emitRefutMatch e env (PCon "True" []) v body failL =
-  emitRefutMatch e env (PLit (LBool True)) v body failL
-emitRefutMatch e env (PCon "False" []) v body failL =
-  emitRefutMatch e env (PLit (LBool False)) v body failL
-emitRefutMatch e env (PCon c args) v body failL =
-  let rep = discRepOfHead e c (lengthS args) [c]
-  emitWordEqTest e (discReg e rep v) (discExpected e rep c) failL
-  emitRefutFields e env args v body failL 0
--- list cons cell: test the discriminant is "Cons", then recurse on head/tail.
-emitRefutMatch e env (PCons h t) v body failL =
-  let rep = discRepOfHead e "Cons" 2 ["Cons"]
-  emitWordEqTest e (discReg e rep v) (discExpected e rep "Cons") failL
-  emitRefutFields e env [h, t] v body failL 0
-emitRefutMatch e env (PList []) v _ failL =
-  let rep = discRepOfHead e "Nil" 0 ["Nil"]
-  emitWordEqTest e (discReg e rep v) (discExpected e rep "Nil") failL
-  env
-emitRefutMatch e env (PList (p :: ps)) v body failL =
-  let rep = discRepOfHead e "Cons" 2 ["Cons"]
-  emitWordEqTest e (discReg e rep v) (discExpected e rep "Cons") failL
-  emitRefutFields e env [p, PList ps] v body failL 0
-emitRefutMatch e env p _ _ _ =
-  gapEnv
-    e
-    ("refutable pattern in guard/range arm not lowered (variable / wildcard / as / tuple / literal / range / constructor / cons / list only): "
-      ++ ptag p)
-    env
+emitRefutMatch e env0 p0 v body failL = go env0 p0
+  where
+    go env PWild = bindPattern e env PWild v body
+    go env (PVar x l bid) = bindPattern e env (PVar x l bid) v body
+    go env (PAs x _ bid p) =
+      let env2 = bindVarTy e env x bid v
+      go env2 p
+    -- a tuple is irrefutable in SHAPE (the type fixes the arity), but its element
+    -- patterns can be refutable — recurse element-wise on the loaded fields.
+    go env (PTuple ps) = emitRefutFields e env ps v body failL 0
+    -- integer / char literal: compare the tagged immediate word directly (both are
+    -- `n*2+1`); String literal via @mdk_string_eq (tagged Bool result); Bool literal
+    -- compares the immediate (3/1).
+    go env (PLit (LInt k)) =
+      -- full-width tag via emitLit (see emitLitChain / #759): a `k*2+1` head wraps for
+      -- |k| >= 2^61 and bakes the wrong comparison constant.
+      let (kw, _) = emitLit e (LInt k)
+      emitWordEqTest e v kw failL
+      env
+    go env (PLit (LChar c)) =
+      let cp = charCode (arrayGetUnsafe 0 (stringToChars c))
+      emitWordEqTest e v (intToString (cp * 2 + 1)) failL
+      env
+    go env (PLit (LBool b)) =
+      emitWordEqTest e v (if b then "3" else "1") failL
+      env
+    go env (PLit (LString s)) =
+      let (lit, _) = emitLit e (LString s)
+      let r = freshReg e
+      emit e (rtLine e r "i64" "mdk_string_eq" (i64Ops [v, lit]))
+      emitWordEqTest e r "3" failL
+      env
+    -- range pattern (G6): `lo <= v && v <= hi` (`..=`) or `lo <= v && v < hi` (`..`),
+    -- on the tagged immediate words (the `n*2+1` transform is strictly monotonic for
+    -- both Int and Char, so the tagged comparison matches the untagged one).  Mirrors
+    -- eval.mdk's inIntRange/inCharRange: incl ⇒ `<= hi`, else `<= hi-1` ≡ `< hi`.
+    go env (PRng lo hi incl) =
+      emitRangeTest e v (rngBound lo) (rngBound hi) incl failL
+      env
+    -- constructor: test the discriminant against the ctor's composite tag; on
+    -- mismatch branch to failL, on match load fields and recurse element-wise.
+    go env (PCon "True" []) = go env (PLit (LBool True))
+    go env (PCon "False" []) = go env (PLit (LBool False))
+    go env (PCon c args) =
+      let rep = discRepOfHead e c (lengthS args) [c]
+      emitWordEqTest e (discReg e rep v) (discExpected e rep c) failL
+      emitRefutFields e env args v body failL 0
+    -- list cons cell: test the discriminant is "Cons", then recurse on head/tail.
+    go env (PCons h t) =
+      let rep = discRepOfHead e "Cons" 2 ["Cons"]
+      emitWordEqTest e (discReg e rep v) (discExpected e rep "Cons") failL
+      emitRefutFields e env [h, t] v body failL 0
+    go env (PList []) =
+      let rep = discRepOfHead e "Nil" 0 ["Nil"]
+      emitWordEqTest e (discReg e rep v) (discExpected e rep "Nil") failL
+      env
+    go env (PList (p :: ps)) =
+      let rep = discRepOfHead e "Cons" 2 ["Cons"]
+      emitWordEqTest e (discReg e rep v) (discExpected e rep "Cons") failL
+      emitRefutFields e env [p, PList ps] v body failL 0
+    go env p =
+      gapEnv
+        e
+        ("refutable pattern in guard/range arm not lowered (variable / wildcard / as / tuple / literal / range / constructor / cons / list only): "
+          ++ ptag p)
+        env
 
 -- recurse a refutable test over a cell's leading fields (loadField per index).
 emitRefutFields : Emit ->
@@ -11249,11 +11295,13 @@ emitRefutFields : Emit ->
   String ->
   Int ->
   OrdMap (String, LTy)
-emitRefutFields _ env [] _ _ _ _ = env
-emitRefutFields e env (p :: rest) v body failL i =
-  let f = loadField e v i
-  let env2 = emitRefutMatch e env p f body failL
-  emitRefutFields e env2 rest v body failL (i + 1)
+emitRefutFields e env0 xs0 v body failL i0 = go env0 xs0 i0
+  where
+    go env [] _ = env
+    go env (p :: rest) i =
+      let f = loadField e v i
+      let env2 = emitRefutMatch e env p f body failL
+      go env2 rest (i + 1)
 
 -- emit `icmp eq word, k`; on inequality branch to failL, else fall through.
 emitWordEqTest : Emit -> String -> String -> String -> Unit
@@ -11651,6 +11699,8 @@ emitConChain : Emit ->
   Ref LTy ->
   Bool ->
   Unit
+-- Bound: the formatter lays this where-go head out as a line the parser rejects (#4896); convert then.
+-- lint-disable-next-line rule-threaded-invariant
 emitConChain e env roots arms _ rest _ _ [] dft slot endL ftL rty exh
   | exh && ftL == "" = match dft
     CTFail site => emitFailTrap e site
@@ -11708,56 +11758,56 @@ emitLitChain : Emit ->
   String ->
   Ref LTy ->
   Unit
-emitLitChain e env roots arms _ rest [] dft slot endL ftL rty =
-  emitTree e env roots arms rest slot endL ftL rty dft
-emitLitChain e env roots arms foc rest ((CTBranch (HLit (LInt k)) sub) :: more) dft slot endL ftL rty =
-  -- Tag the pattern head with the SAME full-width lowering the value-construction
-  -- path uses (emitLit): for |k| >= 2^61 the `k*2+1` tag overflows the emitter's own
-  -- 63-bit Medaka Int and bakes a WRONG comparison constant (#759, an S0 wrong-arm
-  -- miscompile). emitLit shifts at full i64 width via LLVM so the head can't wrap.
-  let (kw, _) = emitLit e (LInt k)
-  let cmp = freshReg e
-  emit e "  \{cmp} = icmp eq i64 \{foc}, \{kw}"
-  let n = intToString (freshLocal e)
-  let yes = "lityes" ++ n
-  let next = "litnext" ++ n
-  emit e "  br i1 \{cmp}, label %\{yes}, label %\{next}"
-  emit e (yes ++ ":")
-  emitTree e env roots arms rest slot endL ftL rty sub
-  emit e (next ++ ":")
-  emitLitChain e env roots arms foc rest more dft slot endL ftL rty
--- Char = immediate codepoint word (cp << 1) | 1 — same comparison shape as Int.
-emitLitChain e env roots arms foc rest ((CTBranch (HLit (LChar c)) sub) :: more) dft slot endL ftL rty =
-  let cp = charCode (arrayGetUnsafe 0 (stringToChars c))
-  let cmp = freshReg e
-  emit e "  \{cmp} = icmp eq i64 \{foc}, \{intToString (cp * 2 + 1)}"
-  let n = intToString (freshLocal e)
-  let yes = "lityes" ++ n
-  let next = "litnext" ++ n
-  emit e "  br i1 \{cmp}, label %\{yes}, label %\{next}"
-  emit e (yes ++ ":")
-  emitTree e env roots arms rest slot endL ftL rty sub
-  emit e (next ++ ":")
-  emitLitChain e env roots arms foc rest more dft slot endL ftL rty
--- String = boxed cell; equality via the @mdk_string_eq runtime helper, which
--- returns a TAGGED Bool word (3 = True), so branch on `icmp eq i64 r, 3`.
--- Materialize the literal operand the same way emitLit (LString _) does.
-emitLitChain e env roots arms foc rest ((CTBranch (HLit (LString s)) sub) :: more) dft slot endL ftL rty =
-  let (lit, _) = emitLit e (LString s)
-  let r = freshReg e
-  emit e (rtLine e r "i64" "mdk_string_eq" (i64Ops [foc, lit]))
-  let cmp = freshReg e
-  emit e "  \{cmp} = icmp eq i64 \{r}, 3"
-  let n = intToString (freshLocal e)
-  let yes = "lityes" ++ n
-  let next = "litnext" ++ n
-  emit e "  br i1 \{cmp}, label %\{yes}, label %\{next}"
-  emit e (yes ++ ":")
-  emitTree e env roots arms rest slot endL ftL rty sub
-  emit e (next ++ ":")
-  emitLitChain e env roots arms foc rest more dft slot endL ftL rty
-emitLitChain e _ _ _ _ _ _ _ _ _ _ _ =
-  gapU e "non-Int literal switch (no Float / Bool literal heads)"
+emitLitChain e env roots arms foc rest xs0 dft slot endL ftL rty = go xs0
+  where
+    go [] = emitTree e env roots arms rest slot endL ftL rty dft
+    go ((CTBranch (HLit (LInt k)) sub) :: more) =
+      -- Tag the pattern head with the SAME full-width lowering the value-construction
+      -- path uses (emitLit): for |k| >= 2^61 the `k*2+1` tag overflows the emitter's own
+      -- 63-bit Medaka Int and bakes a WRONG comparison constant (#759, an S0 wrong-arm
+      -- miscompile). emitLit shifts at full i64 width via LLVM so the head can't wrap.
+      let (kw, _) = emitLit e (LInt k)
+      let cmp = freshReg e
+      emit e "  \{cmp} = icmp eq i64 \{foc}, \{kw}"
+      let n = intToString (freshLocal e)
+      let yes = "lityes" ++ n
+      let next = "litnext" ++ n
+      emit e "  br i1 \{cmp}, label %\{yes}, label %\{next}"
+      emit e (yes ++ ":")
+      emitTree e env roots arms rest slot endL ftL rty sub
+      emit e (next ++ ":")
+      go more
+    -- Char = immediate codepoint word (cp << 1) | 1 — same comparison shape as Int.
+    go ((CTBranch (HLit (LChar c)) sub) :: more) =
+      let cp = charCode (arrayGetUnsafe 0 (stringToChars c))
+      let cmp = freshReg e
+      emit e "  \{cmp} = icmp eq i64 \{foc}, \{intToString (cp * 2 + 1)}"
+      let n = intToString (freshLocal e)
+      let yes = "lityes" ++ n
+      let next = "litnext" ++ n
+      emit e "  br i1 \{cmp}, label %\{yes}, label %\{next}"
+      emit e (yes ++ ":")
+      emitTree e env roots arms rest slot endL ftL rty sub
+      emit e (next ++ ":")
+      go more
+    -- String = boxed cell; equality via the @mdk_string_eq runtime helper, which
+    -- returns a TAGGED Bool word (3 = True), so branch on `icmp eq i64 r, 3`.
+    -- Materialize the literal operand the same way emitLit (LString _) does.
+    go ((CTBranch (HLit (LString s)) sub) :: more) =
+      let (lit, _) = emitLit e (LString s)
+      let r = freshReg e
+      emit e (rtLine e r "i64" "mdk_string_eq" (i64Ops [foc, lit]))
+      let cmp = freshReg e
+      emit e "  \{cmp} = icmp eq i64 \{r}, 3"
+      let n = intToString (freshLocal e)
+      let yes = "lityes" ++ n
+      let next = "litnext" ++ n
+      emit e "  br i1 \{cmp}, label %\{yes}, label %\{next}"
+      emit e (yes ++ ":")
+      emitTree e env roots arms rest slot endL ftL rty sub
+      emit e (next ++ ":")
+      go more
+    go _ = gapU e "non-Int literal switch (no Float / Bool literal heads)"
 
 -- ── small list helpers ────────────────────────────────────────────
 takeS : Int -> List a -> List a
@@ -11939,14 +11989,16 @@ tmcMarker e sym mode =
   emit e "; tmc: \{name} \{mode}"
 
 tmcGroupMarkers : Emit -> String -> List String -> Unit
-tmcGroupMarkers _ _ [] = ()
-tmcGroupMarkers e root (m :: rest) =
-  let _ =
-    if m == root then
-      tmcMarker e m "group-root"
-    else
-      tmcMarker e m ("group:" ++ root)
-  tmcGroupMarkers e root rest
+tmcGroupMarkers e root xs0 = go xs0
+  where
+    go [] = ()
+    go (m :: rest) =
+      let _ =
+        if m == root then
+          tmcMarker e m "group-root"
+        else
+          tmcMarker e m ("group:" ++ root)
+      go rest
 
 emitTrmcFn : Emit ->
   String ->
@@ -12046,6 +12098,8 @@ emitTrmcLoopBody e self arity slotTys clauses single singlePats singleBody site 
 -- one mutable `alloca i64` param slot per arg, seeded from %argK; returns the slot
 -- registers in order.
 trmcEmitParamSlots : Emit -> Int -> Int -> List String
+-- Bound: list built in tail position modulo cons: a where-local go loses the constant-stack loop until the lambda-lift pass (#4878); convert then.
+-- lint-disable-next-line rule-threaded-invariant
 trmcEmitParamSlots e arity i
   | i >= arity = []
   | otherwise =
@@ -12362,7 +12416,6 @@ emitGDispGroup : Emit -> DispGroup -> Unit
 emitGDispGroup e grp =
   let root = dispRootOf grp
   let members = dispMembersOf grp
-  let binds = !e.gDispBinds
   let rootArity = gDispFnArity e root
   let u = gDispMaxArity e members 0
   tmcGroupMarkers e root members
@@ -12381,7 +12434,7 @@ emitGDispGroup e grp =
   emit e ("  br label %" ++ gDispLabel root)
   let saved = !e.gDispCtx
   e.gDispCtx := GDispOn root members uslots destSlot exitL
-  emitGDispMembers e binds members
+  emitGDispMembers e members
   e.gDispCtx := saved
   emit e (exitL ++ ":")
   let r = freshReg e
@@ -12393,6 +12446,8 @@ emitGDispGroup e grp =
 -- one shared `alloca i64` slot per uniform param position, seeded from the
 -- root's %argK (< rootArity) or 0.
 gDispEmitSlots : Emit -> Int -> Int -> Int -> List String
+-- Bound: list built in tail position modulo cons: a where-local go loses the constant-stack loop until the lambda-lift pass (#4878); convert then.
+-- lint-disable-next-line rule-threaded-invariant
 gDispEmitSlots e u rootArity i
   | i >= u = []
   | otherwise =
@@ -12408,13 +12463,13 @@ gDispMaxArity e (m :: rest) acc =
   let a = gDispFnArity e m
   gDispMaxArity e rest (maxInt a acc)
 
-emitGDispMembers : Emit -> List CBind -> List String -> Unit
-emitGDispMembers _ _ [] = ()
-emitGDispMembers e binds (m :: rest) =
+emitGDispMembers : Emit -> List String -> Unit
+emitGDispMembers _ [] = ()
+emitGDispMembers e (m :: rest) =
   let _ = match omLookup m !e.gDispBindMap
     Some b => emitGDispMember e b
     None => gapU e ("(b') group member without a bind: " ++ m)
-  emitGDispMembers e binds rest
+  emitGDispMembers e rest
 
 -- a member's entry block: reload its arity-many slots (typed from its inferred
 -- sig, LTInt-padded — the same trmcReloadParams the Stage-1 loop head uses,
@@ -12566,22 +12621,24 @@ gDispSpine e members ex =
 -- zeroed (GC_malloc) until the next cell/base fills it — the Stage-1 GC-safety
 -- argument verbatim.
 emitGDispCells : Emit -> OrdMap (String, LTy) -> List CExpr -> String -> Unit
-emitGDispCells _ _ [] _ = ()
-emitGDispCells e env (h :: rest) destSlot =
-  let hv = emitArgs e env [h]
-  let cell = freshReg e
-  emit e (rtLine e cell "ptr" "mdk_alloc" (i64Ops ["24"]))
-  emit e "  store i64 \{intToString (cellTag e "Cons")}, ptr \{cell}"
-  storeFields e cell hv 0
-  let cellw = freshReg e
-  emit e "  \{cellw} = ptrtoint ptr \{cell} to i64"
-  let d = freshReg e
-  emit e "  \{d} = load ptr, ptr \{destSlot}"
-  emit e "  store i64 \{cellw}, ptr \{d}"
-  let newdest = freshReg e
-  emit e "  \{newdest} = getelementptr i8, ptr \{cell}, i64 16"
-  emit e "  store ptr \{newdest}, ptr \{destSlot}"
-  emitGDispCells e env rest destSlot
+emitGDispCells e env xs0 destSlot = go xs0
+  where
+    go [] = ()
+    go (h :: rest) =
+      let hv = emitArgs e env [h]
+      let cell = freshReg e
+      emit e (rtLine e cell "ptr" "mdk_alloc" (i64Ops ["24"]))
+      emit e "  store i64 \{intToString (cellTag e "Cons")}, ptr \{cell}"
+      storeFields e cell hv 0
+      let cellw = freshReg e
+      emit e "  \{cellw} = ptrtoint ptr \{cell} to i64"
+      let d = freshReg e
+      emit e "  \{d} = load ptr, ptr \{destSlot}"
+      emit e "  store i64 \{cellw}, ptr \{d}"
+      let newdest = freshReg e
+      emit e "  \{newdest} = getelementptr i8, ptr \{cell}, i64 16"
+      emit e "  store ptr \{newdest}, ptr \{destSlot}"
+      go rest
 
 -- a sanctioned tail edge: recompute the callee's args into fresh regs FIRST (an
 -- arg may read the current member's params), store them into the shared slots
@@ -12673,27 +12730,28 @@ selfFreeW self ex = not (contains self (freeVars [] ex))
 -- descends CIf and a desugarable 2-arm match. Any self outside a tail self-call ⇒
 -- ineligible.
 floatWorkerOk : String -> Int -> CExpr -> Bool
-floatWorkerOk self arity (CIf c t f) =
-  selfFreeW self c && floatWorkerOk self arity t && floatWorkerOk self arity f
-floatWorkerOk self arity (CDecision scrut arms tree) =
-  match decisionToIf scrut arms
-    Some cif => floatWorkerOk self arity cif
-    None => selfFreeW self (CDecision scrut arms tree)
-floatWorkerOk self arity (CBlock stmts) = floatWorkerBlockOk self arity stmts
-floatWorkerOk self arity ex = match flattenApp ex []
-  (CVar f _, args) =>
-    if f == self then lengthS args == arity else selfFreeW self ex
-  _ => selfFreeW self ex
+floatWorkerOk self arity ex0 = go ex0
+  where
+    go (CIf c t f) = selfFreeW self c && go t && go f
+    go (CDecision scrut arms tree) = match decisionToIf scrut arms
+      Some cif => go cif
+      None => selfFreeW self (CDecision scrut arms tree)
+    go (CBlock stmts) = floatWorkerBlockOk self arity stmts
+    go ex = match flattenApp ex []
+      (CVar f _, args) =>
+        if f == self then lengthS args == arity else selfFreeW self ex
+      _ => selfFreeW self ex
 
 -- a let-block body is worker-eligible if every leading CSLet binds a plain var with a
 -- self-free RHS (the lets are evaluated before the tail) and the final stmt is a
 -- CSExpr that is itself worker-eligible (the tail). Any other stmt shape (assign,
 -- let-else, non-PVar pattern, non-CSExpr final) disqualifies → fall back.
 floatWorkerBlockOk : String -> Int -> List CStmt -> Bool
-floatWorkerBlockOk self arity ((CSExpr ex) :: []) = floatWorkerOk self arity ex
-floatWorkerBlockOk self arity ((CSLet _ (PVar _ _ _) rhs) :: rest) =
-  selfFreeW self rhs && floatWorkerBlockOk self arity rest
-floatWorkerBlockOk _ _ _ = False
+floatWorkerBlockOk self arity xs0 = go xs0
+  where
+    go ((CSExpr ex) :: []) = floatWorkerOk self arity ex
+    go ((CSLet _ (PVar _ _ _) rhs) :: rest) = selfFreeW self rhs && go rest
+    go _ = False
 
 floatWorkerEligible : Emit -> String -> List Pat -> List LTy -> CExpr -> Bool
 floatWorkerEligible e name pats ptys body =
@@ -12804,6 +12862,8 @@ emitWorkerArgs : Emit ->
   Int ->
   List CExpr ->
   List (String, String)
+-- Bound: list built in tail position modulo cons: a where-local go loses the constant-stack loop until the lambda-lift pass (#4878); convert then.
+-- lint-disable-next-line rule-threaded-invariant
 emitWorkerArgs _ _ _ _ [] = []
 emitWorkerArgs e env fp i (a :: rest) =
   let op = match elemInt i fp
@@ -12823,29 +12883,29 @@ emitFnBodyD : Emit ->
   Int ->
   CExpr ->
   Unit
-emitFnBodyD e env self worker fp arity (CIf c t f) =
-  let (cv, _) = emitExpr e env c
-  let ci = untagInt e cv
-  let cb = freshReg e
-  emit e "  \{cb} = icmp ne i64 \{ci}, 0"
-  let n = intToString (freshLocal e)
-  let thenL = "then" ++ n
-  let elseL = "else" ++ n
-  emit e "  br i1 \{cb}, label %\{thenL}, label %\{elseL}"
-  emit e (thenL ++ ":")
-  emitFnBodyD e env self worker fp arity t
-  emit e (elseL ++ ":")
-  emitFnBodyD e env self worker fp arity f
-emitFnBodyD e env self worker fp arity (CDecision scrut arms tree) =
-  match decisionToIf scrut arms
-    Some cif => emitFnBodyD e env self worker fp arity cif
-    None =>
-      let d = emitFloatD e env (CDecision scrut arms tree)
-      emit e ("  ret double " ++ d)
-emitFnBodyD e env self worker fp arity (CBlock stmts) =
-  emitFnBodyDBlock e env self worker fp arity stmts
-emitFnBodyD e env self worker fp arity other =
-  emitTailLeafD e env self worker fp arity other (flattenApp other [])
+emitFnBodyD e env self worker fp arity other0 = go other0
+  where
+    go (CIf c t f) =
+      let (cv, _) = emitExpr e env c
+      let ci = untagInt e cv
+      let cb = freshReg e
+      emit e "  \{cb} = icmp ne i64 \{ci}, 0"
+      let n = intToString (freshLocal e)
+      let thenL = "then" ++ n
+      let elseL = "else" ++ n
+      emit e "  br i1 \{cb}, label %\{thenL}, label %\{elseL}"
+      emit e (thenL ++ ":")
+      go t
+      emit e (elseL ++ ":")
+      go f
+    go (CDecision scrut arms tree) = match decisionToIf scrut arms
+      Some cif => go cif
+      None =>
+        let d = emitFloatD e env (CDecision scrut arms tree)
+        emit e ("  ret double " ++ d)
+    go (CBlock stmts) = emitFnBodyDBlock e env self worker fp arity stmts
+    go other =
+      emitTailLeafD e env self worker fp arity other (flattenApp other [])
 
 -- emit a worker-mode let-block: bind each leading CSLet (float RHS → unboxed double
 -- LTFloatU, same as emitBlock; else normal), then emit the final CSExpr in tail
@@ -12858,19 +12918,20 @@ emitFnBodyDBlock : Emit ->
   Int ->
   List CStmt ->
   Unit
-emitFnBodyDBlock e env self worker fp arity ((CSExpr ex) :: []) =
-  emitFnBodyD e env self worker fp arity ex
-emitFnBodyDBlock e env self worker fp arity ((CSLet _ (PVar x _ _) rhs) :: rest) =
-  if computesAsDouble env rhs then
-    let d = emitFloatD e env rhs
-    emitFnBodyDBlock e (omInsert x (d, LTFloatU) env) self worker fp arity rest
-  else
-    let (v, ty) = emitExpr e env rhs
-    emitFnBodyDBlock e (omInsert x (v, ty) env) self worker fp arity rest
-emitFnBodyDBlock e _env _ _ _ _ _ =
-  gapU
-    e
-    "float-worker block: unexpected statement shape (should be gated by floatWorkerBlockOk)"
+emitFnBodyDBlock e env0 self worker fp arity xs0 = go env0 xs0
+  where
+    go env ((CSExpr ex) :: []) = emitFnBodyD e env self worker fp arity ex
+    go env ((CSLet _ (PVar x _ _) rhs) :: rest) =
+      if computesAsDouble env rhs then
+        let d = emitFloatD e env rhs
+        go (omInsert x (d, LTFloatU) env) rest
+      else
+        let (v, ty) = emitExpr e env rhs
+        go (omInsert x (v, ty) env) rest
+    go _env _ =
+      gapU
+        e
+        "float-worker block: unexpected statement shape (should be gated by floatWorkerBlockOk)"
 
 emitTailLeafD : Emit ->
   OrdMap (String, LTy) ->
@@ -12894,6 +12955,8 @@ emitTailLeafD e env _ _ _ _ other _ =
 
 -- the wrapper's call args: `double <unbox %argN>` at float positions, `i64 %argN` else.
 wrapperCallArgs : Emit -> List Int -> Int -> List Pat -> List (String, String)
+-- Bound: list built in tail position modulo cons: a where-local go loses the constant-stack loop until the lambda-lift pass (#4878); convert then.
+-- lint-disable-next-line rule-threaded-invariant
 wrapperCallArgs _ _ _ [] = []
 wrapperCallArgs e fp i (_ :: rest) =
   let op = match elemInt i fp
@@ -13010,14 +13073,16 @@ collectRawWorkers e binds =
   refineRawWorkers e binds (rawWorkerKey first) 20
 
 refineRawWorkers : Emit -> List CBind -> String -> Int -> OrdMap RawWorker
-refineRawWorkers e binds prevKey fuel =
-  let next = collectRawWorkersPass e True binds
-  let key = rawWorkerKey next
-  if key == prevKey || fuel <= 0 then
-    next
-  else
-    e.rawWorkers := next
-    refineRawWorkers e binds key (fuel - 1)
+refineRawWorkers e binds prevKey0 fuel0 = go prevKey0 fuel0
+  where
+    go prevKey fuel =
+      let next = collectRawWorkersPass e True binds
+      let key = rawWorkerKey next
+      if key == prevKey || fuel <= 0 then
+        next
+      else
+        e.rawWorkers := next
+        go key (fuel - 1)
 
 -- a textual key of a worker map, to see a pass change nothing.
 rawWorkerKey : OrdMap RawWorker -> String
@@ -13043,26 +13108,28 @@ rawKindKey RawI32 = "s"
 -- (a `match` arm, a mutual recursion through an ordinary function) would grow
 -- the stack where the uniform define loops.  Such a function returns a word.
 rawRetOk : Emit -> String -> Int -> RawKind -> CExpr -> Bool
-rawRetOk e self n k (CIf _ t f) = rawRetOk e self n k t && rawRetOk e self n k f
-rawRetOk e self n k (CDecision scrut arms tree) = match decisionToIf scrut arms
-  Some cif => rawRetOk e self n k cif
-  None => not (tailCalls e (CDecision scrut arms tree))
-rawRetOk e self n k (CBlock stmts) = match reverseL stmts
-  (CSExpr ex) :: _ => rawRetOk e self n k ex
-  _ => True
-rawRetOk e self n k (CLet False (PVar x a bid) e1 e2) = match e1
-  CLam _ _ => not (tailCalls e (CLet False (PVar x a bid) e1 e2))
-  _ => rawRetOk e self n k e2
-rawRetOk e self n k ex = match flattenApp ex []
-  (CVar f _, args) =>
-    let name = canonFnName e f
-    if name == self then
-      lengthS args == n
-    else if isKnownFn e name then
-      isSome (rawWorkerReturning e f (lengthS args) k)
-    else
-      True
-  _ => not (tailCalls e ex)
+rawRetOk e self n k ex0 = go ex0
+  where
+    go (CIf _ t f) = go t && go f
+    go (CDecision scrut arms tree) = match decisionToIf scrut arms
+      Some cif => go cif
+      None => not (tailCalls e (CDecision scrut arms tree))
+    go (CBlock stmts) = match reverseL stmts
+      (CSExpr ex) :: _ => go ex
+      _ => True
+    go (CLet False (PVar x a bid) e1 e2) = match e1
+      CLam _ _ => not (tailCalls e (CLet False (PVar x a bid) e1 e2))
+      _ => go e2
+    go ex = match flattenApp ex []
+      (CVar f _, args) =>
+        let name = canonFnName e f
+        if name == self then
+          lengthS args == n
+        else if isKnownFn e name then
+          isSome (rawWorkerReturning e f (lengthS args) k)
+        else
+          True
+      _ => not (tailCalls e ex)
 
 -- does a call of a top-level function sit in a tail position of `ex`?
 tailCalls : Emit -> CExpr -> Bool
@@ -13083,10 +13150,12 @@ armsTailCall e ((CArm _ _ body) :: rest) =
 armsTailCall e ((CArmAlt _ _ _) :: rest) = armsTailCall e rest
 
 collectRawWorkersPass : Emit -> Bool -> List CBind -> OrdMap RawWorker
-collectRawWorkersPass _ _ [] = omEmpty
-collectRawWorkersPass e refine (b :: rest) = match rawWorkerOf e refine b
-  Some w => omInsert (bindName b) w (collectRawWorkersPass e refine rest)
-  None => collectRawWorkersPass e refine rest
+collectRawWorkersPass e refine xs0 = go xs0
+  where
+    go [] = omEmpty
+    go (b :: rest) = match rawWorkerOf e refine b
+      Some w => omInsert (bindName b) w (go rest)
+      None => go rest
 
 -- each declared `U64` parameter that some occurrence would box becomes a word.
 refineU64Params : Emit ->
@@ -13095,6 +13164,8 @@ refineU64Params : Emit ->
   List Pat ->
   List RawKind ->
   List RawKind
+-- Bound: list built in tail position modulo cons: a where-local go loses the constant-stack loop until the lambda-lift pass (#4878); convert then.
+-- lint-disable-next-line rule-threaded-invariant
 refineU64Params e retRaw body ((PVar x _ _) :: ps) (RawU64 :: ks) =
   let k = if u64Escapes e x retRaw body == 0 then RawU64 else RawWord
   k :: refineU64Params e retRaw body ps ks
@@ -13189,54 +13260,58 @@ data RawTail = RawTail String String RawWorker
 -- worker on raw values (the loop); any other value is returned in the worker's
 -- result kind.
 emitFnBodyRaw : Emit -> OrdMap (String, LTy) -> RawTail -> CExpr -> Unit
-emitFnBodyRaw e env t (CIf c th el) =
-  let (cv, _) = emitExpr e env c
-  let ci = untagInt e cv
-  let cb = freshReg e
-  emit e "  \{cb} = icmp ne i64 \{ci}, 0"
-  let n = intToString (freshLocal e)
-  let thenL = "then" ++ n
-  let elseL = "else" ++ n
-  emit e "  br i1 \{cb}, label %\{thenL}, label %\{elseL}"
-  emit e (thenL ++ ":")
-  emitFnBodyRaw e env t th
-  emit e (elseL ++ ":")
-  emitFnBodyRaw e env t el
-emitFnBodyRaw e env t (CDecision scrut arms tree) =
-  match decisionToIf scrut arms
-    Some cif => emitFnBodyRaw e env t cif
-    None => emitRawValueRet e env t (CDecision scrut arms tree)
-emitFnBodyRaw e env t (CBlock stmts) = emitFnBodyRawBlock e env t stmts
-emitFnBodyRaw e env t (CLet False (PVar x a bid) e1 e2) = match e1
-  CLam _ _ => emitRawValueRet e env t (CLet False (PVar x a bid) e1 e2)
-  _ => emitFnBodyRaw e (bindLetRaw e env x bid e1 e2) t e2
-emitFnBodyRaw e env (RawTail self worker w) other = match flattenApp other []
-  (CVar f _, args) =>
-    if not (isLocal env f)
-      && canonFnName e f == self
-      && lengthS args == rawWorkerArity w then
-      let ops = emitRawArgs e env (rawWorkerKinds w) args
-      let rty = rawKindTy (rawWorkerRet w)
-      let r = freshReg e
-      let call = directCallWith e MustTailCall (Generated worker) rty ops
-      emit e "  \{r} = \{call}"
-      emit e "  ret \{rty} \{r}"
-    else
-      emitRawValueRet e env (RawTail self worker w) other
-  _ => emitRawValueRet e env (RawTail self worker w) other
+emitFnBodyRaw e env0 t ex0 = go env0 ex0
+  where
+    go env (CIf c th el) =
+      let (cv, _) = emitExpr e env c
+      let ci = untagInt e cv
+      let cb = freshReg e
+      emit e "  \{cb} = icmp ne i64 \{ci}, 0"
+      let n = intToString (freshLocal e)
+      let thenL = "then" ++ n
+      let elseL = "else" ++ n
+      emit e "  br i1 \{cb}, label %\{thenL}, label %\{elseL}"
+      emit e (thenL ++ ":")
+      go env th
+      emit e (elseL ++ ":")
+      go env el
+    go env (CDecision scrut arms tree) = match decisionToIf scrut arms
+      Some cif => go env cif
+      None => emitRawValueRet e env t (CDecision scrut arms tree)
+    go env (CBlock stmts) = emitFnBodyRawBlock e env t stmts
+    go env (CLet False (PVar x a bid) e1 e2) = match e1
+      CLam _ _ => emitRawValueRet e env t (CLet False (PVar x a bid) e1 e2)
+      _ => go (bindLetRaw e env x bid e1 e2) e2
+    go env other = match t
+      RawTail self worker w => match flattenApp other []
+        (CVar f _, args) =>
+          if not (isLocal env f)
+            && canonFnName e f == self
+            && lengthS args == rawWorkerArity w then
+            let ops = emitRawArgs e env (rawWorkerKinds w) args
+            let rty = rawKindTy (rawWorkerRet w)
+            let r = freshReg e
+            let call = directCallWith e MustTailCall (Generated worker) rty ops
+            emit e "  \{r} = \{call}"
+            emit e "  ret \{rty} \{r}"
+          else
+            emitRawValueRet e env t other
+        _ => emitRawValueRet e env t other
 
 emitFnBodyRawBlock : Emit ->
   OrdMap (String, LTy) ->
   RawTail ->
   List CStmt ->
   Unit
-emitFnBodyRawBlock e env t [CSExpr ex] = emitFnBodyRaw e env t ex
-emitFnBodyRawBlock e env (RawTail _ _ w) [s] =
-  let (v, _) = emitBlockLast e env s
-  emitRawWordRet e (rawWorkerRet w) v
-emitFnBodyRawBlock e env t (s :: rest) =
-  emitFnBodyRawBlock e (emitBlockLead e env s rest) t rest
-emitFnBodyRawBlock e _ _ [] = gapU e "empty block"
+emitFnBodyRawBlock e env0 t ss0 = go env0 ss0
+  where
+    go env [CSExpr ex] = emitFnBodyRaw e env t ex
+    go env [s] = match t
+      RawTail _ _ w =>
+        let (v, _) = emitBlockLast e env s
+        emitRawWordRet e (rawWorkerRet w) v
+    go env (s :: rest) = go (emitBlockLead e env s rest) rest
+    go _ [] = gapU e "empty block"
 
 -- return a worker body's value in the worker's result kind.
 emitRawValueRet : Emit -> OrdMap (String, LTy) -> RawTail -> CExpr -> Unit
@@ -13343,30 +13418,30 @@ paramEnv _ _ _ = panic "llvm: function parameters must be plain variables"
 -- caller's frame: every closure a let or group binds is an `@mdk_alloc` cell or
 -- a constant global, never an `alloca`, so this is sound.
 emitFnBody : Emit -> OrdMap (String, LTy) -> TailDefine -> CExpr -> Unit
-emitFnBody e env self (CIf c t f) =
-  let (thenL, elseL) = emitTailIfHead e env c
-  emit e (thenL ++ ":")
-  emitFnBody e env self t
-  emit e (elseL ++ ":")
-  emitFnBody e env self f
-emitFnBody e env self (CDecision scrut arms tree) =
-  emitTailDecision e env self scrut arms tree
-emitFnBody e env self (CLet recF pat e1 e2) =
-  if letBinds recF pat e1 then
-    emitFnBody e (bindLet e env recF pat e1 e2) self e2
-  else
-    emitValueRet e env (CLet recF pat e1 e2)
-emitFnBody e env self (CLetGroup binds body) =
-  match bindLetGroup e env binds body
-    Some env2 => emitFnBody e env2 self body
-    None =>
-      let (v, _) = letGroupGap e
-      emit e ("  ret i64 " ++ v)
-emitFnBody e env self (CBlock stmts) = match lastStmtExpr stmts
-  Some last => emitFnBody e (emitBlockInit e env stmts) self last
-  None => emitValueRet e env (CBlock stmts)
-emitFnBody e env self other =
-  emitTailLeaf e env self other (_ => emitValueRet e env other)
+emitFnBody e env0 self other0 = go env0 other0
+  where
+    go env (CIf c t f) =
+      let (thenL, elseL) = emitTailIfHead e env c
+      emit e (thenL ++ ":")
+      go env t
+      emit e (elseL ++ ":")
+      go env f
+    go env (CDecision scrut arms tree) =
+      emitTailDecision e env self scrut arms tree
+    go env (CLet recF pat e1 e2) =
+      if letBinds recF pat e1 then
+        go (bindLet e env recF pat e1 e2) e2
+      else
+        emitValueRet e env (CLet recF pat e1 e2)
+    go env (CLetGroup binds body) = match bindLetGroup e env binds body
+      Some env2 => go env2 body
+      None =>
+        let (v, _) = letGroupGap e
+        emit e ("  ret i64 " ++ v)
+    go env (CBlock stmts) = match lastStmtExpr stmts
+      Some last => go (emitBlockInit e env stmts) last
+      None => emitValueRet e env (CBlock stmts)
+    go env other = emitTailLeaf e env self other (_ => emitValueRet e env other)
 
 -- emit every statement of a block but the last, exactly as `emitBlock` does
 -- (each one's scope is the rest of the block, the last statement included), and
@@ -13790,6 +13865,8 @@ bindSig e (CBind _ clauses _ bid) =
   FnSig (clauseParamTys e clauses 0 (clauseArityC clauses)) (returnLTy e bid)
 
 clauseParamTys : Emit -> List CClause -> Int -> Int -> List LTy
+-- Bound: list built in tail position modulo cons: a where-local go loses the constant-stack loop until the lambda-lift pass (#4878); convert then.
+-- lint-disable-next-line rule-threaded-invariant
 clauseParamTys e clauses i n
   | i >= n = []
   | otherwise = clausesParamTy e clauses i :: clauseParamTys e clauses (i + 1) n
@@ -13802,10 +13879,12 @@ clausesParamTy e clauses i = match firstPatAt isBinderPat clauses i
     None => runtimeLTy RTValue
 
 firstPatAt : (Pat -> Bool) -> List CClause -> Int -> Option Pat
-firstPatAt _ [] _ = None
-firstPatAt keep ((CClause pats _) :: rest) i = match nthPat pats i
-  Some p => if keep p then Some p else firstPatAt keep rest i
-  None => firstPatAt keep rest i
+firstPatAt keep xs0 i = go xs0
+  where
+    go [] = None
+    go ((CClause pats _) :: rest) = match nthPat pats i
+      Some p => if keep p then Some p else go rest
+      None => go rest
 
 isBinderPat : Pat -> Bool
 isBinderPat (PVar _ _ _) = True
@@ -14085,6 +14164,8 @@ emitSetRef e env [r, x] =
 emitSetRef e _env _ = gapE e "setRef expects exactly 2 arguments"
 
 emitFieldExprs : Emit -> OrdMap (String, LTy) -> List CField -> List String
+-- Bound: list built in tail position modulo cons: a where-local go loses the constant-stack loop until the lambda-lift pass (#4878); convert then.
+-- lint-disable-next-line rule-threaded-invariant
 emitFieldExprs _ _ [] = []
 emitFieldExprs e env ((CField _ _ ex) :: rest) =
   let (w, _) = emitExpr e env ex
@@ -14096,6 +14177,8 @@ emitUpdatePairs : Emit ->
   OrdMap (String, LTy) ->
   List CField ->
   List (Int, String)
+-- Bound: list built in tail position modulo cons: a where-local go loses the constant-stack loop until the lambda-lift pass (#4878); convert then.
+-- lint-disable-next-line rule-threaded-invariant
 emitUpdatePairs _ _ [] = []
 emitUpdatePairs e env ((CField _ ord ex) :: rest) =
   let (w, _) = emitExpr e env ex
@@ -14108,6 +14191,8 @@ buildUpdateWords : Emit ->
   List (Int, String) ->
   Int ->
   List String
+-- Bound: list built in tail position modulo cons: a where-local go loses the constant-stack loop until the lambda-lift pass (#4878); convert then.
+-- lint-disable-next-line rule-threaded-invariant
 buildUpdateWords e bw n updates i =
   if i >= n then
     []
@@ -14583,6 +14668,8 @@ emitList e env xs =
 -- emit every element to its operand word, head-to-tail (same order as the original
 -- recursive emitList's element emission).
 emitListWords : Emit -> OrdMap (String, LTy) -> List CExpr -> List String
+-- Bound: list built in tail position modulo cons: a where-local go loses the constant-stack loop until the lambda-lift pass (#4878); convert then.
+-- lint-disable-next-line rule-threaded-invariant
 emitListWords _ _ [] = []
 emitListWords e env (x :: xs) =
   let (w, _) = emitExpr e env x
@@ -14608,10 +14695,12 @@ emitConstList e words =
   (head, LTCon)
 
 emitConstListGo : Emit -> Int -> List String -> String -> String
-emitConstListGo _ _ [] tl = tl
-emitConstListGo e consTag (w :: rest) tl =
-  let cell = emitConstDictCell e consTag [w, tl]
-  emitConstListGo e consTag rest cell
+emitConstListGo e consTag xs0 tl0 = go xs0 tl0
+  where
+    go [] tl = tl
+    go (w :: rest) tl =
+      let cell = emitConstDictCell e consTag [w, tl]
+      go rest cell
 
 -- CRangeList lo hi incl: build an ascending list [lo…hi] (or [lo…<hi]) via a
 -- back-to-front alloca-counter loop.  An alloca i64 `acc` holds the current

@@ -1,5 +1,5 @@
 # META
-source_lines=711
+source_lines=716
 stages=DESUGAR,MARK
 # SOURCE
 -- BACKEND-NEUTRAL EMIT SUPPORT — helpers shared verbatim by BOTH the LLVM
@@ -270,17 +270,20 @@ foldReachSCCs : OrdMap Unit ->
   List (List String) ->
   OrdMap (List String, OrdMap Unit) ->
   OrdMap (List String, OrdMap Unit)
-foldReachSCCs _ _ [] acc = acc
-foldReachSCCs valSet adj (scc :: rest) acc =
-  let direct = dedup (unionLookup scc adj)
-  -- sources, in the order the old `dedup (… ++ …)` saw them: this SCC's own
-  -- direct value-global callees, then each callee's reach list.  The LAST
-  -- callee's list is held back as the shareable tail; everything before it is
-  -- concatenated and deduped as `earlier`.
-  let earlier =
-    dedup (filterList (n => omHasKey n valSet) direct ++ initReach direct acc)
-  let reached = mergeReach earlier (lastReach direct acc)
-  foldReachSCCs valSet adj rest (insertReach scc reached acc)
+foldReachSCCs valSet adj xs0 acc0 = go xs0 acc0
+  where
+    go [] acc = acc
+    go (scc :: rest) acc =
+      let direct = dedup (unionLookup scc adj)
+      -- sources, in the order the old `dedup (… ++ …)` saw them: this SCC's own
+      -- direct value-global callees, then each callee's reach list.  The LAST
+      -- callee's list is held back as the shareable tail; everything before it is
+      -- concatenated and deduped as `earlier`.
+      let earlier =
+        dedup
+          (filterList (n => omHasKey n valSet) direct ++ initReach direct acc)
+      let reached = mergeReach earlier (lastReach direct acc)
+      go rest (insertReach scc reached acc)
 
 -- `dedup (earlier ++ tailList)` where `earlier` is already deduped, i.e.
 -- `earlier ++ (tailList \ earlier)`, paired with its own membership set.
@@ -547,13 +550,15 @@ foldTaintSCCs : OrdMap (List String) ->
   List (List String) ->
   OrdMap Unit ->
   OrdMap Unit
-foldTaintSCCs _ _ [] acc = acc
-foldTaintSCCs adj methodSet (scc :: rest) acc =
-  let cyclic = lengthGt1 scc || anySelfLoop scc adj
-  let direct = anyKeyIn scc methodSet
-  let succ = anyKeyIn (sccCallees scc adj) acc
-  let acc2 = if cyclic || direct || succ then insertAllKeys scc acc else acc
-  foldTaintSCCs adj methodSet rest acc2
+foldTaintSCCs adj methodSet xs0 acc0 = go xs0 acc0
+  where
+    go [] acc = acc
+    go (scc :: rest) acc =
+      let cyclic = lengthGt1 scc || anySelfLoop scc adj
+      let direct = anyKeyIn scc methodSet
+      let succ = anyKeyIn (sccCallees scc adj) acc
+      let acc2 = if cyclic || direct || succ then insertAllKeys scc acc else acc
+      go rest acc2
 
 -- the value globals that must be emitted LAZY on the native backend: those reaching
 -- an eager dispatch or a value cycle, transitively over the eager call graph.  Excludes
@@ -793,8 +798,7 @@ bindingOrigin name (Loc f line col _ _) = SymbolOrigin name f line col
 (DTypeSig true "eagerReachMap" (TyFun (TyApp (TyCon "List") (TyCon "CBind")) (TyApp (TyCon "OrdMap") (TyApp (TyCon "List") (TyCon "String")))))
 (DFunDef false "eagerReachMap" ((PVar "binds")) (EBlock (DoLet false false (PVar "allNames") (EApp (EVar "bindNames") (EVar "binds"))) (DoLet false false (PVar "nameSet") (EApp (EApp (EVar "omFromNames") (EVar "allNames")) (EVar "omEmpty"))) (DoLet false false (PVar "valSet") (EApp (EApp (EVar "omFromNames") (EApp (EVar "valGlobalNames") (EVar "binds"))) (EVar "omEmpty"))) (DoLet false false (PVar "adj") (EApp (EApp (EVar "eagerCalleesMap") (EVar "nameSet")) (EVar "binds"))) (DoExpr (EApp (EApp (EVar "omMapValues") (EVar "fst")) (EApp (EApp (EApp (EApp (EVar "foldReachSCCs") (EVar "valSet")) (EVar "adj")) (EApp (EApp (EVar "tarjanSCCs") (EVar "allNames")) (EVar "adj"))) (EVar "omEmpty"))))))
 (DTypeSig false "foldReachSCCs" (TyFun (TyApp (TyCon "OrdMap") (TyCon "Unit")) (TyFun (TyApp (TyCon "OrdMap") (TyApp (TyCon "List") (TyCon "String"))) (TyFun (TyApp (TyCon "List") (TyApp (TyCon "List") (TyCon "String"))) (TyFun (TyApp (TyCon "OrdMap") (TyTuple (TyApp (TyCon "List") (TyCon "String")) (TyApp (TyCon "OrdMap") (TyCon "Unit")))) (TyApp (TyCon "OrdMap") (TyTuple (TyApp (TyCon "List") (TyCon "String")) (TyApp (TyCon "OrdMap") (TyCon "Unit")))))))))
-(DFunDef false "foldReachSCCs" (PWild PWild (PList) (PVar "acc")) (EVar "acc"))
-(DFunDef false "foldReachSCCs" ((PVar "valSet") (PVar "adj") (PCons (PVar "scc") (PVar "rest")) (PVar "acc")) (EBlock (DoLet false false (PVar "direct") (EApp (EVar "dedup") (EApp (EApp (EVar "unionLookup") (EVar "scc")) (EVar "adj")))) (DoLet false false (PVar "earlier") (EApp (EVar "dedup") (EBinOp "++" (EApp (EApp (EVar "filterList") (ELam ((PVar "n")) (EApp (EApp (EVar "omHasKey") (EVar "n")) (EVar "valSet")))) (EVar "direct")) (EApp (EApp (EVar "initReach") (EVar "direct")) (EVar "acc"))))) (DoLet false false (PVar "reached") (EApp (EApp (EVar "mergeReach") (EVar "earlier")) (EApp (EApp (EVar "lastReach") (EVar "direct")) (EVar "acc")))) (DoExpr (EApp (EApp (EApp (EApp (EVar "foldReachSCCs") (EVar "valSet")) (EVar "adj")) (EVar "rest")) (EApp (EApp (EApp (EVar "insertReach") (EVar "scc")) (EVar "reached")) (EVar "acc"))))))
+(DFunDef false "foldReachSCCs" ((PVar "valSet") (PVar "adj") (PVar "xs0") (PVar "acc0")) (ELetGroup ((lgb "go" (clause ((PList) (PVar "acc")) (EVar "acc")) (clause ((PCons (PVar "scc") (PVar "rest")) (PVar "acc")) (EBlock (DoLet false false (PVar "direct") (EApp (EVar "dedup") (EApp (EApp (EVar "unionLookup") (EVar "scc")) (EVar "adj")))) (DoLet false false (PVar "earlier") (EApp (EVar "dedup") (EBinOp "++" (EApp (EApp (EVar "filterList") (ELam ((PVar "n")) (EApp (EApp (EVar "omHasKey") (EVar "n")) (EVar "valSet")))) (EVar "direct")) (EApp (EApp (EVar "initReach") (EVar "direct")) (EVar "acc"))))) (DoLet false false (PVar "reached") (EApp (EApp (EVar "mergeReach") (EVar "earlier")) (EApp (EApp (EVar "lastReach") (EVar "direct")) (EVar "acc")))) (DoExpr (EApp (EApp (EVar "go") (EVar "rest")) (EApp (EApp (EApp (EVar "insertReach") (EVar "scc")) (EVar "reached")) (EVar "acc")))))))) (EApp (EApp (EVar "go") (EVar "xs0")) (EVar "acc0"))))
 (DTypeSig false "mergeReach" (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyTuple (TyApp (TyCon "List") (TyCon "String")) (TyApp (TyCon "OrdMap") (TyCon "Unit"))) (TyTuple (TyApp (TyCon "List") (TyCon "String")) (TyApp (TyCon "OrdMap") (TyCon "Unit"))))))
 (DFunDef false "mergeReach" ((PVar "earlier") (PTuple (PVar "tailList") (PVar "tailSet"))) (EBlock (DoLet false false (PVar "earlierSet") (EApp (EApp (EVar "omFromNames") (EVar "earlier")) (EVar "omEmpty"))) (DoLet false false (PVar "overlap") (EApp (EApp (EVar "anyMember") (EVar "earlier")) (EVar "tailSet"))) (DoLet false false (PVar "kept") (EIf (EVar "overlap") (EApp (EApp (EVar "filterList") (ELam ((PVar "n")) (EApp (EVar "not") (EApp (EApp (EVar "omHasKey") (EVar "n")) (EVar "earlierSet"))))) (EVar "tailList")) (EVar "tailList"))) (DoExpr (ETuple (EBinOp "++" (EVar "earlier") (EVar "kept")) (EApp (EApp (EVar "omFromNames") (EVar "earlier")) (EVar "tailSet"))))))
 (DTypeSig false "anyMember" (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyApp (TyCon "OrdMap") (TyCon "Unit")) (TyCon "Bool"))))
@@ -913,8 +917,7 @@ bindingOrigin name (Loc f line col _ _) = SymbolOrigin name f line col
 (DFunDef false "insertAllKeys" ((PList) (PVar "acc")) (EVar "acc"))
 (DFunDef false "insertAllKeys" ((PCons (PVar "n") (PVar "rest")) (PVar "acc")) (EApp (EApp (EVar "insertAllKeys") (EVar "rest")) (EApp (EApp (EApp (EVar "omInsert") (EVar "n")) (ELit LUnit)) (EVar "acc"))))
 (DTypeSig false "foldTaintSCCs" (TyFun (TyApp (TyCon "OrdMap") (TyApp (TyCon "List") (TyCon "String"))) (TyFun (TyApp (TyCon "OrdMap") (TyCon "Unit")) (TyFun (TyApp (TyCon "List") (TyApp (TyCon "List") (TyCon "String"))) (TyFun (TyApp (TyCon "OrdMap") (TyCon "Unit")) (TyApp (TyCon "OrdMap") (TyCon "Unit")))))))
-(DFunDef false "foldTaintSCCs" (PWild PWild (PList) (PVar "acc")) (EVar "acc"))
-(DFunDef false "foldTaintSCCs" ((PVar "adj") (PVar "methodSet") (PCons (PVar "scc") (PVar "rest")) (PVar "acc")) (EBlock (DoLet false false (PVar "cyclic") (EBinOp "||" (EApp (EVar "lengthGt1") (EVar "scc")) (EApp (EApp (EVar "anySelfLoop") (EVar "scc")) (EVar "adj")))) (DoLet false false (PVar "direct") (EApp (EApp (EVar "anyKeyIn") (EVar "scc")) (EVar "methodSet"))) (DoLet false false (PVar "succ") (EApp (EApp (EVar "anyKeyIn") (EApp (EApp (EVar "sccCallees") (EVar "scc")) (EVar "adj"))) (EVar "acc"))) (DoLet false false (PVar "acc2") (EIf (EBinOp "||" (EBinOp "||" (EVar "cyclic") (EVar "direct")) (EVar "succ")) (EApp (EApp (EVar "insertAllKeys") (EVar "scc")) (EVar "acc")) (EVar "acc"))) (DoExpr (EApp (EApp (EApp (EApp (EVar "foldTaintSCCs") (EVar "adj")) (EVar "methodSet")) (EVar "rest")) (EVar "acc2")))))
+(DFunDef false "foldTaintSCCs" ((PVar "adj") (PVar "methodSet") (PVar "xs0") (PVar "acc0")) (ELetGroup ((lgb "go" (clause ((PList) (PVar "acc")) (EVar "acc")) (clause ((PCons (PVar "scc") (PVar "rest")) (PVar "acc")) (EBlock (DoLet false false (PVar "cyclic") (EBinOp "||" (EApp (EVar "lengthGt1") (EVar "scc")) (EApp (EApp (EVar "anySelfLoop") (EVar "scc")) (EVar "adj")))) (DoLet false false (PVar "direct") (EApp (EApp (EVar "anyKeyIn") (EVar "scc")) (EVar "methodSet"))) (DoLet false false (PVar "succ") (EApp (EApp (EVar "anyKeyIn") (EApp (EApp (EVar "sccCallees") (EVar "scc")) (EVar "adj"))) (EVar "acc"))) (DoLet false false (PVar "acc2") (EIf (EBinOp "||" (EBinOp "||" (EVar "cyclic") (EVar "direct")) (EVar "succ")) (EApp (EApp (EVar "insertAllKeys") (EVar "scc")) (EVar "acc")) (EVar "acc"))) (DoExpr (EApp (EApp (EVar "go") (EVar "rest")) (EVar "acc2"))))))) (EApp (EApp (EVar "go") (EVar "xs0")) (EVar "acc0"))))
 (DTypeSig true "lazyGlobalNames" (TyFun (TyApp (TyCon "List") (TyCon "CBind")) (TyApp (TyCon "List") (TyCon "String"))))
 (DFunDef false "lazyGlobalNames" ((PVar "binds")) (EBlock (DoLet false false (PVar "allNames") (EApp (EVar "bindNames") (EVar "binds"))) (DoLet false false (PVar "nameSet") (EApp (EApp (EVar "omFromNames") (EVar "allNames")) (EVar "omEmpty"))) (DoLet false false (PVar "adj") (EApp (EApp (EVar "eagerCalleesMap") (EVar "nameSet")) (EVar "binds"))) (DoLet false false (PVar "methodSet") (EApp (EVar "methodTaintSet") (EVar "binds"))) (DoLet false false (PVar "tainted") (EApp (EApp (EApp (EApp (EVar "foldTaintSCCs") (EVar "adj")) (EVar "methodSet")) (EApp (EApp (EVar "tarjanSCCs") (EVar "allNames")) (EVar "adj"))) (EVar "omEmpty"))) (DoExpr (EApp (EApp (EVar "filterList") (ELam ((PVar "n")) (EBinOp "&&" (EBinOp "/=" (EVar "n") (ELit (LString "main"))) (EApp (EApp (EVar "omHasKey") (EVar "n")) (EVar "tainted"))))) (EApp (EVar "valGlobalNames") (EVar "binds"))))))
 (DTypeSig true "ftPrefix" (TyCon "String"))
@@ -1038,8 +1041,7 @@ bindingOrigin name (Loc f line col _ _) = SymbolOrigin name f line col
 (DTypeSig true "eagerReachMap" (TyFun (TyApp (TyCon "List") (TyCon "CBind")) (TyApp (TyCon "OrdMap") (TyApp (TyCon "List") (TyCon "String")))))
 (DFunDef false "eagerReachMap" ((PVar "binds")) (EBlock (DoLet false false (PVar "allNames") (EApp (EVar "bindNames") (EVar "binds"))) (DoLet false false (PVar "nameSet") (EApp (EApp (EVar "omFromNames") (EVar "allNames")) (EVar "omEmpty"))) (DoLet false false (PVar "valSet") (EApp (EApp (EVar "omFromNames") (EApp (EVar "valGlobalNames") (EVar "binds"))) (EVar "omEmpty"))) (DoLet false false (PVar "adj") (EApp (EApp (EVar "eagerCalleesMap") (EVar "nameSet")) (EVar "binds"))) (DoExpr (EApp (EApp (EVar "omMapValues") (EVar "fst")) (EApp (EApp (EApp (EApp (EVar "foldReachSCCs") (EVar "valSet")) (EVar "adj")) (EApp (EApp (EVar "tarjanSCCs") (EVar "allNames")) (EVar "adj"))) (EVar "omEmpty"))))))
 (DTypeSig false "foldReachSCCs" (TyFun (TyApp (TyCon "OrdMap") (TyCon "Unit")) (TyFun (TyApp (TyCon "OrdMap") (TyApp (TyCon "List") (TyCon "String"))) (TyFun (TyApp (TyCon "List") (TyApp (TyCon "List") (TyCon "String"))) (TyFun (TyApp (TyCon "OrdMap") (TyTuple (TyApp (TyCon "List") (TyCon "String")) (TyApp (TyCon "OrdMap") (TyCon "Unit")))) (TyApp (TyCon "OrdMap") (TyTuple (TyApp (TyCon "List") (TyCon "String")) (TyApp (TyCon "OrdMap") (TyCon "Unit")))))))))
-(DFunDef false "foldReachSCCs" (PWild PWild (PList) (PVar "acc")) (EVar "acc"))
-(DFunDef false "foldReachSCCs" ((PVar "valSet") (PVar "adj") (PCons (PVar "scc") (PVar "rest")) (PVar "acc")) (EBlock (DoLet false false (PVar "direct") (EApp (EVar "dedup") (EApp (EApp (EVar "unionLookup") (EVar "scc")) (EVar "adj")))) (DoLet false false (PVar "earlier") (EApp (EVar "dedup") (EBinOp "++" (EApp (EApp (EVar "filterList") (ELam ((PVar "n")) (EApp (EApp (EVar "omHasKey") (EVar "n")) (EVar "valSet")))) (EVar "direct")) (EApp (EApp (EVar "initReach") (EVar "direct")) (EVar "acc"))))) (DoLet false false (PVar "reached") (EApp (EApp (EVar "mergeReach") (EVar "earlier")) (EApp (EApp (EVar "lastReach") (EVar "direct")) (EVar "acc")))) (DoExpr (EApp (EApp (EApp (EApp (EVar "foldReachSCCs") (EVar "valSet")) (EVar "adj")) (EVar "rest")) (EApp (EApp (EApp (EVar "insertReach") (EVar "scc")) (EVar "reached")) (EVar "acc"))))))
+(DFunDef false "foldReachSCCs" ((PVar "valSet") (PVar "adj") (PVar "xs0") (PVar "acc0")) (ELetGroup ((lgb "go" (clause ((PList) (PVar "acc")) (EVar "acc")) (clause ((PCons (PVar "scc") (PVar "rest")) (PVar "acc")) (EBlock (DoLet false false (PVar "direct") (EApp (EVar "dedup") (EApp (EApp (EVar "unionLookup") (EVar "scc")) (EVar "adj")))) (DoLet false false (PVar "earlier") (EApp (EVar "dedup") (EBinOp "++" (EApp (EApp (EVar "filterList") (ELam ((PVar "n")) (EApp (EApp (EVar "omHasKey") (EVar "n")) (EVar "valSet")))) (EVar "direct")) (EApp (EApp (EVar "initReach") (EVar "direct")) (EVar "acc"))))) (DoLet false false (PVar "reached") (EApp (EApp (EVar "mergeReach") (EVar "earlier")) (EApp (EApp (EVar "lastReach") (EVar "direct")) (EVar "acc")))) (DoExpr (EApp (EApp (EVar "go") (EVar "rest")) (EApp (EApp (EApp (EVar "insertReach") (EVar "scc")) (EVar "reached")) (EVar "acc")))))))) (EApp (EApp (EVar "go") (EVar "xs0")) (EVar "acc0"))))
 (DTypeSig false "mergeReach" (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyTuple (TyApp (TyCon "List") (TyCon "String")) (TyApp (TyCon "OrdMap") (TyCon "Unit"))) (TyTuple (TyApp (TyCon "List") (TyCon "String")) (TyApp (TyCon "OrdMap") (TyCon "Unit"))))))
 (DFunDef false "mergeReach" ((PVar "earlier") (PTuple (PVar "tailList") (PVar "tailSet"))) (EBlock (DoLet false false (PVar "earlierSet") (EApp (EApp (EVar "omFromNames") (EVar "earlier")) (EVar "omEmpty"))) (DoLet false false (PVar "overlap") (EApp (EApp (EVar "anyMember") (EVar "earlier")) (EVar "tailSet"))) (DoLet false false (PVar "kept") (EIf (EVar "overlap") (EApp (EApp (EVar "filterList") (ELam ((PVar "n")) (EApp (EVar "not") (EApp (EApp (EVar "omHasKey") (EVar "n")) (EVar "earlierSet"))))) (EVar "tailList")) (EVar "tailList"))) (DoExpr (ETuple (EBinOp "++" (EVar "earlier") (EVar "kept")) (EApp (EApp (EVar "omFromNames") (EVar "earlier")) (EVar "tailSet"))))))
 (DTypeSig false "anyMember" (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyApp (TyCon "OrdMap") (TyCon "Unit")) (TyCon "Bool"))))
@@ -1158,8 +1160,7 @@ bindingOrigin name (Loc f line col _ _) = SymbolOrigin name f line col
 (DFunDef false "insertAllKeys" ((PList) (PVar "acc")) (EVar "acc"))
 (DFunDef false "insertAllKeys" ((PCons (PVar "n") (PVar "rest")) (PVar "acc")) (EApp (EApp (EVar "insertAllKeys") (EVar "rest")) (EApp (EApp (EApp (EVar "omInsert") (EVar "n")) (ELit LUnit)) (EVar "acc"))))
 (DTypeSig false "foldTaintSCCs" (TyFun (TyApp (TyCon "OrdMap") (TyApp (TyCon "List") (TyCon "String"))) (TyFun (TyApp (TyCon "OrdMap") (TyCon "Unit")) (TyFun (TyApp (TyCon "List") (TyApp (TyCon "List") (TyCon "String"))) (TyFun (TyApp (TyCon "OrdMap") (TyCon "Unit")) (TyApp (TyCon "OrdMap") (TyCon "Unit")))))))
-(DFunDef false "foldTaintSCCs" (PWild PWild (PList) (PVar "acc")) (EVar "acc"))
-(DFunDef false "foldTaintSCCs" ((PVar "adj") (PVar "methodSet") (PCons (PVar "scc") (PVar "rest")) (PVar "acc")) (EBlock (DoLet false false (PVar "cyclic") (EBinOp "||" (EApp (EVar "lengthGt1") (EVar "scc")) (EApp (EApp (EVar "anySelfLoop") (EVar "scc")) (EVar "adj")))) (DoLet false false (PVar "direct") (EApp (EApp (EVar "anyKeyIn") (EVar "scc")) (EVar "methodSet"))) (DoLet false false (PVar "succ") (EApp (EApp (EVar "anyKeyIn") (EApp (EApp (EVar "sccCallees") (EVar "scc")) (EVar "adj"))) (EVar "acc"))) (DoLet false false (PVar "acc2") (EIf (EBinOp "||" (EBinOp "||" (EVar "cyclic") (EVar "direct")) (EVar "succ")) (EApp (EApp (EVar "insertAllKeys") (EVar "scc")) (EVar "acc")) (EVar "acc"))) (DoExpr (EApp (EApp (EApp (EApp (EVar "foldTaintSCCs") (EVar "adj")) (EVar "methodSet")) (EVar "rest")) (EVar "acc2")))))
+(DFunDef false "foldTaintSCCs" ((PVar "adj") (PVar "methodSet") (PVar "xs0") (PVar "acc0")) (ELetGroup ((lgb "go" (clause ((PList) (PVar "acc")) (EVar "acc")) (clause ((PCons (PVar "scc") (PVar "rest")) (PVar "acc")) (EBlock (DoLet false false (PVar "cyclic") (EBinOp "||" (EApp (EVar "lengthGt1") (EVar "scc")) (EApp (EApp (EVar "anySelfLoop") (EVar "scc")) (EVar "adj")))) (DoLet false false (PVar "direct") (EApp (EApp (EVar "anyKeyIn") (EVar "scc")) (EVar "methodSet"))) (DoLet false false (PVar "succ") (EApp (EApp (EVar "anyKeyIn") (EApp (EApp (EVar "sccCallees") (EVar "scc")) (EVar "adj"))) (EVar "acc"))) (DoLet false false (PVar "acc2") (EIf (EBinOp "||" (EBinOp "||" (EVar "cyclic") (EVar "direct")) (EVar "succ")) (EApp (EApp (EVar "insertAllKeys") (EVar "scc")) (EVar "acc")) (EVar "acc"))) (DoExpr (EApp (EApp (EVar "go") (EVar "rest")) (EVar "acc2"))))))) (EApp (EApp (EVar "go") (EVar "xs0")) (EVar "acc0"))))
 (DTypeSig true "lazyGlobalNames" (TyFun (TyApp (TyCon "List") (TyCon "CBind")) (TyApp (TyCon "List") (TyCon "String"))))
 (DFunDef false "lazyGlobalNames" ((PVar "binds")) (EBlock (DoLet false false (PVar "allNames") (EApp (EVar "bindNames") (EVar "binds"))) (DoLet false false (PVar "nameSet") (EApp (EApp (EVar "omFromNames") (EVar "allNames")) (EVar "omEmpty"))) (DoLet false false (PVar "adj") (EApp (EApp (EVar "eagerCalleesMap") (EVar "nameSet")) (EVar "binds"))) (DoLet false false (PVar "methodSet") (EApp (EVar "methodTaintSet") (EVar "binds"))) (DoLet false false (PVar "tainted") (EApp (EApp (EApp (EApp (EVar "foldTaintSCCs") (EVar "adj")) (EVar "methodSet")) (EApp (EApp (EVar "tarjanSCCs") (EVar "allNames")) (EVar "adj"))) (EVar "omEmpty"))) (DoExpr (EApp (EApp (EVar "filterList") (ELam ((PVar "n")) (EBinOp "&&" (EBinOp "/=" (EVar "n") (ELit (LString "main"))) (EApp (EApp (EVar "omHasKey") (EVar "n")) (EVar "tainted"))))) (EApp (EVar "valGlobalNames") (EVar "binds"))))))
 (DTypeSig true "ftPrefix" (TyCon "String"))

@@ -238,9 +238,10 @@ trmcClausesOk : (String -> Bool) ->
   Int ->
   List (List Pat, CExpr) ->
   Bool
-trmcClausesOk _ _ _ _ [] = True
-trmcClausesOk ic ar self arity ((_, body) :: rest) =
-  trmcBodyOk ic ar self arity body && trmcClausesOk ic ar self arity rest
+trmcClausesOk ic ar self arity xs0 = go xs0
+  where
+    go [] = True
+    go ((_, body) :: rest) = trmcBodyOk ic ar self arity body && go rest
 
 -- at least one clause has an eligible cons/ctor-tail leaf.
 export
@@ -250,9 +251,10 @@ trmcAnyCons : (String -> Bool) ->
   Int ->
   List (List Pat, CExpr) ->
   Bool
-trmcAnyCons _ _ _ _ [] = False
-trmcAnyCons ic ar self arity ((_, body) :: rest) =
-  trmcBodyHasCons ic ar self arity body || trmcAnyCons ic ar self arity rest
+trmcAnyCons ic ar self arity xs0 = go xs0
+  where
+    go [] = False
+    go ((_, body) :: rest) = trmcBodyHasCons ic ar self arity body || go rest
 
 -- a tail expr is TRMC-safe: descend through CIf/CLet/CLetGroup wrappers; at a
 -- leaf, either it is an eligible ctor-tail (`Ctor f… (self-call)`, the LAST field
@@ -269,33 +271,30 @@ trmcBodyOk : (String -> Bool) ->
   Int ->
   CExpr ->
   Bool
-trmcBodyOk ic ar self arity (CIf c t f) =
-  selfFree self c
-    && trmcBodyOk ic ar self arity t
-    && trmcBodyOk ic ar self arity f
-trmcBodyOk ic ar self arity (CLet _ _ rhs b) =
-  selfFree self rhs && trmcBodyOk ic ar self arity b
-trmcBodyOk ic ar self arity (CLetGroup binds b) =
-  not (selfRefersToBinds self binds) && trmcBodyOk ic ar self arity b
--- B-match-descent (TRMC-DESIGN §"Phase 2 sub-part 3"): a tail-position decision
--- tree (CDecision — `lowerMatch` lowers a constructor/list/tuple/literal match to
--- this; a non-treeable CMatch has NO emit arm and is left to disqualify) is
--- descended — the SCRUTINEE must be self-free (it is evaluated eagerly, not in the
--- loop's destination-passing position), and every arm body must itself be TRMC-safe
--- in tail position.  An arm body may be a cons/ctor-tail leaf, a self-free base, OR
--- the new F3 plain-tail self-call leaf (`None => self …` — iterate on a shorter
--- list, build no cell).  Any self-call in a NON-tail position inside an arm is
--- caught by `trmcBodyOk`'s leaf check (`selfFree` is SelfRef-directed, so a
--- dispatched self-recursion is not blind).
-trmcBodyOk ic ar self arity (CDecision scrut arms _) =
-  selfFree self scrut && trmcArmsOk ic ar self arity arms
-trmcBodyOk ic ar self arity ex =
-  if isCtorTail ic ar self arity ex then
-    True
-  else if isSelfSatApp self arity ex then
-    True
-  else
-    selfFree self ex
+trmcBodyOk ic ar self arity ex0 = go ex0
+  where
+    go (CIf c t f) = selfFree self c && go t && go f
+    go (CLet _ _ rhs b) = selfFree self rhs && go b
+    go (CLetGroup binds b) = not (selfRefersToBinds self binds) && go b
+    -- B-match-descent (TRMC-DESIGN §"Phase 2 sub-part 3"): a tail-position decision
+    -- tree (CDecision — `lowerMatch` lowers a constructor/list/tuple/literal match to
+    -- this; a non-treeable CMatch has NO emit arm and is left to disqualify) is
+    -- descended — the SCRUTINEE must be self-free (it is evaluated eagerly, not in the
+    -- loop's destination-passing position), and every arm body must itself be TRMC-safe
+    -- in tail position.  An arm body may be a cons/ctor-tail leaf, a self-free base, OR
+    -- the new F3 plain-tail self-call leaf (`None => self …` — iterate on a shorter
+    -- list, build no cell).  Any self-call in a NON-tail position inside an arm is
+    -- caught by `trmcBodyOk`'s leaf check (`selfFree` is SelfRef-directed, so a
+    -- dispatched self-recursion is not blind).
+    go (CDecision scrut arms _) =
+      selfFree self scrut && trmcArmsOk ic ar self arity arms
+    go ex =
+      if isCtorTail ic ar self arity ex then
+        True
+      else if isSelfSatApp self arity ex then
+        True
+      else
+        selfFree self ex
 
 -- every match-arm body is TRMC-safe in tail position (guards must be self-free —
 -- a self-call inside a guard would run outside the loop's tail position).
@@ -306,13 +305,15 @@ trmcArmsOk : (String -> Bool) ->
   Int ->
   List CArm ->
   Bool
-trmcArmsOk _ _ _ _ [] = True
-trmcArmsOk ic ar self arity ((CArm _ guards body) :: rest) =
-  trmcGuardsSelfFree self guards
-    && trmcBodyOk ic ar self arity body
-    && trmcArmsOk ic ar self arity rest
-trmcArmsOk ic ar self arity ((CArmAlt _ guards _) :: rest) =
-  trmcGuardsSelfFree self guards && trmcArmsOk ic ar self arity rest
+trmcArmsOk ic ar self arity xs0 = go xs0
+  where
+    go [] = True
+    go ((CArm _ guards body) :: rest) =
+      trmcGuardsSelfFree self guards
+        && trmcBodyOk ic ar self arity body
+        && go rest
+    go ((CArmAlt _ guards _) :: rest) =
+      trmcGuardsSelfFree self guards && go rest
 
 -- every guard expr is self-free (guards run before the arm body, not in tail
 -- position — a self-call there can't be a tail leaf).
@@ -336,15 +337,13 @@ trmcBodyHasCons : (String -> Bool) ->
   Int ->
   CExpr ->
   Bool
-trmcBodyHasCons ic ar self arity (CIf _ t f) =
-  trmcBodyHasCons ic ar self arity t || trmcBodyHasCons ic ar self arity f
-trmcBodyHasCons ic ar self arity (CLet _ _ _ b) =
-  trmcBodyHasCons ic ar self arity b
-trmcBodyHasCons ic ar self arity (CLetGroup _ b) =
-  trmcBodyHasCons ic ar self arity b
-trmcBodyHasCons ic ar self arity (CDecision _ arms _) =
-  trmcArmsHaveCons ic ar self arity arms
-trmcBodyHasCons ic ar self arity ex = isCtorTail ic ar self arity ex
+trmcBodyHasCons ic ar self arity ex0 = go ex0
+  where
+    go (CIf _ t f) = go t || go f
+    go (CLet _ _ _ b) = go b
+    go (CLetGroup _ b) = go b
+    go (CDecision _ arms _) = trmcArmsHaveCons ic ar self arity arms
+    go ex = isCtorTail ic ar self arity ex
 
 export
 trmcArmsHaveCons : (String -> Bool) ->
@@ -353,12 +352,12 @@ trmcArmsHaveCons : (String -> Bool) ->
   Int ->
   List CArm ->
   Bool
-trmcArmsHaveCons _ _ _ _ [] = False
-trmcArmsHaveCons ic ar self arity ((CArm _ _ body) :: rest) =
-  trmcBodyHasCons ic ar self arity body
-    || trmcArmsHaveCons ic ar self arity rest
-trmcArmsHaveCons ic ar self arity ((CArmAlt _ _ _) :: rest) =
-  trmcArmsHaveCons ic ar self arity rest
+trmcArmsHaveCons ic ar self arity xs0 = go xs0
+  where
+    go [] = False
+    go ((CArm _ _ body) :: rest) =
+      trmcBodyHasCons ic ar self arity body || go rest
+    go ((CArmAlt _ _ _) :: rest) = go rest
 
 -- the eligible ctor-tail shape (Phase 2 Axis A — general single-constructor
 -- LAST-field TMC).  Two cases, both: the LAST field is a SATURATED self-recursive
@@ -498,100 +497,79 @@ selfFree (SelfByMethod method tag _) ex = not (mentionsSelfMethod method tag ex)
 -- recursion DROPPED → silent miscompile.  This full structural walk closes that.
 export
 mentionsSelfMethod : String -> String -> CExpr -> Bool
-mentionsSelfMethod method tag (CMethod m (MethodEvidence _ _ route _ _)) =
-  m == method && instanceWord route == Some tag
-mentionsSelfMethod method tag (CApp f args _) =
-  mentionsSelfMethod method tag f
-    || anyList (mentionsSelfMethod method tag) args
-mentionsSelfMethod method tag (CLam _ b) = mentionsSelfMethod method tag b
-mentionsSelfMethod method tag (CLet _ _ rhs b) =
-  mentionsSelfMethod method tag rhs || mentionsSelfMethod method tag b
-mentionsSelfMethod method tag (CLetGroup binds b) =
-  mentionsSelfMethodBinds method tag binds || mentionsSelfMethod method tag b
-mentionsSelfMethod method tag (CBlock stmts) =
-  mentionsSelfMethodStmts method tag stmts
-mentionsSelfMethod method tag (CIf c t f) =
-  mentionsSelfMethod method tag c
-    || mentionsSelfMethod method tag t
-    || mentionsSelfMethod method tag f
-mentionsSelfMethod method tag (CBinPrim _ l r _ _) =
-  mentionsSelfMethod method tag l || mentionsSelfMethod method tag r
-mentionsSelfMethod method tag (CUnOp _ x) = mentionsSelfMethod method tag x
-mentionsSelfMethod method tag (CMatch s arms) =
-  mentionsSelfMethod method tag s || mentionsSelfMethodArms method tag arms
-mentionsSelfMethod method tag (CDecision s arms _) =
-  mentionsSelfMethod method tag s || mentionsSelfMethodArms method tag arms
-mentionsSelfMethod method tag (CTuple xs) = mentionsSelfMethodList method tag xs
-mentionsSelfMethod method tag (CList xs) = mentionsSelfMethodList method tag xs
-mentionsSelfMethod method tag (CArray xs) = mentionsSelfMethodList method tag xs
-mentionsSelfMethod method tag (CRangeList lo hi _) =
-  mentionsSelfMethod method tag lo || mentionsSelfMethod method tag hi
-mentionsSelfMethod method tag (CRangeArray lo hi _) =
-  mentionsSelfMethod method tag lo || mentionsSelfMethod method tag hi
-mentionsSelfMethod method tag (CRecord _ fields) =
-  mentionsSelfMethodFields method tag fields
-mentionsSelfMethod method tag (CFieldAccess ex _ _ _) =
-  mentionsSelfMethod method tag ex
-mentionsSelfMethod method tag (CRecordUpdate _ base ups) =
-  mentionsSelfMethod method tag base || mentionsSelfMethodFields method tag ups
-mentionsSelfMethod method tag (CVariantUpdate _ base ups) =
-  mentionsSelfMethod method tag base || mentionsSelfMethodFields method tag ups
-mentionsSelfMethod method tag (CIndex a i) =
-  mentionsSelfMethod method tag a || mentionsSelfMethod method tag i
-mentionsSelfMethod method tag (CSlice a lo hi _) =
-  mentionsSelfMethod method tag a
-    || mentionsSelfMethod method tag lo
-    || mentionsSelfMethod method tag hi
-mentionsSelfMethod method tag (CStringIndex a i) =
-  mentionsSelfMethod method tag a || mentionsSelfMethod method tag i
-mentionsSelfMethod method tag (CStringSlice a lo hi _) =
-  mentionsSelfMethod method tag a
-    || mentionsSelfMethod method tag lo
-    || mentionsSelfMethod method tag hi
-mentionsSelfMethod method tag (CListIndex a i) =
-  mentionsSelfMethod method tag a || mentionsSelfMethod method tag i
-mentionsSelfMethod method tag (CListSlice a lo hi _) =
-  mentionsSelfMethod method tag a
-    || mentionsSelfMethod method tag lo
-    || mentionsSelfMethod method tag hi
-mentionsSelfMethod _ _ (CLit _ | CVar _ _ | CDict _ _) = False
+mentionsSelfMethod method tag x0 = go x0
+  where
+    go (CMethod m (MethodEvidence _ _ route _ _)) =
+      m == method && instanceWord route == Some tag
+    go (CApp f args _) = go f || anyList (mentionsSelfMethod method tag) args
+    go (CLam _ b) = go b
+    go (CLet _ _ rhs b) = go rhs || go b
+    go (CLetGroup binds b) = mentionsSelfMethodBinds method tag binds || go b
+    go (CBlock stmts) = mentionsSelfMethodStmts method tag stmts
+    go (CIf c t f) = go c || go t || go f
+    go (CBinPrim _ l r _ _) = go l || go r
+    go (CUnOp _ x) = go x
+    go (CMatch s arms) = go s || mentionsSelfMethodArms method tag arms
+    go (CDecision s arms _) = go s || mentionsSelfMethodArms method tag arms
+    go (CTuple xs) = mentionsSelfMethodList method tag xs
+    go (CList xs) = mentionsSelfMethodList method tag xs
+    go (CArray xs) = mentionsSelfMethodList method tag xs
+    go (CRangeList lo hi _) = go lo || go hi
+    go (CRangeArray lo hi _) = go lo || go hi
+    go (CRecord _ fields) = mentionsSelfMethodFields method tag fields
+    go (CFieldAccess ex _ _ _) = go ex
+    go (CRecordUpdate _ base ups) =
+      go base || mentionsSelfMethodFields method tag ups
+    go (CVariantUpdate _ base ups) =
+      go base || mentionsSelfMethodFields method tag ups
+    go (CIndex a i) = go a || go i
+    go (CSlice a lo hi _) = go a || go lo || go hi
+    go (CStringIndex a i) = go a || go i
+    go (CStringSlice a lo hi _) = go a || go lo || go hi
+    go (CListIndex a i) = go a || go i
+    go (CListSlice a lo hi _) = go a || go lo || go hi
+    go (CLit _ | CVar _ _ | CDict _ _) = False
 
 export
 mentionsSelfMethodList : String -> String -> List CExpr -> Bool
-mentionsSelfMethodList _ _ [] = False
-mentionsSelfMethodList method tag (x :: rest) =
-  mentionsSelfMethod method tag x || mentionsSelfMethodList method tag rest
+mentionsSelfMethodList method tag xs0 = go xs0
+  where
+    go [] = False
+    go (x :: rest) = mentionsSelfMethod method tag x || go rest
 
 export
 mentionsSelfMethodArms : String -> String -> List CArm -> Bool
-mentionsSelfMethodArms _ _ [] = False
-mentionsSelfMethodArms method tag ((CArm _ guards body) :: rest) =
-  mentionsSelfMethodGuards method tag guards
-    || mentionsSelfMethod method tag body
-    || mentionsSelfMethodArms method tag rest
-mentionsSelfMethodArms method tag ((CArmAlt _ guards _) :: rest) =
-  mentionsSelfMethodGuards method tag guards
-    || mentionsSelfMethodArms method tag rest
+mentionsSelfMethodArms method tag xs0 = go xs0
+  where
+    go [] = False
+    go ((CArm _ guards body) :: rest) =
+      mentionsSelfMethodGuards method tag guards
+        || mentionsSelfMethod method tag body
+        || go rest
+    go ((CArmAlt _ guards _) :: rest) =
+      mentionsSelfMethodGuards method tag guards || go rest
 
 export
 mentionsSelfMethodGuards : String -> String -> List CGuard -> Bool
-mentionsSelfMethodGuards _ _ [] = False
-mentionsSelfMethodGuards method tag ((CGBool c) :: rest) =
-  mentionsSelfMethod method tag c || mentionsSelfMethodGuards method tag rest
-mentionsSelfMethodGuards method tag ((CGBind _ c) :: rest) =
-  mentionsSelfMethod method tag c || mentionsSelfMethodGuards method tag rest
+mentionsSelfMethodGuards method tag xs0 = go xs0
+  where
+    go [] = False
+    go ((CGBool c) :: rest) = mentionsSelfMethod method tag c || go rest
+    go ((CGBind _ c) :: rest) = mentionsSelfMethod method tag c || go rest
 
 export
 mentionsSelfMethodFields : String -> String -> List CField -> Bool
-mentionsSelfMethodFields _ _ [] = False
-mentionsSelfMethodFields method tag ((CField _ _ v) :: rest) =
-  mentionsSelfMethod method tag v || mentionsSelfMethodFields method tag rest
+mentionsSelfMethodFields method tag xs0 = go xs0
+  where
+    go [] = False
+    go ((CField _ _ v) :: rest) = mentionsSelfMethod method tag v || go rest
 
 export
 mentionsSelfMethodStmts : String -> String -> List CStmt -> Bool
-mentionsSelfMethodStmts _ _ [] = False
-mentionsSelfMethodStmts method tag (s :: rest) =
-  mentionsSelfMethodStmt method tag s || mentionsSelfMethodStmts method tag rest
+mentionsSelfMethodStmts method tag xs0 = go xs0
+  where
+    go [] = False
+    go (s :: rest) = mentionsSelfMethodStmt method tag s || go rest
 
 export
 mentionsSelfMethodStmt : String -> String -> CStmt -> Bool
@@ -603,17 +581,19 @@ mentionsSelfMethodStmt method tag (CSAssign _ ex) =
 
 export
 mentionsSelfMethodBinds : String -> String -> List CBind -> Bool
-mentionsSelfMethodBinds _ _ [] = False
-mentionsSelfMethodBinds method tag ((CBind _ clauses _ _) :: rest) =
-  mentionsSelfMethodClauses method tag clauses
-    || mentionsSelfMethodBinds method tag rest
+mentionsSelfMethodBinds method tag xs0 = go xs0
+  where
+    go [] = False
+    go ((CBind _ clauses _ _) :: rest) =
+      mentionsSelfMethodClauses method tag clauses || go rest
 
 export
 mentionsSelfMethodClauses : String -> String -> List CClause -> Bool
-mentionsSelfMethodClauses _ _ [] = False
-mentionsSelfMethodClauses method tag ((CClause _ body) :: rest) =
-  mentionsSelfMethod method tag body
-    || mentionsSelfMethodClauses method tag rest
+mentionsSelfMethodClauses method tag xs0 = go xs0
+  where
+    go [] = False
+    go ((CClause _ body) :: rest) =
+      mentionsSelfMethod method tag body || go rest
 
 -- does `ex` mention `self` as a `CDict self …` head ANYWHERE in its tree?  The
 -- CDict analog of `mentionsSelfMethod` (same safety-critical role): `freeVars
@@ -1008,6 +988,8 @@ dispDetectGo : (String -> String) ->
   OrdMap Unit ->
   OrdMap Unit ->
   List DispGroup
+-- Bound: the formatter lays this where-go head out as a line the parser rejects (#4896); convert then.
+-- lint-disable-next-line rule-threaded-invariant
 dispDetectGo _ _ _ _ _ _ _ _ _ _ [] accepted _ _ = reverseL accepted
 dispDetectGo cf isFn fa s1 fnSet bindIx headsMap headsIx implHeads consTargets (b :: rest) accepted claimed doomed =
   match (dispTryRoot
@@ -1246,20 +1228,17 @@ dispExprConsTargets : (String -> String) ->
   OrdMap Unit ->
   CExpr ->
   List String
-dispExprConsTargets cf isFn fa fnSet (CIf _ t f) =
-  dispExprConsTargets cf isFn fa fnSet t
-    ++ dispExprConsTargets cf isFn fa fnSet f
-dispExprConsTargets cf isFn fa fnSet (CLet _ _ _ b) =
-  dispExprConsTargets cf isFn fa fnSet b
-dispExprConsTargets cf isFn fa fnSet (CBlock stmts) = match lastStmtExpr stmts
-  Some ex => dispExprConsTargets cf isFn fa fnSet ex
-  None => []
-dispExprConsTargets cf isFn fa fnSet (CDecision _ arms _) =
-  flatMap (a => dispExprConsTargets cf isFn fa fnSet (armBody a)) arms
-dispExprConsTargets cf isFn fa fnSet other =
-  match dispSpineParts cf isFn fa (f => omHasKey f fnSet) other
-    Some (_, f, _) => [f]
-    None => []
+dispExprConsTargets cf isFn fa fnSet other0 = go other0
+  where
+    go (CIf _ t f) = go t ++ go f
+    go (CLet _ _ _ b) = go b
+    go (CBlock stmts) = match lastStmtExpr stmts
+      Some ex => go ex
+      None => []
+    go (CDecision _ arms _) = flatMap (a => go (armBody a)) arms
+    go other = match dispSpineParts cf isFn fa (f => omHasKey f fnSet) other
+      Some (_, f, _) => [f]
+      None => []
 
 -- a saturated direct call to `root` (canonicalized): flattenApp head is `CVar f`,
 -- `cf f == root`, arg count == arity.
@@ -1378,6 +1357,8 @@ dispGrow : (String -> String) ->
   OrdMap String ->
   OrdMap Unit ->
   (Option (List String), OrdMap Unit)
+-- Bound: the formatter lays this where-go head out as a line the parser rejects (#4896); convert then.
+-- lint-disable-next-line rule-threaded-invariant
 dispGrow _ _ _ _ _ _ _ [] [] accRev _ _ doomed =
   (Some (reverseL accRev), doomed)
 dispGrow cf isFn fa bindIx fnSet claimed root [] back accRev accSet parents doomed =
@@ -1447,6 +1428,8 @@ dispAddNew : List String ->
   OrdMap String ->
   List String ->
   Option (List String, OrdMap Unit, OrdMap String, List String)
+-- Bound: the formatter lays this where-go head out as a line the parser rejects (#4896); convert then.
+-- lint-disable-next-line rule-threaded-invariant
 dispAddNew [] _ _ _ accRev accSet parents addedRev =
   Some (accRev, accSet, parents, addedRev)
 dispAddNew (n :: rest) claimed doomed m accRev accSet parents addedRev =
@@ -1524,11 +1507,13 @@ dispClausesGo : (String -> String) ->
   List CClause ->
   List String ->
   Option (List String)
-dispClausesGo _ _ _ _ _ [] found = Some found
-dispClausesGo cf isFn fa fnSet root ((CClause _ body) :: rest) found =
-  match dispLeavesOk cf isFn fa fnSet root body found
-    None => None
-    Some found2 => dispClausesGo cf isFn fa fnSet root rest found2
+dispClausesGo cf isFn fa fnSet root xs0 found0 = go xs0 found0
+  where
+    go [] found = Some found
+    go ((CClause _ body) :: rest) found =
+      match dispLeavesOk cf isFn fa fnSet root body found
+        None => None
+        Some found2 => go rest found2
 
 -- descend the tail wrappers; check each leaf; accumulate referenced new group fns.
 -- (Block-prefix statements, let-RHSs, guards, and scrutinees are validated by
@@ -1541,22 +1526,18 @@ dispLeavesOk : (String -> String) ->
   CExpr ->
   List String ->
   Option (List String)
-dispLeavesOk cf isFn fa fnSet root (CIf _ t f) found =
-  match dispLeavesOk cf isFn fa fnSet root t found
-    None => None
-    Some f2 => dispLeavesOk cf isFn fa fnSet root f f2
-dispLeavesOk cf isFn fa fnSet root (CLet False (PVar _ _ _) _ b) found =
-  dispLeavesOk cf isFn fa fnSet root b found
-dispLeavesOk cf isFn fa fnSet root (CLet False PWild _ b) found =
-  dispLeavesOk cf isFn fa fnSet root b found
-dispLeavesOk cf isFn fa fnSet root (CBlock stmts) found =
-  match lastStmtExpr stmts
-    Some ex => dispLeavesOk cf isFn fa fnSet root ex found
-    None => None
-dispLeavesOk cf isFn fa fnSet root (CDecision _ arms _) found =
-  dispArmsOk cf isFn fa fnSet root arms found
-dispLeavesOk cf isFn fa fnSet root other found =
-  dispLeafOk cf isFn fa fnSet root other found
+dispLeavesOk cf isFn fa fnSet root other0 found0 = go other0 found0
+  where
+    go (CIf _ t f) found = match go t found
+      None => None
+      Some f2 => go f f2
+    go (CLet False (PVar _ _ _) _ b) found = go b found
+    go (CLet False PWild _ b) found = go b found
+    go (CBlock stmts) found = match lastStmtExpr stmts
+      Some ex => go ex found
+      None => None
+    go (CDecision _ arms _) found = dispArmsOk cf isFn fa fnSet root arms found
+    go other found = dispLeafOk cf isFn fa fnSet root other found
 
 dispArmsOk : (String -> String) ->
   (String -> Bool) ->
@@ -1566,20 +1547,19 @@ dispArmsOk : (String -> String) ->
   List CArm ->
   List String ->
   Option (List String)
-dispArmsOk _ _ _ _ _ [] found = Some found
-dispArmsOk cf isFn fa fnSet root ((CArm _ guards body) :: rest) found =
-  -- only ordinary bool guards (the same restriction the tail emit honors); a refutable
-  -- guard binder would complicate the leaf rewrite — reject the group.
-  if not (allBoolGuards guards) then
-    None
-  else match dispLeavesOk cf isFn fa fnSet root body found
-    None => None
-    Some f2 => dispArmsOk cf isFn fa fnSet root rest f2
-dispArmsOk cf isFn fa fnSet root ((CArmAlt _ guards _) :: rest) found =
-  if allBoolGuards guards then
-    dispArmsOk cf isFn fa fnSet root rest found
-  else
-    None
+dispArmsOk cf isFn fa fnSet root xs0 found0 = go xs0 found0
+  where
+    go [] found = Some found
+    go ((CArm _ guards body) :: rest) found =
+      -- only ordinary bool guards (the same restriction the tail emit honors); a refutable
+      -- guard binder would complicate the leaf rewrite — reject the group.
+      if not (allBoolGuards guards) then
+        None
+      else match dispLeavesOk cf isFn fa fnSet root body found
+        None => None
+        Some f2 => go rest f2
+    go ((CArmAlt _ guards _) :: rest) found =
+      if allBoolGuards guards then go rest found else None
 
 -- classify a single LEAF.  peeled spine cons bottoming in a saturated user-fn call
 -- ⇒ ok + the bottom fn joins the group.  bare saturated tail-call to a user fn ⇒ ok
@@ -1672,31 +1652,26 @@ dispNonTailHeads : (String -> String) ->
   OrdMap Unit ->
   CExpr ->
   List String
-dispNonTailHeads cf isFn fa memberSet (CIf c t f) =
-  allCallHeads cf c
-    ++ dispNonTailHeads cf isFn fa memberSet t
-    ++ dispNonTailHeads cf isFn fa memberSet f
-dispNonTailHeads cf isFn fa memberSet (CLet False (PVar _ _ _) rhs b) =
-  allCallHeads cf rhs ++ dispNonTailHeads cf isFn fa memberSet b
-dispNonTailHeads cf isFn fa memberSet (CLet False PWild rhs b) =
-  allCallHeads cf rhs ++ dispNonTailHeads cf isFn fa memberSet b
-dispNonTailHeads cf isFn fa memberSet (CBlock stmts) =
-  dispStmtNonTailHeads cf isFn fa memberSet stmts
-dispNonTailHeads cf isFn fa memberSet (CDecision scrut arms _) =
-  allCallHeads cf scrut
-    ++ flatMap (a => dispArmNonTailHeads cf isFn fa memberSet a) arms
-dispNonTailHeads cf isFn fa memberSet leaf =
-  match dispSpineParts cf isFn fa (f => omHasKey f memberSet) leaf
-    Some (heads, _, args) =>
-      flatMap (allCallHeads cf) heads ++ flatMap (allCallHeads cf) args
-    None => match flattenApp leaf []
-      (CVar f0 _, args) =>
-        let f = cf f0
-        if omHasKey f memberSet && listLen args == fa f then
-          flatMap (allCallHeads cf) args
-        else
-          allCallHeads cf leaf
-      _ => allCallHeads cf leaf
+dispNonTailHeads cf isFn fa memberSet leaf0 = go leaf0
+  where
+    go (CIf c t f) = allCallHeads cf c ++ go t ++ go f
+    go (CLet False (PVar _ _ _) rhs b) = allCallHeads cf rhs ++ go b
+    go (CLet False PWild rhs b) = allCallHeads cf rhs ++ go b
+    go (CBlock stmts) = dispStmtNonTailHeads cf isFn fa memberSet stmts
+    go (CDecision scrut arms _) =
+      allCallHeads cf scrut
+        ++ flatMap (a => dispArmNonTailHeads cf isFn fa memberSet a) arms
+    go leaf = match dispSpineParts cf isFn fa (f => omHasKey f memberSet) leaf
+      Some (heads, _, args) =>
+        flatMap (allCallHeads cf) heads ++ flatMap (allCallHeads cf) args
+      None => match flattenApp leaf []
+        (CVar f0 _, args) =>
+          let f = cf f0
+          if omHasKey f memberSet && listLen args == fa f then
+            flatMap (allCallHeads cf) args
+          else
+            allCallHeads cf leaf
+        _ => allCallHeads cf leaf
 
 dispArmNonTailHeads : (String -> String) ->
   (String -> Bool) ->
@@ -1716,11 +1691,11 @@ dispStmtNonTailHeads : (String -> String) ->
   OrdMap Unit ->
   List CStmt ->
   List String
-dispStmtNonTailHeads cf isFn fa memberSet [CSExpr ex] =
-  dispNonTailHeads cf isFn fa memberSet ex
-dispStmtNonTailHeads cf isFn fa memberSet (s :: rest) =
-  allCallHeadsStmt cf s ++ dispStmtNonTailHeads cf isFn fa memberSet rest
-dispStmtNonTailHeads _ _ _ _ [] = []
+dispStmtNonTailHeads cf isFn fa memberSet xs0 = go xs0
+  where
+    go [CSExpr ex] = dispNonTailHeads cf isFn fa memberSet ex
+    go (s :: rest) = allCallHeadsStmt cf s ++ go rest
+    go [] = []
 
 -- effectful anyList: the spine-cons / call-head walks thread effectful
 -- hooks, so a short-circuiting any over an effectful predicate is needed.

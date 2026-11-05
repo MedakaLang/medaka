@@ -537,6 +537,8 @@ renameRetirementTokens : String ->
   List (Int, Int) ->
   Int ->
   List String
+-- Bound: list built in tail position modulo cons: a where-local go loses the constant-stack loop until the lambda-lift pass (#4878); convert then.
+-- lint-disable-next-line rule-threaded-invariant
 renameRetirementTokens text names (t :: ts) ((start, end) :: spans) offset =
   match t
     TIdent n => match omLookup n names

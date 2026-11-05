@@ -266,17 +266,20 @@ foldReachSCCs : OrdMap Unit ->
   List (List String) ->
   OrdMap (List String, OrdMap Unit) ->
   OrdMap (List String, OrdMap Unit)
-foldReachSCCs _ _ [] acc = acc
-foldReachSCCs valSet adj (scc :: rest) acc =
-  let direct = dedup (unionLookup scc adj)
-  -- sources, in the order the old `dedup (… ++ …)` saw them: this SCC's own
-  -- direct value-global callees, then each callee's reach list.  The LAST
-  -- callee's list is held back as the shareable tail; everything before it is
-  -- concatenated and deduped as `earlier`.
-  let earlier =
-    dedup (filterList (n => omHasKey n valSet) direct ++ initReach direct acc)
-  let reached = mergeReach earlier (lastReach direct acc)
-  foldReachSCCs valSet adj rest (insertReach scc reached acc)
+foldReachSCCs valSet adj xs0 acc0 = go xs0 acc0
+  where
+    go [] acc = acc
+    go (scc :: rest) acc =
+      let direct = dedup (unionLookup scc adj)
+      -- sources, in the order the old `dedup (… ++ …)` saw them: this SCC's own
+      -- direct value-global callees, then each callee's reach list.  The LAST
+      -- callee's list is held back as the shareable tail; everything before it is
+      -- concatenated and deduped as `earlier`.
+      let earlier =
+        dedup
+          (filterList (n => omHasKey n valSet) direct ++ initReach direct acc)
+      let reached = mergeReach earlier (lastReach direct acc)
+      go rest (insertReach scc reached acc)
 
 -- `dedup (earlier ++ tailList)` where `earlier` is already deduped, i.e.
 -- `earlier ++ (tailList \ earlier)`, paired with its own membership set.
@@ -543,13 +546,15 @@ foldTaintSCCs : OrdMap (List String) ->
   List (List String) ->
   OrdMap Unit ->
   OrdMap Unit
-foldTaintSCCs _ _ [] acc = acc
-foldTaintSCCs adj methodSet (scc :: rest) acc =
-  let cyclic = lengthGt1 scc || anySelfLoop scc adj
-  let direct = anyKeyIn scc methodSet
-  let succ = anyKeyIn (sccCallees scc adj) acc
-  let acc2 = if cyclic || direct || succ then insertAllKeys scc acc else acc
-  foldTaintSCCs adj methodSet rest acc2
+foldTaintSCCs adj methodSet xs0 acc0 = go xs0 acc0
+  where
+    go [] acc = acc
+    go (scc :: rest) acc =
+      let cyclic = lengthGt1 scc || anySelfLoop scc adj
+      let direct = anyKeyIn scc methodSet
+      let succ = anyKeyIn (sccCallees scc adj) acc
+      let acc2 = if cyclic || direct || succ then insertAllKeys scc acc else acc
+      go rest acc2
 
 -- the value globals that must be emitted LAZY on the native backend: those reaching
 -- an eager dispatch or a value cycle, transitively over the eager call graph.  Excludes

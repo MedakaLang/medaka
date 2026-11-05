@@ -203,6 +203,8 @@ scan : String ->
   List Token ->
   List String ->
   Result SymbolDefect (List Token, String)
+-- Bound: hot compiler path: the where-go form allocates one closure per call until the lambda-lift pass (#4878); convert then.
+-- lint-disable-next-line rule-threaded-invariant
 scan text bytes entries markers registry i copied tokens chunks =
   let c = byte bytes i
   if c == -1 then
@@ -730,12 +732,14 @@ referencesGo : List Token ->
   OrdMap Unit ->
   List SymbolDefect ->
   List SymbolDefect
-referencesGo [] _ _ acc = acc
-referencesGo ((Token name _ at) :: rest) seen gaps acc =
-  if isGlobal name && not (omHasKey name seen || omHasKey name gaps) then
-    referencesGo rest seen gaps (UndefinedReference (errorName name) at :: acc)
-  else
-    referencesGo rest seen gaps acc
+referencesGo xs0 seen gaps acc0 = go xs0 acc0
+  where
+    go [] acc = acc
+    go ((Token name _ at) :: rest) acc =
+      if isGlobal name && not (omHasKey name seen || omHasKey name gaps) then
+        go rest (UndefinedReference (errorName name) at :: acc)
+      else
+        go rest acc
 
 attributeOrigins : List Token ->
   OrdMap Expected ->

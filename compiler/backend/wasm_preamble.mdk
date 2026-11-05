@@ -1442,6 +1442,8 @@ asciiTrapGoW : (String -> Int -> String) ->
   Int ->
   Int ->
   List String
+-- Bound: list built in tail position modulo cons: a where-local go loses the constant-stack loop until the lambda-lift pass (#4878); convert then.
+-- lint-disable-next-line rule-threaded-invariant
 asciiTrapGoW callW tailW cs n i =
   if i >= n then
     []
@@ -2231,12 +2233,14 @@ asciiU8arrWat s =
   "(array.new_fixed $u8arr \{intToString (arrayLength cs)}\{asciiConstsW cs (arrayLength cs) 0})"
 
 asciiConstsW : Array Char -> Int -> Int -> String
-asciiConstsW cs n i =
-  if i >= n then
-    ""
-  else
-    " (i32.const \{intToString (charCode (arrayGetUnsafe i cs))})"
-      ++ asciiConstsW cs n (i + 1)
+asciiConstsW cs n i0 = go i0
+  where
+    go i =
+      if i >= n then
+        ""
+      else
+        " (i32.const \{intToString (charCode (arrayGetUnsafe i cs))})"
+          ++ go (i + 1)
 
 -- the IO host-surface runtime: the byte-channel marshalers + the five extern bodies.
 -- $str-dependent (every path/result is a $str) and $C_Ok/$C_Err/$C_Some/$T_List are

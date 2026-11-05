@@ -702,21 +702,21 @@ restampClause name mode (CClause pats body) =
   CClause pats (restampExpr name mode body)
 
 restampExpr : String -> CallMode -> CExpr -> CExpr
-restampExpr name mode (CApp hd args (CallSite old tailPos)) =
-  let args2 = map (restampExpr name mode) args
-  match hd
-    CVar x _ =>
-      if x == name then
-        CApp hd args2 (CallSite mode tailPos)
-      else
-        CApp hd args2 (CallSite old tailPos)
-    _ => CApp (restampExpr name mode hd) args2 (CallSite old tailPos)
-restampExpr name mode (CLet r pat rhs body) =
-  CLet r pat (restampExpr name mode rhs) (restampExpr name mode body)
-restampExpr name mode (CBlock stmts) =
-  CBlock (map (restampStmt name mode) stmts)
-restampExpr _ _ (e@(CLit _ | CVar _ _ | CLam _ _ | CLetGroup _ _ | CMatch _ _ | CDecision _ _ _ | CIf _ _ _ | CBinPrim _ _ _ _ _ | CUnOp _ _ | CTuple _ | CList _ | CRecord _ _ | CFieldAccess _ _ _ _ | CRecordUpdate _ _ _ | CVariantUpdate _ _ _ | CArray _ | CRangeList _ _ _ | CRangeArray _ _ _ | CIndex _ _ | CSlice _ _ _ _ | CStringIndex _ _ | CStringSlice _ _ _ _ | CListIndex _ _ | CListSlice _ _ _ _ | CMethod _ _ | CDict _ _)) =
-  e
+restampExpr name mode ex0 = go ex0
+  where
+    go (CApp hd args (CallSite old tailPos)) =
+      let args2 = map go args
+      match hd
+        CVar x _ =>
+          if x == name then
+            CApp hd args2 (CallSite mode tailPos)
+          else
+            CApp hd args2 (CallSite old tailPos)
+        _ => CApp (go hd) args2 (CallSite old tailPos)
+    go (CLet r pat rhs body) = CLet r pat (go rhs) (go body)
+    go (CBlock stmts) = CBlock (map (restampStmt name mode) stmts)
+    go (e@(CLit _ | CVar _ _ | CLam _ _ | CLetGroup _ _ | CMatch _ _ | CDecision _ _ _ | CIf _ _ _ | CBinPrim _ _ _ _ _ | CUnOp _ _ | CTuple _ | CList _ | CRecord _ _ | CFieldAccess _ _ _ _ | CRecordUpdate _ _ _ | CVariantUpdate _ _ _ | CArray _ | CRangeList _ _ _ | CRangeArray _ _ _ | CIndex _ _ | CSlice _ _ _ _ | CStringIndex _ _ | CStringSlice _ _ _ _ | CListIndex _ _ | CListSlice _ _ _ _ | CMethod _ _ | CDict _ _)) =
+      e
 
 restampStmt : String -> CallMode -> CStmt -> CStmt
 restampStmt name mode (CSExpr e) = CSExpr (restampExpr name mode e)
@@ -812,21 +812,21 @@ reflagClause name flag (CClause pats body) =
   CClause pats (reflagExpr name flag body)
 
 reflagExpr : String -> Bool -> CExpr -> CExpr
-reflagExpr name flag (CApp hd args (CallSite mode old)) =
-  let args2 = map (reflagExpr name flag) args
-  match hd
-    CVar x _ =>
-      if x == name then
-        CApp hd args2 (CallSite mode flag)
-      else
-        CApp hd args2 (CallSite mode old)
-    _ => CApp (reflagExpr name flag hd) args2 (CallSite mode old)
-reflagExpr name flag (CLet r pat rhs body) =
-  CLet r pat (reflagExpr name flag rhs) (reflagExpr name flag body)
-reflagExpr name flag (CIf c t e) =
-  CIf (reflagExpr name flag c) (reflagExpr name flag t) (reflagExpr name flag e)
-reflagExpr _ _ (e@(CLit _ | CVar _ _ | CLam _ _ | CLetGroup _ _ | CMatch _ _ | CDecision _ _ _ | CBinPrim _ _ _ _ _ | CUnOp _ _ | CTuple _ | CList _ | CRecord _ _ | CFieldAccess _ _ _ _ | CRecordUpdate _ _ _ | CVariantUpdate _ _ _ | CArray _ | CRangeList _ _ _ | CRangeArray _ _ _ | CIndex _ _ | CSlice _ _ _ _ | CStringIndex _ _ | CStringSlice _ _ _ _ | CListIndex _ _ | CListSlice _ _ _ _ | CBlock _ | CMethod _ _ | CDict _ _)) =
-  e
+reflagExpr name flag ex0 = go ex0
+  where
+    go (CApp hd args (CallSite mode old)) =
+      let args2 = map go args
+      match hd
+        CVar x _ =>
+          if x == name then
+            CApp hd args2 (CallSite mode flag)
+          else
+            CApp hd args2 (CallSite mode old)
+        _ => CApp (go hd) args2 (CallSite mode old)
+    go (CLet r pat rhs body) = CLet r pat (go rhs) (go body)
+    go (CIf c t e) = CIf (go c) (go t) (go e)
+    go (e@(CLit _ | CVar _ _ | CLam _ _ | CLetGroup _ _ | CMatch _ _ | CDecision _ _ _ | CBinPrim _ _ _ _ _ | CUnOp _ _ | CTuple _ | CList _ | CRecord _ _ | CFieldAccess _ _ _ _ | CRecordUpdate _ _ _ | CVariantUpdate _ _ _ | CArray _ | CRangeList _ _ _ | CRangeArray _ _ _ | CIndex _ _ | CSlice _ _ _ _ | CStringIndex _ _ | CStringSlice _ _ _ _ | CListIndex _ _ | CListSlice _ _ _ _ | CBlock _ | CMethod _ _ | CDict _ _)) =
+      e
 
 tailSrc : String
 tailSrc = "g x = x\nf x = g x\nmain = f 1"

@@ -1,5 +1,5 @@
 # META
-source_lines=1812
+source_lines=1823
 stages=DESUGAR,MARK
 # SOURCE
 import backend.impl_groups.{validateImplGroups}
@@ -1007,9 +1007,11 @@ walkImplBody ctx (CImplDefault iface tag key _ _ pats body) w =
     w
 
 walkClauses : Ctx -> CallScope -> List CClause -> Walk -> Walk
-walkClauses _ _ [] w = w
-walkClauses ctx scope ((CClause pats body) :: rest) w =
-  walkClauses ctx scope rest (walkE ctx (bindPatsScope pats scope) body w)
+walkClauses ctx scope xs0 w0 = go xs0 w0
+  where
+    go [] w = w
+    go ((CClause pats body) :: rest) w =
+      go rest (walkE ctx (bindPatsScope pats scope) body w)
 
 -- Every constructor is listed, with no catch-all arm, so a new expression form
 -- must decide where its binders scope.
@@ -1422,31 +1424,34 @@ noteVar (Ctx backend top _ _ _ facts binding _) scope x (w@(Walk seen found bad 
           results
 
 walkList : Ctx -> CallScope -> List CExpr -> Walk -> Walk
-walkList _ _ [] w = w
-walkList ctx scope (e :: rest) w = walkList ctx scope rest (walkE ctx scope e w)
+walkList ctx scope xs0 w0 = go xs0 w0
+  where
+    go [] w = w
+    go (e :: rest) w = go rest (walkE ctx scope e w)
 
 walkFields : Ctx -> CallScope -> List CField -> Walk -> Walk
-walkFields _ _ [] w = w
-walkFields ctx scope ((CField _ _ e) :: rest) w =
-  walkFields ctx scope rest (walkE ctx scope e w)
+walkFields ctx scope xs0 w0 = go xs0 w0
+  where
+    go [] w = w
+    go ((CField _ _ e) :: rest) w = go rest (walkE ctx scope e w)
 
 walkLocalBinds : Ctx -> CallScope -> List CBind -> Walk -> Walk
-walkLocalBinds _ _ [] w = w
-walkLocalBinds ctx scope ((CBind _ clauses _ _) :: rest) w =
-  walkLocalBinds ctx scope rest (walkClauses ctx scope clauses w)
+walkLocalBinds ctx scope xs0 w0 = go xs0 w0
+  where
+    go [] w = w
+    go ((CBind _ clauses _ _) :: rest) w =
+      go rest (walkClauses ctx scope clauses w)
 
 -- An arm's pattern scopes over its guards and body; a `Pat <- e` guard's
 -- pattern scopes over the guards after it and the body.
 walkArms : Ctx -> CallScope -> List CArm -> Walk -> Walk
-walkArms _ _ [] w = w
-walkArms ctx scope ((CArm pat guards body) :: rest) w =
-  walkArms
-    ctx
-    scope
-    rest
-    (walkGuarded ctx (bindPatScope pat scope) guards body w)
-walkArms ctx scope ((CArmAlt pat guards _) :: rest) w =
-  walkArms ctx scope rest (walkGuards ctx (bindPatScope pat scope) guards w)
+walkArms ctx scope xs0 w0 = go xs0 w0
+  where
+    go [] w = w
+    go ((CArm pat guards body) :: rest) w =
+      go rest (walkGuarded ctx (bindPatScope pat scope) guards body w)
+    go ((CArmAlt pat guards _) :: rest) w =
+      go rest (walkGuards ctx (bindPatScope pat scope) guards w)
 
 walkGuards : Ctx -> CallScope -> List CGuard -> Walk -> Walk
 walkGuards _ _ [] w = w
@@ -1456,11 +1461,12 @@ walkGuards ctx scope ((CGBind pat e) :: rest) w =
   walkGuards ctx (bindPatScope pat scope) rest (walkE ctx scope e w)
 
 walkGuarded : Ctx -> CallScope -> List CGuard -> CExpr -> Walk -> Walk
-walkGuarded ctx scope [] body w = walkE ctx scope body w
-walkGuarded ctx scope ((CGBool c) :: rest) body w =
-  walkGuarded ctx scope rest body (walkE ctx scope c w)
-walkGuarded ctx scope ((CGBind pat e) :: rest) body w =
-  walkGuarded ctx (bindPatScope pat scope) rest body (walkE ctx scope e w)
+walkGuarded ctx scope0 xs0 body w0 = go scope0 xs0 w0
+  where
+    go scope [] w = walkE ctx scope body w
+    go scope ((CGBool c) :: rest) w = go scope rest (walkE ctx scope c w)
+    go scope ((CGBind pat e) :: rest) w =
+      go (bindPatScope pat scope) rest (walkE ctx scope e w)
 
 walkStmts : Ctx -> CallScope -> List CStmt -> Walk -> Walk
 walkStmts _ _ [] w = w
@@ -1588,11 +1594,12 @@ tailLocalBinds b ((CBind _ clauses _ _) :: rest) acc =
   tailLocalBinds b rest (tailClauses b clauses acc)
 
 tailArms : String -> Bool -> List CArm -> List String -> List String
-tailArms _ _ [] acc = acc
-tailArms b tl ((CArm _ guards body) :: rest) acc =
-  tailArms b tl rest (tailE b tl body (tailGuards b guards acc))
-tailArms b tl ((CArmAlt _ guards _) :: rest) acc =
-  tailArms b tl rest (tailGuards b guards acc)
+tailArms b tl xs0 acc0 = go xs0 acc0
+  where
+    go [] acc = acc
+    go ((CArm _ guards body) :: rest) acc =
+      go rest (tailE b tl body (tailGuards b guards acc))
+    go ((CArmAlt _ guards _) :: rest) acc = go rest (tailGuards b guards acc)
 
 -- [arms] is the whole list, [i] the index of the head of [rest].
 armAltFaults : String ->
@@ -1601,17 +1608,19 @@ armAltFaults : String ->
   List CArm ->
   List String ->
   List String
-armAltFaults _ _ _ [] acc = acc
-armAltFaults b arms i ((CArmAlt _ _ owner) :: rest) acc =
-  let ok = owner < i && bodyArmAt arms owner
-  let acc2 =
-    if ok then
-      acc
-    else
-      "arm: or-pattern candidate \{intToString i} shares the body of arm \{intToString owner}, which is not an earlier arm with a body [in \{b}]"
-        :: acc
-  armAltFaults b arms (i + 1) rest acc2
-armAltFaults b arms i (_ :: rest) acc = armAltFaults b arms (i + 1) rest acc
+armAltFaults b arms i0 xs0 acc0 = go i0 xs0 acc0
+  where
+    go _ [] acc = acc
+    go i ((CArmAlt _ _ owner) :: rest) acc =
+      let ok = owner < i && bodyArmAt arms owner
+      let acc2 =
+        if ok then
+          acc
+        else
+          "arm: or-pattern candidate \{intToString i} shares the body of arm \{intToString owner}, which is not an earlier arm with a body [in \{b}]"
+            :: acc
+      go (i + 1) rest acc2
+    go i (_ :: rest) acc = go (i + 1) rest acc
 
 bodyArmAt : List CArm -> Int -> Bool
 bodyArmAt ((CArm _ _ _) :: _) 0 = True
@@ -1625,9 +1634,11 @@ tailGuards b ((CGBind _ e) :: rest) acc =
   tailGuards b rest (tailE b False e acc)
 
 tailStmts : String -> Bool -> List CStmt -> List String -> List String
-tailStmts _ _ [] acc = acc
-tailStmts b tl [CSExpr e] acc = tailE b tl e acc
-tailStmts b tl (st :: rest) acc = tailStmts b tl rest (tailStmt b st acc)
+tailStmts b tl xs0 acc0 = go xs0 acc0
+  where
+    go [] acc = acc
+    go [CSExpr e] acc = tailE b tl e acc
+    go (st :: rest) acc = go rest (tailStmt b st acc)
 
 tailStmt : String -> CStmt -> List String -> List String
 tailStmt b (CSExpr e) acc = tailE b False e acc
@@ -2045,8 +2056,7 @@ validatePhysicalDemand _ _ _ = []
 (DFunDef false "walkImplBody" ((PVar "ctx") (PCon "CImplTagged" (PVar "tag") PWild PWild PWild PWild (PVar "pats") (PVar "body")) (PVar "w")) (EApp (EApp (EApp (EApp (EVar "walkE") (EApp (EApp (EVar "inBinding") (EVar "ctx")) (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "")) (EApp (EVar "display") (EApp (EVar "ctxBinding") (EVar "ctx")))) (ELit (LString "@"))) (EApp (EVar "display") (EVar "tag"))) (ELit (LString ""))))) (EApp (EApp (EVar "bindPatsScope") (EVar "pats")) (EVar "omEmpty"))) (EVar "body")) (EVar "w")))
 (DFunDef false "walkImplBody" ((PVar "ctx") (PCon "CImplDefault" (PVar "iface") (PVar "tag") (PVar "key") PWild PWild (PVar "pats") (PVar "body")) (PVar "w")) (EApp (EApp (EApp (EApp (EVar "walkE") (EApp (EApp (EVar "withBound") (EApp (EApp (EVar "inBinding") (EVar "ctx")) (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "")) (EApp (EVar "display") (EApp (EVar "ctxBinding") (EVar "ctx")))) (ELit (LString "@"))) (EApp (EVar "display") (EVar "tag"))) (ELit (LString ""))))) (EApp (EApp (EApp (EApp (EVar "receiverBound") (EVar "ctx")) (EVar "iface")) (EVar "key")) (EVar "pats")))) (EApp (EApp (EVar "bindPatsScope") (EVar "pats")) (EVar "omEmpty"))) (EVar "body")) (EVar "w")))
 (DTypeSig false "walkClauses" (TyFun (TyCon "Ctx") (TyFun (TyCon "CallScope") (TyFun (TyApp (TyCon "List") (TyCon "CClause")) (TyFun (TyCon "Walk") (TyCon "Walk"))))))
-(DFunDef false "walkClauses" (PWild PWild (PList) (PVar "w")) (EVar "w"))
-(DFunDef false "walkClauses" ((PVar "ctx") (PVar "scope") (PCons (PCon "CClause" (PVar "pats") (PVar "body")) (PVar "rest")) (PVar "w")) (EApp (EApp (EApp (EApp (EVar "walkClauses") (EVar "ctx")) (EVar "scope")) (EVar "rest")) (EApp (EApp (EApp (EApp (EVar "walkE") (EVar "ctx")) (EApp (EApp (EVar "bindPatsScope") (EVar "pats")) (EVar "scope"))) (EVar "body")) (EVar "w"))))
+(DFunDef false "walkClauses" ((PVar "ctx") (PVar "scope") (PVar "xs0") (PVar "w0")) (ELetGroup ((lgb "go" (clause ((PList) (PVar "w")) (EVar "w")) (clause ((PCons (PCon "CClause" (PVar "pats") (PVar "body")) (PVar "rest")) (PVar "w")) (EApp (EApp (EVar "go") (EVar "rest")) (EApp (EApp (EApp (EApp (EVar "walkE") (EVar "ctx")) (EApp (EApp (EVar "bindPatsScope") (EVar "pats")) (EVar "scope"))) (EVar "body")) (EVar "w")))))) (EApp (EApp (EVar "go") (EVar "xs0")) (EVar "w0"))))
 (DTypeSig false "walkE" (TyFun (TyCon "Ctx") (TyFun (TyCon "CallScope") (TyFun (TyCon "CExpr") (TyFun (TyCon "Walk") (TyCon "Walk"))))))
 (DFunDef false "walkE" ((PVar "ctx") (PVar "scope") (PCon "CVar" (PVar "x") PWild) (PVar "w")) (EApp (EApp (EApp (EApp (EVar "noteVar") (EVar "ctx")) (EVar "scope")) (EVar "x")) (EVar "w")))
 (DFunDef false "walkE" (PWild PWild (PCon "CLit" PWild) (PVar "w")) (EVar "w"))
@@ -2180,26 +2190,19 @@ validatePhysicalDemand _ _ _ = []
 (DTypeSig false "noteVar" (TyFun (TyCon "Ctx") (TyFun (TyCon "CallScope") (TyFun (TyCon "String") (TyFun (TyCon "Walk") (TyCon "Walk"))))))
 (DFunDef false "noteVar" ((PCon "Ctx" (PVar "backend") (PVar "top") PWild PWild PWild (PVar "facts") (PVar "binding") PWild) (PVar "scope") (PVar "x") (PAs "w" (PCon "Walk" (PVar "seen") (PVar "found") (PVar "bad") (PVar "scalar") (PVar "calls") (PVar "ctxs") (PVar "evs") (PVar "results")))) (EIf (EBinOp "||" (EApp (EApp (EVar "omHasKey") (EVar "x")) (EVar "scope")) (EApp (EApp (EVar "omHasKey") (EVar "x")) (EVar "seen"))) (EVar "w") (EMatch (EApp (EApp (EVar "unprovidedOn") (EVar "backend")) (EApp (EApp (EVar "optionOr") (ELit (LString ""))) (EApp (EApp (EVar "externRuntimeKey") (EFieldAccess (EVar "facts") "efExterns")) (EVar "x")))) (arm (PCon "None") () (EVar "w")) (arm (PCon "Some" (PTuple (PVar "kind") (PVar "why"))) () (EIf (EApp (EApp (EVar "isProgramName") (EVar "top")) (EVar "x")) (EVar "w") (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EVar "Walk") (EApp (EApp (EApp (EVar "omInsert") (EVar "x")) (ELit LUnit)) (EVar "seen"))) (EBinOp "::" (EApp (EApp (EApp (EApp (EApp (EVar "ExternFinding") (EApp (EApp (EVar "optionOr") (EVar "x")) (EApp (EApp (EVar "externRuntimeKey") (EFieldAccess (EVar "facts") "efExterns")) (EVar "x")))) (EVar "backend")) (EVar "kind")) (EVar "why")) (EVar "binding")) (EVar "found"))) (EVar "bad")) (EVar "scalar")) (EVar "calls")) (EVar "ctxs")) (EVar "evs")) (EVar "results")))))))
 (DTypeSig false "walkList" (TyFun (TyCon "Ctx") (TyFun (TyCon "CallScope") (TyFun (TyApp (TyCon "List") (TyCon "CExpr")) (TyFun (TyCon "Walk") (TyCon "Walk"))))))
-(DFunDef false "walkList" (PWild PWild (PList) (PVar "w")) (EVar "w"))
-(DFunDef false "walkList" ((PVar "ctx") (PVar "scope") (PCons (PVar "e") (PVar "rest")) (PVar "w")) (EApp (EApp (EApp (EApp (EVar "walkList") (EVar "ctx")) (EVar "scope")) (EVar "rest")) (EApp (EApp (EApp (EApp (EVar "walkE") (EVar "ctx")) (EVar "scope")) (EVar "e")) (EVar "w"))))
+(DFunDef false "walkList" ((PVar "ctx") (PVar "scope") (PVar "xs0") (PVar "w0")) (ELetGroup ((lgb "go" (clause ((PList) (PVar "w")) (EVar "w")) (clause ((PCons (PVar "e") (PVar "rest")) (PVar "w")) (EApp (EApp (EVar "go") (EVar "rest")) (EApp (EApp (EApp (EApp (EVar "walkE") (EVar "ctx")) (EVar "scope")) (EVar "e")) (EVar "w")))))) (EApp (EApp (EVar "go") (EVar "xs0")) (EVar "w0"))))
 (DTypeSig false "walkFields" (TyFun (TyCon "Ctx") (TyFun (TyCon "CallScope") (TyFun (TyApp (TyCon "List") (TyCon "CField")) (TyFun (TyCon "Walk") (TyCon "Walk"))))))
-(DFunDef false "walkFields" (PWild PWild (PList) (PVar "w")) (EVar "w"))
-(DFunDef false "walkFields" ((PVar "ctx") (PVar "scope") (PCons (PCon "CField" PWild PWild (PVar "e")) (PVar "rest")) (PVar "w")) (EApp (EApp (EApp (EApp (EVar "walkFields") (EVar "ctx")) (EVar "scope")) (EVar "rest")) (EApp (EApp (EApp (EApp (EVar "walkE") (EVar "ctx")) (EVar "scope")) (EVar "e")) (EVar "w"))))
+(DFunDef false "walkFields" ((PVar "ctx") (PVar "scope") (PVar "xs0") (PVar "w0")) (ELetGroup ((lgb "go" (clause ((PList) (PVar "w")) (EVar "w")) (clause ((PCons (PCon "CField" PWild PWild (PVar "e")) (PVar "rest")) (PVar "w")) (EApp (EApp (EVar "go") (EVar "rest")) (EApp (EApp (EApp (EApp (EVar "walkE") (EVar "ctx")) (EVar "scope")) (EVar "e")) (EVar "w")))))) (EApp (EApp (EVar "go") (EVar "xs0")) (EVar "w0"))))
 (DTypeSig false "walkLocalBinds" (TyFun (TyCon "Ctx") (TyFun (TyCon "CallScope") (TyFun (TyApp (TyCon "List") (TyCon "CBind")) (TyFun (TyCon "Walk") (TyCon "Walk"))))))
-(DFunDef false "walkLocalBinds" (PWild PWild (PList) (PVar "w")) (EVar "w"))
-(DFunDef false "walkLocalBinds" ((PVar "ctx") (PVar "scope") (PCons (PCon "CBind" PWild (PVar "clauses") PWild PWild) (PVar "rest")) (PVar "w")) (EApp (EApp (EApp (EApp (EVar "walkLocalBinds") (EVar "ctx")) (EVar "scope")) (EVar "rest")) (EApp (EApp (EApp (EApp (EVar "walkClauses") (EVar "ctx")) (EVar "scope")) (EVar "clauses")) (EVar "w"))))
+(DFunDef false "walkLocalBinds" ((PVar "ctx") (PVar "scope") (PVar "xs0") (PVar "w0")) (ELetGroup ((lgb "go" (clause ((PList) (PVar "w")) (EVar "w")) (clause ((PCons (PCon "CBind" PWild (PVar "clauses") PWild PWild) (PVar "rest")) (PVar "w")) (EApp (EApp (EVar "go") (EVar "rest")) (EApp (EApp (EApp (EApp (EVar "walkClauses") (EVar "ctx")) (EVar "scope")) (EVar "clauses")) (EVar "w")))))) (EApp (EApp (EVar "go") (EVar "xs0")) (EVar "w0"))))
 (DTypeSig false "walkArms" (TyFun (TyCon "Ctx") (TyFun (TyCon "CallScope") (TyFun (TyApp (TyCon "List") (TyCon "CArm")) (TyFun (TyCon "Walk") (TyCon "Walk"))))))
-(DFunDef false "walkArms" (PWild PWild (PList) (PVar "w")) (EVar "w"))
-(DFunDef false "walkArms" ((PVar "ctx") (PVar "scope") (PCons (PCon "CArm" (PVar "pat") (PVar "guards") (PVar "body")) (PVar "rest")) (PVar "w")) (EApp (EApp (EApp (EApp (EVar "walkArms") (EVar "ctx")) (EVar "scope")) (EVar "rest")) (EApp (EApp (EApp (EApp (EApp (EVar "walkGuarded") (EVar "ctx")) (EApp (EApp (EVar "bindPatScope") (EVar "pat")) (EVar "scope"))) (EVar "guards")) (EVar "body")) (EVar "w"))))
-(DFunDef false "walkArms" ((PVar "ctx") (PVar "scope") (PCons (PCon "CArmAlt" (PVar "pat") (PVar "guards") PWild) (PVar "rest")) (PVar "w")) (EApp (EApp (EApp (EApp (EVar "walkArms") (EVar "ctx")) (EVar "scope")) (EVar "rest")) (EApp (EApp (EApp (EApp (EVar "walkGuards") (EVar "ctx")) (EApp (EApp (EVar "bindPatScope") (EVar "pat")) (EVar "scope"))) (EVar "guards")) (EVar "w"))))
+(DFunDef false "walkArms" ((PVar "ctx") (PVar "scope") (PVar "xs0") (PVar "w0")) (ELetGroup ((lgb "go" (clause ((PList) (PVar "w")) (EVar "w")) (clause ((PCons (PCon "CArm" (PVar "pat") (PVar "guards") (PVar "body")) (PVar "rest")) (PVar "w")) (EApp (EApp (EVar "go") (EVar "rest")) (EApp (EApp (EApp (EApp (EApp (EVar "walkGuarded") (EVar "ctx")) (EApp (EApp (EVar "bindPatScope") (EVar "pat")) (EVar "scope"))) (EVar "guards")) (EVar "body")) (EVar "w")))) (clause ((PCons (PCon "CArmAlt" (PVar "pat") (PVar "guards") PWild) (PVar "rest")) (PVar "w")) (EApp (EApp (EVar "go") (EVar "rest")) (EApp (EApp (EApp (EApp (EVar "walkGuards") (EVar "ctx")) (EApp (EApp (EVar "bindPatScope") (EVar "pat")) (EVar "scope"))) (EVar "guards")) (EVar "w")))))) (EApp (EApp (EVar "go") (EVar "xs0")) (EVar "w0"))))
 (DTypeSig false "walkGuards" (TyFun (TyCon "Ctx") (TyFun (TyCon "CallScope") (TyFun (TyApp (TyCon "List") (TyCon "CGuard")) (TyFun (TyCon "Walk") (TyCon "Walk"))))))
 (DFunDef false "walkGuards" (PWild PWild (PList) (PVar "w")) (EVar "w"))
 (DFunDef false "walkGuards" ((PVar "ctx") (PVar "scope") (PCons (PCon "CGBool" (PVar "c")) (PVar "rest")) (PVar "w")) (EApp (EApp (EApp (EApp (EVar "walkGuards") (EVar "ctx")) (EVar "scope")) (EVar "rest")) (EApp (EApp (EApp (EApp (EVar "walkE") (EVar "ctx")) (EVar "scope")) (EVar "c")) (EVar "w"))))
 (DFunDef false "walkGuards" ((PVar "ctx") (PVar "scope") (PCons (PCon "CGBind" (PVar "pat") (PVar "e")) (PVar "rest")) (PVar "w")) (EApp (EApp (EApp (EApp (EVar "walkGuards") (EVar "ctx")) (EApp (EApp (EVar "bindPatScope") (EVar "pat")) (EVar "scope"))) (EVar "rest")) (EApp (EApp (EApp (EApp (EVar "walkE") (EVar "ctx")) (EVar "scope")) (EVar "e")) (EVar "w"))))
 (DTypeSig false "walkGuarded" (TyFun (TyCon "Ctx") (TyFun (TyCon "CallScope") (TyFun (TyApp (TyCon "List") (TyCon "CGuard")) (TyFun (TyCon "CExpr") (TyFun (TyCon "Walk") (TyCon "Walk")))))))
-(DFunDef false "walkGuarded" ((PVar "ctx") (PVar "scope") (PList) (PVar "body") (PVar "w")) (EApp (EApp (EApp (EApp (EVar "walkE") (EVar "ctx")) (EVar "scope")) (EVar "body")) (EVar "w")))
-(DFunDef false "walkGuarded" ((PVar "ctx") (PVar "scope") (PCons (PCon "CGBool" (PVar "c")) (PVar "rest")) (PVar "body") (PVar "w")) (EApp (EApp (EApp (EApp (EApp (EVar "walkGuarded") (EVar "ctx")) (EVar "scope")) (EVar "rest")) (EVar "body")) (EApp (EApp (EApp (EApp (EVar "walkE") (EVar "ctx")) (EVar "scope")) (EVar "c")) (EVar "w"))))
-(DFunDef false "walkGuarded" ((PVar "ctx") (PVar "scope") (PCons (PCon "CGBind" (PVar "pat") (PVar "e")) (PVar "rest")) (PVar "body") (PVar "w")) (EApp (EApp (EApp (EApp (EApp (EVar "walkGuarded") (EVar "ctx")) (EApp (EApp (EVar "bindPatScope") (EVar "pat")) (EVar "scope"))) (EVar "rest")) (EVar "body")) (EApp (EApp (EApp (EApp (EVar "walkE") (EVar "ctx")) (EVar "scope")) (EVar "e")) (EVar "w"))))
+(DFunDef false "walkGuarded" ((PVar "ctx") (PVar "scope0") (PVar "xs0") (PVar "body") (PVar "w0")) (ELetGroup ((lgb "go" (clause ((PVar "scope") (PList) (PVar "w")) (EApp (EApp (EApp (EApp (EVar "walkE") (EVar "ctx")) (EVar "scope")) (EVar "body")) (EVar "w"))) (clause ((PVar "scope") (PCons (PCon "CGBool" (PVar "c")) (PVar "rest")) (PVar "w")) (EApp (EApp (EApp (EVar "go") (EVar "scope")) (EVar "rest")) (EApp (EApp (EApp (EApp (EVar "walkE") (EVar "ctx")) (EVar "scope")) (EVar "c")) (EVar "w")))) (clause ((PVar "scope") (PCons (PCon "CGBind" (PVar "pat") (PVar "e")) (PVar "rest")) (PVar "w")) (EApp (EApp (EApp (EVar "go") (EApp (EApp (EVar "bindPatScope") (EVar "pat")) (EVar "scope"))) (EVar "rest")) (EApp (EApp (EApp (EApp (EVar "walkE") (EVar "ctx")) (EVar "scope")) (EVar "e")) (EVar "w")))))) (EApp (EApp (EApp (EVar "go") (EVar "scope0")) (EVar "xs0")) (EVar "w0"))))
 (DTypeSig false "walkStmts" (TyFun (TyCon "Ctx") (TyFun (TyCon "CallScope") (TyFun (TyApp (TyCon "List") (TyCon "CStmt")) (TyFun (TyCon "Walk") (TyCon "Walk"))))))
 (DFunDef false "walkStmts" (PWild PWild (PList) (PVar "w")) (EVar "w"))
 (DFunDef false "walkStmts" ((PVar "ctx") (PVar "scope") (PCons (PCon "CSExpr" (PVar "e")) (PVar "rest")) (PVar "w")) (EApp (EApp (EApp (EApp (EVar "walkStmts") (EVar "ctx")) (EVar "scope")) (EVar "rest")) (EApp (EApp (EApp (EApp (EVar "walkE") (EVar "ctx")) (EVar "scope")) (EVar "e")) (EVar "w"))))
@@ -2266,13 +2269,9 @@ validatePhysicalDemand _ _ _ = []
 (DFunDef false "tailLocalBinds" (PWild (PList) (PVar "acc")) (EVar "acc"))
 (DFunDef false "tailLocalBinds" ((PVar "b") (PCons (PCon "CBind" PWild (PVar "clauses") PWild PWild) (PVar "rest")) (PVar "acc")) (EApp (EApp (EApp (EVar "tailLocalBinds") (EVar "b")) (EVar "rest")) (EApp (EApp (EApp (EVar "tailClauses") (EVar "b")) (EVar "clauses")) (EVar "acc"))))
 (DTypeSig false "tailArms" (TyFun (TyCon "String") (TyFun (TyCon "Bool") (TyFun (TyApp (TyCon "List") (TyCon "CArm")) (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyApp (TyCon "List") (TyCon "String")))))))
-(DFunDef false "tailArms" (PWild PWild (PList) (PVar "acc")) (EVar "acc"))
-(DFunDef false "tailArms" ((PVar "b") (PVar "tl") (PCons (PCon "CArm" PWild (PVar "guards") (PVar "body")) (PVar "rest")) (PVar "acc")) (EApp (EApp (EApp (EApp (EVar "tailArms") (EVar "b")) (EVar "tl")) (EVar "rest")) (EApp (EApp (EApp (EApp (EVar "tailE") (EVar "b")) (EVar "tl")) (EVar "body")) (EApp (EApp (EApp (EVar "tailGuards") (EVar "b")) (EVar "guards")) (EVar "acc")))))
-(DFunDef false "tailArms" ((PVar "b") (PVar "tl") (PCons (PCon "CArmAlt" PWild (PVar "guards") PWild) (PVar "rest")) (PVar "acc")) (EApp (EApp (EApp (EApp (EVar "tailArms") (EVar "b")) (EVar "tl")) (EVar "rest")) (EApp (EApp (EApp (EVar "tailGuards") (EVar "b")) (EVar "guards")) (EVar "acc"))))
+(DFunDef false "tailArms" ((PVar "b") (PVar "tl") (PVar "xs0") (PVar "acc0")) (ELetGroup ((lgb "go" (clause ((PList) (PVar "acc")) (EVar "acc")) (clause ((PCons (PCon "CArm" PWild (PVar "guards") (PVar "body")) (PVar "rest")) (PVar "acc")) (EApp (EApp (EVar "go") (EVar "rest")) (EApp (EApp (EApp (EApp (EVar "tailE") (EVar "b")) (EVar "tl")) (EVar "body")) (EApp (EApp (EApp (EVar "tailGuards") (EVar "b")) (EVar "guards")) (EVar "acc"))))) (clause ((PCons (PCon "CArmAlt" PWild (PVar "guards") PWild) (PVar "rest")) (PVar "acc")) (EApp (EApp (EVar "go") (EVar "rest")) (EApp (EApp (EApp (EVar "tailGuards") (EVar "b")) (EVar "guards")) (EVar "acc")))))) (EApp (EApp (EVar "go") (EVar "xs0")) (EVar "acc0"))))
 (DTypeSig false "armAltFaults" (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "CArm")) (TyFun (TyCon "Int") (TyFun (TyApp (TyCon "List") (TyCon "CArm")) (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyApp (TyCon "List") (TyCon "String"))))))))
-(DFunDef false "armAltFaults" (PWild PWild PWild (PList) (PVar "acc")) (EVar "acc"))
-(DFunDef false "armAltFaults" ((PVar "b") (PVar "arms") (PVar "i") (PCons (PCon "CArmAlt" PWild PWild (PVar "owner")) (PVar "rest")) (PVar "acc")) (EBlock (DoLet false false (PVar "ok") (EBinOp "&&" (EBinOp "<" (EVar "owner") (EVar "i")) (EApp (EApp (EVar "bodyArmAt") (EVar "arms")) (EVar "owner")))) (DoLet false false (PVar "acc2") (EIf (EVar "ok") (EVar "acc") (EBinOp "::" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "arm: or-pattern candidate ")) (EApp (EVar "display") (EApp (EVar "intToString") (EVar "i")))) (ELit (LString " shares the body of arm "))) (EApp (EVar "display") (EApp (EVar "intToString") (EVar "owner")))) (ELit (LString ", which is not an earlier arm with a body [in "))) (EApp (EVar "display") (EVar "b"))) (ELit (LString "]"))) (EVar "acc")))) (DoExpr (EApp (EApp (EApp (EApp (EApp (EVar "armAltFaults") (EVar "b")) (EVar "arms")) (EBinOp "+" (EVar "i") (ELit (LInt 1)))) (EVar "rest")) (EVar "acc2")))))
-(DFunDef false "armAltFaults" ((PVar "b") (PVar "arms") (PVar "i") (PCons PWild (PVar "rest")) (PVar "acc")) (EApp (EApp (EApp (EApp (EApp (EVar "armAltFaults") (EVar "b")) (EVar "arms")) (EBinOp "+" (EVar "i") (ELit (LInt 1)))) (EVar "rest")) (EVar "acc")))
+(DFunDef false "armAltFaults" ((PVar "b") (PVar "arms") (PVar "i0") (PVar "xs0") (PVar "acc0")) (ELetGroup ((lgb "go" (clause (PWild (PList) (PVar "acc")) (EVar "acc")) (clause ((PVar "i") (PCons (PCon "CArmAlt" PWild PWild (PVar "owner")) (PVar "rest")) (PVar "acc")) (EBlock (DoLet false false (PVar "ok") (EBinOp "&&" (EBinOp "<" (EVar "owner") (EVar "i")) (EApp (EApp (EVar "bodyArmAt") (EVar "arms")) (EVar "owner")))) (DoLet false false (PVar "acc2") (EIf (EVar "ok") (EVar "acc") (EBinOp "::" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "arm: or-pattern candidate ")) (EApp (EVar "display") (EApp (EVar "intToString") (EVar "i")))) (ELit (LString " shares the body of arm "))) (EApp (EVar "display") (EApp (EVar "intToString") (EVar "owner")))) (ELit (LString ", which is not an earlier arm with a body [in "))) (EApp (EVar "display") (EVar "b"))) (ELit (LString "]"))) (EVar "acc")))) (DoExpr (EApp (EApp (EApp (EVar "go") (EBinOp "+" (EVar "i") (ELit (LInt 1)))) (EVar "rest")) (EVar "acc2"))))) (clause ((PVar "i") (PCons PWild (PVar "rest")) (PVar "acc")) (EApp (EApp (EApp (EVar "go") (EBinOp "+" (EVar "i") (ELit (LInt 1)))) (EVar "rest")) (EVar "acc"))))) (EApp (EApp (EApp (EVar "go") (EVar "i0")) (EVar "xs0")) (EVar "acc0"))))
 (DTypeSig false "bodyArmAt" (TyFun (TyApp (TyCon "List") (TyCon "CArm")) (TyFun (TyCon "Int") (TyCon "Bool"))))
 (DFunDef false "bodyArmAt" ((PCons (PCon "CArm" PWild PWild PWild) PWild) (PLit (LInt 0))) (EVar "True"))
 (DFunDef false "bodyArmAt" ((PCons PWild (PVar "rest")) (PVar "n")) (EBinOp "&&" (EBinOp ">" (EVar "n") (ELit (LInt 0))) (EApp (EApp (EVar "bodyArmAt") (EVar "rest")) (EBinOp "-" (EVar "n") (ELit (LInt 1))))))
@@ -2282,9 +2281,7 @@ validatePhysicalDemand _ _ _ = []
 (DFunDef false "tailGuards" ((PVar "b") (PCons (PCon "CGBool" (PVar "c")) (PVar "rest")) (PVar "acc")) (EApp (EApp (EApp (EVar "tailGuards") (EVar "b")) (EVar "rest")) (EApp (EApp (EApp (EApp (EVar "tailE") (EVar "b")) (EVar "False")) (EVar "c")) (EVar "acc"))))
 (DFunDef false "tailGuards" ((PVar "b") (PCons (PCon "CGBind" PWild (PVar "e")) (PVar "rest")) (PVar "acc")) (EApp (EApp (EApp (EVar "tailGuards") (EVar "b")) (EVar "rest")) (EApp (EApp (EApp (EApp (EVar "tailE") (EVar "b")) (EVar "False")) (EVar "e")) (EVar "acc"))))
 (DTypeSig false "tailStmts" (TyFun (TyCon "String") (TyFun (TyCon "Bool") (TyFun (TyApp (TyCon "List") (TyCon "CStmt")) (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyApp (TyCon "List") (TyCon "String")))))))
-(DFunDef false "tailStmts" (PWild PWild (PList) (PVar "acc")) (EVar "acc"))
-(DFunDef false "tailStmts" ((PVar "b") (PVar "tl") (PList (PCon "CSExpr" (PVar "e"))) (PVar "acc")) (EApp (EApp (EApp (EApp (EVar "tailE") (EVar "b")) (EVar "tl")) (EVar "e")) (EVar "acc")))
-(DFunDef false "tailStmts" ((PVar "b") (PVar "tl") (PCons (PVar "st") (PVar "rest")) (PVar "acc")) (EApp (EApp (EApp (EApp (EVar "tailStmts") (EVar "b")) (EVar "tl")) (EVar "rest")) (EApp (EApp (EApp (EVar "tailStmt") (EVar "b")) (EVar "st")) (EVar "acc"))))
+(DFunDef false "tailStmts" ((PVar "b") (PVar "tl") (PVar "xs0") (PVar "acc0")) (ELetGroup ((lgb "go" (clause ((PList) (PVar "acc")) (EVar "acc")) (clause ((PList (PCon "CSExpr" (PVar "e"))) (PVar "acc")) (EApp (EApp (EApp (EApp (EVar "tailE") (EVar "b")) (EVar "tl")) (EVar "e")) (EVar "acc"))) (clause ((PCons (PVar "st") (PVar "rest")) (PVar "acc")) (EApp (EApp (EVar "go") (EVar "rest")) (EApp (EApp (EApp (EVar "tailStmt") (EVar "b")) (EVar "st")) (EVar "acc")))))) (EApp (EApp (EVar "go") (EVar "xs0")) (EVar "acc0"))))
 (DTypeSig false "tailStmt" (TyFun (TyCon "String") (TyFun (TyCon "CStmt") (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyApp (TyCon "List") (TyCon "String"))))))
 (DFunDef false "tailStmt" ((PVar "b") (PCon "CSExpr" (PVar "e")) (PVar "acc")) (EApp (EApp (EApp (EApp (EVar "tailE") (EVar "b")) (EVar "False")) (EVar "e")) (EVar "acc")))
 (DFunDef false "tailStmt" ((PVar "b") (PCon "CSLet" PWild PWild (PVar "e")) (PVar "acc")) (EApp (EApp (EApp (EApp (EVar "tailE") (EVar "b")) (EVar "False")) (EVar "e")) (EVar "acc")))
@@ -2569,8 +2566,7 @@ validatePhysicalDemand _ _ _ = []
 (DFunDef false "walkImplBody" ((PVar "ctx") (PCon "CImplTagged" (PVar "tag") PWild PWild PWild PWild (PVar "pats") (PVar "body")) (PVar "w")) (EApp (EApp (EApp (EApp (EVar "walkE") (EApp (EApp (EVar "inBinding") (EVar "ctx")) (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "")) (EApp (EMethodRef "display") (EApp (EVar "ctxBinding") (EVar "ctx")))) (ELit (LString "@"))) (EApp (EMethodRef "display") (EVar "tag"))) (ELit (LString ""))))) (EApp (EApp (EVar "bindPatsScope") (EVar "pats")) (EVar "omEmpty"))) (EVar "body")) (EVar "w")))
 (DFunDef false "walkImplBody" ((PVar "ctx") (PCon "CImplDefault" (PVar "iface") (PVar "tag") (PVar "key") PWild PWild (PVar "pats") (PVar "body")) (PVar "w")) (EApp (EApp (EApp (EApp (EVar "walkE") (EApp (EApp (EVar "withBound") (EApp (EApp (EVar "inBinding") (EVar "ctx")) (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "")) (EApp (EMethodRef "display") (EApp (EVar "ctxBinding") (EVar "ctx")))) (ELit (LString "@"))) (EApp (EMethodRef "display") (EVar "tag"))) (ELit (LString ""))))) (EApp (EApp (EApp (EApp (EVar "receiverBound") (EVar "ctx")) (EVar "iface")) (EVar "key")) (EVar "pats")))) (EApp (EApp (EVar "bindPatsScope") (EVar "pats")) (EVar "omEmpty"))) (EVar "body")) (EVar "w")))
 (DTypeSig false "walkClauses" (TyFun (TyCon "Ctx") (TyFun (TyCon "CallScope") (TyFun (TyApp (TyCon "List") (TyCon "CClause")) (TyFun (TyCon "Walk") (TyCon "Walk"))))))
-(DFunDef false "walkClauses" (PWild PWild (PList) (PVar "w")) (EVar "w"))
-(DFunDef false "walkClauses" ((PVar "ctx") (PVar "scope") (PCons (PCon "CClause" (PVar "pats") (PVar "body")) (PVar "rest")) (PVar "w")) (EApp (EApp (EApp (EApp (EVar "walkClauses") (EVar "ctx")) (EVar "scope")) (EVar "rest")) (EApp (EApp (EApp (EApp (EVar "walkE") (EVar "ctx")) (EApp (EApp (EVar "bindPatsScope") (EVar "pats")) (EVar "scope"))) (EVar "body")) (EVar "w"))))
+(DFunDef false "walkClauses" ((PVar "ctx") (PVar "scope") (PVar "xs0") (PVar "w0")) (ELetGroup ((lgb "go" (clause ((PList) (PVar "w")) (EVar "w")) (clause ((PCons (PCon "CClause" (PVar "pats") (PVar "body")) (PVar "rest")) (PVar "w")) (EApp (EApp (EVar "go") (EVar "rest")) (EApp (EApp (EApp (EApp (EVar "walkE") (EVar "ctx")) (EApp (EApp (EVar "bindPatsScope") (EVar "pats")) (EVar "scope"))) (EVar "body")) (EVar "w")))))) (EApp (EApp (EVar "go") (EVar "xs0")) (EVar "w0"))))
 (DTypeSig false "walkE" (TyFun (TyCon "Ctx") (TyFun (TyCon "CallScope") (TyFun (TyCon "CExpr") (TyFun (TyCon "Walk") (TyCon "Walk"))))))
 (DFunDef false "walkE" ((PVar "ctx") (PVar "scope") (PCon "CVar" (PVar "x") PWild) (PVar "w")) (EApp (EApp (EApp (EApp (EVar "noteVar") (EVar "ctx")) (EVar "scope")) (EVar "x")) (EVar "w")))
 (DFunDef false "walkE" (PWild PWild (PCon "CLit" PWild) (PVar "w")) (EVar "w"))
@@ -2704,26 +2700,19 @@ validatePhysicalDemand _ _ _ = []
 (DTypeSig false "noteVar" (TyFun (TyCon "Ctx") (TyFun (TyCon "CallScope") (TyFun (TyCon "String") (TyFun (TyCon "Walk") (TyCon "Walk"))))))
 (DFunDef false "noteVar" ((PCon "Ctx" (PVar "backend") (PVar "top") PWild PWild PWild (PVar "facts") (PVar "binding") PWild) (PVar "scope") (PVar "x") (PAs "w" (PCon "Walk" (PVar "seen") (PVar "found") (PVar "bad") (PVar "scalar") (PVar "calls") (PVar "ctxs") (PVar "evs") (PVar "results")))) (EIf (EBinOp "||" (EApp (EApp (EVar "omHasKey") (EVar "x")) (EVar "scope")) (EApp (EApp (EVar "omHasKey") (EVar "x")) (EVar "seen"))) (EVar "w") (EMatch (EApp (EApp (EVar "unprovidedOn") (EVar "backend")) (EApp (EApp (EVar "optionOr") (ELit (LString ""))) (EApp (EApp (EVar "externRuntimeKey") (EFieldAccess (EVar "facts") "efExterns")) (EVar "x")))) (arm (PCon "None") () (EVar "w")) (arm (PCon "Some" (PTuple (PVar "kind") (PVar "why"))) () (EIf (EApp (EApp (EVar "isProgramName") (EVar "top")) (EVar "x")) (EVar "w") (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EVar "Walk") (EApp (EApp (EApp (EVar "omInsert") (EVar "x")) (ELit LUnit)) (EVar "seen"))) (EBinOp "::" (EApp (EApp (EApp (EApp (EApp (EVar "ExternFinding") (EApp (EApp (EVar "optionOr") (EVar "x")) (EApp (EApp (EVar "externRuntimeKey") (EFieldAccess (EVar "facts") "efExterns")) (EVar "x")))) (EVar "backend")) (EVar "kind")) (EVar "why")) (EVar "binding")) (EVar "found"))) (EVar "bad")) (EVar "scalar")) (EVar "calls")) (EVar "ctxs")) (EVar "evs")) (EVar "results")))))))
 (DTypeSig false "walkList" (TyFun (TyCon "Ctx") (TyFun (TyCon "CallScope") (TyFun (TyApp (TyCon "List") (TyCon "CExpr")) (TyFun (TyCon "Walk") (TyCon "Walk"))))))
-(DFunDef false "walkList" (PWild PWild (PList) (PVar "w")) (EVar "w"))
-(DFunDef false "walkList" ((PVar "ctx") (PVar "scope") (PCons (PVar "e") (PVar "rest")) (PVar "w")) (EApp (EApp (EApp (EApp (EVar "walkList") (EVar "ctx")) (EVar "scope")) (EVar "rest")) (EApp (EApp (EApp (EApp (EVar "walkE") (EVar "ctx")) (EVar "scope")) (EVar "e")) (EVar "w"))))
+(DFunDef false "walkList" ((PVar "ctx") (PVar "scope") (PVar "xs0") (PVar "w0")) (ELetGroup ((lgb "go" (clause ((PList) (PVar "w")) (EVar "w")) (clause ((PCons (PVar "e") (PVar "rest")) (PVar "w")) (EApp (EApp (EVar "go") (EVar "rest")) (EApp (EApp (EApp (EApp (EVar "walkE") (EVar "ctx")) (EVar "scope")) (EVar "e")) (EVar "w")))))) (EApp (EApp (EVar "go") (EVar "xs0")) (EVar "w0"))))
 (DTypeSig false "walkFields" (TyFun (TyCon "Ctx") (TyFun (TyCon "CallScope") (TyFun (TyApp (TyCon "List") (TyCon "CField")) (TyFun (TyCon "Walk") (TyCon "Walk"))))))
-(DFunDef false "walkFields" (PWild PWild (PList) (PVar "w")) (EVar "w"))
-(DFunDef false "walkFields" ((PVar "ctx") (PVar "scope") (PCons (PCon "CField" PWild PWild (PVar "e")) (PVar "rest")) (PVar "w")) (EApp (EApp (EApp (EApp (EVar "walkFields") (EVar "ctx")) (EVar "scope")) (EVar "rest")) (EApp (EApp (EApp (EApp (EVar "walkE") (EVar "ctx")) (EVar "scope")) (EVar "e")) (EVar "w"))))
+(DFunDef false "walkFields" ((PVar "ctx") (PVar "scope") (PVar "xs0") (PVar "w0")) (ELetGroup ((lgb "go" (clause ((PList) (PVar "w")) (EVar "w")) (clause ((PCons (PCon "CField" PWild PWild (PVar "e")) (PVar "rest")) (PVar "w")) (EApp (EApp (EVar "go") (EVar "rest")) (EApp (EApp (EApp (EApp (EVar "walkE") (EVar "ctx")) (EVar "scope")) (EVar "e")) (EVar "w")))))) (EApp (EApp (EVar "go") (EVar "xs0")) (EVar "w0"))))
 (DTypeSig false "walkLocalBinds" (TyFun (TyCon "Ctx") (TyFun (TyCon "CallScope") (TyFun (TyApp (TyCon "List") (TyCon "CBind")) (TyFun (TyCon "Walk") (TyCon "Walk"))))))
-(DFunDef false "walkLocalBinds" (PWild PWild (PList) (PVar "w")) (EVar "w"))
-(DFunDef false "walkLocalBinds" ((PVar "ctx") (PVar "scope") (PCons (PCon "CBind" PWild (PVar "clauses") PWild PWild) (PVar "rest")) (PVar "w")) (EApp (EApp (EApp (EApp (EVar "walkLocalBinds") (EVar "ctx")) (EVar "scope")) (EVar "rest")) (EApp (EApp (EApp (EApp (EVar "walkClauses") (EVar "ctx")) (EVar "scope")) (EVar "clauses")) (EVar "w"))))
+(DFunDef false "walkLocalBinds" ((PVar "ctx") (PVar "scope") (PVar "xs0") (PVar "w0")) (ELetGroup ((lgb "go" (clause ((PList) (PVar "w")) (EVar "w")) (clause ((PCons (PCon "CBind" PWild (PVar "clauses") PWild PWild) (PVar "rest")) (PVar "w")) (EApp (EApp (EVar "go") (EVar "rest")) (EApp (EApp (EApp (EApp (EVar "walkClauses") (EVar "ctx")) (EVar "scope")) (EVar "clauses")) (EVar "w")))))) (EApp (EApp (EVar "go") (EVar "xs0")) (EVar "w0"))))
 (DTypeSig false "walkArms" (TyFun (TyCon "Ctx") (TyFun (TyCon "CallScope") (TyFun (TyApp (TyCon "List") (TyCon "CArm")) (TyFun (TyCon "Walk") (TyCon "Walk"))))))
-(DFunDef false "walkArms" (PWild PWild (PList) (PVar "w")) (EVar "w"))
-(DFunDef false "walkArms" ((PVar "ctx") (PVar "scope") (PCons (PCon "CArm" (PVar "pat") (PVar "guards") (PVar "body")) (PVar "rest")) (PVar "w")) (EApp (EApp (EApp (EApp (EVar "walkArms") (EVar "ctx")) (EVar "scope")) (EVar "rest")) (EApp (EApp (EApp (EApp (EApp (EVar "walkGuarded") (EVar "ctx")) (EApp (EApp (EVar "bindPatScope") (EVar "pat")) (EVar "scope"))) (EVar "guards")) (EVar "body")) (EVar "w"))))
-(DFunDef false "walkArms" ((PVar "ctx") (PVar "scope") (PCons (PCon "CArmAlt" (PVar "pat") (PVar "guards") PWild) (PVar "rest")) (PVar "w")) (EApp (EApp (EApp (EApp (EVar "walkArms") (EVar "ctx")) (EVar "scope")) (EVar "rest")) (EApp (EApp (EApp (EApp (EVar "walkGuards") (EVar "ctx")) (EApp (EApp (EVar "bindPatScope") (EVar "pat")) (EVar "scope"))) (EVar "guards")) (EVar "w"))))
+(DFunDef false "walkArms" ((PVar "ctx") (PVar "scope") (PVar "xs0") (PVar "w0")) (ELetGroup ((lgb "go" (clause ((PList) (PVar "w")) (EVar "w")) (clause ((PCons (PCon "CArm" (PVar "pat") (PVar "guards") (PVar "body")) (PVar "rest")) (PVar "w")) (EApp (EApp (EVar "go") (EVar "rest")) (EApp (EApp (EApp (EApp (EApp (EVar "walkGuarded") (EVar "ctx")) (EApp (EApp (EVar "bindPatScope") (EVar "pat")) (EVar "scope"))) (EVar "guards")) (EVar "body")) (EVar "w")))) (clause ((PCons (PCon "CArmAlt" (PVar "pat") (PVar "guards") PWild) (PVar "rest")) (PVar "w")) (EApp (EApp (EVar "go") (EVar "rest")) (EApp (EApp (EApp (EApp (EVar "walkGuards") (EVar "ctx")) (EApp (EApp (EVar "bindPatScope") (EVar "pat")) (EVar "scope"))) (EVar "guards")) (EVar "w")))))) (EApp (EApp (EVar "go") (EVar "xs0")) (EVar "w0"))))
 (DTypeSig false "walkGuards" (TyFun (TyCon "Ctx") (TyFun (TyCon "CallScope") (TyFun (TyApp (TyCon "List") (TyCon "CGuard")) (TyFun (TyCon "Walk") (TyCon "Walk"))))))
 (DFunDef false "walkGuards" (PWild PWild (PList) (PVar "w")) (EVar "w"))
 (DFunDef false "walkGuards" ((PVar "ctx") (PVar "scope") (PCons (PCon "CGBool" (PVar "c")) (PVar "rest")) (PVar "w")) (EApp (EApp (EApp (EApp (EVar "walkGuards") (EVar "ctx")) (EVar "scope")) (EVar "rest")) (EApp (EApp (EApp (EApp (EVar "walkE") (EVar "ctx")) (EVar "scope")) (EVar "c")) (EVar "w"))))
 (DFunDef false "walkGuards" ((PVar "ctx") (PVar "scope") (PCons (PCon "CGBind" (PVar "pat") (PVar "e")) (PVar "rest")) (PVar "w")) (EApp (EApp (EApp (EApp (EVar "walkGuards") (EVar "ctx")) (EApp (EApp (EVar "bindPatScope") (EVar "pat")) (EVar "scope"))) (EVar "rest")) (EApp (EApp (EApp (EApp (EVar "walkE") (EVar "ctx")) (EVar "scope")) (EVar "e")) (EVar "w"))))
 (DTypeSig false "walkGuarded" (TyFun (TyCon "Ctx") (TyFun (TyCon "CallScope") (TyFun (TyApp (TyCon "List") (TyCon "CGuard")) (TyFun (TyCon "CExpr") (TyFun (TyCon "Walk") (TyCon "Walk")))))))
-(DFunDef false "walkGuarded" ((PVar "ctx") (PVar "scope") (PList) (PVar "body") (PVar "w")) (EApp (EApp (EApp (EApp (EVar "walkE") (EVar "ctx")) (EVar "scope")) (EVar "body")) (EVar "w")))
-(DFunDef false "walkGuarded" ((PVar "ctx") (PVar "scope") (PCons (PCon "CGBool" (PVar "c")) (PVar "rest")) (PVar "body") (PVar "w")) (EApp (EApp (EApp (EApp (EApp (EVar "walkGuarded") (EVar "ctx")) (EVar "scope")) (EVar "rest")) (EVar "body")) (EApp (EApp (EApp (EApp (EVar "walkE") (EVar "ctx")) (EVar "scope")) (EVar "c")) (EVar "w"))))
-(DFunDef false "walkGuarded" ((PVar "ctx") (PVar "scope") (PCons (PCon "CGBind" (PVar "pat") (PVar "e")) (PVar "rest")) (PVar "body") (PVar "w")) (EApp (EApp (EApp (EApp (EApp (EVar "walkGuarded") (EVar "ctx")) (EApp (EApp (EVar "bindPatScope") (EVar "pat")) (EVar "scope"))) (EVar "rest")) (EVar "body")) (EApp (EApp (EApp (EApp (EVar "walkE") (EVar "ctx")) (EVar "scope")) (EVar "e")) (EVar "w"))))
+(DFunDef false "walkGuarded" ((PVar "ctx") (PVar "scope0") (PVar "xs0") (PVar "body") (PVar "w0")) (ELetGroup ((lgb "go" (clause ((PVar "scope") (PList) (PVar "w")) (EApp (EApp (EApp (EApp (EVar "walkE") (EVar "ctx")) (EVar "scope")) (EVar "body")) (EVar "w"))) (clause ((PVar "scope") (PCons (PCon "CGBool" (PVar "c")) (PVar "rest")) (PVar "w")) (EApp (EApp (EApp (EVar "go") (EVar "scope")) (EVar "rest")) (EApp (EApp (EApp (EApp (EVar "walkE") (EVar "ctx")) (EVar "scope")) (EVar "c")) (EVar "w")))) (clause ((PVar "scope") (PCons (PCon "CGBind" (PVar "pat") (PVar "e")) (PVar "rest")) (PVar "w")) (EApp (EApp (EApp (EVar "go") (EApp (EApp (EVar "bindPatScope") (EVar "pat")) (EVar "scope"))) (EVar "rest")) (EApp (EApp (EApp (EApp (EVar "walkE") (EVar "ctx")) (EVar "scope")) (EVar "e")) (EVar "w")))))) (EApp (EApp (EApp (EVar "go") (EVar "scope0")) (EVar "xs0")) (EVar "w0"))))
 (DTypeSig false "walkStmts" (TyFun (TyCon "Ctx") (TyFun (TyCon "CallScope") (TyFun (TyApp (TyCon "List") (TyCon "CStmt")) (TyFun (TyCon "Walk") (TyCon "Walk"))))))
 (DFunDef false "walkStmts" (PWild PWild (PList) (PVar "w")) (EVar "w"))
 (DFunDef false "walkStmts" ((PVar "ctx") (PVar "scope") (PCons (PCon "CSExpr" (PVar "e")) (PVar "rest")) (PVar "w")) (EApp (EApp (EApp (EApp (EVar "walkStmts") (EVar "ctx")) (EVar "scope")) (EVar "rest")) (EApp (EApp (EApp (EApp (EVar "walkE") (EVar "ctx")) (EVar "scope")) (EVar "e")) (EVar "w"))))
@@ -2790,13 +2779,9 @@ validatePhysicalDemand _ _ _ = []
 (DFunDef false "tailLocalBinds" (PWild (PList) (PVar "acc")) (EVar "acc"))
 (DFunDef false "tailLocalBinds" ((PVar "b") (PCons (PCon "CBind" PWild (PVar "clauses") PWild PWild) (PVar "rest")) (PVar "acc")) (EApp (EApp (EApp (EVar "tailLocalBinds") (EVar "b")) (EVar "rest")) (EApp (EApp (EApp (EVar "tailClauses") (EVar "b")) (EVar "clauses")) (EVar "acc"))))
 (DTypeSig false "tailArms" (TyFun (TyCon "String") (TyFun (TyCon "Bool") (TyFun (TyApp (TyCon "List") (TyCon "CArm")) (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyApp (TyCon "List") (TyCon "String")))))))
-(DFunDef false "tailArms" (PWild PWild (PList) (PVar "acc")) (EVar "acc"))
-(DFunDef false "tailArms" ((PVar "b") (PVar "tl") (PCons (PCon "CArm" PWild (PVar "guards") (PVar "body")) (PVar "rest")) (PVar "acc")) (EApp (EApp (EApp (EApp (EVar "tailArms") (EVar "b")) (EVar "tl")) (EVar "rest")) (EApp (EApp (EApp (EApp (EVar "tailE") (EVar "b")) (EVar "tl")) (EVar "body")) (EApp (EApp (EApp (EVar "tailGuards") (EVar "b")) (EVar "guards")) (EVar "acc")))))
-(DFunDef false "tailArms" ((PVar "b") (PVar "tl") (PCons (PCon "CArmAlt" PWild (PVar "guards") PWild) (PVar "rest")) (PVar "acc")) (EApp (EApp (EApp (EApp (EVar "tailArms") (EVar "b")) (EVar "tl")) (EVar "rest")) (EApp (EApp (EApp (EVar "tailGuards") (EVar "b")) (EVar "guards")) (EVar "acc"))))
+(DFunDef false "tailArms" ((PVar "b") (PVar "tl") (PVar "xs0") (PVar "acc0")) (ELetGroup ((lgb "go" (clause ((PList) (PVar "acc")) (EVar "acc")) (clause ((PCons (PCon "CArm" PWild (PVar "guards") (PVar "body")) (PVar "rest")) (PVar "acc")) (EApp (EApp (EVar "go") (EVar "rest")) (EApp (EApp (EApp (EApp (EVar "tailE") (EVar "b")) (EVar "tl")) (EVar "body")) (EApp (EApp (EApp (EVar "tailGuards") (EVar "b")) (EVar "guards")) (EVar "acc"))))) (clause ((PCons (PCon "CArmAlt" PWild (PVar "guards") PWild) (PVar "rest")) (PVar "acc")) (EApp (EApp (EVar "go") (EVar "rest")) (EApp (EApp (EApp (EVar "tailGuards") (EVar "b")) (EVar "guards")) (EVar "acc")))))) (EApp (EApp (EVar "go") (EVar "xs0")) (EVar "acc0"))))
 (DTypeSig false "armAltFaults" (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "CArm")) (TyFun (TyCon "Int") (TyFun (TyApp (TyCon "List") (TyCon "CArm")) (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyApp (TyCon "List") (TyCon "String"))))))))
-(DFunDef false "armAltFaults" (PWild PWild PWild (PList) (PVar "acc")) (EVar "acc"))
-(DFunDef false "armAltFaults" ((PVar "b") (PVar "arms") (PVar "i") (PCons (PCon "CArmAlt" PWild PWild (PVar "owner")) (PVar "rest")) (PVar "acc")) (EBlock (DoLet false false (PVar "ok") (EBinOp "&&" (EBinOp "<" (EVar "owner") (EVar "i")) (EApp (EApp (EVar "bodyArmAt") (EVar "arms")) (EVar "owner")))) (DoLet false false (PVar "acc2") (EIf (EVar "ok") (EVar "acc") (EBinOp "::" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "arm: or-pattern candidate ")) (EApp (EMethodRef "display") (EApp (EVar "intToString") (EVar "i")))) (ELit (LString " shares the body of arm "))) (EApp (EMethodRef "display") (EApp (EVar "intToString") (EVar "owner")))) (ELit (LString ", which is not an earlier arm with a body [in "))) (EApp (EMethodRef "display") (EVar "b"))) (ELit (LString "]"))) (EVar "acc")))) (DoExpr (EApp (EApp (EApp (EApp (EApp (EVar "armAltFaults") (EVar "b")) (EVar "arms")) (EBinOp "+" (EVar "i") (ELit (LInt 1)))) (EVar "rest")) (EVar "acc2")))))
-(DFunDef false "armAltFaults" ((PVar "b") (PVar "arms") (PVar "i") (PCons PWild (PVar "rest")) (PVar "acc")) (EApp (EApp (EApp (EApp (EApp (EVar "armAltFaults") (EVar "b")) (EVar "arms")) (EBinOp "+" (EVar "i") (ELit (LInt 1)))) (EVar "rest")) (EVar "acc")))
+(DFunDef false "armAltFaults" ((PVar "b") (PVar "arms") (PVar "i0") (PVar "xs0") (PVar "acc0")) (ELetGroup ((lgb "go" (clause (PWild (PList) (PVar "acc")) (EVar "acc")) (clause ((PVar "i") (PCons (PCon "CArmAlt" PWild PWild (PVar "owner")) (PVar "rest")) (PVar "acc")) (EBlock (DoLet false false (PVar "ok") (EBinOp "&&" (EBinOp "<" (EVar "owner") (EVar "i")) (EApp (EApp (EVar "bodyArmAt") (EVar "arms")) (EVar "owner")))) (DoLet false false (PVar "acc2") (EIf (EVar "ok") (EVar "acc") (EBinOp "::" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "arm: or-pattern candidate ")) (EApp (EMethodRef "display") (EApp (EVar "intToString") (EVar "i")))) (ELit (LString " shares the body of arm "))) (EApp (EMethodRef "display") (EApp (EVar "intToString") (EVar "owner")))) (ELit (LString ", which is not an earlier arm with a body [in "))) (EApp (EMethodRef "display") (EVar "b"))) (ELit (LString "]"))) (EVar "acc")))) (DoExpr (EApp (EApp (EApp (EVar "go") (EBinOp "+" (EVar "i") (ELit (LInt 1)))) (EVar "rest")) (EVar "acc2"))))) (clause ((PVar "i") (PCons PWild (PVar "rest")) (PVar "acc")) (EApp (EApp (EApp (EVar "go") (EBinOp "+" (EVar "i") (ELit (LInt 1)))) (EVar "rest")) (EVar "acc"))))) (EApp (EApp (EApp (EVar "go") (EVar "i0")) (EVar "xs0")) (EVar "acc0"))))
 (DTypeSig false "bodyArmAt" (TyFun (TyApp (TyCon "List") (TyCon "CArm")) (TyFun (TyCon "Int") (TyCon "Bool"))))
 (DFunDef false "bodyArmAt" ((PCons (PCon "CArm" PWild PWild PWild) PWild) (PLit (LInt 0))) (EVar "True"))
 (DFunDef false "bodyArmAt" ((PCons PWild (PVar "rest")) (PVar "n")) (EBinOp "&&" (EBinOp ">" (EVar "n") (ELit (LInt 0))) (EApp (EApp (EVar "bodyArmAt") (EVar "rest")) (EBinOp "-" (EVar "n") (ELit (LInt 1))))))
@@ -2806,9 +2791,7 @@ validatePhysicalDemand _ _ _ = []
 (DFunDef false "tailGuards" ((PVar "b") (PCons (PCon "CGBool" (PVar "c")) (PVar "rest")) (PVar "acc")) (EApp (EApp (EApp (EVar "tailGuards") (EVar "b")) (EVar "rest")) (EApp (EApp (EApp (EApp (EVar "tailE") (EVar "b")) (EVar "False")) (EVar "c")) (EVar "acc"))))
 (DFunDef false "tailGuards" ((PVar "b") (PCons (PCon "CGBind" PWild (PVar "e")) (PVar "rest")) (PVar "acc")) (EApp (EApp (EApp (EVar "tailGuards") (EVar "b")) (EVar "rest")) (EApp (EApp (EApp (EApp (EVar "tailE") (EVar "b")) (EVar "False")) (EVar "e")) (EVar "acc"))))
 (DTypeSig false "tailStmts" (TyFun (TyCon "String") (TyFun (TyCon "Bool") (TyFun (TyApp (TyCon "List") (TyCon "CStmt")) (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyApp (TyCon "List") (TyCon "String")))))))
-(DFunDef false "tailStmts" (PWild PWild (PList) (PVar "acc")) (EVar "acc"))
-(DFunDef false "tailStmts" ((PVar "b") (PVar "tl") (PList (PCon "CSExpr" (PVar "e"))) (PVar "acc")) (EApp (EApp (EApp (EApp (EVar "tailE") (EVar "b")) (EVar "tl")) (EVar "e")) (EVar "acc")))
-(DFunDef false "tailStmts" ((PVar "b") (PVar "tl") (PCons (PVar "st") (PVar "rest")) (PVar "acc")) (EApp (EApp (EApp (EApp (EVar "tailStmts") (EVar "b")) (EVar "tl")) (EVar "rest")) (EApp (EApp (EApp (EVar "tailStmt") (EVar "b")) (EVar "st")) (EVar "acc"))))
+(DFunDef false "tailStmts" ((PVar "b") (PVar "tl") (PVar "xs0") (PVar "acc0")) (ELetGroup ((lgb "go" (clause ((PList) (PVar "acc")) (EVar "acc")) (clause ((PList (PCon "CSExpr" (PVar "e"))) (PVar "acc")) (EApp (EApp (EApp (EApp (EVar "tailE") (EVar "b")) (EVar "tl")) (EVar "e")) (EVar "acc"))) (clause ((PCons (PVar "st") (PVar "rest")) (PVar "acc")) (EApp (EApp (EVar "go") (EVar "rest")) (EApp (EApp (EApp (EVar "tailStmt") (EVar "b")) (EVar "st")) (EVar "acc")))))) (EApp (EApp (EVar "go") (EVar "xs0")) (EVar "acc0"))))
 (DTypeSig false "tailStmt" (TyFun (TyCon "String") (TyFun (TyCon "CStmt") (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyApp (TyCon "List") (TyCon "String"))))))
 (DFunDef false "tailStmt" ((PVar "b") (PCon "CSExpr" (PVar "e")) (PVar "acc")) (EApp (EApp (EApp (EApp (EVar "tailE") (EVar "b")) (EVar "False")) (EVar "e")) (EVar "acc")))
 (DFunDef false "tailStmt" ((PVar "b") (PCon "CSLet" PWild PWild (PVar "e")) (PVar "acc")) (EApp (EApp (EApp (EApp (EVar "tailE") (EVar "b")) (EVar "False")) (EVar "e")) (EVar "acc")))
