@@ -1580,9 +1580,9 @@ implEntrySymTag (CImplEntry _ _ _ (CImplDefault _ _ _ (ImplSym tag _ _) _ _ _)) 
 
 -- does the prelude object define the impl of [method] at canonical key [key]?
 preludeImplSym : Emit -> String -> String -> Option String
-preludeImplSym e method key = match omLookup method e.input.preludeImplIndex
-  Some byKey => omLookup key byKey
-  None => None
+preludeImplSym e method key = do
+  byKey <- omLookup method e.input.preludeImplIndex
+  omLookup key byKey
 
 -- the method names of the program's tagged impls.  A bare CVar naming one of these,
 -- applied to args, is an arg-position dispatch site (return-position methods are
@@ -3529,13 +3529,12 @@ rawWorkerRet (RawWorker _ _ r) = r
 rawWorkerCall : Emit -> String -> Int -> Option (String, RawWorker)
 rawWorkerCall e f n =
   let name = canonFnName e f
-  match omLookup name !e.rawWorkers
-    Some (RawWorker ar ks r) =>
-      if ar == n then
-        Some (LN.llvmName (LN.LRawWorker name), RawWorker ar ks r)
-      else
-        None
-    None => None
+  do
+    (RawWorker ar ks r) <- omLookup name !e.rawWorkers
+    if ar == n then
+      Some (LN.llvmName (LN.LRawWorker name), RawWorker ar ks r)
+    else
+      None
 
 -- the worker of `f`, when its result is raw of kind `k`.
 rawWorkerReturning : Emit ->
@@ -3543,10 +3542,9 @@ rawWorkerReturning : Emit ->
   Int ->
   RawKind ->
   Option (String, RawWorker)
-rawWorkerReturning e f n k = match rawWorkerCall e f n
-  Some (sym, w) =>
-    if sameRawKind (rawWorkerRet w) k then Some (sym, w) else None
-  None => None
+rawWorkerReturning e f n k = do
+  (sym, w) <- rawWorkerCall e f n
+  if sameRawKind (rawWorkerRet w) k then Some (sym, w) else None
 
 -- A call of a raw worker: each argument as its position's kind (a payload, an
 -- `i32` or a word), evaluated left to right.  Returns the result register, of
@@ -3576,9 +3574,9 @@ emitRawArgs _ _ _ _ = []
 
 -- the worker of `f` whose result is an `i32` (a U32 or an I32).
 rawWorkerReturning32 : Emit -> String -> Int -> Option (String, RawWorker)
-rawWorkerReturning32 e f n = match rawWorkerCall e f n
-  Some (sym, w) => if isRaw32 (rawWorkerRet w) then Some (sym, w) else None
-  None => None
+rawWorkerReturning32 e f n = do
+  (sym, w) <- rawWorkerCall e f n
+  if isRaw32 (rawWorkerRet w) then Some (sym, w) else None
 
 -- A U64- or U32-valued `if` or block on raw values: each arm stores its raw
 -- value in the slot, so neither boxes or retags (emitIf's slot holds words).
@@ -4245,13 +4243,12 @@ bindTupleInline e env ps ex =
     (CVar f _, args) =>
       if isLocal env f then
         None
-      else match tupleInline e f args (lengthS ps)
-        Some (pats, lead, comps) =>
-          let penv = bindInlineArgs e env pats args omEmpty
-          let vals = withInlineScope e (_ =>
-            emitRawOrWords e (emitBlockLeads e penv lead) comps)
-          Some (bindTupleVals env ps vals)
-        None => None
+      else do
+        (pats, lead, comps) <- tupleInline e f args (lengthS ps)
+        let penv = bindInlineArgs e env pats args omEmpty
+        let vals = withInlineScope e (_ =>
+          emitRawOrWords e (emitBlockLeads e penv lead) comps)
+        Some (bindTupleVals env ps vals)
     _ => None
 
 allVarOrWild : List Pat -> Bool
@@ -4329,10 +4326,9 @@ tupleBody _ _ = None
 -- non-negative literal amount, where that refusal cannot fire.
 u64KernelAlias : Emit -> String -> List CExpr -> Option String
 u64KernelAlias e f args = match omLookup (canonFnName e f) !e.gDispBindMap
-  Some (CBind _ [CClause pats body] _ _) => match paramNames pats
-    Some ps =>
-      if lengthS ps == lengthS args then u64AliasBody e ps body args else None
-    None => None
+  Some (CBind _ [CClause pats body] _ _) => do
+    ps <- paramNames pats
+    if lengthS ps == lengthS args then u64AliasBody e ps body args else None
   _ => None
 
 -- the parameter names of an all-variable pattern list.
@@ -4348,14 +4344,13 @@ u64AliasBody e ps (CIf (CBinPrim "<" (CVar k _) zero _ _) _ body) args = match (
   args,
   intLitOf zero,
 )
-  (Some kern, [_, amount], [_, lit], Some 0) => match intLitOf lit
-    Some n =>
-      if isU64ShiftKernel kern && amount == k && n >= 0 then Some kern else None
-    None => None
+  (Some kern, [_, amount], [_, lit], Some 0) => do
+    n <- intLitOf lit
+    if isU64ShiftKernel kern && amount == k && n >= 0 then Some kern else None
   _ => None
-u64AliasBody e ps body _ = match u64KernelApplied e ps body
-  Some kern => if isU64ShiftKernel kern then None else Some kern
-  None => None
+u64AliasBody e ps body _ = do
+  kern <- u64KernelApplied e ps body
+  if isU64ShiftKernel kern then None else Some kern
 
 -- The value of an Int literal as the emitter receives it: bare, or still the
 -- `fromInt` application the typechecker routed to `Num Int`.
@@ -5361,9 +5356,9 @@ hostFloatOp _ _ _ = None
 constNanFold : String -> CExpr -> CExpr -> Option String
 constNanFold op l r =
   if isArithOp op then match (constFoldFloat l, constFoldFloat r)
-    (Some a, Some b) => match hostFloatOp op a b
-      Some v => if v /= v then Some (floatBitsHex v) else None
-      None => None
+    (Some a, Some b) => do
+      v <- hostFloatOp op a b
+      if v /= v then Some (floatBitsHex v) else None
     _ => None
   else
     None
@@ -7163,9 +7158,9 @@ emitIndirect e env hd args mode =
 -- surplus or shortfall is deliberately NOT a hit — over- and under-application
 -- must keep flowing through `emitIndirectMode`'s split/PAP paths unchanged.
 directLamOf : Emit -> String -> Int -> Option String
-directLamOf e cw nargs = match lookupAssoc cw !e.directFn
-  Some (lam, arity) => if arity == nargs then Some lam else None
-  None => None
+directLamOf e cw nargs = do
+  (lam, arity) <- lookupAssoc cw !e.directFn
+  if arity == nargs then Some lam else None
 
 -- An indirect call through closure word `cw` in the application's mode.  An exact,
 -- partial or over application names a closure of known parameter count (a
@@ -10351,17 +10346,16 @@ reservedTypeBase : Int
 reservedTypeBase = 65536
 
 reservedTag : String -> Option Int
-reservedTag name = match namedRuntimeCtor name
-  Some id =>
-    let fact = runtimeCtorFact id
-    let slot = match fact.owner
-      RuntimeList => Some 0
-      RuntimeOption => Some 1
-      RuntimeResult => Some 2
-      RuntimeOrdering => Some 3
-      _ => None
-    map (n => (reservedTypeBase + n) * ctorTagShift + fact.ordinal) slot
-  None => None
+reservedTag name = do
+  id <- namedRuntimeCtor name
+  let fact = runtimeCtorFact id
+  let slot = match fact.owner
+    RuntimeList => Some 0
+    RuntimeOption => Some 1
+    RuntimeResult => Some 2
+    RuntimeOrdering => Some 3
+    _ => None
+  map (n => (reservedTypeBase + n) * ctorTagShift + fact.ordinal) slot
 
 -- the cell-header tag a NAME stamps / is tested against.  Sentinel headers
 -- ("$tuple"/"$ref"/"$closure") keep their hash; the runtime ADTs route through
@@ -10788,9 +10782,9 @@ leafArm e arms i = match nthArm arms i
   None => None
 
 sharedOwner : Emit -> Int -> Option Int
-sharedOwner e i = match !e.orScope
-  Some sc => if omHasKey (intToString i) sc.osOwners then Some i else None
-  None => None
+sharedOwner e i = do
+  sc <- !e.orScope
+  if omHasKey (intToString i) sc.osOwners then Some i else None
 
 -- [arms]' tree, under a scope of its own: a tree nested in one of its bodies
 -- must not read the outer tree's shared arms.
@@ -11385,11 +11379,11 @@ conHeadInfo _ = None
 -- constructor names since a covered-constructor set only ever carries names
 -- (`conHeadInfo`), never a type.
 reservedRosterOf : String -> Option (List String)
-reservedRosterOf name = match namedRuntimeCtor name
-  Some id => match (runtimeCtorFact id).owner
+reservedRosterOf name = do
+  id <- namedRuntimeCtor name
+  match (runtimeCtorFact id).owner
     RuntimeBool => None
     owner => Some (filterMap runtimeCtorName (runtimeRoster owner))
-  None => None
 
 -- #2848 (S-dead-tails): true when `covered` (the constructor names a
 -- CTSwitch's own branches test) already accounts for every constructor of
@@ -11444,11 +11438,11 @@ data DiscRep = RepAllImm | RepAllBox | RepTwoSplit String | RepMixed
 -- indistinguishable from a genuinely nullary ctor and would classify `Cons` as an
 -- immediate.  So membership is asked FIRST and this table answers second.
 reservedCtorArity : String -> Option Int
-reservedCtorArity name = match namedRuntimeCtor name
-  Some id => match (runtimeCtorFact id).owner
+reservedCtorArity name = do
+  id <- namedRuntimeCtor name
+  match (runtimeCtorFact id).owner
     RuntimeBool => None
     _ => Some (runtimeCtorFact id).arity
-  None => None
 
 -- the field count of a constructor when it can be established, `None` when it
 -- cannot.  A name BOTH tables claim (a user type declaring one of the exempt
@@ -11529,15 +11523,14 @@ rosterOwnedBy e ty roster =
 -- claim must have them agree.
 unambiguousRoster : Emit -> String -> Option (List String)
 unambiguousRoster e name =
-  if isCtor e name then match ctorTypeOf e name
-    None => None
-    Some ty =>
-      let t = ctorsOfType e ty
-      if isNonEmptyL t && rosterOwnedBy e ty t then match reservedRosterOf name
-        None => Some t
-        Some r => if sameRoster r t then Some t else None
-      else
-        None
+  if isCtor e name then do
+    ty <- ctorTypeOf e name
+    let t = ctorsOfType e ty
+    if isNonEmptyL t && rosterOwnedBy e ty t then match reservedRosterOf name
+      None => Some t
+      Some r => if sameRoster r t then Some t else None
+    else
+      None
   else
     reservedRosterOf name
 
@@ -13507,19 +13500,17 @@ directCallOperands e env ex =
         None
     CMethod name (MethodEvidence iface siteArity (route@(RKey tag _ _)) implRoutes methRoutes) =>
       let folded = intFromIntIdentityArg name route implRoutes methRoutes args
-      if hasArgs args
-        && isNone folded then match implForSite e name iface tag siteArity
-        Some ent =>
-          let argOps = emitArgs e env args
-          let dictRoutes =
-            staticEntryDictRoutes
-              e
-              name
-              ent
-              (MethodEvidence iface siteArity route implRoutes methRoutes)
-          let dictWords = dictWordsOf e env dictRoutes
-          Some (implEntryFnName e name ent, dictWords ++ argOps)
-        None => None
+      if hasArgs args && isNone folded then do
+        ent <- implForSite e name iface tag siteArity
+        let argOps = emitArgs e env args
+        let dictRoutes =
+          staticEntryDictRoutes
+            e
+            name
+            ent
+            (MethodEvidence iface siteArity route implRoutes methRoutes)
+        let dictWords = dictWordsOf e env dictRoutes
+        Some (implEntryFnName e name ent, dictWords ++ argOps)
       else
         None
     _ => None

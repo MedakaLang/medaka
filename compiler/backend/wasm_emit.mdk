@@ -881,18 +881,16 @@ jsImportForW prog name = match selectedJsImport prog name
 
 selectedJsImport : Prog -> String -> Option JsImport
 selectedJsImport prog name = match omLookup name (progEmit prog).externFacts
-  Some fact if fact.bindingKind
-    == ForeignBinding => match hostSymbol "js" fact.hostBindings
-    Some host =>
-      map
-        (shape => JsImport {
-          medakaName = name,
-          jsName = host,
-          params = shape.parameterHeads,
-          result = shape.resultHead,
-        })
-        fact.callableShape
-    None => None
+  Some fact if fact.bindingKind == ForeignBinding => do
+    host <- hostSymbol "js" fact.hostBindings
+    map
+      (shape => JsImport {
+        medakaName = name,
+        jsName = host,
+        params = shape.parameterHeads,
+        result = shape.resultHead,
+      })
+      fact.callableShape
   _ => None
 
 -- A user extern applied: with all its arguments, the arguments and then its
@@ -1723,14 +1721,13 @@ emitProgramWith : WasmEmit ->
   EmitPlan ->
   CProgram ->
   Result (List SymbolDefect) String
-emitProgramWith emit input plan cp = match emitProgramCore emit input plan cp
-  Err defects => Err defects
-  Ok text =>
-    finishCheckedText
-      (RecordedGaps !emit.gapSymbols)
-      !emit.symbols
-      !emit.callCoverage
-      text
+emitProgramWith emit input plan cp = do
+  text <- emitProgramCore emit input plan cp
+  finishCheckedText
+    (RecordedGaps !emit.gapSymbols)
+    !emit.symbols
+    !emit.callCoverage
+    text
 
 -- Strict and record modes share one semantic gateway; only target gaps may
 -- become record events instead of a refusal.
@@ -1914,9 +1911,9 @@ externFamilyW : WasmEmit -> String -> Option WasmFamily
 externFamilyW emit name =
   if name == siteSentinelName then
     Some WasmLeaf
-  else match lookupAssoc name (emitDemandW emit).catalogFamilies
-    Some f => if isWasmExternFamily f then Some f else None
-    None => None
+  else do
+    f <- lookupAssoc name (emitDemandW emit).catalogFamilies
+    if isWasmExternFamily f then Some f else None
 
 isWasmEtaExtern : WasmEmit -> String -> Bool
 isWasmEtaExtern emit name = isSome (externFamilyW emit name)
@@ -3944,18 +3941,16 @@ instanceFillsW prog key =
 -- concrete route, its supers and `requires` likewise, and the null word of an
 -- unconstrained witness.
 closedDictW : Prog -> Route -> Option String
-closedDictW prog (RKey tag reqs sups) =
-  match allSomeW (map (closedDictW prog) (sups ++ reqs))
-    None => None
-    Some fields =>
-      let fills = instanceFillsW prog tag
-      let functions = flatMap (slotFunctionW prog tag) fills
-      let closures = flatMap (slotClosureW prog tag) fills
-      let tag32 = intToString (dictTag tag)
-      let slotText = constArrayW "$slotarr" (map foldedW functions)
-      let closureText = constArrayW "$dictarr" (map foldedW closures)
-      Some
-        "(struct.new $dict (i32.const \{tag32}) \{constArrayW "$dictarr" fields} \{slotText} \{closureText})"
+closedDictW prog (RKey tag reqs sups) = do
+  fields <- allSomeW (map (closedDictW prog) (sups ++ reqs))
+  let fills = instanceFillsW prog tag
+  let functions = flatMap (slotFunctionW prog tag) fills
+  let closures = flatMap (slotClosureW prog tag) fills
+  let tag32 = intToString (dictTag tag)
+  let slotText = constArrayW "$slotarr" (map foldedW functions)
+  let closureText = constArrayW "$dictarr" (map foldedW closures)
+  Some
+    "(struct.new $dict (i32.const \{tag32}) \{constArrayW "$dictarr" fields} \{slotText} \{closureText})"
 closedDictW _ RNone = Some "(ref.i31 (i32.const 0))"
 closedDictW _ (RLocal _ _) = Some "(ref.i31 (i32.const 0))"
 closedDictW _ (RScalar _) = Some "(ref.i31 (i32.const 0))"

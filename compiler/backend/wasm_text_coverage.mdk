@@ -287,9 +287,9 @@ symbolFrom "d" n = WasmData n
 symbolFrom _ n = WasmElem n
 
 symbolLookup : WasmSymbol -> SymbolIndex a -> Option a
-symbolLookup sym index = match omLookup (symbolNamespace sym) index
-  None => None
-  Some names => omLookup (symbolName sym) names
+symbolLookup sym index = do
+  names <- omLookup (symbolNamespace sym) index
+  omLookup (symbolName sym) names
 
 symbolHas : WasmSymbol -> SymbolIndex a -> Bool
 symbolHas sym index = isSome (symbolLookup sym index)
