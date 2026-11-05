@@ -5,8 +5,11 @@ frontend.marker
 frontend.runtime_constructors
 frontend.visibility
 ir.core_ir
+ir.core_ir_sexp
+ir.core_pass
 ir.extern_lower
 ir.extern_types
+ir.sexp
 support.diag_codes
 support.opcount
 support.ordmap

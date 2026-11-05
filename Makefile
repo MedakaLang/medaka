@@ -243,6 +243,11 @@ inlang-ir-core-ir-sexp-test:
 inlang-ir-core-ir-lower-test:
 	./medaka test compiler/ir/core_ir_lower_test.mdk
 
+## The pass runner runs passes in list order and captures a dump only for a named
+## pass; no entry imports this sibling.
+inlang-ir-core-pass-test:
+	./medaka test compiler/ir/core_pass_test.mdk
+
 inlang-eval-eval-test:
 	./medaka test compiler/eval/eval_test.mdk
 

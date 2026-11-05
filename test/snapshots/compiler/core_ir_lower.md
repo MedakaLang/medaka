@@ -1,5 +1,5 @@
 # META
-source_lines=4056
+source_lines=4132
 stages=DESUGAR,MARK
 # SOURCE
 import support.symbol_encoding.{encodePair}
@@ -20,6 +20,10 @@ import types.symbol_origins.{
 -- is a clean diff, not a rewrite).
 
 import ir.extern_lower.{lowerExterns}
+import ir.core_pass.{
+  CorePass(..), PassConfig, PassRun(..), PassFault(..), defaultPassConfig,
+  runPasses
+}
 import frontend.ast.{
   isWildPat,
   letBindName,
@@ -996,10 +1000,16 @@ lowerStmt _ _ = panic "core_ir lower: unsupported block statement"
 export
 lowerProgramWithFacts : ProgramFacts -> List Decl -> CProgram
 lowerProgramWithFacts facts prog =
-  finishLowering
-    UntypedLowering
-    facts.pfBinders
-    (refoldProgram noLetCheck (lowerProgramWith facts None [] prog))
+  runLowering
+    PassCtx {
+      pcFacts = facts,
+      pcDecls = prog,
+      pcSited = prog,
+      pcLowering = UntypedLowering,
+      pcFieldOrders = [],
+    }
+    untypedPasses
+    (lowerProgramWith facts None [] prog)
 
 -- Lowering after an elaboration, against the table it published.  Refuses (panics)
 -- when none was published instead of silently lowering every inherited default away.
@@ -1010,17 +1020,21 @@ lowerTypedProgramWith facts prog =
     optionOrPanic
       "disposition table: no elaboration has published one"
       facts.pfDispositions
-  finishLowering
-    TypedLowering
-    facts.pfBinders
-    (refoldProgram
-      noLetCheck
-      (lowerProgramWith facts (Some dispositions) [] prog))
+  runLowering
+    PassCtx {
+      pcFacts = facts,
+      pcDecls = prog,
+      pcSited = prog,
+      pcLowering = TypedLowering,
+      pcFieldOrders = [],
+    }
+    typedPasses
+    (lowerProgramWith facts (Some dispositions) [] prog)
 
 -- [dispositions] is the typechecker's table for [prog] (`None` for an untyped
 -- probe; see `lowerProgramWithFacts`).  Refutable lets are still one-arm decisions here
 -- (`letDecision`); each public lowering decides which of them to keep, and ends
--- with `finishLowering`.
+-- with `finishPasses`.
 lowerProgramWith : ProgramFacts ->
   Option DispositionTable ->
   List (String, String, String) ->
@@ -1246,32 +1260,35 @@ lowerProgramEmitPinnedWith : ProgramFacts ->
   List Decl ->
   CProgram
 lowerProgramEmitPinnedWith facts pins prog =
+  programOrPanic (lowerProgramEmitConfigured defaultPassConfig facts pins prog)
+
+-- The emitting lowering as a pass run: the faults and the dumps the config asked
+-- for come back with the program.
+export
+lowerProgramEmitConfigured : PassConfig ->
+  ProgramFacts ->
+  List (String, String, String) ->
+  List Decl ->
+  PassRun
+lowerProgramEmitConfigured config facts pins prog =
   let sited = siteTrapCalls facts prog
   let dispositions = facts.pfDispositions
-  let lowered = lowerProgramWith facts dispositions pins sited
-  let raw =
-    withDeclFacts
-      (emitDeclFacts facts sited (cprogramSymbolOrigins lowered))
-      lowered
-  let fo = declaredRecordFieldOrders prog
   -- An emitting lowering is untyped exactly when no elaboration published the
   -- disposition table it lowered against (`lowerProgramWith`).
   let lowering = match dispositions
     Some _ => TypedLowering
     None => UntypedLowering
-  -- the let decisions are refolded after the record-pattern rewrite, which
-  -- resolves the record patterns `patCanMiss` reads
-  let rewritten = rewriteProgramRecPats fo raw
-  lowerExterns
-    facts
-    prog
-    (finishLowering
-      lowering
-      facts.pfBinders
-      (hoistNullaryMemo
-        (refoldProgram
-          (patCanMiss (siblingTable (cprogramCtorTypes raw)))
-          rewritten)))
+  runPasses
+    config
+    PassCtx {
+      pcFacts = facts,
+      pcDecls = prog,
+      pcSited = sited,
+      pcLowering = lowering,
+      pcFieldOrders = declaredRecordFieldOrders prog,
+    }
+    emitPasses
+    (lowerProgramWith facts dispositions pins sited)
 
 -- The declaration facts an emitting lowering publishes (see `DeclFacts`): every
 -- instance's `requires` count, and the super count of each of their interfaces.
@@ -1449,17 +1466,76 @@ cprogramCtorTypes (CProgram _ _ ctorTypes _ _ _) = ctorTypes
 -- emits for it: a binding's clause, the impl entry an `RKey` route selects, the
 -- binding an `RLocal` route or a `CDict` names (less the dictionaries the
 -- occurrence supplies), a constructor's field count.  Each public lowering ends
--- with `finishLowering`: one eta pass, which may lengthen a clause, then
+-- with `finishPasses`: one eta pass, which may lengthen a clause, then
 -- `stampCallModes`, which writes the mode into every application from the
 -- clauses the eta pass produced.  `core_validate.validateCalls` reads the same
 -- `definedArityOf`, so the stamp and the check cannot disagree about a table.
 
-finishLowering : Lowering -> Option BinderTypeTable -> CProgram -> CProgram
-finishLowering lowering table prog =
-  stampBinders
-    lowering
-    table
-    (markTailSites (stampCallModes (etaSaturateProgram prog)))
+-- What a pass list reads besides the program: the facts, the declarations as
+-- given and as the site-trap rewrite left them, the lowering mode, and the
+-- declared field order of each record.
+data PassCtx = PassCtx {
+  pcFacts : ProgramFacts,
+  pcDecls : List Decl,
+  pcSited : List Decl,
+  pcLowering : Lowering,
+  pcFieldOrders : List (String, List String),
+}
+
+namedPass : String -> (PassCtx -> CProgram -> CProgram) -> CorePass PassCtx
+namedPass passName f = CorePass { passName = passName, passRun = f }
+
+runLowering : PassCtx -> List (CorePass PassCtx) -> CProgram -> CProgram
+runLowering ctx passes start =
+  programOrPanic (runPasses defaultPassConfig ctx passes start)
+
+-- A fault is an internal compiler error naming its pass.
+programOrPanic : PassRun -> CProgram
+programOrPanic run = match run.faults
+  [] => run.program
+  fault :: _ => panic "core pass \{fault.faultPass}: \{fault.faultMessage}"
+
+-- The untyped and typed lowerings keep no refutable-let decision.
+untypedPasses : List (CorePass PassCtx)
+untypedPasses =
+  namedPass "refold-lets" (_ p => refoldProgram noLetCheck p) :: finishPasses
+
+typedPasses : List (CorePass PassCtx)
+typedPasses = untypedPasses
+
+-- The emitting lowering.  Order is the contract:
+-- - the record-pattern rewrite precedes the refold, because `patCanMiss` reads the
+--   record patterns it resolves;
+-- - `finishPasses` end the list before the externs, which only add rows.
+emitPasses : List (CorePass PassCtx)
+emitPasses =
+  [
+      namedPass "decl-facts" (c p =>
+        withDeclFacts
+          (emitDeclFacts c.pcFacts c.pcSited (cprogramSymbolOrigins p))
+          p),
+      namedPass "record-patterns" (c p =>
+        rewriteProgramRecPats c.pcFieldOrders p),
+      namedPass "refold-lets" (_ p =>
+        refoldProgram (patCanMiss (siblingTable (cprogramCtorTypes p))) p),
+      namedPass "hoist-nullary-memo" (_ p => hoistNullaryMemo p),
+    ]
+    -- optimization slot: passes here run before the stamps below, so eta, call
+    -- modes, tail marks and binder stamps all see their output
+
+    ++ finishPasses
+    ++ [namedPass "lower-externs" (c p => lowerExterns c.pcFacts c.pcDecls p)]
+
+-- Call modes are stamped from the clauses the eta pass produced, so eta comes
+-- first; tail marks and binder stamps read the stamped modes.
+finishPasses : List (CorePass PassCtx)
+finishPasses = [
+  namedPass "eta-saturate" (_ p => etaSaturateProgram p),
+  namedPass "call-modes" (_ p => stampCallModes p),
+  namedPass "tail-sites" (_ p => markTailSites p),
+  namedPass "binder-stamps" (c p =>
+    stampBinders c.pcLowering c.pcFacts.pfBinders p),
+]
 
 -- A program's defined arities: each top-level binding's clause pattern count,
 -- each constructor's field count, each impl entry's value arity by method and
@@ -4062,6 +4138,7 @@ nodeTag _ = "?"
 (DUse false (UseGroup ("support" "symbol_encoding") ((mem "encodePair" false))))
 (DUse false (UseGroup ("types" "symbol_origins") ((mem "SymbolOrigins" false) (mem "SymbolOrigin" true) (mem "CoreSymbolOrigins" true) (mem "originKey" false) (mem "functionOrigin" false) (mem "singleProgramOrigins" false))))
 (DUse false (UseGroup ("ir" "extern_lower") ((mem "lowerExterns" false))))
+(DUse false (UseGroup ("ir" "core_pass") ((mem "CorePass" true) (mem "PassConfig" false) (mem "PassRun" true) (mem "PassFault" true) (mem "defaultPassConfig" false) (mem "runPasses" false))))
 (DUse false (UseGroup ("frontend" "ast") ((mem "isWildPat" false) (mem "letBindName" false) (mem "noBinderId" false) (mem "BinderId" true) (mem "Lit" true) (mem "Loc" true) (mem "noDeclLoc" false) (mem "Pat" true) (mem "RecPatField" true) (mem "Expr" true) (mem "Arm" true) (mem "Guard" true) (mem "DoStmt" true) (mem "FieldAssign" true) (mem "LetBind" true) (mem "FunClause" true) (mem "Addr" true) (mem "Decl" true) (mem "ExternDecl" true) (mem "hostRows" false) (mem "Attr" true) (mem "Variant" true) (mem "ConPayload" true) (mem "Field" true) (mem "Ty" true) (mem "Constraint" true) (mem "IfaceMethod" true) (mem "MethodDefault" true) (mem "ImplMethod" true) (mem "Route" true) (mem "TyConOrigin" false) (mem "ifaceIdentity" false) (mem "defaultReceiverDict" false) (mem "patHasOr" false) (mem "orCandidates" false) (mem "paramCandidates" false) (mem "armCandidates" false) (mem "armHasOr" false))))
 (DUse false (UseGroup ("types" "route_key") ((mem "implRouteKeyWord" false) (mem "ifaceWordOf" false) (mem "evDictRoutesIn" false) (mem "evMethodRoutesIn" false) (mem "evSiteHeadIn" false) (mem "numIntWord" false) (mem "numFloatWord" false))))
 (DUse false (UseGroup ("ir" "core_ir") ((mem "CExpr" true) (mem "MethodEvidence" true) (mem "isGivenRooted" false) (mem "ifaceMethodArityKey" false) (mem "CArm" true) (mem "CGuard" true) (mem "CStmt" true) (mem "CField" true) (mem "CBind" true) (mem "CClause" true) (mem "CImplEntry" true) (mem "CImplBody" true) (mem "ImplSym" true) (mem "noImplSym" false) (mem "CProgram" true) (mem "DeclFacts" true) (mem "EntryFact" true) (mem "MethodResultFact" true) (mem "noDeclFacts" false) (mem "CallMode" true) (mem "CallSite" true) (mem "mkApp" false) (mem "leadingDictParams" false) (mem "CTree" true) (mem "CTBranch" true) (mem "CHead" true) (mem "FailSite" true) (mem "siteSentinelName" false) (mem "mapProgramBinders" false) (mem "BinderSite" true) (mem "obviousRuntimeType" false) (mem "withBinderRows" false))))
@@ -4401,9 +4478,9 @@ nodeTag _ = "?"
 (DFunDef false "lowerStmt" ((PVar "facts") (PCon "DoAssign" (PVar "x") (PVar "e"))) (EApp (EApp (EVar "CSAssign") (EVar "x")) (EApp (EApp (EVar "lower") (EVar "facts")) (EVar "e"))))
 (DFunDef false "lowerStmt" (PWild PWild) (EApp (EVar "panic") (ELit (LString "core_ir lower: unsupported block statement"))))
 (DTypeSig true "lowerProgramWithFacts" (TyFun (TyCon "ProgramFacts") (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyCon "CProgram"))))
-(DFunDef false "lowerProgramWithFacts" ((PVar "facts") (PVar "prog")) (EApp (EApp (EApp (EVar "finishLowering") (EVar "UntypedLowering")) (EFieldAccess (EVar "facts") "pfBinders")) (EApp (EApp (EVar "refoldProgram") (EVar "noLetCheck")) (EApp (EApp (EApp (EApp (EVar "lowerProgramWith") (EVar "facts")) (EVar "None")) (EListLit)) (EVar "prog")))))
+(DFunDef false "lowerProgramWithFacts" ((PVar "facts") (PVar "prog")) (EApp (EApp (EApp (EVar "runLowering") (ERecordCreate "PassCtx" ((fa "pcFacts" (EVar "facts")) (fa "pcDecls" (EVar "prog")) (fa "pcSited" (EVar "prog")) (fa "pcLowering" (EVar "UntypedLowering")) (fa "pcFieldOrders" (EListLit))))) (EVar "untypedPasses")) (EApp (EApp (EApp (EApp (EVar "lowerProgramWith") (EVar "facts")) (EVar "None")) (EListLit)) (EVar "prog"))))
 (DTypeSig true "lowerTypedProgramWith" (TyFun (TyCon "ProgramFacts") (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyCon "CProgram"))))
-(DFunDef false "lowerTypedProgramWith" ((PVar "facts") (PVar "prog")) (EBlock (DoLet false false (PVar "dispositions") (EApp (EApp (EVar "optionOrPanic") (ELit (LString "disposition table: no elaboration has published one"))) (EFieldAccess (EVar "facts") "pfDispositions"))) (DoExpr (EApp (EApp (EApp (EVar "finishLowering") (EVar "TypedLowering")) (EFieldAccess (EVar "facts") "pfBinders")) (EApp (EApp (EVar "refoldProgram") (EVar "noLetCheck")) (EApp (EApp (EApp (EApp (EVar "lowerProgramWith") (EVar "facts")) (EApp (EVar "Some") (EVar "dispositions"))) (EListLit)) (EVar "prog")))))))
+(DFunDef false "lowerTypedProgramWith" ((PVar "facts") (PVar "prog")) (EBlock (DoLet false false (PVar "dispositions") (EApp (EApp (EVar "optionOrPanic") (ELit (LString "disposition table: no elaboration has published one"))) (EFieldAccess (EVar "facts") "pfDispositions"))) (DoExpr (EApp (EApp (EApp (EVar "runLowering") (ERecordCreate "PassCtx" ((fa "pcFacts" (EVar "facts")) (fa "pcDecls" (EVar "prog")) (fa "pcSited" (EVar "prog")) (fa "pcLowering" (EVar "TypedLowering")) (fa "pcFieldOrders" (EListLit))))) (EVar "typedPasses")) (EApp (EApp (EApp (EApp (EVar "lowerProgramWith") (EVar "facts")) (EApp (EVar "Some") (EVar "dispositions"))) (EListLit)) (EVar "prog"))))))
 (DTypeSig false "lowerProgramWith" (TyFun (TyCon "ProgramFacts") (TyFun (TyApp (TyCon "Option") (TyCon "DispositionTable")) (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "String") (TyCon "String"))) (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyCon "CProgram"))))))
 (DFunDef false "lowerProgramWith" ((PVar "facts") (PVar "dispositions") (PVar "pins") (PVar "prog")) (EBlock (DoLet false false (PVar "origins") (EApp (EApp (EVar "originsFor") (EVar "facts")) (EVar "prog"))) (DoLet false false (PVar "groups") (EApp (EApp (EVar "lowerGroupsRaw") (EVar "facts")) (EVar "prog"))) (DoLet false false (PVar "ctorTypes") (EApp (EVar "buildCtorToType") (EVar "prog"))) (DoLet false false (PVar "symbols") (EApp (EApp (EApp (EVar "projectOrigins") (EVar "origins")) (EVar "groups")) (EVar "ctorTypes"))) (DoExpr (EApp (EApp (EVar "stampImplSymbols") (EVar "pins")) (EApp (EApp (EApp (EApp (EApp (EApp (EVar "CProgram") (EVar "groups")) (EApp (EVar "ctorArities") (EVar "prog"))) (EVar "ctorTypes")) (EApp (EApp (EApp (EApp (EApp (EApp (EVar "lowerImplsRaw") (EVar "facts")) (EApp (EVar "buildIfaceDispatch") (EVar "prog"))) (EApp (EVar "instanceReqCounts") (EVar "prog"))) (EApp (EVar "declaredMethodArities") (EVar "prog"))) (EVar "dispositions")) (EVar "prog"))) (EApp (EVar "methodContextSlotCounts") (EVar "prog"))) (ERecordUpdate (EVar "noDeclFacts") ((fa "factSymbolOrigins" (EApp (EVar "Some") (EVar "symbols"))))))))))
 (DTypeSig false "noLetCheck" (TyFun (TyCon "Pat") (TyCon "Bool")))
@@ -4486,7 +4563,9 @@ nodeTag _ = "?"
 (DTypeSig true "lowerProgramEmitWith" (TyFun (TyCon "ProgramFacts") (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyCon "CProgram"))))
 (DFunDef false "lowerProgramEmitWith" ((PVar "facts") (PVar "prog")) (EApp (EApp (EApp (EVar "lowerProgramEmitPinnedWith") (EVar "facts")) (EListLit)) (EVar "prog")))
 (DTypeSig true "lowerProgramEmitPinnedWith" (TyFun (TyCon "ProgramFacts") (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "String") (TyCon "String"))) (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyCon "CProgram")))))
-(DFunDef false "lowerProgramEmitPinnedWith" ((PVar "facts") (PVar "pins") (PVar "prog")) (EBlock (DoLet false false (PVar "sited") (EApp (EApp (EVar "siteTrapCalls") (EVar "facts")) (EVar "prog"))) (DoLet false false (PVar "dispositions") (EFieldAccess (EVar "facts") "pfDispositions")) (DoLet false false (PVar "lowered") (EApp (EApp (EApp (EApp (EVar "lowerProgramWith") (EVar "facts")) (EVar "dispositions")) (EVar "pins")) (EVar "sited"))) (DoLet false false (PVar "raw") (EApp (EApp (EVar "withDeclFacts") (EApp (EApp (EApp (EVar "emitDeclFacts") (EVar "facts")) (EVar "sited")) (EApp (EVar "cprogramSymbolOrigins") (EVar "lowered")))) (EVar "lowered"))) (DoLet false false (PVar "fo") (EApp (EVar "declaredRecordFieldOrders") (EVar "prog"))) (DoLet false false (PVar "lowering") (EMatch (EVar "dispositions") (arm (PCon "Some" PWild) () (EVar "TypedLowering")) (arm (PCon "None") () (EVar "UntypedLowering")))) (DoLet false false (PVar "rewritten") (EApp (EApp (EVar "rewriteProgramRecPats") (EVar "fo")) (EVar "raw"))) (DoExpr (EApp (EApp (EApp (EVar "lowerExterns") (EVar "facts")) (EVar "prog")) (EApp (EApp (EApp (EVar "finishLowering") (EVar "lowering")) (EFieldAccess (EVar "facts") "pfBinders")) (EApp (EVar "hoistNullaryMemo") (EApp (EApp (EVar "refoldProgram") (EApp (EVar "patCanMiss") (EApp (EVar "siblingTable") (EApp (EVar "cprogramCtorTypes") (EVar "raw"))))) (EVar "rewritten"))))))))
+(DFunDef false "lowerProgramEmitPinnedWith" ((PVar "facts") (PVar "pins") (PVar "prog")) (EApp (EVar "programOrPanic") (EApp (EApp (EApp (EApp (EVar "lowerProgramEmitConfigured") (EVar "defaultPassConfig")) (EVar "facts")) (EVar "pins")) (EVar "prog"))))
+(DTypeSig true "lowerProgramEmitConfigured" (TyFun (TyCon "PassConfig") (TyFun (TyCon "ProgramFacts") (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "String") (TyCon "String"))) (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyCon "PassRun"))))))
+(DFunDef false "lowerProgramEmitConfigured" ((PVar "config") (PVar "facts") (PVar "pins") (PVar "prog")) (EBlock (DoLet false false (PVar "sited") (EApp (EApp (EVar "siteTrapCalls") (EVar "facts")) (EVar "prog"))) (DoLet false false (PVar "dispositions") (EFieldAccess (EVar "facts") "pfDispositions")) (DoLet false false (PVar "lowering") (EMatch (EVar "dispositions") (arm (PCon "Some" PWild) () (EVar "TypedLowering")) (arm (PCon "None") () (EVar "UntypedLowering")))) (DoExpr (EApp (EApp (EApp (EApp (EVar "runPasses") (EVar "config")) (ERecordCreate "PassCtx" ((fa "pcFacts" (EVar "facts")) (fa "pcDecls" (EVar "prog")) (fa "pcSited" (EVar "sited")) (fa "pcLowering" (EVar "lowering")) (fa "pcFieldOrders" (EApp (EVar "declaredRecordFieldOrders") (EVar "prog")))))) (EVar "emitPasses")) (EApp (EApp (EApp (EApp (EVar "lowerProgramWith") (EVar "facts")) (EVar "dispositions")) (EVar "pins")) (EVar "sited"))))))
 (DTypeSig false "emitDeclFacts" (TyFun (TyCon "ProgramFacts") (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyFun (TyApp (TyCon "Option") (TyCon "CoreSymbolOrigins")) (TyCon "DeclFacts")))))
 (DFunDef false "emitDeclFacts" ((PVar "facts") (PVar "decls") (PVar "symbols")) (EBlock (DoLet false false (PVar "reqs") (EApp (EVar "instanceReqCounts") (EVar "decls"))) (DoLet false false (PVar "table") (EApp (EApp (EVar "optionOr") (EVar "emptyDispositionTable")) (EFieldAccess (EVar "facts") "pfDispositions"))) (DoLet false false (PVar "words") (EApp (EVar "omKeys") (EApp (EApp (EVar "omFromNames") (EApp (EApp (EVar "map") (EVar "ifaceWordOfKey")) (EApp (EVar "omKeys") (EVar "reqs")))) (EVar "omEmpty")))) (DoExpr (ERecordCreate "DeclFacts" ((fa "factSymbolOrigins" (EVar "symbols")) (fa "factRequires" (EApp (EApp (EVar "map") (ELam ((PVar "k")) (ETuple (EVar "k") (EApp (EApp (EVar "optionOr") (ELit (LInt 0))) (EApp (EApp (EVar "omLookup") (EVar "k")) (EVar "reqs")))))) (EApp (EVar "omKeys") (EVar "reqs")))) (fa "factSupers" (EApp (EApp (EVar "map") (ELam ((PVar "w")) (ETuple (EVar "w") (EApp (EApp (EVar "ifaceSuperCount") (EVar "w")) (EVar "table"))))) (EVar "words"))) (fa "factBinders" (EListLit)) (fa "factMethodResults" (EApp (EVar "methodResultFacts") (EVar "decls"))) (fa "factEntryOutcome" (EApp (EVar "entryFact") (EVar "facts"))) (fa "factExterns" (EVar "omEmpty")) (fa "factManifests" (EFieldAccess (EVar "facts") "pfManifests")))))))
 (DTypeSig false "entryFact" (TyFun (TyCon "ProgramFacts") (TyApp (TyCon "Option") (TyCon "EntryFact"))))
@@ -4511,8 +4590,21 @@ nodeTag _ = "?"
 (DFunDef false "untypedRow" ((PVar "bid") (PVar "x") (PVar "site")) (ERecordCreate "BinderRow" ((fa "brId" (EVar "bid")) (fa "brName" (EVar "x")) (fa "brType" (EVar "RTValue")) (fa "brReturns" (EMatch (EVar "site") (arm (PCon "FunctionBinder" PWild) () (EApp (EVar "Some") (EVar "RTValue"))) (arm (PCon "PatternBinder" PWild) () (EVar "None")))) (fa "brSigned" (EVar "False")))))
 (DTypeSig false "cprogramCtorTypes" (TyFun (TyCon "CProgram") (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "String")))))
 (DFunDef false "cprogramCtorTypes" ((PCon "CProgram" PWild PWild (PVar "ctorTypes") PWild PWild PWild)) (EVar "ctorTypes"))
-(DTypeSig false "finishLowering" (TyFun (TyCon "Lowering") (TyFun (TyApp (TyCon "Option") (TyCon "BinderTypeTable")) (TyFun (TyCon "CProgram") (TyCon "CProgram")))))
-(DFunDef false "finishLowering" ((PVar "lowering") (PVar "table") (PVar "prog")) (EApp (EApp (EApp (EVar "stampBinders") (EVar "lowering")) (EVar "table")) (EApp (EVar "markTailSites") (EApp (EVar "stampCallModes") (EApp (EVar "etaSaturateProgram") (EVar "prog"))))))
+(DData Private "PassCtx" () ((variant "PassCtx" (ConNamed (field "pcFacts" (TyCon "ProgramFacts")) (field "pcDecls" (TyApp (TyCon "List") (TyCon "Decl"))) (field "pcSited" (TyApp (TyCon "List") (TyCon "Decl"))) (field "pcLowering" (TyCon "Lowering")) (field "pcFieldOrders" (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "String")))))))) ())
+(DTypeSig false "namedPass" (TyFun (TyCon "String") (TyFun (TyFun (TyCon "PassCtx") (TyFun (TyCon "CProgram") (TyCon "CProgram"))) (TyApp (TyCon "CorePass") (TyCon "PassCtx")))))
+(DFunDef false "namedPass" ((PVar "passName") (PVar "f")) (ERecordCreate "CorePass" ((fa "passName" (EVar "passName")) (fa "passRun" (EVar "f")))))
+(DTypeSig false "runLowering" (TyFun (TyCon "PassCtx") (TyFun (TyApp (TyCon "List") (TyApp (TyCon "CorePass") (TyCon "PassCtx"))) (TyFun (TyCon "CProgram") (TyCon "CProgram")))))
+(DFunDef false "runLowering" ((PVar "ctx") (PVar "passes") (PVar "start")) (EApp (EVar "programOrPanic") (EApp (EApp (EApp (EApp (EVar "runPasses") (EVar "defaultPassConfig")) (EVar "ctx")) (EVar "passes")) (EVar "start"))))
+(DTypeSig false "programOrPanic" (TyFun (TyCon "PassRun") (TyCon "CProgram")))
+(DFunDef false "programOrPanic" ((PVar "run")) (EMatch (EFieldAccess (EVar "run") "faults") (arm (PList) () (EFieldAccess (EVar "run") "program")) (arm (PCons (PVar "fault") PWild) () (EApp (EVar "panic") (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "core pass ")) (EApp (EVar "display") (EFieldAccess (EVar "fault") "faultPass"))) (ELit (LString ": "))) (EApp (EVar "display") (EFieldAccess (EVar "fault") "faultMessage"))) (ELit (LString "")))))))
+(DTypeSig false "untypedPasses" (TyApp (TyCon "List") (TyApp (TyCon "CorePass") (TyCon "PassCtx"))))
+(DFunDef false "untypedPasses" () (EBinOp "::" (EApp (EApp (EVar "namedPass") (ELit (LString "refold-lets"))) (ELam (PWild (PVar "p")) (EApp (EApp (EVar "refoldProgram") (EVar "noLetCheck")) (EVar "p")))) (EVar "finishPasses")))
+(DTypeSig false "typedPasses" (TyApp (TyCon "List") (TyApp (TyCon "CorePass") (TyCon "PassCtx"))))
+(DFunDef false "typedPasses" () (EVar "untypedPasses"))
+(DTypeSig false "emitPasses" (TyApp (TyCon "List") (TyApp (TyCon "CorePass") (TyCon "PassCtx"))))
+(DFunDef false "emitPasses" () (EBinOp "++" (EBinOp "++" (EListLit (EApp (EApp (EVar "namedPass") (ELit (LString "decl-facts"))) (ELam ((PVar "c") (PVar "p")) (EApp (EApp (EVar "withDeclFacts") (EApp (EApp (EApp (EVar "emitDeclFacts") (EFieldAccess (EVar "c") "pcFacts")) (EFieldAccess (EVar "c") "pcSited")) (EApp (EVar "cprogramSymbolOrigins") (EVar "p")))) (EVar "p")))) (EApp (EApp (EVar "namedPass") (ELit (LString "record-patterns"))) (ELam ((PVar "c") (PVar "p")) (EApp (EApp (EVar "rewriteProgramRecPats") (EFieldAccess (EVar "c") "pcFieldOrders")) (EVar "p")))) (EApp (EApp (EVar "namedPass") (ELit (LString "refold-lets"))) (ELam (PWild (PVar "p")) (EApp (EApp (EVar "refoldProgram") (EApp (EVar "patCanMiss") (EApp (EVar "siblingTable") (EApp (EVar "cprogramCtorTypes") (EVar "p"))))) (EVar "p")))) (EApp (EApp (EVar "namedPass") (ELit (LString "hoist-nullary-memo"))) (ELam (PWild (PVar "p")) (EApp (EVar "hoistNullaryMemo") (EVar "p"))))) (EVar "finishPasses")) (EListLit (EApp (EApp (EVar "namedPass") (ELit (LString "lower-externs"))) (ELam ((PVar "c") (PVar "p")) (EApp (EApp (EApp (EVar "lowerExterns") (EFieldAccess (EVar "c") "pcFacts")) (EFieldAccess (EVar "c") "pcDecls")) (EVar "p")))))))
+(DTypeSig false "finishPasses" (TyApp (TyCon "List") (TyApp (TyCon "CorePass") (TyCon "PassCtx"))))
+(DFunDef false "finishPasses" () (EListLit (EApp (EApp (EVar "namedPass") (ELit (LString "eta-saturate"))) (ELam (PWild (PVar "p")) (EApp (EVar "etaSaturateProgram") (EVar "p")))) (EApp (EApp (EVar "namedPass") (ELit (LString "call-modes"))) (ELam (PWild (PVar "p")) (EApp (EVar "stampCallModes") (EVar "p")))) (EApp (EApp (EVar "namedPass") (ELit (LString "tail-sites"))) (ELam (PWild (PVar "p")) (EApp (EVar "markTailSites") (EVar "p")))) (EApp (EApp (EVar "namedPass") (ELit (LString "binder-stamps"))) (ELam ((PVar "c") (PVar "p")) (EApp (EApp (EApp (EVar "stampBinders") (EFieldAccess (EVar "c") "pcLowering")) (EFieldAccess (EFieldAccess (EVar "c") "pcFacts") "pfBinders")) (EVar "p"))))))
 (DData Public "ArityEnv" () ((variant "ArityEnv" (ConPos (TyApp (TyCon "OrdMap") (TyCon "Int")) (TyApp (TyCon "OrdMap") (TyCon "Int")) (TyApp (TyCon "OrdMap") (TyCon "Int")) (TyApp (TyCon "OrdMap") (TyCon "Int"))))) ())
 (DTypeAlias true "CallScope" () (TyApp (TyCon "OrdMap") (TyApp (TyCon "Option") (TyCon "Int"))))
 (DTypeSig true "programArities" (TyFun (TyCon "CProgram") (TyCon "ArityEnv")))
@@ -5398,6 +5490,7 @@ nodeTag _ = "?"
 (DUse false (UseGroup ("support" "symbol_encoding") ((mem "encodePair" false))))
 (DUse false (UseGroup ("types" "symbol_origins") ((mem "SymbolOrigins" false) (mem "SymbolOrigin" true) (mem "CoreSymbolOrigins" true) (mem "originKey" false) (mem "functionOrigin" false) (mem "singleProgramOrigins" false))))
 (DUse false (UseGroup ("ir" "extern_lower") ((mem "lowerExterns" false))))
+(DUse false (UseGroup ("ir" "core_pass") ((mem "CorePass" true) (mem "PassConfig" false) (mem "PassRun" true) (mem "PassFault" true) (mem "defaultPassConfig" false) (mem "runPasses" false))))
 (DUse false (UseGroup ("frontend" "ast") ((mem "isWildPat" false) (mem "letBindName" false) (mem "noBinderId" false) (mem "BinderId" true) (mem "Lit" true) (mem "Loc" true) (mem "noDeclLoc" false) (mem "Pat" true) (mem "RecPatField" true) (mem "Expr" true) (mem "Arm" true) (mem "Guard" true) (mem "DoStmt" true) (mem "FieldAssign" true) (mem "LetBind" true) (mem "FunClause" true) (mem "Addr" true) (mem "Decl" true) (mem "ExternDecl" true) (mem "hostRows" false) (mem "Attr" true) (mem "Variant" true) (mem "ConPayload" true) (mem "Field" true) (mem "Ty" true) (mem "Constraint" true) (mem "IfaceMethod" true) (mem "MethodDefault" true) (mem "ImplMethod" true) (mem "Route" true) (mem "TyConOrigin" false) (mem "ifaceIdentity" false) (mem "defaultReceiverDict" false) (mem "patHasOr" false) (mem "orCandidates" false) (mem "paramCandidates" false) (mem "armCandidates" false) (mem "armHasOr" false))))
 (DUse false (UseGroup ("types" "route_key") ((mem "implRouteKeyWord" false) (mem "ifaceWordOf" false) (mem "evDictRoutesIn" false) (mem "evMethodRoutesIn" false) (mem "evSiteHeadIn" false) (mem "numIntWord" false) (mem "numFloatWord" false))))
 (DUse false (UseGroup ("ir" "core_ir") ((mem "CExpr" true) (mem "MethodEvidence" true) (mem "isGivenRooted" false) (mem "ifaceMethodArityKey" false) (mem "CArm" true) (mem "CGuard" true) (mem "CStmt" true) (mem "CField" true) (mem "CBind" true) (mem "CClause" true) (mem "CImplEntry" true) (mem "CImplBody" true) (mem "ImplSym" true) (mem "noImplSym" false) (mem "CProgram" true) (mem "DeclFacts" true) (mem "EntryFact" true) (mem "MethodResultFact" true) (mem "noDeclFacts" false) (mem "CallMode" true) (mem "CallSite" true) (mem "mkApp" false) (mem "leadingDictParams" false) (mem "CTree" true) (mem "CTBranch" true) (mem "CHead" true) (mem "FailSite" true) (mem "siteSentinelName" false) (mem "mapProgramBinders" false) (mem "BinderSite" true) (mem "obviousRuntimeType" false) (mem "withBinderRows" false))))
@@ -5737,9 +5830,9 @@ nodeTag _ = "?"
 (DFunDef false "lowerStmt" ((PVar "facts") (PCon "DoAssign" (PVar "x") (PVar "e"))) (EApp (EApp (EVar "CSAssign") (EVar "x")) (EApp (EApp (EVar "lower") (EVar "facts")) (EVar "e"))))
 (DFunDef false "lowerStmt" (PWild PWild) (EApp (EVar "panic") (ELit (LString "core_ir lower: unsupported block statement"))))
 (DTypeSig true "lowerProgramWithFacts" (TyFun (TyCon "ProgramFacts") (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyCon "CProgram"))))
-(DFunDef false "lowerProgramWithFacts" ((PVar "facts") (PVar "prog")) (EApp (EApp (EApp (EVar "finishLowering") (EVar "UntypedLowering")) (EFieldAccess (EVar "facts") "pfBinders")) (EApp (EApp (EVar "refoldProgram") (EVar "noLetCheck")) (EApp (EApp (EApp (EApp (EVar "lowerProgramWith") (EVar "facts")) (EVar "None")) (EListLit)) (EVar "prog")))))
+(DFunDef false "lowerProgramWithFacts" ((PVar "facts") (PVar "prog")) (EApp (EApp (EApp (EVar "runLowering") (ERecordCreate "PassCtx" ((fa "pcFacts" (EVar "facts")) (fa "pcDecls" (EVar "prog")) (fa "pcSited" (EVar "prog")) (fa "pcLowering" (EVar "UntypedLowering")) (fa "pcFieldOrders" (EListLit))))) (EVar "untypedPasses")) (EApp (EApp (EApp (EApp (EVar "lowerProgramWith") (EVar "facts")) (EVar "None")) (EListLit)) (EVar "prog"))))
 (DTypeSig true "lowerTypedProgramWith" (TyFun (TyCon "ProgramFacts") (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyCon "CProgram"))))
-(DFunDef false "lowerTypedProgramWith" ((PVar "facts") (PVar "prog")) (EBlock (DoLet false false (PVar "dispositions") (EApp (EApp (EVar "optionOrPanic") (ELit (LString "disposition table: no elaboration has published one"))) (EFieldAccess (EVar "facts") "pfDispositions"))) (DoExpr (EApp (EApp (EApp (EVar "finishLowering") (EVar "TypedLowering")) (EFieldAccess (EVar "facts") "pfBinders")) (EApp (EApp (EVar "refoldProgram") (EVar "noLetCheck")) (EApp (EApp (EApp (EApp (EVar "lowerProgramWith") (EVar "facts")) (EApp (EVar "Some") (EVar "dispositions"))) (EListLit)) (EVar "prog")))))))
+(DFunDef false "lowerTypedProgramWith" ((PVar "facts") (PVar "prog")) (EBlock (DoLet false false (PVar "dispositions") (EApp (EApp (EVar "optionOrPanic") (ELit (LString "disposition table: no elaboration has published one"))) (EFieldAccess (EVar "facts") "pfDispositions"))) (DoExpr (EApp (EApp (EApp (EVar "runLowering") (ERecordCreate "PassCtx" ((fa "pcFacts" (EVar "facts")) (fa "pcDecls" (EVar "prog")) (fa "pcSited" (EVar "prog")) (fa "pcLowering" (EVar "TypedLowering")) (fa "pcFieldOrders" (EListLit))))) (EVar "typedPasses")) (EApp (EApp (EApp (EApp (EVar "lowerProgramWith") (EVar "facts")) (EApp (EVar "Some") (EVar "dispositions"))) (EListLit)) (EVar "prog"))))))
 (DTypeSig false "lowerProgramWith" (TyFun (TyCon "ProgramFacts") (TyFun (TyApp (TyCon "Option") (TyCon "DispositionTable")) (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "String") (TyCon "String"))) (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyCon "CProgram"))))))
 (DFunDef false "lowerProgramWith" ((PVar "facts") (PVar "dispositions") (PVar "pins") (PVar "prog")) (EBlock (DoLet false false (PVar "origins") (EApp (EApp (EVar "originsFor") (EVar "facts")) (EVar "prog"))) (DoLet false false (PVar "groups") (EApp (EApp (EVar "lowerGroupsRaw") (EVar "facts")) (EVar "prog"))) (DoLet false false (PVar "ctorTypes") (EApp (EVar "buildCtorToType") (EVar "prog"))) (DoLet false false (PVar "symbols") (EApp (EApp (EApp (EVar "projectOrigins") (EVar "origins")) (EVar "groups")) (EVar "ctorTypes"))) (DoExpr (EApp (EApp (EVar "stampImplSymbols") (EVar "pins")) (EApp (EApp (EApp (EApp (EApp (EApp (EVar "CProgram") (EVar "groups")) (EApp (EVar "ctorArities") (EVar "prog"))) (EVar "ctorTypes")) (EApp (EApp (EApp (EApp (EApp (EApp (EVar "lowerImplsRaw") (EVar "facts")) (EApp (EVar "buildIfaceDispatch") (EVar "prog"))) (EApp (EVar "instanceReqCounts") (EVar "prog"))) (EApp (EVar "declaredMethodArities") (EVar "prog"))) (EVar "dispositions")) (EVar "prog"))) (EApp (EVar "methodContextSlotCounts") (EVar "prog"))) (ERecordUpdate (EVar "noDeclFacts") ((fa "factSymbolOrigins" (EApp (EVar "Some") (EVar "symbols"))))))))))
 (DTypeSig false "noLetCheck" (TyFun (TyCon "Pat") (TyCon "Bool")))
@@ -5822,7 +5915,9 @@ nodeTag _ = "?"
 (DTypeSig true "lowerProgramEmitWith" (TyFun (TyCon "ProgramFacts") (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyCon "CProgram"))))
 (DFunDef false "lowerProgramEmitWith" ((PVar "facts") (PVar "prog")) (EApp (EApp (EApp (EVar "lowerProgramEmitPinnedWith") (EVar "facts")) (EListLit)) (EVar "prog")))
 (DTypeSig true "lowerProgramEmitPinnedWith" (TyFun (TyCon "ProgramFacts") (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "String") (TyCon "String"))) (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyCon "CProgram")))))
-(DFunDef false "lowerProgramEmitPinnedWith" ((PVar "facts") (PVar "pins") (PVar "prog")) (EBlock (DoLet false false (PVar "sited") (EApp (EApp (EVar "siteTrapCalls") (EVar "facts")) (EVar "prog"))) (DoLet false false (PVar "dispositions") (EFieldAccess (EVar "facts") "pfDispositions")) (DoLet false false (PVar "lowered") (EApp (EApp (EApp (EApp (EVar "lowerProgramWith") (EVar "facts")) (EVar "dispositions")) (EVar "pins")) (EVar "sited"))) (DoLet false false (PVar "raw") (EApp (EApp (EVar "withDeclFacts") (EApp (EApp (EApp (EVar "emitDeclFacts") (EVar "facts")) (EVar "sited")) (EApp (EVar "cprogramSymbolOrigins") (EVar "lowered")))) (EVar "lowered"))) (DoLet false false (PVar "fo") (EApp (EVar "declaredRecordFieldOrders") (EVar "prog"))) (DoLet false false (PVar "lowering") (EMatch (EVar "dispositions") (arm (PCon "Some" PWild) () (EVar "TypedLowering")) (arm (PCon "None") () (EVar "UntypedLowering")))) (DoLet false false (PVar "rewritten") (EApp (EApp (EVar "rewriteProgramRecPats") (EVar "fo")) (EVar "raw"))) (DoExpr (EApp (EApp (EApp (EVar "lowerExterns") (EVar "facts")) (EVar "prog")) (EApp (EApp (EApp (EVar "finishLowering") (EVar "lowering")) (EFieldAccess (EVar "facts") "pfBinders")) (EApp (EVar "hoistNullaryMemo") (EApp (EApp (EVar "refoldProgram") (EApp (EVar "patCanMiss") (EApp (EVar "siblingTable") (EApp (EVar "cprogramCtorTypes") (EVar "raw"))))) (EVar "rewritten"))))))))
+(DFunDef false "lowerProgramEmitPinnedWith" ((PVar "facts") (PVar "pins") (PVar "prog")) (EApp (EVar "programOrPanic") (EApp (EApp (EApp (EApp (EVar "lowerProgramEmitConfigured") (EVar "defaultPassConfig")) (EVar "facts")) (EVar "pins")) (EVar "prog"))))
+(DTypeSig true "lowerProgramEmitConfigured" (TyFun (TyCon "PassConfig") (TyFun (TyCon "ProgramFacts") (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "String") (TyCon "String"))) (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyCon "PassRun"))))))
+(DFunDef false "lowerProgramEmitConfigured" ((PVar "config") (PVar "facts") (PVar "pins") (PVar "prog")) (EBlock (DoLet false false (PVar "sited") (EApp (EApp (EVar "siteTrapCalls") (EVar "facts")) (EVar "prog"))) (DoLet false false (PVar "dispositions") (EFieldAccess (EVar "facts") "pfDispositions")) (DoLet false false (PVar "lowering") (EMatch (EVar "dispositions") (arm (PCon "Some" PWild) () (EVar "TypedLowering")) (arm (PCon "None") () (EVar "UntypedLowering")))) (DoExpr (EApp (EApp (EApp (EApp (EVar "runPasses") (EVar "config")) (ERecordCreate "PassCtx" ((fa "pcFacts" (EVar "facts")) (fa "pcDecls" (EVar "prog")) (fa "pcSited" (EVar "sited")) (fa "pcLowering" (EVar "lowering")) (fa "pcFieldOrders" (EApp (EVar "declaredRecordFieldOrders") (EVar "prog")))))) (EVar "emitPasses")) (EApp (EApp (EApp (EApp (EVar "lowerProgramWith") (EVar "facts")) (EVar "dispositions")) (EVar "pins")) (EVar "sited"))))))
 (DTypeSig false "emitDeclFacts" (TyFun (TyCon "ProgramFacts") (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyFun (TyApp (TyCon "Option") (TyCon "CoreSymbolOrigins")) (TyCon "DeclFacts")))))
 (DFunDef false "emitDeclFacts" ((PVar "facts") (PVar "decls") (PVar "symbols")) (EBlock (DoLet false false (PVar "reqs") (EApp (EVar "instanceReqCounts") (EVar "decls"))) (DoLet false false (PVar "table") (EApp (EApp (EVar "optionOr") (EVar "emptyDispositionTable")) (EFieldAccess (EVar "facts") "pfDispositions"))) (DoLet false false (PVar "words") (EApp (EVar "omKeys") (EApp (EApp (EVar "omFromNames") (EApp (EApp (EMethodRef "map") (EVar "ifaceWordOfKey")) (EApp (EVar "omKeys") (EVar "reqs")))) (EVar "omEmpty")))) (DoExpr (ERecordCreate "DeclFacts" ((fa "factSymbolOrigins" (EVar "symbols")) (fa "factRequires" (EApp (EApp (EMethodRef "map") (ELam ((PVar "k")) (ETuple (EVar "k") (EApp (EApp (EVar "optionOr") (ELit (LInt 0))) (EApp (EApp (EVar "omLookup") (EVar "k")) (EVar "reqs")))))) (EApp (EVar "omKeys") (EVar "reqs")))) (fa "factSupers" (EApp (EApp (EMethodRef "map") (ELam ((PVar "w")) (ETuple (EVar "w") (EApp (EApp (EVar "ifaceSuperCount") (EVar "w")) (EVar "table"))))) (EVar "words"))) (fa "factBinders" (EListLit)) (fa "factMethodResults" (EApp (EVar "methodResultFacts") (EVar "decls"))) (fa "factEntryOutcome" (EApp (EVar "entryFact") (EVar "facts"))) (fa "factExterns" (EVar "omEmpty")) (fa "factManifests" (EFieldAccess (EVar "facts") "pfManifests")))))))
 (DTypeSig false "entryFact" (TyFun (TyCon "ProgramFacts") (TyApp (TyCon "Option") (TyCon "EntryFact"))))
@@ -5847,8 +5942,21 @@ nodeTag _ = "?"
 (DFunDef false "untypedRow" ((PVar "bid") (PVar "x") (PVar "site")) (ERecordCreate "BinderRow" ((fa "brId" (EVar "bid")) (fa "brName" (EVar "x")) (fa "brType" (EVar "RTValue")) (fa "brReturns" (EMatch (EVar "site") (arm (PCon "FunctionBinder" PWild) () (EApp (EVar "Some") (EVar "RTValue"))) (arm (PCon "PatternBinder" PWild) () (EVar "None")))) (fa "brSigned" (EVar "False")))))
 (DTypeSig false "cprogramCtorTypes" (TyFun (TyCon "CProgram") (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "String")))))
 (DFunDef false "cprogramCtorTypes" ((PCon "CProgram" PWild PWild (PVar "ctorTypes") PWild PWild PWild)) (EVar "ctorTypes"))
-(DTypeSig false "finishLowering" (TyFun (TyCon "Lowering") (TyFun (TyApp (TyCon "Option") (TyCon "BinderTypeTable")) (TyFun (TyCon "CProgram") (TyCon "CProgram")))))
-(DFunDef false "finishLowering" ((PVar "lowering") (PVar "table") (PVar "prog")) (EApp (EApp (EApp (EVar "stampBinders") (EVar "lowering")) (EVar "table")) (EApp (EVar "markTailSites") (EApp (EVar "stampCallModes") (EApp (EVar "etaSaturateProgram") (EVar "prog"))))))
+(DData Private "PassCtx" () ((variant "PassCtx" (ConNamed (field "pcFacts" (TyCon "ProgramFacts")) (field "pcDecls" (TyApp (TyCon "List") (TyCon "Decl"))) (field "pcSited" (TyApp (TyCon "List") (TyCon "Decl"))) (field "pcLowering" (TyCon "Lowering")) (field "pcFieldOrders" (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "String")))))))) ())
+(DTypeSig false "namedPass" (TyFun (TyCon "String") (TyFun (TyFun (TyCon "PassCtx") (TyFun (TyCon "CProgram") (TyCon "CProgram"))) (TyApp (TyCon "CorePass") (TyCon "PassCtx")))))
+(DFunDef false "namedPass" ((PVar "passName") (PVar "f")) (ERecordCreate "CorePass" ((fa "passName" (EVar "passName")) (fa "passRun" (EVar "f")))))
+(DTypeSig false "runLowering" (TyFun (TyCon "PassCtx") (TyFun (TyApp (TyCon "List") (TyApp (TyCon "CorePass") (TyCon "PassCtx"))) (TyFun (TyCon "CProgram") (TyCon "CProgram")))))
+(DFunDef false "runLowering" ((PVar "ctx") (PVar "passes") (PVar "start")) (EApp (EVar "programOrPanic") (EApp (EApp (EApp (EApp (EVar "runPasses") (EVar "defaultPassConfig")) (EVar "ctx")) (EVar "passes")) (EVar "start"))))
+(DTypeSig false "programOrPanic" (TyFun (TyCon "PassRun") (TyCon "CProgram")))
+(DFunDef false "programOrPanic" ((PVar "run")) (EMatch (EFieldAccess (EVar "run") "faults") (arm (PList) () (EFieldAccess (EVar "run") "program")) (arm (PCons (PVar "fault") PWild) () (EApp (EVar "panic") (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "core pass ")) (EApp (EMethodRef "display") (EFieldAccess (EVar "fault") "faultPass"))) (ELit (LString ": "))) (EApp (EMethodRef "display") (EFieldAccess (EVar "fault") "faultMessage"))) (ELit (LString "")))))))
+(DTypeSig false "untypedPasses" (TyApp (TyCon "List") (TyApp (TyCon "CorePass") (TyCon "PassCtx"))))
+(DFunDef false "untypedPasses" () (EBinOp "::" (EApp (EApp (EVar "namedPass") (ELit (LString "refold-lets"))) (ELam (PWild (PVar "p")) (EApp (EApp (EVar "refoldProgram") (EVar "noLetCheck")) (EVar "p")))) (EVar "finishPasses")))
+(DTypeSig false "typedPasses" (TyApp (TyCon "List") (TyApp (TyCon "CorePass") (TyCon "PassCtx"))))
+(DFunDef false "typedPasses" () (EVar "untypedPasses"))
+(DTypeSig false "emitPasses" (TyApp (TyCon "List") (TyApp (TyCon "CorePass") (TyCon "PassCtx"))))
+(DFunDef false "emitPasses" () (EBinOp "++" (EBinOp "++" (EListLit (EApp (EApp (EVar "namedPass") (ELit (LString "decl-facts"))) (ELam ((PVar "c") (PVar "p")) (EApp (EApp (EVar "withDeclFacts") (EApp (EApp (EApp (EVar "emitDeclFacts") (EFieldAccess (EVar "c") "pcFacts")) (EFieldAccess (EVar "c") "pcSited")) (EApp (EVar "cprogramSymbolOrigins") (EVar "p")))) (EVar "p")))) (EApp (EApp (EVar "namedPass") (ELit (LString "record-patterns"))) (ELam ((PVar "c") (PVar "p")) (EApp (EApp (EVar "rewriteProgramRecPats") (EFieldAccess (EVar "c") "pcFieldOrders")) (EVar "p")))) (EApp (EApp (EVar "namedPass") (ELit (LString "refold-lets"))) (ELam (PWild (PVar "p")) (EApp (EApp (EVar "refoldProgram") (EApp (EVar "patCanMiss") (EApp (EVar "siblingTable") (EApp (EVar "cprogramCtorTypes") (EVar "p"))))) (EVar "p")))) (EApp (EApp (EVar "namedPass") (ELit (LString "hoist-nullary-memo"))) (ELam (PWild (PVar "p")) (EApp (EVar "hoistNullaryMemo") (EVar "p"))))) (EVar "finishPasses")) (EListLit (EApp (EApp (EVar "namedPass") (ELit (LString "lower-externs"))) (ELam ((PVar "c") (PVar "p")) (EApp (EApp (EApp (EVar "lowerExterns") (EFieldAccess (EVar "c") "pcFacts")) (EFieldAccess (EVar "c") "pcDecls")) (EVar "p")))))))
+(DTypeSig false "finishPasses" (TyApp (TyCon "List") (TyApp (TyCon "CorePass") (TyCon "PassCtx"))))
+(DFunDef false "finishPasses" () (EListLit (EApp (EApp (EVar "namedPass") (ELit (LString "eta-saturate"))) (ELam (PWild (PVar "p")) (EApp (EVar "etaSaturateProgram") (EVar "p")))) (EApp (EApp (EVar "namedPass") (ELit (LString "call-modes"))) (ELam (PWild (PVar "p")) (EApp (EVar "stampCallModes") (EVar "p")))) (EApp (EApp (EVar "namedPass") (ELit (LString "tail-sites"))) (ELam (PWild (PVar "p")) (EApp (EVar "markTailSites") (EVar "p")))) (EApp (EApp (EVar "namedPass") (ELit (LString "binder-stamps"))) (ELam ((PVar "c") (PVar "p")) (EApp (EApp (EApp (EVar "stampBinders") (EFieldAccess (EVar "c") "pcLowering")) (EFieldAccess (EFieldAccess (EVar "c") "pcFacts") "pfBinders")) (EVar "p"))))))
 (DData Public "ArityEnv" () ((variant "ArityEnv" (ConPos (TyApp (TyCon "OrdMap") (TyCon "Int")) (TyApp (TyCon "OrdMap") (TyCon "Int")) (TyApp (TyCon "OrdMap") (TyCon "Int")) (TyApp (TyCon "OrdMap") (TyCon "Int"))))) ())
 (DTypeAlias true "CallScope" () (TyApp (TyCon "OrdMap") (TyApp (TyCon "Option") (TyCon "Int"))))
 (DTypeSig true "programArities" (TyFun (TyCon "CProgram") (TyCon "ArityEnv")))
