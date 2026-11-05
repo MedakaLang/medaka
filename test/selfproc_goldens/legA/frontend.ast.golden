@@ -36,6 +36,8 @@ firstTyLocList : List Ty -> Option Loc
 fixedWidthMask : String -> Option Int
 guardCandidates : List Guard -> List (List Guard)
 guardHasOr : Guard -> Bool
+hasFoldable : List Decl -> Bool
+hasOrdering : List Decl -> Bool
 hostRows : String -> List (String, (List (String, String), a)) -> List (String, (String, a))
 hostSymbol : String -> List (String, String) -> Option String
 identOriginBuiltin : IdentOrigin
@@ -53,6 +55,7 @@ isFixedWidthHead : String -> Bool
 isHint : String -> Bool
 isI32Head : String -> Bool
 isI64Head : String -> Bool
+isPreludeSpelling : String -> String -> Bool
 isTaggedFixedHead : String -> Bool
 isU64Head : String -> Bool
 isUnminted : EvId -> Bool
@@ -111,6 +114,9 @@ patBoundNames : Pat -> List String
 patHasAnnot : Pat -> Bool
 patHasOr : Pat -> Bool
 patternMark : Bool -> String
+preludeAlias : String
+preludeQualified : String -> String
+programIsCore : List Decl -> Bool
 propParamName : PropParam -> String
 qualifiedLocal : String -> String -> String
 qualifierSource : (String -> String) -> List EffParamTy -> String

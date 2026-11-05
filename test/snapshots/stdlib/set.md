@@ -761,6 +761,7 @@ prop "link2 rejoins a split without its element" (x : Int) (xs : List Int) =
   let rebuilt = link2 below above
   wellFormed rebuilt && eq (toList rebuilt) (toList (delete x (fromList xs)))
 # DESUGAR
+(DUse false (UseAlias ("core") "$core"))
 (DUse false (UseGroup ("core") ((mem "Ordering" true) (mem "Ord" false) (mem "Debug" false) (mem "Display" false) (mem "Foldable" false) (mem "Semigroup" false) (mem "Monoid" false) (mem "Option" false) (mem "FromEntries" false))))
 (DUse false (UseGroup ("list") ((mem "intersperse" false) (mem "sort" false) (mem "sortBy" false))))
 (DData Public "Set" ("a") ((variant "Tip" (ConPos)) (variant "Bin" (ConPos (TyCon "Int") (TyVar "a") (TyApp (TyCon "Set") (TyVar "a")) (TyApp (TyCon "Set") (TyVar "a"))))) ())
@@ -898,10 +899,10 @@ prop "link2 rejoins a split without its element" (x : Int) (xs : List Int) =
 (DImpl true "Foldable" ((TyCon "Set")) () ((im "fold" ((PVar "f") (PVar "z") (PVar "s")) (EApp (EApp (EApp (EVar "foldlSet") (EVar "f")) (EVar "z")) (EVar "s"))) (im "foldRight" ((PVar "f") (PVar "z") (PVar "s")) (EApp (EApp (EApp (EVar "foldrSet") (EVar "f")) (EVar "z")) (EVar "s"))) (im "toList" ((PVar "s")) (EApp (EApp (EVar "elementsOnto") (EVar "s")) (EListLit))) (im "isEmpty" ((PCon "Tip")) (EVar "True")) (im "isEmpty" (PWild) (EVar "False")) (im "length" ((PVar "s")) (EApp (EVar "size") (EVar "s")))))
 (DImpl true "Eq" ((TyApp (TyCon "Set") (TyVar "a"))) ((req "Eq" ((TyVar "a")))) ((im "eq" ((PVar "a") (PVar "b")) (EIf (EBinOp "/=" (EApp (EVar "size") (EVar "a")) (EApp (EVar "size") (EVar "b"))) (EVar "False") (EApp (EApp (EVar "eq") (EApp (EVar "toList") (EVar "a"))) (EApp (EVar "toList") (EVar "b")))))))
 (DImpl true "Ord" ((TyApp (TyCon "Set") (TyVar "a"))) ((req "Ord" ((TyVar "a")))) ((im "compare" ((PVar "a") (PVar "b")) (EApp (EApp (EVar "compare") (EApp (EVar "toList") (EVar "a"))) (EApp (EVar "toList") (EVar "b"))))))
-(DImpl true "Debug" ((TyApp (TyCon "Set") (TyVar "a"))) ((req "Debug" ((TyVar "a")))) ((im "debug" ((PVar "s")) (EBinOp "++" (EBinOp "++" (ELit (LString "fromList ")) (EApp (EVar "display") (EApp (EVar "debug") (EApp (EVar "toList") (EVar "s"))))) (ELit (LString ""))))))
+(DImpl true "Debug" ((TyApp (TyCon "Set") (TyVar "a"))) ((req "Debug" ((TyVar "a")))) ((im "debug" ((PVar "s")) (EBinOp "++" (EBinOp "++" (ELit (LString "fromList ")) (EApp (EVar "$core.display") (EApp (EVar "debug") (EApp (EVar "toList") (EVar "s"))))) (ELit (LString ""))))))
 (DTypeSig false "displaySetItems" (TyConstrained ((cstr "Display" (TyVar "a"))) (TyFun (TyApp (TyCon "List") (TyVar "a")) (TyCon "String"))))
 (DFunDef false "displaySetItems" ((PVar "xs")) (EApp (EVar "stringConcat") (EApp (EApp (EVar "intersperse") (ELit (LString ", "))) (EApp (EApp (EVar "map") (EVar "display")) (EVar "xs")))))
-(DImpl true "Display" ((TyApp (TyCon "Set") (TyVar "a"))) ((req "Display" ((TyVar "a")))) ((im "display" ((PVar "s")) (EMatch (EApp (EVar "toList") (EVar "s")) (arm (PList) () (ELit (LString "Set {}"))) (arm (PVar "xs") () (EBinOp "++" (EBinOp "++" (ELit (LString "Set { ")) (EApp (EVar "display") (EApp (EVar "displaySetItems") (EVar "xs")))) (ELit (LString " }"))))))))
+(DImpl true "Display" ((TyApp (TyCon "Set") (TyVar "a"))) ((req "Display" ((TyVar "a")))) ((im "display" ((PVar "s")) (EMatch (EApp (EVar "toList") (EVar "s")) (arm (PList) () (ELit (LString "Set {}"))) (arm (PVar "xs") () (EBinOp "++" (EBinOp "++" (ELit (LString "Set { ")) (EApp (EVar "$core.display") (EApp (EVar "displaySetItems") (EVar "xs")))) (ELit (LString " }"))))))))
 (DImpl true "Semigroup" ((TyApp (TyCon "Set") (TyVar "a"))) ((req "Ord" ((TyVar "a")))) ((im "append" ((PVar "a") (PVar "b")) (EApp (EApp (EVar "union") (EVar "a")) (EVar "b")))))
 (DImpl true "FromEntries" ((TyApp (TyCon "Set") (TyVar "a")) (TyVar "a")) ((req "Ord" ((TyVar "a")))) ((im "fromEntries" ((PVar "es")) (EApp (EVar "fromList") (EVar "es")))))
 (DImpl true "Monoid" ((TyApp (TyCon "Set") (TyVar "a"))) ((req "Ord" ((TyVar "a")))) ((im "empty" () (EVar "Tip"))))

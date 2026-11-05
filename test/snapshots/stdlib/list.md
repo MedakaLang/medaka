@@ -1353,6 +1353,7 @@ prop "elemIndices agrees with the plain findIndices reference on [] and singleto
     && eq (elemIndices k [k]) [0]
     && eq (elemIndices k xs) (findIndicesRef (== k) xs)
 # DESUGAR
+(DUse false (UseAlias ("core") "$core"))
 (DUse false (UseGroup ("core") ((mem "Ordering" true) (mem "Ord" false) (mem "Debug" false) (mem "Option" false) (mem "Result" false))))
 (DUse true (UseGroup ("core") ((mem "Filterable" false) (mem "filter" false) (mem "filterMap" false))))
 (DTypeSig true "singleton" (TyFun (TyVar "a") (TyApp (TyCon "List") (TyVar "a"))))
@@ -1527,8 +1528,8 @@ prop "elemIndices agrees with the plain findIndices reference on [] and singleto
 (DTypeSig true "sort" (TyConstrained ((cstr "Ord" (TyVar "a"))) (TyFun (TyApp (TyCon "List") (TyVar "a")) (TyApp (TyCon "List") (TyVar "a")))))
 (DFunDef false "sort" ((PVar "xs")) (EApp (EApp (EVar "sortBy") (EVar "compare")) (EVar "xs")))
 (DData Public "Down" ("a") ((variant "Down" (ConPos (TyVar "a")))) ())
-(DImpl true "Eq" ((TyApp (TyCon "Down") (TyVar "a"))) ((req "Eq" ((TyVar "a")))) ((im "eq" ((PVar "__x") (PVar "__y")) (EMatch (ETuple (EVar "__x") (EVar "__y")) (arm (PTuple (PCon "Down" (PVar "__a0")) (PCon "Down" (PVar "__b0"))) () (EApp (EApp (EVar "eq") (EVar "__a0")) (EVar "__b0")))))))
-(DImpl true "Debug" ((TyApp (TyCon "Down") (TyVar "a"))) ((req "Debug" ((TyVar "a")))) ((im "debug" ((PVar "__x")) (EMatch (EVar "__x") (arm (PCon "Down" (PVar "__a0")) () (EBinOp "++" (ELit (LString "Down ")) (EApp (EVar "derivedShowWrap") (EApp (EVar "debug") (EVar "__a0")))))))))
+(DImpl true "Eq" ((TyApp (TyCon "Down") (TyVar "a"))) ((req "Eq" ((TyVar "a")))) ((im "eq" ((PVar "__x") (PVar "__y")) (EMatch (ETuple (EVar "__x") (EVar "__y")) (arm (PTuple (PCon "Down" (PVar "__a0")) (PCon "Down" (PVar "__b0"))) () (EApp (EApp (EVar "$core.eq") (EVar "__a0")) (EVar "__b0")))))))
+(DImpl true "Debug" ((TyApp (TyCon "Down") (TyVar "a"))) ((req "Debug" ((TyVar "a")))) ((im "debug" ((PVar "__x")) (EMatch (EVar "__x") (arm (PCon "Down" (PVar "__a0")) () (EBinOp "++" (ELit (LString "Down ")) (EApp (EVar "$core.derivedShowWrap") (EApp (EVar "$core.debug") (EVar "__a0")))))))))
 (DImpl true "Ord" ((TyApp (TyCon "Down") (TyVar "a"))) ((req "Ord" ((TyVar "a")))) ((im "compare" ((PCon "Down" (PVar "a")) (PCon "Down" (PVar "b"))) (EApp (EApp (EVar "compare") (EVar "b")) (EVar "a")))))
 (DTypeSig true "sortOn" (TyConstrained ((cstr "Ord" (TyVar "b"))) (TyFun (TyFun (TyVar "a") (TyEffect () (Some "e") (TyVar "b"))) (TyFun (TyApp (TyCon "List") (TyVar "a")) (TyEffect () (Some "e") (TyApp (TyCon "List") (TyVar "a")))))))
 (DFunDef false "sortOn" ((PVar "key") (PVar "xs")) (EBlock (DoLet false false (PVar "decorated") (EApp (EApp (EVar "map") (ELam ((PVar "x")) (ETuple (EApp (EVar "key") (EVar "x")) (EVar "x")))) (EVar "xs"))) (DoExpr (EApp (EApp (EVar "map") (EVar "snd")) (EApp (EApp (EVar "sortBy") (ELam ((PTuple (PVar "k1") PWild) (PTuple (PVar "k2") PWild)) (EApp (EApp (EVar "compare") (EVar "k1")) (EVar "k2")))) (EVar "decorated"))))))

@@ -59,12 +59,13 @@ export
 mkDiag : Severity -> DiagCode -> String -> Option Loc -> Diag
 mkDiag sev code msg loc = Diag sev (Coded code) msg loc None None
 # DESUGAR
+(DUse false (UseAlias ("core") "$core"))
 (DUse false (UseGroup ("frontend" "ast") ((mem "Loc" false))))
 (DUse false (UseGroup ("support" "diag_codes") ((mem "DiagCode" false) (mem "DiagKind" true) (mem "codeKind" false) (mem "codeText" false) (mem "kindText" false))))
 (DData Public "Severity" () ((variant "SevError" (ConPos)) (variant "SevWarning" (ConPos))) ())
 (DData Public "Fix" () ((variant "Fix" (ConPos (TyCon "Loc") (TyCon "String"))) (variant "FixEdits" (ConPos (TyCon "String") (TyApp (TyCon "List") (TyTuple (TyCon "Loc") (TyCon "String")))))) ())
 (DData Public "DiagId" () ((variant "Coded" (ConPos (TyCon "DiagCode"))) (variant "LintRule" (ConPos (TyCon "String")))) ())
-(DImpl true "Eq" ((TyCon "DiagId")) () ((im "eq" ((PVar "__x") (PVar "__y")) (EMatch (ETuple (EVar "__x") (EVar "__y")) (arm (PTuple (PCon "Coded" (PVar "__a0")) (PCon "Coded" (PVar "__b0"))) () (EApp (EApp (EVar "eq") (EVar "__a0")) (EVar "__b0"))) (arm (PTuple (PCon "LintRule" (PVar "__a0")) (PCon "LintRule" (PVar "__b0"))) () (EApp (EApp (EVar "eq") (EVar "__a0")) (EVar "__b0"))) (arm (PTuple PWild PWild) () (EVar "False"))))))
+(DImpl true "Eq" ((TyCon "DiagId")) () ((im "eq" ((PVar "__x") (PVar "__y")) (EMatch (ETuple (EVar "__x") (EVar "__y")) (arm (PTuple (PCon "Coded" (PVar "__a0")) (PCon "Coded" (PVar "__b0"))) () (EApp (EApp (EVar "$core.eq") (EVar "__a0")) (EVar "__b0"))) (arm (PTuple (PCon "LintRule" (PVar "__a0")) (PCon "LintRule" (PVar "__b0"))) () (EApp (EApp (EVar "$core.eq") (EVar "__a0")) (EVar "__b0"))) (arm (PTuple PWild PWild) () (EVar "False"))))))
 (DData Public "Diag" () ((variant "Diag" (ConPos (TyCon "Severity") (TyCon "DiagId") (TyCon "String") (TyApp (TyCon "Option") (TyCon "Loc")) (TyApp (TyCon "Option") (TyCon "String")) (TyApp (TyCon "Option") (TyCon "Fix"))))) ())
 (DTypeSig true "diagIdText" (TyFun (TyCon "DiagId") (TyCon "String")))
 (DFunDef false "diagIdText" ((PCon "Coded" (PVar "c"))) (EApp (EVar "codeText") (EVar "c")))

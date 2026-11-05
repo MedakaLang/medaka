@@ -8,7 +8,7 @@ import types.effect_authority.{Authority(..), authIsTop}
 import types.repr.{Mono(..), ppAuthority}
 import frontend.ast.{
   noBinderId, Expr(..), Lit(..), Pat(..), DoStmt(..), Loc(..), TyConOrigin(..),
-  unminted
+  unminted, preludeQualified
 }
 import support.util.{listLen}
 
@@ -47,7 +47,11 @@ interp [] = str ""
 interp (first :: rest) = fold cat first rest
 
 part : Expr -> Expr
-part e = EApp (EVar "display") e
+part e = EApp (EVar (preludeQualified "display")) e
+
+-- A `display` call the program writes itself, which a binding can shadow.
+written : Expr -> Expr
+written e = EApp (EVar "display") e
 
 str : String -> Expr
 str s = ELit (LString s)
@@ -114,8 +118,8 @@ test "an interpolated part reads as its operand written directly" =
     expectEqual "top" (known (interp [str "", part leaf, part dir, str ""])),
   ]
 
-test "an interpolated part is top unless display is the prelude method" =
-  let dirPath = interp [str "", part (EVar "dir"), str "/x"]
+test "a written display call is top unless display is the prelude method" =
+  let dirPath = interp [str "", written (EVar "dir"), str "/x"]
   expectAll [
     expectEqual "top" (alphaPrefixWith False qualifiedNames dirPath),
     expectEqual
@@ -123,9 +127,21 @@ test "an interpolated part is top unless display is the prelude method" =
       (alphaPrefixWith
         False
         (_ => None)
-        (interp [str "data/", part (str "x"), str ""])),
+        (interp [str "data/", written (str "x"), str ""])),
     expectEqual
       "top"
+      (alphaPrefixWith
+        True
+        qualifiedNames
+        (ELet at False (PVar "display" at noBinderId) (EVar "f") dirPath)),
+  ]
+
+test "an interpolated part is the prelude's display whatever display is bound" =
+  let dirPath = interp [str "", part (EVar "dir"), str "/x"]
+  expectAll [
+    expectEqual "\"data/*\"" (alphaPrefixWith False qualifiedNames dirPath),
+    expectEqual
+      "\"data/*\""
       (alphaPrefixWith
         True
         qualifiedNames

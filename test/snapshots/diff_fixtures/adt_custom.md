@@ -142,8 +142,9 @@ NEWLINE
 NEWLINE
 EOF
 # DESUGAR
+(DUse false (UseAlias ("core") "$core"))
 (DData Private "Shape" () ((variant "Circle" (ConPos (TyCon "Int"))) (variant "Rect" (ConPos (TyCon "Int") (TyCon "Int")))) ())
-(DImpl true "Display" ((TyCon "Shape")) () ((im "display" ((PVar "__x")) (EMatch (EVar "__x") (arm (PCon "Circle" (PVar "__a0")) () (EBinOp "++" (ELit (LString "Circle ")) (EApp (EVar "derivedShowWrap") (EApp (EVar "display") (EVar "__a0"))))) (arm (PCon "Rect" (PVar "__a0") (PVar "__a1")) () (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "Rect ")) (EApp (EVar "derivedShowWrap") (EApp (EVar "display") (EVar "__a0")))) (ELit (LString " "))) (EApp (EVar "derivedShowWrap") (EApp (EVar "display") (EVar "__a1")))))))))
+(DImpl true "Display" ((TyCon "Shape")) () ((im "display" ((PVar "__x")) (EMatch (EVar "__x") (arm (PCon "Circle" (PVar "__a0")) () (EBinOp "++" (ELit (LString "Circle ")) (EApp (EVar "$core.derivedShowWrap") (EApp (EVar "$core.display") (EVar "__a0"))))) (arm (PCon "Rect" (PVar "__a0") (PVar "__a1")) () (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "Rect ")) (EApp (EVar "$core.derivedShowWrap") (EApp (EVar "$core.display") (EVar "__a0")))) (ELit (LString " "))) (EApp (EVar "$core.derivedShowWrap") (EApp (EVar "$core.display") (EVar "__a1")))))))))
 (DFunDef false "area" ((PVar "s")) (EMatch (EVar "s") (arm (PCon "Circle" (PVar "r")) () (EBinOp "*" (EVar "r") (EVar "r"))) (arm (PCon "Rect" (PVar "w") (PVar "h")) () (EBinOp "*" (EVar "w") (EVar "h")))))
 (DFunDef false "perimeter" ((PVar "s")) (EMatch (EVar "s") (arm (PCon "Circle" (PVar "r")) () (EBinOp "*" (ELit (LInt 2)) (EVar "r"))) (arm (PCon "Rect" (PVar "w") (PVar "h")) () (EBinOp "*" (ELit (LInt 2)) (EBinOp "+" (EVar "w") (EVar "h"))))))
 (DTypeSig false "main" (TyEffect ("IO") None (TyCon "Unit")))

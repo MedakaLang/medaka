@@ -2122,7 +2122,7 @@ singleRootId roots target =
 -- equivalent return-position dict-set via its own `moduleDictNames`.  The
 -- `medaka test stdlib/core.mdk` canary guards the neq-hang.
 
--- Mirror of compiler/frontend/resolve.mdk's
+-- Mirror of compiler/frontend/ast.mdk's
 -- programIsCore: the prelude is the unique program declaring BOTH the
 -- `Ordering` data type and the `Foldable` interface.
 programIsCore : List Decl -> Bool

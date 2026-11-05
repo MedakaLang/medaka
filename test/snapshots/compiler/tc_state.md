@@ -1102,6 +1102,7 @@ mintGraphCtx inputs admitted =
   noteInterners gctx
   gctx
 # DESUGAR
+(DUse false (UseAlias ("core") "$core"))
 (DUse false (UseGroup ("types" "tc_mono") ((mem "locEq" false) (mem "monoScheme" false) (mem "tconBuiltin" false))))
 (DUse false (UseGroup ("frontend" "ast") ((mem "Decl" true) (mem "Loc" true) (mem "TyConOrigin" true) (mem "defaultReceiverDict" false))))
 (DUse false (UseGroup ("types" "repr") ((mem "IfaceRef" true) (mem "Scheme" true))))
@@ -1234,7 +1235,7 @@ mintGraphCtx inputs admitted =
 (DTypeSig true "emptyBuiltinClasses" (TyCon "BuiltinClasses"))
 (DFunDef false "emptyBuiltinClasses" () (ERecordCreate "BuiltinClasses" ((fa "bcNum" (EVar "OriginUnresolved")) (fa "bcEq" (EVar "OriginUnresolved")) (fa "bcOrd" (EVar "OriginUnresolved")) (fa "bcSemigroup" (EVar "OriginUnresolved")) (fa "bcNumPresent" (EVar "False")) (fa "bcEqPresent" (EVar "False")) (fa "bcOrdPresent" (EVar "False")) (fa "bcSemigroupPresent" (EVar "False")) (fa "bcPreludeSeeded" (EVar "False")))))
 (DTypeSig true "dictParamName" (TyFun (TyCon "String") (TyFun (TyCon "Int") (TyCon "String"))))
-(DFunDef false "dictParamName" ((PVar "fn") (PVar "slot")) (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "$dict_")) (EApp (EVar "display") (EVar "fn"))) (ELit (LString "_"))) (EApp (EVar "display") (EApp (EVar "intToString") (EVar "slot")))) (ELit (LString ""))))
+(DFunDef false "dictParamName" ((PVar "fn") (PVar "slot")) (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "$dict_")) (EApp (EVar "$core.display") (EVar "fn"))) (ELit (LString "_"))) (EApp (EVar "$core.display") (EApp (EVar "intToString") (EVar "slot")))) (ELit (LString ""))))
 (DTypeSig true "defaultReceiverOrdinal" (TyCon "Int"))
 (DFunDef false "defaultReceiverOrdinal" () (EUnOp "-" (ELit (LInt 1))))
 (DTypeSig true "emptyImplUniverse" (TyCon "ImplUniverse"))

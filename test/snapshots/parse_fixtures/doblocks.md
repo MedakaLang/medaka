@@ -26,8 +26,9 @@ chained m = do
   b <- f a
   g b
 # DESUGAR
-(DFunDef false "combine" ((PVar "m") (PVar "n")) (EApp (EApp (EVar "andThen") (EVar "m")) (ELam ((PVar "x")) (EApp (EApp (EVar "andThen") (EVar "n")) (ELam ((PVar "y")) (EApp (EVar "pure") (EBinOp "+" (EVar "x") (EVar "y"))))))))
-(DFunDef false "chained" ((PVar "m")) (EApp (EApp (EVar "andThen") (EVar "m")) (ELam ((PVar "a")) (EApp (EApp (EVar "andThen") (EApp (EVar "f") (EVar "a"))) (ELam ((PVar "b")) (EApp (EVar "g") (EVar "b")))))))
+(DUse false (UseAlias ("core") "$core"))
+(DFunDef false "combine" ((PVar "m") (PVar "n")) (EApp (EApp (EVar "$core.andThen") (EVar "m")) (ELam ((PVar "x")) (EApp (EApp (EVar "$core.andThen") (EVar "n")) (ELam ((PVar "y")) (EApp (EVar "pure") (EBinOp "+" (EVar "x") (EVar "y"))))))))
+(DFunDef false "chained" ((PVar "m")) (EApp (EApp (EVar "$core.andThen") (EVar "m")) (ELam ((PVar "a")) (EApp (EApp (EVar "$core.andThen") (EApp (EVar "f") (EVar "a"))) (ELam ((PVar "b")) (EApp (EVar "g") (EVar "b")))))))
 # MARK
 (DFunDef false "combine" ((PVar "m") (PVar "n")) (EApp (EApp (EMethodRef "andThen") (EVar "m")) (ELam ((PVar "x")) (EApp (EApp (EMethodRef "andThen") (EVar "n")) (ELam ((PVar "y")) (EApp (EMethodRef "pure") (EBinOp "+" (EVar "x") (EVar "y"))))))))
 (DFunDef false "chained" ((PVar "m")) (EApp (EApp (EMethodRef "andThen") (EVar "m")) (ELam ((PVar "a")) (EApp (EApp (EMethodRef "andThen") (EApp (EVar "f") (EVar "a"))) (ELam ((PVar "b")) (EApp (EVar "g") (EVar "b")))))))

@@ -68,9 +68,10 @@ NEWLINE
 NEWLINE
 EOF
 # DESUGAR
+(DUse false (UseAlias ("core") "$core"))
 (DFunDef false "inline" () (ELit (LString "one \"quoted\" line")))
 (DFunDef false "block" () (ELit (LString "first\n  indented\nlast\n")))
-(DFunDef false "interp" ((PVar "name")) (EBinOp "++" (EBinOp "++" (ELit (LString "Hello, ")) (EApp (EVar "display") (EVar "name"))) (ELit (LString "!\nBye.\n"))))
+(DFunDef false "interp" ((PVar "name")) (EBinOp "++" (EBinOp "++" (ELit (LString "Hello, ")) (EApp (EVar "$core.display") (EVar "name"))) (ELit (LString "!\nBye.\n"))))
 (DTypeSig false "main" (TyEffect ("IO") None (TyCon "Unit")))
 (DFunDef false "main" () (EBlock (DoExpr (EApp (EVar "println") (EVar "inline"))) (DoExpr (EApp (EVar "println") (EVar "block"))) (DoExpr (EApp (EVar "println") (EApp (EVar "interp") (ELit (LString "Medaka")))))))
 # MARK

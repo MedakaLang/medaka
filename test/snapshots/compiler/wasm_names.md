@@ -178,6 +178,7 @@ ubGuards sc ((CGBind p e) :: rest) =
   let (rest2, sc2) = ubGuards (ubExtend sc [p]) rest
   (CGBind (ubPat sc p) (ubExpr sc e) :: rest2, sc2)
 # DESUGAR
+(DUse false (UseAlias ("core") "$core"))
 (DUse false (UseGroup ("frontend" "ast") ((mem "Pat" true))))
 (DUse false (UseGroup ("ir" "core_ir") ((mem "CProgram" true) (mem "CBind" true) (mem "CClause" true) (mem "CExpr" true) (mem "CImplEntry" true) (mem "CImplBody" true) (mem "CField" true) (mem "CStmt" true) (mem "CArm" true) (mem "CGuard" true))))
 (DUse false (UseGroup ("backend" "trmc_analysis") ((mem "patVars" false) (mem "bindName" false))))
@@ -191,9 +192,9 @@ ubGuards sc ((CGBind p e) :: rest) =
 (DTypeSig false "ubShadowable" (TyFun (TyCon "String") (TyCon "Bool")))
 (DFunDef false "ubShadowable" ((PVar "x")) (EApp (EVar "not") (EApp (EApp (EVar "startsWith") (ELit (LString "$"))) (EVar "x"))))
 (DTypeSig false "ubNew" (TyFun (TyApp (TyCon "OrdMap") (TyCon "Int")) (TyFun (TyCon "String") (TyCon "String"))))
-(DFunDef false "ubNew" ((PVar "sc") (PVar "x")) (EMatch (EApp (EApp (EVar "omLookup") (EVar "x")) (EVar "sc")) (arm (PCon "Some" (PVar "n")) () (EIf (EApp (EVar "ubShadowable") (EVar "x")) (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "")) (EApp (EVar "display") (EVar "x"))) (ELit (LString "$"))) (EApp (EVar "display") (EApp (EVar "intToString") (EVar "n")))) (ELit (LString ""))) (EVar "x"))) (arm (PCon "None") () (EVar "x"))))
+(DFunDef false "ubNew" ((PVar "sc") (PVar "x")) (EMatch (EApp (EApp (EVar "omLookup") (EVar "x")) (EVar "sc")) (arm (PCon "Some" (PVar "n")) () (EIf (EApp (EVar "ubShadowable") (EVar "x")) (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "")) (EApp (EVar "$core.display") (EVar "x"))) (ELit (LString "$"))) (EApp (EVar "$core.display") (EApp (EVar "intToString") (EVar "n")))) (ELit (LString ""))) (EVar "x"))) (arm (PCon "None") () (EVar "x"))))
 (DTypeSig false "ubRef" (TyFun (TyApp (TyCon "OrdMap") (TyCon "Int")) (TyFun (TyCon "String") (TyCon "String"))))
-(DFunDef false "ubRef" ((PVar "sc") (PVar "x")) (EMatch (EApp (EApp (EVar "omLookup") (EVar "x")) (EVar "sc")) (arm (PCon "Some" (PVar "n")) () (EIf (EBinOp ">" (EVar "n") (ELit (LInt 1))) (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "")) (EApp (EVar "display") (EVar "x"))) (ELit (LString "$"))) (EApp (EVar "display") (EApp (EVar "intToString") (EBinOp "-" (EVar "n") (ELit (LInt 1)))))) (ELit (LString ""))) (EVar "x"))) (arm (PCon "None") () (EVar "x"))))
+(DFunDef false "ubRef" ((PVar "sc") (PVar "x")) (EMatch (EApp (EApp (EVar "omLookup") (EVar "x")) (EVar "sc")) (arm (PCon "Some" (PVar "n")) () (EIf (EBinOp ">" (EVar "n") (ELit (LInt 1))) (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "")) (EApp (EVar "$core.display") (EVar "x"))) (ELit (LString "$"))) (EApp (EVar "$core.display") (EApp (EVar "intToString") (EBinOp "-" (EVar "n") (ELit (LInt 1)))))) (ELit (LString ""))) (EVar "x"))) (arm (PCon "None") () (EVar "x"))))
 (DTypeSig false "ubBump" (TyFun (TyApp (TyCon "OrdMap") (TyCon "Int")) (TyFun (TyCon "String") (TyApp (TyCon "OrdMap") (TyCon "Int")))))
 (DFunDef false "ubBump" ((PVar "sc") (PVar "x")) (EIf (EApp (EVar "ubShadowable") (EVar "x")) (EApp (EApp (EApp (EVar "omInsert") (EVar "x")) (EMatch (EApp (EApp (EVar "omLookup") (EVar "x")) (EVar "sc")) (arm (PCon "Some" (PVar "n")) () (EBinOp "+" (EVar "n") (ELit (LInt 1)))) (arm (PCon "None") () (ELit (LInt 1))))) (EVar "sc")) (EVar "sc")))
 (DTypeSig false "ubBumpAll" (TyFun (TyApp (TyCon "OrdMap") (TyCon "Int")) (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyApp (TyCon "OrdMap") (TyCon "Int")))))

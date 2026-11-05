@@ -175,6 +175,7 @@ prefixOk k = match parse (take k mixed)
 test "every prefix of a 200-character mixed input reads or is unterminated" =
   expectEach (map (k => ("prefix \{k}", prefixOk k)) [0..=200])
 # DESUGAR
+(DUse false (UseAlias ("core") "$core"))
 (DUse false (UseGroup ("csv") ((mem "parse" false) (mem "parseWith" false) (mem "render" false) (mem "renderWith" false))))
 (DUse false (UseGroup ("string") ((mem "concat" false) (mem "repeat" false) (mem "take" false))))
 (DUse false (UseGroup ("test") ((mem "Expectation" false) (mem "expectEach" false) (mem "expectEqual" false) (mem "expectErrContains" false) (mem "expectTextContainsAll" false) (mem "pass" false))))
@@ -203,7 +204,7 @@ test "every prefix of a 200-character mixed input reads or is unterminated" =
 (DFunDef false "mixed" () (EApp (EApp (EVar "take") (ELit (LInt 200))) (EApp (EApp (EVar "repeat") (ELit (LInt 30))) (ELit (LString "a,\"b\"\"\r\n ,")))))
 (DTypeSig false "prefixOk" (TyFun (TyCon "Int") (TyCon "Expectation")))
 (DFunDef false "prefixOk" ((PVar "k")) (EMatch (EApp (EVar "parse") (EApp (EApp (EVar "take") (EVar "k")) (EVar "mixed"))) (arm (PCon "Ok" PWild) () (EVar "pass")) (arm (PCon "Err" (PVar "e")) () (EApp (EApp (EVar "expectTextContainsAll") (EListLit (ELit (LString "unterminated quoted field")))) (EVar "e")))))
-(DTest false "every prefix of a 200-character mixed input reads or is unterminated" (EApp (EVar "expectEach") (EApp (EApp (EVar "map") (ELam ((PVar "k")) (ETuple (EBinOp "++" (EBinOp "++" (ELit (LString "prefix ")) (EApp (EVar "display") (EVar "k"))) (ELit (LString ""))) (EApp (EVar "prefixOk") (EVar "k"))))) (ERangeList (ELit (LInt 0)) (ELit (LInt 200)) true))))
+(DTest false "every prefix of a 200-character mixed input reads or is unterminated" (EApp (EVar "expectEach") (EApp (EApp (EVar "map") (ELam ((PVar "k")) (ETuple (EBinOp "++" (EBinOp "++" (ELit (LString "prefix ")) (EApp (EVar "$core.display") (EVar "k"))) (ELit (LString ""))) (EApp (EVar "prefixOk") (EVar "k"))))) (ERangeList (ELit (LInt 0)) (ELit (LInt 200)) true))))
 # MARK
 (DUse false (UseGroup ("csv") ((mem "parse" false) (mem "parseWith" false) (mem "render" false) (mem "renderWith" false))))
 (DUse false (UseGroup ("string") ((mem "concat" false) (mem "repeat" false) (mem "take" false))))

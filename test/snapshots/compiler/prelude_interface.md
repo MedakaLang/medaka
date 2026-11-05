@@ -291,6 +291,7 @@ keysMatch a b
   | a.ikCompiler /= b.ikCompiler = Some "compiler"
   | otherwise = None
 # DESUGAR
+(DUse false (UseAlias ("core") "$core"))
 (DUse false (UseGroup ("types" "invocation_basis") ((mem "publishInvocationView" false))))
 (DUse false (UseGroup ("frontend" "ast") ((mem "Ty" false) (mem "TabKey" false) (mem "DataVis" false) (mem "Variant" false))))
 (DUse false (UseGroup ("list") ((mem "mapAccumL" false) (mem "zip" false))))
@@ -334,7 +335,7 @@ keysMatch a b
 (DTypeSig true "seedPreludeInterface" (TyFun (TyTuple (TyCon "Int") (TyCon "Int")) (TyFun (TyApp (TyCon "List") (TyTuple (TyApp (TyCon "List") (TyApp (TyCon "List") (TyCon "Atom"))) (TyCon "PreludeInterface"))) (TyCon "Unit"))))
 (DFunDef false "seedPreludeInterface" ((PVar "generation") (PVar "sections")) (EApp (EApp (EVar "setRef") (EVar "preludeCacheRef")) (EApp (EVar "Some") (ERecordCreate "PreludeCacheEntry" ((fa "pceGeneration" (EVar "generation")) (fa "pceSections" (EVar "sections")))))))
 (DTypeSig false "joinKey" (TyFun (TyApp (TyCon "List") (TyCon "Atom")) (TyCon "String")))
-(DFunDef false "joinKey" ((PVar "atoms")) (EApp (EApp (EVar "joinWith") (ELit (LString ","))) (EApp (EApp (EVar "map") (ELam ((PVar "a")) (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "")) (EApp (EVar "display") (EApp (EVar "atomKey") (EVar "a")))) (ELit (LString " "))) (EApp (EVar "display") (EApp (EVar "renderAtom") (EVar "a")))) (ELit (LString ""))))) (EVar "atoms"))))
+(DFunDef false "joinKey" ((PVar "atoms")) (EApp (EApp (EVar "joinWith") (ELit (LString ","))) (EApp (EApp (EVar "map") (ELam ((PVar "a")) (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "")) (EApp (EVar "$core.display") (EApp (EVar "atomKey") (EVar "a")))) (ELit (LString " "))) (EApp (EVar "$core.display") (EApp (EVar "renderAtom") (EVar "a")))) (ELit (LString ""))))) (EVar "atoms"))))
 (DTypeSig true "preludeCacheHit" (TyFun (TyTuple (TyCon "Int") (TyCon "Int")) (TyFun (TyApp (TyCon "List") (TyCon "Atom")) (TyApp (TyCon "Option") (TyCon "PreludeInterface")))))
 (DFunDef false "preludeCacheHit" ((PVar "generation") (PVar "join")) (EMatch (EUnOp "!" (EVar "preludeCacheRef")) (arm (PCon "None") () (EVar "None")) (arm (PCon "Some" (PVar "entry")) () (EIf (EBinOp "==" (EFieldAccess (EVar "entry") "pceGeneration") (EVar "generation")) (EApp (EApp (EVar "map") (EVar "snd")) (EApp (EApp (EVar "find") (ELam ((PVar "section")) (EApp (EApp (EVar "any") (ELam ((PVar "j")) (EBinOp "==" (EApp (EVar "joinKey") (EVar "j")) (EApp (EVar "joinKey") (EVar "join"))))) (EApp (EVar "fst") (EVar "section"))))) (EFieldAccess (EVar "entry") "pceSections"))) (EVar "None")))))
 (DTypeSig true "currentPreludeInterface" (TyFun (TyCon "Unit") (TyApp (TyCon "List") (TyTuple (TyApp (TyCon "List") (TyApp (TyCon "List") (TyCon "Atom"))) (TyCon "PreludeInterface")))))

@@ -1007,6 +1007,7 @@ export
 lendByteBlockUnsafe : Bytes -> ByteBlock
 lendByteBlockUnsafe (Bytes bb) = bb
 # DESUGAR
+(DUse false (UseAlias ("core") "$core"))
 (DUse false (UseGroup ("core") ((mem "Ordering" true) (mem "Ord" false) (mem "Debug" false) (mem "Option" false) (mem "Index" false) (mem "Slice" false) (mem "Semigroup" false) (mem "Monoid" false) (mem "Hashable" false))))
 (DUse false (UseGroup ("array") ((mem "findIndex" false) (mem "fromList" false))))
 (DUse false (UseGroup ("string") ((mem "toDigit" false))))
@@ -1021,7 +1022,7 @@ lendByteBlockUnsafe (Bytes bb) = bb
 (DTypeSig true "toArray" (TyFun (TyCon "Bytes") (TyApp (TyCon "Array") (TyCon "Int"))))
 (DFunDef false "toArray" ((PCon "Bytes" (PVar "bb"))) (EApp (EVar "byteBlockToIntArray") (EVar "bb")))
 (DTypeSig false "fromU8ArrayFill" (TyFun (TyApp (TyCon "Array") (TyCon "U8")) (TyFun (TyCon "ByteBlock") (TyFun (TyCon "Int") (TyCon "Unit")))))
-(DFunDef false "fromU8ArrayFill" ((PVar "arr") (PVar "bb") (PVar "i")) (EIf (EBinOp ">=" (EVar "i") (EApp (EVar "arrayLength") (EVar "arr"))) (ELit LUnit) (EIf (EVar "otherwise") (EBlock (DoExpr (EApp (EApp (EApp (EVar "byteBlockSetUnsafe") (EVar "i")) (EApp (EVar "u8ToInt") (EApp (EApp (EVar "index") (EVar "arr")) (EVar "i")))) (EVar "bb"))) (DoExpr (EApp (EApp (EApp (EVar "fromU8ArrayFill") (EVar "arr")) (EVar "bb")) (EBinOp "+" (EVar "i") (ELit (LInt 1)))))) (EApp (EVar "__fallthrough__") (ELit LUnit)))))
+(DFunDef false "fromU8ArrayFill" ((PVar "arr") (PVar "bb") (PVar "i")) (EIf (EBinOp ">=" (EVar "i") (EApp (EVar "arrayLength") (EVar "arr"))) (ELit LUnit) (EIf (EVar "otherwise") (EBlock (DoExpr (EApp (EApp (EApp (EVar "byteBlockSetUnsafe") (EVar "i")) (EApp (EVar "u8ToInt") (EApp (EApp (EVar "$core.index") (EVar "arr")) (EVar "i")))) (EVar "bb"))) (DoExpr (EApp (EApp (EApp (EVar "fromU8ArrayFill") (EVar "arr")) (EVar "bb")) (EBinOp "+" (EVar "i") (ELit (LInt 1)))))) (EApp (EVar "__fallthrough__") (ELit LUnit)))))
 (DTypeSig true "fromU8Array" (TyFun (TyApp (TyCon "Array") (TyCon "U8")) (TyCon "Bytes")))
 (DFunDef false "fromU8Array" ((PVar "arr")) (EBlock (DoLet false false (PVar "bb") (EApp (EVar "byteBlockMake") (EApp (EVar "arrayLength") (EVar "arr")))) (DoExpr (EApp (EApp (EApp (EVar "fromU8ArrayFill") (EVar "arr")) (EVar "bb")) (ELit (LInt 0)))) (DoExpr (EApp (EVar "Bytes") (EVar "bb")))))
 (DTypeSig true "toU8Array" (TyFun (TyCon "Bytes") (TyApp (TyCon "Array") (TyCon "U8"))))
@@ -1108,8 +1109,8 @@ lendByteBlockUnsafe (Bytes bb) = bb
 (DTypeSig false "hexDigit" (TyFun (TyCon "Int") (TyCon "Char")))
 (DFunDef false "hexDigit" ((PVar "n")) (EApp (EApp (EVar "optionOr") (ELit (LChar "?"))) (EApp (EVar "toDigit") (EVar "n"))))
 (DTypeSig false "debugBytesHex" (TyFun (TyCon "ByteBlock") (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyCon "String")))))
-(DFunDef false "debugBytesHex" ((PVar "bb") (PVar "i") (PVar "n")) (EIf (EBinOp ">=" (EVar "i") (EVar "n")) (ELit (LString "")) (EIf (EVar "otherwise") (EBlock (DoLet false false (PVar "b") (EApp (EApp (EVar "byteBlockGetUnsafe") (EVar "i")) (EVar "bb"))) (DoExpr (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "")) (EApp (EVar "display") (EApp (EVar "hexDigit") (EApp (EApp (EVar "shiftRight") (EVar "b")) (ELit (LInt 4)))))) (ELit (LString ""))) (EApp (EVar "display") (EApp (EVar "hexDigit") (EApp (EApp (EVar "bitAnd") (EVar "b")) (ELit (LInt 15)))))) (ELit (LString ""))) (EApp (EVar "display") (EApp (EApp (EApp (EVar "debugBytesHex") (EVar "bb")) (EBinOp "+" (EVar "i") (ELit (LInt 1)))) (EVar "n")))) (ELit (LString ""))))) (EApp (EVar "__fallthrough__") (ELit LUnit)))))
-(DImpl true "Debug" ((TyCon "Bytes")) () ((im "debug" ((PCon "Bytes" (PVar "bb"))) (EBinOp "++" (EBinOp "++" (ELit (LString "Bytes \"")) (EApp (EVar "display") (EApp (EApp (EApp (EVar "debugBytesHex") (EVar "bb")) (ELit (LInt 0))) (EApp (EVar "byteBlockLength") (EVar "bb"))))) (ELit (LString "\""))))))
+(DFunDef false "debugBytesHex" ((PVar "bb") (PVar "i") (PVar "n")) (EIf (EBinOp ">=" (EVar "i") (EVar "n")) (ELit (LString "")) (EIf (EVar "otherwise") (EBlock (DoLet false false (PVar "b") (EApp (EApp (EVar "byteBlockGetUnsafe") (EVar "i")) (EVar "bb"))) (DoExpr (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "")) (EApp (EVar "$core.display") (EApp (EVar "hexDigit") (EApp (EApp (EVar "shiftRight") (EVar "b")) (ELit (LInt 4)))))) (ELit (LString ""))) (EApp (EVar "$core.display") (EApp (EVar "hexDigit") (EApp (EApp (EVar "bitAnd") (EVar "b")) (ELit (LInt 15)))))) (ELit (LString ""))) (EApp (EVar "$core.display") (EApp (EApp (EApp (EVar "debugBytesHex") (EVar "bb")) (EBinOp "+" (EVar "i") (ELit (LInt 1)))) (EVar "n")))) (ELit (LString ""))))) (EApp (EVar "__fallthrough__") (ELit LUnit)))))
+(DImpl true "Debug" ((TyCon "Bytes")) () ((im "debug" ((PCon "Bytes" (PVar "bb"))) (EBinOp "++" (EBinOp "++" (ELit (LString "Bytes \"")) (EApp (EVar "$core.display") (EApp (EApp (EApp (EVar "debugBytesHex") (EVar "bb")) (ELit (LInt 0))) (EApp (EVar "byteBlockLength") (EVar "bb"))))) (ELit (LString "\""))))))
 (DTypeSig true "encodeUtf8" (TyFun (TyCon "String") (TyCon "Bytes")))
 (DFunDef false "encodeUtf8" ((PVar "s")) (EApp (EVar "Bytes") (EApp (EVar "byteBlockFromString") (EVar "s"))))
 (DTypeSig false "utf8Continuation" (TyFun (TyCon "ByteBlock") (TyFun (TyCon "Int") (TyCon "Bool"))))

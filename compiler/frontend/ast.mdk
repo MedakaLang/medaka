@@ -1968,6 +1968,25 @@ export
 qualifiedLocal : String -> String -> String
 qualifiedLocal alias n = "\{alias}.\{n}"
 
+-- The module alias desugar reaches the prelude through for the names it
+-- generates.  `$` cannot start a surface identifier, so no user binding can
+-- spell, shadow or collide with it.
+export
+preludeAlias : String
+preludeAlias = "$core"
+
+-- `name` as desugar spells a generated reference to the prelude's declaration.
+export
+preludeQualified : String -> String
+preludeQualified n = qualifiedLocal preludeAlias n
+
+-- Whether [spelling] is the generated reference to the prelude's [name]: the
+-- alias-qualified spelling, or the bare one inside the prelude itself.
+export
+isPreludeSpelling : String -> String -> Bool
+isPreludeSpelling name spelling =
+  spelling == name || spelling == preludeQualified name
+
 -- a property-test parameter `(name : ty)`.
 -- The Loc is the param-NAME token (#913 Inc 2b: renaming a prop param must
 -- land on its own token, not the prop's name string).
@@ -2310,6 +2329,22 @@ public export data Decl =
   | DLetGroup Bool (List LetBind)
   -- `@attr…` annotations wrapping the next decl
   | DAttrib (List Attr) Decl
+
+-- The prelude is the unique program declaring both the `Ordering` data type
+-- and the `Foldable` interface.
+export
+programIsCore : List Decl -> Bool
+programIsCore prog = hasOrdering prog && hasFoldable prog
+
+hasOrdering : List Decl -> Bool
+hasOrdering [] = False
+hasOrdering ((DData { dataName = "Ordering" }) :: _) = True
+hasOrdering (_ :: rest) = hasOrdering rest
+
+hasFoldable : List Decl -> Bool
+hasFoldable [] = False
+hasFoldable ((DInterface { name = "Foldable", ... }) :: _) = True
+hasFoldable (_ :: rest) = hasFoldable rest
 
 -- ── FRESH type declarations, identity not yet acquired (#1110) ──────────────
 -- The peers of `tyConUnresolved` above, and the same contract: these are the
