@@ -109,7 +109,7 @@ Live design docs: **OPEN** = not started, **PARTIAL** = in progress. Read before
 | [`MESSAGE-AUDIT.md`](design/MESSAGE-AUDIT.md) | MESSAGE-AUDIT.md | PARTIAL |
 | [`MUT-SCOPING-DESIGN.md`](design/MUT-SCOPING-DESIGN.md) | `<Mut>` scoping — effect masking for allocate→fill→freeze | CLOSED |
 | [`PERF-CI-COVERAGE.md`](design/PERF-CI-COVERAGE.md) | PERF-CI-COVERAGE.md — a comprehensive design for catching quadratics in CI | DESIGN |
-| [`PROCESS-SUPERVISION.md`](design/PROCESS-SUPERVISION.md) | Owned-process supervision boundary | PROPOSED |
+| [`PROCESS-SUPERVISION.md`](design/PROCESS-SUPERVISION.md) | Owned-process supervision boundary | Native owner and launch-ticket runtime implemented with independent C controls |
 | [`REFERENCES-RENAME-DESIGN.md`](design/REFERENCES-RENAME-DESIGN.md) | Cross-file `references` + `rename` (#254) — Design / Scoping | DESIGN |
 | [`REGEX-DESIGN.md`](design/REGEX-DESIGN.md) | Regular expressions in the stdlib | — |
 | [`REVIEW-WORKFLOW-DESIGN.md`](design/REVIEW-WORKFLOW-DESIGN.md) | Review workflow: a cheap reviewer and the benchmark that measures it | — |
@@ -193,6 +193,7 @@ What's in the standard library, what's planned, module-by-module status.
 | [`net_async.md`](stdlib/net_async.md) | net_async | — |
 | [`nonempty.md`](stdlib/nonempty.md) | nonempty | — |
 | [`path.md`](stdlib/path.md) | path | — |
+| [`process.md`](stdlib/process.md) | process | — |
 | [`regex.md`](stdlib/regex.md) | regex | — |
 | [`runtime.md`](stdlib/runtime.md) | runtime | — |
 | [`set.md`](stdlib/set.md) | set | — |
