@@ -553,6 +553,8 @@ test "stdlib/test.mdk executed >= 72 assertions" = floorExpectation "test"
 test "stdlib/process_test.mdk executed >= 2 assertions" =
   floorExpectation "process_test"
 
+test "stdlib/process.mdk executed >= 2 assertions" = floorExpectation "process"
+
 test "stdlib/test_process.mdk executed >= 31 assertions" =
   floorExpectation "test_process"
 
