@@ -817,6 +817,8 @@ valueEq (VU64 _ _) _ = u64ShapeMismatch ()
 valueEq _ (VU64 _ _) = u64ShapeMismatch ()
 valueEq (VI64 _ _) _ = u64ShapeMismatch ()
 valueEq _ (VI64 _ _) = u64ShapeMismatch ()
+-- Bound: a pairwise fallthrough: two values with different constructors, and any function, thunk or primitive value, are never equal, so naming the swallowed constructors could not make the match total.
+-- lint-disable-next-line rule-walker-wildcard
 valueEq _ _ = False
 
 valueListEq : List (Value e) -> List (Value e) -> Bool
@@ -950,6 +952,7 @@ matchPat (PRng (LByte lo) (LByte hi) incl) (VInt v)
 -- binds them (its first alternative's), which the slots `annotate` numbers follow
 matchPat (POr alts) v =
   map (orderBinds (patBindings (POr alts))) (findMap (a => matchPat a v) alts)
+matchPat (PAnn p _) v = matchPat p v
 matchPat _ _ = None
 
 orderBinds : List String -> List (String, Value e) -> List (String, Value e)
