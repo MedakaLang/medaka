@@ -1,5 +1,5 @@
 # META
-source_lines=920
+source_lines=924
 stages=DESUGAR,MARK
 # SOURCE
 -- tc_foreign: extern signatures checked against the FFI-ABI crossable set and the FFI-ABI rules on
@@ -445,10 +445,12 @@ ffiTakeAtom : EffAtomTy ->
   List EffAtomTy ->
   List (String, Ty) ->
   Option (List (String, Ty), List EffAtomTy)
-ffiTakeAtom _ [] _ _ = None
-ffiTakeAtom a (d :: ds) skipped sub = match ffiMatchAtom a d sub
-  Some sub2 => Some (sub2, reverseL skipped ++ ds)
-  None => ffiTakeAtom a ds (d :: skipped) sub
+ffiTakeAtom a xs0 skipped0 sub = go xs0 skipped0
+  where
+    go [] _ = None
+    go (d :: ds) skipped = match ffiMatchAtom a d sub
+      Some sub2 => Some (sub2, reverseL skipped ++ ds)
+      None => go ds (d :: skipped)
 
 ffiMatchAtom : EffAtomTy ->
   EffAtomTy ->
@@ -818,17 +820,17 @@ ffiExternTypeRowsWith : OrdMap (Ty, List (String, Int)) ->
   List (TabKey, (List String, Ty)) ->
   List Decl ->
   List (String, (List (String, String), (List String, String)))
-ffiExternTypeRowsWith _ _ [] = []
-ffiExternTypeRowsWith catalog aliases ((DExtern d) :: rest) =
-  externRowCons
-    (omHasKey d.edName catalog)
-    d
-    (ffiSigArgHeadsWith aliases d.edTy, ffiSigRetHeadWith aliases d.edTy)
-    (ffiExternTypeRowsWith catalog aliases rest)
-ffiExternTypeRowsWith catalog aliases ((DAttrib _ inner) :: rest) =
-  ffiExternTypeRowsWith catalog aliases (inner :: rest)
-ffiExternTypeRowsWith catalog aliases (_ :: rest) =
-  ffiExternTypeRowsWith catalog aliases rest
+ffiExternTypeRowsWith catalog aliases xs0 = go xs0
+  where
+    go [] = []
+    go ((DExtern d) :: rest) =
+      externRowCons
+        (omHasKey d.edName catalog)
+        d
+        (ffiSigArgHeadsWith aliases d.edTy, ffiSigRetHeadWith aliases d.edTy)
+        (go rest)
+    go ((DAttrib _ inner) :: rest) = go (inner :: rest)
+    go (_ :: rest) = go rest
 
 -- Walk the arrow spine.  Every PARAM position and the final RESULT position is
 -- a value that actually crosses; the row wrappers and the constraint prefix are
@@ -843,13 +845,15 @@ ffiExternTypeRowsWith catalog aliases (_ :: rest) =
 -- `DExtern` has a `Loc` this diagnostic does not use (`edLoc`), so the
 -- signature's own first `TyCon` is the nearest true anchor available.
 ffiCheckExternSig : ModuleCtx -> String -> Option Loc -> Ty -> Unit
-ffiCheckExternSig mctx n fb ty = match expandAliasHeadTy mctx ty
-  TyConstrained _ inner => ffiCheckExternSig mctx n fb inner
-  TyFun a r =>
-    ffiCheckExternPos mctx n fb a
-    ffiCheckExternSig mctx n fb r
-  TyEffect _ _ inner => ffiCheckExternSig mctx n fb inner
-  t => ffiCheckExternPos mctx n fb t
+ffiCheckExternSig mctx n fb ty0 = go ty0
+  where
+    go ty = match expandAliasHeadTy mctx ty
+      TyConstrained _ inner => go inner
+      TyFun a r =>
+        ffiCheckExternPos mctx n fb a
+        go r
+      TyEffect _ _ inner => go inner
+      t => ffiCheckExternPos mctx n fb t
 
 -- A VALUE position.  A function type landing here is the closure cell §3 rules
 -- out, and it reaches this arm rather than `ffiCheckExternSig`'s `TyFun` arm
@@ -997,8 +1001,7 @@ declExternNames decls = map fst (directExternSigs decls)
 (DFunDef false "ffiMatchAtoms" ((PList) (PVar "rest") (PVar "sub")) (EApp (EVar "Some") (ETuple (EVar "sub") (EVar "rest"))))
 (DFunDef false "ffiMatchAtoms" ((PCons (PVar "a") (PVar "more")) (PVar "ds") (PVar "sub")) (EMatch (EApp (EApp (EApp (EApp (EVar "ffiTakeAtom") (EVar "a")) (EVar "ds")) (EListLit)) (EVar "sub")) (arm (PCon "Some" (PTuple (PVar "sub2") (PVar "ds2"))) () (EApp (EApp (EApp (EVar "ffiMatchAtoms") (EVar "more")) (EVar "ds2")) (EVar "sub2"))) (arm (PCon "None") () (EVar "None"))))
 (DTypeSig false "ffiTakeAtom" (TyFun (TyCon "EffAtomTy") (TyFun (TyApp (TyCon "List") (TyCon "EffAtomTy")) (TyFun (TyApp (TyCon "List") (TyCon "EffAtomTy")) (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "Ty"))) (TyApp (TyCon "Option") (TyTuple (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "Ty"))) (TyApp (TyCon "List") (TyCon "EffAtomTy")))))))))
-(DFunDef false "ffiTakeAtom" (PWild (PList) PWild PWild) (EVar "None"))
-(DFunDef false "ffiTakeAtom" ((PVar "a") (PCons (PVar "d") (PVar "ds")) (PVar "skipped") (PVar "sub")) (EMatch (EApp (EApp (EApp (EVar "ffiMatchAtom") (EVar "a")) (EVar "d")) (EVar "sub")) (arm (PCon "Some" (PVar "sub2")) () (EApp (EVar "Some") (ETuple (EVar "sub2") (EBinOp "++" (EApp (EVar "reverseL") (EVar "skipped")) (EVar "ds"))))) (arm (PCon "None") () (EApp (EApp (EApp (EApp (EVar "ffiTakeAtom") (EVar "a")) (EVar "ds")) (EBinOp "::" (EVar "d") (EVar "skipped"))) (EVar "sub")))))
+(DFunDef false "ffiTakeAtom" ((PVar "a") (PVar "xs0") (PVar "skipped0") (PVar "sub")) (ELetGroup ((lgb "go" (clause ((PList) PWild) (EVar "None")) (clause ((PCons (PVar "d") (PVar "ds")) (PVar "skipped")) (EMatch (EApp (EApp (EApp (EVar "ffiMatchAtom") (EVar "a")) (EVar "d")) (EVar "sub")) (arm (PCon "Some" (PVar "sub2")) () (EApp (EVar "Some") (ETuple (EVar "sub2") (EBinOp "++" (EApp (EVar "reverseL") (EVar "skipped")) (EVar "ds"))))) (arm (PCon "None") () (EApp (EApp (EVar "go") (EVar "ds")) (EBinOp "::" (EVar "d") (EVar "skipped")))))))) (EApp (EApp (EVar "go") (EVar "xs0")) (EVar "skipped0"))))
 (DTypeSig false "ffiMatchAtom" (TyFun (TyCon "EffAtomTy") (TyFun (TyCon "EffAtomTy") (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "Ty"))) (TyApp (TyCon "Option") (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "Ty"))))))))
 (DFunDef false "ffiMatchAtom" ((PVar "a") (PVar "d") (PVar "sub")) (EIf (EApp (EApp (EApp (EApp (EVar "sameTyConHead") (EFieldAccess (EVar "a") "eatLabel")) (EFieldAccess (EVar "a") "eatOrigin")) (EFieldAccess (EVar "d") "eatLabel")) (EFieldAccess (EVar "d") "eatOrigin")) (EMatch (EFieldAccess (EVar "a") "eatParam") (arm (PCon "EPName" (PVar "v")) () (EMatch (EApp (EApp (EVar "lookupAssoc") (EVar "v")) (EVar "sub")) (arm (PCon "Some" (PVar "bound")) () (EApp (EApp (EVar "andThen") (EApp (EVar "ffiParamOf") (EVar "bound"))) (ELam ((PVar "p")) (EIf (EApp (EApp (EVar "ffiSameParam") (EVar "p")) (EFieldAccess (EVar "d") "eatParam")) (EApp (EVar "Some") (EVar "sub")) (EVar "None"))))) (arm (PCon "None") () (EApp (EVar "Some") (EBinOp "::" (ETuple (EVar "v") (EApp (EVar "ffiParamTy") (EFieldAccess (EVar "d") "eatParam"))) (EVar "sub")))))) (arm (PVar "p") () (EIf (EApp (EApp (EVar "ffiSameParam") (EVar "p")) (EFieldAccess (EVar "d") "eatParam")) (EApp (EVar "Some") (EVar "sub")) (EVar "None")))) (EVar "None")))
 (DTypeSig false "ffiParamTy" (TyFun (TyCon "EffParamTy") (TyCon "Ty")))
@@ -1063,12 +1066,9 @@ declExternNames decls = map fst (directExternSigs decls)
 (DTypeSig false "ffiTyHeadNameWith" (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "TabKey") (TyTuple (TyApp (TyCon "List") (TyCon "String")) (TyCon "Ty")))) (TyFun (TyCon "Ty") (TyCon "String"))))
 (DFunDef false "ffiTyHeadNameWith" ((PVar "aliases") (PVar "ty")) (EMatch (EApp (EApp (EVar "expandAliasHeadTyWith") (EVar "aliases")) (EVar "ty")) (arm (PRec "TyCon" ((rf "tyConName" (PVar "n"))) false) () (EVar "n")) (arm (PCon "TyApp" (PVar "a") PWild) () (EApp (EApp (EVar "ffiTyHeadNameWith") (EVar "aliases")) (EVar "a"))) (arm (PCon "TyVar" PWild) () (ELit (LString "_"))) (arm (PCon "TyConstrained" PWild (PVar "t")) () (EApp (EApp (EVar "ffiTyHeadNameWith") (EVar "aliases")) (EVar "t"))) (arm (PCon "TyEffect" PWild PWild (PVar "t")) () (EApp (EApp (EVar "ffiTyHeadNameWith") (EVar "aliases")) (EVar "t"))) (arm (PCon "TyNamed" PWild (PVar "t") PWild) () (EApp (EApp (EVar "ffiTyHeadNameWith") (EVar "aliases")) (EVar "t"))) (arm (PCon "TyQual" (PVar "t") PWild PWild) () (EApp (EApp (EVar "ffiTyHeadNameWith") (EVar "aliases")) (EVar "t"))) (arm (PCon "TyFun" PWild PWild) () (ELit (LString "->"))) (arm PWild () (ELit (LString "?")))))
 (DTypeSig true "ffiExternTypeRowsWith" (TyFun (TyApp (TyCon "OrdMap") (TyTuple (TyCon "Ty") (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "Int"))))) (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "TabKey") (TyTuple (TyApp (TyCon "List") (TyCon "String")) (TyCon "Ty")))) (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyTuple (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "String"))) (TyTuple (TyApp (TyCon "List") (TyCon "String")) (TyCon "String")))))))))
-(DFunDef false "ffiExternTypeRowsWith" (PWild PWild (PList)) (EListLit))
-(DFunDef false "ffiExternTypeRowsWith" ((PVar "catalog") (PVar "aliases") (PCons (PCon "DExtern" (PVar "d")) (PVar "rest"))) (EApp (EApp (EApp (EApp (EVar "externRowCons") (EApp (EApp (EVar "omHasKey") (EFieldAccess (EVar "d") "edName")) (EVar "catalog"))) (EVar "d")) (ETuple (EApp (EApp (EVar "ffiSigArgHeadsWith") (EVar "aliases")) (EFieldAccess (EVar "d") "edTy")) (EApp (EApp (EVar "ffiSigRetHeadWith") (EVar "aliases")) (EFieldAccess (EVar "d") "edTy")))) (EApp (EApp (EApp (EVar "ffiExternTypeRowsWith") (EVar "catalog")) (EVar "aliases")) (EVar "rest"))))
-(DFunDef false "ffiExternTypeRowsWith" ((PVar "catalog") (PVar "aliases") (PCons (PCon "DAttrib" PWild (PVar "inner")) (PVar "rest"))) (EApp (EApp (EApp (EVar "ffiExternTypeRowsWith") (EVar "catalog")) (EVar "aliases")) (EBinOp "::" (EVar "inner") (EVar "rest"))))
-(DFunDef false "ffiExternTypeRowsWith" ((PVar "catalog") (PVar "aliases") (PCons PWild (PVar "rest"))) (EApp (EApp (EApp (EVar "ffiExternTypeRowsWith") (EVar "catalog")) (EVar "aliases")) (EVar "rest")))
+(DFunDef false "ffiExternTypeRowsWith" ((PVar "catalog") (PVar "aliases") (PVar "xs0")) (ELetGroup ((lgb "go" (clause ((PList)) (EListLit)) (clause ((PCons (PCon "DExtern" (PVar "d")) (PVar "rest"))) (EApp (EApp (EApp (EApp (EVar "externRowCons") (EApp (EApp (EVar "omHasKey") (EFieldAccess (EVar "d") "edName")) (EVar "catalog"))) (EVar "d")) (ETuple (EApp (EApp (EVar "ffiSigArgHeadsWith") (EVar "aliases")) (EFieldAccess (EVar "d") "edTy")) (EApp (EApp (EVar "ffiSigRetHeadWith") (EVar "aliases")) (EFieldAccess (EVar "d") "edTy")))) (EApp (EVar "go") (EVar "rest")))) (clause ((PCons (PCon "DAttrib" PWild (PVar "inner")) (PVar "rest"))) (EApp (EVar "go") (EBinOp "::" (EVar "inner") (EVar "rest")))) (clause ((PCons PWild (PVar "rest"))) (EApp (EVar "go") (EVar "rest"))))) (EApp (EVar "go") (EVar "xs0"))))
 (DTypeSig false "ffiCheckExternSig" (TyFun (TyCon "ModuleCtx") (TyFun (TyCon "String") (TyFun (TyApp (TyCon "Option") (TyCon "Loc")) (TyFun (TyCon "Ty") (TyCon "Unit"))))))
-(DFunDef false "ffiCheckExternSig" ((PVar "mctx") (PVar "n") (PVar "fb") (PVar "ty")) (EMatch (EApp (EApp (EVar "expandAliasHeadTy") (EVar "mctx")) (EVar "ty")) (arm (PCon "TyConstrained" PWild (PVar "inner")) () (EApp (EApp (EApp (EApp (EVar "ffiCheckExternSig") (EVar "mctx")) (EVar "n")) (EVar "fb")) (EVar "inner"))) (arm (PCon "TyFun" (PVar "a") (PVar "r")) () (EBlock (DoExpr (EApp (EApp (EApp (EApp (EVar "ffiCheckExternPos") (EVar "mctx")) (EVar "n")) (EVar "fb")) (EVar "a"))) (DoExpr (EApp (EApp (EApp (EApp (EVar "ffiCheckExternSig") (EVar "mctx")) (EVar "n")) (EVar "fb")) (EVar "r"))))) (arm (PCon "TyEffect" PWild PWild (PVar "inner")) () (EApp (EApp (EApp (EApp (EVar "ffiCheckExternSig") (EVar "mctx")) (EVar "n")) (EVar "fb")) (EVar "inner"))) (arm (PVar "t") () (EApp (EApp (EApp (EApp (EVar "ffiCheckExternPos") (EVar "mctx")) (EVar "n")) (EVar "fb")) (EVar "t")))))
+(DFunDef false "ffiCheckExternSig" ((PVar "mctx") (PVar "n") (PVar "fb") (PVar "ty0")) (ELetGroup ((lgb "go" (clause ((PVar "ty")) (EMatch (EApp (EApp (EVar "expandAliasHeadTy") (EVar "mctx")) (EVar "ty")) (arm (PCon "TyConstrained" PWild (PVar "inner")) () (EApp (EVar "go") (EVar "inner"))) (arm (PCon "TyFun" (PVar "a") (PVar "r")) () (EBlock (DoExpr (EApp (EApp (EApp (EApp (EVar "ffiCheckExternPos") (EVar "mctx")) (EVar "n")) (EVar "fb")) (EVar "a"))) (DoExpr (EApp (EVar "go") (EVar "r"))))) (arm (PCon "TyEffect" PWild PWild (PVar "inner")) () (EApp (EVar "go") (EVar "inner"))) (arm (PVar "t") () (EApp (EApp (EApp (EApp (EVar "ffiCheckExternPos") (EVar "mctx")) (EVar "n")) (EVar "fb")) (EVar "t"))))))) (EApp (EVar "go") (EVar "ty0"))))
 (DTypeSig false "ffiCheckExternPos" (TyFun (TyCon "ModuleCtx") (TyFun (TyCon "String") (TyFun (TyApp (TyCon "Option") (TyCon "Loc")) (TyFun (TyCon "Ty") (TyCon "Unit"))))))
 (DFunDef false "ffiCheckExternPos" ((PVar "mctx") (PVar "n") (PVar "fb") (PVar "t")) (EIf (EApp (EApp (EVar "ffiCrossableTy") (EVar "mctx")) (EVar "t")) (ELit LUnit) (EIf (EVar "otherwise") (EApp (EApp (EApp (EApp (EVar "pushTypeErrorAt") (EVar "mctx")) (EVar "TFfiNoncrossable")) (EApp (EApp (EVar "orElseLoc") (EApp (EVar "firstTyLoc") (EVar "t"))) (EVar "fb"))) (EApp (EApp (EVar "ffiNonCrossableMsg") (EVar "n")) (EVar "t"))) (EApp (EVar "__fallthrough__") (ELit LUnit)))))
 (DTypeSig true "ffiCheckExternsLabelled" (TyFun (TyCon "ModuleCtx") (TyFun (TyCon "Bool") (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyCon "Unit")))))
@@ -1165,8 +1165,7 @@ declExternNames decls = map fst (directExternSigs decls)
 (DFunDef false "ffiMatchAtoms" ((PList) (PVar "rest") (PVar "sub")) (EApp (EVar "Some") (ETuple (EMethodRef "sub") (EVar "rest"))))
 (DFunDef false "ffiMatchAtoms" ((PCons (PVar "a") (PVar "more")) (PVar "ds") (PVar "sub")) (EMatch (EApp (EApp (EApp (EApp (EVar "ffiTakeAtom") (EVar "a")) (EVar "ds")) (EListLit)) (EMethodRef "sub")) (arm (PCon "Some" (PTuple (PVar "sub2") (PVar "ds2"))) () (EApp (EApp (EApp (EVar "ffiMatchAtoms") (EVar "more")) (EVar "ds2")) (EVar "sub2"))) (arm (PCon "None") () (EVar "None"))))
 (DTypeSig false "ffiTakeAtom" (TyFun (TyCon "EffAtomTy") (TyFun (TyApp (TyCon "List") (TyCon "EffAtomTy")) (TyFun (TyApp (TyCon "List") (TyCon "EffAtomTy")) (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "Ty"))) (TyApp (TyCon "Option") (TyTuple (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "Ty"))) (TyApp (TyCon "List") (TyCon "EffAtomTy")))))))))
-(DFunDef false "ffiTakeAtom" (PWild (PList) PWild PWild) (EVar "None"))
-(DFunDef false "ffiTakeAtom" ((PVar "a") (PCons (PVar "d") (PVar "ds")) (PVar "skipped") (PVar "sub")) (EMatch (EApp (EApp (EApp (EVar "ffiMatchAtom") (EVar "a")) (EVar "d")) (EMethodRef "sub")) (arm (PCon "Some" (PVar "sub2")) () (EApp (EVar "Some") (ETuple (EVar "sub2") (EBinOp "++" (EApp (EVar "reverseL") (EVar "skipped")) (EVar "ds"))))) (arm (PCon "None") () (EApp (EApp (EApp (EApp (EVar "ffiTakeAtom") (EVar "a")) (EVar "ds")) (EBinOp "::" (EVar "d") (EVar "skipped"))) (EMethodRef "sub")))))
+(DFunDef false "ffiTakeAtom" ((PVar "a") (PVar "xs0") (PVar "skipped0") (PVar "sub")) (ELetGroup ((lgb "go" (clause ((PList) PWild) (EVar "None")) (clause ((PCons (PVar "d") (PVar "ds")) (PVar "skipped")) (EMatch (EApp (EApp (EApp (EVar "ffiMatchAtom") (EVar "a")) (EVar "d")) (EMethodRef "sub")) (arm (PCon "Some" (PVar "sub2")) () (EApp (EVar "Some") (ETuple (EVar "sub2") (EBinOp "++" (EApp (EVar "reverseL") (EVar "skipped")) (EVar "ds"))))) (arm (PCon "None") () (EApp (EApp (EVar "go") (EVar "ds")) (EBinOp "::" (EVar "d") (EVar "skipped")))))))) (EApp (EApp (EVar "go") (EVar "xs0")) (EVar "skipped0"))))
 (DTypeSig false "ffiMatchAtom" (TyFun (TyCon "EffAtomTy") (TyFun (TyCon "EffAtomTy") (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "Ty"))) (TyApp (TyCon "Option") (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "Ty"))))))))
 (DFunDef false "ffiMatchAtom" ((PVar "a") (PVar "d") (PVar "sub")) (EIf (EApp (EApp (EApp (EApp (EVar "sameTyConHead") (EFieldAccess (EVar "a") "eatLabel")) (EFieldAccess (EVar "a") "eatOrigin")) (EFieldAccess (EVar "d") "eatLabel")) (EFieldAccess (EVar "d") "eatOrigin")) (EMatch (EFieldAccess (EVar "a") "eatParam") (arm (PCon "EPName" (PVar "v")) () (EMatch (EApp (EApp (EVar "lookupAssoc") (EVar "v")) (EMethodRef "sub")) (arm (PCon "Some" (PVar "bound")) () (EApp (EApp (EMethodRef "andThen") (EApp (EVar "ffiParamOf") (EVar "bound"))) (ELam ((PVar "p")) (EIf (EApp (EApp (EVar "ffiSameParam") (EVar "p")) (EFieldAccess (EVar "d") "eatParam")) (EApp (EVar "Some") (EMethodRef "sub")) (EVar "None"))))) (arm (PCon "None") () (EApp (EVar "Some") (EBinOp "::" (ETuple (EVar "v") (EApp (EVar "ffiParamTy") (EFieldAccess (EVar "d") "eatParam"))) (EMethodRef "sub")))))) (arm (PVar "p") () (EIf (EApp (EApp (EVar "ffiSameParam") (EVar "p")) (EFieldAccess (EVar "d") "eatParam")) (EApp (EVar "Some") (EMethodRef "sub")) (EVar "None")))) (EVar "None")))
 (DTypeSig false "ffiParamTy" (TyFun (TyCon "EffParamTy") (TyCon "Ty")))
@@ -1231,12 +1230,9 @@ declExternNames decls = map fst (directExternSigs decls)
 (DTypeSig false "ffiTyHeadNameWith" (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "TabKey") (TyTuple (TyApp (TyCon "List") (TyCon "String")) (TyCon "Ty")))) (TyFun (TyCon "Ty") (TyCon "String"))))
 (DFunDef false "ffiTyHeadNameWith" ((PVar "aliases") (PVar "ty")) (EMatch (EApp (EApp (EVar "expandAliasHeadTyWith") (EVar "aliases")) (EVar "ty")) (arm (PRec "TyCon" ((rf "tyConName" (PVar "n"))) false) () (EVar "n")) (arm (PCon "TyApp" (PVar "a") PWild) () (EApp (EApp (EVar "ffiTyHeadNameWith") (EVar "aliases")) (EVar "a"))) (arm (PCon "TyVar" PWild) () (ELit (LString "_"))) (arm (PCon "TyConstrained" PWild (PVar "t")) () (EApp (EApp (EVar "ffiTyHeadNameWith") (EVar "aliases")) (EVar "t"))) (arm (PCon "TyEffect" PWild PWild (PVar "t")) () (EApp (EApp (EVar "ffiTyHeadNameWith") (EVar "aliases")) (EVar "t"))) (arm (PCon "TyNamed" PWild (PVar "t") PWild) () (EApp (EApp (EVar "ffiTyHeadNameWith") (EVar "aliases")) (EVar "t"))) (arm (PCon "TyQual" (PVar "t") PWild PWild) () (EApp (EApp (EVar "ffiTyHeadNameWith") (EVar "aliases")) (EVar "t"))) (arm (PCon "TyFun" PWild PWild) () (ELit (LString "->"))) (arm PWild () (ELit (LString "?")))))
 (DTypeSig true "ffiExternTypeRowsWith" (TyFun (TyApp (TyCon "OrdMap") (TyTuple (TyCon "Ty") (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "Int"))))) (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "TabKey") (TyTuple (TyApp (TyCon "List") (TyCon "String")) (TyCon "Ty")))) (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyTuple (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "String"))) (TyTuple (TyApp (TyCon "List") (TyCon "String")) (TyCon "String")))))))))
-(DFunDef false "ffiExternTypeRowsWith" (PWild PWild (PList)) (EListLit))
-(DFunDef false "ffiExternTypeRowsWith" ((PVar "catalog") (PVar "aliases") (PCons (PCon "DExtern" (PVar "d")) (PVar "rest"))) (EApp (EApp (EApp (EApp (EVar "externRowCons") (EApp (EApp (EVar "omHasKey") (EFieldAccess (EVar "d") "edName")) (EVar "catalog"))) (EVar "d")) (ETuple (EApp (EApp (EVar "ffiSigArgHeadsWith") (EVar "aliases")) (EFieldAccess (EVar "d") "edTy")) (EApp (EApp (EVar "ffiSigRetHeadWith") (EVar "aliases")) (EFieldAccess (EVar "d") "edTy")))) (EApp (EApp (EApp (EVar "ffiExternTypeRowsWith") (EVar "catalog")) (EVar "aliases")) (EVar "rest"))))
-(DFunDef false "ffiExternTypeRowsWith" ((PVar "catalog") (PVar "aliases") (PCons (PCon "DAttrib" PWild (PVar "inner")) (PVar "rest"))) (EApp (EApp (EApp (EVar "ffiExternTypeRowsWith") (EVar "catalog")) (EVar "aliases")) (EBinOp "::" (EVar "inner") (EVar "rest"))))
-(DFunDef false "ffiExternTypeRowsWith" ((PVar "catalog") (PVar "aliases") (PCons PWild (PVar "rest"))) (EApp (EApp (EApp (EVar "ffiExternTypeRowsWith") (EVar "catalog")) (EVar "aliases")) (EVar "rest")))
+(DFunDef false "ffiExternTypeRowsWith" ((PVar "catalog") (PVar "aliases") (PVar "xs0")) (ELetGroup ((lgb "go" (clause ((PList)) (EListLit)) (clause ((PCons (PCon "DExtern" (PVar "d")) (PVar "rest"))) (EApp (EApp (EApp (EApp (EVar "externRowCons") (EApp (EApp (EVar "omHasKey") (EFieldAccess (EVar "d") "edName")) (EVar "catalog"))) (EVar "d")) (ETuple (EApp (EApp (EVar "ffiSigArgHeadsWith") (EVar "aliases")) (EFieldAccess (EVar "d") "edTy")) (EApp (EApp (EVar "ffiSigRetHeadWith") (EVar "aliases")) (EFieldAccess (EVar "d") "edTy")))) (EApp (EVar "go") (EVar "rest")))) (clause ((PCons (PCon "DAttrib" PWild (PVar "inner")) (PVar "rest"))) (EApp (EVar "go") (EBinOp "::" (EVar "inner") (EVar "rest")))) (clause ((PCons PWild (PVar "rest"))) (EApp (EVar "go") (EVar "rest"))))) (EApp (EVar "go") (EVar "xs0"))))
 (DTypeSig false "ffiCheckExternSig" (TyFun (TyCon "ModuleCtx") (TyFun (TyCon "String") (TyFun (TyApp (TyCon "Option") (TyCon "Loc")) (TyFun (TyCon "Ty") (TyCon "Unit"))))))
-(DFunDef false "ffiCheckExternSig" ((PVar "mctx") (PVar "n") (PVar "fb") (PVar "ty")) (EMatch (EApp (EApp (EVar "expandAliasHeadTy") (EVar "mctx")) (EVar "ty")) (arm (PCon "TyConstrained" PWild (PVar "inner")) () (EApp (EApp (EApp (EApp (EVar "ffiCheckExternSig") (EVar "mctx")) (EVar "n")) (EVar "fb")) (EVar "inner"))) (arm (PCon "TyFun" (PVar "a") (PVar "r")) () (EBlock (DoExpr (EApp (EApp (EApp (EApp (EVar "ffiCheckExternPos") (EVar "mctx")) (EVar "n")) (EVar "fb")) (EVar "a"))) (DoExpr (EApp (EApp (EApp (EApp (EVar "ffiCheckExternSig") (EVar "mctx")) (EVar "n")) (EVar "fb")) (EVar "r"))))) (arm (PCon "TyEffect" PWild PWild (PVar "inner")) () (EApp (EApp (EApp (EApp (EVar "ffiCheckExternSig") (EVar "mctx")) (EVar "n")) (EVar "fb")) (EVar "inner"))) (arm (PVar "t") () (EApp (EApp (EApp (EApp (EVar "ffiCheckExternPos") (EVar "mctx")) (EVar "n")) (EVar "fb")) (EVar "t")))))
+(DFunDef false "ffiCheckExternSig" ((PVar "mctx") (PVar "n") (PVar "fb") (PVar "ty0")) (ELetGroup ((lgb "go" (clause ((PVar "ty")) (EMatch (EApp (EApp (EVar "expandAliasHeadTy") (EVar "mctx")) (EVar "ty")) (arm (PCon "TyConstrained" PWild (PVar "inner")) () (EApp (EVar "go") (EVar "inner"))) (arm (PCon "TyFun" (PVar "a") (PVar "r")) () (EBlock (DoExpr (EApp (EApp (EApp (EApp (EVar "ffiCheckExternPos") (EVar "mctx")) (EVar "n")) (EVar "fb")) (EVar "a"))) (DoExpr (EApp (EVar "go") (EVar "r"))))) (arm (PCon "TyEffect" PWild PWild (PVar "inner")) () (EApp (EVar "go") (EVar "inner"))) (arm (PVar "t") () (EApp (EApp (EApp (EApp (EVar "ffiCheckExternPos") (EVar "mctx")) (EVar "n")) (EVar "fb")) (EVar "t"))))))) (EApp (EVar "go") (EVar "ty0"))))
 (DTypeSig false "ffiCheckExternPos" (TyFun (TyCon "ModuleCtx") (TyFun (TyCon "String") (TyFun (TyApp (TyCon "Option") (TyCon "Loc")) (TyFun (TyCon "Ty") (TyCon "Unit"))))))
 (DFunDef false "ffiCheckExternPos" ((PVar "mctx") (PVar "n") (PVar "fb") (PVar "t")) (EIf (EApp (EApp (EVar "ffiCrossableTy") (EVar "mctx")) (EVar "t")) (ELit LUnit) (EIf (EVar "otherwise") (EApp (EApp (EApp (EApp (EVar "pushTypeErrorAt") (EVar "mctx")) (EVar "TFfiNoncrossable")) (EApp (EApp (EVar "orElseLoc") (EApp (EVar "firstTyLoc") (EVar "t"))) (EVar "fb"))) (EApp (EApp (EVar "ffiNonCrossableMsg") (EVar "n")) (EVar "t"))) (EApp (EVar "__fallthrough__") (ELit LUnit)))))
 (DTypeSig true "ffiCheckExternsLabelled" (TyFun (TyCon "ModuleCtx") (TyFun (TyCon "Bool") (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyCon "Unit")))))

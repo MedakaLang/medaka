@@ -288,16 +288,18 @@ routeWalkRecorded : IfaceRef ->
   ScopeId ->
   List RouteWalkEntry ->
   Option RouteWalkEntry
-routeWalkRecorded _ _ _ _ _ [] = None
-routeWalkRecorded iface goals row encl useScope (entry :: rest) =
-  if entry.rweEncl == encl
-    && entry.rweScope == useScope
-    && sameIfaceDecl entry.rweIface iface
-    && monoVecSameGiven entry.rweGoals goals
-    && rowRouteKey entry.rweRow == rowRouteKey row then
-    Some entry
-  else
-    routeWalkRecorded iface goals row encl useScope rest
+routeWalkRecorded iface goals row encl useScope xs0 = go xs0
+  where
+    go [] = None
+    go (entry :: rest) =
+      if entry.rweEncl == encl
+        && entry.rweScope == useScope
+        && sameIfaceDecl entry.rweIface iface
+        && monoVecSameGiven entry.rweGoals goals
+        && rowRouteKey entry.rweRow == rowRouteKey row then
+        Some entry
+      else
+        go rest
 
 -- What the stamper running now has built below its destination's top level.  The
 -- three producers of the routes inside a dictionary (`argReqRoute`, `superRouteAt`,
@@ -1983,6 +1985,8 @@ argImplReqRoutes : SiteCtx ->
   List Require ->
   ReqWalk ->
   List Route
+-- Bound: list built in tail position modulo cons: a where-local go loses the constant-stack loop until the lambda-lift pass (#4878); convert then.
+-- lint-disable-next-line rule-threaded-invariant
 argImplReqRoutes _sx _ _ _ [] _ = []
 argImplReqRoutes sx encl useScope subst ((Require { requireHead = rIface, requireArgs = rargs, requireOrigin = ro }) :: rest) walk =
   let iface = IfaceRef { irName = rIface, irOrigin = ro }
@@ -2214,9 +2218,10 @@ implMatchesU mctx univ iface (a0 :: rest) =
     || bucketArgsMatch mctx (univHeadless univ iface) (a0 :: rest)
 
 bucketArgsMatch : ModuleCtx -> List (List Ty, List Require) -> List Mono -> Bool
-bucketArgsMatch _mctx [] _ = False
-bucketArgsMatch mctx ((tys, _) :: rest) args =
-  implHeadMatchesArgs mctx tys args || bucketArgsMatch mctx rest args
+bucketArgsMatch mctx xs0 args = go xs0
+  where
+    go [] = False
+    go ((tys, _) :: rest) = implHeadMatchesArgs mctx tys args || go rest
 
 -- the impl of [iface] whose `requires` we must check at a dispatch to [args] (the
 -- receiver-head mono [args[0]]), with its (subst, reqs) — the impl checkNestedReqs
@@ -2330,11 +2335,12 @@ firstReqMatch : ModuleCtx ->
   List (List Ty, List Require) ->
   List Mono ->
   Option (List (String, Mono), List Require)
-firstReqMatch _mctx [] _ = None
-firstReqMatch mctx ((tys, reqs) :: rest) args =
-  match implHeadSubst mctx tys args
-    Some sub => Some (sub, reqs)
-    None => firstReqMatch mctx rest args
+firstReqMatch mctx xs0 args = go xs0
+  where
+    go [] = None
+    go ((tys, reqs) :: rest) = match implHeadSubst mctx tys args
+      Some sub => Some (sub, reqs)
+      None => go rest
 
 -- the concrete "iface|tag" bucket (empty when the tag is None / no such impl).
 -- The GOAL-side head arrives as a `HeadKey` that can carry identity; the concrete
@@ -2385,10 +2391,11 @@ bucketArgsMatchReqs : ModuleCtx ->
   List (List Ty, List Require) ->
   List Mono ->
   Bool
-bucketArgsMatchReqs _mctx [] _ = False
-bucketArgsMatchReqs mctx ((tys, reqs) :: rest) args =
-  isNonEmptyL reqs && implHeadMatchesArgs mctx tys args
-    || bucketArgsMatchReqs mctx rest args
+bucketArgsMatchReqs mctx xs0 args = go xs0
+  where
+    go [] = False
+    go ((tys, reqs) :: rest) =
+      isNonEmptyL reqs && implHeadMatchesArgs mctx tys args || go rest
 
 -- The keyed matchers (`bucketArgsMatch`, `bucketArgsMatchReqs`) test a bucket entry with
 -- implHeadMatchesArgs: each head-arg type pattern is

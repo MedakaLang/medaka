@@ -289,6 +289,8 @@ callArgVecsV : GraphCtx ->
   List (CSlot, List Mono) ->
   List (Int, Mono) ->
   List (List Mono)
+-- Bound: list built in tail position modulo cons: a where-local go loses the constant-stack loop until the lambda-lift pass (#4878); convert then.
+-- lint-disable-next-line rule-threaded-invariant
 callArgVecsV _gctx [] _ = []
 callArgVecsV gctx ((s, v) :: rest) subst = match lookupAssocI s.csId subst
   Some m => substArgVec gctx subst m v :: callArgVecsV gctx rest subst
@@ -746,11 +748,13 @@ dictVarSatisfiesIface : ModuleCtx ->
   Int ->
   List (String, Mono) ->
   Bool
-dictVarSatisfiesIface _mctx _ _ [] = False
-dictVarSatisfiesIface mctx mIface id ((cIface, cm) :: rest)
-  | monoIsTyvarId cm id && contains mIface (ifaceSelfAndSupers mctx cIface) =
-    True
-  | otherwise = dictVarSatisfiesIface mctx mIface id rest
+dictVarSatisfiesIface mctx mIface id xs0 = go xs0
+  where
+    go [] = False
+    go ((cIface, cm) :: rest)
+      | monoIsTyvarId cm id
+        && contains mIface (ifaceSelfAndSupers mctx cIface) = True
+      | otherwise = go rest
 
 -- P0-19: impose a definer-shadow standalone's declared domain on the actual argument
 -- [xt] WHEN the occurrence resolves to the standalone (RLocal).  No declared signature ⇒
@@ -1186,12 +1190,12 @@ admittedDeclHitters : ModuleCtx ->
   List IfaceRef ->
   List Mono ->
   Option (List IfaceRef)
-admittedDeclHitters _mctx _ _ [] _ = Some []
-admittedDeclHitters mctx env name (ir :: rest) ats = do
-  hit <- admittedDeclHits mctx env name ir ats
-  map
-    (hs => if hit then ir :: hs else hs)
-    (admittedDeclHitters mctx env name rest ats)
+admittedDeclHitters mctx env name xs0 ats = go xs0
+  where
+    go [] = Some []
+    go (ir :: rest) = do
+      hit <- admittedDeclHits mctx env name ir ats
+      map (hs => if hit then ir :: hs else hs) (go rest)
 
 -- S2-DECL (a)+(b) for ONE declaration: its receiver argument is the applied argument at
 -- ITS OWN dispatch index (not the occurrence's first argument), and the impl query asks
@@ -1221,14 +1225,17 @@ importerDispatchIdxOuter mctx name =
     None => methodDispatchIdx mctx name
 
 admittedIdxMax : ModuleCtx -> String -> List IfaceRef -> Option Int
-admittedIdxMax _mctx _ [] = None
-admittedIdxMax mctx name (ir :: rest) =
-  let here = lookupIdxById ir name mctx.mcCells.methodDispatchIdxByIdRef.value
-  match admittedIdxMax mctx name rest
-    None => here
-    Some k => match here
-      None => Some k
-      Some j => Some (maxI j k)
+admittedIdxMax mctx name xs0 = go xs0
+  where
+    go [] = None
+    go (ir :: rest) =
+      let here =
+        lookupIdxById ir name mctx.mcCells.methodDispatchIdxByIdRef.value
+      match go rest
+        None => here
+        Some k => match here
+          None => Some k
+          Some j => Some (maxI j k)
 
 -- Ground each admitted declaration's OWN receiver argument to the standalone's declared
 -- domain at that index, before the impl queries are asked — the P0-20 symmetry rule
@@ -1251,23 +1258,25 @@ groundAdmittedGo : TcEnv ->
   List Mono ->
   Option Loc ->
   Unit
-groundAdmittedGo _env _ [] _ _ = ()
-groundAdmittedGo env mname (ir :: rest) ats dloc =
-  match (lookupIdxById
-    ir
-    mname
-    env.teDyn.dcModule.mcCells.methodDispatchIdxByIdRef.value)
-    None => ()
-    Some k => match nthMono k ats
-      None => ()
-      Some at =>
-        groundShadowReceiver
-          env.teDyn
-          (importerShadowDomainAt env mname k)
-          at
-          (definerReceiverIsDictVar env.teDyn mname at)
-          dloc
-  groundAdmittedGo env mname rest ats dloc
+groundAdmittedGo env mname xs0 ats dloc = go xs0
+  where
+    go [] = ()
+    go (ir :: rest) =
+      match (lookupIdxById
+        ir
+        mname
+        env.teDyn.dcModule.mcCells.methodDispatchIdxByIdRef.value)
+        None => ()
+        Some k => match nthMono k ats
+          None => ()
+          Some at =>
+            groundShadowReceiver
+              env.teDyn
+              (importerShadowDomainAt env mname k)
+              at
+              (definerReceiverIsDictVar env.teDyn mname at)
+              dloc
+      go rest
 
 -- ERROR-QUALITY: name the two things that collide, say what the collision costs, then
 -- name the fixes.  Callers locate it at the occurrence's head (`appSpineHeadLoc`): an
@@ -1623,15 +1632,16 @@ importShadowsOfDecl : List (String, List Decl) ->
   List Decl ->
   Decl ->
   List (String, String, Option Ty, Ty, Loc)
-importShadowsOfDecl graph rows nameable universe (DAttrib _ d) =
-  importShadowsOfDecl graph rows nameable universe d
-importShadowsOfDecl graph rows nameable universe (DUse _ path _) = match path
-  UseGroup _ ms => match lookupAssoc (useModId path) graph
-    None => []
-    Some depDecls =>
-      flatMap (importMemberShadow graph rows nameable universe depDecls) ms
-  _ => []
-importShadowsOfDecl _ _ _ _ _ = []
+importShadowsOfDecl graph rows nameable universe x0 = go x0
+  where
+    go (DAttrib _ d) = go d
+    go (DUse _ path _) = match path
+      UseGroup _ ms => match lookupAssoc (useModId path) graph
+        None => []
+        Some depDecls =>
+          flatMap (importMemberShadow graph rows nameable universe depDecls) ms
+      _ => []
+    go _ = []
 
 importMemberShadow : List (String, List Decl) ->
   List (String, List String) ->
@@ -1664,15 +1674,17 @@ ifaceMethodSigFor : String ->
   List (String, List String) ->
   List Decl ->
   Option (String, Ty)
-ifaceMethodSigFor _ _ [] _ = None
-ifaceMethodSigFor name sty ((iface, ms) :: rest) universe =
-  let later = ifaceMethodSigFor name sty rest universe
-  if not (contains name ms) then
-    later
-  else match ifaceMethodTyIn iface name universe
-    Some ty =>
-      if schemesAgree sty ty then later else leastIfaceSig (iface, ty) later
-    None => later
+ifaceMethodSigFor name sty xs0 universe = go xs0
+  where
+    go [] = None
+    go ((iface, ms) :: rest) =
+      let later = go rest
+      if not (contains name ms) then
+        later
+      else match ifaceMethodTyIn iface name universe
+        Some ty =>
+          if schemesAgree sty ty then later else leastIfaceSig (iface, ty) later
+        None => later
 
 leastIfaceSig : (String, Ty) -> Option (String, Ty) -> Option (String, Ty)
 leastIfaceSig a None = Some a
@@ -1683,18 +1695,20 @@ leastIfaceSig (a@(ia, ta)) (Some (b@(ib, tb)))
   | otherwise = Some b
 
 ifaceMethodTyIn : String -> String -> List Decl -> Option Ty
-ifaceMethodTyIn _ _ [] = None
-ifaceMethodTyIn iface name ((DAttrib _ d) :: rest) =
-  let inner = ifaceMethodTyIn iface name [d]
-  match inner
-    Some ty => Some ty
-    None => ifaceMethodTyIn iface name rest
-ifaceMethodTyIn iface name ((DInterface { name = n, methods, ... }) :: rest)
-  | n == iface = match ifaceMethodTyOf name methods
-    Some ty => Some ty
-    None => ifaceMethodTyIn iface name rest
-  | otherwise = ifaceMethodTyIn iface name rest
-ifaceMethodTyIn iface name (_ :: rest) = ifaceMethodTyIn iface name rest
+ifaceMethodTyIn iface name xs0 = go xs0
+  where
+    go [] = None
+    go ((DAttrib _ d) :: rest) =
+      let inner = go [d]
+      match inner
+        Some ty => Some ty
+        None => go rest
+    go ((DInterface { name = n, methods, ... }) :: rest)
+      | n == iface = match ifaceMethodTyOf name methods
+        Some ty => Some ty
+        None => go rest
+      | otherwise = go rest
+    go (_ :: rest) = go rest
 
 ifaceMethodTyOf : String -> List IfaceMethod -> Option Ty
 ifaceMethodTyOf _ [] = None
@@ -1740,13 +1754,14 @@ reachableStandaloneSigGo : List (String, List Decl) ->
   Int ->
   List (String, String) ->
   Option (Option Ty)
-reachableStandaloneSigGo _ _ [] = None
-reachableStandaloneSigGo graph fuel ((mid, n) :: rest) =
-  match lookupAssoc mid graph
-    None => reachableStandaloneSigGo graph fuel rest
-    Some ds => match reachableStandaloneSig graph fuel ds n
-      Some sig => Some sig
-      None => reachableStandaloneSigGo graph fuel rest
+reachableStandaloneSigGo graph fuel xs0 = go xs0
+  where
+    go [] = None
+    go ((mid, n) :: rest) = match lookupAssoc mid graph
+      None => go rest
+      Some ds => match reachableStandaloneSig graph fuel ds n
+        Some sig => Some sig
+        None => go rest
 
 -- Every (dependency module id, name in THAT module) an `export import` in [decls] could
 -- have re-exported [name] from.  A non-exporting `import` contributes nothing: it puts
@@ -1882,10 +1897,12 @@ takeAlphaConstraint : List (String, String) ->
   List Constraint ->
   List Constraint ->
   Option (List (String, String), List Constraint)
-takeAlphaConstraint _ _ [] _ = None
-takeAlphaConstraint m c (d :: rest) tried = match tyAlphaConstraint m c d
-  Some m2 => Some (m2, tried ++ rest)
-  None => takeAlphaConstraint m c rest (d :: tried)
+takeAlphaConstraint m c xs0 tried0 = go xs0 tried0
+  where
+    go [] _ = None
+    go (d :: rest) tried = match tyAlphaConstraint m c d
+      Some m2 => Some (m2, tried ++ rest)
+      None => go rest (d :: tried)
 
 -- Same interface, and pairwise alpha-equal arguments under the map the body already
 -- pinned.  `constraintOrigin` is identity metadata the surface signature does not carry

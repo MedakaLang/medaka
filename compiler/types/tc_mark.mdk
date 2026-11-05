@@ -226,37 +226,39 @@ mintDictAt mctx onDict n =
 -- so with the emit path off this would degenerate to the same node set mapProg
 -- visits.
 prePassDeclScoped : ModuleCtx -> ArgRw -> Decl -> Decl
-prePassDeclScoped mctx rw (DFunDef pub n ps e site bid) =
-  DFunDef
-    pub
-    n
-    ps
-    (rewriteArgScoped mctx rw (boundOfList (patVarsListTc ps)) e)
-    site
-    bid
-prePassDeclScoped mctx rw (d@(DInterface { methods, ... })) =
-  DInterface { d | methods = map (prePassIfaceMethodScoped mctx rw) methods }
-prePassDeclScoped mctx rw (d@(DImpl { methods, ... })) =
-  DImpl { d | methods = map (prePassImplMethodScoped mctx rw) methods }
-prePassDeclScoped mctx rw (DProp pub name params body) =
-  DProp
-    pub
-    name
-    params
-    (rewriteArgScoped mctx rw (boundOfList (propParamNamesTc params)) body)
-prePassDeclScoped mctx rw (DTest pub name body) =
-  DTest pub name (rewriteArgScoped mctx rw omEmpty body)
-prePassDeclScoped mctx rw (DAttrib attrs d) =
-  DAttrib attrs (prePassDeclScoped mctx rw d)
--- Top-level `let rec … with …` (DLetGroup): mapDecl/the catch-all skip its bodies,
--- so a constrained-fn occurrence inside a group body would never be rewritten to
--- EDictAt/EMethodAt → its call site gets no dict route → the dict-passed callee is
--- under-applied at eval.  Rewrite each clause body with that clause's params scoped
--- in, exactly like the DFunDef arm.
-prePassDeclScoped mctx rw (DLetGroup pub binds) =
-  DLetGroup pub (map (prePassLetBindScoped mctx rw) binds)
-prePassDeclScoped _mctx _ (d@(DTypeSig _ _ _ _ | DExtern _ | DData {  } | DUse _ _ _ | DEffect _ _ _ _ _ _ | DTypeAlias {  } | DNewtype {  })) =
-  d
+prePassDeclScoped mctx rw x20 = go x20
+  where
+    go (DFunDef pub n ps e site bid) =
+      DFunDef
+        pub
+        n
+        ps
+        (rewriteArgScoped mctx rw (boundOfList (patVarsListTc ps)) e)
+        site
+        bid
+    go (d@(DInterface { methods, ... })) = DInterface { d |
+      methods = map (prePassIfaceMethodScoped mctx rw) methods,
+    }
+    go (d@(DImpl { methods, ... })) =
+      DImpl { d | methods = map (prePassImplMethodScoped mctx rw) methods }
+    go (DProp pub name params body) =
+      DProp
+        pub
+        name
+        params
+        (rewriteArgScoped mctx rw (boundOfList (propParamNamesTc params)) body)
+    go (DTest pub name body) =
+      DTest pub name (rewriteArgScoped mctx rw omEmpty body)
+    go (DAttrib attrs d) = DAttrib attrs (go d)
+    -- Top-level `let rec … with …` (DLetGroup): mapDecl/the catch-all skip its bodies,
+    -- so a constrained-fn occurrence inside a group body would never be rewritten to
+    -- EDictAt/EMethodAt → its call site gets no dict route → the dict-passed callee is
+    -- under-applied at eval.  Rewrite each clause body with that clause's params scoped
+    -- in, exactly like the DFunDef arm.
+    go (DLetGroup pub binds) =
+      DLetGroup pub (map (prePassLetBindScoped mctx rw) binds)
+    go (d@(DTypeSig _ _ _ _ | DExtern _ | DData {  } | DUse _ _ _ | DEffect _ _ _ _ _ _ | DTypeAlias {  } | DNewtype {  })) =
+      d
 
 prePassLetBindScoped : ModuleCtx -> ArgRw -> LetBind -> LetBind
 prePassLetBindScoped mctx rw (LetBind n clauses site bid) =
@@ -377,6 +379,8 @@ boundOfList ns = boundInsert ns omEmpty
 -- binders) extend `bound`; every other node recurses into its children with the
 -- same `bound`.
 rewriteArgScoped : ModuleCtx -> ArgRw -> OrdMap String -> Expr -> Expr
+-- Bound: hot compiler path: the where-go form allocates one closure per call until the lambda-lift pass (#4878); convert then.
+-- lint-disable-next-line rule-threaded-invariant
 rewriteArgScoped mctx (ArgRw rp dn an sm onDict granted) bound (EVar n)
   -- P0-18: `n` is a MANGLED definer-shadow standalone (`<mid>__size`).  Mark it
   -- `EMethodAt` with the BARE dispatch name (so `implFor` finds the impl when the
@@ -586,16 +590,17 @@ rewriteArgGuards : ModuleCtx ->
   OrdMap String ->
   List Guard ->
   (List Guard, OrdMap String)
-rewriteArgGuards _mctx _ bound [] = ([], bound)
-rewriteArgGuards mctx rw bound ((GBool e) :: rest) =
-  let e2 = rewriteArgScoped mctx rw bound e
-  let (rest2, bnd) = rewriteArgGuards mctx rw bound rest
-  (GBool e2 :: rest2, bnd)
-rewriteArgGuards mctx rw bound ((GBind p e) :: rest) =
-  let e2 = rewriteArgScoped mctx rw bound e
-  let (rest2, bnd) =
-    rewriteArgGuards mctx rw (boundInsert (patVarsTc p) bound) rest
-  (GBind p e2 :: rest2, bnd)
+rewriteArgGuards mctx rw bound0 xs0 = go bound0 xs0
+  where
+    go bound [] = ([], bound)
+    go bound ((GBool e) :: rest) =
+      let e2 = rewriteArgScoped mctx rw bound e
+      let (rest2, bnd) = go bound rest
+      (GBool e2 :: rest2, bnd)
+    go bound ((GBind p e) :: rest) =
+      let e2 = rewriteArgScoped mctx rw bound e
+      let (rest2, bnd) = go (boundInsert (patVarsTc p) bound) rest
+      (GBind p e2 :: rest2, bnd)
 
 -- do/block statements: a DoBind/DoLet pattern binds for SUBSEQUENT
 -- statements (a recursive DoLet also for its own RHS).
@@ -604,6 +609,8 @@ rewriteArgStmts : ModuleCtx ->
   OrdMap String ->
   List DoStmt ->
   List DoStmt
+-- Bound: list built in tail position modulo cons: a where-local go loses the constant-stack loop until the lambda-lift pass (#4878); convert then.
+-- lint-disable-next-line rule-threaded-invariant
 rewriteArgStmts _mctx _ _ [] = []
 rewriteArgStmts mctx rw bound ((DoExpr e) :: rest) =
   DoExpr (rewriteArgScoped mctx rw bound e)
@@ -655,10 +662,12 @@ markTailDecls mctx mc dn granted decls =
   map (markTailDecl mctx (argRwOf mc dn noDictHook granted)) decls
 
 markTailDecl : ModuleCtx -> ArgRw -> Decl -> Decl
-markTailDecl _mctx _ (d@(DFunDef _ _ _ _ _ _)) = d
-markTailDecl _mctx _ (d@(DLetGroup _ _)) = d
-markTailDecl mctx rw (DAttrib attrs d) = DAttrib attrs (markTailDecl mctx rw d)
-markTailDecl mctx rw d = prePassDeclScoped mctx rw d
+markTailDecl mctx rw x20 = go x20
+  where
+    go (d@(DFunDef _ _ _ _ _ _)) = d
+    go (d@(DLetGroup _ _)) = d
+    go (DAttrib attrs d) = DAttrib attrs (go d)
+    go d = prePassDeclScoped mctx rw d
 
 markClauseWith : ModuleCtx -> ArgRw -> (List Pat, Expr) -> (List Pat, Expr)
 markClauseWith mctx rw (ps, e) =
@@ -811,27 +820,24 @@ recMarkMembers : ModuleCtx ->
   List ScopedMember ->
   OrdMap (List (List Pat, Expr)) ->
   OrdMap (List (List Pat, Expr))
-recMarkMembers _mctx _ _ [] grouped = grouped
-recMarkMembers mctx dn placeholders (member :: rest) grouped =
-  let m = member.smName
-  let onDict =
-    callee ev =>
-      pushRecDictAppGoal
-        mctx.mcGraph
-        (RecDictApp
-          (Ref [])
-          callee
-          m
-          (placeholderMonoOf callee placeholders)
-          member.smScope
-          ev)
-  let rw = ArgRw omEmpty dn omEmpty [] onDict (_ => False)
-  recMarkMembers
-    mctx
-    dn
-    placeholders
-    rest
-    (mapGroupClauses (markClauseWith mctx rw) [m] grouped)
+recMarkMembers mctx dn placeholders xs0 grouped0 = go xs0 grouped0
+  where
+    go [] grouped = grouped
+    go (member :: rest) grouped =
+      let m = member.smName
+      let onDict =
+        callee ev =>
+          pushRecDictAppGoal
+            mctx.mcGraph
+            (RecDictApp
+              (Ref [])
+              callee
+              m
+              (placeholderMonoOf callee placeholders)
+              member.smScope
+              ev)
+      let rw = ArgRw omEmpty dn omEmpty [] onDict (_ => False)
+      go rest (mapGroupClauses (markClauseWith mctx rw) [m] grouped)
 
 placeholderMonoOf : String -> List (String, Mono) -> Mono
 placeholderMonoOf callee placeholders = match lookupAssoc callee placeholders
@@ -887,11 +893,13 @@ rebuildFunClauses : OrdMap (List (List Pat, Expr)) ->
   String ->
   List FunClause ->
   (List FunClause, OrdMap (List (List Pat, Expr)))
-rebuildFunClauses _ pending _ [] = ([], pending)
-rebuildFunClauses grouped pending n (_ :: rest) =
-  let ((ps, e), pending2) = popMarkedClause grouped pending n
-  let (cs, pending3) = rebuildFunClauses grouped pending2 n rest
-  (FunClause ps e :: cs, pending3)
+rebuildFunClauses grouped pending0 n xs0 = go pending0 xs0
+  where
+    go pending [] = ([], pending)
+    go pending (_ :: rest) =
+      let ((ps, e), pending2) = popMarkedClause grouped pending n
+      let (cs, pending3) = go pending2 rest
+      (FunClause ps e :: cs, pending3)
 
 -- The next unconsumed marked clause of [n]: `pending` holds the clauses not yet
 -- written back, in source order, minted from `clausesOf` on first use.

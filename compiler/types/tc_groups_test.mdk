@@ -509,14 +509,15 @@ groupWith size bodies param =
 -- Alpha-renaming of the parameter [from] to [to] over the fragment a body uses: every
 -- reference the parameter binds is renamed, and a lambda that rebinds [from] shields its body.
 renameFree : String -> String -> Expr -> Expr
-renameFree from to (EVar x) = if x == from then EVar to else EVar x
-renameFree from to (EApp f x) =
-  EApp (renameFree from to f) (renameFree from to x)
-renameFree from to (ELam [PVar n l b] body)
-  | n == from = ELam [PVar n l b] body
-  | otherwise = ELam [PVar n l b] (renameFree from to body)
-renameFree _ _ (e@(ELit _ | ELet _ _ _ _ _ | EMatch _ _ | EIf _ _ _ | EBinOp _ _ _ _ | EUnOp _ _ _ | EInfix _ _ _ | EFieldAccess _ _ _ | ETuple _ | EListLit _ | EArrayLit _ | ERangeList _ _ _ | ERangeArray _ _ _ | ESlice _ _ _ _ | ELetGroup _ _ | ESection _ | EIndex _ _ | EAnnot _ _ | EHeadAnnot _ _ | EBlock _ | EDo _ _ | EStringInterp _ | EGuards _ | ERecordCreate _ _ | ERecordUpdate _ _ _ | EVariantUpdate _ _ _ | EMapLit _ _ | ESetLit _ _ | EAsPat _ _ | EOrPat _ | EMethodRef _ | EDictApp _ | EVarAt _ _ | EVarId _ _ | EMethodAt _ _ _ | EDictAt _ _ | ELoc _ _ | EDoOrigin _ _ | ENumLit _ _ _ | EWideLit _ _ _ _ | ELam _ _)) =
-  e
+renameFree from to x20 = go x20
+  where
+    go (EVar x) = if x == from then EVar to else EVar x
+    go (EApp f x) = EApp (go f) (go x)
+    go (ELam [PVar n l b] body)
+      | n == from = ELam [PVar n l b] body
+      | otherwise = ELam [PVar n l b] (go body)
+    go (e@(ELit _ | ELet _ _ _ _ _ | EMatch _ _ | EIf _ _ _ | EBinOp _ _ _ _ | EUnOp _ _ _ | EInfix _ _ _ | EFieldAccess _ _ _ | ETuple _ | EListLit _ | EArrayLit _ | ERangeList _ _ _ | ERangeArray _ _ _ | ESlice _ _ _ _ | ELetGroup _ _ | ESection _ | EIndex _ _ | EAnnot _ _ | EHeadAnnot _ _ | EBlock _ | EDo _ _ | EStringInterp _ | EGuards _ | ERecordCreate _ _ | ERecordUpdate _ _ _ | EVariantUpdate _ _ _ | EMapLit _ _ | ESetLit _ _ | EAsPat _ _ | EOrPat _ | EMethodRef _ | EDictApp _ | EVarAt _ _ | EVarId _ _ | EMethodAt _ _ _ | EDictAt _ _ | ELoc _ _ | EDoOrigin _ _ | ENumLit _ _ _ | EWideLit _ _ _ _ | ELam _ _)) =
+      e
 
 renamedGroup : Int ->
   List (List Piece) ->

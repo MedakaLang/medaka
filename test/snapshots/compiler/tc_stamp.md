@@ -1,5 +1,5 @@
 # META
-source_lines=759
+source_lines=761
 stages=DESUGAR,MARK
 # SOURCE
 -- tc_stamp: the graph-end stamp queue: enqueue a module's stamping context, drain it after the
@@ -152,6 +152,8 @@ evidenceObservationEntriesGo : Obligation ->
   Int ->
   Int ->
   List EvidenceObservationEntry
+-- Bound: list built in tail position modulo cons: a where-local go loses the constant-stack loop until the lambda-lift pass (#4878); convert then.
+-- lint-disable-next-line rule-threaded-invariant
 evidenceObservationEntriesGo _ [] _ _ _ = []
 evidenceObservationEntriesGo o (r :: rs) preds arity slot =
   let (predHere, predsRest) = match preds
@@ -626,26 +628,26 @@ judgeCells : Array (Option EvCell) ->
   Int ->
   List (String, TcDiag) ->
   List (String, TcDiag)
-judgeCells arr i hi acc
-  | i >= hi || i >= arrayLength arr = acc
-  | otherwise = match arrayGetUnsafe i arr
-    Some c => match c.ecArity.value
-      Some _ =>
-        let row =
-          OccurrenceRow
-            c.ecName.value
-            c.ecIface.value
-            c.ecTag.value
-            c.ecImpl.value
-            c.ecMeth.value
-        judgeCells
-          arr
-          (i + 1)
-          hi
-          (holeDiags (evIdModule c.ecId) c.ecLoc.value c.ecInner.value row
-            ++ acc)
-      None => judgeCells arr (i + 1) hi acc
-    None => judgeCells arr (i + 1) hi acc
+judgeCells arr i0 hi acc0 = go i0 acc0
+  where
+    go i acc
+      | i >= hi || i >= arrayLength arr = acc
+      | otherwise = match arrayGetUnsafe i arr
+        Some c => match c.ecArity.value
+          Some _ =>
+            let row =
+              OccurrenceRow
+                c.ecName.value
+                c.ecIface.value
+                c.ecTag.value
+                c.ecImpl.value
+                c.ecMeth.value
+            go
+              (i + 1)
+              (holeDiags (evIdModule c.ecId) c.ecLoc.value c.ecInner.value row
+                ++ acc)
+          None => go (i + 1) acc
+        None => go (i + 1) acc
 
 judgeGoal : String -> Obligation -> List (String, TcDiag)
 judgeGoal mid o = match (o.oPayload, evValueOf o.oDest)
@@ -897,7 +899,7 @@ evValueOf (EvRoutes rs) = EvMany !rs
 (DTypeSig false "holeKey" (TyFun (TyTuple (TyCon "String") (TyCon "TcDiag")) (TyCon "String")))
 (DFunDef false "holeKey" ((PTuple (PVar "m") (PCon "TcDiag" PWild PWild (PVar "loc") (PVar "msg") PWild PWild))) (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "")) (EApp (EVar "display") (EApp (EVar "lenKey") (EVar "m")))) (ELit (LString ""))) (EApp (EVar "display") (EApp (EVar "lenKey") (EApp (EVar "locGoalKey") (EVar "loc"))))) (ELit (LString ""))) (EApp (EVar "display") (EVar "msg"))) (ELit (LString ""))))
 (DTypeSig false "judgeCells" (TyFun (TyApp (TyCon "Array") (TyApp (TyCon "Option") (TyCon "EvCell"))) (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "TcDiag"))) (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "TcDiag"))))))))
-(DFunDef false "judgeCells" ((PVar "arr") (PVar "i") (PVar "hi") (PVar "acc")) (EIf (EBinOp "||" (EBinOp ">=" (EVar "i") (EVar "hi")) (EBinOp ">=" (EVar "i") (EApp (EVar "arrayLength") (EVar "arr")))) (EVar "acc") (EIf (EVar "otherwise") (EMatch (EApp (EApp (EVar "arrayGetUnsafe") (EVar "i")) (EVar "arr")) (arm (PCon "Some" (PVar "c")) () (EMatch (EFieldAccess (EFieldAccess (EVar "c") "ecArity") "value") (arm (PCon "Some" PWild) () (EBlock (DoLet false false (PVar "row") (EApp (EApp (EApp (EApp (EApp (EVar "OccurrenceRow") (EFieldAccess (EFieldAccess (EVar "c") "ecName") "value")) (EFieldAccess (EFieldAccess (EVar "c") "ecIface") "value")) (EFieldAccess (EFieldAccess (EVar "c") "ecTag") "value")) (EFieldAccess (EFieldAccess (EVar "c") "ecImpl") "value")) (EFieldAccess (EFieldAccess (EVar "c") "ecMeth") "value"))) (DoExpr (EApp (EApp (EApp (EApp (EVar "judgeCells") (EVar "arr")) (EBinOp "+" (EVar "i") (ELit (LInt 1)))) (EVar "hi")) (EBinOp "++" (EApp (EApp (EApp (EApp (EVar "holeDiags") (EApp (EVar "evIdModule") (EFieldAccess (EVar "c") "ecId"))) (EFieldAccess (EFieldAccess (EVar "c") "ecLoc") "value")) (EFieldAccess (EFieldAccess (EVar "c") "ecInner") "value")) (EVar "row")) (EVar "acc")))))) (arm (PCon "None") () (EApp (EApp (EApp (EApp (EVar "judgeCells") (EVar "arr")) (EBinOp "+" (EVar "i") (ELit (LInt 1)))) (EVar "hi")) (EVar "acc"))))) (arm (PCon "None") () (EApp (EApp (EApp (EApp (EVar "judgeCells") (EVar "arr")) (EBinOp "+" (EVar "i") (ELit (LInt 1)))) (EVar "hi")) (EVar "acc")))) (EApp (EVar "__fallthrough__") (ELit LUnit)))))
+(DFunDef false "judgeCells" ((PVar "arr") (PVar "i0") (PVar "hi") (PVar "acc0")) (ELetGroup ((lgb "go" (clause ((PVar "i") (PVar "acc")) (EIf (EBinOp "||" (EBinOp ">=" (EVar "i") (EVar "hi")) (EBinOp ">=" (EVar "i") (EApp (EVar "arrayLength") (EVar "arr")))) (EVar "acc") (EIf (EVar "otherwise") (EMatch (EApp (EApp (EVar "arrayGetUnsafe") (EVar "i")) (EVar "arr")) (arm (PCon "Some" (PVar "c")) () (EMatch (EFieldAccess (EFieldAccess (EVar "c") "ecArity") "value") (arm (PCon "Some" PWild) () (EBlock (DoLet false false (PVar "row") (EApp (EApp (EApp (EApp (EApp (EVar "OccurrenceRow") (EFieldAccess (EFieldAccess (EVar "c") "ecName") "value")) (EFieldAccess (EFieldAccess (EVar "c") "ecIface") "value")) (EFieldAccess (EFieldAccess (EVar "c") "ecTag") "value")) (EFieldAccess (EFieldAccess (EVar "c") "ecImpl") "value")) (EFieldAccess (EFieldAccess (EVar "c") "ecMeth") "value"))) (DoExpr (EApp (EApp (EVar "go") (EBinOp "+" (EVar "i") (ELit (LInt 1)))) (EBinOp "++" (EApp (EApp (EApp (EApp (EVar "holeDiags") (EApp (EVar "evIdModule") (EFieldAccess (EVar "c") "ecId"))) (EFieldAccess (EFieldAccess (EVar "c") "ecLoc") "value")) (EFieldAccess (EFieldAccess (EVar "c") "ecInner") "value")) (EVar "row")) (EVar "acc")))))) (arm (PCon "None") () (EApp (EApp (EVar "go") (EBinOp "+" (EVar "i") (ELit (LInt 1)))) (EVar "acc"))))) (arm (PCon "None") () (EApp (EApp (EVar "go") (EBinOp "+" (EVar "i") (ELit (LInt 1)))) (EVar "acc")))) (EApp (EVar "__fallthrough__") (ELit LUnit))))))) (EApp (EApp (EVar "go") (EVar "i0")) (EVar "acc0"))))
 (DTypeSig false "judgeGoal" (TyFun (TyCon "String") (TyFun (TyCon "Obligation") (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "TcDiag"))))))
 (DFunDef false "judgeGoal" ((PVar "mid") (PVar "o")) (EMatch (ETuple (EFieldAccess (EVar "o") "oPayload") (EApp (EVar "evValueOf") (EFieldAccess (EVar "o") "oDest"))) (arm (PTuple (PCon "GPDictApp" (PVar "app")) (PCon "EvMany" (PVar "rs"))) () (EApp (EApp (EApp (EApp (EVar "holeDiags") (EVar "mid")) (EFieldAccess (EVar "o") "oLoc")) (EFieldAccess (EFieldAccess (EVar "o") "oInner") "value")) (EApp (EApp (EApp (EVar "DictAppRow") (EFieldAccess (EVar "app") "pdaCallee")) (EApp (EApp (EVar "map") (ELam ((PVar "r")) (EFieldAccess (EVar "r") "irName"))) (EFieldAccess (EVar "app") "pdaIfaces"))) (EVar "rs")))) (arm (PTuple (PCon "GPRecDictApp" (PCon "RecDictApp" PWild (PVar "callee") PWild PWild PWild PWild)) (PCon "EvMany" (PVar "rs"))) () (EApp (EApp (EApp (EApp (EVar "holeDiags") (EVar "mid")) (EFieldAccess (EVar "o") "oLoc")) (EFieldAccess (EFieldAccess (EVar "o") "oInner") "value")) (EApp (EApp (EApp (EVar "DictAppRow") (EVar "callee")) (EListLit)) (EVar "rs")))) (arm (PTuple (PCon "GPArith" PWild) (PCon "EvOne" (PVar "r"))) () (EApp (EApp (EApp (EApp (EVar "holeDiags") (EVar "mid")) (EFieldAccess (EVar "o") "oLoc")) (EFieldAccess (EFieldAccess (EVar "o") "oInner") "value")) (EApp (EVar "SiteRow") (EVar "r")))) (arm (PTuple (PCon "GPSite" PWild PWild PWild) (PCon "EvOne" (PVar "r"))) () (EIf (EBinOp "||" (EBinOp "==" (EApp (EVar "goalKindTag") (EFieldAccess (EVar "o") "oKind")) (EApp (EVar "goalKindTag") (EVar "GKBinopSite"))) (EBinOp "==" (EApp (EVar "goalKindTag") (EFieldAccess (EVar "o") "oKind")) (EApp (EVar "goalKindTag") (EVar "GKUnopSite")))) (EApp (EApp (EApp (EApp (EVar "holeDiags") (EVar "mid")) (EFieldAccess (EVar "o") "oLoc")) (EFieldAccess (EFieldAccess (EVar "o") "oInner") "value")) (EApp (EVar "SiteRow") (EVar "r"))) (EListLit))) (arm PWild () (EListLit))))
 (DTypeSig false "holeDiags" (TyFun (TyCon "String") (TyFun (TyApp (TyCon "Option") (TyCon "Loc")) (TyFun (TyCon "Inner") (TyFun (TyCon "EvidenceRow") (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "TcDiag"))))))))
@@ -1064,7 +1066,7 @@ evValueOf (EvRoutes rs) = EvMany !rs
 (DTypeSig false "holeKey" (TyFun (TyTuple (TyCon "String") (TyCon "TcDiag")) (TyCon "String")))
 (DFunDef false "holeKey" ((PTuple (PVar "m") (PCon "TcDiag" PWild PWild (PVar "loc") (PVar "msg") PWild PWild))) (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "")) (EApp (EMethodRef "display") (EApp (EVar "lenKey") (EVar "m")))) (ELit (LString ""))) (EApp (EMethodRef "display") (EApp (EVar "lenKey") (EApp (EVar "locGoalKey") (EVar "loc"))))) (ELit (LString ""))) (EApp (EMethodRef "display") (EVar "msg"))) (ELit (LString ""))))
 (DTypeSig false "judgeCells" (TyFun (TyApp (TyCon "Array") (TyApp (TyCon "Option") (TyCon "EvCell"))) (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "TcDiag"))) (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "TcDiag"))))))))
-(DFunDef false "judgeCells" ((PVar "arr") (PVar "i") (PVar "hi") (PVar "acc")) (EIf (EBinOp "||" (EBinOp ">=" (EVar "i") (EVar "hi")) (EBinOp ">=" (EVar "i") (EApp (EVar "arrayLength") (EVar "arr")))) (EVar "acc") (EIf (EVar "otherwise") (EMatch (EApp (EApp (EVar "arrayGetUnsafe") (EVar "i")) (EVar "arr")) (arm (PCon "Some" (PVar "c")) () (EMatch (EFieldAccess (EFieldAccess (EVar "c") "ecArity") "value") (arm (PCon "Some" PWild) () (EBlock (DoLet false false (PVar "row") (EApp (EApp (EApp (EApp (EApp (EVar "OccurrenceRow") (EFieldAccess (EFieldAccess (EVar "c") "ecName") "value")) (EFieldAccess (EFieldAccess (EVar "c") "ecIface") "value")) (EFieldAccess (EFieldAccess (EVar "c") "ecTag") "value")) (EFieldAccess (EFieldAccess (EVar "c") "ecImpl") "value")) (EFieldAccess (EFieldAccess (EVar "c") "ecMeth") "value"))) (DoExpr (EApp (EApp (EApp (EApp (EVar "judgeCells") (EVar "arr")) (EBinOp "+" (EVar "i") (ELit (LInt 1)))) (EVar "hi")) (EBinOp "++" (EApp (EApp (EApp (EApp (EVar "holeDiags") (EApp (EVar "evIdModule") (EFieldAccess (EVar "c") "ecId"))) (EFieldAccess (EFieldAccess (EVar "c") "ecLoc") "value")) (EFieldAccess (EFieldAccess (EVar "c") "ecInner") "value")) (EVar "row")) (EVar "acc")))))) (arm (PCon "None") () (EApp (EApp (EApp (EApp (EVar "judgeCells") (EVar "arr")) (EBinOp "+" (EVar "i") (ELit (LInt 1)))) (EVar "hi")) (EVar "acc"))))) (arm (PCon "None") () (EApp (EApp (EApp (EApp (EVar "judgeCells") (EVar "arr")) (EBinOp "+" (EVar "i") (ELit (LInt 1)))) (EVar "hi")) (EVar "acc")))) (EApp (EVar "__fallthrough__") (ELit LUnit)))))
+(DFunDef false "judgeCells" ((PVar "arr") (PVar "i0") (PVar "hi") (PVar "acc0")) (ELetGroup ((lgb "go" (clause ((PVar "i") (PVar "acc")) (EIf (EBinOp "||" (EBinOp ">=" (EVar "i") (EVar "hi")) (EBinOp ">=" (EVar "i") (EApp (EVar "arrayLength") (EVar "arr")))) (EVar "acc") (EIf (EVar "otherwise") (EMatch (EApp (EApp (EVar "arrayGetUnsafe") (EVar "i")) (EVar "arr")) (arm (PCon "Some" (PVar "c")) () (EMatch (EFieldAccess (EFieldAccess (EVar "c") "ecArity") "value") (arm (PCon "Some" PWild) () (EBlock (DoLet false false (PVar "row") (EApp (EApp (EApp (EApp (EApp (EVar "OccurrenceRow") (EFieldAccess (EFieldAccess (EVar "c") "ecName") "value")) (EFieldAccess (EFieldAccess (EVar "c") "ecIface") "value")) (EFieldAccess (EFieldAccess (EVar "c") "ecTag") "value")) (EFieldAccess (EFieldAccess (EVar "c") "ecImpl") "value")) (EFieldAccess (EFieldAccess (EVar "c") "ecMeth") "value"))) (DoExpr (EApp (EApp (EVar "go") (EBinOp "+" (EVar "i") (ELit (LInt 1)))) (EBinOp "++" (EApp (EApp (EApp (EApp (EVar "holeDiags") (EApp (EVar "evIdModule") (EFieldAccess (EVar "c") "ecId"))) (EFieldAccess (EFieldAccess (EVar "c") "ecLoc") "value")) (EFieldAccess (EFieldAccess (EVar "c") "ecInner") "value")) (EVar "row")) (EVar "acc")))))) (arm (PCon "None") () (EApp (EApp (EVar "go") (EBinOp "+" (EVar "i") (ELit (LInt 1)))) (EVar "acc"))))) (arm (PCon "None") () (EApp (EApp (EVar "go") (EBinOp "+" (EVar "i") (ELit (LInt 1)))) (EVar "acc")))) (EApp (EVar "__fallthrough__") (ELit LUnit))))))) (EApp (EApp (EVar "go") (EVar "i0")) (EVar "acc0"))))
 (DTypeSig false "judgeGoal" (TyFun (TyCon "String") (TyFun (TyCon "Obligation") (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "TcDiag"))))))
 (DFunDef false "judgeGoal" ((PVar "mid") (PVar "o")) (EMatch (ETuple (EFieldAccess (EVar "o") "oPayload") (EApp (EVar "evValueOf") (EFieldAccess (EVar "o") "oDest"))) (arm (PTuple (PCon "GPDictApp" (PVar "app")) (PCon "EvMany" (PVar "rs"))) () (EApp (EApp (EApp (EApp (EVar "holeDiags") (EVar "mid")) (EFieldAccess (EVar "o") "oLoc")) (EFieldAccess (EFieldAccess (EVar "o") "oInner") "value")) (EApp (EApp (EApp (EVar "DictAppRow") (EFieldAccess (EVar "app") "pdaCallee")) (EApp (EApp (EMethodRef "map") (ELam ((PVar "r")) (EFieldAccess (EVar "r") "irName"))) (EFieldAccess (EVar "app") "pdaIfaces"))) (EVar "rs")))) (arm (PTuple (PCon "GPRecDictApp" (PCon "RecDictApp" PWild (PVar "callee") PWild PWild PWild PWild)) (PCon "EvMany" (PVar "rs"))) () (EApp (EApp (EApp (EApp (EVar "holeDiags") (EVar "mid")) (EFieldAccess (EVar "o") "oLoc")) (EFieldAccess (EFieldAccess (EVar "o") "oInner") "value")) (EApp (EApp (EApp (EVar "DictAppRow") (EVar "callee")) (EListLit)) (EVar "rs")))) (arm (PTuple (PCon "GPArith" PWild) (PCon "EvOne" (PVar "r"))) () (EApp (EApp (EApp (EApp (EVar "holeDiags") (EVar "mid")) (EFieldAccess (EVar "o") "oLoc")) (EFieldAccess (EFieldAccess (EVar "o") "oInner") "value")) (EApp (EVar "SiteRow") (EVar "r")))) (arm (PTuple (PCon "GPSite" PWild PWild PWild) (PCon "EvOne" (PVar "r"))) () (EIf (EBinOp "||" (EBinOp "==" (EApp (EVar "goalKindTag") (EFieldAccess (EVar "o") "oKind")) (EApp (EVar "goalKindTag") (EVar "GKBinopSite"))) (EBinOp "==" (EApp (EVar "goalKindTag") (EFieldAccess (EVar "o") "oKind")) (EApp (EVar "goalKindTag") (EVar "GKUnopSite")))) (EApp (EApp (EApp (EApp (EVar "holeDiags") (EVar "mid")) (EFieldAccess (EVar "o") "oLoc")) (EFieldAccess (EFieldAccess (EVar "o") "oInner") "value")) (EApp (EVar "SiteRow") (EVar "r"))) (EListLit))) (arm PWild () (EListLit))))
 (DTypeSig false "holeDiags" (TyFun (TyCon "String") (TyFun (TyApp (TyCon "Option") (TyCon "Loc")) (TyFun (TyCon "Inner") (TyFun (TyCon "EvidenceRow") (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "TcDiag"))))))))

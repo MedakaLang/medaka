@@ -638,14 +638,15 @@ sealMethodReturnGoalsFrom : GraphCtx ->
   List Obligation ->
   (List Obligation, List MethodReturnMemoView) ->
   (List Obligation, List MethodReturnMemoView)
-sealMethodReturnGoalsFrom _gctx _ [] acc = acc
-sealMethodReturnGoalsFrom gctx evidence (goal :: rest) (goals, views) =
-  match exactReturnRequestOfGoal goal
-    Some request => sealMethodReturnGoalsFrom gctx evidence rest (
-      goals,
-      methodReturnMemoView gctx evidence goal request :: views,
-    )
-    None => sealMethodReturnGoalsFrom gctx evidence rest (goal :: goals, views)
+sealMethodReturnGoalsFrom gctx evidence xs0 acc0 = go xs0 acc0
+  where
+    go [] acc = acc
+    go (goal :: rest) (goals, views) = match exactReturnRequestOfGoal goal
+      Some request => go rest (
+        goals,
+        methodReturnMemoView gctx evidence goal request :: views,
+      )
+      None => go rest (goal :: goals, views)
 
 methodReturnMemoView : GraphCtx ->
   EvTable ->

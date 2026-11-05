@@ -331,25 +331,29 @@ xmodOblArgId m = match normalize m
 -- kept as itself.
 export
 substOblArgs : List Int -> List Mono -> List (Int, Mono) -> Option (List Mono)
-substOblArgs _ [] _ = Some []
-substOblArgs ids (m :: rest) subst = do
-  m2 <- substOblArg ids m subst
-  map (m2 :: _) (substOblArgs ids rest subst)
+substOblArgs ids xs0 subst = go xs0
+  where
+    go [] = Some []
+    go (m :: rest) = do
+      m2 <- substOblArg ids m subst
+      map (m2 :: _) (go rest)
 
 -- ONE predicate argument under [subst]: every tyvar leaf mapped, structure preserved.
 substOblArg : List Int -> Mono -> List (Int, Mono) -> Option Mono
-substOblArg ids m subst = match normalize m
-  TVar cell => match lookupAssocI (tyvarId cell) subst
-    Some m2 => Some m2
-    None => if containsI (tyvarId cell) ids then None else Some (TVar cell)
-  TQual a q => map (a2 => TQual a2 q) (substOblArg ids a subst)
-  TApp a b => do
-    a2 <- substOblArg ids a subst
-    map (b2 => TApp a2 b2) (substOblArg ids b subst)
-  TFun a eff b => do
-    a2 <- substOblArg ids a subst
-    map (b2 => TFun a2 eff b2) (substOblArg ids b subst)
-  other => Some other
+substOblArg ids m0 subst = go m0
+  where
+    go m = match normalize m
+      TVar cell => match lookupAssocI (tyvarId cell) subst
+        Some m2 => Some m2
+        None => if containsI (tyvarId cell) ids then None else Some (TVar cell)
+      TQual a q => map (a2 => TQual a2 q) (go a)
+      TApp a b => do
+        a2 <- go a
+        map (b2 => TApp a2 b2) (go b)
+      TFun a eff b => do
+        a2 <- go a
+        map (b2 => TFun a2 eff b2) (go b)
+      other => Some other
 
 -- the monos [ids] map to under [subst], in order; None if any id is unmapped.
 export
@@ -462,6 +466,8 @@ instantiateNamedMonos : GraphCtx ->
   List (String, Mono) ->
   List (Int, Mono) ->
   List (String, Mono)
+-- Bound: list built in tail position modulo cons: a where-local go loses the constant-stack loop until the lambda-lift pass (#4878); convert then.
+-- lint-disable-next-line rule-threaded-invariant
 instantiateNamedMonos _gctx [] _ = []
 instantiateNamedMonos gctx ((name, mono) :: rest) subst =
   (name, substMono gctx subst [] [] mono)
@@ -784,17 +790,15 @@ monoSizes (m :: rest) = monoSize m + monoSizes rest
 -- variable below [effvars], so neither counter had reached it yet.
 export
 monoMintedBefore : Int -> Int -> Mono -> Bool
-monoMintedBefore tyvars effvars m = match normalize m
-  TVar cell => tyvarId cell < tyvars
-  TApp a b =>
-    monoMintedBefore tyvars effvars a && monoMintedBefore tyvars effvars b
-  TFun a r b =>
-    monoMintedBefore tyvars effvars a
-      && rowMintedBefore effvars r
-      && monoMintedBefore tyvars effvars b
-  TEff r => rowMintedBefore effvars r
-  TQual a _ => monoMintedBefore tyvars effvars a
-  TCon _ _ | TRigid _ | TAuth _ => True
+monoMintedBefore tyvars effvars m0 = go m0
+  where
+    go m = match normalize m
+      TVar cell => tyvarId cell < tyvars
+      TApp a b => go a && go b
+      TFun a r b => go a && rowMintedBefore effvars r && go b
+      TEff r => rowMintedBefore effvars r
+      TQual a _ => go a
+      TCon _ _ | TRigid _ | TAuth _ => True
 
 rowMintedBefore : Int -> EffRow -> Bool
 rowMintedBefore effvars r =
@@ -887,6 +891,8 @@ substMono : GraphCtx ->
   List (Int, Authority) ->
   Mono ->
   Mono
+-- Bound: hot compiler path: the where-go form allocates one closure per call until the lambda-lift pass (#4878); convert then.
+-- lint-disable-next-line rule-threaded-invariant
 substMono gctx subst esub asub t = match normalize t
   TVar cell => optionOr (TVar cell) (lookupAssocI (tyvarId cell) subst)
   c@(TCon _ _) => c
@@ -1319,12 +1325,14 @@ cohBind subst id m =
     True
 
 cohOccurs : Ref (List (Int, Mono)) -> Int -> Mono -> Bool
-cohOccurs subst id m = match cohResolve subst m
-  TVar cell => tyvarId cell == id
-  TApp f a => cohOccurs subst id f || cohOccurs subst id a
-  TFun a _ b => cohOccurs subst id a || cohOccurs subst id b
-  TQual a _ => cohOccurs subst id a
-  TCon _ _ | TRigid _ | TEff _ | TAuth _ => False
+cohOccurs subst id m0 = go m0
+  where
+    go m = match cohResolve subst m
+      TVar cell => tyvarId cell == id
+      TApp f a => go f || go a
+      TFun a _ b => go a || go b
+      TQual a _ => go a
+      TCon _ _ | TRigid _ | TEff _ | TAuth _ => False
 
 export
 matchOneSided : (g -> s -> MStep k g s) ->
@@ -1333,6 +1341,8 @@ matchOneSided : (g -> s -> MStep k g s) ->
   List (g, s) ->
   List (k, s) ->
   Option (List (k, s))
+-- Bound: hot compiler path: the where-go form allocates one closure per call until the lambda-lift pass (#4878); convert then.
+-- lint-disable-next-line rule-threaded-invariant
 matchOneSided _ _ _ [] acc = Some acc
 matchOneSided step keyEq eqS ((g, s) :: rest) acc = match step g s
   MFail => None
@@ -1347,9 +1357,10 @@ matchOneSided step keyEq eqS ((g, s) :: rest) acc = match step g s
 -- method, and the marker would rewrite the local reference into a method call,
 -- importing a phantom `Eq k` constraint the signature can't discharge.
 lookupBy : (k -> k -> Bool) -> k -> List (k, v) -> Option v
-lookupBy _ _ [] = None
-lookupBy keq k ((k2, v) :: rest) =
-  if keq k k2 then Some v else lookupBy keq k rest
+lookupBy keq k xs0 = go xs0
+  where
+    go [] = None
+    go ((k2, v) :: rest) = if keq k k2 then Some v else go rest
 
 -- rigid structural equality (the specific side's vars match only the same id)
 export
@@ -1648,6 +1659,8 @@ mergeSubstPreferConcrete acc ((k, v) :: rest) =
 
 export
 mergeOne : List (String, Mono) -> String -> Mono -> List (String, Mono)
+-- Bound: list built in tail position modulo cons: a where-local go loses the constant-stack loop until the lambda-lift pass (#4878); convert then.
+-- lint-disable-next-line rule-threaded-invariant
 mergeOne [] k v = [(k, v)]
 mergeOne ((k2, v2) :: rest) k v
   | k2 == k = (k2, preferConcrete v2 v) :: rest

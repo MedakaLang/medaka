@@ -625,16 +625,18 @@ narrowFileAtom atom = match atomLabelOf atom
 
 export
 recordClauseFileBound : ModuleCtx -> Expr -> Int -> Mono -> Unit
-recordClauseFileBound mctx body arity ty
-  | arity <= 0 = ()
-  | otherwise = match normalize ty
-    TFun _ row result =>
-      if arity == 1 then
-        recordFileBound mctx body row
-      else
-        recordClauseFileBound mctx body (arity - 1) result
-    TQual inner _ => recordClauseFileBound mctx body arity inner
-    _ => ()
+recordClauseFileBound mctx body arity0 ty0 = go arity0 ty0
+  where
+    go arity ty
+      | arity <= 0 = ()
+      | otherwise = match normalize ty
+        TFun _ row result =>
+          if arity == 1 then
+            recordFileBound mctx body row
+          else
+            go (arity - 1) result
+        TQual inner _ => go arity inner
+        _ => ()
 
 export
 clausesAt : String -> OrdMap (List (List Pat, Expr)) -> List (List Pat, Expr)

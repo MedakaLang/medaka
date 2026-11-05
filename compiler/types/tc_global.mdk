@@ -341,17 +341,19 @@ checkGradedImplHeadDecl : ModuleCtx ->
   Int ->
   Decl ->
   Unit
-checkGradedImplHeadDecl mctx sc ce cur (DAttrib _ d) =
-  checkGradedImplHeadDecl mctx sc ce cur d
-checkGradedImplHeadDecl mctx sc ce cur (DImpl { iface, tys, reqs, implOrigin = o, implIfaceLoc = loc, ... }) =
-  checkGradedImplTys mctx ce cur o iface 0 tys
-  reportWrittenKinds
-    mctx
-    sc
-    []
-    loc
-    (implSlotKinds ce cur o iface 0 tys ++ flatMap (requireSlotKinds sc) reqs)
-checkGradedImplHeadDecl _mctx _ _ _ _ = ()
+checkGradedImplHeadDecl mctx sc ce cur x0 = go x0
+  where
+    go (DAttrib _ d) = go d
+    go (DImpl { iface, tys, reqs, implOrigin = o, implIfaceLoc = loc, ... }) =
+      checkGradedImplTys mctx ce cur o iface 0 tys
+      reportWrittenKinds
+        mctx
+        sc
+        []
+        loc
+        (implSlotKinds ce cur o iface 0 tys
+          ++ flatMap (requireSlotKinds sc) reqs)
+    go _ = ()
 
 -- Each impl head type with its interface slot's kind, `None` for a slot not known.
 implSlotKinds : ClassEnv ->
@@ -396,12 +398,14 @@ checkGradedImplTys : ModuleCtx ->
   Int ->
   List Ty ->
   Unit
-checkGradedImplTys _mctx _ _ _ _ _ [] = ()
-checkGradedImplTys mctx ce cur o iface i (t :: rest) =
-  match ceSlotKindsAt (regKeyOfTab (ifaceTabKey o iface)) cur i ce
-    Some want if anyKRow want => checkGradedImplHead mctx iface t want
-    _ => ()
-  checkGradedImplTys mctx ce cur o iface (i + 1) rest
+checkGradedImplTys mctx ce cur o iface i0 xs0 = go i0 xs0
+  where
+    go _ [] = ()
+    go i (t :: rest) =
+      match ceSlotKindsAt (regKeyOfTab (ifaceTabKey o iface)) cur i ce
+        Some want if anyKRow want => checkGradedImplHead mctx iface t want
+        _ => ()
+      go (i + 1) rest
 
 -- [want] is the interface slot's kind list.
 --
@@ -711,15 +715,13 @@ cohScan : CohSweep -> List CohImpl -> List CohImpl -> CohScan
 cohScan sweep impls fixed = cohScanOuter sweep impls fixed (CohScan None None)
 
 cohScanOuter : CohSweep -> List CohImpl -> List CohImpl -> CohScan -> CohScan
-cohScanOuter _ [] _ acc = acc
-cohScanOuter sweep (e :: rest) fixed acc
-  | cohScanDone acc = acc
-  | otherwise =
-    cohScanOuter
-      sweep
-      rest
-      fixed
-      (cohScanInner sweep e fixed (cohScanInner sweep e rest acc))
+cohScanOuter sweep xs0 fixed acc0 = go xs0 acc0
+  where
+    go [] acc = acc
+    go (e :: rest) acc
+      | cohScanDone acc = acc
+      | otherwise =
+        go rest (cohScanInner sweep e fixed (cohScanInner sweep e rest acc))
 
 -- both classes already witnessed ⇒ nothing later can change what is reported.
 cohScanDone : CohScan -> Bool
@@ -752,12 +754,14 @@ cohSameIface : IfaceRef -> IfaceRef -> Bool
 cohSameIface a b = sameTyConHead a.irName a.irOrigin b.irName b.irOrigin
 
 cohScanInner : CohSweep -> CohImpl -> List CohImpl -> CohScan -> CohScan
-cohScanInner _ _ [] acc = acc
-cohScanInner sweep (e1@(CohImpl if1 xs mid1 _)) ((CohImpl if2 ys mid2 _) :: rest) acc
-  | cohScanDone acc = acc
-  | cohSameIface if1 if2 && cohOverlap xs ys =
-    cohScanInner sweep e1 rest (cohClassify sweep e1 xs ys mid1 mid2 acc)
-  | otherwise = cohScanInner sweep e1 rest acc
+cohScanInner sweep (e1@(CohImpl if1 xs mid1 _)) l0 acc0 = go l0 acc0
+  where
+    go [] acc = acc
+    go ((CohImpl if2 ys mid2 _) :: rest) acc
+      | cohScanDone acc = acc
+      | cohSameIface if1 if2 && cohOverlap xs ys =
+        go rest (cohClassify sweep e1 xs ys mid1 mid2 acc)
+      | otherwise = go rest acc
 
 -- classify ONE overlapping pair.  A strict specialization either way is coherent
 -- (most-specific-wins ranks it) and contributes nothing.  The remaining two cases
@@ -1051,47 +1055,49 @@ checkImplSuperContexts : ModuleCtx ->
   List ImplRow ->
   Decl ->
   Unit
-checkImplSuperContexts mctx decls ce cur rows (DAttrib _ d) =
-  checkImplSuperContexts mctx decls ce cur rows d
-checkImplSuperContexts mctx decls ce cur rows (DImpl { iface, tys, reqs, implOrigin = o, implIfaceLoc = ifaceLoc, ... }) =
-  let derived = isNone ifaceLoc
-  let loc = if derived then derivedImplDeclLoc decls tys else ifaceLoc
-  match ceLookupAt (regKeyOfTab (ifaceTabKey o iface)) cur ce
-    Some r if listLen (ceRowTyparams r) == listLen tys =>
-      let (implTvMap, headMonos) = implHeadMonos mctx tys
-      let roots = implHeadTypeVarRoots implTvMap
-      let headIds = omFromNames (map (p => intToString (snd p)) roots) omEmpty
-      let declared = map (requirePredicateSlot mctx implTvMap) reqs
-      let givens =
-        declared
-          ++ flatMap
-            (s => map fst (predicateSlotKnownSupers mctx.mcGraph s))
+checkImplSuperContexts mctx decls ce cur rows x0 = go x0
+  where
+    go (DAttrib _ d) = go d
+    go (DImpl { iface, tys, reqs, implOrigin = o, implIfaceLoc = ifaceLoc, ... }) =
+      let derived = isNone ifaceLoc
+      let loc = if derived then derivedImplDeclLoc decls tys else ifaceLoc
+      match ceLookupAt (regKeyOfTab (ifaceTabKey o iface)) cur ce
+        Some r if listLen (ceRowTyparams r) == listLen tys =>
+          let (implTvMap, headMonos) = implHeadMonos mctx tys
+          let roots = implHeadTypeVarRoots implTvMap
+          let headIds =
+            omFromNames (map (p => intToString (snd p)) roots) omEmpty
+          let declared = map (requirePredicateSlot mctx implTvMap) reqs
+          let givens =
             declared
-      let subject = "impl \{iface} \{join " " (map ppTyAtom tys)}"
-      let subst = zip (ceRowTyparams r) tys
-      let argsOf =
-        sup =>
-          mapAll
-            (p => lookupPos p (ceRowTyparams r) headMonos)
-            (superParamsOf sup)
-      fold
-        (_ sup => match argsOf sup
-          Some supArgs => checkSuperInstanceContext
-            mctx
-            subject
-            roots
-            headIds
-            givens
-            loc
-            derived
-            (superIfaceRef sup)
-            supArgs
-            (_ => superRowExists rows subst sup)
-          None => ())
-        ()
-        (ceRowSupers r)
-    _ => ()
-checkImplSuperContexts _mctx _ _ _ _ _ = ()
+              ++ flatMap
+                (s => map fst (predicateSlotKnownSupers mctx.mcGraph s))
+                declared
+          let subject = "impl \{iface} \{join " " (map ppTyAtom tys)}"
+          let subst = zip (ceRowTyparams r) tys
+          let argsOf =
+            sup =>
+              mapAll
+                (p => lookupPos p (ceRowTyparams r) headMonos)
+                (superParamsOf sup)
+          fold
+            (_ sup => match argsOf sup
+              Some supArgs => checkSuperInstanceContext
+                mctx
+                subject
+                roots
+                headIds
+                givens
+                loc
+                derived
+                (superIfaceRef sup)
+                supArgs
+                (_ => superRowExists rows subst sup)
+              None => ())
+            ()
+            (ceRowSupers r)
+        _ => ()
+    go _ = ()
 
 -- The span of the `data`/`newtype` declaration a derived impl's head names.
 derivedImplDeclLoc : List Decl -> List Ty -> Option Loc
@@ -1191,23 +1197,23 @@ superContextLeaves : ModuleCtx ->
   IfaceRef ->
   List Mono ->
   List (IfaceRef, List Mono)
-superContextLeaves mctx walk headIds givens loc iface args
-  | anyList (givenAnswers iface args) givens = []
-  | not (anyConcreteHead args) = [(iface, args)]
-  | otherwise = match reqWalkReported mctx loc (reqWalkEnter walk iface args)
-    None => []
-    Some next => solvedOnWalk
-      mctx
-      next
-      iface
-      args
-      (_ => match rigidHeadInstanceContext (siteFor mctx) headIds iface args
-        None => [(iface, args)]
-        Some ctx =>
-          flatMap
-            (g =>
-              superContextLeaves mctx next headIds givens loc (fst g) (snd g))
-            ctx)
+superContextLeaves mctx w0 headIds givens loc i0 a0 = go w0 i0 a0
+  where
+    go walk iface args
+      | anyList (givenAnswers iface args) givens = []
+      | not (anyConcreteHead args) = [(iface, args)]
+      | otherwise =
+        match reqWalkReported mctx loc (reqWalkEnter walk iface args)
+          None => []
+          Some next => solvedOnWalk
+            mctx
+            next
+            iface
+            args
+            (_ =>
+              match rigidHeadInstanceContext (siteFor mctx) headIds iface args
+                None => [(iface, args)]
+                Some ctx => flatMap (g => go next (fst g) (snd g)) ctx)
 
 -- A leaf over head variables names the `requires` to add; a ground one names the
 -- missing instance.  A leaf mentioning a variable the head does not bind has no
@@ -1301,19 +1307,20 @@ checkImplCompletenessMap mctx ce cur iterDecls =
 -- `implOrigin` is read beside `iface` in the same
 -- record pattern, so the identity and the name it qualifies cannot drift apart.
 implCompletenessMsgsOfMap : ClassEnv -> Int -> Decl -> List (Option Loc, String)
-implCompletenessMsgsOfMap ce cur (DAttrib _ d) =
-  implCompletenessMsgsOfMap ce cur d
-implCompletenessMsgsOfMap ce cur (DImpl { iface, tys, methods, implOrigin = o, implIfaceLoc = ifaceLoc, ... }) =
-  match ceRequiredAt (regKeyOfTab (ifaceTabKey o iface)) cur ce
-    None => []  -- unknown interface (reported elsewhere) → skip
-    Some required =>
-      let defined = map implMethodName methods
-      -- An impl with no method body of its own is located at its interface name.
-      let loc = orElseLoc (firstImplMethodLoc methods) ifaceLoc
-      map
-        (m => (loc, missingImplMethodMsg iface tys m))
-        (filter (m => not (contains m defined)) required)
-implCompletenessMsgsOfMap _ _ _ = []
+implCompletenessMsgsOfMap ce cur x0 = go x0
+  where
+    go (DAttrib _ d) = go d
+    go (DImpl { iface, tys, methods, implOrigin = o, implIfaceLoc = ifaceLoc, ... }) =
+      match ceRequiredAt (regKeyOfTab (ifaceTabKey o iface)) cur ce
+        None => []  -- unknown interface (reported elsewhere) → skip
+        Some required =>
+          let defined = map implMethodName methods
+          -- An impl with no method body of its own is located at its interface name.
+          let loc = orElseLoc (firstImplMethodLoc methods) ifaceLoc
+          map
+            (m => (loc, missingImplMethodMsg iface tys m))
+            (filter (m => not (contains m defined)) required)
+    go _ = []
 
 -- The row set is `ceRowsOwnedBy` of stage K's `CE`: the reading module's own
 -- interfaces, not the visible prefix: an imported
@@ -1528,10 +1535,12 @@ inferDefaultMethods : TcEnv ->
   List String ->
   List IfaceMethod ->
   Unit
-inferDefaultMethods _env _ _ _ [] = ()
-inferDefaultMethods env iface dscope typarams (m :: rest) =
-  inferDefaultMethod env iface dscope typarams m
-  inferDefaultMethods env iface dscope typarams rest
+inferDefaultMethods env iface dscope typarams xs0 = go xs0
+  where
+    go [] = ()
+    go (m :: rest) =
+      inferDefaultMethod env iface dscope typarams m
+      go rest
 
 -- C8b: every interface default body is type-checked, constrained or not, by the
 -- one method-body driver, against the interface's own signature for the method.
@@ -1555,10 +1564,12 @@ inferImplBodies : TcEnv ->
   Int ->
   List (Option Loc, Decl) ->
   Unit
-inferImplBodies _env _ _ _ [] = ()
-inferImplBodies env rpNames ce cur ((loc, d) :: rest) =
-  inferOneImpl (envAtIfSome loc env) rpNames ce cur d
-  inferImplBodies env rpNames ce cur rest
+inferImplBodies env rpNames ce cur xs0 = go xs0
+  where
+    go [] = ()
+    go ((loc, d) :: rest) =
+      inferOneImpl (envAtIfSome loc env) rpNames ce cur d
+      go rest
 
 -- #1114 (DICT-SEMANTICS §4.2 D1): would `checkOneCallObligation` reach a VERDICT on this
 -- recorded predicate right now?  That — not groundness — is the question the D1-preserving
@@ -1697,19 +1708,20 @@ implDeclLoc (DImpl { implIfaceLoc, ... }) = Some implIfaceLoc
 implDeclLoc _ = None
 
 inferOneImpl : TcEnv -> List String -> ClassEnv -> Int -> Decl -> Unit
-inferOneImpl env rpNames ce cur (DAttrib _ d) =
-  inferOneImpl env rpNames ce cur d
--- [implOrigin] is bound here, not dropped by the `...`: the impl-body signature
--- lookup takes the interface's IDENTITY, not its bare spelling, so two modules each
--- declaring an interface spelled `Speak` cannot attribute one module's impl body
--- to the other's declared method type.  DICT-SEMANTICS §8 I4: an interface is a
--- (module, name) pair.  Same construction as `implDeclFact`, from the same two fields.
-inferOneImpl env rpNames ce cur (DImpl { iface, tys, reqs, methods, implOrigin, ... }) =
-  let iref = IfaceRef { irName = iface, irOrigin = implOrigin }
-  match reqs
-    [] => inferPlainImpl env ce cur iref tys methods
-    _ => inferRequiresImpl env rpNames ce cur iref tys reqs methods
-inferOneImpl _env _ _ _ _ = ()
+inferOneImpl env rpNames ce cur x0 = go x0
+  where
+    go (DAttrib _ d) = go d
+    -- [implOrigin] is bound here, not dropped by the `...`: the impl-body signature
+    -- lookup takes the interface's IDENTITY, not its bare spelling, so two modules each
+    -- declaring an interface spelled `Speak` cannot attribute one module's impl body
+    -- to the other's declared method type.  DICT-SEMANTICS §8 I4: an interface is a
+    -- (module, name) pair.  Same construction as `implDeclFact`, from the same two fields.
+    go (DImpl { iface, tys, reqs, methods, implOrigin, ... }) =
+      let iref = IfaceRef { irName = iface, irOrigin = implOrigin }
+      match reqs
+        [] => inferPlainImpl env ce cur iref tys methods
+        _ => inferRequiresImpl env rpNames ce cur iref tys reqs methods
+    go _ = ()
 
 -- D3a: a NON-`requires` impl body, inferred on every path (single elaboration mode)
 -- so its ARG-position method occurrences (e.g. `display` of a String field inside a
@@ -1774,6 +1786,8 @@ scopeImplMethods : ModuleCtx ->
   ScopeId ->
   List ImplMethod ->
   List ScopedImplMethod
+-- Bound: list built in tail position modulo cons: a where-local go loses the constant-stack loop until the lambda-lift pass (#4878); convert then.
+-- lint-disable-next-line rule-threaded-invariant
 scopeImplMethods _mctx _ [] = []
 scopeImplMethods mctx parent (method :: rest) =
   let name = implMethodName method
@@ -1796,10 +1810,12 @@ inferImplMethods : TcEnv ->
   List Require ->
   List ScopedImplMethod ->
   Unit
-inferImplMethods _env _ _ _ _ _ _ [] = ()
-inferImplMethods env ce cur iface implTvMap headMonos reqs (m :: rest) =
-  inferImplMethod env ce cur iface implTvMap headMonos reqs m
-  inferImplMethods env ce cur iface implTvMap headMonos reqs rest
+inferImplMethods env ce cur iface implTvMap headMonos reqs xs0 = go xs0
+  where
+    go [] = ()
+    go (m :: rest) =
+      inferImplMethod env ce cur iface implTvMap headMonos reqs m
+      go rest
 
 inferImplMethod : TcEnv ->
   ClassEnv ->
@@ -2594,17 +2610,19 @@ checkImplHeadNumObligations : ModuleCtx ->
   OrdMap Unit ->
   List UObligation ->
   Unit
-checkImplHeadNumObligations _mctx _ _ _ _ [] = ()
-checkImplHeadNumObligations mctx subject implTvMap reqs survivingIds (o :: rest) =
-  checkImplHeadNumIds
-    mctx
-    subject
-    implTvMap
-    reqs
-    survivingIds
-    o.loc
-    (dedupI (numObligIds o))
-  checkImplHeadNumObligations mctx subject implTvMap reqs survivingIds rest
+checkImplHeadNumObligations mctx subject implTvMap reqs survivingIds l0 = go l0
+  where
+    go [] = ()
+    go (o :: rest) =
+      checkImplHeadNumIds
+        mctx
+        subject
+        implTvMap
+        reqs
+        survivingIds
+        (o : UObligation).loc
+        (dedupI (numObligIds o))
+      go rest
 
 checkImplHeadNumIds : ModuleCtx ->
   String ->
@@ -2614,19 +2632,21 @@ checkImplHeadNumIds : ModuleCtx ->
   Option Loc ->
   List Int ->
   Unit
-checkImplHeadNumIds _mctx _ _ _ _ _ [] = ()
-checkImplHeadNumIds mctx subject implTvMap reqs survivingIds loc (id :: rest) =
-  match survivorNameOfId id implTvMap
-    Some vname =>
-      if omHasKey (intToString id) survivingIds
-        && not (implRequiresRoot mctx "Num" id implTvMap reqs) then
-        pushTypeErrorOnceAt
-          mctx
-          TImplMissingRequires
-          loc
-          (undeclaredImplPrerequisiteMsg subject "Num" vname)
-    None => ()
-  checkImplHeadNumIds mctx subject implTvMap reqs survivingIds loc rest
+checkImplHeadNumIds mctx subject implTvMap reqs survivingIds loc xs0 = go xs0
+  where
+    go [] = ()
+    go (id :: rest) =
+      match survivorNameOfId id implTvMap
+        Some vname =>
+          if omHasKey (intToString id) survivingIds
+            && not (implRequiresRoot mctx "Num" id implTvMap reqs) then
+            pushTypeErrorOnceAt
+              mctx
+              TImplMissingRequires
+              loc
+              (undeclaredImplPrerequisiteMsg subject "Num" vname)
+        None => ()
+      go rest
 
 implRequiresRoot : ModuleCtx ->
   String ->
@@ -2634,11 +2654,13 @@ implRequiresRoot : ModuleCtx ->
   List (String, Mono) ->
   List Require ->
   Bool
-implRequiresRoot _mctx _ _ _ [] = False
-implRequiresRoot mctx wanted id implTvMap ((Require { requireHead = iface, requireArgs = args, ... }) :: rest) =
-  contains wanted (ifaceSelfAndSupers mctx iface)
-      && requireArgsAreRoot id implTvMap args
-    || implRequiresRoot mctx wanted id implTvMap rest
+implRequiresRoot mctx wanted id implTvMap xs0 = go xs0
+  where
+    go [] = False
+    go ((Require { requireHead = iface, requireArgs = args, ... }) :: rest) =
+      contains wanted (ifaceSelfAndSupers mctx iface)
+          && requireArgsAreRoot id implTvMap args
+        || go rest
 
 requireArgsAreRoot : Int -> List (String, Mono) -> List Ty -> Bool
 requireArgsAreRoot id implTvMap [TyVar name] = match lookupAssoc name implTvMap
@@ -2873,27 +2895,21 @@ checkSurvivorCallObligations : ModuleCtx ->
   List (IfaceRef, List Mono, Option Loc) ->
   Option Loc ->
   Unit
-checkSurvivorCallObligations _mctx _ _ _ _ _ [] _ = ()
-checkSurvivorCallObligations mctx subject ownIface ownTyparams mty extraMap ((oiface, monos, _) :: rest) loc =
-  checkSurvivorDispatchMonos
-    mctx
-    subject
-    ownIface
-    ownTyparams
-    mty
-    extraMap
-    oiface.irName
-    monos
-    loc
-  checkSurvivorCallObligations
-    mctx
-    subject
-    ownIface
-    ownTyparams
-    mty
-    extraMap
-    rest
-    loc
+checkSurvivorCallObligations mctx subj ownI ownTps mty extra l0 loc = go l0
+  where
+    go [] = ()
+    go ((oiface, monos, _) :: rest) =
+      checkSurvivorDispatchMonos
+        mctx
+        subj
+        ownI
+        ownTps
+        mty
+        extra
+        oiface.irName
+        monos
+        loc
+      go rest
 
 methodLevelConstraintMonos : List String ->
   Ty ->
@@ -2907,12 +2923,11 @@ methodLevelConstraintMonos ifaceParams mty tvMap =
     (methodLevelConstraintVarNames ifaceParams mty)
 
 methodConstraintSlotIds : List String -> Ty -> List (String, Mono) -> List Int
-methodConstraintSlotIds typarams (TyConstrained cs t) tvs =
-  flatMap (constraintSlotId typarams tvs) cs
-    ++ methodConstraintSlotIds typarams t tvs
-methodConstraintSlotIds typarams (TyEffect _ _ t) tvs =
-  methodConstraintSlotIds typarams t tvs
-methodConstraintSlotIds _ _ _ = []
+methodConstraintSlotIds typarams x0 tvs = go x0
+  where
+    go (TyConstrained cs t) = flatMap (constraintSlotId typarams tvs) cs ++ go t
+    go (TyEffect _ _ t) = go t
+    go _ = []
 
 -- one slot per method-level constraint: the id of its dispatch var
 -- (constraintSlotDispatchVar), which the supplied dict narrows by.

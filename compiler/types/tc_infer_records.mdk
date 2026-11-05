@@ -109,12 +109,14 @@ assignedFieldNames fields = map (fa => fst (fieldAssignNamePair fa)) fields
 -- in order, so the missing-field errors are pushed in exactly the old order.
 export
 checkMissingFields : ModuleCtx -> String -> List String -> OrdMap Unit -> Unit
-checkMissingFields _mctx _ [] _ = ()
-checkMissingFields mctx rname (fname :: rest) supplied
-  | omHasKey fname supplied = checkMissingFields mctx rname rest supplied
-  | otherwise =
-    pushTypeError mctx TMissingField (missingFieldMsg fname rname)
-    checkMissingFields mctx rname rest supplied
+checkMissingFields mctx rname xs0 supplied = go xs0
+  where
+    go [] = ()
+    go (fname :: rest)
+      | omHasKey fname supplied = go rest
+      | otherwise =
+        pushTypeError mctx TMissingField (missingFieldMsg fname rname)
+        go rest
 
 -- ── #2839: the stamp names the record by IDENTITY, not by a spelling ─────────
 -- The head this node carries downstream is the selected record's
@@ -326,18 +328,19 @@ typeOtherThan : GraphCtx ->
   Mono ->
   List (String, Int, RecordInfo) ->
   Option CtorFieldConflict
-typeOtherThan _gctx _ _ _ _ [] = None
-typeOtherThan gctx fname a ra ta ((b, _, rb) :: rest) =
-  match omLookup fname (recordFieldMap rb)
-    Some tb =>
-      let (tsub, esub, asub) =
-        paramRenaming (recordResultMono rb) (recordResultMono ra) ([], [], [])
-      let tbOverA = substMono gctx tsub esub asub tb
-      if fieldTypeSame ta tbOverA then
-        typeOtherThan gctx fname a ra ta rest
-      else
-        Some (CtorTypesDiffer a ta b tbOverA)
-    None => typeOtherThan gctx fname a ra ta rest
+typeOtherThan gctx fname a ra ta xs0 = go xs0
+  where
+    go [] = None
+    go ((b, _, rb) :: rest) = match omLookup fname (recordFieldMap rb)
+      Some tb =>
+        let (tsub, esub, asub) =
+          paramRenaming (recordResultMono rb) (recordResultMono ra) ([], [], [])
+        let tbOverA = substMono gctx tsub esub asub tb
+        if fieldTypeSame ta tbOverA then
+          go rest
+        else
+          Some (CtorTypesDiffer a ta b tbOverA)
+      None => go rest
 
 -- Pairs each parameter of `from`'s head application with the argument at the
 -- same position of `to`'s — a type, row or authority parameter, each into its
@@ -865,6 +868,8 @@ ownerDeclOfReceiver mctx te fname owners = do
 -- Every owner key whose companion rows hold the declaration `ident` names, with
 -- that row's `RecordInfo`.
 ownerDeclMatches : GraphCtx -> Ident -> List String -> List (String, RecordInfo)
+-- Bound: list built in tail position modulo cons: a where-local go loses the constant-stack loop until the lambda-lift pass (#4878); convert then.
+-- lint-disable-next-line rule-threaded-invariant
 ownerDeclMatches _gctx _ [] = []
 ownerDeclMatches gctx ident (k :: rest) =
   match omLookup k (spRows gctx.crossRun.universeRecordPop.value)
@@ -1050,11 +1055,13 @@ firstCtorSiblingWithholding : ModuleCtx ->
   String ->
   List String ->
   Option String
-firstCtorSiblingWithholding _mctx _ _ _ [] = None
-firstCtorSiblingWithholding mctx hk fname skey (k :: rest)
-  | k == skey = firstCtorSiblingWithholding mctx hk fname skey rest
-  | ctorSiblingWithholds mctx hk fname k = Some k
-  | otherwise = firstCtorSiblingWithholding mctx hk fname skey rest
+firstCtorSiblingWithholding mctx hk fname skey xs0 = go xs0
+  where
+    go [] = None
+    go (k :: rest)
+      | k == skey = go rest
+      | ctorSiblingWithholds mctx hk fname k = Some k
+      | otherwise = go rest
 
 -- `oGetCtors` already scopes the candidate list to the receiver's own type
 -- (via the `TabKey` lookup above), so this does not re-check the
@@ -1154,16 +1161,13 @@ bestFieldCandidate : String ->
   List String ->
   Option (String, Int) ->
   Option (String, Int)
-bestFieldCandidate _ _ [] acc = acc
-bestFieldCandidate fname lim (c :: cs) acc
-  | c == fname = bestFieldCandidate fname lim cs acc
-  | editDistance fname c > lim = bestFieldCandidate fname lim cs acc
-  | otherwise =
-    bestFieldCandidate
-      fname
-      lim
-      cs
-      (keepBetterField c (editDistance fname c) acc)
+bestFieldCandidate fname lim xs0 acc0 = go xs0 acc0
+  where
+    go [] acc = acc
+    go (c :: cs) acc
+      | c == fname = go cs acc
+      | editDistance fname c > lim = go cs acc
+      | otherwise = go cs (keepBetterField c (editDistance fname c) acc)
 
 keepBetterField : String -> Int -> Option (String, Int) -> Option (String, Int)
 keepBetterField c d None = Some (c, d)

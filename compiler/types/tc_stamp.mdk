@@ -148,6 +148,8 @@ evidenceObservationEntriesGo : Obligation ->
   Int ->
   Int ->
   List EvidenceObservationEntry
+-- Bound: list built in tail position modulo cons: a where-local go loses the constant-stack loop until the lambda-lift pass (#4878); convert then.
+-- lint-disable-next-line rule-threaded-invariant
 evidenceObservationEntriesGo _ [] _ _ _ = []
 evidenceObservationEntriesGo o (r :: rs) preds arity slot =
   let (predHere, predsRest) = match preds
@@ -622,26 +624,26 @@ judgeCells : Array (Option EvCell) ->
   Int ->
   List (String, TcDiag) ->
   List (String, TcDiag)
-judgeCells arr i hi acc
-  | i >= hi || i >= arrayLength arr = acc
-  | otherwise = match arrayGetUnsafe i arr
-    Some c => match c.ecArity.value
-      Some _ =>
-        let row =
-          OccurrenceRow
-            c.ecName.value
-            c.ecIface.value
-            c.ecTag.value
-            c.ecImpl.value
-            c.ecMeth.value
-        judgeCells
-          arr
-          (i + 1)
-          hi
-          (holeDiags (evIdModule c.ecId) c.ecLoc.value c.ecInner.value row
-            ++ acc)
-      None => judgeCells arr (i + 1) hi acc
-    None => judgeCells arr (i + 1) hi acc
+judgeCells arr i0 hi acc0 = go i0 acc0
+  where
+    go i acc
+      | i >= hi || i >= arrayLength arr = acc
+      | otherwise = match arrayGetUnsafe i arr
+        Some c => match c.ecArity.value
+          Some _ =>
+            let row =
+              OccurrenceRow
+                c.ecName.value
+                c.ecIface.value
+                c.ecTag.value
+                c.ecImpl.value
+                c.ecMeth.value
+            go
+              (i + 1)
+              (holeDiags (evIdModule c.ecId) c.ecLoc.value c.ecInner.value row
+                ++ acc)
+          None => go (i + 1) acc
+        None => go (i + 1) acc
 
 judgeGoal : String -> Obligation -> List (String, TcDiag)
 judgeGoal mid o = match (o.oPayload, evValueOf o.oDest)

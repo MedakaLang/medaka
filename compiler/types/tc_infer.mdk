@@ -863,10 +863,12 @@ unifyFieldAssignsIdx : TcEnv ->
   RecordSubst ->
   List FieldAssign ->
   Unit
-unifyFieldAssignsIdx _env _ _ _ [] = ()
-unifyFieldAssignsIdx env rname ri subst ((FieldAssign fn val) :: rest) =
-  unifyFieldAssignIdx env rname ri subst fn val
-  unifyFieldAssignsIdx env rname ri subst rest
+unifyFieldAssignsIdx env rname ri subst xs0 = go xs0
+  where
+    go [] = ()
+    go ((FieldAssign fn val) :: rest) =
+      unifyFieldAssignIdx env rname ri subst fn val
+      go rest
 
 unifyFieldAssignIdx : TcEnv ->
   String ->
@@ -1463,13 +1465,15 @@ inferAppNodes env ft ((node, at) :: rest) =
 -- `applicationRow` with its own syntax, so a standalone selected in place of a
 -- method is proved exactly like any other callee.
 unifySpineResult : TcEnv -> Expr -> Mono -> List (Expr, Mono) -> Mono
-unifySpineResult _env _ ft [] = ft
-unifySpineResult env f ft ((node, at) :: rest) =
-  let r = freshVar env.teDyn.dcModule ()
-  let eff = applicationRow env (EApp f node) ft at r
-  performEffect env.teDyn.dcModule env.teDyn.dcModule.mcCells.curEffect eff
-  notePerformSite env eff
-  unifySpineResult env f r rest
+unifySpineResult env f ft0 xs0 = go ft0 xs0
+  where
+    go ft [] = ft
+    go ft ((node, at) :: rest) =
+      let r = freshVar env.teDyn.dcModule ()
+      let eff = applicationRow env (EApp f node) ft at r
+      performEffect env.teDyn.dcModule env.teDyn.dcModule.mcCells.curEffect eff
+      notePerformSite env eff
+      go r rest
 
 -- ── #2109: RESULT-FIRST inference against a known expected type ───────────
 -- `paramVarianceGuard` (the D-2 variance gate) fires only when BOTH rows at a
@@ -3038,28 +3042,30 @@ checkRedundantGo : ModuleCtx ->
   Bool ->
   List Arm ->
   Unit
-checkRedundantGo _mctx _oracle _ _ _ _ [] = ()
-checkRedundantGo mctx oracle col0 prec heads offCol ((Arm pat gs body) :: rest) =
-  let dp = desugarPat mctx.mcCells.matchOracle.value pat
-  if armUnreachable mctx oracle col0 prec heads offCol dp then
-    mctx.mcCells.matchWarnings :=
-      TcDiag
-          WUnreachableArm
-          2
-          (orElseLoc (exprLoc body) mctx.mcLoc)
-          unreachableArmWarning
-          None
-          None
-        :: mctx.mcCells.matchWarnings.value
-  warnUnreachableAlts mctx oracle col0 prec (armIsUnguarded gs) pat dp body
-  -- Only UNGUARDED, range-free arms contribute to the covered set: a guarded arm
-  -- may not fire, and a range covers part of its type that the matrix cannot name
-  -- (patHasRange) — either would produce a false "redundant" on a later arm.
-  let contributes = armIsUnguarded gs && not (patHasRange pat)
-  let prec2 = if contributes then [dp] :: prec else prec
-  let heads2 = if contributes then noteHeadCtor dp heads else heads
-  let offCol2 = offCol || contributes && not (isConPat dp)
-  checkRedundantGo mctx oracle col0 prec2 heads2 offCol2 rest
+checkRedundantGo mctx oracle col0 p0 h0 o0 l0 = go p0 h0 o0 l0
+  where
+    go _ _ _ [] = ()
+    go prec heads offCol ((Arm pat gs body) :: rest) =
+      let dp = desugarPat mctx.mcCells.matchOracle.value pat
+      if armUnreachable mctx oracle col0 prec heads offCol dp then
+        mctx.mcCells.matchWarnings :=
+          TcDiag
+              WUnreachableArm
+              2
+              (orElseLoc (exprLoc body) mctx.mcLoc)
+              unreachableArmWarning
+              None
+              None
+            :: mctx.mcCells.matchWarnings.value
+      warnUnreachableAlts mctx oracle col0 prec (armIsUnguarded gs) pat dp body
+      -- Only UNGUARDED, range-free arms contribute to the covered set: a guarded arm
+      -- may not fire, and a range covers part of its type that the matrix cannot name
+      -- (patHasRange) — either would produce a false "redundant" on a later arm.
+      let contributes = armIsUnguarded gs && not (patHasRange pat)
+      let prec2 = if contributes then [dp] :: prec else prec
+      let heads2 = if contributes then noteHeadCtor dp heads else heads
+      let offCol2 = offCol || contributes && not (isConPat dp)
+      go prec2 heads2 offCol2 rest
 
 -- An alternative of a reachable or-pattern arm that the earlier unguarded arms, or (in
 -- an unguarded arm only) the alternatives before it in the same arm, already cover.
@@ -3090,26 +3096,24 @@ warnUnreachableAlts mctx oracle col0 prec unguarded pat (POr alts) body
               None
               None
             :: mctx.mcCells.matchWarnings.value)
-      (unreachableAltIndexes mctx oracle col0 prec unguarded 1 alts)
+      (unreachableAltIndexes oracle col0 prec unguarded 1 alts)
 warnUnreachableAlts _ _ _ _ _ _ _ _ = ()
 
 -- 1-based positions of the alternatives covered by [prec] and the alternatives
 -- before them ([seen], newest first).  Empty when every alternative is covered:
 -- that is an unreachable arm, which the caller reports as one.
-unreachableAltIndexes : ModuleCtx ->
-  Oracle ->
+unreachableAltIndexes : Oracle ->
   Option TabKey ->
   List (List Pat) ->
   Bool ->
   Int ->
   List Pat ->
   List Int
-unreachableAltIndexes mctx oracle col0 prec unguarded k alts =
-  let ks = deadAltIndexes mctx oracle col0 prec unguarded [] k alts
+unreachableAltIndexes oracle col0 prec unguarded k alts =
+  let ks = deadAltIndexes oracle col0 prec unguarded [] k alts
   if listLen ks == listLen alts then [] else ks
 
-deadAltIndexes : ModuleCtx ->
-  Oracle ->
+deadAltIndexes : Oracle ->
   Option TabKey ->
   List (List Pat) ->
   Bool ->
@@ -3117,12 +3121,14 @@ deadAltIndexes : ModuleCtx ->
   Int ->
   List Pat ->
   List Int
-deadAltIndexes _ _ _ _ _ _ _ [] = []
-deadAltIndexes mctx oracle col0 prec unguarded seen k (a :: rest) =
-  let dead = patUnreachable oracle col0 (seen ++ prec) a
-  let seen2 = if unguarded then [a] :: seen else seen
-  let more = deadAltIndexes mctx oracle col0 prec unguarded seen2 (k + 1) rest
-  if dead then k :: more else more
+deadAltIndexes oracle col0 prec unguarded x50 x60 xs0 = go x50 x60 xs0
+  where
+    go _ _ [] = []
+    go seen k (a :: rest) =
+      let dead = patUnreachable oracle col0 (seen ++ prec) a
+      let seen2 = if unguarded then [a] :: seen else seen
+      let more = go seen2 (k + 1) rest
+      if dead then k :: more else more
 
 -- PERF fast path.  `patUnreachable` runs the full Maranget `useful` recursion, which
 -- re-scans EVERY preceding row — so the fold as a whole is O(arms²) on a wide match.
@@ -3216,6 +3222,8 @@ nonGuardedRows mctx ((Arm pat [] _) :: rest) =
 nonGuardedRows mctx ((Arm _ _ _) :: rest) = nonGuardedRows mctx rest
 
 inferArms : TcEnv -> Mono -> List Arm -> List (Option Loc, Mono)
+-- Bound: list built in tail position modulo cons: a where-local go loses the constant-stack loop until the lambda-lift pass (#4878); convert then.
+-- lint-disable-next-line rule-threaded-invariant
 inferArms _env _ [] = []
 inferArms env scrutTy ((Arm pat gs body) :: rest) =
   let value = inferArm env scrutTy pat gs body
@@ -3409,75 +3417,80 @@ declareRigidVars mctx keys =
 -- move.
 export
 preunifySigsEx : ModuleCtx ->
-  List (String, Ty) ->
   List ScopedMember ->
   (List ConstraintReg, List (String, Ty, List (String, Mono)))
-preunifySigsEx _mctx _ [] = ([], [])
-preunifySigsEx mctx sigs (member :: rest) =
-  let m = member.smName
-  let v = member.smMono
-  let (restRegs, restTvs) = preunifySigsEx mctx sigs rest
-  match omLookup m mctx.mcCells.sigTyMapRef.value
-    Some ty =>
-      member.smSigned := True
-      let (signedMono, tvs, forceBound) = instantiateSigTracked mctx ty
-      member.smDeclaredRoots :=
-        effectRowRoots
-          (optionOr pureRow forceBound)
-          (effectRoots signedMono Tip)
-      member.smDeclaredAuths :=
-        authRowRoots (optionOr pureRow forceBound) (authRoots signedMono Tip)
-      member.smForceBound := forceBound
-      let (declaredScheme, declaredTvs) = sigToSchemeTvs mctx ty
-      let (Forall ids eids aids _ declaredForce declaredValue) = declaredScheme
-      let slots =
-        declaredPredicateSlots
-          (constraintVarIfaceMonos (sigConstraints ty) declaredTvs)
-          (constraintVarArgMonos
-            mctx
-            (sigConstraints ty)
-            (sigConstraintArgTys ty)
-            declaredTvs)
-      member.smRecursive := Some EnvBinding {
-        ebValue = ValueScheme {
-          vsScheme =
-            Forall
-              ids
-              eids
-              aids
-              []
-              (match forceBound
-                Some _ => declaredForce
-                None => optionOr pureRow member.smForce)
-              declaredValue,
-          vsDeclared = Some CDeclared {
-            cdSlots = predicateSlotCSlots slots,
-            cdPrefix =
-              CDPLen (listLen (dedupSlotVecs (map predicateSlotView slots))),
-            cdArgs = predicateSlotArgs slots,
-          },
-        },
-        ebMethodRow = None,
-        ebStandalone = None,
-      }
-      bindFrom (dynFor mctx) v signedMono
-      let regs = [
-        ConstraintReg {
-          crName = m,
-          crScope = member.smScope,
-          crIfaceMonos = constraintVarIfaceMonos (sigConstraints ty) tvs,
-          crArgVecs =
-            constraintVarArgMonos
-              mctx
-              (sigConstraints ty)
-              (sigConstraintArgTys ty)
-              tvs,
-        },
-      ]
-      (regs ++ restRegs, (m, ty, tvs) :: restTvs)
-    None =>
-      unify mctx v member.smOwned.bsValue
-      (restRegs, restTvs)
+preunifySigsEx mctx xs0 = go xs0
+  where
+    go [] = ([], [])
+    go (member :: rest) =
+      let m = member.smName
+      let v = member.smMono
+      let (restRegs, restTvs) = go rest
+      match omLookup m mctx.mcCells.sigTyMapRef.value
+        Some ty =>
+          member.smSigned := True
+          let (signedMono, tvs, forceBound) = instantiateSigTracked mctx ty
+          member.smDeclaredRoots :=
+            effectRowRoots
+              (optionOr pureRow forceBound)
+              (effectRoots signedMono Tip)
+          member.smDeclaredAuths :=
+            authRowRoots
+              (optionOr pureRow forceBound)
+              (authRoots signedMono Tip)
+          member.smForceBound := forceBound
+          let (declaredScheme, declaredTvs) = sigToSchemeTvs mctx ty
+          let (Forall ids eids aids _ declaredForce declaredValue) =
+            declaredScheme
+          let slots =
+            declaredPredicateSlots
+              (constraintVarIfaceMonos (sigConstraints ty) declaredTvs)
+              (constraintVarArgMonos
+                mctx
+                (sigConstraints ty)
+                (sigConstraintArgTys ty)
+                declaredTvs)
+          member.smRecursive := Some EnvBinding {
+            ebValue = ValueScheme {
+              vsScheme =
+                Forall
+                  ids
+                  eids
+                  aids
+                  []
+                  (match forceBound
+                    Some _ => declaredForce
+                    None => optionOr pureRow member.smForce)
+                  declaredValue,
+              vsDeclared = Some CDeclared {
+                cdSlots = predicateSlotCSlots slots,
+                cdPrefix =
+                  CDPLen
+                    (listLen (dedupSlotVecs (map predicateSlotView slots))),
+                cdArgs = predicateSlotArgs slots,
+              },
+            },
+            ebMethodRow = None,
+            ebStandalone = None,
+          }
+          bindFrom (dynFor mctx) v signedMono
+          let regs = [
+            ConstraintReg {
+              crName = m,
+              crScope = member.smScope,
+              crIfaceMonos = constraintVarIfaceMonos (sigConstraints ty) tvs,
+              crArgVecs =
+                constraintVarArgMonos
+                  mctx
+                  (sigConstraints ty)
+                  (sigConstraintArgTys ty)
+                  tvs,
+            },
+          ]
+          (regs ++ restRegs, (m, ty, tvs) :: restTvs)
+        None =>
+          unify mctx v member.smOwned.bsValue
+          (restRegs, restTvs)
 
 -- The span of the expression whose value [e] is: a `let … in`, which has no
 -- span of its own, returns its body's value, and a block returns its last
@@ -3514,20 +3527,22 @@ inferClauseValues : TcEnv ->
   BindingSummary ->
   List (List Pat, Expr) ->
   (List (Option Loc, Mono), List EffRow)
-inferClauseValues _env _ _ [] = ([], [])
-inferClauseValues env peel owned (cl :: rest) =
-  let ce = inferClauseEff env peel cl
-  -- A clause that does not fit the member's type is reported at the value it
-  -- returns.
-  let value = valueSpanLoc (snd cl)
-  unifySourceDomains
-    (dynAtIfSome value env.teDyn)
-    (listLen (fst cl))
-    owned.bsValue
-    (fst ce)
-  recordEffectBody env.teDyn.dcModule owned.bsBody (snd ce)
-  let (values, effects) = inferClauseValues env peel owned rest
-  ((value, fst ce) :: values, snd ce :: effects)
+inferClauseValues env peel owned xs0 = go xs0
+  where
+    go [] = ([], [])
+    go (cl :: rest) =
+      let ce = inferClauseEff env peel cl
+      -- A clause that does not fit the member's type is reported at the value it
+      -- returns.
+      let value = valueSpanLoc (snd cl)
+      unifySourceDomains
+        (dynAtIfSome value env.teDyn)
+        (listLen (fst cl))
+        owned.bsValue
+        (fst ce)
+      recordEffectBody env.teDyn.dcModule owned.bsBody (snd ce)
+      let (values, effects) = go rest
+      ((value, fst ce) :: values, snd ce :: effects)
 
 -- infer one clause, returning its arrow type AND the concrete effect labels its
 -- body performs (captured in a fresh collection, then the ambient restored —

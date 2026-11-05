@@ -858,11 +858,11 @@ nestedRequireGoalsGo : ModuleCtx ->
   OrdMap Unit ->
   List (UObligation, ReqWalk) ->
   List UObligation
-nestedRequireGoalsGo mctx rigidIds liveIds walks =
-  match flatMap (selectedRequireGoals mctx rigidIds liveIds) walks
-    [] => []
-    derived =>
-      map fst derived ++ nestedRequireGoalsGo mctx rigidIds liveIds derived
+nestedRequireGoalsGo mctx rigidIds liveIds walks0 = go walks0
+  where
+    go walks = match flatMap (selectedRequireGoals mctx rigidIds liveIds) walks
+      [] => []
+      derived => map fst derived ++ go derived
 
 -- The goals from level [walks] down, each goal its walk has already followed left out.
 nestedRequireGoalsOnce : ModuleCtx ->
@@ -870,10 +870,12 @@ nestedRequireGoalsOnce : ModuleCtx ->
   OrdMap Unit ->
   List (UObligation, ReqWalk) ->
   List UObligation
-nestedRequireGoalsOnce _mctx _ _ [] = []
-nestedRequireGoalsOnce mctx rigidIds liveIds walks =
-  let (kept, derived) = followRequireLevel mctx rigidIds liveIds walks [] []
-  kept ++ nestedRequireGoalsOnce mctx rigidIds liveIds derived
+nestedRequireGoalsOnce mctx rigidIds liveIds walks0 = go walks0
+  where
+    go [] = []
+    go walks =
+      let (kept, derived) = followRequireLevel mctx rigidIds liveIds walks [] []
+      kept ++ go derived
 
 -- One level, in order: a goal its walk has already followed is left out,
 -- each other is kept and followed, and the goals it selects form the next level.
@@ -884,14 +886,15 @@ followRequireLevel : ModuleCtx ->
   List UObligation ->
   List (List (UObligation, ReqWalk)) ->
   (List UObligation, List (UObligation, ReqWalk))
-followRequireLevel _mctx _ _ [] kept derived =
-  (reverse kept, flatMap identity (reverse derived))
-followRequireLevel mctx rigidIds liveIds ((o, walk) :: rest) kept derived =
-  if walkGoalFollowed walk o.pred.iface (uOblGoalArgs mctx.mcGraph o) then
-    followRequireLevel mctx rigidIds liveIds rest kept derived
-  else
-    let below = followRequireGoal mctx rigidIds liveIds (o, walk)
-    followRequireLevel mctx rigidIds liveIds rest (o :: kept) (below :: derived)
+followRequireLevel mctx rigidIds liveIds xs0 k0 d0 = go xs0 k0 d0
+  where
+    go [] kept derived = (reverse kept, flatMap identity (reverse derived))
+    go ((o, walk) :: rest) kept derived =
+      if walkGoalFollowed walk o.pred.iface (uOblGoalArgs mctx.mcGraph o) then
+        go rest kept derived
+      else
+        let below = followRequireGoal mctx rigidIds liveIds (o, walk)
+        go rest (o :: kept) (below :: derived)
 
 -- [o]'s prerequisites on the pass that reports nothing; [o] is recorded as followed
 -- when selecting them detected no error and minted none of their variables
@@ -1185,9 +1188,10 @@ buildAdj : List String ->
   OrdMap (List (List Pat, Expr)) ->
   OrdMap (List String) ->
   OrdMap (List String)
-buildAdj [] _ _ m = m
-buildAdj (n :: rest) nameSet cbn m =
-  buildAdj rest nameSet cbn (omInsert n (depsOf n nameSet cbn) m)
+buildAdj xs0 nameSet cbn m0 = go xs0 m0
+  where
+    go [] m = m
+    go (n :: rest) m = go rest (omInsert n (depsOf n nameSet cbn) m)
 
 -- per-name dependencies: the other group names a binding's bodies reference FREE.
 -- Consumed by depGraphMap → Tarjan.  An over-approximated edge is not harmless:
@@ -1375,6 +1379,8 @@ constraintVarArgMonos : ModuleCtx ->
   List (List Ty) ->
   List (String, Mono) ->
   List (List Mono)
+-- Bound: list built in tail position modulo cons: a where-local go loses the constant-stack loop until the lambda-lift pass (#4878); convert then.
+-- lint-disable-next-line rule-threaded-invariant
 constraintVarArgMonos _mctx [] _ _ = []
 constraintVarArgMonos _mctx _ [] _ = []
 constraintVarArgMonos mctx ((_, names) :: rest) (args :: argsRest) tvMap =
@@ -1415,6 +1421,8 @@ sccSchemes : TcEnv ->
   Int ->
   List ScopedMember ->
   List (String, Scheme)
+-- Bound: list built in tail position modulo cons: a where-local go loses the constant-stack loop until the lambda-lift pass (#4878); convert then.
+-- lint-disable-next-line rule-threaded-invariant
 sccSchemes _env _ _ _ _ _ [] = []
 sccSchemes env sigs grouped isLetrec residuals index (member :: rest) =
   let m = member.smName
@@ -1485,6 +1493,9 @@ checkSigsOverExpansive : TcEnv ->
   OrdMap (List (List Pat, Expr)) ->
   List (String, Ty, List (String, Mono)) ->
   Unit
+-- Bound: the where-go form does not check here: the module's `import map as`
+-- alias makes the local Foldable receiver resolve to Map (#4894); keep the threaded form.
+-- lint-disable-next-line rule-threaded-invariant
 checkSigsOverExpansive _env _ [] = ()
 checkSigsOverExpansive env grouped ((m, ty, tvs) :: rest) =
   if not (isEmpty tvs)
@@ -1565,17 +1576,19 @@ checkSigsFixedBy : ModuleCtx ->
   List (Int, String) ->
   List (String, Ty, List (String, Mono)) ->
   Unit
-checkSigsFixedBy _mctx _ [] = ()
-checkSigsFixedBy mctx fixed ((name, ty, tvs) :: rest) =
-  match sigVarFixedBy fixed tvs
-    Some (vname, sibling) =>
-      pushTypeErrorOnceAt
-        mctx
-        TTypeTooGeneral
-        (firstTyLoc ty)
-        (siblingSharedSigVarMsg vname name sibling)
-    None => ()
-  checkSigsFixedBy mctx fixed rest
+checkSigsFixedBy mctx fixed xs0 = go xs0
+  where
+    go [] = ()
+    go ((name, ty, tvs) :: rest) =
+      match sigVarFixedBy fixed tvs
+        Some (vname, sibling) =>
+          pushTypeErrorOnceAt
+            mctx
+            TTypeTooGeneral
+            (firstTyLoc ty)
+            (siblingSharedSigVarMsg vname name sibling)
+        None => ()
+      go rest
 
 sigVarFixedBy : List (Int, String) ->
   List (String, Mono) ->
@@ -1620,9 +1633,9 @@ fixedSibling id ((i, sibling) :: rest)
 -- the union's redundant superclass display — `when : Thenable m => …` whose body's
 -- `pure` infers Applicative now renders just `Thenable a =>` (Applicative is entailed
 -- by `Thenable requires Applicative`, so it is checked-and-dropped, not merged).
--- #837: [memberDefIds] carries each TOP-LEVEL member's binding id (processSCC passes
+-- #837: [defIds] carries each TOP-LEVEL member's binding id (processSCC passes
 -- schemeDefIdsRef); the local/where call sites pass omEmpty so their members key under
--- the sentinel id 0.  A member absent from [memberDefIds] is a local/where binder → 0.
+-- the sentinel id 0.  A member absent from [defIds] is a local/where binder → 0.
 export
 registerSchemeObligations : ModuleCtx ->
   OrdMap Int ->
@@ -1631,28 +1644,31 @@ registerSchemeObligations : ModuleCtx ->
   List UObligation ->
   List (String, Scheme) ->
   Unit
-registerSchemeObligations _mctx _ _ _ _ [] = ()
-registerSchemeObligations mctx memberDefIds sigTvMaps callObls addedObls ((m, sch) :: rest) =
-  -- #838 I2 / #827: record this binding's QUANTIFIED (generalized) var ids as
-  -- caller-deferrable.  A var this binding ∀-quantifies is FORWARDED to its callers
-  -- (each use re-instantiates it fresh), so an end-of-run call obligation carrying
-  -- that exact id is this binding's own deferred predicate — undeterminedGoalExempt
-  -- defers it into the scheme instead of a spurious `Ambiguous instance` reject.
-  -- CRITICAL (S0 #855-review): this uses the POST-generalization `schemeIds`, NOT the
-  -- pre-generalization member monos.  A value-restricted intermediate (`let x = mk n`,
-  -- `mk : Int -> a`) does NOT quantify its var (`Forall []`), so an escaped ambiguous
-  -- var never enters this set and the undetermined-goal verdict rejects it (a1_greet/a1_letleak).
-  mctx.mcCells.deferrableVarIds :=
-    idSetInsertAll (schemeIds sch) mctx.mcCells.deferrableVarIds.value
-  let obs =
-    dedupVecObls (schemeOblsForMember mctx sigTvMaps callObls addedObls m sch)
-  if isEmptyL obs then
-    ()
-  else
-    let defId = optionOr 0 (omLookup m memberDefIds)
-    mctx.mcCells.schemeObligationsRef :=
-      ((m, defId), obs) :: mctx.mcCells.schemeObligationsRef.value
-  registerSchemeObligations mctx memberDefIds sigTvMaps callObls addedObls rest
+registerSchemeObligations mctx defIds sigTvMaps callObls addedObls xs0 = go xs0
+  where
+    go [] = ()
+    go ((m, sch) :: rest) =
+      -- #838 I2 / #827: record this binding's QUANTIFIED (generalized) var ids as
+      -- caller-deferrable.  A var this binding ∀-quantifies is FORWARDED to its callers
+      -- (each use re-instantiates it fresh), so an end-of-run call obligation carrying
+      -- that exact id is this binding's own deferred predicate — undeterminedGoalExempt
+      -- defers it into the scheme instead of a spurious `Ambiguous instance` reject.
+      -- CRITICAL (S0 #855-review): this uses the POST-generalization `schemeIds`, NOT the
+      -- pre-generalization member monos.  A value-restricted intermediate (`let x = mk n`,
+      -- `mk : Int -> a`) does NOT quantify its var (`Forall []`), so an escaped ambiguous
+      -- var never enters this set and the undetermined-goal verdict rejects it (a1_greet/a1_letleak).
+      mctx.mcCells.deferrableVarIds :=
+        idSetInsertAll (schemeIds sch) mctx.mcCells.deferrableVarIds.value
+      let obs =
+        dedupVecObls
+          (schemeOblsForMember mctx sigTvMaps callObls addedObls m sch)
+      if isEmptyL obs then
+        ()
+      else
+        let defId = optionOr 0 (omLookup m defIds)
+        mctx.mcCells.schemeObligationsRef :=
+          ((m, defId), obs) :: mctx.mcCells.schemeObligationsRef.value
+      go rest
 
 -- #619: a SIGNED binding's scheme context is EXACTLY its declared `=>` predicates
 -- (authoritative); an UNSIGNED binding's is its inferred principal context (direct
@@ -1958,10 +1974,12 @@ checkSigConstraintCoverage : ModuleCtx ->
   List UObligation ->
   List (String, Scheme) ->
   Unit
-checkSigConstraintCoverage _mctx _ _ _ _ _ [] = ()
-checkSigConstraintCoverage mctx regs sigs sigTvMaps callObls addedObls ((m, sch) :: rest) =
-  checkSigConstraintOne mctx regs sigs sigTvMaps callObls addedObls m sch
-  checkSigConstraintCoverage mctx regs sigs sigTvMaps callObls addedObls rest
+checkSigConstraintCoverage mctx regs sigs tvMaps callObls added xs0 = go xs0
+  where
+    go [] = ()
+    go ((m, sch) :: rest) =
+      checkSigConstraintOne mctx regs sigs tvMaps callObls added m sch
+      go rest
 
 checkSigConstraintOne : ModuleCtx ->
   List ConstraintReg ->
@@ -2114,23 +2132,25 @@ reportUncoveredVec : ModuleCtx ->
   List VecObl ->
   List VecObl ->
   Unit
-reportUncoveredVec _mctx _ _ _ _ [] = ()
-reportUncoveredVec mctx m sigTvMaps declaredPairs declaredVecs (o :: rest) =
-  if listLen o.voIds < 2 then
-    ()
-  else if containsVecObl o declaredVecs then
-    ()
-  else if not (allPairsIn o.voIface o.voIds declaredPairs) then
-    ()
-  else
-    pushTypeError
-      mctx
-      TMissingConstraint
-      (missingConstraintVecMsg
-        m
-        o.voIface.irName
-        (map (varNameForId sigTvMaps m) o.voIds))
-  reportUncoveredVec mctx m sigTvMaps declaredPairs declaredVecs rest
+reportUncoveredVec mctx m sigTvMaps declaredPairs declaredVecs xs0 = go xs0
+  where
+    go [] = ()
+    go (o :: rest) =
+      if listLen o.voIds < 2 then
+        ()
+      else if containsVecObl o declaredVecs then
+        ()
+      else if not (allPairsIn o.voIface o.voIds declaredPairs) then
+        ()
+      else
+        pushTypeError
+          mctx
+          TMissingConstraint
+          (missingConstraintVecMsg
+            m
+            o.voIface.irName
+            (map (varNameForId sigTvMaps m) o.voIds))
+      go rest
 
 allPairsIn : IfaceRef -> List Int -> List (IfaceRef, Int) -> Bool
 allPairsIn iface ids declaredPairs =
@@ -2143,16 +2163,18 @@ reportUncovered : ModuleCtx ->
   List (IfaceRef, Int) ->
   List (IfaceRef, Int) ->
   Unit
-reportUncovered _mctx _ _ _ [] = ()
-reportUncovered mctx m sigTvMaps declared ((iface, id) :: rest) =
-  if containsIfacePair (iface, id) declared then
-    ()
-  else
-    pushTypeError
-      mctx
-      TMissingConstraint
-      (missingConstraintMsg m iface.irName (varNameForId sigTvMaps m id))
-  reportUncovered mctx m sigTvMaps declared rest
+reportUncovered mctx m sigTvMaps declared xs0 = go xs0
+  where
+    go [] = ()
+    go ((iface, id) :: rest) =
+      if containsIfacePair (iface, id) declared then
+        ()
+      else
+        pushTypeError
+          mctx
+          TMissingConstraint
+          (missingConstraintMsg m iface.irName (varNameForId sigTvMaps m id))
+      go rest
 
 containsIfacePair : (IfaceRef, Int) -> List (IfaceRef, Int) -> Bool
 containsIfacePair _ [] = False

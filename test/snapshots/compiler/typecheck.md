@@ -1,5 +1,5 @@
 # META
-source_lines=3665
+source_lines=3669
 stages=DESUGAR,MARK
 # SOURCE
 -- typecheck: the entry module: the graph drive (`driveGraphK`), the chain and core memos and
@@ -959,6 +959,8 @@ importedBindingWinners : ModuleCtx ->
   OrdMap Unit ->
   OrdMap Unit ->
   List (String, ExportBinding)
+-- Bound: list built in tail position modulo cons: a where-local go loses the constant-stack loop until the lambda-lift pass (#4878); convert then.
+-- lint-disable-next-line rule-threaded-invariant
 importedBindingWinners _mctx [] _ _ = []
 importedBindingWinners mctx ((name, (_, binding)) :: rest) seen ambiguous =
   if omHasKey name seen then
@@ -1401,43 +1403,42 @@ importSeed : GraphCtx ->
   List Decl ->
   List (String, List (String, a)) ->
   List (String, (Option String, a))
-importSeed _gctx _ _ _ [] _ = []
-importSeed gctx mid coreV admitted ((DAttrib _ d) :: rest) depEnv =
-  importSeed gctx mid coreV admitted (d :: rest) depEnv
-importSeed gctx mid coreV admitted ((DUse _ path _) :: rest) depEnv =
-  let depId = useModId path
-  if depId == "core" then
-    map (suppliedBy None) (coreAliasSchemes path coreV)
-      ++ importSeed gctx mid coreV admitted rest depEnv
-  else match lookupAssoc depId depEnv
-    None => importSeed gctx mid coreV admitted rest depEnv
-    Some depSchemes =>
-      let bound = boundNames path
-      let decls =
-        omFromPairs
-          (reverseL (importFormRows path (importerDefiners gctx mid depId)))
-          omEmpty
-      let methods =
-        identKeysByName
-          omEmpty
-          (importFormRows
-            path
-            (match omLookup depId (methodExportsIndex gctx ())
-              Some rows => rows
-              None => []))
-      map
-          (row =>
-            suppliedBy
-              (if bindsName bound (fst row)
-                && not (containsPair (depId, fst row) admitted) then
-                Some (importSupplierKey depId decls methods (fst row))
-              else
-                None)
-              row)
-          (importFormSchemes depEnv path depSchemes)
-        ++ importSeed gctx mid coreV admitted rest depEnv
-importSeed gctx mid coreV admitted (_ :: rest) depEnv =
-  importSeed gctx mid coreV admitted rest depEnv
+importSeed gctx mid coreV admitted xs0 depEnv = go xs0
+  where
+    go [] = []
+    go ((DAttrib _ d) :: rest) = go (d :: rest)
+    go ((DUse _ path _) :: rest) =
+      let depId = useModId path
+      if depId == "core" then
+        map (suppliedBy None) (coreAliasSchemes path coreV) ++ go rest
+      else match lookupAssoc depId depEnv
+        None => go rest
+        Some depSchemes =>
+          let bound = boundNames path
+          let decls =
+            omFromPairs
+              (reverseL (importFormRows path (importerDefiners gctx mid depId)))
+              omEmpty
+          let methods =
+            identKeysByName
+              omEmpty
+              (importFormRows
+                path
+                (match omLookup depId (methodExportsIndex gctx ())
+                  Some rows => rows
+                  None => []))
+          map
+              (row =>
+                suppliedBy
+                  (if bindsName bound (fst row)
+                    && not (containsPair (depId, fst row) admitted) then
+                    Some (importSupplierKey depId decls methods (fst row))
+                  else
+                    None)
+                  row)
+              (importFormSchemes depEnv path depSchemes)
+            ++ go rest
+    go (_ :: rest) = go rest
 
 -- The identity one import's binding of `name` is compared by: the declaration
 -- it denotes.  A standalone value is `(defining module, name there)` from
@@ -2538,9 +2539,10 @@ dispositionRowsOfImpls : ImplEnv ->
   List ImplRow ->
   ClassEnv ->
   List (InstanceShape, String, MethodDisposition)
-dispositionRowsOfImpls _ [] _ = []
-dispositionRowsOfImpls ie (r :: rest) ce =
-  dispositionRowsOfImpl ie r ce ++ dispositionRowsOfImpls ie rest ce
+dispositionRowsOfImpls ie xs0 ce = go xs0
+  where
+    go [] = []
+    go (r :: rest) = dispositionRowsOfImpl ie r ce ++ go rest
 
 -- Each row carries its instance's shape and its interface's word.  The shape's
 -- route word is minted by the same call the lowering and eval install passes make
@@ -2593,6 +2595,8 @@ dispositionRowsOfMethods : InstId ->
   List String ->
   List String ->
   List MethodDisposition
+-- Bound: typecheck.mdk may not grow (D1, #4200); the where-go form adds three code lines here.
+-- lint-disable-next-line rule-threaded-invariant
 dispositionRowsOfMethods _ _ _ _ [] = []
 dispositionRowsOfMethods inst iface supplied required (m :: rest) =
   let restRows = dispositionRowsOfMethods inst iface supplied required rest
@@ -3858,10 +3862,7 @@ schemeLines ((n, p) :: rest) = "\{n} : \{ppPubScheme p}" :: schemeLines rest
 (DFunDef false "declMethodNamesOf" ((PRec "DImpl" ((rf "methods" None)) true)) (EApp (EApp (EVar "map") (EVar "implMethodName")) (EVar "methods")))
 (DFunDef false "declMethodNamesOf" (PWild) (EListLit))
 (DTypeSig false "importSeed" (TyFun (TyCon "GraphCtx") (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyVar "a"))) (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "String"))) (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyVar "a"))))) (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyTuple (TyApp (TyCon "Option") (TyCon "String")) (TyVar "a")))))))))))
-(DFunDef false "importSeed" ((PVar "_gctx") PWild PWild PWild (PList) PWild) (EListLit))
-(DFunDef false "importSeed" ((PVar "gctx") (PVar "mid") (PVar "coreV") (PVar "admitted") (PCons (PCon "DAttrib" PWild (PVar "d")) (PVar "rest")) (PVar "depEnv")) (EApp (EApp (EApp (EApp (EApp (EApp (EVar "importSeed") (EVar "gctx")) (EVar "mid")) (EVar "coreV")) (EVar "admitted")) (EBinOp "::" (EVar "d") (EVar "rest"))) (EVar "depEnv")))
-(DFunDef false "importSeed" ((PVar "gctx") (PVar "mid") (PVar "coreV") (PVar "admitted") (PCons (PCon "DUse" PWild (PVar "path") PWild) (PVar "rest")) (PVar "depEnv")) (EBlock (DoLet false false (PVar "depId") (EApp (EVar "useModId") (EVar "path"))) (DoExpr (EIf (EBinOp "==" (EVar "depId") (ELit (LString "core"))) (EBinOp "++" (EApp (EApp (EVar "map") (EApp (EVar "suppliedBy") (EVar "None"))) (EApp (EApp (EVar "coreAliasSchemes") (EVar "path")) (EVar "coreV"))) (EApp (EApp (EApp (EApp (EApp (EApp (EVar "importSeed") (EVar "gctx")) (EVar "mid")) (EVar "coreV")) (EVar "admitted")) (EVar "rest")) (EVar "depEnv"))) (EMatch (EApp (EApp (EVar "lookupAssoc") (EVar "depId")) (EVar "depEnv")) (arm (PCon "None") () (EApp (EApp (EApp (EApp (EApp (EApp (EVar "importSeed") (EVar "gctx")) (EVar "mid")) (EVar "coreV")) (EVar "admitted")) (EVar "rest")) (EVar "depEnv"))) (arm (PCon "Some" (PVar "depSchemes")) () (EBlock (DoLet false false (PVar "bound") (EApp (EVar "boundNames") (EVar "path"))) (DoLet false false (PVar "decls") (EApp (EApp (EVar "omFromPairs") (EApp (EVar "reverseL") (EApp (EApp (EVar "importFormRows") (EVar "path")) (EApp (EApp (EApp (EVar "importerDefiners") (EVar "gctx")) (EVar "mid")) (EVar "depId"))))) (EVar "omEmpty"))) (DoLet false false (PVar "methods") (EApp (EApp (EVar "identKeysByName") (EVar "omEmpty")) (EApp (EApp (EVar "importFormRows") (EVar "path")) (EMatch (EApp (EApp (EVar "omLookup") (EVar "depId")) (EApp (EApp (EVar "methodExportsIndex") (EVar "gctx")) (ELit LUnit))) (arm (PCon "Some" (PVar "rows")) () (EVar "rows")) (arm (PCon "None") () (EListLit)))))) (DoExpr (EBinOp "++" (EApp (EApp (EVar "map") (ELam ((PVar "row")) (EApp (EApp (EVar "suppliedBy") (EIf (EBinOp "&&" (EApp (EApp (EVar "bindsName") (EVar "bound")) (EApp (EVar "fst") (EVar "row"))) (EApp (EVar "not") (EApp (EApp (EVar "containsPair") (ETuple (EVar "depId") (EApp (EVar "fst") (EVar "row")))) (EVar "admitted")))) (EApp (EVar "Some") (EApp (EApp (EApp (EApp (EVar "importSupplierKey") (EVar "depId")) (EVar "decls")) (EVar "methods")) (EApp (EVar "fst") (EVar "row")))) (EVar "None"))) (EVar "row")))) (EApp (EApp (EApp (EVar "importFormSchemes") (EVar "depEnv")) (EVar "path")) (EVar "depSchemes"))) (EApp (EApp (EApp (EApp (EApp (EApp (EVar "importSeed") (EVar "gctx")) (EVar "mid")) (EVar "coreV")) (EVar "admitted")) (EVar "rest")) (EVar "depEnv")))))))))))
-(DFunDef false "importSeed" ((PVar "gctx") (PVar "mid") (PVar "coreV") (PVar "admitted") (PCons PWild (PVar "rest")) (PVar "depEnv")) (EApp (EApp (EApp (EApp (EApp (EApp (EVar "importSeed") (EVar "gctx")) (EVar "mid")) (EVar "coreV")) (EVar "admitted")) (EVar "rest")) (EVar "depEnv")))
+(DFunDef false "importSeed" ((PVar "gctx") (PVar "mid") (PVar "coreV") (PVar "admitted") (PVar "xs0") (PVar "depEnv")) (ELetGroup ((lgb "go" (clause ((PList)) (EListLit)) (clause ((PCons (PCon "DAttrib" PWild (PVar "d")) (PVar "rest"))) (EApp (EVar "go") (EBinOp "::" (EVar "d") (EVar "rest")))) (clause ((PCons (PCon "DUse" PWild (PVar "path") PWild) (PVar "rest"))) (EBlock (DoLet false false (PVar "depId") (EApp (EVar "useModId") (EVar "path"))) (DoExpr (EIf (EBinOp "==" (EVar "depId") (ELit (LString "core"))) (EBinOp "++" (EApp (EApp (EVar "map") (EApp (EVar "suppliedBy") (EVar "None"))) (EApp (EApp (EVar "coreAliasSchemes") (EVar "path")) (EVar "coreV"))) (EApp (EVar "go") (EVar "rest"))) (EMatch (EApp (EApp (EVar "lookupAssoc") (EVar "depId")) (EVar "depEnv")) (arm (PCon "None") () (EApp (EVar "go") (EVar "rest"))) (arm (PCon "Some" (PVar "depSchemes")) () (EBlock (DoLet false false (PVar "bound") (EApp (EVar "boundNames") (EVar "path"))) (DoLet false false (PVar "decls") (EApp (EApp (EVar "omFromPairs") (EApp (EVar "reverseL") (EApp (EApp (EVar "importFormRows") (EVar "path")) (EApp (EApp (EApp (EVar "importerDefiners") (EVar "gctx")) (EVar "mid")) (EVar "depId"))))) (EVar "omEmpty"))) (DoLet false false (PVar "methods") (EApp (EApp (EVar "identKeysByName") (EVar "omEmpty")) (EApp (EApp (EVar "importFormRows") (EVar "path")) (EMatch (EApp (EApp (EVar "omLookup") (EVar "depId")) (EApp (EApp (EVar "methodExportsIndex") (EVar "gctx")) (ELit LUnit))) (arm (PCon "Some" (PVar "rows")) () (EVar "rows")) (arm (PCon "None") () (EListLit)))))) (DoExpr (EBinOp "++" (EApp (EApp (EVar "map") (ELam ((PVar "row")) (EApp (EApp (EVar "suppliedBy") (EIf (EBinOp "&&" (EApp (EApp (EVar "bindsName") (EVar "bound")) (EApp (EVar "fst") (EVar "row"))) (EApp (EVar "not") (EApp (EApp (EVar "containsPair") (ETuple (EVar "depId") (EApp (EVar "fst") (EVar "row")))) (EVar "admitted")))) (EApp (EVar "Some") (EApp (EApp (EApp (EApp (EVar "importSupplierKey") (EVar "depId")) (EVar "decls")) (EVar "methods")) (EApp (EVar "fst") (EVar "row")))) (EVar "None"))) (EVar "row")))) (EApp (EApp (EApp (EVar "importFormSchemes") (EVar "depEnv")) (EVar "path")) (EVar "depSchemes"))) (EApp (EVar "go") (EVar "rest"))))))))))) (clause ((PCons PWild (PVar "rest"))) (EApp (EVar "go") (EVar "rest"))))) (EApp (EVar "go") (EVar "xs0"))))
 (DTypeSig false "importSupplierKey" (TyFun (TyCon "String") (TyFun (TyApp (TyCon "OrdMap") (TyTuple (TyCon "String") (TyCon "String"))) (TyFun (TyApp (TyCon "OrdMap") (TyApp (TyCon "List") (TyCon "String"))) (TyFun (TyCon "String") (TyCon "String"))))))
 (DFunDef false "importSupplierKey" ((PVar "depId") (PVar "decls") (PVar "methods") (PVar "name")) (EMatch (EApp (EApp (EVar "omLookup") (EVar "name")) (EVar "decls")) (arm (PCon "Some" (PTuple (PVar "defMid") (PVar "origin"))) () (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "")) (EApp (EVar "display") (EApp (EVar "lenKey") (EVar "defMid")))) (ELit (LString ""))) (EApp (EVar "display") (EApp (EVar "lenKey") (EVar "origin")))) (ELit (LString "")))) (arm (PCon "None") () (EMatch (EApp (EApp (EVar "omLookup") (EVar "name")) (EVar "methods")) (arm (PCon "Some" (PVar "keys")) () (EApp (EApp (EVar "joinWith") (ELit (LString ""))) (EApp (EVar "sortUniqS") (EVar "keys")))) (arm (PCon "None") () (EApp (EVar "lenKey") (EVar "depId")))))))
 (DTypeSig false "identKeysByName" (TyFun (TyApp (TyCon "OrdMap") (TyApp (TyCon "List") (TyCon "String"))) (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "Ident"))) (TyApp (TyCon "OrdMap") (TyApp (TyCon "List") (TyCon "String"))))))
@@ -3972,8 +3973,7 @@ schemeLines ((n, p) :: rest) = "\{n} : \{ppPubScheme p}" :: schemeLines rest
 (DFunDef false "dispositionSlotsOfImpls" ((PList) PWild) (EListLit))
 (DFunDef false "dispositionSlotsOfImpls" ((PCons (PVar "r") (PVar "rest")) (PVar "ce")) (EBlock (DoLet false false (PTuple (PVar "iface") PWild PWild) (EApp (EVar "ieRowTriple") (EVar "r"))) (DoLet false false (PVar "inst") (EApp (EApp (EVar "InstId") (EApp (EVar "instRefMid") (EApp (EVar "ieRowInst") (EVar "r")))) (EApp (EVar "instRefSeq") (EApp (EVar "ieRowInst") (EVar "r"))))) (DoLet false false (PVar "supplied") (EApp (EVar "ieRowMethodNames") (EVar "r"))) (DoLet false false (PVar "here") (EMatch (EApp (EApp (EApp (EVar "ceLookupAt") (EApp (EVar "regKeyOfTab") (EApp (EApp (EVar "ifaceTabKey") (EFieldAccess (EVar "iface") "irOrigin")) (EFieldAccess (EVar "iface") "irName")))) (EApp (EVar "ieRowOrd") (EVar "r"))) (EVar "ce")) (arm (PCon "None") () (EListLit)) (arm (PCon "Some" (PVar "ceRow")) () (EApp (EApp (EVar "map") (ELam ((PVar "m")) (ETuple (EVar "inst") (EVar "iface") (EVar "m")))) (EApp (EApp (EVar "filter") (ELam ((PVar "m")) (EBinOp "||" (EApp (EApp (EVar "contains") (EVar "m")) (EVar "supplied")) (EApp (EVar "not") (EApp (EApp (EVar "contains") (EVar "m")) (EApp (EVar "ceRowRequired") (EVar "ceRow"))))))) (EApp (EVar "ceRowMethodNames") (EVar "ceRow"))))))) (DoExpr (EBinOp "++" (EVar "here") (EApp (EApp (EVar "dispositionSlotsOfImpls") (EVar "rest")) (EVar "ce"))))))
 (DTypeSig false "dispositionRowsOfImpls" (TyFun (TyCon "ImplEnv") (TyFun (TyApp (TyCon "List") (TyCon "ImplRow")) (TyFun (TyCon "ClassEnv") (TyApp (TyCon "List") (TyTuple (TyCon "InstanceShape") (TyCon "String") (TyCon "MethodDisposition")))))))
-(DFunDef false "dispositionRowsOfImpls" (PWild (PList) PWild) (EListLit))
-(DFunDef false "dispositionRowsOfImpls" ((PVar "ie") (PCons (PVar "r") (PVar "rest")) (PVar "ce")) (EBinOp "++" (EApp (EApp (EApp (EVar "dispositionRowsOfImpl") (EVar "ie")) (EVar "r")) (EVar "ce")) (EApp (EApp (EApp (EVar "dispositionRowsOfImpls") (EVar "ie")) (EVar "rest")) (EVar "ce"))))
+(DFunDef false "dispositionRowsOfImpls" ((PVar "ie") (PVar "xs0") (PVar "ce")) (ELetGroup ((lgb "go" (clause ((PList)) (EListLit)) (clause ((PCons (PVar "r") (PVar "rest"))) (EBinOp "++" (EApp (EApp (EApp (EVar "dispositionRowsOfImpl") (EVar "ie")) (EVar "r")) (EVar "ce")) (EApp (EVar "go") (EVar "rest")))))) (EApp (EVar "go") (EVar "xs0"))))
 (DTypeSig false "dispositionRowsOfImpl" (TyFun (TyCon "ImplEnv") (TyFun (TyCon "ImplRow") (TyFun (TyCon "ClassEnv") (TyApp (TyCon "List") (TyTuple (TyCon "InstanceShape") (TyCon "String") (TyCon "MethodDisposition")))))))
 (DFunDef false "dispositionRowsOfImpl" (PWild (PVar "r") (PVar "ce")) (EBlock (DoLet false false (PTuple (PVar "iface") (PVar "tys") PWild) (EApp (EVar "ieRowTriple") (EVar "r"))) (DoLet false false (PVar "inst") (EApp (EApp (EVar "InstId") (EApp (EVar "instRefMid") (EApp (EVar "ieRowInst") (EVar "r")))) (EApp (EVar "instRefSeq") (EApp (EVar "ieRowInst") (EVar "r"))))) (DoLet false false (PVar "ifaceWord") (EApp (EApp (EVar "ifaceWordOf") (EFieldAccess (EVar "iface") "irOrigin")) (EFieldAccess (EVar "iface") "irName"))) (DoLet false false (PVar "supplied") (EApp (EVar "ieRowMethodNames") (EVar "r"))) (DoLet false false (PVar "shape") (ERecordCreate "InstanceShape" ((fa "isWord" (EApp (EApp (EApp (EApp (EVar "implRouteKeyWord") (EFieldAccess (EVar "iface") "irOrigin")) (EFieldAccess (EVar "iface") "irName")) (EVar "tys")) (EVar "None"))) (fa "isTys" (EVar "tys"))))) (DoExpr (EMatch (EApp (EApp (EApp (EVar "ceLookupAt") (EApp (EVar "regKeyOfTab") (EApp (EApp (EVar "ifaceTabKey") (EFieldAccess (EVar "iface") "irOrigin")) (EFieldAccess (EVar "iface") "irName")))) (EApp (EVar "ieRowOrd") (EVar "r"))) (EVar "ce")) (arm (PCon "None") () (EListLit)) (arm (PCon "Some" (PVar "ceRow")) () (EApp (EApp (EVar "map") (ELam ((PVar "d")) (ETuple (EVar "shape") (EVar "ifaceWord") (EVar "d")))) (EApp (EApp (EApp (EApp (EApp (EVar "dispositionRowsOfMethods") (EVar "inst")) (EVar "iface")) (EVar "supplied")) (EApp (EVar "ceRowRequired") (EVar "ceRow"))) (EApp (EVar "ceRowMethodNames") (EVar "ceRow")))))))))
 (DTypeSig false "ifaceSuperCountOfRow" (TyFun (TyCon "GraphCtx") (TyFun (TyCon "ImplRow") (TyTuple (TyCon "String") (TyCon "Int")))))
@@ -4270,10 +4270,7 @@ schemeLines ((n, p) :: rest) = "\{n} : \{ppPubScheme p}" :: schemeLines rest
 (DFunDef false "declMethodNamesOf" ((PRec "DImpl" ((rf "methods" None)) true)) (EApp (EApp (EMethodRef "map") (EVar "implMethodName")) (EVar "methods")))
 (DFunDef false "declMethodNamesOf" (PWild) (EListLit))
 (DTypeSig false "importSeed" (TyFun (TyCon "GraphCtx") (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyVar "a"))) (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "String"))) (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyVar "a"))))) (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyTuple (TyApp (TyCon "Option") (TyCon "String")) (TyVar "a")))))))))))
-(DFunDef false "importSeed" ((PVar "_gctx") PWild PWild PWild (PList) PWild) (EListLit))
-(DFunDef false "importSeed" ((PVar "gctx") (PVar "mid") (PVar "coreV") (PVar "admitted") (PCons (PCon "DAttrib" PWild (PVar "d")) (PVar "rest")) (PVar "depEnv")) (EApp (EApp (EApp (EApp (EApp (EApp (EVar "importSeed") (EVar "gctx")) (EVar "mid")) (EVar "coreV")) (EVar "admitted")) (EBinOp "::" (EVar "d") (EVar "rest"))) (EVar "depEnv")))
-(DFunDef false "importSeed" ((PVar "gctx") (PVar "mid") (PVar "coreV") (PVar "admitted") (PCons (PCon "DUse" PWild (PVar "path") PWild) (PVar "rest")) (PVar "depEnv")) (EBlock (DoLet false false (PVar "depId") (EApp (EVar "useModId") (EVar "path"))) (DoExpr (EIf (EBinOp "==" (EVar "depId") (ELit (LString "core"))) (EBinOp "++" (EApp (EApp (EMethodRef "map") (EApp (EVar "suppliedBy") (EVar "None"))) (EApp (EApp (EVar "coreAliasSchemes") (EVar "path")) (EVar "coreV"))) (EApp (EApp (EApp (EApp (EApp (EApp (EVar "importSeed") (EVar "gctx")) (EVar "mid")) (EVar "coreV")) (EVar "admitted")) (EVar "rest")) (EVar "depEnv"))) (EMatch (EApp (EApp (EVar "lookupAssoc") (EVar "depId")) (EVar "depEnv")) (arm (PCon "None") () (EApp (EApp (EApp (EApp (EApp (EApp (EVar "importSeed") (EVar "gctx")) (EVar "mid")) (EVar "coreV")) (EVar "admitted")) (EVar "rest")) (EVar "depEnv"))) (arm (PCon "Some" (PVar "depSchemes")) () (EBlock (DoLet false false (PVar "bound") (EApp (EVar "boundNames") (EVar "path"))) (DoLet false false (PVar "decls") (EApp (EApp (EVar "omFromPairs") (EApp (EVar "reverseL") (EApp (EApp (EVar "importFormRows") (EVar "path")) (EApp (EApp (EApp (EVar "importerDefiners") (EVar "gctx")) (EVar "mid")) (EVar "depId"))))) (EVar "omEmpty"))) (DoLet false false (PVar "methods") (EApp (EApp (EVar "identKeysByName") (EVar "omEmpty")) (EApp (EApp (EVar "importFormRows") (EVar "path")) (EMatch (EApp (EApp (EVar "omLookup") (EVar "depId")) (EApp (EApp (EVar "methodExportsIndex") (EVar "gctx")) (ELit LUnit))) (arm (PCon "Some" (PVar "rows")) () (EVar "rows")) (arm (PCon "None") () (EListLit)))))) (DoExpr (EBinOp "++" (EApp (EApp (EMethodRef "map") (ELam ((PVar "row")) (EApp (EApp (EVar "suppliedBy") (EIf (EBinOp "&&" (EApp (EApp (EVar "bindsName") (EVar "bound")) (EApp (EVar "fst") (EVar "row"))) (EApp (EVar "not") (EApp (EApp (EVar "containsPair") (ETuple (EVar "depId") (EApp (EVar "fst") (EVar "row")))) (EVar "admitted")))) (EApp (EVar "Some") (EApp (EApp (EApp (EApp (EVar "importSupplierKey") (EVar "depId")) (EVar "decls")) (EVar "methods")) (EApp (EVar "fst") (EVar "row")))) (EVar "None"))) (EVar "row")))) (EApp (EApp (EApp (EVar "importFormSchemes") (EVar "depEnv")) (EVar "path")) (EVar "depSchemes"))) (EApp (EApp (EApp (EApp (EApp (EApp (EVar "importSeed") (EVar "gctx")) (EVar "mid")) (EVar "coreV")) (EVar "admitted")) (EVar "rest")) (EVar "depEnv")))))))))))
-(DFunDef false "importSeed" ((PVar "gctx") (PVar "mid") (PVar "coreV") (PVar "admitted") (PCons PWild (PVar "rest")) (PVar "depEnv")) (EApp (EApp (EApp (EApp (EApp (EApp (EVar "importSeed") (EVar "gctx")) (EVar "mid")) (EVar "coreV")) (EVar "admitted")) (EVar "rest")) (EVar "depEnv")))
+(DFunDef false "importSeed" ((PVar "gctx") (PVar "mid") (PVar "coreV") (PVar "admitted") (PVar "xs0") (PVar "depEnv")) (ELetGroup ((lgb "go" (clause ((PList)) (EListLit)) (clause ((PCons (PCon "DAttrib" PWild (PVar "d")) (PVar "rest"))) (EApp (EVar "go") (EBinOp "::" (EVar "d") (EVar "rest")))) (clause ((PCons (PCon "DUse" PWild (PVar "path") PWild) (PVar "rest"))) (EBlock (DoLet false false (PVar "depId") (EApp (EVar "useModId") (EVar "path"))) (DoExpr (EIf (EBinOp "==" (EVar "depId") (ELit (LString "core"))) (EBinOp "++" (EApp (EApp (EMethodRef "map") (EApp (EVar "suppliedBy") (EVar "None"))) (EApp (EApp (EVar "coreAliasSchemes") (EVar "path")) (EVar "coreV"))) (EApp (EVar "go") (EVar "rest"))) (EMatch (EApp (EApp (EVar "lookupAssoc") (EVar "depId")) (EVar "depEnv")) (arm (PCon "None") () (EApp (EVar "go") (EVar "rest"))) (arm (PCon "Some" (PVar "depSchemes")) () (EBlock (DoLet false false (PVar "bound") (EApp (EVar "boundNames") (EVar "path"))) (DoLet false false (PVar "decls") (EApp (EApp (EVar "omFromPairs") (EApp (EVar "reverseL") (EApp (EApp (EVar "importFormRows") (EVar "path")) (EApp (EApp (EApp (EVar "importerDefiners") (EVar "gctx")) (EVar "mid")) (EVar "depId"))))) (EVar "omEmpty"))) (DoLet false false (PVar "methods") (EApp (EApp (EVar "identKeysByName") (EVar "omEmpty")) (EApp (EApp (EVar "importFormRows") (EVar "path")) (EMatch (EApp (EApp (EVar "omLookup") (EVar "depId")) (EApp (EApp (EVar "methodExportsIndex") (EVar "gctx")) (ELit LUnit))) (arm (PCon "Some" (PVar "rows")) () (EVar "rows")) (arm (PCon "None") () (EListLit)))))) (DoExpr (EBinOp "++" (EApp (EApp (EMethodRef "map") (ELam ((PVar "row")) (EApp (EApp (EVar "suppliedBy") (EIf (EBinOp "&&" (EApp (EApp (EVar "bindsName") (EVar "bound")) (EApp (EVar "fst") (EVar "row"))) (EApp (EVar "not") (EApp (EApp (EVar "containsPair") (ETuple (EVar "depId") (EApp (EVar "fst") (EVar "row")))) (EVar "admitted")))) (EApp (EVar "Some") (EApp (EApp (EApp (EApp (EVar "importSupplierKey") (EVar "depId")) (EVar "decls")) (EVar "methods")) (EApp (EVar "fst") (EVar "row")))) (EVar "None"))) (EVar "row")))) (EApp (EApp (EApp (EVar "importFormSchemes") (EVar "depEnv")) (EVar "path")) (EVar "depSchemes"))) (EApp (EVar "go") (EVar "rest"))))))))))) (clause ((PCons PWild (PVar "rest"))) (EApp (EVar "go") (EVar "rest"))))) (EApp (EVar "go") (EVar "xs0"))))
 (DTypeSig false "importSupplierKey" (TyFun (TyCon "String") (TyFun (TyApp (TyCon "OrdMap") (TyTuple (TyCon "String") (TyCon "String"))) (TyFun (TyApp (TyCon "OrdMap") (TyApp (TyCon "List") (TyCon "String"))) (TyFun (TyCon "String") (TyCon "String"))))))
 (DFunDef false "importSupplierKey" ((PVar "depId") (PVar "decls") (PVar "methods") (PVar "name")) (EMatch (EApp (EApp (EVar "omLookup") (EVar "name")) (EVar "decls")) (arm (PCon "Some" (PTuple (PVar "defMid") (PVar "origin"))) () (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "")) (EApp (EMethodRef "display") (EApp (EVar "lenKey") (EVar "defMid")))) (ELit (LString ""))) (EApp (EMethodRef "display") (EApp (EVar "lenKey") (EVar "origin")))) (ELit (LString "")))) (arm (PCon "None") () (EMatch (EApp (EApp (EVar "omLookup") (EVar "name")) (EVar "methods")) (arm (PCon "Some" (PVar "keys")) () (EApp (EApp (EVar "joinWith") (ELit (LString ""))) (EApp (EVar "sortUniqS") (EVar "keys")))) (arm (PCon "None") () (EApp (EVar "lenKey") (EVar "depId")))))))
 (DTypeSig false "identKeysByName" (TyFun (TyApp (TyCon "OrdMap") (TyApp (TyCon "List") (TyCon "String"))) (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "Ident"))) (TyApp (TyCon "OrdMap") (TyApp (TyCon "List") (TyCon "String"))))))
@@ -4384,8 +4381,7 @@ schemeLines ((n, p) :: rest) = "\{n} : \{ppPubScheme p}" :: schemeLines rest
 (DFunDef false "dispositionSlotsOfImpls" ((PList) PWild) (EListLit))
 (DFunDef false "dispositionSlotsOfImpls" ((PCons (PVar "r") (PVar "rest")) (PVar "ce")) (EBlock (DoLet false false (PTuple (PVar "iface") PWild PWild) (EApp (EVar "ieRowTriple") (EVar "r"))) (DoLet false false (PVar "inst") (EApp (EApp (EVar "InstId") (EApp (EVar "instRefMid") (EApp (EVar "ieRowInst") (EVar "r")))) (EApp (EVar "instRefSeq") (EApp (EVar "ieRowInst") (EVar "r"))))) (DoLet false false (PVar "supplied") (EApp (EVar "ieRowMethodNames") (EVar "r"))) (DoLet false false (PVar "here") (EMatch (EApp (EApp (EApp (EVar "ceLookupAt") (EApp (EVar "regKeyOfTab") (EApp (EApp (EVar "ifaceTabKey") (EFieldAccess (EVar "iface") "irOrigin")) (EFieldAccess (EVar "iface") "irName")))) (EApp (EVar "ieRowOrd") (EVar "r"))) (EVar "ce")) (arm (PCon "None") () (EListLit)) (arm (PCon "Some" (PVar "ceRow")) () (EApp (EApp (EMethodRef "map") (ELam ((PVar "m")) (ETuple (EVar "inst") (EVar "iface") (EVar "m")))) (EApp (EApp (EMethodRef "filter") (ELam ((PVar "m")) (EBinOp "||" (EApp (EApp (EVar "contains") (EVar "m")) (EVar "supplied")) (EApp (EVar "not") (EApp (EApp (EVar "contains") (EVar "m")) (EApp (EVar "ceRowRequired") (EVar "ceRow"))))))) (EApp (EVar "ceRowMethodNames") (EVar "ceRow"))))))) (DoExpr (EBinOp "++" (EVar "here") (EApp (EApp (EVar "dispositionSlotsOfImpls") (EVar "rest")) (EVar "ce"))))))
 (DTypeSig false "dispositionRowsOfImpls" (TyFun (TyCon "ImplEnv") (TyFun (TyApp (TyCon "List") (TyCon "ImplRow")) (TyFun (TyCon "ClassEnv") (TyApp (TyCon "List") (TyTuple (TyCon "InstanceShape") (TyCon "String") (TyCon "MethodDisposition")))))))
-(DFunDef false "dispositionRowsOfImpls" (PWild (PList) PWild) (EListLit))
-(DFunDef false "dispositionRowsOfImpls" ((PVar "ie") (PCons (PVar "r") (PVar "rest")) (PVar "ce")) (EBinOp "++" (EApp (EApp (EApp (EVar "dispositionRowsOfImpl") (EVar "ie")) (EVar "r")) (EVar "ce")) (EApp (EApp (EApp (EVar "dispositionRowsOfImpls") (EVar "ie")) (EVar "rest")) (EVar "ce"))))
+(DFunDef false "dispositionRowsOfImpls" ((PVar "ie") (PVar "xs0") (PVar "ce")) (ELetGroup ((lgb "go" (clause ((PList)) (EListLit)) (clause ((PCons (PVar "r") (PVar "rest"))) (EBinOp "++" (EApp (EApp (EApp (EVar "dispositionRowsOfImpl") (EVar "ie")) (EVar "r")) (EVar "ce")) (EApp (EVar "go") (EVar "rest")))))) (EApp (EVar "go") (EVar "xs0"))))
 (DTypeSig false "dispositionRowsOfImpl" (TyFun (TyCon "ImplEnv") (TyFun (TyCon "ImplRow") (TyFun (TyCon "ClassEnv") (TyApp (TyCon "List") (TyTuple (TyCon "InstanceShape") (TyCon "String") (TyCon "MethodDisposition")))))))
 (DFunDef false "dispositionRowsOfImpl" (PWild (PVar "r") (PVar "ce")) (EBlock (DoLet false false (PTuple (PVar "iface") (PVar "tys") PWild) (EApp (EVar "ieRowTriple") (EVar "r"))) (DoLet false false (PVar "inst") (EApp (EApp (EVar "InstId") (EApp (EVar "instRefMid") (EApp (EVar "ieRowInst") (EVar "r")))) (EApp (EVar "instRefSeq") (EApp (EVar "ieRowInst") (EVar "r"))))) (DoLet false false (PVar "ifaceWord") (EApp (EApp (EVar "ifaceWordOf") (EFieldAccess (EVar "iface") "irOrigin")) (EFieldAccess (EVar "iface") "irName"))) (DoLet false false (PVar "supplied") (EApp (EVar "ieRowMethodNames") (EVar "r"))) (DoLet false false (PVar "shape") (ERecordCreate "InstanceShape" ((fa "isWord" (EApp (EApp (EApp (EApp (EVar "implRouteKeyWord") (EFieldAccess (EVar "iface") "irOrigin")) (EFieldAccess (EVar "iface") "irName")) (EVar "tys")) (EVar "None"))) (fa "isTys" (EVar "tys"))))) (DoExpr (EMatch (EApp (EApp (EApp (EVar "ceLookupAt") (EApp (EVar "regKeyOfTab") (EApp (EApp (EVar "ifaceTabKey") (EFieldAccess (EVar "iface") "irOrigin")) (EFieldAccess (EVar "iface") "irName")))) (EApp (EVar "ieRowOrd") (EVar "r"))) (EVar "ce")) (arm (PCon "None") () (EListLit)) (arm (PCon "Some" (PVar "ceRow")) () (EApp (EApp (EMethodRef "map") (ELam ((PVar "d")) (ETuple (EVar "shape") (EVar "ifaceWord") (EVar "d")))) (EApp (EApp (EApp (EApp (EApp (EVar "dispositionRowsOfMethods") (EVar "inst")) (EVar "iface")) (EVar "supplied")) (EApp (EVar "ceRowRequired") (EVar "ceRow"))) (EApp (EVar "ceRowMethodNames") (EVar "ceRow")))))))))
 (DTypeSig false "ifaceSuperCountOfRow" (TyFun (TyCon "GraphCtx") (TyFun (TyCon "ImplRow") (TyTuple (TyCon "String") (TyCon "Int")))))

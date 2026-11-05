@@ -973,21 +973,23 @@ methodTemplateGivenScan : MethodPredicateTemplate ->
   List GivenEntry ->
   MethodTemplateGivenResult ->
   MethodTemplateGivenResult
-methodTemplateGivenScan _ _ [] result = result
-methodTemplateGivenScan template chain (given :: rest) result =
-  let result2 =
-    if givenInScope GSPredicateOnly given
-      && Scopes.visibleOnChain chain (Scopes.binderScope given.geBinder)
-      && methodPredicateTemplateMatchesSlot
-        template
-        given.geSlot then match result
-      MethodTemplateGivenNone => MethodTemplateGivenOne given
-      _ => MethodTemplateGivenMany
-    else
-      result
-  match result2
-    MethodTemplateGivenMany => MethodTemplateGivenMany
-    _ => methodTemplateGivenScan template chain rest result2
+methodTemplateGivenScan template chain xs0 result0 = go xs0 result0
+  where
+    go [] result = result
+    go (given :: rest) result =
+      let result2 =
+        if givenInScope GSPredicateOnly given
+          && Scopes.visibleOnChain chain (Scopes.binderScope given.geBinder)
+          && methodPredicateTemplateMatchesSlot
+            template
+            given.geSlot then match result
+          MethodTemplateGivenNone => MethodTemplateGivenOne given
+          _ => MethodTemplateGivenMany
+        else
+          result
+      match result2
+        MethodTemplateGivenMany => MethodTemplateGivenMany
+        _ => go rest result2
 
 methodPredicateTemplateMatchesSlot : MethodPredicateTemplate ->
   PredicateSlot ->
@@ -1083,6 +1085,8 @@ routesOfMonosTopV : SiteCtx ->
   List (List Mono) ->
   List Route
 -- no vectors at all (a caller with nothing to offer) ⇒ the scalar router, unchanged.
+-- Bound: list built in tail position modulo cons: a where-local go loses the constant-stack loop until the lambda-lift pass (#4878); convert then.
+-- lint-disable-next-line rule-threaded-invariant
 routesOfMonosTopV sx encl useScope monos ifaces [] =
   routesOfMonosTop sx encl useScope monos ifaces
 routesOfMonosTopV _sx _ _ [] _ _ = []
@@ -1136,6 +1140,8 @@ routesOfMonosTop : SiteCtx ->
   List Mono ->
   List IfaceRef ->
   List Route
+-- Bound: list built in tail position modulo cons: a where-local go loses the constant-stack loop until the lambda-lift pass (#4878); convert then.
+-- lint-disable-next-line rule-threaded-invariant
 routesOfMonosTop _sx _ _ [] _ = []
 routesOfMonosTop sx encl useScope (m :: rest) [] =
   routeOf sx ifaceRefNone encl useScope (CountImpls ifaceRefNone) m
@@ -1499,14 +1505,16 @@ methodReturnPrerequisitesMatch _ _ = False
 -- need one bound is left as it is, for `checkSigsTooGeneral` has already run.
 export
 improveByUniqueImpl : DynCtx -> OrdMap Unit -> List UObligation -> Unit
-improveByUniqueImpl _dyn _ [] = ()
-improveByUniqueImpl dyn sigIds (o :: rest) =
-  improveGoal
-    dyn
-    sigIds
-    o.pred.iface
-    (map normalize (uOblArgs dyn.dcModule.mcGraph o))
-  improveByUniqueImpl dyn sigIds rest
+improveByUniqueImpl dyn sigIds xs0 = go xs0
+  where
+    go [] = ()
+    go (o :: rest) =
+      improveGoal
+        dyn
+        sigIds
+        o.pred.iface
+        (map normalize (uOblArgs dyn.dcModule.mcGraph o))
+      go rest
 
 -- Determination by the unique unifying instance (DICT-SEMANTICS §3, the settle
 -- sequence's second step).  A goal of any arity that is not closed is unified with
@@ -1538,15 +1546,17 @@ determineByUniqueInstance mctx rigidIds obls =
 -- The fuel only bounds the loop: every sweep but the last changes some goal's
 -- shape.
 determineSweeps : ModuleCtx -> OrdMap Unit -> GoalWindow -> Int -> Unit
-determineSweeps mctx rigidIds window fuel =
-  if fuel > 0
-    && determineByUniqueInstanceGo
-      mctx
-      rigidIds
-      window
-      False
-      window.gwGoals then
-    determineSweeps mctx rigidIds window (fuel - 1)
+determineSweeps mctx rigidIds window fuel0 = go fuel0
+  where
+    go fuel =
+      if fuel > 0
+        && determineByUniqueInstanceGo
+          mctx
+          rigidIds
+          window
+          False
+          window.gwGoals then
+        go (fuel - 1)
 
 -- One sweep over the window; True when some goal took its instance's shape.
 determineByUniqueInstanceGo : ModuleCtx ->
@@ -1555,11 +1565,13 @@ determineByUniqueInstanceGo : ModuleCtx ->
   Bool ->
   List (Int, UObligation) ->
   Bool
-determineByUniqueInstanceGo _mctx _ _ changed [] = changed
-determineByUniqueInstanceGo mctx rigidIds window changed ((_, o) :: rest) =
-  let args = map normalize (uOblArgs mctx.mcGraph o)
-  let now = determineGoal mctx rigidIds window o args
-  determineByUniqueInstanceGo mctx rigidIds window (now || changed) rest
+determineByUniqueInstanceGo mctx rigidIds window changed0 xs0 = go changed0 xs0
+  where
+    go changed [] = changed
+    go changed ((_, o) :: rest) =
+      let args = map normalize (uOblArgs mctx.mcGraph o)
+      let now = determineGoal mctx rigidIds window o args
+      go (now || changed) rest
 
 -- True when the commit changed the goal's shape.  A commit that only renames the
 -- goal's variables to the instance's fresh ones leaves the goal's size and its

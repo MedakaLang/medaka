@@ -1,5 +1,5 @@
 # META
-source_lines=2400
+source_lines=2407
 stages=DESUGAR,MARK
 # SOURCE
 -- tc_solve_entail: entailment as routes: the judgment `P ⊢ π ⇝ e` at a site (`entail` and its
@@ -292,16 +292,18 @@ routeWalkRecorded : IfaceRef ->
   ScopeId ->
   List RouteWalkEntry ->
   Option RouteWalkEntry
-routeWalkRecorded _ _ _ _ _ [] = None
-routeWalkRecorded iface goals row encl useScope (entry :: rest) =
-  if entry.rweEncl == encl
-    && entry.rweScope == useScope
-    && sameIfaceDecl entry.rweIface iface
-    && monoVecSameGiven entry.rweGoals goals
-    && rowRouteKey entry.rweRow == rowRouteKey row then
-    Some entry
-  else
-    routeWalkRecorded iface goals row encl useScope rest
+routeWalkRecorded iface goals row encl useScope xs0 = go xs0
+  where
+    go [] = None
+    go (entry :: rest) =
+      if entry.rweEncl == encl
+        && entry.rweScope == useScope
+        && sameIfaceDecl entry.rweIface iface
+        && monoVecSameGiven entry.rweGoals goals
+        && rowRouteKey entry.rweRow == rowRouteKey row then
+        Some entry
+      else
+        go rest
 
 -- What the stamper running now has built below its destination's top level.  The
 -- three producers of the routes inside a dictionary (`argReqRoute`, `superRouteAt`,
@@ -1987,6 +1989,8 @@ argImplReqRoutes : SiteCtx ->
   List Require ->
   ReqWalk ->
   List Route
+-- Bound: list built in tail position modulo cons: a where-local go loses the constant-stack loop until the lambda-lift pass (#4878); convert then.
+-- lint-disable-next-line rule-threaded-invariant
 argImplReqRoutes _sx _ _ _ [] _ = []
 argImplReqRoutes sx encl useScope subst ((Require { requireHead = rIface, requireArgs = rargs, requireOrigin = ro }) :: rest) walk =
   let iface = IfaceRef { irName = rIface, irOrigin = ro }
@@ -2218,9 +2222,10 @@ implMatchesU mctx univ iface (a0 :: rest) =
     || bucketArgsMatch mctx (univHeadless univ iface) (a0 :: rest)
 
 bucketArgsMatch : ModuleCtx -> List (List Ty, List Require) -> List Mono -> Bool
-bucketArgsMatch _mctx [] _ = False
-bucketArgsMatch mctx ((tys, _) :: rest) args =
-  implHeadMatchesArgs mctx tys args || bucketArgsMatch mctx rest args
+bucketArgsMatch mctx xs0 args = go xs0
+  where
+    go [] = False
+    go ((tys, _) :: rest) = implHeadMatchesArgs mctx tys args || go rest
 
 -- the impl of [iface] whose `requires` we must check at a dispatch to [args] (the
 -- receiver-head mono [args[0]]), with its (subst, reqs) — the impl checkNestedReqs
@@ -2334,11 +2339,12 @@ firstReqMatch : ModuleCtx ->
   List (List Ty, List Require) ->
   List Mono ->
   Option (List (String, Mono), List Require)
-firstReqMatch _mctx [] _ = None
-firstReqMatch mctx ((tys, reqs) :: rest) args =
-  match implHeadSubst mctx tys args
-    Some sub => Some (sub, reqs)
-    None => firstReqMatch mctx rest args
+firstReqMatch mctx xs0 args = go xs0
+  where
+    go [] = None
+    go ((tys, reqs) :: rest) = match implHeadSubst mctx tys args
+      Some sub => Some (sub, reqs)
+      None => go rest
 
 -- the concrete "iface|tag" bucket (empty when the tag is None / no such impl).
 -- The GOAL-side head arrives as a `HeadKey` that can carry identity; the concrete
@@ -2389,10 +2395,11 @@ bucketArgsMatchReqs : ModuleCtx ->
   List (List Ty, List Require) ->
   List Mono ->
   Bool
-bucketArgsMatchReqs _mctx [] _ = False
-bucketArgsMatchReqs mctx ((tys, reqs) :: rest) args =
-  isNonEmptyL reqs && implHeadMatchesArgs mctx tys args
-    || bucketArgsMatchReqs mctx rest args
+bucketArgsMatchReqs mctx xs0 args = go xs0
+  where
+    go [] = False
+    go ((tys, reqs) :: rest) =
+      isNonEmptyL reqs && implHeadMatchesArgs mctx tys args || go rest
 
 -- The keyed matchers (`bucketArgsMatch`, `bucketArgsMatchReqs`) test a bucket entry with
 -- implHeadMatchesArgs: each head-arg type pattern is
@@ -2445,8 +2452,7 @@ implHeadMatchesArgs mctx tys args = isSome (implHeadSubst mctx tys args)
 (DTypeSig false "routeWalkMemoized" (TyFun (TyCon "SiteCtx") (TyFun (TyCon "String") (TyFun (TyCon "ScopeId") (TyFun (TyApp (TyCon "List") (TyCon "Mono")) (TyFun (TyCon "ImplRow") (TyFun (TyCon "ReqWalk") (TyFun (TyFun (TyCon "SiteCtx") (TyApp (TyCon "List") (TyCon "Route"))) (TyApp (TyCon "List") (TyCon "Route"))))))))))
 (DFunDef false "routeWalkMemoized" ((PVar "sx") (PVar "encl") (PVar "useScope") (PVar "goals") (PVar "row") (PVar "walk") (PVar "follow")) (EBlock (DoLet false false (PVar "memo") (EApp (EVar "reqWalkMemo") (EVar "walk"))) (DoLet false false (PVar "iface") (EApp (EVar "ieRowIface") (EVar "row"))) (DoLet false false (PVar "key") (EApp (EVar "enteredGoalKey") (EVar "walk"))) (DoLet false false (PVar "entries") (EApp (EApp (EVar "optionOr") (EListLit)) (EApp (EApp (EVar "omLookup") (EVar "key")) (EFieldAccess (EFieldAccess (EVar "memo") "wmRoutes") "value")))) (DoExpr (EMatch (EApp (EApp (EApp (EApp (EApp (EApp (EVar "routeWalkRecorded") (EVar "iface")) (EVar "goals")) (EVar "row")) (EVar "encl")) (EVar "useScope")) (EVar "entries")) (arm (PCon "Some" (PVar "entry")) () (EBlock (DoExpr (EApp (EApp (EVar "noteInner") (EVar "sx")) (EFieldAccess (EVar "entry") "rweInner"))) (DoExpr (EFieldAccess (EVar "entry") "rweRoutes")))) (arm (PCon "None") () (EBlock (DoLet false false (PVar "cutsBefore") (EFieldAccess (EFieldAccess (EVar "memo") "wmCuts") "value")) (DoLet false false (PVar "acc") (EApp (EVar "Ref") (EVar "innerNone"))) (DoLet false false (PTuple (PVar "erred") (PVar "routes")) (EApp (EApp (EVar "erredDuring") (EFieldAccess (EVar "sx") "sxModule")) (ELam (PWild) (EApp (EVar "follow") (ERecordUpdate (EVar "sx") ((fa "sxInner" (EApp (EVar "Some") (EVar "acc"))))))))) (DoLet false false (PVar "inner") (EFieldAccess (EVar "acc") "value")) (DoExpr (EApp (EApp (EVar "noteInner") (EVar "sx")) (EVar "inner"))) (DoExpr (EIf (EBinOp "||" (EVar "erred") (EBinOp "/=" (EFieldAccess (EFieldAccess (EVar "memo") "wmCuts") "value") (EVar "cutsBefore"))) (ELit LUnit) (EBlock (DoLet false false (PVar "entry") (ERecordCreate "RouteWalkEntry" ((fa "rweIface" (EVar "iface")) (fa "rweGoals" (EVar "goals")) (fa "rweRow" (EVar "row")) (fa "rweEncl" (EVar "encl")) (fa "rweScope" (EVar "useScope")) (fa "rweRoutes" (EVar "routes")) (fa "rweInner" (EVar "inner"))))) (DoExpr (EApp (EApp (EVar "setRef") (EFieldAccess (EVar "memo") "wmRoutes")) (EApp (EApp (EApp (EVar "omInsert") (EVar "key")) (EBinOp "::" (EVar "entry") (EApp (EApp (EVar "optionOr") (EListLit)) (EApp (EApp (EVar "omLookup") (EVar "key")) (EFieldAccess (EFieldAccess (EVar "memo") "wmRoutes") "value"))))) (EFieldAccess (EFieldAccess (EVar "memo") "wmRoutes") "value"))))))) (DoExpr (EVar "routes"))))))))
 (DTypeSig false "routeWalkRecorded" (TyFun (TyCon "IfaceRef") (TyFun (TyApp (TyCon "List") (TyCon "Mono")) (TyFun (TyCon "ImplRow") (TyFun (TyCon "String") (TyFun (TyCon "ScopeId") (TyFun (TyApp (TyCon "List") (TyCon "RouteWalkEntry")) (TyApp (TyCon "Option") (TyCon "RouteWalkEntry")))))))))
-(DFunDef false "routeWalkRecorded" (PWild PWild PWild PWild PWild (PList)) (EVar "None"))
-(DFunDef false "routeWalkRecorded" ((PVar "iface") (PVar "goals") (PVar "row") (PVar "encl") (PVar "useScope") (PCons (PVar "entry") (PVar "rest"))) (EIf (EBinOp "&&" (EBinOp "&&" (EBinOp "&&" (EBinOp "&&" (EBinOp "==" (EFieldAccess (EVar "entry") "rweEncl") (EVar "encl")) (EBinOp "==" (EFieldAccess (EVar "entry") "rweScope") (EVar "useScope"))) (EApp (EApp (EVar "sameIfaceDecl") (EFieldAccess (EVar "entry") "rweIface")) (EVar "iface"))) (EApp (EApp (EVar "monoVecSameGiven") (EFieldAccess (EVar "entry") "rweGoals")) (EVar "goals"))) (EBinOp "==" (EApp (EVar "rowRouteKey") (EFieldAccess (EVar "entry") "rweRow")) (EApp (EVar "rowRouteKey") (EVar "row")))) (EApp (EVar "Some") (EVar "entry")) (EApp (EApp (EApp (EApp (EApp (EApp (EVar "routeWalkRecorded") (EVar "iface")) (EVar "goals")) (EVar "row")) (EVar "encl")) (EVar "useScope")) (EVar "rest"))))
+(DFunDef false "routeWalkRecorded" ((PVar "iface") (PVar "goals") (PVar "row") (PVar "encl") (PVar "useScope") (PVar "xs0")) (ELetGroup ((lgb "go" (clause ((PList)) (EVar "None")) (clause ((PCons (PVar "entry") (PVar "rest"))) (EIf (EBinOp "&&" (EBinOp "&&" (EBinOp "&&" (EBinOp "&&" (EBinOp "==" (EFieldAccess (EVar "entry") "rweEncl") (EVar "encl")) (EBinOp "==" (EFieldAccess (EVar "entry") "rweScope") (EVar "useScope"))) (EApp (EApp (EVar "sameIfaceDecl") (EFieldAccess (EVar "entry") "rweIface")) (EVar "iface"))) (EApp (EApp (EVar "monoVecSameGiven") (EFieldAccess (EVar "entry") "rweGoals")) (EVar "goals"))) (EBinOp "==" (EApp (EVar "rowRouteKey") (EFieldAccess (EVar "entry") "rweRow")) (EApp (EVar "rowRouteKey") (EVar "row")))) (EApp (EVar "Some") (EVar "entry")) (EApp (EVar "go") (EVar "rest")))))) (EApp (EVar "go") (EVar "xs0"))))
 (DTypeSig false "noteInner" (TyFun (TyCon "SiteCtx") (TyFun (TyCon "Inner") (TyCon "Unit"))))
 (DFunDef false "noteInner" ((PVar "sx") (PVar "inner")) (EMatch (EFieldAccess (EVar "sx") "sxInner") (arm (PCon "Some" (PVar "acc")) () (EApp (EApp (EVar "setRef") (EVar "acc")) (EApp (EApp (EVar "innerOr") (EFieldAccess (EVar "acc") "value")) (EVar "inner")))) (arm (PCon "None") () (ELit LUnit))))
 (DTypeSig false "noteInnerRoute" (TyFun (TyCon "SiteCtx") (TyFun (TyCon "Route") (TyCon "Route"))))
@@ -2677,16 +2683,14 @@ implHeadMatchesArgs mctx tys args = isSome (implHeadSubst mctx tys args)
 (DFunDef false "implMatchesU" ((PVar "_mctx") PWild PWild (PList)) (EVar "False"))
 (DFunDef false "implMatchesU" ((PVar "mctx") (PVar "univ") (PVar "iface") (PCons (PVar "a0") (PVar "rest"))) (EBinOp "||" (EApp (EApp (EApp (EVar "bucketArgsMatch") (EVar "mctx")) (EApp (EApp (EApp (EVar "univConcreteBucket") (EVar "univ")) (EVar "iface")) (EApp (EVar "headTyconMono") (EVar "a0")))) (EBinOp "::" (EVar "a0") (EVar "rest"))) (EApp (EApp (EApp (EVar "bucketArgsMatch") (EVar "mctx")) (EApp (EApp (EVar "univHeadless") (EVar "univ")) (EVar "iface"))) (EBinOp "::" (EVar "a0") (EVar "rest")))))
 (DTypeSig false "bucketArgsMatch" (TyFun (TyCon "ModuleCtx") (TyFun (TyApp (TyCon "List") (TyTuple (TyApp (TyCon "List") (TyCon "Ty")) (TyApp (TyCon "List") (TyCon "Require")))) (TyFun (TyApp (TyCon "List") (TyCon "Mono")) (TyCon "Bool")))))
-(DFunDef false "bucketArgsMatch" ((PVar "_mctx") (PList) PWild) (EVar "False"))
-(DFunDef false "bucketArgsMatch" ((PVar "mctx") (PCons (PTuple (PVar "tys") PWild) (PVar "rest")) (PVar "args")) (EBinOp "||" (EApp (EApp (EApp (EVar "implHeadMatchesArgs") (EVar "mctx")) (EVar "tys")) (EVar "args")) (EApp (EApp (EApp (EVar "bucketArgsMatch") (EVar "mctx")) (EVar "rest")) (EVar "args"))))
+(DFunDef false "bucketArgsMatch" ((PVar "mctx") (PVar "xs0") (PVar "args")) (ELetGroup ((lgb "go" (clause ((PList)) (EVar "False")) (clause ((PCons (PTuple (PVar "tys") PWild) (PVar "rest"))) (EBinOp "||" (EApp (EApp (EApp (EVar "implHeadMatchesArgs") (EVar "mctx")) (EVar "tys")) (EVar "args")) (EApp (EVar "go") (EVar "rest")))))) (EApp (EVar "go") (EVar "xs0"))))
 (DTypeSig true "findMatchingImplReqsU" (TyFun (TyCon "SiteCtx") (TyFun (TyCon "ImplUniverse") (TyFun (TyCon "IfaceRef") (TyFun (TyApp (TyCon "List") (TyCon "Mono")) (TyApp (TyCon "Option") (TyTuple (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "Mono"))) (TyApp (TyCon "List") (TyCon "Require")))))))))
 (DFunDef false "findMatchingImplReqsU" ((PVar "sx") (PVar "univ") (PVar "iface") (PList)) (EApp (EApp (EApp (EVar "firstReqMatch") (EFieldAccess (EVar "sx") "sxModule")) (EApp (EApp (EVar "univHeadless") (EVar "univ")) (EVar "iface"))) (EListLit)))
 (DFunDef false "findMatchingImplReqsU" ((PVar "sx") (PVar "univ") (PVar "iface") (PCons (PVar "a0") (PVar "rest"))) (EMatch (EApp (EApp (EApp (EVar "concreteReqMatchByIface") (EVar "sx")) (EVar "iface")) (EBinOp "::" (EVar "a0") (EVar "rest"))) (arm (PCon "Some" (PVar "r")) () (EApp (EVar "Some") (EVar "r"))) (arm (PCon "None") () (EApp (EApp (EApp (EVar "firstReqMatch") (EFieldAccess (EVar "sx") "sxModule")) (EApp (EApp (EVar "univHeadless") (EVar "univ")) (EVar "iface"))) (EBinOp "::" (EVar "a0") (EVar "rest"))))))
 (DTypeSig false "concreteReqMatchByIface" (TyFun (TyCon "SiteCtx") (TyFun (TyCon "IfaceRef") (TyFun (TyApp (TyCon "List") (TyCon "Mono")) (TyApp (TyCon "Option") (TyTuple (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "Mono"))) (TyApp (TyCon "List") (TyCon "Require"))))))))
 (DFunDef false "concreteReqMatchByIface" ((PVar "sx") (PVar "iface") (PVar "args")) (EApp (EApp (EVar "andThen") (EApp (EApp (EApp (EApp (EVar "ieSelectRowByIface") (EVar "sx")) (EFieldAccess (EFieldAccess (EFieldAccess (EFieldAccess (EVar "sx") "sxModule") "mcCells") "bodyImplEnvRef") "value")) (EVar "iface")) (EVar "args"))) (ELam ((PVar "row")) (EApp (EApp (EApp (EVar "selectedRowReqMatch") (EFieldAccess (EVar "sx") "sxModule")) (EVar "args")) (EVar "row")))))
 (DTypeSig false "firstReqMatch" (TyFun (TyCon "ModuleCtx") (TyFun (TyApp (TyCon "List") (TyTuple (TyApp (TyCon "List") (TyCon "Ty")) (TyApp (TyCon "List") (TyCon "Require")))) (TyFun (TyApp (TyCon "List") (TyCon "Mono")) (TyApp (TyCon "Option") (TyTuple (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "Mono"))) (TyApp (TyCon "List") (TyCon "Require"))))))))
-(DFunDef false "firstReqMatch" ((PVar "_mctx") (PList) PWild) (EVar "None"))
-(DFunDef false "firstReqMatch" ((PVar "mctx") (PCons (PTuple (PVar "tys") (PVar "reqs")) (PVar "rest")) (PVar "args")) (EMatch (EApp (EApp (EApp (EVar "implHeadSubst") (EVar "mctx")) (EVar "tys")) (EVar "args")) (arm (PCon "Some" (PVar "sub")) () (EApp (EVar "Some") (ETuple (EVar "sub") (EVar "reqs")))) (arm (PCon "None") () (EApp (EApp (EApp (EVar "firstReqMatch") (EVar "mctx")) (EVar "rest")) (EVar "args")))))
+(DFunDef false "firstReqMatch" ((PVar "mctx") (PVar "xs0") (PVar "args")) (ELetGroup ((lgb "go" (clause ((PList)) (EVar "None")) (clause ((PCons (PTuple (PVar "tys") (PVar "reqs")) (PVar "rest"))) (EMatch (EApp (EApp (EApp (EVar "implHeadSubst") (EVar "mctx")) (EVar "tys")) (EVar "args")) (arm (PCon "Some" (PVar "sub")) () (EApp (EVar "Some") (ETuple (EVar "sub") (EVar "reqs")))) (arm (PCon "None") () (EApp (EVar "go") (EVar "rest"))))))) (EApp (EVar "go") (EVar "xs0"))))
 (DTypeSig true "univConcreteBucket" (TyFun (TyCon "ImplUniverse") (TyFun (TyCon "IfaceRef") (TyFun (TyApp (TyCon "Option") (TyCon "HeadKey")) (TyApp (TyCon "List") (TyTuple (TyApp (TyCon "List") (TyCon "Ty")) (TyApp (TyCon "List") (TyCon "Require"))))))))
 (DFunDef false "univConcreteBucket" ((PCon "ImplUniverse" (PVar "conc") PWild) (PVar "iface") (PCon "Some" (PVar "hk"))) (EApp (EApp (EVar "mregLookupK") (EApp (EVar "regKeyNTab") (EListLit (EApp (EVar "oblIfaceKey") (EVar "iface")) (EApp (EVar "dispHeadTab") (EVar "hk"))))) (EVar "conc")))
 (DFunDef false "univConcreteBucket" (PWild PWild (PCon "None")) (EListLit))
@@ -2696,8 +2700,7 @@ implHeadMatchesArgs mctx tys args = isSome (implHeadSubst mctx tys args)
 (DFunDef false "implMatchesWithReqsU" ((PVar "_mctx") PWild PWild (PList)) (EVar "False"))
 (DFunDef false "implMatchesWithReqsU" ((PVar "mctx") (PVar "univ") (PVar "iface") (PCons (PVar "a0") (PVar "rest"))) (EBinOp "||" (EApp (EApp (EApp (EVar "bucketArgsMatchReqs") (EVar "mctx")) (EApp (EApp (EApp (EVar "univConcreteBucket") (EVar "univ")) (EVar "iface")) (EApp (EVar "headTyconMono") (EVar "a0")))) (EBinOp "::" (EVar "a0") (EVar "rest"))) (EApp (EApp (EApp (EVar "bucketArgsMatchReqs") (EVar "mctx")) (EApp (EApp (EVar "univHeadless") (EVar "univ")) (EVar "iface"))) (EBinOp "::" (EVar "a0") (EVar "rest")))))
 (DTypeSig false "bucketArgsMatchReqs" (TyFun (TyCon "ModuleCtx") (TyFun (TyApp (TyCon "List") (TyTuple (TyApp (TyCon "List") (TyCon "Ty")) (TyApp (TyCon "List") (TyCon "Require")))) (TyFun (TyApp (TyCon "List") (TyCon "Mono")) (TyCon "Bool")))))
-(DFunDef false "bucketArgsMatchReqs" ((PVar "_mctx") (PList) PWild) (EVar "False"))
-(DFunDef false "bucketArgsMatchReqs" ((PVar "mctx") (PCons (PTuple (PVar "tys") (PVar "reqs")) (PVar "rest")) (PVar "args")) (EBinOp "||" (EBinOp "&&" (EApp (EVar "isNonEmptyL") (EVar "reqs")) (EApp (EApp (EApp (EVar "implHeadMatchesArgs") (EVar "mctx")) (EVar "tys")) (EVar "args"))) (EApp (EApp (EApp (EVar "bucketArgsMatchReqs") (EVar "mctx")) (EVar "rest")) (EVar "args"))))
+(DFunDef false "bucketArgsMatchReqs" ((PVar "mctx") (PVar "xs0") (PVar "args")) (ELetGroup ((lgb "go" (clause ((PList)) (EVar "False")) (clause ((PCons (PTuple (PVar "tys") (PVar "reqs")) (PVar "rest"))) (EBinOp "||" (EBinOp "&&" (EApp (EVar "isNonEmptyL") (EVar "reqs")) (EApp (EApp (EApp (EVar "implHeadMatchesArgs") (EVar "mctx")) (EVar "tys")) (EVar "args"))) (EApp (EVar "go") (EVar "rest")))))) (EApp (EVar "go") (EVar "xs0"))))
 (DTypeSig false "implHeadMatchesArgs" (TyFun (TyCon "ModuleCtx") (TyFun (TyApp (TyCon "List") (TyCon "Ty")) (TyFun (TyApp (TyCon "List") (TyCon "Mono")) (TyCon "Bool")))))
 (DFunDef false "implHeadMatchesArgs" ((PVar "mctx") (PVar "tys") (PVar "args")) (EApp (EVar "isSome") (EApp (EApp (EApp (EVar "implHeadSubst") (EVar "mctx")) (EVar "tys")) (EVar "args"))))
 # MARK
@@ -2743,8 +2746,7 @@ implHeadMatchesArgs mctx tys args = isSome (implHeadSubst mctx tys args)
 (DTypeSig false "routeWalkMemoized" (TyFun (TyCon "SiteCtx") (TyFun (TyCon "String") (TyFun (TyCon "ScopeId") (TyFun (TyApp (TyCon "List") (TyCon "Mono")) (TyFun (TyCon "ImplRow") (TyFun (TyCon "ReqWalk") (TyFun (TyFun (TyCon "SiteCtx") (TyApp (TyCon "List") (TyCon "Route"))) (TyApp (TyCon "List") (TyCon "Route"))))))))))
 (DFunDef false "routeWalkMemoized" ((PVar "sx") (PVar "encl") (PVar "useScope") (PVar "goals") (PVar "row") (PVar "walk") (PVar "follow")) (EBlock (DoLet false false (PVar "memo") (EApp (EVar "reqWalkMemo") (EVar "walk"))) (DoLet false false (PVar "iface") (EApp (EVar "ieRowIface") (EVar "row"))) (DoLet false false (PVar "key") (EApp (EVar "enteredGoalKey") (EVar "walk"))) (DoLet false false (PVar "entries") (EApp (EApp (EVar "optionOr") (EListLit)) (EApp (EApp (EVar "omLookup") (EVar "key")) (EFieldAccess (EFieldAccess (EVar "memo") "wmRoutes") "value")))) (DoExpr (EMatch (EApp (EApp (EApp (EApp (EApp (EApp (EVar "routeWalkRecorded") (EVar "iface")) (EVar "goals")) (EVar "row")) (EVar "encl")) (EVar "useScope")) (EVar "entries")) (arm (PCon "Some" (PVar "entry")) () (EBlock (DoExpr (EApp (EApp (EVar "noteInner") (EVar "sx")) (EFieldAccess (EVar "entry") "rweInner"))) (DoExpr (EFieldAccess (EVar "entry") "rweRoutes")))) (arm (PCon "None") () (EBlock (DoLet false false (PVar "cutsBefore") (EFieldAccess (EFieldAccess (EVar "memo") "wmCuts") "value")) (DoLet false false (PVar "acc") (EApp (EVar "Ref") (EVar "innerNone"))) (DoLet false false (PTuple (PVar "erred") (PVar "routes")) (EApp (EApp (EVar "erredDuring") (EFieldAccess (EVar "sx") "sxModule")) (ELam (PWild) (EApp (EVar "follow") (ERecordUpdate (EVar "sx") ((fa "sxInner" (EApp (EVar "Some") (EVar "acc"))))))))) (DoLet false false (PVar "inner") (EFieldAccess (EVar "acc") "value")) (DoExpr (EApp (EApp (EVar "noteInner") (EVar "sx")) (EVar "inner"))) (DoExpr (EIf (EBinOp "||" (EVar "erred") (EBinOp "/=" (EFieldAccess (EFieldAccess (EVar "memo") "wmCuts") "value") (EVar "cutsBefore"))) (ELit LUnit) (EBlock (DoLet false false (PVar "entry") (ERecordCreate "RouteWalkEntry" ((fa "rweIface" (EVar "iface")) (fa "rweGoals" (EVar "goals")) (fa "rweRow" (EVar "row")) (fa "rweEncl" (EVar "encl")) (fa "rweScope" (EVar "useScope")) (fa "rweRoutes" (EVar "routes")) (fa "rweInner" (EVar "inner"))))) (DoExpr (EApp (EApp (EVar "setRef") (EFieldAccess (EVar "memo") "wmRoutes")) (EApp (EApp (EApp (EVar "omInsert") (EVar "key")) (EBinOp "::" (EVar "entry") (EApp (EApp (EVar "optionOr") (EListLit)) (EApp (EApp (EVar "omLookup") (EVar "key")) (EFieldAccess (EFieldAccess (EVar "memo") "wmRoutes") "value"))))) (EFieldAccess (EFieldAccess (EVar "memo") "wmRoutes") "value"))))))) (DoExpr (EVar "routes"))))))))
 (DTypeSig false "routeWalkRecorded" (TyFun (TyCon "IfaceRef") (TyFun (TyApp (TyCon "List") (TyCon "Mono")) (TyFun (TyCon "ImplRow") (TyFun (TyCon "String") (TyFun (TyCon "ScopeId") (TyFun (TyApp (TyCon "List") (TyCon "RouteWalkEntry")) (TyApp (TyCon "Option") (TyCon "RouteWalkEntry")))))))))
-(DFunDef false "routeWalkRecorded" (PWild PWild PWild PWild PWild (PList)) (EVar "None"))
-(DFunDef false "routeWalkRecorded" ((PVar "iface") (PVar "goals") (PVar "row") (PVar "encl") (PVar "useScope") (PCons (PVar "entry") (PVar "rest"))) (EIf (EBinOp "&&" (EBinOp "&&" (EBinOp "&&" (EBinOp "&&" (EBinOp "==" (EFieldAccess (EVar "entry") "rweEncl") (EVar "encl")) (EBinOp "==" (EFieldAccess (EVar "entry") "rweScope") (EVar "useScope"))) (EApp (EApp (EVar "sameIfaceDecl") (EFieldAccess (EVar "entry") "rweIface")) (EVar "iface"))) (EApp (EApp (EVar "monoVecSameGiven") (EFieldAccess (EVar "entry") "rweGoals")) (EVar "goals"))) (EBinOp "==" (EApp (EVar "rowRouteKey") (EFieldAccess (EVar "entry") "rweRow")) (EApp (EVar "rowRouteKey") (EVar "row")))) (EApp (EVar "Some") (EVar "entry")) (EApp (EApp (EApp (EApp (EApp (EApp (EVar "routeWalkRecorded") (EVar "iface")) (EVar "goals")) (EVar "row")) (EVar "encl")) (EVar "useScope")) (EVar "rest"))))
+(DFunDef false "routeWalkRecorded" ((PVar "iface") (PVar "goals") (PVar "row") (PVar "encl") (PVar "useScope") (PVar "xs0")) (ELetGroup ((lgb "go" (clause ((PList)) (EVar "None")) (clause ((PCons (PVar "entry") (PVar "rest"))) (EIf (EBinOp "&&" (EBinOp "&&" (EBinOp "&&" (EBinOp "&&" (EBinOp "==" (EFieldAccess (EVar "entry") "rweEncl") (EVar "encl")) (EBinOp "==" (EFieldAccess (EVar "entry") "rweScope") (EVar "useScope"))) (EApp (EApp (EVar "sameIfaceDecl") (EFieldAccess (EVar "entry") "rweIface")) (EVar "iface"))) (EApp (EApp (EVar "monoVecSameGiven") (EFieldAccess (EVar "entry") "rweGoals")) (EVar "goals"))) (EBinOp "==" (EApp (EVar "rowRouteKey") (EFieldAccess (EVar "entry") "rweRow")) (EApp (EVar "rowRouteKey") (EVar "row")))) (EApp (EVar "Some") (EVar "entry")) (EApp (EVar "go") (EVar "rest")))))) (EApp (EVar "go") (EVar "xs0"))))
 (DTypeSig false "noteInner" (TyFun (TyCon "SiteCtx") (TyFun (TyCon "Inner") (TyCon "Unit"))))
 (DFunDef false "noteInner" ((PVar "sx") (PVar "inner")) (EMatch (EFieldAccess (EVar "sx") "sxInner") (arm (PCon "Some" (PVar "acc")) () (EApp (EApp (EVar "setRef") (EVar "acc")) (EApp (EApp (EVar "innerOr") (EFieldAccess (EVar "acc") "value")) (EVar "inner")))) (arm (PCon "None") () (ELit LUnit))))
 (DTypeSig false "noteInnerRoute" (TyFun (TyCon "SiteCtx") (TyFun (TyCon "Route") (TyCon "Route"))))
@@ -2975,16 +2977,14 @@ implHeadMatchesArgs mctx tys args = isSome (implHeadSubst mctx tys args)
 (DFunDef false "implMatchesU" ((PVar "_mctx") PWild PWild (PList)) (EVar "False"))
 (DFunDef false "implMatchesU" ((PVar "mctx") (PVar "univ") (PVar "iface") (PCons (PVar "a0") (PVar "rest"))) (EBinOp "||" (EApp (EApp (EApp (EVar "bucketArgsMatch") (EVar "mctx")) (EApp (EApp (EApp (EVar "univConcreteBucket") (EVar "univ")) (EVar "iface")) (EApp (EVar "headTyconMono") (EVar "a0")))) (EBinOp "::" (EVar "a0") (EVar "rest"))) (EApp (EApp (EApp (EVar "bucketArgsMatch") (EVar "mctx")) (EApp (EApp (EVar "univHeadless") (EVar "univ")) (EVar "iface"))) (EBinOp "::" (EVar "a0") (EVar "rest")))))
 (DTypeSig false "bucketArgsMatch" (TyFun (TyCon "ModuleCtx") (TyFun (TyApp (TyCon "List") (TyTuple (TyApp (TyCon "List") (TyCon "Ty")) (TyApp (TyCon "List") (TyCon "Require")))) (TyFun (TyApp (TyCon "List") (TyCon "Mono")) (TyCon "Bool")))))
-(DFunDef false "bucketArgsMatch" ((PVar "_mctx") (PList) PWild) (EVar "False"))
-(DFunDef false "bucketArgsMatch" ((PVar "mctx") (PCons (PTuple (PVar "tys") PWild) (PVar "rest")) (PVar "args")) (EBinOp "||" (EApp (EApp (EApp (EVar "implHeadMatchesArgs") (EVar "mctx")) (EVar "tys")) (EVar "args")) (EApp (EApp (EApp (EVar "bucketArgsMatch") (EVar "mctx")) (EVar "rest")) (EVar "args"))))
+(DFunDef false "bucketArgsMatch" ((PVar "mctx") (PVar "xs0") (PVar "args")) (ELetGroup ((lgb "go" (clause ((PList)) (EVar "False")) (clause ((PCons (PTuple (PVar "tys") PWild) (PVar "rest"))) (EBinOp "||" (EApp (EApp (EApp (EVar "implHeadMatchesArgs") (EVar "mctx")) (EVar "tys")) (EVar "args")) (EApp (EVar "go") (EVar "rest")))))) (EApp (EVar "go") (EVar "xs0"))))
 (DTypeSig true "findMatchingImplReqsU" (TyFun (TyCon "SiteCtx") (TyFun (TyCon "ImplUniverse") (TyFun (TyCon "IfaceRef") (TyFun (TyApp (TyCon "List") (TyCon "Mono")) (TyApp (TyCon "Option") (TyTuple (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "Mono"))) (TyApp (TyCon "List") (TyCon "Require")))))))))
 (DFunDef false "findMatchingImplReqsU" ((PVar "sx") (PVar "univ") (PVar "iface") (PList)) (EApp (EApp (EApp (EVar "firstReqMatch") (EFieldAccess (EVar "sx") "sxModule")) (EApp (EApp (EVar "univHeadless") (EVar "univ")) (EVar "iface"))) (EListLit)))
 (DFunDef false "findMatchingImplReqsU" ((PVar "sx") (PVar "univ") (PVar "iface") (PCons (PVar "a0") (PVar "rest"))) (EMatch (EApp (EApp (EApp (EVar "concreteReqMatchByIface") (EVar "sx")) (EVar "iface")) (EBinOp "::" (EVar "a0") (EVar "rest"))) (arm (PCon "Some" (PVar "r")) () (EApp (EVar "Some") (EVar "r"))) (arm (PCon "None") () (EApp (EApp (EApp (EVar "firstReqMatch") (EFieldAccess (EVar "sx") "sxModule")) (EApp (EApp (EVar "univHeadless") (EVar "univ")) (EVar "iface"))) (EBinOp "::" (EVar "a0") (EVar "rest"))))))
 (DTypeSig false "concreteReqMatchByIface" (TyFun (TyCon "SiteCtx") (TyFun (TyCon "IfaceRef") (TyFun (TyApp (TyCon "List") (TyCon "Mono")) (TyApp (TyCon "Option") (TyTuple (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "Mono"))) (TyApp (TyCon "List") (TyCon "Require"))))))))
 (DFunDef false "concreteReqMatchByIface" ((PVar "sx") (PVar "iface") (PVar "args")) (EApp (EApp (EMethodRef "andThen") (EApp (EApp (EApp (EApp (EVar "ieSelectRowByIface") (EVar "sx")) (EFieldAccess (EFieldAccess (EFieldAccess (EFieldAccess (EVar "sx") "sxModule") "mcCells") "bodyImplEnvRef") "value")) (EVar "iface")) (EVar "args"))) (ELam ((PVar "row")) (EApp (EApp (EApp (EVar "selectedRowReqMatch") (EFieldAccess (EVar "sx") "sxModule")) (EVar "args")) (EVar "row")))))
 (DTypeSig false "firstReqMatch" (TyFun (TyCon "ModuleCtx") (TyFun (TyApp (TyCon "List") (TyTuple (TyApp (TyCon "List") (TyCon "Ty")) (TyApp (TyCon "List") (TyCon "Require")))) (TyFun (TyApp (TyCon "List") (TyCon "Mono")) (TyApp (TyCon "Option") (TyTuple (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "Mono"))) (TyApp (TyCon "List") (TyCon "Require"))))))))
-(DFunDef false "firstReqMatch" ((PVar "_mctx") (PList) PWild) (EVar "None"))
-(DFunDef false "firstReqMatch" ((PVar "mctx") (PCons (PTuple (PVar "tys") (PVar "reqs")) (PVar "rest")) (PVar "args")) (EMatch (EApp (EApp (EApp (EVar "implHeadSubst") (EVar "mctx")) (EVar "tys")) (EVar "args")) (arm (PCon "Some" (PVar "sub")) () (EApp (EVar "Some") (ETuple (EMethodRef "sub") (EVar "reqs")))) (arm (PCon "None") () (EApp (EApp (EApp (EVar "firstReqMatch") (EVar "mctx")) (EVar "rest")) (EVar "args")))))
+(DFunDef false "firstReqMatch" ((PVar "mctx") (PVar "xs0") (PVar "args")) (ELetGroup ((lgb "go" (clause ((PList)) (EVar "None")) (clause ((PCons (PTuple (PVar "tys") (PVar "reqs")) (PVar "rest"))) (EMatch (EApp (EApp (EApp (EVar "implHeadSubst") (EVar "mctx")) (EVar "tys")) (EVar "args")) (arm (PCon "Some" (PVar "sub")) () (EApp (EVar "Some") (ETuple (EMethodRef "sub") (EVar "reqs")))) (arm (PCon "None") () (EApp (EVar "go") (EVar "rest"))))))) (EApp (EVar "go") (EVar "xs0"))))
 (DTypeSig true "univConcreteBucket" (TyFun (TyCon "ImplUniverse") (TyFun (TyCon "IfaceRef") (TyFun (TyApp (TyCon "Option") (TyCon "HeadKey")) (TyApp (TyCon "List") (TyTuple (TyApp (TyCon "List") (TyCon "Ty")) (TyApp (TyCon "List") (TyCon "Require"))))))))
 (DFunDef false "univConcreteBucket" ((PCon "ImplUniverse" (PVar "conc") PWild) (PVar "iface") (PCon "Some" (PVar "hk"))) (EApp (EApp (EVar "mregLookupK") (EApp (EVar "regKeyNTab") (EListLit (EApp (EVar "oblIfaceKey") (EVar "iface")) (EApp (EVar "dispHeadTab") (EVar "hk"))))) (EVar "conc")))
 (DFunDef false "univConcreteBucket" (PWild PWild (PCon "None")) (EListLit))
@@ -2994,7 +2994,6 @@ implHeadMatchesArgs mctx tys args = isSome (implHeadSubst mctx tys args)
 (DFunDef false "implMatchesWithReqsU" ((PVar "_mctx") PWild PWild (PList)) (EVar "False"))
 (DFunDef false "implMatchesWithReqsU" ((PVar "mctx") (PVar "univ") (PVar "iface") (PCons (PVar "a0") (PVar "rest"))) (EBinOp "||" (EApp (EApp (EApp (EVar "bucketArgsMatchReqs") (EVar "mctx")) (EApp (EApp (EApp (EVar "univConcreteBucket") (EVar "univ")) (EVar "iface")) (EApp (EVar "headTyconMono") (EVar "a0")))) (EBinOp "::" (EVar "a0") (EVar "rest"))) (EApp (EApp (EApp (EVar "bucketArgsMatchReqs") (EVar "mctx")) (EApp (EApp (EVar "univHeadless") (EVar "univ")) (EVar "iface"))) (EBinOp "::" (EVar "a0") (EVar "rest")))))
 (DTypeSig false "bucketArgsMatchReqs" (TyFun (TyCon "ModuleCtx") (TyFun (TyApp (TyCon "List") (TyTuple (TyApp (TyCon "List") (TyCon "Ty")) (TyApp (TyCon "List") (TyCon "Require")))) (TyFun (TyApp (TyCon "List") (TyCon "Mono")) (TyCon "Bool")))))
-(DFunDef false "bucketArgsMatchReqs" ((PVar "_mctx") (PList) PWild) (EVar "False"))
-(DFunDef false "bucketArgsMatchReqs" ((PVar "mctx") (PCons (PTuple (PVar "tys") (PVar "reqs")) (PVar "rest")) (PVar "args")) (EBinOp "||" (EBinOp "&&" (EApp (EVar "isNonEmptyL") (EVar "reqs")) (EApp (EApp (EApp (EVar "implHeadMatchesArgs") (EVar "mctx")) (EVar "tys")) (EVar "args"))) (EApp (EApp (EApp (EVar "bucketArgsMatchReqs") (EVar "mctx")) (EVar "rest")) (EVar "args"))))
+(DFunDef false "bucketArgsMatchReqs" ((PVar "mctx") (PVar "xs0") (PVar "args")) (ELetGroup ((lgb "go" (clause ((PList)) (EVar "False")) (clause ((PCons (PTuple (PVar "tys") (PVar "reqs")) (PVar "rest"))) (EBinOp "||" (EBinOp "&&" (EApp (EVar "isNonEmptyL") (EVar "reqs")) (EApp (EApp (EApp (EVar "implHeadMatchesArgs") (EVar "mctx")) (EVar "tys")) (EVar "args"))) (EApp (EVar "go") (EVar "rest")))))) (EApp (EVar "go") (EVar "xs0"))))
 (DTypeSig false "implHeadMatchesArgs" (TyFun (TyCon "ModuleCtx") (TyFun (TyApp (TyCon "List") (TyCon "Ty")) (TyFun (TyApp (TyCon "List") (TyCon "Mono")) (TyCon "Bool")))))
 (DFunDef false "implHeadMatchesArgs" ((PVar "mctx") (PVar "tys") (PVar "args")) (EApp (EVar "isSome") (EApp (EApp (EApp (EVar "implHeadSubst") (EVar "mctx")) (EVar "tys")) (EVar "args"))))

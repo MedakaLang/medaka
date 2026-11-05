@@ -441,10 +441,12 @@ ffiTakeAtom : EffAtomTy ->
   List EffAtomTy ->
   List (String, Ty) ->
   Option (List (String, Ty), List EffAtomTy)
-ffiTakeAtom _ [] _ _ = None
-ffiTakeAtom a (d :: ds) skipped sub = match ffiMatchAtom a d sub
-  Some sub2 => Some (sub2, reverseL skipped ++ ds)
-  None => ffiTakeAtom a ds (d :: skipped) sub
+ffiTakeAtom a xs0 skipped0 sub = go xs0 skipped0
+  where
+    go [] _ = None
+    go (d :: ds) skipped = match ffiMatchAtom a d sub
+      Some sub2 => Some (sub2, reverseL skipped ++ ds)
+      None => go ds (d :: skipped)
 
 ffiMatchAtom : EffAtomTy ->
   EffAtomTy ->
@@ -814,17 +816,17 @@ ffiExternTypeRowsWith : OrdMap (Ty, List (String, Int)) ->
   List (TabKey, (List String, Ty)) ->
   List Decl ->
   List (String, (List (String, String), (List String, String)))
-ffiExternTypeRowsWith _ _ [] = []
-ffiExternTypeRowsWith catalog aliases ((DExtern d) :: rest) =
-  externRowCons
-    (omHasKey d.edName catalog)
-    d
-    (ffiSigArgHeadsWith aliases d.edTy, ffiSigRetHeadWith aliases d.edTy)
-    (ffiExternTypeRowsWith catalog aliases rest)
-ffiExternTypeRowsWith catalog aliases ((DAttrib _ inner) :: rest) =
-  ffiExternTypeRowsWith catalog aliases (inner :: rest)
-ffiExternTypeRowsWith catalog aliases (_ :: rest) =
-  ffiExternTypeRowsWith catalog aliases rest
+ffiExternTypeRowsWith catalog aliases xs0 = go xs0
+  where
+    go [] = []
+    go ((DExtern d) :: rest) =
+      externRowCons
+        (omHasKey d.edName catalog)
+        d
+        (ffiSigArgHeadsWith aliases d.edTy, ffiSigRetHeadWith aliases d.edTy)
+        (go rest)
+    go ((DAttrib _ inner) :: rest) = go (inner :: rest)
+    go (_ :: rest) = go rest
 
 -- Walk the arrow spine.  Every PARAM position and the final RESULT position is
 -- a value that actually crosses; the row wrappers and the constraint prefix are
@@ -839,13 +841,15 @@ ffiExternTypeRowsWith catalog aliases (_ :: rest) =
 -- `DExtern` has a `Loc` this diagnostic does not use (`edLoc`), so the
 -- signature's own first `TyCon` is the nearest true anchor available.
 ffiCheckExternSig : ModuleCtx -> String -> Option Loc -> Ty -> Unit
-ffiCheckExternSig mctx n fb ty = match expandAliasHeadTy mctx ty
-  TyConstrained _ inner => ffiCheckExternSig mctx n fb inner
-  TyFun a r =>
-    ffiCheckExternPos mctx n fb a
-    ffiCheckExternSig mctx n fb r
-  TyEffect _ _ inner => ffiCheckExternSig mctx n fb inner
-  t => ffiCheckExternPos mctx n fb t
+ffiCheckExternSig mctx n fb ty0 = go ty0
+  where
+    go ty = match expandAliasHeadTy mctx ty
+      TyConstrained _ inner => go inner
+      TyFun a r =>
+        ffiCheckExternPos mctx n fb a
+        go r
+      TyEffect _ _ inner => go inner
+      t => ffiCheckExternPos mctx n fb t
 
 -- A VALUE position.  A function type landing here is the closure cell §3 rules
 -- out, and it reaches this arm rather than `ffiCheckExternSig`'s `TyFun` arm

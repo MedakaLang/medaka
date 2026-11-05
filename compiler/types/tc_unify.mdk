@@ -762,6 +762,8 @@ indexOpenClosed mctx lOpen v lClosed =
 -- obligation, so a variable is solved and a mismatch reads as an atom the
 -- bound does not cover (`wantIndexCovered`).
 indexAtomsCovered : ModuleCtx -> List Atom -> List Atom -> List Atom
+-- Bound: list built in tail position modulo cons: a where-local go loses the constant-stack loop until the lambda-lift pass (#4878); convert then.
+-- lint-disable-next-line rule-threaded-invariant
 indexAtomsCovered _mctx [] _ = []
 indexAtomsCovered mctx (x :: rest) bound = match findAtom (atomKey x) bound
   Some y =>
@@ -940,14 +942,16 @@ recordOblAt mctx p originId prov loc scope = wPush
 -- empty diff) pushes NOTHING and allocates nothing.  Records the cell Ref, not
 -- effvarId (see AbsorptionEvent), and snapshots the enclosing construct's span.
 recordAbsorptions : ModuleCtx -> List Atom -> Ref Effvar -> Unit
-recordAbsorptions _mctx [] _ = ()
-recordAbsorptions mctx (a :: rest) cell =
-  wPush mctx.mcCells.absorptions AbsorptionEvent {
-    atom = a,
-    cell = cell,
-    loc = mctx.mcLoc,
-  }
-  recordAbsorptions mctx rest cell
+recordAbsorptions mctx xs0 cell = go xs0
+  where
+    go [] = ()
+    go (a :: rest) =
+      wPush mctx.mcCells.absorptions AbsorptionEvent {
+        atom = a,
+        cell = cell,
+        loc = mctx.mcLoc,
+      }
+      go rest
 
 export
 captureScope : ModuleCtx -> Unit -> ScopeId
@@ -972,6 +976,8 @@ tyvarLevel cell = match !cell
 
 -- occurs-check + lower the levels of vars in [t] to <= [level] (Phase: Rémy levels)
 occursAdjust : ModuleCtx -> Int -> Int -> Mono -> Unit
+-- Bound: hot compiler path: the where-go form allocates one closure per call until the lambda-lift pass (#4878); convert then.
+-- lint-disable-next-line rule-threaded-invariant
 occursAdjust mctx id level t = match normalize t
   TVar cell => occursAdjustVar mctx id level cell
   TCon _ _ => ()
@@ -2023,6 +2029,8 @@ freshAuthvarRanged mctx top pat name =
 -- the head's declared kinds.
 export
 authSlotNamesIn : ModuleCtx -> (List Kind -> List Ty -> List a) -> Ty -> List a
+-- Bound: hot compiler path: the where-go form allocates one closure per call until the lambda-lift pass (#4878); convert then.
+-- lint-disable-next-line rule-threaded-invariant
 authSlotNamesIn mctx readSlots (TyApp a b) = match tyAppSpine (TyApp a b)
   (TyCon { tyConName = n, tyConOrigin = o }, args) =>
     match lookupTab (tyTabKey o n) mctx.mcCells.dataParamKindsRef.value
@@ -2071,21 +2079,25 @@ defaultDeferredPatLitsIn dyn lvl t =
     deferred => defaultPatLitVarsIn dyn (freeGenVars lvl t) deferred
 
 defaultPatLitVarsIn : DynCtx -> List Int -> List (Mono, Int, Option Loc) -> Unit
-defaultPatLitVarsIn _dyn _ [] = ()
-defaultPatLitVarsIn dyn quantified ((a, _, _) :: rest) =
-  match normalize a
-    TVar cell =>
-      if containsI (tyvarId cell) quantified then
-        unifyIn dyn (tconBuiltin "Int") a
-    _ => ()
-  defaultPatLitVarsIn dyn quantified rest
+defaultPatLitVarsIn dyn quantified xs0 = go xs0
+  where
+    go [] = ()
+    go ((a, _, _) :: rest) =
+      match normalize a
+        TVar cell =>
+          if containsI (tyvarId cell) quantified then
+            unifyIn dyn (tconBuiltin "Int") a
+        _ => ()
+      go rest
 
 export
 unifyAll : DynCtx -> Mono -> List Mono -> Unit
-unifyAll _dyn _ [] = ()
-unifyAll dyn t (x :: xs) =
-  unifyIn dyn t x
-  unifyAll dyn t xs
+unifyAll dyn t xs0 = go xs0
+  where
+    go [] = ()
+    go (x :: xs) =
+      unifyIn dyn t x
+      go xs
 
 -- THE qual-entry resolution: a cross-module constrained callee's whole recorded
 -- constraint fact — slots, declared prefix, and argument vectors — from ONE
@@ -2156,6 +2168,8 @@ qualConstraintKey mctx name =
 -- collecting disables.
 export
 lookupQualPayload : String -> String -> List ((String, String), a) -> Option a
+-- Bound: hot compiler path: the where-go form allocates one closure per call until the lambda-lift pass (#4878); convert then.
+-- lint-disable-next-line rule-threaded-invariant
 lookupQualPayload _ _ [] = None
 lookupQualPayload src name (((m, n), v) :: rest)
   | m == src && n == name = Some v
@@ -2265,11 +2279,14 @@ tagAllLitLocs mctx v kind = match normalize v
   _ => ()
 
 tagLitLocsWithRoot : ModuleCtx -> Int -> JoinContext -> List (Mono, Loc) -> Unit
-tagLitLocsWithRoot _mctx _ _ [] = ()
-tagLitLocsWithRoot mctx id kind ((mv, l) :: rest) =
-  if sameRootId id mv then
-    mctx.mcCells.numlitCtxTags := (l, kind) :: mctx.mcCells.numlitCtxTags.value
-  tagLitLocsWithRoot mctx id kind rest
+tagLitLocsWithRoot mctx id kind xs0 = go xs0
+  where
+    go [] = ()
+    go ((mv, l) :: rest) =
+      if sameRootId id mv then
+        mctx.mcCells.numlitCtxTags :=
+          (l, kind) :: mctx.mcCells.numlitCtxTags.value
+      go rest
 
 -- The arrow a callee presents, introduced when its shape is still unknown.
 export
@@ -2459,24 +2476,25 @@ recordSchemeCallObligations : ModuleCtx ->
   List VecObl ->
   List (Int, Mono) ->
   Unit
-recordSchemeCallObligations _mctx _ [] _ = ()
-recordSchemeCallObligations mctx originId (o :: rest) subst =
-  match substVecOblArgs o subst
-    Some monos =>
-      -- `schemeObligationsRef` and its cross-module mirrors
-      -- store `VecObl`, whose interface half is an identity-carrying `IfaceRef`, so this
-      -- site never records `OriginUnresolved`.
-      recordObl
-        mctx
-        Predicate {
-          iface = o.voIface,
-          args = monos,
-        }
-        originId
-        PSchemeReinst
-        mctx.mcLoc
-      recordSchemeCallObligations mctx originId rest subst
-    None => recordSchemeCallObligations mctx originId rest subst
+recordSchemeCallObligations mctx originId xs0 subst = go xs0
+  where
+    go [] = ()
+    go (o :: rest) = match substVecOblArgs o subst
+      Some monos =>
+        -- `schemeObligationsRef` and its cross-module mirrors
+        -- store `VecObl`, whose interface half is an identity-carrying `IfaceRef`, so this
+        -- site never records `OriginUnresolved`.
+        recordObl
+          mctx
+          Predicate {
+            iface = o.voIface,
+            args = monos,
+          }
+          originId
+          PSchemeReinst
+          mctx.mcLoc
+        go rest
+      None => go rest
 
 -- #1161: this predicate's goal at THIS call's instantiation.  An ids-only entry
 -- (`voArgs == []`) takes the historical `substMonos` path unchanged; a vector-carrying
@@ -2496,10 +2514,12 @@ lookupSchemeObls : String ->
   List ((String, Int), List VecObl) ->
   Option (List VecObl)
 lookupSchemeObls x 0 table = lookupSchemeOblsByName x table
-lookupSchemeObls _ _ [] = None
-lookupSchemeObls x id (((n2, i2), v) :: rest)
-  | n2 == x && i2 == id = Some v
-  | otherwise = lookupSchemeObls x id rest
+lookupSchemeObls x id table0 = go table0
+  where
+    go [] = None
+    go (((n2, i2), v) :: rest)
+      | n2 == x && i2 == id = Some v
+      | otherwise = go rest
 
 -- name-only scan (first match) — the bare-name fallback and the display readers
 -- (lookupSchemeIface) keep exactly this pre-#837 behaviour.
@@ -2819,13 +2839,15 @@ distinctVariables values =
 -- inner join whose result is one of them is decided from that shape.
 export
 resolvePendingJoins : DynCtx -> Int -> Unit
-resolvePendingJoins dyn level = match dyn.dcModule.mcCells.pendingJoinsRef.value
-  pj :: rest =>
-    if pj.pjLevel >= level then
-      dyn.dcModule.mcCells.pendingJoinsRef := rest
-      resolvePendingJoin dyn pj
-      resolvePendingJoins dyn level
-  [] => ()
+resolvePendingJoins dyn level = go ()
+  where
+    go () = match dyn.dcModule.mcCells.pendingJoinsRef.value
+      pj :: rest =>
+        if pj.pjLevel >= level then
+          dyn.dcModule.mcCells.pendingJoinsRef := rest
+          resolvePendingJoin dyn pj
+          go ()
+      [] => ()
 
 -- Settle the joins a local binding scope recorded before the binding
 -- generalizes.  A join whose alternatives are all still unshaped variables of
@@ -2844,20 +2866,21 @@ settlePendingJoins dyn level =
     reverseL postponed ++ dyn.dcModule.mcCells.pendingJoinsRef.value
 
 settlePending : DynCtx -> Int -> List PendingJoin -> List PendingJoin
-settlePending dyn level postponed =
-  match dyn.dcModule.mcCells.pendingJoinsRef.value
-    pj :: rest =>
-      if pj.pjLevel >= level then
-        dyn.dcModule.mcCells.pendingJoinsRef := rest
-        if joinOfOuterVariables level pj then
-          lowerTyvarLevel (level - 1) pj.pjResult
-          settlePending dyn level ({ pj | pjLevel = level - 1 } :: postponed)
+settlePending dyn level postponed0 = go postponed0
+  where
+    go postponed = match dyn.dcModule.mcCells.pendingJoinsRef.value
+      pj :: rest =>
+        if pj.pjLevel >= level then
+          dyn.dcModule.mcCells.pendingJoinsRef := rest
+          if joinOfOuterVariables level pj then
+            lowerTyvarLevel (level - 1) pj.pjResult
+            go ({ pj | pjLevel = level - 1 } :: postponed)
+          else
+            resolvePendingJoin dyn pj
+            go postponed
         else
-          resolvePendingJoin dyn pj
-          settlePending dyn level postponed
-      else
-        postponed
-    [] => postponed
+          postponed
+      [] => postponed
 
 joinOfOuterVariables : Int -> PendingJoin -> Bool
 joinOfOuterVariables level pj =

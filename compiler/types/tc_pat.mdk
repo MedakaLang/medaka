@@ -202,12 +202,14 @@ inferOrPat env (first :: rest) =
   fr
 
 inferOrAlts : TcEnv -> (Mono, List (String, Scheme)) -> Int -> List Pat -> Unit
-inferOrAlts _ _ _ [] = ()
-inferOrAlts env fr k (alt :: rest) =
-  let ar = inferPatNode env alt
-  unifyIn env.teDyn (fst fr) (fst ar)
-  each (unifyOrBinder env k (snd ar)) (snd fr)
-  inferOrAlts env fr (k + 1) rest
+inferOrAlts env fr k0 xs0 = go k0 xs0
+  where
+    go _ [] = ()
+    go k (alt :: rest) =
+      let ar = inferPatNode env alt
+      unifyIn env.teDyn (fst fr) (fst ar)
+      each (unifyOrBinder env k (snd ar)) (snd fr)
+      go (k + 1) rest
 
 -- The mismatch is also reported by unification itself; this adds the diagnostic that
 -- names the two alternatives, which unification cannot.
@@ -280,10 +282,11 @@ inferRecPatFields : TcEnv ->
   List (String, Mono) ->
   List RecPatField ->
   List (String, Scheme)
-inferRecPatFields _env _ _ [] = []
-inferRecPatFields env rname fieldTypes ((RecPatField fname _ bid mp) :: rest) =
-  inferRecPatField env rname fieldTypes fname bid mp
-    ++ inferRecPatFields env rname fieldTypes rest
+inferRecPatFields env rname fieldTypes xs0 = go xs0
+  where
+    go [] = []
+    go ((RecPatField fname _ bid mp) :: rest) =
+      inferRecPatField env rname fieldTypes fname bid mp ++ go rest
 
 inferRecPatField : TcEnv ->
   String ->
@@ -402,19 +405,24 @@ settlePatLitsOnly dyn saved =
 
 -- [final]: the module is done, so an unknown var defaults instead of deferring.
 settlePatLitsGo : DynCtx -> Bool -> List (Mono, Int, Option Loc) -> Unit
-settlePatLitsGo _dyn _ [] = ()
-settlePatLitsGo dyn final ((a, n, loc) :: rest) =
-  match normalize a
-    TCon tag _ if isTaggedFixedHead tag =>
-      dyn.dcModule.mcCells.numlitRanges :=
-        (a, n, loc) :: dyn.dcModule.mcCells.numlitRanges.value
-    TCon tag _ if isBoxed64Head tag =>
-      refuseBoxedLitPat dyn.dcModule tag (intToString n) loc
-    TVar _ if not final =>
-      dyn.dcModule.mcCells.patLitDeferred :=
-        (a, n, loc) :: dyn.dcModule.mcCells.patLitDeferred.value
-    _ => unifyIn (dynAtIfSome loc dyn) (tconBuiltin "Int") a
-  settlePatLitsGo dyn final rest
+settlePatLitsGo dyn final xs0 = go xs0
+  where
+    go [] = ()
+    go ((a, n, loc) :: rest) =
+      match normalize a
+        TCon tag _ if isTaggedFixedHead tag =>
+          dyn.dcModule.mcCells.numlitRanges :=
+            (a, n, loc) :: dyn.dcModule.mcCells.numlitRanges.value
+        TCon tag _ if isBoxed64Head tag =>
+          refuseBoxedLitPat dyn.dcModule tag (intToString n) loc
+        TVar _ =>
+          if final then
+            unifyIn (dynAtIfSome loc dyn) (tconBuiltin "Int") a
+          else
+            dyn.dcModule.mcCells.patLitDeferred :=
+              (a, n, loc) :: dyn.dcModule.mcCells.patLitDeferred.value
+        _ => unifyIn (dynAtIfSome loc dyn) (tconBuiltin "Int") a
+      go rest
 
 -- The module's inference is complete: every deferred literal pattern takes the
 -- type its scrutinee finally got, or `Int`.

@@ -1393,11 +1393,11 @@ require_typecheck_arm checkSurvivorObligations checkSurvivorCallObligations 'OpE
 require_typecheck_arm oblPredOf vecOblOfPred 'OpExactReturn request => match methodReturnArgs gctx request'
 require_typecheck_arm ifaceForConstraintIdGo registerActiveDictVars 'OpExactReturn request => match normalize request.mrrOccurrence'
 
-ordinary_return_check_body="$(sed -n '/^checkCallObligationsU mctx deferNonGround univ (o :: rest) =/,/^consumeExactReturnOutcome :/p' "$ROOT/compiler/types/tc_solve_check.mdk")"
+ordinary_return_check_body="$(sed -n '/^checkCallObligationsU mctx deferNonGround univ xs0 = go xs0/,/^consumeExactReturnOutcome :/p' "$ROOT/compiler/types/tc_solve_check.mdk")"
 # The complete arm (`methodReturnWanted` is `Some`) is compared whitespace-flattened,
 # so the call's line breaks are not part of the contract; its whole body must be the
 # consumption of the one solver outcome.
-ordinary_return_arm="$(printf '%s\n' "$ordinary_return_check_body" | sed -n '/^    OpExactReturn request =>/,/^    _ =>/p')"
+ordinary_return_arm="$(printf '%s\n' "$ordinary_return_check_body" | sed -n '/^        OpExactReturn request =>/,/^        _ =>/p')"
 ordinary_return_complete_check="$(printf '%s\n' "$ordinary_return_arm" | sed -n '/match methodReturnWanted mctx request/,/ None =>/p')"
 ordinary_return_complete_flat="$(printf '%s\n' "$ordinary_return_complete_check" | tr '\n' ' ' | tr -s ' ')"
 ordinary_return_complete_required='match methodReturnWanted mctx request Some _ => consumeExactReturnOutcome mctx univ request (solveExactReturnOnce (siteFor mctx) request) None =>'

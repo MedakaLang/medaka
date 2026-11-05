@@ -955,6 +955,8 @@ importedBindingWinners : ModuleCtx ->
   OrdMap Unit ->
   OrdMap Unit ->
   List (String, ExportBinding)
+-- Bound: list built in tail position modulo cons: a where-local go loses the constant-stack loop until the lambda-lift pass (#4878); convert then.
+-- lint-disable-next-line rule-threaded-invariant
 importedBindingWinners _mctx [] _ _ = []
 importedBindingWinners mctx ((name, (_, binding)) :: rest) seen ambiguous =
   if omHasKey name seen then
@@ -1397,43 +1399,42 @@ importSeed : GraphCtx ->
   List Decl ->
   List (String, List (String, a)) ->
   List (String, (Option String, a))
-importSeed _gctx _ _ _ [] _ = []
-importSeed gctx mid coreV admitted ((DAttrib _ d) :: rest) depEnv =
-  importSeed gctx mid coreV admitted (d :: rest) depEnv
-importSeed gctx mid coreV admitted ((DUse _ path _) :: rest) depEnv =
-  let depId = useModId path
-  if depId == "core" then
-    map (suppliedBy None) (coreAliasSchemes path coreV)
-      ++ importSeed gctx mid coreV admitted rest depEnv
-  else match lookupAssoc depId depEnv
-    None => importSeed gctx mid coreV admitted rest depEnv
-    Some depSchemes =>
-      let bound = boundNames path
-      let decls =
-        omFromPairs
-          (reverseL (importFormRows path (importerDefiners gctx mid depId)))
-          omEmpty
-      let methods =
-        identKeysByName
-          omEmpty
-          (importFormRows
-            path
-            (match omLookup depId (methodExportsIndex gctx ())
-              Some rows => rows
-              None => []))
-      map
-          (row =>
-            suppliedBy
-              (if bindsName bound (fst row)
-                && not (containsPair (depId, fst row) admitted) then
-                Some (importSupplierKey depId decls methods (fst row))
-              else
-                None)
-              row)
-          (importFormSchemes depEnv path depSchemes)
-        ++ importSeed gctx mid coreV admitted rest depEnv
-importSeed gctx mid coreV admitted (_ :: rest) depEnv =
-  importSeed gctx mid coreV admitted rest depEnv
+importSeed gctx mid coreV admitted xs0 depEnv = go xs0
+  where
+    go [] = []
+    go ((DAttrib _ d) :: rest) = go (d :: rest)
+    go ((DUse _ path _) :: rest) =
+      let depId = useModId path
+      if depId == "core" then
+        map (suppliedBy None) (coreAliasSchemes path coreV) ++ go rest
+      else match lookupAssoc depId depEnv
+        None => go rest
+        Some depSchemes =>
+          let bound = boundNames path
+          let decls =
+            omFromPairs
+              (reverseL (importFormRows path (importerDefiners gctx mid depId)))
+              omEmpty
+          let methods =
+            identKeysByName
+              omEmpty
+              (importFormRows
+                path
+                (match omLookup depId (methodExportsIndex gctx ())
+                  Some rows => rows
+                  None => []))
+          map
+              (row =>
+                suppliedBy
+                  (if bindsName bound (fst row)
+                    && not (containsPair (depId, fst row) admitted) then
+                    Some (importSupplierKey depId decls methods (fst row))
+                  else
+                    None)
+                  row)
+              (importFormSchemes depEnv path depSchemes)
+            ++ go rest
+    go (_ :: rest) = go rest
 
 -- The identity one import's binding of `name` is compared by: the declaration
 -- it denotes.  A standalone value is `(defining module, name there)` from
@@ -2534,9 +2535,10 @@ dispositionRowsOfImpls : ImplEnv ->
   List ImplRow ->
   ClassEnv ->
   List (InstanceShape, String, MethodDisposition)
-dispositionRowsOfImpls _ [] _ = []
-dispositionRowsOfImpls ie (r :: rest) ce =
-  dispositionRowsOfImpl ie r ce ++ dispositionRowsOfImpls ie rest ce
+dispositionRowsOfImpls ie xs0 ce = go xs0
+  where
+    go [] = []
+    go (r :: rest) = dispositionRowsOfImpl ie r ce ++ go rest
 
 -- Each row carries its instance's shape and its interface's word.  The shape's
 -- route word is minted by the same call the lowering and eval install passes make
@@ -2589,6 +2591,8 @@ dispositionRowsOfMethods : InstId ->
   List String ->
   List String ->
   List MethodDisposition
+-- Bound: typecheck.mdk may not grow (D1, #4200); the where-go form adds three code lines here.
+-- lint-disable-next-line rule-threaded-invariant
 dispositionRowsOfMethods _ _ _ _ [] = []
 dispositionRowsOfMethods inst iface supplied required (m :: rest) =
   let restRows = dispositionRowsOfMethods inst iface supplied required rest

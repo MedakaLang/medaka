@@ -180,10 +180,12 @@ usePathBindsName path n = match importedBindings path
 -- Monomorphic and short-circuiting on purpose (`compiler/AGENTS.md`): this runs only for
 -- a COLLIDED method name, but when it runs it walks one module's exported-method list.
 exportsIdentFor : String -> Ident -> List (String, Ident) -> Bool
-exportsIdentFor _ _ [] = False
-exportsIdentFor n ident ((en, ei) :: rest)
-  | en == n && ei == ident = True
-  | otherwise = exportsIdentFor n ident rest
+exportsIdentFor n ident xs0 = go xs0
+  where
+    go [] = False
+    go ((en, ei) :: rest)
+      | en == n && ei == ident = True
+      | otherwise = go rest
 
 -- resolve one imported bare member name to its actual key in a dependency's public
 -- schemes.  The golden path keys schemes by the bare name; the EMIT path runs after
@@ -735,6 +737,8 @@ aliasMethodKeyRows : String ->
   Loc ->
   List (String, Ident) ->
   List (String, String, String, Ident, Loc)
+-- Bound: list built in tail position modulo cons: a where-local go loses the constant-stack loop until the lambda-lift pass (#4878); convert then.
+-- lint-disable-next-line rule-threaded-invariant
 aliasMethodKeyRows _ _ _ [] = []
 aliasMethodKeyRows a mid loc ((mname, ident) :: rest) =
   (qualifiedLocal a mname, mname, mid, ident, loc)
@@ -761,20 +765,22 @@ aliasMethodKeyApply : ModuleCtx ->
   List String ->
   OrdMap (IfaceRef, List String, Ty, List (String, List Kind)) ->
   OrdMap (IfaceRef, List String, Ty, List (String, List Kind))
-aliasMethodKeyApply _mctx _ [] tab = tab
-aliasMethodKeyApply mctx g (k :: rest) tab =
-  let hits = optionOr [] (omLookup k g)
-  let tab2 = match aliasRowIdents hits []
-    [] => tab
-    [_] => aliasMethodKeyEntry mctx k hits tab
-    _ =>
-      pushTypeErrorOnceAt
-        mctx
-        TAmbiguousAliasMethod
-        (aliasRowLastLoc hits)
-        (aliasAmbiguityMsg k hits)
-      tab
-  aliasMethodKeyApply mctx g rest tab2
+aliasMethodKeyApply mctx g xs0 tab0 = go xs0 tab0
+  where
+    go [] tab = tab
+    go (k :: rest) tab =
+      let hits = optionOr [] (omLookup k g)
+      let tab2 = match aliasRowIdents hits []
+        [] => tab
+        [_] => aliasMethodKeyEntry mctx k hits tab
+        _ =>
+          pushTypeErrorOnceAt
+            mctx
+            TAmbiguousAliasMethod
+            (aliasRowLastLoc hits)
+            (aliasAmbiguityMsg k hits)
+          tab
+      go rest tab2
 
 aliasMethodKeyEntry : ModuleCtx ->
   String ->
@@ -882,12 +888,13 @@ anyUsePathBinds : GraphCtx ->
   String ->
   (Ident, (IfaceRef, List String, Ty, List (String, List Kind))) ->
   Bool
-anyUsePathBinds _gctx [] _ _ _ = False
-anyUsePathBinds gctx ((DAttrib _ d) :: rest) wide n c =
-  anyUsePathBinds gctx [d] wide n c || anyUsePathBinds gctx rest wide n c
-anyUsePathBinds gctx ((DUse _ path _) :: rest) wide n c =
-  usePathWitnesses gctx path wide n c || anyUsePathBinds gctx rest wide n c
-anyUsePathBinds gctx (_ :: rest) wide n c = anyUsePathBinds gctx rest wide n c
+anyUsePathBinds gctx xs0 wide n c = go xs0
+  where
+    go [] = False
+    go ((DAttrib _ d) :: rest) = go [d] || go rest
+    go ((DUse _ path _) :: rest) =
+      usePathWitnesses gctx path wide n c || go rest
+    go (_ :: rest) = go rest
 
 -- ── the witness reads IDENTITY, not spelling ──
 -- An import witnesses a candidate when TWO things hold:
@@ -1001,9 +1008,11 @@ insertCtorVariants : TcEnv ->
   List Variant ->
   SpellingPop Scheme ->
   SpellingPop Scheme
-insertCtorVariants _env _ _ [] pop = pop
-insertCtorVariants env tyName o ((Variant cn _) :: rest) pop =
-  insertCtorVariants env tyName o rest (insertCtorRow env tyName o cn pop)
+insertCtorVariants env tyName o xs0 pop0 = go xs0 pop0
+  where
+    go [] pop = pop
+    go ((Variant cn _) :: rest) pop =
+      go rest (insertCtorRow env tyName o cn pop)
 
 insertCtorRow : TcEnv ->
   String ->
@@ -1037,14 +1046,16 @@ overrideScopedCtors : List Decl ->
   List String ->
   TcEnv ->
   TcEnv
-overrideScopedCtors _ _ [] env = env
-overrideScopedCtors prog cands (n :: rest) env =
-  let env2 = match omLookup n cands
-    None => env
-    Some cs => match scopedCtorEntry env.teDyn.dcModule.mcGraph prog n cs
-      None => env
-      Some s => addCtor env n s
-  overrideScopedCtors prog cands rest env2
+overrideScopedCtors prog cands xs0 env0 = go xs0 env0
+  where
+    go [] env = env
+    go (n :: rest) env =
+      let env2 = match omLookup n cands
+        None => env
+        Some cs => match scopedCtorEntry env.teDyn.dcModule.mcGraph prog n cs
+          None => env
+          Some s => addCtor env n s
+      go rest env2
 
 -- Which declaration of constructor [n] does THIS module mean?  Same nearest-scope-wins
 -- ladder as `methodScopeAt` and `tyOriginScope`, with one rung fewer (see the
@@ -1116,15 +1127,13 @@ ctorCandImported gctx prog n (ident, owner, _) =
   anyUsePathBindsCtor gctx prog n owner ident
 
 anyUsePathBindsCtor : GraphCtx -> List Decl -> String -> String -> Ident -> Bool
-anyUsePathBindsCtor _gctx [] _ _ _ = False
-anyUsePathBindsCtor gctx ((DAttrib _ d) :: rest) n owner ident =
-  anyUsePathBindsCtor gctx [d] n owner ident
-    || anyUsePathBindsCtor gctx rest n owner ident
-anyUsePathBindsCtor gctx ((DUse _ path _) :: rest) n owner ident =
-  usePathWitnessesCtor gctx path n owner ident
-    || anyUsePathBindsCtor gctx rest n owner ident
-anyUsePathBindsCtor gctx (_ :: rest) n owner ident =
-  anyUsePathBindsCtor gctx rest n owner ident
+anyUsePathBindsCtor gctx xs0 n owner ident = go xs0
+  where
+    go [] = False
+    go ((DAttrib _ d) :: rest) = go [d] || go rest
+    go ((DUse _ path _) :: rest) =
+      usePathWitnessesCtor gctx path n owner ident || go rest
+    go (_ :: rest) = go rest
 
 -- An import witnesses a candidate when TWO things hold — the identical conjunction
 -- `usePathWitnesses` states for methods:
@@ -1169,9 +1178,10 @@ usePathBindsCtor (UseAlias _ _) _ _ = True
 usePathBindsCtor _ _ _ = False
 
 anyMemberBindsCtor : String -> String -> List UseMember -> Bool
-anyMemberBindsCtor _ _ [] = False
-anyMemberBindsCtor n owner (m :: rest) =
-  memberBindsCtorName n owner m || anyMemberBindsCtor n owner rest
+anyMemberBindsCtor n owner xs0 = go xs0
+  where
+    go [] = False
+    go (m :: rest) = memberBindsCtorName n owner m || go rest
 
 -- The two spellings that bind a constructor: naming it, or naming its type with `(..)`.
 -- The member's ORIGIN spelling is what is compared — `UseMember`'s first field, the name
@@ -1205,10 +1215,12 @@ depExportsCtorIdent gctx dep n ident =
     Some es => exportsCtorIdentFor n ident es
 
 exportsCtorIdentFor : String -> Ident -> List (String, String, Ident) -> Bool
-exportsCtorIdentFor _ _ [] = False
-exportsCtorIdentFor n ident ((cn, _, ci) :: rest)
-  | cn == n && ci == ident = True
-  | otherwise = exportsCtorIdentFor n ident rest
+exportsCtorIdentFor n ident xs0 = go xs0
+  where
+    go [] = False
+    go ((cn, _, ci) :: rest)
+      | cn == n && ci == ident = True
+      | otherwise = go rest
 
 -- Grow the record population by THIS module's PUBLIC record declarations.
 --
@@ -1244,11 +1256,12 @@ insertRecordVariants : ModuleCtx ->
   List Variant ->
   SpellingPop RecordInfo ->
   SpellingPop RecordInfo
-insertRecordVariants _mctx _ _ [] pop = pop
-insertRecordVariants mctx tyName o ((Variant cn (ConNamed _ _)) :: rest) pop =
-  insertRecordVariants mctx tyName o rest (insertRecordRow mctx tyName o cn pop)
-insertRecordVariants mctx tyName o (_ :: rest) pop =
-  insertRecordVariants mctx tyName o rest pop
+insertRecordVariants mctx tyName o xs0 pop0 = go xs0 pop0
+  where
+    go [] pop = pop
+    go ((Variant cn (ConNamed _ _)) :: rest) pop =
+      go rest (insertRecordRow mctx tyName o cn pop)
+    go (_ :: rest) pop = go rest pop
 
 insertRecordRow : ModuleCtx ->
   String ->
@@ -1324,16 +1337,18 @@ overrideScopedRecords : ModuleCtx ->
   OrdMap (List (Ident, String, RecordInfo)) ->
   List String ->
   Unit
-overrideScopedRecords _mctx _ _ [] = ()
-overrideScopedRecords mctx prog cands (n :: rest) =
-  match omLookup n cands
-    None => ()
-    Some cs => match scopedRecordEntry mctx.mcGraph prog n cs
-      None => ()
-      Some ri =>
-        mctx.mcCells.recordByNameRef :=
-          omInsert n ri mctx.mcCells.recordByNameRef.value
-  overrideScopedRecords mctx prog cands rest
+overrideScopedRecords mctx prog cands xs0 = go xs0
+  where
+    go [] = ()
+    go (n :: rest) =
+      match omLookup n cands
+        None => ()
+        Some cs => match scopedRecordEntry mctx.mcGraph prog n cs
+          None => ()
+          Some ri =>
+            mctx.mcCells.recordByNameRef :=
+              omInsert n ri mctx.mcCells.recordByNameRef.value
+      go rest
 
 -- Which declaration of registry key [n] does THIS module mean?  The same ladder as
 -- `scopedCtorEntry`, using the SAME two predicates — see the mirror-discipline note above
@@ -1404,16 +1419,18 @@ pickSchemesByDecl : ModuleCtx ->
   Registry MethodSchemeRow ->
   OrdMap Scheme ->
   List (String, EnvBinding)
-pickSchemesByDecl _mctx [] _ _ _ = []
-pickSchemesByDecl mctx (n :: ns) table byId sources =
-  let rest = pickSchemesByDecl mctx ns table byId sources
-  match admittedRowFor mctx n byId
-    Some row => (n, methodEnvBinding row) :: rest
-    None => match admittedSchemeFor mctx n byId
-      Some s => (n, ordinaryEnvBinding s) :: rest
-      None => match undecidedSchemeFor mctx n table sources
-        Some s => (n, ordinaryEnvBinding s) :: rest
-        None => rest
+pickSchemesByDecl mctx xs0 table byId sources = go xs0
+  where
+    go [] = []
+    go (n :: ns) =
+      let rest = go ns
+      match admittedRowFor mctx n byId
+        Some row => (n, methodEnvBinding row) :: rest
+        None => match admittedSchemeFor mctx n byId
+          Some s => (n, ordinaryEnvBinding s) :: rest
+          None => match undecidedSchemeFor mctx n table sources
+            Some s => (n, ordinaryEnvBinding s) :: rest
+            None => rest
 
 undecidedSchemeFor : ModuleCtx ->
   String ->
@@ -1443,21 +1460,23 @@ annotateImportedMethodRows : TcEnv ->
   OrdMap Unit ->
   Registry MethodSchemeRow ->
   TcEnv
-annotateImportedMethodRows env [] _ _ _ = env
-annotateImportedMethodRows env (name :: rest) nameable shadows rows =
-  let originName = originMethodName env.teDyn.dcModule name
-  let env2 =
-    if omHasKey originName nameable
-      && not (omHasKey name shadows)
-      && isSome
-        (lookupBinding
+annotateImportedMethodRows env0 xs0 nameable shadows rows = go env0 xs0
+  where
+    go env [] = env
+    go env (name :: rest) =
+      let originName = originMethodName env.teDyn.dcModule name
+      let env2 =
+        if omHasKey originName nameable
+          && not (omHasKey name shadows)
+          && isSome
+            (lookupBinding
+              env
+              name) then match admittedRowFor env.teDyn.dcModule name rows
+          Some row => extendMethodRow env name row
+          None => env
+        else
           env
-          name) then match admittedRowFor env.teDyn.dcModule name rows
-      Some row => extendMethodRow env name row
-      None => env
-    else
-      env
-  annotateImportedMethodRows env2 rest nameable shadows rows
+      go env2 rest
 
 admittedRowFor : ModuleCtx ->
   String ->
@@ -1533,14 +1552,13 @@ aliasConstraintEntries : (String -> List (String, (String, String))) ->
   List Decl ->
   List ((String, String), a) ->
   List (String, a)
-aliasConstraintEntries _defs [] _ = []
-aliasConstraintEntries defs ((DAttrib _ d) :: rest) qual =
-  aliasConstraintEntries defs [d] qual ++ aliasConstraintEntries defs rest qual
-aliasConstraintEntries defs ((DUse _ path _) :: rest) qual =
-  aliasEntriesFor defs (importTableMid path) path qual
-    ++ aliasConstraintEntries defs rest qual
-aliasConstraintEntries defs (_ :: rest) qual =
-  aliasConstraintEntries defs rest qual
+aliasConstraintEntries defs xs0 qual = go xs0
+  where
+    go [] = []
+    go ((DAttrib _ d) :: rest) = go [d] ++ go rest
+    go ((DUse _ path _) :: rest) =
+      aliasEntriesFor defs (importTableMid path) path qual ++ go rest
+    go (_ :: rest) = go rest
 
 aliasEntriesFor : (String -> List (String, (String, String))) ->
   String ->
@@ -1608,11 +1626,12 @@ aliasDictNamesOfDecl : (String -> List (String, (String, String))) ->
   List (String, List Decl) ->
   Decl ->
   List String
-aliasDictNamesOfDecl defs bare unitDecls (DAttrib _ d) =
-  aliasDictNamesOfDecl defs bare unitDecls d
-aliasDictNamesOfDecl defs bare unitDecls (DUse _ path _) =
-  aliasDictNamesOfPath defs bare unitDecls (useModId path) path
-aliasDictNamesOfDecl _defs _ _ _ = []
+aliasDictNamesOfDecl defs bare unitDecls x0 = go x0
+  where
+    go (DAttrib _ d) = go d
+    go (DUse _ path _) =
+      aliasDictNamesOfPath defs bare unitDecls (useModId path) path
+    go _ = []
 
 aliasDictNamesOfPath : (String -> List (String, (String, String))) ->
   OrdMap Unit ->
@@ -1681,15 +1700,16 @@ graphAliasEntry a qual (localName, (defMid, origin)) =
 
 export
 reportAmbiguousImportsIn : ModuleCtx -> OrdMap Unit -> List Decl -> Unit
-reportAmbiguousImportsIn _mctx _ [] = ()
-reportAmbiguousImportsIn mctx occ ((DAttrib _ d) :: rest) =
-  reportAmbiguousImportsIn mctx occ [d]
-  reportAmbiguousImportsIn mctx occ rest
-reportAmbiguousImportsIn mctx occ ((DUse _ path loc) :: rest) =
-  reportAmbiguousImport mctx occ (useModId path) path loc
-  reportAmbiguousImportsIn mctx occ rest
-reportAmbiguousImportsIn mctx occ (_ :: rest) =
-  reportAmbiguousImportsIn mctx occ rest
+reportAmbiguousImportsIn mctx occ xs0 = go xs0
+  where
+    go [] = ()
+    go ((DAttrib _ d) :: rest) =
+      go [d]
+      go rest
+    go ((DUse _ path loc) :: rest) =
+      reportAmbiguousImport mctx occ (useModId path) path loc
+      go rest
+    go (_ :: rest) = go rest
 
 reportAmbiguousImport : ModuleCtx ->
   OrdMap Unit ->
@@ -1734,16 +1754,18 @@ pushAmbiguousImports : ModuleCtx ->
   Loc ->
   List (String, List String) ->
   Unit
-pushAmbiguousImports _mctx _ _ [] = ()
-pushAmbiguousImports mctx depId loc ((n, mids) :: rest) =
-  pushTypeErrorHelpFixAt
-    mctx
-    TAmbiguousReexport
-    (Some loc)
-    (ambigReexportMsg n depId mids)
-    (ambigReexportHelp n depId mids)
-    None
-  pushAmbiguousImports mctx depId loc rest
+pushAmbiguousImports mctx depId loc xs0 = go xs0
+  where
+    go [] = ()
+    go ((n, mids) :: rest) =
+      pushTypeErrorHelpFixAt
+        mctx
+        TAmbiguousReexport
+        (Some loc)
+        (ambigReexportMsg n depId mids)
+        (ambigReexportHelp n depId mids)
+        None
+      go rest
 
 export
 declCtorNamed : String -> Decl -> Bool
