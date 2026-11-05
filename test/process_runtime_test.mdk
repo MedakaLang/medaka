@@ -48,6 +48,7 @@ test "real process owner and launch tickets retain resources through failures" =
       "", "deny-clone", "deny-signal", "deny-wait", "deny-close", "sigpipe",
       "selective-close"
     ],
+    fixture dir "pipe_io" [""],
     fixture dir "launch_tickets" ["", "signal", "wait", "signal-stalled"],
   ])
 
@@ -66,3 +67,30 @@ printf 'control failed as expected\n'
     "sh"
     ["-c", script, "control", underRoot "", dir]
     "control failed as expected")
+
+test "typed pipe operations link and report invalid or closed streams" = withScratchDir
+  (dir =>
+    let source = "\{dir}/pipe_typed.mdk"
+    let binary = "\{dir}/pipe_typed"
+    let program =
+      """
+import bytes.{encodeUtf8}
+import process.{SpawnOptions(..), PipeChoice(..), OutputStream(..), ProcessError(..), StartError(..), start, tryRead, tryWrite, streamFd, closeStdin}
+main = match start "/bin/true" (SpawnOptions { argv = [], cwd = "/tmp", env = [], stdin = Piped, stdout = Piped, stderr = Piped })
+  Err _ => println "start failed"
+  Ok p =>
+    let invalidRead = tryRead p ChildStdout 0
+    let invalidFd = streamFd p 3
+    let _ = closeStdin p
+    let closedWrite = tryWrite p (encodeUtf8 "x") 0 1
+    match (invalidRead, invalidFd, closedWrite)
+      (Err (InvalidIO _), Err (InvalidIO _), Err ProcessClosed) => println "typed pipe passed"
+      _ => println "unexpected result"
+"""
+    match writeFile source program
+      Err e => fail "could not write typed pipe probe: \{e}"
+      Ok _ => expectAll [
+        run (underRoot "medaka") ["check", source] "main",
+        run (underRoot "medaka") ["build", source, "-o", binary] "built",
+        run binary [] "typed pipe passed",
+      ])

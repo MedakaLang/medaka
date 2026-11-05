@@ -43,6 +43,7 @@ static MdkProcess *process_roots;
 static int test_gate = -1, test_ready = -1;
 static int test_signal_error, test_wait_error, test_poll_error;
 static int test_signals, test_waits, test_polls;
+static int test_read_error, test_write_error;
 #endif
 
 static long long box_int(int n) { return (long long)n * 2 + 1; }
@@ -495,3 +496,89 @@ long long mdk_process_dispose(long long word) {
   if (lost) return error_result(5, ECHILD, "wait ownership lost");
   return e ? error_result(6, e, "close process stream") : mdk_ok(1);
 }
+
+static int stream_owner(MdkProcess *p, int stream) {
+  return p->launch_step == MDK_LAUNCH_OWNED && p->state != DISPOSED && p->streams[stream] >= 0;
+}
+static long long stream_busy(void) { return error_result(MDK_PROCESS_BUSY, 0, "process busy"); }
+static long long stream_closed(void) { return error_result(8, 0, "process stream closed"); }
+long long mdk_process_stream_fd(long long word, long long stream_word) {
+  long long stream = stream_word >> 1;
+  if (stream < 0 || stream > 2) return error_result(MDK_PROCESS_INVALID_IO, 0, "invalid stream");
+  if (pthread_mutex_trylock(&process_lock)) return stream_busy();
+  MdkProcess *p = (MdkProcess *)word;
+  if (!stream_owner(p, (int)stream)) { pthread_mutex_unlock(&process_lock); return stream_closed(); }
+  int fd = p->streams[stream];
+  pthread_mutex_unlock(&process_lock);
+  return mdk_ok(box_int(fd));
+}
+long long mdk_process_try_read(long long word, long long stream_word, long long limit_word) {
+  long long stream = stream_word >> 1, limit = limit_word >> 1;
+  if ((stream != 1 && stream != 2) || limit < 1 || limit > 65536)
+    return error_result(MDK_PROCESS_INVALID_IO, 0, "invalid read stream or limit");
+  unsigned char buf[65536];
+  if (pthread_mutex_trylock(&process_lock)) return stream_busy();
+  MdkProcess *p = (MdkProcess *)word;
+  if (!stream_owner(p, (int)stream)) { pthread_mutex_unlock(&process_lock); return stream_closed(); }
+  ssize_t n;
+#ifdef MDK_PROCESS_TESTING
+  if (test_read_error) { errno = test_read_error; test_read_error = 0; n = -1; }
+  else
+#endif
+  n = read(p->streams[stream], buf, (size_t)limit);
+  int e = errno;
+  pthread_mutex_unlock(&process_lock);
+  if (n < 0 && (e == EAGAIN || e == EWOULDBLOCK || e == EINTR)) return mdk_ok(mdk_none());
+  if (n < 0) return error_result(MDK_PROCESS_READ_FAILED, e, "read process stream");
+  size_t size = 16 + ((size_t)n + 7) / 8 * 8;
+  long long *block = mdk_alloc(size);
+  memset(block, 0, size); block[0] = MDK_BYTEBLOCK_TAG; block[1] = n;
+  memcpy((char *)block + 16, buf, (size_t)n);
+  return mdk_ok(mdk_some((long long)block));
+}
+long long mdk_process_try_write(long long word, long long block_word, long long offset_word, long long count_word) {
+  long long offset = offset_word >> 1, count = count_word >> 1;
+  long long *block = (long long *)block_word;
+  long long length = block[1];
+  if (offset < 0 || count < 0 || offset > length || count > length - offset)
+    return error_result(MDK_PROCESS_INVALID_IO, 0, "invalid write window");
+  if (count > 65536) count = 65536;
+  if (pthread_mutex_trylock(&process_lock)) return stream_busy();
+  MdkProcess *p = (MdkProcess *)word;
+  if (!stream_owner(p, 0)) { pthread_mutex_unlock(&process_lock); return stream_closed(); }
+  if (!count) { pthread_mutex_unlock(&process_lock); return mdk_ok(mdk_some(box_int(0))); }
+  sigset_t set, prior, pending;
+  sigemptyset(&set); sigaddset(&set, SIGPIPE);
+  int mask_error = pthread_sigmask(SIG_BLOCK, &set, &prior);
+  if (mask_error) { pthread_mutex_unlock(&process_lock); return error_result(MDK_PROCESS_WRITE_FAILED, mask_error, "block SIGPIPE"); }
+  int pending_error = sigpending(&pending);
+  int pending_errno = errno;
+  if (pending_error) {
+    pthread_sigmask(SIG_SETMASK, &prior, NULL); pthread_mutex_unlock(&process_lock);
+    return error_result(MDK_PROCESS_WRITE_FAILED, pending_errno, "query SIGPIPE");
+  }
+  int was_pending = sigismember(&pending, SIGPIPE);
+  ssize_t n;
+#ifdef MDK_PROCESS_TESTING
+  if (test_write_error) { errno = test_write_error; test_write_error = 0; n = -1; }
+  else
+#endif
+  n = write(p->streams[0], (char *)block + 16 + offset, (size_t)count);
+  int e = errno;
+  if (n < 0 && e == EPIPE && !was_pending) {
+    struct timespec zero = {0, 0};
+    while (sigtimedwait(&set, NULL, &zero) < 0 && errno == EINTR) {}
+  }
+  int restore_error = pthread_sigmask(SIG_SETMASK, &prior, NULL);
+  pthread_mutex_unlock(&process_lock);
+  if (restore_error) return error_result(MDK_PROCESS_WRITE_FAILED, restore_error, "restore SIGPIPE mask");
+  if (n < 0 && (e == EAGAIN || e == EWOULDBLOCK || e == EINTR)) return mdk_ok(mdk_none());
+  if (n < 0 || !n) return error_result(MDK_PROCESS_WRITE_FAILED, n < 0 ? e : EIO, "write process stream");
+  return mdk_ok(mdk_some(box_int((int)n)));
+}
+
+#ifdef MDK_PROCESS_TESTING
+void mdk_process_test_io_faults(int read_error, int write_error) {
+  test_read_error = read_error; test_write_error = write_error;
+}
+#endif

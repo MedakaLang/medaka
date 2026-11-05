@@ -1,5 +1,5 @@
 # META
-source_lines=1125
+source_lines=1138
 stages=DESUGAR,MARK
 # SOURCE
 {- | The host primitives.
@@ -1127,6 +1127,19 @@ extern processPollExitRaw : Process p ->
 extern processCloseStdinRaw : Process p ->
   <Exec p> Result (Int, Int, String) Unit
 extern processDisposeRaw : Process p -> <Exec p> Result (Int, Int, String) Unit
+
+extern processTryReadRaw : Process p ->
+  Int ->
+  Int ->
+  <Exec p> Result (Int, Int, String) (Option ByteBlock)
+extern processTryWriteRaw : Process p ->
+  ByteBlock ->
+  Int ->
+  Int ->
+  <Exec p> Result (Int, Int, String) (Option Int)
+extern processStreamFdRaw : Process p ->
+  Int ->
+  <Exec p> Result (Int, Int, String) Int
 # DESUGAR
 (DExtern false "putStr" (TyFun (TyCon "String") (TyEffect ("Stdout") None (TyCon "Unit"))))
 (DExtern true "putStrLn" (TyFun (TyCon "String") (TyEffect ("Stdout") None (TyCon "Unit"))))
@@ -1353,6 +1366,9 @@ extern processDisposeRaw : Process p -> <Exec p> Result (Int, Int, String) Unit
 (DExtern false "processPollExitRaw" (TyFun (TyApp (TyCon "Process") (TyVar "p")) (TyEffect ((atom "Exec" (name "p"))) None (TyApp (TyApp (TyCon "Result") (TyTuple (TyCon "Int") (TyCon "Int") (TyCon "String"))) (TyApp (TyCon "Option") (TyTuple (TyCon "Int") (TyCon "Int") (TyCon "Bool")))))))
 (DExtern false "processCloseStdinRaw" (TyFun (TyApp (TyCon "Process") (TyVar "p")) (TyEffect ((atom "Exec" (name "p"))) None (TyApp (TyApp (TyCon "Result") (TyTuple (TyCon "Int") (TyCon "Int") (TyCon "String"))) (TyCon "Unit")))))
 (DExtern false "processDisposeRaw" (TyFun (TyApp (TyCon "Process") (TyVar "p")) (TyEffect ((atom "Exec" (name "p"))) None (TyApp (TyApp (TyCon "Result") (TyTuple (TyCon "Int") (TyCon "Int") (TyCon "String"))) (TyCon "Unit")))))
+(DExtern false "processTryReadRaw" (TyFun (TyApp (TyCon "Process") (TyVar "p")) (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyEffect ((atom "Exec" (name "p"))) None (TyApp (TyApp (TyCon "Result") (TyTuple (TyCon "Int") (TyCon "Int") (TyCon "String"))) (TyApp (TyCon "Option") (TyCon "ByteBlock"))))))))
+(DExtern false "processTryWriteRaw" (TyFun (TyApp (TyCon "Process") (TyVar "p")) (TyFun (TyCon "ByteBlock") (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyEffect ((atom "Exec" (name "p"))) None (TyApp (TyApp (TyCon "Result") (TyTuple (TyCon "Int") (TyCon "Int") (TyCon "String"))) (TyApp (TyCon "Option") (TyCon "Int")))))))))
+(DExtern false "processStreamFdRaw" (TyFun (TyApp (TyCon "Process") (TyVar "p")) (TyFun (TyCon "Int") (TyEffect ((atom "Exec" (name "p"))) None (TyApp (TyApp (TyCon "Result") (TyTuple (TyCon "Int") (TyCon "Int") (TyCon "String"))) (TyCon "Int"))))))
 # MARK
 (DExtern false "putStr" (TyFun (TyCon "String") (TyEffect ("Stdout") None (TyCon "Unit"))))
 (DExtern true "putStrLn" (TyFun (TyCon "String") (TyEffect ("Stdout") None (TyCon "Unit"))))
@@ -1579,3 +1595,6 @@ extern processDisposeRaw : Process p -> <Exec p> Result (Int, Int, String) Unit
 (DExtern false "processPollExitRaw" (TyFun (TyApp (TyCon "Process") (TyVar "p")) (TyEffect ((atom "Exec" (name "p"))) None (TyApp (TyApp (TyCon "Result") (TyTuple (TyCon "Int") (TyCon "Int") (TyCon "String"))) (TyApp (TyCon "Option") (TyTuple (TyCon "Int") (TyCon "Int") (TyCon "Bool")))))))
 (DExtern false "processCloseStdinRaw" (TyFun (TyApp (TyCon "Process") (TyVar "p")) (TyEffect ((atom "Exec" (name "p"))) None (TyApp (TyApp (TyCon "Result") (TyTuple (TyCon "Int") (TyCon "Int") (TyCon "String"))) (TyCon "Unit")))))
 (DExtern false "processDisposeRaw" (TyFun (TyApp (TyCon "Process") (TyVar "p")) (TyEffect ((atom "Exec" (name "p"))) None (TyApp (TyApp (TyCon "Result") (TyTuple (TyCon "Int") (TyCon "Int") (TyCon "String"))) (TyCon "Unit")))))
+(DExtern false "processTryReadRaw" (TyFun (TyApp (TyCon "Process") (TyVar "p")) (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyEffect ((atom "Exec" (name "p"))) None (TyApp (TyApp (TyCon "Result") (TyTuple (TyCon "Int") (TyCon "Int") (TyCon "String"))) (TyApp (TyCon "Option") (TyCon "ByteBlock"))))))))
+(DExtern false "processTryWriteRaw" (TyFun (TyApp (TyCon "Process") (TyVar "p")) (TyFun (TyCon "ByteBlock") (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyEffect ((atom "Exec" (name "p"))) None (TyApp (TyApp (TyCon "Result") (TyTuple (TyCon "Int") (TyCon "Int") (TyCon "String"))) (TyApp (TyCon "Option") (TyCon "Int")))))))))
+(DExtern false "processStreamFdRaw" (TyFun (TyApp (TyCon "Process") (TyVar "p")) (TyFun (TyCon "Int") (TyEffect ((atom "Exec" (name "p"))) None (TyApp (TyApp (TyCon "Result") (TyTuple (TyCon "Int") (TyCon "Int") (TyCon "String"))) (TyCon "Int"))))))

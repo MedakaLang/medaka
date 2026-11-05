@@ -27,6 +27,9 @@ data ProcessOperation
   | Wait
   | Close
   | LaunchHandshake
+  | Read
+  | Write
+  | StreamLookup
 ```
 
 ## `ProcessError`
@@ -41,6 +44,17 @@ data ProcessError
   | CloseFailed Int String
   | Unsupported String
   | LaunchCancelled
+  | InvalidIO String
+  | StreamFailed ProcessOperation Int String
+  | ProcessBusy
+```
+
+## `OutputStream`
+
+```
+data OutputStream
+  = ChildStdout
+  | ChildStderr
 ```
 
 ## `ExitStatus`
@@ -116,5 +130,26 @@ closeStdin p
 ```
 dispose : Process p -> <Exec p> Result ProcessError Unit
 dispose p
+```
+
+## `tryRead`
+
+```
+tryRead : Process p -> OutputStream -> Int -> <Exec p> Result ProcessError (Option Bytes)
+tryRead p stream limit
+```
+
+## `tryWrite`
+
+```
+tryWrite : Process p -> Bytes -> Int -> Int -> <Exec p> Result ProcessError (Option Int)
+tryWrite p bytes offset count
+```
+
+## `streamFd`
+
+```
+streamFd : Process p -> Int -> <Exec p> Result ProcessError Int
+streamFd p stream
 ```
 

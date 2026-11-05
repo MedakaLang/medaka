@@ -12,4 +12,8 @@ long long mdk_process_poll_exit(long long process);
 long long mdk_process_close_stdin(long long process);
 long long mdk_process_dispose(long long process);
 
+long long mdk_process_try_read(long long, long long, long long);
+long long mdk_process_try_write(long long, long long, long long, long long);
+long long mdk_process_stream_fd(long long, long long);
+
 #endif
