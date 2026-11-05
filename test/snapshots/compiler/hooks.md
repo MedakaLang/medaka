@@ -34,5 +34,6 @@ hookUnset field =
 (DTypeSig true "hookUnset" (TyFun (TyCon "String") (TyVar "a")))
 (DFunDef false "hookUnset" ((PVar "field")) (EApp (EVar "panic") (EBinOp "++" (EBinOp "++" (ELit (LString "hook `")) (EApp (EVar "$core.display") (EVar "field"))) (ELit (LString "` is unset: the driver did not install hooks")))))
 # MARK
+(DUse false (UseAlias ("core") "$core"))
 (DTypeSig true "hookUnset" (TyFun (TyCon "String") (TyVar "a")))
-(DFunDef false "hookUnset" ((PVar "field")) (EApp (EVar "panic") (EBinOp "++" (EBinOp "++" (ELit (LString "hook `")) (EApp (EMethodRef "display") (EVar "field"))) (ELit (LString "` is unset: the driver did not install hooks")))))
+(DFunDef false "hookUnset" ((PVar "field")) (EApp (EVar "panic") (EBinOp "++" (EBinOp "++" (ELit (LString "hook `")) (EApp (EVar "$core.display") (EVar "field"))) (ELit (LString "` is unset: the driver did not install hooks")))))

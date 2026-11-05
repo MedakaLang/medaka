@@ -385,6 +385,9 @@ test "arch_boundaries: frontend.ast_walk closure matches its golden" =
 test "arch_boundaries: frontend.visibility closure matches its golden" =
   closurePin "frontend.visibility"
 
+test "arch_boundaries: frontend.name_scope closure matches its golden" =
+  closurePin "frontend.name_scope"
+
 test "arch_boundaries: types.effect_param_decode closure matches its golden" =
   closurePin "types.effect_param_decode"
 

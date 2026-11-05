@@ -1,0 +1,6 @@
+import string.{startsWith}
+
+startsWith : String -> Bool
+startsWith _ = True
+
+main = println (startsWith "a")

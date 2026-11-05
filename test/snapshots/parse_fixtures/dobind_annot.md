@@ -21,4 +21,5 @@ compute = do
 (DUse false (UseAlias ("core") "$core"))
 (DFunDef false "compute" () (EApp (EApp (EVar "$core.andThen") (EVar "fetch")) (ELam ((PVar "x")) (ELet false (PVar "x") (EAnnot (EVar "x") (TyCon "Int")) (EApp (EApp (EVar "$core.andThen") (EVar "other")) (ELam ((PVar "y")) (EApp (EVar "wrap") (EBinOp "+" (EVar "x") (EVar "y")))))))))
 # MARK
-(DFunDef false "compute" () (EApp (EApp (EMethodRef "andThen") (EVar "fetch")) (ELam ((PVar "x")) (ELet false (PVar "x") (EAnnot (EVar "x") (TyCon "Int")) (EApp (EApp (EMethodRef "andThen") (EVar "other")) (ELam ((PVar "y")) (EApp (EVar "wrap") (EBinOp "+" (EVar "x") (EVar "y")))))))))
+(DUse false (UseAlias ("core") "$core"))
+(DFunDef false "compute" () (EApp (EApp (EVar "$core.andThen") (EVar "fetch")) (ELam ((PVar "x")) (ELet false (PVar "x") (EAnnot (EVar "x") (TyCon "Int")) (EApp (EApp (EVar "$core.andThen") (EVar "other")) (ELam ((PVar "y")) (EApp (EVar "wrap") (EBinOp "+" (EVar "x") (EVar "y")))))))))

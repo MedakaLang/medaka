@@ -670,6 +670,11 @@ inlang-frontend-desugar-test:
 inlang-frontend-visibility-test:
 	./medaka test compiler/frontend/visibility_test.mdk
 
+## compiler/frontend/name_scope_test.mdk is a `*_test.mdk` sibling, outside every
+## entry's import closure ([W-MODULE-BLIND]): it pins the bare-name ladder's answers.
+inlang-frontend-name-scope-test:
+	./medaka test --engines eval,native compiler/frontend/name_scope_test.mdk
+
 ## compiler/driver/loader_test.mdk is a `*_test.mdk` sibling, outside every
 ## entry's import closure ([W-MODULE-BLIND]): it pins the test-sibling relation.
 inlang-driver-loader-test:

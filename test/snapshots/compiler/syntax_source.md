@@ -221,6 +221,7 @@ syntaxStructural (SyntaxSource _ _ _ _ _ _ _ structural _) = structural
 (DTypeSig true "syntaxStructural" (TyFun (TyCon "SyntaxSource") (TyApp (TyCon "Option") (TyCon "ParsedSource"))))
 (DFunDef false "syntaxStructural" ((PCon "SyntaxSource" PWild PWild PWild PWild PWild PWild PWild (PVar "structural") PWild)) (EVar "structural"))
 # MARK
+(DUse false (UseAlias ("core") "$core"))
 (DUse false (UseGroup ("support" "stage_count") ((mem "stageBump" false))))
 (DUse false (UseGroup ("frontend" "lex_token") ((mem "Token" false) (mem "RawTok" true))))
 (DUse false (UseGroup ("frontend" "lex_scan") ((mem "scanRawChars" false))))
@@ -238,8 +239,8 @@ syntaxStructural (SyntaxSource _ _ _ _ _ _ _ structural _) = structural
 (DData Public "PieceKind" () ((variant "TokenCoverage" (ConPos)) (variant "CommentCoverage" (ConPos)) (variant "SourceGap" (ConPos))) ())
 (DData Abstract "SourcePiece" () ((variant "SourcePiece" (ConPos (TyCon "PieceKind") (TyCon "SourceSpan")))) ())
 (DData Public "SyntaxAdmission" () ((variant "SourceLimit" (ConPos (TyCon "Int"))) (variant "TokenLimit" (ConPos (TyCon "Int")))) ())
-(DImpl true "Debug" ((TyCon "SyntaxAdmission")) () ((im "debug" ((PVar "__x")) (EMatch (EVar "__x") (arm (PCon "SourceLimit" (PVar "__a0")) () (EBinOp "++" (ELit (LString "SourceLimit ")) (EApp (EVar "derivedShowWrap") (EApp (EMethodRef "debug") (EVar "__a0"))))) (arm (PCon "TokenLimit" (PVar "__a0")) () (EBinOp "++" (ELit (LString "TokenLimit ")) (EApp (EVar "derivedShowWrap") (EApp (EMethodRef "debug") (EVar "__a0")))))))))
-(DImpl true "Display" ((TyCon "SyntaxAdmission")) () ((im "display" ((PVar "__x")) (EMatch (EVar "__x") (arm (PCon "SourceLimit" (PVar "__a0")) () (EBinOp "++" (ELit (LString "SourceLimit ")) (EApp (EVar "derivedShowWrap") (EApp (EMethodRef "display") (EVar "__a0"))))) (arm (PCon "TokenLimit" (PVar "__a0")) () (EBinOp "++" (ELit (LString "TokenLimit ")) (EApp (EVar "derivedShowWrap") (EApp (EMethodRef "display") (EVar "__a0")))))))))
+(DImpl true "Debug" ((TyCon "SyntaxAdmission")) () ((im "debug" ((PVar "__x")) (EMatch (EVar "__x") (arm (PCon "SourceLimit" (PVar "__a0")) () (EBinOp "++" (ELit (LString "SourceLimit ")) (EApp (EVar "$core.derivedShowWrap") (EApp (EVar "$core.debug") (EVar "__a0"))))) (arm (PCon "TokenLimit" (PVar "__a0")) () (EBinOp "++" (ELit (LString "TokenLimit ")) (EApp (EVar "$core.derivedShowWrap") (EApp (EVar "$core.debug") (EVar "__a0")))))))))
+(DImpl true "Display" ((TyCon "SyntaxAdmission")) () ((im "display" ((PVar "__x")) (EMatch (EVar "__x") (arm (PCon "SourceLimit" (PVar "__a0")) () (EBinOp "++" (ELit (LString "SourceLimit ")) (EApp (EVar "$core.derivedShowWrap") (EApp (EVar "$core.display") (EVar "__a0"))))) (arm (PCon "TokenLimit" (PVar "__a0")) () (EBinOp "++" (ELit (LString "TokenLimit ")) (EApp (EVar "$core.derivedShowWrap") (EApp (EVar "$core.display") (EVar "__a0")))))))))
 (DData Abstract "SyntaxSource" () ((variant "SyntaxSource" (ConPos (TyCon "String") (TyCon "SourceIndex") (TyApp (TyCon "Array") (TyCon "Token")) (TyApp (TyCon "Array") (TyCon "SourceSpan")) (TyApp (TyCon "Array") (TyCon "Trivia")) (TyApp (TyCon "Array") (TyCon "SourcePiece")) (TyApp (TyApp (TyCon "Result") (TyCon "ParseDiagnostic")) (TyCon "ParsedSource")) (TyApp (TyCon "Option") (TyCon "ParsedSource")) (TyCon "RecoveredSource")))) ())
 (DTypeSig false "rawRange" (TyFun (TyCon "RawTok") (TyTuple (TyCon "Int") (TyCon "Int") (TyCon "PieceKind"))))
 (DFunDef false "rawRange" ((PCon "RTok" PWild (PVar "s") (PVar "e"))) (ETuple (EVar "s") (EVar "e") (EVar "TokenCoverage")))
