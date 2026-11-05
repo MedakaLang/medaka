@@ -24,6 +24,16 @@ options = SpawnOptions {
   stderr = Null,
 }
 
+pipedOptions : List String -> SpawnOptions
+pipedOptions args = SpawnOptions {
+  argv = args,
+  cwd = "/tmp",
+  env = [],
+  stdin = Piped,
+  stdout = Piped,
+  stderr = Null,
+}
+
 test "cancel tokens retain cancellation" =
   let token = newCancelToken ()
   let before = cancelled token
@@ -49,7 +59,7 @@ test "expired deadline stops before submission" =
 
 test "deadline wait remains absolute after delayed scheduling" =
   let deadline = runAsync (after (millis 5))
-  let _ = runAsync (sleep (millis 20))
+  runAsync (sleep (millis 20))
   expectTrue (expiredNow (deadlineWait deadline))
 
 test "launch transfers an owner and observes direct child exit" =
@@ -67,14 +77,7 @@ test "launch transfers an owner and observes direct child exit" =
   expectTrue result
 
 test "writes and reads child pipes with exact bytes" =
-  let opts = SpawnOptions {
-    argv = [],
-    cwd = "/tmp",
-    env = [],
-    stdin = Piped,
-    stdout = Piped,
-    stderr = Null,
-  }
+  let opts = pipedOptions []
   let deadline = runAsync (after (millis 5000))
   let started =
     runAsync (startUntil "/bin/cat" opts deadline (newCancelToken ()))
@@ -98,14 +101,7 @@ test "writes and reads child pipes with exact bytes" =
   expectTrue result
 
 test "cancellation wakes a parked read" =
-  let opts = SpawnOptions {
-    argv = [],
-    cwd = "/tmp",
-    env = [],
-    stdin = Piped,
-    stdout = Piped,
-    stderr = Null,
-  }
+  let opts = pipedOptions []
   let deadline = runAsync (after (millis 5000))
   let started =
     runAsync (startUntil "/bin/cat" opts deadline (newCancelToken ()))
@@ -126,14 +122,7 @@ test "cancellation wakes a parked read" =
   expectTrue result
 
 test "backpressured write returns its committed prefix on timeout" =
-  let opts = SpawnOptions {
-    argv = ["-c", "sleep 0.3; wc -c"],
-    cwd = "/tmp",
-    env = [],
-    stdin = Piped,
-    stdout = Piped,
-    stderr = Null,
-  }
+  let opts = pipedOptions ["-c", "sleep 0.3; wc -c"]
   let launchDeadline = runAsync (after (millis 5000))
   let started =
     runAsync (startUntil "/bin/sh" opts launchDeadline (newCancelToken ()))
@@ -158,14 +147,7 @@ test "backpressured write returns its committed prefix on timeout" =
   expectTrue result
 
 test "backpressured cancellation retains its committed prefix" =
-  let opts = SpawnOptions {
-    argv = ["-c", "sleep 0.3; wc -c"],
-    cwd = "/tmp",
-    env = [],
-    stdin = Piped,
-    stdout = Piped,
-    stderr = Null,
-  }
+  let opts = pipedOptions ["-c", "sleep 0.3; wc -c"]
   let deadline = runAsync (after (millis 5000))
   let started =
     runAsync (startUntil "/bin/sh" opts deadline (newCancelToken ()))
@@ -288,22 +270,8 @@ test "partial launch outcomes release their owners" =
     [cleanedStarted, timed, cancelled, rejected, stopped, refused]
 
 test "a backpressured worker does not prevent another worker or status progress" =
-  let stalled = SpawnOptions {
-    argv = ["-c", "sleep 0.3; wc -c"],
-    cwd = "/tmp",
-    env = [],
-    stdin = Piped,
-    stdout = Piped,
-    stderr = Null,
-  }
-  let echo = SpawnOptions {
-    argv = [],
-    cwd = "/tmp",
-    env = [],
-    stdin = Piped,
-    stdout = Piped,
-    stderr = Null,
-  }
+  let stalled = pipedOptions ["-c", "sleep 0.3; wc -c"]
+  let echo = pipedOptions []
   let deadline = runAsync (after (millis 5000))
   let first =
     runAsync (startUntil "/bin/sh" stalled deadline (newCancelToken ()))
@@ -342,7 +310,7 @@ test "a backpressured worker does not prevent another worker or status progress"
                 decodeUtf8 bytes == Some "ready"
               _ => False)
         cancel token))))))
-      let _ = runAsync concurrent
+      runAsync concurrent
       let closedA = closeStdin a
       let closedB = closeStdin b
       let observed =

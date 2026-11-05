@@ -20,7 +20,7 @@ run cmd args marker = match boundedVerb cmd args
 
 fixture : String ->
   String ->
-  List String ->
+  List (Option String) ->
   <Exec, IO, FileRead, FileWrite> Expectation
 fixture dir name modes =
   let output = "\{dir}/\{name}"
@@ -46,7 +46,13 @@ fixture dir name modes =
       else
         expectAll
           (map
-              (mode => run output (if mode == "" then [] else [mode]) " passed")
+              (mode =>
+                run
+                  output
+                  (match mode
+                    None => []
+                    Some value => [value])
+                  " passed")
               modes
             ++ (if name == "submission" then
               [
@@ -65,12 +71,22 @@ fixture dir name modes =
 test "real process owner and launch tickets retain resources through failures" = withScratchDir
   (dir => expectAll [
     fixture dir "owner_smoke" [
-      "", "deny-clone", "deny-signal", "deny-wait", "deny-close", "sigpipe",
-      "selective-close"
+      None,
+      Some "deny-clone",
+      Some "deny-signal",
+      Some "deny-wait",
+      Some "deny-close",
+      Some "sigpipe",
+      Some "selective-close",
     ],
-    fixture dir "pipe_io" [""],
-    fixture dir "launch_tickets" ["", "signal", "wait", "signal-stalled"],
-    fixture dir "submission" ["", "gc", "signal", "wait"],
+    fixture dir "pipe_io" [None],
+    fixture dir "launch_tickets" [
+      None,
+      Some "signal",
+      Some "wait",
+      Some "signal-stalled",
+    ],
+    fixture dir "submission" [None, Some "gc", Some "signal", Some "wait"],
   ])
 
 test "submission controls reject missing roots and GC-active construction" = withScratchDir
@@ -157,10 +173,10 @@ main = match start "/bin/true" (SpawnOptions { argv = [], cwd = "/tmp", env = []
   Ok p =>
     let invalidRead = tryRead p ChildStdout 0
     let invalidFd = streamFd p 3
-    let _ = closeStdin p
+    let closed = closeStdin p
     let closedWrite = tryWrite p (encodeUtf8 "x") 0 1
-    match (invalidRead, invalidFd, closedWrite)
-      (Err (InvalidIO _), Err (InvalidIO _), Err ProcessClosed) => println "typed pipe passed"
+    match (invalidRead, invalidFd, closed, closedWrite)
+      (Err (InvalidIO _), Err (InvalidIO _), Ok _, Err ProcessClosed) => println "typed pipe passed"
       _ => println "unexpected result"
 """
     match writeFile source program
@@ -204,6 +220,16 @@ test "async launch retains grants and supports cross-module result inspection" =
         "LaunchTicket",
     ])
 
+buildDelayShim : String -> <Exec, IO> Expectation
+buildDelayShim shim = expectSpawnOk "clang" [
+  "-shared",
+  "-fPIC",
+  underRoot "test/process_runtime_fixtures/adapter_delay.c",
+  "-ldl",
+  "-o",
+  shim,
+]
+
 test "async launch timeout and cancellation retain cleanup during delayed exec" = withScratchDir
   (dir =>
     let compiler = underRoot "medaka"
@@ -211,14 +237,7 @@ test "async launch timeout and cancellation retain cleanup during delayed exec" 
     let shim = "\{dir}/delay.so"
     let binary = "\{dir}/adapter_stall"
     expectAll [
-      expectSpawnOk "clang" [
-        "-shared",
-        "-fPIC",
-        underRoot "test/process_runtime_fixtures/adapter_delay.c",
-        "-ldl",
-        "-o",
-        shim,
-      ],
+      buildDelayShim shim,
       expectSpawnOk compiler ["check", source],
       expectSpawnOk compiler ["build", source, "-o", binary],
       expectSpawnOkLine
@@ -239,14 +258,7 @@ test "async write retains exact prefix on an injected syscall error" = withScrat
     let shim = "\{dir}/delay.so"
     let binary = "\{dir}/adapter_write_error"
     expectAll [
-      expectSpawnOk "clang" [
-        "-shared",
-        "-fPIC",
-        underRoot "test/process_runtime_fixtures/adapter_delay.c",
-        "-ldl",
-        "-o",
-        shim,
-      ],
+      buildDelayShim shim,
       expectSpawnOk (underRoot "medaka") ["build", source, "-o", binary],
       expectSpawnOkLine
         "env"
@@ -261,14 +273,7 @@ test "interrupted writes retain their original absolute deadline" = withScratchD
     let shim = "\{dir}/delay.so"
     let binary = "\{dir}/adapter_eintr"
     expectAll [
-      expectSpawnOk "clang" [
-        "-shared",
-        "-fPIC",
-        underRoot "test/process_runtime_fixtures/adapter_delay.c",
-        "-ldl",
-        "-o",
-        shim,
-      ],
+      buildDelayShim shim,
       expectSpawnOk (underRoot "medaka") ["build", source, "-o", binary],
       expectSpawnOkLine
         "env"
@@ -284,14 +289,7 @@ test "parked read rechecks the owner after its fd is reused" = withScratchDir
     let binary = "\{dir}/adapter_reuse"
     let args = ["LD_PRELOAD=\{shim}", "ADAPTER_DELAY=reuse", binary]
     expectAll [
-      expectSpawnOk "clang" [
-        "-shared",
-        "-fPIC",
-        underRoot "test/process_runtime_fixtures/adapter_delay.c",
-        "-ldl",
-        "-o",
-        shim,
-      ],
+      buildDelayShim shim,
       expectSpawnOk (underRoot "medaka") ["build", source, "-o", binary],
       expectSpawnOkLine "env" args "adapter fd reused",
       expectSpawnOkLine "env" args "adapter reuse passed",
@@ -304,14 +302,7 @@ test "launch cleanup errors retain the ticket for retry" = withScratchDir
     let shim = "\{dir}/delay.so"
     let binary = "\{dir}/adapter_cleanup_error"
     expectAll [
-      expectSpawnOk "clang" [
-        "-shared",
-        "-fPIC",
-        underRoot "test/process_runtime_fixtures/adapter_delay.c",
-        "-ldl",
-        "-o",
-        shim,
-      ],
+      buildDelayShim shim,
       expectSpawnOk (underRoot "medaka") ["build", source, "-o", binary],
       expectSpawnOkLine
         "env"
