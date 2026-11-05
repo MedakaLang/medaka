@@ -315,3 +315,40 @@ test "launch cleanup errors retain the ticket for retry" = withScratchDir
         "adapter cleanup error passed",
       expectSpawnOkLine binary [] "adapter cleanup error failed",
     ])
+
+test "fairness controls reject broken scheduling, offsets and owner checks" = withScratchDir
+  (dir =>
+    run
+      "python3"
+      [
+        underRoot "test/process_runtime_fixtures/fairness_mutations.py",
+        underRoot "",
+        dir,
+      ]
+      "fairness mutation controls passed")
+
+test "idle process sessions bound scheduler polling and CPU" = withScratchDir
+  (dir =>
+    let source = underRoot "test/process_runtime_fixtures/fairness_idle.mdk"
+    let binary = "\{dir}/idle"
+    let shim = "\{dir}/poll.so"
+    expectAll [
+      expectSpawnOk (underRoot "medaka") ["check", source],
+      expectSpawnOk (underRoot "medaka") ["build", source, "-o", binary],
+      expectSpawnOk "clang" [
+        "-shared",
+        "-fPIC",
+        underRoot "test/process_runtime_fixtures/fairness_poll.c",
+        "-ldl",
+        "-o",
+        shim,
+      ],
+      run
+        "python3"
+        [
+          underRoot "test/process_runtime_fixtures/fairness_idle.py",
+          binary,
+          shim,
+        ]
+        "passed",
+    ])

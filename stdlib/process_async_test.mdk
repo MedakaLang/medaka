@@ -225,3 +225,78 @@ test "continuous writable progress yields to cancellation" =
         _ => False
     _ => False
   expectTrue result
+
+test "a backpressured worker does not prevent another worker or status progress" =
+  let stalled = SpawnOptions {
+    argv = ["-c", "sleep 0.3; wc -c"],
+    cwd = "/tmp",
+    env = [],
+    stdin = Piped,
+    stdout = Piped,
+    stderr = Null,
+  }
+  let echo = SpawnOptions {
+    argv = [],
+    cwd = "/tmp",
+    env = [],
+    stdin = Piped,
+    stdout = Piped,
+    stderr = Null,
+  }
+  let deadline = runAsync (after (millis 5000))
+  let first =
+    runAsync (startUntil "/bin/sh" stalled deadline (newCancelToken ()))
+  let second =
+    runAsync (startUntil "/bin/cat" echo deadline (newCancelToken ()))
+  let result = match (first, second)
+    (Ok (Started a), Ok (Started b)) =>
+      let token = newCancelToken ()
+      let progress = Ref False
+      let status = Ref False
+      let offset = Ref 0
+      let writing = deferThen (writeUntil
+        a
+        (encodeUtf8 (repeat 1000000 "x"))
+        deadline
+        token) (outcome => liftIO (_ => match outcome
+        Ok (WriteCancelled n) => offset := n
+        _ => ()))
+      let concurrent = deferThen (spawn writing) (_ => deferThen (spawn
+        (deferThen (sleep (millis 20)) (_ => liftIO (_ =>
+          status := True)))) (_ => deferThen (writeUntil
+        b
+        (encodeUtf8 "ready")
+        deadline
+        (newCancelToken ())) (sent => deferThen (readUntil
+        b
+        ChildStdout
+        100
+        deadline
+        (newCancelToken ())) (received => deferThen (sleep
+        (millis 100)) (_ => liftIO (_ =>
+        progress :=
+          !status
+            && (match (sent, received)
+              (Ok (Written 5), Ok (Read bytes)) =>
+                decodeUtf8 bytes == Some "ready"
+              _ => False)
+        cancel token))))))
+      let _ = runAsync concurrent
+      let closedA = closeStdin a
+      let closedB = closeStdin b
+      let observed =
+        runAsync (readUntil a ChildStdout 100 deadline (newCancelToken ()))
+      let exitedA = runAsync (waitUntil a deadline (newCancelToken ()))
+      let exitedB = runAsync (waitUntil b deadline (newCancelToken ()))
+      let disposedA = dispose a
+      let disposedB = dispose b
+      match (observed, exitedA, exitedB, disposedA, disposedB, closedA, closedB)
+        (Ok (Read count), Ok (ChildExited (Exited 0)), Ok (ChildExited (Exited 0)), Ok _, Ok _, Ok _, Ok _) =>
+          !progress
+            && !status
+            && !offset > 0
+            && !offset < 1000000
+            && map trim (decodeUtf8 count) == Some (intToString !offset)
+        _ => False
+    _ => False
+  expectTrue result

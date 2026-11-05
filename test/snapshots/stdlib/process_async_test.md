@@ -1,5 +1,5 @@
 # META
-source_lines=227
+source_lines=302
 stages=DESUGAR,MARK
 # SOURCE
 import async.{Async, runAsync, sleep, expiredNow, spawn, liftIO, yield}
@@ -229,6 +229,81 @@ test "continuous writable progress yields to cancellation" =
         _ => False
     _ => False
   expectTrue result
+
+test "a backpressured worker does not prevent another worker or status progress" =
+  let stalled = SpawnOptions {
+    argv = ["-c", "sleep 0.3; wc -c"],
+    cwd = "/tmp",
+    env = [],
+    stdin = Piped,
+    stdout = Piped,
+    stderr = Null,
+  }
+  let echo = SpawnOptions {
+    argv = [],
+    cwd = "/tmp",
+    env = [],
+    stdin = Piped,
+    stdout = Piped,
+    stderr = Null,
+  }
+  let deadline = runAsync (after (millis 5000))
+  let first =
+    runAsync (startUntil "/bin/sh" stalled deadline (newCancelToken ()))
+  let second =
+    runAsync (startUntil "/bin/cat" echo deadline (newCancelToken ()))
+  let result = match (first, second)
+    (Ok (Started a), Ok (Started b)) =>
+      let token = newCancelToken ()
+      let progress = Ref False
+      let status = Ref False
+      let offset = Ref 0
+      let writing = deferThen (writeUntil
+        a
+        (encodeUtf8 (repeat 1000000 "x"))
+        deadline
+        token) (outcome => liftIO (_ => match outcome
+        Ok (WriteCancelled n) => offset := n
+        _ => ()))
+      let concurrent = deferThen (spawn writing) (_ => deferThen (spawn
+        (deferThen (sleep (millis 20)) (_ => liftIO (_ =>
+          status := True)))) (_ => deferThen (writeUntil
+        b
+        (encodeUtf8 "ready")
+        deadline
+        (newCancelToken ())) (sent => deferThen (readUntil
+        b
+        ChildStdout
+        100
+        deadline
+        (newCancelToken ())) (received => deferThen (sleep
+        (millis 100)) (_ => liftIO (_ =>
+        progress :=
+          !status
+            && (match (sent, received)
+              (Ok (Written 5), Ok (Read bytes)) =>
+                decodeUtf8 bytes == Some "ready"
+              _ => False)
+        cancel token))))))
+      let _ = runAsync concurrent
+      let closedA = closeStdin a
+      let closedB = closeStdin b
+      let observed =
+        runAsync (readUntil a ChildStdout 100 deadline (newCancelToken ()))
+      let exitedA = runAsync (waitUntil a deadline (newCancelToken ()))
+      let exitedB = runAsync (waitUntil b deadline (newCancelToken ()))
+      let disposedA = dispose a
+      let disposedB = dispose b
+      match (observed, exitedA, exitedB, disposedA, disposedB, closedA, closedB)
+        (Ok (Read count), Ok (ChildExited (Exited 0)), Ok (ChildExited (Exited 0)), Ok _, Ok _, Ok _, Ok _) =>
+          !progress
+            && !status
+            && !offset > 0
+            && !offset < 1000000
+            && map trim (decodeUtf8 count) == Some (intToString !offset)
+        _ => False
+    _ => False
+  expectTrue result
 # DESUGAR
 (DUse false (UseGroup ("async") ((mem "Async" false) (mem "runAsync" false) (mem "sleep" false) (mem "expiredNow" false) (mem "spawn" false) (mem "liftIO" false) (mem "yield" false))))
 (DUse false (UseGroup ("process") ((mem "SpawnOptions" true) (mem "PipeChoice" true) (mem "ExitStatus" true) (mem "OutputStream" true) (mem "closeStdin" false) (mem "dispose" false))))
@@ -251,6 +326,7 @@ test "continuous writable progress yields to cancellation" =
 (DTypeSig false "yieldSteps" (TyFun (TyCon "Int") (TyApp (TyApp (TyCon "Async") (TyVar "e")) (TyCon "Unit"))))
 (DFunDef false "yieldSteps" ((PVar "n")) (EIf (EBinOp "<=" (EVar "n") (ELit (LInt 0))) (EApp (EVar "deferPure") (ELit LUnit)) (EApp (EApp (EVar "deferThen") (EVar "yield")) (ELam (PWild) (EApp (EVar "yieldSteps") (EBinOp "-" (EVar "n") (ELit (LInt 1))))))))
 (DTest false "continuous writable progress yields to cancellation" (EBlock (DoLet false false (PVar "opts") (ERecordCreate "SpawnOptions" ((fa "argv" (EListLit (ELit (LString "-c")) (ELit (LString "cat >/dev/null")))) (fa "cwd" (ELit (LString "/tmp"))) (fa "env" (EListLit)) (fa "stdin" (EVar "Piped")) (fa "stdout" (EVar "Null")) (fa "stderr" (EVar "Null"))))) (DoLet false false (PVar "deadline") (EApp (EVar "runAsync") (EApp (EVar "after") (EApp (EVar "millis") (ELit (LInt 5000)))))) (DoLet false false (PVar "started") (EApp (EVar "runAsync") (EApp (EApp (EApp (EApp (EVar "startUntil") (ELit (LString "/bin/sh"))) (EVar "opts")) (EVar "deadline")) (EApp (EVar "newCancelToken") (ELit LUnit))))) (DoLet false false (PVar "result") (EMatch (EVar "started") (arm (PCon "Ok" (PCon "Started" (PVar "p"))) () (EBlock (DoLet false false (PVar "token") (EApp (EVar "newCancelToken") (ELit LUnit))) (DoLet false false (PVar "bytes") (EApp (EVar "encodeUtf8") (EApp (EApp (EVar "repeat") (ELit (LInt 10000000))) (ELit (LString "x"))))) (DoLet false false (PVar "cancelTask") (EApp (EApp (EVar "deferThen") (EApp (EVar "yieldSteps") (ELit (LInt 30)))) (ELam (PWild) (EApp (EVar "liftIO") (ELam (PWild) (EApp (EVar "cancel") (EVar "token"))))))) (DoLet false false (PVar "writing") (EApp (EApp (EVar "deferThen") (EApp (EVar "spawn") (EVar "cancelTask"))) (ELam (PWild) (EApp (EApp (EApp (EApp (EVar "writeUntil") (EVar "p")) (EVar "bytes")) (EVar "deadline")) (EVar "token"))))) (DoLet false false (PVar "written") (EApp (EVar "runAsync") (EVar "writing"))) (DoLet false false (PVar "closed") (EApp (EVar "closeStdin") (EVar "p"))) (DoLet false false (PVar "exited") (EApp (EVar "runAsync") (EApp (EApp (EApp (EVar "waitUntil") (EVar "p")) (EVar "deadline")) (EApp (EVar "newCancelToken") (ELit LUnit))))) (DoLet false false (PVar "disposed") (EApp (EVar "dispose") (EVar "p"))) (DoExpr (EMatch (ETuple (EVar "written") (EVar "closed") (EVar "exited") (EVar "disposed")) (arm (PTuple (PCon "Ok" (PCon "WriteCancelled" (PVar "n"))) (PCon "Ok" PWild) (PCon "Ok" (PCon "ChildExited" (PCon "Exited" (PLit (LInt 0))))) (PCon "Ok" PWild)) () (EBinOp "&&" (EBinOp ">" (EVar "n") (ELit (LInt 0))) (EBinOp "<" (EVar "n") (ELit (LInt 10000000))))) (arm PWild () (EVar "False")))))) (arm PWild () (EVar "False")))) (DoExpr (EApp (EVar "expectTrue") (EVar "result")))))
+(DTest false "a backpressured worker does not prevent another worker or status progress" (EBlock (DoLet false false (PVar "stalled") (ERecordCreate "SpawnOptions" ((fa "argv" (EListLit (ELit (LString "-c")) (ELit (LString "sleep 0.3; wc -c")))) (fa "cwd" (ELit (LString "/tmp"))) (fa "env" (EListLit)) (fa "stdin" (EVar "Piped")) (fa "stdout" (EVar "Piped")) (fa "stderr" (EVar "Null"))))) (DoLet false false (PVar "echo") (ERecordCreate "SpawnOptions" ((fa "argv" (EListLit)) (fa "cwd" (ELit (LString "/tmp"))) (fa "env" (EListLit)) (fa "stdin" (EVar "Piped")) (fa "stdout" (EVar "Piped")) (fa "stderr" (EVar "Null"))))) (DoLet false false (PVar "deadline") (EApp (EVar "runAsync") (EApp (EVar "after") (EApp (EVar "millis") (ELit (LInt 5000)))))) (DoLet false false (PVar "first") (EApp (EVar "runAsync") (EApp (EApp (EApp (EApp (EVar "startUntil") (ELit (LString "/bin/sh"))) (EVar "stalled")) (EVar "deadline")) (EApp (EVar "newCancelToken") (ELit LUnit))))) (DoLet false false (PVar "second") (EApp (EVar "runAsync") (EApp (EApp (EApp (EApp (EVar "startUntil") (ELit (LString "/bin/cat"))) (EVar "echo")) (EVar "deadline")) (EApp (EVar "newCancelToken") (ELit LUnit))))) (DoLet false false (PVar "result") (EMatch (ETuple (EVar "first") (EVar "second")) (arm (PTuple (PCon "Ok" (PCon "Started" (PVar "a"))) (PCon "Ok" (PCon "Started" (PVar "b")))) () (EBlock (DoLet false false (PVar "token") (EApp (EVar "newCancelToken") (ELit LUnit))) (DoLet false false (PVar "progress") (EApp (EVar "Ref") (EVar "False"))) (DoLet false false (PVar "status") (EApp (EVar "Ref") (EVar "False"))) (DoLet false false (PVar "offset") (EApp (EVar "Ref") (ELit (LInt 0)))) (DoLet false false (PVar "writing") (EApp (EApp (EVar "deferThen") (EApp (EApp (EApp (EApp (EVar "writeUntil") (EVar "a")) (EApp (EVar "encodeUtf8") (EApp (EApp (EVar "repeat") (ELit (LInt 1000000))) (ELit (LString "x"))))) (EVar "deadline")) (EVar "token"))) (ELam ((PVar "outcome")) (EApp (EVar "liftIO") (ELam (PWild) (EMatch (EVar "outcome") (arm (PCon "Ok" (PCon "WriteCancelled" (PVar "n"))) () (EApp (EApp (EVar "setRef") (EVar "offset")) (EVar "n"))) (arm PWild () (ELit LUnit)))))))) (DoLet false false (PVar "concurrent") (EApp (EApp (EVar "deferThen") (EApp (EVar "spawn") (EVar "writing"))) (ELam (PWild) (EApp (EApp (EVar "deferThen") (EApp (EVar "spawn") (EApp (EApp (EVar "deferThen") (EApp (EVar "sleep") (EApp (EVar "millis") (ELit (LInt 20))))) (ELam (PWild) (EApp (EVar "liftIO") (ELam (PWild) (EApp (EApp (EVar "setRef") (EVar "status")) (EVar "True")))))))) (ELam (PWild) (EApp (EApp (EVar "deferThen") (EApp (EApp (EApp (EApp (EVar "writeUntil") (EVar "b")) (EApp (EVar "encodeUtf8") (ELit (LString "ready")))) (EVar "deadline")) (EApp (EVar "newCancelToken") (ELit LUnit)))) (ELam ((PVar "sent")) (EApp (EApp (EVar "deferThen") (EApp (EApp (EApp (EApp (EApp (EVar "readUntil") (EVar "b")) (EVar "ChildStdout")) (ELit (LInt 100))) (EVar "deadline")) (EApp (EVar "newCancelToken") (ELit LUnit)))) (ELam ((PVar "received")) (EApp (EApp (EVar "deferThen") (EApp (EVar "sleep") (EApp (EVar "millis") (ELit (LInt 100))))) (ELam (PWild) (EApp (EVar "liftIO") (ELam (PWild) (EBlock (DoExpr (EApp (EApp (EVar "setRef") (EVar "progress")) (EBinOp "&&" (EUnOp "!" (EVar "status")) (EMatch (ETuple (EVar "sent") (EVar "received")) (arm (PTuple (PCon "Ok" (PCon "Written" (PLit (LInt 5)))) (PCon "Ok" (PCon "Read" (PVar "bytes")))) () (EBinOp "==" (EApp (EVar "decodeUtf8") (EVar "bytes")) (EApp (EVar "Some") (ELit (LString "ready"))))) (arm PWild () (EVar "False")))))) (DoExpr (EApp (EVar "cancel") (EVar "token"))))))))))))))))) (DoLet false false PWild (EApp (EVar "runAsync") (EVar "concurrent"))) (DoLet false false (PVar "closedA") (EApp (EVar "closeStdin") (EVar "a"))) (DoLet false false (PVar "closedB") (EApp (EVar "closeStdin") (EVar "b"))) (DoLet false false (PVar "observed") (EApp (EVar "runAsync") (EApp (EApp (EApp (EApp (EApp (EVar "readUntil") (EVar "a")) (EVar "ChildStdout")) (ELit (LInt 100))) (EVar "deadline")) (EApp (EVar "newCancelToken") (ELit LUnit))))) (DoLet false false (PVar "exitedA") (EApp (EVar "runAsync") (EApp (EApp (EApp (EVar "waitUntil") (EVar "a")) (EVar "deadline")) (EApp (EVar "newCancelToken") (ELit LUnit))))) (DoLet false false (PVar "exitedB") (EApp (EVar "runAsync") (EApp (EApp (EApp (EVar "waitUntil") (EVar "b")) (EVar "deadline")) (EApp (EVar "newCancelToken") (ELit LUnit))))) (DoLet false false (PVar "disposedA") (EApp (EVar "dispose") (EVar "a"))) (DoLet false false (PVar "disposedB") (EApp (EVar "dispose") (EVar "b"))) (DoExpr (EMatch (ETuple (EVar "observed") (EVar "exitedA") (EVar "exitedB") (EVar "disposedA") (EVar "disposedB") (EVar "closedA") (EVar "closedB")) (arm (PTuple (PCon "Ok" (PCon "Read" (PVar "count"))) (PCon "Ok" (PCon "ChildExited" (PCon "Exited" (PLit (LInt 0))))) (PCon "Ok" (PCon "ChildExited" (PCon "Exited" (PLit (LInt 0))))) (PCon "Ok" PWild) (PCon "Ok" PWild) (PCon "Ok" PWild) (PCon "Ok" PWild)) () (EBinOp "&&" (EBinOp "&&" (EBinOp "&&" (EBinOp "&&" (EUnOp "!" (EVar "progress")) (EUnOp "!" (EVar "status"))) (EBinOp ">" (EUnOp "!" (EVar "offset")) (ELit (LInt 0)))) (EBinOp "<" (EUnOp "!" (EVar "offset")) (ELit (LInt 1000000)))) (EBinOp "==" (EApp (EApp (EVar "map") (EVar "trim")) (EApp (EVar "decodeUtf8") (EVar "count"))) (EApp (EVar "Some") (EApp (EVar "intToString") (EUnOp "!" (EVar "offset"))))))) (arm PWild () (EVar "False")))))) (arm PWild () (EVar "False")))) (DoExpr (EApp (EVar "expectTrue") (EVar "result")))))
 # MARK
 (DUse false (UseGroup ("async") ((mem "Async" false) (mem "runAsync" false) (mem "sleep" false) (mem "expiredNow" false) (mem "spawn" false) (mem "liftIO" false) (mem "yield" false))))
 (DUse false (UseGroup ("process") ((mem "SpawnOptions" true) (mem "PipeChoice" true) (mem "ExitStatus" true) (mem "OutputStream" true) (mem "closeStdin" false) (mem "dispose" false))))
@@ -273,3 +349,4 @@ test "continuous writable progress yields to cancellation" =
 (DTypeSig false "yieldSteps" (TyFun (TyCon "Int") (TyApp (TyApp (TyCon "Async") (TyVar "e")) (TyCon "Unit"))))
 (DFunDef false "yieldSteps" ((PVar "n")) (EIf (EBinOp "<=" (EVar "n") (ELit (LInt 0))) (EApp (EMethodRef "deferPure") (ELit LUnit)) (EApp (EApp (EMethodRef "deferThen") (EVar "yield")) (ELam (PWild) (EApp (EVar "yieldSteps") (EBinOp "-" (EVar "n") (ELit (LInt 1))))))))
 (DTest false "continuous writable progress yields to cancellation" (EBlock (DoLet false false (PVar "opts") (ERecordCreate "SpawnOptions" ((fa "argv" (EListLit (ELit (LString "-c")) (ELit (LString "cat >/dev/null")))) (fa "cwd" (ELit (LString "/tmp"))) (fa "env" (EListLit)) (fa "stdin" (EVar "Piped")) (fa "stdout" (EVar "Null")) (fa "stderr" (EVar "Null"))))) (DoLet false false (PVar "deadline") (EApp (EVar "runAsync") (EApp (EVar "after") (EApp (EVar "millis") (ELit (LInt 5000)))))) (DoLet false false (PVar "started") (EApp (EVar "runAsync") (EApp (EApp (EApp (EApp (EVar "startUntil") (ELit (LString "/bin/sh"))) (EVar "opts")) (EVar "deadline")) (EApp (EVar "newCancelToken") (ELit LUnit))))) (DoLet false false (PVar "result") (EMatch (EVar "started") (arm (PCon "Ok" (PCon "Started" (PVar "p"))) () (EBlock (DoLet false false (PVar "token") (EApp (EVar "newCancelToken") (ELit LUnit))) (DoLet false false (PVar "bytes") (EApp (EVar "encodeUtf8") (EApp (EApp (EVar "repeat") (ELit (LInt 10000000))) (ELit (LString "x"))))) (DoLet false false (PVar "cancelTask") (EApp (EApp (EMethodRef "deferThen") (EApp (EVar "yieldSteps") (ELit (LInt 30)))) (ELam (PWild) (EApp (EVar "liftIO") (ELam (PWild) (EApp (EVar "cancel") (EVar "token"))))))) (DoLet false false (PVar "writing") (EApp (EApp (EMethodRef "deferThen") (EApp (EVar "spawn") (EVar "cancelTask"))) (ELam (PWild) (EApp (EApp (EApp (EApp (EVar "writeUntil") (EVar "p")) (EVar "bytes")) (EVar "deadline")) (EVar "token"))))) (DoLet false false (PVar "written") (EApp (EVar "runAsync") (EVar "writing"))) (DoLet false false (PVar "closed") (EApp (EVar "closeStdin") (EVar "p"))) (DoLet false false (PVar "exited") (EApp (EVar "runAsync") (EApp (EApp (EApp (EVar "waitUntil") (EVar "p")) (EVar "deadline")) (EApp (EVar "newCancelToken") (ELit LUnit))))) (DoLet false false (PVar "disposed") (EApp (EVar "dispose") (EVar "p"))) (DoExpr (EMatch (ETuple (EVar "written") (EVar "closed") (EVar "exited") (EVar "disposed")) (arm (PTuple (PCon "Ok" (PCon "WriteCancelled" (PVar "n"))) (PCon "Ok" PWild) (PCon "Ok" (PCon "ChildExited" (PCon "Exited" (PLit (LInt 0))))) (PCon "Ok" PWild)) () (EBinOp "&&" (EBinOp ">" (EVar "n") (ELit (LInt 0))) (EBinOp "<" (EVar "n") (ELit (LInt 10000000))))) (arm PWild () (EVar "False")))))) (arm PWild () (EVar "False")))) (DoExpr (EApp (EVar "expectTrue") (EVar "result")))))
+(DTest false "a backpressured worker does not prevent another worker or status progress" (EBlock (DoLet false false (PVar "stalled") (ERecordCreate "SpawnOptions" ((fa "argv" (EListLit (ELit (LString "-c")) (ELit (LString "sleep 0.3; wc -c")))) (fa "cwd" (ELit (LString "/tmp"))) (fa "env" (EListLit)) (fa "stdin" (EVar "Piped")) (fa "stdout" (EVar "Piped")) (fa "stderr" (EVar "Null"))))) (DoLet false false (PVar "echo") (ERecordCreate "SpawnOptions" ((fa "argv" (EListLit)) (fa "cwd" (ELit (LString "/tmp"))) (fa "env" (EListLit)) (fa "stdin" (EVar "Piped")) (fa "stdout" (EVar "Piped")) (fa "stderr" (EVar "Null"))))) (DoLet false false (PVar "deadline") (EApp (EVar "runAsync") (EApp (EVar "after") (EApp (EVar "millis") (ELit (LInt 5000)))))) (DoLet false false (PVar "first") (EApp (EVar "runAsync") (EApp (EApp (EApp (EApp (EVar "startUntil") (ELit (LString "/bin/sh"))) (EVar "stalled")) (EVar "deadline")) (EApp (EVar "newCancelToken") (ELit LUnit))))) (DoLet false false (PVar "second") (EApp (EVar "runAsync") (EApp (EApp (EApp (EApp (EVar "startUntil") (ELit (LString "/bin/cat"))) (EVar "echo")) (EVar "deadline")) (EApp (EVar "newCancelToken") (ELit LUnit))))) (DoLet false false (PVar "result") (EMatch (ETuple (EVar "first") (EVar "second")) (arm (PTuple (PCon "Ok" (PCon "Started" (PVar "a"))) (PCon "Ok" (PCon "Started" (PVar "b")))) () (EBlock (DoLet false false (PVar "token") (EApp (EVar "newCancelToken") (ELit LUnit))) (DoLet false false (PVar "progress") (EApp (EVar "Ref") (EVar "False"))) (DoLet false false (PVar "status") (EApp (EVar "Ref") (EVar "False"))) (DoLet false false (PVar "offset") (EApp (EVar "Ref") (ELit (LInt 0)))) (DoLet false false (PVar "writing") (EApp (EApp (EMethodRef "deferThen") (EApp (EApp (EApp (EApp (EVar "writeUntil") (EVar "a")) (EApp (EVar "encodeUtf8") (EApp (EApp (EVar "repeat") (ELit (LInt 1000000))) (ELit (LString "x"))))) (EVar "deadline")) (EVar "token"))) (ELam ((PVar "outcome")) (EApp (EVar "liftIO") (ELam (PWild) (EMatch (EVar "outcome") (arm (PCon "Ok" (PCon "WriteCancelled" (PVar "n"))) () (EApp (EApp (EVar "setRef") (EVar "offset")) (EVar "n"))) (arm PWild () (ELit LUnit)))))))) (DoLet false false (PVar "concurrent") (EApp (EApp (EMethodRef "deferThen") (EApp (EVar "spawn") (EVar "writing"))) (ELam (PWild) (EApp (EApp (EMethodRef "deferThen") (EApp (EVar "spawn") (EApp (EApp (EMethodRef "deferThen") (EApp (EVar "sleep") (EApp (EVar "millis") (ELit (LInt 20))))) (ELam (PWild) (EApp (EVar "liftIO") (ELam (PWild) (EApp (EApp (EVar "setRef") (EVar "status")) (EVar "True")))))))) (ELam (PWild) (EApp (EApp (EMethodRef "deferThen") (EApp (EApp (EApp (EApp (EVar "writeUntil") (EVar "b")) (EApp (EVar "encodeUtf8") (ELit (LString "ready")))) (EVar "deadline")) (EApp (EVar "newCancelToken") (ELit LUnit)))) (ELam ((PVar "sent")) (EApp (EApp (EMethodRef "deferThen") (EApp (EApp (EApp (EApp (EApp (EVar "readUntil") (EVar "b")) (EVar "ChildStdout")) (ELit (LInt 100))) (EVar "deadline")) (EApp (EVar "newCancelToken") (ELit LUnit)))) (ELam ((PVar "received")) (EApp (EApp (EMethodRef "deferThen") (EApp (EVar "sleep") (EApp (EVar "millis") (ELit (LInt 100))))) (ELam (PWild) (EApp (EVar "liftIO") (ELam (PWild) (EBlock (DoExpr (EApp (EApp (EVar "setRef") (EVar "progress")) (EBinOp "&&" (EUnOp "!" (EVar "status")) (EMatch (ETuple (EVar "sent") (EVar "received")) (arm (PTuple (PCon "Ok" (PCon "Written" (PLit (LInt 5)))) (PCon "Ok" (PCon "Read" (PVar "bytes")))) () (EBinOp "==" (EApp (EVar "decodeUtf8") (EVar "bytes")) (EApp (EVar "Some") (ELit (LString "ready"))))) (arm PWild () (EVar "False")))))) (DoExpr (EApp (EVar "cancel") (EVar "token"))))))))))))))))) (DoLet false false PWild (EApp (EVar "runAsync") (EVar "concurrent"))) (DoLet false false (PVar "closedA") (EApp (EVar "closeStdin") (EVar "a"))) (DoLet false false (PVar "closedB") (EApp (EVar "closeStdin") (EVar "b"))) (DoLet false false (PVar "observed") (EApp (EVar "runAsync") (EApp (EApp (EApp (EApp (EApp (EVar "readUntil") (EVar "a")) (EVar "ChildStdout")) (ELit (LInt 100))) (EVar "deadline")) (EApp (EVar "newCancelToken") (ELit LUnit))))) (DoLet false false (PVar "exitedA") (EApp (EVar "runAsync") (EApp (EApp (EApp (EVar "waitUntil") (EVar "a")) (EVar "deadline")) (EApp (EVar "newCancelToken") (ELit LUnit))))) (DoLet false false (PVar "exitedB") (EApp (EVar "runAsync") (EApp (EApp (EApp (EVar "waitUntil") (EVar "b")) (EVar "deadline")) (EApp (EVar "newCancelToken") (ELit LUnit))))) (DoLet false false (PVar "disposedA") (EApp (EVar "dispose") (EVar "a"))) (DoLet false false (PVar "disposedB") (EApp (EVar "dispose") (EVar "b"))) (DoExpr (EMatch (ETuple (EVar "observed") (EVar "exitedA") (EVar "exitedB") (EVar "disposedA") (EVar "disposedB") (EVar "closedA") (EVar "closedB")) (arm (PTuple (PCon "Ok" (PCon "Read" (PVar "count"))) (PCon "Ok" (PCon "ChildExited" (PCon "Exited" (PLit (LInt 0))))) (PCon "Ok" (PCon "ChildExited" (PCon "Exited" (PLit (LInt 0))))) (PCon "Ok" PWild) (PCon "Ok" PWild) (PCon "Ok" PWild) (PCon "Ok" PWild)) () (EBinOp "&&" (EBinOp "&&" (EBinOp "&&" (EBinOp "&&" (EUnOp "!" (EVar "progress")) (EUnOp "!" (EVar "status"))) (EBinOp ">" (EUnOp "!" (EVar "offset")) (ELit (LInt 0)))) (EBinOp "<" (EUnOp "!" (EVar "offset")) (ELit (LInt 1000000)))) (EBinOp "==" (EApp (EApp (EMethodRef "map") (EVar "trim")) (EApp (EVar "decodeUtf8") (EDictApp "count"))) (EApp (EVar "Some") (EApp (EVar "intToString") (EUnOp "!" (EVar "offset"))))))) (arm PWild () (EVar "False")))))) (arm PWild () (EVar "False")))) (DoExpr (EApp (EVar "expectTrue") (EVar "result")))))

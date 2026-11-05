@@ -83,6 +83,21 @@ static void pending_work(long long p) {
   CHECK(ticks==1000); CHECK(now()-before<0.2);
   GC_gcollect(); CHECK(mdk_process_test_roots()>=1);
 }
+static void repeated_resources(void) {
+  const int sessions=32; int baseline=fds();
+  struct rusage before, after; CHECK(getrusage(RUSAGE_SELF,&before)==0);
+  GC_gcollect(); size_t allocated=GC_get_total_bytes(), heap=GC_get_heap_size();
+  size_t live=heap-GC_get_free_bytes();
+  for (int i=0;i<sessions;++i) {
+    long long p=ticket("/bin/true"); CHECK(kind(drain(p,0))==1); finish(p); empty();
+  }
+  GC_gcollect(); CHECK(getrusage(RUSAGE_SELF,&after)==0);
+  size_t bytes=GC_get_total_bytes()-allocated, retained=GC_get_heap_size();
+  size_t live_after=retained-GC_get_free_bytes();
+  CHECK(fds()==baseline); CHECK(bytes<64*1024*1024); CHECK(retained<=heap+64*1024*1024);
+  CHECK(live_after<=live+64*1024*1024); CHECK(after.ru_maxrss<=before.ru_maxrss+64*1024);
+  printf("resource sessions=%d allocation_bytes=%zu gc_heap_before=%zu gc_heap_after=%zu gc_used_before=%zu gc_used_after=%zu roots=0 permits=0 fds=%d peak_rss_kib=%ld passed\n", sessions,bytes,heap,retained,live,live_after,baseline,after.ru_maxrss);
+}
 static void before_creation(void) {
   int baseline=fds(); Gate g;gate_open(&g);
   mdk_process_test_submit_hold(1,g.gate[0],g.ready[1]);
@@ -293,7 +308,7 @@ int mdk_program_main(int argc,char **argv) {
   else if (argc>1 && !strcmp(argv[1],"signal")) kernel_denial(1);
   else if (argc>1 && !strcmp(argv[1],"wait")) kernel_denial(0);
   else {
-    pipe_failure_slots();bounds();before_creation();creation_race();before_exec();overflow();wait_denial();lost_wait();trylocks();roots_and_env();synchronous_retry();
+    pipe_failure_slots();bounds();repeated_resources();before_creation();creation_race();before_exec();overflow();wait_denial();lost_wait();trylocks();roots_and_env();synchronous_retry();
   }
   CHECK(checks>10);printf("submission controls: %d passed\n",checks);return 0;
 }

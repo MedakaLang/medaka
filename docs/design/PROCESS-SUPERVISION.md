@@ -245,6 +245,10 @@ production does not assume an independently authorized cleanup thread.
 Linux mechanisms passed on this host. Production ownership, hard wall-clock
 bounds, readiness and macOS support are not established by these probes.
 
+## Delivered process I/O boundary
+
+The native process API now provides bounded `tryRead`, `tryWrite`, and `streamFd` operations, and `process_async` provides deadline- and cancellation-aware reads, writes, direct-child waits, and asynchronous launch submission. Launch cleanup can retain a ticket that the caller must drain. Direct-child exit and pipe EOF do not establish descendant containment; #4855 owns the stronger containment and cleanup boundary. Borrowed stdio leasing, its legacy-I/O interlock, and MCP client backpressure remain future work. The proposal sections below retain their original design context rather than describing the current export list.
+
 ## Extern/ABI proposal
 
 `stdlib/runtime.mdk` contains syscall signatures using core-only types, not ProcessError/SpawnOptions imports that create cycles:
