@@ -1,0 +1,12 @@
+import process.{start, SpawnOptions(..), PipeChoice(..)}
+options = SpawnOptions {
+  argv = [],
+  cwd = "/tmp",
+  env = [],
+  stdin = Null,
+  stdout = Null,
+  stderr = Null,
+}
+wrong : Unit -> <Exec "/bin/false"> Unit
+wrong _ = let _ = start "/bin/sh" options in ()
+main = ()

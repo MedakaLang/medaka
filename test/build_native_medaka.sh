@@ -63,6 +63,7 @@ export GC_INITIAL_HEAP_SIZE="${GC_INITIAL_HEAP_SIZE:-1073741824}"
 OUT="${1:-$ROOT/medaka}"
 EMITTER="$ROOT/medaka_emitter"
 RT="$ROOT/runtime/medaka_rt.c"
+PROCESS_RT="$ROOT/runtime/medaka_process.c"
 RUNTIME="$ROOT/stdlib/runtime.mdk"
 CORE="$ROOT/stdlib/core.mdk"
 DRIVER="$ROOT/compiler/entries/llvm_emit_modules_main.mdk"
@@ -936,7 +937,7 @@ pcg_link() {
 
     # $_objs, $PCG_LTO_LDFLAGS and the GC flag vars are deliberately unquoted word lists.
     "$CC" -pthread "$_popt" -flto=thin $PCG_LTO_LDFLAGS "$@" $GC_SECTION_CFLAGS $GC_CFLAGS \
-          $_objs "$RT" $GC_LIBS "$GC_SECTION_LDFLAGS" -lm -o "$_pout" 2>>"$_perr"
+          $_objs "$RT" "$PROCESS_RT" $GC_LIBS "$GC_SECTION_LDFLAGS" -lm -o "$_pout" 2>>"$_perr"
   )
 }
 
@@ -1053,7 +1054,7 @@ else
     # "which codegen path did this build take" is only answerable from a log when
     # the answer happens to be "thinlto".
     echo "stage A: plain clang ${EMITTER_OPT:--O2} link (parallel codegen disabled or its LLVM tools not found) -> $EMITTER ..."
-    if ! "$CC" -pthread "${EMITTER_OPT:--O2}" $GC_SECTION_CFLAGS $GC_CFLAGS "$EMIT_LL" "$RT" $GC_LIBS "$GC_SECTION_LDFLAGS" -lm -o "$EMIT_NEW" 2>"$WORK/emitA-cc.err"; then
+    if ! "$CC" -pthread "${EMITTER_OPT:--O2}" $GC_SECTION_CFLAGS $GC_CFLAGS "$EMIT_LL" "$RT" "$PROCESS_RT" $GC_LIBS "$GC_SECTION_LDFLAGS" -lm -o "$EMIT_NEW" 2>"$WORK/emitA-cc.err"; then
       rm -f "$EMIT_NEW"
       echo "FAIL (clang fresh emitter): $(cat "$WORK/emitA-cc.err")"; exit 1
     fi
@@ -1184,7 +1185,7 @@ else
     fi
   else
     echo "stage B: plain clang(medaka_cli.ll, $CLI_OPT) link (parallel codegen disabled or its LLVM tools not found) -> $OUT ..."
-    if ! "$CC" -pthread "$CLI_OPT" "$PROV_O" $GC_SECTION_CFLAGS $GC_CFLAGS "$CLI_LL" "$RT" $GC_LIBS "$GC_SECTION_LDFLAGS" -lm -o "$OUT_NEW" 2>"$WORK/cc.err"; then
+    if ! "$CC" -pthread "$CLI_OPT" "$PROV_O" $GC_SECTION_CFLAGS $GC_CFLAGS "$CLI_LL" "$RT" "$PROCESS_RT" $GC_LIBS "$GC_SECTION_LDFLAGS" -lm -o "$OUT_NEW" 2>"$WORK/cc.err"; then
       rm -f "$OUT_NEW"
       echo "FAIL (clang medaka): $(cat "$WORK/cc.err")"; exit 1
     fi

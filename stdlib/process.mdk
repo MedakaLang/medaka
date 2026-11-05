@@ -1,0 +1,135 @@
+public export data PipeChoice = Piped | Null
+
+public export data SpawnOptions = SpawnOptions {
+  argv : List String,
+  cwd : String,
+  env : List (String, String),
+  stdin : PipeChoice,
+  stdout : PipeChoice,
+  stderr : PipeChoice,
+}
+
+public export data ProcessOperation =
+  | Validate
+  | Pipe
+  | Fork
+  | Chdir
+  | ExecImage
+  | Wait
+  | Close
+  | LaunchHandshake
+public export data ProcessError =
+  | InvalidSpawn String
+  | SpawnFailed ProcessOperation Int String
+  | ProcessClosed
+  | StillRunning
+  | WaitFailed Int String
+  | CloseFailed Int String
+  | Unsupported String
+  | LaunchCancelled
+public export data ExitStatus = Exited Int | Signalled Int Bool
+public export data StartError ticket =
+  | StartRejected ProcessError
+  | StartCleanupPending ProcessError ticket
+public export data LaunchProgress process =
+  | LaunchPending
+  | LaunchStarted process
+  | LaunchFailed ProcessError
+  | LaunchAborted
+
+choice : PipeChoice -> Int
+choice Piped = 0
+choice Null = 1
+
+rawError : (Int, Int, String) -> ProcessError
+rawError (0, _, msg) = InvalidSpawn msg
+rawError (1, e, msg) = SpawnFailed Pipe e msg
+rawError (2, e, msg) = SpawnFailed Fork e msg
+rawError (3, e, msg) = SpawnFailed Chdir e msg
+rawError (4, e, msg) = SpawnFailed ExecImage e msg
+rawError (5, e, msg) = WaitFailed e msg
+rawError (6, e, msg) = CloseFailed e msg
+rawError (7, _, msg) = Unsupported msg
+rawError (8, _, _) = ProcessClosed
+rawError (9, _, _) = StillRunning
+rawError (10, _, msg) = Unsupported msg
+rawError (11, e, msg) = SpawnFailed LaunchHandshake e msg
+rawError (12, _, _) = LaunchCancelled
+rawError _ = panic "process: invalid error code"
+
+startResult : Result (Int, Int, String, Option (LaunchTicket p)) (Process p) ->
+  Result (StartError (LaunchTicket p)) (Process p)
+startResult (Ok p) = Ok p
+startResult (Err (op, err, msg, None)) =
+  Err (StartRejected (rawError (op, err, msg)))
+startResult (Err (op, err, msg, Some ticket)) =
+  Err (StartCleanupPending (rawError (op, err, msg)) ticket)
+
+progressResult : Result (Int, Int, String) (Int, Option (Process p), Option (Int, Int, String)) ->
+  Result ProcessError (LaunchProgress (Process p))
+progressResult (Err e) = Err (rawError e)
+progressResult (Ok (0, None, None)) = Ok LaunchPending
+progressResult (Ok (1, Some p, None)) = Ok (LaunchStarted p)
+progressResult (Ok (2, None, Some e)) = Ok (LaunchFailed (rawError e))
+progressResult (Ok (3, None, None)) = Ok LaunchAborted
+progressResult _ = panic "process: invalid launch progress ABI"
+
+export
+start : (program : String) ->
+  SpawnOptions ->
+  <Exec program> Result (StartError (LaunchTicket program)) (Process program)
+start program opts =
+  startResult
+    (processStartRaw
+      program
+      opts.argv
+      opts.cwd
+      opts.env
+      (choice opts.stdin)
+      (choice opts.stdout)
+      (choice opts.stderr))
+
+export
+retryStart : LaunchTicket p ->
+  <Exec p> Result (StartError (LaunchTicket p)) (Process p)
+retryStart ticket = startResult (processRetryStartRaw ticket)
+
+export
+checkStart : LaunchTicket p ->
+  <Exec p> Result ProcessError (LaunchProgress (Process p))
+checkStart ticket = progressResult (processCheckStartRaw ticket)
+
+export
+abortStart : LaunchTicket p ->
+  <Exec p> Result ProcessError (LaunchProgress (Process p))
+abortStart ticket = progressResult (processAbortStartRaw ticket)
+
+exitStatus : (Int, Int, Bool) -> ExitStatus
+exitStatus (0, code, _) = Exited code
+exitStatus (1, sig, core) = Signalled sig core
+exitStatus _ = panic "process: invalid exit status ABI"
+
+export
+pollExit : Process p -> <Exec p> Result ProcessError (Option ExitStatus)
+pollExit p = match processPollExitRaw p
+  Err e => Err (rawError e)
+  Ok status => Ok (map exitStatus status)
+
+export
+closeStdin : Process p -> <Exec p> Result ProcessError Unit
+closeStdin p = mapErr rawError (processCloseStdinRaw p)
+
+export
+dispose : Process p -> <Exec p> Result ProcessError Unit
+dispose p = mapErr rawError (processDisposeRaw p)
+
+import test.{expectTrue}
+
+test "launch progress decodes pending, failed, and aborted shapes" =
+  let pending = progressResult (Ok (0, None, None))
+  let failed = progressResult (Ok (2, None, Some (12, 0, "cancelled")))
+  let aborted = progressResult (Ok (3, None, None))
+  expectTrue (match (pending, failed, aborted)
+    (Ok LaunchPending, Ok (LaunchFailed LaunchCancelled), Ok LaunchAborted) =>
+      True
+    _ => False)

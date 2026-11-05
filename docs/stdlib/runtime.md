@@ -1485,3 +1485,45 @@ stringToLower : String -> String
 
 A string with every ASCII letter in lowercase.
 
+### `processStartRaw`
+
+```
+processStartRaw : (program : String) -> List String -> String -> List (String, String) -> Int -> Int -> Int -> <Exec program> Result (Int, Int, String, Option (LaunchTicket program)) (Process program)
+```
+
+### `processRetryStartRaw`
+
+```
+processRetryStartRaw : LaunchTicket p -> <Exec p> Result (Int, Int, String, Option (LaunchTicket p)) (Process p)
+```
+
+### `processCheckStartRaw`
+
+```
+processCheckStartRaw : LaunchTicket p -> <Exec p> Result (Int, Int, String) (Int, Option (Process p), Option (Int, Int, String))
+```
+
+### `processAbortStartRaw`
+
+```
+processAbortStartRaw : LaunchTicket p -> <Exec p> Result (Int, Int, String) (Int, Option (Process p), Option (Int, Int, String))
+```
+
+### `processPollExitRaw`
+
+```
+processPollExitRaw : Process p -> <Exec p> Result (Int, Int, String) (Option (Int, Int, Bool))
+```
+
+### `processCloseStdinRaw`
+
+```
+processCloseStdinRaw : Process p -> <Exec p> Result (Int, Int, String) Unit
+```
+
+### `processDisposeRaw`
+
+```
+processDisposeRaw : Process p -> <Exec p> Result (Int, Int, String) Unit
+```
+

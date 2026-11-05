@@ -1,0 +1,68 @@
+import test_process.{underRoot, boundedVerb, withScratchDir}
+import test.{Expectation, expectAll, fail, pass}
+import string.{contains}
+
+run : String -> List String -> String -> <Exec> Expectation
+run cmd args marker = match boundedVerb cmd args
+  Err e => fail "could not run \{cmd}: \{e}"
+  Ok (code, out, err) =>
+    if code == 0 && contains marker out then
+      pass
+    else
+      fail "\{cmd} exited \{intToString code}: \{out}\{err}"
+
+fixture : String ->
+  String ->
+  List String ->
+  <Exec, IO, FileRead, FileWrite> Expectation
+fixture dir name modes =
+  let output = "\{dir}/\{name}"
+  let built = boundedVerb "clang" [
+    "-DMDK_PROCESS_TESTING",
+    "-std=gnu11",
+    "-O0",
+    "-pthread",
+    "-I\{underRoot "runtime"}",
+    underRoot "runtime/medaka_rt.c",
+    underRoot "runtime/medaka_process.c",
+    underRoot "test/process_runtime_fixtures/\{name}.c",
+    "-lgc",
+    "-lm",
+    "-o",
+    output,
+  ]
+  match built
+    Err e => fail "could not compile \{name}: \{e}"
+    Ok (code, _, err) =>
+      if code /= 0 then
+        fail "compiling \{name} failed: \{err}"
+      else
+        expectAll
+          (map
+            (mode => run output (if mode == "" then [] else [mode]) " passed")
+            modes)
+
+test "real process owner and launch tickets retain resources through failures" = withScratchDir
+  (dir => expectAll [
+    fixture dir "owner_smoke" [
+      "", "deny-clone", "deny-signal", "deny-wait", "deny-close", "sigpipe",
+      "selective-close"
+    ],
+    fixture dir "launch_tickets" ["", "signal", "wait", "signal-stalled"],
+  ])
+
+test "owner fixture rejects an incorrect exit status" = withScratchDir (dir =>
+  let script =
+    """
+set -eu
+sed 's/field(t,2)==255/field(t,2)==253/g' "$1/test/process_runtime_fixtures/owner_smoke.c" > "$2/mutant.c"
+grep -q 'field(t,2)==253' "$2/mutant.c"
+clang -DMDK_PROCESS_TESTING -std=gnu11 -O0 -pthread -I"$1/runtime" "$1/runtime/medaka_rt.c" "$1/runtime/medaka_process.c" "$2/mutant.c" -lgc -lm -o "$2/mutant"
+if "$2/mutant" >"$2/out" 2>&1; then exit 1; fi
+grep -q 'field(t,2)==253' "$2/out"
+printf 'control failed as expected\n'
+"""
+  run
+    "sh"
+    ["-c", script, "control", underRoot "", dir]
+    "control failed as expected")

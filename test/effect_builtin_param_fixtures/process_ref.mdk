@@ -1,0 +1,5 @@
+import process.{StartError}
+bad : Ref (StartError (LaunchTicket "/bin/a")) ->
+  Ref (StartError (LaunchTicket "/bin/b"))
+bad x = x
+main = ()

@@ -8,7 +8,8 @@ description: The one-page sprint slice packet and report format. Load when writi
 In Codex, first read [.codex/SPRINT.md](../../../.codex/SPRINT.md) for the
 prepared-worktree form of §2 and model mappings. In Pi, read `.pi/SPRINT.md`
 from the repository root for its injected-worktree form and project roles.
-Keep the six-section contract.
+Keep the six-section contract. The incidents behind this skill's rules are in
+`.claude/dossier/sprint.md`.
 
 A packet is ONE PAGE — target ≤80 lines, hard ceiling 120. It exists so an
 implementer can start coding within minutes of reading it. Everything the
@@ -41,12 +42,9 @@ make -C <worktree> medaka                           # cold bootstrap, ~31 s
 
 (`slice-<slice-id>` is a throwaway LOCAL branch, never pushed under that name — you
 still push by ref to the sprint branch. The name must be unique per slice AND per
-re-dispatch (suffix `-2` on a retry): worktrees share one `.git`, and a fixed name
-like `slice-work` collides with any other session's worktree that holds it, which
-BLOCKED the first dispatch of a sprint. It exists so the checkout does not
-leave you on a detached HEAD, where a later commit lands on a dangling line
-and strands: `.claude/ORCHESTRATING.md` records two verified phases lost that
-way, recoverable only via `git reflog`.)
+re-dispatch (suffix `-2` on a retry), because worktrees share one `.git`. It
+exists so the checkout does not leave you on a detached HEAD, where a later
+commit strands.)
 
 The checkout MOVES to the sprint base; it does not merge `main` into it. A
 sprint branch is never required to be current with `main` ([W-MERGE-QUEUE] —
@@ -57,18 +55,10 @@ means the packet's base is stale — the sprint branch moved after this packet
 was authored — and that IS a BLOCKED, because the diff would be written
 against a tree the orchestrator has already moved past.
 
-(The former `merge --ff-only <base>` form failed whenever `main` moved,
-regardless of whether anything relevant had changed, and cost a dozen recorded
-dispatches — worktree mint plus a refusal write-up — on docs-only, CI-only and
-stdlib-only landings.)
-
-**Scratch and waiting, one line in every packet.** Make scratch directories with
-`mktemp -d` and never write into an existing `/var/tmp/medaka-scratch/*`
-directory (one slice overwrote a `medaka` binary in another session's tree). Wait
-on a build or a gate in the foreground (or with `pr.sh` for a PR), never with a
-hand-rolled `until ! pgrep -f "<pattern>"; do sleep N; done`: `pgrep -f` matches
-the loop's own wrapper shell, so the loop never ends (three agents left such
-loops running for 17 to 25 hours).
+**Waiting, one line in every packet** (stopgap until #4881 (hook: deny
+self-matching pgrep -f wait loops) lands; then delete it): wait on a build or a
+gate in the foreground, or with `pr.sh` for a PR, never with a hand-rolled
+`until ! pgrep -f "<pattern>"` loop, which matches its own shell and never ends.
 
 **§3 Mission.** One paragraph: the transformation and what is true after it
 lands. State the classification: parity (behavior identical, IR may prove it)
@@ -101,7 +91,7 @@ in §6, and choose the claim-bearing tests within its existing 3–5-check ceili
 A packet that adds a stdlib file names its three pins in §5: the `diagnostics_test`
 module count, the `stage_counts` lint_probe pairs, and the lib suites/exempt row in
 `pds/test/inlang_test_oracle_test.mdk` or `sqlite/test/inlang_test_oracle_test.mdk`.
-No tool derives them.
+Stopgap until #4882 (stdlib-file pins no tool derives) lands; then delete it.
 
 When a site is a test file, name the assertion verb the slice should reach for,
 from the `write-tests` skill's § "The assertion vocabulary — pick the verb,
@@ -120,8 +110,7 @@ finding, never a bless. The one exception is the snapshot of a source file the
 slice itself edits (a comment edit moves it too, `[T-SNAPSHOT-SELF]`): do not
 hand-list those, run `make snapshot-check` and bless each file it names by path
 in the same slice. A snapshot of a file the slice did not edit moving is the
-finding. (param-clump-sweep FIX-3 hand-listed five snapshots and missed the
-sixth, `medaka_cli`.) Decide expected values from semantics before
+finding. Decide expected values from semantics before
 capturing anything — a captured golden records what the engine DID, not what
 is correct.
 
@@ -129,36 +118,23 @@ is correct.
 over a program the compiler refuses demands the same verdict (accept or
 reject), exit code, diagnostic code and message class on both arms; location,
 envelope and ordering are free unless the slice is about them. Byte equality
-is demanded only for an accepted program's output. Phase 1's sprint 8 lost a
-fix round to a packet that demanded byte equality at `4:12` where the drive
-now reports at `4:0`.
+is demanded only for an accepted program's output.
 
 **Two standing checks sit outside the ceiling** because they are cheap and the
 record shows them red only at the merge queue: `medaka test <touched compiler
-directory>` (Phase 1 sprint 6: two in-language test reds in `compiler/types`)
-and `medaka gate verify` followed by
-`sh test/run_gates.sh diff_compiler_gate_registry diff_compiler_check_wrapper_callers`
-(sprint 7: two ledger reds found only by the unnarrowed run). They replace the
-old "touched directory's native test target" line; they are not an invitation
-to enumerate further.
+directory>` and `medaka gate verify` followed by
+`sh test/run_gates.sh diff_compiler_gate_registry diff_compiler_check_wrapper_callers`.
+They are not an invitation to enumerate further.
 
 **A slice that touches `compiler/**.mdk` also runs two gates `make preflight`
-does not derive**, because their `sources` in `test/gates.toml` do not name
-compiler files: `sh test/diff_compiler_lint_baseline.sh` and
-`sh test/typecheck_compiler_source.sh` (vis-test-split S-sinks-public items 5
-and 18; R35 migration's `lint_baseline` red). Name both by command. This is an
-interim line: it is deleted when those two gates declare `sources` and
-`PREFLIGHT_DRY=1 sh test/preflight.sh` derives them. Do not write "preflight
-derives the rest" or "never a hand list" into a contract. `arch_boundaries` is
-derived (`medaka gate explain compiler/types/<file>.mdk` lists it) and needs no
-hand line.
+does not derive**: `sh test/diff_compiler_lint_baseline.sh` and
+`sh test/typecheck_compiler_source.sh`. Name both by command. Stopgap until
+#4819 (preflight does not derive those two gates) lands; then delete it.
+`arch_boundaries` is derived and needs no hand line.
 
 **Do not enumerate the gates the diff might have moved.** That list does not
-converge: across the sprint record the unnamed gate was a snapshot/LEG-A bless
-ten times, `registry_keying_ratchet.sh` six, `selfcompile_fixpoint` three,
-`docs-index`/`docs-links` four, plus lextok, doctest goldens and cross-backend
-parity — and the reminders that were added here for the first three were still
-omitted in five later sprints apiece. The end-of-sprint unnarrowed CI run
+converge (`.claude/dossier/sprint.md` has the count), and a reminder added here
+for one gate was still omitted in later sprints. The end-of-sprint unnarrowed CI run
 (`sprint-orchestrator` end-of-sprint step 1b) executes all of them mechanically
 and does not depend on a packet author remembering. §6 names the checks that
 prove THIS slice's own claim; everything else is that run's job.
@@ -166,10 +142,7 @@ prove THIS slice's own claim; everything else is that run's job.
 **"LEG A diff must be additive-only" allows one exception, stated up front if
 it applies: a verified pure signature change** (row count unchanged, the
 content diff is exactly the signature/comment move and nothing else) is a
-legitimate modified-row diff, not a violation. `selector-identity-2` hit this
-literally: slice 2's 3-row signature-change diff had no way to satisfy the
-literal "additive-only" wording, forcing the reviewer to waive it by judgment
-call instead of by rule. If a slice's transform is known ahead of time to
+legitimate modified-row diff, not a violation. If a slice's transform is known ahead of time to
 rename/re-sign rather than purely add, say so in §6 rather than leaving the
 implementer or reviewer to argue it after the fact.
 
@@ -189,15 +162,6 @@ implementer or reviewer to argue it after the fact.
 > language, and it needs the eight-line program that shows it. A wrong edit is
 > caught by a gate where one exists; a refusal touches no file and is caught by
 > nothing, anywhere — it is the one output no gate inspects.
-
-That last paragraph is a measured rule, not a caution: one sprint refused all
-twelve sites on a false premise about the language, and four minutes with an
-eight-line probe refuted it. The identical model on the identical sites landed
-all twelve once the packet carried that measurement, so the standing
-escalate-after-two-rounds rule would have been the wrong remedy — the defect
-was not capability. `archive/design/JEV-LEDGER.md` section 1.1 rule 4, and the
-episode is `archive/design/JEV-DESIGN.md` section 8.3. It is a single episode,
-N = 1; what carries the rule is the asymmetry, not the count.
 
 **Resuming a refusal:** an informal mid-task message still cannot change scope.
 Once the worker has returned REFUSED and the orchestrator has corrected the
@@ -231,13 +195,6 @@ an explicit "none / not applicable, because …" is. They are cheap to answer
 honestly and expensive to answer falsely, which is the point: they are the
 author-side half of the `style-review` pass, and they front-load the findings
 that pass would otherwise raise a day later.
-
-**A docs-only slice answers one line instead of the five:** every number, and
-every "no X does Y", written into a doc is the output of a command quoted in
-Evidence, or it is not written; a contract Out row's premise gets the same
-grep. vis-test-split's docs slice answered four of five "not applicable" and
-still wrote a tree-wide claim ("no production module exports a name only for a
-test") that was false for about 30 names.
 
 1. **Which `stdlib/` or `compiler/support/` functions did you look for before
    writing any new helper? Name them** — or say "no new helper written". (The

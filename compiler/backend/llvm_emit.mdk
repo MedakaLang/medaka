@@ -3020,6 +3020,48 @@ emitNetExtern : Emit ->
   String ->
   List CExpr ->
   (String, LTy)
+emitNetExtern e env "processStartRaw" args = match emitArgs e env args
+  [a, b, c, d, f, g, h] =>
+    let r = freshReg e
+    emit e (rtLine e r "i64" "mdk_process_start" (i64Ops [a, b, c, d, f, g, h]))
+    (r, LTCon)
+  _ => panic "llvm: processStartRaw takes 7 arguments"
+emitNetExtern e env "processRetryStartRaw" args = match emitArgs e env args
+  [a] =>
+    let r = freshReg e
+    emit e (rtLine e r "i64" "mdk_process_retry_start" (i64Ops [a]))
+    (r, LTCon)
+  _ => panic "llvm: processRetryStartRaw takes 1 arguments"
+emitNetExtern e env "processCheckStartRaw" args = match emitArgs e env args
+  [a] =>
+    let r = freshReg e
+    emit e (rtLine e r "i64" "mdk_process_check_start" (i64Ops [a]))
+    (r, LTCon)
+  _ => panic "llvm: processCheckStartRaw takes 1 arguments"
+emitNetExtern e env "processAbortStartRaw" args = match emitArgs e env args
+  [a] =>
+    let r = freshReg e
+    emit e (rtLine e r "i64" "mdk_process_abort_start" (i64Ops [a]))
+    (r, LTCon)
+  _ => panic "llvm: processAbortStartRaw takes 1 arguments"
+emitNetExtern e env "processPollExitRaw" args = match emitArgs e env args
+  [a] =>
+    let r = freshReg e
+    emit e (rtLine e r "i64" "mdk_process_poll_exit" (i64Ops [a]))
+    (r, LTCon)
+  _ => panic "llvm: processPollExitRaw takes 1 arguments"
+emitNetExtern e env "processCloseStdinRaw" args = match emitArgs e env args
+  [a] =>
+    let r = freshReg e
+    emit e (rtLine e r "i64" "mdk_process_close_stdin" (i64Ops [a]))
+    (r, LTCon)
+  _ => panic "llvm: processCloseStdinRaw takes 1 arguments"
+emitNetExtern e env "processDisposeRaw" args = match emitArgs e env args
+  [a] =>
+    let r = freshReg e
+    emit e (rtLine e r "i64" "mdk_process_dispose" (i64Ops [a]))
+    (r, LTCon)
+  _ => panic "llvm: processDisposeRaw takes 1 arguments"
 emitNetExtern e env "netResolve" args = match emitArgs e env args
   [h] =>
     let r = freshReg e
