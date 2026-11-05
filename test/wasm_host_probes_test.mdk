@@ -59,21 +59,22 @@ locatedRow dir name source expected =
                 fail "wasm build failed: \{wasmErr}"
               else match boundedVerbSeconds 120 native []
                 Err e => fail "native run: \{e}"
-                Ok nativeResult =>
-                  match (boundedVerbSeconds 120 "node" [
-                    underRoot "test/wasm/run.js",
-                    wasm,
-                  ])
-                    Err e => fail "wasm run: \{e}"
-                    Ok wasmResult => expectAll [
-                      expectEqual (1, "", expected) nativeResult,
-                      expectEqual (1, "", expected) wasmResult,
-                    ]
+                Ok nativeResult => match boundedVerbSeconds 120 "node" [
+                  underRoot "test/wasm/run.js",
+                  wasm,
+                ]
+                  Err e => fail "wasm run: \{e}"
+                  Ok wasmResult => expectAll [
+                    expectEqual (1, "", expected) nativeResult,
+                    expectEqual (1, "", expected) wasmResult,
+                  ]
 
 locatedSites : String -> <IO, Exec, FileRead, FileWrite> Expectation
 locatedSites dir =
   let lib = "\{dir}/library.mdk"
-  match writeFile lib "export bad : Int -> Int\nbad n = 10 / n\n"
+  match writeFile lib """export bad : Int -> Int
+bad n = 10 / n
+"""
     Err e => fail "cannot write imported file: \{e}"
     Ok _ => expectEach [
       (
@@ -81,7 +82,9 @@ locatedSites dir =
         locatedRow
           dir
           "explicit"
-          "main =\n  [|1|][2]\n"
+          """main =
+  [|1|][2]
+"""
           "\{dir}/explicit.mdk:2:2: runtime error [E-INDEX-OOB]: index 2 out of bounds\n",
       ),
       (
@@ -89,7 +92,9 @@ locatedSites dir =
         locatedRow
           dir
           "arith"
-          "zero = 0\nmain = 10 / zero\n"
+          """zero = 0
+main = 10 / zero
+"""
           "\{dir}/arith.mdk:2:7: runtime error [E-DIV-ZERO]: division by zero\n",
       ),
       (
@@ -97,7 +102,11 @@ locatedSites dir =
         locatedRow
           dir
           "guard"
-          "classify : Int -> Int\nclassify n\n  | n > 3 = 1\nmain = classify 1\n"
+          """classify : Int -> Int
+classify n
+  | n > 3 = 1
+main = classify 1
+"""
           "\{dir}/guard.mdk:2:0: runtime error [E-NONEXHAUSTIVE-MATCH]: non-exhaustive match\n",
       ),
       (
@@ -105,7 +114,9 @@ locatedSites dir =
         locatedRow
           dir
           "imported"
-          "import library.{bad}\nmain = bad 0\n"
+          """import library.{bad}
+main = bad 0
+"""
           "\{lib}:2:8: runtime error [E-DIV-ZERO]: division by zero\n",
       ),
     ]

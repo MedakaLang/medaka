@@ -51,84 +51,88 @@ sitePackable (Loc f sl sc el ec) =
     && sc >= 0
     && sc < shiftLeft 1 siteColumnBits
 
-fileOf : Loc -> List String
-fileOf (l@(Loc f _ _ _ _)) = if sitePackable l then [f] else []
+fileOf : Loc -> OrdMap Int -> OrdMap Int
+fileOf (l@(Loc f _ _ _ _)) files =
+  if sitePackable l then omInsert f 0 files else files
 
-bindFiles : CBind -> List String
-bindFiles (CBind _ clauses loc _) = fileOf loc ++ flatMap clauseFiles clauses
-clauseFiles : CClause -> List String
-clauseFiles (CClause _ body) = exprFiles body
-fieldFiles : CField -> List String
-fieldFiles (CField _ _ e) = exprFiles e
-armFiles : CArm -> List String
-armFiles (CArm _ guards body) = flatMap guardFiles guards ++ exprFiles body
-armFiles (CArmAlt _ guards _) = flatMap guardFiles guards
-guardFiles : CGuard -> List String
-guardFiles (CGBool e) = exprFiles e
-guardFiles (CGBind _ e) = exprFiles e
-stmtFiles : CStmt -> List String
-stmtFiles (CSExpr e) = exprFiles e
-stmtFiles (CSLet _ _ e) = exprFiles e
-stmtFiles (CSAssign _ e) = exprFiles e
-treeFiles : CTree -> List String
-treeFiles (CTFail (NoArm loc)) = fileOf loc
-treeFiles (CTFail (LetRefuted loc)) = fileOf loc
-treeFiles (CTLeaf _) = []
-treeFiles (CTGuard _ tree) = treeFiles tree
-treeFiles (CTSwitch branches fallback) =
-  flatMap branchFiles branches ++ treeFiles fallback
-treeFiles (CTDrop tree) = treeFiles tree
-branchFiles : CTBranch -> List String
-branchFiles (CTBranch _ tree) = treeFiles tree
-implFiles : CImplEntry -> List String
-implFiles (CImplEntry _ _ _ (CImplTagged _ _ _ _ _ _ body)) = exprFiles body
-implFiles (CImplEntry _ _ _ (CImplDefault _ _ _ _ _ _ body)) = exprFiles body
+bindFiles : OrdMap Int -> CBind -> OrdMap Int
+bindFiles files (CBind _ clauses loc _) =
+  fold clauseFiles (fileOf loc files) clauses
+clauseFiles : OrdMap Int -> CClause -> OrdMap Int
+clauseFiles files (CClause _ body) = exprFiles files body
+fieldFiles : OrdMap Int -> CField -> OrdMap Int
+fieldFiles files (CField _ _ e) = exprFiles files e
+armFiles : OrdMap Int -> CArm -> OrdMap Int
+armFiles files (CArm _ guards body) =
+  exprFiles (fold guardFiles files guards) body
+armFiles files (CArmAlt _ guards _) = fold guardFiles files guards
+guardFiles : OrdMap Int -> CGuard -> OrdMap Int
+guardFiles files (CGBool e) = exprFiles files e
+guardFiles files (CGBind _ e) = exprFiles files e
+stmtFiles : OrdMap Int -> CStmt -> OrdMap Int
+stmtFiles files (CSExpr e) = exprFiles files e
+stmtFiles files (CSLet _ _ e) = exprFiles files e
+stmtFiles files (CSAssign _ e) = exprFiles files e
+treeFiles : OrdMap Int -> CTree -> OrdMap Int
+treeFiles files (CTFail (NoArm loc)) = fileOf loc files
+treeFiles files (CTFail (LetRefuted loc)) = fileOf loc files
+treeFiles files (CTLeaf _) = files
+treeFiles files (CTGuard _ tree) = treeFiles files tree
+treeFiles files (CTSwitch branches fallback) =
+  treeFiles (fold branchFiles files branches) fallback
+treeFiles files (CTDrop tree) = treeFiles files tree
+branchFiles : OrdMap Int -> CTBranch -> OrdMap Int
+branchFiles files (CTBranch _ tree) = treeFiles files tree
+implFiles : OrdMap Int -> CImplEntry -> OrdMap Int
+implFiles files (CImplEntry _ _ _ (CImplTagged _ _ _ _ _ _ body)) =
+  exprFiles files body
+implFiles files (CImplEntry _ _ _ (CImplDefault _ _ _ _ _ _ body)) =
+  exprFiles files body
 
-exprFiles : CExpr -> List String
-exprFiles (CLit _) = []
-exprFiles (CVar _ _) = []
-exprFiles (CApp (CVar name _) [CLit (LString f), CLit (LInt line), CLit (LInt col)] _) =
+exprFiles : OrdMap Int -> CExpr -> OrdMap Int
+exprFiles files (CLit _) = files
+exprFiles files (CVar _ _) = files
+exprFiles files (CApp (CVar name _) [CLit (LString f), CLit (LInt line), CLit (LInt col)] _) =
   if name == siteSentinelName then
-    fileOf (Loc f line col line (col + 1))
+    fileOf (Loc f line col line (col + 1)) files
   else
-    []
-exprFiles (CApp head args _) = exprFiles head ++ flatMap exprFiles args
-exprFiles (CLam _ body) = exprFiles body
-exprFiles (CLet _ _ rhs body) = exprFiles rhs ++ exprFiles body
-exprFiles (CLetGroup binds body) = flatMap bindFiles binds ++ exprFiles body
-exprFiles (CMatch e arms) = exprFiles e ++ flatMap armFiles arms
-exprFiles (CDecision e arms tree) =
-  exprFiles e ++ flatMap armFiles arms ++ treeFiles tree
-exprFiles (CIf a b c) = exprFiles a ++ exprFiles b ++ exprFiles c
-exprFiles (CBinPrim _ a b _ loc) = fileOf loc ++ exprFiles a ++ exprFiles b
-exprFiles (CUnOp _ e) = exprFiles e
-exprFiles (CTuple es) = flatMap exprFiles es
-exprFiles (CList es) = flatMap exprFiles es
-exprFiles (CRecord _ fs) = flatMap fieldFiles fs
-exprFiles (CFieldAccess e _ _ _) = exprFiles e
-exprFiles (CRecordUpdate _ e fs) = exprFiles e ++ flatMap fieldFiles fs
-exprFiles (CVariantUpdate _ e fs) = exprFiles e ++ flatMap fieldFiles fs
-exprFiles (CArray es) = flatMap exprFiles es
-exprFiles (CRangeList a b _) = exprFiles a ++ exprFiles b
-exprFiles (CRangeArray a b _) = exprFiles a ++ exprFiles b
-exprFiles (CIndex a b) = exprFiles a ++ exprFiles b
-exprFiles (CSlice a b c _) = exprFiles a ++ exprFiles b ++ exprFiles c
-exprFiles (CStringIndex a b) = exprFiles a ++ exprFiles b
-exprFiles (CStringSlice a b c _) = exprFiles a ++ exprFiles b ++ exprFiles c
-exprFiles (CListIndex a b) = exprFiles a ++ exprFiles b
-exprFiles (CListSlice a b c _) = exprFiles a ++ exprFiles b ++ exprFiles c
-exprFiles (CBlock stmts) = flatMap stmtFiles stmts
-exprFiles (CMethod _ _) = []
-exprFiles (CDict _ _) = []
+    files
+exprFiles files (CApp head args _) = fold exprFiles (exprFiles files head) args
+exprFiles files (CLam _ body) = exprFiles files body
+exprFiles files (CLet _ _ rhs body) = exprFiles (exprFiles files rhs) body
+exprFiles files (CLetGroup binds body) =
+  exprFiles (fold bindFiles files binds) body
+exprFiles files (CMatch e arms) = fold armFiles (exprFiles files e) arms
+exprFiles files (CDecision e arms tree) =
+  treeFiles (fold armFiles (exprFiles files e) arms) tree
+exprFiles files (CIf a b c) = exprFiles (exprFiles (exprFiles files a) b) c
+exprFiles files (CBinPrim _ a b _ loc) =
+  exprFiles (exprFiles (fileOf loc files) a) b
+exprFiles files (CUnOp _ e) = exprFiles files e
+exprFiles files (CTuple es) = fold exprFiles files es
+exprFiles files (CList es) = fold exprFiles files es
+exprFiles files (CRecord _ fs) = fold fieldFiles files fs
+exprFiles files (CFieldAccess e _ _ _) = exprFiles files e
+exprFiles files (CRecordUpdate _ e fs) = fold fieldFiles (exprFiles files e) fs
+exprFiles files (CVariantUpdate _ e fs) = fold fieldFiles (exprFiles files e) fs
+exprFiles files (CArray es) = fold exprFiles files es
+exprFiles files (CRangeList a b _) = exprFiles (exprFiles files a) b
+exprFiles files (CRangeArray a b _) = exprFiles (exprFiles files a) b
+exprFiles files (CIndex a b) = exprFiles (exprFiles files a) b
+exprFiles files (CSlice a b c _) = exprFiles (exprFiles (exprFiles files a) b) c
+exprFiles files (CStringIndex a b) = exprFiles (exprFiles files a) b
+exprFiles files (CStringSlice a b c _) =
+  exprFiles (exprFiles (exprFiles files a) b) c
+exprFiles files (CListIndex a b) = exprFiles (exprFiles files a) b
+exprFiles files (CListSlice a b c _) =
+  exprFiles (exprFiles (exprFiles files a) b) c
+exprFiles files (CBlock stmts) = fold stmtFiles files stmts
+exprFiles files (CMethod _ _) = files
+exprFiles files (CDict _ _) = files
 
 programFiles : CProgram -> List String
 programFiles (CProgram binds _ _ impls _ _) =
-  map
-    fst
-    (entries
-      (omFromNames
-        (flatMap bindFiles binds ++ flatMap implFiles impls)
-        omEmpty))
+  map fst (entries (fold implFiles (fold bindFiles omEmpty binds) impls))
 
 assign : List String -> Int -> OrdMap Int -> (OrdMap Int, Int)
 assign [] high table = (table, high)
