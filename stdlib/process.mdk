@@ -123,42 +123,7 @@ export
 dispose : Process p -> <Exec p> Result ProcessError Unit
 dispose p = mapErr rawError (processDisposeRaw p)
 
-import test.{expectTrue, fail}
-
-waitForTest : Process p -> Int -> <Exec p> Bool
-waitForTest _ 0 = False
-waitForTest p n = match pollExit p
-  Ok (Some (Exited 42)) => True
-  Ok None => waitForTest p (n - 1)
-  _ => False
-
-test "native process retains an owner until stdin closes and exit is reaped" =
-  let opts = SpawnOptions {
-    argv = ["-c", "read line; exit 42"],
-    cwd = "/tmp",
-    env = [],
-    stdin = Piped,
-    stdout = Null,
-    stderr = Null,
-  }
-  match start "/bin/sh" opts
-    Err _ => fail "process start failed"
-    Ok p =>
-      let held = Ref p
-      let get = _ => !held
-      let owners = [get ()]
-      let _ = arrayMake 100000 123
-      match owners
-        [owner] => match pollExit owner
-          Ok None => match closeStdin (get ())
-            Ok _ =>
-              let exited = waitForTest owner 1000000
-              match dispose p
-                Ok _ => expectTrue exited
-                Err _ => fail "dispose failed"
-            Err _ => fail "close stdin failed"
-          _ => fail "child was not live"
-        _ => fail "owner container lost"
+import test.{expectTrue}
 
 test "launch progress decodes pending, failed, and aborted shapes" =
   let pending = progressResult (Ok (0, None, None))

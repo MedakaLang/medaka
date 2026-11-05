@@ -1,5 +1,5 @@
 # META
-source_lines=170
+source_lines=135
 stages=DESUGAR,MARK
 # SOURCE
 public export data PipeChoice = Piped | Null
@@ -127,42 +127,7 @@ export
 dispose : Process p -> <Exec p> Result ProcessError Unit
 dispose p = mapErr rawError (processDisposeRaw p)
 
-import test.{expectTrue, fail}
-
-waitForTest : Process p -> Int -> <Exec p> Bool
-waitForTest _ 0 = False
-waitForTest p n = match pollExit p
-  Ok (Some (Exited 42)) => True
-  Ok None => waitForTest p (n - 1)
-  _ => False
-
-test "native process retains an owner until stdin closes and exit is reaped" =
-  let opts = SpawnOptions {
-    argv = ["-c", "read line; exit 42"],
-    cwd = "/tmp",
-    env = [],
-    stdin = Piped,
-    stdout = Null,
-    stderr = Null,
-  }
-  match start "/bin/sh" opts
-    Err _ => fail "process start failed"
-    Ok p =>
-      let held = Ref p
-      let get = _ => !held
-      let owners = [get ()]
-      let _ = arrayMake 100000 123
-      match owners
-        [owner] => match pollExit owner
-          Ok None => match closeStdin (get ())
-            Ok _ =>
-              let exited = waitForTest owner 1000000
-              match dispose p
-                Ok _ => expectTrue exited
-                Err _ => fail "dispose failed"
-            Err _ => fail "close stdin failed"
-          _ => fail "child was not live"
-        _ => fail "owner container lost"
+import test.{expectTrue}
 
 test "launch progress decodes pending, failed, and aborted shapes" =
   let pending = progressResult (Ok (0, None, None))
@@ -227,11 +192,7 @@ test "launch progress decodes pending, failed, and aborted shapes" =
 (DFunDef false "closeStdin" ((PVar "p")) (EApp (EApp (EVar "mapErr") (EVar "rawError")) (EApp (EVar "processCloseStdinRaw") (EVar "p"))))
 (DTypeSig true "dispose" (TyFun (TyApp (TyCon "Process") (TyVar "p")) (TyEffect ((atom "Exec" (name "p"))) None (TyApp (TyApp (TyCon "Result") (TyCon "ProcessError")) (TyCon "Unit")))))
 (DFunDef false "dispose" ((PVar "p")) (EApp (EApp (EVar "mapErr") (EVar "rawError")) (EApp (EVar "processDisposeRaw") (EVar "p"))))
-(DUse false (UseGroup ("test") ((mem "expectTrue" false) (mem "fail" false))))
-(DTypeSig false "waitForTest" (TyFun (TyApp (TyCon "Process") (TyVar "p")) (TyFun (TyCon "Int") (TyEffect ((atom "Exec" (name "p"))) None (TyCon "Bool")))))
-(DFunDef false "waitForTest" (PWild (PLit (LInt 0))) (EVar "False"))
-(DFunDef false "waitForTest" ((PVar "p") (PVar "n")) (EMatch (EApp (EVar "pollExit") (EVar "p")) (arm (PCon "Ok" (PCon "Some" (PCon "Exited" (PLit (LInt 42))))) () (EVar "True")) (arm (PCon "Ok" (PCon "None")) () (EApp (EApp (EVar "waitForTest") (EVar "p")) (EBinOp "-" (EVar "n") (ELit (LInt 1))))) (arm PWild () (EVar "False"))))
-(DTest false "native process retains an owner until stdin closes and exit is reaped" (EBlock (DoLet false false (PVar "opts") (ERecordCreate "SpawnOptions" ((fa "argv" (EListLit (ELit (LString "-c")) (ELit (LString "read line; exit 42")))) (fa "cwd" (ELit (LString "/tmp"))) (fa "env" (EListLit)) (fa "stdin" (EVar "Piped")) (fa "stdout" (EVar "Null")) (fa "stderr" (EVar "Null"))))) (DoExpr (EMatch (EApp (EApp (EVar "start") (ELit (LString "/bin/sh"))) (EVar "opts")) (arm (PCon "Err" PWild) () (EApp (EVar "fail") (ELit (LString "process start failed")))) (arm (PCon "Ok" (PVar "p")) () (EBlock (DoLet false false (PVar "held") (EApp (EVar "Ref") (EVar "p"))) (DoLet false false (PVar "get") (ELam (PWild) (EUnOp "!" (EVar "held")))) (DoLet false false (PVar "owners") (EListLit (EApp (EVar "get") (ELit LUnit)))) (DoLet false false PWild (EApp (EApp (EVar "arrayMake") (ELit (LInt 100000))) (ELit (LInt 123)))) (DoExpr (EMatch (EVar "owners") (arm (PList (PVar "owner")) () (EMatch (EApp (EVar "pollExit") (EVar "owner")) (arm (PCon "Ok" (PCon "None")) () (EMatch (EApp (EVar "closeStdin") (EApp (EVar "get") (ELit LUnit))) (arm (PCon "Ok" PWild) () (EBlock (DoLet false false (PVar "exited") (EApp (EApp (EVar "waitForTest") (EVar "owner")) (ELit (LInt 1000000)))) (DoExpr (EMatch (EApp (EVar "dispose") (EVar "p")) (arm (PCon "Ok" PWild) () (EApp (EVar "expectTrue") (EVar "exited"))) (arm (PCon "Err" PWild) () (EApp (EVar "fail") (ELit (LString "dispose failed")))))))) (arm (PCon "Err" PWild) () (EApp (EVar "fail") (ELit (LString "close stdin failed")))))) (arm PWild () (EApp (EVar "fail") (ELit (LString "child was not live")))))) (arm PWild () (EApp (EVar "fail") (ELit (LString "owner container lost"))))))))))))
+(DUse false (UseGroup ("test") ((mem "expectTrue" false))))
 (DTest false "launch progress decodes pending, failed, and aborted shapes" (EBlock (DoLet false false (PVar "pending") (EApp (EVar "progressResult") (EApp (EVar "Ok") (ETuple (ELit (LInt 0)) (EVar "None") (EVar "None"))))) (DoLet false false (PVar "failed") (EApp (EVar "progressResult") (EApp (EVar "Ok") (ETuple (ELit (LInt 2)) (EVar "None") (EApp (EVar "Some") (ETuple (ELit (LInt 12)) (ELit (LInt 0)) (ELit (LString "cancelled")))))))) (DoLet false false (PVar "aborted") (EApp (EVar "progressResult") (EApp (EVar "Ok") (ETuple (ELit (LInt 3)) (EVar "None") (EVar "None"))))) (DoExpr (EApp (EVar "expectTrue") (EMatch (ETuple (EVar "pending") (EVar "failed") (EVar "aborted")) (arm (PTuple (PCon "Ok" (PCon "LaunchPending")) (PCon "Ok" (PCon "LaunchFailed" (PCon "LaunchCancelled"))) (PCon "Ok" (PCon "LaunchAborted"))) () (EVar "True")) (arm PWild () (EVar "False")))))))
 # MARK
 (DData Public "PipeChoice" () ((variant "Piped" (ConPos)) (variant "Null" (ConPos))) ())
@@ -288,9 +249,5 @@ test "launch progress decodes pending, failed, and aborted shapes" =
 (DFunDef false "closeStdin" ((PVar "p")) (EApp (EApp (EVar "mapErr") (EVar "rawError")) (EApp (EVar "processCloseStdinRaw") (EVar "p"))))
 (DTypeSig true "dispose" (TyFun (TyApp (TyCon "Process") (TyVar "p")) (TyEffect ((atom "Exec" (name "p"))) None (TyApp (TyApp (TyCon "Result") (TyCon "ProcessError")) (TyCon "Unit")))))
 (DFunDef false "dispose" ((PVar "p")) (EApp (EApp (EVar "mapErr") (EVar "rawError")) (EApp (EVar "processDisposeRaw") (EVar "p"))))
-(DUse false (UseGroup ("test") ((mem "expectTrue" false) (mem "fail" false))))
-(DTypeSig false "waitForTest" (TyFun (TyApp (TyCon "Process") (TyVar "p")) (TyFun (TyCon "Int") (TyEffect ((atom "Exec" (name "p"))) None (TyCon "Bool")))))
-(DFunDef false "waitForTest" (PWild (PLit (LInt 0))) (EVar "False"))
-(DFunDef false "waitForTest" ((PVar "p") (PVar "n")) (EMatch (EApp (EVar "pollExit") (EVar "p")) (arm (PCon "Ok" (PCon "Some" (PCon "Exited" (PLit (LInt 42))))) () (EVar "True")) (arm (PCon "Ok" (PCon "None")) () (EApp (EApp (EVar "waitForTest") (EVar "p")) (EBinOp "-" (EVar "n") (ELit (LInt 1))))) (arm PWild () (EVar "False"))))
-(DTest false "native process retains an owner until stdin closes and exit is reaped" (EBlock (DoLet false false (PVar "opts") (ERecordCreate "SpawnOptions" ((fa "argv" (EListLit (ELit (LString "-c")) (ELit (LString "read line; exit 42")))) (fa "cwd" (ELit (LString "/tmp"))) (fa "env" (EListLit)) (fa "stdin" (EVar "Piped")) (fa "stdout" (EVar "Null")) (fa "stderr" (EVar "Null"))))) (DoExpr (EMatch (EApp (EApp (EVar "start") (ELit (LString "/bin/sh"))) (EVar "opts")) (arm (PCon "Err" PWild) () (EApp (EVar "fail") (ELit (LString "process start failed")))) (arm (PCon "Ok" (PVar "p")) () (EBlock (DoLet false false (PVar "held") (EApp (EVar "Ref") (EVar "p"))) (DoLet false false (PVar "get") (ELam (PWild) (EUnOp "!" (EVar "held")))) (DoLet false false (PVar "owners") (EListLit (EApp (EVar "get") (ELit LUnit)))) (DoLet false false PWild (EApp (EApp (EVar "arrayMake") (ELit (LInt 100000))) (ELit (LInt 123)))) (DoExpr (EMatch (EVar "owners") (arm (PList (PVar "owner")) () (EMatch (EApp (EVar "pollExit") (EVar "owner")) (arm (PCon "Ok" (PCon "None")) () (EMatch (EApp (EVar "closeStdin") (EApp (EVar "get") (ELit LUnit))) (arm (PCon "Ok" PWild) () (EBlock (DoLet false false (PVar "exited") (EApp (EApp (EVar "waitForTest") (EVar "owner")) (ELit (LInt 1000000)))) (DoExpr (EMatch (EApp (EVar "dispose") (EVar "p")) (arm (PCon "Ok" PWild) () (EApp (EVar "expectTrue") (EVar "exited"))) (arm (PCon "Err" PWild) () (EApp (EVar "fail") (ELit (LString "dispose failed")))))))) (arm (PCon "Err" PWild) () (EApp (EVar "fail") (ELit (LString "close stdin failed")))))) (arm PWild () (EApp (EVar "fail") (ELit (LString "child was not live")))))) (arm PWild () (EApp (EVar "fail") (ELit (LString "owner container lost"))))))))))))
+(DUse false (UseGroup ("test") ((mem "expectTrue" false))))
 (DTest false "launch progress decodes pending, failed, and aborted shapes" (EBlock (DoLet false false (PVar "pending") (EApp (EVar "progressResult") (EApp (EVar "Ok") (ETuple (ELit (LInt 0)) (EVar "None") (EVar "None"))))) (DoLet false false (PVar "failed") (EApp (EVar "progressResult") (EApp (EVar "Ok") (ETuple (ELit (LInt 2)) (EVar "None") (EApp (EVar "Some") (ETuple (ELit (LInt 12)) (ELit (LInt 0)) (ELit (LString "cancelled")))))))) (DoLet false false (PVar "aborted") (EApp (EVar "progressResult") (EApp (EVar "Ok") (ETuple (ELit (LInt 3)) (EVar "None") (EVar "None"))))) (DoExpr (EApp (EVar "expectTrue") (EMatch (ETuple (EVar "pending") (EVar "failed") (EVar "aborted")) (arm (PTuple (PCon "Ok" (PCon "LaunchPending")) (PCon "Ok" (PCon "LaunchFailed" (PCon "LaunchCancelled"))) (PCon "Ok" (PCon "LaunchAborted"))) () (EVar "True")) (arm PWild () (EVar "False")))))))

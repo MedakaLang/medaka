@@ -10,7 +10,7 @@ import process.{
   closeStdin,
   dispose,
 }
-import test.{expectTrue, fail}
+import test.{Expectation(..), expectTrue, fail, pass}
 
 options : SpawnOptions
 options = SpawnOptions {
@@ -22,12 +22,16 @@ options = SpawnOptions {
   stderr = Null,
 }
 
-waitExit : Process p -> Int -> <Exec p> Bool
-waitExit _ 0 = False
+waitExit : Process p -> Int -> <Exec p> Expectation
+waitExit _ 0 = fail "pollExit remained pending after 1000000 attempts"
 waitExit p n = match pollExit p
-  Ok (Some (Exited 42)) => True
+  Ok (Some (Exited 42)) => pass
+  Ok (Some (Exited code)) =>
+    fail "pollExit returned exit code \{intToString code}, expected 42"
+  Ok (Some (Signalled sig _)) =>
+    fail "pollExit returned signal \{intToString sig}, expected exit 42"
   Ok None => waitExit p (n - 1)
-  _ => False
+  Err _ => fail "pollExit returned an error while waiting for exit 42"
 
 test "process aliases share close, exit and disposal state" =
   match start "/bin/sh" options
@@ -36,20 +40,43 @@ test "process aliases share close, exit and disposal state" =
       let alias = p
       match (pollExit p, dispose alias, closeStdin p, closeStdin alias)
         (Ok None, Err StillRunning, Ok _, Ok _) =>
-          if waitExit alias 1000000 then match (
-            pollExit p,
-            dispose alias,
-            dispose p,
-            pollExit alias,
-          )
-            (Ok (Some (Exited 42)), Ok _, Ok _, Err ProcessClosed) =>
-              expectTrue True
-            _ => fail "terminal alias state"
-          else
-            fail "exit was not observed"
+          let exited = waitExit alias 1000000
+          match exited
+            Fail _ _ _ => exited
+            _ => match (pollExit p, dispose alias, dispose p, pollExit alias)
+              (Ok (Some (Exited 42)), Ok _, Ok _, Err ProcessClosed) => pass
+              _ => fail "terminal alias state"
         _ => fail "live alias state"
 
 test "missing executable is a launch error" =
   match start "/medaka-no-such-image" options
     Err (StartRejected (SpawnFailed ExecImage _ _)) => expectTrue True
     _ => fail "missing image did not report ExecImage"
+
+test "native process retains an owner until stdin closes and exit is reaped" =
+  let opts = SpawnOptions {
+    argv = ["-c", "read line; exit 42"],
+    cwd = "/tmp",
+    env = [],
+    stdin = Piped,
+    stdout = Null,
+    stderr = Null,
+  }
+  match start "/bin/sh" opts
+    Err _ => fail "process start failed"
+    Ok p =>
+      let held = Ref p
+      let get = _ => !held
+      let owners = [get ()]
+      let _ = arrayMake 100000 123
+      match owners
+        [owner] => match pollExit owner
+          Ok None => match closeStdin (get ())
+            Ok _ =>
+              let exited = waitExit owner 1000000
+              match dispose p
+                Ok _ => exited
+                Err _ => fail "dispose failed"
+            Err _ => fail "close stdin failed"
+          _ => fail "child was not live"
+        _ => fail "owner container lost"
