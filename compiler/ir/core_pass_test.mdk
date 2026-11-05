@@ -1,4 +1,4 @@
-import test.{expectAll, expectEqual, expectNotEqual}
+import test.{expectAll, expectEqual, expectFalse, expectNotEqual}
 import frontend.ast.{Addr(..)}
 import ir.core_ir.{
   CBind(..),
@@ -95,6 +95,9 @@ test "a fault names its pass" =
     PassFault { faultPass = "second", faultMessage = "bad" },
   ]
   expectEqual ["second"] (map (f => f.faultPass) run.faults)
+
+test "the library default config does not lint" =
+  expectFalse defaultPassConfig.lint
 
 test "a lint-on run turns a finding into a fault naming its pass" =
   let breakIt = CorePass {

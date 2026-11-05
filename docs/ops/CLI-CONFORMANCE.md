@@ -330,7 +330,7 @@ emitter child, so they work on a build with no CLI flag.
 
 | Variable | Effect |
 |---|---|
-| `MEDAKA_CORE_LINT` | `1` checks the Core IR after every lowering pass (and the input), and a finding aborts the emit naming the pass; `0` disables. The default is on for the emitting lowerings (measured at under 2% of `medaka build` CPU), so a finding aborts every emit; the interpreter's lowerings never lint. |
+| `MEDAKA_CORE_LINT` | `1` checks the Core IR after every lowering pass (and the input), and a finding aborts the emit naming the pass; `0` disables. The default is on in the two emit entries behind `medaka build` (measured at under 2% of its CPU), so a finding aborts every build; library callers of the lowerings (tests, tools, the interpreter's lowerings) never lint unless they pass a config with `lint = True`. |
 | `MEDAKA_DUMP_CORE_AFTER` | A comma-separated list of lowering pass names, or `all`; the program after each named pass is written to stderr under a `[core-after <pass>]` line. |
 
 ---

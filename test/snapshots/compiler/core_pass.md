@@ -1,5 +1,5 @@
 # META
-source_lines=75
+source_lines=77
 stages=DESUGAR,MARK
 # SOURCE
 import list.{reverse}
@@ -24,9 +24,11 @@ public export data PassConfig = PassConfig {
   dumpAfter : List String,
 }
 
+-- The library default: unlinted, because library callers (tests, tools) lower
+-- programs that need not be well scoped.  The emit entries turn lint on.
 export
 defaultPassConfig : PassConfig
-defaultPassConfig = PassConfig { lint = True, dumpAfter = [] }
+defaultPassConfig = PassConfig { lint = False, dumpAfter = [] }
 
 -- A broken invariant found after pass [faultPass].
 public export data PassFault = PassFault {
@@ -85,7 +87,7 @@ step config ctx acc pass =
 (DData Public "CorePass" ("c") ((variant "CorePass" (ConNamed (field "passName" (TyCon "String")) (field "passRun" (TyFun (TyVar "c") (TyFun (TyCon "CProgram") (TyCon "CProgram"))))))) ())
 (DData Public "PassConfig" () ((variant "PassConfig" (ConNamed (field "lint" (TyCon "Bool")) (field "dumpAfter" (TyApp (TyCon "List") (TyCon "String")))))) ())
 (DTypeSig true "defaultPassConfig" (TyCon "PassConfig"))
-(DFunDef false "defaultPassConfig" () (ERecordCreate "PassConfig" ((fa "lint" (EVar "True")) (fa "dumpAfter" (EListLit)))))
+(DFunDef false "defaultPassConfig" () (ERecordCreate "PassConfig" ((fa "lint" (EVar "False")) (fa "dumpAfter" (EListLit)))))
 (DData Public "PassFault" () ((variant "PassFault" (ConNamed (field "faultPass" (TyCon "String")) (field "faultMessage" (TyCon "String"))))) ())
 (DData Public "PassRun" () ((variant "PassRun" (ConNamed (field "program" (TyCon "CProgram")) (field "dumps" (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "String")))) (field "faults" (TyApp (TyCon "List") (TyCon "PassFault")))))) ())
 (DTypeSig false "wantsDump" (TyFun (TyCon "PassConfig") (TyFun (TyCon "String") (TyCon "Bool"))))
@@ -104,7 +106,7 @@ step config ctx acc pass =
 (DData Public "CorePass" ("c") ((variant "CorePass" (ConNamed (field "passName" (TyCon "String")) (field "passRun" (TyFun (TyVar "c") (TyFun (TyCon "CProgram") (TyCon "CProgram"))))))) ())
 (DData Public "PassConfig" () ((variant "PassConfig" (ConNamed (field "lint" (TyCon "Bool")) (field "dumpAfter" (TyApp (TyCon "List") (TyCon "String")))))) ())
 (DTypeSig true "defaultPassConfig" (TyCon "PassConfig"))
-(DFunDef false "defaultPassConfig" () (ERecordCreate "PassConfig" ((fa "lint" (EVar "True")) (fa "dumpAfter" (EListLit)))))
+(DFunDef false "defaultPassConfig" () (ERecordCreate "PassConfig" ((fa "lint" (EVar "False")) (fa "dumpAfter" (EListLit)))))
 (DData Public "PassFault" () ((variant "PassFault" (ConNamed (field "faultPass" (TyCon "String")) (field "faultMessage" (TyCon "String"))))) ())
 (DData Public "PassRun" () ((variant "PassRun" (ConNamed (field "program" (TyCon "CProgram")) (field "dumps" (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "String")))) (field "faults" (TyApp (TyCon "List") (TyCon "PassFault")))))) ())
 (DTypeSig false "wantsDump" (TyFun (TyCon "PassConfig") (TyFun (TyCon "String") (TyCon "Bool"))))
