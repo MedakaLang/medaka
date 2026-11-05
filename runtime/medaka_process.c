@@ -757,6 +757,10 @@ long long mdk_process_poll_exit(long long word) {
   return mdk_ok(mdk_some((long long)tuple));
 }
 long long mdk_process_close_stdin(long long word) {
+#ifndef __linux__
+  (void)word;
+  return error_result(10, 0, "native process unsupported");
+#else
   MdkProcess *p = (MdkProcess *)word;
   if (pthread_mutex_trylock(&process_lock)) return error_result(MDK_PROCESS_BUSY, 0, "process busy");
   if (p->launch_step != MDK_LAUNCH_OWNED) { pthread_mutex_unlock(&process_lock); return error_result(0, 0, "launch ownership not transferred"); }
@@ -764,6 +768,7 @@ long long mdk_process_close_stdin(long long word) {
   int r = close_once(&p->streams[0]), e = errno;
   pthread_mutex_unlock(&process_lock);
   return r ? error_result(6, e, "close stdin") : mdk_ok(1);
+#endif
 }
 long long mdk_process_dispose(long long word) {
   MdkProcess *p = (MdkProcess *)word;
@@ -785,6 +790,10 @@ static int stream_owner(MdkProcess *p, int stream) {
 static long long stream_busy(void) { return error_result(MDK_PROCESS_BUSY, 0, "process busy"); }
 static long long stream_closed(void) { return error_result(8, 0, "process stream closed"); }
 long long mdk_process_stream_fd(long long word, long long stream_word) {
+#ifndef __linux__
+  (void)word; (void)stream_word;
+  return error_result(10, 0, "native process unsupported");
+#else
   long long stream = stream_word >> 1;
   if (stream < 0 || stream > 2) return error_result(MDK_PROCESS_INVALID_IO, 0, "invalid stream");
   if (pthread_mutex_trylock(&process_lock)) return stream_busy();
@@ -793,8 +802,13 @@ long long mdk_process_stream_fd(long long word, long long stream_word) {
   int fd = p->streams[stream];
   pthread_mutex_unlock(&process_lock);
   return mdk_ok(box_int(fd));
+#endif
 }
 long long mdk_process_try_read(long long word, long long stream_word, long long limit_word) {
+#ifndef __linux__
+  (void)word; (void)stream_word; (void)limit_word;
+  return error_result(10, 0, "native process unsupported");
+#else
   long long stream = stream_word >> 1, limit = limit_word >> 1;
   if ((stream != 1 && stream != 2) || limit < 1 || limit > 65536)
     return error_result(MDK_PROCESS_INVALID_IO, 0, "invalid read stream or limit");
@@ -817,8 +831,13 @@ long long mdk_process_try_read(long long word, long long stream_word, long long 
   memset(block, 0, size); block[0] = MDK_BYTEBLOCK_TAG; block[1] = n;
   memcpy((char *)block + 16, buf, (size_t)n);
   return mdk_ok(mdk_some((long long)block));
+#endif
 }
 long long mdk_process_try_write(long long word, long long block_word, long long offset_word, long long count_word) {
+#ifndef __linux__
+  (void)word; (void)block_word; (void)offset_word; (void)count_word;
+  return error_result(10, 0, "native process unsupported");
+#else
   long long offset = offset_word >> 1, count = count_word >> 1;
   long long *block = (long long *)block_word;
   long long length = block[1];
@@ -857,6 +876,7 @@ long long mdk_process_try_write(long long word, long long block_word, long long 
   if (n < 0 && (e == EAGAIN || e == EWOULDBLOCK || e == EINTR)) return mdk_ok(mdk_none());
   if (n < 0 || !n) return error_result(MDK_PROCESS_WRITE_FAILED, n < 0 ? e : EIO, "write process stream");
   return mdk_ok(mdk_some(box_int((int)n)));
+#endif
 }
 
 #ifdef MDK_PROCESS_TESTING
