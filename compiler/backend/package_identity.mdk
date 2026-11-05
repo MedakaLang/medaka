@@ -161,6 +161,7 @@ assignmentDefect label low limit high (name, n) =
   else
     []
 
+export
 packageDefects : PackageIdentity -> List String
 packageDefects p =
   (if p.abi == abiVersion then [] else ["identity: incompatible ABI"])

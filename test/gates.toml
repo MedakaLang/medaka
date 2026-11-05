@@ -4139,3 +4139,19 @@ sources = ["scripts/mcp_bench/*"]
 corpus = []
 toolchain = []
 link = "production"
+
+[[gate]]
+name = "diff_compiler_package_identity"
+area = "backend"
+shard = "gates_1"
+project = "compiler"
+tiers = ["merge"]
+cost = "heavy"
+kind = "native"
+migration = "done"
+run = "test/diff_compiler_package_identity_test.mdk"
+oracles = []
+sources = ["compiler/backend/package_identity.mdk", "compiler/backend/package_identity_sexp.mdk", "compiler/backend/package_identity_sexp_test.mdk"]
+corpus = []
+toolchain = ["clang", "node>=24", "wasm-tools"]
+link = "production"
