@@ -1,5 +1,5 @@
 # META
-source_lines=497
+source_lines=496
 stages=DESUGAR,MARK
 # SOURCE
 -- S-expression values with one canonical rendering and a fail-closed reader.
@@ -225,11 +225,10 @@ parseSExp text =
   let p = skipWsAt b n 0
   if p >= n then
     failAt p "empty input"
-  else match readNode b n p
-    Err e => Err e
-    Ok (node, q) =>
-      let r = skipWsAt b n q
-      if r >= n then Ok node else failAt r "trailing text after the first node"
+  else do
+    (node, q) <- readNode b n p
+    let r = skipWsAt b n q
+    if r >= n then Ok node else failAt r "trailing text after the first node"
 
 -- ── the cursor ──────────────────────────────────────────────────────────────
 -- A decoder reads values straight off the bytes, with no `SExp` in between.
@@ -434,9 +433,9 @@ expectAtom path _ = shapeError path "expected an atom"
 
 export
 atomInt : String -> SExp -> Result SexpError Int
-atomInt path node = match expectAtom path node
-  Err e => Err e
-  Ok s => match stringToInt s
+atomInt path node = do
+  s <- expectAtom path node
+  match stringToInt s
     Some n => Ok n
     None => shapeError path "expected an integer"
 
@@ -566,7 +565,7 @@ skipNodeAt b n p depth inQ
 (DTypeSig false "readItems" (TyFun (TyCon "ByteBlock") (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyFun (TyApp (TyCon "List") (TyCon "SExp")) (TyApp (TyApp (TyCon "Result") (TyCon "SexpError")) (TyTuple (TyCon "SExp") (TyCon "Int")))))))))
 (DFunDef false "readItems" ((PVar "b") (PVar "n") (PVar "open") (PVar "p0") (PVar "acc")) (EBlock (DoLet false false (PVar "p") (EApp (EApp (EApp (EVar "skipWsAt") (EVar "b")) (EVar "n")) (EVar "p0"))) (DoExpr (EIf (EBinOp ">=" (EVar "p") (EVar "n")) (EApp (EApp (EVar "failAt") (EVar "open")) (ELit (LString "unbalanced open paren"))) (EIf (EApp (EVar "isCloseByte") (EApp (EApp (EVar "byteBlockGetUnsafe") (EVar "p")) (EVar "b"))) (EApp (EVar "Ok") (ETuple (EApp (EVar "SList") (EApp (EVar "reverse") (EVar "acc"))) (EBinOp "+" (EVar "p") (ELit (LInt 1))))) (EMatch (EApp (EApp (EApp (EVar "readNode") (EVar "b")) (EVar "n")) (EVar "p")) (arm (PCon "Err" (PVar "e")) () (EApp (EVar "Err") (EVar "e"))) (arm (PCon "Ok" (PTuple (PVar "item") (PVar "q"))) () (EApp (EApp (EApp (EApp (EApp (EVar "readItems") (EVar "b")) (EVar "n")) (EVar "open")) (EVar "q")) (EBinOp "::" (EVar "item") (EVar "acc"))))))))))
 (DTypeSig true "parseSExp" (TyFun (TyCon "String") (TyApp (TyApp (TyCon "Result") (TyCon "SexpError")) (TyCon "SExp"))))
-(DFunDef false "parseSExp" ((PVar "text")) (EBlock (DoLet false false (PVar "b") (EApp (EVar "byteBlockFromString") (EVar "text"))) (DoLet false false (PVar "n") (EApp (EVar "byteBlockLength") (EVar "b"))) (DoLet false false (PVar "p") (EApp (EApp (EApp (EVar "skipWsAt") (EVar "b")) (EVar "n")) (ELit (LInt 0)))) (DoExpr (EIf (EBinOp ">=" (EVar "p") (EVar "n")) (EApp (EApp (EVar "failAt") (EVar "p")) (ELit (LString "empty input"))) (EMatch (EApp (EApp (EApp (EVar "readNode") (EVar "b")) (EVar "n")) (EVar "p")) (arm (PCon "Err" (PVar "e")) () (EApp (EVar "Err") (EVar "e"))) (arm (PCon "Ok" (PTuple (PVar "node") (PVar "q"))) () (EBlock (DoLet false false (PVar "r") (EApp (EApp (EApp (EVar "skipWsAt") (EVar "b")) (EVar "n")) (EVar "q"))) (DoExpr (EIf (EBinOp ">=" (EVar "r") (EVar "n")) (EApp (EVar "Ok") (EVar "node")) (EApp (EApp (EVar "failAt") (EVar "r")) (ELit (LString "trailing text after the first node"))))))))))))
+(DFunDef false "parseSExp" ((PVar "text")) (EBlock (DoLet false false (PVar "b") (EApp (EVar "byteBlockFromString") (EVar "text"))) (DoLet false false (PVar "n") (EApp (EVar "byteBlockLength") (EVar "b"))) (DoLet false false (PVar "p") (EApp (EApp (EApp (EVar "skipWsAt") (EVar "b")) (EVar "n")) (ELit (LInt 0)))) (DoExpr (EIf (EBinOp ">=" (EVar "p") (EVar "n")) (EApp (EApp (EVar "failAt") (EVar "p")) (ELit (LString "empty input"))) (EApp (EApp (EVar "andThen") (EApp (EApp (EApp (EVar "readNode") (EVar "b")) (EVar "n")) (EVar "p"))) (ELam ((PVar "__do_x")) (EMatch (EVar "__do_x") (arm (PTuple (PVar "node") (PVar "q")) () (ELet false (PVar "r") (EApp (EApp (EApp (EVar "skipWsAt") (EVar "b")) (EVar "n")) (EVar "q")) (EIf (EBinOp ">=" (EVar "r") (EVar "n")) (EApp (EVar "Ok") (EVar "node")) (EApp (EApp (EVar "failAt") (EVar "r")) (ELit (LString "trailing text after the first node")))))))))))))
 (DData Abstract "SexpCursor" () ((variant "SexpCursor" (ConNamed (field "scBytes" (TyCon "ByteBlock")) (field "scLen" (TyCon "Int")) (field "scPos" (TyApp (TyCon "Ref") (TyCon "Int"))) (field "scFailAt" (TyApp (TyCon "Ref") (TyCon "Int")))))) ())
 (DTypeSig true "cursorOf" (TyFun (TyCon "String") (TyCon "SexpCursor")))
 (DFunDef false "cursorOf" ((PVar "text")) (EBlock (DoLet false false (PVar "b") (EApp (EVar "byteBlockFromString") (EVar "text"))) (DoExpr (ERecordCreate "SexpCursor" ((fa "scBytes" (EVar "b")) (fa "scLen" (EApp (EVar "byteBlockLength") (EVar "b"))) (fa "scPos" (EApp (EVar "Ref") (ELit (LInt 0)))) (fa "scFailAt" (EApp (EVar "Ref") (EUnOp "-" (ELit (LInt 1))))))))))
@@ -610,7 +609,7 @@ skipNodeAt b n p depth inQ
 (DFunDef false "expectAtom" (PWild (PCon "SAtom" (PVar "s"))) (EApp (EVar "Ok") (EVar "s")))
 (DFunDef false "expectAtom" ((PVar "path") PWild) (EApp (EApp (EVar "shapeError") (EVar "path")) (ELit (LString "expected an atom"))))
 (DTypeSig true "atomInt" (TyFun (TyCon "String") (TyFun (TyCon "SExp") (TyApp (TyApp (TyCon "Result") (TyCon "SexpError")) (TyCon "Int")))))
-(DFunDef false "atomInt" ((PVar "path") (PVar "node")) (EMatch (EApp (EApp (EVar "expectAtom") (EVar "path")) (EVar "node")) (arm (PCon "Err" (PVar "e")) () (EApp (EVar "Err") (EVar "e"))) (arm (PCon "Ok" (PVar "s")) () (EMatch (EApp (EVar "stringToInt") (EVar "s")) (arm (PCon "Some" (PVar "n")) () (EApp (EVar "Ok") (EVar "n"))) (arm (PCon "None") () (EApp (EApp (EVar "shapeError") (EVar "path")) (ELit (LString "expected an integer"))))))))
+(DFunDef false "atomInt" ((PVar "path") (PVar "node")) (EApp (EApp (EVar "andThen") (EApp (EApp (EVar "expectAtom") (EVar "path")) (EVar "node"))) (ELam ((PVar "s")) (EMatch (EApp (EVar "stringToInt") (EVar "s")) (arm (PCon "Some" (PVar "n")) () (EApp (EVar "Ok") (EVar "n"))) (arm (PCon "None") () (EApp (EApp (EVar "shapeError") (EVar "path")) (ELit (LString "expected an integer"))))))))
 (DTypeSig true "atomBool" (TyFun (TyCon "String") (TyFun (TyCon "SExp") (TyApp (TyApp (TyCon "Result") (TyCon "SexpError")) (TyCon "Bool")))))
 (DFunDef false "atomBool" ((PVar "path") (PVar "node")) (EMatch (EApp (EApp (EVar "expectAtom") (EVar "path")) (EVar "node")) (arm (PCon "Err" (PVar "e")) () (EApp (EVar "Err") (EVar "e"))) (arm (PCon "Ok" (PLit (LString "true"))) () (EApp (EVar "Ok") (EVar "True"))) (arm (PCon "Ok" (PLit (LString "false"))) () (EApp (EVar "Ok") (EVar "False"))) (arm (PCon "Ok" PWild) () (EApp (EApp (EVar "shapeError") (EVar "path")) (ELit (LString "expected true or false"))))))
 (DTypeSig true "cursorSkip" (TyFun (TyCon "SexpCursor") (TyCon "Unit")))
@@ -686,7 +685,7 @@ skipNodeAt b n p depth inQ
 (DTypeSig false "readItems" (TyFun (TyCon "ByteBlock") (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyFun (TyApp (TyCon "List") (TyCon "SExp")) (TyApp (TyApp (TyCon "Result") (TyCon "SexpError")) (TyTuple (TyCon "SExp") (TyCon "Int")))))))))
 (DFunDef false "readItems" ((PVar "b") (PVar "n") (PVar "open") (PVar "p0") (PVar "acc")) (EBlock (DoLet false false (PVar "p") (EApp (EApp (EApp (EVar "skipWsAt") (EVar "b")) (EVar "n")) (EVar "p0"))) (DoExpr (EIf (EBinOp ">=" (EVar "p") (EVar "n")) (EApp (EApp (EVar "failAt") (EVar "open")) (ELit (LString "unbalanced open paren"))) (EIf (EApp (EVar "isCloseByte") (EApp (EApp (EVar "byteBlockGetUnsafe") (EVar "p")) (EVar "b"))) (EApp (EVar "Ok") (ETuple (EApp (EVar "SList") (EApp (EVar "reverse") (EVar "acc"))) (EBinOp "+" (EVar "p") (ELit (LInt 1))))) (EMatch (EApp (EApp (EApp (EVar "readNode") (EVar "b")) (EVar "n")) (EVar "p")) (arm (PCon "Err" (PVar "e")) () (EApp (EVar "Err") (EVar "e"))) (arm (PCon "Ok" (PTuple (PVar "item") (PVar "q"))) () (EApp (EApp (EApp (EApp (EApp (EVar "readItems") (EVar "b")) (EVar "n")) (EVar "open")) (EVar "q")) (EBinOp "::" (EVar "item") (EVar "acc"))))))))))
 (DTypeSig true "parseSExp" (TyFun (TyCon "String") (TyApp (TyApp (TyCon "Result") (TyCon "SexpError")) (TyCon "SExp"))))
-(DFunDef false "parseSExp" ((PVar "text")) (EBlock (DoLet false false (PVar "b") (EApp (EVar "byteBlockFromString") (EVar "text"))) (DoLet false false (PVar "n") (EApp (EVar "byteBlockLength") (EVar "b"))) (DoLet false false (PVar "p") (EApp (EApp (EApp (EVar "skipWsAt") (EVar "b")) (EVar "n")) (ELit (LInt 0)))) (DoExpr (EIf (EBinOp ">=" (EVar "p") (EVar "n")) (EApp (EApp (EVar "failAt") (EVar "p")) (ELit (LString "empty input"))) (EMatch (EApp (EApp (EApp (EVar "readNode") (EVar "b")) (EVar "n")) (EVar "p")) (arm (PCon "Err" (PVar "e")) () (EApp (EVar "Err") (EVar "e"))) (arm (PCon "Ok" (PTuple (PVar "node") (PVar "q"))) () (EBlock (DoLet false false (PVar "r") (EApp (EApp (EApp (EVar "skipWsAt") (EVar "b")) (EVar "n")) (EVar "q"))) (DoExpr (EIf (EBinOp ">=" (EVar "r") (EVar "n")) (EApp (EVar "Ok") (EVar "node")) (EApp (EApp (EVar "failAt") (EVar "r")) (ELit (LString "trailing text after the first node"))))))))))))
+(DFunDef false "parseSExp" ((PVar "text")) (EBlock (DoLet false false (PVar "b") (EApp (EVar "byteBlockFromString") (EVar "text"))) (DoLet false false (PVar "n") (EApp (EVar "byteBlockLength") (EVar "b"))) (DoLet false false (PVar "p") (EApp (EApp (EApp (EVar "skipWsAt") (EVar "b")) (EVar "n")) (ELit (LInt 0)))) (DoExpr (EIf (EBinOp ">=" (EVar "p") (EVar "n")) (EApp (EApp (EVar "failAt") (EVar "p")) (ELit (LString "empty input"))) (EApp (EApp (EMethodRef "andThen") (EApp (EApp (EApp (EVar "readNode") (EVar "b")) (EVar "n")) (EVar "p"))) (ELam ((PVar "__do_x")) (EMatch (EVar "__do_x") (arm (PTuple (PVar "node") (PVar "q")) () (ELet false (PVar "r") (EApp (EApp (EApp (EVar "skipWsAt") (EVar "b")) (EVar "n")) (EVar "q")) (EIf (EBinOp ">=" (EVar "r") (EVar "n")) (EApp (EVar "Ok") (EVar "node")) (EApp (EApp (EVar "failAt") (EVar "r")) (ELit (LString "trailing text after the first node")))))))))))))
 (DData Abstract "SexpCursor" () ((variant "SexpCursor" (ConNamed (field "scBytes" (TyCon "ByteBlock")) (field "scLen" (TyCon "Int")) (field "scPos" (TyApp (TyCon "Ref") (TyCon "Int"))) (field "scFailAt" (TyApp (TyCon "Ref") (TyCon "Int")))))) ())
 (DTypeSig true "cursorOf" (TyFun (TyCon "String") (TyCon "SexpCursor")))
 (DFunDef false "cursorOf" ((PVar "text")) (EBlock (DoLet false false (PVar "b") (EApp (EVar "byteBlockFromString") (EVar "text"))) (DoExpr (ERecordCreate "SexpCursor" ((fa "scBytes" (EVar "b")) (fa "scLen" (EApp (EVar "byteBlockLength") (EVar "b"))) (fa "scPos" (EApp (EVar "Ref") (ELit (LInt 0)))) (fa "scFailAt" (EApp (EVar "Ref") (EUnOp "-" (ELit (LInt 1))))))))))
@@ -730,7 +729,7 @@ skipNodeAt b n p depth inQ
 (DFunDef false "expectAtom" (PWild (PCon "SAtom" (PVar "s"))) (EApp (EVar "Ok") (EVar "s")))
 (DFunDef false "expectAtom" ((PVar "path") PWild) (EApp (EApp (EVar "shapeError") (EVar "path")) (ELit (LString "expected an atom"))))
 (DTypeSig true "atomInt" (TyFun (TyCon "String") (TyFun (TyCon "SExp") (TyApp (TyApp (TyCon "Result") (TyCon "SexpError")) (TyCon "Int")))))
-(DFunDef false "atomInt" ((PVar "path") (PVar "node")) (EMatch (EApp (EApp (EVar "expectAtom") (EVar "path")) (EVar "node")) (arm (PCon "Err" (PVar "e")) () (EApp (EVar "Err") (EVar "e"))) (arm (PCon "Ok" (PVar "s")) () (EMatch (EApp (EVar "stringToInt") (EVar "s")) (arm (PCon "Some" (PVar "n")) () (EApp (EVar "Ok") (EVar "n"))) (arm (PCon "None") () (EApp (EApp (EVar "shapeError") (EVar "path")) (ELit (LString "expected an integer"))))))))
+(DFunDef false "atomInt" ((PVar "path") (PVar "node")) (EApp (EApp (EMethodRef "andThen") (EApp (EApp (EVar "expectAtom") (EVar "path")) (EVar "node"))) (ELam ((PVar "s")) (EMatch (EApp (EVar "stringToInt") (EVar "s")) (arm (PCon "Some" (PVar "n")) () (EApp (EVar "Ok") (EVar "n"))) (arm (PCon "None") () (EApp (EApp (EVar "shapeError") (EVar "path")) (ELit (LString "expected an integer"))))))))
 (DTypeSig true "atomBool" (TyFun (TyCon "String") (TyFun (TyCon "SExp") (TyApp (TyApp (TyCon "Result") (TyCon "SexpError")) (TyCon "Bool")))))
 (DFunDef false "atomBool" ((PVar "path") (PVar "node")) (EMatch (EApp (EApp (EVar "expectAtom") (EVar "path")) (EVar "node")) (arm (PCon "Err" (PVar "e")) () (EApp (EVar "Err") (EVar "e"))) (arm (PCon "Ok" (PLit (LString "true"))) () (EApp (EVar "Ok") (EVar "True"))) (arm (PCon "Ok" (PLit (LString "false"))) () (EApp (EVar "Ok") (EVar "False"))) (arm (PCon "Ok" PWild) () (EApp (EApp (EVar "shapeError") (EVar "path")) (ELit (LString "expected true or false"))))))
 (DTypeSig true "cursorSkip" (TyFun (TyCon "SexpCursor") (TyCon "Unit")))
