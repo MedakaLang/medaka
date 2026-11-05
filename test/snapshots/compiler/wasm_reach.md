@@ -1,5 +1,5 @@
 # META
-source_lines=276
+source_lines=263
 stages=DESUGAR,MARK
 # SOURCE
 import support.symbol_encoding.{encodePair}
@@ -91,7 +91,7 @@ import ir.core_ir.{
   CImplEntry(..),
   CImplBody(..),
 }
-import support.util.{filterList, startsWith}
+import support.util.{filterList, markReachable, startsWith}
 import backend.emit_support.{forEachU}
 import hash_map.{HashMap, new, setInPlace, has, findWithDefault}
 
@@ -125,7 +125,7 @@ reachKeys groups impls =
   let graph = refGraph defined groups impls
   let seen = new ()
   let roots = map (canonKey defined) ("main" :: memoRootNames groups)
-  closure graph seen roots
+  markReachable graph seen roots
   seen
 
 -- every key the graph can name: top-level binding names + impl method names.
@@ -188,19 +188,6 @@ addEdges defined g key refs =
   setInPlace key (map (canonKey defined) refs ++ findWithDefault [] key g) g
 
 -- BFS worklist closure; `has` skips already-processed keys so each is expanded once.
-closure : HashMap String (List String) ->
-  HashMap String Unit ->
-  List String ->
-  Unit
-closure graph seen xs0 = go xs0
-  where
-    go [] = ()
-    go (w :: work)
-      | has w seen = go work
-      | otherwise =
-        setInPlace w () seen
-        go (findWithDefault [] w graph ++ work)
-
 -- ── structural reference collection ────────────────────────────────────────
 -- Every name a body can turn into a call/global reference at emit time.  Binder
 -- scoping is ignored on purpose (see header).  This match is deliberately
@@ -282,7 +269,7 @@ refsImplBody (CImplDefault _ _ _ _ _ _ body) = refsE body
 (DUse false (UseGroup ("support" "symbol_encoding") ((mem "encodePair" false))))
 (DUse false (UseGroup ("frontend" "ast") ((mem "Route" true))))
 (DUse false (UseGroup ("ir" "core_ir") ((mem "CProgram" true) (mem "CExpr" true) (mem "MethodEvidence" true) (mem "CBind" true) (mem "CClause" true) (mem "CArm" true) (mem "CGuard" true) (mem "CStmt" true) (mem "CField" true) (mem "CImplEntry" true) (mem "CImplBody" true))))
-(DUse false (UseGroup ("support" "util") ((mem "filterList" false) (mem "startsWith" false))))
+(DUse false (UseGroup ("support" "util") ((mem "filterList" false) (mem "markReachable" false) (mem "startsWith" false))))
 (DUse false (UseGroup ("backend" "emit_support") ((mem "forEachU" false))))
 (DUse false (UseGroup ("hash_map") ((mem "HashMap" false) (mem "new" false) (mem "setInPlace" false) (mem "has" false) (mem "findWithDefault" false))))
 (DTypeSig true "wasmReachFilter" (TyFun (TyCon "CProgram") (TyCon "CProgram")))
@@ -292,7 +279,7 @@ refsImplBody (CImplDefault _ _ _ _ _ _ body) = refsE body
 (DTypeSig false "implKey" (TyFun (TyCon "CImplEntry") (TyCon "String")))
 (DFunDef false "implKey" ((PCon "CImplEntry" (PVar "method") PWild PWild PWild)) (EVar "method"))
 (DTypeSig false "reachKeys" (TyFun (TyApp (TyCon "List") (TyCon "CBind")) (TyFun (TyApp (TyCon "List") (TyCon "CImplEntry")) (TyApp (TyApp (TyCon "HashMap") (TyCon "String")) (TyCon "Unit")))))
-(DFunDef false "reachKeys" ((PVar "groups") (PVar "impls")) (EBlock (DoLet false false (PVar "defined") (EApp (EApp (EVar "definedKeys") (EVar "groups")) (EVar "impls"))) (DoLet false false (PVar "graph") (EApp (EApp (EApp (EVar "refGraph") (EVar "defined")) (EVar "groups")) (EVar "impls"))) (DoLet false false (PVar "seen") (EApp (EVar "new") (ELit LUnit))) (DoLet false false (PVar "roots") (EApp (EApp (EVar "map") (EApp (EVar "canonKey") (EVar "defined"))) (EBinOp "::" (ELit (LString "main")) (EApp (EVar "memoRootNames") (EVar "groups"))))) (DoExpr (EApp (EApp (EApp (EVar "closure") (EVar "graph")) (EVar "seen")) (EVar "roots"))) (DoExpr (EVar "seen"))))
+(DFunDef false "reachKeys" ((PVar "groups") (PVar "impls")) (EBlock (DoLet false false (PVar "defined") (EApp (EApp (EVar "definedKeys") (EVar "groups")) (EVar "impls"))) (DoLet false false (PVar "graph") (EApp (EApp (EApp (EVar "refGraph") (EVar "defined")) (EVar "groups")) (EVar "impls"))) (DoLet false false (PVar "seen") (EApp (EVar "new") (ELit LUnit))) (DoLet false false (PVar "roots") (EApp (EApp (EVar "map") (EApp (EVar "canonKey") (EVar "defined"))) (EBinOp "::" (ELit (LString "main")) (EApp (EVar "memoRootNames") (EVar "groups"))))) (DoExpr (EApp (EApp (EApp (EVar "markReachable") (EVar "graph")) (EVar "seen")) (EVar "roots"))) (DoExpr (EVar "seen"))))
 (DTypeSig false "definedKeys" (TyFun (TyApp (TyCon "List") (TyCon "CBind")) (TyFun (TyApp (TyCon "List") (TyCon "CImplEntry")) (TyApp (TyApp (TyCon "HashMap") (TyCon "String")) (TyCon "Unit")))))
 (DFunDef false "definedKeys" ((PVar "groups") (PVar "impls")) (EBlock (DoLet false false (PVar "s") (EApp (EVar "new") (ELit LUnit))) (DoExpr (EApp (EApp (EVar "forEachU") (ELam ((PVar "b")) (EApp (EApp (EApp (EVar "setInPlace") (EApp (EVar "bindKey") (EVar "b"))) (ELit LUnit)) (EVar "s")))) (EVar "groups"))) (DoExpr (EApp (EApp (EVar "forEachU") (ELam ((PVar "e")) (EApp (EApp (EApp (EVar "setInPlace") (EApp (EVar "implKey") (EVar "e"))) (ELit LUnit)) (EVar "s")))) (EVar "impls"))) (DoExpr (EVar "s"))))
 (DTypeSig false "canonKey" (TyFun (TyApp (TyApp (TyCon "HashMap") (TyCon "String")) (TyCon "Unit")) (TyFun (TyCon "String") (TyCon "String"))))
@@ -307,8 +294,6 @@ refsImplBody (CImplDefault _ _ _ _ _ _ body) = refsE body
 (DFunDef false "addImplEdges" ((PVar "defined") (PVar "g") (PCon "CImplEntry" (PVar "method") PWild PWild (PVar "body"))) (EApp (EApp (EApp (EApp (EVar "addEdges") (EVar "defined")) (EVar "g")) (EVar "method")) (EApp (EVar "refsImplBody") (EVar "body"))))
 (DTypeSig false "addEdges" (TyFun (TyApp (TyApp (TyCon "HashMap") (TyCon "String")) (TyCon "Unit")) (TyFun (TyApp (TyApp (TyCon "HashMap") (TyCon "String")) (TyApp (TyCon "List") (TyCon "String"))) (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyCon "Unit"))))))
 (DFunDef false "addEdges" ((PVar "defined") (PVar "g") (PVar "key") (PVar "refs")) (EApp (EApp (EApp (EVar "setInPlace") (EVar "key")) (EBinOp "++" (EApp (EApp (EVar "map") (EApp (EVar "canonKey") (EVar "defined"))) (EVar "refs")) (EApp (EApp (EApp (EVar "findWithDefault") (EListLit)) (EVar "key")) (EVar "g")))) (EVar "g")))
-(DTypeSig false "closure" (TyFun (TyApp (TyApp (TyCon "HashMap") (TyCon "String")) (TyApp (TyCon "List") (TyCon "String"))) (TyFun (TyApp (TyApp (TyCon "HashMap") (TyCon "String")) (TyCon "Unit")) (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyCon "Unit")))))
-(DFunDef false "closure" ((PVar "graph") (PVar "seen") (PVar "xs0")) (ELetGroup ((lgb "go" (clause ((PList)) (ELit LUnit)) (clause ((PCons (PVar "w") (PVar "work"))) (EIf (EApp (EApp (EVar "has") (EVar "w")) (EVar "seen")) (EApp (EVar "go") (EVar "work")) (EIf (EVar "otherwise") (EBlock (DoExpr (EApp (EApp (EApp (EVar "setInPlace") (EVar "w")) (ELit LUnit)) (EVar "seen"))) (DoExpr (EApp (EVar "go") (EBinOp "++" (EApp (EApp (EApp (EVar "findWithDefault") (EListLit)) (EVar "w")) (EVar "graph")) (EVar "work"))))) (EApp (EVar "__fallthrough__") (ELit LUnit))))))) (EApp (EVar "go") (EVar "xs0"))))
 (DTypeSig false "refsE" (TyFun (TyCon "CExpr") (TyApp (TyCon "List") (TyCon "String"))))
 (DFunDef false "refsE" ((PCon "CLit" PWild)) (EListLit))
 (DFunDef false "refsE" ((PCon "CVar" (PVar "x") PWild)) (EListLit (EVar "x")))
@@ -370,7 +355,7 @@ refsImplBody (CImplDefault _ _ _ _ _ _ body) = refsE body
 (DUse false (UseGroup ("support" "symbol_encoding") ((mem "encodePair" false))))
 (DUse false (UseGroup ("frontend" "ast") ((mem "Route" true))))
 (DUse false (UseGroup ("ir" "core_ir") ((mem "CProgram" true) (mem "CExpr" true) (mem "MethodEvidence" true) (mem "CBind" true) (mem "CClause" true) (mem "CArm" true) (mem "CGuard" true) (mem "CStmt" true) (mem "CField" true) (mem "CImplEntry" true) (mem "CImplBody" true))))
-(DUse false (UseGroup ("support" "util") ((mem "filterList" false) (mem "startsWith" false))))
+(DUse false (UseGroup ("support" "util") ((mem "filterList" false) (mem "markReachable" false) (mem "startsWith" false))))
 (DUse false (UseGroup ("backend" "emit_support") ((mem "forEachU" false))))
 (DUse false (UseGroup ("hash_map") ((mem "HashMap" false) (mem "new" false) (mem "setInPlace" false) (mem "has" false) (mem "findWithDefault" false))))
 (DTypeSig true "wasmReachFilter" (TyFun (TyCon "CProgram") (TyCon "CProgram")))
@@ -380,7 +365,7 @@ refsImplBody (CImplDefault _ _ _ _ _ _ body) = refsE body
 (DTypeSig false "implKey" (TyFun (TyCon "CImplEntry") (TyCon "String")))
 (DFunDef false "implKey" ((PCon "CImplEntry" (PVar "method") PWild PWild PWild)) (EVar "method"))
 (DTypeSig false "reachKeys" (TyFun (TyApp (TyCon "List") (TyCon "CBind")) (TyFun (TyApp (TyCon "List") (TyCon "CImplEntry")) (TyApp (TyApp (TyCon "HashMap") (TyCon "String")) (TyCon "Unit")))))
-(DFunDef false "reachKeys" ((PVar "groups") (PVar "impls")) (EBlock (DoLet false false (PVar "defined") (EApp (EApp (EVar "definedKeys") (EVar "groups")) (EVar "impls"))) (DoLet false false (PVar "graph") (EApp (EApp (EApp (EVar "refGraph") (EVar "defined")) (EVar "groups")) (EVar "impls"))) (DoLet false false (PVar "seen") (EApp (EVar "new") (ELit LUnit))) (DoLet false false (PVar "roots") (EApp (EApp (EMethodRef "map") (EApp (EVar "canonKey") (EVar "defined"))) (EBinOp "::" (ELit (LString "main")) (EApp (EVar "memoRootNames") (EVar "groups"))))) (DoExpr (EApp (EApp (EApp (EVar "closure") (EVar "graph")) (EVar "seen")) (EVar "roots"))) (DoExpr (EVar "seen"))))
+(DFunDef false "reachKeys" ((PVar "groups") (PVar "impls")) (EBlock (DoLet false false (PVar "defined") (EApp (EApp (EVar "definedKeys") (EVar "groups")) (EVar "impls"))) (DoLet false false (PVar "graph") (EApp (EApp (EApp (EVar "refGraph") (EVar "defined")) (EVar "groups")) (EVar "impls"))) (DoLet false false (PVar "seen") (EApp (EVar "new") (ELit LUnit))) (DoLet false false (PVar "roots") (EApp (EApp (EMethodRef "map") (EApp (EVar "canonKey") (EVar "defined"))) (EBinOp "::" (ELit (LString "main")) (EApp (EVar "memoRootNames") (EVar "groups"))))) (DoExpr (EApp (EApp (EApp (EVar "markReachable") (EVar "graph")) (EVar "seen")) (EVar "roots"))) (DoExpr (EVar "seen"))))
 (DTypeSig false "definedKeys" (TyFun (TyApp (TyCon "List") (TyCon "CBind")) (TyFun (TyApp (TyCon "List") (TyCon "CImplEntry")) (TyApp (TyApp (TyCon "HashMap") (TyCon "String")) (TyCon "Unit")))))
 (DFunDef false "definedKeys" ((PVar "groups") (PVar "impls")) (EBlock (DoLet false false (PVar "s") (EApp (EVar "new") (ELit LUnit))) (DoExpr (EApp (EApp (EVar "forEachU") (ELam ((PVar "b")) (EApp (EApp (EApp (EVar "setInPlace") (EApp (EVar "bindKey") (EVar "b"))) (ELit LUnit)) (EVar "s")))) (EVar "groups"))) (DoExpr (EApp (EApp (EVar "forEachU") (ELam ((PVar "e")) (EApp (EApp (EApp (EVar "setInPlace") (EApp (EVar "implKey") (EVar "e"))) (ELit LUnit)) (EVar "s")))) (EVar "impls"))) (DoExpr (EVar "s"))))
 (DTypeSig false "canonKey" (TyFun (TyApp (TyApp (TyCon "HashMap") (TyCon "String")) (TyCon "Unit")) (TyFun (TyCon "String") (TyCon "String"))))
@@ -395,8 +380,6 @@ refsImplBody (CImplDefault _ _ _ _ _ _ body) = refsE body
 (DFunDef false "addImplEdges" ((PVar "defined") (PVar "g") (PCon "CImplEntry" (PVar "method") PWild PWild (PVar "body"))) (EApp (EApp (EApp (EApp (EVar "addEdges") (EVar "defined")) (EVar "g")) (EVar "method")) (EApp (EVar "refsImplBody") (EVar "body"))))
 (DTypeSig false "addEdges" (TyFun (TyApp (TyApp (TyCon "HashMap") (TyCon "String")) (TyCon "Unit")) (TyFun (TyApp (TyApp (TyCon "HashMap") (TyCon "String")) (TyApp (TyCon "List") (TyCon "String"))) (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyCon "Unit"))))))
 (DFunDef false "addEdges" ((PVar "defined") (PVar "g") (PVar "key") (PVar "refs")) (EApp (EApp (EApp (EVar "setInPlace") (EVar "key")) (EBinOp "++" (EApp (EApp (EMethodRef "map") (EApp (EVar "canonKey") (EVar "defined"))) (EVar "refs")) (EApp (EApp (EApp (EVar "findWithDefault") (EListLit)) (EVar "key")) (EVar "g")))) (EVar "g")))
-(DTypeSig false "closure" (TyFun (TyApp (TyApp (TyCon "HashMap") (TyCon "String")) (TyApp (TyCon "List") (TyCon "String"))) (TyFun (TyApp (TyApp (TyCon "HashMap") (TyCon "String")) (TyCon "Unit")) (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyCon "Unit")))))
-(DFunDef false "closure" ((PVar "graph") (PVar "seen") (PVar "xs0")) (ELetGroup ((lgb "go" (clause ((PList)) (ELit LUnit)) (clause ((PCons (PVar "w") (PVar "work"))) (EIf (EApp (EApp (EVar "has") (EVar "w")) (EVar "seen")) (EApp (EVar "go") (EVar "work")) (EIf (EVar "otherwise") (EBlock (DoExpr (EApp (EApp (EApp (EVar "setInPlace") (EVar "w")) (ELit LUnit)) (EVar "seen"))) (DoExpr (EApp (EVar "go") (EBinOp "++" (EApp (EApp (EApp (EVar "findWithDefault") (EListLit)) (EVar "w")) (EVar "graph")) (EVar "work"))))) (EApp (EVar "__fallthrough__") (ELit LUnit))))))) (EApp (EVar "go") (EVar "xs0"))))
 (DTypeSig false "refsE" (TyFun (TyCon "CExpr") (TyApp (TyCon "List") (TyCon "String"))))
 (DFunDef false "refsE" ((PCon "CLit" PWild)) (EListLit))
 (DFunDef false "refsE" ((PCon "CVar" (PVar "x") PWild)) (EListLit (EVar "x")))

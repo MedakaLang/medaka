@@ -21,7 +21,7 @@
 -- engine and succeeds under `medaka test --native`.
 
 import support.diag_codes.{codeText}
-import test.{expectEach, expectEqual, expectTrue}
+import test.{expectEach, expectEqual, expectNone, expectTrue}
 import frontend.desugar.{desugar}
 import frontend.parser.{parse, parseLocated}
 import frontend.resolve.{
@@ -367,9 +367,7 @@ letRecBodyText src = match desugar (parse src)
   _ => "unexpected shape"
 
 test "desugar rewrites a do block inside a top-level let rec" =
-  expectEqual
-    False
-    (isSome
-      (indexOf
-        "EDo"
-        (letRecBodyText "let rec f n = do\n  x <- Some n\n  Some x\n")))
+  expectNone
+    (indexOf
+      "EDo"
+      (letRecBodyText "let rec f n = do\n  x <- Some n\n  Some x\n"))

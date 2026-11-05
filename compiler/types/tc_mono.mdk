@@ -302,6 +302,8 @@ authOrderTerm q acc =
   fold
     (a cell =>
       let i = authvarId cell
+      -- Bound: `a` holds the distinct authority-variable ids met in one signature's authority terms, which is a handful.
+      -- lint-disable-next-line rule-list-as-set
       if containsI i a then a else i :: a)
     acc
     (authVars q)

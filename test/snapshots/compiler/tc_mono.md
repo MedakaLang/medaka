@@ -1,5 +1,5 @@
 # META
-source_lines=2278
+source_lines=2280
 stages=DESUGAR,MARK
 # SOURCE
 -- tc_mono: operations over `Mono`/`Scheme`, pure except for minting effect-variable ids from the
@@ -306,6 +306,8 @@ authOrderTerm q acc =
   fold
     (a cell =>
       let i = authvarId cell
+      -- Bound: `a` holds the distinct authority-variable ids met in one signature's authority terms, which is a handful.
+      -- lint-disable-next-line rule-list-as-set
       if containsI i a then a else i :: a)
     acc
     (authVars q)

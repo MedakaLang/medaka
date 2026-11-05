@@ -23,7 +23,7 @@ import eval.eval.{
   ppValue
 }
 import types.program_facts.{ProgramFacts}
-import support.util.{filterList}
+import support.util.{filterList, markReachable}
 import tools.doctest.{ExResult(..)}
 import hash_map.{HashMap, new, setInPlace, has, findWithDefault}
 
@@ -139,7 +139,7 @@ uncapableExternNames corpus bound tests =
     [] => []
     _ =>
       let seen = new ()
-      closureOver
+      markReachable
         (refGraph corpus)
         seen
         (flatMap
@@ -229,16 +229,3 @@ refGraphInto ((DFunDef _ n ps body site bid) :: rest) g =
 -- under-approximation the header names: an extern reachable ONLY through a
 -- dictionary-passed method is missed here and still caught by eval's panic.
 refGraphInto (_ :: rest) g = refGraphInto rest g
-
-closureOver : HashMap String (List String) ->
-  HashMap String Unit ->
-  List String ->
-  Unit
-closureOver graph seen xs0 = go xs0
-  where
-    go [] = ()
-    go (w :: work)
-      | has w seen = go work
-      | otherwise =
-        setInPlace w () seen
-        go (findWithDefault [] w graph ++ work)

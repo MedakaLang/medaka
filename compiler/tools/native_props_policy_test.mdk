@@ -55,12 +55,14 @@ intField : String -> Json -> Option Int
 intField name row = flatMap asInt (get name row)
 
 propertyRow : String -> String -> List Json -> Option Json
-propertyRow _ _ [] = None
-propertyRow engine name (row :: rows) =
-  if field "engine" row == Some engine && field "name" row == Some name then
-    Some row
-  else
-    propertyRow engine name rows
+propertyRow engine name rows0 = go rows0
+  where
+    go [] = None
+    go (row :: rows) =
+      if field "engine" row == Some engine && field "name" row == Some name then
+        Some row
+      else
+        go rows
 
 warningText : String
 warningText =

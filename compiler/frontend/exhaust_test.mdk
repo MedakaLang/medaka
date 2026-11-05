@@ -29,6 +29,8 @@ import test.{
   expectAtLeast,
   expectEqual,
   expectNoFindings,
+  expectNone,
+  expectSome,
   fail,
 }
 
@@ -177,24 +179,20 @@ test "a column of byte-literal ranges leaves a witness until a catch-all joins i
 
 -- ── local clause groups are found inside every container literal ──────────
 
-warnsNonExhaustive : String -> Bool
-warnsNonExhaustive src =
-  isSome (indexOf "non-exhaustive" (exhaustToLines (parse src)))
+nonExhaustiveWarning : String -> Option Int
+nonExhaustiveWarning src = indexOf "non-exhaustive" (exhaustToLines (parse src))
 
 test "a non-exhaustive local function inside a map literal is warned about" =
-  expectEqual
-    True
-    (warnsNonExhaustive
+  expectSome
+    (nonExhaustiveWarning
       "main =\n  let t = Map { \"k\" => (let rec f (Some x) = x in f (Some 1)) }\n  println t\n")
 
 test "a non-exhaustive local function inside a set literal is warned about" =
-  expectEqual
-    True
-    (warnsNonExhaustive
+  expectSome
+    (nonExhaustiveWarning
       "main =\n  let t = Set { (let rec f (Some x) = x in f (Some 1)), 2 }\n  println t\n")
 
 test "an exhaustive local function inside a map literal is not warned about" =
-  expectEqual
-    False
-    (warnsNonExhaustive
+  expectNone
+    (nonExhaustiveWarning
       "main =\n  let t = Map { \"k\" => (let rec f x = x in f 1) }\n  println t\n")
