@@ -586,6 +586,14 @@ interpNoHttpClient : String
 interpNoHttpClient =
   "the interpreter has no HTTP client; only the wasmgc/edge target lowers `fetchText`"
 
+processWasmUnavailable : Disposition WasmFamily
+processWasmUnavailable =
+  NotProvided GapPermanent "process ownership is unavailable on wasm"
+
+processEvalUnavailable : Disposition Unit
+processEvalUnavailable =
+  NotProvided GapPermanent "process ownership is unavailable in eval"
+
 -- In `stdlib/runtime.mdk` declaration order.
 export
 catalogRows : List ExternRow
@@ -852,58 +860,58 @@ catalogRows = [
   ExternRow
     "processSubmitRaw"
     (CSymbol LlvmNet "mdk_process_submit")
-    (NotProvided GapPermanent "process ownership is unavailable on wasm")
-    (NotProvided GapPermanent "process ownership is unavailable in eval"),
+    processWasmUnavailable
+    processEvalUnavailable,
   ExternRow
     "processStartRaw"
     (CSymbol LlvmNet "mdk_process_start")
-    (NotProvided GapPermanent "process ownership is unavailable on wasm")
-    (NotProvided GapPermanent "process ownership is unavailable in eval"),
+    processWasmUnavailable
+    processEvalUnavailable,
   ExternRow
     "processRetryStartRaw"
     (CSymbol LlvmNet "mdk_process_retry_start")
-    (NotProvided GapPermanent "process ownership is unavailable on wasm")
-    (NotProvided GapPermanent "process ownership is unavailable in eval"),
+    processWasmUnavailable
+    processEvalUnavailable,
   ExternRow
     "processCheckStartRaw"
     (CSymbol LlvmNet "mdk_process_check_start")
-    (NotProvided GapPermanent "process ownership is unavailable on wasm")
-    (NotProvided GapPermanent "process ownership is unavailable in eval"),
+    processWasmUnavailable
+    processEvalUnavailable,
   ExternRow
     "processAbortStartRaw"
     (CSymbol LlvmNet "mdk_process_abort_start")
-    (NotProvided GapPermanent "process ownership is unavailable on wasm")
-    (NotProvided GapPermanent "process ownership is unavailable in eval"),
+    processWasmUnavailable
+    processEvalUnavailable,
   ExternRow
     "processPollExitRaw"
     (CSymbol LlvmNet "mdk_process_poll_exit")
-    (NotProvided GapPermanent "process ownership is unavailable on wasm")
-    (NotProvided GapPermanent "process ownership is unavailable in eval"),
+    processWasmUnavailable
+    processEvalUnavailable,
   ExternRow
     "processCloseStdinRaw"
     (CSymbol LlvmNet "mdk_process_close_stdin")
-    (NotProvided GapPermanent "process ownership is unavailable on wasm")
-    (NotProvided GapPermanent "process ownership is unavailable in eval"),
+    processWasmUnavailable
+    processEvalUnavailable,
   ExternRow
     "processDisposeRaw"
     (CSymbol LlvmNet "mdk_process_dispose")
-    (NotProvided GapPermanent "process ownership is unavailable on wasm")
-    (NotProvided GapPermanent "process ownership is unavailable in eval"),
+    processWasmUnavailable
+    processEvalUnavailable,
   ExternRow
     "processTryReadRaw"
     (CSymbol LlvmNet "mdk_process_try_read")
-    (NotProvided GapPermanent "process ownership is unavailable on wasm")
-    (NotProvided GapPermanent "process ownership is unavailable in eval"),
+    processWasmUnavailable
+    processEvalUnavailable,
   ExternRow
     "processTryWriteRaw"
     (CSymbol LlvmNet "mdk_process_try_write")
-    (NotProvided GapPermanent "process ownership is unavailable on wasm")
-    (NotProvided GapPermanent "process ownership is unavailable in eval"),
+    processWasmUnavailable
+    processEvalUnavailable,
   ExternRow
     "processStreamFdRaw"
     (CSymbol LlvmNet "mdk_process_stream_fd")
-    (NotProvided GapPermanent "process ownership is unavailable on wasm")
-    (NotProvided GapPermanent "process ownership is unavailable in eval"),
+    processWasmUnavailable
+    processEvalUnavailable,
   ExternRow
     "netResolve"
     (CSymbol LlvmNet "mdk_net_resolve")

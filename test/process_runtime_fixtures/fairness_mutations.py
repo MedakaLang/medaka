@@ -41,8 +41,8 @@ run([compiler, "check", tests], "yieldSteps", True)
 run([compiler, "test", tests], "continuous writable progress yields to cancellation", False)
 shutil.copy(async_source, scratch / "async.mdk")
 replace(scratch / "process_async.mdk",
-        "writeFrom p bytes (offset + n) deadline token",
-        "writeFrom p bytes offset deadline token")
+        "Ok (Some n) => go (offset + n)",
+        "Ok (Some n) => go offset")
 run([compiler, "check", tests], "yieldSteps", True)
 run([compiler, "test", tests], "backpressured write returns its committed prefix", False)
 
