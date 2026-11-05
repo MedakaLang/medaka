@@ -904,7 +904,7 @@ data Emit = Emit {
   curImplTag : Ref String,
   curSelfFnParams : Ref (List String),
   knownFnMap : Ref (Option (OrdMap Unit)),
-  lazyGlobalMap : Ref (Option (OrdMap Unit)),
+  lazyGlobalMap : Ref (Option (OrdMap (Option CExpr))),
   constructorFacts : ConstructorFacts,
   sigMap : Ref (Option (OrdMap FnSig)),
   implsByMethod : Ref (Option (OrdMap (List CImplEntry))),
@@ -1264,18 +1264,24 @@ installKnownFnMap : Emit -> List String -> Unit
 installKnownFnMap e fns = e.knownFnMap := Some (omFromNames fns omEmpty)
 
 -- ── #561 PR-A: lazy value-global set (installed once per program) ────────────
--- The value globals emit_support.lazyGlobalNames classifies as LAZY (reaching an
--- eager dispatch or a value cycle — no static init order): their reads lower to
+-- The value globals emit_support.lazyGlobalNames classifies as LAZY (an initializer
+-- not safe to speculate, an eager dispatch, or a value cycle): their reads lower to
 -- `call @mdk_force_<x>()` instead of a plain `load @mdk_g_<x>`, and each gets a
 -- `@mdk_force_<x>` define + an `@mdk_gs_<x>` state flag (0 UNFORCED / 1 FORCING /
 -- 2 FORCED).  Everything else stays on the byte-identical eager prologue.  Installed
 -- (even empty) at EVERY emitProgram entry so a prior program's set can never leak
 -- across a same-process re-emit — the same discipline as installKnownFnMap.
-installLazyGlobalMap : Emit -> List String -> Unit
--- Intentional cross-file duplicate of installLazyGlobalMapW in wasm_emit.mdk (#561 PR-B); not consolidating (tiny install helper over a backend-local Ref / divergent-by-design backend pair).
--- lint-disable-next-line rule-duplicate-body
-installLazyGlobalMap e names =
-  e.lazyGlobalMap := Some (omFromNames names omEmpty)
+-- Each name maps to its initializer when this program half defines it, so that a
+-- read can state the forced word's type (`lazyGlobalTy`).
+installLazyGlobalMap : Emit -> List String -> List CBind -> Unit
+installLazyGlobalMap e names binds =
+  let bodies = omFromPairs (filterMap valueBindBody binds) omEmpty
+  e.lazyGlobalMap :=
+    Some (omFromPairs (map (n => (n, omLookup n bodies)) names) omEmpty)
+
+valueBindBody : CBind -> Option (String, CExpr)
+valueBindBody (CBind name [CClause [] body] _ _) = Some (name, body)
+valueBindBody _ = None
 
 export
 isLazyGlobal : Emit -> String -> Bool
@@ -1283,6 +1289,17 @@ isLazyGlobal : Emit -> String -> Bool
 -- lint-disable-next-line rule-duplicate-body
 isLazyGlobal e x = match !e.lazyGlobalMap
   Some m => omHasKey x m
+  None => panic "llvm: lazyGlobalMap read before install (internal error)"
+
+-- The static type of a lazy global's forced word.  The eager prologue records the
+-- type its rhs emitted to (`markGlobalInit`); a lazy rhs is emitted later, in its
+-- force define, so a read takes the type `typeOf` reads off the same rhs.  A global
+-- this half only declares has no rhs here and reads its typecheck stamp.
+lazyGlobalTy : Emit -> String -> LTy
+lazyGlobalTy e x = match !e.lazyGlobalMap
+  Some m => match omLookup x m
+    Some (Some body) => typeOf e omEmpty body
+    _ => globalStampTy e x
   None => panic "llvm: lazyGlobalMap read before install (internal error)"
 
 -- the signature index, read by `sigLookup`; `reverseL` makes the FIRST entry win
@@ -1911,22 +1928,17 @@ lookupVarG e env x = match omLookup x env
   -- black-holes a re-entrant force into E-CYCLIC-VALUE.  A LOCAL of the same name
   -- still shadows (the env is checked first, above).
   --
-  -- ⚠️ The returned LTy `LTInt` is a PLACEHOLDER, not a type claim: the forced word is a
-  -- uniform i64 (Int immediate / Bool immediate / boxed-Float-ptr-as-i64), and this call
-  -- site does not carry the global's real static type.  That is SOUND because no
-  -- type-sensitive consumer trusts THIS LTy — each recovers the real type from its OWN
-  -- typecheck-stamped tag: a Float arithmetic/print op from the CBinPrim/scalar tag
-  -- (scalarTagIsFloat), a bare value-main's print from main's inferred `mty`, a Bool
-  -- `if`/print from the scrutinee/return type.  Verified: LAZY Bool/Float/String globals
-  -- all print & compute == eval (fixtures eager_global_lazy_{bool,float,string}).  If a
-  -- future consumer WERE to key off this returned LTy, those fixtures would fail the gate.
+  -- The read carries the global's static type (`lazyGlobalTy`), as an eager read
+  -- carries its registry entry's: an unstamped program (`llvm_emit_main`) has no
+  -- other source for it, and a value `main` that reads a lazy global prints and
+  -- detects Unit from this LTy (eager_global_guard, lazy_global_string_read).
   None =>
     if isLazyGlobal e x then
       let r = freshReg e
       let forcer = LN.llvmName (LN.LGlobalForcer x)
       let call = wordCall e forcer []
       emit e "  \{r} = \{call}"
-      (r, LTInt)
+      (r, lazyGlobalTy e x)
     else match lookupAssoc x (globalsRegRef e).value
       Some (True, ty) =>
         let r = freshReg e
@@ -4612,11 +4624,6 @@ isAnyExtern e name = match llvmFamily (runtimeName e name)
 
 -- Is `name` an extern of exactly this family?  Used where a caller needs one
 -- family's membership rather than the dispatch.
-inIoFamily : String -> Bool
-inIoFamily name = match llvmFamily name
-  Some LlvmIo => True
-  _ => False
-
 inU64Family : String -> Bool
 inU64Family name = match llvmFamily name
   Some LlvmU64 => True
@@ -13850,7 +13857,7 @@ typeOf _ _ (CList _) = LTCon
 typeOf _ _ (CRangeList _ _ _) = LTCon
 typeOf e env (CVar x _) = match omLookup x env
   Some (_, t) => valueLTy t
-  None => optionOrElse (_ => runtimeLTy RTValue) (omLookup x e.globalTys)
+  None => globalStampTy e x
 typeOf e env (CBinPrim op l _ tag _)
   | isCmpOp op = LTBool
   | op == "::" = LTCon
@@ -13889,6 +13896,11 @@ typeOf e env app =
     CMethod fname _ => callRetTy e fname
     _ => runtimeLTy RTValue
 
+-- a top-level value's type from its typecheck stamp, a bare word when unstamped
+globalStampTy : Emit -> String -> LTy
+globalStampTy e x =
+  optionOrElse (_ => runtimeLTy RTValue) (omLookup x e.globalTys)
+
 -- the type a local's recorded LTy reads as, its raw register kinds as the word
 valueLTy : LTy -> LTy
 valueLTy LTFloatU = LTFloat
@@ -13903,11 +13915,14 @@ bindGroupStamp e env (CBind name _ _ bid) =
   omInsert name ("", binderLTy e bid) env
 
 -- The return type of a known function, from its return stamp.  IO output externs
--- (putStr/putStrLn/…) return Unit but are not functions of the program, so they
--- resolve to LTUnit up front, matching the real emit path (`emitIoExtern`).
+-- (putStr/putStrLn/…) and abort externs (exit/panic/…) are not functions of the
+-- program and resolve to LTUnit up front, matching the real emit paths
+-- (`emitIoExtern`, `emitAbortExtern`).
 callRetTy : Emit -> String -> LTy
-callRetTy e fname =
-  if inIoFamily (runtimeName e fname) then LTUnit else fnRetTy e fname
+callRetTy e fname = match llvmFamily (runtimeName e fname)
+  Some LlvmIo => LTUnit
+  Some LlvmAbort => LTUnit
+  _ => fnRetTy e fname
 
 -- a block's value is its last statement's; a trailing `let` yields Unit
 blockTy : Emit -> OrdMap (String, LTy) -> List CStmt -> LTy
@@ -14733,10 +14748,10 @@ buildEmitState cfg input groups ctorArs ctorTypes implEntries facts =
   e.dictConstCache := []
   e.closConstCache := []
   installKnownFnMap e (collectFns groups)
-  -- #561 PR-A: classify LAZY value globals (dispatch-reaching / cyclic) once per
-  -- program.  Reads of these lower to `call @mdk_force_<x>()`; every other global
-  -- stays on the byte-identical eager prologue.
-  installLazyGlobalMap e cfg.lazyNames
+  -- #561 PR-A: install the LAZY value globals (emit_support.lazyGlobalNames) once
+  -- per program.  Reads of these lower to `call @mdk_force_<x>()`; every other
+  -- global stays on the eager prologue.
+  installLazyGlobalMap e cfg.lazyNames (valBinds groups)
   installTypeIds e
   installSigMap e (programSigs e (fnBinds groups))
   -- #990: group the flat impl-entry list by interface method ONCE, so every per-site
@@ -14844,9 +14859,9 @@ emitProgramMain e plan groups =
   -- prelude-double-load note on emitTopGlobals below for why such a global can
   -- appear at all.
   let mainRhs = mainBody e groups
-  -- #561 PR-A: only SAFE (statically-orderable) value globals are eager-initialised
-  -- in this prologue — byte-identical to the pre-#561 emitter whenever no global is
-  -- lazy (the compiler's own case).  A SAFE global's whole eager reach is SAFE (the
+  -- Only value globals whose initializer is safe to speculate (it calls nothing, so
+  -- running it before `main` cannot be observed; emit_support.speculationSafe) are
+  -- initialised in this prologue.  An eager global's whole eager reach is eager (the
   -- taint is downward-closed over reads), so this prologue never calls a force fn.
   -- LAZY globals are initialised on first use by their @mdk_force_<x> defines below.
   let eagerBinds =

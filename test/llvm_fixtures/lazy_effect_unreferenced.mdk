@@ -1,0 +1,5 @@
+-- An unreferenced top-level value with an effect never runs, including when
+-- the prelude is linked as a separate object and source DCE is off.
+main = putStrLn "ok"
+
+side = putStrLn "BOOM"

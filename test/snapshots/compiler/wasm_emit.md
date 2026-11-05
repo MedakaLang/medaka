@@ -1,5 +1,5 @@
 # META
-source_lines=11118
+source_lines=11119
 stages=DESUGAR,MARK
 # SOURCE
 import backend.runtime_layout.{
@@ -2557,9 +2557,9 @@ entryExports = [
 
 emitRefInit : Prog -> EmitPlan -> List CBind -> List String
 emitRefInit prog plan groups =
-  -- #561 PR-B: only SAFE (statically-orderable) value globals are eager-initialised in
-  -- $__init — byte-identical to the pre-#561 emitter whenever no global is lazy.  A SAFE
-  -- global's whole eager reach is SAFE (the taint is downward-closed over reads), so this
+  -- Only value globals whose initializer is safe to speculate
+  -- (emit_support.speculationSafe) are initialised in $__init.  An eager global's whole
+  -- eager reach is eager (the taint is downward-closed over reads), so this
   -- prologue never calls a $force fn.  LAZY globals are initialised on first use by their
   -- $force_<name> defines (emitRefForceFns); they are excluded from the eager set here.
   let valBinds = plannedValBinds plan groups
@@ -2636,9 +2636,10 @@ emitRefValInit prog (CBind name [CClause [] body] _ _) =
 emitRefValInit prog _ = gapLP prog "value binding must be a nullary clause"
 
 -- ── #561 PR-B: lazy value-global force functions ─────────────────────────────
--- A `$force_<name>` func for every LAZY value global (dispatch-reaching / cyclic — see
--- emit_support.lazyGlobalNames).  A faithful transliteration of the reference engine's
--- forceMemo/blackholeCell (compiler/eval/eval.mdk) and the native @mdk_force_<x>:
+-- A `$force_<name>` func for every LAZY value global (not safe to speculate,
+-- dispatch-reaching, or cyclic — see emit_support.lazyGlobalNames).  A faithful
+-- transliteration of the reference engine's forceMemo/blackholeCell
+-- (compiler/eval/eval.mdk) and the native @mdk_force_<x>:
 --   state 2 FORCED   -> return the memoised $g_<name>
 --   state 1 FORCING  -> re-entered mid-init => E-CYCLIC-VALUE (the black-hole), unreachable
 --   state 0 UNFORCED -> mark FORCING, run the rhs, memoise the value, mark FORCED, return

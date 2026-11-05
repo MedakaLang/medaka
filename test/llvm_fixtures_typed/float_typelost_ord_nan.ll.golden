@@ -220,657 +220,705 @@ declare void @mdk_enable_run_stdout_flush(i64)
 define i32 @mdk_program_main(i32 %argc, ptr %argv) {
 entry:
   call void @mdk_set_args(i32 %argc, ptr %argv)
-  %t0 = call ptr @mdk_alloc_atomic(i64 16)
-  store i64 2, ptr %t0
-  %t1 = getelementptr i8, ptr %t0, i64 8
-  store double 0xFFF8000000000000, ptr %t1
-  %t2 = ptrtoint ptr %t0 to i64
-  store i64 %t2, ptr @mdk.global.6d356635663735373336353732356635665f5f6e616e
-  %t3 = load i64, ptr @mdk.global.6d356635663735373336353732356635665f5f6e616e
-  %t4 = load i64, ptr @mdk.global.6d356635663735373336353732356635665f5f6e616e
-  %t5 = call i64 @mdk.user.6d356635663735373336353732356635665f5f6170706c79436d70(i64 ptrtoint (ptr @mdk.gen.ctorcell.70726f6772616d..1 to i64), i64 %t3, i64 %t4)
-  %t6 = call i64 @mdk.user.6d356635663735373336353732356635665f5f626974(i64 %t5)
-  %t7 = load i64, ptr @mdk.global.6d356635663735373336353732356635665f5f6e616e
-  %t8 = load i64, ptr @mdk.global.6d356635663735373336353732356635665f5f6e616e
-  %t9 = call i64 @mdk.user.6d356635663735373336353732356635665f5f6170706c79436d70(i64 ptrtoint (ptr @mdk.gen.ctorcell.70726f6772616d..3 to i64), i64 %t7, i64 %t8)
-  %t10 = call i64 @mdk.user.6d356635663735373336353732356635665f5f626974(i64 %t9)
-  %t11 = load i64, ptr @mdk.global.6d356635663735373336353732356635665f5f6e616e
-  %t12 = load i64, ptr @mdk.global.6d356635663735373336353732356635665f5f6e616e
-  %t13 = call i64 @mdk.user.6d356635663735373336353732356635665f5f6170706c79436d70(i64 ptrtoint (ptr @mdk.gen.ctorcell.70726f6772616d..5 to i64), i64 %t11, i64 %t12)
-  %t14 = call i64 @mdk.user.6d356635663735373336353732356635665f5f626974(i64 %t13)
-  %t15 = load i64, ptr @mdk.global.6d356635663735373336353732356635665f5f6e616e
-  %t16 = load i64, ptr @mdk.global.6d356635663735373336353732356635665f5f6e616e
-  %t17 = call i64 @mdk.user.6d356635663735373336353732356635665f5f6170706c79436d70(i64 ptrtoint (ptr @mdk.gen.ctorcell.70726f6772616d..7 to i64), i64 %t15, i64 %t16)
-  %t18 = call i64 @mdk.user.6d356635663735373336353732356635665f5f626974(i64 %t17)
-  %t19 = load i64, ptr @mdk.global.6d356635663735373336353732356635665f5f6e616e
-  %t20 = call ptr @mdk_alloc_atomic(i64 16)
-  store i64 2, ptr %t20
-  %t21 = getelementptr i8, ptr %t20, i64 8
-  store double 1.0, ptr %t21
-  %t22 = ptrtoint ptr %t20 to i64
-  %t23 = call i64 @mdk.user.6d356635663735373336353732356635665f5f6170706c79436d70(i64 ptrtoint (ptr @mdk.gen.ctorcell.70726f6772616d..9 to i64), i64 %t19, i64 %t22)
-  %t24 = call i64 @mdk.user.6d356635663735373336353732356635665f5f626974(i64 %t23)
-  %t25 = load i64, ptr @mdk.global.6d356635663735373336353732356635665f5f6e616e
+  %t0 = call i64 @mdk.force.6d356635663735373336353732356635665f5f6e616e42697473()
+  %t1 = sub i64 2001, 1
+  %t2 = ashr i64 %t0, 1
+  %t3 = call { i64, i1 } @llvm.smul.with.overflow.i64(i64 %t2, i64 %t1)
+  %t4 = extractvalue { i64, i1 } %t3, 0
+  %t5 = extractvalue { i64, i1 } %t3, 1
+  br i1 %t5, label %intovf6, label %intok6
+intovf6:
+  %t7 = ashr i64 %t0, 1
+  %t8 = ashr i64 2001, 1
+  call void @mdk_int_overflow(i64 2, i64 %t7, i64 %t8)
+  unreachable
+intok6:
+  %t9 = or i64 %t4, 1
+  %t10 = call i64 @mdk.force.6d356635663735373336353732356635665f5f63746c42697473()
+  %t11 = sub i64 %t10, 1
+  %t12 = call { i64, i1 } @llvm.sadd.with.overflow.i64(i64 %t9, i64 %t11)
+  %t13 = extractvalue { i64, i1 } %t12, 0
+  %t14 = extractvalue { i64, i1 } %t12, 1
+  br i1 %t14, label %intovf15, label %intok15
+intovf15:
+  %t16 = ashr i64 %t9, 1
+  %t17 = ashr i64 %t10, 1
+  call void @mdk_int_overflow(i64 0, i64 %t16, i64 %t17)
+  unreachable
+intok15:
+  %t18 = ashr i64 %t13, 1
+  call void @mdk_print_int(i64 %t18)
+  ret i32 0
+}
+; mdk-module module.5f5f757365725f5f
+define internal i64 @mdk.force.6d356635663735373336353732356635665f5f6e616e() {
+entry:
+  %t0 = load i8, ptr @mdk.state.6d356635663735373336353732356635665f5f6e616e
+  switch i8 %t0, label %lz_unforced [ i8 2, label %lz_forced i8 1, label %lz_forcing ]
+lz_forced:
+  %t1 = load i64, ptr @mdk.global.6d356635663735373336353732356635665f5f6e616e
+  ret i64 %t1
+lz_forcing:
+  call void @mdk_cyclic_value(ptr @mdk.gen.globalname.6d6f64756c652e35663566373537333635373235663566.6d356635663735373336353732356635665f5f6e616e.0)
+  unreachable
+lz_unforced:
+  store i8 1, ptr @mdk.state.6d356635663735373336353732356635665f5f6e616e
+  %t2 = call ptr @mdk_alloc_atomic(i64 16)
+  store i64 2, ptr %t2
+  %t3 = getelementptr i8, ptr %t2, i64 8
+  store double 0xFFF8000000000000, ptr %t3
+  %t4 = ptrtoint ptr %t2 to i64
+  store i64 %t4, ptr @mdk.global.6d356635663735373336353732356635665f5f6e616e
+  store i8 2, ptr @mdk.state.6d356635663735373336353732356635665f5f6e616e
+  ret i64 %t4
+}
+; mdk-module module.5f5f757365725f5f
+define internal i64 @mdk.force.6d356635663735373336353732356635665f5f6e616e42697473() {
+entry:
+  %t0 = load i8, ptr @mdk.state.6d356635663735373336353732356635665f5f6e616e42697473
+  switch i8 %t0, label %lz_unforced [ i8 2, label %lz_forced i8 1, label %lz_forcing ]
+lz_forced:
+  %t1 = load i64, ptr @mdk.global.6d356635663735373336353732356635665f5f6e616e42697473
+  ret i64 %t1
+lz_forcing:
+  call void @mdk_cyclic_value(ptr @mdk.gen.globalname.6d6f64756c652e35663566373537333635373235663566.6d356635663735373336353732356635665f5f6e616e42697473.1)
+  unreachable
+lz_unforced:
+  store i8 1, ptr @mdk.state.6d356635663735373336353732356635665f5f6e616e42697473
+  %t2 = call i64 @mdk.force.6d356635663735373336353732356635665f5f6e616e()
+  %t3 = call i64 @mdk.force.6d356635663735373336353732356635665f5f6e616e()
+  %t4 = call i64 @mdk.user.6d356635663735373336353732356635665f5f6170706c79436d70(i64 ptrtoint (ptr @mdk.gen.ctorcell.6d6f64756c652e35663566373537333635373235663566..3 to i64), i64 %t2, i64 %t3)
+  %t5 = call i64 @mdk.user.6d356635663735373336353732356635665f5f626974(i64 %t4)
+  %t6 = call i64 @mdk.force.6d356635663735373336353732356635665f5f6e616e()
+  %t7 = call i64 @mdk.force.6d356635663735373336353732356635665f5f6e616e()
+  %t8 = call i64 @mdk.user.6d356635663735373336353732356635665f5f6170706c79436d70(i64 ptrtoint (ptr @mdk.gen.ctorcell.6d6f64756c652e35663566373537333635373235663566..5 to i64), i64 %t6, i64 %t7)
+  %t9 = call i64 @mdk.user.6d356635663735373336353732356635665f5f626974(i64 %t8)
+  %t10 = call i64 @mdk.force.6d356635663735373336353732356635665f5f6e616e()
+  %t11 = call i64 @mdk.force.6d356635663735373336353732356635665f5f6e616e()
+  %t12 = call i64 @mdk.user.6d356635663735373336353732356635665f5f6170706c79436d70(i64 ptrtoint (ptr @mdk.gen.ctorcell.6d6f64756c652e35663566373537333635373235663566..7 to i64), i64 %t10, i64 %t11)
+  %t13 = call i64 @mdk.user.6d356635663735373336353732356635665f5f626974(i64 %t12)
+  %t14 = call i64 @mdk.force.6d356635663735373336353732356635665f5f6e616e()
+  %t15 = call i64 @mdk.force.6d356635663735373336353732356635665f5f6e616e()
+  %t16 = call i64 @mdk.user.6d356635663735373336353732356635665f5f6170706c79436d70(i64 ptrtoint (ptr @mdk.gen.ctorcell.6d6f64756c652e35663566373537333635373235663566..9 to i64), i64 %t14, i64 %t15)
+  %t17 = call i64 @mdk.user.6d356635663735373336353732356635665f5f626974(i64 %t16)
+  %t18 = call i64 @mdk.force.6d356635663735373336353732356635665f5f6e616e()
+  %t19 = call ptr @mdk_alloc_atomic(i64 16)
+  store i64 2, ptr %t19
+  %t20 = getelementptr i8, ptr %t19, i64 8
+  store double 1.0, ptr %t20
+  %t21 = ptrtoint ptr %t19 to i64
+  %t22 = call i64 @mdk.user.6d356635663735373336353732356635665f5f6170706c79436d70(i64 ptrtoint (ptr @mdk.gen.ctorcell.6d6f64756c652e35663566373537333635373235663566..11 to i64), i64 %t18, i64 %t21)
+  %t23 = call i64 @mdk.user.6d356635663735373336353732356635665f5f626974(i64 %t22)
+  %t24 = call i64 @mdk.force.6d356635663735373336353732356635665f5f6e616e()
+  %t25 = call ptr @mdk_alloc_atomic(i64 16)
+  store i64 2, ptr %t25
+  %t26 = getelementptr i8, ptr %t25, i64 8
+  store double 1.0, ptr %t26
+  %t27 = ptrtoint ptr %t25 to i64
+  %t28 = call i64 @mdk.user.6d356635663735373336353732356635665f5f6170706c79436d70(i64 ptrtoint (ptr @mdk.gen.ctorcell.6d6f64756c652e35663566373537333635373235663566..13 to i64), i64 %t24, i64 %t27)
+  %t29 = call i64 @mdk.user.6d356635663735373336353732356635665f5f626974(i64 %t28)
+  %t30 = call i64 @mdk.force.6d356635663735373336353732356635665f5f6e616e()
+  %t31 = call ptr @mdk_alloc_atomic(i64 16)
+  store i64 2, ptr %t31
+  %t32 = getelementptr i8, ptr %t31, i64 8
+  store double 1.0, ptr %t32
+  %t33 = ptrtoint ptr %t31 to i64
+  %t34 = call i64 @mdk.user.6d356635663735373336353732356635665f5f6170706c79436d70(i64 ptrtoint (ptr @mdk.gen.ctorcell.6d6f64756c652e35663566373537333635373235663566..15 to i64), i64 %t30, i64 %t33)
+  %t35 = call i64 @mdk.user.6d356635663735373336353732356635665f5f626974(i64 %t34)
+  %t36 = call i64 @mdk.force.6d356635663735373336353732356635665f5f6e616e()
+  %t37 = call ptr @mdk_alloc_atomic(i64 16)
+  store i64 2, ptr %t37
+  %t38 = getelementptr i8, ptr %t37, i64 8
+  store double 1.0, ptr %t38
+  %t39 = ptrtoint ptr %t37 to i64
+  %t40 = call i64 @mdk.user.6d356635663735373336353732356635665f5f6170706c79436d70(i64 ptrtoint (ptr @mdk.gen.ctorcell.6d6f64756c652e35663566373537333635373235663566..17 to i64), i64 %t36, i64 %t39)
+  %t41 = call i64 @mdk.user.6d356635663735373336353732356635665f5f626974(i64 %t40)
+  %t42 = call ptr @mdk_alloc_atomic(i64 16)
+  store i64 2, ptr %t42
+  %t43 = getelementptr i8, ptr %t42, i64 8
+  store double 1.0, ptr %t43
+  %t44 = ptrtoint ptr %t42 to i64
+  %t45 = call i64 @mdk.force.6d356635663735373336353732356635665f5f6e616e()
+  %t46 = call i64 @mdk.user.6d356635663735373336353732356635665f5f6170706c79436d70(i64 ptrtoint (ptr @mdk.gen.ctorcell.6d6f64756c652e35663566373537333635373235663566..19 to i64), i64 %t44, i64 %t45)
+  %t47 = call i64 @mdk.user.6d356635663735373336353732356635665f5f626974(i64 %t46)
+  %t48 = call ptr @mdk_alloc_atomic(i64 16)
+  store i64 2, ptr %t48
+  %t49 = getelementptr i8, ptr %t48, i64 8
+  store double 1.0, ptr %t49
+  %t50 = ptrtoint ptr %t48 to i64
+  %t51 = call i64 @mdk.force.6d356635663735373336353732356635665f5f6e616e()
+  %t52 = call i64 @mdk.user.6d356635663735373336353732356635665f5f6170706c79436d70(i64 ptrtoint (ptr @mdk.gen.ctorcell.6d6f64756c652e35663566373537333635373235663566..21 to i64), i64 %t50, i64 %t51)
+  %t53 = call i64 @mdk.user.6d356635663735373336353732356635665f5f626974(i64 %t52)
+  %t54 = call ptr @mdk_alloc_atomic(i64 16)
+  store i64 2, ptr %t54
+  %t55 = getelementptr i8, ptr %t54, i64 8
+  store double 1.0, ptr %t55
+  %t56 = ptrtoint ptr %t54 to i64
+  %t57 = call i64 @mdk.force.6d356635663735373336353732356635665f5f6e616e()
+  %t58 = call i64 @mdk.user.6d356635663735373336353732356635665f5f6170706c79436d70(i64 ptrtoint (ptr @mdk.gen.ctorcell.6d6f64756c652e35663566373537333635373235663566..23 to i64), i64 %t56, i64 %t57)
+  %t59 = call i64 @mdk.user.6d356635663735373336353732356635665f5f626974(i64 %t58)
+  %t60 = call ptr @mdk_alloc_atomic(i64 16)
+  store i64 2, ptr %t60
+  %t61 = getelementptr i8, ptr %t60, i64 8
+  store double 1.0, ptr %t61
+  %t62 = ptrtoint ptr %t60 to i64
+  %t63 = call i64 @mdk.force.6d356635663735373336353732356635665f5f6e616e()
+  %t64 = call i64 @mdk.user.6d356635663735373336353732356635665f5f6170706c79436d70(i64 ptrtoint (ptr @mdk.gen.ctorcell.6d6f64756c652e35663566373537333635373235663566..25 to i64), i64 %t62, i64 %t63)
+  %t65 = call i64 @mdk.user.6d356635663735373336353732356635665f5f626974(i64 %t64)
+  %t66 = sub i64 %t9, 1
+  %t67 = ashr i64 5, 1
+  %t68 = call { i64, i1 } @llvm.smul.with.overflow.i64(i64 %t67, i64 %t66)
+  %t69 = extractvalue { i64, i1 } %t68, 0
+  %t70 = extractvalue { i64, i1 } %t68, 1
+  br i1 %t70, label %intovf71, label %intok71
+intovf71:
+  %t72 = ashr i64 5, 1
+  %t73 = ashr i64 %t9, 1
+  call void @mdk_int_overflow(i64 2, i64 %t72, i64 %t73)
+  unreachable
+intok71:
+  %t74 = or i64 %t69, 1
+  %t75 = sub i64 %t74, 1
+  %t76 = call { i64, i1 } @llvm.sadd.with.overflow.i64(i64 %t5, i64 %t75)
+  %t77 = extractvalue { i64, i1 } %t76, 0
+  %t78 = extractvalue { i64, i1 } %t76, 1
+  br i1 %t78, label %intovf79, label %intok79
+intovf79:
+  %t80 = ashr i64 %t5, 1
+  %t81 = ashr i64 %t74, 1
+  call void @mdk_int_overflow(i64 0, i64 %t80, i64 %t81)
+  unreachable
+intok79:
+  %t82 = sub i64 %t13, 1
+  %t83 = ashr i64 9, 1
+  %t84 = call { i64, i1 } @llvm.smul.with.overflow.i64(i64 %t83, i64 %t82)
+  %t85 = extractvalue { i64, i1 } %t84, 0
+  %t86 = extractvalue { i64, i1 } %t84, 1
+  br i1 %t86, label %intovf87, label %intok87
+intovf87:
+  %t88 = ashr i64 9, 1
+  %t89 = ashr i64 %t13, 1
+  call void @mdk_int_overflow(i64 2, i64 %t88, i64 %t89)
+  unreachable
+intok87:
+  %t90 = or i64 %t85, 1
+  %t91 = sub i64 %t90, 1
+  %t92 = call { i64, i1 } @llvm.sadd.with.overflow.i64(i64 %t77, i64 %t91)
+  %t93 = extractvalue { i64, i1 } %t92, 0
+  %t94 = extractvalue { i64, i1 } %t92, 1
+  br i1 %t94, label %intovf95, label %intok95
+intovf95:
+  %t96 = ashr i64 %t77, 1
+  %t97 = ashr i64 %t90, 1
+  call void @mdk_int_overflow(i64 0, i64 %t96, i64 %t97)
+  unreachable
+intok95:
+  %t98 = sub i64 %t17, 1
+  %t99 = ashr i64 17, 1
+  %t100 = call { i64, i1 } @llvm.smul.with.overflow.i64(i64 %t99, i64 %t98)
+  %t101 = extractvalue { i64, i1 } %t100, 0
+  %t102 = extractvalue { i64, i1 } %t100, 1
+  br i1 %t102, label %intovf103, label %intok103
+intovf103:
+  %t104 = ashr i64 17, 1
+  %t105 = ashr i64 %t17, 1
+  call void @mdk_int_overflow(i64 2, i64 %t104, i64 %t105)
+  unreachable
+intok103:
+  %t106 = or i64 %t101, 1
+  %t107 = sub i64 %t106, 1
+  %t108 = call { i64, i1 } @llvm.sadd.with.overflow.i64(i64 %t93, i64 %t107)
+  %t109 = extractvalue { i64, i1 } %t108, 0
+  %t110 = extractvalue { i64, i1 } %t108, 1
+  br i1 %t110, label %intovf111, label %intok111
+intovf111:
+  %t112 = ashr i64 %t93, 1
+  %t113 = ashr i64 %t106, 1
+  call void @mdk_int_overflow(i64 0, i64 %t112, i64 %t113)
+  unreachable
+intok111:
+  %t114 = sub i64 %t23, 1
+  %t115 = ashr i64 33, 1
+  %t116 = call { i64, i1 } @llvm.smul.with.overflow.i64(i64 %t115, i64 %t114)
+  %t117 = extractvalue { i64, i1 } %t116, 0
+  %t118 = extractvalue { i64, i1 } %t116, 1
+  br i1 %t118, label %intovf119, label %intok119
+intovf119:
+  %t120 = ashr i64 33, 1
+  %t121 = ashr i64 %t23, 1
+  call void @mdk_int_overflow(i64 2, i64 %t120, i64 %t121)
+  unreachable
+intok119:
+  %t122 = or i64 %t117, 1
+  %t123 = sub i64 %t122, 1
+  %t124 = call { i64, i1 } @llvm.sadd.with.overflow.i64(i64 %t109, i64 %t123)
+  %t125 = extractvalue { i64, i1 } %t124, 0
+  %t126 = extractvalue { i64, i1 } %t124, 1
+  br i1 %t126, label %intovf127, label %intok127
+intovf127:
+  %t128 = ashr i64 %t109, 1
+  %t129 = ashr i64 %t122, 1
+  call void @mdk_int_overflow(i64 0, i64 %t128, i64 %t129)
+  unreachable
+intok127:
+  %t130 = sub i64 %t29, 1
+  %t131 = ashr i64 65, 1
+  %t132 = call { i64, i1 } @llvm.smul.with.overflow.i64(i64 %t131, i64 %t130)
+  %t133 = extractvalue { i64, i1 } %t132, 0
+  %t134 = extractvalue { i64, i1 } %t132, 1
+  br i1 %t134, label %intovf135, label %intok135
+intovf135:
+  %t136 = ashr i64 65, 1
+  %t137 = ashr i64 %t29, 1
+  call void @mdk_int_overflow(i64 2, i64 %t136, i64 %t137)
+  unreachable
+intok135:
+  %t138 = or i64 %t133, 1
+  %t139 = sub i64 %t138, 1
+  %t140 = call { i64, i1 } @llvm.sadd.with.overflow.i64(i64 %t125, i64 %t139)
+  %t141 = extractvalue { i64, i1 } %t140, 0
+  %t142 = extractvalue { i64, i1 } %t140, 1
+  br i1 %t142, label %intovf143, label %intok143
+intovf143:
+  %t144 = ashr i64 %t125, 1
+  %t145 = ashr i64 %t138, 1
+  call void @mdk_int_overflow(i64 0, i64 %t144, i64 %t145)
+  unreachable
+intok143:
+  %t146 = sub i64 %t35, 1
+  %t147 = ashr i64 129, 1
+  %t148 = call { i64, i1 } @llvm.smul.with.overflow.i64(i64 %t147, i64 %t146)
+  %t149 = extractvalue { i64, i1 } %t148, 0
+  %t150 = extractvalue { i64, i1 } %t148, 1
+  br i1 %t150, label %intovf151, label %intok151
+intovf151:
+  %t152 = ashr i64 129, 1
+  %t153 = ashr i64 %t35, 1
+  call void @mdk_int_overflow(i64 2, i64 %t152, i64 %t153)
+  unreachable
+intok151:
+  %t154 = or i64 %t149, 1
+  %t155 = sub i64 %t154, 1
+  %t156 = call { i64, i1 } @llvm.sadd.with.overflow.i64(i64 %t141, i64 %t155)
+  %t157 = extractvalue { i64, i1 } %t156, 0
+  %t158 = extractvalue { i64, i1 } %t156, 1
+  br i1 %t158, label %intovf159, label %intok159
+intovf159:
+  %t160 = ashr i64 %t141, 1
+  %t161 = ashr i64 %t154, 1
+  call void @mdk_int_overflow(i64 0, i64 %t160, i64 %t161)
+  unreachable
+intok159:
+  %t162 = sub i64 %t41, 1
+  %t163 = ashr i64 257, 1
+  %t164 = call { i64, i1 } @llvm.smul.with.overflow.i64(i64 %t163, i64 %t162)
+  %t165 = extractvalue { i64, i1 } %t164, 0
+  %t166 = extractvalue { i64, i1 } %t164, 1
+  br i1 %t166, label %intovf167, label %intok167
+intovf167:
+  %t168 = ashr i64 257, 1
+  %t169 = ashr i64 %t41, 1
+  call void @mdk_int_overflow(i64 2, i64 %t168, i64 %t169)
+  unreachable
+intok167:
+  %t170 = or i64 %t165, 1
+  %t171 = sub i64 %t170, 1
+  %t172 = call { i64, i1 } @llvm.sadd.with.overflow.i64(i64 %t157, i64 %t171)
+  %t173 = extractvalue { i64, i1 } %t172, 0
+  %t174 = extractvalue { i64, i1 } %t172, 1
+  br i1 %t174, label %intovf175, label %intok175
+intovf175:
+  %t176 = ashr i64 %t157, 1
+  %t177 = ashr i64 %t170, 1
+  call void @mdk_int_overflow(i64 0, i64 %t176, i64 %t177)
+  unreachable
+intok175:
+  %t178 = sub i64 %t47, 1
+  %t179 = ashr i64 513, 1
+  %t180 = call { i64, i1 } @llvm.smul.with.overflow.i64(i64 %t179, i64 %t178)
+  %t181 = extractvalue { i64, i1 } %t180, 0
+  %t182 = extractvalue { i64, i1 } %t180, 1
+  br i1 %t182, label %intovf183, label %intok183
+intovf183:
+  %t184 = ashr i64 513, 1
+  %t185 = ashr i64 %t47, 1
+  call void @mdk_int_overflow(i64 2, i64 %t184, i64 %t185)
+  unreachable
+intok183:
+  %t186 = or i64 %t181, 1
+  %t187 = sub i64 %t186, 1
+  %t188 = call { i64, i1 } @llvm.sadd.with.overflow.i64(i64 %t173, i64 %t187)
+  %t189 = extractvalue { i64, i1 } %t188, 0
+  %t190 = extractvalue { i64, i1 } %t188, 1
+  br i1 %t190, label %intovf191, label %intok191
+intovf191:
+  %t192 = ashr i64 %t173, 1
+  %t193 = ashr i64 %t186, 1
+  call void @mdk_int_overflow(i64 0, i64 %t192, i64 %t193)
+  unreachable
+intok191:
+  %t194 = sub i64 %t53, 1
+  %t195 = ashr i64 1025, 1
+  %t196 = call { i64, i1 } @llvm.smul.with.overflow.i64(i64 %t195, i64 %t194)
+  %t197 = extractvalue { i64, i1 } %t196, 0
+  %t198 = extractvalue { i64, i1 } %t196, 1
+  br i1 %t198, label %intovf199, label %intok199
+intovf199:
+  %t200 = ashr i64 1025, 1
+  %t201 = ashr i64 %t53, 1
+  call void @mdk_int_overflow(i64 2, i64 %t200, i64 %t201)
+  unreachable
+intok199:
+  %t202 = or i64 %t197, 1
+  %t203 = sub i64 %t202, 1
+  %t204 = call { i64, i1 } @llvm.sadd.with.overflow.i64(i64 %t189, i64 %t203)
+  %t205 = extractvalue { i64, i1 } %t204, 0
+  %t206 = extractvalue { i64, i1 } %t204, 1
+  br i1 %t206, label %intovf207, label %intok207
+intovf207:
+  %t208 = ashr i64 %t189, 1
+  %t209 = ashr i64 %t202, 1
+  call void @mdk_int_overflow(i64 0, i64 %t208, i64 %t209)
+  unreachable
+intok207:
+  %t210 = sub i64 %t59, 1
+  %t211 = ashr i64 2049, 1
+  %t212 = call { i64, i1 } @llvm.smul.with.overflow.i64(i64 %t211, i64 %t210)
+  %t213 = extractvalue { i64, i1 } %t212, 0
+  %t214 = extractvalue { i64, i1 } %t212, 1
+  br i1 %t214, label %intovf215, label %intok215
+intovf215:
+  %t216 = ashr i64 2049, 1
+  %t217 = ashr i64 %t59, 1
+  call void @mdk_int_overflow(i64 2, i64 %t216, i64 %t217)
+  unreachable
+intok215:
+  %t218 = or i64 %t213, 1
+  %t219 = sub i64 %t218, 1
+  %t220 = call { i64, i1 } @llvm.sadd.with.overflow.i64(i64 %t205, i64 %t219)
+  %t221 = extractvalue { i64, i1 } %t220, 0
+  %t222 = extractvalue { i64, i1 } %t220, 1
+  br i1 %t222, label %intovf223, label %intok223
+intovf223:
+  %t224 = ashr i64 %t205, 1
+  %t225 = ashr i64 %t218, 1
+  call void @mdk_int_overflow(i64 0, i64 %t224, i64 %t225)
+  unreachable
+intok223:
+  %t226 = sub i64 %t65, 1
+  %t227 = ashr i64 4097, 1
+  %t228 = call { i64, i1 } @llvm.smul.with.overflow.i64(i64 %t227, i64 %t226)
+  %t229 = extractvalue { i64, i1 } %t228, 0
+  %t230 = extractvalue { i64, i1 } %t228, 1
+  br i1 %t230, label %intovf231, label %intok231
+intovf231:
+  %t232 = ashr i64 4097, 1
+  %t233 = ashr i64 %t65, 1
+  call void @mdk_int_overflow(i64 2, i64 %t232, i64 %t233)
+  unreachable
+intok231:
+  %t234 = or i64 %t229, 1
+  %t235 = sub i64 %t234, 1
+  %t236 = call { i64, i1 } @llvm.sadd.with.overflow.i64(i64 %t221, i64 %t235)
+  %t237 = extractvalue { i64, i1 } %t236, 0
+  %t238 = extractvalue { i64, i1 } %t236, 1
+  br i1 %t238, label %intovf239, label %intok239
+intovf239:
+  %t240 = ashr i64 %t221, 1
+  %t241 = ashr i64 %t234, 1
+  call void @mdk_int_overflow(i64 0, i64 %t240, i64 %t241)
+  unreachable
+intok239:
+  store i64 %t237, ptr @mdk.global.6d356635663735373336353732356635665f5f6e616e42697473
+  store i8 2, ptr @mdk.state.6d356635663735373336353732356635665f5f6e616e42697473
+  ret i64 %t237
+}
+; mdk-module module.5f5f757365725f5f
+define internal i64 @mdk.force.6d356635663735373336353732356635665f5f63746c42697473() {
+entry:
+  %t0 = load i8, ptr @mdk.state.6d356635663735373336353732356635665f5f63746c42697473
+  switch i8 %t0, label %lz_unforced [ i8 2, label %lz_forced i8 1, label %lz_forcing ]
+lz_forced:
+  %t1 = load i64, ptr @mdk.global.6d356635663735373336353732356635665f5f63746c42697473
+  ret i64 %t1
+lz_forcing:
+  call void @mdk_cyclic_value(ptr @mdk.gen.globalname.6d6f64756c652e35663566373537333635373235663566.6d356635663735373336353732356635665f5f63746c42697473.26)
+  unreachable
+lz_unforced:
+  store i8 1, ptr @mdk.state.6d356635663735373336353732356635665f5f63746c42697473
+  %t2 = call ptr @mdk_alloc_atomic(i64 16)
+  store i64 2, ptr %t2
+  %t3 = getelementptr i8, ptr %t2, i64 8
+  store double 1.0, ptr %t3
+  %t4 = ptrtoint ptr %t2 to i64
+  %t5 = call ptr @mdk_alloc_atomic(i64 16)
+  store i64 2, ptr %t5
+  %t6 = getelementptr i8, ptr %t5, i64 8
+  store double 2.0, ptr %t6
+  %t7 = ptrtoint ptr %t5 to i64
+  %t8 = call i64 @mdk.user.6d356635663735373336353732356635665f5f6170706c79436d70(i64 ptrtoint (ptr @mdk.gen.ctorcell.6d6f64756c652e35663566373537333635373235663566..28 to i64), i64 %t4, i64 %t7)
+  %t9 = call i64 @mdk.user.6d356635663735373336353732356635665f5f626974(i64 %t8)
+  %t10 = call ptr @mdk_alloc_atomic(i64 16)
+  store i64 2, ptr %t10
+  %t11 = getelementptr i8, ptr %t10, i64 8
+  store double 1.0, ptr %t11
+  %t12 = ptrtoint ptr %t10 to i64
+  %t13 = call ptr @mdk_alloc_atomic(i64 16)
+  store i64 2, ptr %t13
+  %t14 = getelementptr i8, ptr %t13, i64 8
+  store double 2.0, ptr %t14
+  %t15 = ptrtoint ptr %t13 to i64
+  %t16 = call i64 @mdk.user.6d356635663735373336353732356635665f5f6170706c79436d70(i64 ptrtoint (ptr @mdk.gen.ctorcell.6d6f64756c652e35663566373537333635373235663566..30 to i64), i64 %t12, i64 %t15)
+  %t17 = call i64 @mdk.user.6d356635663735373336353732356635665f5f626974(i64 %t16)
+  %t18 = call ptr @mdk_alloc_atomic(i64 16)
+  store i64 2, ptr %t18
+  %t19 = getelementptr i8, ptr %t18, i64 8
+  store double 2.0, ptr %t19
+  %t20 = ptrtoint ptr %t18 to i64
+  %t21 = call ptr @mdk_alloc_atomic(i64 16)
+  store i64 2, ptr %t21
+  %t22 = getelementptr i8, ptr %t21, i64 8
+  store double 1.0, ptr %t22
+  %t23 = ptrtoint ptr %t21 to i64
+  %t24 = call i64 @mdk.user.6d356635663735373336353732356635665f5f6170706c79436d70(i64 ptrtoint (ptr @mdk.gen.ctorcell.6d6f64756c652e35663566373537333635373235663566..32 to i64), i64 %t20, i64 %t23)
+  %t25 = call i64 @mdk.user.6d356635663735373336353732356635665f5f626974(i64 %t24)
   %t26 = call ptr @mdk_alloc_atomic(i64 16)
   store i64 2, ptr %t26
   %t27 = getelementptr i8, ptr %t26, i64 8
-  store double 1.0, ptr %t27
+  store double 2.0, ptr %t27
   %t28 = ptrtoint ptr %t26 to i64
-  %t29 = call i64 @mdk.user.6d356635663735373336353732356635665f5f6170706c79436d70(i64 ptrtoint (ptr @mdk.gen.ctorcell.70726f6772616d..11 to i64), i64 %t25, i64 %t28)
-  %t30 = call i64 @mdk.user.6d356635663735373336353732356635665f5f626974(i64 %t29)
-  %t31 = load i64, ptr @mdk.global.6d356635663735373336353732356635665f5f6e616e
-  %t32 = call ptr @mdk_alloc_atomic(i64 16)
-  store i64 2, ptr %t32
-  %t33 = getelementptr i8, ptr %t32, i64 8
-  store double 1.0, ptr %t33
-  %t34 = ptrtoint ptr %t32 to i64
-  %t35 = call i64 @mdk.user.6d356635663735373336353732356635665f5f6170706c79436d70(i64 ptrtoint (ptr @mdk.gen.ctorcell.70726f6772616d..13 to i64), i64 %t31, i64 %t34)
-  %t36 = call i64 @mdk.user.6d356635663735373336353732356635665f5f626974(i64 %t35)
-  %t37 = load i64, ptr @mdk.global.6d356635663735373336353732356635665f5f6e616e
-  %t38 = call ptr @mdk_alloc_atomic(i64 16)
-  store i64 2, ptr %t38
-  %t39 = getelementptr i8, ptr %t38, i64 8
-  store double 1.0, ptr %t39
-  %t40 = ptrtoint ptr %t38 to i64
-  %t41 = call i64 @mdk.user.6d356635663735373336353732356635665f5f6170706c79436d70(i64 ptrtoint (ptr @mdk.gen.ctorcell.70726f6772616d..15 to i64), i64 %t37, i64 %t40)
-  %t42 = call i64 @mdk.user.6d356635663735373336353732356635665f5f626974(i64 %t41)
-  %t43 = call ptr @mdk_alloc_atomic(i64 16)
-  store i64 2, ptr %t43
-  %t44 = getelementptr i8, ptr %t43, i64 8
-  store double 1.0, ptr %t44
-  %t45 = ptrtoint ptr %t43 to i64
-  %t46 = load i64, ptr @mdk.global.6d356635663735373336353732356635665f5f6e616e
-  %t47 = call i64 @mdk.user.6d356635663735373336353732356635665f5f6170706c79436d70(i64 ptrtoint (ptr @mdk.gen.ctorcell.70726f6772616d..17 to i64), i64 %t45, i64 %t46)
-  %t48 = call i64 @mdk.user.6d356635663735373336353732356635665f5f626974(i64 %t47)
-  %t49 = call ptr @mdk_alloc_atomic(i64 16)
-  store i64 2, ptr %t49
-  %t50 = getelementptr i8, ptr %t49, i64 8
-  store double 1.0, ptr %t50
-  %t51 = ptrtoint ptr %t49 to i64
-  %t52 = load i64, ptr @mdk.global.6d356635663735373336353732356635665f5f6e616e
-  %t53 = call i64 @mdk.user.6d356635663735373336353732356635665f5f6170706c79436d70(i64 ptrtoint (ptr @mdk.gen.ctorcell.70726f6772616d..19 to i64), i64 %t51, i64 %t52)
-  %t54 = call i64 @mdk.user.6d356635663735373336353732356635665f5f626974(i64 %t53)
-  %t55 = call ptr @mdk_alloc_atomic(i64 16)
-  store i64 2, ptr %t55
-  %t56 = getelementptr i8, ptr %t55, i64 8
-  store double 1.0, ptr %t56
-  %t57 = ptrtoint ptr %t55 to i64
-  %t58 = load i64, ptr @mdk.global.6d356635663735373336353732356635665f5f6e616e
-  %t59 = call i64 @mdk.user.6d356635663735373336353732356635665f5f6170706c79436d70(i64 ptrtoint (ptr @mdk.gen.ctorcell.70726f6772616d..21 to i64), i64 %t57, i64 %t58)
-  %t60 = call i64 @mdk.user.6d356635663735373336353732356635665f5f626974(i64 %t59)
-  %t61 = call ptr @mdk_alloc_atomic(i64 16)
-  store i64 2, ptr %t61
-  %t62 = getelementptr i8, ptr %t61, i64 8
-  store double 1.0, ptr %t62
-  %t63 = ptrtoint ptr %t61 to i64
-  %t64 = load i64, ptr @mdk.global.6d356635663735373336353732356635665f5f6e616e
-  %t65 = call i64 @mdk.user.6d356635663735373336353732356635665f5f6170706c79436d70(i64 ptrtoint (ptr @mdk.gen.ctorcell.70726f6772616d..23 to i64), i64 %t63, i64 %t64)
-  %t66 = call i64 @mdk.user.6d356635663735373336353732356635665f5f626974(i64 %t65)
-  %t67 = sub i64 %t10, 1
-  %t68 = ashr i64 5, 1
-  %t69 = call { i64, i1 } @llvm.smul.with.overflow.i64(i64 %t68, i64 %t67)
-  %t70 = extractvalue { i64, i1 } %t69, 0
-  %t71 = extractvalue { i64, i1 } %t69, 1
-  br i1 %t71, label %intovf72, label %intok72
-intovf72:
-  %t73 = ashr i64 5, 1
-  %t74 = ashr i64 %t10, 1
-  call void @mdk_int_overflow(i64 2, i64 %t73, i64 %t74)
+  %t29 = call ptr @mdk_alloc_atomic(i64 16)
+  store i64 2, ptr %t29
+  %t30 = getelementptr i8, ptr %t29, i64 8
+  store double 1.0, ptr %t30
+  %t31 = ptrtoint ptr %t29 to i64
+  %t32 = call i64 @mdk.user.6d356635663735373336353732356635665f5f6170706c79436d70(i64 ptrtoint (ptr @mdk.gen.ctorcell.6d6f64756c652e35663566373537333635373235663566..34 to i64), i64 %t28, i64 %t31)
+  %t33 = call i64 @mdk.user.6d356635663735373336353732356635665f5f626974(i64 %t32)
+  %t34 = call ptr @mdk_alloc_atomic(i64 16)
+  store i64 2, ptr %t34
+  %t35 = getelementptr i8, ptr %t34, i64 8
+  store double 1.0, ptr %t35
+  %t36 = ptrtoint ptr %t34 to i64
+  %t37 = call ptr @mdk_alloc_atomic(i64 16)
+  store i64 2, ptr %t37
+  %t38 = getelementptr i8, ptr %t37, i64 8
+  store double 1.0, ptr %t38
+  %t39 = ptrtoint ptr %t37 to i64
+  %t40 = call i64 @mdk.user.6d356635663735373336353732356635665f5f6170706c79436d70(i64 ptrtoint (ptr @mdk.gen.ctorcell.6d6f64756c652e35663566373537333635373235663566..36 to i64), i64 %t36, i64 %t39)
+  %t41 = call i64 @mdk.user.6d356635663735373336353732356635665f5f626974(i64 %t40)
+  %t42 = call ptr @mdk_alloc_atomic(i64 16)
+  store i64 2, ptr %t42
+  %t43 = getelementptr i8, ptr %t42, i64 8
+  store double 1.0, ptr %t43
+  %t44 = ptrtoint ptr %t42 to i64
+  %t45 = call ptr @mdk_alloc_atomic(i64 16)
+  store i64 2, ptr %t45
+  %t46 = getelementptr i8, ptr %t45, i64 8
+  store double 1.0, ptr %t46
+  %t47 = ptrtoint ptr %t45 to i64
+  %t48 = call i64 @mdk.user.6d356635663735373336353732356635665f5f6170706c79436d70(i64 ptrtoint (ptr @mdk.gen.ctorcell.6d6f64756c652e35663566373537333635373235663566..38 to i64), i64 %t44, i64 %t47)
+  %t49 = call i64 @mdk.user.6d356635663735373336353732356635665f5f626974(i64 %t48)
+  %t50 = call i64 @mdk.user.6d356635663735373336353732356635665f5f6170706c79436d70(i64 ptrtoint (ptr @mdk.gen.ctorcell.6d6f64756c652e35663566373537333635373235663566..40 to i64), i64 3, i64 5)
+  %t51 = call i64 @mdk.user.6d356635663735373336353732356635665f5f626974(i64 %t50)
+  %t52 = call i64 @mdk.user.6d356635663735373336353732356635665f5f6170706c79436d70(i64 ptrtoint (ptr @mdk.gen.ctorcell.6d6f64756c652e35663566373537333635373235663566..42 to i64), i64 5, i64 3)
+  %t53 = call i64 @mdk.user.6d356635663735373336353732356635665f5f626974(i64 %t52)
+  %t54 = call i64 @mdk.user.6d356635663735373336353732356635665f5f6170706c79436d70(i64 ptrtoint (ptr @mdk.gen.ctorcell.6d6f64756c652e35663566373537333635373235663566..44 to i64), i64 5, i64 5)
+  %t55 = call i64 @mdk.user.6d356635663735373336353732356635665f5f626974(i64 %t54)
+  %t56 = sub i64 %t17, 1
+  %t57 = ashr i64 5, 1
+  %t58 = call { i64, i1 } @llvm.smul.with.overflow.i64(i64 %t57, i64 %t56)
+  %t59 = extractvalue { i64, i1 } %t58, 0
+  %t60 = extractvalue { i64, i1 } %t58, 1
+  br i1 %t60, label %intovf61, label %intok61
+intovf61:
+  %t62 = ashr i64 5, 1
+  %t63 = ashr i64 %t17, 1
+  call void @mdk_int_overflow(i64 2, i64 %t62, i64 %t63)
   unreachable
-intok72:
-  %t75 = or i64 %t70, 1
-  %t76 = sub i64 %t75, 1
-  %t77 = call { i64, i1 } @llvm.sadd.with.overflow.i64(i64 %t6, i64 %t76)
-  %t78 = extractvalue { i64, i1 } %t77, 0
-  %t79 = extractvalue { i64, i1 } %t77, 1
-  br i1 %t79, label %intovf80, label %intok80
-intovf80:
-  %t81 = ashr i64 %t6, 1
-  %t82 = ashr i64 %t75, 1
-  call void @mdk_int_overflow(i64 0, i64 %t81, i64 %t82)
+intok61:
+  %t64 = or i64 %t59, 1
+  %t65 = sub i64 %t64, 1
+  %t66 = call { i64, i1 } @llvm.sadd.with.overflow.i64(i64 %t9, i64 %t65)
+  %t67 = extractvalue { i64, i1 } %t66, 0
+  %t68 = extractvalue { i64, i1 } %t66, 1
+  br i1 %t68, label %intovf69, label %intok69
+intovf69:
+  %t70 = ashr i64 %t9, 1
+  %t71 = ashr i64 %t64, 1
+  call void @mdk_int_overflow(i64 0, i64 %t70, i64 %t71)
   unreachable
-intok80:
-  %t83 = sub i64 %t14, 1
-  %t84 = ashr i64 9, 1
-  %t85 = call { i64, i1 } @llvm.smul.with.overflow.i64(i64 %t84, i64 %t83)
-  %t86 = extractvalue { i64, i1 } %t85, 0
-  %t87 = extractvalue { i64, i1 } %t85, 1
-  br i1 %t87, label %intovf88, label %intok88
-intovf88:
-  %t89 = ashr i64 9, 1
-  %t90 = ashr i64 %t14, 1
-  call void @mdk_int_overflow(i64 2, i64 %t89, i64 %t90)
+intok69:
+  %t72 = sub i64 %t25, 1
+  %t73 = ashr i64 9, 1
+  %t74 = call { i64, i1 } @llvm.smul.with.overflow.i64(i64 %t73, i64 %t72)
+  %t75 = extractvalue { i64, i1 } %t74, 0
+  %t76 = extractvalue { i64, i1 } %t74, 1
+  br i1 %t76, label %intovf77, label %intok77
+intovf77:
+  %t78 = ashr i64 9, 1
+  %t79 = ashr i64 %t25, 1
+  call void @mdk_int_overflow(i64 2, i64 %t78, i64 %t79)
   unreachable
-intok88:
-  %t91 = or i64 %t86, 1
-  %t92 = sub i64 %t91, 1
-  %t93 = call { i64, i1 } @llvm.sadd.with.overflow.i64(i64 %t78, i64 %t92)
-  %t94 = extractvalue { i64, i1 } %t93, 0
-  %t95 = extractvalue { i64, i1 } %t93, 1
-  br i1 %t95, label %intovf96, label %intok96
-intovf96:
-  %t97 = ashr i64 %t78, 1
-  %t98 = ashr i64 %t91, 1
-  call void @mdk_int_overflow(i64 0, i64 %t97, i64 %t98)
+intok77:
+  %t80 = or i64 %t75, 1
+  %t81 = sub i64 %t80, 1
+  %t82 = call { i64, i1 } @llvm.sadd.with.overflow.i64(i64 %t67, i64 %t81)
+  %t83 = extractvalue { i64, i1 } %t82, 0
+  %t84 = extractvalue { i64, i1 } %t82, 1
+  br i1 %t84, label %intovf85, label %intok85
+intovf85:
+  %t86 = ashr i64 %t67, 1
+  %t87 = ashr i64 %t80, 1
+  call void @mdk_int_overflow(i64 0, i64 %t86, i64 %t87)
   unreachable
-intok96:
-  %t99 = sub i64 %t18, 1
-  %t100 = ashr i64 17, 1
-  %t101 = call { i64, i1 } @llvm.smul.with.overflow.i64(i64 %t100, i64 %t99)
-  %t102 = extractvalue { i64, i1 } %t101, 0
-  %t103 = extractvalue { i64, i1 } %t101, 1
-  br i1 %t103, label %intovf104, label %intok104
-intovf104:
-  %t105 = ashr i64 17, 1
-  %t106 = ashr i64 %t18, 1
-  call void @mdk_int_overflow(i64 2, i64 %t105, i64 %t106)
+intok85:
+  %t88 = sub i64 %t33, 1
+  %t89 = ashr i64 17, 1
+  %t90 = call { i64, i1 } @llvm.smul.with.overflow.i64(i64 %t89, i64 %t88)
+  %t91 = extractvalue { i64, i1 } %t90, 0
+  %t92 = extractvalue { i64, i1 } %t90, 1
+  br i1 %t92, label %intovf93, label %intok93
+intovf93:
+  %t94 = ashr i64 17, 1
+  %t95 = ashr i64 %t33, 1
+  call void @mdk_int_overflow(i64 2, i64 %t94, i64 %t95)
   unreachable
-intok104:
-  %t107 = or i64 %t102, 1
-  %t108 = sub i64 %t107, 1
-  %t109 = call { i64, i1 } @llvm.sadd.with.overflow.i64(i64 %t94, i64 %t108)
-  %t110 = extractvalue { i64, i1 } %t109, 0
-  %t111 = extractvalue { i64, i1 } %t109, 1
-  br i1 %t111, label %intovf112, label %intok112
-intovf112:
-  %t113 = ashr i64 %t94, 1
-  %t114 = ashr i64 %t107, 1
-  call void @mdk_int_overflow(i64 0, i64 %t113, i64 %t114)
+intok93:
+  %t96 = or i64 %t91, 1
+  %t97 = sub i64 %t96, 1
+  %t98 = call { i64, i1 } @llvm.sadd.with.overflow.i64(i64 %t83, i64 %t97)
+  %t99 = extractvalue { i64, i1 } %t98, 0
+  %t100 = extractvalue { i64, i1 } %t98, 1
+  br i1 %t100, label %intovf101, label %intok101
+intovf101:
+  %t102 = ashr i64 %t83, 1
+  %t103 = ashr i64 %t96, 1
+  call void @mdk_int_overflow(i64 0, i64 %t102, i64 %t103)
   unreachable
-intok112:
-  %t115 = sub i64 %t24, 1
-  %t116 = ashr i64 33, 1
-  %t117 = call { i64, i1 } @llvm.smul.with.overflow.i64(i64 %t116, i64 %t115)
-  %t118 = extractvalue { i64, i1 } %t117, 0
-  %t119 = extractvalue { i64, i1 } %t117, 1
-  br i1 %t119, label %intovf120, label %intok120
-intovf120:
-  %t121 = ashr i64 33, 1
-  %t122 = ashr i64 %t24, 1
-  call void @mdk_int_overflow(i64 2, i64 %t121, i64 %t122)
+intok101:
+  %t104 = sub i64 %t41, 1
+  %t105 = ashr i64 33, 1
+  %t106 = call { i64, i1 } @llvm.smul.with.overflow.i64(i64 %t105, i64 %t104)
+  %t107 = extractvalue { i64, i1 } %t106, 0
+  %t108 = extractvalue { i64, i1 } %t106, 1
+  br i1 %t108, label %intovf109, label %intok109
+intovf109:
+  %t110 = ashr i64 33, 1
+  %t111 = ashr i64 %t41, 1
+  call void @mdk_int_overflow(i64 2, i64 %t110, i64 %t111)
   unreachable
-intok120:
-  %t123 = or i64 %t118, 1
-  %t124 = sub i64 %t123, 1
-  %t125 = call { i64, i1 } @llvm.sadd.with.overflow.i64(i64 %t110, i64 %t124)
-  %t126 = extractvalue { i64, i1 } %t125, 0
-  %t127 = extractvalue { i64, i1 } %t125, 1
-  br i1 %t127, label %intovf128, label %intok128
-intovf128:
-  %t129 = ashr i64 %t110, 1
-  %t130 = ashr i64 %t123, 1
-  call void @mdk_int_overflow(i64 0, i64 %t129, i64 %t130)
+intok109:
+  %t112 = or i64 %t107, 1
+  %t113 = sub i64 %t112, 1
+  %t114 = call { i64, i1 } @llvm.sadd.with.overflow.i64(i64 %t99, i64 %t113)
+  %t115 = extractvalue { i64, i1 } %t114, 0
+  %t116 = extractvalue { i64, i1 } %t114, 1
+  br i1 %t116, label %intovf117, label %intok117
+intovf117:
+  %t118 = ashr i64 %t99, 1
+  %t119 = ashr i64 %t112, 1
+  call void @mdk_int_overflow(i64 0, i64 %t118, i64 %t119)
   unreachable
-intok128:
-  %t131 = sub i64 %t30, 1
-  %t132 = ashr i64 65, 1
-  %t133 = call { i64, i1 } @llvm.smul.with.overflow.i64(i64 %t132, i64 %t131)
-  %t134 = extractvalue { i64, i1 } %t133, 0
-  %t135 = extractvalue { i64, i1 } %t133, 1
-  br i1 %t135, label %intovf136, label %intok136
-intovf136:
-  %t137 = ashr i64 65, 1
-  %t138 = ashr i64 %t30, 1
-  call void @mdk_int_overflow(i64 2, i64 %t137, i64 %t138)
+intok117:
+  %t120 = sub i64 %t49, 1
+  %t121 = ashr i64 65, 1
+  %t122 = call { i64, i1 } @llvm.smul.with.overflow.i64(i64 %t121, i64 %t120)
+  %t123 = extractvalue { i64, i1 } %t122, 0
+  %t124 = extractvalue { i64, i1 } %t122, 1
+  br i1 %t124, label %intovf125, label %intok125
+intovf125:
+  %t126 = ashr i64 65, 1
+  %t127 = ashr i64 %t49, 1
+  call void @mdk_int_overflow(i64 2, i64 %t126, i64 %t127)
   unreachable
-intok136:
-  %t139 = or i64 %t134, 1
-  %t140 = sub i64 %t139, 1
-  %t141 = call { i64, i1 } @llvm.sadd.with.overflow.i64(i64 %t126, i64 %t140)
-  %t142 = extractvalue { i64, i1 } %t141, 0
-  %t143 = extractvalue { i64, i1 } %t141, 1
-  br i1 %t143, label %intovf144, label %intok144
-intovf144:
-  %t145 = ashr i64 %t126, 1
-  %t146 = ashr i64 %t139, 1
-  call void @mdk_int_overflow(i64 0, i64 %t145, i64 %t146)
+intok125:
+  %t128 = or i64 %t123, 1
+  %t129 = sub i64 %t128, 1
+  %t130 = call { i64, i1 } @llvm.sadd.with.overflow.i64(i64 %t115, i64 %t129)
+  %t131 = extractvalue { i64, i1 } %t130, 0
+  %t132 = extractvalue { i64, i1 } %t130, 1
+  br i1 %t132, label %intovf133, label %intok133
+intovf133:
+  %t134 = ashr i64 %t115, 1
+  %t135 = ashr i64 %t128, 1
+  call void @mdk_int_overflow(i64 0, i64 %t134, i64 %t135)
   unreachable
-intok144:
-  %t147 = sub i64 %t36, 1
-  %t148 = ashr i64 129, 1
-  %t149 = call { i64, i1 } @llvm.smul.with.overflow.i64(i64 %t148, i64 %t147)
-  %t150 = extractvalue { i64, i1 } %t149, 0
-  %t151 = extractvalue { i64, i1 } %t149, 1
-  br i1 %t151, label %intovf152, label %intok152
-intovf152:
-  %t153 = ashr i64 129, 1
-  %t154 = ashr i64 %t36, 1
-  call void @mdk_int_overflow(i64 2, i64 %t153, i64 %t154)
+intok133:
+  %t136 = sub i64 %t51, 1
+  %t137 = ashr i64 129, 1
+  %t138 = call { i64, i1 } @llvm.smul.with.overflow.i64(i64 %t137, i64 %t136)
+  %t139 = extractvalue { i64, i1 } %t138, 0
+  %t140 = extractvalue { i64, i1 } %t138, 1
+  br i1 %t140, label %intovf141, label %intok141
+intovf141:
+  %t142 = ashr i64 129, 1
+  %t143 = ashr i64 %t51, 1
+  call void @mdk_int_overflow(i64 2, i64 %t142, i64 %t143)
   unreachable
-intok152:
-  %t155 = or i64 %t150, 1
-  %t156 = sub i64 %t155, 1
-  %t157 = call { i64, i1 } @llvm.sadd.with.overflow.i64(i64 %t142, i64 %t156)
-  %t158 = extractvalue { i64, i1 } %t157, 0
-  %t159 = extractvalue { i64, i1 } %t157, 1
-  br i1 %t159, label %intovf160, label %intok160
-intovf160:
-  %t161 = ashr i64 %t142, 1
-  %t162 = ashr i64 %t155, 1
-  call void @mdk_int_overflow(i64 0, i64 %t161, i64 %t162)
+intok141:
+  %t144 = or i64 %t139, 1
+  %t145 = sub i64 %t144, 1
+  %t146 = call { i64, i1 } @llvm.sadd.with.overflow.i64(i64 %t131, i64 %t145)
+  %t147 = extractvalue { i64, i1 } %t146, 0
+  %t148 = extractvalue { i64, i1 } %t146, 1
+  br i1 %t148, label %intovf149, label %intok149
+intovf149:
+  %t150 = ashr i64 %t131, 1
+  %t151 = ashr i64 %t144, 1
+  call void @mdk_int_overflow(i64 0, i64 %t150, i64 %t151)
   unreachable
-intok160:
-  %t163 = sub i64 %t42, 1
-  %t164 = ashr i64 257, 1
-  %t165 = call { i64, i1 } @llvm.smul.with.overflow.i64(i64 %t164, i64 %t163)
-  %t166 = extractvalue { i64, i1 } %t165, 0
-  %t167 = extractvalue { i64, i1 } %t165, 1
-  br i1 %t167, label %intovf168, label %intok168
-intovf168:
-  %t169 = ashr i64 257, 1
-  %t170 = ashr i64 %t42, 1
-  call void @mdk_int_overflow(i64 2, i64 %t169, i64 %t170)
+intok149:
+  %t152 = sub i64 %t53, 1
+  %t153 = ashr i64 257, 1
+  %t154 = call { i64, i1 } @llvm.smul.with.overflow.i64(i64 %t153, i64 %t152)
+  %t155 = extractvalue { i64, i1 } %t154, 0
+  %t156 = extractvalue { i64, i1 } %t154, 1
+  br i1 %t156, label %intovf157, label %intok157
+intovf157:
+  %t158 = ashr i64 257, 1
+  %t159 = ashr i64 %t53, 1
+  call void @mdk_int_overflow(i64 2, i64 %t158, i64 %t159)
   unreachable
-intok168:
-  %t171 = or i64 %t166, 1
-  %t172 = sub i64 %t171, 1
-  %t173 = call { i64, i1 } @llvm.sadd.with.overflow.i64(i64 %t158, i64 %t172)
-  %t174 = extractvalue { i64, i1 } %t173, 0
-  %t175 = extractvalue { i64, i1 } %t173, 1
-  br i1 %t175, label %intovf176, label %intok176
-intovf176:
-  %t177 = ashr i64 %t158, 1
-  %t178 = ashr i64 %t171, 1
-  call void @mdk_int_overflow(i64 0, i64 %t177, i64 %t178)
+intok157:
+  %t160 = or i64 %t155, 1
+  %t161 = sub i64 %t160, 1
+  %t162 = call { i64, i1 } @llvm.sadd.with.overflow.i64(i64 %t147, i64 %t161)
+  %t163 = extractvalue { i64, i1 } %t162, 0
+  %t164 = extractvalue { i64, i1 } %t162, 1
+  br i1 %t164, label %intovf165, label %intok165
+intovf165:
+  %t166 = ashr i64 %t147, 1
+  %t167 = ashr i64 %t160, 1
+  call void @mdk_int_overflow(i64 0, i64 %t166, i64 %t167)
   unreachable
-intok176:
-  %t179 = sub i64 %t48, 1
-  %t180 = ashr i64 513, 1
-  %t181 = call { i64, i1 } @llvm.smul.with.overflow.i64(i64 %t180, i64 %t179)
-  %t182 = extractvalue { i64, i1 } %t181, 0
-  %t183 = extractvalue { i64, i1 } %t181, 1
-  br i1 %t183, label %intovf184, label %intok184
-intovf184:
-  %t185 = ashr i64 513, 1
-  %t186 = ashr i64 %t48, 1
-  call void @mdk_int_overflow(i64 2, i64 %t185, i64 %t186)
+intok165:
+  %t168 = sub i64 %t55, 1
+  %t169 = ashr i64 513, 1
+  %t170 = call { i64, i1 } @llvm.smul.with.overflow.i64(i64 %t169, i64 %t168)
+  %t171 = extractvalue { i64, i1 } %t170, 0
+  %t172 = extractvalue { i64, i1 } %t170, 1
+  br i1 %t172, label %intovf173, label %intok173
+intovf173:
+  %t174 = ashr i64 513, 1
+  %t175 = ashr i64 %t55, 1
+  call void @mdk_int_overflow(i64 2, i64 %t174, i64 %t175)
   unreachable
-intok184:
-  %t187 = or i64 %t182, 1
-  %t188 = sub i64 %t187, 1
-  %t189 = call { i64, i1 } @llvm.sadd.with.overflow.i64(i64 %t174, i64 %t188)
-  %t190 = extractvalue { i64, i1 } %t189, 0
-  %t191 = extractvalue { i64, i1 } %t189, 1
-  br i1 %t191, label %intovf192, label %intok192
-intovf192:
-  %t193 = ashr i64 %t174, 1
-  %t194 = ashr i64 %t187, 1
-  call void @mdk_int_overflow(i64 0, i64 %t193, i64 %t194)
+intok173:
+  %t176 = or i64 %t171, 1
+  %t177 = sub i64 %t176, 1
+  %t178 = call { i64, i1 } @llvm.sadd.with.overflow.i64(i64 %t163, i64 %t177)
+  %t179 = extractvalue { i64, i1 } %t178, 0
+  %t180 = extractvalue { i64, i1 } %t178, 1
+  br i1 %t180, label %intovf181, label %intok181
+intovf181:
+  %t182 = ashr i64 %t163, 1
+  %t183 = ashr i64 %t176, 1
+  call void @mdk_int_overflow(i64 0, i64 %t182, i64 %t183)
   unreachable
-intok192:
-  %t195 = sub i64 %t54, 1
-  %t196 = ashr i64 1025, 1
-  %t197 = call { i64, i1 } @llvm.smul.with.overflow.i64(i64 %t196, i64 %t195)
-  %t198 = extractvalue { i64, i1 } %t197, 0
-  %t199 = extractvalue { i64, i1 } %t197, 1
-  br i1 %t199, label %intovf200, label %intok200
-intovf200:
-  %t201 = ashr i64 1025, 1
-  %t202 = ashr i64 %t54, 1
-  call void @mdk_int_overflow(i64 2, i64 %t201, i64 %t202)
-  unreachable
-intok200:
-  %t203 = or i64 %t198, 1
-  %t204 = sub i64 %t203, 1
-  %t205 = call { i64, i1 } @llvm.sadd.with.overflow.i64(i64 %t190, i64 %t204)
-  %t206 = extractvalue { i64, i1 } %t205, 0
-  %t207 = extractvalue { i64, i1 } %t205, 1
-  br i1 %t207, label %intovf208, label %intok208
-intovf208:
-  %t209 = ashr i64 %t190, 1
-  %t210 = ashr i64 %t203, 1
-  call void @mdk_int_overflow(i64 0, i64 %t209, i64 %t210)
-  unreachable
-intok208:
-  %t211 = sub i64 %t60, 1
-  %t212 = ashr i64 2049, 1
-  %t213 = call { i64, i1 } @llvm.smul.with.overflow.i64(i64 %t212, i64 %t211)
-  %t214 = extractvalue { i64, i1 } %t213, 0
-  %t215 = extractvalue { i64, i1 } %t213, 1
-  br i1 %t215, label %intovf216, label %intok216
-intovf216:
-  %t217 = ashr i64 2049, 1
-  %t218 = ashr i64 %t60, 1
-  call void @mdk_int_overflow(i64 2, i64 %t217, i64 %t218)
-  unreachable
-intok216:
-  %t219 = or i64 %t214, 1
-  %t220 = sub i64 %t219, 1
-  %t221 = call { i64, i1 } @llvm.sadd.with.overflow.i64(i64 %t206, i64 %t220)
-  %t222 = extractvalue { i64, i1 } %t221, 0
-  %t223 = extractvalue { i64, i1 } %t221, 1
-  br i1 %t223, label %intovf224, label %intok224
-intovf224:
-  %t225 = ashr i64 %t206, 1
-  %t226 = ashr i64 %t219, 1
-  call void @mdk_int_overflow(i64 0, i64 %t225, i64 %t226)
-  unreachable
-intok224:
-  %t227 = sub i64 %t66, 1
-  %t228 = ashr i64 4097, 1
-  %t229 = call { i64, i1 } @llvm.smul.with.overflow.i64(i64 %t228, i64 %t227)
-  %t230 = extractvalue { i64, i1 } %t229, 0
-  %t231 = extractvalue { i64, i1 } %t229, 1
-  br i1 %t231, label %intovf232, label %intok232
-intovf232:
-  %t233 = ashr i64 4097, 1
-  %t234 = ashr i64 %t66, 1
-  call void @mdk_int_overflow(i64 2, i64 %t233, i64 %t234)
-  unreachable
-intok232:
-  %t235 = or i64 %t230, 1
-  %t236 = sub i64 %t235, 1
-  %t237 = call { i64, i1 } @llvm.sadd.with.overflow.i64(i64 %t222, i64 %t236)
-  %t238 = extractvalue { i64, i1 } %t237, 0
-  %t239 = extractvalue { i64, i1 } %t237, 1
-  br i1 %t239, label %intovf240, label %intok240
-intovf240:
-  %t241 = ashr i64 %t222, 1
-  %t242 = ashr i64 %t235, 1
-  call void @mdk_int_overflow(i64 0, i64 %t241, i64 %t242)
-  unreachable
-intok240:
-  store i64 %t238, ptr @mdk.global.6d356635663735373336353732356635665f5f6e616e42697473
-  %t243 = call ptr @mdk_alloc_atomic(i64 16)
-  store i64 2, ptr %t243
-  %t244 = getelementptr i8, ptr %t243, i64 8
-  store double 1.0, ptr %t244
-  %t245 = ptrtoint ptr %t243 to i64
-  %t246 = call ptr @mdk_alloc_atomic(i64 16)
-  store i64 2, ptr %t246
-  %t247 = getelementptr i8, ptr %t246, i64 8
-  store double 2.0, ptr %t247
-  %t248 = ptrtoint ptr %t246 to i64
-  %t249 = call i64 @mdk.user.6d356635663735373336353732356635665f5f6170706c79436d70(i64 ptrtoint (ptr @mdk.gen.ctorcell.70726f6772616d..25 to i64), i64 %t245, i64 %t248)
-  %t250 = call i64 @mdk.user.6d356635663735373336353732356635665f5f626974(i64 %t249)
-  %t251 = call ptr @mdk_alloc_atomic(i64 16)
-  store i64 2, ptr %t251
-  %t252 = getelementptr i8, ptr %t251, i64 8
-  store double 1.0, ptr %t252
-  %t253 = ptrtoint ptr %t251 to i64
-  %t254 = call ptr @mdk_alloc_atomic(i64 16)
-  store i64 2, ptr %t254
-  %t255 = getelementptr i8, ptr %t254, i64 8
-  store double 2.0, ptr %t255
-  %t256 = ptrtoint ptr %t254 to i64
-  %t257 = call i64 @mdk.user.6d356635663735373336353732356635665f5f6170706c79436d70(i64 ptrtoint (ptr @mdk.gen.ctorcell.70726f6772616d..27 to i64), i64 %t253, i64 %t256)
-  %t258 = call i64 @mdk.user.6d356635663735373336353732356635665f5f626974(i64 %t257)
-  %t259 = call ptr @mdk_alloc_atomic(i64 16)
-  store i64 2, ptr %t259
-  %t260 = getelementptr i8, ptr %t259, i64 8
-  store double 2.0, ptr %t260
-  %t261 = ptrtoint ptr %t259 to i64
-  %t262 = call ptr @mdk_alloc_atomic(i64 16)
-  store i64 2, ptr %t262
-  %t263 = getelementptr i8, ptr %t262, i64 8
-  store double 1.0, ptr %t263
-  %t264 = ptrtoint ptr %t262 to i64
-  %t265 = call i64 @mdk.user.6d356635663735373336353732356635665f5f6170706c79436d70(i64 ptrtoint (ptr @mdk.gen.ctorcell.70726f6772616d..29 to i64), i64 %t261, i64 %t264)
-  %t266 = call i64 @mdk.user.6d356635663735373336353732356635665f5f626974(i64 %t265)
-  %t267 = call ptr @mdk_alloc_atomic(i64 16)
-  store i64 2, ptr %t267
-  %t268 = getelementptr i8, ptr %t267, i64 8
-  store double 2.0, ptr %t268
-  %t269 = ptrtoint ptr %t267 to i64
-  %t270 = call ptr @mdk_alloc_atomic(i64 16)
-  store i64 2, ptr %t270
-  %t271 = getelementptr i8, ptr %t270, i64 8
-  store double 1.0, ptr %t271
-  %t272 = ptrtoint ptr %t270 to i64
-  %t273 = call i64 @mdk.user.6d356635663735373336353732356635665f5f6170706c79436d70(i64 ptrtoint (ptr @mdk.gen.ctorcell.70726f6772616d..31 to i64), i64 %t269, i64 %t272)
-  %t274 = call i64 @mdk.user.6d356635663735373336353732356635665f5f626974(i64 %t273)
-  %t275 = call ptr @mdk_alloc_atomic(i64 16)
-  store i64 2, ptr %t275
-  %t276 = getelementptr i8, ptr %t275, i64 8
-  store double 1.0, ptr %t276
-  %t277 = ptrtoint ptr %t275 to i64
-  %t278 = call ptr @mdk_alloc_atomic(i64 16)
-  store i64 2, ptr %t278
-  %t279 = getelementptr i8, ptr %t278, i64 8
-  store double 1.0, ptr %t279
-  %t280 = ptrtoint ptr %t278 to i64
-  %t281 = call i64 @mdk.user.6d356635663735373336353732356635665f5f6170706c79436d70(i64 ptrtoint (ptr @mdk.gen.ctorcell.70726f6772616d..33 to i64), i64 %t277, i64 %t280)
-  %t282 = call i64 @mdk.user.6d356635663735373336353732356635665f5f626974(i64 %t281)
-  %t283 = call ptr @mdk_alloc_atomic(i64 16)
-  store i64 2, ptr %t283
-  %t284 = getelementptr i8, ptr %t283, i64 8
-  store double 1.0, ptr %t284
-  %t285 = ptrtoint ptr %t283 to i64
-  %t286 = call ptr @mdk_alloc_atomic(i64 16)
-  store i64 2, ptr %t286
-  %t287 = getelementptr i8, ptr %t286, i64 8
-  store double 1.0, ptr %t287
-  %t288 = ptrtoint ptr %t286 to i64
-  %t289 = call i64 @mdk.user.6d356635663735373336353732356635665f5f6170706c79436d70(i64 ptrtoint (ptr @mdk.gen.ctorcell.70726f6772616d..35 to i64), i64 %t285, i64 %t288)
-  %t290 = call i64 @mdk.user.6d356635663735373336353732356635665f5f626974(i64 %t289)
-  %t291 = call i64 @mdk.user.6d356635663735373336353732356635665f5f6170706c79436d70(i64 ptrtoint (ptr @mdk.gen.ctorcell.70726f6772616d..37 to i64), i64 3, i64 5)
-  %t292 = call i64 @mdk.user.6d356635663735373336353732356635665f5f626974(i64 %t291)
-  %t293 = call i64 @mdk.user.6d356635663735373336353732356635665f5f6170706c79436d70(i64 ptrtoint (ptr @mdk.gen.ctorcell.70726f6772616d..39 to i64), i64 5, i64 3)
-  %t294 = call i64 @mdk.user.6d356635663735373336353732356635665f5f626974(i64 %t293)
-  %t295 = call i64 @mdk.user.6d356635663735373336353732356635665f5f6170706c79436d70(i64 ptrtoint (ptr @mdk.gen.ctorcell.70726f6772616d..41 to i64), i64 5, i64 5)
-  %t296 = call i64 @mdk.user.6d356635663735373336353732356635665f5f626974(i64 %t295)
-  %t297 = sub i64 %t258, 1
-  %t298 = ashr i64 5, 1
-  %t299 = call { i64, i1 } @llvm.smul.with.overflow.i64(i64 %t298, i64 %t297)
-  %t300 = extractvalue { i64, i1 } %t299, 0
-  %t301 = extractvalue { i64, i1 } %t299, 1
-  br i1 %t301, label %intovf302, label %intok302
-intovf302:
-  %t303 = ashr i64 5, 1
-  %t304 = ashr i64 %t258, 1
-  call void @mdk_int_overflow(i64 2, i64 %t303, i64 %t304)
-  unreachable
-intok302:
-  %t305 = or i64 %t300, 1
-  %t306 = sub i64 %t305, 1
-  %t307 = call { i64, i1 } @llvm.sadd.with.overflow.i64(i64 %t250, i64 %t306)
-  %t308 = extractvalue { i64, i1 } %t307, 0
-  %t309 = extractvalue { i64, i1 } %t307, 1
-  br i1 %t309, label %intovf310, label %intok310
-intovf310:
-  %t311 = ashr i64 %t250, 1
-  %t312 = ashr i64 %t305, 1
-  call void @mdk_int_overflow(i64 0, i64 %t311, i64 %t312)
-  unreachable
-intok310:
-  %t313 = sub i64 %t266, 1
-  %t314 = ashr i64 9, 1
-  %t315 = call { i64, i1 } @llvm.smul.with.overflow.i64(i64 %t314, i64 %t313)
-  %t316 = extractvalue { i64, i1 } %t315, 0
-  %t317 = extractvalue { i64, i1 } %t315, 1
-  br i1 %t317, label %intovf318, label %intok318
-intovf318:
-  %t319 = ashr i64 9, 1
-  %t320 = ashr i64 %t266, 1
-  call void @mdk_int_overflow(i64 2, i64 %t319, i64 %t320)
-  unreachable
-intok318:
-  %t321 = or i64 %t316, 1
-  %t322 = sub i64 %t321, 1
-  %t323 = call { i64, i1 } @llvm.sadd.with.overflow.i64(i64 %t308, i64 %t322)
-  %t324 = extractvalue { i64, i1 } %t323, 0
-  %t325 = extractvalue { i64, i1 } %t323, 1
-  br i1 %t325, label %intovf326, label %intok326
-intovf326:
-  %t327 = ashr i64 %t308, 1
-  %t328 = ashr i64 %t321, 1
-  call void @mdk_int_overflow(i64 0, i64 %t327, i64 %t328)
-  unreachable
-intok326:
-  %t329 = sub i64 %t274, 1
-  %t330 = ashr i64 17, 1
-  %t331 = call { i64, i1 } @llvm.smul.with.overflow.i64(i64 %t330, i64 %t329)
-  %t332 = extractvalue { i64, i1 } %t331, 0
-  %t333 = extractvalue { i64, i1 } %t331, 1
-  br i1 %t333, label %intovf334, label %intok334
-intovf334:
-  %t335 = ashr i64 17, 1
-  %t336 = ashr i64 %t274, 1
-  call void @mdk_int_overflow(i64 2, i64 %t335, i64 %t336)
-  unreachable
-intok334:
-  %t337 = or i64 %t332, 1
-  %t338 = sub i64 %t337, 1
-  %t339 = call { i64, i1 } @llvm.sadd.with.overflow.i64(i64 %t324, i64 %t338)
-  %t340 = extractvalue { i64, i1 } %t339, 0
-  %t341 = extractvalue { i64, i1 } %t339, 1
-  br i1 %t341, label %intovf342, label %intok342
-intovf342:
-  %t343 = ashr i64 %t324, 1
-  %t344 = ashr i64 %t337, 1
-  call void @mdk_int_overflow(i64 0, i64 %t343, i64 %t344)
-  unreachable
-intok342:
-  %t345 = sub i64 %t282, 1
-  %t346 = ashr i64 33, 1
-  %t347 = call { i64, i1 } @llvm.smul.with.overflow.i64(i64 %t346, i64 %t345)
-  %t348 = extractvalue { i64, i1 } %t347, 0
-  %t349 = extractvalue { i64, i1 } %t347, 1
-  br i1 %t349, label %intovf350, label %intok350
-intovf350:
-  %t351 = ashr i64 33, 1
-  %t352 = ashr i64 %t282, 1
-  call void @mdk_int_overflow(i64 2, i64 %t351, i64 %t352)
-  unreachable
-intok350:
-  %t353 = or i64 %t348, 1
-  %t354 = sub i64 %t353, 1
-  %t355 = call { i64, i1 } @llvm.sadd.with.overflow.i64(i64 %t340, i64 %t354)
-  %t356 = extractvalue { i64, i1 } %t355, 0
-  %t357 = extractvalue { i64, i1 } %t355, 1
-  br i1 %t357, label %intovf358, label %intok358
-intovf358:
-  %t359 = ashr i64 %t340, 1
-  %t360 = ashr i64 %t353, 1
-  call void @mdk_int_overflow(i64 0, i64 %t359, i64 %t360)
-  unreachable
-intok358:
-  %t361 = sub i64 %t290, 1
-  %t362 = ashr i64 65, 1
-  %t363 = call { i64, i1 } @llvm.smul.with.overflow.i64(i64 %t362, i64 %t361)
-  %t364 = extractvalue { i64, i1 } %t363, 0
-  %t365 = extractvalue { i64, i1 } %t363, 1
-  br i1 %t365, label %intovf366, label %intok366
-intovf366:
-  %t367 = ashr i64 65, 1
-  %t368 = ashr i64 %t290, 1
-  call void @mdk_int_overflow(i64 2, i64 %t367, i64 %t368)
-  unreachable
-intok366:
-  %t369 = or i64 %t364, 1
-  %t370 = sub i64 %t369, 1
-  %t371 = call { i64, i1 } @llvm.sadd.with.overflow.i64(i64 %t356, i64 %t370)
-  %t372 = extractvalue { i64, i1 } %t371, 0
-  %t373 = extractvalue { i64, i1 } %t371, 1
-  br i1 %t373, label %intovf374, label %intok374
-intovf374:
-  %t375 = ashr i64 %t356, 1
-  %t376 = ashr i64 %t369, 1
-  call void @mdk_int_overflow(i64 0, i64 %t375, i64 %t376)
-  unreachable
-intok374:
-  %t377 = sub i64 %t292, 1
-  %t378 = ashr i64 129, 1
-  %t379 = call { i64, i1 } @llvm.smul.with.overflow.i64(i64 %t378, i64 %t377)
-  %t380 = extractvalue { i64, i1 } %t379, 0
-  %t381 = extractvalue { i64, i1 } %t379, 1
-  br i1 %t381, label %intovf382, label %intok382
-intovf382:
-  %t383 = ashr i64 129, 1
-  %t384 = ashr i64 %t292, 1
-  call void @mdk_int_overflow(i64 2, i64 %t383, i64 %t384)
-  unreachable
-intok382:
-  %t385 = or i64 %t380, 1
-  %t386 = sub i64 %t385, 1
-  %t387 = call { i64, i1 } @llvm.sadd.with.overflow.i64(i64 %t372, i64 %t386)
-  %t388 = extractvalue { i64, i1 } %t387, 0
-  %t389 = extractvalue { i64, i1 } %t387, 1
-  br i1 %t389, label %intovf390, label %intok390
-intovf390:
-  %t391 = ashr i64 %t372, 1
-  %t392 = ashr i64 %t385, 1
-  call void @mdk_int_overflow(i64 0, i64 %t391, i64 %t392)
-  unreachable
-intok390:
-  %t393 = sub i64 %t294, 1
-  %t394 = ashr i64 257, 1
-  %t395 = call { i64, i1 } @llvm.smul.with.overflow.i64(i64 %t394, i64 %t393)
-  %t396 = extractvalue { i64, i1 } %t395, 0
-  %t397 = extractvalue { i64, i1 } %t395, 1
-  br i1 %t397, label %intovf398, label %intok398
-intovf398:
-  %t399 = ashr i64 257, 1
-  %t400 = ashr i64 %t294, 1
-  call void @mdk_int_overflow(i64 2, i64 %t399, i64 %t400)
-  unreachable
-intok398:
-  %t401 = or i64 %t396, 1
-  %t402 = sub i64 %t401, 1
-  %t403 = call { i64, i1 } @llvm.sadd.with.overflow.i64(i64 %t388, i64 %t402)
-  %t404 = extractvalue { i64, i1 } %t403, 0
-  %t405 = extractvalue { i64, i1 } %t403, 1
-  br i1 %t405, label %intovf406, label %intok406
-intovf406:
-  %t407 = ashr i64 %t388, 1
-  %t408 = ashr i64 %t401, 1
-  call void @mdk_int_overflow(i64 0, i64 %t407, i64 %t408)
-  unreachable
-intok406:
-  %t409 = sub i64 %t296, 1
-  %t410 = ashr i64 513, 1
-  %t411 = call { i64, i1 } @llvm.smul.with.overflow.i64(i64 %t410, i64 %t409)
-  %t412 = extractvalue { i64, i1 } %t411, 0
-  %t413 = extractvalue { i64, i1 } %t411, 1
-  br i1 %t413, label %intovf414, label %intok414
-intovf414:
-  %t415 = ashr i64 513, 1
-  %t416 = ashr i64 %t296, 1
-  call void @mdk_int_overflow(i64 2, i64 %t415, i64 %t416)
-  unreachable
-intok414:
-  %t417 = or i64 %t412, 1
-  %t418 = sub i64 %t417, 1
-  %t419 = call { i64, i1 } @llvm.sadd.with.overflow.i64(i64 %t404, i64 %t418)
-  %t420 = extractvalue { i64, i1 } %t419, 0
-  %t421 = extractvalue { i64, i1 } %t419, 1
-  br i1 %t421, label %intovf422, label %intok422
-intovf422:
-  %t423 = ashr i64 %t404, 1
-  %t424 = ashr i64 %t417, 1
-  call void @mdk_int_overflow(i64 0, i64 %t423, i64 %t424)
-  unreachable
-intok422:
-  store i64 %t420, ptr @mdk.global.6d356635663735373336353732356635665f5f63746c42697473
-  %t425 = load i64, ptr @mdk.global.6d356635663735373336353732356635665f5f6e616e42697473
-  %t426 = sub i64 2001, 1
-  %t427 = ashr i64 %t425, 1
-  %t428 = call { i64, i1 } @llvm.smul.with.overflow.i64(i64 %t427, i64 %t426)
-  %t429 = extractvalue { i64, i1 } %t428, 0
-  %t430 = extractvalue { i64, i1 } %t428, 1
-  br i1 %t430, label %intovf431, label %intok431
-intovf431:
-  %t432 = ashr i64 %t425, 1
-  %t433 = ashr i64 2001, 1
-  call void @mdk_int_overflow(i64 2, i64 %t432, i64 %t433)
-  unreachable
-intok431:
-  %t434 = or i64 %t429, 1
-  %t435 = load i64, ptr @mdk.global.6d356635663735373336353732356635665f5f63746c42697473
-  %t436 = sub i64 %t435, 1
-  %t437 = call { i64, i1 } @llvm.sadd.with.overflow.i64(i64 %t434, i64 %t436)
-  %t438 = extractvalue { i64, i1 } %t437, 0
-  %t439 = extractvalue { i64, i1 } %t437, 1
-  br i1 %t439, label %intovf440, label %intok440
-intovf440:
-  %t441 = ashr i64 %t434, 1
-  %t442 = ashr i64 %t435, 1
-  call void @mdk_int_overflow(i64 0, i64 %t441, i64 %t442)
-  unreachable
-intok440:
-  %t443 = ashr i64 %t438, 1
-  call void @mdk_print_int(i64 %t443)
-  ret i32 0
+intok181:
+  store i64 %t179, ptr @mdk.global.6d356635663735373336353732356635665f5f63746c42697473
+  store i8 2, ptr @mdk.state.6d356635663735373336353732356635665f5f63746c42697473
+  ret i64 %t179
 }
 ; mdk-module module.5f5f757365725f5f
 define internal i64 @mdk.user.6d356635663735373336353732356635665f5f6170706c79436d70(i64 %arg0, i64 %arg1, i64 %arg2) {
@@ -947,195 +995,207 @@ else2:
 ; mdk-module module.5f5f757365725f5f
 @mdk.global.6d356635663735373336353732356635665f5f6e616e = global i64 0
 ; mdk-module module.5f5f757365725f5f
+@mdk.state.6d356635663735373336353732356635665f5f6e616e = global i8 0
+; mdk-module module.5f5f757365725f5f
 @mdk.global.6d356635663735373336353732356635665f5f6e616e42697473 = global i64 0
 ; mdk-module module.5f5f757365725f5f
+@mdk.state.6d356635663735373336353732356635665f5f6e616e42697473 = global i8 0
+; mdk-module module.5f5f757365725f5f
 @mdk.global.6d356635663735373336353732356635665f5f63746c42697473 = global i64 0
-; mdk-module program
-define internal i64 @mdk.gen.eta.70726f6772616d.6d356635663735373336353732356635665f5f636d704c74.0(i64 %clos, i64 %arg0, i64 %arg1) {
+; mdk-module module.5f5f757365725f5f
+@mdk.state.6d356635663735373336353732356635665f5f63746c42697473 = global i8 0
+; mdk-module module.5f5f757365725f5f
+@mdk.gen.globalname.6d6f64756c652e35663566373537333635373235663566.6d356635663735373336353732356635665f5f6e616e.0 = private unnamed_addr constant [23 x i8] c"\6D\35\66\35\66\37\35\37\33\36\35\37\32\35\66\35\66\5F\5F\6E\61\6E\00"
+; mdk-module module.5f5f757365725f5f
+@mdk.gen.globalname.6d6f64756c652e35663566373537333635373235663566.6d356635663735373336353732356635665f5f6e616e42697473.1 = private unnamed_addr constant [27 x i8] c"\6D\35\66\35\66\37\35\37\33\36\35\37\32\35\66\35\66\5F\5F\6E\61\6E\42\69\74\73\00"
+; mdk-module module.5f5f757365725f5f
+define internal i64 @mdk.gen.eta.6d6f64756c652e35663566373537333635373235663566.6d356635663735373336353732356635665f5f636d704c74.2(i64 %clos, i64 %arg0, i64 %arg1) {
 entry:
   %t0 = call i64 @mdk.user.6d356635663735373336353732356635665f5f636d704c74(i64 %arg0, i64 %arg1)
   ret i64 %t0
 }
 
-; mdk-module program
-@mdk.gen.ctorcell.70726f6772616d..1 = internal constant [2 x i64] [i64 2, i64 ptrtoint (ptr @mdk.gen.eta.70726f6772616d.6d356635663735373336353732356635665f5f636d704c74.0 to i64)]
-; mdk-module program
-define internal i64 @mdk.gen.eta.70726f6772616d.6d356635663735373336353732356635665f5f636d704c65.2(i64 %clos, i64 %arg0, i64 %arg1) {
+; mdk-module module.5f5f757365725f5f
+@mdk.gen.ctorcell.6d6f64756c652e35663566373537333635373235663566..3 = internal constant [2 x i64] [i64 2, i64 ptrtoint (ptr @mdk.gen.eta.6d6f64756c652e35663566373537333635373235663566.6d356635663735373336353732356635665f5f636d704c74.2 to i64)]
+; mdk-module module.5f5f757365725f5f
+define internal i64 @mdk.gen.eta.6d6f64756c652e35663566373537333635373235663566.6d356635663735373336353732356635665f5f636d704c65.4(i64 %clos, i64 %arg0, i64 %arg1) {
 entry:
   %t0 = call i64 @mdk.user.6d356635663735373336353732356635665f5f636d704c65(i64 %arg0, i64 %arg1)
   ret i64 %t0
 }
 
-; mdk-module program
-@mdk.gen.ctorcell.70726f6772616d..3 = internal constant [2 x i64] [i64 2, i64 ptrtoint (ptr @mdk.gen.eta.70726f6772616d.6d356635663735373336353732356635665f5f636d704c65.2 to i64)]
-; mdk-module program
-define internal i64 @mdk.gen.eta.70726f6772616d.6d356635663735373336353732356635665f5f636d704774.4(i64 %clos, i64 %arg0, i64 %arg1) {
+; mdk-module module.5f5f757365725f5f
+@mdk.gen.ctorcell.6d6f64756c652e35663566373537333635373235663566..5 = internal constant [2 x i64] [i64 2, i64 ptrtoint (ptr @mdk.gen.eta.6d6f64756c652e35663566373537333635373235663566.6d356635663735373336353732356635665f5f636d704c65.4 to i64)]
+; mdk-module module.5f5f757365725f5f
+define internal i64 @mdk.gen.eta.6d6f64756c652e35663566373537333635373235663566.6d356635663735373336353732356635665f5f636d704774.6(i64 %clos, i64 %arg0, i64 %arg1) {
 entry:
   %t0 = call i64 @mdk.user.6d356635663735373336353732356635665f5f636d704774(i64 %arg0, i64 %arg1)
   ret i64 %t0
 }
 
-; mdk-module program
-@mdk.gen.ctorcell.70726f6772616d..5 = internal constant [2 x i64] [i64 2, i64 ptrtoint (ptr @mdk.gen.eta.70726f6772616d.6d356635663735373336353732356635665f5f636d704774.4 to i64)]
-; mdk-module program
-define internal i64 @mdk.gen.eta.70726f6772616d.6d356635663735373336353732356635665f5f636d704765.6(i64 %clos, i64 %arg0, i64 %arg1) {
+; mdk-module module.5f5f757365725f5f
+@mdk.gen.ctorcell.6d6f64756c652e35663566373537333635373235663566..7 = internal constant [2 x i64] [i64 2, i64 ptrtoint (ptr @mdk.gen.eta.6d6f64756c652e35663566373537333635373235663566.6d356635663735373336353732356635665f5f636d704774.6 to i64)]
+; mdk-module module.5f5f757365725f5f
+define internal i64 @mdk.gen.eta.6d6f64756c652e35663566373537333635373235663566.6d356635663735373336353732356635665f5f636d704765.8(i64 %clos, i64 %arg0, i64 %arg1) {
 entry:
   %t0 = call i64 @mdk.user.6d356635663735373336353732356635665f5f636d704765(i64 %arg0, i64 %arg1)
   ret i64 %t0
 }
 
-; mdk-module program
-@mdk.gen.ctorcell.70726f6772616d..7 = internal constant [2 x i64] [i64 2, i64 ptrtoint (ptr @mdk.gen.eta.70726f6772616d.6d356635663735373336353732356635665f5f636d704765.6 to i64)]
-; mdk-module program
-define internal i64 @mdk.gen.eta.70726f6772616d.6d356635663735373336353732356635665f5f636d704c74.8(i64 %clos, i64 %arg0, i64 %arg1) {
+; mdk-module module.5f5f757365725f5f
+@mdk.gen.ctorcell.6d6f64756c652e35663566373537333635373235663566..9 = internal constant [2 x i64] [i64 2, i64 ptrtoint (ptr @mdk.gen.eta.6d6f64756c652e35663566373537333635373235663566.6d356635663735373336353732356635665f5f636d704765.8 to i64)]
+; mdk-module module.5f5f757365725f5f
+define internal i64 @mdk.gen.eta.6d6f64756c652e35663566373537333635373235663566.6d356635663735373336353732356635665f5f636d704c74.10(i64 %clos, i64 %arg0, i64 %arg1) {
 entry:
   %t0 = call i64 @mdk.user.6d356635663735373336353732356635665f5f636d704c74(i64 %arg0, i64 %arg1)
   ret i64 %t0
 }
 
-; mdk-module program
-@mdk.gen.ctorcell.70726f6772616d..9 = internal constant [2 x i64] [i64 2, i64 ptrtoint (ptr @mdk.gen.eta.70726f6772616d.6d356635663735373336353732356635665f5f636d704c74.8 to i64)]
-; mdk-module program
-define internal i64 @mdk.gen.eta.70726f6772616d.6d356635663735373336353732356635665f5f636d704c65.10(i64 %clos, i64 %arg0, i64 %arg1) {
+; mdk-module module.5f5f757365725f5f
+@mdk.gen.ctorcell.6d6f64756c652e35663566373537333635373235663566..11 = internal constant [2 x i64] [i64 2, i64 ptrtoint (ptr @mdk.gen.eta.6d6f64756c652e35663566373537333635373235663566.6d356635663735373336353732356635665f5f636d704c74.10 to i64)]
+; mdk-module module.5f5f757365725f5f
+define internal i64 @mdk.gen.eta.6d6f64756c652e35663566373537333635373235663566.6d356635663735373336353732356635665f5f636d704c65.12(i64 %clos, i64 %arg0, i64 %arg1) {
 entry:
   %t0 = call i64 @mdk.user.6d356635663735373336353732356635665f5f636d704c65(i64 %arg0, i64 %arg1)
   ret i64 %t0
 }
 
-; mdk-module program
-@mdk.gen.ctorcell.70726f6772616d..11 = internal constant [2 x i64] [i64 2, i64 ptrtoint (ptr @mdk.gen.eta.70726f6772616d.6d356635663735373336353732356635665f5f636d704c65.10 to i64)]
-; mdk-module program
-define internal i64 @mdk.gen.eta.70726f6772616d.6d356635663735373336353732356635665f5f636d704774.12(i64 %clos, i64 %arg0, i64 %arg1) {
+; mdk-module module.5f5f757365725f5f
+@mdk.gen.ctorcell.6d6f64756c652e35663566373537333635373235663566..13 = internal constant [2 x i64] [i64 2, i64 ptrtoint (ptr @mdk.gen.eta.6d6f64756c652e35663566373537333635373235663566.6d356635663735373336353732356635665f5f636d704c65.12 to i64)]
+; mdk-module module.5f5f757365725f5f
+define internal i64 @mdk.gen.eta.6d6f64756c652e35663566373537333635373235663566.6d356635663735373336353732356635665f5f636d704774.14(i64 %clos, i64 %arg0, i64 %arg1) {
 entry:
   %t0 = call i64 @mdk.user.6d356635663735373336353732356635665f5f636d704774(i64 %arg0, i64 %arg1)
   ret i64 %t0
 }
 
-; mdk-module program
-@mdk.gen.ctorcell.70726f6772616d..13 = internal constant [2 x i64] [i64 2, i64 ptrtoint (ptr @mdk.gen.eta.70726f6772616d.6d356635663735373336353732356635665f5f636d704774.12 to i64)]
-; mdk-module program
-define internal i64 @mdk.gen.eta.70726f6772616d.6d356635663735373336353732356635665f5f636d704765.14(i64 %clos, i64 %arg0, i64 %arg1) {
+; mdk-module module.5f5f757365725f5f
+@mdk.gen.ctorcell.6d6f64756c652e35663566373537333635373235663566..15 = internal constant [2 x i64] [i64 2, i64 ptrtoint (ptr @mdk.gen.eta.6d6f64756c652e35663566373537333635373235663566.6d356635663735373336353732356635665f5f636d704774.14 to i64)]
+; mdk-module module.5f5f757365725f5f
+define internal i64 @mdk.gen.eta.6d6f64756c652e35663566373537333635373235663566.6d356635663735373336353732356635665f5f636d704765.16(i64 %clos, i64 %arg0, i64 %arg1) {
 entry:
   %t0 = call i64 @mdk.user.6d356635663735373336353732356635665f5f636d704765(i64 %arg0, i64 %arg1)
   ret i64 %t0
 }
 
-; mdk-module program
-@mdk.gen.ctorcell.70726f6772616d..15 = internal constant [2 x i64] [i64 2, i64 ptrtoint (ptr @mdk.gen.eta.70726f6772616d.6d356635663735373336353732356635665f5f636d704765.14 to i64)]
-; mdk-module program
-define internal i64 @mdk.gen.eta.70726f6772616d.6d356635663735373336353732356635665f5f636d704c74.16(i64 %clos, i64 %arg0, i64 %arg1) {
+; mdk-module module.5f5f757365725f5f
+@mdk.gen.ctorcell.6d6f64756c652e35663566373537333635373235663566..17 = internal constant [2 x i64] [i64 2, i64 ptrtoint (ptr @mdk.gen.eta.6d6f64756c652e35663566373537333635373235663566.6d356635663735373336353732356635665f5f636d704765.16 to i64)]
+; mdk-module module.5f5f757365725f5f
+define internal i64 @mdk.gen.eta.6d6f64756c652e35663566373537333635373235663566.6d356635663735373336353732356635665f5f636d704c74.18(i64 %clos, i64 %arg0, i64 %arg1) {
 entry:
   %t0 = call i64 @mdk.user.6d356635663735373336353732356635665f5f636d704c74(i64 %arg0, i64 %arg1)
   ret i64 %t0
 }
 
-; mdk-module program
-@mdk.gen.ctorcell.70726f6772616d..17 = internal constant [2 x i64] [i64 2, i64 ptrtoint (ptr @mdk.gen.eta.70726f6772616d.6d356635663735373336353732356635665f5f636d704c74.16 to i64)]
-; mdk-module program
-define internal i64 @mdk.gen.eta.70726f6772616d.6d356635663735373336353732356635665f5f636d704c65.18(i64 %clos, i64 %arg0, i64 %arg1) {
+; mdk-module module.5f5f757365725f5f
+@mdk.gen.ctorcell.6d6f64756c652e35663566373537333635373235663566..19 = internal constant [2 x i64] [i64 2, i64 ptrtoint (ptr @mdk.gen.eta.6d6f64756c652e35663566373537333635373235663566.6d356635663735373336353732356635665f5f636d704c74.18 to i64)]
+; mdk-module module.5f5f757365725f5f
+define internal i64 @mdk.gen.eta.6d6f64756c652e35663566373537333635373235663566.6d356635663735373336353732356635665f5f636d704c65.20(i64 %clos, i64 %arg0, i64 %arg1) {
 entry:
   %t0 = call i64 @mdk.user.6d356635663735373336353732356635665f5f636d704c65(i64 %arg0, i64 %arg1)
   ret i64 %t0
 }
 
-; mdk-module program
-@mdk.gen.ctorcell.70726f6772616d..19 = internal constant [2 x i64] [i64 2, i64 ptrtoint (ptr @mdk.gen.eta.70726f6772616d.6d356635663735373336353732356635665f5f636d704c65.18 to i64)]
-; mdk-module program
-define internal i64 @mdk.gen.eta.70726f6772616d.6d356635663735373336353732356635665f5f636d704774.20(i64 %clos, i64 %arg0, i64 %arg1) {
+; mdk-module module.5f5f757365725f5f
+@mdk.gen.ctorcell.6d6f64756c652e35663566373537333635373235663566..21 = internal constant [2 x i64] [i64 2, i64 ptrtoint (ptr @mdk.gen.eta.6d6f64756c652e35663566373537333635373235663566.6d356635663735373336353732356635665f5f636d704c65.20 to i64)]
+; mdk-module module.5f5f757365725f5f
+define internal i64 @mdk.gen.eta.6d6f64756c652e35663566373537333635373235663566.6d356635663735373336353732356635665f5f636d704774.22(i64 %clos, i64 %arg0, i64 %arg1) {
 entry:
   %t0 = call i64 @mdk.user.6d356635663735373336353732356635665f5f636d704774(i64 %arg0, i64 %arg1)
   ret i64 %t0
 }
 
-; mdk-module program
-@mdk.gen.ctorcell.70726f6772616d..21 = internal constant [2 x i64] [i64 2, i64 ptrtoint (ptr @mdk.gen.eta.70726f6772616d.6d356635663735373336353732356635665f5f636d704774.20 to i64)]
-; mdk-module program
-define internal i64 @mdk.gen.eta.70726f6772616d.6d356635663735373336353732356635665f5f636d704765.22(i64 %clos, i64 %arg0, i64 %arg1) {
+; mdk-module module.5f5f757365725f5f
+@mdk.gen.ctorcell.6d6f64756c652e35663566373537333635373235663566..23 = internal constant [2 x i64] [i64 2, i64 ptrtoint (ptr @mdk.gen.eta.6d6f64756c652e35663566373537333635373235663566.6d356635663735373336353732356635665f5f636d704774.22 to i64)]
+; mdk-module module.5f5f757365725f5f
+define internal i64 @mdk.gen.eta.6d6f64756c652e35663566373537333635373235663566.6d356635663735373336353732356635665f5f636d704765.24(i64 %clos, i64 %arg0, i64 %arg1) {
 entry:
   %t0 = call i64 @mdk.user.6d356635663735373336353732356635665f5f636d704765(i64 %arg0, i64 %arg1)
   ret i64 %t0
 }
 
-; mdk-module program
-@mdk.gen.ctorcell.70726f6772616d..23 = internal constant [2 x i64] [i64 2, i64 ptrtoint (ptr @mdk.gen.eta.70726f6772616d.6d356635663735373336353732356635665f5f636d704765.22 to i64)]
-; mdk-module program
-define internal i64 @mdk.gen.eta.70726f6772616d.6d356635663735373336353732356635665f5f636d704c74.24(i64 %clos, i64 %arg0, i64 %arg1) {
+; mdk-module module.5f5f757365725f5f
+@mdk.gen.ctorcell.6d6f64756c652e35663566373537333635373235663566..25 = internal constant [2 x i64] [i64 2, i64 ptrtoint (ptr @mdk.gen.eta.6d6f64756c652e35663566373537333635373235663566.6d356635663735373336353732356635665f5f636d704765.24 to i64)]
+; mdk-module module.5f5f757365725f5f
+@mdk.gen.globalname.6d6f64756c652e35663566373537333635373235663566.6d356635663735373336353732356635665f5f63746c42697473.26 = private unnamed_addr constant [27 x i8] c"\6D\35\66\35\66\37\35\37\33\36\35\37\32\35\66\35\66\5F\5F\63\74\6C\42\69\74\73\00"
+; mdk-module module.5f5f757365725f5f
+define internal i64 @mdk.gen.eta.6d6f64756c652e35663566373537333635373235663566.6d356635663735373336353732356635665f5f636d704c74.27(i64 %clos, i64 %arg0, i64 %arg1) {
 entry:
   %t0 = call i64 @mdk.user.6d356635663735373336353732356635665f5f636d704c74(i64 %arg0, i64 %arg1)
   ret i64 %t0
 }
 
-; mdk-module program
-@mdk.gen.ctorcell.70726f6772616d..25 = internal constant [2 x i64] [i64 2, i64 ptrtoint (ptr @mdk.gen.eta.70726f6772616d.6d356635663735373336353732356635665f5f636d704c74.24 to i64)]
-; mdk-module program
-define internal i64 @mdk.gen.eta.70726f6772616d.6d356635663735373336353732356635665f5f636d704c65.26(i64 %clos, i64 %arg0, i64 %arg1) {
+; mdk-module module.5f5f757365725f5f
+@mdk.gen.ctorcell.6d6f64756c652e35663566373537333635373235663566..28 = internal constant [2 x i64] [i64 2, i64 ptrtoint (ptr @mdk.gen.eta.6d6f64756c652e35663566373537333635373235663566.6d356635663735373336353732356635665f5f636d704c74.27 to i64)]
+; mdk-module module.5f5f757365725f5f
+define internal i64 @mdk.gen.eta.6d6f64756c652e35663566373537333635373235663566.6d356635663735373336353732356635665f5f636d704c65.29(i64 %clos, i64 %arg0, i64 %arg1) {
 entry:
   %t0 = call i64 @mdk.user.6d356635663735373336353732356635665f5f636d704c65(i64 %arg0, i64 %arg1)
   ret i64 %t0
 }
 
-; mdk-module program
-@mdk.gen.ctorcell.70726f6772616d..27 = internal constant [2 x i64] [i64 2, i64 ptrtoint (ptr @mdk.gen.eta.70726f6772616d.6d356635663735373336353732356635665f5f636d704c65.26 to i64)]
-; mdk-module program
-define internal i64 @mdk.gen.eta.70726f6772616d.6d356635663735373336353732356635665f5f636d704c65.28(i64 %clos, i64 %arg0, i64 %arg1) {
+; mdk-module module.5f5f757365725f5f
+@mdk.gen.ctorcell.6d6f64756c652e35663566373537333635373235663566..30 = internal constant [2 x i64] [i64 2, i64 ptrtoint (ptr @mdk.gen.eta.6d6f64756c652e35663566373537333635373235663566.6d356635663735373336353732356635665f5f636d704c65.29 to i64)]
+; mdk-module module.5f5f757365725f5f
+define internal i64 @mdk.gen.eta.6d6f64756c652e35663566373537333635373235663566.6d356635663735373336353732356635665f5f636d704c65.31(i64 %clos, i64 %arg0, i64 %arg1) {
 entry:
   %t0 = call i64 @mdk.user.6d356635663735373336353732356635665f5f636d704c65(i64 %arg0, i64 %arg1)
   ret i64 %t0
 }
 
-; mdk-module program
-@mdk.gen.ctorcell.70726f6772616d..29 = internal constant [2 x i64] [i64 2, i64 ptrtoint (ptr @mdk.gen.eta.70726f6772616d.6d356635663735373336353732356635665f5f636d704c65.28 to i64)]
-; mdk-module program
-define internal i64 @mdk.gen.eta.70726f6772616d.6d356635663735373336353732356635665f5f636d704774.30(i64 %clos, i64 %arg0, i64 %arg1) {
+; mdk-module module.5f5f757365725f5f
+@mdk.gen.ctorcell.6d6f64756c652e35663566373537333635373235663566..32 = internal constant [2 x i64] [i64 2, i64 ptrtoint (ptr @mdk.gen.eta.6d6f64756c652e35663566373537333635373235663566.6d356635663735373336353732356635665f5f636d704c65.31 to i64)]
+; mdk-module module.5f5f757365725f5f
+define internal i64 @mdk.gen.eta.6d6f64756c652e35663566373537333635373235663566.6d356635663735373336353732356635665f5f636d704774.33(i64 %clos, i64 %arg0, i64 %arg1) {
 entry:
   %t0 = call i64 @mdk.user.6d356635663735373336353732356635665f5f636d704774(i64 %arg0, i64 %arg1)
   ret i64 %t0
 }
 
-; mdk-module program
-@mdk.gen.ctorcell.70726f6772616d..31 = internal constant [2 x i64] [i64 2, i64 ptrtoint (ptr @mdk.gen.eta.70726f6772616d.6d356635663735373336353732356635665f5f636d704774.30 to i64)]
-; mdk-module program
-define internal i64 @mdk.gen.eta.70726f6772616d.6d356635663735373336353732356635665f5f636d704765.32(i64 %clos, i64 %arg0, i64 %arg1) {
+; mdk-module module.5f5f757365725f5f
+@mdk.gen.ctorcell.6d6f64756c652e35663566373537333635373235663566..34 = internal constant [2 x i64] [i64 2, i64 ptrtoint (ptr @mdk.gen.eta.6d6f64756c652e35663566373537333635373235663566.6d356635663735373336353732356635665f5f636d704774.33 to i64)]
+; mdk-module module.5f5f757365725f5f
+define internal i64 @mdk.gen.eta.6d6f64756c652e35663566373537333635373235663566.6d356635663735373336353732356635665f5f636d704765.35(i64 %clos, i64 %arg0, i64 %arg1) {
 entry:
   %t0 = call i64 @mdk.user.6d356635663735373336353732356635665f5f636d704765(i64 %arg0, i64 %arg1)
   ret i64 %t0
 }
 
-; mdk-module program
-@mdk.gen.ctorcell.70726f6772616d..33 = internal constant [2 x i64] [i64 2, i64 ptrtoint (ptr @mdk.gen.eta.70726f6772616d.6d356635663735373336353732356635665f5f636d704765.32 to i64)]
-; mdk-module program
-define internal i64 @mdk.gen.eta.70726f6772616d.6d356635663735373336353732356635665f5f636d704c65.34(i64 %clos, i64 %arg0, i64 %arg1) {
+; mdk-module module.5f5f757365725f5f
+@mdk.gen.ctorcell.6d6f64756c652e35663566373537333635373235663566..36 = internal constant [2 x i64] [i64 2, i64 ptrtoint (ptr @mdk.gen.eta.6d6f64756c652e35663566373537333635373235663566.6d356635663735373336353732356635665f5f636d704765.35 to i64)]
+; mdk-module module.5f5f757365725f5f
+define internal i64 @mdk.gen.eta.6d6f64756c652e35663566373537333635373235663566.6d356635663735373336353732356635665f5f636d704c65.37(i64 %clos, i64 %arg0, i64 %arg1) {
 entry:
   %t0 = call i64 @mdk.user.6d356635663735373336353732356635665f5f636d704c65(i64 %arg0, i64 %arg1)
   ret i64 %t0
 }
 
-; mdk-module program
-@mdk.gen.ctorcell.70726f6772616d..35 = internal constant [2 x i64] [i64 2, i64 ptrtoint (ptr @mdk.gen.eta.70726f6772616d.6d356635663735373336353732356635665f5f636d704c65.34 to i64)]
-; mdk-module program
-define internal i64 @mdk.gen.eta.70726f6772616d.6d356635663735373336353732356635665f5f636d704c74.36(i64 %clos, i64 %arg0, i64 %arg1) {
+; mdk-module module.5f5f757365725f5f
+@mdk.gen.ctorcell.6d6f64756c652e35663566373537333635373235663566..38 = internal constant [2 x i64] [i64 2, i64 ptrtoint (ptr @mdk.gen.eta.6d6f64756c652e35663566373537333635373235663566.6d356635663735373336353732356635665f5f636d704c65.37 to i64)]
+; mdk-module module.5f5f757365725f5f
+define internal i64 @mdk.gen.eta.6d6f64756c652e35663566373537333635373235663566.6d356635663735373336353732356635665f5f636d704c74.39(i64 %clos, i64 %arg0, i64 %arg1) {
 entry:
   %t0 = call i64 @mdk.user.6d356635663735373336353732356635665f5f636d704c74(i64 %arg0, i64 %arg1)
   ret i64 %t0
 }
 
-; mdk-module program
-@mdk.gen.ctorcell.70726f6772616d..37 = internal constant [2 x i64] [i64 2, i64 ptrtoint (ptr @mdk.gen.eta.70726f6772616d.6d356635663735373336353732356635665f5f636d704c74.36 to i64)]
-; mdk-module program
-define internal i64 @mdk.gen.eta.70726f6772616d.6d356635663735373336353732356635665f5f636d704c65.38(i64 %clos, i64 %arg0, i64 %arg1) {
+; mdk-module module.5f5f757365725f5f
+@mdk.gen.ctorcell.6d6f64756c652e35663566373537333635373235663566..40 = internal constant [2 x i64] [i64 2, i64 ptrtoint (ptr @mdk.gen.eta.6d6f64756c652e35663566373537333635373235663566.6d356635663735373336353732356635665f5f636d704c74.39 to i64)]
+; mdk-module module.5f5f757365725f5f
+define internal i64 @mdk.gen.eta.6d6f64756c652e35663566373537333635373235663566.6d356635663735373336353732356635665f5f636d704c65.41(i64 %clos, i64 %arg0, i64 %arg1) {
 entry:
   %t0 = call i64 @mdk.user.6d356635663735373336353732356635665f5f636d704c65(i64 %arg0, i64 %arg1)
   ret i64 %t0
 }
 
-; mdk-module program
-@mdk.gen.ctorcell.70726f6772616d..39 = internal constant [2 x i64] [i64 2, i64 ptrtoint (ptr @mdk.gen.eta.70726f6772616d.6d356635663735373336353732356635665f5f636d704c65.38 to i64)]
-; mdk-module program
-define internal i64 @mdk.gen.eta.70726f6772616d.6d356635663735373336353732356635665f5f636d704765.40(i64 %clos, i64 %arg0, i64 %arg1) {
+; mdk-module module.5f5f757365725f5f
+@mdk.gen.ctorcell.6d6f64756c652e35663566373537333635373235663566..42 = internal constant [2 x i64] [i64 2, i64 ptrtoint (ptr @mdk.gen.eta.6d6f64756c652e35663566373537333635373235663566.6d356635663735373336353732356635665f5f636d704c65.41 to i64)]
+; mdk-module module.5f5f757365725f5f
+define internal i64 @mdk.gen.eta.6d6f64756c652e35663566373537333635373235663566.6d356635663735373336353732356635665f5f636d704765.43(i64 %clos, i64 %arg0, i64 %arg1) {
 entry:
   %t0 = call i64 @mdk.user.6d356635663735373336353732356635665f5f636d704765(i64 %arg0, i64 %arg1)
   ret i64 %t0
 }
 
-; mdk-module program
-@mdk.gen.ctorcell.70726f6772616d..41 = internal constant [2 x i64] [i64 2, i64 ptrtoint (ptr @mdk.gen.eta.70726f6772616d.6d356635663735373336353732356635665f5f636d704765.40 to i64)]
+; mdk-module module.5f5f757365725f5f
+@mdk.gen.ctorcell.6d6f64756c652e35663566373537333635373235663566..44 = internal constant [2 x i64] [i64 2, i64 ptrtoint (ptr @mdk.gen.eta.6d6f64756c652e35663566373537333635373235663566.6d356635663735373336353732356635665f5f636d704765.43 to i64)]
