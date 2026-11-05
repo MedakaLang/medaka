@@ -289,18 +289,22 @@ namesAtLoc loc ns = map (n => (n, loc)) ns
 -- depth) cost, NOT O(project)) IS counted in `riOps` — a deep sequential-`let`
 -- chain that pushed one frame per binder shows up in the scaling ratio.
 lookupScope : Ctx -> String -> List (List (String, String)) -> Option String
-lookupScope _ _ [] = None
-lookupScope ctx n (frame :: rest) =
-  bump ctx
-  match assocFind ctx n frame
-    Some k => Some k
-    None => lookupScope ctx n rest
+lookupScope ctx n xs0 = go xs0
+  where
+    go [] = None
+    go (frame :: rest) =
+      bump ctx
+      match assocFind ctx n frame
+        Some k => Some k
+        None => go rest
 
 assocFind : Ctx -> String -> List (String, String) -> Option String
-assocFind _ _ [] = None
-assocFind ctx n ((k, v) :: rest) =
-  bump ctx
-  if k == n then Some v else assocFind ctx n rest
+assocFind ctx n xs0 = go xs0
+  where
+    go [] = None
+    go ((k, v) :: rest) =
+      bump ctx
+      if k == n then Some v else go rest
 
 -- ── record: def site, use site, occurrence ──────────────────────────────────
 recordDef : Ctx -> String -> String -> Loc -> Unit
@@ -622,27 +626,33 @@ peelLoc (EDoOrigin _ e) = peelLoc e
 peelLoc e = e
 
 walkEach : W -> List (List (String, String)) -> Loc -> List Expr -> Unit
-walkEach _ _ _ [] = ()
-walkEach w scope curLoc (e :: rest) =
-  walkExpr w scope curLoc e
-  walkEach w scope curLoc rest
+walkEach w scope curLoc xs0 = go xs0
+  where
+    go [] = ()
+    go (e :: rest) =
+      walkExpr w scope curLoc e
+      go rest
 
 walkKvs : W -> List (List (String, String)) -> Loc -> List (Expr, Expr) -> Unit
-walkKvs _ _ _ [] = ()
-walkKvs w scope curLoc ((k, v) :: rest) =
-  walkExpr w scope curLoc k
-  walkExpr w scope curLoc v
-  walkKvs w scope curLoc rest
+walkKvs w scope curLoc xs0 = go xs0
+  where
+    go [] = ()
+    go ((k, v) :: rest) =
+      walkExpr w scope curLoc k
+      walkExpr w scope curLoc v
+      go rest
 
 walkFields : W ->
   List (List (String, String)) ->
   Loc ->
   List FieldAssign ->
   Unit
-walkFields _ _ _ [] = ()
-walkFields w scope curLoc ((FieldAssign _ e) :: rest) =
-  walkExpr w scope curLoc e
-  walkFields w scope curLoc rest
+walkFields w scope curLoc xs0 = go xs0
+  where
+    go [] = ()
+    go ((FieldAssign _ e) :: rest) =
+      walkExpr w scope curLoc e
+      go rest
 
 walkSection : W -> List (List (String, String)) -> Loc -> Section -> Unit
 walkSection _ _ _ (SecBare _) = ()
@@ -650,55 +660,62 @@ walkSection w scope curLoc (SecRight _ e) = walkExpr w scope curLoc e
 walkSection w scope curLoc (SecLeft e _) = walkExpr w scope curLoc e
 
 walkInterp : W -> List (List (String, String)) -> Loc -> List InterpPart -> Unit
-walkInterp _ _ _ [] = ()
-walkInterp w scope curLoc ((InterpStr _) :: rest) =
-  walkInterp w scope curLoc rest
-walkInterp w scope curLoc ((InterpExpr e) :: rest) =
-  walkExpr w scope curLoc e
-  walkInterp w scope curLoc rest
+walkInterp w scope curLoc xs0 = go xs0
+  where
+    go [] = ()
+    go ((InterpStr _) :: rest) = go rest
+    go ((InterpExpr e) :: rest) =
+      walkExpr w scope curLoc e
+      go rest
 
 walkStmts : W -> List (List (String, String)) -> Loc -> List DoStmt -> Unit
-walkStmts _ _ _ [] = ()
-walkStmts w scope curLoc ((DoExpr e) :: rest) =
-  walkExpr w scope curLoc e
-  walkStmts w scope curLoc rest
-walkStmts w scope curLoc ((DoBind p e) :: rest) =
-  walkPatTys w curLoc p
-  walkExpr w scope curLoc e
-  let frame = mkNamedFrame w (patBinders curLoc p)
-  walkStmts w (frame :: scope) curLoc rest
-walkStmts w scope curLoc ((DoLet _ isRec p e _) :: rest) =
-  let frame = mkNamedFrame w (patBinders curLoc p)
-  let rhsScope = if isRec then frame :: scope else scope
-  walkExpr w rhsScope curLoc e
-  walkStmts w (frame :: scope) curLoc rest
-walkStmts w scope curLoc ((DoAssign _ e) :: rest) =
-  walkExpr w scope curLoc e
-  walkStmts w scope curLoc rest
-walkStmts w scope curLoc ((DoFieldAssign _ _ e) :: rest) =
-  walkExpr w scope curLoc e
-  walkStmts w scope curLoc rest
+walkStmts w scope0 curLoc xs0 = go scope0 xs0
+  where
+    go _ [] = ()
+    go scope ((DoExpr e) :: rest) =
+      walkExpr w scope curLoc e
+      go scope rest
+    go scope ((DoBind p e) :: rest) =
+      walkPatTys w curLoc p
+      walkExpr w scope curLoc e
+      let frame = mkNamedFrame w (patBinders curLoc p)
+      go (frame :: scope) rest
+    go scope ((DoLet _ isRec p e _) :: rest) =
+      let frame = mkNamedFrame w (patBinders curLoc p)
+      let rhsScope = if isRec then frame :: scope else scope
+      walkExpr w rhsScope curLoc e
+      go (frame :: scope) rest
+    go scope ((DoAssign _ e) :: rest) =
+      walkExpr w scope curLoc e
+      go scope rest
+    go scope ((DoFieldAssign _ _ e) :: rest) =
+      walkExpr w scope curLoc e
+      go scope rest
 
 walkArms : W -> List (List (String, String)) -> Loc -> List Arm -> Unit
-walkArms _ _ _ [] = ()
-walkArms w scope curLoc ((Arm pat gs body) :: rest) =
-  walkPatTys w curLoc pat
-  let frame = mkNamedFrame w (patBinders curLoc pat)
-  let scope1 = frame :: scope
-  let scope2 = walkGuards w scope1 curLoc gs
-  walkExpr w scope2 curLoc body
-  walkArms w scope curLoc rest
+walkArms w scope curLoc xs0 = go xs0
+  where
+    go [] = ()
+    go ((Arm pat gs body) :: rest) =
+      walkPatTys w curLoc pat
+      let frame = mkNamedFrame w (patBinders curLoc pat)
+      let scope1 = frame :: scope
+      let scope2 = walkGuards w scope1 curLoc gs
+      walkExpr w scope2 curLoc body
+      go rest
 
 walkGuardArms : W ->
   List (List (String, String)) ->
   Loc ->
   List GuardArm ->
   Unit
-walkGuardArms _ _ _ [] = ()
-walkGuardArms w scope curLoc ((GuardArm gs body) :: rest) =
-  let scope2 = walkGuards w scope curLoc gs
-  walkExpr w scope2 curLoc body
-  walkGuardArms w scope curLoc rest
+walkGuardArms w scope curLoc xs0 = go xs0
+  where
+    go [] = ()
+    go ((GuardArm gs body) :: rest) =
+      let scope2 = walkGuards w scope curLoc gs
+      walkExpr w scope2 curLoc body
+      go rest
 
 -- a guard list threads scope (a `Pat <- e` bind adds binders for later guards).
 walkGuards : W ->
@@ -706,28 +723,34 @@ walkGuards : W ->
   Loc ->
   List Guard ->
   List (List (String, String))
-walkGuards _ scope _ [] = scope
-walkGuards w scope curLoc ((GBool e) :: rest) =
-  walkExpr w scope curLoc e
-  walkGuards w scope curLoc rest
-walkGuards w scope curLoc ((GBind p e) :: rest) =
-  walkPatTys w curLoc p
-  walkExpr w scope curLoc e
-  let frame = mkNamedFrame w (patBinders curLoc p)
-  walkGuards w (frame :: scope) curLoc rest
+walkGuards w scope0 curLoc xs0 = go scope0 xs0
+  where
+    go scope [] = scope
+    go scope ((GBool e) :: rest) =
+      walkExpr w scope curLoc e
+      go scope rest
+    go scope ((GBind p e) :: rest) =
+      walkPatTys w curLoc p
+      walkExpr w scope curLoc e
+      let frame = mkNamedFrame w (patBinders curLoc p)
+      go (frame :: scope) rest
 
 walkBinds : W -> List (List (String, String)) -> Loc -> List LetBind -> Unit
-walkBinds _ _ _ [] = ()
-walkBinds w scope curLoc ((LetBind _ clauses _ _) :: rest) =
-  walkClauses w scope curLoc clauses
-  walkBinds w scope curLoc rest
+walkBinds w scope curLoc xs0 = go xs0
+  where
+    go [] = ()
+    go ((LetBind _ clauses _ _) :: rest) =
+      walkClauses w scope curLoc clauses
+      go rest
 
 walkClauses : W -> List (List (String, String)) -> Loc -> List FunClause -> Unit
-walkClauses _ _ _ [] = ()
-walkClauses w scope curLoc ((FunClause pats body) :: rest) =
-  let frame = mkNamedFrame w (flatMap (patBinders curLoc) pats)
-  walkExpr w (frame :: scope) curLoc body
-  walkClauses w scope curLoc rest
+walkClauses w scope curLoc xs0 = go xs0
+  where
+    go [] = ()
+    go ((FunClause pats body) :: rest) =
+      let frame = mkNamedFrame w (flatMap (patBinders curLoc) pats)
+      walkExpr w (frame :: scope) curLoc body
+      go rest
 
 -- The written types of a binding pattern's annotations.
 walkPatTys : W -> Loc -> Pat -> Unit
@@ -735,31 +758,36 @@ walkPatTys w curLoc p = each (walkTy w curLoc) (patAnnotTys p)
 
 -- ── type walk (TyCon carries its OWN Option Loc — no curLoc threading needed) ─
 walkTy : W -> Loc -> Ty -> Unit
-walkTy w _ (TyCon { tyConName = name, tyConLoc = mloc }) = match mloc
-  Some l => recordRef (ctxOf w) (resolveTy w name) (uriOf w) (locWithUriOf w l)
-  None => ()
-walkTy _ _ (TyVar _) = ()
-walkTy w curLoc (TyApp a b) =
-  walkTy w curLoc a
-  walkTy w curLoc b
-walkTy w curLoc (TyFun a b) =
-  walkTy w curLoc a
-  walkTy w curLoc b
-walkTy w curLoc (TyTuple ts) = walkTys w curLoc ts
-walkTy w curLoc (TyEffect _ _ t) = walkTy w curLoc t
-walkTy w curLoc (TyConstrained _ t) = walkTy w curLoc t
-walkTy w curLoc (TyNamed _ t _) = walkTy w curLoc t
-walkTy w curLoc (TyQual t _ _) = walkTy w curLoc t
--- A bare row atom (#997) has no wrapped type and its labels aren't `TyCon`
--- references (no go-to-definition target), so there is nothing to walk.
-walkTy _ _ (TyRow _ _ _) = ()
-walkTy _ _ (TyAuth _ _) = ()
+walkTy w curLoc x0 = go x0
+  where
+    go (TyCon { tyConName = name, tyConLoc = mloc }) = match mloc
+      Some l =>
+        recordRef (ctxOf w) (resolveTy w name) (uriOf w) (locWithUriOf w l)
+      None => ()
+    go (TyVar _) = ()
+    go (TyApp a b) =
+      go a
+      go b
+    go (TyFun a b) =
+      go a
+      go b
+    go (TyTuple ts) = walkTys w curLoc ts
+    go (TyEffect _ _ t) = go t
+    go (TyConstrained _ t) = go t
+    go (TyNamed _ t _) = go t
+    go (TyQual t _ _) = go t
+    -- A bare row atom (#997) has no wrapped type and its labels aren't `TyCon`
+    -- references (no go-to-definition target), so there is nothing to walk.
+    go (TyRow _ _ _) = ()
+    go (TyAuth _ _) = ()
 
 walkTys : W -> Loc -> List Ty -> Unit
-walkTys _ _ [] = ()
-walkTys w curLoc (t :: rest) =
-  walkTy w curLoc t
-  walkTys w curLoc rest
+walkTys w curLoc xs0 = go xs0
+  where
+    go [] = ()
+    go (t :: rest) =
+      walkTy w curLoc t
+      go rest
 
 -- ── local binder frames (each name → a fresh, shadow-distinct key) ───────────
 -- Each binder records its DEF at its OWN name-token `Loc` (from `patBinders`), so
@@ -821,10 +849,11 @@ collectDefs : Ctx ->
   String ->
   List (Decl, DeclPos) ->
   List DefEntry
-collectDefs _ _ _ _ [] = []
-collectDefs ctx expSet mid uri ((d, p) :: rest) =
-  defsOfDecl ctx expSet mid uri d (nameLocOf uri p) p
-    ++ collectDefs ctx expSet mid uri rest
+collectDefs ctx expSet mid uri xs0 = go xs0
+  where
+    go [] = []
+    go ((d, p) :: rest) =
+      defsOfDecl ctx expSet mid uri d (nameLocOf uri p) p ++ go rest
 
 -- A VALUE's export flag lives on its `export foo : T` SIGNATURE, not on the bare
 -- `foo = …` definition (idiomatic Medaka), so a def's pub is `declPub OR the name
@@ -842,28 +871,31 @@ collectExportedValues ctx decls =
   s
 
 collectExpValGo : Ctx -> HashMap String Unit -> List Decl -> Unit
-collectExpValGo _ _ [] = ()
-collectExpValGo ctx s ((DTypeSig True n _ _) :: rest) =
-  hmSetC ctx s n ()
-  collectExpValGo ctx s rest
-collectExpValGo ctx s ((DFunDef True n _ _ _ _) :: rest) =
-  hmSetC ctx s n ()
-  collectExpValGo ctx s rest
-collectExpValGo ctx s ((DExtern (ExternDecl { edPub = True, edName = n, ... })) :: rest) =
-  hmSetC ctx s n ()
-  collectExpValGo ctx s rest
-collectExpValGo ctx s ((DLetGroup True binds) :: rest) =
-  collectLetNames ctx s binds
-  collectExpValGo ctx s rest
-collectExpValGo ctx s ((DAttrib _ inner) :: rest) =
-  collectExpValGo ctx s (inner :: rest)
-collectExpValGo ctx s (_ :: rest) = collectExpValGo ctx s rest
+collectExpValGo ctx s xs0 = go xs0
+  where
+    go [] = ()
+    go ((DTypeSig True n _ _) :: rest) =
+      hmSetC ctx s n ()
+      go rest
+    go ((DFunDef True n _ _ _ _) :: rest) =
+      hmSetC ctx s n ()
+      go rest
+    go ((DExtern (ExternDecl { edPub = True, edName = n, ... })) :: rest) =
+      hmSetC ctx s n ()
+      go rest
+    go ((DLetGroup True binds) :: rest) =
+      collectLetNames ctx s binds
+      go rest
+    go ((DAttrib _ inner) :: rest) = go (inner :: rest)
+    go (_ :: rest) = go rest
 
 collectLetNames : Ctx -> HashMap String Unit -> List LetBind -> Unit
-collectLetNames _ _ [] = ()
-collectLetNames ctx s ((LetBind n _ _ _) :: rest) =
-  hmSetC ctx s n ()
-  collectLetNames ctx s rest
+collectLetNames ctx s xs0 = go xs0
+  where
+    go [] = ()
+    go ((LetBind n _ _ _) :: rest) =
+      hmSetC ctx s n ()
+      go rest
 
 nameLocOf : String -> DeclPos -> Loc
 nameLocOf uri p = match declPosNameLoc p
@@ -889,45 +921,47 @@ defsOfDecl : Ctx ->
   Loc ->
   DeclPos ->
   List DefEntry
-defsOfDecl ctx expSet mid uri (DFunDef pub n _ _ _ _) loc _ = [
-  emitDef
-    ctx
-    uri
-    (DefEntry nsVal n (mkKey mid nsVal n) loc (valuePub ctx expSet pub n)),
-]
-defsOfDecl ctx expSet mid uri (DExtern (ExternDecl { edPub = pub, edName = n, ... })) loc _ = [
-  emitDef
-    ctx
-    uri
-    (DefEntry nsVal n (mkKey mid nsVal n) loc (valuePub ctx expSet pub n)),
-]
-defsOfDecl _ _ _ _ (DTypeSig _ _ _ _) _ _ = []
-defsOfDecl ctx expSet mid uri (DLetGroup pub binds) loc _ =
-  map (letGroupDef ctx expSet mid uri loc pub) binds
-defsOfDecl ctx _ mid uri (DData { dataVis = vis, dataName = n, dataCtors = variants }) loc _ =
-  let tyDef =
-    emitDef ctx uri (DefEntry nsTy n (mkKey mid nsTy n) loc (dataIsPub vis))
-  hmSetC ctx ctx.tyCtors (mkKey mid nsTy n) (map variantName variants)
-  tyDef :: flatMap (variantDefs ctx mid uri loc (ctorsPub vis)) variants
-defsOfDecl ctx _ mid uri (DNewtype { newtypePub = pub, newtypeName = n, newtypeCtor = con }) loc _ =
-  let tyDef = emitDef ctx uri (DefEntry nsTy n (mkKey mid nsTy n) loc pub)
-  hmSetC ctx ctx.tyCtors (mkKey mid nsTy n) [con]
-  let conDef =
-    emitDef ctx uri (DefEntry nsCtor con (mkKey mid nsCtor con) loc pub)
-  [tyDef, conDef]
-defsOfDecl ctx _ mid uri (DTypeAlias { tyAliasPub = pub, tyAliasName = n }) loc _ =
-  [emitDef ctx uri (DefEntry nsTy n (mkKey mid nsTy n) loc pub)]
-defsOfDecl ctx _ mid uri (DInterface { pub, name, methods, ... }) loc p =
-  let tyDef = emitDef ctx uri (DefEntry nsTy name (mkKey mid nsTy name) loc pub)
-  -- env/export-only: NOT `emitDef`, so no second binder lands on `name`'s span.
-  let ifaceDef = DefEntry nsIface name (mkKey mid nsIface name) loc pub
-  tyDef
-    :: ifaceDef
-    :: methodDefs ctx mid uri loc pub methods (childLocsOf uri p)
-defsOfDecl _ _ _ _ (DImpl { ... }) _ _ = []
-defsOfDecl ctx expSet mid uri (DAttrib _ inner) loc p =
-  defsOfDecl ctx expSet mid uri inner loc p
-defsOfDecl _ _ _ _ _ _ _ = []
+defsOfDecl ctx expSet mid uri arg40 loc p = go arg40
+  where
+    go (DFunDef pub n _ _ _ _) = [
+      emitDef
+        ctx
+        uri
+        (DefEntry nsVal n (mkKey mid nsVal n) loc (valuePub ctx expSet pub n)),
+    ]
+    go (DExtern (ExternDecl { edPub = pub, edName = n, ... })) = [
+      emitDef
+        ctx
+        uri
+        (DefEntry nsVal n (mkKey mid nsVal n) loc (valuePub ctx expSet pub n)),
+    ]
+    go (DTypeSig _ _ _ _) = []
+    go (DLetGroup pub binds) =
+      map (letGroupDef ctx expSet mid uri loc pub) binds
+    go (DData { dataVis = vis, dataName = n, dataCtors = variants }) =
+      let tyDef =
+        emitDef ctx uri (DefEntry nsTy n (mkKey mid nsTy n) loc (dataIsPub vis))
+      hmSetC ctx ctx.tyCtors (mkKey mid nsTy n) (map variantName variants)
+      tyDef :: flatMap (variantDefs ctx mid uri loc (ctorsPub vis)) variants
+    go (DNewtype { newtypePub = pub, newtypeName = n, newtypeCtor = con }) =
+      let tyDef = emitDef ctx uri (DefEntry nsTy n (mkKey mid nsTy n) loc pub)
+      hmSetC ctx ctx.tyCtors (mkKey mid nsTy n) [con]
+      let conDef =
+        emitDef ctx uri (DefEntry nsCtor con (mkKey mid nsCtor con) loc pub)
+      [tyDef, conDef]
+    go (DTypeAlias { tyAliasPub = pub, tyAliasName = n }) =
+      [emitDef ctx uri (DefEntry nsTy n (mkKey mid nsTy n) loc pub)]
+    go (DInterface { pub, name, methods, ... }) =
+      let tyDef =
+        emitDef ctx uri (DefEntry nsTy name (mkKey mid nsTy name) loc pub)
+      -- env/export-only: NOT `emitDef`, so no second binder lands on `name`'s span.
+      let ifaceDef = DefEntry nsIface name (mkKey mid nsIface name) loc pub
+      tyDef
+        :: ifaceDef
+        :: methodDefs ctx mid uri loc pub methods (childLocsOf uri p)
+    go (DImpl { ... }) = []
+    go (DAttrib _ inner) = go inner
+    go _ = []
 
 letGroupDef : Ctx ->
   HashMap String Unit ->
@@ -992,6 +1026,8 @@ methodDefs : Ctx ->
   List IfaceMethod ->
   List (Option Loc) ->
   List DefEntry
+-- Bound: list built in tail position modulo cons: a where-local go loses the constant-stack loop until the lambda-lift pass (#4878); convert then.
+-- lint-disable-next-line rule-threaded-invariant
 methodDefs _ _ _ _ _ [] _ = []
 methodDefs ctx mid uri loc pub (m :: ms) [] =
   methodDef ctx mid uri loc pub m :: methodDefs ctx mid uri loc pub ms []
@@ -1035,10 +1071,13 @@ walkDecls w ((d, p) :: rest) =
 -- the SAME key as the binding's clause heads (#1025): rename must rewrite it,
 -- or the orphaned signature silently stops constraining the renamed binding.
 recordSigName : W -> Decl -> Loc -> Unit
-recordSigName (W ctx mid uri _ _) (DTypeSig _ n _ _) loc =
-  recordDef ctx (mkKey mid nsVal n) uri loc
-recordSigName w (DAttrib _ inner) loc = recordSigName w inner loc
-recordSigName _ _ _ = ()
+recordSigName w decl0 loc = go decl0
+  where
+    go (DTypeSig _ n _ _) =
+      let (W ctx mid uri _ _) = w
+      recordDef ctx (mkKey mid nsVal n) uri loc
+    go (DAttrib _ inner) = go inner
+    go _ = ()
 
 -- A decl's CHILD name-token `Loc`s (one per interface/impl method clause head,
 -- per data variant, …), re-based onto this module's uri.  `None` where the
@@ -1085,10 +1124,12 @@ mapChildLoc uri (Some l) = Some (withUri uri l)
 -- because `declChildNameIdxs` itself derives child spans from the INNER decl.
 -- The interface's module id is resolved ONCE per impl decl, not per method.
 recordImplHeads : W -> Decl -> Loc -> DeclPos -> Unit
-recordImplHeads w (DAttrib _ inner) loc p = recordImplHeads w inner loc p
-recordImplHeads w (DImpl { iface, methods, ... }) loc p =
-  implHeadsGo w (ifaceModId w iface) loc methods (childLocsOf (uriOf w) p)
-recordImplHeads _ _ _ _ = ()
+recordImplHeads w x0 loc p = go x0
+  where
+    go (DAttrib _ inner) = go inner
+    go (DImpl { iface, methods, ... }) =
+      implHeadsGo w (ifaceModId w iface) loc methods (childLocsOf (uriOf w) p)
+    go _ = ()
 
 -- Zip methods with child `Loc`s POSITIONALLY: `methodNameIdxs` (parser.mdk)
 -- emits one index per clause line of the `where` body, and `ImplMethod` is one
@@ -1097,13 +1138,15 @@ recordImplHeads _ _ _ _ = ()
 -- `Loc` rather than dropping the head, so a parser gap costs precision, never
 -- the whole entry (the same posture `zipFieldIdxs` takes).
 implHeadsGo : W -> String -> Loc -> List ImplMethod -> List (Option Loc) -> Unit
-implHeadsGo _ _ _ [] _ = ()
-implHeadsGo w ifaceMid loc ((ImplMethod n _ _) :: rest) [] =
-  recordImplHead w ifaceMid n loc
-  implHeadsGo w ifaceMid loc rest []
-implHeadsGo w ifaceMid loc ((ImplMethod n _ _) :: rest) (c :: cs) =
-  recordImplHead w ifaceMid n (childLocOr loc c)
-  implHeadsGo w ifaceMid loc rest cs
+implHeadsGo w ifaceMid loc xs0 xs1 = go xs0 xs1
+  where
+    go [] _ = ()
+    go ((ImplMethod n _ _) :: rest) [] =
+      recordImplHead w ifaceMid n loc
+      go rest []
+    go ((ImplMethod n _ _) :: rest) (c :: cs) =
+      recordImplHead w ifaceMid n (childLocOr loc c)
+      go rest cs
 
 -- The `Sized` token of `impl Sized Box` is a USE of the interface (#1014).  The
 -- interface's one recorded binder lives in `nsTy` (see `nsIface`: no def is ever
@@ -1134,54 +1177,59 @@ recordImplHead w ifaceMid n loc =
   recordDef (ctxOf w) (mkKey ifaceMid nsMethod n) (uriOf w) loc
 
 walkDeclBody : W -> Decl -> Loc -> Unit
-walkDeclBody w (DFunDef _ _ pats body _ _) loc =
-  let frame = mkNamedFrame w (flatMap (patBinders loc) pats)
-  walkExpr w [frame] loc body
-walkDeclBody w (DTypeSig _ _ ty _) loc = walkTy w loc ty
-walkDeclBody w (DExtern (ExternDecl { edTy = ty, ... })) loc = walkTy w loc ty
-walkDeclBody w (DData { dataCtors = variants }) loc =
-  walkVariants w loc variants
-walkDeclBody w (DNewtype { newtypeFieldTy = fieldTy }) loc =
-  walkTy w loc fieldTy
-walkDeclBody w (DTypeAlias { tyAliasRhs = rhs }) loc = walkTy w loc rhs
-walkDeclBody w (DInterface { methods, ... }) loc =
-  walkIfaceMethods w loc methods
-walkDeclBody w (DImpl { iface, implIfaceLoc, tys, methods, ... }) loc =
-  recordImplIfaceUse w iface implIfaceLoc
-  walkTys w loc tys
-  walkImplMethods w loc methods
-walkDeclBody w (DProp _ _ params body) loc =
-  let frame = mkNamedFrame w (map ppNameLoc params)
-  walkExpr w [frame] loc body
-walkDeclBody w (DTest _ _ body) loc = walkExpr w [] loc body
-walkDeclBody w (DLetGroup _ binds) loc =
-  let frame = mkNamedFrame w (namesAtLoc loc (map letBindName binds))
-  walkBinds w [frame] loc binds
-walkDeclBody w (DAttrib _ inner) loc = walkDeclBody w inner loc
-walkDeclBody _ _ _ = ()
+walkDeclBody w x0 loc = go x0
+  where
+    go (DFunDef _ _ pats body _ _) =
+      let frame = mkNamedFrame w (flatMap (patBinders loc) pats)
+      walkExpr w [frame] loc body
+    go (DTypeSig _ _ ty _) = walkTy w loc ty
+    go (DExtern (ExternDecl { edTy = ty, ... })) = walkTy w loc ty
+    go (DData { dataCtors = variants }) = walkVariants w loc variants
+    go (DNewtype { newtypeFieldTy = fieldTy }) = walkTy w loc fieldTy
+    go (DTypeAlias { tyAliasRhs = rhs }) = walkTy w loc rhs
+    go (DInterface { methods, ... }) = walkIfaceMethods w loc methods
+    go (DImpl { iface, implIfaceLoc, tys, methods, ... }) =
+      recordImplIfaceUse w iface implIfaceLoc
+      walkTys w loc tys
+      walkImplMethods w loc methods
+    go (DProp _ _ params body) =
+      let frame = mkNamedFrame w (map ppNameLoc params)
+      walkExpr w [frame] loc body
+    go (DTest _ _ body) = walkExpr w [] loc body
+    go (DLetGroup _ binds) =
+      let frame = mkNamedFrame w (namesAtLoc loc (map letBindName binds))
+      walkBinds w [frame] loc binds
+    go (DAttrib _ inner) = go inner
+    go _ = ()
 
 walkVariants : W -> Loc -> List Variant -> Unit
-walkVariants _ _ [] = ()
-walkVariants w loc ((Variant _ payload) :: rest) =
-  walkPayload w loc payload
-  walkVariants w loc rest
+walkVariants w loc xs0 = go xs0
+  where
+    go [] = ()
+    go ((Variant _ payload) :: rest) =
+      walkPayload w loc payload
+      go rest
 
 walkPayload : W -> Loc -> ConPayload -> Unit
 walkPayload w loc (ConPos tys) = walkTys w loc tys
 walkPayload w loc (ConNamed fields _) = walkFieldTys w loc fields
 
 walkFieldTys : W -> Loc -> List Field -> Unit
-walkFieldTys _ _ [] = ()
-walkFieldTys w loc ((Field _ ty) :: rest) =
-  walkTy w loc ty
-  walkFieldTys w loc rest
+walkFieldTys w loc xs0 = go xs0
+  where
+    go [] = ()
+    go ((Field _ ty) :: rest) =
+      walkTy w loc ty
+      go rest
 
 walkIfaceMethods : W -> Loc -> List IfaceMethod -> Unit
-walkIfaceMethods _ _ [] = ()
-walkIfaceMethods w loc ((IfaceMethod _ ty mdef _) :: rest) =
-  walkTy w loc ty
-  walkMethodDefault w loc mdef
-  walkIfaceMethods w loc rest
+walkIfaceMethods w loc xs0 = go xs0
+  where
+    go [] = ()
+    go ((IfaceMethod _ ty mdef _) :: rest) =
+      walkTy w loc ty
+      walkMethodDefault w loc mdef
+      go rest
 
 walkMethodDefault : W -> Loc -> Option MethodDefault -> Unit
 walkMethodDefault _ _ None = ()
@@ -1190,21 +1238,25 @@ walkMethodDefault w loc (Some (MethodDefault pats body)) =
   walkExpr w [frame] loc body
 
 walkImplMethods : W -> Loc -> List ImplMethod -> Unit
-walkImplMethods _ _ [] = ()
-walkImplMethods w loc ((ImplMethod _ pats body) :: rest) =
-  let frame = mkNamedFrame w (flatMap (patBinders loc) pats)
-  walkExpr w [frame] loc body
-  walkImplMethods w loc rest
+walkImplMethods w loc xs0 = go xs0
+  where
+    go [] = ()
+    go ((ImplMethod _ pats body) :: rest) =
+      let frame = mkNamedFrame w (flatMap (patBinders loc) pats)
+      walkExpr w [frame] loc body
+      go rest
 
 -- ── env + export assembly (per module, in dependency order) ──────────────────
 -- Own defs (pub or not) go into this module's useEnv; PUBLIC defs also become
 -- export origins.  Imports resolve local names to the ORIGIN key of an already-
 -- processed dependency; `pub import` re-exports thread the true origin forward.
 addOwnToEnv : Ctx -> HashMap String String -> List DefEntry -> Unit
-addOwnToEnv _ _ [] = ()
-addOwnToEnv ctx useEnv ((DefEntry ns name key _ _) :: rest) =
-  hmSetC ctx useEnv (ns ++ sep ++ name) key
-  addOwnToEnv ctx useEnv rest
+addOwnToEnv ctx useEnv xs0 = go xs0
+  where
+    go [] = ()
+    go ((DefEntry ns name key _ _) :: rest) =
+      hmSetC ctx useEnv (ns ++ sep ++ name) key
+      go rest
 
 registerExports : Ctx -> String -> List DefEntry -> List Decl -> Unit
 registerExports ctx mid ownDefs decls =
@@ -1212,10 +1264,12 @@ registerExports ctx mid ownDefs decls =
   registerReExports ctx mid decls
 
 registerOwnExports : Ctx -> String -> List DefEntry -> Unit
-registerOwnExports _ _ [] = ()
-registerOwnExports ctx mid ((DefEntry ns name key _ pub) :: rest) =
-  whenPub ctx mid ns name key pub
-  registerOwnExports ctx mid rest
+registerOwnExports ctx mid xs0 = go xs0
+  where
+    go [] = ()
+    go ((DefEntry ns name key _ pub) :: rest) =
+      whenPub ctx mid ns name key pub
+      go rest
 
 whenPub : Ctx -> String -> String -> String -> String -> Bool -> Unit
 whenPub ctx mid ns name key True = addExport ctx mid ns name key
@@ -1259,13 +1313,14 @@ addEntry ctx flat perMod mid ns name originKey =
   hmSetC ctx perMod mid ((ns, name, originKey) :: cur)
 
 registerReExports : Ctx -> String -> List Decl -> Unit
-registerReExports _ _ [] = ()
-registerReExports ctx mid ((DUse True path _) :: rest) =
-  reExportPath ctx mid path
-  registerReExports ctx mid rest
-registerReExports ctx mid ((DAttrib _ inner) :: rest) =
-  registerReExports ctx mid (inner :: rest)
-registerReExports ctx mid (_ :: rest) = registerReExports ctx mid rest
+registerReExports ctx mid xs0 = go xs0
+  where
+    go [] = ()
+    go ((DUse True path _) :: rest) =
+      reExportPath ctx mid path
+      go rest
+    go ((DAttrib _ inner) :: rest) = go (inner :: rest)
+    go (_ :: rest) = go rest
 
 reExportPath : Ctx -> String -> UsePath -> Unit
 reExportPath ctx mid (UseName ns) = splitUseName ns (reExportOne ctx mid)
@@ -1292,11 +1347,13 @@ eachMember : (String -> String -> Unit) ->
   (String -> Unit) ->
   List UseMember ->
   Unit
-eachMember _ _ [] = ()
-eachMember one ctors (m :: rest) =
-  one (useMemberOrigin m) (useMemberLocal m)
-  whenAll m (_ => ctors (useMemberOrigin m))
-  eachMember one ctors rest
+eachMember one ctors xs0 = go xs0
+  where
+    go [] = ()
+    go (m :: rest) =
+      one (useMemberOrigin m) (useMemberLocal m)
+      whenAll m (_ => ctors (useMemberOrigin m))
+      go rest
 
 -- run `act` in every namespace.
 forEachNs : (String -> Unit) -> Unit
@@ -1320,14 +1377,16 @@ reExportNs ctx mid srcMod o l ns =
 
 reExportWild : Ctx -> String -> String -> Unit
 reExportWild ctx mid srcMod = match hmGetC ctx ctx.modExp srcMod
-  Some entries => reExportWildGo ctx mid entries
+  Some entries => addExportsGo ctx mid entries
   None => ()
 
-reExportWildGo : Ctx -> String -> List (String, String, String) -> Unit
-reExportWildGo _ _ [] = ()
-reExportWildGo ctx mid ((ns, name, originKey) :: rest) =
-  addExport ctx mid ns name originKey
-  reExportWildGo ctx mid rest
+addExportsGo : Ctx -> String -> List (String, String, String) -> Unit
+addExportsGo ctx mid xs0 = go xs0
+  where
+    go [] = ()
+    go ((ns, name, originKey) :: rest) =
+      addExport ctx mid ns name originKey
+      go rest
 
 -- ── imports → this module's useEnv (all DUse, pub or not) ────────────────────
 -- Where one module's imports land.
@@ -1463,7 +1522,7 @@ seedPrelude ctx mid src = match preludeParseMemo mid src
   None => ()
   Some (decls, _) =>
     let expSet = collectExportedValues ctx decls
-    seedPreludeGo ctx mid (preludeDefEntries expSet mid decls)
+    addExportsGo ctx mid (preludeDefEntries expSet mid decls)
 
 -- prelude def entries WITHOUT recording (no defs/occ), keyed like real exports.
 -- `expSet` supplies sig-exported value names (same `export foo : T` idiom).
@@ -1471,40 +1530,42 @@ preludeDefEntries : HashMap String Unit ->
   String ->
   List Decl ->
   List (String, String, String)
-preludeDefEntries _ _ [] = []
-preludeDefEntries expSet mid (d :: rest) =
-  preludeDefsOfDecl expSet mid d ++ preludeDefEntries expSet mid rest
+preludeDefEntries expSet mid xs0 = go xs0
+  where
+    go [] = []
+    go (d :: rest) = preludeDefsOfDecl expSet mid d ++ go rest
 
 preludeDefsOfDecl : HashMap String Unit ->
   String ->
   Decl ->
   List (String, String, String)
-preludeDefsOfDecl expSet mid (DFunDef pub n _ _ _ _) = valEntry expSet mid pub n
-preludeDefsOfDecl expSet mid (DExtern (ExternDecl { edPub = pub, edName = n, ... })) =
-  valEntry expSet mid pub n
-preludeDefsOfDecl _ mid (DData { dataVis = vis, dataName = n, dataCtors = variants }) =
-  consIf
-    (dataIsPub vis)
-    (nsTy, n, mkKey mid nsTy n)
-    (flatMap (preludeVariant mid) variants)
-preludeDefsOfDecl _ mid (DNewtype { newtypePub = True, newtypeName = n, newtypeCtor = con }) =
-  [(nsTy, n, mkKey mid nsTy n), (nsCtor, con, mkKey mid nsCtor con)]
-preludeDefsOfDecl _ mid (DTypeAlias { tyAliasPub = True, tyAliasName = n }) =
-  [(nsTy, n, mkKey mid nsTy n)]
--- A PRELUDE interface must seed `nsIface` too, or a project-local `impl Eq MyType`
--- would find no origin for `Eq` and file its heads on `?ext` instead of joining
--- `core<TAB>method<TAB>eq` (#1044).
-preludeDefsOfDecl _ mid (DInterface { pub, name, methods, ... }) =
-  consIf
-    pub
-    (nsTy, name, mkKey mid nsTy name)
-    (consIf
-      pub
-      (nsIface, name, mkKey mid nsIface name)
-      (map (preludeMethod mid) methods))
-preludeDefsOfDecl expSet mid (DAttrib _ inner) =
-  preludeDefsOfDecl expSet mid inner
-preludeDefsOfDecl _ _ _ = []
+preludeDefsOfDecl expSet mid x0 = go x0
+  where
+    go (DFunDef pub n _ _ _ _) = valEntry expSet mid pub n
+    go (DExtern (ExternDecl { edPub = pub, edName = n, ... })) =
+      valEntry expSet mid pub n
+    go (DData { dataVis = vis, dataName = n, dataCtors = variants }) =
+      consIf
+        (dataIsPub vis)
+        (nsTy, n, mkKey mid nsTy n)
+        (flatMap (preludeVariant mid) variants)
+    go (DNewtype { newtypePub = True, newtypeName = n, newtypeCtor = con }) =
+      [(nsTy, n, mkKey mid nsTy n), (nsCtor, con, mkKey mid nsCtor con)]
+    go (DTypeAlias { tyAliasPub = True, tyAliasName = n }) =
+      [(nsTy, n, mkKey mid nsTy n)]
+    -- A PRELUDE interface must seed `nsIface` too, or a project-local `impl Eq MyType`
+    -- would find no origin for `Eq` and file its heads on `?ext` instead of joining
+    -- `core<TAB>method<TAB>eq` (#1044).
+    go (DInterface { pub, name, methods, ... }) =
+      consIf
+        pub
+        (nsTy, name, mkKey mid nsTy name)
+        (consIf
+          pub
+          (nsIface, name, mkKey mid nsIface name)
+          (map (preludeMethod mid) methods))
+    go (DAttrib _ inner) = go inner
+    go _ = []
 
 valEntry : HashMap String Unit ->
   String ->
@@ -1528,12 +1589,6 @@ preludeMethod mid m =
 consIf : Bool -> a -> List a -> List a
 consIf False _ xs = xs
 consIf True x xs = x :: xs
-
-seedPreludeGo : Ctx -> String -> List (String, String, String) -> Unit
-seedPreludeGo _ _ [] = ()
-seedPreludeGo ctx mid ((ns, name, originKey) :: rest) =
-  addExport ctx mid ns name originKey
-  seedPreludeGo ctx mid rest
 
 -- copy the prelude modules' exports into a module's useEnv (auto-in-scope). The
 -- prelude is in every module's scope already, so it is never recorded private.
@@ -1577,12 +1632,14 @@ processModules : Ctx ->
   (String -> Option String) ->
   List (String, String, List Decl) ->
   <IO> Unit
-processModules _ _ [] = ()
-processModules ctx read ((mid, path, _) :: rest) =
-  let _ = match getSrc read path
-    None => ()
-    Some src => indexModule ctx mid path src
-  processModules ctx read rest
+processModules ctx read xs0 = go xs0
+  where
+    go [] = ()
+    go ((mid, path, _) :: rest) =
+      let _ = match getSrc read path
+        None => ()
+        Some src => indexModule ctx mid path src
+      go rest
 
 -- The whole-project walk: `topoOrderModules` has already read and parsed every
 -- module, so this neither reads nor parses.
@@ -1723,10 +1780,12 @@ enumerateDir acc dir = match listDir dir
   Ok entries => enumerateEntries acc dir (dropDotEntries entries)
 
 enumerateEntries : Ref (List String) -> String -> List String -> <IO> Unit
-enumerateEntries _ _ [] = ()
-enumerateEntries acc dir (name :: rest) =
-  enumerateOne acc dir name
-  enumerateEntries acc dir rest
+enumerateEntries acc dir xs0 = go xs0
+  where
+    go [] = ()
+    go (name :: rest) =
+      enumerateOne acc dir name
+      go rest
 
 enumerateOne : Ref (List String) -> String -> String -> <IO> Unit
 enumerateOne acc dir name =
@@ -1785,10 +1844,12 @@ directImportIds ((DAttrib _ inner) :: rest) = directImportIds (inner :: rest)
 directImportIds (_ :: rest) = directImportIds rest
 
 registerMidPaths : Ctx -> HashMap String String -> List (String, String) -> Unit
-registerMidPaths _ _ [] = ()
-registerMidPaths ctx byMid ((mid, path) :: rest) =
-  hmSetC ctx byMid mid path
-  registerMidPaths ctx byMid rest
+registerMidPaths ctx byMid xs0 = go xs0
+  where
+    go [] = ()
+    go ((mid, path) :: rest) =
+      hmSetC ctx byMid mid path
+      go rest
 
 midsOf : List (String, String) -> List String
 midsOf [] = []
@@ -1802,10 +1863,12 @@ topoVisitAll : Ctx ->
   Ref (List (String, String, List Decl, Positions)) ->
   List String ->
   <IO> Unit
-topoVisitAll _ _ _ _ _ _ [] = ()
-topoVisitAll ctx read parse byMid visited acc (mid :: rest) =
-  topoVisit ctx read parse byMid visited acc mid
-  topoVisitAll ctx read parse byMid visited acc rest
+topoVisitAll ctx read parse byMid visited acc xs0 = go xs0
+  where
+    go [] = ()
+    go (mid :: rest) =
+      topoVisit ctx read parse byMid visited acc mid
+      go rest
 
 -- Visit one module: mark it visited FIRST (breaks a cycle without looping),
 -- then recurse into its OWN direct imports (dependency-first) before
@@ -1946,10 +2009,12 @@ binderAt idx uri line col = do
   scanOcc line col !r
 
 scanOcc : Int -> Int -> List (Loc, String) -> Option String
-scanOcc _ _ [] = None
-scanOcc line col ((loc, key) :: rest)
-  | locContains loc line col = Some key
-  | otherwise = scanOcc line col rest
+scanOcc line col xs0 = go xs0
+  where
+    go [] = None
+    go ((loc, key) :: rest)
+      | locContains loc line col = Some key
+      | otherwise = go rest
 
 -- (1-based startLine, 0-based startCol, 1-based endLine, 0-based endCol) contains
 -- a (1-based line, 0-based col) point.

@@ -299,15 +299,17 @@ readPinsGo : OrdMap (List (String, TomlValue)) ->
   Int ->
   List TestPin ->
   Result String (List TestPin)
-readPinsGo rows i n acc
-  | i >= n = Ok (reverse acc)
-  | otherwise =
-    let row = intToString i
-    match omLookup row rows
-      None => Err "\{rowPrefix i}: no such row"
-      Some fields => do
-        pin <- readPin (Toml fields) i
-        readPinsGo rows (i + 1) n (pin :: acc)
+readPinsGo rows i0 n acc0 = go i0 acc0
+  where
+    go i acc
+      | i >= n = Ok (reverse acc)
+      | otherwise =
+        let row = intToString i
+        match omLookup row rows
+          None => Err "\{rowPrefix i}: no such row"
+          Some fields => do
+            pin <- readPin (Toml fields) i
+            go (i + 1) (pin :: acc)
 
 {- | Parse the repository's known-red ledger. A ledger with no `[[pin]]` rows
    is valid only when it says `version = 1`; it is the explicit empty state,
@@ -386,13 +388,15 @@ validatePinNamesGo : List TestPin ->
   OrdMap Unit ->
   OrdMap Unit ->
   Result String Unit
-validatePinNamesGo [] _ _ _ = Ok ()
-validatePinNamesGo (pin :: rest) file propNames testNames =
-  if pin.pinFile /= file || pinNamePresent pin propNames testNames then
-    validatePinNamesGo rest file propNames testNames
-  else
-    Err
-      "\{pinOrigin}: issue #\{intToString pin.pinIssue} pins missing \{pinKindName pin.pinKind} '\{pin.pinName}' in \{file}"
+validatePinNamesGo pins0 file propNames testNames = go pins0
+  where
+    go [] = Ok ()
+    go (pin :: rest) =
+      if pin.pinFile /= file || pinNamePresent pin propNames testNames then
+        go rest
+      else
+        Err
+          "\{pinOrigin}: issue #\{intToString pin.pinIssue} pins missing \{pinKindName pin.pinKind} '\{pin.pinName}' in \{file}"
 
 pinKindName : PinKind -> String
 pinKindName PropPin = "property"
@@ -425,9 +429,10 @@ declarationIndex pins file kind label names =
     Ok (omFromNames names omEmpty)
 
 hasSelectedPin : List TestPin -> String -> PinKind -> Bool
-hasSelectedPin [] _ _ = False
-hasSelectedPin (pin :: rest) file kind =
-  pin.pinFile == file && pin.pinKind == kind || hasSelectedPin rest file kind
+hasSelectedPin pins0 file kind = go pins0
+  where
+    go [] = False
+    go (pin :: rest) = pin.pinFile == file && pin.pinKind == kind || go rest
 
 -- A ledger selector identifies one result by kind/name/engine. Duplicate
 -- declarations of one kind would make that identity ambiguous, so reject
@@ -438,13 +443,15 @@ uniqueDeclaredNames : String ->
   List String ->
   OrdMap Unit ->
   Result String (OrdMap Unit)
-uniqueDeclaredNames _ _ [] seen = Ok seen
-uniqueDeclaredNames file kind (name :: rest) seen =
-  if omHasKey name seen then
-    Err
-      "\{pinOrigin}: ambiguous duplicate \{kind} declaration '\{name}' in \{file}"
-  else
-    uniqueDeclaredNames file kind rest (omInsert name () seen)
+uniqueDeclaredNames file kind xs0 seen0 = go xs0 seen0
+  where
+    go [] seen = Ok seen
+    go (name :: rest) seen =
+      if omHasKey name seen then
+        Err
+          "\{pinOrigin}: ambiguous duplicate \{kind} declaration '\{name}' in \{file}"
+      else
+        go rest (omInsert name () seen)
 
 -- ── Observations and reporting ─────────────────────────────────────────────
 

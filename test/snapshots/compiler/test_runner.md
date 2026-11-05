@@ -1,5 +1,5 @@
 # META
-source_lines=240
+source_lines=244
 stages=DESUGAR,MARK
 # SOURCE
 -- Self-hosted `test "…" = <expr>` runner (Phase 127 restored 2026-07-11).
@@ -189,6 +189,8 @@ externScan : List Decl ->
   HashMap String Unit ->
   HashMap String Unit ->
   List String
+-- Bound: list built in tail position modulo cons: a where-local go loses the constant-stack loop until the lambda-lift pass (#4878); convert then.
+-- lint-disable-next-line rule-threaded-invariant
 externScan [] _ _ = []
 externScan ((DAttrib _ d) :: rest) bound emitted =
   externScan (d :: rest) bound emitted
@@ -236,12 +238,14 @@ closureOver : HashMap String (List String) ->
   HashMap String Unit ->
   List String ->
   Unit
-closureOver _ _ [] = ()
-closureOver graph seen (w :: work)
-  | has w seen = closureOver graph seen work
-  | otherwise =
-    setInPlace w () seen
-    closureOver graph seen (findWithDefault [] w graph ++ work)
+closureOver graph seen xs0 = go xs0
+  where
+    go [] = ()
+    go (w :: work)
+      | has w seen = go work
+      | otherwise =
+        setInPlace w () seen
+        go (findWithDefault [] w graph ++ work)
 # DESUGAR
 (DUse false (UseGroup ("frontend" "ast") ((mem "Decl" true) (mem "ExternDecl" true) (mem "Expr" true) (mem "Loc" true) (mem "noDeclLoc" false) (mem "noBinderId" false))))
 (DUse false (UseGroup ("frontend" "marker") ((mem "declRefs" false) (mem "localBoundNames" false))))
@@ -302,8 +306,7 @@ closureOver graph seen (w :: work)
 (DFunDef false "refGraphInto" ((PCons (PCon "DFunDef" PWild (PVar "n") (PVar "ps") (PVar "body") (PVar "site") (PVar "bid")) (PVar "rest")) (PVar "g")) (EBlock (DoExpr (EApp (EApp (EApp (EVar "setInPlace") (EVar "n")) (EBinOp "++" (EApp (EVar "freeRefsOf") (EApp (EApp (EApp (EApp (EApp (EApp (EVar "DFunDef") (EVar "False")) (EVar "n")) (EVar "ps")) (EVar "body")) (EVar "site")) (EVar "bid"))) (EApp (EApp (EApp (EVar "findWithDefault") (EListLit)) (EVar "n")) (EVar "g")))) (EVar "g"))) (DoExpr (EApp (EApp (EVar "refGraphInto") (EVar "rest")) (EVar "g")))))
 (DFunDef false "refGraphInto" ((PCons PWild (PVar "rest")) (PVar "g")) (EApp (EApp (EVar "refGraphInto") (EVar "rest")) (EVar "g")))
 (DTypeSig false "closureOver" (TyFun (TyApp (TyApp (TyCon "HashMap") (TyCon "String")) (TyApp (TyCon "List") (TyCon "String"))) (TyFun (TyApp (TyApp (TyCon "HashMap") (TyCon "String")) (TyCon "Unit")) (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyCon "Unit")))))
-(DFunDef false "closureOver" (PWild PWild (PList)) (ELit LUnit))
-(DFunDef false "closureOver" ((PVar "graph") (PVar "seen") (PCons (PVar "w") (PVar "work"))) (EIf (EApp (EApp (EVar "has") (EVar "w")) (EVar "seen")) (EApp (EApp (EApp (EVar "closureOver") (EVar "graph")) (EVar "seen")) (EVar "work")) (EIf (EVar "otherwise") (EBlock (DoExpr (EApp (EApp (EApp (EVar "setInPlace") (EVar "w")) (ELit LUnit)) (EVar "seen"))) (DoExpr (EApp (EApp (EApp (EVar "closureOver") (EVar "graph")) (EVar "seen")) (EBinOp "++" (EApp (EApp (EApp (EVar "findWithDefault") (EListLit)) (EVar "w")) (EVar "graph")) (EVar "work"))))) (EApp (EVar "__fallthrough__") (ELit LUnit)))))
+(DFunDef false "closureOver" ((PVar "graph") (PVar "seen") (PVar "xs0")) (ELetGroup ((lgb "go" (clause ((PList)) (ELit LUnit)) (clause ((PCons (PVar "w") (PVar "work"))) (EIf (EApp (EApp (EVar "has") (EVar "w")) (EVar "seen")) (EApp (EVar "go") (EVar "work")) (EIf (EVar "otherwise") (EBlock (DoExpr (EApp (EApp (EApp (EVar "setInPlace") (EVar "w")) (ELit LUnit)) (EVar "seen"))) (DoExpr (EApp (EVar "go") (EBinOp "++" (EApp (EApp (EApp (EVar "findWithDefault") (EListLit)) (EVar "w")) (EVar "graph")) (EVar "work"))))) (EApp (EVar "__fallthrough__") (ELit LUnit))))))) (EApp (EVar "go") (EVar "xs0"))))
 # MARK
 (DUse false (UseGroup ("frontend" "ast") ((mem "Decl" true) (mem "ExternDecl" true) (mem "Expr" true) (mem "Loc" true) (mem "noDeclLoc" false) (mem "noBinderId" false))))
 (DUse false (UseGroup ("frontend" "marker") ((mem "declRefs" false) (mem "localBoundNames" false))))
@@ -364,5 +367,4 @@ closureOver graph seen (w :: work)
 (DFunDef false "refGraphInto" ((PCons (PCon "DFunDef" PWild (PVar "n") (PVar "ps") (PVar "body") (PVar "site") (PVar "bid")) (PVar "rest")) (PVar "g")) (EBlock (DoExpr (EApp (EApp (EApp (EVar "setInPlace") (EVar "n")) (EBinOp "++" (EApp (EVar "freeRefsOf") (EApp (EApp (EApp (EApp (EApp (EApp (EVar "DFunDef") (EVar "False")) (EVar "n")) (EVar "ps")) (EVar "body")) (EVar "site")) (EVar "bid"))) (EApp (EApp (EApp (EVar "findWithDefault") (EListLit)) (EVar "n")) (EVar "g")))) (EVar "g"))) (DoExpr (EApp (EApp (EVar "refGraphInto") (EVar "rest")) (EVar "g")))))
 (DFunDef false "refGraphInto" ((PCons PWild (PVar "rest")) (PVar "g")) (EApp (EApp (EVar "refGraphInto") (EVar "rest")) (EVar "g")))
 (DTypeSig false "closureOver" (TyFun (TyApp (TyApp (TyCon "HashMap") (TyCon "String")) (TyApp (TyCon "List") (TyCon "String"))) (TyFun (TyApp (TyApp (TyCon "HashMap") (TyCon "String")) (TyCon "Unit")) (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyCon "Unit")))))
-(DFunDef false "closureOver" (PWild PWild (PList)) (ELit LUnit))
-(DFunDef false "closureOver" ((PVar "graph") (PVar "seen") (PCons (PVar "w") (PVar "work"))) (EIf (EApp (EApp (EVar "has") (EVar "w")) (EVar "seen")) (EApp (EApp (EApp (EVar "closureOver") (EVar "graph")) (EVar "seen")) (EVar "work")) (EIf (EVar "otherwise") (EBlock (DoExpr (EApp (EApp (EApp (EVar "setInPlace") (EVar "w")) (ELit LUnit)) (EVar "seen"))) (DoExpr (EApp (EApp (EApp (EVar "closureOver") (EVar "graph")) (EVar "seen")) (EBinOp "++" (EApp (EApp (EApp (EVar "findWithDefault") (EListLit)) (EVar "w")) (EVar "graph")) (EVar "work"))))) (EApp (EVar "__fallthrough__") (ELit LUnit)))))
+(DFunDef false "closureOver" ((PVar "graph") (PVar "seen") (PVar "xs0")) (ELetGroup ((lgb "go" (clause ((PList)) (ELit LUnit)) (clause ((PCons (PVar "w") (PVar "work"))) (EIf (EApp (EApp (EVar "has") (EVar "w")) (EVar "seen")) (EApp (EVar "go") (EVar "work")) (EIf (EVar "otherwise") (EBlock (DoExpr (EApp (EApp (EApp (EVar "setInPlace") (EVar "w")) (ELit LUnit)) (EVar "seen"))) (DoExpr (EApp (EVar "go") (EBinOp "++" (EApp (EApp (EApp (EVar "findWithDefault") (EListLit)) (EVar "w")) (EVar "graph")) (EVar "work"))))) (EApp (EVar "__fallthrough__") (ELit LUnit))))))) (EApp (EVar "go") (EVar "xs0"))))

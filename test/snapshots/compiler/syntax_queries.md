@@ -1,5 +1,5 @@
 # META
-source_lines=296
+source_lines=298
 stages=DESUGAR,MARK
 # SOURCE
 import list.{reverse}
@@ -108,6 +108,8 @@ zipKids : SourceIndex ->
   List (Option Loc) ->
   List String ->
   List Json
+-- Bound: list built in tail position modulo cons: a where-local go loses the constant-stack loop until the lambda-lift pass (#4878); convert then.
+-- lint-disable-next-line rule-threaded-invariant
 zipKids _ _ _ _ [] = []
 zipKids index fb kind [] (nm :: nms) =
   jChildLoc index nm kind fb None :: zipKids index fb kind [] nms

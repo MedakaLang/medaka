@@ -189,45 +189,40 @@ occupiedNonceTokens : String ->
   List Token ->
   OrdMap Unit ->
   OrdMap Unit
-occupiedNonceTokens _ _ [] occupied = occupied
-occupiedNonceTokens nonce prefixes ((TIdent name) :: rest) occupied =
-  occupiedNonceTokens
-    nonce
-    prefixes
-    rest
-    (occupiedNonceName nonce prefixes name occupied)
-occupiedNonceTokens nonce prefixes ((TUpper name) :: rest) occupied =
-  occupiedNonceTokens
-    nonce
-    prefixes
-    rest
-    (occupiedNonceName nonce prefixes name occupied)
-occupiedNonceTokens nonce prefixes (_ :: rest) occupied =
-  occupiedNonceTokens nonce prefixes rest occupied
+occupiedNonceTokens nonce prefixes xs0 occupied0 = go xs0 occupied0
+  where
+    go [] occupied = occupied
+    go ((TIdent name) :: rest) occupied =
+      go rest (occupiedNonceName nonce prefixes name occupied)
+    go ((TUpper name) :: rest) occupied =
+      go rest (occupiedNonceName nonce prefixes name occupied)
+    go (_ :: rest) occupied = go rest occupied
 
 occupiedNonceName : String ->
   List String ->
   String ->
   OrdMap Unit ->
   OrdMap Unit
-occupiedNonceName _ [] _ occupied = occupied
-occupiedNonceName nonce (prefix :: rest) name occupied =
-  let stem = prefix ++ nonce
-  if startsWith stem name then
-    let tail = stringSlice (stringLength stem) (stringLength name) name
-    if tail == "" || startsWith "_" tail then
-      let used = omInsert "0" () occupied
-      let chars = stringToChars tail
-      let end = nonceSuffixEnd chars 1
-      let digits = if end > 20 then "" else stringSlice 1 end tail
-      let next = match toInt digits
-        Some index => omInsert (intToString index) () used
-        None => used
-      occupiedNonceName nonce rest name next
-    else
-      occupiedNonceName nonce rest name occupied
-  else
-    occupiedNonceName nonce rest name occupied
+occupiedNonceName nonce xs0 name occupied0 = go xs0 occupied0
+  where
+    go [] occupied = occupied
+    go (prefix :: rest) occupied =
+      let stem = prefix ++ nonce
+      if startsWith stem name then
+        let tail = stringSlice (stringLength stem) (stringLength name) name
+        if tail == "" || startsWith "_" tail then
+          let used = omInsert "0" () occupied
+          let chars = stringToChars tail
+          let end = nonceSuffixEnd chars 1
+          let digits = if end > 20 then "" else stringSlice 1 end tail
+          let next = match toInt digits
+            Some index => omInsert (intToString index) () used
+            None => used
+          go rest next
+        else
+          go rest occupied
+      else
+        go rest occupied
 
 nonceSuffixEnd : Array Char -> Int -> Int
 nonceSuffixEnd chars i =
@@ -333,15 +328,17 @@ unquoteLit s =
     None
 
 unquoteScan : Array Char -> Int -> Int -> List Char -> Option String
-unquoteScan cs i end acc
-  | i >= end = Some (stringFromChars (arrayFromList (reverseL acc)))
-  | arrayGetUnsafe i cs == '\\' =
-    if i + 1 >= end then
-      None
-    else match unescapeChar (arrayGetUnsafe (i + 1) cs)
-      Some c => unquoteScan cs (i + 2) end (c :: acc)
-      None => None
-  | otherwise = unquoteScan cs (i + 1) end (arrayGetUnsafe i cs :: acc)
+unquoteScan cs i0 end acc0 = go i0 acc0
+  where
+    go i acc
+      | i >= end = Some (stringFromChars (arrayFromList (reverseL acc)))
+      | arrayGetUnsafe i cs == '\\' =
+        if i + 1 >= end then
+          None
+        else match unescapeChar (arrayGetUnsafe (i + 1) cs)
+          Some c => go (i + 2) (c :: acc)
+          None => None
+      | otherwise = go (i + 1) (arrayGetUnsafe i cs :: acc)
 
 unescapeChar : Char -> Option Char
 unescapeChar 'n' = Some '\n'

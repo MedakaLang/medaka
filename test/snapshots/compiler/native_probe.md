@@ -1,5 +1,5 @@
 # META
-source_lines=404
+source_lines=406
 stages=DESUGAR,MARK
 # SOURCE
 -- compiler/tools/native_probe.mdk — one native probe build for all the native
@@ -314,6 +314,8 @@ runSections : String ->
   List Arm ->
   List Section ->
   <IO> List ArmOut
+-- Bound: list built in tail position modulo cons: a where-local go loses the constant-stack loop until the lambda-lift pass (#4878); convert then.
+-- lint-disable-next-line rule-threaded-invariant
 runSections target tsrc userDecls nonce outPath k (arm :: arms) (section :: sections) =
   let out =
     runSection target tsrc userDecls nonce outPath k arm section.secPrefix

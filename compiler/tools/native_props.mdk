@@ -170,6 +170,8 @@ planCapabilities : List Decl ->
   OrdMap PropRequest ->
   String ->
   List NativePlanOutcome
+-- Bound: list built in tail position modulo cons: a where-local go loses the constant-stack loop until the lambda-lift pass (#4878); convert then.
+-- lint-disable-next-line rule-threaded-invariant
 planCapabilities [] _ _ = []
 planCapabilities ((d@(DProp _ _ _ _)) :: rest) requests message =
   match omLookup (propName d) requests
@@ -192,6 +194,8 @@ plannedOutcomes : PlanEnv ->
   List Decl ->
   OrdMap PropRequest ->
   List NativePlanOutcome
+-- Bound: list built in tail position modulo cons: a where-local go loses the constant-stack loop until the lambda-lift pass (#4878); convert then.
+-- lint-disable-next-line rule-threaded-invariant
 plannedOutcomes _ _ [] _ = []
 plannedOutcomes env modules ((d@(DProp _ _ _ _)) :: rest) requests =
   match omLookup (propName d) requests
@@ -233,11 +237,12 @@ planParameters : PlanEnv ->
   List PropParam ->
   List GenPlan ->
   Result PlanError (List GenPlan)
-planParameters _ _ [] acc = Ok (reverseL acc)
-planParameters env property ((PropParam name _ ty) :: rest) acc =
-  match planFor env property name ty
-    Ok p => planParameters env property rest (p :: acc)
-    Err e => Err e
+planParameters env property xs0 acc0 = go xs0 acc0
+  where
+    go [] acc = Ok (reverseL acc)
+    go ((PropParam name _ ty) :: rest) acc = match planFor env property name ty
+      Ok p => go rest (p :: acc)
+      Err e => Err e
 
 plannedRunnable : List NativePlanOutcome -> List NativePlanOutcome
 plannedRunnable [] = []
@@ -278,17 +283,19 @@ plannedResults ((NativeRunnable d r _) :: rest) rows =
   nativeRowFor (propName d) r rows :: plannedResults rest rows
 
 nativeRowFor : String -> PropRequest -> List PropResult -> PropResult
-nativeRowFor _ r [] =
-  PropResult
-    "native"
-    (propRequestName r)
-    PropErroredResult
-    (Some PropRuntimeError)
-    "native property runner: the compiled probe omitted this property result"
-    (propRequestSeed r)
-    (propRequestCases r)
-nativeRowFor name r ((row@(PropResult _ rowName _ _ _ _ _)) :: rest) =
-  if name == rowName then row else nativeRowFor name r rest
+nativeRowFor name r xs0 = go xs0
+  where
+    go [] =
+      PropResult
+        "native"
+        (propRequestName r)
+        PropErroredResult
+        (Some PropRuntimeError)
+        "native property runner: the compiled probe omitted this property result"
+        (propRequestSeed r)
+        (propRequestCases r)
+    go ((row@(PropResult _ rowName _ _ _ _ _)) :: rest) =
+      if name == rowName then row else go rest
 
 requestIndex : List PropRequest ->
   OrdMap PropRequest ->
@@ -523,6 +530,8 @@ renderIndexed : OrdMap Chunk ->
   Int ->
   List (Decl, PropRequest) ->
   List PropResult
+-- Bound: list built in tail position modulo cons: a where-local go loses the constant-stack loop until the lambda-lift pass (#4878); convert then.
+-- lint-disable-next-line rule-threaded-invariant
 renderIndexed _ _ _ [] = []
 renderIndexed chunks note i ((_, request) :: rest) =
   classifyNativeFields chunks note request i
@@ -667,7 +676,7 @@ plannedSection nonce modules env jobs =
           "\{generatedPrefix nonce}replace_each f (x :: xs) = \{coreAlias nonce}.map (ys => ys :: xs) (f x) ++ \{coreAlias nonce}.map (ys => x :: ys) (\{generatedPrefix nonce}replace_each f xs)",
           "",
         ]
-        ++ plannedPropLines nonce modules env graph jobs 0
+        ++ plannedPropLines nonce modules graph jobs 0
         ++ graphLines nonce modules env (coreAlias nonce) prefix graph
         ++ graphAuxLines nonce modules env (coreAlias nonce) prefix graph,
     secEntry =
@@ -747,12 +756,14 @@ moduleAlias nonce modules owner =
   moduleAliasGo nonce (dropLastPlanModule modules) owner 0
 
 moduleAliasGo : String -> List PlanModule -> String -> Int -> Option String
-moduleAliasGo _ [] _ _ = None
-moduleAliasGo nonce ((PlanModule name _ _) :: rest) owner i =
-  if name == owner then
-    Some "NpModule_\{probeNameNonce nonce}_\{intToString i}"
-  else
-    moduleAliasGo nonce rest owner (i + 1)
+moduleAliasGo nonce xs0 owner i0 = go xs0 i0
+  where
+    go [] _ = None
+    go ((PlanModule name _ _) :: rest) i =
+      if name == owner then
+        Some "NpModule_\{probeNameNonce nonce}_\{intToString i}"
+      else
+        go rest (i + 1)
 
 dropLastPlanModule : List PlanModule -> List PlanModule
 dropLastPlanModule [] = []
@@ -760,26 +771,23 @@ dropLastPlanModule [_] = []
 dropLastPlanModule (x :: xs) = x :: dropLastPlanModule xs
 
 planSourceTy : String -> List PlanModule -> GenPlan -> String
-planSourceTy _ _ GInt = "Int"
-planSourceTy _ _ GBool = "Bool"
-planSourceTy _ _ GFloat = "Float"
-planSourceTy _ _ GChar = "Char"
-planSourceTy _ _ GString = "String"
-planSourceTy _ _ GUnit = "Unit"
-planSourceTy nonce modules (GList plan) =
-  "List (\{planSourceTy nonce modules plan})"
-planSourceTy nonce modules (GArray plan) =
-  "Array (\{planSourceTy nonce modules plan})"
-planSourceTy nonce modules (GOption plan) =
-  "Option (\{planSourceTy nonce modules plan})"
-planSourceTy nonce modules (GResult err ok) =
-  "Result (\{planSourceTy nonce modules err}) (\{planSourceTy nonce modules ok})"
-planSourceTy nonce modules (GTuple plans) =
-  "(\{joinWith ", " (map (planSourceTy nonce modules) plans)})"
-planSourceTy nonce modules (GNominal key plans) =
-  nominalSourceTy nonce modules key plans
-planSourceTy nonce modules (GCustom (CustomPlan _ carrier _)) =
-  carrierSourceTy nonce modules carrier
+planSourceTy nonce modules x0 = go x0
+  where
+    go GInt = "Int"
+    go GBool = "Bool"
+    go GFloat = "Float"
+    go GChar = "Char"
+    go GString = "String"
+    go GUnit = "Unit"
+    go (GList plan) = "List (\{go plan})"
+    go (GArray plan) = "Array (\{go plan})"
+    go (GOption plan) = "Option (\{go plan})"
+    go (GResult err ok) = "Result (\{go err}) (\{go ok})"
+    go (GTuple plans) =
+      "(\{joinWith ", " (map (planSourceTy nonce modules) plans)})"
+    go (GNominal key plans) = nominalSourceTy nonce modules key plans
+    go (GCustom (CustomPlan _ carrier _)) =
+      carrierSourceTy nonce modules carrier
 
 effectfulPlanSourceTy : String -> List PlanModule -> GenPlan -> String
 effectfulPlanSourceTy nonce modules plan =
@@ -814,19 +822,26 @@ typeKeyName (TypeKey name _) = name
 
 plannedPropLines : String ->
   List PlanModule ->
-  PlanEnv ->
   NativeGraph ->
   List NativePlanOutcome ->
   Int ->
   List String
-plannedPropLines _ _ _ _ [] _ = []
-plannedPropLines nonce modules env graph ((NativeRunnable (DProp _ _ params body) r plans) :: rest) i =
-  fnLines nonce i params body
-    ++ plannedRunLines nonce modules graph i params plans (propRequestCases r)
-    ++ plannedShrinkLines nonce modules graph i params plans
-    ++ plannedPropLines nonce modules env graph rest (i + 1)
-plannedPropLines nonce modules env graph (_ :: rest) i =
-  plannedPropLines nonce modules env graph rest i
+plannedPropLines nonce modules graph outcomes0 i0 = go outcomes0 i0
+  where
+    go [] _ = []
+    go ((NativeRunnable (DProp _ _ params body) r plans) :: rest) i =
+      fnLines nonce i params body
+        ++ plannedRunLines
+          nonce
+          modules
+          graph
+          i
+          params
+          plans
+          (propRequestCases r)
+        ++ plannedShrinkLines nonce graph i params plans
+        ++ go rest (i + 1)
+    go (_ :: rest) i = go rest i
 
 -- Every closed plan, including containers and primitives, gets one helper.
 -- The map is the registry; the reverse discovery list only preserves stable
@@ -972,9 +987,10 @@ customPlanArgs env (ty :: rest) = match (
   _ => None
 
 graphExploreMany : PlanEnv -> List GenPlan -> Int -> NativeGraph -> NativeGraph
-graphExploreMany _ [] _ graph = graph
-graphExploreMany env (plan :: rest) depth graph =
-  graphExploreMany env rest depth (graphExplore env plan depth graph)
+graphExploreMany env xs0 depth graph0 = go xs0 graph0
+  where
+    go [] graph = graph
+    go (plan :: rest) graph = go rest (graphExplore env plan depth graph)
 
 graphCtorChildren : PlanEnv ->
   GenPlan ->
@@ -983,16 +999,18 @@ graphCtorChildren : PlanEnv ->
   Int ->
   NativeGraph ->
   NativeGraph
-graphCtorChildren _ _ [] _ _ graph = graph
-graphCtorChildren env plan (ctor :: rest) (weight :: weights) depth graph =
-  let next =
-    if weight <= 0 then
-      graph
-    else match instantiateCtor env plan ctor
-      Err _ => graph
-      Ok fields => graphExploreMany env (map snd fields) (depth + 1) graph
-  graphCtorChildren env plan rest weights depth next
-graphCtorChildren _ _ _ _ _ graph = graph
+graphCtorChildren env plan xs0 xs1 depth graph0 = go xs0 xs1 graph0
+  where
+    go [] _ graph = graph
+    go (ctor :: rest) (weight :: weights) graph =
+      let next =
+        if weight <= 0 then
+          graph
+        else match instantiateCtor env plan ctor
+          Err _ => graph
+          Ok fields => graphExploreMany env (map snd fields) (depth + 1) graph
+      go rest weights next
+    go _ _ graph = graph
 
 graphDisplayCtorChildren : PlanEnv ->
   GenPlan ->
@@ -1000,12 +1018,14 @@ graphDisplayCtorChildren : PlanEnv ->
   Int ->
   NativeGraph ->
   NativeGraph
-graphDisplayCtorChildren _ _ [] _ graph = graph
-graphDisplayCtorChildren env plan (ctor :: rest) depth graph =
-  let next = match instantiateCtor env plan ctor
-    Err _ => graph
-    Ok fields => graphExploreMany env (map snd fields) (depth + 1) graph
-  graphDisplayCtorChildren env plan rest depth next
+graphDisplayCtorChildren env plan xs0 depth graph0 = go xs0 graph0
+  where
+    go [] graph = graph
+    go (ctor :: rest) graph =
+      let next = match instantiateCtor env plan ctor
+        Err _ => graph
+        Ok fields => graphExploreMany env (map snd fields) (depth + 1) graph
+      go rest next
 
 genPlanWord : GenPlan -> String
 genPlanWord GInt = "int"
@@ -1053,17 +1073,18 @@ graphLinesGo : String ->
   OrdMap GraphNode ->
   List String ->
   List String
-graphLinesGo _ _ _ _ _ _ [] = []
-graphLinesGo nonce modules env core prefix nodes (word :: rest) =
-  match omLookup word nodes
-    None => graphLinesGo nonce modules env core prefix nodes rest
-    Some (GraphNode ident plan _) =>
-      [
-          "\{graphNodeName prefix ident} : Int -> \{effectfulPlanSourceTy nonce modules plan}",
-          "\{graphNodeName prefix ident} depth = \{graphNodeBody nonce modules env core (NativeGraph nodes [] 0) prefix plan}",
-          "",
-        ]
-        ++ graphLinesGo nonce modules env core prefix nodes rest
+graphLinesGo nonce modules env core prefix nodes xs0 = go xs0
+  where
+    go [] = []
+    go (word :: rest) = match omLookup word nodes
+      None => go rest
+      Some (GraphNode ident plan _) =>
+        [
+            "\{graphNodeName prefix ident} : Int -> \{effectfulPlanSourceTy nonce modules plan}",
+            "\{graphNodeName prefix ident} depth = \{graphNodeBody nonce modules env core (NativeGraph nodes [] 0) prefix plan}",
+            "",
+          ]
+          ++ go rest
 
 graphDraw : List PlanModule ->
   PlanEnv ->
@@ -1209,6 +1230,8 @@ graphCtorChoiceAt : String ->
   List SoftWeight ->
   String ->
   String
+-- Bound: the where-go head line would exceed 80 columns and fmt lays it out as a head the parser rejects (#4896); convert when that is fixed.
+-- lint-disable-next-line rule-threaded-invariant
 graphCtorChoiceAt _ _ _ _ _ _ _ [] _ _ =
   "panic \"native property runner: no finite constructor\""
 graphCtorChoiceAt nonce modules env graph prefix plan owner (ctor :: rest) (weight :: weights) picked =
@@ -1358,10 +1381,12 @@ renderListChoiceN nonce open close child bound count =
   "match \{generatedPrefix nonce}choose \{count}\n\{renderListArms open close child bound 0}"
 
 renderListArms : String -> String -> String -> Int -> Int -> String
-renderListArms _open _close _child bound n
-  | n > bound = ""
-renderListArms open close child bound n =
-  "  \{if n == bound then "_" else intToString n} => \{open}\{joinWith ", " (repeatString child n)}\{close}\n\{renderListArms open close child bound (n + 1)}"
+renderListArms open close child bound n0 = go n0
+  where
+    go n
+      | n > bound = ""
+    go n =
+      "  \{if n == bound then "_" else intToString n} => \{open}\{joinWith ", " (repeatString child n)}\{close}\n\{go (n + 1)}"
 
 repeatString : String -> Int -> List String
 repeatString _ 0 = []
@@ -1427,21 +1452,22 @@ graphAuxLinesGo : String ->
   OrdMap GraphNode ->
   List String ->
   List String
-graphAuxLinesGo _ _ _ _ _ _ [] = []
-graphAuxLinesGo nonce modules env core prefix nodes (word :: rest) =
-  match omLookup word nodes
-    None => graphAuxLinesGo nonce modules env core prefix nodes rest
-    Some (GraphNode ident plan _) =>
-      let graph = NativeGraph nodes [] 0
-      [
-          "\{shrinkNodeName prefix ident} : \{planSourceTy nonce modules plan} -> List (\{planSourceTy nonce modules plan})",
-          "\{shrinkNodeName prefix ident} value = \{candidateNodeBody nonce modules env core graph prefix plan "value"}",
-          "",
-          "\{displayNodeName prefix ident} : \{planSourceTy nonce modules plan} -> String",
-          "\{displayNodeName prefix ident} value = \{displayNodeBody nonce modules env graph prefix plan "value"}",
-          "",
-        ]
-        ++ graphAuxLinesGo nonce modules env core prefix nodes rest
+graphAuxLinesGo nonce modules env core prefix nodes xs0 = go xs0
+  where
+    go [] = []
+    go (word :: rest) = match omLookup word nodes
+      None => go rest
+      Some (GraphNode ident plan _) =>
+        let graph = NativeGraph nodes [] 0
+        [
+            "\{shrinkNodeName prefix ident} : \{planSourceTy nonce modules plan} -> List (\{planSourceTy nonce modules plan})",
+            "\{shrinkNodeName prefix ident} value = \{candidateNodeBody nonce modules env core graph prefix plan "value"}",
+            "",
+            "\{displayNodeName prefix ident} : \{planSourceTy nonce modules plan} -> String",
+            "\{displayNodeName prefix ident} value = \{displayNodeBody nonce modules env graph prefix plan "value"}",
+            "",
+          ]
+          ++ go rest
 
 candidateNodeBody : String ->
   List PlanModule ->
@@ -1541,6 +1567,8 @@ graphListCandidateFamilies : String ->
   String ->
   List ShrinkAction ->
   List String
+-- Bound: list built in tail position modulo cons: a where-local go loses the constant-stack loop until the lambda-lift pass (#4878); convert then.
+-- lint-disable-next-line rule-threaded-invariant
 graphListCandidateFamilies _ _ _ _ _ [] = []
 graphListCandidateFamilies nonce graph prefix plan name (DeleteElements :: actions) =
   "\{generatedPrefix nonce}delete_each \{name}"
@@ -1569,6 +1597,8 @@ graphArrayCandidateFamilies : String ->
   String ->
   List ShrinkAction ->
   List String
+-- Bound: list built in tail position modulo cons: a where-local go loses the constant-stack loop until the lambda-lift pass (#4878); convert then.
+-- lint-disable-next-line rule-threaded-invariant
 graphArrayCandidateFamilies _ _ _ _ _ [] = []
 graphArrayCandidateFamilies nonce graph prefix plan name (DeleteElements :: actions) =
   "\{coreAlias nonce}.map \{runtimeAlias nonce}.arrayFromList (\{generatedPrefix nonce}delete_each (\{generatedPrefix nonce}array_to_list \{name}))"
@@ -1595,6 +1625,8 @@ graphOptionCandidateFamilies : String ->
   GenPlan ->
   List ShrinkAction ->
   List String
+-- Bound: list built in tail position modulo cons: a where-local go loses the constant-stack loop until the lambda-lift pass (#4878); convert then.
+-- lint-disable-next-line rule-threaded-invariant
 graphOptionCandidateFamilies _ _ _ _ [] = []
 graphOptionCandidateFamilies nonce graph prefix plan (ReplaceEarlierNullary :: actions) =
   "[None]" :: graphOptionCandidateFamilies nonce graph prefix plan actions
@@ -1622,6 +1654,8 @@ graphResultCandidateFamilies : String ->
   String ->
   List ShrinkAction ->
   List String
+-- Bound: list built in tail position modulo cons: a where-local go loses the constant-stack loop until the lambda-lift pass (#4878); convert then.
+-- lint-disable-next-line rule-threaded-invariant
 graphResultCandidateFamilies _ _ _ _ _ [] = []
 graphResultCandidateFamilies nonce graph prefix plan tag (ShrinkChildren :: actions) =
   "\{coreAlias nonce}.map \{tag} (\{graphShrinkRef graph prefix plan "x"})"
@@ -1648,11 +1682,12 @@ graphTupleCandidatesByActions : String ->
   List String ->
   List ShrinkAction ->
   String
-graphTupleCandidatesByActions _ _ _ _ _ _ [] = "[]"
-graphTupleCandidatesByActions nonce graph prefix plans all values (ShrinkChildren :: actions) =
-  "\{graphTupleCandidateLists nonce graph prefix plans all values 0} ++ \{graphTupleCandidatesByActions nonce graph prefix plans all values actions}"
-graphTupleCandidatesByActions nonce graph prefix plans all values (_ :: actions) =
-  graphTupleCandidatesByActions nonce graph prefix plans all values actions
+graphTupleCandidatesByActions nonce graph prefix plans all values xs0 = go xs0
+  where
+    go [] = "[]"
+    go (ShrinkChildren :: actions) =
+      "\{graphTupleCandidateLists nonce graph prefix plans all values 0} ++ \{go actions}"
+    go (_ :: actions) = go actions
 
 graphTupleCandidateLists : String ->
   NativeGraph ->
@@ -1662,10 +1697,12 @@ graphTupleCandidateLists : String ->
   List String ->
   Int ->
   String
-graphTupleCandidateLists _nonce _ _ [] _ _ _ = "[]"
-graphTupleCandidateLists nonce graph prefix (plan :: plans) all (value :: values) index =
-  "\{coreAlias nonce}.map (candidate => (\{joinWith ", " (replaceName index "candidate" all)})) (\{graphShrinkRef graph prefix plan value}) ++ \{graphTupleCandidateLists nonce graph prefix plans all values (index + 1)}"
-graphTupleCandidateLists _nonce _ _ _ _ _ _ = "[]"
+graphTupleCandidateLists nonce graph prefix xs0 all xs1 i0 = go xs0 xs1 i0
+  where
+    go [] _ _ = "[]"
+    go (plan :: plans) (value :: values) index =
+      "\{coreAlias nonce}.map (candidate => (\{joinWith ", " (replaceName index "candidate" all)})) (\{graphShrinkRef graph prefix plan value}) ++ \{go plans values (index + 1)}"
+    go _ _ _ = "[]"
 
 graphNominalCandidates : String ->
   List PlanModule ->
@@ -1695,6 +1732,8 @@ graphNominalCandidateArms : String ->
   List PlanCtor ->
   Option PlanCtor ->
   List String
+-- Bound: list built in tail position modulo cons: a where-local go loses the constant-stack loop until the lambda-lift pass (#4878); convert then.
+-- lint-disable-next-line rule-threaded-invariant
 graphNominalCandidateArms _ _ _ _ _ _ _ [] _ = []
 graphNominalCandidateArms nonce modules env graph prefix plan owner (ctor :: ctors) earlier =
   graphNominalCandidateArm
@@ -1759,11 +1798,12 @@ graphNominalReplacementByActions : String ->
   Option PlanCtor ->
   List ShrinkAction ->
   String
-graphNominalReplacementByActions _ _ _ _ [] = "[]"
-graphNominalReplacementByActions nonce modules owner earlier (ReplaceEarlierNullary :: _) =
-  graphNominalReplacement nonce modules owner earlier
-graphNominalReplacementByActions nonce modules owner earlier (_ :: actions) =
-  graphNominalReplacementByActions nonce modules owner earlier actions
+graphNominalReplacementByActions nonce modules owner earlier xs0 = go xs0
+  where
+    go [] = "[]"
+    go (ReplaceEarlierNullary :: _) =
+      graphNominalReplacement nonce modules owner earlier
+    go (_ :: actions) = go actions
 
 graphNominalReplacement : String ->
   List PlanModule ->
@@ -1787,6 +1827,8 @@ graphNominalFieldCandidatesByActions : String ->
   Int ->
   List ShrinkAction ->
   String
+-- Bound: the where-go head line would exceed 80 columns and fmt lays it out as a head the parser rejects (#4896); convert when that is fixed.
+-- lint-disable-next-line rule-threaded-invariant
 graphNominalFieldCandidatesByActions _ _ _ _ _ _ _ _ _ _ [] = "[]"
 graphNominalFieldCandidatesByActions nonce graph prefix ref all fields allValues values named index (ShrinkChildren :: actions) =
   "\{graphNominalFieldCandidates nonce graph prefix ref all fields allValues values named index} ++ \{graphNominalFieldCandidatesByActions nonce graph prefix ref all fields allValues values named index actions}"
@@ -1815,6 +1857,8 @@ graphNominalFieldCandidates : String ->
   Bool ->
   Int ->
   String
+-- Bound: the where-go head line would exceed 80 columns and fmt lays it out as a head the parser rejects (#4896); convert when that is fixed.
+-- lint-disable-next-line rule-threaded-invariant
 graphNominalFieldCandidates _nonce _ _ _ _ [] _ _ _ _ = "[]"
 graphNominalFieldCandidates nonce graph prefix ref all ((_, plan) :: rest) allValues (value :: values) named index =
   "\{coreAlias nonce}.map (candidate => \{rebuildCtor ref all (replaceName index "candidate" allValues) named}) (\{graphShrinkRef graph prefix plan value}) ++ \{graphNominalFieldCandidates nonce graph prefix ref all rest allValues values named (index + 1)}"
@@ -1836,10 +1880,12 @@ graphJoinDisplaysTail : NativeGraph ->
   List GenPlan ->
   List String ->
   String
-graphJoinDisplaysTail _ _ [] _ = ""
-graphJoinDisplaysTail graph prefix (plan :: plans) (value :: values) =
-  " ++ \", \" ++ \{graphDisplayRef graph prefix plan value}\{graphJoinDisplaysTail graph prefix plans values}"
-graphJoinDisplaysTail _ _ _ _ = ""
+graphJoinDisplaysTail graph prefix xs0 xs1 = go xs0 xs1
+  where
+    go [] _ = ""
+    go (plan :: plans) (value :: values) =
+      " ++ \", \" ++ \{graphDisplayRef graph prefix plan value}\{go plans values}"
+    go _ _ = ""
 
 graphNominalDisplay : String ->
   List PlanModule ->
@@ -1905,10 +1951,12 @@ graphNamedDisplaysTail : NativeGraph ->
   List (Option String, GenPlan) ->
   List String ->
   String
-graphNamedDisplaysTail _ _ [] _ = ""
-graphNamedDisplaysTail graph prefix ((Some field, plan) :: rest) (value :: values) =
-  " ++ \", \" ++ \"\{field} = \" ++ \{graphDisplayRef graph prefix plan value}\{graphNamedDisplaysTail graph prefix rest values}"
-graphNamedDisplaysTail _ _ _ _ = ""
+graphNamedDisplaysTail graph prefix xs0 xs1 = go xs0 xs1
+  where
+    go [] _ = ""
+    go ((Some field, plan) :: rest) (value :: values) =
+      " ++ \", \" ++ \"\{field} = \" ++ \{graphDisplayRef graph prefix plan value}\{go rest values}"
+    go _ _ = ""
 
 plannedRunLines : String ->
   List PlanModule ->
@@ -1937,12 +1985,14 @@ plannedBindings : String ->
   List GenPlan ->
   Int ->
   List String
-plannedBindings nonce graph i ((PropParam _ _ _) :: rest) (plan :: plans) j =
-  [
-      "    let \{slotName nonce i j} = \{graphRef graph (genNodePrefix nonce) plan "0"}",
-    ]
-    ++ plannedBindings nonce graph i rest plans (j + 1)
-plannedBindings _ _ _ _ _ _ = []
+plannedBindings nonce graph i xs0 xs1 j0 = go xs0 xs1 j0
+  where
+    go ((PropParam _ _ _) :: rest) (plan :: plans) j =
+      [
+          "    let \{slotName nonce i j} = \{graphRef graph (genNodePrefix nonce) plan "0"}",
+        ]
+        ++ go rest plans (j + 1)
+    go _ _ _ = []
 
 slotName : String -> Int -> Int -> String
 slotName nonce i j =
@@ -1952,6 +2002,8 @@ paramSlots : String -> Int -> List PropParam -> List String
 paramSlots nonce i ps = paramSlotsGo nonce i ps 0
 
 paramSlotsGo : String -> Int -> List PropParam -> Int -> List String
+-- Bound: list built in tail position modulo cons: a where-local go loses the constant-stack loop until the lambda-lift pass (#4878); convert then.
+-- lint-disable-next-line rule-threaded-invariant
 paramSlotsGo _ _ [] _ = []
 paramSlotsGo nonce i (_ :: rest) j =
   slotName nonce i j :: paramSlotsGo nonce i rest (j + 1)
@@ -1980,30 +2032,28 @@ shrinkName nonce i = "\{generatedPrefix nonce}shrink_\{intToString i}"
 -- invoke `shrink`; structural plans deliberately use the shared construction
 -- policy above and remain displayable without imposing Debug on a nominal.
 plannedShrinkLines : String ->
-  List PlanModule ->
   NativeGraph ->
   Int ->
   List PropParam ->
   List GenPlan ->
   List String
-plannedShrinkLines _ _ _ _ [] _ = []
-plannedShrinkLines nonce modules graph i ps plans =
-  shrinkTopLines nonce modules graph i ps plans
-    ++ shrinkTryLines nonce modules graph i ps plans 0
+plannedShrinkLines _ _ _ [] _ = []
+plannedShrinkLines nonce graph i ps plans =
+  shrinkTopLines nonce graph i ps plans
+    ++ shrinkTryLines nonce graph i ps plans 0
 
 shrinkTopLines : String ->
-  List PlanModule ->
   NativeGraph ->
   Int ->
   List PropParam ->
   List GenPlan ->
   List String
-shrinkTopLines nonce modules graph i ps plans =
+shrinkTopLines nonce graph i ps plans =
   let startCandidates =
     candidateExprAt nonce graph i 0 (nthPlan 0 plans) (slotName nonce i 0)
   [
     "\{shrinkName nonce i} \{generatedPrefix nonce}fuel \{joinWith " " (paramSlots nonce i ps)} =",
-    "  if \{generatedPrefix nonce}fuel <= 0 then (False, \{plannedDetailSlots nonce modules graph i ps plans} ++ \" (WARNING: shrink fuel exhausted, counterexample may not be minimal — see #1307)\") else \{shrinkTryName nonce i 0} \{generatedPrefix nonce}fuel \{startCandidates} \{joinWith " " (paramSlots nonce i ps)}",
+    "  if \{generatedPrefix nonce}fuel <= 0 then (False, \{plannedDetailSlots nonce graph i ps plans} ++ \" (WARNING: shrink fuel exhausted, counterexample may not be minimal — see #1307)\") else \{shrinkTryName nonce i 0} \{generatedPrefix nonce}fuel \{startCandidates} \{joinWith " " (paramSlots nonce i ps)}",
     "",
   ]
 
@@ -2012,33 +2062,31 @@ shrinkTryName nonce i j =
   "\{generatedPrefix nonce}try_\{intToString i}_\{intToString j}"
 
 shrinkTryLines : String ->
-  List PlanModule ->
   NativeGraph ->
   Int ->
   List PropParam ->
   List GenPlan ->
   Int ->
   List String
-shrinkTryLines _nonce _ _ _ [] _ _ = []
-shrinkTryLines _nonce _ _ _ ps _ j
-  | j >= listLen ps = []
-shrinkTryLines nonce modules graph i ps plans j =
-  shrinkTryLine nonce modules graph i ps plans j
-    ++ shrinkTryLines nonce modules graph i ps plans (j + 1)
+shrinkTryLines nonce graph i ps0 plans j0 = go ps0 j0
+  where
+    go [] _ = []
+    go ps j
+      | j >= listLen ps = []
+    go ps j = shrinkTryLine nonce graph i ps plans j ++ go ps (j + 1)
 
 shrinkTryLine : String ->
-  List PlanModule ->
   NativeGraph ->
   Int ->
   List PropParam ->
   List GenPlan ->
   Int ->
   List String
-shrinkTryLine nonce modules graph i ps plans j =
+shrinkTryLine nonce graph i ps plans j =
   let params = paramSlots nonce i ps
   let after =
     if j + 1 >= listLen ps then
-      "(False, \{plannedDetailSlots nonce modules graph i ps plans})"
+      "(False, \{plannedDetailSlots nonce graph i ps plans})"
     else
       let nextCandidates =
         candidateExprAt
@@ -2081,41 +2129,40 @@ replaceName n replacement (x :: rest) =
   x :: replaceName (n - 1) replacement rest
 
 plannedDetailSlots : String ->
-  List PlanModule ->
   NativeGraph ->
   Int ->
   List PropParam ->
   List GenPlan ->
   String
-plannedDetailSlots _ _ _ _ [] _ = "\"counterexample\""
-plannedDetailSlots nonce modules graph i ps plans =
-  plannedDetailSlotsGo nonce modules graph i ps plans 0
+plannedDetailSlots _ _ _ [] _ = "\"counterexample\""
+plannedDetailSlots nonce graph i ps plans =
+  plannedDetailSlotsGo nonce graph i ps plans 0
 
 plannedDetailSlotsGo : String ->
-  List PlanModule ->
   NativeGraph ->
   Int ->
   List PropParam ->
   List GenPlan ->
   Int ->
   String
-plannedDetailSlotsGo _ _ _ _ [] _ _ = "\"counterexample\""
-plannedDetailSlotsGo nonce modules graph i ((PropParam name _ _) :: rest) (plan :: plans) j =
-  "\"\{name} = \" ++ \{graphDisplayRef graph (genNodePrefix nonce) plan (slotName nonce i j)}\{plannedDetailSlotsTail nonce modules graph i rest plans (j + 1)}"
-plannedDetailSlotsGo _ _ _ _ _ _ _ = "\"counterexample\""
+plannedDetailSlotsGo _ _ _ [] _ _ = "\"counterexample\""
+plannedDetailSlotsGo nonce graph i ((PropParam name _ _) :: rest) (plan :: plans) j =
+  "\"\{name} = \" ++ \{graphDisplayRef graph (genNodePrefix nonce) plan (slotName nonce i j)}\{plannedDetailSlotsTail nonce graph i rest plans (j + 1)}"
+plannedDetailSlotsGo _ _ _ _ _ _ = "\"counterexample\""
 
 plannedDetailSlotsTail : String ->
-  List PlanModule ->
   NativeGraph ->
   Int ->
   List PropParam ->
   List GenPlan ->
   Int ->
   String
-plannedDetailSlotsTail _ _ _ _ [] _ _ = ""
-plannedDetailSlotsTail nonce modules graph i ((PropParam name _ _) :: rest) (plan :: plans) j =
-  " ++ \"\\n\" ++ \"\{name} = \" ++ \{graphDisplayRef graph (genNodePrefix nonce) plan (slotName nonce i j)}\{plannedDetailSlotsTail nonce modules graph i rest plans (j + 1)}"
-plannedDetailSlotsTail _ _ _ _ _ _ _ = ""
+plannedDetailSlotsTail nonce graph i p0 pl0 j0 = go p0 pl0 j0
+  where
+    go [] _ _ = ""
+    go ((PropParam name _ _) :: rest) (plan :: plans) j =
+      " ++ \"\\n\" ++ \"\{name} = \" ++ \{graphDisplayRef graph (genNodePrefix nonce) plan (slotName nonce i j)}\{go rest plans (j + 1)}"
+    go _ _ _ = ""
 
 tupleVars : Int -> List String
 tupleVars n = tupleVarsGo n 0

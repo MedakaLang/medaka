@@ -1,5 +1,5 @@
 # META
-source_lines=478
+source_lines=480
 stages=DESUGAR,MARK
 # SOURCE
 -- compiler/tools/native_test_decls.mdk — the NATIVE execution engine for
@@ -446,6 +446,8 @@ renderAll : List Chunk ->
   Int ->
   List (String, Int, Expr) ->
   List ExResult
+-- Bound: list built in tail position modulo cons: a where-local go loses the constant-stack loop until the lambda-lift pass (#4878); convert then.
+-- lint-disable-next-line rule-threaded-invariant
 renderAll _ _ _ [] = []
 renderAll chunks note i (_ :: rest) =
   renderOne chunks note i :: renderAll chunks note (i + 1) rest

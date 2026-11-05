@@ -1,5 +1,5 @@
 # META
-source_lines=583
+source_lines=585
 stages=DESUGAR,MARK
 # SOURCE
 import support.diag_codes.{DiagCode(..)}
@@ -137,16 +137,18 @@ foldTargetDiags : String ->
   List Diag ->
   List (String, String, List Diag) ->
   <IO> List (String, String, List Diag)
-foldTargetDiags _ _ [] triples = triples
-foldTargetDiags entry entrySrc (d :: ds) triples =
-  let file = targetDiagFile entry d
-  let folded =
-    if anyList ((p, _, _) => p == file) triples then
-      cjFoldIntoFile file [d] triples
-    else
-      let src = if file == entry then entrySrc else readFileSafe file
-      triples ++ [(file, src, [d])]
-  foldTargetDiags entry entrySrc ds folded
+foldTargetDiags entry entrySrc xs0 triples0 = go xs0 triples0
+  where
+    go [] triples = triples
+    go (d :: ds) triples =
+      let file = targetDiagFile entry d
+      let folded =
+        if anyList ((p, _, _) => p == file) triples then
+          cjFoldIntoFile file [d] triples
+        else
+          let src = if file == entry then entrySrc else readFileSafe file
+          triples ++ [(file, src, [d])]
+      go ds folded
 
 -- The entry's refusal, or `None` when `main` performs nothing the profile
 -- withholds.  The entry judged is the one the drivers run: a value `main` they
@@ -621,8 +623,7 @@ firstOr _ (x :: _) = x
 (DTypeSig true "ppTargetDiag" (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyCon "Diag") (TyEffect ("IO") None (TyCon "String"))))))
 (DFunDef false "ppTargetDiag" ((PVar "entry") (PVar "entrySrc") (PVar "d")) (EBlock (DoLet false false (PVar "file") (EApp (EApp (EVar "targetDiagFile") (EVar "entry")) (EVar "d"))) (DoLet false false (PVar "src") (EIf (EBinOp "==" (EVar "file") (EVar "entry")) (EVar "entrySrc") (EApp (EVar "readFileSafe") (EVar "file")))) (DoExpr (EApp (EApp (EApp (EVar "ppDiagCliLines") (EApp (EVar "srcLinesArr") (EVar "src"))) (EVar "file")) (EVar "d")))))
 (DTypeSig true "foldTargetDiags" (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "Diag")) (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "String") (TyApp (TyCon "List") (TyCon "Diag")))) (TyEffect ("IO") None (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "String") (TyApp (TyCon "List") (TyCon "Diag"))))))))))
-(DFunDef false "foldTargetDiags" (PWild PWild (PList) (PVar "triples")) (EVar "triples"))
-(DFunDef false "foldTargetDiags" ((PVar "entry") (PVar "entrySrc") (PCons (PVar "d") (PVar "ds")) (PVar "triples")) (EBlock (DoLet false false (PVar "file") (EApp (EApp (EVar "targetDiagFile") (EVar "entry")) (EVar "d"))) (DoLet false false (PVar "folded") (EIf (EApp (EApp (EVar "anyList") (ELam ((PTuple (PVar "p") PWild PWild)) (EBinOp "==" (EVar "p") (EVar "file")))) (EVar "triples")) (EApp (EApp (EApp (EVar "cjFoldIntoFile") (EVar "file")) (EListLit (EVar "d"))) (EVar "triples")) (EBlock (DoLet false false (PVar "src") (EIf (EBinOp "==" (EVar "file") (EVar "entry")) (EVar "entrySrc") (EApp (EVar "readFileSafe") (EVar "file")))) (DoExpr (EBinOp "++" (EVar "triples") (EListLit (ETuple (EVar "file") (EVar "src") (EListLit (EVar "d"))))))))) (DoExpr (EApp (EApp (EApp (EApp (EVar "foldTargetDiags") (EVar "entry")) (EVar "entrySrc")) (EVar "ds")) (EVar "folded")))))
+(DFunDef false "foldTargetDiags" ((PVar "entry") (PVar "entrySrc") (PVar "xs0") (PVar "triples0")) (ELetGroup ((lgb "go" (clause ((PList) (PVar "triples")) (EVar "triples")) (clause ((PCons (PVar "d") (PVar "ds")) (PVar "triples")) (EBlock (DoLet false false (PVar "file") (EApp (EApp (EVar "targetDiagFile") (EVar "entry")) (EVar "d"))) (DoLet false false (PVar "folded") (EIf (EApp (EApp (EVar "anyList") (ELam ((PTuple (PVar "p") PWild PWild)) (EBinOp "==" (EVar "p") (EVar "file")))) (EVar "triples")) (EApp (EApp (EApp (EVar "cjFoldIntoFile") (EVar "file")) (EListLit (EVar "d"))) (EVar "triples")) (EBlock (DoLet false false (PVar "src") (EIf (EBinOp "==" (EVar "file") (EVar "entry")) (EVar "entrySrc") (EApp (EVar "readFileSafe") (EVar "file")))) (DoExpr (EBinOp "++" (EVar "triples") (EListLit (ETuple (EVar "file") (EVar "src") (EListLit (EVar "d"))))))))) (DoExpr (EApp (EApp (EVar "go") (EVar "ds")) (EVar "folded"))))))) (EApp (EApp (EVar "go") (EVar "xs0")) (EVar "triples0"))))
 (DTypeSig false "capabilityRefusal" (TyFun (TyCon "TargetProfile") (TyFun (TyCon "TargetInputs") (TyFun (TyCon "Scheme") (TyApp (TyCon "Option") (TyCon "Diag"))))))
 (DFunDef false "capabilityRefusal" ((PVar "profile") (PVar "analysis") (PVar "_sch")) (EBlock (DoLet false false (PVar "request") (ERecordCreate "ManifestRequest" ((fa "entry" (EApp (EVar "mainEntryKey") (EFieldAccess (EVar "analysis") "tiModules"))) (fa "protocol" (EVar "ExecutedMain"))))) (DoExpr (EMatch (EApp (EApp (EApp (EVar "lookupManifest") (EVar "request")) (EFieldAccess (EFieldAccess (EVar "analysis") "tiOutputs") "doManifestRequests")) (EFieldAccess (EFieldAccess (EVar "analysis") "tiOutputs") "doManifests")) (arm (PCon "Published" (PVar "manifest")) () (EApp (EApp (EApp (EVar "manifestCapabilityRefusal") (EVar "profile")) (EVar "analysis")) (EVar "manifest"))) (arm PWild () (EApp (EVar "Some") (EApp (EApp (EApp (EApp (EVar "mkDiag") (EVar "SevError")) (EVar "targetCapabilityCode")) (ELit (LString "missing checked ExecutedMain manifest"))) (EApp (EVar "entryLoc") (EFieldAccess (EVar "analysis") "tiEntryDecls")))))))))
 (DTypeSig false "manifestCapabilityRefusal" (TyFun (TyCon "TargetProfile") (TyFun (TyCon "TargetInputs") (TyFun (TyCon "CapabilityManifest") (TyApp (TyCon "Option") (TyCon "Diag"))))))
@@ -766,8 +767,7 @@ firstOr _ (x :: _) = x
 (DTypeSig true "ppTargetDiag" (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyCon "Diag") (TyEffect ("IO") None (TyCon "String"))))))
 (DFunDef false "ppTargetDiag" ((PVar "entry") (PVar "entrySrc") (PVar "d")) (EBlock (DoLet false false (PVar "file") (EApp (EApp (EVar "targetDiagFile") (EVar "entry")) (EVar "d"))) (DoLet false false (PVar "src") (EIf (EBinOp "==" (EVar "file") (EVar "entry")) (EVar "entrySrc") (EApp (EVar "readFileSafe") (EVar "file")))) (DoExpr (EApp (EApp (EApp (EVar "ppDiagCliLines") (EApp (EVar "srcLinesArr") (EVar "src"))) (EVar "file")) (EVar "d")))))
 (DTypeSig true "foldTargetDiags" (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "Diag")) (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "String") (TyApp (TyCon "List") (TyCon "Diag")))) (TyEffect ("IO") None (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "String") (TyApp (TyCon "List") (TyCon "Diag"))))))))))
-(DFunDef false "foldTargetDiags" (PWild PWild (PList) (PVar "triples")) (EVar "triples"))
-(DFunDef false "foldTargetDiags" ((PVar "entry") (PVar "entrySrc") (PCons (PVar "d") (PVar "ds")) (PVar "triples")) (EBlock (DoLet false false (PVar "file") (EApp (EApp (EVar "targetDiagFile") (EVar "entry")) (EVar "d"))) (DoLet false false (PVar "folded") (EIf (EApp (EApp (EVar "anyList") (ELam ((PTuple (PVar "p") PWild PWild)) (EBinOp "==" (EVar "p") (EVar "file")))) (EVar "triples")) (EApp (EApp (EApp (EVar "cjFoldIntoFile") (EVar "file")) (EListLit (EVar "d"))) (EVar "triples")) (EBlock (DoLet false false (PVar "src") (EIf (EBinOp "==" (EVar "file") (EVar "entry")) (EVar "entrySrc") (EApp (EVar "readFileSafe") (EVar "file")))) (DoExpr (EBinOp "++" (EVar "triples") (EListLit (ETuple (EVar "file") (EVar "src") (EListLit (EVar "d"))))))))) (DoExpr (EApp (EApp (EApp (EApp (EVar "foldTargetDiags") (EVar "entry")) (EVar "entrySrc")) (EVar "ds")) (EVar "folded")))))
+(DFunDef false "foldTargetDiags" ((PVar "entry") (PVar "entrySrc") (PVar "xs0") (PVar "triples0")) (ELetGroup ((lgb "go" (clause ((PList) (PVar "triples")) (EVar "triples")) (clause ((PCons (PVar "d") (PVar "ds")) (PVar "triples")) (EBlock (DoLet false false (PVar "file") (EApp (EApp (EVar "targetDiagFile") (EVar "entry")) (EVar "d"))) (DoLet false false (PVar "folded") (EIf (EApp (EApp (EVar "anyList") (ELam ((PTuple (PVar "p") PWild PWild)) (EBinOp "==" (EVar "p") (EVar "file")))) (EVar "triples")) (EApp (EApp (EApp (EVar "cjFoldIntoFile") (EVar "file")) (EListLit (EVar "d"))) (EVar "triples")) (EBlock (DoLet false false (PVar "src") (EIf (EBinOp "==" (EVar "file") (EVar "entry")) (EVar "entrySrc") (EApp (EVar "readFileSafe") (EVar "file")))) (DoExpr (EBinOp "++" (EVar "triples") (EListLit (ETuple (EVar "file") (EVar "src") (EListLit (EVar "d"))))))))) (DoExpr (EApp (EApp (EVar "go") (EVar "ds")) (EVar "folded"))))))) (EApp (EApp (EVar "go") (EVar "xs0")) (EVar "triples0"))))
 (DTypeSig false "capabilityRefusal" (TyFun (TyCon "TargetProfile") (TyFun (TyCon "TargetInputs") (TyFun (TyCon "Scheme") (TyApp (TyCon "Option") (TyCon "Diag"))))))
 (DFunDef false "capabilityRefusal" ((PVar "profile") (PVar "analysis") (PVar "_sch")) (EBlock (DoLet false false (PVar "request") (ERecordCreate "ManifestRequest" ((fa "entry" (EApp (EVar "mainEntryKey") (EFieldAccess (EVar "analysis") "tiModules"))) (fa "protocol" (EVar "ExecutedMain"))))) (DoExpr (EMatch (EApp (EApp (EApp (EVar "lookupManifest") (EVar "request")) (EFieldAccess (EFieldAccess (EVar "analysis") "tiOutputs") "doManifestRequests")) (EFieldAccess (EFieldAccess (EVar "analysis") "tiOutputs") "doManifests")) (arm (PCon "Published" (PVar "manifest")) () (EApp (EApp (EApp (EVar "manifestCapabilityRefusal") (EVar "profile")) (EVar "analysis")) (EVar "manifest"))) (arm PWild () (EApp (EVar "Some") (EApp (EApp (EApp (EApp (EVar "mkDiag") (EVar "SevError")) (EVar "targetCapabilityCode")) (ELit (LString "missing checked ExecutedMain manifest"))) (EApp (EVar "entryLoc") (EFieldAccess (EVar "analysis") "tiEntryDecls")))))))))
 (DTypeSig false "manifestCapabilityRefusal" (TyFun (TyCon "TargetProfile") (TyFun (TyCon "TargetInputs") (TyFun (TyCon "CapabilityManifest") (TyApp (TyCon "Option") (TyCon "Diag"))))))

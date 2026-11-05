@@ -185,6 +185,8 @@ externScan : List Decl ->
   HashMap String Unit ->
   HashMap String Unit ->
   List String
+-- Bound: list built in tail position modulo cons: a where-local go loses the constant-stack loop until the lambda-lift pass (#4878); convert then.
+-- lint-disable-next-line rule-threaded-invariant
 externScan [] _ _ = []
 externScan ((DAttrib _ d) :: rest) bound emitted =
   externScan (d :: rest) bound emitted
@@ -232,9 +234,11 @@ closureOver : HashMap String (List String) ->
   HashMap String Unit ->
   List String ->
   Unit
-closureOver _ _ [] = ()
-closureOver graph seen (w :: work)
-  | has w seen = closureOver graph seen work
-  | otherwise =
-    setInPlace w () seen
-    closureOver graph seen (findWithDefault [] w graph ++ work)
+closureOver graph seen xs0 = go xs0
+  where
+    go [] = ()
+    go (w :: work)
+      | has w seen = go work
+      | otherwise =
+        setInPlace w () seen
+        go (findWithDefault [] w graph ++ work)

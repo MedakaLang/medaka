@@ -133,16 +133,18 @@ foldTargetDiags : String ->
   List Diag ->
   List (String, String, List Diag) ->
   <IO> List (String, String, List Diag)
-foldTargetDiags _ _ [] triples = triples
-foldTargetDiags entry entrySrc (d :: ds) triples =
-  let file = targetDiagFile entry d
-  let folded =
-    if anyList ((p, _, _) => p == file) triples then
-      cjFoldIntoFile file [d] triples
-    else
-      let src = if file == entry then entrySrc else readFileSafe file
-      triples ++ [(file, src, [d])]
-  foldTargetDiags entry entrySrc ds folded
+foldTargetDiags entry entrySrc xs0 triples0 = go xs0 triples0
+  where
+    go [] triples = triples
+    go (d :: ds) triples =
+      let file = targetDiagFile entry d
+      let folded =
+        if anyList ((p, _, _) => p == file) triples then
+          cjFoldIntoFile file [d] triples
+        else
+          let src = if file == entry then entrySrc else readFileSafe file
+          triples ++ [(file, src, [d])]
+      go ds folded
 
 -- The entry's refusal, or `None` when `main` performs nothing the profile
 -- withholds.  The entry judged is the one the drivers run: a value `main` they

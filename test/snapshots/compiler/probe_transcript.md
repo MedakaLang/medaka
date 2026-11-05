@@ -1,5 +1,5 @@
 # META
-source_lines=413
+source_lines=410
 stages=DESUGAR,MARK
 # SOURCE
 -- compiler/tools/probe_transcript.mdk — the sentinel-delimited stdout format
@@ -193,45 +193,40 @@ occupiedNonceTokens : String ->
   List Token ->
   OrdMap Unit ->
   OrdMap Unit
-occupiedNonceTokens _ _ [] occupied = occupied
-occupiedNonceTokens nonce prefixes ((TIdent name) :: rest) occupied =
-  occupiedNonceTokens
-    nonce
-    prefixes
-    rest
-    (occupiedNonceName nonce prefixes name occupied)
-occupiedNonceTokens nonce prefixes ((TUpper name) :: rest) occupied =
-  occupiedNonceTokens
-    nonce
-    prefixes
-    rest
-    (occupiedNonceName nonce prefixes name occupied)
-occupiedNonceTokens nonce prefixes (_ :: rest) occupied =
-  occupiedNonceTokens nonce prefixes rest occupied
+occupiedNonceTokens nonce prefixes xs0 occupied0 = go xs0 occupied0
+  where
+    go [] occupied = occupied
+    go ((TIdent name) :: rest) occupied =
+      go rest (occupiedNonceName nonce prefixes name occupied)
+    go ((TUpper name) :: rest) occupied =
+      go rest (occupiedNonceName nonce prefixes name occupied)
+    go (_ :: rest) occupied = go rest occupied
 
 occupiedNonceName : String ->
   List String ->
   String ->
   OrdMap Unit ->
   OrdMap Unit
-occupiedNonceName _ [] _ occupied = occupied
-occupiedNonceName nonce (prefix :: rest) name occupied =
-  let stem = prefix ++ nonce
-  if startsWith stem name then
-    let tail = stringSlice (stringLength stem) (stringLength name) name
-    if tail == "" || startsWith "_" tail then
-      let used = omInsert "0" () occupied
-      let chars = stringToChars tail
-      let end = nonceSuffixEnd chars 1
-      let digits = if end > 20 then "" else stringSlice 1 end tail
-      let next = match toInt digits
-        Some index => omInsert (intToString index) () used
-        None => used
-      occupiedNonceName nonce rest name next
-    else
-      occupiedNonceName nonce rest name occupied
-  else
-    occupiedNonceName nonce rest name occupied
+occupiedNonceName nonce xs0 name occupied0 = go xs0 occupied0
+  where
+    go [] occupied = occupied
+    go (prefix :: rest) occupied =
+      let stem = prefix ++ nonce
+      if startsWith stem name then
+        let tail = stringSlice (stringLength stem) (stringLength name) name
+        if tail == "" || startsWith "_" tail then
+          let used = omInsert "0" () occupied
+          let chars = stringToChars tail
+          let end = nonceSuffixEnd chars 1
+          let digits = if end > 20 then "" else stringSlice 1 end tail
+          let next = match toInt digits
+            Some index => omInsert (intToString index) () used
+            None => used
+          go rest next
+        else
+          go rest occupied
+      else
+        go rest occupied
 
 nonceSuffixEnd : Array Char -> Int -> Int
 nonceSuffixEnd chars i =
@@ -337,15 +332,17 @@ unquoteLit s =
     None
 
 unquoteScan : Array Char -> Int -> Int -> List Char -> Option String
-unquoteScan cs i end acc
-  | i >= end = Some (stringFromChars (arrayFromList (reverseL acc)))
-  | arrayGetUnsafe i cs == '\\' =
-    if i + 1 >= end then
-      None
-    else match unescapeChar (arrayGetUnsafe (i + 1) cs)
-      Some c => unquoteScan cs (i + 2) end (c :: acc)
-      None => None
-  | otherwise = unquoteScan cs (i + 1) end (arrayGetUnsafe i cs :: acc)
+unquoteScan cs i0 end acc0 = go i0 acc0
+  where
+    go i acc
+      | i >= end = Some (stringFromChars (arrayFromList (reverseL acc)))
+      | arrayGetUnsafe i cs == '\\' =
+        if i + 1 >= end then
+          None
+        else match unescapeChar (arrayGetUnsafe (i + 1) cs)
+          Some c => go (i + 2) (c :: acc)
+          None => None
+      | otherwise = go (i + 1) (arrayGetUnsafe i cs :: acc)
 
 unescapeChar : Char -> Option Char
 unescapeChar 'n' = Some '\n'
@@ -454,13 +451,9 @@ renameHeads n (h :: hs) (l :: ls)
 (DTypeSig true "freshProbeNonce" (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyCon "String") (TyCon "String")))))
 (DFunDef false "freshProbeNonce" ((PVar "nonce") (PVar "prefixes") (PVar "source")) (EBlock (DoLet false false (PTuple (PVar "tokens") PWild) (EApp (EVar "probeTokens") (EVar "source"))) (DoLet false false (PVar "occupied") (EApp (EApp (EApp (EApp (EVar "occupiedNonceTokens") (EVar "nonce")) (EVar "prefixes")) (EVar "tokens")) (EVar "omEmpty"))) (DoLet false false (PVar "index") (EApp (EApp (EVar "freeNonceIndex") (EVar "occupied")) (ELit (LInt 0)))) (DoExpr (EIf (EBinOp "==" (EVar "index") (ELit (LInt 0))) (EVar "nonce") (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "")) (EApp (EVar "display") (EVar "nonce"))) (ELit (LString "_"))) (EApp (EVar "display") (EApp (EVar "intToString") (EVar "index")))) (ELit (LString "")))))))
 (DTypeSig false "occupiedNonceTokens" (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyApp (TyCon "List") (TyCon "Token")) (TyFun (TyApp (TyCon "OrdMap") (TyCon "Unit")) (TyApp (TyCon "OrdMap") (TyCon "Unit")))))))
-(DFunDef false "occupiedNonceTokens" (PWild PWild (PList) (PVar "occupied")) (EVar "occupied"))
-(DFunDef false "occupiedNonceTokens" ((PVar "nonce") (PVar "prefixes") (PCons (PCon "TIdent" (PVar "name")) (PVar "rest")) (PVar "occupied")) (EApp (EApp (EApp (EApp (EVar "occupiedNonceTokens") (EVar "nonce")) (EVar "prefixes")) (EVar "rest")) (EApp (EApp (EApp (EApp (EVar "occupiedNonceName") (EVar "nonce")) (EVar "prefixes")) (EVar "name")) (EVar "occupied"))))
-(DFunDef false "occupiedNonceTokens" ((PVar "nonce") (PVar "prefixes") (PCons (PCon "TUpper" (PVar "name")) (PVar "rest")) (PVar "occupied")) (EApp (EApp (EApp (EApp (EVar "occupiedNonceTokens") (EVar "nonce")) (EVar "prefixes")) (EVar "rest")) (EApp (EApp (EApp (EApp (EVar "occupiedNonceName") (EVar "nonce")) (EVar "prefixes")) (EVar "name")) (EVar "occupied"))))
-(DFunDef false "occupiedNonceTokens" ((PVar "nonce") (PVar "prefixes") (PCons PWild (PVar "rest")) (PVar "occupied")) (EApp (EApp (EApp (EApp (EVar "occupiedNonceTokens") (EVar "nonce")) (EVar "prefixes")) (EVar "rest")) (EVar "occupied")))
+(DFunDef false "occupiedNonceTokens" ((PVar "nonce") (PVar "prefixes") (PVar "xs0") (PVar "occupied0")) (ELetGroup ((lgb "go" (clause ((PList) (PVar "occupied")) (EVar "occupied")) (clause ((PCons (PCon "TIdent" (PVar "name")) (PVar "rest")) (PVar "occupied")) (EApp (EApp (EVar "go") (EVar "rest")) (EApp (EApp (EApp (EApp (EVar "occupiedNonceName") (EVar "nonce")) (EVar "prefixes")) (EVar "name")) (EVar "occupied")))) (clause ((PCons (PCon "TUpper" (PVar "name")) (PVar "rest")) (PVar "occupied")) (EApp (EApp (EVar "go") (EVar "rest")) (EApp (EApp (EApp (EApp (EVar "occupiedNonceName") (EVar "nonce")) (EVar "prefixes")) (EVar "name")) (EVar "occupied")))) (clause ((PCons PWild (PVar "rest")) (PVar "occupied")) (EApp (EApp (EVar "go") (EVar "rest")) (EVar "occupied"))))) (EApp (EApp (EVar "go") (EVar "xs0")) (EVar "occupied0"))))
 (DTypeSig false "occupiedNonceName" (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyCon "String") (TyFun (TyApp (TyCon "OrdMap") (TyCon "Unit")) (TyApp (TyCon "OrdMap") (TyCon "Unit")))))))
-(DFunDef false "occupiedNonceName" (PWild (PList) PWild (PVar "occupied")) (EVar "occupied"))
-(DFunDef false "occupiedNonceName" ((PVar "nonce") (PCons (PVar "prefix") (PVar "rest")) (PVar "name") (PVar "occupied")) (EBlock (DoLet false false (PVar "stem") (EBinOp "++" (EVar "prefix") (EVar "nonce"))) (DoExpr (EIf (EApp (EApp (EVar "startsWith") (EVar "stem")) (EVar "name")) (EBlock (DoLet false false (PVar "tail") (EApp (EApp (EApp (EVar "stringSlice") (EApp (EVar "stringLength") (EVar "stem"))) (EApp (EVar "stringLength") (EVar "name"))) (EVar "name"))) (DoExpr (EIf (EBinOp "||" (EBinOp "==" (EVar "tail") (ELit (LString ""))) (EApp (EApp (EVar "startsWith") (ELit (LString "_"))) (EVar "tail"))) (EBlock (DoLet false false (PVar "used") (EApp (EApp (EApp (EVar "omInsert") (ELit (LString "0"))) (ELit LUnit)) (EVar "occupied"))) (DoLet false false (PVar "chars") (EApp (EVar "stringToChars") (EVar "tail"))) (DoLet false false (PVar "end") (EApp (EApp (EVar "nonceSuffixEnd") (EVar "chars")) (ELit (LInt 1)))) (DoLet false false (PVar "digits") (EIf (EBinOp ">" (EVar "end") (ELit (LInt 20))) (ELit (LString "")) (EApp (EApp (EApp (EVar "stringSlice") (ELit (LInt 1))) (EVar "end")) (EVar "tail")))) (DoLet false false (PVar "next") (EMatch (EApp (EVar "toInt") (EVar "digits")) (arm (PCon "Some" (PVar "index")) () (EApp (EApp (EApp (EVar "omInsert") (EApp (EVar "intToString") (EVar "index"))) (ELit LUnit)) (EVar "used"))) (arm (PCon "None") () (EVar "used")))) (DoExpr (EApp (EApp (EApp (EApp (EVar "occupiedNonceName") (EVar "nonce")) (EVar "rest")) (EVar "name")) (EVar "next")))) (EApp (EApp (EApp (EApp (EVar "occupiedNonceName") (EVar "nonce")) (EVar "rest")) (EVar "name")) (EVar "occupied"))))) (EApp (EApp (EApp (EApp (EVar "occupiedNonceName") (EVar "nonce")) (EVar "rest")) (EVar "name")) (EVar "occupied"))))))
+(DFunDef false "occupiedNonceName" ((PVar "nonce") (PVar "xs0") (PVar "name") (PVar "occupied0")) (ELetGroup ((lgb "go" (clause ((PList) (PVar "occupied")) (EVar "occupied")) (clause ((PCons (PVar "prefix") (PVar "rest")) (PVar "occupied")) (EBlock (DoLet false false (PVar "stem") (EBinOp "++" (EVar "prefix") (EVar "nonce"))) (DoExpr (EIf (EApp (EApp (EVar "startsWith") (EVar "stem")) (EVar "name")) (EBlock (DoLet false false (PVar "tail") (EApp (EApp (EApp (EVar "stringSlice") (EApp (EVar "stringLength") (EVar "stem"))) (EApp (EVar "stringLength") (EVar "name"))) (EVar "name"))) (DoExpr (EIf (EBinOp "||" (EBinOp "==" (EVar "tail") (ELit (LString ""))) (EApp (EApp (EVar "startsWith") (ELit (LString "_"))) (EVar "tail"))) (EBlock (DoLet false false (PVar "used") (EApp (EApp (EApp (EVar "omInsert") (ELit (LString "0"))) (ELit LUnit)) (EVar "occupied"))) (DoLet false false (PVar "chars") (EApp (EVar "stringToChars") (EVar "tail"))) (DoLet false false (PVar "end") (EApp (EApp (EVar "nonceSuffixEnd") (EVar "chars")) (ELit (LInt 1)))) (DoLet false false (PVar "digits") (EIf (EBinOp ">" (EVar "end") (ELit (LInt 20))) (ELit (LString "")) (EApp (EApp (EApp (EVar "stringSlice") (ELit (LInt 1))) (EVar "end")) (EVar "tail")))) (DoLet false false (PVar "next") (EMatch (EApp (EVar "toInt") (EVar "digits")) (arm (PCon "Some" (PVar "index")) () (EApp (EApp (EApp (EVar "omInsert") (EApp (EVar "intToString") (EVar "index"))) (ELit LUnit)) (EVar "used"))) (arm (PCon "None") () (EVar "used")))) (DoExpr (EApp (EApp (EVar "go") (EVar "rest")) (EVar "next")))) (EApp (EApp (EVar "go") (EVar "rest")) (EVar "occupied"))))) (EApp (EApp (EVar "go") (EVar "rest")) (EVar "occupied")))))))) (EApp (EApp (EVar "go") (EVar "xs0")) (EVar "occupied0"))))
 (DTypeSig false "nonceSuffixEnd" (TyFun (TyApp (TyCon "Array") (TyCon "Char")) (TyFun (TyCon "Int") (TyCon "Int"))))
 (DFunDef false "nonceSuffixEnd" ((PVar "chars") (PVar "i")) (EIf (EBinOp "||" (EBinOp ">=" (EVar "i") (EApp (EVar "arrayLength") (EVar "chars"))) (EBinOp ">" (EVar "i") (ELit (LInt 20)))) (EVar "i") (EBlock (DoLet false false (PVar "char") (EApp (EApp (EVar "index") (EVar "chars")) (EVar "i"))) (DoExpr (EIf (EBinOp "&&" (EBinOp ">=" (EVar "char") (ELit (LChar "0"))) (EBinOp "<=" (EVar "char") (ELit (LChar "9")))) (EApp (EApp (EVar "nonceSuffixEnd") (EVar "chars")) (EBinOp "+" (EVar "i") (ELit (LInt 1)))) (EVar "i"))))))
 (DTypeSig false "freeNonceIndex" (TyFun (TyApp (TyCon "OrdMap") (TyCon "Unit")) (TyFun (TyCon "Int") (TyCon "Int"))))
@@ -491,7 +484,7 @@ renameHeads n (h :: hs) (l :: ls)
 (DTypeSig true "unquoteLit" (TyFun (TyCon "String") (TyApp (TyCon "Option") (TyCon "String"))))
 (DFunDef false "unquoteLit" ((PVar "s")) (EBlock (DoLet false false (PVar "cs") (EApp (EVar "stringToChars") (EVar "s"))) (DoLet false false (PVar "n") (EApp (EVar "arrayLength") (EVar "cs"))) (DoExpr (EIf (EBinOp "&&" (EBinOp "&&" (EBinOp ">=" (EVar "n") (ELit (LInt 2))) (EBinOp "==" (EApp (EApp (EVar "arrayGetUnsafe") (ELit (LInt 0))) (EVar "cs")) (ELit (LChar "\"")))) (EBinOp "==" (EApp (EApp (EVar "arrayGetUnsafe") (EBinOp "-" (EVar "n") (ELit (LInt 1)))) (EVar "cs")) (ELit (LChar "\"")))) (EApp (EApp (EApp (EApp (EVar "unquoteScan") (EVar "cs")) (ELit (LInt 1))) (EBinOp "-" (EVar "n") (ELit (LInt 1)))) (EListLit)) (EVar "None")))))
 (DTypeSig false "unquoteScan" (TyFun (TyApp (TyCon "Array") (TyCon "Char")) (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyFun (TyApp (TyCon "List") (TyCon "Char")) (TyApp (TyCon "Option") (TyCon "String")))))))
-(DFunDef false "unquoteScan" ((PVar "cs") (PVar "i") (PVar "end") (PVar "acc")) (EIf (EBinOp ">=" (EVar "i") (EVar "end")) (EApp (EVar "Some") (EApp (EVar "stringFromChars") (EApp (EVar "arrayFromList") (EApp (EVar "reverseL") (EVar "acc"))))) (EIf (EBinOp "==" (EApp (EApp (EVar "arrayGetUnsafe") (EVar "i")) (EVar "cs")) (ELit (LChar "\\"))) (EIf (EBinOp ">=" (EBinOp "+" (EVar "i") (ELit (LInt 1))) (EVar "end")) (EVar "None") (EMatch (EApp (EVar "unescapeChar") (EApp (EApp (EVar "arrayGetUnsafe") (EBinOp "+" (EVar "i") (ELit (LInt 1)))) (EVar "cs"))) (arm (PCon "Some" (PVar "c")) () (EApp (EApp (EApp (EApp (EVar "unquoteScan") (EVar "cs")) (EBinOp "+" (EVar "i") (ELit (LInt 2)))) (EVar "end")) (EBinOp "::" (EVar "c") (EVar "acc")))) (arm (PCon "None") () (EVar "None")))) (EIf (EVar "otherwise") (EApp (EApp (EApp (EApp (EVar "unquoteScan") (EVar "cs")) (EBinOp "+" (EVar "i") (ELit (LInt 1)))) (EVar "end")) (EBinOp "::" (EApp (EApp (EVar "arrayGetUnsafe") (EVar "i")) (EVar "cs")) (EVar "acc"))) (EApp (EVar "__fallthrough__") (ELit LUnit))))))
+(DFunDef false "unquoteScan" ((PVar "cs") (PVar "i0") (PVar "end") (PVar "acc0")) (ELetGroup ((lgb "go" (clause ((PVar "i") (PVar "acc")) (EIf (EBinOp ">=" (EVar "i") (EVar "end")) (EApp (EVar "Some") (EApp (EVar "stringFromChars") (EApp (EVar "arrayFromList") (EApp (EVar "reverseL") (EVar "acc"))))) (EIf (EBinOp "==" (EApp (EApp (EVar "arrayGetUnsafe") (EVar "i")) (EVar "cs")) (ELit (LChar "\\"))) (EIf (EBinOp ">=" (EBinOp "+" (EVar "i") (ELit (LInt 1))) (EVar "end")) (EVar "None") (EMatch (EApp (EVar "unescapeChar") (EApp (EApp (EVar "arrayGetUnsafe") (EBinOp "+" (EVar "i") (ELit (LInt 1)))) (EVar "cs"))) (arm (PCon "Some" (PVar "c")) () (EApp (EApp (EVar "go") (EBinOp "+" (EVar "i") (ELit (LInt 2)))) (EBinOp "::" (EVar "c") (EVar "acc")))) (arm (PCon "None") () (EVar "None")))) (EIf (EVar "otherwise") (EApp (EApp (EVar "go") (EBinOp "+" (EVar "i") (ELit (LInt 1)))) (EBinOp "::" (EApp (EApp (EVar "arrayGetUnsafe") (EVar "i")) (EVar "cs")) (EVar "acc"))) (EApp (EVar "__fallthrough__") (ELit LUnit)))))))) (EApp (EApp (EVar "go") (EVar "i0")) (EVar "acc0"))))
 (DTypeSig false "unescapeChar" (TyFun (TyCon "Char") (TyApp (TyCon "Option") (TyCon "Char"))))
 (DFunDef false "unescapeChar" ((PLit (LChar "n"))) (EApp (EVar "Some") (ELit (LChar "\n"))))
 (DFunDef false "unescapeChar" ((PLit (LChar "t"))) (EApp (EVar "Some") (ELit (LChar "\t"))))
@@ -559,13 +552,9 @@ renameHeads n (h :: hs) (l :: ls)
 (DTypeSig true "freshProbeNonce" (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyCon "String") (TyCon "String")))))
 (DFunDef false "freshProbeNonce" ((PVar "nonce") (PVar "prefixes") (PVar "source")) (EBlock (DoLet false false (PTuple (PVar "tokens") PWild) (EApp (EVar "probeTokens") (EVar "source"))) (DoLet false false (PVar "occupied") (EApp (EApp (EApp (EApp (EVar "occupiedNonceTokens") (EVar "nonce")) (EVar "prefixes")) (EVar "tokens")) (EVar "omEmpty"))) (DoLet false false (PVar "index") (EApp (EApp (EVar "freeNonceIndex") (EVar "occupied")) (ELit (LInt 0)))) (DoExpr (EIf (EBinOp "==" (EMethodRef "index") (ELit (LInt 0))) (EVar "nonce") (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "")) (EApp (EMethodRef "display") (EVar "nonce"))) (ELit (LString "_"))) (EApp (EMethodRef "display") (EApp (EVar "intToString") (EMethodRef "index")))) (ELit (LString "")))))))
 (DTypeSig false "occupiedNonceTokens" (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyApp (TyCon "List") (TyCon "Token")) (TyFun (TyApp (TyCon "OrdMap") (TyCon "Unit")) (TyApp (TyCon "OrdMap") (TyCon "Unit")))))))
-(DFunDef false "occupiedNonceTokens" (PWild PWild (PList) (PVar "occupied")) (EVar "occupied"))
-(DFunDef false "occupiedNonceTokens" ((PVar "nonce") (PVar "prefixes") (PCons (PCon "TIdent" (PVar "name")) (PVar "rest")) (PVar "occupied")) (EApp (EApp (EApp (EApp (EVar "occupiedNonceTokens") (EVar "nonce")) (EVar "prefixes")) (EVar "rest")) (EApp (EApp (EApp (EApp (EVar "occupiedNonceName") (EVar "nonce")) (EVar "prefixes")) (EVar "name")) (EVar "occupied"))))
-(DFunDef false "occupiedNonceTokens" ((PVar "nonce") (PVar "prefixes") (PCons (PCon "TUpper" (PVar "name")) (PVar "rest")) (PVar "occupied")) (EApp (EApp (EApp (EApp (EVar "occupiedNonceTokens") (EVar "nonce")) (EVar "prefixes")) (EVar "rest")) (EApp (EApp (EApp (EApp (EVar "occupiedNonceName") (EVar "nonce")) (EVar "prefixes")) (EVar "name")) (EVar "occupied"))))
-(DFunDef false "occupiedNonceTokens" ((PVar "nonce") (PVar "prefixes") (PCons PWild (PVar "rest")) (PVar "occupied")) (EApp (EApp (EApp (EApp (EVar "occupiedNonceTokens") (EVar "nonce")) (EVar "prefixes")) (EVar "rest")) (EVar "occupied")))
+(DFunDef false "occupiedNonceTokens" ((PVar "nonce") (PVar "prefixes") (PVar "xs0") (PVar "occupied0")) (ELetGroup ((lgb "go" (clause ((PList) (PVar "occupied")) (EVar "occupied")) (clause ((PCons (PCon "TIdent" (PVar "name")) (PVar "rest")) (PVar "occupied")) (EApp (EApp (EVar "go") (EVar "rest")) (EApp (EApp (EApp (EApp (EVar "occupiedNonceName") (EVar "nonce")) (EVar "prefixes")) (EVar "name")) (EVar "occupied")))) (clause ((PCons (PCon "TUpper" (PVar "name")) (PVar "rest")) (PVar "occupied")) (EApp (EApp (EVar "go") (EVar "rest")) (EApp (EApp (EApp (EApp (EVar "occupiedNonceName") (EVar "nonce")) (EVar "prefixes")) (EVar "name")) (EVar "occupied")))) (clause ((PCons PWild (PVar "rest")) (PVar "occupied")) (EApp (EApp (EVar "go") (EVar "rest")) (EVar "occupied"))))) (EApp (EApp (EVar "go") (EVar "xs0")) (EVar "occupied0"))))
 (DTypeSig false "occupiedNonceName" (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyCon "String") (TyFun (TyApp (TyCon "OrdMap") (TyCon "Unit")) (TyApp (TyCon "OrdMap") (TyCon "Unit")))))))
-(DFunDef false "occupiedNonceName" (PWild (PList) PWild (PVar "occupied")) (EVar "occupied"))
-(DFunDef false "occupiedNonceName" ((PVar "nonce") (PCons (PVar "prefix") (PVar "rest")) (PVar "name") (PVar "occupied")) (EBlock (DoLet false false (PVar "stem") (EBinOp "++" (EVar "prefix") (EVar "nonce"))) (DoExpr (EIf (EApp (EApp (EVar "startsWith") (EVar "stem")) (EVar "name")) (EBlock (DoLet false false (PVar "tail") (EApp (EApp (EApp (EVar "stringSlice") (EApp (EVar "stringLength") (EVar "stem"))) (EApp (EVar "stringLength") (EVar "name"))) (EVar "name"))) (DoExpr (EIf (EBinOp "||" (EBinOp "==" (EVar "tail") (ELit (LString ""))) (EApp (EApp (EVar "startsWith") (ELit (LString "_"))) (EVar "tail"))) (EBlock (DoLet false false (PVar "used") (EApp (EApp (EApp (EVar "omInsert") (ELit (LString "0"))) (ELit LUnit)) (EVar "occupied"))) (DoLet false false (PVar "chars") (EApp (EVar "stringToChars") (EVar "tail"))) (DoLet false false (PVar "end") (EApp (EApp (EVar "nonceSuffixEnd") (EVar "chars")) (ELit (LInt 1)))) (DoLet false false (PVar "digits") (EIf (EBinOp ">" (EVar "end") (ELit (LInt 20))) (ELit (LString "")) (EApp (EApp (EApp (EVar "stringSlice") (ELit (LInt 1))) (EVar "end")) (EVar "tail")))) (DoLet false false (PVar "next") (EMatch (EApp (EVar "toInt") (EVar "digits")) (arm (PCon "Some" (PVar "index")) () (EApp (EApp (EApp (EVar "omInsert") (EApp (EVar "intToString") (EMethodRef "index"))) (ELit LUnit)) (EVar "used"))) (arm (PCon "None") () (EVar "used")))) (DoExpr (EApp (EApp (EApp (EApp (EVar "occupiedNonceName") (EVar "nonce")) (EVar "rest")) (EVar "name")) (EVar "next")))) (EApp (EApp (EApp (EApp (EVar "occupiedNonceName") (EVar "nonce")) (EVar "rest")) (EVar "name")) (EVar "occupied"))))) (EApp (EApp (EApp (EApp (EVar "occupiedNonceName") (EVar "nonce")) (EVar "rest")) (EVar "name")) (EVar "occupied"))))))
+(DFunDef false "occupiedNonceName" ((PVar "nonce") (PVar "xs0") (PVar "name") (PVar "occupied0")) (ELetGroup ((lgb "go" (clause ((PList) (PVar "occupied")) (EVar "occupied")) (clause ((PCons (PVar "prefix") (PVar "rest")) (PVar "occupied")) (EBlock (DoLet false false (PVar "stem") (EBinOp "++" (EVar "prefix") (EVar "nonce"))) (DoExpr (EIf (EApp (EApp (EVar "startsWith") (EVar "stem")) (EVar "name")) (EBlock (DoLet false false (PVar "tail") (EApp (EApp (EApp (EVar "stringSlice") (EApp (EVar "stringLength") (EVar "stem"))) (EApp (EVar "stringLength") (EVar "name"))) (EVar "name"))) (DoExpr (EIf (EBinOp "||" (EBinOp "==" (EVar "tail") (ELit (LString ""))) (EApp (EApp (EVar "startsWith") (ELit (LString "_"))) (EVar "tail"))) (EBlock (DoLet false false (PVar "used") (EApp (EApp (EApp (EVar "omInsert") (ELit (LString "0"))) (ELit LUnit)) (EVar "occupied"))) (DoLet false false (PVar "chars") (EApp (EVar "stringToChars") (EVar "tail"))) (DoLet false false (PVar "end") (EApp (EApp (EVar "nonceSuffixEnd") (EVar "chars")) (ELit (LInt 1)))) (DoLet false false (PVar "digits") (EIf (EBinOp ">" (EVar "end") (ELit (LInt 20))) (ELit (LString "")) (EApp (EApp (EApp (EVar "stringSlice") (ELit (LInt 1))) (EVar "end")) (EVar "tail")))) (DoLet false false (PVar "next") (EMatch (EApp (EVar "toInt") (EVar "digits")) (arm (PCon "Some" (PVar "index")) () (EApp (EApp (EApp (EVar "omInsert") (EApp (EVar "intToString") (EMethodRef "index"))) (ELit LUnit)) (EVar "used"))) (arm (PCon "None") () (EVar "used")))) (DoExpr (EApp (EApp (EVar "go") (EVar "rest")) (EVar "next")))) (EApp (EApp (EVar "go") (EVar "rest")) (EVar "occupied"))))) (EApp (EApp (EVar "go") (EVar "rest")) (EVar "occupied")))))))) (EApp (EApp (EVar "go") (EVar "xs0")) (EVar "occupied0"))))
 (DTypeSig false "nonceSuffixEnd" (TyFun (TyApp (TyCon "Array") (TyCon "Char")) (TyFun (TyCon "Int") (TyCon "Int"))))
 (DFunDef false "nonceSuffixEnd" ((PVar "chars") (PVar "i")) (EIf (EBinOp "||" (EBinOp ">=" (EVar "i") (EApp (EVar "arrayLength") (EVar "chars"))) (EBinOp ">" (EVar "i") (ELit (LInt 20)))) (EVar "i") (EBlock (DoLet false false (PVar "char") (EApp (EApp (EMethodRef "index") (EVar "chars")) (EVar "i"))) (DoExpr (EIf (EBinOp "&&" (EBinOp ">=" (EVar "char") (ELit (LChar "0"))) (EBinOp "<=" (EVar "char") (ELit (LChar "9")))) (EApp (EApp (EVar "nonceSuffixEnd") (EVar "chars")) (EBinOp "+" (EVar "i") (ELit (LInt 1)))) (EVar "i"))))))
 (DTypeSig false "freeNonceIndex" (TyFun (TyApp (TyCon "OrdMap") (TyCon "Unit")) (TyFun (TyCon "Int") (TyCon "Int"))))
@@ -596,7 +585,7 @@ renameHeads n (h :: hs) (l :: ls)
 (DTypeSig true "unquoteLit" (TyFun (TyCon "String") (TyApp (TyCon "Option") (TyCon "String"))))
 (DFunDef false "unquoteLit" ((PVar "s")) (EBlock (DoLet false false (PVar "cs") (EApp (EVar "stringToChars") (EVar "s"))) (DoLet false false (PVar "n") (EApp (EVar "arrayLength") (EVar "cs"))) (DoExpr (EIf (EBinOp "&&" (EBinOp "&&" (EBinOp ">=" (EVar "n") (ELit (LInt 2))) (EBinOp "==" (EApp (EApp (EVar "arrayGetUnsafe") (ELit (LInt 0))) (EVar "cs")) (ELit (LChar "\"")))) (EBinOp "==" (EApp (EApp (EVar "arrayGetUnsafe") (EBinOp "-" (EVar "n") (ELit (LInt 1)))) (EVar "cs")) (ELit (LChar "\"")))) (EApp (EApp (EApp (EApp (EVar "unquoteScan") (EVar "cs")) (ELit (LInt 1))) (EBinOp "-" (EVar "n") (ELit (LInt 1)))) (EListLit)) (EVar "None")))))
 (DTypeSig false "unquoteScan" (TyFun (TyApp (TyCon "Array") (TyCon "Char")) (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyFun (TyApp (TyCon "List") (TyCon "Char")) (TyApp (TyCon "Option") (TyCon "String")))))))
-(DFunDef false "unquoteScan" ((PVar "cs") (PVar "i") (PVar "end") (PVar "acc")) (EIf (EBinOp ">=" (EVar "i") (EVar "end")) (EApp (EVar "Some") (EApp (EVar "stringFromChars") (EApp (EVar "arrayFromList") (EApp (EVar "reverseL") (EVar "acc"))))) (EIf (EBinOp "==" (EApp (EApp (EVar "arrayGetUnsafe") (EVar "i")) (EVar "cs")) (ELit (LChar "\\"))) (EIf (EBinOp ">=" (EBinOp "+" (EVar "i") (ELit (LInt 1))) (EVar "end")) (EVar "None") (EMatch (EApp (EVar "unescapeChar") (EApp (EApp (EVar "arrayGetUnsafe") (EBinOp "+" (EVar "i") (ELit (LInt 1)))) (EVar "cs"))) (arm (PCon "Some" (PVar "c")) () (EApp (EApp (EApp (EApp (EVar "unquoteScan") (EVar "cs")) (EBinOp "+" (EVar "i") (ELit (LInt 2)))) (EVar "end")) (EBinOp "::" (EVar "c") (EVar "acc")))) (arm (PCon "None") () (EVar "None")))) (EIf (EVar "otherwise") (EApp (EApp (EApp (EApp (EVar "unquoteScan") (EVar "cs")) (EBinOp "+" (EVar "i") (ELit (LInt 1)))) (EVar "end")) (EBinOp "::" (EApp (EApp (EVar "arrayGetUnsafe") (EVar "i")) (EVar "cs")) (EVar "acc"))) (EApp (EVar "__fallthrough__") (ELit LUnit))))))
+(DFunDef false "unquoteScan" ((PVar "cs") (PVar "i0") (PVar "end") (PVar "acc0")) (ELetGroup ((lgb "go" (clause ((PVar "i") (PVar "acc")) (EIf (EBinOp ">=" (EVar "i") (EVar "end")) (EApp (EVar "Some") (EApp (EVar "stringFromChars") (EApp (EVar "arrayFromList") (EApp (EVar "reverseL") (EVar "acc"))))) (EIf (EBinOp "==" (EApp (EApp (EVar "arrayGetUnsafe") (EVar "i")) (EVar "cs")) (ELit (LChar "\\"))) (EIf (EBinOp ">=" (EBinOp "+" (EVar "i") (ELit (LInt 1))) (EVar "end")) (EVar "None") (EMatch (EApp (EVar "unescapeChar") (EApp (EApp (EVar "arrayGetUnsafe") (EBinOp "+" (EVar "i") (ELit (LInt 1)))) (EVar "cs"))) (arm (PCon "Some" (PVar "c")) () (EApp (EApp (EVar "go") (EBinOp "+" (EVar "i") (ELit (LInt 2)))) (EBinOp "::" (EVar "c") (EVar "acc")))) (arm (PCon "None") () (EVar "None")))) (EIf (EVar "otherwise") (EApp (EApp (EVar "go") (EBinOp "+" (EVar "i") (ELit (LInt 1)))) (EBinOp "::" (EApp (EApp (EVar "arrayGetUnsafe") (EVar "i")) (EVar "cs")) (EVar "acc"))) (EApp (EVar "__fallthrough__") (ELit LUnit)))))))) (EApp (EApp (EVar "go") (EVar "i0")) (EVar "acc0"))))
 (DTypeSig false "unescapeChar" (TyFun (TyCon "Char") (TyApp (TyCon "Option") (TyCon "Char"))))
 (DFunDef false "unescapeChar" ((PLit (LChar "n"))) (EApp (EVar "Some") (ELit (LChar "\n"))))
 (DFunDef false "unescapeChar" ((PLit (LChar "t"))) (EApp (EVar "Some") (ELit (LChar "\t"))))
