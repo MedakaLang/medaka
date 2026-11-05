@@ -289,9 +289,9 @@ cevalArm env root arms i = match nthArmParts arms i
   None => panic "core_ir decision tree: arm index out of range"
 
 nthArmParts : List CArm -> Int -> Option (Pat, List CGuard, CExpr)
-nthArmParts arms i = match nthArm arms i
-  Some arm => cArmParts arms arm
-  None => None
+nthArmParts arms i = do
+  arm <- nthArm arms i
+  cArmParts arms arm
 
 cevalArmBody : EvalEnv (Value e) -> Value e -> Pat -> CExpr -> <e> Value e
 cevalArmBody env root pat body = match matchPat pat root
