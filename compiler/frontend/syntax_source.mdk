@@ -97,7 +97,7 @@ publishSyntaxPrepared known (limits@(RecoveryLimits maxSource maxTokens maxAttem
       let index = indexSource src
       let positioned = do
         _ <- known
-        stageBump "syntax.parse_only"
+        let _ = stageBump "syntax.parse_only"
         parseSourceSyntaxPairs src tokens offsets
       let strict = match (known, positioned)
         (Some decls, Some parsed) =>
