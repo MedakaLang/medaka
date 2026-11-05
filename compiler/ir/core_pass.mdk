@@ -1,0 +1,59 @@
+import list.{reverse}
+import ir.core_ir.{CProgram}
+import ir.core_ir_sexp.{cprogramToSexp}
+-- The runner for a declared list of Core IR passes.  A pass is a named
+-- `CProgram -> CProgram` step over a context `c` that the pass list's owner
+-- defines, so this module knows no pass and imports no lowering.
+
+-- One step of a pipeline: [passRun] reads the context and rewrites the program.
+public export data CorePass c = CorePass {
+  passName : String,
+  passRun : c -> CProgram -> CProgram,
+}
+
+-- Built once by the caller (a value, never ambient state).  [lint] asks the
+-- runner to check the program after every pass; [dumpAfter] names the passes
+-- whose output is captured, with "all" for every pass.
+public export data PassConfig = PassConfig {
+  lint : Bool,
+  dumpAfter : List String,
+}
+
+export
+defaultPassConfig : PassConfig
+defaultPassConfig = PassConfig { lint = False, dumpAfter = [] }
+
+-- A broken invariant found after pass [faultPass].
+public export data PassFault = PassFault {
+  faultPass : String,
+  faultMessage : String,
+}
+
+-- The final program, the captured dumps as (pass name, sexp text) in list
+-- order, and the faults found.
+public export data PassRun = PassRun {
+  program : CProgram,
+  dumps : List (String, String),
+  faults : List PassFault,
+}
+
+wantsDump : PassConfig -> String -> Bool
+wantsDump config which =
+  elem "all" config.dumpAfter || elem which config.dumpAfter
+
+-- Runs [passes] left to right over [start].  A pass that panics is not caught.
+export
+runPasses : PassConfig -> c -> List (CorePass c) -> CProgram -> PassRun
+runPasses config ctx passes start =
+  let stepped = fold (step config ctx) (PassRun start [] []) passes
+  PassRun stepped.program (reverse stepped.dumps) stepped.faults
+
+step : PassConfig -> c -> PassRun -> CorePass c -> PassRun
+step config ctx acc pass =
+  let next = pass.passRun ctx acc.program
+  let dumps =
+    if wantsDump config pass.passName then
+      (pass.passName, cprogramToSexp next) :: acc.dumps
+    else
+      acc.dumps
+  PassRun next dumps acc.faults

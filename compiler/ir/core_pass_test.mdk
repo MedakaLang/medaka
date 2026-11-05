@@ -1,0 +1,92 @@
+import test.{expectAll, expectEqual, expectNotEqual}
+import ir.core_ir.{CBind(..), CProgram(..), noDeclFacts, synthBind}
+import ir.core_ir_sexp.{cprogramToSexp}
+import ir.core_pass.{
+  CorePass(..),
+  PassConfig(..),
+  PassFault(..),
+  PassRun(..),
+  defaultPassConfig,
+  runPasses,
+}
+-- Sibling test module for `compiler/ir/core_pass.mdk` ([P-TEST-SIBLING]).
+--
+-- Each pass appends one binding named after itself and the context, so the
+-- program's binding names read off the order the runner ran the passes in.
+
+emptyProgram : CProgram
+emptyProgram = CProgram [] [] [] [] [] noDeclFacts
+
+appendBind : String -> CorePass String
+appendBind passName = CorePass {
+  passName = passName,
+  passRun =
+    ctx (CProgram binds a b c d e) =>
+      CProgram (binds ++ [synthBind "\{ctx}.\{passName}" []]) a b c d e,
+}
+
+bindNames : CProgram -> List String
+bindNames (CProgram binds _ _ _ _ _) = map bindName binds
+
+passes : List (CorePass String)
+passes = [appendBind "first", appendBind "second", appendBind "third"]
+
+test "passes run in list order over the context" =
+  expectEqual
+    ["ctx.first", "ctx.second", "ctx.third"]
+    (bindNames (runPasses defaultPassConfig "ctx" passes emptyProgram).program)
+
+test "no pass list runs nothing and returns the start program" =
+  expectEqual
+    []
+    (bindNames (runPasses defaultPassConfig "ctx" [] emptyProgram).program)
+
+test "the default config captures no dump" =
+  expectEqual
+    0
+    (length (runPasses defaultPassConfig "ctx" passes emptyProgram).dumps)
+
+test "a dump is captured only for a named pass" =
+  let config = PassConfig { lint = False, dumpAfter = ["second"] }
+  let run = runPasses config "ctx" passes emptyProgram
+  expectAll [
+    expectEqual ["second"] (map fst run.dumps),
+    expectNotEqual "" (fold (_ d => snd d) "" run.dumps),
+  ]
+
+test "a dump shows the program as it stood after its pass" =
+  let config = PassConfig { lint = False, dumpAfter = ["first"] }
+  let run = runPasses config "ctx" passes emptyProgram
+  expectAll [
+    expectEqual 1 (length run.dumps),
+    expectEqual
+      (cprogramToSexp
+        (runPasses
+          defaultPassConfig
+          "ctx"
+          [appendBind "first"]
+          emptyProgram).program)
+      (fold (_ d => snd d) "" run.dumps),
+  ]
+
+test "all captures a dump for every pass, in list order" =
+  let config = PassConfig { lint = False, dumpAfter = ["all"] }
+  expectEqual
+    ["first", "second", "third"]
+    (map fst (runPasses config "ctx" passes emptyProgram).dumps)
+
+test "good passes leave no faults" =
+  expectEqual
+    0
+    (length (runPasses defaultPassConfig "ctx" passes emptyProgram).faults)
+
+-- The runner detects no fault yet, so this pins the record's shape: a fault
+-- carries the name of the pass that produced it.
+test "a fault names its pass" =
+  let run = PassRun emptyProgram [] [
+    PassFault { faultPass = "second", faultMessage = "bad" },
+  ]
+  expectEqual ["second"] (map (f => f.faultPass) run.faults)
+
+bindName : CBind -> String
+bindName (CBind n _ _ _) = n

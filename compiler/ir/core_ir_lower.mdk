@@ -16,6 +16,10 @@ import types.symbol_origins.{
 -- is a clean diff, not a rewrite).
 
 import ir.extern_lower.{lowerExterns}
+import ir.core_pass.{
+  CorePass(..), PassConfig, PassRun(..), PassFault(..), defaultPassConfig,
+  runPasses
+}
 import frontend.ast.{
   isWildPat,
   letBindName,
@@ -992,10 +996,16 @@ lowerStmt _ _ = panic "core_ir lower: unsupported block statement"
 export
 lowerProgramWithFacts : ProgramFacts -> List Decl -> CProgram
 lowerProgramWithFacts facts prog =
-  finishLowering
-    UntypedLowering
-    facts.pfBinders
-    (refoldProgram noLetCheck (lowerProgramWith facts None [] prog))
+  runLowering
+    PassCtx {
+      pcFacts = facts,
+      pcDecls = prog,
+      pcSited = prog,
+      pcLowering = UntypedLowering,
+      pcFieldOrders = [],
+    }
+    untypedPasses
+    (lowerProgramWith facts None [] prog)
 
 -- Lowering after an elaboration, against the table it published.  Refuses (panics)
 -- when none was published instead of silently lowering every inherited default away.
@@ -1006,17 +1016,21 @@ lowerTypedProgramWith facts prog =
     optionOrPanic
       "disposition table: no elaboration has published one"
       facts.pfDispositions
-  finishLowering
-    TypedLowering
-    facts.pfBinders
-    (refoldProgram
-      noLetCheck
-      (lowerProgramWith facts (Some dispositions) [] prog))
+  runLowering
+    PassCtx {
+      pcFacts = facts,
+      pcDecls = prog,
+      pcSited = prog,
+      pcLowering = TypedLowering,
+      pcFieldOrders = [],
+    }
+    typedPasses
+    (lowerProgramWith facts (Some dispositions) [] prog)
 
 -- [dispositions] is the typechecker's table for [prog] (`None` for an untyped
 -- probe; see `lowerProgramWithFacts`).  Refutable lets are still one-arm decisions here
 -- (`letDecision`); each public lowering decides which of them to keep, and ends
--- with `finishLowering`.
+-- with `finishPasses`.
 lowerProgramWith : ProgramFacts ->
   Option DispositionTable ->
   List (String, String, String) ->
@@ -1242,32 +1256,35 @@ lowerProgramEmitPinnedWith : ProgramFacts ->
   List Decl ->
   CProgram
 lowerProgramEmitPinnedWith facts pins prog =
+  programOrPanic (lowerProgramEmitConfigured defaultPassConfig facts pins prog)
+
+-- The emitting lowering as a pass run: the faults and the dumps the config asked
+-- for come back with the program.
+export
+lowerProgramEmitConfigured : PassConfig ->
+  ProgramFacts ->
+  List (String, String, String) ->
+  List Decl ->
+  PassRun
+lowerProgramEmitConfigured config facts pins prog =
   let sited = siteTrapCalls facts prog
   let dispositions = facts.pfDispositions
-  let lowered = lowerProgramWith facts dispositions pins sited
-  let raw =
-    withDeclFacts
-      (emitDeclFacts facts sited (cprogramSymbolOrigins lowered))
-      lowered
-  let fo = declaredRecordFieldOrders prog
   -- An emitting lowering is untyped exactly when no elaboration published the
   -- disposition table it lowered against (`lowerProgramWith`).
   let lowering = match dispositions
     Some _ => TypedLowering
     None => UntypedLowering
-  -- the let decisions are refolded after the record-pattern rewrite, which
-  -- resolves the record patterns `patCanMiss` reads
-  let rewritten = rewriteProgramRecPats fo raw
-  lowerExterns
-    facts
-    prog
-    (finishLowering
-      lowering
-      facts.pfBinders
-      (hoistNullaryMemo
-        (refoldProgram
-          (patCanMiss (siblingTable (cprogramCtorTypes raw)))
-          rewritten)))
+  runPasses
+    config
+    PassCtx {
+      pcFacts = facts,
+      pcDecls = prog,
+      pcSited = sited,
+      pcLowering = lowering,
+      pcFieldOrders = declaredRecordFieldOrders prog,
+    }
+    emitPasses
+    (lowerProgramWith facts dispositions pins sited)
 
 -- The declaration facts an emitting lowering publishes (see `DeclFacts`): every
 -- instance's `requires` count, and the super count of each of their interfaces.
@@ -1445,17 +1462,76 @@ cprogramCtorTypes (CProgram _ _ ctorTypes _ _ _) = ctorTypes
 -- emits for it: a binding's clause, the impl entry an `RKey` route selects, the
 -- binding an `RLocal` route or a `CDict` names (less the dictionaries the
 -- occurrence supplies), a constructor's field count.  Each public lowering ends
--- with `finishLowering`: one eta pass, which may lengthen a clause, then
+-- with `finishPasses`: one eta pass, which may lengthen a clause, then
 -- `stampCallModes`, which writes the mode into every application from the
 -- clauses the eta pass produced.  `core_validate.validateCalls` reads the same
 -- `definedArityOf`, so the stamp and the check cannot disagree about a table.
 
-finishLowering : Lowering -> Option BinderTypeTable -> CProgram -> CProgram
-finishLowering lowering table prog =
-  stampBinders
-    lowering
-    table
-    (markTailSites (stampCallModes (etaSaturateProgram prog)))
+-- What a pass list reads besides the program: the facts, the declarations as
+-- given and as the site-trap rewrite left them, the lowering mode, and the
+-- declared field order of each record.
+data PassCtx = PassCtx {
+  pcFacts : ProgramFacts,
+  pcDecls : List Decl,
+  pcSited : List Decl,
+  pcLowering : Lowering,
+  pcFieldOrders : List (String, List String),
+}
+
+namedPass : String -> (PassCtx -> CProgram -> CProgram) -> CorePass PassCtx
+namedPass passName f = CorePass { passName = passName, passRun = f }
+
+runLowering : PassCtx -> List (CorePass PassCtx) -> CProgram -> CProgram
+runLowering ctx passes start =
+  programOrPanic (runPasses defaultPassConfig ctx passes start)
+
+-- A fault is an internal compiler error naming its pass.
+programOrPanic : PassRun -> CProgram
+programOrPanic run = match run.faults
+  [] => run.program
+  fault :: _ => panic "core pass \{fault.faultPass}: \{fault.faultMessage}"
+
+-- The untyped and typed lowerings keep no refutable-let decision.
+untypedPasses : List (CorePass PassCtx)
+untypedPasses =
+  namedPass "refold-lets" (_ p => refoldProgram noLetCheck p) :: finishPasses
+
+typedPasses : List (CorePass PassCtx)
+typedPasses = untypedPasses
+
+-- The emitting lowering.  Order is the contract:
+-- - the record-pattern rewrite precedes the refold, because `patCanMiss` reads the
+--   record patterns it resolves;
+-- - `finishPasses` end the list before the externs, which only add rows.
+emitPasses : List (CorePass PassCtx)
+emitPasses =
+  [
+      namedPass "decl-facts" (c p =>
+        withDeclFacts
+          (emitDeclFacts c.pcFacts c.pcSited (cprogramSymbolOrigins p))
+          p),
+      namedPass "record-patterns" (c p =>
+        rewriteProgramRecPats c.pcFieldOrders p),
+      namedPass "refold-lets" (_ p =>
+        refoldProgram (patCanMiss (siblingTable (cprogramCtorTypes p))) p),
+      namedPass "hoist-nullary-memo" (_ p => hoistNullaryMemo p),
+    ]
+    -- optimization slot: passes here run before the stamps below, so eta, call
+    -- modes, tail marks and binder stamps all see their output
+
+    ++ finishPasses
+    ++ [namedPass "lower-externs" (c p => lowerExterns c.pcFacts c.pcDecls p)]
+
+-- Call modes are stamped from the clauses the eta pass produced, so eta comes
+-- first; tail marks and binder stamps read the stamped modes.
+finishPasses : List (CorePass PassCtx)
+finishPasses = [
+  namedPass "eta-saturate" (_ p => etaSaturateProgram p),
+  namedPass "call-modes" (_ p => stampCallModes p),
+  namedPass "tail-sites" (_ p => markTailSites p),
+  namedPass "binder-stamps" (c p =>
+    stampBinders c.pcLowering c.pcFacts.pfBinders p),
+]
 
 -- A program's defined arities: each top-level binding's clause pattern count,
 -- each constructor's field count, each impl entry's value arity by method and
