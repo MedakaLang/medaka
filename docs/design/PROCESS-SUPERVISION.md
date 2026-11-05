@@ -570,3 +570,12 @@ Ordinary direct-child operations may be separate but carry no owned-tree claim.
 No new runtime primitive, opaque carrier or production supervisor is implemented
 by these experiments. None of the old lifecycle, VM ABI, eval or macOS
 obligations closes from these Linux readiness controls.
+
+### Lifecycle handoff to #4854
+
+The native direct-child owner and indexed launch ticket now provide lifecycle
+operations. `start` and `retryStart` are synchronous; a cleanup-pending error
+retains the ticket until retry, check, or abort completes cleanup. #4854 owns
+bounded pipe reads and writes, readiness integration, cancellation and deadlines,
+and scheduler-safe launch submission. A pipe endpoint or an exec handshake is
+not application readiness or descendant containment.

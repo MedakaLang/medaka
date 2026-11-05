@@ -1,0 +1,55 @@
+import process.{
+  PipeChoice(..),
+  SpawnOptions(..),
+  ProcessError(..),
+  ProcessOperation(..),
+  StartError(..),
+  ExitStatus(..),
+  start,
+  pollExit,
+  closeStdin,
+  dispose,
+}
+import test.{expectTrue, fail}
+
+options : SpawnOptions
+options = SpawnOptions {
+  argv = ["-c", "read line; exit 42"],
+  cwd = "/tmp",
+  env = [],
+  stdin = Piped,
+  stdout = Null,
+  stderr = Null,
+}
+
+waitExit : Process p -> Int -> <Exec p> Bool
+waitExit _ 0 = False
+waitExit p n = match pollExit p
+  Ok (Some (Exited 42)) => True
+  Ok None => waitExit p (n - 1)
+  _ => False
+
+test "process aliases share close, exit and disposal state" =
+  match start "/bin/sh" options
+    Err _ => fail "start failed"
+    Ok p =>
+      let alias = p
+      match (pollExit p, dispose alias, closeStdin p, closeStdin alias)
+        (Ok None, Err StillRunning, Ok _, Ok _) =>
+          if waitExit alias 1000000 then match (
+            pollExit p,
+            dispose alias,
+            dispose p,
+            pollExit alias,
+          )
+            (Ok (Some (Exited 42)), Ok _, Ok _, Err ProcessClosed) =>
+              expectTrue True
+            _ => fail "terminal alias state"
+          else
+            fail "exit was not observed"
+        _ => fail "live alias state"
+
+test "missing executable is a launch error" =
+  match start "/medaka-no-such-image" options
+    Err (StartRejected (SpawnFailed ExecImage _ _)) => expectTrue True
+    _ => fail "missing image did not report ExecImage"
