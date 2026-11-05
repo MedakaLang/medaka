@@ -1,5 +1,5 @@
 # META
-source_lines=166
+source_lines=167
 stages=DESUGAR,MARK
 # SOURCE
 import frontend.ast.{Pat(..)}
@@ -7,7 +7,8 @@ import ir.core_ir.{
   CProgram(..), CBind(..), CClause(..), CExpr(..), CImplEntry(..),
   CImplBody(..), CField(..), CStmt(..), CArm(..), CGuard(..)
 }
-import backend.trmc_analysis.{patVars, bindName}
+import backend.trmc_analysis.{bindName}
+import ir.core_walk.{patBinders}
 import support.ordmap.{OrdMap, omEmpty, omLookup, omInsert}
 import support.util.{startsWith}
 
@@ -82,7 +83,7 @@ ubBumpAll sc [] = sc
 ubBumpAll sc (x :: xs) = ubBumpAll (ubBump sc x) xs
 
 ubExtend : OrdMap Int -> List Pat -> OrdMap Int
-ubExtend sc pats = ubBumpAll sc (flatMap patVars pats)
+ubExtend sc pats = ubBumpAll sc (flatMap patBinders pats)
 
 ubPat : OrdMap Int -> Pat -> Pat
 ubPat sc (PVar x l bid) = PVar (ubNew sc x) l bid
@@ -171,7 +172,8 @@ ubGuards sc ((CGBind p e) :: rest) =
 # DESUGAR
 (DUse false (UseGroup ("frontend" "ast") ((mem "Pat" true))))
 (DUse false (UseGroup ("ir" "core_ir") ((mem "CProgram" true) (mem "CBind" true) (mem "CClause" true) (mem "CExpr" true) (mem "CImplEntry" true) (mem "CImplBody" true) (mem "CField" true) (mem "CStmt" true) (mem "CArm" true) (mem "CGuard" true))))
-(DUse false (UseGroup ("backend" "trmc_analysis") ((mem "patVars" false) (mem "bindName" false))))
+(DUse false (UseGroup ("backend" "trmc_analysis") ((mem "bindName" false))))
+(DUse false (UseGroup ("ir" "core_walk") ((mem "patBinders" false))))
 (DUse false (UseGroup ("support" "ordmap") ((mem "OrdMap" false) (mem "omEmpty" false) (mem "omLookup" false) (mem "omInsert" false))))
 (DUse false (UseGroup ("support" "util") ((mem "startsWith" false))))
 (DTypeSig true "uniqueBinders" (TyFun (TyCon "CProgram") (TyCon "CProgram")))
@@ -191,7 +193,7 @@ ubGuards sc ((CGBind p e) :: rest) =
 (DFunDef false "ubBumpAll" ((PVar "sc") (PList)) (EVar "sc"))
 (DFunDef false "ubBumpAll" ((PVar "sc") (PCons (PVar "x") (PVar "xs"))) (EApp (EApp (EVar "ubBumpAll") (EApp (EApp (EVar "ubBump") (EVar "sc")) (EVar "x"))) (EVar "xs")))
 (DTypeSig false "ubExtend" (TyFun (TyApp (TyCon "OrdMap") (TyCon "Int")) (TyFun (TyApp (TyCon "List") (TyCon "Pat")) (TyApp (TyCon "OrdMap") (TyCon "Int")))))
-(DFunDef false "ubExtend" ((PVar "sc") (PVar "pats")) (EApp (EApp (EVar "ubBumpAll") (EVar "sc")) (EApp (EApp (EVar "flatMap") (EVar "patVars")) (EVar "pats"))))
+(DFunDef false "ubExtend" ((PVar "sc") (PVar "pats")) (EApp (EApp (EVar "ubBumpAll") (EVar "sc")) (EApp (EApp (EVar "flatMap") (EVar "patBinders")) (EVar "pats"))))
 (DTypeSig false "ubPat" (TyFun (TyApp (TyCon "OrdMap") (TyCon "Int")) (TyFun (TyCon "Pat") (TyCon "Pat"))))
 (DFunDef false "ubPat" ((PVar "sc") (PCon "PVar" (PVar "x") (PVar "l") (PVar "bid"))) (EApp (EApp (EApp (EVar "PVar") (EApp (EApp (EVar "ubNew") (EVar "sc")) (EVar "x"))) (EVar "l")) (EVar "bid")))
 (DFunDef false "ubPat" ((PVar "sc") (PCon "PCon" (PVar "c") (PVar "ps"))) (EApp (EApp (EVar "PCon") (EVar "c")) (EApp (EApp (EVar "map") (EApp (EVar "ubPat") (EVar "sc"))) (EVar "ps"))))
@@ -247,7 +249,8 @@ ubGuards sc ((CGBind p e) :: rest) =
 # MARK
 (DUse false (UseGroup ("frontend" "ast") ((mem "Pat" true))))
 (DUse false (UseGroup ("ir" "core_ir") ((mem "CProgram" true) (mem "CBind" true) (mem "CClause" true) (mem "CExpr" true) (mem "CImplEntry" true) (mem "CImplBody" true) (mem "CField" true) (mem "CStmt" true) (mem "CArm" true) (mem "CGuard" true))))
-(DUse false (UseGroup ("backend" "trmc_analysis") ((mem "patVars" false) (mem "bindName" false))))
+(DUse false (UseGroup ("backend" "trmc_analysis") ((mem "bindName" false))))
+(DUse false (UseGroup ("ir" "core_walk") ((mem "patBinders" false))))
 (DUse false (UseGroup ("support" "ordmap") ((mem "OrdMap" false) (mem "omEmpty" false) (mem "omLookup" false) (mem "omInsert" false))))
 (DUse false (UseGroup ("support" "util") ((mem "startsWith" false))))
 (DTypeSig true "uniqueBinders" (TyFun (TyCon "CProgram") (TyCon "CProgram")))
@@ -267,7 +270,7 @@ ubGuards sc ((CGBind p e) :: rest) =
 (DFunDef false "ubBumpAll" ((PVar "sc") (PList)) (EVar "sc"))
 (DFunDef false "ubBumpAll" ((PVar "sc") (PCons (PVar "x") (PVar "xs"))) (EApp (EApp (EVar "ubBumpAll") (EApp (EApp (EVar "ubBump") (EVar "sc")) (EVar "x"))) (EVar "xs")))
 (DTypeSig false "ubExtend" (TyFun (TyApp (TyCon "OrdMap") (TyCon "Int")) (TyFun (TyApp (TyCon "List") (TyCon "Pat")) (TyApp (TyCon "OrdMap") (TyCon "Int")))))
-(DFunDef false "ubExtend" ((PVar "sc") (PVar "pats")) (EApp (EApp (EVar "ubBumpAll") (EVar "sc")) (EApp (EApp (EDictApp "flatMap") (EVar "patVars")) (EVar "pats"))))
+(DFunDef false "ubExtend" ((PVar "sc") (PVar "pats")) (EApp (EApp (EVar "ubBumpAll") (EVar "sc")) (EApp (EApp (EDictApp "flatMap") (EVar "patBinders")) (EVar "pats"))))
 (DTypeSig false "ubPat" (TyFun (TyApp (TyCon "OrdMap") (TyCon "Int")) (TyFun (TyCon "Pat") (TyCon "Pat"))))
 (DFunDef false "ubPat" ((PVar "sc") (PCon "PVar" (PVar "x") (PVar "l") (PVar "bid"))) (EApp (EApp (EApp (EVar "PVar") (EApp (EApp (EVar "ubNew") (EVar "sc")) (EVar "x"))) (EVar "l")) (EVar "bid")))
 (DFunDef false "ubPat" ((PVar "sc") (PCon "PCon" (PVar "c") (PVar "ps"))) (EApp (EApp (EVar "PCon") (EVar "c")) (EApp (EApp (EMethodRef "map") (EApp (EVar "ubPat") (EVar "sc"))) (EVar "ps"))))

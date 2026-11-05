@@ -1,5 +1,5 @@
 # META
-source_lines=1709
+source_lines=1692
 stages=DESUGAR,MARK
 # SOURCE
 -- TRMC eligibility analysis (TRMC-DESIGN.md §"Phase 1 scope" + §"Backend portability").
@@ -12,6 +12,7 @@ stages=DESUGAR,MARK
 -- backend-specific and lives in each emitter.
 
 import frontend.ast.{Pat(..), Route(..), Addr(..), Lit(..)}
+import ir.core_walk.{patBinders}
 import ir.core_ir.{
   CExpr(..),
   MethodEvidence(..),
@@ -90,9 +91,10 @@ freeVarsIn : OrdMap Unit -> CExpr -> List String
 freeVarsIn _ (CLit _) = []
 freeVarsIn b (CVar x _) = if omHasKey x b then [] else [x]
 freeVarsIn b (CApp f args _) = freeVarsIn b f ++ flatMap (freeVarsIn b) args
-freeVarsIn b (CLam ps body) = freeVarsIn (omFromNames (patVarNames ps) b) body
+freeVarsIn b (CLam ps body) =
+  freeVarsIn (omFromNames (flatMap patBinders ps) b) body
 freeVarsIn b (CLet recF pat e1 e2) =
-  let b2 = omFromNames (patVars pat) b
+  let b2 = omFromNames (patBinders pat) b
   let fe1 = if recF then freeVarsIn b2 e1 else freeVarsIn b e1
   fe1 ++ freeVarsIn b2 e2
 freeVarsIn b (CLetGroup binds body) =
@@ -144,7 +146,7 @@ export
 freeVarsArms : OrdMap Unit -> List CArm -> List String
 freeVarsArms _ [] = []
 freeVarsArms b ((CArm pat _ body) :: rest) =
-  freeVarsIn (omFromNames (patVars pat) b) body ++ freeVarsArms b rest
+  freeVarsIn (omFromNames (patBinders pat) b) body ++ freeVarsArms b rest
 freeVarsArms b ((CArmAlt _ _ _) :: rest) = freeVarsArms b rest
 
 export
@@ -152,7 +154,7 @@ freeVarsStmts : OrdMap Unit -> List CStmt -> List String
 freeVarsStmts _ [] = []
 freeVarsStmts b ((CSExpr ex) :: rest) = freeVarsIn b ex ++ freeVarsStmts b rest
 freeVarsStmts b ((CSLet _ pat ex) :: rest) =
-  freeVarsIn b ex ++ freeVarsStmts (omFromNames (patVars pat) b) rest
+  freeVarsIn b ex ++ freeVarsStmts (omFromNames (patBinders pat) b) rest
 freeVarsStmts b ((CSAssign _ ex) :: rest) =
   freeVarsIn b ex ++ freeVarsStmts b rest
 freeVarsStmts b (_ :: rest) = freeVarsStmts b rest
@@ -171,7 +173,8 @@ freeVarsBinds b ((CBind _ clauses _ _) :: rest) =
 freeVarsClauses : OrdMap Unit -> List CClause -> List String
 freeVarsClauses _ [] = []
 freeVarsClauses b ((CClause pats body) :: rest) =
-  freeVarsIn (omFromNames (patVarNames pats) b) body ++ freeVarsClauses b rest
+  freeVarsIn (omFromNames (flatMap patBinders pats) b) body
+    ++ freeVarsClauses b rest
 
 export
 bindNames : List CBind -> List String
@@ -180,26 +183,6 @@ bindNames bs = map bindName bs
 export
 bindName : CBind -> String
 bindName (CBind name _ _ _) = name
-
--- the variables a pattern binds.
-export
-patVars : Pat -> List String
-patVars (PVar x _ _) = [x]
-patVars (PCon _ args) = patVarsList args
-patVars (PCons h t) = patVars h ++ patVars t
-patVars (PTuple ps) = patVarsList ps
-patVars (PList ps) = patVarsList ps
-patVars (PAs x _ _ p) = x :: patVars p
-patVars _ = []
-
-export
-patVarsList : List Pat -> List String
-patVarsList [] = []
-patVarsList (p :: rest) = patVars p ++ patVarsList rest
-
-export
-patVarNames : List Pat -> List String
-patVarNames ps = patVarsList ps
 
 -- ── TRMC eligibility analysis (TRMC-DESIGN.md §"Phase 1 scope") ──────────────
 -- A function `self` of `arity` is TRMC-eligible when every clause body descends
@@ -1713,6 +1696,7 @@ isTrmcImpl : TrmcVerdicts -> String -> String -> Bool
 isTrmcImpl v method key = omHasKey (lenKey method ++ key) v.eligibleImpls
 # DESUGAR
 (DUse false (UseGroup ("frontend" "ast") ((mem "Pat" true) (mem "Route" true) (mem "Addr" true) (mem "Lit" true))))
+(DUse false (UseGroup ("ir" "core_walk") ((mem "patBinders" false))))
 (DUse false (UseGroup ("ir" "core_ir") ((mem "CExpr" true) (mem "MethodEvidence" true) (mem "givenNames" false) (mem "instanceWord" false) (mem "CField" true) (mem "CBind" true) (mem "CClause" true) (mem "CStmt" true) (mem "CArm" true) (mem "CGuard" true) (mem "CImplEntry" true) (mem "CImplBody" true) (mem "leadingDictParams" false))))
 (DUse false (UseGroup ("support" "util") ((mem "lenKey" false) (mem "contains" false) (mem "listLen" false) (mem "filterList" false) (mem "reverseL" false) (mem "anyList" false) (mem "isNonEmptyL" false) (mem "dedup" false))))
 (DUse false (UseGroup ("support" "ordmap") ((mem "OrdMap" false) (mem "omEmpty" false) (mem "omInsert" false) (mem "omLookup" false) (mem "omHasKey" false) (mem "omDelete" false) (mem "omFromNames" false) (mem "omFromPairs" false))))
@@ -1729,8 +1713,8 @@ isTrmcImpl v method key = omHasKey (lenKey method ++ key) v.eligibleImpls
 (DFunDef false "freeVarsIn" (PWild (PCon "CLit" PWild)) (EListLit))
 (DFunDef false "freeVarsIn" ((PVar "b") (PCon "CVar" (PVar "x") PWild)) (EIf (EApp (EApp (EVar "omHasKey") (EVar "x")) (EVar "b")) (EListLit) (EListLit (EVar "x"))))
 (DFunDef false "freeVarsIn" ((PVar "b") (PCon "CApp" (PVar "f") (PVar "args") PWild)) (EBinOp "++" (EApp (EApp (EVar "freeVarsIn") (EVar "b")) (EVar "f")) (EApp (EApp (EVar "flatMap") (EApp (EVar "freeVarsIn") (EVar "b"))) (EVar "args"))))
-(DFunDef false "freeVarsIn" ((PVar "b") (PCon "CLam" (PVar "ps") (PVar "body"))) (EApp (EApp (EVar "freeVarsIn") (EApp (EApp (EVar "omFromNames") (EApp (EVar "patVarNames") (EVar "ps"))) (EVar "b"))) (EVar "body")))
-(DFunDef false "freeVarsIn" ((PVar "b") (PCon "CLet" (PVar "recF") (PVar "pat") (PVar "e1") (PVar "e2"))) (EBlock (DoLet false false (PVar "b2") (EApp (EApp (EVar "omFromNames") (EApp (EVar "patVars") (EVar "pat"))) (EVar "b"))) (DoLet false false (PVar "fe1") (EIf (EVar "recF") (EApp (EApp (EVar "freeVarsIn") (EVar "b2")) (EVar "e1")) (EApp (EApp (EVar "freeVarsIn") (EVar "b")) (EVar "e1")))) (DoExpr (EBinOp "++" (EVar "fe1") (EApp (EApp (EVar "freeVarsIn") (EVar "b2")) (EVar "e2"))))))
+(DFunDef false "freeVarsIn" ((PVar "b") (PCon "CLam" (PVar "ps") (PVar "body"))) (EApp (EApp (EVar "freeVarsIn") (EApp (EApp (EVar "omFromNames") (EApp (EApp (EVar "flatMap") (EVar "patBinders")) (EVar "ps"))) (EVar "b"))) (EVar "body")))
+(DFunDef false "freeVarsIn" ((PVar "b") (PCon "CLet" (PVar "recF") (PVar "pat") (PVar "e1") (PVar "e2"))) (EBlock (DoLet false false (PVar "b2") (EApp (EApp (EVar "omFromNames") (EApp (EVar "patBinders") (EVar "pat"))) (EVar "b"))) (DoLet false false (PVar "fe1") (EIf (EVar "recF") (EApp (EApp (EVar "freeVarsIn") (EVar "b2")) (EVar "e1")) (EApp (EApp (EVar "freeVarsIn") (EVar "b")) (EVar "e1")))) (DoExpr (EBinOp "++" (EVar "fe1") (EApp (EApp (EVar "freeVarsIn") (EVar "b2")) (EVar "e2"))))))
 (DFunDef false "freeVarsIn" ((PVar "b") (PCon "CLetGroup" (PVar "binds") (PVar "body"))) (EBlock (DoLet false false (PVar "b2") (EApp (EApp (EVar "omFromNames") (EApp (EVar "bindNames") (EVar "binds"))) (EVar "b"))) (DoExpr (EBinOp "++" (EApp (EApp (EVar "freeVarsBinds") (EVar "b2")) (EVar "binds")) (EApp (EApp (EVar "freeVarsIn") (EVar "b2")) (EVar "body"))))))
 (DFunDef false "freeVarsIn" ((PVar "b") (PCon "CBlock" (PVar "stmts"))) (EApp (EApp (EVar "freeVarsStmts") (EVar "b")) (EVar "stmts")))
 (DFunDef false "freeVarsIn" ((PVar "b") (PCon "CIf" (PVar "c") (PVar "t") (PVar "f"))) (EBinOp "++" (EBinOp "++" (EApp (EApp (EVar "freeVarsIn") (EVar "b")) (EVar "c")) (EApp (EApp (EVar "freeVarsIn") (EVar "b")) (EVar "t"))) (EApp (EApp (EVar "freeVarsIn") (EVar "b")) (EVar "f"))))
@@ -1760,12 +1744,12 @@ isTrmcImpl v method key = omHasKey (lenKey method ++ key) v.eligibleImpls
 (DFunDef false "freeVarsList" ((PVar "b") (PCons (PVar "e") (PVar "rest"))) (EBinOp "++" (EApp (EApp (EVar "freeVarsIn") (EVar "b")) (EVar "e")) (EApp (EApp (EVar "freeVarsList") (EVar "b")) (EVar "rest"))))
 (DTypeSig true "freeVarsArms" (TyFun (TyApp (TyCon "OrdMap") (TyCon "Unit")) (TyFun (TyApp (TyCon "List") (TyCon "CArm")) (TyApp (TyCon "List") (TyCon "String")))))
 (DFunDef false "freeVarsArms" (PWild (PList)) (EListLit))
-(DFunDef false "freeVarsArms" ((PVar "b") (PCons (PCon "CArm" (PVar "pat") PWild (PVar "body")) (PVar "rest"))) (EBinOp "++" (EApp (EApp (EVar "freeVarsIn") (EApp (EApp (EVar "omFromNames") (EApp (EVar "patVars") (EVar "pat"))) (EVar "b"))) (EVar "body")) (EApp (EApp (EVar "freeVarsArms") (EVar "b")) (EVar "rest"))))
+(DFunDef false "freeVarsArms" ((PVar "b") (PCons (PCon "CArm" (PVar "pat") PWild (PVar "body")) (PVar "rest"))) (EBinOp "++" (EApp (EApp (EVar "freeVarsIn") (EApp (EApp (EVar "omFromNames") (EApp (EVar "patBinders") (EVar "pat"))) (EVar "b"))) (EVar "body")) (EApp (EApp (EVar "freeVarsArms") (EVar "b")) (EVar "rest"))))
 (DFunDef false "freeVarsArms" ((PVar "b") (PCons (PCon "CArmAlt" PWild PWild PWild) (PVar "rest"))) (EApp (EApp (EVar "freeVarsArms") (EVar "b")) (EVar "rest")))
 (DTypeSig true "freeVarsStmts" (TyFun (TyApp (TyCon "OrdMap") (TyCon "Unit")) (TyFun (TyApp (TyCon "List") (TyCon "CStmt")) (TyApp (TyCon "List") (TyCon "String")))))
 (DFunDef false "freeVarsStmts" (PWild (PList)) (EListLit))
 (DFunDef false "freeVarsStmts" ((PVar "b") (PCons (PCon "CSExpr" (PVar "ex")) (PVar "rest"))) (EBinOp "++" (EApp (EApp (EVar "freeVarsIn") (EVar "b")) (EVar "ex")) (EApp (EApp (EVar "freeVarsStmts") (EVar "b")) (EVar "rest"))))
-(DFunDef false "freeVarsStmts" ((PVar "b") (PCons (PCon "CSLet" PWild (PVar "pat") (PVar "ex")) (PVar "rest"))) (EBinOp "++" (EApp (EApp (EVar "freeVarsIn") (EVar "b")) (EVar "ex")) (EApp (EApp (EVar "freeVarsStmts") (EApp (EApp (EVar "omFromNames") (EApp (EVar "patVars") (EVar "pat"))) (EVar "b"))) (EVar "rest"))))
+(DFunDef false "freeVarsStmts" ((PVar "b") (PCons (PCon "CSLet" PWild (PVar "pat") (PVar "ex")) (PVar "rest"))) (EBinOp "++" (EApp (EApp (EVar "freeVarsIn") (EVar "b")) (EVar "ex")) (EApp (EApp (EVar "freeVarsStmts") (EApp (EApp (EVar "omFromNames") (EApp (EVar "patBinders") (EVar "pat"))) (EVar "b"))) (EVar "rest"))))
 (DFunDef false "freeVarsStmts" ((PVar "b") (PCons (PCon "CSAssign" PWild (PVar "ex")) (PVar "rest"))) (EBinOp "++" (EApp (EApp (EVar "freeVarsIn") (EVar "b")) (EVar "ex")) (EApp (EApp (EVar "freeVarsStmts") (EVar "b")) (EVar "rest"))))
 (DFunDef false "freeVarsStmts" ((PVar "b") (PCons PWild (PVar "rest"))) (EApp (EApp (EVar "freeVarsStmts") (EVar "b")) (EVar "rest")))
 (DTypeSig true "freeVarsBinds" (TyFun (TyApp (TyCon "OrdMap") (TyCon "Unit")) (TyFun (TyApp (TyCon "List") (TyCon "CBind")) (TyApp (TyCon "List") (TyCon "String")))))
@@ -1773,24 +1757,11 @@ isTrmcImpl v method key = omHasKey (lenKey method ++ key) v.eligibleImpls
 (DFunDef false "freeVarsBinds" ((PVar "b") (PCons (PCon "CBind" PWild (PVar "clauses") PWild PWild) (PVar "rest"))) (EBinOp "++" (EApp (EApp (EVar "freeVarsClauses") (EVar "b")) (EVar "clauses")) (EApp (EApp (EVar "freeVarsBinds") (EVar "b")) (EVar "rest"))))
 (DTypeSig false "freeVarsClauses" (TyFun (TyApp (TyCon "OrdMap") (TyCon "Unit")) (TyFun (TyApp (TyCon "List") (TyCon "CClause")) (TyApp (TyCon "List") (TyCon "String")))))
 (DFunDef false "freeVarsClauses" (PWild (PList)) (EListLit))
-(DFunDef false "freeVarsClauses" ((PVar "b") (PCons (PCon "CClause" (PVar "pats") (PVar "body")) (PVar "rest"))) (EBinOp "++" (EApp (EApp (EVar "freeVarsIn") (EApp (EApp (EVar "omFromNames") (EApp (EVar "patVarNames") (EVar "pats"))) (EVar "b"))) (EVar "body")) (EApp (EApp (EVar "freeVarsClauses") (EVar "b")) (EVar "rest"))))
+(DFunDef false "freeVarsClauses" ((PVar "b") (PCons (PCon "CClause" (PVar "pats") (PVar "body")) (PVar "rest"))) (EBinOp "++" (EApp (EApp (EVar "freeVarsIn") (EApp (EApp (EVar "omFromNames") (EApp (EApp (EVar "flatMap") (EVar "patBinders")) (EVar "pats"))) (EVar "b"))) (EVar "body")) (EApp (EApp (EVar "freeVarsClauses") (EVar "b")) (EVar "rest"))))
 (DTypeSig true "bindNames" (TyFun (TyApp (TyCon "List") (TyCon "CBind")) (TyApp (TyCon "List") (TyCon "String"))))
 (DFunDef false "bindNames" ((PVar "bs")) (EApp (EApp (EVar "map") (EVar "bindName")) (EVar "bs")))
 (DTypeSig true "bindName" (TyFun (TyCon "CBind") (TyCon "String")))
 (DFunDef false "bindName" ((PCon "CBind" (PVar "name") PWild PWild PWild)) (EVar "name"))
-(DTypeSig true "patVars" (TyFun (TyCon "Pat") (TyApp (TyCon "List") (TyCon "String"))))
-(DFunDef false "patVars" ((PCon "PVar" (PVar "x") PWild PWild)) (EListLit (EVar "x")))
-(DFunDef false "patVars" ((PCon "PCon" PWild (PVar "args"))) (EApp (EVar "patVarsList") (EVar "args")))
-(DFunDef false "patVars" ((PCon "PCons" (PVar "h") (PVar "t"))) (EBinOp "++" (EApp (EVar "patVars") (EVar "h")) (EApp (EVar "patVars") (EVar "t"))))
-(DFunDef false "patVars" ((PCon "PTuple" (PVar "ps"))) (EApp (EVar "patVarsList") (EVar "ps")))
-(DFunDef false "patVars" ((PCon "PList" (PVar "ps"))) (EApp (EVar "patVarsList") (EVar "ps")))
-(DFunDef false "patVars" ((PCon "PAs" (PVar "x") PWild PWild (PVar "p"))) (EBinOp "::" (EVar "x") (EApp (EVar "patVars") (EVar "p"))))
-(DFunDef false "patVars" (PWild) (EListLit))
-(DTypeSig true "patVarsList" (TyFun (TyApp (TyCon "List") (TyCon "Pat")) (TyApp (TyCon "List") (TyCon "String"))))
-(DFunDef false "patVarsList" ((PList)) (EListLit))
-(DFunDef false "patVarsList" ((PCons (PVar "p") (PVar "rest"))) (EBinOp "++" (EApp (EVar "patVars") (EVar "p")) (EApp (EVar "patVarsList") (EVar "rest"))))
-(DTypeSig true "patVarNames" (TyFun (TyApp (TyCon "List") (TyCon "Pat")) (TyApp (TyCon "List") (TyCon "String"))))
-(DFunDef false "patVarNames" ((PVar "ps")) (EApp (EVar "patVarsList") (EVar "ps")))
 (DTypeSig true "trmcEligible" (TyFun (TyFun (TyCon "String") (TyCon "Bool")) (TyFun (TyFun (TyCon "String") (TyCon "Int")) (TyFun (TyCon "SelfRef") (TyFun (TyCon "Int") (TyFun (TyApp (TyCon "List") (TyTuple (TyApp (TyCon "List") (TyCon "Pat")) (TyCon "CExpr"))) (TyCon "Bool")))))))
 (DFunDef false "trmcEligible" ((PVar "ic") (PVar "ar") (PVar "self") (PVar "arity") (PVar "clauses")) (EBinOp "&&" (EApp (EApp (EApp (EApp (EApp (EVar "trmcClausesOk") (EVar "ic")) (EVar "ar")) (EVar "self")) (EVar "arity")) (EVar "clauses")) (EApp (EApp (EApp (EApp (EApp (EVar "trmcAnyCons") (EVar "ic")) (EVar "ar")) (EVar "self")) (EVar "arity")) (EVar "clauses"))))
 (DTypeSig true "trmcClausesOk" (TyFun (TyFun (TyCon "String") (TyCon "Bool")) (TyFun (TyFun (TyCon "String") (TyCon "Int")) (TyFun (TyCon "SelfRef") (TyFun (TyCon "Int") (TyFun (TyApp (TyCon "List") (TyTuple (TyApp (TyCon "List") (TyCon "Pat")) (TyCon "CExpr"))) (TyCon "Bool")))))))
@@ -2162,6 +2133,7 @@ isTrmcImpl v method key = omHasKey (lenKey method ++ key) v.eligibleImpls
 (DFunDef false "isTrmcImpl" ((PVar "v") (PVar "method") (PVar "key")) (EApp (EApp (EVar "omHasKey") (EBinOp "++" (EApp (EVar "lenKey") (EVar "method")) (EVar "key"))) (EFieldAccess (EVar "v") "eligibleImpls")))
 # MARK
 (DUse false (UseGroup ("frontend" "ast") ((mem "Pat" true) (mem "Route" true) (mem "Addr" true) (mem "Lit" true))))
+(DUse false (UseGroup ("ir" "core_walk") ((mem "patBinders" false))))
 (DUse false (UseGroup ("ir" "core_ir") ((mem "CExpr" true) (mem "MethodEvidence" true) (mem "givenNames" false) (mem "instanceWord" false) (mem "CField" true) (mem "CBind" true) (mem "CClause" true) (mem "CStmt" true) (mem "CArm" true) (mem "CGuard" true) (mem "CImplEntry" true) (mem "CImplBody" true) (mem "leadingDictParams" false))))
 (DUse false (UseGroup ("support" "util") ((mem "lenKey" false) (mem "contains" false) (mem "listLen" false) (mem "filterList" false) (mem "reverseL" false) (mem "anyList" false) (mem "isNonEmptyL" false) (mem "dedup" false))))
 (DUse false (UseGroup ("support" "ordmap") ((mem "OrdMap" false) (mem "omEmpty" false) (mem "omInsert" false) (mem "omLookup" false) (mem "omHasKey" false) (mem "omDelete" false) (mem "omFromNames" false) (mem "omFromPairs" false))))
@@ -2178,8 +2150,8 @@ isTrmcImpl v method key = omHasKey (lenKey method ++ key) v.eligibleImpls
 (DFunDef false "freeVarsIn" (PWild (PCon "CLit" PWild)) (EListLit))
 (DFunDef false "freeVarsIn" ((PVar "b") (PCon "CVar" (PVar "x") PWild)) (EIf (EApp (EApp (EVar "omHasKey") (EVar "x")) (EVar "b")) (EListLit) (EListLit (EVar "x"))))
 (DFunDef false "freeVarsIn" ((PVar "b") (PCon "CApp" (PVar "f") (PVar "args") PWild)) (EBinOp "++" (EApp (EApp (EVar "freeVarsIn") (EVar "b")) (EVar "f")) (EApp (EApp (EDictApp "flatMap") (EApp (EVar "freeVarsIn") (EVar "b"))) (EVar "args"))))
-(DFunDef false "freeVarsIn" ((PVar "b") (PCon "CLam" (PVar "ps") (PVar "body"))) (EApp (EApp (EVar "freeVarsIn") (EApp (EApp (EVar "omFromNames") (EApp (EVar "patVarNames") (EVar "ps"))) (EVar "b"))) (EVar "body")))
-(DFunDef false "freeVarsIn" ((PVar "b") (PCon "CLet" (PVar "recF") (PVar "pat") (PVar "e1") (PVar "e2"))) (EBlock (DoLet false false (PVar "b2") (EApp (EApp (EVar "omFromNames") (EApp (EVar "patVars") (EVar "pat"))) (EVar "b"))) (DoLet false false (PVar "fe1") (EIf (EVar "recF") (EApp (EApp (EVar "freeVarsIn") (EVar "b2")) (EVar "e1")) (EApp (EApp (EVar "freeVarsIn") (EVar "b")) (EVar "e1")))) (DoExpr (EBinOp "++" (EVar "fe1") (EApp (EApp (EVar "freeVarsIn") (EVar "b2")) (EVar "e2"))))))
+(DFunDef false "freeVarsIn" ((PVar "b") (PCon "CLam" (PVar "ps") (PVar "body"))) (EApp (EApp (EVar "freeVarsIn") (EApp (EApp (EVar "omFromNames") (EApp (EApp (EDictApp "flatMap") (EVar "patBinders")) (EVar "ps"))) (EVar "b"))) (EVar "body")))
+(DFunDef false "freeVarsIn" ((PVar "b") (PCon "CLet" (PVar "recF") (PVar "pat") (PVar "e1") (PVar "e2"))) (EBlock (DoLet false false (PVar "b2") (EApp (EApp (EVar "omFromNames") (EApp (EVar "patBinders") (EVar "pat"))) (EVar "b"))) (DoLet false false (PVar "fe1") (EIf (EVar "recF") (EApp (EApp (EVar "freeVarsIn") (EVar "b2")) (EVar "e1")) (EApp (EApp (EVar "freeVarsIn") (EVar "b")) (EVar "e1")))) (DoExpr (EBinOp "++" (EVar "fe1") (EApp (EApp (EVar "freeVarsIn") (EVar "b2")) (EVar "e2"))))))
 (DFunDef false "freeVarsIn" ((PVar "b") (PCon "CLetGroup" (PVar "binds") (PVar "body"))) (EBlock (DoLet false false (PVar "b2") (EApp (EApp (EVar "omFromNames") (EApp (EVar "bindNames") (EVar "binds"))) (EVar "b"))) (DoExpr (EBinOp "++" (EApp (EApp (EVar "freeVarsBinds") (EVar "b2")) (EVar "binds")) (EApp (EApp (EVar "freeVarsIn") (EVar "b2")) (EVar "body"))))))
 (DFunDef false "freeVarsIn" ((PVar "b") (PCon "CBlock" (PVar "stmts"))) (EApp (EApp (EVar "freeVarsStmts") (EVar "b")) (EVar "stmts")))
 (DFunDef false "freeVarsIn" ((PVar "b") (PCon "CIf" (PVar "c") (PVar "t") (PVar "f"))) (EBinOp "++" (EBinOp "++" (EApp (EApp (EVar "freeVarsIn") (EVar "b")) (EVar "c")) (EApp (EApp (EVar "freeVarsIn") (EVar "b")) (EVar "t"))) (EApp (EApp (EVar "freeVarsIn") (EVar "b")) (EVar "f"))))
@@ -2209,12 +2181,12 @@ isTrmcImpl v method key = omHasKey (lenKey method ++ key) v.eligibleImpls
 (DFunDef false "freeVarsList" ((PVar "b") (PCons (PVar "e") (PVar "rest"))) (EBinOp "++" (EApp (EApp (EVar "freeVarsIn") (EVar "b")) (EVar "e")) (EApp (EApp (EVar "freeVarsList") (EVar "b")) (EVar "rest"))))
 (DTypeSig true "freeVarsArms" (TyFun (TyApp (TyCon "OrdMap") (TyCon "Unit")) (TyFun (TyApp (TyCon "List") (TyCon "CArm")) (TyApp (TyCon "List") (TyCon "String")))))
 (DFunDef false "freeVarsArms" (PWild (PList)) (EListLit))
-(DFunDef false "freeVarsArms" ((PVar "b") (PCons (PCon "CArm" (PVar "pat") PWild (PVar "body")) (PVar "rest"))) (EBinOp "++" (EApp (EApp (EVar "freeVarsIn") (EApp (EApp (EVar "omFromNames") (EApp (EVar "patVars") (EVar "pat"))) (EVar "b"))) (EVar "body")) (EApp (EApp (EVar "freeVarsArms") (EVar "b")) (EVar "rest"))))
+(DFunDef false "freeVarsArms" ((PVar "b") (PCons (PCon "CArm" (PVar "pat") PWild (PVar "body")) (PVar "rest"))) (EBinOp "++" (EApp (EApp (EVar "freeVarsIn") (EApp (EApp (EVar "omFromNames") (EApp (EVar "patBinders") (EVar "pat"))) (EVar "b"))) (EVar "body")) (EApp (EApp (EVar "freeVarsArms") (EVar "b")) (EVar "rest"))))
 (DFunDef false "freeVarsArms" ((PVar "b") (PCons (PCon "CArmAlt" PWild PWild PWild) (PVar "rest"))) (EApp (EApp (EVar "freeVarsArms") (EVar "b")) (EVar "rest")))
 (DTypeSig true "freeVarsStmts" (TyFun (TyApp (TyCon "OrdMap") (TyCon "Unit")) (TyFun (TyApp (TyCon "List") (TyCon "CStmt")) (TyApp (TyCon "List") (TyCon "String")))))
 (DFunDef false "freeVarsStmts" (PWild (PList)) (EListLit))
 (DFunDef false "freeVarsStmts" ((PVar "b") (PCons (PCon "CSExpr" (PVar "ex")) (PVar "rest"))) (EBinOp "++" (EApp (EApp (EVar "freeVarsIn") (EVar "b")) (EVar "ex")) (EApp (EApp (EVar "freeVarsStmts") (EVar "b")) (EVar "rest"))))
-(DFunDef false "freeVarsStmts" ((PVar "b") (PCons (PCon "CSLet" PWild (PVar "pat") (PVar "ex")) (PVar "rest"))) (EBinOp "++" (EApp (EApp (EVar "freeVarsIn") (EVar "b")) (EVar "ex")) (EApp (EApp (EVar "freeVarsStmts") (EApp (EApp (EVar "omFromNames") (EApp (EVar "patVars") (EVar "pat"))) (EVar "b"))) (EVar "rest"))))
+(DFunDef false "freeVarsStmts" ((PVar "b") (PCons (PCon "CSLet" PWild (PVar "pat") (PVar "ex")) (PVar "rest"))) (EBinOp "++" (EApp (EApp (EVar "freeVarsIn") (EVar "b")) (EVar "ex")) (EApp (EApp (EVar "freeVarsStmts") (EApp (EApp (EVar "omFromNames") (EApp (EVar "patBinders") (EVar "pat"))) (EVar "b"))) (EVar "rest"))))
 (DFunDef false "freeVarsStmts" ((PVar "b") (PCons (PCon "CSAssign" PWild (PVar "ex")) (PVar "rest"))) (EBinOp "++" (EApp (EApp (EVar "freeVarsIn") (EVar "b")) (EVar "ex")) (EApp (EApp (EVar "freeVarsStmts") (EVar "b")) (EVar "rest"))))
 (DFunDef false "freeVarsStmts" ((PVar "b") (PCons PWild (PVar "rest"))) (EApp (EApp (EVar "freeVarsStmts") (EVar "b")) (EVar "rest")))
 (DTypeSig true "freeVarsBinds" (TyFun (TyApp (TyCon "OrdMap") (TyCon "Unit")) (TyFun (TyApp (TyCon "List") (TyCon "CBind")) (TyApp (TyCon "List") (TyCon "String")))))
@@ -2222,24 +2194,11 @@ isTrmcImpl v method key = omHasKey (lenKey method ++ key) v.eligibleImpls
 (DFunDef false "freeVarsBinds" ((PVar "b") (PCons (PCon "CBind" PWild (PVar "clauses") PWild PWild) (PVar "rest"))) (EBinOp "++" (EApp (EApp (EVar "freeVarsClauses") (EVar "b")) (EVar "clauses")) (EApp (EApp (EVar "freeVarsBinds") (EVar "b")) (EVar "rest"))))
 (DTypeSig false "freeVarsClauses" (TyFun (TyApp (TyCon "OrdMap") (TyCon "Unit")) (TyFun (TyApp (TyCon "List") (TyCon "CClause")) (TyApp (TyCon "List") (TyCon "String")))))
 (DFunDef false "freeVarsClauses" (PWild (PList)) (EListLit))
-(DFunDef false "freeVarsClauses" ((PVar "b") (PCons (PCon "CClause" (PVar "pats") (PVar "body")) (PVar "rest"))) (EBinOp "++" (EApp (EApp (EVar "freeVarsIn") (EApp (EApp (EVar "omFromNames") (EApp (EVar "patVarNames") (EVar "pats"))) (EVar "b"))) (EVar "body")) (EApp (EApp (EVar "freeVarsClauses") (EVar "b")) (EVar "rest"))))
+(DFunDef false "freeVarsClauses" ((PVar "b") (PCons (PCon "CClause" (PVar "pats") (PVar "body")) (PVar "rest"))) (EBinOp "++" (EApp (EApp (EVar "freeVarsIn") (EApp (EApp (EVar "omFromNames") (EApp (EApp (EDictApp "flatMap") (EVar "patBinders")) (EVar "pats"))) (EVar "b"))) (EVar "body")) (EApp (EApp (EVar "freeVarsClauses") (EVar "b")) (EVar "rest"))))
 (DTypeSig true "bindNames" (TyFun (TyApp (TyCon "List") (TyCon "CBind")) (TyApp (TyCon "List") (TyCon "String"))))
 (DFunDef false "bindNames" ((PVar "bs")) (EApp (EApp (EMethodRef "map") (EVar "bindName")) (EVar "bs")))
 (DTypeSig true "bindName" (TyFun (TyCon "CBind") (TyCon "String")))
 (DFunDef false "bindName" ((PCon "CBind" (PVar "name") PWild PWild PWild)) (EVar "name"))
-(DTypeSig true "patVars" (TyFun (TyCon "Pat") (TyApp (TyCon "List") (TyCon "String"))))
-(DFunDef false "patVars" ((PCon "PVar" (PVar "x") PWild PWild)) (EListLit (EVar "x")))
-(DFunDef false "patVars" ((PCon "PCon" PWild (PVar "args"))) (EApp (EVar "patVarsList") (EVar "args")))
-(DFunDef false "patVars" ((PCon "PCons" (PVar "h") (PVar "t"))) (EBinOp "++" (EApp (EVar "patVars") (EVar "h")) (EApp (EVar "patVars") (EVar "t"))))
-(DFunDef false "patVars" ((PCon "PTuple" (PVar "ps"))) (EApp (EVar "patVarsList") (EVar "ps")))
-(DFunDef false "patVars" ((PCon "PList" (PVar "ps"))) (EApp (EVar "patVarsList") (EVar "ps")))
-(DFunDef false "patVars" ((PCon "PAs" (PVar "x") PWild PWild (PVar "p"))) (EBinOp "::" (EVar "x") (EApp (EVar "patVars") (EVar "p"))))
-(DFunDef false "patVars" (PWild) (EListLit))
-(DTypeSig true "patVarsList" (TyFun (TyApp (TyCon "List") (TyCon "Pat")) (TyApp (TyCon "List") (TyCon "String"))))
-(DFunDef false "patVarsList" ((PList)) (EListLit))
-(DFunDef false "patVarsList" ((PCons (PVar "p") (PVar "rest"))) (EBinOp "++" (EApp (EVar "patVars") (EVar "p")) (EApp (EVar "patVarsList") (EVar "rest"))))
-(DTypeSig true "patVarNames" (TyFun (TyApp (TyCon "List") (TyCon "Pat")) (TyApp (TyCon "List") (TyCon "String"))))
-(DFunDef false "patVarNames" ((PVar "ps")) (EApp (EVar "patVarsList") (EVar "ps")))
 (DTypeSig true "trmcEligible" (TyFun (TyFun (TyCon "String") (TyCon "Bool")) (TyFun (TyFun (TyCon "String") (TyCon "Int")) (TyFun (TyCon "SelfRef") (TyFun (TyCon "Int") (TyFun (TyApp (TyCon "List") (TyTuple (TyApp (TyCon "List") (TyCon "Pat")) (TyCon "CExpr"))) (TyCon "Bool")))))))
 (DFunDef false "trmcEligible" ((PVar "ic") (PVar "ar") (PVar "self") (PVar "arity") (PVar "clauses")) (EBinOp "&&" (EApp (EApp (EApp (EApp (EApp (EVar "trmcClausesOk") (EVar "ic")) (EVar "ar")) (EVar "self")) (EVar "arity")) (EVar "clauses")) (EApp (EApp (EApp (EApp (EApp (EVar "trmcAnyCons") (EVar "ic")) (EVar "ar")) (EVar "self")) (EVar "arity")) (EVar "clauses"))))
 (DTypeSig true "trmcClausesOk" (TyFun (TyFun (TyCon "String") (TyCon "Bool")) (TyFun (TyFun (TyCon "String") (TyCon "Int")) (TyFun (TyCon "SelfRef") (TyFun (TyCon "Int") (TyFun (TyApp (TyCon "List") (TyTuple (TyApp (TyCon "List") (TyCon "Pat")) (TyCon "CExpr"))) (TyCon "Bool")))))))

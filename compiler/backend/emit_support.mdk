@@ -20,7 +20,8 @@ import ir.core_ir.{
   CImplEntry(..),
 }
 import frontend.ast.{Lit(..), Loc(..), Pat}
-import backend.trmc_analysis.{patVars, bindNames, bindName}
+import backend.trmc_analysis.{bindNames, bindName}
+import ir.core_walk.{patBinders}
 import support.util.{
   contains,
   startsWith,
@@ -72,7 +73,7 @@ eagerVars b (CVar x _) = if omHasKey x b then [] else [x]
 eagerVars _ (CLit _) = []
 eagerVars b (CApp f args _) = eagerVars b f ++ flatMap (eagerVars b) args
 eagerVars b (CLet recF pat e1 e2) =
-  let b2 = omFromNames (patVars pat) b
+  let b2 = omFromNames (patBinders pat) b
   let fe1 = if recF then eagerVars b2 e1 else eagerVars b e1
   fe1 ++ eagerVars b2 e2
 eagerVars b (CLetGroup binds body) =
@@ -107,10 +108,11 @@ eagerVarsList b (e :: rest) = eagerVars b e ++ eagerVarsList b rest
 eagerVarsArms : OrdMap Unit -> List CArm -> List String
 eagerVarsArms _ [] = []
 eagerVarsArms b ((CArm pat gs body) :: rest) =
-  eagerVarsGuarded (omFromNames (patVars pat) b) gs body ++ eagerVarsArms b rest
+  eagerVarsGuarded (omFromNames (patBinders pat) b) gs body
+    ++ eagerVarsArms b rest
 -- a candidate's body is its owner arm's, read there
 eagerVarsArms b ((CArmAlt pat gs _) :: rest) =
-  eagerVarsGuarded (omFromNames (patVars pat) b) gs (CLit LUnit)
+  eagerVarsGuarded (omFromNames (patBinders pat) b) gs (CLit LUnit)
     ++ eagerVarsArms b rest
 
 -- an arm's guard chain + body.  A guard is EAGER — it runs when the arm is
@@ -124,7 +126,7 @@ eagerVarsGuarded b [] body = eagerVars b body
 eagerVarsGuarded b ((CGBool c) :: rest) body =
   eagerVars b c ++ eagerVarsGuarded b rest body
 eagerVarsGuarded b ((CGBind pat e) :: rest) body =
-  eagerVars b e ++ eagerVarsGuarded (omFromNames (patVars pat) b) rest body
+  eagerVars b e ++ eagerVarsGuarded (omFromNames (patBinders pat) b) rest body
 
 eagerVarsFields : OrdMap Unit -> List CField -> List String
 eagerVarsFields _ [] = []
@@ -135,7 +137,7 @@ eagerVarsStmts : OrdMap Unit -> List CStmt -> List String
 eagerVarsStmts _ [] = []
 eagerVarsStmts b ((CSExpr ex) :: rest) = eagerVars b ex ++ eagerVarsStmts b rest
 eagerVarsStmts b ((CSLet _ pat ex) :: rest) =
-  eagerVars b ex ++ eagerVarsStmts (omFromNames (patVars pat) b) rest
+  eagerVars b ex ++ eagerVarsStmts (omFromNames (patBinders pat) b) rest
 eagerVarsStmts b ((CSAssign _ ex) :: rest) =
   eagerVars b ex ++ eagerVarsStmts b rest
 eagerVarsStmts b (_ :: rest) = eagerVarsStmts b rest
@@ -186,7 +188,7 @@ clauseEagerVars ((CClause params body) :: rest) =
 
 paramBound : List Pat -> List String
 paramBound [] = []
-paramBound (p :: rest) = patVars p ++ paramBound rest
+paramBound (p :: rest) = patBinders p ++ paramBound rest
 
 -- names of the nullary single-clause bindings — the value globals whose init
 -- order the sort decides; reach sets are restricted to these.
@@ -347,7 +349,7 @@ bindNameMap (b :: rest) = omInsert (bindName b) b (bindNameMap rest)
 
 export
 guardVars : CGuard -> List String
-guardVars (CGBind p _) = patVars p
+guardVars (CGBind p _) = patBinders p
 guardVars (CGBool _) = []
 
 -- Effectful left-to-right fold over a list, for its side effects only.

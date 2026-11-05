@@ -16,6 +16,7 @@ import types.symbol_origins.{
 -- is a clean diff, not a rewrite).
 
 import ir.extern_lower.{lowerExterns}
+import ir.core_walk.{patBinders}
 import ir.core_pass.{
   CorePass(..), PassConfig(..), PassRun(..), PassFault(..), defaultPassConfig,
   runPasses
@@ -1643,30 +1644,12 @@ bindLetScope pat _ s = bindPatScope pat s
 -- The scope after a pattern: each variable it binds is a non-function local.
 export
 bindPatScope : Pat -> CallScope -> CallScope
-bindPatScope (PVar x _ _) s = omInsert x None s
-bindPatScope PWild s = s
-bindPatScope (PLit _) s = s
-bindPatScope (PCon _ ps) s = bindPatsScope ps s
-bindPatScope (PCons h t) s = bindPatScope t (bindPatScope h s)
-bindPatScope (PTuple ps) s = bindPatsScope ps s
-bindPatScope (PList ps) s = bindPatsScope ps s
-bindPatScope (PAs x _ _ p) s = bindPatScope p (omInsert x None s)
-bindPatScope (PRng _ _ _) s = s
-bindPatScope (PRec _ fields _) s = bindRecFieldsScope fields s
-bindPatScope (POr ps) s = bindPatsScope ps s
+bindPatScope pat s = fold (acc n => omInsert n None acc) s (patBinders pat)
 
 export
 bindPatsScope : List Pat -> CallScope -> CallScope
 bindPatsScope [] s = s
 bindPatsScope (p :: rest) s = bindPatsScope rest (bindPatScope p s)
-
--- A punned field `{x}` binds the field's own name.
-bindRecFieldsScope : List RecPatField -> CallScope -> CallScope
-bindRecFieldsScope [] s = s
-bindRecFieldsScope ((RecPatField f _ _ None) :: rest) s =
-  bindRecFieldsScope rest (omInsert f None s)
-bindRecFieldsScope ((RecPatField _ _ _ (Some p)) :: rest) s =
-  bindRecFieldsScope rest (bindPatScope p s)
 
 -- A let group's functions, each at its clause pattern count.
 export

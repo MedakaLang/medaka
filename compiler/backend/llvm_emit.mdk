@@ -15,6 +15,7 @@ import types.symbol_origins as SO
 import backend.llvm_symbol_names as LN
 import support.symbol_encoding.{encodeComponent}
 import support.symbol_encoding.{encodePair}
+import ir.core_walk.{patBinders}
 import backend.trmc_analysis.{TrmcVerdicts, isTrmcFn, isTrmcImpl}
 -- Core IR -> textual LLVM IR — Stage 2.4 NATIVE BACKEND (slices 1–8+).
 --
@@ -322,8 +323,6 @@ import backend.trmc_analysis.{
   freeVars,
   bindName,
   bindNames,
-  patVars,
-  patVarNames,
   isCtorTail,
   isSelfSatApp,
   consTailArgs,
@@ -4131,7 +4130,7 @@ u64Escapes e x raw (CLet False (PVar y a bid) e1 e2) = match e1
       + (if y == x then 0 else u64Escapes e x raw e2)
 u64Escapes e x raw (CLet False pat e1 e2) =
   u64EscapesBound e x pat e1
-    + (if contains x (patVars pat) then 0 else u64Escapes e x raw e2)
+    + (if contains x (patBinders pat) then 0 else u64Escapes e x raw e2)
 u64Escapes e x raw (CBlock stmts) = u64EscapesBlock e x raw stmts
 -- a container literal or an access binds nothing, so its parts are read as
 -- words (`U64.toIntTruncating x` inside one reads `x` as a payload).
@@ -4158,7 +4157,7 @@ u64EscapesBlock e x raw ((CSLet _ (PVar y a bid) ex) :: rest) = match ex
       + (if y == x then 0 else u64EscapesBlock e x raw rest)
 u64EscapesBlock e x raw ((CSLet _ pat ex) :: rest) =
   u64EscapesBound e x pat ex
-    + (if contains x (patVars pat) then 0 else u64EscapesBlock e x raw rest)
+    + (if contains x (patBinders pat) then 0 else u64EscapesBlock e x raw rest)
 u64EscapesBlock e x raw ((CSAssign y ex) :: rest) =
   u64Escapes e x False ex + (if y == x then 0 else u64EscapesBlock e x raw rest)
 u64EscapesBlock _ _ _ [] = 0
@@ -6493,7 +6492,7 @@ refsLater name clauses laterNames =
 clausesFreeVars : String -> List CClause -> List String
 clausesFreeVars _ [] = []
 clausesFreeVars self ((CClause pats body) :: rest) =
-  freeVars (self :: patVarNames pats) body ++ clausesFreeVars self rest
+  freeVars (self :: flatMap patBinders pats) body ++ clausesFreeVars self rest
 
 anyInList : List String -> List String -> Bool
 anyInList [] _ = False
@@ -6558,9 +6557,9 @@ satOnlyUses name arity (app@(CApp _ _ _)) =
         satOnlyList name arity args
     _ => satOnlyUses name arity hd && satOnlyList name arity args
 satOnlyUses name arity (CLam ps b) =
-  contains name (patVarNames ps) || satOnlyUses name arity b
+  contains name (flatMap patBinders ps) || satOnlyUses name arity b
 satOnlyUses name arity (CLet recF pat e1 e2) =
-  let shadow = contains name (patVars pat)
+  let shadow = contains name (patBinders pat)
   let ok1 =
     if recF then
       shadow || satOnlyUses name arity e1
@@ -6616,7 +6615,7 @@ satOnlyFields name arity ((CField _ _ ex) :: rest) =
 satOnlyArms : String -> Int -> List CArm -> Bool
 satOnlyArms _ _ [] = True
 satOnlyArms name arity ((CArm pat guards b) :: rest) =
-  let shadow = contains name (patVars pat)
+  let shadow = contains name (patBinders pat)
   satOnlyGuards name arity guards
     && (shadow || satOnlyUses name arity b)
     && satOnlyArms name arity rest
@@ -6636,7 +6635,7 @@ satOnlyStmts name arity ((CSExpr ex) :: rest) =
   satOnlyUses name arity ex && satOnlyStmts name arity rest
 satOnlyStmts name arity ((CSLet _ pat ex) :: rest) =
   satOnlyUses name arity ex
-    && (contains name (patVars pat) || satOnlyStmts name arity rest)
+    && (contains name (patBinders pat) || satOnlyStmts name arity rest)
 -- an assignment TO the name would replace the value its call sites resolve to.
 satOnlyStmts name arity ((CSAssign target ex) :: rest) =
   target /= name && satOnlyUses name arity ex && satOnlyStmts name arity rest
@@ -6651,7 +6650,7 @@ satOnlyBinds name arity ((CBind _ clauses _ _) :: rest) =
 satOnlyClauses : String -> Int -> List CClause -> Bool
 satOnlyClauses _ _ [] = True
 satOnlyClauses name arity ((CClause pats b) :: rest) =
-  (contains name (patVarNames pats) || satOnlyUses name arity b)
+  (contains name (flatMap patBinders pats) || satOnlyUses name arity b)
     && satOnlyClauses name arity rest
 
 -- emit the lifted multi-clause `define` for a let-group local function into the
@@ -9670,7 +9669,7 @@ emitConstClosure e lamName arity =
 -- destructuring lambda) routes through `emitLamPatDefine`: the SAME lifted-frame
 -- machinery as `emitLamGo`, but the patterned params are bound by a single-clause
 -- decision tree (`emitClauseTree`) over the `%argK` words instead of a verbatim
--- `paramEnv`.  Capture computation is identical — `patVarNames` already collects
+-- `paramEnv`.  Capture computation is identical — `patBinders` already collects
 -- nested pattern vars, so the patterned param vars are correctly excluded from the
 -- captured set.  Closes the lambda half of EMITTER-GAPS #5.
 emitLam : Emit -> OrdMap (String, LTy) -> List Pat -> CExpr -> (String, LTy)
@@ -9680,7 +9679,7 @@ emitLam e env pats body =
 emitLamGo : Emit -> OrdMap (String, LTy) -> List Pat -> CExpr -> (String, LTy)
 emitLamGo e env pats body =
   let lamName = generatedName e LN.GenLambda ""
-  let pnames = patVarNames pats
+  let pnames = flatMap patBinders pats
   let captured = keepInEnv env (dedupS (freeVars pnames body))
   let captureWords = capWords e env captured
   emitLamDefine e env lamName pats captured body
@@ -9697,7 +9696,7 @@ emitLamGo e env pats body =
 emitLamPat : Emit -> OrdMap (String, LTy) -> List Pat -> CExpr -> (String, LTy)
 emitLamPat e env pats body =
   let lamName = generatedName e LN.GenLambda ""
-  let pnames = patVarNames pats
+  let pnames = flatMap patBinders pats
   let captured = keepInEnv env (dedupS (freeVars pnames body))
   let captureWords = capWords e env captured
   emitPatLamDefine e env lamName omEmpty pats captured body
@@ -9732,7 +9731,7 @@ emitRecLamGo : Emit ->
   (String, LTy)
 emitRecLamGo e env f pats body =
   let lamName = generatedName e LN.GenLambda ""
-  let pnames = patVarNames pats
+  let pnames = flatMap patBinders pats
   let captured = keepInEnv env (removeStr f (dedupS (freeVars pnames body)))
   let captureWords = capWords e env captured
   emitRecLamDefine e env lamName f pats captured body
@@ -9752,7 +9751,7 @@ emitRecLamPat : Emit ->
   (String, LTy)
 emitRecLamPat e env f pats body =
   let lamName = generatedName e LN.GenLambda ""
-  let pnames = patVarNames pats
+  let pnames = flatMap patBinders pats
   let captured = keepInEnv env (removeStr f (dedupS (freeVars pnames body)))
   let captureWords = capWords e env captured
   emitPatLamDefine
@@ -10829,7 +10828,7 @@ orBound e env x = match omLookup x env
 -- The variables arm [owner]'s pattern and guards bind, in binding order.
 orOwnerVars : List CArm -> Int -> List String
 orOwnerVars arms owner = match nthArm arms owner
-  Some (CArm pat guards _) => patVars pat ++ flatMap guardVars guards
+  Some (CArm pat guards _) => patBinders pat ++ flatMap guardVars guards
   _ => []
 
 -- [joins] with the edge added to [owner]'s block, opening the block on its first

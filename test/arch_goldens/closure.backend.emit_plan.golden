@@ -18,6 +18,7 @@ frontend.runtime_constructors
 frontend.visibility
 ir.constructor_facts
 ir.core_ir
+ir.core_walk
 ir.extern_lower
 ir.extern_types
 ir.extern_uses
