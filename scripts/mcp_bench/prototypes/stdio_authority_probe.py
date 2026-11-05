@@ -139,7 +139,7 @@ def main():
                        'sealed', 'write', alias, seed, mutate=mutation)
             require('output_alias_guard', row['rc'] == 0 and row['remaining_hex'] == seed.hex()
                     and row['endpoint_hex'] == (b'BYPASS'.hex() if mutation else '')
-                    and value(row, 'operation_ok') == int(mutation))
+                    and value(row, 'operation_ok') == int(mutation), observed=row)
     for alias in ('/proc/self/fd/0', '/dev/fd/0', '/dev/stdin', str(out / 'input-link')):
         if alias.endswith('input-link'):
             Path(alias).symlink_to('/proc/self/fd/0')

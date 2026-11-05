@@ -26,8 +26,9 @@ the Linux fixture. No shell harness or production Python relay is introduced.
 The independent C fixture includes the real `medaka_rt.c` and links the real
 `medaka_process.c`; its private admission wrappers are a **model**, not runtime
 hooks. It requires distinct anonymous pipefs input/output, correct directions
-and nonblocking flags, distinct stderr and `NoNewPrivs=1`, then sets parent
-dumpability to zero. The measured identity was uid/euid 0, effective capabilities
+and nonblocking flags and distinct stderr. Its launcher establishes
+`NoNewPrivs=1` before acquisition, then the model sets parent dumpability to zero.
+Failure to establish that prerequisite refuses the control before its effects. The measured identity was uid/euid 0, effective capabilities
 zero, NoNewPrivs 1. This is not an ordinary-user deployment receipt or protection
 against CAP_SYS_PTRACE. The separate ownership experiment remains unqualified.
 
@@ -47,8 +48,8 @@ submission worker. No scheduling or Process implementation is duplicated.
 | C5 | Native launch attempts before acquisition prevent acquisition | 12 |
 | C6 | Audit automatic main output and abort paths separately from effects | 4181 |
 
-The census was replayed at `f114a7a5223afc09b0bddcb3114521714b965e75`
-with the byte-preserving probe readability edit pinned in the summary. It covers 6620 tracked `test/**` carriers, including 1024 host/prose/
+The census was replayed at `cbf01c2302a794fa8dae830ea7ae2cb2fadc1dc8`
+with the launcher and diagnostic edits pinned in the summary. It covers 6620 tracked `test/**` carriers, including 1024 host/prose/
 template files scanned in full to include inline programs. The overlapping
 counts are lexical candidates, including comments and strings; they are not
 counts of executable programs or promised compatibility breaks. 2339 carriers

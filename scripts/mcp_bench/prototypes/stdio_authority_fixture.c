@@ -155,6 +155,12 @@ int main(int argc, char **argv) {
     assert(write(fd, "CHILD", 5) == 5); close(fd); return 0;
   }
   report_fd = atoi(argv[2]); assert(argc >= 5);
+  int previous_nnp = prctl(PR_GET_NO_NEW_PRIVS, 0, 0, 0, 0);
+  if (previous_nnp < 0 || prctl(PR_SET_NO_NEW_PRIVS, 1, 0, 0, 0)) {
+    report("launcher_no_new_privs_unavailable", previous_nnp, errno);
+    return 77;
+  }
+  report("launcher_no_new_privs", previous_nnp, 0);
   const char *mode = argv[1], *op = argv[3], *path = argv[4];
   mutation = argc > 5 && !strcmp(argv[5], "mutate");
   GC_INIT(); mdk_process_submission_init();

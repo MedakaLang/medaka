@@ -42,7 +42,7 @@ if sys.platform == 'linux':
 
     stdio = out / 'stdio'
     result = run(['python3', prototype / 'stdio_authority_probe.py', '--root', root, '--out', stdio])
-    require(result.returncode == 77, 'stdio must remain blocked: ' + result.stderr)
+    require(result.returncode == 77, 'stdio must remain blocked: ' + result.stdout[-8000:] + result.stderr)
     values = json.loads((stdio / 'results.json').read_text())
     by_name = {r['name']: r for r in values}
     require(by_name['qualification']['status'] == 'BLOCKED' and by_name['cleanup']['status'] == 'PASS', 'stdio qualification or cleanup')
