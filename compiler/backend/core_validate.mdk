@@ -1,3 +1,4 @@
+import backend.package_identity.{validateIdentityPlan}
 import backend.impl_groups.{validateImplGroups}
 import ir.constructor_facts.{validateConstructorFacts}
 import backend.llvm_symbol_names as LN
@@ -232,6 +233,9 @@ emissionDefects backend domain requirement plan cp =
     None => firstShapeDefect [
       () => validateManifestCarriage requirement plan cp,
       () => validateConstructorFacts cp plan.constructorFacts,
+      () => match plan.identity
+        Err defects => defects
+        Ok identity => validateIdentityPlan cp identity,
       () => validatePlanImplGroups cp plan,
       () => validateExternMetadata cp,
       () =>

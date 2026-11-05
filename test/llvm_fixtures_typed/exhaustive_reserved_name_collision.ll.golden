@@ -322,7 +322,7 @@ intovf57:
   unreachable
 intok57:
   %t60 = call ptr @mdk_alloc(i64 16)
-  store i64 2, ptr %t60
+  store i64 4294967298, ptr %t60
   %t61 = getelementptr i8, ptr %t60, i64 8
   store i64 11, ptr %t61
   %t62 = ptrtoint ptr %t60 to i64
@@ -351,7 +351,7 @@ intovf77:
   call void @mdk_int_overflow(i64 0, i64 %t78, i64 %t79)
   unreachable
 intok77:
-  %t80 = call i64 @mdk.user.6d356635663735373336353732356635665f5f706c61696e(i64 8589934593)
+  %t80 = call i64 @mdk.user.6d356635663735373336353732356635665f5f706c61696e(i64 17179869185)
   %t81 = sub i64 20000001, 1
   %t82 = ashr i64 %t80, 1
   %t83 = call { i64, i1 } @llvm.smul.with.overflow.i64(i64 %t82, i64 %t81)
@@ -511,7 +511,7 @@ intok36:
   store i64 %t34, ptr %t0
   br label %decend1
 connext12:
-  %t39 = icmp eq i64 %t8, 2
+  %t39 = icmp eq i64 %t8, 4294967298
   br i1 %t39, label %conyes40, label %connext40
 conyes40:
   %t41 = inttoptr i64 %arg0 to ptr
@@ -557,13 +557,13 @@ discbox2:
   br label %disccont2
 disccont2:
   %t8 = phi i64 [ %t5, %discimm2 ], [ %t7, %discbox2 ]
-  %t9 = icmp eq i64 %t8, 4294967296
+  %t9 = icmp eq i64 %t8, 8589934592
   br i1 %t9, label %conyes10, label %connext10
 conyes10:
   store i64 21, ptr %t0
   br label %decend1
 connext10:
-  %t11 = icmp eq i64 %t8, 4294967297
+  %t11 = icmp eq i64 %t8, 8589934593
   br i1 %t11, label %conyes12, label %connext12
 conyes12:
   %t13 = inttoptr i64 %arg0 to ptr
@@ -603,7 +603,7 @@ intok36:
   store i64 %t34, ptr %t0
   br label %decend1
 connext12:
-  %t39 = icmp eq i64 %t8, 4294967298
+  %t39 = icmp eq i64 %t8, 8589934594
   br i1 %t39, label %conyes40, label %connext40
 conyes40:
   %t41 = inttoptr i64 %arg0 to ptr

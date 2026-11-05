@@ -301,7 +301,7 @@ entry:
   %t4 = inttoptr i64 %arg0 to ptr
   %t5 = select i1 %t3, ptr %t4, ptr @mdk_disc_none
   %t6 = load i64, ptr %t5
-  %t7 = icmp eq i64 %t6, 0
+  %t7 = icmp eq i64 %t6, 4294967296
   br i1 %t7, label %conyes8, label %connext8
 conyes8:
   %t9 = inttoptr i64 %arg0 to ptr
@@ -331,7 +331,7 @@ define internal i64 @mdk.impl.7a5a5f35665f5f35665f757365725f35665f5f35665f5f3361
 entry:
   %t0 = call i64 @mdk.slotcall.1(i64 %arg0, i64 0) ; slot __user__::Default.def
   %t1 = call ptr @mdk_alloc(i64 16)
-  store i64 0, ptr %t1
+  store i64 4294967296, ptr %t1
   %t2 = getelementptr i8, ptr %t1, i64 8
   store i64 %t0, ptr %t2
   %t3 = ptrtoint ptr %t1 to i64
@@ -342,7 +342,7 @@ entry:
 define internal i64 @mdk.impl.7a5a5f35665f5f35665f757365725f35665f5f35665f5f33615f5f33615f44656661756c745f37635f5f32385f5f35665f5f35665f757365725f35665f5f35665f5f32655f426f785f32305f496e745f32395f5f37635f.646566() {
 entry:
   %t0 = call ptr @mdk_alloc(i64 16)
-  store i64 0, ptr %t0
+  store i64 4294967296, ptr %t0
   %t1 = getelementptr i8, ptr %t0, i64 8
   store i64 85, ptr %t1
   %t2 = ptrtoint ptr %t0 to i64

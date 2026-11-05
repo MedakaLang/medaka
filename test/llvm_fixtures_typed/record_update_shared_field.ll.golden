@@ -321,6 +321,6 @@ entry:
 ; mdk-module module.5f5f757365725f5f
 @mdk.global.6d356635663735373336353732356635665f5f616767 = global i64 0
 ; mdk-module program
-@mdk.gen.dictcell.70726f6772616d..0 = internal constant [3 x i64] [i64 0, i64 19, i64 15]
+@mdk.gen.dictcell.70726f6772616d..0 = internal constant [3 x i64] [i64 8589934592, i64 19, i64 15]
 ; mdk-module program
 @mdk.gen.dictcell.70726f6772616d..1 = internal constant [3 x i64] [i64 4294967296, i64 1, i64 3]

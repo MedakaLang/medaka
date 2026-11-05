@@ -242,7 +242,7 @@ entry:
   store double 4.0, ptr %t4
   %t5 = ptrtoint ptr %t3 to i64
   %t6 = call ptr @mdk_alloc(i64 24)
-  store i64 0, ptr %t6
+  store i64 4294967296, ptr %t6
   %t7 = getelementptr i8, ptr %t6, i64 8
   store i64 %t2, ptr %t7
   %t8 = getelementptr i8, ptr %t6, i64 16
@@ -260,7 +260,7 @@ entry:
   store double 2.0, ptr %t15
   %t16 = ptrtoint ptr %t14 to i64
   %t17 = call ptr @mdk_alloc(i64 24)
-  store i64 0, ptr %t17
+  store i64 4294967296, ptr %t17
   %t18 = getelementptr i8, ptr %t17, i64 8
   store i64 %t13, ptr %t18
   %t19 = getelementptr i8, ptr %t17, i64 16

@@ -680,6 +680,12 @@ Two physical runtimes (Boehm+tagged-word native; host-GC+structs WasmGC) are
 layering rule, not by a shared encoding. §8 and §7.1 were never in real conflict;
 they sit at different layers.
 
+Package identity metadata is encoded by `backend/package_identity_sexp.mdk` with a
+format version, native ABI version, package fingerprint and integrity digest. The
+reader validates identities and their high-water marks before a consumer plans local
+assignments. Automatic package/interface loading belongs to V1. WasmGC keeps named GC
+types and ordinal discriminants; its trap sites share the planned file table with native.
+
 ### 8.7 Dictionaries are method tables
 
 An instance witness (dictionary) is a method table, planned once as `EmitPlan.methodTables`
