@@ -53,17 +53,16 @@ decodeEvEntries text = decodeAll readEvEntries text
 decodeAll : (SexpCursor -> Result SexpError a) -> String -> Result SexpError a
 decodeAll reader text =
   let cur = cursorOf text
-  match reader cur
-    Err e => Err e
-    Ok v =>
-      if cursorAtEnd cur then
-        Ok v
-      else
-        Err SexpError {
-          seOffset = cursorOffset cur,
-          sePath = "",
-          seWhat = "trailing text after the encoded value",
-        }
+  do
+    v <- reader cur
+    if cursorAtEnd cur then
+      Ok v
+    else
+      Err SexpError {
+        seOffset = cursorOffset cur,
+        sePath = "",
+        seWhat = "trailing text after the encoded value",
+      }
 
 checked : String -> SexpCursor -> a -> Result SexpError a
 checked path cur v =

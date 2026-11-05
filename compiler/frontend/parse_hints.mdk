@@ -39,9 +39,9 @@ matchContinuationHint toks offs lines matchPos armPos =
       HintInput { hintTokens = toks, hintOffsets = offs, hintLines = lines }
     let (header, left) = matchHeaderStart input lineStart matchPos 4088
     let anchor = matchHeaderAnchor input header matchPos matchCol
-    match anchor
-      None => None
-      Some col => matchCandidate input armPos col left
+    do
+      col <- anchor
+      matchCandidate input armPos col left
 
 -- At a `.` glued to a raw string literal (`p.r"x"`), the token index of that
 -- literal; the lexer reads `r"` after a `.` as the literal's prefix, never as a

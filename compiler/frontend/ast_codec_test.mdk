@@ -108,16 +108,15 @@ elaborated : List Decl ->
 elaborated rt core mods =
   let (_, report, _) =
     elaborateModulesWithReport defaultDriveInputs False None rt core mods
-  match report.trChecked
-    None => None
-    Some c =>
-      map
-        ((coreTrees, userTrees) => Elaborated {
-          elCore = coreTrees,
-          elMods = userTrees,
-          elEvidence = c.cpEvidence,
-        })
-        c.cpTrees
+  do
+    c <- report.trChecked
+    map
+      ((coreTrees, userTrees) => Elaborated {
+        elCore = coreTrees,
+        elMods = userTrees,
+        elEvidence = c.cpEvidence,
+      })
+      c.cpTrees
 
 -- The runtime and core declarations every drive starts from.
 preludeDecls : Unit -> <Env "MEDAKA_ROOT", FileRead> (List Decl, List Decl)

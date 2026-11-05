@@ -238,9 +238,9 @@ uniEscText src len p = copyCharRange src p (uHexEnd src len (p + 3) + 1)
 uniEscChar : Array Char -> Int -> Int -> Option Char
 uniEscChar src len p
   | not (uniEscWellFormed src len p) = None
-  | otherwise = match uniEscCode src len p
-    None => None
-    Some cp => charFromCode cp
+  | otherwise = do
+    cp <- uniEscCode src len p
+    charFromCode cp
 
 uniIsSurrogate : Int -> Bool
 uniIsSurrogate cp = cp >= 55296 && cp <= 57343
