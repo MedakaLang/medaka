@@ -1,5 +1,5 @@
 # META
-source_lines=307
+source_lines=311
 stages=DESUGAR,MARK
 # SOURCE
 import frontend.ast.{Loc(..), Lit(..)}
@@ -55,84 +55,88 @@ sitePackable (Loc f sl sc el ec) =
     && sc >= 0
     && sc < shiftLeft 1 siteColumnBits
 
-fileOf : Loc -> List String
-fileOf (l@(Loc f _ _ _ _)) = if sitePackable l then [f] else []
+fileOf : Loc -> OrdMap Int -> OrdMap Int
+fileOf (l@(Loc f _ _ _ _)) files =
+  if sitePackable l then omInsert f 0 files else files
 
-bindFiles : CBind -> List String
-bindFiles (CBind _ clauses loc _) = fileOf loc ++ flatMap clauseFiles clauses
-clauseFiles : CClause -> List String
-clauseFiles (CClause _ body) = exprFiles body
-fieldFiles : CField -> List String
-fieldFiles (CField _ _ e) = exprFiles e
-armFiles : CArm -> List String
-armFiles (CArm _ guards body) = flatMap guardFiles guards ++ exprFiles body
-armFiles (CArmAlt _ guards _) = flatMap guardFiles guards
-guardFiles : CGuard -> List String
-guardFiles (CGBool e) = exprFiles e
-guardFiles (CGBind _ e) = exprFiles e
-stmtFiles : CStmt -> List String
-stmtFiles (CSExpr e) = exprFiles e
-stmtFiles (CSLet _ _ e) = exprFiles e
-stmtFiles (CSAssign _ e) = exprFiles e
-treeFiles : CTree -> List String
-treeFiles (CTFail (NoArm loc)) = fileOf loc
-treeFiles (CTFail (LetRefuted loc)) = fileOf loc
-treeFiles (CTLeaf _) = []
-treeFiles (CTGuard _ tree) = treeFiles tree
-treeFiles (CTSwitch branches fallback) =
-  flatMap branchFiles branches ++ treeFiles fallback
-treeFiles (CTDrop tree) = treeFiles tree
-branchFiles : CTBranch -> List String
-branchFiles (CTBranch _ tree) = treeFiles tree
-implFiles : CImplEntry -> List String
-implFiles (CImplEntry _ _ _ (CImplTagged _ _ _ _ _ _ body)) = exprFiles body
-implFiles (CImplEntry _ _ _ (CImplDefault _ _ _ _ _ _ body)) = exprFiles body
+bindFiles : OrdMap Int -> CBind -> OrdMap Int
+bindFiles files (CBind _ clauses loc _) =
+  fold clauseFiles (fileOf loc files) clauses
+clauseFiles : OrdMap Int -> CClause -> OrdMap Int
+clauseFiles files (CClause _ body) = exprFiles files body
+fieldFiles : OrdMap Int -> CField -> OrdMap Int
+fieldFiles files (CField _ _ e) = exprFiles files e
+armFiles : OrdMap Int -> CArm -> OrdMap Int
+armFiles files (CArm _ guards body) =
+  exprFiles (fold guardFiles files guards) body
+armFiles files (CArmAlt _ guards _) = fold guardFiles files guards
+guardFiles : OrdMap Int -> CGuard -> OrdMap Int
+guardFiles files (CGBool e) = exprFiles files e
+guardFiles files (CGBind _ e) = exprFiles files e
+stmtFiles : OrdMap Int -> CStmt -> OrdMap Int
+stmtFiles files (CSExpr e) = exprFiles files e
+stmtFiles files (CSLet _ _ e) = exprFiles files e
+stmtFiles files (CSAssign _ e) = exprFiles files e
+treeFiles : OrdMap Int -> CTree -> OrdMap Int
+treeFiles files (CTFail (NoArm loc)) = fileOf loc files
+treeFiles files (CTFail (LetRefuted loc)) = fileOf loc files
+treeFiles files (CTLeaf _) = files
+treeFiles files (CTGuard _ tree) = treeFiles files tree
+treeFiles files (CTSwitch branches fallback) =
+  treeFiles (fold branchFiles files branches) fallback
+treeFiles files (CTDrop tree) = treeFiles files tree
+branchFiles : OrdMap Int -> CTBranch -> OrdMap Int
+branchFiles files (CTBranch _ tree) = treeFiles files tree
+implFiles : OrdMap Int -> CImplEntry -> OrdMap Int
+implFiles files (CImplEntry _ _ _ (CImplTagged _ _ _ _ _ _ body)) =
+  exprFiles files body
+implFiles files (CImplEntry _ _ _ (CImplDefault _ _ _ _ _ _ body)) =
+  exprFiles files body
 
-exprFiles : CExpr -> List String
-exprFiles (CLit _) = []
-exprFiles (CVar _ _) = []
-exprFiles (CApp (CVar name _) [CLit (LString f), CLit (LInt line), CLit (LInt col)] _) =
+exprFiles : OrdMap Int -> CExpr -> OrdMap Int
+exprFiles files (CLit _) = files
+exprFiles files (CVar _ _) = files
+exprFiles files (CApp (CVar name _) [CLit (LString f), CLit (LInt line), CLit (LInt col)] _) =
   if name == siteSentinelName then
-    fileOf (Loc f line col line (col + 1))
+    fileOf (Loc f line col line (col + 1)) files
   else
-    []
-exprFiles (CApp head args _) = exprFiles head ++ flatMap exprFiles args
-exprFiles (CLam _ body) = exprFiles body
-exprFiles (CLet _ _ rhs body) = exprFiles rhs ++ exprFiles body
-exprFiles (CLetGroup binds body) = flatMap bindFiles binds ++ exprFiles body
-exprFiles (CMatch e arms) = exprFiles e ++ flatMap armFiles arms
-exprFiles (CDecision e arms tree) =
-  exprFiles e ++ flatMap armFiles arms ++ treeFiles tree
-exprFiles (CIf a b c) = exprFiles a ++ exprFiles b ++ exprFiles c
-exprFiles (CBinPrim _ a b _ loc) = fileOf loc ++ exprFiles a ++ exprFiles b
-exprFiles (CUnOp _ e) = exprFiles e
-exprFiles (CTuple es) = flatMap exprFiles es
-exprFiles (CList es) = flatMap exprFiles es
-exprFiles (CRecord _ fs) = flatMap fieldFiles fs
-exprFiles (CFieldAccess e _ _ _) = exprFiles e
-exprFiles (CRecordUpdate _ e fs) = exprFiles e ++ flatMap fieldFiles fs
-exprFiles (CVariantUpdate _ e fs) = exprFiles e ++ flatMap fieldFiles fs
-exprFiles (CArray es) = flatMap exprFiles es
-exprFiles (CRangeList a b _) = exprFiles a ++ exprFiles b
-exprFiles (CRangeArray a b _) = exprFiles a ++ exprFiles b
-exprFiles (CIndex a b) = exprFiles a ++ exprFiles b
-exprFiles (CSlice a b c _) = exprFiles a ++ exprFiles b ++ exprFiles c
-exprFiles (CStringIndex a b) = exprFiles a ++ exprFiles b
-exprFiles (CStringSlice a b c _) = exprFiles a ++ exprFiles b ++ exprFiles c
-exprFiles (CListIndex a b) = exprFiles a ++ exprFiles b
-exprFiles (CListSlice a b c _) = exprFiles a ++ exprFiles b ++ exprFiles c
-exprFiles (CBlock stmts) = flatMap stmtFiles stmts
-exprFiles (CMethod _ _) = []
-exprFiles (CDict _ _) = []
+    files
+exprFiles files (CApp head args _) = fold exprFiles (exprFiles files head) args
+exprFiles files (CLam _ body) = exprFiles files body
+exprFiles files (CLet _ _ rhs body) = exprFiles (exprFiles files rhs) body
+exprFiles files (CLetGroup binds body) =
+  exprFiles (fold bindFiles files binds) body
+exprFiles files (CMatch e arms) = fold armFiles (exprFiles files e) arms
+exprFiles files (CDecision e arms tree) =
+  treeFiles (fold armFiles (exprFiles files e) arms) tree
+exprFiles files (CIf a b c) = exprFiles (exprFiles (exprFiles files a) b) c
+exprFiles files (CBinPrim _ a b _ loc) =
+  exprFiles (exprFiles (fileOf loc files) a) b
+exprFiles files (CUnOp _ e) = exprFiles files e
+exprFiles files (CTuple es) = fold exprFiles files es
+exprFiles files (CList es) = fold exprFiles files es
+exprFiles files (CRecord _ fs) = fold fieldFiles files fs
+exprFiles files (CFieldAccess e _ _ _) = exprFiles files e
+exprFiles files (CRecordUpdate _ e fs) = fold fieldFiles (exprFiles files e) fs
+exprFiles files (CVariantUpdate _ e fs) = fold fieldFiles (exprFiles files e) fs
+exprFiles files (CArray es) = fold exprFiles files es
+exprFiles files (CRangeList a b _) = exprFiles (exprFiles files a) b
+exprFiles files (CRangeArray a b _) = exprFiles (exprFiles files a) b
+exprFiles files (CIndex a b) = exprFiles (exprFiles files a) b
+exprFiles files (CSlice a b c _) = exprFiles (exprFiles (exprFiles files a) b) c
+exprFiles files (CStringIndex a b) = exprFiles (exprFiles files a) b
+exprFiles files (CStringSlice a b c _) =
+  exprFiles (exprFiles (exprFiles files a) b) c
+exprFiles files (CListIndex a b) = exprFiles (exprFiles files a) b
+exprFiles files (CListSlice a b c _) =
+  exprFiles (exprFiles (exprFiles files a) b) c
+exprFiles files (CBlock stmts) = fold stmtFiles files stmts
+exprFiles files (CMethod _ _) = files
+exprFiles files (CDict _ _) = files
 
 programFiles : CProgram -> List String
 programFiles (CProgram binds _ _ impls _ _) =
-  map
-    fst
-    (entries
-      (omFromNames
-        (flatMap bindFiles binds ++ flatMap implFiles impls)
-        omEmpty))
+  map fst (entries (fold implFiles (fold bindFiles omEmpty binds) impls))
 
 assign : List String -> Int -> OrdMap Int -> (OrdMap Int, Int)
 assign [] high table = (table, high)
@@ -322,69 +326,69 @@ packSite plan (loc@(Loc f line col _ _)) =
 (DFunDef false "emptyPackage" () (ERecordCreate "PackageIdentity" ((fa "fingerprint" (ELit (LString ""))) (fa "abi" (EVar "abiVersion")) (fa "types" (EVar "omEmpty")) (fa "files" (EVar "omEmpty")) (fa "typeHigh" (ELit (LInt 0))) (fa "fileHigh" (ELit (LInt 0))))))
 (DTypeSig true "sitePackable" (TyFun (TyCon "Loc") (TyCon "Bool")))
 (DFunDef false "sitePackable" ((PCon "Loc" (PVar "f") (PVar "sl") (PVar "sc") (PVar "el") (PVar "ec"))) (EBinOp "&&" (EBinOp "&&" (EBinOp "&&" (EBinOp "&&" (EBinOp "&&" (EBinOp "/=" (EVar "f") (ELit (LString ""))) (EApp (EVar "not") (EBinOp "&&" (EBinOp "&&" (EBinOp "&&" (EBinOp "==" (EVar "sl") (ELit (LInt 1))) (EBinOp "==" (EVar "sc") (ELit (LInt 0)))) (EBinOp "==" (EVar "el") (ELit (LInt 1)))) (EBinOp "==" (EVar "ec") (ELit (LInt 0)))))) (EBinOp ">=" (EVar "sl") (ELit (LInt 0)))) (EBinOp "<" (EVar "sl") (EApp (EApp (EVar "shiftLeft") (ELit (LInt 1))) (EVar "siteLineBits")))) (EBinOp ">=" (EVar "sc") (ELit (LInt 0)))) (EBinOp "<" (EVar "sc") (EApp (EApp (EVar "shiftLeft") (ELit (LInt 1))) (EVar "siteColumnBits")))))
-(DTypeSig false "fileOf" (TyFun (TyCon "Loc") (TyApp (TyCon "List") (TyCon "String"))))
-(DFunDef false "fileOf" ((PAs "l" (PCon "Loc" (PVar "f") PWild PWild PWild PWild))) (EIf (EApp (EVar "sitePackable") (EVar "l")) (EListLit (EVar "f")) (EListLit)))
-(DTypeSig false "bindFiles" (TyFun (TyCon "CBind") (TyApp (TyCon "List") (TyCon "String"))))
-(DFunDef false "bindFiles" ((PCon "CBind" PWild (PVar "clauses") (PVar "loc") PWild)) (EBinOp "++" (EApp (EVar "fileOf") (EVar "loc")) (EApp (EApp (EVar "flatMap") (EVar "clauseFiles")) (EVar "clauses"))))
-(DTypeSig false "clauseFiles" (TyFun (TyCon "CClause") (TyApp (TyCon "List") (TyCon "String"))))
-(DFunDef false "clauseFiles" ((PCon "CClause" PWild (PVar "body"))) (EApp (EVar "exprFiles") (EVar "body")))
-(DTypeSig false "fieldFiles" (TyFun (TyCon "CField") (TyApp (TyCon "List") (TyCon "String"))))
-(DFunDef false "fieldFiles" ((PCon "CField" PWild PWild (PVar "e"))) (EApp (EVar "exprFiles") (EVar "e")))
-(DTypeSig false "armFiles" (TyFun (TyCon "CArm") (TyApp (TyCon "List") (TyCon "String"))))
-(DFunDef false "armFiles" ((PCon "CArm" PWild (PVar "guards") (PVar "body"))) (EBinOp "++" (EApp (EApp (EVar "flatMap") (EVar "guardFiles")) (EVar "guards")) (EApp (EVar "exprFiles") (EVar "body"))))
-(DFunDef false "armFiles" ((PCon "CArmAlt" PWild (PVar "guards") PWild)) (EApp (EApp (EVar "flatMap") (EVar "guardFiles")) (EVar "guards")))
-(DTypeSig false "guardFiles" (TyFun (TyCon "CGuard") (TyApp (TyCon "List") (TyCon "String"))))
-(DFunDef false "guardFiles" ((PCon "CGBool" (PVar "e"))) (EApp (EVar "exprFiles") (EVar "e")))
-(DFunDef false "guardFiles" ((PCon "CGBind" PWild (PVar "e"))) (EApp (EVar "exprFiles") (EVar "e")))
-(DTypeSig false "stmtFiles" (TyFun (TyCon "CStmt") (TyApp (TyCon "List") (TyCon "String"))))
-(DFunDef false "stmtFiles" ((PCon "CSExpr" (PVar "e"))) (EApp (EVar "exprFiles") (EVar "e")))
-(DFunDef false "stmtFiles" ((PCon "CSLet" PWild PWild (PVar "e"))) (EApp (EVar "exprFiles") (EVar "e")))
-(DFunDef false "stmtFiles" ((PCon "CSAssign" PWild (PVar "e"))) (EApp (EVar "exprFiles") (EVar "e")))
-(DTypeSig false "treeFiles" (TyFun (TyCon "CTree") (TyApp (TyCon "List") (TyCon "String"))))
-(DFunDef false "treeFiles" ((PCon "CTFail" (PCon "NoArm" (PVar "loc")))) (EApp (EVar "fileOf") (EVar "loc")))
-(DFunDef false "treeFiles" ((PCon "CTFail" (PCon "LetRefuted" (PVar "loc")))) (EApp (EVar "fileOf") (EVar "loc")))
-(DFunDef false "treeFiles" ((PCon "CTLeaf" PWild)) (EListLit))
-(DFunDef false "treeFiles" ((PCon "CTGuard" PWild (PVar "tree"))) (EApp (EVar "treeFiles") (EVar "tree")))
-(DFunDef false "treeFiles" ((PCon "CTSwitch" (PVar "branches") (PVar "fallback"))) (EBinOp "++" (EApp (EApp (EVar "flatMap") (EVar "branchFiles")) (EVar "branches")) (EApp (EVar "treeFiles") (EVar "fallback"))))
-(DFunDef false "treeFiles" ((PCon "CTDrop" (PVar "tree"))) (EApp (EVar "treeFiles") (EVar "tree")))
-(DTypeSig false "branchFiles" (TyFun (TyCon "CTBranch") (TyApp (TyCon "List") (TyCon "String"))))
-(DFunDef false "branchFiles" ((PCon "CTBranch" PWild (PVar "tree"))) (EApp (EVar "treeFiles") (EVar "tree")))
-(DTypeSig false "implFiles" (TyFun (TyCon "CImplEntry") (TyApp (TyCon "List") (TyCon "String"))))
-(DFunDef false "implFiles" ((PCon "CImplEntry" PWild PWild PWild (PCon "CImplTagged" PWild PWild PWild PWild PWild PWild (PVar "body")))) (EApp (EVar "exprFiles") (EVar "body")))
-(DFunDef false "implFiles" ((PCon "CImplEntry" PWild PWild PWild (PCon "CImplDefault" PWild PWild PWild PWild PWild PWild (PVar "body")))) (EApp (EVar "exprFiles") (EVar "body")))
-(DTypeSig false "exprFiles" (TyFun (TyCon "CExpr") (TyApp (TyCon "List") (TyCon "String"))))
-(DFunDef false "exprFiles" ((PCon "CLit" PWild)) (EListLit))
-(DFunDef false "exprFiles" ((PCon "CVar" PWild PWild)) (EListLit))
-(DFunDef false "exprFiles" ((PCon "CApp" (PCon "CVar" (PVar "name") PWild) (PList (PCon "CLit" (PCon "LString" (PVar "f"))) (PCon "CLit" (PCon "LInt" (PVar "line"))) (PCon "CLit" (PCon "LInt" (PVar "col")))) PWild)) (EIf (EBinOp "==" (EVar "name") (EVar "siteSentinelName")) (EApp (EVar "fileOf") (EApp (EApp (EApp (EApp (EApp (EVar "Loc") (EVar "f")) (EVar "line")) (EVar "col")) (EVar "line")) (EBinOp "+" (EVar "col") (ELit (LInt 1))))) (EListLit)))
-(DFunDef false "exprFiles" ((PCon "CApp" (PVar "head") (PVar "args") PWild)) (EBinOp "++" (EApp (EVar "exprFiles") (EVar "head")) (EApp (EApp (EVar "flatMap") (EVar "exprFiles")) (EVar "args"))))
-(DFunDef false "exprFiles" ((PCon "CLam" PWild (PVar "body"))) (EApp (EVar "exprFiles") (EVar "body")))
-(DFunDef false "exprFiles" ((PCon "CLet" PWild PWild (PVar "rhs") (PVar "body"))) (EBinOp "++" (EApp (EVar "exprFiles") (EVar "rhs")) (EApp (EVar "exprFiles") (EVar "body"))))
-(DFunDef false "exprFiles" ((PCon "CLetGroup" (PVar "binds") (PVar "body"))) (EBinOp "++" (EApp (EApp (EVar "flatMap") (EVar "bindFiles")) (EVar "binds")) (EApp (EVar "exprFiles") (EVar "body"))))
-(DFunDef false "exprFiles" ((PCon "CMatch" (PVar "e") (PVar "arms"))) (EBinOp "++" (EApp (EVar "exprFiles") (EVar "e")) (EApp (EApp (EVar "flatMap") (EVar "armFiles")) (EVar "arms"))))
-(DFunDef false "exprFiles" ((PCon "CDecision" (PVar "e") (PVar "arms") (PVar "tree"))) (EBinOp "++" (EBinOp "++" (EApp (EVar "exprFiles") (EVar "e")) (EApp (EApp (EVar "flatMap") (EVar "armFiles")) (EVar "arms"))) (EApp (EVar "treeFiles") (EVar "tree"))))
-(DFunDef false "exprFiles" ((PCon "CIf" (PVar "a") (PVar "b") (PVar "c"))) (EBinOp "++" (EBinOp "++" (EApp (EVar "exprFiles") (EVar "a")) (EApp (EVar "exprFiles") (EVar "b"))) (EApp (EVar "exprFiles") (EVar "c"))))
-(DFunDef false "exprFiles" ((PCon "CBinPrim" PWild (PVar "a") (PVar "b") PWild (PVar "loc"))) (EBinOp "++" (EBinOp "++" (EApp (EVar "fileOf") (EVar "loc")) (EApp (EVar "exprFiles") (EVar "a"))) (EApp (EVar "exprFiles") (EVar "b"))))
-(DFunDef false "exprFiles" ((PCon "CUnOp" PWild (PVar "e"))) (EApp (EVar "exprFiles") (EVar "e")))
-(DFunDef false "exprFiles" ((PCon "CTuple" (PVar "es"))) (EApp (EApp (EVar "flatMap") (EVar "exprFiles")) (EVar "es")))
-(DFunDef false "exprFiles" ((PCon "CList" (PVar "es"))) (EApp (EApp (EVar "flatMap") (EVar "exprFiles")) (EVar "es")))
-(DFunDef false "exprFiles" ((PCon "CRecord" PWild (PVar "fs"))) (EApp (EApp (EVar "flatMap") (EVar "fieldFiles")) (EVar "fs")))
-(DFunDef false "exprFiles" ((PCon "CFieldAccess" (PVar "e") PWild PWild PWild)) (EApp (EVar "exprFiles") (EVar "e")))
-(DFunDef false "exprFiles" ((PCon "CRecordUpdate" PWild (PVar "e") (PVar "fs"))) (EBinOp "++" (EApp (EVar "exprFiles") (EVar "e")) (EApp (EApp (EVar "flatMap") (EVar "fieldFiles")) (EVar "fs"))))
-(DFunDef false "exprFiles" ((PCon "CVariantUpdate" PWild (PVar "e") (PVar "fs"))) (EBinOp "++" (EApp (EVar "exprFiles") (EVar "e")) (EApp (EApp (EVar "flatMap") (EVar "fieldFiles")) (EVar "fs"))))
-(DFunDef false "exprFiles" ((PCon "CArray" (PVar "es"))) (EApp (EApp (EVar "flatMap") (EVar "exprFiles")) (EVar "es")))
-(DFunDef false "exprFiles" ((PCon "CRangeList" (PVar "a") (PVar "b") PWild)) (EBinOp "++" (EApp (EVar "exprFiles") (EVar "a")) (EApp (EVar "exprFiles") (EVar "b"))))
-(DFunDef false "exprFiles" ((PCon "CRangeArray" (PVar "a") (PVar "b") PWild)) (EBinOp "++" (EApp (EVar "exprFiles") (EVar "a")) (EApp (EVar "exprFiles") (EVar "b"))))
-(DFunDef false "exprFiles" ((PCon "CIndex" (PVar "a") (PVar "b"))) (EBinOp "++" (EApp (EVar "exprFiles") (EVar "a")) (EApp (EVar "exprFiles") (EVar "b"))))
-(DFunDef false "exprFiles" ((PCon "CSlice" (PVar "a") (PVar "b") (PVar "c") PWild)) (EBinOp "++" (EBinOp "++" (EApp (EVar "exprFiles") (EVar "a")) (EApp (EVar "exprFiles") (EVar "b"))) (EApp (EVar "exprFiles") (EVar "c"))))
-(DFunDef false "exprFiles" ((PCon "CStringIndex" (PVar "a") (PVar "b"))) (EBinOp "++" (EApp (EVar "exprFiles") (EVar "a")) (EApp (EVar "exprFiles") (EVar "b"))))
-(DFunDef false "exprFiles" ((PCon "CStringSlice" (PVar "a") (PVar "b") (PVar "c") PWild)) (EBinOp "++" (EBinOp "++" (EApp (EVar "exprFiles") (EVar "a")) (EApp (EVar "exprFiles") (EVar "b"))) (EApp (EVar "exprFiles") (EVar "c"))))
-(DFunDef false "exprFiles" ((PCon "CListIndex" (PVar "a") (PVar "b"))) (EBinOp "++" (EApp (EVar "exprFiles") (EVar "a")) (EApp (EVar "exprFiles") (EVar "b"))))
-(DFunDef false "exprFiles" ((PCon "CListSlice" (PVar "a") (PVar "b") (PVar "c") PWild)) (EBinOp "++" (EBinOp "++" (EApp (EVar "exprFiles") (EVar "a")) (EApp (EVar "exprFiles") (EVar "b"))) (EApp (EVar "exprFiles") (EVar "c"))))
-(DFunDef false "exprFiles" ((PCon "CBlock" (PVar "stmts"))) (EApp (EApp (EVar "flatMap") (EVar "stmtFiles")) (EVar "stmts")))
-(DFunDef false "exprFiles" ((PCon "CMethod" PWild PWild)) (EListLit))
-(DFunDef false "exprFiles" ((PCon "CDict" PWild PWild)) (EListLit))
+(DTypeSig false "fileOf" (TyFun (TyCon "Loc") (TyFun (TyApp (TyCon "OrdMap") (TyCon "Int")) (TyApp (TyCon "OrdMap") (TyCon "Int")))))
+(DFunDef false "fileOf" ((PAs "l" (PCon "Loc" (PVar "f") PWild PWild PWild PWild)) (PVar "files")) (EIf (EApp (EVar "sitePackable") (EVar "l")) (EApp (EApp (EApp (EVar "omInsert") (EVar "f")) (ELit (LInt 0))) (EVar "files")) (EVar "files")))
+(DTypeSig false "bindFiles" (TyFun (TyApp (TyCon "OrdMap") (TyCon "Int")) (TyFun (TyCon "CBind") (TyApp (TyCon "OrdMap") (TyCon "Int")))))
+(DFunDef false "bindFiles" ((PVar "files") (PCon "CBind" PWild (PVar "clauses") (PVar "loc") PWild)) (EApp (EApp (EApp (EVar "fold") (EVar "clauseFiles")) (EApp (EApp (EVar "fileOf") (EVar "loc")) (EVar "files"))) (EVar "clauses")))
+(DTypeSig false "clauseFiles" (TyFun (TyApp (TyCon "OrdMap") (TyCon "Int")) (TyFun (TyCon "CClause") (TyApp (TyCon "OrdMap") (TyCon "Int")))))
+(DFunDef false "clauseFiles" ((PVar "files") (PCon "CClause" PWild (PVar "body"))) (EApp (EApp (EVar "exprFiles") (EVar "files")) (EVar "body")))
+(DTypeSig false "fieldFiles" (TyFun (TyApp (TyCon "OrdMap") (TyCon "Int")) (TyFun (TyCon "CField") (TyApp (TyCon "OrdMap") (TyCon "Int")))))
+(DFunDef false "fieldFiles" ((PVar "files") (PCon "CField" PWild PWild (PVar "e"))) (EApp (EApp (EVar "exprFiles") (EVar "files")) (EVar "e")))
+(DTypeSig false "armFiles" (TyFun (TyApp (TyCon "OrdMap") (TyCon "Int")) (TyFun (TyCon "CArm") (TyApp (TyCon "OrdMap") (TyCon "Int")))))
+(DFunDef false "armFiles" ((PVar "files") (PCon "CArm" PWild (PVar "guards") (PVar "body"))) (EApp (EApp (EVar "exprFiles") (EApp (EApp (EApp (EVar "fold") (EVar "guardFiles")) (EVar "files")) (EVar "guards"))) (EVar "body")))
+(DFunDef false "armFiles" ((PVar "files") (PCon "CArmAlt" PWild (PVar "guards") PWild)) (EApp (EApp (EApp (EVar "fold") (EVar "guardFiles")) (EVar "files")) (EVar "guards")))
+(DTypeSig false "guardFiles" (TyFun (TyApp (TyCon "OrdMap") (TyCon "Int")) (TyFun (TyCon "CGuard") (TyApp (TyCon "OrdMap") (TyCon "Int")))))
+(DFunDef false "guardFiles" ((PVar "files") (PCon "CGBool" (PVar "e"))) (EApp (EApp (EVar "exprFiles") (EVar "files")) (EVar "e")))
+(DFunDef false "guardFiles" ((PVar "files") (PCon "CGBind" PWild (PVar "e"))) (EApp (EApp (EVar "exprFiles") (EVar "files")) (EVar "e")))
+(DTypeSig false "stmtFiles" (TyFun (TyApp (TyCon "OrdMap") (TyCon "Int")) (TyFun (TyCon "CStmt") (TyApp (TyCon "OrdMap") (TyCon "Int")))))
+(DFunDef false "stmtFiles" ((PVar "files") (PCon "CSExpr" (PVar "e"))) (EApp (EApp (EVar "exprFiles") (EVar "files")) (EVar "e")))
+(DFunDef false "stmtFiles" ((PVar "files") (PCon "CSLet" PWild PWild (PVar "e"))) (EApp (EApp (EVar "exprFiles") (EVar "files")) (EVar "e")))
+(DFunDef false "stmtFiles" ((PVar "files") (PCon "CSAssign" PWild (PVar "e"))) (EApp (EApp (EVar "exprFiles") (EVar "files")) (EVar "e")))
+(DTypeSig false "treeFiles" (TyFun (TyApp (TyCon "OrdMap") (TyCon "Int")) (TyFun (TyCon "CTree") (TyApp (TyCon "OrdMap") (TyCon "Int")))))
+(DFunDef false "treeFiles" ((PVar "files") (PCon "CTFail" (PCon "NoArm" (PVar "loc")))) (EApp (EApp (EVar "fileOf") (EVar "loc")) (EVar "files")))
+(DFunDef false "treeFiles" ((PVar "files") (PCon "CTFail" (PCon "LetRefuted" (PVar "loc")))) (EApp (EApp (EVar "fileOf") (EVar "loc")) (EVar "files")))
+(DFunDef false "treeFiles" ((PVar "files") (PCon "CTLeaf" PWild)) (EVar "files"))
+(DFunDef false "treeFiles" ((PVar "files") (PCon "CTGuard" PWild (PVar "tree"))) (EApp (EApp (EVar "treeFiles") (EVar "files")) (EVar "tree")))
+(DFunDef false "treeFiles" ((PVar "files") (PCon "CTSwitch" (PVar "branches") (PVar "fallback"))) (EApp (EApp (EVar "treeFiles") (EApp (EApp (EApp (EVar "fold") (EVar "branchFiles")) (EVar "files")) (EVar "branches"))) (EVar "fallback")))
+(DFunDef false "treeFiles" ((PVar "files") (PCon "CTDrop" (PVar "tree"))) (EApp (EApp (EVar "treeFiles") (EVar "files")) (EVar "tree")))
+(DTypeSig false "branchFiles" (TyFun (TyApp (TyCon "OrdMap") (TyCon "Int")) (TyFun (TyCon "CTBranch") (TyApp (TyCon "OrdMap") (TyCon "Int")))))
+(DFunDef false "branchFiles" ((PVar "files") (PCon "CTBranch" PWild (PVar "tree"))) (EApp (EApp (EVar "treeFiles") (EVar "files")) (EVar "tree")))
+(DTypeSig false "implFiles" (TyFun (TyApp (TyCon "OrdMap") (TyCon "Int")) (TyFun (TyCon "CImplEntry") (TyApp (TyCon "OrdMap") (TyCon "Int")))))
+(DFunDef false "implFiles" ((PVar "files") (PCon "CImplEntry" PWild PWild PWild (PCon "CImplTagged" PWild PWild PWild PWild PWild PWild (PVar "body")))) (EApp (EApp (EVar "exprFiles") (EVar "files")) (EVar "body")))
+(DFunDef false "implFiles" ((PVar "files") (PCon "CImplEntry" PWild PWild PWild (PCon "CImplDefault" PWild PWild PWild PWild PWild PWild (PVar "body")))) (EApp (EApp (EVar "exprFiles") (EVar "files")) (EVar "body")))
+(DTypeSig false "exprFiles" (TyFun (TyApp (TyCon "OrdMap") (TyCon "Int")) (TyFun (TyCon "CExpr") (TyApp (TyCon "OrdMap") (TyCon "Int")))))
+(DFunDef false "exprFiles" ((PVar "files") (PCon "CLit" PWild)) (EVar "files"))
+(DFunDef false "exprFiles" ((PVar "files") (PCon "CVar" PWild PWild)) (EVar "files"))
+(DFunDef false "exprFiles" ((PVar "files") (PCon "CApp" (PCon "CVar" (PVar "name") PWild) (PList (PCon "CLit" (PCon "LString" (PVar "f"))) (PCon "CLit" (PCon "LInt" (PVar "line"))) (PCon "CLit" (PCon "LInt" (PVar "col")))) PWild)) (EIf (EBinOp "==" (EVar "name") (EVar "siteSentinelName")) (EApp (EApp (EVar "fileOf") (EApp (EApp (EApp (EApp (EApp (EVar "Loc") (EVar "f")) (EVar "line")) (EVar "col")) (EVar "line")) (EBinOp "+" (EVar "col") (ELit (LInt 1))))) (EVar "files")) (EVar "files")))
+(DFunDef false "exprFiles" ((PVar "files") (PCon "CApp" (PVar "head") (PVar "args") PWild)) (EApp (EApp (EApp (EVar "fold") (EVar "exprFiles")) (EApp (EApp (EVar "exprFiles") (EVar "files")) (EVar "head"))) (EVar "args")))
+(DFunDef false "exprFiles" ((PVar "files") (PCon "CLam" PWild (PVar "body"))) (EApp (EApp (EVar "exprFiles") (EVar "files")) (EVar "body")))
+(DFunDef false "exprFiles" ((PVar "files") (PCon "CLet" PWild PWild (PVar "rhs") (PVar "body"))) (EApp (EApp (EVar "exprFiles") (EApp (EApp (EVar "exprFiles") (EVar "files")) (EVar "rhs"))) (EVar "body")))
+(DFunDef false "exprFiles" ((PVar "files") (PCon "CLetGroup" (PVar "binds") (PVar "body"))) (EApp (EApp (EVar "exprFiles") (EApp (EApp (EApp (EVar "fold") (EVar "bindFiles")) (EVar "files")) (EVar "binds"))) (EVar "body")))
+(DFunDef false "exprFiles" ((PVar "files") (PCon "CMatch" (PVar "e") (PVar "arms"))) (EApp (EApp (EApp (EVar "fold") (EVar "armFiles")) (EApp (EApp (EVar "exprFiles") (EVar "files")) (EVar "e"))) (EVar "arms")))
+(DFunDef false "exprFiles" ((PVar "files") (PCon "CDecision" (PVar "e") (PVar "arms") (PVar "tree"))) (EApp (EApp (EVar "treeFiles") (EApp (EApp (EApp (EVar "fold") (EVar "armFiles")) (EApp (EApp (EVar "exprFiles") (EVar "files")) (EVar "e"))) (EVar "arms"))) (EVar "tree")))
+(DFunDef false "exprFiles" ((PVar "files") (PCon "CIf" (PVar "a") (PVar "b") (PVar "c"))) (EApp (EApp (EVar "exprFiles") (EApp (EApp (EVar "exprFiles") (EApp (EApp (EVar "exprFiles") (EVar "files")) (EVar "a"))) (EVar "b"))) (EVar "c")))
+(DFunDef false "exprFiles" ((PVar "files") (PCon "CBinPrim" PWild (PVar "a") (PVar "b") PWild (PVar "loc"))) (EApp (EApp (EVar "exprFiles") (EApp (EApp (EVar "exprFiles") (EApp (EApp (EVar "fileOf") (EVar "loc")) (EVar "files"))) (EVar "a"))) (EVar "b")))
+(DFunDef false "exprFiles" ((PVar "files") (PCon "CUnOp" PWild (PVar "e"))) (EApp (EApp (EVar "exprFiles") (EVar "files")) (EVar "e")))
+(DFunDef false "exprFiles" ((PVar "files") (PCon "CTuple" (PVar "es"))) (EApp (EApp (EApp (EVar "fold") (EVar "exprFiles")) (EVar "files")) (EVar "es")))
+(DFunDef false "exprFiles" ((PVar "files") (PCon "CList" (PVar "es"))) (EApp (EApp (EApp (EVar "fold") (EVar "exprFiles")) (EVar "files")) (EVar "es")))
+(DFunDef false "exprFiles" ((PVar "files") (PCon "CRecord" PWild (PVar "fs"))) (EApp (EApp (EApp (EVar "fold") (EVar "fieldFiles")) (EVar "files")) (EVar "fs")))
+(DFunDef false "exprFiles" ((PVar "files") (PCon "CFieldAccess" (PVar "e") PWild PWild PWild)) (EApp (EApp (EVar "exprFiles") (EVar "files")) (EVar "e")))
+(DFunDef false "exprFiles" ((PVar "files") (PCon "CRecordUpdate" PWild (PVar "e") (PVar "fs"))) (EApp (EApp (EApp (EVar "fold") (EVar "fieldFiles")) (EApp (EApp (EVar "exprFiles") (EVar "files")) (EVar "e"))) (EVar "fs")))
+(DFunDef false "exprFiles" ((PVar "files") (PCon "CVariantUpdate" PWild (PVar "e") (PVar "fs"))) (EApp (EApp (EApp (EVar "fold") (EVar "fieldFiles")) (EApp (EApp (EVar "exprFiles") (EVar "files")) (EVar "e"))) (EVar "fs")))
+(DFunDef false "exprFiles" ((PVar "files") (PCon "CArray" (PVar "es"))) (EApp (EApp (EApp (EVar "fold") (EVar "exprFiles")) (EVar "files")) (EVar "es")))
+(DFunDef false "exprFiles" ((PVar "files") (PCon "CRangeList" (PVar "a") (PVar "b") PWild)) (EApp (EApp (EVar "exprFiles") (EApp (EApp (EVar "exprFiles") (EVar "files")) (EVar "a"))) (EVar "b")))
+(DFunDef false "exprFiles" ((PVar "files") (PCon "CRangeArray" (PVar "a") (PVar "b") PWild)) (EApp (EApp (EVar "exprFiles") (EApp (EApp (EVar "exprFiles") (EVar "files")) (EVar "a"))) (EVar "b")))
+(DFunDef false "exprFiles" ((PVar "files") (PCon "CIndex" (PVar "a") (PVar "b"))) (EApp (EApp (EVar "exprFiles") (EApp (EApp (EVar "exprFiles") (EVar "files")) (EVar "a"))) (EVar "b")))
+(DFunDef false "exprFiles" ((PVar "files") (PCon "CSlice" (PVar "a") (PVar "b") (PVar "c") PWild)) (EApp (EApp (EVar "exprFiles") (EApp (EApp (EVar "exprFiles") (EApp (EApp (EVar "exprFiles") (EVar "files")) (EVar "a"))) (EVar "b"))) (EVar "c")))
+(DFunDef false "exprFiles" ((PVar "files") (PCon "CStringIndex" (PVar "a") (PVar "b"))) (EApp (EApp (EVar "exprFiles") (EApp (EApp (EVar "exprFiles") (EVar "files")) (EVar "a"))) (EVar "b")))
+(DFunDef false "exprFiles" ((PVar "files") (PCon "CStringSlice" (PVar "a") (PVar "b") (PVar "c") PWild)) (EApp (EApp (EVar "exprFiles") (EApp (EApp (EVar "exprFiles") (EApp (EApp (EVar "exprFiles") (EVar "files")) (EVar "a"))) (EVar "b"))) (EVar "c")))
+(DFunDef false "exprFiles" ((PVar "files") (PCon "CListIndex" (PVar "a") (PVar "b"))) (EApp (EApp (EVar "exprFiles") (EApp (EApp (EVar "exprFiles") (EVar "files")) (EVar "a"))) (EVar "b")))
+(DFunDef false "exprFiles" ((PVar "files") (PCon "CListSlice" (PVar "a") (PVar "b") (PVar "c") PWild)) (EApp (EApp (EVar "exprFiles") (EApp (EApp (EVar "exprFiles") (EApp (EApp (EVar "exprFiles") (EVar "files")) (EVar "a"))) (EVar "b"))) (EVar "c")))
+(DFunDef false "exprFiles" ((PVar "files") (PCon "CBlock" (PVar "stmts"))) (EApp (EApp (EApp (EVar "fold") (EVar "stmtFiles")) (EVar "files")) (EVar "stmts")))
+(DFunDef false "exprFiles" ((PVar "files") (PCon "CMethod" PWild PWild)) (EVar "files"))
+(DFunDef false "exprFiles" ((PVar "files") (PCon "CDict" PWild PWild)) (EVar "files"))
 (DTypeSig false "programFiles" (TyFun (TyCon "CProgram") (TyApp (TyCon "List") (TyCon "String"))))
-(DFunDef false "programFiles" ((PCon "CProgram" (PVar "binds") PWild PWild (PVar "impls") PWild PWild)) (EApp (EApp (EVar "map") (EVar "fst")) (EApp (EVar "entries") (EApp (EApp (EVar "omFromNames") (EBinOp "++" (EApp (EApp (EVar "flatMap") (EVar "bindFiles")) (EVar "binds")) (EApp (EApp (EVar "flatMap") (EVar "implFiles")) (EVar "impls")))) (EVar "omEmpty")))))
+(DFunDef false "programFiles" ((PCon "CProgram" (PVar "binds") PWild PWild (PVar "impls") PWild PWild)) (EApp (EApp (EVar "map") (EVar "fst")) (EApp (EVar "entries") (EApp (EApp (EApp (EVar "fold") (EVar "implFiles")) (EApp (EApp (EApp (EVar "fold") (EVar "bindFiles")) (EVar "omEmpty")) (EVar "binds"))) (EVar "impls")))))
 (DTypeSig false "assign" (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyCon "Int") (TyFun (TyApp (TyCon "OrdMap") (TyCon "Int")) (TyTuple (TyApp (TyCon "OrdMap") (TyCon "Int")) (TyCon "Int"))))))
 (DFunDef false "assign" ((PList) (PVar "high") (PVar "table")) (ETuple (EVar "table") (EVar "high")))
 (DFunDef false "assign" ((PCons (PVar "name") (PVar "rest")) (PVar "high") (PVar "table")) (EIf (EApp (EApp (EVar "omHasKey") (EVar "name")) (EVar "table")) (EApp (EApp (EApp (EVar "assign") (EVar "rest")) (EVar "high")) (EVar "table")) (EApp (EApp (EApp (EVar "assign") (EVar "rest")) (EBinOp "+" (EVar "high") (ELit (LInt 1)))) (EApp (EApp (EApp (EVar "omInsert") (EVar "name")) (EBinOp "+" (EVar "high") (ELit (LInt 1)))) (EVar "table")))))
@@ -421,69 +425,69 @@ packSite plan (loc@(Loc f line col _ _)) =
 (DFunDef false "emptyPackage" () (ERecordCreate "PackageIdentity" ((fa "fingerprint" (ELit (LString ""))) (fa "abi" (EVar "abiVersion")) (fa "types" (EVar "omEmpty")) (fa "files" (EVar "omEmpty")) (fa "typeHigh" (ELit (LInt 0))) (fa "fileHigh" (ELit (LInt 0))))))
 (DTypeSig true "sitePackable" (TyFun (TyCon "Loc") (TyCon "Bool")))
 (DFunDef false "sitePackable" ((PCon "Loc" (PVar "f") (PVar "sl") (PVar "sc") (PVar "el") (PVar "ec"))) (EBinOp "&&" (EBinOp "&&" (EBinOp "&&" (EBinOp "&&" (EBinOp "&&" (EBinOp "/=" (EVar "f") (ELit (LString ""))) (EApp (EVar "not") (EBinOp "&&" (EBinOp "&&" (EBinOp "&&" (EBinOp "==" (EVar "sl") (ELit (LInt 1))) (EBinOp "==" (EVar "sc") (ELit (LInt 0)))) (EBinOp "==" (EVar "el") (ELit (LInt 1)))) (EBinOp "==" (EVar "ec") (ELit (LInt 0)))))) (EBinOp ">=" (EVar "sl") (ELit (LInt 0)))) (EBinOp "<" (EVar "sl") (EApp (EApp (EVar "shiftLeft") (ELit (LInt 1))) (EVar "siteLineBits")))) (EBinOp ">=" (EVar "sc") (ELit (LInt 0)))) (EBinOp "<" (EVar "sc") (EApp (EApp (EVar "shiftLeft") (ELit (LInt 1))) (EVar "siteColumnBits")))))
-(DTypeSig false "fileOf" (TyFun (TyCon "Loc") (TyApp (TyCon "List") (TyCon "String"))))
-(DFunDef false "fileOf" ((PAs "l" (PCon "Loc" (PVar "f") PWild PWild PWild PWild))) (EIf (EApp (EVar "sitePackable") (EVar "l")) (EListLit (EVar "f")) (EListLit)))
-(DTypeSig false "bindFiles" (TyFun (TyCon "CBind") (TyApp (TyCon "List") (TyCon "String"))))
-(DFunDef false "bindFiles" ((PCon "CBind" PWild (PVar "clauses") (PVar "loc") PWild)) (EBinOp "++" (EApp (EVar "fileOf") (EVar "loc")) (EApp (EApp (EDictApp "flatMap") (EVar "clauseFiles")) (EVar "clauses"))))
-(DTypeSig false "clauseFiles" (TyFun (TyCon "CClause") (TyApp (TyCon "List") (TyCon "String"))))
-(DFunDef false "clauseFiles" ((PCon "CClause" PWild (PVar "body"))) (EApp (EVar "exprFiles") (EVar "body")))
-(DTypeSig false "fieldFiles" (TyFun (TyCon "CField") (TyApp (TyCon "List") (TyCon "String"))))
-(DFunDef false "fieldFiles" ((PCon "CField" PWild PWild (PVar "e"))) (EApp (EVar "exprFiles") (EVar "e")))
-(DTypeSig false "armFiles" (TyFun (TyCon "CArm") (TyApp (TyCon "List") (TyCon "String"))))
-(DFunDef false "armFiles" ((PCon "CArm" PWild (PVar "guards") (PVar "body"))) (EBinOp "++" (EApp (EApp (EDictApp "flatMap") (EVar "guardFiles")) (EVar "guards")) (EApp (EVar "exprFiles") (EVar "body"))))
-(DFunDef false "armFiles" ((PCon "CArmAlt" PWild (PVar "guards") PWild)) (EApp (EApp (EDictApp "flatMap") (EVar "guardFiles")) (EVar "guards")))
-(DTypeSig false "guardFiles" (TyFun (TyCon "CGuard") (TyApp (TyCon "List") (TyCon "String"))))
-(DFunDef false "guardFiles" ((PCon "CGBool" (PVar "e"))) (EApp (EVar "exprFiles") (EVar "e")))
-(DFunDef false "guardFiles" ((PCon "CGBind" PWild (PVar "e"))) (EApp (EVar "exprFiles") (EVar "e")))
-(DTypeSig false "stmtFiles" (TyFun (TyCon "CStmt") (TyApp (TyCon "List") (TyCon "String"))))
-(DFunDef false "stmtFiles" ((PCon "CSExpr" (PVar "e"))) (EApp (EVar "exprFiles") (EVar "e")))
-(DFunDef false "stmtFiles" ((PCon "CSLet" PWild PWild (PVar "e"))) (EApp (EVar "exprFiles") (EVar "e")))
-(DFunDef false "stmtFiles" ((PCon "CSAssign" PWild (PVar "e"))) (EApp (EVar "exprFiles") (EVar "e")))
-(DTypeSig false "treeFiles" (TyFun (TyCon "CTree") (TyApp (TyCon "List") (TyCon "String"))))
-(DFunDef false "treeFiles" ((PCon "CTFail" (PCon "NoArm" (PVar "loc")))) (EApp (EVar "fileOf") (EVar "loc")))
-(DFunDef false "treeFiles" ((PCon "CTFail" (PCon "LetRefuted" (PVar "loc")))) (EApp (EVar "fileOf") (EVar "loc")))
-(DFunDef false "treeFiles" ((PCon "CTLeaf" PWild)) (EListLit))
-(DFunDef false "treeFiles" ((PCon "CTGuard" PWild (PVar "tree"))) (EApp (EVar "treeFiles") (EVar "tree")))
-(DFunDef false "treeFiles" ((PCon "CTSwitch" (PVar "branches") (PVar "fallback"))) (EBinOp "++" (EApp (EApp (EDictApp "flatMap") (EVar "branchFiles")) (EVar "branches")) (EApp (EVar "treeFiles") (EVar "fallback"))))
-(DFunDef false "treeFiles" ((PCon "CTDrop" (PVar "tree"))) (EApp (EVar "treeFiles") (EVar "tree")))
-(DTypeSig false "branchFiles" (TyFun (TyCon "CTBranch") (TyApp (TyCon "List") (TyCon "String"))))
-(DFunDef false "branchFiles" ((PCon "CTBranch" PWild (PVar "tree"))) (EApp (EVar "treeFiles") (EVar "tree")))
-(DTypeSig false "implFiles" (TyFun (TyCon "CImplEntry") (TyApp (TyCon "List") (TyCon "String"))))
-(DFunDef false "implFiles" ((PCon "CImplEntry" PWild PWild PWild (PCon "CImplTagged" PWild PWild PWild PWild PWild PWild (PVar "body")))) (EApp (EVar "exprFiles") (EVar "body")))
-(DFunDef false "implFiles" ((PCon "CImplEntry" PWild PWild PWild (PCon "CImplDefault" PWild PWild PWild PWild PWild PWild (PVar "body")))) (EApp (EVar "exprFiles") (EVar "body")))
-(DTypeSig false "exprFiles" (TyFun (TyCon "CExpr") (TyApp (TyCon "List") (TyCon "String"))))
-(DFunDef false "exprFiles" ((PCon "CLit" PWild)) (EListLit))
-(DFunDef false "exprFiles" ((PCon "CVar" PWild PWild)) (EListLit))
-(DFunDef false "exprFiles" ((PCon "CApp" (PCon "CVar" (PVar "name") PWild) (PList (PCon "CLit" (PCon "LString" (PVar "f"))) (PCon "CLit" (PCon "LInt" (PVar "line"))) (PCon "CLit" (PCon "LInt" (PVar "col")))) PWild)) (EIf (EBinOp "==" (EVar "name") (EVar "siteSentinelName")) (EApp (EVar "fileOf") (EApp (EApp (EApp (EApp (EApp (EVar "Loc") (EVar "f")) (EVar "line")) (EVar "col")) (EVar "line")) (EBinOp "+" (EVar "col") (ELit (LInt 1))))) (EListLit)))
-(DFunDef false "exprFiles" ((PCon "CApp" (PVar "head") (PVar "args") PWild)) (EBinOp "++" (EApp (EVar "exprFiles") (EVar "head")) (EApp (EApp (EDictApp "flatMap") (EVar "exprFiles")) (EVar "args"))))
-(DFunDef false "exprFiles" ((PCon "CLam" PWild (PVar "body"))) (EApp (EVar "exprFiles") (EVar "body")))
-(DFunDef false "exprFiles" ((PCon "CLet" PWild PWild (PVar "rhs") (PVar "body"))) (EBinOp "++" (EApp (EVar "exprFiles") (EVar "rhs")) (EApp (EVar "exprFiles") (EVar "body"))))
-(DFunDef false "exprFiles" ((PCon "CLetGroup" (PVar "binds") (PVar "body"))) (EBinOp "++" (EApp (EApp (EDictApp "flatMap") (EVar "bindFiles")) (EVar "binds")) (EApp (EVar "exprFiles") (EVar "body"))))
-(DFunDef false "exprFiles" ((PCon "CMatch" (PVar "e") (PVar "arms"))) (EBinOp "++" (EApp (EVar "exprFiles") (EVar "e")) (EApp (EApp (EDictApp "flatMap") (EVar "armFiles")) (EVar "arms"))))
-(DFunDef false "exprFiles" ((PCon "CDecision" (PVar "e") (PVar "arms") (PVar "tree"))) (EBinOp "++" (EBinOp "++" (EApp (EVar "exprFiles") (EVar "e")) (EApp (EApp (EDictApp "flatMap") (EVar "armFiles")) (EVar "arms"))) (EApp (EVar "treeFiles") (EVar "tree"))))
-(DFunDef false "exprFiles" ((PCon "CIf" (PVar "a") (PVar "b") (PVar "c"))) (EBinOp "++" (EBinOp "++" (EApp (EVar "exprFiles") (EVar "a")) (EApp (EVar "exprFiles") (EVar "b"))) (EApp (EVar "exprFiles") (EVar "c"))))
-(DFunDef false "exprFiles" ((PCon "CBinPrim" PWild (PVar "a") (PVar "b") PWild (PVar "loc"))) (EBinOp "++" (EBinOp "++" (EApp (EVar "fileOf") (EVar "loc")) (EApp (EVar "exprFiles") (EVar "a"))) (EApp (EVar "exprFiles") (EVar "b"))))
-(DFunDef false "exprFiles" ((PCon "CUnOp" PWild (PVar "e"))) (EApp (EVar "exprFiles") (EVar "e")))
-(DFunDef false "exprFiles" ((PCon "CTuple" (PVar "es"))) (EApp (EApp (EDictApp "flatMap") (EVar "exprFiles")) (EVar "es")))
-(DFunDef false "exprFiles" ((PCon "CList" (PVar "es"))) (EApp (EApp (EDictApp "flatMap") (EVar "exprFiles")) (EVar "es")))
-(DFunDef false "exprFiles" ((PCon "CRecord" PWild (PVar "fs"))) (EApp (EApp (EDictApp "flatMap") (EVar "fieldFiles")) (EVar "fs")))
-(DFunDef false "exprFiles" ((PCon "CFieldAccess" (PVar "e") PWild PWild PWild)) (EApp (EVar "exprFiles") (EVar "e")))
-(DFunDef false "exprFiles" ((PCon "CRecordUpdate" PWild (PVar "e") (PVar "fs"))) (EBinOp "++" (EApp (EVar "exprFiles") (EVar "e")) (EApp (EApp (EDictApp "flatMap") (EVar "fieldFiles")) (EVar "fs"))))
-(DFunDef false "exprFiles" ((PCon "CVariantUpdate" PWild (PVar "e") (PVar "fs"))) (EBinOp "++" (EApp (EVar "exprFiles") (EVar "e")) (EApp (EApp (EDictApp "flatMap") (EVar "fieldFiles")) (EVar "fs"))))
-(DFunDef false "exprFiles" ((PCon "CArray" (PVar "es"))) (EApp (EApp (EDictApp "flatMap") (EVar "exprFiles")) (EVar "es")))
-(DFunDef false "exprFiles" ((PCon "CRangeList" (PVar "a") (PVar "b") PWild)) (EBinOp "++" (EApp (EVar "exprFiles") (EVar "a")) (EApp (EVar "exprFiles") (EVar "b"))))
-(DFunDef false "exprFiles" ((PCon "CRangeArray" (PVar "a") (PVar "b") PWild)) (EBinOp "++" (EApp (EVar "exprFiles") (EVar "a")) (EApp (EVar "exprFiles") (EVar "b"))))
-(DFunDef false "exprFiles" ((PCon "CIndex" (PVar "a") (PVar "b"))) (EBinOp "++" (EApp (EVar "exprFiles") (EVar "a")) (EApp (EVar "exprFiles") (EVar "b"))))
-(DFunDef false "exprFiles" ((PCon "CSlice" (PVar "a") (PVar "b") (PVar "c") PWild)) (EBinOp "++" (EBinOp "++" (EApp (EVar "exprFiles") (EVar "a")) (EApp (EVar "exprFiles") (EVar "b"))) (EApp (EVar "exprFiles") (EVar "c"))))
-(DFunDef false "exprFiles" ((PCon "CStringIndex" (PVar "a") (PVar "b"))) (EBinOp "++" (EApp (EVar "exprFiles") (EVar "a")) (EApp (EVar "exprFiles") (EVar "b"))))
-(DFunDef false "exprFiles" ((PCon "CStringSlice" (PVar "a") (PVar "b") (PVar "c") PWild)) (EBinOp "++" (EBinOp "++" (EApp (EVar "exprFiles") (EVar "a")) (EApp (EVar "exprFiles") (EVar "b"))) (EApp (EVar "exprFiles") (EVar "c"))))
-(DFunDef false "exprFiles" ((PCon "CListIndex" (PVar "a") (PVar "b"))) (EBinOp "++" (EApp (EVar "exprFiles") (EVar "a")) (EApp (EVar "exprFiles") (EVar "b"))))
-(DFunDef false "exprFiles" ((PCon "CListSlice" (PVar "a") (PVar "b") (PVar "c") PWild)) (EBinOp "++" (EBinOp "++" (EApp (EVar "exprFiles") (EVar "a")) (EApp (EVar "exprFiles") (EVar "b"))) (EApp (EVar "exprFiles") (EVar "c"))))
-(DFunDef false "exprFiles" ((PCon "CBlock" (PVar "stmts"))) (EApp (EApp (EDictApp "flatMap") (EVar "stmtFiles")) (EVar "stmts")))
-(DFunDef false "exprFiles" ((PCon "CMethod" PWild PWild)) (EListLit))
-(DFunDef false "exprFiles" ((PCon "CDict" PWild PWild)) (EListLit))
+(DTypeSig false "fileOf" (TyFun (TyCon "Loc") (TyFun (TyApp (TyCon "OrdMap") (TyCon "Int")) (TyApp (TyCon "OrdMap") (TyCon "Int")))))
+(DFunDef false "fileOf" ((PAs "l" (PCon "Loc" (PVar "f") PWild PWild PWild PWild)) (PVar "files")) (EIf (EApp (EVar "sitePackable") (EVar "l")) (EApp (EApp (EApp (EVar "omInsert") (EVar "f")) (ELit (LInt 0))) (EVar "files")) (EVar "files")))
+(DTypeSig false "bindFiles" (TyFun (TyApp (TyCon "OrdMap") (TyCon "Int")) (TyFun (TyCon "CBind") (TyApp (TyCon "OrdMap") (TyCon "Int")))))
+(DFunDef false "bindFiles" ((PVar "files") (PCon "CBind" PWild (PVar "clauses") (PVar "loc") PWild)) (EApp (EApp (EApp (EMethodRef "fold") (EVar "clauseFiles")) (EApp (EApp (EVar "fileOf") (EVar "loc")) (EVar "files"))) (EVar "clauses")))
+(DTypeSig false "clauseFiles" (TyFun (TyApp (TyCon "OrdMap") (TyCon "Int")) (TyFun (TyCon "CClause") (TyApp (TyCon "OrdMap") (TyCon "Int")))))
+(DFunDef false "clauseFiles" ((PVar "files") (PCon "CClause" PWild (PVar "body"))) (EApp (EApp (EVar "exprFiles") (EVar "files")) (EVar "body")))
+(DTypeSig false "fieldFiles" (TyFun (TyApp (TyCon "OrdMap") (TyCon "Int")) (TyFun (TyCon "CField") (TyApp (TyCon "OrdMap") (TyCon "Int")))))
+(DFunDef false "fieldFiles" ((PVar "files") (PCon "CField" PWild PWild (PVar "e"))) (EApp (EApp (EVar "exprFiles") (EVar "files")) (EVar "e")))
+(DTypeSig false "armFiles" (TyFun (TyApp (TyCon "OrdMap") (TyCon "Int")) (TyFun (TyCon "CArm") (TyApp (TyCon "OrdMap") (TyCon "Int")))))
+(DFunDef false "armFiles" ((PVar "files") (PCon "CArm" PWild (PVar "guards") (PVar "body"))) (EApp (EApp (EVar "exprFiles") (EApp (EApp (EApp (EMethodRef "fold") (EVar "guardFiles")) (EVar "files")) (EVar "guards"))) (EVar "body")))
+(DFunDef false "armFiles" ((PVar "files") (PCon "CArmAlt" PWild (PVar "guards") PWild)) (EApp (EApp (EApp (EMethodRef "fold") (EVar "guardFiles")) (EVar "files")) (EVar "guards")))
+(DTypeSig false "guardFiles" (TyFun (TyApp (TyCon "OrdMap") (TyCon "Int")) (TyFun (TyCon "CGuard") (TyApp (TyCon "OrdMap") (TyCon "Int")))))
+(DFunDef false "guardFiles" ((PVar "files") (PCon "CGBool" (PVar "e"))) (EApp (EApp (EVar "exprFiles") (EVar "files")) (EVar "e")))
+(DFunDef false "guardFiles" ((PVar "files") (PCon "CGBind" PWild (PVar "e"))) (EApp (EApp (EVar "exprFiles") (EVar "files")) (EVar "e")))
+(DTypeSig false "stmtFiles" (TyFun (TyApp (TyCon "OrdMap") (TyCon "Int")) (TyFun (TyCon "CStmt") (TyApp (TyCon "OrdMap") (TyCon "Int")))))
+(DFunDef false "stmtFiles" ((PVar "files") (PCon "CSExpr" (PVar "e"))) (EApp (EApp (EVar "exprFiles") (EVar "files")) (EVar "e")))
+(DFunDef false "stmtFiles" ((PVar "files") (PCon "CSLet" PWild PWild (PVar "e"))) (EApp (EApp (EVar "exprFiles") (EVar "files")) (EVar "e")))
+(DFunDef false "stmtFiles" ((PVar "files") (PCon "CSAssign" PWild (PVar "e"))) (EApp (EApp (EVar "exprFiles") (EVar "files")) (EVar "e")))
+(DTypeSig false "treeFiles" (TyFun (TyApp (TyCon "OrdMap") (TyCon "Int")) (TyFun (TyCon "CTree") (TyApp (TyCon "OrdMap") (TyCon "Int")))))
+(DFunDef false "treeFiles" ((PVar "files") (PCon "CTFail" (PCon "NoArm" (PVar "loc")))) (EApp (EApp (EVar "fileOf") (EVar "loc")) (EVar "files")))
+(DFunDef false "treeFiles" ((PVar "files") (PCon "CTFail" (PCon "LetRefuted" (PVar "loc")))) (EApp (EApp (EVar "fileOf") (EVar "loc")) (EVar "files")))
+(DFunDef false "treeFiles" ((PVar "files") (PCon "CTLeaf" PWild)) (EVar "files"))
+(DFunDef false "treeFiles" ((PVar "files") (PCon "CTGuard" PWild (PVar "tree"))) (EApp (EApp (EVar "treeFiles") (EVar "files")) (EVar "tree")))
+(DFunDef false "treeFiles" ((PVar "files") (PCon "CTSwitch" (PVar "branches") (PVar "fallback"))) (EApp (EApp (EVar "treeFiles") (EApp (EApp (EApp (EMethodRef "fold") (EVar "branchFiles")) (EVar "files")) (EVar "branches"))) (EVar "fallback")))
+(DFunDef false "treeFiles" ((PVar "files") (PCon "CTDrop" (PVar "tree"))) (EApp (EApp (EVar "treeFiles") (EVar "files")) (EVar "tree")))
+(DTypeSig false "branchFiles" (TyFun (TyApp (TyCon "OrdMap") (TyCon "Int")) (TyFun (TyCon "CTBranch") (TyApp (TyCon "OrdMap") (TyCon "Int")))))
+(DFunDef false "branchFiles" ((PVar "files") (PCon "CTBranch" PWild (PVar "tree"))) (EApp (EApp (EVar "treeFiles") (EVar "files")) (EVar "tree")))
+(DTypeSig false "implFiles" (TyFun (TyApp (TyCon "OrdMap") (TyCon "Int")) (TyFun (TyCon "CImplEntry") (TyApp (TyCon "OrdMap") (TyCon "Int")))))
+(DFunDef false "implFiles" ((PVar "files") (PCon "CImplEntry" PWild PWild PWild (PCon "CImplTagged" PWild PWild PWild PWild PWild PWild (PVar "body")))) (EApp (EApp (EVar "exprFiles") (EVar "files")) (EVar "body")))
+(DFunDef false "implFiles" ((PVar "files") (PCon "CImplEntry" PWild PWild PWild (PCon "CImplDefault" PWild PWild PWild PWild PWild PWild (PVar "body")))) (EApp (EApp (EVar "exprFiles") (EVar "files")) (EVar "body")))
+(DTypeSig false "exprFiles" (TyFun (TyApp (TyCon "OrdMap") (TyCon "Int")) (TyFun (TyCon "CExpr") (TyApp (TyCon "OrdMap") (TyCon "Int")))))
+(DFunDef false "exprFiles" ((PVar "files") (PCon "CLit" PWild)) (EVar "files"))
+(DFunDef false "exprFiles" ((PVar "files") (PCon "CVar" PWild PWild)) (EVar "files"))
+(DFunDef false "exprFiles" ((PVar "files") (PCon "CApp" (PCon "CVar" (PVar "name") PWild) (PList (PCon "CLit" (PCon "LString" (PVar "f"))) (PCon "CLit" (PCon "LInt" (PVar "line"))) (PCon "CLit" (PCon "LInt" (PVar "col")))) PWild)) (EIf (EBinOp "==" (EVar "name") (EVar "siteSentinelName")) (EApp (EApp (EVar "fileOf") (EApp (EApp (EApp (EApp (EApp (EVar "Loc") (EVar "f")) (EVar "line")) (EVar "col")) (EVar "line")) (EBinOp "+" (EVar "col") (ELit (LInt 1))))) (EVar "files")) (EVar "files")))
+(DFunDef false "exprFiles" ((PVar "files") (PCon "CApp" (PVar "head") (PVar "args") PWild)) (EApp (EApp (EApp (EMethodRef "fold") (EVar "exprFiles")) (EApp (EApp (EVar "exprFiles") (EVar "files")) (EVar "head"))) (EVar "args")))
+(DFunDef false "exprFiles" ((PVar "files") (PCon "CLam" PWild (PVar "body"))) (EApp (EApp (EVar "exprFiles") (EVar "files")) (EVar "body")))
+(DFunDef false "exprFiles" ((PVar "files") (PCon "CLet" PWild PWild (PVar "rhs") (PVar "body"))) (EApp (EApp (EVar "exprFiles") (EApp (EApp (EVar "exprFiles") (EVar "files")) (EVar "rhs"))) (EVar "body")))
+(DFunDef false "exprFiles" ((PVar "files") (PCon "CLetGroup" (PVar "binds") (PVar "body"))) (EApp (EApp (EVar "exprFiles") (EApp (EApp (EApp (EMethodRef "fold") (EVar "bindFiles")) (EVar "files")) (EVar "binds"))) (EVar "body")))
+(DFunDef false "exprFiles" ((PVar "files") (PCon "CMatch" (PVar "e") (PVar "arms"))) (EApp (EApp (EApp (EMethodRef "fold") (EVar "armFiles")) (EApp (EApp (EVar "exprFiles") (EVar "files")) (EVar "e"))) (EVar "arms")))
+(DFunDef false "exprFiles" ((PVar "files") (PCon "CDecision" (PVar "e") (PVar "arms") (PVar "tree"))) (EApp (EApp (EVar "treeFiles") (EApp (EApp (EApp (EMethodRef "fold") (EVar "armFiles")) (EApp (EApp (EVar "exprFiles") (EVar "files")) (EVar "e"))) (EVar "arms"))) (EVar "tree")))
+(DFunDef false "exprFiles" ((PVar "files") (PCon "CIf" (PVar "a") (PVar "b") (PVar "c"))) (EApp (EApp (EVar "exprFiles") (EApp (EApp (EVar "exprFiles") (EApp (EApp (EVar "exprFiles") (EVar "files")) (EVar "a"))) (EVar "b"))) (EVar "c")))
+(DFunDef false "exprFiles" ((PVar "files") (PCon "CBinPrim" PWild (PVar "a") (PVar "b") PWild (PVar "loc"))) (EApp (EApp (EVar "exprFiles") (EApp (EApp (EVar "exprFiles") (EApp (EApp (EVar "fileOf") (EVar "loc")) (EVar "files"))) (EVar "a"))) (EVar "b")))
+(DFunDef false "exprFiles" ((PVar "files") (PCon "CUnOp" PWild (PVar "e"))) (EApp (EApp (EVar "exprFiles") (EVar "files")) (EVar "e")))
+(DFunDef false "exprFiles" ((PVar "files") (PCon "CTuple" (PVar "es"))) (EApp (EApp (EApp (EMethodRef "fold") (EVar "exprFiles")) (EVar "files")) (EVar "es")))
+(DFunDef false "exprFiles" ((PVar "files") (PCon "CList" (PVar "es"))) (EApp (EApp (EApp (EMethodRef "fold") (EVar "exprFiles")) (EVar "files")) (EVar "es")))
+(DFunDef false "exprFiles" ((PVar "files") (PCon "CRecord" PWild (PVar "fs"))) (EApp (EApp (EApp (EMethodRef "fold") (EVar "fieldFiles")) (EVar "files")) (EVar "fs")))
+(DFunDef false "exprFiles" ((PVar "files") (PCon "CFieldAccess" (PVar "e") PWild PWild PWild)) (EApp (EApp (EVar "exprFiles") (EVar "files")) (EVar "e")))
+(DFunDef false "exprFiles" ((PVar "files") (PCon "CRecordUpdate" PWild (PVar "e") (PVar "fs"))) (EApp (EApp (EApp (EMethodRef "fold") (EVar "fieldFiles")) (EApp (EApp (EVar "exprFiles") (EVar "files")) (EVar "e"))) (EVar "fs")))
+(DFunDef false "exprFiles" ((PVar "files") (PCon "CVariantUpdate" PWild (PVar "e") (PVar "fs"))) (EApp (EApp (EApp (EMethodRef "fold") (EVar "fieldFiles")) (EApp (EApp (EVar "exprFiles") (EVar "files")) (EVar "e"))) (EVar "fs")))
+(DFunDef false "exprFiles" ((PVar "files") (PCon "CArray" (PVar "es"))) (EApp (EApp (EApp (EMethodRef "fold") (EVar "exprFiles")) (EVar "files")) (EVar "es")))
+(DFunDef false "exprFiles" ((PVar "files") (PCon "CRangeList" (PVar "a") (PVar "b") PWild)) (EApp (EApp (EVar "exprFiles") (EApp (EApp (EVar "exprFiles") (EVar "files")) (EVar "a"))) (EVar "b")))
+(DFunDef false "exprFiles" ((PVar "files") (PCon "CRangeArray" (PVar "a") (PVar "b") PWild)) (EApp (EApp (EVar "exprFiles") (EApp (EApp (EVar "exprFiles") (EVar "files")) (EVar "a"))) (EVar "b")))
+(DFunDef false "exprFiles" ((PVar "files") (PCon "CIndex" (PVar "a") (PVar "b"))) (EApp (EApp (EVar "exprFiles") (EApp (EApp (EVar "exprFiles") (EVar "files")) (EVar "a"))) (EVar "b")))
+(DFunDef false "exprFiles" ((PVar "files") (PCon "CSlice" (PVar "a") (PVar "b") (PVar "c") PWild)) (EApp (EApp (EVar "exprFiles") (EApp (EApp (EVar "exprFiles") (EApp (EApp (EVar "exprFiles") (EVar "files")) (EVar "a"))) (EVar "b"))) (EVar "c")))
+(DFunDef false "exprFiles" ((PVar "files") (PCon "CStringIndex" (PVar "a") (PVar "b"))) (EApp (EApp (EVar "exprFiles") (EApp (EApp (EVar "exprFiles") (EVar "files")) (EVar "a"))) (EVar "b")))
+(DFunDef false "exprFiles" ((PVar "files") (PCon "CStringSlice" (PVar "a") (PVar "b") (PVar "c") PWild)) (EApp (EApp (EVar "exprFiles") (EApp (EApp (EVar "exprFiles") (EApp (EApp (EVar "exprFiles") (EVar "files")) (EVar "a"))) (EVar "b"))) (EVar "c")))
+(DFunDef false "exprFiles" ((PVar "files") (PCon "CListIndex" (PVar "a") (PVar "b"))) (EApp (EApp (EVar "exprFiles") (EApp (EApp (EVar "exprFiles") (EVar "files")) (EVar "a"))) (EVar "b")))
+(DFunDef false "exprFiles" ((PVar "files") (PCon "CListSlice" (PVar "a") (PVar "b") (PVar "c") PWild)) (EApp (EApp (EVar "exprFiles") (EApp (EApp (EVar "exprFiles") (EApp (EApp (EVar "exprFiles") (EVar "files")) (EVar "a"))) (EVar "b"))) (EVar "c")))
+(DFunDef false "exprFiles" ((PVar "files") (PCon "CBlock" (PVar "stmts"))) (EApp (EApp (EApp (EMethodRef "fold") (EVar "stmtFiles")) (EVar "files")) (EVar "stmts")))
+(DFunDef false "exprFiles" ((PVar "files") (PCon "CMethod" PWild PWild)) (EVar "files"))
+(DFunDef false "exprFiles" ((PVar "files") (PCon "CDict" PWild PWild)) (EVar "files"))
 (DTypeSig false "programFiles" (TyFun (TyCon "CProgram") (TyApp (TyCon "List") (TyCon "String"))))
-(DFunDef false "programFiles" ((PCon "CProgram" (PVar "binds") PWild PWild (PVar "impls") PWild PWild)) (EApp (EApp (EMethodRef "map") (EVar "fst")) (EApp (EVar "entries") (EApp (EApp (EVar "omFromNames") (EBinOp "++" (EApp (EApp (EDictApp "flatMap") (EVar "bindFiles")) (EVar "binds")) (EApp (EApp (EDictApp "flatMap") (EVar "implFiles")) (EVar "impls")))) (EVar "omEmpty")))))
+(DFunDef false "programFiles" ((PCon "CProgram" (PVar "binds") PWild PWild (PVar "impls") PWild PWild)) (EApp (EApp (EMethodRef "map") (EVar "fst")) (EApp (EVar "entries") (EApp (EApp (EApp (EMethodRef "fold") (EVar "implFiles")) (EApp (EApp (EApp (EMethodRef "fold") (EVar "bindFiles")) (EVar "omEmpty")) (EVar "binds"))) (EVar "impls")))))
 (DTypeSig false "assign" (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyCon "Int") (TyFun (TyApp (TyCon "OrdMap") (TyCon "Int")) (TyTuple (TyApp (TyCon "OrdMap") (TyCon "Int")) (TyCon "Int"))))))
 (DFunDef false "assign" ((PList) (PVar "high") (PVar "table")) (ETuple (EVar "table") (EVar "high")))
 (DFunDef false "assign" ((PCons (PVar "name") (PVar "rest")) (PVar "high") (PVar "table")) (EIf (EApp (EApp (EVar "omHasKey") (EVar "name")) (EVar "table")) (EApp (EApp (EApp (EVar "assign") (EVar "rest")) (EVar "high")) (EVar "table")) (EApp (EApp (EApp (EVar "assign") (EVar "rest")) (EBinOp "+" (EVar "high") (ELit (LInt 1)))) (EApp (EApp (EApp (EVar "omInsert") (EVar "name")) (EBinOp "+" (EVar "high") (ELit (LInt 1)))) (EVar "table")))))

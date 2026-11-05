@@ -116,27 +116,34 @@ test "sparse imported IDs preserve holes and detect corruptions" =
       expectEqual (Some 8) (omLookup "new.T" (plan : IdentityPlan).types),
       expectEqual (Some 5) (omLookup "new.mdk" (plan : IdentityPlan).files),
       expectEqual ["", "pkg.mdk", "", "", "new.mdk"] plan.orderedFiles,
-      expectTrue
-        (not (isEmpty (validateIdentityPlan cp { plan | types = omEmpty }))),
-      expectTrue
-        (not (isEmpty (validateIdentityPlan cp { plan | files = omEmpty }))),
-      expectTrue
-        (not (isEmpty (validateIdentityPlan cp { plan | orderedFiles = [] }))),
+      expectTextContainsAll
+        ["missing type", "imported type changed"]
+        (stringConcat (validateIdentityPlan cp { plan | types = omEmpty })),
+      expectTextContainsAll
+        ["missing file"]
+        (stringConcat (validateIdentityPlan cp { plan | files = omEmpty })),
+      expectTextContainsAll
+        ["file table disagrees"]
+        (stringConcat (validateIdentityPlan cp { plan | orderedFiles = [] })),
     ])
     (planProgramIdentity pkg cp)
 
 test "exhaustion and invalid imported identities refuse" =
   let cp = program [("A", "new.T")] [("x", 2, 1)]
   expectAll [
-    expectTrue
-      (isErr
+    expectTextContainsAll
+      ["type IDs exhausted"]
+      (identityErrors
         (planProgramIdentity
           { emptyPackage | typeHigh = reservedTypeBase - 1 }
           cp)),
-    expectTrue
-      (isErr (planProgramIdentity { emptyPackage | fileHigh = 65535 } cp)),
-    expectTrue
-      (isErr
+    expectTextContainsAll
+      ["file IDs exhausted"]
+      (identityErrors
+        (planProgramIdentity { emptyPackage | fileHigh = 65535 } cp)),
+    expectTextContainsAll
+      ["invalid type assignment bad"]
+      (identityErrors
         (planProgramIdentity
           { emptyPackage | types = omInsert "bad" 0 omEmpty }
           cp)),
@@ -198,8 +205,9 @@ test "inventory visits nested sites and explicit literals" =
         ]
         plan.orderedFiles,
       expectEqual [] (validateIdentityPlan cp plan),
-      expectTrue
-        (not (isEmpty (validateIdentityPlan cp { plan | files = omEmpty }))),
+      expectTextContainsAll
+        ["missing file"]
+        (stringConcat (validateIdentityPlan cp { plan | files = omEmpty })),
     ])
     (planProgramIdentity emptyPackage cp)
 
@@ -253,3 +261,41 @@ test "exact allocation ceilings and conflicting imports" =
       (identityErrors
         (planProgramIdentity { emptyPackage | abi = abiVersion + 1 } cp)),
   ]
+
+perfChain : Int -> CExpr
+perfChain n =
+  if n <= 0 then
+    CLit (LInt 0)
+  else
+    CBinPrim
+      "+"
+      (perfChain (n - 1))
+      (CLit (LInt 1))
+      "Int"
+      (Loc "perf.mdk" 2 3 2 4)
+
+perfProgram : Int -> CProgram
+perfProgram n =
+  CProgram
+    [CBind "main" [CClause [] (perfChain n)] (Loc "" 1 0 1 0) noBinderId]
+    []
+    []
+    []
+    []
+    noDeclFacts
+
+identityAllocation : Int -> <IO> Float
+identityAllocation n =
+  let cp = perfProgram n
+  let before = allocBytes ()
+  let planned = planProgramIdentity emptyPackage cp
+  let _ = match planned
+    Ok p => length p.orderedFiles
+    Err es => length es
+  allocBytes () - before
+
+test "identity inventory allocation scales linearly" =
+  let a = identityAllocation 1000
+  let b = identityAllocation 2000
+  let c = identityAllocation 4000
+  expectAll [expectTrue (b < a * 3.0), expectTrue (c < b * 3.0)]
