@@ -1,5 +1,5 @@
 # META
-source_lines=286
+source_lines=290
 stages=DESUGAR,MARK
 # SOURCE
 -- compiler/tools/lint_baseline.mdk — the per-(file, rule) finding-count baseline
@@ -83,18 +83,20 @@ baselineRowsGo : Toml ->
   HashMap String (List String) ->
   List BaselineRow ->
   Result String (List BaselineRow)
-baselineRowsGo doc origin i n seen acc =
-  if i >= n then
-    Ok acc
-  else match baselineRowAt doc origin i
-    Err e => Err e
-    Ok r =>
-      let rules = findWithDefault [] r.file seen
-      if contains r.rule rules then
-        Err "\{origin}: duplicate row for '\{r.file}' / \{r.rule}"
-      else
-        setInPlace r.file (r.rule :: rules) seen
-        baselineRowsGo doc origin (i + 1) n seen (r :: acc)
+baselineRowsGo doc origin i0 n seen acc0 = go i0 acc0
+  where
+    go i acc =
+      if i >= n then
+        Ok acc
+      else match baselineRowAt doc origin i
+        Err e => Err e
+        Ok r =>
+          let rules = findWithDefault [] r.file seen
+          if contains r.rule rules then
+            Err "\{origin}: duplicate row for '\{r.file}' / \{r.rule}"
+          else
+            setInPlace r.file (r.rule :: rules) seen
+            go (i + 1) (r :: acc)
 
 baselineRowAt : Toml -> String -> Int -> Result String BaselineRow
 baselineRowAt doc origin i = match tableEntry "entry" i doc
@@ -128,10 +130,12 @@ baselineAllowed : LintBaseline -> String -> String -> Option Int
 baselineAllowed (LintBaseline rows) file rule = baselineAllowedGo rows file rule
 
 baselineAllowedGo : List BaselineRow -> String -> String -> Option Int
-baselineAllowedGo [] _ _ = None
-baselineAllowedGo (r :: rest) file rule
-  | r.file == file && r.rule == rule = Some r.count
-  | otherwise = baselineAllowedGo rest file rule
+baselineAllowedGo rows0 file rule = go rows0
+  where
+    go [] = None
+    go (r :: rest)
+      | r.file == file && r.rule == rule = Some r.count
+      | otherwise = go rest
 
 -- One entry per DISTINCT rule name in `names`, with how many times it occurs,
 -- rule-sorted.  `names` is one entry per finding, so the count is the finding
@@ -304,7 +308,7 @@ baselineFileHeader = stringConcat [
 (DTypeSig false "parseLintBaseline" (TyFun (TyCon "String") (TyFun (TyCon "String") (TyApp (TyApp (TyCon "Result") (TyCon "String")) (TyCon "LintBaseline")))))
 (DFunDef false "parseLintBaseline" ((PVar "origin") (PVar "src")) (EMatch (EApp (EVar "parse") (EVar "src")) (arm (PCon "Err" (PVar "e")) () (EApp (EVar "Err") (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "")) (EApp (EVar "display") (EVar "origin"))) (ELit (LString ": not valid TOML: "))) (EApp (EVar "display") (EVar "e"))) (ELit (LString ""))))) (arm (PCon "Ok" (PVar "doc")) () (EApp (EApp (EVar "map") (ELam ((PVar "rows")) (EApp (EVar "LintBaseline") (EApp (EVar "reverseL") (EVar "rows"))))) (EApp (EApp (EApp (EApp (EApp (EApp (EVar "baselineRowsGo") (EVar "doc")) (EVar "origin")) (ELit (LInt 0))) (EApp (EApp (EVar "tableCount") (ELit (LString "entry"))) (EVar "doc"))) (EApp (EVar "new") (ELit LUnit))) (EListLit))))))
 (DTypeSig false "baselineRowsGo" (TyFun (TyCon "Toml") (TyFun (TyCon "String") (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyFun (TyApp (TyApp (TyCon "HashMap") (TyCon "String")) (TyApp (TyCon "List") (TyCon "String"))) (TyFun (TyApp (TyCon "List") (TyCon "BaselineRow")) (TyApp (TyApp (TyCon "Result") (TyCon "String")) (TyApp (TyCon "List") (TyCon "BaselineRow"))))))))))
-(DFunDef false "baselineRowsGo" ((PVar "doc") (PVar "origin") (PVar "i") (PVar "n") (PVar "seen") (PVar "acc")) (EIf (EBinOp ">=" (EVar "i") (EVar "n")) (EApp (EVar "Ok") (EVar "acc")) (EMatch (EApp (EApp (EApp (EVar "baselineRowAt") (EVar "doc")) (EVar "origin")) (EVar "i")) (arm (PCon "Err" (PVar "e")) () (EApp (EVar "Err") (EVar "e"))) (arm (PCon "Ok" (PVar "r")) () (EBlock (DoLet false false (PVar "rules") (EApp (EApp (EApp (EVar "findWithDefault") (EListLit)) (EFieldAccess (EVar "r") "file")) (EVar "seen"))) (DoExpr (EIf (EApp (EApp (EVar "contains") (EFieldAccess (EVar "r") "rule")) (EVar "rules")) (EApp (EVar "Err") (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "")) (EApp (EVar "display") (EVar "origin"))) (ELit (LString ": duplicate row for '"))) (EApp (EVar "display") (EFieldAccess (EVar "r") "file"))) (ELit (LString "' / "))) (EApp (EVar "display") (EFieldAccess (EVar "r") "rule"))) (ELit (LString "")))) (EBlock (DoExpr (EApp (EApp (EApp (EVar "setInPlace") (EFieldAccess (EVar "r") "file")) (EBinOp "::" (EFieldAccess (EVar "r") "rule") (EVar "rules"))) (EVar "seen"))) (DoExpr (EApp (EApp (EApp (EApp (EApp (EApp (EVar "baselineRowsGo") (EVar "doc")) (EVar "origin")) (EBinOp "+" (EVar "i") (ELit (LInt 1)))) (EVar "n")) (EVar "seen")) (EBinOp "::" (EVar "r") (EVar "acc"))))))))))))
+(DFunDef false "baselineRowsGo" ((PVar "doc") (PVar "origin") (PVar "i0") (PVar "n") (PVar "seen") (PVar "acc0")) (ELetGroup ((lgb "go" (clause ((PVar "i") (PVar "acc")) (EIf (EBinOp ">=" (EVar "i") (EVar "n")) (EApp (EVar "Ok") (EVar "acc")) (EMatch (EApp (EApp (EApp (EVar "baselineRowAt") (EVar "doc")) (EVar "origin")) (EVar "i")) (arm (PCon "Err" (PVar "e")) () (EApp (EVar "Err") (EVar "e"))) (arm (PCon "Ok" (PVar "r")) () (EBlock (DoLet false false (PVar "rules") (EApp (EApp (EApp (EVar "findWithDefault") (EListLit)) (EFieldAccess (EVar "r") "file")) (EVar "seen"))) (DoExpr (EIf (EApp (EApp (EVar "contains") (EFieldAccess (EVar "r") "rule")) (EVar "rules")) (EApp (EVar "Err") (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "")) (EApp (EVar "display") (EVar "origin"))) (ELit (LString ": duplicate row for '"))) (EApp (EVar "display") (EFieldAccess (EVar "r") "file"))) (ELit (LString "' / "))) (EApp (EVar "display") (EFieldAccess (EVar "r") "rule"))) (ELit (LString "")))) (EBlock (DoExpr (EApp (EApp (EApp (EVar "setInPlace") (EFieldAccess (EVar "r") "file")) (EBinOp "::" (EFieldAccess (EVar "r") "rule") (EVar "rules"))) (EVar "seen"))) (DoExpr (EApp (EApp (EVar "go") (EBinOp "+" (EVar "i") (ELit (LInt 1)))) (EBinOp "::" (EVar "r") (EVar "acc")))))))))))))) (EApp (EApp (EVar "go") (EVar "i0")) (EVar "acc0"))))
 (DTypeSig false "baselineRowAt" (TyFun (TyCon "Toml") (TyFun (TyCon "String") (TyFun (TyCon "Int") (TyApp (TyApp (TyCon "Result") (TyCon "String")) (TyCon "BaselineRow"))))))
 (DFunDef false "baselineRowAt" ((PVar "doc") (PVar "origin") (PVar "i")) (EMatch (EApp (EApp (EApp (EVar "tableEntry") (ELit (LString "entry"))) (EVar "i")) (EVar "doc")) (arm (PCon "None") () (EApp (EVar "Err") (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "")) (EApp (EVar "display") (EVar "origin"))) (ELit (LString ": [[entry]] #"))) (EApp (EVar "display") (EApp (EVar "intToString") (EVar "i")))) (ELit (LString " is out of range"))))) (arm (PCon "Some" (PVar "e")) () (EMatch (ETuple (EApp (EApp (EVar "getString") (ELit (LString "file"))) (EVar "e")) (EApp (EApp (EVar "getString") (ELit (LString "rule"))) (EVar "e")) (EApp (EApp (EVar "getInt") (ELit (LString "count"))) (EVar "e"))) (arm (PTuple (PCon "Some" (PVar "f")) (PCon "Some" (PVar "r")) (PCon "Some" (PVar "c"))) () (EIf (EBinOp "<" (EVar "c") (ELit (LInt 0))) (EApp (EVar "Err") (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "")) (EApp (EVar "display") (EVar "origin"))) (ELit (LString ": [[entry]] #"))) (EApp (EVar "display") (EApp (EVar "intToString") (EVar "i")))) (ELit (LString " has a negative count")))) (EApp (EVar "Ok") (ERecordCreate "BaselineRow" ((fa "file" (EVar "f")) (fa "rule" (EVar "r")) (fa "count" (EVar "c"))))))) (arm PWild () (EApp (EVar "Err") (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "")) (EApp (EVar "display") (EVar "origin"))) (ELit (LString ": [[entry]] #"))) (EApp (EVar "display") (EApp (EVar "intToString") (EVar "i")))) (ELit (LString " needs file, rule and count")))))))))
 (DTypeSig true "baselineKeyOf" (TyFun (TyCon "String") (TyFun (TyCon "String") (TyCon "String"))))
@@ -312,8 +316,7 @@ baselineFileHeader = stringConcat [
 (DTypeSig false "baselineAllowed" (TyFun (TyCon "LintBaseline") (TyFun (TyCon "String") (TyFun (TyCon "String") (TyApp (TyCon "Option") (TyCon "Int"))))))
 (DFunDef false "baselineAllowed" ((PCon "LintBaseline" (PVar "rows")) (PVar "file") (PVar "rule")) (EApp (EApp (EApp (EVar "baselineAllowedGo") (EVar "rows")) (EVar "file")) (EVar "rule")))
 (DTypeSig false "baselineAllowedGo" (TyFun (TyApp (TyCon "List") (TyCon "BaselineRow")) (TyFun (TyCon "String") (TyFun (TyCon "String") (TyApp (TyCon "Option") (TyCon "Int"))))))
-(DFunDef false "baselineAllowedGo" ((PList) PWild PWild) (EVar "None"))
-(DFunDef false "baselineAllowedGo" ((PCons (PVar "r") (PVar "rest")) (PVar "file") (PVar "rule")) (EIf (EBinOp "&&" (EBinOp "==" (EFieldAccess (EVar "r") "file") (EVar "file")) (EBinOp "==" (EFieldAccess (EVar "r") "rule") (EVar "rule"))) (EApp (EVar "Some") (EFieldAccess (EVar "r") "count")) (EIf (EVar "otherwise") (EApp (EApp (EApp (EVar "baselineAllowedGo") (EVar "rest")) (EVar "file")) (EVar "rule")) (EApp (EVar "__fallthrough__") (ELit LUnit)))))
+(DFunDef false "baselineAllowedGo" ((PVar "rows0") (PVar "file") (PVar "rule")) (ELetGroup ((lgb "go" (clause ((PList)) (EVar "None")) (clause ((PCons (PVar "r") (PVar "rest"))) (EIf (EBinOp "&&" (EBinOp "==" (EFieldAccess (EVar "r") "file") (EVar "file")) (EBinOp "==" (EFieldAccess (EVar "r") "rule") (EVar "rule"))) (EApp (EVar "Some") (EFieldAccess (EVar "r") "count")) (EIf (EVar "otherwise") (EApp (EVar "go") (EVar "rest")) (EApp (EVar "__fallthrough__") (ELit LUnit))))))) (EApp (EVar "go") (EVar "rows0"))))
 (DTypeSig true "ruleCounts" (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "Int")))))
 (DFunDef false "ruleCounts" ((PVar "names")) (EApp (EApp (EVar "map") (ELam ((PVar "r")) (ETuple (EVar "r") (EApp (EApp (EVar "occurrencesOf") (EVar "r")) (EVar "names"))))) (EApp (EVar "sortUniqS") (EVar "names"))))
 (DTypeSig false "occurrencesOf" (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyCon "Int"))))
@@ -376,7 +379,7 @@ baselineFileHeader = stringConcat [
 (DTypeSig false "parseLintBaseline" (TyFun (TyCon "String") (TyFun (TyCon "String") (TyApp (TyApp (TyCon "Result") (TyCon "String")) (TyCon "LintBaseline")))))
 (DFunDef false "parseLintBaseline" ((PVar "origin") (PVar "src")) (EMatch (EApp (EVar "parse") (EVar "src")) (arm (PCon "Err" (PVar "e")) () (EApp (EVar "Err") (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "")) (EApp (EMethodRef "display") (EVar "origin"))) (ELit (LString ": not valid TOML: "))) (EApp (EMethodRef "display") (EVar "e"))) (ELit (LString ""))))) (arm (PCon "Ok" (PVar "doc")) () (EApp (EApp (EMethodRef "map") (ELam ((PVar "rows")) (EApp (EVar "LintBaseline") (EApp (EVar "reverseL") (EVar "rows"))))) (EApp (EApp (EApp (EApp (EApp (EApp (EVar "baselineRowsGo") (EVar "doc")) (EVar "origin")) (ELit (LInt 0))) (EApp (EApp (EVar "tableCount") (ELit (LString "entry"))) (EVar "doc"))) (EApp (EVar "new") (ELit LUnit))) (EListLit))))))
 (DTypeSig false "baselineRowsGo" (TyFun (TyCon "Toml") (TyFun (TyCon "String") (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyFun (TyApp (TyApp (TyCon "HashMap") (TyCon "String")) (TyApp (TyCon "List") (TyCon "String"))) (TyFun (TyApp (TyCon "List") (TyCon "BaselineRow")) (TyApp (TyApp (TyCon "Result") (TyCon "String")) (TyApp (TyCon "List") (TyCon "BaselineRow"))))))))))
-(DFunDef false "baselineRowsGo" ((PVar "doc") (PVar "origin") (PVar "i") (PVar "n") (PVar "seen") (PVar "acc")) (EIf (EBinOp ">=" (EVar "i") (EVar "n")) (EApp (EVar "Ok") (EVar "acc")) (EMatch (EApp (EApp (EApp (EVar "baselineRowAt") (EVar "doc")) (EVar "origin")) (EVar "i")) (arm (PCon "Err" (PVar "e")) () (EApp (EVar "Err") (EVar "e"))) (arm (PCon "Ok" (PVar "r")) () (EBlock (DoLet false false (PVar "rules") (EApp (EApp (EApp (EVar "findWithDefault") (EListLit)) (EFieldAccess (EVar "r") "file")) (EVar "seen"))) (DoExpr (EIf (EApp (EApp (EVar "contains") (EFieldAccess (EVar "r") "rule")) (EVar "rules")) (EApp (EVar "Err") (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "")) (EApp (EMethodRef "display") (EVar "origin"))) (ELit (LString ": duplicate row for '"))) (EApp (EMethodRef "display") (EFieldAccess (EVar "r") "file"))) (ELit (LString "' / "))) (EApp (EMethodRef "display") (EFieldAccess (EVar "r") "rule"))) (ELit (LString "")))) (EBlock (DoExpr (EApp (EApp (EApp (EVar "setInPlace") (EFieldAccess (EVar "r") "file")) (EBinOp "::" (EFieldAccess (EVar "r") "rule") (EVar "rules"))) (EVar "seen"))) (DoExpr (EApp (EApp (EApp (EApp (EApp (EApp (EVar "baselineRowsGo") (EVar "doc")) (EVar "origin")) (EBinOp "+" (EVar "i") (ELit (LInt 1)))) (EVar "n")) (EVar "seen")) (EBinOp "::" (EVar "r") (EVar "acc"))))))))))))
+(DFunDef false "baselineRowsGo" ((PVar "doc") (PVar "origin") (PVar "i0") (PVar "n") (PVar "seen") (PVar "acc0")) (ELetGroup ((lgb "go" (clause ((PVar "i") (PVar "acc")) (EIf (EBinOp ">=" (EVar "i") (EVar "n")) (EApp (EVar "Ok") (EVar "acc")) (EMatch (EApp (EApp (EApp (EVar "baselineRowAt") (EVar "doc")) (EVar "origin")) (EVar "i")) (arm (PCon "Err" (PVar "e")) () (EApp (EVar "Err") (EVar "e"))) (arm (PCon "Ok" (PVar "r")) () (EBlock (DoLet false false (PVar "rules") (EApp (EApp (EApp (EVar "findWithDefault") (EListLit)) (EFieldAccess (EVar "r") "file")) (EVar "seen"))) (DoExpr (EIf (EApp (EApp (EVar "contains") (EFieldAccess (EVar "r") "rule")) (EVar "rules")) (EApp (EVar "Err") (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "")) (EApp (EMethodRef "display") (EVar "origin"))) (ELit (LString ": duplicate row for '"))) (EApp (EMethodRef "display") (EFieldAccess (EVar "r") "file"))) (ELit (LString "' / "))) (EApp (EMethodRef "display") (EFieldAccess (EVar "r") "rule"))) (ELit (LString "")))) (EBlock (DoExpr (EApp (EApp (EApp (EVar "setInPlace") (EFieldAccess (EVar "r") "file")) (EBinOp "::" (EFieldAccess (EVar "r") "rule") (EVar "rules"))) (EVar "seen"))) (DoExpr (EApp (EApp (EVar "go") (EBinOp "+" (EVar "i") (ELit (LInt 1)))) (EBinOp "::" (EVar "r") (EVar "acc")))))))))))))) (EApp (EApp (EVar "go") (EVar "i0")) (EVar "acc0"))))
 (DTypeSig false "baselineRowAt" (TyFun (TyCon "Toml") (TyFun (TyCon "String") (TyFun (TyCon "Int") (TyApp (TyApp (TyCon "Result") (TyCon "String")) (TyCon "BaselineRow"))))))
 (DFunDef false "baselineRowAt" ((PVar "doc") (PVar "origin") (PVar "i")) (EMatch (EApp (EApp (EApp (EVar "tableEntry") (ELit (LString "entry"))) (EVar "i")) (EVar "doc")) (arm (PCon "None") () (EApp (EVar "Err") (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "")) (EApp (EMethodRef "display") (EVar "origin"))) (ELit (LString ": [[entry]] #"))) (EApp (EMethodRef "display") (EApp (EVar "intToString") (EVar "i")))) (ELit (LString " is out of range"))))) (arm (PCon "Some" (PVar "e")) () (EMatch (ETuple (EApp (EApp (EVar "getString") (ELit (LString "file"))) (EVar "e")) (EApp (EApp (EVar "getString") (ELit (LString "rule"))) (EVar "e")) (EApp (EApp (EVar "getInt") (ELit (LString "count"))) (EVar "e"))) (arm (PTuple (PCon "Some" (PVar "f")) (PCon "Some" (PVar "r")) (PCon "Some" (PVar "c"))) () (EIf (EBinOp "<" (EVar "c") (ELit (LInt 0))) (EApp (EVar "Err") (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "")) (EApp (EMethodRef "display") (EVar "origin"))) (ELit (LString ": [[entry]] #"))) (EApp (EMethodRef "display") (EApp (EVar "intToString") (EVar "i")))) (ELit (LString " has a negative count")))) (EApp (EVar "Ok") (ERecordCreate "BaselineRow" ((fa "file" (EVar "f")) (fa "rule" (EVar "r")) (fa "count" (EVar "c"))))))) (arm PWild () (EApp (EVar "Err") (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "")) (EApp (EMethodRef "display") (EVar "origin"))) (ELit (LString ": [[entry]] #"))) (EApp (EMethodRef "display") (EApp (EVar "intToString") (EVar "i")))) (ELit (LString " needs file, rule and count")))))))))
 (DTypeSig true "baselineKeyOf" (TyFun (TyCon "String") (TyFun (TyCon "String") (TyCon "String"))))
@@ -384,8 +387,7 @@ baselineFileHeader = stringConcat [
 (DTypeSig false "baselineAllowed" (TyFun (TyCon "LintBaseline") (TyFun (TyCon "String") (TyFun (TyCon "String") (TyApp (TyCon "Option") (TyCon "Int"))))))
 (DFunDef false "baselineAllowed" ((PCon "LintBaseline" (PVar "rows")) (PVar "file") (PVar "rule")) (EApp (EApp (EApp (EVar "baselineAllowedGo") (EVar "rows")) (EVar "file")) (EVar "rule")))
 (DTypeSig false "baselineAllowedGo" (TyFun (TyApp (TyCon "List") (TyCon "BaselineRow")) (TyFun (TyCon "String") (TyFun (TyCon "String") (TyApp (TyCon "Option") (TyCon "Int"))))))
-(DFunDef false "baselineAllowedGo" ((PList) PWild PWild) (EVar "None"))
-(DFunDef false "baselineAllowedGo" ((PCons (PVar "r") (PVar "rest")) (PVar "file") (PVar "rule")) (EIf (EBinOp "&&" (EBinOp "==" (EFieldAccess (EVar "r") "file") (EVar "file")) (EBinOp "==" (EFieldAccess (EVar "r") "rule") (EVar "rule"))) (EApp (EVar "Some") (EFieldAccess (EVar "r") "count")) (EIf (EVar "otherwise") (EApp (EApp (EApp (EVar "baselineAllowedGo") (EVar "rest")) (EVar "file")) (EVar "rule")) (EApp (EVar "__fallthrough__") (ELit LUnit)))))
+(DFunDef false "baselineAllowedGo" ((PVar "rows0") (PVar "file") (PVar "rule")) (ELetGroup ((lgb "go" (clause ((PList)) (EVar "None")) (clause ((PCons (PVar "r") (PVar "rest"))) (EIf (EBinOp "&&" (EBinOp "==" (EFieldAccess (EVar "r") "file") (EVar "file")) (EBinOp "==" (EFieldAccess (EVar "r") "rule") (EVar "rule"))) (EApp (EVar "Some") (EFieldAccess (EVar "r") "count")) (EIf (EVar "otherwise") (EApp (EVar "go") (EVar "rest")) (EApp (EVar "__fallthrough__") (ELit LUnit))))))) (EApp (EVar "go") (EVar "rows0"))))
 (DTypeSig true "ruleCounts" (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "Int")))))
 (DFunDef false "ruleCounts" ((PVar "names")) (EApp (EApp (EMethodRef "map") (ELam ((PVar "r")) (ETuple (EVar "r") (EApp (EApp (EVar "occurrencesOf") (EVar "r")) (EVar "names"))))) (EApp (EVar "sortUniqS") (EVar "names"))))
 (DTypeSig false "occurrencesOf" (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyCon "Int"))))

@@ -521,6 +521,8 @@ mergeHead : String ->
   List String ->
   List (String, List String) ->
   List (String, List String)
+-- Bound: list built in tail position modulo cons: a where-local go loses the constant-stack loop until the lambda-lift pass (#4878); convert then.
+-- lint-disable-next-line rule-threaded-invariant
 mergeHead name names [] = [(name, names)]
 mergeHead name names ((n, have) :: rest) =
   if n == name then
@@ -620,6 +622,8 @@ letgroupEntriesGo : List LetBind ->
   String ->
   Int ->
   List (String, DocEntry)
+-- Bound: list built in tail position modulo cons: a where-local go loses the constant-stack loop until the lambda-lift pass (#4878); convert then.
+-- lint-disable-next-line rule-threaded-invariant
 letgroupEntriesGo [] _ _ _ = []
 letgroupEntriesGo ((LetBind name _ _ _) :: rest) schemes doc line =
   let sigStr = valueSig name schemes None
@@ -673,18 +677,20 @@ derivedEntries : String ->
   Int ->
   List DeriveRef ->
   List (String, DocEntry)
-derivedEntries _ _ _ _ _ [] = []
-derivedEntries tyName params kinds shape line (d :: ds) =
-  let iface = deriveRefName d
-  let rest = derivedEntries tyName params kinds shape line ds
-  if not (hasDeriver tyName params kinds shape iface) then
-    rest
-  else
-    let args = derivedHead tyName params
-    let name = "\{iface} \{args}"
-    let sigStr =
-      "impl \{iface} \{args}\{derivedRequires iface (typeKindedParams params kinds)}"
-    (name, DocEntry name sigStr "" "" (KImplOn (Some tyName)) line) :: rest
+derivedEntries tyName params kinds shape line xs0 = go xs0
+  where
+    go [] = []
+    go (d :: ds) =
+      let iface = deriveRefName d
+      let rest = go ds
+      if not (hasDeriver tyName params kinds shape iface) then
+        rest
+      else
+        let args = derivedHead tyName params
+        let name = "\{iface} \{args}"
+        let sigStr =
+          "impl \{iface} \{args}\{derivedRequires iface (typeKindedParams params kinds)}"
+        (name, DocEntry name sigStr "" "" (KImplOn (Some tyName)) line) :: rest
 
 -- `T` with no params, `(T a b)` with them — `ppTyP 2`'s rendering of the head
 -- `appliedHead` builds.
@@ -785,6 +791,8 @@ reexportEntriesGo : String ->
   String ->
   Int ->
   List (String, DocEntry)
+-- Bound: list built in tail position modulo cons: a where-local go loses the constant-stack loop until the lambda-lift pass (#4878); convert then.
+-- lint-disable-next-line rule-threaded-invariant
 reexportEntriesGo _ [] _ _ _ _ = []
 reexportEntriesGo originMod (m :: rest) schemes originSchemes doc line =
   let local = useMemberLocal m
@@ -815,17 +823,19 @@ originSchemeTable : String ->
   List String ->
   List Decl ->
   <IO> List (String, List (String, Scheme))
-originSchemeTable _ _ _ [] = []
-originSchemeTable runtimeSrc coreSrc roots (d :: ds) =
-  let rest = originSchemeTable runtimeSrc coreSrc roots ds
-  match useGroupOf d
-    None => rest
-    Some (path, _) =>
-      let mid = joinWith "." path
-      if hasOriginEntry mid rest then
-        rest
-      else
-        (mid, originModuleSchemes runtimeSrc coreSrc roots path) :: rest
+originSchemeTable runtimeSrc coreSrc roots xs0 = go xs0
+  where
+    go [] = []
+    go (d :: ds) =
+      let rest = go ds
+      match useGroupOf d
+        None => rest
+        Some (path, _) =>
+          let mid = joinWith "." path
+          if hasOriginEntry mid rest then
+            rest
+          else
+            (mid, originModuleSchemes runtimeSrc coreSrc roots path) :: rest
 
 hasOriginEntry : String -> List (String, List (String, Scheme)) -> Bool
 hasOriginEntry _ [] = False
@@ -901,42 +911,37 @@ extractFold : Bool ->
   List DocEntry ->
   S.Set String ->
   (List DocEntry, S.Set String)
-extractFold _ _ [] _ _ _ revEntries seen = (revEntries, seen)
--- An attribute documents nothing itself: the declaration under it is the
--- entry, at the attribute's line, which is where its doc comment sits above.
-extractFold bare heads ((DAttrib _ decl, dp) :: rest) schemes origins tbl revEntries seen =
-  extractFold
-    bare
-    heads
-    ((decl, dp) :: rest)
-    schemes
-    origins
-    tbl
-    revEntries
-    seen
-extractFold bare heads ((decl, dp) :: rest) schemes origins tbl revEntries seen =
-  let line = declPosLine dp
-  match multiEntriesFor bare decl line schemes origins tbl
-    Some extras =>
-      let acc = foldExtras extras revEntries seen
-      extractFold bare heads rest schemes origins tbl (fst acc) (snd acc)
-    None => match renderSig bare decl schemes
-      None => extractFold bare heads rest schemes origins tbl revEntries seen
-      Some (name, sigStr) =>
-        if S.has name seen then
-          extractFold bare heads rest schemes origins tbl revEntries seen
-        else
-          let doc = findDocForLine tbl line
-          extractFold
-            bare
-            heads
-            rest
-            schemes
-            origins
-            tbl
-            (DocEntry name sigStr (headFor name heads) doc (declKind decl) line
-              :: revEntries)
-            (S.insert name seen)
+extractFold bare heads xs0 schemes origins tbl revs0 seen0 = go xs0 revs0 seen0
+  where
+    go [] revEntries seen = (revEntries, seen)
+    -- An attribute documents nothing itself: the declaration under it is the
+    -- entry, at the attribute's line, which is where its doc comment sits above.
+    go ((DAttrib _ decl, dp) :: rest) revEntries seen =
+      go ((decl, dp) :: rest) revEntries seen
+    go ((decl, dp) :: rest) revEntries seen =
+      let line = declPosLine dp
+      match multiEntriesFor bare decl line schemes origins tbl
+        Some extras =>
+          let acc = foldExtras extras revEntries seen
+          go rest (fst acc) (snd acc)
+        None => match renderSig bare decl schemes
+          None => go rest revEntries seen
+          Some (name, sigStr) =>
+            if S.has name seen then
+              go rest revEntries seen
+            else
+              let doc = findDocForLine tbl line
+              go
+                rest
+                (DocEntry
+                    name
+                    sigStr
+                    (headFor name heads)
+                    doc
+                    (declKind decl)
+                    line
+                  :: revEntries)
+                (S.insert name seen)
 
 -- Interleave `-- # Title` sections with the entries by source line: a section
 -- precedes the first entry declared after it.  Both lists arrive in
@@ -1701,21 +1706,22 @@ assignAnchors used ((name, line, tag) :: rest) =
   (name, line, tag, a) :: assignAnchors (a :: used) rest
 
 freshAnchor : List String -> String -> Int -> String
-freshAnchor used base n =
-  let cand = if n == 0 then base else "\{base}-\{n}"
-  if anyDoc (== cand) used then freshAnchor used base (n + 1) else cand
+freshAnchor used base n0 = go n0
+  where
+    go n =
+      let cand = if n == 0 then base else "\{base}-\{n}"
+      if anyDoc (== cand) used then go (n + 1) else cand
 
 anchorOf : AnchorTable -> DocEntry -> String
 anchorOf tbl e = match e
   DocEntry name _ _ _ _ line => lookupAnchor tbl name line (entryTag e)
 
 lookupAnchor : AnchorTable -> String -> Int -> String -> String
-lookupAnchor [] name _ _ = slugifyAnchor name
-lookupAnchor ((n, l, t, a) :: rest) name line tag =
-  if n == name && l == line && t == tag then
-    a
-  else
-    lookupAnchor rest name line tag
+lookupAnchor xs0 name line tag = go xs0
+  where
+    go [] = slugifyAnchor name
+    go ((n, l, t, a) :: rest) =
+      if n == name && l == line && t == tag then a else go rest
 
 stringTrimDashes : String -> String
 stringTrimDashes s = stringTrimDashEnd (stringTrimDashStart s)

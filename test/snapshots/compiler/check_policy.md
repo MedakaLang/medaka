@@ -1,5 +1,5 @@
 # META
-source_lines=768
+source_lines=776
 stages=DESUGAR,MARK
 # SOURCE
 import types.capability_manifest.{
@@ -96,6 +96,8 @@ splitComma s =
 -- nesting; a top-level comma (depth 0) splits.  Backward-compat: existing
 -- brace-free policies have depth 0 throughout ⇒ identical to the old split.
 splitCommaGo : Array Char -> Int -> Int -> Int -> Int -> List String
+-- Bound: list built in tail position modulo cons: a where-local go loses the constant-stack loop until the lambda-lift pass (#4878); convert then.
+-- lint-disable-next-line rule-threaded-invariant
 splitCommaGo cs n start i depth
   | i >= n = [sliceStr cs start n]
   | arrayGetUnsafe i cs == '{' = splitCommaGo cs n start (i + 1) (depth + 1)
@@ -108,6 +110,8 @@ sliceStr : Array Char -> Int -> Int -> String
 sliceStr cs a b = stringFromChars (arrayFromList (sliceGo cs a b))
 
 sliceGo : Array Char -> Int -> Int -> List Char
+-- Bound: list built in tail position modulo cons: a where-local go loses the constant-stack loop until the lambda-lift pass (#4878); convert then.
+-- lint-disable-next-line rule-threaded-invariant
 sliceGo cs a b
   | a >= b = []
   | otherwise = arrayGetUnsafe a cs :: sliceGo cs (a + 1) b
@@ -184,6 +188,8 @@ splitSemi : String -> List String
 splitSemi s = splitSemiGo (stringToChars s) (arrayLength (stringToChars s)) 0 0
 
 splitSemiGo : Array Char -> Int -> Int -> Int -> List String
+-- Bound: list built in tail position modulo cons: a where-local go loses the constant-stack loop until the lambda-lift pass (#4878); convert then.
+-- lint-disable-next-line rule-threaded-invariant
 splitSemiGo cs n start i
   | i >= n = [sliceStr cs start n]
   | arrayGetUnsafe i cs == ';' =
@@ -207,10 +213,12 @@ rhsIsSet rhs =
 
 -- Index of the first '=' in the char array, or None.
 splitOnFirstEq : Array Char -> Int -> Int -> Option Int
-splitOnFirstEq cs n i
-  | i >= n = None
-  | arrayGetUnsafe i cs == '=' = Some i
-  | otherwise = splitOnFirstEq cs n (i + 1)
+splitOnFirstEq cs n i0 = go i0
+  where
+    go i
+      | i >= n = None
+      | arrayGetUnsafe i cs == '=' = Some i
+      | otherwise = go (i + 1)
 
 -- The policy as the reject report renders it (`{…}`): a bare entry as the
 -- label, a parameterized one as an atom writes it (`L "pat"`).
@@ -830,7 +838,7 @@ joinSemiTok xs = joinWith ";" xs
 (DTypeSig false "rhsIsSet" (TyFun (TyCon "String") (TyCon "Bool")))
 (DFunDef false "rhsIsSet" ((PVar "rhs")) (EBlock (DoLet false false (PVar "n") (EApp (EVar "stringLength") (EVar "rhs"))) (DoExpr (EBinOp "&&" (EBinOp "&&" (EBinOp ">=" (EVar "n") (ELit (LInt 2))) (EBinOp "==" (EApp (EApp (EApp (EVar "stringSlice") (ELit (LInt 0))) (ELit (LInt 1))) (EVar "rhs")) (ELit (LString "{")))) (EBinOp "==" (EApp (EApp (EApp (EVar "stringSlice") (EBinOp "-" (EVar "n") (ELit (LInt 1)))) (EVar "n")) (EVar "rhs")) (ELit (LString "}")))))))
 (DTypeSig false "splitOnFirstEq" (TyFun (TyApp (TyCon "Array") (TyCon "Char")) (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyApp (TyCon "Option") (TyCon "Int"))))))
-(DFunDef false "splitOnFirstEq" ((PVar "cs") (PVar "n") (PVar "i")) (EIf (EBinOp ">=" (EVar "i") (EVar "n")) (EVar "None") (EIf (EBinOp "==" (EApp (EApp (EVar "arrayGetUnsafe") (EVar "i")) (EVar "cs")) (ELit (LChar "="))) (EApp (EVar "Some") (EVar "i")) (EIf (EVar "otherwise") (EApp (EApp (EApp (EVar "splitOnFirstEq") (EVar "cs")) (EVar "n")) (EBinOp "+" (EVar "i") (ELit (LInt 1)))) (EApp (EVar "__fallthrough__") (ELit LUnit))))))
+(DFunDef false "splitOnFirstEq" ((PVar "cs") (PVar "n") (PVar "i0")) (ELetGroup ((lgb "go" (clause ((PVar "i")) (EIf (EBinOp ">=" (EVar "i") (EVar "n")) (EVar "None") (EIf (EBinOp "==" (EApp (EApp (EVar "arrayGetUnsafe") (EVar "i")) (EVar "cs")) (ELit (LChar "="))) (EApp (EVar "Some") (EVar "i")) (EIf (EVar "otherwise") (EApp (EVar "go") (EBinOp "+" (EVar "i") (ELit (LInt 1)))) (EApp (EVar "__fallthrough__") (ELit LUnit)))))))) (EApp (EVar "go") (EVar "i0"))))
 (DTypeSig false "policyLabels" (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "EffParamTy"))) (TyApp (TyCon "List") (TyCon "String"))))
 (DFunDef false "policyLabels" ((PList)) (EListLit))
 (DFunDef false "policyLabels" ((PCons (PTuple (PVar "l") (PVar "p")) (PVar "rest"))) (EBinOp "::" (EBinOp "++" (EVar "l") (EApp (EApp (EVar "effParamSurface") (EVar "quoteTok")) (EVar "p"))) (EApp (EVar "policyLabels") (EVar "rest"))))
@@ -1016,7 +1024,7 @@ joinSemiTok xs = joinWith ";" xs
 (DTypeSig false "rhsIsSet" (TyFun (TyCon "String") (TyCon "Bool")))
 (DFunDef false "rhsIsSet" ((PVar "rhs")) (EBlock (DoLet false false (PVar "n") (EApp (EVar "stringLength") (EVar "rhs"))) (DoExpr (EBinOp "&&" (EBinOp "&&" (EBinOp ">=" (EVar "n") (ELit (LInt 2))) (EBinOp "==" (EApp (EApp (EApp (EVar "stringSlice") (ELit (LInt 0))) (ELit (LInt 1))) (EVar "rhs")) (ELit (LString "{")))) (EBinOp "==" (EApp (EApp (EApp (EVar "stringSlice") (EBinOp "-" (EVar "n") (ELit (LInt 1)))) (EVar "n")) (EVar "rhs")) (ELit (LString "}")))))))
 (DTypeSig false "splitOnFirstEq" (TyFun (TyApp (TyCon "Array") (TyCon "Char")) (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyApp (TyCon "Option") (TyCon "Int"))))))
-(DFunDef false "splitOnFirstEq" ((PVar "cs") (PVar "n") (PVar "i")) (EIf (EBinOp ">=" (EVar "i") (EVar "n")) (EVar "None") (EIf (EBinOp "==" (EApp (EApp (EVar "arrayGetUnsafe") (EVar "i")) (EVar "cs")) (ELit (LChar "="))) (EApp (EVar "Some") (EVar "i")) (EIf (EVar "otherwise") (EApp (EApp (EApp (EVar "splitOnFirstEq") (EVar "cs")) (EVar "n")) (EBinOp "+" (EVar "i") (ELit (LInt 1)))) (EApp (EVar "__fallthrough__") (ELit LUnit))))))
+(DFunDef false "splitOnFirstEq" ((PVar "cs") (PVar "n") (PVar "i0")) (ELetGroup ((lgb "go" (clause ((PVar "i")) (EIf (EBinOp ">=" (EVar "i") (EVar "n")) (EVar "None") (EIf (EBinOp "==" (EApp (EApp (EVar "arrayGetUnsafe") (EVar "i")) (EVar "cs")) (ELit (LChar "="))) (EApp (EVar "Some") (EVar "i")) (EIf (EVar "otherwise") (EApp (EVar "go") (EBinOp "+" (EVar "i") (ELit (LInt 1)))) (EApp (EVar "__fallthrough__") (ELit LUnit)))))))) (EApp (EVar "go") (EVar "i0"))))
 (DTypeSig false "policyLabels" (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "EffParamTy"))) (TyApp (TyCon "List") (TyCon "String"))))
 (DFunDef false "policyLabels" ((PList)) (EListLit))
 (DFunDef false "policyLabels" ((PCons (PTuple (PVar "l") (PVar "p")) (PVar "rest"))) (EBinOp "::" (EBinOp "++" (EVar "l") (EApp (EApp (EVar "effParamSurface") (EVar "quoteTok")) (EVar "p"))) (EApp (EVar "policyLabels") (EVar "rest"))))

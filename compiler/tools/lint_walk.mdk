@@ -343,18 +343,18 @@ ruleFindings : StdlibIndex ->
   List (Int, Rule) ->
   List (List Finding) ->
   List (Int, Finding)
-ruleFindings _ _ _ _ _ [] _ = []
-ruleFindings idx path facts pos prog ((rank, r) :: rs) walked = match r.check
-  WholeFile check =>
-    map
-        (f => (rank, restampFinding r f))
-        (check (indexFor r idx) path facts pos prog)
-      ++ ruleFindings idx path facts pos prog rs walked
-  Visits _ => match walked
-    hits :: rest =>
-      map (f => (rank, restampFinding r f)) hits
-        ++ ruleFindings idx path facts pos prog rs rest
-    [] => ruleFindings idx path facts pos prog rs []
+ruleFindings idx path facts pos prog rs0 walked0 = go rs0 walked0
+  where
+    go [] _ = []
+    go ((rank, r) :: rs) walked = match r.check
+      WholeFile check =>
+        map
+            (f => (rank, restampFinding r f))
+            (check (indexFor r idx) path facts pos prog)
+          ++ go rs walked
+      Visits _ => match walked
+        hits :: rest => map (f => (rank, restampFinding r f)) hits ++ go rs rest
+        [] => go rs []
 
 -- ── the visitor walk ──────────────────────────────────────────────────────────
 -- One pass over a file's declarations (each paired with its start location)
@@ -410,6 +410,8 @@ walkDecls : List ExprHook ->
   List (Int, Finding) ->
   List (Decl, Option Loc) ->
   List (Int, Finding)
+-- Bound: hot compiler path: the where-go form allocates one closure per call until the lambda-lift pass (#4878); convert then.
+-- lint-disable-next-line rule-threaded-invariant
 walkDecls _ _ acc [] = acc
 walkDecls exprHooks declHooks acc ((d, loc) :: rest) =
   let bodies = declBodies d
@@ -463,9 +465,10 @@ runDeclHooks : Ctx ->
   List (Int, Finding) ->
   List DeclHook ->
   List (Int, Finding)
-runDeclHooks _ _ acc [] = acc
-runDeclHooks ctx d acc ((DeclHook i cb) :: rest) =
-  runDeclHooks ctx d (pushTagged i (cb ctx d) acc) rest
+runDeclHooks ctx d acc0 xs0 = go acc0 xs0
+  where
+    go acc [] = acc
+    go acc ((DeclHook i cb) :: rest) = go (pushTagged i (cb ctx d) acc) rest
 
 pushTagged : Int -> List Finding -> List (Int, Finding) -> List (Int, Finding)
 pushTagged _ [] acc = acc
@@ -476,13 +479,11 @@ walkBodies : List ExprHook ->
   List (Int, Finding) ->
   List DeclBody ->
   List (Int, Finding)
-walkBodies _ _ acc [] = acc
-walkBodies hooks loc acc ((DeclBody owner body) :: rest) =
-  walkBodies
-    hooks
-    loc
-    (walkExpr hooks (ownerScope owner loc) KLoc loc acc body)
-    rest
+walkBodies hooks loc acc0 xs0 = go acc0 xs0
+  where
+    go acc [] = acc
+    go acc ((DeclBody owner body) :: rest) =
+      go (walkExpr hooks (ownerScope owner loc) KLoc loc acc body) rest
 
 -- An `ELoc` is transparent: its span becomes the span beneath it and its
 -- parent is the parent of what it wraps.  The outermost `ELoc` of a run of
@@ -507,10 +508,11 @@ walkWrapped : List ExprHook ->
   List (Int, Finding) ->
   Expr ->
   List (Int, Finding)
-walkWrapped hooks scope parent outer _ acc (ELoc l inner) =
-  walkWrapped hooks scope parent outer l acc inner
-walkWrapped hooks scope parent outer innermost acc e =
-  walkNode hooks scope parent (Some innermost) (Some outer) acc e
+walkWrapped hooks scope parent outer innermost0 acc e0 = go innermost0 e0
+  where
+    go _ (ELoc l inner) = go l inner
+    go innermost e =
+      walkNode hooks scope parent (Some innermost) (Some outer) acc e
 
 walkNode : List ExprHook ->
   BodyScope ->
@@ -532,9 +534,10 @@ walkKids : List ExprHook ->
   List (Int, Finding) ->
   List Expr ->
   List (Int, Finding)
-walkKids _ _ _ _ acc [] = acc
-walkKids hooks scope parent span acc (c :: cs) =
-  walkKids hooks scope parent span (walkExpr hooks scope parent span acc c) cs
+walkKids hooks scope parent span acc0 xs0 = go acc0 xs0
+  where
+    go acc [] = acc
+    go acc (c :: cs) = go (walkExpr hooks scope parent span acc c) cs
 
 visitHooks : Ctx ->
   ExprKind ->
@@ -542,6 +545,8 @@ visitHooks : Ctx ->
   List (Int, Finding) ->
   List ExprHook ->
   List (Int, Finding)
+-- Bound: hot compiler path: the where-go form allocates one closure per call until the lambda-lift pass (#4878); convert then.
+-- lint-disable-next-line rule-threaded-invariant
 visitHooks _ _ _ acc [] = acc
 visitHooks ctx k e acc ((ExprHook i kinds cb) :: rest)
   | hookWants k kinds = visitHooks ctx k e (pushTagged i (cb ctx e) acc) rest
@@ -856,20 +861,20 @@ stdlibRowsGo : String ->
   String ->
   List String ->
   <IO> Result StdlibIndexError (List String, List IndexRow)
-stdlibRowsGo _ _ _ [] = Ok ([], [])
-stdlibRowsGo dir stamp sdir (rel :: rest) =
-  let path = "\{sdir}/\{rel}"
-  let modId = joinWith "." (splitOnChar '/' (stripMdk rel))
-  match fileRows True lintParseSource dir stamp modId path
-    Err (src, e) => Err StdlibIndexError {
-      path = path,
-      source = src,
-      diagnostic = parseErrDiag path e,
-    }
-    Ok (digest, rows) =>
-      map
-        ((ds, rs) => (digest :: ds, rows ++ rs))
-        (stdlibRowsGo dir stamp sdir rest)
+stdlibRowsGo dir stamp sdir xs0 = go xs0
+  where
+    go [] = Ok ([], [])
+    go (rel :: rest) =
+      let path = "\{sdir}/\{rel}"
+      let modId = joinWith "." (splitOnChar '/' (stripMdk rel))
+      match fileRows True lintParseSource dir stamp modId path
+        Err (src, e) => Err StdlibIndexError {
+          path = path,
+          source = src,
+          diagnostic = parseErrDiag path e,
+        }
+        Ok (digest, rows) =>
+          map ((ds, rs) => (digest :: ds, rows ++ rs)) (go rest)
 
 -- A project file that does not parse has no rows: the lint pass over that file
 -- reports the parse error, and the index abstains on what it cannot read.
@@ -1278,6 +1283,8 @@ collectSplices : Option FileFacts ->
   List Rule ->
   List (Decl, DeclPos) ->
   List ((Int, Int, String), List String)
+-- Bound: list built in tail position modulo cons: a where-local go loses the constant-stack loop until the lambda-lift pass (#4878); convert then.
+-- lint-disable-next-line rule-threaded-invariant
 collectSplices _ _ _ _ _ [] = []
 collectSplices facts live cmtLines orc rules ((d, dp) :: rest) =
   let liveRules =
@@ -1307,10 +1314,12 @@ spanHasComment cmtLines startLine endLine =
   anyList (l => startLine <= l && l <= endLine) cmtLines
 
 firstFix : Oracle -> List Rule -> Decl -> Option (List Decl)
-firstFix _ [] _ = None
-firstFix orc (r :: rs) d = match applyRuleFix orc r d
-  Some newDecls => Some newDecls
-  None => firstFix orc rs d
+firstFix orc xs0 d = go xs0
+  where
+    go [] = None
+    go (r :: rs) = match applyRuleFix orc r d
+      Some newDecls => Some newDecls
+      None => go rs
 
 applyRuleFix : Oracle -> Rule -> Decl -> Option (List Decl)
 applyRuleFix orc r d = do

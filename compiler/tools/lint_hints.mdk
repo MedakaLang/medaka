@@ -357,13 +357,15 @@ hintsKeyed : String ->
   Ctx ->
   Expr ->
   List Finding
-hintsKeyed _ _ _ [] _ _ _ _ = []
-hintsKeyed key name severity (h :: rest) idx facts ctx e =
-  if h.hintKey == "" || h.hintKey == key then match matchHint h e
-    Some found => [hintFinding name severity h found idx facts ctx e]
-    None => hintsKeyed key name severity rest idx facts ctx e
-  else
-    hintsKeyed key name severity rest idx facts ctx e
+hintsKeyed key name severity hints0 idx facts ctx e = go hints0
+  where
+    go [] = []
+    go (h :: rest) =
+      if h.hintKey == "" || h.hintKey == key then match matchHint h e
+        Some found => [hintFinding name severity h found idx facts ctx e]
+        None => go rest
+      else
+        go rest
 
 hintFinding : String ->
   Severity ->

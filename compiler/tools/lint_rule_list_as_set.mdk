@@ -423,17 +423,16 @@ grows (rd@(Reader scopes _)) lets param e = match unwrapLoc e
   _ => grownDirect rd param e
 
 grownDirect : Reader -> Param -> Expr -> Bool
-grownDirect (rd@(Reader scopes _)) param e = match unwrapLoc e
-  EBinOp "::" _ t _ => isParam scopes param t || grownDirect rd param t
-  EBinOp "++" a b _ =>
-    isParam scopes param a
-      || isParam scopes param b
-      || grownDirect rd param a
-      || grownDirect rd param b
-  EIf _ t f => grownDirect rd param t || grownDirect rd param f
-  EApp _ _ => helperGrows rd param e
-  ELit _ | EVar _ | ELam _ _ | ELet _ _ _ _ _ | EMatch _ _ | EUnOp _ _ _ | EInfix _ _ _ | EFieldAccess _ _ _ | ETuple _ | EListLit _ | EArrayLit _ | ERangeList _ _ _ | ERangeArray _ _ _ | ESlice _ _ _ _ | ELetGroup _ _ | ESection _ | EIndex _ _ | EAnnot _ _ | EHeadAnnot _ _ | EBlock _ | EDo _ _ | EStringInterp _ | EGuards _ | ERecordCreate _ _ | ERecordUpdate _ _ _ | EVariantUpdate _ _ _ | EMapLit _ _ | ESetLit _ _ | EAsPat _ _ | EOrPat _ | EMethodRef _ | EDictApp _ | EVarAt _ _ | EVarId _ _ | EMethodAt _ _ _ | EDictAt _ _ | ELoc _ _ | EDoOrigin _ _ | ENumLit _ _ _ | EWideLit _ _ _ _ | EBinOp _ _ _ _ =>
-    False
+grownDirect (rd@(Reader scopes _)) param e0 = go e0
+  where
+    go e = match unwrapLoc e
+      EBinOp "::" _ t _ => isParam scopes param t || go t
+      EBinOp "++" a b _ =>
+        isParam scopes param a || isParam scopes param b || go a || go b
+      EIf _ t f => go t || go f
+      EApp _ _ => helperGrows rd param e
+      ELit _ | EVar _ | ELam _ _ | ELet _ _ _ _ _ | EMatch _ _ | EUnOp _ _ _ | EInfix _ _ _ | EFieldAccess _ _ _ | ETuple _ | EListLit _ | EArrayLit _ | ERangeList _ _ _ | ERangeArray _ _ _ | ESlice _ _ _ _ | ELetGroup _ _ | ESection _ | EIndex _ _ | EAnnot _ _ | EHeadAnnot _ _ | EBlock _ | EDo _ _ | EStringInterp _ | EGuards _ | ERecordCreate _ _ | ERecordUpdate _ _ _ | EVariantUpdate _ _ _ | EMapLit _ _ | ESetLit _ _ | EAsPat _ _ | EOrPat _ | EMethodRef _ | EDictApp _ | EVarAt _ _ | EVarId _ _ | EMethodAt _ _ _ | EDictAt _ _ | ELoc _ _ | EDoOrigin _ _ | ENumLit _ _ _ | EWideLit _ _ _ _ | EBinOp _ _ _ _ =>
+        False
 
 -- Whether `e` is a full-arity call of a helper that returns, grown, the
 -- argument it is passed the parameter at.
@@ -598,20 +597,22 @@ accProbes (rd@(Reader scopes _)) acc body =
 
 -- Whether some tail position of `e` returns the accumulator grown.
 tailGrows : Reader -> Param -> Expr -> Bool
-tailGrows rd acc e = match unwrapLoc e
-  EBinOp "::" _ _ _ => grownDirect rd acc e
-  EBinOp "++" _ _ _ => grownDirect rd acc e
-  EApp _ _ => grownDirect rd acc e
-  EIf _ t f => tailGrows rd acc t || tailGrows rd acc f
-  EMatch _ arms => any ((Arm _ _ b) => tailGrows rd acc b) arms
-  EGuards arms => any ((GuardArm _ b) => tailGrows rd acc b) arms
-  ELet _ _ _ _ body => tailGrows rd acc body
-  ELetGroup _ body => tailGrows rd acc body
-  EBlock stmts => match last stmts
-    Some (DoExpr l) => tailGrows rd acc l
-    _ => False
-  ELit _ | EVar _ | ELam _ _ | EUnOp _ _ _ | EInfix _ _ _ | EFieldAccess _ _ _ | ETuple _ | EListLit _ | EArrayLit _ | ERangeList _ _ _ | ERangeArray _ _ _ | ESlice _ _ _ _ | ESection _ | EIndex _ _ | EAnnot _ _ | EHeadAnnot _ _ | EDo _ _ | EStringInterp _ | ERecordCreate _ _ | ERecordUpdate _ _ _ | EVariantUpdate _ _ _ | EMapLit _ _ | ESetLit _ _ | EAsPat _ _ | EOrPat _ | EMethodRef _ | EDictApp _ | EVarAt _ _ | EVarId _ _ | EMethodAt _ _ _ | EDictAt _ _ | ELoc _ _ | EDoOrigin _ _ | ENumLit _ _ _ | EWideLit _ _ _ _ | EBinOp _ _ _ _ =>
-    False
+tailGrows rd acc e0 = go e0
+  where
+    go e = match unwrapLoc e
+      EBinOp "::" _ _ _ => grownDirect rd acc e
+      EBinOp "++" _ _ _ => grownDirect rd acc e
+      EApp _ _ => grownDirect rd acc e
+      EIf _ t f => go t || go f
+      EMatch _ arms => any ((Arm _ _ b) => go b) arms
+      EGuards arms => any ((GuardArm _ b) => go b) arms
+      ELet _ _ _ _ body => go body
+      ELetGroup _ body => go body
+      EBlock stmts => match last stmts
+        Some (DoExpr l) => go l
+        _ => False
+      ELit _ | EVar _ | ELam _ _ | EUnOp _ _ _ | EInfix _ _ _ | EFieldAccess _ _ _ | ETuple _ | EListLit _ | EArrayLit _ | ERangeList _ _ _ | ERangeArray _ _ _ | ESlice _ _ _ _ | ESection _ | EIndex _ _ | EAnnot _ _ | EHeadAnnot _ _ | EDo _ _ | EStringInterp _ | ERecordCreate _ _ | ERecordUpdate _ _ _ | EVariantUpdate _ _ _ | EMapLit _ _ | ESetLit _ _ | EAsPat _ _ | EOrPat _ | EMethodRef _ | EDictApp _ | EVarAt _ _ | EVarId _ _ | EMethodAt _ _ _ | EDictAt _ _ | ELoc _ _ | EDoOrigin _ _ | ENumLit _ _ _ | EWideLit _ _ _ _ | EBinOp _ _ _ _ =>
+        False
 
 -- ── findings ─────────────────────────────────────────────────────────────────
 

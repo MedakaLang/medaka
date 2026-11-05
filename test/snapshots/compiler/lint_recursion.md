@@ -1,5 +1,5 @@
 # META
-source_lines=344
+source_lines=346
 stages=DESUGAR,MARK
 # SOURCE
 -- compiler/tools/lint_recursion.mdk — the shared reader of self-recursion: the
@@ -104,6 +104,8 @@ paramBounds j (PAs x _ _ p) =
 paramBounds j p = map (n => Bound n j False) (patBoundNames p)
 
 walk : FileScopes -> Owner -> List Bound -> Option Loc -> Expr -> List SelfCall
+-- Bound: hot compiler path: the where-go form allocates one closure per call until the lambda-lift pass (#4878); convert then.
+-- lint-disable-next-line rule-threaded-invariant
 walk scopes owner env _ (ELoc l inner) = walk scopes owner env (Some l) inner
 walk scopes owner env loc e = match spineOf e []
   (hd, args) =>

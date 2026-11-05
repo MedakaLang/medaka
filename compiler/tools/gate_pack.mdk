@@ -550,22 +550,25 @@ balUnsampled : List (String, Int) ->
   List (String, List String) ->
   S.Set String ->
   List String
-balUnsampled _ _ [] acc = toList acc
-balUnsampled ps es ((_, names) :: rest) acc =
-  balUnsampled ps es rest (balAddMissing ps es names acc)
+balUnsampled ps es xs0 acc0 = go xs0 acc0
+  where
+    go [] acc = toList acc
+    go ((_, names) :: rest) acc = go rest (balAddMissing ps es names acc)
 
 balAddMissing : List (String, Int) ->
   List String ->
   List String ->
   S.Set String ->
   S.Set String
-balAddMissing _ _ [] acc = acc
-balAddMissing ps es (n :: ns) acc
-  | not (contains n es) = balAddMissing ps es ns acc
-  | S.has n acc = balAddMissing ps es ns acc
-  | otherwise = match lookupAssoc n ps
-    Some _ => balAddMissing ps es ns acc
-    None => balAddMissing ps es ns (S.insert n acc)
+balAddMissing ps es xs0 acc0 = go xs0 acc0
+  where
+    go [] acc = acc
+    go (n :: ns) acc
+      | not (contains n es) = go ns acc
+      | S.has n acc = go ns acc
+      | otherwise = match lookupAssoc n ps
+        Some _ => go ns acc
+        None => go ns (S.insert n acc)
 
 -- The oracles one gate's row must build for it, priced: its scrape kept to
 -- what `build_oracles.sh` builds (`--for`'s own filter) and the multicall does
@@ -642,6 +645,8 @@ balUncosted base (g :: gs)
       "\{g.name} (baseline key '\{baselineKey g.run}')" :: balUncosted base gs
 
 balCands : Setup -> List GateCost -> List Gate -> List Cand
+-- Bound: list built in tail position modulo cons: a where-local go loses the constant-stack loop until the lambda-lift pass (#4878); convert then.
+-- lint-disable-next-line rule-threaded-invariant
 balCands _ _ [] = []
 balCands s base (g :: gs)
   | g.shard == balOtherJob = balCands s base gs
@@ -680,6 +685,8 @@ balCands s base (g :: gs)
 -- the balancer on its own output derives the same pin set, hence the same
 -- target.  See `balTarget`.
 balRows : Price -> List RunRecord -> List Shard -> List Row
+-- Bound: list built in tail position modulo cons: a where-local go loses the constant-stack loop until the lambda-lift pass (#4878); convert then.
+-- lint-disable-next-line rule-threaded-invariant
 balRows _ _ [] = []
 balRows p runs (s :: ss) =
   let j = balJobsFor s.name runs
@@ -969,10 +976,12 @@ balRowTakes c (r :: rs)
 -- as 0, which `balStays` only ever reaches through `balRowTakes` having
 -- already answered False for the same name.
 balRowKey : Cand -> String -> List Row -> Int
-balRowKey _ _ [] = 0
-balRowKey c n (r :: rs)
-  | r.rname == n = balKey c r
-  | otherwise = balRowKey c n rs
+balRowKey c n rs0 = go rs0
+  where
+    go [] = 0
+    go (r :: rs)
+      | r.rname == n = balKey c r
+      | otherwise = go rs
 
 -- Put one gate on a row, and re-derive that row's load.
 --
@@ -984,6 +993,8 @@ balRowKey c n (r :: rs)
 -- so the committed assignment and the derived one are scored by the same
 -- model rather than by two schedules that happen to share a function.
 balAdd : String -> Cand -> List Row -> List Row
+-- Bound: list built in tail position modulo cons: a where-local go loses the constant-stack loop until the lambda-lift pass (#4878); convert then.
+-- lint-disable-next-line rule-threaded-invariant
 balAdd _ _ [] = []
 balAdd n c (r :: rs)
   | r.rname == n =
@@ -1027,6 +1038,8 @@ balBucketAdd ms [] = ms :: []
 balBucketAdd ms bs = balBucketPut ms (balMinL bs) bs
 
 balBucketPut : Int -> Int -> List Int -> List Int
+-- Bound: list built in tail position modulo cons: a where-local go loses the constant-stack loop until the lambda-lift pass (#4878); convert then.
+-- lint-disable-next-line rule-threaded-invariant
 balBucketPut _ _ [] = []
 balBucketPut ms m (b :: bs)
   | b == m = b + ms :: bs
@@ -1182,6 +1195,8 @@ balRowMembers n (g :: gs)
 -- Declared, but not there: the pinned gate has been moved off the closed row
 -- (F3(b)).  Naming where it went instead is the whole diagnosis.
 balPinMissing : String -> List Gate -> List String -> List String -> List String
+-- Bound: list built in tail position modulo cons: a where-local go loses the constant-stack loop until the lambda-lift pass (#4878); convert then.
+-- lint-disable-next-line rule-threaded-invariant
 balPinMissing _ _ [] _ = []
 balPinMissing n gs (p :: ps) members
   | balElemStr p members = balPinMissing n gs ps members
@@ -1201,6 +1216,8 @@ balShardOfGate n (g :: gs)
 
 -- There, but not declared: a gate has been moved onto the closed row (F3(a)).
 balPinExtra : String -> List String -> List String -> List String
+-- Bound: list built in tail position modulo cons: a where-local go loses the constant-stack loop until the lambda-lift pass (#4878); convert then.
+-- lint-disable-next-line rule-threaded-invariant
 balPinExtra _ _ [] = []
 balPinExtra n pinned (m :: ms)
   | balElemStr m pinned = balPinExtra n pinned ms
@@ -1622,6 +1639,8 @@ balDefaultTag False = ""
 
    A residual near zero or negative is the surprising one. -}
 balCalibLines : List Cand -> List Row -> List RunRecord -> List String
+-- Bound: list built in tail position modulo cons: a where-local go loses the constant-stack loop until the lambda-lift pass (#4878); convert then.
+-- lint-disable-next-line rule-threaded-invariant
 balCalibLines _ [] _ = []
 balCalibLines cs (r :: rs) runs =
   balCalibLine cs r runs :: balCalibLines cs rs runs
@@ -1741,13 +1760,15 @@ balJobLine cands r runs = match balJobGrade cands r runs
 
 -- Counts over the rows: (within, outside, not gradeable).
 balJobTally : List Cand -> List Row -> List RunRecord -> (Int, Int, Int)
-balJobTally _ [] _ = (0, 0, 0)
-balJobTally cands (r :: rs) runs =
-  let (w, o, u) = balJobTally cands rs runs
-  match balJobGrade cands r runs
-    JobUngradeable _ => (w, o, u + 1)
-    JobGraded _ _ True => (w + 1, o, u)
-    JobGraded _ _ False => (w, o + 1, u)
+balJobTally cands xs0 runs = go xs0
+  where
+    go [] = (0, 0, 0)
+    go (r :: rs) =
+      let (w, o, u) = go rs
+      match balJobGrade cands r runs
+        JobUngradeable _ => (w, o, u + 1)
+        JobGraded _ _ True => (w + 1, o, u)
+        JobGraded _ _ False => (w, o + 1, u)
 
 balJobSummary : List Cand -> List Row -> List RunRecord -> String
 balJobSummary cands rows runs =
@@ -1918,6 +1939,8 @@ balOosBlock base cs runs =
       ]
 
 balOosFolds : List (List Int) -> List String -> Int -> Int -> List String
+-- Bound: list built in tail position modulo cons: a where-local go loses the constant-stack loop until the lambda-lift pass (#4878); convert then.
+-- lint-disable-next-line rule-threaded-invariant
 balOosFolds vs ids i nr
   | i >= nr = []
   | otherwise =
@@ -1963,6 +1986,8 @@ balStatDrift (c :: cs)
 -- (`balUncosted`), so the `None` arm here is unreachable in a real run and
 -- drops rather than guesses.
 balOosVecs : List GateCost -> List Cand -> List String -> List (List Int)
+-- Bound: list built in tail position modulo cons: a where-local go loses the constant-stack loop until the lambda-lift pass (#4878); convert then.
+-- lint-disable-next-line rule-threaded-invariant
 balOosVecs _ [] _ = []
 balOosVecs base (c :: cs) ids = match costRowOf c.crun base
   None => balOosVecs base cs ids
@@ -2025,26 +2050,32 @@ balOosAct [] _ = 0
 balOosAct (v :: vs) i = balNth i v + balOosAct vs i
 
 balOosPredAll : List (List Int) -> Int -> Int -> Int
-balOosPredAll vs i nr
-  | i >= nr = 0
-  | otherwise = balOosPred vs i + balOosPredAll vs (i + 1) nr
+balOosPredAll vs i0 nr = go i0
+  where
+    go i
+      | i >= nr = 0
+      | otherwise = balOosPred vs i + go (i + 1)
 
 balOosActAll : List (List Int) -> Int -> Int -> Int
-balOosActAll vs i nr
-  | i >= nr = 0
-  | otherwise = balOosAct vs i + balOosActAll vs (i + 1) nr
+balOosActAll vs i0 nr = go i0
+  where
+    go i
+      | i >= nr = 0
+      | otherwise = balOosAct vs i + go (i + 1)
 
 -- Per-fold RELATIVE errors, summed in per-mille and averaged by the caller.
 -- Per-fold rather than pooled: a fold's own total is the denominator its own
 -- error means anything against.
 balOosAbsPm : List (List Int) -> Int -> Int -> Int -> Int
-balOosAbsPm vs i nr acc
-  | i >= nr = acc
-  | otherwise =
-    let p = balOosPred vs i
-    let a = balOosAct vs i
-    let d = if p >= a then p - a else a - p
-    balOosAbsPm vs (i + 1) nr (acc + (if a > 0 then d * 1000 / a else 0))
+balOosAbsPm vs i0 nr acc0 = go i0 acc0
+  where
+    go i acc
+      | i >= nr = acc
+      | otherwise =
+        let p = balOosPred vs i
+        let a = balOosAct vs i
+        let d = if p >= a then p - a else a - p
+        go (i + 1) (acc + (if a > 0 then d * 1000 / a else 0))
 
 balDropNth : Int -> List Int -> List Int
 balDropNth _ [] = []
@@ -2625,6 +2656,8 @@ budgetTimeoutRemedy =
   "Re-classing a gate changes its CI kill timeout (cheap=300s / medium=900s / heavy=3600s, `timeoutFor`) — pick deliberately, not just to silence this gate."
 
 budgetOverClassLines : List GateCost -> String -> List Gate -> List String
+-- Bound: list built in tail position modulo cons: a where-local go loses the constant-stack loop until the lambda-lift pass (#4878); convert then.
+-- lint-disable-next-line rule-threaded-invariant
 budgetOverClassLines _ _ [] = []
 budgetOverClassLines base commitMessage (g :: gs) =
   -- `ms` is always `Some` here — `budgetOverClassGates` only keeps gates

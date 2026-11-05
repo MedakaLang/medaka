@@ -189,6 +189,8 @@ sanitizePath p =
   stringFromChars (arrayFromList (sanitizeGo cs start n))
 
 sanitizeGo : Array Char -> Int -> Int -> List Char
+-- Bound: list built in tail position modulo cons: a where-local go loses the constant-stack loop until the lambda-lift pass (#4878); convert then.
+-- lint-disable-next-line rule-threaded-invariant
 sanitizeGo cs i n
   | i >= n = []
   | otherwise = sanitizeChar (arrayGetUnsafe i cs) :: sanitizeGo cs (i + 1) n
@@ -484,10 +486,12 @@ entryDirty : LintEntry -> Bool
 entryDirty e = e.dirty
 
 storeGo : String -> String -> String -> List LintEntry -> <IO> Unit
-storeGo _ _ _ [] = ()
-storeGo cacheDir tmp stamp (e :: rest) =
-  storeOne cacheDir tmp stamp e
-  storeGo cacheDir tmp stamp rest
+storeGo cacheDir tmp stamp xs0 = go xs0
+  where
+    go [] = ()
+    go (e :: rest) =
+      storeOne cacheDir tmp stamp e
+      go rest
 
 -- Stage under the temp dir, then rename ONTO the shard path (same filesystem —
 -- the temp dir is inside the cache dir).  A failed write leaves the staged file

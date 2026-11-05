@@ -1,5 +1,5 @@
 # META
-source_lines=221
+source_lines=223
 stages=DESUGAR,MARK
 # SOURCE
 -- lint rule rule-concat-to-interp: a `++` chain mixing string literals and expressions. Prefer string interpolation.
@@ -104,10 +104,12 @@ hasBackslashBrace s =
   backslashBraceGo cs (arrayLength cs) 0
 
 backslashBraceGo : Array Char -> Int -> Int -> Bool
-backslashBraceGo cs n i
-  | i + 1 >= n = False
-  | arrayGetUnsafe i cs == '\\' && arrayGetUnsafe (i + 1) cs == '{' = True
-  | otherwise = backslashBraceGo cs n (i + 1)
+backslashBraceGo cs n i0 = go i0
+  where
+    go i
+      | i + 1 >= n = False
+      | arrayGetUnsafe i cs == '\\' && arrayGetUnsafe (i + 1) cs == '{' = True
+      | otherwise = go (i + 1)
 
 -- the chain qualifies: ≥1 literal, ≥2 non-literals, no literal already holds `\{`.
 concatChainQualifies : List Expr -> Bool
@@ -242,7 +244,7 @@ concatToInterpFix idx facts ctx span rewritten =
 (DTypeSig false "hasBackslashBrace" (TyFun (TyCon "String") (TyCon "Bool")))
 (DFunDef false "hasBackslashBrace" ((PVar "s")) (EBlock (DoLet false false (PVar "cs") (EApp (EVar "stringToChars") (EVar "s"))) (DoExpr (EApp (EApp (EApp (EVar "backslashBraceGo") (EVar "cs")) (EApp (EVar "arrayLength") (EVar "cs"))) (ELit (LInt 0))))))
 (DTypeSig false "backslashBraceGo" (TyFun (TyApp (TyCon "Array") (TyCon "Char")) (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyCon "Bool")))))
-(DFunDef false "backslashBraceGo" ((PVar "cs") (PVar "n") (PVar "i")) (EIf (EBinOp ">=" (EBinOp "+" (EVar "i") (ELit (LInt 1))) (EVar "n")) (EVar "False") (EIf (EBinOp "&&" (EBinOp "==" (EApp (EApp (EVar "arrayGetUnsafe") (EVar "i")) (EVar "cs")) (ELit (LChar "\\"))) (EBinOp "==" (EApp (EApp (EVar "arrayGetUnsafe") (EBinOp "+" (EVar "i") (ELit (LInt 1)))) (EVar "cs")) (ELit (LChar "{")))) (EVar "True") (EIf (EVar "otherwise") (EApp (EApp (EApp (EVar "backslashBraceGo") (EVar "cs")) (EVar "n")) (EBinOp "+" (EVar "i") (ELit (LInt 1)))) (EApp (EVar "__fallthrough__") (ELit LUnit))))))
+(DFunDef false "backslashBraceGo" ((PVar "cs") (PVar "n") (PVar "i0")) (ELetGroup ((lgb "go" (clause ((PVar "i")) (EIf (EBinOp ">=" (EBinOp "+" (EVar "i") (ELit (LInt 1))) (EVar "n")) (EVar "False") (EIf (EBinOp "&&" (EBinOp "==" (EApp (EApp (EVar "arrayGetUnsafe") (EVar "i")) (EVar "cs")) (ELit (LChar "\\"))) (EBinOp "==" (EApp (EApp (EVar "arrayGetUnsafe") (EBinOp "+" (EVar "i") (ELit (LInt 1)))) (EVar "cs")) (ELit (LChar "{")))) (EVar "True") (EIf (EVar "otherwise") (EApp (EVar "go") (EBinOp "+" (EVar "i") (ELit (LInt 1)))) (EApp (EVar "__fallthrough__") (ELit LUnit)))))))) (EApp (EVar "go") (EVar "i0"))))
 (DTypeSig false "concatChainQualifies" (TyFun (TyApp (TyCon "List") (TyCon "Expr")) (TyCon "Bool")))
 (DFunDef false "concatChainQualifies" ((PVar "ops")) (EBlock (DoLet false false (PVar "lits") (EApp (EApp (EVar "filterExprs") (EVar "isStrLitOperand")) (EVar "ops"))) (DoLet false false (PVar "holes") (EApp (EApp (EVar "filterExprs") (ELam ((PVar "e")) (EApp (EVar "not") (EApp (EVar "isStrLitOperand") (EVar "e"))))) (EVar "ops"))) (DoExpr (EBinOp "&&" (EBinOp "&&" (EApp (EVar "isNonEmptyL") (EVar "lits")) (EBinOp ">=" (EApp (EVar "listLen") (EVar "holes")) (ELit (LInt 2)))) (EApp (EVar "not") (EApp (EApp (EVar "anyList") (EVar "litHasBackslashBrace")) (EVar "lits")))))))
 (DTypeSig false "litHasBackslashBrace" (TyFun (TyCon "Expr") (TyCon "Bool")))
@@ -293,7 +295,7 @@ concatToInterpFix idx facts ctx span rewritten =
 (DTypeSig false "hasBackslashBrace" (TyFun (TyCon "String") (TyCon "Bool")))
 (DFunDef false "hasBackslashBrace" ((PVar "s")) (EBlock (DoLet false false (PVar "cs") (EApp (EVar "stringToChars") (EVar "s"))) (DoExpr (EApp (EApp (EApp (EVar "backslashBraceGo") (EVar "cs")) (EApp (EVar "arrayLength") (EVar "cs"))) (ELit (LInt 0))))))
 (DTypeSig false "backslashBraceGo" (TyFun (TyApp (TyCon "Array") (TyCon "Char")) (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyCon "Bool")))))
-(DFunDef false "backslashBraceGo" ((PVar "cs") (PVar "n") (PVar "i")) (EIf (EBinOp ">=" (EBinOp "+" (EVar "i") (ELit (LInt 1))) (EVar "n")) (EVar "False") (EIf (EBinOp "&&" (EBinOp "==" (EApp (EApp (EVar "arrayGetUnsafe") (EVar "i")) (EVar "cs")) (ELit (LChar "\\"))) (EBinOp "==" (EApp (EApp (EVar "arrayGetUnsafe") (EBinOp "+" (EVar "i") (ELit (LInt 1)))) (EVar "cs")) (ELit (LChar "{")))) (EVar "True") (EIf (EVar "otherwise") (EApp (EApp (EApp (EVar "backslashBraceGo") (EVar "cs")) (EVar "n")) (EBinOp "+" (EVar "i") (ELit (LInt 1)))) (EApp (EVar "__fallthrough__") (ELit LUnit))))))
+(DFunDef false "backslashBraceGo" ((PVar "cs") (PVar "n") (PVar "i0")) (ELetGroup ((lgb "go" (clause ((PVar "i")) (EIf (EBinOp ">=" (EBinOp "+" (EVar "i") (ELit (LInt 1))) (EVar "n")) (EVar "False") (EIf (EBinOp "&&" (EBinOp "==" (EApp (EApp (EVar "arrayGetUnsafe") (EVar "i")) (EVar "cs")) (ELit (LChar "\\"))) (EBinOp "==" (EApp (EApp (EVar "arrayGetUnsafe") (EBinOp "+" (EVar "i") (ELit (LInt 1)))) (EVar "cs")) (ELit (LChar "{")))) (EVar "True") (EIf (EVar "otherwise") (EApp (EVar "go") (EBinOp "+" (EVar "i") (ELit (LInt 1)))) (EApp (EVar "__fallthrough__") (ELit LUnit)))))))) (EApp (EVar "go") (EVar "i0"))))
 (DTypeSig false "concatChainQualifies" (TyFun (TyApp (TyCon "List") (TyCon "Expr")) (TyCon "Bool")))
 (DFunDef false "concatChainQualifies" ((PVar "ops")) (EBlock (DoLet false false (PVar "lits") (EApp (EApp (EVar "filterExprs") (EVar "isStrLitOperand")) (EVar "ops"))) (DoLet false false (PVar "holes") (EApp (EApp (EVar "filterExprs") (ELam ((PVar "e")) (EApp (EVar "not") (EApp (EVar "isStrLitOperand") (EVar "e"))))) (EVar "ops"))) (DoExpr (EBinOp "&&" (EBinOp "&&" (EApp (EVar "isNonEmptyL") (EVar "lits")) (EBinOp ">=" (EApp (EVar "listLen") (EVar "holes")) (ELit (LInt 2)))) (EApp (EVar "not") (EApp (EApp (EVar "anyList") (EVar "litHasBackslashBrace")) (EVar "lits")))))))
 (DTypeSig false "litHasBackslashBrace" (TyFun (TyCon "Expr") (TyCon "Bool")))

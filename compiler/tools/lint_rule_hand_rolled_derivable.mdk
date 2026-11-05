@@ -74,10 +74,11 @@ derivableDeclL : Oracle -> (Decl, Option Loc) -> List Finding
 derivableDeclL orc (d, loc) = derivableDecl orc loc d
 
 derivableDecl : Oracle -> Option Loc -> Decl -> List Finding
-derivableDecl orc loc (DImpl { iface, tys, ... }) =
-  derivableHit orc loc iface tys
-derivableDecl orc loc (DAttrib _ d) = derivableDecl orc loc d
-derivableDecl _ _ _ = []
+derivableDecl orc loc x0 = go x0
+  where
+    go (DImpl { iface, tys, ... }) = derivableHit orc loc iface tys
+    go (DAttrib _ d) = go d
+    go _ = []
 
 derivableHit : Oracle -> Option Loc -> String -> List Ty -> List Finding
 derivableHit orc loc iface tys

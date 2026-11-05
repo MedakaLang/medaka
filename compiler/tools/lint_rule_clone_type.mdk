@@ -113,10 +113,12 @@ cloneTypeDeclL : List String -> (Decl, Option Loc) -> List Finding
 cloneTypeDeclL impls (d, loc) = cloneTypeDecl impls loc d
 
 cloneTypeDecl : List String -> Option Loc -> Decl -> List Finding
-cloneTypeDecl impls loc (DData { dataName, dataCtors, ... }) =
-  cloneTypeHit impls loc dataName dataCtors
-cloneTypeDecl impls loc (DAttrib _ d) = cloneTypeDecl impls loc d
-cloneTypeDecl _ _ _ = []
+cloneTypeDecl impls loc x0 = go x0
+  where
+    go (DData { dataName, dataCtors, ... }) =
+      cloneTypeHit impls loc dataName dataCtors
+    go (DAttrib _ d) = go d
+    go _ = []
 
 cloneTypeHit : List String ->
   Option Loc ->

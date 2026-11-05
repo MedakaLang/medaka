@@ -222,22 +222,24 @@ fixPass : (String -> String -> Result String (List Finding)) ->
   Int ->
   String ->
   Result FixError FixRun
-fixPass lint limit path n total src = match lint path src
-  Err msg =>
-    if n == 0 then
-      Err (SourceDoesNotParse msg)
-    else
-      Err (FixedOutputDoesNotParse n msg)
-  Ok findings =>
-    let snap = makeSnapshot path None n src
-    let chosen = chooseFixes limit snap (fixesOf findings)
-    if isEmpty chosen then
-      Ok (Settled src total)
-    else if n >= maxPasses then
-      Ok (Capped src total)
-    else match applySourceEdits snap (flatMap (r => r.rsEdits) chosen)
-      Err e => Err (EditsRejected e)
-      Ok out => fixPass lint limit path (n + 1) (total + length chosen) out
+fixPass lint limit path n0 total0 src0 = go n0 total0 src0
+  where
+    go n total src = match lint path src
+      Err msg =>
+        if n == 0 then
+          Err (SourceDoesNotParse msg)
+        else
+          Err (FixedOutputDoesNotParse n msg)
+      Ok findings =>
+        let snap = makeSnapshot path None n src
+        let chosen = chooseFixes limit snap (fixesOf findings)
+        if isEmpty chosen then
+          Ok (Settled src total)
+        else if n >= maxPasses then
+          Ok (Capped src total)
+        else match applySourceEdits snap (flatMap (r => r.rsEdits) chosen)
+          Err e => Err (EditsRejected e)
+          Ok out => go (n + 1) (total + length chosen) out
 
 -- The edit that removes item `i` of a delimited list whose items sit at `items`
 -- (in source order) together with one separator: an item with a successor goes

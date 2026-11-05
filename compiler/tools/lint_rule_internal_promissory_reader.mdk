@@ -271,10 +271,12 @@ declaredInFile subject codeLines =
   declaredInFileGo subject codeLines (arrayLength codeLines) 1
 
 declaredInFileGo : String -> Array String -> Int -> Int -> Bool
-declaredInFileGo subject codeLines n line
-  | line > n = False
-  | isDefinitionLine subject (arrayGetUnsafe (line - 1) codeLines) = True
-  | otherwise = declaredInFileGo subject codeLines n (line + 1)
+declaredInFileGo subject codeLines n line0 = go line0
+  where
+    go line
+      | line > n = False
+      | isDefinitionLine subject (arrayGetUnsafe (line - 1) codeLines) = True
+      | otherwise = go (line + 1)
 
 readerCountSuffix : Int -> String
 readerCountSuffix 0 = ""
@@ -286,6 +288,8 @@ readerLines subject codeLines =
   readerLinesGo subject codeLines (arrayLength codeLines) 1
 
 readerLinesGo : String -> Array String -> Int -> Int -> List Int
+-- Bound: list built in tail position modulo cons: a where-local go loses the constant-stack loop until the lambda-lift pass (#4878); convert then.
+-- lint-disable-next-line rule-threaded-invariant
 readerLinesGo subject codeLines n line
   | line > n = []
   | isReaderLine subject (arrayGetUnsafe (line - 1) codeLines) =
@@ -333,7 +337,10 @@ wordReadOk cs n m =
     && not (assignFollows cs n m.end)
 
 assignFollows : Array Char -> Int -> Int -> Bool
-assignFollows cs n i
-  | i < n && arrayGetUnsafe i cs == ' ' = assignFollows cs n (i + 1)
-  | i + 1 < n = arrayGetUnsafe i cs == ':' && arrayGetUnsafe (i + 1) cs == '='
-  | otherwise = False
+assignFollows cs n i0 = go i0
+  where
+    go i
+      | i < n && arrayGetUnsafe i cs == ' ' = go (i + 1)
+      | i + 1 < n =
+        arrayGetUnsafe i cs == ':' && arrayGetUnsafe (i + 1) cs == '='
+      | otherwise = False

@@ -1,5 +1,5 @@
 # META
-source_lines=140
+source_lines=142
 stages=DESUGAR,MARK
 # SOURCE
 -- lint rule rule-clone-type: a two-constructor `data` with Option's or Result's arities and no `impl`. Prefer the stdlib type.
@@ -117,10 +117,12 @@ cloneTypeDeclL : List String -> (Decl, Option Loc) -> List Finding
 cloneTypeDeclL impls (d, loc) = cloneTypeDecl impls loc d
 
 cloneTypeDecl : List String -> Option Loc -> Decl -> List Finding
-cloneTypeDecl impls loc (DData { dataName, dataCtors, ... }) =
-  cloneTypeHit impls loc dataName dataCtors
-cloneTypeDecl impls loc (DAttrib _ d) = cloneTypeDecl impls loc d
-cloneTypeDecl _ _ _ = []
+cloneTypeDecl impls loc x0 = go x0
+  where
+    go (DData { dataName, dataCtors, ... }) =
+      cloneTypeHit impls loc dataName dataCtors
+    go (DAttrib _ d) = go d
+    go _ = []
 
 cloneTypeHit : List String ->
   Option Loc ->
@@ -172,9 +174,7 @@ cloneTypeFinding loc n shape = Finding {
 (DTypeSig false "cloneTypeDeclL" (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyTuple (TyCon "Decl") (TyApp (TyCon "Option") (TyCon "Loc"))) (TyApp (TyCon "List") (TyCon "Finding")))))
 (DFunDef false "cloneTypeDeclL" ((PVar "impls") (PTuple (PVar "d") (PVar "loc"))) (EApp (EApp (EApp (EVar "cloneTypeDecl") (EVar "impls")) (EVar "loc")) (EVar "d")))
 (DTypeSig false "cloneTypeDecl" (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyApp (TyCon "Option") (TyCon "Loc")) (TyFun (TyCon "Decl") (TyApp (TyCon "List") (TyCon "Finding"))))))
-(DFunDef false "cloneTypeDecl" ((PVar "impls") (PVar "loc") (PRec "DData" ((rf "dataName" None) (rf "dataCtors" None)) true)) (EApp (EApp (EApp (EApp (EVar "cloneTypeHit") (EVar "impls")) (EVar "loc")) (EVar "dataName")) (EVar "dataCtors")))
-(DFunDef false "cloneTypeDecl" ((PVar "impls") (PVar "loc") (PCon "DAttrib" PWild (PVar "d"))) (EApp (EApp (EApp (EVar "cloneTypeDecl") (EVar "impls")) (EVar "loc")) (EVar "d")))
-(DFunDef false "cloneTypeDecl" (PWild PWild PWild) (EListLit))
+(DFunDef false "cloneTypeDecl" ((PVar "impls") (PVar "loc") (PVar "x0")) (ELetGroup ((lgb "go" (clause ((PRec "DData" ((rf "dataName" None) (rf "dataCtors" None)) true)) (EApp (EApp (EApp (EApp (EVar "cloneTypeHit") (EVar "impls")) (EVar "loc")) (EVar "dataName")) (EVar "dataCtors"))) (clause ((PCon "DAttrib" PWild (PVar "d"))) (EApp (EVar "go") (EVar "d"))) (clause (PWild) (EListLit)))) (EApp (EVar "go") (EVar "x0"))))
 (DTypeSig false "cloneTypeHit" (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyApp (TyCon "Option") (TyCon "Loc")) (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "Variant")) (TyApp (TyCon "List") (TyCon "Finding")))))))
 (DFunDef false "cloneTypeHit" ((PVar "impls") (PVar "loc") (PVar "n") (PVar "ctors")) (EIf (EApp (EApp (EVar "contains") (EVar "n")) (EVar "impls")) (EListLit) (EIf (EVar "otherwise") (EMatch (EApp (EVar "cloneShapeName") (EVar "ctors")) (arm (PCon "Some" (PVar "shape")) () (EListLit (EApp (EApp (EApp (EVar "cloneTypeFinding") (EVar "loc")) (EVar "n")) (EVar "shape")))) (arm (PCon "None") () (EListLit))) (EApp (EVar "__fallthrough__") (ELit LUnit)))))
 (DTypeSig false "cloneTypeFinding" (TyFun (TyApp (TyCon "Option") (TyCon "Loc")) (TyFun (TyCon "String") (TyFun (TyCon "String") (TyCon "Finding")))))
@@ -209,9 +209,7 @@ cloneTypeFinding loc n shape = Finding {
 (DTypeSig false "cloneTypeDeclL" (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyTuple (TyCon "Decl") (TyApp (TyCon "Option") (TyCon "Loc"))) (TyApp (TyCon "List") (TyCon "Finding")))))
 (DFunDef false "cloneTypeDeclL" ((PVar "impls") (PTuple (PVar "d") (PVar "loc"))) (EApp (EApp (EApp (EVar "cloneTypeDecl") (EVar "impls")) (EVar "loc")) (EVar "d")))
 (DTypeSig false "cloneTypeDecl" (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyApp (TyCon "Option") (TyCon "Loc")) (TyFun (TyCon "Decl") (TyApp (TyCon "List") (TyCon "Finding"))))))
-(DFunDef false "cloneTypeDecl" ((PVar "impls") (PVar "loc") (PRec "DData" ((rf "dataName" None) (rf "dataCtors" None)) true)) (EApp (EApp (EApp (EApp (EVar "cloneTypeHit") (EVar "impls")) (EVar "loc")) (EVar "dataName")) (EVar "dataCtors")))
-(DFunDef false "cloneTypeDecl" ((PVar "impls") (PVar "loc") (PCon "DAttrib" PWild (PVar "d"))) (EApp (EApp (EApp (EVar "cloneTypeDecl") (EVar "impls")) (EVar "loc")) (EVar "d")))
-(DFunDef false "cloneTypeDecl" (PWild PWild PWild) (EListLit))
+(DFunDef false "cloneTypeDecl" ((PVar "impls") (PVar "loc") (PVar "x0")) (ELetGroup ((lgb "go" (clause ((PRec "DData" ((rf "dataName" None) (rf "dataCtors" None)) true)) (EApp (EApp (EApp (EApp (EVar "cloneTypeHit") (EVar "impls")) (EVar "loc")) (EVar "dataName")) (EVar "dataCtors"))) (clause ((PCon "DAttrib" PWild (PVar "d"))) (EApp (EVar "go") (EVar "d"))) (clause (PWild) (EListLit)))) (EApp (EVar "go") (EVar "x0"))))
 (DTypeSig false "cloneTypeHit" (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyApp (TyCon "Option") (TyCon "Loc")) (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "Variant")) (TyApp (TyCon "List") (TyCon "Finding")))))))
 (DFunDef false "cloneTypeHit" ((PVar "impls") (PVar "loc") (PVar "n") (PVar "ctors")) (EIf (EApp (EApp (EVar "contains") (EVar "n")) (EVar "impls")) (EListLit) (EIf (EVar "otherwise") (EMatch (EApp (EVar "cloneShapeName") (EVar "ctors")) (arm (PCon "Some" (PVar "shape")) () (EListLit (EApp (EApp (EApp (EVar "cloneTypeFinding") (EVar "loc")) (EVar "n")) (EVar "shape")))) (arm (PCon "None") () (EListLit))) (EApp (EVar "__fallthrough__") (ELit LUnit)))))
 (DTypeSig false "cloneTypeFinding" (TyFun (TyApp (TyCon "Option") (TyCon "Loc")) (TyFun (TyCon "String") (TyFun (TyCon "String") (TyCon "Finding")))))

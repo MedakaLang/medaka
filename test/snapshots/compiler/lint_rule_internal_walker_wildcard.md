@@ -1,5 +1,5 @@
 # META
-source_lines=430
+source_lines=432
 stages=DESUGAR,MARK
 # SOURCE
 -- lint rule rule-walker-wildcard: a self-recursive function over constructor patterns whose final wildcard returns a constant or its input without recursing.
@@ -138,6 +138,8 @@ topBodyFindings env (TopClause name _ body loc) = walkBody env name loc body
 
 -- The `match` forms in a body and the `let`/`where` groups it opens.
 walkBody : Env -> String -> Option Loc -> Expr -> List Finding
+-- Bound: hot compiler path: the where-go form allocates one closure per call until the lambda-lift pass (#4878); convert then.
+-- lint-disable-next-line rule-threaded-invariant
 walkBody env name _ (ELoc l inner) = walkBody env name (Some l) inner
 walkBody env name loc e =
   matchFindings env name loc e

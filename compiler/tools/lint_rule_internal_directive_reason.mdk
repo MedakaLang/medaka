@@ -153,16 +153,14 @@ declGapReasoned : List Comment ->
   Option String ->
   Int ->
   Bool
-declGapReasoned comments blocks declZips targetName line =
-  match find (commentBlockEndsAt (line - 1)) blocks
-    Some b => blockHasReason comments b
-    None => match find (declZipEndsAt (line - 1)) declZips
-      Some (d, dp) =>
-        if declGapNameMatches targetName d then
-          declGapReasoned comments blocks declZips targetName (declPosLine dp)
-        else
-          False
-      None => False
+declGapReasoned comments blocks declZips targetName line0 = go line0
+  where
+    go line = match find (commentBlockEndsAt (line - 1)) blocks
+      Some b => blockHasReason comments b
+      None => match find (declZipEndsAt (line - 1)) declZips
+        Some (d, dp) =>
+          if declGapNameMatches targetName d then go (declPosLine dp) else False
+        None => False
 
 -- The name of the declaration the directive's target `line` falls inside —
 -- `None` when no top-level `DTypeSig`/`DFunDef` covers that line (a

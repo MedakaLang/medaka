@@ -1,5 +1,5 @@
 # META
-source_lines=274
+source_lines=272
 stages=DESUGAR,MARK
 # SOURCE
 -- lint rule rule-directive-reason: a `-- lint-disable-*` directive with no comment in its own comment block stating the constraint that forced it. An issue number alone is not a reason.
@@ -157,16 +157,14 @@ declGapReasoned : List Comment ->
   Option String ->
   Int ->
   Bool
-declGapReasoned comments blocks declZips targetName line =
-  match find (commentBlockEndsAt (line - 1)) blocks
-    Some b => blockHasReason comments b
-    None => match find (declZipEndsAt (line - 1)) declZips
-      Some (d, dp) =>
-        if declGapNameMatches targetName d then
-          declGapReasoned comments blocks declZips targetName (declPosLine dp)
-        else
-          False
-      None => False
+declGapReasoned comments blocks declZips targetName line0 = go line0
+  where
+    go line = match find (commentBlockEndsAt (line - 1)) blocks
+      Some b => blockHasReason comments b
+      None => match find (declZipEndsAt (line - 1)) declZips
+        Some (d, dp) =>
+          if declGapNameMatches targetName d then go (declPosLine dp) else False
+        None => False
 
 -- The name of the declaration the directive's target `line` falls inside —
 -- `None` when no top-level `DTypeSig`/`DFunDef` covers that line (a
@@ -295,7 +293,7 @@ directiveReasonFinding c = Finding {
 (DTypeSig false "directiveReasoned" (TyFun (TyApp (TyCon "List") (TyCon "Comment")) (TyFun (TyApp (TyCon "List") (TyCon "CommentBlock")) (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "Decl") (TyCon "DeclPos"))) (TyFun (TyCon "Comment") (TyCon "Bool"))))))
 (DFunDef false "directiveReasoned" ((PVar "comments") (PVar "blocks") (PVar "declZips") (PVar "c")) (EBlock (DoLet false false (PVar "ownReasoned") (EMatch (EApp (EApp (EVar "find") (EApp (EVar "commentBlockContainsLine") (EApp (EVar "commentLine") (EVar "c")))) (EVar "blocks")) (arm (PCon "Some" (PVar "b")) () (EApp (EApp (EVar "blockHasReason") (EVar "comments")) (EVar "b"))) (arm (PCon "None") () (EVar "False")))) (DoExpr (EIf (EVar "ownReasoned") (EVar "True") (EMatch (EApp (EVar "parseDirective") (EVar "c")) (arm (PCon "Some" (PCon "Directive" (PCon "DScopeLine" (PVar "target")) PWild)) () (EApp (EApp (EApp (EApp (EApp (EVar "declGapReasoned") (EVar "comments")) (EVar "blocks")) (EVar "declZips")) (EApp (EApp (EVar "declZipNameAt") (EVar "declZips")) (EVar "target"))) (EApp (EVar "commentLine") (EVar "c")))) (arm (PCon "Some" (PCon "Directive" (PCon "DScopeFile") PWild)) () (EVar "False")) (arm (PCon "None") () (EVar "False")))))))
 (DTypeSig false "declGapReasoned" (TyFun (TyApp (TyCon "List") (TyCon "Comment")) (TyFun (TyApp (TyCon "List") (TyCon "CommentBlock")) (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "Decl") (TyCon "DeclPos"))) (TyFun (TyApp (TyCon "Option") (TyCon "String")) (TyFun (TyCon "Int") (TyCon "Bool")))))))
-(DFunDef false "declGapReasoned" ((PVar "comments") (PVar "blocks") (PVar "declZips") (PVar "targetName") (PVar "line")) (EMatch (EApp (EApp (EVar "find") (EApp (EVar "commentBlockEndsAt") (EBinOp "-" (EVar "line") (ELit (LInt 1))))) (EVar "blocks")) (arm (PCon "Some" (PVar "b")) () (EApp (EApp (EVar "blockHasReason") (EVar "comments")) (EVar "b"))) (arm (PCon "None") () (EMatch (EApp (EApp (EVar "find") (EApp (EVar "declZipEndsAt") (EBinOp "-" (EVar "line") (ELit (LInt 1))))) (EVar "declZips")) (arm (PCon "Some" (PTuple (PVar "d") (PVar "dp"))) () (EIf (EApp (EApp (EVar "declGapNameMatches") (EVar "targetName")) (EVar "d")) (EApp (EApp (EApp (EApp (EApp (EVar "declGapReasoned") (EVar "comments")) (EVar "blocks")) (EVar "declZips")) (EVar "targetName")) (EApp (EVar "declPosLine") (EVar "dp"))) (EVar "False"))) (arm (PCon "None") () (EVar "False"))))))
+(DFunDef false "declGapReasoned" ((PVar "comments") (PVar "blocks") (PVar "declZips") (PVar "targetName") (PVar "line0")) (ELetGroup ((lgb "go" (clause ((PVar "line")) (EMatch (EApp (EApp (EVar "find") (EApp (EVar "commentBlockEndsAt") (EBinOp "-" (EVar "line") (ELit (LInt 1))))) (EVar "blocks")) (arm (PCon "Some" (PVar "b")) () (EApp (EApp (EVar "blockHasReason") (EVar "comments")) (EVar "b"))) (arm (PCon "None") () (EMatch (EApp (EApp (EVar "find") (EApp (EVar "declZipEndsAt") (EBinOp "-" (EVar "line") (ELit (LInt 1))))) (EVar "declZips")) (arm (PCon "Some" (PTuple (PVar "d") (PVar "dp"))) () (EIf (EApp (EApp (EVar "declGapNameMatches") (EVar "targetName")) (EVar "d")) (EApp (EVar "go") (EApp (EVar "declPosLine") (EVar "dp"))) (EVar "False"))) (arm (PCon "None") () (EVar "False")))))))) (EApp (EVar "go") (EVar "line0"))))
 (DTypeSig false "declZipNameAt" (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "Decl") (TyCon "DeclPos"))) (TyFun (TyCon "Int") (TyApp (TyCon "Option") (TyCon "String")))))
 (DFunDef false "declZipNameAt" ((PVar "declZips") (PVar "line")) (EApp (EApp (EVar "andThen") (EApp (EApp (EVar "find") (EApp (EVar "declZipContainsLine") (EVar "line"))) (EVar "declZips"))) (ELam ((PVar "__do_x")) (EMatch (EVar "__do_x") (arm (PTuple (PVar "d") PWild) () (EApp (EVar "declBridgeName") (EVar "d")))))))
 (DTypeSig false "declZipContainsLine" (TyFun (TyCon "Int") (TyFun (TyTuple (TyCon "Decl") (TyCon "DeclPos")) (TyCon "Bool"))))
@@ -358,7 +356,7 @@ directiveReasonFinding c = Finding {
 (DTypeSig false "directiveReasoned" (TyFun (TyApp (TyCon "List") (TyCon "Comment")) (TyFun (TyApp (TyCon "List") (TyCon "CommentBlock")) (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "Decl") (TyCon "DeclPos"))) (TyFun (TyCon "Comment") (TyCon "Bool"))))))
 (DFunDef false "directiveReasoned" ((PVar "comments") (PVar "blocks") (PVar "declZips") (PVar "c")) (EBlock (DoLet false false (PVar "ownReasoned") (EMatch (EApp (EApp (EDictApp "find") (EApp (EVar "commentBlockContainsLine") (EApp (EVar "commentLine") (EVar "c")))) (EVar "blocks")) (arm (PCon "Some" (PVar "b")) () (EApp (EApp (EVar "blockHasReason") (EVar "comments")) (EVar "b"))) (arm (PCon "None") () (EVar "False")))) (DoExpr (EIf (EVar "ownReasoned") (EVar "True") (EMatch (EApp (EVar "parseDirective") (EVar "c")) (arm (PCon "Some" (PCon "Directive" (PCon "DScopeLine" (PVar "target")) PWild)) () (EApp (EApp (EApp (EApp (EApp (EVar "declGapReasoned") (EVar "comments")) (EVar "blocks")) (EVar "declZips")) (EApp (EApp (EVar "declZipNameAt") (EVar "declZips")) (EVar "target"))) (EApp (EVar "commentLine") (EVar "c")))) (arm (PCon "Some" (PCon "Directive" (PCon "DScopeFile") PWild)) () (EVar "False")) (arm (PCon "None") () (EVar "False")))))))
 (DTypeSig false "declGapReasoned" (TyFun (TyApp (TyCon "List") (TyCon "Comment")) (TyFun (TyApp (TyCon "List") (TyCon "CommentBlock")) (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "Decl") (TyCon "DeclPos"))) (TyFun (TyApp (TyCon "Option") (TyCon "String")) (TyFun (TyCon "Int") (TyCon "Bool")))))))
-(DFunDef false "declGapReasoned" ((PVar "comments") (PVar "blocks") (PVar "declZips") (PVar "targetName") (PVar "line")) (EMatch (EApp (EApp (EDictApp "find") (EApp (EVar "commentBlockEndsAt") (EBinOp "-" (EVar "line") (ELit (LInt 1))))) (EVar "blocks")) (arm (PCon "Some" (PVar "b")) () (EApp (EApp (EVar "blockHasReason") (EVar "comments")) (EVar "b"))) (arm (PCon "None") () (EMatch (EApp (EApp (EDictApp "find") (EApp (EVar "declZipEndsAt") (EBinOp "-" (EVar "line") (ELit (LInt 1))))) (EVar "declZips")) (arm (PCon "Some" (PTuple (PVar "d") (PVar "dp"))) () (EIf (EApp (EApp (EVar "declGapNameMatches") (EVar "targetName")) (EVar "d")) (EApp (EApp (EApp (EApp (EApp (EVar "declGapReasoned") (EVar "comments")) (EVar "blocks")) (EVar "declZips")) (EVar "targetName")) (EApp (EVar "declPosLine") (EVar "dp"))) (EVar "False"))) (arm (PCon "None") () (EVar "False"))))))
+(DFunDef false "declGapReasoned" ((PVar "comments") (PVar "blocks") (PVar "declZips") (PVar "targetName") (PVar "line0")) (ELetGroup ((lgb "go" (clause ((PVar "line")) (EMatch (EApp (EApp (EDictApp "find") (EApp (EVar "commentBlockEndsAt") (EBinOp "-" (EVar "line") (ELit (LInt 1))))) (EVar "blocks")) (arm (PCon "Some" (PVar "b")) () (EApp (EApp (EVar "blockHasReason") (EVar "comments")) (EVar "b"))) (arm (PCon "None") () (EMatch (EApp (EApp (EDictApp "find") (EApp (EVar "declZipEndsAt") (EBinOp "-" (EVar "line") (ELit (LInt 1))))) (EVar "declZips")) (arm (PCon "Some" (PTuple (PVar "d") (PVar "dp"))) () (EIf (EApp (EApp (EVar "declGapNameMatches") (EVar "targetName")) (EVar "d")) (EApp (EVar "go") (EApp (EVar "declPosLine") (EVar "dp"))) (EVar "False"))) (arm (PCon "None") () (EVar "False")))))))) (EApp (EVar "go") (EVar "line0"))))
 (DTypeSig false "declZipNameAt" (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "Decl") (TyCon "DeclPos"))) (TyFun (TyCon "Int") (TyApp (TyCon "Option") (TyCon "String")))))
 (DFunDef false "declZipNameAt" ((PVar "declZips") (PVar "line")) (EApp (EApp (EMethodRef "andThen") (EApp (EApp (EDictApp "find") (EApp (EVar "declZipContainsLine") (EVar "line"))) (EVar "declZips"))) (ELam ((PVar "__do_x")) (EMatch (EVar "__do_x") (arm (PTuple (PVar "d") PWild) () (EApp (EVar "declBridgeName") (EVar "d")))))))
 (DTypeSig false "declZipContainsLine" (TyFun (TyCon "Int") (TyFun (TyTuple (TyCon "Decl") (TyCon "DeclPos")) (TyCon "Bool"))))

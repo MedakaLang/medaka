@@ -1,5 +1,5 @@
 # META
-source_lines=129
+source_lines=130
 stages=DESUGAR,MARK
 # SOURCE
 -- lint rule rule-test-bool-helper: a `-> Bool` helper in a `*_test.mdk` graded with `expectTrue`/`expectFalse`. Return an `Expect` from the helper instead.
@@ -70,22 +70,23 @@ ruleTestBoolHelper _ path _ _ decls
   | otherwise = []
 
 helperFinding : List String -> List Expr -> Decl -> List Finding
-helperFinding graded propBodies (DTypeSig _ name ty loc)
-  | endsInBool ty
-    && elem name graded
-    && not (anyList (mentionsVar name) propBodies) = [
-    Finding {
-      rule = ruleNameTestBoolHelper,
-      message =
-        "`\{name}` returns `Bool` and is graded with `expectTrue`/`expectFalse`, which reports no expectation on failure. Return an `Expect` (for example `expectErrContains`, `expectEqual`) and drop the wrapper at its call sites",
-      severity = SevWarning,
-      loc = Some loc,
-      fix = None,
-    },
-  ]
-helperFinding graded propBodies (DAttrib _ d) =
-  helperFinding graded propBodies d
-helperFinding _ _ _ = []
+helperFinding graded propBodies x0 = go x0
+  where
+    go (DTypeSig _ name ty loc)
+      | endsInBool ty
+        && elem name graded
+        && not (anyList (mentionsVar name) propBodies) = [
+        Finding {
+          rule = ruleNameTestBoolHelper,
+          message =
+            "`\{name}` returns `Bool` and is graded with `expectTrue`/`expectFalse`, which reports no expectation on failure. Return an `Expect` (for example `expectErrContains`, `expectEqual`) and drop the wrapper at its call sites",
+          severity = SevWarning,
+          loc = Some loc,
+          fix = None,
+        },
+      ]
+    go (DAttrib _ d) = go d
+    go _ = []
 
 endsInBool : Ty -> Bool
 endsInBool (TyFun _ r) = endsInBool r
@@ -144,9 +145,7 @@ headNames e = match unwrapLoc e
 (DTypeSig false "ruleTestBoolHelper" (TyFun (TyCon "StdlibIndex") (TyFun (TyCon "String") (TyFun (TyCon "FileFacts") (TyFun (TyCon "Positions") (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyApp (TyCon "List") (TyCon "Finding"))))))))
 (DFunDef false "ruleTestBoolHelper" (PWild (PVar "path") PWild PWild (PVar "decls")) (EIf (EApp (EApp (EVar "endsWith") (ELit (LString "_test.mdk"))) (EVar "path")) (EBlock (DoLet false false (PVar "graded") (EApp (EApp (EVar "flatMap") (EVar "gradedHeads")) (EApp (EVar "allBodies") (EVar "decls")))) (DoLet false false (PVar "propBodies") (EApp (EApp (EVar "flatMap") (EVar "propBodyOf")) (EVar "decls"))) (DoExpr (EApp (EApp (EVar "flatMap") (EApp (EApp (EVar "helperFinding") (EVar "graded")) (EVar "propBodies"))) (EVar "decls")))) (EIf (EVar "otherwise") (EListLit) (EApp (EVar "__fallthrough__") (ELit LUnit)))))
 (DTypeSig false "helperFinding" (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyApp (TyCon "List") (TyCon "Expr")) (TyFun (TyCon "Decl") (TyApp (TyCon "List") (TyCon "Finding"))))))
-(DFunDef false "helperFinding" ((PVar "graded") (PVar "propBodies") (PCon "DTypeSig" PWild (PVar "name") (PVar "ty") (PVar "loc"))) (EIf (EBinOp "&&" (EBinOp "&&" (EApp (EVar "endsInBool") (EVar "ty")) (EApp (EApp (EVar "elem") (EVar "name")) (EVar "graded"))) (EApp (EVar "not") (EApp (EApp (EVar "anyList") (EApp (EVar "mentionsVar") (EVar "name"))) (EVar "propBodies")))) (EListLit (ERecordCreate "Finding" ((fa "rule" (EVar "ruleNameTestBoolHelper")) (fa "message" (EBinOp "++" (EBinOp "++" (ELit (LString "`")) (EApp (EVar "display") (EVar "name"))) (ELit (LString "` returns `Bool` and is graded with `expectTrue`/`expectFalse`, which reports no expectation on failure. Return an `Expect` (for example `expectErrContains`, `expectEqual`) and drop the wrapper at its call sites")))) (fa "severity" (EVar "SevWarning")) (fa "loc" (EApp (EVar "Some") (EVar "loc"))) (fa "fix" (EVar "None"))))) (EApp (EVar "__fallthrough__") (ELit LUnit))))
-(DFunDef false "helperFinding" ((PVar "graded") (PVar "propBodies") (PCon "DAttrib" PWild (PVar "d"))) (EApp (EApp (EApp (EVar "helperFinding") (EVar "graded")) (EVar "propBodies")) (EVar "d")))
-(DFunDef false "helperFinding" (PWild PWild PWild) (EListLit))
+(DFunDef false "helperFinding" ((PVar "graded") (PVar "propBodies") (PVar "x0")) (ELetGroup ((lgb "go" (clause ((PCon "DTypeSig" PWild (PVar "name") (PVar "ty") (PVar "loc"))) (EIf (EBinOp "&&" (EBinOp "&&" (EApp (EVar "endsInBool") (EVar "ty")) (EApp (EApp (EVar "elem") (EVar "name")) (EVar "graded"))) (EApp (EVar "not") (EApp (EApp (EVar "anyList") (EApp (EVar "mentionsVar") (EVar "name"))) (EVar "propBodies")))) (EListLit (ERecordCreate "Finding" ((fa "rule" (EVar "ruleNameTestBoolHelper")) (fa "message" (EBinOp "++" (EBinOp "++" (ELit (LString "`")) (EApp (EVar "display") (EVar "name"))) (ELit (LString "` returns `Bool` and is graded with `expectTrue`/`expectFalse`, which reports no expectation on failure. Return an `Expect` (for example `expectErrContains`, `expectEqual`) and drop the wrapper at its call sites")))) (fa "severity" (EVar "SevWarning")) (fa "loc" (EApp (EVar "Some") (EVar "loc"))) (fa "fix" (EVar "None"))))) (EApp (EVar "__fallthrough__") (ELit LUnit)))) (clause ((PCon "DAttrib" PWild (PVar "d"))) (EApp (EVar "go") (EVar "d"))) (clause (PWild) (EListLit)))) (EApp (EVar "go") (EVar "x0"))))
 (DTypeSig false "endsInBool" (TyFun (TyCon "Ty") (TyCon "Bool")))
 (DFunDef false "endsInBool" ((PCon "TyFun" PWild (PVar "r"))) (EApp (EVar "endsInBool") (EVar "r")))
 (DFunDef false "endsInBool" ((PCon "TyConstrained" PWild (PVar "t"))) (EApp (EVar "endsInBool") (EVar "t")))
@@ -184,9 +183,7 @@ headNames e = match unwrapLoc e
 (DTypeSig false "ruleTestBoolHelper" (TyFun (TyCon "StdlibIndex") (TyFun (TyCon "String") (TyFun (TyCon "FileFacts") (TyFun (TyCon "Positions") (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyApp (TyCon "List") (TyCon "Finding"))))))))
 (DFunDef false "ruleTestBoolHelper" (PWild (PVar "path") PWild PWild (PVar "decls")) (EIf (EApp (EApp (EVar "endsWith") (ELit (LString "_test.mdk"))) (EVar "path")) (EBlock (DoLet false false (PVar "graded") (EApp (EApp (EDictApp "flatMap") (EVar "gradedHeads")) (EApp (EVar "allBodies") (EVar "decls")))) (DoLet false false (PVar "propBodies") (EApp (EApp (EDictApp "flatMap") (EVar "propBodyOf")) (EVar "decls"))) (DoExpr (EApp (EApp (EDictApp "flatMap") (EApp (EApp (EVar "helperFinding") (EVar "graded")) (EVar "propBodies"))) (EVar "decls")))) (EIf (EVar "otherwise") (EListLit) (EApp (EVar "__fallthrough__") (ELit LUnit)))))
 (DTypeSig false "helperFinding" (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyApp (TyCon "List") (TyCon "Expr")) (TyFun (TyCon "Decl") (TyApp (TyCon "List") (TyCon "Finding"))))))
-(DFunDef false "helperFinding" ((PVar "graded") (PVar "propBodies") (PCon "DTypeSig" PWild (PVar "name") (PVar "ty") (PVar "loc"))) (EIf (EBinOp "&&" (EBinOp "&&" (EApp (EVar "endsInBool") (EVar "ty")) (EApp (EApp (EDictApp "elem") (EVar "name")) (EVar "graded"))) (EApp (EVar "not") (EApp (EApp (EVar "anyList") (EApp (EVar "mentionsVar") (EVar "name"))) (EVar "propBodies")))) (EListLit (ERecordCreate "Finding" ((fa "rule" (EVar "ruleNameTestBoolHelper")) (fa "message" (EBinOp "++" (EBinOp "++" (ELit (LString "`")) (EApp (EMethodRef "display") (EVar "name"))) (ELit (LString "` returns `Bool` and is graded with `expectTrue`/`expectFalse`, which reports no expectation on failure. Return an `Expect` (for example `expectErrContains`, `expectEqual`) and drop the wrapper at its call sites")))) (fa "severity" (EVar "SevWarning")) (fa "loc" (EApp (EVar "Some") (EVar "loc"))) (fa "fix" (EVar "None"))))) (EApp (EVar "__fallthrough__") (ELit LUnit))))
-(DFunDef false "helperFinding" ((PVar "graded") (PVar "propBodies") (PCon "DAttrib" PWild (PVar "d"))) (EApp (EApp (EApp (EVar "helperFinding") (EVar "graded")) (EVar "propBodies")) (EVar "d")))
-(DFunDef false "helperFinding" (PWild PWild PWild) (EListLit))
+(DFunDef false "helperFinding" ((PVar "graded") (PVar "propBodies") (PVar "x0")) (ELetGroup ((lgb "go" (clause ((PCon "DTypeSig" PWild (PVar "name") (PVar "ty") (PVar "loc"))) (EIf (EBinOp "&&" (EBinOp "&&" (EApp (EVar "endsInBool") (EVar "ty")) (EApp (EApp (EDictApp "elem") (EVar "name")) (EVar "graded"))) (EApp (EVar "not") (EApp (EApp (EVar "anyList") (EApp (EVar "mentionsVar") (EVar "name"))) (EVar "propBodies")))) (EListLit (ERecordCreate "Finding" ((fa "rule" (EVar "ruleNameTestBoolHelper")) (fa "message" (EBinOp "++" (EBinOp "++" (ELit (LString "`")) (EApp (EMethodRef "display") (EVar "name"))) (ELit (LString "` returns `Bool` and is graded with `expectTrue`/`expectFalse`, which reports no expectation on failure. Return an `Expect` (for example `expectErrContains`, `expectEqual`) and drop the wrapper at its call sites")))) (fa "severity" (EVar "SevWarning")) (fa "loc" (EApp (EVar "Some") (EVar "loc"))) (fa "fix" (EVar "None"))))) (EApp (EVar "__fallthrough__") (ELit LUnit)))) (clause ((PCon "DAttrib" PWild (PVar "d"))) (EApp (EVar "go") (EVar "d"))) (clause (PWild) (EListLit)))) (EApp (EVar "go") (EVar "x0"))))
 (DTypeSig false "endsInBool" (TyFun (TyCon "Ty") (TyCon "Bool")))
 (DFunDef false "endsInBool" ((PCon "TyFun" PWild (PVar "r"))) (EApp (EVar "endsInBool") (EVar "r")))
 (DFunDef false "endsInBool" ((PCon "TyConstrained" PWild (PVar "t"))) (EApp (EVar "endsInBool") (EVar "t")))

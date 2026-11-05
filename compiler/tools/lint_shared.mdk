@@ -338,16 +338,20 @@ trimWs s =
   stringSlice a b s
 
 trimWsStart : Array Char -> Int -> Int -> Int
-trimWsStart cs n i
-  | i >= n = i
-  | isWsChar (arrayGetUnsafe i cs) = trimWsStart cs n (i + 1)
-  | otherwise = i
+trimWsStart cs n i0 = go i0
+  where
+    go i
+      | i >= n = i
+      | isWsChar (arrayGetUnsafe i cs) = go (i + 1)
+      | otherwise = i
 
 trimWsEnd : Array Char -> Int -> Int -> Int
-trimWsEnd cs a n
-  | n <= a = a
-  | isWsChar (arrayGetUnsafe (n - 1) cs) = trimWsEnd cs a (n - 1)
-  | otherwise = n
+trimWsEnd cs a n0 = go n0
+  where
+    go n
+      | n <= a = a
+      | isWsChar (arrayGetUnsafe (n - 1) cs) = go (n - 1)
+      | otherwise = n
 
 isWsChar : Char -> Bool
 isWsChar c = c == ' ' || c == '\t' || c == '\r' || c == '\n'
@@ -644,24 +648,27 @@ declBodyFix : Bool ->
   (Expr -> Expr) ->
   Decl ->
   Option (List Decl)
-declBodyFix _ excl rw (DFunDef vis name pats body site bid)
-  | excl name = None
-  | otherwise = bodyFix (b => DFunDef vis name pats b site bid) rw body
-declBodyFix tests excl rw (DAttrib a d) = match declBodyFix tests excl rw d
-  Some [d2] => Some [DAttrib a d2]
-  _ => None
-declBodyFix _ excl rw (d@(DImpl { implOrigin = _, methods })) =
-  let methods2 = map (fixImplMethodWith excl rw) methods
-  if implMethodsBodyKey methods2 == implMethodsBodyKey methods then
-    None
-  else
-    -- #1110: record UPDATE — re-synthesising would reset the acquired identity.
-    Some [DImpl { d | methods = methods2 }]
-declBodyFix True _ rw (DTest pub name body) = bodyFix (DTest pub name) rw body
-declBodyFix True _ rw (DProp pub name ps body) =
-  bodyFix (DProp pub name ps) rw body
-declBodyFix _ _ _ (DTypeSig _ _ _ _ | DExtern _ | DData {  } | DUse _ _ _ | DEffect _ _ _ _ _ _ | DInterface {  } | DTypeAlias {  } | DNewtype {  } | DLetGroup _ _ | DTest _ _ _ | DProp _ _ _ _) =
-  None
+declBodyFix tests excl rw d0 = go d0
+  where
+    go (DFunDef vis name pats body site bid)
+      | excl name = None
+      | otherwise = bodyFix (b => DFunDef vis name pats b site bid) rw body
+    go (DAttrib a d) = match go d
+      Some [d2] => Some [DAttrib a d2]
+      _ => None
+    go (d@(DImpl { implOrigin = _, methods })) =
+      let methods2 = map (fixImplMethodWith excl rw) methods
+      if implMethodsBodyKey methods2 == implMethodsBodyKey methods then
+        None
+      else
+        -- #1110: record UPDATE — re-synthesising would reset the acquired identity.
+        Some [DImpl { d | methods = methods2 }]
+    go (DTest pub name body)
+      | tests = bodyFix (DTest pub name) rw body
+    go (DProp pub name ps body)
+      | tests = bodyFix (DProp pub name ps) rw body
+    go (DTypeSig _ _ _ _ | DExtern _ | DData {  } | DUse _ _ _ | DEffect _ _ _ _ _ _ | DInterface {  } | DTypeAlias {  } | DNewtype {  } | DLetGroup _ _ | DTest _ _ _ | DProp _ _ _ _) =
+      None
 
 fixImplMethodWith : (String -> Bool) ->
   (Expr -> Expr) ->

@@ -219,12 +219,14 @@ bfsReach : HashMap String (List String) ->
   HashMap String Unit ->
   List String ->
   Unit
-bfsReach _ _ [] = ()
-bfsReach refMap visited (x :: rest)
-  | has x visited = bfsReach refMap visited rest
-  | otherwise =
-    setInPlace x () visited
-    bfsReach refMap visited (refsOf refMap x ++ rest)
+bfsReach refMap visited xs0 = go xs0
+  where
+    go [] = ()
+    go (x :: rest)
+      | has x visited = go rest
+      | otherwise =
+        setInPlace x () visited
+        go (refsOf refMap x ++ rest)
 
 refsOf : HashMap String (List String) -> String -> List String
 refsOf refMap n = findWithDefault [] n refMap
@@ -257,6 +259,8 @@ identTokens s =
   identTokGo cs (arrayLength cs) 0
 
 identTokGo : Array Char -> Int -> Int -> List String
+-- Bound: hot compiler path: the where-go form allocates one closure per call until the lambda-lift pass (#4878); convert then.
+-- lint-disable-next-line rule-threaded-invariant
 identTokGo cs n i
   | i >= n = []
   | isIdentStart (arrayGetUnsafe i cs) =
@@ -278,10 +282,12 @@ isIdentStart : Char -> Bool
 isIdentStart c = isLower c || isUpper c || c == '_'
 
 identEnd : Array Char -> Int -> Int -> Int
-identEnd cs n i
-  | i >= n = i
-  | isAlnum (arrayGetUnsafe i cs) = identEnd cs n (i + 1)
-  | otherwise = i
+identEnd cs n i0 = go i0
+  where
+    go i
+      | i >= n = i
+      | isAlnum (arrayGetUnsafe i cs) = go (i + 1)
+      | otherwise = i
 
 -- ── doctest identifiers (string-aware comment channel) ────────────────────────
 -- Identifiers on `>` input lines of doctests (both `-- > expr` line-comment and

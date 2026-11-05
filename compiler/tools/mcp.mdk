@@ -331,6 +331,8 @@ jsonPairsToList : Array (String, Json) -> List (String, Json)
 jsonPairsToList arr = jsonPairsToListGo arr 0 (arrayLength arr)
 
 jsonPairsToListGo : Array (String, Json) -> Int -> Int -> List (String, Json)
+-- Bound: list built in tail position modulo cons: a where-local go loses the constant-stack loop until the lambda-lift pass (#4878); convert then.
+-- lint-disable-next-line rule-threaded-invariant
 jsonPairsToListGo arr i n
   | i >= n = []
   | otherwise = arrayGetUnsafe i arr :: jsonPairsToListGo arr (i + 1) n
@@ -633,10 +635,12 @@ lineTextAtIndexed index src line =
     (sourcePositionToOffset index (line + 1) 0)
 
 lineTextEnd : Array Char -> Int -> Int -> Int
-lineTextEnd arr len i
-  | i >= len = len
-  | arrayGetUnsafe i arr == '\n' || arrayGetUnsafe i arr == '\r' = i
-  | otherwise = lineTextEnd arr len (i + 1)
+lineTextEnd arr len i0 = go i0
+  where
+    go i
+      | i >= len = len
+      | arrayGetUnsafe i arr == '\n' || arrayGetUnsafe i arr == '\r' = i
+      | otherwise = go (i + 1)
 
 -- Every identifier token on `text` (the WIDE class `support.char.isIdentChar`
 -- runs — alnum, `_`, `'`), as (name, 0-based column) pairs in left-to-right
@@ -1448,6 +1452,8 @@ jsonArrToList : Array Json -> List Json
 jsonArrToList arr = jsonArrToListGo arr 0 (arrayLength arr)
 
 jsonArrToListGo : Array Json -> Int -> Int -> List Json
+-- Bound: list built in tail position modulo cons: a where-local go loses the constant-stack loop until the lambda-lift pass (#4878); convert then.
+-- lint-disable-next-line rule-threaded-invariant
 jsonArrToListGo arr i n
   | i >= n = []
   | otherwise = arrayGetUnsafe i arr :: jsonArrToListGo arr (i + 1) n
@@ -2120,31 +2126,25 @@ serveLoop : TraceContext ->
   (Unit -> <IO> Option String) ->
   String ->
   <IO> Unit
-serveLoop trace state runtimeSrc coreSrc stdlibDir stalenessCheck serverVersion =
-  match readLineOpt ()
-    None => unit
-    Some raw =>
-      let counter = trace.traceCounter
-      let requestId = intToString !counter
-      counter := !counter + 1
-      handleLine
-        trace
-        requestId
-        state
-        runtimeSrc
-        coreSrc
-        stdlibDir
-        raw
-        stalenessCheck
-        serverVersion
-      serveLoop
-        trace
-        state
-        runtimeSrc
-        coreSrc
-        stdlibDir
-        stalenessCheck
-        serverVersion
+serveLoop trace state runtimeSrc coreSrc stdlibDir staleCheck serverVer = go ()
+  where
+    go () = match readLineOpt ()
+      None => unit
+      Some raw =>
+        let counter = trace.traceCounter
+        let requestId = intToString !counter
+        counter := !counter + 1
+        handleLine
+          trace
+          requestId
+          state
+          runtimeSrc
+          coreSrc
+          stdlibDir
+          raw
+          staleCheck
+          serverVer
+        go ()
 
 -- Public entry point for the driver (`runMcpCmd` in medaka_cli.mdk).  The prelude
 -- sources + stdlib dir are threaded in so tools can run the compiler pipeline

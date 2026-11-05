@@ -499,19 +499,23 @@ noteUse (W _ us _ _ _) scope loc n =
 
 -- ── the walk ──────────────────────────────────────────────────────────────────
 walkDecls : W -> List Frame -> List Decl -> Unit
-walkDecls _ _ [] = ()
-walkDecls w scope (d :: rest) =
-  noteMentions w scope (declNames d)
-  walkBodies w scope (declBodies d)
-  walkDecls w scope rest
+walkDecls w scope xs0 = go xs0
+  where
+    go [] = ()
+    go (d :: rest) =
+      noteMentions w scope (declNames d)
+      walkBodies w scope (declBodies d)
+      go rest
 
 walkBodies : W -> List Frame -> List DeclBody -> Unit
-walkBodies _ _ [] = ()
-walkBodies w scope ((DeclBody owner body) :: rest) =
-  noteMentions w scope (ownerNames owner)
-  let frame = mintFrame w (ownerSites owner)
-  walkExpr w (frame :: scope) noDeclLoc body
-  walkBodies w scope rest
+walkBodies w scope xs0 = go xs0
+  where
+    go [] = ()
+    go ((DeclBody owner body) :: rest) =
+      noteMentions w scope (ownerNames owner)
+      let frame = mintFrame w (ownerSites owner)
+      walkExpr w (frame :: scope) noDeclLoc body
+      go rest
 
 walkExpr : W -> List Frame -> Loc -> Expr -> Unit
 walkExpr w scope _ (ELoc l e) = walkExpr w scope l e
@@ -549,66 +553,78 @@ letBindClauses : LetBind -> List FunClause
 letBindClauses (LetBind _ clauses _ _) = clauses
 
 walkEach : W -> List Frame -> Loc -> List Expr -> Unit
-walkEach _ _ _ [] = ()
-walkEach w scope loc (e :: rest) =
-  walkExpr w scope loc e
-  walkEach w scope loc rest
+walkEach w scope loc xs0 = go xs0
+  where
+    go [] = ()
+    go (e :: rest) =
+      walkExpr w scope loc e
+      go rest
 
 walkClauses : W -> List Frame -> Loc -> List FunClause -> Unit
-walkClauses _ _ _ [] = ()
-walkClauses w scope loc ((FunClause ps body) :: rest) =
-  noteMentions w scope (flatMap patNames ps)
-  let frame = mintFrame w (flatMap (patSites BParam) ps)
-  walkExpr w (frame :: scope) loc body
-  walkClauses w scope loc rest
+walkClauses w scope loc xs0 = go xs0
+  where
+    go [] = ()
+    go ((FunClause ps body) :: rest) =
+      noteMentions w scope (flatMap patNames ps)
+      let frame = mintFrame w (flatMap (patSites BParam) ps)
+      walkExpr w (frame :: scope) loc body
+      go rest
 
 walkArms : W -> List Frame -> Loc -> List Arm -> Unit
-walkArms _ _ _ [] = ()
-walkArms w scope loc ((Arm p gs body) :: rest) =
-  noteMentions w scope (patNames p)
-  let scope1 = mintFrame w (patSites BMatchArm p) :: scope
-  let scope2 = walkGuards w scope1 loc gs
-  walkExpr w scope2 loc body
-  walkArms w scope loc rest
+walkArms w scope loc xs0 = go xs0
+  where
+    go [] = ()
+    go ((Arm p gs body) :: rest) =
+      noteMentions w scope (patNames p)
+      let scope1 = mintFrame w (patSites BMatchArm p) :: scope
+      let scope2 = walkGuards w scope1 loc gs
+      walkExpr w scope2 loc body
+      go rest
 
 walkGuardArms : W -> List Frame -> Loc -> List GuardArm -> Unit
-walkGuardArms _ _ _ [] = ()
-walkGuardArms w scope loc ((GuardArm gs body) :: rest) =
-  let scope2 = walkGuards w scope loc gs
-  walkExpr w scope2 loc body
-  walkGuardArms w scope loc rest
+walkGuardArms w scope loc xs0 = go xs0
+  where
+    go [] = ()
+    go ((GuardArm gs body) :: rest) =
+      let scope2 = walkGuards w scope loc gs
+      walkExpr w scope2 loc body
+      go rest
 
 -- A guard list threads scope: a `Pat <- e` guard binds for the guards after it.
 walkGuards : W -> List Frame -> Loc -> List Guard -> List Frame
-walkGuards _ scope _ [] = scope
-walkGuards w scope loc ((GBool e) :: rest) =
-  walkExpr w scope loc e
-  walkGuards w scope loc rest
-walkGuards w scope loc ((GBind p e) :: rest) =
-  noteMentions w scope (patNames p)
-  walkExpr w scope loc e
-  walkGuards w (mintFrame w (patSites BMatchArm p) :: scope) loc rest
+walkGuards w scope0 loc xs0 = go scope0 xs0
+  where
+    go scope [] = scope
+    go scope ((GBool e) :: rest) =
+      walkExpr w scope loc e
+      go scope rest
+    go scope ((GBind p e) :: rest) =
+      noteMentions w scope (patNames p)
+      walkExpr w scope loc e
+      go (mintFrame w (patSites BMatchArm p) :: scope) rest
 
 walkStmts : W -> List Frame -> Loc -> List DoStmt -> Unit
-walkStmts _ _ _ [] = ()
-walkStmts w scope loc ((DoExpr e) :: rest) =
-  walkExpr w scope loc e
-  walkStmts w scope loc rest
-walkStmts w scope loc ((DoBind p e) :: rest) =
-  noteMentions w scope (patNames p)
-  walkExpr w scope loc e
-  walkStmts w (mintFrame w (patSites BDoBind p) :: scope) loc rest
-walkStmts w scope loc ((DoLet _ isRec p e _) :: rest) =
-  noteMentions w scope (patNames p)
-  let frame = mintFrame w (patSites BLet p)
-  walkExpr w (letRhsScope isRec frame scope) loc e
-  walkStmts w (frame :: scope) loc rest
-walkStmts w scope loc ((DoAssign x e) :: rest) =
-  walkAssign w scope loc x e
-  walkStmts w scope loc rest
-walkStmts w scope loc ((DoFieldAssign x _ e) :: rest) =
-  walkAssign w scope loc x e
-  walkStmts w scope loc rest
+walkStmts w scope0 loc xs0 = go scope0 xs0
+  where
+    go _ [] = ()
+    go scope ((DoExpr e) :: rest) =
+      walkExpr w scope loc e
+      go scope rest
+    go scope ((DoBind p e) :: rest) =
+      noteMentions w scope (patNames p)
+      walkExpr w scope loc e
+      go (mintFrame w (patSites BDoBind p) :: scope) rest
+    go scope ((DoLet _ isRec p e _) :: rest) =
+      noteMentions w scope (patNames p)
+      let frame = mintFrame w (patSites BLet p)
+      walkExpr w (letRhsScope isRec frame scope) loc e
+      go (frame :: scope) rest
+    go scope ((DoAssign x e) :: rest) =
+      walkAssign w scope loc x e
+      go scope rest
+    go scope ((DoFieldAssign x _ e) :: rest) =
+      walkAssign w scope loc x e
+      go scope rest
 
 -- An assignment uses its target and then walks the assigned expression.
 walkAssign : W -> List Frame -> Loc -> String -> Expr -> Unit

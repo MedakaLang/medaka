@@ -31,10 +31,12 @@ bodyComplexity body =
   countOpenParens cs (arrayLength cs) 0 0
 
 countOpenParens : Array Char -> Int -> Int -> Int -> Int
-countOpenParens cs n i acc
-  | i >= n = acc
-  | arrayGetUnsafe i cs == '(' = countOpenParens cs n (i + 1) (acc + 1)
-  | otherwise = countOpenParens cs n (i + 1) acc
+countOpenParens cs n i0 acc0 = go i0 acc0
+  where
+    go i acc
+      | i >= n = acc
+      | arrayGetUnsafe i cs == '(' = go (i + 1) (acc + 1)
+      | otherwise = go (i + 1) acc
 
 -- ── over-fire narrowing (#893): "pure data" bodies never fire ──────────────────
 -- A body built ENTIRELY out of literals, variable references, tuples/lists/

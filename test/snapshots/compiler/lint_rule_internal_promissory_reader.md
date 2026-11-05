@@ -1,5 +1,5 @@
 # META
-source_lines=339
+source_lines=346
 stages=DESUGAR,MARK
 # SOURCE
 -- lint rule rule-promissory-reader: a comment says a symbol has no reader yet, but the file reads it (#2550).
@@ -275,10 +275,12 @@ declaredInFile subject codeLines =
   declaredInFileGo subject codeLines (arrayLength codeLines) 1
 
 declaredInFileGo : String -> Array String -> Int -> Int -> Bool
-declaredInFileGo subject codeLines n line
-  | line > n = False
-  | isDefinitionLine subject (arrayGetUnsafe (line - 1) codeLines) = True
-  | otherwise = declaredInFileGo subject codeLines n (line + 1)
+declaredInFileGo subject codeLines n line0 = go line0
+  where
+    go line
+      | line > n = False
+      | isDefinitionLine subject (arrayGetUnsafe (line - 1) codeLines) = True
+      | otherwise = go (line + 1)
 
 readerCountSuffix : Int -> String
 readerCountSuffix 0 = ""
@@ -290,6 +292,8 @@ readerLines subject codeLines =
   readerLinesGo subject codeLines (arrayLength codeLines) 1
 
 readerLinesGo : String -> Array String -> Int -> Int -> List Int
+-- Bound: list built in tail position modulo cons: a where-local go loses the constant-stack loop until the lambda-lift pass (#4878); convert then.
+-- lint-disable-next-line rule-threaded-invariant
 readerLinesGo subject codeLines n line
   | line > n = []
   | isReaderLine subject (arrayGetUnsafe (line - 1) codeLines) =
@@ -337,10 +341,13 @@ wordReadOk cs n m =
     && not (assignFollows cs n m.end)
 
 assignFollows : Array Char -> Int -> Int -> Bool
-assignFollows cs n i
-  | i < n && arrayGetUnsafe i cs == ' ' = assignFollows cs n (i + 1)
-  | i + 1 < n = arrayGetUnsafe i cs == ':' && arrayGetUnsafe (i + 1) cs == '='
-  | otherwise = False
+assignFollows cs n i0 = go i0
+  where
+    go i
+      | i < n && arrayGetUnsafe i cs == ' ' = go (i + 1)
+      | i + 1 < n =
+        arrayGetUnsafe i cs == ':' && arrayGetUnsafe (i + 1) cs == '='
+      | otherwise = False
 # DESUGAR
 (DUse false (UseGroup ("frontend" "ast") ((mem "Loc" true) (mem "Decl" true))))
 (DUse false (UseGroup ("frontend" "parser") ((mem "Positions" true))))
@@ -402,7 +409,7 @@ assignFollows cs n i
 (DTypeSig false "declaredInFile" (TyFun (TyCon "String") (TyFun (TyApp (TyCon "Array") (TyCon "String")) (TyCon "Bool"))))
 (DFunDef false "declaredInFile" ((PVar "subject") (PVar "codeLines")) (EApp (EApp (EApp (EApp (EVar "declaredInFileGo") (EVar "subject")) (EVar "codeLines")) (EApp (EVar "arrayLength") (EVar "codeLines"))) (ELit (LInt 1))))
 (DTypeSig false "declaredInFileGo" (TyFun (TyCon "String") (TyFun (TyApp (TyCon "Array") (TyCon "String")) (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyCon "Bool"))))))
-(DFunDef false "declaredInFileGo" ((PVar "subject") (PVar "codeLines") (PVar "n") (PVar "line")) (EIf (EBinOp ">" (EVar "line") (EVar "n")) (EVar "False") (EIf (EApp (EApp (EVar "isDefinitionLine") (EVar "subject")) (EApp (EApp (EVar "arrayGetUnsafe") (EBinOp "-" (EVar "line") (ELit (LInt 1)))) (EVar "codeLines"))) (EVar "True") (EIf (EVar "otherwise") (EApp (EApp (EApp (EApp (EVar "declaredInFileGo") (EVar "subject")) (EVar "codeLines")) (EVar "n")) (EBinOp "+" (EVar "line") (ELit (LInt 1)))) (EApp (EVar "__fallthrough__") (ELit LUnit))))))
+(DFunDef false "declaredInFileGo" ((PVar "subject") (PVar "codeLines") (PVar "n") (PVar "line0")) (ELetGroup ((lgb "go" (clause ((PVar "line")) (EIf (EBinOp ">" (EVar "line") (EVar "n")) (EVar "False") (EIf (EApp (EApp (EVar "isDefinitionLine") (EVar "subject")) (EApp (EApp (EVar "arrayGetUnsafe") (EBinOp "-" (EVar "line") (ELit (LInt 1)))) (EVar "codeLines"))) (EVar "True") (EIf (EVar "otherwise") (EApp (EVar "go") (EBinOp "+" (EVar "line") (ELit (LInt 1)))) (EApp (EVar "__fallthrough__") (ELit LUnit)))))))) (EApp (EVar "go") (EVar "line0"))))
 (DTypeSig false "readerCountSuffix" (TyFun (TyCon "Int") (TyCon "String")))
 (DFunDef false "readerCountSuffix" ((PLit (LInt 0))) (ELit (LString "")))
 (DFunDef false "readerCountSuffix" ((PVar "n")) (EBinOp "++" (EBinOp "++" (ELit (LString " and ")) (EApp (EVar "display") (EVar "n"))) (ELit (LString " more line(s)"))))
@@ -421,7 +428,7 @@ assignFollows cs n i
 (DTypeSig false "wordReadOk" (TyFun (TyApp (TyCon "Array") (TyCon "Char")) (TyFun (TyCon "Int") (TyFun (TyCon "Match") (TyCon "Bool")))))
 (DFunDef false "wordReadOk" ((PVar "cs") (PVar "n") (PVar "m")) (EBinOp "&&" (EBinOp "&&" (EBinOp "||" (EBinOp "==" (EFieldAccess (EVar "m") "start") (ELit (LInt 0))) (EApp (EVar "not") (EApp (EVar "isIdentChar") (EApp (EApp (EVar "arrayGetUnsafe") (EBinOp "-" (EFieldAccess (EVar "m") "start") (ELit (LInt 1)))) (EVar "cs"))))) (EApp (EApp (EVar "identBoundaryAt") (EVar "cs")) (EFieldAccess (EVar "m") "end"))) (EApp (EVar "not") (EApp (EApp (EApp (EVar "assignFollows") (EVar "cs")) (EVar "n")) (EFieldAccess (EVar "m") "end")))))
 (DTypeSig false "assignFollows" (TyFun (TyApp (TyCon "Array") (TyCon "Char")) (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyCon "Bool")))))
-(DFunDef false "assignFollows" ((PVar "cs") (PVar "n") (PVar "i")) (EIf (EBinOp "&&" (EBinOp "<" (EVar "i") (EVar "n")) (EBinOp "==" (EApp (EApp (EVar "arrayGetUnsafe") (EVar "i")) (EVar "cs")) (ELit (LChar " ")))) (EApp (EApp (EApp (EVar "assignFollows") (EVar "cs")) (EVar "n")) (EBinOp "+" (EVar "i") (ELit (LInt 1)))) (EIf (EBinOp "<" (EBinOp "+" (EVar "i") (ELit (LInt 1))) (EVar "n")) (EBinOp "&&" (EBinOp "==" (EApp (EApp (EVar "arrayGetUnsafe") (EVar "i")) (EVar "cs")) (ELit (LChar ":"))) (EBinOp "==" (EApp (EApp (EVar "arrayGetUnsafe") (EBinOp "+" (EVar "i") (ELit (LInt 1)))) (EVar "cs")) (ELit (LChar "=")))) (EIf (EVar "otherwise") (EVar "False") (EApp (EVar "__fallthrough__") (ELit LUnit))))))
+(DFunDef false "assignFollows" ((PVar "cs") (PVar "n") (PVar "i0")) (ELetGroup ((lgb "go" (clause ((PVar "i")) (EIf (EBinOp "&&" (EBinOp "<" (EVar "i") (EVar "n")) (EBinOp "==" (EApp (EApp (EVar "arrayGetUnsafe") (EVar "i")) (EVar "cs")) (ELit (LChar " ")))) (EApp (EVar "go") (EBinOp "+" (EVar "i") (ELit (LInt 1)))) (EIf (EBinOp "<" (EBinOp "+" (EVar "i") (ELit (LInt 1))) (EVar "n")) (EBinOp "&&" (EBinOp "==" (EApp (EApp (EVar "arrayGetUnsafe") (EVar "i")) (EVar "cs")) (ELit (LChar ":"))) (EBinOp "==" (EApp (EApp (EVar "arrayGetUnsafe") (EBinOp "+" (EVar "i") (ELit (LInt 1)))) (EVar "cs")) (ELit (LChar "=")))) (EIf (EVar "otherwise") (EVar "False") (EApp (EVar "__fallthrough__") (ELit LUnit)))))))) (EApp (EVar "go") (EVar "i0"))))
 # MARK
 (DUse false (UseGroup ("frontend" "ast") ((mem "Loc" true) (mem "Decl" true))))
 (DUse false (UseGroup ("frontend" "parser") ((mem "Positions" true))))
@@ -483,7 +490,7 @@ assignFollows cs n i
 (DTypeSig false "declaredInFile" (TyFun (TyCon "String") (TyFun (TyApp (TyCon "Array") (TyCon "String")) (TyCon "Bool"))))
 (DFunDef false "declaredInFile" ((PVar "subject") (PVar "codeLines")) (EApp (EApp (EApp (EApp (EVar "declaredInFileGo") (EVar "subject")) (EVar "codeLines")) (EApp (EVar "arrayLength") (EVar "codeLines"))) (ELit (LInt 1))))
 (DTypeSig false "declaredInFileGo" (TyFun (TyCon "String") (TyFun (TyApp (TyCon "Array") (TyCon "String")) (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyCon "Bool"))))))
-(DFunDef false "declaredInFileGo" ((PVar "subject") (PVar "codeLines") (PVar "n") (PVar "line")) (EIf (EBinOp ">" (EVar "line") (EVar "n")) (EVar "False") (EIf (EApp (EApp (EVar "isDefinitionLine") (EVar "subject")) (EApp (EApp (EVar "arrayGetUnsafe") (EBinOp "-" (EVar "line") (ELit (LInt 1)))) (EVar "codeLines"))) (EVar "True") (EIf (EVar "otherwise") (EApp (EApp (EApp (EApp (EVar "declaredInFileGo") (EVar "subject")) (EVar "codeLines")) (EVar "n")) (EBinOp "+" (EVar "line") (ELit (LInt 1)))) (EApp (EVar "__fallthrough__") (ELit LUnit))))))
+(DFunDef false "declaredInFileGo" ((PVar "subject") (PVar "codeLines") (PVar "n") (PVar "line0")) (ELetGroup ((lgb "go" (clause ((PVar "line")) (EIf (EBinOp ">" (EVar "line") (EVar "n")) (EVar "False") (EIf (EApp (EApp (EVar "isDefinitionLine") (EVar "subject")) (EApp (EApp (EVar "arrayGetUnsafe") (EBinOp "-" (EVar "line") (ELit (LInt 1)))) (EVar "codeLines"))) (EVar "True") (EIf (EVar "otherwise") (EApp (EVar "go") (EBinOp "+" (EVar "line") (ELit (LInt 1)))) (EApp (EVar "__fallthrough__") (ELit LUnit)))))))) (EApp (EVar "go") (EVar "line0"))))
 (DTypeSig false "readerCountSuffix" (TyFun (TyCon "Int") (TyCon "String")))
 (DFunDef false "readerCountSuffix" ((PLit (LInt 0))) (ELit (LString "")))
 (DFunDef false "readerCountSuffix" ((PVar "n")) (EBinOp "++" (EBinOp "++" (ELit (LString " and ")) (EApp (EMethodRef "display") (EVar "n"))) (ELit (LString " more line(s)"))))
@@ -502,4 +509,4 @@ assignFollows cs n i
 (DTypeSig false "wordReadOk" (TyFun (TyApp (TyCon "Array") (TyCon "Char")) (TyFun (TyCon "Int") (TyFun (TyCon "Match") (TyCon "Bool")))))
 (DFunDef false "wordReadOk" ((PVar "cs") (PVar "n") (PVar "m")) (EBinOp "&&" (EBinOp "&&" (EBinOp "||" (EBinOp "==" (EFieldAccess (EVar "m") "start") (ELit (LInt 0))) (EApp (EVar "not") (EApp (EVar "isIdentChar") (EApp (EApp (EVar "arrayGetUnsafe") (EBinOp "-" (EFieldAccess (EVar "m") "start") (ELit (LInt 1)))) (EVar "cs"))))) (EApp (EApp (EVar "identBoundaryAt") (EVar "cs")) (EFieldAccess (EVar "m") "end"))) (EApp (EVar "not") (EApp (EApp (EApp (EVar "assignFollows") (EVar "cs")) (EVar "n")) (EFieldAccess (EVar "m") "end")))))
 (DTypeSig false "assignFollows" (TyFun (TyApp (TyCon "Array") (TyCon "Char")) (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyCon "Bool")))))
-(DFunDef false "assignFollows" ((PVar "cs") (PVar "n") (PVar "i")) (EIf (EBinOp "&&" (EBinOp "<" (EVar "i") (EVar "n")) (EBinOp "==" (EApp (EApp (EVar "arrayGetUnsafe") (EVar "i")) (EVar "cs")) (ELit (LChar " ")))) (EApp (EApp (EApp (EVar "assignFollows") (EVar "cs")) (EVar "n")) (EBinOp "+" (EVar "i") (ELit (LInt 1)))) (EIf (EBinOp "<" (EBinOp "+" (EVar "i") (ELit (LInt 1))) (EVar "n")) (EBinOp "&&" (EBinOp "==" (EApp (EApp (EVar "arrayGetUnsafe") (EVar "i")) (EVar "cs")) (ELit (LChar ":"))) (EBinOp "==" (EApp (EApp (EVar "arrayGetUnsafe") (EBinOp "+" (EVar "i") (ELit (LInt 1)))) (EVar "cs")) (ELit (LChar "=")))) (EIf (EVar "otherwise") (EVar "False") (EApp (EVar "__fallthrough__") (ELit LUnit))))))
+(DFunDef false "assignFollows" ((PVar "cs") (PVar "n") (PVar "i0")) (ELetGroup ((lgb "go" (clause ((PVar "i")) (EIf (EBinOp "&&" (EBinOp "<" (EVar "i") (EVar "n")) (EBinOp "==" (EApp (EApp (EVar "arrayGetUnsafe") (EVar "i")) (EVar "cs")) (ELit (LChar " ")))) (EApp (EVar "go") (EBinOp "+" (EVar "i") (ELit (LInt 1)))) (EIf (EBinOp "<" (EBinOp "+" (EVar "i") (ELit (LInt 1))) (EVar "n")) (EBinOp "&&" (EBinOp "==" (EApp (EApp (EVar "arrayGetUnsafe") (EVar "i")) (EVar "cs")) (ELit (LChar ":"))) (EBinOp "==" (EApp (EApp (EVar "arrayGetUnsafe") (EBinOp "+" (EVar "i") (ELit (LInt 1)))) (EVar "cs")) (ELit (LChar "=")))) (EIf (EVar "otherwise") (EVar "False") (EApp (EVar "__fallthrough__") (ELit LUnit)))))))) (EApp (EVar "go") (EVar "i0"))))

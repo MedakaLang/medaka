@@ -171,32 +171,36 @@ headerRe : Regex
 headerRe = mustCompile "^Content-Length: *([0-9]+)\r\n\r\n"
 
 pfGo : String -> Array Char -> Int -> Int -> (List Frame, Bool)
-pfGo s arr len i =
-  if i >= len then
-    ([], True)
-  else if isTrailingJunk arr len i then
-    ([], True)
-  else match find headerRe (stringSlice i (stringLength s) s)
-    None => ([], False)
-    Some m => match m.groups
-      [Some g] => match toInt g.text
+pfGo s arr len i0 = go i0
+  where
+    go i =
+      if i >= len then
+        ([], True)
+      else if isTrailingJunk arr len i then
+        ([], True)
+      else match find headerRe (stringSlice i (stringLength s) s)
         None => ([], False)
-        Some n =>
-          let bodyStart = i + m.end
-          match takeBytes arr len bodyStart n
-            None => ([Frame n "" False], False)
-            Some bodyEnd =>
-              let body = stringSlice bodyStart bodyEnd s
-              match pfGo s arr len bodyEnd
-                (rest, clean) => (Frame n body True :: rest, clean)
-      _ => ([], False)
+        Some m => match m.groups
+          [Some g] => match toInt g.text
+            None => ([], False)
+            Some n =>
+              let bodyStart = i + m.end
+              match takeBytes arr len bodyStart n
+                None => ([Frame n "" False], False)
+                Some bodyEnd =>
+                  let body = stringSlice bodyStart bodyEnd s
+                  match go bodyEnd
+                    (rest, clean) => (Frame n body True :: rest, clean)
+          _ => ([], False)
 
 -- Everything from i to end is trailing junk (the LSP's `0` unit-print + ws).
 isTrailingJunk : Array Char -> Int -> Int -> Bool
-isTrailingJunk arr len i
-  | i >= len = True
-  | isJunkChar (arrayGetUnsafe i arr) = isTrailingJunk arr len (i + 1)
-  | otherwise = False
+isTrailingJunk arr len i0 = go i0
+  where
+    go i
+      | i >= len = True
+      | isJunkChar (arrayGetUnsafe i arr) = go (i + 1)
+      | otherwise = False
 
 isJunkChar : Char -> Bool
 isJunkChar c =
@@ -209,22 +213,25 @@ matchesAt arr len i lit =
   matchesGo arr len i larr 0 (arrayLength larr)
 
 matchesGo : Array Char -> Int -> Int -> Array Char -> Int -> Int -> Bool
-matchesGo arr len i larr j llen
-  | j >= llen = True
-  | i + j >= len = False
-  | arrayGetUnsafe (i + j) arr == arrayGetUnsafe j larr =
-    matchesGo arr len i larr (j + 1) llen
-  | otherwise = False
+matchesGo arr len i larr j0 llen = go j0
+  where
+    go j
+      | j >= llen = True
+      | i + j >= len = False
+      | arrayGetUnsafe (i + j) arr == arrayGetUnsafe j larr = go (j + 1)
+      | otherwise = False
 
 -- Consume `remaining` BYTES from codepoint `i`; Some end-index on an exact
 -- boundary, None if a codepoint straddles the boundary or the stream runs out.
 takeBytes : Array Char -> Int -> Int -> Int -> Option Int
-takeBytes arr len i remaining
-  | remaining == 0 = Some i
-  | i >= len = None
-  | otherwise =
-    let w = utf8CharWidth (charCode (arrayGetUnsafe i arr))
-    if w > remaining then None else takeBytes arr len (i + 1) (remaining - w)
+takeBytes arr len i0 remaining0 = go i0 remaining0
+  where
+    go i remaining
+      | remaining == 0 = Some i
+      | i >= len = None
+      | otherwise =
+        let w = utf8CharWidth (charCode (arrayGetUnsafe i arr))
+        if w > remaining then None else go (i + 1) (remaining - w)
 
 -- ── response accessors ──────────────────────────────────────────────────────
 
@@ -267,10 +274,12 @@ completionHasLabel idn frames needle = match responseById idn frames
     _ => False
 
 anyLabelEq : Array Json -> Int -> Int -> String -> Bool
-anyLabelEq items i n needle
-  | i >= n = False
-  | labelEq (arrayGetUnsafe i items) needle = True
-  | otherwise = anyLabelEq items (i + 1) n needle
+anyLabelEq items i0 n needle = go i0
+  where
+    go i
+      | i >= n = False
+      | labelEq (arrayGetUnsafe i items) needle = True
+      | otherwise = go (i + 1)
 
 labelEq : Json -> String -> Bool
 labelEq it needle = match get "label" it
@@ -287,10 +296,12 @@ strContains hay needle =
   strContainsGo h (arrayLength h) needle 0
 
 strContainsGo : Array Char -> Int -> String -> Int -> Bool
-strContainsGo h hlen needle i
-  | i >= hlen = False
-  | matchesAt h hlen i needle = True
-  | otherwise = strContainsGo h hlen needle (i + 1)
+strContainsGo h hlen needle i0 = go i0
+  where
+    go i
+      | i >= hlen = False
+      | matchesAt h hlen i needle = True
+      | otherwise = go (i + 1)
 
 {- ── semanticTokens/full decode ──────────────────────────────────────────────
    The response carries `result.data`: a flat int array, 5 ints per token
@@ -311,6 +322,8 @@ semanticData idn frames = do
       _ => None
 
 jIntArrayToList : Array Json -> Int -> Int -> List Int
+-- Bound: list built in tail position modulo cons: a where-local go loses the constant-stack loop until the lambda-lift pass (#4878); convert then.
+-- lint-disable-next-line rule-threaded-invariant
 jIntArrayToList a i n
   | i >= n = []
   | otherwise = match asInt (arrayGetUnsafe i a)

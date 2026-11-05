@@ -335,6 +335,8 @@ jsonPairsToList : Array (String, Json) -> List (String, Json)
 jsonPairsToList arr = jsonPairsToListGo arr 0 (arrayLength arr)
 
 jsonPairsToListGo : Array (String, Json) -> Int -> Int -> List (String, Json)
+-- Bound: list built in tail position modulo cons: a where-local go loses the constant-stack loop until the lambda-lift pass (#4878); convert then.
+-- lint-disable-next-line rule-threaded-invariant
 jsonPairsToListGo arr i n
   | i >= n = []
   | otherwise = arrayGetUnsafe i arr :: jsonPairsToListGo arr (i + 1) n
@@ -637,10 +639,12 @@ lineTextAtIndexed index src line =
     (sourcePositionToOffset index (line + 1) 0)
 
 lineTextEnd : Array Char -> Int -> Int -> Int
-lineTextEnd arr len i
-  | i >= len = len
-  | arrayGetUnsafe i arr == '\n' || arrayGetUnsafe i arr == '\r' = i
-  | otherwise = lineTextEnd arr len (i + 1)
+lineTextEnd arr len i0 = go i0
+  where
+    go i
+      | i >= len = len
+      | arrayGetUnsafe i arr == '\n' || arrayGetUnsafe i arr == '\r' = i
+      | otherwise = go (i + 1)
 
 -- Every identifier token on `text` (the WIDE class `support.char.isIdentChar`
 -- runs — alnum, `_`, `'`), as (name, 0-based column) pairs in left-to-right
@@ -1452,6 +1456,8 @@ jsonArrToList : Array Json -> List Json
 jsonArrToList arr = jsonArrToListGo arr 0 (arrayLength arr)
 
 jsonArrToListGo : Array Json -> Int -> Int -> List Json
+-- Bound: list built in tail position modulo cons: a where-local go loses the constant-stack loop until the lambda-lift pass (#4878); convert then.
+-- lint-disable-next-line rule-threaded-invariant
 jsonArrToListGo arr i n
   | i >= n = []
   | otherwise = arrayGetUnsafe i arr :: jsonArrToListGo arr (i + 1) n
@@ -2124,31 +2130,25 @@ serveLoop : TraceContext ->
   (Unit -> <IO> Option String) ->
   String ->
   <IO> Unit
-serveLoop trace state runtimeSrc coreSrc stdlibDir stalenessCheck serverVersion =
-  match readLineOpt ()
-    None => unit
-    Some raw =>
-      let counter = trace.traceCounter
-      let requestId = intToString !counter
-      counter := !counter + 1
-      handleLine
-        trace
-        requestId
-        state
-        runtimeSrc
-        coreSrc
-        stdlibDir
-        raw
-        stalenessCheck
-        serverVersion
-      serveLoop
-        trace
-        state
-        runtimeSrc
-        coreSrc
-        stdlibDir
-        stalenessCheck
-        serverVersion
+serveLoop trace state runtimeSrc coreSrc stdlibDir staleCheck serverVer = go ()
+  where
+    go () = match readLineOpt ()
+      None => unit
+      Some raw =>
+        let counter = trace.traceCounter
+        let requestId = intToString !counter
+        counter := !counter + 1
+        handleLine
+          trace
+          requestId
+          state
+          runtimeSrc
+          coreSrc
+          stdlibDir
+          raw
+          staleCheck
+          serverVer
+        go ()
 
 -- Public entry point for the driver (`runMcpCmd` in medaka_cli.mdk).  The prelude
 -- sources + stdlib dir are threaded in so tools can run the compiler pipeline
@@ -2285,7 +2285,7 @@ runMcpServer runtimeSrc coreSrc stdlibDir stalenessCheck serverVersion =
 (DTypeSig false "lineTextAtIndexed" (TyFun (TyCon "SourceIndex") (TyFun (TyCon "String") (TyFun (TyCon "Int") (TyApp (TyCon "Option") (TyCon "String"))))))
 (DFunDef false "lineTextAtIndexed" ((PVar "index") (PVar "src") (PVar "line")) (EApp (EApp (EVar "map") (ELam ((PVar "start")) (EApp (EApp (EApp (EVar "stringSlice") (EVar "start")) (EApp (EApp (EApp (EVar "lineTextEnd") (EApp (EVar "stringToChars") (EVar "src"))) (EApp (EVar "stringLength") (EVar "src"))) (EVar "start"))) (EVar "src")))) (EApp (EApp (EApp (EVar "sourcePositionToOffset") (EVar "index")) (EBinOp "+" (EVar "line") (ELit (LInt 1)))) (ELit (LInt 0)))))
 (DTypeSig false "lineTextEnd" (TyFun (TyApp (TyCon "Array") (TyCon "Char")) (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyCon "Int")))))
-(DFunDef false "lineTextEnd" ((PVar "arr") (PVar "len") (PVar "i")) (EIf (EBinOp ">=" (EVar "i") (EVar "len")) (EVar "len") (EIf (EBinOp "||" (EBinOp "==" (EApp (EApp (EVar "arrayGetUnsafe") (EVar "i")) (EVar "arr")) (ELit (LChar "\n"))) (EBinOp "==" (EApp (EApp (EVar "arrayGetUnsafe") (EVar "i")) (EVar "arr")) (ELit (LChar "\r")))) (EVar "i") (EIf (EVar "otherwise") (EApp (EApp (EApp (EVar "lineTextEnd") (EVar "arr")) (EVar "len")) (EBinOp "+" (EVar "i") (ELit (LInt 1)))) (EApp (EVar "__fallthrough__") (ELit LUnit))))))
+(DFunDef false "lineTextEnd" ((PVar "arr") (PVar "len") (PVar "i0")) (ELetGroup ((lgb "go" (clause ((PVar "i")) (EIf (EBinOp ">=" (EVar "i") (EVar "len")) (EVar "len") (EIf (EBinOp "||" (EBinOp "==" (EApp (EApp (EVar "arrayGetUnsafe") (EVar "i")) (EVar "arr")) (ELit (LChar "\n"))) (EBinOp "==" (EApp (EApp (EVar "arrayGetUnsafe") (EVar "i")) (EVar "arr")) (ELit (LChar "\r")))) (EVar "i") (EIf (EVar "otherwise") (EApp (EVar "go") (EBinOp "+" (EVar "i") (ELit (LInt 1)))) (EApp (EVar "__fallthrough__") (ELit LUnit)))))))) (EApp (EVar "go") (EVar "i0"))))
 (DTypeSig false "identTokenRe" (TyCon "Regex"))
 (DFunDef false "identTokenRe" () (EApp (EVar "mustCompile") (ELit (LString "[A-Za-z0-9_']+"))))
 (DTypeSig false "identifiersInLine" (TyFun (TyCon "String") (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "Int")))))
@@ -2480,7 +2480,7 @@ runMcpServer runtimeSrc coreSrc stdlibDir stalenessCheck serverVersion =
 (DTypeSig false "handleLine" (TyFun (TyCon "TraceContext") (TyFun (TyCon "String") (TyFun (TyApp (TyCon "Ref") (TyCon "McpSyntaxState")) (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyFun (TyCon "Unit") (TyEffect ("IO") None (TyApp (TyCon "Option") (TyCon "String")))) (TyFun (TyCon "String") (TyEffect ("IO") None (TyCon "Unit"))))))))))))
 (DFunDef false "handleLine" ((PVar "trace") (PVar "requestId") (PVar "state") (PVar "runtimeSrc") (PVar "coreSrc") (PVar "stdlibDir") (PVar "raw") (PVar "stalenessCheck") (PVar "serverVersion")) (EBlock (DoLet false false (PVar "line") (EApp (EVar "stripCR") (EVar "raw"))) (DoExpr (EIf (EBinOp "==" (EVar "line") (ELit (LString ""))) (EVar "unit") (EMatch (EApp (EVar "parse") (EVar "line")) (arm (PCon "Err" (PVar "e")) () (EApp (EVar "logMcp") (EApp (EVar "stringConcat") (EListLit (ELit (LString "parse error (skipped): ")) (EVar "e"))))) (arm (PCon "Ok" (PVar "msg")) () (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EVar "dispatchMsg") (EVar "trace")) (EVar "requestId")) (EVar "state")) (EVar "runtimeSrc")) (EVar "coreSrc")) (EVar "stdlibDir")) (EVar "msg")) (EVar "stalenessCheck")) (EVar "serverVersion"))))))))
 (DTypeSig false "serveLoop" (TyFun (TyCon "TraceContext") (TyFun (TyApp (TyCon "Ref") (TyCon "McpSyntaxState")) (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyFun (TyCon "Unit") (TyEffect ("IO") None (TyApp (TyCon "Option") (TyCon "String")))) (TyFun (TyCon "String") (TyEffect ("IO") None (TyCon "Unit"))))))))))
-(DFunDef false "serveLoop" ((PVar "trace") (PVar "state") (PVar "runtimeSrc") (PVar "coreSrc") (PVar "stdlibDir") (PVar "stalenessCheck") (PVar "serverVersion")) (EMatch (EApp (EVar "readLineOpt") (ELit LUnit)) (arm (PCon "None") () (EVar "unit")) (arm (PCon "Some" (PVar "raw")) () (EBlock (DoLet false false (PVar "counter") (EFieldAccess (EVar "trace") "traceCounter")) (DoLet false false (PVar "requestId") (EApp (EVar "intToString") (EUnOp "!" (EVar "counter")))) (DoExpr (EApp (EApp (EVar "setRef") (EVar "counter")) (EBinOp "+" (EUnOp "!" (EVar "counter")) (ELit (LInt 1))))) (DoExpr (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EVar "handleLine") (EVar "trace")) (EVar "requestId")) (EVar "state")) (EVar "runtimeSrc")) (EVar "coreSrc")) (EVar "stdlibDir")) (EVar "raw")) (EVar "stalenessCheck")) (EVar "serverVersion"))) (DoExpr (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EVar "serveLoop") (EVar "trace")) (EVar "state")) (EVar "runtimeSrc")) (EVar "coreSrc")) (EVar "stdlibDir")) (EVar "stalenessCheck")) (EVar "serverVersion")))))))
+(DFunDef false "serveLoop" ((PVar "trace") (PVar "state") (PVar "runtimeSrc") (PVar "coreSrc") (PVar "stdlibDir") (PVar "staleCheck") (PVar "serverVer")) (ELetGroup ((lgb "go" (clause ((PLit LUnit)) (EMatch (EApp (EVar "readLineOpt") (ELit LUnit)) (arm (PCon "None") () (EVar "unit")) (arm (PCon "Some" (PVar "raw")) () (EBlock (DoLet false false (PVar "counter") (EFieldAccess (EVar "trace") "traceCounter")) (DoLet false false (PVar "requestId") (EApp (EVar "intToString") (EUnOp "!" (EVar "counter")))) (DoExpr (EApp (EApp (EVar "setRef") (EVar "counter")) (EBinOp "+" (EUnOp "!" (EVar "counter")) (ELit (LInt 1))))) (DoExpr (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EVar "handleLine") (EVar "trace")) (EVar "requestId")) (EVar "state")) (EVar "runtimeSrc")) (EVar "coreSrc")) (EVar "stdlibDir")) (EVar "raw")) (EVar "staleCheck")) (EVar "serverVer"))) (DoExpr (EApp (EVar "go") (ELit LUnit))))))))) (EApp (EVar "go") (ELit LUnit))))
 (DTypeSig true "runMcpServer" (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyFun (TyCon "Unit") (TyEffect ("IO") None (TyApp (TyCon "Option") (TyCon "String")))) (TyFun (TyCon "String") (TyEffect ("IO") None (TyCon "Unit"))))))))
 (DFunDef false "runMcpServer" ((PVar "runtimeSrc") (PVar "coreSrc") (PVar "stdlibDir") (PVar "stalenessCheck") (PVar "serverVersion")) (EBlock (DoExpr (EApp (EVar "logMcp") (ELit (LString "medaka mcp server start")))) (DoLet false false (PVar "path") (EApp (EApp (EVar "optionOr") (ELit (LString ""))) (EApp (EVar "getEnv") (ELit (LString "MEDAKA_MCP_TRACE"))))) (DoLet false false (PVar "settings") (EIf (EBinOp "==" (EVar "path") (ELit (LString ""))) (EVar "None") (EApp (EVar "Some") (ERecordCreate "TraceSettings" ((fa "tracePath" (EVar "path")) (fa "traceSession" (EApp (EApp (EVar "optionOr") (ELit (LString "session"))) (EApp (EVar "getEnv") (ELit (LString "MEDAKA_MCP_TRACE_SESSION"))))) (fa "traceClassification" (EIf (EBinOp "==" (EApp (EVar "getEnv") (ELit (LString "MEDAKA_MCP_TRACE_CLASS"))) (EApp (EVar "Some") (ELit (LString "probe")))) (ELit (LString "probe")) (ELit (LString "organic"))))))))) (DoLet false false (PVar "trace") (ERecordCreate "TraceContext" ((fa "traceSettings" (EVar "settings")) (fa "traceCounter" (EApp (EVar "Ref") (ELit (LInt 0))))))) (DoExpr (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EVar "serveLoop") (EVar "trace")) (EApp (EVar "Ref") (EVar "emptyMcpSyntaxState"))) (EVar "runtimeSrc")) (EVar "coreSrc")) (EVar "stdlibDir")) (EVar "stalenessCheck")) (EVar "serverVersion")))))
 # MARK
@@ -2579,7 +2579,7 @@ runMcpServer runtimeSrc coreSrc stdlibDir stalenessCheck serverVersion =
 (DTypeSig false "lineTextAtIndexed" (TyFun (TyCon "SourceIndex") (TyFun (TyCon "String") (TyFun (TyCon "Int") (TyApp (TyCon "Option") (TyCon "String"))))))
 (DFunDef false "lineTextAtIndexed" ((PVar "index") (PVar "src") (PVar "line")) (EApp (EApp (EMethodRef "map") (ELam ((PVar "start")) (EApp (EApp (EApp (EVar "stringSlice") (EVar "start")) (EApp (EApp (EApp (EVar "lineTextEnd") (EApp (EVar "stringToChars") (EVar "src"))) (EApp (EVar "stringLength") (EVar "src"))) (EVar "start"))) (EVar "src")))) (EApp (EApp (EApp (EVar "sourcePositionToOffset") (EMethodRef "index")) (EBinOp "+" (EVar "line") (ELit (LInt 1)))) (ELit (LInt 0)))))
 (DTypeSig false "lineTextEnd" (TyFun (TyApp (TyCon "Array") (TyCon "Char")) (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyCon "Int")))))
-(DFunDef false "lineTextEnd" ((PVar "arr") (PVar "len") (PVar "i")) (EIf (EBinOp ">=" (EVar "i") (EVar "len")) (EVar "len") (EIf (EBinOp "||" (EBinOp "==" (EApp (EApp (EVar "arrayGetUnsafe") (EVar "i")) (EVar "arr")) (ELit (LChar "\n"))) (EBinOp "==" (EApp (EApp (EVar "arrayGetUnsafe") (EVar "i")) (EVar "arr")) (ELit (LChar "\r")))) (EVar "i") (EIf (EVar "otherwise") (EApp (EApp (EApp (EVar "lineTextEnd") (EVar "arr")) (EVar "len")) (EBinOp "+" (EVar "i") (ELit (LInt 1)))) (EApp (EVar "__fallthrough__") (ELit LUnit))))))
+(DFunDef false "lineTextEnd" ((PVar "arr") (PVar "len") (PVar "i0")) (ELetGroup ((lgb "go" (clause ((PVar "i")) (EIf (EBinOp ">=" (EVar "i") (EVar "len")) (EVar "len") (EIf (EBinOp "||" (EBinOp "==" (EApp (EApp (EVar "arrayGetUnsafe") (EVar "i")) (EVar "arr")) (ELit (LChar "\n"))) (EBinOp "==" (EApp (EApp (EVar "arrayGetUnsafe") (EVar "i")) (EVar "arr")) (ELit (LChar "\r")))) (EVar "i") (EIf (EVar "otherwise") (EApp (EVar "go") (EBinOp "+" (EVar "i") (ELit (LInt 1)))) (EApp (EVar "__fallthrough__") (ELit LUnit)))))))) (EApp (EVar "go") (EVar "i0"))))
 (DTypeSig false "identTokenRe" (TyCon "Regex"))
 (DFunDef false "identTokenRe" () (EApp (EVar "mustCompile") (ELit (LString "[A-Za-z0-9_']+"))))
 (DTypeSig false "identifiersInLine" (TyFun (TyCon "String") (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "Int")))))
@@ -2774,6 +2774,6 @@ runMcpServer runtimeSrc coreSrc stdlibDir stalenessCheck serverVersion =
 (DTypeSig false "handleLine" (TyFun (TyCon "TraceContext") (TyFun (TyCon "String") (TyFun (TyApp (TyCon "Ref") (TyCon "McpSyntaxState")) (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyFun (TyCon "Unit") (TyEffect ("IO") None (TyApp (TyCon "Option") (TyCon "String")))) (TyFun (TyCon "String") (TyEffect ("IO") None (TyCon "Unit"))))))))))))
 (DFunDef false "handleLine" ((PVar "trace") (PVar "requestId") (PVar "state") (PVar "runtimeSrc") (PVar "coreSrc") (PVar "stdlibDir") (PVar "raw") (PVar "stalenessCheck") (PVar "serverVersion")) (EBlock (DoLet false false (PVar "line") (EApp (EVar "stripCR") (EVar "raw"))) (DoExpr (EIf (EBinOp "==" (EVar "line") (ELit (LString ""))) (EVar "unit") (EMatch (EApp (EVar "parse") (EVar "line")) (arm (PCon "Err" (PVar "e")) () (EApp (EVar "logMcp") (EApp (EVar "stringConcat") (EListLit (ELit (LString "parse error (skipped): ")) (EVar "e"))))) (arm (PCon "Ok" (PVar "msg")) () (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EVar "dispatchMsg") (EVar "trace")) (EVar "requestId")) (EVar "state")) (EVar "runtimeSrc")) (EVar "coreSrc")) (EVar "stdlibDir")) (EVar "msg")) (EVar "stalenessCheck")) (EVar "serverVersion"))))))))
 (DTypeSig false "serveLoop" (TyFun (TyCon "TraceContext") (TyFun (TyApp (TyCon "Ref") (TyCon "McpSyntaxState")) (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyFun (TyCon "Unit") (TyEffect ("IO") None (TyApp (TyCon "Option") (TyCon "String")))) (TyFun (TyCon "String") (TyEffect ("IO") None (TyCon "Unit"))))))))))
-(DFunDef false "serveLoop" ((PVar "trace") (PVar "state") (PVar "runtimeSrc") (PVar "coreSrc") (PVar "stdlibDir") (PVar "stalenessCheck") (PVar "serverVersion")) (EMatch (EApp (EVar "readLineOpt") (ELit LUnit)) (arm (PCon "None") () (EVar "unit")) (arm (PCon "Some" (PVar "raw")) () (EBlock (DoLet false false (PVar "counter") (EFieldAccess (EVar "trace") "traceCounter")) (DoLet false false (PVar "requestId") (EApp (EVar "intToString") (EUnOp "!" (EVar "counter")))) (DoExpr (EApp (EApp (EVar "setRef") (EVar "counter")) (EBinOp "+" (EUnOp "!" (EVar "counter")) (ELit (LInt 1))))) (DoExpr (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EVar "handleLine") (EVar "trace")) (EVar "requestId")) (EVar "state")) (EVar "runtimeSrc")) (EVar "coreSrc")) (EVar "stdlibDir")) (EVar "raw")) (EVar "stalenessCheck")) (EVar "serverVersion"))) (DoExpr (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EVar "serveLoop") (EVar "trace")) (EVar "state")) (EVar "runtimeSrc")) (EVar "coreSrc")) (EVar "stdlibDir")) (EVar "stalenessCheck")) (EVar "serverVersion")))))))
+(DFunDef false "serveLoop" ((PVar "trace") (PVar "state") (PVar "runtimeSrc") (PVar "coreSrc") (PVar "stdlibDir") (PVar "staleCheck") (PVar "serverVer")) (ELetGroup ((lgb "go" (clause ((PLit LUnit)) (EMatch (EApp (EVar "readLineOpt") (ELit LUnit)) (arm (PCon "None") () (EVar "unit")) (arm (PCon "Some" (PVar "raw")) () (EBlock (DoLet false false (PVar "counter") (EFieldAccess (EVar "trace") "traceCounter")) (DoLet false false (PVar "requestId") (EApp (EVar "intToString") (EUnOp "!" (EVar "counter")))) (DoExpr (EApp (EApp (EVar "setRef") (EVar "counter")) (EBinOp "+" (EUnOp "!" (EVar "counter")) (ELit (LInt 1))))) (DoExpr (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EVar "handleLine") (EVar "trace")) (EVar "requestId")) (EVar "state")) (EVar "runtimeSrc")) (EVar "coreSrc")) (EVar "stdlibDir")) (EVar "raw")) (EVar "staleCheck")) (EVar "serverVer"))) (DoExpr (EApp (EVar "go") (ELit LUnit))))))))) (EApp (EVar "go") (ELit LUnit))))
 (DTypeSig true "runMcpServer" (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyFun (TyCon "Unit") (TyEffect ("IO") None (TyApp (TyCon "Option") (TyCon "String")))) (TyFun (TyCon "String") (TyEffect ("IO") None (TyCon "Unit"))))))))
 (DFunDef false "runMcpServer" ((PVar "runtimeSrc") (PVar "coreSrc") (PVar "stdlibDir") (PVar "stalenessCheck") (PVar "serverVersion")) (EBlock (DoExpr (EApp (EVar "logMcp") (ELit (LString "medaka mcp server start")))) (DoLet false false (PVar "path") (EApp (EApp (EVar "optionOr") (ELit (LString ""))) (EApp (EVar "getEnv") (ELit (LString "MEDAKA_MCP_TRACE"))))) (DoLet false false (PVar "settings") (EIf (EBinOp "==" (EVar "path") (ELit (LString ""))) (EVar "None") (EApp (EVar "Some") (ERecordCreate "TraceSettings" ((fa "tracePath" (EVar "path")) (fa "traceSession" (EApp (EApp (EVar "optionOr") (ELit (LString "session"))) (EApp (EVar "getEnv") (ELit (LString "MEDAKA_MCP_TRACE_SESSION"))))) (fa "traceClassification" (EIf (EBinOp "==" (EApp (EVar "getEnv") (ELit (LString "MEDAKA_MCP_TRACE_CLASS"))) (EApp (EVar "Some") (ELit (LString "probe")))) (ELit (LString "probe")) (ELit (LString "organic"))))))))) (DoLet false false (PVar "trace") (ERecordCreate "TraceContext" ((fa "traceSettings" (EVar "settings")) (fa "traceCounter" (EApp (EVar "Ref") (ELit (LInt 0))))))) (DoExpr (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EVar "serveLoop") (EVar "trace")) (EApp (EVar "Ref") (EVar "emptyMcpSyntaxState"))) (EVar "runtimeSrc")) (EVar "coreSrc")) (EVar "stdlibDir")) (EVar "stalenessCheck")) (EVar "serverVersion")))))

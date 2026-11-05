@@ -1,5 +1,5 @@
 # META
-source_lines=512
+source_lines=516
 stages=DESUGAR,MARK
 # SOURCE
 -- compiler/tools/lint_cache.mdk — the on-disk cache behind `medaka lint --cache` (#395).
@@ -193,6 +193,8 @@ sanitizePath p =
   stringFromChars (arrayFromList (sanitizeGo cs start n))
 
 sanitizeGo : Array Char -> Int -> Int -> List Char
+-- Bound: list built in tail position modulo cons: a where-local go loses the constant-stack loop until the lambda-lift pass (#4878); convert then.
+-- lint-disable-next-line rule-threaded-invariant
 sanitizeGo cs i n
   | i >= n = []
   | otherwise = sanitizeChar (arrayGetUnsafe i cs) :: sanitizeGo cs (i + 1) n
@@ -488,10 +490,12 @@ entryDirty : LintEntry -> Bool
 entryDirty e = e.dirty
 
 storeGo : String -> String -> String -> List LintEntry -> <IO> Unit
-storeGo _ _ _ [] = ()
-storeGo cacheDir tmp stamp (e :: rest) =
-  storeOne cacheDir tmp stamp e
-  storeGo cacheDir tmp stamp rest
+storeGo cacheDir tmp stamp xs0 = go xs0
+  where
+    go [] = ()
+    go (e :: rest) =
+      storeOne cacheDir tmp stamp e
+      go rest
 
 -- Stage under the temp dir, then rename ONTO the shard path (same filesystem —
 -- the temp dir is inside the cache dir).  A failed write leaves the staged file
@@ -602,8 +606,7 @@ ensureCacheDir cacheDir =
 (DTypeSig false "entryDirty" (TyFun (TyCon "LintEntry") (TyCon "Bool")))
 (DFunDef false "entryDirty" ((PVar "e")) (EFieldAccess (EVar "e") "dirty"))
 (DTypeSig false "storeGo" (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "LintEntry")) (TyEffect ("IO") None (TyCon "Unit")))))))
-(DFunDef false "storeGo" (PWild PWild PWild (PList)) (ELit LUnit))
-(DFunDef false "storeGo" ((PVar "cacheDir") (PVar "tmp") (PVar "stamp") (PCons (PVar "e") (PVar "rest"))) (EBlock (DoExpr (EApp (EApp (EApp (EApp (EVar "storeOne") (EVar "cacheDir")) (EVar "tmp")) (EVar "stamp")) (EVar "e"))) (DoExpr (EApp (EApp (EApp (EApp (EVar "storeGo") (EVar "cacheDir")) (EVar "tmp")) (EVar "stamp")) (EVar "rest")))))
+(DFunDef false "storeGo" ((PVar "cacheDir") (PVar "tmp") (PVar "stamp") (PVar "xs0")) (ELetGroup ((lgb "go" (clause ((PList)) (ELit LUnit)) (clause ((PCons (PVar "e") (PVar "rest"))) (EBlock (DoExpr (EApp (EApp (EApp (EApp (EVar "storeOne") (EVar "cacheDir")) (EVar "tmp")) (EVar "stamp")) (EVar "e"))) (DoExpr (EApp (EVar "go") (EVar "rest"))))))) (EApp (EVar "go") (EVar "xs0"))))
 (DTypeSig false "storeOne" (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyCon "LintEntry") (TyEffect ("IO") None (TyCon "Unit")))))))
 (DFunDef false "storeOne" ((PVar "cacheDir") (PVar "tmp") (PVar "stamp") (PVar "e")) (EApp (EApp (EApp (EVar "stageAndRename") (EVar "tmp")) (EApp (EApp (EVar "shardPathOf") (EVar "cacheDir")) (EFieldAccess (EVar "e") "path"))) (EApp (EApp (EVar "encodeEntry") (EVar "stamp")) (EVar "e"))))
 (DTypeSig false "ensureCacheDir" (TyFun (TyCon "String") (TyEffect ("IO") None (TyApp (TyApp (TyCon "Result") (TyCon "String")) (TyCon "Unit")))))
@@ -696,8 +699,7 @@ ensureCacheDir cacheDir =
 (DTypeSig false "entryDirty" (TyFun (TyCon "LintEntry") (TyCon "Bool")))
 (DFunDef false "entryDirty" ((PVar "e")) (EFieldAccess (EVar "e") "dirty"))
 (DTypeSig false "storeGo" (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "LintEntry")) (TyEffect ("IO") None (TyCon "Unit")))))))
-(DFunDef false "storeGo" (PWild PWild PWild (PList)) (ELit LUnit))
-(DFunDef false "storeGo" ((PVar "cacheDir") (PVar "tmp") (PVar "stamp") (PCons (PVar "e") (PVar "rest"))) (EBlock (DoExpr (EApp (EApp (EApp (EApp (EVar "storeOne") (EVar "cacheDir")) (EVar "tmp")) (EVar "stamp")) (EVar "e"))) (DoExpr (EApp (EApp (EApp (EApp (EVar "storeGo") (EVar "cacheDir")) (EVar "tmp")) (EVar "stamp")) (EVar "rest")))))
+(DFunDef false "storeGo" ((PVar "cacheDir") (PVar "tmp") (PVar "stamp") (PVar "xs0")) (ELetGroup ((lgb "go" (clause ((PList)) (ELit LUnit)) (clause ((PCons (PVar "e") (PVar "rest"))) (EBlock (DoExpr (EApp (EApp (EApp (EApp (EVar "storeOne") (EVar "cacheDir")) (EVar "tmp")) (EVar "stamp")) (EVar "e"))) (DoExpr (EApp (EVar "go") (EVar "rest"))))))) (EApp (EVar "go") (EVar "xs0"))))
 (DTypeSig false "storeOne" (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyCon "LintEntry") (TyEffect ("IO") None (TyCon "Unit")))))))
 (DFunDef false "storeOne" ((PVar "cacheDir") (PVar "tmp") (PVar "stamp") (PVar "e")) (EApp (EApp (EApp (EVar "stageAndRename") (EVar "tmp")) (EApp (EApp (EVar "shardPathOf") (EVar "cacheDir")) (EFieldAccess (EVar "e") "path"))) (EApp (EApp (EVar "encodeEntry") (EVar "stamp")) (EVar "e"))))
 (DTypeSig false "ensureCacheDir" (TyFun (TyCon "String") (TyEffect ("IO") None (TyApp (TyApp (TyCon "Result") (TyCon "String")) (TyCon "Unit")))))

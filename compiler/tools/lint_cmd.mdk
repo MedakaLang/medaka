@@ -529,6 +529,8 @@ lintFilesToDiagQuads : StdlibIndex ->
   Option (String, LintBaseline) ->
   List String ->
   <IO> List (String, String, List Diag, Positions, List Decl)
+-- Bound: list built in tail position modulo cons: a where-local go loses the constant-stack loop until the lambda-lift pass (#4878); convert then.
+-- lint-disable-next-line rule-threaded-invariant
 lintFilesToDiagQuads _ _ _ _ _ _ [] = []
 lintFilesToDiagQuads idx internalFlag disable only deny baseCtx (f :: rest) =
   let fileDisable = disable ++ internalDisabledFor internalFlag f
@@ -560,6 +562,8 @@ lintFilesToDiagTriples : StdlibIndex ->
   Option (String, LintBaseline) ->
   List String ->
   <IO> List (String, String, List Diag)
+-- Bound: list built in tail position modulo cons: a where-local go loses the constant-stack loop until the lambda-lift pass (#4878); convert then.
+-- lint-disable-next-line rule-threaded-invariant
 lintFilesToDiagTriples _ _ _ _ _ _ [] = []
 lintFilesToDiagTriples idx internalFlag disable only deny baseCtx (f :: rest) =
   let fileDisable = disable ++ internalDisabledFor internalFlag f
@@ -749,15 +753,17 @@ dropInactiveInternalProject : List ProjectRule ->
   Bool ->
   List Finding ->
   <IO> List Finding
-dropInactiveInternalProject _ _ [] = []
-dropInactiveInternalProject rules internalFlag (f :: rest) =
-  let keep =
-    if isInternalProjectRule rules f.rule then
-      findingInActiveProject internalFlag f
-    else
-      True
-  let kept = dropInactiveInternalProject rules internalFlag rest
-  if keep then f :: kept else kept
+dropInactiveInternalProject rules internalFlag fs0 = go fs0
+  where
+    go [] = []
+    go (f :: rest) =
+      let keep =
+        if isInternalProjectRule rules (f : Finding).rule then
+          findingInActiveProject internalFlag f
+        else
+          True
+      let kept = go rest
+      if keep then f :: kept else kept
 
 isInternalProjectRule : List ProjectRule -> String -> Bool
 isInternalProjectRule rules name = anyList (isInternalProjectNamed name) rules
@@ -833,6 +839,8 @@ lintFilesGo : StdlibIndex ->
   List String ->
   Bool ->
   <IO> (Bool, List LintEntry)
+-- Bound: the where-go head line of `lintFilesGo` exceeds 80 columns, which the formatter lays out as a form the parser rejects (#4896); convert once that is fixed.
+-- lint-disable-next-line rule-threaded-invariant
 lintFilesGo _ _ _ _ _ _ _ [] acc = (acc, [])
 lintFilesGo idx run disableNames onlyNames denyNames baseCtx cacheCtx (f :: rest) acc =
   let fileDisable = disableNames ++ internalDisabledFor run.lrInternal f

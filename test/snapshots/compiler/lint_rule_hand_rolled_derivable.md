@@ -1,5 +1,5 @@
 # META
-source_lines=117
+source_lines=118
 stages=DESUGAR,MARK
 # SOURCE
 -- lint rule rule-hand-rolled-derivable: hand-written Eq/Ord/Debug impl that could be `deriving` (STYLE §6).
@@ -78,10 +78,11 @@ derivableDeclL : Oracle -> (Decl, Option Loc) -> List Finding
 derivableDeclL orc (d, loc) = derivableDecl orc loc d
 
 derivableDecl : Oracle -> Option Loc -> Decl -> List Finding
-derivableDecl orc loc (DImpl { iface, tys, ... }) =
-  derivableHit orc loc iface tys
-derivableDecl orc loc (DAttrib _ d) = derivableDecl orc loc d
-derivableDecl _ _ _ = []
+derivableDecl orc loc x0 = go x0
+  where
+    go (DImpl { iface, tys, ... }) = derivableHit orc loc iface tys
+    go (DAttrib _ d) = go d
+    go _ = []
 
 derivableHit : Oracle -> Option Loc -> String -> List Ty -> List Finding
 derivableHit orc loc iface tys
@@ -136,9 +137,7 @@ singleNamedType _ = None
 (DTypeSig false "derivableDeclL" (TyFun (TyCon "Oracle") (TyFun (TyTuple (TyCon "Decl") (TyApp (TyCon "Option") (TyCon "Loc"))) (TyApp (TyCon "List") (TyCon "Finding")))))
 (DFunDef false "derivableDeclL" ((PVar "orc") (PTuple (PVar "d") (PVar "loc"))) (EApp (EApp (EApp (EVar "derivableDecl") (EVar "orc")) (EVar "loc")) (EVar "d")))
 (DTypeSig false "derivableDecl" (TyFun (TyCon "Oracle") (TyFun (TyApp (TyCon "Option") (TyCon "Loc")) (TyFun (TyCon "Decl") (TyApp (TyCon "List") (TyCon "Finding"))))))
-(DFunDef false "derivableDecl" ((PVar "orc") (PVar "loc") (PRec "DImpl" ((rf "iface" None) (rf "tys" None)) true)) (EApp (EApp (EApp (EApp (EVar "derivableHit") (EVar "orc")) (EVar "loc")) (EVar "iface")) (EVar "tys")))
-(DFunDef false "derivableDecl" ((PVar "orc") (PVar "loc") (PCon "DAttrib" PWild (PVar "d"))) (EApp (EApp (EApp (EVar "derivableDecl") (EVar "orc")) (EVar "loc")) (EVar "d")))
-(DFunDef false "derivableDecl" (PWild PWild PWild) (EListLit))
+(DFunDef false "derivableDecl" ((PVar "orc") (PVar "loc") (PVar "x0")) (ELetGroup ((lgb "go" (clause ((PRec "DImpl" ((rf "iface" None) (rf "tys" None)) true)) (EApp (EApp (EApp (EApp (EVar "derivableHit") (EVar "orc")) (EVar "loc")) (EVar "iface")) (EVar "tys"))) (clause ((PCon "DAttrib" PWild (PVar "d"))) (EApp (EVar "go") (EVar "d"))) (clause (PWild) (EListLit)))) (EApp (EVar "go") (EVar "x0"))))
 (DTypeSig false "derivableHit" (TyFun (TyCon "Oracle") (TyFun (TyApp (TyCon "Option") (TyCon "Loc")) (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "Ty")) (TyApp (TyCon "List") (TyCon "Finding")))))))
 (DFunDef false "derivableHit" ((PVar "orc") (PVar "loc") (PVar "iface") (PVar "tys")) (EIf (EApp (EApp (EVar "contains") (EVar "iface")) (EVar "derivableIfaces")) (EMatch (EApp (EVar "singleNamedType") (EVar "tys")) (arm (PCon "Some" (PVar "tyName")) () (EIf (EApp (EApp (EVar "hasUserDataDecl") (EVar "orc")) (EVar "tyName")) (EListLit (ERecordCreate "Finding" ((fa "rule" (EVar "ruleNameDerivable")) (fa "message" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "hand-written `impl ")) (EApp (EVar "display") (EVar "iface"))) (ELit (LString "` for '"))) (EApp (EVar "display") (EVar "tyName"))) (ELit (LString "' — use `deriving ("))) (EApp (EVar "display") (EVar "iface"))) (ELit (LString ")`")))) (fa "severity" (EVar "SevWarning")) (fa "loc" (EVar "loc")) (fa "fix" (EVar "None"))))) (EListLit))) (arm (PCon "None") () (EListLit))) (EIf (EVar "otherwise") (EListLit) (EApp (EVar "__fallthrough__") (ELit LUnit)))))
 (DTypeSig false "hasUserDataDecl" (TyFun (TyCon "Oracle") (TyFun (TyCon "String") (TyCon "Bool"))))
@@ -163,9 +162,7 @@ singleNamedType _ = None
 (DTypeSig false "derivableDeclL" (TyFun (TyCon "Oracle") (TyFun (TyTuple (TyCon "Decl") (TyApp (TyCon "Option") (TyCon "Loc"))) (TyApp (TyCon "List") (TyCon "Finding")))))
 (DFunDef false "derivableDeclL" ((PVar "orc") (PTuple (PVar "d") (PVar "loc"))) (EApp (EApp (EApp (EVar "derivableDecl") (EVar "orc")) (EVar "loc")) (EVar "d")))
 (DTypeSig false "derivableDecl" (TyFun (TyCon "Oracle") (TyFun (TyApp (TyCon "Option") (TyCon "Loc")) (TyFun (TyCon "Decl") (TyApp (TyCon "List") (TyCon "Finding"))))))
-(DFunDef false "derivableDecl" ((PVar "orc") (PVar "loc") (PRec "DImpl" ((rf "iface" None) (rf "tys" None)) true)) (EApp (EApp (EApp (EApp (EVar "derivableHit") (EVar "orc")) (EVar "loc")) (EVar "iface")) (EVar "tys")))
-(DFunDef false "derivableDecl" ((PVar "orc") (PVar "loc") (PCon "DAttrib" PWild (PVar "d"))) (EApp (EApp (EApp (EVar "derivableDecl") (EVar "orc")) (EVar "loc")) (EVar "d")))
-(DFunDef false "derivableDecl" (PWild PWild PWild) (EListLit))
+(DFunDef false "derivableDecl" ((PVar "orc") (PVar "loc") (PVar "x0")) (ELetGroup ((lgb "go" (clause ((PRec "DImpl" ((rf "iface" None) (rf "tys" None)) true)) (EApp (EApp (EApp (EApp (EVar "derivableHit") (EVar "orc")) (EVar "loc")) (EVar "iface")) (EVar "tys"))) (clause ((PCon "DAttrib" PWild (PVar "d"))) (EApp (EVar "go") (EVar "d"))) (clause (PWild) (EListLit)))) (EApp (EVar "go") (EVar "x0"))))
 (DTypeSig false "derivableHit" (TyFun (TyCon "Oracle") (TyFun (TyApp (TyCon "Option") (TyCon "Loc")) (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "Ty")) (TyApp (TyCon "List") (TyCon "Finding")))))))
 (DFunDef false "derivableHit" ((PVar "orc") (PVar "loc") (PVar "iface") (PVar "tys")) (EIf (EApp (EApp (EVar "contains") (EVar "iface")) (EVar "derivableIfaces")) (EMatch (EApp (EVar "singleNamedType") (EVar "tys")) (arm (PCon "Some" (PVar "tyName")) () (EIf (EApp (EApp (EVar "hasUserDataDecl") (EVar "orc")) (EVar "tyName")) (EListLit (ERecordCreate "Finding" ((fa "rule" (EVar "ruleNameDerivable")) (fa "message" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "hand-written `impl ")) (EApp (EMethodRef "display") (EVar "iface"))) (ELit (LString "` for '"))) (EApp (EMethodRef "display") (EVar "tyName"))) (ELit (LString "' — use `deriving ("))) (EApp (EMethodRef "display") (EVar "iface"))) (ELit (LString ")`")))) (fa "severity" (EVar "SevWarning")) (fa "loc" (EVar "loc")) (fa "fix" (EVar "None"))))) (EListLit))) (arm (PCon "None") () (EListLit))) (EIf (EVar "otherwise") (EListLit) (EApp (EVar "__fallthrough__") (ELit LUnit)))))
 (DTypeSig false "hasUserDataDecl" (TyFun (TyCon "Oracle") (TyFun (TyCon "String") (TyCon "Bool"))))

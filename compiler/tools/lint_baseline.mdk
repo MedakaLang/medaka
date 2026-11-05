@@ -79,18 +79,20 @@ baselineRowsGo : Toml ->
   HashMap String (List String) ->
   List BaselineRow ->
   Result String (List BaselineRow)
-baselineRowsGo doc origin i n seen acc =
-  if i >= n then
-    Ok acc
-  else match baselineRowAt doc origin i
-    Err e => Err e
-    Ok r =>
-      let rules = findWithDefault [] r.file seen
-      if contains r.rule rules then
-        Err "\{origin}: duplicate row for '\{r.file}' / \{r.rule}"
-      else
-        setInPlace r.file (r.rule :: rules) seen
-        baselineRowsGo doc origin (i + 1) n seen (r :: acc)
+baselineRowsGo doc origin i0 n seen acc0 = go i0 acc0
+  where
+    go i acc =
+      if i >= n then
+        Ok acc
+      else match baselineRowAt doc origin i
+        Err e => Err e
+        Ok r =>
+          let rules = findWithDefault [] r.file seen
+          if contains r.rule rules then
+            Err "\{origin}: duplicate row for '\{r.file}' / \{r.rule}"
+          else
+            setInPlace r.file (r.rule :: rules) seen
+            go (i + 1) (r :: acc)
 
 baselineRowAt : Toml -> String -> Int -> Result String BaselineRow
 baselineRowAt doc origin i = match tableEntry "entry" i doc
@@ -124,10 +126,12 @@ baselineAllowed : LintBaseline -> String -> String -> Option Int
 baselineAllowed (LintBaseline rows) file rule = baselineAllowedGo rows file rule
 
 baselineAllowedGo : List BaselineRow -> String -> String -> Option Int
-baselineAllowedGo [] _ _ = None
-baselineAllowedGo (r :: rest) file rule
-  | r.file == file && r.rule == rule = Some r.count
-  | otherwise = baselineAllowedGo rest file rule
+baselineAllowedGo rows0 file rule = go rows0
+  where
+    go [] = None
+    go (r :: rest)
+      | r.file == file && r.rule == rule = Some r.count
+      | otherwise = go rest
 
 -- One entry per DISTINCT rule name in `names`, with how many times it occurs,
 -- rule-sorted.  `names` is one entry per finding, so the count is the finding

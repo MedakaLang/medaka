@@ -1,5 +1,5 @@
 # META
-source_lines=1188
+source_lines=1196
 stages=DESUGAR,MARK
 # SOURCE
 -- compiler/tools/lint_cmd.mdk — the `medaka lint` engine.
@@ -533,6 +533,8 @@ lintFilesToDiagQuads : StdlibIndex ->
   Option (String, LintBaseline) ->
   List String ->
   <IO> List (String, String, List Diag, Positions, List Decl)
+-- Bound: list built in tail position modulo cons: a where-local go loses the constant-stack loop until the lambda-lift pass (#4878); convert then.
+-- lint-disable-next-line rule-threaded-invariant
 lintFilesToDiagQuads _ _ _ _ _ _ [] = []
 lintFilesToDiagQuads idx internalFlag disable only deny baseCtx (f :: rest) =
   let fileDisable = disable ++ internalDisabledFor internalFlag f
@@ -564,6 +566,8 @@ lintFilesToDiagTriples : StdlibIndex ->
   Option (String, LintBaseline) ->
   List String ->
   <IO> List (String, String, List Diag)
+-- Bound: list built in tail position modulo cons: a where-local go loses the constant-stack loop until the lambda-lift pass (#4878); convert then.
+-- lint-disable-next-line rule-threaded-invariant
 lintFilesToDiagTriples _ _ _ _ _ _ [] = []
 lintFilesToDiagTriples idx internalFlag disable only deny baseCtx (f :: rest) =
   let fileDisable = disable ++ internalDisabledFor internalFlag f
@@ -753,15 +757,17 @@ dropInactiveInternalProject : List ProjectRule ->
   Bool ->
   List Finding ->
   <IO> List Finding
-dropInactiveInternalProject _ _ [] = []
-dropInactiveInternalProject rules internalFlag (f :: rest) =
-  let keep =
-    if isInternalProjectRule rules f.rule then
-      findingInActiveProject internalFlag f
-    else
-      True
-  let kept = dropInactiveInternalProject rules internalFlag rest
-  if keep then f :: kept else kept
+dropInactiveInternalProject rules internalFlag fs0 = go fs0
+  where
+    go [] = []
+    go (f :: rest) =
+      let keep =
+        if isInternalProjectRule rules (f : Finding).rule then
+          findingInActiveProject internalFlag f
+        else
+          True
+      let kept = go rest
+      if keep then f :: kept else kept
 
 isInternalProjectRule : List ProjectRule -> String -> Bool
 isInternalProjectRule rules name = anyList (isInternalProjectNamed name) rules
@@ -837,6 +843,8 @@ lintFilesGo : StdlibIndex ->
   List String ->
   Bool ->
   <IO> (Bool, List LintEntry)
+-- Bound: the where-go head line of `lintFilesGo` exceeds 80 columns, which the formatter lays out as a form the parser rejects (#4896); convert once that is fixed.
+-- lint-disable-next-line rule-threaded-invariant
 lintFilesGo _ _ _ _ _ _ _ [] acc = (acc, [])
 lintFilesGo idx run disableNames onlyNames denyNames baseCtx cacheCtx (f :: rest) acc =
   let fileDisable = disableNames ++ internalDisabledFor run.lrInternal f
@@ -1354,8 +1362,7 @@ writeFixedSource target src newSrc n =
 (DFunDef false "firstInactiveTarget" (PWild (PList)) (EVar "None"))
 (DFunDef false "firstInactiveTarget" ((PVar "named") (PCons (PVar "f") (PVar "rest"))) (EIf (EApp (EApp (EVar "internalActiveFor") (EVar "False")) (EVar "f")) (EApp (EApp (EVar "firstInactiveTarget") (EVar "named")) (EVar "rest")) (EApp (EVar "Some") (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "internal rule ")) (EApp (EVar "display") (EVar "named"))) (ELit (LString " is not active for `"))) (EApp (EVar "display") (EVar "f"))) (ELit (LString "`; pass --internal or set `[lint] internal = true` in the project's medaka.toml"))))))
 (DTypeSig true "dropInactiveInternalProject" (TyFun (TyApp (TyCon "List") (TyCon "ProjectRule")) (TyFun (TyCon "Bool") (TyFun (TyApp (TyCon "List") (TyCon "Finding")) (TyEffect ("IO") None (TyApp (TyCon "List") (TyCon "Finding")))))))
-(DFunDef false "dropInactiveInternalProject" (PWild PWild (PList)) (EListLit))
-(DFunDef false "dropInactiveInternalProject" ((PVar "rules") (PVar "internalFlag") (PCons (PVar "f") (PVar "rest"))) (EBlock (DoLet false false (PVar "keep") (EIf (EApp (EApp (EVar "isInternalProjectRule") (EVar "rules")) (EFieldAccess (EVar "f") "rule")) (EApp (EApp (EVar "findingInActiveProject") (EVar "internalFlag")) (EVar "f")) (EVar "True"))) (DoLet false false (PVar "kept") (EApp (EApp (EApp (EVar "dropInactiveInternalProject") (EVar "rules")) (EVar "internalFlag")) (EVar "rest"))) (DoExpr (EIf (EVar "keep") (EBinOp "::" (EVar "f") (EVar "kept")) (EVar "kept")))))
+(DFunDef false "dropInactiveInternalProject" ((PVar "rules") (PVar "internalFlag") (PVar "fs0")) (ELetGroup ((lgb "go" (clause ((PList)) (EListLit)) (clause ((PCons (PVar "f") (PVar "rest"))) (EBlock (DoLet false false (PVar "keep") (EIf (EApp (EApp (EVar "isInternalProjectRule") (EVar "rules")) (EFieldAccess (EAnnot (EVar "f") (TyCon "Finding")) "rule")) (EApp (EApp (EVar "findingInActiveProject") (EVar "internalFlag")) (EVar "f")) (EVar "True"))) (DoLet false false (PVar "kept") (EApp (EVar "go") (EVar "rest"))) (DoExpr (EIf (EVar "keep") (EBinOp "::" (EVar "f") (EVar "kept")) (EVar "kept"))))))) (EApp (EVar "go") (EVar "fs0"))))
 (DTypeSig false "isInternalProjectRule" (TyFun (TyApp (TyCon "List") (TyCon "ProjectRule")) (TyFun (TyCon "String") (TyCon "Bool"))))
 (DFunDef false "isInternalProjectRule" ((PVar "rules") (PVar "name")) (EApp (EApp (EVar "anyList") (EApp (EVar "isInternalProjectNamed") (EVar "name"))) (EVar "rules")))
 (DTypeSig false "isInternalProjectNamed" (TyFun (TyCon "String") (TyFun (TyCon "ProjectRule") (TyCon "Bool"))))
@@ -1571,8 +1578,7 @@ writeFixedSource target src newSrc n =
 (DFunDef false "firstInactiveTarget" (PWild (PList)) (EVar "None"))
 (DFunDef false "firstInactiveTarget" ((PVar "named") (PCons (PVar "f") (PVar "rest"))) (EIf (EApp (EApp (EVar "internalActiveFor") (EVar "False")) (EVar "f")) (EApp (EApp (EVar "firstInactiveTarget") (EVar "named")) (EVar "rest")) (EApp (EVar "Some") (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "internal rule ")) (EApp (EMethodRef "display") (EVar "named"))) (ELit (LString " is not active for `"))) (EApp (EMethodRef "display") (EVar "f"))) (ELit (LString "`; pass --internal or set `[lint] internal = true` in the project's medaka.toml"))))))
 (DTypeSig true "dropInactiveInternalProject" (TyFun (TyApp (TyCon "List") (TyCon "ProjectRule")) (TyFun (TyCon "Bool") (TyFun (TyApp (TyCon "List") (TyCon "Finding")) (TyEffect ("IO") None (TyApp (TyCon "List") (TyCon "Finding")))))))
-(DFunDef false "dropInactiveInternalProject" (PWild PWild (PList)) (EListLit))
-(DFunDef false "dropInactiveInternalProject" ((PVar "rules") (PVar "internalFlag") (PCons (PVar "f") (PVar "rest"))) (EBlock (DoLet false false (PVar "keep") (EIf (EApp (EApp (EVar "isInternalProjectRule") (EVar "rules")) (EFieldAccess (EVar "f") "rule")) (EApp (EApp (EVar "findingInActiveProject") (EVar "internalFlag")) (EVar "f")) (EVar "True"))) (DoLet false false (PVar "kept") (EApp (EApp (EApp (EVar "dropInactiveInternalProject") (EVar "rules")) (EVar "internalFlag")) (EVar "rest"))) (DoExpr (EIf (EVar "keep") (EBinOp "::" (EVar "f") (EVar "kept")) (EVar "kept")))))
+(DFunDef false "dropInactiveInternalProject" ((PVar "rules") (PVar "internalFlag") (PVar "fs0")) (ELetGroup ((lgb "go" (clause ((PList)) (EListLit)) (clause ((PCons (PVar "f") (PVar "rest"))) (EBlock (DoLet false false (PVar "keep") (EIf (EApp (EApp (EVar "isInternalProjectRule") (EVar "rules")) (EFieldAccess (EAnnot (EVar "f") (TyCon "Finding")) "rule")) (EApp (EApp (EVar "findingInActiveProject") (EVar "internalFlag")) (EVar "f")) (EVar "True"))) (DoLet false false (PVar "kept") (EApp (EVar "go") (EVar "rest"))) (DoExpr (EIf (EVar "keep") (EBinOp "::" (EVar "f") (EVar "kept")) (EVar "kept"))))))) (EApp (EVar "go") (EVar "fs0"))))
 (DTypeSig false "isInternalProjectRule" (TyFun (TyApp (TyCon "List") (TyCon "ProjectRule")) (TyFun (TyCon "String") (TyCon "Bool"))))
 (DFunDef false "isInternalProjectRule" ((PVar "rules") (PVar "name")) (EApp (EApp (EVar "anyList") (EApp (EVar "isInternalProjectNamed") (EVar "name"))) (EVar "rules")))
 (DTypeSig false "isInternalProjectNamed" (TyFun (TyCon "String") (TyFun (TyCon "ProjectRule") (TyCon "Bool"))))

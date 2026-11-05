@@ -1,5 +1,5 @@
 # META
-source_lines=313
+source_lines=319
 stages=DESUGAR,MARK
 # SOURCE
 -- lint rule rule-dead-code: a private top-level binding that nothing reachable from the file's exports, `main` or doctests uses.
@@ -223,12 +223,14 @@ bfsReach : HashMap String (List String) ->
   HashMap String Unit ->
   List String ->
   Unit
-bfsReach _ _ [] = ()
-bfsReach refMap visited (x :: rest)
-  | has x visited = bfsReach refMap visited rest
-  | otherwise =
-    setInPlace x () visited
-    bfsReach refMap visited (refsOf refMap x ++ rest)
+bfsReach refMap visited xs0 = go xs0
+  where
+    go [] = ()
+    go (x :: rest)
+      | has x visited = go rest
+      | otherwise =
+        setInPlace x () visited
+        go (refsOf refMap x ++ rest)
 
 refsOf : HashMap String (List String) -> String -> List String
 refsOf refMap n = findWithDefault [] n refMap
@@ -261,6 +263,8 @@ identTokens s =
   identTokGo cs (arrayLength cs) 0
 
 identTokGo : Array Char -> Int -> Int -> List String
+-- Bound: hot compiler path: the where-go form allocates one closure per call until the lambda-lift pass (#4878); convert then.
+-- lint-disable-next-line rule-threaded-invariant
 identTokGo cs n i
   | i >= n = []
   | isIdentStart (arrayGetUnsafe i cs) =
@@ -282,10 +286,12 @@ isIdentStart : Char -> Bool
 isIdentStart c = isLower c || isUpper c || c == '_'
 
 identEnd : Array Char -> Int -> Int -> Int
-identEnd cs n i
-  | i >= n = i
-  | isAlnum (arrayGetUnsafe i cs) = identEnd cs n (i + 1)
-  | otherwise = i
+identEnd cs n i0 = go i0
+  where
+    go i
+      | i >= n = i
+      | isAlnum (arrayGetUnsafe i cs) = go (i + 1)
+      | otherwise = i
 
 -- ── doctest identifiers (string-aware comment channel) ────────────────────────
 -- Identifiers on `>` input lines of doctests (both `-- > expr` line-comment and
@@ -377,8 +383,7 @@ blockDocLineIdents line =
 (DTypeSig false "bodyIdents" (TyFun (TyCon "Decl") (TyApp (TyCon "List") (TyCon "String"))))
 (DFunDef false "bodyIdents" ((PVar "d")) (EApp (EVar "sortUniqS") (EApp (EVar "identTokens") (EApp (EVar "declToString") (EVar "d")))))
 (DTypeSig false "bfsReach" (TyFun (TyApp (TyApp (TyCon "HashMap") (TyCon "String")) (TyApp (TyCon "List") (TyCon "String"))) (TyFun (TyApp (TyApp (TyCon "HashMap") (TyCon "String")) (TyCon "Unit")) (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyCon "Unit")))))
-(DFunDef false "bfsReach" (PWild PWild (PList)) (ELit LUnit))
-(DFunDef false "bfsReach" ((PVar "refMap") (PVar "visited") (PCons (PVar "x") (PVar "rest"))) (EIf (EApp (EApp (EVar "has") (EVar "x")) (EVar "visited")) (EApp (EApp (EApp (EVar "bfsReach") (EVar "refMap")) (EVar "visited")) (EVar "rest")) (EIf (EVar "otherwise") (EBlock (DoExpr (EApp (EApp (EApp (EVar "setInPlace") (EVar "x")) (ELit LUnit)) (EVar "visited"))) (DoExpr (EApp (EApp (EApp (EVar "bfsReach") (EVar "refMap")) (EVar "visited")) (EBinOp "++" (EApp (EApp (EVar "refsOf") (EVar "refMap")) (EVar "x")) (EVar "rest"))))) (EApp (EVar "__fallthrough__") (ELit LUnit)))))
+(DFunDef false "bfsReach" ((PVar "refMap") (PVar "visited") (PVar "xs0")) (ELetGroup ((lgb "go" (clause ((PList)) (ELit LUnit)) (clause ((PCons (PVar "x") (PVar "rest"))) (EIf (EApp (EApp (EVar "has") (EVar "x")) (EVar "visited")) (EApp (EVar "go") (EVar "rest")) (EIf (EVar "otherwise") (EBlock (DoExpr (EApp (EApp (EApp (EVar "setInPlace") (EVar "x")) (ELit LUnit)) (EVar "visited"))) (DoExpr (EApp (EVar "go") (EBinOp "++" (EApp (EApp (EVar "refsOf") (EVar "refMap")) (EVar "x")) (EVar "rest"))))) (EApp (EVar "__fallthrough__") (ELit LUnit))))))) (EApp (EVar "go") (EVar "xs0"))))
 (DTypeSig false "refsOf" (TyFun (TyApp (TyApp (TyCon "HashMap") (TyCon "String")) (TyApp (TyCon "List") (TyCon "String"))) (TyFun (TyCon "String") (TyApp (TyCon "List") (TyCon "String")))))
 (DFunDef false "refsOf" ((PVar "refMap") (PVar "n")) (EApp (EApp (EApp (EVar "findWithDefault") (EListLit)) (EVar "n")) (EVar "refMap")))
 (DTypeSig false "mergeRefs" (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "String")))) (TyApp (TyApp (TyCon "HashMap") (TyCon "String")) (TyApp (TyCon "List") (TyCon "String")))))
@@ -395,7 +400,7 @@ blockDocLineIdents line =
 (DTypeSig false "isIdentStart" (TyFun (TyCon "Char") (TyCon "Bool")))
 (DFunDef false "isIdentStart" ((PVar "c")) (EBinOp "||" (EBinOp "||" (EApp (EVar "isLower") (EVar "c")) (EApp (EVar "isUpper") (EVar "c"))) (EBinOp "==" (EVar "c") (ELit (LChar "_")))))
 (DTypeSig false "identEnd" (TyFun (TyApp (TyCon "Array") (TyCon "Char")) (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyCon "Int")))))
-(DFunDef false "identEnd" ((PVar "cs") (PVar "n") (PVar "i")) (EIf (EBinOp ">=" (EVar "i") (EVar "n")) (EVar "i") (EIf (EApp (EVar "isAlnum") (EApp (EApp (EVar "arrayGetUnsafe") (EVar "i")) (EVar "cs"))) (EApp (EApp (EApp (EVar "identEnd") (EVar "cs")) (EVar "n")) (EBinOp "+" (EVar "i") (ELit (LInt 1)))) (EIf (EVar "otherwise") (EVar "i") (EApp (EVar "__fallthrough__") (ELit LUnit))))))
+(DFunDef false "identEnd" ((PVar "cs") (PVar "n") (PVar "i0")) (ELetGroup ((lgb "go" (clause ((PVar "i")) (EIf (EBinOp ">=" (EVar "i") (EVar "n")) (EVar "i") (EIf (EApp (EVar "isAlnum") (EApp (EApp (EVar "arrayGetUnsafe") (EVar "i")) (EVar "cs"))) (EApp (EVar "go") (EBinOp "+" (EVar "i") (ELit (LInt 1)))) (EIf (EVar "otherwise") (EVar "i") (EApp (EVar "__fallthrough__") (ELit LUnit)))))))) (EApp (EVar "go") (EVar "i0"))))
 (DTypeSig false "doctestIdents" (TyFun (TyApp (TyCon "List") (TyCon "Comment")) (TyApp (TyCon "List") (TyCon "String"))))
 (DFunDef false "doctestIdents" ((PVar "cmts")) (EApp (EApp (EVar "flatMap") (EVar "commentDocIdents")) (EVar "cmts")))
 (DTypeSig false "commentDocIdents" (TyFun (TyCon "Comment") (TyApp (TyCon "List") (TyCon "String"))))
@@ -466,8 +471,7 @@ blockDocLineIdents line =
 (DTypeSig false "bodyIdents" (TyFun (TyCon "Decl") (TyApp (TyCon "List") (TyCon "String"))))
 (DFunDef false "bodyIdents" ((PVar "d")) (EApp (EVar "sortUniqS") (EApp (EVar "identTokens") (EApp (EVar "declToString") (EVar "d")))))
 (DTypeSig false "bfsReach" (TyFun (TyApp (TyApp (TyCon "HashMap") (TyCon "String")) (TyApp (TyCon "List") (TyCon "String"))) (TyFun (TyApp (TyApp (TyCon "HashMap") (TyCon "String")) (TyCon "Unit")) (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyCon "Unit")))))
-(DFunDef false "bfsReach" (PWild PWild (PList)) (ELit LUnit))
-(DFunDef false "bfsReach" ((PVar "refMap") (PVar "visited") (PCons (PVar "x") (PVar "rest"))) (EIf (EApp (EApp (EVar "has") (EVar "x")) (EVar "visited")) (EApp (EApp (EApp (EVar "bfsReach") (EVar "refMap")) (EVar "visited")) (EVar "rest")) (EIf (EVar "otherwise") (EBlock (DoExpr (EApp (EApp (EApp (EVar "setInPlace") (EVar "x")) (ELit LUnit)) (EVar "visited"))) (DoExpr (EApp (EApp (EApp (EVar "bfsReach") (EVar "refMap")) (EVar "visited")) (EBinOp "++" (EApp (EApp (EVar "refsOf") (EVar "refMap")) (EVar "x")) (EVar "rest"))))) (EApp (EVar "__fallthrough__") (ELit LUnit)))))
+(DFunDef false "bfsReach" ((PVar "refMap") (PVar "visited") (PVar "xs0")) (ELetGroup ((lgb "go" (clause ((PList)) (ELit LUnit)) (clause ((PCons (PVar "x") (PVar "rest"))) (EIf (EApp (EApp (EVar "has") (EVar "x")) (EVar "visited")) (EApp (EVar "go") (EVar "rest")) (EIf (EVar "otherwise") (EBlock (DoExpr (EApp (EApp (EApp (EVar "setInPlace") (EVar "x")) (ELit LUnit)) (EVar "visited"))) (DoExpr (EApp (EVar "go") (EBinOp "++" (EApp (EApp (EVar "refsOf") (EVar "refMap")) (EVar "x")) (EVar "rest"))))) (EApp (EVar "__fallthrough__") (ELit LUnit))))))) (EApp (EVar "go") (EVar "xs0"))))
 (DTypeSig false "refsOf" (TyFun (TyApp (TyApp (TyCon "HashMap") (TyCon "String")) (TyApp (TyCon "List") (TyCon "String"))) (TyFun (TyCon "String") (TyApp (TyCon "List") (TyCon "String")))))
 (DFunDef false "refsOf" ((PVar "refMap") (PVar "n")) (EApp (EApp (EApp (EVar "findWithDefault") (EListLit)) (EVar "n")) (EVar "refMap")))
 (DTypeSig false "mergeRefs" (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "String")))) (TyApp (TyApp (TyCon "HashMap") (TyCon "String")) (TyApp (TyCon "List") (TyCon "String")))))
@@ -484,7 +488,7 @@ blockDocLineIdents line =
 (DTypeSig false "isIdentStart" (TyFun (TyCon "Char") (TyCon "Bool")))
 (DFunDef false "isIdentStart" ((PVar "c")) (EBinOp "||" (EBinOp "||" (EApp (EVar "isLower") (EVar "c")) (EApp (EVar "isUpper") (EVar "c"))) (EBinOp "==" (EVar "c") (ELit (LChar "_")))))
 (DTypeSig false "identEnd" (TyFun (TyApp (TyCon "Array") (TyCon "Char")) (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyCon "Int")))))
-(DFunDef false "identEnd" ((PVar "cs") (PVar "n") (PVar "i")) (EIf (EBinOp ">=" (EVar "i") (EVar "n")) (EVar "i") (EIf (EApp (EVar "isAlnum") (EApp (EApp (EVar "arrayGetUnsafe") (EVar "i")) (EVar "cs"))) (EApp (EApp (EApp (EVar "identEnd") (EVar "cs")) (EVar "n")) (EBinOp "+" (EVar "i") (ELit (LInt 1)))) (EIf (EVar "otherwise") (EVar "i") (EApp (EVar "__fallthrough__") (ELit LUnit))))))
+(DFunDef false "identEnd" ((PVar "cs") (PVar "n") (PVar "i0")) (ELetGroup ((lgb "go" (clause ((PVar "i")) (EIf (EBinOp ">=" (EVar "i") (EVar "n")) (EVar "i") (EIf (EApp (EVar "isAlnum") (EApp (EApp (EVar "arrayGetUnsafe") (EVar "i")) (EVar "cs"))) (EApp (EVar "go") (EBinOp "+" (EVar "i") (ELit (LInt 1)))) (EIf (EVar "otherwise") (EVar "i") (EApp (EVar "__fallthrough__") (ELit LUnit)))))))) (EApp (EVar "go") (EVar "i0"))))
 (DTypeSig false "doctestIdents" (TyFun (TyApp (TyCon "List") (TyCon "Comment")) (TyApp (TyCon "List") (TyCon "String"))))
 (DFunDef false "doctestIdents" ((PVar "cmts")) (EApp (EApp (EDictApp "flatMap") (EVar "commentDocIdents")) (EVar "cmts")))
 (DTypeSig false "commentDocIdents" (TyFun (TyCon "Comment") (TyApp (TyCon "List") (TyCon "String"))))
