@@ -885,6 +885,21 @@ catalogRows = [
     (NotProvided GapPermanent "process ownership is unavailable on wasm")
     (NotProvided GapPermanent "process ownership is unavailable in eval"),
   ExternRow
+    "processTryReadRaw"
+    (CSymbol LlvmNet "mdk_process_try_read")
+    (NotProvided GapPermanent "process ownership is unavailable on wasm")
+    (NotProvided GapPermanent "process ownership is unavailable in eval"),
+  ExternRow
+    "processTryWriteRaw"
+    (CSymbol LlvmNet "mdk_process_try_write")
+    (NotProvided GapPermanent "process ownership is unavailable on wasm")
+    (NotProvided GapPermanent "process ownership is unavailable in eval"),
+  ExternRow
+    "processStreamFdRaw"
+    (CSymbol LlvmNet "mdk_process_stream_fd")
+    (NotProvided GapPermanent "process ownership is unavailable on wasm")
+    (NotProvided GapPermanent "process ownership is unavailable in eval"),
+  ExternRow
     "netResolve"
     (CSymbol LlvmNet "mdk_net_resolve")
     (NotProvided GapPermanent wasmNoSockets)

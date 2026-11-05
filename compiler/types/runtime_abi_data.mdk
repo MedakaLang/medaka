@@ -2297,4 +2297,37 @@ runtimeAbiRows = [
         "v1:Process p -> <Exec p> Result (Int, Int, String) Unit",
     },
   ),
+  (
+    "processTryReadRaw",
+    CallableShape {
+      writtenValueArity = 3,
+      loweredCoreArity = 3,
+      parameterHeads = ["Process", "Int", "Int"],
+      resultHead = "Result",
+      canonicalSignature =
+        "v1:Process p -> Int -> Int -> <Exec p> Result (Int, Int, String) (Option ByteBlock)",
+    },
+  ),
+  (
+    "processTryWriteRaw",
+    CallableShape {
+      writtenValueArity = 4,
+      loweredCoreArity = 4,
+      parameterHeads = ["Process", "ByteBlock", "Int", "Int"],
+      resultHead = "Result",
+      canonicalSignature =
+        "v1:Process p -> ByteBlock -> Int -> Int -> <Exec p> Result (Int, Int, String) (Option Int)",
+    },
+  ),
+  (
+    "processStreamFdRaw",
+    CallableShape {
+      writtenValueArity = 2,
+      loweredCoreArity = 2,
+      parameterHeads = ["Process", "Int"],
+      resultHead = "Result",
+      canonicalSignature =
+        "v1:Process p -> Int -> <Exec p> Result (Int, Int, String) Int",
+    },
+  ),
 ]

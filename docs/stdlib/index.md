@@ -832,6 +832,7 @@ Manipulation of `/`-separated paths as text.
 - [`SpawnOptions`](process.md#spawnoptions)
 - [`ProcessOperation`](process.md#processoperation)
 - [`ProcessError`](process.md#processerror)
+- [`OutputStream`](process.md#outputstream)
 - [`ExitStatus`](process.md#exitstatus)
 - [`StartError`](process.md#starterror)
 - [`LaunchProgress`](process.md#launchprogress)
@@ -842,6 +843,9 @@ Manipulation of `/`-separated paths as text.
 - [`pollExit`](process.md#pollexit)
 - [`closeStdin`](process.md#closestdin)
 - [`dispose`](process.md#dispose)
+- [`tryRead`](process.md#tryread)
+- [`tryWrite`](process.md#trywrite)
+- [`streamFd`](process.md#streamfd)
 
 ## [`regex`](regex.md)
 
@@ -1041,6 +1045,9 @@ The host primitives.
 - [`processPollExitRaw`](runtime.md#processpollexitraw)
 - [`processCloseStdinRaw`](runtime.md#processclosestdinraw)
 - [`processDisposeRaw`](runtime.md#processdisposeraw)
+- [`processTryReadRaw`](runtime.md#processtryreadraw)
+- [`processTryWriteRaw`](runtime.md#processtrywriteraw)
+- [`processStreamFdRaw`](runtime.md#processstreamfdraw)
 
 ## [`set`](set.md)
 

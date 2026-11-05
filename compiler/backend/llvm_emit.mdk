@@ -3074,6 +3074,24 @@ emitNetExtern e env "processDisposeRaw" args = match emitArgs e env args
     emit e (rtLine e r "i64" "mdk_process_dispose" (i64Ops [a]))
     (r, LTCon)
   _ => panic "llvm: processDisposeRaw takes 1 arguments"
+emitNetExtern e env "processTryReadRaw" args = match emitArgs e env args
+  [a, b, c] =>
+    let r = freshReg e
+    emit e (rtLine e r "i64" "mdk_process_try_read" (i64Ops [a, b, c]))
+    (r, LTCon)
+  _ => panic "llvm: processTryReadRaw takes 3 arguments"
+emitNetExtern e env "processTryWriteRaw" args = match emitArgs e env args
+  [a, b, c, d] =>
+    let r = freshReg e
+    emit e (rtLine e r "i64" "mdk_process_try_write" (i64Ops [a, b, c, d]))
+    (r, LTCon)
+  _ => panic "llvm: processTryWriteRaw takes 4 arguments"
+emitNetExtern e env "processStreamFdRaw" args = match emitArgs e env args
+  [a, b] =>
+    let r = freshReg e
+    emit e (rtLine e r "i64" "mdk_process_stream_fd" (i64Ops [a, b]))
+    (r, LTCon)
+  _ => panic "llvm: processStreamFdRaw takes 2 arguments"
 emitNetExtern e env "netResolve" args = match emitArgs e env args
   [h] =>
     let r = freshReg e

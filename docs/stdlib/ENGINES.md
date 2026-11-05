@@ -116,3 +116,6 @@ not bound, so the call is rejected or aborts.
 | `processPollExitRaw` | refused | refused | refused | real | refused |
 | `processCloseStdinRaw` | refused | refused | refused | real | refused |
 | `processDisposeRaw` | refused | refused | refused | real | refused |
+| `processTryReadRaw` | refused | refused | refused | real | refused |
+| `processTryWriteRaw` | refused | refused | refused | real | refused |
+| `processStreamFdRaw` | refused | refused | refused | real | refused |
