@@ -6,11 +6,11 @@
 -- Linux's /proc/self/exe does; a symlink would resolve to oracle_multicall and
 -- fail.  macOS (_NSGetExecutablePath + realpath) has not been exercised.
 --
--- Each arm calls an entry's exported `oracleMain`, never its `main`: a
--- referenced value `main` would initialise eagerly in every process.  The
--- same holds for any top-level value an entry's body references, which is
--- initialised whichever arm runs, so an entry must not grow a top-level
--- value that prints, reads args or fails.
+-- Each arm calls an entry's exported `oracleMain` rather than reading its
+-- value `main`.  A top-level value whose initializer calls anything is
+-- initialised on its first read, not at startup
+-- (`emit_support.speculationSafe`), so an entry's values that print, read
+-- args or fail run only in the arm that reads them.
 --
 -- The arms must equal build_oracles.sh's ENTRIES minus MULTICALL_SINGLES;
 -- test/check_build_oracles_for_consistency.sh fails when they differ.  An

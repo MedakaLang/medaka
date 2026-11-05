@@ -1264,8 +1264,8 @@ installKnownFnMap : Emit -> List String -> Unit
 installKnownFnMap e fns = e.knownFnMap := Some (omFromNames fns omEmpty)
 
 -- ── #561 PR-A: lazy value-global set (installed once per program) ────────────
--- The value globals emit_support.lazyGlobalNames classifies as LAZY (reaching an
--- eager dispatch or a value cycle — no static init order): their reads lower to
+-- The value globals emit_support.lazyGlobalNames classifies as LAZY (an initializer
+-- not safe to speculate, an eager dispatch, or a value cycle): their reads lower to
 -- `call @mdk_force_<x>()` instead of a plain `load @mdk_g_<x>`, and each gets a
 -- `@mdk_force_<x>` define + an `@mdk_gs_<x>` state flag (0 UNFORCED / 1 FORCING /
 -- 2 FORCED).  Everything else stays on the byte-identical eager prologue.  Installed
@@ -14844,9 +14844,9 @@ emitProgramMain e plan groups =
   -- prelude-double-load note on emitTopGlobals below for why such a global can
   -- appear at all.
   let mainRhs = mainBody e groups
-  -- #561 PR-A: only SAFE (statically-orderable) value globals are eager-initialised
-  -- in this prologue — byte-identical to the pre-#561 emitter whenever no global is
-  -- lazy (the compiler's own case).  A SAFE global's whole eager reach is SAFE (the
+  -- Only value globals whose initializer is safe to speculate (it calls nothing, so
+  -- running it before `main` cannot be observed; emit_support.speculationSafe) are
+  -- initialised in this prologue.  An eager global's whole eager reach is eager (the
   -- taint is downward-closed over reads), so this prologue never calls a force fn.
   -- LAZY globals are initialised on first use by their @mdk_force_<x> defines below.
   let eagerBinds =
