@@ -169,13 +169,18 @@ pipeline scratch = do
 import process.{SpawnOptions(..), PipeChoice(..), StartError(..), ProcessError(..), ProcessOperation(..), start}
 main = match start "/medaka-no-such-image" (SpawnOptions { argv = [], cwd = "/tmp", env = [], stdin = Null, stdout = Null, stderr = Null })
   Err (StartRejected (SpawnFailed ExecImage _ _)) => println "missing image"
+  Err (StartRejected (Unsupported "native process unsupported")) => println "unsupported"
   _ => println "unexpected result"
 """
   _ <- runFrom probe (tree ++ "/medaka") [
     "build", "process_probe.mdk", "-o", "process_built"
   ]
   processOut <- runFrom probe (probe ++ "/process_built") []
-  expectOut "missing image" processOut
+  (unameCode, unameOut, unameErr) <- boundedVerb "uname" ["-s"]
+  _ <- if unameCode /= 0 then Err "uname failed: \{unameErr}" else Ok ()
+  expectOut
+    (if trimRight unameOut == "Linux" then "missing image" else "unsupported")
+    processOut
 
 verdict : Result String Unit -> Expectation
 verdict (Err e) = fail "dist_install_smoke: \{e}"
