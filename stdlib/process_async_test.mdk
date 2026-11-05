@@ -1,12 +1,13 @@
 import async.{Async, runAsync, sleep, expiredNow, spawn, liftIO, yield}
 import process.{
   SpawnOptions(..), PipeChoice(..), ExitStatus(..), OutputStream(..),
-  closeStdin, dispose
+  ProcessError(..), closeStdin, dispose, submit, abortStart, LaunchProgress(..),
+  StartError(..)
 }
 import process_async.{
   newCancelToken, cancel, cancelled, after, deadlineWait, startUntil, waitUntil,
-  WaitResult(..), readUntil, ReadResult(..), writeUntil, WriteResult(..),
-  StartResult(..), LaunchStop(..)
+  Deadline, WaitResult(..), readUntil, ReadResult(..), writeUntil,
+  WriteResult(..), StartResult(..), LaunchStop(..)
 }
 import bytes.{encodeUtf8, decodeUtf8}
 import string.{repeat, trim}
@@ -226,6 +227,66 @@ test "continuous writable progress yields to cancellation" =
     _ => False
   expectTrue result
 
+drainLaunch : LaunchTicket p -> Int -> <Clock, Exec p> Bool
+drainLaunch _ 0 = False
+drainLaunch ticket n = match abortStart ticket
+  Ok LaunchAborted => True
+  Ok (LaunchFailed _) => True
+  Ok LaunchPending =>
+    sleepMs 5
+    drainLaunch ticket (n - 1)
+  Err ProcessBusy =>
+    sleepMs 5
+    drainLaunch ticket (n - 1)
+  _ => False
+
+cleanupStart : Result (StartError (LaunchTicket p)) (StartResult (Process p) (LaunchTicket p)) ->
+  Deadline <Clock, Exec p | e> ->
+  <Clock, Exec p | e> Bool
+cleanupStart (Ok (Started p)) deadline =
+  let closed = closeStdin p
+  let exited = runAsync (waitUntil p deadline (newCancelToken ()))
+  let disposed = dispose p
+  match (closed, exited, disposed)
+    (Ok _, Ok (ChildExited _), Ok _) => True
+    _ => False
+cleanupStart (Ok (StartTimedOut (LaunchCleanupPending ticket _))) _ =
+  drainLaunch ticket 400
+cleanupStart (Ok (StartCancelled (LaunchCleanupPending ticket _))) _ =
+  drainLaunch ticket 400
+cleanupStart (Err (StartCleanupPending _ ticket)) _ = drainLaunch ticket 400
+cleanupStart (Ok (StartTimedOut LaunchStopped)) _ = True
+cleanupStart (Ok (StartCancelled LaunchStopped)) _ = True
+cleanupStart (Err (StartRejected _)) _ = True
+cleanupStart _ _ = False
+
+test "partial launch outcomes release their owners" =
+  let deadline = runAsync (after (millis 5000))
+  let started =
+    runAsync (startUntil "/bin/true" options deadline (newCancelToken ()))
+  let cleanedStarted = cleanupStart started deadline
+  let timed = match submit "/bin/true" options
+    Ok ticket =>
+      cleanupStart
+        (Ok (StartTimedOut (LaunchCleanupPending ticket None)))
+        deadline
+    Err _ => False
+  let cancelled = match submit "/bin/true" options
+    Ok ticket =>
+      cleanupStart
+        (Ok (StartCancelled (LaunchCleanupPending ticket None)))
+        deadline
+    Err _ => False
+  let rejected = match submit "/bin/true" options
+    Ok ticket =>
+      cleanupStart (Err (StartCleanupPending ProcessBusy ticket)) deadline
+    Err _ => False
+  let stopped = cleanupStart (Ok (StartTimedOut LaunchStopped)) deadline
+  let refused = cleanupStart (Err (StartRejected ProcessBusy)) deadline
+  expectEqual
+    [True, True, True, True, True, True]
+    [cleanedStarted, timed, cancelled, rejected, stopped, refused]
+
 test "a backpressured worker does not prevent another worker or status progress" =
   let stalled = SpawnOptions {
     argv = ["-c", "sleep 0.3; wc -c"],
@@ -298,5 +359,9 @@ test "a backpressured worker does not prevent another worker or status progress"
             && !offset < 1000000
             && map trim (decodeUtf8 count) == Some (intToString !offset)
         _ => False
-    _ => False
+    _ =>
+      let cleanupDeadline = runAsync (after (millis 5000))
+      let _ = cleanupStart first cleanupDeadline
+      let _ = cleanupStart second cleanupDeadline
+      False
   expectTrue result

@@ -158,16 +158,19 @@ export
 dispose : Process p -> <Exec p> Result ProcessError Unit
 dispose p = mapErr rawError (processDisposeRaw p)
 
+{- | The native stream selector for an output stream. -}
+export
+outputStreamCode : OutputStream -> Int
+outputStreamCode ChildStdout = 1
+outputStreamCode ChildStderr = 2
+
 export
 tryRead : Process p ->
   OutputStream ->
   Int ->
   <Exec p> Result ProcessError (Option Bytes)
 tryRead p stream limit =
-  let code = match stream
-    ChildStdout => 1
-    ChildStderr => 2
-  match processTryReadRaw p code limit
+  match processTryReadRaw p (outputStreamCode stream) limit
     Err e => Err (rawError e)
     Ok block => Ok (map adoptByteBlockUnsafe block)
 

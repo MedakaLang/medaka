@@ -327,28 +327,47 @@ test "fairness controls reject broken scheduling, offsets and owner checks" = wi
       ]
       "fairness mutation controls passed")
 
+test "async submission retries owner contention and stops without a ticket" = withScratchDir
+  (dir =>
+    run
+      "python3"
+      [
+        underRoot "test/process_runtime_fixtures/adapter_contention.py",
+        underRoot "",
+        dir,
+      ]
+      "adapter contention controls passed")
+
 test "idle process sessions bound scheduler polling and CPU" = withScratchDir
   (dir =>
     let source = underRoot "test/process_runtime_fixtures/fairness_idle.mdk"
     let binary = "\{dir}/idle"
-    let shim = "\{dir}/poll.so"
     expectAll [
       expectSpawnOk (underRoot "medaka") ["check", source],
-      expectSpawnOk (underRoot "medaka") ["build", source, "-o", binary],
+      expectSpawnOk (underRoot "medaka") [
+        "build", "--keep-ir", source, "-o", binary
+      ],
       expectSpawnOk "clang" [
-        "-shared",
-        "-fPIC",
+        "-DMDK_PROCESS_TESTING",
+        "-std=gnu11",
+        "-O0",
+        "-pthread",
+        "-I\{underRoot "runtime"}",
+        "\{binary}.ll",
+        underRoot "runtime/medaka_rt.c",
+        underRoot "runtime/medaka_process.c",
         underRoot "test/process_runtime_fixtures/fairness_poll.c",
+        "-lgc",
+        "-lm",
         "-ldl",
         "-o",
-        shim,
+        binary,
       ],
       run
         "python3"
         [
           underRoot "test/process_runtime_fixtures/fairness_idle.py",
           binary,
-          shim,
         ]
         "passed",
     ])

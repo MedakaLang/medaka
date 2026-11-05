@@ -166,7 +166,7 @@ suites = [
   ("array", (52, EvalAndNative)),
   ("async", (10, Eval)),
   ("async_test", (2, NativeCapability)),
-  ("process_async_test", (10, NativeCapability)),
+  ("process_async_test", (12, NativeCapability)),
   ("process", (1, NativeCapability)),
   ("process_test", (3, NativeCapability)),
   -- The RFC 4648 vectors and the canonical-rejection checks. Neither of the
@@ -452,7 +452,7 @@ test "stdlib/async.mdk executed >= 10 assertions" = floorExpectation "async"
 test "stdlib/async_test.mdk executed >= 2 assertions" =
   floorExpectation "async_test"
 
-test "stdlib/process_async_test.mdk executed >= 10 assertions" =
+test "stdlib/process_async_test.mdk executed >= 12 assertions" =
   floorExpectation "process_async_test"
 
 test "stdlib/base32.mdk executed >= 28 assertions" = floorExpectation "base32"

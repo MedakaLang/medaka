@@ -5,9 +5,9 @@ import async.{
 import bytes.{Bytes}
 import bytes as B
 import process.{
-  ProcessError(..), OutputStream(..), ExitStatus, tryRead, tryWrite, streamFd,
-  pollExit, SpawnOptions, StartError(..), LaunchProgress(..), submit,
-  checkStart, abortStart
+  ProcessError(..), OutputStream, outputStreamCode, ExitStatus, tryRead,
+  tryWrite, streamFd, pollExit, SpawnOptions, StartError(..),
+  LaunchProgress(..), submit, checkStart, abortStart
 }
 import time.{Duration, millis}
 
@@ -71,10 +71,6 @@ stop deadline token =
   else
     None
 
-streamCode : OutputStream -> Int
-streamCode ChildStdout = 1
-streamCode ChildStderr = 2
-
 park : Deadline <Clock | e> ->
   CancelToken ->
   List (Wait <Clock | e>) ->
@@ -110,12 +106,13 @@ readPark : Process p ->
   Deadline <Clock, Exec p | e> ->
   CancelToken ->
   <Exec p> Async <Clock, Exec p | e> (Result ProcessError ReadResult)
-readPark p stream limit deadline token = match streamFd p (streamCode stream)
-  Ok fd => deferThen (park deadline token [waitRead fd]) (_ =>
-    readUntil p stream limit deadline token)
-  Err ProcessBusy => deferThen (park deadline token []) (_ =>
-    readUntil p stream limit deadline token)
-  Err err => deferPure (Err err)
+readPark p stream limit deadline token =
+  match streamFd p (outputStreamCode stream)
+    Ok fd => deferThen (park deadline token [waitRead fd]) (_ =>
+      readUntil p stream limit deadline token)
+    Err ProcessBusy => deferThen (park deadline token []) (_ =>
+      readUntil p stream limit deadline token)
+    Err err => deferPure (Err err)
 
 {- | Writes bytes until completion or stop; errors retain the committed count. -}
 export
@@ -205,6 +202,8 @@ startUntil program opts deadline token =
       Some False => deferPure (Ok (StartTimedOut LaunchStopped))
       None => match submit program opts
         Ok ticket => startPoll ticket deadline token
+        Err ProcessBusy => deferThen (park deadline token []) (_ =>
+          startUntil program opts deadline token)
         Err err => deferPure (Err (StartRejected err))))
     identity
 
