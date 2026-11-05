@@ -50,6 +50,10 @@ fixture dir name modes =
               modes
             ++ (if name == "submission" then
               [
+                expectSpawnFails
+                  output
+                  ["no-adoption"]
+                  "mdk_process_test_pid(p)>0",
                 expectSpawnOkLine
                   "env"
                   ["MEDAKA_TEST_SUBMISSION_INIT_FAIL=1", output]

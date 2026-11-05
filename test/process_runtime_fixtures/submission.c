@@ -31,7 +31,7 @@ extern void mdk_process_test_child_hold(int, int);
 extern void mdk_process_test_faults(int, int, int);
 extern void mdk_process_test_lock(int);
 extern int mdk_process_test_pipe(int[2]);
-static int checks;
+static int checks, skip_adoption;
 #define CHECK(x) do { ++checks; if (!(x)) { dprintf(2,"FAIL line %d: %s\n",__LINE__,#x); _exit(1); } } while (0)
 static long long field(long long w, unsigned i) { return ((long long *)w)[i]; }
 static long long nil(void) { return (MDK_TAG_NIL << 1) | 1; }
@@ -126,9 +126,19 @@ static void creation_race(void) {
   puts("cancellation after final stop check still creates one exactly reaped child passed");
 }
 static long long held_child(Gate *g) {
+  Gate publication;gate_open(&publication);mdk_process_test_submit_hold(3,publication.gate[0],publication.ready[1]);
   gate_open(g);mdk_process_test_child_hold(g->gate[0],g->ready[1]);
-  long long p=ticket("/bin/true");gate_ready(g);CHECK(kind(mdk_process_check_start(p))==0);
-  mdk_process_test_child_hold(-1,-1);CHECK(mdk_process_test_pid(p)>0);return p;
+  long long p=ticket("/bin/true");gate_ready(g);gate_ready(&publication);
+  CHECK(kind(mdk_process_check_start(p))==0);CHECK(mdk_process_test_pid(p)==0);
+  mdk_process_test_submit_hold(0,-1,-1);gate_release(&publication);
+  for (int i=0;i<1000 && !mdk_process_test_pid(p);++i) {
+    if (!skip_adoption) CHECK(kind(mdk_process_check_start(p))==0);
+    usleep(1000);
+  }
+  CHECK(mdk_process_test_pid(p)>0);CHECK(mdk_process_test_pidfd(p)>=0);
+  CHECK(kill(mdk_process_test_pid(p),0)==0);
+  CHECK(mdk_process_test_permits()==1 && mdk_process_test_roots()==1);
+  gate_close(&publication);mdk_process_test_child_hold(-1,-1);return p;
 }
 static void before_exec(void) {
   int baseline=fds();Gate g;long long p=held_child(&g);pending_work(p);
@@ -304,7 +314,8 @@ int mdk_program_main(int argc,char **argv) {
     CHECK(field(r,0)==MDK_TAG_OK);finish(field(r,1));empty();
     puts("worker initialization refusal preserves synchronous launch passed");return 0;
   }
-  if (argc>1 && !strcmp(argv[1],"gc")) gc_inactive();
+  if (argc>1 && !strcmp(argv[1],"no-adoption")) { skip_adoption=1; Gate g; held_child(&g); }
+  else if (argc>1 && !strcmp(argv[1],"gc")) gc_inactive();
   else if (argc>1 && !strcmp(argv[1],"signal")) kernel_denial(1);
   else if (argc>1 && !strcmp(argv[1],"wait")) kernel_denial(0);
   else {

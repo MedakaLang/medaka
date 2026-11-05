@@ -294,6 +294,9 @@ static void *construct_native(void *arg) {
     while (write(ep[1], failure, sizeof(failure)) < 0 && errno == EINTR) {}
     _exit(127);
   }
+#ifdef MDK_PROCESS_TESTING
+  if (p->stop) submission_hold(3);
+#endif
   for (int i = 0; i < 3; ++i) close(child[i]);
   close(ep[1]); p->error_fd = ep[0]; p->created = 1;
 #ifdef MDK_PROCESS_TESTING
