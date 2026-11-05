@@ -17,10 +17,11 @@ import support.ordmap.{omEmpty}
 import test.{pass}
 import backend.package_identity.{
   PackageIdentity(..), IdentityPlan(..), planPackageIdentity,
-  planProgramIdentity, packSite
+  planProgramIdentity, renderIdentityDefect, packSite
 }
 import backend.package_identity_sexp.{
-  encodePackageIdentity, decodePackageIdentity
+  encodePackageIdentity, decodePackageIdentity as decodeIdentity,
+  renderPackageIdentityError, PackageIdentityError(..)
 }
 import frontend.ast.{Loc(..), Lit(..), noBinderId}
 import ir.core_ir.{CProgram(..), CBind(..), CClause(..), CExpr(..), noDeclFacts}
@@ -31,6 +32,19 @@ import crypto.sha256_fast.{sha256Fast}
 import bytes.{encodeUtf8}
 import hex as Hex
 import test.{expectAll, expectEqual, expectErrContains, expectOkThen}
+
+decodePackageIdentity : String -> String -> Result String PackageIdentity
+decodePackageIdentity fingerprint text =
+  mapErr renderPackageIdentityError (decodeIdentity fingerprint text)
+
+test "decoder exposes distinct compatibility errors" = expectAll [
+  expectEqual
+    (Err MalformedMetadata)
+    (map (_ => ()) (decodeIdentity "pkg" "(")),
+  expectEqual
+    (Err MalformedEnvelope)
+    (map (_ => ()) (decodeIdentity "pkg" "(other)")),
+]
 
 sample : CProgram
 sample =
@@ -75,6 +89,9 @@ test "planned package identity survives persistence" =
 test "stale and truncated metadata are refused" =
   expectOkThen
     (p => expectAll [
+      expectEqual
+        (Err StaleFingerprint)
+        (map (_ => ()) (decodeIdentity "other" (encodePackageIdentity p))),
       expectErrContains
         "stale fingerprint"
         (map
@@ -196,15 +213,18 @@ test "format, integrity and duplicate names are checked" =
           (SList [SAtom "medaka-package-abi", SAtom "wrong", raw "1" [row]]))),
   ]
 
-physicalProgram : Bool -> Bool -> CProgram
-physicalProgram extra trap =
+data ConsumerShape = OriginalConsumer | ExtendedConsumer deriving (Eq)
+data Outcome = ReturnValue | DivideByZero deriving (Eq)
+
+divisionAt : Loc -> CExpr
+divisionAt loc = CBinPrim "/" (CLit (LInt 1)) (CLit (LInt 0)) "Int" loc
+
+physicalProgram : ConsumerShape -> Outcome -> CProgram
+physicalProgram shape outcome =
   let loc = Loc "pkg.mdk" 2 3 2 4
   let success =
-    if trap then
-      CBinPrim "/" (CLit (LInt 1)) (CLit (LInt 0)) "Int" loc
-    else
-      CLit (LInt 42)
-  let failure = CBinPrim "/" (CLit (LInt 1)) (CLit (LInt 0)) "Int" loc
+    if outcome == DivideByZero then divisionAt loc else CLit (LInt 42)
+  let failure = divisionAt loc
   let payload =
     CDecision
       (CApp (CVar "B" AGlobal) [CLit (LInt 42)] (CallSite CallExact False))
@@ -223,8 +243,11 @@ physicalProgram extra trap =
       (CTSwitch [CTBranch (HCon "A" 0) (CTLeaf 0)] (CTLeaf 1))
   CProgram
     [CBind "main" [CClause [] body] (Loc "a.mdk" 8 1 8 2) (BinderId "pkg" 1)]
-    (if extra then [("Z", 0), ("B", 1), ("A", 0)] else [("A", 0), ("B", 1)])
-    (if extra then
+    (if shape == ExtendedConsumer then
+      [("Z", 0), ("B", 1), ("A", 0)]
+    else
+      [("A", 0), ("B", 1)])
+    (if shape == ExtendedConsumer then
       [("Z", "a.New"), ("B", "pkg.U"), ("A", "pkg.T")]
     else
       [("A", "pkg.T"), ("B", "pkg.U")])
@@ -242,68 +265,63 @@ physicalProgram extra trap =
       ],
     }
 
+emitPhysical : PackageIdentity ->
+  CProgram ->
+  (Result String String, Result String String)
+emitPhysical package cp =
+  let lp = buildEmitPlanWithIdentity LlvmBackend PreludeFreeRuntime package cp
+  let (wp, prepared) =
+    prepareWasmPlanWithIdentity PreludeFreeRuntime omEmpty package cp
+  (
+    mapErr
+      (_ => "LLVM emit failed")
+      (llvmEmit
+        (makeEmitInput RawUnchecked PreludeFreeRuntime [] 0 [] [] "")
+        lp
+        cp),
+    mapErr
+      (_ => "Wasm emit failed")
+      (wasmEmit
+        (makeWasmEmitInput RawUnchecked PreludeFreeRuntime [])
+        wp
+        prepared),
+  )
+
 test "persisted identity is accepted by both emitters" =
   expectOkThen
     (p =>
       expectOkThen
         (q =>
-          let cp = physicalProgram True False
-          let lp = buildEmitPlanWithIdentity LlvmBackend PreludeFreeRuntime q cp
-          let (wp, prepared) =
-            prepareWasmPlanWithIdentity PreludeFreeRuntime omEmpty q cp
+          let (ll, wat) =
+            emitPhysical q (physicalProgram ExtendedConsumer ReturnValue)
           expectAll [
             expectOkThen
-              (ll => expectTextContainsAll ["8589934593", "8589934592"] ll)
-              (mapErr
-                (_ => "LLVM emit failed")
-                (llvmEmit
-                  (makeEmitInput RawUnchecked PreludeFreeRuntime [] 0 [] [] "")
-                  lp
-                  cp)),
-            expectOkThen
-              (_ => pass)
-              (mapErr
-                (_ => "Wasm emit failed")
-                (wasmEmit
-                  (makeWasmEmitInput RawUnchecked PreludeFreeRuntime [])
-                  wp
-                  prepared)),
+              (text => expectTextContainsAll ["8589934593", "8589934592"] text)
+              ll,
+            expectOkThen (_ => pass) wat,
           ])
         (decodePackageIdentity "pkg" (encodePackageIdentity p)))
     (planPackageIdentity "pkg" sample)
 
 physicalRun : String ->
-  Bool ->
-  Bool ->
+  ConsumerShape ->
+  Outcome ->
   <IO, Exec, FileRead, FileWrite> Expectation
-physicalRun dir extra trap = match planPackageIdentity "pkg" sample
+physicalRun dir shape outcome = match planPackageIdentity "pkg" sample
   Err _ => fail "package plan failed"
   Ok p => match decodePackageIdentity "pkg" (encodePackageIdentity p)
     Err e => fail e
-    Ok q =>
-      let cp = physicalProgram extra trap
-      let lp = buildEmitPlanWithIdentity LlvmBackend PreludeFreeRuntime q cp
-      let (wp, prepared) =
-        prepareWasmPlanWithIdentity PreludeFreeRuntime omEmpty q cp
-      match (
-        llvmEmit
-          (makeEmitInput RawUnchecked PreludeFreeRuntime [] 0 [] [] "")
-          lp
-          cp,
-        wasmEmit
-          (makeWasmEmitInput RawUnchecked PreludeFreeRuntime [])
-          wp
-          prepared,
-      )
-        (Ok ll, Ok wat) => runPhysicalFiles dir ll wat trap
-        _ => fail "emission failed"
+    Ok q => match emitPhysical q (physicalProgram shape outcome)
+      (Ok ll, Ok wat) => runPhysicalFiles dir ll wat outcome
+      (Err e, _) => fail e
+      (_, Err e) => fail e
 
 runPhysicalFiles : String ->
   String ->
   String ->
-  Bool ->
+  Outcome ->
   <IO, Exec, FileRead, FileWrite> Expectation
-runPhysicalFiles dir ll wat trap =
+runPhysicalFiles dir ll wat outcome =
   let llPath = "\{dir}/probe.ll"
   let watPath = "\{dir}/probe.wat"
   let native = "\{dir}/probe.native"
@@ -324,7 +342,7 @@ runPhysicalFiles dir ll wat trap =
             boundedVerbSeconds 120 "node" [underRoot "test/wasm/run.js", wasm],
           )
             (Ok (nc, no, ne), Ok (wc, wo, we)) =>
-              if trap then
+              if outcome == DivideByZero then
                 expectAll [
                   expectEqual 1 nc,
                   expectEqual 1 wc,
@@ -351,10 +369,10 @@ runPhysicalFiles dir ll wat trap =
 
 test "persisted identity executes on both physical targets" = withScratchDir
   (dir => expectAll [
-    physicalRun dir False False,
-    physicalRun dir True False,
-    physicalRun dir False True,
-    physicalRun dir True True,
+    physicalRun dir OriginalConsumer ReturnValue,
+    physicalRun dir ExtendedConsumer ReturnValue,
+    physicalRun dir OriginalConsumer DivideByZero,
+    physicalRun dir ExtendedConsumer DivideByZero,
   ])
 
 test "allocation rejects exhausted imported ranges" =
@@ -362,7 +380,7 @@ test "allocation rejects exhausted imported ranges" =
     (p =>
       let reject pkg =
         mapErr
-          (es => stringJoin "; " es)
+          (es => stringJoin "; " (map renderIdentityDefect es))
           (map (_ => ()) (planProgramIdentity pkg (consumer True)))
       expectAll [
         expectErrContains

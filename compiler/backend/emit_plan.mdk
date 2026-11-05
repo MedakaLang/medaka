@@ -1,5 +1,6 @@
 import backend.package_identity.{
-  PackageIdentity, IdentityPlan, emptyPackage, planProgramIdentity
+  PackageIdentity, IdentityPlan, IdentityDefect, emptyPackage,
+  planProgramIdentity
 }
 import backend.impl_groups.{ImplClauseGroup, groupImplEntries}
 import ir.constructor_facts.{ConstructorFacts, planConstructors}
@@ -98,7 +99,7 @@ public export data EmitPlan = EmitPlan {
   entryOutcome : Option EntryFact,
   methodResults : OrdMap (OrdMap MethodResultFact),
   constructorFacts : ConstructorFacts,
-  identity : Result (List String) IdentityPlan,
+  identity : Result (List IdentityDefect) IdentityPlan,
   wasmOnlyReach : Option ReachUnits,
   lazyGlobals : List String,
   eagerReach : OrdMap (List String),
@@ -318,7 +319,7 @@ planOver : Backend ->
   RuntimeExternDomain ->
   Option ReachUnits ->
   OrdMap (List Int) ->
-  Result (List String) IdentityPlan ->
+  Result (List IdentityDefect) IdentityPlan ->
   CProgram ->
   EmitPlan
 planOver target domain reach ctorFields identity prog =
