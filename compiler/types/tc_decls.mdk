@@ -664,29 +664,31 @@ dataEnvFromDeclsGo ord (d :: rest) acc =
 -- the population/read split legible, and the `listLen aliasFixtureEnv.deAliases`
 -- doctest pins population neutrality.
 dataEnvAddDecl : Int -> Bool -> Decl -> DataEnv -> DataEnv
-dataEnvAddDecl ord _ (DAttrib _ d) acc = dataEnvAddDecl ord True d acc
-dataEnvAddDecl _ord _ (DData { dataName, dataParams, dataCtors, dataOrigin, ... }) acc =
-  addDataTypeDecl dataName dataOrigin dataParams dataCtors acc
-dataEnvAddDecl _ord _ (DNewtype { newtypeName, newtypeParams, newtypeCtor, newtypeFieldTy, newtypeOrigin, ... }) acc =
-  addDataTypeDecl
-    newtypeName
-    newtypeOrigin
-    newtypeParams
-    [Variant newtypeCtor (ConPos [newtypeFieldTy])]
-    acc
--- `publicDataDecl d` — the shared predicate applied to the alias's own decl, not
--- a `tyAliasPub` read.  See `AliasDecl`'s note.
-dataEnvAddDecl ord att (d@(DTypeAlias { tyAliasName, tyAliasParams, tyAliasRhs, tyAliasOrigin, ... })) acc =
-  addAliasDecl
-    tyAliasName
-    tyAliasOrigin
-    tyAliasParams
-    tyAliasRhs
-    ord
-    (publicDataDecl d)
-    att
-    acc
-dataEnvAddDecl _ _ _ acc = acc
+dataEnvAddDecl ord att0 d0 acc = go att0 d0
+  where
+    go _ (DAttrib _ d) = go True d
+    go _ (DData { dataName, dataParams, dataCtors, dataOrigin, ... }) =
+      addDataTypeDecl dataName dataOrigin dataParams dataCtors acc
+    go _ (DNewtype { newtypeName, newtypeParams, newtypeCtor, newtypeFieldTy, newtypeOrigin, ... }) =
+      addDataTypeDecl
+        newtypeName
+        newtypeOrigin
+        newtypeParams
+        [Variant newtypeCtor (ConPos [newtypeFieldTy])]
+        acc
+    -- `publicDataDecl d` — the shared predicate applied to the alias's own decl, not
+    -- a `tyAliasPub` read.  See `AliasDecl`'s note.
+    go att (d@(DTypeAlias { tyAliasName, tyAliasParams, tyAliasRhs, tyAliasOrigin, ... })) =
+      addAliasDecl
+        tyAliasName
+        tyAliasOrigin
+        tyAliasParams
+        tyAliasRhs
+        ord
+        (publicDataDecl d)
+        att
+        acc
+    go _ _ = acc
 
 addDataTypeDecl : String ->
   TyConOrigin ->
@@ -712,9 +714,11 @@ addVariantIdentsRaw : String ->
   List Variant ->
   DataEnv ->
   DataEnv
-addVariantIdentsRaw _ _ [] env = env
-addVariantIdentsRaw tyName o ((Variant cn payload) :: rest) env =
-  addVariantIdentsRaw tyName o rest (addCtorIdentRaw tyName o cn payload env)
+addVariantIdentsRaw tyName o xs0 env0 = go xs0 env0
+  where
+    go [] env = env
+    go ((Variant cn payload) :: rest) env =
+      go rest (addCtorIdentRaw tyName o cn payload env)
 
 -- Honest absence, exactly as `spInsert`'s callers: no module id ⇒ no identity ⇒
 -- no candidate — `mkIdent` refuses `OriginUnresolved`/`OriginModule ""`.
@@ -757,12 +761,14 @@ addRecordIdentRaw tyName cn ident fields env =
   }
 
 addFieldOwnerIdents : Ident -> String -> List Field -> DataEnv -> DataEnv
-addFieldOwnerIdents _ _ [] env = env
-addFieldOwnerIdents ident cn ((Field fn _) :: rest) env =
-  let next = (ident, cn) :: optionOr [] (omLookup fn env.deFieldOwnerIdents)
-  addFieldOwnerIdents ident cn rest DataEnv { env |
-    deFieldOwnerIdents = omInsert fn next env.deFieldOwnerIdents,
-  }
+addFieldOwnerIdents ident cn xs0 env0 = go xs0 env0
+  where
+    go [] env = env
+    go ((Field fn _) :: rest) env =
+      let next = (ident, cn) :: optionOr [] (omLookup fn env.deFieldOwnerIdents)
+      go rest DataEnv { env |
+        deFieldOwnerIdents = omInsert fn next env.deFieldOwnerIdents,
+      }
 
 -- The prepend is the order contract, not an implementation detail.  Rows are
 -- folded in ASCENDING ordinal, decls in declaration order, and each row is
@@ -929,10 +935,12 @@ aliasDfsVisitNeighbors : OrdMap (List String) ->
   Ref (List String) ->
   List String ->
   Unit
-aliasDfsVisitNeighbors _ _ _ _ _ [] = ()
-aliasDfsVisitNeighbors graph visitedRef onStackRef onStackSetRef cyclicOut (n :: ns) =
-  aliasDfsVisit graph visitedRef onStackRef onStackSetRef cyclicOut n
-  aliasDfsVisitNeighbors graph visitedRef onStackRef onStackSetRef cyclicOut ns
+aliasDfsVisitNeighbors g vis stk stkSet cyc xs0 = go xs0
+  where
+    go [] = ()
+    go (n :: ns) =
+      aliasDfsVisit g vis stk stkSet cyc n
+      go ns
 
 aliasDfsVisitAll : OrdMap (List String) ->
   Ref (OrdMap Unit) ->
@@ -941,10 +949,12 @@ aliasDfsVisitAll : OrdMap (List String) ->
   Ref (List String) ->
   List String ->
   Unit
-aliasDfsVisitAll _ _ _ _ _ [] = ()
-aliasDfsVisitAll graph visitedRef onStackRef onStackSetRef cyclicOut (k :: ks) =
-  aliasDfsVisit graph visitedRef onStackRef onStackSetRef cyclicOut k
-  aliasDfsVisitAll graph visitedRef onStackRef onStackSetRef cyclicOut ks
+aliasDfsVisitAll g vis stk stkSet cyc xs0 = go xs0
+  where
+    go [] = ()
+    go (k :: ks) =
+      aliasDfsVisit g vis stk stkSet cyc k
+      go ks
 
 -- Each report is located at the alias's right-hand side, the type that refers
 -- back to it, when the reading module declares the alias; an alias another
@@ -955,25 +965,27 @@ emitCyclicAliasErrors : ModuleCtx ->
   List (TabKey, (List String, Ty)) ->
   List String ->
   Unit
-emitCyclicAliasErrors _mctx _ _ [] = ()
-emitCyclicAliasErrors mctx prog table (name :: rest) =
-  let reader = mctx.mcCells.currentModuleRef.value
-  let named = filterList (e => tabKeyName (fst e) == name) table
-  let loc = match find (e => aliasDeclaredBy reader (fst e)) named
-    Some e => firstTyLoc (snd (snd e))
-    None =>
-      findMap
-        (e => do
-          owner <- tabKeyModule (fst e)
-          importLocFor mctx.mcGraph.declEnvsRef.value.deReach prog owner)
-        named
-  pushTypeErrorOnce
-    (mctxAtIfSome loc mctx)
-    TRecursiveAlias
-    ("type alias `"
-      ++ name
-      ++ "` is recursive; a type alias cannot refer to itself, so declare a `data` type instead")
-  emitCyclicAliasErrors mctx prog table rest
+emitCyclicAliasErrors mctx prog table xs0 = go xs0
+  where
+    go [] = ()
+    go (name :: rest) =
+      let reader = mctx.mcCells.currentModuleRef.value
+      let named = filterList (e => tabKeyName (fst e) == name) table
+      let loc = match find (e => aliasDeclaredBy reader (fst e)) named
+        Some e => firstTyLoc (snd (snd e))
+        None =>
+          findMap
+            (e => do
+              owner <- tabKeyModule (fst e)
+              importLocFor mctx.mcGraph.declEnvsRef.value.deReach prog owner)
+            named
+      pushTypeErrorOnce
+        (mctxAtIfSome loc mctx)
+        TRecursiveAlias
+        ("type alias `"
+          ++ name
+          ++ "` is recursive; a type alias cannot refer to itself, so declare a `data` type instead")
+      go rest
 
 -- Does module [reader] declare the alias keyed [key]?  A key with no module
 -- (a flat program's) is the reader's own.
@@ -1215,23 +1227,24 @@ rowArgAtomsIn : ModuleCtx ->
   List (String, List Kind) ->
   Ty ->
   List (String, List Atom)
-rowArgAtomsIn mctx scope (TyApp a b) =
-  let kinded = match tyAppSpine (TyApp a b)
-    (TyCon { tyConName = n, tyConOrigin = o }, args) =>
-      rowArgAtomsApp mctx scope o n args
-    (TyVar h, args) => rowArgAtomsVarApp mctx scope h args
-    _ => None
-  match kinded
-    Some occs => occs
-    None => rowArgAtomsIn mctx scope a ++ rowArgAtomsIn mctx scope b
-rowArgAtomsIn mctx scope (TyFun a b) =
-  rowArgAtomsIn mctx scope a ++ rowArgAtomsIn mctx scope b
-rowArgAtomsIn mctx scope (TyTuple ts) = flatMap (rowArgAtomsIn mctx scope) ts
-rowArgAtomsIn mctx scope (TyEffect _ _ t) = rowArgAtomsIn mctx scope t
-rowArgAtomsIn mctx scope (TyConstrained _ t) = rowArgAtomsIn mctx scope t
-rowArgAtomsIn mctx scope (TyNamed _ t _) = rowArgAtomsIn mctx scope t
-rowArgAtomsIn mctx scope (TyQual t _ _) = rowArgAtomsIn mctx scope t
-rowArgAtomsIn _mctx _ (TyCon {  } | TyVar _ | TyRow _ _ _ | TyAuth _ _) = []
+rowArgAtomsIn mctx scope x0 = go x0
+  where
+    go (TyApp a b) =
+      let kinded = match tyAppSpine (TyApp a b)
+        (TyCon { tyConName = n, tyConOrigin = o }, args) =>
+          rowArgAtomsApp mctx scope o n args
+        (TyVar h, args) => rowArgAtomsVarApp mctx scope h args
+        _ => None
+      match kinded
+        Some occs => occs
+        None => go a ++ go b
+    go (TyFun a b) = go a ++ go b
+    go (TyTuple ts) = flatMap (rowArgAtomsIn mctx scope) ts
+    go (TyEffect _ _ t) = go t
+    go (TyConstrained _ t) = go t
+    go (TyNamed _ t _) = go t
+    go (TyQual t _ _) = go t
+    go (TyCon {  } | TyVar _ | TyRow _ _ _ | TyAuth _ _) = []
 
 rowArgAtomsApp : ModuleCtx ->
   List (String, List Kind) ->
@@ -1622,21 +1635,19 @@ inferParamRowAtoms gctx params variants =
 -- WRITTEN beside it at that occurrence (a tail position `<Stdout | p>` reports
 -- `[Stdout]`; every other occurrence reports `[]`).
 paramRowAtomOccs : GraphCtx -> String -> Ty -> List (List Atom)
-paramRowAtomOccs _gctx p (TyVar n) = if n == p then [[]] else []
-paramRowAtomOccs _gctx _ (TyCon { tyConName = _ }) = []
-paramRowAtomOccs gctx p (TyEffect labels tails t) =
-  paramRowAtomsFor gctx p tails labels ++ paramRowAtomOccs gctx p t
-paramRowAtomOccs gctx p (TyRow labels tails _) =
-  paramRowAtomsFor gctx p tails labels
-paramRowAtomOccs gctx p (TyFun a b) =
-  paramRowAtomOccs gctx p a ++ paramRowAtomOccs gctx p b
-paramRowAtomOccs gctx p (TyTuple ts) = flatMap (paramRowAtomOccs gctx p) ts
-paramRowAtomOccs gctx p (TyApp a b) =
-  paramRowAtomOccs gctx p a ++ paramRowAtomOccs gctx p b
-paramRowAtomOccs gctx p (TyConstrained _ t) = paramRowAtomOccs gctx p t
-paramRowAtomOccs gctx p (TyNamed _ t _) = paramRowAtomOccs gctx p t
-paramRowAtomOccs gctx p (TyQual t _ _) = paramRowAtomOccs gctx p t
-paramRowAtomOccs _gctx _ (TyAuth _ _) = []
+paramRowAtomOccs gctx p x0 = go x0
+  where
+    go (TyVar n) = if n == p then [[]] else []
+    go (TyCon { tyConName = _ }) = []
+    go (TyEffect labels tails t) = paramRowAtomsFor gctx p tails labels ++ go t
+    go (TyRow labels tails _) = paramRowAtomsFor gctx p tails labels
+    go (TyFun a b) = go a ++ go b
+    go (TyTuple ts) = flatMap (paramRowAtomOccs gctx p) ts
+    go (TyApp a b) = go a ++ go b
+    go (TyConstrained _ t) = go t
+    go (TyNamed _ t _) = go t
+    go (TyQual t _ _) = go t
+    go (TyAuth _ _) = []
 
 -- The row's written atoms, once per tail var that IS [p] (a join names several).
 paramRowAtomsFor : GraphCtx ->
@@ -1775,12 +1786,13 @@ registerNamedFieldVariantsGo : ModuleCtx ->
   List Variant ->
   List (List (String, KindAnn)) ->
   Unit
-registerNamedFieldVariantsGo mctx o tyName params kinds ((Variant cname (ConNamed fields _)) :: rest) (bs :: brest) =
-  registerRecordInfoKeyed mctx o cname tyName params kinds bs fields
-  registerNamedFieldVariantsGo mctx o tyName params kinds rest brest
-registerNamedFieldVariantsGo mctx o tyName params kinds (_ :: rest) (_ :: brest) =
-  registerNamedFieldVariantsGo mctx o tyName params kinds rest brest
-registerNamedFieldVariantsGo _mctx _ _ _ _ _ _ = ()
+registerNamedFieldVariantsGo mctx o tyName params kinds xs0 xs1 = go xs0 xs1
+  where
+    go ((Variant cname (ConNamed fields _)) :: rest) (bs :: brest) =
+      registerRecordInfoKeyed mctx o cname tyName params kinds bs fields
+      go rest brest
+    go (_ :: rest) (_ :: brest) = go rest brest
+    go _ _ = ()
 
 addVariants : TcEnv ->
   List (String, Mono) ->
@@ -1792,39 +1804,41 @@ addVariants : TcEnv ->
   List Variant ->
   List (List (String, KindAnn)) ->
   TcEnv
-addVariants env tvs etbl paramTyIds rowEffvarIds authvarIds result ((Variant cname payload) :: rest) (binders :: brest) =
-  let opened = existentialCells env.teDyn.dcModule binders
-  recordExistentials env.teDyn.dcModule.mcGraph opened
-  let ctorEtbl = sigVarsWithAuths opened etbl
-  reportUnboundAuthorityNamesIn
-    env.teDyn.dcModule
-    (payloadAstTypes payload)
-    ctorEtbl
-  -- a report from elaborating a field (a pattern slot a binder cannot fill)
-  -- points at the constructor's fields
-  let ctorType =
-    foldrFun
-      (payloadTypesE
-        (mctxAtIfSome
-          (firstTyLocList (payloadAstTypes payload))
-          env.teDyn.dcModule)
+addVariants env0 tvs etbl pIds rIds aIds res vs0 bs0 = go env0 vs0 bs0
+  where
+    go env ((Variant cname payload) :: rest) (binders :: brest) =
+      let opened = existentialCells env.teDyn.dcModule binders
+      recordExistentials env.teDyn.dcModule.mcGraph opened
+      let ctorEtbl = sigVarsWithAuths opened etbl
+      reportUnboundAuthorityNamesIn
+        env.teDyn.dcModule
+        (payloadAstTypes payload)
         ctorEtbl
-        tvs
-        payload)
-      result
-  let env2 =
-    addCtor
-      env
-      cname
-      (Forall
-        paramTyIds
-        rowEffvarIds
-        (authvarIds ++ map (c => authvarId (snd c)) opened)
-        []
-        pureRow
-        ctorType)
-  addVariants env2 tvs etbl paramTyIds rowEffvarIds authvarIds result rest brest
-addVariants env _ _ _ _ _ _ _ _ = env
+      -- a report from elaborating a field (a pattern slot a binder cannot fill)
+      -- points at the constructor's fields
+      let ctorType =
+        foldrFun
+          (payloadTypesE
+            (mctxAtIfSome
+              (firstTyLocList (payloadAstTypes payload))
+              env.teDyn.dcModule)
+            ctorEtbl
+            tvs
+            payload)
+          res
+      let env2 =
+        addCtor
+          env
+          cname
+          (Forall
+            pIds
+            rIds
+            (aIds ++ map (c => authvarId (snd c)) opened)
+            []
+            pureRow
+            ctorType)
+      go env2 rest brest
+    go env _ _ = env
 
 -- a constraint in a method's own `=>` context is method-level iff it mentions a
 -- tyvar.  One over only interface params is a slot too: an impl head such as
@@ -1939,7 +1953,7 @@ directIfaceSchemeRows : ModuleCtx -> Decl -> List MethodSchemeRow
 directIfaceSchemeRows mctx (DInterface { name, typarams, typaramKinds, methods, ifaceOrigin, ... }) =
   methodSchemeRows
     mctx
-    (declGradedScope mctx.mcGraph typarams typaramKinds methods)
+    (declGradedScope mctx.mcGraph typarams typaramKinds)
     IfaceRef { irName = name, irOrigin = ifaceOrigin }
     typarams
     methods
@@ -1954,25 +1968,27 @@ methodSchemeRows : ModuleCtx ->
   List String ->
   List IfaceMethod ->
   List MethodSchemeRow
-methodSchemeRows _mctx _ _ _ [] = []
-methodSchemeRows mctx scope iface typarams ((IfaceMethod mname mty _ _) :: rest) =
-  let (scheme, tvs) = sigToSchemeTvsIn mctx scope mty
-  let slots =
-    methodPredicateSlotsOfType mctx typarams mty tvs (schemeIds scheme)
-  installMethodPredicateSlots mctx (methodSlotKey iface mname) slots
-  MethodSchemeRow {
-      msrIface = iface,
-      msrName = mname,
-      msrTyparams = typarams,
-      msrType = mty,
-      msrScheme = scheme,
-      msrPredicateTemplate = MethodPredicateTemplate {
-        mptInterface = iface,
-        mptArguments = methodInterfacePredicateTemplate typarams tvs,
-      },
-      msrMethodSlots = slots,
-    }
-    :: methodSchemeRows mctx scope iface typarams rest
+methodSchemeRows mctx scope iface typarams xs0 = go xs0
+  where
+    go [] = []
+    go ((IfaceMethod mname mty _ _) :: rest) =
+      let (scheme, tvs) = sigToSchemeTvsIn mctx scope mty
+      let slots =
+        methodPredicateSlotsOfType mctx typarams mty tvs (schemeIds scheme)
+      installMethodPredicateSlots mctx (methodSlotKey iface mname) slots
+      MethodSchemeRow {
+          msrIface = iface,
+          msrName = mname,
+          msrTyparams = typarams,
+          msrType = mty,
+          msrScheme = scheme,
+          msrPredicateTemplate = MethodPredicateTemplate {
+            mptInterface = iface,
+            mptArguments = methodInterfacePredicateTemplate typarams tvs,
+          },
+          msrMethodSlots = slots,
+        }
+        :: go rest
 
 methodInterfacePredicateTemplate : List String ->
   List (String, Mono) ->
@@ -2030,10 +2046,12 @@ pickNumLitRow : IfaceRef ->
   String ->
   List MethodSchemeRow ->
   Option MethodSchemeRow
-pickNumLitRow _ _ [] = None
-pickNumLitRow iface mname (row :: rest)
-  | row.msrName == mname && sameIfaceDecl row.msrIface iface = Some row
-  | otherwise = pickNumLitRow iface mname rest
+pickNumLitRow iface mname xs0 = go xs0
+  where
+    go [] = None
+    go (row :: rest)
+      | row.msrName == mname && sameIfaceDecl row.msrIface iface = Some row
+      | otherwise = go rest
 
 -- Like the row builder but WITHOUT the installMethodPredicateSlots side effect — for
 -- callers (inferOneIfaceDefaults) that only need the schemes to look up a method's
@@ -2044,10 +2062,11 @@ methodSchemesPure : ModuleCtx ->
   List (String, List Kind) ->
   List IfaceMethod ->
   List (String, Scheme)
-methodSchemesPure _mctx _ [] = []
-methodSchemesPure mctx scope ((IfaceMethod mname mty _ _) :: rest) =
-  (mname, fst (sigToSchemeTvsIn mctx scope mty))
-    :: methodSchemesPure mctx scope rest
+methodSchemesPure mctx scope xs0 = go xs0
+  where
+    go [] = []
+    go ((IfaceMethod mname mty _ _) :: rest) =
+      (mname, fst (sigToSchemeTvsIn mctx scope mty)) :: go rest
 
 -- Install the precomputed row slots through the historical first-write guard.  Empty
 -- method contexts remain absent, and the preserved Flat second row construction cannot
@@ -2080,12 +2099,13 @@ methodPredicateSlotsOfType : ModuleCtx ->
   List (String, Mono) ->
   List Int ->
   List MethodPredicateSlot
-methodPredicateSlotsOfType mctx typarams (TyConstrained cs t) tvs fullIds =
-  flatMap (constraintMethodPredicateSlot mctx typarams tvs fullIds) cs
-    ++ methodPredicateSlotsOfType mctx typarams t tvs fullIds
-methodPredicateSlotsOfType mctx typarams (TyEffect _ _ t) tvs fullIds =
-  methodPredicateSlotsOfType mctx typarams t tvs fullIds
-methodPredicateSlotsOfType _mctx _ _ _ _ = []
+methodPredicateSlotsOfType mctx typarams x0 tvs fullIds = go x0
+  where
+    go (TyConstrained cs t) =
+      flatMap (constraintMethodPredicateSlot mctx typarams tvs fullIds) cs
+        ++ go t
+    go (TyEffect _ _ t) = go t
+    go _ = []
 
 constraintMethodPredicateSlot : ModuleCtx ->
   List String ->
@@ -2192,17 +2212,19 @@ recordDeclKinds mctx ds =
   each (p => recordDeclKindsAs mctx (snd p) (fst p)) (zipL ds solved)
 
 recordDeclKindsAs : ModuleCtx -> Option (TabKey, List Kind) -> Decl -> Unit
-recordDeclKindsAs mctx solved (DAttrib _ d) = recordDeclKindsAs mctx solved d
-recordDeclKindsAs mctx solved (DData { dataVis = vis, dataName = name, dataParams = params, dataCtors = variants, dataOrigin = o }) =
-  recordCtors mctx.mcGraph o name vis params variants
-  recordSolvedKinds mctx o name solved
-recordDeclKindsAs mctx solved (DNewtype { newtypePub = pub, newtypeName = name, newtypeParams = params, newtypeCtor = con, newtypeFieldTy = fty, newtypeOrigin = o }) =
-  let vis = if pub then VisPublic else VisAbstract
-  recordCtors mctx.mcGraph o name vis params [Variant con (ConPos [fty])]
-  recordSolvedKinds mctx o name solved
-recordDeclKindsAs mctx solved (DTypeAlias { tyAliasName = name, tyAliasOrigin = o }) =
-  recordSolvedKinds mctx o name solved
-recordDeclKindsAs _mctx _ _ = ()
+recordDeclKindsAs mctx solved x0 = go x0
+  where
+    go (DAttrib _ d) = go d
+    go (DData { dataVis = vis, dataName = name, dataParams = params, dataCtors = variants, dataOrigin = o }) =
+      recordCtors mctx.mcGraph o name vis params variants
+      recordSolvedKinds mctx o name solved
+    go (DNewtype { newtypePub = pub, newtypeName = name, newtypeParams = params, newtypeCtor = con, newtypeFieldTy = fty, newtypeOrigin = o }) =
+      let vis = if pub then VisPublic else VisAbstract
+      recordCtors mctx.mcGraph o name vis params [Variant con (ConPos [fty])]
+      recordSolvedKinds mctx o name solved
+    go (DTypeAlias { tyAliasName = name, tyAliasOrigin = o }) =
+      recordSolvedKinds mctx o name solved
+    go _ = ()
 
 recordSolvedKinds : ModuleCtx ->
   TyConOrigin ->
@@ -2627,13 +2649,15 @@ ambigRowsOf : String ->
   OrdMap (List (String, String)) ->
   List String ->
   List (String, List String)
-ambigRowsOf _ _ [] = []
-ambigRowsOf mid grouped (n :: rest) =
-  let pairs = definerPairsOf n grouped
-  if listLen pairs >= 2 && not (anyList (p => fst p == mid) pairs) then
-    (n, map fst pairs) :: ambigRowsOf mid grouped rest
-  else
-    ambigRowsOf mid grouped rest
+ambigRowsOf mid grouped xs0 = go xs0
+  where
+    go [] = []
+    go (n :: rest) =
+      let pairs = definerPairsOf n grouped
+      if listLen pairs >= 2 && not (anyList (p => fst p == mid) pairs) then
+        (n, map fst pairs) :: go rest
+      else
+        go rest
 
 definerPairsOf : String ->
   OrdMap (List (String, String)) ->

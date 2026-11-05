@@ -1,5 +1,5 @@
 # META
-source_lines=2997
+source_lines=2996
 stages=DESUGAR,MARK
 # SOURCE
 -- tc_global: the whole-graph and declaration-level checks that need inference: the coherence scan,
@@ -1515,8 +1515,7 @@ inferOneIfaceDefaults env (DInterface { name, typarams, typaramKinds, methods, i
   -- #822: derived from THIS declaration, not from a name key (declGradedScope), and
   -- threaded down so the default bodies see the same Row slots the schemes were built
   -- with.  Computed ONCE per interface rather than per method.
-  let dscope =
-    declGradedScope env.teDyn.dcModule.mcGraph typarams typaramKinds methods
+  let dscope = declGradedScope env.teDyn.dcModule.mcGraph typarams typaramKinds
   let ifaceSchemes = methodSchemesPure env.teDyn.dcModule dscope methods
   let iface = IfaceRef { irName = name, irOrigin = ifaceOrigin }
   inferDefaultMethods
@@ -3209,7 +3208,7 @@ numDictObls gctx (app :: rest) =
 (DFunDef false "inferDefaultBodies" ((PVar "env") (PCons (PVar "d") (PVar "rest"))) (EBlock (DoExpr (EApp (EApp (EVar "inferOneIfaceDefaults") (EVar "env")) (EVar "d"))) (DoExpr (EApp (EApp (EVar "inferDefaultBodies") (EVar "env")) (EVar "rest")))))
 (DTypeSig false "inferOneIfaceDefaults" (TyFun (TyCon "TcEnv") (TyFun (TyCon "Decl") (TyCon "Unit"))))
 (DFunDef false "inferOneIfaceDefaults" ((PVar "env") (PCon "DAttrib" PWild (PVar "d"))) (EApp (EApp (EVar "inferOneIfaceDefaults") (EVar "env")) (EVar "d")))
-(DFunDef false "inferOneIfaceDefaults" ((PVar "env") (PRec "DInterface" ((rf "name" None) (rf "typarams" None) (rf "typaramKinds" None) (rf "methods" None) (rf "ifaceOrigin" None)) true)) (EBlock (DoLet false false (PVar "dscope") (EApp (EApp (EApp (EApp (EVar "declGradedScope") (EFieldAccess (EFieldAccess (EFieldAccess (EVar "env") "teDyn") "dcModule") "mcGraph")) (EVar "typarams")) (EVar "typaramKinds")) (EVar "methods"))) (DoLet false false (PVar "ifaceSchemes") (EApp (EApp (EApp (EVar "methodSchemesPure") (EFieldAccess (EFieldAccess (EVar "env") "teDyn") "dcModule")) (EVar "dscope")) (EVar "methods"))) (DoLet false false (PVar "iface") (ERecordCreate "IfaceRef" ((fa "irName" (EVar "name")) (fa "irOrigin" (EVar "ifaceOrigin"))))) (DoExpr (EApp (EApp (EApp (EApp (EApp (EVar "inferDefaultMethods") (EApp (EApp (EVar "extendVars") (EVar "env")) (EVar "ifaceSchemes"))) (EVar "iface")) (EVar "dscope")) (EVar "typarams")) (EVar "methods")))))
+(DFunDef false "inferOneIfaceDefaults" ((PVar "env") (PRec "DInterface" ((rf "name" None) (rf "typarams" None) (rf "typaramKinds" None) (rf "methods" None) (rf "ifaceOrigin" None)) true)) (EBlock (DoLet false false (PVar "dscope") (EApp (EApp (EApp (EVar "declGradedScope") (EFieldAccess (EFieldAccess (EFieldAccess (EVar "env") "teDyn") "dcModule") "mcGraph")) (EVar "typarams")) (EVar "typaramKinds"))) (DoLet false false (PVar "ifaceSchemes") (EApp (EApp (EApp (EVar "methodSchemesPure") (EFieldAccess (EFieldAccess (EVar "env") "teDyn") "dcModule")) (EVar "dscope")) (EVar "methods"))) (DoLet false false (PVar "iface") (ERecordCreate "IfaceRef" ((fa "irName" (EVar "name")) (fa "irOrigin" (EVar "ifaceOrigin"))))) (DoExpr (EApp (EApp (EApp (EApp (EApp (EVar "inferDefaultMethods") (EApp (EApp (EVar "extendVars") (EVar "env")) (EVar "ifaceSchemes"))) (EVar "iface")) (EVar "dscope")) (EVar "typarams")) (EVar "methods")))))
 (DFunDef false "inferOneIfaceDefaults" ((PVar "_env") PWild) (ELit LUnit))
 (DTypeSig false "inferDefaultMethods" (TyFun (TyCon "TcEnv") (TyFun (TyCon "IfaceRef") (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "Kind")))) (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyApp (TyCon "List") (TyCon "IfaceMethod")) (TyCon "Unit")))))))
 (DFunDef false "inferDefaultMethods" ((PVar "_env") PWild PWild PWild (PList)) (ELit LUnit))
@@ -3551,7 +3550,7 @@ numDictObls gctx (app :: rest) =
 (DFunDef false "inferDefaultBodies" ((PVar "env") (PCons (PVar "d") (PVar "rest"))) (EBlock (DoExpr (EApp (EApp (EVar "inferOneIfaceDefaults") (EVar "env")) (EVar "d"))) (DoExpr (EApp (EApp (EVar "inferDefaultBodies") (EVar "env")) (EVar "rest")))))
 (DTypeSig false "inferOneIfaceDefaults" (TyFun (TyCon "TcEnv") (TyFun (TyCon "Decl") (TyCon "Unit"))))
 (DFunDef false "inferOneIfaceDefaults" ((PVar "env") (PCon "DAttrib" PWild (PVar "d"))) (EApp (EApp (EVar "inferOneIfaceDefaults") (EVar "env")) (EVar "d")))
-(DFunDef false "inferOneIfaceDefaults" ((PVar "env") (PRec "DInterface" ((rf "name" None) (rf "typarams" None) (rf "typaramKinds" None) (rf "methods" None) (rf "ifaceOrigin" None)) true)) (EBlock (DoLet false false (PVar "dscope") (EApp (EApp (EApp (EApp (EVar "declGradedScope") (EFieldAccess (EFieldAccess (EFieldAccess (EVar "env") "teDyn") "dcModule") "mcGraph")) (EVar "typarams")) (EVar "typaramKinds")) (EVar "methods"))) (DoLet false false (PVar "ifaceSchemes") (EApp (EApp (EApp (EVar "methodSchemesPure") (EFieldAccess (EFieldAccess (EVar "env") "teDyn") "dcModule")) (EVar "dscope")) (EVar "methods"))) (DoLet false false (PVar "iface") (ERecordCreate "IfaceRef" ((fa "irName" (EVar "name")) (fa "irOrigin" (EVar "ifaceOrigin"))))) (DoExpr (EApp (EApp (EApp (EApp (EApp (EVar "inferDefaultMethods") (EApp (EApp (EVar "extendVars") (EVar "env")) (EVar "ifaceSchemes"))) (EVar "iface")) (EVar "dscope")) (EVar "typarams")) (EVar "methods")))))
+(DFunDef false "inferOneIfaceDefaults" ((PVar "env") (PRec "DInterface" ((rf "name" None) (rf "typarams" None) (rf "typaramKinds" None) (rf "methods" None) (rf "ifaceOrigin" None)) true)) (EBlock (DoLet false false (PVar "dscope") (EApp (EApp (EApp (EVar "declGradedScope") (EFieldAccess (EFieldAccess (EFieldAccess (EVar "env") "teDyn") "dcModule") "mcGraph")) (EVar "typarams")) (EVar "typaramKinds"))) (DoLet false false (PVar "ifaceSchemes") (EApp (EApp (EApp (EVar "methodSchemesPure") (EFieldAccess (EFieldAccess (EVar "env") "teDyn") "dcModule")) (EVar "dscope")) (EVar "methods"))) (DoLet false false (PVar "iface") (ERecordCreate "IfaceRef" ((fa "irName" (EVar "name")) (fa "irOrigin" (EVar "ifaceOrigin"))))) (DoExpr (EApp (EApp (EApp (EApp (EApp (EVar "inferDefaultMethods") (EApp (EApp (EVar "extendVars") (EVar "env")) (EVar "ifaceSchemes"))) (EVar "iface")) (EVar "dscope")) (EVar "typarams")) (EVar "methods")))))
 (DFunDef false "inferOneIfaceDefaults" ((PVar "_env") PWild) (ELit LUnit))
 (DTypeSig false "inferDefaultMethods" (TyFun (TyCon "TcEnv") (TyFun (TyCon "IfaceRef") (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "Kind")))) (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyApp (TyCon "List") (TyCon "IfaceMethod")) (TyCon "Unit")))))))
 (DFunDef false "inferDefaultMethods" ((PVar "_env") PWild PWild PWild (PList)) (ELit LUnit))

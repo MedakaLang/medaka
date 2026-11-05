@@ -1,5 +1,5 @@
 # META
-source_lines=278
+source_lines=280
 stages=DESUGAR,MARK
 # SOURCE
 -- Evidence coverage: does a published evidence table answer every site its
@@ -118,14 +118,16 @@ declsFaults idx (d :: rest) acc = declsFaults idx rest (declFaults idx d acc)
 
 -- Every `Decl` that holds an expression.
 declFaults : EvIndex -> Decl -> List EvidenceFault -> List EvidenceFault
-declFaults idx (DFunDef _ _ _ e _ _) acc = exprFaults idx e acc
-declFaults idx (DInterface { methods = ms }) acc = ifaceMethodsFaults idx ms acc
-declFaults idx (DImpl { methods = ms }) acc = implMethodsFaults idx ms acc
-declFaults idx (DProp _ _ _ e) acc = exprFaults idx e acc
-declFaults idx (DTest _ _ e) acc = exprFaults idx e acc
-declFaults idx (DLetGroup _ bs) acc = letBindsFaults idx bs acc
-declFaults idx (DAttrib _ d) acc = declFaults idx d acc
-declFaults _ _ acc = acc
+declFaults idx x0 acc = go x0
+  where
+    go (DFunDef _ _ _ e _ _) = exprFaults idx e acc
+    go (DInterface { methods = ms }) = ifaceMethodsFaults idx ms acc
+    go (DImpl { methods = ms }) = implMethodsFaults idx ms acc
+    go (DProp _ _ _ e) = exprFaults idx e acc
+    go (DTest _ _ e) = exprFaults idx e acc
+    go (DLetGroup _ bs) = letBindsFaults idx bs acc
+    go (DAttrib _ d) = go d
+    go _ = acc
 
 ifaceMethodsFaults : EvIndex ->
   List IfaceMethod ->
@@ -310,14 +312,7 @@ kvsFaults idx ((k, v) :: rest) acc =
 (DFunDef false "declsFaults" (PWild (PList) (PVar "acc")) (EVar "acc"))
 (DFunDef false "declsFaults" ((PVar "idx") (PCons (PVar "d") (PVar "rest")) (PVar "acc")) (EApp (EApp (EApp (EVar "declsFaults") (EVar "idx")) (EVar "rest")) (EApp (EApp (EApp (EVar "declFaults") (EVar "idx")) (EVar "d")) (EVar "acc"))))
 (DTypeSig false "declFaults" (TyFun (TyCon "EvIndex") (TyFun (TyCon "Decl") (TyFun (TyApp (TyCon "List") (TyCon "EvidenceFault")) (TyApp (TyCon "List") (TyCon "EvidenceFault"))))))
-(DFunDef false "declFaults" ((PVar "idx") (PCon "DFunDef" PWild PWild PWild (PVar "e") PWild PWild) (PVar "acc")) (EApp (EApp (EApp (EVar "exprFaults") (EVar "idx")) (EVar "e")) (EVar "acc")))
-(DFunDef false "declFaults" ((PVar "idx") (PRec "DInterface" ((rf "methods" (PVar "ms"))) false) (PVar "acc")) (EApp (EApp (EApp (EVar "ifaceMethodsFaults") (EVar "idx")) (EVar "ms")) (EVar "acc")))
-(DFunDef false "declFaults" ((PVar "idx") (PRec "DImpl" ((rf "methods" (PVar "ms"))) false) (PVar "acc")) (EApp (EApp (EApp (EVar "implMethodsFaults") (EVar "idx")) (EVar "ms")) (EVar "acc")))
-(DFunDef false "declFaults" ((PVar "idx") (PCon "DProp" PWild PWild PWild (PVar "e")) (PVar "acc")) (EApp (EApp (EApp (EVar "exprFaults") (EVar "idx")) (EVar "e")) (EVar "acc")))
-(DFunDef false "declFaults" ((PVar "idx") (PCon "DTest" PWild PWild (PVar "e")) (PVar "acc")) (EApp (EApp (EApp (EVar "exprFaults") (EVar "idx")) (EVar "e")) (EVar "acc")))
-(DFunDef false "declFaults" ((PVar "idx") (PCon "DLetGroup" PWild (PVar "bs")) (PVar "acc")) (EApp (EApp (EApp (EVar "letBindsFaults") (EVar "idx")) (EVar "bs")) (EVar "acc")))
-(DFunDef false "declFaults" ((PVar "idx") (PCon "DAttrib" PWild (PVar "d")) (PVar "acc")) (EApp (EApp (EApp (EVar "declFaults") (EVar "idx")) (EVar "d")) (EVar "acc")))
-(DFunDef false "declFaults" (PWild PWild (PVar "acc")) (EVar "acc"))
+(DFunDef false "declFaults" ((PVar "idx") (PVar "x0") (PVar "acc")) (ELetGroup ((lgb "go" (clause ((PCon "DFunDef" PWild PWild PWild (PVar "e") PWild PWild)) (EApp (EApp (EApp (EVar "exprFaults") (EVar "idx")) (EVar "e")) (EVar "acc"))) (clause ((PRec "DInterface" ((rf "methods" (PVar "ms"))) false)) (EApp (EApp (EApp (EVar "ifaceMethodsFaults") (EVar "idx")) (EVar "ms")) (EVar "acc"))) (clause ((PRec "DImpl" ((rf "methods" (PVar "ms"))) false)) (EApp (EApp (EApp (EVar "implMethodsFaults") (EVar "idx")) (EVar "ms")) (EVar "acc"))) (clause ((PCon "DProp" PWild PWild PWild (PVar "e"))) (EApp (EApp (EApp (EVar "exprFaults") (EVar "idx")) (EVar "e")) (EVar "acc"))) (clause ((PCon "DTest" PWild PWild (PVar "e"))) (EApp (EApp (EApp (EVar "exprFaults") (EVar "idx")) (EVar "e")) (EVar "acc"))) (clause ((PCon "DLetGroup" PWild (PVar "bs"))) (EApp (EApp (EApp (EVar "letBindsFaults") (EVar "idx")) (EVar "bs")) (EVar "acc"))) (clause ((PCon "DAttrib" PWild (PVar "d"))) (EApp (EVar "go") (EVar "d"))) (clause (PWild) (EVar "acc")))) (EApp (EVar "go") (EVar "x0"))))
 (DTypeSig false "ifaceMethodsFaults" (TyFun (TyCon "EvIndex") (TyFun (TyApp (TyCon "List") (TyCon "IfaceMethod")) (TyFun (TyApp (TyCon "List") (TyCon "EvidenceFault")) (TyApp (TyCon "List") (TyCon "EvidenceFault"))))))
 (DFunDef false "ifaceMethodsFaults" (PWild (PList) (PVar "acc")) (EVar "acc"))
 (DFunDef false "ifaceMethodsFaults" ((PVar "idx") (PCons (PCon "IfaceMethod" PWild PWild (PCon "Some" (PCon "MethodDefault" PWild (PVar "e"))) PWild) (PVar "rest")) (PVar "acc")) (EApp (EApp (EApp (EVar "ifaceMethodsFaults") (EVar "idx")) (EVar "rest")) (EApp (EApp (EApp (EVar "exprFaults") (EVar "idx")) (EVar "e")) (EVar "acc"))))
@@ -439,14 +434,7 @@ kvsFaults idx ((k, v) :: rest) acc =
 (DFunDef false "declsFaults" (PWild (PList) (PVar "acc")) (EVar "acc"))
 (DFunDef false "declsFaults" ((PVar "idx") (PCons (PVar "d") (PVar "rest")) (PVar "acc")) (EApp (EApp (EApp (EVar "declsFaults") (EVar "idx")) (EVar "rest")) (EApp (EApp (EApp (EVar "declFaults") (EVar "idx")) (EVar "d")) (EVar "acc"))))
 (DTypeSig false "declFaults" (TyFun (TyCon "EvIndex") (TyFun (TyCon "Decl") (TyFun (TyApp (TyCon "List") (TyCon "EvidenceFault")) (TyApp (TyCon "List") (TyCon "EvidenceFault"))))))
-(DFunDef false "declFaults" ((PVar "idx") (PCon "DFunDef" PWild PWild PWild (PVar "e") PWild PWild) (PVar "acc")) (EApp (EApp (EApp (EVar "exprFaults") (EVar "idx")) (EVar "e")) (EVar "acc")))
-(DFunDef false "declFaults" ((PVar "idx") (PRec "DInterface" ((rf "methods" (PVar "ms"))) false) (PVar "acc")) (EApp (EApp (EApp (EVar "ifaceMethodsFaults") (EVar "idx")) (EVar "ms")) (EVar "acc")))
-(DFunDef false "declFaults" ((PVar "idx") (PRec "DImpl" ((rf "methods" (PVar "ms"))) false) (PVar "acc")) (EApp (EApp (EApp (EVar "implMethodsFaults") (EVar "idx")) (EVar "ms")) (EVar "acc")))
-(DFunDef false "declFaults" ((PVar "idx") (PCon "DProp" PWild PWild PWild (PVar "e")) (PVar "acc")) (EApp (EApp (EApp (EVar "exprFaults") (EVar "idx")) (EVar "e")) (EVar "acc")))
-(DFunDef false "declFaults" ((PVar "idx") (PCon "DTest" PWild PWild (PVar "e")) (PVar "acc")) (EApp (EApp (EApp (EVar "exprFaults") (EVar "idx")) (EVar "e")) (EVar "acc")))
-(DFunDef false "declFaults" ((PVar "idx") (PCon "DLetGroup" PWild (PVar "bs")) (PVar "acc")) (EApp (EApp (EApp (EVar "letBindsFaults") (EVar "idx")) (EVar "bs")) (EVar "acc")))
-(DFunDef false "declFaults" ((PVar "idx") (PCon "DAttrib" PWild (PVar "d")) (PVar "acc")) (EApp (EApp (EApp (EVar "declFaults") (EVar "idx")) (EVar "d")) (EVar "acc")))
-(DFunDef false "declFaults" (PWild PWild (PVar "acc")) (EVar "acc"))
+(DFunDef false "declFaults" ((PVar "idx") (PVar "x0") (PVar "acc")) (ELetGroup ((lgb "go" (clause ((PCon "DFunDef" PWild PWild PWild (PVar "e") PWild PWild)) (EApp (EApp (EApp (EVar "exprFaults") (EVar "idx")) (EVar "e")) (EVar "acc"))) (clause ((PRec "DInterface" ((rf "methods" (PVar "ms"))) false)) (EApp (EApp (EApp (EVar "ifaceMethodsFaults") (EVar "idx")) (EVar "ms")) (EVar "acc"))) (clause ((PRec "DImpl" ((rf "methods" (PVar "ms"))) false)) (EApp (EApp (EApp (EVar "implMethodsFaults") (EVar "idx")) (EVar "ms")) (EVar "acc"))) (clause ((PCon "DProp" PWild PWild PWild (PVar "e"))) (EApp (EApp (EApp (EVar "exprFaults") (EVar "idx")) (EVar "e")) (EVar "acc"))) (clause ((PCon "DTest" PWild PWild (PVar "e"))) (EApp (EApp (EApp (EVar "exprFaults") (EVar "idx")) (EVar "e")) (EVar "acc"))) (clause ((PCon "DLetGroup" PWild (PVar "bs"))) (EApp (EApp (EApp (EVar "letBindsFaults") (EVar "idx")) (EVar "bs")) (EVar "acc"))) (clause ((PCon "DAttrib" PWild (PVar "d"))) (EApp (EVar "go") (EVar "d"))) (clause (PWild) (EVar "acc")))) (EApp (EVar "go") (EVar "x0"))))
 (DTypeSig false "ifaceMethodsFaults" (TyFun (TyCon "EvIndex") (TyFun (TyApp (TyCon "List") (TyCon "IfaceMethod")) (TyFun (TyApp (TyCon "List") (TyCon "EvidenceFault")) (TyApp (TyCon "List") (TyCon "EvidenceFault"))))))
 (DFunDef false "ifaceMethodsFaults" (PWild (PList) (PVar "acc")) (EVar "acc"))
 (DFunDef false "ifaceMethodsFaults" ((PVar "idx") (PCons (PCon "IfaceMethod" PWild PWild (PCon "Some" (PCon "MethodDefault" PWild (PVar "e"))) PWild) (PVar "rest")) (PVar "acc")) (EApp (EApp (EApp (EVar "ifaceMethodsFaults") (EVar "idx")) (EVar "rest")) (EApp (EApp (EApp (EVar "exprFaults") (EVar "idx")) (EVar "e")) (EVar "acc"))))

@@ -14,10 +14,11 @@ public export data BindingSummary = BindingSummary {
 
 export
 bodyArrows : List Mono -> EffRow -> Mono -> Mono
-bodyArrows [] _ result = result
-bodyArrows [param] body result = TFun param body result
-bodyArrows (param :: rest) body result =
-  TFun param pureRow (bodyArrows rest body result)
+bodyArrows xs0 body result = go xs0
+  where
+    go [] = result
+    go [param] = TFun param body result
+    go (param :: rest) = TFun param pureRow (go rest)
 
 export
 newBindingSummary : Int -> (Unit -> Mono) -> (Unit -> EffRow) -> BindingSummary
@@ -36,14 +37,16 @@ newBindingSummary arity freshType freshSummary =
 -- recursive uses may constrain their assumption without claiming ownership of
 -- the envelope that will be published after all producers have been inferred.
 freshBodyValues : Int -> (Unit -> Mono) -> EffRow -> (Mono, Mono)
-freshBodyValues arity freshType body =
-  if arity <= 0 then
-    (freshType (), freshType ())
-  else
-    let domain = freshType ()
-    let row = if arity == 1 then body else pureRow
-    let (published, recursive) = freshBodyValues (arity - 1) freshType body
-    (TFun domain row published, TFun domain row recursive)
+freshBodyValues arity0 freshType body = go arity0
+  where
+    go arity =
+      if arity <= 0 then
+        (freshType (), freshType ())
+      else
+        let domain = freshType ()
+        let row = if arity == 1 then body else pureRow
+        let (published, recursive) = go (arity - 1)
+        (TFun domain row published, TFun domain row recursive)
 
 -- Only source applications belong to the binding; a function-valued result
 -- starts a new invocation protocol. An arity mismatch is diagnosed by typing.

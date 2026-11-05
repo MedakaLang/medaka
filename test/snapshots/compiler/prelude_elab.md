@@ -1,5 +1,5 @@
 # META
-source_lines=672
+source_lines=675
 stages=DESUGAR,MARK
 # SOURCE
 -- The prelude's elaborated trees as a value, an on-disk file and a process
@@ -343,14 +343,17 @@ evidenceRowsProblem counter rows
   | otherwise = rowsProblem (arrayMake counter False) counter rows
 
 rowsProblem : Array Bool -> Int -> List EvEntry -> Option String
-rowsProblem _ _ [] = None
-rowsProblem seen counter ((EvEntry (EvId _ i) _) :: rest)
-  | i < 0 = Some "an evidence row has a negative ordinal"
-  | i >= counter = Some "an evidence row is at or above the evidence counter"
-  | arrayGetUnsafe i seen = Some "two evidence rows share one ordinal"
-  | otherwise =
-    arraySetUnsafe i True seen
-    rowsProblem seen counter rest
+rowsProblem seen counter xs0 = go xs0
+  where
+    go [] = None
+    go ((EvEntry (EvId _ i) _) :: rest)
+      | i < 0 = Some "an evidence row has a negative ordinal"
+      | i >= counter =
+        Some "an evidence row is at or above the evidence counter"
+      | arrayGetUnsafe i seen = Some "two evidence rows share one ordinal"
+      | otherwise =
+        arraySetUnsafe i True seen
+        go rest
 
 -- Whether a tree site of module `""` names an ordinal at or above the counter.
 treeSitesProblem : PreludeElab -> Option (String, String)
@@ -750,8 +753,7 @@ heldPreludeEvCounter _ = map ((_, pe, _) => pe.peEvCounter) !preludeElabCacheRef
 (DTypeSig false "evidenceRowsProblem" (TyFun (TyCon "Int") (TyFun (TyApp (TyCon "List") (TyCon "EvEntry")) (TyApp (TyCon "Option") (TyCon "String")))))
 (DFunDef false "evidenceRowsProblem" ((PVar "counter") (PVar "rows")) (EIf (EBinOp "||" (EBinOp "<" (EVar "counter") (ELit (LInt 0))) (EBinOp ">" (EVar "counter") (EVar "maxEvidenceCounter"))) (EApp (EVar "Some") (ELit (LString "the evidence counter is out of range"))) (EIf (EVar "otherwise") (EApp (EApp (EApp (EVar "rowsProblem") (EApp (EApp (EVar "arrayMake") (EVar "counter")) (EVar "False"))) (EVar "counter")) (EVar "rows")) (EApp (EVar "__fallthrough__") (ELit LUnit)))))
 (DTypeSig false "rowsProblem" (TyFun (TyApp (TyCon "Array") (TyCon "Bool")) (TyFun (TyCon "Int") (TyFun (TyApp (TyCon "List") (TyCon "EvEntry")) (TyApp (TyCon "Option") (TyCon "String"))))))
-(DFunDef false "rowsProblem" (PWild PWild (PList)) (EVar "None"))
-(DFunDef false "rowsProblem" ((PVar "seen") (PVar "counter") (PCons (PCon "EvEntry" (PCon "EvId" PWild (PVar "i")) PWild) (PVar "rest"))) (EIf (EBinOp "<" (EVar "i") (ELit (LInt 0))) (EApp (EVar "Some") (ELit (LString "an evidence row has a negative ordinal"))) (EIf (EBinOp ">=" (EVar "i") (EVar "counter")) (EApp (EVar "Some") (ELit (LString "an evidence row is at or above the evidence counter"))) (EIf (EApp (EApp (EVar "arrayGetUnsafe") (EVar "i")) (EVar "seen")) (EApp (EVar "Some") (ELit (LString "two evidence rows share one ordinal"))) (EIf (EVar "otherwise") (EBlock (DoExpr (EApp (EApp (EApp (EVar "arraySetUnsafe") (EVar "i")) (EVar "True")) (EVar "seen"))) (DoExpr (EApp (EApp (EApp (EVar "rowsProblem") (EVar "seen")) (EVar "counter")) (EVar "rest")))) (EApp (EVar "__fallthrough__") (ELit LUnit)))))))
+(DFunDef false "rowsProblem" ((PVar "seen") (PVar "counter") (PVar "xs0")) (ELetGroup ((lgb "go" (clause ((PList)) (EVar "None")) (clause ((PCons (PCon "EvEntry" (PCon "EvId" PWild (PVar "i")) PWild) (PVar "rest"))) (EIf (EBinOp "<" (EVar "i") (ELit (LInt 0))) (EApp (EVar "Some") (ELit (LString "an evidence row has a negative ordinal"))) (EIf (EBinOp ">=" (EVar "i") (EVar "counter")) (EApp (EVar "Some") (ELit (LString "an evidence row is at or above the evidence counter"))) (EIf (EApp (EApp (EVar "arrayGetUnsafe") (EVar "i")) (EVar "seen")) (EApp (EVar "Some") (ELit (LString "two evidence rows share one ordinal"))) (EIf (EVar "otherwise") (EBlock (DoExpr (EApp (EApp (EApp (EVar "arraySetUnsafe") (EVar "i")) (EVar "True")) (EVar "seen"))) (DoExpr (EApp (EVar "go") (EVar "rest")))) (EApp (EVar "__fallthrough__") (ELit LUnit))))))))) (EApp (EVar "go") (EVar "xs0"))))
 (DTypeSig false "treeSitesProblem" (TyFun (TyCon "PreludeElab") (TyApp (TyCon "Option") (TyTuple (TyCon "String") (TyCon "String")))))
 (DFunDef false "treeSitesProblem" ((PVar "pe")) (EIf (EApp (EApp (EVar "any") (EApp (EVar "aboveCounter") (EFieldAccess (EVar "pe") "peEvCounter"))) (EApp (EApp (EVar "evidenceFaults") (EApp (EVar "Some") (ETuple (EFieldAccess (EVar "pe") "peDecls") (EListLit)))) (EListLit))) (EApp (EVar "Some") (ETuple (ELit (LString "counters/evidence")) (ELit (LString "a tree site is at or above the evidence counter")))) (EVar "None")))
 (DTypeSig false "aboveCounter" (TyFun (TyCon "Int") (TyFun (TyCon "EvidenceFault") (TyCon "Bool"))))
@@ -968,8 +970,7 @@ heldPreludeEvCounter _ = map ((_, pe, _) => pe.peEvCounter) !preludeElabCacheRef
 (DTypeSig false "evidenceRowsProblem" (TyFun (TyCon "Int") (TyFun (TyApp (TyCon "List") (TyCon "EvEntry")) (TyApp (TyCon "Option") (TyCon "String")))))
 (DFunDef false "evidenceRowsProblem" ((PVar "counter") (PVar "rows")) (EIf (EBinOp "||" (EBinOp "<" (EVar "counter") (ELit (LInt 0))) (EBinOp ">" (EVar "counter") (EVar "maxEvidenceCounter"))) (EApp (EVar "Some") (ELit (LString "the evidence counter is out of range"))) (EIf (EVar "otherwise") (EApp (EApp (EApp (EVar "rowsProblem") (EApp (EApp (EVar "arrayMake") (EVar "counter")) (EVar "False"))) (EVar "counter")) (EVar "rows")) (EApp (EVar "__fallthrough__") (ELit LUnit)))))
 (DTypeSig false "rowsProblem" (TyFun (TyApp (TyCon "Array") (TyCon "Bool")) (TyFun (TyCon "Int") (TyFun (TyApp (TyCon "List") (TyCon "EvEntry")) (TyApp (TyCon "Option") (TyCon "String"))))))
-(DFunDef false "rowsProblem" (PWild PWild (PList)) (EVar "None"))
-(DFunDef false "rowsProblem" ((PVar "seen") (PVar "counter") (PCons (PCon "EvEntry" (PCon "EvId" PWild (PVar "i")) PWild) (PVar "rest"))) (EIf (EBinOp "<" (EVar "i") (ELit (LInt 0))) (EApp (EVar "Some") (ELit (LString "an evidence row has a negative ordinal"))) (EIf (EBinOp ">=" (EVar "i") (EVar "counter")) (EApp (EVar "Some") (ELit (LString "an evidence row is at or above the evidence counter"))) (EIf (EApp (EApp (EVar "arrayGetUnsafe") (EVar "i")) (EVar "seen")) (EApp (EVar "Some") (ELit (LString "two evidence rows share one ordinal"))) (EIf (EVar "otherwise") (EBlock (DoExpr (EApp (EApp (EApp (EVar "arraySetUnsafe") (EVar "i")) (EVar "True")) (EVar "seen"))) (DoExpr (EApp (EApp (EApp (EVar "rowsProblem") (EVar "seen")) (EVar "counter")) (EVar "rest")))) (EApp (EVar "__fallthrough__") (ELit LUnit)))))))
+(DFunDef false "rowsProblem" ((PVar "seen") (PVar "counter") (PVar "xs0")) (ELetGroup ((lgb "go" (clause ((PList)) (EVar "None")) (clause ((PCons (PCon "EvEntry" (PCon "EvId" PWild (PVar "i")) PWild) (PVar "rest"))) (EIf (EBinOp "<" (EVar "i") (ELit (LInt 0))) (EApp (EVar "Some") (ELit (LString "an evidence row has a negative ordinal"))) (EIf (EBinOp ">=" (EVar "i") (EVar "counter")) (EApp (EVar "Some") (ELit (LString "an evidence row is at or above the evidence counter"))) (EIf (EApp (EApp (EVar "arrayGetUnsafe") (EVar "i")) (EVar "seen")) (EApp (EVar "Some") (ELit (LString "two evidence rows share one ordinal"))) (EIf (EVar "otherwise") (EBlock (DoExpr (EApp (EApp (EApp (EVar "arraySetUnsafe") (EVar "i")) (EVar "True")) (EVar "seen"))) (DoExpr (EApp (EVar "go") (EVar "rest")))) (EApp (EVar "__fallthrough__") (ELit LUnit))))))))) (EApp (EVar "go") (EVar "xs0"))))
 (DTypeSig false "treeSitesProblem" (TyFun (TyCon "PreludeElab") (TyApp (TyCon "Option") (TyTuple (TyCon "String") (TyCon "String")))))
 (DFunDef false "treeSitesProblem" ((PVar "pe")) (EIf (EApp (EApp (EDictApp "any") (EApp (EVar "aboveCounter") (EFieldAccess (EVar "pe") "peEvCounter"))) (EApp (EApp (EVar "evidenceFaults") (EApp (EVar "Some") (ETuple (EFieldAccess (EVar "pe") "peDecls") (EListLit)))) (EListLit))) (EApp (EVar "Some") (ETuple (ELit (LString "counters/evidence")) (ELit (LString "a tree site is at or above the evidence counter")))) (EVar "None")))
 (DTypeSig false "aboveCounter" (TyFun (TyCon "Int") (TyFun (TyCon "EvidenceFault") (TyCon "Bool"))))

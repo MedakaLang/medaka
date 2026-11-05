@@ -69,7 +69,7 @@ declEnvSiblingSees : Int -> DeclEnvModule -> Bool
 declEnvVisibleAt : Int -> Int -> Bool
 declEnvVisibleTo : Int -> Int -> Bool -> Bool
 declEnvsOrdOf : String -> DeclEnvs -> Int
-declGradedScope : GraphCtx -> List String -> List (Option KindAnn) -> List IfaceMethod -> List (String, List Kind)
+declGradedScope : GraphCtx -> List String -> List (Option KindAnn) -> List (String, List Kind)
 declGradedScopeAdd : String -> List Kind -> List (String, List Kind) -> List (String, List Kind)
 declKindEntriesIn : GraphCtx -> List (TabKey, List Kind) -> List Decl -> List (TabKey, List Kind)
 declKindEntriesPublicIn : GraphCtx -> List (TabKey, List Kind) -> List Decl -> List (TabKey, List Kind)

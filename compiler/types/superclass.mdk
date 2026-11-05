@@ -90,18 +90,20 @@ directSupersFrom : (List String -> p -> Super -> Option p) ->
   Int ->
   List Super ->
   List (SuperNode p)
-directSupersFrom _ _ _ _ [] = []
-directSupersFrom step typarams node i (s :: rest) =
-  let tailNodes = directSupersFrom step typarams node (i + 1) rest
-  match step typarams node.superPayload s
-    None => tailNodes
-    Some payload =>
-      SuperNode {
-          superPath = node.superPath ++ [i],
-          superIface = superIfaceRef s,
-          superPayload = payload,
-        }
-        :: tailNodes
+directSupersFrom step typarams node i0 xs0 = go i0 xs0
+  where
+    go _ [] = []
+    go i (s :: rest) =
+      let tailNodes = go (i + 1) rest
+      match step typarams node.superPayload s
+        None => tailNodes
+        Some payload =>
+          SuperNode {
+              superPath = node.superPath ++ [i],
+              superIface = superIfaceRef s,
+              superPayload = payload,
+            }
+            :: tailNodes
 
 -- Breadth-first: expand the whole frontier, keep the unseen nodes in order,
 -- stack them as a layer (`layers` is newest-first, flattened once at the end),
@@ -114,11 +116,13 @@ closureLayers : (IfaceRef -> Option (List String, List Super)) ->
   OrdMap Bool ->
   List (SuperNode p) ->
   List (SuperNode p)
-closureLayers _ _ _ layers _ [] = flatMap (layer => layer) (reverse layers)
-closureLayers lookup step key layers seen frontier =
-  let candidates = flatMapNodes (directSupers lookup step) frontier
-  let (fresh, seen2) = keepFresh key candidates seen
-  closureLayers lookup step key (fresh :: layers) seen2 fresh
+closureLayers look step key layers0 seen0 frontier0 = go layers0 seen0 frontier0
+  where
+    go layers _ [] = flatMap (layer => layer) (reverse layers)
+    go layers seen frontier =
+      let candidates = flatMapNodes (directSupers look step) frontier
+      let (fresh, seen2) = keepFresh key candidates seen
+      go (fresh :: layers) seen2 fresh
 
 flatMapNodes : (SuperNode p -> List (SuperNode p)) ->
   List (SuperNode p) ->

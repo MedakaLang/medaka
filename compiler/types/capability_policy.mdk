@@ -49,37 +49,35 @@ permitFrozen : List (String, Param) ->
   FrozenAtom ->
   List (String, EffParamTy) ->
   Permit
-permitFrozen domains atom policy = match (
-  atom.label == "IO",
-  entriesFor atom policy,
-)
-  (True, []) =>
-    firstNotPermitted
-      (map
-        (label =>
-          permitFrozen
-            domains
-            FrozenAtom {
+permitFrozen domains atom0 policy = go atom0
+  where
+    go atom = match (
+      atom.label == "IO",
+      entriesFor atom policy,
+    )
+      (True, []) =>
+        firstNotPermitted
+          (map
+            (label => go FrozenAtom {
               label = label,
               origin = OriginBuiltin,
               domainTop = dtopIn domains (EffLabel label OriginBuiltin),
               authority =
                 FrozenConst (dtopIn domains (EffLabel label OriginBuiltin)),
-            }
-            policy)
-        hostLabels)
-  (_, []) => Forbidden
-  (_, written) =>
-    match (allOk
-      (map
-        (decodeWrittenParam domains (EffLabel atom.label atom.origin))
-        written))
-      Err message => Malformed message
-      Ok grants =>
-        if within atom.authority (dantichain grants) then
-          Permitted
-        else
-          Forbidden
+            })
+            hostLabels)
+      (_, []) => Forbidden
+      (_, written) =>
+        match (allOk
+          (map
+            (decodeWrittenParam domains (EffLabel atom.label atom.origin))
+            written))
+          Err message => Malformed message
+          Ok grants =>
+            if within atom.authority (dantichain grants) then
+              Permitted
+            else
+              Forbidden
 
 -- A symbolic tuple needs one covering tuple. Constant products may instead be
 -- covered together by several grants through the domain's exact union rule.

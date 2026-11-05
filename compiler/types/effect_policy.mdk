@@ -235,24 +235,21 @@ traceChain : CallGraph ->
   String ->
   List String ->
   List String
-traceChain callGraph effTable forbiddenLabel fn visited =
-  let callees = match omLookup fn callGraph
-    None => []
-    Some s => s
-  match firstWithEffect effTable forbiddenLabel (sortUniqS callees)
-    None => [fn]
-    Some c =>
-      -- Bound: runs only while rendering a refusal's via-chain, and `visited` is one call-graph path that ends at the first revisit.
-      -- lint-disable-next-line rule-list-as-set
-      if contains c visited then
-        [fn, c]
-      else
-        fn :: traceChain callGraph effTable forbiddenLabel c (c :: visited)
+traceChain callGraph effTable forbiddenLabel fn0 visited0 = go fn0 visited0
+  where
+    go fn visited =
+      let callees = match omLookup fn callGraph
+        None => []
+        Some s => s
+      match firstWithEffect effTable forbiddenLabel (sortUniqS callees)
+        None => [fn]
+        Some c =>
+          -- Bound: runs only while rendering a refusal's via-chain, and `visited` is one call-graph path that ends at the first revisit.
+          -- lint-disable-next-line rule-list-as-set
+          if contains c visited then [fn, c] else fn :: go c (c :: visited)
 
 firstWithEffect : EffectTable -> String -> List String -> Option String
-firstWithEffect _ _ [] = None
-firstWithEffect effTable label (c :: rest) =
-  if fnHasEffect effTable c label then
-    Some c
-  else
-    firstWithEffect effTable label rest
+firstWithEffect effTable label xs0 = go xs0
+  where
+    go [] = None
+    go (c :: rest) = if fnHasEffect effTable c label then Some c else go rest

@@ -1,5 +1,5 @@
 # META
-source_lines=153
+source_lines=157
 stages=DESUGAR,MARK
 # SOURCE
 -- The invocation summary: the effects a host can make an entry perform.
@@ -89,8 +89,10 @@ chargeRow _ row (Walk atoms done) =
   Walk (atomsUnion atoms (effrowLabels row)) done
 
 reachAll : InvocationOps -> Variance -> List Mono -> Walk -> Walk
-reachAll _ _ [] st = st
-reachAll ops pol (m :: rest) st = reachAll ops pol rest (reach ops pol m st)
+reachAll ops pol xs0 st0 = go xs0 st0
+  where
+    go [] st = st
+    go (m :: rest) st = go rest (reach ops pol m st)
 
 -- Each argument at the head's variance for its slot, composed with the
 -- context; a slot the head does not declare is invariant.
@@ -101,12 +103,14 @@ reachArgs : InvocationOps ->
   List Mono ->
   Walk ->
   Walk
-reachArgs _ _ _ _ [] st = st
-reachArgs ops pol vs i (arg :: rest) st =
-  let slot = match vs
-    Some known => varianceAt known i
-    None => VInv
-  reachArgs ops pol vs (i + 1) rest (reach ops (mulV pol slot) arg st)
+reachArgs ops pol vs i0 xs0 st0 = go i0 xs0 st0
+  where
+    go _ [] st = st
+    go i (arg :: rest) st =
+      let slot = match vs
+        Some known => varianceAt known i
+        None => VInv
+      go (i + 1) rest (reach ops (mulV pol slot) arg st)
 
 -- Open an applied head once per (position, authority arguments).
 openHead : InvocationOps ->
@@ -174,11 +178,9 @@ varianceTag VInv = "="
 (DFunDef false "chargeRow" ((PCon "VContra") PWild (PVar "st")) (EVar "st"))
 (DFunDef false "chargeRow" (PWild (PVar "row") (PCon "Walk" (PVar "atoms") (PVar "done"))) (EApp (EApp (EVar "Walk") (EApp (EApp (EVar "atomsUnion") (EVar "atoms")) (EApp (EVar "effrowLabels") (EVar "row")))) (EVar "done")))
 (DTypeSig false "reachAll" (TyFun (TyCon "InvocationOps") (TyFun (TyCon "Variance") (TyFun (TyApp (TyCon "List") (TyCon "Mono")) (TyFun (TyCon "Walk") (TyCon "Walk"))))))
-(DFunDef false "reachAll" (PWild PWild (PList) (PVar "st")) (EVar "st"))
-(DFunDef false "reachAll" ((PVar "ops") (PVar "pol") (PCons (PVar "m") (PVar "rest")) (PVar "st")) (EApp (EApp (EApp (EApp (EVar "reachAll") (EVar "ops")) (EVar "pol")) (EVar "rest")) (EApp (EApp (EApp (EApp (EVar "reach") (EVar "ops")) (EVar "pol")) (EVar "m")) (EVar "st"))))
+(DFunDef false "reachAll" ((PVar "ops") (PVar "pol") (PVar "xs0") (PVar "st0")) (ELetGroup ((lgb "go" (clause ((PList) (PVar "st")) (EVar "st")) (clause ((PCons (PVar "m") (PVar "rest")) (PVar "st")) (EApp (EApp (EVar "go") (EVar "rest")) (EApp (EApp (EApp (EApp (EVar "reach") (EVar "ops")) (EVar "pol")) (EVar "m")) (EVar "st")))))) (EApp (EApp (EVar "go") (EVar "xs0")) (EVar "st0"))))
 (DTypeSig false "reachArgs" (TyFun (TyCon "InvocationOps") (TyFun (TyCon "Variance") (TyFun (TyApp (TyCon "Option") (TyApp (TyCon "List") (TyCon "Variance"))) (TyFun (TyCon "Int") (TyFun (TyApp (TyCon "List") (TyCon "Mono")) (TyFun (TyCon "Walk") (TyCon "Walk"))))))))
-(DFunDef false "reachArgs" (PWild PWild PWild PWild (PList) (PVar "st")) (EVar "st"))
-(DFunDef false "reachArgs" ((PVar "ops") (PVar "pol") (PVar "vs") (PVar "i") (PCons (PVar "arg") (PVar "rest")) (PVar "st")) (EBlock (DoLet false false (PVar "slot") (EMatch (EVar "vs") (arm (PCon "Some" (PVar "known")) () (EApp (EApp (EVar "varianceAt") (EVar "known")) (EVar "i"))) (arm (PCon "None") () (EVar "VInv")))) (DoExpr (EApp (EApp (EApp (EApp (EApp (EApp (EVar "reachArgs") (EVar "ops")) (EVar "pol")) (EVar "vs")) (EBinOp "+" (EVar "i") (ELit (LInt 1)))) (EVar "rest")) (EApp (EApp (EApp (EApp (EVar "reach") (EVar "ops")) (EApp (EApp (EVar "mulV") (EVar "pol")) (EVar "slot"))) (EVar "arg")) (EVar "st"))))))
+(DFunDef false "reachArgs" ((PVar "ops") (PVar "pol") (PVar "vs") (PVar "i0") (PVar "xs0") (PVar "st0")) (ELetGroup ((lgb "go" (clause (PWild (PList) (PVar "st")) (EVar "st")) (clause ((PVar "i") (PCons (PVar "arg") (PVar "rest")) (PVar "st")) (EBlock (DoLet false false (PVar "slot") (EMatch (EVar "vs") (arm (PCon "Some" (PVar "known")) () (EApp (EApp (EVar "varianceAt") (EVar "known")) (EVar "i"))) (arm (PCon "None") () (EVar "VInv")))) (DoExpr (EApp (EApp (EApp (EVar "go") (EBinOp "+" (EVar "i") (ELit (LInt 1)))) (EVar "rest")) (EApp (EApp (EApp (EApp (EVar "reach") (EVar "ops")) (EApp (EApp (EVar "mulV") (EVar "pol")) (EVar "slot"))) (EVar "arg")) (EVar "st")))))))) (EApp (EApp (EApp (EVar "go") (EVar "i0")) (EVar "xs0")) (EVar "st0"))))
 (DTypeSig false "openHead" (TyFun (TyCon "InvocationOps") (TyFun (TyCon "Variance") (TyFun (TyCon "Mono") (TyFun (TyCon "Mono") (TyFun (TyApp (TyCon "List") (TyCon "Mono")) (TyFun (TyCon "Walk") (TyCon "Walk"))))))))
 (DFunDef false "openHead" ((PVar "ops") (PVar "pol") (PVar "applied") (PVar "h") (PVar "args") (PCon "Walk" (PVar "atoms") (PVar "done"))) (EBlock (DoLet false false (PVar "key") (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "")) (EApp (EVar "display") (EApp (EFieldAccess (EVar "ops") "headKey") (EVar "h")))) (ELit (LString "@"))) (EApp (EVar "display") (EApp (EVar "varianceTag") (EVar "pol")))) (ELit (LString ":"))) (EApp (EVar "display") (EApp (EApp (EVar "joinWith") (ELit (LString ","))) (EApp (EVar "authorityArgs") (EVar "args"))))) (ELit (LString "")))) (DoExpr (EIf (EApp (EApp (EVar "M.has") (EVar "key")) (EVar "done")) (EApp (EApp (EVar "Walk") (EVar "atoms")) (EVar "done")) (EApp (EApp (EApp (EApp (EVar "reachAll") (EVar "ops")) (EVar "pol")) (EApp (EFieldAccess (EVar "ops") "appliedFields") (EVar "applied"))) (EApp (EApp (EVar "Walk") (EVar "atoms")) (EApp (EApp (EApp (EVar "M.set") (EVar "key")) (ELit LUnit)) (EVar "done"))))))))
 (DTypeSig false "authorityArgs" (TyFun (TyApp (TyCon "List") (TyCon "Mono")) (TyApp (TyCon "List") (TyCon "String"))))
@@ -220,11 +222,9 @@ varianceTag VInv = "="
 (DFunDef false "chargeRow" ((PCon "VContra") PWild (PVar "st")) (EVar "st"))
 (DFunDef false "chargeRow" (PWild (PVar "row") (PCon "Walk" (PVar "atoms") (PVar "done"))) (EApp (EApp (EVar "Walk") (EApp (EApp (EVar "atomsUnion") (EVar "atoms")) (EApp (EVar "effrowLabels") (EVar "row")))) (EVar "done")))
 (DTypeSig false "reachAll" (TyFun (TyCon "InvocationOps") (TyFun (TyCon "Variance") (TyFun (TyApp (TyCon "List") (TyCon "Mono")) (TyFun (TyCon "Walk") (TyCon "Walk"))))))
-(DFunDef false "reachAll" (PWild PWild (PList) (PVar "st")) (EVar "st"))
-(DFunDef false "reachAll" ((PVar "ops") (PVar "pol") (PCons (PVar "m") (PVar "rest")) (PVar "st")) (EApp (EApp (EApp (EApp (EVar "reachAll") (EVar "ops")) (EVar "pol")) (EVar "rest")) (EApp (EApp (EApp (EApp (EVar "reach") (EVar "ops")) (EVar "pol")) (EVar "m")) (EVar "st"))))
+(DFunDef false "reachAll" ((PVar "ops") (PVar "pol") (PVar "xs0") (PVar "st0")) (ELetGroup ((lgb "go" (clause ((PList) (PVar "st")) (EVar "st")) (clause ((PCons (PVar "m") (PVar "rest")) (PVar "st")) (EApp (EApp (EVar "go") (EVar "rest")) (EApp (EApp (EApp (EApp (EVar "reach") (EVar "ops")) (EVar "pol")) (EVar "m")) (EVar "st")))))) (EApp (EApp (EVar "go") (EVar "xs0")) (EVar "st0"))))
 (DTypeSig false "reachArgs" (TyFun (TyCon "InvocationOps") (TyFun (TyCon "Variance") (TyFun (TyApp (TyCon "Option") (TyApp (TyCon "List") (TyCon "Variance"))) (TyFun (TyCon "Int") (TyFun (TyApp (TyCon "List") (TyCon "Mono")) (TyFun (TyCon "Walk") (TyCon "Walk"))))))))
-(DFunDef false "reachArgs" (PWild PWild PWild PWild (PList) (PVar "st")) (EVar "st"))
-(DFunDef false "reachArgs" ((PVar "ops") (PVar "pol") (PVar "vs") (PVar "i") (PCons (PVar "arg") (PVar "rest")) (PVar "st")) (EBlock (DoLet false false (PVar "slot") (EMatch (EVar "vs") (arm (PCon "Some" (PVar "known")) () (EApp (EApp (EVar "varianceAt") (EVar "known")) (EVar "i"))) (arm (PCon "None") () (EVar "VInv")))) (DoExpr (EApp (EApp (EApp (EApp (EApp (EApp (EVar "reachArgs") (EVar "ops")) (EVar "pol")) (EVar "vs")) (EBinOp "+" (EVar "i") (ELit (LInt 1)))) (EVar "rest")) (EApp (EApp (EApp (EApp (EVar "reach") (EVar "ops")) (EApp (EApp (EVar "mulV") (EVar "pol")) (EVar "slot"))) (EVar "arg")) (EVar "st"))))))
+(DFunDef false "reachArgs" ((PVar "ops") (PVar "pol") (PVar "vs") (PVar "i0") (PVar "xs0") (PVar "st0")) (ELetGroup ((lgb "go" (clause (PWild (PList) (PVar "st")) (EVar "st")) (clause ((PVar "i") (PCons (PVar "arg") (PVar "rest")) (PVar "st")) (EBlock (DoLet false false (PVar "slot") (EMatch (EVar "vs") (arm (PCon "Some" (PVar "known")) () (EApp (EApp (EVar "varianceAt") (EVar "known")) (EVar "i"))) (arm (PCon "None") () (EVar "VInv")))) (DoExpr (EApp (EApp (EApp (EVar "go") (EBinOp "+" (EVar "i") (ELit (LInt 1)))) (EVar "rest")) (EApp (EApp (EApp (EApp (EVar "reach") (EVar "ops")) (EApp (EApp (EVar "mulV") (EVar "pol")) (EVar "slot"))) (EVar "arg")) (EVar "st")))))))) (EApp (EApp (EApp (EVar "go") (EVar "i0")) (EVar "xs0")) (EVar "st0"))))
 (DTypeSig false "openHead" (TyFun (TyCon "InvocationOps") (TyFun (TyCon "Variance") (TyFun (TyCon "Mono") (TyFun (TyCon "Mono") (TyFun (TyApp (TyCon "List") (TyCon "Mono")) (TyFun (TyCon "Walk") (TyCon "Walk"))))))))
 (DFunDef false "openHead" ((PVar "ops") (PVar "pol") (PVar "applied") (PVar "h") (PVar "args") (PCon "Walk" (PVar "atoms") (PVar "done"))) (EBlock (DoLet false false (PVar "key") (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "")) (EApp (EMethodRef "display") (EApp (EFieldAccess (EVar "ops") "headKey") (EVar "h")))) (ELit (LString "@"))) (EApp (EMethodRef "display") (EApp (EVar "varianceTag") (EVar "pol")))) (ELit (LString ":"))) (EApp (EMethodRef "display") (EApp (EApp (EVar "joinWith") (ELit (LString ","))) (EApp (EVar "authorityArgs") (EVar "args"))))) (ELit (LString "")))) (DoExpr (EIf (EApp (EApp (EVar "M.has") (EVar "key")) (EVar "done")) (EApp (EApp (EVar "Walk") (EVar "atoms")) (EVar "done")) (EApp (EApp (EApp (EApp (EVar "reachAll") (EVar "ops")) (EVar "pol")) (EApp (EFieldAccess (EVar "ops") "appliedFields") (EVar "applied"))) (EApp (EApp (EVar "Walk") (EVar "atoms")) (EApp (EApp (EApp (EVar "M.set") (EVar "key")) (ELit LUnit)) (EVar "done"))))))))
 (DTypeSig false "authorityArgs" (TyFun (TyApp (TyCon "List") (TyCon "Mono")) (TyApp (TyCon "List") (TyCon "String"))))

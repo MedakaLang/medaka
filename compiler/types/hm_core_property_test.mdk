@@ -175,11 +175,13 @@ bindVar subst name ty =
   if occursIn subst name ty then Occurs else Unifier ((name, ty) :: subst)
 
 occursIn : Subst -> String -> Ty -> Bool
-occursIn subst name ty = match resolve subst ty
-  TV other => other == name
-  TC _ args => any (occursIn subst name) args
-  TF from to => occursIn subst name from || occursIn subst name to
-  TT items => any (occursIn subst name) items
+occursIn subst name ty0 = go ty0
+  where
+    go ty = match resolve subst ty
+      TV other => other == name
+      TC _ args => any (occursIn subst name) args
+      TF from to => go from || go to
+      TT items => any (occursIn subst name) items
 
 unifyAll : Subst -> List Ty -> List Ty -> Unified
 unifyAll subst [] [] = Unifier subst
@@ -431,30 +433,34 @@ repeatedVar ty =
 -- `ty` with the first occurrence of `name` replaced by `first` and every
 -- later occurrence by `later`.
 splitVar : String -> Ty -> Ty -> Bool -> Ty -> (Ty, Bool)
-splitVar name first later seen (TV other) =
-  if other /= name then
-    (TV other, seen)
-  else if seen then
-    (later, True)
-  else
-    (first, True)
-splitVar name first later seen (TC n args) =
-  let (args2, seen2) = splitList name first later seen args
-  (TC n args2, seen2)
-splitVar name first later seen (TF from to) =
-  let (from2, seen2) = splitVar name first later seen from
-  let (to2, seen3) = splitVar name first later seen2 to
-  (TF from2 to2, seen3)
-splitVar name first later seen (TT items) =
-  let (items2, seen2) = splitList name first later seen items
-  (TT items2, seen2)
+splitVar name first later seen0 x0 = go seen0 x0
+  where
+    go seen (TV other) =
+      if other /= name then
+        (TV other, seen)
+      else if seen then
+        (later, True)
+      else
+        (first, True)
+    go seen (TC n args) =
+      let (args2, seen2) = splitList name first later seen args
+      (TC n args2, seen2)
+    go seen (TF from to) =
+      let (from2, seen2) = go seen from
+      let (to2, seen3) = go seen2 to
+      (TF from2 to2, seen3)
+    go seen (TT items) =
+      let (items2, seen2) = splitList name first later seen items
+      (TT items2, seen2)
 
 splitList : String -> Ty -> Ty -> Bool -> List Ty -> (List Ty, Bool)
-splitList _ _ _ seen [] = ([], seen)
-splitList name first later seen (t :: rest) =
-  let (t2, seen2) = splitVar name first later seen t
-  let (rest2, seen3) = splitList name first later seen2 rest
-  (t2 :: rest2, seen3)
+splitList name first later seen0 xs0 = go seen0 xs0
+  where
+    go seen [] = ([], seen)
+    go seen (t :: rest) =
+      let (t2, seen2) = splitVar name first later seen t
+      let (rest2, seen3) = go seen2 rest
+      (t2 :: rest2, seen3)
 
 {- A ground type that is not an instance of `ty`'s scheme: a repeated
    variable's occurrences are sent to two different grounds, which no single

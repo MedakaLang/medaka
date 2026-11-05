@@ -175,8 +175,9 @@ isIdentWith start rest s =
   arrayLength cs > 0 && start (arrayGetUnsafe 0 cs) && identCharsFrom rest cs 1
 
 identCharsFrom : (Char -> Bool) -> Array Char -> Int -> Bool
-identCharsFrom p cs i =
-  i >= arrayLength cs || p (arrayGetUnsafe i cs) && identCharsFrom p cs (i + 1)
+identCharsFrom p cs i0 = go i0
+  where
+    go i = i >= arrayLength cs || p (arrayGetUnsafe i cs) && go (i + 1)
 
 -- A Medaka identifier character less the apostrophe.
 isCIdentChar : Char -> Bool

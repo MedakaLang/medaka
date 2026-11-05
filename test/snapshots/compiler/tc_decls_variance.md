@@ -1,5 +1,5 @@
 # META
-source_lines=579
+source_lines=575
 stages=DESUGAR,MARK
 # SOURCE
 -- tc_decls_variance: polarity and variance of declared types: occurrence polarity, polarity joins
@@ -261,15 +261,14 @@ declEnvPolarityFixGo : List (TabKey, List Polarity) ->
   Int ->
   List (TabKey, List Polarity) ->
   List (TabKey, List Polarity)
-declEnvPolarityFixGo base ds fuel prev =
-  if fuel <= 0 then
-    map (e => (fst e, map (_ => PInv) (snd e))) prev
-  else
-    let next = declEnvPolarityEntries (prev ++ base) ds
-    if polarityEntriesEq prev next then
-      prev
-    else
-      declEnvPolarityFixGo base ds (fuel - 1) next
+declEnvPolarityFixGo base ds fuel0 prev0 = go fuel0 prev0
+  where
+    go fuel prev =
+      if fuel <= 0 then
+        map (e => (fst e, map (_ => PInv) (snd e))) prev
+      else
+        let next = declEnvPolarityEntries (prev ++ base) ds
+        if polarityEntriesEq prev next then prev else go (fuel - 1) next
 
 -- A parameter with no occurrence is phantom: nothing about it can be
 -- laundered, so the published verdict is the lenient one.
@@ -423,63 +422,58 @@ paramOccPolarities : List (TabKey, List Polarity) ->
   Polarity ->
   Ty ->
   List Polarity
-paramOccPolarities _ p pol (TyVar n) = if n == p then [pol] else []
-paramOccPolarities _ _ _ (TyCon { tyConName = _ }) = []
-paramOccPolarities tab p pol (TyFun a b) =
-  paramOccPolarities tab p (polMul pol PContra) a
-    ++ paramOccPolarities tab p pol b
-paramOccPolarities tab p pol (TyTuple ts) =
-  flatMap (paramOccPolarities tab p pol) ts
-paramOccPolarities tab p pol (TyEffect _ _ t) = paramOccPolarities tab p pol t
-paramOccPolarities tab p pol (TyConstrained _ t) =
-  paramOccPolarities tab p pol t
-paramOccPolarities _ _ _ (TyRow _ _ _) = []
-paramOccPolarities _ _ _ (TyAuth _ _) = []
-paramOccPolarities tab p pol (TyNamed _ t _) = paramOccPolarities tab p pol t
-paramOccPolarities tab p pol (TyQual t _ _) = paramOccPolarities tab p pol t
-paramOccPolarities tab p pol (TyApp a b) = match tyAppSpine (TyApp a b)
-  -- OCCURRENCE MINT: same record pattern as
-  -- `argPerformableOccs`' spine arm, for the same reason — the head's name and
-  -- its acquired identity must be read off one pattern so they cannot drift.
-  (TyCon { tyConName = n, tyConOrigin = o }, args) =>
-    paramOccPolaritiesArgs
-      tab
-      p
-      pol
-      (paramPolaritiesIn tab (tyTabKey o n))
-      0
-      args
-  -- ── #2107: ABSTRACT HEAD ⇒ INVARIANT, not the lenient `PCo` default ──────
-  -- An abstract head — a type PARAMETER of this very declaration, as `f` is in
-  -- `data W f a = MkW (f a)` — records nothing anywhere, and unlike an
-  -- unregistered `TyCon` head it never will: `f`'s slot polarity is not a
-  -- property of `W` at all, it is whatever the head gets INSTANTIATED to at
-  -- each use.  `W Ref` needs `PInv`; `W List` would be sound at `PCo`.  The
-  -- declaration cannot tell them apart, so it takes the sound side and reports
-  -- every occurrence reached through such a head as `PInv`.
-  --
-  -- THIS IS A deliberate, measured acceptance narrowing — the one place in
-  -- this function that can reject a program a less conservative verdict accepts.  It is
-  -- the same trade `paramVarianceGuard`'s own "this does narrow acceptance
-  -- In the sound direction too" note already documents: equality is the only
-  -- symmetric sound rule available without direction, and here invariance is
-  -- the only sound verdict available without knowing `f`.  Cost, measured:
-  -- `data W f a = MkW (f a)` at `f := List` (immutable, covariant) can no
-  -- longer widen a closed effect row at `a`, though doing so would be sound.
-  -- Benefit: at `f := Ref` it no longer LAUNDERS one (#2107 — a `Unit -> Unit`
-  -- reader of a cell someone wrote a `<Stdout>` closure into, silently).
-  -- Recovering the sound half needs a DEPENDENT polarity (`f`'s slot resolved
-  -- against the mono argument actually applied at that index, at
-  -- `paramVarianceGuard`) — a new `Polarity` constructor and a resolution step,
-  -- not a change to this arm.
-  --
-  -- The count is preserved rather than fabricated: `map` over the occurrences
-  -- the two sides actually report, so a parameter that does not occur here
-  -- still contributes nothing.
-  _ =>
-    map
-      (q => polMul PInv q)
-      (paramOccPolarities tab p pol a ++ paramOccPolarities tab p pol b)
+paramOccPolarities tab p pol0 x0 = go pol0 x0
+  where
+    go pol (TyVar n) = if n == p then [pol] else []
+    go _ (TyCon { tyConName = _ }) = []
+    go pol (TyFun a b) = go (polMul pol PContra) a ++ go pol b
+    go pol (TyTuple ts) = flatMap (paramOccPolarities tab p pol) ts
+    go pol (TyEffect _ _ t) = go pol t
+    go pol (TyConstrained _ t) = go pol t
+    go _ (TyRow _ _ _) = []
+    go _ (TyAuth _ _) = []
+    go pol (TyNamed _ t _) = go pol t
+    go pol (TyQual t _ _) = go pol t
+    go pol (TyApp a b) = match tyAppSpine (TyApp a b)
+      -- OCCURRENCE MINT: same record pattern as
+      -- `argPerformableOccs`' spine arm, for the same reason — the head's name and
+      -- its acquired identity must be read off one pattern so they cannot drift.
+      (TyCon { tyConName = n, tyConOrigin = o }, args) =>
+        paramOccPolaritiesArgs
+          tab
+          p
+          pol
+          (paramPolaritiesIn tab (tyTabKey o n))
+          0
+          args
+      -- ── #2107: ABSTRACT HEAD ⇒ INVARIANT, not the lenient `PCo` default ──────
+      -- An abstract head — a type PARAMETER of this very declaration, as `f` is in
+      -- `data W f a = MkW (f a)` — records nothing anywhere, and unlike an
+      -- unregistered `TyCon` head it never will: `f`'s slot polarity is not a
+      -- property of `W` at all, it is whatever the head gets INSTANTIATED to at
+      -- each use.  `W Ref` needs `PInv`; `W List` would be sound at `PCo`.  The
+      -- declaration cannot tell them apart, so it takes the sound side and reports
+      -- every occurrence reached through such a head as `PInv`.
+      --
+      -- THIS IS A deliberate, measured acceptance narrowing — the one place in
+      -- this function that can reject a program a less conservative verdict accepts.  It is
+      -- the same trade `paramVarianceGuard`'s own "this does narrow acceptance
+      -- In the sound direction too" note already documents: equality is the only
+      -- symmetric sound rule available without direction, and here invariance is
+      -- the only sound verdict available without knowing `f`.  Cost, measured:
+      -- `data W f a = MkW (f a)` at `f := List` (immutable, covariant) can no
+      -- longer widen a closed effect row at `a`, though doing so would be sound.
+      -- Benefit: at `f := Ref` it no longer LAUNDERS one (#2107 — a `Unit -> Unit`
+      -- reader of a cell someone wrote a `<Stdout>` closure into, silently).
+      -- Recovering the sound half needs a DEPENDENT polarity (`f`'s slot resolved
+      -- against the mono argument actually applied at that index, at
+      -- `paramVarianceGuard`) — a new `Polarity` constructor and a resolution step,
+      -- not a change to this arm.
+      --
+      -- The count is preserved rather than fabricated: `map` over the occurrences
+      -- the two sides actually report, so a parameter that does not occur here
+      -- still contributes nothing.
+      _ => map (q => polMul PInv q) (go pol a ++ go pol b)
 
 paramOccPolaritiesArgs : List (TabKey, List Polarity) ->
   String ->
@@ -488,10 +482,12 @@ paramOccPolaritiesArgs : List (TabKey, List Polarity) ->
   Int ->
   List Ty ->
   List Polarity
-paramOccPolaritiesArgs _ _ _ _ _ [] = []
-paramOccPolaritiesArgs tab p pol headPols i (t :: rest) =
-  paramOccPolarities tab p (polMul pol (polarityAtOr headPols i)) t
-    ++ paramOccPolaritiesArgs tab p pol headPols (i + 1) rest
+paramOccPolaritiesArgs tab p pol headPols i0 xs0 = go i0 xs0
+  where
+    go _ [] = []
+    go i (t :: rest) =
+      paramOccPolarities tab p (polMul pol (polarityAtOr headPols i)) t
+        ++ go (i + 1) rest
 
 -- Sign composition over {+1, -1, 0} ≅ {PCo, PContra, PInv}: commutative, `PCo`
 -- is the unit and `PInv` absorbs; `PPhantom`, no occurrence at all, absorbs
@@ -634,7 +630,7 @@ declPolarityKeys (_ :: rest) = declPolarityKeys rest
 (DFunDef false "polarityTyConNames" ((PCon "TyQual" (PVar "t") PWild PWild) (PVar "acc")) (EApp (EApp (EVar "polarityTyConNames") (EVar "t")) (EVar "acc")))
 (DFunDef false "polarityTyConNames" ((POr (PCon "TyVar" PWild) (PCon "TyRow" PWild PWild PWild) (PCon "TyAuth" PWild PWild)) (PVar "acc")) (EVar "acc"))
 (DTypeSig false "declEnvPolarityFixGo" (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "TabKey") (TyApp (TyCon "List") (TyCon "Polarity")))) (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyFun (TyCon "Int") (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "TabKey") (TyApp (TyCon "List") (TyCon "Polarity")))) (TyApp (TyCon "List") (TyTuple (TyCon "TabKey") (TyApp (TyCon "List") (TyCon "Polarity")))))))))
-(DFunDef false "declEnvPolarityFixGo" ((PVar "base") (PVar "ds") (PVar "fuel") (PVar "prev")) (EIf (EBinOp "<=" (EVar "fuel") (ELit (LInt 0))) (EApp (EApp (EVar "map") (ELam ((PVar "e")) (ETuple (EApp (EVar "fst") (EVar "e")) (EApp (EApp (EVar "map") (ELam (PWild) (EVar "PInv"))) (EApp (EVar "snd") (EVar "e")))))) (EVar "prev")) (EBlock (DoLet false false (PVar "next") (EApp (EApp (EVar "declEnvPolarityEntries") (EBinOp "++" (EVar "prev") (EVar "base"))) (EVar "ds"))) (DoExpr (EIf (EApp (EApp (EVar "polarityEntriesEq") (EVar "prev")) (EVar "next")) (EVar "prev") (EApp (EApp (EApp (EApp (EVar "declEnvPolarityFixGo") (EVar "base")) (EVar "ds")) (EBinOp "-" (EVar "fuel") (ELit (LInt 1)))) (EVar "next")))))))
+(DFunDef false "declEnvPolarityFixGo" ((PVar "base") (PVar "ds") (PVar "fuel0") (PVar "prev0")) (ELetGroup ((lgb "go" (clause ((PVar "fuel") (PVar "prev")) (EIf (EBinOp "<=" (EVar "fuel") (ELit (LInt 0))) (EApp (EApp (EVar "map") (ELam ((PVar "e")) (ETuple (EApp (EVar "fst") (EVar "e")) (EApp (EApp (EVar "map") (ELam (PWild) (EVar "PInv"))) (EApp (EVar "snd") (EVar "e")))))) (EVar "prev")) (EBlock (DoLet false false (PVar "next") (EApp (EApp (EVar "declEnvPolarityEntries") (EBinOp "++" (EVar "prev") (EVar "base"))) (EVar "ds"))) (DoExpr (EIf (EApp (EApp (EVar "polarityEntriesEq") (EVar "prev")) (EVar "next")) (EVar "prev") (EApp (EApp (EVar "go") (EBinOp "-" (EVar "fuel") (ELit (LInt 1)))) (EVar "next"))))))))) (EApp (EApp (EVar "go") (EVar "fuel0")) (EVar "prev0"))))
 (DTypeSig false "publishedPolarity" (TyFun (TyCon "Polarity") (TyCon "Polarity")))
 (DFunDef false "publishedPolarity" ((PCon "PPhantom")) (EVar "PCo"))
 (DFunDef false "publishedPolarity" ((PVar "q")) (EVar "q"))
@@ -666,20 +662,9 @@ declPolarityKeys (_ :: rest) = declPolarityKeys rest
 (DTypeSig true "variantPayload" (TyFun (TyCon "Variant") (TyCon "ConPayload")))
 (DFunDef false "variantPayload" ((PCon "Variant" PWild (PVar "payload"))) (EVar "payload"))
 (DTypeSig false "paramOccPolarities" (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "TabKey") (TyApp (TyCon "List") (TyCon "Polarity")))) (TyFun (TyCon "String") (TyFun (TyCon "Polarity") (TyFun (TyCon "Ty") (TyApp (TyCon "List") (TyCon "Polarity")))))))
-(DFunDef false "paramOccPolarities" (PWild (PVar "p") (PVar "pol") (PCon "TyVar" (PVar "n"))) (EIf (EBinOp "==" (EVar "n") (EVar "p")) (EListLit (EVar "pol")) (EListLit)))
-(DFunDef false "paramOccPolarities" (PWild PWild PWild (PRec "TyCon" ((rf "tyConName" PWild)) false)) (EListLit))
-(DFunDef false "paramOccPolarities" ((PVar "tab") (PVar "p") (PVar "pol") (PCon "TyFun" (PVar "a") (PVar "b"))) (EBinOp "++" (EApp (EApp (EApp (EApp (EVar "paramOccPolarities") (EVar "tab")) (EVar "p")) (EApp (EApp (EVar "polMul") (EVar "pol")) (EVar "PContra"))) (EVar "a")) (EApp (EApp (EApp (EApp (EVar "paramOccPolarities") (EVar "tab")) (EVar "p")) (EVar "pol")) (EVar "b"))))
-(DFunDef false "paramOccPolarities" ((PVar "tab") (PVar "p") (PVar "pol") (PCon "TyTuple" (PVar "ts"))) (EApp (EApp (EVar "flatMap") (EApp (EApp (EApp (EVar "paramOccPolarities") (EVar "tab")) (EVar "p")) (EVar "pol"))) (EVar "ts")))
-(DFunDef false "paramOccPolarities" ((PVar "tab") (PVar "p") (PVar "pol") (PCon "TyEffect" PWild PWild (PVar "t"))) (EApp (EApp (EApp (EApp (EVar "paramOccPolarities") (EVar "tab")) (EVar "p")) (EVar "pol")) (EVar "t")))
-(DFunDef false "paramOccPolarities" ((PVar "tab") (PVar "p") (PVar "pol") (PCon "TyConstrained" PWild (PVar "t"))) (EApp (EApp (EApp (EApp (EVar "paramOccPolarities") (EVar "tab")) (EVar "p")) (EVar "pol")) (EVar "t")))
-(DFunDef false "paramOccPolarities" (PWild PWild PWild (PCon "TyRow" PWild PWild PWild)) (EListLit))
-(DFunDef false "paramOccPolarities" (PWild PWild PWild (PCon "TyAuth" PWild PWild)) (EListLit))
-(DFunDef false "paramOccPolarities" ((PVar "tab") (PVar "p") (PVar "pol") (PCon "TyNamed" PWild (PVar "t") PWild)) (EApp (EApp (EApp (EApp (EVar "paramOccPolarities") (EVar "tab")) (EVar "p")) (EVar "pol")) (EVar "t")))
-(DFunDef false "paramOccPolarities" ((PVar "tab") (PVar "p") (PVar "pol") (PCon "TyQual" (PVar "t") PWild PWild)) (EApp (EApp (EApp (EApp (EVar "paramOccPolarities") (EVar "tab")) (EVar "p")) (EVar "pol")) (EVar "t")))
-(DFunDef false "paramOccPolarities" ((PVar "tab") (PVar "p") (PVar "pol") (PCon "TyApp" (PVar "a") (PVar "b"))) (EMatch (EApp (EVar "tyAppSpine") (EApp (EApp (EVar "TyApp") (EVar "a")) (EVar "b"))) (arm (PTuple (PRec "TyCon" ((rf "tyConName" (PVar "n")) (rf "tyConOrigin" (PVar "o"))) false) (PVar "args")) () (EApp (EApp (EApp (EApp (EApp (EApp (EVar "paramOccPolaritiesArgs") (EVar "tab")) (EVar "p")) (EVar "pol")) (EApp (EApp (EVar "paramPolaritiesIn") (EVar "tab")) (EApp (EApp (EVar "tyTabKey") (EVar "o")) (EVar "n")))) (ELit (LInt 0))) (EVar "args"))) (arm PWild () (EApp (EApp (EVar "map") (ELam ((PVar "q")) (EApp (EApp (EVar "polMul") (EVar "PInv")) (EVar "q")))) (EBinOp "++" (EApp (EApp (EApp (EApp (EVar "paramOccPolarities") (EVar "tab")) (EVar "p")) (EVar "pol")) (EVar "a")) (EApp (EApp (EApp (EApp (EVar "paramOccPolarities") (EVar "tab")) (EVar "p")) (EVar "pol")) (EVar "b")))))))
+(DFunDef false "paramOccPolarities" ((PVar "tab") (PVar "p") (PVar "pol0") (PVar "x0")) (ELetGroup ((lgb "go" (clause ((PVar "pol") (PCon "TyVar" (PVar "n"))) (EIf (EBinOp "==" (EVar "n") (EVar "p")) (EListLit (EVar "pol")) (EListLit))) (clause (PWild (PRec "TyCon" ((rf "tyConName" PWild)) false)) (EListLit)) (clause ((PVar "pol") (PCon "TyFun" (PVar "a") (PVar "b"))) (EBinOp "++" (EApp (EApp (EVar "go") (EApp (EApp (EVar "polMul") (EVar "pol")) (EVar "PContra"))) (EVar "a")) (EApp (EApp (EVar "go") (EVar "pol")) (EVar "b")))) (clause ((PVar "pol") (PCon "TyTuple" (PVar "ts"))) (EApp (EApp (EVar "flatMap") (EApp (EApp (EApp (EVar "paramOccPolarities") (EVar "tab")) (EVar "p")) (EVar "pol"))) (EVar "ts"))) (clause ((PVar "pol") (PCon "TyEffect" PWild PWild (PVar "t"))) (EApp (EApp (EVar "go") (EVar "pol")) (EVar "t"))) (clause ((PVar "pol") (PCon "TyConstrained" PWild (PVar "t"))) (EApp (EApp (EVar "go") (EVar "pol")) (EVar "t"))) (clause (PWild (PCon "TyRow" PWild PWild PWild)) (EListLit)) (clause (PWild (PCon "TyAuth" PWild PWild)) (EListLit)) (clause ((PVar "pol") (PCon "TyNamed" PWild (PVar "t") PWild)) (EApp (EApp (EVar "go") (EVar "pol")) (EVar "t"))) (clause ((PVar "pol") (PCon "TyQual" (PVar "t") PWild PWild)) (EApp (EApp (EVar "go") (EVar "pol")) (EVar "t"))) (clause ((PVar "pol") (PCon "TyApp" (PVar "a") (PVar "b"))) (EMatch (EApp (EVar "tyAppSpine") (EApp (EApp (EVar "TyApp") (EVar "a")) (EVar "b"))) (arm (PTuple (PRec "TyCon" ((rf "tyConName" (PVar "n")) (rf "tyConOrigin" (PVar "o"))) false) (PVar "args")) () (EApp (EApp (EApp (EApp (EApp (EApp (EVar "paramOccPolaritiesArgs") (EVar "tab")) (EVar "p")) (EVar "pol")) (EApp (EApp (EVar "paramPolaritiesIn") (EVar "tab")) (EApp (EApp (EVar "tyTabKey") (EVar "o")) (EVar "n")))) (ELit (LInt 0))) (EVar "args"))) (arm PWild () (EApp (EApp (EVar "map") (ELam ((PVar "q")) (EApp (EApp (EVar "polMul") (EVar "PInv")) (EVar "q")))) (EBinOp "++" (EApp (EApp (EVar "go") (EVar "pol")) (EVar "a")) (EApp (EApp (EVar "go") (EVar "pol")) (EVar "b"))))))))) (EApp (EApp (EVar "go") (EVar "pol0")) (EVar "x0"))))
 (DTypeSig false "paramOccPolaritiesArgs" (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "TabKey") (TyApp (TyCon "List") (TyCon "Polarity")))) (TyFun (TyCon "String") (TyFun (TyCon "Polarity") (TyFun (TyApp (TyCon "Option") (TyApp (TyCon "List") (TyCon "Polarity"))) (TyFun (TyCon "Int") (TyFun (TyApp (TyCon "List") (TyCon "Ty")) (TyApp (TyCon "List") (TyCon "Polarity")))))))))
-(DFunDef false "paramOccPolaritiesArgs" (PWild PWild PWild PWild PWild (PList)) (EListLit))
-(DFunDef false "paramOccPolaritiesArgs" ((PVar "tab") (PVar "p") (PVar "pol") (PVar "headPols") (PVar "i") (PCons (PVar "t") (PVar "rest"))) (EBinOp "++" (EApp (EApp (EApp (EApp (EVar "paramOccPolarities") (EVar "tab")) (EVar "p")) (EApp (EApp (EVar "polMul") (EVar "pol")) (EApp (EApp (EVar "polarityAtOr") (EVar "headPols")) (EVar "i")))) (EVar "t")) (EApp (EApp (EApp (EApp (EApp (EApp (EVar "paramOccPolaritiesArgs") (EVar "tab")) (EVar "p")) (EVar "pol")) (EVar "headPols")) (EBinOp "+" (EVar "i") (ELit (LInt 1)))) (EVar "rest"))))
+(DFunDef false "paramOccPolaritiesArgs" ((PVar "tab") (PVar "p") (PVar "pol") (PVar "headPols") (PVar "i0") (PVar "xs0")) (ELetGroup ((lgb "go" (clause (PWild (PList)) (EListLit)) (clause ((PVar "i") (PCons (PVar "t") (PVar "rest"))) (EBinOp "++" (EApp (EApp (EApp (EApp (EVar "paramOccPolarities") (EVar "tab")) (EVar "p")) (EApp (EApp (EVar "polMul") (EVar "pol")) (EApp (EApp (EVar "polarityAtOr") (EVar "headPols")) (EVar "i")))) (EVar "t")) (EApp (EApp (EVar "go") (EBinOp "+" (EVar "i") (ELit (LInt 1)))) (EVar "rest")))))) (EApp (EApp (EVar "go") (EVar "i0")) (EVar "xs0"))))
 (DTypeSig false "polMul" (TyFun (TyCon "Polarity") (TyFun (TyCon "Polarity") (TyCon "Polarity"))))
 (DFunDef false "polMul" ((PCon "PPhantom") PWild) (EVar "PPhantom"))
 (DFunDef false "polMul" (PWild (PCon "PPhantom")) (EVar "PPhantom"))
@@ -773,7 +758,7 @@ declPolarityKeys (_ :: rest) = declPolarityKeys rest
 (DFunDef false "polarityTyConNames" ((PCon "TyQual" (PVar "t") PWild PWild) (PVar "acc")) (EApp (EApp (EVar "polarityTyConNames") (EVar "t")) (EVar "acc")))
 (DFunDef false "polarityTyConNames" ((POr (PCon "TyVar" PWild) (PCon "TyRow" PWild PWild PWild) (PCon "TyAuth" PWild PWild)) (PVar "acc")) (EVar "acc"))
 (DTypeSig false "declEnvPolarityFixGo" (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "TabKey") (TyApp (TyCon "List") (TyCon "Polarity")))) (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyFun (TyCon "Int") (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "TabKey") (TyApp (TyCon "List") (TyCon "Polarity")))) (TyApp (TyCon "List") (TyTuple (TyCon "TabKey") (TyApp (TyCon "List") (TyCon "Polarity")))))))))
-(DFunDef false "declEnvPolarityFixGo" ((PVar "base") (PVar "ds") (PVar "fuel") (PVar "prev")) (EIf (EBinOp "<=" (EVar "fuel") (ELit (LInt 0))) (EApp (EApp (EMethodRef "map") (ELam ((PVar "e")) (ETuple (EApp (EVar "fst") (EVar "e")) (EApp (EApp (EMethodRef "map") (ELam (PWild) (EVar "PInv"))) (EApp (EVar "snd") (EVar "e")))))) (EVar "prev")) (EBlock (DoLet false false (PVar "next") (EApp (EApp (EVar "declEnvPolarityEntries") (EBinOp "++" (EVar "prev") (EVar "base"))) (EVar "ds"))) (DoExpr (EIf (EApp (EApp (EVar "polarityEntriesEq") (EVar "prev")) (EVar "next")) (EVar "prev") (EApp (EApp (EApp (EApp (EVar "declEnvPolarityFixGo") (EVar "base")) (EVar "ds")) (EBinOp "-" (EVar "fuel") (ELit (LInt 1)))) (EVar "next")))))))
+(DFunDef false "declEnvPolarityFixGo" ((PVar "base") (PVar "ds") (PVar "fuel0") (PVar "prev0")) (ELetGroup ((lgb "go" (clause ((PVar "fuel") (PVar "prev")) (EIf (EBinOp "<=" (EVar "fuel") (ELit (LInt 0))) (EApp (EApp (EMethodRef "map") (ELam ((PVar "e")) (ETuple (EApp (EVar "fst") (EVar "e")) (EApp (EApp (EMethodRef "map") (ELam (PWild) (EVar "PInv"))) (EApp (EVar "snd") (EVar "e")))))) (EVar "prev")) (EBlock (DoLet false false (PVar "next") (EApp (EApp (EVar "declEnvPolarityEntries") (EBinOp "++" (EVar "prev") (EVar "base"))) (EVar "ds"))) (DoExpr (EIf (EApp (EApp (EVar "polarityEntriesEq") (EVar "prev")) (EVar "next")) (EVar "prev") (EApp (EApp (EVar "go") (EBinOp "-" (EVar "fuel") (ELit (LInt 1)))) (EVar "next"))))))))) (EApp (EApp (EVar "go") (EVar "fuel0")) (EVar "prev0"))))
 (DTypeSig false "publishedPolarity" (TyFun (TyCon "Polarity") (TyCon "Polarity")))
 (DFunDef false "publishedPolarity" ((PCon "PPhantom")) (EVar "PCo"))
 (DFunDef false "publishedPolarity" ((PVar "q")) (EVar "q"))
@@ -805,20 +790,9 @@ declPolarityKeys (_ :: rest) = declPolarityKeys rest
 (DTypeSig true "variantPayload" (TyFun (TyCon "Variant") (TyCon "ConPayload")))
 (DFunDef false "variantPayload" ((PCon "Variant" PWild (PVar "payload"))) (EVar "payload"))
 (DTypeSig false "paramOccPolarities" (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "TabKey") (TyApp (TyCon "List") (TyCon "Polarity")))) (TyFun (TyCon "String") (TyFun (TyCon "Polarity") (TyFun (TyCon "Ty") (TyApp (TyCon "List") (TyCon "Polarity")))))))
-(DFunDef false "paramOccPolarities" (PWild (PVar "p") (PVar "pol") (PCon "TyVar" (PVar "n"))) (EIf (EBinOp "==" (EVar "n") (EVar "p")) (EListLit (EVar "pol")) (EListLit)))
-(DFunDef false "paramOccPolarities" (PWild PWild PWild (PRec "TyCon" ((rf "tyConName" PWild)) false)) (EListLit))
-(DFunDef false "paramOccPolarities" ((PVar "tab") (PVar "p") (PVar "pol") (PCon "TyFun" (PVar "a") (PVar "b"))) (EBinOp "++" (EApp (EApp (EApp (EApp (EVar "paramOccPolarities") (EVar "tab")) (EVar "p")) (EApp (EApp (EVar "polMul") (EVar "pol")) (EVar "PContra"))) (EVar "a")) (EApp (EApp (EApp (EApp (EVar "paramOccPolarities") (EVar "tab")) (EVar "p")) (EVar "pol")) (EVar "b"))))
-(DFunDef false "paramOccPolarities" ((PVar "tab") (PVar "p") (PVar "pol") (PCon "TyTuple" (PVar "ts"))) (EApp (EApp (EDictApp "flatMap") (EApp (EApp (EApp (EVar "paramOccPolarities") (EVar "tab")) (EVar "p")) (EVar "pol"))) (EVar "ts")))
-(DFunDef false "paramOccPolarities" ((PVar "tab") (PVar "p") (PVar "pol") (PCon "TyEffect" PWild PWild (PVar "t"))) (EApp (EApp (EApp (EApp (EVar "paramOccPolarities") (EVar "tab")) (EVar "p")) (EVar "pol")) (EVar "t")))
-(DFunDef false "paramOccPolarities" ((PVar "tab") (PVar "p") (PVar "pol") (PCon "TyConstrained" PWild (PVar "t"))) (EApp (EApp (EApp (EApp (EVar "paramOccPolarities") (EVar "tab")) (EVar "p")) (EVar "pol")) (EVar "t")))
-(DFunDef false "paramOccPolarities" (PWild PWild PWild (PCon "TyRow" PWild PWild PWild)) (EListLit))
-(DFunDef false "paramOccPolarities" (PWild PWild PWild (PCon "TyAuth" PWild PWild)) (EListLit))
-(DFunDef false "paramOccPolarities" ((PVar "tab") (PVar "p") (PVar "pol") (PCon "TyNamed" PWild (PVar "t") PWild)) (EApp (EApp (EApp (EApp (EVar "paramOccPolarities") (EVar "tab")) (EVar "p")) (EVar "pol")) (EVar "t")))
-(DFunDef false "paramOccPolarities" ((PVar "tab") (PVar "p") (PVar "pol") (PCon "TyQual" (PVar "t") PWild PWild)) (EApp (EApp (EApp (EApp (EVar "paramOccPolarities") (EVar "tab")) (EVar "p")) (EVar "pol")) (EVar "t")))
-(DFunDef false "paramOccPolarities" ((PVar "tab") (PVar "p") (PVar "pol") (PCon "TyApp" (PVar "a") (PVar "b"))) (EMatch (EApp (EVar "tyAppSpine") (EApp (EApp (EVar "TyApp") (EVar "a")) (EVar "b"))) (arm (PTuple (PRec "TyCon" ((rf "tyConName" (PVar "n")) (rf "tyConOrigin" (PVar "o"))) false) (PVar "args")) () (EApp (EApp (EApp (EApp (EApp (EApp (EVar "paramOccPolaritiesArgs") (EVar "tab")) (EVar "p")) (EVar "pol")) (EApp (EApp (EVar "paramPolaritiesIn") (EVar "tab")) (EApp (EApp (EVar "tyTabKey") (EVar "o")) (EVar "n")))) (ELit (LInt 0))) (EVar "args"))) (arm PWild () (EApp (EApp (EMethodRef "map") (ELam ((PVar "q")) (EApp (EApp (EVar "polMul") (EVar "PInv")) (EVar "q")))) (EBinOp "++" (EApp (EApp (EApp (EApp (EVar "paramOccPolarities") (EVar "tab")) (EVar "p")) (EVar "pol")) (EVar "a")) (EApp (EApp (EApp (EApp (EVar "paramOccPolarities") (EVar "tab")) (EVar "p")) (EVar "pol")) (EVar "b")))))))
+(DFunDef false "paramOccPolarities" ((PVar "tab") (PVar "p") (PVar "pol0") (PVar "x0")) (ELetGroup ((lgb "go" (clause ((PVar "pol") (PCon "TyVar" (PVar "n"))) (EIf (EBinOp "==" (EVar "n") (EVar "p")) (EListLit (EVar "pol")) (EListLit))) (clause (PWild (PRec "TyCon" ((rf "tyConName" PWild)) false)) (EListLit)) (clause ((PVar "pol") (PCon "TyFun" (PVar "a") (PVar "b"))) (EBinOp "++" (EApp (EApp (EVar "go") (EApp (EApp (EVar "polMul") (EVar "pol")) (EVar "PContra"))) (EVar "a")) (EApp (EApp (EVar "go") (EVar "pol")) (EVar "b")))) (clause ((PVar "pol") (PCon "TyTuple" (PVar "ts"))) (EApp (EApp (EDictApp "flatMap") (EApp (EApp (EApp (EVar "paramOccPolarities") (EVar "tab")) (EVar "p")) (EVar "pol"))) (EVar "ts"))) (clause ((PVar "pol") (PCon "TyEffect" PWild PWild (PVar "t"))) (EApp (EApp (EVar "go") (EVar "pol")) (EVar "t"))) (clause ((PVar "pol") (PCon "TyConstrained" PWild (PVar "t"))) (EApp (EApp (EVar "go") (EVar "pol")) (EVar "t"))) (clause (PWild (PCon "TyRow" PWild PWild PWild)) (EListLit)) (clause (PWild (PCon "TyAuth" PWild PWild)) (EListLit)) (clause ((PVar "pol") (PCon "TyNamed" PWild (PVar "t") PWild)) (EApp (EApp (EVar "go") (EVar "pol")) (EVar "t"))) (clause ((PVar "pol") (PCon "TyQual" (PVar "t") PWild PWild)) (EApp (EApp (EVar "go") (EVar "pol")) (EVar "t"))) (clause ((PVar "pol") (PCon "TyApp" (PVar "a") (PVar "b"))) (EMatch (EApp (EVar "tyAppSpine") (EApp (EApp (EVar "TyApp") (EVar "a")) (EVar "b"))) (arm (PTuple (PRec "TyCon" ((rf "tyConName" (PVar "n")) (rf "tyConOrigin" (PVar "o"))) false) (PVar "args")) () (EApp (EApp (EApp (EApp (EApp (EApp (EVar "paramOccPolaritiesArgs") (EVar "tab")) (EVar "p")) (EVar "pol")) (EApp (EApp (EVar "paramPolaritiesIn") (EVar "tab")) (EApp (EApp (EVar "tyTabKey") (EVar "o")) (EVar "n")))) (ELit (LInt 0))) (EVar "args"))) (arm PWild () (EApp (EApp (EMethodRef "map") (ELam ((PVar "q")) (EApp (EApp (EVar "polMul") (EVar "PInv")) (EVar "q")))) (EBinOp "++" (EApp (EApp (EVar "go") (EVar "pol")) (EVar "a")) (EApp (EApp (EVar "go") (EVar "pol")) (EVar "b"))))))))) (EApp (EApp (EVar "go") (EVar "pol0")) (EVar "x0"))))
 (DTypeSig false "paramOccPolaritiesArgs" (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "TabKey") (TyApp (TyCon "List") (TyCon "Polarity")))) (TyFun (TyCon "String") (TyFun (TyCon "Polarity") (TyFun (TyApp (TyCon "Option") (TyApp (TyCon "List") (TyCon "Polarity"))) (TyFun (TyCon "Int") (TyFun (TyApp (TyCon "List") (TyCon "Ty")) (TyApp (TyCon "List") (TyCon "Polarity")))))))))
-(DFunDef false "paramOccPolaritiesArgs" (PWild PWild PWild PWild PWild (PList)) (EListLit))
-(DFunDef false "paramOccPolaritiesArgs" ((PVar "tab") (PVar "p") (PVar "pol") (PVar "headPols") (PVar "i") (PCons (PVar "t") (PVar "rest"))) (EBinOp "++" (EApp (EApp (EApp (EApp (EVar "paramOccPolarities") (EVar "tab")) (EVar "p")) (EApp (EApp (EVar "polMul") (EVar "pol")) (EApp (EApp (EVar "polarityAtOr") (EVar "headPols")) (EVar "i")))) (EVar "t")) (EApp (EApp (EApp (EApp (EApp (EApp (EVar "paramOccPolaritiesArgs") (EVar "tab")) (EVar "p")) (EVar "pol")) (EVar "headPols")) (EBinOp "+" (EVar "i") (ELit (LInt 1)))) (EVar "rest"))))
+(DFunDef false "paramOccPolaritiesArgs" ((PVar "tab") (PVar "p") (PVar "pol") (PVar "headPols") (PVar "i0") (PVar "xs0")) (ELetGroup ((lgb "go" (clause (PWild (PList)) (EListLit)) (clause ((PVar "i") (PCons (PVar "t") (PVar "rest"))) (EBinOp "++" (EApp (EApp (EApp (EApp (EVar "paramOccPolarities") (EVar "tab")) (EVar "p")) (EApp (EApp (EVar "polMul") (EVar "pol")) (EApp (EApp (EVar "polarityAtOr") (EVar "headPols")) (EVar "i")))) (EVar "t")) (EApp (EApp (EVar "go") (EBinOp "+" (EVar "i") (ELit (LInt 1)))) (EVar "rest")))))) (EApp (EApp (EVar "go") (EVar "i0")) (EVar "xs0"))))
 (DTypeSig false "polMul" (TyFun (TyCon "Polarity") (TyFun (TyCon "Polarity") (TyCon "Polarity"))))
 (DFunDef false "polMul" ((PCon "PPhantom") PWild) (EVar "PPhantom"))
 (DFunDef false "polMul" (PWild (PCon "PPhantom")) (EVar "PPhantom"))

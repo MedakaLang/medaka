@@ -94,13 +94,15 @@ sameShape _ _ = False
 -- An incompatible alternative is diagnosed through ordinary equality, then
 -- omitted from recovery. No user type mismatch reaches a projection panic.
 matchingValues : ValueJoinOps c -> Mono -> List (c, Mono) -> List (c, Mono)
-matchingValues _ _ [] = []
-matchingValues ops witness ((value@(context, t)) :: rest) =
-  if sameShape witness t then
-    value :: matchingValues ops witness rest
-  else
-    ops.vjoEqual context witness t
-    matchingValues ops witness rest
+matchingValues ops witness xs0 = go xs0
+  where
+    go [] = []
+    go ((value@(context, t)) :: rest) =
+      if sameShape witness t then
+        value :: go rest
+      else
+        ops.vjoEqual context witness t
+        go rest
 
 joinNonempty : ValueJoinOps c -> List (c, Mono) -> Mono
 joinNonempty ops values = match concreteWitness values
@@ -151,10 +153,12 @@ equalValues ops ((_, first) :: rest) =
   first
 
 equalRest : ValueJoinOps c -> Mono -> List (c, Mono) -> Unit
-equalRest _ _ [] = ()
-equalRest ops first ((context, value) :: rest) =
-  ops.vjoEqual context first value
-  equalRest ops first rest
+equalRest ops first xs0 = go xs0
+  where
+    go [] = ()
+    go ((context, value) :: rest) =
+      ops.vjoEqual context first value
+      go rest
 
 arrowDomain : (c, Mono) -> (c, Mono)
 arrowDomain (context, TFun domain _ _) = (context, domain)

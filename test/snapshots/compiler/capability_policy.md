@@ -1,5 +1,5 @@
 # META
-source_lines=173
+source_lines=171
 stages=DESUGAR,MARK
 # SOURCE
 -- Admission compares a frozen demand with constant grants; it never solves cells.
@@ -53,37 +53,35 @@ permitFrozen : List (String, Param) ->
   FrozenAtom ->
   List (String, EffParamTy) ->
   Permit
-permitFrozen domains atom policy = match (
-  atom.label == "IO",
-  entriesFor atom policy,
-)
-  (True, []) =>
-    firstNotPermitted
-      (map
-        (label =>
-          permitFrozen
-            domains
-            FrozenAtom {
+permitFrozen domains atom0 policy = go atom0
+  where
+    go atom = match (
+      atom.label == "IO",
+      entriesFor atom policy,
+    )
+      (True, []) =>
+        firstNotPermitted
+          (map
+            (label => go FrozenAtom {
               label = label,
               origin = OriginBuiltin,
               domainTop = dtopIn domains (EffLabel label OriginBuiltin),
               authority =
                 FrozenConst (dtopIn domains (EffLabel label OriginBuiltin)),
-            }
-            policy)
-        hostLabels)
-  (_, []) => Forbidden
-  (_, written) =>
-    match (allOk
-      (map
-        (decodeWrittenParam domains (EffLabel atom.label atom.origin))
-        written))
-      Err message => Malformed message
-      Ok grants =>
-        if within atom.authority (dantichain grants) then
-          Permitted
-        else
-          Forbidden
+            })
+            hostLabels)
+      (_, []) => Forbidden
+      (_, written) =>
+        match (allOk
+          (map
+            (decodeWrittenParam domains (EffLabel atom.label atom.origin))
+            written))
+          Err message => Malformed message
+          Ok grants =>
+            if within atom.authority (dantichain grants) then
+              Permitted
+            else
+              Forbidden
 
 -- A symbolic tuple needs one covering tuple. Constant products may instead be
 -- covered together by several grants through the domain's exact union rule.
@@ -193,7 +191,7 @@ allOk ((Ok value) :: rest) = map (value :: _) (allOk rest)
 (DFunDef false "malformedLine" ((PTuple (PVar "a") (PCon "Malformed" (PVar "message")))) (EListLit (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "   policy entry for ")) (EApp (EVar "display") (EFieldAccess (EVar "a") "label"))) (ELit (LString ": "))) (EApp (EVar "display") (EVar "message"))) (ELit (LString "\n")))))
 (DFunDef false "malformedLine" (PWild) (EListLit))
 (DTypeSig true "permitFrozen" (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "Param"))) (TyFun (TyCon "FrozenAtom") (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "EffParamTy"))) (TyCon "Permit")))))
-(DFunDef false "permitFrozen" ((PVar "domains") (PVar "atom") (PVar "policy")) (EMatch (ETuple (EBinOp "==" (EFieldAccess (EVar "atom") "label") (ELit (LString "IO"))) (EApp (EApp (EVar "entriesFor") (EVar "atom")) (EVar "policy"))) (arm (PTuple (PCon "True") (PList)) () (EApp (EVar "firstNotPermitted") (EApp (EApp (EVar "map") (ELam ((PVar "label")) (EApp (EApp (EApp (EVar "permitFrozen") (EVar "domains")) (ERecordCreate "FrozenAtom" ((fa "label" (EVar "label")) (fa "origin" (EVar "OriginBuiltin")) (fa "domainTop" (EApp (EApp (EVar "dtopIn") (EVar "domains")) (EApp (EApp (EVar "EffLabel") (EVar "label")) (EVar "OriginBuiltin")))) (fa "authority" (EApp (EVar "FrozenConst") (EApp (EApp (EVar "dtopIn") (EVar "domains")) (EApp (EApp (EVar "EffLabel") (EVar "label")) (EVar "OriginBuiltin")))))))) (EVar "policy")))) (EVar "hostLabels")))) (arm (PTuple PWild (PList)) () (EVar "Forbidden")) (arm (PTuple PWild (PVar "written")) () (EMatch (EApp (EVar "allOk") (EApp (EApp (EVar "map") (EApp (EApp (EVar "decodeWrittenParam") (EVar "domains")) (EApp (EApp (EVar "EffLabel") (EFieldAccess (EVar "atom") "label")) (EFieldAccess (EVar "atom") "origin")))) (EVar "written"))) (arm (PCon "Err" (PVar "message")) () (EApp (EVar "Malformed") (EVar "message"))) (arm (PCon "Ok" (PVar "grants")) () (EIf (EApp (EApp (EVar "within") (EFieldAccess (EVar "atom") "authority")) (EApp (EVar "dantichain") (EVar "grants"))) (EVar "Permitted") (EVar "Forbidden")))))))
+(DFunDef false "permitFrozen" ((PVar "domains") (PVar "atom0") (PVar "policy")) (ELetGroup ((lgb "go" (clause ((PVar "atom")) (EMatch (ETuple (EBinOp "==" (EFieldAccess (EVar "atom") "label") (ELit (LString "IO"))) (EApp (EApp (EVar "entriesFor") (EVar "atom")) (EVar "policy"))) (arm (PTuple (PCon "True") (PList)) () (EApp (EVar "firstNotPermitted") (EApp (EApp (EVar "map") (ELam ((PVar "label")) (EApp (EVar "go") (ERecordCreate "FrozenAtom" ((fa "label" (EVar "label")) (fa "origin" (EVar "OriginBuiltin")) (fa "domainTop" (EApp (EApp (EVar "dtopIn") (EVar "domains")) (EApp (EApp (EVar "EffLabel") (EVar "label")) (EVar "OriginBuiltin")))) (fa "authority" (EApp (EVar "FrozenConst") (EApp (EApp (EVar "dtopIn") (EVar "domains")) (EApp (EApp (EVar "EffLabel") (EVar "label")) (EVar "OriginBuiltin")))))))))) (EVar "hostLabels")))) (arm (PTuple PWild (PList)) () (EVar "Forbidden")) (arm (PTuple PWild (PVar "written")) () (EMatch (EApp (EVar "allOk") (EApp (EApp (EVar "map") (EApp (EApp (EVar "decodeWrittenParam") (EVar "domains")) (EApp (EApp (EVar "EffLabel") (EFieldAccess (EVar "atom") "label")) (EFieldAccess (EVar "atom") "origin")))) (EVar "written"))) (arm (PCon "Err" (PVar "message")) () (EApp (EVar "Malformed") (EVar "message"))) (arm (PCon "Ok" (PVar "grants")) () (EIf (EApp (EApp (EVar "within") (EFieldAccess (EVar "atom") "authority")) (EApp (EVar "dantichain") (EVar "grants"))) (EVar "Permitted") (EVar "Forbidden"))))))))) (EApp (EVar "go") (EVar "atom0"))))
 (DTypeSig false "within" (TyFun (TyCon "FrozenAuthority") (TyFun (TyApp (TyCon "List") (TyCon "Param")) (TyCon "Bool"))))
 (DFunDef false "within" ((PCon "FrozenJoin" (PVar "members")) (PVar "grants")) (EApp (EApp (EVar "allList") (ELam ((PVar "m")) (EApp (EApp (EVar "within") (EVar "m")) (EVar "grants")))) (EVar "members")))
 (DFunDef false "within" ((PCon "FrozenConst" (PVar "p")) (PVar "grants")) (EApp (EApp (EVar "dsubAny") (EVar "p")) (EVar "grants")))
@@ -257,7 +255,7 @@ allOk ((Ok value) :: rest) = map (value :: _) (allOk rest)
 (DFunDef false "malformedLine" ((PTuple (PVar "a") (PCon "Malformed" (PVar "message")))) (EListLit (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "   policy entry for ")) (EApp (EMethodRef "display") (EFieldAccess (EVar "a") "label"))) (ELit (LString ": "))) (EApp (EMethodRef "display") (EVar "message"))) (ELit (LString "\n")))))
 (DFunDef false "malformedLine" (PWild) (EListLit))
 (DTypeSig true "permitFrozen" (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "Param"))) (TyFun (TyCon "FrozenAtom") (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "EffParamTy"))) (TyCon "Permit")))))
-(DFunDef false "permitFrozen" ((PVar "domains") (PVar "atom") (PVar "policy")) (EMatch (ETuple (EBinOp "==" (EFieldAccess (EVar "atom") "label") (ELit (LString "IO"))) (EApp (EApp (EVar "entriesFor") (EVar "atom")) (EVar "policy"))) (arm (PTuple (PCon "True") (PList)) () (EApp (EVar "firstNotPermitted") (EApp (EApp (EMethodRef "map") (ELam ((PVar "label")) (EApp (EApp (EApp (EVar "permitFrozen") (EVar "domains")) (ERecordCreate "FrozenAtom" ((fa "label" (EVar "label")) (fa "origin" (EVar "OriginBuiltin")) (fa "domainTop" (EApp (EApp (EVar "dtopIn") (EVar "domains")) (EApp (EApp (EVar "EffLabel") (EVar "label")) (EVar "OriginBuiltin")))) (fa "authority" (EApp (EVar "FrozenConst") (EApp (EApp (EVar "dtopIn") (EVar "domains")) (EApp (EApp (EVar "EffLabel") (EVar "label")) (EVar "OriginBuiltin")))))))) (EVar "policy")))) (EVar "hostLabels")))) (arm (PTuple PWild (PList)) () (EVar "Forbidden")) (arm (PTuple PWild (PVar "written")) () (EMatch (EApp (EVar "allOk") (EApp (EApp (EMethodRef "map") (EApp (EApp (EVar "decodeWrittenParam") (EVar "domains")) (EApp (EApp (EVar "EffLabel") (EFieldAccess (EVar "atom") "label")) (EFieldAccess (EVar "atom") "origin")))) (EVar "written"))) (arm (PCon "Err" (PVar "message")) () (EApp (EVar "Malformed") (EVar "message"))) (arm (PCon "Ok" (PVar "grants")) () (EIf (EApp (EApp (EVar "within") (EFieldAccess (EVar "atom") "authority")) (EApp (EVar "dantichain") (EVar "grants"))) (EVar "Permitted") (EVar "Forbidden")))))))
+(DFunDef false "permitFrozen" ((PVar "domains") (PVar "atom0") (PVar "policy")) (ELetGroup ((lgb "go" (clause ((PVar "atom")) (EMatch (ETuple (EBinOp "==" (EFieldAccess (EVar "atom") "label") (ELit (LString "IO"))) (EApp (EApp (EVar "entriesFor") (EVar "atom")) (EVar "policy"))) (arm (PTuple (PCon "True") (PList)) () (EApp (EVar "firstNotPermitted") (EApp (EApp (EMethodRef "map") (ELam ((PVar "label")) (EApp (EVar "go") (ERecordCreate "FrozenAtom" ((fa "label" (EVar "label")) (fa "origin" (EVar "OriginBuiltin")) (fa "domainTop" (EApp (EApp (EVar "dtopIn") (EVar "domains")) (EApp (EApp (EVar "EffLabel") (EVar "label")) (EVar "OriginBuiltin")))) (fa "authority" (EApp (EVar "FrozenConst") (EApp (EApp (EVar "dtopIn") (EVar "domains")) (EApp (EApp (EVar "EffLabel") (EVar "label")) (EVar "OriginBuiltin")))))))))) (EVar "hostLabels")))) (arm (PTuple PWild (PList)) () (EVar "Forbidden")) (arm (PTuple PWild (PVar "written")) () (EMatch (EApp (EVar "allOk") (EApp (EApp (EMethodRef "map") (EApp (EApp (EVar "decodeWrittenParam") (EVar "domains")) (EApp (EApp (EVar "EffLabel") (EFieldAccess (EVar "atom") "label")) (EFieldAccess (EVar "atom") "origin")))) (EVar "written"))) (arm (PCon "Err" (PVar "message")) () (EApp (EVar "Malformed") (EVar "message"))) (arm (PCon "Ok" (PVar "grants")) () (EIf (EApp (EApp (EVar "within") (EFieldAccess (EVar "atom") "authority")) (EApp (EVar "dantichain") (EVar "grants"))) (EVar "Permitted") (EVar "Forbidden"))))))))) (EApp (EVar "go") (EVar "atom0"))))
 (DTypeSig false "within" (TyFun (TyCon "FrozenAuthority") (TyFun (TyApp (TyCon "List") (TyCon "Param")) (TyCon "Bool"))))
 (DFunDef false "within" ((PCon "FrozenJoin" (PVar "members")) (PVar "grants")) (EApp (EApp (EVar "allList") (ELam ((PVar "m")) (EApp (EApp (EVar "within") (EVar "m")) (EVar "grants")))) (EVar "members")))
 (DFunDef false "within" ((PCon "FrozenConst" (PVar "p")) (PVar "grants")) (EApp (EApp (EVar "dsubAny") (EVar "p")) (EVar "grants")))

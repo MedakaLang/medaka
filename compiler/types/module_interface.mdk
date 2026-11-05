@@ -455,40 +455,41 @@ methodCellEntriesFrom : Array (Option EvCell) ->
   Int ->
   EvTable ->
   EvTable
-methodCellEntriesFrom arr lo i acc
-  | i < lo = acc
-  | otherwise = match arrayGetUnsafe i arr
-    None => methodCellEntriesFrom arr lo (i - 1) acc
-    Some c =>
-      let arity =
-        optionOrPanic
-          "method cell published before its selected scheme supplied an arity"
-          c.ecArity.value
-      methodCellEntriesFrom
-        arr
-        lo
-        (i - 1)
-        (EvEntry
-            c.ecId
-            (EvMethod
-              c.ecIface.value
-              arity
-              c.ecTag.value
-              c.ecImpl.value
-              c.ecMeth.value)
-          :: acc)
+methodCellEntriesFrom arr lo i0 acc0 = go i0 acc0
+  where
+    go i acc
+      | i < lo = acc
+      | otherwise = match arrayGetUnsafe i arr
+        None => go (i - 1) acc
+        Some c =>
+          let arity =
+            optionOrPanic
+              "method cell published before its selected scheme supplied an arity"
+              c.ecArity.value
+          go
+            (i - 1)
+            (EvEntry
+                c.ecId
+                (EvMethod
+                  c.ecIface.value
+                  arity
+                  c.ecTag.value
+                  c.ecImpl.value
+                  c.ecMeth.value)
+              :: acc)
 
 siteCellEntriesFrom : Array (Option (EvId, SiteCell)) ->
   Int ->
   Int ->
   EvTable ->
   EvTable
-siteCellEntriesFrom arr lo i acc
-  | i < lo = acc
-  | otherwise = match arrayGetUnsafe i arr
-    None => siteCellEntriesFrom arr lo (i - 1) acc
-    Some (ev, c) =>
-      siteCellEntriesFrom arr lo (i - 1) (EvEntry ev (siteCellValue c) :: acc)
+siteCellEntriesFrom arr lo i0 acc0 = go i0 acc0
+  where
+    go i acc
+      | i < lo = acc
+      | otherwise = match arrayGetUnsafe i arr
+        None => go (i - 1) acc
+        Some (ev, c) => go (i - 1) (EvEntry ev (siteCellValue c) :: acc)
 
 siteCellValue : SiteCell -> EvVal
 siteCellValue (OpSite r) = EvOne r.value

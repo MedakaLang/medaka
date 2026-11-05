@@ -1511,8 +1511,7 @@ inferOneIfaceDefaults env (DInterface { name, typarams, typaramKinds, methods, i
   -- #822: derived from THIS declaration, not from a name key (declGradedScope), and
   -- threaded down so the default bodies see the same Row slots the schemes were built
   -- with.  Computed ONCE per interface rather than per method.
-  let dscope =
-    declGradedScope env.teDyn.dcModule.mcGraph typarams typaramKinds methods
+  let dscope = declGradedScope env.teDyn.dcModule.mcGraph typarams typaramKinds
   let ifaceSchemes = methodSchemesPure env.teDyn.dcModule dscope methods
   let iface = IfaceRef { irName = name, irOrigin = ifaceOrigin }
   inferDefaultMethods

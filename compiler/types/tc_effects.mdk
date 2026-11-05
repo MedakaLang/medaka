@@ -462,7 +462,7 @@ checkUndeterminedRetEffVarsDecl mctx (DInterface { name, typarams, typaramKinds,
   checkIfaceMethodEffs
     mctx
     name
-    (declGradedScope mctx.mcGraph typarams typaramKinds methods)
+    (declGradedScope mctx.mcGraph typarams typaramKinds)
     methods
 -- #1103: the ARGUMENT-COVERAGE half of the rule is NOT method-only.  Its own
 -- comment (below) says post-unify inspection cannot catch these shapes because
@@ -488,18 +488,20 @@ checkIfaceMethodEffs : ModuleCtx ->
   List (String, List Kind) ->
   List IfaceMethod ->
   Unit
-checkIfaceMethodEffs _mctx _ _ [] = ()
-checkIfaceMethodEffs mctx iface scope ((IfaceMethod mname mty _ _) :: rest) =
-  match undeterminedRetEffVars mctx scope mty
-    [] => ()
-    bad =>
-      pushTypeErrorOnceAt
-        mctx
-        TEffectUndetermined
-        (firstTyLoc mty)
-        (effectUndeterminedMsg iface mname bad)
-  checkArgEffVarCoverage mctx (Some iface) scope mname mty
-  checkIfaceMethodEffs mctx iface scope rest
+checkIfaceMethodEffs mctx iface scope xs0 = go xs0
+  where
+    go [] = ()
+    go ((IfaceMethod mname mty _ _) :: rest) =
+      match undeterminedRetEffVars mctx scope mty
+        [] => ()
+        bad =>
+          pushTypeErrorOnceAt
+            mctx
+            TEffectUndetermined
+            (firstTyLoc mty)
+            (effectUndeterminedMsg iface mname bad)
+      checkArgEffVarCoverage mctx (Some iface) scope mname mty
+      go rest
 
 -- The DUAL of the #784 rule, closing the adversarial review's break 4 (and the
 -- argument-only variant): an effect var's ARGUMENT-position occurrences are
@@ -578,37 +580,41 @@ checkArgEffVars : ModuleCtx ->
   List (String, List Atom) ->
   List String ->
   Unit
-checkArgEffVars _mctx _ _ _ _ _ [] = ()
-checkArgEffVars mctx iface mname mty argOccs retOccs (v :: rest) =
-  let vrets = filterList (o => fst o == v) retOccs
-  let vatoms = flatMap snd (filterList (o => fst o == v) argOccs)
-  if isEmptyL vrets then match iface
-    Some i =>
-      pushTypeErrorOnceAt
-        mctx
-        TEffectArgUncovered
-        (firstTyLoc mty)
-        (argOnlyEffVarMsg i mname v)
-    None => ()
-  else match retOccsEscape mctx.mcGraph vatoms vrets
-    [] => ()
-    esc =>
-      pushTypeErrorOnceAt
-        mctx
-        TEffectArgUncovered
-        (firstTyLoc mty)
-        (argAtomsMsgFor iface mname v esc)
-  checkArgEffVars mctx iface mname mty argOccs retOccs rest
+checkArgEffVars mctx iface mname mty argOccs retOccs xs0 = go xs0
+  where
+    go [] = ()
+    go (v :: rest) =
+      let vrets = filterList (o => fst o == v) retOccs
+      let vatoms = flatMap snd (filterList (o => fst o == v) argOccs)
+      if isEmptyL vrets then match iface
+        Some i =>
+          pushTypeErrorOnceAt
+            mctx
+            TEffectArgUncovered
+            (firstTyLoc mty)
+            (argOnlyEffVarMsg i mname v)
+        None => ()
+      else match retOccsEscape mctx.mcGraph vatoms vrets
+        [] => ()
+        esc =>
+          pushTypeErrorOnceAt
+            mctx
+            TEffectArgUncovered
+            (firstTyLoc mty)
+            (argAtomsMsgFor iface mname v esc)
+      go rest
 
 -- first non-empty escape of the argument-side atoms against a non-argument
 -- occurrence's declared atoms (IO-expanded via atomsEscape)
 retOccsEscape : GraphCtx -> List Atom -> List (String, List Atom) -> List Atom
-retOccsEscape _gctx _ [] = []
-retOccsEscape gctx vatoms ((_, declAtoms) :: rest) =
-  if isNonEmptyL (atomsEscape gctx vatoms declAtoms) then
-    atomsEscape gctx vatoms declAtoms
-  else
-    retOccsEscape gctx vatoms rest
+retOccsEscape gctx vatoms xs0 = go xs0
+  where
+    go [] = []
+    go ((_, declAtoms) :: rest) =
+      if isNonEmptyL (atomsEscape gctx vatoms declAtoms) then
+        atomsEscape gctx vatoms declAtoms
+      else
+        go rest
 
 -- effect-var occurrences (name, written atoms) inside ARGUMENT positions of a
 -- method signature that an impl can PERFORM: rows of functions the impl can
@@ -629,11 +635,12 @@ methodEffArgOccs : ModuleCtx ->
   List (String, List Kind) ->
   Ty ->
   List (String, List Atom)
-methodEffArgOccs mctx scope (TyConstrained _ t) = methodEffArgOccs mctx scope t
-methodEffArgOccs mctx scope (TyEffect _ _ t) = methodEffArgOccs mctx scope t
-methodEffArgOccs mctx scope (TyFun a b) =
-  argPerformableOccs mctx scope True a ++ methodEffArgOccs mctx scope b
-methodEffArgOccs _mctx _ _ = []
+methodEffArgOccs mctx scope x0 = go x0
+  where
+    go (TyConstrained _ t) = go t
+    go (TyEffect _ _ t) = go t
+    go (TyFun a b) = argPerformableOccs mctx scope True a ++ go b
+    go _ = []
 
 -- One `(tail var, the row's written atoms)` occurrence per tail variable.  A
 -- row is a JOIN when it names several (#821, `<Stdout | e | e2>`), and every
@@ -654,41 +661,35 @@ argPerformableOccs : ModuleCtx ->
   Bool ->
   Ty ->
   List (String, List Atom)
-argPerformableOccs mctx scope perf (TyEffect labels tails t) =
-  (if perf then occsOfTails mctx.mcGraph tails labels else [])
-    ++ argPerformableOccs mctx scope perf t
--- A bare row atom (#997) carries its own tail var + labels directly (no
--- wrapped type to recurse into) — same treatment as the `TyEffect` arms
--- above.  Without this, a KRow ctor-arg written as `Box <Stdout | e> Int`
--- (as opposed to a bare `Box e Int`) was invisible to this collector, which
--- made the impl-body T-EFFECT-LAUNDER check over-fire on it (see
--- `effVarOccAtoms` below, which shares this gap).
-argPerformableOccs mctx _ perf (TyRow labels tails _) =
-  if perf then occsOfTails mctx.mcGraph tails labels else []
-argPerformableOccs mctx scope perf (TyFun a b) =
-  argPerformableOccs mctx scope (not perf) a
-    ++ argPerformableOccs mctx scope perf b
-argPerformableOccs mctx scope perf (TyTuple ts) =
-  flatMap (argPerformableOccs mctx scope perf) ts
-argPerformableOccs mctx scope perf (TyApp a b) = match tyAppSpine (TyApp a b)
-  -- OCCURRENCE MINT (#1110/#1111 A-2.3): the head's acquired identity, read off
-  -- the same record pattern as its name so the two cannot drift apart.
-  (TyCon { tyConName = n, tyConOrigin = o }, args) =>
-    krowSlotOccs mctx scope perf o n args
-  -- #1100, the abstract-head half — symmetric with `rowArgNamesVarApp` on the
-  -- RETURN side.  An interface typaram of graded kind, in scope, is row-kinded
-  -- in exactly the same way a registered ctor's KRow slot is; without this arm
-  -- `gtake : f e a -> a` collected NOTHING and the coverage rule never fired.
-  (TyVar h, args) => krowSlotVarOccs mctx scope perf h args
-  _ =>
-    argPerformableOccs mctx scope perf a ++ argPerformableOccs mctx scope perf b
-argPerformableOccs mctx scope perf (TyConstrained _ t) =
-  argPerformableOccs mctx scope perf t
-argPerformableOccs mctx scope perf (TyNamed _ t _) =
-  argPerformableOccs mctx scope perf t
-argPerformableOccs mctx scope perf (TyQual t _ _) =
-  argPerformableOccs mctx scope perf t
-argPerformableOccs _mctx _ _ (TyCon {  } | TyVar _ | TyAuth _ _) = []
+argPerformableOccs mctx scope perf0 x0 = go perf0 x0
+  where
+    go perf (TyEffect labels tails t) =
+      (if perf then occsOfTails mctx.mcGraph tails labels else []) ++ go perf t
+    -- A bare row atom (#997) carries its own tail var + labels directly (no
+    -- wrapped type to recurse into) — same treatment as the `TyEffect` arms
+    -- above.  Without this, a KRow ctor-arg written as `Box <Stdout | e> Int`
+    -- (as opposed to a bare `Box e Int`) was invisible to this collector, which
+    -- made the impl-body T-EFFECT-LAUNDER check over-fire on it (see
+    -- `effVarOccAtoms` below, which shares this gap).
+    go perf (TyRow labels tails _) =
+      if perf then occsOfTails mctx.mcGraph tails labels else []
+    go perf (TyFun a b) = go (not perf) a ++ go perf b
+    go perf (TyTuple ts) = flatMap (argPerformableOccs mctx scope perf) ts
+    go perf (TyApp a b) = match tyAppSpine (TyApp a b)
+      -- OCCURRENCE MINT (#1110/#1111 A-2.3): the head's acquired identity, read off
+      -- the same record pattern as its name so the two cannot drift apart.
+      (TyCon { tyConName = n, tyConOrigin = o }, args) =>
+        krowSlotOccs mctx scope perf o n args
+      -- #1100, the abstract-head half — symmetric with `rowArgNamesVarApp` on the
+      -- RETURN side.  An interface typaram of graded kind, in scope, is row-kinded
+      -- in exactly the same way a registered ctor's KRow slot is; without this arm
+      -- `gtake : f e a -> a` collected NOTHING and the coverage rule never fired.
+      (TyVar h, args) => krowSlotVarOccs mctx scope perf h args
+      _ => go perf a ++ go perf b
+    go perf (TyConstrained _ t) = go perf t
+    go perf (TyNamed _ t _) = go perf t
+    go perf (TyQual t _ _) = go perf t
+    go _ (TyCon {  } | TyVar _ | TyAuth _ _) = []
 
 -- one ctor node: its bare row-kinded slots (if performable) + recurse the args
 --
@@ -790,16 +791,17 @@ methodEffRetOccs : ModuleCtx ->
   List (String, List Kind) ->
   Ty ->
   List (String, List Atom)
-methodEffRetOccs mctx scope (TyConstrained _ t) = methodEffRetOccs mctx scope t
-methodEffRetOccs mctx scope (TyEffect labels tails t) =
-  occsOfTails mctx.mcGraph tails labels ++ methodEffRetOccs mctx scope t
-methodEffRetOccs mctx scope (TyFun _ b) = methodEffRetOccs mctx scope b
-methodEffRetOccs mctx scope t =
-  let occs = effVarOccAtoms mctx.mcGraph t
-  occs
-    ++ filterList
-      (o2 => not (anyList (o => fst o == fst o2) occs))
-      (rowArgAtomsIn mctx scope t)
+methodEffRetOccs mctx scope t0 = go t0
+  where
+    go (TyConstrained _ t) = go t
+    go (TyEffect labels tails t) = occsOfTails mctx.mcGraph tails labels ++ go t
+    go (TyFun _ b) = go b
+    go t =
+      let occs = effVarOccAtoms mctx.mcGraph t
+      occs
+        ++ filterList
+          (o2 => not (anyList (o => fst o == fst o2) occs))
+          (rowArgAtomsIn mctx scope t)
 
 -- The predicate: return-position effect tail vars minus argument-carried ones.
 -- An effect var is argument-carried — hence soundly pinned at every call site —
@@ -967,13 +969,15 @@ registerLocalGroupAbs : TcEnv ->
   Int ->
   List (LetBind, Option ScopeId) ->
   Unit
-registerLocalGroupAbs _env _ _ [] = ()
-registerLocalGroupAbs genv oblN0 callN0 ((LetBind name _ _ _, lscope) :: rest) =
-  match lookupVar genv name
-    Some sch =>
-      registerLocalAbsIf genv.teDyn.dcModule name lscope sch oblN0 callN0
-    None => ()
-  registerLocalGroupAbs genv oblN0 callN0 rest
+registerLocalGroupAbs genv oblN0 callN0 xs0 = go xs0
+  where
+    go [] = ()
+    go ((LetBind name _ _ _, lscope) :: rest) =
+      match lookupVar genv name
+        Some sch =>
+          registerLocalAbsIf genv.teDyn.dcModule name lscope sch oblN0 callN0
+        None => ()
+      go rest
 
 export
 localBindingSummary : ModuleCtx -> LetBind -> (String, BindingSummary)
@@ -1139,13 +1143,15 @@ launderEscapeFromLog : GraphCtx ->
   List EffRow ->
   List AbsorptionEvent ->
   List Atom
-launderEscapeFromLog _gctx [] _ _ = []
-launderEscapeFromLog _gctx _ [] _ = []
-launderEscapeFromLog gctx (der :: dRest) (aer :: aRest) evts =
-  let here = match aer
-    EffRow _ None => []
-    EffRow _ (Some _) => launderOpenActualArrow gctx der evts
-  here ++ launderEscapeFromLog gctx dRest aRest evts
+launderEscapeFromLog gctx xs0 xs1 evts = go xs0 xs1
+  where
+    go [] _ = []
+    go _ [] = []
+    go (der :: dRest) (aer :: aRest) =
+      let here = match aer
+        EffRow _ None => []
+        EffRow _ (Some _) => launderOpenActualArrow gctx der evts
+      here ++ go dRest aRest
 
 -- OPEN actual arrow: recover the absorbed launder atom from the trail, keyed on an OPEN
 -- declared arrow's live tail; a CLOSED declared arrow's leak was already reported by the
@@ -1238,7 +1244,7 @@ checkImplEffVarRigidity mctx subject scope mty effMap launderFlagged eager loc =
     effVarOccAtoms mctx.mcGraph mty
       ++ map (n => (n, [])) (rowArgNamesIn mctx scope mty)
   if launderFlagged then () else checkEffVarAtoms mctx subject occs effMap loc
-  checkIndexOnlyEffVarsOpen mctx subject effMap loc eager
+  checkIndexOnlyEffVarsOpen mctx subject loc eager
   -- DEFERRED-PERFORMANCE residual (round-2 break 4; tracked, NOT enforced):
   -- a method effect var forced CLOSED post-unify is in truth a PIN — an impl
   -- that applies its <e>-callback inside a value whose declared row is pure
@@ -1293,12 +1299,11 @@ checkImplEffVarRigidity mctx subject scope mty effMap launderFlagged eager loc =
 -- available at its rigidity read and passes `[]`: a residual, not a rule.)
 checkIndexOnlyEffVarsOpen : ModuleCtx ->
   String ->
-  List (String, Ref Effvar) ->
   Option Loc ->
   List String ->
   Unit
-checkIndexOnlyEffVarsOpen mctx subject effMap loc eager =
-  checkIndexOnlyGo mctx subject effMap loc eager
+checkIndexOnlyEffVarsOpen mctx subject loc eager =
+  checkIndexOnlyGo mctx subject loc eager
 
 -- the index-only vars of [mty] that some body arrow row (pre-unify) carries as
 -- its tail — i.e. the body performs them at call time.
@@ -1362,19 +1367,16 @@ effVarCellPerformed v effMap pairs tails = match lookupAssoc v effMap
       dids
   None => False
 
-checkIndexOnlyGo : ModuleCtx ->
-  String ->
-  List (String, Ref Effvar) ->
-  Option Loc ->
-  List String ->
-  Unit
-checkIndexOnlyGo _mctx _ _ _ [] = ()
-checkIndexOnlyGo mctx subject effMap loc (v :: rest) =
-  -- [eager] already holds only the vars the body performed on a method arrow
-  -- (`eagerIndexOnlyVars`); whether the cell then closed (the pre-#821 unify)
-  -- or the ambient became a join (#821) is not the signal, the performing is.
-  pushTypeErrorOnceAt mctx TEffectIndexEager loc (indexEagerMsg subject v)
-  checkIndexOnlyGo mctx subject effMap loc rest
+checkIndexOnlyGo : ModuleCtx -> String -> Option Loc -> List String -> Unit
+checkIndexOnlyGo mctx subject loc xs0 = go xs0
+  where
+    go [] = ()
+    go (v :: rest) =
+      -- [eager] already holds only the vars the body performed on a method arrow
+      -- (`eagerIndexOnlyVars`); whether the cell then closed (the pre-#821 unify)
+      -- or the ambient became a join (#821) is not the signal, the performing is.
+      pushTypeErrorOnceAt mctx TEffectIndexEager loc (indexEagerMsg subject v)
+      go rest
 
 -- The earliest collected call that ran a variable now on one of [actual]'s arrows.
 export
@@ -1435,13 +1437,23 @@ checkEffVarAtoms : ModuleCtx ->
   List (String, Ref Effvar) ->
   Option Loc ->
   Unit
-checkEffVarAtoms _mctx _ _ [] _ = ()
-checkEffVarAtoms mctx subject occs ((n, cell) :: rest) loc =
-  let esc =
-    effVarOccEscape mctx.mcGraph n (effrowLabels (EffRow [] (Some cell))) occs
-  if isNonEmptyL esc then
-    pushTypeErrorOnceAt mctx TEffectLaunder loc (effVarLaunderMsg subject n esc)
-  checkEffVarAtoms mctx subject occs rest loc
+checkEffVarAtoms mctx subject occs xs0 loc = go xs0
+  where
+    go [] = ()
+    go ((n, cell) :: rest) =
+      let esc =
+        effVarOccEscape
+          mctx.mcGraph
+          n
+          (effrowLabels (EffRow [] (Some cell)))
+          occs
+      if isNonEmptyL esc then
+        pushTypeErrorOnceAt
+          mctx
+          TEffectLaunder
+          loc
+          (effVarLaunderMsg subject n esc)
+      go rest
 
 -- the first occurrence of var [n] whose declared atoms fail to cover
 -- [instAtoms]: laundering demands EVERY occurrence cover the instantiation,
@@ -1451,13 +1463,16 @@ effVarOccEscape : GraphCtx ->
   List Atom ->
   List (String, List Atom) ->
   List Atom
-effVarOccEscape _gctx _ [] _ = []
-effVarOccEscape _gctx _ _ [] = []
-effVarOccEscape gctx n instAtoms ((m, declAtoms) :: rest) =
-  if m == n && isNonEmptyL (atomsEscape gctx instAtoms declAtoms) then
-    atomsEscape gctx instAtoms declAtoms
-  else
-    effVarOccEscape gctx n instAtoms rest
+effVarOccEscape gctx n instAtoms occs0 = go occs0
+  where
+    go _
+      | isEmptyL instAtoms = []
+    go [] = []
+    go ((m, declAtoms) :: rest) =
+      if m == n && isNonEmptyL (atomsEscape gctx instAtoms declAtoms) then
+        atomsEscape gctx instAtoms declAtoms
+      else
+        go rest
 
 -- (name, written atoms) for each named-tail row occurrence in a method's AST
 -- type — every TyEffect node, on the arrow spine or nested (tuples, callback

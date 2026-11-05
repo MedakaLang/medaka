@@ -149,12 +149,13 @@ alphaSyntax _ _ _ (ELit _ | ELam _ _ | EUnOp _ _ _ | EInfix _ _ _ | EFieldAccess
 -- `Display String` is the identity. A local, top-level or imported definition
 -- of `display` denotes some other function, so under one the part is top.
 displayHead : AlphaEnv -> List (String, AlphaBinder) -> Expr -> Bool
-displayHead env lets (ELoc _ f) = displayHead env lets f
-displayHead env lets (EVar x) = preludeDisplay env lets x
-displayHead env lets (EVarId x _) = preludeDisplay env lets x
-displayHead env lets (EMethodAt x seed _) =
-  seed == "" && preludeDisplay env lets x
-displayHead _ _ _ = False
+displayHead env lets x0 = go x0
+  where
+    go (ELoc _ f) = go f
+    go (EVar x) = preludeDisplay env lets x
+    go (EVarId x _) = preludeDisplay env lets x
+    go (EMethodAt x seed _) = seed == "" && preludeDisplay env lets x
+    go _ = False
 
 preludeDisplay : AlphaEnv -> List (String, AlphaBinder) -> String -> Bool
 preludeDisplay env lets x =
@@ -188,10 +189,11 @@ blockAuthority : Param ->
   List (String, AlphaBinder) ->
   List DoStmt ->
   Option Authority
-blockAuthority top env lets [DoExpr e] = alphaSyntax top env lets e
-blockAuthority top env lets (s :: rest@(_ :: _)) =
-  blockAuthority top env (stmtScope s lets) rest
-blockAuthority _ _ _ _ = None
+blockAuthority top env lets0 xs0 = go lets0 xs0
+  where
+    go lets [DoExpr e] = alphaSyntax top env lets e
+    go lets (s :: rest@(_ :: _)) = go (stmtScope s lets) rest
+    go _ _ = None
 
 stmtScope : DoStmt -> List (String, AlphaBinder) -> List (String, AlphaBinder)
 stmtScope (DoLet _ _ (PVar x _ _) e _) lets = (x, ALet e) :: lets
@@ -274,19 +276,21 @@ suffixed env lets b left = match exactString env lets b
 -- The string an expression denotes exactly: a literal, a concatenation of
 -- two such, or an interpolated part whose operand is one.
 exactString : AlphaEnv -> List (String, AlphaBinder) -> Expr -> Option String
-exactString env lets (ELoc _ e) = exactString env lets e
-exactString env lets (EDoOrigin _ e) = exactString env lets e
-exactString env lets (EAnnot e _) = exactString env lets e
-exactString env lets (EHeadAnnot e _) = exactString env lets e
-exactString _ _ (ELit (LString s)) = Some s
-exactString env lets (EBinOp op a b _)
-  | op == "++" = match (exactString env lets a, exactString env lets b)
-    (Some x, Some y) => Some (x ++ y)
-    _ => None
-exactString env lets (EApp f x)
-  | displayHead env lets f = exactString env lets x
-exactString _ _ (ELit _ | EVar _ | ELam _ _ | ELet _ _ _ _ _ | EMatch _ _ | EIf _ _ _ | EUnOp _ _ _ | EInfix _ _ _ | EFieldAccess _ _ _ | ETuple _ | EListLit _ | EArrayLit _ | ERangeList _ _ _ | ERangeArray _ _ _ | ESlice _ _ _ _ | ELetGroup _ _ | ESection _ | EIndex _ _ | EBlock _ | EDo _ _ | EStringInterp _ | EGuards _ | ERecordCreate _ _ | ERecordUpdate _ _ _ | EVariantUpdate _ _ _ | EMapLit _ _ | ESetLit _ _ | EAsPat _ _ | EOrPat _ | EMethodRef _ | EDictApp _ | EVarAt _ _ | EVarId _ _ | EMethodAt _ _ _ | EDictAt _ _ | ENumLit _ _ _ | EWideLit _ _ _ _ | EApp _ _ | EBinOp _ _ _ _) =
-  None
+exactString env lets x0 = go x0
+  where
+    go (ELoc _ e) = go e
+    go (EDoOrigin _ e) = go e
+    go (EAnnot e _) = go e
+    go (EHeadAnnot e _) = go e
+    go (ELit (LString s)) = Some s
+    go (EBinOp op a b _)
+      | op == "++" = match (go a, go b)
+        (Some x, Some y) => Some (x ++ y)
+        _ => None
+    go (EApp f x)
+      | displayHead env lets f = go x
+    go (ELit _ | EVar _ | ELam _ _ | ELet _ _ _ _ _ | EMatch _ _ | EIf _ _ _ | EUnOp _ _ _ | EInfix _ _ _ | EFieldAccess _ _ _ | ETuple _ | EListLit _ | EArrayLit _ | ERangeList _ _ _ | ERangeArray _ _ _ | ESlice _ _ _ _ | ELetGroup _ _ | ESection _ | EIndex _ _ | EBlock _ | EDo _ _ | EStringInterp _ | EGuards _ | ERecordCreate _ _ | ERecordUpdate _ _ _ | EVariantUpdate _ _ _ | EMapLit _ _ | ESetLit _ _ | EAsPat _ _ | EOrPat _ | EMethodRef _ | EDictApp _ | EVarAt _ _ | EVarId _ _ | EMethodAt _ _ _ | EDictAt _ _ | ENumLit _ _ _ | EWideLit _ _ _ _ | EApp _ _ | EBinOp _ _ _ _) =
+      None
 
 -- An operand that is exactly the empty string: appending it on either side
 -- leaves the other operand's value, and so its authority, unchanged. String
