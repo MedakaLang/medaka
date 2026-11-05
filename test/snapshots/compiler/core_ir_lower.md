@@ -1,5 +1,5 @@
 # META
-source_lines=4133
+source_lines=4116
 stages=DESUGAR,MARK
 # SOURCE
 import support.symbol_encoding.{encodePair}
@@ -20,6 +20,7 @@ import types.symbol_origins.{
 -- is a clean diff, not a rewrite).
 
 import ir.extern_lower.{lowerExterns}
+import ir.core_walk.{patBinders}
 import ir.core_pass.{
   CorePass(..), PassConfig(..), PassRun(..), PassFault(..), defaultPassConfig,
   runPasses
@@ -1647,30 +1648,12 @@ bindLetScope pat _ s = bindPatScope pat s
 -- The scope after a pattern: each variable it binds is a non-function local.
 export
 bindPatScope : Pat -> CallScope -> CallScope
-bindPatScope (PVar x _ _) s = omInsert x None s
-bindPatScope PWild s = s
-bindPatScope (PLit _) s = s
-bindPatScope (PCon _ ps) s = bindPatsScope ps s
-bindPatScope (PCons h t) s = bindPatScope t (bindPatScope h s)
-bindPatScope (PTuple ps) s = bindPatsScope ps s
-bindPatScope (PList ps) s = bindPatsScope ps s
-bindPatScope (PAs x _ _ p) s = bindPatScope p (omInsert x None s)
-bindPatScope (PRng _ _ _) s = s
-bindPatScope (PRec _ fields _) s = bindRecFieldsScope fields s
-bindPatScope (POr ps) s = bindPatsScope ps s
+bindPatScope pat s = fold (acc n => omInsert n None acc) s (patBinders pat)
 
 export
 bindPatsScope : List Pat -> CallScope -> CallScope
 bindPatsScope [] s = s
 bindPatsScope (p :: rest) s = bindPatsScope rest (bindPatScope p s)
-
--- A punned field `{x}` binds the field's own name.
-bindRecFieldsScope : List RecPatField -> CallScope -> CallScope
-bindRecFieldsScope [] s = s
-bindRecFieldsScope ((RecPatField f _ _ None) :: rest) s =
-  bindRecFieldsScope rest (omInsert f None s)
-bindRecFieldsScope ((RecPatField _ _ _ (Some p)) :: rest) s =
-  bindRecFieldsScope rest (bindPatScope p s)
 
 -- A let group's functions, each at its clause pattern count.
 export
@@ -4139,6 +4122,7 @@ nodeTag _ = "?"
 (DUse false (UseGroup ("support" "symbol_encoding") ((mem "encodePair" false))))
 (DUse false (UseGroup ("types" "symbol_origins") ((mem "SymbolOrigins" false) (mem "SymbolOrigin" true) (mem "CoreSymbolOrigins" true) (mem "originKey" false) (mem "functionOrigin" false) (mem "singleProgramOrigins" false))))
 (DUse false (UseGroup ("ir" "extern_lower") ((mem "lowerExterns" false))))
+(DUse false (UseGroup ("ir" "core_walk") ((mem "patBinders" false))))
 (DUse false (UseGroup ("ir" "core_pass") ((mem "CorePass" true) (mem "PassConfig" true) (mem "PassRun" true) (mem "PassFault" true) (mem "defaultPassConfig" false) (mem "runPasses" false))))
 (DUse false (UseGroup ("frontend" "ast") ((mem "isWildPat" false) (mem "letBindName" false) (mem "noBinderId" false) (mem "BinderId" true) (mem "Lit" true) (mem "Loc" true) (mem "noDeclLoc" false) (mem "Pat" true) (mem "RecPatField" true) (mem "Expr" true) (mem "Arm" true) (mem "Guard" true) (mem "DoStmt" true) (mem "FieldAssign" true) (mem "LetBind" true) (mem "FunClause" true) (mem "Addr" true) (mem "Decl" true) (mem "ExternDecl" true) (mem "hostRows" false) (mem "Attr" true) (mem "Variant" true) (mem "ConPayload" true) (mem "Field" true) (mem "Ty" true) (mem "Constraint" true) (mem "IfaceMethod" true) (mem "MethodDefault" true) (mem "ImplMethod" true) (mem "Route" true) (mem "TyConOrigin" false) (mem "ifaceIdentity" false) (mem "defaultReceiverDict" false) (mem "patHasOr" false) (mem "orCandidates" false) (mem "paramCandidates" false) (mem "armCandidates" false) (mem "armHasOr" false))))
 (DUse false (UseGroup ("types" "route_key") ((mem "implRouteKeyWord" false) (mem "ifaceWordOf" false) (mem "evDictRoutesIn" false) (mem "evMethodRoutesIn" false) (mem "evSiteHeadIn" false) (mem "numIntWord" false) (mem "numFloatWord" false))))
@@ -4647,24 +4631,10 @@ nodeTag _ = "?"
 (DFunDef false "bindLetScope" ((PCon "PVar" (PVar "x") PWild PWild) (PCon "CLam" (PAs "ps" (PCons PWild PWild)) PWild) (PVar "s")) (EApp (EApp (EApp (EVar "omInsert") (EVar "x")) (EApp (EVar "Some") (EApp (EVar "listLen") (EVar "ps")))) (EVar "s")))
 (DFunDef false "bindLetScope" ((PVar "pat") PWild (PVar "s")) (EApp (EApp (EVar "bindPatScope") (EVar "pat")) (EVar "s")))
 (DTypeSig true "bindPatScope" (TyFun (TyCon "Pat") (TyFun (TyCon "CallScope") (TyCon "CallScope"))))
-(DFunDef false "bindPatScope" ((PCon "PVar" (PVar "x") PWild PWild) (PVar "s")) (EApp (EApp (EApp (EVar "omInsert") (EVar "x")) (EVar "None")) (EVar "s")))
-(DFunDef false "bindPatScope" ((PCon "PWild") (PVar "s")) (EVar "s"))
-(DFunDef false "bindPatScope" ((PCon "PLit" PWild) (PVar "s")) (EVar "s"))
-(DFunDef false "bindPatScope" ((PCon "PCon" PWild (PVar "ps")) (PVar "s")) (EApp (EApp (EVar "bindPatsScope") (EVar "ps")) (EVar "s")))
-(DFunDef false "bindPatScope" ((PCon "PCons" (PVar "h") (PVar "t")) (PVar "s")) (EApp (EApp (EVar "bindPatScope") (EVar "t")) (EApp (EApp (EVar "bindPatScope") (EVar "h")) (EVar "s"))))
-(DFunDef false "bindPatScope" ((PCon "PTuple" (PVar "ps")) (PVar "s")) (EApp (EApp (EVar "bindPatsScope") (EVar "ps")) (EVar "s")))
-(DFunDef false "bindPatScope" ((PCon "PList" (PVar "ps")) (PVar "s")) (EApp (EApp (EVar "bindPatsScope") (EVar "ps")) (EVar "s")))
-(DFunDef false "bindPatScope" ((PCon "PAs" (PVar "x") PWild PWild (PVar "p")) (PVar "s")) (EApp (EApp (EVar "bindPatScope") (EVar "p")) (EApp (EApp (EApp (EVar "omInsert") (EVar "x")) (EVar "None")) (EVar "s"))))
-(DFunDef false "bindPatScope" ((PCon "PRng" PWild PWild PWild) (PVar "s")) (EVar "s"))
-(DFunDef false "bindPatScope" ((PCon "PRec" PWild (PVar "fields") PWild) (PVar "s")) (EApp (EApp (EVar "bindRecFieldsScope") (EVar "fields")) (EVar "s")))
-(DFunDef false "bindPatScope" ((PCon "POr" (PVar "ps")) (PVar "s")) (EApp (EApp (EVar "bindPatsScope") (EVar "ps")) (EVar "s")))
+(DFunDef false "bindPatScope" ((PVar "pat") (PVar "s")) (EApp (EApp (EApp (EVar "fold") (ELam ((PVar "acc") (PVar "n")) (EApp (EApp (EApp (EVar "omInsert") (EVar "n")) (EVar "None")) (EVar "acc")))) (EVar "s")) (EApp (EVar "patBinders") (EVar "pat"))))
 (DTypeSig true "bindPatsScope" (TyFun (TyApp (TyCon "List") (TyCon "Pat")) (TyFun (TyCon "CallScope") (TyCon "CallScope"))))
 (DFunDef false "bindPatsScope" ((PList) (PVar "s")) (EVar "s"))
 (DFunDef false "bindPatsScope" ((PCons (PVar "p") (PVar "rest")) (PVar "s")) (EApp (EApp (EVar "bindPatsScope") (EVar "rest")) (EApp (EApp (EVar "bindPatScope") (EVar "p")) (EVar "s"))))
-(DTypeSig false "bindRecFieldsScope" (TyFun (TyApp (TyCon "List") (TyCon "RecPatField")) (TyFun (TyCon "CallScope") (TyCon "CallScope"))))
-(DFunDef false "bindRecFieldsScope" ((PList) (PVar "s")) (EVar "s"))
-(DFunDef false "bindRecFieldsScope" ((PCons (PCon "RecPatField" (PVar "f") PWild PWild (PCon "None")) (PVar "rest")) (PVar "s")) (EApp (EApp (EVar "bindRecFieldsScope") (EVar "rest")) (EApp (EApp (EApp (EVar "omInsert") (EVar "f")) (EVar "None")) (EVar "s"))))
-(DFunDef false "bindRecFieldsScope" ((PCons (PCon "RecPatField" PWild PWild PWild (PCon "Some" (PVar "p"))) (PVar "rest")) (PVar "s")) (EApp (EApp (EVar "bindRecFieldsScope") (EVar "rest")) (EApp (EApp (EVar "bindPatScope") (EVar "p")) (EVar "s"))))
 (DTypeSig true "bindGroupScope" (TyFun (TyApp (TyCon "List") (TyCon "CBind")) (TyFun (TyCon "CallScope") (TyCon "CallScope"))))
 (DFunDef false "bindGroupScope" ((PList) (PVar "s")) (EVar "s"))
 (DFunDef false "bindGroupScope" ((PCons (PCon "CBind" (PVar "name") (PVar "clauses") PWild PWild) (PVar "rest")) (PVar "s")) (EApp (EApp (EVar "bindGroupScope") (EVar "rest")) (EApp (EApp (EApp (EVar "omInsert") (EVar "name")) (EApp (EVar "Some") (EApp (EVar "clausesArity") (EVar "clauses")))) (EVar "s"))))
@@ -5491,6 +5461,7 @@ nodeTag _ = "?"
 (DUse false (UseGroup ("support" "symbol_encoding") ((mem "encodePair" false))))
 (DUse false (UseGroup ("types" "symbol_origins") ((mem "SymbolOrigins" false) (mem "SymbolOrigin" true) (mem "CoreSymbolOrigins" true) (mem "originKey" false) (mem "functionOrigin" false) (mem "singleProgramOrigins" false))))
 (DUse false (UseGroup ("ir" "extern_lower") ((mem "lowerExterns" false))))
+(DUse false (UseGroup ("ir" "core_walk") ((mem "patBinders" false))))
 (DUse false (UseGroup ("ir" "core_pass") ((mem "CorePass" true) (mem "PassConfig" true) (mem "PassRun" true) (mem "PassFault" true) (mem "defaultPassConfig" false) (mem "runPasses" false))))
 (DUse false (UseGroup ("frontend" "ast") ((mem "isWildPat" false) (mem "letBindName" false) (mem "noBinderId" false) (mem "BinderId" true) (mem "Lit" true) (mem "Loc" true) (mem "noDeclLoc" false) (mem "Pat" true) (mem "RecPatField" true) (mem "Expr" true) (mem "Arm" true) (mem "Guard" true) (mem "DoStmt" true) (mem "FieldAssign" true) (mem "LetBind" true) (mem "FunClause" true) (mem "Addr" true) (mem "Decl" true) (mem "ExternDecl" true) (mem "hostRows" false) (mem "Attr" true) (mem "Variant" true) (mem "ConPayload" true) (mem "Field" true) (mem "Ty" true) (mem "Constraint" true) (mem "IfaceMethod" true) (mem "MethodDefault" true) (mem "ImplMethod" true) (mem "Route" true) (mem "TyConOrigin" false) (mem "ifaceIdentity" false) (mem "defaultReceiverDict" false) (mem "patHasOr" false) (mem "orCandidates" false) (mem "paramCandidates" false) (mem "armCandidates" false) (mem "armHasOr" false))))
 (DUse false (UseGroup ("types" "route_key") ((mem "implRouteKeyWord" false) (mem "ifaceWordOf" false) (mem "evDictRoutesIn" false) (mem "evMethodRoutesIn" false) (mem "evSiteHeadIn" false) (mem "numIntWord" false) (mem "numFloatWord" false))))
@@ -5999,24 +5970,10 @@ nodeTag _ = "?"
 (DFunDef false "bindLetScope" ((PCon "PVar" (PVar "x") PWild PWild) (PCon "CLam" (PAs "ps" (PCons PWild PWild)) PWild) (PVar "s")) (EApp (EApp (EApp (EVar "omInsert") (EVar "x")) (EApp (EVar "Some") (EApp (EVar "listLen") (EVar "ps")))) (EVar "s")))
 (DFunDef false "bindLetScope" ((PVar "pat") PWild (PVar "s")) (EApp (EApp (EVar "bindPatScope") (EVar "pat")) (EVar "s")))
 (DTypeSig true "bindPatScope" (TyFun (TyCon "Pat") (TyFun (TyCon "CallScope") (TyCon "CallScope"))))
-(DFunDef false "bindPatScope" ((PCon "PVar" (PVar "x") PWild PWild) (PVar "s")) (EApp (EApp (EApp (EVar "omInsert") (EVar "x")) (EVar "None")) (EVar "s")))
-(DFunDef false "bindPatScope" ((PCon "PWild") (PVar "s")) (EVar "s"))
-(DFunDef false "bindPatScope" ((PCon "PLit" PWild) (PVar "s")) (EVar "s"))
-(DFunDef false "bindPatScope" ((PCon "PCon" PWild (PVar "ps")) (PVar "s")) (EApp (EApp (EVar "bindPatsScope") (EVar "ps")) (EVar "s")))
-(DFunDef false "bindPatScope" ((PCon "PCons" (PVar "h") (PVar "t")) (PVar "s")) (EApp (EApp (EVar "bindPatScope") (EVar "t")) (EApp (EApp (EVar "bindPatScope") (EVar "h")) (EVar "s"))))
-(DFunDef false "bindPatScope" ((PCon "PTuple" (PVar "ps")) (PVar "s")) (EApp (EApp (EVar "bindPatsScope") (EVar "ps")) (EVar "s")))
-(DFunDef false "bindPatScope" ((PCon "PList" (PVar "ps")) (PVar "s")) (EApp (EApp (EVar "bindPatsScope") (EVar "ps")) (EVar "s")))
-(DFunDef false "bindPatScope" ((PCon "PAs" (PVar "x") PWild PWild (PVar "p")) (PVar "s")) (EApp (EApp (EVar "bindPatScope") (EVar "p")) (EApp (EApp (EApp (EVar "omInsert") (EVar "x")) (EVar "None")) (EVar "s"))))
-(DFunDef false "bindPatScope" ((PCon "PRng" PWild PWild PWild) (PVar "s")) (EVar "s"))
-(DFunDef false "bindPatScope" ((PCon "PRec" PWild (PVar "fields") PWild) (PVar "s")) (EApp (EApp (EVar "bindRecFieldsScope") (EVar "fields")) (EVar "s")))
-(DFunDef false "bindPatScope" ((PCon "POr" (PVar "ps")) (PVar "s")) (EApp (EApp (EVar "bindPatsScope") (EVar "ps")) (EVar "s")))
+(DFunDef false "bindPatScope" ((PVar "pat") (PVar "s")) (EApp (EApp (EApp (EMethodRef "fold") (ELam ((PVar "acc") (PVar "n")) (EApp (EApp (EApp (EVar "omInsert") (EVar "n")) (EVar "None")) (EVar "acc")))) (EVar "s")) (EApp (EVar "patBinders") (EVar "pat"))))
 (DTypeSig true "bindPatsScope" (TyFun (TyApp (TyCon "List") (TyCon "Pat")) (TyFun (TyCon "CallScope") (TyCon "CallScope"))))
 (DFunDef false "bindPatsScope" ((PList) (PVar "s")) (EVar "s"))
 (DFunDef false "bindPatsScope" ((PCons (PVar "p") (PVar "rest")) (PVar "s")) (EApp (EApp (EVar "bindPatsScope") (EVar "rest")) (EApp (EApp (EVar "bindPatScope") (EVar "p")) (EVar "s"))))
-(DTypeSig false "bindRecFieldsScope" (TyFun (TyApp (TyCon "List") (TyCon "RecPatField")) (TyFun (TyCon "CallScope") (TyCon "CallScope"))))
-(DFunDef false "bindRecFieldsScope" ((PList) (PVar "s")) (EVar "s"))
-(DFunDef false "bindRecFieldsScope" ((PCons (PCon "RecPatField" (PVar "f") PWild PWild (PCon "None")) (PVar "rest")) (PVar "s")) (EApp (EApp (EVar "bindRecFieldsScope") (EVar "rest")) (EApp (EApp (EApp (EVar "omInsert") (EVar "f")) (EVar "None")) (EVar "s"))))
-(DFunDef false "bindRecFieldsScope" ((PCons (PCon "RecPatField" PWild PWild PWild (PCon "Some" (PVar "p"))) (PVar "rest")) (PVar "s")) (EApp (EApp (EVar "bindRecFieldsScope") (EVar "rest")) (EApp (EApp (EVar "bindPatScope") (EVar "p")) (EVar "s"))))
 (DTypeSig true "bindGroupScope" (TyFun (TyApp (TyCon "List") (TyCon "CBind")) (TyFun (TyCon "CallScope") (TyCon "CallScope"))))
 (DFunDef false "bindGroupScope" ((PList) (PVar "s")) (EVar "s"))
 (DFunDef false "bindGroupScope" ((PCons (PCon "CBind" (PVar "name") (PVar "clauses") PWild PWild) (PVar "rest")) (PVar "s")) (EApp (EApp (EVar "bindGroupScope") (EVar "rest")) (EApp (EApp (EApp (EVar "omInsert") (EVar "name")) (EApp (EVar "Some") (EApp (EVar "clausesArity") (EVar "clauses")))) (EVar "s"))))

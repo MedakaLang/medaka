@@ -1,9 +1,10 @@
 # META
-source_lines=301
+source_lines=284
 stages=DESUGAR,MARK
 # SOURCE
 import support.symbol_encoding.{encodePair}
-import frontend.ast.{Addr(..), Pat(..), RecPatField(..)}
+import frontend.ast.{Addr(..), Pat}
+import ir.core_walk.{patBinders}
 import ir.core_ir.{
   CProgram(..), CBind(..), CClause(..), CExpr(..), CImplEntry(..),
   CImplBody(..), CArm(..), CGuard(..), CStmt(..), CField(..),
@@ -110,10 +111,10 @@ walkExternVars f (CProgram groups ca ct impls mc facts) =
     facts
 
 bindPatScope : Pat -> OrdMap Unit -> OrdMap Unit
-bindPatScope pat scope = omFromNames (patNames pat) scope
+bindPatScope pat scope = omFromNames (patBinders pat) scope
 
 bindPatsScope : List Pat -> OrdMap Unit -> OrdMap Unit
-bindPatsScope pats scope = omFromNames (flatMap patNames pats) scope
+bindPatsScope pats scope = omFromNames (flatMap patBinders pats) scope
 
 bindLetScope : Pat -> CExpr -> OrdMap Unit -> OrdMap Unit
 bindLetScope pat _ scope = bindPatScope pat scope
@@ -121,24 +122,6 @@ bindLetScope pat _ scope = bindPatScope pat scope
 bindGroupScope : List CBind -> OrdMap Unit -> OrdMap Unit
 bindGroupScope binds scope =
   omFromNames (map ((CBind n _ _ _) => n) binds) scope
-
-patNames : Pat -> List String
-patNames (PVar n _ _) = [n]
-patNames (PCon _ ps) = flatMap patNames ps
-patNames (PCons a b) = patNames a ++ patNames b
-patNames (PTuple ps) = flatMap patNames ps
-patNames (PList ps) = flatMap patNames ps
-patNames (PAs n _ _ p) = n :: patNames p
-patNames (PRec _ fs _) = flatMap fieldNames fs
-patNames PWild = []
-patNames (PLit _) = []
-patNames (PRng _ _ _) = []
-patNames (POr []) = []
-patNames (POr (p :: _)) = patNames p
-
-fieldNames : RecPatField -> List String
-fieldNames (RecPatField n _ _ None) = [n]
-fieldNames (RecPatField _ _ _ (Some p)) = patNames p
 
 export
 externHeadRows : CProgram -> ExternHeadRows
@@ -305,7 +288,8 @@ externFactIndex =
     omEmpty
 # DESUGAR
 (DUse false (UseGroup ("support" "symbol_encoding") ((mem "encodePair" false))))
-(DUse false (UseGroup ("frontend" "ast") ((mem "Addr" true) (mem "Pat" true) (mem "RecPatField" true))))
+(DUse false (UseGroup ("frontend" "ast") ((mem "Addr" true) (mem "Pat" false))))
+(DUse false (UseGroup ("ir" "core_walk") ((mem "patBinders" false))))
 (DUse false (UseGroup ("ir" "core_ir") ((mem "CProgram" true) (mem "CBind" true) (mem "CClause" true) (mem "CExpr" true) (mem "CImplEntry" true) (mem "CImplBody" true) (mem "CArm" true) (mem "CGuard" true) (mem "CStmt" true) (mem "CField" true) (mem "MethodEvidence" true) (mem "DeclFacts" true))))
 (DUse false (UseGroup ("ir" "extern_types") ((mem "ExternDeclFact" true))))
 (DUse false (UseGroup ("types" "extern_source") ((mem "ExternSource" true) (mem "ExternProvenance" true) (mem "ExternBindingKind" true) (mem "runtimeExternSymbol" false) (mem "sourceExterns" false) (mem "ExternHeadRows" false))))
@@ -328,29 +312,13 @@ externFactIndex =
 (DTypeSig true "walkExternVars" (TyFun (TyCon "ExternVisitor") (TyFun (TyCon "CProgram") (TyCon "CProgram"))))
 (DFunDef false "walkExternVars" ((PVar "f") (PCon "CProgram" (PVar "groups") (PVar "ca") (PVar "ct") (PVar "impls") (PVar "mc") (PVar "facts"))) (EApp (EApp (EApp (EApp (EApp (EApp (EVar "CProgram") (EApp (EApp (EVar "map") (EApp (EApp (EVar "walkBind") (EVar "f")) (EVar "omEmpty"))) (EVar "groups"))) (EVar "ca")) (EVar "ct")) (EApp (EApp (EVar "map") (EApp (EVar "walkEntry") (EVar "f"))) (EVar "impls"))) (EVar "mc")) (EVar "facts")))
 (DTypeSig false "bindPatScope" (TyFun (TyCon "Pat") (TyFun (TyApp (TyCon "OrdMap") (TyCon "Unit")) (TyApp (TyCon "OrdMap") (TyCon "Unit")))))
-(DFunDef false "bindPatScope" ((PVar "pat") (PVar "scope")) (EApp (EApp (EVar "omFromNames") (EApp (EVar "patNames") (EVar "pat"))) (EVar "scope")))
+(DFunDef false "bindPatScope" ((PVar "pat") (PVar "scope")) (EApp (EApp (EVar "omFromNames") (EApp (EVar "patBinders") (EVar "pat"))) (EVar "scope")))
 (DTypeSig false "bindPatsScope" (TyFun (TyApp (TyCon "List") (TyCon "Pat")) (TyFun (TyApp (TyCon "OrdMap") (TyCon "Unit")) (TyApp (TyCon "OrdMap") (TyCon "Unit")))))
-(DFunDef false "bindPatsScope" ((PVar "pats") (PVar "scope")) (EApp (EApp (EVar "omFromNames") (EApp (EApp (EVar "flatMap") (EVar "patNames")) (EVar "pats"))) (EVar "scope")))
+(DFunDef false "bindPatsScope" ((PVar "pats") (PVar "scope")) (EApp (EApp (EVar "omFromNames") (EApp (EApp (EVar "flatMap") (EVar "patBinders")) (EVar "pats"))) (EVar "scope")))
 (DTypeSig false "bindLetScope" (TyFun (TyCon "Pat") (TyFun (TyCon "CExpr") (TyFun (TyApp (TyCon "OrdMap") (TyCon "Unit")) (TyApp (TyCon "OrdMap") (TyCon "Unit"))))))
 (DFunDef false "bindLetScope" ((PVar "pat") PWild (PVar "scope")) (EApp (EApp (EVar "bindPatScope") (EVar "pat")) (EVar "scope")))
 (DTypeSig false "bindGroupScope" (TyFun (TyApp (TyCon "List") (TyCon "CBind")) (TyFun (TyApp (TyCon "OrdMap") (TyCon "Unit")) (TyApp (TyCon "OrdMap") (TyCon "Unit")))))
 (DFunDef false "bindGroupScope" ((PVar "binds") (PVar "scope")) (EApp (EApp (EVar "omFromNames") (EApp (EApp (EVar "map") (ELam ((PCon "CBind" (PVar "n") PWild PWild PWild)) (EVar "n"))) (EVar "binds"))) (EVar "scope")))
-(DTypeSig false "patNames" (TyFun (TyCon "Pat") (TyApp (TyCon "List") (TyCon "String"))))
-(DFunDef false "patNames" ((PCon "PVar" (PVar "n") PWild PWild)) (EListLit (EVar "n")))
-(DFunDef false "patNames" ((PCon "PCon" PWild (PVar "ps"))) (EApp (EApp (EVar "flatMap") (EVar "patNames")) (EVar "ps")))
-(DFunDef false "patNames" ((PCon "PCons" (PVar "a") (PVar "b"))) (EBinOp "++" (EApp (EVar "patNames") (EVar "a")) (EApp (EVar "patNames") (EVar "b"))))
-(DFunDef false "patNames" ((PCon "PTuple" (PVar "ps"))) (EApp (EApp (EVar "flatMap") (EVar "patNames")) (EVar "ps")))
-(DFunDef false "patNames" ((PCon "PList" (PVar "ps"))) (EApp (EApp (EVar "flatMap") (EVar "patNames")) (EVar "ps")))
-(DFunDef false "patNames" ((PCon "PAs" (PVar "n") PWild PWild (PVar "p"))) (EBinOp "::" (EVar "n") (EApp (EVar "patNames") (EVar "p"))))
-(DFunDef false "patNames" ((PCon "PRec" PWild (PVar "fs") PWild)) (EApp (EApp (EVar "flatMap") (EVar "fieldNames")) (EVar "fs")))
-(DFunDef false "patNames" ((PCon "PWild")) (EListLit))
-(DFunDef false "patNames" ((PCon "PLit" PWild)) (EListLit))
-(DFunDef false "patNames" ((PCon "PRng" PWild PWild PWild)) (EListLit))
-(DFunDef false "patNames" ((PCon "POr" (PList))) (EListLit))
-(DFunDef false "patNames" ((PCon "POr" (PCons (PVar "p") PWild))) (EApp (EVar "patNames") (EVar "p")))
-(DTypeSig false "fieldNames" (TyFun (TyCon "RecPatField") (TyApp (TyCon "List") (TyCon "String"))))
-(DFunDef false "fieldNames" ((PCon "RecPatField" (PVar "n") PWild PWild (PCon "None"))) (EListLit (EVar "n")))
-(DFunDef false "fieldNames" ((PCon "RecPatField" PWild PWild PWild (PCon "Some" (PVar "p")))) (EApp (EVar "patNames") (EVar "p")))
 (DTypeSig true "externHeadRows" (TyFun (TyCon "CProgram") (TyCon "ExternHeadRows")))
 (DFunDef false "externHeadRows" ((PCon "CProgram" PWild PWild PWild PWild PWild (PVar "facts"))) (EApp (EApp (EVar "flatMap") (ELam ((PVar "key")) (EMatch (EApp (EApp (EVar "omLookup") (EVar "key")) (EFieldAccess (EVar "facts") "factExterns")) (arm (PCon "Some" (PVar "fact")) () (EMatch (ETuple (EFieldAccess (EVar "fact") "bindingKind") (EFieldAccess (EVar "fact") "callableShape")) (arm (PTuple (PCon "ForeignBinding") (PCon "Some" (PVar "shape"))) () (EListLit (ETuple (EFieldAccess (EVar "fact") "symbol") (ETuple (EFieldAccess (EVar "fact") "hostBindings") (ETuple (EFieldAccess (EVar "shape") "parameterHeads") (EFieldAccess (EVar "shape") "resultHead")))))) (arm PWild () (EListLit)))) (arm (PCon "None") () (EListLit))))) (EApp (EVar "omKeys") (EFieldAccess (EVar "facts") "factExterns"))))
 (DTypeSig true "externRuntimeKey" (TyFun (TyApp (TyCon "OrdMap") (TyCon "ExternDeclFact")) (TyFun (TyCon "String") (TyApp (TyCon "Option") (TyCon "String")))))
@@ -405,7 +373,8 @@ externFactIndex =
 (DFunDef false "externFactIndex" () (EApp (EApp (EVar "fold") (ELam ((PVar "index") (PVar "fact")) (EIf (EApp (EApp (EVar "omHasKey") (EFieldAccess (EVar "fact") "symbol")) (EVar "index")) (EApp (EVar "panic") (EBinOp "++" (ELit (LString "duplicate-extern-declaration: ")) (EFieldAccess (EVar "fact") "symbol"))) (EApp (EApp (EApp (EVar "omInsert") (EFieldAccess (EVar "fact") "symbol")) (EVar "fact")) (EVar "index"))))) (EVar "omEmpty")))
 # MARK
 (DUse false (UseGroup ("support" "symbol_encoding") ((mem "encodePair" false))))
-(DUse false (UseGroup ("frontend" "ast") ((mem "Addr" true) (mem "Pat" true) (mem "RecPatField" true))))
+(DUse false (UseGroup ("frontend" "ast") ((mem "Addr" true) (mem "Pat" false))))
+(DUse false (UseGroup ("ir" "core_walk") ((mem "patBinders" false))))
 (DUse false (UseGroup ("ir" "core_ir") ((mem "CProgram" true) (mem "CBind" true) (mem "CClause" true) (mem "CExpr" true) (mem "CImplEntry" true) (mem "CImplBody" true) (mem "CArm" true) (mem "CGuard" true) (mem "CStmt" true) (mem "CField" true) (mem "MethodEvidence" true) (mem "DeclFacts" true))))
 (DUse false (UseGroup ("ir" "extern_types") ((mem "ExternDeclFact" true))))
 (DUse false (UseGroup ("types" "extern_source") ((mem "ExternSource" true) (mem "ExternProvenance" true) (mem "ExternBindingKind" true) (mem "runtimeExternSymbol" false) (mem "sourceExterns" false) (mem "ExternHeadRows" false))))
@@ -428,29 +397,13 @@ externFactIndex =
 (DTypeSig true "walkExternVars" (TyFun (TyCon "ExternVisitor") (TyFun (TyCon "CProgram") (TyCon "CProgram"))))
 (DFunDef false "walkExternVars" ((PVar "f") (PCon "CProgram" (PVar "groups") (PVar "ca") (PVar "ct") (PVar "impls") (PVar "mc") (PVar "facts"))) (EApp (EApp (EApp (EApp (EApp (EApp (EVar "CProgram") (EApp (EApp (EMethodRef "map") (EApp (EApp (EVar "walkBind") (EVar "f")) (EVar "omEmpty"))) (EVar "groups"))) (EVar "ca")) (EVar "ct")) (EApp (EApp (EMethodRef "map") (EApp (EVar "walkEntry") (EVar "f"))) (EVar "impls"))) (EVar "mc")) (EVar "facts")))
 (DTypeSig false "bindPatScope" (TyFun (TyCon "Pat") (TyFun (TyApp (TyCon "OrdMap") (TyCon "Unit")) (TyApp (TyCon "OrdMap") (TyCon "Unit")))))
-(DFunDef false "bindPatScope" ((PVar "pat") (PVar "scope")) (EApp (EApp (EVar "omFromNames") (EApp (EVar "patNames") (EVar "pat"))) (EVar "scope")))
+(DFunDef false "bindPatScope" ((PVar "pat") (PVar "scope")) (EApp (EApp (EVar "omFromNames") (EApp (EVar "patBinders") (EVar "pat"))) (EVar "scope")))
 (DTypeSig false "bindPatsScope" (TyFun (TyApp (TyCon "List") (TyCon "Pat")) (TyFun (TyApp (TyCon "OrdMap") (TyCon "Unit")) (TyApp (TyCon "OrdMap") (TyCon "Unit")))))
-(DFunDef false "bindPatsScope" ((PVar "pats") (PVar "scope")) (EApp (EApp (EVar "omFromNames") (EApp (EApp (EDictApp "flatMap") (EVar "patNames")) (EVar "pats"))) (EVar "scope")))
+(DFunDef false "bindPatsScope" ((PVar "pats") (PVar "scope")) (EApp (EApp (EVar "omFromNames") (EApp (EApp (EDictApp "flatMap") (EVar "patBinders")) (EVar "pats"))) (EVar "scope")))
 (DTypeSig false "bindLetScope" (TyFun (TyCon "Pat") (TyFun (TyCon "CExpr") (TyFun (TyApp (TyCon "OrdMap") (TyCon "Unit")) (TyApp (TyCon "OrdMap") (TyCon "Unit"))))))
 (DFunDef false "bindLetScope" ((PVar "pat") PWild (PVar "scope")) (EApp (EApp (EVar "bindPatScope") (EVar "pat")) (EVar "scope")))
 (DTypeSig false "bindGroupScope" (TyFun (TyApp (TyCon "List") (TyCon "CBind")) (TyFun (TyApp (TyCon "OrdMap") (TyCon "Unit")) (TyApp (TyCon "OrdMap") (TyCon "Unit")))))
 (DFunDef false "bindGroupScope" ((PVar "binds") (PVar "scope")) (EApp (EApp (EVar "omFromNames") (EApp (EApp (EMethodRef "map") (ELam ((PCon "CBind" (PVar "n") PWild PWild PWild)) (EVar "n"))) (EVar "binds"))) (EVar "scope")))
-(DTypeSig false "patNames" (TyFun (TyCon "Pat") (TyApp (TyCon "List") (TyCon "String"))))
-(DFunDef false "patNames" ((PCon "PVar" (PVar "n") PWild PWild)) (EListLit (EVar "n")))
-(DFunDef false "patNames" ((PCon "PCon" PWild (PVar "ps"))) (EApp (EApp (EDictApp "flatMap") (EVar "patNames")) (EVar "ps")))
-(DFunDef false "patNames" ((PCon "PCons" (PVar "a") (PVar "b"))) (EBinOp "++" (EApp (EVar "patNames") (EVar "a")) (EApp (EVar "patNames") (EVar "b"))))
-(DFunDef false "patNames" ((PCon "PTuple" (PVar "ps"))) (EApp (EApp (EDictApp "flatMap") (EVar "patNames")) (EVar "ps")))
-(DFunDef false "patNames" ((PCon "PList" (PVar "ps"))) (EApp (EApp (EDictApp "flatMap") (EVar "patNames")) (EVar "ps")))
-(DFunDef false "patNames" ((PCon "PAs" (PVar "n") PWild PWild (PVar "p"))) (EBinOp "::" (EVar "n") (EApp (EVar "patNames") (EVar "p"))))
-(DFunDef false "patNames" ((PCon "PRec" PWild (PVar "fs") PWild)) (EApp (EApp (EDictApp "flatMap") (EVar "fieldNames")) (EVar "fs")))
-(DFunDef false "patNames" ((PCon "PWild")) (EListLit))
-(DFunDef false "patNames" ((PCon "PLit" PWild)) (EListLit))
-(DFunDef false "patNames" ((PCon "PRng" PWild PWild PWild)) (EListLit))
-(DFunDef false "patNames" ((PCon "POr" (PList))) (EListLit))
-(DFunDef false "patNames" ((PCon "POr" (PCons (PVar "p") PWild))) (EApp (EVar "patNames") (EVar "p")))
-(DTypeSig false "fieldNames" (TyFun (TyCon "RecPatField") (TyApp (TyCon "List") (TyCon "String"))))
-(DFunDef false "fieldNames" ((PCon "RecPatField" (PVar "n") PWild PWild (PCon "None"))) (EListLit (EVar "n")))
-(DFunDef false "fieldNames" ((PCon "RecPatField" PWild PWild PWild (PCon "Some" (PVar "p")))) (EApp (EVar "patNames") (EVar "p")))
 (DTypeSig true "externHeadRows" (TyFun (TyCon "CProgram") (TyCon "ExternHeadRows")))
 (DFunDef false "externHeadRows" ((PCon "CProgram" PWild PWild PWild PWild PWild (PVar "facts"))) (EApp (EApp (EDictApp "flatMap") (ELam ((PVar "key")) (EMatch (EApp (EApp (EVar "omLookup") (EVar "key")) (EFieldAccess (EVar "facts") "factExterns")) (arm (PCon "Some" (PVar "fact")) () (EMatch (ETuple (EFieldAccess (EVar "fact") "bindingKind") (EFieldAccess (EVar "fact") "callableShape")) (arm (PTuple (PCon "ForeignBinding") (PCon "Some" (PVar "shape"))) () (EListLit (ETuple (EFieldAccess (EVar "fact") "symbol") (ETuple (EFieldAccess (EVar "fact") "hostBindings") (ETuple (EFieldAccess (EVar "shape") "parameterHeads") (EFieldAccess (EVar "shape") "resultHead")))))) (arm PWild () (EListLit)))) (arm (PCon "None") () (EListLit))))) (EApp (EVar "omKeys") (EFieldAccess (EVar "facts") "factExterns"))))
 (DTypeSig true "externRuntimeKey" (TyFun (TyApp (TyCon "OrdMap") (TyCon "ExternDeclFact")) (TyFun (TyCon "String") (TyApp (TyCon "Option") (TyCon "String")))))

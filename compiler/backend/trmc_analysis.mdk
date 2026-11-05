@@ -8,6 +8,7 @@
 -- backend-specific and lives in each emitter.
 
 import frontend.ast.{Pat(..), Route(..), Addr(..), Lit(..)}
+import ir.core_walk.{patBinders}
 import ir.core_ir.{
   CExpr(..),
   MethodEvidence(..),
@@ -86,9 +87,10 @@ freeVarsIn : OrdMap Unit -> CExpr -> List String
 freeVarsIn _ (CLit _) = []
 freeVarsIn b (CVar x _) = if omHasKey x b then [] else [x]
 freeVarsIn b (CApp f args _) = freeVarsIn b f ++ flatMap (freeVarsIn b) args
-freeVarsIn b (CLam ps body) = freeVarsIn (omFromNames (patVarNames ps) b) body
+freeVarsIn b (CLam ps body) =
+  freeVarsIn (omFromNames (flatMap patBinders ps) b) body
 freeVarsIn b (CLet recF pat e1 e2) =
-  let b2 = omFromNames (patVars pat) b
+  let b2 = omFromNames (patBinders pat) b
   let fe1 = if recF then freeVarsIn b2 e1 else freeVarsIn b e1
   fe1 ++ freeVarsIn b2 e2
 freeVarsIn b (CLetGroup binds body) =
@@ -140,7 +142,7 @@ export
 freeVarsArms : OrdMap Unit -> List CArm -> List String
 freeVarsArms _ [] = []
 freeVarsArms b ((CArm pat _ body) :: rest) =
-  freeVarsIn (omFromNames (patVars pat) b) body ++ freeVarsArms b rest
+  freeVarsIn (omFromNames (patBinders pat) b) body ++ freeVarsArms b rest
 freeVarsArms b ((CArmAlt _ _ _) :: rest) = freeVarsArms b rest
 
 export
@@ -148,7 +150,7 @@ freeVarsStmts : OrdMap Unit -> List CStmt -> List String
 freeVarsStmts _ [] = []
 freeVarsStmts b ((CSExpr ex) :: rest) = freeVarsIn b ex ++ freeVarsStmts b rest
 freeVarsStmts b ((CSLet _ pat ex) :: rest) =
-  freeVarsIn b ex ++ freeVarsStmts (omFromNames (patVars pat) b) rest
+  freeVarsIn b ex ++ freeVarsStmts (omFromNames (patBinders pat) b) rest
 freeVarsStmts b ((CSAssign _ ex) :: rest) =
   freeVarsIn b ex ++ freeVarsStmts b rest
 freeVarsStmts b (_ :: rest) = freeVarsStmts b rest
@@ -167,7 +169,8 @@ freeVarsBinds b ((CBind _ clauses _ _) :: rest) =
 freeVarsClauses : OrdMap Unit -> List CClause -> List String
 freeVarsClauses _ [] = []
 freeVarsClauses b ((CClause pats body) :: rest) =
-  freeVarsIn (omFromNames (patVarNames pats) b) body ++ freeVarsClauses b rest
+  freeVarsIn (omFromNames (flatMap patBinders pats) b) body
+    ++ freeVarsClauses b rest
 
 export
 bindNames : List CBind -> List String
@@ -176,26 +179,6 @@ bindNames bs = map bindName bs
 export
 bindName : CBind -> String
 bindName (CBind name _ _ _) = name
-
--- the variables a pattern binds.
-export
-patVars : Pat -> List String
-patVars (PVar x _ _) = [x]
-patVars (PCon _ args) = patVarsList args
-patVars (PCons h t) = patVars h ++ patVars t
-patVars (PTuple ps) = patVarsList ps
-patVars (PList ps) = patVarsList ps
-patVars (PAs x _ _ p) = x :: patVars p
-patVars _ = []
-
-export
-patVarsList : List Pat -> List String
-patVarsList [] = []
-patVarsList (p :: rest) = patVars p ++ patVarsList rest
-
-export
-patVarNames : List Pat -> List String
-patVarNames ps = patVarsList ps
 
 -- ── TRMC eligibility analysis (TRMC-DESIGN.md §"Phase 1 scope") ──────────────
 -- A function `self` of `arity` is TRMC-eligible when every clause body descends

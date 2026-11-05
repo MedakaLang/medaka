@@ -28,10 +28,10 @@ import backend.extern_catalog.{
 }
 import backend.global_plan.{GlobalInitPlan}
 import backend.trmc_analysis.{
-  TrmcVerdicts, DispGroup, patVarsList, patVars, bindName, clauseBodyOf,
-  armBody, flattenApp
+  TrmcVerdicts, DispGroup, bindName, clauseBodyOf, armBody, flattenApp
 }
 import backend.emit_support.{appParts, isExactCall}
+import ir.core_walk as CW
 import types.runtime_types.{BinderRow(..), RuntimeType(..), binderOrdinal}
 import types.private_mangle.{injectiveIdent}
 import support.ordmap.{
@@ -262,7 +262,7 @@ isValBind _ = False
 
 -- [sc] with every variable [pats] bind in scope
 bindIn : DemandScope -> List Pat -> DemandScope
-bindIn sc pats = match patVarsList pats
+bindIn sc pats = match flatMap CW.patBinders pats
   [] => sc
   names => { sc | locals = omFromNames names sc.locals }
 
@@ -483,7 +483,7 @@ clauseUsesClosures fnNames ctorArs (CClause pats body) =
   exprUsesClosures
     fnNames
     ctorArs
-    (envExtendUnstamped (flatMap patVars pats) envEmpty)
+    (envExtendUnstamped (flatMap CW.patBinders pats) envEmpty)
     body
 
 -- a CLam anywhere; an application whose head is not a saturated known-fn/ctor call;
@@ -515,7 +515,7 @@ exprUsesClosures fnNames ctorArs locals (CLet _ pat a b) =
     || exprUsesClosures
       fnNames
       ctorArs
-      (envExtendUnstamped (patVars pat) locals)
+      (envExtendUnstamped (CW.patBinders pat) locals)
       b
 exprUsesClosures fnNames ctorArs locals (CBlock stmts) =
   blockUsesClosures fnNames ctorArs locals stmts
@@ -539,7 +539,7 @@ blockUsesClosures fnNames ctorArs locals ((CSLet _ pat e) :: rest) =
     || blockUsesClosures
       fnNames
       ctorArs
-      (envExtendUnstamped (patVars pat) locals)
+      (envExtendUnstamped (CW.patBinders pat) locals)
       rest
 blockUsesClosures fnNames ctorArs locals ((CSExpr e) :: rest) =
   exprUsesClosures fnNames ctorArs locals e

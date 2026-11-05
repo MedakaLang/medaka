@@ -3,7 +3,8 @@ import ir.core_ir.{
   CProgram(..), CBind(..), CClause(..), CExpr(..), CImplEntry(..),
   CImplBody(..), CField(..), CStmt(..), CArm(..), CGuard(..)
 }
-import backend.trmc_analysis.{patVars, bindName}
+import backend.trmc_analysis.{bindName}
+import ir.core_walk.{patBinders}
 import support.ordmap.{OrdMap, omEmpty, omLookup, omInsert}
 import support.util.{startsWith}
 
@@ -78,7 +79,7 @@ ubBumpAll sc [] = sc
 ubBumpAll sc (x :: xs) = ubBumpAll (ubBump sc x) xs
 
 ubExtend : OrdMap Int -> List Pat -> OrdMap Int
-ubExtend sc pats = ubBumpAll sc (flatMap patVars pats)
+ubExtend sc pats = ubBumpAll sc (flatMap patBinders pats)
 
 ubPat : OrdMap Int -> Pat -> Pat
 ubPat sc (PVar x l bid) = PVar (ubNew sc x) l bid
