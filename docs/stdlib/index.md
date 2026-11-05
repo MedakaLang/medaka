@@ -323,6 +323,8 @@ The prelude: the types, interfaces, and functions every Medaka program can use w
 - [`Rep`](core.md#rep)
 - [`RField`](core.md#rfield)
 - [`Generic`](core.md#generic)
+- [`Process`](core.md#process)
+- [`LaunchTicket`](core.md#launchticket)
 
 ## [`crypto.hmac`](crypto.hmac.md)
 
@@ -824,6 +826,23 @@ Manipulation of `/`-separated paths as text.
 - [`stripPrefix`](path.md#stripprefix)
 - [`normalize`](path.md#normalize)
 
+## [`process`](process.md)
+
+- [`PipeChoice`](process.md#pipechoice)
+- [`SpawnOptions`](process.md#spawnoptions)
+- [`ProcessOperation`](process.md#processoperation)
+- [`ProcessError`](process.md#processerror)
+- [`ExitStatus`](process.md#exitstatus)
+- [`StartError`](process.md#starterror)
+- [`LaunchProgress`](process.md#launchprogress)
+- [`start`](process.md#start)
+- [`retryStart`](process.md#retrystart)
+- [`checkStart`](process.md#checkstart)
+- [`abortStart`](process.md#abortstart)
+- [`pollExit`](process.md#pollexit)
+- [`closeStdin`](process.md#closestdin)
+- [`dispose`](process.md#dispose)
+
 ## [`regex`](regex.md)
 
 Regular expressions, matched in linear time.
@@ -1015,6 +1034,13 @@ The host primitives.
 - [`charToLower`](runtime.md#chartolower)
 - [`stringToUpper`](runtime.md#stringtoupper)
 - [`stringToLower`](runtime.md#stringtolower)
+- [`processStartRaw`](runtime.md#processstartraw)
+- [`processRetryStartRaw`](runtime.md#processretrystartraw)
+- [`processCheckStartRaw`](runtime.md#processcheckstartraw)
+- [`processAbortStartRaw`](runtime.md#processabortstartraw)
+- [`processPollExitRaw`](runtime.md#processpollexitraw)
+- [`processCloseStdinRaw`](runtime.md#processclosestdinraw)
+- [`processDisposeRaw`](runtime.md#processdisposeraw)
 
 ## [`set`](set.md)
 
