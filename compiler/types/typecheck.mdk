@@ -1662,9 +1662,9 @@ checkCoreMemoized : ModuleCtx ->
 checkCoreMemoized prev key runtimeDecls coreDecls runtimeSeed =
   let gctx = prev.mcGraph
   let join = gctx.config.value.tcIoJoin
-  let cached = match key
-    Some k => preludeCacheHit k join
-    None => None
+  let cached = do
+    k <- key
+    preludeCacheHit k join
   match cached
     Some pi => continueFromInterface gctx gctx.graphRun pi
     None =>
@@ -1954,9 +1954,9 @@ graphPreamble inputs admitted sel preludeKey runtimeDecls coreDecls modules =
 -- onto the binders of [coreDecls], the drive's own desugar of core: held for the
 -- drive's prelude key.
 treeArmElab : DriveInputs -> List Decl -> Option PreludeElab
-treeArmElab inputs coreDecls = match inputs.diPreludeKey
-  Some k => preludeElabFor k coreDecls
-  None => None
+treeArmElab inputs coreDecls = do
+  k <- inputs.diPreludeKey
+  preludeElabFor k coreDecls
 
 -- Those trees with the interface of the same key cached for the drive's IO join:
 -- a drive takes both or neither.
@@ -2795,9 +2795,9 @@ driveGraphK sel (DriveArgs inputs valueMain executes preludeKey keyed runtimeDec
           modules
       -- On a hit (`treeArmHit`: the core pass closed core) core's trees arrive
       -- dict-passed, and core's evidence and binder rows join the drive's.
-      let shipped = match coreClosed
-        Some _ => treeArmElab inputs coreDecls
-        None => None
+      let shipped = do
+        _ <- coreClosed
+        treeArmElab inputs coreDecls
       let (coreD, modules3) =
         dictPassModulesIfEnabled
           lastCtx

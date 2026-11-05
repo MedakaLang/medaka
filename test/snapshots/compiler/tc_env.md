@@ -1,5 +1,5 @@
 # META
-source_lines=4459
+source_lines=4458
 stages=DESUGAR,MARK
 # SOURCE
 -- tc_env: construction of `ImplEnv`, `ClassEnv`, `MethodEnv` and lookup in every declaration
@@ -289,9 +289,9 @@ ifaceExportsIndex gctx _ = gctx.declEnvsRef.value.deMethods.meIfaceExports
 -- belong to the same allocation as their scheme, not the final definition's ids.
 export
 bindingDeclared : TcEnv -> String -> Option CDeclared
-bindingDeclared env name = match lookupBinding env name
-  Some binding => binding.ebValue.vsDeclared
-  None => None
+bindingDeclared env name = do
+  binding <- lookupBinding env name
+  binding.ebValue.vsDeclared
 
 export
 attachStandaloneSources : OrdMap Scheme ->
@@ -1525,9 +1525,9 @@ ceInsertRow r env = ClassEnv { env |
 -- mistaken for finishing early.
 export
 ceLookupAt : RegKey -> Int -> ClassEnv -> Option CeRow
-ceLookupAt key cur env = match regLookupK key env.ceByKey
-  None => None
-  Some r => if declEnvVisibleAt cur (ceRowOrd r) then Some r else None
+ceLookupAt key cur env = do
+  r <- regLookupK key env.ceByKey
+  if declEnvVisibleAt cur (ceRowOrd r) then Some r else None
 
 -- An interface named by a RESOLVED reference: the reference's origin was bound by
 -- resolve at a site that could see the declaration, so no ordinal filter applies.
@@ -1573,9 +1573,9 @@ ceRowsOwnedBy cur env = filterList (r => ceRowOrd r == cur) env.ceRows
 -- impl has type arguments".
 export
 ceSlotKindsAt : RegKey -> Int -> Int -> ClassEnv -> Option (List Kind)
-ceSlotKindsAt key cur i env = match ceLookupAt key cur env
-  None => None
-  Some r => nthKindList i (ceRowParamKinds r)
+ceSlotKindsAt key cur i env = do
+  r <- ceLookupAt key cur env
+  nthKindList i (ceRowParamKinds r)
 
 -- #1557 A-3.5a: interface [key]'s REQUIRED-method names at the reading module's
 -- ordinal — the relocation target of `universeIfaceRequiredRef`'s registry lookup
@@ -1775,9 +1775,9 @@ lookupVar env n = match omLookup n env.teVars
 
 export
 lookupMethodRow : TcEnv -> String -> Option MethodSchemeRow
-lookupMethodRow env n = match lookupBinding env n
-  Some binding => binding.ebMethodRow
-  None => None
+lookupMethodRow env n = do
+  binding <- lookupBinding env n
+  binding.ebMethodRow
 
 export
 lookupCtor : TcEnv -> String -> Option Scheme
@@ -1825,17 +1825,17 @@ lookupStandaloneVar env name =
 
 export
 lookupStandaloneValue : TcEnv -> String -> Option ValueScheme
-lookupStandaloneValue env name = match lookupBinding env name
-  Some binding => map snd binding.ebStandalone
-  None => None
+lookupStandaloneValue env name = do
+  binding <- lookupBinding env name
+  map snd binding.ebStandalone
 
 export
 lookupImportedStandalone : TcEnv -> String -> Option Scheme
-lookupImportedStandalone env name = match lookupBinding env name
-  Some binding => match binding.ebStandalone
+lookupImportedStandalone env name = do
+  binding <- lookupBinding env name
+  match binding.ebStandalone
     Some (ImportedStandalone, value) => Some value.vsScheme
     _ => None
-  None => None
 
 -- #739: is [name] an explicitly-imported value (has a known source module)?  A miss in
 -- the qual constraint table for such a name is authoritative ("unconstrained in its
@@ -3634,9 +3634,9 @@ ceMethodTyAt : IfaceRef ->
   Option (List String, Ty, List (String, List Kind))
 ceMethodTyAt iface mname cur ce =
   let key = regKeyOfTab (ifaceTabKey iface.irOrigin iface.irName)
-  match ceLookupAt key cur ce
-    Some row => ceMethodTyIn (ceRowTyparams row) mname (ceRowMethods row)
-    None => None
+  do
+    row <- ceLookupAt key cur ce
+    ceMethodTyIn (ceRowTyparams row) mname (ceRowMethods row)
 
 ceMethodTyIn : List String ->
   String ->
@@ -3771,17 +3771,16 @@ lookupMethodRowById : IfaceRef ->
   String ->
   Registry MethodSchemeRow ->
   Option MethodSchemeRow
-lookupMethodRowById iface n rows = match regLookupK (methodRowKey iface n) rows
-  Some row =>
-    if sameTyConHead
-      row.msrIface.irName
-      row.msrIface.irOrigin
-      iface.irName
-      iface.irOrigin then
-      Some row
-    else
-      None
-  None => None
+lookupMethodRowById iface n rows = do
+  row <- regLookupK (methodRowKey iface n) rows
+  if sameTyConHead
+    row.msrIface.irName
+    row.msrIface.irOrigin
+    iface.irName
+    iface.irOrigin then
+    Some row
+  else
+    None
 
 -- `sameTyConHead`, not a bare `irName` compare: this is a LOOKUP, where a false HIT
 -- is silent wrongness (the wrong interface's scheme), so absence-makes-no-claim plus
@@ -4489,7 +4488,7 @@ methodRowSameNameView rows =
 (DTypeSig true "ifaceExportsIndex" (TyFun (TyCon "GraphCtx") (TyFun (TyCon "Unit") (TyApp (TyCon "OrdMap") (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "String"))))))))
 (DFunDef false "ifaceExportsIndex" ((PVar "gctx") PWild) (EFieldAccess (EFieldAccess (EFieldAccess (EFieldAccess (EVar "gctx") "declEnvsRef") "value") "deMethods") "meIfaceExports"))
 (DTypeSig true "bindingDeclared" (TyFun (TyCon "TcEnv") (TyFun (TyCon "String") (TyApp (TyCon "Option") (TyCon "CDeclared")))))
-(DFunDef false "bindingDeclared" ((PVar "env") (PVar "name")) (EMatch (EApp (EApp (EVar "lookupBinding") (EVar "env")) (EVar "name")) (arm (PCon "Some" (PVar "binding")) () (EFieldAccess (EFieldAccess (EVar "binding") "ebValue") "vsDeclared")) (arm (PCon "None") () (EVar "None"))))
+(DFunDef false "bindingDeclared" ((PVar "env") (PVar "name")) (EApp (EApp (EVar "andThen") (EApp (EApp (EVar "lookupBinding") (EVar "env")) (EVar "name"))) (ELam ((PVar "binding")) (EFieldAccess (EFieldAccess (EVar "binding") "ebValue") "vsDeclared"))))
 (DTypeSig true "attachStandaloneSources" (TyFun (TyApp (TyCon "OrdMap") (TyCon "Scheme")) (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "EnvBinding"))) (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "EnvBinding"))))))
 (DFunDef false "attachStandaloneSources" ((PVar "sources") (PVar "bindings")) (EApp (EApp (EVar "map") (ELam ((PTuple (PVar "name") (PVar "binding"))) (ETuple (EVar "name") (EMatch (EApp (EApp (EVar "omLookup") (EVar "name")) (EVar "sources")) (arm (PCon "Some" (PVar "source")) () (EApp (EApp (EVar "bindingWithStandalone") (EVar "binding")) (ETuple (EVar "ImportedStandalone") (EApp (EVar "ordinaryValueScheme") (EVar "source"))))) (arm (PCon "None") () (EVar "binding")))))) (EVar "bindings")))
 (DTypeSig true "standaloneValueFor" (TyFun (TyCon "TcEnv") (TyFun (TyCon "String") (TyFun (TyCon "String") (TyApp (TyCon "Option") (TyCon "ValueScheme"))))))
@@ -4677,7 +4676,7 @@ methodRowSameNameView rows =
 (DTypeSig false "ceInsertRow" (TyFun (TyCon "CeRow") (TyFun (TyCon "ClassEnv") (TyCon "ClassEnv"))))
 (DFunDef false "ceInsertRow" ((PVar "r") (PVar "env")) (EVariantUpdate "ClassEnv" (EVar "env") ((fa "ceRows" (EBinOp "::" (EVar "r") (EFieldAccess (EVar "env") "ceRows"))) (fa "ceByKey" (EApp (EApp (EApp (EVar "regInsertK") (EApp (EVar "ceRowKey") (EVar "r"))) (EVar "r")) (EFieldAccess (EVar "env") "ceByKey"))))))
 (DTypeSig true "ceLookupAt" (TyFun (TyCon "RegKey") (TyFun (TyCon "Int") (TyFun (TyCon "ClassEnv") (TyApp (TyCon "Option") (TyCon "CeRow"))))))
-(DFunDef false "ceLookupAt" ((PVar "key") (PVar "cur") (PVar "env")) (EMatch (EApp (EApp (EVar "regLookupK") (EVar "key")) (EFieldAccess (EVar "env") "ceByKey")) (arm (PCon "None") () (EVar "None")) (arm (PCon "Some" (PVar "r")) () (EIf (EApp (EApp (EVar "declEnvVisibleAt") (EVar "cur")) (EApp (EVar "ceRowOrd") (EVar "r"))) (EApp (EVar "Some") (EVar "r")) (EVar "None")))))
+(DFunDef false "ceLookupAt" ((PVar "key") (PVar "cur") (PVar "env")) (EApp (EApp (EVar "andThen") (EApp (EApp (EVar "regLookupK") (EVar "key")) (EFieldAccess (EVar "env") "ceByKey"))) (ELam ((PVar "r")) (EIf (EApp (EApp (EVar "declEnvVisibleAt") (EVar "cur")) (EApp (EVar "ceRowOrd") (EVar "r"))) (EApp (EVar "Some") (EVar "r")) (EVar "None")))))
 (DTypeSig false "ceLookupGraph" (TyFun (TyCon "RegKey") (TyFun (TyCon "ClassEnv") (TyApp (TyCon "Option") (TyCon "CeRow")))))
 (DFunDef false "ceLookupGraph" ((PVar "key") (PVar "env")) (EApp (EApp (EVar "regLookupK") (EVar "key")) (EFieldAccess (EVar "env") "ceByKey")))
 (DTypeSig true "ceRowsVisibleAt" (TyFun (TyCon "Int") (TyFun (TyCon "ClassEnv") (TyApp (TyCon "List") (TyCon "CeRow")))))
@@ -4685,7 +4684,7 @@ methodRowSameNameView rows =
 (DTypeSig true "ceRowsOwnedBy" (TyFun (TyCon "Int") (TyFun (TyCon "ClassEnv") (TyApp (TyCon "List") (TyCon "CeRow")))))
 (DFunDef false "ceRowsOwnedBy" ((PVar "cur") (PVar "env")) (EApp (EApp (EVar "filterList") (ELam ((PVar "r")) (EBinOp "==" (EApp (EVar "ceRowOrd") (EVar "r")) (EVar "cur")))) (EFieldAccess (EVar "env") "ceRows")))
 (DTypeSig true "ceSlotKindsAt" (TyFun (TyCon "RegKey") (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyFun (TyCon "ClassEnv") (TyApp (TyCon "Option") (TyApp (TyCon "List") (TyCon "Kind"))))))))
-(DFunDef false "ceSlotKindsAt" ((PVar "key") (PVar "cur") (PVar "i") (PVar "env")) (EMatch (EApp (EApp (EApp (EVar "ceLookupAt") (EVar "key")) (EVar "cur")) (EVar "env")) (arm (PCon "None") () (EVar "None")) (arm (PCon "Some" (PVar "r")) () (EApp (EApp (EVar "nthKindList") (EVar "i")) (EApp (EVar "ceRowParamKinds") (EVar "r"))))))
+(DFunDef false "ceSlotKindsAt" ((PVar "key") (PVar "cur") (PVar "i") (PVar "env")) (EApp (EApp (EVar "andThen") (EApp (EApp (EApp (EVar "ceLookupAt") (EVar "key")) (EVar "cur")) (EVar "env"))) (ELam ((PVar "r")) (EApp (EApp (EVar "nthKindList") (EVar "i")) (EApp (EVar "ceRowParamKinds") (EVar "r"))))))
 (DTypeSig true "ceRequiredAt" (TyFun (TyCon "RegKey") (TyFun (TyCon "Int") (TyFun (TyCon "ClassEnv") (TyApp (TyCon "Option") (TyApp (TyCon "List") (TyCon "String")))))))
 (DFunDef false "ceRequiredAt" ((PVar "key") (PVar "cur") (PVar "env")) (EApp (EApp (EVar "map") (EVar "ceRowRequired")) (EApp (EApp (EApp (EVar "ceLookupAt") (EVar "key")) (EVar "cur")) (EVar "env"))))
 (DTypeSig false "nthKindList" (TyFun (TyCon "Int") (TyFun (TyApp (TyCon "List") (TyApp (TyCon "List") (TyCon "Kind"))) (TyApp (TyCon "Option") (TyApp (TyCon "List") (TyCon "Kind"))))))
@@ -4737,7 +4736,7 @@ methodRowSameNameView rows =
 (DTypeSig true "lookupVar" (TyFun (TyCon "TcEnv") (TyFun (TyCon "String") (TyApp (TyCon "Option") (TyCon "Scheme")))))
 (DFunDef false "lookupVar" ((PVar "env") (PVar "n")) (EMatch (EApp (EApp (EVar "omLookup") (EVar "n")) (EFieldAccess (EVar "env") "teVars")) (arm (PCon "Some" (PVar "binding")) () (EApp (EVar "Some") (EFieldAccess (EFieldAccess (EVar "binding") "ebValue") "vsScheme"))) (arm (PCon "None") () (EApp (EApp (EVar "omLookup") (EVar "n")) (EFieldAccess (EVar "env") "teCtors")))))
 (DTypeSig true "lookupMethodRow" (TyFun (TyCon "TcEnv") (TyFun (TyCon "String") (TyApp (TyCon "Option") (TyCon "MethodSchemeRow")))))
-(DFunDef false "lookupMethodRow" ((PVar "env") (PVar "n")) (EMatch (EApp (EApp (EVar "lookupBinding") (EVar "env")) (EVar "n")) (arm (PCon "Some" (PVar "binding")) () (EFieldAccess (EVar "binding") "ebMethodRow")) (arm (PCon "None") () (EVar "None"))))
+(DFunDef false "lookupMethodRow" ((PVar "env") (PVar "n")) (EApp (EApp (EVar "andThen") (EApp (EApp (EVar "lookupBinding") (EVar "env")) (EVar "n"))) (ELam ((PVar "binding")) (EFieldAccess (EVar "binding") "ebMethodRow"))))
 (DTypeSig true "lookupCtor" (TyFun (TyCon "TcEnv") (TyFun (TyCon "String") (TyApp (TyCon "Option") (TyCon "Scheme")))))
 (DFunDef false "lookupCtor" ((PVar "env") (PVar "n")) (EApp (EApp (EVar "omLookup") (EVar "n")) (EFieldAccess (EVar "env") "teCtors")))
 (DTypeSig true "extendVar" (TyFun (TyCon "TcEnv") (TyFun (TyCon "String") (TyFun (TyCon "Scheme") (TyCon "TcEnv")))))
@@ -4756,9 +4755,9 @@ methodRowSameNameView rows =
 (DTypeSig true "lookupStandaloneVar" (TyFun (TyCon "TcEnv") (TyFun (TyCon "String") (TyApp (TyCon "Option") (TyCon "Scheme")))))
 (DFunDef false "lookupStandaloneVar" ((PVar "env") (PVar "name")) (EApp (EApp (EVar "map") (ELam ((PVar "value")) (EFieldAccess (EVar "value") "vsScheme"))) (EApp (EApp (EVar "lookupStandaloneValue") (EVar "env")) (EVar "name"))))
 (DTypeSig true "lookupStandaloneValue" (TyFun (TyCon "TcEnv") (TyFun (TyCon "String") (TyApp (TyCon "Option") (TyCon "ValueScheme")))))
-(DFunDef false "lookupStandaloneValue" ((PVar "env") (PVar "name")) (EMatch (EApp (EApp (EVar "lookupBinding") (EVar "env")) (EVar "name")) (arm (PCon "Some" (PVar "binding")) () (EApp (EApp (EVar "map") (EVar "snd")) (EFieldAccess (EVar "binding") "ebStandalone"))) (arm (PCon "None") () (EVar "None"))))
+(DFunDef false "lookupStandaloneValue" ((PVar "env") (PVar "name")) (EApp (EApp (EVar "andThen") (EApp (EApp (EVar "lookupBinding") (EVar "env")) (EVar "name"))) (ELam ((PVar "binding")) (EApp (EApp (EVar "map") (EVar "snd")) (EFieldAccess (EVar "binding") "ebStandalone")))))
 (DTypeSig true "lookupImportedStandalone" (TyFun (TyCon "TcEnv") (TyFun (TyCon "String") (TyApp (TyCon "Option") (TyCon "Scheme")))))
-(DFunDef false "lookupImportedStandalone" ((PVar "env") (PVar "name")) (EMatch (EApp (EApp (EVar "lookupBinding") (EVar "env")) (EVar "name")) (arm (PCon "Some" (PVar "binding")) () (EMatch (EFieldAccess (EVar "binding") "ebStandalone") (arm (PCon "Some" (PTuple (PCon "ImportedStandalone") (PVar "value"))) () (EApp (EVar "Some") (EFieldAccess (EVar "value") "vsScheme"))) (arm PWild () (EVar "None")))) (arm (PCon "None") () (EVar "None"))))
+(DFunDef false "lookupImportedStandalone" ((PVar "env") (PVar "name")) (EApp (EApp (EVar "andThen") (EApp (EApp (EVar "lookupBinding") (EVar "env")) (EVar "name"))) (ELam ((PVar "binding")) (EMatch (EFieldAccess (EVar "binding") "ebStandalone") (arm (PCon "Some" (PTuple (PCon "ImportedStandalone") (PVar "value"))) () (EApp (EVar "Some") (EFieldAccess (EVar "value") "vsScheme"))) (arm PWild () (EVar "None"))))))
 (DTypeSig true "hasImportDefiner" (TyFun (TyCon "ModuleCtx") (TyFun (TyCon "String") (TyCon "Bool"))))
 (DFunDef false "hasImportDefiner" ((PVar "mctx") (PVar "name")) (EApp (EVar "isSome") (EApp (EApp (EVar "omLookup") (EVar "name")) (EFieldAccess (EFieldAccess (EFieldAccess (EVar "mctx") "mcCells") "currentImportDefinersRef") "value"))))
 (DTypeSig true "bindingWithStandalone" (TyFun (TyCon "EnvBinding") (TyFun (TyTuple (TyCon "StandaloneOrigin") (TyCon "ValueScheme")) (TyCon "EnvBinding"))))
@@ -5152,7 +5151,7 @@ methodRowSameNameView rows =
 (DTypeSig true "removeAllS" (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyApp (TyCon "List") (TyCon "String")))))
 (DFunDef false "removeAllS" ((PVar "drop") (PVar "xs")) (EApp (EApp (EVar "filter") (ELam ((PVar "x")) (EApp (EVar "not") (EApp (EApp (EVar "contains") (EVar "x")) (EVar "drop"))))) (EVar "xs")))
 (DTypeSig true "ceMethodTyAt" (TyFun (TyCon "IfaceRef") (TyFun (TyCon "String") (TyFun (TyCon "Int") (TyFun (TyCon "ClassEnv") (TyApp (TyCon "Option") (TyTuple (TyApp (TyCon "List") (TyCon "String")) (TyCon "Ty") (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "Kind")))))))))))
-(DFunDef false "ceMethodTyAt" ((PVar "iface") (PVar "mname") (PVar "cur") (PVar "ce")) (EBlock (DoLet false false (PVar "key") (EApp (EVar "regKeyOfTab") (EApp (EApp (EVar "ifaceTabKey") (EFieldAccess (EVar "iface") "irOrigin")) (EFieldAccess (EVar "iface") "irName")))) (DoExpr (EMatch (EApp (EApp (EApp (EVar "ceLookupAt") (EVar "key")) (EVar "cur")) (EVar "ce")) (arm (PCon "Some" (PVar "row")) () (EApp (EApp (EApp (EVar "ceMethodTyIn") (EApp (EVar "ceRowTyparams") (EVar "row"))) (EVar "mname")) (EApp (EVar "ceRowMethods") (EVar "row")))) (arm (PCon "None") () (EVar "None"))))))
+(DFunDef false "ceMethodTyAt" ((PVar "iface") (PVar "mname") (PVar "cur") (PVar "ce")) (EBlock (DoLet false false (PVar "key") (EApp (EVar "regKeyOfTab") (EApp (EApp (EVar "ifaceTabKey") (EFieldAccess (EVar "iface") "irOrigin")) (EFieldAccess (EVar "iface") "irName")))) (DoExpr (EApp (EApp (EVar "andThen") (EApp (EApp (EApp (EVar "ceLookupAt") (EVar "key")) (EVar "cur")) (EVar "ce"))) (ELam ((PVar "row")) (EApp (EApp (EApp (EVar "ceMethodTyIn") (EApp (EVar "ceRowTyparams") (EVar "row"))) (EVar "mname")) (EApp (EVar "ceRowMethods") (EVar "row"))))))))
 (DTypeSig false "ceMethodTyIn" (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "Ty") (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "Kind")))))) (TyApp (TyCon "Option") (TyTuple (TyApp (TyCon "List") (TyCon "String")) (TyCon "Ty") (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "Kind"))))))))))
 (DFunDef false "ceMethodTyIn" (PWild PWild (PList)) (EVar "None"))
 (DFunDef false "ceMethodTyIn" ((PVar "typarams") (PVar "mname") (PCons (PTuple (PVar "name") (PVar "mty") (PVar "scope")) (PVar "rest"))) (EIf (EBinOp "==" (EVar "name") (EVar "mname")) (EApp (EVar "Some") (ETuple (EVar "typarams") (EVar "mty") (EVar "scope"))) (EIf (EVar "otherwise") (EApp (EApp (EApp (EVar "ceMethodTyIn") (EVar "typarams")) (EVar "mname")) (EVar "rest")) (EApp (EVar "__fallthrough__") (ELit LUnit)))))
@@ -5193,7 +5192,7 @@ methodRowSameNameView rows =
 (DTypeSig true "methodEnvBinding" (TyFun (TyCon "MethodSchemeRow") (TyCon "EnvBinding")))
 (DFunDef false "methodEnvBinding" ((PVar "row")) (ERecordCreate "EnvBinding" ((fa "ebValue" (EApp (EVar "ordinaryValueScheme") (EFieldAccess (EVar "row") "msrScheme"))) (fa "ebMethodRow" (EApp (EVar "Some") (EVar "row"))) (fa "ebStandalone" (EVar "None")))))
 (DTypeSig true "lookupMethodRowById" (TyFun (TyCon "IfaceRef") (TyFun (TyCon "String") (TyFun (TyApp (TyCon "Registry") (TyCon "MethodSchemeRow")) (TyApp (TyCon "Option") (TyCon "MethodSchemeRow"))))))
-(DFunDef false "lookupMethodRowById" ((PVar "iface") (PVar "n") (PVar "rows")) (EMatch (EApp (EApp (EVar "regLookupK") (EApp (EApp (EVar "methodRowKey") (EVar "iface")) (EVar "n"))) (EVar "rows")) (arm (PCon "Some" (PVar "row")) () (EIf (EApp (EApp (EApp (EApp (EVar "sameTyConHead") (EFieldAccess (EFieldAccess (EVar "row") "msrIface") "irName")) (EFieldAccess (EFieldAccess (EVar "row") "msrIface") "irOrigin")) (EFieldAccess (EVar "iface") "irName")) (EFieldAccess (EVar "iface") "irOrigin")) (EApp (EVar "Some") (EVar "row")) (EVar "None"))) (arm (PCon "None") () (EVar "None"))))
+(DFunDef false "lookupMethodRowById" ((PVar "iface") (PVar "n") (PVar "rows")) (EApp (EApp (EVar "andThen") (EApp (EApp (EVar "regLookupK") (EApp (EApp (EVar "methodRowKey") (EVar "iface")) (EVar "n"))) (EVar "rows"))) (ELam ((PVar "row")) (EIf (EApp (EApp (EApp (EApp (EVar "sameTyConHead") (EFieldAccess (EFieldAccess (EVar "row") "msrIface") "irName")) (EFieldAccess (EFieldAccess (EVar "row") "msrIface") "irOrigin")) (EFieldAccess (EVar "iface") "irName")) (EFieldAccess (EVar "iface") "irOrigin")) (EApp (EVar "Some") (EVar "row")) (EVar "None")))))
 (DTypeSig true "lookupSchemeById" (TyFun (TyCon "IfaceRef") (TyFun (TyCon "String") (TyFun (TyApp (TyCon "Registry") (TyCon "MethodSchemeRow")) (TyApp (TyCon "Option") (TyCon "Scheme"))))))
 (DFunDef false "lookupSchemeById" ((PVar "iface") (PVar "n") (PVar "rows")) (EApp (EApp (EVar "map") (ELam ((PVar "row")) (EFieldAccess (EVar "row") "msrScheme"))) (EApp (EApp (EApp (EVar "lookupMethodRowById") (EVar "iface")) (EVar "n")) (EVar "rows"))))
 (DTypeSig false "methodRowKey" (TyFun (TyCon "IfaceRef") (TyFun (TyCon "String") (TyCon "RegKey"))))
@@ -5350,7 +5349,7 @@ methodRowSameNameView rows =
 (DTypeSig true "ifaceExportsIndex" (TyFun (TyCon "GraphCtx") (TyFun (TyCon "Unit") (TyApp (TyCon "OrdMap") (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "String"))))))))
 (DFunDef false "ifaceExportsIndex" ((PVar "gctx") PWild) (EFieldAccess (EFieldAccess (EFieldAccess (EFieldAccess (EVar "gctx") "declEnvsRef") "value") "deMethods") "meIfaceExports"))
 (DTypeSig true "bindingDeclared" (TyFun (TyCon "TcEnv") (TyFun (TyCon "String") (TyApp (TyCon "Option") (TyCon "CDeclared")))))
-(DFunDef false "bindingDeclared" ((PVar "env") (PVar "name")) (EMatch (EApp (EApp (EVar "lookupBinding") (EVar "env")) (EVar "name")) (arm (PCon "Some" (PVar "binding")) () (EFieldAccess (EFieldAccess (EVar "binding") "ebValue") "vsDeclared")) (arm (PCon "None") () (EVar "None"))))
+(DFunDef false "bindingDeclared" ((PVar "env") (PVar "name")) (EApp (EApp (EMethodRef "andThen") (EApp (EApp (EVar "lookupBinding") (EVar "env")) (EVar "name"))) (ELam ((PVar "binding")) (EFieldAccess (EFieldAccess (EVar "binding") "ebValue") "vsDeclared"))))
 (DTypeSig true "attachStandaloneSources" (TyFun (TyApp (TyCon "OrdMap") (TyCon "Scheme")) (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "EnvBinding"))) (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "EnvBinding"))))))
 (DFunDef false "attachStandaloneSources" ((PVar "sources") (PVar "bindings")) (EApp (EApp (EMethodRef "map") (ELam ((PTuple (PVar "name") (PVar "binding"))) (ETuple (EVar "name") (EMatch (EApp (EApp (EVar "omLookup") (EVar "name")) (EVar "sources")) (arm (PCon "Some" (PVar "source")) () (EApp (EApp (EVar "bindingWithStandalone") (EVar "binding")) (ETuple (EVar "ImportedStandalone") (EApp (EVar "ordinaryValueScheme") (EVar "source"))))) (arm (PCon "None") () (EVar "binding")))))) (EVar "bindings")))
 (DTypeSig true "standaloneValueFor" (TyFun (TyCon "TcEnv") (TyFun (TyCon "String") (TyFun (TyCon "String") (TyApp (TyCon "Option") (TyCon "ValueScheme"))))))
@@ -5538,7 +5537,7 @@ methodRowSameNameView rows =
 (DTypeSig false "ceInsertRow" (TyFun (TyCon "CeRow") (TyFun (TyCon "ClassEnv") (TyCon "ClassEnv"))))
 (DFunDef false "ceInsertRow" ((PVar "r") (PVar "env")) (EVariantUpdate "ClassEnv" (EVar "env") ((fa "ceRows" (EBinOp "::" (EVar "r") (EFieldAccess (EVar "env") "ceRows"))) (fa "ceByKey" (EApp (EApp (EApp (EVar "regInsertK") (EApp (EVar "ceRowKey") (EVar "r"))) (EVar "r")) (EFieldAccess (EVar "env") "ceByKey"))))))
 (DTypeSig true "ceLookupAt" (TyFun (TyCon "RegKey") (TyFun (TyCon "Int") (TyFun (TyCon "ClassEnv") (TyApp (TyCon "Option") (TyCon "CeRow"))))))
-(DFunDef false "ceLookupAt" ((PVar "key") (PVar "cur") (PVar "env")) (EMatch (EApp (EApp (EVar "regLookupK") (EVar "key")) (EFieldAccess (EVar "env") "ceByKey")) (arm (PCon "None") () (EVar "None")) (arm (PCon "Some" (PVar "r")) () (EIf (EApp (EApp (EVar "declEnvVisibleAt") (EVar "cur")) (EApp (EVar "ceRowOrd") (EVar "r"))) (EApp (EVar "Some") (EVar "r")) (EVar "None")))))
+(DFunDef false "ceLookupAt" ((PVar "key") (PVar "cur") (PVar "env")) (EApp (EApp (EMethodRef "andThen") (EApp (EApp (EVar "regLookupK") (EVar "key")) (EFieldAccess (EVar "env") "ceByKey"))) (ELam ((PVar "r")) (EIf (EApp (EApp (EVar "declEnvVisibleAt") (EVar "cur")) (EApp (EVar "ceRowOrd") (EVar "r"))) (EApp (EVar "Some") (EVar "r")) (EVar "None")))))
 (DTypeSig false "ceLookupGraph" (TyFun (TyCon "RegKey") (TyFun (TyCon "ClassEnv") (TyApp (TyCon "Option") (TyCon "CeRow")))))
 (DFunDef false "ceLookupGraph" ((PVar "key") (PVar "env")) (EApp (EApp (EVar "regLookupK") (EVar "key")) (EFieldAccess (EVar "env") "ceByKey")))
 (DTypeSig true "ceRowsVisibleAt" (TyFun (TyCon "Int") (TyFun (TyCon "ClassEnv") (TyApp (TyCon "List") (TyCon "CeRow")))))
@@ -5546,7 +5545,7 @@ methodRowSameNameView rows =
 (DTypeSig true "ceRowsOwnedBy" (TyFun (TyCon "Int") (TyFun (TyCon "ClassEnv") (TyApp (TyCon "List") (TyCon "CeRow")))))
 (DFunDef false "ceRowsOwnedBy" ((PVar "cur") (PVar "env")) (EApp (EApp (EVar "filterList") (ELam ((PVar "r")) (EBinOp "==" (EApp (EVar "ceRowOrd") (EVar "r")) (EVar "cur")))) (EFieldAccess (EVar "env") "ceRows")))
 (DTypeSig true "ceSlotKindsAt" (TyFun (TyCon "RegKey") (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyFun (TyCon "ClassEnv") (TyApp (TyCon "Option") (TyApp (TyCon "List") (TyCon "Kind"))))))))
-(DFunDef false "ceSlotKindsAt" ((PVar "key") (PVar "cur") (PVar "i") (PVar "env")) (EMatch (EApp (EApp (EApp (EVar "ceLookupAt") (EVar "key")) (EVar "cur")) (EVar "env")) (arm (PCon "None") () (EVar "None")) (arm (PCon "Some" (PVar "r")) () (EApp (EApp (EVar "nthKindList") (EVar "i")) (EApp (EVar "ceRowParamKinds") (EVar "r"))))))
+(DFunDef false "ceSlotKindsAt" ((PVar "key") (PVar "cur") (PVar "i") (PVar "env")) (EApp (EApp (EMethodRef "andThen") (EApp (EApp (EApp (EVar "ceLookupAt") (EVar "key")) (EVar "cur")) (EVar "env"))) (ELam ((PVar "r")) (EApp (EApp (EVar "nthKindList") (EVar "i")) (EApp (EVar "ceRowParamKinds") (EVar "r"))))))
 (DTypeSig true "ceRequiredAt" (TyFun (TyCon "RegKey") (TyFun (TyCon "Int") (TyFun (TyCon "ClassEnv") (TyApp (TyCon "Option") (TyApp (TyCon "List") (TyCon "String")))))))
 (DFunDef false "ceRequiredAt" ((PVar "key") (PVar "cur") (PVar "env")) (EApp (EApp (EMethodRef "map") (EVar "ceRowRequired")) (EApp (EApp (EApp (EVar "ceLookupAt") (EVar "key")) (EVar "cur")) (EVar "env"))))
 (DTypeSig false "nthKindList" (TyFun (TyCon "Int") (TyFun (TyApp (TyCon "List") (TyApp (TyCon "List") (TyCon "Kind"))) (TyApp (TyCon "Option") (TyApp (TyCon "List") (TyCon "Kind"))))))
@@ -5598,7 +5597,7 @@ methodRowSameNameView rows =
 (DTypeSig true "lookupVar" (TyFun (TyCon "TcEnv") (TyFun (TyCon "String") (TyApp (TyCon "Option") (TyCon "Scheme")))))
 (DFunDef false "lookupVar" ((PVar "env") (PVar "n")) (EMatch (EApp (EApp (EVar "omLookup") (EVar "n")) (EFieldAccess (EVar "env") "teVars")) (arm (PCon "Some" (PVar "binding")) () (EApp (EVar "Some") (EFieldAccess (EFieldAccess (EVar "binding") "ebValue") "vsScheme"))) (arm (PCon "None") () (EApp (EApp (EVar "omLookup") (EVar "n")) (EFieldAccess (EVar "env") "teCtors")))))
 (DTypeSig true "lookupMethodRow" (TyFun (TyCon "TcEnv") (TyFun (TyCon "String") (TyApp (TyCon "Option") (TyCon "MethodSchemeRow")))))
-(DFunDef false "lookupMethodRow" ((PVar "env") (PVar "n")) (EMatch (EApp (EApp (EVar "lookupBinding") (EVar "env")) (EVar "n")) (arm (PCon "Some" (PVar "binding")) () (EFieldAccess (EVar "binding") "ebMethodRow")) (arm (PCon "None") () (EVar "None"))))
+(DFunDef false "lookupMethodRow" ((PVar "env") (PVar "n")) (EApp (EApp (EMethodRef "andThen") (EApp (EApp (EVar "lookupBinding") (EVar "env")) (EVar "n"))) (ELam ((PVar "binding")) (EFieldAccess (EVar "binding") "ebMethodRow"))))
 (DTypeSig true "lookupCtor" (TyFun (TyCon "TcEnv") (TyFun (TyCon "String") (TyApp (TyCon "Option") (TyCon "Scheme")))))
 (DFunDef false "lookupCtor" ((PVar "env") (PVar "n")) (EApp (EApp (EVar "omLookup") (EVar "n")) (EFieldAccess (EVar "env") "teCtors")))
 (DTypeSig true "extendVar" (TyFun (TyCon "TcEnv") (TyFun (TyCon "String") (TyFun (TyCon "Scheme") (TyCon "TcEnv")))))
@@ -5617,9 +5616,9 @@ methodRowSameNameView rows =
 (DTypeSig true "lookupStandaloneVar" (TyFun (TyCon "TcEnv") (TyFun (TyCon "String") (TyApp (TyCon "Option") (TyCon "Scheme")))))
 (DFunDef false "lookupStandaloneVar" ((PVar "env") (PVar "name")) (EApp (EApp (EMethodRef "map") (ELam ((PVar "value")) (EFieldAccess (EVar "value") "vsScheme"))) (EApp (EApp (EVar "lookupStandaloneValue") (EVar "env")) (EVar "name"))))
 (DTypeSig true "lookupStandaloneValue" (TyFun (TyCon "TcEnv") (TyFun (TyCon "String") (TyApp (TyCon "Option") (TyCon "ValueScheme")))))
-(DFunDef false "lookupStandaloneValue" ((PVar "env") (PVar "name")) (EMatch (EApp (EApp (EVar "lookupBinding") (EVar "env")) (EVar "name")) (arm (PCon "Some" (PVar "binding")) () (EApp (EApp (EMethodRef "map") (EVar "snd")) (EFieldAccess (EVar "binding") "ebStandalone"))) (arm (PCon "None") () (EVar "None"))))
+(DFunDef false "lookupStandaloneValue" ((PVar "env") (PVar "name")) (EApp (EApp (EMethodRef "andThen") (EApp (EApp (EVar "lookupBinding") (EVar "env")) (EVar "name"))) (ELam ((PVar "binding")) (EApp (EApp (EMethodRef "map") (EVar "snd")) (EFieldAccess (EVar "binding") "ebStandalone")))))
 (DTypeSig true "lookupImportedStandalone" (TyFun (TyCon "TcEnv") (TyFun (TyCon "String") (TyApp (TyCon "Option") (TyCon "Scheme")))))
-(DFunDef false "lookupImportedStandalone" ((PVar "env") (PVar "name")) (EMatch (EApp (EApp (EVar "lookupBinding") (EVar "env")) (EVar "name")) (arm (PCon "Some" (PVar "binding")) () (EMatch (EFieldAccess (EVar "binding") "ebStandalone") (arm (PCon "Some" (PTuple (PCon "ImportedStandalone") (PVar "value"))) () (EApp (EVar "Some") (EFieldAccess (EVar "value") "vsScheme"))) (arm PWild () (EVar "None")))) (arm (PCon "None") () (EVar "None"))))
+(DFunDef false "lookupImportedStandalone" ((PVar "env") (PVar "name")) (EApp (EApp (EMethodRef "andThen") (EApp (EApp (EVar "lookupBinding") (EVar "env")) (EVar "name"))) (ELam ((PVar "binding")) (EMatch (EFieldAccess (EVar "binding") "ebStandalone") (arm (PCon "Some" (PTuple (PCon "ImportedStandalone") (PVar "value"))) () (EApp (EVar "Some") (EFieldAccess (EVar "value") "vsScheme"))) (arm PWild () (EVar "None"))))))
 (DTypeSig true "hasImportDefiner" (TyFun (TyCon "ModuleCtx") (TyFun (TyCon "String") (TyCon "Bool"))))
 (DFunDef false "hasImportDefiner" ((PVar "mctx") (PVar "name")) (EApp (EVar "isSome") (EApp (EApp (EVar "omLookup") (EVar "name")) (EFieldAccess (EFieldAccess (EFieldAccess (EVar "mctx") "mcCells") "currentImportDefinersRef") "value"))))
 (DTypeSig true "bindingWithStandalone" (TyFun (TyCon "EnvBinding") (TyFun (TyTuple (TyCon "StandaloneOrigin") (TyCon "ValueScheme")) (TyCon "EnvBinding"))))
@@ -6013,7 +6012,7 @@ methodRowSameNameView rows =
 (DTypeSig true "removeAllS" (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyApp (TyCon "List") (TyCon "String")))))
 (DFunDef false "removeAllS" ((PVar "drop") (PVar "xs")) (EApp (EApp (EMethodRef "filter") (ELam ((PVar "x")) (EApp (EVar "not") (EApp (EApp (EVar "contains") (EVar "x")) (EVar "drop"))))) (EVar "xs")))
 (DTypeSig true "ceMethodTyAt" (TyFun (TyCon "IfaceRef") (TyFun (TyCon "String") (TyFun (TyCon "Int") (TyFun (TyCon "ClassEnv") (TyApp (TyCon "Option") (TyTuple (TyApp (TyCon "List") (TyCon "String")) (TyCon "Ty") (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "Kind")))))))))))
-(DFunDef false "ceMethodTyAt" ((PVar "iface") (PVar "mname") (PVar "cur") (PVar "ce")) (EBlock (DoLet false false (PVar "key") (EApp (EVar "regKeyOfTab") (EApp (EApp (EVar "ifaceTabKey") (EFieldAccess (EVar "iface") "irOrigin")) (EFieldAccess (EVar "iface") "irName")))) (DoExpr (EMatch (EApp (EApp (EApp (EVar "ceLookupAt") (EVar "key")) (EVar "cur")) (EVar "ce")) (arm (PCon "Some" (PVar "row")) () (EApp (EApp (EApp (EVar "ceMethodTyIn") (EApp (EVar "ceRowTyparams") (EVar "row"))) (EVar "mname")) (EApp (EVar "ceRowMethods") (EVar "row")))) (arm (PCon "None") () (EVar "None"))))))
+(DFunDef false "ceMethodTyAt" ((PVar "iface") (PVar "mname") (PVar "cur") (PVar "ce")) (EBlock (DoLet false false (PVar "key") (EApp (EVar "regKeyOfTab") (EApp (EApp (EVar "ifaceTabKey") (EFieldAccess (EVar "iface") "irOrigin")) (EFieldAccess (EVar "iface") "irName")))) (DoExpr (EApp (EApp (EMethodRef "andThen") (EApp (EApp (EApp (EVar "ceLookupAt") (EVar "key")) (EVar "cur")) (EVar "ce"))) (ELam ((PVar "row")) (EApp (EApp (EApp (EVar "ceMethodTyIn") (EApp (EVar "ceRowTyparams") (EVar "row"))) (EVar "mname")) (EApp (EVar "ceRowMethods") (EVar "row"))))))))
 (DTypeSig false "ceMethodTyIn" (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "Ty") (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "Kind")))))) (TyApp (TyCon "Option") (TyTuple (TyApp (TyCon "List") (TyCon "String")) (TyCon "Ty") (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "Kind"))))))))))
 (DFunDef false "ceMethodTyIn" (PWild PWild (PList)) (EVar "None"))
 (DFunDef false "ceMethodTyIn" ((PVar "typarams") (PVar "mname") (PCons (PTuple (PVar "name") (PVar "mty") (PVar "scope")) (PVar "rest"))) (EIf (EBinOp "==" (EVar "name") (EVar "mname")) (EApp (EVar "Some") (ETuple (EVar "typarams") (EVar "mty") (EVar "scope"))) (EIf (EVar "otherwise") (EApp (EApp (EApp (EVar "ceMethodTyIn") (EVar "typarams")) (EVar "mname")) (EVar "rest")) (EApp (EVar "__fallthrough__") (ELit LUnit)))))
@@ -6054,7 +6053,7 @@ methodRowSameNameView rows =
 (DTypeSig true "methodEnvBinding" (TyFun (TyCon "MethodSchemeRow") (TyCon "EnvBinding")))
 (DFunDef false "methodEnvBinding" ((PVar "row")) (ERecordCreate "EnvBinding" ((fa "ebValue" (EApp (EVar "ordinaryValueScheme") (EFieldAccess (EVar "row") "msrScheme"))) (fa "ebMethodRow" (EApp (EVar "Some") (EVar "row"))) (fa "ebStandalone" (EVar "None")))))
 (DTypeSig true "lookupMethodRowById" (TyFun (TyCon "IfaceRef") (TyFun (TyCon "String") (TyFun (TyApp (TyCon "Registry") (TyCon "MethodSchemeRow")) (TyApp (TyCon "Option") (TyCon "MethodSchemeRow"))))))
-(DFunDef false "lookupMethodRowById" ((PVar "iface") (PVar "n") (PVar "rows")) (EMatch (EApp (EApp (EVar "regLookupK") (EApp (EApp (EVar "methodRowKey") (EVar "iface")) (EVar "n"))) (EVar "rows")) (arm (PCon "Some" (PVar "row")) () (EIf (EApp (EApp (EApp (EApp (EVar "sameTyConHead") (EFieldAccess (EFieldAccess (EVar "row") "msrIface") "irName")) (EFieldAccess (EFieldAccess (EVar "row") "msrIface") "irOrigin")) (EFieldAccess (EVar "iface") "irName")) (EFieldAccess (EVar "iface") "irOrigin")) (EApp (EVar "Some") (EVar "row")) (EVar "None"))) (arm (PCon "None") () (EVar "None"))))
+(DFunDef false "lookupMethodRowById" ((PVar "iface") (PVar "n") (PVar "rows")) (EApp (EApp (EMethodRef "andThen") (EApp (EApp (EVar "regLookupK") (EApp (EApp (EVar "methodRowKey") (EVar "iface")) (EVar "n"))) (EVar "rows"))) (ELam ((PVar "row")) (EIf (EApp (EApp (EApp (EApp (EVar "sameTyConHead") (EFieldAccess (EFieldAccess (EVar "row") "msrIface") "irName")) (EFieldAccess (EFieldAccess (EVar "row") "msrIface") "irOrigin")) (EFieldAccess (EVar "iface") "irName")) (EFieldAccess (EVar "iface") "irOrigin")) (EApp (EVar "Some") (EVar "row")) (EVar "None")))))
 (DTypeSig true "lookupSchemeById" (TyFun (TyCon "IfaceRef") (TyFun (TyCon "String") (TyFun (TyApp (TyCon "Registry") (TyCon "MethodSchemeRow")) (TyApp (TyCon "Option") (TyCon "Scheme"))))))
 (DFunDef false "lookupSchemeById" ((PVar "iface") (PVar "n") (PVar "rows")) (EApp (EApp (EMethodRef "map") (ELam ((PVar "row")) (EFieldAccess (EVar "row") "msrScheme"))) (EApp (EApp (EApp (EVar "lookupMethodRowById") (EVar "iface")) (EVar "n")) (EVar "rows"))))
 (DTypeSig false "methodRowKey" (TyFun (TyCon "IfaceRef") (TyFun (TyCon "String") (TyCon "RegKey"))))

@@ -74,9 +74,9 @@ lookupPos name (n :: ns) (v :: vs)
 export
 mapAll : (a -> Option b) -> List a -> Option (List b)
 mapAll _ [] = Some []
-mapAll f (x :: xs) = match f x
-  None => None
-  Some y => map (y :: _) (mapAll f xs)
+mapAll f (x :: xs) = do
+  y <- f x
+  map (y :: _) (mapAll f xs)
 
 seedNodesFrom : Int -> List (IfaceRef, p) -> List (SuperNode p)
 seedNodesFrom _ [] = []

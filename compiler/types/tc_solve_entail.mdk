@@ -353,13 +353,11 @@ occurrenceParamMonos : ModuleCtx ->
   Mono ->
   List (String, Mono) ->
   Option (List Mono)
-occurrenceParamMonos mctx name fullMono omitted =
-  match methodEntryHere mctx name
-    None => None
-    Some (_, typarams, mty, _) =>
-      map
-        (subst => map (paramMonoOf (subst ++ omitted)) typarams)
-        (matchTyMono mty fullMono)
+occurrenceParamMonos mctx name fullMono omitted = do
+  (_, typarams, mty, _) <- methodEntryHere mctx name
+  map
+    (subst => map (paramMonoOf (subst ++ omitted)) typarams)
+    (matchTyMono mty fullMono)
 
 -- RIGID PRODUCER 2 of 2 (#1110): [tp] is an interface type-PARAMETER name, so
 -- the fallback when the head match bound nothing for it is a rigid variable,
@@ -975,12 +973,11 @@ ieSelectRowByIface : SiteCtx ->
   IfaceRef ->
   List Mono ->
   Option ImplRow
-ieSelectRowByIface sx env iface goals = match goalHeadCon goals
-  Some hk =>
-    ieRowOfEntry
-      env
-      (pickMostSpecificEntry sx goals (ieCandidatesForIface env hk iface goals))
-  None => None
+ieSelectRowByIface sx env iface goals = do
+  hk <- goalHeadCon goals
+  ieRowOfEntry
+    env
+    (pickMostSpecificEntry sx goals (ieCandidatesForIface env hk iface goals))
 
 -- ENTRY POINT 2 of 3 — the METHOD-keyed row selector, read by the two element-dict
 -- route sites AND by the route WORD itself, through `keyForSite`.
@@ -1002,23 +999,22 @@ ieSelectRowByMethod : SiteCtx ->
   String ->
   List Mono ->
   Option ImplRow
-ieSelectRowByMethod sx env name goals = match goalHeadCon goals
-  Some hk =>
-    ieRowOfEntry
-      env
-      (pickMostSpecificEntry
-        sx
-        goals
-        -- #1386: interface from the OCCURRENCE spelling, method-set membership from
-        -- its ORIGIN — both projected off the one name, inside the one query.
-        (ieCandidatesForMethod
-          sx.sxModule.mcGraph
-          env
-          hk
-          (originMethodName sx.sxModule name)
-          (methodAdmissionHere sx.sxModule name)
-          goals))
-  None => None
+ieSelectRowByMethod sx env name goals = do
+  hk <- goalHeadCon goals
+  ieRowOfEntry
+    env
+    (pickMostSpecificEntry
+      sx
+      goals
+      -- #1386: interface from the OCCURRENCE spelling, method-set membership from
+      -- its ORIGIN — both projected off the one name, inside the one query.
+      (ieCandidatesForMethod
+        sx.sxModule.mcGraph
+        env
+        hk
+        (originMethodName sx.sxModule name)
+        (methodAdmissionHere sx.sxModule name)
+        goals))
 
 -- Match an already-selected instance row against the complete predicate goal.
 -- The substitution and prerequisites are projections of that same row.
@@ -1127,13 +1123,12 @@ implHeadSubst : ModuleCtx ->
   Option (List (String, Mono))
 implHeadSubst mctx pats concretes
   | listLen pats /= listLen concretes = None
-  | otherwise = match positionBindings pats concretes []
-    None => None
-    Some binds =>
-      if matchEqPairs mctx (repeatedBindings binds []) then
-        Some (fold (acc b => mergeOne acc (fst b) (snd b)) [] binds)
-      else
-        None
+  | otherwise = do
+    binds <- positionBindings pats concretes []
+    if matchEqPairs mctx (repeatedBindings binds []) then
+      Some (fold (acc b => mergeOne acc (fst b) (snd b)) [] binds)
+    else
+      None
 
 -- A variable a closed binder declared (`declaredSigVarIds`) is a constant here, not
 -- one of the goal's free variables: a repeated head variable never equates it with
@@ -1389,9 +1384,9 @@ entailAssum mctx m encl name useScope kind =
   let request = goalRequestOfKind mctx name kind
   match entailAssumVar mctx request m encl name useScope kind
     Some answer => Some answer
-    None => match request
-      Some req => activeDictPredOf mctx.mcGraph req m useScope
-      None => None
+    None => do
+      req <- request
+      activeDictPredOf mctx.mcGraph req m useScope
 
 goalRequestOfKind : ModuleCtx -> String -> EntailKind -> Option PredicateRequest
 goalRequestOfKind mctx name (EKReturn fullMono _) =
@@ -1494,9 +1489,9 @@ entailAssumRoute dname (EKPredicateOp _ _ _) = RDict dname
 selectReturnRow : SiteCtx -> ImplEnv -> String -> List Mono -> Option ImplRow
 selectReturnRow sx env name goals = match ieSelectRowByMethod sx env name goals
   Some row => Some row
-  None => match methodIfaceHere sx.sxModule name
-    Some iface => determinedGoalInstance sx.sxModule iface goals
-    None => None
+  None => do
+    iface <- methodIfaceHere sx.sxModule name
+    determinedGoalInstance sx.sxModule iface goals
 
 -- The instance a boundary's determination committed [iface]'s goal [goals] to
 -- (`fileDeterminedRow`).  Selection by head constructor names nothing for a goal
@@ -2323,14 +2318,13 @@ concreteReqMatchByIface : SiteCtx ->
 -- so an impl in a later module contributes no `requires` and the goal reads as
 -- unroutable. The checker and the two element-dict route sites read this one registry;
 -- repointing this function alone produces an S0.
-concreteReqMatchByIface sx iface args =
-  match (ieSelectRowByIface
+concreteReqMatchByIface sx iface args = do
+  row <- ieSelectRowByIface
     sx
     sx.sxModule.mcCells.bodyImplEnvRef.value
     iface
-    args)
-    Some row => selectedRowReqMatch sx.sxModule args row
-    None => None
+    args
+  selectedRowReqMatch sx.sxModule args row
 
 firstReqMatch : ModuleCtx ->
   List (List Ty, List Require) ->

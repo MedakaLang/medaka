@@ -643,9 +643,9 @@ moduleInterfaceIdentity mi = intToString mi.miSerial
 
 export
 moduleCacheHit : ModuleKey -> Option ModuleInterface
-moduleCacheHit key = match omLookup key.mkModule moduleCacheRef.value.mcEntries
-  Some mi => if mi.miKeyText == moduleKeyText key then Some mi else None
-  None => None
+moduleCacheHit key = do
+  mi <- omLookup key.mkModule moduleCacheRef.value.mcEntries
+  if mi.miKeyText == moduleKeyText key then Some mi else None
 
 -- Keeps [mi] as its module's interface, replacing the one recorded before.
 export

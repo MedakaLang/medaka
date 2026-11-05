@@ -460,12 +460,11 @@ splitList name first later seen (t :: rest) =
    variable's occurrences are sent to two different grounds, which no single
    substitution does. -}
 nonInstance : List GTy -> Ty -> Option Ty
-nonInstance grounds ty = match repeatedVar ty
-  Some name =>
-    let ground = toTy (pick (groundsOf grounds) 0)
-    let split = fst (splitVar name ground (TC "List" [ground]) False ty)
-    Some (instanceAt (t => t) grounds split)
-  None => None
+nonInstance grounds ty = do
+  name <- repeatedVar ty
+  let ground = toTy (pick (groundsOf grounds) 0)
+  let split = fst (splitVar name ground (TC "List" [ground]) False ty)
+  Some (instanceAt (t => t) grounds split)
 
 topBinding : Shape -> String
 topBinding shape = "\{shapeSupport}g = \{shapeAt "x" shape}\n"

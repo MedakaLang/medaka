@@ -245,13 +245,12 @@ ctorFieldConflictHere : ModuleCtx ->
   RecordInfo ->
   String ->
   Option CtorFieldConflict
-ctorFieldConflictHere mctx te rname ri fname = match headTyconMono te
-  None => None
-  Some hk =>
-    if Some hk == headTyconMono (recordResultMono ri) then
-      ctorFieldConflict mctx hk fname rname
-    else
-      None
+ctorFieldConflictHere mctx te rname ri fname = do
+  hk <- headTyconMono te
+  if Some hk == headTyconMono (recordResultMono ri) then
+    ctorFieldConflict mctx hk fname rname
+  else
+    None
 
 ctorFieldConflict : ModuleCtx ->
   HeadKey ->
@@ -270,9 +269,9 @@ ctorFieldConflict mctx hk fname rname =
       _ => None
 
 ctorsOfHead : ModuleCtx -> HeadKey -> Option (List String)
-ctorsOfHead mctx hk = match ctorOracleKeyOf (Some hk)
-  None => None
-  Some tk => oGetCtors mctx.mcCells.matchOracle.value tk
+ctorsOfHead mctx hk = do
+  tk <- ctorOracleKeyOf (Some hk)
+  oGetCtors mctx.mcCells.matchOracle.value tk
 
 -- Each constructor that declares `fname`, with the field's index in that
 -- constructor's declaration-order field list — the index both emitters read —
@@ -290,9 +289,9 @@ ctorFieldSlot : ModuleCtx ->
   String ->
   String ->
   Option (String, Int, RecordInfo)
-ctorFieldSlot mctx hk fname k = match ctorRecordOfType mctx hk k
-  None => None
-  Some ri => map (i => (k, i, ri)) (elemIndex fname (recordFieldNames ri))
+ctorFieldSlot mctx hk fname k = do
+  ri <- ctorRecordOfType mctx hk k
+  map (i => (k, i, ri)) (elemIndex fname (recordFieldNames ri))
 
 firstSlotDisagreement : List (String, Int, RecordInfo) ->
   Option CtorFieldConflict
@@ -316,10 +315,9 @@ firstTypeDisagreement : GraphCtx ->
   List (String, Int, RecordInfo) ->
   Option CtorFieldConflict
 firstTypeDisagreement _gctx _ [] = None
-firstTypeDisagreement gctx fname ((a, _, ra) :: rest) =
-  match omLookup fname (recordFieldMap ra)
-    None => None
-    Some ta => typeOtherThan gctx fname a ra ta rest
+firstTypeDisagreement gctx fname ((a, _, ra) :: rest) = do
+  ta <- omLookup fname (recordFieldMap ra)
+  typeOtherThan gctx fname a ra ta rest
 
 typeOtherThan : GraphCtx ->
   String ->
@@ -579,9 +577,9 @@ lookupRecordForReceiver : ModuleCtx -> Mono -> String -> Option RecordInfo
 lookupRecordForReceiver mctx te r =
   match recordForReceiverIdent mctx.mcGraph te r
     Some ri => Some ri
-    None => match lookupRecordByName mctx r
-      Some ri => if recordOfOtherType te ri then None else Some ri
-      None => None
+    None => do
+      ri <- lookupRecordByName mctx r
+      if recordOfOtherType te ri then None else Some ri
 
 -- The floor answers by the record's NAME, and a program's own type may share a
 -- prelude record's name (#3465: a program's `RField` beside the prelude's).  A
@@ -608,12 +606,11 @@ recordOfOtherType te (RecordInfo _ _ res _ _) = match (
 -- an `Ident`).  A key with no companion row therefore pays one map lookup and
 -- allocates nothing at all.  Do not "simplify" by projecting the head first.
 recordForReceiverIdent : GraphCtx -> Mono -> String -> Option RecordInfo
-recordForReceiverIdent gctx te r =
-  match omLookup r (spRows gctx.crossRun.universeRecordPop.value)
-    None => None
-    Some cs => match receiverTypeIdent te
-      None => None
-      Some ident => recordCandForType ident cs
+recordForReceiverIdent gctx te r = do
+  cs <- omLookup r (spRows gctx.crossRun.universeRecordPop.value)
+  do
+    ident <- receiverTypeIdent te
+    recordCandForType ident cs
 
 -- ROUTED THROUGH `headTyconMono`, NOT A FRESH `Mono.TCon` PATTERN.  Reading
 -- the origin field directly here would add a second site to the `Mono.TCon`
@@ -629,9 +626,9 @@ receiverTypeWord te r = match headTyconMono te
   None => r
 
 receiverTypeIdent : Mono -> Option Ident
-receiverTypeIdent te = match headTyconMono te
-  Some hk => headKeyIdent hk
-  None => None
+receiverTypeIdent te = do
+  hk <- headTyconMono te
+  headKeyIdent hk
 
 recordCandForType : Ident ->
   List (Ident, String, RecordInfo) ->
@@ -855,16 +852,15 @@ ownerDeclOfReceiver : ModuleCtx ->
   List String ->
   Option (String, RecordInfo)
 ownerDeclOfReceiver _mctx _ _ [] = None
-ownerDeclOfReceiver mctx te fname owners = match receiverTypeIdent te
-  None => None
-  Some ident =>
-    match dedupBy fieldDeclTypeKey (ownerDeclMatches mctx.mcGraph ident owners)
-      [(k, ri)] =>
-        if narrowingBlockedByCtorSibling mctx (headTyconMono te) fname k then
-          None
-        else
-          Some (k, ri)
-      _ => None
+ownerDeclOfReceiver mctx te fname owners = do
+  ident <- receiverTypeIdent te
+  match dedupBy fieldDeclTypeKey (ownerDeclMatches mctx.mcGraph ident owners)
+    [(k, ri)] =>
+      if narrowingBlockedByCtorSibling mctx (headTyconMono te) fname k then
+        None
+      else
+        Some (k, ri)
+    _ => None
 
 -- Every owner key whose companion rows hold the declaration `ident` names, with
 -- that row's `RecordInfo`.
@@ -1020,10 +1016,9 @@ ctorSiblingWithholdingName : ModuleCtx ->
   String ->
   Option String
 ctorSiblingWithholdingName _mctx None _ _ = None
-ctorSiblingWithholdingName mctx (Some hk) fname survivorKey =
-  match ctorsOfHead mctx hk
-    None => None
-    Some ctors => firstCtorSiblingWithholding mctx hk fname survivorKey ctors
+ctorSiblingWithholdingName mctx (Some hk) fname survivorKey = do
+  ctors <- ctorsOfHead mctx hk
+  firstCtorSiblingWithholding mctx hk fname survivorKey ctors
 
 -- The reader's key mint for `matchOracle`'s `typeCtors`, and it is **not**
 -- `headTabOf`.  `typeCtors` is keyed by DECLARATION IDENTITY (`frontend/exhaust.mdk`,
@@ -1079,17 +1074,16 @@ ctorSiblingWithholds mctx hk fname k = match ctorRecordOfType mctx hk k
 ctorRecordOfType : ModuleCtx -> HeadKey -> String -> Option RecordInfo
 ctorRecordOfType mctx hk k = match ctorRecordFromCompanion mctx.mcGraph hk k
   Some ri => Some ri
-  None => match lookupRecordByName mctx k
-    Some ri =>
-      if recordCandIsReceiverDecl (Some hk) (k, ri) then Some ri else None
-    None => None
+  None => do
+    ri <- lookupRecordByName mctx k
+    if recordCandIsReceiverDecl (Some hk) (k, ri) then Some ri else None
 
 ctorRecordFromCompanion : GraphCtx -> HeadKey -> String -> Option RecordInfo
-ctorRecordFromCompanion gctx hk k = match headKeyIdent hk
-  None => None
-  Some ident => match omLookup k (spRows gctx.crossRun.universeRecordPop.value)
-    None => None
-    Some cs => recordCandForType ident cs
+ctorRecordFromCompanion gctx hk k = do
+  ident <- headKeyIdent hk
+  do
+    cs <- omLookup k (spRows gctx.crossRun.universeRecordPop.value)
+    recordCandForType ident cs
 
 -- Each owner key paired with its `RecordInfo`; a key with no entry is dropped
 -- rather than defaulted, so the filter above only ever sees real declarations.

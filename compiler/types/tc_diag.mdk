@@ -355,13 +355,12 @@ boundaryOwnsOpen mctx rigidIds i =
 -- select the wrong module's row; the worst a collision can do is offer
 -- applicable advice for the right reason under the wrong module's declaration.
 noImplHint : ModuleCtx -> String -> List Mono -> Option String
-noImplHint mctx iface [arg] = match headTyconNameMono arg
-  Some n =>
-    if derivableIface iface && headIsStdlibOwned mctx.mcGraph arg then
-      None
-    else
-      noImplHintFor mctx iface n
-  None => None
+noImplHint mctx iface [arg] = do
+  n <- headTyconNameMono arg
+  if derivableIface iface && headIsStdlibOwned mctx.mcGraph arg then
+    None
+  else
+    noImplHintFor mctx iface n
 noImplHint _mctx _ _ = None
 
 -- A type declared in a stdlib-owned module cannot take `deriving`, and an

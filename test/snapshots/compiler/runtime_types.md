@@ -167,9 +167,9 @@ binderRowIn None _ = None
 binderRowIn (Some table) (BinderId m i) = rowIn table m i
 
 rowIn : BinderTypeTable -> String -> Int -> Option BinderRow
-rowIn table m i = match get i table
-  None => None
-  Some row => match row.brId
+rowIn table m i = do
+  row <- get i table
+  match row.brId
     BinderId m2 _ =>
       if m2 == m then
         Some row
@@ -266,7 +266,7 @@ runtimeTypeFromName _ = None
 (DFunDef false "binderRowIn" ((PCon "None") PWild) (EVar "None"))
 (DFunDef false "binderRowIn" ((PCon "Some" (PVar "table")) (PCon "BinderId" (PVar "m") (PVar "i"))) (EApp (EApp (EApp (EVar "rowIn") (EVar "table")) (EVar "m")) (EVar "i")))
 (DTypeSig false "rowIn" (TyFun (TyCon "BinderTypeTable") (TyFun (TyCon "String") (TyFun (TyCon "Int") (TyApp (TyCon "Option") (TyCon "BinderRow"))))))
-(DFunDef false "rowIn" ((PVar "table") (PVar "m") (PVar "i")) (EMatch (EApp (EApp (EVar "get") (EVar "i")) (EVar "table")) (arm (PCon "None") () (EVar "None")) (arm (PCon "Some" (PVar "row")) () (EMatch (EFieldAccess (EVar "row") "brId") (arm (PCon "BinderId" (PVar "m2") PWild) () (EIf (EBinOp "==" (EVar "m2") (EVar "m")) (EApp (EVar "Some") (EVar "row")) (EApp (EVar "panic") (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "binder table: ")) (EApp (EVar "display") (EVar "m"))) (ELit (LString "#"))) (EApp (EVar "display") (EApp (EVar "intToString") (EVar "i")))) (ELit (LString " answered by module "))) (EApp (EVar "display") (EVar "m2"))) (ELit (LString ""))))))))))
+(DFunDef false "rowIn" ((PVar "table") (PVar "m") (PVar "i")) (EApp (EApp (EVar "andThen") (EApp (EApp (EVar "get") (EVar "i")) (EVar "table"))) (ELam ((PVar "row")) (EMatch (EFieldAccess (EVar "row") "brId") (arm (PCon "BinderId" (PVar "m2") PWild) () (EIf (EBinOp "==" (EVar "m2") (EVar "m")) (EApp (EVar "Some") (EVar "row")) (EApp (EVar "panic") (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "binder table: ")) (EApp (EVar "display") (EVar "m"))) (ELit (LString "#"))) (EApp (EVar "display") (EApp (EVar "intToString") (EVar "i")))) (ELit (LString " answered by module "))) (EApp (EVar "display") (EVar "m2"))) (ELit (LString ""))))))))))
 (DTypeSig true "runtimeTypeName" (TyFun (TyCon "RuntimeType") (TyCon "String")))
 (DFunDef false "runtimeTypeName" ((PCon "RTInt")) (ELit (LString "RTInt")))
 (DFunDef false "runtimeTypeName" ((PCon "RTFloat")) (ELit (LString "RTFloat")))
@@ -351,7 +351,7 @@ runtimeTypeFromName _ = None
 (DFunDef false "binderRowIn" ((PCon "None") PWild) (EVar "None"))
 (DFunDef false "binderRowIn" ((PCon "Some" (PVar "table")) (PCon "BinderId" (PVar "m") (PVar "i"))) (EApp (EApp (EApp (EVar "rowIn") (EVar "table")) (EVar "m")) (EVar "i")))
 (DTypeSig false "rowIn" (TyFun (TyCon "BinderTypeTable") (TyFun (TyCon "String") (TyFun (TyCon "Int") (TyApp (TyCon "Option") (TyCon "BinderRow"))))))
-(DFunDef false "rowIn" ((PVar "table") (PVar "m") (PVar "i")) (EMatch (EApp (EApp (EVar "get") (EVar "i")) (EVar "table")) (arm (PCon "None") () (EVar "None")) (arm (PCon "Some" (PVar "row")) () (EMatch (EFieldAccess (EVar "row") "brId") (arm (PCon "BinderId" (PVar "m2") PWild) () (EIf (EBinOp "==" (EVar "m2") (EVar "m")) (EApp (EVar "Some") (EVar "row")) (EApp (EVar "panic") (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "binder table: ")) (EApp (EMethodRef "display") (EVar "m"))) (ELit (LString "#"))) (EApp (EMethodRef "display") (EApp (EVar "intToString") (EVar "i")))) (ELit (LString " answered by module "))) (EApp (EMethodRef "display") (EVar "m2"))) (ELit (LString ""))))))))))
+(DFunDef false "rowIn" ((PVar "table") (PVar "m") (PVar "i")) (EApp (EApp (EMethodRef "andThen") (EApp (EApp (EVar "get") (EVar "i")) (EVar "table"))) (ELam ((PVar "row")) (EMatch (EFieldAccess (EVar "row") "brId") (arm (PCon "BinderId" (PVar "m2") PWild) () (EIf (EBinOp "==" (EVar "m2") (EVar "m")) (EApp (EVar "Some") (EVar "row")) (EApp (EVar "panic") (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "binder table: ")) (EApp (EMethodRef "display") (EVar "m"))) (ELit (LString "#"))) (EApp (EMethodRef "display") (EApp (EVar "intToString") (EVar "i")))) (ELit (LString " answered by module "))) (EApp (EMethodRef "display") (EVar "m2"))) (ELit (LString ""))))))))))
 (DTypeSig true "runtimeTypeName" (TyFun (TyCon "RuntimeType") (TyCon "String")))
 (DFunDef false "runtimeTypeName" ((PCon "RTInt")) (ELit (LString "RTInt")))
 (DFunDef false "runtimeTypeName" ((PCon "RTFloat")) (ELit (LString "RTFloat")))

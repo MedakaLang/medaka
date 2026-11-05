@@ -175,17 +175,15 @@ effectSiteOf : ModuleCtx ->
   Option Authority ->
   Option Loc
 effectSiteOf _mctx _ None _ = None
-effectSiteOf mctx fn (Some label) bound =
-  match omLookup (effectSiteKey fn label) mctx.mcCells.effectSitesRef.value
-    Some sites =>
-      let ordered = reverseL sites
-      let offending = match bound
-        Some hi => filterList (site => not (authSub (fst site) hi)) ordered
-        None => []
-      match offending ++ ordered
-        site :: _ => snd site
-        [] => None
-    None => None
+effectSiteOf mctx fn (Some label) bound = do
+  sites <- omLookup (effectSiteKey fn label) mctx.mcCells.effectSitesRef.value
+  let ordered = reverseL sites
+  let offending = match bound
+    Some hi => filterList (site => not (authSub (fst site) hi)) ordered
+    None => []
+  match offending ++ ordered
+    site :: _ => snd site
+    [] => None
 
 export
 beginEffectSummaryScope : ModuleCtx -> Unit -> Unit
@@ -370,9 +368,9 @@ reportEffectSummaryFailures outer (failure :: rest) =
 failureBound : SummaryFailure ObligationSite -> Option Authority
 failureBound failure = match failure.esfAuthority
   Some (_, hi) => Some hi
-  None => match failure.esfLabel
-    Some label => map atomAuth (findAtom label (fst (rowFlat failure.esfUpper)))
-    None => None
+  None => do
+    label <- failure.esfLabel
+    map atomAuth (findAtom label (fst (rowFlat failure.esfUpper)))
 
 reportRowFailure : ModuleCtx -> SummaryFailure ObligationSite -> Unit
 reportRowFailure mctx failure =

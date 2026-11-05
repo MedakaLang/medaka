@@ -1235,15 +1235,14 @@ declaredConstraintIds mctx name = match qualConstraintIds mctx name
       predicateSlotIdsAt name mctx.mcCells.funPredicateSlotsIdxRef.value
 
 qualConstraintIds : ModuleCtx -> String -> Option (List Int)
-qualConstraintIds mctx name = match qualConstraintKey mctx name
-  None => None
-  Some (src, origin) =>
-    map
-      predicateSlotIds
-      (lookupQualPayload
-        src
-        origin
-        mctx.mcGraph.crossRun.crossModuleFunPredicateSlotsQualRef.value)
+qualConstraintIds mctx name = do
+  (src, origin) <- qualConstraintKey mctx name
+  map
+    predicateSlotIds
+    (lookupQualPayload
+      src
+      origin
+      mctx.mcGraph.crossRun.crossModuleFunPredicateSlotsQualRef.value)
 
 export
 inferDictAtFound : ModuleCtx ->
@@ -2038,21 +2037,20 @@ recordMethodObligationGuarded env name s mono omitted =
     recordImplObligation env.teDyn.dcModule name mono omitted
 
 exactReturnRow : TcEnv -> String -> Scheme -> Option MethodSchemeRow
-exactReturnRow env name scheme = match lookupMethodRow env name
-  None => None
-  Some row =>
-    if lookupLocalFlag env name
-      || isMonoScheme scheme
-      || omHasKey name env.teDyn.dcModule.mcCells.definerShadowNamesRef.value
-      || omHasKey name env.teDyn.dcModule.mcCells.standaloneValuesRef.value
-      || isSome
-        (Scopes.enclosingDefaultBody
-          (currentScopeStore env.teDyn.dcModule.mcGraph ())
-          (captureScope env.teDyn.dcModule ()))
-      || listLen (methodAdmittedHere env.teDyn.dcModule name) >= 2 then
-      None
-    else
-      Some row
+exactReturnRow env name scheme = do
+  row <- lookupMethodRow env name
+  if lookupLocalFlag env name
+    || isMonoScheme scheme
+    || omHasKey name env.teDyn.dcModule.mcCells.definerShadowNamesRef.value
+    || omHasKey name env.teDyn.dcModule.mcCells.standaloneValuesRef.value
+    || isSome
+      (Scopes.enclosingDefaultBody
+        (currentScopeStore env.teDyn.dcModule.mcGraph ())
+        (captureScope env.teDyn.dcModule ()))
+    || listLen (methodAdmittedHere env.teDyn.dcModule name) >= 2 then
+    None
+  else
+    Some row
 
 export
 recordMethodObligationOwned : TcEnv ->

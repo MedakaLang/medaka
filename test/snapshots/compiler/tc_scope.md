@@ -556,9 +556,9 @@ dispatchIdxScoped : ModuleCtx ->
   String ->
   List ((IfaceRef, String), Int) ->
   Option Int
-dispatchIdxScoped mctx name byId = match methodIfaceHere mctx name
-  None => None
-  Some iface => lookupIdxById iface (originMethodName mctx name) byId
+dispatchIdxScoped mctx name byId = do
+  iface <- methodIfaceHere mctx name
+  lookupIdxById iface (originMethodName mctx name) byId
 
 -- The impl-existence test uses graph-global semantics: it ranges over EVERY module of
 -- the loaded graph (SHADOW-SEMANTICS.md:226), never filtered by what the querying
@@ -1489,9 +1489,9 @@ admittedSchemeFor : ModuleCtx ->
 -- `dispatchIdxScoped` carries — an alias-qualified occurrence resolves its interface
 -- from the spelling and its row from the origin.  Both projections are read HERE, off
 -- the one name, so they cannot be given two different scopes.
-admittedSchemeFor mctx n byId = match methodEntryHere mctx n
-  None => None
-  Some (iface, _, _, _) => lookupSchemeById iface (originMethodName mctx n) byId
+admittedSchemeFor mctx n byId = do
+  (iface, _, _, _) <- methodEntryHere mctx n
+  lookupSchemeById iface (originMethodName mctx n) byId
 
 export
 schemeOblEntriesFor : String ->
@@ -1868,7 +1868,7 @@ importedIfaceRows idx (_ :: rest) = importedIfaceRows idx rest
 (DTypeSig true "argDispatchOf" (TyFun (TyCon "ModuleCtx") (TyFun (TyCon "String") (TyApp (TyCon "Option") (TyCon "Int")))))
 (DFunDef false "argDispatchOf" ((PVar "mctx") (PVar "name")) (EApp (EApp (EApp (EVar "dispatchIdxScoped") (EVar "mctx")) (EVar "name")) (EFieldAccess (EFieldAccess (EFieldAccess (EVar "mctx") "mcGraph") "argDispatchIdxByIdRef") "value")))
 (DTypeSig false "dispatchIdxScoped" (TyFun (TyCon "ModuleCtx") (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyTuple (TyTuple (TyCon "IfaceRef") (TyCon "String")) (TyCon "Int"))) (TyApp (TyCon "Option") (TyCon "Int"))))))
-(DFunDef false "dispatchIdxScoped" ((PVar "mctx") (PVar "name") (PVar "byId")) (EMatch (EApp (EApp (EVar "methodIfaceHere") (EVar "mctx")) (EVar "name")) (arm (PCon "None") () (EVar "None")) (arm (PCon "Some" (PVar "iface")) () (EApp (EApp (EApp (EVar "lookupIdxById") (EVar "iface")) (EApp (EApp (EVar "originMethodName") (EVar "mctx")) (EVar "name"))) (EVar "byId")))))
+(DFunDef false "dispatchIdxScoped" ((PVar "mctx") (PVar "name") (PVar "byId")) (EApp (EApp (EVar "andThen") (EApp (EApp (EVar "methodIfaceHere") (EVar "mctx")) (EVar "name"))) (ELam ((PVar "iface")) (EApp (EApp (EApp (EVar "lookupIdxById") (EVar "iface")) (EApp (EApp (EVar "originMethodName") (EVar "mctx")) (EVar "name"))) (EVar "byId")))))
 (DTypeSig true "ieImplExistsForHead" (TyFun (TyCon "ModuleCtx") (TyFun (TyCon "ImplEnv") (TyFun (TyCon "String") (TyFun (TyCon "HeadKey") (TyCon "Bool"))))))
 (DFunDef false "ieImplExistsForHead" ((PVar "mctx") (PVar "env") (PVar "name") (PVar "hk")) (EApp (EApp (EApp (EApp (EApp (EVar "ieImplExistsForHeadOf") (EVar "mctx")) (EVar "env")) (EVar "name")) (EVar "hk")) (EApp (EApp (EVar "methodAdmissionHere") (EVar "mctx")) (EVar "name"))))
 (DTypeSig true "admittedIfaceWord" (TyFun (TyCon "ModuleCtx") (TyFun (TyCon "String") (TyCon "String"))))
@@ -2027,7 +2027,7 @@ importedIfaceRows idx (_ :: rest) = importedIfaceRows idx rest
 (DTypeSig false "admittedRowFor" (TyFun (TyCon "ModuleCtx") (TyFun (TyCon "String") (TyFun (TyApp (TyCon "Registry") (TyCon "MethodSchemeRow")) (TyApp (TyCon "Option") (TyCon "MethodSchemeRow"))))))
 (DFunDef false "admittedRowFor" ((PVar "mctx") (PVar "n") (PVar "byId")) (EIf (EBinOp ">=" (EApp (EVar "listLen") (EApp (EApp (EVar "methodAdmittedHere") (EVar "mctx")) (EVar "n"))) (ELit (LInt 2))) (EVar "None") (EApp (EApp (EVar "andThen") (EApp (EApp (EVar "methodEntryHere") (EVar "mctx")) (EVar "n"))) (ELam ((PVar "__do_x")) (EMatch (EVar "__do_x") (arm (PTuple (PVar "iface") PWild PWild PWild) () (EApp (EApp (EVar "andThen") (EApp (EApp (EApp (EVar "lookupMethodRowById") (EVar "iface")) (EApp (EApp (EVar "originMethodName") (EVar "mctx")) (EVar "n"))) (EVar "byId"))) (ELam ((PVar "row")) (EIf (EApp (EVar "methodRowCanCarry") (EVar "row")) (EApp (EVar "Some") (EVar "row")) (EVar "None"))))))))))
 (DTypeSig false "admittedSchemeFor" (TyFun (TyCon "ModuleCtx") (TyFun (TyCon "String") (TyFun (TyApp (TyCon "Registry") (TyCon "MethodSchemeRow")) (TyApp (TyCon "Option") (TyCon "Scheme"))))))
-(DFunDef false "admittedSchemeFor" ((PVar "mctx") (PVar "n") (PVar "byId")) (EMatch (EApp (EApp (EVar "methodEntryHere") (EVar "mctx")) (EVar "n")) (arm (PCon "None") () (EVar "None")) (arm (PCon "Some" (PTuple (PVar "iface") PWild PWild PWild)) () (EApp (EApp (EApp (EVar "lookupSchemeById") (EVar "iface")) (EApp (EApp (EVar "originMethodName") (EVar "mctx")) (EVar "n"))) (EVar "byId")))))
+(DFunDef false "admittedSchemeFor" ((PVar "mctx") (PVar "n") (PVar "byId")) (EApp (EApp (EVar "andThen") (EApp (EApp (EVar "methodEntryHere") (EVar "mctx")) (EVar "n"))) (ELam ((PVar "__do_x")) (EMatch (EVar "__do_x") (arm (PTuple (PVar "iface") PWild PWild PWild) () (EApp (EApp (EApp (EVar "lookupSchemeById") (EVar "iface")) (EApp (EApp (EVar "originMethodName") (EVar "mctx")) (EVar "n"))) (EVar "byId")))))))
 (DTypeSig true "schemeOblEntriesFor" (TyFun (TyCon "String") (TyFun (TyCon "UsePath") (TyFun (TyApp (TyCon "List") (TyTuple (TyTuple (TyCon "String") (TyCon "String")) (TyApp (TyCon "List") (TyCon "VecObl")))) (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "VecObl"))))))))
 (DFunDef false "schemeOblEntriesFor" ((PVar "mid") (PCon "UseAlias" PWild (PVar "a")) (PVar "qual")) (EApp (EApp (EVar "flatMap") (EApp (EApp (EVar "moduleAliasEntry") (EVar "mid")) (EVar "a"))) (EVar "qual")))
 (DFunDef false "schemeOblEntriesFor" ((PVar "mid") (PCon "UseWild" PWild) (PVar "qual")) (EApp (EApp (EVar "flatMap") (EApp (EVar "wildSchemeOblEntry") (EVar "mid"))) (EVar "qual")))
@@ -2180,7 +2180,7 @@ importedIfaceRows idx (_ :: rest) = importedIfaceRows idx rest
 (DTypeSig true "argDispatchOf" (TyFun (TyCon "ModuleCtx") (TyFun (TyCon "String") (TyApp (TyCon "Option") (TyCon "Int")))))
 (DFunDef false "argDispatchOf" ((PVar "mctx") (PVar "name")) (EApp (EApp (EApp (EVar "dispatchIdxScoped") (EVar "mctx")) (EVar "name")) (EFieldAccess (EFieldAccess (EFieldAccess (EVar "mctx") "mcGraph") "argDispatchIdxByIdRef") "value")))
 (DTypeSig false "dispatchIdxScoped" (TyFun (TyCon "ModuleCtx") (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyTuple (TyTuple (TyCon "IfaceRef") (TyCon "String")) (TyCon "Int"))) (TyApp (TyCon "Option") (TyCon "Int"))))))
-(DFunDef false "dispatchIdxScoped" ((PVar "mctx") (PVar "name") (PVar "byId")) (EMatch (EApp (EApp (EVar "methodIfaceHere") (EVar "mctx")) (EVar "name")) (arm (PCon "None") () (EVar "None")) (arm (PCon "Some" (PVar "iface")) () (EApp (EApp (EApp (EVar "lookupIdxById") (EVar "iface")) (EApp (EApp (EVar "originMethodName") (EVar "mctx")) (EVar "name"))) (EVar "byId")))))
+(DFunDef false "dispatchIdxScoped" ((PVar "mctx") (PVar "name") (PVar "byId")) (EApp (EApp (EMethodRef "andThen") (EApp (EApp (EVar "methodIfaceHere") (EVar "mctx")) (EVar "name"))) (ELam ((PVar "iface")) (EApp (EApp (EApp (EVar "lookupIdxById") (EVar "iface")) (EApp (EApp (EVar "originMethodName") (EVar "mctx")) (EVar "name"))) (EVar "byId")))))
 (DTypeSig true "ieImplExistsForHead" (TyFun (TyCon "ModuleCtx") (TyFun (TyCon "ImplEnv") (TyFun (TyCon "String") (TyFun (TyCon "HeadKey") (TyCon "Bool"))))))
 (DFunDef false "ieImplExistsForHead" ((PVar "mctx") (PVar "env") (PVar "name") (PVar "hk")) (EApp (EApp (EApp (EApp (EApp (EVar "ieImplExistsForHeadOf") (EVar "mctx")) (EVar "env")) (EVar "name")) (EVar "hk")) (EApp (EApp (EVar "methodAdmissionHere") (EVar "mctx")) (EVar "name"))))
 (DTypeSig true "admittedIfaceWord" (TyFun (TyCon "ModuleCtx") (TyFun (TyCon "String") (TyCon "String"))))
@@ -2339,7 +2339,7 @@ importedIfaceRows idx (_ :: rest) = importedIfaceRows idx rest
 (DTypeSig false "admittedRowFor" (TyFun (TyCon "ModuleCtx") (TyFun (TyCon "String") (TyFun (TyApp (TyCon "Registry") (TyCon "MethodSchemeRow")) (TyApp (TyCon "Option") (TyCon "MethodSchemeRow"))))))
 (DFunDef false "admittedRowFor" ((PVar "mctx") (PVar "n") (PVar "byId")) (EIf (EBinOp ">=" (EApp (EVar "listLen") (EApp (EApp (EVar "methodAdmittedHere") (EVar "mctx")) (EVar "n"))) (ELit (LInt 2))) (EVar "None") (EApp (EApp (EMethodRef "andThen") (EApp (EApp (EVar "methodEntryHere") (EVar "mctx")) (EVar "n"))) (ELam ((PVar "__do_x")) (EMatch (EVar "__do_x") (arm (PTuple (PVar "iface") PWild PWild PWild) () (EApp (EApp (EMethodRef "andThen") (EApp (EApp (EApp (EVar "lookupMethodRowById") (EVar "iface")) (EApp (EApp (EVar "originMethodName") (EVar "mctx")) (EVar "n"))) (EVar "byId"))) (ELam ((PVar "row")) (EIf (EApp (EVar "methodRowCanCarry") (EVar "row")) (EApp (EVar "Some") (EVar "row")) (EVar "None"))))))))))
 (DTypeSig false "admittedSchemeFor" (TyFun (TyCon "ModuleCtx") (TyFun (TyCon "String") (TyFun (TyApp (TyCon "Registry") (TyCon "MethodSchemeRow")) (TyApp (TyCon "Option") (TyCon "Scheme"))))))
-(DFunDef false "admittedSchemeFor" ((PVar "mctx") (PVar "n") (PVar "byId")) (EMatch (EApp (EApp (EVar "methodEntryHere") (EVar "mctx")) (EVar "n")) (arm (PCon "None") () (EVar "None")) (arm (PCon "Some" (PTuple (PVar "iface") PWild PWild PWild)) () (EApp (EApp (EApp (EVar "lookupSchemeById") (EVar "iface")) (EApp (EApp (EVar "originMethodName") (EVar "mctx")) (EVar "n"))) (EVar "byId")))))
+(DFunDef false "admittedSchemeFor" ((PVar "mctx") (PVar "n") (PVar "byId")) (EApp (EApp (EMethodRef "andThen") (EApp (EApp (EVar "methodEntryHere") (EVar "mctx")) (EVar "n"))) (ELam ((PVar "__do_x")) (EMatch (EVar "__do_x") (arm (PTuple (PVar "iface") PWild PWild PWild) () (EApp (EApp (EApp (EVar "lookupSchemeById") (EVar "iface")) (EApp (EApp (EVar "originMethodName") (EVar "mctx")) (EVar "n"))) (EVar "byId")))))))
 (DTypeSig true "schemeOblEntriesFor" (TyFun (TyCon "String") (TyFun (TyCon "UsePath") (TyFun (TyApp (TyCon "List") (TyTuple (TyTuple (TyCon "String") (TyCon "String")) (TyApp (TyCon "List") (TyCon "VecObl")))) (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "VecObl"))))))))
 (DFunDef false "schemeOblEntriesFor" ((PVar "mid") (PCon "UseAlias" PWild (PVar "a")) (PVar "qual")) (EApp (EApp (EDictApp "flatMap") (EApp (EApp (EVar "moduleAliasEntry") (EVar "mid")) (EVar "a"))) (EVar "qual")))
 (DFunDef false "schemeOblEntriesFor" ((PVar "mid") (PCon "UseWild" PWild) (PVar "qual")) (EApp (EApp (EDictApp "flatMap") (EApp (EVar "wildSchemeOblEntry") (EVar "mid"))) (EVar "qual")))

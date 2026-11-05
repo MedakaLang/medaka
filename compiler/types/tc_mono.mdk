@@ -332,9 +332,9 @@ xmodOblArgId m = match normalize m
 export
 substOblArgs : List Int -> List Mono -> List (Int, Mono) -> Option (List Mono)
 substOblArgs _ [] _ = Some []
-substOblArgs ids (m :: rest) subst = match substOblArg ids m subst
-  None => None
-  Some m2 => map (m2 :: _) (substOblArgs ids rest subst)
+substOblArgs ids (m :: rest) subst = do
+  m2 <- substOblArg ids m subst
+  map (m2 :: _) (substOblArgs ids rest subst)
 
 -- ONE predicate argument under [subst]: every tyvar leaf mapped, structure preserved.
 substOblArg : List Int -> Mono -> List (Int, Mono) -> Option Mono
@@ -343,21 +343,21 @@ substOblArg ids m subst = match normalize m
     Some m2 => Some m2
     None => if containsI (tyvarId cell) ids then None else Some (TVar cell)
   TQual a q => map (a2 => TQual a2 q) (substOblArg ids a subst)
-  TApp a b => match substOblArg ids a subst
-    None => None
-    Some a2 => map (b2 => TApp a2 b2) (substOblArg ids b subst)
-  TFun a eff b => match substOblArg ids a subst
-    None => None
-    Some a2 => map (b2 => TFun a2 eff b2) (substOblArg ids b subst)
+  TApp a b => do
+    a2 <- substOblArg ids a subst
+    map (b2 => TApp a2 b2) (substOblArg ids b subst)
+  TFun a eff b => do
+    a2 <- substOblArg ids a subst
+    map (b2 => TFun a2 eff b2) (substOblArg ids b subst)
   other => Some other
 
 -- the monos [ids] map to under [subst], in order; None if any id is unmapped.
 export
 substMonos : List Int -> List (Int, Mono) -> Option (List Mono)
 substMonos [] _ = Some []
-substMonos (id :: rest) subst = match lookupAssocI id subst
-  Some mono => map (mono :: _) (substMonos rest subst)
-  None => None
+substMonos (id :: rest) subst = do
+  mono <- lookupAssocI id subst
+  map (mono :: _) (substMonos rest subst)
 
 -- the k-th domain of a (possibly curried) function type; `nthFunDomain 0` is the
 -- receiver of an index-0 dispatch.
@@ -973,11 +973,10 @@ stripArrows t = t
 -- nothing either, so there the key already IS the emitted name.
 export
 recordOwnerModule : RecordInfo -> Option String
-recordOwnerModule ri = match headTyconMono (recordResultMono ri)
-  None => None
-  Some hk => match headKeyIdent hk
-    None => None
-    Some (Ident _ io _) => identOriginFold None (mid => Some mid) io
+recordOwnerModule ri = do
+  hk <- headTyconMono (recordResultMono ri)
+  (Ident _ io _) <- headKeyIdent hk
+  identOriginFold None (mid => Some mid) io
 
 export
 rowSame : EffRow -> EffRow -> Bool
@@ -1100,9 +1099,9 @@ monoIsTyvarId m id = match normalize m
 -- `match headMonoNode` arm set here is one more the next person would forget.
 export
 matchCol0Type : Mono -> Option TabKey
-matchCol0Type ty = match headTyconNameMono ty
-  None => None
-  Some n => match headTyconMono ty
+matchCol0Type ty = do
+  n <- headTyconNameMono ty
+  match headTyconMono ty
     Some (HkDecl k) => Some k
     Some (HkRigid _) => Some (TkBare NsType n)
     None => Some (TkBare NsType n)

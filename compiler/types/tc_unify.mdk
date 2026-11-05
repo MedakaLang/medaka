@@ -1369,9 +1369,9 @@ ordinaryBoundFailureMsg mctx name label lower lo hi upper =
 -- ([key]).
 binderLabel : ModuleCtx -> String -> String -> Option String -> Option String
 binderLabel mctx fn n key =
-  let written = match omLookup fn mctx.mcCells.sigTyMapRef.value
-    Some ty => binderLabelIn mctx n ty
-    None => None
+  let written = do
+    ty <- omLookup fn mctx.mcCells.sigTyMapRef.value
+    binderLabelIn mctx n ty
   orElseOpt written (map labelKeyName key)
 
 -- The label a signature writes binder [n] under: its written domain
@@ -1567,9 +1567,9 @@ typeMismatch dyn a b =
 
 -- The do-chain a mismatch is blamed on: none once a report has been made for it.
 activeDo : DynCtx -> Option DoCtx
-activeDo dyn = match dyn.dcDo
-  Some doCtx => if doCtx.doReported.value then None else Some doCtx
-  None => None
+activeDo dyn = do
+  doCtx <- dyn.dcDo
+  if doCtx.doReported.value then None else Some doCtx
 
 typeMismatchReport : DynCtx -> Mono -> Mono -> Unit
 typeMismatchReport dyn a b = match dyn.dcMethodMismatch
@@ -1682,23 +1682,22 @@ typeMismatchReportRest dyn a b = match activeDo dyn
 -- wildcard, not shadowed by the module's own definition of `name`, and not a
 -- user module (whose names are the author's own business).
 importedCalleeHelp : DynCtx -> Option String
-importedCalleeHelp dyn = match dyn.dcCallee
-  None => None
-  Some name =>
-    let cells = dyn.dcModule.mcCells
-    let decls = match cells.methodScopeCtxRef.value
-      Some (ds, _) => ds
-      None => []
-    let plain =
-      omLookup name cells.currentImportOriginsRef.value == Some name
-        && importsByName name decls
-        && not (elem name (declTopFnNames decls))
-    let owned = dyn.dcModule.mcGraph.config.value.tcStdlibOwned
-    match omLookup name cells.currentImportDefinersRef.value
-      Some mid if plain && omHasKey mid owned =>
-        Some
-          "`\{name}` here is `\{mid}.\{name}` (selectively imported from `\{mid}`); an unqualified `\{name}` from any other module needs its own import"
-      _ => None
+importedCalleeHelp dyn = do
+  name <- dyn.dcCallee
+  let cells = dyn.dcModule.mcCells
+  let decls = match cells.methodScopeCtxRef.value
+    Some (ds, _) => ds
+    None => []
+  let plain =
+    omLookup name cells.currentImportOriginsRef.value == Some name
+      && importsByName name decls
+      && not (elem name (declTopFnNames decls))
+  let owned = dyn.dcModule.mcGraph.config.value.tcStdlibOwned
+  match omLookup name cells.currentImportDefinersRef.value
+    Some mid if plain && omHasKey mid owned =>
+      Some
+        "`\{name}` here is `\{mid}.\{name}` (selectively imported from `\{mid}`); an unqualified `\{name}` from any other module needs its own import"
+    _ => None
 
 -- Some `import m.{..}` of [decls] lists [name] with no alias.
 importsByName : String -> List Decl -> Bool
@@ -2094,15 +2093,14 @@ unifyAll dyn t (x :: xs) =
 -- or that name owns no qual ids entry.
 export
 qualConstraintDecl : ModuleCtx -> String -> Option CDeclared
-qualConstraintDecl mctx name = match qualConstraintKey mctx name
-  None => None
-  Some (src, origin) =>
-    map
-      (slots => qualDeclOf mctx.mcGraph src origin slots)
-      (lookupQualPayload
-        src
-        origin
-        mctx.mcGraph.crossRun.crossModuleFunPredicateSlotsQualRef.value)
+qualConstraintDecl mctx name = do
+  (src, origin) <- qualConstraintKey mctx name
+  map
+    (slots => qualDeclOf mctx.mcGraph src origin slots)
+    (lookupQualPayload
+      src
+      origin
+      mctx.mcGraph.crossRun.crossModuleFunPredicateSlotsQualRef.value)
 
 qualDeclOf : GraphCtx -> String -> String -> List PredicateSlot -> CDeclared
 qualDeclOf gctx src origin stored =

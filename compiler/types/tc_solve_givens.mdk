@@ -145,22 +145,20 @@ scalarGivenProjection : GraphCtx ->
   IfaceRef ->
   ScopeId ->
   Option (List Int)
-scalarGivenProjection gctx binder goalIface useScope =
-  match directGivenIfaceOf binder (givensForScope gctx useScope)
-    None => None
-    Some declared =>
-      if declared.irName == goalIface.irName then
-        None
-      else
-        map
-          (n => drop 1 n.superPath)
-          (find
-            (n => n.superIface.irName == goalIface.irName)
-            (superClosure
-              (superLookup gctx)
-              (_ _ _ => Some ())
-              (ir _ => regKeyRender (regKeyOfTab (oblIfaceKey ir)))
-              [(declared, ())]))
+scalarGivenProjection gctx binder goalIface useScope = do
+  declared <- directGivenIfaceOf binder (givensForScope gctx useScope)
+  if declared.irName == goalIface.irName then
+    None
+  else
+    map
+      (n => drop 1 n.superPath)
+      (find
+        (n => n.superIface.irName == goalIface.irName)
+        (superClosure
+          (superLookup gctx)
+          (_ _ _ => Some ())
+          (ir _ => regKeyRender (regKeyOfTab (oblIfaceKey ir)))
+          [(declared, ())]))
 
 -- Whether the tyvar-keyed binder [binder] can answer a goal of [goalIface]: its own
 -- predicate is the goal's interface or has it as a superclass.  A binder with no
@@ -744,10 +742,9 @@ activeDictPredOf gctx request targetMono useScope =
   let preds = givensForScope gctx useScope
   match request.prArgs
     PSArgsKnown _ => firstPredForEncl gctx request useScope preds
-    PSArgsUnknown => match predicateTargetId targetMono
-      Some target =>
-        firstPredForEnclAt gctx GSPredicateOnly target request useScope preds
-      None => None
+    PSArgsUnknown => do
+      target <- predicateTargetId targetMono
+      firstPredForEnclAt gctx GSPredicateOnly target request useScope preds
 
 predicateTargetId : Mono -> Option Int
 predicateTargetId m = match peelQual m

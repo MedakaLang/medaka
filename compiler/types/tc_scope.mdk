@@ -552,9 +552,9 @@ dispatchIdxScoped : ModuleCtx ->
   String ->
   List ((IfaceRef, String), Int) ->
   Option Int
-dispatchIdxScoped mctx name byId = match methodIfaceHere mctx name
-  None => None
-  Some iface => lookupIdxById iface (originMethodName mctx name) byId
+dispatchIdxScoped mctx name byId = do
+  iface <- methodIfaceHere mctx name
+  lookupIdxById iface (originMethodName mctx name) byId
 
 -- The impl-existence test uses graph-global semantics: it ranges over EVERY module of
 -- the loaded graph (SHADOW-SEMANTICS.md:226), never filtered by what the querying
@@ -1485,9 +1485,9 @@ admittedSchemeFor : ModuleCtx ->
 -- `dispatchIdxScoped` carries — an alias-qualified occurrence resolves its interface
 -- from the spelling and its row from the origin.  Both projections are read HERE, off
 -- the one name, so they cannot be given two different scopes.
-admittedSchemeFor mctx n byId = match methodEntryHere mctx n
-  None => None
-  Some (iface, _, _, _) => lookupSchemeById iface (originMethodName mctx n) byId
+admittedSchemeFor mctx n byId = do
+  (iface, _, _, _) <- methodEntryHere mctx n
+  lookupSchemeById iface (originMethodName mctx n) byId
 
 export
 schemeOblEntriesFor : String ->

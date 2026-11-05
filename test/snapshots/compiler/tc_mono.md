@@ -1,5 +1,5 @@
 # META
-source_lines=2266
+source_lines=2265
 stages=DESUGAR,MARK
 # SOURCE
 -- tc_mono: operations over `Mono`/`Scheme`, pure except for minting effect-variable ids from the
@@ -336,9 +336,9 @@ xmodOblArgId m = match normalize m
 export
 substOblArgs : List Int -> List Mono -> List (Int, Mono) -> Option (List Mono)
 substOblArgs _ [] _ = Some []
-substOblArgs ids (m :: rest) subst = match substOblArg ids m subst
-  None => None
-  Some m2 => map (m2 :: _) (substOblArgs ids rest subst)
+substOblArgs ids (m :: rest) subst = do
+  m2 <- substOblArg ids m subst
+  map (m2 :: _) (substOblArgs ids rest subst)
 
 -- ONE predicate argument under [subst]: every tyvar leaf mapped, structure preserved.
 substOblArg : List Int -> Mono -> List (Int, Mono) -> Option Mono
@@ -347,21 +347,21 @@ substOblArg ids m subst = match normalize m
     Some m2 => Some m2
     None => if containsI (tyvarId cell) ids then None else Some (TVar cell)
   TQual a q => map (a2 => TQual a2 q) (substOblArg ids a subst)
-  TApp a b => match substOblArg ids a subst
-    None => None
-    Some a2 => map (b2 => TApp a2 b2) (substOblArg ids b subst)
-  TFun a eff b => match substOblArg ids a subst
-    None => None
-    Some a2 => map (b2 => TFun a2 eff b2) (substOblArg ids b subst)
+  TApp a b => do
+    a2 <- substOblArg ids a subst
+    map (b2 => TApp a2 b2) (substOblArg ids b subst)
+  TFun a eff b => do
+    a2 <- substOblArg ids a subst
+    map (b2 => TFun a2 eff b2) (substOblArg ids b subst)
   other => Some other
 
 -- the monos [ids] map to under [subst], in order; None if any id is unmapped.
 export
 substMonos : List Int -> List (Int, Mono) -> Option (List Mono)
 substMonos [] _ = Some []
-substMonos (id :: rest) subst = match lookupAssocI id subst
-  Some mono => map (mono :: _) (substMonos rest subst)
-  None => None
+substMonos (id :: rest) subst = do
+  mono <- lookupAssocI id subst
+  map (mono :: _) (substMonos rest subst)
 
 -- the k-th domain of a (possibly curried) function type; `nthFunDomain 0` is the
 -- receiver of an index-0 dispatch.
@@ -977,11 +977,10 @@ stripArrows t = t
 -- nothing either, so there the key already IS the emitted name.
 export
 recordOwnerModule : RecordInfo -> Option String
-recordOwnerModule ri = match headTyconMono (recordResultMono ri)
-  None => None
-  Some hk => match headKeyIdent hk
-    None => None
-    Some (Ident _ io _) => identOriginFold None (mid => Some mid) io
+recordOwnerModule ri = do
+  hk <- headTyconMono (recordResultMono ri)
+  (Ident _ io _) <- headKeyIdent hk
+  identOriginFold None (mid => Some mid) io
 
 export
 rowSame : EffRow -> EffRow -> Bool
@@ -1104,9 +1103,9 @@ monoIsTyvarId m id = match normalize m
 -- `match headMonoNode` arm set here is one more the next person would forget.
 export
 matchCol0Type : Mono -> Option TabKey
-matchCol0Type ty = match headTyconNameMono ty
-  None => None
-  Some n => match headTyconMono ty
+matchCol0Type ty = do
+  n <- headTyconNameMono ty
+  match headTyconMono ty
     Some (HkDecl k) => Some k
     Some (HkRigid _) => Some (TkBare NsType n)
     None => Some (TkBare NsType n)
@@ -2356,12 +2355,12 @@ implDeclWithReqs _ = []
 (DFunDef false "xmodOblArgId" ((PVar "m")) (EMatch (EApp (EVar "normalize") (EVar "m")) (arm (PCon "TVar" (PVar "cell")) () (EListLit (EApp (EVar "tyvarId") (EVar "cell")))) (arm PWild () (EApp (EVar "monoTyvarIds") (EVar "m")))))
 (DTypeSig true "substOblArgs" (TyFun (TyApp (TyCon "List") (TyCon "Int")) (TyFun (TyApp (TyCon "List") (TyCon "Mono")) (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "Int") (TyCon "Mono"))) (TyApp (TyCon "Option") (TyApp (TyCon "List") (TyCon "Mono")))))))
 (DFunDef false "substOblArgs" (PWild (PList) PWild) (EApp (EVar "Some") (EListLit)))
-(DFunDef false "substOblArgs" ((PVar "ids") (PCons (PVar "m") (PVar "rest")) (PVar "subst")) (EMatch (EApp (EApp (EApp (EVar "substOblArg") (EVar "ids")) (EVar "m")) (EVar "subst")) (arm (PCon "None") () (EVar "None")) (arm (PCon "Some" (PVar "m2")) () (EApp (EApp (EVar "map") (ELam ((PVar "_s")) (EBinOp "::" (EVar "m2") (EVar "_s")))) (EApp (EApp (EApp (EVar "substOblArgs") (EVar "ids")) (EVar "rest")) (EVar "subst"))))))
+(DFunDef false "substOblArgs" ((PVar "ids") (PCons (PVar "m") (PVar "rest")) (PVar "subst")) (EApp (EApp (EVar "andThen") (EApp (EApp (EApp (EVar "substOblArg") (EVar "ids")) (EVar "m")) (EVar "subst"))) (ELam ((PVar "m2")) (EApp (EApp (EVar "map") (ELam ((PVar "_s")) (EBinOp "::" (EVar "m2") (EVar "_s")))) (EApp (EApp (EApp (EVar "substOblArgs") (EVar "ids")) (EVar "rest")) (EVar "subst"))))))
 (DTypeSig false "substOblArg" (TyFun (TyApp (TyCon "List") (TyCon "Int")) (TyFun (TyCon "Mono") (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "Int") (TyCon "Mono"))) (TyApp (TyCon "Option") (TyCon "Mono"))))))
-(DFunDef false "substOblArg" ((PVar "ids") (PVar "m") (PVar "subst")) (EMatch (EApp (EVar "normalize") (EVar "m")) (arm (PCon "TVar" (PVar "cell")) () (EMatch (EApp (EApp (EVar "lookupAssocI") (EApp (EVar "tyvarId") (EVar "cell"))) (EVar "subst")) (arm (PCon "Some" (PVar "m2")) () (EApp (EVar "Some") (EVar "m2"))) (arm (PCon "None") () (EIf (EApp (EApp (EVar "containsI") (EApp (EVar "tyvarId") (EVar "cell"))) (EVar "ids")) (EVar "None") (EApp (EVar "Some") (EApp (EVar "TVar") (EVar "cell"))))))) (arm (PCon "TQual" (PVar "a") (PVar "q")) () (EApp (EApp (EVar "map") (ELam ((PVar "a2")) (EApp (EApp (EVar "TQual") (EVar "a2")) (EVar "q")))) (EApp (EApp (EApp (EVar "substOblArg") (EVar "ids")) (EVar "a")) (EVar "subst")))) (arm (PCon "TApp" (PVar "a") (PVar "b")) () (EMatch (EApp (EApp (EApp (EVar "substOblArg") (EVar "ids")) (EVar "a")) (EVar "subst")) (arm (PCon "None") () (EVar "None")) (arm (PCon "Some" (PVar "a2")) () (EApp (EApp (EVar "map") (ELam ((PVar "b2")) (EApp (EApp (EVar "TApp") (EVar "a2")) (EVar "b2")))) (EApp (EApp (EApp (EVar "substOblArg") (EVar "ids")) (EVar "b")) (EVar "subst")))))) (arm (PCon "TFun" (PVar "a") (PVar "eff") (PVar "b")) () (EMatch (EApp (EApp (EApp (EVar "substOblArg") (EVar "ids")) (EVar "a")) (EVar "subst")) (arm (PCon "None") () (EVar "None")) (arm (PCon "Some" (PVar "a2")) () (EApp (EApp (EVar "map") (ELam ((PVar "b2")) (EApp (EApp (EApp (EVar "TFun") (EVar "a2")) (EVar "eff")) (EVar "b2")))) (EApp (EApp (EApp (EVar "substOblArg") (EVar "ids")) (EVar "b")) (EVar "subst")))))) (arm (PVar "other") () (EApp (EVar "Some") (EVar "other")))))
+(DFunDef false "substOblArg" ((PVar "ids") (PVar "m") (PVar "subst")) (EMatch (EApp (EVar "normalize") (EVar "m")) (arm (PCon "TVar" (PVar "cell")) () (EMatch (EApp (EApp (EVar "lookupAssocI") (EApp (EVar "tyvarId") (EVar "cell"))) (EVar "subst")) (arm (PCon "Some" (PVar "m2")) () (EApp (EVar "Some") (EVar "m2"))) (arm (PCon "None") () (EIf (EApp (EApp (EVar "containsI") (EApp (EVar "tyvarId") (EVar "cell"))) (EVar "ids")) (EVar "None") (EApp (EVar "Some") (EApp (EVar "TVar") (EVar "cell"))))))) (arm (PCon "TQual" (PVar "a") (PVar "q")) () (EApp (EApp (EVar "map") (ELam ((PVar "a2")) (EApp (EApp (EVar "TQual") (EVar "a2")) (EVar "q")))) (EApp (EApp (EApp (EVar "substOblArg") (EVar "ids")) (EVar "a")) (EVar "subst")))) (arm (PCon "TApp" (PVar "a") (PVar "b")) () (EApp (EApp (EVar "andThen") (EApp (EApp (EApp (EVar "substOblArg") (EVar "ids")) (EVar "a")) (EVar "subst"))) (ELam ((PVar "a2")) (EApp (EApp (EVar "map") (ELam ((PVar "b2")) (EApp (EApp (EVar "TApp") (EVar "a2")) (EVar "b2")))) (EApp (EApp (EApp (EVar "substOblArg") (EVar "ids")) (EVar "b")) (EVar "subst")))))) (arm (PCon "TFun" (PVar "a") (PVar "eff") (PVar "b")) () (EApp (EApp (EVar "andThen") (EApp (EApp (EApp (EVar "substOblArg") (EVar "ids")) (EVar "a")) (EVar "subst"))) (ELam ((PVar "a2")) (EApp (EApp (EVar "map") (ELam ((PVar "b2")) (EApp (EApp (EApp (EVar "TFun") (EVar "a2")) (EVar "eff")) (EVar "b2")))) (EApp (EApp (EApp (EVar "substOblArg") (EVar "ids")) (EVar "b")) (EVar "subst")))))) (arm (PVar "other") () (EApp (EVar "Some") (EVar "other")))))
 (DTypeSig true "substMonos" (TyFun (TyApp (TyCon "List") (TyCon "Int")) (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "Int") (TyCon "Mono"))) (TyApp (TyCon "Option") (TyApp (TyCon "List") (TyCon "Mono"))))))
 (DFunDef false "substMonos" ((PList) PWild) (EApp (EVar "Some") (EListLit)))
-(DFunDef false "substMonos" ((PCons (PVar "id") (PVar "rest")) (PVar "subst")) (EMatch (EApp (EApp (EVar "lookupAssocI") (EVar "id")) (EVar "subst")) (arm (PCon "Some" (PVar "mono")) () (EApp (EApp (EVar "map") (ELam ((PVar "_s")) (EBinOp "::" (EVar "mono") (EVar "_s")))) (EApp (EApp (EVar "substMonos") (EVar "rest")) (EVar "subst")))) (arm (PCon "None") () (EVar "None"))))
+(DFunDef false "substMonos" ((PCons (PVar "id") (PVar "rest")) (PVar "subst")) (EApp (EApp (EVar "andThen") (EApp (EApp (EVar "lookupAssocI") (EVar "id")) (EVar "subst"))) (ELam ((PVar "mono")) (EApp (EApp (EVar "map") (ELam ((PVar "_s")) (EBinOp "::" (EVar "mono") (EVar "_s")))) (EApp (EApp (EVar "substMonos") (EVar "rest")) (EVar "subst"))))))
 (DTypeSig true "nthFunDomain" (TyFun (TyCon "Int") (TyFun (TyCon "Mono") (TyApp (TyCon "Option") (TyCon "Mono")))))
 (DFunDef false "nthFunDomain" ((PVar "k") (PVar "m")) (EMatch (EApp (EVar "normalize") (EVar "m")) (arm (PCon "TFun" (PVar "a") PWild (PVar "r")) () (EIf (EBinOp "==" (EVar "k") (ELit (LInt 0))) (EApp (EVar "Some") (EVar "a")) (EApp (EApp (EVar "nthFunDomain") (EBinOp "-" (EVar "k") (ELit (LInt 1)))) (EVar "r")))) (arm PWild () (EVar "None"))))
 (DTypeSig true "expectedParamTypes" (TyFun (TyCon "Mono") (TyFun (TyCon "Int") (TyApp (TyCon "List") (TyCon "Mono")))))
@@ -2528,7 +2527,7 @@ implDeclWithReqs _ = []
 (DFunDef false "stripArrows" ((PCon "TFun" PWild PWild (PVar "b"))) (EApp (EVar "stripArrows") (EVar "b")))
 (DFunDef false "stripArrows" ((PVar "t")) (EVar "t"))
 (DTypeSig true "recordOwnerModule" (TyFun (TyCon "RecordInfo") (TyApp (TyCon "Option") (TyCon "String"))))
-(DFunDef false "recordOwnerModule" ((PVar "ri")) (EMatch (EApp (EVar "headTyconMono") (EApp (EVar "recordResultMono") (EVar "ri"))) (arm (PCon "None") () (EVar "None")) (arm (PCon "Some" (PVar "hk")) () (EMatch (EApp (EVar "headKeyIdent") (EVar "hk")) (arm (PCon "None") () (EVar "None")) (arm (PCon "Some" (PCon "Ident" PWild (PVar "io") PWild)) () (EApp (EApp (EApp (EVar "identOriginFold") (EVar "None")) (ELam ((PVar "mid")) (EApp (EVar "Some") (EVar "mid")))) (EVar "io")))))))
+(DFunDef false "recordOwnerModule" ((PVar "ri")) (EApp (EApp (EVar "andThen") (EApp (EVar "headTyconMono") (EApp (EVar "recordResultMono") (EVar "ri")))) (ELam ((PVar "hk")) (EApp (EApp (EVar "andThen") (EApp (EVar "headKeyIdent") (EVar "hk"))) (ELam ((PVar "__do_x")) (EMatch (EVar "__do_x") (arm (PCon "Ident" PWild (PVar "io") PWild) () (EApp (EApp (EApp (EVar "identOriginFold") (EVar "None")) (ELam ((PVar "mid")) (EApp (EVar "Some") (EVar "mid")))) (EVar "io")))))))))
 (DTypeSig true "rowSame" (TyFun (TyCon "EffRow") (TyFun (TyCon "EffRow") (TyCon "Bool"))))
 (DFunDef false "rowSame" ((PVar "r1") (PVar "r2")) (EBlock (DoLet false false (PTuple (PVar "atoms1") (PVar "tails1")) (EApp (EVar "rowFlat") (EVar "r1"))) (DoLet false false (PTuple (PVar "atoms2") (PVar "tails2")) (EApp (EVar "rowFlat") (EVar "r2"))) (DoExpr (EBinOp "&&" (EBinOp "==" (EApp (EApp (EVar "map") (EVar "effvarId")) (EVar "tails1")) (EApp (EApp (EVar "map") (EVar "effvarId")) (EVar "tails2"))) (EApp (EApp (EVar "atomsSame") (EApp (EVar "atomsNorm") (EVar "atoms1"))) (EApp (EVar "atomsNorm") (EVar "atoms2")))))))
 (DTypeSig false "atomsSame" (TyFun (TyApp (TyCon "List") (TyCon "Atom")) (TyFun (TyApp (TyCon "List") (TyCon "Atom")) (TyCon "Bool"))))
@@ -2559,7 +2558,7 @@ implDeclWithReqs _ = []
 (DTypeSig true "monoIsTyvarId" (TyFun (TyCon "Mono") (TyFun (TyCon "Int") (TyCon "Bool"))))
 (DFunDef false "monoIsTyvarId" ((PVar "m") (PVar "id")) (EMatch (EApp (EVar "normalize") (EVar "m")) (arm (PCon "TVar" (PVar "cell")) () (EBinOp "==" (EApp (EVar "tyvarId") (EVar "cell")) (EVar "id"))) (arm PWild () (EVar "False"))))
 (DTypeSig true "matchCol0Type" (TyFun (TyCon "Mono") (TyApp (TyCon "Option") (TyCon "TabKey"))))
-(DFunDef false "matchCol0Type" ((PVar "ty")) (EMatch (EApp (EVar "headTyconNameMono") (EVar "ty")) (arm (PCon "None") () (EVar "None")) (arm (PCon "Some" (PVar "n")) () (EMatch (EApp (EVar "headTyconMono") (EVar "ty")) (arm (PCon "Some" (PCon "HkDecl" (PVar "k"))) () (EApp (EVar "Some") (EVar "k"))) (arm (PCon "Some" (PCon "HkRigid" PWild)) () (EApp (EVar "Some") (EApp (EApp (EVar "TkBare") (EVar "NsType")) (EVar "n")))) (arm (PCon "None") () (EApp (EVar "Some") (EApp (EApp (EVar "TkBare") (EVar "NsType")) (EVar "n"))))))))
+(DFunDef false "matchCol0Type" ((PVar "ty")) (EApp (EApp (EVar "andThen") (EApp (EVar "headTyconNameMono") (EVar "ty"))) (ELam ((PVar "n")) (EMatch (EApp (EVar "headTyconMono") (EVar "ty")) (arm (PCon "Some" (PCon "HkDecl" (PVar "k"))) () (EApp (EVar "Some") (EVar "k"))) (arm (PCon "Some" (PCon "HkRigid" PWild)) () (EApp (EVar "Some") (EApp (EApp (EVar "TkBare") (EVar "NsType")) (EVar "n")))) (arm (PCon "None") () (EApp (EVar "Some") (EApp (EApp (EVar "TkBare") (EVar "NsType")) (EVar "n"))))))))
 (DTypeSig true "nthTy" (TyFun (TyCon "Int") (TyFun (TyApp (TyCon "List") (TyCon "Ty")) (TyApp (TyCon "Option") (TyCon "Ty")))))
 (DFunDef false "nthTy" (PWild (PList)) (EVar "None"))
 (DFunDef false "nthTy" ((PVar "i") (PCons (PVar "t") (PVar "rest"))) (EIf (EBinOp "<=" (EVar "i") (ELit (LInt 0))) (EApp (EVar "Some") (EVar "t")) (EIf (EVar "otherwise") (EApp (EApp (EVar "nthTy") (EBinOp "-" (EVar "i") (ELit (LInt 1)))) (EVar "rest")) (EApp (EVar "__fallthrough__") (ELit LUnit)))))
@@ -2958,12 +2957,12 @@ implDeclWithReqs _ = []
 (DFunDef false "xmodOblArgId" ((PVar "m")) (EMatch (EApp (EVar "normalize") (EVar "m")) (arm (PCon "TVar" (PVar "cell")) () (EListLit (EApp (EVar "tyvarId") (EVar "cell")))) (arm PWild () (EApp (EVar "monoTyvarIds") (EVar "m")))))
 (DTypeSig true "substOblArgs" (TyFun (TyApp (TyCon "List") (TyCon "Int")) (TyFun (TyApp (TyCon "List") (TyCon "Mono")) (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "Int") (TyCon "Mono"))) (TyApp (TyCon "Option") (TyApp (TyCon "List") (TyCon "Mono")))))))
 (DFunDef false "substOblArgs" (PWild (PList) PWild) (EApp (EVar "Some") (EListLit)))
-(DFunDef false "substOblArgs" ((PVar "ids") (PCons (PVar "m") (PVar "rest")) (PVar "subst")) (EMatch (EApp (EApp (EApp (EVar "substOblArg") (EVar "ids")) (EVar "m")) (EVar "subst")) (arm (PCon "None") () (EVar "None")) (arm (PCon "Some" (PVar "m2")) () (EApp (EApp (EMethodRef "map") (ELam ((PVar "_s")) (EBinOp "::" (EVar "m2") (EVar "_s")))) (EApp (EApp (EApp (EVar "substOblArgs") (EVar "ids")) (EVar "rest")) (EVar "subst"))))))
+(DFunDef false "substOblArgs" ((PVar "ids") (PCons (PVar "m") (PVar "rest")) (PVar "subst")) (EApp (EApp (EMethodRef "andThen") (EApp (EApp (EApp (EVar "substOblArg") (EVar "ids")) (EVar "m")) (EVar "subst"))) (ELam ((PVar "m2")) (EApp (EApp (EMethodRef "map") (ELam ((PVar "_s")) (EBinOp "::" (EVar "m2") (EVar "_s")))) (EApp (EApp (EApp (EVar "substOblArgs") (EVar "ids")) (EVar "rest")) (EVar "subst"))))))
 (DTypeSig false "substOblArg" (TyFun (TyApp (TyCon "List") (TyCon "Int")) (TyFun (TyCon "Mono") (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "Int") (TyCon "Mono"))) (TyApp (TyCon "Option") (TyCon "Mono"))))))
-(DFunDef false "substOblArg" ((PVar "ids") (PVar "m") (PVar "subst")) (EMatch (EApp (EVar "normalize") (EVar "m")) (arm (PCon "TVar" (PVar "cell")) () (EMatch (EApp (EApp (EVar "lookupAssocI") (EApp (EVar "tyvarId") (EVar "cell"))) (EVar "subst")) (arm (PCon "Some" (PVar "m2")) () (EApp (EVar "Some") (EVar "m2"))) (arm (PCon "None") () (EIf (EApp (EApp (EVar "containsI") (EApp (EVar "tyvarId") (EVar "cell"))) (EVar "ids")) (EVar "None") (EApp (EVar "Some") (EApp (EVar "TVar") (EVar "cell"))))))) (arm (PCon "TQual" (PVar "a") (PVar "q")) () (EApp (EApp (EMethodRef "map") (ELam ((PVar "a2")) (EApp (EApp (EVar "TQual") (EVar "a2")) (EVar "q")))) (EApp (EApp (EApp (EVar "substOblArg") (EVar "ids")) (EVar "a")) (EVar "subst")))) (arm (PCon "TApp" (PVar "a") (PVar "b")) () (EMatch (EApp (EApp (EApp (EVar "substOblArg") (EVar "ids")) (EVar "a")) (EVar "subst")) (arm (PCon "None") () (EVar "None")) (arm (PCon "Some" (PVar "a2")) () (EApp (EApp (EMethodRef "map") (ELam ((PVar "b2")) (EApp (EApp (EVar "TApp") (EVar "a2")) (EVar "b2")))) (EApp (EApp (EApp (EVar "substOblArg") (EVar "ids")) (EVar "b")) (EVar "subst")))))) (arm (PCon "TFun" (PVar "a") (PVar "eff") (PVar "b")) () (EMatch (EApp (EApp (EApp (EVar "substOblArg") (EVar "ids")) (EVar "a")) (EVar "subst")) (arm (PCon "None") () (EVar "None")) (arm (PCon "Some" (PVar "a2")) () (EApp (EApp (EMethodRef "map") (ELam ((PVar "b2")) (EApp (EApp (EApp (EVar "TFun") (EVar "a2")) (EVar "eff")) (EVar "b2")))) (EApp (EApp (EApp (EVar "substOblArg") (EVar "ids")) (EVar "b")) (EVar "subst")))))) (arm (PVar "other") () (EApp (EVar "Some") (EVar "other")))))
+(DFunDef false "substOblArg" ((PVar "ids") (PVar "m") (PVar "subst")) (EMatch (EApp (EVar "normalize") (EVar "m")) (arm (PCon "TVar" (PVar "cell")) () (EMatch (EApp (EApp (EVar "lookupAssocI") (EApp (EVar "tyvarId") (EVar "cell"))) (EVar "subst")) (arm (PCon "Some" (PVar "m2")) () (EApp (EVar "Some") (EVar "m2"))) (arm (PCon "None") () (EIf (EApp (EApp (EVar "containsI") (EApp (EVar "tyvarId") (EVar "cell"))) (EVar "ids")) (EVar "None") (EApp (EVar "Some") (EApp (EVar "TVar") (EVar "cell"))))))) (arm (PCon "TQual" (PVar "a") (PVar "q")) () (EApp (EApp (EMethodRef "map") (ELam ((PVar "a2")) (EApp (EApp (EVar "TQual") (EVar "a2")) (EVar "q")))) (EApp (EApp (EApp (EVar "substOblArg") (EVar "ids")) (EVar "a")) (EVar "subst")))) (arm (PCon "TApp" (PVar "a") (PVar "b")) () (EApp (EApp (EMethodRef "andThen") (EApp (EApp (EApp (EVar "substOblArg") (EVar "ids")) (EVar "a")) (EVar "subst"))) (ELam ((PVar "a2")) (EApp (EApp (EMethodRef "map") (ELam ((PVar "b2")) (EApp (EApp (EVar "TApp") (EVar "a2")) (EVar "b2")))) (EApp (EApp (EApp (EVar "substOblArg") (EVar "ids")) (EVar "b")) (EVar "subst")))))) (arm (PCon "TFun" (PVar "a") (PVar "eff") (PVar "b")) () (EApp (EApp (EMethodRef "andThen") (EApp (EApp (EApp (EVar "substOblArg") (EVar "ids")) (EVar "a")) (EVar "subst"))) (ELam ((PVar "a2")) (EApp (EApp (EMethodRef "map") (ELam ((PVar "b2")) (EApp (EApp (EApp (EVar "TFun") (EVar "a2")) (EVar "eff")) (EVar "b2")))) (EApp (EApp (EApp (EVar "substOblArg") (EVar "ids")) (EVar "b")) (EVar "subst")))))) (arm (PVar "other") () (EApp (EVar "Some") (EVar "other")))))
 (DTypeSig true "substMonos" (TyFun (TyApp (TyCon "List") (TyCon "Int")) (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "Int") (TyCon "Mono"))) (TyApp (TyCon "Option") (TyApp (TyCon "List") (TyCon "Mono"))))))
 (DFunDef false "substMonos" ((PList) PWild) (EApp (EVar "Some") (EListLit)))
-(DFunDef false "substMonos" ((PCons (PVar "id") (PVar "rest")) (PVar "subst")) (EMatch (EApp (EApp (EVar "lookupAssocI") (EVar "id")) (EVar "subst")) (arm (PCon "Some" (PVar "mono")) () (EApp (EApp (EMethodRef "map") (ELam ((PVar "_s")) (EBinOp "::" (EVar "mono") (EVar "_s")))) (EApp (EApp (EVar "substMonos") (EVar "rest")) (EVar "subst")))) (arm (PCon "None") () (EVar "None"))))
+(DFunDef false "substMonos" ((PCons (PVar "id") (PVar "rest")) (PVar "subst")) (EApp (EApp (EMethodRef "andThen") (EApp (EApp (EVar "lookupAssocI") (EVar "id")) (EVar "subst"))) (ELam ((PVar "mono")) (EApp (EApp (EMethodRef "map") (ELam ((PVar "_s")) (EBinOp "::" (EVar "mono") (EVar "_s")))) (EApp (EApp (EVar "substMonos") (EVar "rest")) (EVar "subst"))))))
 (DTypeSig true "nthFunDomain" (TyFun (TyCon "Int") (TyFun (TyCon "Mono") (TyApp (TyCon "Option") (TyCon "Mono")))))
 (DFunDef false "nthFunDomain" ((PVar "k") (PVar "m")) (EMatch (EApp (EVar "normalize") (EVar "m")) (arm (PCon "TFun" (PVar "a") PWild (PVar "r")) () (EIf (EBinOp "==" (EVar "k") (ELit (LInt 0))) (EApp (EVar "Some") (EVar "a")) (EApp (EApp (EVar "nthFunDomain") (EBinOp "-" (EVar "k") (ELit (LInt 1)))) (EVar "r")))) (arm PWild () (EVar "None"))))
 (DTypeSig true "expectedParamTypes" (TyFun (TyCon "Mono") (TyFun (TyCon "Int") (TyApp (TyCon "List") (TyCon "Mono")))))
@@ -3130,7 +3129,7 @@ implDeclWithReqs _ = []
 (DFunDef false "stripArrows" ((PCon "TFun" PWild PWild (PVar "b"))) (EApp (EVar "stripArrows") (EVar "b")))
 (DFunDef false "stripArrows" ((PVar "t")) (EVar "t"))
 (DTypeSig true "recordOwnerModule" (TyFun (TyCon "RecordInfo") (TyApp (TyCon "Option") (TyCon "String"))))
-(DFunDef false "recordOwnerModule" ((PVar "ri")) (EMatch (EApp (EVar "headTyconMono") (EApp (EVar "recordResultMono") (EVar "ri"))) (arm (PCon "None") () (EVar "None")) (arm (PCon "Some" (PVar "hk")) () (EMatch (EApp (EVar "headKeyIdent") (EVar "hk")) (arm (PCon "None") () (EVar "None")) (arm (PCon "Some" (PCon "Ident" PWild (PVar "io") PWild)) () (EApp (EApp (EApp (EVar "identOriginFold") (EVar "None")) (ELam ((PVar "mid")) (EApp (EVar "Some") (EVar "mid")))) (EVar "io")))))))
+(DFunDef false "recordOwnerModule" ((PVar "ri")) (EApp (EApp (EMethodRef "andThen") (EApp (EVar "headTyconMono") (EApp (EVar "recordResultMono") (EVar "ri")))) (ELam ((PVar "hk")) (EApp (EApp (EMethodRef "andThen") (EApp (EVar "headKeyIdent") (EVar "hk"))) (ELam ((PVar "__do_x")) (EMatch (EVar "__do_x") (arm (PCon "Ident" PWild (PVar "io") PWild) () (EApp (EApp (EApp (EVar "identOriginFold") (EVar "None")) (ELam ((PVar "mid")) (EApp (EVar "Some") (EVar "mid")))) (EVar "io")))))))))
 (DTypeSig true "rowSame" (TyFun (TyCon "EffRow") (TyFun (TyCon "EffRow") (TyCon "Bool"))))
 (DFunDef false "rowSame" ((PVar "r1") (PVar "r2")) (EBlock (DoLet false false (PTuple (PVar "atoms1") (PVar "tails1")) (EApp (EVar "rowFlat") (EVar "r1"))) (DoLet false false (PTuple (PVar "atoms2") (PVar "tails2")) (EApp (EVar "rowFlat") (EVar "r2"))) (DoExpr (EBinOp "&&" (EBinOp "==" (EApp (EApp (EMethodRef "map") (EVar "effvarId")) (EVar "tails1")) (EApp (EApp (EMethodRef "map") (EVar "effvarId")) (EVar "tails2"))) (EApp (EApp (EVar "atomsSame") (EApp (EVar "atomsNorm") (EVar "atoms1"))) (EApp (EVar "atomsNorm") (EVar "atoms2")))))))
 (DTypeSig false "atomsSame" (TyFun (TyApp (TyCon "List") (TyCon "Atom")) (TyFun (TyApp (TyCon "List") (TyCon "Atom")) (TyCon "Bool"))))
@@ -3161,7 +3160,7 @@ implDeclWithReqs _ = []
 (DTypeSig true "monoIsTyvarId" (TyFun (TyCon "Mono") (TyFun (TyCon "Int") (TyCon "Bool"))))
 (DFunDef false "monoIsTyvarId" ((PVar "m") (PVar "id")) (EMatch (EApp (EVar "normalize") (EVar "m")) (arm (PCon "TVar" (PVar "cell")) () (EBinOp "==" (EApp (EVar "tyvarId") (EVar "cell")) (EVar "id"))) (arm PWild () (EVar "False"))))
 (DTypeSig true "matchCol0Type" (TyFun (TyCon "Mono") (TyApp (TyCon "Option") (TyCon "TabKey"))))
-(DFunDef false "matchCol0Type" ((PVar "ty")) (EMatch (EApp (EVar "headTyconNameMono") (EVar "ty")) (arm (PCon "None") () (EVar "None")) (arm (PCon "Some" (PVar "n")) () (EMatch (EApp (EVar "headTyconMono") (EVar "ty")) (arm (PCon "Some" (PCon "HkDecl" (PVar "k"))) () (EApp (EVar "Some") (EVar "k"))) (arm (PCon "Some" (PCon "HkRigid" PWild)) () (EApp (EVar "Some") (EApp (EApp (EVar "TkBare") (EVar "NsType")) (EVar "n")))) (arm (PCon "None") () (EApp (EVar "Some") (EApp (EApp (EVar "TkBare") (EVar "NsType")) (EVar "n"))))))))
+(DFunDef false "matchCol0Type" ((PVar "ty")) (EApp (EApp (EMethodRef "andThen") (EApp (EVar "headTyconNameMono") (EVar "ty"))) (ELam ((PVar "n")) (EMatch (EApp (EVar "headTyconMono") (EVar "ty")) (arm (PCon "Some" (PCon "HkDecl" (PVar "k"))) () (EApp (EVar "Some") (EVar "k"))) (arm (PCon "Some" (PCon "HkRigid" PWild)) () (EApp (EVar "Some") (EApp (EApp (EVar "TkBare") (EVar "NsType")) (EVar "n")))) (arm (PCon "None") () (EApp (EVar "Some") (EApp (EApp (EVar "TkBare") (EVar "NsType")) (EVar "n"))))))))
 (DTypeSig true "nthTy" (TyFun (TyCon "Int") (TyFun (TyApp (TyCon "List") (TyCon "Ty")) (TyApp (TyCon "Option") (TyCon "Ty")))))
 (DFunDef false "nthTy" (PWild (PList)) (EVar "None"))
 (DFunDef false "nthTy" ((PVar "i") (PCons (PVar "t") (PVar "rest"))) (EIf (EBinOp "<=" (EVar "i") (ELit (LInt 0))) (EApp (EVar "Some") (EVar "t")) (EIf (EVar "otherwise") (EApp (EApp (EVar "nthTy") (EBinOp "-" (EVar "i") (ELit (LInt 1)))) (EVar "rest")) (EApp (EVar "__fallthrough__") (ELit LUnit)))))

@@ -166,9 +166,9 @@ preludeDisplay env lets x =
 stringNames : AlphaEnv -> AlphaEnv
 stringNames env = { env |
   aeVarType =
-    x => match env.aeVarType x
-      Some ty => if qualifiedString ty then Some ty else None
-      None => None,
+    x => do
+      ty <- env.aeVarType x
+      if qualifiedString ty then Some ty else None,
 }
 
 qualifiedString : Mono -> Bool
@@ -309,11 +309,11 @@ varAuthority top env lets x = match letInScope x lets
   None => typedAuthority top env x
 
 typedAuthority : Param -> AlphaEnv -> String -> Option Authority
-typedAuthority top env x = match env.aeVarType x
-  Some ty => match normalize ty
+typedAuthority top env x = do
+  ty <- env.aeVarType x
+  match normalize ty
     TQual _ q => Some (qualifierIn top q)
     _ => None
-  None => None
 
 -- A let's right-hand side is read in the scope it was bound in: the entries
 -- older than it, never a later rebinding of a name it mentions.

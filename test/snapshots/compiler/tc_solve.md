@@ -1,5 +1,5 @@
 # META
-source_lines=2236
+source_lines=2242
 stages=DESUGAR,MARK
 # SOURCE
 -- tc_solve: one solving judgment over one goal store, above the entailment core: the exact-return
@@ -1198,6 +1198,9 @@ recPredicateArgs gctx mono slot = match slot.psArgs
 
 recSlotSubst : Mono -> List Int -> Option (List (Int, Mono))
 recSlotSubst _ [] = Some []
+-- Bound: a recursion through `map` that is not a tail call, run once per slot of every
+-- recursive predicate; the `do` form allocates a closure per element.
+-- lint-disable-next-line rule-passthrough-arm
 recSlotSubst mono (id :: rest) = match findTvarInMono mono id
   None => None
   Some m => map ((id, m) :: _) (recSlotSubst mono rest)
@@ -1919,6 +1922,9 @@ collectByParam typarams pairs = match collectByParamGo typarams pairs
 
 collectByParamGo : List String -> List (String, Mono) -> Option (List Mono)
 collectByParamGo [] _ = Some []
+-- Bound: a recursion through `map` that is not a tail call, run once per interface
+-- parameter of every solved goal; the `do` form allocates a closure per element.
+-- lint-disable-next-line rule-passthrough-arm
 collectByParamGo (p :: rest) pairs = match lookupAssoc p pairs
   None => None
   Some m => map (m :: _) (collectByParamGo rest pairs)

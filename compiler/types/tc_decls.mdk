@@ -963,10 +963,9 @@ emitCyclicAliasErrors mctx prog table (name :: rest) =
     Some e => firstTyLoc (snd (snd e))
     None =>
       findMap
-        (e => match tabKeyModule (fst e)
-          Some owner =>
-            importLocFor mctx.mcGraph.declEnvsRef.value.deReach prog owner
-          None => None)
+        (e => do
+          owner <- tabKeyModule (fst e)
+          importLocFor mctx.mcGraph.declEnvsRef.value.deReach prog owner)
         named
   pushTypeErrorOnce
     (mctxAtIfSome loc mctx)

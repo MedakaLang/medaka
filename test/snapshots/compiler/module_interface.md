@@ -647,9 +647,9 @@ moduleInterfaceIdentity mi = intToString mi.miSerial
 
 export
 moduleCacheHit : ModuleKey -> Option ModuleInterface
-moduleCacheHit key = match omLookup key.mkModule moduleCacheRef.value.mcEntries
-  Some mi => if mi.miKeyText == moduleKeyText key then Some mi else None
-  None => None
+moduleCacheHit key = do
+  mi <- omLookup key.mkModule moduleCacheRef.value.mcEntries
+  if mi.miKeyText == moduleKeyText key then Some mi else None
 
 -- Keeps [mi] as its module's interface, replacing the one recorded before.
 export
@@ -768,7 +768,7 @@ currentModuleInterfaces _ = map snd (M.entries moduleCacheRef.value.mcEntries)
 (DTypeSig true "moduleInterfaceIdentity" (TyFun (TyCon "ModuleInterface") (TyCon "String")))
 (DFunDef false "moduleInterfaceIdentity" ((PVar "mi")) (EApp (EVar "intToString") (EFieldAccess (EVar "mi") "miSerial")))
 (DTypeSig true "moduleCacheHit" (TyFun (TyCon "ModuleKey") (TyApp (TyCon "Option") (TyCon "ModuleInterface"))))
-(DFunDef false "moduleCacheHit" ((PVar "key")) (EMatch (EApp (EApp (EVar "omLookup") (EFieldAccess (EVar "key") "mkModule")) (EFieldAccess (EFieldAccess (EVar "moduleCacheRef") "value") "mcEntries")) (arm (PCon "Some" (PVar "mi")) () (EIf (EBinOp "==" (EFieldAccess (EVar "mi") "miKeyText") (EApp (EVar "moduleKeyText") (EVar "key"))) (EApp (EVar "Some") (EVar "mi")) (EVar "None"))) (arm (PCon "None") () (EVar "None"))))
+(DFunDef false "moduleCacheHit" ((PVar "key")) (EApp (EApp (EVar "andThen") (EApp (EApp (EVar "omLookup") (EFieldAccess (EVar "key") "mkModule")) (EFieldAccess (EFieldAccess (EVar "moduleCacheRef") "value") "mcEntries"))) (ELam ((PVar "mi")) (EIf (EBinOp "==" (EFieldAccess (EVar "mi") "miKeyText") (EApp (EVar "moduleKeyText") (EVar "key"))) (EApp (EVar "Some") (EVar "mi")) (EVar "None")))))
 (DTypeSig true "recordModuleInterface" (TyFun (TyCon "ModuleInterface") (TyCon "Unit")))
 (DFunDef false "recordModuleInterface" ((PVar "mi")) (EApp (EApp (EVar "setRef") (EVar "moduleCacheRef")) (EApp (EApp (EVar "withInterface") (EFieldAccess (EVar "moduleCacheRef") "value")) (EVar "mi"))))
 (DTypeSig true "retainModuleInterfaces" (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyCon "Unit")))
@@ -866,7 +866,7 @@ currentModuleInterfaces _ = map snd (M.entries moduleCacheRef.value.mcEntries)
 (DTypeSig true "moduleInterfaceIdentity" (TyFun (TyCon "ModuleInterface") (TyCon "String")))
 (DFunDef false "moduleInterfaceIdentity" ((PVar "mi")) (EApp (EVar "intToString") (EFieldAccess (EVar "mi") "miSerial")))
 (DTypeSig true "moduleCacheHit" (TyFun (TyCon "ModuleKey") (TyApp (TyCon "Option") (TyCon "ModuleInterface"))))
-(DFunDef false "moduleCacheHit" ((PVar "key")) (EMatch (EApp (EApp (EVar "omLookup") (EFieldAccess (EVar "key") "mkModule")) (EFieldAccess (EFieldAccess (EVar "moduleCacheRef") "value") "mcEntries")) (arm (PCon "Some" (PVar "mi")) () (EIf (EBinOp "==" (EFieldAccess (EVar "mi") "miKeyText") (EApp (EVar "moduleKeyText") (EVar "key"))) (EApp (EVar "Some") (EVar "mi")) (EVar "None"))) (arm (PCon "None") () (EVar "None"))))
+(DFunDef false "moduleCacheHit" ((PVar "key")) (EApp (EApp (EMethodRef "andThen") (EApp (EApp (EVar "omLookup") (EFieldAccess (EVar "key") "mkModule")) (EFieldAccess (EFieldAccess (EVar "moduleCacheRef") "value") "mcEntries"))) (ELam ((PVar "mi")) (EIf (EBinOp "==" (EFieldAccess (EVar "mi") "miKeyText") (EApp (EVar "moduleKeyText") (EVar "key"))) (EApp (EVar "Some") (EVar "mi")) (EVar "None")))))
 (DTypeSig true "recordModuleInterface" (TyFun (TyCon "ModuleInterface") (TyCon "Unit")))
 (DFunDef false "recordModuleInterface" ((PVar "mi")) (EApp (EApp (EVar "setRef") (EVar "moduleCacheRef")) (EApp (EApp (EVar "withInterface") (EFieldAccess (EVar "moduleCacheRef") "value")) (EVar "mi"))))
 (DTypeSig true "retainModuleInterfaces" (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyCon "Unit")))

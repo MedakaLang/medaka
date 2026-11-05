@@ -2381,18 +2381,17 @@ tupleCallShapeHint : Expr ->
   Expr ->
   Mono ->
   Option (String, Option (Loc, String))
-tupleCallShapeHint f x ft = match tupleArgElems x
-  None => None
-  Some es =>
-    let n = listLen es
-    if n < 2 then
-      None
-    else if funArity ft /= n then
-      None
-    else if domainIsTupleOfArity ft n then
-      None
-    else
-      map (name => buildTupleCallHint name es f x) (appSpineName f)
+tupleCallShapeHint f x ft = do
+  es <- tupleArgElems x
+  let n = listLen es
+  if n < 2 then
+    None
+  else if funArity ft /= n then
+    None
+  else if domainIsTupleOfArity ft n then
+    None
+  else
+    map (name => buildTupleCallHint name es f x) (appSpineName f)
 
 inferApp : TcEnv -> Expr -> Mono -> Mono -> Mono
 inferApp env appExpr ft xt =

@@ -412,9 +412,9 @@ ffiMatchRow : List EffAtomTy ->
   Option (List (String, Ty)) ->
   Option (List (String, Ty))
 ffiMatchRow _ _ _ _ None = None
-ffiMatchRow l1 t1 l2 t2 (Some sub) = match ffiMatchAtoms l1 l2 sub
-  None => None
-  Some (sub2, rest) => match t1
+ffiMatchRow l1 t1 l2 t2 (Some sub) = do
+  (sub2, rest) <- ffiMatchAtoms l1 l2 sub
+  match t1
     [] => match (rest, t2)
       ([], []) => Some sub2
       _ => None
@@ -457,9 +457,9 @@ ffiMatchAtom a d sub =
     d.eatLabel
     d.eatOrigin then match a.eatParam
     EPName v => match lookupAssoc v sub
-      Some bound => match ffiParamOf bound
-        Some p => if ffiSameParam p d.eatParam then Some sub else None
-        None => None
+      Some bound => do
+        p <- ffiParamOf bound
+        if ffiSameParam p d.eatParam then Some sub else None
       None => Some ((v, ffiParamTy d.eatParam) :: sub)
     p => if ffiSameParam p d.eatParam then Some sub else None
   else

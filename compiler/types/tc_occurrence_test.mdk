@@ -638,9 +638,9 @@ shadowReader _ =
 -- The parameter type the occurrence of the standalone `size` in [env] instantiated its
 -- scheme to, rendered; the obligations its context re-records are over it.
 occurrenceParam : TcEnv -> Option String
-occurrenceParam env = match standaloneOccurrence env "size" "" None
-  Some o => map ppMono (nthFunDomain 0 o.svoInstance.mtiBody)
-  None => None
+occurrenceParam env = do
+  o <- standaloneOccurrence env "size" "" None
+  map ppMono (nthFunDomain 0 o.svoInstance.mtiBody)
 
 -- The (interface, arguments) of each obligation [m] has recorded.
 recorded : ModuleCtx -> List (String, List String)

@@ -163,9 +163,9 @@ binderRowIn None _ = None
 binderRowIn (Some table) (BinderId m i) = rowIn table m i
 
 rowIn : BinderTypeTable -> String -> Int -> Option BinderRow
-rowIn table m i = match get i table
-  None => None
-  Some row => match row.brId
+rowIn table m i = do
+  row <- get i table
+  match row.brId
     BinderId m2 _ =>
       if m2 == m then
         Some row

@@ -915,9 +915,9 @@ renderCallArg (ELit _ | EUnOp _ _ _ | EApp _ _ | ELam _ _ | ELet _ _ _ _ _ | EMa
 export
 renderCallArgs : List Expr -> Option (List String)
 renderCallArgs [] = Some []
-renderCallArgs (e :: rest) = match renderCallArg e
-  None => None
-  Some s => map (s :: _) (renderCallArgs rest)
+renderCallArgs (e :: rest) = do
+  s <- renderCallArg e
+  map (s :: _) (renderCallArgs rest)
 
 -- The non-exhaustive-`match` warning (note the em-dash).  Coverage only; the
 -- redundancy pass has its own string, `unreachableArmWarning`.  When the witness
@@ -1826,7 +1826,7 @@ dropAmbiguity = filterList (d => tcCode d /= TAmbiguousInstance)
 (DFunDef false "renderCallArg" ((POr (PCon "ELit" PWild) (PCon "EUnOp" PWild PWild PWild) (PCon "EApp" PWild PWild) (PCon "ELam" PWild PWild) (PCon "ELet" PWild PWild PWild PWild PWild) (PCon "EMatch" PWild PWild) (PCon "EIf" PWild PWild PWild) (PCon "EBinOp" PWild PWild PWild PWild) (PCon "EInfix" PWild PWild PWild) (PCon "EFieldAccess" PWild PWild PWild) (PCon "ETuple" PWild) (PCon "EListLit" PWild) (PCon "EArrayLit" PWild) (PCon "ERangeList" PWild PWild PWild) (PCon "ERangeArray" PWild PWild PWild) (PCon "ESlice" PWild PWild PWild PWild) (PCon "ELetGroup" PWild PWild) (PCon "ESection" PWild) (PCon "EIndex" PWild PWild) (PCon "EHeadAnnot" PWild PWild) (PCon "EBlock" PWild) (PCon "EDo" PWild PWild) (PCon "EStringInterp" PWild) (PCon "EGuards" PWild) (PCon "ERecordCreate" PWild PWild) (PCon "ERecordUpdate" PWild PWild PWild) (PCon "EVariantUpdate" PWild PWild PWild) (PCon "EMapLit" PWild PWild) (PCon "ESetLit" PWild PWild) (PCon "EAsPat" PWild PWild) (PCon "EOrPat" PWild) (PCon "EMethodRef" PWild) (PCon "EDictApp" PWild) (PCon "EVarAt" PWild PWild) (PCon "EDoOrigin" PWild PWild))) (EVar "None"))
 (DTypeSig true "renderCallArgs" (TyFun (TyApp (TyCon "List") (TyCon "Expr")) (TyApp (TyCon "Option") (TyApp (TyCon "List") (TyCon "String")))))
 (DFunDef false "renderCallArgs" ((PList)) (EApp (EVar "Some") (EListLit)))
-(DFunDef false "renderCallArgs" ((PCons (PVar "e") (PVar "rest"))) (EMatch (EApp (EVar "renderCallArg") (EVar "e")) (arm (PCon "None") () (EVar "None")) (arm (PCon "Some" (PVar "s")) () (EApp (EApp (EVar "map") (ELam ((PVar "_s")) (EBinOp "::" (EVar "s") (EVar "_s")))) (EApp (EVar "renderCallArgs") (EVar "rest"))))))
+(DFunDef false "renderCallArgs" ((PCons (PVar "e") (PVar "rest"))) (EApp (EApp (EVar "andThen") (EApp (EVar "renderCallArg") (EVar "e"))) (ELam ((PVar "s")) (EApp (EApp (EVar "map") (ELam ((PVar "_s")) (EBinOp "::" (EVar "s") (EVar "_s")))) (EApp (EVar "renderCallArgs") (EVar "rest"))))))
 (DTypeSig true "nonExhaustiveMatchWarning" (TyCon "String"))
 (DFunDef false "nonExhaustiveMatchWarning" () (ELit (LString "Warning: non-exhaustive match; not every case is covered")))
 (DTypeSig true "binderNonExhaustiveMsg" (TyFun (TyApp (TyCon "Option") (TyCon "TabKey")) (TyFun (TyCon "String") (TyTuple (TyCon "String") (TyCon "String")))))
@@ -2301,7 +2301,7 @@ dropAmbiguity = filterList (d => tcCode d /= TAmbiguousInstance)
 (DFunDef false "renderCallArg" ((POr (PCon "ELit" PWild) (PCon "EUnOp" PWild PWild PWild) (PCon "EApp" PWild PWild) (PCon "ELam" PWild PWild) (PCon "ELet" PWild PWild PWild PWild PWild) (PCon "EMatch" PWild PWild) (PCon "EIf" PWild PWild PWild) (PCon "EBinOp" PWild PWild PWild PWild) (PCon "EInfix" PWild PWild PWild) (PCon "EFieldAccess" PWild PWild PWild) (PCon "ETuple" PWild) (PCon "EListLit" PWild) (PCon "EArrayLit" PWild) (PCon "ERangeList" PWild PWild PWild) (PCon "ERangeArray" PWild PWild PWild) (PCon "ESlice" PWild PWild PWild PWild) (PCon "ELetGroup" PWild PWild) (PCon "ESection" PWild) (PCon "EIndex" PWild PWild) (PCon "EHeadAnnot" PWild PWild) (PCon "EBlock" PWild) (PCon "EDo" PWild PWild) (PCon "EStringInterp" PWild) (PCon "EGuards" PWild) (PCon "ERecordCreate" PWild PWild) (PCon "ERecordUpdate" PWild PWild PWild) (PCon "EVariantUpdate" PWild PWild PWild) (PCon "EMapLit" PWild PWild) (PCon "ESetLit" PWild PWild) (PCon "EAsPat" PWild PWild) (PCon "EOrPat" PWild) (PCon "EMethodRef" PWild) (PCon "EDictApp" PWild) (PCon "EVarAt" PWild PWild) (PCon "EDoOrigin" PWild PWild))) (EVar "None"))
 (DTypeSig true "renderCallArgs" (TyFun (TyApp (TyCon "List") (TyCon "Expr")) (TyApp (TyCon "Option") (TyApp (TyCon "List") (TyCon "String")))))
 (DFunDef false "renderCallArgs" ((PList)) (EApp (EVar "Some") (EListLit)))
-(DFunDef false "renderCallArgs" ((PCons (PVar "e") (PVar "rest"))) (EMatch (EApp (EVar "renderCallArg") (EVar "e")) (arm (PCon "None") () (EVar "None")) (arm (PCon "Some" (PVar "s")) () (EApp (EApp (EMethodRef "map") (ELam ((PVar "_s")) (EBinOp "::" (EVar "s") (EVar "_s")))) (EApp (EVar "renderCallArgs") (EVar "rest"))))))
+(DFunDef false "renderCallArgs" ((PCons (PVar "e") (PVar "rest"))) (EApp (EApp (EMethodRef "andThen") (EApp (EVar "renderCallArg") (EVar "e"))) (ELam ((PVar "s")) (EApp (EApp (EMethodRef "map") (ELam ((PVar "_s")) (EBinOp "::" (EVar "s") (EVar "_s")))) (EApp (EVar "renderCallArgs") (EVar "rest"))))))
 (DTypeSig true "nonExhaustiveMatchWarning" (TyCon "String"))
 (DFunDef false "nonExhaustiveMatchWarning" () (ELit (LString "Warning: non-exhaustive match; not every case is covered")))
 (DTypeSig true "binderNonExhaustiveMsg" (TyFun (TyApp (TyCon "Option") (TyCon "TabKey")) (TyFun (TyCon "String") (TyTuple (TyCon "String") (TyCon "String")))))

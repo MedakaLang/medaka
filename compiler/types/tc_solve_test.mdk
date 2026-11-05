@@ -596,9 +596,9 @@ publishMethodReturnTrace : EvTable ->
   MethodReturnTraceEntry ->
   MethodReturnTraceEntry
 publishMethodReturnTrace evidence entry =
-  let published = match entry.mrtGoal
-    Some goal => lookupTraceEvidence goal evidence
-    None => None
+  let published = do
+    goal <- entry.mrtGoal
+    lookupTraceEvidence goal evidence
   MethodReturnTraceEntry {
     mrtStage = entry.mrtStage,
     mrtInterface = entry.mrtInterface,

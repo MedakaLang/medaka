@@ -767,22 +767,21 @@ unifiedRowReqs : ModuleCtx ->
 unifiedRowReqs mctx rigidIds args (row@(ImplRow _ _ _ _ reqs _ _)) =
   let (tvs, heads) = freshRowHeadsTvs mctx row
   let goalIds = flatMap monoUnboundIds args
-  match headsUnifier mctx.mcGraph rigidIds args heads
-    Some scratch =>
-      if allList
-        (b =>
-          not (containsI (fst b) goalIds)
-            || boundaryOwnsOpen mctx rigidIds (fst b))
-        !scratch then
-        let sigCells = sigCellsOf rigidIds (flatMap monoVarCells args)
-        let bound =
-          map
-            (nv => (fst nv, unrigidSig sigCells (cohApply scratch (snd nv))))
-            tvs
-        Some (bound, flatMap (nv => monoUnboundIds (snd nv)) bound, reqs)
-      else
-        None
-    None => None
+  do
+    scratch <- headsUnifier mctx.mcGraph rigidIds args heads
+    if allList
+      (b =>
+        not (containsI (fst b) goalIds)
+          || boundaryOwnsOpen mctx rigidIds (fst b))
+      !scratch then
+      let sigCells = sigCellsOf rigidIds (flatMap monoVarCells args)
+      let bound =
+        map
+          (nv => (fst nv, unrigidSig sigCells (cohApply scratch (snd nv))))
+          tvs
+      Some (bound, flatMap (nv => monoUnboundIds (snd nv)) bound, reqs)
+    else
+      None
 
 -- A prerequisite as a goal at [o]'s site.  One that mentions a variable the
 -- instance's head does not fix is left to the module's obligation check.
@@ -1755,17 +1754,17 @@ declaredOblMixed mctx boundIds ifref tvMap args =
 -- Shared by the declared-context sourcing and recordSigConstraintArgs.
 constraintArgMonos : List Ty -> List (String, Mono) -> Option (List Mono)
 constraintArgMonos [] _ = Some []
-constraintArgMonos (a :: rest) tvMap = match constraintArgMono a tvMap
-  None => None
-  Some mono => map (mono :: _) (constraintArgMonos rest tvMap)
+constraintArgMonos (a :: rest) tvMap = do
+  mono <- constraintArgMono a tvMap
+  map (mono :: _) (constraintArgMonos rest tvMap)
 
 -- the mono ONE predicate argument resolves to: None unless it is a plain tyvar
 -- present in [tvMap] (a concrete-grounded argument like `Sz Int =>` carries no
 -- per-use obligation here).
 constraintArgMono : Ty -> List (String, Mono) -> Option Mono
-constraintArgMono a tvMap = match constraintArgVarName a
-  None => None
-  Some v => lookupAssoc v tvMap
+constraintArgMono a tvMap = do
+  v <- constraintArgVarName a
+  lookupAssoc v tvMap
 
 lookupSigTvMap : String ->
   List (String, Ty, List (String, Mono)) ->

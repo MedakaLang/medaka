@@ -285,9 +285,9 @@ ifaceExportsIndex gctx _ = gctx.declEnvsRef.value.deMethods.meIfaceExports
 -- belong to the same allocation as their scheme, not the final definition's ids.
 export
 bindingDeclared : TcEnv -> String -> Option CDeclared
-bindingDeclared env name = match lookupBinding env name
-  Some binding => binding.ebValue.vsDeclared
-  None => None
+bindingDeclared env name = do
+  binding <- lookupBinding env name
+  binding.ebValue.vsDeclared
 
 export
 attachStandaloneSources : OrdMap Scheme ->
@@ -1521,9 +1521,9 @@ ceInsertRow r env = ClassEnv { env |
 -- mistaken for finishing early.
 export
 ceLookupAt : RegKey -> Int -> ClassEnv -> Option CeRow
-ceLookupAt key cur env = match regLookupK key env.ceByKey
-  None => None
-  Some r => if declEnvVisibleAt cur (ceRowOrd r) then Some r else None
+ceLookupAt key cur env = do
+  r <- regLookupK key env.ceByKey
+  if declEnvVisibleAt cur (ceRowOrd r) then Some r else None
 
 -- An interface named by a RESOLVED reference: the reference's origin was bound by
 -- resolve at a site that could see the declaration, so no ordinal filter applies.
@@ -1569,9 +1569,9 @@ ceRowsOwnedBy cur env = filterList (r => ceRowOrd r == cur) env.ceRows
 -- impl has type arguments".
 export
 ceSlotKindsAt : RegKey -> Int -> Int -> ClassEnv -> Option (List Kind)
-ceSlotKindsAt key cur i env = match ceLookupAt key cur env
-  None => None
-  Some r => nthKindList i (ceRowParamKinds r)
+ceSlotKindsAt key cur i env = do
+  r <- ceLookupAt key cur env
+  nthKindList i (ceRowParamKinds r)
 
 -- #1557 A-3.5a: interface [key]'s REQUIRED-method names at the reading module's
 -- ordinal — the relocation target of `universeIfaceRequiredRef`'s registry lookup
@@ -1771,9 +1771,9 @@ lookupVar env n = match omLookup n env.teVars
 
 export
 lookupMethodRow : TcEnv -> String -> Option MethodSchemeRow
-lookupMethodRow env n = match lookupBinding env n
-  Some binding => binding.ebMethodRow
-  None => None
+lookupMethodRow env n = do
+  binding <- lookupBinding env n
+  binding.ebMethodRow
 
 export
 lookupCtor : TcEnv -> String -> Option Scheme
@@ -1821,17 +1821,17 @@ lookupStandaloneVar env name =
 
 export
 lookupStandaloneValue : TcEnv -> String -> Option ValueScheme
-lookupStandaloneValue env name = match lookupBinding env name
-  Some binding => map snd binding.ebStandalone
-  None => None
+lookupStandaloneValue env name = do
+  binding <- lookupBinding env name
+  map snd binding.ebStandalone
 
 export
 lookupImportedStandalone : TcEnv -> String -> Option Scheme
-lookupImportedStandalone env name = match lookupBinding env name
-  Some binding => match binding.ebStandalone
+lookupImportedStandalone env name = do
+  binding <- lookupBinding env name
+  match binding.ebStandalone
     Some (ImportedStandalone, value) => Some value.vsScheme
     _ => None
-  None => None
 
 -- #739: is [name] an explicitly-imported value (has a known source module)?  A miss in
 -- the qual constraint table for such a name is authoritative ("unconstrained in its
@@ -3630,9 +3630,9 @@ ceMethodTyAt : IfaceRef ->
   Option (List String, Ty, List (String, List Kind))
 ceMethodTyAt iface mname cur ce =
   let key = regKeyOfTab (ifaceTabKey iface.irOrigin iface.irName)
-  match ceLookupAt key cur ce
-    Some row => ceMethodTyIn (ceRowTyparams row) mname (ceRowMethods row)
-    None => None
+  do
+    row <- ceLookupAt key cur ce
+    ceMethodTyIn (ceRowTyparams row) mname (ceRowMethods row)
 
 ceMethodTyIn : List String ->
   String ->
@@ -3767,17 +3767,16 @@ lookupMethodRowById : IfaceRef ->
   String ->
   Registry MethodSchemeRow ->
   Option MethodSchemeRow
-lookupMethodRowById iface n rows = match regLookupK (methodRowKey iface n) rows
-  Some row =>
-    if sameTyConHead
-      row.msrIface.irName
-      row.msrIface.irOrigin
-      iface.irName
-      iface.irOrigin then
-      Some row
-    else
-      None
-  None => None
+lookupMethodRowById iface n rows = do
+  row <- regLookupK (methodRowKey iface n) rows
+  if sameTyConHead
+    row.msrIface.irName
+    row.msrIface.irOrigin
+    iface.irName
+    iface.irOrigin then
+    Some row
+  else
+    None
 
 -- `sameTyConHead`, not a bare `irName` compare: this is a LOOKUP, where a false HIT
 -- is silent wrongness (the wrong interface's scheme), so absence-makes-no-claim plus

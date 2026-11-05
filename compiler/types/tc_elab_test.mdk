@@ -840,16 +840,15 @@ sizeUsingCell = ImplMethod "size" [pvar "b"] (EMethodAt "size" "" site0)
 -- The parameters of the impl's `size` once the pass has run, the cell `m#0` having been routed
 -- to [route] with the element-dictionary routes [impls].
 implParamsRouted : Route -> List Route -> Option (List (String, List String))
-implParamsRouted route impls = match implOf boxImpl [sizeUsingCell]
-  Some decl =>
-    map
-      implParams
-      (passedWith
-        [EvEntry site0 (EvMethod "Sizeable" 1 route impls [])]
-        []
-        []
-        [decl])
-  None => None
+implParamsRouted route impls = do
+  decl <- implOf boxImpl [sizeUsingCell]
+  map
+    implParams
+    (passedWith
+      [EvEntry site0 (EvMethod "Sizeable" 1 route impls [])]
+      []
+      []
+      [decl])
 
 test "an impl method that reads its requirement's dictionary takes that dictionary as its first parameter" =
   expectEqual

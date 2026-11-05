@@ -911,9 +911,9 @@ renderCallArg (ELit _ | EUnOp _ _ _ | EApp _ _ | ELam _ _ | ELet _ _ _ _ _ | EMa
 export
 renderCallArgs : List Expr -> Option (List String)
 renderCallArgs [] = Some []
-renderCallArgs (e :: rest) = match renderCallArg e
-  None => None
-  Some s => map (s :: _) (renderCallArgs rest)
+renderCallArgs (e :: rest) = do
+  s <- renderCallArg e
+  map (s :: _) (renderCallArgs rest)
 
 -- The non-exhaustive-`match` warning (note the em-dash).  Coverage only; the
 -- redundancy pass has its own string, `unreachableArmWarning`.  When the witness
