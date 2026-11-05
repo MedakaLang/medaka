@@ -166,3 +166,152 @@ main = match start "/bin/true" (SpawnOptions { argv = [], cwd = "/tmp", env = []
         run (underRoot "medaka") ["build", source, "-o", binary] "built",
         run binary [] "typed pipe passed",
       ])
+
+test "async launch retains grants and supports cross-module result inspection" = withScratchDir
+  (dir =>
+    let source = underRoot "test/process_runtime_fixtures/adapter_typed.mdk"
+    let compiler = underRoot "medaka"
+    let binary = "\{dir}/adapter"
+    expectAll [
+      expectSpawnOk compiler ["check", source],
+      expectSpawnOk compiler ["build", source, "-o", binary],
+      expectSpawnOkLine binary [] "adapter native passed",
+      expectSpawnOk compiler [
+        "check-policy", source, "--allow", "Clock,Exec=/bin/true,Stdout",
+        "--fn", "launch"
+      ],
+      expectSpawnFails
+        compiler
+        [
+          "check-policy", source, "--allow", "Clock,Exec=/bin/false,Stdout",
+          "--fn", "launch"
+        ]
+        "Exec",
+      expectSpawnFails
+        compiler
+        ["check", underRoot "test/process_runtime_fixtures/adapter_forge.mdk"]
+        "Process",
+      expectSpawnFails
+        compiler
+        [
+          "check",
+          underRoot "test/process_runtime_fixtures/adapter_ticket_forge.mdk",
+        ]
+        "LaunchTicket",
+    ])
+
+test "async launch timeout and cancellation retain cleanup during delayed exec" = withScratchDir
+  (dir =>
+    let compiler = underRoot "medaka"
+    let source = underRoot "test/process_runtime_fixtures/adapter_stall.mdk"
+    let shim = "\{dir}/delay.so"
+    let binary = "\{dir}/adapter_stall"
+    expectAll [
+      expectSpawnOk "clang" [
+        "-shared",
+        "-fPIC",
+        underRoot "test/process_runtime_fixtures/adapter_delay.c",
+        "-ldl",
+        "-o",
+        shim,
+      ],
+      expectSpawnOk compiler ["check", source],
+      expectSpawnOk compiler ["build", source, "-o", binary],
+      expectSpawnOkLine
+        "env"
+        ["LD_PRELOAD=\{shim}", "ADAPTER_DELAY=exec", binary]
+        "adapter stall passed",
+      expectSpawnOkLine
+        "env"
+        ["LD_PRELOAD=\{shim}", "ADAPTER_DELAY=pipe", binary]
+        "adapter stall passed",
+      expectSpawnOkLine binary [] "adapter stall failed",
+    ])
+
+test "async write retains exact prefix on an injected syscall error" = withScratchDir
+  (dir =>
+    let source =
+      underRoot "test/process_runtime_fixtures/adapter_write_error.mdk"
+    let shim = "\{dir}/delay.so"
+    let binary = "\{dir}/adapter_write_error"
+    expectAll [
+      expectSpawnOk "clang" [
+        "-shared",
+        "-fPIC",
+        underRoot "test/process_runtime_fixtures/adapter_delay.c",
+        "-ldl",
+        "-o",
+        shim,
+      ],
+      expectSpawnOk (underRoot "medaka") ["build", source, "-o", binary],
+      expectSpawnOkLine
+        "env"
+        ["LD_PRELOAD=\{shim}", "ADAPTER_DELAY=write", binary]
+        "adapter error prefix passed",
+      expectSpawnOkLine binary [] "adapter error prefix failed",
+    ])
+
+test "interrupted writes retain their original absolute deadline" = withScratchDir
+  (dir =>
+    let source = underRoot "test/process_runtime_fixtures/adapter_eintr.mdk"
+    let shim = "\{dir}/delay.so"
+    let binary = "\{dir}/adapter_eintr"
+    expectAll [
+      expectSpawnOk "clang" [
+        "-shared",
+        "-fPIC",
+        underRoot "test/process_runtime_fixtures/adapter_delay.c",
+        "-ldl",
+        "-o",
+        shim,
+      ],
+      expectSpawnOk (underRoot "medaka") ["build", source, "-o", binary],
+      expectSpawnOkLine
+        "env"
+        ["LD_PRELOAD=\{shim}", "ADAPTER_DELAY=eintr", binary]
+        "adapter eintr deadline passed",
+      expectSpawnOkLine binary [] "adapter eintr deadline failed",
+    ])
+
+test "parked read rechecks the owner after its fd is reused" = withScratchDir
+  (dir =>
+    let source = underRoot "test/process_runtime_fixtures/adapter_reuse.mdk"
+    let shim = "\{dir}/delay.so"
+    let binary = "\{dir}/adapter_reuse"
+    let args = ["LD_PRELOAD=\{shim}", "ADAPTER_DELAY=reuse", binary]
+    expectAll [
+      expectSpawnOk "clang" [
+        "-shared",
+        "-fPIC",
+        underRoot "test/process_runtime_fixtures/adapter_delay.c",
+        "-ldl",
+        "-o",
+        shim,
+      ],
+      expectSpawnOk (underRoot "medaka") ["build", source, "-o", binary],
+      expectSpawnOkLine "env" args "adapter fd reused",
+      expectSpawnOkLine "env" args "adapter reuse passed",
+    ])
+
+test "launch cleanup errors retain the ticket for retry" = withScratchDir
+  (dir =>
+    let source =
+      underRoot "test/process_runtime_fixtures/adapter_cleanup_error.mdk"
+    let shim = "\{dir}/delay.so"
+    let binary = "\{dir}/adapter_cleanup_error"
+    expectAll [
+      expectSpawnOk "clang" [
+        "-shared",
+        "-fPIC",
+        underRoot "test/process_runtime_fixtures/adapter_delay.c",
+        "-ldl",
+        "-o",
+        shim,
+      ],
+      expectSpawnOk (underRoot "medaka") ["build", source, "-o", binary],
+      expectSpawnOkLine
+        "env"
+        ["LD_PRELOAD=\{shim}", "ADAPTER_DELAY=wait-error", binary]
+        "adapter cleanup error passed",
+      expectSpawnOkLine binary [] "adapter cleanup error failed",
+    ])
