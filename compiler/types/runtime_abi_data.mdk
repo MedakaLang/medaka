@@ -2220,6 +2220,18 @@ runtimeAbiRows = [
     },
   ),
   (
+    "processSubmitRaw",
+    CallableShape {
+      writtenValueArity = 7,
+      loweredCoreArity = 7,
+      parameterHeads =
+        ["String", "List", "String", "List", "Int", "Int", "Int"],
+      resultHead = "Result",
+      canonicalSignature =
+        "v1:(program : String) -> List String -> String -> List (String, String) -> Int -> Int -> Int -> <Exec program> Result (Int, Int, String) (LaunchTicket program)",
+    },
+  ),
+  (
     "processStartRaw",
     CallableShape {
       writtenValueArity = 7,

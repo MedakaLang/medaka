@@ -97,6 +97,7 @@ renderAbiHeader _ = stringConcat [
   "#define MDK_PROCESS_INVALID_IO 13\n",
   "#define MDK_PROCESS_READ_FAILED 14\n",
   "#define MDK_PROCESS_WRITE_FAILED 15\n",
+  "#define MDK_PROCESS_QUEUE_FULL 16\n",
   "#define MDK_PROCESS_BUSY 17\n",
   "#define MDK_STR_TAG 1\n",
   "#define MDK_FLOAT_TAG 2\n",

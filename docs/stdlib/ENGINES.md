@@ -109,6 +109,7 @@ not bound, so the call is rejected or aborts.
 | `hashStringHex` | real | real | real | real | refused |
 | `hashFile` | refused | real | refused | real | refused |
 | `byteBlockWriteStdout` | canned | real | canned | real | real |
+| `processSubmitRaw` | refused | refused | refused | real | refused |
 | `processStartRaw` | refused | refused | refused | real | refused |
 | `processRetryStartRaw` | refused | refused | refused | real | refused |
 | `processCheckStartRaw` | refused | refused | refused | real | refused |

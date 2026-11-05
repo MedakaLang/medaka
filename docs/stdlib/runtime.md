@@ -1485,6 +1485,12 @@ stringToLower : String -> String
 
 A string with every ASCII letter in lowercase.
 
+### `processSubmitRaw`
+
+```
+processSubmitRaw : (program : String) -> List String -> String -> List (String, String) -> Int -> Int -> Int -> <Exec program> Result (Int, Int, String) (LaunchTicket program)
+```
+
 ### `processStartRaw`
 
 ```

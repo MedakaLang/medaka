@@ -288,6 +288,9 @@ runtimeDecls = [
   fn "i64" "mdk_build_fingerprint" ["i64"],
   fn "i64" "mdk_build_commit" ["i64"],
   fn "i64" "mdk_build_date" ["i64"],
+  fn "i64" "mdk_process_submit" [
+    "i64", "i64", "i64", "i64", "i64", "i64", "i64"
+  ],
   fn "i64" "mdk_process_start" [
     "i64", "i64", "i64", "i64", "i64", "i64", "i64"
   ],

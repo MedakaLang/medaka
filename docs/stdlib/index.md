@@ -828,6 +828,8 @@ Manipulation of `/`-separated paths as text.
 
 ## [`process`](process.md)
 
+Submit a bounded native launch without waiting for creation or exec.
+
 - [`PipeChoice`](process.md#pipechoice)
 - [`SpawnOptions`](process.md#spawnoptions)
 - [`ProcessOperation`](process.md#processoperation)
@@ -836,6 +838,7 @@ Manipulation of `/`-separated paths as text.
 - [`ExitStatus`](process.md#exitstatus)
 - [`StartError`](process.md#starterror)
 - [`LaunchProgress`](process.md#launchprogress)
+- [`submit`](process.md#submit)
 - [`start`](process.md#start)
 - [`retryStart`](process.md#retrystart)
 - [`checkStart`](process.md#checkstart)
@@ -1038,6 +1041,7 @@ The host primitives.
 - [`charToLower`](runtime.md#chartolower)
 - [`stringToUpper`](runtime.md#stringtoupper)
 - [`stringToLower`](runtime.md#stringtolower)
+- [`processSubmitRaw`](runtime.md#processsubmitraw)
 - [`processStartRaw`](runtime.md#processstartraw)
 - [`processRetryStartRaw`](runtime.md#processretrystartraw)
 - [`processCheckStartRaw`](runtime.md#processcheckstartraw)

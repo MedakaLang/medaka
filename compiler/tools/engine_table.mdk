@@ -59,6 +59,7 @@ refusedOnRun = [
   ("processTryReadRaw", execReason),
   ("processTryWriteRaw", execReason),
   ("processStreamFdRaw", execReason),
+  ("processSubmitRaw", execReason),
   ("processStartRaw", execReason),
   ("processRetryStartRaw", execReason),
   ("processCheckStartRaw", execReason),
