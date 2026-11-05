@@ -1,5 +1,10 @@
 # process
 
+Submit a bounded native launch without waiting for creation or exec.
+The ticket retains cleanup ownership until checkStart transfers a Process or
+abortStart positively observes terminal cleanup. Queue permits remain held
+during creation and failed cleanup; callers must keep draining pending tickets.
+
 ## `PipeChoice`
 
 ```
@@ -27,6 +32,9 @@ data ProcessOperation
   | Wait
   | Close
   | LaunchHandshake
+  | Read
+  | Write
+  | StreamLookup
 ```
 
 ## `ProcessError`
@@ -41,6 +49,18 @@ data ProcessError
   | CloseFailed Int String
   | Unsupported String
   | LaunchCancelled
+  | InvalidIO String
+  | StreamFailed ProcessOperation Int String
+  | SubmissionQueueFull
+  | ProcessBusy
+```
+
+## `OutputStream`
+
+```
+data OutputStream
+  = ChildStdout
+  | ChildStderr
 ```
 
 ## `ExitStatus`
@@ -68,6 +88,18 @@ data LaunchProgress process
   | LaunchFailed ProcessError
   | LaunchAborted
 ```
+
+## `submit`
+
+```
+submit : (program : String) -> SpawnOptions -> <Exec program> Result ProcessError (LaunchTicket program)
+submit program opts
+```
+
+Submit a bounded native launch without waiting for creation or exec.
+The ticket retains cleanup ownership until checkStart transfers a Process or
+abortStart positively observes terminal cleanup. Queue permits remain held
+during creation and failed cleanup; callers must keep draining pending tickets.
 
 ## `start`
 
@@ -116,5 +148,34 @@ closeStdin p
 ```
 dispose : Process p -> <Exec p> Result ProcessError Unit
 dispose p
+```
+
+## `outputStreamCode`
+
+```
+outputStreamCode : OutputStream -> Int
+```
+
+The native stream selector for an output stream.
+
+## `tryRead`
+
+```
+tryRead : Process p -> OutputStream -> Int -> <Exec p> Result ProcessError (Option Bytes)
+tryRead p stream limit
+```
+
+## `tryWrite`
+
+```
+tryWrite : Process p -> Bytes -> Int -> Int -> <Exec p> Result ProcessError (Option Int)
+tryWrite p bytes offset count
+```
+
+## `streamFd`
+
+```
+streamFd : Process p -> Int -> <Exec p> Result ProcessError Int
+streamFd p stream
 ```
 

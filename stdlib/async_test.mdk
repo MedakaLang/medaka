@@ -1,0 +1,11 @@
+import async.{runAsync, deadlineAfter, expiredNow, waitFlag, sleep}
+import time.{millis}
+import test.{expectTrue, expectFalse}
+
+test "expiredNow checks the carried timer without yielding" =
+  let wait = runAsync (deadlineAfter (millis 5))
+  let _ = runAsync (sleep (millis 20))
+  expectTrue (expiredNow wait)
+
+test "expiredNow does not expire a flag wait" =
+  expectFalse (expiredNow (waitFlag (Ref True)))

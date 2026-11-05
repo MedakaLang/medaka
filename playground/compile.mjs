@@ -220,7 +220,8 @@ function withGuestStderr(e, host) {
 // message naming it, in place of the compiler trap the toolchain would otherwise
 // surface.  The externs the browser host serves (medaka_host.mjs SLICES) are absent.
 const NATIVE_ONLY_EXTERNS = new Set([
-  'processStartRaw', 'processRetryStartRaw', 'processCheckStartRaw',
+  'processTryReadRaw', 'processTryWriteRaw', 'processStreamFdRaw',
+  'processSubmitRaw', 'processStartRaw', 'processRetryStartRaw', 'processCheckStartRaw',
   'processAbortStartRaw', 'processPollExitRaw', 'processCloseStdinRaw', 'processDisposeRaw',
   'runCommand',
   'netResolve', 'netTcpConnect', 'netTcpListen', 'netListenPort', 'netTcpAccept',

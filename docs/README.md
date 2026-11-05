@@ -194,6 +194,7 @@ What's in the standard library, what's planned, module-by-module status.
 | [`nonempty.md`](stdlib/nonempty.md) | nonempty | — |
 | [`path.md`](stdlib/path.md) | path | — |
 | [`process.md`](stdlib/process.md) | process | — |
+| [`process_async.md`](stdlib/process_async.md) | process_async | — |
 | [`regex.md`](stdlib/regex.md) | regex | — |
 | [`runtime.md`](stdlib/runtime.md) | runtime | — |
 | [`set.md`](stdlib/set.md) | set | — |

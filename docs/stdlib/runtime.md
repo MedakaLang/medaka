@@ -1485,6 +1485,12 @@ stringToLower : String -> String
 
 A string with every ASCII letter in lowercase.
 
+### `processSubmitRaw`
+
+```
+processSubmitRaw : (program : String) -> List String -> String -> List (String, String) -> Int -> Int -> Int -> <Exec program> Result (Int, Int, String) (LaunchTicket program)
+```
+
 ### `processStartRaw`
 
 ```
@@ -1525,5 +1531,23 @@ processCloseStdinRaw : Process p -> <Exec p> Result (Int, Int, String) Unit
 
 ```
 processDisposeRaw : Process p -> <Exec p> Result (Int, Int, String) Unit
+```
+
+### `processTryReadRaw`
+
+```
+processTryReadRaw : Process p -> Int -> Int -> <Exec p> Result (Int, Int, String) (Option ByteBlock)
+```
+
+### `processTryWriteRaw`
+
+```
+processTryWriteRaw : Process p -> ByteBlock -> Int -> Int -> <Exec p> Result (Int, Int, String) (Option Int)
+```
+
+### `processStreamFdRaw`
+
+```
+processStreamFdRaw : Process p -> Int -> <Exec p> Result (Int, Int, String) Int
 ```
 

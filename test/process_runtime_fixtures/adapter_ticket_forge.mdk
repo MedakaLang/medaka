@@ -1,0 +1,4 @@
+import process_async.{LaunchStop(..)}
+forge : LaunchStop (LaunchTicket "/bin/true")
+forge = LaunchCleanupPending (LaunchTicket 0) None
+main = forge

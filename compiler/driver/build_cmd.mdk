@@ -2448,29 +2448,32 @@ clangLinkTimed job libFlags provObj perfOn tLink0 =
       -- prelude functions into user code without LTO.  Proven output-identical
       -- inline-vs-prebuilt by test/diff_compiler_prelude_obj.sh.
       let preludeObj = preludeObjOf ()
-      let processC = joinPath (dirOf rtC) "medaka_process.c"
-      let objInputs =
+      let processInput = archiveProcessRuntime cc rtC optFlag gcCflags tmpDir
+      let objInputs process =
         if preludeObj == "" then
-          [llPath, rtInput, processC]
+          [llPath, rtInput, process]
         else
-          [llPath, preludeObj, rtInput, processC]
+          [llPath, preludeObj, rtInput, process]
       -- `--stamp-build`'s provenance object, LAST so it overrides the weak,
       -- empty definitions medaka_rt.c contributes; "" (the default) leaves the
       -- input list byte-identical to the unstamped one.
-      let linkInputs =
-        if provObj == "" then objInputs else objInputs ++ [provObj]
+      let linkInputs process =
+        if provObj == "" then
+          objInputs process
+        else
+          objInputs process ++ [provObj]
       -- The runtime (runtime/medaka_rt.c) runs the compiled program on a 256 MB
       -- worker thread via GC_pthread_create, so it self-provisions its stack: no
       -- Mach-O-only `-Wl,-stack_size` link flag is needed on either platform.
       -- `-pthread` (thread runtime) and `-lm` (math externs) go on every link.
       let sectionsLink = gcSectionsLinkFlag ()
       let argsWith =
-        libs =>
+        process libs =>
           [optFlag, "-pthread"]
             ++ ltoLinkFlags lto
             ++ gcSectionsCflags
             ++ gcCflags
-            ++ linkInputs
+            ++ linkInputs process
             ++ libFlags
             ++ libs
             ++ [sectionsLink, "-lm", "-o", outPath]
@@ -2478,12 +2481,39 @@ clangLinkTimed job libFlags provObj perfOn tLink0 =
       -- ONCE, after the clang child exits, without duplicating the row across three
       -- result arms.  Medaka is strict, so this runs clang exactly where the
       -- `match` would.
-      let ccRes = linkWithGcFallback cc argsWith gcLibs
+      let ccRes = match processInput
+        Err e => Err e
+        Ok process => linkWithGcFallback cc (argsWith process) gcLibs
       let tClang = now ()
       emitPhase perfOn "clang" (tClang - tRtObj) inputAbs
       match ccRes
         Err e => buildErr "error: linking \{inputAbs} failed\n\{e}"
         Ok _ => buildOk "built \{inputAbs} -> \{outPath}"
+
+-- Only a strong process API reference extracts this archive member. The runtime's
+-- weak startup hook then initializes it before Medaka code; unrelated programs
+-- retain neither the worker nor its queue. Keep the member native so the system
+-- archiver needs no LLVM bitcode plugin, including on installed toolchains.
+archiveProcessRuntime : String ->
+  String ->
+  String ->
+  List String ->
+  String ->
+  <IO> Result String String
+archiveProcessRuntime cc rtC optFlag gcCflags tmpDir =
+  let processC = joinPath (dirOf rtC) "medaka_process.c"
+  let processObj = joinPath tmpDir "process.o"
+  let processLib = joinPath tmpDir "process.a"
+  let args =
+    [optFlag, "-pthread"]
+      ++ gcSectionsCflags
+      ++ gcCflags
+      ++ ["-c", processC, "-o", processObj]
+  match runCommandOk cc args
+    Err e => Err e
+    Ok _ => match runCommandOk "ar" ["rcs", processLib, processObj]
+      Ok _ => Ok processLib
+      Err _ => Ok processObj
 
 -- A link against libgc.a that fails is retried once against the shared library,
 -- so an archive this toolchain cannot link (non-PIC, or another compiler's LTO

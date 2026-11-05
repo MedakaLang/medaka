@@ -1,3 +1,5 @@
+import bytes.{Bytes, adoptByteBlockUnsafe, lendByteBlockUnsafe}
+
 public export data PipeChoice = Piped | Null
 
 public export data SpawnOptions = SpawnOptions {
@@ -18,6 +20,9 @@ public export data ProcessOperation =
   | Wait
   | Close
   | LaunchHandshake
+  | Read
+  | Write
+  | StreamLookup
 public export data ProcessError =
   | InvalidSpawn String
   | SpawnFailed ProcessOperation Int String
@@ -27,6 +32,11 @@ public export data ProcessError =
   | CloseFailed Int String
   | Unsupported String
   | LaunchCancelled
+  | InvalidIO String
+  | StreamFailed ProcessOperation Int String
+  | SubmissionQueueFull
+  | ProcessBusy
+public export data OutputStream = ChildStdout | ChildStderr
 public export data ExitStatus = Exited Int | Signalled Int Bool
 public export data StartError ticket =
   | StartRejected ProcessError
@@ -55,6 +65,11 @@ rawError (9, _, _) = StillRunning
 rawError (10, _, msg) = Unsupported msg
 rawError (11, e, msg) = SpawnFailed LaunchHandshake e msg
 rawError (12, _, _) = LaunchCancelled
+rawError (13, _, msg) = InvalidIO msg
+rawError (14, e, msg) = StreamFailed Read e msg
+rawError (15, e, msg) = StreamFailed Write e msg
+rawError (16, _, _) = SubmissionQueueFull
+rawError (17, _, _) = ProcessBusy
 rawError _ = panic "process: invalid error code"
 
 startResult : Result (Int, Int, String, Option (LaunchTicket p)) (Process p) ->
@@ -73,6 +88,26 @@ progressResult (Ok (1, Some p, None)) = Ok (LaunchStarted p)
 progressResult (Ok (2, None, Some e)) = Ok (LaunchFailed (rawError e))
 progressResult (Ok (3, None, None)) = Ok LaunchAborted
 progressResult _ = panic "process: invalid launch progress ABI"
+
+{- | Submit a bounded native launch without waiting for creation or exec.
+     The ticket retains cleanup ownership until checkStart transfers a Process or
+     abortStart positively observes terminal cleanup. Queue permits remain held
+     during creation and failed cleanup; callers must keep draining pending tickets. -}
+export
+submit : (program : String) ->
+  SpawnOptions ->
+  <Exec program> Result ProcessError (LaunchTicket program)
+submit program opts =
+  mapErr
+    rawError
+    (processSubmitRaw
+      program
+      opts.argv
+      opts.cwd
+      opts.env
+      (choice opts.stdin)
+      (choice opts.stdout)
+      (choice opts.stderr))
 
 export
 start : (program : String) ->
@@ -123,6 +158,37 @@ export
 dispose : Process p -> <Exec p> Result ProcessError Unit
 dispose p = mapErr rawError (processDisposeRaw p)
 
+{- | The native stream selector for an output stream. -}
+export
+outputStreamCode : OutputStream -> Int
+outputStreamCode ChildStdout = 1
+outputStreamCode ChildStderr = 2
+
+export
+tryRead : Process p ->
+  OutputStream ->
+  Int ->
+  <Exec p> Result ProcessError (Option Bytes)
+tryRead p stream limit =
+  match processTryReadRaw p (outputStreamCode stream) limit
+    Err e => Err (rawError e)
+    Ok block => Ok (map adoptByteBlockUnsafe block)
+
+export
+tryWrite : Process p ->
+  Bytes ->
+  Int ->
+  Int ->
+  <Exec p> Result ProcessError (Option Int)
+tryWrite p bytes offset count =
+  mapErr
+    rawError
+    (processTryWriteRaw p (lendByteBlockUnsafe bytes) offset count)
+
+export
+streamFd : Process p -> Int -> <Exec p> Result ProcessError Int
+streamFd p stream = mapErr rawError (processStreamFdRaw p stream)
+
 import test.{expectTrue}
 
 test "launch progress decodes pending, failed, and aborted shapes" =
@@ -133,3 +199,13 @@ test "launch progress decodes pending, failed, and aborted shapes" =
     (Ok LaunchPending, Ok (LaunchFailed LaunchCancelled), Ok LaunchAborted) =>
       True
     _ => False)
+
+test "stream errors preserve operation and busy state" = expectTrue (match (
+  rawError (13, 0, "bad"),
+  rawError (14, 5, "read"),
+  rawError (15, 32, "write"),
+  rawError (17, 0, "busy"),
+)
+  (InvalidIO "bad", StreamFailed Read 5 "read", StreamFailed Write 32 "write", ProcessBusy) =>
+    True
+  _ => False)
