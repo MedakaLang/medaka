@@ -614,7 +614,7 @@ a broker's child.
 
 #### Owned scope and cleanup (#4855)
 
-Placement remains a prospective `stdlib/process_scope.mdk` adapter over the
+Placement remains a prospective process_scope module in stdlib over the
 existing `process`, `async`, `time` and shared deadline/cancellation exports.
 It must not import compiler tools or create a second scheduler. The earlier
 `startOwned : (program : String) -> SpawnOptions -> Deadline <Clock, Exec program | e> -> CancelToken -> Async <Clock, Exec program | e> (Result ProcessError (Process program))`
@@ -646,7 +646,7 @@ protected long-lived manager; the positive deployment matrix has not run.
 
 #### Stdio and backpressure (#4854)
 
-Placement remains a prospective `stdlib/stdio_async.mdk`, importing `async`,
+Placement remains a prospective stdio_async module in stdlib, importing `async`,
 `bytes`, `time`, and the shared deadline/token exports from `process_async`,
 without compiler-tools imports or a second scheduler. The earlier sketches
 `open : Unit -> <Stdin, Stdout> Result StdioError Stdio`,

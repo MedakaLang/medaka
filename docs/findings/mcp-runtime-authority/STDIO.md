@@ -43,14 +43,15 @@ submission worker. No scheduling or Process implementation is duplicated.
 | C1 | Reject pathname content I/O forever after first acquisition | 242 |
 | C2 | Reject libc resolver entry forever after first acquisition | 33 |
 | C3 | Reject legacy launch forever; prior launch attempts prevent acquisition | 44 |
-| C4 | Reject legacy protocol input/output before buffering or transfer | 3290 |
+| C4 | Reject legacy protocol input/output before buffering or transfer | 3291 |
 | C5 | Native launch attempts before acquisition prevent acquisition | 12 |
 | C6 | Audit automatic main output and abort paths separately from effects | 4181 |
 
-The census covers 6618 tracked `test/**` carriers, including 1023 host/prose/
+The census was replayed at `f114a7a5223afc09b0bddcb3114521714b965e75`
+with the byte-preserving probe readability edit pinned in the summary. It covers 6620 tracked `test/**` carriers, including 1024 host/prose/
 template files scanned in full to include inline programs. The overlapping
 counts are lexical candidates, including comments and strings; they are not
-counts of executable programs or promised compatibility breaks. 2338 carriers
+counts of executable programs or promised compatibility breaks. 2339 carriers
 have no lexical trigger. Derived golden/oracle/config artifacts are excluded
 by suffix and their counts are recorded. No test source or production behavior
 changed. A production cut needs semantic classification of the affected uses;

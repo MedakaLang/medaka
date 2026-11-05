@@ -19,6 +19,11 @@
     "normalization": "Only output-directory spellings, including diagnostic hex and row-name spellings",
     "stderr_bytes": 0
   },
+  "latest_census_replay": {
+    "base": "f114a7a5223afc09b0bddcb3114521714b965e75",
+    "probe_sha256": "070468933148b22933d50e03a4e3a51fde89285a6ea98c9c346de877cb1c6701",
+    "note": "Replay included the byte-preserving embedded-program readability edit; source_sha256 above pins the original experiment."
+  },
   "compatibility": {
     "scope": "All tracked test/** program carriers; full file text includes inline programs. Overlapping lexical candidates include comments/strings; not semantic or unique-program counts.",
     "suffixes": [
@@ -36,7 +41,7 @@
       ".sh",
       ".wat"
     ],
-    "files": 6618,
+    "files": 6620,
     "rules": {
       "C1": "pathname content I/O refused forever after first acquisition",
       "C2": "libc resolver entry refused forever after first acquisition",
@@ -49,12 +54,12 @@
       "C1": 242,
       "C6": 4181,
       "C3": 44,
-      "C4": 3290,
+      "C4": 3291,
       "C2": 33,
       "C5": 12
     },
-    "inline_host_files": 1023,
-    "no_lexical_trigger": 2338,
+    "inline_host_files": 1024,
+    "no_lexical_trigger": 2339,
     "excluded_artifact_suffix_counts": {
       ".txt": 195,
       ".json": 64,
@@ -195,7 +200,7 @@
     {"name":"abort_exposure_ordinary_check","status":"OBSERVED","rc":0,"stdout_hex":"6d61696e203a20610a2d2d203c6f75743e2f61626f72745f6578706f737572652e6d646b3a206f6b202831206465636c61726174696f6e28732920636865636b65642c2030206572726f7273290a","stderr_hex":"","expected_security_verdict":"reject internal-only extern; current acceptance is #4865 exposure"},
     {"name":"abort_exposure_native_bytes","status":"PASS","rc":1,"endpoint_hex":"4558504f534544","remaining_hex":"6c65617365616c696173203132372e302e302e310a","stderr_hex":"3c6f75743e2f61626f72745f6578706f737572652e6d646b3a343a323a2072756e74696d65206572726f72205b452d50414e49435d3a20434f4e54524f4c0a"},
     {"name":"admission_policy_decision","status":"UNQUALIFIED","reason":"check-policy is advisory; ordinary native build runs Net-only resolver and automatic output. No production admission/seal path exists."},
-    {"name":"compatibility_census","status":"OBSERVED","files":6618,"file_counts":{"C1":242,"C6":4181,"C3":44,"C4":3290,"C2":33,"C5":12},"inline_host_files":1023,"no_lexical_trigger":2338,"census_sha256":"78da0aff02e786052ef9ac43c5961926d640bb5c09acd92b6fa3bcb319c0bbf2"},
+    {"name":"compatibility_census","status":"OBSERVED","files":6620,"file_counts":{"C1":242,"C6":4181,"C3":44,"C4":3291,"C2":33,"C5":12},"inline_host_files":1024,"no_lexical_trigger":2339,"census_sha256":"4e0d4ffa9baa7213a99b1711fca5e55c897f034355c3e8f50c37a76b71b85d4b"},
     {"name":"cleanup","status":"PASS","detail":"Every Popen waited; C fork child exactly reaped; runtime launch terminal/dispose or structured unavailable; private scratch directory removed","native_unavailable":[]},
     {"name":"qualification","status":"BLOCKED","exit_code":77,"reason":"Runtime seal conflicts with supervisor obligations. No enforceable narrower file/NSS/worker split qualified. No production API authorized."}
   ]

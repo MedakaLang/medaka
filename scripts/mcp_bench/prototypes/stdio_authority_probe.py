@@ -228,12 +228,20 @@ def main():
 
     programs = {
         'empty': 'main = ()\n',
-        'net_only': 'main : <Net "leasealias"> Unit\nmain = match netResolve "leasealias"\n  Ok _ => ()\n  Err _ => ()\n',
+        'net_only': """main : <Net "leasealias"> Unit
+main = match netResolve "leasealias"
+  Ok _ => ()
+  Err _ => ()
+""",
         'automatic': 'main = 7\n',
         'internal_stdout': 'main = byteBlockWriteStdout (byteBlockFromString "RAW")\n',
         'stash_exposure': 'main = stashRunStdout "EXPOSED"\n',
         'enable_exposure': 'main = enableRunStdoutFlush ()\n',
-        'abort_exposure': 'main =\n  enableRunStdoutFlush ()\n  stashRunStdout "EXPOSED"\n  panic "CONTROL"\n',
+        'abort_exposure': """main =
+  enableRunStdoutFlush ()
+  stashRunStdout "EXPOSED"
+  panic "CONTROL"
+""",
     }
     for name, source in programs.items():
         path = out / (name + '.mdk')
