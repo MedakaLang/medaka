@@ -850,6 +850,11 @@ catalogRows = [
       GapBug
       "unimplemented in all 3 engines (see llvm/wasm TODO rows); no stdlib caller yet — a forward-declared snapshot-testing primitive (TESTING-DESIGN.md §4.7 \"medaka test --promote\"); recorded as a bug row for the interpreter although it is not an asymmetric regression against another engine"),
   ExternRow
+    "processSubmitRaw"
+    (CSymbol LlvmNet "mdk_process_submit")
+    (NotProvided GapPermanent "process ownership is unavailable on wasm")
+    (NotProvided GapPermanent "process ownership is unavailable in eval"),
+  ExternRow
     "processStartRaw"
     (CSymbol LlvmNet "mdk_process_start")
     (NotProvided GapPermanent "process ownership is unavailable on wasm")

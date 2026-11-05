@@ -3032,6 +3032,14 @@ emitNetExtern : Emit ->
   String ->
   List CExpr ->
   (String, LTy)
+emitNetExtern e env "processSubmitRaw" args = match emitArgs e env args
+  [a, b, c, d, f, g, h] =>
+    let r = freshReg e
+    emit
+      e
+      (rtLine e r "i64" "mdk_process_submit" (i64Ops [a, b, c, d, f, g, h]))
+    (r, LTCon)
+  _ => panic "llvm: processSubmitRaw takes 7 arguments"
 emitNetExtern e env "processStartRaw" args = match emitArgs e env args
   [a, b, c, d, f, g, h] =>
     let r = freshReg e

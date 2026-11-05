@@ -34,6 +34,7 @@ public export data ProcessError =
   | LaunchCancelled
   | InvalidIO String
   | StreamFailed ProcessOperation Int String
+  | SubmissionQueueFull
   | ProcessBusy
 public export data OutputStream = ChildStdout | ChildStderr
 public export data ExitStatus = Exited Int | Signalled Int Bool
@@ -67,6 +68,7 @@ rawError (12, _, _) = LaunchCancelled
 rawError (13, _, msg) = InvalidIO msg
 rawError (14, e, msg) = StreamFailed Read e msg
 rawError (15, e, msg) = StreamFailed Write e msg
+rawError (16, _, _) = SubmissionQueueFull
 rawError (17, _, _) = ProcessBusy
 rawError _ = panic "process: invalid error code"
 
@@ -86,6 +88,26 @@ progressResult (Ok (1, Some p, None)) = Ok (LaunchStarted p)
 progressResult (Ok (2, None, Some e)) = Ok (LaunchFailed (rawError e))
 progressResult (Ok (3, None, None)) = Ok LaunchAborted
 progressResult _ = panic "process: invalid launch progress ABI"
+
+{- | Submit a bounded native launch without waiting for creation or exec.
+     The ticket retains cleanup ownership until checkStart transfers a Process or
+     abortStart positively observes terminal cleanup. Queue permits remain held
+     during creation and failed cleanup; callers must keep draining pending tickets. -}
+export
+submit : (program : String) ->
+  SpawnOptions ->
+  <Exec program> Result ProcessError (LaunchTicket program)
+submit program opts =
+  mapErr
+    rawError
+    (processSubmitRaw
+      program
+      opts.argv
+      opts.cwd
+      opts.env
+      (choice opts.stdin)
+      (choice opts.stdout)
+      (choice opts.stderr))
 
 export
 start : (program : String) ->

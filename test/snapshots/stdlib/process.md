@@ -1,5 +1,5 @@
 # META
-source_lines=186
+source_lines=208
 stages=DESUGAR,MARK
 # SOURCE
 import bytes.{Bytes, adoptByteBlockUnsafe, lendByteBlockUnsafe}
@@ -38,6 +38,7 @@ public export data ProcessError =
   | LaunchCancelled
   | InvalidIO String
   | StreamFailed ProcessOperation Int String
+  | SubmissionQueueFull
   | ProcessBusy
 public export data OutputStream = ChildStdout | ChildStderr
 public export data ExitStatus = Exited Int | Signalled Int Bool
@@ -71,6 +72,7 @@ rawError (12, _, _) = LaunchCancelled
 rawError (13, _, msg) = InvalidIO msg
 rawError (14, e, msg) = StreamFailed Read e msg
 rawError (15, e, msg) = StreamFailed Write e msg
+rawError (16, _, _) = SubmissionQueueFull
 rawError (17, _, _) = ProcessBusy
 rawError _ = panic "process: invalid error code"
 
@@ -90,6 +92,26 @@ progressResult (Ok (1, Some p, None)) = Ok (LaunchStarted p)
 progressResult (Ok (2, None, Some e)) = Ok (LaunchFailed (rawError e))
 progressResult (Ok (3, None, None)) = Ok LaunchAborted
 progressResult _ = panic "process: invalid launch progress ABI"
+
+{- | Submit a bounded native launch without waiting for creation or exec.
+     The ticket retains cleanup ownership until checkStart transfers a Process or
+     abortStart positively observes terminal cleanup. Queue permits remain held
+     during creation and failed cleanup; callers must keep draining pending tickets. -}
+export
+submit : (program : String) ->
+  SpawnOptions ->
+  <Exec program> Result ProcessError (LaunchTicket program)
+submit program opts =
+  mapErr
+    rawError
+    (processSubmitRaw
+      program
+      opts.argv
+      opts.cwd
+      opts.env
+      (choice opts.stdin)
+      (choice opts.stdout)
+      (choice opts.stderr))
 
 export
 start : (program : String) ->
@@ -193,7 +215,7 @@ test "stream errors preserve operation and busy state" = expectTrue (match (
 (DData Public "PipeChoice" () ((variant "Piped" (ConPos)) (variant "Null" (ConPos))) ())
 (DData Public "SpawnOptions" () ((variant "SpawnOptions" (ConNamed (field "argv" (TyApp (TyCon "List") (TyCon "String"))) (field "cwd" (TyCon "String")) (field "env" (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "String")))) (field "stdin" (TyCon "PipeChoice")) (field "stdout" (TyCon "PipeChoice")) (field "stderr" (TyCon "PipeChoice"))))) ())
 (DData Public "ProcessOperation" () ((variant "Validate" (ConPos)) (variant "Pipe" (ConPos)) (variant "Fork" (ConPos)) (variant "Chdir" (ConPos)) (variant "ExecImage" (ConPos)) (variant "Wait" (ConPos)) (variant "Close" (ConPos)) (variant "LaunchHandshake" (ConPos)) (variant "Read" (ConPos)) (variant "Write" (ConPos)) (variant "StreamLookup" (ConPos))) ())
-(DData Public "ProcessError" () ((variant "InvalidSpawn" (ConPos (TyCon "String"))) (variant "SpawnFailed" (ConPos (TyCon "ProcessOperation") (TyCon "Int") (TyCon "String"))) (variant "ProcessClosed" (ConPos)) (variant "StillRunning" (ConPos)) (variant "WaitFailed" (ConPos (TyCon "Int") (TyCon "String"))) (variant "CloseFailed" (ConPos (TyCon "Int") (TyCon "String"))) (variant "Unsupported" (ConPos (TyCon "String"))) (variant "LaunchCancelled" (ConPos)) (variant "InvalidIO" (ConPos (TyCon "String"))) (variant "StreamFailed" (ConPos (TyCon "ProcessOperation") (TyCon "Int") (TyCon "String"))) (variant "ProcessBusy" (ConPos))) ())
+(DData Public "ProcessError" () ((variant "InvalidSpawn" (ConPos (TyCon "String"))) (variant "SpawnFailed" (ConPos (TyCon "ProcessOperation") (TyCon "Int") (TyCon "String"))) (variant "ProcessClosed" (ConPos)) (variant "StillRunning" (ConPos)) (variant "WaitFailed" (ConPos (TyCon "Int") (TyCon "String"))) (variant "CloseFailed" (ConPos (TyCon "Int") (TyCon "String"))) (variant "Unsupported" (ConPos (TyCon "String"))) (variant "LaunchCancelled" (ConPos)) (variant "InvalidIO" (ConPos (TyCon "String"))) (variant "StreamFailed" (ConPos (TyCon "ProcessOperation") (TyCon "Int") (TyCon "String"))) (variant "SubmissionQueueFull" (ConPos)) (variant "ProcessBusy" (ConPos))) ())
 (DData Public "OutputStream" () ((variant "ChildStdout" (ConPos)) (variant "ChildStderr" (ConPos))) ())
 (DData Public "ExitStatus" () ((variant "Exited" (ConPos (TyCon "Int"))) (variant "Signalled" (ConPos (TyCon "Int") (TyCon "Bool")))) ())
 (DData Public "StartError" ("ticket") ((variant "StartRejected" (ConPos (TyCon "ProcessError"))) (variant "StartCleanupPending" (ConPos (TyCon "ProcessError") (TyVar "ticket")))) ())
@@ -218,6 +240,7 @@ test "stream errors preserve operation and busy state" = expectTrue (match (
 (DFunDef false "rawError" ((PTuple (PLit (LInt 13)) PWild (PVar "msg"))) (EApp (EVar "InvalidIO") (EVar "msg")))
 (DFunDef false "rawError" ((PTuple (PLit (LInt 14)) (PVar "e") (PVar "msg"))) (EApp (EApp (EApp (EVar "StreamFailed") (EVar "Read")) (EVar "e")) (EVar "msg")))
 (DFunDef false "rawError" ((PTuple (PLit (LInt 15)) (PVar "e") (PVar "msg"))) (EApp (EApp (EApp (EVar "StreamFailed") (EVar "Write")) (EVar "e")) (EVar "msg")))
+(DFunDef false "rawError" ((PTuple (PLit (LInt 16)) PWild PWild)) (EVar "SubmissionQueueFull"))
 (DFunDef false "rawError" ((PTuple (PLit (LInt 17)) PWild PWild)) (EVar "ProcessBusy"))
 (DFunDef false "rawError" (PWild) (EApp (EVar "panic") (ELit (LString "process: invalid error code"))))
 (DTypeSig false "startResult" (TyFun (TyApp (TyApp (TyCon "Result") (TyTuple (TyCon "Int") (TyCon "Int") (TyCon "String") (TyApp (TyCon "Option") (TyApp (TyCon "LaunchTicket") (TyVar "p"))))) (TyApp (TyCon "Process") (TyVar "p"))) (TyApp (TyApp (TyCon "Result") (TyApp (TyCon "StartError") (TyApp (TyCon "LaunchTicket") (TyVar "p")))) (TyApp (TyCon "Process") (TyVar "p")))))
@@ -231,6 +254,8 @@ test "stream errors preserve operation and busy state" = expectTrue (match (
 (DFunDef false "progressResult" ((PCon "Ok" (PTuple (PLit (LInt 2)) (PCon "None") (PCon "Some" (PVar "e"))))) (EApp (EVar "Ok") (EApp (EVar "LaunchFailed") (EApp (EVar "rawError") (EVar "e")))))
 (DFunDef false "progressResult" ((PCon "Ok" (PTuple (PLit (LInt 3)) (PCon "None") (PCon "None")))) (EApp (EVar "Ok") (EVar "LaunchAborted")))
 (DFunDef false "progressResult" (PWild) (EApp (EVar "panic") (ELit (LString "process: invalid launch progress ABI"))))
+(DTypeSig true "submit" (TyFun (TyNamed "program" (TyCon "String")) (TyFun (TyCon "SpawnOptions") (TyEffect ((atom "Exec" (name "program"))) None (TyApp (TyApp (TyCon "Result") (TyCon "ProcessError")) (TyApp (TyCon "LaunchTicket") (TyVar "program")))))))
+(DFunDef false "submit" ((PVar "program") (PVar "opts")) (EApp (EApp (EVar "mapErr") (EVar "rawError")) (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EVar "processSubmitRaw") (EVar "program")) (EFieldAccess (EVar "opts") "argv")) (EFieldAccess (EVar "opts") "cwd")) (EFieldAccess (EVar "opts") "env")) (EApp (EVar "choice") (EFieldAccess (EVar "opts") "stdin"))) (EApp (EVar "choice") (EFieldAccess (EVar "opts") "stdout"))) (EApp (EVar "choice") (EFieldAccess (EVar "opts") "stderr")))))
 (DTypeSig true "start" (TyFun (TyNamed "program" (TyCon "String")) (TyFun (TyCon "SpawnOptions") (TyEffect ((atom "Exec" (name "program"))) None (TyApp (TyApp (TyCon "Result") (TyApp (TyCon "StartError") (TyApp (TyCon "LaunchTicket") (TyVar "program")))) (TyApp (TyCon "Process") (TyVar "program")))))))
 (DFunDef false "start" ((PVar "program") (PVar "opts")) (EApp (EVar "startResult") (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EVar "processStartRaw") (EVar "program")) (EFieldAccess (EVar "opts") "argv")) (EFieldAccess (EVar "opts") "cwd")) (EFieldAccess (EVar "opts") "env")) (EApp (EVar "choice") (EFieldAccess (EVar "opts") "stdin"))) (EApp (EVar "choice") (EFieldAccess (EVar "opts") "stdout"))) (EApp (EVar "choice") (EFieldAccess (EVar "opts") "stderr")))))
 (DTypeSig true "retryStart" (TyFun (TyApp (TyCon "LaunchTicket") (TyVar "p")) (TyEffect ((atom "Exec" (name "p"))) None (TyApp (TyApp (TyCon "Result") (TyApp (TyCon "StartError") (TyApp (TyCon "LaunchTicket") (TyVar "p")))) (TyApp (TyCon "Process") (TyVar "p"))))))
@@ -263,7 +288,7 @@ test "stream errors preserve operation and busy state" = expectTrue (match (
 (DData Public "PipeChoice" () ((variant "Piped" (ConPos)) (variant "Null" (ConPos))) ())
 (DData Public "SpawnOptions" () ((variant "SpawnOptions" (ConNamed (field "argv" (TyApp (TyCon "List") (TyCon "String"))) (field "cwd" (TyCon "String")) (field "env" (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "String")))) (field "stdin" (TyCon "PipeChoice")) (field "stdout" (TyCon "PipeChoice")) (field "stderr" (TyCon "PipeChoice"))))) ())
 (DData Public "ProcessOperation" () ((variant "Validate" (ConPos)) (variant "Pipe" (ConPos)) (variant "Fork" (ConPos)) (variant "Chdir" (ConPos)) (variant "ExecImage" (ConPos)) (variant "Wait" (ConPos)) (variant "Close" (ConPos)) (variant "LaunchHandshake" (ConPos)) (variant "Read" (ConPos)) (variant "Write" (ConPos)) (variant "StreamLookup" (ConPos))) ())
-(DData Public "ProcessError" () ((variant "InvalidSpawn" (ConPos (TyCon "String"))) (variant "SpawnFailed" (ConPos (TyCon "ProcessOperation") (TyCon "Int") (TyCon "String"))) (variant "ProcessClosed" (ConPos)) (variant "StillRunning" (ConPos)) (variant "WaitFailed" (ConPos (TyCon "Int") (TyCon "String"))) (variant "CloseFailed" (ConPos (TyCon "Int") (TyCon "String"))) (variant "Unsupported" (ConPos (TyCon "String"))) (variant "LaunchCancelled" (ConPos)) (variant "InvalidIO" (ConPos (TyCon "String"))) (variant "StreamFailed" (ConPos (TyCon "ProcessOperation") (TyCon "Int") (TyCon "String"))) (variant "ProcessBusy" (ConPos))) ())
+(DData Public "ProcessError" () ((variant "InvalidSpawn" (ConPos (TyCon "String"))) (variant "SpawnFailed" (ConPos (TyCon "ProcessOperation") (TyCon "Int") (TyCon "String"))) (variant "ProcessClosed" (ConPos)) (variant "StillRunning" (ConPos)) (variant "WaitFailed" (ConPos (TyCon "Int") (TyCon "String"))) (variant "CloseFailed" (ConPos (TyCon "Int") (TyCon "String"))) (variant "Unsupported" (ConPos (TyCon "String"))) (variant "LaunchCancelled" (ConPos)) (variant "InvalidIO" (ConPos (TyCon "String"))) (variant "StreamFailed" (ConPos (TyCon "ProcessOperation") (TyCon "Int") (TyCon "String"))) (variant "SubmissionQueueFull" (ConPos)) (variant "ProcessBusy" (ConPos))) ())
 (DData Public "OutputStream" () ((variant "ChildStdout" (ConPos)) (variant "ChildStderr" (ConPos))) ())
 (DData Public "ExitStatus" () ((variant "Exited" (ConPos (TyCon "Int"))) (variant "Signalled" (ConPos (TyCon "Int") (TyCon "Bool")))) ())
 (DData Public "StartError" ("ticket") ((variant "StartRejected" (ConPos (TyCon "ProcessError"))) (variant "StartCleanupPending" (ConPos (TyCon "ProcessError") (TyVar "ticket")))) ())
@@ -288,6 +313,7 @@ test "stream errors preserve operation and busy state" = expectTrue (match (
 (DFunDef false "rawError" ((PTuple (PLit (LInt 13)) PWild (PVar "msg"))) (EApp (EVar "InvalidIO") (EVar "msg")))
 (DFunDef false "rawError" ((PTuple (PLit (LInt 14)) (PVar "e") (PVar "msg"))) (EApp (EApp (EApp (EVar "StreamFailed") (EVar "Read")) (EVar "e")) (EVar "msg")))
 (DFunDef false "rawError" ((PTuple (PLit (LInt 15)) (PVar "e") (PVar "msg"))) (EApp (EApp (EApp (EVar "StreamFailed") (EVar "Write")) (EVar "e")) (EVar "msg")))
+(DFunDef false "rawError" ((PTuple (PLit (LInt 16)) PWild PWild)) (EVar "SubmissionQueueFull"))
 (DFunDef false "rawError" ((PTuple (PLit (LInt 17)) PWild PWild)) (EVar "ProcessBusy"))
 (DFunDef false "rawError" (PWild) (EApp (EVar "panic") (ELit (LString "process: invalid error code"))))
 (DTypeSig false "startResult" (TyFun (TyApp (TyApp (TyCon "Result") (TyTuple (TyCon "Int") (TyCon "Int") (TyCon "String") (TyApp (TyCon "Option") (TyApp (TyCon "LaunchTicket") (TyVar "p"))))) (TyApp (TyCon "Process") (TyVar "p"))) (TyApp (TyApp (TyCon "Result") (TyApp (TyCon "StartError") (TyApp (TyCon "LaunchTicket") (TyVar "p")))) (TyApp (TyCon "Process") (TyVar "p")))))
@@ -301,6 +327,8 @@ test "stream errors preserve operation and busy state" = expectTrue (match (
 (DFunDef false "progressResult" ((PCon "Ok" (PTuple (PLit (LInt 2)) (PCon "None") (PCon "Some" (PVar "e"))))) (EApp (EVar "Ok") (EApp (EVar "LaunchFailed") (EApp (EVar "rawError") (EVar "e")))))
 (DFunDef false "progressResult" ((PCon "Ok" (PTuple (PLit (LInt 3)) (PCon "None") (PCon "None")))) (EApp (EVar "Ok") (EVar "LaunchAborted")))
 (DFunDef false "progressResult" (PWild) (EApp (EVar "panic") (ELit (LString "process: invalid launch progress ABI"))))
+(DTypeSig true "submit" (TyFun (TyNamed "program" (TyCon "String")) (TyFun (TyCon "SpawnOptions") (TyEffect ((atom "Exec" (name "program"))) None (TyApp (TyApp (TyCon "Result") (TyCon "ProcessError")) (TyApp (TyCon "LaunchTicket") (TyVar "program")))))))
+(DFunDef false "submit" ((PVar "program") (PVar "opts")) (EApp (EApp (EVar "mapErr") (EVar "rawError")) (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EVar "processSubmitRaw") (EVar "program")) (EFieldAccess (EVar "opts") "argv")) (EFieldAccess (EVar "opts") "cwd")) (EFieldAccess (EVar "opts") "env")) (EApp (EVar "choice") (EFieldAccess (EVar "opts") "stdin"))) (EApp (EVar "choice") (EFieldAccess (EVar "opts") "stdout"))) (EApp (EVar "choice") (EFieldAccess (EVar "opts") "stderr")))))
 (DTypeSig true "start" (TyFun (TyNamed "program" (TyCon "String")) (TyFun (TyCon "SpawnOptions") (TyEffect ((atom "Exec" (name "program"))) None (TyApp (TyApp (TyCon "Result") (TyApp (TyCon "StartError") (TyApp (TyCon "LaunchTicket") (TyVar "program")))) (TyApp (TyCon "Process") (TyVar "program")))))))
 (DFunDef false "start" ((PVar "program") (PVar "opts")) (EApp (EVar "startResult") (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EVar "processStartRaw") (EVar "program")) (EFieldAccess (EVar "opts") "argv")) (EFieldAccess (EVar "opts") "cwd")) (EFieldAccess (EVar "opts") "env")) (EApp (EVar "choice") (EFieldAccess (EVar "opts") "stdin"))) (EApp (EVar "choice") (EFieldAccess (EVar "opts") "stdout"))) (EApp (EVar "choice") (EFieldAccess (EVar "opts") "stderr")))))
 (DTypeSig true "retryStart" (TyFun (TyApp (TyCon "LaunchTicket") (TyVar "p")) (TyEffect ((atom "Exec" (name "p"))) None (TyApp (TyApp (TyCon "Result") (TyApp (TyCon "StartError") (TyApp (TyCon "LaunchTicket") (TyVar "p")))) (TyApp (TyCon "Process") (TyVar "p"))))))

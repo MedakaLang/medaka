@@ -1,4 +1,11 @@
-import test_process.{underRoot, boundedVerb, withScratchDir}
+import test_process.{
+  underRoot,
+  boundedVerb,
+  withScratchDir,
+  expectSpawnOk,
+  expectSpawnFails,
+  expectSpawnOkLine,
+}
 import test.{Expectation, expectAll, fail, pass}
 import string.{contains}
 
@@ -39,8 +46,17 @@ fixture dir name modes =
       else
         expectAll
           (map
-            (mode => run output (if mode == "" then [] else [mode]) " passed")
-            modes)
+              (mode => run output (if mode == "" then [] else [mode]) " passed")
+              modes
+            ++ (if name == "submission" then
+              [
+                expectSpawnOkLine
+                  "env"
+                  ["MEDAKA_TEST_SUBMISSION_INIT_FAIL=1", output]
+                  "worker initialization refusal preserves synchronous launch passed",
+              ]
+            else
+              []))
 
 test "real process owner and launch tickets retain resources through failures" = withScratchDir
   (dir => expectAll [
@@ -50,7 +66,63 @@ test "real process owner and launch tickets retain resources through failures" =
     ],
     fixture dir "pipe_io" [""],
     fixture dir "launch_tickets" ["", "signal", "wait", "signal-stalled"],
+    fixture dir "submission" ["", "gc", "signal", "wait"],
   ])
+
+test "submission controls reject missing roots and GC-active construction" = withScratchDir
+  (dir =>
+    run
+      "python3"
+      [
+        underRoot "test/process_runtime_fixtures/submission_mutations.py",
+        underRoot "",
+        dir,
+      ]
+      "submission mutation controls passed")
+
+test "optional submission startup preserves standalone, archive, cached and installed links" = withScratchDir
+  (dir =>
+    run
+      "python3"
+      [
+        underRoot "test/process_runtime_fixtures/submission_linkage.py",
+        underRoot "",
+        dir,
+      ]
+      "submission linkage controls passed")
+
+test "typed submission preserves Exec grants and explicitly refuses eval and wasm" = withScratchDir
+  (dir =>
+    let source = underRoot "test/process_runtime_fixtures/submission_typed.mdk"
+    let compiler = underRoot "medaka"
+    let binary = "\{dir}/submitted"
+    expectAll [
+      expectSpawnOk compiler ["check", source],
+      expectSpawnOk compiler ["build", source, "-o", binary],
+      expectSpawnOkLine binary [] "submitted native passed",
+      expectSpawnOk compiler [
+        "check-policy", source, "--allow", "Exec=/bin/true", "--fn", "launch"
+      ],
+      expectSpawnFails
+        compiler
+        ["check-policy", source, "--allow", "Exec=/bin/false", "--fn", "launch"]
+        "Exec",
+      expectSpawnFails
+        compiler
+        [
+          "check",
+          underRoot "test/process_runtime_fixtures/submission_grant.mdk",
+        ]
+        "Exec",
+      expectSpawnFails
+        compiler
+        ["run", source]
+        "process ownership is unavailable in eval",
+      expectSpawnFails
+        compiler
+        ["check", "--target", "wasm", source]
+        "does not grant Exec",
+    ])
 
 test "owner fixture rejects an incorrect exit status" = withScratchDir (dir =>
   let script =

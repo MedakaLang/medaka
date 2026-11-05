@@ -1,5 +1,10 @@
 # process
 
+Submit a bounded native launch without waiting for creation or exec.
+The ticket retains cleanup ownership until checkStart transfers a Process or
+abortStart positively observes terminal cleanup. Queue permits remain held
+during creation and failed cleanup; callers must keep draining pending tickets.
+
 ## `PipeChoice`
 
 ```
@@ -46,6 +51,7 @@ data ProcessError
   | LaunchCancelled
   | InvalidIO String
   | StreamFailed ProcessOperation Int String
+  | SubmissionQueueFull
   | ProcessBusy
 ```
 
@@ -82,6 +88,18 @@ data LaunchProgress process
   | LaunchFailed ProcessError
   | LaunchAborted
 ```
+
+## `submit`
+
+```
+submit : (program : String) -> SpawnOptions -> <Exec program> Result ProcessError (LaunchTicket program)
+submit program opts
+```
+
+Submit a bounded native launch without waiting for creation or exec.
+The ticket retains cleanup ownership until checkStart transfers a Process or
+abortStart positively observes terminal cleanup. Queue permits remain held
+during creation and failed cleanup; callers must keep draining pending tickets.
 
 ## `start`
 

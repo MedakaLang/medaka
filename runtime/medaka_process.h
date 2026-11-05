@@ -2,6 +2,10 @@
 #define MEDAKA_PROCESS_H
 
 typedef struct MdkProcess MdkProcess;
+void mdk_process_submission_init(void);
+long long mdk_process_submit(long long program, long long argv, long long cwd,
+                            long long env, long long in_mode, long long out_mode,
+                            long long err_mode);
 long long mdk_process_start(long long program, long long argv, long long cwd,
                             long long env, long long in_mode, long long out_mode,
                             long long err_mode);
