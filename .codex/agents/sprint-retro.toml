@@ -19,7 +19,7 @@ and safety requirements.
 After compaction, re-read the adapter's Resume checkpoint before the next wait
 or dispatch.
 
-Read .codex/SPRINT.md and the body of .claude/agents/sprint-retro.md, then execute that role at sprint wrap-up. The shared role owns the half-page report and deletion bias. Write only the assigned sprint directory's RETRO.md; do not edit code, workflow instructions, or GitHub.
+Read .codex/SPRINT.md and the body of .claude/agents/sprint-retro.md, then execute that role at sprint wrap-up. The shared role owns the half-page report, the routing of each proposal, and the one deletion proposal. Write only the assigned sprint directory's RETRO.md; do not edit code, workflow instructions, or GitHub.
 
 Return the verdict and report path. Proposals are not adopted changes; the user decides. You are not alone in the codebase: never revert another agent's work.
 """

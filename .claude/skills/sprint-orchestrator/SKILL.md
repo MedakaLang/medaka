@@ -72,19 +72,14 @@ instead.
    the four merge triggers below — **not** for divergence.** A `main` that
    simply moved is not a trigger: packet §2 checks out the sprint base
    directly and never merges `main`, and [W-MERGE-QUEUE] means branch
-   currency is never required. `prelude-shadow-build-agreement` measured the
-   elective case — a pre-fix-round resync that cost a rebuild and a re-bless
-   and prevented nothing, since the branch was `CONFLICTING` at land anyway.
-   The check is still worth its two commands: it is what let
-   `comment-register` discover mid-sprint that a sibling sprint had shipped
-   the same census tool, and drop a doomed slice before the review round.
+   currency is never required. The check also catches a sibling sprint that
+   shipped the same work, before a doomed slice runs.
 
    **Merge `origin/main` into the sprint branch NOW only if the check shows
    one of these** (then push, and update the packet's base):
    - **A formatter, linter, or accepted-syntax change landed.** Otherwise
      every later slice is authored in the old format and the rebuilt binary's
-     pre-commit hook reflows it at land — one sprint ate "stale-binary fmt
-     drift across ~480 files" from the tree-wide reformat.
+     pre-commit hook reflows it at land.
    - **A slice needs something that just landed** — new code, a renamed gate
      or shard a packet must cite by name.
    - **`main` touched a shared record or table this sprint is also
@@ -94,11 +89,7 @@ instead.
    - **Land time, or `mergeable` says `CONFLICTING`.**
 
    Whichever the trigger, resync with `sh scripts/sprint-resync.sh
-   <sprint-branch>` — never by hand. Three orchestrator git slips came from
-   hand-running that sequence: a bare merge pushed without its blessed
-   goldens, a `git checkout <stale-sha> --` over an already-verified bless
-   (costing a full rebuild+rebless+preflight redo), and a merge into the
-   wrong branch.
+   <sprint-branch>` — never by hand.
 3. **Dispatch** one `sprint-implementer` with `isolation: "worktree"` and the
    contract's model tier for the slice. The brief is one line: the packet
    path. (The harness mints the worktree from `main`'s tip; the packet's §2
@@ -137,8 +128,7 @@ disjointness evidence, re-verified at dispatch time against the CURRENT head:
 `scripts/sprint-disjoint.sh` over the two packets' site lists (redirect to a
 file and read `$?` — it does not survive a pipe; its `head=` stamp must equal
 your sprint head or the result is stale). Merge their results serially. When
-in doubt, serial — selector-identity's throughput was killed by process, not
-by serialization.
+in doubt, serial.
 
 ## End of sprint — review, fix, merge
 
@@ -162,9 +152,7 @@ by serialization.
       PR's own runs — but a second dispatch on the same branch cancels the
       first, so trigger it once.
       ⚠️ **Read it, and fold its reds into step 2's triage.** An unread red
-      run is the failure this replaces, not a lesser version of it — one
-      sprint dispatched three slices over a standing red nobody read for ~3h.
-      Two limits worth knowing when you read it: CI **warns** on a C3a
+      run is the failure this replaces, not a lesser version of it. Two limits worth knowing when you read it: CI **warns** on a C3a
       fixpoint failure where the local script hard-fails, and a break it
       finds must be attributed by `git log`/bisect rather than by the slice
       that owned it.
@@ -172,8 +160,7 @@ by serialization.
    c. **Dispatch ONE `sprint-reviewer`** (opus, `isolation: "worktree"`) with the
       resynced head SHA, the merge-base with main, the contract path, and NOTES.md.
       Every reviewer and style brief says "work only in your own worktree; never run
-      `git checkout` elsewhere": a style pass that checked a SHA out in the
-      orchestrator's worktree detached its HEAD and broke the fix-round build. If the
+      `git checkout` elsewhere". If the
       contract's §7 named domain property classes, name them in the brief. It reviews the WHOLE
    sprint diff at once — adversarial programs plus spec conformance — and
    reports ranked findings. For a large sprint, two reviewers with different
@@ -192,9 +179,7 @@ by serialization.
    first and set `--max-usd` from its estimate, because a sprint diff can pass
    the $1 default. A sprint diff of about 70 units costs about $0.40 and takes
    about 15 minutes on an idle box, longer on a loaded one; unit cutting alone
-   is minutes. The brief says: **tail the log, never kill a run that is still
-   printing batch lines** (one sprint killed two runs at 50 minutes and got
-   nothing). The shared cache path makes a rerun in any worktree free. Its
+   is minutes. The shared cache path makes a rerun in any worktree free. Its
    findings are leads that the style pass verifies against the rubric; the
    comments it dropped as pre-existing are already listed in its output and
    need no ledger line each. Its DECLINED register is what stops it demanding churn;
@@ -202,8 +187,7 @@ by serialization.
    line rather than dispatching a fix. Its brief restricts it to findings a
    `grep` can reproduce (copies, twins, comment register, unnamed tuples,
    hand-rolled stdlib); "move X beside Y" demands are declined, because the
-   pass never builds and cannot see the import cycle that sank two of six such
-   refactors in Phase 1 sprint 7.
+   pass never builds and cannot see an import cycle.
    Placement findings are measured against what the contract's Surface row
    STATED (`sprint-plan` step 3) and the **`architecture`** skill
    (`.claude/skills/architecture/SKILL.md`), not against a reviewer's
@@ -233,14 +217,10 @@ by serialization.
 
    ⚠️ **A one-line fix a previous fixer already located does NOT get its own
    dispatch.** Fold it into the packet still in flight, or make it yourself —
-   a dispatch is a worktree mint, a cold build, a gate run and a report,
-   measured at 18–36 min against ~10 min for an orchestrator-direct fix. This
-   is the fix round's most-repeated waste: nine sprints spun a full cycle for
-   a change the prior packet's own report had already named and located (a
-   missing `-c user.name=`, an identical one-line grep pattern in a fourth
-   script, a golden re-bless, a one-line mirror), and one such chain burned
-   1h10 for a ~10-minute packet. Dispatch a fix when it needs a build and a
-   judgment call; do it yourself when it needs neither.
+   a dispatch measured 18–36 min against ~10 min for an orchestrator-direct
+   fix, and this was the fix round's most-repeated waste (nine sprints).
+   Dispatch a fix when it needs a build and a judgment call; do it yourself
+   when it needs neither.
 4. **Land.** `medaka fmt --write` + `medaka lint` clean on touched files;
    `make preflight` if the diff touches blast-radius paths, else let CI
    answer. Mark the PR ready (`gh pr ready N`), then start
@@ -252,11 +232,17 @@ by serialization.
    `verdict:` line. On QUEUE_FAILED, check `known-red` / open flake issues
    before touching code, then re-run `land`.
 5. **Wrap.** Close/update the tracking issue (what landed, what was filed,
-   SHAs). Dispatch `sprint-retro` (lightweight — half a page, deletion bias).
-   Update STATUS.md to terminal states. Reap worktrees and background
-   processes.
+   SHAs). Dispatch `sprint-retro` (half a page; it routes each proposal to a
+   tool issue, a sprint-family note or the candidate list, and proposes one
+   deletion). File its tool issues yourself, by readback. The PR that adopts
+   its proposals also updates `.claude/dossier/retro-candidates.md`: new first
+   sightings in, promoted and expired entries out. Update STATUS.md to
+   terminal states. Reap worktrees and background processes.
 
 ## Standing rules — each one paid for in an incident
+
+The incidents behind this skill's rules are in `.claude/dossier/sprint.md`.
+
 
 - **Merge by the reported SHA**, never by branch name; verify a "landed on
   main" claim with `git merge-base --is-ancestor <sha> origin/main`.
