@@ -20,9 +20,11 @@ public export data PassConfig = PassConfig {
   dumpAfter : List String,
 }
 
+-- The library default: unlinted, because library callers (tests, tools) lower
+-- programs that need not be well scoped.  The emit entries turn lint on.
 export
 defaultPassConfig : PassConfig
-defaultPassConfig = PassConfig { lint = True, dumpAfter = [] }
+defaultPassConfig = PassConfig { lint = False, dumpAfter = [] }
 
 -- A broken invariant found after pass [faultPass].
 public export data PassFault = PassFault {

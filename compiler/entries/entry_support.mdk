@@ -23,7 +23,7 @@ import types.program_facts.{
 }
 import frontend.parser.{parse}
 import ir.core_ir.{CProgram}
-import ir.core_pass.{PassConfig(..), PassRun(..), defaultPassConfig}
+import ir.core_pass.{PassConfig(..), PassRun(..)}
 import string.{split}
 import frontend.desugar.{desugar, desugarIn, mapProg}
 import frontend.desugar_cache.{desugaredPrelude, preludeGeneration}
@@ -976,8 +976,9 @@ withSiteFile : String -> Loc -> Loc
 withSiteFile path (Loc "" sl sc el ec) = Loc path sl sc el ec
 withSiteFile _ l = l
 
--- The pass configuration the environment asks for, read once per process:
--- `MEDAKA_CORE_LINT` (`1` on, `0` off) and `MEDAKA_DUMP_CORE_AFTER`
+-- The pass configuration the two real emit entries run with, read once per
+-- process: `MEDAKA_CORE_LINT` (`1` on, `0` off; unset is on, unlike
+-- `defaultPassConfig`, which library callers use unlinted) and `MEDAKA_DUMP_CORE_AFTER`
 -- (comma-separated pass names, or `all`).
 export
 passConfigOfEnv : <IO> PassConfig
@@ -985,7 +986,7 @@ passConfigOfEnv =
   let lintOn = match getEnv "MEDAKA_CORE_LINT"
     Some "1" => True
     Some "0" => False
-    _ => defaultPassConfig.lint
+    _ => True
   let dumps = match getEnv "MEDAKA_DUMP_CORE_AFTER"
     Some names => filterList (/= "") (split "," names)
     None => []

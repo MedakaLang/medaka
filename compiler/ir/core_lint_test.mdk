@@ -1,4 +1,4 @@
-import test.{expectAll, expectEqual, expectTrue}
+import test.{expectAll, expectEqual, expectFalse}
 import frontend.ast.{Addr(..), Lit(..), Pat(..), noBinderId, noDeclLoc}
 import ir.core_ir.{
   CArm(..),
@@ -196,7 +196,8 @@ test "the input program is linted under the name input" =
 test "a lint-off run finds nothing" =
   expectEqual 0 (length (runPasses lintOff "ctx" [breakVar] clean).faults)
 
-test "the default config lints" = expectTrue defaultPassConfig.lint
+test "the library default config does not lint" =
+  expectFalse defaultPassConfig.lint
 
 test "a clean program through lint-on passes has no faults" =
   expectEqual 0 (length (runPasses lintOn "ctx" [keep, keep] clean).faults)
