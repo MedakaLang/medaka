@@ -45,7 +45,8 @@ fixture dir name modes =
 test "real process owner and launch tickets retain resources through failures" = withScratchDir
   (dir => expectAll [
     fixture dir "owner_smoke" [
-      "", "deny-clone", "deny-signal", "deny-wait", "deny-close"
+      "", "deny-clone", "deny-signal", "deny-wait", "deny-close", "sigpipe",
+      "selective-close"
     ],
     fixture dir "launch_tickets" ["", "signal", "wait", "signal-stalled"],
   ])

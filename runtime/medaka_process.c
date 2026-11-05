@@ -209,14 +209,14 @@ static MdkProcess *process_begin(const MdkSpawnSpec *s, MdkProcessError *error) 
       if (sig == SIGKILL || sig == SIGSTOP) continue;
       struct sigaction prior;
       if (sigaction(sig, NULL, &prior)) { if (errno == EINVAL) continue; goto child_failure; }
-      if (prior.sa_handler != SIG_DFL && prior.sa_handler != SIG_IGN) {
+      if (prior.sa_handler != SIG_DFL && (sig == SIGPIPE || prior.sa_handler != SIG_IGN)) {
         struct sigaction reset = {0}; reset.sa_handler = SIG_DFL; sigemptyset(&reset.sa_mask);
         if (sigaction(sig, &reset, NULL)) goto child_failure;
       }
     }
     if (sigprocmask(SIG_SETMASK, &old_mask, NULL)) goto child_failure;
     for (int i = 0; i < 3; ++i) if (dup2(child[i], i) < 0) goto child_failure;
-    if (syscall(SYS_close_range, 3U, UINT_MAX, CLOSE_RANGE_CLOEXEC) < 0) goto child_failure;
+    failure[0] = 10; if (syscall(SYS_close_range, 3U, UINT_MAX, CLOSE_RANGE_CLOEXEC) < 0) goto child_failure;
     failure[0] = 3; if (chdir(s->cwd) < 0) goto child_failure;
     failure[0] = 4; execve(s->program, s->argv, s->env);
   child_failure:
@@ -271,7 +271,7 @@ static MdkLaunchStep process_check_start(MdkProcess *p, MdkProcessError *error) 
     if (n > 0) p->record_len += (size_t)n;
     if (p->record_len == sizeof(p->record)) {
       int pair[2]; memcpy(pair, p->record, sizeof(pair));
-      p->failure = (MdkProcessError){pair[0] == 1 || pair[0] == 3 || pair[0] == 4 ? pair[0] : 11, pair[1], "child setup"};
+      p->failure = (MdkProcessError){pair[0] == 1 || pair[0] == 3 || pair[0] == 4 || pair[0] == 10 ? pair[0] : 11, pair[1], "child setup"};
       close_once(&p->error_fd); close_streams(p); p->state = FAILING;
     } else if (!n) {
       close_once(&p->error_fd);
