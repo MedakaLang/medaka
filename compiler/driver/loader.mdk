@@ -444,16 +444,18 @@ moduleIdsUnder dir prefix = match listDir dir
   Ok entries => entryModuleIds dir prefix entries
 
 entryModuleIds : String -> String -> List String -> <IO> List String
-entryModuleIds _ _ [] = []
-entryModuleIds dir prefix (name :: rest) =
-  let here = match mdkBaseName name
-    Some base => ["\{prefix}\{base}"]
-    None =>
-      if startsWith "." name then
-        []
-      else
-        moduleIdsUnder "\{dir}/\{name}" "\{prefix}\{name}."
-  here ++ entryModuleIds dir prefix rest
+entryModuleIds dir prefix xs0 = go xs0
+  where
+    go [] = []
+    go (name :: rest) =
+      let here = match mdkBaseName name
+        Some base => ["\{prefix}\{base}"]
+        None =>
+          if startsWith "." name then
+            []
+          else
+            moduleIdsUnder "\{dir}/\{name}" "\{prefix}\{name}."
+      here ++ go rest
 
 -- `foo.mdk` -> `Some "foo"`; dotfiles, non-`.mdk` entries, the two implicit
 -- prelude modules, and a `*_test.mdk` sibling (a module's tests, never an
@@ -1027,6 +1029,8 @@ rewriteDecls : List (String, String) ->
   List String ->
   List Decl ->
   <IO> List Decl
+-- Bound: list built in tail position modulo cons: a where-local go loses the constant-stack loop until the lambda-lift pass (#4878); convert then.
+-- lint-disable-next-line rule-threaded-invariant
 rewriteDecls _ _ [] = []
 rewriteDecls deps roots (d :: ds) =
   let d2 = rewriteDecl deps roots d
@@ -1375,17 +1379,21 @@ trustedModsGo : List (String, String) ->
   List String ->
   List String ->
   <IO> List String
-trustedModsGo _ _ _ _ [] = []
-trustedModsGo deps roots stdlibRoot trustedRoots (m :: ms) =
-  let rest = trustedModsGo deps roots stdlibRoot trustedRoots ms
-  match findModuleFile deps roots m
-    Some (path, owningRoot) =>
-      if contains (canonicalizePath owningRoot) trustedRoots
-        || underDir (canonicalizePath stdlibRoot) (canonicalizePath path) then
-        m :: rest
-      else
-        rest
-    None => rest
+trustedModsGo deps roots stdlibRoot trustedRoots xs0 = go xs0
+  where
+    go [] = []
+    go (m :: ms) =
+      let rest = go ms
+      match findModuleFile deps roots m
+        Some (path, owningRoot) =>
+          if contains (canonicalizePath owningRoot) trustedRoots
+            || underDir
+              (canonicalizePath stdlibRoot)
+              (canonicalizePath path) then
+            m :: rest
+          else
+            rest
+        None => rest
 
 underDir : String -> String -> Bool
 underDir dir path = startsWith "\{dir}/" path
@@ -1584,11 +1592,13 @@ visitModsF : (String -> String -> Result ParseError (List Decl)) ->
   String ->
   List String ->
   <IO> Result LoadError (List String, List (String, String, List Decl))
-visitModsF _ _ _ _ _ visited acc _ [] = Ok (visited, acc)
-visitModsF parseFn read deps roots stack visited acc importer (d :: ds) =
-  match visitModF parseFn read deps roots stack visited acc importer "" d
-    Err e => Err e
-    Ok (v2, a2) => visitModsF parseFn read deps roots stack v2 a2 importer ds
+visitModsF parseFn read deps roots stack v0 a0 importer xs0 = go v0 a0 xs0
+  where
+    go visited acc [] = Ok (visited, acc)
+    go visited acc (d :: ds) =
+      match visitModF parseFn read deps roots stack visited acc importer "" d
+        Err e => Err e
+        Ok (v2, a2) => go v2 a2 ds
 
 -- A walk's result as the loaders return it: the modules, with the source records
 -- narrowed to them.

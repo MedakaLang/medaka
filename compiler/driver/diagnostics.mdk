@@ -589,6 +589,8 @@ srcLinesArr src =
   arrayFromList (srcLinesGo cs 0 0 (arrayLength cs))
 
 srcLinesGo : Array Char -> Int -> Int -> Int -> List String
+-- Bound: hot compiler path: the where-go form allocates one closure per call until the lambda-lift pass (#4878); convert then.
+-- lint-disable-next-line rule-threaded-invariant
 srcLinesGo cs start i n
   | i >= n = [charSlice cs start n]
   | arrayGetUnsafe i cs == '\n' =
@@ -1316,6 +1318,8 @@ putBucket : String ->
   List Diag ->
   List (String, List Diag) ->
   List (String, List Diag)
+-- Bound: list built in tail position modulo cons: a where-local go loses the constant-stack loop until the lambda-lift pass (#4878); convert then.
+-- lint-disable-next-line rule-threaded-invariant
 putBucket f v [] = [(f, v)]
 putBucket f v ((k, old) :: rest)
   | k == f = (f, v) :: rest
@@ -1860,6 +1864,9 @@ resolvePass : (List String -> <e> List (String, List String)) ->
   List (String, String, List Decl) ->
   List (String, List Diag) ->
   <e> List (String, List Diag)
+-- Bound: with a 12-parameter head the formatter puts the body on its own line, where
+-- a following `where` does not parse, so the where-go form cannot be written.
+-- lint-disable-next-line rule-threaded-invariant
 resolvePass _ _ _ _ _ _ _ _ _ _ [] buckets = buckets
 resolvePass exportsFor allowInternal trustedMods subjectOf preludeKey rt core served known ids ((m@(mid, path, desugared)) :: rest) buckets =
   let trusted = allowInternal || contains mid trustedMods
@@ -2300,30 +2307,30 @@ foldModuleTc : RawPasses ->
   List (String, String, List Decl) ->
   List (String, List Diag) ->
   List (String, List Diag)
-foldModuleTc _ _ _ _ [] buckets = buckets
-foldModuleTc passes graph known ids ((mid, path, prog) :: rest) buckets =
-  -- A test sibling's guard oracle binds its subject's private constructors.
-  let sibling = isSome (passes.rpSubjectOf mid)
-  let (rawDiags, exp, ident) =
-    servedPass
-      FoldKind
-      (map (k => joinNl [k, boolKey sibling]) graph)
-      ids
-      (mid, path, prog)
-      (_ => rawTreeDiags passes known (mid, path, prog))
-  let (tcErrs, tcWarns) = optionOr ([], []) (omLookup mid passes.rpTc)
-  let tcReported = match lookupBucket path buckets
-    Some existing => not (resolveRejected existing)
-    None => True
-  let errDiags = if tcReported then map diagOfTypeError tcErrs else []
-  let warnDiags = if tcReported then map diagOfTypeWarning tcWarns else []
-  foldModuleTc
-    passes
-    graph
-    (omInsert exp.modId exp known)
-    (withIdentity mid ident ids)
-    rest
-    (pushDiags path (rawDiags ++ errDiags ++ warnDiags) buckets)
+foldModuleTc passes graph k0 i0 ms0 b0 = go k0 i0 ms0 b0
+  where
+    go _ _ [] buckets = buckets
+    go known ids ((mid, path, prog) :: rest) buckets =
+      -- A test sibling's guard oracle binds its subject's private constructors.
+      let sibling = isSome (passes.rpSubjectOf mid)
+      let (rawDiags, exp, ident) =
+        servedPass
+          FoldKind
+          (map (k => joinNl [k, boolKey sibling]) graph)
+          ids
+          (mid, path, prog)
+          (_ => rawTreeDiags passes known (mid, path, prog))
+      let (tcErrs, tcWarns) = optionOr ([], []) (omLookup mid passes.rpTc)
+      let tcReported = match lookupBucket path buckets
+        Some existing => not (resolveRejected existing)
+        None => True
+      let errDiags = if tcReported then map diagOfTypeError tcErrs else []
+      let warnDiags = if tcReported then map diagOfTypeWarning tcWarns else []
+      go
+        (omInsert exp.modId exp known)
+        (withIdentity mid ident ids)
+        rest
+        (pushDiags path (rawDiags ++ errDiags ++ warnDiags) buckets)
 
 -- One module's derive, guard-exhaustiveness and two shadow diagnostics, and its
 -- exports for the modules after it.
@@ -3081,6 +3088,8 @@ cjFoldIntoFile : String ->
   List Diag ->
   List (String, String, List Diag) ->
   List (String, String, List Diag)
+-- Bound: list built in tail position modulo cons: a where-local go loses the constant-stack loop until the lambda-lift pass (#4878); convert then.
+-- lint-disable-next-line rule-threaded-invariant
 cjFoldIntoFile _ [] triples = triples
 cjFoldIntoFile _ _ [] = []
 cjFoldIntoFile path extra ((p, s, ds) :: rest)

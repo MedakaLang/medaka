@@ -1932,18 +1932,22 @@ foreignLibErrGo : String ->
   String ->
   List (String, String) ->
   <IO> String
-foreignLibErrGo _ _ _ _ [] = ""
-foreignLibErrGo cc tmpDir projRoot probeC ((name, dir) :: rest) =
-  let probeOut = joinPath tmpDir "ffi_lib_probe.out"
-  match runCommand cc ([probeC, "-o", probeOut] ++ libLinkFlags [(name, dir)])
-    Err e =>
-      "error: could not run \{cc} to check the foreign library `\{name}`: \{e}"
-    -- bucket-adjacent, not fail-open and not converted: a probe failure here
-    -- deliberately replaces the probe's own stderr with missingLibMsg, a
-    -- purpose-built diagnostic naming the library/manifest key/searched
-    -- dirs — intentional UX, not lost information.
-    Ok (0, _, _) => foreignLibErrGo cc tmpDir projRoot probeC rest
-    Ok (_, _, _) => missingLibMsg projRoot name dir
+foreignLibErrGo cc tmpDir projRoot probeC xs0 = go xs0
+  where
+    go [] = ""
+    go ((name, dir) :: rest) =
+      let probeOut = joinPath tmpDir "ffi_lib_probe.out"
+      match (runCommand
+        cc
+        ([probeC, "-o", probeOut] ++ libLinkFlags [(name, dir)]))
+        Err e =>
+          "error: could not run \{cc} to check the foreign library `\{name}`: \{e}"
+        -- bucket-adjacent, not fail-open and not converted: a probe failure here
+        -- deliberately replaces the probe's own stderr with missingLibMsg, a
+        -- purpose-built diagnostic naming the library/manifest key/searched
+        -- dirs — intentional UX, not lost information.
+        Ok (0, _, _) => go rest
+        Ok (_, _, _) => missingLibMsg projRoot name dir
 
 -- The missing-library diagnostic: names the library, the manifest KEY that
 -- declared it, the file that key lives in, where we looked, and the edit that

@@ -992,6 +992,8 @@ residualJsonTriples : String ->
   List (String, String) ->
   List (String, TcDiag) ->
   <IO> List (String, String, List Diag)
+-- Bound: list built in tail position modulo cons: a where-local go loses the constant-stack loop until the lambda-lift pass (#4878); convert then.
+-- lint-disable-next-line rule-threaded-invariant
 residualJsonTriples entryFile _ [] =
   [(entryFile, readFileSafe entryFile, [genericResidualDiag entryFile])]
 residualJsonTriples entryFile pathMap ((mid, d) :: rest) =
@@ -2226,10 +2228,12 @@ codemodFilesGo : CodeMode ->
   List String ->
   Bool ->
   <IO> Bool
-codemodFilesGo _ _ _ [] acc = acc
-codemodFilesGo mode xf warnFn (f :: rest) acc =
-  let signal = codemodOneReport mode xf warnFn f
-  codemodFilesGo mode xf warnFn rest (acc || signal)
+codemodFilesGo mode xf warnFn xs0 acc0 = go xs0 acc0
+  where
+    go [] acc = acc
+    go (f :: rest) acc =
+      let signal = codemodOneReport mode xf warnFn f
+      go rest (acc || signal)
 
 codemodOneReport : CodeMode ->
   (Decl -> (Decl, Bool)) ->
@@ -3528,15 +3532,17 @@ collectModuleDocs : String ->
   String ->
   List String ->
   <IO> Result String (List ModuleDoc)
-collectModuleDocs _ _ _ [] = Ok []
-collectModuleDocs rsrc csrc stdlibDir (target :: rest) = match readSource target
-  Err msg => Err "\{target}: \{msg}"
-  Ok tsrc => match docParseError target tsrc
-    Some msg => Err msg
-    None =>
-      let roots = entrySearchRoots (dirOf target) ++ [stdlibDir]
-      let md = computeModuleDoc rsrc csrc tsrc target roots
-      map (md :: _) (collectModuleDocs rsrc csrc stdlibDir rest)
+collectModuleDocs rsrc csrc stdlibDir xs0 = go xs0
+  where
+    go [] = Ok []
+    go (target :: rest) = match readSource target
+      Err msg => Err "\{target}: \{msg}"
+      Ok tsrc => match docParseError target tsrc
+        Some msg => Err msg
+        None =>
+          let roots = entrySearchRoots (dirOf target) ++ [stdlibDir]
+          let md = computeModuleDoc rsrc csrc tsrc target roots
+          map (md :: _) (go rest)
 
 -- A library page is named for its module's DERIVED name (`mdName`: a stdlib
 -- module's import id, otherwise the basename minus `.mdk`), so two non-stdlib

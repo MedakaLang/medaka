@@ -206,6 +206,8 @@ pinnedPrintlnDecls decls = pinnedCopies "println" autoPrintPinName decls
 -- Copies of every signature and clause of `origin` re-bound under `pin`, marked
 -- exported so a synthesized import can reach them.
 pinnedCopies : String -> String -> List Decl -> List Decl
+-- Bound: list built in tail position modulo cons: a where-local go loses the constant-stack loop until the lambda-lift pass (#4878); convert then.
+-- lint-disable-next-line rule-threaded-invariant
 pinnedCopies _ _ [] = []
 pinnedCopies origin pin ((DAttrib _ d) :: rest) =
   pinnedCopies origin pin (d :: rest)

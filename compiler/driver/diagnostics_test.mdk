@@ -411,12 +411,14 @@ main = println v1
 
 -- Writes modules [i], [i + 1], ... of the [n]-module chain beside the entry.
 writeChain : String -> Int -> Int -> <FileWrite> Result String Unit
-writeChain dir n i =
-  if i >= n then
-    writeFile "\{dir}/main.mdk" chainEntry
-  else match writeFile "\{dir}/m\{i}.mdk" (chainModuleSrc n i)
-    Err e => Err e
-    Ok _ => writeChain dir n (i + 1)
+writeChain dir n i0 = go i0
+  where
+    go i =
+      if i >= n then
+        writeFile "\{dir}/main.mdk" chainEntry
+      else match writeFile "\{dir}/m\{i}.mdk" (chainModuleSrc n i)
+        Err e => Err e
+        Ok _ => go (i + 1)
 
 -- One analyze of the chain's entry through the session caches: the number of
 -- modules its drive served from their interfaces.
