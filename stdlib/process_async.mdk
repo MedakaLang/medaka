@@ -1,0 +1,238 @@
+import async.{
+  Async, Wait, liftIO, awaitAny, deadlineAfter, expiredNow, waitFlag, waitRead,
+  waitWrite
+}
+import bytes.{Bytes}
+import bytes as B
+import process.{
+  ProcessError(..), OutputStream(..), ExitStatus, tryRead, tryWrite, streamFd,
+  pollExit, SpawnOptions, StartError(..), LaunchProgress(..), submit,
+  checkStart, abortStart
+}
+import time.{Duration, millis}
+
+{- | An absolute monotonic deadline, created by `after`. -}
+export data Deadline (e : Effect) = Deadline (Wait e)
+{- | A cooperative cancellation token shared by operations. -}
+export data CancelToken = CancelToken (Ref Bool)
+{- | Read bytes, end of stream, or the reason the operation stopped. -}
+public export data ReadResult =
+  | Read Bytes
+  | EndOfStream
+  | ReadTimedOut
+  | ReadCancelled
+{- | The committed byte count on completion, timeout, or cancellation. -}
+public export data WriteResult =
+  | Written Int
+  | WriteTimedOut Int
+  | WriteCancelled Int
+{- | Direct-child exit status or the reason observation stopped. -}
+public export data WaitResult =
+  | ChildExited ExitStatus
+  | WaitTimedOut
+  | WaitCancelled
+
+{- | Creates an uncancelled token. -}
+export
+newCancelToken : Unit -> CancelToken
+newCancelToken _ = CancelToken (Ref False)
+
+{- | Cancels the token and wakes tasks waiting on it. -}
+export
+cancel : CancelToken -> Unit
+cancel (CancelToken flag) = flag := True
+
+{- | Reports whether the token has been cancelled. -}
+export
+cancelled : CancelToken -> Bool
+cancelled (CancelToken flag) = !flag
+
+{- | A wait satisfied when the token is cancelled. -}
+export
+cancelWait : CancelToken -> Wait e
+cancelWait (CancelToken flag) = waitFlag flag
+
+{- | Creates a deadline relative to when this deferred computation runs. -}
+export
+after : Duration -> Async <Clock | e> (Deadline <Clock | e>)
+after duration = deferMap Deadline (deadlineAfter duration)
+
+{- | The wait for this deadline; it does not reset on reuse. -}
+export
+deadlineWait : Deadline e -> Wait e
+deadlineWait (Deadline wait) = wait
+
+stop : Deadline e -> CancelToken -> <e> Option Bool
+stop deadline token =
+  if cancelled token then
+    Some True
+  else if expiredNow (deadlineWait deadline) then
+    Some False
+  else
+    None
+
+streamCode : OutputStream -> Int
+streamCode ChildStdout = 1
+streamCode ChildStderr = 2
+
+park : Deadline <Clock | e> ->
+  CancelToken ->
+  List (Wait <Clock | e>) ->
+  Async <Clock | e> Unit
+park deadline token extra = deferThen (deadlineAfter (millis 10)) (tick =>
+  awaitAny (deadlineWait deadline :: cancelWait token :: tick :: extra))
+
+{- | Reads a bounded chunk, stopping on cancellation or deadline. -}
+export
+readUntil : Process p ->
+  OutputStream ->
+  Int ->
+  Deadline <Clock, Exec p | e> ->
+  CancelToken ->
+  Async <Clock, Exec p | e> (Result ProcessError ReadResult)
+readUntil p stream limit deadline token =
+  deferThen
+    (liftIO (_ => match stop deadline token
+      Some True => deferPure (Ok ReadCancelled)
+      Some False => deferPure (Ok ReadTimedOut)
+      None => match tryRead p stream limit
+        Ok (Some bytes) =>
+          deferPure
+            (Ok (if B.length bytes == 0 then EndOfStream else Read bytes))
+        Ok None => readPark p stream limit deadline token
+        Err ProcessBusy => readPark p stream limit deadline token
+        Err err => deferPure (Err err)))
+    identity
+
+readPark : Process p ->
+  OutputStream ->
+  Int ->
+  Deadline <Clock, Exec p | e> ->
+  CancelToken ->
+  <Exec p> Async <Clock, Exec p | e> (Result ProcessError ReadResult)
+readPark p stream limit deadline token = match streamFd p (streamCode stream)
+  Ok fd => deferThen (park deadline token [waitRead fd]) (_ =>
+    readUntil p stream limit deadline token)
+  Err ProcessBusy => deferThen (park deadline token []) (_ =>
+    readUntil p stream limit deadline token)
+  Err err => deferPure (Err err)
+
+{- | Writes bytes until completion or stop; errors retain the committed count. -}
+export
+writeUntil : Process p ->
+  Bytes ->
+  Deadline <Clock, Exec p | e> ->
+  CancelToken ->
+  Async <Clock, Exec p | e> (Result (ProcessError, Int) WriteResult)
+writeUntil p bytes deadline token = writeFrom p bytes 0 deadline token
+
+writeFrom : Process p ->
+  Bytes ->
+  Int ->
+  Deadline <Clock, Exec p | e> ->
+  CancelToken ->
+  Async <Clock, Exec p | e> (Result (ProcessError, Int) WriteResult)
+writeFrom p bytes offset deadline token =
+  deferThen
+    (liftIO (_ => match stop deadline token
+      Some True => deferPure (Ok (WriteCancelled offset))
+      Some False => deferPure (Ok (WriteTimedOut offset))
+      None =>
+        if offset == B.length bytes then
+          deferPure (Ok (Written offset))
+        else match tryWrite p bytes offset (B.length bytes - offset)
+          Ok (Some n) => writeFrom p bytes (offset + n) deadline token
+          Ok None => writePark p bytes offset deadline token
+          Err ProcessBusy => writePark p bytes offset deadline token
+          Err err => deferPure (Err (err, offset))))
+    identity
+
+writePark : Process p ->
+  Bytes ->
+  Int ->
+  Deadline <Clock, Exec p | e> ->
+  CancelToken ->
+  <Exec p> Async <Clock, Exec p | e> (Result (ProcessError, Int) WriteResult)
+writePark p bytes offset deadline token = match streamFd p 0
+  Ok fd => deferThen (park deadline token [waitWrite fd]) (_ =>
+    writeFrom p bytes offset deadline token)
+  Err ProcessBusy => deferThen (park deadline token []) (_ =>
+    writeFrom p bytes offset deadline token)
+  Err err => deferPure (Err (err, offset))
+
+{- | Observes direct-child exit until cancellation or deadline. -}
+export
+waitUntil : Process p ->
+  Deadline <Clock, Exec p | e> ->
+  CancelToken ->
+  Async <Clock, Exec p | e> (Result ProcessError WaitResult)
+waitUntil p deadline token =
+  deferThen
+    (liftIO (_ => match stop deadline token
+      Some True => deferPure (Ok WaitCancelled)
+      Some False => deferPure (Ok WaitTimedOut)
+      None => match pollExit p
+        Ok (Some status) => deferPure (Ok (ChildExited status))
+        Ok None =>
+          deferThen (park deadline token []) (_ => waitUntil p deadline token)
+        Err ProcessBusy =>
+          deferThen (park deadline token []) (_ => waitUntil p deadline token)
+        Err err => deferPure (Err err)))
+    identity
+
+{- | Cleanup outcome; a pending ticket must be retained and drained. -}
+public export data LaunchStop ticket =
+  | LaunchStopped
+  | LaunchCleanupPending ticket (Option ProcessError)
+  | LaunchCleanupFailed ProcessError
+{- | Launch transfer or a stop with its cleanup outcome. -}
+public export data StartResult process ticket =
+  | Started process
+  | StartTimedOut (LaunchStop ticket)
+  | StartCancelled (LaunchStop ticket)
+
+{- | Submits launch cooperatively and retains cleanup ownership on stop. -}
+export
+startUntil : (program : String) ->
+  SpawnOptions ->
+  Deadline <Clock, Exec program | e> ->
+  CancelToken ->
+  Async <Clock, Exec program | e> (Result (StartError (LaunchTicket program)) (StartResult (Process program) (LaunchTicket program)))
+startUntil program opts deadline token =
+  deferThen
+    (liftIO (_ => match stop deadline token
+      Some True => deferPure (Ok (StartCancelled LaunchStopped))
+      Some False => deferPure (Ok (StartTimedOut LaunchStopped))
+      None => match submit program opts
+        Ok ticket => startPoll ticket deadline token
+        Err err => deferPure (Err (StartRejected err))))
+    identity
+
+startPoll : LaunchTicket p ->
+  Deadline <Clock, Exec p | e> ->
+  CancelToken ->
+  Async <Clock, Exec p | e> (Result (StartError (LaunchTicket p)) (StartResult (Process p) (LaunchTicket p)))
+startPoll ticket deadline token =
+  deferThen
+    (liftIO (_ => match stop deadline token
+      Some True => deferPure (Ok (StartCancelled (stopLaunch ticket)))
+      Some False => deferPure (Ok (StartTimedOut (stopLaunch ticket)))
+      None => match checkStart ticket
+        Ok (LaunchStarted p) => deferPure (Ok (Started p))
+        Ok LaunchPending => deferThen (park deadline token []) (_ =>
+          startPoll ticket deadline token)
+        Ok (LaunchFailed err) => deferPure (Err (StartRejected err))
+        Ok LaunchAborted => deferPure (Err (StartRejected LaunchCancelled))
+        Err ProcessBusy => deferThen (park deadline token []) (_ =>
+          startPoll ticket deadline token)
+        Err err => deferPure (Err (StartCleanupPending err ticket))))
+    identity
+
+stopLaunch : LaunchTicket p -> <Exec p> LaunchStop (LaunchTicket p)
+stopLaunch ticket = match abortStart ticket
+  Ok LaunchAborted => LaunchStopped
+  Ok (LaunchFailed err) => LaunchCleanupFailed err
+  Ok LaunchPending => LaunchCleanupPending ticket None
+  Ok (LaunchStarted _) => LaunchCleanupPending ticket None
+  Err ProcessBusy => LaunchCleanupPending ticket None
+  Err err => LaunchCleanupPending ticket (Some err)

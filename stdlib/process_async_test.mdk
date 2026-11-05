@@ -1,0 +1,227 @@
+import async.{Async, runAsync, sleep, expiredNow, spawn, liftIO, yield}
+import process.{
+  SpawnOptions(..), PipeChoice(..), ExitStatus(..), OutputStream(..),
+  closeStdin, dispose
+}
+import process_async.{
+  newCancelToken, cancel, cancelled, after, deadlineWait, startUntil, waitUntil,
+  WaitResult(..), readUntil, ReadResult(..), writeUntil, WriteResult(..),
+  StartResult(..), LaunchStop(..)
+}
+import bytes.{encodeUtf8, decodeUtf8}
+import string.{repeat, trim}
+import time.{millis}
+import test.{expectEqual, expectTrue}
+
+options : SpawnOptions
+options = SpawnOptions {
+  argv = [],
+  cwd = "/tmp",
+  env = [],
+  stdin = Null,
+  stdout = Null,
+  stderr = Null,
+}
+
+test "cancel tokens retain cancellation" =
+  let token = newCancelToken ()
+  let before = cancelled token
+  cancel token
+  expectEqual (False, True) (before, cancelled token)
+
+test "cancel takes priority over an expired deadline" =
+  let deadline = runAsync (after (millis -1))
+  let token = newCancelToken ()
+  cancel token
+  let result = runAsync (startUntil "/bin/true" options deadline token)
+  expectTrue (match result
+    Ok (StartCancelled LaunchStopped) => True
+    _ => False)
+
+test "expired deadline stops before submission" =
+  let deadline = runAsync (after (millis -1))
+  let result =
+    runAsync (startUntil "/bin/true" options deadline (newCancelToken ()))
+  expectTrue (match result
+    Ok (StartTimedOut LaunchStopped) => True
+    _ => False)
+
+test "deadline wait remains absolute after delayed scheduling" =
+  let deadline = runAsync (after (millis 5))
+  let _ = runAsync (sleep (millis 20))
+  expectTrue (expiredNow (deadlineWait deadline))
+
+test "launch transfers an owner and observes direct child exit" =
+  let deadline = runAsync (after (millis 5000))
+  let outcome =
+    runAsync (startUntil "/bin/true" options deadline (newCancelToken ()))
+  let result = match outcome
+    Ok (Started p) =>
+      let exited = runAsync (waitUntil p deadline (newCancelToken ()))
+      let disposed = dispose p
+      match (exited, disposed)
+        (Ok (ChildExited (Exited 0)), Ok _) => True
+        _ => False
+    _ => False
+  expectTrue result
+
+test "writes and reads child pipes with exact bytes" =
+  let opts = SpawnOptions {
+    argv = [],
+    cwd = "/tmp",
+    env = [],
+    stdin = Piped,
+    stdout = Piped,
+    stderr = Null,
+  }
+  let deadline = runAsync (after (millis 5000))
+  let started =
+    runAsync (startUntil "/bin/cat" opts deadline (newCancelToken ()))
+  let result = match started
+    Ok (Started p) =>
+      let empty =
+        runAsync (writeUntil p (encodeUtf8 "") deadline (newCancelToken ()))
+      let written =
+        runAsync
+          (writeUntil p (encodeUtf8 "hello") deadline (newCancelToken ()))
+      let closed = closeStdin p
+      let read =
+        runAsync (readUntil p ChildStdout 100 deadline (newCancelToken ()))
+      let exited = runAsync (waitUntil p deadline (newCancelToken ()))
+      let disposed = dispose p
+      match (empty, written, closed, read, exited, disposed)
+        (Ok (Written 0), Ok (Written 5), Ok _, Ok (Read bytes), Ok (ChildExited (Exited 0)), Ok _) =>
+          decodeUtf8 bytes == Some "hello"
+        _ => False
+    _ => False
+  expectTrue result
+
+test "cancellation wakes a parked read" =
+  let opts = SpawnOptions {
+    argv = [],
+    cwd = "/tmp",
+    env = [],
+    stdin = Piped,
+    stdout = Piped,
+    stderr = Null,
+  }
+  let deadline = runAsync (after (millis 5000))
+  let started =
+    runAsync (startUntil "/bin/cat" opts deadline (newCancelToken ()))
+  let result = match started
+    Ok (Started p) =>
+      let token = newCancelToken ()
+      let reading = deferThen (spawn
+        (deferThen (sleep (millis 20)) (_ => liftIO (_ => cancel token)))) (_ =>
+        readUntil p ChildStdout 100 deadline token)
+      let read = runAsync reading
+      let closed = closeStdin p
+      let exited = runAsync (waitUntil p deadline (newCancelToken ()))
+      let disposed = dispose p
+      match (read, closed, exited, disposed)
+        (Ok ReadCancelled, Ok _, Ok (ChildExited (Exited 0)), Ok _) => True
+        _ => False
+    _ => False
+  expectTrue result
+
+test "backpressured write returns its committed prefix on timeout" =
+  let opts = SpawnOptions {
+    argv = ["-c", "sleep 0.3; wc -c"],
+    cwd = "/tmp",
+    env = [],
+    stdin = Piped,
+    stdout = Piped,
+    stderr = Null,
+  }
+  let launchDeadline = runAsync (after (millis 5000))
+  let started =
+    runAsync (startUntil "/bin/sh" opts launchDeadline (newCancelToken ()))
+  let result = match started
+    Ok (Started p) =>
+      let bytes = encodeUtf8 (repeat 1000000 "x")
+      let deadline = runAsync (after (millis 100))
+      let written = runAsync (writeUntil p bytes deadline (newCancelToken ()))
+      let closed = closeStdin p
+      let observed =
+        runAsync
+          (readUntil p ChildStdout 100 launchDeadline (newCancelToken ()))
+      let exited = runAsync (waitUntil p launchDeadline (newCancelToken ()))
+      let disposed = dispose p
+      match (written, closed, observed, exited, disposed)
+        (Ok (WriteTimedOut n), Ok _, Ok (Read count), Ok (ChildExited (Exited 0)), Ok _) =>
+          n > 0
+            && n < 1000000
+            && map trim (decodeUtf8 count) == Some (intToString n)
+        _ => False
+    _ => False
+  expectTrue result
+
+test "backpressured cancellation retains its committed prefix" =
+  let opts = SpawnOptions {
+    argv = ["-c", "sleep 0.3; wc -c"],
+    cwd = "/tmp",
+    env = [],
+    stdin = Piped,
+    stdout = Piped,
+    stderr = Null,
+  }
+  let deadline = runAsync (after (millis 5000))
+  let started =
+    runAsync (startUntil "/bin/sh" opts deadline (newCancelToken ()))
+  let result = match started
+    Ok (Started p) =>
+      let token = newCancelToken ()
+      let bytes = encodeUtf8 (repeat 1000000 "x")
+      let writing = deferThen (spawn
+        (deferThen (sleep (millis 100)) (_ => liftIO (_ =>
+          cancel token)))) (_ =>
+        writeUntil p bytes deadline token)
+      let written = runAsync writing
+      let closed = closeStdin p
+      let observed =
+        runAsync (readUntil p ChildStdout 100 deadline (newCancelToken ()))
+      let exited = runAsync (waitUntil p deadline (newCancelToken ()))
+      let disposed = dispose p
+      match (written, closed, observed, exited, disposed)
+        (Ok (WriteCancelled n), Ok _, Ok (Read count), Ok (ChildExited (Exited 0)), Ok _) =>
+          n > 0
+            && n < 1000000
+            && map trim (decodeUtf8 count) == Some (intToString n)
+        _ => False
+    _ => False
+  expectTrue result
+
+yieldSteps : Int -> Async e Unit
+yieldSteps n =
+  if n <= 0 then deferPure () else deferThen yield (_ => yieldSteps (n - 1))
+
+test "continuous writable progress yields to cancellation" =
+  let opts = SpawnOptions {
+    argv = ["-c", "cat >/dev/null"],
+    cwd = "/tmp",
+    env = [],
+    stdin = Piped,
+    stdout = Null,
+    stderr = Null,
+  }
+  let deadline = runAsync (after (millis 5000))
+  let started =
+    runAsync (startUntil "/bin/sh" opts deadline (newCancelToken ()))
+  let result = match started
+    Ok (Started p) =>
+      let token = newCancelToken ()
+      let bytes = encodeUtf8 (repeat 10000000 "x")
+      let cancelTask =
+        deferThen (yieldSteps 30) (_ => liftIO (_ => cancel token))
+      let writing =
+        deferThen (spawn cancelTask) (_ => writeUntil p bytes deadline token)
+      let written = runAsync writing
+      let closed = closeStdin p
+      let exited = runAsync (waitUntil p deadline (newCancelToken ()))
+      let disposed = dispose p
+      match (written, closed, exited, disposed)
+        (Ok (WriteCancelled n), Ok _, Ok (ChildExited (Exited 0)), Ok _) =>
+          n > 0 && n < 10000000
+        _ => False
+    _ => False
+  expectTrue result

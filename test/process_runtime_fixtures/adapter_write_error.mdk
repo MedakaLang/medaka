@@ -1,0 +1,48 @@
+import async.{runAsync}
+import bytes.{encodeUtf8}
+import process.{
+  SpawnOptions(..), PipeChoice(..), ProcessError(..), ProcessOperation(..),
+  ExitStatus(..), closeStdin, dispose
+}
+import process_async.{
+  after, newCancelToken, startUntil, writeUntil, waitUntil, StartResult(..),
+  WaitResult(..)
+}
+import string.{repeat}
+import time.{millis}
+
+options : SpawnOptions
+options = SpawnOptions {
+  argv = ["1"],
+  cwd = "/tmp",
+  env = [],
+  stdin = Piped,
+  stdout = Null,
+  stderr = Null,
+}
+
+main =
+  let deadline = runAsync (after (millis 5000))
+  let started =
+    runAsync (startUntil "/bin/sleep" options deadline (newCancelToken ()))
+  let passed = match started
+    Ok (Started p) =>
+      let written =
+        runAsync
+          (writeUntil
+            p
+            (encodeUtf8 (repeat 100000 "x"))
+            deadline
+            (newCancelToken ()))
+      let closed = closeStdin p
+      let exited = runAsync (waitUntil p deadline (newCancelToken ()))
+      let disposed = dispose p
+      match (written, closed, exited, disposed)
+        (Err (StreamFailed Write 5 _, 4096), Ok _, Ok (ChildExited (Exited 0)), Ok _) =>
+          True
+        _ => False
+    _ => False
+  if passed then
+    println "adapter error prefix passed"
+  else
+    println "adapter error prefix failed"
