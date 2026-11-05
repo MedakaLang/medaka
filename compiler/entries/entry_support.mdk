@@ -837,14 +837,16 @@ evalDictString runtimeDecls preludeDecls userDecls =
 -- that table).
 export
 batchLoop : String -> (List Decl -> String) -> List String -> <IO> Unit
-batchLoop _sentinel _render [] = putStr ""
-batchLoop sentinel render (path :: rest) = match readFile path
-  Err msg =>
-    ePutStrLn msg
-    batchLoop sentinel render rest
-  Ok src =>
-    putStr "\{sentinel}\{path}\n\{render (desugar (parse src))}\n"
-    batchLoop sentinel render rest
+batchLoop sentinel render xs0 = go xs0
+  where
+    go [] = putStr ""
+    go (path :: rest) = match readFile path
+      Err msg =>
+        ePutStrLn msg
+        go rest
+      Ok src =>
+        putStr "\{sentinel}\{path}\n\{render (desugar (parse src))}\n"
+        go rest
 
 -- batch CLI shape: <runtime.mdk> <core.mdk> <target.mdk>...  runtime + core parsed
 -- + desugared ONCE, then `render runtimeDecls coreDecls targetDecls` per target.
