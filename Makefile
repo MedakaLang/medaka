@@ -248,6 +248,11 @@ inlang-ir-core-ir-lower-test:
 inlang-ir-core-pass-test:
 	./medaka test compiler/ir/core_pass_test.mdk
 
+## The Core IR walk rewrites, folds and collects binders over every `CExpr`
+## constructor; no entry imports this sibling.
+inlang-ir-core-walk-test:
+	./medaka test compiler/ir/core_walk_test.mdk
+
 inlang-eval-eval-test:
 	./medaka test compiler/eval/eval_test.mdk
 
