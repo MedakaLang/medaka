@@ -255,19 +255,19 @@ hexVal c
 -- Four hex digits at [i, i+4) → a raw codepoint (may land inside the UTF-16
 -- surrogate range — `parseUnicodeAt` below is what pairs or rejects those).
 hex4 : Array Char -> Int -> Option Int
-hex4 arr i = match hexVal (arrayGetUnsafe i arr)
-  None => None
-  Some h0 => hex4From arr i h0
+hex4 arr i = do
+  h0 <- hexVal (arrayGetUnsafe i arr)
+  hex4From arr i h0
 
 hex4From : Array Char -> Int -> Int -> Option Int
-hex4From arr i h0 = match hexVal (arrayGetUnsafe (i + 1) arr)
-  None => None
-  Some h1 => hex4From2 arr i (h0 * 16 + h1)
+hex4From arr i h0 = do
+  h1 <- hexVal (arrayGetUnsafe (i + 1) arr)
+  hex4From2 arr i (h0 * 16 + h1)
 
 hex4From2 : Array Char -> Int -> Int -> Option Int
-hex4From2 arr i acc = match hexVal (arrayGetUnsafe (i + 2) arr)
-  None => None
-  Some h2 => hex4From3 arr i (acc * 16 + h2)
+hex4From2 arr i acc = do
+  h2 <- hexVal (arrayGetUnsafe (i + 2) arr)
+  hex4From3 arr i (acc * 16 + h2)
 
 hex4From3 : Array Char -> Int -> Int -> Option Int
 hex4From3 arr i acc = map (acc * 16 + _) (hexVal (arrayGetUnsafe (i + 3) arr))
@@ -1094,11 +1094,11 @@ prop "get finds an inserted key" (k : Int) (v : Int) =
 (DTypeSig false "hexVal" (TyFun (TyCon "Char") (TyApp (TyCon "Option") (TyCon "Int"))))
 (DFunDef false "hexVal" ((PVar "c")) (EIf (EBinOp "&&" (EBinOp ">=" (EApp (EVar "charCode") (EVar "c")) (ELit (LInt 48))) (EBinOp "<=" (EApp (EVar "charCode") (EVar "c")) (ELit (LInt 57)))) (EApp (EVar "Some") (EBinOp "-" (EApp (EVar "charCode") (EVar "c")) (ELit (LInt 48)))) (EIf (EBinOp "&&" (EBinOp ">=" (EApp (EVar "charCode") (EVar "c")) (ELit (LInt 97))) (EBinOp "<=" (EApp (EVar "charCode") (EVar "c")) (ELit (LInt 102)))) (EApp (EVar "Some") (EBinOp "-" (EApp (EVar "charCode") (EVar "c")) (ELit (LInt 87)))) (EIf (EBinOp "&&" (EBinOp ">=" (EApp (EVar "charCode") (EVar "c")) (ELit (LInt 65))) (EBinOp "<=" (EApp (EVar "charCode") (EVar "c")) (ELit (LInt 70)))) (EApp (EVar "Some") (EBinOp "-" (EApp (EVar "charCode") (EVar "c")) (ELit (LInt 55)))) (EIf (EVar "otherwise") (EVar "None") (EApp (EVar "__fallthrough__") (ELit LUnit)))))))
 (DTypeSig false "hex4" (TyFun (TyApp (TyCon "Array") (TyCon "Char")) (TyFun (TyCon "Int") (TyApp (TyCon "Option") (TyCon "Int")))))
-(DFunDef false "hex4" ((PVar "arr") (PVar "i")) (EMatch (EApp (EVar "hexVal") (EApp (EApp (EVar "arrayGetUnsafe") (EVar "i")) (EVar "arr"))) (arm (PCon "None") () (EVar "None")) (arm (PCon "Some" (PVar "h0")) () (EApp (EApp (EApp (EVar "hex4From") (EVar "arr")) (EVar "i")) (EVar "h0")))))
+(DFunDef false "hex4" ((PVar "arr") (PVar "i")) (EApp (EApp (EVar "andThen") (EApp (EVar "hexVal") (EApp (EApp (EVar "arrayGetUnsafe") (EVar "i")) (EVar "arr")))) (ELam ((PVar "h0")) (EApp (EApp (EApp (EVar "hex4From") (EVar "arr")) (EVar "i")) (EVar "h0")))))
 (DTypeSig false "hex4From" (TyFun (TyApp (TyCon "Array") (TyCon "Char")) (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyApp (TyCon "Option") (TyCon "Int"))))))
-(DFunDef false "hex4From" ((PVar "arr") (PVar "i") (PVar "h0")) (EMatch (EApp (EVar "hexVal") (EApp (EApp (EVar "arrayGetUnsafe") (EBinOp "+" (EVar "i") (ELit (LInt 1)))) (EVar "arr"))) (arm (PCon "None") () (EVar "None")) (arm (PCon "Some" (PVar "h1")) () (EApp (EApp (EApp (EVar "hex4From2") (EVar "arr")) (EVar "i")) (EBinOp "+" (EBinOp "*" (EVar "h0") (ELit (LInt 16))) (EVar "h1"))))))
+(DFunDef false "hex4From" ((PVar "arr") (PVar "i") (PVar "h0")) (EApp (EApp (EVar "andThen") (EApp (EVar "hexVal") (EApp (EApp (EVar "arrayGetUnsafe") (EBinOp "+" (EVar "i") (ELit (LInt 1)))) (EVar "arr")))) (ELam ((PVar "h1")) (EApp (EApp (EApp (EVar "hex4From2") (EVar "arr")) (EVar "i")) (EBinOp "+" (EBinOp "*" (EVar "h0") (ELit (LInt 16))) (EVar "h1"))))))
 (DTypeSig false "hex4From2" (TyFun (TyApp (TyCon "Array") (TyCon "Char")) (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyApp (TyCon "Option") (TyCon "Int"))))))
-(DFunDef false "hex4From2" ((PVar "arr") (PVar "i") (PVar "acc")) (EMatch (EApp (EVar "hexVal") (EApp (EApp (EVar "arrayGetUnsafe") (EBinOp "+" (EVar "i") (ELit (LInt 2)))) (EVar "arr"))) (arm (PCon "None") () (EVar "None")) (arm (PCon "Some" (PVar "h2")) () (EApp (EApp (EApp (EVar "hex4From3") (EVar "arr")) (EVar "i")) (EBinOp "+" (EBinOp "*" (EVar "acc") (ELit (LInt 16))) (EVar "h2"))))))
+(DFunDef false "hex4From2" ((PVar "arr") (PVar "i") (PVar "acc")) (EApp (EApp (EVar "andThen") (EApp (EVar "hexVal") (EApp (EApp (EVar "arrayGetUnsafe") (EBinOp "+" (EVar "i") (ELit (LInt 2)))) (EVar "arr")))) (ELam ((PVar "h2")) (EApp (EApp (EApp (EVar "hex4From3") (EVar "arr")) (EVar "i")) (EBinOp "+" (EBinOp "*" (EVar "acc") (ELit (LInt 16))) (EVar "h2"))))))
 (DTypeSig false "hex4From3" (TyFun (TyApp (TyCon "Array") (TyCon "Char")) (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyApp (TyCon "Option") (TyCon "Int"))))))
 (DFunDef false "hex4From3" ((PVar "arr") (PVar "i") (PVar "acc")) (EApp (EApp (EVar "map") (ELam ((PVar "_s")) (EBinOp "+" (EBinOp "*" (EVar "acc") (ELit (LInt 16))) (EVar "_s")))) (EApp (EVar "hexVal") (EApp (EApp (EVar "arrayGetUnsafe") (EBinOp "+" (EVar "i") (ELit (LInt 3)))) (EVar "arr")))))
 (DTypeSig false "isHighSurrogate" (TyFun (TyCon "Int") (TyCon "Bool")))
@@ -1345,11 +1345,11 @@ prop "get finds an inserted key" (k : Int) (v : Int) =
 (DTypeSig false "hexVal" (TyFun (TyCon "Char") (TyApp (TyCon "Option") (TyCon "Int"))))
 (DFunDef false "hexVal" ((PVar "c")) (EIf (EBinOp "&&" (EBinOp ">=" (EApp (EVar "charCode") (EVar "c")) (ELit (LInt 48))) (EBinOp "<=" (EApp (EVar "charCode") (EVar "c")) (ELit (LInt 57)))) (EApp (EVar "Some") (EBinOp "-" (EApp (EVar "charCode") (EVar "c")) (ELit (LInt 48)))) (EIf (EBinOp "&&" (EBinOp ">=" (EApp (EVar "charCode") (EVar "c")) (ELit (LInt 97))) (EBinOp "<=" (EApp (EVar "charCode") (EVar "c")) (ELit (LInt 102)))) (EApp (EVar "Some") (EBinOp "-" (EApp (EVar "charCode") (EVar "c")) (ELit (LInt 87)))) (EIf (EBinOp "&&" (EBinOp ">=" (EApp (EVar "charCode") (EVar "c")) (ELit (LInt 65))) (EBinOp "<=" (EApp (EVar "charCode") (EVar "c")) (ELit (LInt 70)))) (EApp (EVar "Some") (EBinOp "-" (EApp (EVar "charCode") (EVar "c")) (ELit (LInt 55)))) (EIf (EVar "otherwise") (EVar "None") (EApp (EVar "__fallthrough__") (ELit LUnit)))))))
 (DTypeSig false "hex4" (TyFun (TyApp (TyCon "Array") (TyCon "Char")) (TyFun (TyCon "Int") (TyApp (TyCon "Option") (TyCon "Int")))))
-(DFunDef false "hex4" ((PVar "arr") (PVar "i")) (EMatch (EApp (EVar "hexVal") (EApp (EApp (EVar "arrayGetUnsafe") (EVar "i")) (EVar "arr"))) (arm (PCon "None") () (EVar "None")) (arm (PCon "Some" (PVar "h0")) () (EApp (EApp (EApp (EVar "hex4From") (EVar "arr")) (EVar "i")) (EVar "h0")))))
+(DFunDef false "hex4" ((PVar "arr") (PVar "i")) (EApp (EApp (EMethodRef "andThen") (EApp (EVar "hexVal") (EApp (EApp (EVar "arrayGetUnsafe") (EVar "i")) (EVar "arr")))) (ELam ((PVar "h0")) (EApp (EApp (EApp (EVar "hex4From") (EVar "arr")) (EVar "i")) (EVar "h0")))))
 (DTypeSig false "hex4From" (TyFun (TyApp (TyCon "Array") (TyCon "Char")) (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyApp (TyCon "Option") (TyCon "Int"))))))
-(DFunDef false "hex4From" ((PVar "arr") (PVar "i") (PVar "h0")) (EMatch (EApp (EVar "hexVal") (EApp (EApp (EVar "arrayGetUnsafe") (EBinOp "+" (EVar "i") (ELit (LInt 1)))) (EVar "arr"))) (arm (PCon "None") () (EVar "None")) (arm (PCon "Some" (PVar "h1")) () (EApp (EApp (EApp (EVar "hex4From2") (EVar "arr")) (EVar "i")) (EBinOp "+" (EBinOp "*" (EVar "h0") (ELit (LInt 16))) (EVar "h1"))))))
+(DFunDef false "hex4From" ((PVar "arr") (PVar "i") (PVar "h0")) (EApp (EApp (EMethodRef "andThen") (EApp (EVar "hexVal") (EApp (EApp (EVar "arrayGetUnsafe") (EBinOp "+" (EVar "i") (ELit (LInt 1)))) (EVar "arr")))) (ELam ((PVar "h1")) (EApp (EApp (EApp (EVar "hex4From2") (EVar "arr")) (EVar "i")) (EBinOp "+" (EBinOp "*" (EVar "h0") (ELit (LInt 16))) (EVar "h1"))))))
 (DTypeSig false "hex4From2" (TyFun (TyApp (TyCon "Array") (TyCon "Char")) (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyApp (TyCon "Option") (TyCon "Int"))))))
-(DFunDef false "hex4From2" ((PVar "arr") (PVar "i") (PVar "acc")) (EMatch (EApp (EVar "hexVal") (EApp (EApp (EVar "arrayGetUnsafe") (EBinOp "+" (EVar "i") (ELit (LInt 2)))) (EVar "arr"))) (arm (PCon "None") () (EVar "None")) (arm (PCon "Some" (PVar "h2")) () (EApp (EApp (EApp (EVar "hex4From3") (EVar "arr")) (EVar "i")) (EBinOp "+" (EBinOp "*" (EVar "acc") (ELit (LInt 16))) (EVar "h2"))))))
+(DFunDef false "hex4From2" ((PVar "arr") (PVar "i") (PVar "acc")) (EApp (EApp (EMethodRef "andThen") (EApp (EVar "hexVal") (EApp (EApp (EVar "arrayGetUnsafe") (EBinOp "+" (EVar "i") (ELit (LInt 2)))) (EVar "arr")))) (ELam ((PVar "h2")) (EApp (EApp (EApp (EVar "hex4From3") (EVar "arr")) (EVar "i")) (EBinOp "+" (EBinOp "*" (EVar "acc") (ELit (LInt 16))) (EVar "h2"))))))
 (DTypeSig false "hex4From3" (TyFun (TyApp (TyCon "Array") (TyCon "Char")) (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyApp (TyCon "Option") (TyCon "Int"))))))
 (DFunDef false "hex4From3" ((PVar "arr") (PVar "i") (PVar "acc")) (EApp (EApp (EMethodRef "map") (ELam ((PVar "_s")) (EBinOp "+" (EBinOp "*" (EVar "acc") (ELit (LInt 16))) (EVar "_s")))) (EApp (EVar "hexVal") (EApp (EApp (EVar "arrayGetUnsafe") (EBinOp "+" (EVar "i") (ELit (LInt 3)))) (EVar "arr")))))
 (DTypeSig false "isHighSurrogate" (TyFun (TyCon "Int") (TyCon "Bool")))

@@ -658,14 +658,13 @@ braceHexCode st =
     None
   else
     advance st
-    match braceHexGo st 0 0
-      None => None
-      Some code =>
-        if code > maxCode then
-          failAt st "codepoint is above the Unicode maximum"
-          None
-        else
-          Some code
+    do
+      code <- braceHexGo st 0 0
+      if code > maxCode then
+        failAt st "codepoint is above the Unicode maximum"
+        None
+      else
+        Some code
 
 braceHexGo : PState -> Int -> Int -> Option Int
 braceHexGo st seen acc =
@@ -766,9 +765,9 @@ setEscapeItem st = match peekAt st 1
       skip2 st (Some spaceRanges)
     else if c == 'S' then
       skip2 st (Some (complementRanges spaceRanges))
-    else match escapeCode st
-      None => None
-      Some code => setRangeFrom st code
+    else do
+      code <- escapeCode st
+      setRangeFrom st code
 
 -- A `-` directly before the closing bracket, or at the end of the pattern,
 -- is a literal `-` rather than the start of a range.
@@ -776,14 +775,13 @@ setRangeFrom : PState -> Int -> Option (List (Int, Int))
 setRangeFrom st lo =
   if isAt st '-' && not (peekIs st 1 ']') && !st.pos + 1 < patLen st then
     advance st
-    match setSingle st
-      None => None
-      Some hi =>
-        if lo <= hi then
-          Some [(lo, hi)]
-        else
-          failAt st "character class range is reversed"
-          None
+    do
+      hi <- setSingle st
+      if lo <= hi then
+        Some [(lo, hi)]
+      else
+        failAt st "character class range is reversed"
+        None
   else
     Some [(lo, lo)]
 

@@ -114,9 +114,9 @@ parseArrayItemStr : Array Char ->
   Int ->
   List String ->
   Result String (List String, Int)
-parseArrayItemStr arr i acc = match parseQuotedStr arr i
-  Err e => Err e
-  Ok (s, j) => parseArraySep arr j (s :: acc)
+parseArrayItemStr arr i acc = do
+  (s, j) <- parseQuotedStr arr i
+  parseArraySep arr j (s :: acc)
 
 -- After a parsed item: only a `,` (another item may follow, a trailing comma
 -- before `]` is fine) or `]` (close) is valid next.  Anything else, most
@@ -208,14 +208,14 @@ checkLineConsumed arr j key =
       ])
 
 parseKvStr : Array Char -> Int -> String -> Result String (String, TomlValue)
-parseKvStr arr i key = match parseQuotedStr arr i
-  Err e => Err e
-  Ok (s, j) => map (_ => (key, TString s)) (checkLineConsumed arr j key)
+parseKvStr arr i key = do
+  (s, j) <- parseQuotedStr arr i
+  map (_ => (key, TString s)) (checkLineConsumed arr j key)
 
 parseKvArr : Array Char -> Int -> String -> Result String (String, TomlValue)
-parseKvArr arr i key = match parseArrayValue arr i
-  Err e => Err e
-  Ok (xs, j) => map (_ => (key, TArray xs)) (checkLineConsumed arr j key)
+parseKvArr arr i key = do
+  (xs, j) <- parseArrayValue arr i
+  map (_ => (key, TArray xs)) (checkLineConsumed arr j key)
 
 -- The remaining characters of the line from `i`, trimmed.  Used for the
 -- unquoted scalar forms (integer / boolean), which run to end-of-line.
@@ -261,11 +261,11 @@ parseHeader s = match reFind arrayTableRe s
   Some m => match m.groups
     (Some g) :: [] => Some (HArrayTable (trimAscii g.text))
     _ => None
-  None => match reFind tableRe s
-    Some m => match m.groups
+  None => do
+    m <- reFind tableRe s
+    match m.groups
       (Some g) :: [] => Some (HTable (trimAscii g.text))
       _ => None
-    None => None
 
 -- Qualify a key relative to the current section.  Every section qualifies;
 -- `[package]` is not special.
@@ -435,9 +435,9 @@ parseTableCount name src = match parse src
 parseTableEntryStr : String -> Int -> String -> String -> Option String
 parseTableEntryStr name i field src = match parse src
   Err _ => None
-  Ok doc => match tableEntry name i doc
-    None => None
-    Some e => getString field e
+  Ok doc => do
+    e <- tableEntry name i doc
+    getString field e
 
 {- | The string at a qualified key, or `None` when the key is absent or
    holds another kind of value.
@@ -516,9 +516,9 @@ tableIdxOf prefix key =
     None
   else
     let rest = drop (stringLength prefix) key
-    match indexOf "." rest
-      None => None
-      Some d => toInt (stringSlice 0 d rest)
+    do
+      d <- indexOf "." rest
+      toInt (stringSlice 0 d rest)
 
 -- The largest entry index of `prefix` over all keys, or -1 when there is none.
 -- It is an index, not a count, so an index at the top of `Int` is not

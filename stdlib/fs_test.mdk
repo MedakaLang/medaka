@@ -47,9 +47,9 @@ buildTree root = do
 -- `listDir` in turn, a subdirectory followed by its own contents. `walkDir`
 -- must produce this order for any host `listDir` order.
 expectedWalk : String -> <FileRead> Result String (List String)
-expectedWalk dir = match listDir dir
-  Err e => Err e
-  Ok names => expectedEntries dir names
+expectedWalk dir = do
+  names <- listDir dir
+  expectedEntries dir names
 
 expectedEntries : String ->
   List String ->
@@ -370,17 +370,16 @@ withDotTree check = withScratchDir (dir => match buildDotTree dir
 -- Every file and every directory under `root` (a directory with a trailing
 -- slash, `root` itself included), as the unpruned walk of `walkDir`.
 everyCandidate : String -> <FileRead> Result String (List String)
-everyCandidate root = match walkDir root
-  Err e => Err e
-  Ok paths => map ("\{root}/" :: _) (slashDirs paths)
+everyCandidate root = do
+  paths <- walkDir root
+  map ("\{root}/" :: _) (slashDirs paths)
 
 slashDirs : List String -> <FileRead> Result String (List String)
 slashDirs [] = Ok []
-slashDirs (p :: rest) = match isDir p
-  Err e => Err e
-  Ok d =>
-    let marked = if d then "\{p}/" else p
-    map (marked :: _) (slashDirs rest)
+slashDirs (p :: rest) = do
+  d <- isDir p
+  let marked = if d then "\{p}/" else p
+  map (marked :: _) (slashDirs rest)
 
 -- The answer `glob` must give: the candidates `matchGlob` accepts, files for
 -- a pattern without a trailing slash and directories for one with.

@@ -1,5 +1,5 @@
 # META
-source_lines=203
+source_lines=202
 stages=DESUGAR,MARK
 # SOURCE
 {- | Base32 encoding and decoding, per RFC 4648.
@@ -142,20 +142,19 @@ decodeChars chars i bits buffer acc =
    Err "base32: uppercase is not canonical" -}
 export
 base32Decode : String -> Result String Bytes
-base32Decode text = match decodeChars (toChars text) 0 0 0 []
-  Err message => Err message
-  Ok (decoded, bits, residual) =>
-    if residual /= 0 then
-      Err "base32: non-zero trailing bits"
+base32Decode text = do
+  (decoded, bits, residual) <- decodeChars (toChars text) 0 0 0 []
+  if residual /= 0 then
+    Err "base32: non-zero trailing bits"
+  else
+    -- Each decoded byte is `bitAnd (shiftRight next remaining) 255`, so
+    -- the byte domain holds by construction and the checked door would
+    -- only add a scan.
+    let bytes = fromArrayAssumeByteDomain (arrayFromList decoded)
+    if base32Encode bytes /= text then
+      Err "base32: non-canonical length"
     else
-      -- Each decoded byte is `bitAnd (shiftRight next remaining) 255`, so
-      -- the byte domain holds by construction and the checked door would
-      -- only add a scan.
-      let bytes = fromArrayAssumeByteDomain (arrayFromList decoded)
-      if base32Encode bytes /= text then
-        Err "base32: non-canonical length"
-      else
-        Ok bytes
+      Ok bytes
 
 -- > map toArray (base32Decode "")
 -- Ok [||]
@@ -231,7 +230,7 @@ prop "base32 round-trip: decode (encode b) == Ok b" (xs : List Int) =
 (DTypeSig false "decodeChars" (TyFun (TyApp (TyCon "Array") (TyCon "Char")) (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyFun (TyApp (TyCon "List") (TyCon "Int")) (TyApp (TyApp (TyCon "Result") (TyCon "String")) (TyTuple (TyApp (TyCon "List") (TyCon "Int")) (TyCon "Int") (TyCon "Int")))))))))
 (DFunDef false "decodeChars" ((PVar "chars") (PVar "i") (PVar "bits") (PVar "buffer") (PVar "acc")) (EIf (EBinOp ">=" (EVar "i") (EApp (EVar "arrayLength") (EVar "chars"))) (EApp (EVar "Ok") (ETuple (EApp (EVar "reverse") (EVar "acc")) (EVar "bits") (EVar "buffer"))) (EMatch (EApp (EVar "digit") (EApp (EApp (EVar "index") (EVar "chars")) (EVar "i"))) (arm (PCon "Err" (PVar "message")) () (EApp (EVar "Err") (EVar "message"))) (arm (PCon "Ok" (PVar "d")) () (EBlock (DoLet false false (PVar "next") (EApp (EApp (EVar "bitOr") (EApp (EApp (EVar "shiftLeft") (EVar "buffer")) (ELit (LInt 5)))) (EVar "d"))) (DoLet false false (PVar "nextBits") (EBinOp "+" (EVar "bits") (ELit (LInt 5)))) (DoExpr (EIf (EBinOp ">=" (EVar "nextBits") (ELit (LInt 8))) (EBlock (DoLet false false (PVar "remaining") (EBinOp "-" (EVar "nextBits") (ELit (LInt 8)))) (DoLet false false (PVar "b") (EApp (EApp (EVar "bitAnd") (EApp (EApp (EVar "shiftRight") (EVar "next")) (EVar "remaining"))) (ELit (LInt 255)))) (DoExpr (EApp (EApp (EApp (EApp (EApp (EVar "decodeChars") (EVar "chars")) (EBinOp "+" (EVar "i") (ELit (LInt 1)))) (EVar "remaining")) (EApp (EApp (EVar "bitAnd") (EVar "next")) (EBinOp "-" (EApp (EApp (EVar "shiftLeft") (ELit (LInt 1))) (EVar "remaining")) (ELit (LInt 1))))) (EBinOp "::" (EVar "b") (EVar "acc"))))) (EApp (EApp (EApp (EApp (EApp (EVar "decodeChars") (EVar "chars")) (EBinOp "+" (EVar "i") (ELit (LInt 1)))) (EVar "nextBits")) (EVar "next")) (EVar "acc")))))))))
 (DTypeSig true "base32Decode" (TyFun (TyCon "String") (TyApp (TyApp (TyCon "Result") (TyCon "String")) (TyCon "Bytes"))))
-(DFunDef false "base32Decode" ((PVar "text")) (EMatch (EApp (EApp (EApp (EApp (EApp (EVar "decodeChars") (EApp (EVar "toChars") (EVar "text"))) (ELit (LInt 0))) (ELit (LInt 0))) (ELit (LInt 0))) (EListLit)) (arm (PCon "Err" (PVar "message")) () (EApp (EVar "Err") (EVar "message"))) (arm (PCon "Ok" (PTuple (PVar "decoded") (PVar "bits") (PVar "residual"))) () (EIf (EBinOp "/=" (EVar "residual") (ELit (LInt 0))) (EApp (EVar "Err") (ELit (LString "base32: non-zero trailing bits"))) (EBlock (DoLet false false (PVar "bytes") (EApp (EVar "fromArrayAssumeByteDomain") (EApp (EVar "arrayFromList") (EVar "decoded")))) (DoExpr (EIf (EBinOp "/=" (EApp (EVar "base32Encode") (EVar "bytes")) (EVar "text")) (EApp (EVar "Err") (ELit (LString "base32: non-canonical length"))) (EApp (EVar "Ok") (EVar "bytes")))))))))
+(DFunDef false "base32Decode" ((PVar "text")) (EApp (EApp (EVar "andThen") (EApp (EApp (EApp (EApp (EApp (EVar "decodeChars") (EApp (EVar "toChars") (EVar "text"))) (ELit (LInt 0))) (ELit (LInt 0))) (ELit (LInt 0))) (EListLit))) (ELam ((PVar "__do_x")) (EMatch (EVar "__do_x") (arm (PTuple (PVar "decoded") (PVar "bits") (PVar "residual")) () (EIf (EBinOp "/=" (EVar "residual") (ELit (LInt 0))) (EApp (EVar "Err") (ELit (LString "base32: non-zero trailing bits"))) (EBlock (DoLet false false (PVar "bytes") (EApp (EVar "fromArrayAssumeByteDomain") (EApp (EVar "arrayFromList") (EVar "decoded")))) (DoExpr (EIf (EBinOp "/=" (EApp (EVar "base32Encode") (EVar "bytes")) (EVar "text")) (EApp (EVar "Err") (ELit (LString "base32: non-canonical length"))) (EApp (EVar "Ok") (EVar "bytes")))))))))))
 (DTypeSig false "toBytes" (TyFun (TyApp (TyCon "List") (TyCon "Int")) (TyCon "Bytes")))
 (DFunDef false "toBytes" ((PVar "xs")) (EApp (EVar "fromArrayAssumeByteDomain") (EApp (EVar "arrayFromList") (EApp (EApp (EVar "map") (ELam ((PVar "b")) (EBinOp "%" (EBinOp "+" (EBinOp "%" (EVar "b") (ELit (LInt 256))) (ELit (LInt 256))) (ELit (LInt 256))))) (EVar "xs")))))
 (DProp false "base32 round-trip: decode (encode b) == Ok b" ((pp "xs" (TyApp (TyCon "List") (TyCon "Int")))) (EBlock (DoLet false false (PVar "b") (EApp (EVar "toBytes") (EVar "xs"))) (DoExpr (EBinOp "==" (EApp (EVar "base32Decode") (EApp (EVar "base32Encode") (EVar "b"))) (EApp (EVar "Ok") (EVar "b"))))))
@@ -261,7 +260,7 @@ prop "base32 round-trip: decode (encode b) == Ok b" (xs : List Int) =
 (DTypeSig false "decodeChars" (TyFun (TyApp (TyCon "Array") (TyCon "Char")) (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyFun (TyApp (TyCon "List") (TyCon "Int")) (TyApp (TyApp (TyCon "Result") (TyCon "String")) (TyTuple (TyApp (TyCon "List") (TyCon "Int")) (TyCon "Int") (TyCon "Int")))))))))
 (DFunDef false "decodeChars" ((PVar "chars") (PVar "i") (PVar "bits") (PVar "buffer") (PVar "acc")) (EIf (EBinOp ">=" (EVar "i") (EApp (EVar "arrayLength") (EVar "chars"))) (EApp (EVar "Ok") (ETuple (EApp (EVar "reverse") (EVar "acc")) (EVar "bits") (EVar "buffer"))) (EMatch (EApp (EVar "digit") (EApp (EApp (EMethodRef "index") (EVar "chars")) (EVar "i"))) (arm (PCon "Err" (PVar "message")) () (EApp (EVar "Err") (EVar "message"))) (arm (PCon "Ok" (PVar "d")) () (EBlock (DoLet false false (PVar "next") (EApp (EApp (EVar "bitOr") (EApp (EApp (EVar "shiftLeft") (EVar "buffer")) (ELit (LInt 5)))) (EVar "d"))) (DoLet false false (PVar "nextBits") (EBinOp "+" (EVar "bits") (ELit (LInt 5)))) (DoExpr (EIf (EBinOp ">=" (EVar "nextBits") (ELit (LInt 8))) (EBlock (DoLet false false (PVar "remaining") (EBinOp "-" (EVar "nextBits") (ELit (LInt 8)))) (DoLet false false (PVar "b") (EApp (EApp (EVar "bitAnd") (EApp (EApp (EVar "shiftRight") (EVar "next")) (EVar "remaining"))) (ELit (LInt 255)))) (DoExpr (EApp (EApp (EApp (EApp (EApp (EVar "decodeChars") (EVar "chars")) (EBinOp "+" (EVar "i") (ELit (LInt 1)))) (EVar "remaining")) (EApp (EApp (EVar "bitAnd") (EVar "next")) (EBinOp "-" (EApp (EApp (EVar "shiftLeft") (ELit (LInt 1))) (EVar "remaining")) (ELit (LInt 1))))) (EBinOp "::" (EVar "b") (EVar "acc"))))) (EApp (EApp (EApp (EApp (EApp (EVar "decodeChars") (EVar "chars")) (EBinOp "+" (EVar "i") (ELit (LInt 1)))) (EVar "nextBits")) (EVar "next")) (EVar "acc")))))))))
 (DTypeSig true "base32Decode" (TyFun (TyCon "String") (TyApp (TyApp (TyCon "Result") (TyCon "String")) (TyCon "Bytes"))))
-(DFunDef false "base32Decode" ((PVar "text")) (EMatch (EApp (EApp (EApp (EApp (EApp (EVar "decodeChars") (EApp (EVar "toChars") (EVar "text"))) (ELit (LInt 0))) (ELit (LInt 0))) (ELit (LInt 0))) (EListLit)) (arm (PCon "Err" (PVar "message")) () (EApp (EVar "Err") (EVar "message"))) (arm (PCon "Ok" (PTuple (PVar "decoded") (PVar "bits") (PVar "residual"))) () (EIf (EBinOp "/=" (EVar "residual") (ELit (LInt 0))) (EApp (EVar "Err") (ELit (LString "base32: non-zero trailing bits"))) (EBlock (DoLet false false (PVar "bytes") (EApp (EVar "fromArrayAssumeByteDomain") (EApp (EVar "arrayFromList") (EVar "decoded")))) (DoExpr (EIf (EBinOp "/=" (EApp (EVar "base32Encode") (EVar "bytes")) (EVar "text")) (EApp (EVar "Err") (ELit (LString "base32: non-canonical length"))) (EApp (EVar "Ok") (EVar "bytes")))))))))
+(DFunDef false "base32Decode" ((PVar "text")) (EApp (EApp (EMethodRef "andThen") (EApp (EApp (EApp (EApp (EApp (EVar "decodeChars") (EApp (EVar "toChars") (EVar "text"))) (ELit (LInt 0))) (ELit (LInt 0))) (ELit (LInt 0))) (EListLit))) (ELam ((PVar "__do_x")) (EMatch (EVar "__do_x") (arm (PTuple (PVar "decoded") (PVar "bits") (PVar "residual")) () (EIf (EBinOp "/=" (EVar "residual") (ELit (LInt 0))) (EApp (EVar "Err") (ELit (LString "base32: non-zero trailing bits"))) (EBlock (DoLet false false (PVar "bytes") (EApp (EVar "fromArrayAssumeByteDomain") (EApp (EVar "arrayFromList") (EVar "decoded")))) (DoExpr (EIf (EBinOp "/=" (EApp (EVar "base32Encode") (EVar "bytes")) (EVar "text")) (EApp (EVar "Err") (ELit (LString "base32: non-canonical length"))) (EApp (EVar "Ok") (EVar "bytes")))))))))))
 (DTypeSig false "toBytes" (TyFun (TyApp (TyCon "List") (TyCon "Int")) (TyCon "Bytes")))
 (DFunDef false "toBytes" ((PVar "xs")) (EApp (EVar "fromArrayAssumeByteDomain") (EApp (EVar "arrayFromList") (EApp (EApp (EMethodRef "map") (ELam ((PVar "b")) (EBinOp "%" (EBinOp "+" (EBinOp "%" (EVar "b") (ELit (LInt 256))) (ELit (LInt 256))) (ELit (LInt 256))))) (EVar "xs")))))
 (DProp false "base32 round-trip: decode (encode b) == Ok b" ((pp "xs" (TyApp (TyCon "List") (TyCon "Int")))) (EBlock (DoLet false false (PVar "b") (EApp (EVar "toBytes") (EVar "xs"))) (DoExpr (EBinOp "==" (EApp (EVar "base32Decode") (EApp (EVar "base32Encode") (EVar "b"))) (EApp (EVar "Ok") (EVar "b"))))))

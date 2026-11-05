@@ -487,9 +487,9 @@ scanKnown sp t f rest = match f.arity
   Switch => consGiven (canonical f, None) (scanArgs sp rest)
   _ => match rest
     [] => Err (missingValueMessage sp t)
-    v :: rest2 => match checkValue sp t f.arity v
-      Err m => Err m
-      Ok _ => consGiven (canonical f, Some v) (scanArgs sp rest2)
+    v :: rest2 => do
+      _ <- checkValue sp t f.arity v
+      consGiven (canonical f, Some v) (scanArgs sp rest2)
 
 -- The `=` spelling: `--flag=v`.  A switch given `--flag=v` was not spelled by
 -- any name in the spec, so it is an unclaimed token, not a silently dropped
@@ -499,9 +499,9 @@ scanEqForm sp t nm v rest = match findFlag nm sp.flags
   None => scanUnclaimed sp t rest
   Some f => match f.arity
     Switch => scanUnclaimed sp t rest
-    _ => match checkValue sp nm f.arity v
-      Err m => Err m
-      Ok _ => consGiven (canonical f, Some v) (scanArgs sp rest)
+    _ => do
+      _ <- checkValue sp nm f.arity v
+      consGiven (canonical f, Some v) (scanArgs sp rest)
 
 -- No `FlagSpec` claims this token.
 scanUnclaimed : ArgSpec -> String -> List String -> Scan
@@ -533,13 +533,12 @@ hasName nm (n :: rest) = n == nm || hasName nm rest
 
 -- `--flag=v` → `("--flag", "v")`.  An `=` at position 0 is not a split.
 splitEq : String -> Option (String, String)
-splitEq t = match indexOf "=" t
-  None => None
-  Some i =>
-    if i <= 0 then
-      None
-    else
-      Some (stringSlice 0 i t, stringSlice (i + 1) (stringLength t) t)
+splitEq t = do
+  i <- indexOf "=" t
+  if i <= 0 then
+    None
+  else
+    Some (stringSlice 0 i t, stringSlice (i + 1) (stringLength t) t)
 
 -- # Querying a parse
 

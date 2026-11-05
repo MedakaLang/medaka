@@ -68,9 +68,9 @@ export
 copyFile : (src : String) ->
   (dst : String) ->
   <FileRead src, FileWrite dst> Result String Unit
-copyFile src dst = match readFileBytes src
-  Ok bytes => writeFileBytes dst bytes
-  Err e => Err e
+copyFile src dst = do
+  bytes <- readFileBytes src
+  writeFileBytes dst bytes
 
 {- | Rewrites the file at `path` with the result of `f` applied to its text.
 
@@ -127,9 +127,9 @@ mkdirAll : String -> <FileWrite> Result String Unit
 mkdirAll path =
   if path == "" || path == "." || path == "/" then
     Ok ()
-  else match mkdirAll (dirname path)
-    Err e => Err e
-    Ok _ => match makeDir path
+  else do
+    _ <- mkdirAll (dirname path)
+    match makeDir path
       Ok _ => Ok ()
       -- EEXIST (strerror "File exists") is success; other errors propagate.
       Err e2 => if contains "exists" e2 then Ok () else Err e2
@@ -169,9 +169,9 @@ mkdirAllDurably path =
    directory that cannot be read or entry that cannot be examined. -}
 export
 walkDir : String -> <FileRead> Result String (List String)
-walkDir root = match listDir root
-  Err e => Err e
-  Ok entries => walkEntries root entries
+walkDir root = do
+  entries <- listDir root
+  walkEntries root entries
 
 -- Each directory's result is built forward, so no pass is as deep as the
 -- tree's total entry count: `run` has no tail calls, and a depth-limited
@@ -183,11 +183,17 @@ walkEntries _ [] = Ok []
 -- lint-disable-next-line rule-bind-chain-to-do
 walkEntries root (name :: rest) =
   let full = joinPath root name
+  -- Bound: a `do` chain costs more frames per entry on the widest directory `run` can walk.
+  -- lint-disable-next-line rule-passthrough-arm
   match stat full
     Err e => Err e
     Ok st =>
+      -- Bound: as above.
+      -- lint-disable-next-line rule-passthrough-arm
       if st.isDir then match listDir full
         Err e => Err e
+        -- Bound: as above.
+        -- lint-disable-next-line rule-passthrough-arm
         Ok subs => match walkEntries full subs
           Err e => Err e
           Ok inner =>
@@ -295,7 +301,10 @@ walkDirSorted : WalkKind ->
   <FileRead> Result String (List String)
 -- lint-disable-next-line rule-bind-chain-to-do
 walkDirSorted kind levels skip root names =
-  match collectEntries kind levels skip root names
+  let collected = collectEntries kind levels skip root names
+  -- Bound: the frame cost of a `do` chain per entry, stated above.
+  -- lint-disable-next-line rule-passthrough-arm
+  match collected
     Err e => Err e
     Ok entries =>
       walkSorted kind levels skip (sortOn ((key, _, _) => key) entries)
@@ -315,6 +324,8 @@ walkSorted kind levels skip ((_, full, isDirectory) :: rest) =
       map ("\{full}/" :: _) (walkSorted kind levels skip rest)
     else match listDir full
       Err e => Err (namePath full e)
+      -- Bound: the frame cost of a `do` chain per entry, stated above.
+      -- lint-disable-next-line rule-passthrough-arm
       Ok subs => match walkDirSorted kind (belowLevel levels) skip full subs
         Err e => Err e
         Ok inner =>
@@ -459,9 +470,9 @@ filesOnly (p :: rest) = match isFile p
    Ok True -}
 export
 fixtureFiles : String -> <FileRead> Result String (List String)
-fixtureFiles root = match walkDir root
-  Err e => Err e
-  Ok paths => match filesOnly paths
+fixtureFiles root = do
+  paths <- walkDir root
+  match filesOnly paths
     Err e => Err e
     Ok [] => Err "\{root}: no fixture files found"
     Ok fs => Ok fs
@@ -486,9 +497,9 @@ dirsOnly (p :: rest) = match isDir p
    Ok True -}
 export
 fixtureDirs : String -> <FileRead> Result String (List String)
-fixtureDirs root = match listDir root
-  Err e => Err e
-  Ok names => match dirsOnly (map (joinPath root) names)
+fixtureDirs root = do
+  names <- listDir root
+  match dirsOnly (map (joinPath root) names)
     Err e => Err e
     Ok [] => Err "\{root}: no fixture directories found"
     Ok ds => Ok ds

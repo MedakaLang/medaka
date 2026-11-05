@@ -290,14 +290,14 @@ withConnection : (host : String) ->
   Int ->
   (Connection host -> <Net host | e> Result String a) ->
   <Net host | e> Result String a
-withConnection host port body = match connect host port
-  Err e => Err e
-  Ok conn =>
-    let r = body conn
+withConnection host port body = do
+  conn <- connect host port
+  let r = body conn
+  let _ =
     bestEffort
       "the connection is being torn down and `body`'s result is what the caller needs; a failed close has no recovery"
       (close conn)
-    r
+  r
 
 {- | Listens on `addr` and `port`, runs `body` on the listener, and closes
    it whatever `body` returns.
@@ -308,14 +308,14 @@ withListener : (addr : String) ->
   Int ->
   (Listener addr -> <Net addr | e> Result String a) ->
   <Net addr | e> Result String a
-withListener addr port body = match listen addr port
-  Err e => Err e
-  Ok lis =>
-    let r = body lis
+withListener addr port body = do
+  lis <- listen addr port
+  let r = body lis
+  let _ =
     bestEffort
       "the listener is being torn down and `body`'s result is what the caller needs; a failed close has no recovery"
       (closeListener lis)
-    r
+  r
 
 {- | Accepts connections forever, running `handle` on each and closing it
    afterwards.

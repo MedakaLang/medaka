@@ -1,5 +1,5 @@
 # META
-source_lines=540
+source_lines=539
 stages=DESUGAR,MARK
 # SOURCE
 -- Tests for the file primitives `stdlib/fs.mdk` builds on.
@@ -51,9 +51,9 @@ buildTree root = do
 -- `listDir` in turn, a subdirectory followed by its own contents. `walkDir`
 -- must produce this order for any host `listDir` order.
 expectedWalk : String -> <FileRead> Result String (List String)
-expectedWalk dir = match listDir dir
-  Err e => Err e
-  Ok names => expectedEntries dir names
+expectedWalk dir = do
+  names <- listDir dir
+  expectedEntries dir names
 
 expectedEntries : String ->
   List String ->
@@ -374,17 +374,16 @@ withDotTree check = withScratchDir (dir => match buildDotTree dir
 -- Every file and every directory under `root` (a directory with a trailing
 -- slash, `root` itself included), as the unpruned walk of `walkDir`.
 everyCandidate : String -> <FileRead> Result String (List String)
-everyCandidate root = match walkDir root
-  Err e => Err e
-  Ok paths => map ("\{root}/" :: _) (slashDirs paths)
+everyCandidate root = do
+  paths <- walkDir root
+  map ("\{root}/" :: _) (slashDirs paths)
 
 slashDirs : List String -> <FileRead> Result String (List String)
 slashDirs [] = Ok []
-slashDirs (p :: rest) = match isDir p
-  Err e => Err e
-  Ok d =>
-    let marked = if d then "\{p}/" else p
-    map (marked :: _) (slashDirs rest)
+slashDirs (p :: rest) = do
+  d <- isDir p
+  let marked = if d then "\{p}/" else p
+  map (marked :: _) (slashDirs rest)
 
 -- The answer `glob` must give: the candidates `matchGlob` accepts, files for
 -- a pattern without a trailing slash and directories for one with.
@@ -554,7 +553,7 @@ test "writeFileBytes to a full device is an Err" =
 (DTypeSig false "buildTree" (TyFun (TyCon "String") (TyEffect ("FileWrite") None (TyApp (TyApp (TyCon "Result") (TyCon "String")) (TyCon "Unit")))))
 (DFunDef false "buildTree" ((PVar "root")) (EApp (EApp (EVar "andThen") (EApp (EVar "mkdirAll") (EApp (EApp (EVar "joinPath") (EVar "root")) (ELit (LString "sub/deep"))))) (ELam ((PVar "__do_x")) (EMatch (EVar "__do_x") (arm (PLit LUnit) () (EApp (EApp (EVar "andThen") (EApp (EVar "mkdirAll") (EApp (EApp (EVar "joinPath") (EVar "root")) (ELit (LString "zed"))))) (ELam ((PVar "__do_x")) (EMatch (EVar "__do_x") (arm (PLit LUnit) () (EApp (EApp (EVar "andThen") (EApp (EApp (EVar "writeFile") (EApp (EApp (EVar "joinPath") (EVar "root")) (ELit (LString "a.txt")))) (ELit (LString "a")))) (ELam ((PVar "__do_x")) (EMatch (EVar "__do_x") (arm (PLit LUnit) () (EApp (EApp (EVar "andThen") (EApp (EApp (EVar "writeFile") (EApp (EApp (EVar "joinPath") (EVar "root")) (ELit (LString "sub/b.txt")))) (ELit (LString "b")))) (ELam ((PVar "__do_x")) (EMatch (EVar "__do_x") (arm (PLit LUnit) () (EApp (EApp (EVar "andThen") (EApp (EApp (EVar "writeFile") (EApp (EApp (EVar "joinPath") (EVar "root")) (ELit (LString "sub/c.txt")))) (ELit (LString "c")))) (ELam ((PVar "__do_x")) (EMatch (EVar "__do_x") (arm (PLit LUnit) () (EApp (EApp (EVar "andThen") (EApp (EApp (EVar "writeFile") (EApp (EApp (EVar "joinPath") (EVar "root")) (ELit (LString "sub/deep/d.txt")))) (ELit (LString "d")))) (ELam ((PVar "__do_x")) (EMatch (EVar "__do_x") (arm (PLit LUnit) () (EApp (EApp (EVar "andThen") (EApp (EApp (EVar "writeFile") (EApp (EApp (EVar "joinPath") (EVar "root")) (ELit (LString "zed/e.txt")))) (ELit (LString "e")))) (ELam ((PVar "__do_x")) (EMatch (EVar "__do_x") (arm (PLit LUnit) () (EApp (EApp (EVar "andThen") (EApp (EApp (EVar "writeFile") (EApp (EApp (EVar "joinPath") (EVar "root")) (ELit (LString "zed/f.txt")))) (ELit (LString "f")))) (ELam ((PVar "__do_x")) (EMatch (EVar "__do_x") (arm (PLit LUnit) () (EApp (EApp (EVar "andThen") (EApp (EApp (EVar "writeFile") (EApp (EApp (EVar "joinPath") (EVar "root")) (ELit (LString "g.txt")))) (ELit (LString "g")))) (ELam ((PVar "__do_x")) (EMatch (EVar "__do_x") (arm (PLit LUnit) () (EApp (EVar "Ok") (ELit LUnit)))))))))))))))))))))))))))))))))))))))
 (DTypeSig false "expectedWalk" (TyFun (TyCon "String") (TyEffect ("FileRead") None (TyApp (TyApp (TyCon "Result") (TyCon "String")) (TyApp (TyCon "List") (TyCon "String"))))))
-(DFunDef false "expectedWalk" ((PVar "dir")) (EMatch (EApp (EVar "listDir") (EVar "dir")) (arm (PCon "Err" (PVar "e")) () (EApp (EVar "Err") (EVar "e"))) (arm (PCon "Ok" (PVar "names")) () (EApp (EApp (EVar "expectedEntries") (EVar "dir")) (EVar "names")))))
+(DFunDef false "expectedWalk" ((PVar "dir")) (EApp (EApp (EVar "andThen") (EApp (EVar "listDir") (EVar "dir"))) (ELam ((PVar "names")) (EApp (EApp (EVar "expectedEntries") (EVar "dir")) (EVar "names")))))
 (DTypeSig false "expectedEntries" (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyEffect ("FileRead") None (TyApp (TyApp (TyCon "Result") (TyCon "String")) (TyApp (TyCon "List") (TyCon "String")))))))
 (DFunDef false "expectedEntries" (PWild (PList)) (EApp (EVar "Ok") (EListLit)))
 (DFunDef false "expectedEntries" ((PVar "dir") (PCons (PVar "name") (PVar "rest"))) (EBlock (DoLet false false (PVar "full") (EApp (EApp (EVar "joinPath") (EVar "dir")) (EVar "name"))) (DoExpr (EMatch (EApp (EVar "isDir") (EVar "full")) (arm (PCon "Err" (PVar "e")) () (EApp (EVar "Err") (EVar "e"))) (arm (PCon "Ok" (PCon "False")) () (EApp (EApp (EVar "map") (ELam ((PVar "_s")) (EBinOp "::" (EVar "full") (EVar "_s")))) (EApp (EApp (EVar "expectedEntries") (EVar "dir")) (EVar "rest")))) (arm (PCon "Ok" (PCon "True")) () (EApp (EApp (EVar "andThen") (EApp (EVar "expectedWalk") (EVar "full"))) (ELam ((PVar "sub")) (EApp (EApp (EVar "andThen") (EApp (EApp (EVar "expectedEntries") (EVar "dir")) (EVar "rest"))) (ELam ((PVar "tail")) (EApp (EVar "Ok") (EBinOp "::" (EVar "full") (EBinOp "++" (EVar "sub") (EVar "tail")))))))))))))
@@ -617,10 +616,10 @@ test "writeFileBytes to a full device is an Err" =
 (DTypeSig false "withDotTree" (TyFun (TyFun (TyCon "String") (TyEffect ("Exec" "IO" "FileRead" "FileWrite") None (TyCon "Expectation"))) (TyEffect ("Exec" "IO" "FileRead" "FileWrite") None (TyCon "Expectation"))))
 (DFunDef false "withDotTree" ((PVar "check")) (EApp (EVar "withScratchDir") (ELam ((PVar "dir")) (EMatch (EApp (EVar "buildDotTree") (EVar "dir")) (arm (PCon "Err" (PVar "e")) () (EApp (EVar "fail") (EBinOp "++" (EBinOp "++" (ELit (LString "could not build the tree: ")) (EApp (EVar "display") (EVar "e"))) (ELit (LString ""))))) (arm (PCon "Ok" PWild) () (EApp (EVar "check") (EVar "dir")))))))
 (DTypeSig false "everyCandidate" (TyFun (TyCon "String") (TyEffect ("FileRead") None (TyApp (TyApp (TyCon "Result") (TyCon "String")) (TyApp (TyCon "List") (TyCon "String"))))))
-(DFunDef false "everyCandidate" ((PVar "root")) (EMatch (EApp (EVar "walkDir") (EVar "root")) (arm (PCon "Err" (PVar "e")) () (EApp (EVar "Err") (EVar "e"))) (arm (PCon "Ok" (PVar "paths")) () (EApp (EApp (EVar "map") (ELam ((PVar "_s")) (EBinOp "::" (EBinOp "++" (EBinOp "++" (ELit (LString "")) (EApp (EVar "display") (EVar "root"))) (ELit (LString "/"))) (EVar "_s")))) (EApp (EVar "slashDirs") (EVar "paths"))))))
+(DFunDef false "everyCandidate" ((PVar "root")) (EApp (EApp (EVar "andThen") (EApp (EVar "walkDir") (EVar "root"))) (ELam ((PVar "paths")) (EApp (EApp (EVar "map") (ELam ((PVar "_s")) (EBinOp "::" (EBinOp "++" (EBinOp "++" (ELit (LString "")) (EApp (EVar "display") (EVar "root"))) (ELit (LString "/"))) (EVar "_s")))) (EApp (EVar "slashDirs") (EVar "paths"))))))
 (DTypeSig false "slashDirs" (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyEffect ("FileRead") None (TyApp (TyApp (TyCon "Result") (TyCon "String")) (TyApp (TyCon "List") (TyCon "String"))))))
 (DFunDef false "slashDirs" ((PList)) (EApp (EVar "Ok") (EListLit)))
-(DFunDef false "slashDirs" ((PCons (PVar "p") (PVar "rest"))) (EMatch (EApp (EVar "isDir") (EVar "p")) (arm (PCon "Err" (PVar "e")) () (EApp (EVar "Err") (EVar "e"))) (arm (PCon "Ok" (PVar "d")) () (EBlock (DoLet false false (PVar "marked") (EIf (EVar "d") (EBinOp "++" (EBinOp "++" (ELit (LString "")) (EApp (EVar "display") (EVar "p"))) (ELit (LString "/"))) (EVar "p"))) (DoExpr (EApp (EApp (EVar "map") (ELam ((PVar "_s")) (EBinOp "::" (EVar "marked") (EVar "_s")))) (EApp (EVar "slashDirs") (EVar "rest"))))))))
+(DFunDef false "slashDirs" ((PCons (PVar "p") (PVar "rest"))) (EApp (EApp (EVar "andThen") (EApp (EVar "isDir") (EVar "p"))) (ELam ((PVar "d")) (ELet false (PVar "marked") (EIf (EVar "d") (EBinOp "++" (EBinOp "++" (ELit (LString "")) (EApp (EVar "display") (EVar "p"))) (ELit (LString "/"))) (EVar "p")) (EApp (EApp (EVar "map") (ELam ((PVar "_s")) (EBinOp "::" (EVar "marked") (EVar "_s")))) (EApp (EVar "slashDirs") (EVar "rest")))))))
 (DTypeSig false "oracle" (TyFun (TyCon "String") (TyFun (TyCon "String") (TyEffect ("FileRead") None (TyApp (TyApp (TyCon "Result") (TyCon "String")) (TyApp (TyCon "List") (TyCon "String")))))))
 (DFunDef false "oracle" ((PVar "dir") (PVar "pattern")) (EApp (EApp (EVar "map") (ELam ((PVar "cs")) (EApp (EVar "sort") (EApp (EApp (EVar "filter") (ELam ((PVar "c")) (EBinOp "&&" (EApp (EApp (EVar "matchGlob") (EVar "pattern")) (EVar "c")) (EBinOp "==" (EApp (EApp (EVar "endsWith") (ELit (LString "/"))) (EVar "c")) (EApp (EApp (EVar "endsWith") (ELit (LString "/"))) (EVar "pattern")))))) (EVar "cs"))))) (EApp (EVar "everyCandidate") (EVar "dir"))))
 (DTypeSig false "globAgrees" (TyFun (TyCon "String") (TyFun (TyCon "String") (TyEffect ("FileRead") None (TyTuple (TyCon "String") (TyCon "Expectation"))))))
@@ -646,7 +645,7 @@ test "writeFileBytes to a full device is an Err" =
 (DTypeSig false "buildTree" (TyFun (TyCon "String") (TyEffect ("FileWrite") None (TyApp (TyApp (TyCon "Result") (TyCon "String")) (TyCon "Unit")))))
 (DFunDef false "buildTree" ((PVar "root")) (EApp (EApp (EMethodRef "andThen") (EApp (EVar "mkdirAll") (EApp (EApp (EVar "joinPath") (EVar "root")) (ELit (LString "sub/deep"))))) (ELam ((PVar "__do_x")) (EMatch (EVar "__do_x") (arm (PLit LUnit) () (EApp (EApp (EMethodRef "andThen") (EApp (EVar "mkdirAll") (EApp (EApp (EVar "joinPath") (EVar "root")) (ELit (LString "zed"))))) (ELam ((PVar "__do_x")) (EMatch (EVar "__do_x") (arm (PLit LUnit) () (EApp (EApp (EMethodRef "andThen") (EApp (EApp (EVar "writeFile") (EApp (EApp (EVar "joinPath") (EVar "root")) (ELit (LString "a.txt")))) (ELit (LString "a")))) (ELam ((PVar "__do_x")) (EMatch (EVar "__do_x") (arm (PLit LUnit) () (EApp (EApp (EMethodRef "andThen") (EApp (EApp (EVar "writeFile") (EApp (EApp (EVar "joinPath") (EVar "root")) (ELit (LString "sub/b.txt")))) (ELit (LString "b")))) (ELam ((PVar "__do_x")) (EMatch (EVar "__do_x") (arm (PLit LUnit) () (EApp (EApp (EMethodRef "andThen") (EApp (EApp (EVar "writeFile") (EApp (EApp (EVar "joinPath") (EVar "root")) (ELit (LString "sub/c.txt")))) (ELit (LString "c")))) (ELam ((PVar "__do_x")) (EMatch (EVar "__do_x") (arm (PLit LUnit) () (EApp (EApp (EMethodRef "andThen") (EApp (EApp (EVar "writeFile") (EApp (EApp (EVar "joinPath") (EVar "root")) (ELit (LString "sub/deep/d.txt")))) (ELit (LString "d")))) (ELam ((PVar "__do_x")) (EMatch (EVar "__do_x") (arm (PLit LUnit) () (EApp (EApp (EMethodRef "andThen") (EApp (EApp (EVar "writeFile") (EApp (EApp (EVar "joinPath") (EVar "root")) (ELit (LString "zed/e.txt")))) (ELit (LString "e")))) (ELam ((PVar "__do_x")) (EMatch (EVar "__do_x") (arm (PLit LUnit) () (EApp (EApp (EMethodRef "andThen") (EApp (EApp (EVar "writeFile") (EApp (EApp (EVar "joinPath") (EVar "root")) (ELit (LString "zed/f.txt")))) (ELit (LString "f")))) (ELam ((PVar "__do_x")) (EMatch (EVar "__do_x") (arm (PLit LUnit) () (EApp (EApp (EMethodRef "andThen") (EApp (EApp (EVar "writeFile") (EApp (EApp (EVar "joinPath") (EVar "root")) (ELit (LString "g.txt")))) (ELit (LString "g")))) (ELam ((PVar "__do_x")) (EMatch (EVar "__do_x") (arm (PLit LUnit) () (EApp (EVar "Ok") (ELit LUnit)))))))))))))))))))))))))))))))))))))))
 (DTypeSig false "expectedWalk" (TyFun (TyCon "String") (TyEffect ("FileRead") None (TyApp (TyApp (TyCon "Result") (TyCon "String")) (TyApp (TyCon "List") (TyCon "String"))))))
-(DFunDef false "expectedWalk" ((PVar "dir")) (EMatch (EApp (EVar "listDir") (EVar "dir")) (arm (PCon "Err" (PVar "e")) () (EApp (EVar "Err") (EVar "e"))) (arm (PCon "Ok" (PVar "names")) () (EApp (EApp (EVar "expectedEntries") (EVar "dir")) (EVar "names")))))
+(DFunDef false "expectedWalk" ((PVar "dir")) (EApp (EApp (EMethodRef "andThen") (EApp (EVar "listDir") (EVar "dir"))) (ELam ((PVar "names")) (EApp (EApp (EVar "expectedEntries") (EVar "dir")) (EVar "names")))))
 (DTypeSig false "expectedEntries" (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyEffect ("FileRead") None (TyApp (TyApp (TyCon "Result") (TyCon "String")) (TyApp (TyCon "List") (TyCon "String")))))))
 (DFunDef false "expectedEntries" (PWild (PList)) (EApp (EVar "Ok") (EListLit)))
 (DFunDef false "expectedEntries" ((PVar "dir") (PCons (PVar "name") (PVar "rest"))) (EBlock (DoLet false false (PVar "full") (EApp (EApp (EVar "joinPath") (EVar "dir")) (EVar "name"))) (DoExpr (EMatch (EApp (EVar "isDir") (EVar "full")) (arm (PCon "Err" (PVar "e")) () (EApp (EVar "Err") (EVar "e"))) (arm (PCon "Ok" (PCon "False")) () (EApp (EApp (EMethodRef "map") (ELam ((PVar "_s")) (EBinOp "::" (EVar "full") (EVar "_s")))) (EApp (EApp (EVar "expectedEntries") (EVar "dir")) (EVar "rest")))) (arm (PCon "Ok" (PCon "True")) () (EApp (EApp (EMethodRef "andThen") (EApp (EVar "expectedWalk") (EVar "full"))) (ELam ((PVar "sub")) (EApp (EApp (EMethodRef "andThen") (EApp (EApp (EVar "expectedEntries") (EVar "dir")) (EVar "rest"))) (ELam ((PVar "tail")) (EApp (EVar "Ok") (EBinOp "::" (EVar "full") (EBinOp "++" (EMethodRef "sub") (EVar "tail")))))))))))))
@@ -709,10 +708,10 @@ test "writeFileBytes to a full device is an Err" =
 (DTypeSig false "withDotTree" (TyFun (TyFun (TyCon "String") (TyEffect ("Exec" "IO" "FileRead" "FileWrite") None (TyCon "Expectation"))) (TyEffect ("Exec" "IO" "FileRead" "FileWrite") None (TyCon "Expectation"))))
 (DFunDef false "withDotTree" ((PVar "check")) (EApp (EVar "withScratchDir") (ELam ((PVar "dir")) (EMatch (EApp (EVar "buildDotTree") (EVar "dir")) (arm (PCon "Err" (PVar "e")) () (EApp (EVar "fail") (EBinOp "++" (EBinOp "++" (ELit (LString "could not build the tree: ")) (EApp (EMethodRef "display") (EVar "e"))) (ELit (LString ""))))) (arm (PCon "Ok" PWild) () (EApp (EVar "check") (EVar "dir")))))))
 (DTypeSig false "everyCandidate" (TyFun (TyCon "String") (TyEffect ("FileRead") None (TyApp (TyApp (TyCon "Result") (TyCon "String")) (TyApp (TyCon "List") (TyCon "String"))))))
-(DFunDef false "everyCandidate" ((PVar "root")) (EMatch (EApp (EVar "walkDir") (EVar "root")) (arm (PCon "Err" (PVar "e")) () (EApp (EVar "Err") (EVar "e"))) (arm (PCon "Ok" (PVar "paths")) () (EApp (EApp (EMethodRef "map") (ELam ((PVar "_s")) (EBinOp "::" (EBinOp "++" (EBinOp "++" (ELit (LString "")) (EApp (EMethodRef "display") (EVar "root"))) (ELit (LString "/"))) (EVar "_s")))) (EApp (EVar "slashDirs") (EVar "paths"))))))
+(DFunDef false "everyCandidate" ((PVar "root")) (EApp (EApp (EMethodRef "andThen") (EApp (EVar "walkDir") (EVar "root"))) (ELam ((PVar "paths")) (EApp (EApp (EMethodRef "map") (ELam ((PVar "_s")) (EBinOp "::" (EBinOp "++" (EBinOp "++" (ELit (LString "")) (EApp (EMethodRef "display") (EVar "root"))) (ELit (LString "/"))) (EVar "_s")))) (EApp (EVar "slashDirs") (EVar "paths"))))))
 (DTypeSig false "slashDirs" (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyEffect ("FileRead") None (TyApp (TyApp (TyCon "Result") (TyCon "String")) (TyApp (TyCon "List") (TyCon "String"))))))
 (DFunDef false "slashDirs" ((PList)) (EApp (EVar "Ok") (EListLit)))
-(DFunDef false "slashDirs" ((PCons (PVar "p") (PVar "rest"))) (EMatch (EApp (EVar "isDir") (EVar "p")) (arm (PCon "Err" (PVar "e")) () (EApp (EVar "Err") (EVar "e"))) (arm (PCon "Ok" (PVar "d")) () (EBlock (DoLet false false (PVar "marked") (EIf (EVar "d") (EBinOp "++" (EBinOp "++" (ELit (LString "")) (EApp (EMethodRef "display") (EVar "p"))) (ELit (LString "/"))) (EVar "p"))) (DoExpr (EApp (EApp (EMethodRef "map") (ELam ((PVar "_s")) (EBinOp "::" (EVar "marked") (EVar "_s")))) (EApp (EVar "slashDirs") (EVar "rest"))))))))
+(DFunDef false "slashDirs" ((PCons (PVar "p") (PVar "rest"))) (EApp (EApp (EMethodRef "andThen") (EApp (EVar "isDir") (EVar "p"))) (ELam ((PVar "d")) (ELet false (PVar "marked") (EIf (EVar "d") (EBinOp "++" (EBinOp "++" (ELit (LString "")) (EApp (EMethodRef "display") (EVar "p"))) (ELit (LString "/"))) (EVar "p")) (EApp (EApp (EMethodRef "map") (ELam ((PVar "_s")) (EBinOp "::" (EVar "marked") (EVar "_s")))) (EApp (EVar "slashDirs") (EVar "rest")))))))
 (DTypeSig false "oracle" (TyFun (TyCon "String") (TyFun (TyCon "String") (TyEffect ("FileRead") None (TyApp (TyApp (TyCon "Result") (TyCon "String")) (TyApp (TyCon "List") (TyCon "String")))))))
 (DFunDef false "oracle" ((PVar "dir") (PVar "pattern")) (EApp (EApp (EMethodRef "map") (ELam ((PVar "cs")) (EApp (EVar "sort") (EApp (EApp (EMethodRef "filter") (ELam ((PVar "c")) (EBinOp "&&" (EApp (EApp (EVar "matchGlob") (EVar "pattern")) (EVar "c")) (EBinOp "==" (EApp (EApp (EVar "endsWith") (ELit (LString "/"))) (EVar "c")) (EApp (EApp (EVar "endsWith") (ELit (LString "/"))) (EVar "pattern")))))) (EVar "cs"))))) (EApp (EVar "everyCandidate") (EVar "dir"))))
 (DTypeSig false "globAgrees" (TyFun (TyCon "String") (TyFun (TyCon "String") (TyEffect ("FileRead") None (TyTuple (TyCon "String") (TyCon "Expectation"))))))

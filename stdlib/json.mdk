@@ -251,19 +251,19 @@ hexVal c
 -- Four hex digits at [i, i+4) → a raw codepoint (may land inside the UTF-16
 -- surrogate range — `parseUnicodeAt` below is what pairs or rejects those).
 hex4 : Array Char -> Int -> Option Int
-hex4 arr i = match hexVal (arrayGetUnsafe i arr)
-  None => None
-  Some h0 => hex4From arr i h0
+hex4 arr i = do
+  h0 <- hexVal (arrayGetUnsafe i arr)
+  hex4From arr i h0
 
 hex4From : Array Char -> Int -> Int -> Option Int
-hex4From arr i h0 = match hexVal (arrayGetUnsafe (i + 1) arr)
-  None => None
-  Some h1 => hex4From2 arr i (h0 * 16 + h1)
+hex4From arr i h0 = do
+  h1 <- hexVal (arrayGetUnsafe (i + 1) arr)
+  hex4From2 arr i (h0 * 16 + h1)
 
 hex4From2 : Array Char -> Int -> Int -> Option Int
-hex4From2 arr i acc = match hexVal (arrayGetUnsafe (i + 2) arr)
-  None => None
-  Some h2 => hex4From3 arr i (acc * 16 + h2)
+hex4From2 arr i acc = do
+  h2 <- hexVal (arrayGetUnsafe (i + 2) arr)
+  hex4From3 arr i (acc * 16 + h2)
 
 hex4From3 : Array Char -> Int -> Int -> Option Int
 hex4From3 arr i acc = map (acc * 16 + _) (hexVal (arrayGetUnsafe (i + 3) arr))
