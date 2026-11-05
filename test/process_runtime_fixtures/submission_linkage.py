@@ -85,9 +85,23 @@ result = subprocess.run([scratch / "missing-hook"], env=environment, timeout=15)
 assert result.returncode == 7, result
 print("missing-hook defect rejected before the first process API call")
 run([*cc, "-U__linux__", "-c", root / "runtime/medaka_process.c", "-o", scratch / "unsupported.o"])
+assert "sigtimedwait" not in run(["nm", scratch / "unsupported.o"])
 run([*cc, "-DMDK_SUBMIT_UNSUPPORTED", runtime, scratch / "unsupported.o",
      fixtures / "submission_startup.c", "-lgc", "-lm", "-o", scratch / "unsupported"])
 run([scratch / "unsupported"], "unsupported submission refuses without a worker passed")
+run([scratch / "unsupported"], "unsupported stream operations refuse without fd mutation passed")
+source = (root / "runtime/medaka_process.c").read_text()
+guard = 'long long mdk_process_try_write(long long word, long long block_word, long long offset_word, long long count_word) {\n#ifndef __linux__'
+assert source.count(guard) == 1
+mutated_stream = scratch / "unguarded-stream.c"
+mutated_stream.write_text(source.replace(guard, guard.replace("#ifndef __linux__", "#if 0")))
+run([*cc, "-U__linux__", "-c", mutated_stream, "-o", scratch / "unguarded-stream.o"])
+run([*cc, "-DMDK_SUBMIT_UNSUPPORTED", runtime, scratch / "unguarded-stream.o",
+     fixtures / "submission_startup.c", "-lgc", "-lm", "-o", scratch / "unguarded-stream"])
+result = subprocess.run([scratch / "unguarded-stream"], env=environment, timeout=15,
+                        capture_output=True, text=True)
+assert result.returncode != 0, result
+print("unguarded write mutation rejected by invalid byte input probe")
 print("standalone, direct, archive and unsupported runtime startup passed")
 
 compiler = root / "medaka"
