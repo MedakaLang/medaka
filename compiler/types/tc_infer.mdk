@@ -3156,12 +3156,14 @@ armUnreachable _mctx oracle col0 prec _ _ dp =
 noteHeadCtor : Pat -> OrdMap Unit -> OrdMap Unit
 noteHeadCtor (PCon c _) heads = omInsert c () heads
 noteHeadCtor (POr alts) heads = fold (h a => noteHeadCtor a h) heads alts
-noteHeadCtor _ heads = heads
+noteHeadCtor (PVar _ _ _ | PWild | PLit _ | PCons _ _ | PTuple _ | PList _ | PAs _ _ _ _ | PRng _ _ _ | PRec _ _ _ | PAnn _ _) heads =
+  heads
 
 isConPat : Pat -> Bool
 isConPat (PCon _ _) = True
 isConPat (POr alts) = allList isConPat alts
-isConPat _ = False
+isConPat (PVar _ _ _ | PWild | PLit _ | PCons _ _ | PTuple _ | PList _ | PAs _ _ _ _ | PRng _ _ _ | PRec _ _ _ | PAnn _ _) =
+  False
 
 -- Only UNGUARDED arms contribute to the covered set (a guarded arm may not fire).
 armIsUnguarded : List Guard -> Bool

@@ -128,7 +128,8 @@ collectEVars (ESlice a b c _) =
 collectEVars (EIndex a b) = collectEVars a ++ collectEVars b
 collectEVars (EBlock stmts) = concatMapCP collectStmt stmts
 collectEVars (EDo _ stmts) = concatMapCP collectStmt stmts
-collectEVars _ = []
+collectEVars (ELit _ | ESection _ | EStringInterp _ | EGuards _ | EMapLit _ _ | ESetLit _ _ | EAsPat _ _ | EOrPat _ | EVarAt _ _ | EVarId _ _ | EMethodAt _ _ _ | EDictAt _ _ | EDoOrigin _ _ | ENumLit _ _ _ | EWideLit _ _ _ _) =
+  []
 
 collectBind : LetBind -> List String
 collectBind (LetBind _ clauses _ _) = concatMapCP collectClause clauses
@@ -210,7 +211,7 @@ resultSpineRows : Mono -> List Atom
 resultSpineRows m = match normalize m
   TFun _ row res => atomsUnion (effrowLabels row) (resultSpineRows res)
   TEff row => effrowLabels row
-  _ => []
+  TVar _ | TCon _ _ | TRigid _ | TApp _ _ | TQual _ _ | TAuth _ => []
 
 -- Does fn `name` carry an atom whose LABEL is `label`?  (Chain reconstruction
 -- stays label-keyed — the param does not participate in the call-graph trace.)

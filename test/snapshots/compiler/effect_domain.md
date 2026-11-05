@@ -249,7 +249,7 @@ setMembers _ = []
 largestSet : Param -> Int
 largestSet (PSet (Some xs)) = listLen xs
 largestSet (PProduct ax) = fold (acc a => max acc (largestSet (snd a))) 0 ax
-largestSet _ = 0
+largestSet (PUnit | PPrefix _ | PPath _ | PSet _) = 0
 
 headParam : List Param -> Param
 headParam (p :: _) = p
@@ -945,7 +945,7 @@ retagParam _ p = p
 (DTypeSig false "largestSet" (TyFun (TyCon "Param") (TyCon "Int")))
 (DFunDef false "largestSet" ((PCon "PSet" (PCon "Some" (PVar "xs")))) (EApp (EVar "listLen") (EVar "xs")))
 (DFunDef false "largestSet" ((PCon "PProduct" (PVar "ax"))) (EApp (EApp (EApp (EVar "fold") (ELam ((PVar "acc") (PVar "a")) (EApp (EApp (EVar "max") (EVar "acc")) (EApp (EVar "largestSet") (EApp (EVar "snd") (EVar "a")))))) (ELit (LInt 0))) (EVar "ax")))
-(DFunDef false "largestSet" (PWild) (ELit (LInt 0)))
+(DFunDef false "largestSet" ((POr (PCon "PUnit") (PCon "PPrefix" PWild) (PCon "PPath" PWild) (PCon "PSet" PWild))) (ELit (LInt 0)))
 (DTypeSig false "headParam" (TyFun (TyApp (TyCon "List") (TyCon "Param")) (TyCon "Param")))
 (DFunDef false "headParam" ((PCons (PVar "p") PWild)) (EVar "p"))
 (DFunDef false "headParam" ((PList)) (EVar "PUnit"))
@@ -1251,7 +1251,7 @@ retagParam _ p = p
 (DTypeSig false "largestSet" (TyFun (TyCon "Param") (TyCon "Int")))
 (DFunDef false "largestSet" ((PCon "PSet" (PCon "Some" (PVar "xs")))) (EApp (EVar "listLen") (EVar "xs")))
 (DFunDef false "largestSet" ((PCon "PProduct" (PVar "ax"))) (EApp (EApp (EApp (EMethodRef "fold") (ELam ((PVar "acc") (PVar "a")) (EApp (EApp (EMethodRef "max") (EVar "acc")) (EApp (EVar "largestSet") (EApp (EVar "snd") (EVar "a")))))) (ELit (LInt 0))) (EVar "ax")))
-(DFunDef false "largestSet" (PWild) (ELit (LInt 0)))
+(DFunDef false "largestSet" ((POr (PCon "PUnit") (PCon "PPrefix" PWild) (PCon "PPath" PWild) (PCon "PSet" PWild))) (ELit (LInt 0)))
 (DTypeSig false "headParam" (TyFun (TyApp (TyCon "List") (TyCon "Param")) (TyCon "Param")))
 (DFunDef false "headParam" ((PCons (PVar "p") PWild)) (EVar "p"))
 (DFunDef false "headParam" ((PList)) (EVar "PUnit"))

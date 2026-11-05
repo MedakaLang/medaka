@@ -2046,7 +2046,7 @@ authSlotNamesIn mctx readSlots (TyConstrained _ t) =
 authSlotNamesIn mctx readSlots (TyNamed _ t _) =
   authSlotNamesIn mctx readSlots t
 authSlotNamesIn mctx readSlots (TyQual t _ _) = authSlotNamesIn mctx readSlots t
-authSlotNamesIn _mctx _ _ = []
+authSlotNamesIn _mctx _ (TyCon {  } | TyVar _ | TyRow _ _ _ | TyAuth _ _) = []
 
 -- What [readAtom] reads off every effect atom a written type holds.
 export
@@ -2692,7 +2692,7 @@ monoHasNonCovariantSlot mctx t = match normalize t
       || monoHasNonCovariantSlot mctx a
       || monoHasNonCovariantSlot mctx b
   TFun a _ b => monoHasNonCovariantSlot mctx a || monoHasNonCovariantSlot mctx b
-  _ => False
+  TVar _ | TCon _ _ | TRigid _ | TEff _ | TQual _ _ | TAuth _ => False
 
 -- is the slot applied at the node above [hd] (positional index = the depth of
 -- [hd]'s own spine) recorded as non-covariant for [hd]'s head?  The same read
@@ -3384,7 +3384,7 @@ zipBindFrom _dyn _ _ = ()
 (DFunDef false "authSlotNamesIn" ((PVar "mctx") (PVar "readSlots") (PCon "TyConstrained" PWild (PVar "t"))) (EApp (EApp (EApp (EVar "authSlotNamesIn") (EVar "mctx")) (EVar "readSlots")) (EVar "t")))
 (DFunDef false "authSlotNamesIn" ((PVar "mctx") (PVar "readSlots") (PCon "TyNamed" PWild (PVar "t") PWild)) (EApp (EApp (EApp (EVar "authSlotNamesIn") (EVar "mctx")) (EVar "readSlots")) (EVar "t")))
 (DFunDef false "authSlotNamesIn" ((PVar "mctx") (PVar "readSlots") (PCon "TyQual" (PVar "t") PWild PWild)) (EApp (EApp (EApp (EVar "authSlotNamesIn") (EVar "mctx")) (EVar "readSlots")) (EVar "t")))
-(DFunDef false "authSlotNamesIn" ((PVar "_mctx") PWild PWild) (EListLit))
+(DFunDef false "authSlotNamesIn" ((PVar "_mctx") PWild (POr (PRec "TyCon" () false) (PCon "TyVar" PWild) (PCon "TyRow" PWild PWild PWild) (PCon "TyAuth" PWild PWild))) (EListLit))
 (DTypeSig true "atomBindersIn" (TyFun (TyFun (TyCon "EffAtomTy") (TyApp (TyCon "List") (TyVar "a"))) (TyFun (TyCon "Ty") (TyApp (TyCon "List") (TyVar "a")))))
 (DFunDef false "atomBindersIn" (PWild (PCon "TyVar" PWild)) (EListLit))
 (DFunDef false "atomBindersIn" (PWild (PRec "TyCon" ((rf "tyConName" PWild)) false)) (EListLit))
@@ -3511,7 +3511,7 @@ zipBindFrom _dyn _ _ = ()
 (DFunDef false "contraRowCheck" ((PVar "_mctx") (PList) PWild PWild) (ELit LUnit))
 (DFunDef false "contraRowCheck" ((PVar "mctx") (PVar "extras") (PVar "le") (PVar "la")) (EApp (EApp (EApp (EVar "pushTypeError") (EVar "mctx")) (EVar "TEffectLeak")) (EApp (EApp (EApp (EVar "contraRowMsg") (EVar "le")) (EVar "la")) (EVar "extras"))))
 (DTypeSig true "monoHasNonCovariantSlot" (TyFun (TyCon "ModuleCtx") (TyFun (TyCon "Mono") (TyCon "Bool"))))
-(DFunDef false "monoHasNonCovariantSlot" ((PVar "mctx") (PVar "t")) (EMatch (EApp (EVar "normalize") (EVar "t")) (arm (PCon "TApp" (PVar "a") (PVar "b")) () (EBinOp "||" (EBinOp "||" (EApp (EApp (EVar "monoSlotNonCovariant") (EVar "mctx")) (EVar "a")) (EApp (EApp (EVar "monoHasNonCovariantSlot") (EVar "mctx")) (EVar "a"))) (EApp (EApp (EVar "monoHasNonCovariantSlot") (EVar "mctx")) (EVar "b")))) (arm (PCon "TFun" (PVar "a") PWild (PVar "b")) () (EBinOp "||" (EApp (EApp (EVar "monoHasNonCovariantSlot") (EVar "mctx")) (EVar "a")) (EApp (EApp (EVar "monoHasNonCovariantSlot") (EVar "mctx")) (EVar "b")))) (arm PWild () (EVar "False"))))
+(DFunDef false "monoHasNonCovariantSlot" ((PVar "mctx") (PVar "t")) (EMatch (EApp (EVar "normalize") (EVar "t")) (arm (PCon "TApp" (PVar "a") (PVar "b")) () (EBinOp "||" (EBinOp "||" (EApp (EApp (EVar "monoSlotNonCovariant") (EVar "mctx")) (EVar "a")) (EApp (EApp (EVar "monoHasNonCovariantSlot") (EVar "mctx")) (EVar "a"))) (EApp (EApp (EVar "monoHasNonCovariantSlot") (EVar "mctx")) (EVar "b")))) (arm (PCon "TFun" (PVar "a") PWild (PVar "b")) () (EBinOp "||" (EApp (EApp (EVar "monoHasNonCovariantSlot") (EVar "mctx")) (EVar "a")) (EApp (EApp (EVar "monoHasNonCovariantSlot") (EVar "mctx")) (EVar "b")))) (arm (POr (PCon "TVar" PWild) (PCon "TCon" PWild PWild) (PCon "TRigid" PWild) (PCon "TEff" PWild) (PCon "TQual" PWild PWild) (PCon "TAuth" PWild)) () (EVar "False"))))
 (DTypeSig false "monoSlotNonCovariant" (TyFun (TyCon "ModuleCtx") (TyFun (TyCon "Mono") (TyCon "Bool"))))
 (DFunDef false "monoSlotNonCovariant" ((PVar "mctx") (PVar "hd")) (EMatch (EApp (EVar "headTyconMono") (EVar "hd")) (arm (PCon "Some" (PCon "HkDecl" (PVar "key"))) () (EMatch (EApp (EApp (EVar "paramPolaritiesOf") (EVar "mctx")) (EVar "key")) (arm (PCon "Some" (PVar "pols")) () (EMatch (EApp (EApp (EVar "polarityAt") (EVar "pols")) (EApp (EVar "monoSpineDepth") (EVar "hd"))) (arm (PCon "PCo") () (EVar "False")) (arm PWild () (EVar "True")))) (arm (PCon "None") () (EVar "False")))) (arm PWild () (EVar "False"))))
 (DTypeSig true "unifyParamsExpected" (TyFun (TyCon "DynCtx") (TyFun (TyApp (TyCon "List") (TyCon "Mono")) (TyFun (TyApp (TyCon "List") (TyCon "Mono")) (TyCon "Unit")))))
@@ -3944,7 +3944,7 @@ zipBindFrom _dyn _ _ = ()
 (DFunDef false "authSlotNamesIn" ((PVar "mctx") (PVar "readSlots") (PCon "TyConstrained" PWild (PVar "t"))) (EApp (EApp (EApp (EVar "authSlotNamesIn") (EVar "mctx")) (EVar "readSlots")) (EVar "t")))
 (DFunDef false "authSlotNamesIn" ((PVar "mctx") (PVar "readSlots") (PCon "TyNamed" PWild (PVar "t") PWild)) (EApp (EApp (EApp (EVar "authSlotNamesIn") (EVar "mctx")) (EVar "readSlots")) (EVar "t")))
 (DFunDef false "authSlotNamesIn" ((PVar "mctx") (PVar "readSlots") (PCon "TyQual" (PVar "t") PWild PWild)) (EApp (EApp (EApp (EVar "authSlotNamesIn") (EVar "mctx")) (EVar "readSlots")) (EVar "t")))
-(DFunDef false "authSlotNamesIn" ((PVar "_mctx") PWild PWild) (EListLit))
+(DFunDef false "authSlotNamesIn" ((PVar "_mctx") PWild (POr (PRec "TyCon" () false) (PCon "TyVar" PWild) (PCon "TyRow" PWild PWild PWild) (PCon "TyAuth" PWild PWild))) (EListLit))
 (DTypeSig true "atomBindersIn" (TyFun (TyFun (TyCon "EffAtomTy") (TyApp (TyCon "List") (TyVar "a"))) (TyFun (TyCon "Ty") (TyApp (TyCon "List") (TyVar "a")))))
 (DFunDef false "atomBindersIn" (PWild (PCon "TyVar" PWild)) (EListLit))
 (DFunDef false "atomBindersIn" (PWild (PRec "TyCon" ((rf "tyConName" PWild)) false)) (EListLit))
@@ -4071,7 +4071,7 @@ zipBindFrom _dyn _ _ = ()
 (DFunDef false "contraRowCheck" ((PVar "_mctx") (PList) PWild PWild) (ELit LUnit))
 (DFunDef false "contraRowCheck" ((PVar "mctx") (PVar "extras") (PVar "le") (PVar "la")) (EApp (EApp (EApp (EVar "pushTypeError") (EVar "mctx")) (EVar "TEffectLeak")) (EApp (EApp (EApp (EVar "contraRowMsg") (EVar "le")) (EVar "la")) (EVar "extras"))))
 (DTypeSig true "monoHasNonCovariantSlot" (TyFun (TyCon "ModuleCtx") (TyFun (TyCon "Mono") (TyCon "Bool"))))
-(DFunDef false "monoHasNonCovariantSlot" ((PVar "mctx") (PVar "t")) (EMatch (EApp (EVar "normalize") (EVar "t")) (arm (PCon "TApp" (PVar "a") (PVar "b")) () (EBinOp "||" (EBinOp "||" (EApp (EApp (EVar "monoSlotNonCovariant") (EVar "mctx")) (EVar "a")) (EApp (EApp (EVar "monoHasNonCovariantSlot") (EVar "mctx")) (EVar "a"))) (EApp (EApp (EVar "monoHasNonCovariantSlot") (EVar "mctx")) (EVar "b")))) (arm (PCon "TFun" (PVar "a") PWild (PVar "b")) () (EBinOp "||" (EApp (EApp (EVar "monoHasNonCovariantSlot") (EVar "mctx")) (EVar "a")) (EApp (EApp (EVar "monoHasNonCovariantSlot") (EVar "mctx")) (EVar "b")))) (arm PWild () (EVar "False"))))
+(DFunDef false "monoHasNonCovariantSlot" ((PVar "mctx") (PVar "t")) (EMatch (EApp (EVar "normalize") (EVar "t")) (arm (PCon "TApp" (PVar "a") (PVar "b")) () (EBinOp "||" (EBinOp "||" (EApp (EApp (EVar "monoSlotNonCovariant") (EVar "mctx")) (EVar "a")) (EApp (EApp (EVar "monoHasNonCovariantSlot") (EVar "mctx")) (EVar "a"))) (EApp (EApp (EVar "monoHasNonCovariantSlot") (EVar "mctx")) (EVar "b")))) (arm (PCon "TFun" (PVar "a") PWild (PVar "b")) () (EBinOp "||" (EApp (EApp (EVar "monoHasNonCovariantSlot") (EVar "mctx")) (EVar "a")) (EApp (EApp (EVar "monoHasNonCovariantSlot") (EVar "mctx")) (EVar "b")))) (arm (POr (PCon "TVar" PWild) (PCon "TCon" PWild PWild) (PCon "TRigid" PWild) (PCon "TEff" PWild) (PCon "TQual" PWild PWild) (PCon "TAuth" PWild)) () (EVar "False"))))
 (DTypeSig false "monoSlotNonCovariant" (TyFun (TyCon "ModuleCtx") (TyFun (TyCon "Mono") (TyCon "Bool"))))
 (DFunDef false "monoSlotNonCovariant" ((PVar "mctx") (PVar "hd")) (EMatch (EApp (EVar "headTyconMono") (EVar "hd")) (arm (PCon "Some" (PCon "HkDecl" (PVar "key"))) () (EMatch (EApp (EApp (EVar "paramPolaritiesOf") (EVar "mctx")) (EVar "key")) (arm (PCon "Some" (PVar "pols")) () (EMatch (EApp (EApp (EVar "polarityAt") (EVar "pols")) (EApp (EVar "monoSpineDepth") (EVar "hd"))) (arm (PCon "PCo") () (EVar "False")) (arm PWild () (EVar "True")))) (arm (PCon "None") () (EVar "False")))) (arm PWild () (EVar "False"))))
 (DTypeSig true "unifyParamsExpected" (TyFun (TyCon "DynCtx") (TyFun (TyApp (TyCon "List") (TyCon "Mono")) (TyFun (TyApp (TyCon "List") (TyCon "Mono")) (TyCon "Unit")))))

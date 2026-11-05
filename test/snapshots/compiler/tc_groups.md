@@ -1,5 +1,5 @@
 # META
-source_lines=2183
+source_lines=2187
 stages=DESUGAR,MARK
 # SOURCE
 -- tc_groups: binding-group analysis and the generalization policy at a binding boundary: the
@@ -280,7 +280,8 @@ isNonexpansive env (ERecordCreate _ fs) =
     (fa => match fa
       FieldAssign _ e => isNonexpansive env e)
     fs
-isNonexpansive _env _ = False
+isNonexpansive _env (ELet _ _ _ _ _ | EMatch _ _ | EIf _ _ _ | EBinOp _ _ _ _ | EUnOp _ _ _ | EInfix _ _ _ | EFieldAccess _ _ _ | EArrayLit _ | ERangeList _ _ _ | ERangeArray _ _ _ | ESlice _ _ _ _ | ELetGroup _ _ | ESection _ | EIndex _ _ | EBlock _ | EDo _ _ | EStringInterp _ | EGuards _ | ERecordUpdate _ _ _ | EVariantUpdate _ _ _ | EMapLit _ _ | ESetLit _ _ | EAsPat _ _ | EOrPat _ | EDictApp _ | EVarAt _ _ | ENumLit _ _ _ | EWideLit _ _ _ _) =
+  False
 
 -- Walk the left spine of an application to its head, testing EVERY argument met
 -- on the way, and finally test whether the head IS a constructor that is safe to
@@ -319,7 +320,8 @@ isCtorAppSpine env (EDoOrigin _ e) = isCtorAppSpine env e
 isCtorAppSpine env (EApp f x) = isCtorAppSpine env f && isNonexpansive env x
 isCtorAppSpine env (EVar name) = isDeclaredCtorHead env name
 isCtorAppSpine env (EVarId name _) = isDeclaredCtorHead env name
-isCtorAppSpine _env _ = False
+isCtorAppSpine _env (ELit _ | ELam _ _ | ELet _ _ _ _ _ | EMatch _ _ | EIf _ _ _ | EBinOp _ _ _ _ | EUnOp _ _ _ | EInfix _ _ _ | EFieldAccess _ _ _ | ETuple _ | EListLit _ | EArrayLit _ | ERangeList _ _ _ | ERangeArray _ _ _ | ESlice _ _ _ _ | ELetGroup _ _ | ESection _ | EIndex _ _ | EAnnot _ _ | EHeadAnnot _ _ | EBlock _ | EDo _ _ | EStringInterp _ | EGuards _ | ERecordCreate _ _ | ERecordUpdate _ _ _ | EVariantUpdate _ _ _ | EMapLit _ _ | ESetLit _ _ | EAsPat _ _ | EOrPat _ | EMethodRef _ | EDictApp _ | EVarAt _ _ | EMethodAt _ _ _ | EDictAt _ _ | ENumLit _ _ _ | EWideLit _ _ _ _) =
+  False
 
 -- The head test itself: `name` is a real, declared constructor and is not the
 -- `Ref` extern.  See `isCtorAppSpine`'s docblock for why `lookupCtor` is the
@@ -614,7 +616,8 @@ eagerRefs (EMapLit _ kvs) = flatMap eagerRefsPair kvs
 eagerRefs (ESetLit _ es) = flatMap eagerRefs es
 eagerRefs (ELoc _ e) = eagerRefs e
 eagerRefs (EDoOrigin _ e) = eagerRefs e
-eagerRefs _ = []
+eagerRefs (ELit _ | EMethodRef _ | EDictApp _ | EVarAt _ _ | ENumLit _ _ _ | EWideLit _ _ _ _ | ESection _) =
+  []
 
 eagerRefsLetBind : LetBind -> List String
 eagerRefsLetBind (LetBind _ clauses _ _) =
@@ -992,7 +995,8 @@ allEVars (ESection s) = sectionEVars s
 --   EVarAt             — minted by `annotateProgram`, which runs after typecheck.
 -- A new reference-bearing constructor therefore needs an arm above: falling to the
 -- catch-all silently drops a dependency edge rather than erroring.
-allEVars _ = []
+allEVars (EMethodRef _ | EDictApp _ | EVarAt _ _ | ENumLit _ _ _ | EWideLit _ _ _ _) =
+  []
 
 kvEVars : (Expr, Expr) -> List String
 kvEVars (k, v) = allEVars k ++ allEVars v
@@ -2236,14 +2240,14 @@ ifaceMethodEVars (IfaceMethod _ _ d _) = match d
 (DFunDef false "isNonexpansive" ((PVar "env") (PCon "EListLit" (PVar "es"))) (EApp (EApp (EVar "allList") (EApp (EVar "isNonexpansive") (EVar "env"))) (EVar "es")))
 (DFunDef false "isNonexpansive" ((PVar "env") (PAs "app" (PCon "EApp" PWild PWild))) (EApp (EApp (EVar "isCtorAppSpine") (EVar "env")) (EVar "app")))
 (DFunDef false "isNonexpansive" ((PVar "env") (PCon "ERecordCreate" PWild (PVar "fs"))) (EApp (EApp (EVar "allList") (ELam ((PVar "fa")) (EMatch (EVar "fa") (arm (PCon "FieldAssign" PWild (PVar "e")) () (EApp (EApp (EVar "isNonexpansive") (EVar "env")) (EVar "e")))))) (EVar "fs")))
-(DFunDef false "isNonexpansive" ((PVar "_env") PWild) (EVar "False"))
+(DFunDef false "isNonexpansive" ((PVar "_env") (POr (PCon "ELet" PWild PWild PWild PWild PWild) (PCon "EMatch" PWild PWild) (PCon "EIf" PWild PWild PWild) (PCon "EBinOp" PWild PWild PWild PWild) (PCon "EUnOp" PWild PWild PWild) (PCon "EInfix" PWild PWild PWild) (PCon "EFieldAccess" PWild PWild PWild) (PCon "EArrayLit" PWild) (PCon "ERangeList" PWild PWild PWild) (PCon "ERangeArray" PWild PWild PWild) (PCon "ESlice" PWild PWild PWild PWild) (PCon "ELetGroup" PWild PWild) (PCon "ESection" PWild) (PCon "EIndex" PWild PWild) (PCon "EBlock" PWild) (PCon "EDo" PWild PWild) (PCon "EStringInterp" PWild) (PCon "EGuards" PWild) (PCon "ERecordUpdate" PWild PWild PWild) (PCon "EVariantUpdate" PWild PWild PWild) (PCon "EMapLit" PWild PWild) (PCon "ESetLit" PWild PWild) (PCon "EAsPat" PWild PWild) (PCon "EOrPat" PWild) (PCon "EDictApp" PWild) (PCon "EVarAt" PWild PWild) (PCon "ENumLit" PWild PWild PWild) (PCon "EWideLit" PWild PWild PWild PWild))) (EVar "False"))
 (DTypeSig false "isCtorAppSpine" (TyFun (TyCon "TcEnv") (TyFun (TyCon "Expr") (TyCon "Bool"))))
 (DFunDef false "isCtorAppSpine" ((PVar "env") (PCon "ELoc" PWild (PVar "e"))) (EApp (EApp (EVar "isCtorAppSpine") (EVar "env")) (EVar "e")))
 (DFunDef false "isCtorAppSpine" ((PVar "env") (PCon "EDoOrigin" PWild (PVar "e"))) (EApp (EApp (EVar "isCtorAppSpine") (EVar "env")) (EVar "e")))
 (DFunDef false "isCtorAppSpine" ((PVar "env") (PCon "EApp" (PVar "f") (PVar "x"))) (EBinOp "&&" (EApp (EApp (EVar "isCtorAppSpine") (EVar "env")) (EVar "f")) (EApp (EApp (EVar "isNonexpansive") (EVar "env")) (EVar "x"))))
 (DFunDef false "isCtorAppSpine" ((PVar "env") (PCon "EVar" (PVar "name"))) (EApp (EApp (EVar "isDeclaredCtorHead") (EVar "env")) (EVar "name")))
 (DFunDef false "isCtorAppSpine" ((PVar "env") (PCon "EVarId" (PVar "name") PWild)) (EApp (EApp (EVar "isDeclaredCtorHead") (EVar "env")) (EVar "name")))
-(DFunDef false "isCtorAppSpine" ((PVar "_env") PWild) (EVar "False"))
+(DFunDef false "isCtorAppSpine" ((PVar "_env") (POr (PCon "ELit" PWild) (PCon "ELam" PWild PWild) (PCon "ELet" PWild PWild PWild PWild PWild) (PCon "EMatch" PWild PWild) (PCon "EIf" PWild PWild PWild) (PCon "EBinOp" PWild PWild PWild PWild) (PCon "EUnOp" PWild PWild PWild) (PCon "EInfix" PWild PWild PWild) (PCon "EFieldAccess" PWild PWild PWild) (PCon "ETuple" PWild) (PCon "EListLit" PWild) (PCon "EArrayLit" PWild) (PCon "ERangeList" PWild PWild PWild) (PCon "ERangeArray" PWild PWild PWild) (PCon "ESlice" PWild PWild PWild PWild) (PCon "ELetGroup" PWild PWild) (PCon "ESection" PWild) (PCon "EIndex" PWild PWild) (PCon "EAnnot" PWild PWild) (PCon "EHeadAnnot" PWild PWild) (PCon "EBlock" PWild) (PCon "EDo" PWild PWild) (PCon "EStringInterp" PWild) (PCon "EGuards" PWild) (PCon "ERecordCreate" PWild PWild) (PCon "ERecordUpdate" PWild PWild PWild) (PCon "EVariantUpdate" PWild PWild PWild) (PCon "EMapLit" PWild PWild) (PCon "ESetLit" PWild PWild) (PCon "EAsPat" PWild PWild) (PCon "EOrPat" PWild) (PCon "EMethodRef" PWild) (PCon "EDictApp" PWild) (PCon "EVarAt" PWild PWild) (PCon "EMethodAt" PWild PWild PWild) (PCon "EDictAt" PWild PWild) (PCon "ENumLit" PWild PWild PWild) (PCon "EWideLit" PWild PWild PWild PWild))) (EVar "False"))
 (DTypeSig false "isDeclaredCtorHead" (TyFun (TyCon "TcEnv") (TyFun (TyCon "String") (TyCon "Bool"))))
 (DFunDef false "isDeclaredCtorHead" ((PVar "env") (PVar "name")) (EBinOp "&&" (EBinOp "&&" (EBinOp "/=" (EVar "name") (ELit (LString "Ref"))) (EApp (EVar "ctorHeadShaped") (EVar "name"))) (EApp (EVar "isSome") (EApp (EApp (EVar "lookupCtor") (EVar "env")) (EVar "name")))))
 (DTypeSig true "genBindingRestricted" (TyFun (TyCon "DynCtx") (TyFun (TyApp (TyApp (TyCon "Map") (TyCon "Int")) (TyCon "Unit")) (TyFun (TyApp (TyCon "List") (TyCon "AuthResidual")) (TyFun (TyCon "Bool") (TyFun (TyCon "EffRow") (TyFun (TyCon "Mono") (TyCon "Scheme"))))))))
@@ -2334,7 +2338,7 @@ ifaceMethodEVars (IfaceMethod _ _ d _) = match d
 (DFunDef false "eagerRefs" ((PCon "ESetLit" PWild (PVar "es"))) (EApp (EApp (EVar "flatMap") (EVar "eagerRefs")) (EVar "es")))
 (DFunDef false "eagerRefs" ((PCon "ELoc" PWild (PVar "e"))) (EApp (EVar "eagerRefs") (EVar "e")))
 (DFunDef false "eagerRefs" ((PCon "EDoOrigin" PWild (PVar "e"))) (EApp (EVar "eagerRefs") (EVar "e")))
-(DFunDef false "eagerRefs" (PWild) (EListLit))
+(DFunDef false "eagerRefs" ((POr (PCon "ELit" PWild) (PCon "EMethodRef" PWild) (PCon "EDictApp" PWild) (PCon "EVarAt" PWild PWild) (PCon "ENumLit" PWild PWild PWild) (PCon "EWideLit" PWild PWild PWild PWild) (PCon "ESection" PWild))) (EListLit))
 (DTypeSig false "eagerRefsLetBind" (TyFun (TyCon "LetBind") (TyApp (TyCon "List") (TyCon "String"))))
 (DFunDef false "eagerRefsLetBind" ((PCon "LetBind" PWild (PVar "clauses") PWild PWild)) (EApp (EApp (EVar "flatMap") (EVar "eagerRefsClauseAllPats")) (EVar "clauses")))
 (DTypeSig false "eagerRefsClauseAllPats" (TyFun (TyCon "FunClause") (TyApp (TyCon "List") (TyCon "String"))))
@@ -2437,7 +2441,7 @@ ifaceMethodEVars (IfaceMethod _ _ d _) = match d
 (DFunDef false "allEVars" ((PCon "EStringInterp" (PVar "parts"))) (EApp (EApp (EVar "flatMap") (EVar "interpEVars")) (EVar "parts")))
 (DFunDef false "allEVars" ((PCon "EGuards" (PVar "arms"))) (EApp (EApp (EVar "flatMap") (EVar "guardArmEVars")) (EVar "arms")))
 (DFunDef false "allEVars" ((PCon "ESection" (PVar "s"))) (EApp (EVar "sectionEVars") (EVar "s")))
-(DFunDef false "allEVars" (PWild) (EListLit))
+(DFunDef false "allEVars" ((POr (PCon "EMethodRef" PWild) (PCon "EDictApp" PWild) (PCon "EVarAt" PWild PWild) (PCon "ENumLit" PWild PWild PWild) (PCon "EWideLit" PWild PWild PWild PWild))) (EListLit))
 (DTypeSig false "kvEVars" (TyFun (TyTuple (TyCon "Expr") (TyCon "Expr")) (TyApp (TyCon "List") (TyCon "String"))))
 (DFunDef false "kvEVars" ((PTuple (PVar "k") (PVar "v"))) (EBinOp "++" (EApp (EVar "allEVars") (EVar "k")) (EApp (EVar "allEVars") (EVar "v"))))
 (DTypeSig false "interpEVars" (TyFun (TyCon "InterpPart") (TyApp (TyCon "List") (TyCon "String"))))
@@ -2773,14 +2777,14 @@ ifaceMethodEVars (IfaceMethod _ _ d _) = match d
 (DFunDef false "isNonexpansive" ((PVar "env") (PCon "EListLit" (PVar "es"))) (EApp (EApp (EVar "allList") (EApp (EVar "isNonexpansive") (EVar "env"))) (EVar "es")))
 (DFunDef false "isNonexpansive" ((PVar "env") (PAs "app" (PCon "EApp" PWild PWild))) (EApp (EApp (EVar "isCtorAppSpine") (EVar "env")) (EVar "app")))
 (DFunDef false "isNonexpansive" ((PVar "env") (PCon "ERecordCreate" PWild (PVar "fs"))) (EApp (EApp (EVar "allList") (ELam ((PVar "fa")) (EMatch (EVar "fa") (arm (PCon "FieldAssign" PWild (PVar "e")) () (EApp (EApp (EVar "isNonexpansive") (EVar "env")) (EVar "e")))))) (EVar "fs")))
-(DFunDef false "isNonexpansive" ((PVar "_env") PWild) (EVar "False"))
+(DFunDef false "isNonexpansive" ((PVar "_env") (POr (PCon "ELet" PWild PWild PWild PWild PWild) (PCon "EMatch" PWild PWild) (PCon "EIf" PWild PWild PWild) (PCon "EBinOp" PWild PWild PWild PWild) (PCon "EUnOp" PWild PWild PWild) (PCon "EInfix" PWild PWild PWild) (PCon "EFieldAccess" PWild PWild PWild) (PCon "EArrayLit" PWild) (PCon "ERangeList" PWild PWild PWild) (PCon "ERangeArray" PWild PWild PWild) (PCon "ESlice" PWild PWild PWild PWild) (PCon "ELetGroup" PWild PWild) (PCon "ESection" PWild) (PCon "EIndex" PWild PWild) (PCon "EBlock" PWild) (PCon "EDo" PWild PWild) (PCon "EStringInterp" PWild) (PCon "EGuards" PWild) (PCon "ERecordUpdate" PWild PWild PWild) (PCon "EVariantUpdate" PWild PWild PWild) (PCon "EMapLit" PWild PWild) (PCon "ESetLit" PWild PWild) (PCon "EAsPat" PWild PWild) (PCon "EOrPat" PWild) (PCon "EDictApp" PWild) (PCon "EVarAt" PWild PWild) (PCon "ENumLit" PWild PWild PWild) (PCon "EWideLit" PWild PWild PWild PWild))) (EVar "False"))
 (DTypeSig false "isCtorAppSpine" (TyFun (TyCon "TcEnv") (TyFun (TyCon "Expr") (TyCon "Bool"))))
 (DFunDef false "isCtorAppSpine" ((PVar "env") (PCon "ELoc" PWild (PVar "e"))) (EApp (EApp (EVar "isCtorAppSpine") (EVar "env")) (EVar "e")))
 (DFunDef false "isCtorAppSpine" ((PVar "env") (PCon "EDoOrigin" PWild (PVar "e"))) (EApp (EApp (EVar "isCtorAppSpine") (EVar "env")) (EVar "e")))
 (DFunDef false "isCtorAppSpine" ((PVar "env") (PCon "EApp" (PVar "f") (PVar "x"))) (EBinOp "&&" (EApp (EApp (EVar "isCtorAppSpine") (EVar "env")) (EVar "f")) (EApp (EApp (EVar "isNonexpansive") (EVar "env")) (EVar "x"))))
 (DFunDef false "isCtorAppSpine" ((PVar "env") (PCon "EVar" (PVar "name"))) (EApp (EApp (EVar "isDeclaredCtorHead") (EVar "env")) (EVar "name")))
 (DFunDef false "isCtorAppSpine" ((PVar "env") (PCon "EVarId" (PVar "name") PWild)) (EApp (EApp (EVar "isDeclaredCtorHead") (EVar "env")) (EVar "name")))
-(DFunDef false "isCtorAppSpine" ((PVar "_env") PWild) (EVar "False"))
+(DFunDef false "isCtorAppSpine" ((PVar "_env") (POr (PCon "ELit" PWild) (PCon "ELam" PWild PWild) (PCon "ELet" PWild PWild PWild PWild PWild) (PCon "EMatch" PWild PWild) (PCon "EIf" PWild PWild PWild) (PCon "EBinOp" PWild PWild PWild PWild) (PCon "EUnOp" PWild PWild PWild) (PCon "EInfix" PWild PWild PWild) (PCon "EFieldAccess" PWild PWild PWild) (PCon "ETuple" PWild) (PCon "EListLit" PWild) (PCon "EArrayLit" PWild) (PCon "ERangeList" PWild PWild PWild) (PCon "ERangeArray" PWild PWild PWild) (PCon "ESlice" PWild PWild PWild PWild) (PCon "ELetGroup" PWild PWild) (PCon "ESection" PWild) (PCon "EIndex" PWild PWild) (PCon "EAnnot" PWild PWild) (PCon "EHeadAnnot" PWild PWild) (PCon "EBlock" PWild) (PCon "EDo" PWild PWild) (PCon "EStringInterp" PWild) (PCon "EGuards" PWild) (PCon "ERecordCreate" PWild PWild) (PCon "ERecordUpdate" PWild PWild PWild) (PCon "EVariantUpdate" PWild PWild PWild) (PCon "EMapLit" PWild PWild) (PCon "ESetLit" PWild PWild) (PCon "EAsPat" PWild PWild) (PCon "EOrPat" PWild) (PCon "EMethodRef" PWild) (PCon "EDictApp" PWild) (PCon "EVarAt" PWild PWild) (PCon "EMethodAt" PWild PWild PWild) (PCon "EDictAt" PWild PWild) (PCon "ENumLit" PWild PWild PWild) (PCon "EWideLit" PWild PWild PWild PWild))) (EVar "False"))
 (DTypeSig false "isDeclaredCtorHead" (TyFun (TyCon "TcEnv") (TyFun (TyCon "String") (TyCon "Bool"))))
 (DFunDef false "isDeclaredCtorHead" ((PVar "env") (PVar "name")) (EBinOp "&&" (EBinOp "&&" (EBinOp "/=" (EVar "name") (ELit (LString "Ref"))) (EApp (EVar "ctorHeadShaped") (EVar "name"))) (EApp (EVar "isSome") (EApp (EApp (EVar "lookupCtor") (EVar "env")) (EVar "name")))))
 (DTypeSig true "genBindingRestricted" (TyFun (TyCon "DynCtx") (TyFun (TyApp (TyApp (TyCon "Map") (TyCon "Int")) (TyCon "Unit")) (TyFun (TyApp (TyCon "List") (TyCon "AuthResidual")) (TyFun (TyCon "Bool") (TyFun (TyCon "EffRow") (TyFun (TyCon "Mono") (TyCon "Scheme"))))))))
@@ -2871,7 +2875,7 @@ ifaceMethodEVars (IfaceMethod _ _ d _) = match d
 (DFunDef false "eagerRefs" ((PCon "ESetLit" PWild (PVar "es"))) (EApp (EApp (EDictApp "flatMap") (EVar "eagerRefs")) (EVar "es")))
 (DFunDef false "eagerRefs" ((PCon "ELoc" PWild (PVar "e"))) (EApp (EVar "eagerRefs") (EVar "e")))
 (DFunDef false "eagerRefs" ((PCon "EDoOrigin" PWild (PVar "e"))) (EApp (EVar "eagerRefs") (EVar "e")))
-(DFunDef false "eagerRefs" (PWild) (EListLit))
+(DFunDef false "eagerRefs" ((POr (PCon "ELit" PWild) (PCon "EMethodRef" PWild) (PCon "EDictApp" PWild) (PCon "EVarAt" PWild PWild) (PCon "ENumLit" PWild PWild PWild) (PCon "EWideLit" PWild PWild PWild PWild) (PCon "ESection" PWild))) (EListLit))
 (DTypeSig false "eagerRefsLetBind" (TyFun (TyCon "LetBind") (TyApp (TyCon "List") (TyCon "String"))))
 (DFunDef false "eagerRefsLetBind" ((PCon "LetBind" PWild (PVar "clauses") PWild PWild)) (EApp (EApp (EDictApp "flatMap") (EVar "eagerRefsClauseAllPats")) (EVar "clauses")))
 (DTypeSig false "eagerRefsClauseAllPats" (TyFun (TyCon "FunClause") (TyApp (TyCon "List") (TyCon "String"))))
@@ -2974,7 +2978,7 @@ ifaceMethodEVars (IfaceMethod _ _ d _) = match d
 (DFunDef false "allEVars" ((PCon "EStringInterp" (PVar "parts"))) (EApp (EApp (EDictApp "flatMap") (EVar "interpEVars")) (EVar "parts")))
 (DFunDef false "allEVars" ((PCon "EGuards" (PVar "arms"))) (EApp (EApp (EDictApp "flatMap") (EVar "guardArmEVars")) (EVar "arms")))
 (DFunDef false "allEVars" ((PCon "ESection" (PVar "s"))) (EApp (EVar "sectionEVars") (EVar "s")))
-(DFunDef false "allEVars" (PWild) (EListLit))
+(DFunDef false "allEVars" ((POr (PCon "EMethodRef" PWild) (PCon "EDictApp" PWild) (PCon "EVarAt" PWild PWild) (PCon "ENumLit" PWild PWild PWild) (PCon "EWideLit" PWild PWild PWild PWild))) (EListLit))
 (DTypeSig false "kvEVars" (TyFun (TyTuple (TyCon "Expr") (TyCon "Expr")) (TyApp (TyCon "List") (TyCon "String"))))
 (DFunDef false "kvEVars" ((PTuple (PVar "k") (PVar "v"))) (EBinOp "++" (EApp (EVar "allEVars") (EVar "k")) (EApp (EVar "allEVars") (EVar "v"))))
 (DTypeSig false "interpEVars" (TyFun (TyCon "InterpPart") (TyApp (TyCon "List") (TyCon "String"))))

@@ -255,7 +255,8 @@ prePassDeclScoped mctx rw (DAttrib attrs d) =
 -- in, exactly like the DFunDef arm.
 prePassDeclScoped mctx rw (DLetGroup pub binds) =
   DLetGroup pub (map (prePassLetBindScoped mctx rw) binds)
-prePassDeclScoped _mctx _ d = d
+prePassDeclScoped _mctx _ (d@(DTypeSig _ _ _ _ | DExtern _ | DData {  } | DUse _ _ _ | DEffect _ _ _ _ _ _ | DTypeAlias {  } | DNewtype {  })) =
+  d
 
 prePassLetBindScoped : ModuleCtx -> ArgRw -> LetBind -> LetBind
 prePassLetBindScoped mctx rw (LetBind n clauses site bid) =
@@ -318,7 +319,8 @@ localAbsCandidate (ERecordCreate _ fs) =
     (fa => match fa
       FieldAssign _ e => localAbsCandidate e)
     fs
-localAbsCandidate _ = False
+localAbsCandidate (ELet _ _ _ _ _ | EMatch _ _ | EIf _ _ _ | EBinOp _ _ _ _ | EUnOp _ _ _ | EInfix _ _ _ | EFieldAccess _ _ _ | EArrayLit _ | ERangeList _ _ _ | ERangeArray _ _ _ | ESlice _ _ _ _ | ELetGroup _ _ | ESection _ | EIndex _ _ | EBlock _ | EDo _ _ | EStringInterp _ | EGuards _ | ERecordUpdate _ _ _ | EVariantUpdate _ _ _ | EMapLit _ _ | ESetLit _ _ | EAsPat _ _ | EOrPat _ | EDictApp _ | EVarAt _ _ | ENumLit _ _ _ | EWideLit _ _ _ _) =
+  False
 
 localAbsCtorSpine : Expr -> Bool
 localAbsCtorSpine (ELoc _ e) = localAbsCtorSpine e
@@ -326,7 +328,8 @@ localAbsCtorSpine (EDoOrigin _ e) = localAbsCtorSpine e
 localAbsCtorSpine (EApp f x) = localAbsCtorSpine f && localAbsCandidate x
 localAbsCtorSpine (EVar name) = ctorHeadShaped name
 localAbsCtorSpine (EVarId name _) = ctorHeadShaped name
-localAbsCtorSpine _ = False
+localAbsCtorSpine (ELit _ | ELam _ _ | ELet _ _ _ _ _ | EMatch _ _ | EIf _ _ _ | EBinOp _ _ _ _ | EUnOp _ _ _ | EInfix _ _ _ | EFieldAccess _ _ _ | ETuple _ | EListLit _ | EArrayLit _ | ERangeList _ _ _ | ERangeArray _ _ _ | ESlice _ _ _ _ | ELetGroup _ _ | ESection _ | EIndex _ _ | EAnnot _ _ | EHeadAnnot _ _ | EBlock _ | EDo _ _ | EStringInterp _ | EGuards _ | ERecordCreate _ _ | ERecordUpdate _ _ _ | EVariantUpdate _ _ _ | EMapLit _ _ | ESetLit _ _ | EAsPat _ _ | EOrPat _ | EMethodRef _ | EDictApp _ | EVarAt _ _ | EMethodAt _ _ _ | EDictAt _ _ | ENumLit _ _ _ | EWideLit _ _ _ _) =
+  False
 
 localAbsCandidateBind : LetBind -> Bool
 localAbsCandidateBind (LetBind _ clauses _ _) =
@@ -523,7 +526,8 @@ rewriteArgScoped mctx _ _ (ENumLit n ev lx) =
 rewriteArgScoped mctx _ _ (EWideLit hi lo ev lx) =
   EWideLit hi lo (mintedOr (mintOpSite mctx) ev) lx
 -- leaves (ELit / EMethodRef / EDictApp / EVarAt / EMethodAt / EDictAt / SecBare)
-rewriteArgScoped _mctx _ _ e = e
+rewriteArgScoped _mctx _ _ (e@(ESection _ | ELit _ | EMethodRef _ | EDictApp _ | EVarAt _ _ | EVarId _ _ | EMethodAt _ _ _)) =
+  e
 
 rewriteArgField : ModuleCtx ->
   ArgRw ->

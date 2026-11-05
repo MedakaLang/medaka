@@ -201,7 +201,7 @@ namesHead (RKey key ds ms) =
   not (isInstanceKey key) || anyList namesHead ds || anyList namesHead ms
 namesHead (RLocal _ ds) = anyList namesHead ds
 namesHead (RProj r _) = namesHead r
-namesHead _ = False
+namesHead (RNone | RDict _ | RDictFwd _ | RScalar _) = False
 
 hasUnroutedPart : Route -> Bool
 hasUnroutedPart (RKey _ ds ms) = anyList unroutedWithin (ds ++ ms)
@@ -314,7 +314,7 @@ slotIface ifaces routes bad = match findIndex bad routes
 (DFunDef false "namesHead" ((PCon "RKey" (PVar "key") (PVar "ds") (PVar "ms"))) (EBinOp "||" (EBinOp "||" (EApp (EVar "not") (EApp (EVar "isInstanceKey") (EVar "key"))) (EApp (EApp (EVar "anyList") (EVar "namesHead")) (EVar "ds"))) (EApp (EApp (EVar "anyList") (EVar "namesHead")) (EVar "ms"))))
 (DFunDef false "namesHead" ((PCon "RLocal" PWild (PVar "ds"))) (EApp (EApp (EVar "anyList") (EVar "namesHead")) (EVar "ds")))
 (DFunDef false "namesHead" ((PCon "RProj" (PVar "r") PWild)) (EApp (EVar "namesHead") (EVar "r")))
-(DFunDef false "namesHead" (PWild) (EVar "False"))
+(DFunDef false "namesHead" ((POr (PCon "RNone") (PCon "RDict" PWild) (PCon "RDictFwd" PWild) (PCon "RScalar" PWild))) (EVar "False"))
 (DTypeSig false "hasUnroutedPart" (TyFun (TyCon "Route") (TyCon "Bool")))
 (DFunDef false "hasUnroutedPart" ((PCon "RKey" PWild (PVar "ds") (PVar "ms"))) (EApp (EApp (EVar "anyList") (EVar "unroutedWithin")) (EBinOp "++" (EVar "ds") (EVar "ms"))))
 (DFunDef false "hasUnroutedPart" ((PCon "RLocal" PWild (PVar "ds"))) (EApp (EApp (EVar "anyList") (EVar "unroutedWithin")) (EVar "ds")))
@@ -404,7 +404,7 @@ slotIface ifaces routes bad = match findIndex bad routes
 (DFunDef false "namesHead" ((PCon "RKey" (PVar "key") (PVar "ds") (PVar "ms"))) (EBinOp "||" (EBinOp "||" (EApp (EVar "not") (EApp (EVar "isInstanceKey") (EVar "key"))) (EApp (EApp (EVar "anyList") (EVar "namesHead")) (EVar "ds"))) (EApp (EApp (EVar "anyList") (EVar "namesHead")) (EVar "ms"))))
 (DFunDef false "namesHead" ((PCon "RLocal" PWild (PVar "ds"))) (EApp (EApp (EVar "anyList") (EVar "namesHead")) (EVar "ds")))
 (DFunDef false "namesHead" ((PCon "RProj" (PVar "r") PWild)) (EApp (EVar "namesHead") (EVar "r")))
-(DFunDef false "namesHead" (PWild) (EVar "False"))
+(DFunDef false "namesHead" ((POr (PCon "RNone") (PCon "RDict" PWild) (PCon "RDictFwd" PWild) (PCon "RScalar" PWild))) (EVar "False"))
 (DTypeSig false "hasUnroutedPart" (TyFun (TyCon "Route") (TyCon "Bool")))
 (DFunDef false "hasUnroutedPart" ((PCon "RKey" PWild (PVar "ds") (PVar "ms"))) (EApp (EApp (EVar "anyList") (EVar "unroutedWithin")) (EBinOp "++" (EVar "ds") (EVar "ms"))))
 (DFunDef false "hasUnroutedPart" ((PCon "RLocal" PWild (PVar "ds"))) (EApp (EApp (EVar "anyList") (EVar "unroutedWithin")) (EVar "ds")))

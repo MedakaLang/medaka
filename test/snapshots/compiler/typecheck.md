@@ -1,5 +1,5 @@
 # META
-source_lines=3664
+source_lines=3665
 stages=DESUGAR,MARK
 # SOURCE
 -- typecheck: the entry module: the graph drive (`driveGraphK`), the chain and core memos and
@@ -1355,7 +1355,8 @@ deAliasMethodMembers rows (DAttrib attrs d) =
   DAttrib attrs (deAliasMethodMembers rows d)
 deAliasMethodMembers rows (DUse pub (UseGroup quals ms) loc) =
   DUse pub (UseGroup quals (map (deAliasMethodMember rows) ms)) loc
-deAliasMethodMembers _ d = d
+deAliasMethodMembers _ (d@(DUse _ _ _ | DTypeSig _ _ _ _ | DExtern _ | DFunDef _ _ _ _ _ _ | DData {  } | DEffect _ _ _ _ _ _ | DProp _ _ _ _ | DTest _ _ _ | DInterface {  } | DImpl {  } | DTypeAlias {  } | DNewtype {  } | DLetGroup _ _)) =
+  d
 
 deAliasMethodMember : List (String, String) -> UseMember -> UseMember
 deAliasMethodMember rows (m@(UseMember n allCtors loc (Some local)))
@@ -3845,7 +3846,7 @@ schemeLines ((n, p) :: rest) = "\{n} : \{ppPubScheme p}" :: schemeLines rest
 (DTypeSig false "deAliasMethodMembers" (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "String"))) (TyFun (TyCon "Decl") (TyCon "Decl"))))
 (DFunDef false "deAliasMethodMembers" ((PVar "rows") (PCon "DAttrib" (PVar "attrs") (PVar "d"))) (EApp (EApp (EVar "DAttrib") (EVar "attrs")) (EApp (EApp (EVar "deAliasMethodMembers") (EVar "rows")) (EVar "d"))))
 (DFunDef false "deAliasMethodMembers" ((PVar "rows") (PCon "DUse" (PVar "pub") (PCon "UseGroup" (PVar "quals") (PVar "ms")) (PVar "loc"))) (EApp (EApp (EApp (EVar "DUse") (EVar "pub")) (EApp (EApp (EVar "UseGroup") (EVar "quals")) (EApp (EApp (EVar "map") (EApp (EVar "deAliasMethodMember") (EVar "rows"))) (EVar "ms")))) (EVar "loc")))
-(DFunDef false "deAliasMethodMembers" (PWild (PVar "d")) (EVar "d"))
+(DFunDef false "deAliasMethodMembers" (PWild (PAs "d" (POr (PCon "DUse" PWild PWild PWild) (PCon "DTypeSig" PWild PWild PWild PWild) (PCon "DExtern" PWild) (PCon "DFunDef" PWild PWild PWild PWild PWild PWild) (PRec "DData" () false) (PCon "DEffect" PWild PWild PWild PWild PWild PWild) (PCon "DProp" PWild PWild PWild PWild) (PCon "DTest" PWild PWild PWild) (PRec "DInterface" () false) (PRec "DImpl" () false) (PRec "DTypeAlias" () false) (PRec "DNewtype" () false) (PCon "DLetGroup" PWild PWild)))) (EVar "d"))
 (DTypeSig false "deAliasMethodMember" (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "String"))) (TyFun (TyCon "UseMember") (TyCon "UseMember"))))
 (DFunDef false "deAliasMethodMember" ((PVar "rows") (PAs "m" (PCon "UseMember" (PVar "n") (PVar "allCtors") (PVar "loc") (PCon "Some" (PVar "local"))))) (EIf (EApp (EApp (EVar "containsPair") (ETuple (EVar "local") (EVar "n"))) (EVar "rows")) (EApp (EApp (EApp (EApp (EVar "UseMember") (EVar "n")) (EVar "allCtors")) (EVar "loc")) (EVar "None")) (EIf (EVar "otherwise") (EVar "m") (EApp (EVar "__fallthrough__") (ELit LUnit)))))
 (DFunDef false "deAliasMethodMember" (PWild (PVar "m")) (EVar "m"))
@@ -4257,7 +4258,7 @@ schemeLines ((n, p) :: rest) = "\{n} : \{ppPubScheme p}" :: schemeLines rest
 (DTypeSig false "deAliasMethodMembers" (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "String"))) (TyFun (TyCon "Decl") (TyCon "Decl"))))
 (DFunDef false "deAliasMethodMembers" ((PVar "rows") (PCon "DAttrib" (PVar "attrs") (PVar "d"))) (EApp (EApp (EVar "DAttrib") (EVar "attrs")) (EApp (EApp (EVar "deAliasMethodMembers") (EVar "rows")) (EVar "d"))))
 (DFunDef false "deAliasMethodMembers" ((PVar "rows") (PCon "DUse" (PVar "pub") (PCon "UseGroup" (PVar "quals") (PVar "ms")) (PVar "loc"))) (EApp (EApp (EApp (EVar "DUse") (EVar "pub")) (EApp (EApp (EVar "UseGroup") (EVar "quals")) (EApp (EApp (EMethodRef "map") (EApp (EVar "deAliasMethodMember") (EVar "rows"))) (EVar "ms")))) (EVar "loc")))
-(DFunDef false "deAliasMethodMembers" (PWild (PVar "d")) (EVar "d"))
+(DFunDef false "deAliasMethodMembers" (PWild (PAs "d" (POr (PCon "DUse" PWild PWild PWild) (PCon "DTypeSig" PWild PWild PWild PWild) (PCon "DExtern" PWild) (PCon "DFunDef" PWild PWild PWild PWild PWild PWild) (PRec "DData" () false) (PCon "DEffect" PWild PWild PWild PWild PWild PWild) (PCon "DProp" PWild PWild PWild PWild) (PCon "DTest" PWild PWild PWild) (PRec "DInterface" () false) (PRec "DImpl" () false) (PRec "DTypeAlias" () false) (PRec "DNewtype" () false) (PCon "DLetGroup" PWild PWild)))) (EVar "d"))
 (DTypeSig false "deAliasMethodMember" (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "String"))) (TyFun (TyCon "UseMember") (TyCon "UseMember"))))
 (DFunDef false "deAliasMethodMember" ((PVar "rows") (PAs "m" (PCon "UseMember" (PVar "n") (PVar "allCtors") (PVar "loc") (PCon "Some" (PVar "local"))))) (EIf (EApp (EApp (EVar "containsPair") (ETuple (EVar "local") (EVar "n"))) (EVar "rows")) (EApp (EApp (EApp (EApp (EVar "UseMember") (EVar "n")) (EVar "allCtors")) (EVar "loc")) (EVar "None")) (EIf (EVar "otherwise") (EVar "m") (EApp (EVar "__fallthrough__") (ELit LUnit)))))
 (DFunDef false "deAliasMethodMember" (PWild (PVar "m")) (EVar "m"))

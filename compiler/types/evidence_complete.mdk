@@ -197,7 +197,7 @@ namesHead (RKey key ds ms) =
   not (isInstanceKey key) || anyList namesHead ds || anyList namesHead ms
 namesHead (RLocal _ ds) = anyList namesHead ds
 namesHead (RProj r _) = namesHead r
-namesHead _ = False
+namesHead (RNone | RDict _ | RDictFwd _ | RScalar _) = False
 
 hasUnroutedPart : Route -> Bool
 hasUnroutedPart (RKey _ ds ms) = anyList unroutedWithin (ds ++ ms)

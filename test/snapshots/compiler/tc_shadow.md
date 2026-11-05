@@ -1,5 +1,5 @@
 # META
-source_lines=1898
+source_lines=1916
 stages=DESUGAR,MARK
 # SOURCE
 -- tc_shadow: standalone-vs-method shadow resolution (S1-S9) outside the inference recursion,
@@ -92,6 +92,7 @@ import frontend.ast.{
   Constraint(..),
   Decl(..),
   EffAtomTy(..),
+  EffParamTy(..),
   EvId(..),
   Expr(..),
   IfaceMethod(..),
@@ -100,7 +101,9 @@ import frontend.ast.{
   Ty(..),
   UseMember(..),
   UsePath(..),
+  binderDomainSurface,
   effAtomSurface,
+  effParamSurface,
 }
 import types.repr.{
   IfaceRef(..), Mono(..), lookupAssocI, normalize, ppMono, ppTy
@@ -1836,6 +1839,16 @@ tyAlphaGo m (TyConstrained c1 a) (TyConstrained c2 b)
 tyAlphaGo m (TyRow e1 t1 _) (TyRow e2 t2 _)
   | sameWrittenAtoms e1 e2 && t1 == t2 = Some m
   | otherwise = None
+tyAlphaGo m (TyNamed n1 a d1) (TyNamed n2 b d2)
+  | n1 == n2 && binderDomainSurface d1 == binderDomainSurface d2 =
+    tyAlphaGo m a b
+  | otherwise = None
+tyAlphaGo m (TyQual a q1 _) (TyQual b q2 _)
+  | sameWrittenParams q1 q2 = tyAlphaGo m a b
+  | otherwise = None
+tyAlphaGo m (TyAuth q1 _) (TyAuth q2 _)
+  | sameWrittenParams q1 q2 = Some m
+  | otherwise = None
 tyAlphaGo _ _ _ = None
 
 -- Two written rows agree when their atoms spell the same; the declaration
@@ -1843,6 +1856,11 @@ tyAlphaGo _ _ _ = None
 sameWrittenAtoms : List EffAtomTy -> List EffAtomTy -> Bool
 sameWrittenAtoms e1 e2 =
   map (effAtomSurface escStr) e1 == map (effAtomSurface escStr) e2
+
+-- Two written authority terms agree when they spell the same.
+sameWrittenParams : List EffParamTy -> List EffParamTy -> Bool
+sameWrittenParams q1 q2 =
+  map (effParamSurface escStr) q1 == map (effParamSurface escStr) q2
 
 tyAlphaList : List (String, String) ->
   List Ty ->
@@ -1914,7 +1932,7 @@ bindTyName m x y = match lookupAssoc x m
 (DUse false (UseGroup ("types" "tc_solve_givens") ((mem "lookupPredicateSlots" false))))
 (DUse false (UseGroup ("types" "tc_solve") ((mem "admittedSelection" false) (mem "routeLocalSym" false) (mem "routesOfMonosTopV" false))))
 (DUse false (UseGroup ("types" "tc_solve_check") ((mem "dedupSlotVecs" false) (mem "ifaceSelfAndSupers" false))))
-(DUse false (UseGroup ("frontend" "ast") ((mem "Constraint" true) (mem "Decl" true) (mem "EffAtomTy" true) (mem "EvId" true) (mem "Expr" true) (mem "IfaceMethod" true) (mem "Loc" true) (mem "Route" true) (mem "Ty" true) (mem "UseMember" true) (mem "UsePath" true) (mem "effAtomSurface" false))))
+(DUse false (UseGroup ("frontend" "ast") ((mem "Constraint" true) (mem "Decl" true) (mem "EffAtomTy" true) (mem "EffParamTy" true) (mem "EvId" true) (mem "Expr" true) (mem "IfaceMethod" true) (mem "Loc" true) (mem "Route" true) (mem "Ty" true) (mem "UseMember" true) (mem "UsePath" true) (mem "binderDomainSurface" false) (mem "effAtomSurface" false) (mem "effParamSurface" false))))
 (DUse false (UseGroup ("types" "repr") ((mem "IfaceRef" true) (mem "Mono" true) (mem "lookupAssocI" false) (mem "normalize" false) (mem "ppMono" false) (mem "ppTy" false))))
 (DUse false (UseGroup ("types" "evidence_complete") ((mem "Inner" true))))
 (DUse false (UseGroup ("support" "ordmap") ((mem "omEmpty" false) (mem "omHasKey" false) (mem "omKeys" false) (mem "omLookup" false) (mem "omSize" false) (mem "OrdMap" false))))
@@ -2148,9 +2166,14 @@ bindTyName m x y = match lookupAssoc x m
 (DFunDef false "tyAlphaGo" ((PVar "m") (PCon "TyEffect" (PVar "e1") (PVar "t1") (PVar "a")) (PCon "TyEffect" (PVar "e2") (PVar "t2") (PVar "b"))) (EIf (EBinOp "&&" (EApp (EApp (EVar "sameWrittenAtoms") (EVar "e1")) (EVar "e2")) (EBinOp "==" (EVar "t1") (EVar "t2"))) (EApp (EApp (EApp (EVar "tyAlphaGo") (EVar "m")) (EVar "a")) (EVar "b")) (EIf (EVar "otherwise") (EVar "None") (EApp (EVar "__fallthrough__") (ELit LUnit)))))
 (DFunDef false "tyAlphaGo" ((PVar "m") (PCon "TyConstrained" (PVar "c1") (PVar "a")) (PCon "TyConstrained" (PVar "c2") (PVar "b"))) (EIf (EBinOp "/=" (EApp (EVar "listLen") (EVar "c1")) (EApp (EVar "listLen") (EVar "c2"))) (EVar "None") (EIf (EVar "otherwise") (EMatch (EApp (EApp (EApp (EVar "tyAlphaGo") (EVar "m")) (EVar "a")) (EVar "b")) (arm (PCon "None") () (EVar "None")) (arm (PCon "Some" (PVar "m2")) () (EApp (EApp (EApp (EVar "tyAlphaConstraints") (EVar "m2")) (EVar "c1")) (EVar "c2")))) (EApp (EVar "__fallthrough__") (ELit LUnit)))))
 (DFunDef false "tyAlphaGo" ((PVar "m") (PCon "TyRow" (PVar "e1") (PVar "t1") PWild) (PCon "TyRow" (PVar "e2") (PVar "t2") PWild)) (EIf (EBinOp "&&" (EApp (EApp (EVar "sameWrittenAtoms") (EVar "e1")) (EVar "e2")) (EBinOp "==" (EVar "t1") (EVar "t2"))) (EApp (EVar "Some") (EVar "m")) (EIf (EVar "otherwise") (EVar "None") (EApp (EVar "__fallthrough__") (ELit LUnit)))))
+(DFunDef false "tyAlphaGo" ((PVar "m") (PCon "TyNamed" (PVar "n1") (PVar "a") (PVar "d1")) (PCon "TyNamed" (PVar "n2") (PVar "b") (PVar "d2"))) (EIf (EBinOp "&&" (EBinOp "==" (EVar "n1") (EVar "n2")) (EBinOp "==" (EApp (EVar "binderDomainSurface") (EVar "d1")) (EApp (EVar "binderDomainSurface") (EVar "d2")))) (EApp (EApp (EApp (EVar "tyAlphaGo") (EVar "m")) (EVar "a")) (EVar "b")) (EIf (EVar "otherwise") (EVar "None") (EApp (EVar "__fallthrough__") (ELit LUnit)))))
+(DFunDef false "tyAlphaGo" ((PVar "m") (PCon "TyQual" (PVar "a") (PVar "q1") PWild) (PCon "TyQual" (PVar "b") (PVar "q2") PWild)) (EIf (EApp (EApp (EVar "sameWrittenParams") (EVar "q1")) (EVar "q2")) (EApp (EApp (EApp (EVar "tyAlphaGo") (EVar "m")) (EVar "a")) (EVar "b")) (EIf (EVar "otherwise") (EVar "None") (EApp (EVar "__fallthrough__") (ELit LUnit)))))
+(DFunDef false "tyAlphaGo" ((PVar "m") (PCon "TyAuth" (PVar "q1") PWild) (PCon "TyAuth" (PVar "q2") PWild)) (EIf (EApp (EApp (EVar "sameWrittenParams") (EVar "q1")) (EVar "q2")) (EApp (EVar "Some") (EVar "m")) (EIf (EVar "otherwise") (EVar "None") (EApp (EVar "__fallthrough__") (ELit LUnit)))))
 (DFunDef false "tyAlphaGo" (PWild PWild PWild) (EVar "None"))
 (DTypeSig false "sameWrittenAtoms" (TyFun (TyApp (TyCon "List") (TyCon "EffAtomTy")) (TyFun (TyApp (TyCon "List") (TyCon "EffAtomTy")) (TyCon "Bool"))))
 (DFunDef false "sameWrittenAtoms" ((PVar "e1") (PVar "e2")) (EBinOp "==" (EApp (EApp (EVar "map") (EApp (EVar "effAtomSurface") (EVar "escStr"))) (EVar "e1")) (EApp (EApp (EVar "map") (EApp (EVar "effAtomSurface") (EVar "escStr"))) (EVar "e2"))))
+(DTypeSig false "sameWrittenParams" (TyFun (TyApp (TyCon "List") (TyCon "EffParamTy")) (TyFun (TyApp (TyCon "List") (TyCon "EffParamTy")) (TyCon "Bool"))))
+(DFunDef false "sameWrittenParams" ((PVar "q1") (PVar "q2")) (EBinOp "==" (EApp (EApp (EVar "map") (EApp (EVar "effParamSurface") (EVar "escStr"))) (EVar "q1")) (EApp (EApp (EVar "map") (EApp (EVar "effParamSurface") (EVar "escStr"))) (EVar "q2"))))
 (DTypeSig false "tyAlphaList" (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "String"))) (TyFun (TyApp (TyCon "List") (TyCon "Ty")) (TyFun (TyApp (TyCon "List") (TyCon "Ty")) (TyApp (TyCon "Option") (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "String"))))))))
 (DFunDef false "tyAlphaList" ((PVar "m") (PList) (PList)) (EApp (EVar "Some") (EVar "m")))
 (DFunDef false "tyAlphaList" ((PVar "m") (PCons (PVar "x") (PVar "xs")) (PCons (PVar "y") (PVar "ys"))) (EMatch (EApp (EApp (EApp (EVar "tyAlphaGo") (EVar "m")) (EVar "x")) (EVar "y")) (arm (PCon "None") () (EVar "None")) (arm (PCon "Some" (PVar "m2")) () (EApp (EApp (EApp (EVar "tyAlphaList") (EVar "m2")) (EVar "xs")) (EVar "ys")))))
@@ -2179,7 +2202,7 @@ bindTyName m x y = match lookupAssoc x m
 (DUse false (UseGroup ("types" "tc_solve_givens") ((mem "lookupPredicateSlots" false))))
 (DUse false (UseGroup ("types" "tc_solve") ((mem "admittedSelection" false) (mem "routeLocalSym" false) (mem "routesOfMonosTopV" false))))
 (DUse false (UseGroup ("types" "tc_solve_check") ((mem "dedupSlotVecs" false) (mem "ifaceSelfAndSupers" false))))
-(DUse false (UseGroup ("frontend" "ast") ((mem "Constraint" true) (mem "Decl" true) (mem "EffAtomTy" true) (mem "EvId" true) (mem "Expr" true) (mem "IfaceMethod" true) (mem "Loc" true) (mem "Route" true) (mem "Ty" true) (mem "UseMember" true) (mem "UsePath" true) (mem "effAtomSurface" false))))
+(DUse false (UseGroup ("frontend" "ast") ((mem "Constraint" true) (mem "Decl" true) (mem "EffAtomTy" true) (mem "EffParamTy" true) (mem "EvId" true) (mem "Expr" true) (mem "IfaceMethod" true) (mem "Loc" true) (mem "Route" true) (mem "Ty" true) (mem "UseMember" true) (mem "UsePath" true) (mem "binderDomainSurface" false) (mem "effAtomSurface" false) (mem "effParamSurface" false))))
 (DUse false (UseGroup ("types" "repr") ((mem "IfaceRef" true) (mem "Mono" true) (mem "lookupAssocI" false) (mem "normalize" false) (mem "ppMono" false) (mem "ppTy" false))))
 (DUse false (UseGroup ("types" "evidence_complete") ((mem "Inner" true))))
 (DUse false (UseGroup ("support" "ordmap") ((mem "omEmpty" false) (mem "omHasKey" false) (mem "omKeys" false) (mem "omLookup" false) (mem "omSize" false) (mem "OrdMap" false))))
@@ -2413,9 +2436,14 @@ bindTyName m x y = match lookupAssoc x m
 (DFunDef false "tyAlphaGo" ((PVar "m") (PCon "TyEffect" (PVar "e1") (PVar "t1") (PVar "a")) (PCon "TyEffect" (PVar "e2") (PVar "t2") (PVar "b"))) (EIf (EBinOp "&&" (EApp (EApp (EVar "sameWrittenAtoms") (EVar "e1")) (EVar "e2")) (EBinOp "==" (EVar "t1") (EVar "t2"))) (EApp (EApp (EApp (EVar "tyAlphaGo") (EVar "m")) (EVar "a")) (EVar "b")) (EIf (EVar "otherwise") (EVar "None") (EApp (EVar "__fallthrough__") (ELit LUnit)))))
 (DFunDef false "tyAlphaGo" ((PVar "m") (PCon "TyConstrained" (PVar "c1") (PVar "a")) (PCon "TyConstrained" (PVar "c2") (PVar "b"))) (EIf (EBinOp "/=" (EApp (EVar "listLen") (EVar "c1")) (EApp (EVar "listLen") (EVar "c2"))) (EVar "None") (EIf (EVar "otherwise") (EMatch (EApp (EApp (EApp (EVar "tyAlphaGo") (EVar "m")) (EVar "a")) (EVar "b")) (arm (PCon "None") () (EVar "None")) (arm (PCon "Some" (PVar "m2")) () (EApp (EApp (EApp (EVar "tyAlphaConstraints") (EVar "m2")) (EVar "c1")) (EVar "c2")))) (EApp (EVar "__fallthrough__") (ELit LUnit)))))
 (DFunDef false "tyAlphaGo" ((PVar "m") (PCon "TyRow" (PVar "e1") (PVar "t1") PWild) (PCon "TyRow" (PVar "e2") (PVar "t2") PWild)) (EIf (EBinOp "&&" (EApp (EApp (EVar "sameWrittenAtoms") (EVar "e1")) (EVar "e2")) (EBinOp "==" (EVar "t1") (EVar "t2"))) (EApp (EVar "Some") (EVar "m")) (EIf (EVar "otherwise") (EVar "None") (EApp (EVar "__fallthrough__") (ELit LUnit)))))
+(DFunDef false "tyAlphaGo" ((PVar "m") (PCon "TyNamed" (PVar "n1") (PVar "a") (PVar "d1")) (PCon "TyNamed" (PVar "n2") (PVar "b") (PVar "d2"))) (EIf (EBinOp "&&" (EBinOp "==" (EVar "n1") (EVar "n2")) (EBinOp "==" (EApp (EVar "binderDomainSurface") (EVar "d1")) (EApp (EVar "binderDomainSurface") (EVar "d2")))) (EApp (EApp (EApp (EVar "tyAlphaGo") (EVar "m")) (EVar "a")) (EVar "b")) (EIf (EVar "otherwise") (EVar "None") (EApp (EVar "__fallthrough__") (ELit LUnit)))))
+(DFunDef false "tyAlphaGo" ((PVar "m") (PCon "TyQual" (PVar "a") (PVar "q1") PWild) (PCon "TyQual" (PVar "b") (PVar "q2") PWild)) (EIf (EApp (EApp (EVar "sameWrittenParams") (EVar "q1")) (EVar "q2")) (EApp (EApp (EApp (EVar "tyAlphaGo") (EVar "m")) (EVar "a")) (EVar "b")) (EIf (EVar "otherwise") (EVar "None") (EApp (EVar "__fallthrough__") (ELit LUnit)))))
+(DFunDef false "tyAlphaGo" ((PVar "m") (PCon "TyAuth" (PVar "q1") PWild) (PCon "TyAuth" (PVar "q2") PWild)) (EIf (EApp (EApp (EVar "sameWrittenParams") (EVar "q1")) (EVar "q2")) (EApp (EVar "Some") (EVar "m")) (EIf (EVar "otherwise") (EVar "None") (EApp (EVar "__fallthrough__") (ELit LUnit)))))
 (DFunDef false "tyAlphaGo" (PWild PWild PWild) (EVar "None"))
 (DTypeSig false "sameWrittenAtoms" (TyFun (TyApp (TyCon "List") (TyCon "EffAtomTy")) (TyFun (TyApp (TyCon "List") (TyCon "EffAtomTy")) (TyCon "Bool"))))
 (DFunDef false "sameWrittenAtoms" ((PVar "e1") (PVar "e2")) (EBinOp "==" (EApp (EApp (EMethodRef "map") (EApp (EVar "effAtomSurface") (EVar "escStr"))) (EVar "e1")) (EApp (EApp (EMethodRef "map") (EApp (EVar "effAtomSurface") (EVar "escStr"))) (EVar "e2"))))
+(DTypeSig false "sameWrittenParams" (TyFun (TyApp (TyCon "List") (TyCon "EffParamTy")) (TyFun (TyApp (TyCon "List") (TyCon "EffParamTy")) (TyCon "Bool"))))
+(DFunDef false "sameWrittenParams" ((PVar "q1") (PVar "q2")) (EBinOp "==" (EApp (EApp (EMethodRef "map") (EApp (EVar "effParamSurface") (EVar "escStr"))) (EVar "q1")) (EApp (EApp (EMethodRef "map") (EApp (EVar "effParamSurface") (EVar "escStr"))) (EVar "q2"))))
 (DTypeSig false "tyAlphaList" (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "String"))) (TyFun (TyApp (TyCon "List") (TyCon "Ty")) (TyFun (TyApp (TyCon "List") (TyCon "Ty")) (TyApp (TyCon "Option") (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "String"))))))))
 (DFunDef false "tyAlphaList" ((PVar "m") (PList) (PList)) (EApp (EVar "Some") (EVar "m")))
 (DFunDef false "tyAlphaList" ((PVar "m") (PCons (PVar "x") (PVar "xs")) (PCons (PVar "y") (PVar "ys"))) (EMatch (EApp (EApp (EApp (EVar "tyAlphaGo") (EVar "m")) (EVar "x")) (EVar "y")) (arm (PCon "None") () (EVar "None")) (arm (PCon "Some" (PVar "m2")) () (EApp (EApp (EApp (EVar "tyAlphaList") (EVar "m2")) (EVar "xs")) (EVar "ys")))))

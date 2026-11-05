@@ -1,5 +1,5 @@
 # META
-source_lines=2844
+source_lines=2845
 stages=DESUGAR,MARK
 # SOURCE
 -- tc_decls: declaration analysis above the written-type layer: building `DataEnv` and `DeclEnvs`
@@ -2258,7 +2258,7 @@ export
 kindIsDeclared : Kind -> Bool
 kindIsDeclared KType = False
 kindIsDeclared (KArrow d r) = kindIsDeclared d || kindIsDeclared r
-kindIsDeclared _ = True
+kindIsDeclared (KRow | KAuth _ _) = True
 
 -- like astTypeFresh but also returns the tyvar-name → fresh-var map
 export
@@ -2427,7 +2427,8 @@ implHeadNormalDecl aliases (DAttrib a d) =
   DAttrib a (implHeadNormalDecl aliases d)
 implHeadNormalDecl aliases (d@(DImpl { tys = tys })) =
   DImpl { d | tys = map (tyAliasNormalForm aliases []) tys }
-implHeadNormalDecl _ d = d
+implHeadNormalDecl _ (d@(DTypeSig _ _ _ _ | DExtern _ | DFunDef _ _ _ _ _ _ | DData {  } | DUse _ _ _ | DEffect _ _ _ _ _ _ | DProp _ _ _ _ | DTest _ _ _ | DInterface {  } | DTypeAlias {  } | DNewtype {  } | DLetGroup _ _)) =
+  d
 
 -- The graph every Module-mode driver typechecks: type-constructor identity
 -- acquired over the whole graph (`stampGraphTyOrigins`), then every impl head in
@@ -3228,7 +3229,7 @@ methodRowNumObservation saved caseName builtinDecls decls =
 (DTypeSig true "kindIsDeclared" (TyFun (TyCon "Kind") (TyCon "Bool")))
 (DFunDef false "kindIsDeclared" ((PCon "KType")) (EVar "False"))
 (DFunDef false "kindIsDeclared" ((PCon "KArrow" (PVar "d") (PVar "r"))) (EBinOp "||" (EApp (EVar "kindIsDeclared") (EVar "d")) (EApp (EVar "kindIsDeclared") (EVar "r"))))
-(DFunDef false "kindIsDeclared" (PWild) (EVar "True"))
+(DFunDef false "kindIsDeclared" ((POr (PCon "KRow") (PCon "KAuth" PWild PWild))) (EVar "True"))
 (DTypeSig true "instantiateSigTracked" (TyFun (TyCon "ModuleCtx") (TyFun (TyCon "Ty") (TyTuple (TyCon "Mono") (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "Mono"))) (TyApp (TyCon "Option") (TyCon "EffRow"))))))
 (DFunDef false "instantiateSigTracked" ((PVar "outer") (PVar "ty")) (EApp (EApp (EApp (EVar "atSignature") (EVar "outer")) (EVar "ty")) (ELam ((PVar "mctx")) (EBlock (DoLet false false (PVar "rows") (EApp (EApp (EVar "rowArgNames") (EVar "mctx")) (EVar "ty"))) (DoLet false false (PVar "auths") (EApp (EApp (EVar "authArgBindersIn") (EVar "mctx")) (EVar "ty"))) (DoLet false false (PVar "tvs") (EApp (EApp (EVar "freshTvMap") (EVar "mctx")) (EApp (EApp (EApp (EVar "sigTyVarNames") (EVar "ty")) (EVar "rows")) (EApp (EApp (EVar "map") (EVar "fst")) (EVar "auths"))))) (DoLet false false (PVar "etbl") (EApp (EApp (EApp (EApp (EVar "sigVarsForWith") (EVar "mctx")) (EVar "ty")) (EApp (EVar "dedup") (EBinOp "++" (EApp (EVar "effTailNames") (EVar "ty")) (EVar "rows")))) (EVar "auths"))) (DoLet false false (PTuple (PVar "written") (PVar "scope")) (EApp (EApp (EApp (EVar "recoveredScope") (EVar "mctx")) (EVar "tvs")) (EVar "ty"))) (DoExpr (ETuple (EApp (EApp (EApp (EApp (EVar "fromAstTypeE") (EVar "mctx")) (EVar "etbl")) (EVar "scope")) (EVar "written")) (EVar "tvs") (EApp (EApp (EApp (EApp (EVar "writtenBindingForce") (EVar "mctx")) (EVar "etbl")) (EVar "tvs")) (EVar "ty"))))))))
 (DTypeSig true "constraintNameMonos" (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "Mono"))) (TyApp (TyCon "List") (TyCon "Mono")))))
@@ -3264,7 +3265,7 @@ methodRowNumObservation saved caseName builtinDecls decls =
 (DTypeSig false "implHeadNormalDecl" (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "TabKey") (TyTuple (TyApp (TyCon "List") (TyCon "String")) (TyCon "Ty")))) (TyFun (TyCon "Decl") (TyCon "Decl"))))
 (DFunDef false "implHeadNormalDecl" ((PVar "aliases") (PCon "DAttrib" (PVar "a") (PVar "d"))) (EApp (EApp (EVar "DAttrib") (EVar "a")) (EApp (EApp (EVar "implHeadNormalDecl") (EVar "aliases")) (EVar "d"))))
 (DFunDef false "implHeadNormalDecl" ((PVar "aliases") (PAs "d" (PRec "DImpl" ((rf "tys" (PVar "tys"))) false))) (EVariantUpdate "DImpl" (EVar "d") ((fa "tys" (EApp (EApp (EVar "map") (EApp (EApp (EVar "tyAliasNormalForm") (EVar "aliases")) (EListLit))) (EVar "tys"))))))
-(DFunDef false "implHeadNormalDecl" (PWild (PVar "d")) (EVar "d"))
+(DFunDef false "implHeadNormalDecl" (PWild (PAs "d" (POr (PCon "DTypeSig" PWild PWild PWild PWild) (PCon "DExtern" PWild) (PCon "DFunDef" PWild PWild PWild PWild PWild PWild) (PRec "DData" () false) (PCon "DUse" PWild PWild PWild) (PCon "DEffect" PWild PWild PWild PWild PWild PWild) (PCon "DProp" PWild PWild PWild PWild) (PCon "DTest" PWild PWild PWild) (PRec "DInterface" () false) (PRec "DTypeAlias" () false) (PRec "DNewtype" () false) (PCon "DLetGroup" PWild PWild)))) (EVar "d"))
 (DTypeSig true "stampGraphDecls" (TyFun (TyApp (TyCon "List") (TyCon "SiblingPair")) (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "Decl")))) (TyTuple (TyApp (TyCon "List") (TyCon "Decl")) (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "Decl")))))))))
 (DFunDef false "stampGraphDecls" ((PVar "sibling") (PVar "coreDecls0") (PVar "modules0")) (EBlock (DoLet false false (PTuple (PVar "coreDecls") (PVar "modules")) (EApp (EApp (EApp (EVar "stampGraphTyOrigins") (EVar "sibling")) (EVar "coreDecls0")) (EVar "modules0"))) (DoLet false false (PVar "aliases") (EApp (EApp (EVar "flatMap") (EVar "graphAliasRow")) (EBinOp "++" (EVar "coreDecls") (EApp (EApp (EVar "flatMap") (EVar "snd")) (EVar "modules"))))) (DoExpr (EIf (EApp (EVar "isEmptyL") (EVar "aliases")) (ETuple (EVar "coreDecls") (EVar "modules")) (ETuple (EApp (EApp (EVar "map") (EApp (EVar "implHeadNormalDecl") (EVar "aliases"))) (EVar "coreDecls")) (EApp (EApp (EVar "map") (ELam ((PVar "m")) (ETuple (EApp (EVar "fst") (EVar "m")) (EApp (EApp (EVar "map") (EApp (EVar "implHeadNormalDecl") (EVar "aliases"))) (EApp (EVar "snd") (EVar "m")))))) (EVar "modules")))))))
 (DTypeSig true "declEnvModulesFrom" (TyFun (TyCon "GraphCtx") (TyFun (TyCon "Int") (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "Decl")))) (TyApp (TyCon "List") (TyCon "DeclEnvModule"))))))
@@ -3712,7 +3713,7 @@ methodRowNumObservation saved caseName builtinDecls decls =
 (DTypeSig true "kindIsDeclared" (TyFun (TyCon "Kind") (TyCon "Bool")))
 (DFunDef false "kindIsDeclared" ((PCon "KType")) (EVar "False"))
 (DFunDef false "kindIsDeclared" ((PCon "KArrow" (PVar "d") (PVar "r"))) (EBinOp "||" (EApp (EVar "kindIsDeclared") (EVar "d")) (EApp (EVar "kindIsDeclared") (EVar "r"))))
-(DFunDef false "kindIsDeclared" (PWild) (EVar "True"))
+(DFunDef false "kindIsDeclared" ((POr (PCon "KRow") (PCon "KAuth" PWild PWild))) (EVar "True"))
 (DTypeSig true "instantiateSigTracked" (TyFun (TyCon "ModuleCtx") (TyFun (TyCon "Ty") (TyTuple (TyCon "Mono") (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "Mono"))) (TyApp (TyCon "Option") (TyCon "EffRow"))))))
 (DFunDef false "instantiateSigTracked" ((PVar "outer") (PVar "ty")) (EApp (EApp (EApp (EVar "atSignature") (EVar "outer")) (EVar "ty")) (ELam ((PVar "mctx")) (EBlock (DoLet false false (PVar "rows") (EApp (EApp (EVar "rowArgNames") (EVar "mctx")) (EVar "ty"))) (DoLet false false (PVar "auths") (EApp (EApp (EVar "authArgBindersIn") (EVar "mctx")) (EVar "ty"))) (DoLet false false (PVar "tvs") (EApp (EApp (EVar "freshTvMap") (EVar "mctx")) (EApp (EApp (EApp (EVar "sigTyVarNames") (EVar "ty")) (EVar "rows")) (EApp (EApp (EMethodRef "map") (EVar "fst")) (EVar "auths"))))) (DoLet false false (PVar "etbl") (EApp (EApp (EApp (EApp (EVar "sigVarsForWith") (EVar "mctx")) (EVar "ty")) (EApp (EVar "dedup") (EBinOp "++" (EApp (EVar "effTailNames") (EVar "ty")) (EVar "rows")))) (EVar "auths"))) (DoLet false false (PTuple (PVar "written") (PVar "scope")) (EApp (EApp (EApp (EVar "recoveredScope") (EVar "mctx")) (EVar "tvs")) (EVar "ty"))) (DoExpr (ETuple (EApp (EApp (EApp (EApp (EVar "fromAstTypeE") (EVar "mctx")) (EVar "etbl")) (EVar "scope")) (EVar "written")) (EVar "tvs") (EApp (EApp (EApp (EApp (EVar "writtenBindingForce") (EVar "mctx")) (EVar "etbl")) (EVar "tvs")) (EVar "ty"))))))))
 (DTypeSig true "constraintNameMonos" (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "Mono"))) (TyApp (TyCon "List") (TyCon "Mono")))))
@@ -3748,7 +3749,7 @@ methodRowNumObservation saved caseName builtinDecls decls =
 (DTypeSig false "implHeadNormalDecl" (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "TabKey") (TyTuple (TyApp (TyCon "List") (TyCon "String")) (TyCon "Ty")))) (TyFun (TyCon "Decl") (TyCon "Decl"))))
 (DFunDef false "implHeadNormalDecl" ((PVar "aliases") (PCon "DAttrib" (PVar "a") (PVar "d"))) (EApp (EApp (EVar "DAttrib") (EVar "a")) (EApp (EApp (EVar "implHeadNormalDecl") (EVar "aliases")) (EVar "d"))))
 (DFunDef false "implHeadNormalDecl" ((PVar "aliases") (PAs "d" (PRec "DImpl" ((rf "tys" (PVar "tys"))) false))) (EVariantUpdate "DImpl" (EVar "d") ((fa "tys" (EApp (EApp (EMethodRef "map") (EApp (EApp (EVar "tyAliasNormalForm") (EVar "aliases")) (EListLit))) (EVar "tys"))))))
-(DFunDef false "implHeadNormalDecl" (PWild (PVar "d")) (EVar "d"))
+(DFunDef false "implHeadNormalDecl" (PWild (PAs "d" (POr (PCon "DTypeSig" PWild PWild PWild PWild) (PCon "DExtern" PWild) (PCon "DFunDef" PWild PWild PWild PWild PWild PWild) (PRec "DData" () false) (PCon "DUse" PWild PWild PWild) (PCon "DEffect" PWild PWild PWild PWild PWild PWild) (PCon "DProp" PWild PWild PWild PWild) (PCon "DTest" PWild PWild PWild) (PRec "DInterface" () false) (PRec "DTypeAlias" () false) (PRec "DNewtype" () false) (PCon "DLetGroup" PWild PWild)))) (EVar "d"))
 (DTypeSig true "stampGraphDecls" (TyFun (TyApp (TyCon "List") (TyCon "SiblingPair")) (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "Decl")))) (TyTuple (TyApp (TyCon "List") (TyCon "Decl")) (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "Decl")))))))))
 (DFunDef false "stampGraphDecls" ((PVar "sibling") (PVar "coreDecls0") (PVar "modules0")) (EBlock (DoLet false false (PTuple (PVar "coreDecls") (PVar "modules")) (EApp (EApp (EApp (EVar "stampGraphTyOrigins") (EVar "sibling")) (EVar "coreDecls0")) (EVar "modules0"))) (DoLet false false (PVar "aliases") (EApp (EApp (EDictApp "flatMap") (EVar "graphAliasRow")) (EBinOp "++" (EVar "coreDecls") (EApp (EApp (EDictApp "flatMap") (EVar "snd")) (EVar "modules"))))) (DoExpr (EIf (EApp (EVar "isEmptyL") (EVar "aliases")) (ETuple (EVar "coreDecls") (EVar "modules")) (ETuple (EApp (EApp (EMethodRef "map") (EApp (EVar "implHeadNormalDecl") (EVar "aliases"))) (EVar "coreDecls")) (EApp (EApp (EMethodRef "map") (ELam ((PVar "m")) (ETuple (EApp (EVar "fst") (EVar "m")) (EApp (EApp (EMethodRef "map") (EApp (EVar "implHeadNormalDecl") (EVar "aliases"))) (EApp (EVar "snd") (EVar "m")))))) (EVar "modules")))))))
 (DTypeSig true "declEnvModulesFrom" (TyFun (TyCon "GraphCtx") (TyFun (TyCon "Int") (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "Decl")))) (TyApp (TyCon "List") (TyCon "DeclEnvModule"))))))

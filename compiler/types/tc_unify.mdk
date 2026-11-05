@@ -2042,7 +2042,7 @@ authSlotNamesIn mctx readSlots (TyConstrained _ t) =
 authSlotNamesIn mctx readSlots (TyNamed _ t _) =
   authSlotNamesIn mctx readSlots t
 authSlotNamesIn mctx readSlots (TyQual t _ _) = authSlotNamesIn mctx readSlots t
-authSlotNamesIn _mctx _ _ = []
+authSlotNamesIn _mctx _ (TyCon {  } | TyVar _ | TyRow _ _ _ | TyAuth _ _) = []
 
 -- What [readAtom] reads off every effect atom a written type holds.
 export
@@ -2688,7 +2688,7 @@ monoHasNonCovariantSlot mctx t = match normalize t
       || monoHasNonCovariantSlot mctx a
       || monoHasNonCovariantSlot mctx b
   TFun a _ b => monoHasNonCovariantSlot mctx a || monoHasNonCovariantSlot mctx b
-  _ => False
+  TVar _ | TCon _ _ | TRigid _ | TEff _ | TQual _ _ | TAuth _ => False
 
 -- is the slot applied at the node above [hd] (positional index = the depth of
 -- [hd]'s own spine) recorded as non-covariant for [hd]'s head?  The same read

@@ -1,5 +1,5 @@
 # META
-source_lines=1319
+source_lines=1323
 stages=DESUGAR,MARK
 # SOURCE
 -- tc_mark: the mark pass: rewrite a binding group's method references into marked occurrences
@@ -259,7 +259,8 @@ prePassDeclScoped mctx rw (DAttrib attrs d) =
 -- in, exactly like the DFunDef arm.
 prePassDeclScoped mctx rw (DLetGroup pub binds) =
   DLetGroup pub (map (prePassLetBindScoped mctx rw) binds)
-prePassDeclScoped _mctx _ d = d
+prePassDeclScoped _mctx _ (d@(DTypeSig _ _ _ _ | DExtern _ | DData {  } | DUse _ _ _ | DEffect _ _ _ _ _ _ | DTypeAlias {  } | DNewtype {  })) =
+  d
 
 prePassLetBindScoped : ModuleCtx -> ArgRw -> LetBind -> LetBind
 prePassLetBindScoped mctx rw (LetBind n clauses site bid) =
@@ -322,7 +323,8 @@ localAbsCandidate (ERecordCreate _ fs) =
     (fa => match fa
       FieldAssign _ e => localAbsCandidate e)
     fs
-localAbsCandidate _ = False
+localAbsCandidate (ELet _ _ _ _ _ | EMatch _ _ | EIf _ _ _ | EBinOp _ _ _ _ | EUnOp _ _ _ | EInfix _ _ _ | EFieldAccess _ _ _ | EArrayLit _ | ERangeList _ _ _ | ERangeArray _ _ _ | ESlice _ _ _ _ | ELetGroup _ _ | ESection _ | EIndex _ _ | EBlock _ | EDo _ _ | EStringInterp _ | EGuards _ | ERecordUpdate _ _ _ | EVariantUpdate _ _ _ | EMapLit _ _ | ESetLit _ _ | EAsPat _ _ | EOrPat _ | EDictApp _ | EVarAt _ _ | ENumLit _ _ _ | EWideLit _ _ _ _) =
+  False
 
 localAbsCtorSpine : Expr -> Bool
 localAbsCtorSpine (ELoc _ e) = localAbsCtorSpine e
@@ -330,7 +332,8 @@ localAbsCtorSpine (EDoOrigin _ e) = localAbsCtorSpine e
 localAbsCtorSpine (EApp f x) = localAbsCtorSpine f && localAbsCandidate x
 localAbsCtorSpine (EVar name) = ctorHeadShaped name
 localAbsCtorSpine (EVarId name _) = ctorHeadShaped name
-localAbsCtorSpine _ = False
+localAbsCtorSpine (ELit _ | ELam _ _ | ELet _ _ _ _ _ | EMatch _ _ | EIf _ _ _ | EBinOp _ _ _ _ | EUnOp _ _ _ | EInfix _ _ _ | EFieldAccess _ _ _ | ETuple _ | EListLit _ | EArrayLit _ | ERangeList _ _ _ | ERangeArray _ _ _ | ESlice _ _ _ _ | ELetGroup _ _ | ESection _ | EIndex _ _ | EAnnot _ _ | EHeadAnnot _ _ | EBlock _ | EDo _ _ | EStringInterp _ | EGuards _ | ERecordCreate _ _ | ERecordUpdate _ _ _ | EVariantUpdate _ _ _ | EMapLit _ _ | ESetLit _ _ | EAsPat _ _ | EOrPat _ | EMethodRef _ | EDictApp _ | EVarAt _ _ | EMethodAt _ _ _ | EDictAt _ _ | ENumLit _ _ _ | EWideLit _ _ _ _) =
+  False
 
 localAbsCandidateBind : LetBind -> Bool
 localAbsCandidateBind (LetBind _ clauses _ _) =
@@ -527,7 +530,8 @@ rewriteArgScoped mctx _ _ (ENumLit n ev lx) =
 rewriteArgScoped mctx _ _ (EWideLit hi lo ev lx) =
   EWideLit hi lo (mintedOr (mintOpSite mctx) ev) lx
 -- leaves (ELit / EMethodRef / EDictApp / EVarAt / EMethodAt / EDictAt / SecBare)
-rewriteArgScoped _mctx _ _ e = e
+rewriteArgScoped _mctx _ _ (e@(ESection _ | ELit _ | EMethodRef _ | EDictApp _ | EVarAt _ _ | EVarId _ _ | EMethodAt _ _ _)) =
+  e
 
 rewriteArgField : ModuleCtx ->
   ArgRw ->
@@ -1373,7 +1377,7 @@ finishModuleMarking mm env grouped prog =
 (DFunDef false "prePassDeclScoped" ((PVar "mctx") (PVar "rw") (PCon "DTest" (PVar "pub") (PVar "name") (PVar "body"))) (EApp (EApp (EApp (EVar "DTest") (EVar "pub")) (EVar "name")) (EApp (EApp (EApp (EApp (EVar "rewriteArgScoped") (EVar "mctx")) (EVar "rw")) (EVar "omEmpty")) (EVar "body"))))
 (DFunDef false "prePassDeclScoped" ((PVar "mctx") (PVar "rw") (PCon "DAttrib" (PVar "attrs") (PVar "d"))) (EApp (EApp (EVar "DAttrib") (EVar "attrs")) (EApp (EApp (EApp (EVar "prePassDeclScoped") (EVar "mctx")) (EVar "rw")) (EVar "d"))))
 (DFunDef false "prePassDeclScoped" ((PVar "mctx") (PVar "rw") (PCon "DLetGroup" (PVar "pub") (PVar "binds"))) (EApp (EApp (EVar "DLetGroup") (EVar "pub")) (EApp (EApp (EVar "map") (EApp (EApp (EVar "prePassLetBindScoped") (EVar "mctx")) (EVar "rw"))) (EVar "binds"))))
-(DFunDef false "prePassDeclScoped" ((PVar "_mctx") PWild (PVar "d")) (EVar "d"))
+(DFunDef false "prePassDeclScoped" ((PVar "_mctx") PWild (PAs "d" (POr (PCon "DTypeSig" PWild PWild PWild PWild) (PCon "DExtern" PWild) (PRec "DData" () false) (PCon "DUse" PWild PWild PWild) (PCon "DEffect" PWild PWild PWild PWild PWild PWild) (PRec "DTypeAlias" () false) (PRec "DNewtype" () false)))) (EVar "d"))
 (DTypeSig false "prePassLetBindScoped" (TyFun (TyCon "ModuleCtx") (TyFun (TyCon "ArgRw") (TyFun (TyCon "LetBind") (TyCon "LetBind")))))
 (DFunDef false "prePassLetBindScoped" ((PVar "mctx") (PVar "rw") (PCon "LetBind" (PVar "n") (PVar "clauses") (PVar "site") (PVar "bid"))) (EApp (EApp (EApp (EApp (EVar "LetBind") (EVar "n")) (EApp (EApp (EVar "map") (EApp (EApp (EVar "prePassFunClauseScoped") (EVar "mctx")) (EVar "rw"))) (EVar "clauses"))) (EVar "site")) (EVar "bid")))
 (DTypeSig false "prePassFunClauseScoped" (TyFun (TyCon "ModuleCtx") (TyFun (TyCon "ArgRw") (TyFun (TyCon "FunClause") (TyCon "FunClause")))))
@@ -1402,14 +1406,14 @@ finishModuleMarking mm env grouped prog =
 (DFunDef false "localAbsCandidate" ((PCon "EListLit" (PVar "es"))) (EApp (EApp (EVar "allList") (EVar "localAbsCandidate")) (EVar "es")))
 (DFunDef false "localAbsCandidate" ((PAs "app" (PCon "EApp" PWild PWild))) (EApp (EVar "localAbsCtorSpine") (EVar "app")))
 (DFunDef false "localAbsCandidate" ((PCon "ERecordCreate" PWild (PVar "fs"))) (EApp (EApp (EVar "allList") (ELam ((PVar "fa")) (EMatch (EVar "fa") (arm (PCon "FieldAssign" PWild (PVar "e")) () (EApp (EVar "localAbsCandidate") (EVar "e")))))) (EVar "fs")))
-(DFunDef false "localAbsCandidate" (PWild) (EVar "False"))
+(DFunDef false "localAbsCandidate" ((POr (PCon "ELet" PWild PWild PWild PWild PWild) (PCon "EMatch" PWild PWild) (PCon "EIf" PWild PWild PWild) (PCon "EBinOp" PWild PWild PWild PWild) (PCon "EUnOp" PWild PWild PWild) (PCon "EInfix" PWild PWild PWild) (PCon "EFieldAccess" PWild PWild PWild) (PCon "EArrayLit" PWild) (PCon "ERangeList" PWild PWild PWild) (PCon "ERangeArray" PWild PWild PWild) (PCon "ESlice" PWild PWild PWild PWild) (PCon "ELetGroup" PWild PWild) (PCon "ESection" PWild) (PCon "EIndex" PWild PWild) (PCon "EBlock" PWild) (PCon "EDo" PWild PWild) (PCon "EStringInterp" PWild) (PCon "EGuards" PWild) (PCon "ERecordUpdate" PWild PWild PWild) (PCon "EVariantUpdate" PWild PWild PWild) (PCon "EMapLit" PWild PWild) (PCon "ESetLit" PWild PWild) (PCon "EAsPat" PWild PWild) (PCon "EOrPat" PWild) (PCon "EDictApp" PWild) (PCon "EVarAt" PWild PWild) (PCon "ENumLit" PWild PWild PWild) (PCon "EWideLit" PWild PWild PWild PWild))) (EVar "False"))
 (DTypeSig false "localAbsCtorSpine" (TyFun (TyCon "Expr") (TyCon "Bool")))
 (DFunDef false "localAbsCtorSpine" ((PCon "ELoc" PWild (PVar "e"))) (EApp (EVar "localAbsCtorSpine") (EVar "e")))
 (DFunDef false "localAbsCtorSpine" ((PCon "EDoOrigin" PWild (PVar "e"))) (EApp (EVar "localAbsCtorSpine") (EVar "e")))
 (DFunDef false "localAbsCtorSpine" ((PCon "EApp" (PVar "f") (PVar "x"))) (EBinOp "&&" (EApp (EVar "localAbsCtorSpine") (EVar "f")) (EApp (EVar "localAbsCandidate") (EVar "x"))))
 (DFunDef false "localAbsCtorSpine" ((PCon "EVar" (PVar "name"))) (EApp (EVar "ctorHeadShaped") (EVar "name")))
 (DFunDef false "localAbsCtorSpine" ((PCon "EVarId" (PVar "name") PWild)) (EApp (EVar "ctorHeadShaped") (EVar "name")))
-(DFunDef false "localAbsCtorSpine" (PWild) (EVar "False"))
+(DFunDef false "localAbsCtorSpine" ((POr (PCon "ELit" PWild) (PCon "ELam" PWild PWild) (PCon "ELet" PWild PWild PWild PWild PWild) (PCon "EMatch" PWild PWild) (PCon "EIf" PWild PWild PWild) (PCon "EBinOp" PWild PWild PWild PWild) (PCon "EUnOp" PWild PWild PWild) (PCon "EInfix" PWild PWild PWild) (PCon "EFieldAccess" PWild PWild PWild) (PCon "ETuple" PWild) (PCon "EListLit" PWild) (PCon "EArrayLit" PWild) (PCon "ERangeList" PWild PWild PWild) (PCon "ERangeArray" PWild PWild PWild) (PCon "ESlice" PWild PWild PWild PWild) (PCon "ELetGroup" PWild PWild) (PCon "ESection" PWild) (PCon "EIndex" PWild PWild) (PCon "EAnnot" PWild PWild) (PCon "EHeadAnnot" PWild PWild) (PCon "EBlock" PWild) (PCon "EDo" PWild PWild) (PCon "EStringInterp" PWild) (PCon "EGuards" PWild) (PCon "ERecordCreate" PWild PWild) (PCon "ERecordUpdate" PWild PWild PWild) (PCon "EVariantUpdate" PWild PWild PWild) (PCon "EMapLit" PWild PWild) (PCon "ESetLit" PWild PWild) (PCon "EAsPat" PWild PWild) (PCon "EOrPat" PWild) (PCon "EMethodRef" PWild) (PCon "EDictApp" PWild) (PCon "EVarAt" PWild PWild) (PCon "EMethodAt" PWild PWild PWild) (PCon "EDictAt" PWild PWild) (PCon "ENumLit" PWild PWild PWild) (PCon "EWideLit" PWild PWild PWild PWild))) (EVar "False"))
 (DTypeSig false "localAbsCandidateBind" (TyFun (TyCon "LetBind") (TyCon "Bool")))
 (DFunDef false "localAbsCandidateBind" ((PCon "LetBind" PWild (PVar "clauses") PWild PWild)) (EApp (EApp (EVar "anyList") (EVar "localAbsCandidateClause")) (EVar "clauses")))
 (DTypeSig false "localAbsCandidateClause" (TyFun (TyCon "FunClause") (TyCon "Bool")))
@@ -1462,7 +1466,7 @@ finishModuleMarking mm env grouped prog =
 (DFunDef false "rewriteArgScoped" ((PVar "mctx") (PVar "rw") (PVar "bound") (PCon "EOrPat" (PVar "es"))) (EApp (EVar "EOrPat") (EApp (EApp (EVar "map") (EApp (EApp (EApp (EVar "rewriteArgScoped") (EVar "mctx")) (EVar "rw")) (EVar "bound"))) (EVar "es"))))
 (DFunDef false "rewriteArgScoped" ((PVar "mctx") PWild PWild (PCon "ENumLit" (PVar "n") (PVar "ev") (PVar "lx"))) (EApp (EApp (EApp (EVar "ENumLit") (EVar "n")) (EApp (EApp (EVar "mintedOr") (EApp (EVar "mintLitSite") (EVar "mctx"))) (EVar "ev"))) (EVar "lx")))
 (DFunDef false "rewriteArgScoped" ((PVar "mctx") PWild PWild (PCon "EWideLit" (PVar "hi") (PVar "lo") (PVar "ev") (PVar "lx"))) (EApp (EApp (EApp (EApp (EVar "EWideLit") (EVar "hi")) (EVar "lo")) (EApp (EApp (EVar "mintedOr") (EApp (EVar "mintOpSite") (EVar "mctx"))) (EVar "ev"))) (EVar "lx")))
-(DFunDef false "rewriteArgScoped" ((PVar "_mctx") PWild PWild (PVar "e")) (EVar "e"))
+(DFunDef false "rewriteArgScoped" ((PVar "_mctx") PWild PWild (PAs "e" (POr (PCon "ESection" PWild) (PCon "ELit" PWild) (PCon "EMethodRef" PWild) (PCon "EDictApp" PWild) (PCon "EVarAt" PWild PWild) (PCon "EVarId" PWild PWild) (PCon "EMethodAt" PWild PWild PWild)))) (EVar "e"))
 (DTypeSig false "rewriteArgField" (TyFun (TyCon "ModuleCtx") (TyFun (TyCon "ArgRw") (TyFun (TyApp (TyCon "OrdMap") (TyCon "String")) (TyFun (TyCon "FieldAssign") (TyCon "FieldAssign"))))))
 (DFunDef false "rewriteArgField" ((PVar "mctx") (PVar "rw") (PVar "bound") (PCon "FieldAssign" (PVar "n") (PVar "e"))) (EApp (EApp (EVar "FieldAssign") (EVar "n")) (EApp (EApp (EApp (EApp (EVar "rewriteArgScoped") (EVar "mctx")) (EVar "rw")) (EVar "bound")) (EVar "e"))))
 (DTypeSig false "rewriteArgKv" (TyFun (TyCon "ModuleCtx") (TyFun (TyCon "ArgRw") (TyFun (TyApp (TyCon "OrdMap") (TyCon "String")) (TyFun (TyTuple (TyCon "Expr") (TyCon "Expr")) (TyTuple (TyCon "Expr") (TyCon "Expr")))))))
@@ -1620,7 +1624,7 @@ finishModuleMarking mm env grouped prog =
 (DFunDef false "prePassDeclScoped" ((PVar "mctx") (PVar "rw") (PCon "DTest" (PVar "pub") (PVar "name") (PVar "body"))) (EApp (EApp (EApp (EVar "DTest") (EVar "pub")) (EVar "name")) (EApp (EApp (EApp (EApp (EVar "rewriteArgScoped") (EVar "mctx")) (EVar "rw")) (EVar "omEmpty")) (EVar "body"))))
 (DFunDef false "prePassDeclScoped" ((PVar "mctx") (PVar "rw") (PCon "DAttrib" (PVar "attrs") (PVar "d"))) (EApp (EApp (EVar "DAttrib") (EVar "attrs")) (EApp (EApp (EApp (EVar "prePassDeclScoped") (EVar "mctx")) (EVar "rw")) (EVar "d"))))
 (DFunDef false "prePassDeclScoped" ((PVar "mctx") (PVar "rw") (PCon "DLetGroup" (PVar "pub") (PVar "binds"))) (EApp (EApp (EVar "DLetGroup") (EVar "pub")) (EApp (EApp (EMethodRef "map") (EApp (EApp (EVar "prePassLetBindScoped") (EVar "mctx")) (EVar "rw"))) (EVar "binds"))))
-(DFunDef false "prePassDeclScoped" ((PVar "_mctx") PWild (PVar "d")) (EVar "d"))
+(DFunDef false "prePassDeclScoped" ((PVar "_mctx") PWild (PAs "d" (POr (PCon "DTypeSig" PWild PWild PWild PWild) (PCon "DExtern" PWild) (PRec "DData" () false) (PCon "DUse" PWild PWild PWild) (PCon "DEffect" PWild PWild PWild PWild PWild PWild) (PRec "DTypeAlias" () false) (PRec "DNewtype" () false)))) (EVar "d"))
 (DTypeSig false "prePassLetBindScoped" (TyFun (TyCon "ModuleCtx") (TyFun (TyCon "ArgRw") (TyFun (TyCon "LetBind") (TyCon "LetBind")))))
 (DFunDef false "prePassLetBindScoped" ((PVar "mctx") (PVar "rw") (PCon "LetBind" (PVar "n") (PVar "clauses") (PVar "site") (PVar "bid"))) (EApp (EApp (EApp (EApp (EVar "LetBind") (EVar "n")) (EApp (EApp (EMethodRef "map") (EApp (EApp (EVar "prePassFunClauseScoped") (EVar "mctx")) (EVar "rw"))) (EVar "clauses"))) (EVar "site")) (EVar "bid")))
 (DTypeSig false "prePassFunClauseScoped" (TyFun (TyCon "ModuleCtx") (TyFun (TyCon "ArgRw") (TyFun (TyCon "FunClause") (TyCon "FunClause")))))
@@ -1649,14 +1653,14 @@ finishModuleMarking mm env grouped prog =
 (DFunDef false "localAbsCandidate" ((PCon "EListLit" (PVar "es"))) (EApp (EApp (EVar "allList") (EVar "localAbsCandidate")) (EVar "es")))
 (DFunDef false "localAbsCandidate" ((PAs "app" (PCon "EApp" PWild PWild))) (EApp (EVar "localAbsCtorSpine") (EVar "app")))
 (DFunDef false "localAbsCandidate" ((PCon "ERecordCreate" PWild (PVar "fs"))) (EApp (EApp (EVar "allList") (ELam ((PVar "fa")) (EMatch (EVar "fa") (arm (PCon "FieldAssign" PWild (PVar "e")) () (EApp (EVar "localAbsCandidate") (EVar "e")))))) (EVar "fs")))
-(DFunDef false "localAbsCandidate" (PWild) (EVar "False"))
+(DFunDef false "localAbsCandidate" ((POr (PCon "ELet" PWild PWild PWild PWild PWild) (PCon "EMatch" PWild PWild) (PCon "EIf" PWild PWild PWild) (PCon "EBinOp" PWild PWild PWild PWild) (PCon "EUnOp" PWild PWild PWild) (PCon "EInfix" PWild PWild PWild) (PCon "EFieldAccess" PWild PWild PWild) (PCon "EArrayLit" PWild) (PCon "ERangeList" PWild PWild PWild) (PCon "ERangeArray" PWild PWild PWild) (PCon "ESlice" PWild PWild PWild PWild) (PCon "ELetGroup" PWild PWild) (PCon "ESection" PWild) (PCon "EIndex" PWild PWild) (PCon "EBlock" PWild) (PCon "EDo" PWild PWild) (PCon "EStringInterp" PWild) (PCon "EGuards" PWild) (PCon "ERecordUpdate" PWild PWild PWild) (PCon "EVariantUpdate" PWild PWild PWild) (PCon "EMapLit" PWild PWild) (PCon "ESetLit" PWild PWild) (PCon "EAsPat" PWild PWild) (PCon "EOrPat" PWild) (PCon "EDictApp" PWild) (PCon "EVarAt" PWild PWild) (PCon "ENumLit" PWild PWild PWild) (PCon "EWideLit" PWild PWild PWild PWild))) (EVar "False"))
 (DTypeSig false "localAbsCtorSpine" (TyFun (TyCon "Expr") (TyCon "Bool")))
 (DFunDef false "localAbsCtorSpine" ((PCon "ELoc" PWild (PVar "e"))) (EApp (EVar "localAbsCtorSpine") (EVar "e")))
 (DFunDef false "localAbsCtorSpine" ((PCon "EDoOrigin" PWild (PVar "e"))) (EApp (EVar "localAbsCtorSpine") (EVar "e")))
 (DFunDef false "localAbsCtorSpine" ((PCon "EApp" (PVar "f") (PVar "x"))) (EBinOp "&&" (EApp (EVar "localAbsCtorSpine") (EVar "f")) (EApp (EVar "localAbsCandidate") (EVar "x"))))
 (DFunDef false "localAbsCtorSpine" ((PCon "EVar" (PVar "name"))) (EApp (EVar "ctorHeadShaped") (EVar "name")))
 (DFunDef false "localAbsCtorSpine" ((PCon "EVarId" (PVar "name") PWild)) (EApp (EVar "ctorHeadShaped") (EVar "name")))
-(DFunDef false "localAbsCtorSpine" (PWild) (EVar "False"))
+(DFunDef false "localAbsCtorSpine" ((POr (PCon "ELit" PWild) (PCon "ELam" PWild PWild) (PCon "ELet" PWild PWild PWild PWild PWild) (PCon "EMatch" PWild PWild) (PCon "EIf" PWild PWild PWild) (PCon "EBinOp" PWild PWild PWild PWild) (PCon "EUnOp" PWild PWild PWild) (PCon "EInfix" PWild PWild PWild) (PCon "EFieldAccess" PWild PWild PWild) (PCon "ETuple" PWild) (PCon "EListLit" PWild) (PCon "EArrayLit" PWild) (PCon "ERangeList" PWild PWild PWild) (PCon "ERangeArray" PWild PWild PWild) (PCon "ESlice" PWild PWild PWild PWild) (PCon "ELetGroup" PWild PWild) (PCon "ESection" PWild) (PCon "EIndex" PWild PWild) (PCon "EAnnot" PWild PWild) (PCon "EHeadAnnot" PWild PWild) (PCon "EBlock" PWild) (PCon "EDo" PWild PWild) (PCon "EStringInterp" PWild) (PCon "EGuards" PWild) (PCon "ERecordCreate" PWild PWild) (PCon "ERecordUpdate" PWild PWild PWild) (PCon "EVariantUpdate" PWild PWild PWild) (PCon "EMapLit" PWild PWild) (PCon "ESetLit" PWild PWild) (PCon "EAsPat" PWild PWild) (PCon "EOrPat" PWild) (PCon "EMethodRef" PWild) (PCon "EDictApp" PWild) (PCon "EVarAt" PWild PWild) (PCon "EMethodAt" PWild PWild PWild) (PCon "EDictAt" PWild PWild) (PCon "ENumLit" PWild PWild PWild) (PCon "EWideLit" PWild PWild PWild PWild))) (EVar "False"))
 (DTypeSig false "localAbsCandidateBind" (TyFun (TyCon "LetBind") (TyCon "Bool")))
 (DFunDef false "localAbsCandidateBind" ((PCon "LetBind" PWild (PVar "clauses") PWild PWild)) (EApp (EApp (EVar "anyList") (EVar "localAbsCandidateClause")) (EVar "clauses")))
 (DTypeSig false "localAbsCandidateClause" (TyFun (TyCon "FunClause") (TyCon "Bool")))
@@ -1709,7 +1713,7 @@ finishModuleMarking mm env grouped prog =
 (DFunDef false "rewriteArgScoped" ((PVar "mctx") (PVar "rw") (PVar "bound") (PCon "EOrPat" (PVar "es"))) (EApp (EVar "EOrPat") (EApp (EApp (EMethodRef "map") (EApp (EApp (EApp (EVar "rewriteArgScoped") (EVar "mctx")) (EVar "rw")) (EVar "bound"))) (EVar "es"))))
 (DFunDef false "rewriteArgScoped" ((PVar "mctx") PWild PWild (PCon "ENumLit" (PVar "n") (PVar "ev") (PVar "lx"))) (EApp (EApp (EApp (EVar "ENumLit") (EVar "n")) (EApp (EApp (EVar "mintedOr") (EApp (EVar "mintLitSite") (EVar "mctx"))) (EVar "ev"))) (EVar "lx")))
 (DFunDef false "rewriteArgScoped" ((PVar "mctx") PWild PWild (PCon "EWideLit" (PVar "hi") (PVar "lo") (PVar "ev") (PVar "lx"))) (EApp (EApp (EApp (EApp (EVar "EWideLit") (EVar "hi")) (EVar "lo")) (EApp (EApp (EVar "mintedOr") (EApp (EVar "mintOpSite") (EVar "mctx"))) (EVar "ev"))) (EVar "lx")))
-(DFunDef false "rewriteArgScoped" ((PVar "_mctx") PWild PWild (PVar "e")) (EVar "e"))
+(DFunDef false "rewriteArgScoped" ((PVar "_mctx") PWild PWild (PAs "e" (POr (PCon "ESection" PWild) (PCon "ELit" PWild) (PCon "EMethodRef" PWild) (PCon "EDictApp" PWild) (PCon "EVarAt" PWild PWild) (PCon "EVarId" PWild PWild) (PCon "EMethodAt" PWild PWild PWild)))) (EVar "e"))
 (DTypeSig false "rewriteArgField" (TyFun (TyCon "ModuleCtx") (TyFun (TyCon "ArgRw") (TyFun (TyApp (TyCon "OrdMap") (TyCon "String")) (TyFun (TyCon "FieldAssign") (TyCon "FieldAssign"))))))
 (DFunDef false "rewriteArgField" ((PVar "mctx") (PVar "rw") (PVar "bound") (PCon "FieldAssign" (PVar "n") (PVar "e"))) (EApp (EApp (EVar "FieldAssign") (EVar "n")) (EApp (EApp (EApp (EApp (EVar "rewriteArgScoped") (EVar "mctx")) (EVar "rw")) (EVar "bound")) (EVar "e"))))
 (DTypeSig false "rewriteArgKv" (TyFun (TyCon "ModuleCtx") (TyFun (TyCon "ArgRw") (TyFun (TyApp (TyCon "OrdMap") (TyCon "String")) (TyFun (TyTuple (TyCon "Expr") (TyCon "Expr")) (TyTuple (TyCon "Expr") (TyCon "Expr")))))))

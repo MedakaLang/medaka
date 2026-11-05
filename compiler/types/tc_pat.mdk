@@ -521,7 +521,8 @@ patOpensExistentials env (PCons h t) =
   patOpensExistentials env h || patOpensExistentials env t
 patOpensExistentials env (PAs _ _ _ p) = patOpensExistentials env p
 patOpensExistentials env (POr alts) = anyList (patOpensExistentials env) alts
-patOpensExistentials _env _ = False
+patOpensExistentials env (PAnn p _) = patOpensExistentials env p
+patOpensExistentials _env (PVar _ _ _ | PWild | PLit _ | PRng _ _ _) = False
 
 recPatFieldOpens : TcEnv -> RecPatField -> Bool
 recPatFieldOpens env (RecPatField _ _ _ (Some p)) = patOpensExistentials env p

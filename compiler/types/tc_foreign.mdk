@@ -87,7 +87,8 @@ namedArgPositions (TyFun (TyNamed n _ _) b) i =
   (n, i) :: namedArgPositions b (i + 1)
 namedArgPositions (TyFun _ b) i = namedArgPositions b (i + 1)
 namedArgPositions (TyConstrained _ t) i = namedArgPositions t i
-namedArgPositions _ _ = []
+namedArgPositions (TyCon {  } | TyVar _ | TyApp _ _ | TyTuple _ | TyEffect _ _ _ | TyNamed _ _ _ | TyQual _ _ _ | TyRow _ _ _ | TyAuth _ _) _ =
+  []
 
 -- Apply the four user-extern declaration rules unless the program under check is
 -- stdlib-owned, OR the run has no builtin-extern catalog at all.

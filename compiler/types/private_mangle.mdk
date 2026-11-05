@@ -1972,7 +1972,8 @@ patVarsPM (PList ps) = patVarsListPM ps
 patVarsPM (PAs x _ _ p) = x :: patVarsPM p
 patVarsPM (POr (p :: _)) = patVarsPM p
 patVarsPM (PRec _ fields _) = flatMap recPatFieldVarsPM fields
-patVarsPM _ = []
+patVarsPM (PAnn p _) = patVarsPM p
+patVarsPM (POr [] | PWild | PLit _ | PRng _ _ _) = []
 
 patVarsListPM : List Pat -> List String
 patVarsListPM ps = flatMap patVarsPM ps

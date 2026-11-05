@@ -1,5 +1,5 @@
 # META
-source_lines=3583
+source_lines=3585
 stages=DESUGAR,MARK
 # SOURCE
 -- tc_infer: the expression inference recursion (variables, application, lambda, let and rec-let,
@@ -3160,12 +3160,14 @@ armUnreachable _mctx oracle col0 prec _ _ dp =
 noteHeadCtor : Pat -> OrdMap Unit -> OrdMap Unit
 noteHeadCtor (PCon c _) heads = omInsert c () heads
 noteHeadCtor (POr alts) heads = fold (h a => noteHeadCtor a h) heads alts
-noteHeadCtor _ heads = heads
+noteHeadCtor (PVar _ _ _ | PWild | PLit _ | PCons _ _ | PTuple _ | PList _ | PAs _ _ _ _ | PRng _ _ _ | PRec _ _ _ | PAnn _ _) heads =
+  heads
 
 isConPat : Pat -> Bool
 isConPat (PCon _ _) = True
 isConPat (POr alts) = allList isConPat alts
-isConPat _ = False
+isConPat (PVar _ _ _ | PWild | PLit _ | PCons _ _ | PTuple _ | PList _ | PAs _ _ _ _ | PRng _ _ _ | PRec _ _ _ | PAnn _ _) =
+  False
 
 -- Only UNGUARDED arms contribute to the covered set (a guarded arm may not fire).
 armIsUnguarded : List Guard -> Bool
@@ -4044,11 +4046,11 @@ peelOntoParams dyn (Some src) patTypes pats =
 (DTypeSig false "noteHeadCtor" (TyFun (TyCon "Pat") (TyFun (TyApp (TyCon "OrdMap") (TyCon "Unit")) (TyApp (TyCon "OrdMap") (TyCon "Unit")))))
 (DFunDef false "noteHeadCtor" ((PCon "PCon" (PVar "c") PWild) (PVar "heads")) (EApp (EApp (EApp (EVar "omInsert") (EVar "c")) (ELit LUnit)) (EVar "heads")))
 (DFunDef false "noteHeadCtor" ((PCon "POr" (PVar "alts")) (PVar "heads")) (EApp (EApp (EApp (EVar "fold") (ELam ((PVar "h") (PVar "a")) (EApp (EApp (EVar "noteHeadCtor") (EVar "a")) (EVar "h")))) (EVar "heads")) (EVar "alts")))
-(DFunDef false "noteHeadCtor" (PWild (PVar "heads")) (EVar "heads"))
+(DFunDef false "noteHeadCtor" ((POr (PCon "PVar" PWild PWild PWild) (PCon "PWild") (PCon "PLit" PWild) (PCon "PCons" PWild PWild) (PCon "PTuple" PWild) (PCon "PList" PWild) (PCon "PAs" PWild PWild PWild PWild) (PCon "PRng" PWild PWild PWild) (PCon "PRec" PWild PWild PWild) (PCon "PAnn" PWild PWild)) (PVar "heads")) (EVar "heads"))
 (DTypeSig false "isConPat" (TyFun (TyCon "Pat") (TyCon "Bool")))
 (DFunDef false "isConPat" ((PCon "PCon" PWild PWild)) (EVar "True"))
 (DFunDef false "isConPat" ((PCon "POr" (PVar "alts"))) (EApp (EApp (EVar "allList") (EVar "isConPat")) (EVar "alts")))
-(DFunDef false "isConPat" (PWild) (EVar "False"))
+(DFunDef false "isConPat" ((POr (PCon "PVar" PWild PWild PWild) (PCon "PWild") (PCon "PLit" PWild) (PCon "PCons" PWild PWild) (PCon "PTuple" PWild) (PCon "PList" PWild) (PCon "PAs" PWild PWild PWild PWild) (PCon "PRng" PWild PWild PWild) (PCon "PRec" PWild PWild PWild) (PCon "PAnn" PWild PWild))) (EVar "False"))
 (DTypeSig false "armIsUnguarded" (TyFun (TyApp (TyCon "List") (TyCon "Guard")) (TyCon "Bool")))
 (DFunDef false "armIsUnguarded" ((PList)) (EVar "True"))
 (DFunDef false "armIsUnguarded" ((PCons PWild PWild)) (EVar "False"))
@@ -4562,11 +4564,11 @@ peelOntoParams dyn (Some src) patTypes pats =
 (DTypeSig false "noteHeadCtor" (TyFun (TyCon "Pat") (TyFun (TyApp (TyCon "OrdMap") (TyCon "Unit")) (TyApp (TyCon "OrdMap") (TyCon "Unit")))))
 (DFunDef false "noteHeadCtor" ((PCon "PCon" (PVar "c") PWild) (PVar "heads")) (EApp (EApp (EApp (EVar "omInsert") (EVar "c")) (ELit LUnit)) (EVar "heads")))
 (DFunDef false "noteHeadCtor" ((PCon "POr" (PVar "alts")) (PVar "heads")) (EApp (EApp (EApp (EMethodRef "fold") (ELam ((PVar "h") (PVar "a")) (EApp (EApp (EVar "noteHeadCtor") (EVar "a")) (EVar "h")))) (EVar "heads")) (EVar "alts")))
-(DFunDef false "noteHeadCtor" (PWild (PVar "heads")) (EVar "heads"))
+(DFunDef false "noteHeadCtor" ((POr (PCon "PVar" PWild PWild PWild) (PCon "PWild") (PCon "PLit" PWild) (PCon "PCons" PWild PWild) (PCon "PTuple" PWild) (PCon "PList" PWild) (PCon "PAs" PWild PWild PWild PWild) (PCon "PRng" PWild PWild PWild) (PCon "PRec" PWild PWild PWild) (PCon "PAnn" PWild PWild)) (PVar "heads")) (EVar "heads"))
 (DTypeSig false "isConPat" (TyFun (TyCon "Pat") (TyCon "Bool")))
 (DFunDef false "isConPat" ((PCon "PCon" PWild PWild)) (EVar "True"))
 (DFunDef false "isConPat" ((PCon "POr" (PVar "alts"))) (EApp (EApp (EVar "allList") (EVar "isConPat")) (EVar "alts")))
-(DFunDef false "isConPat" (PWild) (EVar "False"))
+(DFunDef false "isConPat" ((POr (PCon "PVar" PWild PWild PWild) (PCon "PWild") (PCon "PLit" PWild) (PCon "PCons" PWild PWild) (PCon "PTuple" PWild) (PCon "PList" PWild) (PCon "PAs" PWild PWild PWild PWild) (PCon "PRng" PWild PWild PWild) (PCon "PRec" PWild PWild PWild) (PCon "PAnn" PWild PWild))) (EVar "False"))
 (DTypeSig false "armIsUnguarded" (TyFun (TyApp (TyCon "List") (TyCon "Guard")) (TyCon "Bool")))
 (DFunDef false "armIsUnguarded" ((PList)) (EVar "True"))
 (DFunDef false "armIsUnguarded" ((PCons PWild PWild)) (EVar "False"))

@@ -694,7 +694,7 @@ walkMono name _ effIds authIds (TEff row) w = walkRow name effIds authIds row w
 walkMono name ids effIds authIds (TQual inner auth) w =
   walkAuth name authIds auth (walkMono name ids effIds authIds inner w)
 walkMono name _ _ authIds (TAuth auth) w = walkAuth name authIds auth w
-walkMono _ _ _ _ _ w = w
+walkMono _ _ _ _ (TCon _ _ | TRigid _) w = w
 
 walkAuth : String -> List Int -> Authority -> Walk -> Walk
 walkAuth name authIds (AVar cell) w = match !cell
@@ -704,7 +704,7 @@ walkAuth name authIds (AVar cell) w = match !cell
 walkAuth name authIds (AJoin ms) w = foldWalk (walkAuth name authIds) ms w
 walkAuth name authIds (AProduct axes) w =
   foldWalk (axis acc => walkAuth name authIds (snd axis) acc) axes w
-walkAuth _ _ _ w = w
+walkAuth _ _ (AConst _) w = w
 
 walkRow : String -> List Int -> List Int -> EffRow -> Walk -> Walk
 walkRow name effIds authIds (EffRow atoms tail) w =

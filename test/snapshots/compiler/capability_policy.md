@@ -156,7 +156,7 @@ variablesInto (FrozenJoin members) vars =
   fold (acc m => variablesInto m acc) vars members
 variablesInto (FrozenProduct axes) vars =
   fold (acc a => variablesInto (snd a) acc) vars axes
-variablesInto _ vars = vars
+variablesInto (FrozenConst _) vars = vars
 
 variableName : FrozenVariable -> String
 variableName v = match v.sourceName
@@ -230,7 +230,7 @@ allOk ((Ok value) :: rest) = map (value :: _) (allOk rest)
 (DFunDef false "variablesInto" ((PCon "FrozenVar" (PVar "v")) (PVar "vars")) (EApp (EApp (EApp (EVar "M.set") (EFieldAccess (EVar "v") "localId")) (EVar "v")) (EVar "vars")))
 (DFunDef false "variablesInto" ((PCon "FrozenJoin" (PVar "members")) (PVar "vars")) (EApp (EApp (EApp (EVar "fold") (ELam ((PVar "acc") (PVar "m")) (EApp (EApp (EVar "variablesInto") (EVar "m")) (EVar "acc")))) (EVar "vars")) (EVar "members")))
 (DFunDef false "variablesInto" ((PCon "FrozenProduct" (PVar "axes")) (PVar "vars")) (EApp (EApp (EApp (EVar "fold") (ELam ((PVar "acc") (PVar "a")) (EApp (EApp (EVar "variablesInto") (EApp (EVar "snd") (EVar "a"))) (EVar "acc")))) (EVar "vars")) (EVar "axes")))
-(DFunDef false "variablesInto" (PWild (PVar "vars")) (EVar "vars"))
+(DFunDef false "variablesInto" ((PCon "FrozenConst" PWild) (PVar "vars")) (EVar "vars"))
 (DTypeSig false "variableName" (TyFun (TyCon "FrozenVariable") (TyCon "String")))
 (DFunDef false "variableName" ((PVar "v")) (EMatch (EFieldAccess (EVar "v") "sourceName") (arm (PCon "Some" (PVar "name")) () (EVar "name")) (arm (PCon "None") () (EBinOp "++" (ELit (LString "k")) (EApp (EVar "intToString") (EFieldAccess (EVar "v") "localId"))))))
 (DTypeSig false "variablesWhy" (TyFun (TyApp (TyCon "List") (TyCon "FrozenVariable")) (TyCon "String")))
@@ -294,7 +294,7 @@ allOk ((Ok value) :: rest) = map (value :: _) (allOk rest)
 (DFunDef false "variablesInto" ((PCon "FrozenVar" (PVar "v")) (PVar "vars")) (EApp (EApp (EApp (EVar "M.set") (EFieldAccess (EVar "v") "localId")) (EVar "v")) (EVar "vars")))
 (DFunDef false "variablesInto" ((PCon "FrozenJoin" (PVar "members")) (PVar "vars")) (EApp (EApp (EApp (EMethodRef "fold") (ELam ((PVar "acc") (PVar "m")) (EApp (EApp (EVar "variablesInto") (EVar "m")) (EVar "acc")))) (EVar "vars")) (EVar "members")))
 (DFunDef false "variablesInto" ((PCon "FrozenProduct" (PVar "axes")) (PVar "vars")) (EApp (EApp (EApp (EMethodRef "fold") (ELam ((PVar "acc") (PVar "a")) (EApp (EApp (EVar "variablesInto") (EApp (EVar "snd") (EVar "a"))) (EVar "acc")))) (EVar "vars")) (EVar "axes")))
-(DFunDef false "variablesInto" (PWild (PVar "vars")) (EVar "vars"))
+(DFunDef false "variablesInto" ((PCon "FrozenConst" PWild) (PVar "vars")) (EVar "vars"))
 (DTypeSig false "variableName" (TyFun (TyCon "FrozenVariable") (TyCon "String")))
 (DFunDef false "variableName" ((PVar "v")) (EMatch (EFieldAccess (EVar "v") "sourceName") (arm (PCon "Some" (PVar "name")) () (EVar "name")) (arm (PCon "None") () (EBinOp "++" (ELit (LString "k")) (EApp (EVar "intToString") (EFieldAccess (EVar "v") "localId"))))))
 (DTypeSig false "variablesWhy" (TyFun (TyApp (TyCon "List") (TyCon "FrozenVariable")) (TyCon "String")))

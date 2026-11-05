@@ -1,5 +1,5 @@
 # META
-source_lines=919
+source_lines=920
 stages=DESUGAR,MARK
 # SOURCE
 -- tc_foreign: extern signatures checked against the FFI-ABI crossable set and the FFI-ABI rules on
@@ -91,7 +91,8 @@ namedArgPositions (TyFun (TyNamed n _ _) b) i =
   (n, i) :: namedArgPositions b (i + 1)
 namedArgPositions (TyFun _ b) i = namedArgPositions b (i + 1)
 namedArgPositions (TyConstrained _ t) i = namedArgPositions t i
-namedArgPositions _ _ = []
+namedArgPositions (TyCon {  } | TyVar _ | TyApp _ _ | TyTuple _ | TyEffect _ _ _ | TyNamed _ _ _ | TyQual _ _ _ | TyRow _ _ _ | TyAuth _ _) _ =
+  []
 
 -- Apply the four user-extern declaration rules unless the program under check is
 -- stdlib-owned, OR the run has no builtin-extern catalog at all.
@@ -946,7 +947,7 @@ declExternNames decls = map fst (directExternSigs decls)
 (DFunDef false "namedArgPositions" ((PCon "TyFun" (PCon "TyNamed" (PVar "n") PWild PWild) (PVar "b")) (PVar "i")) (EBinOp "::" (ETuple (EVar "n") (EVar "i")) (EApp (EApp (EVar "namedArgPositions") (EVar "b")) (EBinOp "+" (EVar "i") (ELit (LInt 1))))))
 (DFunDef false "namedArgPositions" ((PCon "TyFun" PWild (PVar "b")) (PVar "i")) (EApp (EApp (EVar "namedArgPositions") (EVar "b")) (EBinOp "+" (EVar "i") (ELit (LInt 1)))))
 (DFunDef false "namedArgPositions" ((PCon "TyConstrained" PWild (PVar "t")) (PVar "i")) (EApp (EApp (EVar "namedArgPositions") (EVar "t")) (EVar "i")))
-(DFunDef false "namedArgPositions" (PWild PWild) (EListLit))
+(DFunDef false "namedArgPositions" ((POr (PRec "TyCon" () false) (PCon "TyVar" PWild) (PCon "TyApp" PWild PWild) (PCon "TyTuple" PWild) (PCon "TyEffect" PWild PWild PWild) (PCon "TyNamed" PWild PWild PWild) (PCon "TyQual" PWild PWild PWild) (PCon "TyRow" PWild PWild PWild) (PCon "TyAuth" PWild PWild)) PWild) (EListLit))
 (DTypeSig true "ffiStampMode" (TyFun (TyCon "GraphCtx") (TyFun (TyCon "String") (TyCon "Bool"))))
 (DFunDef false "ffiStampMode" ((PVar "gctx") (PVar "mid")) (EBinOp "&&" (EBinOp ">" (EApp (EVar "omSize") (EFieldAccess (EFieldAccess (EVar "gctx") "builtinExternNamesRef") "value")) (ELit (LInt 0))) (EApp (EApp (EVar "ffiStampModeOwned") (EVar "gctx")) (EVar "mid"))))
 (DTypeSig false "ffiStampModeOwned" (TyFun (TyCon "GraphCtx") (TyFun (TyCon "String") (TyCon "Bool"))))
@@ -1114,7 +1115,7 @@ declExternNames decls = map fst (directExternSigs decls)
 (DFunDef false "namedArgPositions" ((PCon "TyFun" (PCon "TyNamed" (PVar "n") PWild PWild) (PVar "b")) (PVar "i")) (EBinOp "::" (ETuple (EVar "n") (EVar "i")) (EApp (EApp (EVar "namedArgPositions") (EVar "b")) (EBinOp "+" (EVar "i") (ELit (LInt 1))))))
 (DFunDef false "namedArgPositions" ((PCon "TyFun" PWild (PVar "b")) (PVar "i")) (EApp (EApp (EVar "namedArgPositions") (EVar "b")) (EBinOp "+" (EVar "i") (ELit (LInt 1)))))
 (DFunDef false "namedArgPositions" ((PCon "TyConstrained" PWild (PVar "t")) (PVar "i")) (EApp (EApp (EVar "namedArgPositions") (EVar "t")) (EVar "i")))
-(DFunDef false "namedArgPositions" (PWild PWild) (EListLit))
+(DFunDef false "namedArgPositions" ((POr (PRec "TyCon" () false) (PCon "TyVar" PWild) (PCon "TyApp" PWild PWild) (PCon "TyTuple" PWild) (PCon "TyEffect" PWild PWild PWild) (PCon "TyNamed" PWild PWild PWild) (PCon "TyQual" PWild PWild PWild) (PCon "TyRow" PWild PWild PWild) (PCon "TyAuth" PWild PWild)) PWild) (EListLit))
 (DTypeSig true "ffiStampMode" (TyFun (TyCon "GraphCtx") (TyFun (TyCon "String") (TyCon "Bool"))))
 (DFunDef false "ffiStampMode" ((PVar "gctx") (PVar "mid")) (EBinOp "&&" (EBinOp ">" (EApp (EVar "omSize") (EFieldAccess (EFieldAccess (EVar "gctx") "builtinExternNamesRef") "value")) (ELit (LInt 0))) (EApp (EApp (EVar "ffiStampModeOwned") (EVar "gctx")) (EVar "mid"))))
 (DTypeSig false "ffiStampModeOwned" (TyFun (TyCon "GraphCtx") (TyFun (TyCon "String") (TyCon "Bool"))))

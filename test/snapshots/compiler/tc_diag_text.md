@@ -1,5 +1,5 @@
 # META
-source_lines=1553
+source_lines=1554
 stages=DESUGAR,MARK
 # SOURCE
 -- tc_diag_text: the context-free message text of the typechecker: every message, help and fix
@@ -908,7 +908,8 @@ renderCallArg (EVarId n _) = Some n
 renderCallArg (EMethodAt n _ _) = Some n
 renderCallArg (EDictAt n _) = Some n
 renderCallArg (EUnOp "-" e _) = map ("-" ++ _) (renderCallArg e)
-renderCallArg _ = None
+renderCallArg (ELit _ | EUnOp _ _ _ | EApp _ _ | ELam _ _ | ELet _ _ _ _ _ | EMatch _ _ | EIf _ _ _ | EBinOp _ _ _ _ | EInfix _ _ _ | EFieldAccess _ _ _ | ETuple _ | EListLit _ | EArrayLit _ | ERangeList _ _ _ | ERangeArray _ _ _ | ESlice _ _ _ _ | ELetGroup _ _ | ESection _ | EIndex _ _ | EHeadAnnot _ _ | EBlock _ | EDo _ _ | EStringInterp _ | EGuards _ | ERecordCreate _ _ | ERecordUpdate _ _ _ | EVariantUpdate _ _ _ | EMapLit _ _ | ESetLit _ _ | EAsPat _ _ | EOrPat _ | EMethodRef _ | EDictApp _ | EVarAt _ _ | EDoOrigin _ _) =
+  None
 
 -- all-or-nothing render of every tuple element.
 export
@@ -1822,7 +1823,7 @@ dropAmbiguity = filterList (d => tcCode d /= TAmbiguousInstance)
 (DFunDef false "renderCallArg" ((PCon "EMethodAt" (PVar "n") PWild PWild)) (EApp (EVar "Some") (EVar "n")))
 (DFunDef false "renderCallArg" ((PCon "EDictAt" (PVar "n") PWild)) (EApp (EVar "Some") (EVar "n")))
 (DFunDef false "renderCallArg" ((PCon "EUnOp" (PLit (LString "-")) (PVar "e") PWild)) (EApp (EApp (EVar "map") (ELam ((PVar "_s")) (EBinOp "++" (ELit (LString "-")) (EVar "_s")))) (EApp (EVar "renderCallArg") (EVar "e"))))
-(DFunDef false "renderCallArg" (PWild) (EVar "None"))
+(DFunDef false "renderCallArg" ((POr (PCon "ELit" PWild) (PCon "EUnOp" PWild PWild PWild) (PCon "EApp" PWild PWild) (PCon "ELam" PWild PWild) (PCon "ELet" PWild PWild PWild PWild PWild) (PCon "EMatch" PWild PWild) (PCon "EIf" PWild PWild PWild) (PCon "EBinOp" PWild PWild PWild PWild) (PCon "EInfix" PWild PWild PWild) (PCon "EFieldAccess" PWild PWild PWild) (PCon "ETuple" PWild) (PCon "EListLit" PWild) (PCon "EArrayLit" PWild) (PCon "ERangeList" PWild PWild PWild) (PCon "ERangeArray" PWild PWild PWild) (PCon "ESlice" PWild PWild PWild PWild) (PCon "ELetGroup" PWild PWild) (PCon "ESection" PWild) (PCon "EIndex" PWild PWild) (PCon "EHeadAnnot" PWild PWild) (PCon "EBlock" PWild) (PCon "EDo" PWild PWild) (PCon "EStringInterp" PWild) (PCon "EGuards" PWild) (PCon "ERecordCreate" PWild PWild) (PCon "ERecordUpdate" PWild PWild PWild) (PCon "EVariantUpdate" PWild PWild PWild) (PCon "EMapLit" PWild PWild) (PCon "ESetLit" PWild PWild) (PCon "EAsPat" PWild PWild) (PCon "EOrPat" PWild) (PCon "EMethodRef" PWild) (PCon "EDictApp" PWild) (PCon "EVarAt" PWild PWild) (PCon "EDoOrigin" PWild PWild))) (EVar "None"))
 (DTypeSig true "renderCallArgs" (TyFun (TyApp (TyCon "List") (TyCon "Expr")) (TyApp (TyCon "Option") (TyApp (TyCon "List") (TyCon "String")))))
 (DFunDef false "renderCallArgs" ((PList)) (EApp (EVar "Some") (EListLit)))
 (DFunDef false "renderCallArgs" ((PCons (PVar "e") (PVar "rest"))) (EMatch (EApp (EVar "renderCallArg") (EVar "e")) (arm (PCon "None") () (EVar "None")) (arm (PCon "Some" (PVar "s")) () (EApp (EApp (EVar "map") (ELam ((PVar "_s")) (EBinOp "::" (EVar "s") (EVar "_s")))) (EApp (EVar "renderCallArgs") (EVar "rest"))))))
@@ -2297,7 +2298,7 @@ dropAmbiguity = filterList (d => tcCode d /= TAmbiguousInstance)
 (DFunDef false "renderCallArg" ((PCon "EMethodAt" (PVar "n") PWild PWild)) (EApp (EVar "Some") (EVar "n")))
 (DFunDef false "renderCallArg" ((PCon "EDictAt" (PVar "n") PWild)) (EApp (EVar "Some") (EVar "n")))
 (DFunDef false "renderCallArg" ((PCon "EUnOp" (PLit (LString "-")) (PVar "e") PWild)) (EApp (EApp (EMethodRef "map") (ELam ((PVar "_s")) (EBinOp "++" (ELit (LString "-")) (EVar "_s")))) (EApp (EVar "renderCallArg") (EVar "e"))))
-(DFunDef false "renderCallArg" (PWild) (EVar "None"))
+(DFunDef false "renderCallArg" ((POr (PCon "ELit" PWild) (PCon "EUnOp" PWild PWild PWild) (PCon "EApp" PWild PWild) (PCon "ELam" PWild PWild) (PCon "ELet" PWild PWild PWild PWild PWild) (PCon "EMatch" PWild PWild) (PCon "EIf" PWild PWild PWild) (PCon "EBinOp" PWild PWild PWild PWild) (PCon "EInfix" PWild PWild PWild) (PCon "EFieldAccess" PWild PWild PWild) (PCon "ETuple" PWild) (PCon "EListLit" PWild) (PCon "EArrayLit" PWild) (PCon "ERangeList" PWild PWild PWild) (PCon "ERangeArray" PWild PWild PWild) (PCon "ESlice" PWild PWild PWild PWild) (PCon "ELetGroup" PWild PWild) (PCon "ESection" PWild) (PCon "EIndex" PWild PWild) (PCon "EHeadAnnot" PWild PWild) (PCon "EBlock" PWild) (PCon "EDo" PWild PWild) (PCon "EStringInterp" PWild) (PCon "EGuards" PWild) (PCon "ERecordCreate" PWild PWild) (PCon "ERecordUpdate" PWild PWild PWild) (PCon "EVariantUpdate" PWild PWild PWild) (PCon "EMapLit" PWild PWild) (PCon "ESetLit" PWild PWild) (PCon "EAsPat" PWild PWild) (PCon "EOrPat" PWild) (PCon "EMethodRef" PWild) (PCon "EDictApp" PWild) (PCon "EVarAt" PWild PWild) (PCon "EDoOrigin" PWild PWild))) (EVar "None"))
 (DTypeSig true "renderCallArgs" (TyFun (TyApp (TyCon "List") (TyCon "Expr")) (TyApp (TyCon "Option") (TyApp (TyCon "List") (TyCon "String")))))
 (DFunDef false "renderCallArgs" ((PList)) (EApp (EVar "Some") (EListLit)))
 (DFunDef false "renderCallArgs" ((PCons (PVar "e") (PVar "rest"))) (EMatch (EApp (EVar "renderCallArg") (EVar "e")) (arm (PCon "None") () (EVar "None")) (arm (PCon "Some" (PVar "s")) () (EApp (EApp (EMethodRef "map") (ELam ((PVar "_s")) (EBinOp "::" (EVar "s") (EVar "_s")))) (EApp (EVar "renderCallArgs") (EVar "rest"))))))

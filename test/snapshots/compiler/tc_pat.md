@@ -1,5 +1,5 @@
 # META
-source_lines=617
+source_lines=618
 stages=DESUGAR,MARK
 # SOURCE
 -- tc_pat: pattern inference: literal, constructor, tuple, list, record and existential-opening
@@ -525,7 +525,8 @@ patOpensExistentials env (PCons h t) =
   patOpensExistentials env h || patOpensExistentials env t
 patOpensExistentials env (PAs _ _ _ p) = patOpensExistentials env p
 patOpensExistentials env (POr alts) = anyList (patOpensExistentials env) alts
-patOpensExistentials _env _ = False
+patOpensExistentials env (PAnn p _) = patOpensExistentials env p
+patOpensExistentials _env (PVar _ _ _ | PWild | PLit _ | PRng _ _ _) = False
 
 recPatFieldOpens : TcEnv -> RecPatField -> Bool
 recPatFieldOpens env (RecPatField _ _ _ (Some p)) = patOpensExistentials env p
@@ -747,7 +748,8 @@ recordLetBindType gctx (LetBind name _ _ bid, (_, summary)) =
 (DFunDef false "patOpensExistentials" ((PVar "env") (PCon "PCons" (PVar "h") (PVar "t"))) (EBinOp "||" (EApp (EApp (EVar "patOpensExistentials") (EVar "env")) (EVar "h")) (EApp (EApp (EVar "patOpensExistentials") (EVar "env")) (EVar "t"))))
 (DFunDef false "patOpensExistentials" ((PVar "env") (PCon "PAs" PWild PWild PWild (PVar "p"))) (EApp (EApp (EVar "patOpensExistentials") (EVar "env")) (EVar "p")))
 (DFunDef false "patOpensExistentials" ((PVar "env") (PCon "POr" (PVar "alts"))) (EApp (EApp (EVar "anyList") (EApp (EVar "patOpensExistentials") (EVar "env"))) (EVar "alts")))
-(DFunDef false "patOpensExistentials" ((PVar "_env") PWild) (EVar "False"))
+(DFunDef false "patOpensExistentials" ((PVar "env") (PCon "PAnn" (PVar "p") PWild)) (EApp (EApp (EVar "patOpensExistentials") (EVar "env")) (EVar "p")))
+(DFunDef false "patOpensExistentials" ((PVar "_env") (POr (PCon "PVar" PWild PWild PWild) (PCon "PWild") (PCon "PLit" PWild) (PCon "PRng" PWild PWild PWild))) (EVar "False"))
 (DTypeSig false "recPatFieldOpens" (TyFun (TyCon "TcEnv") (TyFun (TyCon "RecPatField") (TyCon "Bool"))))
 (DFunDef false "recPatFieldOpens" ((PVar "env") (PCon "RecPatField" PWild PWild PWild (PCon "Some" (PVar "p")))) (EApp (EApp (EVar "patOpensExistentials") (EVar "env")) (EVar "p")))
 (DFunDef false "recPatFieldOpens" ((PVar "_env") PWild) (EVar "False"))
@@ -899,7 +901,8 @@ recordLetBindType gctx (LetBind name _ _ bid, (_, summary)) =
 (DFunDef false "patOpensExistentials" ((PVar "env") (PCon "PCons" (PVar "h") (PVar "t"))) (EBinOp "||" (EApp (EApp (EVar "patOpensExistentials") (EVar "env")) (EVar "h")) (EApp (EApp (EVar "patOpensExistentials") (EVar "env")) (EVar "t"))))
 (DFunDef false "patOpensExistentials" ((PVar "env") (PCon "PAs" PWild PWild PWild (PVar "p"))) (EApp (EApp (EVar "patOpensExistentials") (EVar "env")) (EVar "p")))
 (DFunDef false "patOpensExistentials" ((PVar "env") (PCon "POr" (PVar "alts"))) (EApp (EApp (EVar "anyList") (EApp (EVar "patOpensExistentials") (EVar "env"))) (EVar "alts")))
-(DFunDef false "patOpensExistentials" ((PVar "_env") PWild) (EVar "False"))
+(DFunDef false "patOpensExistentials" ((PVar "env") (PCon "PAnn" (PVar "p") PWild)) (EApp (EApp (EVar "patOpensExistentials") (EVar "env")) (EVar "p")))
+(DFunDef false "patOpensExistentials" ((PVar "_env") (POr (PCon "PVar" PWild PWild PWild) (PCon "PWild") (PCon "PLit" PWild) (PCon "PRng" PWild PWild PWild))) (EVar "False"))
 (DTypeSig false "recPatFieldOpens" (TyFun (TyCon "TcEnv") (TyFun (TyCon "RecPatField") (TyCon "Bool"))))
 (DFunDef false "recPatFieldOpens" ((PVar "env") (PCon "RecPatField" PWild PWild PWild (PCon "Some" (PVar "p")))) (EApp (EApp (EVar "patOpensExistentials") (EVar "env")) (EVar "p")))
 (DFunDef false "recPatFieldOpens" ((PVar "_env") PWild) (EVar "False"))

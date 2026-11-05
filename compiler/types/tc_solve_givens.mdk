@@ -411,7 +411,7 @@ implReqDictVarOf gctx (Some request) m useScope = match peelQual m
       useScope
       (givensForScope gctx useScope)
   TApp a _ => implReqDictVarOf gctx (Some request) a useScope
-  _ => None
+  TCon _ _ | TRigid _ | TFun _ _ _ | TEff _ | TQual _ _ | TAuth _ => None
 
 -- #1177: A use site is resolved by its predicate, not by its constraint var'S ID.
 -- A function's slots are one per predicate, each carrying its variables' ids, so a

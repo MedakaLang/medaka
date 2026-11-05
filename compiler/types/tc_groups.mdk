@@ -276,7 +276,8 @@ isNonexpansive env (ERecordCreate _ fs) =
     (fa => match fa
       FieldAssign _ e => isNonexpansive env e)
     fs
-isNonexpansive _env _ = False
+isNonexpansive _env (ELet _ _ _ _ _ | EMatch _ _ | EIf _ _ _ | EBinOp _ _ _ _ | EUnOp _ _ _ | EInfix _ _ _ | EFieldAccess _ _ _ | EArrayLit _ | ERangeList _ _ _ | ERangeArray _ _ _ | ESlice _ _ _ _ | ELetGroup _ _ | ESection _ | EIndex _ _ | EBlock _ | EDo _ _ | EStringInterp _ | EGuards _ | ERecordUpdate _ _ _ | EVariantUpdate _ _ _ | EMapLit _ _ | ESetLit _ _ | EAsPat _ _ | EOrPat _ | EDictApp _ | EVarAt _ _ | ENumLit _ _ _ | EWideLit _ _ _ _) =
+  False
 
 -- Walk the left spine of an application to its head, testing EVERY argument met
 -- on the way, and finally test whether the head IS a constructor that is safe to
@@ -315,7 +316,8 @@ isCtorAppSpine env (EDoOrigin _ e) = isCtorAppSpine env e
 isCtorAppSpine env (EApp f x) = isCtorAppSpine env f && isNonexpansive env x
 isCtorAppSpine env (EVar name) = isDeclaredCtorHead env name
 isCtorAppSpine env (EVarId name _) = isDeclaredCtorHead env name
-isCtorAppSpine _env _ = False
+isCtorAppSpine _env (ELit _ | ELam _ _ | ELet _ _ _ _ _ | EMatch _ _ | EIf _ _ _ | EBinOp _ _ _ _ | EUnOp _ _ _ | EInfix _ _ _ | EFieldAccess _ _ _ | ETuple _ | EListLit _ | EArrayLit _ | ERangeList _ _ _ | ERangeArray _ _ _ | ESlice _ _ _ _ | ELetGroup _ _ | ESection _ | EIndex _ _ | EAnnot _ _ | EHeadAnnot _ _ | EBlock _ | EDo _ _ | EStringInterp _ | EGuards _ | ERecordCreate _ _ | ERecordUpdate _ _ _ | EVariantUpdate _ _ _ | EMapLit _ _ | ESetLit _ _ | EAsPat _ _ | EOrPat _ | EMethodRef _ | EDictApp _ | EVarAt _ _ | EMethodAt _ _ _ | EDictAt _ _ | ENumLit _ _ _ | EWideLit _ _ _ _) =
+  False
 
 -- The head test itself: `name` is a real, declared constructor and is not the
 -- `Ref` extern.  See `isCtorAppSpine`'s docblock for why `lookupCtor` is the
@@ -610,7 +612,8 @@ eagerRefs (EMapLit _ kvs) = flatMap eagerRefsPair kvs
 eagerRefs (ESetLit _ es) = flatMap eagerRefs es
 eagerRefs (ELoc _ e) = eagerRefs e
 eagerRefs (EDoOrigin _ e) = eagerRefs e
-eagerRefs _ = []
+eagerRefs (ELit _ | EMethodRef _ | EDictApp _ | EVarAt _ _ | ENumLit _ _ _ | EWideLit _ _ _ _ | ESection _) =
+  []
 
 eagerRefsLetBind : LetBind -> List String
 eagerRefsLetBind (LetBind _ clauses _ _) =
@@ -988,7 +991,8 @@ allEVars (ESection s) = sectionEVars s
 --   EVarAt             — minted by `annotateProgram`, which runs after typecheck.
 -- A new reference-bearing constructor therefore needs an arm above: falling to the
 -- catch-all silently drops a dependency edge rather than erroring.
-allEVars _ = []
+allEVars (EMethodRef _ | EDictApp _ | EVarAt _ _ | ENumLit _ _ _ | EWideLit _ _ _ _) =
+  []
 
 kvEVars : (Expr, Expr) -> List String
 kvEVars (k, v) = allEVars k ++ allEVars v

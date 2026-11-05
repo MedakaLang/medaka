@@ -250,7 +250,7 @@ polarityTyConNames (TyEffect _ _ t) acc = polarityTyConNames t acc
 polarityTyConNames (TyConstrained _ t) acc = polarityTyConNames t acc
 polarityTyConNames (TyNamed _ t _) acc = polarityTyConNames t acc
 polarityTyConNames (TyQual t _ _) acc = polarityTyConNames t acc
-polarityTyConNames _ acc = acc
+polarityTyConNames (TyVar _ | TyRow _ _ _ | TyAuth _ _) acc = acc
 
 declEnvPolarityFixGo : List (TabKey, List Polarity) ->
   List Decl ->

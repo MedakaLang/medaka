@@ -82,7 +82,8 @@ occurs id value = match normalize value
     Link _ => False
   TFun domain _ result => occurs id domain || occurs id result
   TApp head argument => occurs id head || occurs id argument
-  _ => False
+  TQual inner _ => occurs id inner
+  TCon _ _ | TRigid _ | TEff _ | TAuth _ => False
 
 freshType : Harness -> Unit -> Mono
 freshType harness () =

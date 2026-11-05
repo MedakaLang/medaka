@@ -2046,7 +2046,7 @@ export
 kindTypeOnly : Kind -> Bool
 kindTypeOnly KType = True
 kindTypeOnly (KArrow d r) = kindTypeOnly d && kindTypeOnly r
-kindTypeOnly _ = False
+kindTypeOnly (KRow | KAuth _ _) = False
 
 -- Two `Authority` kinds agree only on one label and one `*` (§6.1).
 export
@@ -2246,7 +2246,7 @@ kindJoin : Kind -> Kind -> Kind
 kindJoin (KArrow d1 r1) (KArrow d2 r2) =
   KArrow (kindJoin d1 d2) (kindJoin r1 r2)
 kindJoin KType b = b
-kindJoin a _ = a
+kindJoin (a@(KRow | KAuth _ _ | KArrow _ _)) _ = a
 
 sameVarKinds : List (String, Kind) -> List (String, Kind) -> Bool
 sameVarKinds ((a, ka) :: as2) ((b, kb) :: bs) =
@@ -2286,7 +2286,7 @@ constraintHeadsIn (TyTuple ts) = flatMap constraintHeadsIn ts
 constraintHeadsIn (TyEffect _ _ t) = constraintHeadsIn t
 constraintHeadsIn (TyNamed _ t _) = constraintHeadsIn t
 constraintHeadsIn (TyQual t _ _) = constraintHeadsIn t
-constraintHeadsIn _ = []
+constraintHeadsIn (TyCon {  } | TyVar _ | TyRow _ _ _ | TyAuth _ _) = []
 
 -- A constructor kind: an arrow over `Type`.
 export

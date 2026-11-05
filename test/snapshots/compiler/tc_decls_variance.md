@@ -254,7 +254,7 @@ polarityTyConNames (TyEffect _ _ t) acc = polarityTyConNames t acc
 polarityTyConNames (TyConstrained _ t) acc = polarityTyConNames t acc
 polarityTyConNames (TyNamed _ t _) acc = polarityTyConNames t acc
 polarityTyConNames (TyQual t _ _) acc = polarityTyConNames t acc
-polarityTyConNames _ acc = acc
+polarityTyConNames (TyVar _ | TyRow _ _ _ | TyAuth _ _) acc = acc
 
 declEnvPolarityFixGo : List (TabKey, List Polarity) ->
   List Decl ->
@@ -632,7 +632,7 @@ declPolarityKeys (_ :: rest) = declPolarityKeys rest
 (DFunDef false "polarityTyConNames" ((PCon "TyConstrained" PWild (PVar "t")) (PVar "acc")) (EApp (EApp (EVar "polarityTyConNames") (EVar "t")) (EVar "acc")))
 (DFunDef false "polarityTyConNames" ((PCon "TyNamed" PWild (PVar "t") PWild) (PVar "acc")) (EApp (EApp (EVar "polarityTyConNames") (EVar "t")) (EVar "acc")))
 (DFunDef false "polarityTyConNames" ((PCon "TyQual" (PVar "t") PWild PWild) (PVar "acc")) (EApp (EApp (EVar "polarityTyConNames") (EVar "t")) (EVar "acc")))
-(DFunDef false "polarityTyConNames" (PWild (PVar "acc")) (EVar "acc"))
+(DFunDef false "polarityTyConNames" ((POr (PCon "TyVar" PWild) (PCon "TyRow" PWild PWild PWild) (PCon "TyAuth" PWild PWild)) (PVar "acc")) (EVar "acc"))
 (DTypeSig false "declEnvPolarityFixGo" (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "TabKey") (TyApp (TyCon "List") (TyCon "Polarity")))) (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyFun (TyCon "Int") (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "TabKey") (TyApp (TyCon "List") (TyCon "Polarity")))) (TyApp (TyCon "List") (TyTuple (TyCon "TabKey") (TyApp (TyCon "List") (TyCon "Polarity")))))))))
 (DFunDef false "declEnvPolarityFixGo" ((PVar "base") (PVar "ds") (PVar "fuel") (PVar "prev")) (EIf (EBinOp "<=" (EVar "fuel") (ELit (LInt 0))) (EApp (EApp (EVar "map") (ELam ((PVar "e")) (ETuple (EApp (EVar "fst") (EVar "e")) (EApp (EApp (EVar "map") (ELam (PWild) (EVar "PInv"))) (EApp (EVar "snd") (EVar "e")))))) (EVar "prev")) (EBlock (DoLet false false (PVar "next") (EApp (EApp (EVar "declEnvPolarityEntries") (EBinOp "++" (EVar "prev") (EVar "base"))) (EVar "ds"))) (DoExpr (EIf (EApp (EApp (EVar "polarityEntriesEq") (EVar "prev")) (EVar "next")) (EVar "prev") (EApp (EApp (EApp (EApp (EVar "declEnvPolarityFixGo") (EVar "base")) (EVar "ds")) (EBinOp "-" (EVar "fuel") (ELit (LInt 1)))) (EVar "next")))))))
 (DTypeSig false "publishedPolarity" (TyFun (TyCon "Polarity") (TyCon "Polarity")))
@@ -771,7 +771,7 @@ declPolarityKeys (_ :: rest) = declPolarityKeys rest
 (DFunDef false "polarityTyConNames" ((PCon "TyConstrained" PWild (PVar "t")) (PVar "acc")) (EApp (EApp (EVar "polarityTyConNames") (EVar "t")) (EVar "acc")))
 (DFunDef false "polarityTyConNames" ((PCon "TyNamed" PWild (PVar "t") PWild) (PVar "acc")) (EApp (EApp (EVar "polarityTyConNames") (EVar "t")) (EVar "acc")))
 (DFunDef false "polarityTyConNames" ((PCon "TyQual" (PVar "t") PWild PWild) (PVar "acc")) (EApp (EApp (EVar "polarityTyConNames") (EVar "t")) (EVar "acc")))
-(DFunDef false "polarityTyConNames" (PWild (PVar "acc")) (EVar "acc"))
+(DFunDef false "polarityTyConNames" ((POr (PCon "TyVar" PWild) (PCon "TyRow" PWild PWild PWild) (PCon "TyAuth" PWild PWild)) (PVar "acc")) (EVar "acc"))
 (DTypeSig false "declEnvPolarityFixGo" (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "TabKey") (TyApp (TyCon "List") (TyCon "Polarity")))) (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyFun (TyCon "Int") (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "TabKey") (TyApp (TyCon "List") (TyCon "Polarity")))) (TyApp (TyCon "List") (TyTuple (TyCon "TabKey") (TyApp (TyCon "List") (TyCon "Polarity")))))))))
 (DFunDef false "declEnvPolarityFixGo" ((PVar "base") (PVar "ds") (PVar "fuel") (PVar "prev")) (EIf (EBinOp "<=" (EVar "fuel") (ELit (LInt 0))) (EApp (EApp (EMethodRef "map") (ELam ((PVar "e")) (ETuple (EApp (EVar "fst") (EVar "e")) (EApp (EApp (EMethodRef "map") (ELam (PWild) (EVar "PInv"))) (EApp (EVar "snd") (EVar "e")))))) (EVar "prev")) (EBlock (DoLet false false (PVar "next") (EApp (EApp (EVar "declEnvPolarityEntries") (EBinOp "++" (EVar "prev") (EVar "base"))) (EVar "ds"))) (DoExpr (EIf (EApp (EApp (EVar "polarityEntriesEq") (EVar "prev")) (EVar "next")) (EVar "prev") (EApp (EApp (EApp (EApp (EVar "declEnvPolarityFixGo") (EVar "base")) (EVar "ds")) (EBinOp "-" (EVar "fuel") (ELit (LInt 1)))) (EVar "next")))))))
 (DTypeSig false "publishedPolarity" (TyFun (TyCon "Polarity") (TyCon "Polarity")))

@@ -88,6 +88,7 @@ import frontend.ast.{
   Constraint(..),
   Decl(..),
   EffAtomTy(..),
+  EffParamTy(..),
   EvId(..),
   Expr(..),
   IfaceMethod(..),
@@ -96,7 +97,9 @@ import frontend.ast.{
   Ty(..),
   UseMember(..),
   UsePath(..),
+  binderDomainSurface,
   effAtomSurface,
+  effParamSurface,
 }
 import types.repr.{
   IfaceRef(..), Mono(..), lookupAssocI, normalize, ppMono, ppTy
@@ -1832,6 +1835,16 @@ tyAlphaGo m (TyConstrained c1 a) (TyConstrained c2 b)
 tyAlphaGo m (TyRow e1 t1 _) (TyRow e2 t2 _)
   | sameWrittenAtoms e1 e2 && t1 == t2 = Some m
   | otherwise = None
+tyAlphaGo m (TyNamed n1 a d1) (TyNamed n2 b d2)
+  | n1 == n2 && binderDomainSurface d1 == binderDomainSurface d2 =
+    tyAlphaGo m a b
+  | otherwise = None
+tyAlphaGo m (TyQual a q1 _) (TyQual b q2 _)
+  | sameWrittenParams q1 q2 = tyAlphaGo m a b
+  | otherwise = None
+tyAlphaGo m (TyAuth q1 _) (TyAuth q2 _)
+  | sameWrittenParams q1 q2 = Some m
+  | otherwise = None
 tyAlphaGo _ _ _ = None
 
 -- Two written rows agree when their atoms spell the same; the declaration
@@ -1839,6 +1852,11 @@ tyAlphaGo _ _ _ = None
 sameWrittenAtoms : List EffAtomTy -> List EffAtomTy -> Bool
 sameWrittenAtoms e1 e2 =
   map (effAtomSurface escStr) e1 == map (effAtomSurface escStr) e2
+
+-- Two written authority terms agree when they spell the same.
+sameWrittenParams : List EffParamTy -> List EffParamTy -> Bool
+sameWrittenParams q1 q2 =
+  map (effParamSurface escStr) q1 == map (effParamSurface escStr) q2
 
 tyAlphaList : List (String, String) ->
   List Ty ->

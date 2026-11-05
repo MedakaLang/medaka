@@ -152,7 +152,7 @@ variablesInto (FrozenJoin members) vars =
   fold (acc m => variablesInto m acc) vars members
 variablesInto (FrozenProduct axes) vars =
   fold (acc a => variablesInto (snd a) acc) vars axes
-variablesInto _ vars = vars
+variablesInto (FrozenConst _) vars = vars
 
 variableName : FrozenVariable -> String
 variableName v = match v.sourceName

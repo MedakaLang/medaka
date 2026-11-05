@@ -58,7 +58,7 @@ authLevelOf (AVar cell) = authvarLevel cell
 authLevelOf (AJoin ms) = fold (acc m => max acc (authLevelOf m)) 0 ms
 authLevelOf (AProduct axes) =
   fold (acc a => max acc (authLevelOf (snd a))) 0 axes
-authLevelOf _ = 0
+authLevelOf (AConst _) = 0
 
 export
 authvarDomain : Ref Authvar -> Param
@@ -261,7 +261,7 @@ authRetag : Param -> Authority -> Authority
 authRetag top a = match authNorm a
   AConst p => AConst (retagParam top p)
   AJoin ms => authJoinAll (map (authRetag top) ms)
-  other => other
+  other@(AVar _ | AProduct _) => other
 
 -- A value's abstraction may over-approximate it, so a value whose authority
 -- would hold more than `setCardCap` constants is folded by the domain join
@@ -434,7 +434,7 @@ projectAxis schema name lo = match authNorm lo
         _ => None)
       (Some (AJoin []))
       ms
-  _ => None
+  AVar _ | AConst _ => None
 
 constantsOf : List Authority -> List Param
 constantsOf [] = []

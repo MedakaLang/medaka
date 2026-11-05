@@ -222,7 +222,7 @@ variableIds : FrozenAuthority -> List Int
 variableIds (FrozenVar v) = [v.localId]
 variableIds (FrozenJoin members) = flatMap variableIds members
 variableIds (FrozenProduct axes) = flatMap (a => variableIds (snd a)) axes
-variableIds _ = []
+variableIds (FrozenConst _) = []
 
 test "freeze follows aliases, retains joins and products, and shares local variable identity across the batch" =
   let cell = Ref (AUnbound 80 0 (PPrefix None) True (Some "path"))

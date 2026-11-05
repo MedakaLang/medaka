@@ -115,7 +115,7 @@ runtimeTypeOf isCell (TVar cell) = match !cell
 runtimeTypeOf isCell (TQual inner _) = runtimeTypeOf isCell inner
 runtimeTypeOf isCell (TCon n o) = headRuntimeType isCell n o
 runtimeTypeOf isCell (TApp f _) = appliedRuntimeType isCell f
-runtimeTypeOf _ _ = RTValue
+runtimeTypeOf _ (TRigid _ | TFun _ _ _ | TEff _ | TAuth _) = RTValue
 
 -- An applied type is a cell when its head is; a scalar head never takes
 -- arguments, and a variable head (`f a`) fixes nothing.
@@ -128,7 +128,7 @@ appliedRuntimeType isCell (TApp f _) = appliedRuntimeType isCell f
 appliedRuntimeType isCell (TCon n o) = match headRuntimeType isCell n o
   RTCon => RTCon
   _ => RTValue
-appliedRuntimeType _ _ = RTValue
+appliedRuntimeType _ (TRigid _ | TFun _ _ _ | TEff _ | TAuth _) = RTValue
 
 headRuntimeType : (String -> TyConOrigin -> Bool) ->
   String ->
@@ -233,13 +233,13 @@ runtimeTypeFromName _ = None
 (DFunDef false "runtimeTypeOf" ((PVar "isCell") (PCon "TQual" (PVar "inner") PWild)) (EApp (EApp (EVar "runtimeTypeOf") (EVar "isCell")) (EVar "inner")))
 (DFunDef false "runtimeTypeOf" ((PVar "isCell") (PCon "TCon" (PVar "n") (PVar "o"))) (EApp (EApp (EApp (EVar "headRuntimeType") (EVar "isCell")) (EVar "n")) (EVar "o")))
 (DFunDef false "runtimeTypeOf" ((PVar "isCell") (PCon "TApp" (PVar "f") PWild)) (EApp (EApp (EVar "appliedRuntimeType") (EVar "isCell")) (EVar "f")))
-(DFunDef false "runtimeTypeOf" (PWild PWild) (EVar "RTValue"))
+(DFunDef false "runtimeTypeOf" (PWild (POr (PCon "TRigid" PWild) (PCon "TFun" PWild PWild PWild) (PCon "TEff" PWild) (PCon "TAuth" PWild))) (EVar "RTValue"))
 (DTypeSig false "appliedRuntimeType" (TyFun (TyFun (TyCon "String") (TyFun (TyCon "TyConOrigin") (TyCon "Bool"))) (TyFun (TyCon "Mono") (TyCon "RuntimeType"))))
 (DFunDef false "appliedRuntimeType" ((PVar "isCell") (PCon "TVar" (PVar "cell"))) (EMatch (EUnOp "!" (EVar "cell")) (arm (PCon "Link" (PVar "t")) () (EApp (EApp (EVar "appliedRuntimeType") (EVar "isCell")) (EVar "t"))) (arm (PCon "Unbound" PWild PWild) () (EVar "RTValue"))))
 (DFunDef false "appliedRuntimeType" ((PVar "isCell") (PCon "TQual" (PVar "inner") PWild)) (EApp (EApp (EVar "appliedRuntimeType") (EVar "isCell")) (EVar "inner")))
 (DFunDef false "appliedRuntimeType" ((PVar "isCell") (PCon "TApp" (PVar "f") PWild)) (EApp (EApp (EVar "appliedRuntimeType") (EVar "isCell")) (EVar "f")))
 (DFunDef false "appliedRuntimeType" ((PVar "isCell") (PCon "TCon" (PVar "n") (PVar "o"))) (EMatch (EApp (EApp (EApp (EVar "headRuntimeType") (EVar "isCell")) (EVar "n")) (EVar "o")) (arm (PCon "RTCon") () (EVar "RTCon")) (arm PWild () (EVar "RTValue"))))
-(DFunDef false "appliedRuntimeType" (PWild PWild) (EVar "RTValue"))
+(DFunDef false "appliedRuntimeType" (PWild (POr (PCon "TRigid" PWild) (PCon "TFun" PWild PWild PWild) (PCon "TEff" PWild) (PCon "TAuth" PWild))) (EVar "RTValue"))
 (DTypeSig false "headRuntimeType" (TyFun (TyFun (TyCon "String") (TyFun (TyCon "TyConOrigin") (TyCon "Bool"))) (TyFun (TyCon "String") (TyFun (TyCon "TyConOrigin") (TyCon "RuntimeType")))))
 (DFunDef false "headRuntimeType" (PWild (PVar "n") (PCon "OriginBuiltin")) (EApp (EVar "builtinRuntimeType") (EVar "n")))
 (DFunDef false "headRuntimeType" ((PVar "isCell") (PVar "n") (PVar "o")) (EIf (EApp (EApp (EVar "isCell") (EVar "n")) (EVar "o")) (EVar "RTCon") (EVar "RTValue")))
@@ -318,13 +318,13 @@ runtimeTypeFromName _ = None
 (DFunDef false "runtimeTypeOf" ((PVar "isCell") (PCon "TQual" (PVar "inner") PWild)) (EApp (EApp (EVar "runtimeTypeOf") (EVar "isCell")) (EVar "inner")))
 (DFunDef false "runtimeTypeOf" ((PVar "isCell") (PCon "TCon" (PVar "n") (PVar "o"))) (EApp (EApp (EApp (EVar "headRuntimeType") (EVar "isCell")) (EVar "n")) (EVar "o")))
 (DFunDef false "runtimeTypeOf" ((PVar "isCell") (PCon "TApp" (PVar "f") PWild)) (EApp (EApp (EVar "appliedRuntimeType") (EVar "isCell")) (EVar "f")))
-(DFunDef false "runtimeTypeOf" (PWild PWild) (EVar "RTValue"))
+(DFunDef false "runtimeTypeOf" (PWild (POr (PCon "TRigid" PWild) (PCon "TFun" PWild PWild PWild) (PCon "TEff" PWild) (PCon "TAuth" PWild))) (EVar "RTValue"))
 (DTypeSig false "appliedRuntimeType" (TyFun (TyFun (TyCon "String") (TyFun (TyCon "TyConOrigin") (TyCon "Bool"))) (TyFun (TyCon "Mono") (TyCon "RuntimeType"))))
 (DFunDef false "appliedRuntimeType" ((PVar "isCell") (PCon "TVar" (PVar "cell"))) (EMatch (EUnOp "!" (EVar "cell")) (arm (PCon "Link" (PVar "t")) () (EApp (EApp (EVar "appliedRuntimeType") (EVar "isCell")) (EVar "t"))) (arm (PCon "Unbound" PWild PWild) () (EVar "RTValue"))))
 (DFunDef false "appliedRuntimeType" ((PVar "isCell") (PCon "TQual" (PVar "inner") PWild)) (EApp (EApp (EVar "appliedRuntimeType") (EVar "isCell")) (EVar "inner")))
 (DFunDef false "appliedRuntimeType" ((PVar "isCell") (PCon "TApp" (PVar "f") PWild)) (EApp (EApp (EVar "appliedRuntimeType") (EVar "isCell")) (EVar "f")))
 (DFunDef false "appliedRuntimeType" ((PVar "isCell") (PCon "TCon" (PVar "n") (PVar "o"))) (EMatch (EApp (EApp (EApp (EVar "headRuntimeType") (EVar "isCell")) (EVar "n")) (EVar "o")) (arm (PCon "RTCon") () (EVar "RTCon")) (arm PWild () (EVar "RTValue"))))
-(DFunDef false "appliedRuntimeType" (PWild PWild) (EVar "RTValue"))
+(DFunDef false "appliedRuntimeType" (PWild (POr (PCon "TRigid" PWild) (PCon "TFun" PWild PWild PWild) (PCon "TEff" PWild) (PCon "TAuth" PWild))) (EVar "RTValue"))
 (DTypeSig false "headRuntimeType" (TyFun (TyFun (TyCon "String") (TyFun (TyCon "TyConOrigin") (TyCon "Bool"))) (TyFun (TyCon "String") (TyFun (TyCon "TyConOrigin") (TyCon "RuntimeType")))))
 (DFunDef false "headRuntimeType" (PWild (PVar "n") (PCon "OriginBuiltin")) (EApp (EVar "builtinRuntimeType") (EVar "n")))
 (DFunDef false "headRuntimeType" ((PVar "isCell") (PVar "n") (PVar "o")) (EIf (EApp (EApp (EVar "isCell") (EVar "n")) (EVar "o")) (EVar "RTCon") (EVar "RTValue")))

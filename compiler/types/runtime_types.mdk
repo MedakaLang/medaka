@@ -111,7 +111,7 @@ runtimeTypeOf isCell (TVar cell) = match !cell
 runtimeTypeOf isCell (TQual inner _) = runtimeTypeOf isCell inner
 runtimeTypeOf isCell (TCon n o) = headRuntimeType isCell n o
 runtimeTypeOf isCell (TApp f _) = appliedRuntimeType isCell f
-runtimeTypeOf _ _ = RTValue
+runtimeTypeOf _ (TRigid _ | TFun _ _ _ | TEff _ | TAuth _) = RTValue
 
 -- An applied type is a cell when its head is; a scalar head never takes
 -- arguments, and a variable head (`f a`) fixes nothing.
@@ -124,7 +124,7 @@ appliedRuntimeType isCell (TApp f _) = appliedRuntimeType isCell f
 appliedRuntimeType isCell (TCon n o) = match headRuntimeType isCell n o
   RTCon => RTCon
   _ => RTValue
-appliedRuntimeType _ _ = RTValue
+appliedRuntimeType _ (TRigid _ | TFun _ _ _ | TEff _ | TAuth _) = RTValue
 
 headRuntimeType : (String -> TyConOrigin -> Bool) ->
   String ->

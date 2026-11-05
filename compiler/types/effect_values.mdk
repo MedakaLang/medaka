@@ -60,7 +60,7 @@ freshShape ops (TEff _) = TEff (ops.vjoFreshRow ())
 freshShape ops (TAuth q) = TAuth (ops.vjoFreshAuth (authDomainTop q))
 freshShape ops (TQual inner q) =
   TQual (freshShape ops inner) (ops.vjoFreshAuth (authDomainTop q))
-freshShape _ t = t
+freshShape _ (t@(TVar _ | TCon _ _ | TRigid _)) = t
 
 freshApplicationHead : ValueJoinOps c -> Mono -> Mono
 freshApplicationHead ops head = match normalize head
@@ -77,7 +77,7 @@ occursIn id value = match normalize value
   TFun domain _ result => occursIn id domain || occursIn id result
   TApp head argument => occursIn id head || occursIn id argument
   TQual inner _ => occursIn id inner
-  _ => False
+  TCon _ _ | TRigid _ | TEff _ | TAuth _ => False
 
 concreteWitness : List (c, Mono) -> Option Mono
 concreteWitness [] = None

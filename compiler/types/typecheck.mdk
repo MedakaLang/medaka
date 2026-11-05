@@ -1351,7 +1351,8 @@ deAliasMethodMembers rows (DAttrib attrs d) =
   DAttrib attrs (deAliasMethodMembers rows d)
 deAliasMethodMembers rows (DUse pub (UseGroup quals ms) loc) =
   DUse pub (UseGroup quals (map (deAliasMethodMember rows) ms)) loc
-deAliasMethodMembers _ d = d
+deAliasMethodMembers _ (d@(DUse _ _ _ | DTypeSig _ _ _ _ | DExtern _ | DFunDef _ _ _ _ _ _ | DData {  } | DEffect _ _ _ _ _ _ | DProp _ _ _ _ | DTest _ _ _ | DInterface {  } | DImpl {  } | DTypeAlias {  } | DNewtype {  } | DLetGroup _ _)) =
+  d
 
 deAliasMethodMember : List (String, String) -> UseMember -> UseMember
 deAliasMethodMember rows (m@(UseMember n allCtors loc (Some local)))

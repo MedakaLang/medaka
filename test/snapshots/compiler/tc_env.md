@@ -2050,7 +2050,7 @@ export
 kindTypeOnly : Kind -> Bool
 kindTypeOnly KType = True
 kindTypeOnly (KArrow d r) = kindTypeOnly d && kindTypeOnly r
-kindTypeOnly _ = False
+kindTypeOnly (KRow | KAuth _ _) = False
 
 -- Two `Authority` kinds agree only on one label and one `*` (§6.1).
 export
@@ -2250,7 +2250,7 @@ kindJoin : Kind -> Kind -> Kind
 kindJoin (KArrow d1 r1) (KArrow d2 r2) =
   KArrow (kindJoin d1 d2) (kindJoin r1 r2)
 kindJoin KType b = b
-kindJoin a _ = a
+kindJoin (a@(KRow | KAuth _ _ | KArrow _ _)) _ = a
 
 sameVarKinds : List (String, Kind) -> List (String, Kind) -> Bool
 sameVarKinds ((a, ka) :: as2) ((b, kb) :: bs) =
@@ -2290,7 +2290,7 @@ constraintHeadsIn (TyTuple ts) = flatMap constraintHeadsIn ts
 constraintHeadsIn (TyEffect _ _ t) = constraintHeadsIn t
 constraintHeadsIn (TyNamed _ t _) = constraintHeadsIn t
 constraintHeadsIn (TyQual t _ _) = constraintHeadsIn t
-constraintHeadsIn _ = []
+constraintHeadsIn (TyCon {  } | TyVar _ | TyRow _ _ _ | TyAuth _ _) = []
 
 -- A constructor kind: an arrow over `Type`.
 export
@@ -4818,7 +4818,7 @@ methodRowSameNameView rows =
 (DTypeSig true "kindTypeOnly" (TyFun (TyCon "Kind") (TyCon "Bool")))
 (DFunDef false "kindTypeOnly" ((PCon "KType")) (EVar "True"))
 (DFunDef false "kindTypeOnly" ((PCon "KArrow" (PVar "d") (PVar "r"))) (EBinOp "&&" (EApp (EVar "kindTypeOnly") (EVar "d")) (EApp (EVar "kindTypeOnly") (EVar "r"))))
-(DFunDef false "kindTypeOnly" (PWild) (EVar "False"))
+(DFunDef false "kindTypeOnly" ((POr (PCon "KRow") (PCon "KAuth" PWild PWild))) (EVar "False"))
 (DTypeSig true "kindEq" (TyFun (TyCon "Kind") (TyFun (TyCon "Kind") (TyCon "Bool"))))
 (DFunDef false "kindEq" ((PCon "KType") (PCon "KType")) (EVar "True"))
 (DFunDef false "kindEq" ((PCon "KRow") (PCon "KRow")) (EVar "True"))
@@ -4871,7 +4871,7 @@ methodRowSameNameView rows =
 (DTypeSig false "kindJoin" (TyFun (TyCon "Kind") (TyFun (TyCon "Kind") (TyCon "Kind"))))
 (DFunDef false "kindJoin" ((PCon "KArrow" (PVar "d1") (PVar "r1")) (PCon "KArrow" (PVar "d2") (PVar "r2"))) (EApp (EApp (EVar "KArrow") (EApp (EApp (EVar "kindJoin") (EVar "d1")) (EVar "d2"))) (EApp (EApp (EVar "kindJoin") (EVar "r1")) (EVar "r2"))))
 (DFunDef false "kindJoin" ((PCon "KType") (PVar "b")) (EVar "b"))
-(DFunDef false "kindJoin" ((PVar "a") PWild) (EVar "a"))
+(DFunDef false "kindJoin" ((PAs "a" (POr (PCon "KRow") (PCon "KAuth" PWild PWild) (PCon "KArrow" PWild PWild))) PWild) (EVar "a"))
 (DTypeSig false "sameVarKinds" (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "Kind"))) (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "Kind"))) (TyCon "Bool"))))
 (DFunDef false "sameVarKinds" ((PCons (PTuple (PVar "a") (PVar "ka")) (PVar "as2")) (PCons (PTuple (PVar "b") (PVar "kb")) (PVar "bs"))) (EBinOp "&&" (EBinOp "&&" (EBinOp "==" (EVar "a") (EVar "b")) (EApp (EApp (EVar "kindEq") (EVar "ka")) (EVar "kb"))) (EApp (EApp (EVar "sameVarKinds") (EVar "as2")) (EVar "bs"))))
 (DFunDef false "sameVarKinds" ((PList) (PList)) (EVar "True"))
@@ -4896,7 +4896,7 @@ methodRowSameNameView rows =
 (DFunDef false "constraintHeadsIn" ((PCon "TyEffect" PWild PWild (PVar "t"))) (EApp (EVar "constraintHeadsIn") (EVar "t")))
 (DFunDef false "constraintHeadsIn" ((PCon "TyNamed" PWild (PVar "t") PWild)) (EApp (EVar "constraintHeadsIn") (EVar "t")))
 (DFunDef false "constraintHeadsIn" ((PCon "TyQual" (PVar "t") PWild PWild)) (EApp (EVar "constraintHeadsIn") (EVar "t")))
-(DFunDef false "constraintHeadsIn" (PWild) (EListLit))
+(DFunDef false "constraintHeadsIn" ((POr (PRec "TyCon" () false) (PCon "TyVar" PWild) (PCon "TyRow" PWild PWild PWild) (PCon "TyAuth" PWild PWild))) (EListLit))
 (DTypeSig true "kindHasArrow" (TyFun (TyCon "Kind") (TyCon "Bool")))
 (DFunDef false "kindHasArrow" ((PCon "KArrow" (PVar "d") (PVar "r"))) (EApp (EVar "kindTypeOnly") (EApp (EApp (EVar "KArrow") (EVar "d")) (EVar "r"))))
 (DFunDef false "kindHasArrow" (PWild) (EVar "False"))
@@ -5679,7 +5679,7 @@ methodRowSameNameView rows =
 (DTypeSig true "kindTypeOnly" (TyFun (TyCon "Kind") (TyCon "Bool")))
 (DFunDef false "kindTypeOnly" ((PCon "KType")) (EVar "True"))
 (DFunDef false "kindTypeOnly" ((PCon "KArrow" (PVar "d") (PVar "r"))) (EBinOp "&&" (EApp (EVar "kindTypeOnly") (EVar "d")) (EApp (EVar "kindTypeOnly") (EVar "r"))))
-(DFunDef false "kindTypeOnly" (PWild) (EVar "False"))
+(DFunDef false "kindTypeOnly" ((POr (PCon "KRow") (PCon "KAuth" PWild PWild))) (EVar "False"))
 (DTypeSig true "kindEq" (TyFun (TyCon "Kind") (TyFun (TyCon "Kind") (TyCon "Bool"))))
 (DFunDef false "kindEq" ((PCon "KType") (PCon "KType")) (EVar "True"))
 (DFunDef false "kindEq" ((PCon "KRow") (PCon "KRow")) (EVar "True"))
@@ -5732,7 +5732,7 @@ methodRowSameNameView rows =
 (DTypeSig false "kindJoin" (TyFun (TyCon "Kind") (TyFun (TyCon "Kind") (TyCon "Kind"))))
 (DFunDef false "kindJoin" ((PCon "KArrow" (PVar "d1") (PVar "r1")) (PCon "KArrow" (PVar "d2") (PVar "r2"))) (EApp (EApp (EVar "KArrow") (EApp (EApp (EVar "kindJoin") (EVar "d1")) (EVar "d2"))) (EApp (EApp (EVar "kindJoin") (EVar "r1")) (EVar "r2"))))
 (DFunDef false "kindJoin" ((PCon "KType") (PVar "b")) (EVar "b"))
-(DFunDef false "kindJoin" ((PVar "a") PWild) (EVar "a"))
+(DFunDef false "kindJoin" ((PAs "a" (POr (PCon "KRow") (PCon "KAuth" PWild PWild) (PCon "KArrow" PWild PWild))) PWild) (EVar "a"))
 (DTypeSig false "sameVarKinds" (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "Kind"))) (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "Kind"))) (TyCon "Bool"))))
 (DFunDef false "sameVarKinds" ((PCons (PTuple (PVar "a") (PVar "ka")) (PVar "as2")) (PCons (PTuple (PVar "b") (PVar "kb")) (PVar "bs"))) (EBinOp "&&" (EBinOp "&&" (EBinOp "==" (EVar "a") (EVar "b")) (EApp (EApp (EVar "kindEq") (EVar "ka")) (EVar "kb"))) (EApp (EApp (EVar "sameVarKinds") (EVar "as2")) (EVar "bs"))))
 (DFunDef false "sameVarKinds" ((PList) (PList)) (EVar "True"))
@@ -5757,7 +5757,7 @@ methodRowSameNameView rows =
 (DFunDef false "constraintHeadsIn" ((PCon "TyEffect" PWild PWild (PVar "t"))) (EApp (EVar "constraintHeadsIn") (EVar "t")))
 (DFunDef false "constraintHeadsIn" ((PCon "TyNamed" PWild (PVar "t") PWild)) (EApp (EVar "constraintHeadsIn") (EVar "t")))
 (DFunDef false "constraintHeadsIn" ((PCon "TyQual" (PVar "t") PWild PWild)) (EApp (EVar "constraintHeadsIn") (EVar "t")))
-(DFunDef false "constraintHeadsIn" (PWild) (EListLit))
+(DFunDef false "constraintHeadsIn" ((POr (PRec "TyCon" () false) (PCon "TyVar" PWild) (PCon "TyRow" PWild PWild PWild) (PCon "TyAuth" PWild PWild))) (EListLit))
 (DTypeSig true "kindHasArrow" (TyFun (TyCon "Kind") (TyCon "Bool")))
 (DFunDef false "kindHasArrow" ((PCon "KArrow" (PVar "d") (PVar "r"))) (EApp (EVar "kindTypeOnly") (EApp (EApp (EVar "KArrow") (EVar "d")) (EVar "r"))))
 (DFunDef false "kindHasArrow" (PWild) (EVar "False"))

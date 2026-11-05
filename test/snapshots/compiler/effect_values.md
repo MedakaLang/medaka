@@ -64,7 +64,7 @@ freshShape ops (TEff _) = TEff (ops.vjoFreshRow ())
 freshShape ops (TAuth q) = TAuth (ops.vjoFreshAuth (authDomainTop q))
 freshShape ops (TQual inner q) =
   TQual (freshShape ops inner) (ops.vjoFreshAuth (authDomainTop q))
-freshShape _ t = t
+freshShape _ (t@(TVar _ | TCon _ _ | TRigid _)) = t
 
 freshApplicationHead : ValueJoinOps c -> Mono -> Mono
 freshApplicationHead ops head = match normalize head
@@ -81,7 +81,7 @@ occursIn id value = match normalize value
   TFun domain _ result => occursIn id domain || occursIn id result
   TApp head argument => occursIn id head || occursIn id argument
   TQual inner _ => occursIn id inner
-  _ => False
+  TCon _ _ | TRigid _ | TEff _ | TAuth _ => False
 
 concreteWitness : List (c, Mono) -> Option Mono
 concreteWitness [] = None
@@ -290,11 +290,11 @@ qualAuth value = match normalize value
 (DFunDef false "freshShape" ((PVar "ops") (PCon "TEff" PWild)) (EApp (EVar "TEff") (EApp (EFieldAccess (EVar "ops") "vjoFreshRow") (ELit LUnit))))
 (DFunDef false "freshShape" ((PVar "ops") (PCon "TAuth" (PVar "q"))) (EApp (EVar "TAuth") (EApp (EFieldAccess (EVar "ops") "vjoFreshAuth") (EApp (EVar "authDomainTop") (EVar "q")))))
 (DFunDef false "freshShape" ((PVar "ops") (PCon "TQual" (PVar "inner") (PVar "q"))) (EApp (EApp (EVar "TQual") (EApp (EApp (EVar "freshShape") (EVar "ops")) (EVar "inner"))) (EApp (EFieldAccess (EVar "ops") "vjoFreshAuth") (EApp (EVar "authDomainTop") (EVar "q")))))
-(DFunDef false "freshShape" (PWild (PVar "t")) (EVar "t"))
+(DFunDef false "freshShape" (PWild (PAs "t" (POr (PCon "TVar" PWild) (PCon "TCon" PWild PWild) (PCon "TRigid" PWild)))) (EVar "t"))
 (DTypeSig false "freshApplicationHead" (TyFun (TyApp (TyCon "ValueJoinOps") (TyVar "c")) (TyFun (TyCon "Mono") (TyCon "Mono"))))
 (DFunDef false "freshApplicationHead" ((PVar "ops") (PVar "head")) (EMatch (EApp (EVar "normalize") (EVar "head")) (arm (PCon "TApp" (PVar "prefix") PWild) () (EApp (EApp (EVar "TApp") (EApp (EApp (EVar "freshApplicationHead") (EVar "ops")) (EVar "prefix"))) (EApp (EFieldAccess (EVar "ops") "vjoFreshType") (ELit LUnit)))) (arm PWild () (EApp (EFieldAccess (EVar "ops") "vjoFreshType") (ELit LUnit)))))
 (DTypeSig false "occursIn" (TyFun (TyCon "Int") (TyFun (TyCon "Mono") (TyCon "Bool"))))
-(DFunDef false "occursIn" ((PVar "id") (PVar "value")) (EMatch (EApp (EVar "normalize") (EVar "value")) (arm (PCon "TVar" (PVar "cell")) () (EMatch (EFieldAccess (EVar "cell") "value") (arm (PCon "Unbound" (PVar "other") PWild) () (EBinOp "==" (EVar "id") (EVar "other"))) (arm (PCon "Link" PWild) () (EVar "False")))) (arm (PCon "TFun" (PVar "domain") PWild (PVar "result")) () (EBinOp "||" (EApp (EApp (EVar "occursIn") (EVar "id")) (EVar "domain")) (EApp (EApp (EVar "occursIn") (EVar "id")) (EVar "result")))) (arm (PCon "TApp" (PVar "head") (PVar "argument")) () (EBinOp "||" (EApp (EApp (EVar "occursIn") (EVar "id")) (EVar "head")) (EApp (EApp (EVar "occursIn") (EVar "id")) (EVar "argument")))) (arm (PCon "TQual" (PVar "inner") PWild) () (EApp (EApp (EVar "occursIn") (EVar "id")) (EVar "inner"))) (arm PWild () (EVar "False"))))
+(DFunDef false "occursIn" ((PVar "id") (PVar "value")) (EMatch (EApp (EVar "normalize") (EVar "value")) (arm (PCon "TVar" (PVar "cell")) () (EMatch (EFieldAccess (EVar "cell") "value") (arm (PCon "Unbound" (PVar "other") PWild) () (EBinOp "==" (EVar "id") (EVar "other"))) (arm (PCon "Link" PWild) () (EVar "False")))) (arm (PCon "TFun" (PVar "domain") PWild (PVar "result")) () (EBinOp "||" (EApp (EApp (EVar "occursIn") (EVar "id")) (EVar "domain")) (EApp (EApp (EVar "occursIn") (EVar "id")) (EVar "result")))) (arm (PCon "TApp" (PVar "head") (PVar "argument")) () (EBinOp "||" (EApp (EApp (EVar "occursIn") (EVar "id")) (EVar "head")) (EApp (EApp (EVar "occursIn") (EVar "id")) (EVar "argument")))) (arm (PCon "TQual" (PVar "inner") PWild) () (EApp (EApp (EVar "occursIn") (EVar "id")) (EVar "inner"))) (arm (POr (PCon "TCon" PWild PWild) (PCon "TRigid" PWild) (PCon "TEff" PWild) (PCon "TAuth" PWild)) () (EVar "False"))))
 (DTypeSig false "concreteWitness" (TyFun (TyApp (TyCon "List") (TyTuple (TyVar "c") (TyCon "Mono"))) (TyApp (TyCon "Option") (TyCon "Mono"))))
 (DFunDef false "concreteWitness" ((PList)) (EVar "None"))
 (DFunDef false "concreteWitness" ((PCons (PTuple PWild (PVar "t")) (PVar "rest"))) (EMatch (EApp (EVar "normalize") (EVar "t")) (arm (PCon "TVar" PWild) () (EApp (EVar "concreteWitness") (EVar "rest"))) (arm (PVar "value") () (EApp (EVar "Some") (EVar "value")))))
@@ -386,11 +386,11 @@ qualAuth value = match normalize value
 (DFunDef false "freshShape" ((PVar "ops") (PCon "TEff" PWild)) (EApp (EVar "TEff") (EApp (EFieldAccess (EVar "ops") "vjoFreshRow") (ELit LUnit))))
 (DFunDef false "freshShape" ((PVar "ops") (PCon "TAuth" (PVar "q"))) (EApp (EVar "TAuth") (EApp (EFieldAccess (EVar "ops") "vjoFreshAuth") (EApp (EVar "authDomainTop") (EVar "q")))))
 (DFunDef false "freshShape" ((PVar "ops") (PCon "TQual" (PVar "inner") (PVar "q"))) (EApp (EApp (EVar "TQual") (EApp (EApp (EVar "freshShape") (EVar "ops")) (EVar "inner"))) (EApp (EFieldAccess (EVar "ops") "vjoFreshAuth") (EApp (EVar "authDomainTop") (EVar "q")))))
-(DFunDef false "freshShape" (PWild (PVar "t")) (EVar "t"))
+(DFunDef false "freshShape" (PWild (PAs "t" (POr (PCon "TVar" PWild) (PCon "TCon" PWild PWild) (PCon "TRigid" PWild)))) (EVar "t"))
 (DTypeSig false "freshApplicationHead" (TyFun (TyApp (TyCon "ValueJoinOps") (TyVar "c")) (TyFun (TyCon "Mono") (TyCon "Mono"))))
 (DFunDef false "freshApplicationHead" ((PVar "ops") (PVar "head")) (EMatch (EApp (EVar "normalize") (EVar "head")) (arm (PCon "TApp" (PVar "prefix") PWild) () (EApp (EApp (EVar "TApp") (EApp (EApp (EVar "freshApplicationHead") (EVar "ops")) (EVar "prefix"))) (EApp (EFieldAccess (EVar "ops") "vjoFreshType") (ELit LUnit)))) (arm PWild () (EApp (EFieldAccess (EVar "ops") "vjoFreshType") (ELit LUnit)))))
 (DTypeSig false "occursIn" (TyFun (TyCon "Int") (TyFun (TyCon "Mono") (TyCon "Bool"))))
-(DFunDef false "occursIn" ((PVar "id") (PVar "value")) (EMatch (EApp (EVar "normalize") (EVar "value")) (arm (PCon "TVar" (PVar "cell")) () (EMatch (EFieldAccess (EVar "cell") "value") (arm (PCon "Unbound" (PVar "other") PWild) () (EBinOp "==" (EVar "id") (EVar "other"))) (arm (PCon "Link" PWild) () (EVar "False")))) (arm (PCon "TFun" (PVar "domain") PWild (PVar "result")) () (EBinOp "||" (EApp (EApp (EVar "occursIn") (EVar "id")) (EVar "domain")) (EApp (EApp (EVar "occursIn") (EVar "id")) (EVar "result")))) (arm (PCon "TApp" (PVar "head") (PVar "argument")) () (EBinOp "||" (EApp (EApp (EVar "occursIn") (EVar "id")) (EVar "head")) (EApp (EApp (EVar "occursIn") (EVar "id")) (EVar "argument")))) (arm (PCon "TQual" (PVar "inner") PWild) () (EApp (EApp (EVar "occursIn") (EVar "id")) (EVar "inner"))) (arm PWild () (EVar "False"))))
+(DFunDef false "occursIn" ((PVar "id") (PVar "value")) (EMatch (EApp (EVar "normalize") (EVar "value")) (arm (PCon "TVar" (PVar "cell")) () (EMatch (EFieldAccess (EVar "cell") "value") (arm (PCon "Unbound" (PVar "other") PWild) () (EBinOp "==" (EVar "id") (EVar "other"))) (arm (PCon "Link" PWild) () (EVar "False")))) (arm (PCon "TFun" (PVar "domain") PWild (PVar "result")) () (EBinOp "||" (EApp (EApp (EVar "occursIn") (EVar "id")) (EVar "domain")) (EApp (EApp (EVar "occursIn") (EVar "id")) (EVar "result")))) (arm (PCon "TApp" (PVar "head") (PVar "argument")) () (EBinOp "||" (EApp (EApp (EVar "occursIn") (EVar "id")) (EVar "head")) (EApp (EApp (EVar "occursIn") (EVar "id")) (EVar "argument")))) (arm (PCon "TQual" (PVar "inner") PWild) () (EApp (EApp (EVar "occursIn") (EVar "id")) (EVar "inner"))) (arm (POr (PCon "TCon" PWild PWild) (PCon "TRigid" PWild) (PCon "TEff" PWild) (PCon "TAuth" PWild)) () (EVar "False"))))
 (DTypeSig false "concreteWitness" (TyFun (TyApp (TyCon "List") (TyTuple (TyVar "c") (TyCon "Mono"))) (TyApp (TyCon "Option") (TyCon "Mono"))))
 (DFunDef false "concreteWitness" ((PList)) (EVar "None"))
 (DFunDef false "concreteWitness" ((PCons (PTuple PWild (PVar "t")) (PVar "rest"))) (EMatch (EApp (EVar "normalize") (EVar "t")) (arm (PCon "TVar" PWild) () (EApp (EVar "concreteWitness") (EVar "rest"))) (arm (PVar "value") () (EApp (EVar "Some") (EVar "value")))))

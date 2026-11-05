@@ -245,7 +245,7 @@ setMembers _ = []
 largestSet : Param -> Int
 largestSet (PSet (Some xs)) = listLen xs
 largestSet (PProduct ax) = fold (acc a => max acc (largestSet (snd a))) 0 ax
-largestSet _ = 0
+largestSet (PUnit | PPrefix _ | PPath _ | PSet _) = 0
 
 headParam : List Param -> Param
 headParam (p :: _) = p

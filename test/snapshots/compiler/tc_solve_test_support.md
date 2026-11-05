@@ -203,7 +203,7 @@ monoLinks (TVar cell) = match !cell
 monoLinks (TApp a b) = monoLinks a + monoLinks b
 monoLinks (TFun a _ b) = monoLinks a + monoLinks b
 monoLinks (TQual a _) = monoLinks a
-monoLinks _ = 0
+monoLinks (TCon _ _ | TRigid _ | TEff _ | TAuth _) = 0
 
 -- The evidence in ordinal order, each id replaced by its rank, then the
 -- disposition rows; `withheld` when there is no checked program.
@@ -396,7 +396,7 @@ matchWarningsNow mctx = match mctx.mcCells.matchWarnings.value
 (DFunDef false "monoLinks" ((PCon "TApp" (PVar "a") (PVar "b"))) (EBinOp "+" (EApp (EVar "monoLinks") (EVar "a")) (EApp (EVar "monoLinks") (EVar "b"))))
 (DFunDef false "monoLinks" ((PCon "TFun" (PVar "a") PWild (PVar "b"))) (EBinOp "+" (EApp (EVar "monoLinks") (EVar "a")) (EApp (EVar "monoLinks") (EVar "b"))))
 (DFunDef false "monoLinks" ((PCon "TQual" (PVar "a") PWild)) (EApp (EVar "monoLinks") (EVar "a")))
-(DFunDef false "monoLinks" (PWild) (ELit (LInt 0)))
+(DFunDef false "monoLinks" ((POr (PCon "TCon" PWild PWild) (PCon "TRigid" PWild) (PCon "TEff" PWild) (PCon "TAuth" PWild))) (ELit (LInt 0)))
 (DTypeSig true "accRenderChecked" (TyFun (TyApp (TyCon "Option") (TyCon "CheckedProgram")) (TyApp (TyCon "List") (TyCon "String"))))
 (DFunDef false "accRenderChecked" ((PCon "None")) (EListLit (ELit (LString "withheld"))))
 (DFunDef false "accRenderChecked" ((PCon "Some" (PVar "c"))) (EBlock (DoLet false false (PVar "ordered") (EApp (EApp (EVar "sortOn") (ELam ((PVar "e")) (EMatch (EVar "e") (arm (PCon "EvEntry" (PCon "EvId" (PVar "m") (PVar "i")) PWild) () (ETuple (EVar "m") (EVar "i")))))) (EFieldAccess (EVar "c") "cpEvidence"))) (DoExpr (EBinOp "::" (ELit (LString "checked")) (EBinOp "++" (EApp (EApp (EVar "map") (ELam ((PVar "ie")) (EMatch (EVar "ie") (arm (PTuple (PVar "rank") (PCon "EvEntry" PWild (PVar "v"))) () (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "ev ")) (EApp (EVar "display") (EApp (EVar "debug") (EVar "rank")))) (ELit (LString " "))) (EApp (EVar "display") (EApp (EVar "valText") (EVar "v")))) (ELit (LString ""))))))) (EApp (EVar "indexed") (EVar "ordered"))) (EApp (EApp (EVar "map") (EVar "dispositionText")) (EApp (EVar "dispositionRows") (EFieldAccess (EVar "c") "cpDispositions"))))))))
@@ -511,7 +511,7 @@ matchWarningsNow mctx = match mctx.mcCells.matchWarnings.value
 (DFunDef false "monoLinks" ((PCon "TApp" (PVar "a") (PVar "b"))) (EBinOp "+" (EApp (EVar "monoLinks") (EVar "a")) (EApp (EVar "monoLinks") (EVar "b"))))
 (DFunDef false "monoLinks" ((PCon "TFun" (PVar "a") PWild (PVar "b"))) (EBinOp "+" (EApp (EVar "monoLinks") (EVar "a")) (EApp (EVar "monoLinks") (EVar "b"))))
 (DFunDef false "monoLinks" ((PCon "TQual" (PVar "a") PWild)) (EApp (EVar "monoLinks") (EVar "a")))
-(DFunDef false "monoLinks" (PWild) (ELit (LInt 0)))
+(DFunDef false "monoLinks" ((POr (PCon "TCon" PWild PWild) (PCon "TRigid" PWild) (PCon "TEff" PWild) (PCon "TAuth" PWild))) (ELit (LInt 0)))
 (DTypeSig true "accRenderChecked" (TyFun (TyApp (TyCon "Option") (TyCon "CheckedProgram")) (TyApp (TyCon "List") (TyCon "String"))))
 (DFunDef false "accRenderChecked" ((PCon "None")) (EListLit (ELit (LString "withheld"))))
 (DFunDef false "accRenderChecked" ((PCon "Some" (PVar "c"))) (EBlock (DoLet false false (PVar "ordered") (EApp (EApp (EVar "sortOn") (ELam ((PVar "e")) (EMatch (EVar "e") (arm (PCon "EvEntry" (PCon "EvId" (PVar "m") (PVar "i")) PWild) () (ETuple (EVar "m") (EVar "i")))))) (EFieldAccess (EVar "c") "cpEvidence"))) (DoExpr (EBinOp "::" (ELit (LString "checked")) (EBinOp "++" (EApp (EApp (EMethodRef "map") (ELam ((PVar "ie")) (EMatch (EVar "ie") (arm (PTuple (PVar "rank") (PCon "EvEntry" PWild (PVar "v"))) () (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "ev ")) (EApp (EMethodRef "display") (EApp (EMethodRef "debug") (EVar "rank")))) (ELit (LString " "))) (EApp (EMethodRef "display") (EApp (EVar "valText") (EVar "v")))) (ELit (LString ""))))))) (EApp (EVar "indexed") (EVar "ordered"))) (EApp (EApp (EMethodRef "map") (EVar "dispositionText")) (EApp (EVar "dispositionRows") (EFieldAccess (EVar "c") "cpDispositions"))))))))
