@@ -5,7 +5,8 @@ import ir.core_ir.{
 import frontend.ast.{Pat(..), Addr(..)}
 import backend.package_identity.{
   PackageIdentity(..), IdentityPlan(..), emptyPackage, planPackageIdentity,
-  planProgramIdentity, validateIdentityPlan, packSite
+  planProgramIdentity, validateIdentityPlan, renderIdentityDefect,
+  IdentityDefect(..), IdentityKind(..), packSite
 }
 import backend.runtime_layout.{abiVersion, reservedTypeBase}
 import ir.core_ir.{CProgram(..), CBind(..), CClause(..), CExpr(..), noDeclFacts}
@@ -118,13 +119,22 @@ test "sparse imported IDs preserve holes and detect corruptions" =
       expectEqual ["", "pkg.mdk", "", "", "new.mdk"] plan.orderedFiles,
       expectTextContainsAll
         ["missing type", "imported type changed"]
-        (stringConcat (validateIdentityPlan cp { plan | types = omEmpty })),
+        (stringConcat
+          (map
+            renderIdentityDefect
+            (validateIdentityPlan cp { plan | types = omEmpty }))),
       expectTextContainsAll
         ["missing file"]
-        (stringConcat (validateIdentityPlan cp { plan | files = omEmpty })),
+        (stringConcat
+          (map
+            renderIdentityDefect
+            (validateIdentityPlan cp { plan | files = omEmpty }))),
       expectTextContainsAll
         ["file table disagrees"]
-        (stringConcat (validateIdentityPlan cp { plan | orderedFiles = [] })),
+        (stringConcat
+          (map
+            renderIdentityDefect
+            (validateIdentityPlan cp { plan | orderedFiles = [] }))),
     ])
     (planProgramIdentity pkg cp)
 
@@ -207,12 +217,15 @@ test "inventory visits nested sites and explicit literals" =
       expectEqual [] (validateIdentityPlan cp plan),
       expectTextContainsAll
         ["missing file"]
-        (stringConcat (validateIdentityPlan cp { plan | files = omEmpty })),
+        (stringConcat
+          (map
+            renderIdentityDefect
+            (validateIdentityPlan cp { plan | files = omEmpty }))),
     ])
     (planProgramIdentity emptyPackage cp)
 
-identityErrors : Result (List String) IdentityPlan -> String
-identityErrors (Err errors) = stringConcat errors
+identityErrors : Result (List IdentityDefect) IdentityPlan -> String
+identityErrors (Err errors) = stringConcat (map renderIdentityDefect errors)
 identityErrors (Ok _) = "accepted"
 
 test "corrupt local numbering is detected" =
@@ -224,16 +237,20 @@ test "corrupt local numbering is detected" =
         expectTextContainsAll
           ["type allocation disagrees"]
           (stringConcat
-            (validateIdentityPlan cp { typed |
-              types = omInsert "a.T" 2 (omInsert "b.T" 1 omEmpty),
-            })),
+            (map
+              renderIdentityDefect
+              (validateIdentityPlan cp { typed |
+                types = omInsert "a.T" 2 (omInsert "b.T" 1 omEmpty),
+              }))),
         expectTextContainsAll
           ["file allocation disagrees"]
           (stringConcat
-            (validateIdentityPlan cp { typed |
-              files = omInsert "a" 2 (omInsert "b" 1 omEmpty),
-              orderedFiles = ["b", "a"],
-            })),
+            (map
+              renderIdentityDefect
+              (validateIdentityPlan cp { typed |
+                files = omInsert "a" 2 (omInsert "b" 1 omEmpty),
+                orderedFiles = ["b", "a"],
+              }))),
       ])
     (planProgramIdentity emptyPackage cp)
 
@@ -261,6 +278,14 @@ test "exact allocation ceilings and conflicting imports" =
       (identityErrors
         (planProgramIdentity { emptyPackage | abi = abiVersion + 1 } cp)),
   ]
+
+test "identity planning returns structured defects" =
+  let cp = program [("A", "new.T")] []
+  expectEqual
+    (Err [IdentityIncompatibleAbi])
+    (map
+      (_ => ())
+      (planProgramIdentity { emptyPackage | abi = abiVersion + 1 } cp))
 
 perfChain : Int -> CExpr
 perfChain n =

@@ -1,4 +1,4 @@
-import backend.package_identity.{IdentityPlan(..), packSite}
+import backend.package_identity.{IdentityPlan(..), IdentityDefect, packSite}
 import backend.runtime_layout.{
   ctorTagShift, reservedTypeBase, runtimeCallArgMax, closureCodeSlot,
   closureCaptureStart
@@ -910,7 +910,7 @@ data Emit = Emit {
   sigMap : Ref (Option (OrdMap FnSig)),
   implsByMethod : Ref (Option (OrdMap (List CImplEntry))),
   implMethodSet : Ref (Option (OrdMap Unit)),
-  identity : Result (List String) IdentityPlan,
+  identity : Result (List IdentityDefect) IdentityPlan,
   -- the program's method tables (`EmitPlan.methodTables`)
   methodTables : MethodTables,
   -- every impl group, keyed by its position in `EmitPlan.implGroups`
@@ -14901,7 +14901,7 @@ data EmitStateConfig = EmitStateConfig {
   trmc : TrmcVerdicts,
   methodResults : OrdMap (OrdMap MethodResultFact),
   constructorFacts : ConstructorFacts,
-  identity : Result (List String) IdentityPlan,
+  identity : Result (List IdentityDefect) IdentityPlan,
   externRequirements : ExternRequirements,
   dispGroups : Option (List DispGroup),
   implGroups : List ImplClauseGroup,

@@ -1,5 +1,5 @@
 # META
-source_lines=311
+source_lines=365
 stages=DESUGAR,MARK
 # SOURCE
 import frontend.ast.{Loc(..), Lit(..)}
@@ -33,6 +33,49 @@ public export data IdentityPlan = IdentityPlan {
   files : OrdMap Int,
   orderedFiles : List String,
 }
+
+public export data IdentityKind =
+  | TypeIdentity
+  | FileIdentity
+  deriving (Eq, Debug, Display)
+
+public export data IdentityDefect =
+  | IdentityIncompatibleAbi
+  | InvalidHighWater IdentityKind
+  | InvalidAssignment IdentityKind String
+  | DuplicateNumber IdentityKind
+  | Exhausted IdentityKind
+  | MissingAssignment IdentityKind String
+  | AllocationDisagrees IdentityKind
+  | ReservedHole IdentityKind String
+  | ImportedChanged IdentityKind String
+  | FileTableDisagrees
+  deriving (Eq, Debug, Display)
+
+kindName : IdentityKind -> String
+kindName TypeIdentity = "type"
+kindName FileIdentity = "file"
+
+export
+renderIdentityDefect : IdentityDefect -> String
+renderIdentityDefect IdentityIncompatibleAbi = "identity: incompatible ABI"
+renderIdentityDefect (InvalidHighWater kind) =
+  "identity: invalid \{kindName kind} high-water mark"
+renderIdentityDefect (InvalidAssignment kind name) =
+  "identity: invalid \{kindName kind} assignment \{name}"
+renderIdentityDefect (DuplicateNumber kind) =
+  "identity: duplicate \{kindName kind} number"
+renderIdentityDefect (Exhausted kind) =
+  "identity: \{kindName kind} IDs exhausted"
+renderIdentityDefect (MissingAssignment kind name) =
+  "identity: missing \{kindName kind} \{name}"
+renderIdentityDefect (AllocationDisagrees kind) =
+  "identity: \{kindName kind} allocation disagrees"
+renderIdentityDefect (ReservedHole kind name) =
+  "identity: local \{kindName kind} uses reserved hole \{name}"
+renderIdentityDefect (ImportedChanged kind name) =
+  "identity: imported \{kindName kind} changed \{name}"
+renderIdentityDefect FileTableDisagrees = "identity: file table disagrees"
 
 export
 emptyPackage : PackageIdentity
@@ -151,43 +194,53 @@ ordered high files =
   let reverse = fromList (map (pair => (snd pair, fst pair)) (entries files))
   if high < 1 then [] else map (n => optionOr "" (get n reverse)) [1..=high]
 
-mapDefects : String -> Int -> Int -> Int -> OrdMap Int -> List String
-mapDefects label low limit high table =
+data IdentityBounds = IdentityBounds {
+  kind : IdentityKind,
+  limit : Int,
+  high : Int,
+}
+
+mapDefects : IdentityBounds -> OrdMap Int -> List IdentityDefect
+mapDefects bounds table =
   let rows = entries table
-  let invalid = flatMap (assignmentDefect label low limit high) rows
+  let invalid = flatMap (assignmentDefect bounds) rows
   let nums = map (p => intToString (snd p)) rows
   invalid
     ++ (if length (entries (omFromNames nums omEmpty)) /= length nums then
-      ["identity: duplicate " ++ label ++ " number"]
+      [DuplicateNumber bounds.kind]
     else
       [])
 
-assignmentDefect : String -> Int -> Int -> Int -> (String, Int) -> List String
-assignmentDefect label low limit high (name, n) =
-  if name == "" || n < low || n >= limit || n > high then
-    ["identity: invalid \{label} assignment \{name}"]
+assignmentDefect : IdentityBounds -> (String, Int) -> List IdentityDefect
+assignmentDefect bounds (name, n) =
+  if name == "" || n < 1 || n >= bounds.limit || n > bounds.high then
+    [InvalidAssignment bounds.kind name]
   else
     []
 
 export
-packageDefects : PackageIdentity -> List String
+packageDefects : PackageIdentity -> List IdentityDefect
 packageDefects p =
-  (if p.abi == abiVersion then [] else ["identity: incompatible ABI"])
+  (if p.abi == abiVersion then [] else [IdentityIncompatibleAbi])
     ++ (if p.typeHigh >= 0 && p.typeHigh < reservedTypeBase then
       []
     else
-      ["identity: invalid type high-water mark"])
+      [InvalidHighWater TypeIdentity])
     ++ (if p.fileHigh >= 0 && p.fileHigh < shiftLeft 1 siteFileBits then
       []
     else
-      ["identity: invalid file high-water mark"])
-    ++ mapDefects "type" 1 reservedTypeBase p.typeHigh p.types
-    ++ mapDefects "file" 1 (shiftLeft 1 siteFileBits) p.fileHigh p.files
+      [InvalidHighWater FileIdentity])
+    ++ mapDefects
+      (IdentityBounds TypeIdentity reservedTypeBase p.typeHigh)
+      p.types
+    ++ mapDefects
+      (IdentityBounds FileIdentity (shiftLeft 1 siteFileBits) p.fileHigh)
+      p.files
 
 export
 planProgramIdentity : PackageIdentity ->
   CProgram ->
-  Result (List String) IdentityPlan
+  Result (List IdentityDefect) IdentityPlan
 planProgramIdentity imported cp =
   let (types, typeHigh) =
     assign
@@ -198,14 +251,11 @@ planProgramIdentity imported cp =
     assign (programFiles cp) imported.fileHigh imported.files
   let defects =
     packageDefects imported
-      ++ (if typeHigh < reservedTypeBase then
-        []
-      else
-        ["identity: type IDs exhausted"])
+      ++ (if typeHigh < reservedTypeBase then [] else [Exhausted TypeIdentity])
       ++ (if fileHigh < shiftLeft 1 siteFileBits then
         []
       else
-        ["identity: file IDs exhausted"])
+        [Exhausted FileIdentity])
   if isEmpty defects then
     Ok IdentityPlan {
       imported = imported,
@@ -217,7 +267,9 @@ planProgramIdentity imported cp =
     Err defects
 
 export
-planPackageIdentity : String -> CProgram -> Result (List String) PackageIdentity
+planPackageIdentity : String ->
+  CProgram ->
+  Result (List IdentityDefect) PackageIdentity
 planPackageIdentity fingerprint cp =
   map
     (plan => PackageIdentity {
@@ -225,84 +277,86 @@ planPackageIdentity fingerprint cp =
       abi = abiVersion,
       types = (plan : IdentityPlan).types,
       files = (plan : IdentityPlan).files,
-      typeHigh =
-        fold
-          (n pair => max n (snd pair))
-          0
-          (entries (plan : IdentityPlan).types),
-      fileHigh =
-        fold
-          (n pair => max n (snd pair))
-          0
-          (entries (plan : IdentityPlan).files),
+      typeHigh = highWater 0 (plan : IdentityPlan).types,
+      fileHigh = highWater 0 (plan : IdentityPlan).files,
     })
     (planProgramIdentity emptyPackage cp)
 
+highWater : Int -> OrdMap Int -> Int
+highWater initial table =
+  fold (n pair => max n (snd pair)) initial (entries table)
+
 export
-validateIdentityPlan : CProgram -> IdentityPlan -> List String
+validateIdentityPlan : CProgram -> IdentityPlan -> List IdentityDefect
 validateIdentityPlan cp plan =
   let imported = plan.imported
-  let typeHigh =
-    fold (n pair => max n (snd pair)) imported.typeHigh (entries plan.types)
-  let fileHigh =
-    fold (n pair => max n (snd pair)) imported.fileHigh (entries plan.files)
+  let typeHigh = highWater imported.typeHigh plan.types
+  let fileHigh = highWater imported.fileHigh plan.files
   let (expectedTypes, _) =
     assign (map fst (entries plan.types)) imported.typeHigh imported.types
   let (expectedFiles, _) =
     assign (map fst (entries plan.files)) imported.fileHigh imported.files
   packageDefects imported
-    ++ mapDefects "type" 1 reservedTypeBase typeHigh plan.types
-    ++ mapDefects "file" 1 (shiftLeft 1 siteFileBits) fileHigh plan.files
-    ++ flatMap (importDefect "type" plan.types) (entries imported.types)
-    ++ flatMap (importDefect "file" plan.files) (entries imported.files)
+    ++ mapDefects
+      (IdentityBounds TypeIdentity reservedTypeBase typeHigh)
+      plan.types
+    ++ mapDefects
+      (IdentityBounds FileIdentity (shiftLeft 1 siteFileBits) fileHigh)
+      plan.files
+    ++ flatMap (importDefect TypeIdentity plan.types) (entries imported.types)
+    ++ flatMap (importDefect FileIdentity plan.files) (entries imported.files)
     ++ flatMap
       (name =>
         if omHasKey name plan.types then
           []
         else
-          ["identity: missing type " ++ name])
+          [MissingAssignment TypeIdentity name])
       (planConstructors cp).typeOrder
     ++ flatMap
       (name =>
         if omHasKey name plan.files then
           []
         else
-          ["identity: missing file " ++ name])
+          [MissingAssignment FileIdentity name])
       (programFiles cp)
     ++ (if entries expectedTypes == entries plan.types then
       []
     else
-      ["identity: type allocation disagrees"])
+      [AllocationDisagrees TypeIdentity])
     ++ (if entries expectedFiles == entries plan.files then
       []
     else
-      ["identity: file allocation disagrees"])
+      [AllocationDisagrees FileIdentity])
     ++ flatMap
-      (localDefect "type" imported.typeHigh imported.types)
+      (localDefect TypeIdentity imported.typeHigh imported.types)
       (entries plan.types)
     ++ flatMap
-      (localDefect "file" imported.fileHigh imported.files)
+      (localDefect FileIdentity imported.fileHigh imported.files)
       (entries plan.files)
     ++ (if fileHigh >= 0
       && fileHigh < shiftLeft 1 siteFileBits
       && plan.orderedFiles == ordered fileHigh plan.files then
       []
     else
-      ["identity: file table disagrees"])
+      [FileTableDisagrees])
 
-localDefect : String -> Int -> OrdMap Int -> (String, Int) -> List String
+localDefect : IdentityKind ->
+  Int ->
+  OrdMap Int ->
+  (String, Int) ->
+  List IdentityDefect
 localDefect label high imported (name, n) =
   if not (omHasKey name imported) && n <= high then
-    ["identity: local \{label} uses reserved hole \{name}"]
+    [ReservedHole label name]
   else
     []
 
-importDefect : String -> OrdMap Int -> (String, Int) -> List String
+importDefect : IdentityKind ->
+  OrdMap Int ->
+  (String, Int) ->
+  List IdentityDefect
 importDefect label table (name, n) =
-  if omLookup name table == Some n then
-    []
-  else
-    ["identity: imported \{label} changed \{name}"]
+  if omLookup name table == Some n then [] else [ImportedChanged label name]
 
 export
 packSite : IdentityPlan -> Loc -> Int
@@ -310,7 +364,7 @@ packSite plan (loc@(Loc f line col _ _)) =
   if not (sitePackable loc) then
     0
   else match omLookup f plan.files
-    None => 0
+    None => panic "identity: missing file \{f}"
     Some n =>
       n * shiftLeft 1 siteFileShift + line * shiftLeft 1 siteLineShift + col
 # DESUGAR
@@ -322,6 +376,28 @@ packSite plan (loc@(Loc f line col _ _)) =
 (DUse false (UseGroup ("map") ((mem "entries" false) (mem "fromList" false) (mem "get" false))))
 (DData Public "PackageIdentity" () ((variant "PackageIdentity" (ConNamed (field "fingerprint" (TyCon "String")) (field "abi" (TyCon "Int")) (field "types" (TyApp (TyCon "OrdMap") (TyCon "Int"))) (field "files" (TyApp (TyCon "OrdMap") (TyCon "Int"))) (field "typeHigh" (TyCon "Int")) (field "fileHigh" (TyCon "Int"))))) ())
 (DData Public "IdentityPlan" () ((variant "IdentityPlan" (ConNamed (field "imported" (TyCon "PackageIdentity")) (field "types" (TyApp (TyCon "OrdMap") (TyCon "Int"))) (field "files" (TyApp (TyCon "OrdMap") (TyCon "Int"))) (field "orderedFiles" (TyApp (TyCon "List") (TyCon "String")))))) ())
+(DData Public "IdentityKind" () ((variant "TypeIdentity" (ConPos)) (variant "FileIdentity" (ConPos))) ())
+(DImpl true "Eq" ((TyCon "IdentityKind")) () ((im "eq" ((PVar "__x") (PVar "__y")) (EMatch (ETuple (EVar "__x") (EVar "__y")) (arm (PTuple (PCon "TypeIdentity") (PCon "TypeIdentity")) () (EVar "True")) (arm (PTuple (PCon "FileIdentity") (PCon "FileIdentity")) () (EVar "True")) (arm (PTuple PWild PWild) () (EVar "False"))))))
+(DImpl true "Debug" ((TyCon "IdentityKind")) () ((im "debug" ((PVar "__x")) (EMatch (EVar "__x") (arm (PCon "TypeIdentity") () (ELit (LString "TypeIdentity"))) (arm (PCon "FileIdentity") () (ELit (LString "FileIdentity")))))))
+(DImpl true "Display" ((TyCon "IdentityKind")) () ((im "display" ((PVar "__x")) (EMatch (EVar "__x") (arm (PCon "TypeIdentity") () (ELit (LString "TypeIdentity"))) (arm (PCon "FileIdentity") () (ELit (LString "FileIdentity")))))))
+(DData Public "IdentityDefect" () ((variant "IdentityIncompatibleAbi" (ConPos)) (variant "InvalidHighWater" (ConPos (TyCon "IdentityKind"))) (variant "InvalidAssignment" (ConPos (TyCon "IdentityKind") (TyCon "String"))) (variant "DuplicateNumber" (ConPos (TyCon "IdentityKind"))) (variant "Exhausted" (ConPos (TyCon "IdentityKind"))) (variant "MissingAssignment" (ConPos (TyCon "IdentityKind") (TyCon "String"))) (variant "AllocationDisagrees" (ConPos (TyCon "IdentityKind"))) (variant "ReservedHole" (ConPos (TyCon "IdentityKind") (TyCon "String"))) (variant "ImportedChanged" (ConPos (TyCon "IdentityKind") (TyCon "String"))) (variant "FileTableDisagrees" (ConPos))) ())
+(DImpl true "Eq" ((TyCon "IdentityDefect")) () ((im "eq" ((PVar "__x") (PVar "__y")) (EMatch (ETuple (EVar "__x") (EVar "__y")) (arm (PTuple (PCon "IdentityIncompatibleAbi") (PCon "IdentityIncompatibleAbi")) () (EVar "True")) (arm (PTuple (PCon "InvalidHighWater" (PVar "__a0")) (PCon "InvalidHighWater" (PVar "__b0"))) () (EApp (EApp (EVar "eq") (EVar "__a0")) (EVar "__b0"))) (arm (PTuple (PCon "InvalidAssignment" (PVar "__a0") (PVar "__a1")) (PCon "InvalidAssignment" (PVar "__b0") (PVar "__b1"))) () (EBinOp "&&" (EApp (EApp (EVar "eq") (EVar "__a0")) (EVar "__b0")) (EApp (EApp (EVar "eq") (EVar "__a1")) (EVar "__b1")))) (arm (PTuple (PCon "DuplicateNumber" (PVar "__a0")) (PCon "DuplicateNumber" (PVar "__b0"))) () (EApp (EApp (EVar "eq") (EVar "__a0")) (EVar "__b0"))) (arm (PTuple (PCon "Exhausted" (PVar "__a0")) (PCon "Exhausted" (PVar "__b0"))) () (EApp (EApp (EVar "eq") (EVar "__a0")) (EVar "__b0"))) (arm (PTuple (PCon "MissingAssignment" (PVar "__a0") (PVar "__a1")) (PCon "MissingAssignment" (PVar "__b0") (PVar "__b1"))) () (EBinOp "&&" (EApp (EApp (EVar "eq") (EVar "__a0")) (EVar "__b0")) (EApp (EApp (EVar "eq") (EVar "__a1")) (EVar "__b1")))) (arm (PTuple (PCon "AllocationDisagrees" (PVar "__a0")) (PCon "AllocationDisagrees" (PVar "__b0"))) () (EApp (EApp (EVar "eq") (EVar "__a0")) (EVar "__b0"))) (arm (PTuple (PCon "ReservedHole" (PVar "__a0") (PVar "__a1")) (PCon "ReservedHole" (PVar "__b0") (PVar "__b1"))) () (EBinOp "&&" (EApp (EApp (EVar "eq") (EVar "__a0")) (EVar "__b0")) (EApp (EApp (EVar "eq") (EVar "__a1")) (EVar "__b1")))) (arm (PTuple (PCon "ImportedChanged" (PVar "__a0") (PVar "__a1")) (PCon "ImportedChanged" (PVar "__b0") (PVar "__b1"))) () (EBinOp "&&" (EApp (EApp (EVar "eq") (EVar "__a0")) (EVar "__b0")) (EApp (EApp (EVar "eq") (EVar "__a1")) (EVar "__b1")))) (arm (PTuple (PCon "FileTableDisagrees") (PCon "FileTableDisagrees")) () (EVar "True")) (arm (PTuple PWild PWild) () (EVar "False"))))))
+(DImpl true "Debug" ((TyCon "IdentityDefect")) () ((im "debug" ((PVar "__x")) (EMatch (EVar "__x") (arm (PCon "IdentityIncompatibleAbi") () (ELit (LString "IdentityIncompatibleAbi"))) (arm (PCon "InvalidHighWater" (PVar "__a0")) () (EBinOp "++" (ELit (LString "InvalidHighWater ")) (EApp (EVar "derivedShowWrap") (EApp (EVar "debug") (EVar "__a0"))))) (arm (PCon "InvalidAssignment" (PVar "__a0") (PVar "__a1")) () (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "InvalidAssignment ")) (EApp (EVar "derivedShowWrap") (EApp (EVar "debug") (EVar "__a0")))) (ELit (LString " "))) (EApp (EVar "derivedShowWrap") (EApp (EVar "debug") (EVar "__a1"))))) (arm (PCon "DuplicateNumber" (PVar "__a0")) () (EBinOp "++" (ELit (LString "DuplicateNumber ")) (EApp (EVar "derivedShowWrap") (EApp (EVar "debug") (EVar "__a0"))))) (arm (PCon "Exhausted" (PVar "__a0")) () (EBinOp "++" (ELit (LString "Exhausted ")) (EApp (EVar "derivedShowWrap") (EApp (EVar "debug") (EVar "__a0"))))) (arm (PCon "MissingAssignment" (PVar "__a0") (PVar "__a1")) () (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "MissingAssignment ")) (EApp (EVar "derivedShowWrap") (EApp (EVar "debug") (EVar "__a0")))) (ELit (LString " "))) (EApp (EVar "derivedShowWrap") (EApp (EVar "debug") (EVar "__a1"))))) (arm (PCon "AllocationDisagrees" (PVar "__a0")) () (EBinOp "++" (ELit (LString "AllocationDisagrees ")) (EApp (EVar "derivedShowWrap") (EApp (EVar "debug") (EVar "__a0"))))) (arm (PCon "ReservedHole" (PVar "__a0") (PVar "__a1")) () (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "ReservedHole ")) (EApp (EVar "derivedShowWrap") (EApp (EVar "debug") (EVar "__a0")))) (ELit (LString " "))) (EApp (EVar "derivedShowWrap") (EApp (EVar "debug") (EVar "__a1"))))) (arm (PCon "ImportedChanged" (PVar "__a0") (PVar "__a1")) () (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "ImportedChanged ")) (EApp (EVar "derivedShowWrap") (EApp (EVar "debug") (EVar "__a0")))) (ELit (LString " "))) (EApp (EVar "derivedShowWrap") (EApp (EVar "debug") (EVar "__a1"))))) (arm (PCon "FileTableDisagrees") () (ELit (LString "FileTableDisagrees")))))))
+(DImpl true "Display" ((TyCon "IdentityDefect")) () ((im "display" ((PVar "__x")) (EMatch (EVar "__x") (arm (PCon "IdentityIncompatibleAbi") () (ELit (LString "IdentityIncompatibleAbi"))) (arm (PCon "InvalidHighWater" (PVar "__a0")) () (EBinOp "++" (ELit (LString "InvalidHighWater ")) (EApp (EVar "derivedShowWrap") (EApp (EVar "display") (EVar "__a0"))))) (arm (PCon "InvalidAssignment" (PVar "__a0") (PVar "__a1")) () (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "InvalidAssignment ")) (EApp (EVar "derivedShowWrap") (EApp (EVar "display") (EVar "__a0")))) (ELit (LString " "))) (EApp (EVar "derivedShowWrap") (EApp (EVar "display") (EVar "__a1"))))) (arm (PCon "DuplicateNumber" (PVar "__a0")) () (EBinOp "++" (ELit (LString "DuplicateNumber ")) (EApp (EVar "derivedShowWrap") (EApp (EVar "display") (EVar "__a0"))))) (arm (PCon "Exhausted" (PVar "__a0")) () (EBinOp "++" (ELit (LString "Exhausted ")) (EApp (EVar "derivedShowWrap") (EApp (EVar "display") (EVar "__a0"))))) (arm (PCon "MissingAssignment" (PVar "__a0") (PVar "__a1")) () (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "MissingAssignment ")) (EApp (EVar "derivedShowWrap") (EApp (EVar "display") (EVar "__a0")))) (ELit (LString " "))) (EApp (EVar "derivedShowWrap") (EApp (EVar "display") (EVar "__a1"))))) (arm (PCon "AllocationDisagrees" (PVar "__a0")) () (EBinOp "++" (ELit (LString "AllocationDisagrees ")) (EApp (EVar "derivedShowWrap") (EApp (EVar "display") (EVar "__a0"))))) (arm (PCon "ReservedHole" (PVar "__a0") (PVar "__a1")) () (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "ReservedHole ")) (EApp (EVar "derivedShowWrap") (EApp (EVar "display") (EVar "__a0")))) (ELit (LString " "))) (EApp (EVar "derivedShowWrap") (EApp (EVar "display") (EVar "__a1"))))) (arm (PCon "ImportedChanged" (PVar "__a0") (PVar "__a1")) () (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "ImportedChanged ")) (EApp (EVar "derivedShowWrap") (EApp (EVar "display") (EVar "__a0")))) (ELit (LString " "))) (EApp (EVar "derivedShowWrap") (EApp (EVar "display") (EVar "__a1"))))) (arm (PCon "FileTableDisagrees") () (ELit (LString "FileTableDisagrees")))))))
+(DTypeSig false "kindName" (TyFun (TyCon "IdentityKind") (TyCon "String")))
+(DFunDef false "kindName" ((PCon "TypeIdentity")) (ELit (LString "type")))
+(DFunDef false "kindName" ((PCon "FileIdentity")) (ELit (LString "file")))
+(DTypeSig true "renderIdentityDefect" (TyFun (TyCon "IdentityDefect") (TyCon "String")))
+(DFunDef false "renderIdentityDefect" ((PCon "IdentityIncompatibleAbi")) (ELit (LString "identity: incompatible ABI")))
+(DFunDef false "renderIdentityDefect" ((PCon "InvalidHighWater" (PVar "kind"))) (EBinOp "++" (EBinOp "++" (ELit (LString "identity: invalid ")) (EApp (EVar "display") (EApp (EVar "kindName") (EVar "kind")))) (ELit (LString " high-water mark"))))
+(DFunDef false "renderIdentityDefect" ((PCon "InvalidAssignment" (PVar "kind") (PVar "name"))) (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "identity: invalid ")) (EApp (EVar "display") (EApp (EVar "kindName") (EVar "kind")))) (ELit (LString " assignment "))) (EApp (EVar "display") (EVar "name"))) (ELit (LString ""))))
+(DFunDef false "renderIdentityDefect" ((PCon "DuplicateNumber" (PVar "kind"))) (EBinOp "++" (EBinOp "++" (ELit (LString "identity: duplicate ")) (EApp (EVar "display") (EApp (EVar "kindName") (EVar "kind")))) (ELit (LString " number"))))
+(DFunDef false "renderIdentityDefect" ((PCon "Exhausted" (PVar "kind"))) (EBinOp "++" (EBinOp "++" (ELit (LString "identity: ")) (EApp (EVar "display") (EApp (EVar "kindName") (EVar "kind")))) (ELit (LString " IDs exhausted"))))
+(DFunDef false "renderIdentityDefect" ((PCon "MissingAssignment" (PVar "kind") (PVar "name"))) (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "identity: missing ")) (EApp (EVar "display") (EApp (EVar "kindName") (EVar "kind")))) (ELit (LString " "))) (EApp (EVar "display") (EVar "name"))) (ELit (LString ""))))
+(DFunDef false "renderIdentityDefect" ((PCon "AllocationDisagrees" (PVar "kind"))) (EBinOp "++" (EBinOp "++" (ELit (LString "identity: ")) (EApp (EVar "display") (EApp (EVar "kindName") (EVar "kind")))) (ELit (LString " allocation disagrees"))))
+(DFunDef false "renderIdentityDefect" ((PCon "ReservedHole" (PVar "kind") (PVar "name"))) (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "identity: local ")) (EApp (EVar "display") (EApp (EVar "kindName") (EVar "kind")))) (ELit (LString " uses reserved hole "))) (EApp (EVar "display") (EVar "name"))) (ELit (LString ""))))
+(DFunDef false "renderIdentityDefect" ((PCon "ImportedChanged" (PVar "kind") (PVar "name"))) (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "identity: imported ")) (EApp (EVar "display") (EApp (EVar "kindName") (EVar "kind")))) (ELit (LString " changed "))) (EApp (EVar "display") (EVar "name"))) (ELit (LString ""))))
+(DFunDef false "renderIdentityDefect" ((PCon "FileTableDisagrees")) (ELit (LString "identity: file table disagrees")))
 (DTypeSig true "emptyPackage" (TyCon "PackageIdentity"))
 (DFunDef false "emptyPackage" () (ERecordCreate "PackageIdentity" ((fa "fingerprint" (ELit (LString ""))) (fa "abi" (EVar "abiVersion")) (fa "types" (EVar "omEmpty")) (fa "files" (EVar "omEmpty")) (fa "typeHigh" (ELit (LInt 0))) (fa "fileHigh" (ELit (LInt 0))))))
 (DTypeSig true "sitePackable" (TyFun (TyCon "Loc") (TyCon "Bool")))
@@ -394,24 +470,27 @@ packSite plan (loc@(Loc f line col _ _)) =
 (DFunDef false "assign" ((PCons (PVar "name") (PVar "rest")) (PVar "high") (PVar "table")) (EIf (EApp (EApp (EVar "omHasKey") (EVar "name")) (EVar "table")) (EApp (EApp (EApp (EVar "assign") (EVar "rest")) (EVar "high")) (EVar "table")) (EApp (EApp (EApp (EVar "assign") (EVar "rest")) (EBinOp "+" (EVar "high") (ELit (LInt 1)))) (EApp (EApp (EApp (EVar "omInsert") (EVar "name")) (EBinOp "+" (EVar "high") (ELit (LInt 1)))) (EVar "table")))))
 (DTypeSig false "ordered" (TyFun (TyCon "Int") (TyFun (TyApp (TyCon "OrdMap") (TyCon "Int")) (TyApp (TyCon "List") (TyCon "String")))))
 (DFunDef false "ordered" ((PVar "high") (PVar "files")) (EBlock (DoLet false false (PVar "reverse") (EApp (EVar "fromList") (EApp (EApp (EVar "map") (ELam ((PVar "pair")) (ETuple (EApp (EVar "snd") (EVar "pair")) (EApp (EVar "fst") (EVar "pair"))))) (EApp (EVar "entries") (EVar "files"))))) (DoExpr (EIf (EBinOp "<" (EVar "high") (ELit (LInt 1))) (EListLit) (EApp (EApp (EVar "map") (ELam ((PVar "n")) (EApp (EApp (EVar "optionOr") (ELit (LString ""))) (EApp (EApp (EVar "get") (EVar "n")) (EVar "reverse"))))) (ERangeList (ELit (LInt 1)) (EVar "high") true))))))
-(DTypeSig false "mapDefects" (TyFun (TyCon "String") (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyFun (TyApp (TyCon "OrdMap") (TyCon "Int")) (TyApp (TyCon "List") (TyCon "String"))))))))
-(DFunDef false "mapDefects" ((PVar "label") (PVar "low") (PVar "limit") (PVar "high") (PVar "table")) (EBlock (DoLet false false (PVar "rows") (EApp (EVar "entries") (EVar "table"))) (DoLet false false (PVar "invalid") (EApp (EApp (EVar "flatMap") (EApp (EApp (EApp (EApp (EVar "assignmentDefect") (EVar "label")) (EVar "low")) (EVar "limit")) (EVar "high"))) (EVar "rows"))) (DoLet false false (PVar "nums") (EApp (EApp (EVar "map") (ELam ((PVar "p")) (EApp (EVar "intToString") (EApp (EVar "snd") (EVar "p"))))) (EVar "rows"))) (DoExpr (EBinOp "++" (EVar "invalid") (EIf (EBinOp "/=" (EApp (EVar "length") (EApp (EVar "entries") (EApp (EApp (EVar "omFromNames") (EVar "nums")) (EVar "omEmpty")))) (EApp (EVar "length") (EVar "nums"))) (EListLit (EBinOp "++" (EBinOp "++" (ELit (LString "identity: duplicate ")) (EVar "label")) (ELit (LString " number")))) (EListLit))))))
-(DTypeSig false "assignmentDefect" (TyFun (TyCon "String") (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyFun (TyTuple (TyCon "String") (TyCon "Int")) (TyApp (TyCon "List") (TyCon "String"))))))))
-(DFunDef false "assignmentDefect" ((PVar "label") (PVar "low") (PVar "limit") (PVar "high") (PTuple (PVar "name") (PVar "n"))) (EIf (EBinOp "||" (EBinOp "||" (EBinOp "||" (EBinOp "==" (EVar "name") (ELit (LString ""))) (EBinOp "<" (EVar "n") (EVar "low"))) (EBinOp ">=" (EVar "n") (EVar "limit"))) (EBinOp ">" (EVar "n") (EVar "high"))) (EListLit (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "identity: invalid ")) (EApp (EVar "display") (EVar "label"))) (ELit (LString " assignment "))) (EApp (EVar "display") (EVar "name"))) (ELit (LString "")))) (EListLit)))
-(DTypeSig true "packageDefects" (TyFun (TyCon "PackageIdentity") (TyApp (TyCon "List") (TyCon "String"))))
-(DFunDef false "packageDefects" ((PVar "p")) (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EIf (EBinOp "==" (EFieldAccess (EVar "p") "abi") (EVar "abiVersion")) (EListLit) (EListLit (ELit (LString "identity: incompatible ABI")))) (EIf (EBinOp "&&" (EBinOp ">=" (EFieldAccess (EVar "p") "typeHigh") (ELit (LInt 0))) (EBinOp "<" (EFieldAccess (EVar "p") "typeHigh") (EVar "reservedTypeBase"))) (EListLit) (EListLit (ELit (LString "identity: invalid type high-water mark"))))) (EIf (EBinOp "&&" (EBinOp ">=" (EFieldAccess (EVar "p") "fileHigh") (ELit (LInt 0))) (EBinOp "<" (EFieldAccess (EVar "p") "fileHigh") (EApp (EApp (EVar "shiftLeft") (ELit (LInt 1))) (EVar "siteFileBits")))) (EListLit) (EListLit (ELit (LString "identity: invalid file high-water mark"))))) (EApp (EApp (EApp (EApp (EApp (EVar "mapDefects") (ELit (LString "type"))) (ELit (LInt 1))) (EVar "reservedTypeBase")) (EFieldAccess (EVar "p") "typeHigh")) (EFieldAccess (EVar "p") "types"))) (EApp (EApp (EApp (EApp (EApp (EVar "mapDefects") (ELit (LString "file"))) (ELit (LInt 1))) (EApp (EApp (EVar "shiftLeft") (ELit (LInt 1))) (EVar "siteFileBits"))) (EFieldAccess (EVar "p") "fileHigh")) (EFieldAccess (EVar "p") "files"))))
-(DTypeSig true "planProgramIdentity" (TyFun (TyCon "PackageIdentity") (TyFun (TyCon "CProgram") (TyApp (TyApp (TyCon "Result") (TyApp (TyCon "List") (TyCon "String"))) (TyCon "IdentityPlan")))))
-(DFunDef false "planProgramIdentity" ((PVar "imported") (PVar "cp")) (EBlock (DoLet false false (PTuple (PVar "types") (PVar "typeHigh")) (EApp (EApp (EApp (EVar "assign") (EApp (EApp (EVar "map") (EVar "fst")) (EApp (EVar "entries") (EApp (EApp (EVar "omFromNames") (EFieldAccess (EApp (EVar "planConstructors") (EVar "cp")) "typeOrder")) (EVar "omEmpty"))))) (EFieldAccess (EVar "imported") "typeHigh")) (EFieldAccess (EVar "imported") "types"))) (DoLet false false (PTuple (PVar "files") (PVar "fileHigh")) (EApp (EApp (EApp (EVar "assign") (EApp (EVar "programFiles") (EVar "cp"))) (EFieldAccess (EVar "imported") "fileHigh")) (EFieldAccess (EVar "imported") "files"))) (DoLet false false (PVar "defects") (EBinOp "++" (EBinOp "++" (EApp (EVar "packageDefects") (EVar "imported")) (EIf (EBinOp "<" (EVar "typeHigh") (EVar "reservedTypeBase")) (EListLit) (EListLit (ELit (LString "identity: type IDs exhausted"))))) (EIf (EBinOp "<" (EVar "fileHigh") (EApp (EApp (EVar "shiftLeft") (ELit (LInt 1))) (EVar "siteFileBits"))) (EListLit) (EListLit (ELit (LString "identity: file IDs exhausted")))))) (DoExpr (EIf (EApp (EVar "isEmpty") (EVar "defects")) (EApp (EVar "Ok") (ERecordCreate "IdentityPlan" ((fa "imported" (EVar "imported")) (fa "types" (EVar "types")) (fa "files" (EVar "files")) (fa "orderedFiles" (EApp (EApp (EVar "ordered") (EVar "fileHigh")) (EVar "files")))))) (EApp (EVar "Err") (EVar "defects"))))))
-(DTypeSig true "planPackageIdentity" (TyFun (TyCon "String") (TyFun (TyCon "CProgram") (TyApp (TyApp (TyCon "Result") (TyApp (TyCon "List") (TyCon "String"))) (TyCon "PackageIdentity")))))
-(DFunDef false "planPackageIdentity" ((PVar "fingerprint") (PVar "cp")) (EApp (EApp (EVar "map") (ELam ((PVar "plan")) (ERecordCreate "PackageIdentity" ((fa "fingerprint" (EVar "fingerprint")) (fa "abi" (EVar "abiVersion")) (fa "types" (EFieldAccess (EAnnot (EVar "plan") (TyCon "IdentityPlan")) "types")) (fa "files" (EFieldAccess (EAnnot (EVar "plan") (TyCon "IdentityPlan")) "files")) (fa "typeHigh" (EApp (EApp (EApp (EVar "fold") (ELam ((PVar "n") (PVar "pair")) (EApp (EApp (EVar "max") (EVar "n")) (EApp (EVar "snd") (EVar "pair"))))) (ELit (LInt 0))) (EApp (EVar "entries") (EFieldAccess (EAnnot (EVar "plan") (TyCon "IdentityPlan")) "types")))) (fa "fileHigh" (EApp (EApp (EApp (EVar "fold") (ELam ((PVar "n") (PVar "pair")) (EApp (EApp (EVar "max") (EVar "n")) (EApp (EVar "snd") (EVar "pair"))))) (ELit (LInt 0))) (EApp (EVar "entries") (EFieldAccess (EAnnot (EVar "plan") (TyCon "IdentityPlan")) "files")))))))) (EApp (EApp (EVar "planProgramIdentity") (EVar "emptyPackage")) (EVar "cp"))))
-(DTypeSig true "validateIdentityPlan" (TyFun (TyCon "CProgram") (TyFun (TyCon "IdentityPlan") (TyApp (TyCon "List") (TyCon "String")))))
-(DFunDef false "validateIdentityPlan" ((PVar "cp") (PVar "plan")) (EBlock (DoLet false false (PVar "imported") (EFieldAccess (EVar "plan") "imported")) (DoLet false false (PVar "typeHigh") (EApp (EApp (EApp (EVar "fold") (ELam ((PVar "n") (PVar "pair")) (EApp (EApp (EVar "max") (EVar "n")) (EApp (EVar "snd") (EVar "pair"))))) (EFieldAccess (EVar "imported") "typeHigh")) (EApp (EVar "entries") (EFieldAccess (EVar "plan") "types")))) (DoLet false false (PVar "fileHigh") (EApp (EApp (EApp (EVar "fold") (ELam ((PVar "n") (PVar "pair")) (EApp (EApp (EVar "max") (EVar "n")) (EApp (EVar "snd") (EVar "pair"))))) (EFieldAccess (EVar "imported") "fileHigh")) (EApp (EVar "entries") (EFieldAccess (EVar "plan") "files")))) (DoLet false false (PTuple (PVar "expectedTypes") PWild) (EApp (EApp (EApp (EVar "assign") (EApp (EApp (EVar "map") (EVar "fst")) (EApp (EVar "entries") (EFieldAccess (EVar "plan") "types")))) (EFieldAccess (EVar "imported") "typeHigh")) (EFieldAccess (EVar "imported") "types"))) (DoLet false false (PTuple (PVar "expectedFiles") PWild) (EApp (EApp (EApp (EVar "assign") (EApp (EApp (EVar "map") (EVar "fst")) (EApp (EVar "entries") (EFieldAccess (EVar "plan") "files")))) (EFieldAccess (EVar "imported") "fileHigh")) (EFieldAccess (EVar "imported") "files"))) (DoExpr (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EApp (EVar "packageDefects") (EVar "imported")) (EApp (EApp (EApp (EApp (EApp (EVar "mapDefects") (ELit (LString "type"))) (ELit (LInt 1))) (EVar "reservedTypeBase")) (EVar "typeHigh")) (EFieldAccess (EVar "plan") "types"))) (EApp (EApp (EApp (EApp (EApp (EVar "mapDefects") (ELit (LString "file"))) (ELit (LInt 1))) (EApp (EApp (EVar "shiftLeft") (ELit (LInt 1))) (EVar "siteFileBits"))) (EVar "fileHigh")) (EFieldAccess (EVar "plan") "files"))) (EApp (EApp (EVar "flatMap") (EApp (EApp (EVar "importDefect") (ELit (LString "type"))) (EFieldAccess (EVar "plan") "types"))) (EApp (EVar "entries") (EFieldAccess (EVar "imported") "types")))) (EApp (EApp (EVar "flatMap") (EApp (EApp (EVar "importDefect") (ELit (LString "file"))) (EFieldAccess (EVar "plan") "files"))) (EApp (EVar "entries") (EFieldAccess (EVar "imported") "files")))) (EApp (EApp (EVar "flatMap") (ELam ((PVar "name")) (EIf (EApp (EApp (EVar "omHasKey") (EVar "name")) (EFieldAccess (EVar "plan") "types")) (EListLit) (EListLit (EBinOp "++" (ELit (LString "identity: missing type ")) (EVar "name")))))) (EFieldAccess (EApp (EVar "planConstructors") (EVar "cp")) "typeOrder"))) (EApp (EApp (EVar "flatMap") (ELam ((PVar "name")) (EIf (EApp (EApp (EVar "omHasKey") (EVar "name")) (EFieldAccess (EVar "plan") "files")) (EListLit) (EListLit (EBinOp "++" (ELit (LString "identity: missing file ")) (EVar "name")))))) (EApp (EVar "programFiles") (EVar "cp")))) (EIf (EBinOp "==" (EApp (EVar "entries") (EVar "expectedTypes")) (EApp (EVar "entries") (EFieldAccess (EVar "plan") "types"))) (EListLit) (EListLit (ELit (LString "identity: type allocation disagrees"))))) (EIf (EBinOp "==" (EApp (EVar "entries") (EVar "expectedFiles")) (EApp (EVar "entries") (EFieldAccess (EVar "plan") "files"))) (EListLit) (EListLit (ELit (LString "identity: file allocation disagrees"))))) (EApp (EApp (EVar "flatMap") (EApp (EApp (EApp (EVar "localDefect") (ELit (LString "type"))) (EFieldAccess (EVar "imported") "typeHigh")) (EFieldAccess (EVar "imported") "types"))) (EApp (EVar "entries") (EFieldAccess (EVar "plan") "types")))) (EApp (EApp (EVar "flatMap") (EApp (EApp (EApp (EVar "localDefect") (ELit (LString "file"))) (EFieldAccess (EVar "imported") "fileHigh")) (EFieldAccess (EVar "imported") "files"))) (EApp (EVar "entries") (EFieldAccess (EVar "plan") "files")))) (EIf (EBinOp "&&" (EBinOp "&&" (EBinOp ">=" (EVar "fileHigh") (ELit (LInt 0))) (EBinOp "<" (EVar "fileHigh") (EApp (EApp (EVar "shiftLeft") (ELit (LInt 1))) (EVar "siteFileBits")))) (EBinOp "==" (EFieldAccess (EVar "plan") "orderedFiles") (EApp (EApp (EVar "ordered") (EVar "fileHigh")) (EFieldAccess (EVar "plan") "files")))) (EListLit) (EListLit (ELit (LString "identity: file table disagrees"))))))))
-(DTypeSig false "localDefect" (TyFun (TyCon "String") (TyFun (TyCon "Int") (TyFun (TyApp (TyCon "OrdMap") (TyCon "Int")) (TyFun (TyTuple (TyCon "String") (TyCon "Int")) (TyApp (TyCon "List") (TyCon "String")))))))
-(DFunDef false "localDefect" ((PVar "label") (PVar "high") (PVar "imported") (PTuple (PVar "name") (PVar "n"))) (EIf (EBinOp "&&" (EApp (EVar "not") (EApp (EApp (EVar "omHasKey") (EVar "name")) (EVar "imported"))) (EBinOp "<=" (EVar "n") (EVar "high"))) (EListLit (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "identity: local ")) (EApp (EVar "display") (EVar "label"))) (ELit (LString " uses reserved hole "))) (EApp (EVar "display") (EVar "name"))) (ELit (LString "")))) (EListLit)))
-(DTypeSig false "importDefect" (TyFun (TyCon "String") (TyFun (TyApp (TyCon "OrdMap") (TyCon "Int")) (TyFun (TyTuple (TyCon "String") (TyCon "Int")) (TyApp (TyCon "List") (TyCon "String"))))))
-(DFunDef false "importDefect" ((PVar "label") (PVar "table") (PTuple (PVar "name") (PVar "n"))) (EIf (EBinOp "==" (EApp (EApp (EVar "omLookup") (EVar "name")) (EVar "table")) (EApp (EVar "Some") (EVar "n"))) (EListLit) (EListLit (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "identity: imported ")) (EApp (EVar "display") (EVar "label"))) (ELit (LString " changed "))) (EApp (EVar "display") (EVar "name"))) (ELit (LString ""))))))
+(DData Private "IdentityBounds" () ((variant "IdentityBounds" (ConNamed (field "kind" (TyCon "IdentityKind")) (field "limit" (TyCon "Int")) (field "high" (TyCon "Int"))))) ())
+(DTypeSig false "mapDefects" (TyFun (TyCon "IdentityBounds") (TyFun (TyApp (TyCon "OrdMap") (TyCon "Int")) (TyApp (TyCon "List") (TyCon "IdentityDefect")))))
+(DFunDef false "mapDefects" ((PVar "bounds") (PVar "table")) (EBlock (DoLet false false (PVar "rows") (EApp (EVar "entries") (EVar "table"))) (DoLet false false (PVar "invalid") (EApp (EApp (EVar "flatMap") (EApp (EVar "assignmentDefect") (EVar "bounds"))) (EVar "rows"))) (DoLet false false (PVar "nums") (EApp (EApp (EVar "map") (ELam ((PVar "p")) (EApp (EVar "intToString") (EApp (EVar "snd") (EVar "p"))))) (EVar "rows"))) (DoExpr (EBinOp "++" (EVar "invalid") (EIf (EBinOp "/=" (EApp (EVar "length") (EApp (EVar "entries") (EApp (EApp (EVar "omFromNames") (EVar "nums")) (EVar "omEmpty")))) (EApp (EVar "length") (EVar "nums"))) (EListLit (EApp (EVar "DuplicateNumber") (EFieldAccess (EVar "bounds") "kind"))) (EListLit))))))
+(DTypeSig false "assignmentDefect" (TyFun (TyCon "IdentityBounds") (TyFun (TyTuple (TyCon "String") (TyCon "Int")) (TyApp (TyCon "List") (TyCon "IdentityDefect")))))
+(DFunDef false "assignmentDefect" ((PVar "bounds") (PTuple (PVar "name") (PVar "n"))) (EIf (EBinOp "||" (EBinOp "||" (EBinOp "||" (EBinOp "==" (EVar "name") (ELit (LString ""))) (EBinOp "<" (EVar "n") (ELit (LInt 1)))) (EBinOp ">=" (EVar "n") (EFieldAccess (EVar "bounds") "limit"))) (EBinOp ">" (EVar "n") (EFieldAccess (EVar "bounds") "high"))) (EListLit (EApp (EApp (EVar "InvalidAssignment") (EFieldAccess (EVar "bounds") "kind")) (EVar "name"))) (EListLit)))
+(DTypeSig true "packageDefects" (TyFun (TyCon "PackageIdentity") (TyApp (TyCon "List") (TyCon "IdentityDefect"))))
+(DFunDef false "packageDefects" ((PVar "p")) (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EIf (EBinOp "==" (EFieldAccess (EVar "p") "abi") (EVar "abiVersion")) (EListLit) (EListLit (EVar "IdentityIncompatibleAbi"))) (EIf (EBinOp "&&" (EBinOp ">=" (EFieldAccess (EVar "p") "typeHigh") (ELit (LInt 0))) (EBinOp "<" (EFieldAccess (EVar "p") "typeHigh") (EVar "reservedTypeBase"))) (EListLit) (EListLit (EApp (EVar "InvalidHighWater") (EVar "TypeIdentity"))))) (EIf (EBinOp "&&" (EBinOp ">=" (EFieldAccess (EVar "p") "fileHigh") (ELit (LInt 0))) (EBinOp "<" (EFieldAccess (EVar "p") "fileHigh") (EApp (EApp (EVar "shiftLeft") (ELit (LInt 1))) (EVar "siteFileBits")))) (EListLit) (EListLit (EApp (EVar "InvalidHighWater") (EVar "FileIdentity"))))) (EApp (EApp (EVar "mapDefects") (EApp (EApp (EApp (EVar "IdentityBounds") (EVar "TypeIdentity")) (EVar "reservedTypeBase")) (EFieldAccess (EVar "p") "typeHigh"))) (EFieldAccess (EVar "p") "types"))) (EApp (EApp (EVar "mapDefects") (EApp (EApp (EApp (EVar "IdentityBounds") (EVar "FileIdentity")) (EApp (EApp (EVar "shiftLeft") (ELit (LInt 1))) (EVar "siteFileBits"))) (EFieldAccess (EVar "p") "fileHigh"))) (EFieldAccess (EVar "p") "files"))))
+(DTypeSig true "planProgramIdentity" (TyFun (TyCon "PackageIdentity") (TyFun (TyCon "CProgram") (TyApp (TyApp (TyCon "Result") (TyApp (TyCon "List") (TyCon "IdentityDefect"))) (TyCon "IdentityPlan")))))
+(DFunDef false "planProgramIdentity" ((PVar "imported") (PVar "cp")) (EBlock (DoLet false false (PTuple (PVar "types") (PVar "typeHigh")) (EApp (EApp (EApp (EVar "assign") (EApp (EApp (EVar "map") (EVar "fst")) (EApp (EVar "entries") (EApp (EApp (EVar "omFromNames") (EFieldAccess (EApp (EVar "planConstructors") (EVar "cp")) "typeOrder")) (EVar "omEmpty"))))) (EFieldAccess (EVar "imported") "typeHigh")) (EFieldAccess (EVar "imported") "types"))) (DoLet false false (PTuple (PVar "files") (PVar "fileHigh")) (EApp (EApp (EApp (EVar "assign") (EApp (EVar "programFiles") (EVar "cp"))) (EFieldAccess (EVar "imported") "fileHigh")) (EFieldAccess (EVar "imported") "files"))) (DoLet false false (PVar "defects") (EBinOp "++" (EBinOp "++" (EApp (EVar "packageDefects") (EVar "imported")) (EIf (EBinOp "<" (EVar "typeHigh") (EVar "reservedTypeBase")) (EListLit) (EListLit (EApp (EVar "Exhausted") (EVar "TypeIdentity"))))) (EIf (EBinOp "<" (EVar "fileHigh") (EApp (EApp (EVar "shiftLeft") (ELit (LInt 1))) (EVar "siteFileBits"))) (EListLit) (EListLit (EApp (EVar "Exhausted") (EVar "FileIdentity")))))) (DoExpr (EIf (EApp (EVar "isEmpty") (EVar "defects")) (EApp (EVar "Ok") (ERecordCreate "IdentityPlan" ((fa "imported" (EVar "imported")) (fa "types" (EVar "types")) (fa "files" (EVar "files")) (fa "orderedFiles" (EApp (EApp (EVar "ordered") (EVar "fileHigh")) (EVar "files")))))) (EApp (EVar "Err") (EVar "defects"))))))
+(DTypeSig true "planPackageIdentity" (TyFun (TyCon "String") (TyFun (TyCon "CProgram") (TyApp (TyApp (TyCon "Result") (TyApp (TyCon "List") (TyCon "IdentityDefect"))) (TyCon "PackageIdentity")))))
+(DFunDef false "planPackageIdentity" ((PVar "fingerprint") (PVar "cp")) (EApp (EApp (EVar "map") (ELam ((PVar "plan")) (ERecordCreate "PackageIdentity" ((fa "fingerprint" (EVar "fingerprint")) (fa "abi" (EVar "abiVersion")) (fa "types" (EFieldAccess (EAnnot (EVar "plan") (TyCon "IdentityPlan")) "types")) (fa "files" (EFieldAccess (EAnnot (EVar "plan") (TyCon "IdentityPlan")) "files")) (fa "typeHigh" (EApp (EApp (EVar "highWater") (ELit (LInt 0))) (EFieldAccess (EAnnot (EVar "plan") (TyCon "IdentityPlan")) "types"))) (fa "fileHigh" (EApp (EApp (EVar "highWater") (ELit (LInt 0))) (EFieldAccess (EAnnot (EVar "plan") (TyCon "IdentityPlan")) "files"))))))) (EApp (EApp (EVar "planProgramIdentity") (EVar "emptyPackage")) (EVar "cp"))))
+(DTypeSig false "highWater" (TyFun (TyCon "Int") (TyFun (TyApp (TyCon "OrdMap") (TyCon "Int")) (TyCon "Int"))))
+(DFunDef false "highWater" ((PVar "initial") (PVar "table")) (EApp (EApp (EApp (EVar "fold") (ELam ((PVar "n") (PVar "pair")) (EApp (EApp (EVar "max") (EVar "n")) (EApp (EVar "snd") (EVar "pair"))))) (EVar "initial")) (EApp (EVar "entries") (EVar "table"))))
+(DTypeSig true "validateIdentityPlan" (TyFun (TyCon "CProgram") (TyFun (TyCon "IdentityPlan") (TyApp (TyCon "List") (TyCon "IdentityDefect")))))
+(DFunDef false "validateIdentityPlan" ((PVar "cp") (PVar "plan")) (EBlock (DoLet false false (PVar "imported") (EFieldAccess (EVar "plan") "imported")) (DoLet false false (PVar "typeHigh") (EApp (EApp (EVar "highWater") (EFieldAccess (EVar "imported") "typeHigh")) (EFieldAccess (EVar "plan") "types"))) (DoLet false false (PVar "fileHigh") (EApp (EApp (EVar "highWater") (EFieldAccess (EVar "imported") "fileHigh")) (EFieldAccess (EVar "plan") "files"))) (DoLet false false (PTuple (PVar "expectedTypes") PWild) (EApp (EApp (EApp (EVar "assign") (EApp (EApp (EVar "map") (EVar "fst")) (EApp (EVar "entries") (EFieldAccess (EVar "plan") "types")))) (EFieldAccess (EVar "imported") "typeHigh")) (EFieldAccess (EVar "imported") "types"))) (DoLet false false (PTuple (PVar "expectedFiles") PWild) (EApp (EApp (EApp (EVar "assign") (EApp (EApp (EVar "map") (EVar "fst")) (EApp (EVar "entries") (EFieldAccess (EVar "plan") "files")))) (EFieldAccess (EVar "imported") "fileHigh")) (EFieldAccess (EVar "imported") "files"))) (DoExpr (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EApp (EVar "packageDefects") (EVar "imported")) (EApp (EApp (EVar "mapDefects") (EApp (EApp (EApp (EVar "IdentityBounds") (EVar "TypeIdentity")) (EVar "reservedTypeBase")) (EVar "typeHigh"))) (EFieldAccess (EVar "plan") "types"))) (EApp (EApp (EVar "mapDefects") (EApp (EApp (EApp (EVar "IdentityBounds") (EVar "FileIdentity")) (EApp (EApp (EVar "shiftLeft") (ELit (LInt 1))) (EVar "siteFileBits"))) (EVar "fileHigh"))) (EFieldAccess (EVar "plan") "files"))) (EApp (EApp (EVar "flatMap") (EApp (EApp (EVar "importDefect") (EVar "TypeIdentity")) (EFieldAccess (EVar "plan") "types"))) (EApp (EVar "entries") (EFieldAccess (EVar "imported") "types")))) (EApp (EApp (EVar "flatMap") (EApp (EApp (EVar "importDefect") (EVar "FileIdentity")) (EFieldAccess (EVar "plan") "files"))) (EApp (EVar "entries") (EFieldAccess (EVar "imported") "files")))) (EApp (EApp (EVar "flatMap") (ELam ((PVar "name")) (EIf (EApp (EApp (EVar "omHasKey") (EVar "name")) (EFieldAccess (EVar "plan") "types")) (EListLit) (EListLit (EApp (EApp (EVar "MissingAssignment") (EVar "TypeIdentity")) (EVar "name")))))) (EFieldAccess (EApp (EVar "planConstructors") (EVar "cp")) "typeOrder"))) (EApp (EApp (EVar "flatMap") (ELam ((PVar "name")) (EIf (EApp (EApp (EVar "omHasKey") (EVar "name")) (EFieldAccess (EVar "plan") "files")) (EListLit) (EListLit (EApp (EApp (EVar "MissingAssignment") (EVar "FileIdentity")) (EVar "name")))))) (EApp (EVar "programFiles") (EVar "cp")))) (EIf (EBinOp "==" (EApp (EVar "entries") (EVar "expectedTypes")) (EApp (EVar "entries") (EFieldAccess (EVar "plan") "types"))) (EListLit) (EListLit (EApp (EVar "AllocationDisagrees") (EVar "TypeIdentity"))))) (EIf (EBinOp "==" (EApp (EVar "entries") (EVar "expectedFiles")) (EApp (EVar "entries") (EFieldAccess (EVar "plan") "files"))) (EListLit) (EListLit (EApp (EVar "AllocationDisagrees") (EVar "FileIdentity"))))) (EApp (EApp (EVar "flatMap") (EApp (EApp (EApp (EVar "localDefect") (EVar "TypeIdentity")) (EFieldAccess (EVar "imported") "typeHigh")) (EFieldAccess (EVar "imported") "types"))) (EApp (EVar "entries") (EFieldAccess (EVar "plan") "types")))) (EApp (EApp (EVar "flatMap") (EApp (EApp (EApp (EVar "localDefect") (EVar "FileIdentity")) (EFieldAccess (EVar "imported") "fileHigh")) (EFieldAccess (EVar "imported") "files"))) (EApp (EVar "entries") (EFieldAccess (EVar "plan") "files")))) (EIf (EBinOp "&&" (EBinOp "&&" (EBinOp ">=" (EVar "fileHigh") (ELit (LInt 0))) (EBinOp "<" (EVar "fileHigh") (EApp (EApp (EVar "shiftLeft") (ELit (LInt 1))) (EVar "siteFileBits")))) (EBinOp "==" (EFieldAccess (EVar "plan") "orderedFiles") (EApp (EApp (EVar "ordered") (EVar "fileHigh")) (EFieldAccess (EVar "plan") "files")))) (EListLit) (EListLit (EVar "FileTableDisagrees")))))))
+(DTypeSig false "localDefect" (TyFun (TyCon "IdentityKind") (TyFun (TyCon "Int") (TyFun (TyApp (TyCon "OrdMap") (TyCon "Int")) (TyFun (TyTuple (TyCon "String") (TyCon "Int")) (TyApp (TyCon "List") (TyCon "IdentityDefect")))))))
+(DFunDef false "localDefect" ((PVar "label") (PVar "high") (PVar "imported") (PTuple (PVar "name") (PVar "n"))) (EIf (EBinOp "&&" (EApp (EVar "not") (EApp (EApp (EVar "omHasKey") (EVar "name")) (EVar "imported"))) (EBinOp "<=" (EVar "n") (EVar "high"))) (EListLit (EApp (EApp (EVar "ReservedHole") (EVar "label")) (EVar "name"))) (EListLit)))
+(DTypeSig false "importDefect" (TyFun (TyCon "IdentityKind") (TyFun (TyApp (TyCon "OrdMap") (TyCon "Int")) (TyFun (TyTuple (TyCon "String") (TyCon "Int")) (TyApp (TyCon "List") (TyCon "IdentityDefect"))))))
+(DFunDef false "importDefect" ((PVar "label") (PVar "table") (PTuple (PVar "name") (PVar "n"))) (EIf (EBinOp "==" (EApp (EApp (EVar "omLookup") (EVar "name")) (EVar "table")) (EApp (EVar "Some") (EVar "n"))) (EListLit) (EListLit (EApp (EApp (EVar "ImportedChanged") (EVar "label")) (EVar "name")))))
 (DTypeSig true "packSite" (TyFun (TyCon "IdentityPlan") (TyFun (TyCon "Loc") (TyCon "Int"))))
-(DFunDef false "packSite" ((PVar "plan") (PAs "loc" (PCon "Loc" (PVar "f") (PVar "line") (PVar "col") PWild PWild))) (EIf (EApp (EVar "not") (EApp (EVar "sitePackable") (EVar "loc"))) (ELit (LInt 0)) (EMatch (EApp (EApp (EVar "omLookup") (EVar "f")) (EFieldAccess (EVar "plan") "files")) (arm (PCon "None") () (ELit (LInt 0))) (arm (PCon "Some" (PVar "n")) () (EBinOp "+" (EBinOp "+" (EBinOp "*" (EVar "n") (EApp (EApp (EVar "shiftLeft") (ELit (LInt 1))) (EVar "siteFileShift"))) (EBinOp "*" (EVar "line") (EApp (EApp (EVar "shiftLeft") (ELit (LInt 1))) (EVar "siteLineShift")))) (EVar "col"))))))
+(DFunDef false "packSite" ((PVar "plan") (PAs "loc" (PCon "Loc" (PVar "f") (PVar "line") (PVar "col") PWild PWild))) (EIf (EApp (EVar "not") (EApp (EVar "sitePackable") (EVar "loc"))) (ELit (LInt 0)) (EMatch (EApp (EApp (EVar "omLookup") (EVar "f")) (EFieldAccess (EVar "plan") "files")) (arm (PCon "None") () (EApp (EVar "panic") (EBinOp "++" (EBinOp "++" (ELit (LString "identity: missing file ")) (EApp (EVar "display") (EVar "f"))) (ELit (LString ""))))) (arm (PCon "Some" (PVar "n")) () (EBinOp "+" (EBinOp "+" (EBinOp "*" (EVar "n") (EApp (EApp (EVar "shiftLeft") (ELit (LInt 1))) (EVar "siteFileShift"))) (EBinOp "*" (EVar "line") (EApp (EApp (EVar "shiftLeft") (ELit (LInt 1))) (EVar "siteLineShift")))) (EVar "col"))))))
 # MARK
 (DUse false (UseGroup ("frontend" "ast") ((mem "Loc" true) (mem "Lit" true))))
 (DUse false (UseGroup ("ir" "core_ir") ((mem "CProgram" true) (mem "CBind" true) (mem "CClause" true) (mem "CExpr" true) (mem "CField" true) (mem "CArm" true) (mem "CGuard" true) (mem "CTree" true) (mem "CTBranch" true) (mem "FailSite" true) (mem "CStmt" true) (mem "CImplEntry" true) (mem "CImplBody" true) (mem "siteSentinelName" false))))
@@ -421,6 +500,28 @@ packSite plan (loc@(Loc f line col _ _)) =
 (DUse false (UseGroup ("map") ((mem "entries" false) (mem "fromList" false) (mem "get" false))))
 (DData Public "PackageIdentity" () ((variant "PackageIdentity" (ConNamed (field "fingerprint" (TyCon "String")) (field "abi" (TyCon "Int")) (field "types" (TyApp (TyCon "OrdMap") (TyCon "Int"))) (field "files" (TyApp (TyCon "OrdMap") (TyCon "Int"))) (field "typeHigh" (TyCon "Int")) (field "fileHigh" (TyCon "Int"))))) ())
 (DData Public "IdentityPlan" () ((variant "IdentityPlan" (ConNamed (field "imported" (TyCon "PackageIdentity")) (field "types" (TyApp (TyCon "OrdMap") (TyCon "Int"))) (field "files" (TyApp (TyCon "OrdMap") (TyCon "Int"))) (field "orderedFiles" (TyApp (TyCon "List") (TyCon "String")))))) ())
+(DData Public "IdentityKind" () ((variant "TypeIdentity" (ConPos)) (variant "FileIdentity" (ConPos))) ())
+(DImpl true "Eq" ((TyCon "IdentityKind")) () ((im "eq" ((PVar "__x") (PVar "__y")) (EMatch (ETuple (EVar "__x") (EVar "__y")) (arm (PTuple (PCon "TypeIdentity") (PCon "TypeIdentity")) () (EVar "True")) (arm (PTuple (PCon "FileIdentity") (PCon "FileIdentity")) () (EVar "True")) (arm (PTuple PWild PWild) () (EVar "False"))))))
+(DImpl true "Debug" ((TyCon "IdentityKind")) () ((im "debug" ((PVar "__x")) (EMatch (EVar "__x") (arm (PCon "TypeIdentity") () (ELit (LString "TypeIdentity"))) (arm (PCon "FileIdentity") () (ELit (LString "FileIdentity")))))))
+(DImpl true "Display" ((TyCon "IdentityKind")) () ((im "display" ((PVar "__x")) (EMatch (EVar "__x") (arm (PCon "TypeIdentity") () (ELit (LString "TypeIdentity"))) (arm (PCon "FileIdentity") () (ELit (LString "FileIdentity")))))))
+(DData Public "IdentityDefect" () ((variant "IdentityIncompatibleAbi" (ConPos)) (variant "InvalidHighWater" (ConPos (TyCon "IdentityKind"))) (variant "InvalidAssignment" (ConPos (TyCon "IdentityKind") (TyCon "String"))) (variant "DuplicateNumber" (ConPos (TyCon "IdentityKind"))) (variant "Exhausted" (ConPos (TyCon "IdentityKind"))) (variant "MissingAssignment" (ConPos (TyCon "IdentityKind") (TyCon "String"))) (variant "AllocationDisagrees" (ConPos (TyCon "IdentityKind"))) (variant "ReservedHole" (ConPos (TyCon "IdentityKind") (TyCon "String"))) (variant "ImportedChanged" (ConPos (TyCon "IdentityKind") (TyCon "String"))) (variant "FileTableDisagrees" (ConPos))) ())
+(DImpl true "Eq" ((TyCon "IdentityDefect")) () ((im "eq" ((PVar "__x") (PVar "__y")) (EMatch (ETuple (EVar "__x") (EVar "__y")) (arm (PTuple (PCon "IdentityIncompatibleAbi") (PCon "IdentityIncompatibleAbi")) () (EVar "True")) (arm (PTuple (PCon "InvalidHighWater" (PVar "__a0")) (PCon "InvalidHighWater" (PVar "__b0"))) () (EApp (EApp (EMethodRef "eq") (EVar "__a0")) (EVar "__b0"))) (arm (PTuple (PCon "InvalidAssignment" (PVar "__a0") (PVar "__a1")) (PCon "InvalidAssignment" (PVar "__b0") (PVar "__b1"))) () (EBinOp "&&" (EApp (EApp (EMethodRef "eq") (EVar "__a0")) (EVar "__b0")) (EApp (EApp (EMethodRef "eq") (EVar "__a1")) (EVar "__b1")))) (arm (PTuple (PCon "DuplicateNumber" (PVar "__a0")) (PCon "DuplicateNumber" (PVar "__b0"))) () (EApp (EApp (EMethodRef "eq") (EVar "__a0")) (EVar "__b0"))) (arm (PTuple (PCon "Exhausted" (PVar "__a0")) (PCon "Exhausted" (PVar "__b0"))) () (EApp (EApp (EMethodRef "eq") (EVar "__a0")) (EVar "__b0"))) (arm (PTuple (PCon "MissingAssignment" (PVar "__a0") (PVar "__a1")) (PCon "MissingAssignment" (PVar "__b0") (PVar "__b1"))) () (EBinOp "&&" (EApp (EApp (EMethodRef "eq") (EVar "__a0")) (EVar "__b0")) (EApp (EApp (EMethodRef "eq") (EVar "__a1")) (EVar "__b1")))) (arm (PTuple (PCon "AllocationDisagrees" (PVar "__a0")) (PCon "AllocationDisagrees" (PVar "__b0"))) () (EApp (EApp (EMethodRef "eq") (EVar "__a0")) (EVar "__b0"))) (arm (PTuple (PCon "ReservedHole" (PVar "__a0") (PVar "__a1")) (PCon "ReservedHole" (PVar "__b0") (PVar "__b1"))) () (EBinOp "&&" (EApp (EApp (EMethodRef "eq") (EVar "__a0")) (EVar "__b0")) (EApp (EApp (EMethodRef "eq") (EVar "__a1")) (EVar "__b1")))) (arm (PTuple (PCon "ImportedChanged" (PVar "__a0") (PVar "__a1")) (PCon "ImportedChanged" (PVar "__b0") (PVar "__b1"))) () (EBinOp "&&" (EApp (EApp (EMethodRef "eq") (EVar "__a0")) (EVar "__b0")) (EApp (EApp (EMethodRef "eq") (EVar "__a1")) (EVar "__b1")))) (arm (PTuple (PCon "FileTableDisagrees") (PCon "FileTableDisagrees")) () (EVar "True")) (arm (PTuple PWild PWild) () (EVar "False"))))))
+(DImpl true "Debug" ((TyCon "IdentityDefect")) () ((im "debug" ((PVar "__x")) (EMatch (EVar "__x") (arm (PCon "IdentityIncompatibleAbi") () (ELit (LString "IdentityIncompatibleAbi"))) (arm (PCon "InvalidHighWater" (PVar "__a0")) () (EBinOp "++" (ELit (LString "InvalidHighWater ")) (EApp (EVar "derivedShowWrap") (EApp (EMethodRef "debug") (EVar "__a0"))))) (arm (PCon "InvalidAssignment" (PVar "__a0") (PVar "__a1")) () (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "InvalidAssignment ")) (EApp (EVar "derivedShowWrap") (EApp (EMethodRef "debug") (EVar "__a0")))) (ELit (LString " "))) (EApp (EVar "derivedShowWrap") (EApp (EMethodRef "debug") (EVar "__a1"))))) (arm (PCon "DuplicateNumber" (PVar "__a0")) () (EBinOp "++" (ELit (LString "DuplicateNumber ")) (EApp (EVar "derivedShowWrap") (EApp (EMethodRef "debug") (EVar "__a0"))))) (arm (PCon "Exhausted" (PVar "__a0")) () (EBinOp "++" (ELit (LString "Exhausted ")) (EApp (EVar "derivedShowWrap") (EApp (EMethodRef "debug") (EVar "__a0"))))) (arm (PCon "MissingAssignment" (PVar "__a0") (PVar "__a1")) () (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "MissingAssignment ")) (EApp (EVar "derivedShowWrap") (EApp (EMethodRef "debug") (EVar "__a0")))) (ELit (LString " "))) (EApp (EVar "derivedShowWrap") (EApp (EMethodRef "debug") (EVar "__a1"))))) (arm (PCon "AllocationDisagrees" (PVar "__a0")) () (EBinOp "++" (ELit (LString "AllocationDisagrees ")) (EApp (EVar "derivedShowWrap") (EApp (EMethodRef "debug") (EVar "__a0"))))) (arm (PCon "ReservedHole" (PVar "__a0") (PVar "__a1")) () (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "ReservedHole ")) (EApp (EVar "derivedShowWrap") (EApp (EMethodRef "debug") (EVar "__a0")))) (ELit (LString " "))) (EApp (EVar "derivedShowWrap") (EApp (EMethodRef "debug") (EVar "__a1"))))) (arm (PCon "ImportedChanged" (PVar "__a0") (PVar "__a1")) () (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "ImportedChanged ")) (EApp (EVar "derivedShowWrap") (EApp (EMethodRef "debug") (EVar "__a0")))) (ELit (LString " "))) (EApp (EVar "derivedShowWrap") (EApp (EMethodRef "debug") (EVar "__a1"))))) (arm (PCon "FileTableDisagrees") () (ELit (LString "FileTableDisagrees")))))))
+(DImpl true "Display" ((TyCon "IdentityDefect")) () ((im "display" ((PVar "__x")) (EMatch (EVar "__x") (arm (PCon "IdentityIncompatibleAbi") () (ELit (LString "IdentityIncompatibleAbi"))) (arm (PCon "InvalidHighWater" (PVar "__a0")) () (EBinOp "++" (ELit (LString "InvalidHighWater ")) (EApp (EVar "derivedShowWrap") (EApp (EMethodRef "display") (EVar "__a0"))))) (arm (PCon "InvalidAssignment" (PVar "__a0") (PVar "__a1")) () (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "InvalidAssignment ")) (EApp (EVar "derivedShowWrap") (EApp (EMethodRef "display") (EVar "__a0")))) (ELit (LString " "))) (EApp (EVar "derivedShowWrap") (EApp (EMethodRef "display") (EVar "__a1"))))) (arm (PCon "DuplicateNumber" (PVar "__a0")) () (EBinOp "++" (ELit (LString "DuplicateNumber ")) (EApp (EVar "derivedShowWrap") (EApp (EMethodRef "display") (EVar "__a0"))))) (arm (PCon "Exhausted" (PVar "__a0")) () (EBinOp "++" (ELit (LString "Exhausted ")) (EApp (EVar "derivedShowWrap") (EApp (EMethodRef "display") (EVar "__a0"))))) (arm (PCon "MissingAssignment" (PVar "__a0") (PVar "__a1")) () (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "MissingAssignment ")) (EApp (EVar "derivedShowWrap") (EApp (EMethodRef "display") (EVar "__a0")))) (ELit (LString " "))) (EApp (EVar "derivedShowWrap") (EApp (EMethodRef "display") (EVar "__a1"))))) (arm (PCon "AllocationDisagrees" (PVar "__a0")) () (EBinOp "++" (ELit (LString "AllocationDisagrees ")) (EApp (EVar "derivedShowWrap") (EApp (EMethodRef "display") (EVar "__a0"))))) (arm (PCon "ReservedHole" (PVar "__a0") (PVar "__a1")) () (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "ReservedHole ")) (EApp (EVar "derivedShowWrap") (EApp (EMethodRef "display") (EVar "__a0")))) (ELit (LString " "))) (EApp (EVar "derivedShowWrap") (EApp (EMethodRef "display") (EVar "__a1"))))) (arm (PCon "ImportedChanged" (PVar "__a0") (PVar "__a1")) () (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "ImportedChanged ")) (EApp (EVar "derivedShowWrap") (EApp (EMethodRef "display") (EVar "__a0")))) (ELit (LString " "))) (EApp (EVar "derivedShowWrap") (EApp (EMethodRef "display") (EVar "__a1"))))) (arm (PCon "FileTableDisagrees") () (ELit (LString "FileTableDisagrees")))))))
+(DTypeSig false "kindName" (TyFun (TyCon "IdentityKind") (TyCon "String")))
+(DFunDef false "kindName" ((PCon "TypeIdentity")) (ELit (LString "type")))
+(DFunDef false "kindName" ((PCon "FileIdentity")) (ELit (LString "file")))
+(DTypeSig true "renderIdentityDefect" (TyFun (TyCon "IdentityDefect") (TyCon "String")))
+(DFunDef false "renderIdentityDefect" ((PCon "IdentityIncompatibleAbi")) (ELit (LString "identity: incompatible ABI")))
+(DFunDef false "renderIdentityDefect" ((PCon "InvalidHighWater" (PVar "kind"))) (EBinOp "++" (EBinOp "++" (ELit (LString "identity: invalid ")) (EApp (EMethodRef "display") (EApp (EVar "kindName") (EVar "kind")))) (ELit (LString " high-water mark"))))
+(DFunDef false "renderIdentityDefect" ((PCon "InvalidAssignment" (PVar "kind") (PVar "name"))) (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "identity: invalid ")) (EApp (EMethodRef "display") (EApp (EVar "kindName") (EVar "kind")))) (ELit (LString " assignment "))) (EApp (EMethodRef "display") (EVar "name"))) (ELit (LString ""))))
+(DFunDef false "renderIdentityDefect" ((PCon "DuplicateNumber" (PVar "kind"))) (EBinOp "++" (EBinOp "++" (ELit (LString "identity: duplicate ")) (EApp (EMethodRef "display") (EApp (EVar "kindName") (EVar "kind")))) (ELit (LString " number"))))
+(DFunDef false "renderIdentityDefect" ((PCon "Exhausted" (PVar "kind"))) (EBinOp "++" (EBinOp "++" (ELit (LString "identity: ")) (EApp (EMethodRef "display") (EApp (EVar "kindName") (EVar "kind")))) (ELit (LString " IDs exhausted"))))
+(DFunDef false "renderIdentityDefect" ((PCon "MissingAssignment" (PVar "kind") (PVar "name"))) (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "identity: missing ")) (EApp (EMethodRef "display") (EApp (EVar "kindName") (EVar "kind")))) (ELit (LString " "))) (EApp (EMethodRef "display") (EVar "name"))) (ELit (LString ""))))
+(DFunDef false "renderIdentityDefect" ((PCon "AllocationDisagrees" (PVar "kind"))) (EBinOp "++" (EBinOp "++" (ELit (LString "identity: ")) (EApp (EMethodRef "display") (EApp (EVar "kindName") (EVar "kind")))) (ELit (LString " allocation disagrees"))))
+(DFunDef false "renderIdentityDefect" ((PCon "ReservedHole" (PVar "kind") (PVar "name"))) (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "identity: local ")) (EApp (EMethodRef "display") (EApp (EVar "kindName") (EVar "kind")))) (ELit (LString " uses reserved hole "))) (EApp (EMethodRef "display") (EVar "name"))) (ELit (LString ""))))
+(DFunDef false "renderIdentityDefect" ((PCon "ImportedChanged" (PVar "kind") (PVar "name"))) (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "identity: imported ")) (EApp (EMethodRef "display") (EApp (EVar "kindName") (EVar "kind")))) (ELit (LString " changed "))) (EApp (EMethodRef "display") (EVar "name"))) (ELit (LString ""))))
+(DFunDef false "renderIdentityDefect" ((PCon "FileTableDisagrees")) (ELit (LString "identity: file table disagrees")))
 (DTypeSig true "emptyPackage" (TyCon "PackageIdentity"))
 (DFunDef false "emptyPackage" () (ERecordCreate "PackageIdentity" ((fa "fingerprint" (ELit (LString ""))) (fa "abi" (EVar "abiVersion")) (fa "types" (EVar "omEmpty")) (fa "files" (EVar "omEmpty")) (fa "typeHigh" (ELit (LInt 0))) (fa "fileHigh" (ELit (LInt 0))))))
 (DTypeSig true "sitePackable" (TyFun (TyCon "Loc") (TyCon "Bool")))
@@ -493,21 +594,24 @@ packSite plan (loc@(Loc f line col _ _)) =
 (DFunDef false "assign" ((PCons (PVar "name") (PVar "rest")) (PVar "high") (PVar "table")) (EIf (EApp (EApp (EVar "omHasKey") (EVar "name")) (EVar "table")) (EApp (EApp (EApp (EVar "assign") (EVar "rest")) (EVar "high")) (EVar "table")) (EApp (EApp (EApp (EVar "assign") (EVar "rest")) (EBinOp "+" (EVar "high") (ELit (LInt 1)))) (EApp (EApp (EApp (EVar "omInsert") (EVar "name")) (EBinOp "+" (EVar "high") (ELit (LInt 1)))) (EVar "table")))))
 (DTypeSig false "ordered" (TyFun (TyCon "Int") (TyFun (TyApp (TyCon "OrdMap") (TyCon "Int")) (TyApp (TyCon "List") (TyCon "String")))))
 (DFunDef false "ordered" ((PVar "high") (PVar "files")) (EBlock (DoLet false false (PVar "reverse") (EApp (EVar "fromList") (EApp (EApp (EMethodRef "map") (ELam ((PVar "pair")) (ETuple (EApp (EVar "snd") (EVar "pair")) (EApp (EVar "fst") (EVar "pair"))))) (EApp (EVar "entries") (EVar "files"))))) (DoExpr (EIf (EBinOp "<" (EVar "high") (ELit (LInt 1))) (EListLit) (EApp (EApp (EMethodRef "map") (ELam ((PVar "n")) (EApp (EApp (EVar "optionOr") (ELit (LString ""))) (EApp (EApp (EVar "get") (EVar "n")) (EVar "reverse"))))) (ERangeList (ELit (LInt 1)) (EVar "high") true))))))
-(DTypeSig false "mapDefects" (TyFun (TyCon "String") (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyFun (TyApp (TyCon "OrdMap") (TyCon "Int")) (TyApp (TyCon "List") (TyCon "String"))))))))
-(DFunDef false "mapDefects" ((PVar "label") (PVar "low") (PVar "limit") (PVar "high") (PVar "table")) (EBlock (DoLet false false (PVar "rows") (EApp (EVar "entries") (EVar "table"))) (DoLet false false (PVar "invalid") (EApp (EApp (EDictApp "flatMap") (EApp (EApp (EApp (EApp (EVar "assignmentDefect") (EVar "label")) (EVar "low")) (EVar "limit")) (EVar "high"))) (EVar "rows"))) (DoLet false false (PVar "nums") (EApp (EApp (EMethodRef "map") (ELam ((PVar "p")) (EApp (EVar "intToString") (EApp (EVar "snd") (EVar "p"))))) (EVar "rows"))) (DoExpr (EBinOp "++" (EVar "invalid") (EIf (EBinOp "/=" (EApp (EMethodRef "length") (EApp (EVar "entries") (EApp (EApp (EVar "omFromNames") (EVar "nums")) (EVar "omEmpty")))) (EApp (EMethodRef "length") (EVar "nums"))) (EListLit (EBinOp "++" (EBinOp "++" (ELit (LString "identity: duplicate ")) (EVar "label")) (ELit (LString " number")))) (EListLit))))))
-(DTypeSig false "assignmentDefect" (TyFun (TyCon "String") (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyFun (TyTuple (TyCon "String") (TyCon "Int")) (TyApp (TyCon "List") (TyCon "String"))))))))
-(DFunDef false "assignmentDefect" ((PVar "label") (PVar "low") (PVar "limit") (PVar "high") (PTuple (PVar "name") (PVar "n"))) (EIf (EBinOp "||" (EBinOp "||" (EBinOp "||" (EBinOp "==" (EVar "name") (ELit (LString ""))) (EBinOp "<" (EVar "n") (EVar "low"))) (EBinOp ">=" (EVar "n") (EVar "limit"))) (EBinOp ">" (EVar "n") (EVar "high"))) (EListLit (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "identity: invalid ")) (EApp (EMethodRef "display") (EVar "label"))) (ELit (LString " assignment "))) (EApp (EMethodRef "display") (EVar "name"))) (ELit (LString "")))) (EListLit)))
-(DTypeSig true "packageDefects" (TyFun (TyCon "PackageIdentity") (TyApp (TyCon "List") (TyCon "String"))))
-(DFunDef false "packageDefects" ((PVar "p")) (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EIf (EBinOp "==" (EFieldAccess (EVar "p") "abi") (EVar "abiVersion")) (EListLit) (EListLit (ELit (LString "identity: incompatible ABI")))) (EIf (EBinOp "&&" (EBinOp ">=" (EFieldAccess (EVar "p") "typeHigh") (ELit (LInt 0))) (EBinOp "<" (EFieldAccess (EVar "p") "typeHigh") (EVar "reservedTypeBase"))) (EListLit) (EListLit (ELit (LString "identity: invalid type high-water mark"))))) (EIf (EBinOp "&&" (EBinOp ">=" (EFieldAccess (EVar "p") "fileHigh") (ELit (LInt 0))) (EBinOp "<" (EFieldAccess (EVar "p") "fileHigh") (EApp (EApp (EVar "shiftLeft") (ELit (LInt 1))) (EVar "siteFileBits")))) (EListLit) (EListLit (ELit (LString "identity: invalid file high-water mark"))))) (EApp (EApp (EApp (EApp (EApp (EVar "mapDefects") (ELit (LString "type"))) (ELit (LInt 1))) (EVar "reservedTypeBase")) (EFieldAccess (EVar "p") "typeHigh")) (EFieldAccess (EVar "p") "types"))) (EApp (EApp (EApp (EApp (EApp (EVar "mapDefects") (ELit (LString "file"))) (ELit (LInt 1))) (EApp (EApp (EVar "shiftLeft") (ELit (LInt 1))) (EVar "siteFileBits"))) (EFieldAccess (EVar "p") "fileHigh")) (EFieldAccess (EVar "p") "files"))))
-(DTypeSig true "planProgramIdentity" (TyFun (TyCon "PackageIdentity") (TyFun (TyCon "CProgram") (TyApp (TyApp (TyCon "Result") (TyApp (TyCon "List") (TyCon "String"))) (TyCon "IdentityPlan")))))
-(DFunDef false "planProgramIdentity" ((PVar "imported") (PVar "cp")) (EBlock (DoLet false false (PTuple (PVar "types") (PVar "typeHigh")) (EApp (EApp (EApp (EVar "assign") (EApp (EApp (EMethodRef "map") (EVar "fst")) (EApp (EVar "entries") (EApp (EApp (EVar "omFromNames") (EFieldAccess (EApp (EVar "planConstructors") (EVar "cp")) "typeOrder")) (EVar "omEmpty"))))) (EFieldAccess (EVar "imported") "typeHigh")) (EFieldAccess (EVar "imported") "types"))) (DoLet false false (PTuple (PVar "files") (PVar "fileHigh")) (EApp (EApp (EApp (EVar "assign") (EApp (EVar "programFiles") (EVar "cp"))) (EFieldAccess (EVar "imported") "fileHigh")) (EFieldAccess (EVar "imported") "files"))) (DoLet false false (PVar "defects") (EBinOp "++" (EBinOp "++" (EApp (EVar "packageDefects") (EVar "imported")) (EIf (EBinOp "<" (EVar "typeHigh") (EVar "reservedTypeBase")) (EListLit) (EListLit (ELit (LString "identity: type IDs exhausted"))))) (EIf (EBinOp "<" (EVar "fileHigh") (EApp (EApp (EVar "shiftLeft") (ELit (LInt 1))) (EVar "siteFileBits"))) (EListLit) (EListLit (ELit (LString "identity: file IDs exhausted")))))) (DoExpr (EIf (EApp (EMethodRef "isEmpty") (EVar "defects")) (EApp (EVar "Ok") (ERecordCreate "IdentityPlan" ((fa "imported" (EVar "imported")) (fa "types" (EVar "types")) (fa "files" (EVar "files")) (fa "orderedFiles" (EApp (EApp (EVar "ordered") (EVar "fileHigh")) (EVar "files")))))) (EApp (EVar "Err") (EVar "defects"))))))
-(DTypeSig true "planPackageIdentity" (TyFun (TyCon "String") (TyFun (TyCon "CProgram") (TyApp (TyApp (TyCon "Result") (TyApp (TyCon "List") (TyCon "String"))) (TyCon "PackageIdentity")))))
-(DFunDef false "planPackageIdentity" ((PVar "fingerprint") (PVar "cp")) (EApp (EApp (EMethodRef "map") (ELam ((PVar "plan")) (ERecordCreate "PackageIdentity" ((fa "fingerprint" (EVar "fingerprint")) (fa "abi" (EVar "abiVersion")) (fa "types" (EFieldAccess (EAnnot (EVar "plan") (TyCon "IdentityPlan")) "types")) (fa "files" (EFieldAccess (EAnnot (EVar "plan") (TyCon "IdentityPlan")) "files")) (fa "typeHigh" (EApp (EApp (EApp (EMethodRef "fold") (ELam ((PVar "n") (PVar "pair")) (EApp (EApp (EMethodRef "max") (EVar "n")) (EApp (EVar "snd") (EVar "pair"))))) (ELit (LInt 0))) (EApp (EVar "entries") (EFieldAccess (EAnnot (EVar "plan") (TyCon "IdentityPlan")) "types")))) (fa "fileHigh" (EApp (EApp (EApp (EMethodRef "fold") (ELam ((PVar "n") (PVar "pair")) (EApp (EApp (EMethodRef "max") (EVar "n")) (EApp (EVar "snd") (EVar "pair"))))) (ELit (LInt 0))) (EApp (EVar "entries") (EFieldAccess (EAnnot (EVar "plan") (TyCon "IdentityPlan")) "files")))))))) (EApp (EApp (EVar "planProgramIdentity") (EVar "emptyPackage")) (EVar "cp"))))
-(DTypeSig true "validateIdentityPlan" (TyFun (TyCon "CProgram") (TyFun (TyCon "IdentityPlan") (TyApp (TyCon "List") (TyCon "String")))))
-(DFunDef false "validateIdentityPlan" ((PVar "cp") (PVar "plan")) (EBlock (DoLet false false (PVar "imported") (EFieldAccess (EVar "plan") "imported")) (DoLet false false (PVar "typeHigh") (EApp (EApp (EApp (EMethodRef "fold") (ELam ((PVar "n") (PVar "pair")) (EApp (EApp (EMethodRef "max") (EVar "n")) (EApp (EVar "snd") (EVar "pair"))))) (EFieldAccess (EVar "imported") "typeHigh")) (EApp (EVar "entries") (EFieldAccess (EVar "plan") "types")))) (DoLet false false (PVar "fileHigh") (EApp (EApp (EApp (EMethodRef "fold") (ELam ((PVar "n") (PVar "pair")) (EApp (EApp (EMethodRef "max") (EVar "n")) (EApp (EVar "snd") (EVar "pair"))))) (EFieldAccess (EVar "imported") "fileHigh")) (EApp (EVar "entries") (EFieldAccess (EVar "plan") "files")))) (DoLet false false (PTuple (PVar "expectedTypes") PWild) (EApp (EApp (EApp (EVar "assign") (EApp (EApp (EMethodRef "map") (EVar "fst")) (EApp (EVar "entries") (EFieldAccess (EVar "plan") "types")))) (EFieldAccess (EVar "imported") "typeHigh")) (EFieldAccess (EVar "imported") "types"))) (DoLet false false (PTuple (PVar "expectedFiles") PWild) (EApp (EApp (EApp (EVar "assign") (EApp (EApp (EMethodRef "map") (EVar "fst")) (EApp (EVar "entries") (EFieldAccess (EVar "plan") "files")))) (EFieldAccess (EVar "imported") "fileHigh")) (EFieldAccess (EVar "imported") "files"))) (DoExpr (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EApp (EVar "packageDefects") (EVar "imported")) (EApp (EApp (EApp (EApp (EApp (EVar "mapDefects") (ELit (LString "type"))) (ELit (LInt 1))) (EVar "reservedTypeBase")) (EVar "typeHigh")) (EFieldAccess (EVar "plan") "types"))) (EApp (EApp (EApp (EApp (EApp (EVar "mapDefects") (ELit (LString "file"))) (ELit (LInt 1))) (EApp (EApp (EVar "shiftLeft") (ELit (LInt 1))) (EVar "siteFileBits"))) (EVar "fileHigh")) (EFieldAccess (EVar "plan") "files"))) (EApp (EApp (EDictApp "flatMap") (EApp (EApp (EVar "importDefect") (ELit (LString "type"))) (EFieldAccess (EVar "plan") "types"))) (EApp (EVar "entries") (EFieldAccess (EVar "imported") "types")))) (EApp (EApp (EDictApp "flatMap") (EApp (EApp (EVar "importDefect") (ELit (LString "file"))) (EFieldAccess (EVar "plan") "files"))) (EApp (EVar "entries") (EFieldAccess (EVar "imported") "files")))) (EApp (EApp (EDictApp "flatMap") (ELam ((PVar "name")) (EIf (EApp (EApp (EVar "omHasKey") (EVar "name")) (EFieldAccess (EVar "plan") "types")) (EListLit) (EListLit (EBinOp "++" (ELit (LString "identity: missing type ")) (EVar "name")))))) (EFieldAccess (EApp (EVar "planConstructors") (EVar "cp")) "typeOrder"))) (EApp (EApp (EDictApp "flatMap") (ELam ((PVar "name")) (EIf (EApp (EApp (EVar "omHasKey") (EVar "name")) (EFieldAccess (EVar "plan") "files")) (EListLit) (EListLit (EBinOp "++" (ELit (LString "identity: missing file ")) (EVar "name")))))) (EApp (EVar "programFiles") (EVar "cp")))) (EIf (EBinOp "==" (EApp (EVar "entries") (EVar "expectedTypes")) (EApp (EVar "entries") (EFieldAccess (EVar "plan") "types"))) (EListLit) (EListLit (ELit (LString "identity: type allocation disagrees"))))) (EIf (EBinOp "==" (EApp (EVar "entries") (EVar "expectedFiles")) (EApp (EVar "entries") (EFieldAccess (EVar "plan") "files"))) (EListLit) (EListLit (ELit (LString "identity: file allocation disagrees"))))) (EApp (EApp (EDictApp "flatMap") (EApp (EApp (EApp (EVar "localDefect") (ELit (LString "type"))) (EFieldAccess (EVar "imported") "typeHigh")) (EFieldAccess (EVar "imported") "types"))) (EApp (EVar "entries") (EFieldAccess (EVar "plan") "types")))) (EApp (EApp (EDictApp "flatMap") (EApp (EApp (EApp (EVar "localDefect") (ELit (LString "file"))) (EFieldAccess (EVar "imported") "fileHigh")) (EFieldAccess (EVar "imported") "files"))) (EApp (EVar "entries") (EFieldAccess (EVar "plan") "files")))) (EIf (EBinOp "&&" (EBinOp "&&" (EBinOp ">=" (EVar "fileHigh") (ELit (LInt 0))) (EBinOp "<" (EVar "fileHigh") (EApp (EApp (EVar "shiftLeft") (ELit (LInt 1))) (EVar "siteFileBits")))) (EBinOp "==" (EFieldAccess (EVar "plan") "orderedFiles") (EApp (EApp (EVar "ordered") (EVar "fileHigh")) (EFieldAccess (EVar "plan") "files")))) (EListLit) (EListLit (ELit (LString "identity: file table disagrees"))))))))
-(DTypeSig false "localDefect" (TyFun (TyCon "String") (TyFun (TyCon "Int") (TyFun (TyApp (TyCon "OrdMap") (TyCon "Int")) (TyFun (TyTuple (TyCon "String") (TyCon "Int")) (TyApp (TyCon "List") (TyCon "String")))))))
-(DFunDef false "localDefect" ((PVar "label") (PVar "high") (PVar "imported") (PTuple (PVar "name") (PVar "n"))) (EIf (EBinOp "&&" (EApp (EVar "not") (EApp (EApp (EVar "omHasKey") (EVar "name")) (EVar "imported"))) (EBinOp "<=" (EVar "n") (EVar "high"))) (EListLit (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "identity: local ")) (EApp (EMethodRef "display") (EVar "label"))) (ELit (LString " uses reserved hole "))) (EApp (EMethodRef "display") (EVar "name"))) (ELit (LString "")))) (EListLit)))
-(DTypeSig false "importDefect" (TyFun (TyCon "String") (TyFun (TyApp (TyCon "OrdMap") (TyCon "Int")) (TyFun (TyTuple (TyCon "String") (TyCon "Int")) (TyApp (TyCon "List") (TyCon "String"))))))
-(DFunDef false "importDefect" ((PVar "label") (PVar "table") (PTuple (PVar "name") (PVar "n"))) (EIf (EBinOp "==" (EApp (EApp (EVar "omLookup") (EVar "name")) (EVar "table")) (EApp (EVar "Some") (EVar "n"))) (EListLit) (EListLit (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "identity: imported ")) (EApp (EMethodRef "display") (EVar "label"))) (ELit (LString " changed "))) (EApp (EMethodRef "display") (EVar "name"))) (ELit (LString ""))))))
+(DData Private "IdentityBounds" () ((variant "IdentityBounds" (ConNamed (field "kind" (TyCon "IdentityKind")) (field "limit" (TyCon "Int")) (field "high" (TyCon "Int"))))) ())
+(DTypeSig false "mapDefects" (TyFun (TyCon "IdentityBounds") (TyFun (TyApp (TyCon "OrdMap") (TyCon "Int")) (TyApp (TyCon "List") (TyCon "IdentityDefect")))))
+(DFunDef false "mapDefects" ((PVar "bounds") (PVar "table")) (EBlock (DoLet false false (PVar "rows") (EApp (EVar "entries") (EVar "table"))) (DoLet false false (PVar "invalid") (EApp (EApp (EDictApp "flatMap") (EApp (EVar "assignmentDefect") (EVar "bounds"))) (EVar "rows"))) (DoLet false false (PVar "nums") (EApp (EApp (EMethodRef "map") (ELam ((PVar "p")) (EApp (EVar "intToString") (EApp (EVar "snd") (EVar "p"))))) (EVar "rows"))) (DoExpr (EBinOp "++" (EVar "invalid") (EIf (EBinOp "/=" (EApp (EMethodRef "length") (EApp (EVar "entries") (EApp (EApp (EVar "omFromNames") (EVar "nums")) (EVar "omEmpty")))) (EApp (EMethodRef "length") (EVar "nums"))) (EListLit (EApp (EVar "DuplicateNumber") (EFieldAccess (EVar "bounds") "kind"))) (EListLit))))))
+(DTypeSig false "assignmentDefect" (TyFun (TyCon "IdentityBounds") (TyFun (TyTuple (TyCon "String") (TyCon "Int")) (TyApp (TyCon "List") (TyCon "IdentityDefect")))))
+(DFunDef false "assignmentDefect" ((PVar "bounds") (PTuple (PVar "name") (PVar "n"))) (EIf (EBinOp "||" (EBinOp "||" (EBinOp "||" (EBinOp "==" (EVar "name") (ELit (LString ""))) (EBinOp "<" (EVar "n") (ELit (LInt 1)))) (EBinOp ">=" (EVar "n") (EFieldAccess (EVar "bounds") "limit"))) (EBinOp ">" (EVar "n") (EFieldAccess (EVar "bounds") "high"))) (EListLit (EApp (EApp (EVar "InvalidAssignment") (EFieldAccess (EVar "bounds") "kind")) (EVar "name"))) (EListLit)))
+(DTypeSig true "packageDefects" (TyFun (TyCon "PackageIdentity") (TyApp (TyCon "List") (TyCon "IdentityDefect"))))
+(DFunDef false "packageDefects" ((PVar "p")) (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EIf (EBinOp "==" (EFieldAccess (EVar "p") "abi") (EVar "abiVersion")) (EListLit) (EListLit (EVar "IdentityIncompatibleAbi"))) (EIf (EBinOp "&&" (EBinOp ">=" (EFieldAccess (EVar "p") "typeHigh") (ELit (LInt 0))) (EBinOp "<" (EFieldAccess (EVar "p") "typeHigh") (EVar "reservedTypeBase"))) (EListLit) (EListLit (EApp (EVar "InvalidHighWater") (EVar "TypeIdentity"))))) (EIf (EBinOp "&&" (EBinOp ">=" (EFieldAccess (EVar "p") "fileHigh") (ELit (LInt 0))) (EBinOp "<" (EFieldAccess (EVar "p") "fileHigh") (EApp (EApp (EVar "shiftLeft") (ELit (LInt 1))) (EVar "siteFileBits")))) (EListLit) (EListLit (EApp (EVar "InvalidHighWater") (EVar "FileIdentity"))))) (EApp (EApp (EVar "mapDefects") (EApp (EApp (EApp (EVar "IdentityBounds") (EVar "TypeIdentity")) (EVar "reservedTypeBase")) (EFieldAccess (EVar "p") "typeHigh"))) (EFieldAccess (EVar "p") "types"))) (EApp (EApp (EVar "mapDefects") (EApp (EApp (EApp (EVar "IdentityBounds") (EVar "FileIdentity")) (EApp (EApp (EVar "shiftLeft") (ELit (LInt 1))) (EVar "siteFileBits"))) (EFieldAccess (EVar "p") "fileHigh"))) (EFieldAccess (EVar "p") "files"))))
+(DTypeSig true "planProgramIdentity" (TyFun (TyCon "PackageIdentity") (TyFun (TyCon "CProgram") (TyApp (TyApp (TyCon "Result") (TyApp (TyCon "List") (TyCon "IdentityDefect"))) (TyCon "IdentityPlan")))))
+(DFunDef false "planProgramIdentity" ((PVar "imported") (PVar "cp")) (EBlock (DoLet false false (PTuple (PVar "types") (PVar "typeHigh")) (EApp (EApp (EApp (EVar "assign") (EApp (EApp (EMethodRef "map") (EVar "fst")) (EApp (EVar "entries") (EApp (EApp (EVar "omFromNames") (EFieldAccess (EApp (EVar "planConstructors") (EVar "cp")) "typeOrder")) (EVar "omEmpty"))))) (EFieldAccess (EVar "imported") "typeHigh")) (EFieldAccess (EVar "imported") "types"))) (DoLet false false (PTuple (PVar "files") (PVar "fileHigh")) (EApp (EApp (EApp (EVar "assign") (EApp (EVar "programFiles") (EVar "cp"))) (EFieldAccess (EVar "imported") "fileHigh")) (EFieldAccess (EVar "imported") "files"))) (DoLet false false (PVar "defects") (EBinOp "++" (EBinOp "++" (EApp (EVar "packageDefects") (EVar "imported")) (EIf (EBinOp "<" (EVar "typeHigh") (EVar "reservedTypeBase")) (EListLit) (EListLit (EApp (EVar "Exhausted") (EVar "TypeIdentity"))))) (EIf (EBinOp "<" (EVar "fileHigh") (EApp (EApp (EVar "shiftLeft") (ELit (LInt 1))) (EVar "siteFileBits"))) (EListLit) (EListLit (EApp (EVar "Exhausted") (EVar "FileIdentity")))))) (DoExpr (EIf (EApp (EMethodRef "isEmpty") (EVar "defects")) (EApp (EVar "Ok") (ERecordCreate "IdentityPlan" ((fa "imported" (EVar "imported")) (fa "types" (EVar "types")) (fa "files" (EVar "files")) (fa "orderedFiles" (EApp (EApp (EVar "ordered") (EVar "fileHigh")) (EVar "files")))))) (EApp (EVar "Err") (EVar "defects"))))))
+(DTypeSig true "planPackageIdentity" (TyFun (TyCon "String") (TyFun (TyCon "CProgram") (TyApp (TyApp (TyCon "Result") (TyApp (TyCon "List") (TyCon "IdentityDefect"))) (TyCon "PackageIdentity")))))
+(DFunDef false "planPackageIdentity" ((PVar "fingerprint") (PVar "cp")) (EApp (EApp (EMethodRef "map") (ELam ((PVar "plan")) (ERecordCreate "PackageIdentity" ((fa "fingerprint" (EVar "fingerprint")) (fa "abi" (EVar "abiVersion")) (fa "types" (EFieldAccess (EAnnot (EVar "plan") (TyCon "IdentityPlan")) "types")) (fa "files" (EFieldAccess (EAnnot (EVar "plan") (TyCon "IdentityPlan")) "files")) (fa "typeHigh" (EApp (EApp (EVar "highWater") (ELit (LInt 0))) (EFieldAccess (EAnnot (EVar "plan") (TyCon "IdentityPlan")) "types"))) (fa "fileHigh" (EApp (EApp (EVar "highWater") (ELit (LInt 0))) (EFieldAccess (EAnnot (EVar "plan") (TyCon "IdentityPlan")) "files"))))))) (EApp (EApp (EVar "planProgramIdentity") (EVar "emptyPackage")) (EVar "cp"))))
+(DTypeSig false "highWater" (TyFun (TyCon "Int") (TyFun (TyApp (TyCon "OrdMap") (TyCon "Int")) (TyCon "Int"))))
+(DFunDef false "highWater" ((PVar "initial") (PVar "table")) (EApp (EApp (EApp (EMethodRef "fold") (ELam ((PVar "n") (PVar "pair")) (EApp (EApp (EMethodRef "max") (EVar "n")) (EApp (EVar "snd") (EVar "pair"))))) (EVar "initial")) (EApp (EVar "entries") (EVar "table"))))
+(DTypeSig true "validateIdentityPlan" (TyFun (TyCon "CProgram") (TyFun (TyCon "IdentityPlan") (TyApp (TyCon "List") (TyCon "IdentityDefect")))))
+(DFunDef false "validateIdentityPlan" ((PVar "cp") (PVar "plan")) (EBlock (DoLet false false (PVar "imported") (EFieldAccess (EVar "plan") "imported")) (DoLet false false (PVar "typeHigh") (EApp (EApp (EVar "highWater") (EFieldAccess (EVar "imported") "typeHigh")) (EFieldAccess (EVar "plan") "types"))) (DoLet false false (PVar "fileHigh") (EApp (EApp (EVar "highWater") (EFieldAccess (EVar "imported") "fileHigh")) (EFieldAccess (EVar "plan") "files"))) (DoLet false false (PTuple (PVar "expectedTypes") PWild) (EApp (EApp (EApp (EVar "assign") (EApp (EApp (EMethodRef "map") (EVar "fst")) (EApp (EVar "entries") (EFieldAccess (EVar "plan") "types")))) (EFieldAccess (EVar "imported") "typeHigh")) (EFieldAccess (EVar "imported") "types"))) (DoLet false false (PTuple (PVar "expectedFiles") PWild) (EApp (EApp (EApp (EVar "assign") (EApp (EApp (EMethodRef "map") (EVar "fst")) (EApp (EVar "entries") (EFieldAccess (EVar "plan") "files")))) (EFieldAccess (EVar "imported") "fileHigh")) (EFieldAccess (EVar "imported") "files"))) (DoExpr (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EApp (EVar "packageDefects") (EVar "imported")) (EApp (EApp (EVar "mapDefects") (EApp (EApp (EApp (EVar "IdentityBounds") (EVar "TypeIdentity")) (EVar "reservedTypeBase")) (EVar "typeHigh"))) (EFieldAccess (EVar "plan") "types"))) (EApp (EApp (EVar "mapDefects") (EApp (EApp (EApp (EVar "IdentityBounds") (EVar "FileIdentity")) (EApp (EApp (EVar "shiftLeft") (ELit (LInt 1))) (EVar "siteFileBits"))) (EVar "fileHigh"))) (EFieldAccess (EVar "plan") "files"))) (EApp (EApp (EDictApp "flatMap") (EApp (EApp (EVar "importDefect") (EVar "TypeIdentity")) (EFieldAccess (EVar "plan") "types"))) (EApp (EVar "entries") (EFieldAccess (EVar "imported") "types")))) (EApp (EApp (EDictApp "flatMap") (EApp (EApp (EVar "importDefect") (EVar "FileIdentity")) (EFieldAccess (EVar "plan") "files"))) (EApp (EVar "entries") (EFieldAccess (EVar "imported") "files")))) (EApp (EApp (EDictApp "flatMap") (ELam ((PVar "name")) (EIf (EApp (EApp (EVar "omHasKey") (EVar "name")) (EFieldAccess (EVar "plan") "types")) (EListLit) (EListLit (EApp (EApp (EVar "MissingAssignment") (EVar "TypeIdentity")) (EVar "name")))))) (EFieldAccess (EApp (EVar "planConstructors") (EVar "cp")) "typeOrder"))) (EApp (EApp (EDictApp "flatMap") (ELam ((PVar "name")) (EIf (EApp (EApp (EVar "omHasKey") (EVar "name")) (EFieldAccess (EVar "plan") "files")) (EListLit) (EListLit (EApp (EApp (EVar "MissingAssignment") (EVar "FileIdentity")) (EVar "name")))))) (EApp (EVar "programFiles") (EVar "cp")))) (EIf (EBinOp "==" (EApp (EVar "entries") (EVar "expectedTypes")) (EApp (EVar "entries") (EFieldAccess (EVar "plan") "types"))) (EListLit) (EListLit (EApp (EVar "AllocationDisagrees") (EVar "TypeIdentity"))))) (EIf (EBinOp "==" (EApp (EVar "entries") (EVar "expectedFiles")) (EApp (EVar "entries") (EFieldAccess (EVar "plan") "files"))) (EListLit) (EListLit (EApp (EVar "AllocationDisagrees") (EVar "FileIdentity"))))) (EApp (EApp (EDictApp "flatMap") (EApp (EApp (EApp (EVar "localDefect") (EVar "TypeIdentity")) (EFieldAccess (EVar "imported") "typeHigh")) (EFieldAccess (EVar "imported") "types"))) (EApp (EVar "entries") (EFieldAccess (EVar "plan") "types")))) (EApp (EApp (EDictApp "flatMap") (EApp (EApp (EApp (EVar "localDefect") (EVar "FileIdentity")) (EFieldAccess (EVar "imported") "fileHigh")) (EFieldAccess (EVar "imported") "files"))) (EApp (EVar "entries") (EFieldAccess (EVar "plan") "files")))) (EIf (EBinOp "&&" (EBinOp "&&" (EBinOp ">=" (EVar "fileHigh") (ELit (LInt 0))) (EBinOp "<" (EVar "fileHigh") (EApp (EApp (EVar "shiftLeft") (ELit (LInt 1))) (EVar "siteFileBits")))) (EBinOp "==" (EFieldAccess (EVar "plan") "orderedFiles") (EApp (EApp (EVar "ordered") (EVar "fileHigh")) (EFieldAccess (EVar "plan") "files")))) (EListLit) (EListLit (EVar "FileTableDisagrees")))))))
+(DTypeSig false "localDefect" (TyFun (TyCon "IdentityKind") (TyFun (TyCon "Int") (TyFun (TyApp (TyCon "OrdMap") (TyCon "Int")) (TyFun (TyTuple (TyCon "String") (TyCon "Int")) (TyApp (TyCon "List") (TyCon "IdentityDefect")))))))
+(DFunDef false "localDefect" ((PVar "label") (PVar "high") (PVar "imported") (PTuple (PVar "name") (PVar "n"))) (EIf (EBinOp "&&" (EApp (EVar "not") (EApp (EApp (EVar "omHasKey") (EVar "name")) (EVar "imported"))) (EBinOp "<=" (EVar "n") (EVar "high"))) (EListLit (EApp (EApp (EVar "ReservedHole") (EVar "label")) (EVar "name"))) (EListLit)))
+(DTypeSig false "importDefect" (TyFun (TyCon "IdentityKind") (TyFun (TyApp (TyCon "OrdMap") (TyCon "Int")) (TyFun (TyTuple (TyCon "String") (TyCon "Int")) (TyApp (TyCon "List") (TyCon "IdentityDefect"))))))
+(DFunDef false "importDefect" ((PVar "label") (PVar "table") (PTuple (PVar "name") (PVar "n"))) (EIf (EBinOp "==" (EApp (EApp (EVar "omLookup") (EVar "name")) (EVar "table")) (EApp (EVar "Some") (EVar "n"))) (EListLit) (EListLit (EApp (EApp (EVar "ImportedChanged") (EVar "label")) (EVar "name")))))
 (DTypeSig true "packSite" (TyFun (TyCon "IdentityPlan") (TyFun (TyCon "Loc") (TyCon "Int"))))
-(DFunDef false "packSite" ((PVar "plan") (PAs "loc" (PCon "Loc" (PVar "f") (PVar "line") (PVar "col") PWild PWild))) (EIf (EApp (EVar "not") (EApp (EVar "sitePackable") (EVar "loc"))) (ELit (LInt 0)) (EMatch (EApp (EApp (EVar "omLookup") (EVar "f")) (EFieldAccess (EVar "plan") "files")) (arm (PCon "None") () (ELit (LInt 0))) (arm (PCon "Some" (PVar "n")) () (EBinOp "+" (EBinOp "+" (EBinOp "*" (EVar "n") (EApp (EApp (EVar "shiftLeft") (ELit (LInt 1))) (EVar "siteFileShift"))) (EBinOp "*" (EVar "line") (EApp (EApp (EVar "shiftLeft") (ELit (LInt 1))) (EVar "siteLineShift")))) (EVar "col"))))))
+(DFunDef false "packSite" ((PVar "plan") (PAs "loc" (PCon "Loc" (PVar "f") (PVar "line") (PVar "col") PWild PWild))) (EIf (EApp (EVar "not") (EApp (EVar "sitePackable") (EVar "loc"))) (ELit (LInt 0)) (EMatch (EApp (EApp (EVar "omLookup") (EVar "f")) (EFieldAccess (EVar "plan") "files")) (arm (PCon "None") () (EApp (EVar "panic") (EBinOp "++" (EBinOp "++" (ELit (LString "identity: missing file ")) (EApp (EMethodRef "display") (EVar "f"))) (ELit (LString ""))))) (arm (PCon "Some" (PVar "n")) () (EBinOp "+" (EBinOp "+" (EBinOp "*" (EVar "n") (EApp (EApp (EVar "shiftLeft") (ELit (LInt 1))) (EVar "siteFileShift"))) (EBinOp "*" (EVar "line") (EApp (EApp (EVar "shiftLeft") (ELit (LInt 1))) (EVar "siteLineShift")))) (EVar "col"))))))

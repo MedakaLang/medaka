@@ -683,7 +683,10 @@ they sit at different layers.
 Package identity metadata is encoded by `backend/package_identity_sexp.mdk` with a
 format version, native ABI version, package fingerprint and integrity digest. The
 reader validates identities and their high-water marks before a consumer plans local
-assignments. Automatic package/interface loading belongs to V1. WasmGC keeps named GC
+assignments. Planning returns `IdentityDefect` values, and decoding returns
+`PackageIdentityError` values; render them at the diagnostic boundary. A packable site
+whose file is absent is an invariant failure, while unlocated sites retain word zero.
+Automatic package/interface loading belongs to V1. WasmGC keeps named GC
 types and ordinal discriminants; its trap sites share the planned file table with native.
 
 ### 8.7 Dictionaries are method tables

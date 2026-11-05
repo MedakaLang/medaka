@@ -30,6 +30,49 @@ public export data IdentityPlan = IdentityPlan {
   orderedFiles : List String,
 }
 
+public export data IdentityKind =
+  | TypeIdentity
+  | FileIdentity
+  deriving (Eq, Debug, Display)
+
+public export data IdentityDefect =
+  | IdentityIncompatibleAbi
+  | InvalidHighWater IdentityKind
+  | InvalidAssignment IdentityKind String
+  | DuplicateNumber IdentityKind
+  | Exhausted IdentityKind
+  | MissingAssignment IdentityKind String
+  | AllocationDisagrees IdentityKind
+  | ReservedHole IdentityKind String
+  | ImportedChanged IdentityKind String
+  | FileTableDisagrees
+  deriving (Eq, Debug, Display)
+
+kindName : IdentityKind -> String
+kindName TypeIdentity = "type"
+kindName FileIdentity = "file"
+
+export
+renderIdentityDefect : IdentityDefect -> String
+renderIdentityDefect IdentityIncompatibleAbi = "identity: incompatible ABI"
+renderIdentityDefect (InvalidHighWater kind) =
+  "identity: invalid \{kindName kind} high-water mark"
+renderIdentityDefect (InvalidAssignment kind name) =
+  "identity: invalid \{kindName kind} assignment \{name}"
+renderIdentityDefect (DuplicateNumber kind) =
+  "identity: duplicate \{kindName kind} number"
+renderIdentityDefect (Exhausted kind) =
+  "identity: \{kindName kind} IDs exhausted"
+renderIdentityDefect (MissingAssignment kind name) =
+  "identity: missing \{kindName kind} \{name}"
+renderIdentityDefect (AllocationDisagrees kind) =
+  "identity: \{kindName kind} allocation disagrees"
+renderIdentityDefect (ReservedHole kind name) =
+  "identity: local \{kindName kind} uses reserved hole \{name}"
+renderIdentityDefect (ImportedChanged kind name) =
+  "identity: imported \{kindName kind} changed \{name}"
+renderIdentityDefect FileTableDisagrees = "identity: file table disagrees"
+
 export
 emptyPackage : PackageIdentity
 emptyPackage = PackageIdentity {
@@ -147,43 +190,53 @@ ordered high files =
   let reverse = fromList (map (pair => (snd pair, fst pair)) (entries files))
   if high < 1 then [] else map (n => optionOr "" (get n reverse)) [1..=high]
 
-mapDefects : String -> Int -> Int -> Int -> OrdMap Int -> List String
-mapDefects label low limit high table =
+data IdentityBounds = IdentityBounds {
+  kind : IdentityKind,
+  limit : Int,
+  high : Int,
+}
+
+mapDefects : IdentityBounds -> OrdMap Int -> List IdentityDefect
+mapDefects bounds table =
   let rows = entries table
-  let invalid = flatMap (assignmentDefect label low limit high) rows
+  let invalid = flatMap (assignmentDefect bounds) rows
   let nums = map (p => intToString (snd p)) rows
   invalid
     ++ (if length (entries (omFromNames nums omEmpty)) /= length nums then
-      ["identity: duplicate " ++ label ++ " number"]
+      [DuplicateNumber bounds.kind]
     else
       [])
 
-assignmentDefect : String -> Int -> Int -> Int -> (String, Int) -> List String
-assignmentDefect label low limit high (name, n) =
-  if name == "" || n < low || n >= limit || n > high then
-    ["identity: invalid \{label} assignment \{name}"]
+assignmentDefect : IdentityBounds -> (String, Int) -> List IdentityDefect
+assignmentDefect bounds (name, n) =
+  if name == "" || n < 1 || n >= bounds.limit || n > bounds.high then
+    [InvalidAssignment bounds.kind name]
   else
     []
 
 export
-packageDefects : PackageIdentity -> List String
+packageDefects : PackageIdentity -> List IdentityDefect
 packageDefects p =
-  (if p.abi == abiVersion then [] else ["identity: incompatible ABI"])
+  (if p.abi == abiVersion then [] else [IdentityIncompatibleAbi])
     ++ (if p.typeHigh >= 0 && p.typeHigh < reservedTypeBase then
       []
     else
-      ["identity: invalid type high-water mark"])
+      [InvalidHighWater TypeIdentity])
     ++ (if p.fileHigh >= 0 && p.fileHigh < shiftLeft 1 siteFileBits then
       []
     else
-      ["identity: invalid file high-water mark"])
-    ++ mapDefects "type" 1 reservedTypeBase p.typeHigh p.types
-    ++ mapDefects "file" 1 (shiftLeft 1 siteFileBits) p.fileHigh p.files
+      [InvalidHighWater FileIdentity])
+    ++ mapDefects
+      (IdentityBounds TypeIdentity reservedTypeBase p.typeHigh)
+      p.types
+    ++ mapDefects
+      (IdentityBounds FileIdentity (shiftLeft 1 siteFileBits) p.fileHigh)
+      p.files
 
 export
 planProgramIdentity : PackageIdentity ->
   CProgram ->
-  Result (List String) IdentityPlan
+  Result (List IdentityDefect) IdentityPlan
 planProgramIdentity imported cp =
   let (types, typeHigh) =
     assign
@@ -194,14 +247,11 @@ planProgramIdentity imported cp =
     assign (programFiles cp) imported.fileHigh imported.files
   let defects =
     packageDefects imported
-      ++ (if typeHigh < reservedTypeBase then
-        []
-      else
-        ["identity: type IDs exhausted"])
+      ++ (if typeHigh < reservedTypeBase then [] else [Exhausted TypeIdentity])
       ++ (if fileHigh < shiftLeft 1 siteFileBits then
         []
       else
-        ["identity: file IDs exhausted"])
+        [Exhausted FileIdentity])
   if isEmpty defects then
     Ok IdentityPlan {
       imported = imported,
@@ -213,7 +263,9 @@ planProgramIdentity imported cp =
     Err defects
 
 export
-planPackageIdentity : String -> CProgram -> Result (List String) PackageIdentity
+planPackageIdentity : String ->
+  CProgram ->
+  Result (List IdentityDefect) PackageIdentity
 planPackageIdentity fingerprint cp =
   map
     (plan => PackageIdentity {
@@ -221,84 +273,86 @@ planPackageIdentity fingerprint cp =
       abi = abiVersion,
       types = (plan : IdentityPlan).types,
       files = (plan : IdentityPlan).files,
-      typeHigh =
-        fold
-          (n pair => max n (snd pair))
-          0
-          (entries (plan : IdentityPlan).types),
-      fileHigh =
-        fold
-          (n pair => max n (snd pair))
-          0
-          (entries (plan : IdentityPlan).files),
+      typeHigh = highWater 0 (plan : IdentityPlan).types,
+      fileHigh = highWater 0 (plan : IdentityPlan).files,
     })
     (planProgramIdentity emptyPackage cp)
 
+highWater : Int -> OrdMap Int -> Int
+highWater initial table =
+  fold (n pair => max n (snd pair)) initial (entries table)
+
 export
-validateIdentityPlan : CProgram -> IdentityPlan -> List String
+validateIdentityPlan : CProgram -> IdentityPlan -> List IdentityDefect
 validateIdentityPlan cp plan =
   let imported = plan.imported
-  let typeHigh =
-    fold (n pair => max n (snd pair)) imported.typeHigh (entries plan.types)
-  let fileHigh =
-    fold (n pair => max n (snd pair)) imported.fileHigh (entries plan.files)
+  let typeHigh = highWater imported.typeHigh plan.types
+  let fileHigh = highWater imported.fileHigh plan.files
   let (expectedTypes, _) =
     assign (map fst (entries plan.types)) imported.typeHigh imported.types
   let (expectedFiles, _) =
     assign (map fst (entries plan.files)) imported.fileHigh imported.files
   packageDefects imported
-    ++ mapDefects "type" 1 reservedTypeBase typeHigh plan.types
-    ++ mapDefects "file" 1 (shiftLeft 1 siteFileBits) fileHigh plan.files
-    ++ flatMap (importDefect "type" plan.types) (entries imported.types)
-    ++ flatMap (importDefect "file" plan.files) (entries imported.files)
+    ++ mapDefects
+      (IdentityBounds TypeIdentity reservedTypeBase typeHigh)
+      plan.types
+    ++ mapDefects
+      (IdentityBounds FileIdentity (shiftLeft 1 siteFileBits) fileHigh)
+      plan.files
+    ++ flatMap (importDefect TypeIdentity plan.types) (entries imported.types)
+    ++ flatMap (importDefect FileIdentity plan.files) (entries imported.files)
     ++ flatMap
       (name =>
         if omHasKey name plan.types then
           []
         else
-          ["identity: missing type " ++ name])
+          [MissingAssignment TypeIdentity name])
       (planConstructors cp).typeOrder
     ++ flatMap
       (name =>
         if omHasKey name plan.files then
           []
         else
-          ["identity: missing file " ++ name])
+          [MissingAssignment FileIdentity name])
       (programFiles cp)
     ++ (if entries expectedTypes == entries plan.types then
       []
     else
-      ["identity: type allocation disagrees"])
+      [AllocationDisagrees TypeIdentity])
     ++ (if entries expectedFiles == entries plan.files then
       []
     else
-      ["identity: file allocation disagrees"])
+      [AllocationDisagrees FileIdentity])
     ++ flatMap
-      (localDefect "type" imported.typeHigh imported.types)
+      (localDefect TypeIdentity imported.typeHigh imported.types)
       (entries plan.types)
     ++ flatMap
-      (localDefect "file" imported.fileHigh imported.files)
+      (localDefect FileIdentity imported.fileHigh imported.files)
       (entries plan.files)
     ++ (if fileHigh >= 0
       && fileHigh < shiftLeft 1 siteFileBits
       && plan.orderedFiles == ordered fileHigh plan.files then
       []
     else
-      ["identity: file table disagrees"])
+      [FileTableDisagrees])
 
-localDefect : String -> Int -> OrdMap Int -> (String, Int) -> List String
+localDefect : IdentityKind ->
+  Int ->
+  OrdMap Int ->
+  (String, Int) ->
+  List IdentityDefect
 localDefect label high imported (name, n) =
   if not (omHasKey name imported) && n <= high then
-    ["identity: local \{label} uses reserved hole \{name}"]
+    [ReservedHole label name]
   else
     []
 
-importDefect : String -> OrdMap Int -> (String, Int) -> List String
+importDefect : IdentityKind ->
+  OrdMap Int ->
+  (String, Int) ->
+  List IdentityDefect
 importDefect label table (name, n) =
-  if omLookup name table == Some n then
-    []
-  else
-    ["identity: imported \{label} changed \{name}"]
+  if omLookup name table == Some n then [] else [ImportedChanged label name]
 
 export
 packSite : IdentityPlan -> Loc -> Int
@@ -306,6 +360,6 @@ packSite plan (loc@(Loc f line col _ _)) =
   if not (sitePackable loc) then
     0
   else match omLookup f plan.files
-    None => 0
+    None => panic "identity: missing file \{f}"
     Some n =>
       n * shiftLeft 1 siteFileShift + line * shiftLeft 1 siteLineShift + col

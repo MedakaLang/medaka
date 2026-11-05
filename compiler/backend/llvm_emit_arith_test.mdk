@@ -500,7 +500,7 @@ identityProgram extra = match arithProgram "Int"
       impls
       ctx
       facts
-  cp => cp
+  _ => panic "identityProgram: unexpected arithmetic fixture shape"
 
 test "LLVM uses imported constructor identity with an earlier local type" =
   match planPackageIdentity "pkg" (identityProgram False)

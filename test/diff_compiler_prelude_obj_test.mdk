@@ -243,7 +243,10 @@ identityRow w =
   let pobj = "\{w}/identity_prelude.o"
   match (writeFile
     src
-    "data AAA = Alpha | Payload Int\nmain = foldUntil (acc x => if x > 2 then Break acc else Continue (acc + x)) 0 [1, 2, 3, 4]\n")
+    """
+data AAA = Alpha | Payload Int
+main = foldUntil (acc x => if x > 2 then Break acc else Continue (acc + x)) 0 [1, 2, 3, 4]
+""")
     Err e => fail "could not write identity probe: \{e}"
     Ok _ => match buildExit [medakaBin, "build", "--emit-prelude-obj", pobj]
       Err e => fail "could not build identity prelude: \{e}"
