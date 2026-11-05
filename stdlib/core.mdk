@@ -2496,3 +2496,6 @@ prop "Ord Array: equal prefixes order by length" (xs : List Int) (ys : List Int)
   eq
     (compare (arrayFromList xs) (arrayFromList (xs ++ ys)))
     (compare (length xs) (length (xs ++ ys)))
+
+export extern data Process (p : Authority Exec)
+export extern data LaunchTicket (p : Authority Exec)

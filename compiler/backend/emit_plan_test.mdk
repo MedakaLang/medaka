@@ -1,3 +1,5 @@
+import backend.package_identity.{IdentityPlan(..)}
+import frontend.ast.{Loc(..)}
 import backend.impl_groups.{ImplClauseGroup}
 import backend.wasm_demand.{JsImport(..)}
 import backend.trmc_analysis.{isTrmcFn, isTrmcImpl}
@@ -1898,4 +1900,20 @@ test "each slot of an instance's table names the one group that fills it" =
       "an instance with no entries has no table",
       expectEqual [] (fillsOf tables "m::Shape|Tri|"),
     ),
+  ]
+
+test "reached wasm inventories sites before reach filtering" =
+  let dead =
+    CBind
+      "dead"
+      [CClause [] (CLit (LInt 2))]
+      (Loc "dead.mdk" 3 2 3 3)
+      noBinderId
+  let cp = CProgram [val "main" (CLit (LInt 1)), dead] [] [] [] [] noDeclFacts
+  let (plan, reached) = buildEmitPlanReached PreludeFreeRuntime omEmpty cp
+  expectAll [
+    expectEqual ["main"] (bindNames reached),
+    expectEqual (Some 1) (match plan.identity
+      Err _ => None
+      Ok identity => omLookup "dead.mdk" identity.files),
   ]

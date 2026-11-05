@@ -417,39 +417,22 @@ any native runtime exists.
 
 ## 8. Value representation & calling convention
 
-> **Status: RATIFIED 2026-06-07.** Option A (uniform tagged word) is adopted as the
-> **native** physical encoding, *under the shared abstract value contract of §8.6* —
-> the ratification is of the contract + this encoding, not a backend-specific bit
-> layout (so WasmGC compatibility is structural: it implements the same contract with
-> `i31ref` + typed structs; §8.6). The Stage-2.4 de-risking spike
-> (`compiler/backend/llvm_emit.mdk` + `runtime/medaka_rt.c`, gated by
-> `test/diff_compiler_llvm.sh`, 43/43 byte-identical to the tree-walker) proved the
-> encoding end-to-end. **Ratified decisions (human, 2026-06-07):**
-> 1. **Native rep = Option A** (low-bit-1 immediate 63-bit `Int`/`Char`/`Bool`/`Unit`/
->    nullary ctors; boxed pointers) — *conditioned on §8.6's abstract contract so the
->    semantics are WasmGC-compatible*.
-> 2. **Constructor tag = dense i32 ctor-ordinal per type** (NOT the spike's i64
->    string-hash) — ports to LLVM/WasmGC `br_table` and eliminates the
->    hash-**collision** miscompile class. (The separate `decodeHead` reserved-name
->    aliasing bug — a user ctor named `Cons`/`Nil`/`Unit` decoding to the built-in
->    head at lowering — was a *distinct* name-keying hazard; FIXED 2026-06-07 by
->    reserving synthetic `__cons__`/`__nil__`/`__unit__` head names in `canonPat`,
->    not by the tag change; PLAN.md.) **The spike now emits ordinals** (done
->    2026-06-07, `llvm_emit.mdk` `cellTag`): a composite `typeId<<32 | ordinal` whose
->    low half is the ratified dense per-type ordinal and whose high half is a per-type
->    id that keeps the spike's cross-type arg-tag dispatch correct (the real backend
->    resolves those sites statically and keeps only the low-half ordinal). `ceval` is
->    irrelevant to tags — it walks `VCon` by name and never materializes a tag.
-> 3. **Heap header = keep a uniform one-word header on every boxed cell** (the ADT tag
->    rides here; uniform cell shape for switch tag-testing; eases precise-GC migration).
-> 4. **`Float` = boxed-first** (§8.4) — type-directed local unboxing only if profiling
->    demands it.
-> 5. **Scalar self-description = not required** (§8.4) — generic rendering goes through
->    compile-time `Debug` (`→METHOD`, §2c); the runtime never reflects on scalar layout.
->
-> The spike's rep remains revisable in one place (`llvm_emit.mdk`'s tag/box helpers +
-> `medaka_rt.c`); ratifying the *contract* is what is now locked, not the spike's
-> expedient i64 hash (decision 2 supersedes it for the real backend).
+The native ABI is generated from `compiler/backend/runtime_layout.mdk` into
+`runtime/medaka_abi.h`. The following alternatives describe the original design;
+current physical layout is summarized here and in the generated header.
+
+A value is an eight-byte word. Integers, characters and nullary constructors use
+low-bit-one immediates; boxed values are pointers. Constructor headers use
+`typeId * 2^32 + ordinal`; the runtime-reserved type IDs start at 65536. A
+string is `[tag | byte length | codepoint count | UTF-8 bytes]`; an array is
+`[length | elements]` and therefore does not have a constructor header. Boxed
+Float, U64 and I64 cells hold a header and one payload word. Closures are
+`[arity | code pointer | captures]`; a runtime PAP is
+`[-1 | original closure | supplied count | supplied arguments]`. Native method
+tables use `[header | supers | slots | requires]` (§8.7).
+
+The packed trap site uses a 16-bit file number, 24-bit line and 20-bit column.
+File numbering remains local to each emitted program. A zero site means absent.
 
 > **Layering note (reconciles §7.1's WasmGC constraint — 2026-06-06).** §8.0–8.5
 > describe the **native (LLVM + Boehm) physical encoding** — *one of two* physical
@@ -618,95 +601,15 @@ recorded inline here):
   reflection, that is when a header tag on a boxed scalar, or a distinct `Bool`
   immediate tag, earns its keep.)
 
-### 8.5 Calling convention sketch (commit: `musttail` for tail calls)
+### 8.5 Calling convention
 
-The uniform-word rep makes the convention fall out cleanly:
-
-- **Uniform word ABI.** Every compiled Medaka function takes and returns the 64-bit
-  value word. An arity-*n* function is `T @f(T %a0, … , T %a{n-1})` with `T = i64`.
-  Medaka's multi-arg lambdas are **true n-ary** (`x y => body`, *not* curried — see
-  AGENTS.md), so a function has a fixed arity; partial application builds a closure
-  (PAP) rather than currying through one-arg trampolines.
-- **Two calling conventions, one boundary.** Medaka↔Medaka calls use a
-  **tail-callable convention** (`tailcc`); Medaka↔runtime-extern calls use the **C
-  convention** (`ccc`) — the C-ABI-over-opaque-pointers boundary §2a/§6 already
-  commit to. The runtime never sees `tailcc`; compiled code marshals to `ccc` at the
-  extern call (the spike already does this: its `@mdk_print_*` / `@mdk_alloc` calls
-  are plain C-ABI).
-- **`musttail` for syntactic tail calls — committed.** Medaka leans on deep
-  non-accumulating recursion (the unary `isEven`/`isOdd`, `foldl`, the tree-walker's
-  own recursion); without guaranteed TCO it would stack-overflow where the
-  tree-walker does not. Emit LLVM **`musttail`** on every call in tail position.
-  `musttail` requires the caller and callee to share calling convention and return
-  type and for the call to be immediately followed by `ret` — and the **uniform
-  i64-in/i64-out ABI satisfies the signature-match constraint for free** (every
-  Medaka function is `i64(…)→i64`). That synergy is a second, independent reason the
-  uniform word pays off: it is precisely what makes universal `musttail` legal. Use
-  `tailcc` to also get TCO on calls LLVM can't mark `musttail` (e.g. through a
-  function-pointer/closure where the convention still matches).
-- **Empirically validated (2026-06-05) — spike slice 2.** The de-risking spike
-  (`llvm_emit.mdk`, STAGE2-DESIGN.md §2.4) now emits real functions + calls, and
-  `musttail` is confirmed end-to-end on `clang -O0` for arm64: a self-recursive
-  tail call lowers to `%r = musttail call i64 @mdk_f(…)` immediately followed by
-  `ret i64 %r`, and a 5,000,000-deep tail-recursive `sumTo` returns the correct
-  total with no stack growth (a plain `call` overflows). The spike uses the **C
-  convention (`ccc`) for the i64-in/i64-out functions**, not `tailcc`, and
-  `musttail` is still accepted and TCO-correct there — so the signature-match
-  argument above holds under the default cc, and the `tailcc` upgrade (line above)
-  is an optimization for the non-`musttail`-able cases rather than a prerequisite.
-  Scope caveat: only **self-recursive** tail calls are emitted as `musttail` so far
-  (self-recursion trivially satisfies the prototype-match rule); cross-function
-  `musttail` (mutual recursion) needs an explicit prototype-match check and is the
-  next increment.
-- **Empirically validated (2026-06-06) — spike slice 3 (ADTs + match).** The spike
-  now emits the first **heap-allocated non-scalar** values: a constructor is a boxed
-  cell `{ i64 tag, field… }` via `mdk_alloc` (the §8.4 Option-A layout, the Float
-  box extended to N fields), and a `match` is a decision-tree CFG (tag-test `br`
-  switch → `getelementptr` field projection → arm body). 22/22 gate. Two rep
-  decisions surfaced for the real backend (deferred — see STAGE2-DESIGN.md
-  §2.4/§2.4a spike-rep notes):
-  (1) ~~the spike **boxes nullary constructors** (1-word alloc) where §8.1 says they
-  should be **immediate/free**~~ **DONE 2026-06-07** — the spike now emits a nullary
-  ctor as the §8.1 IMMEDIATE word `(cellTag<<1)|1` (no alloc, the Bool immediate
-  generalised); a `match` head reads the tag via `loadDiscriminant` (branch on the
-  low bit: immediate ⇒ `ashr 1`, boxed ⇒ load header), so a type mixing nullary +
-  boxed ctors discriminates without dereferencing an immediate (`llvm_emit.mdk`
-  `emitCtorAlloc`/`loadDiscriminant`; adversarial `test/llvm_fixtures/adt_imm_mixed.mdk`);
-  (2) ~~the i64 string-hash
-  tag~~ **DONE 2026-06-07** — the spike now emits the **dense i32 ctor-ordinal**
-  (per type, via `cellTag`) that ports to LLVM/WasmGC `br_table` cleanly and avoids
-  collisions. The emitted encoding is
-  the native physical rep (§8.6); a WasmGC sibling would use `i31ref` + typed structs
-  over the host GC, sharing only the Core IR, not the bits.
-- **Empirically validated (2026-06-06) — spike slice 4 (closures + HOFs).** The
-  closure rep below is now proven on the spike: a `CLam` lambda-lifts to a top-level
-  `define`, the closure cell `{ header, code_ptr, captured… }` allocates via the
-  same `mdk_alloc` path, and a higher-order call loads `code_ptr` and passes the
-  closure word as the leading arg. 35/35 gate (slices 1–5b). Rep decisions surfaced (deferred —
-  STAGE2-DESIGN.md §2.4/§2.4a spike-rep notes (d)–(f)): the one-word **header is never inspected** and
-  could be dropped; **saturated calls only** (arity must move into the cell for
-  partial/over-application); named-fn-as-value is **eta-wrapped per use** (could be
-  interned once arities are carried).
-- **Closures.** A closure value is a boxed cell `{ header, code_ptr, captured… }`;
-  calling loads `code_ptr` and passes the closure (env) pointer as a leading
-  argument. (LLVM spike slice 4, 2026-06-06: proven end-to-end — `CLam`
-  lambda-lifted to a top-level `define @mdk_lamN(i64 %clos, i64 %arg…)`, cell
-  allocated via the same `mdk_alloc` path as ADTs with "fields" =
-  `[code_ptr, capture…]`, indirect call passes the closure word as the leading arg.
-  **Saturated calls only** — the type-erased Core IR can't see arity at the call
-  site, so partial/over-application are deferred: the real backend must carry arity
-  in the cell. The spike's one-word header is never inspected and could be dropped.
-  See STAGE2-DESIGN.md §2.4/§2.4a spike-rep notes (d)–(f).)
-- **`panic`/`exit`.** `noreturn` (§4). The unwind model (abort vs. catchable
-  unwind) is deferred with the convention, as §4 already notes.
-
-**Where this gets proven.** Per the §2 sequencing note, the rep + convention should
-be exercised at the **bytecode VM (§2.2)** against the tree-walker oracle before the
-real LLVM backend — the VM forces the same value-representation and C-ABI-extern
-commitments in the cheaper, single-steppable setting. This spike is the *earliest*
-such exercise (LLVM-side; scalars + functions + ADTs/match + closures/HOFs so far); the VM will
-broaden it to the full value set (records, arrays, closures, thunks, dispatch) with
-the same oracle.
+Native closure calls pass the closure word before value arguments. An exact
+call may call the code pointer directly; otherwise `__mdk_apply` creates or
+flattens a PAP and handles over-application. Its C exact-call switch has arms
+through eight value arguments. The separate sixteen-argument constant sizes the
+PAP stack buffer; it is not a guarantee that partial or over-application at
+that arity works. Wide dynamic partial and over calls remain tracked in #4790.
+No universal tail-call guarantee is implied by this ABI.
 
 ### 8.6 The shared contract + the WasmGC encoding (reconciliation)
 
@@ -776,6 +679,15 @@ Two physical runtimes (Boehm+tagged-word native; host-GC+structs WasmGC) are
 *expected and fine* — "one language" is guaranteed by the shared contract + the
 layering rule, not by a shared encoding. §8 and §7.1 were never in real conflict;
 they sit at different layers.
+
+Package identity metadata is encoded by `backend/package_identity_sexp.mdk` with a
+format version, native ABI version, package fingerprint and integrity digest. The
+reader validates identities and their high-water marks before a consumer plans local
+assignments. Planning returns `IdentityDefect` values, and decoding returns
+`PackageIdentityError` values; render them at the diagnostic boundary. A packable site
+whose file is absent is an invariant failure, while unlocated sites retain word zero.
+Automatic package/interface loading belongs to V1. WasmGC keeps named GC
+types and ordinal discriminants; its trap sites share the planned file table with native.
 
 ### 8.7 Dictionaries are method tables
 

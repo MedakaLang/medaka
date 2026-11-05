@@ -1642,7 +1642,7 @@ loadProgramFilesE read entry roots =
 -- Like loadProgramFilesE but parses every module with `parseLocatedResult`, so the
 -- resulting decls carry REAL ELoc spans (B.10.2b) — the LSP project path uses
 -- this so type-error diagnostics get expr-level ranges, mirroring the single-doc
--- `analyzeLocated`.
+-- `analyzeFrom` over `parseLocated`.
 export
 loadProgramFilesLocatedE : (String -> Option String) ->
   String ->

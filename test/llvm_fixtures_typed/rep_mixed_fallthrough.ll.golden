@@ -50,8 +50,8 @@ declare void @mdk_eputstr(i64)
 declare void @mdk_eputstrln(i64)
 declare void @mdk_flushstdout(i64)
 declare void @mdk_print_unit()
-declare void @mdk_panic(i64)
-declare void @mdk_exit(i64)
+declare void @mdk_panic(i64) noreturn
+declare void @mdk_exit(i64) noreturn
 declare i64 @mdk_array_make(i64, i64)
 declare i64 @mdk_array_copy(i64)
 declare void @mdk_array_blit(i64, i64, i64, i64, i64)
@@ -159,6 +159,17 @@ declare i64 @mdk_executable_path(i64)
 declare i64 @mdk_build_fingerprint(i64)
 declare i64 @mdk_build_commit(i64)
 declare i64 @mdk_build_date(i64)
+declare i64 @mdk_process_submit(i64, i64, i64, i64, i64, i64, i64)
+declare i64 @mdk_process_start(i64, i64, i64, i64, i64, i64, i64)
+declare i64 @mdk_process_retry_start(i64)
+declare i64 @mdk_process_check_start(i64)
+declare i64 @mdk_process_abort_start(i64)
+declare i64 @mdk_process_poll_exit(i64)
+declare i64 @mdk_process_close_stdin(i64)
+declare i64 @mdk_process_dispose(i64)
+declare i64 @mdk_process_try_read(i64, i64, i64)
+declare i64 @mdk_process_try_write(i64, i64, i64, i64)
+declare i64 @mdk_process_stream_fd(i64, i64)
 declare i64 @mdk_net_resolve(i64)
 declare i64 @mdk_net_tcp_connect(i64, i64)
 declare i64 @mdk_net_tcp_listen(i64, i64)
@@ -213,6 +224,7 @@ declare i64 @mdk_monotonic_sec(i64)
 declare void @mdk_sleep_ms(i64)
 declare i64 @mdk_alloc_bytes(i64)
 declare void @mdk_stash_run_stdout(i64)
+declare void @mdk_set_abort_report(i64, i64)
 declare void @mdk_enable_run_stdout_flush(i64)
 
 ; mdk-module program
@@ -220,26 +232,26 @@ define i32 @mdk_program_main(i32 %argc, ptr %argv) {
 entry:
   call void @mdk_set_args(i32 %argc, ptr %argv)
   %t0 = call ptr @mdk_alloc(i64 16)
-  store i64 1, ptr %t0
+  store i64 4294967297, ptr %t0
   %t1 = getelementptr i8, ptr %t0, i64 8
   store i64 11, ptr %t1
   %t2 = ptrtoint ptr %t0 to i64
   %t3 = call ptr @mdk_alloc(i64 24)
-  store i64 2, ptr %t3
+  store i64 4294967298, ptr %t3
   %t4 = getelementptr i8, ptr %t3, i64 8
   store i64 7, ptr %t4
   %t5 = getelementptr i8, ptr %t3, i64 16
   store i64 9, ptr %t5
   %t6 = ptrtoint ptr %t3 to i64
   %t7 = call ptr @mdk_alloc(i64 16)
-  store i64 1, ptr %t7
+  store i64 4294967297, ptr %t7
   %t8 = getelementptr i8, ptr %t7, i64 8
   store i64 201, ptr %t8
   %t9 = ptrtoint ptr %t7 to i64
   %t10 = call ptr @mdk_alloc(i64 24)
   store i64 281474976710656, ptr %t10
   %t11 = getelementptr i8, ptr %t10, i64 8
-  store i64 1, ptr %t11
+  store i64 8589934593, ptr %t11
   %t12 = getelementptr i8, ptr %t10, i64 16
   store i64 562949953421315, ptr %t12
   %t13 = ptrtoint ptr %t10 to i64
@@ -253,7 +265,7 @@ entry:
   %t18 = call ptr @mdk_alloc(i64 24)
   store i64 281474976710656, ptr %t18
   %t19 = getelementptr i8, ptr %t18, i64 8
-  store i64 7, ptr %t19
+  store i64 8589934599, ptr %t19
   %t20 = getelementptr i8, ptr %t18, i64 16
   store i64 %t17, ptr %t20
   %t21 = ptrtoint ptr %t18 to i64
@@ -274,7 +286,7 @@ entry:
   %t30 = call ptr @mdk_alloc(i64 24)
   store i64 281474976710656, ptr %t30
   %t31 = getelementptr i8, ptr %t30, i64 8
-  store i64 1, ptr %t31
+  store i64 8589934593, ptr %t31
   %t32 = getelementptr i8, ptr %t30, i64 16
   store i64 %t29, ptr %t32
   %t33 = ptrtoint ptr %t30 to i64
@@ -299,7 +311,7 @@ discbox3:
   br label %disccont3
 disccont3:
   %t9 = phi i64 [ %t6, %discimm3 ], [ %t8, %discbox3 ]
-  %t10 = icmp eq i64 %t9, 0
+  %t10 = icmp eq i64 %t9, 4294967296
   br i1 %t10, label %conyes11, label %connext11
 conyes11:
   store i64 3, ptr %t0
@@ -319,7 +331,7 @@ discbox13:
   br label %disccont13
 disccont13:
   %t19 = phi i64 [ %t16, %discimm13 ], [ %t18, %discbox13 ]
-  %t20 = icmp eq i64 %t19, 1
+  %t20 = icmp eq i64 %t19, 4294967297
   br i1 %t20, label %conyes21, label %connext21
 conyes21:
   %t22 = inttoptr i64 %arg0 to ptr
@@ -345,7 +357,7 @@ discbox29:
   br label %disccont29
 disccont29:
   %t35 = phi i64 [ %t32, %discimm29 ], [ %t34, %discbox29 ]
-  %t36 = icmp eq i64 %t35, 2
+  %t36 = icmp eq i64 %t35, 4294967298
   br i1 %t36, label %conyes37, label %connext37
 conyes37:
   %t38 = inttoptr i64 %arg0 to ptr
@@ -390,7 +402,7 @@ discbox59:
   br label %disccont59
 disccont59:
   %t65 = phi i64 [ %t62, %discimm59 ], [ %t64, %discbox59 ]
-  %t66 = icmp eq i64 %t65, 3
+  %t66 = icmp eq i64 %t65, 4294967299
   br i1 %t66, label %conyes67, label %connext67
 conyes67:
   store i64 5, ptr %t0

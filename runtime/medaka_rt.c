@@ -43,6 +43,7 @@
 #ifndef _GNU_SOURCE
 #define _GNU_SOURCE
 #endif
+#include "medaka_runtime.h"
 #include <dirent.h>
 #include <errno.h>
 #include <stdio.h>
@@ -51,6 +52,7 @@
 #include <math.h>
 #include <string.h>
 #include <stdnoreturn.h>
+#include <stdatomic.h>
 #include <sys/stat.h>
 #include <sys/time.h>
 #include <time.h>
@@ -76,6 +78,13 @@
  * pthread_create would NOT have its stack registered as a GC root, so Boehm would
  * collect still-live objects and corrupt the heap.  GC_pthread_create registers
  * the worker's stack, keeping conservative scanning correct on it. */
+#include "medaka_process.h"
+/* A process API reference extracts its archive member; this weak hook alone must not. */
+#ifdef __APPLE__
+extern void mdk_process_submission_init(void) __attribute__((weak_import));
+#else
+extern void mdk_process_submission_init(void) __attribute__((weak));
+#endif
 #define GC_THREADS
 #include <gc.h>
 /* gc_inline.h asserts each allocation's size with GC_size, a call per cell, unless
@@ -97,8 +106,15 @@ __attribute__((weak)) const long long mdk_gc_initial_heap_bytes = 0;
  * separately by GC_pthread_create.  GC_malloc would otherwise lazily init on its
  * first call. */
 
+static void *mdk_gc_oom(size_t bytes);
+static void mdk_gc_warn(char *msg, GC_word arg);
+static GC_warn_proc mdk_gc_prev_warn = 0;
+
 __attribute__((constructor)) static void mdk_gc_init(void) {
   GC_INIT();
+  mdk_gc_prev_warn = GC_get_warn_proc();
+  GC_set_warn_proc(mdk_gc_warn);
+  GC_set_oom_fn(mdk_gc_oom);
   if (mdk_gc_initial_heap_bytes > 0 && !getenv("GC_INITIAL_HEAP_SIZE"))
     GC_expand_hp((size_t)mdk_gc_initial_heap_bytes);
   /* Perf tuning (compiler/PERF-RESULTS.md): Medaka workloads are
@@ -227,7 +243,7 @@ void *mdk_alloc_atomic(long long n) { return GC_malloc_atomic((size_t)n); }
  * >= 1) forces every application of a PAP through __mdk_apply, which FLATTENS it —
  * re-dispatching the original closure against (already-supplied ++ new) args.  So a
  * PAP is never called via the inline fast path and needs no per-arity trampoline. */
-#define MDK_MAX_ARITY 16
+
 
 typedef long long mdk_i64;
 
@@ -259,10 +275,10 @@ static mdk_i64 mdk_call_exact(mdk_i64 code, mdk_i64 cw, mdk_i64 argc,
 /* build a PAP capturing `cw` plus the `argc` args already supplied. */
 static mdk_i64 mdk_make_pap(mdk_i64 cw, mdk_i64 argc, const mdk_i64 *argv) {
   mdk_i64 *cell = (mdk_i64 *)mdk_alloc((long long)(8 * (3 + argc)));
-  cell[0] = -1;         /* PAP sentinel header */
-  cell[1] = cw;         /* the original closure */
-  cell[2] = argc;       /* number of args captured so far */
-  for (mdk_i64 i = 0; i < argc; i++) cell[3 + i] = argv[i];
+  cell[0] = MDK_PAP_HEADER;         /* PAP sentinel header */
+  cell[MDK_PAP_CLOSURE_SLOT] = cw;         /* the original closure */
+  cell[MDK_PAP_COUNT_SLOT] = argc;       /* number of args captured so far */
+  for (mdk_i64 i = 0; i < argc; i++) cell[MDK_PAP_ARGS_SLOT + i] = argv[i];
   return (mdk_i64)cell;
 }
 
@@ -271,23 +287,23 @@ static mdk_i64 mdk_make_pap(mdk_i64 cw, mdk_i64 argc, const mdk_i64 *argv) {
  * exact-arity inline call. */
 mdk_i64 __mdk_apply(mdk_i64 cw, mdk_i64 argc, const mdk_i64 *argv) {
   mdk_i64 *cell = (mdk_i64 *)cw;
-  if (cell[0] == -1) {
+  if (cell[0] == MDK_PAP_HEADER) {
     /* PAP: flatten — combine already-supplied args with the new ones and
      * re-dispatch against the underlying closure. */
-    mdk_i64 orig = cell[1];
-    mdk_i64 nsup = cell[2];
+    mdk_i64 orig = cell[MDK_PAP_CLOSURE_SLOT];
+    mdk_i64 nsup = cell[MDK_PAP_COUNT_SLOT];
     mdk_i64 total = nsup + argc;
     mdk_i64 stackbuf[2 * MDK_MAX_ARITY];
     mdk_i64 *buf = stackbuf;
     if (total > (mdk_i64)(2 * MDK_MAX_ARITY))
       buf = (mdk_i64 *)mdk_alloc((long long)(8 * total));
-    for (mdk_i64 i = 0; i < nsup; i++) buf[i] = ((mdk_i64 *)cw)[3 + i];
+    for (mdk_i64 i = 0; i < nsup; i++) buf[i] = ((mdk_i64 *)cw)[MDK_PAP_ARGS_SLOT + i];
     for (mdk_i64 i = 0; i < argc; i++) buf[nsup + i] = argv[i];
     return __mdk_apply(orig, total, buf);
   }
   {
     mdk_i64 arity = cell[0];
-    mdk_i64 code = cell[1];
+    mdk_i64 code = cell[MDK_CLOSURE_CODE_SLOT];
     if (argc == arity) return mdk_call_exact(code, cw, argc, argv);
     if (argc < arity) return mdk_make_pap(cw, argc, argv);
     /* over-application: saturate `arity`, then apply the surplus to the result. */
@@ -303,9 +319,217 @@ mdk_i64 __mdk_apply(mdk_i64 cw, mdk_i64 argc, const mdk_i64 *argv) {
    that needs it but is emitted earlier in this file. */
 static void mdk_flush_run_stdout_on_abort(void);
 
+/* ABORT-LINE EMITTER.  Every diagnostic abort in this file writes its line through
+ * mdk_abort_coded or mdk_abort_verbatim, so a note or a template is added in one
+ * place.  Both are async-signal-safe: write(2) only, no stdio, no allocation, no GC,
+ * no locks, integers formatted by hand into stack buffers.  They write and return;
+ * the caller flushes stdout beforehand and exits afterwards.
+ *
+ * mdk_abort_coded writes `[file:line:col: ]runtime error [<code>]: <pre><bytes><post>\n`.
+ * `site` is the packed trap site of the `_at` entries below (0 prints no location);
+ * `bytes`/`blen` is an optional counted run (not NUL-terminated) between `pre` and
+ * `post`.  mdk_abort_verbatim writes an already-formatted line, plus the newline.
+ *
+ * `file` of a site indexes the NULL-terminated path table a program that has located
+ * traps defines strongly as `mdk_site_files`; this weak null stands in for every
+ * program that defines none (the cold seed bootstrap among them), the same
+ * weak-default scheme as the build stamps below.  A file number past the table, or
+ * no table, prints the unlocated line. */
+__attribute__((weak)) const char *const *const mdk_site_files = 0;
+
+/* The abort report `setAbortReport` registers (mdk_set_abort_report below), held
+ * in malloc memory because the abort path reads it from a signal handler after
+ * the GC may have freed the Medaka strings.  An empty string clears its slot.
+ *
+ * With a note, an abort writes its line and then the note on a line of its own.
+ * With a template (a JSON envelope), a coded abort writes the template in place
+ * of its line: byte 0x01 becomes the code, byte 0x02 the message, escaped as
+ * stdlib/json.mdk's `escapeChar` escapes a string.  A pre-formatted line is
+ * written as it is, then the note.  Each slot is cleared before it is written,
+ * so an abort during the write adds no second report. */
+static char *volatile mdk_abort_note = 0;
+static char *volatile mdk_abort_tmpl = 0;
+
+static char *mdk_take_abort_slot(char *volatile *slot) {
+  char *p = *slot;
+  *slot = 0;
+  atomic_signal_fence(memory_order_seq_cst);
+  return p;
+}
+
+struct mdk_abort_buf {
+  char b[192];
+  size_t n;
+};
+#define MDK_ABORT_BUF_INIT {.b = {0}, .n = 0}
+
+static void mdk_abort_write(const char *p, size_t n) {
+  while (n > 0) {
+    ssize_t k = write(2, p, n);
+    if (k < 0) {
+      if (errno == EINTR) continue;
+      return;
+    }
+    p += k;
+    n -= (size_t)k;
+  }
+}
+
+static void mdk_abuf_str(struct mdk_abort_buf *a, const char *s) {
+  while (*s && a->n + 1 < sizeof a->b) a->b[a->n++] = *s++;
+  a->b[a->n] = 0;
+}
+
+static void mdk_abuf_u64(struct mdk_abort_buf *a, unsigned long long v) {
+  char tmp[24];
+  size_t k = 0;
+  do {
+    tmp[k++] = (char)('0' + v % 10);
+    v /= 10;
+  } while (v != 0);
+  while (k > 0 && a->n + 1 < sizeof a->b) a->b[a->n++] = tmp[--k];
+  a->b[a->n] = 0;
+}
+
+static void mdk_abuf_int(struct mdk_abort_buf *a, long long v) {
+  if (v < 0) {
+    mdk_abuf_str(a, "-");
+    mdk_abuf_u64(a, 0ULL - (unsigned long long)v);
+  } else {
+    mdk_abuf_u64(a, (unsigned long long)v);
+  }
+}
+
+/* An operand of an Int overflow message: a negative one is parenthesized. */
+static void mdk_abuf_operand(struct mdk_abort_buf *a, long long v) {
+  if (v < 0) {
+    mdk_abuf_str(a, "(");
+    mdk_abuf_int(a, v);
+    mdk_abuf_str(a, ")");
+  } else {
+    mdk_abuf_int(a, v);
+  }
+}
+
+static void mdk_abort_put_site(unsigned long long site) {
+  unsigned long long file = site >> MDK_SITE_FILE_SHIFT;
+  const char *const *table = mdk_site_files;
+  if (file == 0 || table == 0) return;
+  for (unsigned long long i = 0; i + 1 < file; i++)
+    if (table[i] == 0) return;
+  if (table[file - 1] == 0) return;
+  struct mdk_abort_buf a = MDK_ABORT_BUF_INIT;
+  mdk_abort_write(table[file - 1], strlen(table[file - 1]));
+  mdk_abuf_str(&a, ":");
+  mdk_abuf_u64(&a, (site >> MDK_SITE_LINE_SHIFT) & MDK_SITE_LINE_MASK);
+  mdk_abuf_str(&a, ":");
+  mdk_abuf_u64(&a, site & MDK_SITE_COLUMN_MASK);
+  mdk_abuf_str(&a, ": ");
+  mdk_abort_write(a.b, a.n);
+}
+
+static void mdk_abort_write_note(const char *note) {
+  if (!note) return;
+  mdk_abort_write(note, strlen(note));
+  mdk_abort_write("\n", 1);
+}
+
+/* `bytes` as the inside of a JSON string literal, as stdlib/json.mdk's
+ * `escapeChar` writes it: every byte from 0x20 up, those of UTF-8 sequences
+ * included, is copied, except `"` and `\`. */
+static void mdk_abort_write_json_escaped(const char *bytes, size_t blen) {
+  static const char hex[] = "0123456789abcdef";
+  size_t run = 0;
+  for (size_t i = 0; i < blen; i++) {
+    unsigned char c = (unsigned char)bytes[i];
+    char esc[6];
+    size_t n = 2;
+    esc[0] = '\\';
+    if (c == '"' || c == '\\') esc[1] = (char)c;
+    else if (c == 8) esc[1] = 'b';
+    else if (c == 9) esc[1] = 't';
+    else if (c == 10) esc[1] = 'n';
+    else if (c == 12) esc[1] = 'f';
+    else if (c == 13) esc[1] = 'r';
+    else if (c < 32) {
+      esc[1] = 'u';
+      esc[2] = '0';
+      esc[3] = '0';
+      esc[4] = hex[c / 16];
+      esc[5] = hex[c % 16];
+      n = 6;
+    } else continue;
+    mdk_abort_write(bytes + run, i - run);
+    mdk_abort_write(esc, n);
+    run = i + 1;
+  }
+  mdk_abort_write(bytes + run, blen - run);
+}
+
+static void mdk_abort_write_template(const char *tmpl, const char *code,
+                                     const char *pre, const char *bytes,
+                                     size_t blen, const char *post) {
+  const char *run = tmpl;
+  const char *p = tmpl;
+  for (; *p; p++) {
+    if (*p != '\x01' && *p != '\x02') continue;
+    mdk_abort_write(run, (size_t)(p - run));
+    if (*p == '\x01') {
+      mdk_abort_write(code, strlen(code));
+    } else {
+      mdk_abort_write_json_escaped(pre, strlen(pre));
+      if (bytes) mdk_abort_write_json_escaped(bytes, blen);
+      if (post) mdk_abort_write_json_escaped(post, strlen(post));
+    }
+    run = p + 1;
+  }
+  mdk_abort_write(run, (size_t)(p - run));
+  mdk_abort_write("\n", 1);
+}
+
+static void mdk_abort_coded(unsigned long long site, const char *code,
+                            const char *pre, const char *bytes, size_t blen,
+                            const char *post) {
+  char *tmpl = mdk_take_abort_slot(&mdk_abort_tmpl);
+  char *note = mdk_take_abort_slot(&mdk_abort_note);
+  if (tmpl) {
+    mdk_abort_write_template(tmpl, code, pre, bytes, blen, post);
+    return;
+  }
+  mdk_abort_put_site(site);
+  mdk_abort_write("runtime error [", 15);
+  mdk_abort_write(code, strlen(code));
+  mdk_abort_write("]: ", 3);
+  mdk_abort_write(pre, strlen(pre));
+  if (bytes) mdk_abort_write(bytes, blen);
+  if (post) mdk_abort_write(post, strlen(post));
+  mdk_abort_write("\n", 1);
+  mdk_abort_write_note(note);
+}
+
+/* A pre-formatted line under `--json` is already the whole envelope, so only a
+ * note follows it. */
+static void mdk_abort_verbatim(const char *bytes, size_t blen) {
+  mdk_take_abort_slot(&mdk_abort_tmpl);
+  char *note = mdk_take_abort_slot(&mdk_abort_note);
+  mdk_abort_write(bytes, blen);
+  mdk_abort_write("\n", 1);
+  mdk_abort_write_note(note);
+}
+
+/* The `_at` twins are defined below; each plain entry calls its twin with site 0. */
+noreturn void mdk_div_zero_at(unsigned long long site);
+noreturn void mdk_mod_zero_at(unsigned long long site);
+noreturn void mdk_int_overflow_at(long long op, long long a, long long b,
+                                  unsigned long long site);
+noreturn void mdk_nonexhaustive_match_at(unsigned long long site);
+noreturn void mdk_let_refute_at(unsigned long long site);
+noreturn void mdk_oob_at_at(long long idx, unsigned long long site);
+noreturn void mdk_panic_at(long long w, unsigned long long site);
+
 noreturn void mdk_oob(void) {
   mdk_flush_run_stdout_on_abort();
-  fprintf(stderr, "runtime error [E-INDEX-OOB]: index out of bounds\n");
+  mdk_abort_coded(0, "E-INDEX-OOB", "index out of bounds", 0, 0, 0);
   exit(1);
 }
 
@@ -323,9 +547,7 @@ noreturn void mdk_oob_msg(long long w) {
   mdk_flush_run_stdout_on_abort();
   const char *cell = (const char *)w;
   long long byte_len = ((const long long *)cell)[1];
-  fputs("runtime error [E-INDEX-OOB]: ", stderr);
-  fwrite(cell + 24, 1, (size_t)byte_len, stderr);
-  fputc('\n', stderr);
+  mdk_abort_coded(0, "E-INDEX-OOB", "", cell + 24, (size_t)byte_len, 0);
   exit(1);
 }
 
@@ -342,11 +564,7 @@ noreturn void mdk_oob_msg(long long w) {
  * into hot loops, making `arr[i] := v` ~15% slower than the `Array.set` function it
  * desugars to.  Formatting here fixes both: the engines agree, and the impl's cold
  * branch is one call. */
-noreturn void mdk_oob_at(long long idx) {
-  mdk_flush_run_stdout_on_abort();
-  fprintf(stderr, "runtime error [E-INDEX-OOB]: index %lld out of bounds\n", idx);
-  exit(1);
-}
+noreturn void mdk_oob_at(long long idx) { mdk_oob_at_at(idx, 0); }
 
 /* Out-of-range `arr.[lo..hi]` / `arr.[lo..=hi]` (#550).  The emitted slice used to
  * allocate `end - lo` slots and copy `a[lo + i]` with NO bounds check, so an
@@ -361,8 +579,13 @@ noreturn void mdk_oob_at(long long idx) {
  * path, so the two extra argument words cost nothing on the hot path. */
 noreturn void mdk_slice_oob(long long lo, long long hi_incl) {
   mdk_flush_run_stdout_on_abort();
-  fprintf(stderr, "runtime error [E-SLICE-OOB]: slice [%lld..%lld] out of bounds\n",
-          lo, hi_incl);
+  struct mdk_abort_buf a = MDK_ABORT_BUF_INIT;
+  mdk_abuf_str(&a, "slice [");
+  mdk_abuf_int(&a, lo);
+  mdk_abuf_str(&a, "..");
+  mdk_abuf_int(&a, hi_incl);
+  mdk_abuf_str(&a, "] out of bounds");
+  mdk_abort_coded(0, "E-SLICE-OOB", a.b, 0, 0, 0);
   exit(1);
 }
 
@@ -376,9 +599,8 @@ noreturn void mdk_slice_oob(long long lo, long long hi_incl) {
  * mdk_oob/mdk_slice_oob do (the "run drops stdout on panic" machinery). */
 noreturn void mdk_cyclic_value(const char* name) {
   mdk_flush_run_stdout_on_abort();
-  fprintf(stderr,
-          "runtime error [E-CYCLIC-VALUE]: %s refers to itself during initialization (non-productive cyclic value)\n",
-          name);
+  mdk_abort_coded(0, "E-CYCLIC-VALUE", "", name, strlen(name),
+                  " refers to itself during initialization (non-productive cyclic value)");
   exit(1);
 }
 
@@ -518,7 +740,7 @@ void mdk_print_float(double d) {
  * Per §2a, every extern that RETURNS a Medaka String allocates it here, through
  * mdk_alloc, with this exact layout — it never hands back a
  * native-owned buffer.  mdk_int_to_string is the first such extern. */
-#define MDK_STR_TAG 1
+
 
 /* BYTEBLOCK REPRESENTATION — the packed byte buffer behind the `ByteBlock`
  * builtin (stdlib/runtime.mdk, "Byte blocks"), boxed as one GC cell:
@@ -530,15 +752,14 @@ void mdk_print_float(double d) {
  * The header sits at offset 0, unlike the array cell, whose word 0 is its raw
  * element count -- so a length-1 array is indistinguishable from a String cell
  * and a byte block must not be given that shape.  The value is a composite in
- * the reserved type-id range (slot 4; see the MDK_TAG block below and
+ * the reserved type-id range (slot 4; see MDK_TAG in runtime/medaka_abi.h and
  * `reservedTag` in compiler/backend/llvm_emit.mdk), which no user constructor
- * tag and no other cell header can reach.  The _Static_assert beside MDK_TAG
- * pins this spelling to that formula.
+ * tag and no other cell header can reach.  The generated ABI header defines the tag and pins the formula.
  *
  * The payload holds no pointers and the two header words are integers, so the
  * cell is allocated pointer-free through mdk_alloc_atomic, exactly as a String
  * cell is; mdk_alloc_atomic does not zero, so mdk_byteblock_alloc memsets. */
-#define MDK_BYTEBLOCK_TAG ((65536LL + 4LL) * 4294967296LL)
+
 
 /* U64 REPRESENTATION — the boxed 64-bit unsigned integer behind the `U64`
  * builtin (docs/design/INTEGER-TYPES-DESIGN.md section 6.2), Float's cell shape:
@@ -547,13 +768,12 @@ void mdk_print_float(double d) {
  *   offset  8:  u64 payload    the value, all 64 bits
  *
  * The header is reserved type-id 5 (`u64CellTag` in
- * compiler/backend/llvm_emit.mdk), pinned to MDK_TAG(5, 0) beside the byte
- * block's assertion.  The cell holds no pointers, so it is allocated through
+ * compiler/backend/llvm_emit.mdk), pinned to MDK_TAG(5, 0) in the ABI header.  The cell holds no pointers, so it is allocated through
  * mdk_alloc_atomic; a literal is a private constant cell the emitter lays out
  * the same way, so nothing may write through a U64 word.  The type-lost
  * discriminators below (mdk_value_eq, mdk_value_cmp_raw, mdk_value_lt/le/gt/ge,
  * mdk_num_*, mdk_print_num) order and compute on the unsigned payload. */
-#define MDK_U64_TAG ((65536LL + 5LL) * 4294967296LL)
+
 
 static int mdk_is_u64(long long w) {
   return ((w & 1) == 0) && ((const long long *)w)[0] == MDK_U64_TAG;
@@ -577,10 +797,10 @@ void mdk_print_u64(long long w) { printf("%llu\n", mdk_u64_payload(w)); }
 /* I64 REPRESENTATION — the boxed 64-bit signed integer behind the `I64` builtin:
  * U64's cell shape and payload, the 64 bits read in two's complement, under a
  * header of its own (reserved type-id 6, `i64CellTag` in
- * compiler/backend/llvm_emit.mdk, pinned to MDK_TAG(6, 0) below).  The distinct
+ * compiler/backend/llvm_emit.mdk, pinned to MDK_TAG(6, 0) in the ABI header).  The distinct
  * header is what lets the type-lost discriminators order, divide and print an
  * I64 signed where a U64 is unsigned. */
-#define MDK_I64_TAG ((65536LL + 6LL) * 4294967296LL)
+
 
 static int mdk_is_i64(long long w) {
   return ((w & 1) == 0) && ((const long long *)w)[0] == MDK_I64_TAG;
@@ -619,7 +839,7 @@ noreturn static void mdk_byteblock_append_unsupported(void);
 
 /* mdk_append's fail-closed arm: a left operand that is neither String, byte block,
  * Nil nor Cons must not be walked as a Cons chain.  Both read the reserved ADT tags
- * MDK_TAG_CONS/MDK_TAG_NIL, so they are defined down beside those. */
+ * MDK_TAG_CONS/MDK_TAG_NIL, defined in the ABI header. */
 static int mdk_is_list_word(long long w);
 noreturn static void mdk_append_unsupported(void);
 
@@ -796,7 +1016,7 @@ long long mdk_value_eq(long long a, long long b) {
    * addresses. */
   if (mdk_is_u64(a)) return mdk_u64_payload(a) == mdk_u64_payload(b) ? 3 : 1;
   if (mdk_is_i64(a)) return mdk_i64_payload(a) == mdk_i64_payload(b) ? 3 : 1;
-  int a_flt = ((a & 1) == 0) && ((const long long *)a)[0] == 2;
+  int a_flt = ((a & 1) == 0) && ((const long long *)a)[0] == MDK_FLOAT_TAG;
   if (a_flt) {
     double da = ((const double *)a)[1], db = ((const double *)b)[1];
     return da == db ? 3 : 1;
@@ -1071,6 +1291,30 @@ void mdk_stash_run_stdout(long long w) {
   mdk_run_chunk_count++;
 }
 
+static char *mdk_copy_abort_string(long long w) {
+  const char *cell = (const char *)w;
+  long long byte_len = ((const long long *)cell)[1];
+  if (byte_len == 0) return 0;
+  char *copy = malloc((size_t)byte_len + 1);
+  if (!copy) return 0;
+  memcpy(copy, cell + 24, (size_t)byte_len);
+  copy[byte_len] = 0;
+  return copy;
+}
+
+void mdk_set_abort_report(long long note, long long tmpl) {
+  char *new_note = mdk_copy_abort_string(note);
+  char *new_tmpl = mdk_copy_abort_string(tmpl);
+  char *old_note = mdk_abort_note;
+  char *old_tmpl = mdk_abort_tmpl;
+  atomic_signal_fence(memory_order_seq_cst);
+  mdk_abort_note = new_note;
+  mdk_abort_tmpl = new_tmpl;
+  atomic_signal_fence(memory_order_seq_cst);
+  free(old_note);
+  free(old_tmpl);
+}
+
 /* Async-signal-safe: only word-sized reads and write(2), no allocation, no
    stdio.  Clears the stash first so a re-entrant abort during the flush
    itself (or a later abort path, e.g. mdk_exit after this already ran)
@@ -1092,6 +1336,28 @@ static void mdk_flush_run_stdout_on_abort(void) {
   }
 }
 
+/* Boehm calls this from inside its allocator when a request cannot be met, so it
+   must not allocate or take a lock: it reports through the write(2)-only abort
+   emitter and leaves with _exit. A returned NULL would be dereferenced and
+   misreported as a segmentation fault. */
+static void *mdk_gc_oom(size_t bytes) {
+  struct mdk_abort_buf a = MDK_ABORT_BUF_INIT;
+  mdk_abuf_u64(&a, (unsigned long long)bytes);
+  mdk_flush_run_stdout_on_abort();
+  mdk_flush_build_stdout_on_fatal_signal();
+  mdk_abort_coded(0, "E-OUT-OF-MEMORY", "out of memory (could not allocate ", a.b, a.n,
+                  " bytes)");
+  _exit(1);
+}
+
+/* While an abort template is armed, stderr must stay one JSON document, and the
+   failed size is already in the coded message, so Boehm's own warnings (printed
+   as the heap fills) are dropped; otherwise they pass to the previous proc. */
+static void mdk_gc_warn(char *msg, GC_word arg) {
+  if (mdk_abort_tmpl) return;
+  if (mdk_gc_prev_warn) mdk_gc_prev_warn(msg, arg);
+}
+
 /* `panic` is BOTH the abort primitive the interpreter's `runtimePanic` uses to
    print an already-formatted, coded+located runtime diagnostic AND the lowering
    of a user's `panic "msg"` in a natively-compiled program.  The two want
@@ -1102,35 +1368,14 @@ static void mdk_flush_run_stdout_on_abort(void) {
    pre-formatted strings with a leading 0x01 sentinel byte (eval.mdk's
    runtimePanic); mdk_panic strips that and prints verbatim, else it adds the
    E-PANIC banner.  A user panic message never begins with 0x01. */
-noreturn void mdk_panic(long long w) {
-  mdk_flush_run_stdout_on_abort();
-  const char *cell = (const char *)w;
-  long long byte_len = ((const long long *)cell)[1];
-  const char *bytes = cell + 24;
-  if (byte_len > 0 && bytes[0] == '\x01') {
-    fwrite(bytes + 1, 1, (size_t)(byte_len - 1), stderr);
-  } else {
-    fputs("runtime error [E-PANIC]: ", stderr);
-    fwrite(bytes, 1, (size_t)byte_len, stderr);
-  }
-  fputc('\n', stderr);
-  exit(1);
-}
+noreturn void mdk_panic(long long w) { mdk_panic_at(w, 0); }
 
 /* Integer divide/modulo by zero traps (LLVM emitter guards the divisor before
    the hardware sdiv/srem, whose zero-divisor behaviour is UB → silent garbage +
    exit 0).  Message matches the interpreter's runtimePanic MINUS the source
    location (Core IR carries no loc); nonzero exit. */
-noreturn void mdk_div_zero(void) {
-  mdk_flush_run_stdout_on_abort();
-  fputs("runtime error [E-DIV-ZERO]: division by zero\n", stderr);
-  exit(1);
-}
-noreturn void mdk_mod_zero(void) {
-  mdk_flush_run_stdout_on_abort();
-  fputs("runtime error [E-MOD-ZERO]: modulo by zero\n", stderr);
-  exit(1);
-}
+noreturn void mdk_div_zero(void) { mdk_div_zero_at(0); }
+noreturn void mdk_mod_zero(void) { mdk_mod_zero_at(0); }
 
 /* Int overflow trap.  `Int` arithmetic whose exact result falls outside
    -2^62 .. 2^62 - 1 stops the program; the U types are the wrapping opt-out.
@@ -1139,24 +1384,8 @@ noreturn void mdk_mod_zero(void) {
    cold path with the untagged operands; `op` is 0 `+`, 1 `-`, 2 `*`, 3 `/`,
    4 negation (b unused).  The message matches the interpreter's runtimePanic
    minus the source location: a negative operand is parenthesized. */
-static void mdk_put_operand(long long v) {
-  if (v < 0) fprintf(stderr, "(%lld)", v);
-  else fprintf(stderr, "%lld", v);
-}
 noreturn void mdk_int_overflow(long long op, long long a, long long b) {
-  static const char ops[] = "+-*/";
-  mdk_flush_run_stdout_on_abort();
-  fputs("runtime error [E-INT-OVERFLOW]: ", stderr);
-  if (op == 4) {
-    fputc('-', stderr);
-    mdk_put_operand(a);
-  } else {
-    mdk_put_operand(a);
-    fprintf(stderr, " %c ", ops[op & 3]);
-    mdk_put_operand(b);
-  }
-  fputs(" overflows Int\n", stderr);
-  exit(1);
+  mdk_int_overflow_at(op, a, b, 0);
 }
 
 /* Non-exhaustive match trap.  A compiled match whose decision tree matches no
@@ -1165,11 +1394,7 @@ noreturn void mdk_int_overflow(long long op, long long a, long long b) {
    before the `unreachable`, matching the interpreter's runtimePanic MINUS the
    source location (Core IR carries no loc — a located native trap is a
    follow-on); nonzero exit. */
-noreturn void mdk_nonexhaustive_match(void) {
-  mdk_flush_run_stdout_on_abort();
-  fputs("runtime error [E-NONEXHAUSTIVE-MATCH]: non-exhaustive match\n", stderr);
-  exit(1);
-}
+noreturn void mdk_nonexhaustive_match(void) { mdk_nonexhaustive_match_at(0); }
 /* Dict-key-mismatch dispatcher trap (#1958).  A `@mdk_disp_*`/arg-tag dispatch
    chain's fallthrough is reached when the caller's dict/discriminant cell
    carries a key that matches NONE of the emitted arms.  Every fallthrough site
@@ -1184,7 +1409,8 @@ noreturn void mdk_nonexhaustive_match(void) {
    location (Core IR carries no loc); nonzero exit. */
 noreturn void mdk_dispatch_no_impl(void) {
   mdk_flush_run_stdout_on_abort();
-  fputs("runtime error [E-DISPATCH-NO-IMPL]: dispatch found no implementation matching the dict key\n", stderr);
+  mdk_abort_coded(0, "E-DISPATCH-NO-IMPL",
+                  "dispatch found no implementation matching the dict key", 0, 0, 0);
   exit(1);
 }
 /* Arg-tag dispatch reached an arm whose runtime constructor tag is shared by two
@@ -1208,10 +1434,10 @@ noreturn void mdk_dispatch_no_impl(void) {
    arguments -- same convention as its siblings above); nonzero exit. */
 noreturn void mdk_dispatch_ambiguous(void) {
   mdk_flush_run_stdout_on_abort();
-  fputs("runtime error [E-AMBIGUOUS-DISPATCH]: arg-tag dispatch on this receiver is "
-        "undecidable: more than one impl is declared at that type head and the runtime "
-        "tag cannot choose between them\n",
-        stderr);
+  mdk_abort_coded(0, "E-AMBIGUOUS-DISPATCH",
+                  "arg-tag dispatch on this receiver is "
+                  "undecidable: more than one impl is declared at that type head and the runtime "
+                  "tag cannot choose between them", 0, 0, 0);
   exit(1);
 }
 /* A refutable block-`let` (`let (Some y) = e` with no `else`) whose scrutinee did
@@ -1220,94 +1446,72 @@ noreturn void mdk_dispatch_ambiguous(void) {
    field load on a mismatching cell → SIGSEGV.  The emitter now tag-checks the
    head ctor and calls this noreturn trap on a miss, matching run's message MINUS
    the source location (Core IR carries no loc); nonzero exit. */
-noreturn void mdk_let_refute(void) {
-  mdk_flush_run_stdout_on_abort();
-  fputs("runtime error [E-LET-REFUTE]: let pattern match failed\n", stderr);
-  exit(1);
-}
+noreturn void mdk_let_refute(void) { mdk_let_refute_at(0); }
 
 /* LOCATED TRAPS.  Each abort above has an `_at` twin taking one more argument,
    the trap's source site packed as (file + 1) << 44 | line << 20 | col (16, 24
    and 20 bits; col 0-based), which prints `file:line:col: ` ahead of the same
-   line, as `medaka run` does.  `file` indexes the NULL-terminated path table a
-   program that has located traps defines strongly as `mdk_site_files`; this
-   weak null stands in for every program that defines none (the cold seed
-   bootstrap among them), the same weak-default scheme as the build stamps
-   below.  A site of 0, a file number past the table, or no table prints the
-   unlocated line.  The plain entries keep their signatures: the seed calls
-   them. */
-__attribute__((weak)) const char *const *const mdk_site_files = 0;
-
-static void mdk_put_site(unsigned long long site) {
-  unsigned long long file = site >> 44;
-  const char *const *table = mdk_site_files;
-  if (file == 0 || table == 0) return;
-  for (unsigned long long i = 0; i + 1 < file; i++)
-    if (table[i] == 0) return;
-  if (table[file - 1] == 0) return;
-  fprintf(stderr, "%s:%llu:%llu: ", table[file - 1], (site >> 20) & 0xFFFFFF,
-          site & 0xFFFFF);
-}
+   line, as `medaka run` does.  The plain entries are the twins at site 0 and keep
+   their signatures: the seed calls them. */
 
 noreturn void mdk_div_zero_at(unsigned long long site) {
   mdk_flush_run_stdout_on_abort();
-  mdk_put_site(site);
-  fputs("runtime error [E-DIV-ZERO]: division by zero\n", stderr);
+  mdk_abort_coded(site, "E-DIV-ZERO", "division by zero", 0, 0, 0);
   exit(1);
 }
 noreturn void mdk_mod_zero_at(unsigned long long site) {
   mdk_flush_run_stdout_on_abort();
-  mdk_put_site(site);
-  fputs("runtime error [E-MOD-ZERO]: modulo by zero\n", stderr);
+  mdk_abort_coded(site, "E-MOD-ZERO", "modulo by zero", 0, 0, 0);
   exit(1);
 }
 noreturn void mdk_int_overflow_at(long long op, long long a, long long b,
                                   unsigned long long site) {
   static const char ops[] = "+-*/";
-  mdk_flush_run_stdout_on_abort();
-  mdk_put_site(site);
-  fputs("runtime error [E-INT-OVERFLOW]: ", stderr);
+  struct mdk_abort_buf buf = MDK_ABORT_BUF_INIT;
   if (op == 4) {
-    fputc('-', stderr);
-    mdk_put_operand(a);
+    mdk_abuf_str(&buf, "-");
+    mdk_abuf_operand(&buf, a);
   } else {
-    mdk_put_operand(a);
-    fprintf(stderr, " %c ", ops[op & 3]);
-    mdk_put_operand(b);
+    char opstr[5] = {' ', ops[op & 3], ' ', 0, 0};
+    mdk_abuf_operand(&buf, a);
+    mdk_abuf_str(&buf, opstr);
+    mdk_abuf_operand(&buf, b);
   }
-  fputs(" overflows Int\n", stderr);
+  mdk_abuf_str(&buf, " overflows Int");
+  mdk_flush_run_stdout_on_abort();
+  mdk_abort_coded(site, "E-INT-OVERFLOW", buf.b, 0, 0, 0);
   exit(1);
 }
 noreturn void mdk_nonexhaustive_match_at(unsigned long long site) {
   mdk_flush_run_stdout_on_abort();
-  mdk_put_site(site);
-  fputs("runtime error [E-NONEXHAUSTIVE-MATCH]: non-exhaustive match\n", stderr);
+  mdk_abort_coded(site, "E-NONEXHAUSTIVE-MATCH", "non-exhaustive match", 0, 0, 0);
   exit(1);
 }
 noreturn void mdk_let_refute_at(unsigned long long site) {
   mdk_flush_run_stdout_on_abort();
-  mdk_put_site(site);
-  fputs("runtime error [E-LET-REFUTE]: let pattern match failed\n", stderr);
+  mdk_abort_coded(site, "E-LET-REFUTE", "let pattern match failed", 0, 0, 0);
   exit(1);
 }
 noreturn void mdk_oob_at_at(long long idx, unsigned long long site) {
+  struct mdk_abort_buf buf = MDK_ABORT_BUF_INIT;
+  mdk_abuf_str(&buf, "index ");
+  mdk_abuf_int(&buf, idx);
+  mdk_abuf_str(&buf, " out of bounds");
   mdk_flush_run_stdout_on_abort();
-  mdk_put_site(site);
-  fprintf(stderr, "runtime error [E-INDEX-OOB]: index %lld out of bounds\n", idx);
+  mdk_abort_coded(site, "E-INDEX-OOB", buf.b, 0, 0, 0);
   exit(1);
 }
-/* A pre-formatted message (the 0x01 sentinel, see mdk_panic) already carries
-   its own location, so it prints verbatim. */
+/* A pre-formatted message (the 0x01 sentinel, see above) already carries its own
+   location, so it prints verbatim. */
 noreturn void mdk_panic_at(long long w, unsigned long long site) {
   const char *cell = (const char *)w;
   long long byte_len = ((const long long *)cell)[1];
   const char *bytes = cell + 24;
-  if (byte_len > 0 && bytes[0] == '\x01') mdk_panic(w);
   mdk_flush_run_stdout_on_abort();
-  mdk_put_site(site);
-  fputs("runtime error [E-PANIC]: ", stderr);
-  fwrite(bytes, 1, (size_t)byte_len, stderr);
-  fputc('\n', stderr);
+  if (byte_len > 0 && bytes[0] == '\x01')
+    mdk_abort_verbatim(bytes + 1, (size_t)(byte_len - 1));
+  else
+    mdk_abort_coded(site, "E-PANIC", "", bytes, (size_t)byte_len, 0);
   exit(1);
 }
 /* User `exit n`. Unlike the other abort paths above this carries no diagnostic
@@ -1581,8 +1785,7 @@ static int mdk_is_byteblock(long long w) {
 }
 noreturn static void mdk_byteblock_append_unsupported(void) {
   mdk_flush_run_stdout_on_abort();
-  fputs("runtime error [E-BYTEBLOCK-APPEND]: ++ is not defined on ByteBlock\n",
-        stderr);
+  mdk_abort_coded(0, "E-BYTEBLOCK-APPEND", "++ is not defined on ByteBlock", 0, 0, 0);
   exit(1);
 }
 
@@ -2122,31 +2325,6 @@ long long mdk_string_to_lower(long long s) {
  * are boxed cells [i64 tag | field… ] (fields at offset 8*(i+1)), matching
  * emitCtorAlloc.  Ordinals follow core.mdk: Option = Some|None, Result = Ok|Err,
  * Ordering = Lt|Eq|Gt; List = Cons|Nil. */
-#define MDK_TAG_SHIFT     4294967296LL          /* 2^32 — ctorTagShift */
-#define MDK_RESERVED_BASE 65536LL               /* reservedTypeBase */
-#define MDK_TAG(tid, ord) (((MDK_RESERVED_BASE + (tid)) * MDK_TAG_SHIFT) + (ord))
-#define MDK_TAG_CONS MDK_TAG(0, 0)
-#define MDK_TAG_NIL  MDK_TAG(0, 1)
-#define MDK_TAG_SOME MDK_TAG(1, 0)
-#define MDK_TAG_NONE MDK_TAG(1, 1)
-#define MDK_TAG_OK   MDK_TAG(2, 0)
-#define MDK_TAG_ERR  MDK_TAG(2, 1)
-#define MDK_TAG_LT   MDK_TAG(3, 0)
-#define MDK_TAG_EQ   MDK_TAG(3, 1)
-#define MDK_TAG_GT   MDK_TAG(3, 2)
-
-/* Reserved type-id 4 is the `ByteBlock` cell header, not an ADT: it is stamped by
- * mdk_byteblock_alloc, which runs long before this block, so it carries its own
- * spelling.  The two must be the same word, and the next runtime ADT takes id 7. */
-_Static_assert(MDK_BYTEBLOCK_TAG == MDK_TAG(4, 0),
-               "ByteBlock header must be reserved type-id 4, ordinal 0");
-/* Reserved type-id 5 is the `U64` cell header, likewise not an ADT, and 6 the
- * `I64` cell header. */
-_Static_assert(MDK_U64_TAG == MDK_TAG(5, 0),
-               "U64 header must be reserved type-id 5, ordinal 0");
-_Static_assert(MDK_I64_TAG == MDK_TAG(6, 0),
-               "I64 header must be reserved type-id 6, ordinal 0");
-
 /* mdk_append's list discriminator and its fail-closed arm (forward-declared with
  * the byte-block ones, up beside MDK_STR_TAG): a List word is either the Nil
  * immediate or a boxed cell whose header is the reserved Cons tag.  A nullary
@@ -2159,9 +2337,9 @@ static int mdk_is_list_word(long long w) {
 }
 noreturn static void mdk_append_unsupported(void) {
   mdk_flush_run_stdout_on_abort();
-  fputs("runtime error [E-APPEND-UNROUTED]: ++ reached the untyped runtime "
-        "fallback on a value that is not a String or a List\n",
-        stderr);
+  mdk_abort_coded(0, "E-APPEND-UNROUTED",
+                  "++ reached the untyped runtime "
+                  "fallback on a value that is not a String or a List", 0, 0, 0);
   exit(1);
 }
 
@@ -2206,7 +2384,7 @@ long long mdk_char_from_code(long long n_tagged) {
 /* Box a double as a Float cell [header=2 | double], matching emitter boxFloat. */
 static long long mdk_box_float(double d) {
   long long *c = (long long *)mdk_alloc(16);
-  c[0] = 2; ((double *)c)[1] = d; return (long long)c;
+  c[0] = MDK_FLOAT_TAG; ((double *)c)[1] = d; return (long long)c;
 }
 
 /* ── G3: polymorphic `Num a =>` arithmetic (runtime numeric dispatch) ─────────
@@ -2607,7 +2785,7 @@ long long mdk_value_cmp_raw(long long a, long long b) {
     long long sa = mdk_i64_payload(a), sb = mdk_i64_payload(b);
     return sa < sb ? -1 : sa > sb ? 1 : 0;
   }
-  int a_flt = ((a & 1) == 0) && ((const long long *)a)[0] == 2;
+  int a_flt = ((a & 1) == 0) && ((const long long *)a)[0] == MDK_FLOAT_TAG;
   if (a_flt) {
     double da = ((const double *)a)[1], db = ((const double *)b)[1];
     return da < db ? -1 : da > db ? 1 : 0;
@@ -2635,7 +2813,7 @@ long long mdk_value_cmp_raw(long long a, long long b) {
  * (`compare`/`min`/`max`/`sort` never route here; they go through the Ord
  * dict.  Whether `compare` at NaN should be IEEE totalOrder is issue #360.) */
 static int mdk_value_is_float(long long a) {
-  return ((a & 1) == 0) && ((const long long *)a)[0] == 2;
+  return ((a & 1) == 0) && ((const long long *)a)[0] == MDK_FLOAT_TAG;
 }
 
 long long mdk_value_lt(long long a, long long b) {
@@ -2689,6 +2867,10 @@ long long mdk_get_env(long long name) {
  * (a path, a directory entry, an strerror message), so read as outside bytes. */
 static long long mdk_str_cstr(const char *s) {
   return mdk_str_lossy(s, (long long)strlen(s));
+}
+
+long long mdk_runtime_string(const char *s) {
+  return mdk_str_cstr(s);
 }
 
 /* Every file extern whose path is an authority receives, after its value
@@ -3055,7 +3237,11 @@ long long mdk_bit_not(long long a)                 { return ~a; }
    `shiftRight` is arithmetic: the vacated bits copy the sign. */
 static noreturn void mdk_negative_shift(const char *name, long long k) {
   mdk_flush_run_stdout_on_abort();
-  fprintf(stderr, "runtime error [E-PANIC]: %s: negative shift %lld\n", name, k);
+  struct mdk_abort_buf a = MDK_ABORT_BUF_INIT;
+  mdk_abuf_str(&a, name);
+  mdk_abuf_str(&a, ": negative shift ");
+  mdk_abuf_int(&a, k);
+  mdk_abort_coded(0, "E-PANIC", a.b, 0, 0, 0);
   exit(1);
 }
 long long mdk_shift_left(long long a, long long b) {
@@ -3285,7 +3471,7 @@ long long mdk_fsync(long long path, long long grant) {
  * fork fails.  A program that cannot be executed is Ok (127, "", strerror).
  * Tuple cell layout: [header=TUPLE_TAG, tagged_exitcode, stdout_str, stderr_str].
  * TUPLE_TAG = hashName("$tuple") = djb2 of "$tuple" = 6950939912435. */
-#define MDK_TUPLE_TAG 6950939912435LL
+
 
 static long long mdk_read_temp(const char *path) {
   FILE *f = fopen(path, "rb");
@@ -4554,9 +4740,7 @@ static void mdk_chain_previous(int sig, siginfo_t *info, void *uctx) {
      calling both here is safe regardless of which engine is running. */
   mdk_flush_run_stdout_on_abort();
   mdk_flush_build_stdout_on_fatal_signal();
-  static const char m[] =
-    "runtime error [E-FATAL-SIGNAL]: fatal memory fault (segmentation fault)\n";
-  write(2, m, sizeof(m) - 1);
+  mdk_abort_coded(0, "E-FATAL-SIGNAL", "fatal memory fault (segmentation fault)", 0, 0, 0);
   _exit(139);
 }
 
@@ -4564,9 +4748,7 @@ static void mdk_fault_handler(int sig, siginfo_t *info, void *uctx) {
   if (mdk_addr_near_stack(info ? info->si_addr : NULL)) {
     mdk_flush_run_stdout_on_abort();
     mdk_flush_build_stdout_on_fatal_signal();
-    static const char m[] =
-      "runtime error [E-STACK-OVERFLOW]: stack overflow (recursion too deep)\n";
-    write(2, m, sizeof(m) - 1);
+    mdk_abort_coded(0, "E-STACK-OVERFLOW", "stack overflow (recursion too deep)", 0, 0, 0);
     _exit(134);
   }
   mdk_chain_previous(sig, info, uctx);
@@ -4620,6 +4802,7 @@ static void *mdk_main_thread(void *p) {
 }
 
 int main(int argc, char **argv) {
+  if (mdk_process_submission_init) mdk_process_submission_init();
   struct mdk_main_args a;
   a.argc = argc;
   a.argv = argv;

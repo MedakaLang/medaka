@@ -164,6 +164,15 @@ Whether a deadline from `deadlineAfter` has passed.
 
 Any other wait is never expired. Reads the clock the wait carries.
 
+## `expiredNow`
+
+```
+expiredNow : Wait e -> <e> Bool
+```
+
+Checks a wait without yielding. A timer reads its carried clock; other waits
+return False. The check performs the wait's effect row.
+
 ## `await`
 
 ```

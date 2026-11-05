@@ -272,6 +272,10 @@ inlang-backend-extern-catalog-test:
 ## compiler/backend/hash_digest_test.mdk pins the `hashStringHex` / `hashFile`
 ## digests against vectors computed outside the engine; no entry imports it.
 ## `--native`: the file cases write real files.
+inlang-backend-runtime-layout-test:
+	./medaka test compiler/backend/runtime_layout_test.mdk
+	./medaka test compiler/backend/runtime_c_abi_test.mdk
+
 inlang-backend-hash-digest-test:
 	./medaka test --native compiler/backend/hash_digest_test.mdk
 
@@ -307,7 +311,7 @@ inlang-backend-emit-binder-refusal-test:
 inlang-backend-emit-plan-test:
 	./medaka test --native compiler/backend/emit_plan_test.mdk
 	./medaka test --native compiler/backend/extern_requirements_test.mdk compiler/backend/wasm_demand_test.mdk compiler/backend/wasm_fn_values_test.mdk
-	./medaka test compiler/backend/global_plan_test.mdk
+	./medaka test compiler/backend/global_plan_test.mdk compiler/backend/package_identity_test.mdk compiler/backend/package_identity_sexp_test.mdk
 
 ## The immutable implementation-clause partition consumed by both emitters;
 ## no entry imports this data-only sibling.

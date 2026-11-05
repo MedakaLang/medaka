@@ -190,7 +190,6 @@ importNamesIn : ExpNs String -> Map String ModuleExports -> UsePath -> List Stri
 importValueBindings : UsePath -> ModuleExports -> List (String, String)
 importValueDecls : Map String ModuleExports -> UsePath -> List (String, String)
 importedCtorDecls : List Decl -> List SiblingPair -> List (String, List Decl) -> List (String, List Decl) -> List (String, List Decl)
-importedCtorDeclsGo : (Option (String, List Decl) -> Map String ModuleExports -> (String, List Decl) -> (List Decl, ModuleExports)) -> (String -> Option (String, List Decl)) -> Map String ModuleExports -> List (String, List Decl) -> List (String, List Decl)
 importedCtorDeclsStep : ModuleExports -> Map String (List Decl) -> Option (String, List Decl) -> Map String ModuleExports -> (String, List Decl) -> (List Decl, ModuleExports)
 importedEffectOrigins : Map String (List (String, String)) -> UsePath -> List (String, String)
 importedEffects : Map String ModuleExports -> List Decl -> List String
@@ -243,6 +242,7 @@ matchesExport : String -> (String, List String) -> List String
 mergeAdds : ImportAdds -> ImportAdds -> ImportAdds
 mkScope : List String -> Scope
 moduleAliasNames : List Decl -> List String
+moduleTrusted : Bool -> List String -> String -> Bool
 modulesExportingName : Env -> String -> List String
 namedLocs : (List Decl -> List String) -> List Decl -> List (String, Option Loc)
 newlyDuplicated : Option Loc -> Map String Unit -> List String -> List ResError
@@ -308,11 +308,10 @@ reservedClashes : String -> List String -> List (String, Option Loc) -> List Res
 resolveModule : List Decl -> List Decl -> Map String ModuleExports -> String -> List Decl -> (ModuleExports, List ResError)
 resolveModuleG : List String -> Option (String, List Decl) -> Option (Int, Int) -> List Decl -> List Decl -> Map String ModuleExports -> String -> List Decl -> (ModuleExports, List ResError)
 resolveModulesErrors : List Decl -> List Decl -> Map String ModuleExports -> List (String, List Decl) -> List ResError
-resolveModulesErrorsByFile : List (String, String) -> Bool -> List String -> List SiblingPair -> Option (Int, Int) -> List Decl -> List Decl -> List (String, List Decl) -> List (String, List ResError)
-resolveModulesErrorsG : Bool -> List String -> List SiblingPair -> Option (Int, Int) -> List Decl -> List Decl -> Map String ModuleExports -> List (String, List Decl) -> List ResError
-resolveModulesErrorsPairsG : Bool -> List String -> List SiblingPair -> Option (Int, Int) -> List Decl -> List Decl -> Map String ModuleExports -> List (String, List Decl) -> List (String, List ResError)
+resolveModulesErrorsByFile : List (String, String) -> ResolveWalk -> List (String, List Decl) -> List (String, List ResError)
+resolveModulesErrorsG : ResolveWalk -> Map String ModuleExports -> List (String, List Decl) -> List ResError
+resolveModulesErrorsPairsG : ResolveWalk -> Map String ModuleExports -> List (String, List Decl) -> List (String, List ResError)
 resolveModulesToLines : List Decl -> List Decl -> List (String, List Decl) -> String
-resolvePairsGo : Bool -> List String -> (String -> Option (String, List Decl)) -> Option (Int, Int) -> List Decl -> List Decl -> Map String ModuleExports -> List (String, List Decl) -> List (String, List ResError)
 resolveProgram : List Decl -> List Decl -> List Decl -> List ResError
 resolveProgramG2 : List String -> List Decl -> List Decl -> List Decl -> List ResError
 resolveToLines : List Decl -> List Decl -> List Decl -> String
@@ -356,7 +355,6 @@ stampKv : Map String Int -> (Expr, Expr) -> (Expr, Expr)
 stampLet : Map String Int -> Loc -> Bool -> Pat -> Expr -> Expr -> Expr
 stampLetBind : Map String Int -> LetBind -> LetBind
 stampLetGroup : Map String Int -> List LetBind -> Expr -> Expr
-stampModulesGo : List (String, String) -> (String -> Option (String, List Decl)) -> Map String (List (String, String)) -> List (String, List Decl) -> List (String, List Decl)
 stampOneModule : List (String, String) -> Map String (List (String, String)) -> String -> List Decl -> List Decl
 stampSection : Map String Int -> Section -> Section
 stampStmts : Map String Int -> List DoStmt -> List DoStmt

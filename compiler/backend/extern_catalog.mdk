@@ -586,6 +586,14 @@ interpNoHttpClient : String
 interpNoHttpClient =
   "the interpreter has no HTTP client; only the wasmgc/edge target lowers `fetchText`"
 
+processWasmUnavailable : Disposition WasmFamily
+processWasmUnavailable =
+  NotProvided GapPermanent "process ownership is unavailable on wasm"
+
+processEvalUnavailable : Disposition Unit
+processEvalUnavailable =
+  NotProvided GapPermanent "process ownership is unavailable in eval"
+
 -- In `stdlib/runtime.mdk` declaration order.
 export
 catalogRows : List ExternRow
@@ -820,6 +828,13 @@ catalogRows = [
       "internal `medaka run` CLI plumbing (interpreter-only chunk-list stash for the \"run drops stdout on panic\" fix) — the compiler is only ever built via the LLVM backend, never wasm, so no WasmGC program ever exercises this")
     Interpreted,
   ExternRow
+    "setAbortReport"
+    (CSymbol LlvmIo "mdk_set_abort_report")
+    (NotProvided
+      GapPermanent
+      "internal abort-report plumbing (hands the C runtime the note and `--json` envelope an abort prints) — the compiler is only ever built via the LLVM backend, never wasm, so no WasmGC program ever exercises this")
+    Interpreted,
+  ExternRow
     "enableRunStdoutFlush"
     (CSymbol LlvmIo "mdk_enable_run_stdout_flush")
     (NotProvided
@@ -842,6 +857,61 @@ catalogRows = [
     (NotProvided
       GapBug
       "unimplemented in all 3 engines (see llvm/wasm TODO rows); no stdlib caller yet — a forward-declared snapshot-testing primitive (TESTING-DESIGN.md §4.7 \"medaka test --promote\"); recorded as a bug row for the interpreter although it is not an asymmetric regression against another engine"),
+  ExternRow
+    "processSubmitRaw"
+    (CSymbol LlvmNet "mdk_process_submit")
+    processWasmUnavailable
+    processEvalUnavailable,
+  ExternRow
+    "processStartRaw"
+    (CSymbol LlvmNet "mdk_process_start")
+    processWasmUnavailable
+    processEvalUnavailable,
+  ExternRow
+    "processRetryStartRaw"
+    (CSymbol LlvmNet "mdk_process_retry_start")
+    processWasmUnavailable
+    processEvalUnavailable,
+  ExternRow
+    "processCheckStartRaw"
+    (CSymbol LlvmNet "mdk_process_check_start")
+    processWasmUnavailable
+    processEvalUnavailable,
+  ExternRow
+    "processAbortStartRaw"
+    (CSymbol LlvmNet "mdk_process_abort_start")
+    processWasmUnavailable
+    processEvalUnavailable,
+  ExternRow
+    "processPollExitRaw"
+    (CSymbol LlvmNet "mdk_process_poll_exit")
+    processWasmUnavailable
+    processEvalUnavailable,
+  ExternRow
+    "processCloseStdinRaw"
+    (CSymbol LlvmNet "mdk_process_close_stdin")
+    processWasmUnavailable
+    processEvalUnavailable,
+  ExternRow
+    "processDisposeRaw"
+    (CSymbol LlvmNet "mdk_process_dispose")
+    processWasmUnavailable
+    processEvalUnavailable,
+  ExternRow
+    "processTryReadRaw"
+    (CSymbol LlvmNet "mdk_process_try_read")
+    processWasmUnavailable
+    processEvalUnavailable,
+  ExternRow
+    "processTryWriteRaw"
+    (CSymbol LlvmNet "mdk_process_try_write")
+    processWasmUnavailable
+    processEvalUnavailable,
+  ExternRow
+    "processStreamFdRaw"
+    (CSymbol LlvmNet "mdk_process_stream_fd")
+    processWasmUnavailable
+    processEvalUnavailable,
   ExternRow
     "netResolve"
     (CSymbol LlvmNet "mdk_net_resolve")

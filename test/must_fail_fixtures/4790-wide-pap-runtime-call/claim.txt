@@ -1,0 +1,11 @@
+issue: 4790
+what: completing a partial application of a nine-argument closure crashes the native
+what: binary instead of printing 45; the eight-argument control completes successfully.
+cmd: build-run main.mdk
+exit: 139
+stdout: before
+control: build-run control.mdk
+why-verb: build-run reaches the native runtime; run uses the interpreter.
+why-stdout: before shows that execution reached the call; the missing 45 and signal
+why-stdout: are the observed failure. A different crash after the marker can also match.
+why-control: the same partial-application shape at arity eight must exit successfully.

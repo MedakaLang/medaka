@@ -1,0 +1,3 @@
+import backend.runtime_layout.{renderAbiHeader}
+
+main = putStr (renderAbiHeader ())

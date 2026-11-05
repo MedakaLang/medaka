@@ -1,3 +1,6 @@
+import backend.runtime_layout.{
+  siteFileShift, siteLineShift, siteLineBits, siteColumnBits
+}
 import backend.wasm_symbol_names as WN
 import support.diag_codes.{DiagCode(..)}
 import backend.wasm_demand.{
@@ -416,14 +419,14 @@ siteRuntimeLines callW tailW files nonexh =
       "    (local $f i32)",
       "    (if (i64.ne (local.get $s) (i64.const 0))",
       "      (then",
-      "        (local.set $f (i32.wrap_i64 (i64.shr_u (local.get $s) (i64.const 44))))",
+      "        (local.set $f (i32.wrap_i64 (i64.shr_u (local.get $s) (i64.const \{intToString siteFileShift}))))",
     ]
     ++ flatMap (siteFileArmW callW tailW) (zipFilesW files 1)
     ++ [
       "        (\{callW "mdk_write_err_byte" 1} (i32.const 58))",
-      "        (\{callW "mdk_write_err_int" 1} (i64.and (i64.shr_u (local.get $s) (i64.const 20)) (i64.const 16777215)))",
+      "        (\{callW "mdk_write_err_int" 1} (i64.and (i64.shr_u (local.get $s) (i64.const \{intToString siteLineShift})) (i64.const \{intToString (shiftLeft 1 siteLineBits - 1)})))",
       "        (\{callW "mdk_write_err_byte" 1} (i32.const 58))",
-      "        (\{callW "mdk_write_err_int" 1} (i64.and (local.get $s) (i64.const 1048575)))",
+      "        (\{callW "mdk_write_err_int" 1} (i64.and (local.get $s) (i64.const \{intToString (shiftLeft 1 siteColumnBits - 1)})))",
       "        (\{callW "mdk_write_err_byte" 1} (i32.const 58))",
       "        (\{callW "mdk_write_err_byte" 1} (i32.const 32))))",
       "  )",

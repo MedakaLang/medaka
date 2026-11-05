@@ -66,8 +66,7 @@ import support.util.{
 }
 import support.path.{baseOf, chopExt}
 import support.stage_count.{stageExit}
-import support.ordmap.{omEmpty}
-import driver.diagnostics.{projectEntrySchemes}
+import driver.diagnostics.{projectEntrySchemes, freshLoad}
 import driver.loader.{moduleIdOfPath}
 import frontend.desugar.{dataDerivers, newtypeDerivers, typeKindedParams}
 import json.{Json(..), jObject, jArray}
@@ -861,13 +860,7 @@ originModuleSchemes runtimeSrc coreSrc roots path =
     None => []
     Some p =>
       match (projectEntrySchemes
-        (Ref [])
-        (Ref omEmpty)
-        (_ => None)
-        p
-        roots
-        runtimeSrc
-        coreSrc)
+        (freshLoad (_ => None) p roots runtimeSrc coreSrc))
         None => []
         Some ss => pubSchemes ss
 
@@ -1369,6 +1362,7 @@ docOnlyExcluded = [
   "__fallthrough__",
   "setRef",
   "stashRunStdout",
+  "setAbortReport",
   "enableRunStdoutFlush",
   "assertSnapshot",
   "indexError",
@@ -1846,13 +1840,7 @@ docSchemesFor : String ->
   <IO> List (String, Scheme)
 docSchemesFor runtimeSrc coreSrc filename roots _rawUser =
   match (projectEntrySchemes
-    (Ref [])
-    (Ref omEmpty)
-    (_ => None)
-    filename
-    roots
-    runtimeSrc
-    coreSrc)
+    (freshLoad (_ => None) filename roots runtimeSrc coreSrc))
     None =>
       ePutStrLn
         "medaka doc: '\{filename}' has an unresolved import graph (missing or cyclic import) — signatures unavailable"

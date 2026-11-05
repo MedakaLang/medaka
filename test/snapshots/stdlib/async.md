@@ -1,5 +1,5 @@
 # META
-source_lines=539
+source_lines=542
 stages=DESUGAR,MARK
 # SOURCE
 -- async.mdk — Medaka's cooperative-concurrency layer: the `Async` type, its
@@ -213,6 +213,9 @@ export
 expired : Wait e -> Async e Bool
 expired w = Suspend (u => Done (expiredNow w))
 
+{- | Checks a wait without yielding. A timer reads its carried clock; other waits
+   return False. The check performs the wait's effect row. -}
+export
 expiredNow : Wait e -> <e> Bool
 expiredNow (WaitUntil t (Timer now _)) = t <= now ()
 expiredNow _ = False
@@ -585,7 +588,7 @@ isWriteOf _ _ = False
 (DFunDef false "systemDeadline" ((PVar "t")) (EApp (EApp (EVar "WaitUntil") (EVar "t")) (EApp (EApp (EVar "Timer") (ELam ((PVar "u")) (EApp (EVar "monotonicSec") (ELit LUnit)))) (ELam ((PVar "ms")) (EApp (EVar "sleepMs") (EVar "ms"))))))
 (DTypeSig true "expired" (TyFun (TyApp (TyCon "Wait") (TyVar "e")) (TyApp (TyApp (TyCon "Async") (TyVar "e")) (TyCon "Bool"))))
 (DFunDef false "expired" ((PVar "w")) (EApp (EVar "Suspend") (ELam ((PVar "u")) (EApp (EVar "Done") (EApp (EVar "expiredNow") (EVar "w"))))))
-(DTypeSig false "expiredNow" (TyFun (TyApp (TyCon "Wait") (TyVar "e")) (TyEffect () (Some "e") (TyCon "Bool"))))
+(DTypeSig true "expiredNow" (TyFun (TyApp (TyCon "Wait") (TyVar "e")) (TyEffect () (Some "e") (TyCon "Bool"))))
 (DFunDef false "expiredNow" ((PCon "WaitUntil" (PVar "t") (PCon "Timer" (PVar "now") PWild))) (EBinOp "<=" (EVar "t") (EApp (EVar "now") (ELit LUnit))))
 (DFunDef false "expiredNow" (PWild) (EVar "False"))
 (DTypeSig true "await" (TyFun (TyApp (TyCon "Task") (TyVar "a")) (TyApp (TyApp (TyCon "Async") (TyVar "e")) (TyVar "a"))))
@@ -739,7 +742,7 @@ isWriteOf _ _ = False
 (DFunDef false "systemDeadline" ((PVar "t")) (EApp (EApp (EVar "WaitUntil") (EVar "t")) (EApp (EApp (EVar "Timer") (ELam ((PVar "u")) (EApp (EVar "monotonicSec") (ELit LUnit)))) (ELam ((PVar "ms")) (EApp (EVar "sleepMs") (EVar "ms"))))))
 (DTypeSig true "expired" (TyFun (TyApp (TyCon "Wait") (TyVar "e")) (TyApp (TyApp (TyCon "Async") (TyVar "e")) (TyCon "Bool"))))
 (DFunDef false "expired" ((PVar "w")) (EApp (EVar "Suspend") (ELam ((PVar "u")) (EApp (EVar "Done") (EApp (EVar "expiredNow") (EVar "w"))))))
-(DTypeSig false "expiredNow" (TyFun (TyApp (TyCon "Wait") (TyVar "e")) (TyEffect () (Some "e") (TyCon "Bool"))))
+(DTypeSig true "expiredNow" (TyFun (TyApp (TyCon "Wait") (TyVar "e")) (TyEffect () (Some "e") (TyCon "Bool"))))
 (DFunDef false "expiredNow" ((PCon "WaitUntil" (PVar "t") (PCon "Timer" (PVar "now") PWild))) (EBinOp "<=" (EVar "t") (EApp (EVar "now") (ELit LUnit))))
 (DFunDef false "expiredNow" (PWild) (EVar "False"))
 (DTypeSig true "await" (TyFun (TyApp (TyCon "Task") (TyVar "a")) (TyApp (TyApp (TyCon "Async") (TyVar "e")) (TyVar "a"))))

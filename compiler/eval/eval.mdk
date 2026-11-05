@@ -3188,13 +3188,6 @@ export
 pendingRunDiags : Ref (List (String, String, List Diag))
 pendingRunDiags = Ref []
 
--- An opaque extra line `runtimePanic` appends to its non-JSON abort text (the
--- `medaka test` driver sets the rerun-seed line here). Read only at the panic
--- chokepoint and set only by that driver, so `run` and `repl` never see one.
-export
-abortNote : Ref (Option String)
-abortNote = Ref None
-
 -- Update currentEvalLoc from an ELoc span, but IGNORE the placeholder span the
 -- non-located `parse` produces (every token collapses to the zero-width
 -- `Loc "" 1 0 1 0`).  The prelude (runtime.mdk/core.mdk) is parsed that way, so
@@ -3258,11 +3251,8 @@ runtimePanic code msg = match !currentEvalLoc
       panic
         "\{fmtSentinel}\{cjAllToJsonWith (runEnvelopeFields ()) (!pendingRunDiags ++ [(ff, "", [diag])])}"
     else
-      let line =
-        "\{ff}:\{intToString sl}:\{intToString sc}: runtime error [\{code}]: \{msg}"
-      match !abortNote
-        Some note => panic "\{fmtSentinel}\{line}\n\{note}"
-        None => panic "\{fmtSentinel}\{line}"
+      panic
+        "\{fmtSentinel}\{ff}:\{intToString sl}:\{intToString sc}: runtime error [\{code}]: \{msg}"
 
 -- 0x01 marker (see runtimePanic / mdk_panic): a preformatted runtime diagnostic
 -- the abort primitive must print verbatim, never re-banner.
@@ -3294,6 +3284,12 @@ pPutStrLn _ = panic "putStrLn: not a String"
 pStashRunStdout : Value e -> <e> Value e
 pStashRunStdout (VString s) = let _ = stashRunStdout s in VUnit
 pStashRunStdout _ = panic "stashRunStdout: not a String"
+
+-- Inert, unlike pStashRunStdout: a guest program under the interpreter must
+-- not rewrite the host's abort report, so this never calls the C function.
+pSetAbortReport : Value e -> Value e -> <e> Value e
+pSetAbortReport (VString _) (VString _) = VUnit
+pSetAbortReport _ _ = panic "setAbortReport: not a String"
 
 pEnableRunStdoutFlush : Value e -> <e> Value e
 pEnableRunStdoutFlush _ = let _ = enableRunStdoutFlush () in VUnit
@@ -3620,6 +3616,7 @@ externBindings _ = [
   ("ePutStr", prim1M pDiscard),
   ("ePutStrLn", prim1M pDiscard),
   ("stashRunStdout", prim1M pStashRunStdout),
+  ("setAbortReport", prim2M pSetAbortReport),
   ("enableRunStdoutFlush", prim1M pEnableRunStdoutFlush),
   ("panic", prim1 pPanic),
   ("indexError", prim1 (s => runtimePanic EIndexOob (unString s))),
@@ -4581,57 +4578,54 @@ buildModInfos : ProgramFacts ->
   List (String, ModExports (Value e)) ->
   List (String, List Decl) ->
   List (ModInfo (Value e))
--- Bound: list built in tail position modulo cons: a where-local go loses the constant-stack loop until the lambda-lift pass (#4878); convert then.
--- lint-disable-next-line rule-threaded-invariant
-buildModInfos _ _ _ _ _ _ _ [] = []
-buildModInfos facts globalFrame runtimeFrame coreExports sibling fulls exportsMap ((mid, decls) :: rest) =
-  let grps = groupsOf decls
-  -- P0-9: each module's OWN constructors ALSO live in its LOCAL frame (they stay
-  -- in the shared global too — see evalModulesWith — for by-name / `Type(..)`
-  -- cross-module ctor imports and back-compat).  The local copy SHADOWS the
-  -- global, so a module whose code constructs a same-named ctor that another
-  -- module also defines at a different arity (e.g. `map`'s arity-5 `Bin` vs
-  -- `set`'s arity-4 `Bin`) builds via ITS OWN `makeCtor` — the shared global is
-  -- first-wins and would otherwise pick the wrong module's arity (E-NOT-A-FUNCTION).
-  let modCtors = collectCtors decls
-  let localCells = map (n => (n, Ref VUnit)) (map fst grps ++ map fst modCtors)
-  let imports =
-    -- Bound: [fulls] holds one entry per subject module of the graph (a module that has a test sibling), and the lookup inside importsMapFor runs only for a test sibling.
-    -- lint-disable-next-line rule-list-as-set
-    importFrameOf coreExports (importsMapFor sibling mid fulls exportsMap) decls
-  -- #1542: tag this module's env with its own file, LAST in the frame list so
-  -- an ordinary name lookup (which resolves in localCells/imports/globalCells
-  -- almost always) never reaches it — only the once-per-call lookup in
-  -- applyClosure/applyClosureF (below) ever searches this far.
-  let fileTagFrame =
-    ScanFrame [(evalFileTagName, Ref (VString (moduleFileOf mid)))]
-  let menv = EvalEnv facts [
-    indexedFrame localCells,
-    indexedFrame imports,
-    globalFrame,
-    fileTagFrame,
-    runtimeFrame,
-  ]
-  let exportsUnder =
-    v =>
-      moduleExports
-        v
-        coreExports
-        exportsMap
-        globalFrame
-        runtimeFrame
-        localCells
-        decls
-  ModInfo mid decls grps localCells menv
-    :: buildModInfos
-      facts
-      globalFrame
-      runtimeFrame
-      coreExports
-      sibling
-      (withSubjectFull sibling mid (exportsUnder FullView) fulls)
-      ((mid, exportsUnder ExportedView) :: exportsMap)
-      rest
+buildModInfos facts globalFrame runtimeFrame coreExports sibling fulls exportsMap mods =
+  let go fullsSoFar exportsSoFar pending = match pending
+    [] => []
+    (mid, decls) :: rest =>
+      let grps = groupsOf decls
+      -- A module's own constructors also live in its local frame (they stay in the
+      -- shared global for by-name / `Type(..)` cross-module imports).  The local copy
+      -- shadows the bare-name global, which is first-wins, so a module constructing a
+      -- ctor another module defines at a different arity (`map`'s arity-5 `Bin` vs
+      -- `set`'s arity-4 `Bin`) builds via its own `makeCtor` (else E-NOT-A-FUNCTION).
+      let modCtors = collectCtors decls
+      let localCells =
+        map (n => (n, Ref VUnit)) (map fst grps ++ map fst modCtors)
+      -- Bound: [fullsSoFar] holds one entry per subject module of the graph (a module
+      -- that has a test sibling), and the lookup inside importsMapFor runs only for a
+      -- test sibling.
+      -- lint-disable-next-line rule-list-as-set
+      let importsByModule = importsMapFor sibling mid fullsSoFar exportsSoFar
+      let imports = importFrameOf coreExports importsByModule decls
+      -- #1542: tag this module's env with its own file, LAST in the frame list so
+      -- an ordinary name lookup (which resolves in localCells/imports/globalCells
+      -- almost always) never reaches it — only the once-per-call lookup in
+      -- applyClosure/applyClosureF (below) ever searches this far.
+      let fileTagFrame =
+        ScanFrame [(evalFileTagName, Ref (VString (moduleFileOf mid)))]
+      let menv = EvalEnv facts [
+        indexedFrame localCells,
+        indexedFrame imports,
+        globalFrame,
+        fileTagFrame,
+        runtimeFrame,
+      ]
+      let exportsUnder =
+        v =>
+          moduleExports
+            v
+            coreExports
+            exportsSoFar
+            globalFrame
+            runtimeFrame
+            localCells
+            decls
+      ModInfo mid decls grps localCells menv
+        :: go
+          (withSubjectFull sibling mid (exportsUnder FullView) fullsSoFar)
+          ((mid, exportsUnder ExportedView) :: exportsSoFar)
+          rest
+  go fulls exportsMap mods
 
 -- What a module offers its importers: the names the visibility producer exports,
 -- not every cell the module's own env holds.  `localCells` carries private groups

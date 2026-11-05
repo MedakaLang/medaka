@@ -36,6 +36,9 @@ import tools.interface_cmd.{interfaceHelpText, runInterfaceCmd}
 import tools.new_cmd.{newProject}
 import driver.build_cmd.{
   BuildTarget(..),
+  BuildPaths(..),
+  BuildOptions(..),
+  defaultBuildOptions,
   ppBuildReport,
   runBuild,
   emitRtObj,
@@ -125,7 +128,7 @@ import frontend.parser.{
 import frontend.lexer.{tokenizeWithOffsetPairs}
 import frontend.desugar_cache.{desugaredPrelude, preludeGeneration}
 import frontend.desugar.{desugarIn}
-import tools.target_parse.{targetDesugared}
+import tools.target_parse.{targetDesugared, parseTargetResult}
 import driver.loader.{
   loadProgramFilesLocatedE,
   stdinEntry,
@@ -160,6 +163,7 @@ import driver.diagnostics.{
   FrontPolicy(..),
   FrontOutput(..),
   ppDiagCliSrc,
+  parseErrDiag,
   ppDiagCliLines,
   ppDiagBuckets,
   stdlibExportsReader,
@@ -412,16 +416,17 @@ sourceStalenessVerdict _ =
       live <- liveSourceFingerprint root
       if live == baked then None else Some compilerDir
 
--- C4 (docs/ops/CLI-CONFORMANCE.md §4): `run --json` is the ONE invocation whose
--- MACHINE channel is stderr — `run`'s stdout belongs to the user program — and
--- this warning is written to stderr.  Emitting it as prose there corrupts the
+-- C4 (docs/ops/CLI-CONFORMANCE.md §4): `run --json` and `test --json` are the
+-- invocations whose aborted run writes its envelope to stderr — `run`'s stdout
+-- belongs to the user program, `test --json`'s to its report — and this warning
+-- is written to stderr.  Emitting it as prose there corrupts the
 -- envelope; SILENCING it would hide a stale binary from every MCP/LSP consumer,
--- a severity INCREASE dressed as a fix ([W-QUIETER]).  So on that one path the
+-- a severity INCREASE dressed as a fix ([W-QUIETER]).  So on those paths the
 -- verdict is DEFERRED into `pendingStaleNotice` and rides INSIDE the envelope
 -- as a `staleBinary` field — the same shape `attachStaleness` already uses for
--- MCP results.  Every `run --json` arm that leaves WITHOUT an envelope flushes
--- it back out as prose (`runAbort`), so it is relocated on every path, dropped
--- on none.
+-- MCP results.  Every such arm that leaves WITHOUT an envelope flushes it back
+-- out as prose (`runAbort`, `testDie`, `testExit`), so it is relocated on every
+-- path, dropped on none.
 --
 -- MEDAKA_STRICT keeps its hard stop and keeps printing prose: it exits before
 -- any envelope can exist, so prose is the only channel there is.
@@ -435,8 +440,9 @@ checkSourceStaleness argv = match sourceStalenessVerdict ()
         ++ "; rebuild with `make medaka`"
     if envOr "MEDAKA_STRICT" "" /= "" then
       dieMsg msg
-    else if runJsonInvocation argv then
+    else if envelopeOnStderrInvocation argv then
       pendingStaleNotice := Some msg
+      registerEarlyNotice argv msg
     else
       ePutStrLn msg
 
@@ -527,25 +533,44 @@ reportChildTrees prelude =
   reportTrees None dieMsg (checkPreludeElab prelude)
   reportDecls None dieMsg prelude
 
--- Is this argv `medaka run … --json …`?  The predicate is deliberately the
--- BYTE-IDENTICAL one `runRunCmd` uses to compute its own `jsonMode`
--- (`runFlagGiven "--json"` over the whole post-verb argv, program passthrough args
--- included).  If the two ever disagreed, a deferred notice would be staged for
--- an invocation that never emits an envelope — i.e. suppression — so they are
--- kept the same predicate on purpose, imprecision included.
-runJsonInvocation : List String -> Bool
-runJsonInvocation ("run" :: rest) = runFlagGiven "--json" rest
-runJsonInvocation _ = False
+-- Is this argv one whose aborted run writes its envelope to stderr: `medaka run
+-- … --json …` or `medaka test … --json …`?  Each arm is deliberately the
+-- BYTE-IDENTICAL predicate its verb uses to compute its own `jsonMode`
+-- (`runFlagGiven "--json"` over the post-verb argv for `run`, program passthrough
+-- args included; `parseArgs testArgSpec` for `test`, which never dies here).  If
+-- the two ever disagreed, a deferred notice would be staged for an invocation
+-- that never emits an envelope — i.e. suppression — so they are kept the same
+-- predicate on purpose, imprecision included.
+envelopeOnStderrInvocation : List String -> Bool
+envelopeOnStderrInvocation ("run" :: rest) = runFlagGiven "--json" rest
+envelopeOnStderrInvocation ("test" :: rest) = match parseArgs testArgSpec rest
+  Ok a => flag "--json" a
+  Err _ => False
+envelopeOnStderrInvocation _ = False
+
+-- `test --json` also hands the deferred notice to the C abort emitter as a
+-- prose note, so an abort that fires before `armAbortReport` (out of memory or
+-- a stack overflow in the front end, a native-only run, which never arms) still
+-- appends it after the abort line.  `armAbortReport` replaces the slots later,
+-- so the envelope carries `staleBinary` and the prose is not printed twice.
+-- Only `test` ever stores a report, so the prose flush may clear the slot
+-- whenever it prints a notice.
+registerEarlyNotice : List String -> String -> <IO> Unit
+registerEarlyNotice ("test" :: _) msg = setAbortReport msg ""
+registerEarlyNotice _ _ = ()
 
 -- Print the deferred staleness notices as prose and clear them.  Called from every
--- exit that is NOT the envelope: `run`'s error arms (via `runAbort`) and
--- `dispatchSub`'s `--help`.  A no-op whenever nothing was deferred.
+-- exit that is NOT the envelope: `run`'s error arms (via `runAbort`), the `test`
+-- exits (`testDie`, `testExit`, the props-worker arm of `runTestCmd` and the
+-- passing `--json` report) and `dispatchSub`'s `--help`.  A no-op whenever
+-- nothing was deferred.
 flushStaleNoticeProse : Unit -> <IO> Unit
 flushStaleNoticeProse _ =
   let _ = match !pendingStaleNotice
     None => ()
     Some msg =>
       pendingStaleNotice := None
+      setAbortReport "" ""
       ePutStrLn msg
   let notices = !pendingPreludeNotices
   pendingPreludeNotices := []
@@ -574,6 +599,18 @@ dieMsg msg =
   emitAbortTotal ()
   ePutStrLn msg
   stageExit 1
+
+-- `test --json`'s exits that write no stderr envelope: flush the deferred
+-- notice as prose first, so a stale-binary verdict is never dropped.
+testDie : String -> <IO> Unit
+testDie msg =
+  flushStaleNoticeProse ()
+  dieMsg msg
+
+testExit : Int -> <IO> Unit
+testExit code =
+  flushStaleNoticeProse ()
+  stageExit code
 
 runAbort : String -> <IO> Unit
 runAbort msg =
@@ -1377,7 +1414,7 @@ carryTargetProfile flagValue entry = match carryProjectProfile flagValue entry
 
 -- True if the flag appears in `run`'s PRE-positional prefix ONLY — the same
 -- prefix `runArgvFilter` consumes, program passthrough args (after the first
--- positional) excluded.  `runJsonInvocation` is required to match this
+-- positional) excluded.  `envelopeOnStderrInvocation` is required to match this
 -- byte-for-byte (see its note); both now agree on the fixed, precise scope.
 runFlagGiven : String -> List String -> Bool
 runFlagGiven _ [] = False
@@ -1541,18 +1578,22 @@ runBuildJsonCmd a allowInternal root stdlibDir input outOpt target =
           None => defaultOutPath target input
         let ask =
           GateAsk { askAllowInternal = allowInternal, askDiagJson = True }
-        -- `quietEmitStderr = True`: the child's verdict arrives as the
+        -- `boQuietEmit = True`: the child's verdict arrives as the
         -- envelope (`diagEnvelope`), so its human copy is not forwarded.
         match (runBuild
-          root
-          medaka
-          cc
           target
-          input
-          outPath
-          keepIrCli
-          True
-          stampBuild
+          BuildPaths {
+            bpRoot = root,
+            bpMedaka = medaka,
+            bpCc = cc,
+            bpInput = input,
+            bpOut = outPath,
+          }
+          { defaultBuildOptions |
+            boKeepIr = keepIrCli,
+            boQuietEmit = True,
+            boStamp = stampBuild,
+          }
           (Some ask))
           -- #2243: the build's own notes (a failed `--keep-ir` copy) join
           -- the entry file's `diagnostics` array rather than vanishing
@@ -1762,7 +1803,7 @@ emitHiddenDiagNote n =
 --      Not to the same `diags` VALUE: `check` passes its `trusted` set as
 --      `fiTrusted` and `run`'s single-file arm passes `[]`, a pre-existing
 --      asymmetry that `run`'s own arm documents.  The front end's guard is
---      `internalGuardFor (fiAllowInternal || contains mid fiTrusted)`, which
+--      `internalGuardFor (moduleTrusted fiAllowInternal fiTrusted mid)`, which
 --      decides only which constructs count as "internal" for `ResError` gating,
 --      and every `ResError` reaches `diags` as a `SevError` via `diagOfResError`,
 --      so the two results can differ ONLY in their ERROR set, never in the
@@ -2453,15 +2494,18 @@ runBuildPlainCmd a =
           Ok prelude =>
             nativeTreesReport target prelude
             match (runBuild
-              root
-              medaka
-              cc
               target
-              inputAbs
-              outPath
-              keepIrCli
-              False
-              stampBuild
+              BuildPaths {
+                bpRoot = root,
+                bpMedaka = medaka,
+                bpCc = cc,
+                bpInput = inputAbs,
+                bpOut = outPath,
+              }
+              { defaultBuildOptions |
+                boKeepIr = keepIrCli,
+                boStamp = stampBuild,
+              }
               (Some GateAsk {
                 askAllowInternal = allowInternal,
                 askDiagJson = False,
@@ -3171,13 +3215,14 @@ runTestCmd argv0 =
   -- check and that normalisation are both `args.mdk`'s job now.
   let a = requireArgs testArgSpec argv0
   if flag "--props-worker" a then
+    flushStaleNoticeProse ()
     runPropsWorkerCmd a
   else match parseTestEngines a
-    Err msg => dieMsg "medaka test: \{msg}"
+    Err msg => testDie "medaka test: \{msg}"
     Ok engines => match parseTestCasesFlag a
-      Err msg => dieMsg "medaka test: \{msg}"
+      Err msg => testDie "medaka test: \{msg}"
       Ok casesOpt => match parseTestIntFlag "--seed" a
-        Err msg => dieMsg "medaka test: \{msg}"
+        Err msg => testDie "medaka test: \{msg}"
         Ok seedOpt =>
           let _ = match seedOpt
             Some s => seedPropRng s
@@ -3186,7 +3231,7 @@ runTestCmd argv0 =
           let filterOpt = flagValue "--filter" a
           let jsonMode = flag "--json" a
           match initTestSeed ()
-            Err msg => dieMsg "medaka test: \{msg}"
+            Err msg => testDie "medaka test: \{msg}"
             Ok _ => runTestTargets engines cases filterOpt seedOpt jsonMode a
 
 runTestTargets : List Engine ->
@@ -3199,9 +3244,8 @@ runTestTargets : List Engine ->
 runTestTargets engines cases filterOpt seedOpt jsonMode a = match a.positionals
   [] =>
     if jsonMode then
-      ePutStrLn
+      testDie
         "medaka test --json: needs a single file.mdk target; with no target, medaka test runs the whole enclosing project"
-      stageExit 1
     else
       runTestProjectCmd engines cases filterOpt seedOpt
   [target] => match listDir target
@@ -3212,15 +3256,13 @@ runTestTargets engines cases filterOpt seedOpt jsonMode a = match a.positionals
         runTestOne engines cases filterOpt target
     Ok _ =>
       if jsonMode then
-        ePutStrLn
+        testDie
           "medaka test --json: directory targets are not supported; pass a single file.mdk target"
-        stageExit 1
       else
         runTestManyTargets engines cases filterOpt seedOpt [target]
   targets =>
     if jsonMode then
-      ePutStrLn "medaka test --json: exactly one file.mdk target is supported"
-      stageExit 1
+      testDie "medaka test --json: exactly one file.mdk target is supported"
     else
       runTestManyTargets engines cases filterOpt seedOpt targets
 
@@ -3324,6 +3366,7 @@ runTestJsonCmd engines cases filterOpt target =
     prelude <- readPreludeSources stdlibDir
     let _ = seedCheckPrelude prelude
     tsrc <- readSource target
+    _ <- parseTargetOrRefuse target tsrc
     let userDecls = targetDesugared tsrc
     if filterMatchedNothing filterOpt tsrc userDecls then
       Err
@@ -3354,8 +3397,16 @@ runTestJsonCmd engines cases filterOpt target =
       putStrLn (stringify (cliSeedOnFailure typeError ok report))
       Ok ok
   match r
-    Err e => dieMsg e
-    Ok ok => if ok then () else stageExit 1
+    Err e => testDie e
+    Ok ok => if ok then flushStaleNoticeProse () else testExit 1
+
+-- The located parse refusal the human arm prints (`runTestUnderProfile`), as an
+-- `Err`, so a parse error under `--json` never reaches the panicking
+-- `targetDesugared`.
+parseTargetOrRefuse : String -> String -> Result String Unit
+parseTargetOrRefuse target tsrc = match parseTargetResult tsrc
+  Err e => Err (ppDiagCliSrc tsrc target (parseErrDiag target e))
+  Ok _ => Ok ()
 
 -- Directory/project/multi-target path: expand every target to concrete .mdk
 -- files (SAME walk as lint/fmt), then run+aggregate.  C3

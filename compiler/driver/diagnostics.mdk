@@ -39,12 +39,14 @@ import frontend.resolve.{
   ResError,
   resolveProgramG2,
   internalGuardFor,
+  moduleTrusted,
   ppResError,
   resErrorLoc,
   resErrorCode,
   resErrorDidYouMean,
   resErrorIsPrivateName,
   resolveModuleG,
+  ResolveWalk(..),
   resolveModulesErrorsByFile,
   importedCtorDeclsStep,
   importerSubject,
@@ -622,19 +624,6 @@ analyze : String -> String -> String -> List Diag
 analyze runtimeSrc coreSrc progSrc =
   analyzeFrom noStdlibExports "" runtimeSrc coreSrc (parse progSrc)
 
--- B.10.2b: the target is parsed with `parseLocated`, so the ELoc wrappers carry
--- REAL line/col spans (the pure `parse` carries placeholder locs).  Type-error
--- Diags then surface the true expr-level span; runtime/core stay on `parse`
--- (their locs are never reported).  Unguarded for internal-only externs.
-export
-analyzeLocated : (List String -> <e> List (String, List String)) ->
-  String ->
-  String ->
-  String ->
-  <e> List Diag
-analyzeLocated exportsFor runtimeSrc coreSrc progSrc =
-  analyzeFrom exportsFor "" runtimeSrc coreSrc (parseLocated progSrc)
-
 -- The raw-tree half of a single file's front end, plus the derived trees its
 -- drive consumes.  `surfaceDiags` holds the first groups of the file's fixed
 -- result order (derives, guard exhaustiveness, prelude-standalone shadows,
@@ -653,7 +642,7 @@ data SurfaceAnalysis = SurfaceAnalysis {
 
 -- One file's diagnostics, unguarded, parameterised over the already-parsed
 -- target program (so `analyze` can pass placeholder-loc `parse` decls and
--- `analyzeLocated` real-loc `parseLocated` decls).  `modName` names THIS module
+-- the project drive real-loc `parseLocated` decls).  `modName` names THIS module
 -- in module-scoped diagnostic text (#1499's `W-PRELUDE-METHOD-SHADOW`).
 -- "" = the caller has no module id in hand (the LSP live buffer, the
 -- playground, an inline `source`), and the text falls back to "this module".
@@ -1008,7 +997,7 @@ frontEnd exportsFor drive fi = match fi.fiProgram
         fi.fiRuntimeSrc
         fi.fiCoreSrc
         raw
-        (internalGuardFor (fi.fiAllowInternal || contains mid fi.fiTrusted))
+        (internalGuardFor (moduleTrusted fi.fiAllowInternal fi.fiTrusted mid))
     match s.resolveClean
       False => undrivenOutput [(path, s.surfaceDiags)]
       True =>
@@ -1034,37 +1023,26 @@ frontEnd exportsFor drive fi = match fi.fiProgram
       fdPairs = pairs,
       fdMods = mods,
     }
+    let walk = ResolveWalk {
+      rwAllowInternal = fi.fiAllowInternal,
+      rwTrusted = fi.fiTrusted,
+      rwSibling = fi.fiInputs.diSibling,
+      rwPreludeKey = preludeKey,
+      rwRuntime = rt,
+      rwPrelude = core,
+    }
     match fi.fiPolicy
       NeverDriveRejected =>
         let resolved =
           hintResErrorPairs
             exportsFor
-            (resolveModulesErrorsByFile
-              (map modIdToPath mods)
-              fi.fiAllowInternal
-              fi.fiTrusted
-              fi.fiInputs.diSibling
-              preludeKey
-              rt
-              core
-              pairs)
+            (resolveModulesErrorsByFile (map modIdToPath mods) walk pairs)
         match anyList (p => not (isEmpty (snd p))) resolved
           True => undrivenOutput (map resolveBucket resolved)
           False =>
             drivenGraph drive None driveIn (seedAll (map midPath mods) [])
       DriveUnblocked chainKey steps =>
-        let buckets =
-          resolvedBuckets
-            exportsFor
-            fi.fiAllowInternal
-            fi.fiTrusted
-            fi.fiInputs.diSibling
-            preludeKey
-            chainKey
-            rt
-            core
-            mods
-            pairs
+        let buckets = resolvedBuckets exportsFor walk chainKey mods pairs
         match bucketsResolveRejected buckets
           True =>
             let (r, outputs, results) =
@@ -1395,6 +1373,14 @@ wrappedRead cacheRef staleRef parseCacheRef read path = do
         None => Some src  -- no cached version → use the broken one
 -- fall back to the last source that parsed
 
+-- `wrappedRead` over a load's own caches and reader, collecting into `staleRef`.
+wrappedReadFor : ProjectLoad ->
+  Ref (List (String, Diag)) ->
+  String ->
+  Option String
+wrappedReadFor load staleRef path =
+  wrappedRead load.plCache staleRef load.plParseCache load.plRead path
+
 export
 parseErrDiag : String -> ParseError -> Diag
 parseErrDiag path e = parseDiagnosticToDiag path (parseErrorDiagnostic e)
@@ -1421,7 +1407,56 @@ parseErrDiag path e = parseDiagnosticToDiag path (parseErrorDiagnostic e)
 preludeDesugared : String -> List Decl
 preludeDesugared src = desugaredPrelude src
 
--- `allowInternal`/`trustedMods` gate the internal-extern guard on the RESOLVE
+-- One project-analysis load: the caches and reader it goes through, the entry and
+-- search roots it walks from, and the runtime/core prelude sources it checks
+-- against.  `plCache` persists last-good sources across calls; `plParseCache` lets
+-- an unchanged module skip re-parsing.
+public export data ProjectLoad = ProjectLoad {
+  plCache : Ref (List (String, String)),
+  plParseCache : Ref (OrdMap (List Decl)),
+  plRead : String -> Option String,
+  plEntry : String,
+  plRoots : List String,
+  plRuntimeSrc : String,
+  plCoreSrc : String,
+}
+
+-- A `ProjectLoad` plus the internal-extern trust the resolve pass applies.
+public export data ProjectQuery = ProjectQuery {
+  pqLoad : ProjectLoad,
+  pqAllowInternal : Bool,
+  pqTrusted : List String,
+}
+
+-- A load with fresh, call-private caches.  A caller whose caches must outlive the
+-- call (the LSP's session caches) builds its own `ProjectLoad`.
+export
+freshLoad : (String -> Option String) ->
+  String ->
+  List String ->
+  String ->
+  String ->
+  ProjectLoad
+freshLoad read entry roots runtimeSrc coreSrc = ProjectLoad {
+  plCache = Ref [],
+  plParseCache = Ref omEmpty,
+  plRead = read,
+  plEntry = entry,
+  plRoots = roots,
+  plRuntimeSrc = runtimeSrc,
+  plCoreSrc = coreSrc,
+}
+
+-- The query that trusts every module: `allowInternal` set, no trusted-module list.
+export
+openQuery : ProjectLoad -> ProjectQuery
+openQuery load = ProjectQuery {
+  pqLoad = load,
+  pqAllowInternal = True,
+  pqTrusted = [],
+}
+
+-- `pqAllowInternal`/`pqTrusted` gate the internal-extern guard on the RESOLVE
 -- pass exactly as `resolveModulesErrorsPairsG` (the human `check`/`run`/`build`
 -- multi-module gate) already does: a module is trusted (no internalExterns
 -- restriction) when `allowInternal` is set OR its modId is in `trustedMods`
@@ -1432,59 +1467,21 @@ preludeDesugared src = desugaredPrelude src
 -- human `check` correctly rejected via the guarded path.
 export
 analyzeProject : (List String -> <e> List (String, List String)) ->
-  Bool ->
-  List String ->
-  Ref (List (String, String)) ->
-  Ref (OrdMap (List Decl)) ->
-  (String -> Option String) ->
-  String ->
-  List String ->
-  String ->
-  String ->
+  ProjectQuery ->
   <IO | e> List (String, List Diag)
-analyzeProject exportsFor allowInternal trustedMods cacheRef parseCacheRef read entry roots runtimeSrc coreSrc =
-  let (_, results) =
-    analyzeProjectFull
-      exportsFor
-      allowInternal
-      trustedMods
-      cacheRef
-      parseCacheRef
-      read
-      entry
-      roots
-      runtimeSrc
-      coreSrc
+analyzeProject exportsFor query =
+  let (_, results) = analyzeProjectFull exportsFor query
   results
 
 -- `analyzeProject` also handing back the per-module `(schemes, errs, warns)` the
--- graph driver produced — see `typecheckPassFull`.  A load failure never reaches a
+-- graph driver produced — see `typecheckPassReport`.  A load failure never reaches a
 -- typecheck, so its per-module list is empty and only the diagnostics it attributes
 -- to the entry file carry any verdict.
 analyzeProjectFull : (List String -> <e> List (String, List String)) ->
-  Bool ->
-  List String ->
-  Ref (List (String, String)) ->
-  Ref (OrdMap (List Decl)) ->
-  (String -> Option String) ->
-  String ->
-  List String ->
-  String ->
-  String ->
+  ProjectQuery ->
   <IO | e> (List ModDiags, List (String, List Diag))
-analyzeProjectFull exportsFor allowInternal trustedMods cacheRef parseCacheRef read entry roots runtimeSrc coreSrc =
-  let (report, results) =
-    analyzeProjectReport
-      exportsFor
-      allowInternal
-      trustedMods
-      cacheRef
-      parseCacheRef
-      read
-      entry
-      roots
-      runtimeSrc
-      coreSrc
+analyzeProjectFull exportsFor query =
+  let (report, results) = analyzeProjectReport exportsFor query
   match report
     Some r => (r.trDiagnostics, results)
     None => ([], results)
@@ -1493,29 +1490,10 @@ analyzeProjectFull exportsFor allowInternal trustedMods cacheRef parseCacheRef r
 -- on a load failure, which reaches no typecheck).
 export
 analyzeProjectReport : (List String -> <e> List (String, List String)) ->
-  Bool ->
-  List String ->
-  Ref (List (String, String)) ->
-  Ref (OrdMap (List Decl)) ->
-  (String -> Option String) ->
-  String ->
-  List String ->
-  String ->
-  String ->
+  ProjectQuery ->
   <IO | e> (Option TcReport, List (String, List Diag))
-analyzeProjectReport exportsFor allowInternal trustedMods cacheRef parseCacheRef read entry roots runtimeSrc coreSrc =
-  let (keyed, results) =
-    analyzeProjectKeyed
-      exportsFor
-      allowInternal
-      trustedMods
-      cacheRef
-      parseCacheRef
-      read
-      entry
-      roots
-      runtimeSrc
-      coreSrc
+analyzeProjectReport exportsFor query =
+  let (keyed, results) = analyzeProjectKeyed exportsFor query
   (map (k => fst (fst k)) keyed, results)
 
 -- A loaded graph's identity: the entry's module id, and `moduleStepKey` of every
@@ -1548,86 +1526,64 @@ graphIdSame a b =
 -- drive and the identity of the graph its load read.
 export
 analyzeProjectKeyed : (List String -> <e> List (String, List String)) ->
-  Bool ->
-  List String ->
-  Ref (List (String, String)) ->
-  Ref (OrdMap (List Decl)) ->
-  (String -> Option String) ->
-  String ->
-  List String ->
-  String ->
-  String ->
+  ProjectQuery ->
   <IO | e> (Option ((TcReport, DriveOutputs), GraphId), List (String, List Diag))
-analyzeProjectKeyed exportsFor allowInternal trustedMods cacheRef parseCacheRef read entry roots runtimeSrc coreSrc =
+analyzeProjectKeyed exportsFor query =
+  let load = query.pqLoad
   let staleRef = newStale ()
-  let wread = p => wrappedRead cacheRef staleRef parseCacheRef read p
+  let wread = wrappedReadFor load staleRef
   projectKeyedFromLoad
     exportsFor
-    allowInternal
-    trustedMods
-    entry
-    roots
-    runtimeSrc
-    coreSrc
+    query
     staleRef
-    (loadProgramFilesLocatedCachedE parseCacheRef wread entry roots)
+    (loadProgramFilesLocatedCachedE
+      load.plParseCache
+      wread
+      load.plEntry
+      load.plRoots)
 
 export
 analyzeProjectKeyedSources : (List String -> <e> List (String, List String)) ->
-  Bool ->
-  List String ->
-  Ref (List (String, String)) ->
-  Ref (OrdMap (List Decl)) ->
-  (String -> Option String) ->
-  String ->
-  List String ->
-  String ->
-  String ->
+  ProjectQuery ->
   <IO | e> (Option ((TcReport, DriveOutputs), GraphId), List (String, List Diag), OrdMap String)
-analyzeProjectKeyedSources exportsFor allowInternal trustedMods cacheRef parseCacheRef read entry roots runtimeSrc coreSrc =
+analyzeProjectKeyedSources exportsFor query =
+  let load = query.pqLoad
   let staleRef = newStale ()
-  let wread = p => wrappedRead cacheRef staleRef parseCacheRef read p
+  let wread = wrappedReadFor load staleRef
   let (loaded, sources) =
-    loadProgramFilesLocatedCachedSourcesE parseCacheRef wread entry roots
-  let (keyed, diags) =
-    projectKeyedFromLoad
-      exportsFor
-      allowInternal
-      trustedMods
-      entry
-      roots
-      runtimeSrc
-      coreSrc
-      staleRef
-      loaded
+    loadProgramFilesLocatedCachedSourcesE
+      load.plParseCache
+      wread
+      load.plEntry
+      load.plRoots
+  let (keyed, diags) = projectKeyedFromLoad exportsFor query staleRef loaded
   (keyed, diags, sources)
 
 projectKeyedFromLoad : (List String -> <e> List (String, List String)) ->
-  Bool ->
-  List String ->
-  String ->
-  List String ->
-  String ->
-  String ->
+  ProjectQuery ->
   Ref (List (String, Diag)) ->
   Result LoadError (List (String, String, List Decl)) ->
   <IO | e> (Option ((TcReport, DriveOutputs), GraphId), List (String, List Diag))
 -- Dependency errors keep the destination file and the exact located parser error.
-projectKeyedFromLoad _exportsFor _allowInternal _trustedMods _entry _roots _runtimeSrc _coreSrc staleRef (Err (LoadParseFailed mpath _ pe)) =
+projectKeyedFromLoad _exportsFor _query staleRef (Err (LoadParseFailed mpath _ pe)) =
   (None, appendStale staleRef [(mpath, [parseErrDiag mpath pe])])
-projectKeyedFromLoad _exportsFor _allowInternal _trustedMods entry _roots _runtimeSrc _coreSrc staleRef (Err (LoadMsg e)) = (
+projectKeyedFromLoad _exportsFor query staleRef (Err (LoadMsg e)) = (
   None,
-  appendStale staleRef [(entry, [mkDiag SevError RModuleLoad e None])],
+  appendStale staleRef [
+    (query.pqLoad.plEntry, [mkDiag SevError RModuleLoad e None]),
+  ],
 )
 -- A located cycle or test-module import belongs to the importing module.
-projectKeyedFromLoad _exportsFor _allowInternal _trustedMods entry _roots _runtimeSrc _coreSrc staleRef (Err le) = (
+projectKeyedFromLoad _exportsFor query staleRef (Err le) = (
   None,
-  appendStale staleRef (match loadErrorSite entry le
+  appendStale staleRef (match loadErrorSite query.pqLoad.plEntry le
     Some (code, e, file, _, loc) => [(file, [mkDiag SevError code e loc])]
     None => []),
 )
-projectKeyedFromLoad exportsFor allowInternal trustedMods entry roots runtimeSrc coreSrc staleRef (Ok mods) =
-  let chainKey = chainKeyOf entry roots
+projectKeyedFromLoad exportsFor query staleRef (Ok mods) =
+  let load = query.pqLoad
+  let roots = load.plRoots
+  let chainKey = chainKeyOf load.plEntry roots
   let front =
     frontEnd
       exportsFor
@@ -1636,10 +1592,10 @@ projectKeyedFromLoad exportsFor allowInternal trustedMods entry roots runtimeSrc
         fiInputs = { driveInputsFor !selectedProfile False [] |
           diSibling = siblingPairsOf roots mods,
         },
-        fiAllowInternal = allowInternal,
-        fiTrusted = trustedMods,
-        fiRuntimeSrc = runtimeSrc,
-        fiCoreSrc = coreSrc,
+        fiAllowInternal = query.pqAllowInternal,
+        fiTrusted = query.pqTrusted,
+        fiRuntimeSrc = load.plRuntimeSrc,
+        fiCoreSrc = load.plCoreSrc,
         fiPolicy = DriveUnblocked chainKey RecordSteps,
         fiProgram = FrontGraph mods (desugaredModPairs mods),
       }
@@ -1652,65 +1608,6 @@ projectKeyedFromLoad exportsFor allowInternal trustedMods entry roots runtimeSrc
 bucketsResolveRejected : List (String, List Diag) -> Bool
 bucketsResolveRejected buckets = anyList (b => resolveRejected (snd b)) buckets
 
--- `analyzeProject` minus the load: resolve, then typecheck, then bucket — over a
--- graph the caller has already loaded.  `medaka test` loads once and calls this,
--- rather than handing `analyzeProject` an entry it would load a second time.
-export
-projectDiagsLoaded : (List String -> <e> List (String, List String)) ->
-  Bool ->
-  List String ->
-  List Decl ->
-  List Decl ->
-  Option (Int, Int) ->
-  String ->
-  List (String, String, List Decl) ->
-  <e> List (String, List Diag)
-projectDiagsLoaded exportsFor allowInternal trustedMods runtimeP coreP preludeKey chainKey mods =
-  snd
-    (projectDiagsLoadedFull
-      exportsFor
-      allowInternal
-      trustedMods
-      runtimeP
-      coreP
-      preludeKey
-      chainKey
-      mods
-      (desugaredModPairs mods))
-
--- `projectDiagsLoaded` also handing back the per-module `(schemes, errs, warns)` --
--- see `typecheckPassFull`.  `modPairs` is the caller's `desugaredModPairs mods`:
--- the resolve half and the typecheck half read the same trees.
-projectDiagsLoadedFull : (List String -> <e> List (String, List String)) ->
-  Bool ->
-  List String ->
-  List Decl ->
-  List Decl ->
-  Option (Int, Int) ->
-  String ->
-  List (String, String, List Decl) ->
-  List (String, List Decl) ->
-  <e> (List ModDiags, List (String, List Diag))
-projectDiagsLoadedFull exportsFor allowInternal trustedMods runtimeP coreP preludeKey chainKey mods modPairs =
-  typecheckPassFull
-    (driveInputsFor !selectedProfile False [])
-    runtimeP
-    coreP
-    preludeKey
-    chainKey
-    mods
-    modPairs
-    (resolvedBuckets
-      exportsFor
-      allowInternal
-      trustedMods
-      []
-      preludeKey
-      chainKey
-      runtimeP
-      coreP
-      mods
-      modPairs)
 -- A load error (cycle / unknown module / unreadable file) is attributed to the
 -- entry file (the compiler loader returns a single Err string without a per-file
 -- split, unlike the OCaml attribute_load_error; entry is the conservative
@@ -1722,69 +1619,32 @@ projectDiagsLoadedFull exportsFor allowInternal trustedMods runtimeP coreP prelu
 -- prelude's schemes, the entry's locals and seed) is dropped.  None on a load
 -- error (a buffer with an unresolved import).
 export
-projectEntrySchemes : Ref (List (String, String)) ->
-  Ref (OrdMap (List Decl)) ->
-  (String -> Option String) ->
-  String ->
-  List String ->
-  String ->
-  String ->
-  <IO> Option (List (String, PubScheme))
-projectEntrySchemes cacheRef parseCacheRef read entry roots runtimeSrc coreSrc =
-  map
-    (pa => publishedEntrySchemes pa.paSchemes)
-    (projectEntryAnalysis
-      cacheRef
-      parseCacheRef
-      read
-      entry
-      roots
-      runtimeSrc
-      coreSrc)
+projectEntrySchemes : ProjectLoad -> <IO> Option (List (String, PubScheme))
+projectEntrySchemes load =
+  map (pa => publishedEntrySchemes pa.paSchemes) (projectEntryAnalysis load)
 
 -- `projectEntrySchemes` handing back its drive's `PartialAnalysis`: every
 -- module's schemes, the prelude's, and the last-checked module's locals and seed.
-projectEntryAnalysis : Ref (List (String, String)) ->
-  Ref (OrdMap (List Decl)) ->
-  (String -> Option String) ->
-  String ->
-  List String ->
-  String ->
-  String ->
-  <IO> Option PartialAnalysis
-projectEntryAnalysis cacheRef parseCacheRef read entry roots runtimeSrc coreSrc =
-  projectEntryAnalysisOr
-    (_ => None)
-    cacheRef
-    parseCacheRef
-    read
-    entry
-    roots
-    runtimeSrc
-    coreSrc
+projectEntryAnalysis : ProjectLoad -> <IO> Option PartialAnalysis
+projectEntryAnalysis load = projectEntryAnalysisOr (_ => None) load
 
 -- `projectEntryAnalysis` that first asks `kept` for an analysis of the graph it
 -- loaded, and drives only when `kept` has none.
 export
 projectEntryAnalysisOr : (GraphId -> Option PartialAnalysis) ->
-  Ref (List (String, String)) ->
-  Ref (OrdMap (List Decl)) ->
-  (String -> Option String) ->
-  String ->
-  List String ->
-  String ->
-  String ->
+  ProjectLoad ->
   <IO> Option PartialAnalysis
-projectEntryAnalysisOr kept cacheRef parseCacheRef read entry roots runtimeSrc coreSrc =
+projectEntryAnalysisOr kept load =
+  let roots = load.plRoots
   let staleRef = newStale ()
-  let wread = p => wrappedRead cacheRef staleRef parseCacheRef read p
-  let runtimeP = preludeDesugared runtimeSrc
-  let coreP = preludeDesugared coreSrc
+  let wread = wrappedReadFor load staleRef
+  let runtimeP = preludeDesugared load.plRuntimeSrc
+  let coreP = preludeDesugared load.plCoreSrc
   -- #2719 (a1): the SAME prelude key `analyzeProject` mints, so hover/completion
   -- shares the process-wide prelude interface instead of re-typechecking and
   -- re-solving runtime + core on every request.
-  let preludeKey = Some (preludeGeneration runtimeSrc coreSrc)
-  match loadProgramFilesLocatedCached parseCacheRef wread entry roots
+  let preludeKey = Some (preludeGeneration load.plRuntimeSrc load.plCoreSrc)
+  match loadProgramFilesLocatedCached load.plParseCache wread load.plEntry roots
     Err _ => None
     Ok mods => match kept (graphIdOf mods)
       Some pa => Some pa
@@ -1836,40 +1696,33 @@ foldStale ((path, d) :: rest) buckets =
 -- ── resolve pass (per module, threading exports) ────────────────────────────
 -- Mirror analyze_project's resolve loop: resolveModuleG per module in dependency
 -- order, accumulating ModuleExports, bucketing each module's errors by its file.
--- #1362: guarded via `allowInternal`/`trustedMods` exactly like
--- `resolveModulesErrorsPairsG` (the human check/run/build multi-module gate) —
--- previously always called the unguarded `resolveModule` (implicit
--- `internalGuard = []`), so this pass never rejected an internal-extern
--- violation regardless of caller intent.
+-- Guarded via `rwAllowInternal`/`rwTrusted` exactly like
+-- `resolveModulesErrorsPairsG` (the human check/run/build multi-module gate), so
+-- this pass rejects an internal-extern violation the way that gate does (#1362).
 -- Resolve errors have no per-error loc in the compiler pipeline → None.
--- #926: `known` is now a Map keyed by module id (mirrors resolve.mdk's driver),
--- so each module's imports resolve via an O(log n) `findExports` lookup instead of a
--- linear scan of a growing `List ModuleExports`.  Threaded byte-identically:
--- `omInsert exp.modId exp known` replaces the `exp :: known` prepend.
+-- `known` is a Map keyed by module id (as in resolve.mdk's driver): each module's
+-- imports resolve via an O(log n) `findExports` lookup, and `omInsert exp.modId
+-- exp known` threads each module's exports to the next.
 --
 -- `mods`' decls are already DESUGARED (the caller shares one `desugarModule` per
 -- module with the typecheck half).  [served] is the chain key of an analyze that
 -- serves each module's verdict from `passCacheRef`, `None` for one that resolves
 -- every module afresh; [ids] holds the resolve identities of the modules before.
 resolvePass : (List String -> <e> List (String, List String)) ->
-  Bool ->
-  List String ->
+  ResolveWalk ->
   (String -> Option (String, List Decl)) ->
-  Option (Int, Int) ->
-  List Decl ->
-  List Decl ->
   Option String ->
   OrdMap ModuleExports ->
   OrdMap Int ->
   List (String, String, List Decl) ->
   List (String, List Diag) ->
   <e> List (String, List Diag)
--- Bound: with a 12-parameter head the formatter puts the body on its own line, where
--- a following `where` does not parse, so the where-go form cannot be written.
+-- Bound: written as a where-local `go`, the body is refused: `resolvePass runs the
+-- caller-chosen row <(a | b)> where only <a> is allowed` against the declared `<e>`.
 -- lint-disable-next-line rule-threaded-invariant
-resolvePass _ _ _ _ _ _ _ _ _ _ [] buckets = buckets
-resolvePass exportsFor allowInternal trustedMods subjectOf preludeKey rt core served known ids ((m@(mid, path, desugared)) :: rest) buckets =
-  let trusted = allowInternal || contains mid trustedMods
+resolvePass _ _ _ _ _ _ [] buckets = buckets
+resolvePass exportsFor walk subjectOf served known ids ((m@(mid, path, desugared)) :: rest) buckets =
+  let trusted = moduleTrusted walk.rwAllowInternal walk.rwTrusted mid
   -- A module's verdict reads, beside its own decls and its imports' exports, its
   -- trust (#1362), whether any module came before it (a missing import is
   -- `UnknownModule` after the first module and a stub in the first), and whether
@@ -1889,21 +1742,17 @@ resolvePass exportsFor allowInternal trustedMods subjectOf preludeKey rt core se
       resolveModuleG
         (internalGuardFor trusted)
         subject
-        preludeKey
-        rt
-        core
+        walk.rwPreludeKey
+        walk.rwRuntime
+        walk.rwPrelude
         known
         mid
         desugared
     (map diagOfResError (hintResErrors exportsFor errs), exp))
   resolvePass
     exportsFor
-    allowInternal
-    trustedMods
+    walk
     subjectOf
-    preludeKey
-    rt
-    core
     served
     (omInsert exp.modId exp known)
     (withIdentity mid ident ids)
@@ -1928,37 +1777,12 @@ boolKey False = "F"
 -- Guard-exhaustiveness warnings still come from the RAW (pre-desugar) module decls
 -- (checkGuardExhaustiveness needs the surface `EGuards` shape, gone after desugar),
 -- bucketed per file alongside the module's type diagnostics.
--- It hands back the per-module `(schemes, errs, warns)` the driver produced
--- beside the bucketed diagnostics; `medaka test`'s gate takes `snd`.
+-- It hands back the drive's whole report and outputs, whose `trDiagnostics` is
+-- the per-module `(schemes, errs, warns)` list, beside the bucketed diagnostics.
 -- `typecheckDiagsFold` keeps consuming exactly `(errs, warns)`: the schemes are
 -- a projection beside the fold, never an input to it.  `modPairs` is the
--- caller's, so the graph is desugared once per analyze.
-typecheckPassFull : DriveInputs ->
-  List Decl ->
-  List Decl ->
-  Option (Int, Int) ->
-  String ->
-  List (String, String, List Decl) ->
-  List (String, List Decl) ->
-  List (String, List Diag) ->
-  (List ModDiags, List (String, List Diag))
-typecheckPassFull inputs runtimeP coreP preludeKey chainKey mods modPairs buckets =
-  let (r, _, results) =
-    typecheckPassReport
-      NoSteps
-      inputs
-      runtimeP
-      coreP
-      preludeKey
-      chainKey
-      mods
-      modPairs
-      buckets
-  (r.trDiagnostics, results)
-
--- `typecheckPassFull` returning the drive's whole report and outputs, whose
--- `trDiagnostics` is the per-module list.  `frontEnd` runs it over a graph
--- resolve rejected under `DriveUnblocked`.
+-- caller's, so the graph is desugared once per analyze.  `frontEnd` runs it over
+-- a graph resolve rejected under `DriveUnblocked`.
 typecheckPassReport : ChainSteps ->
   DriveInputs ->
   List Decl ->
@@ -2061,7 +1885,7 @@ stepKeysFor : ChainSteps ->
 stepKeysFor RecordSteps mods = map moduleStepKey mods
 stepKeysFor NoSteps _ = []
 
--- The non-typecheck half of `typecheckPassFull`, over per-module `(errs, warns)` a
+-- The non-typecheck half of `typecheckPassReport`, over per-module `(errs, warns)` a
 -- driver already produced: fold in each module's guard-exhaustiveness, `deriving`
 -- and prelude-standalone-shadow diagnostics and bucket the lot by file path.
 -- `frontEnd` reaches it with whatever the verb's drive returned (for `run`,
@@ -2142,35 +1966,25 @@ foldServeKey RecordSteps (Some (rk, ck)) chainKey =
 foldServeKey _ _ _ = None
 
 -- Resolve a graph the caller has already loaded, bucketing each module's errors
--- by its file.  The shared prefix of `projectDiagsLoaded` and `frontEnd`'s
--- `DriveUnblocked` arm, which differ only in where the typecheck half comes
--- from.  They resolve identically so their verdicts agree on a channel that has
--- nothing to do with typing.
+-- by its file.  `frontEnd`'s `DriveUnblocked` arm resolves through it, so the
+-- verdicts on a channel that has nothing to do with typing agree with the
+-- `NeverDriveRejected` arm's `resolveModulesErrorsByFile`.
 resolvedBuckets : (List String -> <e> List (String, List String)) ->
-  Bool ->
-  List String ->
-  List SiblingPair ->
-  Option (Int, Int) ->
+  ResolveWalk ->
   String ->
-  List Decl ->
-  List Decl ->
   List (String, String, List Decl) ->
   List (String, List Decl) ->
   <e> List (String, List Diag)
-resolvedBuckets exportsFor allowInternal trustedMods sibling preludeKey chainKey runtimeP coreP mods modPairs =
+resolvedBuckets exportsFor walk chainKey mods modPairs =
   -- A keyed prelude serves each module's verdict from `passCacheRef`; unkeyed,
   -- nothing is served or recorded, and no key is built.  The caches keep this
   -- graph's modules and no others.
-  if isSome preludeKey then retainPassEntries (map modIdOf mods)
+  if isSome walk.rwPreludeKey then retainPassEntries (map modIdOf mods)
   resolvePass
     exportsFor
-    allowInternal
-    trustedMods
-    (importerSubject sibling modPairs)
-    preludeKey
-    runtimeP
-    coreP
-    (map ((rk, ck) => chainFullKey rk ck chainKey) preludeKey)
+    walk
+    (importerSubject walk.rwSibling modPairs)
+    (map ((rk, ck) => chainFullKey rk ck chainKey) walk.rwPreludeKey)
     omEmpty
     omEmpty
     (desugaredTriples mods modPairs)
@@ -2570,20 +2384,9 @@ analyzeProjectToLines : Ref (List (String, String)) ->
   String ->
   <IO> String
 analyzeProjectToLines cacheRef read entry roots runtimeSrc coreSrc =
-  let parseCacheRef = Ref omEmpty
-  joinNl
-    (projectLines
-      (analyzeProject
-        noStdlibExports
-        True
-        []
-        cacheRef
-        parseCacheRef
-        read
-        entry
-        roots
-        runtimeSrc
-        coreSrc))
+  let load =
+    { freshLoad read entry roots runtimeSrc coreSrc | plCache = cacheRef }
+  analyzeProject noStdlibExports (openQuery load) |> projectLines |> joinNl
 
 projectLines : List (String, List Diag) -> List String
 projectLines [] = []
@@ -2791,15 +2594,24 @@ pendingEnvelopeExtras = Ref []
 export
 runEnvelopeFields : Unit -> <e> List (String, Json)
 runEnvelopeFields _ =
-  let staleF = match !pendingStaleNotice
-    None => []
-    Some msg => [("staleBinary", JString msg)]
-  let preludeF =
-    map ((field, msg) => (field, JString msg)) !pendingPreludeNotices
   let perfF = match takePerfSink ()
     [] => []
     ls => [("perf", JArray (arrayFromList (map (l => JString l) ls)))]
-  staleF ++ preludeF ++ perfF ++ !pendingEnvelopeExtras
+  staleNoticeFields () ++ perfF ++ !pendingEnvelopeExtras
+
+-- `runEnvelopeFields` without the `perf` member, for an envelope rendered ahead
+-- of an abort that may never happen: reading the perf sink drains it, and the
+-- lines it holds belong to whichever channel reports the run that follows.
+export
+abortEnvelopeFields : Unit -> <e> List (String, Json)
+abortEnvelopeFields _ = staleNoticeFields () ++ !pendingEnvelopeExtras
+
+staleNoticeFields : Unit -> <e> List (String, Json)
+staleNoticeFields _ =
+  let staleF = match !pendingStaleNotice
+    None => []
+    Some msg => [("staleBinary", JString msg)]
+  staleF ++ map ((field, msg) => (field, JString msg)) !pendingPreludeNotices
 
 -- Emit the ONE `run --json` envelope on stderr — or nothing at all when there
 -- is nothing to say (no diagnostics AND no notices), which keeps a clean run on

@@ -22,7 +22,7 @@ import support.symbol_origin.{SymbolOrigin}
 -- or `noalias align 8 `), its return type, its name without the `@`, its
 -- parameter types, and the attributes written after its parameter list (""
 -- or text with a leading space).  Attribute text is opaque here.
-export data RuntimeDecl =
+public export data RuntimeDecl =
   RuntimeDecl String String String (List String) String
   deriving (Eq, Debug)
 
@@ -62,6 +62,26 @@ declareRuntime origin (d :: rest) reg =
   match declareOnce (Foreign (runtimeName d)) (runtimePrototype d) origin reg
     Ok reg2 => declareRuntime origin rest reg2
     Err defect => Err defect
+
+-- Located trap declarations share the same ABI roster as the preamble.
+export
+siteTrapDecls : List RuntimeDecl
+siteTrapDecls = [
+  noReturn "mdk_panic_at" ["i64", "i64"],
+  noReturn "mdk_oob_at_at" ["i64", "i64"],
+  noReturn "mdk_int_overflow_at" ["i64", "i64", "i64", "i64"],
+  noReturn "mdk_mod_zero_at" ["i64"],
+  noReturn "mdk_div_zero_at" ["i64"],
+  noReturn "mdk_nonexhaustive_match_at" ["i64"],
+  noReturn "mdk_let_refute_at" ["i64"],
+]
+
+export
+siteTrapDecl : String -> Option RuntimeDecl
+siteTrapDecl name =
+  match filter (d => runtimeName d == name ++ "_at") siteTrapDecls
+    [d] => Some d
+    _ => None
 
 -- The preamble: two comment lines, one `declare` per row, then a blank line.
 export
@@ -153,8 +173,8 @@ runtimeDecls = [
   fn "void" "mdk_eputstrln" ["i64"],
   fn "void" "mdk_flushstdout" ["i64"],
   fn "void" "mdk_print_unit" [],
-  fn "void" "mdk_panic" ["i64"],
-  fn "void" "mdk_exit" ["i64"],
+  noReturn "mdk_panic" ["i64"],
+  noReturn "mdk_exit" ["i64"],
   fn "i64" "mdk_array_make" ["i64", "i64"],
   fn "i64" "mdk_array_copy" ["i64"],
   fn "void" "mdk_array_blit" ["i64", "i64", "i64", "i64", "i64"],
@@ -268,6 +288,21 @@ runtimeDecls = [
   fn "i64" "mdk_build_fingerprint" ["i64"],
   fn "i64" "mdk_build_commit" ["i64"],
   fn "i64" "mdk_build_date" ["i64"],
+  fn "i64" "mdk_process_submit" [
+    "i64", "i64", "i64", "i64", "i64", "i64", "i64"
+  ],
+  fn "i64" "mdk_process_start" [
+    "i64", "i64", "i64", "i64", "i64", "i64", "i64"
+  ],
+  fn "i64" "mdk_process_retry_start" ["i64"],
+  fn "i64" "mdk_process_check_start" ["i64"],
+  fn "i64" "mdk_process_abort_start" ["i64"],
+  fn "i64" "mdk_process_poll_exit" ["i64"],
+  fn "i64" "mdk_process_close_stdin" ["i64"],
+  fn "i64" "mdk_process_dispose" ["i64"],
+  fn "i64" "mdk_process_try_read" ["i64", "i64", "i64"],
+  fn "i64" "mdk_process_try_write" ["i64", "i64", "i64", "i64"],
+  fn "i64" "mdk_process_stream_fd" ["i64", "i64"],
   fn "i64" "mdk_net_resolve" ["i64"],
   fn "i64" "mdk_net_tcp_connect" ["i64", "i64"],
   fn "i64" "mdk_net_tcp_listen" ["i64", "i64"],
@@ -322,5 +357,6 @@ runtimeDecls = [
   fn "void" "mdk_sleep_ms" ["i64"],
   fn "i64" "mdk_alloc_bytes" ["i64"],
   fn "void" "mdk_stash_run_stdout" ["i64"],
+  fn "void" "mdk_set_abort_report" ["i64", "i64"],
   fn "void" "mdk_enable_run_stdout_flush" ["i64"],
 ]

@@ -1,0 +1,20 @@
+import backend.runtime_c_abi.{
+  AbiType(..), RuntimeAbiRow(..), runtimeAbiRows, renderAbiError
+}
+import backend.llvm_preamble.{runtimeDecls, ffiRuntimeDecls, siteTrapDecls}
+import string.{join}
+
+typeName : AbiType -> String
+typeName AbiWord = "i64"
+typeName AbiInt32 = "i32"
+typeName AbiPointer = "ptr"
+typeName AbiDouble = "double"
+typeName AbiVoid = "void"
+
+render : RuntimeAbiRow -> String
+render row =
+  "\{row.name}|\{typeName row.result}|\{join "," (map typeName row.parameters)}|\{if row.noReturn then "noreturn" else "returns"}"
+
+main = match runtimeAbiRows (runtimeDecls ++ ffiRuntimeDecls ++ siteTrapDecls)
+  Err e => putStrLn ("ERROR: " ++ renderAbiError e)
+  Ok rows => putStrLn (join "\n" (map render rows))

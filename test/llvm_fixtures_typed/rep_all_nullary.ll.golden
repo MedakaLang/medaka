@@ -50,8 +50,8 @@ declare void @mdk_eputstr(i64)
 declare void @mdk_eputstrln(i64)
 declare void @mdk_flushstdout(i64)
 declare void @mdk_print_unit()
-declare void @mdk_panic(i64)
-declare void @mdk_exit(i64)
+declare void @mdk_panic(i64) noreturn
+declare void @mdk_exit(i64) noreturn
 declare i64 @mdk_array_make(i64, i64)
 declare i64 @mdk_array_copy(i64)
 declare void @mdk_array_blit(i64, i64, i64, i64, i64)
@@ -159,6 +159,17 @@ declare i64 @mdk_executable_path(i64)
 declare i64 @mdk_build_fingerprint(i64)
 declare i64 @mdk_build_commit(i64)
 declare i64 @mdk_build_date(i64)
+declare i64 @mdk_process_submit(i64, i64, i64, i64, i64, i64, i64)
+declare i64 @mdk_process_start(i64, i64, i64, i64, i64, i64, i64)
+declare i64 @mdk_process_retry_start(i64)
+declare i64 @mdk_process_check_start(i64)
+declare i64 @mdk_process_abort_start(i64)
+declare i64 @mdk_process_poll_exit(i64)
+declare i64 @mdk_process_close_stdin(i64)
+declare i64 @mdk_process_dispose(i64)
+declare i64 @mdk_process_try_read(i64, i64, i64)
+declare i64 @mdk_process_try_write(i64, i64, i64, i64)
+declare i64 @mdk_process_stream_fd(i64, i64)
 declare i64 @mdk_net_resolve(i64)
 declare i64 @mdk_net_tcp_connect(i64, i64)
 declare i64 @mdk_net_tcp_listen(i64, i64)
@@ -213,14 +224,15 @@ declare i64 @mdk_monotonic_sec(i64)
 declare void @mdk_sleep_ms(i64)
 declare i64 @mdk_alloc_bytes(i64)
 declare void @mdk_stash_run_stdout(i64)
+declare void @mdk_set_abort_report(i64, i64)
 declare void @mdk_enable_run_stdout_flush(i64)
 
 ; mdk-module program
 define i32 @mdk_program_main(i32 %argc, ptr %argv) {
 entry:
   call void @mdk_set_args(i32 %argc, ptr %argv)
-  %t0 = call i64 @mdk.user.6d356635663735373336353732356635665f5f7368616465(i64 1)
-  %t1 = call i64 @mdk.user.6d356635663735373336353732356635665f5f7368616465(i64 3)
+  %t0 = call i64 @mdk.user.6d356635663735373336353732356635665f5f7368616465(i64 8589934593)
+  %t1 = call i64 @mdk.user.6d356635663735373336353732356635665f5f7368616465(i64 8589934595)
   %t2 = sub i64 21, 1
   %t3 = ashr i64 %t1, 1
   %t4 = call { i64, i1 } @llvm.smul.with.overflow.i64(i64 %t3, i64 %t2)
@@ -245,7 +257,7 @@ intovf15:
   call void @mdk_int_overflow(i64 0, i64 %t16, i64 %t17)
   unreachable
 intok15:
-  %t18 = call i64 @mdk.user.6d356635663735373336353732356635665f5f7368616465(i64 5)
+  %t18 = call i64 @mdk.user.6d356635663735373336353732356635665f5f7368616465(i64 8589934597)
   %t19 = sub i64 201, 1
   %t20 = ashr i64 %t18, 1
   %t21 = call { i64, i1 } @llvm.smul.with.overflow.i64(i64 %t20, i64 %t19)
@@ -353,7 +365,7 @@ intok83:
 define internal i64 @mdk.user.6d356635663735373336353732356635665f5f7368616465(i64 %arg0) {
 entry:
   %t0 = alloca i64
-  %t3 = icmp eq i64 %arg0, 1
+  %t3 = icmp eq i64 %arg0, 8589934593
   br i1 %t3, label %conyes4, label %connext4
 conyes4:
   store i64 3, ptr %t0
@@ -361,7 +373,7 @@ conyes4:
 connext4:
   br label %clause2
 clause2:
-  %t6 = icmp eq i64 %arg0, 3
+  %t6 = icmp eq i64 %arg0, 8589934595
   br i1 %t6, label %conyes7, label %connext7
 conyes7:
   store i64 5, ptr %t0
@@ -369,7 +381,7 @@ conyes7:
 connext7:
   br label %clause5
 clause5:
-  %t8 = icmp eq i64 %arg0, 5
+  %t8 = icmp eq i64 %arg0, 8589934597
   br i1 %t8, label %conyes9, label %connext9
 conyes9:
   store i64 7, ptr %t0

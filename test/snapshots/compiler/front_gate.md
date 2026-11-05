@@ -1,5 +1,5 @@
 # META
-source_lines=510
+source_lines=514
 stages=DESUGAR,MARK
 # SOURCE
 import support.diag_codes.{DiagCode(..)}
@@ -21,7 +21,9 @@ import frontend.parser.{
 }
 import frontend.desugar.{desugarIn}
 import frontend.desugar_cache.{desugaredPrelude, preludeGeneration}
-import frontend.resolve.{internalGuardFor, resolveModulesErrorsByFile}
+import frontend.resolve.{
+  ResolveWalk(..), internalGuardFor, moduleTrusted, resolveModulesErrorsByFile
+}
 import driver.diagnostics.{
   CheckJson(..),
   Diag(..),
@@ -59,7 +61,7 @@ import driver.loader.{
   availableModulesHint,
 }
 import support.path.{dirOf}
-import support.util.{contains, joinNl, splitLast}
+import support.util.{joinNl, splitLast}
 import support.stage_count.{stageExit}
 import tools.target_check.{foldTargetDiags}
 
@@ -236,7 +238,7 @@ resolveRefusal allowInternal stdlibDir trusted rsrc csrc entry g =
           g.fgCoreD
           raw
           desugared
-          (internalGuardFor (allowInternal || contains mid trusted))
+          (internalGuardFor (moduleTrusted allowInternal trusted mid))
       match errs
         [] => None
         _ =>
@@ -249,12 +251,14 @@ resolveRefusal allowInternal stdlibDir trusted rsrc csrc entry g =
             (cliStdlibExports stdlibDir)
             (resolveModulesErrorsByFile
               (map modIdToPath g.fgMods)
-              allowInternal
-              trusted
-              (siblingPairsOf g.fgRoots g.fgMods)
-              (Some (preludeGeneration rsrc csrc))
-              g.fgRuntimeD
-              g.fgCoreD
+              ResolveWalk {
+                rwAllowInternal = allowInternal,
+                rwTrusted = trusted,
+                rwSibling = siblingPairsOf g.fgRoots g.fgMods,
+                rwPreludeKey = Some (preludeGeneration rsrc csrc),
+                rwRuntime = g.fgRuntimeD,
+                rwPrelude = g.fgCoreD,
+              }
               g.fgModsD))
       if text == "" then None else Some text
 
@@ -520,11 +524,11 @@ fileWithNotes _ _ _ = None
 (DUse false (UseGroup ("frontend" "parser") ((mem "parseLocated" false) (mem "parseResult" false) (mem "ParseError" false) (mem "parseErrorDiagnostic" false))))
 (DUse false (UseGroup ("frontend" "desugar") ((mem "desugarIn" false))))
 (DUse false (UseGroup ("frontend" "desugar_cache") ((mem "desugaredPrelude" false) (mem "preludeGeneration" false))))
-(DUse false (UseGroup ("frontend" "resolve") ((mem "internalGuardFor" false) (mem "resolveModulesErrorsByFile" false))))
+(DUse false (UseGroup ("frontend" "resolve") ((mem "ResolveWalk" true) (mem "internalGuardFor" false) (mem "moduleTrusted" false) (mem "resolveModulesErrorsByFile" false))))
 (DUse false (UseGroup ("driver" "diagnostics") ((mem "CheckJson" true) (mem "Diag" true) (mem "DiagId" true) (mem "Severity" true) (mem "cjDiagnostic" false) (mem "cjGraphParts" false) (mem "cjLoadFailure" false) (mem "cjSingleParts" false) (mem "ppCheckJson" false) (mem "readFileSafe" false) (mem "siblingPairsOf" false) (mem "relDiagPath" false) (mem "hintResErrorPairs" false) (mem "mainEntryError" false) (mem "ppDiagCliLines" false) (mem "ppDiagCliSrc" false) (mem "ppMainEntryError" false) (mem "ppResolveErrorsByFile" false) (mem "srcLinesArr" false) (mem "stdlibExportsReader" false) (mem "surfaceErrors" false))))
 (DUse false (UseGroup ("driver" "loader") ((mem "LoadError" true) (mem "loadErrorSite" false) (mem "dropPathTriple" false) (mem "entrySearchRoots" false) (mem "loadProgramFilesLocatedE" false) (mem "modIdToPath" false) (mem "projectTrustedMods" false) (mem "readSource" false) (mem "unknownModuleIdOf" false) (mem "findImportLoc" false) (mem "availableModulesHint" false))))
 (DUse false (UseGroup ("support" "path") ((mem "dirOf" false))))
-(DUse false (UseGroup ("support" "util") ((mem "contains" false) (mem "joinNl" false) (mem "splitLast" false))))
+(DUse false (UseGroup ("support" "util") ((mem "joinNl" false) (mem "splitLast" false))))
 (DUse false (UseGroup ("support" "stage_count") ((mem "stageExit" false))))
 (DUse false (UseGroup ("tools" "target_check") ((mem "foldTargetDiags" false))))
 (DTypeSig true "cliStdlibExports" (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyEffect ("IO") None (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "String"))))))))
@@ -550,7 +554,7 @@ fileWithNotes _ _ _ = None
 (DTypeSig false "loadRefusal" (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyCon "LoadError") (TyEffect ("IO") None (TyCon "String"))))))
 (DFunDef false "loadRefusal" ((PVar "stdlibDir") (PVar "entry") (PVar "lerr")) (EMatch (EApp (EVar "readSource") (EVar "entry")) (arm (PCon "Err" (PVar "e")) () (EVar "e")) (arm (PCon "Ok" (PVar "tsrc")) () (EMatch (EApp (EVar "parseResult") (EVar "tsrc")) (arm (PCon "Err" (PVar "e")) () (EApp (EApp (EApp (EVar "ppParseError") (EVar "tsrc")) (EVar "entry")) (EVar "e"))) (arm (PCon "Ok" PWild) () (EApp (EApp (EApp (EApp (EVar "moduleLoadErrText") (EVar "tsrc")) (EVar "entry")) (EVar "stdlibDir")) (EVar "lerr")))))))
 (DTypeSig false "resolveRefusal" (TyFun (TyCon "Bool") (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyCon "FrontGraph") (TyEffect ("IO") None (TyApp (TyCon "Option") (TyCon "String")))))))))))
-(DFunDef false "resolveRefusal" ((PVar "allowInternal") (PVar "stdlibDir") (PVar "trusted") (PVar "rsrc") (PVar "csrc") (PVar "entry") (PVar "g")) (EBlock (DoLet false false (PVar "trees") (ETuple (EFieldAccess (EVar "g") "fgMods") (EFieldAccess (EVar "g") "fgModsD"))) (DoExpr (EMatch (EVar "trees") (arm (PTuple (PList (PTuple (PVar "mid") PWild (PVar "raw"))) (PList (PTuple PWild (PVar "desugared")))) () (EBlock (DoLet false false (PVar "errs") (EApp (EApp (EApp (EApp (EApp (EApp (EVar "surfaceErrors") (EApp (EVar "cliStdlibExports") (EVar "stdlibDir"))) (EFieldAccess (EVar "g") "fgRuntimeD")) (EFieldAccess (EVar "g") "fgCoreD")) (EVar "raw")) (EVar "desugared")) (EApp (EVar "internalGuardFor") (EBinOp "||" (EVar "allowInternal") (EApp (EApp (EVar "contains") (EVar "mid")) (EVar "trusted")))))) (DoExpr (EMatch (EVar "errs") (arm (PList) () (EVar "None")) (arm PWild () (EBlock (DoLet false false (PVar "lines") (EApp (EVar "srcLinesArr") (EApp (EVar "entrySource") (EVar "entry")))) (DoExpr (EApp (EVar "Some") (EApp (EVar "joinNl") (EApp (EApp (EVar "map") (EApp (EApp (EVar "ppDiagCliLines") (EVar "lines")) (EVar "entry"))) (EVar "errs"))))))))))) (arm PWild () (EBlock (DoLet false false (PVar "text") (EApp (EVar "ppResolveErrorsByFile") (EApp (EApp (EVar "hintResErrorPairs") (EApp (EVar "cliStdlibExports") (EVar "stdlibDir"))) (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EVar "resolveModulesErrorsByFile") (EApp (EApp (EVar "map") (EVar "modIdToPath")) (EFieldAccess (EVar "g") "fgMods"))) (EVar "allowInternal")) (EVar "trusted")) (EApp (EApp (EVar "siblingPairsOf") (EFieldAccess (EVar "g") "fgRoots")) (EFieldAccess (EVar "g") "fgMods"))) (EApp (EVar "Some") (EApp (EApp (EVar "preludeGeneration") (EVar "rsrc")) (EVar "csrc")))) (EFieldAccess (EVar "g") "fgRuntimeD")) (EFieldAccess (EVar "g") "fgCoreD")) (EFieldAccess (EVar "g") "fgModsD"))))) (DoExpr (EIf (EBinOp "==" (EVar "text") (ELit (LString ""))) (EVar "None") (EApp (EVar "Some") (EVar "text"))))))))))
+(DFunDef false "resolveRefusal" ((PVar "allowInternal") (PVar "stdlibDir") (PVar "trusted") (PVar "rsrc") (PVar "csrc") (PVar "entry") (PVar "g")) (EBlock (DoLet false false (PVar "trees") (ETuple (EFieldAccess (EVar "g") "fgMods") (EFieldAccess (EVar "g") "fgModsD"))) (DoExpr (EMatch (EVar "trees") (arm (PTuple (PList (PTuple (PVar "mid") PWild (PVar "raw"))) (PList (PTuple PWild (PVar "desugared")))) () (EBlock (DoLet false false (PVar "errs") (EApp (EApp (EApp (EApp (EApp (EApp (EVar "surfaceErrors") (EApp (EVar "cliStdlibExports") (EVar "stdlibDir"))) (EFieldAccess (EVar "g") "fgRuntimeD")) (EFieldAccess (EVar "g") "fgCoreD")) (EVar "raw")) (EVar "desugared")) (EApp (EVar "internalGuardFor") (EApp (EApp (EApp (EVar "moduleTrusted") (EVar "allowInternal")) (EVar "trusted")) (EVar "mid"))))) (DoExpr (EMatch (EVar "errs") (arm (PList) () (EVar "None")) (arm PWild () (EBlock (DoLet false false (PVar "lines") (EApp (EVar "srcLinesArr") (EApp (EVar "entrySource") (EVar "entry")))) (DoExpr (EApp (EVar "Some") (EApp (EVar "joinNl") (EApp (EApp (EVar "map") (EApp (EApp (EVar "ppDiagCliLines") (EVar "lines")) (EVar "entry"))) (EVar "errs"))))))))))) (arm PWild () (EBlock (DoLet false false (PVar "text") (EApp (EVar "ppResolveErrorsByFile") (EApp (EApp (EVar "hintResErrorPairs") (EApp (EVar "cliStdlibExports") (EVar "stdlibDir"))) (EApp (EApp (EApp (EVar "resolveModulesErrorsByFile") (EApp (EApp (EVar "map") (EVar "modIdToPath")) (EFieldAccess (EVar "g") "fgMods"))) (ERecordCreate "ResolveWalk" ((fa "rwAllowInternal" (EVar "allowInternal")) (fa "rwTrusted" (EVar "trusted")) (fa "rwSibling" (EApp (EApp (EVar "siblingPairsOf") (EFieldAccess (EVar "g") "fgRoots")) (EFieldAccess (EVar "g") "fgMods"))) (fa "rwPreludeKey" (EApp (EVar "Some") (EApp (EApp (EVar "preludeGeneration") (EVar "rsrc")) (EVar "csrc")))) (fa "rwRuntime" (EFieldAccess (EVar "g") "fgRuntimeD")) (fa "rwPrelude" (EFieldAccess (EVar "g") "fgCoreD"))))) (EFieldAccess (EVar "g") "fgModsD"))))) (DoExpr (EIf (EBinOp "==" (EVar "text") (ELit (LString ""))) (EVar "None") (EApp (EVar "Some") (EVar "text"))))))))))
 (DTypeSig false "mainRefusal" (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "Decl")))) (TyEffect ("IO") None (TyApp (TyCon "Option") (TyCon "String"))))))
 (DFunDef false "mainRefusal" ((PVar "entry") (PVar "pairs")) (EApp (EApp (EVar "andThen") (EApp (EVar "splitLast") (EVar "pairs"))) (ELam ((PVar "__do_x")) (EMatch (EVar "__do_x") (arm (PTuple PWild (PTuple PWild (PVar "decls"))) () (EApp (EApp (EVar "map") (ELam ((PVar "d")) (EApp (EApp (EApp (EVar "ppMainEntryError") (EApp (EVar "entrySource") (EVar "entry"))) (EVar "entry")) (EVar "d")))) (EApp (EVar "mainEntryError") (EVar "decls"))))))))
 (DTypeSig false "entrySource" (TyFun (TyCon "String") (TyEffect ("IO") None (TyCon "String"))))
@@ -605,11 +609,11 @@ fileWithNotes _ _ _ = None
 (DUse false (UseGroup ("frontend" "parser") ((mem "parseLocated" false) (mem "parseResult" false) (mem "ParseError" false) (mem "parseErrorDiagnostic" false))))
 (DUse false (UseGroup ("frontend" "desugar") ((mem "desugarIn" false))))
 (DUse false (UseGroup ("frontend" "desugar_cache") ((mem "desugaredPrelude" false) (mem "preludeGeneration" false))))
-(DUse false (UseGroup ("frontend" "resolve") ((mem "internalGuardFor" false) (mem "resolveModulesErrorsByFile" false))))
+(DUse false (UseGroup ("frontend" "resolve") ((mem "ResolveWalk" true) (mem "internalGuardFor" false) (mem "moduleTrusted" false) (mem "resolveModulesErrorsByFile" false))))
 (DUse false (UseGroup ("driver" "diagnostics") ((mem "CheckJson" true) (mem "Diag" true) (mem "DiagId" true) (mem "Severity" true) (mem "cjDiagnostic" false) (mem "cjGraphParts" false) (mem "cjLoadFailure" false) (mem "cjSingleParts" false) (mem "ppCheckJson" false) (mem "readFileSafe" false) (mem "siblingPairsOf" false) (mem "relDiagPath" false) (mem "hintResErrorPairs" false) (mem "mainEntryError" false) (mem "ppDiagCliLines" false) (mem "ppDiagCliSrc" false) (mem "ppMainEntryError" false) (mem "ppResolveErrorsByFile" false) (mem "srcLinesArr" false) (mem "stdlibExportsReader" false) (mem "surfaceErrors" false))))
 (DUse false (UseGroup ("driver" "loader") ((mem "LoadError" true) (mem "loadErrorSite" false) (mem "dropPathTriple" false) (mem "entrySearchRoots" false) (mem "loadProgramFilesLocatedE" false) (mem "modIdToPath" false) (mem "projectTrustedMods" false) (mem "readSource" false) (mem "unknownModuleIdOf" false) (mem "findImportLoc" false) (mem "availableModulesHint" false))))
 (DUse false (UseGroup ("support" "path") ((mem "dirOf" false))))
-(DUse false (UseGroup ("support" "util") ((mem "contains" false) (mem "joinNl" false) (mem "splitLast" false))))
+(DUse false (UseGroup ("support" "util") ((mem "joinNl" false) (mem "splitLast" false))))
 (DUse false (UseGroup ("support" "stage_count") ((mem "stageExit" false))))
 (DUse false (UseGroup ("tools" "target_check") ((mem "foldTargetDiags" false))))
 (DTypeSig true "cliStdlibExports" (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyEffect ("IO") None (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "String"))))))))
@@ -635,7 +639,7 @@ fileWithNotes _ _ _ = None
 (DTypeSig false "loadRefusal" (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyCon "LoadError") (TyEffect ("IO") None (TyCon "String"))))))
 (DFunDef false "loadRefusal" ((PVar "stdlibDir") (PVar "entry") (PVar "lerr")) (EMatch (EApp (EVar "readSource") (EVar "entry")) (arm (PCon "Err" (PVar "e")) () (EVar "e")) (arm (PCon "Ok" (PVar "tsrc")) () (EMatch (EApp (EVar "parseResult") (EVar "tsrc")) (arm (PCon "Err" (PVar "e")) () (EApp (EApp (EApp (EVar "ppParseError") (EVar "tsrc")) (EVar "entry")) (EVar "e"))) (arm (PCon "Ok" PWild) () (EApp (EApp (EApp (EApp (EVar "moduleLoadErrText") (EVar "tsrc")) (EVar "entry")) (EVar "stdlibDir")) (EVar "lerr")))))))
 (DTypeSig false "resolveRefusal" (TyFun (TyCon "Bool") (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyCon "FrontGraph") (TyEffect ("IO") None (TyApp (TyCon "Option") (TyCon "String")))))))))))
-(DFunDef false "resolveRefusal" ((PVar "allowInternal") (PVar "stdlibDir") (PVar "trusted") (PVar "rsrc") (PVar "csrc") (PVar "entry") (PVar "g")) (EBlock (DoLet false false (PVar "trees") (ETuple (EFieldAccess (EVar "g") "fgMods") (EFieldAccess (EVar "g") "fgModsD"))) (DoExpr (EMatch (EVar "trees") (arm (PTuple (PList (PTuple (PVar "mid") PWild (PVar "raw"))) (PList (PTuple PWild (PVar "desugared")))) () (EBlock (DoLet false false (PVar "errs") (EApp (EApp (EApp (EApp (EApp (EApp (EVar "surfaceErrors") (EApp (EVar "cliStdlibExports") (EVar "stdlibDir"))) (EFieldAccess (EVar "g") "fgRuntimeD")) (EFieldAccess (EVar "g") "fgCoreD")) (EVar "raw")) (EVar "desugared")) (EApp (EVar "internalGuardFor") (EBinOp "||" (EVar "allowInternal") (EApp (EApp (EVar "contains") (EVar "mid")) (EVar "trusted")))))) (DoExpr (EMatch (EVar "errs") (arm (PList) () (EVar "None")) (arm PWild () (EBlock (DoLet false false (PVar "lines") (EApp (EVar "srcLinesArr") (EApp (EVar "entrySource") (EVar "entry")))) (DoExpr (EApp (EVar "Some") (EApp (EVar "joinNl") (EApp (EApp (EMethodRef "map") (EApp (EApp (EVar "ppDiagCliLines") (EVar "lines")) (EVar "entry"))) (EVar "errs"))))))))))) (arm PWild () (EBlock (DoLet false false (PVar "text") (EApp (EVar "ppResolveErrorsByFile") (EApp (EApp (EVar "hintResErrorPairs") (EApp (EVar "cliStdlibExports") (EVar "stdlibDir"))) (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EVar "resolveModulesErrorsByFile") (EApp (EApp (EMethodRef "map") (EVar "modIdToPath")) (EFieldAccess (EVar "g") "fgMods"))) (EVar "allowInternal")) (EVar "trusted")) (EApp (EApp (EVar "siblingPairsOf") (EFieldAccess (EVar "g") "fgRoots")) (EFieldAccess (EVar "g") "fgMods"))) (EApp (EVar "Some") (EApp (EApp (EVar "preludeGeneration") (EVar "rsrc")) (EVar "csrc")))) (EFieldAccess (EVar "g") "fgRuntimeD")) (EFieldAccess (EVar "g") "fgCoreD")) (EFieldAccess (EVar "g") "fgModsD"))))) (DoExpr (EIf (EBinOp "==" (EVar "text") (ELit (LString ""))) (EVar "None") (EApp (EVar "Some") (EVar "text"))))))))))
+(DFunDef false "resolveRefusal" ((PVar "allowInternal") (PVar "stdlibDir") (PVar "trusted") (PVar "rsrc") (PVar "csrc") (PVar "entry") (PVar "g")) (EBlock (DoLet false false (PVar "trees") (ETuple (EFieldAccess (EVar "g") "fgMods") (EFieldAccess (EVar "g") "fgModsD"))) (DoExpr (EMatch (EVar "trees") (arm (PTuple (PList (PTuple (PVar "mid") PWild (PVar "raw"))) (PList (PTuple PWild (PVar "desugared")))) () (EBlock (DoLet false false (PVar "errs") (EApp (EApp (EApp (EApp (EApp (EApp (EVar "surfaceErrors") (EApp (EVar "cliStdlibExports") (EVar "stdlibDir"))) (EFieldAccess (EVar "g") "fgRuntimeD")) (EFieldAccess (EVar "g") "fgCoreD")) (EVar "raw")) (EVar "desugared")) (EApp (EVar "internalGuardFor") (EApp (EApp (EApp (EVar "moduleTrusted") (EVar "allowInternal")) (EVar "trusted")) (EVar "mid"))))) (DoExpr (EMatch (EVar "errs") (arm (PList) () (EVar "None")) (arm PWild () (EBlock (DoLet false false (PVar "lines") (EApp (EVar "srcLinesArr") (EApp (EVar "entrySource") (EVar "entry")))) (DoExpr (EApp (EVar "Some") (EApp (EVar "joinNl") (EApp (EApp (EMethodRef "map") (EApp (EApp (EVar "ppDiagCliLines") (EVar "lines")) (EVar "entry"))) (EVar "errs"))))))))))) (arm PWild () (EBlock (DoLet false false (PVar "text") (EApp (EVar "ppResolveErrorsByFile") (EApp (EApp (EVar "hintResErrorPairs") (EApp (EVar "cliStdlibExports") (EVar "stdlibDir"))) (EApp (EApp (EApp (EVar "resolveModulesErrorsByFile") (EApp (EApp (EMethodRef "map") (EVar "modIdToPath")) (EFieldAccess (EVar "g") "fgMods"))) (ERecordCreate "ResolveWalk" ((fa "rwAllowInternal" (EVar "allowInternal")) (fa "rwTrusted" (EVar "trusted")) (fa "rwSibling" (EApp (EApp (EVar "siblingPairsOf") (EFieldAccess (EVar "g") "fgRoots")) (EFieldAccess (EVar "g") "fgMods"))) (fa "rwPreludeKey" (EApp (EVar "Some") (EApp (EApp (EVar "preludeGeneration") (EVar "rsrc")) (EVar "csrc")))) (fa "rwRuntime" (EFieldAccess (EVar "g") "fgRuntimeD")) (fa "rwPrelude" (EFieldAccess (EVar "g") "fgCoreD"))))) (EFieldAccess (EVar "g") "fgModsD"))))) (DoExpr (EIf (EBinOp "==" (EVar "text") (ELit (LString ""))) (EVar "None") (EApp (EVar "Some") (EVar "text"))))))))))
 (DTypeSig false "mainRefusal" (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "Decl")))) (TyEffect ("IO") None (TyApp (TyCon "Option") (TyCon "String"))))))
 (DFunDef false "mainRefusal" ((PVar "entry") (PVar "pairs")) (EApp (EApp (EMethodRef "andThen") (EApp (EVar "splitLast") (EVar "pairs"))) (ELam ((PVar "__do_x")) (EMatch (EVar "__do_x") (arm (PTuple PWild (PTuple PWild (PVar "decls"))) () (EApp (EApp (EMethodRef "map") (ELam ((PVar "d")) (EApp (EApp (EApp (EVar "ppMainEntryError") (EApp (EVar "entrySource") (EVar "entry"))) (EVar "entry")) (EVar "d")))) (EApp (EVar "mainEntryError") (EVar "decls"))))))))
 (DTypeSig false "entrySource" (TyFun (TyCon "String") (TyEffect ("IO") None (TyCon "String"))))

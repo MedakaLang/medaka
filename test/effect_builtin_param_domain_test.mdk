@@ -866,3 +866,46 @@ test "a catalog redeclaration at an index join covers every term" = expectAll [
   ],
   expectCheckAccept (fixture "catalog_index_var_join_accept.mdk"),
 ]
+
+test "process exact authority and policy remain indexed" = expectAll [
+  expectCheckAccept (fixture "process_positive.mdk"),
+  expectCheckReject (fixture "process_negative.mdk") [
+    "performs <Exec \"/bin/sh\">",
+  ],
+  expectVerbExitStartsWith
+    "check-policy"
+    [
+      fixture "process_positive.mdk",
+      "--allow",
+      "Exec=/bin/sh",
+      "--fn",
+      "launch",
+    ]
+    0
+    "accepted",
+  expectVerbExitStartsWith
+    "check-policy"
+    [fixture "process_positive.mdk", "--allow", "Exec=/bin/*", "--fn", "launch"]
+    0
+    "accepted",
+  expectVerbExitStartsWith
+    "check-policy"
+    [
+      fixture "process_positive.mdk",
+      "--allow",
+      "Exec=/bin/false",
+      "--fn",
+      "launch",
+    ]
+    1
+    "rejected",
+]
+
+test "process owner indices cannot be narrowed or laundered through Ref" = expectAll
+  [
+    expectCheckReject (fixture "process_ref.mdk") ["authority index mismatch"],
+    expectCheckReject (fixture "process_existential.mdk") [
+      "declared bound admits only",
+    ],
+    expectCheckReject (fixture "process_env.mdk") ["performs <Env"],
+  ]

@@ -1,3 +1,5 @@
+import frontend.ast.{Loc(..)}
+import backend.package_identity.{IdentityPlan(..)}
 import backend.impl_groups.{ImplClauseGroup(..)}
 import backend.wasm_emit_test_support_test.{funcBlock, linesWith}
 import ir.constructor_facts.{ConstructorFacts(..)}
@@ -3959,3 +3961,111 @@ test "(ah) a slot load tests the dictionary for null and traps through mdk_dispa
         (take 2 (drop 1 (fromLabel "slotnull" (split "\n" ir)))),
     ),
   ]
+
+test "identity plan corruptions are refused by the emission gateway" =
+  let cp = constructorVictim "ctor-valid"
+  expectEach
+    (map
+      (target =>
+        let original = buildEmitPlan target PreludeFreeRuntime cp
+        match original.identity
+          Err _ => (backendName target, fail "identity planning failed")
+          Ok identity =>
+            let defects plan =
+              joinNl
+                (map
+                  coreDefectMessage
+                  (validateForEmission
+                    target
+                    PreludeFreeRuntime
+                    RawUnchecked
+                    plan
+                    cp).defects)
+            (
+              backendName target,
+              expectAll [
+                expectTextContainsAll
+                  ["identity: missing type"]
+                  (defects { original |
+                    identity = Ok ({ identity | types = omEmpty }),
+                  }),
+                expectTextContainsAll
+                  ["identity: file table disagrees"]
+                  (defects { original |
+                    identity = Ok ({ identity | orderedFiles = ["bogus"] }),
+                  }),
+                expectTextContainsAll
+                  ["identity: invalid type assignment"]
+                  (defects { original |
+                    identity = Ok ({ identity |
+                      types = omInsert "bad" 0 identity.types,
+                    }),
+                  }),
+              ],
+            ))
+      [LlvmBackend, WasmBackend])
+
+identityLocated : CProgram -> CProgram
+identityLocated (CProgram binds ars tys impls mctx facts) =
+  CProgram (map identityLocatedBind binds) ars tys impls mctx facts
+identityLocatedBind : CBind -> CBind
+identityLocatedBind (CBind name clauses _ bid) =
+  CBind name clauses (Loc "gateway.mdk" 2 3 2 4) bid
+
+test "missing site file refuses at the emission gateway" =
+  let cp = identityLocated (constructorVictim "ctor-valid")
+  expectEach
+    (map
+      (target =>
+        let original = buildEmitPlan target PreludeFreeRuntime cp
+        match original.identity
+          Err _ => (backendName target, fail "identity planning failed")
+          Ok identity =>
+            let damaged = { original |
+              identity = Ok ({ identity | files = omEmpty, orderedFiles = [] }),
+            }
+            let defects =
+              (validateForEmission
+                target
+                PreludeFreeRuntime
+                RawUnchecked
+                damaged
+                cp).defects
+            (
+              backendName target,
+              expectTextContainsAll
+                ["identity: missing file", "gateway.mdk"]
+                (joinNl (map coreDefectMessage defects)),
+            ))
+      [LlvmBackend, WasmBackend])
+
+test "gateway rejects an ownerless user constructor and keeps runtime controls" =
+  let source = typedLowered "" """
+    data T = PackCtor
+    f x = PackCtor
+    main = 42
+    """
+  let bad = match source
+    CProgram binds ars _ impls ctx facts =>
+      CProgram binds ars [] impls ctx facts
+  let runtime =
+    constructorTables
+      [("Some", 1), ("None", 0), ("$tuple", 2)]
+      []
+      (typedLowered "" "main = 42")
+  expectEach
+    (flatMap
+      (backend => [
+        (
+          "missing owner",
+          expectEqual
+            ["internal error: constructor-fact: missing owner for PackCtor"]
+            (emissionDefectTexts backend bad),
+        ),
+        (
+          "runtime and synthetic",
+          expectEqual [] (emissionDefectTexts backend runtime),
+        ),
+        ("declared owner", expectEqual [] (emissionDefectTexts backend source)),
+      ])
+      [LlvmBackend, WasmBackend])

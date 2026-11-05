@@ -211,3 +211,59 @@ test "rt_obj -O2: inline, prebuilt and cached builds are byte-identical" =
 
 test "rt_obj self-repair: a corrupt cache entry is rejected and recompiled" =
   withScratchDir repairArm
+
+-- Exercise header invalidation in a private runtime tree, including missing SHA tools.
+headerCacheScript : String
+headerCacheScript =
+  """
+set -eu
+w=$1
+root=$2
+bin=$3
+mkdir -p "$w/root/runtime" "$w/cache" "$w/nosha-cache" "$w/path"
+cp "$root/runtime/medaka_rt.c" "$root/runtime/medaka_abi.h" "$root/runtime/medaka_runtime.h" "$root/runtime/medaka_process.h" "$root/runtime/medaka_process.c" "$w/root/runtime/"
+cp "$w/root/runtime/medaka_abi.h" "$w/original.h"
+ln -s "$root/stdlib" "$w/root/stdlib"
+printf 'main = println 12345\n' > "$w/probe.mdk"
+export MEDAKA_ROOT="$w/root" MEDAKA_EMITTER="$root/medaka_emitter" MEDAKA_CACHE_DIR="$w/cache"
+export MEDAKA_RT_OBJ= MEDAKA_NO_OBJ_CACHE=
+"$bin" build "$w/probe.mdk" -o "$w/a" >/dev/null
+first=$(find "$w/cache" -name 'rt-*.o' -print)
+test -n "$first"
+printf '\n/* mutation */\n' >> "$w/root/runtime/medaka_abi.h"
+"$bin" build "$w/probe.mdk" -o "$w/b" >/dev/null
+test "$(find "$w/cache" -name 'rt-*.o' | wc -l)" -eq 2
+cp "$w/original.h" "$w/root/runtime/medaka_abi.h"
+"$bin" build "$w/probe.mdk" -o "$w/c" >/dev/null
+test "$(find "$w/cache" -name 'rt-*.o' | wc -l)" -eq 2
+cp "$w/root/runtime/medaka_runtime.h" "$w/runtime-original.h"
+printf '\n/* mutation */\n' >> "$w/root/runtime/medaka_runtime.h"
+"$bin" build "$w/probe.mdk" -o "$w/header" >/dev/null
+test "$(find "$w/cache" -name 'rt-*.o' | wc -l)" -eq 3
+cp "$w/runtime-original.h" "$w/root/runtime/medaka_runtime.h"
+for source in medaka_process.c medaka_process.h; do
+  cp "$w/root/runtime/$source" "$w/process-original"
+  printf '\n#error process unit must be compiled\n' >> "$w/root/runtime/$source"
+  if "$bin" build "$w/probe.mdk" -o "$w/broken" >/dev/null 2>&1; then exit 1; fi
+  cp "$w/process-original" "$w/root/runtime/$source"
+done
+MEDAKA_NO_OBJ_CACHE=1 "$bin" build "$w/probe.mdk" -o "$w/uncached" >/dev/null
+"$bin" build --emit-rt-obj "$w/runtime.o" >/dev/null
+MEDAKA_RT_OBJ="$w/runtime.o" "$bin" build "$w/probe.mdk" -o "$w/explicit" >/dev/null
+for x in a b c uncached explicit; do test "$("$w/$x")" = 12345; done
+for tool in /usr/bin/*; do
+  case ${tool##*/} in sha256sum|shasum) continue ;; esac
+  ln -s "$tool" "$w/path/${tool##*/}" 2>/dev/null || :
+done
+PATH="$w/path" MEDAKA_CACHE_DIR="$w/nosha-cache" "$bin" build "$w/probe.mdk" -o "$w/no-sha" >/dev/null
+test "$("$w/no-sha")" = 12345
+test -z "$(find "$w/nosha-cache" -name 'rt-*.o' -print)"
+"""
+
+test "rt_obj: header mutations invalidate cache and no SHA disables it" = withScratchDir
+  (w =>
+    gradeExit
+      "header cache controls"
+      (boundedVerb "sh" [
+        "-c", headerCacheScript, "sh", w, medakaRoot, medakaBin
+      ]))

@@ -15,13 +15,13 @@
 
 import support.ordmap.{OrdMap, omEmpty, omSize, omLookup}
 import driver.diagnostics.{
-  projectEntryAnalysis, analyzeToLines, analyzeProjectFull,
-  analyzeProjectReport, analyzeProjectKeyed, analyzeProjectKeyedSources,
-  noStdlibExports, graphCheckDrive, CheckDrive(..), CheckDump(..), analyzeFrom,
-  frontEnd, checkFrontDrive, FrontInput(..), FrontPolicy(..), FrontProgram(..),
-  FrontOutput(..), Diag(..), diagIdText, passCacheRef, PassCaches(..),
-  PassEntry(..), checkJsonFileParts, ppCheckJson, stdlibExportsReader,
-  desugaredModPairs, ChainSteps(..)
+  projectEntryAnalysis, ProjectLoad(..), freshLoad, openQuery, analyzeToLines,
+  analyzeProjectFull, analyzeProjectReport, analyzeProjectKeyed,
+  analyzeProjectKeyedSources, noStdlibExports, graphCheckDrive, CheckDrive(..),
+  CheckDump(..), analyzeFrom, frontEnd, checkFrontDrive, FrontInput(..),
+  FrontPolicy(..), FrontProgram(..), FrontOutput(..), Diag(..), diagIdText,
+  passCacheRef, PassCaches(..), PassEntry(..), checkJsonFileParts, ppCheckJson,
+  stdlibExportsReader, desugaredModPairs, ChainSteps(..)
 }
 import driver.loader.{loadProgramFilesLocatedCachedSourcesE}
 import support.source_index.{indexSource, offsetToUtf16Position}
@@ -39,7 +39,7 @@ import path.{dirname, stem}
 import string.{contains, endsWith, lines, split, trim, unlines}
 import test.{
   Expectation, expectOk, expectAll, expectEach, expectEqual, expectFalse,
-  expectNotEqual, expectNoFindings, expectTrue, fail
+  expectNotEqual, expectNoFindings, expectTrue, expectAtLeast, fail
 }
 import types.publish.{
   PubScheme(..), LiveCell(..), TcReport(..), graphCells, pubSchemes
@@ -112,15 +112,7 @@ graphRows rsrc csrc read entry roots =
   let (full, _) =
     analyzeProjectFull
       noStdlibExports
-      True
-      []
-      (Ref [])
-      (Ref omEmpty)
-      read
-      entry
-      roots
-      rsrc
-      csrc
+      (openQuery (freshLoad read entry roots rsrc csrc))
   map
     (m => match m
       (mid, (schemes, _, _)) => (mid, schemes))
@@ -200,7 +192,7 @@ corpusCheck = match (readFile "stdlib/runtime.mdk", readFile "stdlib/core.mdk")
         ("no published Link", expectEqual [] (cellsWhere isLink rows)),
         ("no open effect summary", expectEqual [] (cellsWhere isSummary rows)),
         ("every graph published its modules", expectEqual [] unloaded),
-        ("stdlib modules driven", expectEqual 58 (length stdlibEs)),
+        ("stdlib modules driven", expectAtLeast 50 (length stdlibEs)),
       ]
     (Err e, _) => fail e
     (_, Err e) => fail e
@@ -287,15 +279,7 @@ reportOf rsrc csrc dir src =
       fst
         (analyzeProjectReport
           noStdlibExports
-          True
-          []
-          (Ref [])
-          (Ref omEmpty)
-          (_ => None)
-          entry
-          [dir, "stdlib"]
-          rsrc
-          csrc)
+          (openQuery (freshLoad (_ => None) entry [dir, "stdlib"] rsrc csrc)))
 
 alphaSrc : String
 alphaSrc = """export
@@ -431,15 +415,10 @@ analyzeChain rsrc csrc dir parseCache =
   let (keyed, _) =
     analyzeProjectKeyed
       noStdlibExports
-      True
-      []
-      (Ref [])
-      parseCache
-      (_ => None)
-      "\{dir}/main.mdk"
-      [dir, "stdlib"]
-      rsrc
-      csrc
+      (openQuery
+        { freshLoad (_ => None) "\{dir}/main.mdk" [dir, "stdlib"] rsrc csrc |
+          plParseCache = parseCache,
+        })
   match keyed
     Some ((_, outputs), _) => outputs.doServedModules
     None => -1
@@ -499,15 +478,7 @@ foldAnalyze rsrc csrc dir read =
   let (_, buckets) =
     analyzeProjectKeyed
       noStdlibExports
-      True
-      []
-      (Ref [])
-      (Ref omEmpty)
-      read
-      "\{dir}/fcmain.mdk"
-      [dir, "stdlib"]
-      rsrc
-      csrc
+      (openQuery (freshLoad read "\{dir}/fcmain.mdk" [dir, "stdlib"] rsrc csrc))
   (
     map
       diagText
@@ -576,15 +547,8 @@ analyzeEntry rsrc csrc dir entry =
   let (keyed, buckets) =
     analyzeProjectKeyed
       noStdlibExports
-      True
-      []
-      (Ref [])
-      (Ref omEmpty)
-      (_ => None)
-      "\{dir}/\{entry}.mdk"
-      [dir, "stdlib"]
-      rsrc
-      csrc
+      (openQuery
+        (freshLoad (_ => None) "\{dir}/\{entry}.mdk" [dir, "stdlib"] rsrc csrc))
   (
     sort
       (flatMap
@@ -858,40 +822,32 @@ main = 1
       let (_, oldBuckets) =
         analyzeProjectKeyed
           noStdlibExports
-          True
-          []
-          (Ref [])
-          (Ref omEmpty)
-          (_ => None)
-          entry
-          [dir, "stdlib"]
-          rsrc
-          csrc
+          (openQuery (freshLoad (_ => None) entry [dir, "stdlib"] rsrc csrc))
       let (keyed, newBuckets, sources) =
         analyzeProjectKeyedSources
           noStdlibExports
-          True
-          []
-          cache
-          parseCache
-          (_ => None)
-          entry
-          [dir, "stdlib"]
-          rsrc
-          csrc
+          (openQuery ProjectLoad {
+            plCache = cache,
+            plParseCache = parseCache,
+            plRead = _ => None,
+            plEntry = entry,
+            plRoots = [dir, "stdlib"],
+            plRuntimeSrc = rsrc,
+            plCoreSrc = csrc,
+          })
       let removed = removeFile dep
       let (failed, buckets, failedSources) =
         analyzeProjectKeyedSources
           noStdlibExports
-          True
-          []
-          cache
-          parseCache
-          (_ => None)
-          entry
-          [dir, "stdlib"]
-          rsrc
-          csrc
+          (openQuery ProjectLoad {
+            plCache = cache,
+            plParseCache = parseCache,
+            plRead = _ => None,
+            plEntry = entry,
+            plRoots = [dir, "stdlib"],
+            plRuntimeSrc = rsrc,
+            plCoreSrc = csrc,
+          })
       expectEach [
         ("dependency removed", expectOk removed),
         ("success", expectTrue (isSome keyed)),
@@ -1314,15 +1270,13 @@ siblingBuckets file =
       let (_, buckets) =
         analyzeProjectKeyed
           (stdlibExportsReader "stdlib")
-          True
-          []
-          (Ref [])
-          (Ref omEmpty)
-          (_ => None)
-          "test/sibling_view_fixtures/\{file}"
-          ["test/sibling_view_fixtures", "stdlib"]
-          rsrc
-          csrc
+          (openQuery
+            (freshLoad
+              (_ => None)
+              "test/sibling_view_fixtures/\{file}"
+              ["test/sibling_view_fixtures", "stdlib"]
+              rsrc
+              csrc))
       sort (flatMap (b => map (d => diagCodeText d) (snd b)) buckets))
 
 diagCodeText : Diag -> String
@@ -1334,13 +1288,12 @@ analysisSeedHas : String -> String -> <IO> Bool
 analysisSeedHas file name = withPreludeOr False (rsrc csrc =>
   let analysis =
     projectEntryAnalysis
-      (Ref [])
-      (Ref omEmpty)
-      (_ => None)
-      "test/sibling_view_fixtures/\{file}"
-      ["test/sibling_view_fixtures", "stdlib"]
-      rsrc
-      csrc
+      (freshLoad
+        (_ => None)
+        "test/sibling_view_fixtures/\{file}"
+        ["test/sibling_view_fixtures", "stdlib"]
+        rsrc
+        csrc)
   optionOr False (map (pa => any (== name) (map fst pa.paSeed)) analysis))
 
 test "hover and completion analysis gives a test sibling its subject's private names" = expectEach

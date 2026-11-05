@@ -1,0 +1,5 @@
+import process_async.{StartResult(..)}
+import process.{pollExit}
+forge : Process "/bin/true"
+forge = Process 0
+main = pollExit forge

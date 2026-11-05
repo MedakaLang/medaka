@@ -73,6 +73,8 @@ import driver.diagnostics.{
   FrontOutput(..),
   analyzeProjectKeyedSources,
   projectEntryAnalysisOr,
+  ProjectLoad(..),
+  openQuery,
   GraphId,
   graphIdSame,
   stdlibExportsReader,
@@ -774,15 +776,15 @@ projectEntryEnv runtimeSrc coreSrc uri src docs =
   let read = path => docsGet (uriOfPath path) docs
   map
     (pa => hoverEnvOf (publishedEntrySchemes pa.paSchemes) pa)
-    (projectEntryAnalysisOr
-      (keptGraph uri src docs)
-      projectCache
-      projectParseCache
-      read
-      rootFile
-      [projectDir, stdlibDir]
-      runtimeSrc
-      coreSrc)
+    (projectEntryAnalysisOr (keptGraph uri src docs) ProjectLoad {
+      plCache = projectCache,
+      plParseCache = projectParseCache,
+      plRead = read,
+      plEntry = rootFile,
+      plRoots = [projectDir, stdlibDir],
+      plRuntimeSrc = runtimeSrc,
+      plCoreSrc = coreSrc,
+    })
 
 -- The entry analysis `uri`'s last publish kept, if it analyzed `src` over the
 -- graph `current` names.
@@ -1725,20 +1727,20 @@ publishProjectDiagnostics runtimeSrc coreSrc uri text docs =
   let read = path => docsGet (uriOfPath path) docs
   -- #1362: the single-doc path (`publishDiagnosticsFrom`) runs `fileFront` UNGUARDED
   -- (no internal-extern restriction, no `--allow-internal` concept in the
-  -- LSP); kept unguarded here too (`allowInternal = True`, `trustedMods = []`)
+  -- LSP); kept unguarded here too (`openQuery`: allowInternal set, no trusted modules)
   -- so a live-edit session never flags what a build-time `check` wouldn't.
   let (keyed, results, sources) =
     analyzeProjectKeyedSources
       (stdlibExportsReader stdlibDir)
-      True
-      []
-      projectCache
-      projectParseCache
-      read
-      rootFile
-      [projectDir, stdlibDir]
-      runtimeSrc
-      coreSrc
+      (openQuery ProjectLoad {
+        plCache = projectCache,
+        plParseCache = projectParseCache,
+        plRead = read,
+        plEntry = rootFile,
+        plRoots = [projectDir, stdlibDir],
+        plRuntimeSrc = runtimeSrc,
+        plCoreSrc = coreSrc,
+      })
   publishEach docs sources results
   -- A resolve-blocked entry is not the last module the drive checked, so its
   -- report holds another module's locals and seed: nothing is kept.

@@ -232,7 +232,7 @@ runs:
         fi
         live="$( { printf '%s\n' "$closure"; \
                    find stdlib -name '*.mdk' -not -name '*_test.mdk' -print; \
-                   find runtime -name '*.c' -print; } \
+                   find runtime \( -name '*.c' -o -name '*.h' \) -print; } \
                  | LC_ALL=C sort -u \
                  | while IFS= read -r f; do printf '%s\n' "$f"; cat "$f"; done \
                  | sha256sum | cut -d' ' -f1 )"

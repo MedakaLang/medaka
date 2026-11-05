@@ -1,5 +1,5 @@
 # META
-source_lines=2498
+source_lines=2501
 stages=TYPES
 diagnostics=TYPES
 # SOURCE
@@ -2501,6 +2501,9 @@ prop "Ord Array: equal prefixes order by length" (xs : List Int) (ys : List Int)
   eq
     (compare (arrayFromList xs) (arrayFromList (xs ++ ys)))
     (compare (length xs) (length (xs ++ ys)))
+
+export extern data Process (p : Authority Exec)
+export extern data LaunchTicket (p : Authority Exec)
 # TYPES
 eq : a -> a -> Bool
 append : a -> a -> a

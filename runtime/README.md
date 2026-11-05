@@ -81,3 +81,9 @@ clang /tmp/x.ll runtime/medaka_rt.c -o /tmp/x && /tmp/x
 `clang` (Apple clang ≥ 15 / any LLVM ≥ 15 with opaque pointers) compiles textual
 LLVM IR directly — no `llc`/`opt` needed. The harmless `overriding the module target
 triple` warning on stderr is expected (the emitted module carries no triple).
+
+`medaka_process.c` owns direct-child process handles and launch tickets. Native
+builds link it alongside `medaka_rt.c`; `medaka_process.h` and
+`medaka_runtime.h` declare the boundary between those units. The public
+`process` module exposes lifecycle operations; byte-stream operations and
+scheduler integration remain tracked by #4854.

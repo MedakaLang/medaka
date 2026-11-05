@@ -483,11 +483,11 @@ directly instead of the S-1 memo):
 
 | workload | before (min) | after (min) | note |
 |---|---:|---:|---|
-| open-file → first-diagnostic | 0.053 | 0.058 | unchanged (within noise) — this path (`analyzeLocated` → `analyzeFrom`) already routed through S-1's `parsePrelude` memo *before* this slice; S-1 already discharged it |
+| open-file → first-diagnostic | 0.053 | 0.058 | unchanged (within noise) — this path (`analyzeLocated`, since removed → `analyzeFrom`) already routed through S-1's `parsePrelude` memo *before* this slice; S-1 already discharged it |
 | keystroke → hover | 0.097 | 0.062 | **~37% faster** — `docSchemes` (hover/completion/inlayHint env build, `lsp.mdk:701-702`) was the one remaining site still calling `parseResult` on the raw prelude source on every request; this slice routes it through `parsePrelude` too |
 
 **Verdict:** S-1's memo did NOT fully discharge #2040/#962 on its own —
-`analyzeLocated`'s diagnostics path was already covered (confirmed by the
+`analyzeLocated`'s (since removed; now `analyzeFrom`'s) diagnostics path was already covered (confirmed by the
 unchanged before/after number above), but `docSchemes` was not, and it is the
 env build behind hover/completion/inlayHint. This slice wires that one
 remaining site onto the existing memo; the LSP's third prelude-parsing path,
@@ -504,7 +504,7 @@ of this one's §5.
 
 **Parity, not a behavior change**: `docSchemes` returns `List (String,
 Scheme)` (`(name, type scheme)` pairs) with no `Loc`/span field anywhere in
-its result — unlike `analyzeLocated`'s `Diag`s, nothing it produces can carry
+its result — unlike `analyzeFrom`'s `Diag`s, nothing it produces can carry
 a stale or zero-span prelude location, so swapping its prelude source from
 `parseResult`+`unwrapDecls` to the memoized `parsePrelude` changes no
 observable output. `parsePrelude`'s own doc comment establishes `parse` and

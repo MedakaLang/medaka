@@ -50,8 +50,8 @@ declare void @mdk_eputstr(i64)
 declare void @mdk_eputstrln(i64)
 declare void @mdk_flushstdout(i64)
 declare void @mdk_print_unit()
-declare void @mdk_panic(i64)
-declare void @mdk_exit(i64)
+declare void @mdk_panic(i64) noreturn
+declare void @mdk_exit(i64) noreturn
 declare i64 @mdk_array_make(i64, i64)
 declare i64 @mdk_array_copy(i64)
 declare void @mdk_array_blit(i64, i64, i64, i64, i64)
@@ -159,6 +159,17 @@ declare i64 @mdk_executable_path(i64)
 declare i64 @mdk_build_fingerprint(i64)
 declare i64 @mdk_build_commit(i64)
 declare i64 @mdk_build_date(i64)
+declare i64 @mdk_process_submit(i64, i64, i64, i64, i64, i64, i64)
+declare i64 @mdk_process_start(i64, i64, i64, i64, i64, i64, i64)
+declare i64 @mdk_process_retry_start(i64)
+declare i64 @mdk_process_check_start(i64)
+declare i64 @mdk_process_abort_start(i64)
+declare i64 @mdk_process_poll_exit(i64)
+declare i64 @mdk_process_close_stdin(i64)
+declare i64 @mdk_process_dispose(i64)
+declare i64 @mdk_process_try_read(i64, i64, i64)
+declare i64 @mdk_process_try_write(i64, i64, i64, i64)
+declare i64 @mdk_process_stream_fd(i64, i64)
 declare i64 @mdk_net_resolve(i64)
 declare i64 @mdk_net_tcp_connect(i64, i64)
 declare i64 @mdk_net_tcp_listen(i64, i64)
@@ -213,6 +224,7 @@ declare i64 @mdk_monotonic_sec(i64)
 declare void @mdk_sleep_ms(i64)
 declare i64 @mdk_alloc_bytes(i64)
 declare void @mdk_stash_run_stdout(i64)
+declare void @mdk_set_abort_report(i64, i64)
 declare void @mdk_enable_run_stdout_flush(i64)
 
 ; mdk-module program
@@ -249,19 +261,19 @@ entry:
   %t15 = ptrtoint ptr %t12 to i64
   %t16 = call i64 @mdk.impl.7a5a5f35665f5f35665f757365725f35665f5f35665f5f32655f4d794c697374.636f6d70617265(i64 ptrtoint (ptr @mdk.gen.dictcell.70726f6772616d..0 to i64), i64 %t7, i64 %t15)
   %t17 = alloca i64
-  %t19 = icmp eq i64 %t16, 1
+  %t19 = icmp eq i64 %t16, 8589934593
   br i1 %t19, label %conyes20, label %connext20
 conyes20:
   store i64 3, ptr %t17
   br label %decend18
 connext20:
-  %t21 = icmp eq i64 %t16, 3
+  %t21 = icmp eq i64 %t16, 8589934595
   br i1 %t21, label %conyes22, label %connext22
 conyes22:
   store i64 5, ptr %t17
   br label %decend18
 connext22:
-  %t23 = icmp eq i64 %t16, 5
+  %t23 = icmp eq i64 %t16, 8589934597
   br i1 %t23, label %conyes24, label %connext24
 conyes24:
   store i64 7, ptr %t17
@@ -286,7 +298,7 @@ entry:
   %t5 = icmp ne i64 %t4, 0
   br i1 %t5, label %then6, label %else6
 then6:
-  ret i64 1
+  ret i64 8589934593
 else6:
   %t7 = icmp sgt i64 %arg0, %arg1
   %t8 = zext i1 %t7 to i64
@@ -296,9 +308,9 @@ else6:
   %t12 = icmp ne i64 %t11, 0
   br i1 %t12, label %then13, label %else13
 then13:
-  ret i64 5
+  ret i64 8589934597
 else13:
-  ret i64 3
+  ret i64 8589934595
 }
 
 ; mdk-module impl.5f5f757365725f5f3a3a4f72647c285f5f757365725f5f2e4d794c6973742061297c.636f6d70617265
@@ -325,7 +337,7 @@ conyes11:
   %t19 = icmp eq i64 %t18, 281474976710657
   br i1 %t19, label %conyes20, label %connext20
 conyes20:
-  store i64 3, ptr %t0
+  store i64 8589934595, ptr %t0
   br label %decend1
 connext20:
   br label %clause2
@@ -342,7 +354,7 @@ clause2:
   %t29 = icmp eq i64 %t28, 281474976710657
   br i1 %t29, label %conyes30, label %connext30
 conyes30:
-  store i64 1, ptr %t0
+  store i64 8589934593, ptr %t0
   br label %decend1
 connext30:
   br label %clause21
@@ -357,7 +369,7 @@ clause21:
   %t39 = icmp eq i64 %t38, 281474976710657
   br i1 %t39, label %conyes40, label %connext40
 conyes40:
-  store i64 5, ptr %t0
+  store i64 8589934597, ptr %t0
   br label %decend1
 connext40:
   br label %clause31
@@ -407,7 +419,7 @@ conyes64:
   %t81 = getelementptr i8, ptr %t80, i64 16
   %t82 = load i64, ptr %t81
   %t83 = call i64 @mdk.slotcall.3(i64 %arg0, i64 0, i64 %t73, i64 %t79) ; slot __user__::Ord.compare
-  %t84 = icmp eq i64 %t83, 3
+  %t84 = icmp eq i64 %t83, 8589934595
   br i1 %t84, label %conyes85, label %connext85
 conyes85:
   %t86 = musttail call i64 @mdk.impl.7a5a5f35665f5f35665f757365725f35665f5f35665f5f32655f4d794c697374.636f6d70617265(i64 %arg0, i64 %t76, i64 %t82)

@@ -1,5 +1,5 @@
 # META
-source_lines=3550
+source_lines=3362
 stages=DESUGAR,MARK
 # SOURCE
 import support.diag_codes.{DiagCode(..)}
@@ -43,12 +43,14 @@ import frontend.resolve.{
   ResError,
   resolveProgramG2,
   internalGuardFor,
+  moduleTrusted,
   ppResError,
   resErrorLoc,
   resErrorCode,
   resErrorDidYouMean,
   resErrorIsPrivateName,
   resolveModuleG,
+  ResolveWalk(..),
   resolveModulesErrorsByFile,
   importedCtorDeclsStep,
   importerSubject,
@@ -626,19 +628,6 @@ analyze : String -> String -> String -> List Diag
 analyze runtimeSrc coreSrc progSrc =
   analyzeFrom noStdlibExports "" runtimeSrc coreSrc (parse progSrc)
 
--- B.10.2b: the target is parsed with `parseLocated`, so the ELoc wrappers carry
--- REAL line/col spans (the pure `parse` carries placeholder locs).  Type-error
--- Diags then surface the true expr-level span; runtime/core stay on `parse`
--- (their locs are never reported).  Unguarded for internal-only externs.
-export
-analyzeLocated : (List String -> <e> List (String, List String)) ->
-  String ->
-  String ->
-  String ->
-  <e> List Diag
-analyzeLocated exportsFor runtimeSrc coreSrc progSrc =
-  analyzeFrom exportsFor "" runtimeSrc coreSrc (parseLocated progSrc)
-
 -- The raw-tree half of a single file's front end, plus the derived trees its
 -- drive consumes.  `surfaceDiags` holds the first groups of the file's fixed
 -- result order (derives, guard exhaustiveness, prelude-standalone shadows,
@@ -657,7 +646,7 @@ data SurfaceAnalysis = SurfaceAnalysis {
 
 -- One file's diagnostics, unguarded, parameterised over the already-parsed
 -- target program (so `analyze` can pass placeholder-loc `parse` decls and
--- `analyzeLocated` real-loc `parseLocated` decls).  `modName` names THIS module
+-- the project drive real-loc `parseLocated` decls).  `modName` names THIS module
 -- in module-scoped diagnostic text (#1499's `W-PRELUDE-METHOD-SHADOW`).
 -- "" = the caller has no module id in hand (the LSP live buffer, the
 -- playground, an inline `source`), and the text falls back to "this module".
@@ -1012,7 +1001,7 @@ frontEnd exportsFor drive fi = match fi.fiProgram
         fi.fiRuntimeSrc
         fi.fiCoreSrc
         raw
-        (internalGuardFor (fi.fiAllowInternal || contains mid fi.fiTrusted))
+        (internalGuardFor (moduleTrusted fi.fiAllowInternal fi.fiTrusted mid))
     match s.resolveClean
       False => undrivenOutput [(path, s.surfaceDiags)]
       True =>
@@ -1038,37 +1027,26 @@ frontEnd exportsFor drive fi = match fi.fiProgram
       fdPairs = pairs,
       fdMods = mods,
     }
+    let walk = ResolveWalk {
+      rwAllowInternal = fi.fiAllowInternal,
+      rwTrusted = fi.fiTrusted,
+      rwSibling = fi.fiInputs.diSibling,
+      rwPreludeKey = preludeKey,
+      rwRuntime = rt,
+      rwPrelude = core,
+    }
     match fi.fiPolicy
       NeverDriveRejected =>
         let resolved =
           hintResErrorPairs
             exportsFor
-            (resolveModulesErrorsByFile
-              (map modIdToPath mods)
-              fi.fiAllowInternal
-              fi.fiTrusted
-              fi.fiInputs.diSibling
-              preludeKey
-              rt
-              core
-              pairs)
+            (resolveModulesErrorsByFile (map modIdToPath mods) walk pairs)
         match anyList (p => not (isEmpty (snd p))) resolved
           True => undrivenOutput (map resolveBucket resolved)
           False =>
             drivenGraph drive None driveIn (seedAll (map midPath mods) [])
       DriveUnblocked chainKey steps =>
-        let buckets =
-          resolvedBuckets
-            exportsFor
-            fi.fiAllowInternal
-            fi.fiTrusted
-            fi.fiInputs.diSibling
-            preludeKey
-            chainKey
-            rt
-            core
-            mods
-            pairs
+        let buckets = resolvedBuckets exportsFor walk chainKey mods pairs
         match bucketsResolveRejected buckets
           True =>
             let (r, outputs, results) =
@@ -1399,6 +1377,14 @@ wrappedRead cacheRef staleRef parseCacheRef read path = do
         None => Some src  -- no cached version → use the broken one
 -- fall back to the last source that parsed
 
+-- `wrappedRead` over a load's own caches and reader, collecting into `staleRef`.
+wrappedReadFor : ProjectLoad ->
+  Ref (List (String, Diag)) ->
+  String ->
+  Option String
+wrappedReadFor load staleRef path =
+  wrappedRead load.plCache staleRef load.plParseCache load.plRead path
+
 export
 parseErrDiag : String -> ParseError -> Diag
 parseErrDiag path e = parseDiagnosticToDiag path (parseErrorDiagnostic e)
@@ -1425,7 +1411,56 @@ parseErrDiag path e = parseDiagnosticToDiag path (parseErrorDiagnostic e)
 preludeDesugared : String -> List Decl
 preludeDesugared src = desugaredPrelude src
 
--- `allowInternal`/`trustedMods` gate the internal-extern guard on the RESOLVE
+-- One project-analysis load: the caches and reader it goes through, the entry and
+-- search roots it walks from, and the runtime/core prelude sources it checks
+-- against.  `plCache` persists last-good sources across calls; `plParseCache` lets
+-- an unchanged module skip re-parsing.
+public export data ProjectLoad = ProjectLoad {
+  plCache : Ref (List (String, String)),
+  plParseCache : Ref (OrdMap (List Decl)),
+  plRead : String -> Option String,
+  plEntry : String,
+  plRoots : List String,
+  plRuntimeSrc : String,
+  plCoreSrc : String,
+}
+
+-- A `ProjectLoad` plus the internal-extern trust the resolve pass applies.
+public export data ProjectQuery = ProjectQuery {
+  pqLoad : ProjectLoad,
+  pqAllowInternal : Bool,
+  pqTrusted : List String,
+}
+
+-- A load with fresh, call-private caches.  A caller whose caches must outlive the
+-- call (the LSP's session caches) builds its own `ProjectLoad`.
+export
+freshLoad : (String -> Option String) ->
+  String ->
+  List String ->
+  String ->
+  String ->
+  ProjectLoad
+freshLoad read entry roots runtimeSrc coreSrc = ProjectLoad {
+  plCache = Ref [],
+  plParseCache = Ref omEmpty,
+  plRead = read,
+  plEntry = entry,
+  plRoots = roots,
+  plRuntimeSrc = runtimeSrc,
+  plCoreSrc = coreSrc,
+}
+
+-- The query that trusts every module: `allowInternal` set, no trusted-module list.
+export
+openQuery : ProjectLoad -> ProjectQuery
+openQuery load = ProjectQuery {
+  pqLoad = load,
+  pqAllowInternal = True,
+  pqTrusted = [],
+}
+
+-- `pqAllowInternal`/`pqTrusted` gate the internal-extern guard on the RESOLVE
 -- pass exactly as `resolveModulesErrorsPairsG` (the human `check`/`run`/`build`
 -- multi-module gate) already does: a module is trusted (no internalExterns
 -- restriction) when `allowInternal` is set OR its modId is in `trustedMods`
@@ -1436,59 +1471,21 @@ preludeDesugared src = desugaredPrelude src
 -- human `check` correctly rejected via the guarded path.
 export
 analyzeProject : (List String -> <e> List (String, List String)) ->
-  Bool ->
-  List String ->
-  Ref (List (String, String)) ->
-  Ref (OrdMap (List Decl)) ->
-  (String -> Option String) ->
-  String ->
-  List String ->
-  String ->
-  String ->
+  ProjectQuery ->
   <IO | e> List (String, List Diag)
-analyzeProject exportsFor allowInternal trustedMods cacheRef parseCacheRef read entry roots runtimeSrc coreSrc =
-  let (_, results) =
-    analyzeProjectFull
-      exportsFor
-      allowInternal
-      trustedMods
-      cacheRef
-      parseCacheRef
-      read
-      entry
-      roots
-      runtimeSrc
-      coreSrc
+analyzeProject exportsFor query =
+  let (_, results) = analyzeProjectFull exportsFor query
   results
 
 -- `analyzeProject` also handing back the per-module `(schemes, errs, warns)` the
--- graph driver produced — see `typecheckPassFull`.  A load failure never reaches a
+-- graph driver produced — see `typecheckPassReport`.  A load failure never reaches a
 -- typecheck, so its per-module list is empty and only the diagnostics it attributes
 -- to the entry file carry any verdict.
 analyzeProjectFull : (List String -> <e> List (String, List String)) ->
-  Bool ->
-  List String ->
-  Ref (List (String, String)) ->
-  Ref (OrdMap (List Decl)) ->
-  (String -> Option String) ->
-  String ->
-  List String ->
-  String ->
-  String ->
+  ProjectQuery ->
   <IO | e> (List ModDiags, List (String, List Diag))
-analyzeProjectFull exportsFor allowInternal trustedMods cacheRef parseCacheRef read entry roots runtimeSrc coreSrc =
-  let (report, results) =
-    analyzeProjectReport
-      exportsFor
-      allowInternal
-      trustedMods
-      cacheRef
-      parseCacheRef
-      read
-      entry
-      roots
-      runtimeSrc
-      coreSrc
+analyzeProjectFull exportsFor query =
+  let (report, results) = analyzeProjectReport exportsFor query
   match report
     Some r => (r.trDiagnostics, results)
     None => ([], results)
@@ -1497,29 +1494,10 @@ analyzeProjectFull exportsFor allowInternal trustedMods cacheRef parseCacheRef r
 -- on a load failure, which reaches no typecheck).
 export
 analyzeProjectReport : (List String -> <e> List (String, List String)) ->
-  Bool ->
-  List String ->
-  Ref (List (String, String)) ->
-  Ref (OrdMap (List Decl)) ->
-  (String -> Option String) ->
-  String ->
-  List String ->
-  String ->
-  String ->
+  ProjectQuery ->
   <IO | e> (Option TcReport, List (String, List Diag))
-analyzeProjectReport exportsFor allowInternal trustedMods cacheRef parseCacheRef read entry roots runtimeSrc coreSrc =
-  let (keyed, results) =
-    analyzeProjectKeyed
-      exportsFor
-      allowInternal
-      trustedMods
-      cacheRef
-      parseCacheRef
-      read
-      entry
-      roots
-      runtimeSrc
-      coreSrc
+analyzeProjectReport exportsFor query =
+  let (keyed, results) = analyzeProjectKeyed exportsFor query
   (map (k => fst (fst k)) keyed, results)
 
 -- A loaded graph's identity: the entry's module id, and `moduleStepKey` of every
@@ -1552,86 +1530,64 @@ graphIdSame a b =
 -- drive and the identity of the graph its load read.
 export
 analyzeProjectKeyed : (List String -> <e> List (String, List String)) ->
-  Bool ->
-  List String ->
-  Ref (List (String, String)) ->
-  Ref (OrdMap (List Decl)) ->
-  (String -> Option String) ->
-  String ->
-  List String ->
-  String ->
-  String ->
+  ProjectQuery ->
   <IO | e> (Option ((TcReport, DriveOutputs), GraphId), List (String, List Diag))
-analyzeProjectKeyed exportsFor allowInternal trustedMods cacheRef parseCacheRef read entry roots runtimeSrc coreSrc =
+analyzeProjectKeyed exportsFor query =
+  let load = query.pqLoad
   let staleRef = newStale ()
-  let wread = p => wrappedRead cacheRef staleRef parseCacheRef read p
+  let wread = wrappedReadFor load staleRef
   projectKeyedFromLoad
     exportsFor
-    allowInternal
-    trustedMods
-    entry
-    roots
-    runtimeSrc
-    coreSrc
+    query
     staleRef
-    (loadProgramFilesLocatedCachedE parseCacheRef wread entry roots)
+    (loadProgramFilesLocatedCachedE
+      load.plParseCache
+      wread
+      load.plEntry
+      load.plRoots)
 
 export
 analyzeProjectKeyedSources : (List String -> <e> List (String, List String)) ->
-  Bool ->
-  List String ->
-  Ref (List (String, String)) ->
-  Ref (OrdMap (List Decl)) ->
-  (String -> Option String) ->
-  String ->
-  List String ->
-  String ->
-  String ->
+  ProjectQuery ->
   <IO | e> (Option ((TcReport, DriveOutputs), GraphId), List (String, List Diag), OrdMap String)
-analyzeProjectKeyedSources exportsFor allowInternal trustedMods cacheRef parseCacheRef read entry roots runtimeSrc coreSrc =
+analyzeProjectKeyedSources exportsFor query =
+  let load = query.pqLoad
   let staleRef = newStale ()
-  let wread = p => wrappedRead cacheRef staleRef parseCacheRef read p
+  let wread = wrappedReadFor load staleRef
   let (loaded, sources) =
-    loadProgramFilesLocatedCachedSourcesE parseCacheRef wread entry roots
-  let (keyed, diags) =
-    projectKeyedFromLoad
-      exportsFor
-      allowInternal
-      trustedMods
-      entry
-      roots
-      runtimeSrc
-      coreSrc
-      staleRef
-      loaded
+    loadProgramFilesLocatedCachedSourcesE
+      load.plParseCache
+      wread
+      load.plEntry
+      load.plRoots
+  let (keyed, diags) = projectKeyedFromLoad exportsFor query staleRef loaded
   (keyed, diags, sources)
 
 projectKeyedFromLoad : (List String -> <e> List (String, List String)) ->
-  Bool ->
-  List String ->
-  String ->
-  List String ->
-  String ->
-  String ->
+  ProjectQuery ->
   Ref (List (String, Diag)) ->
   Result LoadError (List (String, String, List Decl)) ->
   <IO | e> (Option ((TcReport, DriveOutputs), GraphId), List (String, List Diag))
 -- Dependency errors keep the destination file and the exact located parser error.
-projectKeyedFromLoad _exportsFor _allowInternal _trustedMods _entry _roots _runtimeSrc _coreSrc staleRef (Err (LoadParseFailed mpath _ pe)) =
+projectKeyedFromLoad _exportsFor _query staleRef (Err (LoadParseFailed mpath _ pe)) =
   (None, appendStale staleRef [(mpath, [parseErrDiag mpath pe])])
-projectKeyedFromLoad _exportsFor _allowInternal _trustedMods entry _roots _runtimeSrc _coreSrc staleRef (Err (LoadMsg e)) = (
+projectKeyedFromLoad _exportsFor query staleRef (Err (LoadMsg e)) = (
   None,
-  appendStale staleRef [(entry, [mkDiag SevError RModuleLoad e None])],
+  appendStale staleRef [
+    (query.pqLoad.plEntry, [mkDiag SevError RModuleLoad e None]),
+  ],
 )
 -- A located cycle or test-module import belongs to the importing module.
-projectKeyedFromLoad _exportsFor _allowInternal _trustedMods entry _roots _runtimeSrc _coreSrc staleRef (Err le) = (
+projectKeyedFromLoad _exportsFor query staleRef (Err le) = (
   None,
-  appendStale staleRef (match loadErrorSite entry le
+  appendStale staleRef (match loadErrorSite query.pqLoad.plEntry le
     Some (code, e, file, _, loc) => [(file, [mkDiag SevError code e loc])]
     None => []),
 )
-projectKeyedFromLoad exportsFor allowInternal trustedMods entry roots runtimeSrc coreSrc staleRef (Ok mods) =
-  let chainKey = chainKeyOf entry roots
+projectKeyedFromLoad exportsFor query staleRef (Ok mods) =
+  let load = query.pqLoad
+  let roots = load.plRoots
+  let chainKey = chainKeyOf load.plEntry roots
   let front =
     frontEnd
       exportsFor
@@ -1640,10 +1596,10 @@ projectKeyedFromLoad exportsFor allowInternal trustedMods entry roots runtimeSrc
         fiInputs = { driveInputsFor !selectedProfile False [] |
           diSibling = siblingPairsOf roots mods,
         },
-        fiAllowInternal = allowInternal,
-        fiTrusted = trustedMods,
-        fiRuntimeSrc = runtimeSrc,
-        fiCoreSrc = coreSrc,
+        fiAllowInternal = query.pqAllowInternal,
+        fiTrusted = query.pqTrusted,
+        fiRuntimeSrc = load.plRuntimeSrc,
+        fiCoreSrc = load.plCoreSrc,
         fiPolicy = DriveUnblocked chainKey RecordSteps,
         fiProgram = FrontGraph mods (desugaredModPairs mods),
       }
@@ -1656,65 +1612,6 @@ projectKeyedFromLoad exportsFor allowInternal trustedMods entry roots runtimeSrc
 bucketsResolveRejected : List (String, List Diag) -> Bool
 bucketsResolveRejected buckets = anyList (b => resolveRejected (snd b)) buckets
 
--- `analyzeProject` minus the load: resolve, then typecheck, then bucket — over a
--- graph the caller has already loaded.  `medaka test` loads once and calls this,
--- rather than handing `analyzeProject` an entry it would load a second time.
-export
-projectDiagsLoaded : (List String -> <e> List (String, List String)) ->
-  Bool ->
-  List String ->
-  List Decl ->
-  List Decl ->
-  Option (Int, Int) ->
-  String ->
-  List (String, String, List Decl) ->
-  <e> List (String, List Diag)
-projectDiagsLoaded exportsFor allowInternal trustedMods runtimeP coreP preludeKey chainKey mods =
-  snd
-    (projectDiagsLoadedFull
-      exportsFor
-      allowInternal
-      trustedMods
-      runtimeP
-      coreP
-      preludeKey
-      chainKey
-      mods
-      (desugaredModPairs mods))
-
--- `projectDiagsLoaded` also handing back the per-module `(schemes, errs, warns)` --
--- see `typecheckPassFull`.  `modPairs` is the caller's `desugaredModPairs mods`:
--- the resolve half and the typecheck half read the same trees.
-projectDiagsLoadedFull : (List String -> <e> List (String, List String)) ->
-  Bool ->
-  List String ->
-  List Decl ->
-  List Decl ->
-  Option (Int, Int) ->
-  String ->
-  List (String, String, List Decl) ->
-  List (String, List Decl) ->
-  <e> (List ModDiags, List (String, List Diag))
-projectDiagsLoadedFull exportsFor allowInternal trustedMods runtimeP coreP preludeKey chainKey mods modPairs =
-  typecheckPassFull
-    (driveInputsFor !selectedProfile False [])
-    runtimeP
-    coreP
-    preludeKey
-    chainKey
-    mods
-    modPairs
-    (resolvedBuckets
-      exportsFor
-      allowInternal
-      trustedMods
-      []
-      preludeKey
-      chainKey
-      runtimeP
-      coreP
-      mods
-      modPairs)
 -- A load error (cycle / unknown module / unreadable file) is attributed to the
 -- entry file (the compiler loader returns a single Err string without a per-file
 -- split, unlike the OCaml attribute_load_error; entry is the conservative
@@ -1726,69 +1623,32 @@ projectDiagsLoadedFull exportsFor allowInternal trustedMods runtimeP coreP prelu
 -- prelude's schemes, the entry's locals and seed) is dropped.  None on a load
 -- error (a buffer with an unresolved import).
 export
-projectEntrySchemes : Ref (List (String, String)) ->
-  Ref (OrdMap (List Decl)) ->
-  (String -> Option String) ->
-  String ->
-  List String ->
-  String ->
-  String ->
-  <IO> Option (List (String, PubScheme))
-projectEntrySchemes cacheRef parseCacheRef read entry roots runtimeSrc coreSrc =
-  map
-    (pa => publishedEntrySchemes pa.paSchemes)
-    (projectEntryAnalysis
-      cacheRef
-      parseCacheRef
-      read
-      entry
-      roots
-      runtimeSrc
-      coreSrc)
+projectEntrySchemes : ProjectLoad -> <IO> Option (List (String, PubScheme))
+projectEntrySchemes load =
+  map (pa => publishedEntrySchemes pa.paSchemes) (projectEntryAnalysis load)
 
 -- `projectEntrySchemes` handing back its drive's `PartialAnalysis`: every
 -- module's schemes, the prelude's, and the last-checked module's locals and seed.
-projectEntryAnalysis : Ref (List (String, String)) ->
-  Ref (OrdMap (List Decl)) ->
-  (String -> Option String) ->
-  String ->
-  List String ->
-  String ->
-  String ->
-  <IO> Option PartialAnalysis
-projectEntryAnalysis cacheRef parseCacheRef read entry roots runtimeSrc coreSrc =
-  projectEntryAnalysisOr
-    (_ => None)
-    cacheRef
-    parseCacheRef
-    read
-    entry
-    roots
-    runtimeSrc
-    coreSrc
+projectEntryAnalysis : ProjectLoad -> <IO> Option PartialAnalysis
+projectEntryAnalysis load = projectEntryAnalysisOr (_ => None) load
 
 -- `projectEntryAnalysis` that first asks `kept` for an analysis of the graph it
 -- loaded, and drives only when `kept` has none.
 export
 projectEntryAnalysisOr : (GraphId -> Option PartialAnalysis) ->
-  Ref (List (String, String)) ->
-  Ref (OrdMap (List Decl)) ->
-  (String -> Option String) ->
-  String ->
-  List String ->
-  String ->
-  String ->
+  ProjectLoad ->
   <IO> Option PartialAnalysis
-projectEntryAnalysisOr kept cacheRef parseCacheRef read entry roots runtimeSrc coreSrc =
+projectEntryAnalysisOr kept load =
+  let roots = load.plRoots
   let staleRef = newStale ()
-  let wread = p => wrappedRead cacheRef staleRef parseCacheRef read p
-  let runtimeP = preludeDesugared runtimeSrc
-  let coreP = preludeDesugared coreSrc
+  let wread = wrappedReadFor load staleRef
+  let runtimeP = preludeDesugared load.plRuntimeSrc
+  let coreP = preludeDesugared load.plCoreSrc
   -- #2719 (a1): the SAME prelude key `analyzeProject` mints, so hover/completion
   -- shares the process-wide prelude interface instead of re-typechecking and
   -- re-solving runtime + core on every request.
-  let preludeKey = Some (preludeGeneration runtimeSrc coreSrc)
-  match loadProgramFilesLocatedCached parseCacheRef wread entry roots
+  let preludeKey = Some (preludeGeneration load.plRuntimeSrc load.plCoreSrc)
+  match loadProgramFilesLocatedCached load.plParseCache wread load.plEntry roots
     Err _ => None
     Ok mods => match kept (graphIdOf mods)
       Some pa => Some pa
@@ -1840,40 +1700,33 @@ foldStale ((path, d) :: rest) buckets =
 -- ── resolve pass (per module, threading exports) ────────────────────────────
 -- Mirror analyze_project's resolve loop: resolveModuleG per module in dependency
 -- order, accumulating ModuleExports, bucketing each module's errors by its file.
--- #1362: guarded via `allowInternal`/`trustedMods` exactly like
--- `resolveModulesErrorsPairsG` (the human check/run/build multi-module gate) —
--- previously always called the unguarded `resolveModule` (implicit
--- `internalGuard = []`), so this pass never rejected an internal-extern
--- violation regardless of caller intent.
+-- Guarded via `rwAllowInternal`/`rwTrusted` exactly like
+-- `resolveModulesErrorsPairsG` (the human check/run/build multi-module gate), so
+-- this pass rejects an internal-extern violation the way that gate does (#1362).
 -- Resolve errors have no per-error loc in the compiler pipeline → None.
--- #926: `known` is now a Map keyed by module id (mirrors resolve.mdk's driver),
--- so each module's imports resolve via an O(log n) `findExports` lookup instead of a
--- linear scan of a growing `List ModuleExports`.  Threaded byte-identically:
--- `omInsert exp.modId exp known` replaces the `exp :: known` prepend.
+-- `known` is a Map keyed by module id (as in resolve.mdk's driver): each module's
+-- imports resolve via an O(log n) `findExports` lookup, and `omInsert exp.modId
+-- exp known` threads each module's exports to the next.
 --
 -- `mods`' decls are already DESUGARED (the caller shares one `desugarModule` per
 -- module with the typecheck half).  [served] is the chain key of an analyze that
 -- serves each module's verdict from `passCacheRef`, `None` for one that resolves
 -- every module afresh; [ids] holds the resolve identities of the modules before.
 resolvePass : (List String -> <e> List (String, List String)) ->
-  Bool ->
-  List String ->
+  ResolveWalk ->
   (String -> Option (String, List Decl)) ->
-  Option (Int, Int) ->
-  List Decl ->
-  List Decl ->
   Option String ->
   OrdMap ModuleExports ->
   OrdMap Int ->
   List (String, String, List Decl) ->
   List (String, List Diag) ->
   <e> List (String, List Diag)
--- Bound: with a 12-parameter head the formatter puts the body on its own line, where
--- a following `where` does not parse, so the where-go form cannot be written.
+-- Bound: written as a where-local `go`, the body is refused: `resolvePass runs the
+-- caller-chosen row <(a | b)> where only <a> is allowed` against the declared `<e>`.
 -- lint-disable-next-line rule-threaded-invariant
-resolvePass _ _ _ _ _ _ _ _ _ _ [] buckets = buckets
-resolvePass exportsFor allowInternal trustedMods subjectOf preludeKey rt core served known ids ((m@(mid, path, desugared)) :: rest) buckets =
-  let trusted = allowInternal || contains mid trustedMods
+resolvePass _ _ _ _ _ _ [] buckets = buckets
+resolvePass exportsFor walk subjectOf served known ids ((m@(mid, path, desugared)) :: rest) buckets =
+  let trusted = moduleTrusted walk.rwAllowInternal walk.rwTrusted mid
   -- A module's verdict reads, beside its own decls and its imports' exports, its
   -- trust (#1362), whether any module came before it (a missing import is
   -- `UnknownModule` after the first module and a stub in the first), and whether
@@ -1893,21 +1746,17 @@ resolvePass exportsFor allowInternal trustedMods subjectOf preludeKey rt core se
       resolveModuleG
         (internalGuardFor trusted)
         subject
-        preludeKey
-        rt
-        core
+        walk.rwPreludeKey
+        walk.rwRuntime
+        walk.rwPrelude
         known
         mid
         desugared
     (map diagOfResError (hintResErrors exportsFor errs), exp))
   resolvePass
     exportsFor
-    allowInternal
-    trustedMods
+    walk
     subjectOf
-    preludeKey
-    rt
-    core
     served
     (omInsert exp.modId exp known)
     (withIdentity mid ident ids)
@@ -1932,37 +1781,12 @@ boolKey False = "F"
 -- Guard-exhaustiveness warnings still come from the RAW (pre-desugar) module decls
 -- (checkGuardExhaustiveness needs the surface `EGuards` shape, gone after desugar),
 -- bucketed per file alongside the module's type diagnostics.
--- It hands back the per-module `(schemes, errs, warns)` the driver produced
--- beside the bucketed diagnostics; `medaka test`'s gate takes `snd`.
+-- It hands back the drive's whole report and outputs, whose `trDiagnostics` is
+-- the per-module `(schemes, errs, warns)` list, beside the bucketed diagnostics.
 -- `typecheckDiagsFold` keeps consuming exactly `(errs, warns)`: the schemes are
 -- a projection beside the fold, never an input to it.  `modPairs` is the
--- caller's, so the graph is desugared once per analyze.
-typecheckPassFull : DriveInputs ->
-  List Decl ->
-  List Decl ->
-  Option (Int, Int) ->
-  String ->
-  List (String, String, List Decl) ->
-  List (String, List Decl) ->
-  List (String, List Diag) ->
-  (List ModDiags, List (String, List Diag))
-typecheckPassFull inputs runtimeP coreP preludeKey chainKey mods modPairs buckets =
-  let (r, _, results) =
-    typecheckPassReport
-      NoSteps
-      inputs
-      runtimeP
-      coreP
-      preludeKey
-      chainKey
-      mods
-      modPairs
-      buckets
-  (r.trDiagnostics, results)
-
--- `typecheckPassFull` returning the drive's whole report and outputs, whose
--- `trDiagnostics` is the per-module list.  `frontEnd` runs it over a graph
--- resolve rejected under `DriveUnblocked`.
+-- caller's, so the graph is desugared once per analyze.  `frontEnd` runs it over
+-- a graph resolve rejected under `DriveUnblocked`.
 typecheckPassReport : ChainSteps ->
   DriveInputs ->
   List Decl ->
@@ -2065,7 +1889,7 @@ stepKeysFor : ChainSteps ->
 stepKeysFor RecordSteps mods = map moduleStepKey mods
 stepKeysFor NoSteps _ = []
 
--- The non-typecheck half of `typecheckPassFull`, over per-module `(errs, warns)` a
+-- The non-typecheck half of `typecheckPassReport`, over per-module `(errs, warns)` a
 -- driver already produced: fold in each module's guard-exhaustiveness, `deriving`
 -- and prelude-standalone-shadow diagnostics and bucket the lot by file path.
 -- `frontEnd` reaches it with whatever the verb's drive returned (for `run`,
@@ -2146,35 +1970,25 @@ foldServeKey RecordSteps (Some (rk, ck)) chainKey =
 foldServeKey _ _ _ = None
 
 -- Resolve a graph the caller has already loaded, bucketing each module's errors
--- by its file.  The shared prefix of `projectDiagsLoaded` and `frontEnd`'s
--- `DriveUnblocked` arm, which differ only in where the typecheck half comes
--- from.  They resolve identically so their verdicts agree on a channel that has
--- nothing to do with typing.
+-- by its file.  `frontEnd`'s `DriveUnblocked` arm resolves through it, so the
+-- verdicts on a channel that has nothing to do with typing agree with the
+-- `NeverDriveRejected` arm's `resolveModulesErrorsByFile`.
 resolvedBuckets : (List String -> <e> List (String, List String)) ->
-  Bool ->
-  List String ->
-  List SiblingPair ->
-  Option (Int, Int) ->
+  ResolveWalk ->
   String ->
-  List Decl ->
-  List Decl ->
   List (String, String, List Decl) ->
   List (String, List Decl) ->
   <e> List (String, List Diag)
-resolvedBuckets exportsFor allowInternal trustedMods sibling preludeKey chainKey runtimeP coreP mods modPairs =
+resolvedBuckets exportsFor walk chainKey mods modPairs =
   -- A keyed prelude serves each module's verdict from `passCacheRef`; unkeyed,
   -- nothing is served or recorded, and no key is built.  The caches keep this
   -- graph's modules and no others.
-  if isSome preludeKey then retainPassEntries (map modIdOf mods)
+  if isSome walk.rwPreludeKey then retainPassEntries (map modIdOf mods)
   resolvePass
     exportsFor
-    allowInternal
-    trustedMods
-    (importerSubject sibling modPairs)
-    preludeKey
-    runtimeP
-    coreP
-    (map ((rk, ck) => chainFullKey rk ck chainKey) preludeKey)
+    walk
+    (importerSubject walk.rwSibling modPairs)
+    (map ((rk, ck) => chainFullKey rk ck chainKey) walk.rwPreludeKey)
     omEmpty
     omEmpty
     (desugaredTriples mods modPairs)
@@ -2574,20 +2388,9 @@ analyzeProjectToLines : Ref (List (String, String)) ->
   String ->
   <IO> String
 analyzeProjectToLines cacheRef read entry roots runtimeSrc coreSrc =
-  let parseCacheRef = Ref omEmpty
-  joinNl
-    (projectLines
-      (analyzeProject
-        noStdlibExports
-        True
-        []
-        cacheRef
-        parseCacheRef
-        read
-        entry
-        roots
-        runtimeSrc
-        coreSrc))
+  let load =
+    { freshLoad read entry roots runtimeSrc coreSrc | plCache = cacheRef }
+  analyzeProject noStdlibExports (openQuery load) |> projectLines |> joinNl
 
 projectLines : List (String, List Diag) -> List String
 projectLines [] = []
@@ -2795,15 +2598,24 @@ pendingEnvelopeExtras = Ref []
 export
 runEnvelopeFields : Unit -> <e> List (String, Json)
 runEnvelopeFields _ =
-  let staleF = match !pendingStaleNotice
-    None => []
-    Some msg => [("staleBinary", JString msg)]
-  let preludeF =
-    map ((field, msg) => (field, JString msg)) !pendingPreludeNotices
   let perfF = match takePerfSink ()
     [] => []
     ls => [("perf", JArray (arrayFromList (map (l => JString l) ls)))]
-  staleF ++ preludeF ++ perfF ++ !pendingEnvelopeExtras
+  staleNoticeFields () ++ perfF ++ !pendingEnvelopeExtras
+
+-- `runEnvelopeFields` without the `perf` member, for an envelope rendered ahead
+-- of an abort that may never happen: reading the perf sink drains it, and the
+-- lines it holds belong to whichever channel reports the run that follows.
+export
+abortEnvelopeFields : Unit -> <e> List (String, Json)
+abortEnvelopeFields _ = staleNoticeFields () ++ !pendingEnvelopeExtras
+
+staleNoticeFields : Unit -> <e> List (String, Json)
+staleNoticeFields _ =
+  let staleF = match !pendingStaleNotice
+    None => []
+    Some msg => [("staleBinary", JString msg)]
+  staleF ++ map ((field, msg) => (field, JString msg)) !pendingPreludeNotices
 
 -- Emit the ONE `run --json` envelope on stderr — or nothing at all when there
 -- is nothing to say (no diagnostics AND no notices), which keeps a clean run on
@@ -3562,7 +3374,7 @@ checkJsonLoadErr target src _ le = match loadErrorSite target le
 (DUse false (UseGroup ("frontend" "parser") ((mem "parse" false) (mem "parseLocated" false) (mem "parseResult" false) (mem "ParseError" false) (mem "parseErrorDiagnostic" false))))
 (DUse false (UseGroup ("frontend" "desugar_cache") ((mem "desugaredPrelude" false) (mem "preludeGeneration" false))))
 (DUse false (UseGroup ("frontend" "desugar") ((mem "desugar" false) (mem "checkDerives" false))))
-(DUse false (UseGroup ("frontend" "resolve") ((mem "ResError" false) (mem "resolveProgramG2" false) (mem "internalGuardFor" false) (mem "ppResError" false) (mem "resErrorLoc" false) (mem "resErrorCode" false) (mem "resErrorDidYouMean" false) (mem "resErrorIsPrivateName" false) (mem "resolveModuleG" false) (mem "resolveModulesErrorsByFile" false) (mem "importedCtorDeclsStep" false) (mem "importerSubject" false) (mem "withStdlibExports" false) (mem "hintableUnboundNames" false) (mem "exportedValueNames" false))))
+(DUse false (UseGroup ("frontend" "resolve") ((mem "ResError" false) (mem "resolveProgramG2" false) (mem "internalGuardFor" false) (mem "moduleTrusted" false) (mem "ppResError" false) (mem "resErrorLoc" false) (mem "resErrorCode" false) (mem "resErrorDidYouMean" false) (mem "resErrorIsPrivateName" false) (mem "resolveModuleG" false) (mem "ResolveWalk" true) (mem "resolveModulesErrorsByFile" false) (mem "importedCtorDeclsStep" false) (mem "importerSubject" false) (mem "withStdlibExports" false) (mem "hintableUnboundNames" false) (mem "exportedValueNames" false))))
 (DUse false (UseGroup ("frontend" "ast") ((mem "SiblingPair" true))))
 (DUse false (UseGroup ("frontend" "visibility") ((mem "ModuleExports" false) (mem "coreExports" false) (mem "useModuleIds" false))))
 (DUse false (UseGroup ("list") ((mem "last" false))))
@@ -3660,8 +3472,6 @@ checkJsonLoadErr target src _ le = match loadErrorSite target le
 (DFunDef false "nthLineArr" ((PVar "srcLines") (PVar "n")) (EIf (EBinOp "||" (EBinOp "<" (EVar "n") (ELit (LInt 1))) (EBinOp ">" (EVar "n") (EApp (EVar "arrayLength") (EVar "srcLines")))) (EVar "None") (EIf (EVar "otherwise") (EApp (EVar "Some") (EApp (EApp (EVar "arrayGetUnsafe") (EBinOp "-" (EVar "n") (ELit (LInt 1)))) (EVar "srcLines"))) (EApp (EVar "__fallthrough__") (ELit LUnit)))))
 (DTypeSig true "analyze" (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyCon "String") (TyApp (TyCon "List") (TyCon "Diag"))))))
 (DFunDef false "analyze" ((PVar "runtimeSrc") (PVar "coreSrc") (PVar "progSrc")) (EApp (EApp (EApp (EApp (EApp (EVar "analyzeFrom") (EVar "noStdlibExports")) (ELit (LString ""))) (EVar "runtimeSrc")) (EVar "coreSrc")) (EApp (EVar "parse") (EVar "progSrc"))))
-(DTypeSig true "analyzeLocated" (TyFun (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyEffect () (Some "e") (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "String")))))) (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyCon "String") (TyEffect () (Some "e") (TyApp (TyCon "List") (TyCon "Diag"))))))))
-(DFunDef false "analyzeLocated" ((PVar "exportsFor") (PVar "runtimeSrc") (PVar "coreSrc") (PVar "progSrc")) (EApp (EApp (EApp (EApp (EApp (EVar "analyzeFrom") (EVar "exportsFor")) (ELit (LString ""))) (EVar "runtimeSrc")) (EVar "coreSrc")) (EApp (EVar "parseLocated") (EVar "progSrc"))))
 (DData Private "SurfaceAnalysis" () ((variant "SurfaceAnalysis" (ConNamed (field "surfaceDiags" (TyApp (TyCon "List") (TyCon "Diag"))) (field "resolveClean" (TyCon "Bool")) (field "surfaceDesugared" (TyApp (TyCon "List") (TyCon "Decl"))) (field "surfaceRuntimeP" (TyApp (TyCon "List") (TyCon "Decl"))) (field "surfaceCoreP" (TyApp (TyCon "List") (TyCon "Decl"))) (field "surfacePreludeKey" (TyApp (TyCon "Option") (TyTuple (TyCon "Int") (TyCon "Int"))))))) ())
 (DTypeSig true "analyzeFrom" (TyFun (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyEffect () (Some "e") (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "String")))))) (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyEffect () (Some "e") (TyApp (TyCon "List") (TyCon "Diag")))))))))
 (DFunDef false "analyzeFrom" ((PVar "exportsFor") (PVar "modName") (PVar "runtimeSrc") (PVar "coreSrc") (PVar "raw")) (EApp (EApp (EVar "flatMap") (EVar "snd")) (EFieldAccess (EApp (EApp (EApp (EApp (EApp (EApp (EVar "fileFront") (EVar "exportsFor")) (EVar "modName")) (EVar "True")) (EVar "runtimeSrc")) (EVar "coreSrc")) (EVar "raw")) "foDiags")))
@@ -3698,7 +3508,7 @@ checkJsonLoadErr target src _ le = match loadErrorSite target le
 (DTypeSig false "unkept" (TyFun (TyTuple (TyCon "TcReport") (TyCon "DriveOutputs")) (TyTuple (TyCon "Unit") (TyCon "TcReport") (TyCon "DriveOutputs"))))
 (DFunDef false "unkept" ((PTuple (PVar "r") (PVar "o"))) (ETuple (ELit LUnit) (EVar "r") (EVar "o")))
 (DTypeSig true "frontEnd" (TyFun (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyEffect () (Some "e") (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "String")))))) (TyFun (TyFun (TyCon "FrontDriveIn") (TyEffect () (Some "e") (TyTuple (TyVar "a") (TyCon "TcReport") (TyCon "DriveOutputs")))) (TyFun (TyCon "FrontInput") (TyEffect () (Some "e") (TyApp (TyCon "FrontOutput") (TyVar "a")))))))
-(DFunDef false "frontEnd" ((PVar "exportsFor") (PVar "drive") (PVar "fi")) (EMatch (EFieldAccess (EVar "fi") "fiProgram") (arm (PCon "FrontFile" (PTuple (PVar "mid") (PVar "path") (PVar "raw"))) () (EBlock (DoLet false false (PVar "s") (EApp (EApp (EApp (EApp (EApp (EApp (EVar "analyzeSurface") (EVar "exportsFor")) (EVar "mid")) (EFieldAccess (EVar "fi") "fiRuntimeSrc")) (EFieldAccess (EVar "fi") "fiCoreSrc")) (EVar "raw")) (EApp (EVar "internalGuardFor") (EBinOp "||" (EFieldAccess (EVar "fi") "fiAllowInternal") (EApp (EApp (EVar "contains") (EVar "mid")) (EFieldAccess (EVar "fi") "fiTrusted")))))) (DoExpr (EMatch (EFieldAccess (EVar "s") "resolveClean") (arm (PCon "False") () (EApp (EVar "undrivenOutput") (EListLit (ETuple (EVar "path") (EFieldAccess (EVar "s") "surfaceDiags"))))) (arm (PCon "True") () (EBlock (DoLet false false (PTuple (PVar "kept") (PVar "r") (PVar "outputs")) (EApp (EVar "drive") (ERecordCreate "FrontDriveIn" ((fa "fdInputs" (EFieldAccess (EVar "fi") "fiInputs")) (fa "fdPreludeKey" (EFieldAccess (EVar "s") "surfacePreludeKey")) (fa "fdRuntime" (EFieldAccess (EVar "s") "surfaceRuntimeP")) (fa "fdCore" (EFieldAccess (EVar "s") "surfaceCoreP")) (fa "fdPairs" (EListLit (ETuple (ELit (LString "__user__")) (EFieldAccess (EVar "s") "surfaceDesugared")))) (fa "fdMods" (EListLit)))))) (DoLet false false (PVar "tcHalf") (EApp (EVar "tcHalfOfPerModule") (EApp (EApp (EVar "map") (EVar "dropModSchemes")) (EFieldAccess (EVar "r") "trDiagnostics")))) (DoExpr (EApp (EApp (EApp (EApp (EVar "drivenOutput") (EListLit (ETuple (EVar "path") (EBinOp "++" (EFieldAccess (EVar "s") "surfaceDiags") (EVar "tcHalf"))))) (EVar "r")) (EVar "outputs")) (EVar "kept"))))))))) (arm (PCon "FrontGraph" (PVar "mods") (PVar "pairs")) () (EBlock (DoLet false false (PVar "rt") (EApp (EVar "desugaredPrelude") (EFieldAccess (EVar "fi") "fiRuntimeSrc"))) (DoLet false false (PVar "core") (EApp (EVar "desugaredPrelude") (EFieldAccess (EVar "fi") "fiCoreSrc"))) (DoLet false false (PVar "preludeKey") (EApp (EVar "Some") (EApp (EApp (EVar "preludeGeneration") (EFieldAccess (EVar "fi") "fiRuntimeSrc")) (EFieldAccess (EVar "fi") "fiCoreSrc")))) (DoLet false false (PVar "driveIn") (ERecordCreate "FrontDriveIn" ((fa "fdInputs" (EFieldAccess (EVar "fi") "fiInputs")) (fa "fdPreludeKey" (EVar "preludeKey")) (fa "fdRuntime" (EVar "rt")) (fa "fdCore" (EVar "core")) (fa "fdPairs" (EVar "pairs")) (fa "fdMods" (EVar "mods"))))) (DoExpr (EMatch (EFieldAccess (EVar "fi") "fiPolicy") (arm (PCon "NeverDriveRejected") () (EBlock (DoLet false false (PVar "resolved") (EApp (EApp (EVar "hintResErrorPairs") (EVar "exportsFor")) (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EVar "resolveModulesErrorsByFile") (EApp (EApp (EVar "map") (EVar "modIdToPath")) (EVar "mods"))) (EFieldAccess (EVar "fi") "fiAllowInternal")) (EFieldAccess (EVar "fi") "fiTrusted")) (EFieldAccess (EFieldAccess (EVar "fi") "fiInputs") "diSibling")) (EVar "preludeKey")) (EVar "rt")) (EVar "core")) (EVar "pairs")))) (DoExpr (EMatch (EApp (EApp (EVar "anyList") (ELam ((PVar "p")) (EApp (EVar "not") (EApp (EVar "isEmpty") (EApp (EVar "snd") (EVar "p")))))) (EVar "resolved")) (arm (PCon "True") () (EApp (EVar "undrivenOutput") (EApp (EApp (EVar "map") (EVar "resolveBucket")) (EVar "resolved")))) (arm (PCon "False") () (EApp (EApp (EApp (EApp (EVar "drivenGraph") (EVar "drive")) (EVar "None")) (EVar "driveIn")) (EApp (EApp (EVar "seedAll") (EApp (EApp (EVar "map") (EVar "midPath")) (EVar "mods"))) (EListLit)))))))) (arm (PCon "DriveUnblocked" (PVar "chainKey") (PVar "steps")) () (EBlock (DoLet false false (PVar "buckets") (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EVar "resolvedBuckets") (EVar "exportsFor")) (EFieldAccess (EVar "fi") "fiAllowInternal")) (EFieldAccess (EVar "fi") "fiTrusted")) (EFieldAccess (EFieldAccess (EVar "fi") "fiInputs") "diSibling")) (EVar "preludeKey")) (EVar "chainKey")) (EVar "rt")) (EVar "core")) (EVar "mods")) (EVar "pairs"))) (DoExpr (EMatch (EApp (EVar "bucketsResolveRejected") (EVar "buckets")) (arm (PCon "True") () (EBlock (DoLet false false (PTuple (PVar "r") (PVar "outputs") (PVar "results")) (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EVar "typecheckPassReport") (EVar "steps")) (EFieldAccess (EVar "fi") "fiInputs")) (EVar "rt")) (EVar "core")) (EVar "preludeKey")) (EVar "chainKey")) (EVar "mods")) (EVar "pairs")) (EVar "buckets"))) (DoExpr (ERecordCreate "FrontOutput" ((fa "foDiags" (EVar "results")) (fa "foReport" (EVar "r")) (fa "foOutputs" (EVar "outputs")) (fa "foDriven" (EVar "None"))))))) (arm (PCon "False") () (EApp (EApp (EApp (EApp (EVar "drivenGraph") (EVar "drive")) (EApp (EApp (EApp (EVar "foldServeKey") (EVar "steps")) (EVar "preludeKey")) (EVar "chainKey"))) (EVar "driveIn")) (EVar "buckets"))))))) (arm (PCon "ResolvedByGate") () (EApp (EApp (EApp (EApp (EVar "drivenGraph") (EVar "drive")) (EVar "None")) (EVar "driveIn")) (EApp (EApp (EVar "seedAll") (EApp (EApp (EVar "map") (EVar "midPath")) (EVar "mods"))) (EListLit))))))))))
+(DFunDef false "frontEnd" ((PVar "exportsFor") (PVar "drive") (PVar "fi")) (EMatch (EFieldAccess (EVar "fi") "fiProgram") (arm (PCon "FrontFile" (PTuple (PVar "mid") (PVar "path") (PVar "raw"))) () (EBlock (DoLet false false (PVar "s") (EApp (EApp (EApp (EApp (EApp (EApp (EVar "analyzeSurface") (EVar "exportsFor")) (EVar "mid")) (EFieldAccess (EVar "fi") "fiRuntimeSrc")) (EFieldAccess (EVar "fi") "fiCoreSrc")) (EVar "raw")) (EApp (EVar "internalGuardFor") (EApp (EApp (EApp (EVar "moduleTrusted") (EFieldAccess (EVar "fi") "fiAllowInternal")) (EFieldAccess (EVar "fi") "fiTrusted")) (EVar "mid"))))) (DoExpr (EMatch (EFieldAccess (EVar "s") "resolveClean") (arm (PCon "False") () (EApp (EVar "undrivenOutput") (EListLit (ETuple (EVar "path") (EFieldAccess (EVar "s") "surfaceDiags"))))) (arm (PCon "True") () (EBlock (DoLet false false (PTuple (PVar "kept") (PVar "r") (PVar "outputs")) (EApp (EVar "drive") (ERecordCreate "FrontDriveIn" ((fa "fdInputs" (EFieldAccess (EVar "fi") "fiInputs")) (fa "fdPreludeKey" (EFieldAccess (EVar "s") "surfacePreludeKey")) (fa "fdRuntime" (EFieldAccess (EVar "s") "surfaceRuntimeP")) (fa "fdCore" (EFieldAccess (EVar "s") "surfaceCoreP")) (fa "fdPairs" (EListLit (ETuple (ELit (LString "__user__")) (EFieldAccess (EVar "s") "surfaceDesugared")))) (fa "fdMods" (EListLit)))))) (DoLet false false (PVar "tcHalf") (EApp (EVar "tcHalfOfPerModule") (EApp (EApp (EVar "map") (EVar "dropModSchemes")) (EFieldAccess (EVar "r") "trDiagnostics")))) (DoExpr (EApp (EApp (EApp (EApp (EVar "drivenOutput") (EListLit (ETuple (EVar "path") (EBinOp "++" (EFieldAccess (EVar "s") "surfaceDiags") (EVar "tcHalf"))))) (EVar "r")) (EVar "outputs")) (EVar "kept"))))))))) (arm (PCon "FrontGraph" (PVar "mods") (PVar "pairs")) () (EBlock (DoLet false false (PVar "rt") (EApp (EVar "desugaredPrelude") (EFieldAccess (EVar "fi") "fiRuntimeSrc"))) (DoLet false false (PVar "core") (EApp (EVar "desugaredPrelude") (EFieldAccess (EVar "fi") "fiCoreSrc"))) (DoLet false false (PVar "preludeKey") (EApp (EVar "Some") (EApp (EApp (EVar "preludeGeneration") (EFieldAccess (EVar "fi") "fiRuntimeSrc")) (EFieldAccess (EVar "fi") "fiCoreSrc")))) (DoLet false false (PVar "driveIn") (ERecordCreate "FrontDriveIn" ((fa "fdInputs" (EFieldAccess (EVar "fi") "fiInputs")) (fa "fdPreludeKey" (EVar "preludeKey")) (fa "fdRuntime" (EVar "rt")) (fa "fdCore" (EVar "core")) (fa "fdPairs" (EVar "pairs")) (fa "fdMods" (EVar "mods"))))) (DoLet false false (PVar "walk") (ERecordCreate "ResolveWalk" ((fa "rwAllowInternal" (EFieldAccess (EVar "fi") "fiAllowInternal")) (fa "rwTrusted" (EFieldAccess (EVar "fi") "fiTrusted")) (fa "rwSibling" (EFieldAccess (EFieldAccess (EVar "fi") "fiInputs") "diSibling")) (fa "rwPreludeKey" (EVar "preludeKey")) (fa "rwRuntime" (EVar "rt")) (fa "rwPrelude" (EVar "core"))))) (DoExpr (EMatch (EFieldAccess (EVar "fi") "fiPolicy") (arm (PCon "NeverDriveRejected") () (EBlock (DoLet false false (PVar "resolved") (EApp (EApp (EVar "hintResErrorPairs") (EVar "exportsFor")) (EApp (EApp (EApp (EVar "resolveModulesErrorsByFile") (EApp (EApp (EVar "map") (EVar "modIdToPath")) (EVar "mods"))) (EVar "walk")) (EVar "pairs")))) (DoExpr (EMatch (EApp (EApp (EVar "anyList") (ELam ((PVar "p")) (EApp (EVar "not") (EApp (EVar "isEmpty") (EApp (EVar "snd") (EVar "p")))))) (EVar "resolved")) (arm (PCon "True") () (EApp (EVar "undrivenOutput") (EApp (EApp (EVar "map") (EVar "resolveBucket")) (EVar "resolved")))) (arm (PCon "False") () (EApp (EApp (EApp (EApp (EVar "drivenGraph") (EVar "drive")) (EVar "None")) (EVar "driveIn")) (EApp (EApp (EVar "seedAll") (EApp (EApp (EVar "map") (EVar "midPath")) (EVar "mods"))) (EListLit)))))))) (arm (PCon "DriveUnblocked" (PVar "chainKey") (PVar "steps")) () (EBlock (DoLet false false (PVar "buckets") (EApp (EApp (EApp (EApp (EApp (EVar "resolvedBuckets") (EVar "exportsFor")) (EVar "walk")) (EVar "chainKey")) (EVar "mods")) (EVar "pairs"))) (DoExpr (EMatch (EApp (EVar "bucketsResolveRejected") (EVar "buckets")) (arm (PCon "True") () (EBlock (DoLet false false (PTuple (PVar "r") (PVar "outputs") (PVar "results")) (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EVar "typecheckPassReport") (EVar "steps")) (EFieldAccess (EVar "fi") "fiInputs")) (EVar "rt")) (EVar "core")) (EVar "preludeKey")) (EVar "chainKey")) (EVar "mods")) (EVar "pairs")) (EVar "buckets"))) (DoExpr (ERecordCreate "FrontOutput" ((fa "foDiags" (EVar "results")) (fa "foReport" (EVar "r")) (fa "foOutputs" (EVar "outputs")) (fa "foDriven" (EVar "None"))))))) (arm (PCon "False") () (EApp (EApp (EApp (EApp (EVar "drivenGraph") (EVar "drive")) (EApp (EApp (EApp (EVar "foldServeKey") (EVar "steps")) (EVar "preludeKey")) (EVar "chainKey"))) (EVar "driveIn")) (EVar "buckets"))))))) (arm (PCon "ResolvedByGate") () (EApp (EApp (EApp (EApp (EVar "drivenGraph") (EVar "drive")) (EVar "None")) (EVar "driveIn")) (EApp (EApp (EVar "seedAll") (EApp (EApp (EVar "map") (EVar "midPath")) (EVar "mods"))) (EListLit))))))))))
 (DTypeSig false "drivenGraph" (TyFun (TyFun (TyCon "FrontDriveIn") (TyEffect () (Some "e") (TyTuple (TyVar "a") (TyCon "TcReport") (TyCon "DriveOutputs")))) (TyFun (TyApp (TyCon "Option") (TyCon "String")) (TyFun (TyCon "FrontDriveIn") (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "Diag")))) (TyEffect () (Some "e") (TyApp (TyCon "FrontOutput") (TyVar "a"))))))))
 (DFunDef false "drivenGraph" ((PVar "drive") (PVar "served") (PVar "d") (PVar "buckets")) (EBlock (DoLet false false (PTuple (PVar "kept") (PVar "r") (PVar "outputs")) (EApp (EVar "drive") (EVar "d"))) (DoLet false false (PVar "folded") (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EVar "typecheckDiagsFold") (EVar "outputs")) (EFieldAccess (EFieldAccess (EVar "d") "fdInputs") "diSibling")) (EVar "served")) (EFieldAccess (EVar "d") "fdRuntime")) (EFieldAccess (EVar "d") "fdCore")) (EFieldAccess (EVar "d") "fdMods")) (EFieldAccess (EVar "d") "fdPairs")) (EApp (EApp (EVar "map") (EVar "dropModSchemes")) (EFieldAccess (EVar "r") "trDiagnostics"))) (EVar "buckets"))) (DoExpr (EApp (EApp (EApp (EApp (EVar "drivenOutput") (EVar "folded")) (EVar "r")) (EVar "outputs")) (EVar "kept")))))
 (DTypeSig false "resolveBucket" (TyFun (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "ResError"))) (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "Diag")))))
@@ -3747,16 +3557,24 @@ checkJsonLoadErr target src _ le = match loadErrorSite target le
 (DFunDef false "cacheRemove" ((PVar "f") (PCons (PTuple (PVar "k") (PVar "v")) (PVar "rest"))) (EIf (EBinOp "==" (EVar "k") (EVar "f")) (EApp (EApp (EVar "cacheRemove") (EVar "f")) (EVar "rest")) (EIf (EVar "otherwise") (EBinOp "::" (ETuple (EVar "k") (EVar "v")) (EApp (EApp (EVar "cacheRemove") (EVar "f")) (EVar "rest"))) (EApp (EVar "__fallthrough__") (ELit LUnit)))))
 (DTypeSig false "wrappedRead" (TyFun (TyApp (TyCon "Ref") (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "String")))) (TyFun (TyApp (TyCon "Ref") (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "Diag")))) (TyFun (TyApp (TyCon "Ref") (TyApp (TyCon "OrdMap") (TyApp (TyCon "List") (TyCon "Decl")))) (TyFun (TyFun (TyCon "String") (TyApp (TyCon "Option") (TyCon "String"))) (TyFun (TyCon "String") (TyApp (TyCon "Option") (TyCon "String"))))))))
 (DFunDef false "wrappedRead" ((PVar "cacheRef") (PVar "staleRef") (PVar "parseCacheRef") (PVar "read") (PVar "path")) (EApp (EApp (EVar "andThen") (EApp (EVar "read") (EVar "path"))) (ELam ((PVar "src")) (EMatch (EApp (EApp (EVar "parseCachedLocated") (EVar "parseCacheRef")) (EVar "src")) (arm (PCon "Ok" PWild) () (EBlock (DoExpr (EApp (EApp (EVar "setRef") (EVar "cacheRef")) (EApp (EApp (EApp (EVar "cachePut") (EVar "path")) (EVar "src")) (EUnOp "!" (EVar "cacheRef"))))) (DoExpr (EApp (EVar "Some") (EVar "src"))))) (arm (PCon "Err" (PVar "e")) () (EBlock (DoExpr (EApp (EApp (EVar "setRef") (EVar "staleRef")) (EBinOp "::" (ETuple (EVar "path") (EApp (EApp (EVar "parseErrDiag") (EVar "path")) (EVar "e"))) (EUnOp "!" (EVar "staleRef"))))) (DoExpr (EMatch (EApp (EApp (EVar "lookupAssoc") (EVar "path")) (EUnOp "!" (EVar "cacheRef"))) (arm (PCon "Some" (PVar "good")) () (EApp (EVar "Some") (EVar "good"))) (arm (PCon "None") () (EApp (EVar "Some") (EVar "src")))))))))))
+(DTypeSig false "wrappedReadFor" (TyFun (TyCon "ProjectLoad") (TyFun (TyApp (TyCon "Ref") (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "Diag")))) (TyFun (TyCon "String") (TyApp (TyCon "Option") (TyCon "String"))))))
+(DFunDef false "wrappedReadFor" ((PVar "load") (PVar "staleRef") (PVar "path")) (EApp (EApp (EApp (EApp (EApp (EVar "wrappedRead") (EFieldAccess (EVar "load") "plCache")) (EVar "staleRef")) (EFieldAccess (EVar "load") "plParseCache")) (EFieldAccess (EVar "load") "plRead")) (EVar "path")))
 (DTypeSig true "parseErrDiag" (TyFun (TyCon "String") (TyFun (TyCon "ParseError") (TyCon "Diag"))))
 (DFunDef false "parseErrDiag" ((PVar "path") (PVar "e")) (EApp (EApp (EVar "parseDiagnosticToDiag") (EVar "path")) (EApp (EVar "parseErrorDiagnostic") (EVar "e"))))
 (DTypeSig false "preludeDesugared" (TyFun (TyCon "String") (TyApp (TyCon "List") (TyCon "Decl"))))
 (DFunDef false "preludeDesugared" ((PVar "src")) (EApp (EVar "desugaredPrelude") (EVar "src")))
-(DTypeSig true "analyzeProject" (TyFun (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyEffect () (Some "e") (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "String")))))) (TyFun (TyCon "Bool") (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyApp (TyCon "Ref") (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "String")))) (TyFun (TyApp (TyCon "Ref") (TyApp (TyCon "OrdMap") (TyApp (TyCon "List") (TyCon "Decl")))) (TyFun (TyFun (TyCon "String") (TyApp (TyCon "Option") (TyCon "String"))) (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyCon "String") (TyFun (TyCon "String") (TyEffect ("IO") (Some "e") (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "Diag"))))))))))))))))
-(DFunDef false "analyzeProject" ((PVar "exportsFor") (PVar "allowInternal") (PVar "trustedMods") (PVar "cacheRef") (PVar "parseCacheRef") (PVar "read") (PVar "entry") (PVar "roots") (PVar "runtimeSrc") (PVar "coreSrc")) (EBlock (DoLet false false (PTuple PWild (PVar "results")) (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EVar "analyzeProjectFull") (EVar "exportsFor")) (EVar "allowInternal")) (EVar "trustedMods")) (EVar "cacheRef")) (EVar "parseCacheRef")) (EVar "read")) (EVar "entry")) (EVar "roots")) (EVar "runtimeSrc")) (EVar "coreSrc"))) (DoExpr (EVar "results"))))
-(DTypeSig false "analyzeProjectFull" (TyFun (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyEffect () (Some "e") (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "String")))))) (TyFun (TyCon "Bool") (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyApp (TyCon "Ref") (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "String")))) (TyFun (TyApp (TyCon "Ref") (TyApp (TyCon "OrdMap") (TyApp (TyCon "List") (TyCon "Decl")))) (TyFun (TyFun (TyCon "String") (TyApp (TyCon "Option") (TyCon "String"))) (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyCon "String") (TyFun (TyCon "String") (TyEffect ("IO") (Some "e") (TyTuple (TyApp (TyCon "List") (TyCon "ModDiags")) (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "Diag")))))))))))))))))
-(DFunDef false "analyzeProjectFull" ((PVar "exportsFor") (PVar "allowInternal") (PVar "trustedMods") (PVar "cacheRef") (PVar "parseCacheRef") (PVar "read") (PVar "entry") (PVar "roots") (PVar "runtimeSrc") (PVar "coreSrc")) (EBlock (DoLet false false (PTuple (PVar "report") (PVar "results")) (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EVar "analyzeProjectReport") (EVar "exportsFor")) (EVar "allowInternal")) (EVar "trustedMods")) (EVar "cacheRef")) (EVar "parseCacheRef")) (EVar "read")) (EVar "entry")) (EVar "roots")) (EVar "runtimeSrc")) (EVar "coreSrc"))) (DoExpr (EMatch (EVar "report") (arm (PCon "Some" (PVar "r")) () (ETuple (EFieldAccess (EVar "r") "trDiagnostics") (EVar "results"))) (arm (PCon "None") () (ETuple (EListLit) (EVar "results")))))))
-(DTypeSig true "analyzeProjectReport" (TyFun (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyEffect () (Some "e") (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "String")))))) (TyFun (TyCon "Bool") (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyApp (TyCon "Ref") (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "String")))) (TyFun (TyApp (TyCon "Ref") (TyApp (TyCon "OrdMap") (TyApp (TyCon "List") (TyCon "Decl")))) (TyFun (TyFun (TyCon "String") (TyApp (TyCon "Option") (TyCon "String"))) (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyCon "String") (TyFun (TyCon "String") (TyEffect ("IO") (Some "e") (TyTuple (TyApp (TyCon "Option") (TyCon "TcReport")) (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "Diag")))))))))))))))))
-(DFunDef false "analyzeProjectReport" ((PVar "exportsFor") (PVar "allowInternal") (PVar "trustedMods") (PVar "cacheRef") (PVar "parseCacheRef") (PVar "read") (PVar "entry") (PVar "roots") (PVar "runtimeSrc") (PVar "coreSrc")) (EBlock (DoLet false false (PTuple (PVar "keyed") (PVar "results")) (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EVar "analyzeProjectKeyed") (EVar "exportsFor")) (EVar "allowInternal")) (EVar "trustedMods")) (EVar "cacheRef")) (EVar "parseCacheRef")) (EVar "read")) (EVar "entry")) (EVar "roots")) (EVar "runtimeSrc")) (EVar "coreSrc"))) (DoExpr (ETuple (EApp (EApp (EVar "map") (ELam ((PVar "k")) (EApp (EVar "fst") (EApp (EVar "fst") (EVar "k"))))) (EVar "keyed")) (EVar "results")))))
+(DData Public "ProjectLoad" () ((variant "ProjectLoad" (ConNamed (field "plCache" (TyApp (TyCon "Ref") (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "String"))))) (field "plParseCache" (TyApp (TyCon "Ref") (TyApp (TyCon "OrdMap") (TyApp (TyCon "List") (TyCon "Decl"))))) (field "plRead" (TyFun (TyCon "String") (TyApp (TyCon "Option") (TyCon "String")))) (field "plEntry" (TyCon "String")) (field "plRoots" (TyApp (TyCon "List") (TyCon "String"))) (field "plRuntimeSrc" (TyCon "String")) (field "plCoreSrc" (TyCon "String"))))) ())
+(DData Public "ProjectQuery" () ((variant "ProjectQuery" (ConNamed (field "pqLoad" (TyCon "ProjectLoad")) (field "pqAllowInternal" (TyCon "Bool")) (field "pqTrusted" (TyApp (TyCon "List") (TyCon "String")))))) ())
+(DTypeSig true "freshLoad" (TyFun (TyFun (TyCon "String") (TyApp (TyCon "Option") (TyCon "String"))) (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyCon "String") (TyFun (TyCon "String") (TyCon "ProjectLoad")))))))
+(DFunDef false "freshLoad" ((PVar "read") (PVar "entry") (PVar "roots") (PVar "runtimeSrc") (PVar "coreSrc")) (ERecordCreate "ProjectLoad" ((fa "plCache" (EApp (EVar "Ref") (EListLit))) (fa "plParseCache" (EApp (EVar "Ref") (EVar "omEmpty"))) (fa "plRead" (EVar "read")) (fa "plEntry" (EVar "entry")) (fa "plRoots" (EVar "roots")) (fa "plRuntimeSrc" (EVar "runtimeSrc")) (fa "plCoreSrc" (EVar "coreSrc")))))
+(DTypeSig true "openQuery" (TyFun (TyCon "ProjectLoad") (TyCon "ProjectQuery")))
+(DFunDef false "openQuery" ((PVar "load")) (ERecordCreate "ProjectQuery" ((fa "pqLoad" (EVar "load")) (fa "pqAllowInternal" (EVar "True")) (fa "pqTrusted" (EListLit)))))
+(DTypeSig true "analyzeProject" (TyFun (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyEffect () (Some "e") (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "String")))))) (TyFun (TyCon "ProjectQuery") (TyEffect ("IO") (Some "e") (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "Diag"))))))))
+(DFunDef false "analyzeProject" ((PVar "exportsFor") (PVar "query")) (EBlock (DoLet false false (PTuple PWild (PVar "results")) (EApp (EApp (EVar "analyzeProjectFull") (EVar "exportsFor")) (EVar "query"))) (DoExpr (EVar "results"))))
+(DTypeSig false "analyzeProjectFull" (TyFun (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyEffect () (Some "e") (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "String")))))) (TyFun (TyCon "ProjectQuery") (TyEffect ("IO") (Some "e") (TyTuple (TyApp (TyCon "List") (TyCon "ModDiags")) (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "Diag")))))))))
+(DFunDef false "analyzeProjectFull" ((PVar "exportsFor") (PVar "query")) (EBlock (DoLet false false (PTuple (PVar "report") (PVar "results")) (EApp (EApp (EVar "analyzeProjectReport") (EVar "exportsFor")) (EVar "query"))) (DoExpr (EMatch (EVar "report") (arm (PCon "Some" (PVar "r")) () (ETuple (EFieldAccess (EVar "r") "trDiagnostics") (EVar "results"))) (arm (PCon "None") () (ETuple (EListLit) (EVar "results")))))))
+(DTypeSig true "analyzeProjectReport" (TyFun (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyEffect () (Some "e") (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "String")))))) (TyFun (TyCon "ProjectQuery") (TyEffect ("IO") (Some "e") (TyTuple (TyApp (TyCon "Option") (TyCon "TcReport")) (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "Diag")))))))))
+(DFunDef false "analyzeProjectReport" ((PVar "exportsFor") (PVar "query")) (EBlock (DoLet false false (PTuple (PVar "keyed") (PVar "results")) (EApp (EApp (EVar "analyzeProjectKeyed") (EVar "exportsFor")) (EVar "query"))) (DoExpr (ETuple (EApp (EApp (EVar "map") (ELam ((PVar "k")) (EApp (EVar "fst") (EApp (EVar "fst") (EVar "k"))))) (EVar "keyed")) (EVar "results")))))
 (DData Public "GraphId" () ((variant "GraphId" (ConNamed (field "giEntry" (TyCon "String")) (field "giSteps" (TyApp (TyCon "List") (TyApp (TyCon "Option") (TyCon "String"))))))) ())
 (DTypeSig true "graphIdOf" (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "String") (TyApp (TyCon "List") (TyCon "Decl")))) (TyCon "GraphId")))
 (DFunDef false "graphIdOf" ((PVar "mods")) (ERecordCreate "GraphId" ((fa "giEntry" (EApp (EVar "lastModId") (EVar "mods"))) (fa "giSteps" (EApp (EApp (EVar "map") (EVar "moduleStepKey")) (EVar "mods"))))))
@@ -3764,27 +3582,23 @@ checkJsonLoadErr target src _ le = match loadErrorSite target le
 (DFunDef false "lastModId" ((PVar "mods")) (EMatch (EApp (EVar "last") (EVar "mods")) (arm (PCon "Some" (PTuple (PVar "mid") PWild PWild)) () (EVar "mid")) (arm (PCon "None") () (ELit (LString "")))))
 (DTypeSig true "graphIdSame" (TyFun (TyCon "GraphId") (TyFun (TyCon "GraphId") (TyCon "Bool"))))
 (DFunDef false "graphIdSame" ((PVar "a") (PVar "b")) (EBinOp "&&" (EBinOp "&&" (EBinOp "==" (EFieldAccess (EVar "a") "giEntry") (EFieldAccess (EVar "b") "giEntry")) (EApp (EApp (EVar "allList") (EVar "isSome")) (EFieldAccess (EVar "a") "giSteps"))) (EBinOp "==" (EFieldAccess (EVar "a") "giSteps") (EFieldAccess (EVar "b") "giSteps"))))
-(DTypeSig true "analyzeProjectKeyed" (TyFun (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyEffect () (Some "e") (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "String")))))) (TyFun (TyCon "Bool") (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyApp (TyCon "Ref") (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "String")))) (TyFun (TyApp (TyCon "Ref") (TyApp (TyCon "OrdMap") (TyApp (TyCon "List") (TyCon "Decl")))) (TyFun (TyFun (TyCon "String") (TyApp (TyCon "Option") (TyCon "String"))) (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyCon "String") (TyFun (TyCon "String") (TyEffect ("IO") (Some "e") (TyTuple (TyApp (TyCon "Option") (TyTuple (TyTuple (TyCon "TcReport") (TyCon "DriveOutputs")) (TyCon "GraphId"))) (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "Diag")))))))))))))))))
-(DFunDef false "analyzeProjectKeyed" ((PVar "exportsFor") (PVar "allowInternal") (PVar "trustedMods") (PVar "cacheRef") (PVar "parseCacheRef") (PVar "read") (PVar "entry") (PVar "roots") (PVar "runtimeSrc") (PVar "coreSrc")) (EBlock (DoLet false false (PVar "staleRef") (EApp (EVar "newStale") (ELit LUnit))) (DoLet false false (PVar "wread") (ELam ((PVar "p")) (EApp (EApp (EApp (EApp (EApp (EVar "wrappedRead") (EVar "cacheRef")) (EVar "staleRef")) (EVar "parseCacheRef")) (EVar "read")) (EVar "p")))) (DoExpr (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EVar "projectKeyedFromLoad") (EVar "exportsFor")) (EVar "allowInternal")) (EVar "trustedMods")) (EVar "entry")) (EVar "roots")) (EVar "runtimeSrc")) (EVar "coreSrc")) (EVar "staleRef")) (EApp (EApp (EApp (EApp (EVar "loadProgramFilesLocatedCachedE") (EVar "parseCacheRef")) (EVar "wread")) (EVar "entry")) (EVar "roots"))))))
-(DTypeSig true "analyzeProjectKeyedSources" (TyFun (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyEffect () (Some "e") (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "String")))))) (TyFun (TyCon "Bool") (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyApp (TyCon "Ref") (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "String")))) (TyFun (TyApp (TyCon "Ref") (TyApp (TyCon "OrdMap") (TyApp (TyCon "List") (TyCon "Decl")))) (TyFun (TyFun (TyCon "String") (TyApp (TyCon "Option") (TyCon "String"))) (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyCon "String") (TyFun (TyCon "String") (TyEffect ("IO") (Some "e") (TyTuple (TyApp (TyCon "Option") (TyTuple (TyTuple (TyCon "TcReport") (TyCon "DriveOutputs")) (TyCon "GraphId"))) (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "Diag")))) (TyApp (TyCon "OrdMap") (TyCon "String")))))))))))))))
-(DFunDef false "analyzeProjectKeyedSources" ((PVar "exportsFor") (PVar "allowInternal") (PVar "trustedMods") (PVar "cacheRef") (PVar "parseCacheRef") (PVar "read") (PVar "entry") (PVar "roots") (PVar "runtimeSrc") (PVar "coreSrc")) (EBlock (DoLet false false (PVar "staleRef") (EApp (EVar "newStale") (ELit LUnit))) (DoLet false false (PVar "wread") (ELam ((PVar "p")) (EApp (EApp (EApp (EApp (EApp (EVar "wrappedRead") (EVar "cacheRef")) (EVar "staleRef")) (EVar "parseCacheRef")) (EVar "read")) (EVar "p")))) (DoLet false false (PTuple (PVar "loaded") (PVar "sources")) (EApp (EApp (EApp (EApp (EVar "loadProgramFilesLocatedCachedSourcesE") (EVar "parseCacheRef")) (EVar "wread")) (EVar "entry")) (EVar "roots"))) (DoLet false false (PTuple (PVar "keyed") (PVar "diags")) (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EVar "projectKeyedFromLoad") (EVar "exportsFor")) (EVar "allowInternal")) (EVar "trustedMods")) (EVar "entry")) (EVar "roots")) (EVar "runtimeSrc")) (EVar "coreSrc")) (EVar "staleRef")) (EVar "loaded"))) (DoExpr (ETuple (EVar "keyed") (EVar "diags") (EVar "sources")))))
-(DTypeSig false "projectKeyedFromLoad" (TyFun (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyEffect () (Some "e") (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "String")))))) (TyFun (TyCon "Bool") (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyApp (TyCon "Ref") (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "Diag")))) (TyFun (TyApp (TyApp (TyCon "Result") (TyCon "LoadError")) (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "String") (TyApp (TyCon "List") (TyCon "Decl"))))) (TyEffect ("IO") (Some "e") (TyTuple (TyApp (TyCon "Option") (TyTuple (TyTuple (TyCon "TcReport") (TyCon "DriveOutputs")) (TyCon "GraphId"))) (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "Diag"))))))))))))))))
-(DFunDef false "projectKeyedFromLoad" ((PVar "_exportsFor") (PVar "_allowInternal") (PVar "_trustedMods") (PVar "_entry") (PVar "_roots") (PVar "_runtimeSrc") (PVar "_coreSrc") (PVar "staleRef") (PCon "Err" (PCon "LoadParseFailed" (PVar "mpath") PWild (PVar "pe")))) (ETuple (EVar "None") (EApp (EApp (EVar "appendStale") (EVar "staleRef")) (EListLit (ETuple (EVar "mpath") (EListLit (EApp (EApp (EVar "parseErrDiag") (EVar "mpath")) (EVar "pe"))))))))
-(DFunDef false "projectKeyedFromLoad" ((PVar "_exportsFor") (PVar "_allowInternal") (PVar "_trustedMods") (PVar "entry") (PVar "_roots") (PVar "_runtimeSrc") (PVar "_coreSrc") (PVar "staleRef") (PCon "Err" (PCon "LoadMsg" (PVar "e")))) (ETuple (EVar "None") (EApp (EApp (EVar "appendStale") (EVar "staleRef")) (EListLit (ETuple (EVar "entry") (EListLit (EApp (EApp (EApp (EApp (EVar "mkDiag") (EVar "SevError")) (EVar "RModuleLoad")) (EVar "e")) (EVar "None"))))))))
-(DFunDef false "projectKeyedFromLoad" ((PVar "_exportsFor") (PVar "_allowInternal") (PVar "_trustedMods") (PVar "entry") (PVar "_roots") (PVar "_runtimeSrc") (PVar "_coreSrc") (PVar "staleRef") (PCon "Err" (PVar "le"))) (ETuple (EVar "None") (EApp (EApp (EVar "appendStale") (EVar "staleRef")) (EMatch (EApp (EApp (EVar "loadErrorSite") (EVar "entry")) (EVar "le")) (arm (PCon "Some" (PTuple (PVar "code") (PVar "e") (PVar "file") PWild (PVar "loc"))) () (EListLit (ETuple (EVar "file") (EListLit (EApp (EApp (EApp (EApp (EVar "mkDiag") (EVar "SevError")) (EVar "code")) (EVar "e")) (EVar "loc")))))) (arm (PCon "None") () (EListLit))))))
-(DFunDef false "projectKeyedFromLoad" ((PVar "exportsFor") (PVar "allowInternal") (PVar "trustedMods") (PVar "entry") (PVar "roots") (PVar "runtimeSrc") (PVar "coreSrc") (PVar "staleRef") (PCon "Ok" (PVar "mods"))) (EBlock (DoLet false false (PVar "chainKey") (EApp (EApp (EVar "chainKeyOf") (EVar "entry")) (EVar "roots"))) (DoLet false false (PVar "front") (EApp (EApp (EApp (EVar "frontEnd") (EVar "exportsFor")) (ELam ((PVar "d")) (EApp (EVar "unkept") (EApp (EApp (EApp (EVar "checkReportOf") (EVar "RecordSteps")) (EVar "chainKey")) (EVar "d"))))) (ERecordCreate "FrontInput" ((fa "fiInputs" (ERecordUpdate (EApp (EApp (EApp (EVar "driveInputsFor") (EUnOp "!" (EVar "selectedProfile"))) (EVar "False")) (EListLit)) ((fa "diSibling" (EApp (EApp (EVar "siblingPairsOf") (EVar "roots")) (EVar "mods")))))) (fa "fiAllowInternal" (EVar "allowInternal")) (fa "fiTrusted" (EVar "trustedMods")) (fa "fiRuntimeSrc" (EVar "runtimeSrc")) (fa "fiCoreSrc" (EVar "coreSrc")) (fa "fiPolicy" (EApp (EApp (EVar "DriveUnblocked") (EVar "chainKey")) (EVar "RecordSteps"))) (fa "fiProgram" (EApp (EApp (EVar "FrontGraph") (EVar "mods")) (EApp (EVar "desugaredModPairs") (EVar "mods")))))))) (DoExpr (ETuple (EApp (EVar "Some") (ETuple (ETuple (EFieldAccess (EVar "front") "foReport") (EFieldAccess (EVar "front") "foOutputs")) (EApp (EVar "graphIdOf") (EVar "mods")))) (EApp (EApp (EVar "appendStale") (EVar "staleRef")) (EFieldAccess (EVar "front") "foDiags"))))))
+(DTypeSig true "analyzeProjectKeyed" (TyFun (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyEffect () (Some "e") (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "String")))))) (TyFun (TyCon "ProjectQuery") (TyEffect ("IO") (Some "e") (TyTuple (TyApp (TyCon "Option") (TyTuple (TyTuple (TyCon "TcReport") (TyCon "DriveOutputs")) (TyCon "GraphId"))) (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "Diag")))))))))
+(DFunDef false "analyzeProjectKeyed" ((PVar "exportsFor") (PVar "query")) (EBlock (DoLet false false (PVar "load") (EFieldAccess (EVar "query") "pqLoad")) (DoLet false false (PVar "staleRef") (EApp (EVar "newStale") (ELit LUnit))) (DoLet false false (PVar "wread") (EApp (EApp (EVar "wrappedReadFor") (EVar "load")) (EVar "staleRef"))) (DoExpr (EApp (EApp (EApp (EApp (EVar "projectKeyedFromLoad") (EVar "exportsFor")) (EVar "query")) (EVar "staleRef")) (EApp (EApp (EApp (EApp (EVar "loadProgramFilesLocatedCachedE") (EFieldAccess (EVar "load") "plParseCache")) (EVar "wread")) (EFieldAccess (EVar "load") "plEntry")) (EFieldAccess (EVar "load") "plRoots"))))))
+(DTypeSig true "analyzeProjectKeyedSources" (TyFun (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyEffect () (Some "e") (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "String")))))) (TyFun (TyCon "ProjectQuery") (TyEffect ("IO") (Some "e") (TyTuple (TyApp (TyCon "Option") (TyTuple (TyTuple (TyCon "TcReport") (TyCon "DriveOutputs")) (TyCon "GraphId"))) (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "Diag")))) (TyApp (TyCon "OrdMap") (TyCon "String")))))))
+(DFunDef false "analyzeProjectKeyedSources" ((PVar "exportsFor") (PVar "query")) (EBlock (DoLet false false (PVar "load") (EFieldAccess (EVar "query") "pqLoad")) (DoLet false false (PVar "staleRef") (EApp (EVar "newStale") (ELit LUnit))) (DoLet false false (PVar "wread") (EApp (EApp (EVar "wrappedReadFor") (EVar "load")) (EVar "staleRef"))) (DoLet false false (PTuple (PVar "loaded") (PVar "sources")) (EApp (EApp (EApp (EApp (EVar "loadProgramFilesLocatedCachedSourcesE") (EFieldAccess (EVar "load") "plParseCache")) (EVar "wread")) (EFieldAccess (EVar "load") "plEntry")) (EFieldAccess (EVar "load") "plRoots"))) (DoLet false false (PTuple (PVar "keyed") (PVar "diags")) (EApp (EApp (EApp (EApp (EVar "projectKeyedFromLoad") (EVar "exportsFor")) (EVar "query")) (EVar "staleRef")) (EVar "loaded"))) (DoExpr (ETuple (EVar "keyed") (EVar "diags") (EVar "sources")))))
+(DTypeSig false "projectKeyedFromLoad" (TyFun (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyEffect () (Some "e") (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "String")))))) (TyFun (TyCon "ProjectQuery") (TyFun (TyApp (TyCon "Ref") (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "Diag")))) (TyFun (TyApp (TyApp (TyCon "Result") (TyCon "LoadError")) (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "String") (TyApp (TyCon "List") (TyCon "Decl"))))) (TyEffect ("IO") (Some "e") (TyTuple (TyApp (TyCon "Option") (TyTuple (TyTuple (TyCon "TcReport") (TyCon "DriveOutputs")) (TyCon "GraphId"))) (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "Diag")))))))))))
+(DFunDef false "projectKeyedFromLoad" ((PVar "_exportsFor") (PVar "_query") (PVar "staleRef") (PCon "Err" (PCon "LoadParseFailed" (PVar "mpath") PWild (PVar "pe")))) (ETuple (EVar "None") (EApp (EApp (EVar "appendStale") (EVar "staleRef")) (EListLit (ETuple (EVar "mpath") (EListLit (EApp (EApp (EVar "parseErrDiag") (EVar "mpath")) (EVar "pe"))))))))
+(DFunDef false "projectKeyedFromLoad" ((PVar "_exportsFor") (PVar "query") (PVar "staleRef") (PCon "Err" (PCon "LoadMsg" (PVar "e")))) (ETuple (EVar "None") (EApp (EApp (EVar "appendStale") (EVar "staleRef")) (EListLit (ETuple (EFieldAccess (EFieldAccess (EVar "query") "pqLoad") "plEntry") (EListLit (EApp (EApp (EApp (EApp (EVar "mkDiag") (EVar "SevError")) (EVar "RModuleLoad")) (EVar "e")) (EVar "None"))))))))
+(DFunDef false "projectKeyedFromLoad" ((PVar "_exportsFor") (PVar "query") (PVar "staleRef") (PCon "Err" (PVar "le"))) (ETuple (EVar "None") (EApp (EApp (EVar "appendStale") (EVar "staleRef")) (EMatch (EApp (EApp (EVar "loadErrorSite") (EFieldAccess (EFieldAccess (EVar "query") "pqLoad") "plEntry")) (EVar "le")) (arm (PCon "Some" (PTuple (PVar "code") (PVar "e") (PVar "file") PWild (PVar "loc"))) () (EListLit (ETuple (EVar "file") (EListLit (EApp (EApp (EApp (EApp (EVar "mkDiag") (EVar "SevError")) (EVar "code")) (EVar "e")) (EVar "loc")))))) (arm (PCon "None") () (EListLit))))))
+(DFunDef false "projectKeyedFromLoad" ((PVar "exportsFor") (PVar "query") (PVar "staleRef") (PCon "Ok" (PVar "mods"))) (EBlock (DoLet false false (PVar "load") (EFieldAccess (EVar "query") "pqLoad")) (DoLet false false (PVar "roots") (EFieldAccess (EVar "load") "plRoots")) (DoLet false false (PVar "chainKey") (EApp (EApp (EVar "chainKeyOf") (EFieldAccess (EVar "load") "plEntry")) (EVar "roots"))) (DoLet false false (PVar "front") (EApp (EApp (EApp (EVar "frontEnd") (EVar "exportsFor")) (ELam ((PVar "d")) (EApp (EVar "unkept") (EApp (EApp (EApp (EVar "checkReportOf") (EVar "RecordSteps")) (EVar "chainKey")) (EVar "d"))))) (ERecordCreate "FrontInput" ((fa "fiInputs" (ERecordUpdate (EApp (EApp (EApp (EVar "driveInputsFor") (EUnOp "!" (EVar "selectedProfile"))) (EVar "False")) (EListLit)) ((fa "diSibling" (EApp (EApp (EVar "siblingPairsOf") (EVar "roots")) (EVar "mods")))))) (fa "fiAllowInternal" (EFieldAccess (EVar "query") "pqAllowInternal")) (fa "fiTrusted" (EFieldAccess (EVar "query") "pqTrusted")) (fa "fiRuntimeSrc" (EFieldAccess (EVar "load") "plRuntimeSrc")) (fa "fiCoreSrc" (EFieldAccess (EVar "load") "plCoreSrc")) (fa "fiPolicy" (EApp (EApp (EVar "DriveUnblocked") (EVar "chainKey")) (EVar "RecordSteps"))) (fa "fiProgram" (EApp (EApp (EVar "FrontGraph") (EVar "mods")) (EApp (EVar "desugaredModPairs") (EVar "mods")))))))) (DoExpr (ETuple (EApp (EVar "Some") (ETuple (ETuple (EFieldAccess (EVar "front") "foReport") (EFieldAccess (EVar "front") "foOutputs")) (EApp (EVar "graphIdOf") (EVar "mods")))) (EApp (EApp (EVar "appendStale") (EVar "staleRef")) (EFieldAccess (EVar "front") "foDiags"))))))
 (DTypeSig false "bucketsResolveRejected" (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "Diag")))) (TyCon "Bool")))
 (DFunDef false "bucketsResolveRejected" ((PVar "buckets")) (EApp (EApp (EVar "anyList") (ELam ((PVar "b")) (EApp (EVar "resolveRejected") (EApp (EVar "snd") (EVar "b"))))) (EVar "buckets")))
-(DTypeSig true "projectDiagsLoaded" (TyFun (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyEffect () (Some "e") (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "String")))))) (TyFun (TyCon "Bool") (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyFun (TyApp (TyCon "Option") (TyTuple (TyCon "Int") (TyCon "Int"))) (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "String") (TyApp (TyCon "List") (TyCon "Decl")))) (TyEffect () (Some "e") (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "Diag"))))))))))))))
-(DFunDef false "projectDiagsLoaded" ((PVar "exportsFor") (PVar "allowInternal") (PVar "trustedMods") (PVar "runtimeP") (PVar "coreP") (PVar "preludeKey") (PVar "chainKey") (PVar "mods")) (EApp (EVar "snd") (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EVar "projectDiagsLoadedFull") (EVar "exportsFor")) (EVar "allowInternal")) (EVar "trustedMods")) (EVar "runtimeP")) (EVar "coreP")) (EVar "preludeKey")) (EVar "chainKey")) (EVar "mods")) (EApp (EVar "desugaredModPairs") (EVar "mods")))))
-(DTypeSig false "projectDiagsLoadedFull" (TyFun (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyEffect () (Some "e") (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "String")))))) (TyFun (TyCon "Bool") (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyFun (TyApp (TyCon "Option") (TyTuple (TyCon "Int") (TyCon "Int"))) (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "String") (TyApp (TyCon "List") (TyCon "Decl")))) (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "Decl")))) (TyEffect () (Some "e") (TyTuple (TyApp (TyCon "List") (TyCon "ModDiags")) (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "Diag"))))))))))))))))
-(DFunDef false "projectDiagsLoadedFull" ((PVar "exportsFor") (PVar "allowInternal") (PVar "trustedMods") (PVar "runtimeP") (PVar "coreP") (PVar "preludeKey") (PVar "chainKey") (PVar "mods") (PVar "modPairs")) (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EVar "typecheckPassFull") (EApp (EApp (EApp (EVar "driveInputsFor") (EUnOp "!" (EVar "selectedProfile"))) (EVar "False")) (EListLit))) (EVar "runtimeP")) (EVar "coreP")) (EVar "preludeKey")) (EVar "chainKey")) (EVar "mods")) (EVar "modPairs")) (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EVar "resolvedBuckets") (EVar "exportsFor")) (EVar "allowInternal")) (EVar "trustedMods")) (EListLit)) (EVar "preludeKey")) (EVar "chainKey")) (EVar "runtimeP")) (EVar "coreP")) (EVar "mods")) (EVar "modPairs"))))
-(DTypeSig true "projectEntrySchemes" (TyFun (TyApp (TyCon "Ref") (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "String")))) (TyFun (TyApp (TyCon "Ref") (TyApp (TyCon "OrdMap") (TyApp (TyCon "List") (TyCon "Decl")))) (TyFun (TyFun (TyCon "String") (TyApp (TyCon "Option") (TyCon "String"))) (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyCon "String") (TyFun (TyCon "String") (TyEffect ("IO") None (TyApp (TyCon "Option") (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "PubScheme")))))))))))))
-(DFunDef false "projectEntrySchemes" ((PVar "cacheRef") (PVar "parseCacheRef") (PVar "read") (PVar "entry") (PVar "roots") (PVar "runtimeSrc") (PVar "coreSrc")) (EApp (EApp (EVar "map") (ELam ((PVar "pa")) (EApp (EVar "publishedEntrySchemes") (EFieldAccess (EVar "pa") "paSchemes")))) (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EVar "projectEntryAnalysis") (EVar "cacheRef")) (EVar "parseCacheRef")) (EVar "read")) (EVar "entry")) (EVar "roots")) (EVar "runtimeSrc")) (EVar "coreSrc"))))
-(DTypeSig false "projectEntryAnalysis" (TyFun (TyApp (TyCon "Ref") (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "String")))) (TyFun (TyApp (TyCon "Ref") (TyApp (TyCon "OrdMap") (TyApp (TyCon "List") (TyCon "Decl")))) (TyFun (TyFun (TyCon "String") (TyApp (TyCon "Option") (TyCon "String"))) (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyCon "String") (TyFun (TyCon "String") (TyEffect ("IO") None (TyApp (TyCon "Option") (TyCon "PartialAnalysis")))))))))))
-(DFunDef false "projectEntryAnalysis" ((PVar "cacheRef") (PVar "parseCacheRef") (PVar "read") (PVar "entry") (PVar "roots") (PVar "runtimeSrc") (PVar "coreSrc")) (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EVar "projectEntryAnalysisOr") (ELam (PWild) (EVar "None"))) (EVar "cacheRef")) (EVar "parseCacheRef")) (EVar "read")) (EVar "entry")) (EVar "roots")) (EVar "runtimeSrc")) (EVar "coreSrc")))
-(DTypeSig true "projectEntryAnalysisOr" (TyFun (TyFun (TyCon "GraphId") (TyApp (TyCon "Option") (TyCon "PartialAnalysis"))) (TyFun (TyApp (TyCon "Ref") (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "String")))) (TyFun (TyApp (TyCon "Ref") (TyApp (TyCon "OrdMap") (TyApp (TyCon "List") (TyCon "Decl")))) (TyFun (TyFun (TyCon "String") (TyApp (TyCon "Option") (TyCon "String"))) (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyCon "String") (TyFun (TyCon "String") (TyEffect ("IO") None (TyApp (TyCon "Option") (TyCon "PartialAnalysis"))))))))))))
-(DFunDef false "projectEntryAnalysisOr" ((PVar "kept") (PVar "cacheRef") (PVar "parseCacheRef") (PVar "read") (PVar "entry") (PVar "roots") (PVar "runtimeSrc") (PVar "coreSrc")) (EBlock (DoLet false false (PVar "staleRef") (EApp (EVar "newStale") (ELit LUnit))) (DoLet false false (PVar "wread") (ELam ((PVar "p")) (EApp (EApp (EApp (EApp (EApp (EVar "wrappedRead") (EVar "cacheRef")) (EVar "staleRef")) (EVar "parseCacheRef")) (EVar "read")) (EVar "p")))) (DoLet false false (PVar "runtimeP") (EApp (EVar "preludeDesugared") (EVar "runtimeSrc"))) (DoLet false false (PVar "coreP") (EApp (EVar "preludeDesugared") (EVar "coreSrc"))) (DoLet false false (PVar "preludeKey") (EApp (EVar "Some") (EApp (EApp (EVar "preludeGeneration") (EVar "runtimeSrc")) (EVar "coreSrc")))) (DoExpr (EMatch (EApp (EApp (EApp (EApp (EVar "loadProgramFilesLocatedCached") (EVar "parseCacheRef")) (EVar "wread")) (EVar "entry")) (EVar "roots")) (arm (PCon "Err" PWild) () (EVar "None")) (arm (PCon "Ok" (PVar "mods")) () (EMatch (EApp (EVar "kept") (EApp (EVar "graphIdOf") (EVar "mods"))) (arm (PCon "Some" (PVar "pa")) () (EApp (EVar "Some") (EVar "pa"))) (arm (PCon "None") () (EApp (EVar "Some") (EApp (EApp (EApp (EApp (EApp (EVar "checkModulesPartialK") (ERecordUpdate (EApp (EApp (EApp (EVar "driveInputsFor") (EUnOp "!" (EVar "selectedProfile"))) (EVar "False")) (EListLit)) ((fa "diSibling" (EApp (EApp (EVar "siblingPairsOf") (EVar "roots")) (EVar "mods")))))) (EVar "preludeKey")) (EVar "runtimeP")) (EVar "coreP")) (EApp (EVar "desugarGraph") (EVar "mods")))))))))))
+(DTypeSig true "projectEntrySchemes" (TyFun (TyCon "ProjectLoad") (TyEffect ("IO") None (TyApp (TyCon "Option") (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "PubScheme")))))))
+(DFunDef false "projectEntrySchemes" ((PVar "load")) (EApp (EApp (EVar "map") (ELam ((PVar "pa")) (EApp (EVar "publishedEntrySchemes") (EFieldAccess (EVar "pa") "paSchemes")))) (EApp (EVar "projectEntryAnalysis") (EVar "load"))))
+(DTypeSig false "projectEntryAnalysis" (TyFun (TyCon "ProjectLoad") (TyEffect ("IO") None (TyApp (TyCon "Option") (TyCon "PartialAnalysis")))))
+(DFunDef false "projectEntryAnalysis" ((PVar "load")) (EApp (EApp (EVar "projectEntryAnalysisOr") (ELam (PWild) (EVar "None"))) (EVar "load")))
+(DTypeSig true "projectEntryAnalysisOr" (TyFun (TyFun (TyCon "GraphId") (TyApp (TyCon "Option") (TyCon "PartialAnalysis"))) (TyFun (TyCon "ProjectLoad") (TyEffect ("IO") None (TyApp (TyCon "Option") (TyCon "PartialAnalysis"))))))
+(DFunDef false "projectEntryAnalysisOr" ((PVar "kept") (PVar "load")) (EBlock (DoLet false false (PVar "roots") (EFieldAccess (EVar "load") "plRoots")) (DoLet false false (PVar "staleRef") (EApp (EVar "newStale") (ELit LUnit))) (DoLet false false (PVar "wread") (EApp (EApp (EVar "wrappedReadFor") (EVar "load")) (EVar "staleRef"))) (DoLet false false (PVar "runtimeP") (EApp (EVar "preludeDesugared") (EFieldAccess (EVar "load") "plRuntimeSrc"))) (DoLet false false (PVar "coreP") (EApp (EVar "preludeDesugared") (EFieldAccess (EVar "load") "plCoreSrc"))) (DoLet false false (PVar "preludeKey") (EApp (EVar "Some") (EApp (EApp (EVar "preludeGeneration") (EFieldAccess (EVar "load") "plRuntimeSrc")) (EFieldAccess (EVar "load") "plCoreSrc")))) (DoExpr (EMatch (EApp (EApp (EApp (EApp (EVar "loadProgramFilesLocatedCached") (EFieldAccess (EVar "load") "plParseCache")) (EVar "wread")) (EFieldAccess (EVar "load") "plEntry")) (EVar "roots")) (arm (PCon "Err" PWild) () (EVar "None")) (arm (PCon "Ok" (PVar "mods")) () (EMatch (EApp (EVar "kept") (EApp (EVar "graphIdOf") (EVar "mods"))) (arm (PCon "Some" (PVar "pa")) () (EApp (EVar "Some") (EVar "pa"))) (arm (PCon "None") () (EApp (EVar "Some") (EApp (EApp (EApp (EApp (EApp (EVar "checkModulesPartialK") (ERecordUpdate (EApp (EApp (EApp (EVar "driveInputsFor") (EUnOp "!" (EVar "selectedProfile"))) (EVar "False")) (EListLit)) ((fa "diSibling" (EApp (EApp (EVar "siblingPairsOf") (EVar "roots")) (EVar "mods")))))) (EVar "preludeKey")) (EVar "runtimeP")) (EVar "coreP")) (EApp (EVar "desugarGraph") (EVar "mods")))))))))))
 (DTypeSig false "newStale" (TyFun (TyCon "Unit") (TyApp (TyCon "Ref") (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "Diag"))))))
 (DFunDef false "newStale" (PWild) (EApp (EVar "Ref") (EListLit)))
 (DTypeSig true "midPath" (TyFun (TyTuple (TyCon "String") (TyCon "String") (TyApp (TyCon "List") (TyCon "Decl"))) (TyCon "String")))
@@ -3797,16 +3611,14 @@ checkJsonLoadErr target src _ le = match loadErrorSite target le
 (DTypeSig false "foldStale" (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "Diag"))) (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "Diag")))) (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "Diag")))))))
 (DFunDef false "foldStale" ((PList) (PVar "buckets")) (EVar "buckets"))
 (DFunDef false "foldStale" ((PCons (PTuple (PVar "path") (PVar "d")) (PVar "rest")) (PVar "buckets")) (EApp (EApp (EVar "foldStale") (EVar "rest")) (EApp (EApp (EApp (EVar "pushDiag") (EVar "path")) (EVar "d")) (EApp (EApp (EVar "seedBucket") (EVar "path")) (EVar "buckets")))))
-(DTypeSig false "resolvePass" (TyFun (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyEffect () (Some "e") (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "String")))))) (TyFun (TyCon "Bool") (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyFun (TyCon "String") (TyApp (TyCon "Option") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "Decl"))))) (TyFun (TyApp (TyCon "Option") (TyTuple (TyCon "Int") (TyCon "Int"))) (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyFun (TyApp (TyCon "Option") (TyCon "String")) (TyFun (TyApp (TyCon "OrdMap") (TyCon "ModuleExports")) (TyFun (TyApp (TyCon "OrdMap") (TyCon "Int")) (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "String") (TyApp (TyCon "List") (TyCon "Decl")))) (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "Diag")))) (TyEffect () (Some "e") (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "Diag"))))))))))))))))))
-(DFunDef false "resolvePass" (PWild PWild PWild PWild PWild PWild PWild PWild PWild PWild (PList) (PVar "buckets")) (EVar "buckets"))
-(DFunDef false "resolvePass" ((PVar "exportsFor") (PVar "allowInternal") (PVar "trustedMods") (PVar "subjectOf") (PVar "preludeKey") (PVar "rt") (PVar "core") (PVar "served") (PVar "known") (PVar "ids") (PCons (PAs "m" (PTuple (PVar "mid") (PVar "path") (PVar "desugared"))) (PVar "rest")) (PVar "buckets")) (EBlock (DoLet false false (PVar "trusted") (EBinOp "||" (EVar "allowInternal") (EApp (EApp (EVar "contains") (EVar "mid")) (EVar "trustedMods")))) (DoLet false false (PVar "subject") (EApp (EVar "subjectOf") (EVar "mid"))) (DoLet false false (PVar "graph") (EApp (EApp (EVar "map") (ELam ((PVar "k")) (EApp (EVar "joinNl") (EListLit (EVar "k") (EApp (EVar "boolKey") (EVar "trusted")) (EApp (EVar "boolKey") (EBinOp "==" (EApp (EVar "omSize") (EVar "known")) (ELit (LInt 0)))) (EApp (EVar "boolKey") (EApp (EVar "isSome") (EVar "subject"))))))) (EVar "served"))) (DoLet false false (PTuple (PVar "diags") (PVar "exp") (PVar "ident")) (EApp (EApp (EApp (EApp (EApp (EVar "servedPass") (EVar "ResolveKind")) (EVar "graph")) (EVar "ids")) (EVar "m")) (ELam (PWild) (EBlock (DoLet false false (PTuple (PVar "exp") (PVar "errs")) (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EVar "resolveModuleG") (EApp (EVar "internalGuardFor") (EVar "trusted"))) (EVar "subject")) (EVar "preludeKey")) (EVar "rt")) (EVar "core")) (EVar "known")) (EVar "mid")) (EVar "desugared"))) (DoExpr (ETuple (EApp (EApp (EVar "map") (EVar "diagOfResError")) (EApp (EApp (EVar "hintResErrors") (EVar "exportsFor")) (EVar "errs"))) (EVar "exp"))))))) (DoExpr (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EVar "resolvePass") (EVar "exportsFor")) (EVar "allowInternal")) (EVar "trustedMods")) (EVar "subjectOf")) (EVar "preludeKey")) (EVar "rt")) (EVar "core")) (EVar "served")) (EApp (EApp (EApp (EVar "omInsert") (EFieldAccess (EVar "exp") "modId")) (EVar "exp")) (EVar "known"))) (EApp (EApp (EApp (EVar "withIdentity") (EVar "mid")) (EVar "ident")) (EVar "ids"))) (EVar "rest")) (EApp (EApp (EApp (EVar "pushDiags") (EVar "path")) (EVar "diags")) (EVar "buckets"))))))
+(DTypeSig false "resolvePass" (TyFun (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyEffect () (Some "e") (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "String")))))) (TyFun (TyCon "ResolveWalk") (TyFun (TyFun (TyCon "String") (TyApp (TyCon "Option") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "Decl"))))) (TyFun (TyApp (TyCon "Option") (TyCon "String")) (TyFun (TyApp (TyCon "OrdMap") (TyCon "ModuleExports")) (TyFun (TyApp (TyCon "OrdMap") (TyCon "Int")) (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "String") (TyApp (TyCon "List") (TyCon "Decl")))) (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "Diag")))) (TyEffect () (Some "e") (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "Diag"))))))))))))))
+(DFunDef false "resolvePass" (PWild PWild PWild PWild PWild PWild (PList) (PVar "buckets")) (EVar "buckets"))
+(DFunDef false "resolvePass" ((PVar "exportsFor") (PVar "walk") (PVar "subjectOf") (PVar "served") (PVar "known") (PVar "ids") (PCons (PAs "m" (PTuple (PVar "mid") (PVar "path") (PVar "desugared"))) (PVar "rest")) (PVar "buckets")) (EBlock (DoLet false false (PVar "trusted") (EApp (EApp (EApp (EVar "moduleTrusted") (EFieldAccess (EVar "walk") "rwAllowInternal")) (EFieldAccess (EVar "walk") "rwTrusted")) (EVar "mid"))) (DoLet false false (PVar "subject") (EApp (EVar "subjectOf") (EVar "mid"))) (DoLet false false (PVar "graph") (EApp (EApp (EVar "map") (ELam ((PVar "k")) (EApp (EVar "joinNl") (EListLit (EVar "k") (EApp (EVar "boolKey") (EVar "trusted")) (EApp (EVar "boolKey") (EBinOp "==" (EApp (EVar "omSize") (EVar "known")) (ELit (LInt 0)))) (EApp (EVar "boolKey") (EApp (EVar "isSome") (EVar "subject"))))))) (EVar "served"))) (DoLet false false (PTuple (PVar "diags") (PVar "exp") (PVar "ident")) (EApp (EApp (EApp (EApp (EApp (EVar "servedPass") (EVar "ResolveKind")) (EVar "graph")) (EVar "ids")) (EVar "m")) (ELam (PWild) (EBlock (DoLet false false (PTuple (PVar "exp") (PVar "errs")) (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EVar "resolveModuleG") (EApp (EVar "internalGuardFor") (EVar "trusted"))) (EVar "subject")) (EFieldAccess (EVar "walk") "rwPreludeKey")) (EFieldAccess (EVar "walk") "rwRuntime")) (EFieldAccess (EVar "walk") "rwPrelude")) (EVar "known")) (EVar "mid")) (EVar "desugared"))) (DoExpr (ETuple (EApp (EApp (EVar "map") (EVar "diagOfResError")) (EApp (EApp (EVar "hintResErrors") (EVar "exportsFor")) (EVar "errs"))) (EVar "exp"))))))) (DoExpr (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EVar "resolvePass") (EVar "exportsFor")) (EVar "walk")) (EVar "subjectOf")) (EVar "served")) (EApp (EApp (EApp (EVar "omInsert") (EFieldAccess (EVar "exp") "modId")) (EVar "exp")) (EVar "known"))) (EApp (EApp (EApp (EVar "withIdentity") (EVar "mid")) (EVar "ident")) (EVar "ids"))) (EVar "rest")) (EApp (EApp (EApp (EVar "pushDiags") (EVar "path")) (EVar "diags")) (EVar "buckets"))))))
 (DTypeSig false "withIdentity" (TyFun (TyCon "String") (TyFun (TyApp (TyCon "Option") (TyCon "Int")) (TyFun (TyApp (TyCon "OrdMap") (TyCon "Int")) (TyApp (TyCon "OrdMap") (TyCon "Int"))))))
 (DFunDef false "withIdentity" ((PVar "mid") (PVar "ident") (PVar "ids")) (EApp (EApp (EApp (EVar "option") (EVar "ids")) (ELam ((PVar "i")) (EApp (EApp (EApp (EVar "omInsert") (EVar "mid")) (EVar "i")) (EVar "ids")))) (EVar "ident")))
 (DTypeSig false "boolKey" (TyFun (TyCon "Bool") (TyCon "String")))
 (DFunDef false "boolKey" ((PCon "True")) (ELit (LString "T")))
 (DFunDef false "boolKey" ((PCon "False")) (ELit (LString "F")))
-(DTypeSig false "typecheckPassFull" (TyFun (TyCon "DriveInputs") (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyFun (TyApp (TyCon "Option") (TyTuple (TyCon "Int") (TyCon "Int"))) (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "String") (TyApp (TyCon "List") (TyCon "Decl")))) (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "Decl")))) (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "Diag")))) (TyTuple (TyApp (TyCon "List") (TyCon "ModDiags")) (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "Diag"))))))))))))))
-(DFunDef false "typecheckPassFull" ((PVar "inputs") (PVar "runtimeP") (PVar "coreP") (PVar "preludeKey") (PVar "chainKey") (PVar "mods") (PVar "modPairs") (PVar "buckets")) (EBlock (DoLet false false (PTuple (PVar "r") PWild (PVar "results")) (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EVar "typecheckPassReport") (EVar "NoSteps")) (EVar "inputs")) (EVar "runtimeP")) (EVar "coreP")) (EVar "preludeKey")) (EVar "chainKey")) (EVar "mods")) (EVar "modPairs")) (EVar "buckets"))) (DoExpr (ETuple (EFieldAccess (EVar "r") "trDiagnostics") (EVar "results")))))
 (DTypeSig false "typecheckPassReport" (TyFun (TyCon "ChainSteps") (TyFun (TyCon "DriveInputs") (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyFun (TyApp (TyCon "Option") (TyTuple (TyCon "Int") (TyCon "Int"))) (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "String") (TyApp (TyCon "List") (TyCon "Decl")))) (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "Decl")))) (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "Diag")))) (TyTuple (TyCon "TcReport") (TyCon "DriveOutputs") (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "Diag")))))))))))))))
 (DFunDef false "typecheckPassReport" ((PVar "steps") (PVar "inputs") (PVar "runtimeP") (PVar "coreP") (PVar "preludeKey") (PVar "chainKey") (PVar "mods") (PVar "modPairs") (PVar "buckets")) (EBlock (DoLet false false (PVar "blocked") (EApp (EApp (EApp (EVar "resolveBlockedMods") (EVar "buckets")) (EVar "omEmpty")) (EVar "mods"))) (DoLet false false (PVar "checkedMods") (EApp (EApp (EVar "filterList") (ELam ((PTuple (PVar "mid") PWild PWild)) (EApp (EVar "not") (EApp (EApp (EVar "omHasKey") (EVar "mid")) (EVar "blocked"))))) (EVar "mods"))) (DoLet false false (PVar "checkedPairs") (EApp (EApp (EVar "filterList") (ELam ((PTuple (PVar "mid") PWild)) (EApp (EVar "not") (EApp (EApp (EVar "omHasKey") (EVar "mid")) (EVar "blocked"))))) (EVar "modPairs"))) (DoLet false false (PVar "rejected") (EApp (EVar "bucketsResolveRejected") (EVar "buckets"))) (DoLet false false (PVar "valueMain") (EBinOp "&&" (EApp (EVar "not") (EVar "rejected")) (EApp (EApp (EVar "valueMainCandidate") (EVar "coreP")) (EVar "modPairs")))) (DoLet false false (PTuple (PVar "driven") (PVar "outputs")) (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EVar "checkChainReport") (EVar "steps")) (EVar "inputs")) (EVar "valueMain")) (EVar "preludeKey")) (EVar "chainKey")) (EVar "runtimeP")) (EVar "coreP")) (EVar "checkedMods")) (EVar "checkedPairs"))) (DoLet false false (PVar "report") (EIf (EVar "rejected") (ERecordUpdate (EVar "driven") ((fa "trChecked" (EVar "None")))) (EVar "driven"))) (DoExpr (ETuple (EVar "report") (EVar "outputs") (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EVar "typecheckDiagsFold") (EVar "outputs")) (EFieldAccess (EVar "inputs") "diSibling")) (EApp (EApp (EApp (EVar "foldServeKey") (EVar "steps")) (EVar "preludeKey")) (EVar "chainKey"))) (EVar "runtimeP")) (EVar "coreP")) (EVar "mods")) (EVar "modPairs")) (EApp (EApp (EVar "map") (EVar "dropModSchemes")) (EFieldAccess (EVar "report") "trDiagnostics"))) (EVar "buckets"))))))
 (DTypeSig false "checkChainReport" (TyFun (TyCon "ChainSteps") (TyFun (TyCon "DriveInputs") (TyFun (TyCon "Bool") (TyFun (TyApp (TyCon "Option") (TyTuple (TyCon "Int") (TyCon "Int"))) (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "String") (TyApp (TyCon "List") (TyCon "Decl")))) (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "Decl")))) (TyTuple (TyCon "TcReport") (TyCon "DriveOutputs"))))))))))))
@@ -3825,8 +3637,8 @@ checkJsonLoadErr target src _ le = match loadErrorSite target le
 (DTypeSig false "foldServeKey" (TyFun (TyCon "ChainSteps") (TyFun (TyApp (TyCon "Option") (TyTuple (TyCon "Int") (TyCon "Int"))) (TyFun (TyCon "String") (TyApp (TyCon "Option") (TyCon "String"))))))
 (DFunDef false "foldServeKey" ((PCon "RecordSteps") (PCon "Some" (PTuple (PVar "rk") (PVar "ck"))) (PVar "chainKey")) (EApp (EVar "Some") (EApp (EApp (EApp (EVar "chainFullKey") (EVar "rk")) (EVar "ck")) (EVar "chainKey"))))
 (DFunDef false "foldServeKey" (PWild PWild PWild) (EVar "None"))
-(DTypeSig false "resolvedBuckets" (TyFun (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyEffect () (Some "e") (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "String")))))) (TyFun (TyCon "Bool") (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyApp (TyCon "List") (TyCon "SiblingPair")) (TyFun (TyApp (TyCon "Option") (TyTuple (TyCon "Int") (TyCon "Int"))) (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "String") (TyApp (TyCon "List") (TyCon "Decl")))) (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "Decl")))) (TyEffect () (Some "e") (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "Diag"))))))))))))))))
-(DFunDef false "resolvedBuckets" ((PVar "exportsFor") (PVar "allowInternal") (PVar "trustedMods") (PVar "sibling") (PVar "preludeKey") (PVar "chainKey") (PVar "runtimeP") (PVar "coreP") (PVar "mods") (PVar "modPairs")) (EBlock (DoExpr (EIf (EApp (EVar "isSome") (EVar "preludeKey")) (EApp (EVar "retainPassEntries") (EApp (EApp (EVar "map") (EVar "modIdOf")) (EVar "mods"))) (ELit LUnit))) (DoExpr (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EVar "resolvePass") (EVar "exportsFor")) (EVar "allowInternal")) (EVar "trustedMods")) (EApp (EApp (EVar "importerSubject") (EVar "sibling")) (EVar "modPairs"))) (EVar "preludeKey")) (EVar "runtimeP")) (EVar "coreP")) (EApp (EApp (EVar "map") (ELam ((PTuple (PVar "rk") (PVar "ck"))) (EApp (EApp (EApp (EVar "chainFullKey") (EVar "rk")) (EVar "ck")) (EVar "chainKey")))) (EVar "preludeKey"))) (EVar "omEmpty")) (EVar "omEmpty")) (EApp (EApp (EVar "desugaredTriples") (EVar "mods")) (EVar "modPairs"))) (EApp (EApp (EVar "seedAll") (EApp (EApp (EVar "map") (EVar "midPath")) (EVar "mods"))) (EListLit))))))
+(DTypeSig false "resolvedBuckets" (TyFun (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyEffect () (Some "e") (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "String")))))) (TyFun (TyCon "ResolveWalk") (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "String") (TyApp (TyCon "List") (TyCon "Decl")))) (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "Decl")))) (TyEffect () (Some "e") (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "Diag")))))))))))
+(DFunDef false "resolvedBuckets" ((PVar "exportsFor") (PVar "walk") (PVar "chainKey") (PVar "mods") (PVar "modPairs")) (EBlock (DoExpr (EIf (EApp (EVar "isSome") (EFieldAccess (EVar "walk") "rwPreludeKey")) (EApp (EVar "retainPassEntries") (EApp (EApp (EVar "map") (EVar "modIdOf")) (EVar "mods"))) (ELit LUnit))) (DoExpr (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EVar "resolvePass") (EVar "exportsFor")) (EVar "walk")) (EApp (EApp (EVar "importerSubject") (EFieldAccess (EVar "walk") "rwSibling")) (EVar "modPairs"))) (EApp (EApp (EVar "map") (ELam ((PTuple (PVar "rk") (PVar "ck"))) (EApp (EApp (EApp (EVar "chainFullKey") (EVar "rk")) (EVar "ck")) (EVar "chainKey")))) (EFieldAccess (EVar "walk") "rwPreludeKey"))) (EVar "omEmpty")) (EVar "omEmpty")) (EApp (EApp (EVar "desugaredTriples") (EVar "mods")) (EVar "modPairs"))) (EApp (EApp (EVar "seedAll") (EApp (EApp (EVar "map") (EVar "midPath")) (EVar "mods"))) (EListLit))))))
 (DTypeSig false "desugaredTriples" (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "String") (TyApp (TyCon "List") (TyCon "Decl")))) (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "Decl")))) (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "String") (TyApp (TyCon "List") (TyCon "Decl")))))))
 (DFunDef false "desugaredTriples" ((PCons (PTuple (PVar "mid") (PVar "path") PWild) (PVar "ms")) (PCons (PTuple PWild (PVar "decls")) (PVar "ps"))) (EBinOp "::" (ETuple (EVar "mid") (EVar "path") (EVar "decls")) (EApp (EApp (EVar "desugaredTriples") (EVar "ms")) (EVar "ps"))))
 (DFunDef false "desugaredTriples" (PWild PWild) (EListLit))
@@ -3894,7 +3706,7 @@ checkJsonLoadErr target src _ le = match loadErrorSite target le
 (DTypeSig false "ifaceRowsText" (TyFun (TyCon "String") (TyFun (TyApp (TyCon "Option") (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "String"))))) (TyCon "String"))))
 (DFunDef false "ifaceRowsText" ((PVar "mid") (PVar "rows")) (EApp (EVar "stringConcat") (EBinOp "::" (EApp (EVar "lenKey") (EVar "mid")) (EApp (EApp (EVar "map") (ELam ((PVar "row")) (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "")) (EApp (EVar "display") (EApp (EVar "lenKey") (EApp (EVar "fst") (EVar "row"))))) (ELit (LString ""))) (EApp (EVar "display") (EApp (EVar "lenKey") (EApp (EVar "joinNl") (EApp (EVar "snd") (EVar "row")))))) (ELit (LString ""))))) (EApp (EApp (EVar "optionOr") (EListLit)) (EVar "rows"))))))
 (DTypeSig true "analyzeProjectToLines" (TyFun (TyApp (TyCon "Ref") (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "String")))) (TyFun (TyFun (TyCon "String") (TyApp (TyCon "Option") (TyCon "String"))) (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyCon "String") (TyFun (TyCon "String") (TyEffect ("IO") None (TyCon "String")))))))))
-(DFunDef false "analyzeProjectToLines" ((PVar "cacheRef") (PVar "read") (PVar "entry") (PVar "roots") (PVar "runtimeSrc") (PVar "coreSrc")) (EBlock (DoLet false false (PVar "parseCacheRef") (EApp (EVar "Ref") (EVar "omEmpty"))) (DoExpr (EApp (EVar "joinNl") (EApp (EVar "projectLines") (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EVar "analyzeProject") (EVar "noStdlibExports")) (EVar "True")) (EListLit)) (EVar "cacheRef")) (EVar "parseCacheRef")) (EVar "read")) (EVar "entry")) (EVar "roots")) (EVar "runtimeSrc")) (EVar "coreSrc")))))))
+(DFunDef false "analyzeProjectToLines" ((PVar "cacheRef") (PVar "read") (PVar "entry") (PVar "roots") (PVar "runtimeSrc") (PVar "coreSrc")) (EBlock (DoLet false false (PVar "load") (ERecordUpdate (EApp (EApp (EApp (EApp (EApp (EVar "freshLoad") (EVar "read")) (EVar "entry")) (EVar "roots")) (EVar "runtimeSrc")) (EVar "coreSrc")) ((fa "plCache" (EVar "cacheRef"))))) (DoExpr (EBinOp "|>" (EBinOp "|>" (EApp (EApp (EVar "analyzeProject") (EVar "noStdlibExports")) (EApp (EVar "openQuery") (EVar "load"))) (EVar "projectLines")) (EVar "joinNl")))))
 (DTypeSig false "projectLines" (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "Diag")))) (TyApp (TyCon "List") (TyCon "String"))))
 (DFunDef false "projectLines" ((PList)) (EListLit))
 (DFunDef false "projectLines" ((PCons (PTuple (PVar "file") (PVar "ds")) (PVar "rest"))) (EBinOp "::" (EBinOp "++" (ELit (LString "## FILE ")) (EVar "file")) (EBinOp "++" (EApp (EApp (EVar "map") (EVar "ppDiagLoc")) (EVar "ds")) (EApp (EVar "projectLines") (EVar "rest")))))
@@ -3939,7 +3751,11 @@ checkJsonLoadErr target src _ le = match loadErrorSite target le
 (DTypeSig true "pendingEnvelopeExtras" (TyApp (TyCon "Ref") (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "Json")))))
 (DFunDef false "pendingEnvelopeExtras" () (EApp (EVar "Ref") (EListLit)))
 (DTypeSig true "runEnvelopeFields" (TyFun (TyCon "Unit") (TyEffect () (Some "e") (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "Json"))))))
-(DFunDef false "runEnvelopeFields" (PWild) (EBlock (DoLet false false (PVar "staleF") (EMatch (EUnOp "!" (EVar "pendingStaleNotice")) (arm (PCon "None") () (EListLit)) (arm (PCon "Some" (PVar "msg")) () (EListLit (ETuple (ELit (LString "staleBinary")) (EApp (EVar "JString") (EVar "msg"))))))) (DoLet false false (PVar "preludeF") (EApp (EApp (EVar "map") (ELam ((PTuple (PVar "field") (PVar "msg"))) (ETuple (EVar "field") (EApp (EVar "JString") (EVar "msg"))))) (EUnOp "!" (EVar "pendingPreludeNotices")))) (DoLet false false (PVar "perfF") (EMatch (EApp (EVar "takePerfSink") (ELit LUnit)) (arm (PList) () (EListLit)) (arm (PVar "ls") () (EListLit (ETuple (ELit (LString "perf")) (EApp (EVar "JArray") (EApp (EVar "arrayFromList") (EApp (EApp (EVar "map") (ELam ((PVar "l")) (EApp (EVar "JString") (EVar "l")))) (EVar "ls"))))))))) (DoExpr (EBinOp "++" (EBinOp "++" (EBinOp "++" (EVar "staleF") (EVar "preludeF")) (EVar "perfF")) (EUnOp "!" (EVar "pendingEnvelopeExtras"))))))
+(DFunDef false "runEnvelopeFields" (PWild) (EBlock (DoLet false false (PVar "perfF") (EMatch (EApp (EVar "takePerfSink") (ELit LUnit)) (arm (PList) () (EListLit)) (arm (PVar "ls") () (EListLit (ETuple (ELit (LString "perf")) (EApp (EVar "JArray") (EApp (EVar "arrayFromList") (EApp (EApp (EVar "map") (ELam ((PVar "l")) (EApp (EVar "JString") (EVar "l")))) (EVar "ls"))))))))) (DoExpr (EBinOp "++" (EBinOp "++" (EApp (EVar "staleNoticeFields") (ELit LUnit)) (EVar "perfF")) (EUnOp "!" (EVar "pendingEnvelopeExtras"))))))
+(DTypeSig true "abortEnvelopeFields" (TyFun (TyCon "Unit") (TyEffect () (Some "e") (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "Json"))))))
+(DFunDef false "abortEnvelopeFields" (PWild) (EBinOp "++" (EApp (EVar "staleNoticeFields") (ELit LUnit)) (EUnOp "!" (EVar "pendingEnvelopeExtras"))))
+(DTypeSig false "staleNoticeFields" (TyFun (TyCon "Unit") (TyEffect () (Some "e") (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "Json"))))))
+(DFunDef false "staleNoticeFields" (PWild) (EBlock (DoLet false false (PVar "staleF") (EMatch (EUnOp "!" (EVar "pendingStaleNotice")) (arm (PCon "None") () (EListLit)) (arm (PCon "Some" (PVar "msg")) () (EListLit (ETuple (ELit (LString "staleBinary")) (EApp (EVar "JString") (EVar "msg"))))))) (DoExpr (EBinOp "++" (EVar "staleF") (EApp (EApp (EVar "map") (ELam ((PTuple (PVar "field") (PVar "msg"))) (ETuple (EVar "field") (EApp (EVar "JString") (EVar "msg"))))) (EUnOp "!" (EVar "pendingPreludeNotices")))))))
 (DTypeSig true "flushRunEnvelope" (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "String") (TyApp (TyCon "List") (TyCon "Diag")))) (TyEffect ("Stderr") (Some "e") (TyCon "Unit"))))
 (DFunDef false "flushRunEnvelope" ((PVar "triples")) (EMatch (ETuple (EVar "triples") (EApp (EVar "runEnvelopeFields") (ELit LUnit))) (arm (PTuple (PList) (PList)) () (ELit LUnit)) (arm (PTuple (PVar "ts") (PVar "extra")) () (EApp (EVar "ePutStrLn") (EApp (EApp (EVar "cjAllToJsonWith") (EVar "extra")) (EVar "ts"))))))
 (DTypeSig true "readDiagSrc" (TyFun (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "Diag"))) (TyEffect ("IO") None (TyTuple (TyCon "String") (TyCon "String") (TyApp (TyCon "List") (TyCon "Diag"))))))
@@ -4086,7 +3902,7 @@ checkJsonLoadErr target src _ le = match loadErrorSite target le
 (DUse false (UseGroup ("frontend" "parser") ((mem "parse" false) (mem "parseLocated" false) (mem "parseResult" false) (mem "ParseError" false) (mem "parseErrorDiagnostic" false))))
 (DUse false (UseGroup ("frontend" "desugar_cache") ((mem "desugaredPrelude" false) (mem "preludeGeneration" false))))
 (DUse false (UseGroup ("frontend" "desugar") ((mem "desugar" false) (mem "checkDerives" false))))
-(DUse false (UseGroup ("frontend" "resolve") ((mem "ResError" false) (mem "resolveProgramG2" false) (mem "internalGuardFor" false) (mem "ppResError" false) (mem "resErrorLoc" false) (mem "resErrorCode" false) (mem "resErrorDidYouMean" false) (mem "resErrorIsPrivateName" false) (mem "resolveModuleG" false) (mem "resolveModulesErrorsByFile" false) (mem "importedCtorDeclsStep" false) (mem "importerSubject" false) (mem "withStdlibExports" false) (mem "hintableUnboundNames" false) (mem "exportedValueNames" false))))
+(DUse false (UseGroup ("frontend" "resolve") ((mem "ResError" false) (mem "resolveProgramG2" false) (mem "internalGuardFor" false) (mem "moduleTrusted" false) (mem "ppResError" false) (mem "resErrorLoc" false) (mem "resErrorCode" false) (mem "resErrorDidYouMean" false) (mem "resErrorIsPrivateName" false) (mem "resolveModuleG" false) (mem "ResolveWalk" true) (mem "resolveModulesErrorsByFile" false) (mem "importedCtorDeclsStep" false) (mem "importerSubject" false) (mem "withStdlibExports" false) (mem "hintableUnboundNames" false) (mem "exportedValueNames" false))))
 (DUse false (UseGroup ("frontend" "ast") ((mem "SiblingPair" true))))
 (DUse false (UseGroup ("frontend" "visibility") ((mem "ModuleExports" false) (mem "coreExports" false) (mem "useModuleIds" false))))
 (DUse false (UseGroup ("list") ((mem "last" false))))
@@ -4184,8 +4000,6 @@ checkJsonLoadErr target src _ le = match loadErrorSite target le
 (DFunDef false "nthLineArr" ((PVar "srcLines") (PVar "n")) (EIf (EBinOp "||" (EBinOp "<" (EVar "n") (ELit (LInt 1))) (EBinOp ">" (EVar "n") (EApp (EVar "arrayLength") (EVar "srcLines")))) (EVar "None") (EIf (EVar "otherwise") (EApp (EVar "Some") (EApp (EApp (EVar "arrayGetUnsafe") (EBinOp "-" (EVar "n") (ELit (LInt 1)))) (EVar "srcLines"))) (EApp (EVar "__fallthrough__") (ELit LUnit)))))
 (DTypeSig true "analyze" (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyCon "String") (TyApp (TyCon "List") (TyCon "Diag"))))))
 (DFunDef false "analyze" ((PVar "runtimeSrc") (PVar "coreSrc") (PVar "progSrc")) (EApp (EApp (EApp (EApp (EApp (EVar "analyzeFrom") (EVar "noStdlibExports")) (ELit (LString ""))) (EVar "runtimeSrc")) (EVar "coreSrc")) (EApp (EVar "parse") (EVar "progSrc"))))
-(DTypeSig true "analyzeLocated" (TyFun (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyEffect () (Some "e") (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "String")))))) (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyCon "String") (TyEffect () (Some "e") (TyApp (TyCon "List") (TyCon "Diag"))))))))
-(DFunDef false "analyzeLocated" ((PVar "exportsFor") (PVar "runtimeSrc") (PVar "coreSrc") (PVar "progSrc")) (EApp (EApp (EApp (EApp (EApp (EVar "analyzeFrom") (EVar "exportsFor")) (ELit (LString ""))) (EVar "runtimeSrc")) (EVar "coreSrc")) (EApp (EVar "parseLocated") (EVar "progSrc"))))
 (DData Private "SurfaceAnalysis" () ((variant "SurfaceAnalysis" (ConNamed (field "surfaceDiags" (TyApp (TyCon "List") (TyCon "Diag"))) (field "resolveClean" (TyCon "Bool")) (field "surfaceDesugared" (TyApp (TyCon "List") (TyCon "Decl"))) (field "surfaceRuntimeP" (TyApp (TyCon "List") (TyCon "Decl"))) (field "surfaceCoreP" (TyApp (TyCon "List") (TyCon "Decl"))) (field "surfacePreludeKey" (TyApp (TyCon "Option") (TyTuple (TyCon "Int") (TyCon "Int"))))))) ())
 (DTypeSig true "analyzeFrom" (TyFun (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyEffect () (Some "e") (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "String")))))) (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyEffect () (Some "e") (TyApp (TyCon "List") (TyCon "Diag")))))))))
 (DFunDef false "analyzeFrom" ((PVar "exportsFor") (PVar "modName") (PVar "runtimeSrc") (PVar "coreSrc") (PVar "raw")) (EApp (EApp (EDictApp "flatMap") (EVar "snd")) (EFieldAccess (EApp (EApp (EApp (EApp (EApp (EApp (EVar "fileFront") (EVar "exportsFor")) (EVar "modName")) (EVar "True")) (EVar "runtimeSrc")) (EVar "coreSrc")) (EVar "raw")) "foDiags")))
@@ -4222,7 +4036,7 @@ checkJsonLoadErr target src _ le = match loadErrorSite target le
 (DTypeSig false "unkept" (TyFun (TyTuple (TyCon "TcReport") (TyCon "DriveOutputs")) (TyTuple (TyCon "Unit") (TyCon "TcReport") (TyCon "DriveOutputs"))))
 (DFunDef false "unkept" ((PTuple (PVar "r") (PVar "o"))) (ETuple (ELit LUnit) (EVar "r") (EVar "o")))
 (DTypeSig true "frontEnd" (TyFun (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyEffect () (Some "e") (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "String")))))) (TyFun (TyFun (TyCon "FrontDriveIn") (TyEffect () (Some "e") (TyTuple (TyVar "a") (TyCon "TcReport") (TyCon "DriveOutputs")))) (TyFun (TyCon "FrontInput") (TyEffect () (Some "e") (TyApp (TyCon "FrontOutput") (TyVar "a")))))))
-(DFunDef false "frontEnd" ((PVar "exportsFor") (PVar "drive") (PVar "fi")) (EMatch (EFieldAccess (EVar "fi") "fiProgram") (arm (PCon "FrontFile" (PTuple (PVar "mid") (PVar "path") (PVar "raw"))) () (EBlock (DoLet false false (PVar "s") (EApp (EApp (EApp (EApp (EApp (EApp (EVar "analyzeSurface") (EVar "exportsFor")) (EVar "mid")) (EFieldAccess (EVar "fi") "fiRuntimeSrc")) (EFieldAccess (EVar "fi") "fiCoreSrc")) (EVar "raw")) (EApp (EVar "internalGuardFor") (EBinOp "||" (EFieldAccess (EVar "fi") "fiAllowInternal") (EApp (EApp (EVar "contains") (EVar "mid")) (EFieldAccess (EVar "fi") "fiTrusted")))))) (DoExpr (EMatch (EFieldAccess (EVar "s") "resolveClean") (arm (PCon "False") () (EApp (EVar "undrivenOutput") (EListLit (ETuple (EVar "path") (EFieldAccess (EVar "s") "surfaceDiags"))))) (arm (PCon "True") () (EBlock (DoLet false false (PTuple (PVar "kept") (PVar "r") (PVar "outputs")) (EApp (EVar "drive") (ERecordCreate "FrontDriveIn" ((fa "fdInputs" (EFieldAccess (EVar "fi") "fiInputs")) (fa "fdPreludeKey" (EFieldAccess (EVar "s") "surfacePreludeKey")) (fa "fdRuntime" (EFieldAccess (EVar "s") "surfaceRuntimeP")) (fa "fdCore" (EFieldAccess (EVar "s") "surfaceCoreP")) (fa "fdPairs" (EListLit (ETuple (ELit (LString "__user__")) (EFieldAccess (EVar "s") "surfaceDesugared")))) (fa "fdMods" (EListLit)))))) (DoLet false false (PVar "tcHalf") (EApp (EVar "tcHalfOfPerModule") (EApp (EApp (EMethodRef "map") (EVar "dropModSchemes")) (EFieldAccess (EVar "r") "trDiagnostics")))) (DoExpr (EApp (EApp (EApp (EApp (EVar "drivenOutput") (EListLit (ETuple (EVar "path") (EBinOp "++" (EFieldAccess (EVar "s") "surfaceDiags") (EVar "tcHalf"))))) (EVar "r")) (EVar "outputs")) (EVar "kept"))))))))) (arm (PCon "FrontGraph" (PVar "mods") (PVar "pairs")) () (EBlock (DoLet false false (PVar "rt") (EApp (EVar "desugaredPrelude") (EFieldAccess (EVar "fi") "fiRuntimeSrc"))) (DoLet false false (PVar "core") (EApp (EVar "desugaredPrelude") (EFieldAccess (EVar "fi") "fiCoreSrc"))) (DoLet false false (PVar "preludeKey") (EApp (EVar "Some") (EApp (EApp (EVar "preludeGeneration") (EFieldAccess (EVar "fi") "fiRuntimeSrc")) (EFieldAccess (EVar "fi") "fiCoreSrc")))) (DoLet false false (PVar "driveIn") (ERecordCreate "FrontDriveIn" ((fa "fdInputs" (EFieldAccess (EVar "fi") "fiInputs")) (fa "fdPreludeKey" (EVar "preludeKey")) (fa "fdRuntime" (EVar "rt")) (fa "fdCore" (EVar "core")) (fa "fdPairs" (EVar "pairs")) (fa "fdMods" (EVar "mods"))))) (DoExpr (EMatch (EFieldAccess (EVar "fi") "fiPolicy") (arm (PCon "NeverDriveRejected") () (EBlock (DoLet false false (PVar "resolved") (EApp (EApp (EVar "hintResErrorPairs") (EVar "exportsFor")) (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EVar "resolveModulesErrorsByFile") (EApp (EApp (EMethodRef "map") (EVar "modIdToPath")) (EVar "mods"))) (EFieldAccess (EVar "fi") "fiAllowInternal")) (EFieldAccess (EVar "fi") "fiTrusted")) (EFieldAccess (EFieldAccess (EVar "fi") "fiInputs") "diSibling")) (EVar "preludeKey")) (EVar "rt")) (EVar "core")) (EVar "pairs")))) (DoExpr (EMatch (EApp (EApp (EVar "anyList") (ELam ((PVar "p")) (EApp (EVar "not") (EApp (EMethodRef "isEmpty") (EApp (EVar "snd") (EVar "p")))))) (EVar "resolved")) (arm (PCon "True") () (EApp (EVar "undrivenOutput") (EApp (EApp (EMethodRef "map") (EVar "resolveBucket")) (EVar "resolved")))) (arm (PCon "False") () (EApp (EApp (EApp (EApp (EVar "drivenGraph") (EVar "drive")) (EVar "None")) (EVar "driveIn")) (EApp (EApp (EVar "seedAll") (EApp (EApp (EMethodRef "map") (EVar "midPath")) (EVar "mods"))) (EListLit)))))))) (arm (PCon "DriveUnblocked" (PVar "chainKey") (PVar "steps")) () (EBlock (DoLet false false (PVar "buckets") (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EVar "resolvedBuckets") (EVar "exportsFor")) (EFieldAccess (EVar "fi") "fiAllowInternal")) (EFieldAccess (EVar "fi") "fiTrusted")) (EFieldAccess (EFieldAccess (EVar "fi") "fiInputs") "diSibling")) (EVar "preludeKey")) (EVar "chainKey")) (EVar "rt")) (EVar "core")) (EVar "mods")) (EVar "pairs"))) (DoExpr (EMatch (EApp (EVar "bucketsResolveRejected") (EVar "buckets")) (arm (PCon "True") () (EBlock (DoLet false false (PTuple (PVar "r") (PVar "outputs") (PVar "results")) (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EVar "typecheckPassReport") (EVar "steps")) (EFieldAccess (EVar "fi") "fiInputs")) (EVar "rt")) (EVar "core")) (EVar "preludeKey")) (EVar "chainKey")) (EVar "mods")) (EVar "pairs")) (EVar "buckets"))) (DoExpr (ERecordCreate "FrontOutput" ((fa "foDiags" (EVar "results")) (fa "foReport" (EVar "r")) (fa "foOutputs" (EVar "outputs")) (fa "foDriven" (EVar "None"))))))) (arm (PCon "False") () (EApp (EApp (EApp (EApp (EVar "drivenGraph") (EVar "drive")) (EApp (EApp (EApp (EVar "foldServeKey") (EVar "steps")) (EVar "preludeKey")) (EVar "chainKey"))) (EVar "driveIn")) (EVar "buckets"))))))) (arm (PCon "ResolvedByGate") () (EApp (EApp (EApp (EApp (EVar "drivenGraph") (EVar "drive")) (EVar "None")) (EVar "driveIn")) (EApp (EApp (EVar "seedAll") (EApp (EApp (EMethodRef "map") (EVar "midPath")) (EVar "mods"))) (EListLit))))))))))
+(DFunDef false "frontEnd" ((PVar "exportsFor") (PVar "drive") (PVar "fi")) (EMatch (EFieldAccess (EVar "fi") "fiProgram") (arm (PCon "FrontFile" (PTuple (PVar "mid") (PVar "path") (PVar "raw"))) () (EBlock (DoLet false false (PVar "s") (EApp (EApp (EApp (EApp (EApp (EApp (EVar "analyzeSurface") (EVar "exportsFor")) (EVar "mid")) (EFieldAccess (EVar "fi") "fiRuntimeSrc")) (EFieldAccess (EVar "fi") "fiCoreSrc")) (EVar "raw")) (EApp (EVar "internalGuardFor") (EApp (EApp (EApp (EVar "moduleTrusted") (EFieldAccess (EVar "fi") "fiAllowInternal")) (EFieldAccess (EVar "fi") "fiTrusted")) (EVar "mid"))))) (DoExpr (EMatch (EFieldAccess (EVar "s") "resolveClean") (arm (PCon "False") () (EApp (EVar "undrivenOutput") (EListLit (ETuple (EVar "path") (EFieldAccess (EVar "s") "surfaceDiags"))))) (arm (PCon "True") () (EBlock (DoLet false false (PTuple (PVar "kept") (PVar "r") (PVar "outputs")) (EApp (EVar "drive") (ERecordCreate "FrontDriveIn" ((fa "fdInputs" (EFieldAccess (EVar "fi") "fiInputs")) (fa "fdPreludeKey" (EFieldAccess (EVar "s") "surfacePreludeKey")) (fa "fdRuntime" (EFieldAccess (EVar "s") "surfaceRuntimeP")) (fa "fdCore" (EFieldAccess (EVar "s") "surfaceCoreP")) (fa "fdPairs" (EListLit (ETuple (ELit (LString "__user__")) (EFieldAccess (EVar "s") "surfaceDesugared")))) (fa "fdMods" (EListLit)))))) (DoLet false false (PVar "tcHalf") (EApp (EVar "tcHalfOfPerModule") (EApp (EApp (EMethodRef "map") (EVar "dropModSchemes")) (EFieldAccess (EVar "r") "trDiagnostics")))) (DoExpr (EApp (EApp (EApp (EApp (EVar "drivenOutput") (EListLit (ETuple (EVar "path") (EBinOp "++" (EFieldAccess (EVar "s") "surfaceDiags") (EVar "tcHalf"))))) (EVar "r")) (EVar "outputs")) (EVar "kept"))))))))) (arm (PCon "FrontGraph" (PVar "mods") (PVar "pairs")) () (EBlock (DoLet false false (PVar "rt") (EApp (EVar "desugaredPrelude") (EFieldAccess (EVar "fi") "fiRuntimeSrc"))) (DoLet false false (PVar "core") (EApp (EVar "desugaredPrelude") (EFieldAccess (EVar "fi") "fiCoreSrc"))) (DoLet false false (PVar "preludeKey") (EApp (EVar "Some") (EApp (EApp (EVar "preludeGeneration") (EFieldAccess (EVar "fi") "fiRuntimeSrc")) (EFieldAccess (EVar "fi") "fiCoreSrc")))) (DoLet false false (PVar "driveIn") (ERecordCreate "FrontDriveIn" ((fa "fdInputs" (EFieldAccess (EVar "fi") "fiInputs")) (fa "fdPreludeKey" (EVar "preludeKey")) (fa "fdRuntime" (EVar "rt")) (fa "fdCore" (EVar "core")) (fa "fdPairs" (EVar "pairs")) (fa "fdMods" (EVar "mods"))))) (DoLet false false (PVar "walk") (ERecordCreate "ResolveWalk" ((fa "rwAllowInternal" (EFieldAccess (EVar "fi") "fiAllowInternal")) (fa "rwTrusted" (EFieldAccess (EVar "fi") "fiTrusted")) (fa "rwSibling" (EFieldAccess (EFieldAccess (EVar "fi") "fiInputs") "diSibling")) (fa "rwPreludeKey" (EVar "preludeKey")) (fa "rwRuntime" (EVar "rt")) (fa "rwPrelude" (EVar "core"))))) (DoExpr (EMatch (EFieldAccess (EVar "fi") "fiPolicy") (arm (PCon "NeverDriveRejected") () (EBlock (DoLet false false (PVar "resolved") (EApp (EApp (EVar "hintResErrorPairs") (EVar "exportsFor")) (EApp (EApp (EApp (EVar "resolveModulesErrorsByFile") (EApp (EApp (EMethodRef "map") (EVar "modIdToPath")) (EVar "mods"))) (EVar "walk")) (EVar "pairs")))) (DoExpr (EMatch (EApp (EApp (EVar "anyList") (ELam ((PVar "p")) (EApp (EVar "not") (EApp (EMethodRef "isEmpty") (EApp (EVar "snd") (EVar "p")))))) (EVar "resolved")) (arm (PCon "True") () (EApp (EVar "undrivenOutput") (EApp (EApp (EMethodRef "map") (EVar "resolveBucket")) (EVar "resolved")))) (arm (PCon "False") () (EApp (EApp (EApp (EApp (EVar "drivenGraph") (EVar "drive")) (EVar "None")) (EVar "driveIn")) (EApp (EApp (EVar "seedAll") (EApp (EApp (EMethodRef "map") (EVar "midPath")) (EVar "mods"))) (EListLit)))))))) (arm (PCon "DriveUnblocked" (PVar "chainKey") (PVar "steps")) () (EBlock (DoLet false false (PVar "buckets") (EApp (EApp (EApp (EApp (EApp (EVar "resolvedBuckets") (EVar "exportsFor")) (EVar "walk")) (EVar "chainKey")) (EVar "mods")) (EVar "pairs"))) (DoExpr (EMatch (EApp (EVar "bucketsResolveRejected") (EVar "buckets")) (arm (PCon "True") () (EBlock (DoLet false false (PTuple (PVar "r") (PVar "outputs") (PVar "results")) (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EVar "typecheckPassReport") (EVar "steps")) (EFieldAccess (EVar "fi") "fiInputs")) (EVar "rt")) (EVar "core")) (EVar "preludeKey")) (EVar "chainKey")) (EVar "mods")) (EVar "pairs")) (EVar "buckets"))) (DoExpr (ERecordCreate "FrontOutput" ((fa "foDiags" (EVar "results")) (fa "foReport" (EVar "r")) (fa "foOutputs" (EVar "outputs")) (fa "foDriven" (EVar "None"))))))) (arm (PCon "False") () (EApp (EApp (EApp (EApp (EVar "drivenGraph") (EVar "drive")) (EApp (EApp (EApp (EVar "foldServeKey") (EVar "steps")) (EVar "preludeKey")) (EVar "chainKey"))) (EVar "driveIn")) (EVar "buckets"))))))) (arm (PCon "ResolvedByGate") () (EApp (EApp (EApp (EApp (EVar "drivenGraph") (EVar "drive")) (EVar "None")) (EVar "driveIn")) (EApp (EApp (EVar "seedAll") (EApp (EApp (EMethodRef "map") (EVar "midPath")) (EVar "mods"))) (EListLit))))))))))
 (DTypeSig false "drivenGraph" (TyFun (TyFun (TyCon "FrontDriveIn") (TyEffect () (Some "e") (TyTuple (TyVar "a") (TyCon "TcReport") (TyCon "DriveOutputs")))) (TyFun (TyApp (TyCon "Option") (TyCon "String")) (TyFun (TyCon "FrontDriveIn") (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "Diag")))) (TyEffect () (Some "e") (TyApp (TyCon "FrontOutput") (TyVar "a"))))))))
 (DFunDef false "drivenGraph" ((PVar "drive") (PVar "served") (PVar "d") (PVar "buckets")) (EBlock (DoLet false false (PTuple (PVar "kept") (PVar "r") (PVar "outputs")) (EApp (EVar "drive") (EVar "d"))) (DoLet false false (PVar "folded") (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EVar "typecheckDiagsFold") (EVar "outputs")) (EFieldAccess (EFieldAccess (EVar "d") "fdInputs") "diSibling")) (EVar "served")) (EFieldAccess (EVar "d") "fdRuntime")) (EFieldAccess (EVar "d") "fdCore")) (EFieldAccess (EVar "d") "fdMods")) (EFieldAccess (EVar "d") "fdPairs")) (EApp (EApp (EMethodRef "map") (EVar "dropModSchemes")) (EFieldAccess (EVar "r") "trDiagnostics"))) (EVar "buckets"))) (DoExpr (EApp (EApp (EApp (EApp (EVar "drivenOutput") (EVar "folded")) (EVar "r")) (EVar "outputs")) (EVar "kept")))))
 (DTypeSig false "resolveBucket" (TyFun (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "ResError"))) (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "Diag")))))
@@ -4271,16 +4085,24 @@ checkJsonLoadErr target src _ le = match loadErrorSite target le
 (DFunDef false "cacheRemove" ((PVar "f") (PCons (PTuple (PVar "k") (PVar "v")) (PVar "rest"))) (EIf (EBinOp "==" (EVar "k") (EVar "f")) (EApp (EApp (EVar "cacheRemove") (EVar "f")) (EVar "rest")) (EIf (EVar "otherwise") (EBinOp "::" (ETuple (EVar "k") (EVar "v")) (EApp (EApp (EVar "cacheRemove") (EVar "f")) (EVar "rest"))) (EApp (EVar "__fallthrough__") (ELit LUnit)))))
 (DTypeSig false "wrappedRead" (TyFun (TyApp (TyCon "Ref") (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "String")))) (TyFun (TyApp (TyCon "Ref") (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "Diag")))) (TyFun (TyApp (TyCon "Ref") (TyApp (TyCon "OrdMap") (TyApp (TyCon "List") (TyCon "Decl")))) (TyFun (TyFun (TyCon "String") (TyApp (TyCon "Option") (TyCon "String"))) (TyFun (TyCon "String") (TyApp (TyCon "Option") (TyCon "String"))))))))
 (DFunDef false "wrappedRead" ((PVar "cacheRef") (PVar "staleRef") (PVar "parseCacheRef") (PVar "read") (PVar "path")) (EApp (EApp (EMethodRef "andThen") (EApp (EVar "read") (EVar "path"))) (ELam ((PVar "src")) (EMatch (EApp (EApp (EVar "parseCachedLocated") (EVar "parseCacheRef")) (EVar "src")) (arm (PCon "Ok" PWild) () (EBlock (DoExpr (EApp (EApp (EVar "setRef") (EVar "cacheRef")) (EApp (EApp (EApp (EVar "cachePut") (EVar "path")) (EVar "src")) (EUnOp "!" (EVar "cacheRef"))))) (DoExpr (EApp (EVar "Some") (EVar "src"))))) (arm (PCon "Err" (PVar "e")) () (EBlock (DoExpr (EApp (EApp (EVar "setRef") (EVar "staleRef")) (EBinOp "::" (ETuple (EVar "path") (EApp (EApp (EVar "parseErrDiag") (EVar "path")) (EVar "e"))) (EUnOp "!" (EVar "staleRef"))))) (DoExpr (EMatch (EApp (EApp (EVar "lookupAssoc") (EVar "path")) (EUnOp "!" (EVar "cacheRef"))) (arm (PCon "Some" (PVar "good")) () (EApp (EVar "Some") (EVar "good"))) (arm (PCon "None") () (EApp (EVar "Some") (EVar "src")))))))))))
+(DTypeSig false "wrappedReadFor" (TyFun (TyCon "ProjectLoad") (TyFun (TyApp (TyCon "Ref") (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "Diag")))) (TyFun (TyCon "String") (TyApp (TyCon "Option") (TyCon "String"))))))
+(DFunDef false "wrappedReadFor" ((PVar "load") (PVar "staleRef") (PVar "path")) (EApp (EApp (EApp (EApp (EApp (EVar "wrappedRead") (EFieldAccess (EVar "load") "plCache")) (EVar "staleRef")) (EFieldAccess (EVar "load") "plParseCache")) (EFieldAccess (EVar "load") "plRead")) (EVar "path")))
 (DTypeSig true "parseErrDiag" (TyFun (TyCon "String") (TyFun (TyCon "ParseError") (TyCon "Diag"))))
 (DFunDef false "parseErrDiag" ((PVar "path") (PVar "e")) (EApp (EApp (EVar "parseDiagnosticToDiag") (EVar "path")) (EApp (EVar "parseErrorDiagnostic") (EVar "e"))))
 (DTypeSig false "preludeDesugared" (TyFun (TyCon "String") (TyApp (TyCon "List") (TyCon "Decl"))))
 (DFunDef false "preludeDesugared" ((PVar "src")) (EApp (EVar "desugaredPrelude") (EVar "src")))
-(DTypeSig true "analyzeProject" (TyFun (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyEffect () (Some "e") (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "String")))))) (TyFun (TyCon "Bool") (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyApp (TyCon "Ref") (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "String")))) (TyFun (TyApp (TyCon "Ref") (TyApp (TyCon "OrdMap") (TyApp (TyCon "List") (TyCon "Decl")))) (TyFun (TyFun (TyCon "String") (TyApp (TyCon "Option") (TyCon "String"))) (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyCon "String") (TyFun (TyCon "String") (TyEffect ("IO") (Some "e") (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "Diag"))))))))))))))))
-(DFunDef false "analyzeProject" ((PVar "exportsFor") (PVar "allowInternal") (PVar "trustedMods") (PVar "cacheRef") (PVar "parseCacheRef") (PVar "read") (PVar "entry") (PVar "roots") (PVar "runtimeSrc") (PVar "coreSrc")) (EBlock (DoLet false false (PTuple PWild (PVar "results")) (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EVar "analyzeProjectFull") (EVar "exportsFor")) (EVar "allowInternal")) (EVar "trustedMods")) (EVar "cacheRef")) (EVar "parseCacheRef")) (EVar "read")) (EVar "entry")) (EVar "roots")) (EVar "runtimeSrc")) (EVar "coreSrc"))) (DoExpr (EVar "results"))))
-(DTypeSig false "analyzeProjectFull" (TyFun (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyEffect () (Some "e") (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "String")))))) (TyFun (TyCon "Bool") (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyApp (TyCon "Ref") (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "String")))) (TyFun (TyApp (TyCon "Ref") (TyApp (TyCon "OrdMap") (TyApp (TyCon "List") (TyCon "Decl")))) (TyFun (TyFun (TyCon "String") (TyApp (TyCon "Option") (TyCon "String"))) (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyCon "String") (TyFun (TyCon "String") (TyEffect ("IO") (Some "e") (TyTuple (TyApp (TyCon "List") (TyCon "ModDiags")) (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "Diag")))))))))))))))))
-(DFunDef false "analyzeProjectFull" ((PVar "exportsFor") (PVar "allowInternal") (PVar "trustedMods") (PVar "cacheRef") (PVar "parseCacheRef") (PVar "read") (PVar "entry") (PVar "roots") (PVar "runtimeSrc") (PVar "coreSrc")) (EBlock (DoLet false false (PTuple (PVar "report") (PVar "results")) (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EVar "analyzeProjectReport") (EVar "exportsFor")) (EVar "allowInternal")) (EVar "trustedMods")) (EVar "cacheRef")) (EVar "parseCacheRef")) (EVar "read")) (EVar "entry")) (EVar "roots")) (EVar "runtimeSrc")) (EVar "coreSrc"))) (DoExpr (EMatch (EVar "report") (arm (PCon "Some" (PVar "r")) () (ETuple (EFieldAccess (EVar "r") "trDiagnostics") (EVar "results"))) (arm (PCon "None") () (ETuple (EListLit) (EVar "results")))))))
-(DTypeSig true "analyzeProjectReport" (TyFun (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyEffect () (Some "e") (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "String")))))) (TyFun (TyCon "Bool") (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyApp (TyCon "Ref") (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "String")))) (TyFun (TyApp (TyCon "Ref") (TyApp (TyCon "OrdMap") (TyApp (TyCon "List") (TyCon "Decl")))) (TyFun (TyFun (TyCon "String") (TyApp (TyCon "Option") (TyCon "String"))) (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyCon "String") (TyFun (TyCon "String") (TyEffect ("IO") (Some "e") (TyTuple (TyApp (TyCon "Option") (TyCon "TcReport")) (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "Diag")))))))))))))))))
-(DFunDef false "analyzeProjectReport" ((PVar "exportsFor") (PVar "allowInternal") (PVar "trustedMods") (PVar "cacheRef") (PVar "parseCacheRef") (PVar "read") (PVar "entry") (PVar "roots") (PVar "runtimeSrc") (PVar "coreSrc")) (EBlock (DoLet false false (PTuple (PVar "keyed") (PVar "results")) (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EVar "analyzeProjectKeyed") (EVar "exportsFor")) (EVar "allowInternal")) (EVar "trustedMods")) (EVar "cacheRef")) (EVar "parseCacheRef")) (EVar "read")) (EVar "entry")) (EVar "roots")) (EVar "runtimeSrc")) (EVar "coreSrc"))) (DoExpr (ETuple (EApp (EApp (EMethodRef "map") (ELam ((PVar "k")) (EApp (EVar "fst") (EApp (EVar "fst") (EVar "k"))))) (EVar "keyed")) (EVar "results")))))
+(DData Public "ProjectLoad" () ((variant "ProjectLoad" (ConNamed (field "plCache" (TyApp (TyCon "Ref") (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "String"))))) (field "plParseCache" (TyApp (TyCon "Ref") (TyApp (TyCon "OrdMap") (TyApp (TyCon "List") (TyCon "Decl"))))) (field "plRead" (TyFun (TyCon "String") (TyApp (TyCon "Option") (TyCon "String")))) (field "plEntry" (TyCon "String")) (field "plRoots" (TyApp (TyCon "List") (TyCon "String"))) (field "plRuntimeSrc" (TyCon "String")) (field "plCoreSrc" (TyCon "String"))))) ())
+(DData Public "ProjectQuery" () ((variant "ProjectQuery" (ConNamed (field "pqLoad" (TyCon "ProjectLoad")) (field "pqAllowInternal" (TyCon "Bool")) (field "pqTrusted" (TyApp (TyCon "List") (TyCon "String")))))) ())
+(DTypeSig true "freshLoad" (TyFun (TyFun (TyCon "String") (TyApp (TyCon "Option") (TyCon "String"))) (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyCon "String") (TyFun (TyCon "String") (TyCon "ProjectLoad")))))))
+(DFunDef false "freshLoad" ((PVar "read") (PVar "entry") (PVar "roots") (PVar "runtimeSrc") (PVar "coreSrc")) (ERecordCreate "ProjectLoad" ((fa "plCache" (EApp (EVar "Ref") (EListLit))) (fa "plParseCache" (EApp (EVar "Ref") (EVar "omEmpty"))) (fa "plRead" (EVar "read")) (fa "plEntry" (EVar "entry")) (fa "plRoots" (EVar "roots")) (fa "plRuntimeSrc" (EVar "runtimeSrc")) (fa "plCoreSrc" (EVar "coreSrc")))))
+(DTypeSig true "openQuery" (TyFun (TyCon "ProjectLoad") (TyCon "ProjectQuery")))
+(DFunDef false "openQuery" ((PVar "load")) (ERecordCreate "ProjectQuery" ((fa "pqLoad" (EVar "load")) (fa "pqAllowInternal" (EVar "True")) (fa "pqTrusted" (EListLit)))))
+(DTypeSig true "analyzeProject" (TyFun (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyEffect () (Some "e") (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "String")))))) (TyFun (TyCon "ProjectQuery") (TyEffect ("IO") (Some "e") (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "Diag"))))))))
+(DFunDef false "analyzeProject" ((PVar "exportsFor") (PVar "query")) (EBlock (DoLet false false (PTuple PWild (PVar "results")) (EApp (EApp (EVar "analyzeProjectFull") (EVar "exportsFor")) (EVar "query"))) (DoExpr (EVar "results"))))
+(DTypeSig false "analyzeProjectFull" (TyFun (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyEffect () (Some "e") (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "String")))))) (TyFun (TyCon "ProjectQuery") (TyEffect ("IO") (Some "e") (TyTuple (TyApp (TyCon "List") (TyCon "ModDiags")) (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "Diag")))))))))
+(DFunDef false "analyzeProjectFull" ((PVar "exportsFor") (PVar "query")) (EBlock (DoLet false false (PTuple (PVar "report") (PVar "results")) (EApp (EApp (EVar "analyzeProjectReport") (EVar "exportsFor")) (EVar "query"))) (DoExpr (EMatch (EVar "report") (arm (PCon "Some" (PVar "r")) () (ETuple (EFieldAccess (EVar "r") "trDiagnostics") (EVar "results"))) (arm (PCon "None") () (ETuple (EListLit) (EVar "results")))))))
+(DTypeSig true "analyzeProjectReport" (TyFun (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyEffect () (Some "e") (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "String")))))) (TyFun (TyCon "ProjectQuery") (TyEffect ("IO") (Some "e") (TyTuple (TyApp (TyCon "Option") (TyCon "TcReport")) (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "Diag")))))))))
+(DFunDef false "analyzeProjectReport" ((PVar "exportsFor") (PVar "query")) (EBlock (DoLet false false (PTuple (PVar "keyed") (PVar "results")) (EApp (EApp (EVar "analyzeProjectKeyed") (EVar "exportsFor")) (EVar "query"))) (DoExpr (ETuple (EApp (EApp (EMethodRef "map") (ELam ((PVar "k")) (EApp (EVar "fst") (EApp (EVar "fst") (EVar "k"))))) (EVar "keyed")) (EVar "results")))))
 (DData Public "GraphId" () ((variant "GraphId" (ConNamed (field "giEntry" (TyCon "String")) (field "giSteps" (TyApp (TyCon "List") (TyApp (TyCon "Option") (TyCon "String"))))))) ())
 (DTypeSig true "graphIdOf" (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "String") (TyApp (TyCon "List") (TyCon "Decl")))) (TyCon "GraphId")))
 (DFunDef false "graphIdOf" ((PVar "mods")) (ERecordCreate "GraphId" ((fa "giEntry" (EApp (EVar "lastModId") (EVar "mods"))) (fa "giSteps" (EApp (EApp (EMethodRef "map") (EVar "moduleStepKey")) (EVar "mods"))))))
@@ -4288,27 +4110,23 @@ checkJsonLoadErr target src _ le = match loadErrorSite target le
 (DFunDef false "lastModId" ((PVar "mods")) (EMatch (EApp (EVar "last") (EVar "mods")) (arm (PCon "Some" (PTuple (PVar "mid") PWild PWild)) () (EVar "mid")) (arm (PCon "None") () (ELit (LString "")))))
 (DTypeSig true "graphIdSame" (TyFun (TyCon "GraphId") (TyFun (TyCon "GraphId") (TyCon "Bool"))))
 (DFunDef false "graphIdSame" ((PVar "a") (PVar "b")) (EBinOp "&&" (EBinOp "&&" (EBinOp "==" (EFieldAccess (EVar "a") "giEntry") (EFieldAccess (EVar "b") "giEntry")) (EApp (EApp (EVar "allList") (EVar "isSome")) (EFieldAccess (EVar "a") "giSteps"))) (EBinOp "==" (EFieldAccess (EVar "a") "giSteps") (EFieldAccess (EVar "b") "giSteps"))))
-(DTypeSig true "analyzeProjectKeyed" (TyFun (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyEffect () (Some "e") (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "String")))))) (TyFun (TyCon "Bool") (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyApp (TyCon "Ref") (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "String")))) (TyFun (TyApp (TyCon "Ref") (TyApp (TyCon "OrdMap") (TyApp (TyCon "List") (TyCon "Decl")))) (TyFun (TyFun (TyCon "String") (TyApp (TyCon "Option") (TyCon "String"))) (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyCon "String") (TyFun (TyCon "String") (TyEffect ("IO") (Some "e") (TyTuple (TyApp (TyCon "Option") (TyTuple (TyTuple (TyCon "TcReport") (TyCon "DriveOutputs")) (TyCon "GraphId"))) (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "Diag")))))))))))))))))
-(DFunDef false "analyzeProjectKeyed" ((PVar "exportsFor") (PVar "allowInternal") (PVar "trustedMods") (PVar "cacheRef") (PVar "parseCacheRef") (PVar "read") (PVar "entry") (PVar "roots") (PVar "runtimeSrc") (PVar "coreSrc")) (EBlock (DoLet false false (PVar "staleRef") (EApp (EVar "newStale") (ELit LUnit))) (DoLet false false (PVar "wread") (ELam ((PVar "p")) (EApp (EApp (EApp (EApp (EApp (EVar "wrappedRead") (EVar "cacheRef")) (EVar "staleRef")) (EVar "parseCacheRef")) (EVar "read")) (EVar "p")))) (DoExpr (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EVar "projectKeyedFromLoad") (EVar "exportsFor")) (EVar "allowInternal")) (EVar "trustedMods")) (EVar "entry")) (EVar "roots")) (EVar "runtimeSrc")) (EVar "coreSrc")) (EVar "staleRef")) (EApp (EApp (EApp (EApp (EVar "loadProgramFilesLocatedCachedE") (EVar "parseCacheRef")) (EVar "wread")) (EVar "entry")) (EVar "roots"))))))
-(DTypeSig true "analyzeProjectKeyedSources" (TyFun (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyEffect () (Some "e") (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "String")))))) (TyFun (TyCon "Bool") (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyApp (TyCon "Ref") (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "String")))) (TyFun (TyApp (TyCon "Ref") (TyApp (TyCon "OrdMap") (TyApp (TyCon "List") (TyCon "Decl")))) (TyFun (TyFun (TyCon "String") (TyApp (TyCon "Option") (TyCon "String"))) (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyCon "String") (TyFun (TyCon "String") (TyEffect ("IO") (Some "e") (TyTuple (TyApp (TyCon "Option") (TyTuple (TyTuple (TyCon "TcReport") (TyCon "DriveOutputs")) (TyCon "GraphId"))) (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "Diag")))) (TyApp (TyCon "OrdMap") (TyCon "String")))))))))))))))
-(DFunDef false "analyzeProjectKeyedSources" ((PVar "exportsFor") (PVar "allowInternal") (PVar "trustedMods") (PVar "cacheRef") (PVar "parseCacheRef") (PVar "read") (PVar "entry") (PVar "roots") (PVar "runtimeSrc") (PVar "coreSrc")) (EBlock (DoLet false false (PVar "staleRef") (EApp (EVar "newStale") (ELit LUnit))) (DoLet false false (PVar "wread") (ELam ((PVar "p")) (EApp (EApp (EApp (EApp (EApp (EVar "wrappedRead") (EVar "cacheRef")) (EVar "staleRef")) (EVar "parseCacheRef")) (EVar "read")) (EVar "p")))) (DoLet false false (PTuple (PVar "loaded") (PVar "sources")) (EApp (EApp (EApp (EApp (EVar "loadProgramFilesLocatedCachedSourcesE") (EVar "parseCacheRef")) (EVar "wread")) (EVar "entry")) (EVar "roots"))) (DoLet false false (PTuple (PVar "keyed") (PVar "diags")) (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EVar "projectKeyedFromLoad") (EVar "exportsFor")) (EVar "allowInternal")) (EVar "trustedMods")) (EVar "entry")) (EVar "roots")) (EVar "runtimeSrc")) (EVar "coreSrc")) (EVar "staleRef")) (EVar "loaded"))) (DoExpr (ETuple (EVar "keyed") (EVar "diags") (EVar "sources")))))
-(DTypeSig false "projectKeyedFromLoad" (TyFun (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyEffect () (Some "e") (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "String")))))) (TyFun (TyCon "Bool") (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyApp (TyCon "Ref") (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "Diag")))) (TyFun (TyApp (TyApp (TyCon "Result") (TyCon "LoadError")) (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "String") (TyApp (TyCon "List") (TyCon "Decl"))))) (TyEffect ("IO") (Some "e") (TyTuple (TyApp (TyCon "Option") (TyTuple (TyTuple (TyCon "TcReport") (TyCon "DriveOutputs")) (TyCon "GraphId"))) (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "Diag"))))))))))))))))
-(DFunDef false "projectKeyedFromLoad" ((PVar "_exportsFor") (PVar "_allowInternal") (PVar "_trustedMods") (PVar "_entry") (PVar "_roots") (PVar "_runtimeSrc") (PVar "_coreSrc") (PVar "staleRef") (PCon "Err" (PCon "LoadParseFailed" (PVar "mpath") PWild (PVar "pe")))) (ETuple (EVar "None") (EApp (EApp (EVar "appendStale") (EVar "staleRef")) (EListLit (ETuple (EVar "mpath") (EListLit (EApp (EApp (EVar "parseErrDiag") (EVar "mpath")) (EVar "pe"))))))))
-(DFunDef false "projectKeyedFromLoad" ((PVar "_exportsFor") (PVar "_allowInternal") (PVar "_trustedMods") (PVar "entry") (PVar "_roots") (PVar "_runtimeSrc") (PVar "_coreSrc") (PVar "staleRef") (PCon "Err" (PCon "LoadMsg" (PVar "e")))) (ETuple (EVar "None") (EApp (EApp (EVar "appendStale") (EVar "staleRef")) (EListLit (ETuple (EVar "entry") (EListLit (EApp (EApp (EApp (EApp (EVar "mkDiag") (EVar "SevError")) (EVar "RModuleLoad")) (EVar "e")) (EVar "None"))))))))
-(DFunDef false "projectKeyedFromLoad" ((PVar "_exportsFor") (PVar "_allowInternal") (PVar "_trustedMods") (PVar "entry") (PVar "_roots") (PVar "_runtimeSrc") (PVar "_coreSrc") (PVar "staleRef") (PCon "Err" (PVar "le"))) (ETuple (EVar "None") (EApp (EApp (EVar "appendStale") (EVar "staleRef")) (EMatch (EApp (EApp (EVar "loadErrorSite") (EVar "entry")) (EVar "le")) (arm (PCon "Some" (PTuple (PVar "code") (PVar "e") (PVar "file") PWild (PVar "loc"))) () (EListLit (ETuple (EVar "file") (EListLit (EApp (EApp (EApp (EApp (EVar "mkDiag") (EVar "SevError")) (EVar "code")) (EVar "e")) (EVar "loc")))))) (arm (PCon "None") () (EListLit))))))
-(DFunDef false "projectKeyedFromLoad" ((PVar "exportsFor") (PVar "allowInternal") (PVar "trustedMods") (PVar "entry") (PVar "roots") (PVar "runtimeSrc") (PVar "coreSrc") (PVar "staleRef") (PCon "Ok" (PVar "mods"))) (EBlock (DoLet false false (PVar "chainKey") (EApp (EApp (EVar "chainKeyOf") (EVar "entry")) (EVar "roots"))) (DoLet false false (PVar "front") (EApp (EApp (EApp (EVar "frontEnd") (EVar "exportsFor")) (ELam ((PVar "d")) (EApp (EVar "unkept") (EApp (EApp (EApp (EVar "checkReportOf") (EVar "RecordSteps")) (EVar "chainKey")) (EVar "d"))))) (ERecordCreate "FrontInput" ((fa "fiInputs" (ERecordUpdate (EApp (EApp (EApp (EVar "driveInputsFor") (EUnOp "!" (EVar "selectedProfile"))) (EVar "False")) (EListLit)) ((fa "diSibling" (EApp (EApp (EVar "siblingPairsOf") (EVar "roots")) (EVar "mods")))))) (fa "fiAllowInternal" (EVar "allowInternal")) (fa "fiTrusted" (EVar "trustedMods")) (fa "fiRuntimeSrc" (EVar "runtimeSrc")) (fa "fiCoreSrc" (EVar "coreSrc")) (fa "fiPolicy" (EApp (EApp (EVar "DriveUnblocked") (EVar "chainKey")) (EVar "RecordSteps"))) (fa "fiProgram" (EApp (EApp (EVar "FrontGraph") (EVar "mods")) (EApp (EVar "desugaredModPairs") (EVar "mods")))))))) (DoExpr (ETuple (EApp (EVar "Some") (ETuple (ETuple (EFieldAccess (EVar "front") "foReport") (EFieldAccess (EVar "front") "foOutputs")) (EApp (EVar "graphIdOf") (EVar "mods")))) (EApp (EApp (EVar "appendStale") (EVar "staleRef")) (EFieldAccess (EVar "front") "foDiags"))))))
+(DTypeSig true "analyzeProjectKeyed" (TyFun (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyEffect () (Some "e") (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "String")))))) (TyFun (TyCon "ProjectQuery") (TyEffect ("IO") (Some "e") (TyTuple (TyApp (TyCon "Option") (TyTuple (TyTuple (TyCon "TcReport") (TyCon "DriveOutputs")) (TyCon "GraphId"))) (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "Diag")))))))))
+(DFunDef false "analyzeProjectKeyed" ((PVar "exportsFor") (PVar "query")) (EBlock (DoLet false false (PVar "load") (EFieldAccess (EVar "query") "pqLoad")) (DoLet false false (PVar "staleRef") (EApp (EVar "newStale") (ELit LUnit))) (DoLet false false (PVar "wread") (EApp (EApp (EVar "wrappedReadFor") (EVar "load")) (EVar "staleRef"))) (DoExpr (EApp (EApp (EApp (EApp (EVar "projectKeyedFromLoad") (EVar "exportsFor")) (EVar "query")) (EVar "staleRef")) (EApp (EApp (EApp (EApp (EVar "loadProgramFilesLocatedCachedE") (EFieldAccess (EVar "load") "plParseCache")) (EVar "wread")) (EFieldAccess (EVar "load") "plEntry")) (EFieldAccess (EVar "load") "plRoots"))))))
+(DTypeSig true "analyzeProjectKeyedSources" (TyFun (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyEffect () (Some "e") (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "String")))))) (TyFun (TyCon "ProjectQuery") (TyEffect ("IO") (Some "e") (TyTuple (TyApp (TyCon "Option") (TyTuple (TyTuple (TyCon "TcReport") (TyCon "DriveOutputs")) (TyCon "GraphId"))) (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "Diag")))) (TyApp (TyCon "OrdMap") (TyCon "String")))))))
+(DFunDef false "analyzeProjectKeyedSources" ((PVar "exportsFor") (PVar "query")) (EBlock (DoLet false false (PVar "load") (EFieldAccess (EVar "query") "pqLoad")) (DoLet false false (PVar "staleRef") (EApp (EVar "newStale") (ELit LUnit))) (DoLet false false (PVar "wread") (EApp (EApp (EVar "wrappedReadFor") (EVar "load")) (EVar "staleRef"))) (DoLet false false (PTuple (PVar "loaded") (PVar "sources")) (EApp (EApp (EApp (EApp (EVar "loadProgramFilesLocatedCachedSourcesE") (EFieldAccess (EVar "load") "plParseCache")) (EVar "wread")) (EFieldAccess (EVar "load") "plEntry")) (EFieldAccess (EVar "load") "plRoots"))) (DoLet false false (PTuple (PVar "keyed") (PVar "diags")) (EApp (EApp (EApp (EApp (EVar "projectKeyedFromLoad") (EVar "exportsFor")) (EVar "query")) (EVar "staleRef")) (EVar "loaded"))) (DoExpr (ETuple (EVar "keyed") (EVar "diags") (EVar "sources")))))
+(DTypeSig false "projectKeyedFromLoad" (TyFun (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyEffect () (Some "e") (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "String")))))) (TyFun (TyCon "ProjectQuery") (TyFun (TyApp (TyCon "Ref") (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "Diag")))) (TyFun (TyApp (TyApp (TyCon "Result") (TyCon "LoadError")) (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "String") (TyApp (TyCon "List") (TyCon "Decl"))))) (TyEffect ("IO") (Some "e") (TyTuple (TyApp (TyCon "Option") (TyTuple (TyTuple (TyCon "TcReport") (TyCon "DriveOutputs")) (TyCon "GraphId"))) (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "Diag")))))))))))
+(DFunDef false "projectKeyedFromLoad" ((PVar "_exportsFor") (PVar "_query") (PVar "staleRef") (PCon "Err" (PCon "LoadParseFailed" (PVar "mpath") PWild (PVar "pe")))) (ETuple (EVar "None") (EApp (EApp (EVar "appendStale") (EVar "staleRef")) (EListLit (ETuple (EVar "mpath") (EListLit (EApp (EApp (EVar "parseErrDiag") (EVar "mpath")) (EVar "pe"))))))))
+(DFunDef false "projectKeyedFromLoad" ((PVar "_exportsFor") (PVar "query") (PVar "staleRef") (PCon "Err" (PCon "LoadMsg" (PVar "e")))) (ETuple (EVar "None") (EApp (EApp (EVar "appendStale") (EVar "staleRef")) (EListLit (ETuple (EFieldAccess (EFieldAccess (EVar "query") "pqLoad") "plEntry") (EListLit (EApp (EApp (EApp (EApp (EVar "mkDiag") (EVar "SevError")) (EVar "RModuleLoad")) (EVar "e")) (EVar "None"))))))))
+(DFunDef false "projectKeyedFromLoad" ((PVar "_exportsFor") (PVar "query") (PVar "staleRef") (PCon "Err" (PVar "le"))) (ETuple (EVar "None") (EApp (EApp (EVar "appendStale") (EVar "staleRef")) (EMatch (EApp (EApp (EVar "loadErrorSite") (EFieldAccess (EFieldAccess (EVar "query") "pqLoad") "plEntry")) (EVar "le")) (arm (PCon "Some" (PTuple (PVar "code") (PVar "e") (PVar "file") PWild (PVar "loc"))) () (EListLit (ETuple (EVar "file") (EListLit (EApp (EApp (EApp (EApp (EVar "mkDiag") (EVar "SevError")) (EVar "code")) (EVar "e")) (EVar "loc")))))) (arm (PCon "None") () (EListLit))))))
+(DFunDef false "projectKeyedFromLoad" ((PVar "exportsFor") (PVar "query") (PVar "staleRef") (PCon "Ok" (PVar "mods"))) (EBlock (DoLet false false (PVar "load") (EFieldAccess (EVar "query") "pqLoad")) (DoLet false false (PVar "roots") (EFieldAccess (EVar "load") "plRoots")) (DoLet false false (PVar "chainKey") (EApp (EApp (EVar "chainKeyOf") (EFieldAccess (EVar "load") "plEntry")) (EVar "roots"))) (DoLet false false (PVar "front") (EApp (EApp (EApp (EVar "frontEnd") (EVar "exportsFor")) (ELam ((PVar "d")) (EApp (EVar "unkept") (EApp (EApp (EApp (EVar "checkReportOf") (EVar "RecordSteps")) (EVar "chainKey")) (EVar "d"))))) (ERecordCreate "FrontInput" ((fa "fiInputs" (ERecordUpdate (EApp (EApp (EApp (EVar "driveInputsFor") (EUnOp "!" (EVar "selectedProfile"))) (EVar "False")) (EListLit)) ((fa "diSibling" (EApp (EApp (EVar "siblingPairsOf") (EVar "roots")) (EVar "mods")))))) (fa "fiAllowInternal" (EFieldAccess (EVar "query") "pqAllowInternal")) (fa "fiTrusted" (EFieldAccess (EVar "query") "pqTrusted")) (fa "fiRuntimeSrc" (EFieldAccess (EVar "load") "plRuntimeSrc")) (fa "fiCoreSrc" (EFieldAccess (EVar "load") "plCoreSrc")) (fa "fiPolicy" (EApp (EApp (EVar "DriveUnblocked") (EVar "chainKey")) (EVar "RecordSteps"))) (fa "fiProgram" (EApp (EApp (EVar "FrontGraph") (EVar "mods")) (EApp (EVar "desugaredModPairs") (EVar "mods")))))))) (DoExpr (ETuple (EApp (EVar "Some") (ETuple (ETuple (EFieldAccess (EVar "front") "foReport") (EFieldAccess (EVar "front") "foOutputs")) (EApp (EVar "graphIdOf") (EVar "mods")))) (EApp (EApp (EVar "appendStale") (EVar "staleRef")) (EFieldAccess (EVar "front") "foDiags"))))))
 (DTypeSig false "bucketsResolveRejected" (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "Diag")))) (TyCon "Bool")))
 (DFunDef false "bucketsResolveRejected" ((PVar "buckets")) (EApp (EApp (EVar "anyList") (ELam ((PVar "b")) (EApp (EVar "resolveRejected") (EApp (EVar "snd") (EVar "b"))))) (EVar "buckets")))
-(DTypeSig true "projectDiagsLoaded" (TyFun (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyEffect () (Some "e") (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "String")))))) (TyFun (TyCon "Bool") (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyFun (TyApp (TyCon "Option") (TyTuple (TyCon "Int") (TyCon "Int"))) (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "String") (TyApp (TyCon "List") (TyCon "Decl")))) (TyEffect () (Some "e") (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "Diag"))))))))))))))
-(DFunDef false "projectDiagsLoaded" ((PVar "exportsFor") (PVar "allowInternal") (PVar "trustedMods") (PVar "runtimeP") (PVar "coreP") (PVar "preludeKey") (PVar "chainKey") (PVar "mods")) (EApp (EVar "snd") (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EVar "projectDiagsLoadedFull") (EVar "exportsFor")) (EVar "allowInternal")) (EVar "trustedMods")) (EVar "runtimeP")) (EVar "coreP")) (EVar "preludeKey")) (EVar "chainKey")) (EVar "mods")) (EApp (EVar "desugaredModPairs") (EVar "mods")))))
-(DTypeSig false "projectDiagsLoadedFull" (TyFun (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyEffect () (Some "e") (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "String")))))) (TyFun (TyCon "Bool") (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyFun (TyApp (TyCon "Option") (TyTuple (TyCon "Int") (TyCon "Int"))) (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "String") (TyApp (TyCon "List") (TyCon "Decl")))) (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "Decl")))) (TyEffect () (Some "e") (TyTuple (TyApp (TyCon "List") (TyCon "ModDiags")) (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "Diag"))))))))))))))))
-(DFunDef false "projectDiagsLoadedFull" ((PVar "exportsFor") (PVar "allowInternal") (PVar "trustedMods") (PVar "runtimeP") (PVar "coreP") (PVar "preludeKey") (PVar "chainKey") (PVar "mods") (PVar "modPairs")) (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EVar "typecheckPassFull") (EApp (EApp (EApp (EVar "driveInputsFor") (EUnOp "!" (EVar "selectedProfile"))) (EVar "False")) (EListLit))) (EVar "runtimeP")) (EVar "coreP")) (EVar "preludeKey")) (EVar "chainKey")) (EVar "mods")) (EVar "modPairs")) (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EVar "resolvedBuckets") (EVar "exportsFor")) (EVar "allowInternal")) (EVar "trustedMods")) (EListLit)) (EVar "preludeKey")) (EVar "chainKey")) (EVar "runtimeP")) (EVar "coreP")) (EVar "mods")) (EVar "modPairs"))))
-(DTypeSig true "projectEntrySchemes" (TyFun (TyApp (TyCon "Ref") (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "String")))) (TyFun (TyApp (TyCon "Ref") (TyApp (TyCon "OrdMap") (TyApp (TyCon "List") (TyCon "Decl")))) (TyFun (TyFun (TyCon "String") (TyApp (TyCon "Option") (TyCon "String"))) (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyCon "String") (TyFun (TyCon "String") (TyEffect ("IO") None (TyApp (TyCon "Option") (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "PubScheme")))))))))))))
-(DFunDef false "projectEntrySchemes" ((PVar "cacheRef") (PVar "parseCacheRef") (PVar "read") (PVar "entry") (PVar "roots") (PVar "runtimeSrc") (PVar "coreSrc")) (EApp (EApp (EMethodRef "map") (ELam ((PVar "pa")) (EApp (EVar "publishedEntrySchemes") (EFieldAccess (EVar "pa") "paSchemes")))) (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EVar "projectEntryAnalysis") (EVar "cacheRef")) (EVar "parseCacheRef")) (EVar "read")) (EVar "entry")) (EVar "roots")) (EVar "runtimeSrc")) (EVar "coreSrc"))))
-(DTypeSig false "projectEntryAnalysis" (TyFun (TyApp (TyCon "Ref") (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "String")))) (TyFun (TyApp (TyCon "Ref") (TyApp (TyCon "OrdMap") (TyApp (TyCon "List") (TyCon "Decl")))) (TyFun (TyFun (TyCon "String") (TyApp (TyCon "Option") (TyCon "String"))) (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyCon "String") (TyFun (TyCon "String") (TyEffect ("IO") None (TyApp (TyCon "Option") (TyCon "PartialAnalysis")))))))))))
-(DFunDef false "projectEntryAnalysis" ((PVar "cacheRef") (PVar "parseCacheRef") (PVar "read") (PVar "entry") (PVar "roots") (PVar "runtimeSrc") (PVar "coreSrc")) (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EVar "projectEntryAnalysisOr") (ELam (PWild) (EVar "None"))) (EVar "cacheRef")) (EVar "parseCacheRef")) (EVar "read")) (EVar "entry")) (EVar "roots")) (EVar "runtimeSrc")) (EVar "coreSrc")))
-(DTypeSig true "projectEntryAnalysisOr" (TyFun (TyFun (TyCon "GraphId") (TyApp (TyCon "Option") (TyCon "PartialAnalysis"))) (TyFun (TyApp (TyCon "Ref") (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "String")))) (TyFun (TyApp (TyCon "Ref") (TyApp (TyCon "OrdMap") (TyApp (TyCon "List") (TyCon "Decl")))) (TyFun (TyFun (TyCon "String") (TyApp (TyCon "Option") (TyCon "String"))) (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyCon "String") (TyFun (TyCon "String") (TyEffect ("IO") None (TyApp (TyCon "Option") (TyCon "PartialAnalysis"))))))))))))
-(DFunDef false "projectEntryAnalysisOr" ((PVar "kept") (PVar "cacheRef") (PVar "parseCacheRef") (PVar "read") (PVar "entry") (PVar "roots") (PVar "runtimeSrc") (PVar "coreSrc")) (EBlock (DoLet false false (PVar "staleRef") (EApp (EVar "newStale") (ELit LUnit))) (DoLet false false (PVar "wread") (ELam ((PVar "p")) (EApp (EApp (EApp (EApp (EApp (EVar "wrappedRead") (EVar "cacheRef")) (EVar "staleRef")) (EVar "parseCacheRef")) (EVar "read")) (EVar "p")))) (DoLet false false (PVar "runtimeP") (EApp (EVar "preludeDesugared") (EVar "runtimeSrc"))) (DoLet false false (PVar "coreP") (EApp (EVar "preludeDesugared") (EVar "coreSrc"))) (DoLet false false (PVar "preludeKey") (EApp (EVar "Some") (EApp (EApp (EVar "preludeGeneration") (EVar "runtimeSrc")) (EVar "coreSrc")))) (DoExpr (EMatch (EApp (EApp (EApp (EApp (EVar "loadProgramFilesLocatedCached") (EVar "parseCacheRef")) (EVar "wread")) (EVar "entry")) (EVar "roots")) (arm (PCon "Err" PWild) () (EVar "None")) (arm (PCon "Ok" (PVar "mods")) () (EMatch (EApp (EVar "kept") (EApp (EVar "graphIdOf") (EVar "mods"))) (arm (PCon "Some" (PVar "pa")) () (EApp (EVar "Some") (EVar "pa"))) (arm (PCon "None") () (EApp (EVar "Some") (EApp (EApp (EApp (EApp (EApp (EVar "checkModulesPartialK") (ERecordUpdate (EApp (EApp (EApp (EVar "driveInputsFor") (EUnOp "!" (EVar "selectedProfile"))) (EVar "False")) (EListLit)) ((fa "diSibling" (EApp (EApp (EVar "siblingPairsOf") (EVar "roots")) (EVar "mods")))))) (EVar "preludeKey")) (EVar "runtimeP")) (EVar "coreP")) (EApp (EVar "desugarGraph") (EVar "mods")))))))))))
+(DTypeSig true "projectEntrySchemes" (TyFun (TyCon "ProjectLoad") (TyEffect ("IO") None (TyApp (TyCon "Option") (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "PubScheme")))))))
+(DFunDef false "projectEntrySchemes" ((PVar "load")) (EApp (EApp (EMethodRef "map") (ELam ((PVar "pa")) (EApp (EVar "publishedEntrySchemes") (EFieldAccess (EVar "pa") "paSchemes")))) (EApp (EVar "projectEntryAnalysis") (EVar "load"))))
+(DTypeSig false "projectEntryAnalysis" (TyFun (TyCon "ProjectLoad") (TyEffect ("IO") None (TyApp (TyCon "Option") (TyCon "PartialAnalysis")))))
+(DFunDef false "projectEntryAnalysis" ((PVar "load")) (EApp (EApp (EVar "projectEntryAnalysisOr") (ELam (PWild) (EVar "None"))) (EVar "load")))
+(DTypeSig true "projectEntryAnalysisOr" (TyFun (TyFun (TyCon "GraphId") (TyApp (TyCon "Option") (TyCon "PartialAnalysis"))) (TyFun (TyCon "ProjectLoad") (TyEffect ("IO") None (TyApp (TyCon "Option") (TyCon "PartialAnalysis"))))))
+(DFunDef false "projectEntryAnalysisOr" ((PVar "kept") (PVar "load")) (EBlock (DoLet false false (PVar "roots") (EFieldAccess (EVar "load") "plRoots")) (DoLet false false (PVar "staleRef") (EApp (EVar "newStale") (ELit LUnit))) (DoLet false false (PVar "wread") (EApp (EApp (EVar "wrappedReadFor") (EVar "load")) (EVar "staleRef"))) (DoLet false false (PVar "runtimeP") (EApp (EVar "preludeDesugared") (EFieldAccess (EVar "load") "plRuntimeSrc"))) (DoLet false false (PVar "coreP") (EApp (EVar "preludeDesugared") (EFieldAccess (EVar "load") "plCoreSrc"))) (DoLet false false (PVar "preludeKey") (EApp (EVar "Some") (EApp (EApp (EVar "preludeGeneration") (EFieldAccess (EVar "load") "plRuntimeSrc")) (EFieldAccess (EVar "load") "plCoreSrc")))) (DoExpr (EMatch (EApp (EApp (EApp (EApp (EVar "loadProgramFilesLocatedCached") (EFieldAccess (EVar "load") "plParseCache")) (EVar "wread")) (EFieldAccess (EVar "load") "plEntry")) (EVar "roots")) (arm (PCon "Err" PWild) () (EVar "None")) (arm (PCon "Ok" (PVar "mods")) () (EMatch (EApp (EVar "kept") (EApp (EVar "graphIdOf") (EVar "mods"))) (arm (PCon "Some" (PVar "pa")) () (EApp (EVar "Some") (EVar "pa"))) (arm (PCon "None") () (EApp (EVar "Some") (EApp (EApp (EApp (EApp (EApp (EVar "checkModulesPartialK") (ERecordUpdate (EApp (EApp (EApp (EVar "driveInputsFor") (EUnOp "!" (EVar "selectedProfile"))) (EVar "False")) (EListLit)) ((fa "diSibling" (EApp (EApp (EVar "siblingPairsOf") (EVar "roots")) (EVar "mods")))))) (EVar "preludeKey")) (EVar "runtimeP")) (EVar "coreP")) (EApp (EVar "desugarGraph") (EVar "mods")))))))))))
 (DTypeSig false "newStale" (TyFun (TyCon "Unit") (TyApp (TyCon "Ref") (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "Diag"))))))
 (DFunDef false "newStale" (PWild) (EApp (EVar "Ref") (EListLit)))
 (DTypeSig true "midPath" (TyFun (TyTuple (TyCon "String") (TyCon "String") (TyApp (TyCon "List") (TyCon "Decl"))) (TyCon "String")))
@@ -4321,16 +4139,14 @@ checkJsonLoadErr target src _ le = match loadErrorSite target le
 (DTypeSig false "foldStale" (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "Diag"))) (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "Diag")))) (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "Diag")))))))
 (DFunDef false "foldStale" ((PList) (PVar "buckets")) (EVar "buckets"))
 (DFunDef false "foldStale" ((PCons (PTuple (PVar "path") (PVar "d")) (PVar "rest")) (PVar "buckets")) (EApp (EApp (EVar "foldStale") (EVar "rest")) (EApp (EApp (EApp (EVar "pushDiag") (EVar "path")) (EVar "d")) (EApp (EApp (EVar "seedBucket") (EVar "path")) (EVar "buckets")))))
-(DTypeSig false "resolvePass" (TyFun (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyEffect () (Some "e") (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "String")))))) (TyFun (TyCon "Bool") (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyFun (TyCon "String") (TyApp (TyCon "Option") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "Decl"))))) (TyFun (TyApp (TyCon "Option") (TyTuple (TyCon "Int") (TyCon "Int"))) (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyFun (TyApp (TyCon "Option") (TyCon "String")) (TyFun (TyApp (TyCon "OrdMap") (TyCon "ModuleExports")) (TyFun (TyApp (TyCon "OrdMap") (TyCon "Int")) (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "String") (TyApp (TyCon "List") (TyCon "Decl")))) (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "Diag")))) (TyEffect () (Some "e") (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "Diag"))))))))))))))))))
-(DFunDef false "resolvePass" (PWild PWild PWild PWild PWild PWild PWild PWild PWild PWild (PList) (PVar "buckets")) (EVar "buckets"))
-(DFunDef false "resolvePass" ((PVar "exportsFor") (PVar "allowInternal") (PVar "trustedMods") (PVar "subjectOf") (PVar "preludeKey") (PVar "rt") (PVar "core") (PVar "served") (PVar "known") (PVar "ids") (PCons (PAs "m" (PTuple (PVar "mid") (PVar "path") (PVar "desugared"))) (PVar "rest")) (PVar "buckets")) (EBlock (DoLet false false (PVar "trusted") (EBinOp "||" (EVar "allowInternal") (EApp (EApp (EVar "contains") (EVar "mid")) (EVar "trustedMods")))) (DoLet false false (PVar "subject") (EApp (EVar "subjectOf") (EVar "mid"))) (DoLet false false (PVar "graph") (EApp (EApp (EMethodRef "map") (ELam ((PVar "k")) (EApp (EVar "joinNl") (EListLit (EVar "k") (EApp (EVar "boolKey") (EVar "trusted")) (EApp (EVar "boolKey") (EBinOp "==" (EApp (EVar "omSize") (EVar "known")) (ELit (LInt 0)))) (EApp (EVar "boolKey") (EApp (EVar "isSome") (EVar "subject"))))))) (EVar "served"))) (DoLet false false (PTuple (PVar "diags") (PVar "exp") (PVar "ident")) (EApp (EApp (EApp (EApp (EApp (EVar "servedPass") (EVar "ResolveKind")) (EVar "graph")) (EVar "ids")) (EVar "m")) (ELam (PWild) (EBlock (DoLet false false (PTuple (PVar "exp") (PVar "errs")) (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EVar "resolveModuleG") (EApp (EVar "internalGuardFor") (EVar "trusted"))) (EVar "subject")) (EVar "preludeKey")) (EVar "rt")) (EVar "core")) (EVar "known")) (EVar "mid")) (EVar "desugared"))) (DoExpr (ETuple (EApp (EApp (EMethodRef "map") (EVar "diagOfResError")) (EApp (EApp (EVar "hintResErrors") (EVar "exportsFor")) (EVar "errs"))) (EVar "exp"))))))) (DoExpr (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EVar "resolvePass") (EVar "exportsFor")) (EVar "allowInternal")) (EVar "trustedMods")) (EVar "subjectOf")) (EVar "preludeKey")) (EVar "rt")) (EVar "core")) (EVar "served")) (EApp (EApp (EApp (EVar "omInsert") (EFieldAccess (EVar "exp") "modId")) (EVar "exp")) (EVar "known"))) (EApp (EApp (EApp (EVar "withIdentity") (EVar "mid")) (EVar "ident")) (EVar "ids"))) (EVar "rest")) (EApp (EApp (EApp (EVar "pushDiags") (EVar "path")) (EVar "diags")) (EVar "buckets"))))))
+(DTypeSig false "resolvePass" (TyFun (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyEffect () (Some "e") (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "String")))))) (TyFun (TyCon "ResolveWalk") (TyFun (TyFun (TyCon "String") (TyApp (TyCon "Option") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "Decl"))))) (TyFun (TyApp (TyCon "Option") (TyCon "String")) (TyFun (TyApp (TyCon "OrdMap") (TyCon "ModuleExports")) (TyFun (TyApp (TyCon "OrdMap") (TyCon "Int")) (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "String") (TyApp (TyCon "List") (TyCon "Decl")))) (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "Diag")))) (TyEffect () (Some "e") (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "Diag"))))))))))))))
+(DFunDef false "resolvePass" (PWild PWild PWild PWild PWild PWild (PList) (PVar "buckets")) (EVar "buckets"))
+(DFunDef false "resolvePass" ((PVar "exportsFor") (PVar "walk") (PVar "subjectOf") (PVar "served") (PVar "known") (PVar "ids") (PCons (PAs "m" (PTuple (PVar "mid") (PVar "path") (PVar "desugared"))) (PVar "rest")) (PVar "buckets")) (EBlock (DoLet false false (PVar "trusted") (EApp (EApp (EApp (EVar "moduleTrusted") (EFieldAccess (EVar "walk") "rwAllowInternal")) (EFieldAccess (EVar "walk") "rwTrusted")) (EVar "mid"))) (DoLet false false (PVar "subject") (EApp (EVar "subjectOf") (EVar "mid"))) (DoLet false false (PVar "graph") (EApp (EApp (EMethodRef "map") (ELam ((PVar "k")) (EApp (EVar "joinNl") (EListLit (EVar "k") (EApp (EVar "boolKey") (EVar "trusted")) (EApp (EVar "boolKey") (EBinOp "==" (EApp (EVar "omSize") (EVar "known")) (ELit (LInt 0)))) (EApp (EVar "boolKey") (EApp (EVar "isSome") (EVar "subject"))))))) (EVar "served"))) (DoLet false false (PTuple (PVar "diags") (PVar "exp") (PVar "ident")) (EApp (EApp (EApp (EApp (EApp (EVar "servedPass") (EVar "ResolveKind")) (EVar "graph")) (EVar "ids")) (EVar "m")) (ELam (PWild) (EBlock (DoLet false false (PTuple (PVar "exp") (PVar "errs")) (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EVar "resolveModuleG") (EApp (EVar "internalGuardFor") (EVar "trusted"))) (EVar "subject")) (EFieldAccess (EVar "walk") "rwPreludeKey")) (EFieldAccess (EVar "walk") "rwRuntime")) (EFieldAccess (EVar "walk") "rwPrelude")) (EVar "known")) (EVar "mid")) (EVar "desugared"))) (DoExpr (ETuple (EApp (EApp (EMethodRef "map") (EVar "diagOfResError")) (EApp (EApp (EVar "hintResErrors") (EVar "exportsFor")) (EVar "errs"))) (EVar "exp"))))))) (DoExpr (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EVar "resolvePass") (EVar "exportsFor")) (EVar "walk")) (EVar "subjectOf")) (EVar "served")) (EApp (EApp (EApp (EVar "omInsert") (EFieldAccess (EVar "exp") "modId")) (EVar "exp")) (EVar "known"))) (EApp (EApp (EApp (EVar "withIdentity") (EVar "mid")) (EVar "ident")) (EVar "ids"))) (EVar "rest")) (EApp (EApp (EApp (EVar "pushDiags") (EVar "path")) (EVar "diags")) (EVar "buckets"))))))
 (DTypeSig false "withIdentity" (TyFun (TyCon "String") (TyFun (TyApp (TyCon "Option") (TyCon "Int")) (TyFun (TyApp (TyCon "OrdMap") (TyCon "Int")) (TyApp (TyCon "OrdMap") (TyCon "Int"))))))
 (DFunDef false "withIdentity" ((PVar "mid") (PVar "ident") (PVar "ids")) (EApp (EApp (EApp (EVar "option") (EVar "ids")) (ELam ((PVar "i")) (EApp (EApp (EApp (EVar "omInsert") (EVar "mid")) (EVar "i")) (EVar "ids")))) (EVar "ident")))
 (DTypeSig false "boolKey" (TyFun (TyCon "Bool") (TyCon "String")))
 (DFunDef false "boolKey" ((PCon "True")) (ELit (LString "T")))
 (DFunDef false "boolKey" ((PCon "False")) (ELit (LString "F")))
-(DTypeSig false "typecheckPassFull" (TyFun (TyCon "DriveInputs") (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyFun (TyApp (TyCon "Option") (TyTuple (TyCon "Int") (TyCon "Int"))) (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "String") (TyApp (TyCon "List") (TyCon "Decl")))) (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "Decl")))) (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "Diag")))) (TyTuple (TyApp (TyCon "List") (TyCon "ModDiags")) (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "Diag"))))))))))))))
-(DFunDef false "typecheckPassFull" ((PVar "inputs") (PVar "runtimeP") (PVar "coreP") (PVar "preludeKey") (PVar "chainKey") (PVar "mods") (PVar "modPairs") (PVar "buckets")) (EBlock (DoLet false false (PTuple (PVar "r") PWild (PVar "results")) (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EVar "typecheckPassReport") (EVar "NoSteps")) (EVar "inputs")) (EVar "runtimeP")) (EVar "coreP")) (EVar "preludeKey")) (EVar "chainKey")) (EVar "mods")) (EVar "modPairs")) (EVar "buckets"))) (DoExpr (ETuple (EFieldAccess (EVar "r") "trDiagnostics") (EVar "results")))))
 (DTypeSig false "typecheckPassReport" (TyFun (TyCon "ChainSteps") (TyFun (TyCon "DriveInputs") (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyFun (TyApp (TyCon "Option") (TyTuple (TyCon "Int") (TyCon "Int"))) (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "String") (TyApp (TyCon "List") (TyCon "Decl")))) (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "Decl")))) (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "Diag")))) (TyTuple (TyCon "TcReport") (TyCon "DriveOutputs") (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "Diag")))))))))))))))
 (DFunDef false "typecheckPassReport" ((PVar "steps") (PVar "inputs") (PVar "runtimeP") (PVar "coreP") (PVar "preludeKey") (PVar "chainKey") (PVar "mods") (PVar "modPairs") (PVar "buckets")) (EBlock (DoLet false false (PVar "blocked") (EApp (EApp (EApp (EVar "resolveBlockedMods") (EVar "buckets")) (EVar "omEmpty")) (EVar "mods"))) (DoLet false false (PVar "checkedMods") (EApp (EApp (EVar "filterList") (ELam ((PTuple (PVar "mid") PWild PWild)) (EApp (EVar "not") (EApp (EApp (EVar "omHasKey") (EVar "mid")) (EVar "blocked"))))) (EVar "mods"))) (DoLet false false (PVar "checkedPairs") (EApp (EApp (EVar "filterList") (ELam ((PTuple (PVar "mid") PWild)) (EApp (EVar "not") (EApp (EApp (EVar "omHasKey") (EVar "mid")) (EVar "blocked"))))) (EVar "modPairs"))) (DoLet false false (PVar "rejected") (EApp (EVar "bucketsResolveRejected") (EVar "buckets"))) (DoLet false false (PVar "valueMain") (EBinOp "&&" (EApp (EVar "not") (EVar "rejected")) (EApp (EApp (EVar "valueMainCandidate") (EVar "coreP")) (EVar "modPairs")))) (DoLet false false (PTuple (PVar "driven") (PVar "outputs")) (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EVar "checkChainReport") (EVar "steps")) (EVar "inputs")) (EVar "valueMain")) (EVar "preludeKey")) (EVar "chainKey")) (EVar "runtimeP")) (EVar "coreP")) (EVar "checkedMods")) (EVar "checkedPairs"))) (DoLet false false (PVar "report") (EIf (EVar "rejected") (ERecordUpdate (EVar "driven") ((fa "trChecked" (EVar "None")))) (EVar "driven"))) (DoExpr (ETuple (EVar "report") (EVar "outputs") (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EVar "typecheckDiagsFold") (EVar "outputs")) (EFieldAccess (EVar "inputs") "diSibling")) (EApp (EApp (EApp (EVar "foldServeKey") (EVar "steps")) (EVar "preludeKey")) (EVar "chainKey"))) (EVar "runtimeP")) (EVar "coreP")) (EVar "mods")) (EVar "modPairs")) (EApp (EApp (EMethodRef "map") (EVar "dropModSchemes")) (EFieldAccess (EVar "report") "trDiagnostics"))) (EVar "buckets"))))))
 (DTypeSig false "checkChainReport" (TyFun (TyCon "ChainSteps") (TyFun (TyCon "DriveInputs") (TyFun (TyCon "Bool") (TyFun (TyApp (TyCon "Option") (TyTuple (TyCon "Int") (TyCon "Int"))) (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "String") (TyApp (TyCon "List") (TyCon "Decl")))) (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "Decl")))) (TyTuple (TyCon "TcReport") (TyCon "DriveOutputs"))))))))))))
@@ -4349,8 +4165,8 @@ checkJsonLoadErr target src _ le = match loadErrorSite target le
 (DTypeSig false "foldServeKey" (TyFun (TyCon "ChainSteps") (TyFun (TyApp (TyCon "Option") (TyTuple (TyCon "Int") (TyCon "Int"))) (TyFun (TyCon "String") (TyApp (TyCon "Option") (TyCon "String"))))))
 (DFunDef false "foldServeKey" ((PCon "RecordSteps") (PCon "Some" (PTuple (PVar "rk") (PVar "ck"))) (PVar "chainKey")) (EApp (EVar "Some") (EApp (EApp (EApp (EVar "chainFullKey") (EVar "rk")) (EVar "ck")) (EVar "chainKey"))))
 (DFunDef false "foldServeKey" (PWild PWild PWild) (EVar "None"))
-(DTypeSig false "resolvedBuckets" (TyFun (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyEffect () (Some "e") (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "String")))))) (TyFun (TyCon "Bool") (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyApp (TyCon "List") (TyCon "SiblingPair")) (TyFun (TyApp (TyCon "Option") (TyTuple (TyCon "Int") (TyCon "Int"))) (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "String") (TyApp (TyCon "List") (TyCon "Decl")))) (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "Decl")))) (TyEffect () (Some "e") (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "Diag"))))))))))))))))
-(DFunDef false "resolvedBuckets" ((PVar "exportsFor") (PVar "allowInternal") (PVar "trustedMods") (PVar "sibling") (PVar "preludeKey") (PVar "chainKey") (PVar "runtimeP") (PVar "coreP") (PVar "mods") (PVar "modPairs")) (EBlock (DoExpr (EIf (EApp (EVar "isSome") (EVar "preludeKey")) (EApp (EVar "retainPassEntries") (EApp (EApp (EMethodRef "map") (EVar "modIdOf")) (EVar "mods"))) (ELit LUnit))) (DoExpr (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EVar "resolvePass") (EVar "exportsFor")) (EVar "allowInternal")) (EVar "trustedMods")) (EApp (EApp (EVar "importerSubject") (EVar "sibling")) (EVar "modPairs"))) (EVar "preludeKey")) (EVar "runtimeP")) (EVar "coreP")) (EApp (EApp (EMethodRef "map") (ELam ((PTuple (PVar "rk") (PVar "ck"))) (EApp (EApp (EApp (EVar "chainFullKey") (EVar "rk")) (EVar "ck")) (EVar "chainKey")))) (EVar "preludeKey"))) (EVar "omEmpty")) (EVar "omEmpty")) (EApp (EApp (EVar "desugaredTriples") (EVar "mods")) (EVar "modPairs"))) (EApp (EApp (EVar "seedAll") (EApp (EApp (EMethodRef "map") (EVar "midPath")) (EVar "mods"))) (EListLit))))))
+(DTypeSig false "resolvedBuckets" (TyFun (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyEffect () (Some "e") (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "String")))))) (TyFun (TyCon "ResolveWalk") (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "String") (TyApp (TyCon "List") (TyCon "Decl")))) (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "Decl")))) (TyEffect () (Some "e") (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "Diag")))))))))))
+(DFunDef false "resolvedBuckets" ((PVar "exportsFor") (PVar "walk") (PVar "chainKey") (PVar "mods") (PVar "modPairs")) (EBlock (DoExpr (EIf (EApp (EVar "isSome") (EFieldAccess (EVar "walk") "rwPreludeKey")) (EApp (EVar "retainPassEntries") (EApp (EApp (EMethodRef "map") (EVar "modIdOf")) (EVar "mods"))) (ELit LUnit))) (DoExpr (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EVar "resolvePass") (EVar "exportsFor")) (EVar "walk")) (EApp (EApp (EVar "importerSubject") (EFieldAccess (EVar "walk") "rwSibling")) (EVar "modPairs"))) (EApp (EApp (EMethodRef "map") (ELam ((PTuple (PVar "rk") (PVar "ck"))) (EApp (EApp (EApp (EVar "chainFullKey") (EVar "rk")) (EVar "ck")) (EVar "chainKey")))) (EFieldAccess (EVar "walk") "rwPreludeKey"))) (EVar "omEmpty")) (EVar "omEmpty")) (EApp (EApp (EVar "desugaredTriples") (EVar "mods")) (EVar "modPairs"))) (EApp (EApp (EVar "seedAll") (EApp (EApp (EMethodRef "map") (EVar "midPath")) (EVar "mods"))) (EListLit))))))
 (DTypeSig false "desugaredTriples" (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "String") (TyApp (TyCon "List") (TyCon "Decl")))) (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "Decl")))) (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "String") (TyApp (TyCon "List") (TyCon "Decl")))))))
 (DFunDef false "desugaredTriples" ((PCons (PTuple (PVar "mid") (PVar "path") PWild) (PVar "ms")) (PCons (PTuple PWild (PVar "decls")) (PVar "ps"))) (EBinOp "::" (ETuple (EVar "mid") (EVar "path") (EVar "decls")) (EApp (EApp (EVar "desugaredTriples") (EVar "ms")) (EVar "ps"))))
 (DFunDef false "desugaredTriples" (PWild PWild) (EListLit))
@@ -4418,7 +4234,7 @@ checkJsonLoadErr target src _ le = match loadErrorSite target le
 (DTypeSig false "ifaceRowsText" (TyFun (TyCon "String") (TyFun (TyApp (TyCon "Option") (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "String"))))) (TyCon "String"))))
 (DFunDef false "ifaceRowsText" ((PVar "mid") (PVar "rows")) (EApp (EVar "stringConcat") (EBinOp "::" (EApp (EVar "lenKey") (EVar "mid")) (EApp (EApp (EMethodRef "map") (ELam ((PVar "row")) (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "")) (EApp (EMethodRef "display") (EApp (EVar "lenKey") (EApp (EVar "fst") (EVar "row"))))) (ELit (LString ""))) (EApp (EMethodRef "display") (EApp (EVar "lenKey") (EApp (EVar "joinNl") (EApp (EVar "snd") (EVar "row")))))) (ELit (LString ""))))) (EApp (EApp (EVar "optionOr") (EListLit)) (EVar "rows"))))))
 (DTypeSig true "analyzeProjectToLines" (TyFun (TyApp (TyCon "Ref") (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "String")))) (TyFun (TyFun (TyCon "String") (TyApp (TyCon "Option") (TyCon "String"))) (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyCon "String") (TyFun (TyCon "String") (TyEffect ("IO") None (TyCon "String")))))))))
-(DFunDef false "analyzeProjectToLines" ((PVar "cacheRef") (PVar "read") (PVar "entry") (PVar "roots") (PVar "runtimeSrc") (PVar "coreSrc")) (EBlock (DoLet false false (PVar "parseCacheRef") (EApp (EVar "Ref") (EVar "omEmpty"))) (DoExpr (EApp (EVar "joinNl") (EApp (EVar "projectLines") (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EVar "analyzeProject") (EVar "noStdlibExports")) (EVar "True")) (EListLit)) (EVar "cacheRef")) (EVar "parseCacheRef")) (EVar "read")) (EVar "entry")) (EVar "roots")) (EVar "runtimeSrc")) (EVar "coreSrc")))))))
+(DFunDef false "analyzeProjectToLines" ((PVar "cacheRef") (PVar "read") (PVar "entry") (PVar "roots") (PVar "runtimeSrc") (PVar "coreSrc")) (EBlock (DoLet false false (PVar "load") (ERecordUpdate (EApp (EApp (EApp (EApp (EApp (EVar "freshLoad") (EVar "read")) (EVar "entry")) (EVar "roots")) (EVar "runtimeSrc")) (EVar "coreSrc")) ((fa "plCache" (EVar "cacheRef"))))) (DoExpr (EBinOp "|>" (EBinOp "|>" (EApp (EApp (EVar "analyzeProject") (EVar "noStdlibExports")) (EApp (EVar "openQuery") (EVar "load"))) (EVar "projectLines")) (EVar "joinNl")))))
 (DTypeSig false "projectLines" (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "Diag")))) (TyApp (TyCon "List") (TyCon "String"))))
 (DFunDef false "projectLines" ((PList)) (EListLit))
 (DFunDef false "projectLines" ((PCons (PTuple (PVar "file") (PVar "ds")) (PVar "rest"))) (EBinOp "::" (EBinOp "++" (ELit (LString "## FILE ")) (EVar "file")) (EBinOp "++" (EApp (EApp (EMethodRef "map") (EVar "ppDiagLoc")) (EVar "ds")) (EApp (EVar "projectLines") (EVar "rest")))))
@@ -4463,7 +4279,11 @@ checkJsonLoadErr target src _ le = match loadErrorSite target le
 (DTypeSig true "pendingEnvelopeExtras" (TyApp (TyCon "Ref") (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "Json")))))
 (DFunDef false "pendingEnvelopeExtras" () (EApp (EVar "Ref") (EListLit)))
 (DTypeSig true "runEnvelopeFields" (TyFun (TyCon "Unit") (TyEffect () (Some "e") (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "Json"))))))
-(DFunDef false "runEnvelopeFields" (PWild) (EBlock (DoLet false false (PVar "staleF") (EMatch (EUnOp "!" (EVar "pendingStaleNotice")) (arm (PCon "None") () (EListLit)) (arm (PCon "Some" (PVar "msg")) () (EListLit (ETuple (ELit (LString "staleBinary")) (EApp (EVar "JString") (EVar "msg"))))))) (DoLet false false (PVar "preludeF") (EApp (EApp (EMethodRef "map") (ELam ((PTuple (PVar "field") (PVar "msg"))) (ETuple (EVar "field") (EApp (EVar "JString") (EVar "msg"))))) (EUnOp "!" (EVar "pendingPreludeNotices")))) (DoLet false false (PVar "perfF") (EMatch (EApp (EVar "takePerfSink") (ELit LUnit)) (arm (PList) () (EListLit)) (arm (PVar "ls") () (EListLit (ETuple (ELit (LString "perf")) (EApp (EVar "JArray") (EApp (EVar "arrayFromList") (EApp (EApp (EMethodRef "map") (ELam ((PVar "l")) (EApp (EVar "JString") (EVar "l")))) (EVar "ls"))))))))) (DoExpr (EBinOp "++" (EBinOp "++" (EBinOp "++" (EVar "staleF") (EVar "preludeF")) (EVar "perfF")) (EUnOp "!" (EVar "pendingEnvelopeExtras"))))))
+(DFunDef false "runEnvelopeFields" (PWild) (EBlock (DoLet false false (PVar "perfF") (EMatch (EApp (EVar "takePerfSink") (ELit LUnit)) (arm (PList) () (EListLit)) (arm (PVar "ls") () (EListLit (ETuple (ELit (LString "perf")) (EApp (EVar "JArray") (EApp (EVar "arrayFromList") (EApp (EApp (EMethodRef "map") (ELam ((PVar "l")) (EApp (EVar "JString") (EVar "l")))) (EVar "ls"))))))))) (DoExpr (EBinOp "++" (EBinOp "++" (EApp (EVar "staleNoticeFields") (ELit LUnit)) (EVar "perfF")) (EUnOp "!" (EVar "pendingEnvelopeExtras"))))))
+(DTypeSig true "abortEnvelopeFields" (TyFun (TyCon "Unit") (TyEffect () (Some "e") (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "Json"))))))
+(DFunDef false "abortEnvelopeFields" (PWild) (EBinOp "++" (EApp (EVar "staleNoticeFields") (ELit LUnit)) (EUnOp "!" (EVar "pendingEnvelopeExtras"))))
+(DTypeSig false "staleNoticeFields" (TyFun (TyCon "Unit") (TyEffect () (Some "e") (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "Json"))))))
+(DFunDef false "staleNoticeFields" (PWild) (EBlock (DoLet false false (PVar "staleF") (EMatch (EUnOp "!" (EVar "pendingStaleNotice")) (arm (PCon "None") () (EListLit)) (arm (PCon "Some" (PVar "msg")) () (EListLit (ETuple (ELit (LString "staleBinary")) (EApp (EVar "JString") (EVar "msg"))))))) (DoExpr (EBinOp "++" (EVar "staleF") (EApp (EApp (EMethodRef "map") (ELam ((PTuple (PVar "field") (PVar "msg"))) (ETuple (EVar "field") (EApp (EVar "JString") (EVar "msg"))))) (EUnOp "!" (EVar "pendingPreludeNotices")))))))
 (DTypeSig true "flushRunEnvelope" (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "String") (TyApp (TyCon "List") (TyCon "Diag")))) (TyEffect ("Stderr") (Some "e") (TyCon "Unit"))))
 (DFunDef false "flushRunEnvelope" ((PVar "triples")) (EMatch (ETuple (EVar "triples") (EApp (EVar "runEnvelopeFields") (ELit LUnit))) (arm (PTuple (PList) (PList)) () (ELit LUnit)) (arm (PTuple (PVar "ts") (PVar "extra")) () (EApp (EVar "ePutStrLn") (EApp (EApp (EVar "cjAllToJsonWith") (EVar "extra")) (EVar "ts"))))))
 (DTypeSig true "readDiagSrc" (TyFun (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "Diag"))) (TyEffect ("IO") None (TyTuple (TyCon "String") (TyCon "String") (TyApp (TyCon "List") (TyCon "Diag"))))))

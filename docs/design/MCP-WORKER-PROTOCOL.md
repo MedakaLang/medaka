@@ -109,8 +109,13 @@ not passed this experiment.
 
 The [Linux decision report](../findings/mcp-m0-packaging/REPORT.md) disqualifies
 both measured prototypes under the mandatory lifecycle and correctness criteria.
-This version 1 vocabulary remains an experimental contract, not a selected M1
-interface or proof of implementation. The report specifies a bounded follow-up;
+Medaka is the intended production supervisor, with Python retained as an independent
+measurement reference. This version 1 vocabulary remains an experimental contract,
+not a selected M1 interface or proof of implementation. The [process contract](PROCESS-SUPERVISION.md)
+sets the proposed module boundaries; launch tickets, stdio lease interlock, protected
+broker deployment and worker-origin identity remain SPIKE-FIRST. Indexed Exec does
+not provide containment, and unsupported containment must refuse before spawn. The
+report specifies a bounded follow-up;
 #4770 remains open and actual macOS evidence is deferred to #4820. Existing MCP
 clients and wrapper behavior remain in place until a documented compatible
 migration is implemented.

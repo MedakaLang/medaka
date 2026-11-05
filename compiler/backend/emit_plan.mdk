@@ -1,3 +1,7 @@
+import backend.package_identity.{
+  PackageIdentity, IdentityPlan, IdentityDefect, emptyPackage,
+  planProgramIdentity
+}
 import backend.impl_groups.{ImplClauseGroup, groupImplEntries}
 import ir.constructor_facts.{ConstructorFacts, planConstructors}
 import support.symbol_encoding.{encodePair}
@@ -95,6 +99,7 @@ public export data EmitPlan = EmitPlan {
   entryOutcome : Option EntryFact,
   methodResults : OrdMap (OrdMap MethodResultFact),
   constructorFacts : ConstructorFacts,
+  identity : Result (List IdentityDefect) IdentityPlan,
   wasmOnlyReach : Option ReachUnits,
   lazyGlobals : List String,
   eagerReach : OrdMap (List String),
@@ -245,7 +250,17 @@ firstEntryOf entries g = match (g : ImplClauseGroup).indices
 
 export
 buildEmitPlan : Backend -> RuntimeExternDomain -> CProgram -> EmitPlan
-buildEmitPlan target domain prog = planOver target domain None omEmpty prog
+buildEmitPlan target domain prog =
+  buildEmitPlanWithIdentity target domain emptyPackage prog
+
+export
+buildEmitPlanWithIdentity : Backend ->
+  RuntimeExternDomain ->
+  PackageIdentity ->
+  CProgram ->
+  EmitPlan
+buildEmitPlanWithIdentity target domain package prog =
+  planOver target domain None omEmpty (planProgramIdentity package prog) prog
 
 -- The wasm modules entries' builder: reach first, then every plan field over the
 -- reached program, which is also the program the emitter must receive. The
@@ -256,13 +271,26 @@ buildEmitPlanReached : RuntimeExternDomain ->
   CProgram ->
   (EmitPlan, CProgram)
 buildEmitPlanReached domain ctorFields prog =
+  buildEmitPlanReachedWithIdentity domain ctorFields emptyPackage prog
+
+export
+buildEmitPlanReachedWithIdentity : RuntimeExternDomain ->
+  OrdMap (List Int) ->
+  PackageIdentity ->
+  CProgram ->
+  (EmitPlan, CProgram)
+buildEmitPlanReachedWithIdentity domain ctorFields package prog =
+  let identity = planProgramIdentity package prog
   let reached = wasmReachFilter prog
   let units = ReachUnits {
     total = programUnitCount prog,
     kept = programUnitCount reached,
   }
   let prepared = uniqueBinders reached
-  (planOver WasmBackend domain (Some units) ctorFields prepared, prepared)
+  (
+    planOver WasmBackend domain (Some units) ctorFields identity prepared,
+    prepared,
+  )
 
 export
 prepareWasmPlan : RuntimeExternDomain ->
@@ -270,8 +298,18 @@ prepareWasmPlan : RuntimeExternDomain ->
   CProgram ->
   (EmitPlan, CProgram)
 prepareWasmPlan domain ctorFields prog =
+  prepareWasmPlanWithIdentity domain ctorFields emptyPackage prog
+
+export
+prepareWasmPlanWithIdentity : RuntimeExternDomain ->
+  OrdMap (List Int) ->
+  PackageIdentity ->
+  CProgram ->
+  (EmitPlan, CProgram)
+prepareWasmPlanWithIdentity domain ctorFields package prog =
+  let identity = planProgramIdentity package prog
   let prepared = uniqueBinders prog
-  (planOver WasmBackend domain None ctorFields prepared, prepared)
+  (planOver WasmBackend domain None ctorFields identity prepared, prepared)
 
 programUnitCount : CProgram -> Int
 programUnitCount (CProgram groups _ _ impls _ _) =
@@ -281,9 +319,10 @@ planOver : Backend ->
   RuntimeExternDomain ->
   Option ReachUnits ->
   OrdMap (List Int) ->
+  Result (List IdentityDefect) IdentityPlan ->
   CProgram ->
   EmitPlan
-planOver target domain reach ctorFields prog =
+planOver target domain reach ctorFields identity prog =
   let (CProgram groups _ _ impls _ facts) = prog
   let constructors = planConstructors prog
   let ctors = constructors.arities
@@ -319,6 +358,7 @@ planOver target domain reach ctorFields prog =
     entryOutcome = facts.factEntryOutcome,
     methodResults = indexMethodResults facts.factMethodResults,
     constructorFacts = constructors,
+    identity = identity,
     wasmOnlyReach = reach,
     lazyGlobals = lazy,
     eagerReach = eager,
