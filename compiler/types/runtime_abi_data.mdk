@@ -2219,4 +2219,82 @@ runtimeAbiRows = [
       canonicalSignature = "v1:String -> String",
     },
   ),
+  (
+    "processStartRaw",
+    CallableShape {
+      writtenValueArity = 7,
+      loweredCoreArity = 7,
+      parameterHeads =
+        ["String", "List", "String", "List", "Int", "Int", "Int"],
+      resultHead = "Result",
+      canonicalSignature =
+        "v1:(program : String) -> List String -> String -> List (String, String) -> Int -> Int -> Int -> <Exec program> Result (Int, Int, String, Option (LaunchTicket program)) (Process program)",
+    },
+  ),
+  (
+    "processRetryStartRaw",
+    CallableShape {
+      writtenValueArity = 1,
+      loweredCoreArity = 1,
+      parameterHeads = ["LaunchTicket"],
+      resultHead = "Result",
+      canonicalSignature =
+        "v1:LaunchTicket p -> <Exec p> Result (Int, Int, String, Option (LaunchTicket p)) (Process p)",
+    },
+  ),
+  (
+    "processCheckStartRaw",
+    CallableShape {
+      writtenValueArity = 1,
+      loweredCoreArity = 1,
+      parameterHeads = ["LaunchTicket"],
+      resultHead = "Result",
+      canonicalSignature =
+        "v1:LaunchTicket p -> <Exec p> Result (Int, Int, String) (Int, Option (Process p), Option (Int, Int, String))",
+    },
+  ),
+  (
+    "processAbortStartRaw",
+    CallableShape {
+      writtenValueArity = 1,
+      loweredCoreArity = 1,
+      parameterHeads = ["LaunchTicket"],
+      resultHead = "Result",
+      canonicalSignature =
+        "v1:LaunchTicket p -> <Exec p> Result (Int, Int, String) (Int, Option (Process p), Option (Int, Int, String))",
+    },
+  ),
+  (
+    "processPollExitRaw",
+    CallableShape {
+      writtenValueArity = 1,
+      loweredCoreArity = 1,
+      parameterHeads = ["Process"],
+      resultHead = "Result",
+      canonicalSignature =
+        "v1:Process p -> <Exec p> Result (Int, Int, String) (Option (Int, Int, Bool))",
+    },
+  ),
+  (
+    "processCloseStdinRaw",
+    CallableShape {
+      writtenValueArity = 1,
+      loweredCoreArity = 1,
+      parameterHeads = ["Process"],
+      resultHead = "Result",
+      canonicalSignature =
+        "v1:Process p -> <Exec p> Result (Int, Int, String) Unit",
+    },
+  ),
+  (
+    "processDisposeRaw",
+    CallableShape {
+      writtenValueArity = 1,
+      loweredCoreArity = 1,
+      parameterHeads = ["Process"],
+      resultHead = "Result",
+      canonicalSignature =
+        "v1:Process p -> <Exec p> Result (Int, Int, String) Unit",
+    },
+  ),
 ]

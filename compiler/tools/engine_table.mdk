@@ -56,6 +56,13 @@ stdoutReason =
 -- reason.  An effectful extern in no table and not here is drift.
 refusedOnRun : List (String, String)
 refusedOnRun = [
+  ("processStartRaw", execReason),
+  ("processRetryStartRaw", execReason),
+  ("processCheckStartRaw", execReason),
+  ("processAbortStartRaw", execReason),
+  ("processPollExitRaw", execReason),
+  ("processCloseStdinRaw", execReason),
+  ("processDisposeRaw", execReason),
   ("runCommand", execReason),
   ("runCommandBatch", execReason),
   (
