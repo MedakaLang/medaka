@@ -150,6 +150,14 @@ dispose : Process p -> <Exec p> Result ProcessError Unit
 dispose p
 ```
 
+## `outputStreamCode`
+
+```
+outputStreamCode : OutputStream -> Int
+```
+
+The native stream selector for an output stream.
+
 ## `tryRead`
 
 ```

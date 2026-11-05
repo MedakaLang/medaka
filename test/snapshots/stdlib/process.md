@@ -1,5 +1,5 @@
 # META
-source_lines=208
+source_lines=211
 stages=DESUGAR,MARK
 # SOURCE
 import bytes.{Bytes, adoptByteBlockUnsafe, lendByteBlockUnsafe}
@@ -162,16 +162,19 @@ export
 dispose : Process p -> <Exec p> Result ProcessError Unit
 dispose p = mapErr rawError (processDisposeRaw p)
 
+{- | The native stream selector for an output stream. -}
+export
+outputStreamCode : OutputStream -> Int
+outputStreamCode ChildStdout = 1
+outputStreamCode ChildStderr = 2
+
 export
 tryRead : Process p ->
   OutputStream ->
   Int ->
   <Exec p> Result ProcessError (Option Bytes)
 tryRead p stream limit =
-  let code = match stream
-    ChildStdout => 1
-    ChildStderr => 2
-  match processTryReadRaw p code limit
+  match processTryReadRaw p (outputStreamCode stream) limit
     Err e => Err (rawError e)
     Ok block => Ok (map adoptByteBlockUnsafe block)
 
@@ -274,8 +277,11 @@ test "stream errors preserve operation and busy state" = expectTrue (match (
 (DFunDef false "closeStdin" ((PVar "p")) (EApp (EApp (EVar "mapErr") (EVar "rawError")) (EApp (EVar "processCloseStdinRaw") (EVar "p"))))
 (DTypeSig true "dispose" (TyFun (TyApp (TyCon "Process") (TyVar "p")) (TyEffect ((atom "Exec" (name "p"))) None (TyApp (TyApp (TyCon "Result") (TyCon "ProcessError")) (TyCon "Unit")))))
 (DFunDef false "dispose" ((PVar "p")) (EApp (EApp (EVar "mapErr") (EVar "rawError")) (EApp (EVar "processDisposeRaw") (EVar "p"))))
+(DTypeSig true "outputStreamCode" (TyFun (TyCon "OutputStream") (TyCon "Int")))
+(DFunDef false "outputStreamCode" ((PCon "ChildStdout")) (ELit (LInt 1)))
+(DFunDef false "outputStreamCode" ((PCon "ChildStderr")) (ELit (LInt 2)))
 (DTypeSig true "tryRead" (TyFun (TyApp (TyCon "Process") (TyVar "p")) (TyFun (TyCon "OutputStream") (TyFun (TyCon "Int") (TyEffect ((atom "Exec" (name "p"))) None (TyApp (TyApp (TyCon "Result") (TyCon "ProcessError")) (TyApp (TyCon "Option") (TyCon "Bytes"))))))))
-(DFunDef false "tryRead" ((PVar "p") (PVar "stream") (PVar "limit")) (EBlock (DoLet false false (PVar "code") (EMatch (EVar "stream") (arm (PCon "ChildStdout") () (ELit (LInt 1))) (arm (PCon "ChildStderr") () (ELit (LInt 2))))) (DoExpr (EMatch (EApp (EApp (EApp (EVar "processTryReadRaw") (EVar "p")) (EVar "code")) (EVar "limit")) (arm (PCon "Err" (PVar "e")) () (EApp (EVar "Err") (EApp (EVar "rawError") (EVar "e")))) (arm (PCon "Ok" (PVar "block")) () (EApp (EVar "Ok") (EApp (EApp (EVar "map") (EVar "adoptByteBlockUnsafe")) (EVar "block"))))))))
+(DFunDef false "tryRead" ((PVar "p") (PVar "stream") (PVar "limit")) (EMatch (EApp (EApp (EApp (EVar "processTryReadRaw") (EVar "p")) (EApp (EVar "outputStreamCode") (EVar "stream"))) (EVar "limit")) (arm (PCon "Err" (PVar "e")) () (EApp (EVar "Err") (EApp (EVar "rawError") (EVar "e")))) (arm (PCon "Ok" (PVar "block")) () (EApp (EVar "Ok") (EApp (EApp (EVar "map") (EVar "adoptByteBlockUnsafe")) (EVar "block"))))))
 (DTypeSig true "tryWrite" (TyFun (TyApp (TyCon "Process") (TyVar "p")) (TyFun (TyCon "Bytes") (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyEffect ((atom "Exec" (name "p"))) None (TyApp (TyApp (TyCon "Result") (TyCon "ProcessError")) (TyApp (TyCon "Option") (TyCon "Int")))))))))
 (DFunDef false "tryWrite" ((PVar "p") (PVar "bytes") (PVar "offset") (PVar "count")) (EApp (EApp (EVar "mapErr") (EVar "rawError")) (EApp (EApp (EApp (EApp (EVar "processTryWriteRaw") (EVar "p")) (EApp (EVar "lendByteBlockUnsafe") (EVar "bytes"))) (EVar "offset")) (EVar "count"))))
 (DTypeSig true "streamFd" (TyFun (TyApp (TyCon "Process") (TyVar "p")) (TyFun (TyCon "Int") (TyEffect ((atom "Exec" (name "p"))) None (TyApp (TyApp (TyCon "Result") (TyCon "ProcessError")) (TyCon "Int"))))))
@@ -347,8 +353,11 @@ test "stream errors preserve operation and busy state" = expectTrue (match (
 (DFunDef false "closeStdin" ((PVar "p")) (EApp (EApp (EVar "mapErr") (EVar "rawError")) (EApp (EVar "processCloseStdinRaw") (EVar "p"))))
 (DTypeSig true "dispose" (TyFun (TyApp (TyCon "Process") (TyVar "p")) (TyEffect ((atom "Exec" (name "p"))) None (TyApp (TyApp (TyCon "Result") (TyCon "ProcessError")) (TyCon "Unit")))))
 (DFunDef false "dispose" ((PVar "p")) (EApp (EApp (EVar "mapErr") (EVar "rawError")) (EApp (EVar "processDisposeRaw") (EVar "p"))))
+(DTypeSig true "outputStreamCode" (TyFun (TyCon "OutputStream") (TyCon "Int")))
+(DFunDef false "outputStreamCode" ((PCon "ChildStdout")) (ELit (LInt 1)))
+(DFunDef false "outputStreamCode" ((PCon "ChildStderr")) (ELit (LInt 2)))
 (DTypeSig true "tryRead" (TyFun (TyApp (TyCon "Process") (TyVar "p")) (TyFun (TyCon "OutputStream") (TyFun (TyCon "Int") (TyEffect ((atom "Exec" (name "p"))) None (TyApp (TyApp (TyCon "Result") (TyCon "ProcessError")) (TyApp (TyCon "Option") (TyCon "Bytes"))))))))
-(DFunDef false "tryRead" ((PVar "p") (PVar "stream") (PVar "limit")) (EBlock (DoLet false false (PVar "code") (EMatch (EVar "stream") (arm (PCon "ChildStdout") () (ELit (LInt 1))) (arm (PCon "ChildStderr") () (ELit (LInt 2))))) (DoExpr (EMatch (EApp (EApp (EApp (EVar "processTryReadRaw") (EVar "p")) (EVar "code")) (EVar "limit")) (arm (PCon "Err" (PVar "e")) () (EApp (EVar "Err") (EApp (EVar "rawError") (EVar "e")))) (arm (PCon "Ok" (PVar "block")) () (EApp (EVar "Ok") (EApp (EApp (EMethodRef "map") (EVar "adoptByteBlockUnsafe")) (EVar "block"))))))))
+(DFunDef false "tryRead" ((PVar "p") (PVar "stream") (PVar "limit")) (EMatch (EApp (EApp (EApp (EVar "processTryReadRaw") (EVar "p")) (EApp (EVar "outputStreamCode") (EVar "stream"))) (EVar "limit")) (arm (PCon "Err" (PVar "e")) () (EApp (EVar "Err") (EApp (EVar "rawError") (EVar "e")))) (arm (PCon "Ok" (PVar "block")) () (EApp (EVar "Ok") (EApp (EApp (EMethodRef "map") (EVar "adoptByteBlockUnsafe")) (EVar "block"))))))
 (DTypeSig true "tryWrite" (TyFun (TyApp (TyCon "Process") (TyVar "p")) (TyFun (TyCon "Bytes") (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyEffect ((atom "Exec" (name "p"))) None (TyApp (TyApp (TyCon "Result") (TyCon "ProcessError")) (TyApp (TyCon "Option") (TyCon "Int")))))))))
 (DFunDef false "tryWrite" ((PVar "p") (PVar "bytes") (PVar "offset") (PVar "count")) (EApp (EApp (EVar "mapErr") (EVar "rawError")) (EApp (EApp (EApp (EApp (EVar "processTryWriteRaw") (EVar "p")) (EApp (EVar "lendByteBlockUnsafe") (EVar "bytes"))) (EVar "offset")) (EDictApp "count"))))
 (DTypeSig true "streamFd" (TyFun (TyApp (TyCon "Process") (TyVar "p")) (TyFun (TyCon "Int") (TyEffect ((atom "Exec" (name "p"))) None (TyApp (TyApp (TyCon "Result") (TyCon "ProcessError")) (TyCon "Int"))))))

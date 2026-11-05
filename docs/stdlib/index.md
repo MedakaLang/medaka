@@ -847,6 +847,7 @@ Submit a bounded native launch without waiting for creation or exec.
 - [`pollExit`](process.md#pollexit)
 - [`closeStdin`](process.md#closestdin)
 - [`dispose`](process.md#dispose)
+- [`outputStreamCode`](process.md#outputstreamcode)
 - [`tryRead`](process.md#tryread)
 - [`tryWrite`](process.md#trywrite)
 - [`streamFd`](process.md#streamfd)
