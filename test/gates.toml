@@ -2703,6 +2703,22 @@ toolchain = ["clang"]
 link = "production"
 
 [[gate]]
+name = "process_authority"
+area = "infra"
+shard = "gates_7"
+project = "compiler"
+tiers = ["merge"]
+cost = "medium"
+kind = "native"
+migration = "done"
+run = "test/process_authority_test.mdk"
+oracles = []
+sources = ["scripts/mcp_bench/prototypes/ownership_probe.py", "scripts/mcp_bench/prototypes/ownership_fixture.c", "scripts/mcp_bench/prototypes/stdio_authority_probe.py", "scripts/mcp_bench/prototypes/stdio_authority_fixture.c", "runtime/medaka_rt.c", "runtime/medaka_process.c", "stdlib/runtime.mdk", "compiler/backend/llvm_emit.mdk", "compiler/backend/llvm_preamble.mdk", "compiler/frontend/resolve.mdk"]
+corpus = ["test/process_authority_fixtures"]
+toolchain = ["clang"]
+link = "production"
+
+[[gate]]
 name = "process_runtime"
 area = "infra"
 shard = "gates_7"

@@ -57,14 +57,14 @@ macOS evidence is deferred to #4820.
 
 [Owned-process supervision](PROCESS-SUPERVISION.md) is the single proposed process
 contract: `core.mdk` carries opaque `Process p`, `process.mdk` owns typed lifecycle
-operations, `runtime.mdk` declares raw externs, and the planned native process C source and header
-own native resources. `process_async.mdk` adapts pipes to the existing Async
-scheduler; `stdio_async.mdk` owns the client stdio lease; `process_scope.mdk`
-coordinates owned cleanup. Their proposed exports and acyclic import limits are
-specified there. These are not implemented APIs. No shell supervisor or second event
-loop is part of this direction.
+operations, `runtime.mdk` declares raw externs, and the native process C source
+and header own direct-child resources. The landed `process_async.mdk` adapts
+pipes to the existing Async scheduler. Proposed `stdio_async.mdk` and
+`process_scope.mdk` await authority proof and have no implemented APIs. Their
+sketches and import limits are specified there; no shell supervisor or second
+event loop is part of this direction.
 
-Launch ticket and wait ownership, the stdio lease and legacy buffering interlock,
+Broker launch and wait ownership, the stdio lease and legacy buffering interlock,
 protected broker deployment and worker-origin identity remain SPIKE-FIRST. Indexed
 Exec grants invocation authority, not containment. A Linux protected cgroup broker
 is a candidate without a positive deployment proof; unsupported authority must
@@ -300,3 +300,11 @@ input tokens as a context-cost proxy on the stated Linux host. Trace deltas incl
 measurement noise; memory charge is distinct from RSS and input tokens are distinct
 from private context occupancy. Five repetitions per case support observed maxima,
 not percentile claims. The two-second offline handshake remains a hypothesis to test.
+
+The [authority investigation](../findings/mcp-runtime-authority/REPORT.md) did
+not qualify either the protected owned-scope manager or an exclusive stdio
+policy. The supervisor, scope and stdio handoffs therefore remain SPIKE-FIRST;
+see the numbered acceptance and prerequisites in
+[PROCESS-SUPERVISION.md](PROCESS-SUPERVISION.md#authority-investigation-handoffs).
+The landed direct-child owner and shared deadline/cancellation interfaces remain
+in use; a broker-owned child is not implicitly a caller-owned `Process`.
