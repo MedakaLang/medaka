@@ -1,5 +1,5 @@
 # META
-source_lines=1243
+source_lines=1249
 stages=DESUGAR,MARK
 # SOURCE
 -- Self-hosted exhaust stage — standalone
@@ -710,7 +710,8 @@ patHasRange (PList ps) = anyList patHasRange ps
 patHasRange (PAs _ _ _ p) = patHasRange p
 patHasRange (POr ps) = anyList patHasRange ps
 patHasRange (PRec _ fields _) = anyList recFieldHasRange fields
-patHasRange _ = False
+patHasRange (PAnn p _) = patHasRange p
+patHasRange (PVar _ _ _ | PWild | PLit _) = False
 
 recFieldHasRange : RecPatField -> Bool
 recFieldHasRange (RecPatField _ _ _ None) = False
@@ -847,7 +848,7 @@ isIrrefutablePat (PAs _ _ _ p) = isIrrefutablePat p
 isIrrefutablePat (POr ps) = anyList isIrrefutablePat ps
 isIrrefutablePat (PRec _ fields _) = allList recFieldIrrefutable fields
 isIrrefutablePat (PAnn p _) = isIrrefutablePat p
-isIrrefutablePat _ = False
+isIrrefutablePat (PLit _ | PCon _ _ | PCons _ _ | PList _ | PRng _ _ _) = False
 
 recFieldIrrefutable : RecPatField -> Bool
 recFieldIrrefutable (RecPatField _ _ _ None) = True
@@ -1114,7 +1115,12 @@ collectLetBinds (ESection (SecRight _ e0)) = collectLetBinds e0
 collectLetBinds (ESection (SecLeft e0 _)) = collectLetBinds e0
 collectLetBinds (ELoc _ e) = collectLetBinds e
 collectLetBinds (EDoOrigin _ e) = collectLetBinds e
-collectLetBinds _ = []
+collectLetBinds (EHeadAnnot e0 _) = collectLetBinds e0
+collectLetBinds (EMapLit _ kvs) =
+  flatMap (kv => collectLetBinds (fst kv) ++ collectLetBinds (snd kv)) kvs
+collectLetBinds (ESetLit _ es) = flatMap collectLetBinds es
+collectLetBinds (ELit _ | EVar _ | EAsPat _ _ | EOrPat _ | ESection (SecBare _) | EMethodRef _ | EDictApp _ | EVarAt _ _ | EVarId _ _ | EMethodAt _ _ _ | EDictAt _ _ | ENumLit _ _ _ | EWideLit _ _ _ _) =
+  []
 
 collectLetBindInner : LetBind -> List LetBind
 collectLetBindInner (LetBind _ funclauses _ _) =
@@ -1461,7 +1467,8 @@ exhaustToLines prog = exhaustToLinesWith prog prog
 (DFunDef false "patHasRange" ((PCon "PAs" PWild PWild PWild (PVar "p"))) (EApp (EVar "patHasRange") (EVar "p")))
 (DFunDef false "patHasRange" ((PCon "POr" (PVar "ps"))) (EApp (EApp (EVar "anyList") (EVar "patHasRange")) (EVar "ps")))
 (DFunDef false "patHasRange" ((PCon "PRec" PWild (PVar "fields") PWild)) (EApp (EApp (EVar "anyList") (EVar "recFieldHasRange")) (EVar "fields")))
-(DFunDef false "patHasRange" (PWild) (EVar "False"))
+(DFunDef false "patHasRange" ((PCon "PAnn" (PVar "p") PWild)) (EApp (EVar "patHasRange") (EVar "p")))
+(DFunDef false "patHasRange" ((POr (PCon "PVar" PWild PWild PWild) (PCon "PWild") (PCon "PLit" PWild))) (EVar "False"))
 (DTypeSig false "recFieldHasRange" (TyFun (TyCon "RecPatField") (TyCon "Bool")))
 (DFunDef false "recFieldHasRange" ((PCon "RecPatField" PWild PWild PWild (PCon "None"))) (EVar "False"))
 (DFunDef false "recFieldHasRange" ((PCon "RecPatField" PWild PWild PWild (PCon "Some" (PVar "p")))) (EApp (EVar "patHasRange") (EVar "p")))
@@ -1511,7 +1518,7 @@ exhaustToLines prog = exhaustToLinesWith prog prog
 (DFunDef false "isIrrefutablePat" ((PCon "POr" (PVar "ps"))) (EApp (EApp (EVar "anyList") (EVar "isIrrefutablePat")) (EVar "ps")))
 (DFunDef false "isIrrefutablePat" ((PCon "PRec" PWild (PVar "fields") PWild)) (EApp (EApp (EVar "allList") (EVar "recFieldIrrefutable")) (EVar "fields")))
 (DFunDef false "isIrrefutablePat" ((PCon "PAnn" (PVar "p") PWild)) (EApp (EVar "isIrrefutablePat") (EVar "p")))
-(DFunDef false "isIrrefutablePat" (PWild) (EVar "False"))
+(DFunDef false "isIrrefutablePat" ((POr (PCon "PLit" PWild) (PCon "PCon" PWild PWild) (PCon "PCons" PWild PWild) (PCon "PList" PWild) (PCon "PRng" PWild PWild PWild))) (EVar "False"))
 (DTypeSig false "recFieldIrrefutable" (TyFun (TyCon "RecPatField") (TyCon "Bool")))
 (DFunDef false "recFieldIrrefutable" ((PCon "RecPatField" PWild PWild PWild (PCon "None"))) (EVar "True"))
 (DFunDef false "recFieldIrrefutable" ((PCon "RecPatField" PWild PWild PWild (PCon "Some" (PVar "p")))) (EApp (EVar "isIrrefutablePat") (EVar "p")))
@@ -1620,7 +1627,10 @@ exhaustToLines prog = exhaustToLinesWith prog prog
 (DFunDef false "collectLetBinds" ((PCon "ESection" (PCon "SecLeft" (PVar "e0") PWild))) (EApp (EVar "collectLetBinds") (EVar "e0")))
 (DFunDef false "collectLetBinds" ((PCon "ELoc" PWild (PVar "e"))) (EApp (EVar "collectLetBinds") (EVar "e")))
 (DFunDef false "collectLetBinds" ((PCon "EDoOrigin" PWild (PVar "e"))) (EApp (EVar "collectLetBinds") (EVar "e")))
-(DFunDef false "collectLetBinds" (PWild) (EListLit))
+(DFunDef false "collectLetBinds" ((PCon "EHeadAnnot" (PVar "e0") PWild)) (EApp (EVar "collectLetBinds") (EVar "e0")))
+(DFunDef false "collectLetBinds" ((PCon "EMapLit" PWild (PVar "kvs"))) (EApp (EApp (EVar "flatMap") (ELam ((PVar "kv")) (EBinOp "++" (EApp (EVar "collectLetBinds") (EApp (EVar "fst") (EVar "kv"))) (EApp (EVar "collectLetBinds") (EApp (EVar "snd") (EVar "kv")))))) (EVar "kvs")))
+(DFunDef false "collectLetBinds" ((PCon "ESetLit" PWild (PVar "es"))) (EApp (EApp (EVar "flatMap") (EVar "collectLetBinds")) (EVar "es")))
+(DFunDef false "collectLetBinds" ((POr (PCon "ELit" PWild) (PCon "EVar" PWild) (PCon "EAsPat" PWild PWild) (PCon "EOrPat" PWild) (PCon "ESection" (PCon "SecBare" PWild)) (PCon "EMethodRef" PWild) (PCon "EDictApp" PWild) (PCon "EVarAt" PWild PWild) (PCon "EVarId" PWild PWild) (PCon "EMethodAt" PWild PWild PWild) (PCon "EDictAt" PWild PWild) (PCon "ENumLit" PWild PWild PWild) (PCon "EWideLit" PWild PWild PWild PWild))) (EListLit))
 (DTypeSig false "collectLetBindInner" (TyFun (TyCon "LetBind") (TyApp (TyCon "List") (TyCon "LetBind"))))
 (DFunDef false "collectLetBindInner" ((PCon "LetBind" PWild (PVar "funclauses") PWild PWild)) (EApp (EApp (EVar "flatMap") (EVar "funClauseBinds")) (EVar "funclauses")))
 (DTypeSig false "funClauseBinds" (TyFun (TyCon "FunClause") (TyApp (TyCon "List") (TyCon "LetBind"))))
@@ -1894,7 +1904,8 @@ exhaustToLines prog = exhaustToLinesWith prog prog
 (DFunDef false "patHasRange" ((PCon "PAs" PWild PWild PWild (PVar "p"))) (EApp (EVar "patHasRange") (EVar "p")))
 (DFunDef false "patHasRange" ((PCon "POr" (PVar "ps"))) (EApp (EApp (EVar "anyList") (EVar "patHasRange")) (EVar "ps")))
 (DFunDef false "patHasRange" ((PCon "PRec" PWild (PVar "fields") PWild)) (EApp (EApp (EVar "anyList") (EVar "recFieldHasRange")) (EVar "fields")))
-(DFunDef false "patHasRange" (PWild) (EVar "False"))
+(DFunDef false "patHasRange" ((PCon "PAnn" (PVar "p") PWild)) (EApp (EVar "patHasRange") (EVar "p")))
+(DFunDef false "patHasRange" ((POr (PCon "PVar" PWild PWild PWild) (PCon "PWild") (PCon "PLit" PWild))) (EVar "False"))
 (DTypeSig false "recFieldHasRange" (TyFun (TyCon "RecPatField") (TyCon "Bool")))
 (DFunDef false "recFieldHasRange" ((PCon "RecPatField" PWild PWild PWild (PCon "None"))) (EVar "False"))
 (DFunDef false "recFieldHasRange" ((PCon "RecPatField" PWild PWild PWild (PCon "Some" (PVar "p")))) (EApp (EVar "patHasRange") (EVar "p")))
@@ -1944,7 +1955,7 @@ exhaustToLines prog = exhaustToLinesWith prog prog
 (DFunDef false "isIrrefutablePat" ((PCon "POr" (PVar "ps"))) (EApp (EApp (EVar "anyList") (EVar "isIrrefutablePat")) (EVar "ps")))
 (DFunDef false "isIrrefutablePat" ((PCon "PRec" PWild (PVar "fields") PWild)) (EApp (EApp (EVar "allList") (EVar "recFieldIrrefutable")) (EVar "fields")))
 (DFunDef false "isIrrefutablePat" ((PCon "PAnn" (PVar "p") PWild)) (EApp (EVar "isIrrefutablePat") (EVar "p")))
-(DFunDef false "isIrrefutablePat" (PWild) (EVar "False"))
+(DFunDef false "isIrrefutablePat" ((POr (PCon "PLit" PWild) (PCon "PCon" PWild PWild) (PCon "PCons" PWild PWild) (PCon "PList" PWild) (PCon "PRng" PWild PWild PWild))) (EVar "False"))
 (DTypeSig false "recFieldIrrefutable" (TyFun (TyCon "RecPatField") (TyCon "Bool")))
 (DFunDef false "recFieldIrrefutable" ((PCon "RecPatField" PWild PWild PWild (PCon "None"))) (EVar "True"))
 (DFunDef false "recFieldIrrefutable" ((PCon "RecPatField" PWild PWild PWild (PCon "Some" (PVar "p")))) (EApp (EVar "isIrrefutablePat") (EVar "p")))
@@ -2053,7 +2064,10 @@ exhaustToLines prog = exhaustToLinesWith prog prog
 (DFunDef false "collectLetBinds" ((PCon "ESection" (PCon "SecLeft" (PVar "e0") PWild))) (EApp (EVar "collectLetBinds") (EVar "e0")))
 (DFunDef false "collectLetBinds" ((PCon "ELoc" PWild (PVar "e"))) (EApp (EVar "collectLetBinds") (EVar "e")))
 (DFunDef false "collectLetBinds" ((PCon "EDoOrigin" PWild (PVar "e"))) (EApp (EVar "collectLetBinds") (EVar "e")))
-(DFunDef false "collectLetBinds" (PWild) (EListLit))
+(DFunDef false "collectLetBinds" ((PCon "EHeadAnnot" (PVar "e0") PWild)) (EApp (EVar "collectLetBinds") (EVar "e0")))
+(DFunDef false "collectLetBinds" ((PCon "EMapLit" PWild (PVar "kvs"))) (EApp (EApp (EDictApp "flatMap") (ELam ((PVar "kv")) (EBinOp "++" (EApp (EVar "collectLetBinds") (EApp (EVar "fst") (EVar "kv"))) (EApp (EVar "collectLetBinds") (EApp (EVar "snd") (EVar "kv")))))) (EVar "kvs")))
+(DFunDef false "collectLetBinds" ((PCon "ESetLit" PWild (PVar "es"))) (EApp (EApp (EDictApp "flatMap") (EVar "collectLetBinds")) (EVar "es")))
+(DFunDef false "collectLetBinds" ((POr (PCon "ELit" PWild) (PCon "EVar" PWild) (PCon "EAsPat" PWild PWild) (PCon "EOrPat" PWild) (PCon "ESection" (PCon "SecBare" PWild)) (PCon "EMethodRef" PWild) (PCon "EDictApp" PWild) (PCon "EVarAt" PWild PWild) (PCon "EVarId" PWild PWild) (PCon "EMethodAt" PWild PWild PWild) (PCon "EDictAt" PWild PWild) (PCon "ENumLit" PWild PWild PWild) (PCon "EWideLit" PWild PWild PWild PWild))) (EListLit))
 (DTypeSig false "collectLetBindInner" (TyFun (TyCon "LetBind") (TyApp (TyCon "List") (TyCon "LetBind"))))
 (DFunDef false "collectLetBindInner" ((PCon "LetBind" PWild (PVar "funclauses") PWild PWild)) (EApp (EApp (EDictApp "flatMap") (EVar "funClauseBinds")) (EVar "funclauses")))
 (DTypeSig false "funClauseBinds" (TyFun (TyCon "FunClause") (TyApp (TyCon "List") (TyCon "LetBind"))))

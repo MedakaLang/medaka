@@ -32,9 +32,18 @@ import frontend.resolve.{
   resErrorLoc,
   resolveProgram,
 }
-import frontend.ast.{Decl(..), Variant(..), ConPayload(..), Field(..), Loc(..)}
+import frontend.ast.{
+  ConPayload(..),
+  Decl(..),
+  Field(..),
+  FunClause(..),
+  LetBind(..),
+  Loc(..),
+  Variant(..),
+}
+import ir.sexp.{exprSexp}
 import support.util.{contains, filterList}
-import string.{stripPrefix}
+import string.{indexOf, stripPrefix}
 
 visibilitySourcePath : String
 visibilitySourcePath = "compiler/frontend/visibility.mdk"
@@ -349,3 +358,18 @@ test "a lambda parameter annotation is resolved as a written type" = expectEach
             """),
     ),
   ]
+
+-- ── desugar reaches a top-level `let rec` body ────────────────────────────
+
+letRecBodyText : String -> String
+letRecBodyText src = match desugar (parse src)
+  [DLetGroup _ [LetBind _ [FunClause _ body] _ _]] => exprSexp body
+  _ => "unexpected shape"
+
+test "desugar rewrites a do block inside a top-level let rec" =
+  expectEqual
+    False
+    (isSome
+      (indexOf
+        "EDo"
+        (letRecBodyText "let rec f n = do\n  x <- Some n\n  Some x\n")))

@@ -810,7 +810,7 @@ patBoundNames (PAs x _ _ p) = x :: patBoundNames p
 patBoundNames (POr (p :: _)) = patBoundNames p
 patBoundNames (PRec _ fields _) = flatMap recPatFieldNames fields
 patBoundNames (PAnn p _) = patBoundNames p
-patBoundNames _ = []
+patBoundNames (PWild | PLit _ | PRng _ _ _ | POr []) = []
 
 recPatFieldNames : RecPatField -> List String
 recPatFieldNames (RecPatField label _ _ None) = [label]
@@ -844,7 +844,7 @@ patHasOr (PList ps) = any patHasOr ps
 patHasOr (PAs _ _ _ p) = patHasOr p
 patHasOr (PRec _ fields _) = any recFieldHasOr fields
 patHasOr (PAnn p _) = patHasOr p
-patHasOr _ = False
+patHasOr (PVar _ _ _ | PWild | PLit _ | PRng _ _ _) = False
 
 -- Whether [p] holds a written type annotation (`PAnn`) anywhere.
 export
@@ -857,7 +857,7 @@ patHasAnnot (PList ps) = any patHasAnnot ps
 patHasAnnot (PAs _ _ _ p) = patHasAnnot p
 patHasAnnot (POr ps) = any patHasAnnot ps
 patHasAnnot (PRec _ fields _) = any recFieldHasAnnot fields
-patHasAnnot _ = False
+patHasAnnot (PVar _ _ _ | PWild | PLit _ | PRng _ _ _) = False
 
 recFieldHasAnnot : RecPatField -> Bool
 recFieldHasAnnot (RecPatField _ _ _ (Some p)) = patHasAnnot p
@@ -874,7 +874,7 @@ patAnnotTys (PList ps) = flatMap patAnnotTys ps
 patAnnotTys (PAs _ _ _ p) = patAnnotTys p
 patAnnotTys (POr ps) = flatMap patAnnotTys ps
 patAnnotTys (PRec _ fields _) = flatMap recFieldAnnotTys fields
-patAnnotTys _ = []
+patAnnotTys (PVar _ _ _ | PWild | PLit _ | PRng _ _ _) = []
 
 recFieldAnnotTys : RecPatField -> List Ty
 recFieldAnnotTys (RecPatField _ _ _ (Some p)) = patAnnotTys p
@@ -904,7 +904,7 @@ orCount (PList ps) = orCountProduct ps
 orCount (PAs _ _ _ p) = orCount p
 orCount (PRec _ fields _) = fold (n f => satMul n (recFieldCount f)) 1 fields
 orCount (PAnn p _) = orCount p
-orCount _ = 1
+orCount (PVar _ _ _ | PWild | PLit _ | PRng _ _ _) = 1
 
 -- The candidate count of a parameter list, as `paramCandidates` would build it.
 export
@@ -1285,7 +1285,7 @@ export
 effParamNames : EffParamTy -> List String
 effParamNames (EPName n) = [n]
 effParamNames (EPProduct axes) = flatMap (a => effParamNames (snd a)) axes
-effParamNames _ = []
+effParamNames (EPTop | EPLit _ | EPSet _) = []
 
 -- The names a written authority term refers to.
 export
@@ -3112,7 +3112,7 @@ public export data SiblingPair = SiblingPair {
 (DFunDef false "patBoundNames" ((PCon "POr" (PCons (PVar "p") PWild))) (EApp (EVar "patBoundNames") (EVar "p")))
 (DFunDef false "patBoundNames" ((PCon "PRec" PWild (PVar "fields") PWild)) (EApp (EApp (EVar "flatMap") (EVar "recPatFieldNames")) (EVar "fields")))
 (DFunDef false "patBoundNames" ((PCon "PAnn" (PVar "p") PWild)) (EApp (EVar "patBoundNames") (EVar "p")))
-(DFunDef false "patBoundNames" (PWild) (EListLit))
+(DFunDef false "patBoundNames" ((POr (PCon "PWild") (PCon "PLit" PWild) (PCon "PRng" PWild PWild PWild) (PCon "POr" (PList)))) (EListLit))
 (DTypeSig false "recPatFieldNames" (TyFun (TyCon "RecPatField") (TyApp (TyCon "List") (TyCon "String"))))
 (DFunDef false "recPatFieldNames" ((PCon "RecPatField" (PVar "label") PWild PWild (PCon "None"))) (EListLit (EVar "label")))
 (DFunDef false "recPatFieldNames" ((PCon "RecPatField" PWild PWild PWild (PCon "Some" (PVar "p")))) (EApp (EVar "patBoundNames") (EVar "p")))
@@ -3139,7 +3139,7 @@ public export data SiblingPair = SiblingPair {
 (DFunDef false "patHasOr" ((PCon "PAs" PWild PWild PWild (PVar "p"))) (EApp (EVar "patHasOr") (EVar "p")))
 (DFunDef false "patHasOr" ((PCon "PRec" PWild (PVar "fields") PWild)) (EApp (EApp (EVar "any") (EVar "recFieldHasOr")) (EVar "fields")))
 (DFunDef false "patHasOr" ((PCon "PAnn" (PVar "p") PWild)) (EApp (EVar "patHasOr") (EVar "p")))
-(DFunDef false "patHasOr" (PWild) (EVar "False"))
+(DFunDef false "patHasOr" ((POr (PCon "PVar" PWild PWild PWild) (PCon "PWild") (PCon "PLit" PWild) (PCon "PRng" PWild PWild PWild))) (EVar "False"))
 (DTypeSig true "patHasAnnot" (TyFun (TyCon "Pat") (TyCon "Bool")))
 (DFunDef false "patHasAnnot" ((PCon "PAnn" PWild PWild)) (EVar "True"))
 (DFunDef false "patHasAnnot" ((PCon "PCon" PWild (PVar "ps"))) (EApp (EApp (EVar "any") (EVar "patHasAnnot")) (EVar "ps")))
@@ -3149,7 +3149,7 @@ public export data SiblingPair = SiblingPair {
 (DFunDef false "patHasAnnot" ((PCon "PAs" PWild PWild PWild (PVar "p"))) (EApp (EVar "patHasAnnot") (EVar "p")))
 (DFunDef false "patHasAnnot" ((PCon "POr" (PVar "ps"))) (EApp (EApp (EVar "any") (EVar "patHasAnnot")) (EVar "ps")))
 (DFunDef false "patHasAnnot" ((PCon "PRec" PWild (PVar "fields") PWild)) (EApp (EApp (EVar "any") (EVar "recFieldHasAnnot")) (EVar "fields")))
-(DFunDef false "patHasAnnot" (PWild) (EVar "False"))
+(DFunDef false "patHasAnnot" ((POr (PCon "PVar" PWild PWild PWild) (PCon "PWild") (PCon "PLit" PWild) (PCon "PRng" PWild PWild PWild))) (EVar "False"))
 (DTypeSig false "recFieldHasAnnot" (TyFun (TyCon "RecPatField") (TyCon "Bool")))
 (DFunDef false "recFieldHasAnnot" ((PCon "RecPatField" PWild PWild PWild (PCon "Some" (PVar "p")))) (EApp (EVar "patHasAnnot") (EVar "p")))
 (DFunDef false "recFieldHasAnnot" (PWild) (EVar "False"))
@@ -3162,7 +3162,7 @@ public export data SiblingPair = SiblingPair {
 (DFunDef false "patAnnotTys" ((PCon "PAs" PWild PWild PWild (PVar "p"))) (EApp (EVar "patAnnotTys") (EVar "p")))
 (DFunDef false "patAnnotTys" ((PCon "POr" (PVar "ps"))) (EApp (EApp (EVar "flatMap") (EVar "patAnnotTys")) (EVar "ps")))
 (DFunDef false "patAnnotTys" ((PCon "PRec" PWild (PVar "fields") PWild)) (EApp (EApp (EVar "flatMap") (EVar "recFieldAnnotTys")) (EVar "fields")))
-(DFunDef false "patAnnotTys" (PWild) (EListLit))
+(DFunDef false "patAnnotTys" ((POr (PCon "PVar" PWild PWild PWild) (PCon "PWild") (PCon "PLit" PWild) (PCon "PRng" PWild PWild PWild))) (EListLit))
 (DTypeSig false "recFieldAnnotTys" (TyFun (TyCon "RecPatField") (TyApp (TyCon "List") (TyCon "Ty"))))
 (DFunDef false "recFieldAnnotTys" ((PCon "RecPatField" PWild PWild PWild (PCon "Some" (PVar "p")))) (EApp (EVar "patAnnotTys") (EVar "p")))
 (DFunDef false "recFieldAnnotTys" (PWild) (EListLit))
@@ -3180,7 +3180,7 @@ public export data SiblingPair = SiblingPair {
 (DFunDef false "orCount" ((PCon "PAs" PWild PWild PWild (PVar "p"))) (EApp (EVar "orCount") (EVar "p")))
 (DFunDef false "orCount" ((PCon "PRec" PWild (PVar "fields") PWild)) (EApp (EApp (EApp (EVar "fold") (ELam ((PVar "n") (PVar "f")) (EApp (EApp (EVar "satMul") (EVar "n")) (EApp (EVar "recFieldCount") (EVar "f"))))) (ELit (LInt 1))) (EVar "fields")))
 (DFunDef false "orCount" ((PCon "PAnn" (PVar "p") PWild)) (EApp (EVar "orCount") (EVar "p")))
-(DFunDef false "orCount" (PWild) (ELit (LInt 1)))
+(DFunDef false "orCount" ((POr (PCon "PVar" PWild PWild PWild) (PCon "PWild") (PCon "PLit" PWild) (PCon "PRng" PWild PWild PWild))) (ELit (LInt 1)))
 (DTypeSig true "orCountProduct" (TyFun (TyApp (TyCon "List") (TyCon "Pat")) (TyCon "Int")))
 (DFunDef false "orCountProduct" ((PVar "ps")) (EApp (EApp (EApp (EVar "fold") (ELam ((PVar "n") (PVar "p")) (EApp (EApp (EVar "satMul") (EVar "n")) (EApp (EVar "orCount") (EVar "p"))))) (ELit (LInt 1))) (EVar "ps")))
 (DTypeSig false "recFieldCount" (TyFun (TyCon "RecPatField") (TyCon "Int")))
@@ -3318,7 +3318,7 @@ public export data SiblingPair = SiblingPair {
 (DTypeSig true "effParamNames" (TyFun (TyCon "EffParamTy") (TyApp (TyCon "List") (TyCon "String"))))
 (DFunDef false "effParamNames" ((PCon "EPName" (PVar "n"))) (EListLit (EVar "n")))
 (DFunDef false "effParamNames" ((PCon "EPProduct" (PVar "axes"))) (EApp (EApp (EVar "flatMap") (ELam ((PVar "a")) (EApp (EVar "effParamNames") (EApp (EVar "snd") (EVar "a"))))) (EVar "axes")))
-(DFunDef false "effParamNames" (PWild) (EListLit))
+(DFunDef false "effParamNames" ((POr (PCon "EPTop") (PCon "EPLit" PWild) (PCon "EPSet" PWild))) (EListLit))
 (DTypeSig true "authTermNames" (TyFun (TyApp (TyCon "List") (TyCon "EffParamTy")) (TyApp (TyCon "List") (TyCon "String"))))
 (DFunDef false "authTermNames" ((PVar "ps")) (EApp (EApp (EVar "flatMap") (ELam ((PVar "p")) (EMatch (EVar "p") (arm (PCon "EPName" (PVar "n")) () (EListLit (EVar "n"))) (arm PWild () (EListLit))))) (EVar "ps")))
 (DTypeSig false "kindAnnArg" (TyFun (TyCon "KindAnn") (TyCon "String")))
@@ -3720,7 +3720,7 @@ public export data SiblingPair = SiblingPair {
 (DFunDef false "patBoundNames" ((PCon "POr" (PCons (PVar "p") PWild))) (EApp (EVar "patBoundNames") (EVar "p")))
 (DFunDef false "patBoundNames" ((PCon "PRec" PWild (PVar "fields") PWild)) (EApp (EApp (EDictApp "flatMap") (EVar "recPatFieldNames")) (EVar "fields")))
 (DFunDef false "patBoundNames" ((PCon "PAnn" (PVar "p") PWild)) (EApp (EVar "patBoundNames") (EVar "p")))
-(DFunDef false "patBoundNames" (PWild) (EListLit))
+(DFunDef false "patBoundNames" ((POr (PCon "PWild") (PCon "PLit" PWild) (PCon "PRng" PWild PWild PWild) (PCon "POr" (PList)))) (EListLit))
 (DTypeSig false "recPatFieldNames" (TyFun (TyCon "RecPatField") (TyApp (TyCon "List") (TyCon "String"))))
 (DFunDef false "recPatFieldNames" ((PCon "RecPatField" (PVar "label") PWild PWild (PCon "None"))) (EListLit (EVar "label")))
 (DFunDef false "recPatFieldNames" ((PCon "RecPatField" PWild PWild PWild (PCon "Some" (PVar "p")))) (EApp (EVar "patBoundNames") (EVar "p")))
@@ -3747,7 +3747,7 @@ public export data SiblingPair = SiblingPair {
 (DFunDef false "patHasOr" ((PCon "PAs" PWild PWild PWild (PVar "p"))) (EApp (EVar "patHasOr") (EVar "p")))
 (DFunDef false "patHasOr" ((PCon "PRec" PWild (PVar "fields") PWild)) (EApp (EApp (EDictApp "any") (EVar "recFieldHasOr")) (EVar "fields")))
 (DFunDef false "patHasOr" ((PCon "PAnn" (PVar "p") PWild)) (EApp (EVar "patHasOr") (EVar "p")))
-(DFunDef false "patHasOr" (PWild) (EVar "False"))
+(DFunDef false "patHasOr" ((POr (PCon "PVar" PWild PWild PWild) (PCon "PWild") (PCon "PLit" PWild) (PCon "PRng" PWild PWild PWild))) (EVar "False"))
 (DTypeSig true "patHasAnnot" (TyFun (TyCon "Pat") (TyCon "Bool")))
 (DFunDef false "patHasAnnot" ((PCon "PAnn" PWild PWild)) (EVar "True"))
 (DFunDef false "patHasAnnot" ((PCon "PCon" PWild (PVar "ps"))) (EApp (EApp (EDictApp "any") (EVar "patHasAnnot")) (EVar "ps")))
@@ -3757,7 +3757,7 @@ public export data SiblingPair = SiblingPair {
 (DFunDef false "patHasAnnot" ((PCon "PAs" PWild PWild PWild (PVar "p"))) (EApp (EVar "patHasAnnot") (EVar "p")))
 (DFunDef false "patHasAnnot" ((PCon "POr" (PVar "ps"))) (EApp (EApp (EDictApp "any") (EVar "patHasAnnot")) (EVar "ps")))
 (DFunDef false "patHasAnnot" ((PCon "PRec" PWild (PVar "fields") PWild)) (EApp (EApp (EDictApp "any") (EVar "recFieldHasAnnot")) (EVar "fields")))
-(DFunDef false "patHasAnnot" (PWild) (EVar "False"))
+(DFunDef false "patHasAnnot" ((POr (PCon "PVar" PWild PWild PWild) (PCon "PWild") (PCon "PLit" PWild) (PCon "PRng" PWild PWild PWild))) (EVar "False"))
 (DTypeSig false "recFieldHasAnnot" (TyFun (TyCon "RecPatField") (TyCon "Bool")))
 (DFunDef false "recFieldHasAnnot" ((PCon "RecPatField" PWild PWild PWild (PCon "Some" (PVar "p")))) (EApp (EVar "patHasAnnot") (EVar "p")))
 (DFunDef false "recFieldHasAnnot" (PWild) (EVar "False"))
@@ -3770,7 +3770,7 @@ public export data SiblingPair = SiblingPair {
 (DFunDef false "patAnnotTys" ((PCon "PAs" PWild PWild PWild (PVar "p"))) (EApp (EVar "patAnnotTys") (EVar "p")))
 (DFunDef false "patAnnotTys" ((PCon "POr" (PVar "ps"))) (EApp (EApp (EDictApp "flatMap") (EVar "patAnnotTys")) (EVar "ps")))
 (DFunDef false "patAnnotTys" ((PCon "PRec" PWild (PVar "fields") PWild)) (EApp (EApp (EDictApp "flatMap") (EVar "recFieldAnnotTys")) (EVar "fields")))
-(DFunDef false "patAnnotTys" (PWild) (EListLit))
+(DFunDef false "patAnnotTys" ((POr (PCon "PVar" PWild PWild PWild) (PCon "PWild") (PCon "PLit" PWild) (PCon "PRng" PWild PWild PWild))) (EListLit))
 (DTypeSig false "recFieldAnnotTys" (TyFun (TyCon "RecPatField") (TyApp (TyCon "List") (TyCon "Ty"))))
 (DFunDef false "recFieldAnnotTys" ((PCon "RecPatField" PWild PWild PWild (PCon "Some" (PVar "p")))) (EApp (EVar "patAnnotTys") (EVar "p")))
 (DFunDef false "recFieldAnnotTys" (PWild) (EListLit))
@@ -3788,7 +3788,7 @@ public export data SiblingPair = SiblingPair {
 (DFunDef false "orCount" ((PCon "PAs" PWild PWild PWild (PVar "p"))) (EApp (EVar "orCount") (EVar "p")))
 (DFunDef false "orCount" ((PCon "PRec" PWild (PVar "fields") PWild)) (EApp (EApp (EApp (EMethodRef "fold") (ELam ((PVar "n") (PVar "f")) (EApp (EApp (EVar "satMul") (EVar "n")) (EApp (EVar "recFieldCount") (EVar "f"))))) (ELit (LInt 1))) (EVar "fields")))
 (DFunDef false "orCount" ((PCon "PAnn" (PVar "p") PWild)) (EApp (EVar "orCount") (EVar "p")))
-(DFunDef false "orCount" (PWild) (ELit (LInt 1)))
+(DFunDef false "orCount" ((POr (PCon "PVar" PWild PWild PWild) (PCon "PWild") (PCon "PLit" PWild) (PCon "PRng" PWild PWild PWild))) (ELit (LInt 1)))
 (DTypeSig true "orCountProduct" (TyFun (TyApp (TyCon "List") (TyCon "Pat")) (TyCon "Int")))
 (DFunDef false "orCountProduct" ((PVar "ps")) (EApp (EApp (EApp (EMethodRef "fold") (ELam ((PVar "n") (PVar "p")) (EApp (EApp (EVar "satMul") (EVar "n")) (EApp (EVar "orCount") (EVar "p"))))) (ELit (LInt 1))) (EVar "ps")))
 (DTypeSig false "recFieldCount" (TyFun (TyCon "RecPatField") (TyCon "Int")))
@@ -3926,7 +3926,7 @@ public export data SiblingPair = SiblingPair {
 (DTypeSig true "effParamNames" (TyFun (TyCon "EffParamTy") (TyApp (TyCon "List") (TyCon "String"))))
 (DFunDef false "effParamNames" ((PCon "EPName" (PVar "n"))) (EListLit (EVar "n")))
 (DFunDef false "effParamNames" ((PCon "EPProduct" (PVar "axes"))) (EApp (EApp (EDictApp "flatMap") (ELam ((PVar "a")) (EApp (EVar "effParamNames") (EApp (EVar "snd") (EVar "a"))))) (EVar "axes")))
-(DFunDef false "effParamNames" (PWild) (EListLit))
+(DFunDef false "effParamNames" ((POr (PCon "EPTop") (PCon "EPLit" PWild) (PCon "EPSet" PWild))) (EListLit))
 (DTypeSig true "authTermNames" (TyFun (TyApp (TyCon "List") (TyCon "EffParamTy")) (TyApp (TyCon "List") (TyCon "String"))))
 (DFunDef false "authTermNames" ((PVar "ps")) (EApp (EApp (EDictApp "flatMap") (ELam ((PVar "p")) (EMatch (EVar "p") (arm (PCon "EPName" (PVar "n")) () (EListLit (EVar "n"))) (arm PWild () (EListLit))))) (EVar "ps")))
 (DTypeSig false "kindAnnArg" (TyFun (TyCon "KindAnn") (TyCon "String")))

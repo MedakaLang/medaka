@@ -39,9 +39,7 @@ localBoundNames : List Decl -> List String
 mapLitPairBound : (Expr, Expr) -> List String
 mapLitPairVars : (Expr, Expr) -> List String
 markDecl : Map String Unit -> Map String Unit -> Decl -> Decl
-markFunClause : (Expr -> Expr) -> FunClause -> FunClause
 markInfix : Map String Unit -> Map String Unit -> String -> Expr -> Expr -> Expr
-markLetBind : (Expr -> Expr) -> LetBind -> LetBind
 markNode : Map String Unit -> Map String Unit -> Expr -> Expr
 markProgram : Map String Unit -> Map String Unit -> List Decl -> List Decl
 markVar : Map String Unit -> Map String Unit -> String -> Expr

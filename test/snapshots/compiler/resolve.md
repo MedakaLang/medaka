@@ -1,5 +1,5 @@
 # META
-source_lines=6433
+source_lines=6440
 stages=DESUGAR,MARK
 # SOURCE
 -- Self-hosted resolve stage (single-file
@@ -830,7 +830,8 @@ checkPat cur env (PAs _ _ _ p) = checkPat cur env p
 checkPat cur env (POr ps) =
   flatMap (checkPat cur env) ps ++ orBinderErrors cur ps
 checkPat cur env (PRec name fields _) = checkRecPat cur env name fields
-checkPat _ _ _ = []
+checkPat cur env (PAnn p _) = checkPat cur env p
+checkPat _ _ (PVar _ _ _ | PWild | PLit _ | PRng _ _ _) = []
 
 -- Every alternative of an or-pattern binds the same names (order and
 -- repetition aside).  One error per or-pattern: the first alternative that
@@ -2550,7 +2551,8 @@ firstExprLoc (ESlice e0 lo hi _) =
 firstExprLoc (EBlock stmts) = firstStmtLoc stmts
 firstExprLoc (EDo _ stmts) = firstStmtLoc stmts
 firstExprLoc (EDoOrigin _ e) = firstExprLoc e
-firstExprLoc _ = None
+firstExprLoc (ELit _ | EVar _ | ESection _ | EStringInterp _ | EGuards _ | ERecordCreate _ _ | ERecordUpdate _ _ _ | EVariantUpdate _ _ _ | EMapLit _ _ | ESetLit _ _ | EAsPat _ _ | EOrPat _ | EMethodRef _ | EDictApp _ | EVarAt _ _ | EVarId _ _ | EMethodAt _ _ _ | EDictAt _ _ | ENumLit _ _ _ | EWideLit _ _ _ _) =
+  None
 
 firstLocList : List Expr -> Option Loc
 firstLocList [] = None
@@ -4821,7 +4823,8 @@ stampDecl top (d@(DInterface { methods, ... })) =
 stampDecl top (d@(DImpl { methods, ... })) =
   DImpl { d | methods = map (stampImplMethod top) methods }
 stampDecl top (DAttrib attrs inner) = DAttrib attrs (stampDecl top inner)
-stampDecl _ d = d
+stampDecl _ (d@(DTypeSig _ _ _ _ | DExtern _ | DData {  } | DUse _ _ _ | DEffect _ _ _ _ _ _ | DTypeAlias {  } | DNewtype {  })) =
+  d
 
 stampIfaceMethod : OrdMap Int -> IfaceMethod -> IfaceMethod
 stampIfaceMethod _ (IfaceMethod nm ty None mloc) = IfaceMethod nm ty None mloc
@@ -5404,7 +5407,8 @@ stampDeclKinds scope (d@(DInterface { typaramKinds, ... })) = DInterface { d |
 }
 stampDeclKinds scope (DAttrib attrs inner) =
   DAttrib attrs (stampDeclKinds scope inner)
-stampDeclKinds _ d = d
+stampDeclKinds _ (d@(DTypeSig _ _ _ _ | DExtern _ | DFunDef _ _ _ _ _ _ | DUse _ _ _ | DEffect _ _ _ _ _ _ | DProp _ _ _ _ | DTest _ _ _ | DImpl {  } | DLetGroup _ _)) =
+  d
 
 stampBinders : OrdMap TyConOrigin ->
   List (String, KindAnn) ->
@@ -5605,7 +5609,8 @@ unqualDecl ctx (d@(DImpl { iface = n, reqs, methods, ... })) = DImpl { d |
   methods = map (unqualImplMethod ctx) methods,
 }
 unqualDecl ctx (DAttrib attrs inner) = DAttrib attrs (unqualDecl ctx inner)
-unqualDecl _ d = d
+unqualDecl _ (d@(DTypeSig _ _ _ _ | DExtern _ | DData {  } | DUse _ _ _ | DEffect _ _ _ _ _ _ | DTypeAlias {  } | DNewtype {  })) =
+  d
 
 unqualIfaceMethod : AliasCtx -> IfaceMethod -> IfaceMethod
 unqualIfaceMethod _ (IfaceMethod nm ty None mloc) = IfaceMethod nm ty None mloc
@@ -5825,7 +5830,8 @@ stampDeclOrigin mid (d@(DInterface { ifaceOrigin = o })) =
 stampDeclOrigin mid (DEffect pub n dom axes o l) =
   DEffect pub n dom axes (fillDeclOrigin mid o) l
 stampDeclOrigin mid (DAttrib attrs d) = DAttrib attrs (stampDeclOrigin mid d)
-stampDeclOrigin _ d = d
+stampDeclOrigin _ (d@(DTypeSig _ _ _ _ | DExtern _ | DFunDef _ _ _ _ _ _ | DUse _ _ _ | DProp _ _ _ _ | DTest _ _ _ | DImpl {  } | DLetGroup _ _)) =
+  d
 
 -- The decl-layer peer of `stampHeadWith`'s immunity rule: fill in ONLY a
 -- still-unresolved origin, so a declaration that already carries identity is immune
@@ -6032,7 +6038,8 @@ mapIfaceOccDeclLocal f (d@(DImpl { implOrigin = o, iface = n, reqs })) = DImpl {
 }
 mapIfaceOccDeclLocal f (DAttrib attrs d) =
   DAttrib attrs (mapIfaceOccDeclLocal f d)
-mapIfaceOccDeclLocal _ d = d
+mapIfaceOccDeclLocal _ (d@(DTypeSig _ _ _ _ | DExtern _ | DFunDef _ _ _ _ _ _ | DData {  } | DUse _ _ _ | DEffect _ _ _ _ _ _ | DProp _ _ _ _ | DTest _ _ _ | DTypeAlias {  } | DNewtype {  } | DLetGroup _ _)) =
+  d
 
 -- The interface peer of `stampHeadWith`/`fillDeclOrigin`: fill in ONLY a
 -- still-unresolved origin.  The `carrier` tag is IGNORED here on purpose — which
@@ -6574,7 +6581,8 @@ addOriginsProvenance acc n base (m :: rest) =
 (DFunDef false "checkPat" ((PVar "cur") (PVar "env") (PCon "PAs" PWild PWild PWild (PVar "p"))) (EApp (EApp (EApp (EVar "checkPat") (EVar "cur")) (EVar "env")) (EVar "p")))
 (DFunDef false "checkPat" ((PVar "cur") (PVar "env") (PCon "POr" (PVar "ps"))) (EBinOp "++" (EApp (EApp (EVar "flatMap") (EApp (EApp (EVar "checkPat") (EVar "cur")) (EVar "env"))) (EVar "ps")) (EApp (EApp (EVar "orBinderErrors") (EVar "cur")) (EVar "ps"))))
 (DFunDef false "checkPat" ((PVar "cur") (PVar "env") (PCon "PRec" (PVar "name") (PVar "fields") PWild)) (EApp (EApp (EApp (EApp (EVar "checkRecPat") (EVar "cur")) (EVar "env")) (EVar "name")) (EVar "fields")))
-(DFunDef false "checkPat" (PWild PWild PWild) (EListLit))
+(DFunDef false "checkPat" ((PVar "cur") (PVar "env") (PCon "PAnn" (PVar "p") PWild)) (EApp (EApp (EApp (EVar "checkPat") (EVar "cur")) (EVar "env")) (EVar "p")))
+(DFunDef false "checkPat" (PWild PWild (POr (PCon "PVar" PWild PWild PWild) (PCon "PWild") (PCon "PLit" PWild) (PCon "PRng" PWild PWild PWild))) (EListLit))
 (DTypeSig false "orBinderErrors" (TyFun (TyApp (TyCon "Option") (TyCon "Loc")) (TyFun (TyApp (TyCon "List") (TyCon "Pat")) (TyApp (TyCon "List") (TyCon "ResError")))))
 (DFunDef false "orBinderErrors" (PWild (PList)) (EListLit))
 (DFunDef false "orBinderErrors" ((PVar "cur") (PCons (PVar "p") (PVar "rest"))) (EBlock (DoLet false false (PVar "names") (EApp (EVar "patBindings") (EVar "p"))) (DoExpr (EMatch (EApp (EApp (EVar "filter") (ELam ((PVar "q")) (EApp (EVar "not") (EApp (EApp (EVar "sameBinders") (EVar "names")) (EApp (EVar "patBindings") (EVar "q")))))) (EVar "rest")) (arm (PList) () (EListLit)) (arm (PCons (PVar "q") PWild) () (EListLit (EApp (EApp (EApp (EApp (EVar "OrPatternBinders") (EVar "names")) (EApp (EVar "patBindings") (EVar "q"))) (EApp (EApp (EVar "any") (EVar "isBareVarPat")) (EBinOp "::" (EVar "p") (EVar "rest")))) (EVar "cur"))))))))
@@ -7062,7 +7070,7 @@ addOriginsProvenance acc n base (m :: rest) =
 (DFunDef false "firstExprLoc" ((PCon "EBlock" (PVar "stmts"))) (EApp (EVar "firstStmtLoc") (EVar "stmts")))
 (DFunDef false "firstExprLoc" ((PCon "EDo" PWild (PVar "stmts"))) (EApp (EVar "firstStmtLoc") (EVar "stmts")))
 (DFunDef false "firstExprLoc" ((PCon "EDoOrigin" PWild (PVar "e"))) (EApp (EVar "firstExprLoc") (EVar "e")))
-(DFunDef false "firstExprLoc" (PWild) (EVar "None"))
+(DFunDef false "firstExprLoc" ((POr (PCon "ELit" PWild) (PCon "EVar" PWild) (PCon "ESection" PWild) (PCon "EStringInterp" PWild) (PCon "EGuards" PWild) (PCon "ERecordCreate" PWild PWild) (PCon "ERecordUpdate" PWild PWild PWild) (PCon "EVariantUpdate" PWild PWild PWild) (PCon "EMapLit" PWild PWild) (PCon "ESetLit" PWild PWild) (PCon "EAsPat" PWild PWild) (PCon "EOrPat" PWild) (PCon "EMethodRef" PWild) (PCon "EDictApp" PWild) (PCon "EVarAt" PWild PWild) (PCon "EVarId" PWild PWild) (PCon "EMethodAt" PWild PWild PWild) (PCon "EDictAt" PWild PWild) (PCon "ENumLit" PWild PWild PWild) (PCon "EWideLit" PWild PWild PWild PWild))) (EVar "None"))
 (DTypeSig false "firstLocList" (TyFun (TyApp (TyCon "List") (TyCon "Expr")) (TyApp (TyCon "Option") (TyCon "Loc"))))
 (DFunDef false "firstLocList" ((PList)) (EVar "None"))
 (DFunDef false "firstLocList" ((PCons (PVar "e") (PVar "rest"))) (EApp (EApp (EVar "orElseLoc") (EApp (EVar "firstExprLoc") (EVar "e"))) (EApp (EVar "firstLocList") (EVar "rest"))))
@@ -7608,7 +7616,7 @@ addOriginsProvenance acc n base (m :: rest) =
 (DFunDef false "stampDecl" ((PVar "top") (PAs "d" (PRec "DInterface" ((rf "methods" None)) true))) (EVariantUpdate "DInterface" (EVar "d") ((fa "methods" (EApp (EApp (EVar "map") (EApp (EVar "stampIfaceMethod") (EVar "top"))) (EVar "methods"))))))
 (DFunDef false "stampDecl" ((PVar "top") (PAs "d" (PRec "DImpl" ((rf "methods" None)) true))) (EVariantUpdate "DImpl" (EVar "d") ((fa "methods" (EApp (EApp (EVar "map") (EApp (EVar "stampImplMethod") (EVar "top"))) (EVar "methods"))))))
 (DFunDef false "stampDecl" ((PVar "top") (PCon "DAttrib" (PVar "attrs") (PVar "inner"))) (EApp (EApp (EVar "DAttrib") (EVar "attrs")) (EApp (EApp (EVar "stampDecl") (EVar "top")) (EVar "inner"))))
-(DFunDef false "stampDecl" (PWild (PVar "d")) (EVar "d"))
+(DFunDef false "stampDecl" (PWild (PAs "d" (POr (PCon "DTypeSig" PWild PWild PWild PWild) (PCon "DExtern" PWild) (PRec "DData" () false) (PCon "DUse" PWild PWild PWild) (PCon "DEffect" PWild PWild PWild PWild PWild PWild) (PRec "DTypeAlias" () false) (PRec "DNewtype" () false)))) (EVar "d"))
 (DTypeSig false "stampIfaceMethod" (TyFun (TyApp (TyCon "OrdMap") (TyCon "Int")) (TyFun (TyCon "IfaceMethod") (TyCon "IfaceMethod"))))
 (DFunDef false "stampIfaceMethod" (PWild (PCon "IfaceMethod" (PVar "nm") (PVar "ty") (PCon "None") (PVar "mloc"))) (EApp (EApp (EApp (EApp (EVar "IfaceMethod") (EVar "nm")) (EVar "ty")) (EVar "None")) (EVar "mloc")))
 (DFunDef false "stampIfaceMethod" ((PVar "top") (PCon "IfaceMethod" (PVar "nm") (PVar "ty") (PCon "Some" (PCon "MethodDefault" (PVar "pats") (PVar "body"))) (PVar "mloc"))) (EApp (EApp (EApp (EApp (EVar "IfaceMethod") (EVar "nm")) (EVar "ty")) (EApp (EVar "Some") (EApp (EApp (EVar "MethodDefault") (EVar "pats")) (EApp (EApp (EVar "stampExpr") (EApp (EApp (EVar "insertParams") (EVar "pats")) (EVar "top"))) (EVar "body"))))) (EVar "mloc")))
@@ -7705,7 +7713,7 @@ addOriginsProvenance acc n base (m :: rest) =
 (DFunDef false "stampDeclKinds" ((PVar "scope") (PAs "d" (PRec "DTypeAlias" ((rf "tyAliasParamKinds" None)) false))) (EVariantUpdate "DTypeAlias" (EVar "d") ((fa "tyAliasParamKinds" (EApp (EApp (EVar "map") (EApp (EVar "stampKindOpt") (EVar "scope"))) (EVar "tyAliasParamKinds"))))))
 (DFunDef false "stampDeclKinds" ((PVar "scope") (PAs "d" (PRec "DInterface" ((rf "typaramKinds" None)) true))) (EVariantUpdate "DInterface" (EVar "d") ((fa "typaramKinds" (EApp (EApp (EVar "map") (EApp (EVar "stampKindOpt") (EVar "scope"))) (EVar "typaramKinds"))))))
 (DFunDef false "stampDeclKinds" ((PVar "scope") (PCon "DAttrib" (PVar "attrs") (PVar "inner"))) (EApp (EApp (EVar "DAttrib") (EVar "attrs")) (EApp (EApp (EVar "stampDeclKinds") (EVar "scope")) (EVar "inner"))))
-(DFunDef false "stampDeclKinds" (PWild (PVar "d")) (EVar "d"))
+(DFunDef false "stampDeclKinds" (PWild (PAs "d" (POr (PCon "DTypeSig" PWild PWild PWild PWild) (PCon "DExtern" PWild) (PCon "DFunDef" PWild PWild PWild PWild PWild PWild) (PCon "DUse" PWild PWild PWild) (PCon "DEffect" PWild PWild PWild PWild PWild PWild) (PCon "DProp" PWild PWild PWild PWild) (PCon "DTest" PWild PWild PWild) (PRec "DImpl" () false) (PCon "DLetGroup" PWild PWild)))) (EVar "d"))
 (DTypeSig false "stampBinders" (TyFun (TyApp (TyCon "OrdMap") (TyCon "TyConOrigin")) (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "KindAnn"))) (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "KindAnn"))))))
 (DFunDef false "stampBinders" ((PVar "scope") (PVar "binders")) (EApp (EApp (EVar "map") (ELam ((PVar "b")) (ETuple (EApp (EVar "fst") (EVar "b")) (EApp (EApp (EVar "stampKind") (EVar "scope")) (EApp (EVar "snd") (EVar "b")))))) (EVar "binders")))
 (DTypeSig false "stampKindOpt" (TyFun (TyApp (TyCon "OrdMap") (TyCon "TyConOrigin")) (TyFun (TyApp (TyCon "Option") (TyCon "KindAnn")) (TyApp (TyCon "Option") (TyCon "KindAnn")))))
@@ -7764,7 +7772,7 @@ addOriginsProvenance acc n base (m :: rest) =
 (DFunDef false "unqualDecl" ((PVar "ctx") (PAs "d" (PRec "DInterface" ((rf "supers" None) (rf "methods" None)) true))) (EVariantUpdate "DInterface" (EVar "d") ((fa "supers" (EApp (EApp (EVar "map") (EApp (EVar "unqualSuper") (EVar "ctx"))) (EVar "supers"))) (fa "methods" (EApp (EApp (EVar "map") (EApp (EVar "unqualIfaceMethod") (EVar "ctx"))) (EVar "methods"))))))
 (DFunDef false "unqualDecl" ((PVar "ctx") (PAs "d" (PRec "DImpl" ((rf "iface" (PVar "n")) (rf "reqs" None) (rf "methods" None)) true))) (EVariantUpdate "DImpl" (EVar "d") ((fa "iface" (EApp (EApp (EVar "unqualIfaceName") (EVar "ctx")) (EVar "n"))) (fa "reqs" (EApp (EApp (EVar "map") (EApp (EVar "unqualRequire") (EVar "ctx"))) (EVar "reqs"))) (fa "methods" (EApp (EApp (EVar "map") (EApp (EVar "unqualImplMethod") (EVar "ctx"))) (EVar "methods"))))))
 (DFunDef false "unqualDecl" ((PVar "ctx") (PCon "DAttrib" (PVar "attrs") (PVar "inner"))) (EApp (EApp (EVar "DAttrib") (EVar "attrs")) (EApp (EApp (EVar "unqualDecl") (EVar "ctx")) (EVar "inner"))))
-(DFunDef false "unqualDecl" (PWild (PVar "d")) (EVar "d"))
+(DFunDef false "unqualDecl" (PWild (PAs "d" (POr (PCon "DTypeSig" PWild PWild PWild PWild) (PCon "DExtern" PWild) (PRec "DData" () false) (PCon "DUse" PWild PWild PWild) (PCon "DEffect" PWild PWild PWild PWild PWild PWild) (PRec "DTypeAlias" () false) (PRec "DNewtype" () false)))) (EVar "d"))
 (DTypeSig false "unqualIfaceMethod" (TyFun (TyCon "AliasCtx") (TyFun (TyCon "IfaceMethod") (TyCon "IfaceMethod"))))
 (DFunDef false "unqualIfaceMethod" (PWild (PCon "IfaceMethod" (PVar "nm") (PVar "ty") (PCon "None") (PVar "mloc"))) (EApp (EApp (EApp (EApp (EVar "IfaceMethod") (EVar "nm")) (EVar "ty")) (EVar "None")) (EVar "mloc")))
 (DFunDef false "unqualIfaceMethod" ((PVar "ctx") (PCon "IfaceMethod" (PVar "nm") (PVar "ty") (PCon "Some" (PCon "MethodDefault" (PVar "pats") (PVar "body"))) (PVar "mloc"))) (EApp (EApp (EApp (EApp (EVar "IfaceMethod") (EVar "nm")) (EVar "ty")) (EApp (EVar "Some") (EApp (EApp (EVar "MethodDefault") (EApp (EApp (EVar "map") (EApp (EVar "unqualPat") (EVar "ctx"))) (EVar "pats"))) (EApp (EApp (EVar "unqualExpr") (EVar "ctx")) (EVar "body"))))) (EVar "mloc")))
@@ -7869,7 +7877,7 @@ addOriginsProvenance acc n base (m :: rest) =
 (DFunDef false "stampDeclOrigin" ((PVar "mid") (PAs "d" (PRec "DInterface" ((rf "ifaceOrigin" (PVar "o"))) false))) (EVariantUpdate "DInterface" (EVar "d") ((fa "ifaceOrigin" (EApp (EApp (EVar "fillDeclOrigin") (EVar "mid")) (EVar "o"))))))
 (DFunDef false "stampDeclOrigin" ((PVar "mid") (PCon "DEffect" (PVar "pub") (PVar "n") (PVar "dom") (PVar "axes") (PVar "o") (PVar "l"))) (EApp (EApp (EApp (EApp (EApp (EApp (EVar "DEffect") (EVar "pub")) (EVar "n")) (EVar "dom")) (EVar "axes")) (EApp (EApp (EVar "fillDeclOrigin") (EVar "mid")) (EVar "o"))) (EVar "l")))
 (DFunDef false "stampDeclOrigin" ((PVar "mid") (PCon "DAttrib" (PVar "attrs") (PVar "d"))) (EApp (EApp (EVar "DAttrib") (EVar "attrs")) (EApp (EApp (EVar "stampDeclOrigin") (EVar "mid")) (EVar "d"))))
-(DFunDef false "stampDeclOrigin" (PWild (PVar "d")) (EVar "d"))
+(DFunDef false "stampDeclOrigin" (PWild (PAs "d" (POr (PCon "DTypeSig" PWild PWild PWild PWild) (PCon "DExtern" PWild) (PCon "DFunDef" PWild PWild PWild PWild PWild PWild) (PCon "DUse" PWild PWild PWild) (PCon "DProp" PWild PWild PWild PWild) (PCon "DTest" PWild PWild PWild) (PRec "DImpl" () false) (PCon "DLetGroup" PWild PWild)))) (EVar "d"))
 (DTypeSig false "fillDeclOrigin" (TyFun (TyCon "String") (TyFun (TyCon "TyConOrigin") (TyCon "TyConOrigin"))))
 (DFunDef false "fillDeclOrigin" ((PVar "mid") (PCon "OriginUnresolved")) (EIf (EBinOp "==" (EVar "mid") (ELit (LString ""))) (EVar "OriginUnresolved") (EApp (EVar "OriginModule") (EVar "mid"))))
 (DFunDef false "fillDeclOrigin" (PWild (PCon "OriginBuiltin")) (EVar "OriginBuiltin"))
@@ -7889,7 +7897,7 @@ addOriginsProvenance acc n base (m :: rest) =
 (DFunDef false "mapIfaceOccDeclLocal" ((PVar "f") (PAs "d" (PRec "DInterface" ((rf "ifaceOrigin" PWild) (rf "supers" None)) false))) (EVariantUpdate "DInterface" (EVar "d") ((fa "supers" (EApp (EApp (EVar "map") (EApp (EVar "mapSuperOcc") (EVar "f"))) (EVar "supers"))))))
 (DFunDef false "mapIfaceOccDeclLocal" ((PVar "f") (PAs "d" (PRec "DImpl" ((rf "implOrigin" (PVar "o")) (rf "iface" (PVar "n")) (rf "reqs" None)) false))) (EVariantUpdate "DImpl" (EVar "d") ((fa "implOrigin" (EApp (EApp (EApp (EVar "f") (ELit (LString "implOrigin"))) (EVar "n")) (EVar "o"))) (fa "reqs" (EApp (EApp (EVar "map") (EApp (EVar "mapRequireOcc") (EVar "f"))) (EVar "reqs"))))))
 (DFunDef false "mapIfaceOccDeclLocal" ((PVar "f") (PCon "DAttrib" (PVar "attrs") (PVar "d"))) (EApp (EApp (EVar "DAttrib") (EVar "attrs")) (EApp (EApp (EVar "mapIfaceOccDeclLocal") (EVar "f")) (EVar "d"))))
-(DFunDef false "mapIfaceOccDeclLocal" (PWild (PVar "d")) (EVar "d"))
+(DFunDef false "mapIfaceOccDeclLocal" (PWild (PAs "d" (POr (PCon "DTypeSig" PWild PWild PWild PWild) (PCon "DExtern" PWild) (PCon "DFunDef" PWild PWild PWild PWild PWild PWild) (PRec "DData" () false) (PCon "DUse" PWild PWild PWild) (PCon "DEffect" PWild PWild PWild PWild PWild PWild) (PCon "DProp" PWild PWild PWild PWild) (PCon "DTest" PWild PWild PWild) (PRec "DTypeAlias" () false) (PRec "DNewtype" () false) (PCon "DLetGroup" PWild PWild)))) (EVar "d"))
 (DTypeSig false "fillIfaceOccOrigin" (TyFun (TyApp (TyCon "OrdMap") (TyCon "TyConOrigin")) (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyCon "TyConOrigin") (TyCon "TyConOrigin"))))))
 (DFunDef false "fillIfaceOccOrigin" ((PVar "scope") PWild (PVar "n") (PCon "OriginUnresolved")) (EApp (EApp (EVar "optionOr") (EVar "OriginUnresolved")) (EApp (EApp (EVar "omLookup") (EApp (EVar "ifaceKey") (EVar "n"))) (EVar "scope"))))
 (DFunDef false "fillIfaceOccOrigin" (PWild PWild PWild (PCon "OriginBuiltin")) (EVar "OriginBuiltin"))
@@ -8080,7 +8088,8 @@ addOriginsProvenance acc n base (m :: rest) =
 (DFunDef false "checkPat" ((PVar "cur") (PVar "env") (PCon "PAs" PWild PWild PWild (PVar "p"))) (EApp (EApp (EApp (EVar "checkPat") (EVar "cur")) (EVar "env")) (EVar "p")))
 (DFunDef false "checkPat" ((PVar "cur") (PVar "env") (PCon "POr" (PVar "ps"))) (EBinOp "++" (EApp (EApp (EDictApp "flatMap") (EApp (EApp (EVar "checkPat") (EVar "cur")) (EVar "env"))) (EVar "ps")) (EApp (EApp (EVar "orBinderErrors") (EVar "cur")) (EVar "ps"))))
 (DFunDef false "checkPat" ((PVar "cur") (PVar "env") (PCon "PRec" (PVar "name") (PVar "fields") PWild)) (EApp (EApp (EApp (EApp (EVar "checkRecPat") (EVar "cur")) (EVar "env")) (EVar "name")) (EVar "fields")))
-(DFunDef false "checkPat" (PWild PWild PWild) (EListLit))
+(DFunDef false "checkPat" ((PVar "cur") (PVar "env") (PCon "PAnn" (PVar "p") PWild)) (EApp (EApp (EApp (EVar "checkPat") (EVar "cur")) (EVar "env")) (EVar "p")))
+(DFunDef false "checkPat" (PWild PWild (POr (PCon "PVar" PWild PWild PWild) (PCon "PWild") (PCon "PLit" PWild) (PCon "PRng" PWild PWild PWild))) (EListLit))
 (DTypeSig false "orBinderErrors" (TyFun (TyApp (TyCon "Option") (TyCon "Loc")) (TyFun (TyApp (TyCon "List") (TyCon "Pat")) (TyApp (TyCon "List") (TyCon "ResError")))))
 (DFunDef false "orBinderErrors" (PWild (PList)) (EListLit))
 (DFunDef false "orBinderErrors" ((PVar "cur") (PCons (PVar "p") (PVar "rest"))) (EBlock (DoLet false false (PVar "names") (EApp (EVar "patBindings") (EVar "p"))) (DoExpr (EMatch (EApp (EApp (EMethodRef "filter") (ELam ((PVar "q")) (EApp (EVar "not") (EApp (EApp (EVar "sameBinders") (EVar "names")) (EApp (EVar "patBindings") (EVar "q")))))) (EVar "rest")) (arm (PList) () (EListLit)) (arm (PCons (PVar "q") PWild) () (EListLit (EApp (EApp (EApp (EApp (EVar "OrPatternBinders") (EVar "names")) (EApp (EVar "patBindings") (EVar "q"))) (EApp (EApp (EDictApp "any") (EVar "isBareVarPat")) (EBinOp "::" (EVar "p") (EVar "rest")))) (EVar "cur"))))))))
@@ -8568,7 +8577,7 @@ addOriginsProvenance acc n base (m :: rest) =
 (DFunDef false "firstExprLoc" ((PCon "EBlock" (PVar "stmts"))) (EApp (EVar "firstStmtLoc") (EVar "stmts")))
 (DFunDef false "firstExprLoc" ((PCon "EDo" PWild (PVar "stmts"))) (EApp (EVar "firstStmtLoc") (EVar "stmts")))
 (DFunDef false "firstExprLoc" ((PCon "EDoOrigin" PWild (PVar "e"))) (EApp (EVar "firstExprLoc") (EVar "e")))
-(DFunDef false "firstExprLoc" (PWild) (EVar "None"))
+(DFunDef false "firstExprLoc" ((POr (PCon "ELit" PWild) (PCon "EVar" PWild) (PCon "ESection" PWild) (PCon "EStringInterp" PWild) (PCon "EGuards" PWild) (PCon "ERecordCreate" PWild PWild) (PCon "ERecordUpdate" PWild PWild PWild) (PCon "EVariantUpdate" PWild PWild PWild) (PCon "EMapLit" PWild PWild) (PCon "ESetLit" PWild PWild) (PCon "EAsPat" PWild PWild) (PCon "EOrPat" PWild) (PCon "EMethodRef" PWild) (PCon "EDictApp" PWild) (PCon "EVarAt" PWild PWild) (PCon "EVarId" PWild PWild) (PCon "EMethodAt" PWild PWild PWild) (PCon "EDictAt" PWild PWild) (PCon "ENumLit" PWild PWild PWild) (PCon "EWideLit" PWild PWild PWild PWild))) (EVar "None"))
 (DTypeSig false "firstLocList" (TyFun (TyApp (TyCon "List") (TyCon "Expr")) (TyApp (TyCon "Option") (TyCon "Loc"))))
 (DFunDef false "firstLocList" ((PList)) (EVar "None"))
 (DFunDef false "firstLocList" ((PCons (PVar "e") (PVar "rest"))) (EApp (EApp (EVar "orElseLoc") (EApp (EVar "firstExprLoc") (EVar "e"))) (EApp (EVar "firstLocList") (EVar "rest"))))
@@ -9114,7 +9123,7 @@ addOriginsProvenance acc n base (m :: rest) =
 (DFunDef false "stampDecl" ((PVar "top") (PAs "d" (PRec "DInterface" ((rf "methods" None)) true))) (EVariantUpdate "DInterface" (EVar "d") ((fa "methods" (EApp (EApp (EMethodRef "map") (EApp (EVar "stampIfaceMethod") (EVar "top"))) (EVar "methods"))))))
 (DFunDef false "stampDecl" ((PVar "top") (PAs "d" (PRec "DImpl" ((rf "methods" None)) true))) (EVariantUpdate "DImpl" (EVar "d") ((fa "methods" (EApp (EApp (EMethodRef "map") (EApp (EVar "stampImplMethod") (EVar "top"))) (EVar "methods"))))))
 (DFunDef false "stampDecl" ((PVar "top") (PCon "DAttrib" (PVar "attrs") (PVar "inner"))) (EApp (EApp (EVar "DAttrib") (EVar "attrs")) (EApp (EApp (EVar "stampDecl") (EVar "top")) (EVar "inner"))))
-(DFunDef false "stampDecl" (PWild (PVar "d")) (EVar "d"))
+(DFunDef false "stampDecl" (PWild (PAs "d" (POr (PCon "DTypeSig" PWild PWild PWild PWild) (PCon "DExtern" PWild) (PRec "DData" () false) (PCon "DUse" PWild PWild PWild) (PCon "DEffect" PWild PWild PWild PWild PWild PWild) (PRec "DTypeAlias" () false) (PRec "DNewtype" () false)))) (EVar "d"))
 (DTypeSig false "stampIfaceMethod" (TyFun (TyApp (TyCon "OrdMap") (TyCon "Int")) (TyFun (TyCon "IfaceMethod") (TyCon "IfaceMethod"))))
 (DFunDef false "stampIfaceMethod" (PWild (PCon "IfaceMethod" (PVar "nm") (PVar "ty") (PCon "None") (PVar "mloc"))) (EApp (EApp (EApp (EApp (EVar "IfaceMethod") (EVar "nm")) (EVar "ty")) (EVar "None")) (EVar "mloc")))
 (DFunDef false "stampIfaceMethod" ((PVar "top") (PCon "IfaceMethod" (PVar "nm") (PVar "ty") (PCon "Some" (PCon "MethodDefault" (PVar "pats") (PVar "body"))) (PVar "mloc"))) (EApp (EApp (EApp (EApp (EVar "IfaceMethod") (EVar "nm")) (EVar "ty")) (EApp (EVar "Some") (EApp (EApp (EVar "MethodDefault") (EVar "pats")) (EApp (EApp (EVar "stampExpr") (EApp (EApp (EVar "insertParams") (EVar "pats")) (EVar "top"))) (EVar "body"))))) (EVar "mloc")))
@@ -9211,7 +9220,7 @@ addOriginsProvenance acc n base (m :: rest) =
 (DFunDef false "stampDeclKinds" ((PVar "scope") (PAs "d" (PRec "DTypeAlias" ((rf "tyAliasParamKinds" None)) false))) (EVariantUpdate "DTypeAlias" (EVar "d") ((fa "tyAliasParamKinds" (EApp (EApp (EMethodRef "map") (EApp (EVar "stampKindOpt") (EVar "scope"))) (EVar "tyAliasParamKinds"))))))
 (DFunDef false "stampDeclKinds" ((PVar "scope") (PAs "d" (PRec "DInterface" ((rf "typaramKinds" None)) true))) (EVariantUpdate "DInterface" (EVar "d") ((fa "typaramKinds" (EApp (EApp (EMethodRef "map") (EApp (EVar "stampKindOpt") (EVar "scope"))) (EVar "typaramKinds"))))))
 (DFunDef false "stampDeclKinds" ((PVar "scope") (PCon "DAttrib" (PVar "attrs") (PVar "inner"))) (EApp (EApp (EVar "DAttrib") (EVar "attrs")) (EApp (EApp (EVar "stampDeclKinds") (EVar "scope")) (EVar "inner"))))
-(DFunDef false "stampDeclKinds" (PWild (PVar "d")) (EVar "d"))
+(DFunDef false "stampDeclKinds" (PWild (PAs "d" (POr (PCon "DTypeSig" PWild PWild PWild PWild) (PCon "DExtern" PWild) (PCon "DFunDef" PWild PWild PWild PWild PWild PWild) (PCon "DUse" PWild PWild PWild) (PCon "DEffect" PWild PWild PWild PWild PWild PWild) (PCon "DProp" PWild PWild PWild PWild) (PCon "DTest" PWild PWild PWild) (PRec "DImpl" () false) (PCon "DLetGroup" PWild PWild)))) (EVar "d"))
 (DTypeSig false "stampBinders" (TyFun (TyApp (TyCon "OrdMap") (TyCon "TyConOrigin")) (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "KindAnn"))) (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "KindAnn"))))))
 (DFunDef false "stampBinders" ((PVar "scope") (PVar "binders")) (EApp (EApp (EMethodRef "map") (ELam ((PVar "b")) (ETuple (EApp (EVar "fst") (EVar "b")) (EApp (EApp (EVar "stampKind") (EVar "scope")) (EApp (EVar "snd") (EVar "b")))))) (EVar "binders")))
 (DTypeSig false "stampKindOpt" (TyFun (TyApp (TyCon "OrdMap") (TyCon "TyConOrigin")) (TyFun (TyApp (TyCon "Option") (TyCon "KindAnn")) (TyApp (TyCon "Option") (TyCon "KindAnn")))))
@@ -9270,7 +9279,7 @@ addOriginsProvenance acc n base (m :: rest) =
 (DFunDef false "unqualDecl" ((PVar "ctx") (PAs "d" (PRec "DInterface" ((rf "supers" None) (rf "methods" None)) true))) (EVariantUpdate "DInterface" (EVar "d") ((fa "supers" (EApp (EApp (EMethodRef "map") (EApp (EVar "unqualSuper") (EVar "ctx"))) (EVar "supers"))) (fa "methods" (EApp (EApp (EMethodRef "map") (EApp (EVar "unqualIfaceMethod") (EVar "ctx"))) (EVar "methods"))))))
 (DFunDef false "unqualDecl" ((PVar "ctx") (PAs "d" (PRec "DImpl" ((rf "iface" (PVar "n")) (rf "reqs" None) (rf "methods" None)) true))) (EVariantUpdate "DImpl" (EVar "d") ((fa "iface" (EApp (EApp (EVar "unqualIfaceName") (EVar "ctx")) (EVar "n"))) (fa "reqs" (EApp (EApp (EMethodRef "map") (EApp (EVar "unqualRequire") (EVar "ctx"))) (EVar "reqs"))) (fa "methods" (EApp (EApp (EMethodRef "map") (EApp (EVar "unqualImplMethod") (EVar "ctx"))) (EVar "methods"))))))
 (DFunDef false "unqualDecl" ((PVar "ctx") (PCon "DAttrib" (PVar "attrs") (PVar "inner"))) (EApp (EApp (EVar "DAttrib") (EVar "attrs")) (EApp (EApp (EVar "unqualDecl") (EVar "ctx")) (EVar "inner"))))
-(DFunDef false "unqualDecl" (PWild (PVar "d")) (EVar "d"))
+(DFunDef false "unqualDecl" (PWild (PAs "d" (POr (PCon "DTypeSig" PWild PWild PWild PWild) (PCon "DExtern" PWild) (PRec "DData" () false) (PCon "DUse" PWild PWild PWild) (PCon "DEffect" PWild PWild PWild PWild PWild PWild) (PRec "DTypeAlias" () false) (PRec "DNewtype" () false)))) (EVar "d"))
 (DTypeSig false "unqualIfaceMethod" (TyFun (TyCon "AliasCtx") (TyFun (TyCon "IfaceMethod") (TyCon "IfaceMethod"))))
 (DFunDef false "unqualIfaceMethod" (PWild (PCon "IfaceMethod" (PVar "nm") (PVar "ty") (PCon "None") (PVar "mloc"))) (EApp (EApp (EApp (EApp (EVar "IfaceMethod") (EVar "nm")) (EVar "ty")) (EVar "None")) (EVar "mloc")))
 (DFunDef false "unqualIfaceMethod" ((PVar "ctx") (PCon "IfaceMethod" (PVar "nm") (PVar "ty") (PCon "Some" (PCon "MethodDefault" (PVar "pats") (PVar "body"))) (PVar "mloc"))) (EApp (EApp (EApp (EApp (EVar "IfaceMethod") (EVar "nm")) (EVar "ty")) (EApp (EVar "Some") (EApp (EApp (EVar "MethodDefault") (EApp (EApp (EMethodRef "map") (EApp (EVar "unqualPat") (EVar "ctx"))) (EVar "pats"))) (EApp (EApp (EVar "unqualExpr") (EVar "ctx")) (EVar "body"))))) (EVar "mloc")))
@@ -9375,7 +9384,7 @@ addOriginsProvenance acc n base (m :: rest) =
 (DFunDef false "stampDeclOrigin" ((PVar "mid") (PAs "d" (PRec "DInterface" ((rf "ifaceOrigin" (PVar "o"))) false))) (EVariantUpdate "DInterface" (EVar "d") ((fa "ifaceOrigin" (EApp (EApp (EVar "fillDeclOrigin") (EVar "mid")) (EVar "o"))))))
 (DFunDef false "stampDeclOrigin" ((PVar "mid") (PCon "DEffect" (PVar "pub") (PVar "n") (PVar "dom") (PVar "axes") (PVar "o") (PVar "l"))) (EApp (EApp (EApp (EApp (EApp (EApp (EVar "DEffect") (EVar "pub")) (EVar "n")) (EVar "dom")) (EVar "axes")) (EApp (EApp (EVar "fillDeclOrigin") (EVar "mid")) (EVar "o"))) (EVar "l")))
 (DFunDef false "stampDeclOrigin" ((PVar "mid") (PCon "DAttrib" (PVar "attrs") (PVar "d"))) (EApp (EApp (EVar "DAttrib") (EVar "attrs")) (EApp (EApp (EVar "stampDeclOrigin") (EVar "mid")) (EVar "d"))))
-(DFunDef false "stampDeclOrigin" (PWild (PVar "d")) (EVar "d"))
+(DFunDef false "stampDeclOrigin" (PWild (PAs "d" (POr (PCon "DTypeSig" PWild PWild PWild PWild) (PCon "DExtern" PWild) (PCon "DFunDef" PWild PWild PWild PWild PWild PWild) (PCon "DUse" PWild PWild PWild) (PCon "DProp" PWild PWild PWild PWild) (PCon "DTest" PWild PWild PWild) (PRec "DImpl" () false) (PCon "DLetGroup" PWild PWild)))) (EVar "d"))
 (DTypeSig false "fillDeclOrigin" (TyFun (TyCon "String") (TyFun (TyCon "TyConOrigin") (TyCon "TyConOrigin"))))
 (DFunDef false "fillDeclOrigin" ((PVar "mid") (PCon "OriginUnresolved")) (EIf (EBinOp "==" (EVar "mid") (ELit (LString ""))) (EVar "OriginUnresolved") (EApp (EVar "OriginModule") (EVar "mid"))))
 (DFunDef false "fillDeclOrigin" (PWild (PCon "OriginBuiltin")) (EVar "OriginBuiltin"))
@@ -9395,7 +9404,7 @@ addOriginsProvenance acc n base (m :: rest) =
 (DFunDef false "mapIfaceOccDeclLocal" ((PVar "f") (PAs "d" (PRec "DInterface" ((rf "ifaceOrigin" PWild) (rf "supers" None)) false))) (EVariantUpdate "DInterface" (EVar "d") ((fa "supers" (EApp (EApp (EMethodRef "map") (EApp (EVar "mapSuperOcc") (EVar "f"))) (EVar "supers"))))))
 (DFunDef false "mapIfaceOccDeclLocal" ((PVar "f") (PAs "d" (PRec "DImpl" ((rf "implOrigin" (PVar "o")) (rf "iface" (PVar "n")) (rf "reqs" None)) false))) (EVariantUpdate "DImpl" (EVar "d") ((fa "implOrigin" (EApp (EApp (EApp (EVar "f") (ELit (LString "implOrigin"))) (EVar "n")) (EVar "o"))) (fa "reqs" (EApp (EApp (EMethodRef "map") (EApp (EVar "mapRequireOcc") (EVar "f"))) (EVar "reqs"))))))
 (DFunDef false "mapIfaceOccDeclLocal" ((PVar "f") (PCon "DAttrib" (PVar "attrs") (PVar "d"))) (EApp (EApp (EVar "DAttrib") (EVar "attrs")) (EApp (EApp (EVar "mapIfaceOccDeclLocal") (EVar "f")) (EVar "d"))))
-(DFunDef false "mapIfaceOccDeclLocal" (PWild (PVar "d")) (EVar "d"))
+(DFunDef false "mapIfaceOccDeclLocal" (PWild (PAs "d" (POr (PCon "DTypeSig" PWild PWild PWild PWild) (PCon "DExtern" PWild) (PCon "DFunDef" PWild PWild PWild PWild PWild PWild) (PRec "DData" () false) (PCon "DUse" PWild PWild PWild) (PCon "DEffect" PWild PWild PWild PWild PWild PWild) (PCon "DProp" PWild PWild PWild PWild) (PCon "DTest" PWild PWild PWild) (PRec "DTypeAlias" () false) (PRec "DNewtype" () false) (PCon "DLetGroup" PWild PWild)))) (EVar "d"))
 (DTypeSig false "fillIfaceOccOrigin" (TyFun (TyApp (TyCon "OrdMap") (TyCon "TyConOrigin")) (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyCon "TyConOrigin") (TyCon "TyConOrigin"))))))
 (DFunDef false "fillIfaceOccOrigin" ((PVar "scope") PWild (PVar "n") (PCon "OriginUnresolved")) (EApp (EApp (EVar "optionOr") (EVar "OriginUnresolved")) (EApp (EApp (EVar "omLookup") (EApp (EVar "ifaceKey") (EVar "n"))) (EVar "scope"))))
 (DFunDef false "fillIfaceOccOrigin" (PWild PWild PWild (PCon "OriginBuiltin")) (EVar "OriginBuiltin"))

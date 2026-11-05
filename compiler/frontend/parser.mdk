@@ -313,7 +313,8 @@ exprToPat (EAsPat x sub) = PAs x (Loc "" 0 0 0 0) noBinderId (exprToPat sub)
 exprToPat (EOrPat es) = orPatOf (map exprToPat es)
 exprToPat (EApp f x) = appToPat (EApp f x)
 exprToPat (EAnnot e t) = PAnn (exprToPat e) t
-exprToPat _ = PWild
+exprToPat (ELam _ _ | ELet _ _ _ _ _ | EMatch _ _ | EIf _ _ _ | EBinOp _ _ _ _ | EUnOp _ _ _ | EInfix _ _ _ | EFieldAccess _ _ _ | EArrayLit _ | ERangeList _ _ _ | ERangeArray _ _ _ | ESlice _ _ _ _ | ELetGroup _ _ | ESection _ | EIndex _ _ | EHeadAnnot _ _ | EBlock _ | EDo _ _ | EStringInterp _ | EGuards _ | ERecordCreate _ _ | ERecordUpdate _ _ _ | EVariantUpdate _ _ _ | EMapLit _ _ | ESetLit _ _ | EMethodRef _ | EDictApp _ | EVarAt _ _ | EVarId _ _ | EMethodAt _ _ _ | EDictAt _ _ | EDoOrigin _ _) =
+  PWild
 
 -- Alternatives joined into one pattern; nested or-patterns are flattened so a
 -- POr never sits directly inside a POr.
@@ -2060,7 +2061,8 @@ tyAppSpine t = tyAppSpineAcc t []
 tyAppSpineAcc : Ty -> List Ty -> Option (String, List Ty)
 tyAppSpineAcc (TyCon { tyConName = iface }) acc = Some (iface, acc)
 tyAppSpineAcc (TyApp f a) acc = tyAppSpineAcc f (a :: acc)
-tyAppSpineAcc _ _ = None
+tyAppSpineAcc (TyVar _ | TyFun _ _ | TyTuple _ | TyEffect _ _ _ | TyConstrained _ _ | TyNamed _ _ _ | TyQual _ _ _ | TyRow _ _ _ | TyAuth _ _) _ =
+  None
 
 concatMapC : List Ty -> List Constraint
 concatMapC [] = []
@@ -4563,7 +4565,8 @@ flattenFieldPath (ELoc _ e) = flattenFieldPath e
 flattenFieldPath (EVar x) = Some (x, [])
 flattenFieldPath (EFieldAccess inner f _) =
   fieldPathExtend (flattenFieldPath inner) f
-flattenFieldPath _ = None
+flattenFieldPath (ELit _ | EApp _ _ | ELam _ _ | ELet _ _ _ _ _ | EMatch _ _ | EIf _ _ _ | EBinOp _ _ _ _ | EUnOp _ _ _ | EInfix _ _ _ | ETuple _ | EListLit _ | EArrayLit _ | ERangeList _ _ _ | ERangeArray _ _ _ | ESlice _ _ _ _ | ELetGroup _ _ | ESection _ | EIndex _ _ | EAnnot _ _ | EHeadAnnot _ _ | EBlock _ | EDo _ _ | EStringInterp _ | EGuards _ | ERecordCreate _ _ | ERecordUpdate _ _ _ | EVariantUpdate _ _ _ | EMapLit _ _ | ESetLit _ _ | EAsPat _ _ | EOrPat _ | EMethodRef _ | EDictApp _ | EVarAt _ _ | EVarId _ _ | EMethodAt _ _ _ | EDictAt _ _ | EDoOrigin _ _ | ENumLit _ _ _ | EWideLit _ _ _ _) =
+  None
 
 fieldPathExtend : Option (String, List String) ->
   String ->

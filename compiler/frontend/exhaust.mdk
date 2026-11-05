@@ -706,7 +706,8 @@ patHasRange (PList ps) = anyList patHasRange ps
 patHasRange (PAs _ _ _ p) = patHasRange p
 patHasRange (POr ps) = anyList patHasRange ps
 patHasRange (PRec _ fields _) = anyList recFieldHasRange fields
-patHasRange _ = False
+patHasRange (PAnn p _) = patHasRange p
+patHasRange (PVar _ _ _ | PWild | PLit _) = False
 
 recFieldHasRange : RecPatField -> Bool
 recFieldHasRange (RecPatField _ _ _ None) = False
@@ -843,7 +844,7 @@ isIrrefutablePat (PAs _ _ _ p) = isIrrefutablePat p
 isIrrefutablePat (POr ps) = anyList isIrrefutablePat ps
 isIrrefutablePat (PRec _ fields _) = allList recFieldIrrefutable fields
 isIrrefutablePat (PAnn p _) = isIrrefutablePat p
-isIrrefutablePat _ = False
+isIrrefutablePat (PLit _ | PCon _ _ | PCons _ _ | PList _ | PRng _ _ _) = False
 
 recFieldIrrefutable : RecPatField -> Bool
 recFieldIrrefutable (RecPatField _ _ _ None) = True
@@ -1110,7 +1111,12 @@ collectLetBinds (ESection (SecRight _ e0)) = collectLetBinds e0
 collectLetBinds (ESection (SecLeft e0 _)) = collectLetBinds e0
 collectLetBinds (ELoc _ e) = collectLetBinds e
 collectLetBinds (EDoOrigin _ e) = collectLetBinds e
-collectLetBinds _ = []
+collectLetBinds (EHeadAnnot e0 _) = collectLetBinds e0
+collectLetBinds (EMapLit _ kvs) =
+  flatMap (kv => collectLetBinds (fst kv) ++ collectLetBinds (snd kv)) kvs
+collectLetBinds (ESetLit _ es) = flatMap collectLetBinds es
+collectLetBinds (ELit _ | EVar _ | EAsPat _ _ | EOrPat _ | ESection (SecBare _) | EMethodRef _ | EDictApp _ | EVarAt _ _ | EVarId _ _ | EMethodAt _ _ _ | EDictAt _ _ | ENumLit _ _ _ | EWideLit _ _ _ _) =
+  []
 
 collectLetBindInner : LetBind -> List LetBind
 collectLetBindInner (LetBind _ funclauses _ _) =
