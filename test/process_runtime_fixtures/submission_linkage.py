@@ -141,3 +141,47 @@ run([installed / "medaka", "build", "ordinary.mdk", "-o", "ordinary"],
 startup(outside / "ordinary", False, "ordinary native passed", installed_env, outside)
 print("installed compiler builds and starts submitted worker outside the source tree passed")
 print("submission linkage controls passed")
+
+shim_dir = scratch / "failed-ar"
+shim_dir.mkdir()
+(shim_dir / "ar").write_text("#!/bin/sh\nexit 1\n")
+(shim_dir / "ar").chmod(0o755)
+fallback_env = {**environment, "PATH": str(shim_dir) + os.pathsep + environment["PATH"],
+                "MEDAKA_CACHE_DIR": str(scratch / "fallback-cache")}
+for name, variables in [
+    ("inline", {"MEDAKA_NO_OBJ_CACHE": "1", "MEDAKA_RT_OBJ": ""}),
+    ("explicit", {"MEDAKA_NO_OBJ_CACHE": "", "MEDAKA_RT_OBJ": str(explicit)}),
+    ("cache-first", {"MEDAKA_NO_OBJ_CACHE": "", "MEDAKA_RT_OBJ": ""}),
+    ("cache-hit", {"MEDAKA_NO_OBJ_CACHE": "", "MEDAKA_RT_OBJ": ""}),
+]:
+    env = {**fallback_env, **variables}
+    for kind, input_source, marker in [("direct", source, "submitted native passed"),
+                                        ("indirect", indirect, "submitted native passed"),
+                                        ("ordinary", ordinary, "ordinary native passed")]:
+        binary = scratch / f"fallback-{name}-{kind}"
+        run([compiler, "build", input_source, "-o", binary], env=env)
+        startup(binary, True, marker, env)
+assert list((scratch / "fallback-cache").rglob("rt-*.o"))
+for name, marker in [("submitted", "submitted native passed"),
+                     ("ordinary", "ordinary native passed")]:
+    run([installed / "medaka", "build", name + ".mdk", "-o", "fallback-" + name],
+        env={**installed_env, "PATH": fallback_env["PATH"]}, cwd=outside)
+    startup(outside / ("fallback-" + name), True, marker, installed_env, outside)
+print("failed archiver: inline, explicit, cache and installed builds passed")
+
+wrapper = scratch / "clang-fail"
+wrapper.write_text('''#!/bin/sh
+case " $* " in
+  *medaka_process.c*) if [ "$FAIL_STAGE" = compile ]; then echo injected-process-compile >&2; exit 1; fi ;;
+  *process.o*) if [ "$FAIL_STAGE" = link ]; then echo injected-final-link >&2; exit 1; fi ;;
+esac
+exec clang "$@"
+''')
+wrapper.chmod(0o755)
+for stage, diagnostic in [("compile", "injected-process-compile"),
+                          ("link", "injected-final-link")]:
+    result = subprocess.run([compiler, "build", ordinary, "-o", scratch / ("fail-" + stage)],
+                            env={**fallback_env, "CC": str(wrapper), "FAIL_STAGE": stage},
+                            cwd=scratch, capture_output=True, text=True, timeout=180)
+    assert result.returncode != 0 and diagnostic in result.stderr + result.stdout, result
+print("process compilation and final link failures reported")
