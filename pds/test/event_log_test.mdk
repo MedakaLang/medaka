@@ -327,11 +327,13 @@ appendMany : DataDir d ->
   Int ->
   Int ->
   <FileRead d, FileWrite d> Result String Unit
-appendMany _dir 0 _ = Ok ()
-appendMany dir remaining timeSeconds =
-  match appendAt dir timeSeconds "bafyrei\{intToString remaining}"
-    Err message => Err message
-    Ok _ => appendMany dir (remaining - 1) timeSeconds
+appendMany dir remaining0 timeSeconds = go remaining0
+  where
+    go 0 = Ok ()
+    go remaining =
+      match appendAt dir timeSeconds "bafyrei\{intToString remaining}"
+        Err message => Err message
+        Ok _ => go (remaining - 1)
 
 mustSeqs : Result String (List EventLogEntry) -> List Int
 mustSeqs (Ok entries) = seqsOf entries

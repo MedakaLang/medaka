@@ -306,11 +306,13 @@ matchesAt : Array Char -> Int -> String -> Bool
 matchesAt arr i needle = matchesGo arr i (stringToChars needle) 0
 
 matchesGo : Array Char -> Int -> Array Char -> Int -> Bool
-matchesGo arr i needle j
-  | j >= arrayLength needle = True
-  | i + j >= arrayLength arr = False
-  | charCode arr[i + j] == charCode needle[j] = matchesGo arr i needle (j + 1)
-  | otherwise = False
+matchesGo arr i needle j0 = go j0
+  where
+    go j
+      | j >= arrayLength needle = True
+      | i + j >= arrayLength arr = False
+      | charCode arr[i + j] == charCode needle[j] = go (j + 1)
+      | otherwise = False
 
 -- ---------------------------------------------------------------------------
 -- Column-name → index resolution (for the typed query layer)
@@ -334,13 +336,15 @@ lowerChars : Array Char -> Array Char
 lowerChars arr = arrayFromList (lowerCharsGo arr 0 (arrayLength arr) [])
 
 lowerCharsGo : Array Char -> Int -> Int -> List Char -> List Char
-lowerCharsGo arr i n acc =
-  if i >= n then
-    reverse acc
-  else
-    let c = arr[i]
-    let lc = optionOr c (charFromCode (lowerCode (charCode c)))
-    lowerCharsGo arr (i + 1) n (lc :: acc)
+lowerCharsGo arr i0 n acc0 = go i0 acc0
+  where
+    go i acc =
+      if i >= n then
+        reverse acc
+      else
+        let c = arr[i]
+        let lc = optionOr c (charFromCode (lowerCode (charCode c)))
+        go (i + 1) (lc :: acc)
 
 ciScan : Array Char -> Array Char -> Option Int
 ciScan arr needle = ciGo arr needle 0 (arrayLength arr) (-1) 0 False True
@@ -399,12 +403,13 @@ identMatchAt : Array Char -> Int -> Array Char -> Bool
 identMatchAt arr i needle = identMatchGo arr i needle 0
 
 identMatchGo : Array Char -> Int -> Array Char -> Int -> Bool
-identMatchGo arr i needle j
-  | j >= arrayLength needle = identBoundaryAt arr (i + j)
-  | i + j >= arrayLength arr = False
-  | lowerCode (charCode arr[i + j]) == charCode needle[j] =
-    identMatchGo arr i needle (j + 1)
-  | otherwise = False
+identMatchGo arr i needle j0 = go j0
+  where
+    go j
+      | j >= arrayLength needle = identBoundaryAt arr (i + j)
+      | i + j >= arrayLength arr = False
+      | lowerCode (charCode arr[i + j]) == charCode needle[j] = go (j + 1)
+      | otherwise = False
 
 -- The char after the identifier must NOT be an identifier char (so "id" does
 -- not spuriously match the prefix of "identity").
@@ -488,30 +493,30 @@ cnStep arr i n col depth started atColStart acc c
 identLen : Array Char -> Int -> Int
 identLen arr i = identLenGo arr i 0
 identLenGo : Array Char -> Int -> Int -> Int
-identLenGo arr i j =
-  if i + j >= arrayLength arr then
-    j
-  else
-    let c = charCode arr[i + j]
-    if c >= 48 && c <= 57
-      || c >= 65 && c <= 90
-      || c >= 97 && c <= 122
-      || c == 95 then
-      identLenGo arr i (j + 1)
-    else if j == 0 then
-      1
-    else
-      j
+identLenGo arr i j0 = go j0
+  where
+    go j =
+      if i + j >= arrayLength arr then
+        j
+      else
+        let c = charCode arr[i + j]
+        if c >= 48 && c <= 57
+          || c >= 65 && c <= 90
+          || c >= 97 && c <= 122
+          || c == 95 then
+          go (j + 1)
+        else if j == 0 then
+          1
+        else
+          j
 
 readIdent : Array Char -> Int -> String
 readIdent arr i =
   stringFromChars (arrayFromList (readIdentTake arr i 0 (identLen arr i) []))
 readIdentTake : Array Char -> Int -> Int -> Int -> List Char -> List Char
-readIdentTake arr i j len acc =
-  if j >= len then
-    reverse acc
-  else
-    readIdentTake arr i (j + 1) len (arr[i + j] :: acc)
+readIdentTake arr i j0 len acc0 = go j0 acc0
+  where
+    go j acc = if j >= len then reverse acc else go (j + 1) (arr[i + j] :: acc)
 
 -- | Given the IPK column index (if any), a row's rowid, and its raw cells,
 --   return the cells with the IPK column replaced by the rowid.
@@ -521,6 +526,8 @@ rowCellsWithIpk : Option Int -> Row -> List Cell
 rowCellsWithIpk pkIdx row = substituteIpk pkIdx 0 (rowRowid row) (rowCells row)
 
 substituteIpk : Option Int -> Int -> Int -> List Cell -> List Cell
+-- Bound: list built in tail position modulo cons: a where-local go loses the constant-stack loop until the lambda-lift pass (#4878); convert then.
+-- lint-disable-next-line rule-threaded-invariant
 substituteIpk _pkIdx _idx _rowid [] = []
 substituteIpk pkIdx idx rowid (c :: rest) =
   let cell = match pkIdx

@@ -574,6 +574,16 @@ NEWLINE
 IDENT "advanceLine"
 IDENT "src"
 IDENT "target"
+IDENT "p0"
+IDENT "line0"
+EQUAL
+IDENT "go"
+IDENT "p0"
+IDENT "line0"
+INDENT
+WHERE
+INDENT
+IDENT "go"
 IDENT "p"
 IDENT "line"
 INDENT
@@ -605,9 +615,7 @@ IDENT "isLineBreakAt"
 IDENT "src"
 IDENT "p"
 EQUAL
-IDENT "advanceLine"
-IDENT "src"
-IDENT "target"
+IDENT "go"
 LPAREN
 IDENT "p"
 PLUS
@@ -622,15 +630,17 @@ NEWLINE
 PIPE
 IDENT "otherwise"
 EQUAL
-IDENT "advanceLine"
-IDENT "src"
-IDENT "target"
+IDENT "go"
 LPAREN
 IDENT "p"
 PLUS
 INT 1
 RPAREN
 IDENT "line"
+NEWLINE
+DEDENT
+NEWLINE
+DEDENT
 NEWLINE
 DEDENT
 NEWLINE
@@ -719,6 +729,18 @@ NEWLINE
 IDENT "posLineColFrom"
 IDENT "src"
 IDENT "target"
+IDENT "p0"
+IDENT "line0"
+IDENT "lineStart0"
+EQUAL
+IDENT "go"
+IDENT "p0"
+IDENT "line0"
+IDENT "lineStart0"
+INDENT
+WHERE
+INDENT
+IDENT "go"
 IDENT "p"
 IDENT "line"
 IDENT "lineStart"
@@ -741,9 +763,7 @@ IDENT "isLineBreakAt"
 IDENT "src"
 IDENT "p"
 EQUAL
-IDENT "posLineColFrom"
-IDENT "src"
-IDENT "target"
+IDENT "go"
 LPAREN
 IDENT "p"
 PLUS
@@ -763,9 +783,7 @@ NEWLINE
 PIPE
 IDENT "otherwise"
 EQUAL
-IDENT "posLineColFrom"
-IDENT "src"
-IDENT "target"
+IDENT "go"
 LPAREN
 IDENT "p"
 PLUS
@@ -773,6 +791,10 @@ INT 1
 RPAREN
 IDENT "line"
 IDENT "lineStart"
+NEWLINE
+DEDENT
+NEWLINE
+DEDENT
 NEWLINE
 DEDENT
 NEWLINE

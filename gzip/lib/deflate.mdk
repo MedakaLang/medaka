@@ -381,14 +381,16 @@ insertOne m p =
    "inserted exactly once" invariant. A no-op if `target <= m.nextInsert.value`
    already. -}
 insertUpTo : Matcher -> Int -> Unit
-insertUpTo m target =
-  let cur = m.nextInsert.value
-  if cur >= target then
-    ()
-  else
-    let _ = if hasHash cur m.n then insertOne m cur
-    m.nextInsert := cur + 1
-    insertUpTo m target
+insertUpTo m target = go ()
+  where
+    go () =
+      let cur = m.nextInsert.value
+      if cur >= target then
+        ()
+      else
+        let _ = if hasHash cur m.n then insertOne m cur
+        m.nextInsert := cur + 1
+        go ()
 
 -- Walk the chain from `candidate` backwards (via `prevArr`), keeping the
 -- longest match within the window and at least `minMatch`-worthy (the
@@ -397,36 +399,34 @@ insertUpTo m target =
 -- `maxChainLength` links, a window-exceeding distance, or `maxMatch` (no
 -- point walking further once the longest possible match is already found).
 findMatchChain : Matcher -> Int -> Int -> Int -> Int -> Int -> (Int, Int)
-findMatchChain m pos candidate chainLeft bestLen bestDist
-  | candidate < 0 || chainLeft <= 0 = (bestLen, bestDist)
-  | pos - candidate > windowSize = (bestLen, bestDist)
-  | otherwise =
-    let limit = minInt maxMatch (m.n - pos)
-    let len = matchLenAt m.input pos candidate limit
-    let (bestLen2, bestDist2) =
-      if len > bestLen then (len, pos - candidate) else (bestLen, bestDist)
-    if bestLen2 >= maxMatch then
-      (bestLen2, bestDist2)
-    else
-      findMatchChain
-        m
-        pos
-        (prevGet m.prevArr candidate)
-        (chainLeft - 1)
-        bestLen2
-        bestDist2
+findMatchChain m pos cand0 left0 len0 dist0 = go cand0 left0 len0 dist0
+  where
+    go candidate chainLeft bestLen bestDist
+      | candidate < 0 || chainLeft <= 0 = (bestLen, bestDist)
+      | pos - candidate > windowSize = (bestLen, bestDist)
+      | otherwise =
+        let limit = minInt maxMatch (m.n - pos)
+        let len = matchLenAt m.input pos candidate limit
+        let (bestLen2, bestDist2) =
+          if len > bestLen then (len, pos - candidate) else (bestLen, bestDist)
+        if bestLen2 >= maxMatch then
+          (bestLen2, bestDist2)
+        else
+          go (prevGet m.prevArr candidate) (chainLeft - 1) bestLen2 bestDist2
 
 matchLenAt : Bytes -> Int -> Int -> Int -> Int
 matchLenAt input pos candidate limit = matchLenGo input pos candidate limit 0
 
 matchLenGo : Bytes -> Int -> Int -> Int -> Int -> Int
-matchLenGo input pos candidate limit acc
-  | acc >= limit = acc
-  | otherwise =
-    if byteAt input (pos + acc) == byteAt input (candidate + acc) then
-      matchLenGo input pos candidate limit (acc + 1)
-    else
-      acc
+matchLenGo input pos candidate limit acc0 = go acc0
+  where
+    go acc
+      | acc >= limit = acc
+      | otherwise =
+        if byteAt input (pos + acc) == byteAt input (candidate + acc) then
+          go (acc + 1)
+        else
+          acc
 
 -- | Best (length, distance) match at `pos`, using the chain as it stands
 --   BEFORE `pos` itself is inserted (so a match never references itself).
@@ -492,19 +492,21 @@ deflateTryLazy m pos len1 dist1 w =
 --   position, and either emit a literal (no match, or below `minMatch`) or
 --   hand off to the lazy-matching decision above.
 deflateScan : Matcher -> Int -> BitWriter -> Unit
-deflateScan m pos w
-  | pos >= m.n = ()
-  | not (hasHash pos m.n) =
-    encodeLiteral (byteAt m.input pos) w
-    deflateScan m (pos + 1) w
-  | otherwise =
-    let (len1, dist1) = findMatch m pos
-    insertUpTo m (pos + 1)
-    if len1 < minMatch then
-      encodeLiteral (byteAt m.input pos) w
-      deflateScan m (pos + 1) w
-    else
-      deflateTryLazy m pos len1 dist1 w
+deflateScan m pos0 w = go pos0
+  where
+    go pos
+      | pos >= m.n = ()
+      | not (hasHash pos m.n) =
+        encodeLiteral (byteAt m.input pos) w
+        go (pos + 1)
+      | otherwise =
+        let (len1, dist1) = findMatch m pos
+        insertUpTo m (pos + 1)
+        if len1 < minMatch then
+          encodeLiteral (byteAt m.input pos) w
+          go (pos + 1)
+        else
+          deflateTryLazy m pos len1 dist1 w
 
 -- ---------------------------------------------------------------------------
 -- Block encoders
@@ -556,14 +558,16 @@ emitStoredBlock isLast offset len input w =
   putBytesAligned (B.sliceClamped offset (offset + len) input) w
 
 emitStoredChunks : Bytes -> Int -> Int -> BitWriter -> Unit
-emitStoredChunks input n offset w
-  | offset >= n = ()
-  | otherwise =
-    let remaining = n - offset
-    let chunkLen = minInt remaining storedChunkMax
-    let isLast = offset + chunkLen >= n
-    emitStoredBlock isLast offset chunkLen input w
-    emitStoredChunks input n (offset + chunkLen) w
+emitStoredChunks input n offset0 w = go offset0
+  where
+    go offset
+      | offset >= n = ()
+      | otherwise =
+        let remaining = n - offset
+        let chunkLen = minInt remaining storedChunkMax
+        let isLast = offset + chunkLen >= n
+        emitStoredBlock isLast offset chunkLen input w
+        go (offset + chunkLen)
 
 {- | Encode `input` as one or more stored blocks (`BTYPE=00`), chunked at
    `storedChunkMax` (65535, the 16-bit `LEN` field's limit). An empty input

@@ -391,10 +391,12 @@ secretInterpolationHits (path, content) =
   secretScan path (basename path) 1 (lines content)
 
 secretScan : String -> String -> Int -> List String -> List String
-secretScan _ _ _ [] = []
-secretScan path base n (line :: rest) =
-  flatMap (leakedInterpolation path base n) (interpolations line)
-    ++ secretScan path base (n + 1) rest
+secretScan path base n0 xs0 = go n0 xs0
+  where
+    go _ [] = []
+    go n (line :: rest) =
+      flatMap (leakedInterpolation path base n) (interpolations line)
+        ++ go (n + 1) rest
 
 leakedInterpolation : String -> String -> Int -> String -> List String
 leakedInterpolation path base n expr =
@@ -513,25 +515,27 @@ stripFrom : Array Char ->
   Bool ->
   Int ->
   (List Char, Int)
-stripFrom cs n i kept inQuote depth =
-  if i >= n then
-    (kept, depth)
-  else
-    let c = arrayGetUnsafe i cs
-    if inQuote && c == '\\' then
-      stripFrom cs n (i + 2) kept True depth
-    else if inQuote then
-      stripFrom cs n (i + 1) (keeping depth c kept) (c /= '"') depth
-    else if depth == 0 && c == '"' then
-      stripFrom cs n (i + 1) (c :: kept) True depth
-    else if depth == 0 && c == '-' && charAt cs n (i + 1) == Some '-' then
-      (kept, depth)
-    else if c == '{' && charAt cs n (i + 1) == Some '-' then
-      stripFrom cs n (i + 2) kept False (depth + 1)
-    else if c == '-' && charAt cs n (i + 1) == Some '}' then
-      stripFrom cs n (i + 2) kept False (if depth > 0 then depth - 1 else 0)
-    else
-      stripFrom cs n (i + 1) (keeping depth c kept) False depth
+stripFrom cs n i0 kept0 inQuote0 depth0 = go i0 kept0 inQuote0 depth0
+  where
+    go i kept inQuote depth =
+      if i >= n then
+        (kept, depth)
+      else
+        let c = arrayGetUnsafe i cs
+        if inQuote && c == '\\' then
+          go (i + 2) kept True depth
+        else if inQuote then
+          go (i + 1) (keeping depth c kept) (c /= '"') depth
+        else if depth == 0 && c == '"' then
+          go (i + 1) (c :: kept) True depth
+        else if depth == 0 && c == '-' && charAt cs n (i + 1) == Some '-' then
+          (kept, depth)
+        else if c == '{' && charAt cs n (i + 1) == Some '-' then
+          go (i + 2) kept False (depth + 1)
+        else if c == '-' && charAt cs n (i + 1) == Some '}' then
+          go (i + 2) kept False (if depth > 0 then depth - 1 else 0)
+        else
+          go (i + 1) (keeping depth c kept) False depth
 
 -- | The character at `i`, if `i` is within the first `n` of `cs`.
 charAt : Array Char -> Int -> Int -> Option Char

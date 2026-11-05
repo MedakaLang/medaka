@@ -182,15 +182,17 @@ beatMoves : (dir : String @FileRead*) ->
   String ->
   Int ->
   <Clock, FileRead dir> Bool
-beatMoves dir n seen remaining =
-  if remaining <= 0 then
-    False
-  else
-    let () = sleep (millis lockPollMillis)
-    if ownerText dir n /= seen then
-      True
-    else
-      beatMoves dir n seen (remaining - lockPollMillis)
+beatMoves dir n seen remaining0 = go remaining0
+  where
+    go remaining =
+      if remaining <= 0 then
+        False
+      else
+        let () = sleep (millis lockPollMillis)
+        if ownerText dir n /= seen then
+          True
+        else
+          go (remaining - lockPollMillis)
 
 -- How long ago the recorded holder last beat, for the refusal. An owner file
 -- that does not parse says so rather than reporting a number derived from
@@ -328,10 +330,12 @@ discardEach : (dir : String @FileWrite*) ->
   Int ->
   List Int ->
   <FileWrite dir> Unit
-discardEach _ _ [] = ()
-discardEach dir n (m :: rest) =
-  let () = if m < n then discardGeneration dir m
-  discardEach dir n rest
+discardEach dir n xs0 = go xs0
+  where
+    go [] = ()
+    go (m :: rest) =
+      let () = if m < n then discardGeneration dir m
+      go rest
 
 discardGeneration : (dir : String @FileWrite*) -> Int -> <FileWrite dir> Unit
 discardGeneration dir m =

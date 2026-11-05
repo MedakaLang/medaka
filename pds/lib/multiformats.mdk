@@ -110,30 +110,35 @@ uvarintEncode n =
 -- the continuation bit was still set) or over-length (more than
 -- `uvarintMaxBytes` bytes).
 uvarintDecodeGo : Bytes -> Int -> Int -> Int -> Int -> Result String (Int, Int)
-uvarintDecodeGo bytes idx n shift acc =
-  if idx >= uvarintMaxBytes then
-    Err "uvarint: over-long (more than 9 bytes)"
-  else if idx >= n then
-    Err "uvarint: truncated (input ended with the continuation bit still set)"
-  else
-    let b = byteAt idx bytes
-    let acc2 = acc + shiftLeft (bitAnd b 0x7f) shift
-    if bitAnd b 0x80 == 0 then
-      Ok (acc2, idx + 1)
-    else
-      uvarintDecodeGo bytes (idx + 1) n (shift + 7) acc2
+uvarintDecodeGo bytes idx0 n shift0 acc0 = go idx0 shift0 acc0
+  where
+    go idx shift acc =
+      if idx >= uvarintMaxBytes then
+        Err "uvarint: over-long (more than 9 bytes)"
+      else if idx >= n then
+        Err
+          "uvarint: truncated (input ended with the continuation bit still set)"
+      else
+        let b = byteAt idx bytes
+        let acc2 = acc + shiftLeft (bitAnd b 0x7f) shift
+        if bitAnd b 0x80 == 0 then
+          Ok (acc2, idx + 1)
+        else
+          go (idx + 1) (shift + 7) acc2
 
 -- Byte-for-byte comparison of `bytes[0 .. len)` against `expected`, used to
 -- confirm a decoded value's canonical (minimal) re-encoding matches what
 -- was actually consumed.
 prefixEquals : Bytes -> Bytes -> Int -> Int -> Bool
-prefixEquals a b i len =
-  if i >= len then
-    True
-  else if byteAt i a /= byteAt i b then
-    False
-  else
-    prefixEquals a b (i + 1) len
+prefixEquals a b i0 len = go i0
+  where
+    go i =
+      if i >= len then
+        True
+      else if byteAt i a /= byteAt i b then
+        False
+      else
+        go (i + 1)
 
 {- | Decode one unsigned-varint from the front of `bytes`. `Ok (value,
    bytesConsumed)`. `Err` on a non-minimal encoding (the published

@@ -168,16 +168,18 @@ upperString s =
   stringFromChars (arrayFromList (upperCharsGo chars 0 n []))
 
 upperCharsGo : Array Char -> Int -> Int -> List Char -> List Char
-upperCharsGo arr i n acc =
-  if i >= n then
-    reverse acc
-  else
-    let c = charCode arr[i]
-    let uc = if c >= 97 && c <= 122 then c - 32 else c
-    let ch = match charFromCode uc
-      Some x => x
-      None => arr[i]
-    upperCharsGo arr (i + 1) n (ch :: acc)
+upperCharsGo arr i0 n acc0 = go i0 acc0
+  where
+    go i acc =
+      if i >= n then
+        reverse acc
+      else
+        let c = charCode arr[i]
+        let uc = if c >= 97 && c <= 122 then c - 32 else c
+        let ch = match charFromCode uc
+          Some x => x
+          None => arr[i]
+        go (i + 1) (ch :: acc)
 
 -- ---------------------------------------------------------------------------
 -- Spec helpers
@@ -212,6 +214,8 @@ replaceSpec : List (String, String, Option Int, List (Int, List Cell)) ->
   String ->
   (String, String, Option Int, List (Int, List Cell)) ->
   List (String, String, Option Int, List (Int, List Cell))
+-- Bound: list built in tail position modulo cons: a where-local go loses the constant-stack loop until the lambda-lift pass (#4878); convert then.
+-- lint-disable-next-line rule-threaded-invariant
 replaceSpec [] _ _ = []
 replaceSpec ((n, s, p, rs) :: rest) tbl new =
   if n == tbl then new :: rest else (n, s, p, rs) :: replaceSpec rest tbl new
@@ -480,15 +484,17 @@ applyUpdateGo : CreateTable ->
   List (Int, List Cell) ->
   Int ->
   Result String (List (Int, List Cell), Int)
-applyUpdateGo _ _ _ [] acc n = Ok (reverse acc, n)
-applyUpdateGo ct pred assigns ((rowid, cells) :: rest) acc n =
-  if pred cells then do
-    -- Evaluate every RHS against the ORIGINAL cells first, then apply.
-    resolved <- evalAssignsAt ct assigns cells []
-    let newCells = applyCellAssigns resolved cells
-    applyUpdateGo ct pred assigns rest ((rowid, newCells) :: acc) (n + 1)
-  else
-    applyUpdateGo ct pred assigns rest ((rowid, cells) :: acc) n
+applyUpdateGo ct pred assigns xs0 acc0 n0 = go xs0 acc0 n0
+  where
+    go [] acc n = Ok (reverse acc, n)
+    go ((rowid, cells) :: rest) acc n =
+      if pred cells then do
+        -- Evaluate every RHS against the ORIGINAL cells first, then apply.
+        resolved <- evalAssignsAt ct assigns cells []
+        let newCells = applyCellAssigns resolved cells
+        go rest ((rowid, newCells) :: acc) (n + 1)
+      else
+        go rest ((rowid, cells) :: acc) n
 
 -- Evaluate each (idx, accessor) against the given (original) cells, coerce the
 -- result to the column's affinity and enforce its NOT NULL, yielding the
@@ -498,10 +504,12 @@ evalAssignsAt : CreateTable ->
   List Cell ->
   List (Int, Cell) ->
   Result String (List (Int, Cell))
-evalAssignsAt _ [] _ acc = Ok (reverse acc)
-evalAssignsAt ct ((idx, g) :: rest) cells acc = do
-  v <- coerceAt ct idx (g cells)
-  evalAssignsAt ct rest cells ((idx, v) :: acc)
+evalAssignsAt ct xs0 cells acc0 = go xs0 acc0
+  where
+    go [] acc = Ok (reverse acc)
+    go ((idx, g) :: rest) acc = do
+      v <- coerceAt ct idx (g cells)
+      go rest ((idx, v) :: acc)
 
 -- Apply a list of (index, Cell) replacements to a cell list.
 applyCellAssigns : List (Int, Cell) -> List Cell -> List Cell
@@ -519,9 +527,10 @@ applyCellAssignsGo assigns (c :: rest) idx acc =
 
 -- Look up whether this index has an assignment; return the replacement or the original.
 findAssign : List (Int, Cell) -> Int -> Cell -> Cell
-findAssign [] _ orig = orig
-findAssign ((i, cell) :: rest) idx orig =
-  if i == idx then cell else findAssign rest idx orig
+findAssign xs0 idx orig = go xs0
+  where
+    go [] = orig
+    go ((i, cell) :: rest) = if i == idx then cell else go rest
 
 -- ---------------------------------------------------------------------------
 -- INSERT
@@ -592,10 +601,12 @@ mapRows : CreateTable ->
   List (List Cell) ->
   List (List Cell) ->
   Result String (List (List Cell))
-mapRows _ _ [] acc = Ok (reverse acc)
-mapRows ct cols (r :: rest) acc = do
-  row <- mapRow ct cols r
-  mapRows ct cols rest (row :: acc)
+mapRows ct cols xs0 acc0 = go xs0 acc0
+  where
+    go [] acc = Ok (reverse acc)
+    go (r :: rest) acc = do
+      row <- mapRow ct cols r
+      go rest (row :: acc)
 
 mapRow : CreateTable ->
   Option (List String) ->
@@ -651,11 +662,13 @@ scatter : Int -> List Int -> List Cell -> List Cell
 scatter width idxs vals = scatterGo width (zip idxs vals) 0 []
 
 scatterGo : Int -> List (Int, Cell) -> Int -> List Cell -> List Cell
-scatterGo width pairs i acc =
-  if i >= width then
-    reverse acc
-  else
-    scatterGo width pairs (i + 1) (findAssign pairs i CNull :: acc)
+scatterGo width pairs i0 acc0 = go i0 acc0
+  where
+    go i acc =
+      if i >= width then
+        reverse acc
+      else
+        go (i + 1) (findAssign pairs i CNull :: acc)
 
 -- ---- rowid assignment ------------------------------------------------------
 
@@ -668,18 +681,14 @@ assignRowids : CreateTable ->
   List (List Cell) ->
   List (Int, List Cell) ->
   Result String (List (Int, List Cell))
-assignRowids _ _ _ _ [] acc = Ok (reverse acc)
-assignRowids ct ipk next taken (row :: rest) acc = do
-  coerced <- coerceRow ct row
-  (rid, cells) <- rowWithRowid ct ipk next coerced
-  _ <- refuseDuplicate ct ipk rid taken
-  assignRowids
-    ct
-    ipk
-    (max next rid + 1)
-    (S.insert rid taken)
-    rest
-    ((rid, cells) :: acc)
+assignRowids ct ipk next0 taken0 xs0 acc0 = go next0 taken0 xs0 acc0
+  where
+    go _ _ [] acc = Ok (reverse acc)
+    go next taken (row :: rest) acc = do
+      coerced <- coerceRow ct row
+      (rid, cells) <- rowWithRowid ct ipk next coerced
+      _ <- refuseDuplicate ct ipk rid taken
+      go (max next rid + 1) (S.insert rid taken) rest ((rid, cells) :: acc)
 
 -- For an IPK table the rowid IS the IPK cell (auto-assigned when NULL, and
 -- written back into the cell so the reader's `rowCellsWithIpk` sees it).  For a

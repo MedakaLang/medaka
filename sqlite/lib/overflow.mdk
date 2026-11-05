@@ -209,8 +209,6 @@ overflowChainPages usable firstPage spilled =
   chainGo firstPage (overflowPageCount usable spilled) 0 []
 
 chainGo : Int -> Int -> Int -> List Int -> List Int
-chainGo firstPage n i acc =
-  if i >= n then
-    reverse acc
-  else
-    chainGo firstPage n (i + 1) (firstPage + i :: acc)
+chainGo firstPage n i0 acc0 = go i0 acc0
+  where
+    go i acc = if i >= n then reverse acc else go (i + 1) (firstPage + i :: acc)

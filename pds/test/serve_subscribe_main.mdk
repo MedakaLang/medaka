@@ -156,17 +156,20 @@ readBodyChunks : Connection * ->
   List Bytes ->
   Int ->
   <Net> Result String String
-readBodyChunks conn want parts got =
-  if got >= want then match decodeUtf8 (B.take want (B.concat (reverse parts)))
-    Some text => Ok text
-    None => Err "serve_subscribe: refusal body is not UTF-8"
-  else match recv conn 4096
-    Err message => Err message
-    Ok chunk =>
-      if B.isEmpty chunk then
-        Err "serve_subscribe: refusal body ended before its content-length"
-      else
-        readBodyChunks conn want (chunk :: parts) (got + B.length chunk)
+readBodyChunks conn want parts0 got0 = go parts0 got0
+  where
+    go parts got =
+      if got
+        >= want then match decodeUtf8 (B.take want (B.concat (reverse parts)))
+        Some text => Ok text
+        None => Err "serve_subscribe: refusal body is not UTF-8"
+      else match recv conn 4096
+        Err message => Err message
+        Ok chunk =>
+          if B.isEmpty chunk then
+            Err "serve_subscribe: refusal body ended before its content-length"
+          else
+            go (chunk :: parts) (got + B.length chunk)
 
 {- | Complete a handshake and answer the bytes that arrived past the 101.
 
@@ -927,16 +930,17 @@ runHandleCells : Int ->
   Option Int ->
   List HandleCell ->
   <IO, Net> Result String (Option Int, Bytes)
-runHandleCells _ _ buffered _ _ _ previous [] = Ok (previous, buffered)
-runHandleCells port conn buffered token did current previous (cell :: more) =
-  let (HandleCell sent _ _ _) = cell
-  match postUpdateHandle port token sent
-    Err message => Err "handle '\{sent}': \{message}"
-    Ok answer =>
-      match gradeHandleCell conn buffered did current previous cell answer
-        Err message => Err message
-        Ok (seen, rest) =>
-          runHandleCells port conn rest token did current seen more
+runHandleCells port conn buf0 token did current prev0 cs0 = go buf0 prev0 cs0
+  where
+    go buffered previous [] = Ok (previous, buffered)
+    go buffered previous (cell :: more) =
+      let (HandleCell sent _ _ _) = cell
+      match postUpdateHandle port token sent
+        Err message => Err "handle '\{sent}': \{message}"
+        Ok answer =>
+          match gradeHandleCell conn buffered did current previous cell answer
+            Err message => Err message
+            Ok (seen, rest) => go rest seen more
 
 {- | `com.atproto.identity.updateHandle` as a subscriber sees it: each
    accepted call puts exactly one `#identity` event on the stream, numbered
@@ -1124,30 +1128,32 @@ soakLoop : Connection * ->
   Int ->
   Int ->
   <Clock, IO, Net> Result String (Int, Int)
-soakLoop conn buffered t0 budget events commits =
-  if elapsedSince t0 >= budget then
-    Ok (events, commits)
-  else match nextEvent conn buffered
-    Err message =>
-      if message == "Resource temporarily unavailable"
-        || message == "Operation timed out" then
-        soakLoop conn buffered t0 budget events commits
-      else
-        Err message
-    Ok None => Err "serve_subscribe: synthetic soak stream closed"
-    Ok (Some (payload, rest)) => match splitEvent payload
-      Err message => Err message
-      Ok (header, body) =>
-        let kind = eventKind header
-        if kind == "!error" then
-          Err "serve_subscribe: synthetic soak received an error event"
-        else if kind == "#commit" then match soakCommitPath body
+soakLoop conn buf0 t0 budget events0 commits0 = go buf0 events0 commits0
+  where
+    go buffered events commits =
+      if elapsedSince t0 >= budget then
+        Ok (events, commits)
+      else match nextEvent conn buffered
+        Err message =>
+          if message == "Resource temporarily unavailable"
+            || message == "Operation timed out" then
+            go buffered events commits
+          else
+            Err message
+        Ok None => Err "serve_subscribe: synthetic soak stream closed"
+        Ok (Some (payload, rest)) => match splitEvent payload
           Err message => Err message
-          Ok path =>
-            let () = println "relay-path \{path}"
-            soakLoop conn rest t0 budget (events + 1) (commits + 1)
-        else
-          soakLoop conn rest t0 budget (events + 1) commits
+          Ok (header, body) =>
+            let kind = eventKind header
+            if kind == "!error" then
+              Err "serve_subscribe: synthetic soak received an error event"
+            else if kind == "#commit" then match soakCommitPath body
+              Err message => Err message
+              Ok path =>
+                let () = println "relay-path \{path}"
+                go rest (events + 1) (commits + 1)
+            else
+              go rest (events + 1) commits
 
 runSoak : Int -> Int -> <IO, Net, Clock> Unit
 runSoak port durationMs =

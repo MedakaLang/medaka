@@ -972,24 +972,20 @@ batchElements : Validation ->
   Int ->
   Int ->
   Result Response (List RepoWrite, List Json, Int)
-batchElements validation did rev elements i auto =
-  if i >= arrayLength elements then
-    Ok ([], [], auto)
-  else do
-    (write, result, nextAuto) <- batchElement
-      validation
-      did
-      rev
-      auto
-      elements[i]
-    (rest, results, finalAuto) <- batchElements
-      validation
-      did
-      rev
-      elements
-      (i + 1)
-      nextAuto
-    Ok (write :: rest, result :: results, finalAuto)
+batchElements validation did rev elements i0 auto0 = go i0 auto0
+  where
+    go i auto =
+      if i >= arrayLength elements then
+        Ok ([], [], auto)
+      else do
+        (write, result, nextAuto) <- batchElement
+          validation
+          did
+          rev
+          auto
+          elements[i]
+        (rest, results, finalAuto) <- go (i + 1) nextAuto
+        Ok (write :: rest, result :: results, finalAuto)
 
 {- | `applyWrites` is the batch counterpart of the three single-record
    procedures, and its whole point is that it signs ONE commit: N operations

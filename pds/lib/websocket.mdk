@@ -209,12 +209,14 @@ copyPayload bytes off len (Some key) =
   MB.freeze out
 
 unmask : Bytes -> Int -> MutBytes -> Int -> Bytes -> Int -> Unit
-unmask bytes off out len key i =
-  if i >= len then
-    ()
-  else
-    MB.setInPlace i (U8.bitXor bytes[off + i] key[i % 4]) out
-    unmask bytes off out len key (i + 1)
+unmask bytes off out len key i0 = go i0
+  where
+    go i =
+      if i >= len then
+        ()
+      else
+        MB.setInPlace i (U8.bitXor bytes[off + i] key[i % 4]) out
+        go (i + 1)
 
 -- RFC 6455 §5.2: "the minimal number of bytes MUST be used to encode the
 -- length". A 64-bit field holding 5 is a distinct encoding of a frame that
@@ -367,12 +369,14 @@ decodeDeclared fin opcode masked lenField maxPayload bytes offset available extL
 -- ── Encoding ─────────────────────────────────────────────────────────
 
 maskInto : Builder -> Bytes -> Int -> Bytes -> Unit
-maskInto out src i key =
-  if i >= B.length src then
-    ()
-  else
-    emitU8 (U8.bitXor src[i] key[i % 4]) out
-    maskInto out src (i + 1) key
+maskInto out src i0 key = go i0
+  where
+    go i =
+      if i >= B.length src then
+        ()
+      else
+        emitU8 (U8.bitXor src[i] key[i % 4]) out
+        go (i + 1)
 
 encodeWith : Option Bytes -> Frame -> Bytes
 encodeWith maskKey (Frame fin opcode payload) =

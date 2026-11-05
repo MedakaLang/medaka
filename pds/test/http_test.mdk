@@ -1023,16 +1023,18 @@ sameFrame _ _ = False
 -- Deliver `input` in `step`-byte increments from `size`, comparing the resumed
 -- verdict at each prefix against a scan of that same prefix from scratch.
 resumeAgreesGo : Bytes -> Int -> Int -> Int -> HttpScan -> Expectation
-resumeAgreesGo input start step size scan =
-  let buf = prefix input size
-  let (resumed, next) = scanRequestBoundaryFrom buf start scan
-  let agrees = sameFrame resumed (scanRequestBoundary buf start)
-  if not agrees then
-    fail "the resumed verdict differs from a scan from scratch"
-  else if size >= B.length input then
-    pass
-  else
-    resumeAgreesGo input start step (min (B.length input) (size + step)) next
+resumeAgreesGo input start step size0 scan0 = go size0 scan0
+  where
+    go size scan =
+      let buf = prefix input size
+      let (resumed, next) = scanRequestBoundaryFrom buf start scan
+      let agrees = sameFrame resumed (scanRequestBoundary buf start)
+      if not agrees then
+        fail "the resumed verdict differs from a scan from scratch"
+      else if size >= B.length input then
+        pass
+      else
+        go (min (B.length input) (size + step)) next
 
 resumeAgrees : Int -> Int -> Bytes -> Expectation
 resumeAgrees start step input =
@@ -1131,13 +1133,13 @@ test "a body short of its content length is pending, padding notwithstanding" =
 -- Scanning a padded backing array one received byte at a time has to agree with
 -- scanning the exact prefix of that many bytes, for every shape in the corpus.
 availAgreesGo : Bytes -> MB.MutBytes -> Int -> Int -> HttpScan -> Bool
-availAgreesGo padded buffer live avail scan =
-  let (resumed, next) = scanRequestBoundaryWithin buffer avail 0 scan
-  let agrees = sameFrame resumed (scanRequestBoundary (prefix padded avail) 0)
-  if avail >= live then
-    agrees
-  else
-    agrees && availAgreesGo padded buffer live (avail + 1) next
+availAgreesGo padded buffer live avail0 scan0 = go avail0 scan0
+  where
+    go avail scan =
+      let (resumed, next) = scanRequestBoundaryWithin buffer avail 0 scan
+      let agrees =
+        sameFrame resumed (scanRequestBoundary (prefix padded avail) 0)
+      if avail >= live then agrees else agrees && go (avail + 1) next
 
 availAgrees : Bytes -> Bool
 availAgrees input =

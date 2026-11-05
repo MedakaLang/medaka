@@ -13,6 +13,7 @@ allPairs _ _ _ = True
    distinct without needing a third input list. -}
 export
 allTriples : (a -> a -> a -> Bool) -> (a -> a) -> List a -> List a -> Bool
-allTriples f next (a :: ax) (b :: bx) =
-  f a b (next a) && allTriples f next ax bx
-allTriples _ _ _ _ = True
+allTriples f next xs0 xs1 = go xs0 xs1
+  where
+    go (a :: ax) (b :: bx) = f a b (next a) && go ax bx
+    go _ _ = True

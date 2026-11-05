@@ -64,12 +64,14 @@ validateEach : String ->
   List Stanza ->
   List String ->
   <FileRead, Exec> Result String (List String)
-validateEach _ _ [] = Ok []
-validateEach root stanzas (p :: rest) = match findStanzaForFile p stanzas
-  None => Err "vector_ledger: no [vector] stanza names file \"\{p}\""
-  Some s => do
-    _ <- validateRow root s
-    map (p :: _) (validateEach root stanzas rest)
+validateEach root stanzas xs0 = go xs0
+  where
+    go [] = Ok []
+    go (p :: rest) = match findStanzaForFile p stanzas
+      None => Err "vector_ledger: no [vector] stanza names file \"\{p}\""
+      Some s => do
+        _ <- validateRow root s
+        map (p :: _) (go rest)
 
 findStanzaForFile : String -> List Stanza -> Option Stanza
 findStanzaForFile _ [] = None

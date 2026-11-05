@@ -127,19 +127,22 @@ emitValueAt (DcLink cid) _ out =
   Ok ()
 
 emitValues : List DagCbor -> Int -> Builder -> Result String Unit
-emitValues [] _ _ = Ok ()
-emitValues (value :: rest) depth out = match emitValue value depth out
-  Err message => Err message
-  Ok () => emitValues rest depth out
+emitValues xs0 depth out = go xs0
+  where
+    go [] = Ok ()
+    go (value :: rest) = match emitValue value depth out
+      Err message => Err message
+      Ok () => go rest
 
 emitFields : List (String, DagCbor) -> Int -> Builder -> Result String Unit
-emitFields [] _ _ = Ok ()
-emitFields ((key, value) :: rest) depth out =
-  match emitValue (DcString key) depth out
-    Err message => Err message
-    Ok () => match emitValue value depth out
+emitFields xs0 depth out = go xs0
+  where
+    go [] = Ok ()
+    go ((key, value) :: rest) = match emitValue (DcString key) depth out
       Err message => Err message
-      Ok () => emitFields rest depth out
+      Ok () => match emitValue value depth out
+        Err message => Err message
+        Ok () => go rest
 
 firstDuplicate : List (String, DagCbor) -> Option String -> Option String
 firstDuplicate [] _ = None
@@ -247,12 +250,12 @@ parseString input pos additional = match readArgument input pos additional
         Some text => BOk (DcString text) finalPos
 
 parseArray : Bytes -> Int -> Int -> Int -> List DagCbor -> BResult DagCbor
-parseArray _ pos _ 0 acc = BOk (DcArray (reverse acc)) pos
-parseArray input pos depth remaining acc =
-  match parseValueAt input pos (depth + 1)
-    BErr message errorPos => BErr message errorPos
-    BOk value endPos =>
-      parseArray input endPos depth (remaining - 1) (value :: acc)
+parseArray input pos0 depth remaining0 acc0 = go pos0 remaining0 acc0
+  where
+    go pos 0 acc = BOk (DcArray (reverse acc)) pos
+    go pos remaining acc = match parseValueAt input pos (depth + 1)
+      BErr message errorPos => BErr message errorPos
+      BOk value endPos => go endPos (remaining - 1) (value :: acc)
 
 parseMap : Bytes ->
   Int ->
@@ -261,24 +264,19 @@ parseMap : Bytes ->
   Option String ->
   List (String, DagCbor) ->
   BResult DagCbor
-parseMap _ pos _ 0 _ acc = BOk (DcMap (reverse acc)) pos
-parseMap input pos depth remaining previous acc =
-  match parseValueAt input pos (depth + 1)
-    BErr message errorPos => BErr message errorPos
-    BOk keyValue keyEnd => match keyValue
-      DcString key => match mapKeyOrder previous key
-        Err message => BErr message pos
-        Ok () => match parseValueAt input keyEnd (depth + 1)
-          BErr message errorPos => BErr message errorPos
-          BOk value valueEnd =>
-            parseMap
-              input
-              valueEnd
-              depth
-              (remaining - 1)
-              (Some key)
-              ((key, value) :: acc)
-      _ => BErr "dagcbor: map key is not a string" pos
+parseMap input pos0 depth rem0 prev0 acc0 = go pos0 rem0 prev0 acc0
+  where
+    go pos 0 _ acc = BOk (DcMap (reverse acc)) pos
+    go pos remaining previous acc = match parseValueAt input pos (depth + 1)
+      BErr message errorPos => BErr message errorPos
+      BOk keyValue keyEnd => match keyValue
+        DcString key => match mapKeyOrder previous key
+          Err message => BErr message pos
+          Ok () => match parseValueAt input keyEnd (depth + 1)
+            BErr message errorPos => BErr message errorPos
+            BOk value valueEnd =>
+              go valueEnd (remaining - 1) (Some key) ((key, value) :: acc)
+        _ => BErr "dagcbor: map key is not a string" pos
 
 mapKeyOrder : Option String -> String -> Result String Unit
 mapKeyOrder None _ = Ok ()

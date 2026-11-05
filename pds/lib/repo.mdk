@@ -179,13 +179,15 @@ findPathSlash path i slash =
     findPathSlash path (i + 1) slash
 
 lastDotBefore : Bytes -> Int -> Int -> Int -> Int
-lastDotBefore bytes i end last =
-  if i >= end then
-    last
-  else if byteAt bytes i == 46 then
-    lastDotBefore bytes (i + 1) end i
-  else
-    lastDotBefore bytes (i + 1) end last
+lastDotBefore bytes i0 end last0 = go i0 last0
+  where
+    go i last =
+      if i >= end then
+        last
+      else if byteAt bytes i == 46 then
+        go (i + 1) i
+      else
+        go (i + 1) last
 
 normalizedAuthority : Bytes -> Int -> Bool
 normalizedAuthority path end =

@@ -274,17 +274,19 @@ sendEntries : Duration ->
   Int ->
   List EventLogEntry ->
   Async <Clock, Net h | e> (Result String Int)
-sendEntries _ _ delivered [] = deferPure (Ok delivered)
-sendEntries budget conn _delivered (entry :: rest) =
-  match Hex.decode entry.frameHex
-    Err message =>
-      deferPure
-        (Err "subscribe: event \{intToString entry.seq} is not hex: \{message}")
-    Ok payload => defer
-      sent <- sendPayload budget conn payload
-      match sent
-        Err message => deferPure (Err message)
-        Ok () => sendEntries budget conn entry.seq rest
+sendEntries budget conn delivered0 entries0 = go delivered0 entries0
+  where
+    go delivered [] = deferPure (Ok delivered)
+    go _delivered (entry :: rest) = match Hex.decode entry.frameHex
+      Err message =>
+        deferPure
+          (Err
+            "subscribe: event \{intToString entry.seq} is not hex: \{message}")
+      Ok payload => defer
+        sent <- sendPayload budget conn payload
+        match sent
+          Err message => deferPure (Err message)
+          Ok () => go entry.seq rest
 
 -- One atproto event-stream message, as one unfragmented binary WebSocket
 -- frame. The payload is two concatenated CBOR objects and the reader decodes

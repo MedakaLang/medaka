@@ -313,14 +313,15 @@ checkElements : Lexicons ->
   Int ->
   Option String ->
   Check
-checkElements lex path items elements i open =
-  if i >= arrayLength elements then
-    keepOpen open
-  else match checkValue lex "\{path}[\{intToString i}]" items elements[i]
-    Fail message => Fail message
-    Open message =>
-      checkElements lex path items elements (i + 1) (firstOpen open message)
-    Pass => checkElements lex path items elements (i + 1) open
+checkElements lex path items elements i0 open0 = go i0 open0
+  where
+    go i open =
+      if i >= arrayLength elements then
+        keepOpen open
+      else match checkValue lex "\{path}[\{intToString i}]" items elements[i]
+        Fail message => Fail message
+        Open message => go (i + 1) (firstOpen open message)
+        Pass => go (i + 1) open
 
 {- | An object: a plain JSON object (not a `$link` or `$bytes` one) whose
    declared properties check. A property that is absent is refused only if it
@@ -340,19 +341,19 @@ checkProperties : Lexicons ->
   List (String, LexType) ->
   Option String ->
   Check
-checkProperties _ _ _ _ [] open = keepOpen open
-checkProperties lex path required value ((name, fieldType) :: rest) open =
-  match get name value
-    None =>
-      if elem name required then
-        Fail "Missing required key \"\{name}\" at \{path}"
-      else
-        checkProperties lex path required value rest open
-    Some field => match checkValue lex "\{path}.\{name}" fieldType field
-      Fail message => Fail message
-      Open message =>
-        checkProperties lex path required value rest (firstOpen open message)
-      Pass => checkProperties lex path required value rest open
+checkProperties lex path required value props0 open0 = go props0 open0
+  where
+    go [] open = keepOpen open
+    go ((name, fieldType) :: rest) open = match get name value
+      None =>
+        if elem name required then
+          Fail "Missing required key \"\{name}\" at \{path}"
+        else
+          go rest open
+      Some field => match checkValue lex "\{path}.\{name}" fieldType field
+        Fail message => Fail message
+        Open message => go rest (firstOpen open message)
+        Pass => go rest open
 
 {- | A reference to an object definition is a typed object: `$type` may be
    absent, but if present it must name that definition. A reference to any
@@ -624,10 +625,12 @@ trailingPads codes i count =
     count
 
 allBase64 : Array Int -> Int -> Int -> Bool
-allBase64 codes i end
-  | i >= end = True
-  | isBase64Code codes[i] = allBase64 codes (i + 1) end
-  | otherwise = False
+allBase64 codes i0 end = go i0
+  where
+    go i
+      | i >= end = True
+      | isBase64Code codes[i] = go (i + 1)
+      | otherwise = False
 
 isBase64Code : Int -> Bool
 isBase64Code c =

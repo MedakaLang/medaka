@@ -330,9 +330,11 @@ withoutConsumed wanted consumed =
     consumed
 
 hasAccess : Int -> Bytes -> List SessionRecord -> Bool
-hasAccess _ _ [] = False
-hasAccess now wanted ((SessionRecord access _ expires _) :: rest) =
-  now < expires && ctEq wanted access || hasAccess now wanted rest
+hasAccess now wanted xs0 = go xs0
+  where
+    go [] = False
+    go ((SessionRecord access _ expires _) :: rest) =
+      now < expires && ctEq wanted access || go rest
 
 withoutRefresh : Bytes -> List SessionRecord -> List SessionRecord
 withoutRefresh wanted open =

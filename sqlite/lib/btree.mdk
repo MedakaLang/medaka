@@ -191,23 +191,17 @@ decodeCells : Bytes ->
   Int ->
   List Row ->
   Result String (List Row)
-decodeCells bytes pageSize usable pageBase cpArrayStart nCells i acc
-  | i >= nCells = Ok (reverse acc)
-  | otherwise = do
-    -- cell pointer i is a uint16 at cpArrayStart + i*2; it is a page-relative
-    -- offset, so the absolute cell offset is pageBase + cellPtr.
-    cellPtr <- beU16 bytes (cpArrayStart + i * 2)
-    let cellOffset = pageBase + cellPtr
-    row <- decodeLeafCell bytes pageSize usable cellOffset
-    decodeCells
-      bytes
-      pageSize
-      usable
-      pageBase
-      cpArrayStart
-      nCells
-      (i + 1)
-      (row :: acc)
+decodeCells bytes pageSize usable pageBase cpStart nCells i0 acc0 = go i0 acc0
+  where
+    go i acc
+      | i >= nCells = Ok (reverse acc)
+      | otherwise = do
+        -- cell pointer i is a uint16 at cpStart + i*2; it is a page-relative
+        -- offset, so the absolute cell offset is pageBase + cellPtr.
+        cellPtr <- beU16 bytes (cpStart + i * 2)
+        let cellOffset = pageBase + cellPtr
+        row <- decodeLeafCell bytes pageSize usable cellOffset
+        go (i + 1) (row :: acc)
 
 -- | Decode one table-leaf cell at absolute byte offset `off`:
 --   [payload-len varint] [rowid varint] [local payload] [4-byte BE overflow page]
@@ -286,27 +280,26 @@ gatherChain : Bytes ->
   Int ->
   List Bytes ->
   Result String (List Bytes)
-gatherChain bytes pageSize usable page remaining acc
-  | remaining <= 0 = Ok (reverse acc)
-  | page < 1 =
-    Err
-      "overflow chain ended early: \{intToString remaining} payload bytes unaccounted for"
-  | otherwise =
-    let base = (page - 1) * pageSize
-    let chunkLen = min remaining (overflowCapacity usable)
-    do
-      _ <- requireBytes
-        bytes
-        (base + 4 + chunkLen)
-        "overflow page \{intToString page}"
-      next <- beU32 bytes base
-      gatherChain
-        bytes
-        pageSize
-        usable
-        next
-        (remaining - chunkLen)
-        (slice bytes (base + 4) (base + 4 + chunkLen) :: acc)
+gatherChain bytes pageSize usable page0 rem0 acc0 = go page0 rem0 acc0
+  where
+    go page remaining acc
+      | remaining <= 0 = Ok (reverse acc)
+      | page < 1 =
+        Err
+          "overflow chain ended early: \{intToString remaining} payload bytes unaccounted for"
+      | otherwise =
+        let base = (page - 1) * pageSize
+        let chunkLen = min remaining (overflowCapacity usable)
+        do
+          _ <- requireBytes
+            bytes
+            (base + 4 + chunkLen)
+            "overflow page \{intToString page}"
+          next <- beU32 bytes base
+          go
+            next
+            (remaining - chunkLen)
+            (slice bytes (base + 4) (base + 4 + chunkLen) :: acc)
 
 -- Fail (rather than silently truncate, which is what `bytes.slice` would do)
 -- if the file image is too short to contain the bytes we are about to read.
@@ -392,6 +385,8 @@ decodeIndexCells : Bytes ->
   Int ->
   List (List Cell, Int) ->
   Result String (List (List Cell, Int))
+-- Bound: the head line of the where-go form cannot fit 80 columns and the parser rejects the two-line layout (#4896); convert then.
+-- lint-disable-next-line rule-threaded-invariant
 decodeIndexCells bytes pageSize usable pageBase cpArrayStart nCells i acc
   | i >= nCells = Ok (reverse acc)
   | otherwise = do
@@ -504,6 +499,8 @@ scanIndexInteriorCells : Bytes ->
   Int ->
   List (List (List Cell, Int)) ->
   Result String (List (List Cell, Int))
+-- Bound: the head line of the where-go form cannot fit 80 columns and the parser rejects the two-line layout (#4896); convert then.
+-- lint-disable-next-line rule-threaded-invariant
 scanIndexInteriorCells bytes pageSize usable cpArrayStart pageBase nCells i rightmost chunks
   | i >= nCells = do
     let rmHdr = pageHdrOffset pageSize rightmost
@@ -601,6 +598,8 @@ scanInteriorCells : Bytes ->
   Int ->
   List (List Row) ->
   Result String (List Row)
+-- Bound: the head line of the where-go form cannot fit 80 columns and the parser rejects the two-line layout (#4896); convert then.
+-- lint-disable-next-line rule-threaded-invariant
 scanInteriorCells bytes pageSize usable cpArrayStart pageBase nCells i rightmost chunks
   | i >= nCells = do
     -- all left-children visited; now the rightmost child
@@ -712,6 +711,8 @@ seekInteriorCells : Bytes ->
   Int ->
   Int ->
   Result String (Option Row)
+-- Bound: the head line of the where-go form cannot fit 80 columns and the parser rejects the two-line layout (#4896); convert then.
+-- lint-disable-next-line rule-threaded-invariant
 seekInteriorCells bytes pageSize usable cpArrayStart pageBase nCells i rightmost target
   | i >= nCells = do
     let rmHdr = pageHdrOffset pageSize rightmost

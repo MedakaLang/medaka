@@ -280,20 +280,22 @@ packCells : Array Int ->
   Int ->
   String ->
   Result String Int
-packCells _page [] _cpStart contentTop _floor _i _errMsg = Ok contentTop
-packCells page (cell :: rest) cpStart contentTop floor i errMsg =
-  let clen = arrayLength cell
-  let newTop = contentTop - clen
-  if newTop < floor then
-    Err errMsg
-  else
-    -- Blit the cell bytes into the page at newTop.
-    blit cell 0 page newTop clen
-    -- Write the page-relative pointer (u16, big-endian) for cell i.
-    let ptrOff = cpStart + i * 2
-    page[ptrOff] := bitAnd (newTop / 256) 255
-    page[ptrOff + 1] := bitAnd newTop 255
-    packCells page rest cpStart newTop floor (i + 1) errMsg
+packCells page xs0 cpStart contentTop0 floor i0 errMsg = go xs0 contentTop0 i0
+  where
+    go [] contentTop _i = Ok contentTop
+    go (cell :: rest) contentTop i =
+      let clen = arrayLength cell
+      let newTop = contentTop - clen
+      if newTop < floor then
+        Err errMsg
+      else
+        -- Blit the cell bytes into the page at newTop.
+        blit cell 0 page newTop clen
+        -- Write the page-relative pointer (u16, big-endian) for cell i.
+        let ptrOff = cpStart + i * 2
+        page[ptrOff] := bitAnd (newTop / 256) 255
+        page[ptrOff + 1] := bitAnd newTop 255
+        go rest newTop (i + 1)
 
 -- Write the 8-byte TABLE-leaf page header (type 0x0D) at `hdrOff`.
 writeLeafHeader : Array Int -> Int -> Int -> Int -> Unit
@@ -429,18 +431,20 @@ buildOverflowChain spill firstPage =
     []
 
 chainGo : Array Int -> Int -> Int -> Int -> List (Array Int) -> List (Array Int)
-chainGo spill firstPage i total acc =
-  if i >= total then
-    reverse acc
-  else
-    let cap = overflowCapacity usableSize
-    let off = i * cap
-    let chunk = min cap (arrayLength spill - off)
-    let next = if i == total - 1 then 0 else firstPage + i + 1
-    let page = arrayMake pageSize 0
-    setU32BE page 0 next
-    blit spill off page 4 chunk
-    chainGo spill firstPage (i + 1) total (page :: acc)
+chainGo spill firstPage i0 total acc0 = go i0 acc0
+  where
+    go i acc =
+      if i >= total then
+        reverse acc
+      else
+        let cap = overflowCapacity usableSize
+        let off = i * cap
+        let chunk = min cap (arrayLength spill - off)
+        let next = if i == total - 1 then 0 else firstPage + i + 1
+        let page = arrayMake pageSize 0
+        setU32BE page 0 next
+        blit spill off page 4 chunk
+        go (i + 1) (page :: acc)
 
 -- | Assign overflow pages to every spilling row in `rows`, patching each cell's
 --   pointer and emitting its chain.  Threads the next free page number.

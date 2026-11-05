@@ -401,14 +401,16 @@ deaf port = match listen "127.0.0.1" port
 acceptLoop : Listener * ->
   (Connection * -> <FileWrite, Net> Result String Unit) ->
   <FileWrite, Net> Unit
-acceptLoop lis handle = match accept lis
-  Err message => panic "appview_stub: accept failed: \{message}"
-  Ok conn =>
-    let _ = handle conn
-    bestEffort
-      "the call is finished and the peer may already have hung up; the loop goes on to the next one"
-      (close conn)
-    acceptLoop lis handle
+acceptLoop lis handle = go ()
+  where
+    go () = match accept lis
+      Err message => panic "appview_stub: accept failed: \{message}"
+      Ok conn =>
+        let _ = handle conn
+        bestEffort
+          "the call is finished and the peer may already have hung up; the loop goes on to the next one"
+          (close conn)
+        go ()
 
 serveWith : Int -> (Listener * -> <FileWrite, Net> Unit) -> <IO, Net> Unit
 serveWith port run = match listen "127.0.0.1" port
@@ -449,18 +451,15 @@ holdCalls : String ->
   Int ->
   List (Connection *, Bytes) ->
   <FileWrite, Net> List (Connection *, Bytes)
-holdCalls path status lis remaining held =
-  if remaining <= 0 then
-    held
-  else match accept lis
-    Err message => panic "appview_stub: accept failed: \{message}"
-    Ok conn =>
-      holdCalls
-        path
-        status
-        lis
-        (remaining - 1)
-        ((conn, answerFor path status conn) :: held)
+holdCalls path status lis remaining0 held0 = go remaining0 held0
+  where
+    go remaining held =
+      if remaining <= 0 then
+        held
+      else match accept lis
+        Err message => panic "appview_stub: accept failed: \{message}"
+        Ok conn =>
+          go (remaining - 1) ((conn, answerFor path status conn) :: held)
 
 -- The order the held calls are answered in is not the order they arrived in,
 -- and nothing depends on it: the log is already written in arrival order by
@@ -519,37 +518,45 @@ sendRange bytes lo hi conn =
       (sendAll conn (B.sliceClamped lo hi bytes))
 
 sendPrefixes : Bytes -> Int -> List (Connection *) -> <Clock, Net> Unit
-sendPrefixes _ _ [] = ()
-sendPrefixes bytes prefix (conn :: rest) =
-  let () = sendRange bytes 0 prefix conn
-  let () = sleepMs bulkPrefixGapMs
-  sendPrefixes bytes prefix rest
+sendPrefixes bytes prefix xs0 = go xs0
+  where
+    go [] = ()
+    go (conn :: rest) =
+      let () = sendRange bytes 0 prefix conn
+      let () = sleepMs bulkPrefixGapMs
+      go rest
 
 sendEach : Bytes -> Int -> Int -> List (Connection *) -> <Net> Unit
-sendEach _ _ _ [] = ()
-sendEach bytes lo hi (conn :: rest) =
-  let () = sendRange bytes lo hi conn
-  sendEach bytes lo hi rest
+sendEach bytes lo hi xs0 = go xs0
+  where
+    go [] = ()
+    go (conn :: rest) =
+      let () = sendRange bytes lo hi conn
+      go rest
 
 -- One byte to every held call per tick, from `at` until `until`, and returns
 -- where it stopped.
 trickle : Bytes -> Int -> Int -> List (Connection *) -> <Clock, Net> Int
-trickle bytes at until conns =
-  if at >= until then
-    at
-  else
-    let () = sleepMs bulkTickMs
-    let () = sendEach bytes at (at + 1) conns
-    trickle bytes (at + 1) until conns
+trickle bytes at0 until conns = go at0
+  where
+    go at =
+      if at >= until then
+        at
+      else
+        let () = sleepMs bulkTickMs
+        let () = sendEach bytes at (at + 1) conns
+        go (at + 1)
 
 finishAll : Bytes -> Int -> List (Connection *) -> <Net> Unit
-finishAll _ _ [] = ()
-finishAll bytes from (conn :: rest) =
-  let () = sendRange bytes from (B.length bytes) conn
-  bestEffort
-    "the call is answered in full or abandoned by the PDS, and the peer may already have closed"
-    (close conn)
-  finishAll bytes from rest
+finishAll bytes from conns0 = go conns0
+  where
+    go [] = ()
+    go (conn :: rest) =
+      let () = sendRange bytes from (B.length bytes) conn
+      bestEffort
+        "the call is answered in full or abandoned by the PDS, and the peer may already have closed"
+        (close conn)
+      go rest
 
 {- | Holds `count` calls as `batch` does, then answers every one of them with a
    `size`-byte body without completing any: `prefix` bytes each, in the order

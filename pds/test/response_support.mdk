@@ -221,13 +221,15 @@ recvChunks : String ->
   Int ->
   Int ->
   <Net> Result String Bytes
-recvChunks who conn parts have need =
-  if have >= need then
-    Ok (B.concat (reverse parts))
-  else match recv conn 65536
-    Err message => Err message
-    Ok chunk =>
-      if B.isEmpty chunk then
-        Err "\{who}: connection closed mid-response"
-      else
-        recvChunks who conn (chunk :: parts) (have + B.length chunk) need
+recvChunks who conn parts0 have0 need = go parts0 have0
+  where
+    go parts have =
+      if have >= need then
+        Ok (B.concat (reverse parts))
+      else match recv conn 65536
+        Err message => Err message
+        Ok chunk =>
+          if B.isEmpty chunk then
+            Err "\{who}: connection closed mid-response"
+          else
+            go (chunk :: parts) (have + B.length chunk)

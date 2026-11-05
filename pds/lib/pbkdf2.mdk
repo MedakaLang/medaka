@@ -38,25 +38,29 @@ int32Be n = match U32.tryFromInt n
       "pbkdf2: block index \{n} is outside 0..4294967295; derived key too long"
 
 xorInto : MutBytes -> Bytes -> Int -> Unit
-xorInto acc u i =
-  if i >= MB.length acc then
-    ()
-  else
-    let () = MB.setInPlace i (U8.bitXor acc[i] u[i]) acc
-    xorInto acc u (i + 1)
+xorInto acc u i0 = go i0
+  where
+    go i =
+      if i >= MB.length acc then
+        ()
+      else
+        let () = MB.setInPlace i (U8.bitXor acc[i] u[i]) acc
+        go (i + 1)
 
 -- Folds U_2 .. U_iterations into `acc` (already seeded with U_1), each
 -- `Uj = HMAC(P, U_{j-1})`, XORing every one in (RFC 2898 §5.2 `F`). `key`
 -- is `password`'s `HmacSha256Key`, built once by the caller so every
 -- iteration reuses the same precomputed ipad/opad compressions.
 foldU : HmacSha256Key -> Int -> MutBytes -> Bytes -> Int -> MutBytes
-foldU key iterations acc prevU j =
-  if j >= iterations then
-    acc
-  else
-    let u = hmacSha256WithKey key prevU
-    let () = xorInto acc u 0
-    foldU key iterations acc u (j + 1)
+foldU key iterations acc prevU0 j0 = go prevU0 j0
+  where
+    go prevU j =
+      if j >= iterations then
+        acc
+      else
+        let u = hmacSha256WithKey key prevU
+        let () = xorInto acc u 0
+        go u (j + 1)
 
 -- One 32-byte PBKDF2 block `T_blockIndex` (RFC 2898 §5.2 `F(P, S, c, i)`),
 -- under the same `key` `foldU` reuses for every iteration.
@@ -73,16 +77,18 @@ buildBlocks : HmacSha256Key ->
   MutBytes ->
   Int ->
   MutBytes
-buildBlocks key salt iterations dkLen total out blockIndex =
-  if blockIndex > total then
-    out
-  else
-    let block = pbkdf2Block key salt iterations blockIndex
-    let offset = (blockIndex - 1) * hashBytes
-    let remaining = dkLen - offset
-    let take = min remaining hashBytes
-    let () = MB.blit block 0 out offset take
-    buildBlocks key salt iterations dkLen total out (blockIndex + 1)
+buildBlocks key salt iterations dkLen total out index0 = go index0
+  where
+    go blockIndex =
+      if blockIndex > total then
+        out
+      else
+        let block = pbkdf2Block key salt iterations blockIndex
+        let offset = (blockIndex - 1) * hashBytes
+        let remaining = dkLen - offset
+        let take = min remaining hashBytes
+        let () = MB.blit block 0 out offset take
+        go (blockIndex + 1)
 
 {- | The `dkLen`-byte key derived from `password` and `salt` over
    `iterations` rounds.
