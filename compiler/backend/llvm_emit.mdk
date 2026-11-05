@@ -1,5 +1,5 @@
+import backend.package_identity.{IdentityPlan(..), packSite}
 import backend.runtime_layout.{
-  siteFileShift, siteLineShift, siteFileBits, siteLineBits, siteColumnBits,
   ctorTagShift, reservedTypeBase, runtimeCallArgMax, closureCodeSlot,
   closureCaptureStart
 }
@@ -910,7 +910,7 @@ data Emit = Emit {
   sigMap : Ref (Option (OrdMap FnSig)),
   implsByMethod : Ref (Option (OrdMap (List CImplEntry))),
   implMethodSet : Ref (Option (OrdMap Unit)),
-  typeIdMap : Ref (Option (OrdMap Int)),
+  identity : Result (List String) IdentityPlan,
   -- the program's method tables (`EmitPlan.methodTables`)
   methodTables : MethodTables,
   -- every impl group, keyed by its position in `EmitPlan.implGroups`
@@ -944,10 +944,6 @@ data Emit = Emit {
   inlineOpen : Ref Int,
   -- how many inlinings the current outermost inlining site has opened.
   inlineSpent : Ref Int,
-  -- the trap-site file table (`siteImm`): each located file's number, and the
-  -- files in reverse numbering order.
-  siteFileNums : Ref (OrdMap Int),
-  siteFiles : Ref (List String),
   -- the trap entries called with a site (`emitTrapCall`), in first-call order,
   -- reversed; each one's `_at` declare is emitted once.
   siteTraps : Ref (List String),
@@ -1639,18 +1635,10 @@ implEntryKey : CImplEntry -> String
 implEntryKey (CImplEntry _ _ _ (CImplTagged _ key _ _ _ _ _)) = key
 implEntryKey (CImplEntry _ _ _ (CImplDefault _ _ key _ _ _ _)) = key
 
--- Physical type identifiers follow the shared declaration order.
-installTypeIds : Emit -> Unit
-installTypeIds e =
-  e.typeIdMap :=
-    Some
-      (omFromPairs
-        (reverseL (numberFrom 0 e.constructorFacts.typeOrder))
-        omEmpty)
-
-numberFrom : Int -> List String -> List (String, Int)
-numberFrom _ [] = []
-numberFrom i (x :: rest) = (x, i) :: numberFrom (i + 1) rest
+identityOf : Emit -> IdentityPlan
+identityOf e = match e.identity
+  Ok identity => identity
+  Err _ => panic "llvm: invalid identity plan"
 
 ctorTypeOf : Emit -> String -> Option String
 ctorTypeOf e name = declaredCtorOwner e.constructorFacts name
@@ -5879,17 +5867,8 @@ siteImm : Emit -> Loc -> String
 siteImm e l = intToString (sitePacked e l)
 
 sitePacked : Emit -> Loc -> Int
-sitePacked e (Loc f sl sc el ec)
-  | f == "" || sl == 1 && sc == 0 && el == 1 && ec == 0 = 0
-  | e.input.emitHalf == emitHalfPrelude = 0
-  | sl < 0
-    || sl >= shiftLeft 1 siteLineBits
-    || sc < 0
-    || sc >= shiftLeft 1 siteColumnBits = 0
-  | otherwise = match siteFileNumber e f
-    Some n =>
-      n * shiftLeft 1 siteFileShift + sl * shiftLeft 1 siteLineShift + sc
-    None => 0
+sitePacked e loc =
+  if e.input.emitHalf == emitHalfPrelude then 0 else packSite (identityOf e) loc
 
 -- A trap-site literal (`siteSentinelName` applied to a file, a line and a
 -- column) is the packed site as an Int word, 0 when it does not pack.
@@ -5909,20 +5888,6 @@ siteLiteralLocOf : List CExpr -> Option Loc
 siteLiteralLocOf [CLit (LString f), CLit (LInt line), CLit (LInt col)] =
   Some (Loc f line col line (col + 1))
 siteLiteralLocOf _ = None
-
--- [f]'s 1-based number in the site file table, assigned on first use; None once
--- the 16-bit field is full.
-siteFileNumber : Emit -> String -> Option Int
-siteFileNumber e f = match omLookup f !e.siteFileNums
-  Some n => Some n
-  None =>
-    let n = omSize !e.siteFileNums + 1
-    if n >= shiftLeft 1 siteFileBits then
-      None
-    else
-      e.siteFileNums := omInsert f n !e.siteFileNums
-      e.siteFiles := f :: !e.siteFiles
-      Some n
 
 -- `call void @<fn>(<args>)` on i64 words, or its `_at` twin with the packed
 -- [site] appended when the site is located.
@@ -5958,20 +5923,24 @@ siteTrapDeclares e =
 
 -- The site file table, a NULL-terminated array of the files' paths behind the
 -- `mdk_site_files` pointer the runtime reads (a weak null there when a program
--- defines none).  Nothing when no located trap was emitted.
+-- defines none). The prelude half never defines a table.
 siteFileTable : Emit -> List String
-siteFileTable e = match reverseL !e.siteFiles
-  [] => []
-  files =>
-    let n = listLen files
-    registerGlobal e False ".sitefiles" "[\{intToString (n + 1)} x ptr]"
-    registerGlobal e False "mdk_site_files" "ptr"
-    ["; mdk-module \{scopeProgram}"]
-      ++ siteFileStrings e 0 files
-      ++ [
-        "@.sitefiles = private unnamed_addr constant [\{intToString (n + 1)} x ptr] [\{siteFileElems 0 n}ptr null]",
-        "@mdk_site_files = constant ptr @.sitefiles",
-      ]
+siteFileTable e =
+  match (if e.input.emitHalf == emitHalfPrelude then
+    []
+  else
+    (identityOf e).orderedFiles)
+    [] => []
+    files =>
+      let n = listLen files
+      registerGlobal e False ".sitefiles" "[\{intToString (n + 1)} x ptr]"
+      registerGlobal e False "mdk_site_files" "ptr"
+      ["; mdk-module \{scopeProgram}"]
+        ++ siteFileStrings e 0 files
+        ++ [
+          "@.sitefiles = private unnamed_addr constant [\{intToString (n + 1)} x ptr] [\{siteFileElems 0 n}ptr null]",
+          "@mdk_site_files = constant ptr @.sitefiles",
+        ]
 
 -- the table's first [n] elements, from [i], each followed by ", ".
 siteFileElems : Int -> Int -> String
@@ -10391,11 +10360,11 @@ ctorOrdinal e name = match declaredCtorOrdinal e.constructorFacts name
       (map (id => (runtimeCtorFact id).ordinal) (namedRuntimeCtor name))
 
 ctorTypeId : Emit -> String -> Int
-ctorTypeId e name = match !e.typeIdMap
-  Some ids => match ctorTypeOf e name
-    Some ty => optionOr 0 (omLookup ty ids)
-    None => omSize ids
-  None => panic "llvm: typeIdMap read before install (internal error)"
+ctorTypeId e name = match ctorTypeOf e name
+  Some ty => match omLookup ty (identityOf e).types
+    Some id => id
+    None => panic ("llvm: missing type identity " ++ ty)
+  None => panic ("llvm: missing constructor owner " ++ name)
 
 -- allocate a constructor cell {tag, field…}; the field words are already emitted.
 -- Result is the cell pointer as an i64 word, typed LTCon.  A NULLARY constructor
@@ -14743,6 +14712,7 @@ programEmitConfig gapMode input plan groups = EmitStateConfig {
   trmc = plan.trmc,
   methodResults = plan.methodResults,
   constructorFacts = plan.constructorFacts,
+  identity = plan.identity,
   externRequirements = plan.externRequirements,
   dispGroups = Some plan.dispGroups,
   implGroups = plan.implGroups,
@@ -14863,6 +14833,7 @@ data EmitStateConfig = EmitStateConfig {
   trmc : TrmcVerdicts,
   methodResults : OrdMap (OrdMap MethodResultFact),
   constructorFacts : ConstructorFacts,
+  identity : Result (List String) IdentityPlan,
   externRequirements : ExternRequirements,
   dispGroups : Option (List DispGroup),
   implGroups : List ImplClauseGroup,
@@ -14955,7 +14926,7 @@ buildEmitState cfg input groups ctorArs ctorTypes implEntries facts =
     sigMap = Ref None,
     implsByMethod = Ref None,
     implMethodSet = Ref None,
-    typeIdMap = Ref None,
+    identity = cfg.identity,
     methodTables = cfg.methodTables,
     implGroupAt = Ref omEmpty,
     slotCache = Ref omEmpty,
@@ -14971,8 +14942,6 @@ buildEmitState cfg input groups ctorArs ctorTypes implEntries facts =
     constGlobals = Ref omEmpty,
     inlineOpen = Ref 0,
     inlineSpent = Ref 0,
-    siteFileNums = Ref omEmpty,
-    siteFiles = Ref [],
     siteTraps = Ref [],
     symbols =
       Ref
@@ -14994,7 +14963,6 @@ buildEmitState cfg input groups ctorArs ctorTypes implEntries facts =
   -- program.  Reads of these lower to `call @mdk_force_<x>()`; every other global
   -- stays on the byte-identical eager prologue.
   installLazyGlobalMap e cfg.lazyNames
-  installTypeIds e
   installSigMap e (programSigs e (fnBinds groups))
   -- #990: group the flat impl-entry list by interface method ONCE, so every per-site
   -- dispatch scan (implsOf) is O(bucket) not
@@ -15404,6 +15372,7 @@ emitProgramGaps input plan (cp@(CProgram groups ctorArs ctorTypes implEntries _ 
     trmc = plan.trmc,
     methodResults = plan.methodResults,
     constructorFacts = plan.constructorFacts,
+    identity = plan.identity,
     externRequirements = plan.externRequirements,
     dispGroups = None,
     implGroups = plan.implGroups,
