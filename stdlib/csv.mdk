@@ -105,23 +105,25 @@ scan : String ->
   Option (String, Int) ->
   List String ->
   (List String, Option (String, Int))
-scan _ _ fs pend [] = (fs, pend)
-scan dl n fs pend (p :: rest) =
-  let raw = match pend
-    None => p
-    Some (r, _) => r ++ p
-  let opened = match pend
-    None => n
-    Some (_, m) => m
-  let last = isEmpty rest
-  let shown = if last then stripCR raw else raw
-  match field shown
-    Some v => scan dl n (v :: fs) None rest
-    None =>
-      if last then
-        (fs, Some (raw ++ "\n", opened))
-      else
-        scan dl n fs (Some (raw ++ dl, opened)) rest
+scan dl n fs0 pend0 xs0 = go fs0 pend0 xs0
+  where
+    go fs pend [] = (fs, pend)
+    go fs pend (p :: rest) =
+      let raw = match pend
+        None => p
+        Some (r, _) => r ++ p
+      let opened = match pend
+        None => n
+        Some (_, m) => m
+      let last = isEmpty rest
+      let shown = if last then stripCR raw else raw
+      match field shown
+        Some v => go (v :: fs) None rest
+        None =>
+          if last then
+            (fs, Some (raw ++ "\n", opened))
+          else
+            go fs (Some (raw ++ dl, opened)) rest
 
 -- The value of a complete field, or None when it opens a quote that is still
 -- open. An unquoted field is its own value.

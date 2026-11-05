@@ -46,11 +46,13 @@ byteToHexChars b upper =
   (digitChar hi upper, digitChar lo upper)
 
 encodeGo : Bytes -> Int -> Bool -> List Char -> List Char
-encodeGo bs i upper acc
-  | i < 0 = acc
-  | otherwise =
-    let (hi, lo) = byteToHexChars (U8.toInt bs[i]) upper
-    encodeGo bs (i - 1) upper (hi :: lo :: acc)
+encodeGo bs i0 upper acc0 = go i0 acc0
+  where
+    go i acc
+      | i < 0 = acc
+      | otherwise =
+        let (hi, lo) = byteToHexChars (U8.toInt bs[i]) upper
+        go (i - 1) (hi :: lo :: acc)
 
 encodeAs : Bytes -> Bool -> String
 encodeAs bs upper =
@@ -91,13 +93,15 @@ encodeString s = encode (encodeUtf8 s)
 -- the accumulator instead would be linear in the bytes already decoded,
 -- making the whole decode quadratic in the input's length.
 decodeGo : Array Char -> Int -> Int -> List Int -> Result String (List Int)
-decodeGo chars i n acc
-  | i >= n = Ok (reverse acc)
-  | otherwise = match fromDigit (charAt i chars)
-    None => Err "hex.decode: invalid hex digit"
-    Some hi => match fromDigit (charAt (i + 1) chars)
-      None => Err "hex.decode: invalid hex digit"
-      Some lo => decodeGo chars (i + 2) n (hi * 16 + lo :: acc)
+decodeGo chars i0 n acc0 = go i0 acc0
+  where
+    go i acc
+      | i >= n = Ok (reverse acc)
+      | otherwise = match fromDigit (charAt i chars)
+        None => Err "hex.decode: invalid hex digit"
+        Some hi => match fromDigit (charAt (i + 1) chars)
+          None => Err "hex.decode: invalid hex digit"
+          Some lo => go (i + 2) (hi * 16 + lo :: acc)
 
 {- | The bytes written in a hex string, as a `Bytes`.
 

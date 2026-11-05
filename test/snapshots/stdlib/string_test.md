@@ -1,5 +1,5 @@
 # META
-source_lines=1231
+source_lines=1235
 stages=DESUGAR,MARK
 # SOURCE
 -- Tests for the substring search and replace functions in `stdlib/string.mdk`.
@@ -477,13 +477,15 @@ refCountOccurrences needle hay
   | otherwise = refCountGo needle hay 0 0
 
 refCountGo : String -> String -> Int -> Int -> Int
-refCountGo needle hay i acc
-  | i + stringLength needle > stringLength hay = acc
-  -- Bound: reference oracle over short test strings, kept as the codepoint definition.
-  -- lint-disable-next-line rule-reslice-in-loop
-  | stringSlice i (i + stringLength needle) hay == needle =
-    refCountGo needle hay (i + stringLength needle) (acc + 1)
-  | otherwise = refCountGo needle hay (i + 1) acc
+refCountGo needle hay i0 acc0 = go i0 acc0
+  where
+    go i acc
+      | i + stringLength needle > stringLength hay = acc
+      -- Bound: reference oracle over short test strings, kept as the codepoint definition.
+      -- lint-disable-next-line rule-reslice-in-loop
+      | stringSlice i (i + stringLength needle) hay == needle =
+        go (i + stringLength needle) (acc + 1)
+      | otherwise = go (i + 1) acc
 
 refLastIndexOf : String -> String -> Option Int
 -- Oracle: the codepoint definition the native extern replaced, kept on purpose.
@@ -493,13 +495,15 @@ refLastIndexOf needle hay
   | otherwise = refLastGo needle hay 0 None
 
 refLastGo : String -> String -> Int -> Option Int -> Option Int
-refLastGo needle hay i acc
-  | i + stringLength needle > stringLength hay = acc
-  -- Bound: reference oracle over short test strings, kept as the codepoint definition.
-  -- lint-disable-next-line rule-reslice-in-loop
-  | stringSlice i (i + stringLength needle) hay == needle =
-    refLastGo needle hay (i + 1) (Some i)
-  | otherwise = refLastGo needle hay (i + 1) acc
+refLastGo needle hay i0 acc0 = go i0 acc0
+  where
+    go i acc
+      | i + stringLength needle > stringLength hay = acc
+      -- Bound: reference oracle over short test strings, kept as the codepoint definition.
+      -- lint-disable-next-line rule-reslice-in-loop
+      | stringSlice i (i + stringLength needle) hay == needle =
+        go (i + 1) (Some i)
+      | otherwise = go (i + 1) acc
 
 edgePairs : List (String, String)
 edgePairs = [
@@ -1364,11 +1368,11 @@ test "indent with an empty prefix leaves the text alone" =
 (DTypeSig false "refCountOccurrences" (TyFun (TyCon "String") (TyFun (TyCon "String") (TyCon "Int"))))
 (DFunDef false "refCountOccurrences" ((PVar "needle") (PVar "hay")) (EIf (EBinOp "==" (EVar "needle") (ELit (LString ""))) (ELit (LInt 0)) (EIf (EVar "otherwise") (EApp (EApp (EApp (EApp (EVar "refCountGo") (EVar "needle")) (EVar "hay")) (ELit (LInt 0))) (ELit (LInt 0))) (EApp (EVar "__fallthrough__") (ELit LUnit)))))
 (DTypeSig false "refCountGo" (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyCon "Int"))))))
-(DFunDef false "refCountGo" ((PVar "needle") (PVar "hay") (PVar "i") (PVar "acc")) (EIf (EBinOp ">" (EBinOp "+" (EVar "i") (EApp (EVar "stringLength") (EVar "needle"))) (EApp (EVar "stringLength") (EVar "hay"))) (EVar "acc") (EIf (EBinOp "==" (EApp (EApp (EApp (EVar "stringSlice") (EVar "i")) (EBinOp "+" (EVar "i") (EApp (EVar "stringLength") (EVar "needle")))) (EVar "hay")) (EVar "needle")) (EApp (EApp (EApp (EApp (EVar "refCountGo") (EVar "needle")) (EVar "hay")) (EBinOp "+" (EVar "i") (EApp (EVar "stringLength") (EVar "needle")))) (EBinOp "+" (EVar "acc") (ELit (LInt 1)))) (EIf (EVar "otherwise") (EApp (EApp (EApp (EApp (EVar "refCountGo") (EVar "needle")) (EVar "hay")) (EBinOp "+" (EVar "i") (ELit (LInt 1)))) (EVar "acc")) (EApp (EVar "__fallthrough__") (ELit LUnit))))))
+(DFunDef false "refCountGo" ((PVar "needle") (PVar "hay") (PVar "i0") (PVar "acc0")) (ELetGroup ((lgb "go" (clause ((PVar "i") (PVar "acc")) (EIf (EBinOp ">" (EBinOp "+" (EVar "i") (EApp (EVar "stringLength") (EVar "needle"))) (EApp (EVar "stringLength") (EVar "hay"))) (EVar "acc") (EIf (EBinOp "==" (EApp (EApp (EApp (EVar "stringSlice") (EVar "i")) (EBinOp "+" (EVar "i") (EApp (EVar "stringLength") (EVar "needle")))) (EVar "hay")) (EVar "needle")) (EApp (EApp (EVar "go") (EBinOp "+" (EVar "i") (EApp (EVar "stringLength") (EVar "needle")))) (EBinOp "+" (EVar "acc") (ELit (LInt 1)))) (EIf (EVar "otherwise") (EApp (EApp (EVar "go") (EBinOp "+" (EVar "i") (ELit (LInt 1)))) (EVar "acc")) (EApp (EVar "__fallthrough__") (ELit LUnit)))))))) (EApp (EApp (EVar "go") (EVar "i0")) (EVar "acc0"))))
 (DTypeSig false "refLastIndexOf" (TyFun (TyCon "String") (TyFun (TyCon "String") (TyApp (TyCon "Option") (TyCon "Int")))))
 (DFunDef false "refLastIndexOf" ((PVar "needle") (PVar "hay")) (EIf (EBinOp "==" (EVar "needle") (ELit (LString ""))) (EApp (EVar "Some") (EApp (EVar "stringLength") (EVar "hay"))) (EIf (EVar "otherwise") (EApp (EApp (EApp (EApp (EVar "refLastGo") (EVar "needle")) (EVar "hay")) (ELit (LInt 0))) (EVar "None")) (EApp (EVar "__fallthrough__") (ELit LUnit)))))
 (DTypeSig false "refLastGo" (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyCon "Int") (TyFun (TyApp (TyCon "Option") (TyCon "Int")) (TyApp (TyCon "Option") (TyCon "Int")))))))
-(DFunDef false "refLastGo" ((PVar "needle") (PVar "hay") (PVar "i") (PVar "acc")) (EIf (EBinOp ">" (EBinOp "+" (EVar "i") (EApp (EVar "stringLength") (EVar "needle"))) (EApp (EVar "stringLength") (EVar "hay"))) (EVar "acc") (EIf (EBinOp "==" (EApp (EApp (EApp (EVar "stringSlice") (EVar "i")) (EBinOp "+" (EVar "i") (EApp (EVar "stringLength") (EVar "needle")))) (EVar "hay")) (EVar "needle")) (EApp (EApp (EApp (EApp (EVar "refLastGo") (EVar "needle")) (EVar "hay")) (EBinOp "+" (EVar "i") (ELit (LInt 1)))) (EApp (EVar "Some") (EVar "i"))) (EIf (EVar "otherwise") (EApp (EApp (EApp (EApp (EVar "refLastGo") (EVar "needle")) (EVar "hay")) (EBinOp "+" (EVar "i") (ELit (LInt 1)))) (EVar "acc")) (EApp (EVar "__fallthrough__") (ELit LUnit))))))
+(DFunDef false "refLastGo" ((PVar "needle") (PVar "hay") (PVar "i0") (PVar "acc0")) (ELetGroup ((lgb "go" (clause ((PVar "i") (PVar "acc")) (EIf (EBinOp ">" (EBinOp "+" (EVar "i") (EApp (EVar "stringLength") (EVar "needle"))) (EApp (EVar "stringLength") (EVar "hay"))) (EVar "acc") (EIf (EBinOp "==" (EApp (EApp (EApp (EVar "stringSlice") (EVar "i")) (EBinOp "+" (EVar "i") (EApp (EVar "stringLength") (EVar "needle")))) (EVar "hay")) (EVar "needle")) (EApp (EApp (EVar "go") (EBinOp "+" (EVar "i") (ELit (LInt 1)))) (EApp (EVar "Some") (EVar "i"))) (EIf (EVar "otherwise") (EApp (EApp (EVar "go") (EBinOp "+" (EVar "i") (ELit (LInt 1)))) (EVar "acc")) (EApp (EVar "__fallthrough__") (ELit LUnit)))))))) (EApp (EApp (EVar "go") (EVar "i0")) (EVar "acc0"))))
 (DTypeSig false "edgePairs" (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "String"))))
 (DFunDef false "edgePairs" () (EListLit (ETuple (ELit (LString "")) (ELit (LString ""))) (ETuple (ELit (LString "")) (ELit (LString "abc"))) (ETuple (ELit (LString "a")) (ELit (LString ""))) (ETuple (ELit (LString "aa")) (ELit (LString "aaaa"))) (ETuple (ELit (LString "aa")) (ELit (LString "aaa"))) (ETuple (ELit (LString "aa")) (ELit (LString "a"))) (ETuple (ELit (LString "aba")) (ELit (LString "ababa"))) (ETuple (ELit (LString "ab")) (ELit (LString "xabab"))) (ETuple (ELit (LString "x")) (ELit (LString "xxxxx"))) (ETuple (ELit (LString "ll")) (ELit (LString "lllll"))) (ETuple (ELit (LString "z")) (ELit (LString "hello"))) (ETuple (ELit (LString "é")) (ELit (LString "éaé"))) (ETuple (ELit (LString "é")) (ELit (LString "ééé"))) (ETuple (ELit (LString "éé")) (ELit (LString "ééé"))) (ETuple (ELit (LString "日本")) (ELit (LString "日本語日本"))) (ETuple (ELit (LString "日")) (ELit (LString "a日日b"))) (ETuple (ELit (LString "😀")) (ELit (LString "a😀😀b"))) (ETuple (ELit (LString "ééé")) (ELit (LString "éé"))) (ETuple (ELit (LString "abc")) (ELit (LString "ab"))) (ETuple (ELit (LString "é")) (ELit (LString "")))))
 (DTypeSig false "refPairs" (TyFun (TyFun (TyCon "String") (TyFun (TyCon "String") (TyVar "a"))) (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "String"))) (TyApp (TyCon "List") (TyVar "a")))))
@@ -1675,11 +1679,11 @@ test "indent with an empty prefix leaves the text alone" =
 (DTypeSig false "refCountOccurrences" (TyFun (TyCon "String") (TyFun (TyCon "String") (TyCon "Int"))))
 (DFunDef false "refCountOccurrences" ((PVar "needle") (PVar "hay")) (EIf (EBinOp "==" (EVar "needle") (ELit (LString ""))) (ELit (LInt 0)) (EIf (EVar "otherwise") (EApp (EApp (EApp (EApp (EVar "refCountGo") (EVar "needle")) (EVar "hay")) (ELit (LInt 0))) (ELit (LInt 0))) (EApp (EVar "__fallthrough__") (ELit LUnit)))))
 (DTypeSig false "refCountGo" (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyCon "Int"))))))
-(DFunDef false "refCountGo" ((PVar "needle") (PVar "hay") (PVar "i") (PVar "acc")) (EIf (EBinOp ">" (EBinOp "+" (EVar "i") (EApp (EVar "stringLength") (EVar "needle"))) (EApp (EVar "stringLength") (EVar "hay"))) (EVar "acc") (EIf (EBinOp "==" (EApp (EApp (EApp (EVar "stringSlice") (EVar "i")) (EBinOp "+" (EVar "i") (EApp (EVar "stringLength") (EVar "needle")))) (EVar "hay")) (EVar "needle")) (EApp (EApp (EApp (EApp (EVar "refCountGo") (EVar "needle")) (EVar "hay")) (EBinOp "+" (EVar "i") (EApp (EVar "stringLength") (EVar "needle")))) (EBinOp "+" (EVar "acc") (ELit (LInt 1)))) (EIf (EVar "otherwise") (EApp (EApp (EApp (EApp (EVar "refCountGo") (EVar "needle")) (EVar "hay")) (EBinOp "+" (EVar "i") (ELit (LInt 1)))) (EVar "acc")) (EApp (EVar "__fallthrough__") (ELit LUnit))))))
+(DFunDef false "refCountGo" ((PVar "needle") (PVar "hay") (PVar "i0") (PVar "acc0")) (ELetGroup ((lgb "go" (clause ((PVar "i") (PVar "acc")) (EIf (EBinOp ">" (EBinOp "+" (EVar "i") (EApp (EVar "stringLength") (EVar "needle"))) (EApp (EVar "stringLength") (EVar "hay"))) (EVar "acc") (EIf (EBinOp "==" (EApp (EApp (EApp (EVar "stringSlice") (EVar "i")) (EBinOp "+" (EVar "i") (EApp (EVar "stringLength") (EVar "needle")))) (EVar "hay")) (EVar "needle")) (EApp (EApp (EVar "go") (EBinOp "+" (EVar "i") (EApp (EVar "stringLength") (EVar "needle")))) (EBinOp "+" (EVar "acc") (ELit (LInt 1)))) (EIf (EVar "otherwise") (EApp (EApp (EVar "go") (EBinOp "+" (EVar "i") (ELit (LInt 1)))) (EVar "acc")) (EApp (EVar "__fallthrough__") (ELit LUnit)))))))) (EApp (EApp (EVar "go") (EVar "i0")) (EVar "acc0"))))
 (DTypeSig false "refLastIndexOf" (TyFun (TyCon "String") (TyFun (TyCon "String") (TyApp (TyCon "Option") (TyCon "Int")))))
 (DFunDef false "refLastIndexOf" ((PVar "needle") (PVar "hay")) (EIf (EBinOp "==" (EVar "needle") (ELit (LString ""))) (EApp (EVar "Some") (EApp (EVar "stringLength") (EVar "hay"))) (EIf (EVar "otherwise") (EApp (EApp (EApp (EApp (EVar "refLastGo") (EVar "needle")) (EVar "hay")) (ELit (LInt 0))) (EVar "None")) (EApp (EVar "__fallthrough__") (ELit LUnit)))))
 (DTypeSig false "refLastGo" (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyCon "Int") (TyFun (TyApp (TyCon "Option") (TyCon "Int")) (TyApp (TyCon "Option") (TyCon "Int")))))))
-(DFunDef false "refLastGo" ((PVar "needle") (PVar "hay") (PVar "i") (PVar "acc")) (EIf (EBinOp ">" (EBinOp "+" (EVar "i") (EApp (EVar "stringLength") (EVar "needle"))) (EApp (EVar "stringLength") (EVar "hay"))) (EVar "acc") (EIf (EBinOp "==" (EApp (EApp (EApp (EVar "stringSlice") (EVar "i")) (EBinOp "+" (EVar "i") (EApp (EVar "stringLength") (EVar "needle")))) (EVar "hay")) (EVar "needle")) (EApp (EApp (EApp (EApp (EVar "refLastGo") (EVar "needle")) (EVar "hay")) (EBinOp "+" (EVar "i") (ELit (LInt 1)))) (EApp (EVar "Some") (EVar "i"))) (EIf (EVar "otherwise") (EApp (EApp (EApp (EApp (EVar "refLastGo") (EVar "needle")) (EVar "hay")) (EBinOp "+" (EVar "i") (ELit (LInt 1)))) (EVar "acc")) (EApp (EVar "__fallthrough__") (ELit LUnit))))))
+(DFunDef false "refLastGo" ((PVar "needle") (PVar "hay") (PVar "i0") (PVar "acc0")) (ELetGroup ((lgb "go" (clause ((PVar "i") (PVar "acc")) (EIf (EBinOp ">" (EBinOp "+" (EVar "i") (EApp (EVar "stringLength") (EVar "needle"))) (EApp (EVar "stringLength") (EVar "hay"))) (EVar "acc") (EIf (EBinOp "==" (EApp (EApp (EApp (EVar "stringSlice") (EVar "i")) (EBinOp "+" (EVar "i") (EApp (EVar "stringLength") (EVar "needle")))) (EVar "hay")) (EVar "needle")) (EApp (EApp (EVar "go") (EBinOp "+" (EVar "i") (ELit (LInt 1)))) (EApp (EVar "Some") (EVar "i"))) (EIf (EVar "otherwise") (EApp (EApp (EVar "go") (EBinOp "+" (EVar "i") (ELit (LInt 1)))) (EVar "acc")) (EApp (EVar "__fallthrough__") (ELit LUnit)))))))) (EApp (EApp (EVar "go") (EVar "i0")) (EVar "acc0"))))
 (DTypeSig false "edgePairs" (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "String"))))
 (DFunDef false "edgePairs" () (EListLit (ETuple (ELit (LString "")) (ELit (LString ""))) (ETuple (ELit (LString "")) (ELit (LString "abc"))) (ETuple (ELit (LString "a")) (ELit (LString ""))) (ETuple (ELit (LString "aa")) (ELit (LString "aaaa"))) (ETuple (ELit (LString "aa")) (ELit (LString "aaa"))) (ETuple (ELit (LString "aa")) (ELit (LString "a"))) (ETuple (ELit (LString "aba")) (ELit (LString "ababa"))) (ETuple (ELit (LString "ab")) (ELit (LString "xabab"))) (ETuple (ELit (LString "x")) (ELit (LString "xxxxx"))) (ETuple (ELit (LString "ll")) (ELit (LString "lllll"))) (ETuple (ELit (LString "z")) (ELit (LString "hello"))) (ETuple (ELit (LString "é")) (ELit (LString "éaé"))) (ETuple (ELit (LString "é")) (ELit (LString "ééé"))) (ETuple (ELit (LString "éé")) (ELit (LString "ééé"))) (ETuple (ELit (LString "日本")) (ELit (LString "日本語日本"))) (ETuple (ELit (LString "日")) (ELit (LString "a日日b"))) (ETuple (ELit (LString "😀")) (ELit (LString "a😀😀b"))) (ETuple (ELit (LString "ééé")) (ELit (LString "éé"))) (ETuple (ELit (LString "abc")) (ELit (LString "ab"))) (ETuple (ELit (LString "é")) (ELit (LString "")))))
 (DTypeSig false "refPairs" (TyFun (TyFun (TyCon "String") (TyFun (TyCon "String") (TyVar "a"))) (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "String"))) (TyApp (TyCon "List") (TyVar "a")))))

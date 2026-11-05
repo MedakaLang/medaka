@@ -1,5 +1,5 @@
 # META
-source_lines=2464
+source_lines=2490
 stages=DESUGAR,MARK
 # SOURCE
 {- | HTTP/1.1 message framing: request parsing, response building, and
@@ -373,11 +373,13 @@ isTokenByte byte =
     || byte == 126
 
 allToken : Bytes -> Int -> Int -> Bool
-allToken input pos end =
-  if pos >= end then
-    True
-  else
-    isTokenByte (byteAt input pos) && allToken input (pos + 1) end
+allToken input pos0 end = go pos0
+  where
+    go pos =
+      if pos >= end then
+        True
+      else
+        isTokenByte (byteAt input pos) && go (pos + 1)
 
 isHexByte : Int -> Bool
 isHexByte byte =
@@ -410,28 +412,30 @@ isSubDelimiterByte byte =
     || byte == 61
 
 validTarget : Bytes -> Int -> Int -> Bool -> Bool
-validTarget input pos end query =
-  if pos >= end then
-    True
-  else
-    let byte = byteAt input pos
-    if byte == 37 then
-      pos + 2 < end
-        && isHexByte (byteAt input (pos + 1))
-        && isHexByte (byteAt input (pos + 2))
-        && validTarget input (pos + 3) end query
-    else
-      let pchar =
-        isUnreservedByte byte
-          || isSubDelimiterByte byte
-          || byte == 58
-          || byte == 64
-      if pchar || byte == 47 || query && byte == 63 then
-        validTarget input (pos + 1) end query
-      else if not query && byte == 63 then
-        validTarget input (pos + 1) end True
+validTarget input pos0 end query0 = go pos0 query0
+  where
+    go pos query =
+      if pos >= end then
+        True
       else
-        False
+        let byte = byteAt input pos
+        if byte == 37 then
+          pos + 2 < end
+            && isHexByte (byteAt input (pos + 1))
+            && isHexByte (byteAt input (pos + 2))
+            && go (pos + 3) query
+        else
+          let pchar =
+            isUnreservedByte byte
+              || isSubDelimiterByte byte
+              || byte == 58
+              || byte == 64
+          if pchar || byte == 47 || query && byte == 63 then
+            go (pos + 1) query
+          else if not query && byte == 63 then
+            go (pos + 1) True
+          else
+            False
 
 exactAsciiAt : Bytes -> Int -> String -> Bool
 exactAsciiAt input start expected =
@@ -440,25 +444,28 @@ exactAsciiAt input start expected =
   start + size <= B.length input && slice input start (start + size) == wanted
 
 validFieldValue : Bytes -> Int -> Int -> Bool
-validFieldValue input pos end =
-  if pos >= end then
-    True
-  else
-    let byte = byteAt input pos
-    (byte == 9 || byte >= 32 && byte /= 127)
-      && validFieldValue input (pos + 1) end
+validFieldValue input pos0 end = go pos0
+  where
+    go pos =
+      if pos >= end then
+        True
+      else
+        let byte = byteAt input pos
+        (byte == 9 || byte >= 32 && byte /= 127) && go (pos + 1)
 
 -- | The index of the first `wanted` in `value[pos, end)`, or `None`. No
 -- byte at or past `end` is read.
 export
 findByte : Bytes -> Int -> Int -> Int -> Option Int
-findByte value pos end wanted =
-  if pos >= end then
-    None
-  else if byteAt value pos == wanted then
-    Some pos
-  else
-    findByte value (pos + 1) end wanted
+findByte value pos0 end wanted = go pos0
+  where
+    go pos =
+      if pos >= end then
+        None
+      else if byteAt value pos == wanted then
+        Some pos
+      else
+        go (pos + 1)
 
 -- `avail` is how many bytes of `input` the caller has actually received; the
 -- search runs out of input there, not at `B.length input`.
@@ -469,24 +476,28 @@ findCrlfChecked : String ->
   Int ->
   Int ->
   Result FrameError Int
-findCrlfChecked label input avail start pos limit =
-  if pos - start > limit then
-    Err (Fatal (HttpResourceExcess "http: \{label} exceeds its resource limit"))
-  else if pos >= avail then
-    incomplete "http: truncated \{label}; expected CRLF"
-  else if byteAt input pos == 10 then
-    malformed "http: bare LF in \{label}"
-  else if byteAt input pos == 13 then
-    -- A trailing CR is the one-shot parser's bare CR and a stream's half-read
-    -- CRLF, so it keeps that diagnostic while staying completable.
-    if pos + 1 >= avail then
-      incomplete "http: bare CR in \{label}"
-    else if byteAt input (pos + 1) /= 10 then
-      malformed "http: bare CR in \{label}"
-    else
-      Ok pos
-  else
-    findCrlfChecked label input avail start (pos + 1) limit
+findCrlfChecked label input avail start pos0 limit = go pos0
+  where
+    go pos =
+      if pos - start > limit then
+        Err
+          (Fatal
+            (HttpResourceExcess "http: \{label} exceeds its resource limit"))
+      else if pos >= avail then
+        incomplete "http: truncated \{label}; expected CRLF"
+      else if byteAt input pos == 10 then
+        malformed "http: bare LF in \{label}"
+      else if byteAt input pos == 13 then
+        -- A trailing CR is the one-shot parser's bare CR and a stream's half-read
+        -- CRLF, so it keeps that diagnostic while staying completable.
+        if pos + 1 >= avail then
+          incomplete "http: bare CR in \{label}"
+        else if byteAt input (pos + 1) /= 10 then
+          malformed "http: bare CR in \{label}"
+        else
+          Ok pos
+      else
+        go (pos + 1)
 
 -- `cursor` is where the CRLF search resumes; it is `start` for a fresh scan
 -- and a later, already-searched offset when a suspended scan continues.
@@ -536,22 +547,26 @@ parseRequestLine input avail start cursor = do
 -- a tab, or `end` when they all are.
 export
 trimLeftOws : Bytes -> Int -> Int -> Int
-trimLeftOws value pos end =
-  if pos < end && (byteAt value pos == 32 || byteAt value pos == 9) then
-    trimLeftOws value (pos + 1) end
-  else
-    pos
+trimLeftOws value pos0 end = go pos0
+  where
+    go pos =
+      if pos < end && (byteAt value pos == 32 || byteAt value pos == 9) then
+        go (pos + 1)
+      else
+        pos
 
 -- | The index one past the last byte in `value[start, end)` that is not a
 -- space or a tab, or `start` when they all are.
 export
 trimRightOws : Bytes -> Int -> Int -> Int
-trimRightOws value start end =
-  if end > start
-    && (byteAt value (end - 1) == 32 || byteAt value (end - 1) == 9) then
-    trimRightOws value start (end - 1)
-  else
-    end
+trimRightOws value start end0 = go end0
+  where
+    go end =
+      if end > start
+        && (byteAt value (end - 1) == 32 || byteAt value (end - 1) == 9) then
+        go (end - 1)
+      else
+        end
 
 parseHeaderLine : Bytes -> Int -> Int -> Result FrameError Header
 parseHeaderLine input start end =
@@ -633,27 +648,14 @@ parseFieldsChecked : Bytes ->
   Bool ->
   List Header ->
   Result FrameError HeaderBlock
-parseFieldsChecked input pos sectionStart priorBytes count trailer acc = do
-  step <- fieldStep
-    input
-    (B.length input)
-    pos
-    pos
-    sectionStart
-    priorBytes
-    count
-    trailer
-  match step
-    FieldDone next totalBytes => Ok (HeaderBlock (reverse acc) next totalBytes)
-    FieldMore field next =>
-      parseFieldsChecked
-        input
-        next
-        sectionStart
-        priorBytes
-        (count + 1)
-        trailer
-        (field :: acc)
+parseFieldsChecked inp p0 secBeg prior c0 trailer a0 = go p0 c0 a0
+  where
+    go pos count acc = do
+      step <- fieldStep inp (B.length inp) pos pos secBeg prior count trailer
+      match step
+        FieldDone next totalBytes =>
+          Ok (HeaderBlock (reverse acc) next totalBytes)
+        FieldMore field next => go next (count + 1) (field :: acc)
 
 {- | The fields of the header or trailer section starting at `pos`, and the
    offset just past the blank line that ends it.
@@ -680,14 +682,16 @@ findNamed wanted ((Header name value) :: rest) =
   if name == wanted then Some value else findNamed wanted rest
 
 asciiEqualCiGo : Bytes -> Bytes -> Int -> Bool
-asciiEqualCiGo value expected i =
-  if i >= B.length value then
-    i == B.length expected
-  else
-    i < B.length expected
-      && byteAt value i <= 127
-      && lowerByte (byteAt value i) == lowerByte (byteAt expected i)
-      && asciiEqualCiGo value expected (i + 1)
+asciiEqualCiGo value expected i0 = go i0
+  where
+    go i =
+      if i >= B.length value then
+        i == B.length expected
+      else
+        i < B.length expected
+          && byteAt value i <= 127
+          && lowerByte (byteAt value i) == lowerByte (byteAt expected i)
+          && go (i + 1)
 
 asciiEqualCi : Bytes -> String -> Bool
 asciiEqualCi value expected = asciiEqualCiGo value (encodeUtf8 expected) 0
@@ -742,11 +746,10 @@ selectBodyMode headers =
     Ok NoBody
 
 scanTokenEnd : Bytes -> Int -> Int -> Int
-scanTokenEnd value pos end =
-  if pos < end && isTokenByte (byteAt value pos) then
-    scanTokenEnd value (pos + 1) end
-  else
-    pos
+scanTokenEnd value pos0 end = go pos0
+  where
+    go pos =
+      if pos < end && isTokenByte (byteAt value pos) then go (pos + 1) else pos
 
 parseConnectionValue : Bytes -> Int -> Bool -> Result FrameError Bool
 parseConnectionValue value pos sawClose =
@@ -779,85 +782,92 @@ keepAliveFromHeaders ((Header name value) :: rest) = do
     Ok (restKeepAlive && not closes)
 
 validRegName : Bytes -> Int -> Int -> Bool
-validRegName value pos end =
-  if pos >= end then
-    True
-  else
-    let byte = byteAt value pos
-    if byte == 37 then
-      pos + 2 < end
-        && isHexByte (byteAt value (pos + 1))
-        && isHexByte (byteAt value (pos + 2))
-        && validRegName value (pos + 3) end
-    else
-      (isUnreservedByte byte || isSubDelimiterByte byte)
-        && validRegName value (pos + 1) end
+validRegName value pos0 end = go pos0
+  where
+    go pos =
+      if pos >= end then
+        True
+      else
+        let byte = byteAt value pos
+        if byte == 37 then
+          pos + 2 < end
+            && isHexByte (byteAt value (pos + 1))
+            && isHexByte (byteAt value (pos + 2))
+            && go (pos + 3)
+        else
+          (isUnreservedByte byte || isSubDelimiterByte byte) && go (pos + 1)
 
 allDigits : Bytes -> Int -> Int -> Bool
-allDigits value pos end =
-  if pos >= end then
-    True
-  else
-    byteAt value pos >= 48
-      && byteAt value pos <= 57
-      && allDigits value (pos + 1) end
+allDigits value pos0 end = go pos0
+  where
+    go pos =
+      if pos >= end then
+        True
+      else
+        byteAt value pos >= 48 && byteAt value pos <= 57 && go (pos + 1)
 
 decimalValue : Bytes -> Int -> Int -> Int -> Int
-decimalValue value pos end acc =
-  if pos >= end then
-    acc
-  else
-    decimalValue value (pos + 1) end (acc * 10 + byteAt value pos - 48)
+decimalValue value pos0 end acc0 = go pos0 acc0
+  where
+    go pos acc =
+      if pos >= end then
+        acc
+      else
+        go (pos + 1) (acc * 10 + byteAt value pos - 48)
 
 validIpv4 : Bytes -> Int -> Int -> Int -> Bool
-validIpv4 value start end parts =
-  if parts >= 4 || start >= end then
-    False
-  else
-    let dot = optionOr end (findByte value start end 46)
-    let size = dot - start
-    let validPart =
-      size >= 1
-        && size <= 3
-        && allDigits value start dot
-        && decimalValue value start dot 0 <= 255
-        && (size == 1 || byteAt value start /= 48)
-    if not validPart then
-      False
-    else if dot == end then
-      parts == 3
-    else
-      validIpv4 value (dot + 1) end (parts + 1)
+validIpv4 value start0 end parts0 = go start0 parts0
+  where
+    go start parts =
+      if parts >= 4 || start >= end then
+        False
+      else
+        let dot = optionOr end (findByte value start end 46)
+        let size = dot - start
+        let validPart =
+          size >= 1
+            && size <= 3
+            && allDigits value start dot
+            && decimalValue value start dot 0 <= 255
+            && (size == 1 || byteAt value start /= 48)
+        if not validPart then
+          False
+        else if dot == end then
+          parts == 3
+        else
+          go (dot + 1) (parts + 1)
 
 allHex : Bytes -> Int -> Int -> Bool
-allHex value pos end =
-  if pos >= end then
-    True
-  else
-    isHexByte (byteAt value pos) && allHex value (pos + 1) end
+allHex value pos0 end = go pos0
+  where
+    go pos =
+      if pos >= end then True else isHexByte (byteAt value pos) && go (pos + 1)
 
 validIpv6Go : Bytes -> Int -> Int -> Int -> Bool -> Bool
-validIpv6Go value pos end groups compressed =
-  if pos >= end then
-    if compressed then groups < 8 else groups == 8
-  else
-    let colon = optionOr end (findByte value pos end 58)
-    if colon == pos then
-      False
-    else
-      let dot = findByte value pos colon 46
-      let componentGroups = match dot
-        None => if colon - pos <= 4 && allHex value pos colon then 1 else 9
-        Some _ => if colon == end && validIpv4 value pos colon 0 then 2 else 9
-      let nextGroups = groups + componentGroups
-      if nextGroups > 8 then
-        False
-      else if colon == end then
-        if compressed then nextGroups < 8 else nextGroups == 8
-      else if colon + 1 < end && byteAt value (colon + 1) == 58 then
-        not compressed && validIpv6Go value (colon + 2) end nextGroups True
+validIpv6Go value pos0 end groups0 compressed0 = go pos0 groups0 compressed0
+  where
+    go pos groups compressed =
+      if pos >= end then
+        if compressed then groups < 8 else groups == 8
       else
-        validIpv6Go value (colon + 1) end nextGroups compressed
+        let colon = optionOr end (findByte value pos end 58)
+        if colon == pos then
+          False
+        else
+          let dot = findByte value pos colon 46
+          let componentGroups = match dot
+            None => if colon - pos <= 4 && allHex value pos colon then 1 else 9
+            Some _ =>
+              if colon == end && validIpv4 value pos colon 0 then 2 else 9
+          let nextGroups = groups + componentGroups
+          if nextGroups > 8 then
+            False
+          else if colon == end then
+            if compressed then nextGroups < 8 else nextGroups == 8
+          else if colon + 1 < end && byteAt value (colon + 1) == 58 then
+            not compressed && go (colon + 2) nextGroups True
+          else
+            go (colon + 1) nextGroups compressed
 
 validIpv6 : Bytes -> Int -> Int -> Bool
 validIpv6 value start end =
@@ -871,20 +881,21 @@ validIpv6 value start end =
     validIpv6Go value start end 0 False
 
 scanHex : Bytes -> Int -> Int -> Int
-scanHex value pos end =
-  if pos < end && isHexByte (byteAt value pos) then
-    scanHex value (pos + 1) end
-  else
-    pos
+scanHex value pos0 end = go pos0
+  where
+    go pos =
+      if pos < end && isHexByte (byteAt value pos) then go (pos + 1) else pos
 
 validIpvFutureTail : Bytes -> Int -> Int -> Bool
-validIpvFutureTail value pos end =
-  if pos >= end then
-    True
-  else
-    let byte = byteAt value pos
-    (isUnreservedByte byte || isSubDelimiterByte byte || byte == 58)
-      && validIpvFutureTail value (pos + 1) end
+validIpvFutureTail value pos0 end = go pos0
+  where
+    go pos =
+      if pos >= end then
+        True
+      else
+        let byte = byteAt value pos
+        (isUnreservedByte byte || isSubDelimiterByte byte || byte == 58)
+          && go (pos + 1)
 
 validIpvFuture : Bytes -> Int -> Int -> Bool
 validIpvFuture value start end =
@@ -958,52 +969,55 @@ hexDigit byte =
     None
 
 parseHexSizeGo : Bytes -> Int -> Int -> Int -> Result FrameError Int
-parseHexSizeGo input pos end acc =
-  if pos >= end then
-    Ok acc
-  else match hexDigit (byteAt input pos)
-    None => malformed "http: invalid chunk size"
-    Some digit =>
-      if acc > (maxHttpBodyBytes - digit) / 16 then
-        Err
-          (Fatal
-            (HttpResourceExcess "http: chunk size exceeds decoded body limit"))
-      else
-        parseHexSizeGo input (pos + 1) end (acc * 16 + digit)
+parseHexSizeGo input pos0 end acc0 = go pos0 acc0
+  where
+    go pos acc =
+      if pos >= end then
+        Ok acc
+      else match hexDigit (byteAt input pos)
+        None => malformed "http: invalid chunk size"
+        Some digit =>
+          if acc > (maxHttpBodyBytes - digit) / 16 then
+            Err
+              (Fatal
+                (HttpResourceExcess
+                  "http: chunk size exceeds decoded body limit"))
+          else
+            go (pos + 1) (acc * 16 + digit)
 
 -- | The index of the first byte in `value[pos, end)` that is not a space or
 -- a tab, or `end` when they all are. The same as `trimLeftOws`.
 export
 skipOws : Bytes -> Int -> Int -> Int
-skipOws value pos end =
-  if pos < end && (byteAt value pos == 32 || byteAt value pos == 9) then
-    skipOws value (pos + 1) end
-  else
-    pos
+skipOws value pos end = trimLeftOws value pos end
 
 scanQuoted : Bytes -> Int -> Int -> Result FrameError Int
-scanQuoted input pos end =
-  if pos >= end then
-    malformed "http: unterminated quoted chunk extension"
-  else if byteAt input pos == 34 then
-    Ok (pos + 1)
-  else if byteAt input pos == 92 then
-    if pos + 1 >= end then
-      malformed "http: truncated quoted-pair in chunk extension"
-    else
-      let escaped = byteAt input (pos + 1)
-      if escaped == 9 || escaped == 32 || escaped >= 33 && escaped /= 127 then
-        scanQuoted input (pos + 2) end
+scanQuoted input pos0 end = go pos0
+  where
+    go pos =
+      if pos >= end then
+        malformed "http: unterminated quoted chunk extension"
+      else if byteAt input pos == 34 then
+        Ok (pos + 1)
+      else if byteAt input pos == 92 then
+        if pos + 1 >= end then
+          malformed "http: truncated quoted-pair in chunk extension"
+        else
+          let escaped = byteAt input (pos + 1)
+          if escaped == 9
+            || escaped == 32
+            || escaped >= 33 && escaped /= 127 then
+            go (pos + 2)
+          else
+            malformed "http: control byte in quoted chunk extension"
       else
-        malformed "http: control byte in quoted chunk extension"
-  else
-    let byte = byteAt input pos
-    if byte == 9
-      || byte == 32
-      || byte >= 33 && byte /= 34 && byte /= 92 && byte /= 127 then
-      scanQuoted input (pos + 1) end
-    else
-      malformed "http: control byte in quoted chunk extension"
+        let byte = byteAt input pos
+        if byte == 9
+          || byte == 32
+          || byte >= 33 && byte /= 34 && byte /= 92 && byte /= 127 then
+          go (pos + 1)
+        else
+          malformed "http: control byte in quoted chunk extension"
 
 parseChunkExtensionValue : Bytes -> Int -> Int -> Result FrameError Int
 parseChunkExtensionValue input pos end =
@@ -1019,27 +1033,29 @@ parseChunkExtensionValue input pos end =
       Ok valueEnd
 
 parseChunkExtensionsGo : Bytes -> Int -> Int -> Result FrameError Unit
-parseChunkExtensionsGo input pos end =
-  let start = skipOws input pos end
-  if start == end then
-    Ok ()
-  else if byteAt input start /= 59 then
-    malformed "http: invalid chunk extension separator"
-  else
-    let nameStart = skipOws input (start + 1) end
-    let nameEnd = scanTokenEnd input nameStart end
-    if nameEnd == nameStart then
-      malformed "http: empty chunk extension name"
-    else
-      let afterName = skipOws input nameEnd end
-      if afterName < end && byteAt input afterName == 61 then do
-        valueEnd <- parseChunkExtensionValue
-          input
-          (skipOws input (afterName + 1) end)
-          end
-        parseChunkExtensionsGo input valueEnd end
+parseChunkExtensionsGo input pos0 end = go pos0
+  where
+    go pos =
+      let start = skipOws input pos end
+      if start == end then
+        Ok ()
+      else if byteAt input start /= 59 then
+        malformed "http: invalid chunk extension separator"
       else
-        parseChunkExtensionsGo input afterName end
+        let nameStart = skipOws input (start + 1) end
+        let nameEnd = scanTokenEnd input nameStart end
+        if nameEnd == nameStart then
+          malformed "http: empty chunk extension name"
+        else
+          let afterName = skipOws input nameEnd end
+          if afterName < end && byteAt input afterName == 61 then do
+            valueEnd <- parseChunkExtensionValue
+              input
+              (skipOws input (afterName + 1) end)
+              end
+            go valueEnd
+          else
+            go afterName
 
 parseChunkSize : Bytes -> Int -> Int -> Result FrameError Int
 parseChunkSize input start end =
@@ -1058,24 +1074,26 @@ parseChunkedChecked : Bytes ->
   Int ->
   Int ->
   Result FrameError ParsedBody
-parseChunkedChecked input pos headerBytes out total count = do
-  head <- chunkHeadStep input (B.length input) pos pos total count
-  match head
-    ChunkEnd dataPos => do
-      (HeaderBlock trailers finalPos _) <- parseFieldsChecked
-        input
-        dataPos
-        dataPos
-        headerBytes
-        0
-        True
-        []
-      Ok (ParsedBody (buildBytes out) trailers finalPos)
-    ChunkBody dataPos size => do
-      (chunk, _) <- readSliceAt input dataPos size
-      next <- chunkDataEnd input (B.length input) dataPos size
-      let () = emitBytes chunk out
-      parseChunkedChecked input next headerBytes out (total + size) (count + 1)
+parseChunkedChecked inp pos0 hdrBytes out total0 count0 = go pos0 total0 count0
+  where
+    go pos total count = do
+      head <- chunkHeadStep inp (B.length inp) pos pos total count
+      match head
+        ChunkEnd dataPos => do
+          (HeaderBlock trailers finalPos _) <- parseFieldsChecked
+            inp
+            dataPos
+            dataPos
+            hdrBytes
+            0
+            True
+            []
+          Ok (ParsedBody (buildBytes out) trailers finalPos)
+        ChunkBody dataPos size => do
+          (chunk, _) <- readSliceAt inp dataPos size
+          next <- chunkDataEnd inp (B.length inp) dataPos size
+          let () = emitBytes chunk out
+          go next (total + size) (count + 1)
 
 {- | The decoded bytes of the chunked body starting at `pos`, its trailer
    fields, and the offset just past the trailer section.
@@ -1226,106 +1244,96 @@ headBodyPhase (FrameHead _ _ ChunkedBody _ bodyPos _) =
   BodyChunkSize bodyPos 0 0 bodyPos
 
 scanBody : Bytes -> Int -> FrameHead -> BodyPhase -> ScanOutcome
-scanBody _ avail head (BodyUntil finalPos) =
-  if finalPos <= avail then
-    ScanFramed (FrameSpan head finalPos)
-  else
-    ScanSuspend
-      "http: truncated body at byte \{intToString avail}"
-      (PhaseBody head (BodyUntil finalPos))
-scanBody input avail head (BodyChunkSize chunkPos total count cursor) =
-  match chunkHeadStep input avail chunkPos (max chunkPos cursor) total count
-    Err (Incomplete message) =>
-      ScanSuspend
-        message
-        (PhaseBody
-          head
-          (BodyChunkSize chunkPos total count (crlfResume avail chunkPos)))
-    Err (Fatal failure) => ScanFatal failure
-    Ok (ChunkEnd dataPos) =>
-      scanBody input avail head (BodyTrailers dataPos dataPos 0 dataPos)
-    Ok (ChunkBody dataPos size) =>
-      scanBody input avail head (BodyChunkData dataPos size total count)
-scanBody input avail head (BodyChunkData dataPos size total count) =
-  match chunkDataEnd input avail dataPos size
-    Err (Incomplete message) =>
-      ScanSuspend
-        message
-        (PhaseBody head (BodyChunkData dataPos size total count))
-    Err (Fatal failure) => ScanFatal failure
-    Ok next =>
-      scanBody
-        input
-        avail
-        head
-        (BodyChunkSize next (total + size) (count + 1) next)
-scanBody input avail head (BodyTrailers sectionStart pos count cursor) =
-  let step =
-    fieldStep
-      input
-      avail
-      pos
-      (max pos cursor)
-      sectionStart
-      (headHeaderBytes head)
-      count
-      True
-  match step
-    Err (Incomplete message) =>
-      ScanSuspend
-        message
-        (PhaseBody
-          head
-          (BodyTrailers sectionStart pos count (crlfResume avail pos)))
-    Err (Fatal failure) => ScanFatal failure
-    Ok (FieldMore _ next) =>
-      scanBody
-        input
-        avail
-        head
-        (BodyTrailers sectionStart next (count + 1) next)
-    Ok (FieldDone finalPos _) => ScanFramed (FrameSpan head finalPos)
+scanBody input avail head x0 = go x0
+  where
+    go (BodyUntil finalPos) =
+      if finalPos <= avail then
+        ScanFramed (FrameSpan head finalPos)
+      else
+        ScanSuspend
+          "http: truncated body at byte \{intToString avail}"
+          (PhaseBody head (BodyUntil finalPos))
+    go (BodyChunkSize chunkPos total count cursor) =
+      match chunkHeadStep input avail chunkPos (max chunkPos cursor) total count
+        Err (Incomplete message) =>
+          ScanSuspend
+            message
+            (PhaseBody
+              head
+              (BodyChunkSize chunkPos total count (crlfResume avail chunkPos)))
+        Err (Fatal failure) => ScanFatal failure
+        Ok (ChunkEnd dataPos) => go (BodyTrailers dataPos dataPos 0 dataPos)
+        Ok (ChunkBody dataPos size) =>
+          go (BodyChunkData dataPos size total count)
+    go (BodyChunkData dataPos size total count) =
+      match chunkDataEnd input avail dataPos size
+        Err (Incomplete message) =>
+          ScanSuspend
+            message
+            (PhaseBody head (BodyChunkData dataPos size total count))
+        Err (Fatal failure) => ScanFatal failure
+        Ok next => go (BodyChunkSize next (total + size) (count + 1) next)
+    go (BodyTrailers sectionStart pos count cursor) =
+      let step =
+        fieldStep
+          input
+          avail
+          pos
+          (max pos cursor)
+          sectionStart
+          (headHeaderBytes head)
+          count
+          True
+      match step
+        Err (Incomplete message) =>
+          ScanSuspend
+            message
+            (PhaseBody
+              head
+              (BodyTrailers sectionStart pos count (crlfResume avail pos)))
+        Err (Fatal failure) => ScanFatal failure
+        Ok (FieldMore _ next) =>
+          go (BodyTrailers sectionStart next (count + 1) next)
+        Ok (FieldDone finalPos _) => ScanFramed (FrameSpan head finalPos)
 
 -- Advance a scan of the request starting at `start` from `phase`. Every
 -- framing decision in this module is taken here or in a step this calls, so
 -- the resumable scanner and the one-shot parser are the same framer.
 scanFrom : Bytes -> Int -> Int -> ScanPhase -> ScanOutcome
-scanFrom input avail start (PhaseLine cursor) =
-  match parseRequestLine input avail start (max start cursor)
-    Err (Incomplete message) =>
-      ScanSuspend message (PhaseLine (crlfResume avail start))
-    Err (Fatal failure) => ScanFatal failure
-    Ok line =>
-      let headerPos = requestLineHeaderPos line
-      scanFrom input avail start (PhaseFields line [] headerPos 0 headerPos)
-scanFrom input avail start (PhaseFields line acc pos count cursor) =
-  let step =
-    fieldStep
-      input
-      avail
-      pos
-      (max pos cursor)
-      (requestLineHeaderPos line)
-      0
-      count
-      False
-  match step
-    Err (Incomplete message) =>
-      ScanSuspend
-        message
-        (PhaseFields line acc pos count (crlfResume avail pos))
-    Err (Fatal failure) => ScanFatal failure
-    Ok (FieldMore field next) =>
-      scanFrom
-        input
-        avail
-        start
-        (PhaseFields line (field :: acc) next (count + 1) next)
-    Ok (FieldDone bodyPos headerBytes) =>
-      match settle (buildHead line (reverse acc) bodyPos headerBytes)
-        Err failure => ScanFatal failure
-        Ok head => scanBody input avail head (headBodyPhase head)
-scanFrom input avail _ (PhaseBody head phase) = scanBody input avail head phase
+scanFrom input avail start x0 = go x0
+  where
+    go (PhaseLine cursor) =
+      match parseRequestLine input avail start (max start cursor)
+        Err (Incomplete message) =>
+          ScanSuspend message (PhaseLine (crlfResume avail start))
+        Err (Fatal failure) => ScanFatal failure
+        Ok line =>
+          let headerPos = requestLineHeaderPos line
+          go (PhaseFields line [] headerPos 0 headerPos)
+    go (PhaseFields line acc pos count cursor) =
+      let step =
+        fieldStep
+          input
+          avail
+          pos
+          (max pos cursor)
+          (requestLineHeaderPos line)
+          0
+          count
+          False
+      match step
+        Err (Incomplete message) =>
+          ScanSuspend
+            message
+            (PhaseFields line acc pos count (crlfResume avail pos))
+        Err (Fatal failure) => ScanFatal failure
+        Ok (FieldMore field next) =>
+          go (PhaseFields line (field :: acc) next (count + 1) next)
+        Ok (FieldDone bodyPos headerBytes) =>
+          match settle (buildHead line (reverse acc) bodyPos headerBytes)
+            Err failure => ScanFatal failure
+            Ok head => scanBody input avail head (headBodyPhase head)
+    go (PhaseBody head phase) = scanBody input avail head phase
 
 frameSpanAt : Bytes -> Int -> Result FrameError FrameSpan
 frameSpanAt input start =
@@ -1575,20 +1583,24 @@ responseFindCrlfGo : String ->
   Int ->
   Int ->
   Result FrameError Int
-responseFindCrlfGo label input avail start pos limit =
-  if pos - start > limit then
-    Err (Fatal (HttpResourceExcess "http: \{label} exceeds its resource limit"))
-  else if pos >= avail then
-    responseMalformed "http: truncated \{label}; expected CRLF"
-  else if byteAt input pos == 10 then
-    responseMalformed "http: bare LF in \{label}"
-  else if byteAt input pos == 13 then
-    if pos + 1 >= avail || byteAt input (pos + 1) /= 10 then
-      responseMalformed "http: bare CR in \{label}"
-    else
-      Ok pos
-  else
-    responseFindCrlfGo label input avail start (pos + 1) limit
+responseFindCrlfGo label input avail start pos0 limit = go pos0
+  where
+    go pos =
+      if pos - start > limit then
+        Err
+          (Fatal
+            (HttpResourceExcess "http: \{label} exceeds its resource limit"))
+      else if pos >= avail then
+        responseMalformed "http: truncated \{label}; expected CRLF"
+      else if byteAt input pos == 10 then
+        responseMalformed "http: bare LF in \{label}"
+      else if byteAt input pos == 13 then
+        if pos + 1 >= avail || byteAt input (pos + 1) /= 10 then
+          responseMalformed "http: bare CR in \{label}"
+        else
+          Ok pos
+      else
+        go (pos + 1)
 
 responseParseDecimalGo : Bytes -> Int -> Int -> Result FrameError Int
 responseParseDecimalGo value i acc =
@@ -1700,19 +1712,13 @@ responseParseFields : Bytes ->
   Int ->
   List Header ->
   Result FrameError (List Header, Int, Int)
-responseParseFields input avail pos sectionStart priorBytes count acc = do
-  step <- responseFieldStep input avail pos sectionStart priorBytes count
-  match step
-    ResponseFieldDone next totalBytes => Ok (reverse acc, next, totalBytes)
-    ResponseFieldMore field next =>
-      responseParseFields
-        input
-        avail
-        next
-        sectionStart
-        priorBytes
-        (count + 1)
-        (field :: acc)
+responseParseFields inp av pos0 secBeg prior count0 acc0 = go pos0 count0 acc0
+  where
+    go pos count acc = do
+      step <- responseFieldStep inp av pos secBeg prior count
+      match step
+        ResponseFieldDone next totalBytes => Ok (reverse acc, next, totalBytes)
+        ResponseFieldMore field next => go next (count + 1) (field :: acc)
 
 responseImpliesNoBody : Int -> Bool
 responseImpliesNoBody status =
@@ -1753,17 +1759,20 @@ responseSelectBodyMode status headers =
           Ok (FixedBody size)
 
 responseParseHexSizeGo : Bytes -> Int -> Int -> Int -> Result FrameError Int
-responseParseHexSizeGo input pos end acc =
-  if pos >= end then
-    Ok acc
-  else match hexDigit (byteAt input pos)
-    None => responseMalformed "http: invalid chunk size"
-    Some digit =>
-      if acc > (maxHttpResponseChunkBytes - digit) / 16 then
-        Err
-          (Fatal (HttpResourceExcess "http: chunk size exceeds resource limit"))
-      else
-        responseParseHexSizeGo input (pos + 1) end (acc * 16 + digit)
+responseParseHexSizeGo input pos0 end acc0 = go pos0 acc0
+  where
+    go pos acc =
+      if pos >= end then
+        Ok acc
+      else match hexDigit (byteAt input pos)
+        None => responseMalformed "http: invalid chunk size"
+        Some digit =>
+          if acc > (maxHttpResponseChunkBytes - digit) / 16 then
+            Err
+              (Fatal
+                (HttpResourceExcess "http: chunk size exceeds resource limit"))
+          else
+            go (pos + 1) (acc * 16 + digit)
 
 responseParseChunkSize : Bytes -> Int -> Int -> Result FrameError Int
 responseParseChunkSize input start end =
@@ -1832,30 +1841,32 @@ responseParseChunked : Bytes ->
   Int ->
   Int ->
   Result FrameError (Bytes, List Header, Int)
-responseParseChunked input avail pos out total count = do
-  head <- responseChunkHeadStep input avail pos count
-  match head
-    ResponseChunkEnd dataPos => do
-      (trailers, finalPos, _) <- responseParseFields
-        input
-        avail
-        dataPos
-        dataPos
-        0
-        0
-        []
-      Ok (buildBytes out, trailers, finalPos)
-    ResponseChunkBody dataPos size => do
-      if total + size > maxHttpBodyBytes then
-        Err
-          (Fatal
-            (HttpResourceExcess
-              "http: decoded body exceeds 5242880-byte resource limit"))
-      else do
-        (chunk, _) <- responseReadSliceAt input avail dataPos size
-        next <- responseChunkDataEnd input avail dataPos size
-        let () = emitBytes chunk out
-        responseParseChunked input avail next out (total + size) (count + 1)
+responseParseChunked input avail pos0 out total0 count0 = go pos0 total0 count0
+  where
+    go pos total count = do
+      head <- responseChunkHeadStep input avail pos count
+      match head
+        ResponseChunkEnd dataPos => do
+          (trailers, finalPos, _) <- responseParseFields
+            input
+            avail
+            dataPos
+            dataPos
+            0
+            0
+            []
+          Ok (buildBytes out, trailers, finalPos)
+        ResponseChunkBody dataPos size => do
+          if total + size > maxHttpBodyBytes then
+            Err
+              (Fatal
+                (HttpResourceExcess
+                  "http: decoded body exceeds 5242880-byte resource limit"))
+          else do
+            (chunk, _) <- responseReadSliceAt input avail dataPos size
+            next <- responseChunkDataEnd input avail dataPos size
+            let () = emitBytes chunk out
+            go next (total + size) (count + 1)
 
 responseParseBody : BodyMode ->
   Bytes ->
@@ -1928,15 +1939,24 @@ test "response resource diagnostics use the public http vocabulary" =
     _ => expectTrue False
 
 responseScanChunkedEnd : Bytes -> Int -> Int -> Int -> Result FrameError Int
-responseScanChunkedEnd input avail pos count = do
-  head <- responseChunkHeadStep input avail pos count
-  match head
-    ResponseChunkEnd dataPos => do
-      (_, finalPos, _) <- responseParseFields input avail dataPos dataPos 0 0 []
-      Ok finalPos
-    ResponseChunkBody dataPos size => do
-      next <- responseChunkDataEnd input avail dataPos size
-      responseScanChunkedEnd input avail next (count + 1)
+responseScanChunkedEnd input avail pos0 count0 = go pos0 count0
+  where
+    go pos count = do
+      head <- responseChunkHeadStep input avail pos count
+      match head
+        ResponseChunkEnd dataPos => do
+          (_, finalPos, _) <- responseParseFields
+            input
+            avail
+            dataPos
+            dataPos
+            0
+            0
+            []
+          Ok finalPos
+        ResponseChunkBody dataPos size => do
+          next <- responseChunkDataEnd input avail dataPos size
+          go next (count + 1)
 
 responseScanBodyEnd : BodyMode -> Bytes -> Int -> Int -> Result FrameError Int
 responseScanBodyEnd NoBody _ _ pos = Ok pos
@@ -2127,22 +2147,24 @@ percentNibble : Int -> Option Int
 percentNibble byte = hexDigit byte
 
 decodeQueryBytes : Bytes -> Int -> Int -> Builder -> Result String Unit
-decodeQueryBytes input pos end out =
-  if pos >= end then
-    Ok ()
-  else if byteAt input pos /= 37 then
-    let () = emitU8 input[pos] out
-    decodeQueryBytes input (pos + 1) end out
-  else if pos + 2 >= end then
-    Err "http: malformed percent escape in query"
-  else match (
-    percentNibble (byteAt input (pos + 1)),
-    percentNibble (byteAt input (pos + 2)),
-  )
-    (Some high, Some low) =>
-      let () = emitU8 (fromInt (high * 16 + low)) out
-      decodeQueryBytes input (pos + 3) end out
-    _ => Err "http: malformed percent escape in query"
+decodeQueryBytes input pos0 end out = go pos0
+  where
+    go pos =
+      if pos >= end then
+        Ok ()
+      else if byteAt input pos /= 37 then
+        let () = emitU8 input[pos] out
+        go (pos + 1)
+      else if pos + 2 >= end then
+        Err "http: malformed percent escape in query"
+      else match (
+        percentNibble (byteAt input (pos + 1)),
+        percentNibble (byteAt input (pos + 2)),
+      )
+        (Some high, Some low) =>
+          let () = emitU8 (fromInt (high * 16 + low)) out
+          go (pos + 3)
+        _ => Err "http: malformed percent escape in query"
 
 continuation : Int -> Bool
 continuation byte = byte >= 128 && byte <= 191
@@ -2350,55 +2372,59 @@ validMediaBytes bytes i =
     (byte == 9 || byte >= 32 && byte <= 126) && validMediaBytes bytes (i + 1)
 
 scanMediaQuoted : Bytes -> Int -> Int -> Result String Int
-scanMediaQuoted value pos end =
-  if pos >= end then
-    Err "http: unterminated quoted media-type parameter"
-  else if byteAt value pos == 34 then
-    Ok (pos + 1)
-  else if byteAt value pos == 92 then
-    if pos + 1 >= end
-      || byteAt value (pos + 1) < 32
-      || byteAt value (pos + 1) > 126 then
-      Err "http: invalid quoted media-type parameter"
-    else
-      scanMediaQuoted value (pos + 2) end
-  else if byteAt value pos < 32 || byteAt value pos == 127 then
-    Err "http: control byte in media-type parameter"
-  else
-    scanMediaQuoted value (pos + 1) end
+scanMediaQuoted value pos0 end = go pos0
+  where
+    go pos =
+      if pos >= end then
+        Err "http: unterminated quoted media-type parameter"
+      else if byteAt value pos == 34 then
+        Ok (pos + 1)
+      else if byteAt value pos == 92 then
+        if pos + 1 >= end
+          || byteAt value (pos + 1) < 32
+          || byteAt value (pos + 1) > 126 then
+          Err "http: invalid quoted media-type parameter"
+        else
+          go (pos + 2)
+      else if byteAt value pos < 32 || byteAt value pos == 127 then
+        Err "http: control byte in media-type parameter"
+      else
+        go (pos + 1)
 
 parseMediaParameters : Bytes -> Int -> Int -> Int -> Result String Unit
-parseMediaParameters value pos end count =
-  let start = skipOws value pos end
-  if start == end then
-    Ok ()
-  else if count >= 32 then
-    Err "http: media type has too many parameters"
-  else if byteAt value start /= 59 then
-    Err "http: invalid media-type parameter separator"
-  else
-    let nameStart = skipOws value (start + 1) end
-    let nameEnd = scanTokenEnd value nameStart end
-    if nameEnd == nameStart then
-      Err "http: empty media-type parameter name"
-    else
-      let afterName = skipOws value nameEnd end
-      if afterName >= end || byteAt value afterName /= 61 then
-        Err "http: media-type parameter requires a value"
+parseMediaParameters value pos0 end count0 = go pos0 count0
+  where
+    go pos count =
+      let start = skipOws value pos end
+      if start == end then
+        Ok ()
+      else if count >= 32 then
+        Err "http: media type has too many parameters"
+      else if byteAt value start /= 59 then
+        Err "http: invalid media-type parameter separator"
       else
-        let valueStart = skipOws value (afterName + 1) end
-        if valueStart >= end then
-          Err "http: media-type parameter requires a value"
-        else do
-          valueEnd <- if byteAt value valueStart == 34 then
-            scanMediaQuoted value (valueStart + 1) end
+        let nameStart = skipOws value (start + 1) end
+        let nameEnd = scanTokenEnd value nameStart end
+        if nameEnd == nameStart then
+          Err "http: empty media-type parameter name"
+        else
+          let afterName = skipOws value nameEnd end
+          if afterName >= end || byteAt value afterName /= 61 then
+            Err "http: media-type parameter requires a value"
           else
-            let tokenEnd = scanTokenEnd value valueStart end
-            if tokenEnd == valueStart then
-              Err "http: invalid media-type parameter value"
-            else
-              Ok tokenEnd
-          parseMediaParameters value valueEnd end (count + 1)
+            let valueStart = skipOws value (afterName + 1) end
+            if valueStart >= end then
+              Err "http: media-type parameter requires a value"
+            else do
+              valueEnd <- if byteAt value valueStart == 34 then
+                scanMediaQuoted value (valueStart + 1) end
+              else
+                let tokenEnd = scanTokenEnd value valueStart end
+                if tokenEnd == valueStart then
+                  Err "http: invalid media-type parameter value"
+                else
+                  Ok tokenEnd
+              go valueEnd (count + 1)
 
 -- | The media type in `value`, with type and subtype lowercased, or `Err`
 -- when it is not one. Parameters are checked for form and then dropped.
@@ -2575,7 +2601,7 @@ decodeRequestBody (Request _ _ headers _ packed _) = do
 (DTypeSig true "isTokenByte" (TyFun (TyCon "Int") (TyCon "Bool")))
 (DFunDef false "isTokenByte" ((PVar "byte")) (EBinOp "||" (EBinOp "||" (EBinOp "||" (EBinOp "||" (EBinOp "||" (EBinOp "||" (EBinOp "||" (EBinOp "||" (EBinOp "||" (EBinOp "||" (EBinOp "||" (EBinOp "||" (EBinOp "||" (EBinOp "||" (EBinOp "||" (EBinOp "||" (EBinOp "||" (EBinOp "&&" (EBinOp ">=" (EVar "byte") (ELit (LInt 48))) (EBinOp "<=" (EVar "byte") (ELit (LInt 57)))) (EBinOp "&&" (EBinOp ">=" (EVar "byte") (ELit (LInt 65))) (EBinOp "<=" (EVar "byte") (ELit (LInt 90))))) (EBinOp "&&" (EBinOp ">=" (EVar "byte") (ELit (LInt 97))) (EBinOp "<=" (EVar "byte") (ELit (LInt 122))))) (EBinOp "==" (EVar "byte") (ELit (LInt 33)))) (EBinOp "==" (EVar "byte") (ELit (LInt 35)))) (EBinOp "==" (EVar "byte") (ELit (LInt 36)))) (EBinOp "==" (EVar "byte") (ELit (LInt 37)))) (EBinOp "==" (EVar "byte") (ELit (LInt 38)))) (EBinOp "==" (EVar "byte") (ELit (LInt 39)))) (EBinOp "==" (EVar "byte") (ELit (LInt 42)))) (EBinOp "==" (EVar "byte") (ELit (LInt 43)))) (EBinOp "==" (EVar "byte") (ELit (LInt 45)))) (EBinOp "==" (EVar "byte") (ELit (LInt 46)))) (EBinOp "==" (EVar "byte") (ELit (LInt 94)))) (EBinOp "==" (EVar "byte") (ELit (LInt 95)))) (EBinOp "==" (EVar "byte") (ELit (LInt 96)))) (EBinOp "==" (EVar "byte") (ELit (LInt 124)))) (EBinOp "==" (EVar "byte") (ELit (LInt 126)))))
 (DTypeSig false "allToken" (TyFun (TyCon "Bytes") (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyCon "Bool")))))
-(DFunDef false "allToken" ((PVar "input") (PVar "pos") (PVar "end")) (EIf (EBinOp ">=" (EVar "pos") (EVar "end")) (EVar "True") (EBinOp "&&" (EApp (EVar "isTokenByte") (EApp (EApp (EVar "byteAt") (EVar "input")) (EVar "pos"))) (EApp (EApp (EApp (EVar "allToken") (EVar "input")) (EBinOp "+" (EVar "pos") (ELit (LInt 1)))) (EVar "end")))))
+(DFunDef false "allToken" ((PVar "input") (PVar "pos0") (PVar "end")) (ELetGroup ((lgb "go" (clause ((PVar "pos")) (EIf (EBinOp ">=" (EVar "pos") (EVar "end")) (EVar "True") (EBinOp "&&" (EApp (EVar "isTokenByte") (EApp (EApp (EVar "byteAt") (EVar "input")) (EVar "pos"))) (EApp (EVar "go") (EBinOp "+" (EVar "pos") (ELit (LInt 1))))))))) (EApp (EVar "go") (EVar "pos0"))))
 (DTypeSig false "isHexByte" (TyFun (TyCon "Int") (TyCon "Bool")))
 (DFunDef false "isHexByte" ((PVar "byte")) (EBinOp "||" (EBinOp "||" (EBinOp "&&" (EBinOp ">=" (EVar "byte") (ELit (LInt 48))) (EBinOp "<=" (EVar "byte") (ELit (LInt 57)))) (EBinOp "&&" (EBinOp ">=" (EVar "byte") (ELit (LInt 65))) (EBinOp "<=" (EVar "byte") (ELit (LInt 70))))) (EBinOp "&&" (EBinOp ">=" (EVar "byte") (ELit (LInt 97))) (EBinOp "<=" (EVar "byte") (ELit (LInt 102))))))
 (DTypeSig false "isUnreservedByte" (TyFun (TyCon "Int") (TyCon "Bool")))
@@ -2583,21 +2609,21 @@ decodeRequestBody (Request _ _ headers _ packed _) = do
 (DTypeSig false "isSubDelimiterByte" (TyFun (TyCon "Int") (TyCon "Bool")))
 (DFunDef false "isSubDelimiterByte" ((PVar "byte")) (EBinOp "||" (EBinOp "||" (EBinOp "||" (EBinOp "||" (EBinOp "||" (EBinOp "||" (EBinOp "||" (EBinOp "||" (EBinOp "||" (EBinOp "||" (EBinOp "==" (EVar "byte") (ELit (LInt 33))) (EBinOp "==" (EVar "byte") (ELit (LInt 36)))) (EBinOp "==" (EVar "byte") (ELit (LInt 38)))) (EBinOp "==" (EVar "byte") (ELit (LInt 39)))) (EBinOp "==" (EVar "byte") (ELit (LInt 40)))) (EBinOp "==" (EVar "byte") (ELit (LInt 41)))) (EBinOp "==" (EVar "byte") (ELit (LInt 42)))) (EBinOp "==" (EVar "byte") (ELit (LInt 43)))) (EBinOp "==" (EVar "byte") (ELit (LInt 44)))) (EBinOp "==" (EVar "byte") (ELit (LInt 59)))) (EBinOp "==" (EVar "byte") (ELit (LInt 61)))))
 (DTypeSig false "validTarget" (TyFun (TyCon "Bytes") (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyFun (TyCon "Bool") (TyCon "Bool"))))))
-(DFunDef false "validTarget" ((PVar "input") (PVar "pos") (PVar "end") (PVar "query")) (EIf (EBinOp ">=" (EVar "pos") (EVar "end")) (EVar "True") (EBlock (DoLet false false (PVar "byte") (EApp (EApp (EVar "byteAt") (EVar "input")) (EVar "pos"))) (DoExpr (EIf (EBinOp "==" (EVar "byte") (ELit (LInt 37))) (EBinOp "&&" (EBinOp "&&" (EBinOp "&&" (EBinOp "<" (EBinOp "+" (EVar "pos") (ELit (LInt 2))) (EVar "end")) (EApp (EVar "isHexByte") (EApp (EApp (EVar "byteAt") (EVar "input")) (EBinOp "+" (EVar "pos") (ELit (LInt 1)))))) (EApp (EVar "isHexByte") (EApp (EApp (EVar "byteAt") (EVar "input")) (EBinOp "+" (EVar "pos") (ELit (LInt 2)))))) (EApp (EApp (EApp (EApp (EVar "validTarget") (EVar "input")) (EBinOp "+" (EVar "pos") (ELit (LInt 3)))) (EVar "end")) (EVar "query"))) (EBlock (DoLet false false (PVar "pchar") (EBinOp "||" (EBinOp "||" (EBinOp "||" (EApp (EVar "isUnreservedByte") (EVar "byte")) (EApp (EVar "isSubDelimiterByte") (EVar "byte"))) (EBinOp "==" (EVar "byte") (ELit (LInt 58)))) (EBinOp "==" (EVar "byte") (ELit (LInt 64))))) (DoExpr (EIf (EBinOp "||" (EBinOp "||" (EVar "pchar") (EBinOp "==" (EVar "byte") (ELit (LInt 47)))) (EBinOp "&&" (EVar "query") (EBinOp "==" (EVar "byte") (ELit (LInt 63))))) (EApp (EApp (EApp (EApp (EVar "validTarget") (EVar "input")) (EBinOp "+" (EVar "pos") (ELit (LInt 1)))) (EVar "end")) (EVar "query")) (EIf (EBinOp "&&" (EApp (EVar "not") (EVar "query")) (EBinOp "==" (EVar "byte") (ELit (LInt 63)))) (EApp (EApp (EApp (EApp (EVar "validTarget") (EVar "input")) (EBinOp "+" (EVar "pos") (ELit (LInt 1)))) (EVar "end")) (EVar "True")) (EVar "False"))))))))))
+(DFunDef false "validTarget" ((PVar "input") (PVar "pos0") (PVar "end") (PVar "query0")) (ELetGroup ((lgb "go" (clause ((PVar "pos") (PVar "query")) (EIf (EBinOp ">=" (EVar "pos") (EVar "end")) (EVar "True") (EBlock (DoLet false false (PVar "byte") (EApp (EApp (EVar "byteAt") (EVar "input")) (EVar "pos"))) (DoExpr (EIf (EBinOp "==" (EVar "byte") (ELit (LInt 37))) (EBinOp "&&" (EBinOp "&&" (EBinOp "&&" (EBinOp "<" (EBinOp "+" (EVar "pos") (ELit (LInt 2))) (EVar "end")) (EApp (EVar "isHexByte") (EApp (EApp (EVar "byteAt") (EVar "input")) (EBinOp "+" (EVar "pos") (ELit (LInt 1)))))) (EApp (EVar "isHexByte") (EApp (EApp (EVar "byteAt") (EVar "input")) (EBinOp "+" (EVar "pos") (ELit (LInt 2)))))) (EApp (EApp (EVar "go") (EBinOp "+" (EVar "pos") (ELit (LInt 3)))) (EVar "query"))) (EBlock (DoLet false false (PVar "pchar") (EBinOp "||" (EBinOp "||" (EBinOp "||" (EApp (EVar "isUnreservedByte") (EVar "byte")) (EApp (EVar "isSubDelimiterByte") (EVar "byte"))) (EBinOp "==" (EVar "byte") (ELit (LInt 58)))) (EBinOp "==" (EVar "byte") (ELit (LInt 64))))) (DoExpr (EIf (EBinOp "||" (EBinOp "||" (EVar "pchar") (EBinOp "==" (EVar "byte") (ELit (LInt 47)))) (EBinOp "&&" (EVar "query") (EBinOp "==" (EVar "byte") (ELit (LInt 63))))) (EApp (EApp (EVar "go") (EBinOp "+" (EVar "pos") (ELit (LInt 1)))) (EVar "query")) (EIf (EBinOp "&&" (EApp (EVar "not") (EVar "query")) (EBinOp "==" (EVar "byte") (ELit (LInt 63)))) (EApp (EApp (EVar "go") (EBinOp "+" (EVar "pos") (ELit (LInt 1)))) (EVar "True")) (EVar "False")))))))))))) (EApp (EApp (EVar "go") (EVar "pos0")) (EVar "query0"))))
 (DTypeSig false "exactAsciiAt" (TyFun (TyCon "Bytes") (TyFun (TyCon "Int") (TyFun (TyCon "String") (TyCon "Bool")))))
 (DFunDef false "exactAsciiAt" ((PVar "input") (PVar "start") (PVar "expected")) (EBlock (DoLet false false (PVar "wanted") (EApp (EVar "encodeUtf8") (EVar "expected"))) (DoLet false false (PVar "size") (EApp (EVar "B.length") (EVar "wanted"))) (DoExpr (EBinOp "&&" (EBinOp "<=" (EBinOp "+" (EVar "start") (EVar "size")) (EApp (EVar "B.length") (EVar "input"))) (EBinOp "==" (EApp (EApp (EApp (EVar "slice") (EVar "input")) (EVar "start")) (EBinOp "+" (EVar "start") (EVar "size"))) (EVar "wanted"))))))
 (DTypeSig false "validFieldValue" (TyFun (TyCon "Bytes") (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyCon "Bool")))))
-(DFunDef false "validFieldValue" ((PVar "input") (PVar "pos") (PVar "end")) (EIf (EBinOp ">=" (EVar "pos") (EVar "end")) (EVar "True") (EBlock (DoLet false false (PVar "byte") (EApp (EApp (EVar "byteAt") (EVar "input")) (EVar "pos"))) (DoExpr (EBinOp "&&" (EBinOp "||" (EBinOp "==" (EVar "byte") (ELit (LInt 9))) (EBinOp "&&" (EBinOp ">=" (EVar "byte") (ELit (LInt 32))) (EBinOp "/=" (EVar "byte") (ELit (LInt 127))))) (EApp (EApp (EApp (EVar "validFieldValue") (EVar "input")) (EBinOp "+" (EVar "pos") (ELit (LInt 1)))) (EVar "end")))))))
+(DFunDef false "validFieldValue" ((PVar "input") (PVar "pos0") (PVar "end")) (ELetGroup ((lgb "go" (clause ((PVar "pos")) (EIf (EBinOp ">=" (EVar "pos") (EVar "end")) (EVar "True") (EBlock (DoLet false false (PVar "byte") (EApp (EApp (EVar "byteAt") (EVar "input")) (EVar "pos"))) (DoExpr (EBinOp "&&" (EBinOp "||" (EBinOp "==" (EVar "byte") (ELit (LInt 9))) (EBinOp "&&" (EBinOp ">=" (EVar "byte") (ELit (LInt 32))) (EBinOp "/=" (EVar "byte") (ELit (LInt 127))))) (EApp (EVar "go") (EBinOp "+" (EVar "pos") (ELit (LInt 1))))))))))) (EApp (EVar "go") (EVar "pos0"))))
 (DTypeSig true "findByte" (TyFun (TyCon "Bytes") (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyApp (TyCon "Option") (TyCon "Int")))))))
-(DFunDef false "findByte" ((PVar "value") (PVar "pos") (PVar "end") (PVar "wanted")) (EIf (EBinOp ">=" (EVar "pos") (EVar "end")) (EVar "None") (EIf (EBinOp "==" (EApp (EApp (EVar "byteAt") (EVar "value")) (EVar "pos")) (EVar "wanted")) (EApp (EVar "Some") (EVar "pos")) (EApp (EApp (EApp (EApp (EVar "findByte") (EVar "value")) (EBinOp "+" (EVar "pos") (ELit (LInt 1)))) (EVar "end")) (EVar "wanted")))))
+(DFunDef false "findByte" ((PVar "value") (PVar "pos0") (PVar "end") (PVar "wanted")) (ELetGroup ((lgb "go" (clause ((PVar "pos")) (EIf (EBinOp ">=" (EVar "pos") (EVar "end")) (EVar "None") (EIf (EBinOp "==" (EApp (EApp (EVar "byteAt") (EVar "value")) (EVar "pos")) (EVar "wanted")) (EApp (EVar "Some") (EVar "pos")) (EApp (EVar "go") (EBinOp "+" (EVar "pos") (ELit (LInt 1))))))))) (EApp (EVar "go") (EVar "pos0"))))
 (DTypeSig false "findCrlfChecked" (TyFun (TyCon "String") (TyFun (TyCon "Bytes") (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyApp (TyApp (TyCon "Result") (TyCon "FrameError")) (TyCon "Int")))))))))
-(DFunDef false "findCrlfChecked" ((PVar "label") (PVar "input") (PVar "avail") (PVar "start") (PVar "pos") (PVar "limit")) (EIf (EBinOp ">" (EBinOp "-" (EVar "pos") (EVar "start")) (EVar "limit")) (EApp (EVar "Err") (EApp (EVar "Fatal") (EApp (EVar "HttpResourceExcess") (EBinOp "++" (EBinOp "++" (ELit (LString "http: ")) (EApp (EVar "display") (EVar "label"))) (ELit (LString " exceeds its resource limit")))))) (EIf (EBinOp ">=" (EVar "pos") (EVar "avail")) (EApp (EVar "incomplete") (EBinOp "++" (EBinOp "++" (ELit (LString "http: truncated ")) (EApp (EVar "display") (EVar "label"))) (ELit (LString "; expected CRLF")))) (EIf (EBinOp "==" (EApp (EApp (EVar "byteAt") (EVar "input")) (EVar "pos")) (ELit (LInt 10))) (EApp (EVar "malformed") (EBinOp "++" (EBinOp "++" (ELit (LString "http: bare LF in ")) (EApp (EVar "display") (EVar "label"))) (ELit (LString "")))) (EIf (EBinOp "==" (EApp (EApp (EVar "byteAt") (EVar "input")) (EVar "pos")) (ELit (LInt 13))) (EIf (EBinOp ">=" (EBinOp "+" (EVar "pos") (ELit (LInt 1))) (EVar "avail")) (EApp (EVar "incomplete") (EBinOp "++" (EBinOp "++" (ELit (LString "http: bare CR in ")) (EApp (EVar "display") (EVar "label"))) (ELit (LString "")))) (EIf (EBinOp "/=" (EApp (EApp (EVar "byteAt") (EVar "input")) (EBinOp "+" (EVar "pos") (ELit (LInt 1)))) (ELit (LInt 10))) (EApp (EVar "malformed") (EBinOp "++" (EBinOp "++" (ELit (LString "http: bare CR in ")) (EApp (EVar "display") (EVar "label"))) (ELit (LString "")))) (EApp (EVar "Ok") (EVar "pos")))) (EApp (EApp (EApp (EApp (EApp (EApp (EVar "findCrlfChecked") (EVar "label")) (EVar "input")) (EVar "avail")) (EVar "start")) (EBinOp "+" (EVar "pos") (ELit (LInt 1)))) (EVar "limit")))))))
+(DFunDef false "findCrlfChecked" ((PVar "label") (PVar "input") (PVar "avail") (PVar "start") (PVar "pos0") (PVar "limit")) (ELetGroup ((lgb "go" (clause ((PVar "pos")) (EIf (EBinOp ">" (EBinOp "-" (EVar "pos") (EVar "start")) (EVar "limit")) (EApp (EVar "Err") (EApp (EVar "Fatal") (EApp (EVar "HttpResourceExcess") (EBinOp "++" (EBinOp "++" (ELit (LString "http: ")) (EApp (EVar "display") (EVar "label"))) (ELit (LString " exceeds its resource limit")))))) (EIf (EBinOp ">=" (EVar "pos") (EVar "avail")) (EApp (EVar "incomplete") (EBinOp "++" (EBinOp "++" (ELit (LString "http: truncated ")) (EApp (EVar "display") (EVar "label"))) (ELit (LString "; expected CRLF")))) (EIf (EBinOp "==" (EApp (EApp (EVar "byteAt") (EVar "input")) (EVar "pos")) (ELit (LInt 10))) (EApp (EVar "malformed") (EBinOp "++" (EBinOp "++" (ELit (LString "http: bare LF in ")) (EApp (EVar "display") (EVar "label"))) (ELit (LString "")))) (EIf (EBinOp "==" (EApp (EApp (EVar "byteAt") (EVar "input")) (EVar "pos")) (ELit (LInt 13))) (EIf (EBinOp ">=" (EBinOp "+" (EVar "pos") (ELit (LInt 1))) (EVar "avail")) (EApp (EVar "incomplete") (EBinOp "++" (EBinOp "++" (ELit (LString "http: bare CR in ")) (EApp (EVar "display") (EVar "label"))) (ELit (LString "")))) (EIf (EBinOp "/=" (EApp (EApp (EVar "byteAt") (EVar "input")) (EBinOp "+" (EVar "pos") (ELit (LInt 1)))) (ELit (LInt 10))) (EApp (EVar "malformed") (EBinOp "++" (EBinOp "++" (ELit (LString "http: bare CR in ")) (EApp (EVar "display") (EVar "label"))) (ELit (LString "")))) (EApp (EVar "Ok") (EVar "pos")))) (EApp (EVar "go") (EBinOp "+" (EVar "pos") (ELit (LInt 1))))))))))) (EApp (EVar "go") (EVar "pos0"))))
 (DTypeSig false "parseRequestLine" (TyFun (TyCon "Bytes") (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyApp (TyApp (TyCon "Result") (TyCon "FrameError")) (TyCon "RequestLine")))))))
 (DFunDef false "parseRequestLine" ((PVar "input") (PVar "avail") (PVar "start") (PVar "cursor")) (EApp (EApp (EVar "andThen") (EApp (EApp (EApp (EApp (EApp (EApp (EVar "findCrlfChecked") (ELit (LString "request line"))) (EVar "input")) (EVar "avail")) (EVar "start")) (EVar "cursor")) (EVar "maxHttpRequestLineBytes"))) (ELam ((PVar "end")) (EApp (EApp (EVar "andThen") (EApp (EVar "resourceExcess") (EApp (EVar "checkHttpRequestLineBytes") (EBinOp "-" (EVar "end") (EVar "start"))))) (ELam ((PVar "__do_x")) (EMatch (EVar "__do_x") (arm (PLit LUnit) () (EApp (EApp (EVar "andThen") (EMatch (EApp (EApp (EApp (EApp (EVar "elemIndexWithin") (EVar "start")) (EVar "end")) (ELit (LInt 32))) (EVar "input")) (arm (PCon "None") () (EApp (EVar "malformed") (ELit (LString "http: malformed request line; expected METHOD SP TARGET SP HTTP/1.1")))) (arm (PCon "Some" (PVar "pos")) () (EApp (EVar "Ok") (EVar "pos"))))) (ELam ((PVar "firstSpace")) (EApp (EApp (EVar "andThen") (EMatch (EApp (EApp (EApp (EApp (EVar "elemIndexWithin") (EBinOp "+" (EVar "firstSpace") (ELit (LInt 1)))) (EVar "end")) (ELit (LInt 32))) (EVar "input")) (arm (PCon "None") () (EApp (EVar "malformed") (ELit (LString "http: malformed request line; expected METHOD SP TARGET SP HTTP/1.1")))) (arm (PCon "Some" (PVar "pos")) () (EApp (EVar "Ok") (EVar "pos"))))) (ELam ((PVar "secondSpace")) (EIf (EBinOp "||" (EBinOp "==" (EVar "firstSpace") (EVar "start")) (EApp (EVar "not") (EApp (EApp (EApp (EVar "allToken") (EVar "input")) (EVar "start")) (EVar "firstSpace")))) (EApp (EVar "malformed") (ELit (LString "http: invalid method token"))) (EIf (EBinOp "==" (EVar "secondSpace") (EBinOp "+" (EVar "firstSpace") (ELit (LInt 1)))) (EApp (EVar "malformed") (ELit (LString "http: empty request target"))) (EIf (EBinOp "||" (EBinOp "/=" (EApp (EApp (EVar "byteAt") (EVar "input")) (EBinOp "+" (EVar "firstSpace") (ELit (LInt 1)))) (ELit (LInt 47))) (EApp (EVar "not") (EApp (EApp (EApp (EApp (EVar "validTarget") (EVar "input")) (EBinOp "+" (EVar "firstSpace") (ELit (LInt 1)))) (EVar "secondSpace")) (EVar "False")))) (EApp (EVar "malformed") (ELit (LString "http: request target must be an origin-form ASCII target without a fragment"))) (EIf (EBinOp "||" (EBinOp "/=" (EBinOp "+" (EVar "secondSpace") (ELit (LInt 9))) (EVar "end")) (EApp (EVar "not") (EApp (EApp (EApp (EVar "exactAsciiAt") (EVar "input")) (EBinOp "+" (EVar "secondSpace") (ELit (LInt 1)))) (ELit (LString "HTTP/1.1"))))) (EApp (EVar "malformed") (ELit (LString "http: only HTTP/1.1 requests are supported"))) (EApp (EVar "Ok") (EApp (EApp (EApp (EVar "RequestLine") (EApp (EApp (EVar "optionOrPanic") (ELit (LString "http: request-line method is proven ASCII by allToken"))) (EApp (EVar "decodeUtf8") (EApp (EApp (EApp (EVar "slice") (EVar "input")) (EVar "start")) (EVar "firstSpace"))))) (EApp (EApp (EVar "optionOrPanic") (ELit (LString "http: request target is proven ASCII by validTarget"))) (EApp (EVar "decodeUtf8") (EApp (EApp (EApp (EVar "slice") (EVar "input")) (EBinOp "+" (EVar "firstSpace") (ELit (LInt 1)))) (EVar "secondSpace"))))) (EBinOp "+" (EVar "end") (ELit (LInt 2))))))))))))))))))))
 (DTypeSig true "trimLeftOws" (TyFun (TyCon "Bytes") (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyCon "Int")))))
-(DFunDef false "trimLeftOws" ((PVar "value") (PVar "pos") (PVar "end")) (EIf (EBinOp "&&" (EBinOp "<" (EVar "pos") (EVar "end")) (EBinOp "||" (EBinOp "==" (EApp (EApp (EVar "byteAt") (EVar "value")) (EVar "pos")) (ELit (LInt 32))) (EBinOp "==" (EApp (EApp (EVar "byteAt") (EVar "value")) (EVar "pos")) (ELit (LInt 9))))) (EApp (EApp (EApp (EVar "trimLeftOws") (EVar "value")) (EBinOp "+" (EVar "pos") (ELit (LInt 1)))) (EVar "end")) (EVar "pos")))
+(DFunDef false "trimLeftOws" ((PVar "value") (PVar "pos0") (PVar "end")) (ELetGroup ((lgb "go" (clause ((PVar "pos")) (EIf (EBinOp "&&" (EBinOp "<" (EVar "pos") (EVar "end")) (EBinOp "||" (EBinOp "==" (EApp (EApp (EVar "byteAt") (EVar "value")) (EVar "pos")) (ELit (LInt 32))) (EBinOp "==" (EApp (EApp (EVar "byteAt") (EVar "value")) (EVar "pos")) (ELit (LInt 9))))) (EApp (EVar "go") (EBinOp "+" (EVar "pos") (ELit (LInt 1)))) (EVar "pos"))))) (EApp (EVar "go") (EVar "pos0"))))
 (DTypeSig true "trimRightOws" (TyFun (TyCon "Bytes") (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyCon "Int")))))
-(DFunDef false "trimRightOws" ((PVar "value") (PVar "start") (PVar "end")) (EIf (EBinOp "&&" (EBinOp ">" (EVar "end") (EVar "start")) (EBinOp "||" (EBinOp "==" (EApp (EApp (EVar "byteAt") (EVar "value")) (EBinOp "-" (EVar "end") (ELit (LInt 1)))) (ELit (LInt 32))) (EBinOp "==" (EApp (EApp (EVar "byteAt") (EVar "value")) (EBinOp "-" (EVar "end") (ELit (LInt 1)))) (ELit (LInt 9))))) (EApp (EApp (EApp (EVar "trimRightOws") (EVar "value")) (EVar "start")) (EBinOp "-" (EVar "end") (ELit (LInt 1)))) (EVar "end")))
+(DFunDef false "trimRightOws" ((PVar "value") (PVar "start") (PVar "end0")) (ELetGroup ((lgb "go" (clause ((PVar "end")) (EIf (EBinOp "&&" (EBinOp ">" (EVar "end") (EVar "start")) (EBinOp "||" (EBinOp "==" (EApp (EApp (EVar "byteAt") (EVar "value")) (EBinOp "-" (EVar "end") (ELit (LInt 1)))) (ELit (LInt 32))) (EBinOp "==" (EApp (EApp (EVar "byteAt") (EVar "value")) (EBinOp "-" (EVar "end") (ELit (LInt 1)))) (ELit (LInt 9))))) (EApp (EVar "go") (EBinOp "-" (EVar "end") (ELit (LInt 1)))) (EVar "end"))))) (EApp (EVar "go") (EVar "end0"))))
 (DTypeSig false "parseHeaderLine" (TyFun (TyCon "Bytes") (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyApp (TyApp (TyCon "Result") (TyCon "FrameError")) (TyCon "Header"))))))
 (DFunDef false "parseHeaderLine" ((PVar "input") (PVar "start") (PVar "end")) (EIf (EBinOp "||" (EBinOp "==" (EApp (EApp (EVar "byteAt") (EVar "input")) (EVar "start")) (ELit (LInt 32))) (EBinOp "==" (EApp (EApp (EVar "byteAt") (EVar "input")) (EVar "start")) (ELit (LInt 9)))) (EApp (EVar "malformed") (ELit (LString "http: obsolete folded header lines are forbidden"))) (EMatch (EApp (EApp (EApp (EApp (EVar "elemIndexWithin") (EVar "start")) (EVar "end")) (ELit (LInt 58))) (EVar "input")) (arm (PCon "None") () (EApp (EVar "malformed") (ELit (LString "http: malformed header field; missing colon")))) (arm (PCon "Some" (PVar "colon")) () (EIf (EBinOp "||" (EBinOp "==" (EVar "colon") (EVar "start")) (EApp (EVar "not") (EApp (EApp (EApp (EVar "allToken") (EVar "input")) (EVar "start")) (EVar "colon")))) (EApp (EVar "malformed") (ELit (LString "http: invalid header field name"))) (EIf (EApp (EVar "not") (EApp (EApp (EApp (EVar "validFieldValue") (EVar "input")) (EBinOp "+" (EVar "colon") (ELit (LInt 1)))) (EVar "end"))) (EApp (EVar "malformed") (ELit (LString "http: control byte in header field value"))) (EBlock (DoLet false false (PVar "valueStart") (EApp (EApp (EApp (EVar "trimLeftOws") (EVar "input")) (EBinOp "+" (EVar "colon") (ELit (LInt 1)))) (EVar "end"))) (DoLet false false (PVar "valueEnd") (EApp (EApp (EApp (EVar "trimRightOws") (EVar "input")) (EVar "valueStart")) (EVar "end"))) (DoExpr (EApp (EVar "Ok") (EApp (EApp (EVar "Header") (EApp (EApp (EApp (EVar "lowerAscii") (EVar "input")) (EVar "start")) (EVar "colon"))) (EApp (EApp (EApp (EVar "slice") (EVar "input")) (EVar "valueStart")) (EVar "valueEnd"))))))))))))
 (DTypeSig false "forbiddenTrailer" (TyFun (TyCon "Header") (TyCon "Bool")))
@@ -2608,7 +2634,7 @@ decodeRequestBody (Request _ _ headers _ packed _) = do
 (DTypeSig false "fieldStep" (TyFun (TyCon "Bytes") (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyFun (TyCon "Bool") (TyApp (TyApp (TyCon "Result") (TyCon "FrameError")) (TyCon "FieldStep")))))))))))
 (DFunDef false "fieldStep" ((PVar "input") (PVar "avail") (PVar "pos") (PVar "cursor") (PVar "sectionStart") (PVar "priorBytes") (PVar "count") (PVar "trailer")) (EApp (EApp (EVar "andThen") (EApp (EApp (EApp (EApp (EApp (EApp (EVar "findCrlfChecked") (EIf (EVar "trailer") (ELit (LString "trailer field")) (ELit (LString "header field")))) (EVar "input")) (EVar "avail")) (EVar "pos")) (EVar "cursor")) (EVar "maxHttpHeaderBytes"))) (ELam ((PVar "end")) (ELet false (PVar "next") (EBinOp "+" (EVar "end") (ELit (LInt 2))) (ELet false (PVar "totalBytes") (EBinOp "-" (EBinOp "+" (EVar "priorBytes") (EVar "next")) (EVar "sectionStart")) (EApp (EApp (EVar "andThen") (EApp (EVar "resourceExcess") (EApp (EVar "checkHttpHeaderBytes") (EVar "totalBytes")))) (ELam ((PVar "__do_x")) (EMatch (EVar "__do_x") (arm (PLit LUnit) () (EIf (EBinOp "==" (EVar "end") (EVar "pos")) (EApp (EVar "Ok") (EApp (EApp (EVar "FieldDone") (EVar "next")) (EVar "totalBytes"))) (EApp (EApp (EVar "andThen") (EApp (EApp (EVar "checkFieldCount") (EVar "trailer")) (EBinOp "+" (EVar "count") (ELit (LInt 1))))) (ELam ((PVar "__do_x")) (EMatch (EVar "__do_x") (arm (PLit LUnit) () (EApp (EApp (EVar "andThen") (EApp (EApp (EApp (EVar "parseHeaderLine") (EVar "input")) (EVar "pos")) (EVar "end"))) (ELam ((PVar "field")) (EIf (EBinOp "&&" (EVar "trailer") (EApp (EVar "forbiddenTrailer") (EVar "field"))) (EApp (EVar "malformed") (ELit (LString "http: forbidden framing or routing field in trailer"))) (EApp (EVar "Ok") (EApp (EApp (EVar "FieldMore") (EVar "field")) (EVar "next"))))))))))))))))))))
 (DTypeSig false "parseFieldsChecked" (TyFun (TyCon "Bytes") (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyFun (TyCon "Bool") (TyFun (TyApp (TyCon "List") (TyCon "Header")) (TyApp (TyApp (TyCon "Result") (TyCon "FrameError")) (TyCon "HeaderBlock"))))))))))
-(DFunDef false "parseFieldsChecked" ((PVar "input") (PVar "pos") (PVar "sectionStart") (PVar "priorBytes") (PVar "count") (PVar "trailer") (PVar "acc")) (EApp (EApp (EVar "andThen") (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EVar "fieldStep") (EVar "input")) (EApp (EVar "B.length") (EVar "input"))) (EVar "pos")) (EVar "pos")) (EVar "sectionStart")) (EVar "priorBytes")) (EVar "count")) (EVar "trailer"))) (ELam ((PVar "step")) (EMatch (EVar "step") (arm (PCon "FieldDone" (PVar "next") (PVar "totalBytes")) () (EApp (EVar "Ok") (EApp (EApp (EApp (EVar "HeaderBlock") (EApp (EVar "reverse") (EVar "acc"))) (EVar "next")) (EVar "totalBytes")))) (arm (PCon "FieldMore" (PVar "field") (PVar "next")) () (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EVar "parseFieldsChecked") (EVar "input")) (EVar "next")) (EVar "sectionStart")) (EVar "priorBytes")) (EBinOp "+" (EVar "count") (ELit (LInt 1)))) (EVar "trailer")) (EBinOp "::" (EVar "field") (EVar "acc"))))))))
+(DFunDef false "parseFieldsChecked" ((PVar "inp") (PVar "p0") (PVar "secBeg") (PVar "prior") (PVar "c0") (PVar "trailer") (PVar "a0")) (ELetGroup ((lgb "go" (clause ((PVar "pos") (PVar "count") (PVar "acc")) (EApp (EApp (EVar "andThen") (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EVar "fieldStep") (EVar "inp")) (EApp (EVar "B.length") (EVar "inp"))) (EVar "pos")) (EVar "pos")) (EVar "secBeg")) (EVar "prior")) (EVar "count")) (EVar "trailer"))) (ELam ((PVar "step")) (EMatch (EVar "step") (arm (PCon "FieldDone" (PVar "next") (PVar "totalBytes")) () (EApp (EVar "Ok") (EApp (EApp (EApp (EVar "HeaderBlock") (EApp (EVar "reverse") (EVar "acc"))) (EVar "next")) (EVar "totalBytes")))) (arm (PCon "FieldMore" (PVar "field") (PVar "next")) () (EApp (EApp (EApp (EVar "go") (EVar "next")) (EBinOp "+" (EVar "count") (ELit (LInt 1)))) (EBinOp "::" (EVar "field") (EVar "acc")))))))))) (EApp (EApp (EApp (EVar "go") (EVar "p0")) (EVar "c0")) (EVar "a0"))))
 (DTypeSig true "parseFields" (TyFun (TyCon "Bytes") (TyFun (TyCon "Int") (TyFun (TyCon "Bool") (TyApp (TyApp (TyCon "Result") (TyCon "HttpParseFailure")) (TyTuple (TyApp (TyCon "List") (TyCon "Header")) (TyCon "Int")))))))
 (DFunDef false "parseFields" ((PVar "input") (PVar "pos") (PVar "trailer")) (EApp (EApp (EVar "map") (ELam ((PCon "HeaderBlock" (PVar "fields") (PVar "next") PWild)) (ETuple (EVar "fields") (EVar "next")))) (EApp (EVar "settle") (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EVar "parseFieldsChecked") (EVar "input")) (EVar "pos")) (EVar "pos")) (ELit (LInt 0))) (ELit (LInt 0))) (EVar "trailer")) (EListLit)))))
 (DTypeSig false "countNamed" (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "Header")) (TyCon "Int"))))
@@ -2618,7 +2644,7 @@ decodeRequestBody (Request _ _ headers _ packed _) = do
 (DFunDef false "findNamed" (PWild (PList)) (EVar "None"))
 (DFunDef false "findNamed" ((PVar "wanted") (PCons (PCon "Header" (PVar "name") (PVar "value")) (PVar "rest"))) (EIf (EBinOp "==" (EVar "name") (EVar "wanted")) (EApp (EVar "Some") (EVar "value")) (EApp (EApp (EVar "findNamed") (EVar "wanted")) (EVar "rest"))))
 (DTypeSig false "asciiEqualCiGo" (TyFun (TyCon "Bytes") (TyFun (TyCon "Bytes") (TyFun (TyCon "Int") (TyCon "Bool")))))
-(DFunDef false "asciiEqualCiGo" ((PVar "value") (PVar "expected") (PVar "i")) (EIf (EBinOp ">=" (EVar "i") (EApp (EVar "B.length") (EVar "value"))) (EBinOp "==" (EVar "i") (EApp (EVar "B.length") (EVar "expected"))) (EBinOp "&&" (EBinOp "&&" (EBinOp "&&" (EBinOp "<" (EVar "i") (EApp (EVar "B.length") (EVar "expected"))) (EBinOp "<=" (EApp (EApp (EVar "byteAt") (EVar "value")) (EVar "i")) (ELit (LInt 127)))) (EBinOp "==" (EApp (EVar "lowerByte") (EApp (EApp (EVar "byteAt") (EVar "value")) (EVar "i"))) (EApp (EVar "lowerByte") (EApp (EApp (EVar "byteAt") (EVar "expected")) (EVar "i"))))) (EApp (EApp (EApp (EVar "asciiEqualCiGo") (EVar "value")) (EVar "expected")) (EBinOp "+" (EVar "i") (ELit (LInt 1)))))))
+(DFunDef false "asciiEqualCiGo" ((PVar "value") (PVar "expected") (PVar "i0")) (ELetGroup ((lgb "go" (clause ((PVar "i")) (EIf (EBinOp ">=" (EVar "i") (EApp (EVar "B.length") (EVar "value"))) (EBinOp "==" (EVar "i") (EApp (EVar "B.length") (EVar "expected"))) (EBinOp "&&" (EBinOp "&&" (EBinOp "&&" (EBinOp "<" (EVar "i") (EApp (EVar "B.length") (EVar "expected"))) (EBinOp "<=" (EApp (EApp (EVar "byteAt") (EVar "value")) (EVar "i")) (ELit (LInt 127)))) (EBinOp "==" (EApp (EVar "lowerByte") (EApp (EApp (EVar "byteAt") (EVar "value")) (EVar "i"))) (EApp (EVar "lowerByte") (EApp (EApp (EVar "byteAt") (EVar "expected")) (EVar "i"))))) (EApp (EVar "go") (EBinOp "+" (EVar "i") (ELit (LInt 1))))))))) (EApp (EVar "go") (EVar "i0"))))
 (DTypeSig false "asciiEqualCi" (TyFun (TyCon "Bytes") (TyFun (TyCon "String") (TyCon "Bool"))))
 (DFunDef false "asciiEqualCi" ((PVar "value") (PVar "expected")) (EApp (EApp (EApp (EVar "asciiEqualCiGo") (EVar "value")) (EApp (EVar "encodeUtf8") (EVar "expected"))) (ELit (LInt 0))))
 (DTypeSig false "parseDecimalGo" (TyFun (TyCon "Bytes") (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyApp (TyApp (TyCon "Result") (TyCon "FrameError")) (TyCon "Int"))))))
@@ -2628,30 +2654,30 @@ decodeRequestBody (Request _ _ headers _ packed _) = do
 (DTypeSig false "selectBodyMode" (TyFun (TyApp (TyCon "List") (TyCon "Header")) (TyApp (TyApp (TyCon "Result") (TyCon "FrameError")) (TyCon "BodyMode"))))
 (DFunDef false "selectBodyMode" ((PVar "headers")) (EBlock (DoLet false false (PVar "clCount") (EApp (EApp (EVar "countNamed") (ELit (LString "content-length"))) (EVar "headers"))) (DoLet false false (PVar "teCount") (EApp (EApp (EVar "countNamed") (ELit (LString "transfer-encoding"))) (EVar "headers"))) (DoExpr (EIf (EBinOp ">" (EVar "clCount") (ELit (LInt 1))) (EApp (EVar "malformed") (ELit (LString "http: duplicate Content-Length is ambiguous"))) (EIf (EBinOp "&&" (EBinOp ">" (EVar "clCount") (ELit (LInt 0))) (EBinOp ">" (EVar "teCount") (ELit (LInt 0)))) (EApp (EVar "malformed") (ELit (LString "http: Transfer-Encoding with Content-Length is ambiguous"))) (EIf (EBinOp ">" (EVar "teCount") (ELit (LInt 0))) (EIf (EBinOp "/=" (EVar "teCount") (ELit (LInt 1))) (EApp (EVar "malformed") (ELit (LString "http: repeated Transfer-Encoding is unsupported"))) (EMatch (EApp (EApp (EVar "findNamed") (ELit (LString "transfer-encoding"))) (EVar "headers")) (arm (PCon "Some" (PVar "value")) () (EIf (EApp (EApp (EVar "asciiEqualCi") (EVar "value")) (ELit (LString "chunked"))) (EApp (EVar "Ok") (EVar "ChunkedBody")) (EApp (EVar "malformed") (ELit (LString "http: unsupported transfer coding; expected exactly chunked"))))) (arm (PCon "None") () (EApp (EVar "malformed") (ELit (LString "http: internal transfer framing error")))))) (EIf (EBinOp "==" (EVar "clCount") (ELit (LInt 1))) (EMatch (EApp (EApp (EVar "findNamed") (ELit (LString "content-length"))) (EVar "headers")) (arm (PCon "Some" (PVar "value")) () (EApp (EApp (EVar "map") (EVar "FixedBody")) (EApp (EVar "parseContentLength") (EVar "value")))) (arm (PCon "None") () (EApp (EVar "malformed") (ELit (LString "http: internal content framing error"))))) (EApp (EVar "Ok") (EVar "NoBody")))))))))
 (DTypeSig false "scanTokenEnd" (TyFun (TyCon "Bytes") (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyCon "Int")))))
-(DFunDef false "scanTokenEnd" ((PVar "value") (PVar "pos") (PVar "end")) (EIf (EBinOp "&&" (EBinOp "<" (EVar "pos") (EVar "end")) (EApp (EVar "isTokenByte") (EApp (EApp (EVar "byteAt") (EVar "value")) (EVar "pos")))) (EApp (EApp (EApp (EVar "scanTokenEnd") (EVar "value")) (EBinOp "+" (EVar "pos") (ELit (LInt 1)))) (EVar "end")) (EVar "pos")))
+(DFunDef false "scanTokenEnd" ((PVar "value") (PVar "pos0") (PVar "end")) (ELetGroup ((lgb "go" (clause ((PVar "pos")) (EIf (EBinOp "&&" (EBinOp "<" (EVar "pos") (EVar "end")) (EApp (EVar "isTokenByte") (EApp (EApp (EVar "byteAt") (EVar "value")) (EVar "pos")))) (EApp (EVar "go") (EBinOp "+" (EVar "pos") (ELit (LInt 1)))) (EVar "pos"))))) (EApp (EVar "go") (EVar "pos0"))))
 (DTypeSig false "parseConnectionValue" (TyFun (TyCon "Bytes") (TyFun (TyCon "Int") (TyFun (TyCon "Bool") (TyApp (TyApp (TyCon "Result") (TyCon "FrameError")) (TyCon "Bool"))))))
 (DFunDef false "parseConnectionValue" ((PVar "value") (PVar "pos") (PVar "sawClose")) (EBlock (DoLet false false (PVar "end") (EApp (EVar "B.length") (EVar "value"))) (DoLet false false (PVar "start") (EApp (EApp (EApp (EVar "trimLeftOws") (EVar "value")) (EVar "pos")) (EVar "end"))) (DoExpr (EIf (EBinOp ">=" (EVar "start") (EVar "end")) (EApp (EVar "malformed") (ELit (LString "http: empty token in Connection field"))) (EBlock (DoLet false false (PVar "tokenEnd") (EApp (EApp (EApp (EVar "scanTokenEnd") (EVar "value")) (EVar "start")) (EVar "end"))) (DoExpr (EIf (EBinOp "==" (EVar "tokenEnd") (EVar "start")) (EApp (EVar "malformed") (ELit (LString "http: invalid Connection token"))) (EBlock (DoLet false false (PVar "closeNow") (EBinOp "||" (EVar "sawClose") (EBinOp "==" (EApp (EApp (EApp (EVar "lowerAscii") (EVar "value")) (EVar "start")) (EVar "tokenEnd")) (ELit (LString "close"))))) (DoLet false false (PVar "after") (EApp (EApp (EApp (EVar "trimLeftOws") (EVar "value")) (EVar "tokenEnd")) (EVar "end"))) (DoExpr (EIf (EBinOp "==" (EVar "after") (EVar "end")) (EApp (EVar "Ok") (EVar "closeNow")) (EIf (EBinOp "/=" (EApp (EApp (EVar "byteAt") (EVar "value")) (EVar "after")) (ELit (LInt 44))) (EApp (EVar "malformed") (ELit (LString "http: invalid Connection token list"))) (EApp (EApp (EApp (EVar "parseConnectionValue") (EVar "value")) (EBinOp "+" (EVar "after") (ELit (LInt 1)))) (EVar "closeNow")))))))))))))
 (DTypeSig false "keepAliveFromHeaders" (TyFun (TyApp (TyCon "List") (TyCon "Header")) (TyApp (TyApp (TyCon "Result") (TyCon "FrameError")) (TyCon "Bool"))))
 (DFunDef false "keepAliveFromHeaders" ((PList)) (EApp (EVar "Ok") (EVar "True")))
 (DFunDef false "keepAliveFromHeaders" ((PCons (PCon "Header" (PVar "name") (PVar "value")) (PVar "rest"))) (EApp (EApp (EVar "andThen") (EApp (EVar "keepAliveFromHeaders") (EVar "rest"))) (ELam ((PVar "restKeepAlive")) (EIf (EBinOp "/=" (EVar "name") (ELit (LString "connection"))) (EApp (EVar "Ok") (EVar "restKeepAlive")) (EApp (EApp (EVar "andThen") (EApp (EApp (EApp (EVar "parseConnectionValue") (EVar "value")) (ELit (LInt 0))) (EVar "False"))) (ELam ((PVar "closes")) (EApp (EVar "Ok") (EBinOp "&&" (EVar "restKeepAlive") (EApp (EVar "not") (EVar "closes"))))))))))
 (DTypeSig false "validRegName" (TyFun (TyCon "Bytes") (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyCon "Bool")))))
-(DFunDef false "validRegName" ((PVar "value") (PVar "pos") (PVar "end")) (EIf (EBinOp ">=" (EVar "pos") (EVar "end")) (EVar "True") (EBlock (DoLet false false (PVar "byte") (EApp (EApp (EVar "byteAt") (EVar "value")) (EVar "pos"))) (DoExpr (EIf (EBinOp "==" (EVar "byte") (ELit (LInt 37))) (EBinOp "&&" (EBinOp "&&" (EBinOp "&&" (EBinOp "<" (EBinOp "+" (EVar "pos") (ELit (LInt 2))) (EVar "end")) (EApp (EVar "isHexByte") (EApp (EApp (EVar "byteAt") (EVar "value")) (EBinOp "+" (EVar "pos") (ELit (LInt 1)))))) (EApp (EVar "isHexByte") (EApp (EApp (EVar "byteAt") (EVar "value")) (EBinOp "+" (EVar "pos") (ELit (LInt 2)))))) (EApp (EApp (EApp (EVar "validRegName") (EVar "value")) (EBinOp "+" (EVar "pos") (ELit (LInt 3)))) (EVar "end"))) (EBinOp "&&" (EBinOp "||" (EApp (EVar "isUnreservedByte") (EVar "byte")) (EApp (EVar "isSubDelimiterByte") (EVar "byte"))) (EApp (EApp (EApp (EVar "validRegName") (EVar "value")) (EBinOp "+" (EVar "pos") (ELit (LInt 1)))) (EVar "end"))))))))
+(DFunDef false "validRegName" ((PVar "value") (PVar "pos0") (PVar "end")) (ELetGroup ((lgb "go" (clause ((PVar "pos")) (EIf (EBinOp ">=" (EVar "pos") (EVar "end")) (EVar "True") (EBlock (DoLet false false (PVar "byte") (EApp (EApp (EVar "byteAt") (EVar "value")) (EVar "pos"))) (DoExpr (EIf (EBinOp "==" (EVar "byte") (ELit (LInt 37))) (EBinOp "&&" (EBinOp "&&" (EBinOp "&&" (EBinOp "<" (EBinOp "+" (EVar "pos") (ELit (LInt 2))) (EVar "end")) (EApp (EVar "isHexByte") (EApp (EApp (EVar "byteAt") (EVar "value")) (EBinOp "+" (EVar "pos") (ELit (LInt 1)))))) (EApp (EVar "isHexByte") (EApp (EApp (EVar "byteAt") (EVar "value")) (EBinOp "+" (EVar "pos") (ELit (LInt 2)))))) (EApp (EVar "go") (EBinOp "+" (EVar "pos") (ELit (LInt 3))))) (EBinOp "&&" (EBinOp "||" (EApp (EVar "isUnreservedByte") (EVar "byte")) (EApp (EVar "isSubDelimiterByte") (EVar "byte"))) (EApp (EVar "go") (EBinOp "+" (EVar "pos") (ELit (LInt 1)))))))))))) (EApp (EVar "go") (EVar "pos0"))))
 (DTypeSig false "allDigits" (TyFun (TyCon "Bytes") (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyCon "Bool")))))
-(DFunDef false "allDigits" ((PVar "value") (PVar "pos") (PVar "end")) (EIf (EBinOp ">=" (EVar "pos") (EVar "end")) (EVar "True") (EBinOp "&&" (EBinOp "&&" (EBinOp ">=" (EApp (EApp (EVar "byteAt") (EVar "value")) (EVar "pos")) (ELit (LInt 48))) (EBinOp "<=" (EApp (EApp (EVar "byteAt") (EVar "value")) (EVar "pos")) (ELit (LInt 57)))) (EApp (EApp (EApp (EVar "allDigits") (EVar "value")) (EBinOp "+" (EVar "pos") (ELit (LInt 1)))) (EVar "end")))))
+(DFunDef false "allDigits" ((PVar "value") (PVar "pos0") (PVar "end")) (ELetGroup ((lgb "go" (clause ((PVar "pos")) (EIf (EBinOp ">=" (EVar "pos") (EVar "end")) (EVar "True") (EBinOp "&&" (EBinOp "&&" (EBinOp ">=" (EApp (EApp (EVar "byteAt") (EVar "value")) (EVar "pos")) (ELit (LInt 48))) (EBinOp "<=" (EApp (EApp (EVar "byteAt") (EVar "value")) (EVar "pos")) (ELit (LInt 57)))) (EApp (EVar "go") (EBinOp "+" (EVar "pos") (ELit (LInt 1))))))))) (EApp (EVar "go") (EVar "pos0"))))
 (DTypeSig false "decimalValue" (TyFun (TyCon "Bytes") (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyCon "Int"))))))
-(DFunDef false "decimalValue" ((PVar "value") (PVar "pos") (PVar "end") (PVar "acc")) (EIf (EBinOp ">=" (EVar "pos") (EVar "end")) (EVar "acc") (EApp (EApp (EApp (EApp (EVar "decimalValue") (EVar "value")) (EBinOp "+" (EVar "pos") (ELit (LInt 1)))) (EVar "end")) (EBinOp "-" (EBinOp "+" (EBinOp "*" (EVar "acc") (ELit (LInt 10))) (EApp (EApp (EVar "byteAt") (EVar "value")) (EVar "pos"))) (ELit (LInt 48))))))
+(DFunDef false "decimalValue" ((PVar "value") (PVar "pos0") (PVar "end") (PVar "acc0")) (ELetGroup ((lgb "go" (clause ((PVar "pos") (PVar "acc")) (EIf (EBinOp ">=" (EVar "pos") (EVar "end")) (EVar "acc") (EApp (EApp (EVar "go") (EBinOp "+" (EVar "pos") (ELit (LInt 1)))) (EBinOp "-" (EBinOp "+" (EBinOp "*" (EVar "acc") (ELit (LInt 10))) (EApp (EApp (EVar "byteAt") (EVar "value")) (EVar "pos"))) (ELit (LInt 48)))))))) (EApp (EApp (EVar "go") (EVar "pos0")) (EVar "acc0"))))
 (DTypeSig false "validIpv4" (TyFun (TyCon "Bytes") (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyCon "Bool"))))))
-(DFunDef false "validIpv4" ((PVar "value") (PVar "start") (PVar "end") (PVar "parts")) (EIf (EBinOp "||" (EBinOp ">=" (EVar "parts") (ELit (LInt 4))) (EBinOp ">=" (EVar "start") (EVar "end"))) (EVar "False") (EBlock (DoLet false false (PVar "dot") (EApp (EApp (EVar "optionOr") (EVar "end")) (EApp (EApp (EApp (EApp (EVar "findByte") (EVar "value")) (EVar "start")) (EVar "end")) (ELit (LInt 46))))) (DoLet false false (PVar "size") (EBinOp "-" (EVar "dot") (EVar "start"))) (DoLet false false (PVar "validPart") (EBinOp "&&" (EBinOp "&&" (EBinOp "&&" (EBinOp "&&" (EBinOp ">=" (EVar "size") (ELit (LInt 1))) (EBinOp "<=" (EVar "size") (ELit (LInt 3)))) (EApp (EApp (EApp (EVar "allDigits") (EVar "value")) (EVar "start")) (EVar "dot"))) (EBinOp "<=" (EApp (EApp (EApp (EApp (EVar "decimalValue") (EVar "value")) (EVar "start")) (EVar "dot")) (ELit (LInt 0))) (ELit (LInt 255)))) (EBinOp "||" (EBinOp "==" (EVar "size") (ELit (LInt 1))) (EBinOp "/=" (EApp (EApp (EVar "byteAt") (EVar "value")) (EVar "start")) (ELit (LInt 48)))))) (DoExpr (EIf (EApp (EVar "not") (EVar "validPart")) (EVar "False") (EIf (EBinOp "==" (EVar "dot") (EVar "end")) (EBinOp "==" (EVar "parts") (ELit (LInt 3))) (EApp (EApp (EApp (EApp (EVar "validIpv4") (EVar "value")) (EBinOp "+" (EVar "dot") (ELit (LInt 1)))) (EVar "end")) (EBinOp "+" (EVar "parts") (ELit (LInt 1))))))))))
+(DFunDef false "validIpv4" ((PVar "value") (PVar "start0") (PVar "end") (PVar "parts0")) (ELetGroup ((lgb "go" (clause ((PVar "start") (PVar "parts")) (EIf (EBinOp "||" (EBinOp ">=" (EVar "parts") (ELit (LInt 4))) (EBinOp ">=" (EVar "start") (EVar "end"))) (EVar "False") (EBlock (DoLet false false (PVar "dot") (EApp (EApp (EVar "optionOr") (EVar "end")) (EApp (EApp (EApp (EApp (EVar "findByte") (EVar "value")) (EVar "start")) (EVar "end")) (ELit (LInt 46))))) (DoLet false false (PVar "size") (EBinOp "-" (EVar "dot") (EVar "start"))) (DoLet false false (PVar "validPart") (EBinOp "&&" (EBinOp "&&" (EBinOp "&&" (EBinOp "&&" (EBinOp ">=" (EVar "size") (ELit (LInt 1))) (EBinOp "<=" (EVar "size") (ELit (LInt 3)))) (EApp (EApp (EApp (EVar "allDigits") (EVar "value")) (EVar "start")) (EVar "dot"))) (EBinOp "<=" (EApp (EApp (EApp (EApp (EVar "decimalValue") (EVar "value")) (EVar "start")) (EVar "dot")) (ELit (LInt 0))) (ELit (LInt 255)))) (EBinOp "||" (EBinOp "==" (EVar "size") (ELit (LInt 1))) (EBinOp "/=" (EApp (EApp (EVar "byteAt") (EVar "value")) (EVar "start")) (ELit (LInt 48)))))) (DoExpr (EIf (EApp (EVar "not") (EVar "validPart")) (EVar "False") (EIf (EBinOp "==" (EVar "dot") (EVar "end")) (EBinOp "==" (EVar "parts") (ELit (LInt 3))) (EApp (EApp (EVar "go") (EBinOp "+" (EVar "dot") (ELit (LInt 1)))) (EBinOp "+" (EVar "parts") (ELit (LInt 1)))))))))))) (EApp (EApp (EVar "go") (EVar "start0")) (EVar "parts0"))))
 (DTypeSig false "allHex" (TyFun (TyCon "Bytes") (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyCon "Bool")))))
-(DFunDef false "allHex" ((PVar "value") (PVar "pos") (PVar "end")) (EIf (EBinOp ">=" (EVar "pos") (EVar "end")) (EVar "True") (EBinOp "&&" (EApp (EVar "isHexByte") (EApp (EApp (EVar "byteAt") (EVar "value")) (EVar "pos"))) (EApp (EApp (EApp (EVar "allHex") (EVar "value")) (EBinOp "+" (EVar "pos") (ELit (LInt 1)))) (EVar "end")))))
+(DFunDef false "allHex" ((PVar "value") (PVar "pos0") (PVar "end")) (ELetGroup ((lgb "go" (clause ((PVar "pos")) (EIf (EBinOp ">=" (EVar "pos") (EVar "end")) (EVar "True") (EBinOp "&&" (EApp (EVar "isHexByte") (EApp (EApp (EVar "byteAt") (EVar "value")) (EVar "pos"))) (EApp (EVar "go") (EBinOp "+" (EVar "pos") (ELit (LInt 1))))))))) (EApp (EVar "go") (EVar "pos0"))))
 (DTypeSig false "validIpv6Go" (TyFun (TyCon "Bytes") (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyFun (TyCon "Bool") (TyCon "Bool")))))))
-(DFunDef false "validIpv6Go" ((PVar "value") (PVar "pos") (PVar "end") (PVar "groups") (PVar "compressed")) (EIf (EBinOp ">=" (EVar "pos") (EVar "end")) (EIf (EVar "compressed") (EBinOp "<" (EVar "groups") (ELit (LInt 8))) (EBinOp "==" (EVar "groups") (ELit (LInt 8)))) (EBlock (DoLet false false (PVar "colon") (EApp (EApp (EVar "optionOr") (EVar "end")) (EApp (EApp (EApp (EApp (EVar "findByte") (EVar "value")) (EVar "pos")) (EVar "end")) (ELit (LInt 58))))) (DoExpr (EIf (EBinOp "==" (EVar "colon") (EVar "pos")) (EVar "False") (EBlock (DoLet false false (PVar "dot") (EApp (EApp (EApp (EApp (EVar "findByte") (EVar "value")) (EVar "pos")) (EVar "colon")) (ELit (LInt 46)))) (DoLet false false (PVar "componentGroups") (EMatch (EVar "dot") (arm (PCon "None") () (EIf (EBinOp "&&" (EBinOp "<=" (EBinOp "-" (EVar "colon") (EVar "pos")) (ELit (LInt 4))) (EApp (EApp (EApp (EVar "allHex") (EVar "value")) (EVar "pos")) (EVar "colon"))) (ELit (LInt 1)) (ELit (LInt 9)))) (arm (PCon "Some" PWild) () (EIf (EBinOp "&&" (EBinOp "==" (EVar "colon") (EVar "end")) (EApp (EApp (EApp (EApp (EVar "validIpv4") (EVar "value")) (EVar "pos")) (EVar "colon")) (ELit (LInt 0)))) (ELit (LInt 2)) (ELit (LInt 9)))))) (DoLet false false (PVar "nextGroups") (EBinOp "+" (EVar "groups") (EVar "componentGroups"))) (DoExpr (EIf (EBinOp ">" (EVar "nextGroups") (ELit (LInt 8))) (EVar "False") (EIf (EBinOp "==" (EVar "colon") (EVar "end")) (EIf (EVar "compressed") (EBinOp "<" (EVar "nextGroups") (ELit (LInt 8))) (EBinOp "==" (EVar "nextGroups") (ELit (LInt 8)))) (EIf (EBinOp "&&" (EBinOp "<" (EBinOp "+" (EVar "colon") (ELit (LInt 1))) (EVar "end")) (EBinOp "==" (EApp (EApp (EVar "byteAt") (EVar "value")) (EBinOp "+" (EVar "colon") (ELit (LInt 1)))) (ELit (LInt 58)))) (EBinOp "&&" (EApp (EVar "not") (EVar "compressed")) (EApp (EApp (EApp (EApp (EApp (EVar "validIpv6Go") (EVar "value")) (EBinOp "+" (EVar "colon") (ELit (LInt 2)))) (EVar "end")) (EVar "nextGroups")) (EVar "True"))) (EApp (EApp (EApp (EApp (EApp (EVar "validIpv6Go") (EVar "value")) (EBinOp "+" (EVar "colon") (ELit (LInt 1)))) (EVar "end")) (EVar "nextGroups")) (EVar "compressed"))))))))))))
+(DFunDef false "validIpv6Go" ((PVar "value") (PVar "pos0") (PVar "end") (PVar "groups0") (PVar "compressed0")) (ELetGroup ((lgb "go" (clause ((PVar "pos") (PVar "groups") (PVar "compressed")) (EIf (EBinOp ">=" (EVar "pos") (EVar "end")) (EIf (EVar "compressed") (EBinOp "<" (EVar "groups") (ELit (LInt 8))) (EBinOp "==" (EVar "groups") (ELit (LInt 8)))) (EBlock (DoLet false false (PVar "colon") (EApp (EApp (EVar "optionOr") (EVar "end")) (EApp (EApp (EApp (EApp (EVar "findByte") (EVar "value")) (EVar "pos")) (EVar "end")) (ELit (LInt 58))))) (DoExpr (EIf (EBinOp "==" (EVar "colon") (EVar "pos")) (EVar "False") (EBlock (DoLet false false (PVar "dot") (EApp (EApp (EApp (EApp (EVar "findByte") (EVar "value")) (EVar "pos")) (EVar "colon")) (ELit (LInt 46)))) (DoLet false false (PVar "componentGroups") (EMatch (EVar "dot") (arm (PCon "None") () (EIf (EBinOp "&&" (EBinOp "<=" (EBinOp "-" (EVar "colon") (EVar "pos")) (ELit (LInt 4))) (EApp (EApp (EApp (EVar "allHex") (EVar "value")) (EVar "pos")) (EVar "colon"))) (ELit (LInt 1)) (ELit (LInt 9)))) (arm (PCon "Some" PWild) () (EIf (EBinOp "&&" (EBinOp "==" (EVar "colon") (EVar "end")) (EApp (EApp (EApp (EApp (EVar "validIpv4") (EVar "value")) (EVar "pos")) (EVar "colon")) (ELit (LInt 0)))) (ELit (LInt 2)) (ELit (LInt 9)))))) (DoLet false false (PVar "nextGroups") (EBinOp "+" (EVar "groups") (EVar "componentGroups"))) (DoExpr (EIf (EBinOp ">" (EVar "nextGroups") (ELit (LInt 8))) (EVar "False") (EIf (EBinOp "==" (EVar "colon") (EVar "end")) (EIf (EVar "compressed") (EBinOp "<" (EVar "nextGroups") (ELit (LInt 8))) (EBinOp "==" (EVar "nextGroups") (ELit (LInt 8)))) (EIf (EBinOp "&&" (EBinOp "<" (EBinOp "+" (EVar "colon") (ELit (LInt 1))) (EVar "end")) (EBinOp "==" (EApp (EApp (EVar "byteAt") (EVar "value")) (EBinOp "+" (EVar "colon") (ELit (LInt 1)))) (ELit (LInt 58)))) (EBinOp "&&" (EApp (EVar "not") (EVar "compressed")) (EApp (EApp (EApp (EVar "go") (EBinOp "+" (EVar "colon") (ELit (LInt 2)))) (EVar "nextGroups")) (EVar "True"))) (EApp (EApp (EApp (EVar "go") (EBinOp "+" (EVar "colon") (ELit (LInt 1)))) (EVar "nextGroups")) (EVar "compressed")))))))))))))) (EApp (EApp (EApp (EVar "go") (EVar "pos0")) (EVar "groups0")) (EVar "compressed0"))))
 (DTypeSig false "validIpv6" (TyFun (TyCon "Bytes") (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyCon "Bool")))))
 (DFunDef false "validIpv6" ((PVar "value") (PVar "start") (PVar "end")) (EIf (EBinOp ">=" (EVar "start") (EVar "end")) (EVar "False") (EIf (EBinOp "==" (EApp (EApp (EVar "byteAt") (EVar "value")) (EVar "start")) (ELit (LInt 58))) (EBinOp "&&" (EBinOp "&&" (EBinOp "<" (EBinOp "+" (EVar "start") (ELit (LInt 1))) (EVar "end")) (EBinOp "==" (EApp (EApp (EVar "byteAt") (EVar "value")) (EBinOp "+" (EVar "start") (ELit (LInt 1)))) (ELit (LInt 58)))) (EApp (EApp (EApp (EApp (EApp (EVar "validIpv6Go") (EVar "value")) (EBinOp "+" (EVar "start") (ELit (LInt 2)))) (EVar "end")) (ELit (LInt 0))) (EVar "True"))) (EApp (EApp (EApp (EApp (EApp (EVar "validIpv6Go") (EVar "value")) (EVar "start")) (EVar "end")) (ELit (LInt 0))) (EVar "False")))))
 (DTypeSig false "scanHex" (TyFun (TyCon "Bytes") (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyCon "Int")))))
-(DFunDef false "scanHex" ((PVar "value") (PVar "pos") (PVar "end")) (EIf (EBinOp "&&" (EBinOp "<" (EVar "pos") (EVar "end")) (EApp (EVar "isHexByte") (EApp (EApp (EVar "byteAt") (EVar "value")) (EVar "pos")))) (EApp (EApp (EApp (EVar "scanHex") (EVar "value")) (EBinOp "+" (EVar "pos") (ELit (LInt 1)))) (EVar "end")) (EVar "pos")))
+(DFunDef false "scanHex" ((PVar "value") (PVar "pos0") (PVar "end")) (ELetGroup ((lgb "go" (clause ((PVar "pos")) (EIf (EBinOp "&&" (EBinOp "<" (EVar "pos") (EVar "end")) (EApp (EVar "isHexByte") (EApp (EApp (EVar "byteAt") (EVar "value")) (EVar "pos")))) (EApp (EVar "go") (EBinOp "+" (EVar "pos") (ELit (LInt 1)))) (EVar "pos"))))) (EApp (EVar "go") (EVar "pos0"))))
 (DTypeSig false "validIpvFutureTail" (TyFun (TyCon "Bytes") (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyCon "Bool")))))
-(DFunDef false "validIpvFutureTail" ((PVar "value") (PVar "pos") (PVar "end")) (EIf (EBinOp ">=" (EVar "pos") (EVar "end")) (EVar "True") (EBlock (DoLet false false (PVar "byte") (EApp (EApp (EVar "byteAt") (EVar "value")) (EVar "pos"))) (DoExpr (EBinOp "&&" (EBinOp "||" (EBinOp "||" (EApp (EVar "isUnreservedByte") (EVar "byte")) (EApp (EVar "isSubDelimiterByte") (EVar "byte"))) (EBinOp "==" (EVar "byte") (ELit (LInt 58)))) (EApp (EApp (EApp (EVar "validIpvFutureTail") (EVar "value")) (EBinOp "+" (EVar "pos") (ELit (LInt 1)))) (EVar "end")))))))
+(DFunDef false "validIpvFutureTail" ((PVar "value") (PVar "pos0") (PVar "end")) (ELetGroup ((lgb "go" (clause ((PVar "pos")) (EIf (EBinOp ">=" (EVar "pos") (EVar "end")) (EVar "True") (EBlock (DoLet false false (PVar "byte") (EApp (EApp (EVar "byteAt") (EVar "value")) (EVar "pos"))) (DoExpr (EBinOp "&&" (EBinOp "||" (EBinOp "||" (EApp (EVar "isUnreservedByte") (EVar "byte")) (EApp (EVar "isSubDelimiterByte") (EVar "byte"))) (EBinOp "==" (EVar "byte") (ELit (LInt 58)))) (EApp (EVar "go") (EBinOp "+" (EVar "pos") (ELit (LInt 1))))))))))) (EApp (EVar "go") (EVar "pos0"))))
 (DTypeSig false "validIpvFuture" (TyFun (TyCon "Bytes") (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyCon "Bool")))))
 (DFunDef false "validIpvFuture" ((PVar "value") (PVar "start") (PVar "end")) (EIf (EBinOp "||" (EBinOp ">=" (EVar "start") (EVar "end")) (EBinOp "&&" (EBinOp "/=" (EApp (EApp (EVar "byteAt") (EVar "value")) (EVar "start")) (ELit (LInt 118))) (EBinOp "/=" (EApp (EApp (EVar "byteAt") (EVar "value")) (EVar "start")) (ELit (LInt 86))))) (EVar "False") (EBlock (DoLet false false (PVar "versionEnd") (EApp (EApp (EApp (EVar "scanHex") (EVar "value")) (EBinOp "+" (EVar "start") (ELit (LInt 1)))) (EVar "end"))) (DoExpr (EBinOp "&&" (EBinOp "&&" (EBinOp "&&" (EBinOp "&&" (EBinOp ">" (EVar "versionEnd") (EBinOp "+" (EVar "start") (ELit (LInt 1)))) (EBinOp "<" (EVar "versionEnd") (EVar "end"))) (EBinOp "==" (EApp (EApp (EVar "byteAt") (EVar "value")) (EVar "versionEnd")) (ELit (LInt 46)))) (EBinOp "<" (EBinOp "+" (EVar "versionEnd") (ELit (LInt 1))) (EVar "end"))) (EApp (EApp (EApp (EVar "validIpvFutureTail") (EVar "value")) (EBinOp "+" (EVar "versionEnd") (ELit (LInt 1)))) (EVar "end")))))))
 (DTypeSig false "validIpLiteral" (TyFun (TyCon "Bytes") (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyCon "Bool")))))
@@ -2665,19 +2691,19 @@ decodeRequestBody (Request _ _ headers _ packed _) = do
 (DTypeSig true "hexDigit" (TyFun (TyCon "Int") (TyApp (TyCon "Option") (TyCon "Int"))))
 (DFunDef false "hexDigit" ((PVar "byte")) (EIf (EBinOp "&&" (EBinOp ">=" (EVar "byte") (ELit (LInt 48))) (EBinOp "<=" (EVar "byte") (ELit (LInt 57)))) (EApp (EVar "Some") (EBinOp "-" (EVar "byte") (ELit (LInt 48)))) (EIf (EBinOp "&&" (EBinOp ">=" (EVar "byte") (ELit (LInt 65))) (EBinOp "<=" (EVar "byte") (ELit (LInt 70)))) (EApp (EVar "Some") (EBinOp "-" (EVar "byte") (ELit (LInt 55)))) (EIf (EBinOp "&&" (EBinOp ">=" (EVar "byte") (ELit (LInt 97))) (EBinOp "<=" (EVar "byte") (ELit (LInt 102)))) (EApp (EVar "Some") (EBinOp "-" (EVar "byte") (ELit (LInt 87)))) (EVar "None")))))
 (DTypeSig false "parseHexSizeGo" (TyFun (TyCon "Bytes") (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyApp (TyApp (TyCon "Result") (TyCon "FrameError")) (TyCon "Int")))))))
-(DFunDef false "parseHexSizeGo" ((PVar "input") (PVar "pos") (PVar "end") (PVar "acc")) (EIf (EBinOp ">=" (EVar "pos") (EVar "end")) (EApp (EVar "Ok") (EVar "acc")) (EMatch (EApp (EVar "hexDigit") (EApp (EApp (EVar "byteAt") (EVar "input")) (EVar "pos"))) (arm (PCon "None") () (EApp (EVar "malformed") (ELit (LString "http: invalid chunk size")))) (arm (PCon "Some" (PVar "digit")) () (EIf (EBinOp ">" (EVar "acc") (EBinOp "/" (EBinOp "-" (EVar "maxHttpBodyBytes") (EVar "digit")) (ELit (LInt 16)))) (EApp (EVar "Err") (EApp (EVar "Fatal") (EApp (EVar "HttpResourceExcess") (ELit (LString "http: chunk size exceeds decoded body limit"))))) (EApp (EApp (EApp (EApp (EVar "parseHexSizeGo") (EVar "input")) (EBinOp "+" (EVar "pos") (ELit (LInt 1)))) (EVar "end")) (EBinOp "+" (EBinOp "*" (EVar "acc") (ELit (LInt 16))) (EVar "digit"))))))))
+(DFunDef false "parseHexSizeGo" ((PVar "input") (PVar "pos0") (PVar "end") (PVar "acc0")) (ELetGroup ((lgb "go" (clause ((PVar "pos") (PVar "acc")) (EIf (EBinOp ">=" (EVar "pos") (EVar "end")) (EApp (EVar "Ok") (EVar "acc")) (EMatch (EApp (EVar "hexDigit") (EApp (EApp (EVar "byteAt") (EVar "input")) (EVar "pos"))) (arm (PCon "None") () (EApp (EVar "malformed") (ELit (LString "http: invalid chunk size")))) (arm (PCon "Some" (PVar "digit")) () (EIf (EBinOp ">" (EVar "acc") (EBinOp "/" (EBinOp "-" (EVar "maxHttpBodyBytes") (EVar "digit")) (ELit (LInt 16)))) (EApp (EVar "Err") (EApp (EVar "Fatal") (EApp (EVar "HttpResourceExcess") (ELit (LString "http: chunk size exceeds decoded body limit"))))) (EApp (EApp (EVar "go") (EBinOp "+" (EVar "pos") (ELit (LInt 1)))) (EBinOp "+" (EBinOp "*" (EVar "acc") (ELit (LInt 16))) (EVar "digit")))))))))) (EApp (EApp (EVar "go") (EVar "pos0")) (EVar "acc0"))))
 (DTypeSig true "skipOws" (TyFun (TyCon "Bytes") (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyCon "Int")))))
-(DFunDef false "skipOws" ((PVar "value") (PVar "pos") (PVar "end")) (EIf (EBinOp "&&" (EBinOp "<" (EVar "pos") (EVar "end")) (EBinOp "||" (EBinOp "==" (EApp (EApp (EVar "byteAt") (EVar "value")) (EVar "pos")) (ELit (LInt 32))) (EBinOp "==" (EApp (EApp (EVar "byteAt") (EVar "value")) (EVar "pos")) (ELit (LInt 9))))) (EApp (EApp (EApp (EVar "skipOws") (EVar "value")) (EBinOp "+" (EVar "pos") (ELit (LInt 1)))) (EVar "end")) (EVar "pos")))
+(DFunDef false "skipOws" ((PVar "value") (PVar "pos") (PVar "end")) (EApp (EApp (EApp (EVar "trimLeftOws") (EVar "value")) (EVar "pos")) (EVar "end")))
 (DTypeSig false "scanQuoted" (TyFun (TyCon "Bytes") (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyApp (TyApp (TyCon "Result") (TyCon "FrameError")) (TyCon "Int"))))))
-(DFunDef false "scanQuoted" ((PVar "input") (PVar "pos") (PVar "end")) (EIf (EBinOp ">=" (EVar "pos") (EVar "end")) (EApp (EVar "malformed") (ELit (LString "http: unterminated quoted chunk extension"))) (EIf (EBinOp "==" (EApp (EApp (EVar "byteAt") (EVar "input")) (EVar "pos")) (ELit (LInt 34))) (EApp (EVar "Ok") (EBinOp "+" (EVar "pos") (ELit (LInt 1)))) (EIf (EBinOp "==" (EApp (EApp (EVar "byteAt") (EVar "input")) (EVar "pos")) (ELit (LInt 92))) (EIf (EBinOp ">=" (EBinOp "+" (EVar "pos") (ELit (LInt 1))) (EVar "end")) (EApp (EVar "malformed") (ELit (LString "http: truncated quoted-pair in chunk extension"))) (EBlock (DoLet false false (PVar "escaped") (EApp (EApp (EVar "byteAt") (EVar "input")) (EBinOp "+" (EVar "pos") (ELit (LInt 1))))) (DoExpr (EIf (EBinOp "||" (EBinOp "||" (EBinOp "==" (EVar "escaped") (ELit (LInt 9))) (EBinOp "==" (EVar "escaped") (ELit (LInt 32)))) (EBinOp "&&" (EBinOp ">=" (EVar "escaped") (ELit (LInt 33))) (EBinOp "/=" (EVar "escaped") (ELit (LInt 127))))) (EApp (EApp (EApp (EVar "scanQuoted") (EVar "input")) (EBinOp "+" (EVar "pos") (ELit (LInt 2)))) (EVar "end")) (EApp (EVar "malformed") (ELit (LString "http: control byte in quoted chunk extension"))))))) (EBlock (DoLet false false (PVar "byte") (EApp (EApp (EVar "byteAt") (EVar "input")) (EVar "pos"))) (DoExpr (EIf (EBinOp "||" (EBinOp "||" (EBinOp "==" (EVar "byte") (ELit (LInt 9))) (EBinOp "==" (EVar "byte") (ELit (LInt 32)))) (EBinOp "&&" (EBinOp "&&" (EBinOp "&&" (EBinOp ">=" (EVar "byte") (ELit (LInt 33))) (EBinOp "/=" (EVar "byte") (ELit (LInt 34)))) (EBinOp "/=" (EVar "byte") (ELit (LInt 92)))) (EBinOp "/=" (EVar "byte") (ELit (LInt 127))))) (EApp (EApp (EApp (EVar "scanQuoted") (EVar "input")) (EBinOp "+" (EVar "pos") (ELit (LInt 1)))) (EVar "end")) (EApp (EVar "malformed") (ELit (LString "http: control byte in quoted chunk extension"))))))))))
+(DFunDef false "scanQuoted" ((PVar "input") (PVar "pos0") (PVar "end")) (ELetGroup ((lgb "go" (clause ((PVar "pos")) (EIf (EBinOp ">=" (EVar "pos") (EVar "end")) (EApp (EVar "malformed") (ELit (LString "http: unterminated quoted chunk extension"))) (EIf (EBinOp "==" (EApp (EApp (EVar "byteAt") (EVar "input")) (EVar "pos")) (ELit (LInt 34))) (EApp (EVar "Ok") (EBinOp "+" (EVar "pos") (ELit (LInt 1)))) (EIf (EBinOp "==" (EApp (EApp (EVar "byteAt") (EVar "input")) (EVar "pos")) (ELit (LInt 92))) (EIf (EBinOp ">=" (EBinOp "+" (EVar "pos") (ELit (LInt 1))) (EVar "end")) (EApp (EVar "malformed") (ELit (LString "http: truncated quoted-pair in chunk extension"))) (EBlock (DoLet false false (PVar "escaped") (EApp (EApp (EVar "byteAt") (EVar "input")) (EBinOp "+" (EVar "pos") (ELit (LInt 1))))) (DoExpr (EIf (EBinOp "||" (EBinOp "||" (EBinOp "==" (EVar "escaped") (ELit (LInt 9))) (EBinOp "==" (EVar "escaped") (ELit (LInt 32)))) (EBinOp "&&" (EBinOp ">=" (EVar "escaped") (ELit (LInt 33))) (EBinOp "/=" (EVar "escaped") (ELit (LInt 127))))) (EApp (EVar "go") (EBinOp "+" (EVar "pos") (ELit (LInt 2)))) (EApp (EVar "malformed") (ELit (LString "http: control byte in quoted chunk extension"))))))) (EBlock (DoLet false false (PVar "byte") (EApp (EApp (EVar "byteAt") (EVar "input")) (EVar "pos"))) (DoExpr (EIf (EBinOp "||" (EBinOp "||" (EBinOp "==" (EVar "byte") (ELit (LInt 9))) (EBinOp "==" (EVar "byte") (ELit (LInt 32)))) (EBinOp "&&" (EBinOp "&&" (EBinOp "&&" (EBinOp ">=" (EVar "byte") (ELit (LInt 33))) (EBinOp "/=" (EVar "byte") (ELit (LInt 34)))) (EBinOp "/=" (EVar "byte") (ELit (LInt 92)))) (EBinOp "/=" (EVar "byte") (ELit (LInt 127))))) (EApp (EVar "go") (EBinOp "+" (EVar "pos") (ELit (LInt 1)))) (EApp (EVar "malformed") (ELit (LString "http: control byte in quoted chunk extension")))))))))))) (EApp (EVar "go") (EVar "pos0"))))
 (DTypeSig false "parseChunkExtensionValue" (TyFun (TyCon "Bytes") (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyApp (TyApp (TyCon "Result") (TyCon "FrameError")) (TyCon "Int"))))))
 (DFunDef false "parseChunkExtensionValue" ((PVar "input") (PVar "pos") (PVar "end")) (EIf (EBinOp ">=" (EVar "pos") (EVar "end")) (EApp (EVar "malformed") (ELit (LString "http: missing chunk extension value"))) (EIf (EBinOp "==" (EApp (EApp (EVar "byteAt") (EVar "input")) (EVar "pos")) (ELit (LInt 34))) (EApp (EApp (EApp (EVar "scanQuoted") (EVar "input")) (EBinOp "+" (EVar "pos") (ELit (LInt 1)))) (EVar "end")) (EBlock (DoLet false false (PVar "valueEnd") (EApp (EApp (EApp (EVar "scanTokenEnd") (EVar "input")) (EVar "pos")) (EVar "end"))) (DoExpr (EIf (EBinOp "==" (EVar "valueEnd") (EVar "pos")) (EApp (EVar "malformed") (ELit (LString "http: invalid chunk extension value"))) (EApp (EVar "Ok") (EVar "valueEnd"))))))))
 (DTypeSig false "parseChunkExtensionsGo" (TyFun (TyCon "Bytes") (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyApp (TyApp (TyCon "Result") (TyCon "FrameError")) (TyCon "Unit"))))))
-(DFunDef false "parseChunkExtensionsGo" ((PVar "input") (PVar "pos") (PVar "end")) (EBlock (DoLet false false (PVar "start") (EApp (EApp (EApp (EVar "skipOws") (EVar "input")) (EVar "pos")) (EVar "end"))) (DoExpr (EIf (EBinOp "==" (EVar "start") (EVar "end")) (EApp (EVar "Ok") (ELit LUnit)) (EIf (EBinOp "/=" (EApp (EApp (EVar "byteAt") (EVar "input")) (EVar "start")) (ELit (LInt 59))) (EApp (EVar "malformed") (ELit (LString "http: invalid chunk extension separator"))) (EBlock (DoLet false false (PVar "nameStart") (EApp (EApp (EApp (EVar "skipOws") (EVar "input")) (EBinOp "+" (EVar "start") (ELit (LInt 1)))) (EVar "end"))) (DoLet false false (PVar "nameEnd") (EApp (EApp (EApp (EVar "scanTokenEnd") (EVar "input")) (EVar "nameStart")) (EVar "end"))) (DoExpr (EIf (EBinOp "==" (EVar "nameEnd") (EVar "nameStart")) (EApp (EVar "malformed") (ELit (LString "http: empty chunk extension name"))) (EBlock (DoLet false false (PVar "afterName") (EApp (EApp (EApp (EVar "skipOws") (EVar "input")) (EVar "nameEnd")) (EVar "end"))) (DoExpr (EIf (EBinOp "&&" (EBinOp "<" (EVar "afterName") (EVar "end")) (EBinOp "==" (EApp (EApp (EVar "byteAt") (EVar "input")) (EVar "afterName")) (ELit (LInt 61)))) (EApp (EApp (EVar "andThen") (EApp (EApp (EApp (EVar "parseChunkExtensionValue") (EVar "input")) (EApp (EApp (EApp (EVar "skipOws") (EVar "input")) (EBinOp "+" (EVar "afterName") (ELit (LInt 1)))) (EVar "end"))) (EVar "end"))) (ELam ((PVar "valueEnd")) (EApp (EApp (EApp (EVar "parseChunkExtensionsGo") (EVar "input")) (EVar "valueEnd")) (EVar "end")))) (EApp (EApp (EApp (EVar "parseChunkExtensionsGo") (EVar "input")) (EVar "afterName")) (EVar "end")))))))))))))
+(DFunDef false "parseChunkExtensionsGo" ((PVar "input") (PVar "pos0") (PVar "end")) (ELetGroup ((lgb "go" (clause ((PVar "pos")) (EBlock (DoLet false false (PVar "start") (EApp (EApp (EApp (EVar "skipOws") (EVar "input")) (EVar "pos")) (EVar "end"))) (DoExpr (EIf (EBinOp "==" (EVar "start") (EVar "end")) (EApp (EVar "Ok") (ELit LUnit)) (EIf (EBinOp "/=" (EApp (EApp (EVar "byteAt") (EVar "input")) (EVar "start")) (ELit (LInt 59))) (EApp (EVar "malformed") (ELit (LString "http: invalid chunk extension separator"))) (EBlock (DoLet false false (PVar "nameStart") (EApp (EApp (EApp (EVar "skipOws") (EVar "input")) (EBinOp "+" (EVar "start") (ELit (LInt 1)))) (EVar "end"))) (DoLet false false (PVar "nameEnd") (EApp (EApp (EApp (EVar "scanTokenEnd") (EVar "input")) (EVar "nameStart")) (EVar "end"))) (DoExpr (EIf (EBinOp "==" (EVar "nameEnd") (EVar "nameStart")) (EApp (EVar "malformed") (ELit (LString "http: empty chunk extension name"))) (EBlock (DoLet false false (PVar "afterName") (EApp (EApp (EApp (EVar "skipOws") (EVar "input")) (EVar "nameEnd")) (EVar "end"))) (DoExpr (EIf (EBinOp "&&" (EBinOp "<" (EVar "afterName") (EVar "end")) (EBinOp "==" (EApp (EApp (EVar "byteAt") (EVar "input")) (EVar "afterName")) (ELit (LInt 61)))) (EApp (EApp (EVar "andThen") (EApp (EApp (EApp (EVar "parseChunkExtensionValue") (EVar "input")) (EApp (EApp (EApp (EVar "skipOws") (EVar "input")) (EBinOp "+" (EVar "afterName") (ELit (LInt 1)))) (EVar "end"))) (EVar "end"))) (ELam ((PVar "valueEnd")) (EApp (EVar "go") (EVar "valueEnd")))) (EApp (EVar "go") (EVar "afterName"))))))))))))))) (EApp (EVar "go") (EVar "pos0"))))
 (DTypeSig false "parseChunkSize" (TyFun (TyCon "Bytes") (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyApp (TyApp (TyCon "Result") (TyCon "FrameError")) (TyCon "Int"))))))
 (DFunDef false "parseChunkSize" ((PVar "input") (PVar "start") (PVar "end")) (EBlock (DoLet false false (PVar "semi") (EApp (EApp (EVar "optionOr") (EVar "end")) (EApp (EApp (EApp (EApp (EVar "elemIndexWithin") (EVar "start")) (EVar "end")) (ELit (LInt 59))) (EVar "input")))) (DoExpr (EIf (EBinOp "==" (EVar "semi") (EVar "start")) (EApp (EVar "malformed") (ELit (LString "http: empty chunk size"))) (EApp (EApp (EVar "andThen") (EApp (EApp (EApp (EApp (EVar "parseHexSizeGo") (EVar "input")) (EVar "start")) (EVar "semi")) (ELit (LInt 0)))) (ELam ((PVar "size")) (EApp (EApp (EVar "andThen") (EApp (EApp (EApp (EVar "parseChunkExtensionsGo") (EVar "input")) (EVar "semi")) (EVar "end"))) (ELam ((PVar "__do_x")) (EMatch (EVar "__do_x") (arm (PLit LUnit) () (EApp (EVar "Ok") (EVar "size"))))))))))))
 (DTypeSig false "parseChunkedChecked" (TyFun (TyCon "Bytes") (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyFun (TyCon "Builder") (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyApp (TyApp (TyCon "Result") (TyCon "FrameError")) (TyCon "ParsedBody")))))))))
-(DFunDef false "parseChunkedChecked" ((PVar "input") (PVar "pos") (PVar "headerBytes") (PVar "out") (PVar "total") (PVar "count")) (EApp (EApp (EVar "andThen") (EApp (EApp (EApp (EApp (EApp (EApp (EVar "chunkHeadStep") (EVar "input")) (EApp (EVar "B.length") (EVar "input"))) (EVar "pos")) (EVar "pos")) (EVar "total")) (EVar "count"))) (ELam ((PVar "head")) (EMatch (EVar "head") (arm (PCon "ChunkEnd" (PVar "dataPos")) () (EApp (EApp (EVar "andThen") (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EVar "parseFieldsChecked") (EVar "input")) (EVar "dataPos")) (EVar "dataPos")) (EVar "headerBytes")) (ELit (LInt 0))) (EVar "True")) (EListLit))) (ELam ((PVar "__do_x")) (EMatch (EVar "__do_x") (arm (PCon "HeaderBlock" (PVar "trailers") (PVar "finalPos") PWild) () (EApp (EVar "Ok") (EApp (EApp (EApp (EVar "ParsedBody") (EApp (EVar "buildBytes") (EVar "out"))) (EVar "trailers")) (EVar "finalPos")))))))) (arm (PCon "ChunkBody" (PVar "dataPos") (PVar "size")) () (EApp (EApp (EVar "andThen") (EApp (EApp (EApp (EVar "readSliceAt") (EVar "input")) (EVar "dataPos")) (EVar "size"))) (ELam ((PVar "__do_x")) (EMatch (EVar "__do_x") (arm (PTuple (PVar "chunk") PWild) () (EApp (EApp (EVar "andThen") (EApp (EApp (EApp (EApp (EVar "chunkDataEnd") (EVar "input")) (EApp (EVar "B.length") (EVar "input"))) (EVar "dataPos")) (EVar "size"))) (ELam ((PVar "next")) (ELet false (PLit LUnit) (EApp (EApp (EVar "emitBytes") (EVar "chunk")) (EVar "out")) (EApp (EApp (EApp (EApp (EApp (EApp (EVar "parseChunkedChecked") (EVar "input")) (EVar "next")) (EVar "headerBytes")) (EVar "out")) (EBinOp "+" (EVar "total") (EVar "size"))) (EBinOp "+" (EVar "count") (ELit (LInt 1))))))))))))))))
+(DFunDef false "parseChunkedChecked" ((PVar "inp") (PVar "pos0") (PVar "hdrBytes") (PVar "out") (PVar "total0") (PVar "count0")) (ELetGroup ((lgb "go" (clause ((PVar "pos") (PVar "total") (PVar "count")) (EApp (EApp (EVar "andThen") (EApp (EApp (EApp (EApp (EApp (EApp (EVar "chunkHeadStep") (EVar "inp")) (EApp (EVar "B.length") (EVar "inp"))) (EVar "pos")) (EVar "pos")) (EVar "total")) (EVar "count"))) (ELam ((PVar "head")) (EMatch (EVar "head") (arm (PCon "ChunkEnd" (PVar "dataPos")) () (EApp (EApp (EVar "andThen") (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EVar "parseFieldsChecked") (EVar "inp")) (EVar "dataPos")) (EVar "dataPos")) (EVar "hdrBytes")) (ELit (LInt 0))) (EVar "True")) (EListLit))) (ELam ((PVar "__do_x")) (EMatch (EVar "__do_x") (arm (PCon "HeaderBlock" (PVar "trailers") (PVar "finalPos") PWild) () (EApp (EVar "Ok") (EApp (EApp (EApp (EVar "ParsedBody") (EApp (EVar "buildBytes") (EVar "out"))) (EVar "trailers")) (EVar "finalPos")))))))) (arm (PCon "ChunkBody" (PVar "dataPos") (PVar "size")) () (EApp (EApp (EVar "andThen") (EApp (EApp (EApp (EVar "readSliceAt") (EVar "inp")) (EVar "dataPos")) (EVar "size"))) (ELam ((PVar "__do_x")) (EMatch (EVar "__do_x") (arm (PTuple (PVar "chunk") PWild) () (EApp (EApp (EVar "andThen") (EApp (EApp (EApp (EApp (EVar "chunkDataEnd") (EVar "inp")) (EApp (EVar "B.length") (EVar "inp"))) (EVar "dataPos")) (EVar "size"))) (ELam ((PVar "next")) (ELet false (PLit LUnit) (EApp (EApp (EVar "emitBytes") (EVar "chunk")) (EVar "out")) (EApp (EApp (EApp (EVar "go") (EVar "next")) (EBinOp "+" (EVar "total") (EVar "size"))) (EBinOp "+" (EVar "count") (ELit (LInt 1)))))))))))))))))) (EApp (EApp (EApp (EVar "go") (EVar "pos0")) (EVar "total0")) (EVar "count0"))))
 (DTypeSig true "parseChunked" (TyFun (TyCon "Bytes") (TyFun (TyCon "Int") (TyApp (TyApp (TyCon "Result") (TyCon "HttpParseFailure")) (TyTuple (TyCon "Bytes") (TyApp (TyCon "List") (TyCon "Header")) (TyCon "Int"))))))
 (DFunDef false "parseChunked" ((PVar "input") (PVar "pos")) (EApp (EApp (EVar "map") (ELam ((PCon "ParsedBody" (PVar "body") (PVar "trailers") (PVar "next"))) (ETuple (EVar "body") (EVar "trailers") (EVar "next")))) (EApp (EVar "settle") (EApp (EApp (EApp (EApp (EApp (EApp (EVar "parseChunkedChecked") (EVar "input")) (EVar "pos")) (ELit (LInt 0))) (EApp (EVar "newBuilder") (ELit LUnit))) (ELit (LInt 0))) (ELit (LInt 0))))))
 (DData Private "ChunkHead" () ((variant "ChunkEnd" (ConPos (TyCon "Int"))) (variant "ChunkBody" (ConPos (TyCon "Int") (TyCon "Int")))) ())
@@ -2713,14 +2739,9 @@ decodeRequestBody (Request _ _ headers _ packed _) = do
 (DFunDef false "headBodyPhase" ((PCon "FrameHead" PWild PWild (PCon "FixedBody" (PVar "size")) PWild (PVar "bodyPos") PWild)) (EApp (EVar "BodyUntil") (EBinOp "+" (EVar "bodyPos") (EVar "size"))))
 (DFunDef false "headBodyPhase" ((PCon "FrameHead" PWild PWild (PCon "ChunkedBody") PWild (PVar "bodyPos") PWild)) (EApp (EApp (EApp (EApp (EVar "BodyChunkSize") (EVar "bodyPos")) (ELit (LInt 0))) (ELit (LInt 0))) (EVar "bodyPos")))
 (DTypeSig false "scanBody" (TyFun (TyCon "Bytes") (TyFun (TyCon "Int") (TyFun (TyCon "FrameHead") (TyFun (TyCon "BodyPhase") (TyCon "ScanOutcome"))))))
-(DFunDef false "scanBody" (PWild (PVar "avail") (PVar "head") (PCon "BodyUntil" (PVar "finalPos"))) (EIf (EBinOp "<=" (EVar "finalPos") (EVar "avail")) (EApp (EVar "ScanFramed") (EApp (EApp (EVar "FrameSpan") (EVar "head")) (EVar "finalPos"))) (EApp (EApp (EVar "ScanSuspend") (EBinOp "++" (EBinOp "++" (ELit (LString "http: truncated body at byte ")) (EApp (EVar "display") (EApp (EVar "intToString") (EVar "avail")))) (ELit (LString "")))) (EApp (EApp (EVar "PhaseBody") (EVar "head")) (EApp (EVar "BodyUntil") (EVar "finalPos"))))))
-(DFunDef false "scanBody" ((PVar "input") (PVar "avail") (PVar "head") (PCon "BodyChunkSize" (PVar "chunkPos") (PVar "total") (PVar "count") (PVar "cursor"))) (EMatch (EApp (EApp (EApp (EApp (EApp (EApp (EVar "chunkHeadStep") (EVar "input")) (EVar "avail")) (EVar "chunkPos")) (EApp (EApp (EVar "max") (EVar "chunkPos")) (EVar "cursor"))) (EVar "total")) (EVar "count")) (arm (PCon "Err" (PCon "Incomplete" (PVar "message"))) () (EApp (EApp (EVar "ScanSuspend") (EVar "message")) (EApp (EApp (EVar "PhaseBody") (EVar "head")) (EApp (EApp (EApp (EApp (EVar "BodyChunkSize") (EVar "chunkPos")) (EVar "total")) (EVar "count")) (EApp (EApp (EVar "crlfResume") (EVar "avail")) (EVar "chunkPos")))))) (arm (PCon "Err" (PCon "Fatal" (PVar "failure"))) () (EApp (EVar "ScanFatal") (EVar "failure"))) (arm (PCon "Ok" (PCon "ChunkEnd" (PVar "dataPos"))) () (EApp (EApp (EApp (EApp (EVar "scanBody") (EVar "input")) (EVar "avail")) (EVar "head")) (EApp (EApp (EApp (EApp (EVar "BodyTrailers") (EVar "dataPos")) (EVar "dataPos")) (ELit (LInt 0))) (EVar "dataPos")))) (arm (PCon "Ok" (PCon "ChunkBody" (PVar "dataPos") (PVar "size"))) () (EApp (EApp (EApp (EApp (EVar "scanBody") (EVar "input")) (EVar "avail")) (EVar "head")) (EApp (EApp (EApp (EApp (EVar "BodyChunkData") (EVar "dataPos")) (EVar "size")) (EVar "total")) (EVar "count"))))))
-(DFunDef false "scanBody" ((PVar "input") (PVar "avail") (PVar "head") (PCon "BodyChunkData" (PVar "dataPos") (PVar "size") (PVar "total") (PVar "count"))) (EMatch (EApp (EApp (EApp (EApp (EVar "chunkDataEnd") (EVar "input")) (EVar "avail")) (EVar "dataPos")) (EVar "size")) (arm (PCon "Err" (PCon "Incomplete" (PVar "message"))) () (EApp (EApp (EVar "ScanSuspend") (EVar "message")) (EApp (EApp (EVar "PhaseBody") (EVar "head")) (EApp (EApp (EApp (EApp (EVar "BodyChunkData") (EVar "dataPos")) (EVar "size")) (EVar "total")) (EVar "count"))))) (arm (PCon "Err" (PCon "Fatal" (PVar "failure"))) () (EApp (EVar "ScanFatal") (EVar "failure"))) (arm (PCon "Ok" (PVar "next")) () (EApp (EApp (EApp (EApp (EVar "scanBody") (EVar "input")) (EVar "avail")) (EVar "head")) (EApp (EApp (EApp (EApp (EVar "BodyChunkSize") (EVar "next")) (EBinOp "+" (EVar "total") (EVar "size"))) (EBinOp "+" (EVar "count") (ELit (LInt 1)))) (EVar "next"))))))
-(DFunDef false "scanBody" ((PVar "input") (PVar "avail") (PVar "head") (PCon "BodyTrailers" (PVar "sectionStart") (PVar "pos") (PVar "count") (PVar "cursor"))) (EBlock (DoLet false false (PVar "step") (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EVar "fieldStep") (EVar "input")) (EVar "avail")) (EVar "pos")) (EApp (EApp (EVar "max") (EVar "pos")) (EVar "cursor"))) (EVar "sectionStart")) (EApp (EVar "headHeaderBytes") (EVar "head"))) (EVar "count")) (EVar "True"))) (DoExpr (EMatch (EVar "step") (arm (PCon "Err" (PCon "Incomplete" (PVar "message"))) () (EApp (EApp (EVar "ScanSuspend") (EVar "message")) (EApp (EApp (EVar "PhaseBody") (EVar "head")) (EApp (EApp (EApp (EApp (EVar "BodyTrailers") (EVar "sectionStart")) (EVar "pos")) (EVar "count")) (EApp (EApp (EVar "crlfResume") (EVar "avail")) (EVar "pos")))))) (arm (PCon "Err" (PCon "Fatal" (PVar "failure"))) () (EApp (EVar "ScanFatal") (EVar "failure"))) (arm (PCon "Ok" (PCon "FieldMore" PWild (PVar "next"))) () (EApp (EApp (EApp (EApp (EVar "scanBody") (EVar "input")) (EVar "avail")) (EVar "head")) (EApp (EApp (EApp (EApp (EVar "BodyTrailers") (EVar "sectionStart")) (EVar "next")) (EBinOp "+" (EVar "count") (ELit (LInt 1)))) (EVar "next")))) (arm (PCon "Ok" (PCon "FieldDone" (PVar "finalPos") PWild)) () (EApp (EVar "ScanFramed") (EApp (EApp (EVar "FrameSpan") (EVar "head")) (EVar "finalPos"))))))))
+(DFunDef false "scanBody" ((PVar "input") (PVar "avail") (PVar "head") (PVar "x0")) (ELetGroup ((lgb "go" (clause ((PCon "BodyUntil" (PVar "finalPos"))) (EIf (EBinOp "<=" (EVar "finalPos") (EVar "avail")) (EApp (EVar "ScanFramed") (EApp (EApp (EVar "FrameSpan") (EVar "head")) (EVar "finalPos"))) (EApp (EApp (EVar "ScanSuspend") (EBinOp "++" (EBinOp "++" (ELit (LString "http: truncated body at byte ")) (EApp (EVar "display") (EApp (EVar "intToString") (EVar "avail")))) (ELit (LString "")))) (EApp (EApp (EVar "PhaseBody") (EVar "head")) (EApp (EVar "BodyUntil") (EVar "finalPos")))))) (clause ((PCon "BodyChunkSize" (PVar "chunkPos") (PVar "total") (PVar "count") (PVar "cursor"))) (EMatch (EApp (EApp (EApp (EApp (EApp (EApp (EVar "chunkHeadStep") (EVar "input")) (EVar "avail")) (EVar "chunkPos")) (EApp (EApp (EVar "max") (EVar "chunkPos")) (EVar "cursor"))) (EVar "total")) (EVar "count")) (arm (PCon "Err" (PCon "Incomplete" (PVar "message"))) () (EApp (EApp (EVar "ScanSuspend") (EVar "message")) (EApp (EApp (EVar "PhaseBody") (EVar "head")) (EApp (EApp (EApp (EApp (EVar "BodyChunkSize") (EVar "chunkPos")) (EVar "total")) (EVar "count")) (EApp (EApp (EVar "crlfResume") (EVar "avail")) (EVar "chunkPos")))))) (arm (PCon "Err" (PCon "Fatal" (PVar "failure"))) () (EApp (EVar "ScanFatal") (EVar "failure"))) (arm (PCon "Ok" (PCon "ChunkEnd" (PVar "dataPos"))) () (EApp (EVar "go") (EApp (EApp (EApp (EApp (EVar "BodyTrailers") (EVar "dataPos")) (EVar "dataPos")) (ELit (LInt 0))) (EVar "dataPos")))) (arm (PCon "Ok" (PCon "ChunkBody" (PVar "dataPos") (PVar "size"))) () (EApp (EVar "go") (EApp (EApp (EApp (EApp (EVar "BodyChunkData") (EVar "dataPos")) (EVar "size")) (EVar "total")) (EVar "count")))))) (clause ((PCon "BodyChunkData" (PVar "dataPos") (PVar "size") (PVar "total") (PVar "count"))) (EMatch (EApp (EApp (EApp (EApp (EVar "chunkDataEnd") (EVar "input")) (EVar "avail")) (EVar "dataPos")) (EVar "size")) (arm (PCon "Err" (PCon "Incomplete" (PVar "message"))) () (EApp (EApp (EVar "ScanSuspend") (EVar "message")) (EApp (EApp (EVar "PhaseBody") (EVar "head")) (EApp (EApp (EApp (EApp (EVar "BodyChunkData") (EVar "dataPos")) (EVar "size")) (EVar "total")) (EVar "count"))))) (arm (PCon "Err" (PCon "Fatal" (PVar "failure"))) () (EApp (EVar "ScanFatal") (EVar "failure"))) (arm (PCon "Ok" (PVar "next")) () (EApp (EVar "go") (EApp (EApp (EApp (EApp (EVar "BodyChunkSize") (EVar "next")) (EBinOp "+" (EVar "total") (EVar "size"))) (EBinOp "+" (EVar "count") (ELit (LInt 1)))) (EVar "next")))))) (clause ((PCon "BodyTrailers" (PVar "sectionStart") (PVar "pos") (PVar "count") (PVar "cursor"))) (EBlock (DoLet false false (PVar "step") (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EVar "fieldStep") (EVar "input")) (EVar "avail")) (EVar "pos")) (EApp (EApp (EVar "max") (EVar "pos")) (EVar "cursor"))) (EVar "sectionStart")) (EApp (EVar "headHeaderBytes") (EVar "head"))) (EVar "count")) (EVar "True"))) (DoExpr (EMatch (EVar "step") (arm (PCon "Err" (PCon "Incomplete" (PVar "message"))) () (EApp (EApp (EVar "ScanSuspend") (EVar "message")) (EApp (EApp (EVar "PhaseBody") (EVar "head")) (EApp (EApp (EApp (EApp (EVar "BodyTrailers") (EVar "sectionStart")) (EVar "pos")) (EVar "count")) (EApp (EApp (EVar "crlfResume") (EVar "avail")) (EVar "pos")))))) (arm (PCon "Err" (PCon "Fatal" (PVar "failure"))) () (EApp (EVar "ScanFatal") (EVar "failure"))) (arm (PCon "Ok" (PCon "FieldMore" PWild (PVar "next"))) () (EApp (EVar "go") (EApp (EApp (EApp (EApp (EVar "BodyTrailers") (EVar "sectionStart")) (EVar "next")) (EBinOp "+" (EVar "count") (ELit (LInt 1)))) (EVar "next")))) (arm (PCon "Ok" (PCon "FieldDone" (PVar "finalPos") PWild)) () (EApp (EVar "ScanFramed") (EApp (EApp (EVar "FrameSpan") (EVar "head")) (EVar "finalPos")))))))))) (EApp (EVar "go") (EVar "x0"))))
 (DTypeSig false "scanFrom" (TyFun (TyCon "Bytes") (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyFun (TyCon "ScanPhase") (TyCon "ScanOutcome"))))))
-(DFunDef false "scanFrom" ((PVar "input") (PVar "avail") (PVar "start") (PCon "PhaseLine" (PVar "cursor"))) (EMatch (EApp (EApp (EApp (EApp (EVar "parseRequestLine") (EVar "input")) (EVar "avail")) (EVar "start")) (EApp (EApp (EVar "max") (EVar "start")) (EVar "cursor"))) (arm (PCon "Err" (PCon "Incomplete" (PVar "message"))) () (EApp (EApp (EVar "ScanSuspend") (EVar "message")) (EApp (EVar "PhaseLine") (EApp (EApp (EVar "crlfResume") (EVar "avail")) (EVar "start"))))) (arm (PCon "Err" (PCon "Fatal" (PVar "failure"))) () (EApp (EVar "ScanFatal") (EVar "failure"))) (arm (PCon "Ok" (PVar "line")) () (EBlock (DoLet false false (PVar "headerPos") (EApp (EVar "requestLineHeaderPos") (EVar "line"))) (DoExpr (EApp (EApp (EApp (EApp (EVar "scanFrom") (EVar "input")) (EVar "avail")) (EVar "start")) (EApp (EApp (EApp (EApp (EApp (EVar "PhaseFields") (EVar "line")) (EListLit)) (EVar "headerPos")) (ELit (LInt 0))) (EVar "headerPos"))))))))
-(DFunDef false "scanFrom" ((PVar "input") (PVar "avail") (PVar "start") (PCon "PhaseFields" (PVar "line") (PVar "acc") (PVar "pos") (PVar "count") (PVar "cursor"))) (EBlock (DoLet false false (PVar "step") (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EVar "fieldStep") (EVar "input")) (EVar "avail")) (EVar "pos")) (EApp (EApp (EVar "max") (EVar "pos")) (EVar "cursor"))) (EApp (EVar "requestLineHeaderPos") (EVar "line"))) (ELit (LInt 0))) (EVar "count")) (EVar "False"))) (DoExpr (EMatch (EVar "step") (arm (PCon "Err" (PCon "Incomplete" (PVar "message"))) () (EApp (EApp (EVar "ScanSuspend") (EVar "message")) (EApp (EApp (EApp (EApp (EApp (EVar "PhaseFields") (EVar "line")) (EVar "acc")) (EVar "pos")) (EVar "count")) (EApp (EApp (EVar "crlfResume") (EVar "avail")) (EVar "pos"))))) (arm (PCon "Err" (PCon "Fatal" (PVar "failure"))) () (EApp (EVar "ScanFatal") (EVar "failure"))) (arm (PCon "Ok" (PCon "FieldMore" (PVar "field") (PVar "next"))) () (EApp (EApp (EApp (EApp (EVar "scanFrom") (EVar "input")) (EVar "avail")) (EVar "start")) (EApp (EApp (EApp (EApp (EApp (EVar "PhaseFields") (EVar "line")) (EBinOp "::" (EVar "field") (EVar "acc"))) (EVar "next")) (EBinOp "+" (EVar "count") (ELit (LInt 1)))) (EVar "next")))) (arm (PCon "Ok" (PCon "FieldDone" (PVar "bodyPos") (PVar "headerBytes"))) () (EMatch (EApp (EVar "settle") (EApp (EApp (EApp (EApp (EVar "buildHead") (EVar "line")) (EApp (EVar "reverse") (EVar "acc"))) (EVar "bodyPos")) (EVar "headerBytes"))) (arm (PCon "Err" (PVar "failure")) () (EApp (EVar "ScanFatal") (EVar "failure"))) (arm (PCon "Ok" (PVar "head")) () (EApp (EApp (EApp (EApp (EVar "scanBody") (EVar "input")) (EVar "avail")) (EVar "head")) (EApp (EVar "headBodyPhase") (EVar "head"))))))))))
-(DFunDef false "scanFrom" ((PVar "input") (PVar "avail") PWild (PCon "PhaseBody" (PVar "head") (PVar "phase"))) (EApp (EApp (EApp (EApp (EVar "scanBody") (EVar "input")) (EVar "avail")) (EVar "head")) (EVar "phase")))
+(DFunDef false "scanFrom" ((PVar "input") (PVar "avail") (PVar "start") (PVar "x0")) (ELetGroup ((lgb "go" (clause ((PCon "PhaseLine" (PVar "cursor"))) (EMatch (EApp (EApp (EApp (EApp (EVar "parseRequestLine") (EVar "input")) (EVar "avail")) (EVar "start")) (EApp (EApp (EVar "max") (EVar "start")) (EVar "cursor"))) (arm (PCon "Err" (PCon "Incomplete" (PVar "message"))) () (EApp (EApp (EVar "ScanSuspend") (EVar "message")) (EApp (EVar "PhaseLine") (EApp (EApp (EVar "crlfResume") (EVar "avail")) (EVar "start"))))) (arm (PCon "Err" (PCon "Fatal" (PVar "failure"))) () (EApp (EVar "ScanFatal") (EVar "failure"))) (arm (PCon "Ok" (PVar "line")) () (EBlock (DoLet false false (PVar "headerPos") (EApp (EVar "requestLineHeaderPos") (EVar "line"))) (DoExpr (EApp (EVar "go") (EApp (EApp (EApp (EApp (EApp (EVar "PhaseFields") (EVar "line")) (EListLit)) (EVar "headerPos")) (ELit (LInt 0))) (EVar "headerPos")))))))) (clause ((PCon "PhaseFields" (PVar "line") (PVar "acc") (PVar "pos") (PVar "count") (PVar "cursor"))) (EBlock (DoLet false false (PVar "step") (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EVar "fieldStep") (EVar "input")) (EVar "avail")) (EVar "pos")) (EApp (EApp (EVar "max") (EVar "pos")) (EVar "cursor"))) (EApp (EVar "requestLineHeaderPos") (EVar "line"))) (ELit (LInt 0))) (EVar "count")) (EVar "False"))) (DoExpr (EMatch (EVar "step") (arm (PCon "Err" (PCon "Incomplete" (PVar "message"))) () (EApp (EApp (EVar "ScanSuspend") (EVar "message")) (EApp (EApp (EApp (EApp (EApp (EVar "PhaseFields") (EVar "line")) (EVar "acc")) (EVar "pos")) (EVar "count")) (EApp (EApp (EVar "crlfResume") (EVar "avail")) (EVar "pos"))))) (arm (PCon "Err" (PCon "Fatal" (PVar "failure"))) () (EApp (EVar "ScanFatal") (EVar "failure"))) (arm (PCon "Ok" (PCon "FieldMore" (PVar "field") (PVar "next"))) () (EApp (EVar "go") (EApp (EApp (EApp (EApp (EApp (EVar "PhaseFields") (EVar "line")) (EBinOp "::" (EVar "field") (EVar "acc"))) (EVar "next")) (EBinOp "+" (EVar "count") (ELit (LInt 1)))) (EVar "next")))) (arm (PCon "Ok" (PCon "FieldDone" (PVar "bodyPos") (PVar "headerBytes"))) () (EMatch (EApp (EVar "settle") (EApp (EApp (EApp (EApp (EVar "buildHead") (EVar "line")) (EApp (EVar "reverse") (EVar "acc"))) (EVar "bodyPos")) (EVar "headerBytes"))) (arm (PCon "Err" (PVar "failure")) () (EApp (EVar "ScanFatal") (EVar "failure"))) (arm (PCon "Ok" (PVar "head")) () (EApp (EApp (EApp (EApp (EVar "scanBody") (EVar "input")) (EVar "avail")) (EVar "head")) (EApp (EVar "headBodyPhase") (EVar "head")))))))))) (clause ((PCon "PhaseBody" (PVar "head") (PVar "phase"))) (EApp (EApp (EApp (EApp (EVar "scanBody") (EVar "input")) (EVar "avail")) (EVar "head")) (EVar "phase"))))) (EApp (EVar "go") (EVar "x0"))))
 (DTypeSig false "frameSpanAt" (TyFun (TyCon "Bytes") (TyFun (TyCon "Int") (TyApp (TyApp (TyCon "Result") (TyCon "FrameError")) (TyCon "FrameSpan")))))
 (DFunDef false "frameSpanAt" ((PVar "input") (PVar "start")) (EBlock (DoLet false false (PVar "outcome") (EApp (EApp (EApp (EApp (EVar "scanFrom") (EVar "input")) (EApp (EVar "B.length") (EVar "input"))) (EVar "start")) (EApp (EVar "PhaseLine") (EVar "start")))) (DoExpr (EMatch (EVar "outcome") (arm (PCon "ScanSuspend" (PVar "message") PWild) () (EApp (EVar "Err") (EApp (EVar "Incomplete") (EVar "message")))) (arm (PCon "ScanFatal" (PVar "failure")) () (EApp (EVar "Err") (EApp (EVar "Fatal") (EVar "failure")))) (arm (PCon "ScanFramed" (PVar "span")) () (EApp (EVar "Ok") (EVar "span")))))))
 (DTypeSig false "frameFromSpan" (TyFun (TyCon "Bytes") (TyFun (TyCon "FrameHead") (TyFun (TyCon "Int") (TyApp (TyApp (TyCon "Result") (TyCon "FrameError")) (TyCon "FramedRequest"))))))
@@ -2785,7 +2806,7 @@ decodeRequestBody (Request _ _ headers _ packed _) = do
 (DTypeSig false "responseFindCrlf" (TyFun (TyCon "String") (TyFun (TyCon "Bytes") (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyApp (TyApp (TyCon "Result") (TyCon "FrameError")) (TyCon "Int"))))))))
 (DFunDef false "responseFindCrlf" ((PVar "label") (PVar "input") (PVar "avail") (PVar "start") (PVar "limit")) (EApp (EApp (EApp (EApp (EApp (EApp (EVar "responseFindCrlfGo") (EVar "label")) (EVar "input")) (EVar "avail")) (EVar "start")) (EVar "start")) (EVar "limit")))
 (DTypeSig false "responseFindCrlfGo" (TyFun (TyCon "String") (TyFun (TyCon "Bytes") (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyApp (TyApp (TyCon "Result") (TyCon "FrameError")) (TyCon "Int")))))))))
-(DFunDef false "responseFindCrlfGo" ((PVar "label") (PVar "input") (PVar "avail") (PVar "start") (PVar "pos") (PVar "limit")) (EIf (EBinOp ">" (EBinOp "-" (EVar "pos") (EVar "start")) (EVar "limit")) (EApp (EVar "Err") (EApp (EVar "Fatal") (EApp (EVar "HttpResourceExcess") (EBinOp "++" (EBinOp "++" (ELit (LString "http: ")) (EApp (EVar "display") (EVar "label"))) (ELit (LString " exceeds its resource limit")))))) (EIf (EBinOp ">=" (EVar "pos") (EVar "avail")) (EApp (EVar "responseMalformed") (EBinOp "++" (EBinOp "++" (ELit (LString "http: truncated ")) (EApp (EVar "display") (EVar "label"))) (ELit (LString "; expected CRLF")))) (EIf (EBinOp "==" (EApp (EApp (EVar "byteAt") (EVar "input")) (EVar "pos")) (ELit (LInt 10))) (EApp (EVar "responseMalformed") (EBinOp "++" (EBinOp "++" (ELit (LString "http: bare LF in ")) (EApp (EVar "display") (EVar "label"))) (ELit (LString "")))) (EIf (EBinOp "==" (EApp (EApp (EVar "byteAt") (EVar "input")) (EVar "pos")) (ELit (LInt 13))) (EIf (EBinOp "||" (EBinOp ">=" (EBinOp "+" (EVar "pos") (ELit (LInt 1))) (EVar "avail")) (EBinOp "/=" (EApp (EApp (EVar "byteAt") (EVar "input")) (EBinOp "+" (EVar "pos") (ELit (LInt 1)))) (ELit (LInt 10)))) (EApp (EVar "responseMalformed") (EBinOp "++" (EBinOp "++" (ELit (LString "http: bare CR in ")) (EApp (EVar "display") (EVar "label"))) (ELit (LString "")))) (EApp (EVar "Ok") (EVar "pos"))) (EApp (EApp (EApp (EApp (EApp (EApp (EVar "responseFindCrlfGo") (EVar "label")) (EVar "input")) (EVar "avail")) (EVar "start")) (EBinOp "+" (EVar "pos") (ELit (LInt 1)))) (EVar "limit")))))))
+(DFunDef false "responseFindCrlfGo" ((PVar "label") (PVar "input") (PVar "avail") (PVar "start") (PVar "pos0") (PVar "limit")) (ELetGroup ((lgb "go" (clause ((PVar "pos")) (EIf (EBinOp ">" (EBinOp "-" (EVar "pos") (EVar "start")) (EVar "limit")) (EApp (EVar "Err") (EApp (EVar "Fatal") (EApp (EVar "HttpResourceExcess") (EBinOp "++" (EBinOp "++" (ELit (LString "http: ")) (EApp (EVar "display") (EVar "label"))) (ELit (LString " exceeds its resource limit")))))) (EIf (EBinOp ">=" (EVar "pos") (EVar "avail")) (EApp (EVar "responseMalformed") (EBinOp "++" (EBinOp "++" (ELit (LString "http: truncated ")) (EApp (EVar "display") (EVar "label"))) (ELit (LString "; expected CRLF")))) (EIf (EBinOp "==" (EApp (EApp (EVar "byteAt") (EVar "input")) (EVar "pos")) (ELit (LInt 10))) (EApp (EVar "responseMalformed") (EBinOp "++" (EBinOp "++" (ELit (LString "http: bare LF in ")) (EApp (EVar "display") (EVar "label"))) (ELit (LString "")))) (EIf (EBinOp "==" (EApp (EApp (EVar "byteAt") (EVar "input")) (EVar "pos")) (ELit (LInt 13))) (EIf (EBinOp "||" (EBinOp ">=" (EBinOp "+" (EVar "pos") (ELit (LInt 1))) (EVar "avail")) (EBinOp "/=" (EApp (EApp (EVar "byteAt") (EVar "input")) (EBinOp "+" (EVar "pos") (ELit (LInt 1)))) (ELit (LInt 10)))) (EApp (EVar "responseMalformed") (EBinOp "++" (EBinOp "++" (ELit (LString "http: bare CR in ")) (EApp (EVar "display") (EVar "label"))) (ELit (LString "")))) (EApp (EVar "Ok") (EVar "pos"))) (EApp (EVar "go") (EBinOp "+" (EVar "pos") (ELit (LInt 1))))))))))) (EApp (EVar "go") (EVar "pos0"))))
 (DTypeSig false "responseParseDecimalGo" (TyFun (TyCon "Bytes") (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyApp (TyApp (TyCon "Result") (TyCon "FrameError")) (TyCon "Int"))))))
 (DFunDef false "responseParseDecimalGo" ((PVar "value") (PVar "i") (PVar "acc")) (EIf (EBinOp ">=" (EVar "i") (EApp (EVar "B.length") (EVar "value"))) (EApp (EVar "Ok") (EVar "acc")) (EBlock (DoLet false false (PVar "byte") (EApp (EApp (EVar "byteAt") (EVar "value")) (EVar "i"))) (DoExpr (EIf (EBinOp "||" (EBinOp "<" (EVar "byte") (ELit (LInt 48))) (EBinOp ">" (EVar "byte") (ELit (LInt 57)))) (EApp (EVar "responseMalformed") (ELit (LString "http: invalid decimal field"))) (EBlock (DoLet false false (PVar "digit") (EBinOp "-" (EVar "byte") (ELit (LInt 48)))) (DoExpr (EIf (EBinOp ">" (EVar "acc") (EBinOp "/" (EBinOp "-" (EVar "intMaxBound") (EVar "digit")) (ELit (LInt 10)))) (EApp (EVar "responseMalformed") (ELit (LString "http: decimal field overflows Int"))) (EApp (EApp (EApp (EVar "responseParseDecimalGo") (EVar "value")) (EBinOp "+" (EVar "i") (ELit (LInt 1)))) (EBinOp "+" (EBinOp "*" (EVar "acc") (ELit (LInt 10))) (EVar "digit")))))))))))
 (DTypeSig false "responseParseStatusLine" (TyFun (TyCon "Bytes") (TyFun (TyCon "Int") (TyApp (TyApp (TyCon "Result") (TyCon "FrameError")) (TyCon "ResponseStatusLine")))))
@@ -2795,13 +2816,13 @@ decodeRequestBody (Request _ _ headers _ packed _) = do
 (DTypeSig false "responseFieldStep" (TyFun (TyCon "Bytes") (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyApp (TyApp (TyCon "Result") (TyCon "FrameError")) (TyCon "ResponseFieldStep")))))))))
 (DFunDef false "responseFieldStep" ((PVar "input") (PVar "avail") (PVar "pos") (PVar "sectionStart") (PVar "priorBytes") (PVar "count")) (EApp (EApp (EVar "andThen") (EApp (EApp (EApp (EApp (EApp (EVar "responseFindCrlf") (ELit (LString "header field"))) (EVar "input")) (EVar "avail")) (EVar "pos")) (EVar "maxHttpHeaderBytes"))) (ELam ((PVar "end")) (ELet false (PVar "next") (EBinOp "+" (EVar "end") (ELit (LInt 2))) (ELet false (PVar "totalBytes") (EBinOp "-" (EBinOp "+" (EVar "priorBytes") (EVar "next")) (EVar "sectionStart")) (EIf (EBinOp ">" (EVar "totalBytes") (EVar "maxHttpHeaderBytes")) (EApp (EVar "Err") (EApp (EVar "Fatal") (EApp (EVar "HttpResourceExcess") (ELit (LString "http: combined header and trailer section exceeds 65536-byte resource limit"))))) (EIf (EBinOp "==" (EVar "end") (EVar "pos")) (EApp (EVar "Ok") (EApp (EApp (EVar "ResponseFieldDone") (EVar "next")) (EVar "totalBytes"))) (EIf (EBinOp ">" (EBinOp "+" (EVar "count") (ELit (LInt 1))) (EVar "maxHttpHeaderFields")) (EApp (EVar "Err") (EApp (EVar "Fatal") (EApp (EVar "HttpResourceExcess") (ELit (LString "http: header field count exceeds 100 resource limit"))))) (EApp (EApp (EVar "andThen") (EApp (EApp (EApp (EVar "responseParseHeaderLine") (EVar "input")) (EVar "pos")) (EVar "end"))) (ELam ((PVar "field")) (EApp (EVar "Ok") (EApp (EApp (EVar "ResponseFieldMore") (EVar "field")) (EVar "next")))))))))))))
 (DTypeSig false "responseParseFields" (TyFun (TyCon "Bytes") (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyFun (TyApp (TyCon "List") (TyCon "Header")) (TyApp (TyApp (TyCon "Result") (TyCon "FrameError")) (TyTuple (TyApp (TyCon "List") (TyCon "Header")) (TyCon "Int") (TyCon "Int")))))))))))
-(DFunDef false "responseParseFields" ((PVar "input") (PVar "avail") (PVar "pos") (PVar "sectionStart") (PVar "priorBytes") (PVar "count") (PVar "acc")) (EApp (EApp (EVar "andThen") (EApp (EApp (EApp (EApp (EApp (EApp (EVar "responseFieldStep") (EVar "input")) (EVar "avail")) (EVar "pos")) (EVar "sectionStart")) (EVar "priorBytes")) (EVar "count"))) (ELam ((PVar "step")) (EMatch (EVar "step") (arm (PCon "ResponseFieldDone" (PVar "next") (PVar "totalBytes")) () (EApp (EVar "Ok") (ETuple (EApp (EVar "reverse") (EVar "acc")) (EVar "next") (EVar "totalBytes")))) (arm (PCon "ResponseFieldMore" (PVar "field") (PVar "next")) () (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EVar "responseParseFields") (EVar "input")) (EVar "avail")) (EVar "next")) (EVar "sectionStart")) (EVar "priorBytes")) (EBinOp "+" (EVar "count") (ELit (LInt 1)))) (EBinOp "::" (EVar "field") (EVar "acc"))))))))
+(DFunDef false "responseParseFields" ((PVar "inp") (PVar "av") (PVar "pos0") (PVar "secBeg") (PVar "prior") (PVar "count0") (PVar "acc0")) (ELetGroup ((lgb "go" (clause ((PVar "pos") (PVar "count") (PVar "acc")) (EApp (EApp (EVar "andThen") (EApp (EApp (EApp (EApp (EApp (EApp (EVar "responseFieldStep") (EVar "inp")) (EVar "av")) (EVar "pos")) (EVar "secBeg")) (EVar "prior")) (EVar "count"))) (ELam ((PVar "step")) (EMatch (EVar "step") (arm (PCon "ResponseFieldDone" (PVar "next") (PVar "totalBytes")) () (EApp (EVar "Ok") (ETuple (EApp (EVar "reverse") (EVar "acc")) (EVar "next") (EVar "totalBytes")))) (arm (PCon "ResponseFieldMore" (PVar "field") (PVar "next")) () (EApp (EApp (EApp (EVar "go") (EVar "next")) (EBinOp "+" (EVar "count") (ELit (LInt 1)))) (EBinOp "::" (EVar "field") (EVar "acc")))))))))) (EApp (EApp (EApp (EVar "go") (EVar "pos0")) (EVar "count0")) (EVar "acc0"))))
 (DTypeSig false "responseImpliesNoBody" (TyFun (TyCon "Int") (TyCon "Bool")))
 (DFunDef false "responseImpliesNoBody" ((PVar "status")) (EBinOp "||" (EBinOp "||" (EBinOp "&&" (EBinOp ">=" (EVar "status") (ELit (LInt 100))) (EBinOp "<" (EVar "status") (ELit (LInt 200)))) (EBinOp "==" (EVar "status") (ELit (LInt 204)))) (EBinOp "==" (EVar "status") (ELit (LInt 304)))))
 (DTypeSig false "responseSelectBodyMode" (TyFun (TyCon "Int") (TyFun (TyApp (TyCon "List") (TyCon "Header")) (TyApp (TyApp (TyCon "Result") (TyCon "FrameError")) (TyCon "BodyMode")))))
 (DFunDef false "responseSelectBodyMode" ((PVar "status") (PVar "headers")) (EBlock (DoLet false false (PVar "clCount") (EApp (EApp (EVar "countNamed") (ELit (LString "content-length"))) (EVar "headers"))) (DoLet false false (PVar "teCount") (EApp (EApp (EVar "countNamed") (ELit (LString "transfer-encoding"))) (EVar "headers"))) (DoExpr (EIf (EBinOp ">" (EVar "clCount") (ELit (LInt 1))) (EApp (EVar "responseMalformed") (ELit (LString "http: duplicate Content-Length is ambiguous"))) (EIf (EBinOp "&&" (EBinOp ">" (EVar "clCount") (ELit (LInt 0))) (EBinOp ">" (EVar "teCount") (ELit (LInt 0)))) (EApp (EVar "responseMalformed") (ELit (LString "http: Transfer-Encoding with Content-Length is ambiguous"))) (EIf (EBinOp ">" (EVar "teCount") (ELit (LInt 0))) (EIf (EBinOp "/=" (EVar "teCount") (ELit (LInt 1))) (EApp (EVar "responseMalformed") (ELit (LString "http: repeated Transfer-Encoding is unsupported"))) (EMatch (EApp (EApp (EVar "findNamed") (ELit (LString "transfer-encoding"))) (EVar "headers")) (arm (PCon "None") () (EApp (EVar "responseMalformed") (ELit (LString "http: missing Transfer-Encoding value")))) (arm (PCon "Some" (PVar "value")) () (EIf (EApp (EApp (EVar "asciiEqualCi") (EVar "value")) (ELit (LString "chunked"))) (EApp (EVar "Ok") (EVar "ChunkedBody")) (EApp (EVar "responseMalformed") (ELit (LString "http: unsupported Transfer-Encoding coding"))))))) (EMatch (EApp (EApp (EVar "findNamed") (ELit (LString "content-length"))) (EVar "headers")) (arm (PCon "None") () (EIf (EApp (EVar "responseImpliesNoBody") (EVar "status")) (EApp (EVar "Ok") (EVar "NoBody")) (EApp (EVar "Ok") (EVar "UntilCloseBody")))) (arm (PCon "Some" (PVar "value")) () (EIf (EBinOp "==" (EApp (EVar "B.length") (EVar "value")) (ELit (LInt 0))) (EApp (EVar "responseMalformed") (ELit (LString "http: empty Content-Length"))) (EApp (EApp (EVar "andThen") (EApp (EApp (EApp (EVar "responseParseDecimalGo") (EVar "value")) (ELit (LInt 0))) (ELit (LInt 0)))) (ELam ((PVar "size")) (EIf (EBinOp ">" (EVar "size") (EVar "maxHttpBodyBytes")) (EApp (EVar "Err") (EApp (EVar "Fatal") (EApp (EVar "HttpResourceExcess") (ELit (LString "http: decoded body exceeds 5242880-byte resource limit"))))) (EApp (EVar "Ok") (EApp (EVar "FixedBody") (EVar "size")))))))))))))))
 (DTypeSig false "responseParseHexSizeGo" (TyFun (TyCon "Bytes") (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyApp (TyApp (TyCon "Result") (TyCon "FrameError")) (TyCon "Int")))))))
-(DFunDef false "responseParseHexSizeGo" ((PVar "input") (PVar "pos") (PVar "end") (PVar "acc")) (EIf (EBinOp ">=" (EVar "pos") (EVar "end")) (EApp (EVar "Ok") (EVar "acc")) (EMatch (EApp (EVar "hexDigit") (EApp (EApp (EVar "byteAt") (EVar "input")) (EVar "pos"))) (arm (PCon "None") () (EApp (EVar "responseMalformed") (ELit (LString "http: invalid chunk size")))) (arm (PCon "Some" (PVar "digit")) () (EIf (EBinOp ">" (EVar "acc") (EBinOp "/" (EBinOp "-" (EVar "maxHttpResponseChunkBytes") (EVar "digit")) (ELit (LInt 16)))) (EApp (EVar "Err") (EApp (EVar "Fatal") (EApp (EVar "HttpResourceExcess") (ELit (LString "http: chunk size exceeds resource limit"))))) (EApp (EApp (EApp (EApp (EVar "responseParseHexSizeGo") (EVar "input")) (EBinOp "+" (EVar "pos") (ELit (LInt 1)))) (EVar "end")) (EBinOp "+" (EBinOp "*" (EVar "acc") (ELit (LInt 16))) (EVar "digit"))))))))
+(DFunDef false "responseParseHexSizeGo" ((PVar "input") (PVar "pos0") (PVar "end") (PVar "acc0")) (ELetGroup ((lgb "go" (clause ((PVar "pos") (PVar "acc")) (EIf (EBinOp ">=" (EVar "pos") (EVar "end")) (EApp (EVar "Ok") (EVar "acc")) (EMatch (EApp (EVar "hexDigit") (EApp (EApp (EVar "byteAt") (EVar "input")) (EVar "pos"))) (arm (PCon "None") () (EApp (EVar "responseMalformed") (ELit (LString "http: invalid chunk size")))) (arm (PCon "Some" (PVar "digit")) () (EIf (EBinOp ">" (EVar "acc") (EBinOp "/" (EBinOp "-" (EVar "maxHttpResponseChunkBytes") (EVar "digit")) (ELit (LInt 16)))) (EApp (EVar "Err") (EApp (EVar "Fatal") (EApp (EVar "HttpResourceExcess") (ELit (LString "http: chunk size exceeds resource limit"))))) (EApp (EApp (EVar "go") (EBinOp "+" (EVar "pos") (ELit (LInt 1)))) (EBinOp "+" (EBinOp "*" (EVar "acc") (ELit (LInt 16))) (EVar "digit")))))))))) (EApp (EApp (EVar "go") (EVar "pos0")) (EVar "acc0"))))
 (DTypeSig false "responseParseChunkSize" (TyFun (TyCon "Bytes") (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyApp (TyApp (TyCon "Result") (TyCon "FrameError")) (TyCon "Int"))))))
 (DFunDef false "responseParseChunkSize" ((PVar "input") (PVar "start") (PVar "end")) (EBlock (DoLet false false (PVar "semi") (EApp (EApp (EVar "optionOr") (EVar "end")) (EApp (EApp (EApp (EApp (EVar "findByte") (EVar "input")) (EVar "start")) (EVar "end")) (ELit (LInt 59))))) (DoExpr (EIf (EBinOp "==" (EVar "semi") (EVar "start")) (EApp (EVar "responseMalformed") (ELit (LString "http: empty chunk size"))) (EApp (EApp (EVar "andThen") (EApp (EApp (EApp (EApp (EVar "responseParseHexSizeGo") (EVar "input")) (EVar "start")) (EVar "semi")) (ELit (LInt 0)))) (ELam ((PVar "size")) (EApp (EApp (EVar "andThen") (EApp (EApp (EApp (EVar "parseChunkExtensionsGo") (EVar "input")) (EVar "semi")) (EVar "end"))) (ELam ((PVar "__do_x")) (EMatch (EVar "__do_x") (arm (PLit LUnit) () (EApp (EVar "Ok") (EVar "size"))))))))))))
 (DData Private "ResponseChunkHead" () ((variant "ResponseChunkEnd" (ConPos (TyCon "Int"))) (variant "ResponseChunkBody" (ConPos (TyCon "Int") (TyCon "Int")))) ())
@@ -2812,7 +2833,7 @@ decodeRequestBody (Request _ _ headers _ packed _) = do
 (DTypeSig false "responseChunkDataEnd" (TyFun (TyCon "Bytes") (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyApp (TyApp (TyCon "Result") (TyCon "FrameError")) (TyCon "Int")))))))
 (DFunDef false "responseChunkDataEnd" ((PVar "input") (PVar "avail") (PVar "dataPos") (PVar "size")) (EBlock (DoLet false false (PVar "afterChunk") (EBinOp "+" (EVar "dataPos") (EVar "size"))) (DoExpr (EIf (EBinOp ">" (EVar "afterChunk") (EVar "avail")) (EApp (EVar "responseMalformed") (ELit (LString "http: truncated chunk body"))) (EIf (EBinOp ">" (EBinOp "+" (EVar "afterChunk") (ELit (LInt 2))) (EVar "avail")) (EApp (EVar "responseMalformed") (ELit (LString "http: truncated CRLF after chunk data"))) (EIf (EBinOp "||" (EBinOp "/=" (EApp (EApp (EVar "byteAt") (EVar "input")) (EVar "afterChunk")) (ELit (LInt 13))) (EBinOp "/=" (EApp (EApp (EVar "byteAt") (EVar "input")) (EBinOp "+" (EVar "afterChunk") (ELit (LInt 1)))) (ELit (LInt 10)))) (EApp (EVar "responseMalformed") (ELit (LString "http: missing CRLF after chunk data"))) (EApp (EVar "Ok") (EBinOp "+" (EVar "afterChunk") (ELit (LInt 2))))))))))
 (DTypeSig false "responseParseChunked" (TyFun (TyCon "Bytes") (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyFun (TyCon "Builder") (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyApp (TyApp (TyCon "Result") (TyCon "FrameError")) (TyTuple (TyCon "Bytes") (TyApp (TyCon "List") (TyCon "Header")) (TyCon "Int"))))))))))
-(DFunDef false "responseParseChunked" ((PVar "input") (PVar "avail") (PVar "pos") (PVar "out") (PVar "total") (PVar "count")) (EApp (EApp (EVar "andThen") (EApp (EApp (EApp (EApp (EVar "responseChunkHeadStep") (EVar "input")) (EVar "avail")) (EVar "pos")) (EVar "count"))) (ELam ((PVar "head")) (EMatch (EVar "head") (arm (PCon "ResponseChunkEnd" (PVar "dataPos")) () (EApp (EApp (EVar "andThen") (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EVar "responseParseFields") (EVar "input")) (EVar "avail")) (EVar "dataPos")) (EVar "dataPos")) (ELit (LInt 0))) (ELit (LInt 0))) (EListLit))) (ELam ((PVar "__do_x")) (EMatch (EVar "__do_x") (arm (PTuple (PVar "trailers") (PVar "finalPos") PWild) () (EApp (EVar "Ok") (ETuple (EApp (EVar "buildBytes") (EVar "out")) (EVar "trailers") (EVar "finalPos")))))))) (arm (PCon "ResponseChunkBody" (PVar "dataPos") (PVar "size")) () (EIf (EBinOp ">" (EBinOp "+" (EVar "total") (EVar "size")) (EVar "maxHttpBodyBytes")) (EApp (EVar "Err") (EApp (EVar "Fatal") (EApp (EVar "HttpResourceExcess") (ELit (LString "http: decoded body exceeds 5242880-byte resource limit"))))) (EApp (EApp (EVar "andThen") (EApp (EApp (EApp (EApp (EVar "responseReadSliceAt") (EVar "input")) (EVar "avail")) (EVar "dataPos")) (EVar "size"))) (ELam ((PVar "__do_x")) (EMatch (EVar "__do_x") (arm (PTuple (PVar "chunk") PWild) () (EApp (EApp (EVar "andThen") (EApp (EApp (EApp (EApp (EVar "responseChunkDataEnd") (EVar "input")) (EVar "avail")) (EVar "dataPos")) (EVar "size"))) (ELam ((PVar "next")) (ELet false (PLit LUnit) (EApp (EApp (EVar "emitBytes") (EVar "chunk")) (EVar "out")) (EApp (EApp (EApp (EApp (EApp (EApp (EVar "responseParseChunked") (EVar "input")) (EVar "avail")) (EVar "next")) (EVar "out")) (EBinOp "+" (EVar "total") (EVar "size"))) (EBinOp "+" (EVar "count") (ELit (LInt 1)))))))))))))))))
+(DFunDef false "responseParseChunked" ((PVar "input") (PVar "avail") (PVar "pos0") (PVar "out") (PVar "total0") (PVar "count0")) (ELetGroup ((lgb "go" (clause ((PVar "pos") (PVar "total") (PVar "count")) (EApp (EApp (EVar "andThen") (EApp (EApp (EApp (EApp (EVar "responseChunkHeadStep") (EVar "input")) (EVar "avail")) (EVar "pos")) (EVar "count"))) (ELam ((PVar "head")) (EMatch (EVar "head") (arm (PCon "ResponseChunkEnd" (PVar "dataPos")) () (EApp (EApp (EVar "andThen") (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EVar "responseParseFields") (EVar "input")) (EVar "avail")) (EVar "dataPos")) (EVar "dataPos")) (ELit (LInt 0))) (ELit (LInt 0))) (EListLit))) (ELam ((PVar "__do_x")) (EMatch (EVar "__do_x") (arm (PTuple (PVar "trailers") (PVar "finalPos") PWild) () (EApp (EVar "Ok") (ETuple (EApp (EVar "buildBytes") (EVar "out")) (EVar "trailers") (EVar "finalPos")))))))) (arm (PCon "ResponseChunkBody" (PVar "dataPos") (PVar "size")) () (EIf (EBinOp ">" (EBinOp "+" (EVar "total") (EVar "size")) (EVar "maxHttpBodyBytes")) (EApp (EVar "Err") (EApp (EVar "Fatal") (EApp (EVar "HttpResourceExcess") (ELit (LString "http: decoded body exceeds 5242880-byte resource limit"))))) (EApp (EApp (EVar "andThen") (EApp (EApp (EApp (EApp (EVar "responseReadSliceAt") (EVar "input")) (EVar "avail")) (EVar "dataPos")) (EVar "size"))) (ELam ((PVar "__do_x")) (EMatch (EVar "__do_x") (arm (PTuple (PVar "chunk") PWild) () (EApp (EApp (EVar "andThen") (EApp (EApp (EApp (EApp (EVar "responseChunkDataEnd") (EVar "input")) (EVar "avail")) (EVar "dataPos")) (EVar "size"))) (ELam ((PVar "next")) (ELet false (PLit LUnit) (EApp (EApp (EVar "emitBytes") (EVar "chunk")) (EVar "out")) (EApp (EApp (EApp (EVar "go") (EVar "next")) (EBinOp "+" (EVar "total") (EVar "size"))) (EBinOp "+" (EVar "count") (ELit (LInt 1))))))))))))))))))) (EApp (EApp (EApp (EVar "go") (EVar "pos0")) (EVar "total0")) (EVar "count0"))))
 (DTypeSig false "responseParseBody" (TyFun (TyCon "BodyMode") (TyFun (TyCon "Bytes") (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyApp (TyApp (TyCon "Result") (TyCon "FrameError")) (TyTuple (TyCon "Bytes") (TyApp (TyCon "List") (TyCon "Header")) (TyCon "Int"))))))))
 (DFunDef false "responseParseBody" ((PCon "NoBody") PWild PWild (PVar "pos")) (EApp (EVar "Ok") (ETuple (EVar "empty") (EListLit) (EVar "pos"))))
 (DFunDef false "responseParseBody" ((PCon "FixedBody" (PVar "size")) (PVar "input") (PVar "avail") (PVar "pos")) (EApp (EApp (EVar "andThen") (EApp (EApp (EApp (EApp (EVar "responseReadSliceAt") (EVar "input")) (EVar "avail")) (EVar "pos")) (EVar "size"))) (ELam ((PVar "__do_x")) (EMatch (EVar "__do_x") (arm (PTuple (PVar "body") (PVar "finalPos")) () (EApp (EVar "Ok") (ETuple (EVar "body") (EListLit) (EVar "finalPos"))))))))
@@ -2827,7 +2848,7 @@ decodeRequestBody (Request _ _ headers _ packed _) = do
 (DTest false "response malformed diagnostics use the public http vocabulary" (EMatch (EApp (EVar "parseResponseClassified") (EApp (EVar "encodeUtf8") (ELit (LString "")))) (arm (PCon "Err" (PCon "HttpMalformed" (PVar "message"))) () (EApp (EApp (EVar "expectEqual") (ELit (LString "http: truncated status line; expected CRLF"))) (EVar "message"))) (arm PWild () (EApp (EVar "expectTrue") (EVar "False")))))
 (DTest false "response resource diagnostics use the public http vocabulary" (EBlock (DoLet false false (PVar "input") (EApp (EVar "encodeUtf8") (ELit (LString "HTTP/1.1 200 OK\r\ntransfer-encoding: chunked\r\n\r\n100001\r\n")))) (DoExpr (EMatch (EApp (EVar "parseResponseClassified") (EVar "input")) (arm (PCon "Err" (PCon "HttpResourceExcess" (PVar "message"))) () (EApp (EApp (EVar "expectEqual") (ELit (LString "http: chunk size exceeds resource limit"))) (EVar "message"))) (arm PWild () (EApp (EVar "expectTrue") (EVar "False")))))))
 (DTypeSig false "responseScanChunkedEnd" (TyFun (TyCon "Bytes") (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyApp (TyApp (TyCon "Result") (TyCon "FrameError")) (TyCon "Int")))))))
-(DFunDef false "responseScanChunkedEnd" ((PVar "input") (PVar "avail") (PVar "pos") (PVar "count")) (EApp (EApp (EVar "andThen") (EApp (EApp (EApp (EApp (EVar "responseChunkHeadStep") (EVar "input")) (EVar "avail")) (EVar "pos")) (EVar "count"))) (ELam ((PVar "head")) (EMatch (EVar "head") (arm (PCon "ResponseChunkEnd" (PVar "dataPos")) () (EApp (EApp (EVar "andThen") (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EVar "responseParseFields") (EVar "input")) (EVar "avail")) (EVar "dataPos")) (EVar "dataPos")) (ELit (LInt 0))) (ELit (LInt 0))) (EListLit))) (ELam ((PVar "__do_x")) (EMatch (EVar "__do_x") (arm (PTuple PWild (PVar "finalPos") PWild) () (EApp (EVar "Ok") (EVar "finalPos"))))))) (arm (PCon "ResponseChunkBody" (PVar "dataPos") (PVar "size")) () (EApp (EApp (EVar "andThen") (EApp (EApp (EApp (EApp (EVar "responseChunkDataEnd") (EVar "input")) (EVar "avail")) (EVar "dataPos")) (EVar "size"))) (ELam ((PVar "next")) (EApp (EApp (EApp (EApp (EVar "responseScanChunkedEnd") (EVar "input")) (EVar "avail")) (EVar "next")) (EBinOp "+" (EVar "count") (ELit (LInt 1)))))))))))
+(DFunDef false "responseScanChunkedEnd" ((PVar "input") (PVar "avail") (PVar "pos0") (PVar "count0")) (ELetGroup ((lgb "go" (clause ((PVar "pos") (PVar "count")) (EApp (EApp (EVar "andThen") (EApp (EApp (EApp (EApp (EVar "responseChunkHeadStep") (EVar "input")) (EVar "avail")) (EVar "pos")) (EVar "count"))) (ELam ((PVar "head")) (EMatch (EVar "head") (arm (PCon "ResponseChunkEnd" (PVar "dataPos")) () (EApp (EApp (EVar "andThen") (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EVar "responseParseFields") (EVar "input")) (EVar "avail")) (EVar "dataPos")) (EVar "dataPos")) (ELit (LInt 0))) (ELit (LInt 0))) (EListLit))) (ELam ((PVar "__do_x")) (EMatch (EVar "__do_x") (arm (PTuple PWild (PVar "finalPos") PWild) () (EApp (EVar "Ok") (EVar "finalPos"))))))) (arm (PCon "ResponseChunkBody" (PVar "dataPos") (PVar "size")) () (EApp (EApp (EVar "andThen") (EApp (EApp (EApp (EApp (EVar "responseChunkDataEnd") (EVar "input")) (EVar "avail")) (EVar "dataPos")) (EVar "size"))) (ELam ((PVar "next")) (EApp (EApp (EVar "go") (EVar "next")) (EBinOp "+" (EVar "count") (ELit (LInt 1))))))))))))) (EApp (EApp (EVar "go") (EVar "pos0")) (EVar "count0"))))
 (DTypeSig false "responseScanBodyEnd" (TyFun (TyCon "BodyMode") (TyFun (TyCon "Bytes") (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyApp (TyApp (TyCon "Result") (TyCon "FrameError")) (TyCon "Int")))))))
 (DFunDef false "responseScanBodyEnd" ((PCon "NoBody") PWild PWild (PVar "pos")) (EApp (EVar "Ok") (EVar "pos")))
 (DFunDef false "responseScanBodyEnd" ((PCon "FixedBody" (PVar "size")) PWild (PVar "avail") (PVar "pos")) (EIf (EBinOp ">" (EBinOp "+" (EVar "pos") (EVar "size")) (EVar "avail")) (EApp (EVar "responseMalformed") (ELit (LString "http: declared body is still arriving"))) (EApp (EVar "Ok") (EBinOp "+" (EVar "pos") (EVar "size")))))
@@ -2874,7 +2895,7 @@ decodeRequestBody (Request _ _ headers _ packed _) = do
 (DTypeSig false "percentNibble" (TyFun (TyCon "Int") (TyApp (TyCon "Option") (TyCon "Int"))))
 (DFunDef false "percentNibble" ((PVar "byte")) (EApp (EVar "hexDigit") (EVar "byte")))
 (DTypeSig false "decodeQueryBytes" (TyFun (TyCon "Bytes") (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyFun (TyCon "Builder") (TyApp (TyApp (TyCon "Result") (TyCon "String")) (TyCon "Unit")))))))
-(DFunDef false "decodeQueryBytes" ((PVar "input") (PVar "pos") (PVar "end") (PVar "out")) (EIf (EBinOp ">=" (EVar "pos") (EVar "end")) (EApp (EVar "Ok") (ELit LUnit)) (EIf (EBinOp "/=" (EApp (EApp (EVar "byteAt") (EVar "input")) (EVar "pos")) (ELit (LInt 37))) (EBlock (DoLet false false (PLit LUnit) (EApp (EApp (EVar "emitU8") (EApp (EApp (EVar "index") (EVar "input")) (EVar "pos"))) (EVar "out"))) (DoExpr (EApp (EApp (EApp (EApp (EVar "decodeQueryBytes") (EVar "input")) (EBinOp "+" (EVar "pos") (ELit (LInt 1)))) (EVar "end")) (EVar "out")))) (EIf (EBinOp ">=" (EBinOp "+" (EVar "pos") (ELit (LInt 2))) (EVar "end")) (EApp (EVar "Err") (ELit (LString "http: malformed percent escape in query"))) (EMatch (ETuple (EApp (EVar "percentNibble") (EApp (EApp (EVar "byteAt") (EVar "input")) (EBinOp "+" (EVar "pos") (ELit (LInt 1))))) (EApp (EVar "percentNibble") (EApp (EApp (EVar "byteAt") (EVar "input")) (EBinOp "+" (EVar "pos") (ELit (LInt 2)))))) (arm (PTuple (PCon "Some" (PVar "high")) (PCon "Some" (PVar "low"))) () (EBlock (DoLet false false (PLit LUnit) (EApp (EApp (EVar "emitU8") (EApp (EVar "fromInt") (EBinOp "+" (EBinOp "*" (EVar "high") (ELit (LInt 16))) (EVar "low")))) (EVar "out"))) (DoExpr (EApp (EApp (EApp (EApp (EVar "decodeQueryBytes") (EVar "input")) (EBinOp "+" (EVar "pos") (ELit (LInt 3)))) (EVar "end")) (EVar "out"))))) (arm PWild () (EApp (EVar "Err") (ELit (LString "http: malformed percent escape in query")))))))))
+(DFunDef false "decodeQueryBytes" ((PVar "input") (PVar "pos0") (PVar "end") (PVar "out")) (ELetGroup ((lgb "go" (clause ((PVar "pos")) (EIf (EBinOp ">=" (EVar "pos") (EVar "end")) (EApp (EVar "Ok") (ELit LUnit)) (EIf (EBinOp "/=" (EApp (EApp (EVar "byteAt") (EVar "input")) (EVar "pos")) (ELit (LInt 37))) (EBlock (DoLet false false (PLit LUnit) (EApp (EApp (EVar "emitU8") (EApp (EApp (EVar "index") (EVar "input")) (EVar "pos"))) (EVar "out"))) (DoExpr (EApp (EVar "go") (EBinOp "+" (EVar "pos") (ELit (LInt 1)))))) (EIf (EBinOp ">=" (EBinOp "+" (EVar "pos") (ELit (LInt 2))) (EVar "end")) (EApp (EVar "Err") (ELit (LString "http: malformed percent escape in query"))) (EMatch (ETuple (EApp (EVar "percentNibble") (EApp (EApp (EVar "byteAt") (EVar "input")) (EBinOp "+" (EVar "pos") (ELit (LInt 1))))) (EApp (EVar "percentNibble") (EApp (EApp (EVar "byteAt") (EVar "input")) (EBinOp "+" (EVar "pos") (ELit (LInt 2)))))) (arm (PTuple (PCon "Some" (PVar "high")) (PCon "Some" (PVar "low"))) () (EBlock (DoLet false false (PLit LUnit) (EApp (EApp (EVar "emitU8") (EApp (EVar "fromInt") (EBinOp "+" (EBinOp "*" (EVar "high") (ELit (LInt 16))) (EVar "low")))) (EVar "out"))) (DoExpr (EApp (EVar "go") (EBinOp "+" (EVar "pos") (ELit (LInt 3))))))) (arm PWild () (EApp (EVar "Err") (ELit (LString "http: malformed percent escape in query"))))))))))) (EApp (EVar "go") (EVar "pos0"))))
 (DTypeSig false "continuation" (TyFun (TyCon "Int") (TyCon "Bool")))
 (DFunDef false "continuation" ((PVar "byte")) (EBinOp "&&" (EBinOp ">=" (EVar "byte") (ELit (LInt 128))) (EBinOp "<=" (EVar "byte") (ELit (LInt 191)))))
 (DTypeSig false "utf8Step" (TyFun (TyCon "Bytes") (TyFun (TyCon "Int") (TyApp (TyCon "Option") (TyTuple (TyCon "Int") (TyCon "Int"))))))
@@ -2896,9 +2917,9 @@ decodeRequestBody (Request _ _ headers _ packed _) = do
 (DTypeSig false "validMediaBytes" (TyFun (TyCon "Bytes") (TyFun (TyCon "Int") (TyCon "Bool"))))
 (DFunDef false "validMediaBytes" ((PVar "bytes") (PVar "i")) (EIf (EBinOp ">=" (EVar "i") (EApp (EVar "B.length") (EVar "bytes"))) (EVar "True") (EBlock (DoLet false false (PVar "byte") (EApp (EApp (EVar "byteAt") (EVar "bytes")) (EVar "i"))) (DoExpr (EBinOp "&&" (EBinOp "||" (EBinOp "==" (EVar "byte") (ELit (LInt 9))) (EBinOp "&&" (EBinOp ">=" (EVar "byte") (ELit (LInt 32))) (EBinOp "<=" (EVar "byte") (ELit (LInt 126))))) (EApp (EApp (EVar "validMediaBytes") (EVar "bytes")) (EBinOp "+" (EVar "i") (ELit (LInt 1)))))))))
 (DTypeSig false "scanMediaQuoted" (TyFun (TyCon "Bytes") (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyApp (TyApp (TyCon "Result") (TyCon "String")) (TyCon "Int"))))))
-(DFunDef false "scanMediaQuoted" ((PVar "value") (PVar "pos") (PVar "end")) (EIf (EBinOp ">=" (EVar "pos") (EVar "end")) (EApp (EVar "Err") (ELit (LString "http: unterminated quoted media-type parameter"))) (EIf (EBinOp "==" (EApp (EApp (EVar "byteAt") (EVar "value")) (EVar "pos")) (ELit (LInt 34))) (EApp (EVar "Ok") (EBinOp "+" (EVar "pos") (ELit (LInt 1)))) (EIf (EBinOp "==" (EApp (EApp (EVar "byteAt") (EVar "value")) (EVar "pos")) (ELit (LInt 92))) (EIf (EBinOp "||" (EBinOp "||" (EBinOp ">=" (EBinOp "+" (EVar "pos") (ELit (LInt 1))) (EVar "end")) (EBinOp "<" (EApp (EApp (EVar "byteAt") (EVar "value")) (EBinOp "+" (EVar "pos") (ELit (LInt 1)))) (ELit (LInt 32)))) (EBinOp ">" (EApp (EApp (EVar "byteAt") (EVar "value")) (EBinOp "+" (EVar "pos") (ELit (LInt 1)))) (ELit (LInt 126)))) (EApp (EVar "Err") (ELit (LString "http: invalid quoted media-type parameter"))) (EApp (EApp (EApp (EVar "scanMediaQuoted") (EVar "value")) (EBinOp "+" (EVar "pos") (ELit (LInt 2)))) (EVar "end"))) (EIf (EBinOp "||" (EBinOp "<" (EApp (EApp (EVar "byteAt") (EVar "value")) (EVar "pos")) (ELit (LInt 32))) (EBinOp "==" (EApp (EApp (EVar "byteAt") (EVar "value")) (EVar "pos")) (ELit (LInt 127)))) (EApp (EVar "Err") (ELit (LString "http: control byte in media-type parameter"))) (EApp (EApp (EApp (EVar "scanMediaQuoted") (EVar "value")) (EBinOp "+" (EVar "pos") (ELit (LInt 1)))) (EVar "end")))))))
+(DFunDef false "scanMediaQuoted" ((PVar "value") (PVar "pos0") (PVar "end")) (ELetGroup ((lgb "go" (clause ((PVar "pos")) (EIf (EBinOp ">=" (EVar "pos") (EVar "end")) (EApp (EVar "Err") (ELit (LString "http: unterminated quoted media-type parameter"))) (EIf (EBinOp "==" (EApp (EApp (EVar "byteAt") (EVar "value")) (EVar "pos")) (ELit (LInt 34))) (EApp (EVar "Ok") (EBinOp "+" (EVar "pos") (ELit (LInt 1)))) (EIf (EBinOp "==" (EApp (EApp (EVar "byteAt") (EVar "value")) (EVar "pos")) (ELit (LInt 92))) (EIf (EBinOp "||" (EBinOp "||" (EBinOp ">=" (EBinOp "+" (EVar "pos") (ELit (LInt 1))) (EVar "end")) (EBinOp "<" (EApp (EApp (EVar "byteAt") (EVar "value")) (EBinOp "+" (EVar "pos") (ELit (LInt 1)))) (ELit (LInt 32)))) (EBinOp ">" (EApp (EApp (EVar "byteAt") (EVar "value")) (EBinOp "+" (EVar "pos") (ELit (LInt 1)))) (ELit (LInt 126)))) (EApp (EVar "Err") (ELit (LString "http: invalid quoted media-type parameter"))) (EApp (EVar "go") (EBinOp "+" (EVar "pos") (ELit (LInt 2))))) (EIf (EBinOp "||" (EBinOp "<" (EApp (EApp (EVar "byteAt") (EVar "value")) (EVar "pos")) (ELit (LInt 32))) (EBinOp "==" (EApp (EApp (EVar "byteAt") (EVar "value")) (EVar "pos")) (ELit (LInt 127)))) (EApp (EVar "Err") (ELit (LString "http: control byte in media-type parameter"))) (EApp (EVar "go") (EBinOp "+" (EVar "pos") (ELit (LInt 1))))))))))) (EApp (EVar "go") (EVar "pos0"))))
 (DTypeSig false "parseMediaParameters" (TyFun (TyCon "Bytes") (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyApp (TyApp (TyCon "Result") (TyCon "String")) (TyCon "Unit")))))))
-(DFunDef false "parseMediaParameters" ((PVar "value") (PVar "pos") (PVar "end") (PVar "count")) (EBlock (DoLet false false (PVar "start") (EApp (EApp (EApp (EVar "skipOws") (EVar "value")) (EVar "pos")) (EVar "end"))) (DoExpr (EIf (EBinOp "==" (EVar "start") (EVar "end")) (EApp (EVar "Ok") (ELit LUnit)) (EIf (EBinOp ">=" (EVar "count") (ELit (LInt 32))) (EApp (EVar "Err") (ELit (LString "http: media type has too many parameters"))) (EIf (EBinOp "/=" (EApp (EApp (EVar "byteAt") (EVar "value")) (EVar "start")) (ELit (LInt 59))) (EApp (EVar "Err") (ELit (LString "http: invalid media-type parameter separator"))) (EBlock (DoLet false false (PVar "nameStart") (EApp (EApp (EApp (EVar "skipOws") (EVar "value")) (EBinOp "+" (EVar "start") (ELit (LInt 1)))) (EVar "end"))) (DoLet false false (PVar "nameEnd") (EApp (EApp (EApp (EVar "scanTokenEnd") (EVar "value")) (EVar "nameStart")) (EVar "end"))) (DoExpr (EIf (EBinOp "==" (EVar "nameEnd") (EVar "nameStart")) (EApp (EVar "Err") (ELit (LString "http: empty media-type parameter name"))) (EBlock (DoLet false false (PVar "afterName") (EApp (EApp (EApp (EVar "skipOws") (EVar "value")) (EVar "nameEnd")) (EVar "end"))) (DoExpr (EIf (EBinOp "||" (EBinOp ">=" (EVar "afterName") (EVar "end")) (EBinOp "/=" (EApp (EApp (EVar "byteAt") (EVar "value")) (EVar "afterName")) (ELit (LInt 61)))) (EApp (EVar "Err") (ELit (LString "http: media-type parameter requires a value"))) (EBlock (DoLet false false (PVar "valueStart") (EApp (EApp (EApp (EVar "skipOws") (EVar "value")) (EBinOp "+" (EVar "afterName") (ELit (LInt 1)))) (EVar "end"))) (DoExpr (EIf (EBinOp ">=" (EVar "valueStart") (EVar "end")) (EApp (EVar "Err") (ELit (LString "http: media-type parameter requires a value"))) (EApp (EApp (EVar "andThen") (EIf (EBinOp "==" (EApp (EApp (EVar "byteAt") (EVar "value")) (EVar "valueStart")) (ELit (LInt 34))) (EApp (EApp (EApp (EVar "scanMediaQuoted") (EVar "value")) (EBinOp "+" (EVar "valueStart") (ELit (LInt 1)))) (EVar "end")) (EBlock (DoLet false false (PVar "tokenEnd") (EApp (EApp (EApp (EVar "scanTokenEnd") (EVar "value")) (EVar "valueStart")) (EVar "end"))) (DoExpr (EIf (EBinOp "==" (EVar "tokenEnd") (EVar "valueStart")) (EApp (EVar "Err") (ELit (LString "http: invalid media-type parameter value"))) (EApp (EVar "Ok") (EVar "tokenEnd"))))))) (ELam ((PVar "valueEnd")) (EApp (EApp (EApp (EApp (EVar "parseMediaParameters") (EVar "value")) (EVar "valueEnd")) (EVar "end")) (EBinOp "+" (EVar "count") (ELit (LInt 1)))))))))))))))))))))
+(DFunDef false "parseMediaParameters" ((PVar "value") (PVar "pos0") (PVar "end") (PVar "count0")) (ELetGroup ((lgb "go" (clause ((PVar "pos") (PVar "count")) (EBlock (DoLet false false (PVar "start") (EApp (EApp (EApp (EVar "skipOws") (EVar "value")) (EVar "pos")) (EVar "end"))) (DoExpr (EIf (EBinOp "==" (EVar "start") (EVar "end")) (EApp (EVar "Ok") (ELit LUnit)) (EIf (EBinOp ">=" (EVar "count") (ELit (LInt 32))) (EApp (EVar "Err") (ELit (LString "http: media type has too many parameters"))) (EIf (EBinOp "/=" (EApp (EApp (EVar "byteAt") (EVar "value")) (EVar "start")) (ELit (LInt 59))) (EApp (EVar "Err") (ELit (LString "http: invalid media-type parameter separator"))) (EBlock (DoLet false false (PVar "nameStart") (EApp (EApp (EApp (EVar "skipOws") (EVar "value")) (EBinOp "+" (EVar "start") (ELit (LInt 1)))) (EVar "end"))) (DoLet false false (PVar "nameEnd") (EApp (EApp (EApp (EVar "scanTokenEnd") (EVar "value")) (EVar "nameStart")) (EVar "end"))) (DoExpr (EIf (EBinOp "==" (EVar "nameEnd") (EVar "nameStart")) (EApp (EVar "Err") (ELit (LString "http: empty media-type parameter name"))) (EBlock (DoLet false false (PVar "afterName") (EApp (EApp (EApp (EVar "skipOws") (EVar "value")) (EVar "nameEnd")) (EVar "end"))) (DoExpr (EIf (EBinOp "||" (EBinOp ">=" (EVar "afterName") (EVar "end")) (EBinOp "/=" (EApp (EApp (EVar "byteAt") (EVar "value")) (EVar "afterName")) (ELit (LInt 61)))) (EApp (EVar "Err") (ELit (LString "http: media-type parameter requires a value"))) (EBlock (DoLet false false (PVar "valueStart") (EApp (EApp (EApp (EVar "skipOws") (EVar "value")) (EBinOp "+" (EVar "afterName") (ELit (LInt 1)))) (EVar "end"))) (DoExpr (EIf (EBinOp ">=" (EVar "valueStart") (EVar "end")) (EApp (EVar "Err") (ELit (LString "http: media-type parameter requires a value"))) (EApp (EApp (EVar "andThen") (EIf (EBinOp "==" (EApp (EApp (EVar "byteAt") (EVar "value")) (EVar "valueStart")) (ELit (LInt 34))) (EApp (EApp (EApp (EVar "scanMediaQuoted") (EVar "value")) (EBinOp "+" (EVar "valueStart") (ELit (LInt 1)))) (EVar "end")) (EBlock (DoLet false false (PVar "tokenEnd") (EApp (EApp (EApp (EVar "scanTokenEnd") (EVar "value")) (EVar "valueStart")) (EVar "end"))) (DoExpr (EIf (EBinOp "==" (EVar "tokenEnd") (EVar "valueStart")) (EApp (EVar "Err") (ELit (LString "http: invalid media-type parameter value"))) (EApp (EVar "Ok") (EVar "tokenEnd"))))))) (ELam ((PVar "valueEnd")) (EApp (EApp (EVar "go") (EVar "valueEnd")) (EBinOp "+" (EVar "count") (ELit (LInt 1))))))))))))))))))))))) (EApp (EApp (EVar "go") (EVar "pos0")) (EVar "count0"))))
 (DTypeSig true "parseMediaType" (TyFun (TyCon "Bytes") (TyApp (TyApp (TyCon "Result") (TyCon "String")) (TyCon "MediaType"))))
 (DFunDef false "parseMediaType" ((PVar "value")) (EBlock (DoLet false false (PVar "end") (EApp (EVar "B.length") (EVar "value"))) (DoExpr (EIf (EBinOp "||" (EBinOp "==" (EVar "end") (ELit (LInt 0))) (EBinOp ">" (EVar "end") (ELit (LInt 4096)))) (EApp (EVar "Err") (ELit (LString "http: media type exceeds its 4096-byte resource limit"))) (EIf (EApp (EVar "not") (EApp (EApp (EVar "validMediaBytes") (EVar "value")) (ELit (LInt 0)))) (EApp (EVar "Err") (ELit (LString "http: media type must be bounded ASCII"))) (EBlock (DoLet false false (PVar "typeEnd") (EApp (EApp (EApp (EVar "scanTokenEnd") (EVar "value")) (ELit (LInt 0))) (EVar "end"))) (DoExpr (EIf (EBinOp "||" (EBinOp "||" (EBinOp "==" (EVar "typeEnd") (ELit (LInt 0))) (EBinOp ">=" (EVar "typeEnd") (EVar "end"))) (EBinOp "/=" (EApp (EApp (EVar "byteAt") (EVar "value")) (EVar "typeEnd")) (ELit (LInt 47)))) (EApp (EVar "Err") (ELit (LString "http: invalid media type"))) (EBlock (DoLet false false (PVar "subtypeStart") (EBinOp "+" (EVar "typeEnd") (ELit (LInt 1)))) (DoLet false false (PVar "subtypeEnd") (EApp (EApp (EApp (EVar "scanTokenEnd") (EVar "value")) (EVar "subtypeStart")) (EVar "end"))) (DoExpr (EIf (EBinOp "==" (EVar "subtypeEnd") (EVar "subtypeStart")) (EApp (EVar "Err") (ELit (LString "http: invalid media subtype"))) (EApp (EApp (EVar "andThen") (EApp (EApp (EApp (EApp (EVar "parseMediaParameters") (EVar "value")) (EVar "subtypeEnd")) (EVar "end")) (ELit (LInt 0)))) (ELam ((PVar "__do_x")) (EMatch (EVar "__do_x") (arm (PLit LUnit) () (EApp (EVar "Ok") (EApp (EApp (EVar "MediaType") (EApp (EApp (EApp (EVar "lowerAscii") (EVar "value")) (ELit (LInt 0))) (EVar "typeEnd"))) (EApp (EApp (EApp (EVar "lowerAscii") (EVar "value")) (EVar "subtypeStart")) (EVar "subtypeEnd")))))))))))))))))))
 (DTypeSig false "contentType" (TyFun (TyApp (TyCon "List") (TyCon "Header")) (TyApp (TyApp (TyCon "Result") (TyCon "String")) (TyCon "MediaType"))))
@@ -3014,7 +3035,7 @@ decodeRequestBody (Request _ _ headers _ packed _) = do
 (DTypeSig true "isTokenByte" (TyFun (TyCon "Int") (TyCon "Bool")))
 (DFunDef false "isTokenByte" ((PVar "byte")) (EBinOp "||" (EBinOp "||" (EBinOp "||" (EBinOp "||" (EBinOp "||" (EBinOp "||" (EBinOp "||" (EBinOp "||" (EBinOp "||" (EBinOp "||" (EBinOp "||" (EBinOp "||" (EBinOp "||" (EBinOp "||" (EBinOp "||" (EBinOp "||" (EBinOp "||" (EBinOp "&&" (EBinOp ">=" (EVar "byte") (ELit (LInt 48))) (EBinOp "<=" (EVar "byte") (ELit (LInt 57)))) (EBinOp "&&" (EBinOp ">=" (EVar "byte") (ELit (LInt 65))) (EBinOp "<=" (EVar "byte") (ELit (LInt 90))))) (EBinOp "&&" (EBinOp ">=" (EVar "byte") (ELit (LInt 97))) (EBinOp "<=" (EVar "byte") (ELit (LInt 122))))) (EBinOp "==" (EVar "byte") (ELit (LInt 33)))) (EBinOp "==" (EVar "byte") (ELit (LInt 35)))) (EBinOp "==" (EVar "byte") (ELit (LInt 36)))) (EBinOp "==" (EVar "byte") (ELit (LInt 37)))) (EBinOp "==" (EVar "byte") (ELit (LInt 38)))) (EBinOp "==" (EVar "byte") (ELit (LInt 39)))) (EBinOp "==" (EVar "byte") (ELit (LInt 42)))) (EBinOp "==" (EVar "byte") (ELit (LInt 43)))) (EBinOp "==" (EVar "byte") (ELit (LInt 45)))) (EBinOp "==" (EVar "byte") (ELit (LInt 46)))) (EBinOp "==" (EVar "byte") (ELit (LInt 94)))) (EBinOp "==" (EVar "byte") (ELit (LInt 95)))) (EBinOp "==" (EVar "byte") (ELit (LInt 96)))) (EBinOp "==" (EVar "byte") (ELit (LInt 124)))) (EBinOp "==" (EVar "byte") (ELit (LInt 126)))))
 (DTypeSig false "allToken" (TyFun (TyCon "Bytes") (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyCon "Bool")))))
-(DFunDef false "allToken" ((PVar "input") (PVar "pos") (PVar "end")) (EIf (EBinOp ">=" (EVar "pos") (EVar "end")) (EVar "True") (EBinOp "&&" (EApp (EVar "isTokenByte") (EApp (EApp (EVar "byteAt") (EVar "input")) (EVar "pos"))) (EApp (EApp (EApp (EVar "allToken") (EVar "input")) (EBinOp "+" (EVar "pos") (ELit (LInt 1)))) (EVar "end")))))
+(DFunDef false "allToken" ((PVar "input") (PVar "pos0") (PVar "end")) (ELetGroup ((lgb "go" (clause ((PVar "pos")) (EIf (EBinOp ">=" (EVar "pos") (EVar "end")) (EVar "True") (EBinOp "&&" (EApp (EVar "isTokenByte") (EApp (EApp (EVar "byteAt") (EVar "input")) (EVar "pos"))) (EApp (EVar "go") (EBinOp "+" (EVar "pos") (ELit (LInt 1))))))))) (EApp (EVar "go") (EVar "pos0"))))
 (DTypeSig false "isHexByte" (TyFun (TyCon "Int") (TyCon "Bool")))
 (DFunDef false "isHexByte" ((PVar "byte")) (EBinOp "||" (EBinOp "||" (EBinOp "&&" (EBinOp ">=" (EVar "byte") (ELit (LInt 48))) (EBinOp "<=" (EVar "byte") (ELit (LInt 57)))) (EBinOp "&&" (EBinOp ">=" (EVar "byte") (ELit (LInt 65))) (EBinOp "<=" (EVar "byte") (ELit (LInt 70))))) (EBinOp "&&" (EBinOp ">=" (EVar "byte") (ELit (LInt 97))) (EBinOp "<=" (EVar "byte") (ELit (LInt 102))))))
 (DTypeSig false "isUnreservedByte" (TyFun (TyCon "Int") (TyCon "Bool")))
@@ -3022,21 +3043,21 @@ decodeRequestBody (Request _ _ headers _ packed _) = do
 (DTypeSig false "isSubDelimiterByte" (TyFun (TyCon "Int") (TyCon "Bool")))
 (DFunDef false "isSubDelimiterByte" ((PVar "byte")) (EBinOp "||" (EBinOp "||" (EBinOp "||" (EBinOp "||" (EBinOp "||" (EBinOp "||" (EBinOp "||" (EBinOp "||" (EBinOp "||" (EBinOp "||" (EBinOp "==" (EVar "byte") (ELit (LInt 33))) (EBinOp "==" (EVar "byte") (ELit (LInt 36)))) (EBinOp "==" (EVar "byte") (ELit (LInt 38)))) (EBinOp "==" (EVar "byte") (ELit (LInt 39)))) (EBinOp "==" (EVar "byte") (ELit (LInt 40)))) (EBinOp "==" (EVar "byte") (ELit (LInt 41)))) (EBinOp "==" (EVar "byte") (ELit (LInt 42)))) (EBinOp "==" (EVar "byte") (ELit (LInt 43)))) (EBinOp "==" (EVar "byte") (ELit (LInt 44)))) (EBinOp "==" (EVar "byte") (ELit (LInt 59)))) (EBinOp "==" (EVar "byte") (ELit (LInt 61)))))
 (DTypeSig false "validTarget" (TyFun (TyCon "Bytes") (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyFun (TyCon "Bool") (TyCon "Bool"))))))
-(DFunDef false "validTarget" ((PVar "input") (PVar "pos") (PVar "end") (PVar "query")) (EIf (EBinOp ">=" (EVar "pos") (EVar "end")) (EVar "True") (EBlock (DoLet false false (PVar "byte") (EApp (EApp (EVar "byteAt") (EVar "input")) (EVar "pos"))) (DoExpr (EIf (EBinOp "==" (EVar "byte") (ELit (LInt 37))) (EBinOp "&&" (EBinOp "&&" (EBinOp "&&" (EBinOp "<" (EBinOp "+" (EVar "pos") (ELit (LInt 2))) (EVar "end")) (EApp (EVar "isHexByte") (EApp (EApp (EVar "byteAt") (EVar "input")) (EBinOp "+" (EVar "pos") (ELit (LInt 1)))))) (EApp (EVar "isHexByte") (EApp (EApp (EVar "byteAt") (EVar "input")) (EBinOp "+" (EVar "pos") (ELit (LInt 2)))))) (EApp (EApp (EApp (EApp (EVar "validTarget") (EVar "input")) (EBinOp "+" (EVar "pos") (ELit (LInt 3)))) (EVar "end")) (EVar "query"))) (EBlock (DoLet false false (PVar "pchar") (EBinOp "||" (EBinOp "||" (EBinOp "||" (EApp (EVar "isUnreservedByte") (EVar "byte")) (EApp (EVar "isSubDelimiterByte") (EVar "byte"))) (EBinOp "==" (EVar "byte") (ELit (LInt 58)))) (EBinOp "==" (EVar "byte") (ELit (LInt 64))))) (DoExpr (EIf (EBinOp "||" (EBinOp "||" (EVar "pchar") (EBinOp "==" (EVar "byte") (ELit (LInt 47)))) (EBinOp "&&" (EVar "query") (EBinOp "==" (EVar "byte") (ELit (LInt 63))))) (EApp (EApp (EApp (EApp (EVar "validTarget") (EVar "input")) (EBinOp "+" (EVar "pos") (ELit (LInt 1)))) (EVar "end")) (EVar "query")) (EIf (EBinOp "&&" (EApp (EVar "not") (EVar "query")) (EBinOp "==" (EVar "byte") (ELit (LInt 63)))) (EApp (EApp (EApp (EApp (EVar "validTarget") (EVar "input")) (EBinOp "+" (EVar "pos") (ELit (LInt 1)))) (EVar "end")) (EVar "True")) (EVar "False"))))))))))
+(DFunDef false "validTarget" ((PVar "input") (PVar "pos0") (PVar "end") (PVar "query0")) (ELetGroup ((lgb "go" (clause ((PVar "pos") (PVar "query")) (EIf (EBinOp ">=" (EVar "pos") (EVar "end")) (EVar "True") (EBlock (DoLet false false (PVar "byte") (EApp (EApp (EVar "byteAt") (EVar "input")) (EVar "pos"))) (DoExpr (EIf (EBinOp "==" (EVar "byte") (ELit (LInt 37))) (EBinOp "&&" (EBinOp "&&" (EBinOp "&&" (EBinOp "<" (EBinOp "+" (EVar "pos") (ELit (LInt 2))) (EVar "end")) (EApp (EVar "isHexByte") (EApp (EApp (EVar "byteAt") (EVar "input")) (EBinOp "+" (EVar "pos") (ELit (LInt 1)))))) (EApp (EVar "isHexByte") (EApp (EApp (EVar "byteAt") (EVar "input")) (EBinOp "+" (EVar "pos") (ELit (LInt 2)))))) (EApp (EApp (EVar "go") (EBinOp "+" (EVar "pos") (ELit (LInt 3)))) (EVar "query"))) (EBlock (DoLet false false (PVar "pchar") (EBinOp "||" (EBinOp "||" (EBinOp "||" (EApp (EVar "isUnreservedByte") (EVar "byte")) (EApp (EVar "isSubDelimiterByte") (EVar "byte"))) (EBinOp "==" (EVar "byte") (ELit (LInt 58)))) (EBinOp "==" (EVar "byte") (ELit (LInt 64))))) (DoExpr (EIf (EBinOp "||" (EBinOp "||" (EVar "pchar") (EBinOp "==" (EVar "byte") (ELit (LInt 47)))) (EBinOp "&&" (EVar "query") (EBinOp "==" (EVar "byte") (ELit (LInt 63))))) (EApp (EApp (EVar "go") (EBinOp "+" (EVar "pos") (ELit (LInt 1)))) (EVar "query")) (EIf (EBinOp "&&" (EApp (EVar "not") (EVar "query")) (EBinOp "==" (EVar "byte") (ELit (LInt 63)))) (EApp (EApp (EVar "go") (EBinOp "+" (EVar "pos") (ELit (LInt 1)))) (EVar "True")) (EVar "False")))))))))))) (EApp (EApp (EVar "go") (EVar "pos0")) (EVar "query0"))))
 (DTypeSig false "exactAsciiAt" (TyFun (TyCon "Bytes") (TyFun (TyCon "Int") (TyFun (TyCon "String") (TyCon "Bool")))))
 (DFunDef false "exactAsciiAt" ((PVar "input") (PVar "start") (PVar "expected")) (EBlock (DoLet false false (PVar "wanted") (EApp (EVar "encodeUtf8") (EVar "expected"))) (DoLet false false (PVar "size") (EApp (EVar "B.length") (EVar "wanted"))) (DoExpr (EBinOp "&&" (EBinOp "<=" (EBinOp "+" (EVar "start") (EVar "size")) (EApp (EVar "B.length") (EVar "input"))) (EBinOp "==" (EApp (EApp (EApp (EMethodRef "slice") (EVar "input")) (EVar "start")) (EBinOp "+" (EVar "start") (EVar "size"))) (EVar "wanted"))))))
 (DTypeSig false "validFieldValue" (TyFun (TyCon "Bytes") (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyCon "Bool")))))
-(DFunDef false "validFieldValue" ((PVar "input") (PVar "pos") (PVar "end")) (EIf (EBinOp ">=" (EVar "pos") (EVar "end")) (EVar "True") (EBlock (DoLet false false (PVar "byte") (EApp (EApp (EVar "byteAt") (EVar "input")) (EVar "pos"))) (DoExpr (EBinOp "&&" (EBinOp "||" (EBinOp "==" (EVar "byte") (ELit (LInt 9))) (EBinOp "&&" (EBinOp ">=" (EVar "byte") (ELit (LInt 32))) (EBinOp "/=" (EVar "byte") (ELit (LInt 127))))) (EApp (EApp (EApp (EVar "validFieldValue") (EVar "input")) (EBinOp "+" (EVar "pos") (ELit (LInt 1)))) (EVar "end")))))))
+(DFunDef false "validFieldValue" ((PVar "input") (PVar "pos0") (PVar "end")) (ELetGroup ((lgb "go" (clause ((PVar "pos")) (EIf (EBinOp ">=" (EVar "pos") (EVar "end")) (EVar "True") (EBlock (DoLet false false (PVar "byte") (EApp (EApp (EVar "byteAt") (EVar "input")) (EVar "pos"))) (DoExpr (EBinOp "&&" (EBinOp "||" (EBinOp "==" (EVar "byte") (ELit (LInt 9))) (EBinOp "&&" (EBinOp ">=" (EVar "byte") (ELit (LInt 32))) (EBinOp "/=" (EVar "byte") (ELit (LInt 127))))) (EApp (EVar "go") (EBinOp "+" (EVar "pos") (ELit (LInt 1))))))))))) (EApp (EVar "go") (EVar "pos0"))))
 (DTypeSig true "findByte" (TyFun (TyCon "Bytes") (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyApp (TyCon "Option") (TyCon "Int")))))))
-(DFunDef false "findByte" ((PVar "value") (PVar "pos") (PVar "end") (PVar "wanted")) (EIf (EBinOp ">=" (EVar "pos") (EVar "end")) (EVar "None") (EIf (EBinOp "==" (EApp (EApp (EVar "byteAt") (EVar "value")) (EVar "pos")) (EVar "wanted")) (EApp (EVar "Some") (EVar "pos")) (EApp (EApp (EApp (EApp (EVar "findByte") (EVar "value")) (EBinOp "+" (EVar "pos") (ELit (LInt 1)))) (EVar "end")) (EVar "wanted")))))
+(DFunDef false "findByte" ((PVar "value") (PVar "pos0") (PVar "end") (PVar "wanted")) (ELetGroup ((lgb "go" (clause ((PVar "pos")) (EIf (EBinOp ">=" (EVar "pos") (EVar "end")) (EVar "None") (EIf (EBinOp "==" (EApp (EApp (EVar "byteAt") (EVar "value")) (EVar "pos")) (EVar "wanted")) (EApp (EVar "Some") (EVar "pos")) (EApp (EVar "go") (EBinOp "+" (EVar "pos") (ELit (LInt 1))))))))) (EApp (EVar "go") (EVar "pos0"))))
 (DTypeSig false "findCrlfChecked" (TyFun (TyCon "String") (TyFun (TyCon "Bytes") (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyApp (TyApp (TyCon "Result") (TyCon "FrameError")) (TyCon "Int")))))))))
-(DFunDef false "findCrlfChecked" ((PVar "label") (PVar "input") (PVar "avail") (PVar "start") (PVar "pos") (PVar "limit")) (EIf (EBinOp ">" (EBinOp "-" (EVar "pos") (EVar "start")) (EVar "limit")) (EApp (EVar "Err") (EApp (EVar "Fatal") (EApp (EVar "HttpResourceExcess") (EBinOp "++" (EBinOp "++" (ELit (LString "http: ")) (EApp (EMethodRef "display") (EVar "label"))) (ELit (LString " exceeds its resource limit")))))) (EIf (EBinOp ">=" (EVar "pos") (EVar "avail")) (EApp (EVar "incomplete") (EBinOp "++" (EBinOp "++" (ELit (LString "http: truncated ")) (EApp (EMethodRef "display") (EVar "label"))) (ELit (LString "; expected CRLF")))) (EIf (EBinOp "==" (EApp (EApp (EVar "byteAt") (EVar "input")) (EVar "pos")) (ELit (LInt 10))) (EApp (EVar "malformed") (EBinOp "++" (EBinOp "++" (ELit (LString "http: bare LF in ")) (EApp (EMethodRef "display") (EVar "label"))) (ELit (LString "")))) (EIf (EBinOp "==" (EApp (EApp (EVar "byteAt") (EVar "input")) (EVar "pos")) (ELit (LInt 13))) (EIf (EBinOp ">=" (EBinOp "+" (EVar "pos") (ELit (LInt 1))) (EVar "avail")) (EApp (EVar "incomplete") (EBinOp "++" (EBinOp "++" (ELit (LString "http: bare CR in ")) (EApp (EMethodRef "display") (EVar "label"))) (ELit (LString "")))) (EIf (EBinOp "/=" (EApp (EApp (EVar "byteAt") (EVar "input")) (EBinOp "+" (EVar "pos") (ELit (LInt 1)))) (ELit (LInt 10))) (EApp (EVar "malformed") (EBinOp "++" (EBinOp "++" (ELit (LString "http: bare CR in ")) (EApp (EMethodRef "display") (EVar "label"))) (ELit (LString "")))) (EApp (EVar "Ok") (EVar "pos")))) (EApp (EApp (EApp (EApp (EApp (EApp (EVar "findCrlfChecked") (EVar "label")) (EVar "input")) (EVar "avail")) (EVar "start")) (EBinOp "+" (EVar "pos") (ELit (LInt 1)))) (EVar "limit")))))))
+(DFunDef false "findCrlfChecked" ((PVar "label") (PVar "input") (PVar "avail") (PVar "start") (PVar "pos0") (PVar "limit")) (ELetGroup ((lgb "go" (clause ((PVar "pos")) (EIf (EBinOp ">" (EBinOp "-" (EVar "pos") (EVar "start")) (EVar "limit")) (EApp (EVar "Err") (EApp (EVar "Fatal") (EApp (EVar "HttpResourceExcess") (EBinOp "++" (EBinOp "++" (ELit (LString "http: ")) (EApp (EMethodRef "display") (EVar "label"))) (ELit (LString " exceeds its resource limit")))))) (EIf (EBinOp ">=" (EVar "pos") (EVar "avail")) (EApp (EVar "incomplete") (EBinOp "++" (EBinOp "++" (ELit (LString "http: truncated ")) (EApp (EMethodRef "display") (EVar "label"))) (ELit (LString "; expected CRLF")))) (EIf (EBinOp "==" (EApp (EApp (EVar "byteAt") (EVar "input")) (EVar "pos")) (ELit (LInt 10))) (EApp (EVar "malformed") (EBinOp "++" (EBinOp "++" (ELit (LString "http: bare LF in ")) (EApp (EMethodRef "display") (EVar "label"))) (ELit (LString "")))) (EIf (EBinOp "==" (EApp (EApp (EVar "byteAt") (EVar "input")) (EVar "pos")) (ELit (LInt 13))) (EIf (EBinOp ">=" (EBinOp "+" (EVar "pos") (ELit (LInt 1))) (EVar "avail")) (EApp (EVar "incomplete") (EBinOp "++" (EBinOp "++" (ELit (LString "http: bare CR in ")) (EApp (EMethodRef "display") (EVar "label"))) (ELit (LString "")))) (EIf (EBinOp "/=" (EApp (EApp (EVar "byteAt") (EVar "input")) (EBinOp "+" (EVar "pos") (ELit (LInt 1)))) (ELit (LInt 10))) (EApp (EVar "malformed") (EBinOp "++" (EBinOp "++" (ELit (LString "http: bare CR in ")) (EApp (EMethodRef "display") (EVar "label"))) (ELit (LString "")))) (EApp (EVar "Ok") (EVar "pos")))) (EApp (EVar "go") (EBinOp "+" (EVar "pos") (ELit (LInt 1))))))))))) (EApp (EVar "go") (EVar "pos0"))))
 (DTypeSig false "parseRequestLine" (TyFun (TyCon "Bytes") (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyApp (TyApp (TyCon "Result") (TyCon "FrameError")) (TyCon "RequestLine")))))))
 (DFunDef false "parseRequestLine" ((PVar "input") (PVar "avail") (PVar "start") (PVar "cursor")) (EApp (EApp (EMethodRef "andThen") (EApp (EApp (EApp (EApp (EApp (EApp (EVar "findCrlfChecked") (ELit (LString "request line"))) (EVar "input")) (EVar "avail")) (EVar "start")) (EVar "cursor")) (EVar "maxHttpRequestLineBytes"))) (ELam ((PVar "end")) (EApp (EApp (EMethodRef "andThen") (EApp (EVar "resourceExcess") (EApp (EVar "checkHttpRequestLineBytes") (EBinOp "-" (EVar "end") (EVar "start"))))) (ELam ((PVar "__do_x")) (EMatch (EVar "__do_x") (arm (PLit LUnit) () (EApp (EApp (EMethodRef "andThen") (EMatch (EApp (EApp (EApp (EApp (EVar "elemIndexWithin") (EVar "start")) (EVar "end")) (ELit (LInt 32))) (EVar "input")) (arm (PCon "None") () (EApp (EVar "malformed") (ELit (LString "http: malformed request line; expected METHOD SP TARGET SP HTTP/1.1")))) (arm (PCon "Some" (PVar "pos")) () (EApp (EVar "Ok") (EVar "pos"))))) (ELam ((PVar "firstSpace")) (EApp (EApp (EMethodRef "andThen") (EMatch (EApp (EApp (EApp (EApp (EVar "elemIndexWithin") (EBinOp "+" (EVar "firstSpace") (ELit (LInt 1)))) (EVar "end")) (ELit (LInt 32))) (EVar "input")) (arm (PCon "None") () (EApp (EVar "malformed") (ELit (LString "http: malformed request line; expected METHOD SP TARGET SP HTTP/1.1")))) (arm (PCon "Some" (PVar "pos")) () (EApp (EVar "Ok") (EVar "pos"))))) (ELam ((PVar "secondSpace")) (EIf (EBinOp "||" (EBinOp "==" (EVar "firstSpace") (EVar "start")) (EApp (EVar "not") (EApp (EApp (EApp (EVar "allToken") (EVar "input")) (EVar "start")) (EVar "firstSpace")))) (EApp (EVar "malformed") (ELit (LString "http: invalid method token"))) (EIf (EBinOp "==" (EVar "secondSpace") (EBinOp "+" (EVar "firstSpace") (ELit (LInt 1)))) (EApp (EVar "malformed") (ELit (LString "http: empty request target"))) (EIf (EBinOp "||" (EBinOp "/=" (EApp (EApp (EVar "byteAt") (EVar "input")) (EBinOp "+" (EVar "firstSpace") (ELit (LInt 1)))) (ELit (LInt 47))) (EApp (EVar "not") (EApp (EApp (EApp (EApp (EVar "validTarget") (EVar "input")) (EBinOp "+" (EVar "firstSpace") (ELit (LInt 1)))) (EVar "secondSpace")) (EVar "False")))) (EApp (EVar "malformed") (ELit (LString "http: request target must be an origin-form ASCII target without a fragment"))) (EIf (EBinOp "||" (EBinOp "/=" (EBinOp "+" (EVar "secondSpace") (ELit (LInt 9))) (EVar "end")) (EApp (EVar "not") (EApp (EApp (EApp (EVar "exactAsciiAt") (EVar "input")) (EBinOp "+" (EVar "secondSpace") (ELit (LInt 1)))) (ELit (LString "HTTP/1.1"))))) (EApp (EVar "malformed") (ELit (LString "http: only HTTP/1.1 requests are supported"))) (EApp (EVar "Ok") (EApp (EApp (EApp (EVar "RequestLine") (EApp (EApp (EVar "optionOrPanic") (ELit (LString "http: request-line method is proven ASCII by allToken"))) (EApp (EVar "decodeUtf8") (EApp (EApp (EApp (EMethodRef "slice") (EVar "input")) (EVar "start")) (EVar "firstSpace"))))) (EApp (EApp (EVar "optionOrPanic") (ELit (LString "http: request target is proven ASCII by validTarget"))) (EApp (EVar "decodeUtf8") (EApp (EApp (EApp (EMethodRef "slice") (EVar "input")) (EBinOp "+" (EVar "firstSpace") (ELit (LInt 1)))) (EVar "secondSpace"))))) (EBinOp "+" (EVar "end") (ELit (LInt 2))))))))))))))))))))
 (DTypeSig true "trimLeftOws" (TyFun (TyCon "Bytes") (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyCon "Int")))))
-(DFunDef false "trimLeftOws" ((PVar "value") (PVar "pos") (PVar "end")) (EIf (EBinOp "&&" (EBinOp "<" (EVar "pos") (EVar "end")) (EBinOp "||" (EBinOp "==" (EApp (EApp (EVar "byteAt") (EVar "value")) (EVar "pos")) (ELit (LInt 32))) (EBinOp "==" (EApp (EApp (EVar "byteAt") (EVar "value")) (EVar "pos")) (ELit (LInt 9))))) (EApp (EApp (EApp (EVar "trimLeftOws") (EVar "value")) (EBinOp "+" (EVar "pos") (ELit (LInt 1)))) (EVar "end")) (EVar "pos")))
+(DFunDef false "trimLeftOws" ((PVar "value") (PVar "pos0") (PVar "end")) (ELetGroup ((lgb "go" (clause ((PVar "pos")) (EIf (EBinOp "&&" (EBinOp "<" (EVar "pos") (EVar "end")) (EBinOp "||" (EBinOp "==" (EApp (EApp (EVar "byteAt") (EVar "value")) (EVar "pos")) (ELit (LInt 32))) (EBinOp "==" (EApp (EApp (EVar "byteAt") (EVar "value")) (EVar "pos")) (ELit (LInt 9))))) (EApp (EVar "go") (EBinOp "+" (EVar "pos") (ELit (LInt 1)))) (EVar "pos"))))) (EApp (EVar "go") (EVar "pos0"))))
 (DTypeSig true "trimRightOws" (TyFun (TyCon "Bytes") (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyCon "Int")))))
-(DFunDef false "trimRightOws" ((PVar "value") (PVar "start") (PVar "end")) (EIf (EBinOp "&&" (EBinOp ">" (EVar "end") (EVar "start")) (EBinOp "||" (EBinOp "==" (EApp (EApp (EVar "byteAt") (EVar "value")) (EBinOp "-" (EVar "end") (ELit (LInt 1)))) (ELit (LInt 32))) (EBinOp "==" (EApp (EApp (EVar "byteAt") (EVar "value")) (EBinOp "-" (EVar "end") (ELit (LInt 1)))) (ELit (LInt 9))))) (EApp (EApp (EApp (EVar "trimRightOws") (EVar "value")) (EVar "start")) (EBinOp "-" (EVar "end") (ELit (LInt 1)))) (EVar "end")))
+(DFunDef false "trimRightOws" ((PVar "value") (PVar "start") (PVar "end0")) (ELetGroup ((lgb "go" (clause ((PVar "end")) (EIf (EBinOp "&&" (EBinOp ">" (EVar "end") (EVar "start")) (EBinOp "||" (EBinOp "==" (EApp (EApp (EVar "byteAt") (EVar "value")) (EBinOp "-" (EVar "end") (ELit (LInt 1)))) (ELit (LInt 32))) (EBinOp "==" (EApp (EApp (EVar "byteAt") (EVar "value")) (EBinOp "-" (EVar "end") (ELit (LInt 1)))) (ELit (LInt 9))))) (EApp (EVar "go") (EBinOp "-" (EVar "end") (ELit (LInt 1)))) (EVar "end"))))) (EApp (EVar "go") (EVar "end0"))))
 (DTypeSig false "parseHeaderLine" (TyFun (TyCon "Bytes") (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyApp (TyApp (TyCon "Result") (TyCon "FrameError")) (TyCon "Header"))))))
 (DFunDef false "parseHeaderLine" ((PVar "input") (PVar "start") (PVar "end")) (EIf (EBinOp "||" (EBinOp "==" (EApp (EApp (EVar "byteAt") (EVar "input")) (EVar "start")) (ELit (LInt 32))) (EBinOp "==" (EApp (EApp (EVar "byteAt") (EVar "input")) (EVar "start")) (ELit (LInt 9)))) (EApp (EVar "malformed") (ELit (LString "http: obsolete folded header lines are forbidden"))) (EMatch (EApp (EApp (EApp (EApp (EVar "elemIndexWithin") (EVar "start")) (EVar "end")) (ELit (LInt 58))) (EVar "input")) (arm (PCon "None") () (EApp (EVar "malformed") (ELit (LString "http: malformed header field; missing colon")))) (arm (PCon "Some" (PVar "colon")) () (EIf (EBinOp "||" (EBinOp "==" (EVar "colon") (EVar "start")) (EApp (EVar "not") (EApp (EApp (EApp (EVar "allToken") (EVar "input")) (EVar "start")) (EVar "colon")))) (EApp (EVar "malformed") (ELit (LString "http: invalid header field name"))) (EIf (EApp (EVar "not") (EApp (EApp (EApp (EVar "validFieldValue") (EVar "input")) (EBinOp "+" (EVar "colon") (ELit (LInt 1)))) (EVar "end"))) (EApp (EVar "malformed") (ELit (LString "http: control byte in header field value"))) (EBlock (DoLet false false (PVar "valueStart") (EApp (EApp (EApp (EVar "trimLeftOws") (EVar "input")) (EBinOp "+" (EVar "colon") (ELit (LInt 1)))) (EVar "end"))) (DoLet false false (PVar "valueEnd") (EApp (EApp (EApp (EVar "trimRightOws") (EVar "input")) (EVar "valueStart")) (EVar "end"))) (DoExpr (EApp (EVar "Ok") (EApp (EApp (EVar "Header") (EApp (EApp (EApp (EVar "lowerAscii") (EVar "input")) (EVar "start")) (EVar "colon"))) (EApp (EApp (EApp (EMethodRef "slice") (EVar "input")) (EVar "valueStart")) (EVar "valueEnd"))))))))))))
 (DTypeSig false "forbiddenTrailer" (TyFun (TyCon "Header") (TyCon "Bool")))
@@ -3047,7 +3068,7 @@ decodeRequestBody (Request _ _ headers _ packed _) = do
 (DTypeSig false "fieldStep" (TyFun (TyCon "Bytes") (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyFun (TyCon "Bool") (TyApp (TyApp (TyCon "Result") (TyCon "FrameError")) (TyCon "FieldStep")))))))))))
 (DFunDef false "fieldStep" ((PVar "input") (PVar "avail") (PVar "pos") (PVar "cursor") (PVar "sectionStart") (PVar "priorBytes") (PVar "count") (PVar "trailer")) (EApp (EApp (EMethodRef "andThen") (EApp (EApp (EApp (EApp (EApp (EApp (EVar "findCrlfChecked") (EIf (EVar "trailer") (ELit (LString "trailer field")) (ELit (LString "header field")))) (EVar "input")) (EVar "avail")) (EVar "pos")) (EVar "cursor")) (EVar "maxHttpHeaderBytes"))) (ELam ((PVar "end")) (ELet false (PVar "next") (EBinOp "+" (EVar "end") (ELit (LInt 2))) (ELet false (PVar "totalBytes") (EBinOp "-" (EBinOp "+" (EVar "priorBytes") (EVar "next")) (EVar "sectionStart")) (EApp (EApp (EMethodRef "andThen") (EApp (EVar "resourceExcess") (EApp (EVar "checkHttpHeaderBytes") (EVar "totalBytes")))) (ELam ((PVar "__do_x")) (EMatch (EVar "__do_x") (arm (PLit LUnit) () (EIf (EBinOp "==" (EVar "end") (EVar "pos")) (EApp (EVar "Ok") (EApp (EApp (EVar "FieldDone") (EVar "next")) (EVar "totalBytes"))) (EApp (EApp (EMethodRef "andThen") (EApp (EApp (EVar "checkFieldCount") (EVar "trailer")) (EBinOp "+" (EDictApp "count") (ELit (LInt 1))))) (ELam ((PVar "__do_x")) (EMatch (EVar "__do_x") (arm (PLit LUnit) () (EApp (EApp (EMethodRef "andThen") (EApp (EApp (EApp (EVar "parseHeaderLine") (EVar "input")) (EVar "pos")) (EVar "end"))) (ELam ((PVar "field")) (EIf (EBinOp "&&" (EVar "trailer") (EApp (EVar "forbiddenTrailer") (EVar "field"))) (EApp (EVar "malformed") (ELit (LString "http: forbidden framing or routing field in trailer"))) (EApp (EVar "Ok") (EApp (EApp (EVar "FieldMore") (EVar "field")) (EVar "next"))))))))))))))))))))
 (DTypeSig false "parseFieldsChecked" (TyFun (TyCon "Bytes") (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyFun (TyCon "Bool") (TyFun (TyApp (TyCon "List") (TyCon "Header")) (TyApp (TyApp (TyCon "Result") (TyCon "FrameError")) (TyCon "HeaderBlock"))))))))))
-(DFunDef false "parseFieldsChecked" ((PVar "input") (PVar "pos") (PVar "sectionStart") (PVar "priorBytes") (PVar "count") (PVar "trailer") (PVar "acc")) (EApp (EApp (EMethodRef "andThen") (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EVar "fieldStep") (EVar "input")) (EApp (EVar "B.length") (EVar "input"))) (EVar "pos")) (EVar "pos")) (EVar "sectionStart")) (EVar "priorBytes")) (EDictApp "count")) (EVar "trailer"))) (ELam ((PVar "step")) (EMatch (EVar "step") (arm (PCon "FieldDone" (PVar "next") (PVar "totalBytes")) () (EApp (EVar "Ok") (EApp (EApp (EApp (EVar "HeaderBlock") (EApp (EVar "reverse") (EVar "acc"))) (EVar "next")) (EVar "totalBytes")))) (arm (PCon "FieldMore" (PVar "field") (PVar "next")) () (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EVar "parseFieldsChecked") (EVar "input")) (EVar "next")) (EVar "sectionStart")) (EVar "priorBytes")) (EBinOp "+" (EDictApp "count") (ELit (LInt 1)))) (EVar "trailer")) (EBinOp "::" (EVar "field") (EVar "acc"))))))))
+(DFunDef false "parseFieldsChecked" ((PVar "inp") (PVar "p0") (PVar "secBeg") (PVar "prior") (PVar "c0") (PVar "trailer") (PVar "a0")) (ELetGroup ((lgb "go" (clause ((PVar "pos") (PVar "count") (PVar "acc")) (EApp (EApp (EMethodRef "andThen") (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EVar "fieldStep") (EVar "inp")) (EApp (EVar "B.length") (EVar "inp"))) (EVar "pos")) (EVar "pos")) (EVar "secBeg")) (EVar "prior")) (EDictApp "count")) (EVar "trailer"))) (ELam ((PVar "step")) (EMatch (EVar "step") (arm (PCon "FieldDone" (PVar "next") (PVar "totalBytes")) () (EApp (EVar "Ok") (EApp (EApp (EApp (EVar "HeaderBlock") (EApp (EVar "reverse") (EVar "acc"))) (EVar "next")) (EVar "totalBytes")))) (arm (PCon "FieldMore" (PVar "field") (PVar "next")) () (EApp (EApp (EApp (EVar "go") (EVar "next")) (EBinOp "+" (EDictApp "count") (ELit (LInt 1)))) (EBinOp "::" (EVar "field") (EVar "acc")))))))))) (EApp (EApp (EApp (EVar "go") (EVar "p0")) (EVar "c0")) (EVar "a0"))))
 (DTypeSig true "parseFields" (TyFun (TyCon "Bytes") (TyFun (TyCon "Int") (TyFun (TyCon "Bool") (TyApp (TyApp (TyCon "Result") (TyCon "HttpParseFailure")) (TyTuple (TyApp (TyCon "List") (TyCon "Header")) (TyCon "Int")))))))
 (DFunDef false "parseFields" ((PVar "input") (PVar "pos") (PVar "trailer")) (EApp (EApp (EMethodRef "map") (ELam ((PCon "HeaderBlock" (PVar "fields") (PVar "next") PWild)) (ETuple (EVar "fields") (EVar "next")))) (EApp (EVar "settle") (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EVar "parseFieldsChecked") (EVar "input")) (EVar "pos")) (EVar "pos")) (ELit (LInt 0))) (ELit (LInt 0))) (EVar "trailer")) (EListLit)))))
 (DTypeSig false "countNamed" (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "Header")) (TyCon "Int"))))
@@ -3057,7 +3078,7 @@ decodeRequestBody (Request _ _ headers _ packed _) = do
 (DFunDef false "findNamed" (PWild (PList)) (EVar "None"))
 (DFunDef false "findNamed" ((PVar "wanted") (PCons (PCon "Header" (PVar "name") (PVar "value")) (PVar "rest"))) (EIf (EBinOp "==" (EVar "name") (EVar "wanted")) (EApp (EVar "Some") (EVar "value")) (EApp (EApp (EVar "findNamed") (EVar "wanted")) (EVar "rest"))))
 (DTypeSig false "asciiEqualCiGo" (TyFun (TyCon "Bytes") (TyFun (TyCon "Bytes") (TyFun (TyCon "Int") (TyCon "Bool")))))
-(DFunDef false "asciiEqualCiGo" ((PVar "value") (PVar "expected") (PVar "i")) (EIf (EBinOp ">=" (EVar "i") (EApp (EVar "B.length") (EVar "value"))) (EBinOp "==" (EVar "i") (EApp (EVar "B.length") (EVar "expected"))) (EBinOp "&&" (EBinOp "&&" (EBinOp "&&" (EBinOp "<" (EVar "i") (EApp (EVar "B.length") (EVar "expected"))) (EBinOp "<=" (EApp (EApp (EVar "byteAt") (EVar "value")) (EVar "i")) (ELit (LInt 127)))) (EBinOp "==" (EApp (EVar "lowerByte") (EApp (EApp (EVar "byteAt") (EVar "value")) (EVar "i"))) (EApp (EVar "lowerByte") (EApp (EApp (EVar "byteAt") (EVar "expected")) (EVar "i"))))) (EApp (EApp (EApp (EVar "asciiEqualCiGo") (EVar "value")) (EVar "expected")) (EBinOp "+" (EVar "i") (ELit (LInt 1)))))))
+(DFunDef false "asciiEqualCiGo" ((PVar "value") (PVar "expected") (PVar "i0")) (ELetGroup ((lgb "go" (clause ((PVar "i")) (EIf (EBinOp ">=" (EVar "i") (EApp (EVar "B.length") (EVar "value"))) (EBinOp "==" (EVar "i") (EApp (EVar "B.length") (EVar "expected"))) (EBinOp "&&" (EBinOp "&&" (EBinOp "&&" (EBinOp "<" (EVar "i") (EApp (EVar "B.length") (EVar "expected"))) (EBinOp "<=" (EApp (EApp (EVar "byteAt") (EVar "value")) (EVar "i")) (ELit (LInt 127)))) (EBinOp "==" (EApp (EVar "lowerByte") (EApp (EApp (EVar "byteAt") (EVar "value")) (EVar "i"))) (EApp (EVar "lowerByte") (EApp (EApp (EVar "byteAt") (EVar "expected")) (EVar "i"))))) (EApp (EVar "go") (EBinOp "+" (EVar "i") (ELit (LInt 1))))))))) (EApp (EVar "go") (EVar "i0"))))
 (DTypeSig false "asciiEqualCi" (TyFun (TyCon "Bytes") (TyFun (TyCon "String") (TyCon "Bool"))))
 (DFunDef false "asciiEqualCi" ((PVar "value") (PVar "expected")) (EApp (EApp (EApp (EVar "asciiEqualCiGo") (EVar "value")) (EApp (EVar "encodeUtf8") (EVar "expected"))) (ELit (LInt 0))))
 (DTypeSig false "parseDecimalGo" (TyFun (TyCon "Bytes") (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyApp (TyApp (TyCon "Result") (TyCon "FrameError")) (TyCon "Int"))))))
@@ -3067,30 +3088,30 @@ decodeRequestBody (Request _ _ headers _ packed _) = do
 (DTypeSig false "selectBodyMode" (TyFun (TyApp (TyCon "List") (TyCon "Header")) (TyApp (TyApp (TyCon "Result") (TyCon "FrameError")) (TyCon "BodyMode"))))
 (DFunDef false "selectBodyMode" ((PVar "headers")) (EBlock (DoLet false false (PVar "clCount") (EApp (EApp (EVar "countNamed") (ELit (LString "content-length"))) (EVar "headers"))) (DoLet false false (PVar "teCount") (EApp (EApp (EVar "countNamed") (ELit (LString "transfer-encoding"))) (EVar "headers"))) (DoExpr (EIf (EBinOp ">" (EVar "clCount") (ELit (LInt 1))) (EApp (EVar "malformed") (ELit (LString "http: duplicate Content-Length is ambiguous"))) (EIf (EBinOp "&&" (EBinOp ">" (EVar "clCount") (ELit (LInt 0))) (EBinOp ">" (EVar "teCount") (ELit (LInt 0)))) (EApp (EVar "malformed") (ELit (LString "http: Transfer-Encoding with Content-Length is ambiguous"))) (EIf (EBinOp ">" (EVar "teCount") (ELit (LInt 0))) (EIf (EBinOp "/=" (EVar "teCount") (ELit (LInt 1))) (EApp (EVar "malformed") (ELit (LString "http: repeated Transfer-Encoding is unsupported"))) (EMatch (EApp (EApp (EVar "findNamed") (ELit (LString "transfer-encoding"))) (EVar "headers")) (arm (PCon "Some" (PVar "value")) () (EIf (EApp (EApp (EVar "asciiEqualCi") (EVar "value")) (ELit (LString "chunked"))) (EApp (EVar "Ok") (EVar "ChunkedBody")) (EApp (EVar "malformed") (ELit (LString "http: unsupported transfer coding; expected exactly chunked"))))) (arm (PCon "None") () (EApp (EVar "malformed") (ELit (LString "http: internal transfer framing error")))))) (EIf (EBinOp "==" (EVar "clCount") (ELit (LInt 1))) (EMatch (EApp (EApp (EVar "findNamed") (ELit (LString "content-length"))) (EVar "headers")) (arm (PCon "Some" (PVar "value")) () (EApp (EApp (EMethodRef "map") (EVar "FixedBody")) (EApp (EVar "parseContentLength") (EVar "value")))) (arm (PCon "None") () (EApp (EVar "malformed") (ELit (LString "http: internal content framing error"))))) (EApp (EVar "Ok") (EVar "NoBody")))))))))
 (DTypeSig false "scanTokenEnd" (TyFun (TyCon "Bytes") (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyCon "Int")))))
-(DFunDef false "scanTokenEnd" ((PVar "value") (PVar "pos") (PVar "end")) (EIf (EBinOp "&&" (EBinOp "<" (EVar "pos") (EVar "end")) (EApp (EVar "isTokenByte") (EApp (EApp (EVar "byteAt") (EVar "value")) (EVar "pos")))) (EApp (EApp (EApp (EVar "scanTokenEnd") (EVar "value")) (EBinOp "+" (EVar "pos") (ELit (LInt 1)))) (EVar "end")) (EVar "pos")))
+(DFunDef false "scanTokenEnd" ((PVar "value") (PVar "pos0") (PVar "end")) (ELetGroup ((lgb "go" (clause ((PVar "pos")) (EIf (EBinOp "&&" (EBinOp "<" (EVar "pos") (EVar "end")) (EApp (EVar "isTokenByte") (EApp (EApp (EVar "byteAt") (EVar "value")) (EVar "pos")))) (EApp (EVar "go") (EBinOp "+" (EVar "pos") (ELit (LInt 1)))) (EVar "pos"))))) (EApp (EVar "go") (EVar "pos0"))))
 (DTypeSig false "parseConnectionValue" (TyFun (TyCon "Bytes") (TyFun (TyCon "Int") (TyFun (TyCon "Bool") (TyApp (TyApp (TyCon "Result") (TyCon "FrameError")) (TyCon "Bool"))))))
 (DFunDef false "parseConnectionValue" ((PVar "value") (PVar "pos") (PVar "sawClose")) (EBlock (DoLet false false (PVar "end") (EApp (EVar "B.length") (EVar "value"))) (DoLet false false (PVar "start") (EApp (EApp (EApp (EVar "trimLeftOws") (EVar "value")) (EVar "pos")) (EVar "end"))) (DoExpr (EIf (EBinOp ">=" (EVar "start") (EVar "end")) (EApp (EVar "malformed") (ELit (LString "http: empty token in Connection field"))) (EBlock (DoLet false false (PVar "tokenEnd") (EApp (EApp (EApp (EVar "scanTokenEnd") (EVar "value")) (EVar "start")) (EVar "end"))) (DoExpr (EIf (EBinOp "==" (EVar "tokenEnd") (EVar "start")) (EApp (EVar "malformed") (ELit (LString "http: invalid Connection token"))) (EBlock (DoLet false false (PVar "closeNow") (EBinOp "||" (EVar "sawClose") (EBinOp "==" (EApp (EApp (EApp (EVar "lowerAscii") (EVar "value")) (EVar "start")) (EVar "tokenEnd")) (ELit (LString "close"))))) (DoLet false false (PVar "after") (EApp (EApp (EApp (EVar "trimLeftOws") (EVar "value")) (EVar "tokenEnd")) (EVar "end"))) (DoExpr (EIf (EBinOp "==" (EVar "after") (EVar "end")) (EApp (EVar "Ok") (EVar "closeNow")) (EIf (EBinOp "/=" (EApp (EApp (EVar "byteAt") (EVar "value")) (EVar "after")) (ELit (LInt 44))) (EApp (EVar "malformed") (ELit (LString "http: invalid Connection token list"))) (EApp (EApp (EApp (EVar "parseConnectionValue") (EVar "value")) (EBinOp "+" (EVar "after") (ELit (LInt 1)))) (EVar "closeNow")))))))))))))
 (DTypeSig false "keepAliveFromHeaders" (TyFun (TyApp (TyCon "List") (TyCon "Header")) (TyApp (TyApp (TyCon "Result") (TyCon "FrameError")) (TyCon "Bool"))))
 (DFunDef false "keepAliveFromHeaders" ((PList)) (EApp (EVar "Ok") (EVar "True")))
 (DFunDef false "keepAliveFromHeaders" ((PCons (PCon "Header" (PVar "name") (PVar "value")) (PVar "rest"))) (EApp (EApp (EMethodRef "andThen") (EApp (EVar "keepAliveFromHeaders") (EVar "rest"))) (ELam ((PVar "restKeepAlive")) (EIf (EBinOp "/=" (EVar "name") (ELit (LString "connection"))) (EApp (EVar "Ok") (EVar "restKeepAlive")) (EApp (EApp (EMethodRef "andThen") (EApp (EApp (EApp (EVar "parseConnectionValue") (EVar "value")) (ELit (LInt 0))) (EVar "False"))) (ELam ((PVar "closes")) (EApp (EVar "Ok") (EBinOp "&&" (EVar "restKeepAlive") (EApp (EVar "not") (EVar "closes"))))))))))
 (DTypeSig false "validRegName" (TyFun (TyCon "Bytes") (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyCon "Bool")))))
-(DFunDef false "validRegName" ((PVar "value") (PVar "pos") (PVar "end")) (EIf (EBinOp ">=" (EVar "pos") (EVar "end")) (EVar "True") (EBlock (DoLet false false (PVar "byte") (EApp (EApp (EVar "byteAt") (EVar "value")) (EVar "pos"))) (DoExpr (EIf (EBinOp "==" (EVar "byte") (ELit (LInt 37))) (EBinOp "&&" (EBinOp "&&" (EBinOp "&&" (EBinOp "<" (EBinOp "+" (EVar "pos") (ELit (LInt 2))) (EVar "end")) (EApp (EVar "isHexByte") (EApp (EApp (EVar "byteAt") (EVar "value")) (EBinOp "+" (EVar "pos") (ELit (LInt 1)))))) (EApp (EVar "isHexByte") (EApp (EApp (EVar "byteAt") (EVar "value")) (EBinOp "+" (EVar "pos") (ELit (LInt 2)))))) (EApp (EApp (EApp (EVar "validRegName") (EVar "value")) (EBinOp "+" (EVar "pos") (ELit (LInt 3)))) (EVar "end"))) (EBinOp "&&" (EBinOp "||" (EApp (EVar "isUnreservedByte") (EVar "byte")) (EApp (EVar "isSubDelimiterByte") (EVar "byte"))) (EApp (EApp (EApp (EVar "validRegName") (EVar "value")) (EBinOp "+" (EVar "pos") (ELit (LInt 1)))) (EVar "end"))))))))
+(DFunDef false "validRegName" ((PVar "value") (PVar "pos0") (PVar "end")) (ELetGroup ((lgb "go" (clause ((PVar "pos")) (EIf (EBinOp ">=" (EVar "pos") (EVar "end")) (EVar "True") (EBlock (DoLet false false (PVar "byte") (EApp (EApp (EVar "byteAt") (EVar "value")) (EVar "pos"))) (DoExpr (EIf (EBinOp "==" (EVar "byte") (ELit (LInt 37))) (EBinOp "&&" (EBinOp "&&" (EBinOp "&&" (EBinOp "<" (EBinOp "+" (EVar "pos") (ELit (LInt 2))) (EVar "end")) (EApp (EVar "isHexByte") (EApp (EApp (EVar "byteAt") (EVar "value")) (EBinOp "+" (EVar "pos") (ELit (LInt 1)))))) (EApp (EVar "isHexByte") (EApp (EApp (EVar "byteAt") (EVar "value")) (EBinOp "+" (EVar "pos") (ELit (LInt 2)))))) (EApp (EVar "go") (EBinOp "+" (EVar "pos") (ELit (LInt 3))))) (EBinOp "&&" (EBinOp "||" (EApp (EVar "isUnreservedByte") (EVar "byte")) (EApp (EVar "isSubDelimiterByte") (EVar "byte"))) (EApp (EVar "go") (EBinOp "+" (EVar "pos") (ELit (LInt 1)))))))))))) (EApp (EVar "go") (EVar "pos0"))))
 (DTypeSig false "allDigits" (TyFun (TyCon "Bytes") (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyCon "Bool")))))
-(DFunDef false "allDigits" ((PVar "value") (PVar "pos") (PVar "end")) (EIf (EBinOp ">=" (EVar "pos") (EVar "end")) (EVar "True") (EBinOp "&&" (EBinOp "&&" (EBinOp ">=" (EApp (EApp (EVar "byteAt") (EVar "value")) (EVar "pos")) (ELit (LInt 48))) (EBinOp "<=" (EApp (EApp (EVar "byteAt") (EVar "value")) (EVar "pos")) (ELit (LInt 57)))) (EApp (EApp (EApp (EVar "allDigits") (EVar "value")) (EBinOp "+" (EVar "pos") (ELit (LInt 1)))) (EVar "end")))))
+(DFunDef false "allDigits" ((PVar "value") (PVar "pos0") (PVar "end")) (ELetGroup ((lgb "go" (clause ((PVar "pos")) (EIf (EBinOp ">=" (EVar "pos") (EVar "end")) (EVar "True") (EBinOp "&&" (EBinOp "&&" (EBinOp ">=" (EApp (EApp (EVar "byteAt") (EVar "value")) (EVar "pos")) (ELit (LInt 48))) (EBinOp "<=" (EApp (EApp (EVar "byteAt") (EVar "value")) (EVar "pos")) (ELit (LInt 57)))) (EApp (EVar "go") (EBinOp "+" (EVar "pos") (ELit (LInt 1))))))))) (EApp (EVar "go") (EVar "pos0"))))
 (DTypeSig false "decimalValue" (TyFun (TyCon "Bytes") (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyCon "Int"))))))
-(DFunDef false "decimalValue" ((PVar "value") (PVar "pos") (PVar "end") (PVar "acc")) (EIf (EBinOp ">=" (EVar "pos") (EVar "end")) (EVar "acc") (EApp (EApp (EApp (EApp (EVar "decimalValue") (EVar "value")) (EBinOp "+" (EVar "pos") (ELit (LInt 1)))) (EVar "end")) (EBinOp "-" (EBinOp "+" (EBinOp "*" (EVar "acc") (ELit (LInt 10))) (EApp (EApp (EVar "byteAt") (EVar "value")) (EVar "pos"))) (ELit (LInt 48))))))
+(DFunDef false "decimalValue" ((PVar "value") (PVar "pos0") (PVar "end") (PVar "acc0")) (ELetGroup ((lgb "go" (clause ((PVar "pos") (PVar "acc")) (EIf (EBinOp ">=" (EVar "pos") (EVar "end")) (EVar "acc") (EApp (EApp (EVar "go") (EBinOp "+" (EVar "pos") (ELit (LInt 1)))) (EBinOp "-" (EBinOp "+" (EBinOp "*" (EVar "acc") (ELit (LInt 10))) (EApp (EApp (EVar "byteAt") (EVar "value")) (EVar "pos"))) (ELit (LInt 48)))))))) (EApp (EApp (EVar "go") (EVar "pos0")) (EVar "acc0"))))
 (DTypeSig false "validIpv4" (TyFun (TyCon "Bytes") (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyCon "Bool"))))))
-(DFunDef false "validIpv4" ((PVar "value") (PVar "start") (PVar "end") (PVar "parts")) (EIf (EBinOp "||" (EBinOp ">=" (EVar "parts") (ELit (LInt 4))) (EBinOp ">=" (EVar "start") (EVar "end"))) (EVar "False") (EBlock (DoLet false false (PVar "dot") (EApp (EApp (EVar "optionOr") (EVar "end")) (EApp (EApp (EApp (EApp (EVar "findByte") (EVar "value")) (EVar "start")) (EVar "end")) (ELit (LInt 46))))) (DoLet false false (PVar "size") (EBinOp "-" (EVar "dot") (EVar "start"))) (DoLet false false (PVar "validPart") (EBinOp "&&" (EBinOp "&&" (EBinOp "&&" (EBinOp "&&" (EBinOp ">=" (EVar "size") (ELit (LInt 1))) (EBinOp "<=" (EVar "size") (ELit (LInt 3)))) (EApp (EApp (EApp (EVar "allDigits") (EVar "value")) (EVar "start")) (EVar "dot"))) (EBinOp "<=" (EApp (EApp (EApp (EApp (EVar "decimalValue") (EVar "value")) (EVar "start")) (EVar "dot")) (ELit (LInt 0))) (ELit (LInt 255)))) (EBinOp "||" (EBinOp "==" (EVar "size") (ELit (LInt 1))) (EBinOp "/=" (EApp (EApp (EVar "byteAt") (EVar "value")) (EVar "start")) (ELit (LInt 48)))))) (DoExpr (EIf (EApp (EVar "not") (EVar "validPart")) (EVar "False") (EIf (EBinOp "==" (EVar "dot") (EVar "end")) (EBinOp "==" (EVar "parts") (ELit (LInt 3))) (EApp (EApp (EApp (EApp (EVar "validIpv4") (EVar "value")) (EBinOp "+" (EVar "dot") (ELit (LInt 1)))) (EVar "end")) (EBinOp "+" (EVar "parts") (ELit (LInt 1))))))))))
+(DFunDef false "validIpv4" ((PVar "value") (PVar "start0") (PVar "end") (PVar "parts0")) (ELetGroup ((lgb "go" (clause ((PVar "start") (PVar "parts")) (EIf (EBinOp "||" (EBinOp ">=" (EVar "parts") (ELit (LInt 4))) (EBinOp ">=" (EVar "start") (EVar "end"))) (EVar "False") (EBlock (DoLet false false (PVar "dot") (EApp (EApp (EVar "optionOr") (EVar "end")) (EApp (EApp (EApp (EApp (EVar "findByte") (EVar "value")) (EVar "start")) (EVar "end")) (ELit (LInt 46))))) (DoLet false false (PVar "size") (EBinOp "-" (EVar "dot") (EVar "start"))) (DoLet false false (PVar "validPart") (EBinOp "&&" (EBinOp "&&" (EBinOp "&&" (EBinOp "&&" (EBinOp ">=" (EVar "size") (ELit (LInt 1))) (EBinOp "<=" (EVar "size") (ELit (LInt 3)))) (EApp (EApp (EApp (EVar "allDigits") (EVar "value")) (EVar "start")) (EVar "dot"))) (EBinOp "<=" (EApp (EApp (EApp (EApp (EVar "decimalValue") (EVar "value")) (EVar "start")) (EVar "dot")) (ELit (LInt 0))) (ELit (LInt 255)))) (EBinOp "||" (EBinOp "==" (EVar "size") (ELit (LInt 1))) (EBinOp "/=" (EApp (EApp (EVar "byteAt") (EVar "value")) (EVar "start")) (ELit (LInt 48)))))) (DoExpr (EIf (EApp (EVar "not") (EVar "validPart")) (EVar "False") (EIf (EBinOp "==" (EVar "dot") (EVar "end")) (EBinOp "==" (EVar "parts") (ELit (LInt 3))) (EApp (EApp (EVar "go") (EBinOp "+" (EVar "dot") (ELit (LInt 1)))) (EBinOp "+" (EVar "parts") (ELit (LInt 1)))))))))))) (EApp (EApp (EVar "go") (EVar "start0")) (EVar "parts0"))))
 (DTypeSig false "allHex" (TyFun (TyCon "Bytes") (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyCon "Bool")))))
-(DFunDef false "allHex" ((PVar "value") (PVar "pos") (PVar "end")) (EIf (EBinOp ">=" (EVar "pos") (EVar "end")) (EVar "True") (EBinOp "&&" (EApp (EVar "isHexByte") (EApp (EApp (EVar "byteAt") (EVar "value")) (EVar "pos"))) (EApp (EApp (EApp (EVar "allHex") (EVar "value")) (EBinOp "+" (EVar "pos") (ELit (LInt 1)))) (EVar "end")))))
+(DFunDef false "allHex" ((PVar "value") (PVar "pos0") (PVar "end")) (ELetGroup ((lgb "go" (clause ((PVar "pos")) (EIf (EBinOp ">=" (EVar "pos") (EVar "end")) (EVar "True") (EBinOp "&&" (EApp (EVar "isHexByte") (EApp (EApp (EVar "byteAt") (EVar "value")) (EVar "pos"))) (EApp (EVar "go") (EBinOp "+" (EVar "pos") (ELit (LInt 1))))))))) (EApp (EVar "go") (EVar "pos0"))))
 (DTypeSig false "validIpv6Go" (TyFun (TyCon "Bytes") (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyFun (TyCon "Bool") (TyCon "Bool")))))))
-(DFunDef false "validIpv6Go" ((PVar "value") (PVar "pos") (PVar "end") (PVar "groups") (PVar "compressed")) (EIf (EBinOp ">=" (EVar "pos") (EVar "end")) (EIf (EVar "compressed") (EBinOp "<" (EVar "groups") (ELit (LInt 8))) (EBinOp "==" (EVar "groups") (ELit (LInt 8)))) (EBlock (DoLet false false (PVar "colon") (EApp (EApp (EVar "optionOr") (EVar "end")) (EApp (EApp (EApp (EApp (EVar "findByte") (EVar "value")) (EVar "pos")) (EVar "end")) (ELit (LInt 58))))) (DoExpr (EIf (EBinOp "==" (EVar "colon") (EVar "pos")) (EVar "False") (EBlock (DoLet false false (PVar "dot") (EApp (EApp (EApp (EApp (EVar "findByte") (EVar "value")) (EVar "pos")) (EVar "colon")) (ELit (LInt 46)))) (DoLet false false (PVar "componentGroups") (EMatch (EVar "dot") (arm (PCon "None") () (EIf (EBinOp "&&" (EBinOp "<=" (EBinOp "-" (EVar "colon") (EVar "pos")) (ELit (LInt 4))) (EApp (EApp (EApp (EVar "allHex") (EVar "value")) (EVar "pos")) (EVar "colon"))) (ELit (LInt 1)) (ELit (LInt 9)))) (arm (PCon "Some" PWild) () (EIf (EBinOp "&&" (EBinOp "==" (EVar "colon") (EVar "end")) (EApp (EApp (EApp (EApp (EVar "validIpv4") (EVar "value")) (EVar "pos")) (EVar "colon")) (ELit (LInt 0)))) (ELit (LInt 2)) (ELit (LInt 9)))))) (DoLet false false (PVar "nextGroups") (EBinOp "+" (EVar "groups") (EVar "componentGroups"))) (DoExpr (EIf (EBinOp ">" (EVar "nextGroups") (ELit (LInt 8))) (EVar "False") (EIf (EBinOp "==" (EVar "colon") (EVar "end")) (EIf (EVar "compressed") (EBinOp "<" (EVar "nextGroups") (ELit (LInt 8))) (EBinOp "==" (EVar "nextGroups") (ELit (LInt 8)))) (EIf (EBinOp "&&" (EBinOp "<" (EBinOp "+" (EVar "colon") (ELit (LInt 1))) (EVar "end")) (EBinOp "==" (EApp (EApp (EVar "byteAt") (EVar "value")) (EBinOp "+" (EVar "colon") (ELit (LInt 1)))) (ELit (LInt 58)))) (EBinOp "&&" (EApp (EVar "not") (EVar "compressed")) (EApp (EApp (EApp (EApp (EApp (EVar "validIpv6Go") (EVar "value")) (EBinOp "+" (EVar "colon") (ELit (LInt 2)))) (EVar "end")) (EVar "nextGroups")) (EVar "True"))) (EApp (EApp (EApp (EApp (EApp (EVar "validIpv6Go") (EVar "value")) (EBinOp "+" (EVar "colon") (ELit (LInt 1)))) (EVar "end")) (EVar "nextGroups")) (EVar "compressed"))))))))))))
+(DFunDef false "validIpv6Go" ((PVar "value") (PVar "pos0") (PVar "end") (PVar "groups0") (PVar "compressed0")) (ELetGroup ((lgb "go" (clause ((PVar "pos") (PVar "groups") (PVar "compressed")) (EIf (EBinOp ">=" (EVar "pos") (EVar "end")) (EIf (EVar "compressed") (EBinOp "<" (EVar "groups") (ELit (LInt 8))) (EBinOp "==" (EVar "groups") (ELit (LInt 8)))) (EBlock (DoLet false false (PVar "colon") (EApp (EApp (EVar "optionOr") (EVar "end")) (EApp (EApp (EApp (EApp (EVar "findByte") (EVar "value")) (EVar "pos")) (EVar "end")) (ELit (LInt 58))))) (DoExpr (EIf (EBinOp "==" (EVar "colon") (EVar "pos")) (EVar "False") (EBlock (DoLet false false (PVar "dot") (EApp (EApp (EApp (EApp (EVar "findByte") (EVar "value")) (EVar "pos")) (EVar "colon")) (ELit (LInt 46)))) (DoLet false false (PVar "componentGroups") (EMatch (EVar "dot") (arm (PCon "None") () (EIf (EBinOp "&&" (EBinOp "<=" (EBinOp "-" (EVar "colon") (EVar "pos")) (ELit (LInt 4))) (EApp (EApp (EApp (EVar "allHex") (EVar "value")) (EVar "pos")) (EVar "colon"))) (ELit (LInt 1)) (ELit (LInt 9)))) (arm (PCon "Some" PWild) () (EIf (EBinOp "&&" (EBinOp "==" (EVar "colon") (EVar "end")) (EApp (EApp (EApp (EApp (EVar "validIpv4") (EVar "value")) (EVar "pos")) (EVar "colon")) (ELit (LInt 0)))) (ELit (LInt 2)) (ELit (LInt 9)))))) (DoLet false false (PVar "nextGroups") (EBinOp "+" (EVar "groups") (EVar "componentGroups"))) (DoExpr (EIf (EBinOp ">" (EVar "nextGroups") (ELit (LInt 8))) (EVar "False") (EIf (EBinOp "==" (EVar "colon") (EVar "end")) (EIf (EVar "compressed") (EBinOp "<" (EVar "nextGroups") (ELit (LInt 8))) (EBinOp "==" (EVar "nextGroups") (ELit (LInt 8)))) (EIf (EBinOp "&&" (EBinOp "<" (EBinOp "+" (EVar "colon") (ELit (LInt 1))) (EVar "end")) (EBinOp "==" (EApp (EApp (EVar "byteAt") (EVar "value")) (EBinOp "+" (EVar "colon") (ELit (LInt 1)))) (ELit (LInt 58)))) (EBinOp "&&" (EApp (EVar "not") (EVar "compressed")) (EApp (EApp (EApp (EVar "go") (EBinOp "+" (EVar "colon") (ELit (LInt 2)))) (EVar "nextGroups")) (EVar "True"))) (EApp (EApp (EApp (EVar "go") (EBinOp "+" (EVar "colon") (ELit (LInt 1)))) (EVar "nextGroups")) (EVar "compressed")))))))))))))) (EApp (EApp (EApp (EVar "go") (EVar "pos0")) (EVar "groups0")) (EVar "compressed0"))))
 (DTypeSig false "validIpv6" (TyFun (TyCon "Bytes") (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyCon "Bool")))))
 (DFunDef false "validIpv6" ((PVar "value") (PVar "start") (PVar "end")) (EIf (EBinOp ">=" (EVar "start") (EVar "end")) (EVar "False") (EIf (EBinOp "==" (EApp (EApp (EVar "byteAt") (EVar "value")) (EVar "start")) (ELit (LInt 58))) (EBinOp "&&" (EBinOp "&&" (EBinOp "<" (EBinOp "+" (EVar "start") (ELit (LInt 1))) (EVar "end")) (EBinOp "==" (EApp (EApp (EVar "byteAt") (EVar "value")) (EBinOp "+" (EVar "start") (ELit (LInt 1)))) (ELit (LInt 58)))) (EApp (EApp (EApp (EApp (EApp (EVar "validIpv6Go") (EVar "value")) (EBinOp "+" (EVar "start") (ELit (LInt 2)))) (EVar "end")) (ELit (LInt 0))) (EVar "True"))) (EApp (EApp (EApp (EApp (EApp (EVar "validIpv6Go") (EVar "value")) (EVar "start")) (EVar "end")) (ELit (LInt 0))) (EVar "False")))))
 (DTypeSig false "scanHex" (TyFun (TyCon "Bytes") (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyCon "Int")))))
-(DFunDef false "scanHex" ((PVar "value") (PVar "pos") (PVar "end")) (EIf (EBinOp "&&" (EBinOp "<" (EVar "pos") (EVar "end")) (EApp (EVar "isHexByte") (EApp (EApp (EVar "byteAt") (EVar "value")) (EVar "pos")))) (EApp (EApp (EApp (EVar "scanHex") (EVar "value")) (EBinOp "+" (EVar "pos") (ELit (LInt 1)))) (EVar "end")) (EVar "pos")))
+(DFunDef false "scanHex" ((PVar "value") (PVar "pos0") (PVar "end")) (ELetGroup ((lgb "go" (clause ((PVar "pos")) (EIf (EBinOp "&&" (EBinOp "<" (EVar "pos") (EVar "end")) (EApp (EVar "isHexByte") (EApp (EApp (EVar "byteAt") (EVar "value")) (EVar "pos")))) (EApp (EVar "go") (EBinOp "+" (EVar "pos") (ELit (LInt 1)))) (EVar "pos"))))) (EApp (EVar "go") (EVar "pos0"))))
 (DTypeSig false "validIpvFutureTail" (TyFun (TyCon "Bytes") (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyCon "Bool")))))
-(DFunDef false "validIpvFutureTail" ((PVar "value") (PVar "pos") (PVar "end")) (EIf (EBinOp ">=" (EVar "pos") (EVar "end")) (EVar "True") (EBlock (DoLet false false (PVar "byte") (EApp (EApp (EVar "byteAt") (EVar "value")) (EVar "pos"))) (DoExpr (EBinOp "&&" (EBinOp "||" (EBinOp "||" (EApp (EVar "isUnreservedByte") (EVar "byte")) (EApp (EVar "isSubDelimiterByte") (EVar "byte"))) (EBinOp "==" (EVar "byte") (ELit (LInt 58)))) (EApp (EApp (EApp (EVar "validIpvFutureTail") (EVar "value")) (EBinOp "+" (EVar "pos") (ELit (LInt 1)))) (EVar "end")))))))
+(DFunDef false "validIpvFutureTail" ((PVar "value") (PVar "pos0") (PVar "end")) (ELetGroup ((lgb "go" (clause ((PVar "pos")) (EIf (EBinOp ">=" (EVar "pos") (EVar "end")) (EVar "True") (EBlock (DoLet false false (PVar "byte") (EApp (EApp (EVar "byteAt") (EVar "value")) (EVar "pos"))) (DoExpr (EBinOp "&&" (EBinOp "||" (EBinOp "||" (EApp (EVar "isUnreservedByte") (EVar "byte")) (EApp (EVar "isSubDelimiterByte") (EVar "byte"))) (EBinOp "==" (EVar "byte") (ELit (LInt 58)))) (EApp (EVar "go") (EBinOp "+" (EVar "pos") (ELit (LInt 1))))))))))) (EApp (EVar "go") (EVar "pos0"))))
 (DTypeSig false "validIpvFuture" (TyFun (TyCon "Bytes") (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyCon "Bool")))))
 (DFunDef false "validIpvFuture" ((PVar "value") (PVar "start") (PVar "end")) (EIf (EBinOp "||" (EBinOp ">=" (EVar "start") (EVar "end")) (EBinOp "&&" (EBinOp "/=" (EApp (EApp (EVar "byteAt") (EVar "value")) (EVar "start")) (ELit (LInt 118))) (EBinOp "/=" (EApp (EApp (EVar "byteAt") (EVar "value")) (EVar "start")) (ELit (LInt 86))))) (EVar "False") (EBlock (DoLet false false (PVar "versionEnd") (EApp (EApp (EApp (EVar "scanHex") (EVar "value")) (EBinOp "+" (EVar "start") (ELit (LInt 1)))) (EVar "end"))) (DoExpr (EBinOp "&&" (EBinOp "&&" (EBinOp "&&" (EBinOp "&&" (EBinOp ">" (EVar "versionEnd") (EBinOp "+" (EVar "start") (ELit (LInt 1)))) (EBinOp "<" (EVar "versionEnd") (EVar "end"))) (EBinOp "==" (EApp (EApp (EVar "byteAt") (EVar "value")) (EVar "versionEnd")) (ELit (LInt 46)))) (EBinOp "<" (EBinOp "+" (EVar "versionEnd") (ELit (LInt 1))) (EVar "end"))) (EApp (EApp (EApp (EVar "validIpvFutureTail") (EVar "value")) (EBinOp "+" (EVar "versionEnd") (ELit (LInt 1)))) (EVar "end")))))))
 (DTypeSig false "validIpLiteral" (TyFun (TyCon "Bytes") (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyCon "Bool")))))
@@ -3104,19 +3125,19 @@ decodeRequestBody (Request _ _ headers _ packed _) = do
 (DTypeSig true "hexDigit" (TyFun (TyCon "Int") (TyApp (TyCon "Option") (TyCon "Int"))))
 (DFunDef false "hexDigit" ((PVar "byte")) (EIf (EBinOp "&&" (EBinOp ">=" (EVar "byte") (ELit (LInt 48))) (EBinOp "<=" (EVar "byte") (ELit (LInt 57)))) (EApp (EVar "Some") (EBinOp "-" (EVar "byte") (ELit (LInt 48)))) (EIf (EBinOp "&&" (EBinOp ">=" (EVar "byte") (ELit (LInt 65))) (EBinOp "<=" (EVar "byte") (ELit (LInt 70)))) (EApp (EVar "Some") (EBinOp "-" (EVar "byte") (ELit (LInt 55)))) (EIf (EBinOp "&&" (EBinOp ">=" (EVar "byte") (ELit (LInt 97))) (EBinOp "<=" (EVar "byte") (ELit (LInt 102)))) (EApp (EVar "Some") (EBinOp "-" (EVar "byte") (ELit (LInt 87)))) (EVar "None")))))
 (DTypeSig false "parseHexSizeGo" (TyFun (TyCon "Bytes") (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyApp (TyApp (TyCon "Result") (TyCon "FrameError")) (TyCon "Int")))))))
-(DFunDef false "parseHexSizeGo" ((PVar "input") (PVar "pos") (PVar "end") (PVar "acc")) (EIf (EBinOp ">=" (EVar "pos") (EVar "end")) (EApp (EVar "Ok") (EVar "acc")) (EMatch (EApp (EVar "hexDigit") (EApp (EApp (EVar "byteAt") (EVar "input")) (EVar "pos"))) (arm (PCon "None") () (EApp (EVar "malformed") (ELit (LString "http: invalid chunk size")))) (arm (PCon "Some" (PVar "digit")) () (EIf (EBinOp ">" (EVar "acc") (EBinOp "/" (EBinOp "-" (EVar "maxHttpBodyBytes") (EVar "digit")) (ELit (LInt 16)))) (EApp (EVar "Err") (EApp (EVar "Fatal") (EApp (EVar "HttpResourceExcess") (ELit (LString "http: chunk size exceeds decoded body limit"))))) (EApp (EApp (EApp (EApp (EVar "parseHexSizeGo") (EVar "input")) (EBinOp "+" (EVar "pos") (ELit (LInt 1)))) (EVar "end")) (EBinOp "+" (EBinOp "*" (EVar "acc") (ELit (LInt 16))) (EVar "digit"))))))))
+(DFunDef false "parseHexSizeGo" ((PVar "input") (PVar "pos0") (PVar "end") (PVar "acc0")) (ELetGroup ((lgb "go" (clause ((PVar "pos") (PVar "acc")) (EIf (EBinOp ">=" (EVar "pos") (EVar "end")) (EApp (EVar "Ok") (EVar "acc")) (EMatch (EApp (EVar "hexDigit") (EApp (EApp (EVar "byteAt") (EVar "input")) (EVar "pos"))) (arm (PCon "None") () (EApp (EVar "malformed") (ELit (LString "http: invalid chunk size")))) (arm (PCon "Some" (PVar "digit")) () (EIf (EBinOp ">" (EVar "acc") (EBinOp "/" (EBinOp "-" (EVar "maxHttpBodyBytes") (EVar "digit")) (ELit (LInt 16)))) (EApp (EVar "Err") (EApp (EVar "Fatal") (EApp (EVar "HttpResourceExcess") (ELit (LString "http: chunk size exceeds decoded body limit"))))) (EApp (EApp (EVar "go") (EBinOp "+" (EVar "pos") (ELit (LInt 1)))) (EBinOp "+" (EBinOp "*" (EVar "acc") (ELit (LInt 16))) (EVar "digit")))))))))) (EApp (EApp (EVar "go") (EVar "pos0")) (EVar "acc0"))))
 (DTypeSig true "skipOws" (TyFun (TyCon "Bytes") (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyCon "Int")))))
-(DFunDef false "skipOws" ((PVar "value") (PVar "pos") (PVar "end")) (EIf (EBinOp "&&" (EBinOp "<" (EVar "pos") (EVar "end")) (EBinOp "||" (EBinOp "==" (EApp (EApp (EVar "byteAt") (EVar "value")) (EVar "pos")) (ELit (LInt 32))) (EBinOp "==" (EApp (EApp (EVar "byteAt") (EVar "value")) (EVar "pos")) (ELit (LInt 9))))) (EApp (EApp (EApp (EVar "skipOws") (EVar "value")) (EBinOp "+" (EVar "pos") (ELit (LInt 1)))) (EVar "end")) (EVar "pos")))
+(DFunDef false "skipOws" ((PVar "value") (PVar "pos") (PVar "end")) (EApp (EApp (EApp (EVar "trimLeftOws") (EVar "value")) (EVar "pos")) (EVar "end")))
 (DTypeSig false "scanQuoted" (TyFun (TyCon "Bytes") (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyApp (TyApp (TyCon "Result") (TyCon "FrameError")) (TyCon "Int"))))))
-(DFunDef false "scanQuoted" ((PVar "input") (PVar "pos") (PVar "end")) (EIf (EBinOp ">=" (EVar "pos") (EVar "end")) (EApp (EVar "malformed") (ELit (LString "http: unterminated quoted chunk extension"))) (EIf (EBinOp "==" (EApp (EApp (EVar "byteAt") (EVar "input")) (EVar "pos")) (ELit (LInt 34))) (EApp (EVar "Ok") (EBinOp "+" (EVar "pos") (ELit (LInt 1)))) (EIf (EBinOp "==" (EApp (EApp (EVar "byteAt") (EVar "input")) (EVar "pos")) (ELit (LInt 92))) (EIf (EBinOp ">=" (EBinOp "+" (EVar "pos") (ELit (LInt 1))) (EVar "end")) (EApp (EVar "malformed") (ELit (LString "http: truncated quoted-pair in chunk extension"))) (EBlock (DoLet false false (PVar "escaped") (EApp (EApp (EVar "byteAt") (EVar "input")) (EBinOp "+" (EVar "pos") (ELit (LInt 1))))) (DoExpr (EIf (EBinOp "||" (EBinOp "||" (EBinOp "==" (EVar "escaped") (ELit (LInt 9))) (EBinOp "==" (EVar "escaped") (ELit (LInt 32)))) (EBinOp "&&" (EBinOp ">=" (EVar "escaped") (ELit (LInt 33))) (EBinOp "/=" (EVar "escaped") (ELit (LInt 127))))) (EApp (EApp (EApp (EVar "scanQuoted") (EVar "input")) (EBinOp "+" (EVar "pos") (ELit (LInt 2)))) (EVar "end")) (EApp (EVar "malformed") (ELit (LString "http: control byte in quoted chunk extension"))))))) (EBlock (DoLet false false (PVar "byte") (EApp (EApp (EVar "byteAt") (EVar "input")) (EVar "pos"))) (DoExpr (EIf (EBinOp "||" (EBinOp "||" (EBinOp "==" (EVar "byte") (ELit (LInt 9))) (EBinOp "==" (EVar "byte") (ELit (LInt 32)))) (EBinOp "&&" (EBinOp "&&" (EBinOp "&&" (EBinOp ">=" (EVar "byte") (ELit (LInt 33))) (EBinOp "/=" (EVar "byte") (ELit (LInt 34)))) (EBinOp "/=" (EVar "byte") (ELit (LInt 92)))) (EBinOp "/=" (EVar "byte") (ELit (LInt 127))))) (EApp (EApp (EApp (EVar "scanQuoted") (EVar "input")) (EBinOp "+" (EVar "pos") (ELit (LInt 1)))) (EVar "end")) (EApp (EVar "malformed") (ELit (LString "http: control byte in quoted chunk extension"))))))))))
+(DFunDef false "scanQuoted" ((PVar "input") (PVar "pos0") (PVar "end")) (ELetGroup ((lgb "go" (clause ((PVar "pos")) (EIf (EBinOp ">=" (EVar "pos") (EVar "end")) (EApp (EVar "malformed") (ELit (LString "http: unterminated quoted chunk extension"))) (EIf (EBinOp "==" (EApp (EApp (EVar "byteAt") (EVar "input")) (EVar "pos")) (ELit (LInt 34))) (EApp (EVar "Ok") (EBinOp "+" (EVar "pos") (ELit (LInt 1)))) (EIf (EBinOp "==" (EApp (EApp (EVar "byteAt") (EVar "input")) (EVar "pos")) (ELit (LInt 92))) (EIf (EBinOp ">=" (EBinOp "+" (EVar "pos") (ELit (LInt 1))) (EVar "end")) (EApp (EVar "malformed") (ELit (LString "http: truncated quoted-pair in chunk extension"))) (EBlock (DoLet false false (PVar "escaped") (EApp (EApp (EVar "byteAt") (EVar "input")) (EBinOp "+" (EVar "pos") (ELit (LInt 1))))) (DoExpr (EIf (EBinOp "||" (EBinOp "||" (EBinOp "==" (EVar "escaped") (ELit (LInt 9))) (EBinOp "==" (EVar "escaped") (ELit (LInt 32)))) (EBinOp "&&" (EBinOp ">=" (EVar "escaped") (ELit (LInt 33))) (EBinOp "/=" (EVar "escaped") (ELit (LInt 127))))) (EApp (EVar "go") (EBinOp "+" (EVar "pos") (ELit (LInt 2)))) (EApp (EVar "malformed") (ELit (LString "http: control byte in quoted chunk extension"))))))) (EBlock (DoLet false false (PVar "byte") (EApp (EApp (EVar "byteAt") (EVar "input")) (EVar "pos"))) (DoExpr (EIf (EBinOp "||" (EBinOp "||" (EBinOp "==" (EVar "byte") (ELit (LInt 9))) (EBinOp "==" (EVar "byte") (ELit (LInt 32)))) (EBinOp "&&" (EBinOp "&&" (EBinOp "&&" (EBinOp ">=" (EVar "byte") (ELit (LInt 33))) (EBinOp "/=" (EVar "byte") (ELit (LInt 34)))) (EBinOp "/=" (EVar "byte") (ELit (LInt 92)))) (EBinOp "/=" (EVar "byte") (ELit (LInt 127))))) (EApp (EVar "go") (EBinOp "+" (EVar "pos") (ELit (LInt 1)))) (EApp (EVar "malformed") (ELit (LString "http: control byte in quoted chunk extension")))))))))))) (EApp (EVar "go") (EVar "pos0"))))
 (DTypeSig false "parseChunkExtensionValue" (TyFun (TyCon "Bytes") (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyApp (TyApp (TyCon "Result") (TyCon "FrameError")) (TyCon "Int"))))))
 (DFunDef false "parseChunkExtensionValue" ((PVar "input") (PVar "pos") (PVar "end")) (EIf (EBinOp ">=" (EVar "pos") (EVar "end")) (EApp (EVar "malformed") (ELit (LString "http: missing chunk extension value"))) (EIf (EBinOp "==" (EApp (EApp (EVar "byteAt") (EVar "input")) (EVar "pos")) (ELit (LInt 34))) (EApp (EApp (EApp (EVar "scanQuoted") (EVar "input")) (EBinOp "+" (EVar "pos") (ELit (LInt 1)))) (EVar "end")) (EBlock (DoLet false false (PVar "valueEnd") (EApp (EApp (EApp (EVar "scanTokenEnd") (EVar "input")) (EVar "pos")) (EVar "end"))) (DoExpr (EIf (EBinOp "==" (EVar "valueEnd") (EVar "pos")) (EApp (EVar "malformed") (ELit (LString "http: invalid chunk extension value"))) (EApp (EVar "Ok") (EVar "valueEnd"))))))))
 (DTypeSig false "parseChunkExtensionsGo" (TyFun (TyCon "Bytes") (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyApp (TyApp (TyCon "Result") (TyCon "FrameError")) (TyCon "Unit"))))))
-(DFunDef false "parseChunkExtensionsGo" ((PVar "input") (PVar "pos") (PVar "end")) (EBlock (DoLet false false (PVar "start") (EApp (EApp (EApp (EVar "skipOws") (EVar "input")) (EVar "pos")) (EVar "end"))) (DoExpr (EIf (EBinOp "==" (EVar "start") (EVar "end")) (EApp (EVar "Ok") (ELit LUnit)) (EIf (EBinOp "/=" (EApp (EApp (EVar "byteAt") (EVar "input")) (EVar "start")) (ELit (LInt 59))) (EApp (EVar "malformed") (ELit (LString "http: invalid chunk extension separator"))) (EBlock (DoLet false false (PVar "nameStart") (EApp (EApp (EApp (EVar "skipOws") (EVar "input")) (EBinOp "+" (EVar "start") (ELit (LInt 1)))) (EVar "end"))) (DoLet false false (PVar "nameEnd") (EApp (EApp (EApp (EVar "scanTokenEnd") (EVar "input")) (EVar "nameStart")) (EVar "end"))) (DoExpr (EIf (EBinOp "==" (EVar "nameEnd") (EVar "nameStart")) (EApp (EVar "malformed") (ELit (LString "http: empty chunk extension name"))) (EBlock (DoLet false false (PVar "afterName") (EApp (EApp (EApp (EVar "skipOws") (EVar "input")) (EVar "nameEnd")) (EVar "end"))) (DoExpr (EIf (EBinOp "&&" (EBinOp "<" (EVar "afterName") (EVar "end")) (EBinOp "==" (EApp (EApp (EVar "byteAt") (EVar "input")) (EVar "afterName")) (ELit (LInt 61)))) (EApp (EApp (EMethodRef "andThen") (EApp (EApp (EApp (EVar "parseChunkExtensionValue") (EVar "input")) (EApp (EApp (EApp (EVar "skipOws") (EVar "input")) (EBinOp "+" (EVar "afterName") (ELit (LInt 1)))) (EVar "end"))) (EVar "end"))) (ELam ((PVar "valueEnd")) (EApp (EApp (EApp (EVar "parseChunkExtensionsGo") (EVar "input")) (EVar "valueEnd")) (EVar "end")))) (EApp (EApp (EApp (EVar "parseChunkExtensionsGo") (EVar "input")) (EVar "afterName")) (EVar "end")))))))))))))
+(DFunDef false "parseChunkExtensionsGo" ((PVar "input") (PVar "pos0") (PVar "end")) (ELetGroup ((lgb "go" (clause ((PVar "pos")) (EBlock (DoLet false false (PVar "start") (EApp (EApp (EApp (EVar "skipOws") (EVar "input")) (EVar "pos")) (EVar "end"))) (DoExpr (EIf (EBinOp "==" (EVar "start") (EVar "end")) (EApp (EVar "Ok") (ELit LUnit)) (EIf (EBinOp "/=" (EApp (EApp (EVar "byteAt") (EVar "input")) (EVar "start")) (ELit (LInt 59))) (EApp (EVar "malformed") (ELit (LString "http: invalid chunk extension separator"))) (EBlock (DoLet false false (PVar "nameStart") (EApp (EApp (EApp (EVar "skipOws") (EVar "input")) (EBinOp "+" (EVar "start") (ELit (LInt 1)))) (EVar "end"))) (DoLet false false (PVar "nameEnd") (EApp (EApp (EApp (EVar "scanTokenEnd") (EVar "input")) (EVar "nameStart")) (EVar "end"))) (DoExpr (EIf (EBinOp "==" (EVar "nameEnd") (EVar "nameStart")) (EApp (EVar "malformed") (ELit (LString "http: empty chunk extension name"))) (EBlock (DoLet false false (PVar "afterName") (EApp (EApp (EApp (EVar "skipOws") (EVar "input")) (EVar "nameEnd")) (EVar "end"))) (DoExpr (EIf (EBinOp "&&" (EBinOp "<" (EVar "afterName") (EVar "end")) (EBinOp "==" (EApp (EApp (EVar "byteAt") (EVar "input")) (EVar "afterName")) (ELit (LInt 61)))) (EApp (EApp (EMethodRef "andThen") (EApp (EApp (EApp (EVar "parseChunkExtensionValue") (EVar "input")) (EApp (EApp (EApp (EVar "skipOws") (EVar "input")) (EBinOp "+" (EVar "afterName") (ELit (LInt 1)))) (EVar "end"))) (EVar "end"))) (ELam ((PVar "valueEnd")) (EApp (EVar "go") (EVar "valueEnd")))) (EApp (EVar "go") (EVar "afterName"))))))))))))))) (EApp (EVar "go") (EVar "pos0"))))
 (DTypeSig false "parseChunkSize" (TyFun (TyCon "Bytes") (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyApp (TyApp (TyCon "Result") (TyCon "FrameError")) (TyCon "Int"))))))
 (DFunDef false "parseChunkSize" ((PVar "input") (PVar "start") (PVar "end")) (EBlock (DoLet false false (PVar "semi") (EApp (EApp (EVar "optionOr") (EVar "end")) (EApp (EApp (EApp (EApp (EVar "elemIndexWithin") (EVar "start")) (EVar "end")) (ELit (LInt 59))) (EVar "input")))) (DoExpr (EIf (EBinOp "==" (EVar "semi") (EVar "start")) (EApp (EVar "malformed") (ELit (LString "http: empty chunk size"))) (EApp (EApp (EMethodRef "andThen") (EApp (EApp (EApp (EApp (EVar "parseHexSizeGo") (EVar "input")) (EVar "start")) (EVar "semi")) (ELit (LInt 0)))) (ELam ((PVar "size")) (EApp (EApp (EMethodRef "andThen") (EApp (EApp (EApp (EVar "parseChunkExtensionsGo") (EVar "input")) (EVar "semi")) (EVar "end"))) (ELam ((PVar "__do_x")) (EMatch (EVar "__do_x") (arm (PLit LUnit) () (EApp (EVar "Ok") (EVar "size"))))))))))))
 (DTypeSig false "parseChunkedChecked" (TyFun (TyCon "Bytes") (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyFun (TyCon "Builder") (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyApp (TyApp (TyCon "Result") (TyCon "FrameError")) (TyCon "ParsedBody")))))))))
-(DFunDef false "parseChunkedChecked" ((PVar "input") (PVar "pos") (PVar "headerBytes") (PVar "out") (PVar "total") (PVar "count")) (EApp (EApp (EMethodRef "andThen") (EApp (EApp (EApp (EApp (EApp (EApp (EVar "chunkHeadStep") (EVar "input")) (EApp (EVar "B.length") (EVar "input"))) (EVar "pos")) (EVar "pos")) (EVar "total")) (EDictApp "count"))) (ELam ((PVar "head")) (EMatch (EVar "head") (arm (PCon "ChunkEnd" (PVar "dataPos")) () (EApp (EApp (EMethodRef "andThen") (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EVar "parseFieldsChecked") (EVar "input")) (EVar "dataPos")) (EVar "dataPos")) (EVar "headerBytes")) (ELit (LInt 0))) (EVar "True")) (EListLit))) (ELam ((PVar "__do_x")) (EMatch (EVar "__do_x") (arm (PCon "HeaderBlock" (PVar "trailers") (PVar "finalPos") PWild) () (EApp (EVar "Ok") (EApp (EApp (EApp (EVar "ParsedBody") (EApp (EVar "buildBytes") (EVar "out"))) (EVar "trailers")) (EVar "finalPos")))))))) (arm (PCon "ChunkBody" (PVar "dataPos") (PVar "size")) () (EApp (EApp (EMethodRef "andThen") (EApp (EApp (EApp (EVar "readSliceAt") (EVar "input")) (EVar "dataPos")) (EVar "size"))) (ELam ((PVar "__do_x")) (EMatch (EVar "__do_x") (arm (PTuple (PVar "chunk") PWild) () (EApp (EApp (EMethodRef "andThen") (EApp (EApp (EApp (EApp (EVar "chunkDataEnd") (EVar "input")) (EApp (EVar "B.length") (EVar "input"))) (EVar "dataPos")) (EVar "size"))) (ELam ((PVar "next")) (ELet false (PLit LUnit) (EApp (EApp (EVar "emitBytes") (EVar "chunk")) (EVar "out")) (EApp (EApp (EApp (EApp (EApp (EApp (EVar "parseChunkedChecked") (EVar "input")) (EVar "next")) (EVar "headerBytes")) (EVar "out")) (EBinOp "+" (EVar "total") (EVar "size"))) (EBinOp "+" (EDictApp "count") (ELit (LInt 1))))))))))))))))
+(DFunDef false "parseChunkedChecked" ((PVar "inp") (PVar "pos0") (PVar "hdrBytes") (PVar "out") (PVar "total0") (PVar "count0")) (ELetGroup ((lgb "go" (clause ((PVar "pos") (PVar "total") (PVar "count")) (EApp (EApp (EMethodRef "andThen") (EApp (EApp (EApp (EApp (EApp (EApp (EVar "chunkHeadStep") (EVar "inp")) (EApp (EVar "B.length") (EVar "inp"))) (EVar "pos")) (EVar "pos")) (EVar "total")) (EDictApp "count"))) (ELam ((PVar "head")) (EMatch (EVar "head") (arm (PCon "ChunkEnd" (PVar "dataPos")) () (EApp (EApp (EMethodRef "andThen") (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EVar "parseFieldsChecked") (EVar "inp")) (EVar "dataPos")) (EVar "dataPos")) (EVar "hdrBytes")) (ELit (LInt 0))) (EVar "True")) (EListLit))) (ELam ((PVar "__do_x")) (EMatch (EVar "__do_x") (arm (PCon "HeaderBlock" (PVar "trailers") (PVar "finalPos") PWild) () (EApp (EVar "Ok") (EApp (EApp (EApp (EVar "ParsedBody") (EApp (EVar "buildBytes") (EVar "out"))) (EVar "trailers")) (EVar "finalPos")))))))) (arm (PCon "ChunkBody" (PVar "dataPos") (PVar "size")) () (EApp (EApp (EMethodRef "andThen") (EApp (EApp (EApp (EVar "readSliceAt") (EVar "inp")) (EVar "dataPos")) (EVar "size"))) (ELam ((PVar "__do_x")) (EMatch (EVar "__do_x") (arm (PTuple (PVar "chunk") PWild) () (EApp (EApp (EMethodRef "andThen") (EApp (EApp (EApp (EApp (EVar "chunkDataEnd") (EVar "inp")) (EApp (EVar "B.length") (EVar "inp"))) (EVar "dataPos")) (EVar "size"))) (ELam ((PVar "next")) (ELet false (PLit LUnit) (EApp (EApp (EVar "emitBytes") (EVar "chunk")) (EVar "out")) (EApp (EApp (EApp (EVar "go") (EVar "next")) (EBinOp "+" (EVar "total") (EVar "size"))) (EBinOp "+" (EDictApp "count") (ELit (LInt 1)))))))))))))))))) (EApp (EApp (EApp (EVar "go") (EVar "pos0")) (EVar "total0")) (EVar "count0"))))
 (DTypeSig true "parseChunked" (TyFun (TyCon "Bytes") (TyFun (TyCon "Int") (TyApp (TyApp (TyCon "Result") (TyCon "HttpParseFailure")) (TyTuple (TyCon "Bytes") (TyApp (TyCon "List") (TyCon "Header")) (TyCon "Int"))))))
 (DFunDef false "parseChunked" ((PVar "input") (PVar "pos")) (EApp (EApp (EMethodRef "map") (ELam ((PCon "ParsedBody" (PVar "body") (PVar "trailers") (PVar "next"))) (ETuple (EVar "body") (EVar "trailers") (EVar "next")))) (EApp (EVar "settle") (EApp (EApp (EApp (EApp (EApp (EApp (EVar "parseChunkedChecked") (EVar "input")) (EVar "pos")) (ELit (LInt 0))) (EApp (EVar "newBuilder") (ELit LUnit))) (ELit (LInt 0))) (ELit (LInt 0))))))
 (DData Private "ChunkHead" () ((variant "ChunkEnd" (ConPos (TyCon "Int"))) (variant "ChunkBody" (ConPos (TyCon "Int") (TyCon "Int")))) ())
@@ -3152,14 +3173,9 @@ decodeRequestBody (Request _ _ headers _ packed _) = do
 (DFunDef false "headBodyPhase" ((PCon "FrameHead" PWild PWild (PCon "FixedBody" (PVar "size")) PWild (PVar "bodyPos") PWild)) (EApp (EVar "BodyUntil") (EBinOp "+" (EVar "bodyPos") (EVar "size"))))
 (DFunDef false "headBodyPhase" ((PCon "FrameHead" PWild PWild (PCon "ChunkedBody") PWild (PVar "bodyPos") PWild)) (EApp (EApp (EApp (EApp (EVar "BodyChunkSize") (EVar "bodyPos")) (ELit (LInt 0))) (ELit (LInt 0))) (EVar "bodyPos")))
 (DTypeSig false "scanBody" (TyFun (TyCon "Bytes") (TyFun (TyCon "Int") (TyFun (TyCon "FrameHead") (TyFun (TyCon "BodyPhase") (TyCon "ScanOutcome"))))))
-(DFunDef false "scanBody" (PWild (PVar "avail") (PVar "head") (PCon "BodyUntil" (PVar "finalPos"))) (EIf (EBinOp "<=" (EVar "finalPos") (EVar "avail")) (EApp (EVar "ScanFramed") (EApp (EApp (EVar "FrameSpan") (EVar "head")) (EVar "finalPos"))) (EApp (EApp (EVar "ScanSuspend") (EBinOp "++" (EBinOp "++" (ELit (LString "http: truncated body at byte ")) (EApp (EMethodRef "display") (EApp (EVar "intToString") (EVar "avail")))) (ELit (LString "")))) (EApp (EApp (EVar "PhaseBody") (EVar "head")) (EApp (EVar "BodyUntil") (EVar "finalPos"))))))
-(DFunDef false "scanBody" ((PVar "input") (PVar "avail") (PVar "head") (PCon "BodyChunkSize" (PVar "chunkPos") (PVar "total") (PVar "count") (PVar "cursor"))) (EMatch (EApp (EApp (EApp (EApp (EApp (EApp (EVar "chunkHeadStep") (EVar "input")) (EVar "avail")) (EVar "chunkPos")) (EApp (EApp (EMethodRef "max") (EVar "chunkPos")) (EVar "cursor"))) (EVar "total")) (EDictApp "count")) (arm (PCon "Err" (PCon "Incomplete" (PVar "message"))) () (EApp (EApp (EVar "ScanSuspend") (EVar "message")) (EApp (EApp (EVar "PhaseBody") (EVar "head")) (EApp (EApp (EApp (EApp (EVar "BodyChunkSize") (EVar "chunkPos")) (EVar "total")) (EDictApp "count")) (EApp (EApp (EVar "crlfResume") (EVar "avail")) (EVar "chunkPos")))))) (arm (PCon "Err" (PCon "Fatal" (PVar "failure"))) () (EApp (EVar "ScanFatal") (EVar "failure"))) (arm (PCon "Ok" (PCon "ChunkEnd" (PVar "dataPos"))) () (EApp (EApp (EApp (EApp (EVar "scanBody") (EVar "input")) (EVar "avail")) (EVar "head")) (EApp (EApp (EApp (EApp (EVar "BodyTrailers") (EVar "dataPos")) (EVar "dataPos")) (ELit (LInt 0))) (EVar "dataPos")))) (arm (PCon "Ok" (PCon "ChunkBody" (PVar "dataPos") (PVar "size"))) () (EApp (EApp (EApp (EApp (EVar "scanBody") (EVar "input")) (EVar "avail")) (EVar "head")) (EApp (EApp (EApp (EApp (EVar "BodyChunkData") (EVar "dataPos")) (EVar "size")) (EVar "total")) (EDictApp "count"))))))
-(DFunDef false "scanBody" ((PVar "input") (PVar "avail") (PVar "head") (PCon "BodyChunkData" (PVar "dataPos") (PVar "size") (PVar "total") (PVar "count"))) (EMatch (EApp (EApp (EApp (EApp (EVar "chunkDataEnd") (EVar "input")) (EVar "avail")) (EVar "dataPos")) (EVar "size")) (arm (PCon "Err" (PCon "Incomplete" (PVar "message"))) () (EApp (EApp (EVar "ScanSuspend") (EVar "message")) (EApp (EApp (EVar "PhaseBody") (EVar "head")) (EApp (EApp (EApp (EApp (EVar "BodyChunkData") (EVar "dataPos")) (EVar "size")) (EVar "total")) (EDictApp "count"))))) (arm (PCon "Err" (PCon "Fatal" (PVar "failure"))) () (EApp (EVar "ScanFatal") (EVar "failure"))) (arm (PCon "Ok" (PVar "next")) () (EApp (EApp (EApp (EApp (EVar "scanBody") (EVar "input")) (EVar "avail")) (EVar "head")) (EApp (EApp (EApp (EApp (EVar "BodyChunkSize") (EVar "next")) (EBinOp "+" (EVar "total") (EVar "size"))) (EBinOp "+" (EDictApp "count") (ELit (LInt 1)))) (EVar "next"))))))
-(DFunDef false "scanBody" ((PVar "input") (PVar "avail") (PVar "head") (PCon "BodyTrailers" (PVar "sectionStart") (PVar "pos") (PVar "count") (PVar "cursor"))) (EBlock (DoLet false false (PVar "step") (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EVar "fieldStep") (EVar "input")) (EVar "avail")) (EVar "pos")) (EApp (EApp (EMethodRef "max") (EVar "pos")) (EVar "cursor"))) (EVar "sectionStart")) (EApp (EVar "headHeaderBytes") (EVar "head"))) (EDictApp "count")) (EVar "True"))) (DoExpr (EMatch (EVar "step") (arm (PCon "Err" (PCon "Incomplete" (PVar "message"))) () (EApp (EApp (EVar "ScanSuspend") (EVar "message")) (EApp (EApp (EVar "PhaseBody") (EVar "head")) (EApp (EApp (EApp (EApp (EVar "BodyTrailers") (EVar "sectionStart")) (EVar "pos")) (EDictApp "count")) (EApp (EApp (EVar "crlfResume") (EVar "avail")) (EVar "pos")))))) (arm (PCon "Err" (PCon "Fatal" (PVar "failure"))) () (EApp (EVar "ScanFatal") (EVar "failure"))) (arm (PCon "Ok" (PCon "FieldMore" PWild (PVar "next"))) () (EApp (EApp (EApp (EApp (EVar "scanBody") (EVar "input")) (EVar "avail")) (EVar "head")) (EApp (EApp (EApp (EApp (EVar "BodyTrailers") (EVar "sectionStart")) (EVar "next")) (EBinOp "+" (EDictApp "count") (ELit (LInt 1)))) (EVar "next")))) (arm (PCon "Ok" (PCon "FieldDone" (PVar "finalPos") PWild)) () (EApp (EVar "ScanFramed") (EApp (EApp (EVar "FrameSpan") (EVar "head")) (EVar "finalPos"))))))))
+(DFunDef false "scanBody" ((PVar "input") (PVar "avail") (PVar "head") (PVar "x0")) (ELetGroup ((lgb "go" (clause ((PCon "BodyUntil" (PVar "finalPos"))) (EIf (EBinOp "<=" (EVar "finalPos") (EVar "avail")) (EApp (EVar "ScanFramed") (EApp (EApp (EVar "FrameSpan") (EVar "head")) (EVar "finalPos"))) (EApp (EApp (EVar "ScanSuspend") (EBinOp "++" (EBinOp "++" (ELit (LString "http: truncated body at byte ")) (EApp (EMethodRef "display") (EApp (EVar "intToString") (EVar "avail")))) (ELit (LString "")))) (EApp (EApp (EVar "PhaseBody") (EVar "head")) (EApp (EVar "BodyUntil") (EVar "finalPos")))))) (clause ((PCon "BodyChunkSize" (PVar "chunkPos") (PVar "total") (PVar "count") (PVar "cursor"))) (EMatch (EApp (EApp (EApp (EApp (EApp (EApp (EVar "chunkHeadStep") (EVar "input")) (EVar "avail")) (EVar "chunkPos")) (EApp (EApp (EMethodRef "max") (EVar "chunkPos")) (EVar "cursor"))) (EVar "total")) (EDictApp "count")) (arm (PCon "Err" (PCon "Incomplete" (PVar "message"))) () (EApp (EApp (EVar "ScanSuspend") (EVar "message")) (EApp (EApp (EVar "PhaseBody") (EVar "head")) (EApp (EApp (EApp (EApp (EVar "BodyChunkSize") (EVar "chunkPos")) (EVar "total")) (EDictApp "count")) (EApp (EApp (EVar "crlfResume") (EVar "avail")) (EVar "chunkPos")))))) (arm (PCon "Err" (PCon "Fatal" (PVar "failure"))) () (EApp (EVar "ScanFatal") (EVar "failure"))) (arm (PCon "Ok" (PCon "ChunkEnd" (PVar "dataPos"))) () (EApp (EVar "go") (EApp (EApp (EApp (EApp (EVar "BodyTrailers") (EVar "dataPos")) (EVar "dataPos")) (ELit (LInt 0))) (EVar "dataPos")))) (arm (PCon "Ok" (PCon "ChunkBody" (PVar "dataPos") (PVar "size"))) () (EApp (EVar "go") (EApp (EApp (EApp (EApp (EVar "BodyChunkData") (EVar "dataPos")) (EVar "size")) (EVar "total")) (EDictApp "count")))))) (clause ((PCon "BodyChunkData" (PVar "dataPos") (PVar "size") (PVar "total") (PVar "count"))) (EMatch (EApp (EApp (EApp (EApp (EVar "chunkDataEnd") (EVar "input")) (EVar "avail")) (EVar "dataPos")) (EVar "size")) (arm (PCon "Err" (PCon "Incomplete" (PVar "message"))) () (EApp (EApp (EVar "ScanSuspend") (EVar "message")) (EApp (EApp (EVar "PhaseBody") (EVar "head")) (EApp (EApp (EApp (EApp (EVar "BodyChunkData") (EVar "dataPos")) (EVar "size")) (EVar "total")) (EDictApp "count"))))) (arm (PCon "Err" (PCon "Fatal" (PVar "failure"))) () (EApp (EVar "ScanFatal") (EVar "failure"))) (arm (PCon "Ok" (PVar "next")) () (EApp (EVar "go") (EApp (EApp (EApp (EApp (EVar "BodyChunkSize") (EVar "next")) (EBinOp "+" (EVar "total") (EVar "size"))) (EBinOp "+" (EDictApp "count") (ELit (LInt 1)))) (EVar "next")))))) (clause ((PCon "BodyTrailers" (PVar "sectionStart") (PVar "pos") (PVar "count") (PVar "cursor"))) (EBlock (DoLet false false (PVar "step") (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EVar "fieldStep") (EVar "input")) (EVar "avail")) (EVar "pos")) (EApp (EApp (EMethodRef "max") (EVar "pos")) (EVar "cursor"))) (EVar "sectionStart")) (EApp (EVar "headHeaderBytes") (EVar "head"))) (EDictApp "count")) (EVar "True"))) (DoExpr (EMatch (EVar "step") (arm (PCon "Err" (PCon "Incomplete" (PVar "message"))) () (EApp (EApp (EVar "ScanSuspend") (EVar "message")) (EApp (EApp (EVar "PhaseBody") (EVar "head")) (EApp (EApp (EApp (EApp (EVar "BodyTrailers") (EVar "sectionStart")) (EVar "pos")) (EDictApp "count")) (EApp (EApp (EVar "crlfResume") (EVar "avail")) (EVar "pos")))))) (arm (PCon "Err" (PCon "Fatal" (PVar "failure"))) () (EApp (EVar "ScanFatal") (EVar "failure"))) (arm (PCon "Ok" (PCon "FieldMore" PWild (PVar "next"))) () (EApp (EVar "go") (EApp (EApp (EApp (EApp (EVar "BodyTrailers") (EVar "sectionStart")) (EVar "next")) (EBinOp "+" (EDictApp "count") (ELit (LInt 1)))) (EVar "next")))) (arm (PCon "Ok" (PCon "FieldDone" (PVar "finalPos") PWild)) () (EApp (EVar "ScanFramed") (EApp (EApp (EVar "FrameSpan") (EVar "head")) (EVar "finalPos")))))))))) (EApp (EVar "go") (EVar "x0"))))
 (DTypeSig false "scanFrom" (TyFun (TyCon "Bytes") (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyFun (TyCon "ScanPhase") (TyCon "ScanOutcome"))))))
-(DFunDef false "scanFrom" ((PVar "input") (PVar "avail") (PVar "start") (PCon "PhaseLine" (PVar "cursor"))) (EMatch (EApp (EApp (EApp (EApp (EVar "parseRequestLine") (EVar "input")) (EVar "avail")) (EVar "start")) (EApp (EApp (EMethodRef "max") (EVar "start")) (EVar "cursor"))) (arm (PCon "Err" (PCon "Incomplete" (PVar "message"))) () (EApp (EApp (EVar "ScanSuspend") (EVar "message")) (EApp (EVar "PhaseLine") (EApp (EApp (EVar "crlfResume") (EVar "avail")) (EVar "start"))))) (arm (PCon "Err" (PCon "Fatal" (PVar "failure"))) () (EApp (EVar "ScanFatal") (EVar "failure"))) (arm (PCon "Ok" (PVar "line")) () (EBlock (DoLet false false (PVar "headerPos") (EApp (EVar "requestLineHeaderPos") (EVar "line"))) (DoExpr (EApp (EApp (EApp (EApp (EVar "scanFrom") (EVar "input")) (EVar "avail")) (EVar "start")) (EApp (EApp (EApp (EApp (EApp (EVar "PhaseFields") (EVar "line")) (EListLit)) (EVar "headerPos")) (ELit (LInt 0))) (EVar "headerPos"))))))))
-(DFunDef false "scanFrom" ((PVar "input") (PVar "avail") (PVar "start") (PCon "PhaseFields" (PVar "line") (PVar "acc") (PVar "pos") (PVar "count") (PVar "cursor"))) (EBlock (DoLet false false (PVar "step") (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EVar "fieldStep") (EVar "input")) (EVar "avail")) (EVar "pos")) (EApp (EApp (EMethodRef "max") (EVar "pos")) (EVar "cursor"))) (EApp (EVar "requestLineHeaderPos") (EVar "line"))) (ELit (LInt 0))) (EDictApp "count")) (EVar "False"))) (DoExpr (EMatch (EVar "step") (arm (PCon "Err" (PCon "Incomplete" (PVar "message"))) () (EApp (EApp (EVar "ScanSuspend") (EVar "message")) (EApp (EApp (EApp (EApp (EApp (EVar "PhaseFields") (EVar "line")) (EVar "acc")) (EVar "pos")) (EDictApp "count")) (EApp (EApp (EVar "crlfResume") (EVar "avail")) (EVar "pos"))))) (arm (PCon "Err" (PCon "Fatal" (PVar "failure"))) () (EApp (EVar "ScanFatal") (EVar "failure"))) (arm (PCon "Ok" (PCon "FieldMore" (PVar "field") (PVar "next"))) () (EApp (EApp (EApp (EApp (EVar "scanFrom") (EVar "input")) (EVar "avail")) (EVar "start")) (EApp (EApp (EApp (EApp (EApp (EVar "PhaseFields") (EVar "line")) (EBinOp "::" (EVar "field") (EVar "acc"))) (EVar "next")) (EBinOp "+" (EDictApp "count") (ELit (LInt 1)))) (EVar "next")))) (arm (PCon "Ok" (PCon "FieldDone" (PVar "bodyPos") (PVar "headerBytes"))) () (EMatch (EApp (EVar "settle") (EApp (EApp (EApp (EApp (EVar "buildHead") (EVar "line")) (EApp (EVar "reverse") (EVar "acc"))) (EVar "bodyPos")) (EVar "headerBytes"))) (arm (PCon "Err" (PVar "failure")) () (EApp (EVar "ScanFatal") (EVar "failure"))) (arm (PCon "Ok" (PVar "head")) () (EApp (EApp (EApp (EApp (EVar "scanBody") (EVar "input")) (EVar "avail")) (EVar "head")) (EApp (EVar "headBodyPhase") (EVar "head"))))))))))
-(DFunDef false "scanFrom" ((PVar "input") (PVar "avail") PWild (PCon "PhaseBody" (PVar "head") (PVar "phase"))) (EApp (EApp (EApp (EApp (EVar "scanBody") (EVar "input")) (EVar "avail")) (EVar "head")) (EVar "phase")))
+(DFunDef false "scanFrom" ((PVar "input") (PVar "avail") (PVar "start") (PVar "x0")) (ELetGroup ((lgb "go" (clause ((PCon "PhaseLine" (PVar "cursor"))) (EMatch (EApp (EApp (EApp (EApp (EVar "parseRequestLine") (EVar "input")) (EVar "avail")) (EVar "start")) (EApp (EApp (EMethodRef "max") (EVar "start")) (EVar "cursor"))) (arm (PCon "Err" (PCon "Incomplete" (PVar "message"))) () (EApp (EApp (EVar "ScanSuspend") (EVar "message")) (EApp (EVar "PhaseLine") (EApp (EApp (EVar "crlfResume") (EVar "avail")) (EVar "start"))))) (arm (PCon "Err" (PCon "Fatal" (PVar "failure"))) () (EApp (EVar "ScanFatal") (EVar "failure"))) (arm (PCon "Ok" (PVar "line")) () (EBlock (DoLet false false (PVar "headerPos") (EApp (EVar "requestLineHeaderPos") (EVar "line"))) (DoExpr (EApp (EVar "go") (EApp (EApp (EApp (EApp (EApp (EVar "PhaseFields") (EVar "line")) (EListLit)) (EVar "headerPos")) (ELit (LInt 0))) (EVar "headerPos")))))))) (clause ((PCon "PhaseFields" (PVar "line") (PVar "acc") (PVar "pos") (PVar "count") (PVar "cursor"))) (EBlock (DoLet false false (PVar "step") (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EVar "fieldStep") (EVar "input")) (EVar "avail")) (EVar "pos")) (EApp (EApp (EMethodRef "max") (EVar "pos")) (EVar "cursor"))) (EApp (EVar "requestLineHeaderPos") (EVar "line"))) (ELit (LInt 0))) (EDictApp "count")) (EVar "False"))) (DoExpr (EMatch (EVar "step") (arm (PCon "Err" (PCon "Incomplete" (PVar "message"))) () (EApp (EApp (EVar "ScanSuspend") (EVar "message")) (EApp (EApp (EApp (EApp (EApp (EVar "PhaseFields") (EVar "line")) (EVar "acc")) (EVar "pos")) (EDictApp "count")) (EApp (EApp (EVar "crlfResume") (EVar "avail")) (EVar "pos"))))) (arm (PCon "Err" (PCon "Fatal" (PVar "failure"))) () (EApp (EVar "ScanFatal") (EVar "failure"))) (arm (PCon "Ok" (PCon "FieldMore" (PVar "field") (PVar "next"))) () (EApp (EVar "go") (EApp (EApp (EApp (EApp (EApp (EVar "PhaseFields") (EVar "line")) (EBinOp "::" (EVar "field") (EVar "acc"))) (EVar "next")) (EBinOp "+" (EDictApp "count") (ELit (LInt 1)))) (EVar "next")))) (arm (PCon "Ok" (PCon "FieldDone" (PVar "bodyPos") (PVar "headerBytes"))) () (EMatch (EApp (EVar "settle") (EApp (EApp (EApp (EApp (EVar "buildHead") (EVar "line")) (EApp (EVar "reverse") (EVar "acc"))) (EVar "bodyPos")) (EVar "headerBytes"))) (arm (PCon "Err" (PVar "failure")) () (EApp (EVar "ScanFatal") (EVar "failure"))) (arm (PCon "Ok" (PVar "head")) () (EApp (EApp (EApp (EApp (EVar "scanBody") (EVar "input")) (EVar "avail")) (EVar "head")) (EApp (EVar "headBodyPhase") (EVar "head")))))))))) (clause ((PCon "PhaseBody" (PVar "head") (PVar "phase"))) (EApp (EApp (EApp (EApp (EVar "scanBody") (EVar "input")) (EVar "avail")) (EVar "head")) (EVar "phase"))))) (EApp (EVar "go") (EVar "x0"))))
 (DTypeSig false "frameSpanAt" (TyFun (TyCon "Bytes") (TyFun (TyCon "Int") (TyApp (TyApp (TyCon "Result") (TyCon "FrameError")) (TyCon "FrameSpan")))))
 (DFunDef false "frameSpanAt" ((PVar "input") (PVar "start")) (EBlock (DoLet false false (PVar "outcome") (EApp (EApp (EApp (EApp (EVar "scanFrom") (EVar "input")) (EApp (EVar "B.length") (EVar "input"))) (EVar "start")) (EApp (EVar "PhaseLine") (EVar "start")))) (DoExpr (EMatch (EVar "outcome") (arm (PCon "ScanSuspend" (PVar "message") PWild) () (EApp (EVar "Err") (EApp (EVar "Incomplete") (EVar "message")))) (arm (PCon "ScanFatal" (PVar "failure")) () (EApp (EVar "Err") (EApp (EVar "Fatal") (EVar "failure")))) (arm (PCon "ScanFramed" (PVar "span")) () (EApp (EVar "Ok") (EVar "span")))))))
 (DTypeSig false "frameFromSpan" (TyFun (TyCon "Bytes") (TyFun (TyCon "FrameHead") (TyFun (TyCon "Int") (TyApp (TyApp (TyCon "Result") (TyCon "FrameError")) (TyCon "FramedRequest"))))))
@@ -3224,7 +3240,7 @@ decodeRequestBody (Request _ _ headers _ packed _) = do
 (DTypeSig false "responseFindCrlf" (TyFun (TyCon "String") (TyFun (TyCon "Bytes") (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyApp (TyApp (TyCon "Result") (TyCon "FrameError")) (TyCon "Int"))))))))
 (DFunDef false "responseFindCrlf" ((PVar "label") (PVar "input") (PVar "avail") (PVar "start") (PVar "limit")) (EApp (EApp (EApp (EApp (EApp (EApp (EVar "responseFindCrlfGo") (EVar "label")) (EVar "input")) (EVar "avail")) (EVar "start")) (EVar "start")) (EVar "limit")))
 (DTypeSig false "responseFindCrlfGo" (TyFun (TyCon "String") (TyFun (TyCon "Bytes") (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyApp (TyApp (TyCon "Result") (TyCon "FrameError")) (TyCon "Int")))))))))
-(DFunDef false "responseFindCrlfGo" ((PVar "label") (PVar "input") (PVar "avail") (PVar "start") (PVar "pos") (PVar "limit")) (EIf (EBinOp ">" (EBinOp "-" (EVar "pos") (EVar "start")) (EVar "limit")) (EApp (EVar "Err") (EApp (EVar "Fatal") (EApp (EVar "HttpResourceExcess") (EBinOp "++" (EBinOp "++" (ELit (LString "http: ")) (EApp (EMethodRef "display") (EVar "label"))) (ELit (LString " exceeds its resource limit")))))) (EIf (EBinOp ">=" (EVar "pos") (EVar "avail")) (EApp (EVar "responseMalformed") (EBinOp "++" (EBinOp "++" (ELit (LString "http: truncated ")) (EApp (EMethodRef "display") (EVar "label"))) (ELit (LString "; expected CRLF")))) (EIf (EBinOp "==" (EApp (EApp (EVar "byteAt") (EVar "input")) (EVar "pos")) (ELit (LInt 10))) (EApp (EVar "responseMalformed") (EBinOp "++" (EBinOp "++" (ELit (LString "http: bare LF in ")) (EApp (EMethodRef "display") (EVar "label"))) (ELit (LString "")))) (EIf (EBinOp "==" (EApp (EApp (EVar "byteAt") (EVar "input")) (EVar "pos")) (ELit (LInt 13))) (EIf (EBinOp "||" (EBinOp ">=" (EBinOp "+" (EVar "pos") (ELit (LInt 1))) (EVar "avail")) (EBinOp "/=" (EApp (EApp (EVar "byteAt") (EVar "input")) (EBinOp "+" (EVar "pos") (ELit (LInt 1)))) (ELit (LInt 10)))) (EApp (EVar "responseMalformed") (EBinOp "++" (EBinOp "++" (ELit (LString "http: bare CR in ")) (EApp (EMethodRef "display") (EVar "label"))) (ELit (LString "")))) (EApp (EVar "Ok") (EVar "pos"))) (EApp (EApp (EApp (EApp (EApp (EApp (EVar "responseFindCrlfGo") (EVar "label")) (EVar "input")) (EVar "avail")) (EVar "start")) (EBinOp "+" (EVar "pos") (ELit (LInt 1)))) (EVar "limit")))))))
+(DFunDef false "responseFindCrlfGo" ((PVar "label") (PVar "input") (PVar "avail") (PVar "start") (PVar "pos0") (PVar "limit")) (ELetGroup ((lgb "go" (clause ((PVar "pos")) (EIf (EBinOp ">" (EBinOp "-" (EVar "pos") (EVar "start")) (EVar "limit")) (EApp (EVar "Err") (EApp (EVar "Fatal") (EApp (EVar "HttpResourceExcess") (EBinOp "++" (EBinOp "++" (ELit (LString "http: ")) (EApp (EMethodRef "display") (EVar "label"))) (ELit (LString " exceeds its resource limit")))))) (EIf (EBinOp ">=" (EVar "pos") (EVar "avail")) (EApp (EVar "responseMalformed") (EBinOp "++" (EBinOp "++" (ELit (LString "http: truncated ")) (EApp (EMethodRef "display") (EVar "label"))) (ELit (LString "; expected CRLF")))) (EIf (EBinOp "==" (EApp (EApp (EVar "byteAt") (EVar "input")) (EVar "pos")) (ELit (LInt 10))) (EApp (EVar "responseMalformed") (EBinOp "++" (EBinOp "++" (ELit (LString "http: bare LF in ")) (EApp (EMethodRef "display") (EVar "label"))) (ELit (LString "")))) (EIf (EBinOp "==" (EApp (EApp (EVar "byteAt") (EVar "input")) (EVar "pos")) (ELit (LInt 13))) (EIf (EBinOp "||" (EBinOp ">=" (EBinOp "+" (EVar "pos") (ELit (LInt 1))) (EVar "avail")) (EBinOp "/=" (EApp (EApp (EVar "byteAt") (EVar "input")) (EBinOp "+" (EVar "pos") (ELit (LInt 1)))) (ELit (LInt 10)))) (EApp (EVar "responseMalformed") (EBinOp "++" (EBinOp "++" (ELit (LString "http: bare CR in ")) (EApp (EMethodRef "display") (EVar "label"))) (ELit (LString "")))) (EApp (EVar "Ok") (EVar "pos"))) (EApp (EVar "go") (EBinOp "+" (EVar "pos") (ELit (LInt 1))))))))))) (EApp (EVar "go") (EVar "pos0"))))
 (DTypeSig false "responseParseDecimalGo" (TyFun (TyCon "Bytes") (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyApp (TyApp (TyCon "Result") (TyCon "FrameError")) (TyCon "Int"))))))
 (DFunDef false "responseParseDecimalGo" ((PVar "value") (PVar "i") (PVar "acc")) (EIf (EBinOp ">=" (EVar "i") (EApp (EVar "B.length") (EVar "value"))) (EApp (EVar "Ok") (EVar "acc")) (EBlock (DoLet false false (PVar "byte") (EApp (EApp (EVar "byteAt") (EVar "value")) (EVar "i"))) (DoExpr (EIf (EBinOp "||" (EBinOp "<" (EVar "byte") (ELit (LInt 48))) (EBinOp ">" (EVar "byte") (ELit (LInt 57)))) (EApp (EVar "responseMalformed") (ELit (LString "http: invalid decimal field"))) (EBlock (DoLet false false (PVar "digit") (EBinOp "-" (EVar "byte") (ELit (LInt 48)))) (DoExpr (EIf (EBinOp ">" (EVar "acc") (EBinOp "/" (EBinOp "-" (EVar "intMaxBound") (EVar "digit")) (ELit (LInt 10)))) (EApp (EVar "responseMalformed") (ELit (LString "http: decimal field overflows Int"))) (EApp (EApp (EApp (EVar "responseParseDecimalGo") (EVar "value")) (EBinOp "+" (EVar "i") (ELit (LInt 1)))) (EBinOp "+" (EBinOp "*" (EVar "acc") (ELit (LInt 10))) (EVar "digit")))))))))))
 (DTypeSig false "responseParseStatusLine" (TyFun (TyCon "Bytes") (TyFun (TyCon "Int") (TyApp (TyApp (TyCon "Result") (TyCon "FrameError")) (TyCon "ResponseStatusLine")))))
@@ -3234,13 +3250,13 @@ decodeRequestBody (Request _ _ headers _ packed _) = do
 (DTypeSig false "responseFieldStep" (TyFun (TyCon "Bytes") (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyApp (TyApp (TyCon "Result") (TyCon "FrameError")) (TyCon "ResponseFieldStep")))))))))
 (DFunDef false "responseFieldStep" ((PVar "input") (PVar "avail") (PVar "pos") (PVar "sectionStart") (PVar "priorBytes") (PVar "count")) (EApp (EApp (EMethodRef "andThen") (EApp (EApp (EApp (EApp (EApp (EVar "responseFindCrlf") (ELit (LString "header field"))) (EVar "input")) (EVar "avail")) (EVar "pos")) (EVar "maxHttpHeaderBytes"))) (ELam ((PVar "end")) (ELet false (PVar "next") (EBinOp "+" (EVar "end") (ELit (LInt 2))) (ELet false (PVar "totalBytes") (EBinOp "-" (EBinOp "+" (EVar "priorBytes") (EVar "next")) (EVar "sectionStart")) (EIf (EBinOp ">" (EVar "totalBytes") (EVar "maxHttpHeaderBytes")) (EApp (EVar "Err") (EApp (EVar "Fatal") (EApp (EVar "HttpResourceExcess") (ELit (LString "http: combined header and trailer section exceeds 65536-byte resource limit"))))) (EIf (EBinOp "==" (EVar "end") (EVar "pos")) (EApp (EVar "Ok") (EApp (EApp (EVar "ResponseFieldDone") (EVar "next")) (EVar "totalBytes"))) (EIf (EBinOp ">" (EBinOp "+" (EDictApp "count") (ELit (LInt 1))) (EVar "maxHttpHeaderFields")) (EApp (EVar "Err") (EApp (EVar "Fatal") (EApp (EVar "HttpResourceExcess") (ELit (LString "http: header field count exceeds 100 resource limit"))))) (EApp (EApp (EMethodRef "andThen") (EApp (EApp (EApp (EVar "responseParseHeaderLine") (EVar "input")) (EVar "pos")) (EVar "end"))) (ELam ((PVar "field")) (EApp (EVar "Ok") (EApp (EApp (EVar "ResponseFieldMore") (EVar "field")) (EVar "next")))))))))))))
 (DTypeSig false "responseParseFields" (TyFun (TyCon "Bytes") (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyFun (TyApp (TyCon "List") (TyCon "Header")) (TyApp (TyApp (TyCon "Result") (TyCon "FrameError")) (TyTuple (TyApp (TyCon "List") (TyCon "Header")) (TyCon "Int") (TyCon "Int")))))))))))
-(DFunDef false "responseParseFields" ((PVar "input") (PVar "avail") (PVar "pos") (PVar "sectionStart") (PVar "priorBytes") (PVar "count") (PVar "acc")) (EApp (EApp (EMethodRef "andThen") (EApp (EApp (EApp (EApp (EApp (EApp (EVar "responseFieldStep") (EVar "input")) (EVar "avail")) (EVar "pos")) (EVar "sectionStart")) (EVar "priorBytes")) (EDictApp "count"))) (ELam ((PVar "step")) (EMatch (EVar "step") (arm (PCon "ResponseFieldDone" (PVar "next") (PVar "totalBytes")) () (EApp (EVar "Ok") (ETuple (EApp (EVar "reverse") (EVar "acc")) (EVar "next") (EVar "totalBytes")))) (arm (PCon "ResponseFieldMore" (PVar "field") (PVar "next")) () (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EVar "responseParseFields") (EVar "input")) (EVar "avail")) (EVar "next")) (EVar "sectionStart")) (EVar "priorBytes")) (EBinOp "+" (EDictApp "count") (ELit (LInt 1)))) (EBinOp "::" (EVar "field") (EVar "acc"))))))))
+(DFunDef false "responseParseFields" ((PVar "inp") (PVar "av") (PVar "pos0") (PVar "secBeg") (PVar "prior") (PVar "count0") (PVar "acc0")) (ELetGroup ((lgb "go" (clause ((PVar "pos") (PVar "count") (PVar "acc")) (EApp (EApp (EMethodRef "andThen") (EApp (EApp (EApp (EApp (EApp (EApp (EVar "responseFieldStep") (EVar "inp")) (EVar "av")) (EVar "pos")) (EVar "secBeg")) (EVar "prior")) (EDictApp "count"))) (ELam ((PVar "step")) (EMatch (EVar "step") (arm (PCon "ResponseFieldDone" (PVar "next") (PVar "totalBytes")) () (EApp (EVar "Ok") (ETuple (EApp (EVar "reverse") (EVar "acc")) (EVar "next") (EVar "totalBytes")))) (arm (PCon "ResponseFieldMore" (PVar "field") (PVar "next")) () (EApp (EApp (EApp (EVar "go") (EVar "next")) (EBinOp "+" (EDictApp "count") (ELit (LInt 1)))) (EBinOp "::" (EVar "field") (EVar "acc")))))))))) (EApp (EApp (EApp (EVar "go") (EVar "pos0")) (EVar "count0")) (EVar "acc0"))))
 (DTypeSig false "responseImpliesNoBody" (TyFun (TyCon "Int") (TyCon "Bool")))
 (DFunDef false "responseImpliesNoBody" ((PVar "status")) (EBinOp "||" (EBinOp "||" (EBinOp "&&" (EBinOp ">=" (EVar "status") (ELit (LInt 100))) (EBinOp "<" (EVar "status") (ELit (LInt 200)))) (EBinOp "==" (EVar "status") (ELit (LInt 204)))) (EBinOp "==" (EVar "status") (ELit (LInt 304)))))
 (DTypeSig false "responseSelectBodyMode" (TyFun (TyCon "Int") (TyFun (TyApp (TyCon "List") (TyCon "Header")) (TyApp (TyApp (TyCon "Result") (TyCon "FrameError")) (TyCon "BodyMode")))))
 (DFunDef false "responseSelectBodyMode" ((PVar "status") (PVar "headers")) (EBlock (DoLet false false (PVar "clCount") (EApp (EApp (EVar "countNamed") (ELit (LString "content-length"))) (EVar "headers"))) (DoLet false false (PVar "teCount") (EApp (EApp (EVar "countNamed") (ELit (LString "transfer-encoding"))) (EVar "headers"))) (DoExpr (EIf (EBinOp ">" (EVar "clCount") (ELit (LInt 1))) (EApp (EVar "responseMalformed") (ELit (LString "http: duplicate Content-Length is ambiguous"))) (EIf (EBinOp "&&" (EBinOp ">" (EVar "clCount") (ELit (LInt 0))) (EBinOp ">" (EVar "teCount") (ELit (LInt 0)))) (EApp (EVar "responseMalformed") (ELit (LString "http: Transfer-Encoding with Content-Length is ambiguous"))) (EIf (EBinOp ">" (EVar "teCount") (ELit (LInt 0))) (EIf (EBinOp "/=" (EVar "teCount") (ELit (LInt 1))) (EApp (EVar "responseMalformed") (ELit (LString "http: repeated Transfer-Encoding is unsupported"))) (EMatch (EApp (EApp (EVar "findNamed") (ELit (LString "transfer-encoding"))) (EVar "headers")) (arm (PCon "None") () (EApp (EVar "responseMalformed") (ELit (LString "http: missing Transfer-Encoding value")))) (arm (PCon "Some" (PVar "value")) () (EIf (EApp (EApp (EVar "asciiEqualCi") (EVar "value")) (ELit (LString "chunked"))) (EApp (EVar "Ok") (EVar "ChunkedBody")) (EApp (EVar "responseMalformed") (ELit (LString "http: unsupported Transfer-Encoding coding"))))))) (EMatch (EApp (EApp (EVar "findNamed") (ELit (LString "content-length"))) (EVar "headers")) (arm (PCon "None") () (EIf (EApp (EVar "responseImpliesNoBody") (EVar "status")) (EApp (EVar "Ok") (EVar "NoBody")) (EApp (EVar "Ok") (EVar "UntilCloseBody")))) (arm (PCon "Some" (PVar "value")) () (EIf (EBinOp "==" (EApp (EVar "B.length") (EVar "value")) (ELit (LInt 0))) (EApp (EVar "responseMalformed") (ELit (LString "http: empty Content-Length"))) (EApp (EApp (EMethodRef "andThen") (EApp (EApp (EApp (EVar "responseParseDecimalGo") (EVar "value")) (ELit (LInt 0))) (ELit (LInt 0)))) (ELam ((PVar "size")) (EIf (EBinOp ">" (EVar "size") (EVar "maxHttpBodyBytes")) (EApp (EVar "Err") (EApp (EVar "Fatal") (EApp (EVar "HttpResourceExcess") (ELit (LString "http: decoded body exceeds 5242880-byte resource limit"))))) (EApp (EVar "Ok") (EApp (EVar "FixedBody") (EVar "size")))))))))))))))
 (DTypeSig false "responseParseHexSizeGo" (TyFun (TyCon "Bytes") (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyApp (TyApp (TyCon "Result") (TyCon "FrameError")) (TyCon "Int")))))))
-(DFunDef false "responseParseHexSizeGo" ((PVar "input") (PVar "pos") (PVar "end") (PVar "acc")) (EIf (EBinOp ">=" (EVar "pos") (EVar "end")) (EApp (EVar "Ok") (EVar "acc")) (EMatch (EApp (EVar "hexDigit") (EApp (EApp (EVar "byteAt") (EVar "input")) (EVar "pos"))) (arm (PCon "None") () (EApp (EVar "responseMalformed") (ELit (LString "http: invalid chunk size")))) (arm (PCon "Some" (PVar "digit")) () (EIf (EBinOp ">" (EVar "acc") (EBinOp "/" (EBinOp "-" (EVar "maxHttpResponseChunkBytes") (EVar "digit")) (ELit (LInt 16)))) (EApp (EVar "Err") (EApp (EVar "Fatal") (EApp (EVar "HttpResourceExcess") (ELit (LString "http: chunk size exceeds resource limit"))))) (EApp (EApp (EApp (EApp (EVar "responseParseHexSizeGo") (EVar "input")) (EBinOp "+" (EVar "pos") (ELit (LInt 1)))) (EVar "end")) (EBinOp "+" (EBinOp "*" (EVar "acc") (ELit (LInt 16))) (EVar "digit"))))))))
+(DFunDef false "responseParseHexSizeGo" ((PVar "input") (PVar "pos0") (PVar "end") (PVar "acc0")) (ELetGroup ((lgb "go" (clause ((PVar "pos") (PVar "acc")) (EIf (EBinOp ">=" (EVar "pos") (EVar "end")) (EApp (EVar "Ok") (EVar "acc")) (EMatch (EApp (EVar "hexDigit") (EApp (EApp (EVar "byteAt") (EVar "input")) (EVar "pos"))) (arm (PCon "None") () (EApp (EVar "responseMalformed") (ELit (LString "http: invalid chunk size")))) (arm (PCon "Some" (PVar "digit")) () (EIf (EBinOp ">" (EVar "acc") (EBinOp "/" (EBinOp "-" (EVar "maxHttpResponseChunkBytes") (EVar "digit")) (ELit (LInt 16)))) (EApp (EVar "Err") (EApp (EVar "Fatal") (EApp (EVar "HttpResourceExcess") (ELit (LString "http: chunk size exceeds resource limit"))))) (EApp (EApp (EVar "go") (EBinOp "+" (EVar "pos") (ELit (LInt 1)))) (EBinOp "+" (EBinOp "*" (EVar "acc") (ELit (LInt 16))) (EVar "digit")))))))))) (EApp (EApp (EVar "go") (EVar "pos0")) (EVar "acc0"))))
 (DTypeSig false "responseParseChunkSize" (TyFun (TyCon "Bytes") (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyApp (TyApp (TyCon "Result") (TyCon "FrameError")) (TyCon "Int"))))))
 (DFunDef false "responseParseChunkSize" ((PVar "input") (PVar "start") (PVar "end")) (EBlock (DoLet false false (PVar "semi") (EApp (EApp (EVar "optionOr") (EVar "end")) (EApp (EApp (EApp (EApp (EVar "findByte") (EVar "input")) (EVar "start")) (EVar "end")) (ELit (LInt 59))))) (DoExpr (EIf (EBinOp "==" (EVar "semi") (EVar "start")) (EApp (EVar "responseMalformed") (ELit (LString "http: empty chunk size"))) (EApp (EApp (EMethodRef "andThen") (EApp (EApp (EApp (EApp (EVar "responseParseHexSizeGo") (EVar "input")) (EVar "start")) (EVar "semi")) (ELit (LInt 0)))) (ELam ((PVar "size")) (EApp (EApp (EMethodRef "andThen") (EApp (EApp (EApp (EVar "parseChunkExtensionsGo") (EVar "input")) (EVar "semi")) (EVar "end"))) (ELam ((PVar "__do_x")) (EMatch (EVar "__do_x") (arm (PLit LUnit) () (EApp (EVar "Ok") (EVar "size"))))))))))))
 (DData Private "ResponseChunkHead" () ((variant "ResponseChunkEnd" (ConPos (TyCon "Int"))) (variant "ResponseChunkBody" (ConPos (TyCon "Int") (TyCon "Int")))) ())
@@ -3251,7 +3267,7 @@ decodeRequestBody (Request _ _ headers _ packed _) = do
 (DTypeSig false "responseChunkDataEnd" (TyFun (TyCon "Bytes") (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyApp (TyApp (TyCon "Result") (TyCon "FrameError")) (TyCon "Int")))))))
 (DFunDef false "responseChunkDataEnd" ((PVar "input") (PVar "avail") (PVar "dataPos") (PVar "size")) (EBlock (DoLet false false (PVar "afterChunk") (EBinOp "+" (EVar "dataPos") (EVar "size"))) (DoExpr (EIf (EBinOp ">" (EVar "afterChunk") (EVar "avail")) (EApp (EVar "responseMalformed") (ELit (LString "http: truncated chunk body"))) (EIf (EBinOp ">" (EBinOp "+" (EVar "afterChunk") (ELit (LInt 2))) (EVar "avail")) (EApp (EVar "responseMalformed") (ELit (LString "http: truncated CRLF after chunk data"))) (EIf (EBinOp "||" (EBinOp "/=" (EApp (EApp (EVar "byteAt") (EVar "input")) (EVar "afterChunk")) (ELit (LInt 13))) (EBinOp "/=" (EApp (EApp (EVar "byteAt") (EVar "input")) (EBinOp "+" (EVar "afterChunk") (ELit (LInt 1)))) (ELit (LInt 10)))) (EApp (EVar "responseMalformed") (ELit (LString "http: missing CRLF after chunk data"))) (EApp (EVar "Ok") (EBinOp "+" (EVar "afterChunk") (ELit (LInt 2))))))))))
 (DTypeSig false "responseParseChunked" (TyFun (TyCon "Bytes") (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyFun (TyCon "Builder") (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyApp (TyApp (TyCon "Result") (TyCon "FrameError")) (TyTuple (TyCon "Bytes") (TyApp (TyCon "List") (TyCon "Header")) (TyCon "Int"))))))))))
-(DFunDef false "responseParseChunked" ((PVar "input") (PVar "avail") (PVar "pos") (PVar "out") (PVar "total") (PVar "count")) (EApp (EApp (EMethodRef "andThen") (EApp (EApp (EApp (EApp (EVar "responseChunkHeadStep") (EVar "input")) (EVar "avail")) (EVar "pos")) (EDictApp "count"))) (ELam ((PVar "head")) (EMatch (EVar "head") (arm (PCon "ResponseChunkEnd" (PVar "dataPos")) () (EApp (EApp (EMethodRef "andThen") (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EVar "responseParseFields") (EVar "input")) (EVar "avail")) (EVar "dataPos")) (EVar "dataPos")) (ELit (LInt 0))) (ELit (LInt 0))) (EListLit))) (ELam ((PVar "__do_x")) (EMatch (EVar "__do_x") (arm (PTuple (PVar "trailers") (PVar "finalPos") PWild) () (EApp (EVar "Ok") (ETuple (EApp (EVar "buildBytes") (EVar "out")) (EVar "trailers") (EVar "finalPos")))))))) (arm (PCon "ResponseChunkBody" (PVar "dataPos") (PVar "size")) () (EIf (EBinOp ">" (EBinOp "+" (EVar "total") (EVar "size")) (EVar "maxHttpBodyBytes")) (EApp (EVar "Err") (EApp (EVar "Fatal") (EApp (EVar "HttpResourceExcess") (ELit (LString "http: decoded body exceeds 5242880-byte resource limit"))))) (EApp (EApp (EMethodRef "andThen") (EApp (EApp (EApp (EApp (EVar "responseReadSliceAt") (EVar "input")) (EVar "avail")) (EVar "dataPos")) (EVar "size"))) (ELam ((PVar "__do_x")) (EMatch (EVar "__do_x") (arm (PTuple (PVar "chunk") PWild) () (EApp (EApp (EMethodRef "andThen") (EApp (EApp (EApp (EApp (EVar "responseChunkDataEnd") (EVar "input")) (EVar "avail")) (EVar "dataPos")) (EVar "size"))) (ELam ((PVar "next")) (ELet false (PLit LUnit) (EApp (EApp (EVar "emitBytes") (EVar "chunk")) (EVar "out")) (EApp (EApp (EApp (EApp (EApp (EApp (EVar "responseParseChunked") (EVar "input")) (EVar "avail")) (EVar "next")) (EVar "out")) (EBinOp "+" (EVar "total") (EVar "size"))) (EBinOp "+" (EDictApp "count") (ELit (LInt 1)))))))))))))))))
+(DFunDef false "responseParseChunked" ((PVar "input") (PVar "avail") (PVar "pos0") (PVar "out") (PVar "total0") (PVar "count0")) (ELetGroup ((lgb "go" (clause ((PVar "pos") (PVar "total") (PVar "count")) (EApp (EApp (EMethodRef "andThen") (EApp (EApp (EApp (EApp (EVar "responseChunkHeadStep") (EVar "input")) (EVar "avail")) (EVar "pos")) (EDictApp "count"))) (ELam ((PVar "head")) (EMatch (EVar "head") (arm (PCon "ResponseChunkEnd" (PVar "dataPos")) () (EApp (EApp (EMethodRef "andThen") (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EVar "responseParseFields") (EVar "input")) (EVar "avail")) (EVar "dataPos")) (EVar "dataPos")) (ELit (LInt 0))) (ELit (LInt 0))) (EListLit))) (ELam ((PVar "__do_x")) (EMatch (EVar "__do_x") (arm (PTuple (PVar "trailers") (PVar "finalPos") PWild) () (EApp (EVar "Ok") (ETuple (EApp (EVar "buildBytes") (EVar "out")) (EVar "trailers") (EVar "finalPos")))))))) (arm (PCon "ResponseChunkBody" (PVar "dataPos") (PVar "size")) () (EIf (EBinOp ">" (EBinOp "+" (EVar "total") (EVar "size")) (EVar "maxHttpBodyBytes")) (EApp (EVar "Err") (EApp (EVar "Fatal") (EApp (EVar "HttpResourceExcess") (ELit (LString "http: decoded body exceeds 5242880-byte resource limit"))))) (EApp (EApp (EMethodRef "andThen") (EApp (EApp (EApp (EApp (EVar "responseReadSliceAt") (EVar "input")) (EVar "avail")) (EVar "dataPos")) (EVar "size"))) (ELam ((PVar "__do_x")) (EMatch (EVar "__do_x") (arm (PTuple (PVar "chunk") PWild) () (EApp (EApp (EMethodRef "andThen") (EApp (EApp (EApp (EApp (EVar "responseChunkDataEnd") (EVar "input")) (EVar "avail")) (EVar "dataPos")) (EVar "size"))) (ELam ((PVar "next")) (ELet false (PLit LUnit) (EApp (EApp (EVar "emitBytes") (EVar "chunk")) (EVar "out")) (EApp (EApp (EApp (EVar "go") (EVar "next")) (EBinOp "+" (EVar "total") (EVar "size"))) (EBinOp "+" (EDictApp "count") (ELit (LInt 1))))))))))))))))))) (EApp (EApp (EApp (EVar "go") (EVar "pos0")) (EVar "total0")) (EVar "count0"))))
 (DTypeSig false "responseParseBody" (TyFun (TyCon "BodyMode") (TyFun (TyCon "Bytes") (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyApp (TyApp (TyCon "Result") (TyCon "FrameError")) (TyTuple (TyCon "Bytes") (TyApp (TyCon "List") (TyCon "Header")) (TyCon "Int"))))))))
 (DFunDef false "responseParseBody" ((PCon "NoBody") PWild PWild (PVar "pos")) (EApp (EVar "Ok") (ETuple (EMethodRef "empty") (EListLit) (EVar "pos"))))
 (DFunDef false "responseParseBody" ((PCon "FixedBody" (PVar "size")) (PVar "input") (PVar "avail") (PVar "pos")) (EApp (EApp (EMethodRef "andThen") (EApp (EApp (EApp (EApp (EVar "responseReadSliceAt") (EVar "input")) (EVar "avail")) (EVar "pos")) (EVar "size"))) (ELam ((PVar "__do_x")) (EMatch (EVar "__do_x") (arm (PTuple (PVar "body") (PVar "finalPos")) () (EApp (EVar "Ok") (ETuple (EVar "body") (EListLit) (EVar "finalPos"))))))))
@@ -3266,7 +3282,7 @@ decodeRequestBody (Request _ _ headers _ packed _) = do
 (DTest false "response malformed diagnostics use the public http vocabulary" (EMatch (EApp (EVar "parseResponseClassified") (EApp (EVar "encodeUtf8") (ELit (LString "")))) (arm (PCon "Err" (PCon "HttpMalformed" (PVar "message"))) () (EApp (EApp (EVar "expectEqual") (ELit (LString "http: truncated status line; expected CRLF"))) (EVar "message"))) (arm PWild () (EApp (EVar "expectTrue") (EVar "False")))))
 (DTest false "response resource diagnostics use the public http vocabulary" (EBlock (DoLet false false (PVar "input") (EApp (EVar "encodeUtf8") (ELit (LString "HTTP/1.1 200 OK\r\ntransfer-encoding: chunked\r\n\r\n100001\r\n")))) (DoExpr (EMatch (EApp (EVar "parseResponseClassified") (EVar "input")) (arm (PCon "Err" (PCon "HttpResourceExcess" (PVar "message"))) () (EApp (EApp (EVar "expectEqual") (ELit (LString "http: chunk size exceeds resource limit"))) (EVar "message"))) (arm PWild () (EApp (EVar "expectTrue") (EVar "False")))))))
 (DTypeSig false "responseScanChunkedEnd" (TyFun (TyCon "Bytes") (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyApp (TyApp (TyCon "Result") (TyCon "FrameError")) (TyCon "Int")))))))
-(DFunDef false "responseScanChunkedEnd" ((PVar "input") (PVar "avail") (PVar "pos") (PVar "count")) (EApp (EApp (EMethodRef "andThen") (EApp (EApp (EApp (EApp (EVar "responseChunkHeadStep") (EVar "input")) (EVar "avail")) (EVar "pos")) (EDictApp "count"))) (ELam ((PVar "head")) (EMatch (EVar "head") (arm (PCon "ResponseChunkEnd" (PVar "dataPos")) () (EApp (EApp (EMethodRef "andThen") (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EVar "responseParseFields") (EVar "input")) (EVar "avail")) (EVar "dataPos")) (EVar "dataPos")) (ELit (LInt 0))) (ELit (LInt 0))) (EListLit))) (ELam ((PVar "__do_x")) (EMatch (EVar "__do_x") (arm (PTuple PWild (PVar "finalPos") PWild) () (EApp (EVar "Ok") (EVar "finalPos"))))))) (arm (PCon "ResponseChunkBody" (PVar "dataPos") (PVar "size")) () (EApp (EApp (EMethodRef "andThen") (EApp (EApp (EApp (EApp (EVar "responseChunkDataEnd") (EVar "input")) (EVar "avail")) (EVar "dataPos")) (EVar "size"))) (ELam ((PVar "next")) (EApp (EApp (EApp (EApp (EVar "responseScanChunkedEnd") (EVar "input")) (EVar "avail")) (EVar "next")) (EBinOp "+" (EDictApp "count") (ELit (LInt 1)))))))))))
+(DFunDef false "responseScanChunkedEnd" ((PVar "input") (PVar "avail") (PVar "pos0") (PVar "count0")) (ELetGroup ((lgb "go" (clause ((PVar "pos") (PVar "count")) (EApp (EApp (EMethodRef "andThen") (EApp (EApp (EApp (EApp (EVar "responseChunkHeadStep") (EVar "input")) (EVar "avail")) (EVar "pos")) (EDictApp "count"))) (ELam ((PVar "head")) (EMatch (EVar "head") (arm (PCon "ResponseChunkEnd" (PVar "dataPos")) () (EApp (EApp (EMethodRef "andThen") (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EVar "responseParseFields") (EVar "input")) (EVar "avail")) (EVar "dataPos")) (EVar "dataPos")) (ELit (LInt 0))) (ELit (LInt 0))) (EListLit))) (ELam ((PVar "__do_x")) (EMatch (EVar "__do_x") (arm (PTuple PWild (PVar "finalPos") PWild) () (EApp (EVar "Ok") (EVar "finalPos"))))))) (arm (PCon "ResponseChunkBody" (PVar "dataPos") (PVar "size")) () (EApp (EApp (EMethodRef "andThen") (EApp (EApp (EApp (EApp (EVar "responseChunkDataEnd") (EVar "input")) (EVar "avail")) (EVar "dataPos")) (EVar "size"))) (ELam ((PVar "next")) (EApp (EApp (EVar "go") (EVar "next")) (EBinOp "+" (EDictApp "count") (ELit (LInt 1))))))))))))) (EApp (EApp (EVar "go") (EVar "pos0")) (EVar "count0"))))
 (DTypeSig false "responseScanBodyEnd" (TyFun (TyCon "BodyMode") (TyFun (TyCon "Bytes") (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyApp (TyApp (TyCon "Result") (TyCon "FrameError")) (TyCon "Int")))))))
 (DFunDef false "responseScanBodyEnd" ((PCon "NoBody") PWild PWild (PVar "pos")) (EApp (EVar "Ok") (EVar "pos")))
 (DFunDef false "responseScanBodyEnd" ((PCon "FixedBody" (PVar "size")) PWild (PVar "avail") (PVar "pos")) (EIf (EBinOp ">" (EBinOp "+" (EVar "pos") (EVar "size")) (EVar "avail")) (EApp (EVar "responseMalformed") (ELit (LString "http: declared body is still arriving"))) (EApp (EVar "Ok") (EBinOp "+" (EVar "pos") (EVar "size")))))
@@ -3313,7 +3329,7 @@ decodeRequestBody (Request _ _ headers _ packed _) = do
 (DTypeSig false "percentNibble" (TyFun (TyCon "Int") (TyApp (TyCon "Option") (TyCon "Int"))))
 (DFunDef false "percentNibble" ((PVar "byte")) (EApp (EVar "hexDigit") (EVar "byte")))
 (DTypeSig false "decodeQueryBytes" (TyFun (TyCon "Bytes") (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyFun (TyCon "Builder") (TyApp (TyApp (TyCon "Result") (TyCon "String")) (TyCon "Unit")))))))
-(DFunDef false "decodeQueryBytes" ((PVar "input") (PVar "pos") (PVar "end") (PVar "out")) (EIf (EBinOp ">=" (EVar "pos") (EVar "end")) (EApp (EVar "Ok") (ELit LUnit)) (EIf (EBinOp "/=" (EApp (EApp (EVar "byteAt") (EVar "input")) (EVar "pos")) (ELit (LInt 37))) (EBlock (DoLet false false (PLit LUnit) (EApp (EApp (EVar "emitU8") (EApp (EApp (EMethodRef "index") (EVar "input")) (EVar "pos"))) (EVar "out"))) (DoExpr (EApp (EApp (EApp (EApp (EVar "decodeQueryBytes") (EVar "input")) (EBinOp "+" (EVar "pos") (ELit (LInt 1)))) (EVar "end")) (EVar "out")))) (EIf (EBinOp ">=" (EBinOp "+" (EVar "pos") (ELit (LInt 2))) (EVar "end")) (EApp (EVar "Err") (ELit (LString "http: malformed percent escape in query"))) (EMatch (ETuple (EApp (EVar "percentNibble") (EApp (EApp (EVar "byteAt") (EVar "input")) (EBinOp "+" (EVar "pos") (ELit (LInt 1))))) (EApp (EVar "percentNibble") (EApp (EApp (EVar "byteAt") (EVar "input")) (EBinOp "+" (EVar "pos") (ELit (LInt 2)))))) (arm (PTuple (PCon "Some" (PVar "high")) (PCon "Some" (PVar "low"))) () (EBlock (DoLet false false (PLit LUnit) (EApp (EApp (EVar "emitU8") (EApp (EMethodRef "fromInt") (EBinOp "+" (EBinOp "*" (EVar "high") (ELit (LInt 16))) (EVar "low")))) (EVar "out"))) (DoExpr (EApp (EApp (EApp (EApp (EVar "decodeQueryBytes") (EVar "input")) (EBinOp "+" (EVar "pos") (ELit (LInt 3)))) (EVar "end")) (EVar "out"))))) (arm PWild () (EApp (EVar "Err") (ELit (LString "http: malformed percent escape in query")))))))))
+(DFunDef false "decodeQueryBytes" ((PVar "input") (PVar "pos0") (PVar "end") (PVar "out")) (ELetGroup ((lgb "go" (clause ((PVar "pos")) (EIf (EBinOp ">=" (EVar "pos") (EVar "end")) (EApp (EVar "Ok") (ELit LUnit)) (EIf (EBinOp "/=" (EApp (EApp (EVar "byteAt") (EVar "input")) (EVar "pos")) (ELit (LInt 37))) (EBlock (DoLet false false (PLit LUnit) (EApp (EApp (EVar "emitU8") (EApp (EApp (EMethodRef "index") (EVar "input")) (EVar "pos"))) (EVar "out"))) (DoExpr (EApp (EVar "go") (EBinOp "+" (EVar "pos") (ELit (LInt 1)))))) (EIf (EBinOp ">=" (EBinOp "+" (EVar "pos") (ELit (LInt 2))) (EVar "end")) (EApp (EVar "Err") (ELit (LString "http: malformed percent escape in query"))) (EMatch (ETuple (EApp (EVar "percentNibble") (EApp (EApp (EVar "byteAt") (EVar "input")) (EBinOp "+" (EVar "pos") (ELit (LInt 1))))) (EApp (EVar "percentNibble") (EApp (EApp (EVar "byteAt") (EVar "input")) (EBinOp "+" (EVar "pos") (ELit (LInt 2)))))) (arm (PTuple (PCon "Some" (PVar "high")) (PCon "Some" (PVar "low"))) () (EBlock (DoLet false false (PLit LUnit) (EApp (EApp (EVar "emitU8") (EApp (EMethodRef "fromInt") (EBinOp "+" (EBinOp "*" (EVar "high") (ELit (LInt 16))) (EVar "low")))) (EVar "out"))) (DoExpr (EApp (EVar "go") (EBinOp "+" (EVar "pos") (ELit (LInt 3))))))) (arm PWild () (EApp (EVar "Err") (ELit (LString "http: malformed percent escape in query"))))))))))) (EApp (EVar "go") (EVar "pos0"))))
 (DTypeSig false "continuation" (TyFun (TyCon "Int") (TyCon "Bool")))
 (DFunDef false "continuation" ((PVar "byte")) (EBinOp "&&" (EBinOp ">=" (EVar "byte") (ELit (LInt 128))) (EBinOp "<=" (EVar "byte") (ELit (LInt 191)))))
 (DTypeSig false "utf8Step" (TyFun (TyCon "Bytes") (TyFun (TyCon "Int") (TyApp (TyCon "Option") (TyTuple (TyCon "Int") (TyCon "Int"))))))
@@ -3335,9 +3351,9 @@ decodeRequestBody (Request _ _ headers _ packed _) = do
 (DTypeSig false "validMediaBytes" (TyFun (TyCon "Bytes") (TyFun (TyCon "Int") (TyCon "Bool"))))
 (DFunDef false "validMediaBytes" ((PVar "bytes") (PVar "i")) (EIf (EBinOp ">=" (EVar "i") (EApp (EVar "B.length") (EVar "bytes"))) (EVar "True") (EBlock (DoLet false false (PVar "byte") (EApp (EApp (EVar "byteAt") (EVar "bytes")) (EVar "i"))) (DoExpr (EBinOp "&&" (EBinOp "||" (EBinOp "==" (EVar "byte") (ELit (LInt 9))) (EBinOp "&&" (EBinOp ">=" (EVar "byte") (ELit (LInt 32))) (EBinOp "<=" (EVar "byte") (ELit (LInt 126))))) (EApp (EApp (EVar "validMediaBytes") (EVar "bytes")) (EBinOp "+" (EVar "i") (ELit (LInt 1)))))))))
 (DTypeSig false "scanMediaQuoted" (TyFun (TyCon "Bytes") (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyApp (TyApp (TyCon "Result") (TyCon "String")) (TyCon "Int"))))))
-(DFunDef false "scanMediaQuoted" ((PVar "value") (PVar "pos") (PVar "end")) (EIf (EBinOp ">=" (EVar "pos") (EVar "end")) (EApp (EVar "Err") (ELit (LString "http: unterminated quoted media-type parameter"))) (EIf (EBinOp "==" (EApp (EApp (EVar "byteAt") (EVar "value")) (EVar "pos")) (ELit (LInt 34))) (EApp (EVar "Ok") (EBinOp "+" (EVar "pos") (ELit (LInt 1)))) (EIf (EBinOp "==" (EApp (EApp (EVar "byteAt") (EVar "value")) (EVar "pos")) (ELit (LInt 92))) (EIf (EBinOp "||" (EBinOp "||" (EBinOp ">=" (EBinOp "+" (EVar "pos") (ELit (LInt 1))) (EVar "end")) (EBinOp "<" (EApp (EApp (EVar "byteAt") (EVar "value")) (EBinOp "+" (EVar "pos") (ELit (LInt 1)))) (ELit (LInt 32)))) (EBinOp ">" (EApp (EApp (EVar "byteAt") (EVar "value")) (EBinOp "+" (EVar "pos") (ELit (LInt 1)))) (ELit (LInt 126)))) (EApp (EVar "Err") (ELit (LString "http: invalid quoted media-type parameter"))) (EApp (EApp (EApp (EVar "scanMediaQuoted") (EVar "value")) (EBinOp "+" (EVar "pos") (ELit (LInt 2)))) (EVar "end"))) (EIf (EBinOp "||" (EBinOp "<" (EApp (EApp (EVar "byteAt") (EVar "value")) (EVar "pos")) (ELit (LInt 32))) (EBinOp "==" (EApp (EApp (EVar "byteAt") (EVar "value")) (EVar "pos")) (ELit (LInt 127)))) (EApp (EVar "Err") (ELit (LString "http: control byte in media-type parameter"))) (EApp (EApp (EApp (EVar "scanMediaQuoted") (EVar "value")) (EBinOp "+" (EVar "pos") (ELit (LInt 1)))) (EVar "end")))))))
+(DFunDef false "scanMediaQuoted" ((PVar "value") (PVar "pos0") (PVar "end")) (ELetGroup ((lgb "go" (clause ((PVar "pos")) (EIf (EBinOp ">=" (EVar "pos") (EVar "end")) (EApp (EVar "Err") (ELit (LString "http: unterminated quoted media-type parameter"))) (EIf (EBinOp "==" (EApp (EApp (EVar "byteAt") (EVar "value")) (EVar "pos")) (ELit (LInt 34))) (EApp (EVar "Ok") (EBinOp "+" (EVar "pos") (ELit (LInt 1)))) (EIf (EBinOp "==" (EApp (EApp (EVar "byteAt") (EVar "value")) (EVar "pos")) (ELit (LInt 92))) (EIf (EBinOp "||" (EBinOp "||" (EBinOp ">=" (EBinOp "+" (EVar "pos") (ELit (LInt 1))) (EVar "end")) (EBinOp "<" (EApp (EApp (EVar "byteAt") (EVar "value")) (EBinOp "+" (EVar "pos") (ELit (LInt 1)))) (ELit (LInt 32)))) (EBinOp ">" (EApp (EApp (EVar "byteAt") (EVar "value")) (EBinOp "+" (EVar "pos") (ELit (LInt 1)))) (ELit (LInt 126)))) (EApp (EVar "Err") (ELit (LString "http: invalid quoted media-type parameter"))) (EApp (EVar "go") (EBinOp "+" (EVar "pos") (ELit (LInt 2))))) (EIf (EBinOp "||" (EBinOp "<" (EApp (EApp (EVar "byteAt") (EVar "value")) (EVar "pos")) (ELit (LInt 32))) (EBinOp "==" (EApp (EApp (EVar "byteAt") (EVar "value")) (EVar "pos")) (ELit (LInt 127)))) (EApp (EVar "Err") (ELit (LString "http: control byte in media-type parameter"))) (EApp (EVar "go") (EBinOp "+" (EVar "pos") (ELit (LInt 1))))))))))) (EApp (EVar "go") (EVar "pos0"))))
 (DTypeSig false "parseMediaParameters" (TyFun (TyCon "Bytes") (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyApp (TyApp (TyCon "Result") (TyCon "String")) (TyCon "Unit")))))))
-(DFunDef false "parseMediaParameters" ((PVar "value") (PVar "pos") (PVar "end") (PVar "count")) (EBlock (DoLet false false (PVar "start") (EApp (EApp (EApp (EVar "skipOws") (EVar "value")) (EVar "pos")) (EVar "end"))) (DoExpr (EIf (EBinOp "==" (EVar "start") (EVar "end")) (EApp (EVar "Ok") (ELit LUnit)) (EIf (EBinOp ">=" (EDictApp "count") (ELit (LInt 32))) (EApp (EVar "Err") (ELit (LString "http: media type has too many parameters"))) (EIf (EBinOp "/=" (EApp (EApp (EVar "byteAt") (EVar "value")) (EVar "start")) (ELit (LInt 59))) (EApp (EVar "Err") (ELit (LString "http: invalid media-type parameter separator"))) (EBlock (DoLet false false (PVar "nameStart") (EApp (EApp (EApp (EVar "skipOws") (EVar "value")) (EBinOp "+" (EVar "start") (ELit (LInt 1)))) (EVar "end"))) (DoLet false false (PVar "nameEnd") (EApp (EApp (EApp (EVar "scanTokenEnd") (EVar "value")) (EVar "nameStart")) (EVar "end"))) (DoExpr (EIf (EBinOp "==" (EVar "nameEnd") (EVar "nameStart")) (EApp (EVar "Err") (ELit (LString "http: empty media-type parameter name"))) (EBlock (DoLet false false (PVar "afterName") (EApp (EApp (EApp (EVar "skipOws") (EVar "value")) (EVar "nameEnd")) (EVar "end"))) (DoExpr (EIf (EBinOp "||" (EBinOp ">=" (EVar "afterName") (EVar "end")) (EBinOp "/=" (EApp (EApp (EVar "byteAt") (EVar "value")) (EVar "afterName")) (ELit (LInt 61)))) (EApp (EVar "Err") (ELit (LString "http: media-type parameter requires a value"))) (EBlock (DoLet false false (PVar "valueStart") (EApp (EApp (EApp (EVar "skipOws") (EVar "value")) (EBinOp "+" (EVar "afterName") (ELit (LInt 1)))) (EVar "end"))) (DoExpr (EIf (EBinOp ">=" (EVar "valueStart") (EVar "end")) (EApp (EVar "Err") (ELit (LString "http: media-type parameter requires a value"))) (EApp (EApp (EMethodRef "andThen") (EIf (EBinOp "==" (EApp (EApp (EVar "byteAt") (EVar "value")) (EVar "valueStart")) (ELit (LInt 34))) (EApp (EApp (EApp (EVar "scanMediaQuoted") (EVar "value")) (EBinOp "+" (EVar "valueStart") (ELit (LInt 1)))) (EVar "end")) (EBlock (DoLet false false (PVar "tokenEnd") (EApp (EApp (EApp (EVar "scanTokenEnd") (EVar "value")) (EVar "valueStart")) (EVar "end"))) (DoExpr (EIf (EBinOp "==" (EVar "tokenEnd") (EVar "valueStart")) (EApp (EVar "Err") (ELit (LString "http: invalid media-type parameter value"))) (EApp (EVar "Ok") (EVar "tokenEnd"))))))) (ELam ((PVar "valueEnd")) (EApp (EApp (EApp (EApp (EVar "parseMediaParameters") (EVar "value")) (EVar "valueEnd")) (EVar "end")) (EBinOp "+" (EDictApp "count") (ELit (LInt 1)))))))))))))))))))))
+(DFunDef false "parseMediaParameters" ((PVar "value") (PVar "pos0") (PVar "end") (PVar "count0")) (ELetGroup ((lgb "go" (clause ((PVar "pos") (PVar "count")) (EBlock (DoLet false false (PVar "start") (EApp (EApp (EApp (EVar "skipOws") (EVar "value")) (EVar "pos")) (EVar "end"))) (DoExpr (EIf (EBinOp "==" (EVar "start") (EVar "end")) (EApp (EVar "Ok") (ELit LUnit)) (EIf (EBinOp ">=" (EDictApp "count") (ELit (LInt 32))) (EApp (EVar "Err") (ELit (LString "http: media type has too many parameters"))) (EIf (EBinOp "/=" (EApp (EApp (EVar "byteAt") (EVar "value")) (EVar "start")) (ELit (LInt 59))) (EApp (EVar "Err") (ELit (LString "http: invalid media-type parameter separator"))) (EBlock (DoLet false false (PVar "nameStart") (EApp (EApp (EApp (EVar "skipOws") (EVar "value")) (EBinOp "+" (EVar "start") (ELit (LInt 1)))) (EVar "end"))) (DoLet false false (PVar "nameEnd") (EApp (EApp (EApp (EVar "scanTokenEnd") (EVar "value")) (EVar "nameStart")) (EVar "end"))) (DoExpr (EIf (EBinOp "==" (EVar "nameEnd") (EVar "nameStart")) (EApp (EVar "Err") (ELit (LString "http: empty media-type parameter name"))) (EBlock (DoLet false false (PVar "afterName") (EApp (EApp (EApp (EVar "skipOws") (EVar "value")) (EVar "nameEnd")) (EVar "end"))) (DoExpr (EIf (EBinOp "||" (EBinOp ">=" (EVar "afterName") (EVar "end")) (EBinOp "/=" (EApp (EApp (EVar "byteAt") (EVar "value")) (EVar "afterName")) (ELit (LInt 61)))) (EApp (EVar "Err") (ELit (LString "http: media-type parameter requires a value"))) (EBlock (DoLet false false (PVar "valueStart") (EApp (EApp (EApp (EVar "skipOws") (EVar "value")) (EBinOp "+" (EVar "afterName") (ELit (LInt 1)))) (EVar "end"))) (DoExpr (EIf (EBinOp ">=" (EVar "valueStart") (EVar "end")) (EApp (EVar "Err") (ELit (LString "http: media-type parameter requires a value"))) (EApp (EApp (EMethodRef "andThen") (EIf (EBinOp "==" (EApp (EApp (EVar "byteAt") (EVar "value")) (EVar "valueStart")) (ELit (LInt 34))) (EApp (EApp (EApp (EVar "scanMediaQuoted") (EVar "value")) (EBinOp "+" (EVar "valueStart") (ELit (LInt 1)))) (EVar "end")) (EBlock (DoLet false false (PVar "tokenEnd") (EApp (EApp (EApp (EVar "scanTokenEnd") (EVar "value")) (EVar "valueStart")) (EVar "end"))) (DoExpr (EIf (EBinOp "==" (EVar "tokenEnd") (EVar "valueStart")) (EApp (EVar "Err") (ELit (LString "http: invalid media-type parameter value"))) (EApp (EVar "Ok") (EVar "tokenEnd"))))))) (ELam ((PVar "valueEnd")) (EApp (EApp (EVar "go") (EVar "valueEnd")) (EBinOp "+" (EDictApp "count") (ELit (LInt 1))))))))))))))))))))))) (EApp (EApp (EVar "go") (EVar "pos0")) (EVar "count0"))))
 (DTypeSig true "parseMediaType" (TyFun (TyCon "Bytes") (TyApp (TyApp (TyCon "Result") (TyCon "String")) (TyCon "MediaType"))))
 (DFunDef false "parseMediaType" ((PVar "value")) (EBlock (DoLet false false (PVar "end") (EApp (EVar "B.length") (EVar "value"))) (DoExpr (EIf (EBinOp "||" (EBinOp "==" (EVar "end") (ELit (LInt 0))) (EBinOp ">" (EVar "end") (ELit (LInt 4096)))) (EApp (EVar "Err") (ELit (LString "http: media type exceeds its 4096-byte resource limit"))) (EIf (EApp (EVar "not") (EApp (EApp (EVar "validMediaBytes") (EVar "value")) (ELit (LInt 0)))) (EApp (EVar "Err") (ELit (LString "http: media type must be bounded ASCII"))) (EBlock (DoLet false false (PVar "typeEnd") (EApp (EApp (EApp (EVar "scanTokenEnd") (EVar "value")) (ELit (LInt 0))) (EVar "end"))) (DoExpr (EIf (EBinOp "||" (EBinOp "||" (EBinOp "==" (EVar "typeEnd") (ELit (LInt 0))) (EBinOp ">=" (EVar "typeEnd") (EVar "end"))) (EBinOp "/=" (EApp (EApp (EVar "byteAt") (EVar "value")) (EVar "typeEnd")) (ELit (LInt 47)))) (EApp (EVar "Err") (ELit (LString "http: invalid media type"))) (EBlock (DoLet false false (PVar "subtypeStart") (EBinOp "+" (EVar "typeEnd") (ELit (LInt 1)))) (DoLet false false (PVar "subtypeEnd") (EApp (EApp (EApp (EVar "scanTokenEnd") (EVar "value")) (EVar "subtypeStart")) (EVar "end"))) (DoExpr (EIf (EBinOp "==" (EVar "subtypeEnd") (EVar "subtypeStart")) (EApp (EVar "Err") (ELit (LString "http: invalid media subtype"))) (EApp (EApp (EMethodRef "andThen") (EApp (EApp (EApp (EApp (EVar "parseMediaParameters") (EVar "value")) (EVar "subtypeEnd")) (EVar "end")) (ELit (LInt 0)))) (ELam ((PVar "__do_x")) (EMatch (EVar "__do_x") (arm (PLit LUnit) () (EApp (EVar "Ok") (EApp (EApp (EVar "MediaType") (EApp (EApp (EApp (EVar "lowerAscii") (EVar "value")) (ELit (LInt 0))) (EVar "typeEnd"))) (EApp (EApp (EApp (EVar "lowerAscii") (EVar "value")) (EVar "subtypeStart")) (EVar "subtypeEnd")))))))))))))))))))
 (DTypeSig false "contentType" (TyFun (TyApp (TyCon "List") (TyCon "Header")) (TyApp (TyApp (TyCon "Result") (TyCon "String")) (TyCon "MediaType"))))

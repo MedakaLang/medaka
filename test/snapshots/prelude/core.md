@@ -1,5 +1,5 @@
 # META
-source_lines=2486
+source_lines=2498
 stages=TYPES
 diagnostics=TYPES
 # SOURCE
@@ -408,13 +408,15 @@ export impl Debug (List a) requires Debug a where
 -- prepended to `acc` from the back; mirrors `debugListItems` but walks by
 -- index (arrays aren't cons-lists).
 debugArrayItems : Debug a => Array a -> Int -> Int -> List String -> List String
-debugArrayItems arr lo j acc
-  | j < lo = acc
-  | otherwise =
-    let piece = debug (arrayGetUnsafe j arr)
-    debugArrayItems arr lo (j - 1) (match acc
-      [] => [piece]
-      _ => piece :: ", " :: acc)
+debugArrayItems arr lo j0 acc0 = go j0 acc0
+  where
+    go j acc
+      | j < lo = acc
+      | otherwise =
+        let piece = debug (arrayGetUnsafe j arr)
+        go (j - 1) (match acc
+          [] => [piece]
+          _ => piece :: ", " :: acc)
 
 -- Lives in `core.mdk` (not `array.mdk`) so array literals render without an
 -- explicit `import array`.
@@ -433,13 +435,15 @@ export impl Eq (Array a) requires Eq a where
     if arrayLength a /= arrayLength b then False else eqGo a b 0 (arrayLength a)
 
 eqGo : Eq a => Array a -> Array a -> Int -> Int -> Bool
-eqGo a b i n =
-  if i >= n then
-    True
-  else if eq (arrayGetUnsafe i a) (arrayGetUnsafe i b) then
-    eqGo a b (i + 1) n
-  else
-    False
+eqGo a b i0 n = go i0
+  where
+    go i =
+      if i >= n then
+        True
+      else if eq (arrayGetUnsafe i a) (arrayGetUnsafe i b) then
+        go (i + 1)
+      else
+        False
 
 {- | Arrays compare lexicographically, exactly as the lists of their
    elements would. -}
@@ -474,26 +478,24 @@ arrFoldUntilGo : (b -> a -> <e> ControlFlow b) ->
   Int ->
   b ->
   <e> b
-arrFoldUntilGo f arr i n acc =
-  if i >= n then
-    acc
-  else match f acc (arrayGetUnsafe i arr)
-    Continue acc' => arrFoldUntilGo f arr (i + 1) n acc'
-    Break r => r
+arrFoldUntilGo f arr i0 n acc0 = go i0 acc0
+  where
+    go i acc =
+      if i >= n then
+        acc
+      else match f acc (arrayGetUnsafe i arr)
+        Continue acc' => go (i + 1) acc'
+        Break r => r
 
 arrFoldGo : (b -> a -> <e> b) -> Array a -> Int -> Int -> b -> <e> b
-arrFoldGo f arr i n acc =
-  if i >= n then
-    acc
-  else
-    arrFoldGo f arr (i + 1) n (f acc (arrayGetUnsafe i arr))
+arrFoldGo f arr i0 n acc0 = go i0 acc0
+  where
+    go i acc = if i >= n then acc else go (i + 1) (f acc (arrayGetUnsafe i arr))
 
 arrFoldRightGo : (a -> b -> <e> b) -> Array a -> Int -> b -> <e> b
-arrFoldRightGo f arr i acc =
-  if i < 0 then
-    acc
-  else
-    arrFoldRightGo f arr (i - 1) (f (arrayGetUnsafe i arr) acc)
+arrFoldRightGo f arr i0 acc0 = go i0 acc0
+  where
+    go i acc = if i < 0 then acc else go (i - 1) (f (arrayGetUnsafe i arr) acc)
 
 export impl Mappable Array where
   map f arr = arrayMakeWith (arrayLength arr) (i => f (arrayGetUnsafe i arr))
@@ -602,13 +604,15 @@ displayArrayItems : Display a =>
   Int ->
   List String ->
   List String
-displayArrayItems arr lo j acc
-  | j < lo = acc
-  | otherwise =
-    let piece = display (arrayGetUnsafe j arr)
-    displayArrayItems arr lo (j - 1) (match acc
-      [] => [piece]
-      _ => piece :: ", " :: acc)
+displayArrayItems arr lo j0 acc0 = go j0 acc0
+  where
+    go j acc
+      | j < lo = acc
+      | otherwise =
+        let piece = display (arrayGetUnsafe j arr)
+        go (j - 1) (match acc
+          [] => [piece]
+          _ => piece :: ", " :: acc)
 
 {- | Arrays render in their literal syntax, `[|1, 2, 3|]`, with the elements
    unquoted.
@@ -689,19 +693,21 @@ derivedArgNeedsParens s =
       c == '-' || derivedHasTopLevelSpace chars 0 (stringLength s) 0
 
 derivedHasTopLevelSpace : Array Char -> Int -> Int -> Int -> Bool
-derivedHasTopLevelSpace chars i n depth =
-  if i >= n then
-    False
-  else
-    let c = arrayGetUnsafe i chars
-    if c == ' ' && depth == 0 then
-      True
-    else if c == '(' || c == '[' || c == '{' then
-      derivedHasTopLevelSpace chars (i + 1) n (depth + 1)
-    else if c == ')' || c == ']' || c == '}' then
-      derivedHasTopLevelSpace chars (i + 1) n (depth - 1)
-    else
-      derivedHasTopLevelSpace chars (i + 1) n depth
+derivedHasTopLevelSpace chars i0 n depth0 = go i0 depth0
+  where
+    go i depth =
+      if i >= n then
+        False
+      else
+        let c = arrayGetUnsafe i chars
+        if c == ' ' && depth == 0 then
+          True
+        else if c == '(' || c == '[' || c == '{' then
+          go (i + 1) (depth + 1)
+        else if c == ')' || c == ']' || c == '}' then
+          go (i + 1) (depth - 1)
+        else
+          go (i + 1) depth
 
 -- # Hashing
 
@@ -782,11 +788,13 @@ export impl Hashable (Array a) requires Hashable a where
   hash arr = hashArrGo 0 arr 0 (arrayLength arr)
 
 hashArrGo : Hashable a => Int -> Array a -> Int -> Int -> Int
-hashArrGo acc arr i n =
-  if i >= n then
-    acc
-  else
-    hashArrGo (derivedHashStep acc (hash (arrayGetUnsafe i arr))) arr (i + 1) n
+hashArrGo acc0 arr i0 n = go acc0 i0
+  where
+    go acc i =
+      if i >= n then
+        acc
+      else
+        go (derivedHashStep acc (hash (arrayGetUnsafe i arr))) (i + 1)
 
 export impl Hashable (a, b) requires Hashable a, Hashable b where
   hash (a, b) = derivedHashStep (hash a) (hash b)
@@ -1507,8 +1515,10 @@ listIndexAt site xs i =
 -- to the base case, so the out-of-bounds message can name the index the caller
 -- passed rather than the leftover 0 from the recursion.
 indexGo : Int -> List a -> Int -> Int -> a
-indexGo site [] i0 _ = indexErrorAtSite site i0
-indexGo site (h :: t) i0 i = if i <= 0 then h else indexGo site t i0 (i - 1)
+indexGo site xs0 i0 i1 = go xs0 i1
+  where
+    go [] _ = indexErrorAtSite site i0
+    go (h :: t) i = if i <= 0 then h else go t (i - 1)
 
 {- | The character at a codepoint position: `s[i]`.
 
@@ -1600,6 +1610,8 @@ sliceInclusiveEnd hi = if hi == intMaxBound then hi else hi + 1
 -- index is still below `hi` is the `hi > length` half of `Slice (Array a)`'s
 -- guard, decided here so the walk doubles as the length check.
 sliceListGo : List a -> Int -> Int -> Int -> List a
+-- Bound: list built in tail position modulo cons: a where-local go loses the constant-stack loop until the lambda-lift pass (#4878); convert then.
+-- lint-disable-next-line rule-threaded-invariant
 sliceListGo [] i lo hi
   | i >= hi = []
   | otherwise = sliceError lo (sliceLastIndex hi)

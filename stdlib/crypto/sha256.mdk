@@ -121,12 +121,14 @@ scheduleWord byteOf i =
       b3)
 
 fillFirst16 : Array U32 -> (Int -> Int) -> Int -> Unit
-fillFirst16 w byteOf i =
-  if i >= 16 then
-    ()
-  else
-    setInPlace i (scheduleWord byteOf i) w
-    fillFirst16 w byteOf (i + 1)
+fillFirst16 w byteOf i0 = go i0
+  where
+    go i =
+      if i >= 16 then
+        ()
+      else
+        setInPlace i (scheduleWord byteOf i) w
+        go (i + 1)
 
 extendSchedule : Array U32 -> Int -> Unit
 extendSchedule w i =
@@ -187,30 +189,32 @@ compressBlock byteOf (h0, h1, h2, h3, h4, h5, h6, h7) =
 -- Fold every FULL 64-byte block of `msg` directly by offset — no copy of
 -- the message is ever made.
 processFullBlocks : ByteBlock -> Int -> State -> Int -> State
-processFullBlocks msg numFull st blockIdx =
-  if blockIdx >= numFull then
-    st
-  else
-    let base = blockIdx * 64
-    processFullBlocks
-      msg
-      numFull
-      (compressBlock (j => byteBlockGetUnsafe (base + j) msg) st)
-      (blockIdx + 1)
+processFullBlocks msg numFull st0 blockIdx0 = go st0 blockIdx0
+  where
+    go st blockIdx =
+      if blockIdx >= numFull then
+        st
+      else
+        let base = blockIdx * 64
+        go
+          (compressBlock (j => byteBlockGetUnsafe (base + j) msg) st)
+          (blockIdx + 1)
 
 -- The length, in bits, of `padLength`-byte messages fits big-endian into
 -- the last 8 bytes of the padded block: writes it there.
 writeLenGo : ByteBlock -> Int -> Int -> Int -> Unit
-writeLenGo out offset bitLen i =
-  if i >= 8 then
-    ()
-  else
-    let shiftAmt = (7 - i) * 8
-    byteBlockSetUnsafe
-      (offset + i)
-      (bitAnd (shiftRight bitLen shiftAmt) 255)
-      out
-    writeLenGo out offset bitLen (i + 1)
+writeLenGo out offset bitLen i0 = go i0
+  where
+    go i =
+      if i >= 8 then
+        ()
+      else
+        let shiftAmt = (7 - i) * 8
+        byteBlockSetUnsafe
+          (offset + i)
+          (bitAnd (shiftRight bitLen shiftAmt) 255)
+          out
+        go (i + 1)
 
 -- The number of bytes in the final, padded region (one block if the tail
 -- plus the 0x80 marker plus the 8-byte length fits in 64 bytes, else two).

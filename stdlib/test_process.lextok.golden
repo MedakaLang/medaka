@@ -22,8 +22,6 @@ IDENT "list"
 DOT_LBRACE
 IDENT "findMap"
 COMMA
-IDENT "somes"
-COMMA
 IDENT "zipWith3"
 RBRACE
 NEWLINE
@@ -1798,12 +1796,9 @@ IDENT "known"
 RPAREN
 RPAREN
 LPAREN
-IDENT "somes"
-LPAREN
-IDENT "map"
+IDENT "filterMap"
 IDENT "namer"
 IDENT "entries"
-RPAREN
 RPAREN
 NEWLINE
 DEDENT
@@ -1842,12 +1837,9 @@ INDENT
 LET
 IDENT "present"
 EQUAL
-IDENT "somes"
-LPAREN
-IDENT "map"
+IDENT "filterMap"
 IDENT "namer"
 IDENT "entries"
-RPAREN
 NEWLINE
 IDENT "filter"
 LPAREN
@@ -1999,8 +1991,10 @@ IDENT "titledFloorName"
 IDENT "titlePrefix"
 IDENT "line"
 EQUAL
+DO
 INDENT
-MATCH
+IDENT "rest"
+LARROW
 IDENT "stripPrefix"
 LPAREN
 IDENT "floorTitleOpen"
@@ -2008,14 +2002,7 @@ PLUSPLUS
 IDENT "titlePrefix"
 RPAREN
 IDENT "line"
-INDENT
-UPPER "None"
-FAT_ARROW
-UPPER "None"
 NEWLINE
-UPPER "Some"
-IDENT "rest"
-FAT_ARROW
 IDENT "map"
 LPAREN
 IDENT "i"
@@ -2033,8 +2020,6 @@ RPAREN
 NEWLINE
 DEDENT
 NEWLINE
-DEDENT
-NEWLINE
 IDENT "gradedFloorName"
 COLON
 UPPER "String"
@@ -2048,19 +2033,14 @@ IDENT "gradedFloorName"
 IDENT "callOpen"
 IDENT "line"
 EQUAL
-MATCH
+DO
+INDENT
+IDENT "i"
+LARROW
 IDENT "indexOf"
 IDENT "callOpen"
 IDENT "line"
-INDENT
-UPPER "None"
-FAT_ARROW
-UPPER "None"
 NEWLINE
-UPPER "Some"
-IDENT "i"
-FAT_ARROW
-INDENT
 LET
 IDENT "rest"
 EQUAL
@@ -2091,8 +2071,6 @@ IDENT "indexOf"
 STRING "\""
 IDENT "rest"
 RPAREN
-NEWLINE
-DEDENT
 NEWLINE
 DEDENT
 NEWLINE

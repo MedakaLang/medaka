@@ -153,17 +153,21 @@ reinsertAll : Hashable a =>
   Ref (Array (List a)) ->
   Ref Int ->
   Unit
-reinsertAll oldArr i n buckets count
-  | i >= n = ()
-  | otherwise =
-    reinsertBucket (arrayGetUnsafe i oldArr) buckets count
-    reinsertAll oldArr (i + 1) n buckets count
+reinsertAll oldArr i0 n buckets count = go i0
+  where
+    go i
+      | i >= n = ()
+      | otherwise =
+        reinsertBucket (arrayGetUnsafe i oldArr) buckets count
+        go (i + 1)
 
 reinsertBucket : Hashable a => List a -> Ref (Array (List a)) -> Ref Int -> Unit
-reinsertBucket [] _ _ = ()
-reinsertBucket (x :: rest) buckets count =
-  putRaw x buckets count
-  reinsertBucket rest buckets count
+reinsertBucket xs0 buckets count = go xs0
+  where
+    go [] = ()
+    go (x :: rest) =
+      putRaw x buckets count
+      go rest
 
 putRaw : Hashable a => a -> Ref (Array (List a)) -> Ref Int -> Unit
 putRaw x buckets count =
@@ -191,16 +195,20 @@ deleteAt x arr idx count =
 -- ── Iteration / folds ───────────────────────────────────────────────────
 
 collectElems : Array (List a) -> Int -> Int -> List a -> List a
-collectElems arr i n acc
-  | i >= n = acc
-  | otherwise = collectElems arr (i + 1) n (arrayGetUnsafe i arr ++ acc)
+collectElems arr i0 n acc0 = go i0 acc0
+  where
+    go i acc
+      | i >= n = acc
+      | otherwise = go (i + 1) (arrayGetUnsafe i arr ++ acc)
 
 elemList : HashSet a -> List a
 elemList (HashSet buckets _) = collectElems !buckets 0 (arrayLength !buckets) []
 
 foldrElems : (a -> b -> <e> b) -> b -> List a -> <e> b
-foldrElems _ z [] = z
-foldrElems f z (x :: rest) = f x (foldrElems f z rest)
+foldrElems f z xs0 = go xs0
+  where
+    go [] = z
+    go (x :: rest) = f x (go rest)
 
 foldlElems : (b -> a -> <e> b) -> b -> List a -> <e> b
 foldlElems _ z [] = z

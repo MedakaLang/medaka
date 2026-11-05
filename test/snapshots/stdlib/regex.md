@@ -1,5 +1,5 @@
 # META
-source_lines=1745
+source_lines=1757
 stages=DESUGAR,MARK
 # SOURCE
 {- | Regular expressions, matched in linear time.
@@ -160,13 +160,15 @@ complementGo ((lo, hi) :: rest) next =
     complementGo rest after
 
 inRanges : Array Int -> Int -> Int -> Bool
-inRanges rs i c =
-  if i >= arrayLength rs then
-    False
-  else if c >= arrayGetUnsafe i rs && c <= arrayGetUnsafe (i + 1) rs then
-    True
-  else
-    inRanges rs (i + 2) c
+inRanges rs i0 c = go i0
+  where
+    go i =
+      if i >= arrayLength rs then
+        False
+      else if c >= arrayGetUnsafe i rs && c <= arrayGetUnsafe (i + 1) rs then
+        True
+      else
+        go (i + 2)
 
 setMatches : Array Int -> Bool -> Int -> Bool
 setMatches rs negated c =
@@ -476,17 +478,16 @@ expandRepeat greedy node lo hi =
     catRepeat node lo (optChain greedy node (hi - lo))
 
 catRepeat : Node -> Int -> Node -> Node
-catRepeat node n rest =
-  if n <= 0 then rest else NCat node (catRepeat node (n - 1) rest)
+catRepeat node n0 rest = go n0
+  where
+    go n = if n <= 0 then rest else NCat node (go (n - 1))
 
 -- `a{2,4}` is `a a (a (a)?)?`, nested rather than a flat run of options, so
 -- a greedy bound takes as many copies as it can and a lazy one as few.
 optChain : Bool -> Node -> Int -> Node
-optChain greedy node k =
-  if k <= 0 then
-    NEmpty
-  else
-    NOpt greedy (NCat node (optChain greedy node (k - 1)))
+optChain greedy node k0 = go k0
+  where
+    go k = if k <= 0 then NEmpty else NOpt greedy (NCat node (go (k - 1)))
 
 parseAtom : PState -> Node
 parseAtom st =
@@ -923,6 +924,8 @@ foundYet : Vm -> Bool
 foundYet vm = isSome !vm.found
 
 addThread : Vm -> ThreadList -> Int -> Int -> Array Int -> Unit
+-- Bound: hot compiler path: the where-go form allocates one closure per call until the lambda-lift pass (#4878); convert then.
+-- lint-disable-next-line rule-threaded-invariant
 addThread vm list pc pos slots =
   vm.steps := !vm.steps + 1
   if arrayGetUnsafe pc list.mark == !list.gen then
@@ -967,35 +970,37 @@ wordAt vm i =
 -- already in nlist may still overwrite that record later, which is what
 -- makes greedy repetition win.
 stepThreads : Vm -> ThreadList -> ThreadList -> Int -> Int -> Unit
-stepThreads vm clist nlist pos i =
-  if i >= !clist.live then
-    ()
-  else
-    let pc = arrayGetUnsafe i clist.dense
-    let slots = arrayGetUnsafe i clist.slots
-    match arrayGetUnsafe pc vm.prog
-      IChar ch =>
-        if pos < vm.subjEnd && arrayGetUnsafe pos vm.codes == ch then
-          addThread vm nlist (pc + 1) (pos + 1) slots
-        stepThreads vm clist nlist pos (i + 1)
-      ISet rs negated =>
-        if pos < vm.subjEnd
-          && setMatches rs negated (arrayGetUnsafe pos vm.codes) then
-          addThread vm nlist (pc + 1) (pos + 1) slots
-        stepThreads vm clist nlist pos (i + 1)
-      IAny dotAll =>
-        if pos < vm.subjEnd
-          && (dotAll || arrayGetUnsafe pos vm.codes /= 10) then
-          addThread vm nlist (pc + 1) (pos + 1) slots
-        stepThreads vm clist nlist pos (i + 1)
-      IMatch =>
-        if vm.anchorEnd && pos /= vm.subjEnd then
-          stepThreads vm clist nlist pos (i + 1)
-        else
-          let done = arrayCopy slots
-          arraySetUnsafe 1 pos done
-          vm.found := Some done
-      _ => stepThreads vm clist nlist pos (i + 1)
+stepThreads vm clist nlist pos i0 = go i0
+  where
+    go i =
+      if i >= !clist.live then
+        ()
+      else
+        let pc = arrayGetUnsafe i clist.dense
+        let slots = arrayGetUnsafe i clist.slots
+        match arrayGetUnsafe pc vm.prog
+          IChar ch =>
+            if pos < vm.subjEnd && arrayGetUnsafe pos vm.codes == ch then
+              addThread vm nlist (pc + 1) (pos + 1) slots
+            go (i + 1)
+          ISet rs negated =>
+            if pos < vm.subjEnd
+              && setMatches rs negated (arrayGetUnsafe pos vm.codes) then
+              addThread vm nlist (pc + 1) (pos + 1) slots
+            go (i + 1)
+          IAny dotAll =>
+            if pos < vm.subjEnd
+              && (dotAll || arrayGetUnsafe pos vm.codes /= 10) then
+              addThread vm nlist (pc + 1) (pos + 1) slots
+            go (i + 1)
+          IMatch =>
+            if vm.anchorEnd && pos /= vm.subjEnd then
+              go (i + 1)
+            else
+              let done = arrayCopy slots
+              arraySetUnsafe 1 pos done
+              vm.found := Some done
+          _ => go (i + 1)
 
 -- A fresh thread is seeded at every position until a match is found, at the
 -- end of the list so it loses to everything already running: that is the
@@ -1022,17 +1027,16 @@ vmLoop : Vm ->
   ThreadList ->
   ThreadList ->
   Option (Array Int)
-vmLoop vm startAt anchorStart pos clist nlist =
-  seedThread vm clist pos startAt anchorStart
-  if !clist.live == 0 && (foundYet vm || anchorStart) then
-    !vm.found
-  else
-    resetThreads nlist
-    stepThreads vm clist nlist pos 0
-    if pos >= vm.subjEnd then
-      !vm.found
-    else
-      vmLoop vm startAt anchorStart (pos + 1) nlist clist
+vmLoop vm startAt anchorStart pos0 clist0 nlist0 = go pos0 clist0 nlist0
+  where
+    go pos clist nlist =
+      seedThread vm clist pos startAt anchorStart
+      if !clist.live == 0 && (foundYet vm || anchorStart) then
+        !vm.found
+      else
+        resetThreads nlist
+        stepThreads vm clist nlist pos 0
+        if pos >= vm.subjEnd then !vm.found else go (pos + 1) nlist clist
 
 codesOf : String -> Array Int
 codesOf s =
@@ -1141,6 +1145,8 @@ groupsOfWith : (Int -> Int -> String) ->
   Array Int ->
   Int ->
   List (Option Group)
+-- Bound: list built in tail position modulo cons: a where-local go loses the constant-stack loop until the lambda-lift pass (#4878); convert then.
+-- lint-disable-next-line rule-threaded-invariant
 groupsOfWith textOf re slots k =
   if k > re.ngroups then
     []
@@ -1410,18 +1416,20 @@ findAllGo : Regex ->
   Int ->
   List Match ->
   List Match
-findAllGo re s codes pos prevEnd acc =
-  if pos > arrayLength codes then
-    acc
-  else match searchFrom re codes pos False False (Ref 0)
-    None => acc
-    Some slots =>
-      let lo = arrayGetUnsafe 0 slots
-      let hi = arrayGetUnsafe 1 slots
-      let keep = not (hi == lo && lo == prevEnd)
-      let next = if hi == lo then lo + 1 else hi
-      let acc2 = if keep then mkMatch re s slots :: acc else acc
-      findAllGo re s codes next hi acc2
+findAllGo re s codes pos0 prevEnd0 acc0 = go pos0 prevEnd0 acc0
+  where
+    go pos prevEnd acc =
+      if pos > arrayLength codes then
+        acc
+      else match searchFrom re codes pos False False (Ref 0)
+        None => acc
+        Some slots =>
+          let lo = arrayGetUnsafe 0 slots
+          let hi = arrayGetUnsafe 1 slots
+          let keep = not (hi == lo && lo == prevEnd)
+          let next = if hi == lo then lo + 1 else hi
+          let acc2 = if keep then mkMatch re s slots :: acc else acc
+          go next hi acc2
 
 -- > map (m => (m : Match).text) (findAll (mustCompile "a*") "baaab")
 -- ["", "aaa", ""]
@@ -1594,33 +1602,37 @@ stitch : (Match -> <e> String) ->
   Int ->
   List String ->
   <e> List String
-stitch _ s [] beg acc = sliceClamped beg (stringLength s) s :: acc
-stitch f s (m :: rest) beg acc =
-  -- Bound: one subject sliced at ascending offsets, linear on the native runtime (cursor cache) and quadratic on WasmGC for long non-ASCII input; the callback f may slice another string, which evicts the cache and makes native quadratic too.
-  -- lint-disable-next-line rule-reslice-in-loop
-  let piece = sliceClamped beg m.start s
-  let replaced = f m
-  stitch f s rest m.end (replaced :: piece :: acc)
+stitch f s ms0 beg0 acc0 = go ms0 beg0 acc0
+  where
+    go [] beg acc = sliceClamped beg (stringLength s) s :: acc
+    go (m :: rest) beg acc =
+      -- Bound: one subject sliced at ascending offsets, linear on the native runtime (cursor cache) and quadratic on WasmGC for long non-ASCII input; the callback f may slice another string, which evicts the cache and makes native quadratic too.
+      -- lint-disable-next-line rule-reslice-in-loop
+      let piece = sliceClamped beg (m : Match).start s
+      let replaced = f m
+      go rest (m : Match).end (replaced :: piece :: acc)
 
 expandRepl : String -> Match -> String
 expandRepl repl m = stringConcat (reverse (expandGo (toChars repl) 0 m []))
 
 expandGo : Array Char -> Int -> Match -> List String -> List String
-expandGo cs i m acc =
-  if i >= arrayLength cs then
-    acc
-  else
-    let c = arrayGetUnsafe i cs
-    if c == '$' && i + 1 < arrayLength cs then
-      let d = arrayGetUnsafe (i + 1) cs
-      if d == '$' then
-        expandGo cs (i + 2) m ("$" :: acc)
-      else if isDigit d then
-        expandGo cs (i + 2) m (groupText m (charCode d - 48) :: acc)
+expandGo cs i0 m acc0 = go i0 acc0
+  where
+    go i acc =
+      if i >= arrayLength cs then
+        acc
       else
-        expandGo cs (i + 1) m ("$" :: acc)
-    else
-      expandGo cs (i + 1) m (charToStr c :: acc)
+        let c = arrayGetUnsafe i cs
+        if c == '$' && i + 1 < arrayLength cs then
+          let d = arrayGetUnsafe (i + 1) cs
+          if d == '$' then
+            go (i + 2) ("$" :: acc)
+          else if isDigit d then
+            go (i + 2) (groupText m (charCode d - 48) :: acc)
+          else
+            go (i + 1) ("$" :: acc)
+        else
+          go (i + 1) (charToStr c :: acc)
 
 groupText : Match -> Int -> String
 groupText m 0 = m.text
@@ -1786,7 +1798,7 @@ spansOrdered (m :: rest) floor =
 (DFunDef false "complementGo" ((PList) (PVar "next")) (EIf (EBinOp ">" (EVar "next") (EVar "maxCode")) (EListLit) (EListLit (ETuple (EVar "next") (EVar "maxCode")))))
 (DFunDef false "complementGo" ((PCons (PTuple (PVar "lo") (PVar "hi")) (PVar "rest")) (PVar "next")) (EBlock (DoLet false false (PVar "after") (EApp (EApp (EVar "max") (EBinOp "+" (EVar "hi") (ELit (LInt 1)))) (EVar "next"))) (DoExpr (EIf (EBinOp ">" (EVar "lo") (EVar "next")) (EBinOp "::" (ETuple (EVar "next") (EBinOp "-" (EVar "lo") (ELit (LInt 1)))) (EApp (EApp (EVar "complementGo") (EVar "rest")) (EVar "after"))) (EApp (EApp (EVar "complementGo") (EVar "rest")) (EVar "after"))))))
 (DTypeSig false "inRanges" (TyFun (TyApp (TyCon "Array") (TyCon "Int")) (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyCon "Bool")))))
-(DFunDef false "inRanges" ((PVar "rs") (PVar "i") (PVar "c")) (EIf (EBinOp ">=" (EVar "i") (EApp (EVar "arrayLength") (EVar "rs"))) (EVar "False") (EIf (EBinOp "&&" (EBinOp ">=" (EVar "c") (EApp (EApp (EVar "arrayGetUnsafe") (EVar "i")) (EVar "rs"))) (EBinOp "<=" (EVar "c") (EApp (EApp (EVar "arrayGetUnsafe") (EBinOp "+" (EVar "i") (ELit (LInt 1)))) (EVar "rs")))) (EVar "True") (EApp (EApp (EApp (EVar "inRanges") (EVar "rs")) (EBinOp "+" (EVar "i") (ELit (LInt 2)))) (EVar "c")))))
+(DFunDef false "inRanges" ((PVar "rs") (PVar "i0") (PVar "c")) (ELetGroup ((lgb "go" (clause ((PVar "i")) (EIf (EBinOp ">=" (EVar "i") (EApp (EVar "arrayLength") (EVar "rs"))) (EVar "False") (EIf (EBinOp "&&" (EBinOp ">=" (EVar "c") (EApp (EApp (EVar "arrayGetUnsafe") (EVar "i")) (EVar "rs"))) (EBinOp "<=" (EVar "c") (EApp (EApp (EVar "arrayGetUnsafe") (EBinOp "+" (EVar "i") (ELit (LInt 1)))) (EVar "rs")))) (EVar "True") (EApp (EVar "go") (EBinOp "+" (EVar "i") (ELit (LInt 2))))))))) (EApp (EVar "go") (EVar "i0"))))
 (DTypeSig false "setMatches" (TyFun (TyApp (TyCon "Array") (TyCon "Int")) (TyFun (TyCon "Bool") (TyFun (TyCon "Int") (TyCon "Bool")))))
 (DFunDef false "setMatches" ((PVar "rs") (PVar "negated") (PVar "c")) (EIf (EVar "negated") (EApp (EVar "not") (EApp (EApp (EApp (EVar "inRanges") (EVar "rs")) (ELit (LInt 0))) (EVar "c"))) (EApp (EApp (EApp (EVar "inRanges") (EVar "rs")) (ELit (LInt 0))) (EVar "c"))))
 (DTypeSig false "isWordCode" (TyFun (TyCon "Int") (TyCon "Bool")))
@@ -1885,9 +1897,9 @@ spansOrdered (m :: rest) floor =
 (DTypeSig false "expandRepeat" (TyFun (TyCon "Bool") (TyFun (TyCon "Node") (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyCon "Node"))))))
 (DFunDef false "expandRepeat" ((PVar "greedy") (PVar "node") (PVar "lo") (PVar "hi")) (EIf (EBinOp "<" (EVar "hi") (ELit (LInt 0))) (EApp (EApp (EApp (EVar "catRepeat") (EVar "node")) (EVar "lo")) (EApp (EApp (EVar "NStar") (EVar "greedy")) (EVar "node"))) (EApp (EApp (EApp (EVar "catRepeat") (EVar "node")) (EVar "lo")) (EApp (EApp (EApp (EVar "optChain") (EVar "greedy")) (EVar "node")) (EBinOp "-" (EVar "hi") (EVar "lo"))))))
 (DTypeSig false "catRepeat" (TyFun (TyCon "Node") (TyFun (TyCon "Int") (TyFun (TyCon "Node") (TyCon "Node")))))
-(DFunDef false "catRepeat" ((PVar "node") (PVar "n") (PVar "rest")) (EIf (EBinOp "<=" (EVar "n") (ELit (LInt 0))) (EVar "rest") (EApp (EApp (EVar "NCat") (EVar "node")) (EApp (EApp (EApp (EVar "catRepeat") (EVar "node")) (EBinOp "-" (EVar "n") (ELit (LInt 1)))) (EVar "rest")))))
+(DFunDef false "catRepeat" ((PVar "node") (PVar "n0") (PVar "rest")) (ELetGroup ((lgb "go" (clause ((PVar "n")) (EIf (EBinOp "<=" (EVar "n") (ELit (LInt 0))) (EVar "rest") (EApp (EApp (EVar "NCat") (EVar "node")) (EApp (EVar "go") (EBinOp "-" (EVar "n") (ELit (LInt 1))))))))) (EApp (EVar "go") (EVar "n0"))))
 (DTypeSig false "optChain" (TyFun (TyCon "Bool") (TyFun (TyCon "Node") (TyFun (TyCon "Int") (TyCon "Node")))))
-(DFunDef false "optChain" ((PVar "greedy") (PVar "node") (PVar "k")) (EIf (EBinOp "<=" (EVar "k") (ELit (LInt 0))) (EVar "NEmpty") (EApp (EApp (EVar "NOpt") (EVar "greedy")) (EApp (EApp (EVar "NCat") (EVar "node")) (EApp (EApp (EApp (EVar "optChain") (EVar "greedy")) (EVar "node")) (EBinOp "-" (EVar "k") (ELit (LInt 1))))))))
+(DFunDef false "optChain" ((PVar "greedy") (PVar "node") (PVar "k0")) (ELetGroup ((lgb "go" (clause ((PVar "k")) (EIf (EBinOp "<=" (EVar "k") (ELit (LInt 0))) (EVar "NEmpty") (EApp (EApp (EVar "NOpt") (EVar "greedy")) (EApp (EApp (EVar "NCat") (EVar "node")) (EApp (EVar "go") (EBinOp "-" (EVar "k") (ELit (LInt 1)))))))))) (EApp (EVar "go") (EVar "k0"))))
 (DTypeSig false "parseAtom" (TyFun (TyCon "PState") (TyCon "Node")))
 (DFunDef false "parseAtom" ((PVar "st")) (EIf (EApp (EVar "atEnd") (EVar "st")) (EBlock (DoExpr (EApp (EApp (EVar "failAt") (EVar "st")) (ELit (LString "pattern ends where an expression was expected")))) (DoExpr (EVar "NEmpty"))) (EBlock (DoLet false false (PVar "c") (EApp (EVar "cur") (EVar "st"))) (DoExpr (EIf (EBinOp "==" (EVar "c") (ELit (LChar "("))) (EApp (EVar "parseGroup") (EVar "st")) (EIf (EBinOp "==" (EVar "c") (ELit (LChar "["))) (EApp (EVar "parseSet") (EVar "st")) (EIf (EBinOp "==" (EVar "c") (ELit (LChar "."))) (EBlock (DoExpr (EApp (EVar "advance") (EVar "st"))) (DoExpr (EApp (EVar "NAny") (EFieldAccess (EVar "st") "dotAll")))) (EIf (EBinOp "==" (EVar "c") (ELit (LChar "^"))) (EBlock (DoExpr (EApp (EVar "advance") (EVar "st"))) (DoExpr (EApp (EVar "NAssert") (EVar "asStart")))) (EIf (EBinOp "==" (EVar "c") (ELit (LChar "$"))) (EBlock (DoExpr (EApp (EVar "advance") (EVar "st"))) (DoExpr (EApp (EVar "NAssert") (EVar "asEnd")))) (EIf (EBinOp "==" (EVar "c") (ELit (LChar "\\"))) (EApp (EVar "parseEscape") (EVar "st")) (EIf (EBinOp "||" (EBinOp "||" (EBinOp "==" (EVar "c") (ELit (LChar "*"))) (EBinOp "==" (EVar "c") (ELit (LChar "+")))) (EBinOp "==" (EVar "c") (ELit (LChar "?")))) (EBlock (DoExpr (EApp (EApp (EVar "failAt") (EVar "st")) (ELit (LString "repetition operator with nothing to repeat")))) (DoExpr (EApp (EVar "advance") (EVar "st"))) (DoExpr (EVar "NEmpty"))) (EBlock (DoExpr (EApp (EVar "advance") (EVar "st"))) (DoExpr (EApp (EApp (EVar "litNode") (EVar "st")) (EApp (EVar "charCode") (EVar "c"))))))))))))))))
 (DTypeSig false "litNode" (TyFun (TyCon "PState") (TyFun (TyCon "Int") (TyCon "Node"))))
@@ -1971,13 +1983,13 @@ spansOrdered (m :: rest) floor =
 (DTypeSig false "wordAt" (TyFun (TyCon "Vm") (TyFun (TyCon "Int") (TyCon "Bool"))))
 (DFunDef false "wordAt" ((PVar "vm") (PVar "i")) (EBinOp "&&" (EBinOp "&&" (EBinOp ">=" (EVar "i") (EFieldAccess (EVar "vm") "subjStart")) (EBinOp "<" (EVar "i") (EFieldAccess (EVar "vm") "subjEnd"))) (EApp (EVar "isWordCode") (EApp (EApp (EVar "arrayGetUnsafe") (EVar "i")) (EFieldAccess (EVar "vm") "codes")))))
 (DTypeSig false "stepThreads" (TyFun (TyCon "Vm") (TyFun (TyCon "ThreadList") (TyFun (TyCon "ThreadList") (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyCon "Unit")))))))
-(DFunDef false "stepThreads" ((PVar "vm") (PVar "clist") (PVar "nlist") (PVar "pos") (PVar "i")) (EIf (EBinOp ">=" (EVar "i") (EUnOp "!" (EFieldAccess (EVar "clist") "live"))) (ELit LUnit) (EBlock (DoLet false false (PVar "pc") (EApp (EApp (EVar "arrayGetUnsafe") (EVar "i")) (EFieldAccess (EVar "clist") "dense"))) (DoLet false false (PVar "slots") (EApp (EApp (EVar "arrayGetUnsafe") (EVar "i")) (EFieldAccess (EVar "clist") "slots"))) (DoExpr (EMatch (EApp (EApp (EVar "arrayGetUnsafe") (EVar "pc")) (EFieldAccess (EVar "vm") "prog")) (arm (PCon "IChar" (PVar "ch")) () (EBlock (DoExpr (EIf (EBinOp "&&" (EBinOp "<" (EVar "pos") (EFieldAccess (EVar "vm") "subjEnd")) (EBinOp "==" (EApp (EApp (EVar "arrayGetUnsafe") (EVar "pos")) (EFieldAccess (EVar "vm") "codes")) (EVar "ch"))) (EApp (EApp (EApp (EApp (EApp (EVar "addThread") (EVar "vm")) (EVar "nlist")) (EBinOp "+" (EVar "pc") (ELit (LInt 1)))) (EBinOp "+" (EVar "pos") (ELit (LInt 1)))) (EVar "slots")) (ELit LUnit))) (DoExpr (EApp (EApp (EApp (EApp (EApp (EVar "stepThreads") (EVar "vm")) (EVar "clist")) (EVar "nlist")) (EVar "pos")) (EBinOp "+" (EVar "i") (ELit (LInt 1))))))) (arm (PCon "ISet" (PVar "rs") (PVar "negated")) () (EBlock (DoExpr (EIf (EBinOp "&&" (EBinOp "<" (EVar "pos") (EFieldAccess (EVar "vm") "subjEnd")) (EApp (EApp (EApp (EVar "setMatches") (EVar "rs")) (EVar "negated")) (EApp (EApp (EVar "arrayGetUnsafe") (EVar "pos")) (EFieldAccess (EVar "vm") "codes")))) (EApp (EApp (EApp (EApp (EApp (EVar "addThread") (EVar "vm")) (EVar "nlist")) (EBinOp "+" (EVar "pc") (ELit (LInt 1)))) (EBinOp "+" (EVar "pos") (ELit (LInt 1)))) (EVar "slots")) (ELit LUnit))) (DoExpr (EApp (EApp (EApp (EApp (EApp (EVar "stepThreads") (EVar "vm")) (EVar "clist")) (EVar "nlist")) (EVar "pos")) (EBinOp "+" (EVar "i") (ELit (LInt 1))))))) (arm (PCon "IAny" (PVar "dotAll")) () (EBlock (DoExpr (EIf (EBinOp "&&" (EBinOp "<" (EVar "pos") (EFieldAccess (EVar "vm") "subjEnd")) (EBinOp "||" (EVar "dotAll") (EBinOp "/=" (EApp (EApp (EVar "arrayGetUnsafe") (EVar "pos")) (EFieldAccess (EVar "vm") "codes")) (ELit (LInt 10))))) (EApp (EApp (EApp (EApp (EApp (EVar "addThread") (EVar "vm")) (EVar "nlist")) (EBinOp "+" (EVar "pc") (ELit (LInt 1)))) (EBinOp "+" (EVar "pos") (ELit (LInt 1)))) (EVar "slots")) (ELit LUnit))) (DoExpr (EApp (EApp (EApp (EApp (EApp (EVar "stepThreads") (EVar "vm")) (EVar "clist")) (EVar "nlist")) (EVar "pos")) (EBinOp "+" (EVar "i") (ELit (LInt 1))))))) (arm (PCon "IMatch") () (EIf (EBinOp "&&" (EFieldAccess (EVar "vm") "anchorEnd") (EBinOp "/=" (EVar "pos") (EFieldAccess (EVar "vm") "subjEnd"))) (EApp (EApp (EApp (EApp (EApp (EVar "stepThreads") (EVar "vm")) (EVar "clist")) (EVar "nlist")) (EVar "pos")) (EBinOp "+" (EVar "i") (ELit (LInt 1)))) (EBlock (DoLet false false (PVar "done") (EApp (EVar "arrayCopy") (EVar "slots"))) (DoExpr (EApp (EApp (EApp (EVar "arraySetUnsafe") (ELit (LInt 1))) (EVar "pos")) (EVar "done"))) (DoExpr (EApp (EApp (EVar "setRef") (EFieldAccess (EVar "vm") "found")) (EApp (EVar "Some") (EVar "done"))))))) (arm PWild () (EApp (EApp (EApp (EApp (EApp (EVar "stepThreads") (EVar "vm")) (EVar "clist")) (EVar "nlist")) (EVar "pos")) (EBinOp "+" (EVar "i") (ELit (LInt 1))))))))))
+(DFunDef false "stepThreads" ((PVar "vm") (PVar "clist") (PVar "nlist") (PVar "pos") (PVar "i0")) (ELetGroup ((lgb "go" (clause ((PVar "i")) (EIf (EBinOp ">=" (EVar "i") (EUnOp "!" (EFieldAccess (EVar "clist") "live"))) (ELit LUnit) (EBlock (DoLet false false (PVar "pc") (EApp (EApp (EVar "arrayGetUnsafe") (EVar "i")) (EFieldAccess (EVar "clist") "dense"))) (DoLet false false (PVar "slots") (EApp (EApp (EVar "arrayGetUnsafe") (EVar "i")) (EFieldAccess (EVar "clist") "slots"))) (DoExpr (EMatch (EApp (EApp (EVar "arrayGetUnsafe") (EVar "pc")) (EFieldAccess (EVar "vm") "prog")) (arm (PCon "IChar" (PVar "ch")) () (EBlock (DoExpr (EIf (EBinOp "&&" (EBinOp "<" (EVar "pos") (EFieldAccess (EVar "vm") "subjEnd")) (EBinOp "==" (EApp (EApp (EVar "arrayGetUnsafe") (EVar "pos")) (EFieldAccess (EVar "vm") "codes")) (EVar "ch"))) (EApp (EApp (EApp (EApp (EApp (EVar "addThread") (EVar "vm")) (EVar "nlist")) (EBinOp "+" (EVar "pc") (ELit (LInt 1)))) (EBinOp "+" (EVar "pos") (ELit (LInt 1)))) (EVar "slots")) (ELit LUnit))) (DoExpr (EApp (EVar "go") (EBinOp "+" (EVar "i") (ELit (LInt 1))))))) (arm (PCon "ISet" (PVar "rs") (PVar "negated")) () (EBlock (DoExpr (EIf (EBinOp "&&" (EBinOp "<" (EVar "pos") (EFieldAccess (EVar "vm") "subjEnd")) (EApp (EApp (EApp (EVar "setMatches") (EVar "rs")) (EVar "negated")) (EApp (EApp (EVar "arrayGetUnsafe") (EVar "pos")) (EFieldAccess (EVar "vm") "codes")))) (EApp (EApp (EApp (EApp (EApp (EVar "addThread") (EVar "vm")) (EVar "nlist")) (EBinOp "+" (EVar "pc") (ELit (LInt 1)))) (EBinOp "+" (EVar "pos") (ELit (LInt 1)))) (EVar "slots")) (ELit LUnit))) (DoExpr (EApp (EVar "go") (EBinOp "+" (EVar "i") (ELit (LInt 1))))))) (arm (PCon "IAny" (PVar "dotAll")) () (EBlock (DoExpr (EIf (EBinOp "&&" (EBinOp "<" (EVar "pos") (EFieldAccess (EVar "vm") "subjEnd")) (EBinOp "||" (EVar "dotAll") (EBinOp "/=" (EApp (EApp (EVar "arrayGetUnsafe") (EVar "pos")) (EFieldAccess (EVar "vm") "codes")) (ELit (LInt 10))))) (EApp (EApp (EApp (EApp (EApp (EVar "addThread") (EVar "vm")) (EVar "nlist")) (EBinOp "+" (EVar "pc") (ELit (LInt 1)))) (EBinOp "+" (EVar "pos") (ELit (LInt 1)))) (EVar "slots")) (ELit LUnit))) (DoExpr (EApp (EVar "go") (EBinOp "+" (EVar "i") (ELit (LInt 1))))))) (arm (PCon "IMatch") () (EIf (EBinOp "&&" (EFieldAccess (EVar "vm") "anchorEnd") (EBinOp "/=" (EVar "pos") (EFieldAccess (EVar "vm") "subjEnd"))) (EApp (EVar "go") (EBinOp "+" (EVar "i") (ELit (LInt 1)))) (EBlock (DoLet false false (PVar "done") (EApp (EVar "arrayCopy") (EVar "slots"))) (DoExpr (EApp (EApp (EApp (EVar "arraySetUnsafe") (ELit (LInt 1))) (EVar "pos")) (EVar "done"))) (DoExpr (EApp (EApp (EVar "setRef") (EFieldAccess (EVar "vm") "found")) (EApp (EVar "Some") (EVar "done"))))))) (arm PWild () (EApp (EVar "go") (EBinOp "+" (EVar "i") (ELit (LInt 1)))))))))))) (EApp (EVar "go") (EVar "i0"))))
 (DTypeSig false "seedThread" (TyFun (TyCon "Vm") (TyFun (TyCon "ThreadList") (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyFun (TyCon "Bool") (TyCon "Unit")))))))
 (DFunDef false "seedThread" ((PVar "vm") (PVar "clist") (PVar "pos") (PVar "startAt") (PVar "anchorStart")) (EIf (EBinOp "||" (EApp (EVar "foundYet") (EVar "vm")) (EBinOp "&&" (EVar "anchorStart") (EBinOp "/=" (EVar "pos") (EVar "startAt")))) (ELit LUnit) (EBlock (DoLet false false (PVar "slots") (EApp (EApp (EVar "arrayMake") (EFieldAccess (EVar "vm") "nslots")) (EUnOp "-" (ELit (LInt 1))))) (DoExpr (EApp (EApp (EApp (EVar "arraySetUnsafe") (ELit (LInt 0))) (EVar "pos")) (EVar "slots"))) (DoExpr (EApp (EApp (EApp (EApp (EApp (EVar "addThread") (EVar "vm")) (EVar "clist")) (ELit (LInt 0))) (EVar "pos")) (EVar "slots"))))))
 (DTypeSig false "vmSearch" (TyFun (TyCon "Vm") (TyFun (TyCon "Int") (TyFun (TyCon "Bool") (TyApp (TyCon "Option") (TyApp (TyCon "Array") (TyCon "Int")))))))
 (DFunDef false "vmSearch" ((PVar "vm") (PVar "startAt") (PVar "anchorStart")) (EBlock (DoLet false false (PVar "n") (EApp (EVar "arrayLength") (EFieldAccess (EVar "vm") "prog"))) (DoExpr (EApp (EApp (EApp (EApp (EApp (EApp (EVar "vmLoop") (EVar "vm")) (EVar "startAt")) (EVar "anchorStart")) (EVar "startAt")) (EApp (EVar "newThreads") (EVar "n"))) (EApp (EVar "newThreads") (EVar "n"))))))
 (DTypeSig false "vmLoop" (TyFun (TyCon "Vm") (TyFun (TyCon "Int") (TyFun (TyCon "Bool") (TyFun (TyCon "Int") (TyFun (TyCon "ThreadList") (TyFun (TyCon "ThreadList") (TyApp (TyCon "Option") (TyApp (TyCon "Array") (TyCon "Int"))))))))))
-(DFunDef false "vmLoop" ((PVar "vm") (PVar "startAt") (PVar "anchorStart") (PVar "pos") (PVar "clist") (PVar "nlist")) (EBlock (DoExpr (EApp (EApp (EApp (EApp (EApp (EVar "seedThread") (EVar "vm")) (EVar "clist")) (EVar "pos")) (EVar "startAt")) (EVar "anchorStart"))) (DoExpr (EIf (EBinOp "&&" (EBinOp "==" (EUnOp "!" (EFieldAccess (EVar "clist") "live")) (ELit (LInt 0))) (EBinOp "||" (EApp (EVar "foundYet") (EVar "vm")) (EVar "anchorStart"))) (EUnOp "!" (EFieldAccess (EVar "vm") "found")) (EBlock (DoExpr (EApp (EVar "resetThreads") (EVar "nlist"))) (DoExpr (EApp (EApp (EApp (EApp (EApp (EVar "stepThreads") (EVar "vm")) (EVar "clist")) (EVar "nlist")) (EVar "pos")) (ELit (LInt 0)))) (DoExpr (EIf (EBinOp ">=" (EVar "pos") (EFieldAccess (EVar "vm") "subjEnd")) (EUnOp "!" (EFieldAccess (EVar "vm") "found")) (EApp (EApp (EApp (EApp (EApp (EApp (EVar "vmLoop") (EVar "vm")) (EVar "startAt")) (EVar "anchorStart")) (EBinOp "+" (EVar "pos") (ELit (LInt 1)))) (EVar "nlist")) (EVar "clist")))))))))
+(DFunDef false "vmLoop" ((PVar "vm") (PVar "startAt") (PVar "anchorStart") (PVar "pos0") (PVar "clist0") (PVar "nlist0")) (ELetGroup ((lgb "go" (clause ((PVar "pos") (PVar "clist") (PVar "nlist")) (EBlock (DoExpr (EApp (EApp (EApp (EApp (EApp (EVar "seedThread") (EVar "vm")) (EVar "clist")) (EVar "pos")) (EVar "startAt")) (EVar "anchorStart"))) (DoExpr (EIf (EBinOp "&&" (EBinOp "==" (EUnOp "!" (EFieldAccess (EVar "clist") "live")) (ELit (LInt 0))) (EBinOp "||" (EApp (EVar "foundYet") (EVar "vm")) (EVar "anchorStart"))) (EUnOp "!" (EFieldAccess (EVar "vm") "found")) (EBlock (DoExpr (EApp (EVar "resetThreads") (EVar "nlist"))) (DoExpr (EApp (EApp (EApp (EApp (EApp (EVar "stepThreads") (EVar "vm")) (EVar "clist")) (EVar "nlist")) (EVar "pos")) (ELit (LInt 0)))) (DoExpr (EIf (EBinOp ">=" (EVar "pos") (EFieldAccess (EVar "vm") "subjEnd")) (EUnOp "!" (EFieldAccess (EVar "vm") "found")) (EApp (EApp (EApp (EVar "go") (EBinOp "+" (EVar "pos") (ELit (LInt 1)))) (EVar "nlist")) (EVar "clist"))))))))))) (EApp (EApp (EApp (EVar "go") (EVar "pos0")) (EVar "clist0")) (EVar "nlist0"))))
 (DTypeSig false "codesOf" (TyFun (TyCon "String") (TyApp (TyCon "Array") (TyCon "Int"))))
 (DFunDef false "codesOf" ((PVar "s")) (EBlock (DoLet false false (PVar "cs") (EApp (EVar "toChars") (EVar "s"))) (DoExpr (EApp (EApp (EVar "arrayMakeWith") (EApp (EVar "arrayLength") (EVar "cs"))) (ELam ((PVar "i")) (EApp (EVar "charCode") (EApp (EApp (EVar "arrayGetUnsafe") (EVar "i")) (EVar "cs"))))))))
 (DTypeSig false "searchFrom" (TyFun (TyCon "Regex") (TyFun (TyApp (TyCon "Array") (TyCon "Int")) (TyFun (TyCon "Int") (TyFun (TyCon "Bool") (TyFun (TyCon "Bool") (TyFun (TyApp (TyCon "Ref") (TyCon "Int")) (TyApp (TyCon "Option") (TyApp (TyCon "Array") (TyCon "Int"))))))))))
@@ -2031,7 +2043,7 @@ spansOrdered (m :: rest) floor =
 (DTypeSig true "findAll" (TyFun (TyCon "Regex") (TyFun (TyCon "String") (TyApp (TyCon "List") (TyCon "Match")))))
 (DFunDef false "findAll" ((PVar "re") (PVar "s")) (EApp (EVar "reverse") (EApp (EApp (EApp (EApp (EApp (EApp (EVar "findAllGo") (EVar "re")) (EVar "s")) (EApp (EVar "codesOf") (EVar "s"))) (ELit (LInt 0))) (EUnOp "-" (ELit (LInt 1)))) (EListLit))))
 (DTypeSig false "findAllGo" (TyFun (TyCon "Regex") (TyFun (TyCon "String") (TyFun (TyApp (TyCon "Array") (TyCon "Int")) (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyFun (TyApp (TyCon "List") (TyCon "Match")) (TyApp (TyCon "List") (TyCon "Match")))))))))
-(DFunDef false "findAllGo" ((PVar "re") (PVar "s") (PVar "codes") (PVar "pos") (PVar "prevEnd") (PVar "acc")) (EIf (EBinOp ">" (EVar "pos") (EApp (EVar "arrayLength") (EVar "codes"))) (EVar "acc") (EMatch (EApp (EApp (EApp (EApp (EApp (EApp (EVar "searchFrom") (EVar "re")) (EVar "codes")) (EVar "pos")) (EVar "False")) (EVar "False")) (EApp (EVar "Ref") (ELit (LInt 0)))) (arm (PCon "None") () (EVar "acc")) (arm (PCon "Some" (PVar "slots")) () (EBlock (DoLet false false (PVar "lo") (EApp (EApp (EVar "arrayGetUnsafe") (ELit (LInt 0))) (EVar "slots"))) (DoLet false false (PVar "hi") (EApp (EApp (EVar "arrayGetUnsafe") (ELit (LInt 1))) (EVar "slots"))) (DoLet false false (PVar "keep") (EApp (EVar "not") (EBinOp "&&" (EBinOp "==" (EVar "hi") (EVar "lo")) (EBinOp "==" (EVar "lo") (EVar "prevEnd"))))) (DoLet false false (PVar "next") (EIf (EBinOp "==" (EVar "hi") (EVar "lo")) (EBinOp "+" (EVar "lo") (ELit (LInt 1))) (EVar "hi"))) (DoLet false false (PVar "acc2") (EIf (EVar "keep") (EBinOp "::" (EApp (EApp (EApp (EVar "mkMatch") (EVar "re")) (EVar "s")) (EVar "slots")) (EVar "acc")) (EVar "acc"))) (DoExpr (EApp (EApp (EApp (EApp (EApp (EApp (EVar "findAllGo") (EVar "re")) (EVar "s")) (EVar "codes")) (EVar "next")) (EVar "hi")) (EVar "acc2"))))))))
+(DFunDef false "findAllGo" ((PVar "re") (PVar "s") (PVar "codes") (PVar "pos0") (PVar "prevEnd0") (PVar "acc0")) (ELetGroup ((lgb "go" (clause ((PVar "pos") (PVar "prevEnd") (PVar "acc")) (EIf (EBinOp ">" (EVar "pos") (EApp (EVar "arrayLength") (EVar "codes"))) (EVar "acc") (EMatch (EApp (EApp (EApp (EApp (EApp (EApp (EVar "searchFrom") (EVar "re")) (EVar "codes")) (EVar "pos")) (EVar "False")) (EVar "False")) (EApp (EVar "Ref") (ELit (LInt 0)))) (arm (PCon "None") () (EVar "acc")) (arm (PCon "Some" (PVar "slots")) () (EBlock (DoLet false false (PVar "lo") (EApp (EApp (EVar "arrayGetUnsafe") (ELit (LInt 0))) (EVar "slots"))) (DoLet false false (PVar "hi") (EApp (EApp (EVar "arrayGetUnsafe") (ELit (LInt 1))) (EVar "slots"))) (DoLet false false (PVar "keep") (EApp (EVar "not") (EBinOp "&&" (EBinOp "==" (EVar "hi") (EVar "lo")) (EBinOp "==" (EVar "lo") (EVar "prevEnd"))))) (DoLet false false (PVar "next") (EIf (EBinOp "==" (EVar "hi") (EVar "lo")) (EBinOp "+" (EVar "lo") (ELit (LInt 1))) (EVar "hi"))) (DoLet false false (PVar "acc2") (EIf (EVar "keep") (EBinOp "::" (EApp (EApp (EApp (EVar "mkMatch") (EVar "re")) (EVar "s")) (EVar "slots")) (EVar "acc")) (EVar "acc"))) (DoExpr (EApp (EApp (EApp (EVar "go") (EVar "next")) (EVar "hi")) (EVar "acc2")))))))))) (EApp (EApp (EApp (EVar "go") (EVar "pos0")) (EVar "prevEnd0")) (EVar "acc0"))))
 (DTypeSig true "isFullMatchBytes" (TyFun (TyCon "Regex") (TyFun (TyCon "Bytes") (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyCon "Bool"))))))
 (DFunDef false "isFullMatchBytes" ((PVar "re") (PVar "bytes") (PVar "start") (PVar "end")) (EBlock (DoLet false false (PTuple PWild (PVar "codes")) (EApp (EApp (EApp (EVar "windowCodes") (EVar "bytes")) (EVar "start")) (EVar "end"))) (DoExpr (EApp (EVar "isSome") (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EVar "searchWindow") (EVar "re")) (EVar "codes")) (ETuple (ELit (LInt 0)) (EApp (EVar "arrayLength") (EVar "codes")))) (ELit (LInt 0))) (EVar "True")) (EVar "True")) (EApp (EVar "Ref") (ELit (LInt 0))))))))
 (DTypeSig true "findBytes" (TyFun (TyCon "Regex") (TyFun (TyCon "Bytes") (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyApp (TyCon "Option") (TyCon "Match")))))))
@@ -2043,12 +2055,11 @@ spansOrdered (m :: rest) floor =
 (DTypeSig true "replaceAllWith" (TyFun (TyCon "Regex") (TyFun (TyFun (TyCon "Match") (TyEffect () (Some "e") (TyCon "String"))) (TyFun (TyCon "String") (TyEffect () (Some "e") (TyCon "String"))))))
 (DFunDef false "replaceAllWith" ((PVar "re") (PVar "f") (PVar "s")) (EApp (EVar "stringConcat") (EApp (EVar "reverse") (EApp (EApp (EApp (EApp (EApp (EVar "stitch") (EVar "f")) (EVar "s")) (EApp (EApp (EVar "findAll") (EVar "re")) (EVar "s"))) (ELit (LInt 0))) (EListLit)))))
 (DTypeSig false "stitch" (TyFun (TyFun (TyCon "Match") (TyEffect () (Some "e") (TyCon "String"))) (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "Match")) (TyFun (TyCon "Int") (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyEffect () (Some "e") (TyApp (TyCon "List") (TyCon "String")))))))))
-(DFunDef false "stitch" (PWild (PVar "s") (PList) (PVar "beg") (PVar "acc")) (EBinOp "::" (EApp (EApp (EApp (EVar "sliceClamped") (EVar "beg")) (EApp (EVar "stringLength") (EVar "s"))) (EVar "s")) (EVar "acc")))
-(DFunDef false "stitch" ((PVar "f") (PVar "s") (PCons (PVar "m") (PVar "rest")) (PVar "beg") (PVar "acc")) (EBlock (DoLet false false (PVar "piece") (EApp (EApp (EApp (EVar "sliceClamped") (EVar "beg")) (EFieldAccess (EVar "m") "start")) (EVar "s"))) (DoLet false false (PVar "replaced") (EApp (EVar "f") (EVar "m"))) (DoExpr (EApp (EApp (EApp (EApp (EApp (EVar "stitch") (EVar "f")) (EVar "s")) (EVar "rest")) (EFieldAccess (EVar "m") "end")) (EBinOp "::" (EVar "replaced") (EBinOp "::" (EVar "piece") (EVar "acc")))))))
+(DFunDef false "stitch" ((PVar "f") (PVar "s") (PVar "ms0") (PVar "beg0") (PVar "acc0")) (ELetGroup ((lgb "go" (clause ((PList) (PVar "beg") (PVar "acc")) (EBinOp "::" (EApp (EApp (EApp (EVar "sliceClamped") (EVar "beg")) (EApp (EVar "stringLength") (EVar "s"))) (EVar "s")) (EVar "acc"))) (clause ((PCons (PVar "m") (PVar "rest")) (PVar "beg") (PVar "acc")) (EBlock (DoLet false false (PVar "piece") (EApp (EApp (EApp (EVar "sliceClamped") (EVar "beg")) (EFieldAccess (EAnnot (EVar "m") (TyCon "Match")) "start")) (EVar "s"))) (DoLet false false (PVar "replaced") (EApp (EVar "f") (EVar "m"))) (DoExpr (EApp (EApp (EApp (EVar "go") (EVar "rest")) (EFieldAccess (EAnnot (EVar "m") (TyCon "Match")) "end")) (EBinOp "::" (EVar "replaced") (EBinOp "::" (EVar "piece") (EVar "acc"))))))))) (EApp (EApp (EApp (EVar "go") (EVar "ms0")) (EVar "beg0")) (EVar "acc0"))))
 (DTypeSig false "expandRepl" (TyFun (TyCon "String") (TyFun (TyCon "Match") (TyCon "String"))))
 (DFunDef false "expandRepl" ((PVar "repl") (PVar "m")) (EApp (EVar "stringConcat") (EApp (EVar "reverse") (EApp (EApp (EApp (EApp (EVar "expandGo") (EApp (EVar "toChars") (EVar "repl"))) (ELit (LInt 0))) (EVar "m")) (EListLit)))))
 (DTypeSig false "expandGo" (TyFun (TyApp (TyCon "Array") (TyCon "Char")) (TyFun (TyCon "Int") (TyFun (TyCon "Match") (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyApp (TyCon "List") (TyCon "String")))))))
-(DFunDef false "expandGo" ((PVar "cs") (PVar "i") (PVar "m") (PVar "acc")) (EIf (EBinOp ">=" (EVar "i") (EApp (EVar "arrayLength") (EVar "cs"))) (EVar "acc") (EBlock (DoLet false false (PVar "c") (EApp (EApp (EVar "arrayGetUnsafe") (EVar "i")) (EVar "cs"))) (DoExpr (EIf (EBinOp "&&" (EBinOp "==" (EVar "c") (ELit (LChar "$"))) (EBinOp "<" (EBinOp "+" (EVar "i") (ELit (LInt 1))) (EApp (EVar "arrayLength") (EVar "cs")))) (EBlock (DoLet false false (PVar "d") (EApp (EApp (EVar "arrayGetUnsafe") (EBinOp "+" (EVar "i") (ELit (LInt 1)))) (EVar "cs"))) (DoExpr (EIf (EBinOp "==" (EVar "d") (ELit (LChar "$"))) (EApp (EApp (EApp (EApp (EVar "expandGo") (EVar "cs")) (EBinOp "+" (EVar "i") (ELit (LInt 2)))) (EVar "m")) (EBinOp "::" (ELit (LString "$")) (EVar "acc"))) (EIf (EApp (EVar "isDigit") (EVar "d")) (EApp (EApp (EApp (EApp (EVar "expandGo") (EVar "cs")) (EBinOp "+" (EVar "i") (ELit (LInt 2)))) (EVar "m")) (EBinOp "::" (EApp (EApp (EVar "groupText") (EVar "m")) (EBinOp "-" (EApp (EVar "charCode") (EVar "d")) (ELit (LInt 48)))) (EVar "acc"))) (EApp (EApp (EApp (EApp (EVar "expandGo") (EVar "cs")) (EBinOp "+" (EVar "i") (ELit (LInt 1)))) (EVar "m")) (EBinOp "::" (ELit (LString "$")) (EVar "acc"))))))) (EApp (EApp (EApp (EApp (EVar "expandGo") (EVar "cs")) (EBinOp "+" (EVar "i") (ELit (LInt 1)))) (EVar "m")) (EBinOp "::" (EApp (EVar "charToStr") (EVar "c")) (EVar "acc"))))))))
+(DFunDef false "expandGo" ((PVar "cs") (PVar "i0") (PVar "m") (PVar "acc0")) (ELetGroup ((lgb "go" (clause ((PVar "i") (PVar "acc")) (EIf (EBinOp ">=" (EVar "i") (EApp (EVar "arrayLength") (EVar "cs"))) (EVar "acc") (EBlock (DoLet false false (PVar "c") (EApp (EApp (EVar "arrayGetUnsafe") (EVar "i")) (EVar "cs"))) (DoExpr (EIf (EBinOp "&&" (EBinOp "==" (EVar "c") (ELit (LChar "$"))) (EBinOp "<" (EBinOp "+" (EVar "i") (ELit (LInt 1))) (EApp (EVar "arrayLength") (EVar "cs")))) (EBlock (DoLet false false (PVar "d") (EApp (EApp (EVar "arrayGetUnsafe") (EBinOp "+" (EVar "i") (ELit (LInt 1)))) (EVar "cs"))) (DoExpr (EIf (EBinOp "==" (EVar "d") (ELit (LChar "$"))) (EApp (EApp (EVar "go") (EBinOp "+" (EVar "i") (ELit (LInt 2)))) (EBinOp "::" (ELit (LString "$")) (EVar "acc"))) (EIf (EApp (EVar "isDigit") (EVar "d")) (EApp (EApp (EVar "go") (EBinOp "+" (EVar "i") (ELit (LInt 2)))) (EBinOp "::" (EApp (EApp (EVar "groupText") (EVar "m")) (EBinOp "-" (EApp (EVar "charCode") (EVar "d")) (ELit (LInt 48)))) (EVar "acc"))) (EApp (EApp (EVar "go") (EBinOp "+" (EVar "i") (ELit (LInt 1)))) (EBinOp "::" (ELit (LString "$")) (EVar "acc"))))))) (EApp (EApp (EVar "go") (EBinOp "+" (EVar "i") (ELit (LInt 1)))) (EBinOp "::" (EApp (EVar "charToStr") (EVar "c")) (EVar "acc")))))))))) (EApp (EApp (EVar "go") (EVar "i0")) (EVar "acc0"))))
 (DTypeSig false "groupText" (TyFun (TyCon "Match") (TyFun (TyCon "Int") (TyCon "String"))))
 (DFunDef false "groupText" ((PVar "m") (PLit (LInt 0))) (EFieldAccess (EVar "m") "text"))
 (DFunDef false "groupText" ((PVar "m") (PVar "k")) (EMatch (EApp (EApp (EVar "get") (EBinOp "-" (EVar "k") (ELit (LInt 1)))) (EFieldAccess (EVar "m") "groups")) (arm (PCon "Some" (PCon "Some" (PVar "g"))) () (EFieldAccess (EVar "g") "text")) (arm PWild () (ELit (LString "")))))
@@ -2108,7 +2119,7 @@ spansOrdered (m :: rest) floor =
 (DFunDef false "complementGo" ((PList) (PVar "next")) (EIf (EBinOp ">" (EVar "next") (EVar "maxCode")) (EListLit) (EListLit (ETuple (EVar "next") (EVar "maxCode")))))
 (DFunDef false "complementGo" ((PCons (PTuple (PVar "lo") (PVar "hi")) (PVar "rest")) (PVar "next")) (EBlock (DoLet false false (PVar "after") (EApp (EApp (EMethodRef "max") (EBinOp "+" (EVar "hi") (ELit (LInt 1)))) (EVar "next"))) (DoExpr (EIf (EBinOp ">" (EVar "lo") (EVar "next")) (EBinOp "::" (ETuple (EVar "next") (EBinOp "-" (EVar "lo") (ELit (LInt 1)))) (EApp (EApp (EVar "complementGo") (EVar "rest")) (EVar "after"))) (EApp (EApp (EVar "complementGo") (EVar "rest")) (EVar "after"))))))
 (DTypeSig false "inRanges" (TyFun (TyApp (TyCon "Array") (TyCon "Int")) (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyCon "Bool")))))
-(DFunDef false "inRanges" ((PVar "rs") (PVar "i") (PVar "c")) (EIf (EBinOp ">=" (EVar "i") (EApp (EVar "arrayLength") (EVar "rs"))) (EVar "False") (EIf (EBinOp "&&" (EBinOp ">=" (EVar "c") (EApp (EApp (EVar "arrayGetUnsafe") (EVar "i")) (EVar "rs"))) (EBinOp "<=" (EVar "c") (EApp (EApp (EVar "arrayGetUnsafe") (EBinOp "+" (EVar "i") (ELit (LInt 1)))) (EVar "rs")))) (EVar "True") (EApp (EApp (EApp (EVar "inRanges") (EVar "rs")) (EBinOp "+" (EVar "i") (ELit (LInt 2)))) (EVar "c")))))
+(DFunDef false "inRanges" ((PVar "rs") (PVar "i0") (PVar "c")) (ELetGroup ((lgb "go" (clause ((PVar "i")) (EIf (EBinOp ">=" (EVar "i") (EApp (EVar "arrayLength") (EVar "rs"))) (EVar "False") (EIf (EBinOp "&&" (EBinOp ">=" (EVar "c") (EApp (EApp (EVar "arrayGetUnsafe") (EVar "i")) (EVar "rs"))) (EBinOp "<=" (EVar "c") (EApp (EApp (EVar "arrayGetUnsafe") (EBinOp "+" (EVar "i") (ELit (LInt 1)))) (EVar "rs")))) (EVar "True") (EApp (EVar "go") (EBinOp "+" (EVar "i") (ELit (LInt 2))))))))) (EApp (EVar "go") (EVar "i0"))))
 (DTypeSig false "setMatches" (TyFun (TyApp (TyCon "Array") (TyCon "Int")) (TyFun (TyCon "Bool") (TyFun (TyCon "Int") (TyCon "Bool")))))
 (DFunDef false "setMatches" ((PVar "rs") (PVar "negated") (PVar "c")) (EIf (EVar "negated") (EApp (EVar "not") (EApp (EApp (EApp (EVar "inRanges") (EVar "rs")) (ELit (LInt 0))) (EVar "c"))) (EApp (EApp (EApp (EVar "inRanges") (EVar "rs")) (ELit (LInt 0))) (EVar "c"))))
 (DTypeSig false "isWordCode" (TyFun (TyCon "Int") (TyCon "Bool")))
@@ -2207,9 +2218,9 @@ spansOrdered (m :: rest) floor =
 (DTypeSig false "expandRepeat" (TyFun (TyCon "Bool") (TyFun (TyCon "Node") (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyCon "Node"))))))
 (DFunDef false "expandRepeat" ((PVar "greedy") (PVar "node") (PVar "lo") (PVar "hi")) (EIf (EBinOp "<" (EVar "hi") (ELit (LInt 0))) (EApp (EApp (EApp (EVar "catRepeat") (EVar "node")) (EVar "lo")) (EApp (EApp (EVar "NStar") (EVar "greedy")) (EVar "node"))) (EApp (EApp (EApp (EVar "catRepeat") (EVar "node")) (EVar "lo")) (EApp (EApp (EApp (EVar "optChain") (EVar "greedy")) (EVar "node")) (EBinOp "-" (EVar "hi") (EVar "lo"))))))
 (DTypeSig false "catRepeat" (TyFun (TyCon "Node") (TyFun (TyCon "Int") (TyFun (TyCon "Node") (TyCon "Node")))))
-(DFunDef false "catRepeat" ((PVar "node") (PVar "n") (PVar "rest")) (EIf (EBinOp "<=" (EVar "n") (ELit (LInt 0))) (EVar "rest") (EApp (EApp (EVar "NCat") (EVar "node")) (EApp (EApp (EApp (EVar "catRepeat") (EVar "node")) (EBinOp "-" (EVar "n") (ELit (LInt 1)))) (EVar "rest")))))
+(DFunDef false "catRepeat" ((PVar "node") (PVar "n0") (PVar "rest")) (ELetGroup ((lgb "go" (clause ((PVar "n")) (EIf (EBinOp "<=" (EVar "n") (ELit (LInt 0))) (EVar "rest") (EApp (EApp (EVar "NCat") (EVar "node")) (EApp (EVar "go") (EBinOp "-" (EVar "n") (ELit (LInt 1))))))))) (EApp (EVar "go") (EVar "n0"))))
 (DTypeSig false "optChain" (TyFun (TyCon "Bool") (TyFun (TyCon "Node") (TyFun (TyCon "Int") (TyCon "Node")))))
-(DFunDef false "optChain" ((PVar "greedy") (PVar "node") (PVar "k")) (EIf (EBinOp "<=" (EVar "k") (ELit (LInt 0))) (EVar "NEmpty") (EApp (EApp (EVar "NOpt") (EVar "greedy")) (EApp (EApp (EVar "NCat") (EVar "node")) (EApp (EApp (EApp (EVar "optChain") (EVar "greedy")) (EVar "node")) (EBinOp "-" (EVar "k") (ELit (LInt 1))))))))
+(DFunDef false "optChain" ((PVar "greedy") (PVar "node") (PVar "k0")) (ELetGroup ((lgb "go" (clause ((PVar "k")) (EIf (EBinOp "<=" (EVar "k") (ELit (LInt 0))) (EVar "NEmpty") (EApp (EApp (EVar "NOpt") (EVar "greedy")) (EApp (EApp (EVar "NCat") (EVar "node")) (EApp (EVar "go") (EBinOp "-" (EVar "k") (ELit (LInt 1)))))))))) (EApp (EVar "go") (EVar "k0"))))
 (DTypeSig false "parseAtom" (TyFun (TyCon "PState") (TyCon "Node")))
 (DFunDef false "parseAtom" ((PVar "st")) (EIf (EApp (EVar "atEnd") (EVar "st")) (EBlock (DoExpr (EApp (EApp (EVar "failAt") (EVar "st")) (ELit (LString "pattern ends where an expression was expected")))) (DoExpr (EVar "NEmpty"))) (EBlock (DoLet false false (PVar "c") (EApp (EVar "cur") (EVar "st"))) (DoExpr (EIf (EBinOp "==" (EVar "c") (ELit (LChar "("))) (EApp (EVar "parseGroup") (EVar "st")) (EIf (EBinOp "==" (EVar "c") (ELit (LChar "["))) (EApp (EVar "parseSet") (EVar "st")) (EIf (EBinOp "==" (EVar "c") (ELit (LChar "."))) (EBlock (DoExpr (EApp (EVar "advance") (EVar "st"))) (DoExpr (EApp (EVar "NAny") (EFieldAccess (EVar "st") "dotAll")))) (EIf (EBinOp "==" (EVar "c") (ELit (LChar "^"))) (EBlock (DoExpr (EApp (EVar "advance") (EVar "st"))) (DoExpr (EApp (EVar "NAssert") (EVar "asStart")))) (EIf (EBinOp "==" (EVar "c") (ELit (LChar "$"))) (EBlock (DoExpr (EApp (EVar "advance") (EVar "st"))) (DoExpr (EApp (EVar "NAssert") (EVar "asEnd")))) (EIf (EBinOp "==" (EVar "c") (ELit (LChar "\\"))) (EApp (EVar "parseEscape") (EVar "st")) (EIf (EBinOp "||" (EBinOp "||" (EBinOp "==" (EVar "c") (ELit (LChar "*"))) (EBinOp "==" (EVar "c") (ELit (LChar "+")))) (EBinOp "==" (EVar "c") (ELit (LChar "?")))) (EBlock (DoExpr (EApp (EApp (EVar "failAt") (EVar "st")) (ELit (LString "repetition operator with nothing to repeat")))) (DoExpr (EApp (EVar "advance") (EVar "st"))) (DoExpr (EVar "NEmpty"))) (EBlock (DoExpr (EApp (EVar "advance") (EVar "st"))) (DoExpr (EApp (EApp (EVar "litNode") (EVar "st")) (EApp (EVar "charCode") (EVar "c"))))))))))))))))
 (DTypeSig false "litNode" (TyFun (TyCon "PState") (TyFun (TyCon "Int") (TyCon "Node"))))
@@ -2293,13 +2304,13 @@ spansOrdered (m :: rest) floor =
 (DTypeSig false "wordAt" (TyFun (TyCon "Vm") (TyFun (TyCon "Int") (TyCon "Bool"))))
 (DFunDef false "wordAt" ((PVar "vm") (PVar "i")) (EBinOp "&&" (EBinOp "&&" (EBinOp ">=" (EVar "i") (EFieldAccess (EVar "vm") "subjStart")) (EBinOp "<" (EVar "i") (EFieldAccess (EVar "vm") "subjEnd"))) (EApp (EVar "isWordCode") (EApp (EApp (EVar "arrayGetUnsafe") (EVar "i")) (EFieldAccess (EVar "vm") "codes")))))
 (DTypeSig false "stepThreads" (TyFun (TyCon "Vm") (TyFun (TyCon "ThreadList") (TyFun (TyCon "ThreadList") (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyCon "Unit")))))))
-(DFunDef false "stepThreads" ((PVar "vm") (PVar "clist") (PVar "nlist") (PVar "pos") (PVar "i")) (EIf (EBinOp ">=" (EVar "i") (EUnOp "!" (EFieldAccess (EVar "clist") "live"))) (ELit LUnit) (EBlock (DoLet false false (PVar "pc") (EApp (EApp (EVar "arrayGetUnsafe") (EVar "i")) (EFieldAccess (EVar "clist") "dense"))) (DoLet false false (PVar "slots") (EApp (EApp (EVar "arrayGetUnsafe") (EVar "i")) (EFieldAccess (EVar "clist") "slots"))) (DoExpr (EMatch (EApp (EApp (EVar "arrayGetUnsafe") (EVar "pc")) (EFieldAccess (EVar "vm") "prog")) (arm (PCon "IChar" (PVar "ch")) () (EBlock (DoExpr (EIf (EBinOp "&&" (EBinOp "<" (EVar "pos") (EFieldAccess (EVar "vm") "subjEnd")) (EBinOp "==" (EApp (EApp (EVar "arrayGetUnsafe") (EVar "pos")) (EFieldAccess (EVar "vm") "codes")) (EVar "ch"))) (EApp (EApp (EApp (EApp (EApp (EVar "addThread") (EVar "vm")) (EVar "nlist")) (EBinOp "+" (EVar "pc") (ELit (LInt 1)))) (EBinOp "+" (EVar "pos") (ELit (LInt 1)))) (EVar "slots")) (ELit LUnit))) (DoExpr (EApp (EApp (EApp (EApp (EApp (EVar "stepThreads") (EVar "vm")) (EVar "clist")) (EVar "nlist")) (EVar "pos")) (EBinOp "+" (EVar "i") (ELit (LInt 1))))))) (arm (PCon "ISet" (PVar "rs") (PVar "negated")) () (EBlock (DoExpr (EIf (EBinOp "&&" (EBinOp "<" (EVar "pos") (EFieldAccess (EVar "vm") "subjEnd")) (EApp (EApp (EApp (EVar "setMatches") (EVar "rs")) (EVar "negated")) (EApp (EApp (EVar "arrayGetUnsafe") (EVar "pos")) (EFieldAccess (EVar "vm") "codes")))) (EApp (EApp (EApp (EApp (EApp (EVar "addThread") (EVar "vm")) (EVar "nlist")) (EBinOp "+" (EVar "pc") (ELit (LInt 1)))) (EBinOp "+" (EVar "pos") (ELit (LInt 1)))) (EVar "slots")) (ELit LUnit))) (DoExpr (EApp (EApp (EApp (EApp (EApp (EVar "stepThreads") (EVar "vm")) (EVar "clist")) (EVar "nlist")) (EVar "pos")) (EBinOp "+" (EVar "i") (ELit (LInt 1))))))) (arm (PCon "IAny" (PVar "dotAll")) () (EBlock (DoExpr (EIf (EBinOp "&&" (EBinOp "<" (EVar "pos") (EFieldAccess (EVar "vm") "subjEnd")) (EBinOp "||" (EVar "dotAll") (EBinOp "/=" (EApp (EApp (EVar "arrayGetUnsafe") (EVar "pos")) (EFieldAccess (EVar "vm") "codes")) (ELit (LInt 10))))) (EApp (EApp (EApp (EApp (EApp (EVar "addThread") (EVar "vm")) (EVar "nlist")) (EBinOp "+" (EVar "pc") (ELit (LInt 1)))) (EBinOp "+" (EVar "pos") (ELit (LInt 1)))) (EVar "slots")) (ELit LUnit))) (DoExpr (EApp (EApp (EApp (EApp (EApp (EVar "stepThreads") (EVar "vm")) (EVar "clist")) (EVar "nlist")) (EVar "pos")) (EBinOp "+" (EVar "i") (ELit (LInt 1))))))) (arm (PCon "IMatch") () (EIf (EBinOp "&&" (EFieldAccess (EVar "vm") "anchorEnd") (EBinOp "/=" (EVar "pos") (EFieldAccess (EVar "vm") "subjEnd"))) (EApp (EApp (EApp (EApp (EApp (EVar "stepThreads") (EVar "vm")) (EVar "clist")) (EVar "nlist")) (EVar "pos")) (EBinOp "+" (EVar "i") (ELit (LInt 1)))) (EBlock (DoLet false false (PVar "done") (EApp (EVar "arrayCopy") (EVar "slots"))) (DoExpr (EApp (EApp (EApp (EVar "arraySetUnsafe") (ELit (LInt 1))) (EVar "pos")) (EVar "done"))) (DoExpr (EApp (EApp (EVar "setRef") (EFieldAccess (EVar "vm") "found")) (EApp (EVar "Some") (EVar "done"))))))) (arm PWild () (EApp (EApp (EApp (EApp (EApp (EVar "stepThreads") (EVar "vm")) (EVar "clist")) (EVar "nlist")) (EVar "pos")) (EBinOp "+" (EVar "i") (ELit (LInt 1))))))))))
+(DFunDef false "stepThreads" ((PVar "vm") (PVar "clist") (PVar "nlist") (PVar "pos") (PVar "i0")) (ELetGroup ((lgb "go" (clause ((PVar "i")) (EIf (EBinOp ">=" (EVar "i") (EUnOp "!" (EFieldAccess (EVar "clist") "live"))) (ELit LUnit) (EBlock (DoLet false false (PVar "pc") (EApp (EApp (EVar "arrayGetUnsafe") (EVar "i")) (EFieldAccess (EVar "clist") "dense"))) (DoLet false false (PVar "slots") (EApp (EApp (EVar "arrayGetUnsafe") (EVar "i")) (EFieldAccess (EVar "clist") "slots"))) (DoExpr (EMatch (EApp (EApp (EVar "arrayGetUnsafe") (EVar "pc")) (EFieldAccess (EVar "vm") "prog")) (arm (PCon "IChar" (PVar "ch")) () (EBlock (DoExpr (EIf (EBinOp "&&" (EBinOp "<" (EVar "pos") (EFieldAccess (EVar "vm") "subjEnd")) (EBinOp "==" (EApp (EApp (EVar "arrayGetUnsafe") (EVar "pos")) (EFieldAccess (EVar "vm") "codes")) (EVar "ch"))) (EApp (EApp (EApp (EApp (EApp (EVar "addThread") (EVar "vm")) (EVar "nlist")) (EBinOp "+" (EVar "pc") (ELit (LInt 1)))) (EBinOp "+" (EVar "pos") (ELit (LInt 1)))) (EVar "slots")) (ELit LUnit))) (DoExpr (EApp (EVar "go") (EBinOp "+" (EVar "i") (ELit (LInt 1))))))) (arm (PCon "ISet" (PVar "rs") (PVar "negated")) () (EBlock (DoExpr (EIf (EBinOp "&&" (EBinOp "<" (EVar "pos") (EFieldAccess (EVar "vm") "subjEnd")) (EApp (EApp (EApp (EVar "setMatches") (EVar "rs")) (EVar "negated")) (EApp (EApp (EVar "arrayGetUnsafe") (EVar "pos")) (EFieldAccess (EVar "vm") "codes")))) (EApp (EApp (EApp (EApp (EApp (EVar "addThread") (EVar "vm")) (EVar "nlist")) (EBinOp "+" (EVar "pc") (ELit (LInt 1)))) (EBinOp "+" (EVar "pos") (ELit (LInt 1)))) (EVar "slots")) (ELit LUnit))) (DoExpr (EApp (EVar "go") (EBinOp "+" (EVar "i") (ELit (LInt 1))))))) (arm (PCon "IAny" (PVar "dotAll")) () (EBlock (DoExpr (EIf (EBinOp "&&" (EBinOp "<" (EVar "pos") (EFieldAccess (EVar "vm") "subjEnd")) (EBinOp "||" (EVar "dotAll") (EBinOp "/=" (EApp (EApp (EVar "arrayGetUnsafe") (EVar "pos")) (EFieldAccess (EVar "vm") "codes")) (ELit (LInt 10))))) (EApp (EApp (EApp (EApp (EApp (EVar "addThread") (EVar "vm")) (EVar "nlist")) (EBinOp "+" (EVar "pc") (ELit (LInt 1)))) (EBinOp "+" (EVar "pos") (ELit (LInt 1)))) (EVar "slots")) (ELit LUnit))) (DoExpr (EApp (EVar "go") (EBinOp "+" (EVar "i") (ELit (LInt 1))))))) (arm (PCon "IMatch") () (EIf (EBinOp "&&" (EFieldAccess (EVar "vm") "anchorEnd") (EBinOp "/=" (EVar "pos") (EFieldAccess (EVar "vm") "subjEnd"))) (EApp (EVar "go") (EBinOp "+" (EVar "i") (ELit (LInt 1)))) (EBlock (DoLet false false (PVar "done") (EApp (EVar "arrayCopy") (EVar "slots"))) (DoExpr (EApp (EApp (EApp (EVar "arraySetUnsafe") (ELit (LInt 1))) (EVar "pos")) (EVar "done"))) (DoExpr (EApp (EApp (EVar "setRef") (EFieldAccess (EVar "vm") "found")) (EApp (EVar "Some") (EVar "done"))))))) (arm PWild () (EApp (EVar "go") (EBinOp "+" (EVar "i") (ELit (LInt 1)))))))))))) (EApp (EVar "go") (EVar "i0"))))
 (DTypeSig false "seedThread" (TyFun (TyCon "Vm") (TyFun (TyCon "ThreadList") (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyFun (TyCon "Bool") (TyCon "Unit")))))))
 (DFunDef false "seedThread" ((PVar "vm") (PVar "clist") (PVar "pos") (PVar "startAt") (PVar "anchorStart")) (EIf (EBinOp "||" (EApp (EVar "foundYet") (EVar "vm")) (EBinOp "&&" (EVar "anchorStart") (EBinOp "/=" (EVar "pos") (EVar "startAt")))) (ELit LUnit) (EBlock (DoLet false false (PVar "slots") (EApp (EApp (EVar "arrayMake") (EFieldAccess (EVar "vm") "nslots")) (EUnOp "-" (ELit (LInt 1))))) (DoExpr (EApp (EApp (EApp (EVar "arraySetUnsafe") (ELit (LInt 0))) (EVar "pos")) (EVar "slots"))) (DoExpr (EApp (EApp (EApp (EApp (EApp (EVar "addThread") (EVar "vm")) (EVar "clist")) (ELit (LInt 0))) (EVar "pos")) (EVar "slots"))))))
 (DTypeSig false "vmSearch" (TyFun (TyCon "Vm") (TyFun (TyCon "Int") (TyFun (TyCon "Bool") (TyApp (TyCon "Option") (TyApp (TyCon "Array") (TyCon "Int")))))))
 (DFunDef false "vmSearch" ((PVar "vm") (PVar "startAt") (PVar "anchorStart")) (EBlock (DoLet false false (PVar "n") (EApp (EVar "arrayLength") (EFieldAccess (EVar "vm") "prog"))) (DoExpr (EApp (EApp (EApp (EApp (EApp (EApp (EVar "vmLoop") (EVar "vm")) (EVar "startAt")) (EVar "anchorStart")) (EVar "startAt")) (EApp (EVar "newThreads") (EVar "n"))) (EApp (EVar "newThreads") (EVar "n"))))))
 (DTypeSig false "vmLoop" (TyFun (TyCon "Vm") (TyFun (TyCon "Int") (TyFun (TyCon "Bool") (TyFun (TyCon "Int") (TyFun (TyCon "ThreadList") (TyFun (TyCon "ThreadList") (TyApp (TyCon "Option") (TyApp (TyCon "Array") (TyCon "Int"))))))))))
-(DFunDef false "vmLoop" ((PVar "vm") (PVar "startAt") (PVar "anchorStart") (PVar "pos") (PVar "clist") (PVar "nlist")) (EBlock (DoExpr (EApp (EApp (EApp (EApp (EApp (EVar "seedThread") (EVar "vm")) (EVar "clist")) (EVar "pos")) (EVar "startAt")) (EVar "anchorStart"))) (DoExpr (EIf (EBinOp "&&" (EBinOp "==" (EUnOp "!" (EFieldAccess (EVar "clist") "live")) (ELit (LInt 0))) (EBinOp "||" (EApp (EVar "foundYet") (EVar "vm")) (EVar "anchorStart"))) (EUnOp "!" (EFieldAccess (EVar "vm") "found")) (EBlock (DoExpr (EApp (EVar "resetThreads") (EVar "nlist"))) (DoExpr (EApp (EApp (EApp (EApp (EApp (EVar "stepThreads") (EVar "vm")) (EVar "clist")) (EVar "nlist")) (EVar "pos")) (ELit (LInt 0)))) (DoExpr (EIf (EBinOp ">=" (EVar "pos") (EFieldAccess (EVar "vm") "subjEnd")) (EUnOp "!" (EFieldAccess (EVar "vm") "found")) (EApp (EApp (EApp (EApp (EApp (EApp (EVar "vmLoop") (EVar "vm")) (EVar "startAt")) (EVar "anchorStart")) (EBinOp "+" (EVar "pos") (ELit (LInt 1)))) (EVar "nlist")) (EVar "clist")))))))))
+(DFunDef false "vmLoop" ((PVar "vm") (PVar "startAt") (PVar "anchorStart") (PVar "pos0") (PVar "clist0") (PVar "nlist0")) (ELetGroup ((lgb "go" (clause ((PVar "pos") (PVar "clist") (PVar "nlist")) (EBlock (DoExpr (EApp (EApp (EApp (EApp (EApp (EVar "seedThread") (EVar "vm")) (EVar "clist")) (EVar "pos")) (EVar "startAt")) (EVar "anchorStart"))) (DoExpr (EIf (EBinOp "&&" (EBinOp "==" (EUnOp "!" (EFieldAccess (EVar "clist") "live")) (ELit (LInt 0))) (EBinOp "||" (EApp (EVar "foundYet") (EVar "vm")) (EVar "anchorStart"))) (EUnOp "!" (EFieldAccess (EVar "vm") "found")) (EBlock (DoExpr (EApp (EVar "resetThreads") (EVar "nlist"))) (DoExpr (EApp (EApp (EApp (EApp (EApp (EVar "stepThreads") (EVar "vm")) (EVar "clist")) (EVar "nlist")) (EVar "pos")) (ELit (LInt 0)))) (DoExpr (EIf (EBinOp ">=" (EVar "pos") (EFieldAccess (EVar "vm") "subjEnd")) (EUnOp "!" (EFieldAccess (EVar "vm") "found")) (EApp (EApp (EApp (EVar "go") (EBinOp "+" (EVar "pos") (ELit (LInt 1)))) (EVar "nlist")) (EVar "clist"))))))))))) (EApp (EApp (EApp (EVar "go") (EVar "pos0")) (EVar "clist0")) (EVar "nlist0"))))
 (DTypeSig false "codesOf" (TyFun (TyCon "String") (TyApp (TyCon "Array") (TyCon "Int"))))
 (DFunDef false "codesOf" ((PVar "s")) (EBlock (DoLet false false (PVar "cs") (EApp (EVar "toChars") (EVar "s"))) (DoExpr (EApp (EApp (EVar "arrayMakeWith") (EApp (EVar "arrayLength") (EVar "cs"))) (ELam ((PVar "i")) (EApp (EVar "charCode") (EApp (EApp (EVar "arrayGetUnsafe") (EVar "i")) (EVar "cs"))))))))
 (DTypeSig false "searchFrom" (TyFun (TyCon "Regex") (TyFun (TyApp (TyCon "Array") (TyCon "Int")) (TyFun (TyCon "Int") (TyFun (TyCon "Bool") (TyFun (TyCon "Bool") (TyFun (TyApp (TyCon "Ref") (TyCon "Int")) (TyApp (TyCon "Option") (TyApp (TyCon "Array") (TyCon "Int"))))))))))
@@ -2353,7 +2364,7 @@ spansOrdered (m :: rest) floor =
 (DTypeSig true "findAll" (TyFun (TyCon "Regex") (TyFun (TyCon "String") (TyApp (TyCon "List") (TyCon "Match")))))
 (DFunDef false "findAll" ((PVar "re") (PVar "s")) (EApp (EVar "reverse") (EApp (EApp (EApp (EApp (EApp (EApp (EVar "findAllGo") (EVar "re")) (EVar "s")) (EApp (EVar "codesOf") (EVar "s"))) (ELit (LInt 0))) (EUnOp "-" (ELit (LInt 1)))) (EListLit))))
 (DTypeSig false "findAllGo" (TyFun (TyCon "Regex") (TyFun (TyCon "String") (TyFun (TyApp (TyCon "Array") (TyCon "Int")) (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyFun (TyApp (TyCon "List") (TyCon "Match")) (TyApp (TyCon "List") (TyCon "Match")))))))))
-(DFunDef false "findAllGo" ((PVar "re") (PVar "s") (PVar "codes") (PVar "pos") (PVar "prevEnd") (PVar "acc")) (EIf (EBinOp ">" (EVar "pos") (EApp (EVar "arrayLength") (EVar "codes"))) (EVar "acc") (EMatch (EApp (EApp (EApp (EApp (EApp (EApp (EVar "searchFrom") (EVar "re")) (EVar "codes")) (EVar "pos")) (EVar "False")) (EVar "False")) (EApp (EVar "Ref") (ELit (LInt 0)))) (arm (PCon "None") () (EVar "acc")) (arm (PCon "Some" (PVar "slots")) () (EBlock (DoLet false false (PVar "lo") (EApp (EApp (EVar "arrayGetUnsafe") (ELit (LInt 0))) (EVar "slots"))) (DoLet false false (PVar "hi") (EApp (EApp (EVar "arrayGetUnsafe") (ELit (LInt 1))) (EVar "slots"))) (DoLet false false (PVar "keep") (EApp (EVar "not") (EBinOp "&&" (EBinOp "==" (EVar "hi") (EVar "lo")) (EBinOp "==" (EVar "lo") (EVar "prevEnd"))))) (DoLet false false (PVar "next") (EIf (EBinOp "==" (EVar "hi") (EVar "lo")) (EBinOp "+" (EVar "lo") (ELit (LInt 1))) (EVar "hi"))) (DoLet false false (PVar "acc2") (EIf (EVar "keep") (EBinOp "::" (EApp (EApp (EApp (EVar "mkMatch") (EVar "re")) (EVar "s")) (EVar "slots")) (EVar "acc")) (EVar "acc"))) (DoExpr (EApp (EApp (EApp (EApp (EApp (EApp (EVar "findAllGo") (EVar "re")) (EVar "s")) (EVar "codes")) (EVar "next")) (EVar "hi")) (EVar "acc2"))))))))
+(DFunDef false "findAllGo" ((PVar "re") (PVar "s") (PVar "codes") (PVar "pos0") (PVar "prevEnd0") (PVar "acc0")) (ELetGroup ((lgb "go" (clause ((PVar "pos") (PVar "prevEnd") (PVar "acc")) (EIf (EBinOp ">" (EVar "pos") (EApp (EVar "arrayLength") (EVar "codes"))) (EVar "acc") (EMatch (EApp (EApp (EApp (EApp (EApp (EApp (EVar "searchFrom") (EVar "re")) (EVar "codes")) (EVar "pos")) (EVar "False")) (EVar "False")) (EApp (EVar "Ref") (ELit (LInt 0)))) (arm (PCon "None") () (EVar "acc")) (arm (PCon "Some" (PVar "slots")) () (EBlock (DoLet false false (PVar "lo") (EApp (EApp (EVar "arrayGetUnsafe") (ELit (LInt 0))) (EVar "slots"))) (DoLet false false (PVar "hi") (EApp (EApp (EVar "arrayGetUnsafe") (ELit (LInt 1))) (EVar "slots"))) (DoLet false false (PVar "keep") (EApp (EVar "not") (EBinOp "&&" (EBinOp "==" (EVar "hi") (EVar "lo")) (EBinOp "==" (EVar "lo") (EVar "prevEnd"))))) (DoLet false false (PVar "next") (EIf (EBinOp "==" (EVar "hi") (EVar "lo")) (EBinOp "+" (EVar "lo") (ELit (LInt 1))) (EVar "hi"))) (DoLet false false (PVar "acc2") (EIf (EVar "keep") (EBinOp "::" (EApp (EApp (EApp (EVar "mkMatch") (EVar "re")) (EVar "s")) (EVar "slots")) (EVar "acc")) (EVar "acc"))) (DoExpr (EApp (EApp (EApp (EVar "go") (EVar "next")) (EVar "hi")) (EVar "acc2")))))))))) (EApp (EApp (EApp (EVar "go") (EVar "pos0")) (EVar "prevEnd0")) (EVar "acc0"))))
 (DTypeSig true "isFullMatchBytes" (TyFun (TyCon "Regex") (TyFun (TyCon "Bytes") (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyCon "Bool"))))))
 (DFunDef false "isFullMatchBytes" ((PVar "re") (PVar "bytes") (PVar "start") (PVar "end")) (EBlock (DoLet false false (PTuple PWild (PVar "codes")) (EApp (EApp (EApp (EVar "windowCodes") (EVar "bytes")) (EVar "start")) (EVar "end"))) (DoExpr (EApp (EVar "isSome") (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EVar "searchWindow") (EVar "re")) (EVar "codes")) (ETuple (ELit (LInt 0)) (EApp (EVar "arrayLength") (EVar "codes")))) (ELit (LInt 0))) (EVar "True")) (EVar "True")) (EApp (EVar "Ref") (ELit (LInt 0))))))))
 (DTypeSig true "findBytes" (TyFun (TyCon "Regex") (TyFun (TyCon "Bytes") (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyApp (TyCon "Option") (TyCon "Match")))))))
@@ -2365,12 +2376,11 @@ spansOrdered (m :: rest) floor =
 (DTypeSig true "replaceAllWith" (TyFun (TyCon "Regex") (TyFun (TyFun (TyCon "Match") (TyEffect () (Some "e") (TyCon "String"))) (TyFun (TyCon "String") (TyEffect () (Some "e") (TyCon "String"))))))
 (DFunDef false "replaceAllWith" ((PVar "re") (PVar "f") (PVar "s")) (EApp (EVar "stringConcat") (EApp (EVar "reverse") (EApp (EApp (EApp (EApp (EApp (EVar "stitch") (EVar "f")) (EVar "s")) (EApp (EApp (EVar "findAll") (EVar "re")) (EVar "s"))) (ELit (LInt 0))) (EListLit)))))
 (DTypeSig false "stitch" (TyFun (TyFun (TyCon "Match") (TyEffect () (Some "e") (TyCon "String"))) (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "Match")) (TyFun (TyCon "Int") (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyEffect () (Some "e") (TyApp (TyCon "List") (TyCon "String")))))))))
-(DFunDef false "stitch" (PWild (PVar "s") (PList) (PVar "beg") (PVar "acc")) (EBinOp "::" (EApp (EApp (EApp (EVar "sliceClamped") (EVar "beg")) (EApp (EVar "stringLength") (EVar "s"))) (EVar "s")) (EVar "acc")))
-(DFunDef false "stitch" ((PVar "f") (PVar "s") (PCons (PVar "m") (PVar "rest")) (PVar "beg") (PVar "acc")) (EBlock (DoLet false false (PVar "piece") (EApp (EApp (EApp (EVar "sliceClamped") (EVar "beg")) (EFieldAccess (EVar "m") "start")) (EVar "s"))) (DoLet false false (PVar "replaced") (EApp (EVar "f") (EVar "m"))) (DoExpr (EApp (EApp (EApp (EApp (EApp (EVar "stitch") (EVar "f")) (EVar "s")) (EVar "rest")) (EFieldAccess (EVar "m") "end")) (EBinOp "::" (EVar "replaced") (EBinOp "::" (EVar "piece") (EVar "acc")))))))
+(DFunDef false "stitch" ((PVar "f") (PVar "s") (PVar "ms0") (PVar "beg0") (PVar "acc0")) (ELetGroup ((lgb "go" (clause ((PList) (PVar "beg") (PVar "acc")) (EBinOp "::" (EApp (EApp (EApp (EVar "sliceClamped") (EVar "beg")) (EApp (EVar "stringLength") (EVar "s"))) (EVar "s")) (EVar "acc"))) (clause ((PCons (PVar "m") (PVar "rest")) (PVar "beg") (PVar "acc")) (EBlock (DoLet false false (PVar "piece") (EApp (EApp (EApp (EVar "sliceClamped") (EVar "beg")) (EFieldAccess (EAnnot (EVar "m") (TyCon "Match")) "start")) (EVar "s"))) (DoLet false false (PVar "replaced") (EApp (EVar "f") (EVar "m"))) (DoExpr (EApp (EApp (EApp (EVar "go") (EVar "rest")) (EFieldAccess (EAnnot (EVar "m") (TyCon "Match")) "end")) (EBinOp "::" (EVar "replaced") (EBinOp "::" (EVar "piece") (EVar "acc"))))))))) (EApp (EApp (EApp (EVar "go") (EVar "ms0")) (EVar "beg0")) (EVar "acc0"))))
 (DTypeSig false "expandRepl" (TyFun (TyCon "String") (TyFun (TyCon "Match") (TyCon "String"))))
 (DFunDef false "expandRepl" ((PVar "repl") (PVar "m")) (EApp (EVar "stringConcat") (EApp (EVar "reverse") (EApp (EApp (EApp (EApp (EVar "expandGo") (EApp (EVar "toChars") (EVar "repl"))) (ELit (LInt 0))) (EVar "m")) (EListLit)))))
 (DTypeSig false "expandGo" (TyFun (TyApp (TyCon "Array") (TyCon "Char")) (TyFun (TyCon "Int") (TyFun (TyCon "Match") (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyApp (TyCon "List") (TyCon "String")))))))
-(DFunDef false "expandGo" ((PVar "cs") (PVar "i") (PVar "m") (PVar "acc")) (EIf (EBinOp ">=" (EVar "i") (EApp (EVar "arrayLength") (EVar "cs"))) (EVar "acc") (EBlock (DoLet false false (PVar "c") (EApp (EApp (EVar "arrayGetUnsafe") (EVar "i")) (EVar "cs"))) (DoExpr (EIf (EBinOp "&&" (EBinOp "==" (EVar "c") (ELit (LChar "$"))) (EBinOp "<" (EBinOp "+" (EVar "i") (ELit (LInt 1))) (EApp (EVar "arrayLength") (EVar "cs")))) (EBlock (DoLet false false (PVar "d") (EApp (EApp (EVar "arrayGetUnsafe") (EBinOp "+" (EVar "i") (ELit (LInt 1)))) (EVar "cs"))) (DoExpr (EIf (EBinOp "==" (EVar "d") (ELit (LChar "$"))) (EApp (EApp (EApp (EApp (EVar "expandGo") (EVar "cs")) (EBinOp "+" (EVar "i") (ELit (LInt 2)))) (EVar "m")) (EBinOp "::" (ELit (LString "$")) (EVar "acc"))) (EIf (EApp (EVar "isDigit") (EVar "d")) (EApp (EApp (EApp (EApp (EVar "expandGo") (EVar "cs")) (EBinOp "+" (EVar "i") (ELit (LInt 2)))) (EVar "m")) (EBinOp "::" (EApp (EApp (EVar "groupText") (EVar "m")) (EBinOp "-" (EApp (EVar "charCode") (EVar "d")) (ELit (LInt 48)))) (EVar "acc"))) (EApp (EApp (EApp (EApp (EVar "expandGo") (EVar "cs")) (EBinOp "+" (EVar "i") (ELit (LInt 1)))) (EVar "m")) (EBinOp "::" (ELit (LString "$")) (EVar "acc"))))))) (EApp (EApp (EApp (EApp (EVar "expandGo") (EVar "cs")) (EBinOp "+" (EVar "i") (ELit (LInt 1)))) (EVar "m")) (EBinOp "::" (EApp (EVar "charToStr") (EVar "c")) (EVar "acc"))))))))
+(DFunDef false "expandGo" ((PVar "cs") (PVar "i0") (PVar "m") (PVar "acc0")) (ELetGroup ((lgb "go" (clause ((PVar "i") (PVar "acc")) (EIf (EBinOp ">=" (EVar "i") (EApp (EVar "arrayLength") (EVar "cs"))) (EVar "acc") (EBlock (DoLet false false (PVar "c") (EApp (EApp (EVar "arrayGetUnsafe") (EVar "i")) (EVar "cs"))) (DoExpr (EIf (EBinOp "&&" (EBinOp "==" (EVar "c") (ELit (LChar "$"))) (EBinOp "<" (EBinOp "+" (EVar "i") (ELit (LInt 1))) (EApp (EVar "arrayLength") (EVar "cs")))) (EBlock (DoLet false false (PVar "d") (EApp (EApp (EVar "arrayGetUnsafe") (EBinOp "+" (EVar "i") (ELit (LInt 1)))) (EVar "cs"))) (DoExpr (EIf (EBinOp "==" (EVar "d") (ELit (LChar "$"))) (EApp (EApp (EVar "go") (EBinOp "+" (EVar "i") (ELit (LInt 2)))) (EBinOp "::" (ELit (LString "$")) (EVar "acc"))) (EIf (EApp (EVar "isDigit") (EVar "d")) (EApp (EApp (EVar "go") (EBinOp "+" (EVar "i") (ELit (LInt 2)))) (EBinOp "::" (EApp (EApp (EVar "groupText") (EVar "m")) (EBinOp "-" (EApp (EVar "charCode") (EVar "d")) (ELit (LInt 48)))) (EVar "acc"))) (EApp (EApp (EVar "go") (EBinOp "+" (EVar "i") (ELit (LInt 1)))) (EBinOp "::" (ELit (LString "$")) (EVar "acc"))))))) (EApp (EApp (EVar "go") (EBinOp "+" (EVar "i") (ELit (LInt 1)))) (EBinOp "::" (EApp (EVar "charToStr") (EVar "c")) (EVar "acc")))))))))) (EApp (EApp (EVar "go") (EVar "i0")) (EVar "acc0"))))
 (DTypeSig false "groupText" (TyFun (TyCon "Match") (TyFun (TyCon "Int") (TyCon "String"))))
 (DFunDef false "groupText" ((PVar "m") (PLit (LInt 0))) (EFieldAccess (EVar "m") "text"))
 (DFunDef false "groupText" ((PVar "m") (PVar "k")) (EMatch (EApp (EApp (EVar "get") (EBinOp "-" (EVar "k") (ELit (LInt 1)))) (EFieldAccess (EVar "m") "groups")) (arm (PCon "Some" (PCon "Some" (PVar "g"))) () (EFieldAccess (EVar "g") "text")) (arm PWild () (ELit (LString "")))))

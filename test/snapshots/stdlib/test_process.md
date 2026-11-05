@@ -1,5 +1,5 @@
 # META
-source_lines=659
+source_lines=661
 stages=DESUGAR,MARK
 # SOURCE
 {- | Assertions for a test that runs a program.
@@ -600,6 +600,8 @@ floorBlockPairs : String ->
   String ->
   List String ->
   List (String, Option String)
+-- Bound: list built in tail position modulo cons: a where-local go loses the constant-stack loop until the lambda-lift pass (#4878); convert then.
+-- lint-disable-next-line rule-threaded-invariant
 floorBlockPairs _ _ [] = []
 floorBlockPairs titlePrefix callOpen (line :: rest) =
   match titledFloorName titlePrefix line

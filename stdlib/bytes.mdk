@@ -140,11 +140,13 @@ toArray (Bytes bb) = byteBlockToIntArray bb
 
 -- Writes `arr[i ..]` into the block `bb`, which is exactly as long as `arr`.
 fromU8ArrayFill : Array U8 -> ByteBlock -> Int -> Unit
-fromU8ArrayFill arr bb i
-  | i >= arrayLength arr = ()
-  | otherwise =
-    byteBlockSetUnsafe i (u8ToInt arr[i]) bb
-    fromU8ArrayFill arr bb (i + 1)
+fromU8ArrayFill arr bb i0 = go i0
+  where
+    go i
+      | i >= arrayLength arr = ()
+      | otherwise =
+        byteBlockSetUnsafe i (u8ToInt arr[i]) bb
+        go (i + 1)
 
 {- | The byte string holding the elements of `arr`, in order.
 
@@ -311,13 +313,15 @@ splitAt n b = (take n b, drop n b)
 
 -- `v` is the needle already widened, so the loop compares machine words.
 elemIndexGo : Int -> ByteBlock -> Int -> Int -> Option Int
-elemIndexGo v bb i n =
-  if i >= n then
-    None
-  else if byteBlockGetUnsafe i bb == v then
-    Some i
-  else
-    elemIndexGo v bb (i + 1) n
+elemIndexGo v bb i0 n = go i0
+  where
+    go i =
+      if i >= n then
+        None
+      else if byteBlockGetUnsafe i bb == v then
+        Some i
+      else
+        go (i + 1)
 
 {- | The index of the first byte equal to `v`, or `None` when no byte is.
 
@@ -354,22 +358,26 @@ elemIndexWithin lo hi v (Bytes bb) =
 -- copy at every candidate position, which is the cost the packed
 -- representation exists to avoid.
 matchesAtGo : ByteBlock -> ByteBlock -> Int -> Int -> Int -> Bool
-matchesAtGo nb hb i pos n =
-  if i >= n then
-    True
-  else if byteBlockGetUnsafe i nb == byteBlockGetUnsafe (pos + i) hb then
-    matchesAtGo nb hb (i + 1) pos n
-  else
-    False
+matchesAtGo nb hb i0 pos n = go i0
+  where
+    go i =
+      if i >= n then
+        True
+      else if byteBlockGetUnsafe i nb == byteBlockGetUnsafe (pos + i) hb then
+        go (i + 1)
+      else
+        False
 
 indexOfWithinGo : ByteBlock -> Int -> ByteBlock -> Int -> Int -> Option Int
-indexOfWithinGo nb nlen hb pos lastPos =
-  if pos > lastPos then
-    None
-  else if matchesAtGo nb hb 0 pos nlen then
-    Some pos
-  else
-    indexOfWithinGo nb nlen hb (pos + 1) lastPos
+indexOfWithinGo nb nlen hb pos0 lastPos = go pos0
+  where
+    go pos =
+      if pos > lastPos then
+        None
+      else if matchesAtGo nb hb 0 pos nlen then
+        Some pos
+      else
+        go (pos + 1)
 
 {- | The index of the first occurrence of `needle` within `[lo, hi)`, or
    `None`.
@@ -429,10 +437,11 @@ lastIndexOf needle haystack
 -- copy is `O(length)` per hit, so a needle that hits often costs quadratic
 -- bytes.
 lastIndexOfGo : Bytes -> Bytes -> Int -> Option Int -> Option Int
-lastIndexOfGo needle haystack from acc =
-  match indexOfWithin from (length haystack) needle haystack
-    None => acc
-    Some i => lastIndexOfGo needle haystack (i + 1) (Some i)
+lastIndexOfGo needle haystack from0 acc0 = go from0 acc0
+  where
+    go from acc = match indexOfWithin from (length haystack) needle haystack
+      None => acc
+      Some i => go (i + 1) (Some i)
 
 {- | Whether `needle` occurs anywhere in `haystack`. The empty needle occurs
    in every byte string.
@@ -489,8 +498,9 @@ endsWith (Bytes nb) (Bytes bb) =
 -- same values back.
 
 foldGo : (b -> U8 -> <e> b) -> b -> ByteBlock -> Int -> Int -> <e> b
-foldGo f acc bb i n =
-  if i >= n then acc else foldGo f (f acc (byteAt i bb)) bb (i + 1) n
+foldGo f acc0 bb i0 n = go acc0 i0
+  where
+    go acc i = if i >= n then acc else go (f acc (byteAt i bb)) (i + 1)
 
 {- | The result of applying `f` to an accumulator and each byte of `b` in
    turn, starting from `init` and reading left to right.
@@ -509,12 +519,14 @@ fold : (b -> U8 -> <e> b) -> b -> Bytes -> <e> b
 fold f init (Bytes bb) = foldGo f init bb 0 (byteBlockLength bb)
 
 forEachGo : (U8 -> <e> Unit) -> ByteBlock -> Int -> Int -> <e> Unit
-forEachGo f bb i n =
-  if i >= n then
-    ()
-  else
-    let _ = f (byteAt i bb)
-    forEachGo f bb (i + 1) n
+forEachGo f bb i0 n = go i0
+  where
+    go i =
+      if i >= n then
+        ()
+      else
+        let _ = f (byteAt i bb)
+        go (i + 1)
 
 {- | Runs `f` on each byte of `b` in order, for its effect.
 
@@ -529,13 +541,10 @@ forEach f (Bytes bb) = forEachGo f bb 0 (byteBlockLength bb)
 -- over a megabyte buffer is the reason this module has them at all.
 
 anyGo : (U8 -> <e> Bool) -> ByteBlock -> Int -> Int -> <e> Bool
-anyGo f bb i n =
-  if i >= n then
-    False
-  else if f (byteAt i bb) then
-    True
-  else
-    anyGo f bb (i + 1) n
+anyGo f bb i0 n = go i0
+  where
+    go i =
+      if i >= n then False else if f (byteAt i bb) then True else go (i + 1)
 
 {- | Whether at least one byte of `b` satisfies `f`. `False` on an empty byte
    string. Stops at the first byte that satisfies `f`.
@@ -552,13 +561,10 @@ any f (Bytes bb) = anyGo f bb 0 (byteBlockLength bb)
 -- False
 
 allGo : (U8 -> <e> Bool) -> ByteBlock -> Int -> Int -> <e> Bool
-allGo f bb i n =
-  if i >= n then
-    True
-  else if f (byteAt i bb) then
-    allGo f bb (i + 1) n
-  else
-    False
+allGo f bb i0 n = go i0
+  where
+    go i =
+      if i >= n then True else if f (byteAt i bb) then go (i + 1) else False
 
 {- | Whether every byte of `b` satisfies `f`. `True` on an empty byte string.
    Stops at the first byte that does not satisfy `f`.
@@ -575,12 +581,14 @@ all f (Bytes bb) = allGo f bb 0 (byteBlockLength bb)
 -- True
 
 mapGo : (U8 -> <e> U8) -> ByteBlock -> ByteBlock -> Int -> Int -> <e> Unit
-mapGo f src dst i n =
-  if i >= n then
-    ()
-  else
-    byteBlockSetUnsafe i (u8ToInt (f (byteAt i src))) dst
-    mapGo f src dst (i + 1) n
+mapGo f src dst i0 n = go i0
+  where
+    go i =
+      if i >= n then
+        ()
+      else
+        byteBlockSetUnsafe i (u8ToInt (f (byteAt i src))) dst
+        go (i + 1)
 
 {- | The byte string of the same length holding `f` applied to each byte of
    `b`.
@@ -667,13 +675,15 @@ concat parts =
 -- the packed representation exists to avoid.
 
 eqGo : ByteBlock -> ByteBlock -> Int -> Int -> Bool
-eqGo a b i n =
-  if i >= n then
-    True
-  else if byteBlockGetUnsafe i a == byteBlockGetUnsafe i b then
-    eqGo a b (i + 1) n
-  else
-    False
+eqGo a b i0 n = go i0
+  where
+    go i =
+      if i >= n then
+        True
+      else if byteBlockGetUnsafe i a == byteBlockGetUnsafe i b then
+        go (i + 1)
+      else
+        False
 
 {- | Two byte strings are equal when they hold the same bytes in the same
    order.
@@ -688,15 +698,17 @@ export impl Eq Bytes where
     if n /= byteBlockLength b then False else eqGo a b 0 n
 
 compareGo : ByteBlock -> ByteBlock -> Int -> Int -> Int -> Ordering
-compareGo a b i na nb =
-  if i >= na then
-    if i >= nb then Eq else Lt
-  else if i >= nb then
-    Gt
-  else
-    let x = byteBlockGetUnsafe i a
-    let y = byteBlockGetUnsafe i b
-    if x < y then Lt else if x > y then Gt else compareGo a b (i + 1) na nb
+compareGo a b i0 na nb = go i0
+  where
+    go i =
+      if i >= na then
+        if i >= nb then Eq else Lt
+      else if i >= nb then
+        Gt
+      else
+        let x = byteBlockGetUnsafe i a
+        let y = byteBlockGetUnsafe i b
+        if x < y then Lt else if x > y then Gt else go (i + 1)
 
 {- | Byte strings compare lexicographically, as the arrays of their bytes
    do: byte by byte from the front, with a prefix sorting before what
@@ -713,15 +725,13 @@ export impl Ord Bytes where
 -- The prelude's compound fold, `acc * 33 + hash byte`, one `derivedHashStep`
 -- per byte.
 hashGo : Int -> ByteBlock -> Int -> Int -> Int
-hashGo acc bb i n =
-  if i >= n then
-    acc
-  else
-    hashGo
-      (derivedHashStep acc (hashInt (byteBlockGetUnsafe i bb)))
-      bb
-      (i + 1)
-      n
+hashGo acc0 bb i0 n = go acc0 i0
+  where
+    go acc i =
+      if i >= n then
+        acc
+      else
+        go (derivedHashStep acc (hashInt (byteBlockGetUnsafe i bb))) (i + 1)
 
 {- | Byte strings hash by their bytes, so `Bytes` can key a
    `hash_map.HashMap` or a `hash_set.HashSet`. Two byte strings that are
@@ -741,11 +751,13 @@ hexDigit : Int -> Char
 hexDigit n = optionOr '?' (toDigit n)
 
 debugBytesHex : ByteBlock -> Int -> Int -> String
-debugBytesHex bb i n
-  | i >= n = ""
-  | otherwise =
-    let b = byteBlockGetUnsafe i bb
-    "\{hexDigit (shiftRight b 4)}\{hexDigit (bitAnd b 15)}\{debugBytesHex bb (i + 1) n}"
+debugBytesHex bb i0 n = go i0
+  where
+    go i
+      | i >= n = ""
+      | otherwise =
+        let b = byteBlockGetUnsafe i bb
+        "\{hexDigit (shiftRight b 4)}\{hexDigit (bitAnd b 15)}\{go (i + 1)}"
 
 {- | Renders as `Bytes "<hex>"`: lowercase, two digits per byte, with no
    separator between bytes. The rendering differs from that of the
@@ -862,12 +874,14 @@ utf8StepAt bb i n =
     utf8Ill 1
 
 utf8ValidFrom : ByteBlock -> Int -> Int -> Bool
-utf8ValidFrom bb i n =
-  if i >= n then
-    True
-  else
-    let step = utf8StepAt bb i n
-    step > 0 && utf8ValidFrom bb (i + step) n
+utf8ValidFrom bb i0 n = go i0
+  where
+    go i =
+      if i >= n then
+        True
+      else
+        let step = utf8StepAt bb i n
+        step > 0 && go (i + step)
 
 {- | The string `b` encodes, read as UTF-8, or `None` when `b` is not valid
    UTF-8.

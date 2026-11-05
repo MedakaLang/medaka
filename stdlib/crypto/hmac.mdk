@@ -21,11 +21,13 @@ import bytes as B
 import u8 as U8
 
 ctEqAccum : Bytes -> Bytes -> Int -> Int -> Int
-ctEqAccum a b i acc =
-  if i >= B.length a then
-    acc
-  else
-    ctEqAccum a b (i + 1) (bitOr acc (bitXor (U8.toInt a[i]) (U8.toInt b[i])))
+ctEqAccum a b i0 acc0 = go i0 acc0
+  where
+    go i acc =
+      if i >= B.length a then
+        acc
+      else
+        go (i + 1) (bitOr acc (bitXor (U8.toInt a[i]) (U8.toInt b[i])))
 
 {- | Whether two byte strings contain the same bytes.
 
@@ -53,20 +55,25 @@ blockBytes : Int
 blockBytes = 64
 
 fillPad : ByteBlock -> Int -> Int -> Unit
-fillPad out pad i =
-  if i >= blockBytes then
-    ()
-  else
-    let () = byteBlockSetUnsafe i pad out
-    fillPad out pad (i + 1)
+fillPad out pad i0 = go i0
+  where
+    go i =
+      if i >= blockBytes then
+        ()
+      else
+        let () = byteBlockSetUnsafe i pad out
+        go (i + 1)
 
 fillKeyPad : ByteBlock -> ByteBlock -> Int -> Int -> Unit
-fillKeyPad key out pad i =
-  if i >= byteBlockLength key then
-    ()
-  else
-    let () = byteBlockSetUnsafe i (bitXor (byteBlockGetUnsafe i key) pad) out
-    fillKeyPad key out pad (i + 1)
+fillKeyPad key out pad i0 = go i0
+  where
+    go i =
+      if i >= byteBlockLength key then
+        ()
+      else
+        let () =
+          byteBlockSetUnsafe i (bitXor (byteBlockGetUnsafe i key) pad) out
+        go (i + 1)
 
 -- `key` is already normalized to at most `blockBytes`, so the tail of the
 -- block keeps the raw pad byte: that is the zero-padding of RFC 2104 §2
@@ -122,7 +129,7 @@ hmacSha256 key message =
    the inner and outer hash, two SHA-256 compressions for a message that
    fits in the tag's own 32 bytes, instead of `hmacSha256`'s four. -}
 export data HmacSha256Key =
-  | HmacSha256Key (U32, U32, U32, U32, U32, U32, U32, U32) (U32, U32, U32, U32, U32, U32, U32, U32)
+  HmacSha256Key (U32, U32, U32, U32, U32, U32, U32, U32) (U32, U32, U32, U32, U32, U32, U32, U32)
 
 {- | Precomputes the ipad/opad compressions for `key`, once. -}
 export

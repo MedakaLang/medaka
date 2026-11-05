@@ -156,13 +156,15 @@ complementGo ((lo, hi) :: rest) next =
     complementGo rest after
 
 inRanges : Array Int -> Int -> Int -> Bool
-inRanges rs i c =
-  if i >= arrayLength rs then
-    False
-  else if c >= arrayGetUnsafe i rs && c <= arrayGetUnsafe (i + 1) rs then
-    True
-  else
-    inRanges rs (i + 2) c
+inRanges rs i0 c = go i0
+  where
+    go i =
+      if i >= arrayLength rs then
+        False
+      else if c >= arrayGetUnsafe i rs && c <= arrayGetUnsafe (i + 1) rs then
+        True
+      else
+        go (i + 2)
 
 setMatches : Array Int -> Bool -> Int -> Bool
 setMatches rs negated c =
@@ -472,17 +474,16 @@ expandRepeat greedy node lo hi =
     catRepeat node lo (optChain greedy node (hi - lo))
 
 catRepeat : Node -> Int -> Node -> Node
-catRepeat node n rest =
-  if n <= 0 then rest else NCat node (catRepeat node (n - 1) rest)
+catRepeat node n0 rest = go n0
+  where
+    go n = if n <= 0 then rest else NCat node (go (n - 1))
 
 -- `a{2,4}` is `a a (a (a)?)?`, nested rather than a flat run of options, so
 -- a greedy bound takes as many copies as it can and a lazy one as few.
 optChain : Bool -> Node -> Int -> Node
-optChain greedy node k =
-  if k <= 0 then
-    NEmpty
-  else
-    NOpt greedy (NCat node (optChain greedy node (k - 1)))
+optChain greedy node k0 = go k0
+  where
+    go k = if k <= 0 then NEmpty else NOpt greedy (NCat node (go (k - 1)))
 
 parseAtom : PState -> Node
 parseAtom st =
@@ -919,6 +920,8 @@ foundYet : Vm -> Bool
 foundYet vm = isSome !vm.found
 
 addThread : Vm -> ThreadList -> Int -> Int -> Array Int -> Unit
+-- Bound: hot compiler path: the where-go form allocates one closure per call until the lambda-lift pass (#4878); convert then.
+-- lint-disable-next-line rule-threaded-invariant
 addThread vm list pc pos slots =
   vm.steps := !vm.steps + 1
   if arrayGetUnsafe pc list.mark == !list.gen then
@@ -963,35 +966,37 @@ wordAt vm i =
 -- already in nlist may still overwrite that record later, which is what
 -- makes greedy repetition win.
 stepThreads : Vm -> ThreadList -> ThreadList -> Int -> Int -> Unit
-stepThreads vm clist nlist pos i =
-  if i >= !clist.live then
-    ()
-  else
-    let pc = arrayGetUnsafe i clist.dense
-    let slots = arrayGetUnsafe i clist.slots
-    match arrayGetUnsafe pc vm.prog
-      IChar ch =>
-        if pos < vm.subjEnd && arrayGetUnsafe pos vm.codes == ch then
-          addThread vm nlist (pc + 1) (pos + 1) slots
-        stepThreads vm clist nlist pos (i + 1)
-      ISet rs negated =>
-        if pos < vm.subjEnd
-          && setMatches rs negated (arrayGetUnsafe pos vm.codes) then
-          addThread vm nlist (pc + 1) (pos + 1) slots
-        stepThreads vm clist nlist pos (i + 1)
-      IAny dotAll =>
-        if pos < vm.subjEnd
-          && (dotAll || arrayGetUnsafe pos vm.codes /= 10) then
-          addThread vm nlist (pc + 1) (pos + 1) slots
-        stepThreads vm clist nlist pos (i + 1)
-      IMatch =>
-        if vm.anchorEnd && pos /= vm.subjEnd then
-          stepThreads vm clist nlist pos (i + 1)
-        else
-          let done = arrayCopy slots
-          arraySetUnsafe 1 pos done
-          vm.found := Some done
-      _ => stepThreads vm clist nlist pos (i + 1)
+stepThreads vm clist nlist pos i0 = go i0
+  where
+    go i =
+      if i >= !clist.live then
+        ()
+      else
+        let pc = arrayGetUnsafe i clist.dense
+        let slots = arrayGetUnsafe i clist.slots
+        match arrayGetUnsafe pc vm.prog
+          IChar ch =>
+            if pos < vm.subjEnd && arrayGetUnsafe pos vm.codes == ch then
+              addThread vm nlist (pc + 1) (pos + 1) slots
+            go (i + 1)
+          ISet rs negated =>
+            if pos < vm.subjEnd
+              && setMatches rs negated (arrayGetUnsafe pos vm.codes) then
+              addThread vm nlist (pc + 1) (pos + 1) slots
+            go (i + 1)
+          IAny dotAll =>
+            if pos < vm.subjEnd
+              && (dotAll || arrayGetUnsafe pos vm.codes /= 10) then
+              addThread vm nlist (pc + 1) (pos + 1) slots
+            go (i + 1)
+          IMatch =>
+            if vm.anchorEnd && pos /= vm.subjEnd then
+              go (i + 1)
+            else
+              let done = arrayCopy slots
+              arraySetUnsafe 1 pos done
+              vm.found := Some done
+          _ => go (i + 1)
 
 -- A fresh thread is seeded at every position until a match is found, at the
 -- end of the list so it loses to everything already running: that is the
@@ -1018,17 +1023,16 @@ vmLoop : Vm ->
   ThreadList ->
   ThreadList ->
   Option (Array Int)
-vmLoop vm startAt anchorStart pos clist nlist =
-  seedThread vm clist pos startAt anchorStart
-  if !clist.live == 0 && (foundYet vm || anchorStart) then
-    !vm.found
-  else
-    resetThreads nlist
-    stepThreads vm clist nlist pos 0
-    if pos >= vm.subjEnd then
-      !vm.found
-    else
-      vmLoop vm startAt anchorStart (pos + 1) nlist clist
+vmLoop vm startAt anchorStart pos0 clist0 nlist0 = go pos0 clist0 nlist0
+  where
+    go pos clist nlist =
+      seedThread vm clist pos startAt anchorStart
+      if !clist.live == 0 && (foundYet vm || anchorStart) then
+        !vm.found
+      else
+        resetThreads nlist
+        stepThreads vm clist nlist pos 0
+        if pos >= vm.subjEnd then !vm.found else go (pos + 1) nlist clist
 
 codesOf : String -> Array Int
 codesOf s =
@@ -1137,6 +1141,8 @@ groupsOfWith : (Int -> Int -> String) ->
   Array Int ->
   Int ->
   List (Option Group)
+-- Bound: list built in tail position modulo cons: a where-local go loses the constant-stack loop until the lambda-lift pass (#4878); convert then.
+-- lint-disable-next-line rule-threaded-invariant
 groupsOfWith textOf re slots k =
   if k > re.ngroups then
     []
@@ -1406,18 +1412,20 @@ findAllGo : Regex ->
   Int ->
   List Match ->
   List Match
-findAllGo re s codes pos prevEnd acc =
-  if pos > arrayLength codes then
-    acc
-  else match searchFrom re codes pos False False (Ref 0)
-    None => acc
-    Some slots =>
-      let lo = arrayGetUnsafe 0 slots
-      let hi = arrayGetUnsafe 1 slots
-      let keep = not (hi == lo && lo == prevEnd)
-      let next = if hi == lo then lo + 1 else hi
-      let acc2 = if keep then mkMatch re s slots :: acc else acc
-      findAllGo re s codes next hi acc2
+findAllGo re s codes pos0 prevEnd0 acc0 = go pos0 prevEnd0 acc0
+  where
+    go pos prevEnd acc =
+      if pos > arrayLength codes then
+        acc
+      else match searchFrom re codes pos False False (Ref 0)
+        None => acc
+        Some slots =>
+          let lo = arrayGetUnsafe 0 slots
+          let hi = arrayGetUnsafe 1 slots
+          let keep = not (hi == lo && lo == prevEnd)
+          let next = if hi == lo then lo + 1 else hi
+          let acc2 = if keep then mkMatch re s slots :: acc else acc
+          go next hi acc2
 
 -- > map (m => (m : Match).text) (findAll (mustCompile "a*") "baaab")
 -- ["", "aaa", ""]
@@ -1590,33 +1598,37 @@ stitch : (Match -> <e> String) ->
   Int ->
   List String ->
   <e> List String
-stitch _ s [] beg acc = sliceClamped beg (stringLength s) s :: acc
-stitch f s (m :: rest) beg acc =
-  -- Bound: one subject sliced at ascending offsets, linear on the native runtime (cursor cache) and quadratic on WasmGC for long non-ASCII input; the callback f may slice another string, which evicts the cache and makes native quadratic too.
-  -- lint-disable-next-line rule-reslice-in-loop
-  let piece = sliceClamped beg m.start s
-  let replaced = f m
-  stitch f s rest m.end (replaced :: piece :: acc)
+stitch f s ms0 beg0 acc0 = go ms0 beg0 acc0
+  where
+    go [] beg acc = sliceClamped beg (stringLength s) s :: acc
+    go (m :: rest) beg acc =
+      -- Bound: one subject sliced at ascending offsets, linear on the native runtime (cursor cache) and quadratic on WasmGC for long non-ASCII input; the callback f may slice another string, which evicts the cache and makes native quadratic too.
+      -- lint-disable-next-line rule-reslice-in-loop
+      let piece = sliceClamped beg (m : Match).start s
+      let replaced = f m
+      go rest (m : Match).end (replaced :: piece :: acc)
 
 expandRepl : String -> Match -> String
 expandRepl repl m = stringConcat (reverse (expandGo (toChars repl) 0 m []))
 
 expandGo : Array Char -> Int -> Match -> List String -> List String
-expandGo cs i m acc =
-  if i >= arrayLength cs then
-    acc
-  else
-    let c = arrayGetUnsafe i cs
-    if c == '$' && i + 1 < arrayLength cs then
-      let d = arrayGetUnsafe (i + 1) cs
-      if d == '$' then
-        expandGo cs (i + 2) m ("$" :: acc)
-      else if isDigit d then
-        expandGo cs (i + 2) m (groupText m (charCode d - 48) :: acc)
+expandGo cs i0 m acc0 = go i0 acc0
+  where
+    go i acc =
+      if i >= arrayLength cs then
+        acc
       else
-        expandGo cs (i + 1) m ("$" :: acc)
-    else
-      expandGo cs (i + 1) m (charToStr c :: acc)
+        let c = arrayGetUnsafe i cs
+        if c == '$' && i + 1 < arrayLength cs then
+          let d = arrayGetUnsafe (i + 1) cs
+          if d == '$' then
+            go (i + 2) ("$" :: acc)
+          else if isDigit d then
+            go (i + 2) (groupText m (charCode d - 48) :: acc)
+          else
+            go (i + 1) ("$" :: acc)
+        else
+          go (i + 1) (charToStr c :: acc)
 
 groupText : Match -> Int -> String
 groupText m 0 = m.text

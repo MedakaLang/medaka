@@ -421,12 +421,13 @@ finishFloat tok end = match stringToFloat tok
 
 -- Keyword literals (true/false/null).
 matchLit : Array Char -> Int -> Array Char -> Int -> Int -> Bool
-matchLit arr j litArr k m
-  | k >= m = True
-  | j + k >= arrayLength arr = False
-  | arrayGetUnsafe (j + k) arr == arrayGetUnsafe k litArr =
-    matchLit arr j litArr (k + 1) m
-  | otherwise = False
+matchLit arr j litArr k0 m = go k0
+  where
+    go k
+      | k >= m = True
+      | j + k >= arrayLength arr = False
+      | arrayGetUnsafe (j + k) arr == arrayGetUnsafe k litArr = go (k + 1)
+      | otherwise = False
 
 parseLit : Array Char -> Int -> String -> Json -> Result String (Json, Int)
 parseLit arr j lit val =
@@ -612,10 +613,13 @@ get key (JObject pairs) = lookupGo key pairs 0 (arrayLength pairs)
 get _ _ = None
 
 lookupGo : String -> Array (String, Json) -> Int -> Int -> Option Json
-lookupGo key pairs i n
-  | i >= n = None
-  | fst (arrayGetUnsafe i pairs) == key = Some (snd (arrayGetUnsafe i pairs))
-  | otherwise = lookupGo key pairs (i + 1) n
+lookupGo key pairs i0 n = go i0
+  where
+    go i
+      | i >= n = None
+      | fst (arrayGetUnsafe i pairs) == key =
+        Some (snd (arrayGetUnsafe i pairs))
+      | otherwise = go (i + 1)
 
 {- | The element at index `k` of a `JArray`, or `None` when `k` is out of
    range or the value is not an array.
@@ -737,9 +741,11 @@ indexOfStep s =
     None
 
 allDigits : Array Char -> Int -> Int -> Bool
-allDigits cs i n
-  | i >= n = True
-  | otherwise = isDigit (arrayGetUnsafe i cs) && allDigits cs (i + 1) n
+allDigits cs i0 n = go i0
+  where
+    go i
+      | i >= n = True
+      | otherwise = isDigit (arrayGetUnsafe i cs) && go (i + 1)
 
 kindName : Json -> String
 kindName JNull = "null"
@@ -837,16 +843,15 @@ prettyInto n level (JObject pairs) acc
 prettyInto _ _ j acc = stringifyInto j acc
 
 prettyElems : Int -> Int -> Array Json -> Int -> List String -> List String
-prettyElems n level arr i acc
-  | i >= arrayLength arr = acc
-  | otherwise =
-    let sep = if i == 0 then acc else "," :: acc
-    prettyElems
-      n
-      level
-      arr
-      (i + 1)
-      (prettyInto n level (arrayGetUnsafe i arr) (newlineAt n level :: sep))
+prettyElems n level arr i0 acc0 = go i0 acc0
+  where
+    go i acc
+      | i >= arrayLength arr = acc
+      | otherwise =
+        let sep = if i == 0 then acc else "," :: acc
+        go
+          (i + 1)
+          (prettyInto n level (arrayGetUnsafe i arr) (newlineAt n level :: sep))
 
 prettyMembers : Int ->
   Int ->
@@ -854,13 +859,15 @@ prettyMembers : Int ->
   Int ->
   List String ->
   List String
-prettyMembers n level pairs i acc
-  | i >= arrayLength pairs = acc
-  | otherwise =
-    let p = arrayGetUnsafe i pairs
-    let sep = if i == 0 then acc else "," :: acc
-    let keyed = ": " :: escapeString (fst p) :: newlineAt n level :: sep
-    prettyMembers n level pairs (i + 1) (prettyInto n level (snd p) keyed)
+prettyMembers n level pairs i0 acc0 = go i0 acc0
+  where
+    go i acc
+      | i >= arrayLength pairs = acc
+      | otherwise =
+        let p = arrayGetUnsafe i pairs
+        let sep = if i == 0 then acc else "," :: acc
+        let keyed = ": " :: escapeString (fst p) :: newlineAt n level :: sep
+        go (i + 1) (prettyInto n level (snd p) keyed)
 
 {- | The value as JSON text spread over lines, indented `n` spaces per level.
 
@@ -887,9 +894,11 @@ lineEnd arr i
   | otherwise = lineEnd arr (i + 1)
 
 blankBetween : Array Char -> Int -> Int -> Bool
-blankBetween arr i e
-  | i >= e = True
-  | otherwise = isWs (arrayGetUnsafe i arr) && blankBetween arr (i + 1) e
+blankBetween arr i0 e = go i0
+  where
+    go i
+      | i >= e = True
+      | otherwise = isWs (arrayGetUnsafe i arr) && go (i + 1)
 
 parseLinesGo : Array Char ->
   Int ->
@@ -940,18 +949,21 @@ stringifyLines js =
 -- ── Instances ───────────────────────────────────────────────────────────
 
 arrEqJson : Array Json -> Array Json -> Int -> Bool
-arrEqJson a b i
-  | i >= arrayLength a = True
-  | otherwise =
-    eq (arrayGetUnsafe i a) (arrayGetUnsafe i b) && arrEqJson a b (i + 1)
+arrEqJson a b i0 = go i0
+  where
+    go i
+      | i >= arrayLength a = True
+      | otherwise = eq (arrayGetUnsafe i a) (arrayGetUnsafe i b) && go (i + 1)
 
 objEqJson : Array (String, Json) -> Array (String, Json) -> Int -> Bool
-objEqJson a b i
-  | i >= arrayLength a = True
-  | otherwise =
-    let pa = arrayGetUnsafe i a
-    let pb = arrayGetUnsafe i b
-    fst pa == fst pb && eq (snd pa) (snd pb) && objEqJson a b (i + 1)
+objEqJson a b i0 = go i0
+  where
+    go i
+      | i >= arrayLength a = True
+      | otherwise =
+        let pa = arrayGetUnsafe i a
+        let pb = arrayGetUnsafe i b
+        fst pa == fst pb && eq (snd pa) (snd pb) && go (i + 1)
 
 {- | Values are equal when they have the same structure. Objects compare
    member by member in order, so the same members in a different order are

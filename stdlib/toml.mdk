@@ -96,19 +96,21 @@ parseArrayItems : Array Char ->
   Int ->
   List String ->
   Result String (List String, Int)
-parseArrayItems arr i acc
-  | i >= arrayLength arr = Err "unterminated array"
-  | arrayGetUnsafe i arr == ']' = Ok (reverse acc, i + 1)
-  | arrayGetUnsafe i arr == ' ' = parseArrayItems arr (i + 1) acc
-  | arrayGetUnsafe i arr == '\t' = parseArrayItems arr (i + 1) acc
-  | arrayGetUnsafe i arr == '"' = parseArrayItemStr arr i acc
-  | otherwise =
-    Err
-      (stringConcat [
-        "unexpected char in array: '",
-        charToStr (arrayGetUnsafe i arr),
-        "'",
-      ])
+parseArrayItems arr i0 acc = go i0
+  where
+    go i
+      | i >= arrayLength arr = Err "unterminated array"
+      | arrayGetUnsafe i arr == ']' = Ok (reverse acc, i + 1)
+      | arrayGetUnsafe i arr == ' ' = go (i + 1)
+      | arrayGetUnsafe i arr == '\t' = go (i + 1)
+      | arrayGetUnsafe i arr == '"' = parseArrayItemStr arr i acc
+      | otherwise =
+        Err
+          (stringConcat [
+            "unexpected char in array: '",
+            charToStr (arrayGetUnsafe i arr),
+            "'",
+          ])
 
 parseArrayItemStr : Array Char ->
   Int ->
@@ -127,28 +129,32 @@ parseArraySep : Array Char ->
   Int ->
   List String ->
   Result String (List String, Int)
-parseArraySep arr i acc
-  | i >= arrayLength arr = Err "unterminated array"
-  | arrayGetUnsafe i arr == ' ' = parseArraySep arr (i + 1) acc
-  | arrayGetUnsafe i arr == '\t' = parseArraySep arr (i + 1) acc
-  | arrayGetUnsafe i arr == ',' = parseArrayItems arr (i + 1) acc
-  | arrayGetUnsafe i arr == ']' = Ok (reverse acc, i + 1)
-  | otherwise =
-    Err
-      (stringConcat [
-        "expected ',' or ']' in array, found: '",
-        charToStr (arrayGetUnsafe i arr),
-        "'",
-      ])
+parseArraySep arr i0 acc = go i0
+  where
+    go i
+      | i >= arrayLength arr = Err "unterminated array"
+      | arrayGetUnsafe i arr == ' ' = go (i + 1)
+      | arrayGetUnsafe i arr == '\t' = go (i + 1)
+      | arrayGetUnsafe i arr == ',' = parseArrayItems arr (i + 1) acc
+      | arrayGetUnsafe i arr == ']' = Ok (reverse acc, i + 1)
+      | otherwise =
+        Err
+          (stringConcat [
+            "expected ',' or ']' in array, found: '",
+            charToStr (arrayGetUnsafe i arr),
+            "'",
+          ])
 
 -- ── Key-value line parser ────────────────────────────────────────────────────
 
 skipSpaces : Array Char -> Int -> Int -> Int
-skipSpaces arr i n
-  | i >= n = n
-  | arrayGetUnsafe i arr == ' ' = skipSpaces arr (i + 1) n
-  | arrayGetUnsafe i arr == '\t' = skipSpaces arr (i + 1) n
-  | otherwise = i
+skipSpaces arr i0 n = go i0
+  where
+    go i
+      | i >= n = n
+      | arrayGetUnsafe i arr == ' ' = go (i + 1)
+      | arrayGetUnsafe i arr == '\t' = go (i + 1)
+      | otherwise = i
 
 -- Parse `key = value` where value is a quoted string or array.
 parseKv : String -> Result String (String, TomlValue)
@@ -158,10 +164,12 @@ parseKv line =
   findEq arr n 0
 
 findEq : Array Char -> Int -> Int -> Result String (String, TomlValue)
-findEq arr n i
-  | i >= n = Err (stringConcat ["expected '=' in: ", stringFromChars arr])
-  | arrayGetUnsafe i arr == '=' = parseKvAfterEq arr n i
-  | otherwise = findEq arr n (i + 1)
+findEq arr n i0 = go i0
+  where
+    go i
+      | i >= n = Err (stringConcat ["expected '=' in: ", stringFromChars arr])
+      | arrayGetUnsafe i arr == '=' = parseKvAfterEq arr n i
+      | otherwise = go (i + 1)
 
 parseKvAfterEq : Array Char -> Int -> Int -> Result String (String, TomlValue)
 parseKvAfterEq arr n eq =
@@ -550,20 +558,17 @@ tableEntryGo : String ->
   Int ->
   List (String, TomlValue) ->
   (Int, List (String, TomlValue))
-tableEntryGo _ _ [] best acc = (best, acc)
-tableEntryGo prefix entryPrefix ((k, v) :: rest) best acc =
-  let best2 = match tableIdxOf prefix k
-    None => best
-    Some j => max j best
-  if startsWith entryPrefix k then
-    tableEntryGo
-      prefix
-      entryPrefix
-      rest
-      best2
-      ((drop (stringLength entryPrefix) k, v) :: acc)
-  else
-    tableEntryGo prefix entryPrefix rest best2 acc
+tableEntryGo prefix entryPrefix kvs0 best0 acc0 = go kvs0 best0 acc0
+  where
+    go [] best acc = (best, acc)
+    go ((k, v) :: rest) best acc =
+      let best2 = match tableIdxOf prefix k
+        None => best
+        Some j => max j best
+      if startsWith entryPrefix k then
+        go rest best2 ((drop (stringLength entryPrefix) k, v) :: acc)
+      else
+        go rest best2 acc
 
 {- | The `i`-th `[[name]]` entry, counting from `0`, as a document of its
    own, or `None` when `i` is out of range.
