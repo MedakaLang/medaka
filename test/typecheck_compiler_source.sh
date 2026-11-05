@@ -1368,7 +1368,7 @@ if [ "$(printf '%s\n' "$ordinary_return_solver_body" | grep -c 'ieSelectRowByIfa
   exit 1
 fi
 
-require_typecheck_arm publishMethodReturnTrace lookupTraceEvidence 'let published = match entry.mrtGoal'
+require_typecheck_arm publishMethodReturnTrace lookupTraceEvidence 'goal <- entry.mrtGoal'
 require_typecheck_arm publishMethodReturnTrace lookupTraceEvidence 'mrtPublished = published'
 
 require_typecheck_arm pushExactReturnObl methodReturnRequest 'pred = Predicate { iface = request.mrrIface, args = [] }'
@@ -1557,8 +1557,8 @@ printf '%s\n' "$ce_method_required" | while IFS= read -r required; do
   fi
 done || exit 1
 ce_method_env_required='ceMethodTyAt : IfaceRef ->
-  match ceLookupAt key cur ce
-    Some row => ceMethodTyIn (ceRowTyparams row) mname (ceRowMethods row)'
+  row <- ceLookupAt key cur ce
+    ceMethodTyIn (ceRowTyparams row) mname (ceRowMethods row)'
 printf '%s\n' "$ce_method_env_required" | while IFS= read -r required; do
   if ! grep -Fq "$required" "$tc_env_src"; then
     echo "FAIL: impl-body ClassEnv lookup is missing required source: $required"
