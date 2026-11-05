@@ -497,7 +497,7 @@ main = (
     writeOk missing """import absent.{x}
 main = x
 """,
-    writeOk cycle """import cycle.{x}
+    writeOk cycle """import cycle.{x as y}
 x = 1
 """,
     writeOk request (stringConcat [join "\n" calls, "\n"]),
