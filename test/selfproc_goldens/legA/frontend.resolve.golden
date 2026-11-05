@@ -167,9 +167,7 @@ foldEffectProvenance : Map String ModuleExports -> Map String (List String) -> L
 foldImports : Map String ModuleExports -> List (UsePath, Loc) -> ImportAdds
 foldMergedProvenance : (UsePath -> String -> String) -> ExpNs String -> ExpNs (String, String) -> Map String ModuleExports -> (Map String (List String), Map String Unit) -> List UsePath -> (Map String (List String), Map String Unit)
 foreignKeywordNotes : List (String, String)
-hasFoldable : List Decl -> Bool
 hasNullaryClause : List FunClause -> Bool
-hasOrdering : List Decl -> Bool
 haskellCtorAliases : List (String, String)
 haskellNote : String -> String -> String
 haskellTypeAliases : List (String, String)
@@ -281,7 +279,6 @@ primitiveConstructors : List String
 primitiveTypes : List String
 privateAmbiguity : Map String ModuleExports -> Option (String, List Decl) -> ResError -> ResError
 privilegedReexportErrors : Map String ModuleExports -> Map String ModuleExports -> Option (String, List Decl) -> List Decl -> List ResError
-programIsCore : List Decl -> Bool
 provMidsOf : String -> Map String (List String) -> List String
 provToPairs : Map String (List String) -> List (String, List String)
 pubErr : ModuleExports -> String -> List ResError

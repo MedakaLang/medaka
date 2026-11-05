@@ -547,6 +547,7 @@ closure graph seen ((from, w :: ws) :: stack)
 refsOf : HashMap String (List String) -> String -> List String
 refsOf graph n = findWithDefault [] n graph
 # DESUGAR
+(DUse false (UseAlias ("core") "$core"))
 (DUse false (UseGroup ("support" "symbol_encoding") ((mem "encodePair" false))))
 (DUse false (UseGroup ("frontend" "ast") ((mem "Decl" true) (mem "ExternDecl" true) (mem "LetBind" false) (mem "UsePath" true) (mem "ifaceMethodName" false) (mem "implMethodName" false) (mem "letBindName" false) (mem "useMemberAlias" false) (mem "useMemberOrigin" false))))
 (DUse false (UseGroup ("frontend" "marker") ((mem "declRefs" false))))
@@ -648,7 +649,7 @@ refsOf graph n = findWithDefault [] n graph
 (DFunDef false "ifaceMethodsInto" ((PCons (PRec "DInterface" ((rf "name" None) (rf "methods" None)) true) (PVar "rest")) (PVar "t")) (EBlock (DoExpr (EApp (EApp (EApp (EVar "setInPlace") (EVar "name")) (EBinOp "++" (EApp (EApp (EVar "map") (EVar "ifaceMethodName")) (EVar "methods")) (EApp (EApp (EApp (EVar "findWithDefault") (EListLit)) (EVar "name")) (EVar "t")))) (EVar "t"))) (DoExpr (EApp (EApp (EVar "ifaceMethodsInto") (EVar "rest")) (EVar "t")))))
 (DFunDef false "ifaceMethodsInto" ((PCons PWild (PVar "rest")) (PVar "t")) (EApp (EApp (EVar "ifaceMethodsInto") (EVar "rest")) (EVar "t")))
 (DTypeSig false "methodSpellings" (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "String"))) (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyApp (TyCon "List") (TyCon "String"))))))
-(DFunDef false "methodSpellings" ((PVar "aliases") (PVar "members") (PVar "ms")) (EBinOp "++" (EBinOp "++" (EVar "ms") (EApp (EApp (EVar "flatMap") (ELam ((PVar "a")) (EApp (EApp (EVar "map") (ELam ((PVar "m")) (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "")) (EApp (EVar "display") (EVar "a"))) (ELit (LString "."))) (EApp (EVar "display") (EVar "m"))) (ELit (LString ""))))) (EVar "ms")))) (EVar "aliases"))) (EApp (EApp (EVar "map") (EVar "fst")) (EApp (EApp (EVar "filter") (ELam ((PVar "lo")) (EApp (EApp (EVar "contains") (EApp (EVar "snd") (EVar "lo"))) (EVar "ms")))) (EVar "members")))))
+(DFunDef false "methodSpellings" ((PVar "aliases") (PVar "members") (PVar "ms")) (EBinOp "++" (EBinOp "++" (EVar "ms") (EApp (EApp (EVar "flatMap") (ELam ((PVar "a")) (EApp (EApp (EVar "map") (ELam ((PVar "m")) (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "")) (EApp (EVar "$core.display") (EVar "a"))) (ELit (LString "."))) (EApp (EVar "$core.display") (EVar "m"))) (ELit (LString ""))))) (EVar "ms")))) (EVar "aliases"))) (EApp (EApp (EVar "map") (EVar "fst")) (EApp (EApp (EVar "filter") (ELam ((PVar "lo")) (EApp (EApp (EVar "contains") (EApp (EVar "snd") (EVar "lo"))) (EVar "ms")))) (EVar "members")))))
 (DTypeSig false "moduleAliases" (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyApp (TyCon "List") (TyCon "String"))))
 (DFunDef false "moduleAliases" ((PVar "decls")) (EApp (EApp (EVar "flatMap") (EVar "moduleAlias")) (EVar "decls")))
 (DTypeSig false "moduleAlias" (TyFun (TyCon "Decl") (TyApp (TyCon "List") (TyCon "String"))))

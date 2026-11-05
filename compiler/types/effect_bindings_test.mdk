@@ -364,44 +364,58 @@ test "fresh reference construction can infer one shared callback allowance" =
   ]
 
 test "a do-bound function passed to a closed slot inside a let is proved at its owner" =
-  let source =
-    "data Opt a = Nothing | Just a\n"
-      ++ "interface Monad m where\n  andThen : m a -> (a -> <e> m b) -> <e> m b\n"
-      ++ "impl Monad Opt where\n  andThen o k = match o\n    Just x => k x\n    Nothing => Nothing\n"
-      ++ "useFn : (Int -> Int) -> Int\nuseFn f = f 0\n"
+  let monad =
+    "public export data Opt a = Nothing | Just a\n"
+      ++ "export interface Monad m where\n  andThen : m a -> (a -> <e> m b) -> <e> m b\n"
+      ++ "export impl Monad Opt where\n  andThen o k = match o\n    Just x => k x\n    Nothing => Nothing\n"
+  let source = "useFn : (Int -> Int) -> Int\nuseFn f = f 0\n"
   expectAll [
     expectEqual
       []
-      (errorsFor
+      (errorsUnder
+        monad
         (source
           ++ "run : Opt (Int -> Int) -> Opt Int\nrun o = do\n  f <- o\n  let out = useFn f\n  Just out\n")),
     expectTrue
       (contains
         "T-EFFECT-LEAK"
-        (errorsFor
+        (errorsUnder
+          monad
           (source
             ++ "run : Opt (Int -> <Audit> Int) -> Opt Int\nrun o = do\n  f <- o\n  let out = useFn f\n  Just out\n"))),
   ]
 
 test "repeated top-prefix writes inside a continuation stay within a bare contract" =
-  let source =
-    "data Res a = Ok a | Err String\n"
-      ++ "interface Monad m where\n  andThen : m a -> (a -> <e> m b) -> <e> m b\n"
-      ++ "impl Monad Res where\n  andThen r k = match r\n    Ok x => k x\n    Err e => Err e\n"
-      ++ "fsync : String -> <FileWrite> Res Unit\nfsync _ = Ok ()\n"
+  let monad =
+    "public export data Res a = Ok a | Err String\n"
+      ++ "export interface Monad m where\n  andThen : m a -> (a -> <e> m b) -> <e> m b\n"
+      ++ "export impl Monad Res where\n  andThen r k = match r\n    Ok x => k x\n    Err e => Err e\n"
+  let source = "fsync : String -> <FileWrite> Res Unit\nfsync _ = Ok ()\n"
   expectAll [
     expectEqual
       []
-      (errorsFor
+      (errorsUnder
+        monad
         (source
           ++ "w : String -> <FileWrite> Res Unit\nw d = do\n  _ <- Ok ()\n  _ <- fsync (\"\" ++ d ++ \"/x\")\n  fsync (\"\" ++ d ++ \"/y\")\n")),
     expectTrue
       (contains
         "T-EFFECT-LEAK"
-        (errorsFor
+        (errorsUnder
+          monad
           (source
             ++ "w : String -> <FileWrite \"/tmp\"> Res Unit\nw d = do\n  _ <- Ok ()\n  _ <- fsync (\"\" ++ d ++ \"/x\")\n  fsync (\"\" ++ d ++ \"/y\")\n"))),
   ]
+
+-- `errorsFor` with [core] as the prelude, which a `do` block binds through.
+errorsUnder : String -> String -> List String
+errorsUnder core source =
+  let (errors, _) = checkOneDiags defaultDriveInputs [] (desugar
+    (parseLocated core)) (
+    "binding_effects",
+    desugar (parseLocated (effectPrelude ++ source)),
+  )
+  diagCodeTexts errors
 
 errorsFor : String -> List String
 errorsFor source =

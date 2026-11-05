@@ -34,6 +34,7 @@ export
 encodePair : String -> String -> String
 encodePair mid name = "m\{encodeComponent mid}__\{name}"
 # DESUGAR
+(DUse false (UseAlias ("core") "$core"))
 (DUse false (UseGroup ("array") ((mem "get" false "arrGet"))))
 (DUse false (UseGroup ("string") ((mem "toDigit" false) (mem "toUtf8" false))))
 (DTypeSig false "digitChar" (TyFun (TyCon "Int") (TyCon "Char")))
@@ -47,7 +48,7 @@ encodePair mid name = "m\{encodeComponent mid}__\{name}"
 (DTypeSig false "encodeBytes" (TyFun (TyApp (TyCon "Array") (TyCon "Int")) (TyCon "String")))
 (DFunDef false "encodeBytes" ((PVar "bytes")) (EApp (EVar "stringFromChars") (EApp (EVar "arrayFromList") (EApp (EApp (EApp (EVar "encodeGo") (EVar "bytes")) (EBinOp "-" (EApp (EVar "arrayLength") (EVar "bytes")) (ELit (LInt 1)))) (EListLit)))))
 (DTypeSig true "encodePair" (TyFun (TyCon "String") (TyFun (TyCon "String") (TyCon "String"))))
-(DFunDef false "encodePair" ((PVar "mid") (PVar "name")) (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "m")) (EApp (EVar "display") (EApp (EVar "encodeComponent") (EVar "mid")))) (ELit (LString "__"))) (EApp (EVar "display") (EVar "name"))) (ELit (LString ""))))
+(DFunDef false "encodePair" ((PVar "mid") (PVar "name")) (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "m")) (EApp (EVar "$core.display") (EApp (EVar "encodeComponent") (EVar "mid")))) (ELit (LString "__"))) (EApp (EVar "$core.display") (EVar "name"))) (ELit (LString ""))))
 # MARK
 (DUse false (UseGroup ("array") ((mem "get" false "arrGet"))))
 (DUse false (UseGroup ("string") ((mem "toDigit" false) (mem "toUtf8" false))))

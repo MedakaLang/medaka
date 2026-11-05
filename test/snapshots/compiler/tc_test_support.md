@@ -465,6 +465,7 @@ oblOver iface args = UObligation {
   oblProj = OpProjected,
 }
 # DESUGAR
+(DUse false (UseAlias ("core") "$core"))
 (DUse false (UseGroup ("support" "diag_codes") ((mem "codeText" false))))
 (DUse false (UseGroup ("list") ((mem "drop" false) (mem "range" false) (mem "reverse" false) (mem "zip" false))))
 (DUse false (UseGroup ("test") ((mem "Expectation" false) (mem "expectEqual" false))))
@@ -486,10 +487,10 @@ oblOver iface args = UObligation {
 (DUse false (UseGroup ("types" "evidence_complete") ((mem "innerNone" false))))
 (DUse false (UseGroup ("types" "tc_types") ((mem "CheckRunSeed" true) (mem "EvCell" true) (mem "Kind" true) (mem "MarkCtx" true) (mem "ModuleCtx" true) (mem "ClassEnv" false) (mem "ImplEnv" false) (mem "ModuleMarking" true) (mem "OblProjection" true) (mem "Predicate" true) (mem "Provenance" true) (mem "StandaloneOrigin" true) (mem "TcEnv" false) (mem "UObligation" true) (mem "ValueScheme" true))))
 (DTypeSig true "routeTag" (TyFun (TyCon "Route") (TyCon "String")))
-(DFunDef false "routeTag" ((PCon "RScalar" (PVar "tag"))) (EBinOp "++" (EBinOp "++" (ELit (LString "scalar:")) (EApp (EVar "display") (EVar "tag"))) (ELit (LString ""))))
+(DFunDef false "routeTag" ((PCon "RScalar" (PVar "tag"))) (EBinOp "++" (EBinOp "++" (ELit (LString "scalar:")) (EApp (EVar "$core.display") (EVar "tag"))) (ELit (LString ""))))
 (DFunDef false "routeTag" ((PCon "RNone")) (ELit (LString "none")))
-(DFunDef false "routeTag" ((PCon "RDict" (PVar "d"))) (EBinOp "++" (EBinOp "++" (ELit (LString "dict:")) (EApp (EVar "display") (EVar "d"))) (ELit (LString ""))))
-(DFunDef false "routeTag" ((PCon "RKey" (PVar "word") PWild PWild)) (EBinOp "++" (EBinOp "++" (ELit (LString "key:")) (EApp (EVar "display") (EVar "word"))) (ELit (LString ""))))
+(DFunDef false "routeTag" ((PCon "RDict" (PVar "d"))) (EBinOp "++" (EBinOp "++" (ELit (LString "dict:")) (EApp (EVar "$core.display") (EVar "d"))) (ELit (LString ""))))
+(DFunDef false "routeTag" ((PCon "RKey" (PVar "word") PWild PWild)) (EBinOp "++" (EBinOp "++" (ELit (LString "key:")) (EApp (EVar "$core.display") (EVar "word"))) (ELit (LString ""))))
 (DFunDef false "routeTag" (PWild) (ELit (LString "other")))
 (DTypeSig true "at" (TyCon "Loc"))
 (DFunDef false "at" () (EApp (EApp (EApp (EApp (EApp (EVar "Loc") (ELit (LString "t.mdk"))) (ELit (LInt 1))) (ELit (LInt 1))) (ELit (LInt 1))) (ELit (LInt 1))))

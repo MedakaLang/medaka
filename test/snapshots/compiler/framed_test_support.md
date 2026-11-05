@@ -42,6 +42,7 @@ withDigestOf file body = match S.indexOf "\n" file
           header)
     "\{S.replace claimed (sha256Hex body) header}\n\{body}"
 # DESUGAR
+(DUse false (UseAlias ("core") "$core"))
 (DUse false (UseGroup ("frontend" "ast") ((mem "Decl" false))))
 (DUse false (UseGroup ("frontend" "ast_codec") ((mem "declsSExp" false))))
 (DUse false (UseAlias ("string") "S"))
@@ -53,7 +54,7 @@ withDigestOf file body = match S.indexOf "\n" file
 (DTypeSig true "treeText" (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyCon "String")))
 (DFunDef false "treeText" ((PVar "ds")) (EApp (EVar "renderSExp") (EApp (EVar "declsSExp") (EVar "ds"))))
 (DTypeSig true "withDigestOf" (TyFun (TyCon "String") (TyFun (TyCon "String") (TyCon "String"))))
-(DFunDef false "withDigestOf" ((PVar "file") (PVar "body")) (EMatch (EApp (EApp (EVar "S.indexOf") (ELit (LString "\n"))) (EVar "file")) (arm (PCon "None") () (EVar "file")) (arm (PCon "Some" (PVar "i")) () (EBlock (DoLet false false (PVar "header") (EApp (EApp (EVar "S.take") (EVar "i")) (EVar "file"))) (DoLet false false (PVar "claimed") (EApp (EApp (EVar "S.take") (ELit (LInt 64))) (EApp (EApp (EVar "S.drop") (EBinOp "+" (EApp (EVar "S.length") (ELit (LString "(digest "))) (EApp (EApp (EVar "optionOr") (ELit (LInt 0))) (EApp (EApp (EVar "S.indexOf") (ELit (LString "(digest "))) (EVar "header"))))) (EVar "header")))) (DoExpr (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "")) (EApp (EVar "display") (EApp (EApp (EApp (EVar "S.replace") (EVar "claimed")) (EApp (EVar "sha256Hex") (EVar "body"))) (EVar "header")))) (ELit (LString "\n"))) (EApp (EVar "display") (EVar "body"))) (ELit (LString ""))))))))
+(DFunDef false "withDigestOf" ((PVar "file") (PVar "body")) (EMatch (EApp (EApp (EVar "S.indexOf") (ELit (LString "\n"))) (EVar "file")) (arm (PCon "None") () (EVar "file")) (arm (PCon "Some" (PVar "i")) () (EBlock (DoLet false false (PVar "header") (EApp (EApp (EVar "S.take") (EVar "i")) (EVar "file"))) (DoLet false false (PVar "claimed") (EApp (EApp (EVar "S.take") (ELit (LInt 64))) (EApp (EApp (EVar "S.drop") (EBinOp "+" (EApp (EVar "S.length") (ELit (LString "(digest "))) (EApp (EApp (EVar "optionOr") (ELit (LInt 0))) (EApp (EApp (EVar "S.indexOf") (ELit (LString "(digest "))) (EVar "header"))))) (EVar "header")))) (DoExpr (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "")) (EApp (EVar "$core.display") (EApp (EApp (EApp (EVar "S.replace") (EVar "claimed")) (EApp (EVar "sha256Hex") (EVar "body"))) (EVar "header")))) (ELit (LString "\n"))) (EApp (EVar "$core.display") (EVar "body"))) (ELit (LString ""))))))))
 # MARK
 (DUse false (UseGroup ("frontend" "ast") ((mem "Decl" false))))
 (DUse false (UseGroup ("frontend" "ast_codec") ((mem "declsSExp" false))))

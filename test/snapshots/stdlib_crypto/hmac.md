@@ -154,12 +154,13 @@ hmacSha256WithKey (HmacSha256Key innerStart outerStart) message =
 -- > let key = hmacSha256Key (fromU8Array (arrayMake 65 0x0b)) in hmacSha256WithKey key (encodeUtf8 "Hi There") == hmacSha256 (fromU8Array (arrayMake 65 0x0b)) (encodeUtf8 "Hi There")
 -- True
 # DESUGAR
+(DUse false (UseAlias ("core") "$core"))
 (DUse false (UseGroup ("bytes") ((mem "Bytes" false) (mem "adoptByteBlockUnsafe" false) (mem "concat" false) (mem "encodeUtf8" false) (mem "fromU8Array" false) (mem "lendByteBlockUnsafe" false))))
 (DUse false (UseGroup ("crypto" "sha256") ((mem "sha256" false) (mem "sha256AssumeByteDomainFrom" false) (mem "sha256FoldKeyBlock" false))))
 (DUse false (UseAlias ("bytes") "B"))
 (DUse false (UseAlias ("u8") "U8"))
 (DTypeSig false "ctEqAccum" (TyFun (TyCon "Bytes") (TyFun (TyCon "Bytes") (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyCon "Int"))))))
-(DFunDef false "ctEqAccum" ((PVar "a") (PVar "b") (PVar "i") (PVar "acc")) (EIf (EBinOp ">=" (EVar "i") (EApp (EVar "B.length") (EVar "a"))) (EVar "acc") (EApp (EApp (EApp (EApp (EVar "ctEqAccum") (EVar "a")) (EVar "b")) (EBinOp "+" (EVar "i") (ELit (LInt 1)))) (EApp (EApp (EVar "bitOr") (EVar "acc")) (EApp (EApp (EVar "bitXor") (EApp (EVar "U8.toInt") (EApp (EApp (EVar "index") (EVar "a")) (EVar "i")))) (EApp (EVar "U8.toInt") (EApp (EApp (EVar "index") (EVar "b")) (EVar "i"))))))))
+(DFunDef false "ctEqAccum" ((PVar "a") (PVar "b") (PVar "i") (PVar "acc")) (EIf (EBinOp ">=" (EVar "i") (EApp (EVar "B.length") (EVar "a"))) (EVar "acc") (EApp (EApp (EApp (EApp (EVar "ctEqAccum") (EVar "a")) (EVar "b")) (EBinOp "+" (EVar "i") (ELit (LInt 1)))) (EApp (EApp (EVar "bitOr") (EVar "acc")) (EApp (EApp (EVar "bitXor") (EApp (EVar "U8.toInt") (EApp (EApp (EVar "$core.index") (EVar "a")) (EVar "i")))) (EApp (EVar "U8.toInt") (EApp (EApp (EVar "$core.index") (EVar "b")) (EVar "i"))))))))
 (DTypeSig true "ctEq" (TyFun (TyCon "Bytes") (TyFun (TyCon "Bytes") (TyCon "Bool"))))
 (DFunDef false "ctEq" ((PVar "a") (PVar "b")) (EIf (EBinOp "/=" (EApp (EVar "B.length") (EVar "a")) (EApp (EVar "B.length") (EVar "b"))) (EVar "False") (EBinOp "==" (EApp (EApp (EApp (EApp (EVar "ctEqAccum") (EVar "a")) (EVar "b")) (ELit (LInt 0))) (ELit (LInt 0))) (ELit (LInt 0)))))
 (DTypeSig false "blockBytes" (TyCon "Int"))

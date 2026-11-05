@@ -1,5 +1,5 @@
 # META
-source_lines=340
+source_lines=342
 stages=DESUGAR,MARK
 # SOURCE
 -- Scoped effect collection. A capture observes performed rows without solving
@@ -15,7 +15,7 @@ import types.effect_authority.{
 import types.repr.{Mono(..), normalize}
 import frontend.ast.{
   Expr(..), Lit(..), Pat(..), Arm(..), LetBind(..), FunClause(..), DoStmt(..),
-  TyConOrigin(..), patBoundNames, sameTyConHead
+  TyConOrigin(..), patBoundNames, sameTyConHead, preludeQualified
 }
 import support.util.{reverseL, mapOption}
 
@@ -147,10 +147,11 @@ alphaSyntax top env lets (EApp f x)
   | displayHead env lets f = alphaSyntax top (stringNames env) lets x
 alphaSyntax _ _ _ _ = None
 
--- `display e`, which string interpolation lowers each part to, is `e` itself
--- when `display` is the prelude method and `e` is a `String`: the prelude's
--- `Display String` is the identity. A local, top-level or imported definition
--- of `display` denotes some other function, so under one the part is top.
+-- `display e` is `e` itself when `display` is the prelude method and `e` is a
+-- `String`: the prelude's `Display String` is the identity. String
+-- interpolation lowers each part to the prelude's, spelled through the
+-- prelude alias. A written `display` that a local, top-level or imported
+-- definition shadows denotes some other function, so under one it is top.
 displayHead : AlphaEnv -> List (String, AlphaBinder) -> Expr -> Bool
 displayHead env lets (ELoc _ f) = displayHead env lets f
 displayHead env lets (EVar x) = preludeDisplay env lets x
@@ -161,7 +162,8 @@ displayHead _ _ _ = False
 
 preludeDisplay : AlphaEnv -> List (String, AlphaBinder) -> String -> Bool
 preludeDisplay env lets x =
-  x == "display" && env.aeDisplayIsPrelude && isNone (letInScope x lets)
+  x == preludeQualified "display"
+    || x == "display" && env.aeDisplayIsPrelude && isNone (letInScope x lets)
 
 -- The names a `display` operand is read through: only a qualified `String`
 -- keeps its qualifier, since a qualified value of another type displays as a
@@ -347,7 +349,7 @@ collectBinds ((LetBind n clauses _ _) :: rest) acc = match clauses
 (DUse false (UseGroup ("types" "effect_domain") ((mem "Param" true) (mem "canonParam" false) (mem "productPrimaryLift" false) (mem "domainKey" false))))
 (DUse false (UseGroup ("types" "effect_authority") ((mem "Authority" true) (mem "authJoin" false) (mem "authTop" false) (mem "authExtend" false) (mem "authAppend" false) (mem "authWidenValue" false) (mem "authDomainTop" false) (mem "authRetag" false))))
 (DUse false (UseGroup ("types" "repr") ((mem "Mono" true) (mem "normalize" false))))
-(DUse false (UseGroup ("frontend" "ast") ((mem "Expr" true) (mem "Lit" true) (mem "Pat" true) (mem "Arm" true) (mem "LetBind" true) (mem "FunClause" true) (mem "DoStmt" true) (mem "TyConOrigin" true) (mem "patBoundNames" false) (mem "sameTyConHead" false))))
+(DUse false (UseGroup ("frontend" "ast") ((mem "Expr" true) (mem "Lit" true) (mem "Pat" true) (mem "Arm" true) (mem "LetBind" true) (mem "FunClause" true) (mem "DoStmt" true) (mem "TyConOrigin" true) (mem "patBoundNames" false) (mem "sameTyConHead" false) (mem "preludeQualified" false))))
 (DUse false (UseGroup ("support" "util") ((mem "reverseL" false) (mem "mapOption" false))))
 (DTypeSig true "recordEffect" (TyFun (TyApp (TyCon "Ref") (TyApp (TyCon "List") (TyCon "EffRow"))) (TyFun (TyCon "EffRow") (TyCon "Unit"))))
 (DFunDef false "recordEffect" (PWild (PCon "EffRow" (PList) (PCon "None"))) (ELit LUnit))
@@ -392,7 +394,7 @@ collectBinds ((LetBind n clauses _ _) :: rest) acc = match clauses
 (DFunDef false "displayHead" ((PVar "env") (PVar "lets") (PCon "EMethodAt" (PVar "x") (PVar "seed") PWild)) (EBinOp "&&" (EBinOp "==" (EVar "seed") (ELit (LString ""))) (EApp (EApp (EApp (EVar "preludeDisplay") (EVar "env")) (EVar "lets")) (EVar "x"))))
 (DFunDef false "displayHead" (PWild PWild PWild) (EVar "False"))
 (DTypeSig false "preludeDisplay" (TyFun (TyCon "AlphaEnv") (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "AlphaBinder"))) (TyFun (TyCon "String") (TyCon "Bool")))))
-(DFunDef false "preludeDisplay" ((PVar "env") (PVar "lets") (PVar "x")) (EBinOp "&&" (EBinOp "&&" (EBinOp "==" (EVar "x") (ELit (LString "display"))) (EFieldAccess (EVar "env") "aeDisplayIsPrelude")) (EApp (EVar "isNone") (EApp (EApp (EVar "letInScope") (EVar "x")) (EVar "lets")))))
+(DFunDef false "preludeDisplay" ((PVar "env") (PVar "lets") (PVar "x")) (EBinOp "||" (EBinOp "==" (EVar "x") (EApp (EVar "preludeQualified") (ELit (LString "display")))) (EBinOp "&&" (EBinOp "&&" (EBinOp "==" (EVar "x") (ELit (LString "display"))) (EFieldAccess (EVar "env") "aeDisplayIsPrelude")) (EApp (EVar "isNone") (EApp (EApp (EVar "letInScope") (EVar "x")) (EVar "lets"))))))
 (DTypeSig false "stringNames" (TyFun (TyCon "AlphaEnv") (TyCon "AlphaEnv")))
 (DFunDef false "stringNames" ((PVar "env")) (ERecordUpdate (EVar "env") ((fa "aeVarType" (ELam ((PVar "x")) (EMatch (EApp (EFieldAccess (EVar "env") "aeVarType") (EVar "x")) (arm (PCon "Some" (PVar "ty")) () (EIf (EApp (EVar "qualifiedString") (EVar "ty")) (EApp (EVar "Some") (EVar "ty")) (EVar "None"))) (arm (PCon "None") () (EVar "None"))))))))
 (DTypeSig false "qualifiedString" (TyFun (TyCon "Mono") (TyCon "Bool")))
@@ -460,7 +462,7 @@ collectBinds ((LetBind n clauses _ _) :: rest) acc = match clauses
 (DUse false (UseGroup ("types" "effect_domain") ((mem "Param" true) (mem "canonParam" false) (mem "productPrimaryLift" false) (mem "domainKey" false))))
 (DUse false (UseGroup ("types" "effect_authority") ((mem "Authority" true) (mem "authJoin" false) (mem "authTop" false) (mem "authExtend" false) (mem "authAppend" false) (mem "authWidenValue" false) (mem "authDomainTop" false) (mem "authRetag" false))))
 (DUse false (UseGroup ("types" "repr") ((mem "Mono" true) (mem "normalize" false))))
-(DUse false (UseGroup ("frontend" "ast") ((mem "Expr" true) (mem "Lit" true) (mem "Pat" true) (mem "Arm" true) (mem "LetBind" true) (mem "FunClause" true) (mem "DoStmt" true) (mem "TyConOrigin" true) (mem "patBoundNames" false) (mem "sameTyConHead" false))))
+(DUse false (UseGroup ("frontend" "ast") ((mem "Expr" true) (mem "Lit" true) (mem "Pat" true) (mem "Arm" true) (mem "LetBind" true) (mem "FunClause" true) (mem "DoStmt" true) (mem "TyConOrigin" true) (mem "patBoundNames" false) (mem "sameTyConHead" false) (mem "preludeQualified" false))))
 (DUse false (UseGroup ("support" "util") ((mem "reverseL" false) (mem "mapOption" false))))
 (DTypeSig true "recordEffect" (TyFun (TyApp (TyCon "Ref") (TyApp (TyCon "List") (TyCon "EffRow"))) (TyFun (TyCon "EffRow") (TyCon "Unit"))))
 (DFunDef false "recordEffect" (PWild (PCon "EffRow" (PList) (PCon "None"))) (ELit LUnit))
@@ -505,7 +507,7 @@ collectBinds ((LetBind n clauses _ _) :: rest) acc = match clauses
 (DFunDef false "displayHead" ((PVar "env") (PVar "lets") (PCon "EMethodAt" (PVar "x") (PVar "seed") PWild)) (EBinOp "&&" (EBinOp "==" (EVar "seed") (ELit (LString ""))) (EApp (EApp (EApp (EVar "preludeDisplay") (EVar "env")) (EVar "lets")) (EVar "x"))))
 (DFunDef false "displayHead" (PWild PWild PWild) (EVar "False"))
 (DTypeSig false "preludeDisplay" (TyFun (TyCon "AlphaEnv") (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "AlphaBinder"))) (TyFun (TyCon "String") (TyCon "Bool")))))
-(DFunDef false "preludeDisplay" ((PVar "env") (PVar "lets") (PVar "x")) (EBinOp "&&" (EBinOp "&&" (EBinOp "==" (EVar "x") (ELit (LString "display"))) (EFieldAccess (EVar "env") "aeDisplayIsPrelude")) (EApp (EVar "isNone") (EApp (EApp (EVar "letInScope") (EVar "x")) (EVar "lets")))))
+(DFunDef false "preludeDisplay" ((PVar "env") (PVar "lets") (PVar "x")) (EBinOp "||" (EBinOp "==" (EVar "x") (EApp (EVar "preludeQualified") (ELit (LString "display")))) (EBinOp "&&" (EBinOp "&&" (EBinOp "==" (EVar "x") (ELit (LString "display"))) (EFieldAccess (EVar "env") "aeDisplayIsPrelude")) (EApp (EVar "isNone") (EApp (EApp (EVar "letInScope") (EVar "x")) (EVar "lets"))))))
 (DTypeSig false "stringNames" (TyFun (TyCon "AlphaEnv") (TyCon "AlphaEnv")))
 (DFunDef false "stringNames" ((PVar "env")) (ERecordUpdate (EVar "env") ((fa "aeVarType" (ELam ((PVar "x")) (EMatch (EApp (EFieldAccess (EVar "env") "aeVarType") (EVar "x")) (arm (PCon "Some" (PVar "ty")) () (EIf (EApp (EVar "qualifiedString") (EVar "ty")) (EApp (EVar "Some") (EVar "ty")) (EVar "None"))) (arm (PCon "None") () (EVar "None"))))))))
 (DTypeSig false "qualifiedString" (TyFun (TyCon "Mono") (TyCon "Bool")))

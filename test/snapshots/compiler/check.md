@@ -214,6 +214,7 @@ entryExhaustGo preludeDecls (_ :: scopes) (_ :: rest) =
   entryExhaustGo preludeDecls scopes rest
 entryExhaustGo _ [] (_ :: _) = ""
 # DESUGAR
+(DUse false (UseAlias ("core") "$core"))
 (DUse false (UseGroup ("frontend" "ast") ((mem "Decl" false))))
 (DUse false (UseGroup ("frontend" "ast") ((mem "SiblingPair" false))))
 (DUse false (UseGroup ("frontend" "parser") ((mem "parse" false))))
@@ -239,7 +240,7 @@ entryExhaustGo _ [] (_ :: _) = ""
 (DTypeSig false "joinNonEmpty" (TyFun (TyCon "String") (TyFun (TyCon "String") (TyCon "String"))))
 (DFunDef false "joinNonEmpty" ((PLit (LString "")) (PVar "b")) (EVar "b"))
 (DFunDef false "joinNonEmpty" ((PVar "a") (PLit (LString ""))) (EVar "a"))
-(DFunDef false "joinNonEmpty" ((PVar "a") (PVar "b")) (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "")) (EApp (EVar "display") (EVar "a"))) (ELit (LString "\n"))) (EApp (EVar "display") (EVar "b"))) (ELit (LString ""))))
+(DFunDef false "joinNonEmpty" ((PVar "a") (PVar "b")) (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "")) (EApp (EVar "$core.display") (EVar "a"))) (ELit (LString "\n"))) (EApp (EVar "$core.display") (EVar "b"))) (ELit (LString ""))))
 (DTypeSig true "checkHasErrors" (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyCon "String") (TyCon "Bool")))))
 (DFunDef false "checkHasErrors" ((PVar "rsrc") (PVar "csrc") (PVar "tsrc")) (EBlock (DoLet false false (PVar "raw") (EApp (EVar "parse") (EVar "tsrc"))) (DoLet false false (PVar "desugared") (EApp (EVar "desugar") (EVar "raw"))) (DoLet false false (PVar "runtimeP") (EApp (EVar "parsePrelude") (EVar "rsrc"))) (DoLet false false (PVar "coreP") (EApp (EVar "parsePrelude") (EVar "csrc"))) (DoLet false false (PVar "importErrs") (EApp (EVar "singleFileImportErrors") (EVar "desugared"))) (DoExpr (EMatch (EVar "importErrs") (arm (PCons PWild PWild) () (EVar "True")) (arm (PList) () (EBlock (DoLet false false (PVar "resDiags") (EApp (EApp (EApp (EVar "resolveToLines") (EVar "runtimeP")) (EVar "coreP")) (EVar "desugared"))) (DoExpr (EMatch (EVar "resDiags") (arm (PLit (LString "")) () (EApp (EApp (EApp (EApp (EVar "checkOneErrorsWithRuntime") (EVar "defaultDriveInputs")) (EApp (EVar "desugar") (EVar "runtimeP"))) (EApp (EVar "desugar") (EVar "coreP"))) (EVar "desugared"))) (arm PWild () (EVar "True"))))))))))
 (DTypeSig true "checkModulesReport" (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "ModDiags")) (TyCon "String"))))

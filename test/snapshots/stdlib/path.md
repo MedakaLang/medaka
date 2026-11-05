@@ -443,6 +443,7 @@ prop "dirname ++ / ++ basename normalizes back to the original absolute path" (p
   else
     normalize (joinPath (dirname p) (basename p)) == normalize p
 # DESUGAR
+(DUse false (UseAlias ("core") "$core"))
 (DUse false (UseGroup ("list") ((mem "reverse" false))))
 (DUse false (UseGroup ("string") ((mem "split" false) (mem "startsWith" false) (mem "endsWith" false) (mem "contains" false) (mem "lastIndexOf" false) (mem "toChars" false))))
 (DTypeSig true "dirname" (TyFun (TyCon "String") (TyCon "String")))
@@ -460,7 +461,7 @@ prop "dirname ++ / ++ basename normalizes back to the original absolute path" (p
 (DTypeSig true "withExtension" (TyFun (TyCon "String") (TyFun (TyCon "String") (TyCon "String"))))
 (DFunDef false "withExtension" ((PVar "ext") (PVar "path")) (EBlock (DoLet false false (PVar "base") (EApp (EVar "basename") (EVar "path"))) (DoLet false false (PVar "e") (EApp (EVar "extname") (EVar "path"))) (DoLet false false (PVar "newBase") (EBinOp "++" (EIf (EBinOp "==" (EVar "e") (ELit (LString ""))) (EVar "base") (EApp (EApp (EApp (EVar "stringSlice") (ELit (LInt 0))) (EBinOp "-" (EApp (EVar "stringLength") (EVar "base")) (EApp (EVar "stringLength") (EVar "e")))) (EVar "base"))) (EApp (EVar "normalizeExt") (EVar "ext")))) (DoExpr (EIf (EApp (EApp (EVar "contains") (ELit (LString "/"))) (EVar "path")) (EApp (EApp (EVar "joinPath") (EApp (EVar "dirname") (EVar "path"))) (EVar "newBase")) (EVar "newBase")))))
 (DTypeSig true "joinPath" (TyFun (TyCon "String") (TyFun (TyCon "String") (TyCon "String"))))
-(DFunDef false "joinPath" ((PVar "a") (PVar "b")) (EIf (EBinOp "==" (EVar "a") (ELit (LString ""))) (EVar "b") (EIf (EBinOp "==" (EVar "b") (ELit (LString ""))) (EVar "a") (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "")) (EApp (EVar "display") (EApp (EVar "stripTrailingSlash") (EVar "a")))) (ELit (LString "/"))) (EApp (EVar "display") (EApp (EVar "stripLeadingSlash") (EVar "b")))) (ELit (LString ""))))))
+(DFunDef false "joinPath" ((PVar "a") (PVar "b")) (EIf (EBinOp "==" (EVar "a") (ELit (LString ""))) (EVar "b") (EIf (EBinOp "==" (EVar "b") (ELit (LString ""))) (EVar "a") (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "")) (EApp (EVar "$core.display") (EApp (EVar "stripTrailingSlash") (EVar "a")))) (ELit (LString "/"))) (EApp (EVar "$core.display") (EApp (EVar "stripLeadingSlash") (EVar "b")))) (ELit (LString ""))))))
 (DTypeSig false "stripTrailingSlash" (TyFun (TyCon "String") (TyCon "String")))
 (DFunDef false "stripTrailingSlash" ((PVar "s")) (EIf (EApp (EApp (EVar "endsWith") (ELit (LString "/"))) (EVar "s")) (EApp (EApp (EApp (EVar "stringSlice") (ELit (LInt 0))) (EBinOp "-" (EApp (EVar "stringLength") (EVar "s")) (ELit (LInt 1)))) (EVar "s")) (EVar "s")))
 (DTypeSig false "stripLeadingSlash" (TyFun (TyCon "String") (TyCon "String")))

@@ -58,6 +58,7 @@ import frontend.ast.{
   useMemberOrigin,
   useMemberAlias,
   qualifiedLocal,
+  programIsCore,
   PropParam(..),
   MethodDefault(..),
   IfaceMethod(..),
@@ -2187,20 +2188,6 @@ lastOf : List String -> String
 lastOf [] = ""
 lastOf [x] = x
 lastOf (_ :: rest) = lastOf rest
-
-export
-programIsCore : List Decl -> Bool
-programIsCore prog = hasOrdering prog && hasFoldable prog
-
-hasOrdering : List Decl -> Bool
-hasOrdering [] = False
-hasOrdering ((DData { dataName = "Ordering" }) :: _) = True
-hasOrdering (_ :: rest) = hasOrdering rest
-
-hasFoldable : List Decl -> Bool
-hasFoldable [] = False
-hasFoldable ((DInterface { name = "Foldable", ... }) :: _) = True
-hasFoldable (_ :: rest) = hasFoldable rest
 
 -- ── build_env ─────────────────────────────────────────────────────────────
 buildEnv : List Decl -> List Decl -> List Decl -> List String -> Env

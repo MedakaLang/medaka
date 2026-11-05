@@ -123,6 +123,7 @@ generatorName i = "$prop_gen_\{intToString i}"
 shrinkerName : Int -> String
 shrinkerName i = "$prop_shrink_\{intToString i}"
 # DESUGAR
+(DUse false (UseAlias ("core") "$core"))
 (DUse false (UseGroup ("frontend" "ast") ((mem "noBinderId" false) (mem "Decl" true) (mem "Expr" true) (mem "Pat" true) (mem "Lit" true) (mem "Ty" true) (mem "Loc" true) (mem "UsePath" true) (mem "tyConBuiltin" false) (mem "effAtomBare" false))))
 (DUse false (UseGroup ("support" "ordmap") ((mem "OrdMap" false) (mem "omEmpty" false) (mem "omHasKey" false) (mem "omInsert" false) (mem "omKeys" false) (mem "omLookup" false))))
 (DUse false (UseGroup ("support" "util") ((mem "reverseL" false))))
@@ -151,11 +152,11 @@ shrinkerName i = "$prop_shrink_\{intToString i}"
 (DFunDef false "prependDecls" ((PCons (PVar "decl") (PVar "rest")) (PVar "acc")) (EApp (EApp (EVar "prependDecls") (EVar "rest")) (EBinOp "::" (EVar "decl") (EVar "acc"))))
 (DFunDef false "prependDecls" (PWild (PVar "acc")) (EVar "acc"))
 (DTypeSig false "helperLoc" (TyFun (TyCon "Int") (TyCon "Loc")))
-(DFunDef false "helperLoc" ((PVar "i")) (EApp (EApp (EApp (EApp (EApp (EVar "Loc") (EBinOp "++" (EBinOp "++" (ELit (LString "<property-helper:")) (EApp (EVar "display") (EApp (EVar "intToString") (EVar "i")))) (ELit (LString ">")))) (ELit (LInt 1))) (ELit (LInt 1))) (ELit (LInt 1))) (ELit (LInt 1))))
+(DFunDef false "helperLoc" ((PVar "i")) (EApp (EApp (EApp (EApp (EApp (EVar "Loc") (EBinOp "++" (EBinOp "++" (ELit (LString "<property-helper:")) (EApp (EVar "$core.display") (EApp (EVar "intToString") (EVar "i")))) (ELit (LString ">")))) (ELit (LInt 1))) (ELit (LInt 1))) (ELit (LInt 1))) (ELit (LInt 1))))
 (DTypeSig false "generatorName" (TyFun (TyCon "Int") (TyCon "String")))
-(DFunDef false "generatorName" ((PVar "i")) (EBinOp "++" (EBinOp "++" (ELit (LString "$prop_gen_")) (EApp (EVar "display") (EApp (EVar "intToString") (EVar "i")))) (ELit (LString ""))))
+(DFunDef false "generatorName" ((PVar "i")) (EBinOp "++" (EBinOp "++" (ELit (LString "$prop_gen_")) (EApp (EVar "$core.display") (EApp (EVar "intToString") (EVar "i")))) (ELit (LString ""))))
 (DTypeSig false "shrinkerName" (TyFun (TyCon "Int") (TyCon "String")))
-(DFunDef false "shrinkerName" ((PVar "i")) (EBinOp "++" (EBinOp "++" (ELit (LString "$prop_shrink_")) (EApp (EVar "display") (EApp (EVar "intToString") (EVar "i")))) (ELit (LString ""))))
+(DFunDef false "shrinkerName" ((PVar "i")) (EBinOp "++" (EBinOp "++" (ELit (LString "$prop_shrink_")) (EApp (EVar "$core.display") (EApp (EVar "intToString") (EVar "i")))) (ELit (LString ""))))
 # MARK
 (DUse false (UseGroup ("frontend" "ast") ((mem "noBinderId" false) (mem "Decl" true) (mem "Expr" true) (mem "Pat" true) (mem "Lit" true) (mem "Ty" true) (mem "Loc" true) (mem "UsePath" true) (mem "tyConBuiltin" false) (mem "effAtomBare" false))))
 (DUse false (UseGroup ("support" "ordmap") ((mem "OrdMap" false) (mem "omEmpty" false) (mem "omHasKey" false) (mem "omInsert" false) (mem "omKeys" false) (mem "omLookup" false))))

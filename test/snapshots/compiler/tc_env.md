@@ -4460,6 +4460,7 @@ methodRowSameNameView rows =
     ))
     rows
 # DESUGAR
+(DUse false (UseAlias ("core") "$core"))
 (DUse false (UseGroup ("types" "tc_mono") ((mem "argMentions" false) (mem "entryHeadMatches" false) (mem "headTyconTy" false) (mem "implDeclsWithReqs" false) (mem "nthTy" false) (mem "schemeBodyOf" false) (mem "schemeIds" false) (mem "tyAppSpine" false) (mem "tyVarNames" false))))
 (DUse false (UseGroup ("types" "tc_state") ((mem "builtinCtors" false) (mem "emptyClassEnv" false) (mem "emptyDataEnv" false) (mem "emptyDeclEnvSeedAcc" false) (mem "emptyImplEnv" false) (mem "emptyImplUniverse" false) (mem "emptyMethodEnv" false))))
 (DUse false (UseGroup ("frontend" "ast") ((mem "Constraint" true) (mem "DataVis" true) (mem "Decl" true) (mem "Expr" true) (mem "FunClause" true) (mem "Ident" true) (mem "IfaceMethod" true) (mem "ImplMethod" true) (mem "KindAnn" true) (mem "LetBind" true) (mem "Loc" true) (mem "Ns" true) (mem "Pat" true) (mem "Require" true) (mem "Super" true) (mem "TabKey" true) (mem "Ty" true) (mem "TyConOrigin" true) (mem "UseMember" true) (mem "UsePath" true) (mem "Variant" true) (mem "identOriginOf" false) (mem "lookupTab" false) (mem "mkIdent" false) (mem "orElseLoc" false) (mem "sameTyConHead" false) (mem "tabKeyEq" false) (mem "tabKeyName" false) (mem "tabKeyOf" false) (mem "tyConBuiltin" false) (mem "variantFieldTys" false) (mem "useMemberLocal" false) (mem "useMemberOrigin" false))))
@@ -4712,7 +4713,7 @@ methodRowSameNameView rows =
 (DTypeSig true "methodRowIface" (TyFun (TyCon "MethodRow") (TyCon "IfaceRef")))
 (DFunDef false "methodRowIface" ((PVar "r")) (EMatch (EFieldAccess (EVar "r") "mrEntry") (arm (PTuple (PVar "iface") PWild PWild PWild) () (EVar "iface"))))
 (DTypeSig true "methodPreludeRow" (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "MethodRow")) (TyApp (TyCon "Option") (TyCon "MethodRow")))))
-(DFunDef false "methodPreludeRow" ((PVar "n") (PVar "cs")) (EApp (EApp (EVar "andThen") (EApp (EApp (EApp (EVar "mkIdent") (EVar "NsMethod")) (EApp (EVar "OriginModule") (ELit (LString "core")))) (EVar "n"))) (ELam ((PVar "ident")) (EApp (EApp (EVar "methodRowById") (EVar "ident")) (EVar "cs")))))
+(DFunDef false "methodPreludeRow" ((PVar "n") (PVar "cs")) (EApp (EApp (EVar "$core.andThen") (EApp (EApp (EApp (EVar "mkIdent") (EVar "NsMethod")) (EApp (EVar "OriginModule") (ELit (LString "core")))) (EVar "n"))) (ELam ((PVar "ident")) (EApp (EApp (EVar "methodRowById") (EVar "ident")) (EVar "cs")))))
 (DTypeSig true "methodExportsIndex" (TyFun (TyCon "GraphCtx") (TyFun (TyCon "Unit") (TyApp (TyCon "OrdMap") (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "Ident")))))))
 (DFunDef false "methodExportsIndex" ((PVar "gctx") PWild) (EFieldAccess (EFieldAccess (EFieldAccess (EFieldAccess (EVar "gctx") "declEnvsRef") "value") "deMethods") "meExports"))
 (DTypeSig true "dispatchTyparams" (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyApp (TyCon "List") (TyCon "String"))))

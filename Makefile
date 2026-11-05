@@ -659,6 +659,12 @@ inlang-frontend-ast-codec-test:
 inlang-frontend-ast-walk-test:
 	./medaka test compiler/frontend/ast_walk_test.mdk
 
+## compiler/frontend/desugar_test.mdk is a `*_test.mdk` sibling, outside every
+## entry's import closure ([W-MODULE-BLIND]): it pins, on both engines, that each
+## name the sugar generates denotes the prelude's declaration.
+inlang-frontend-desugar-test:
+	./medaka test --engines eval,native compiler/frontend/desugar_test.mdk
+
 ## compiler/frontend/visibility_test.mdk is a `*_test.mdk` sibling, outside every
 ## entry's import closure ([W-MODULE-BLIND]): it pins the producer's facets.
 inlang-frontend-visibility-test:

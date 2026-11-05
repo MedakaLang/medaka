@@ -2186,6 +2186,7 @@ ifaceMethodEVars (IfaceMethod _ _ d _) = match d
   Some (MethodDefault _ body) => allEVars body
   None => []
 # DESUGAR
+(DUse false (UseAlias ("core") "$core"))
 (DUse false (UseGroup ("support" "diag_codes") ((mem "DiagCode" true))))
 (DUse false (UseGroup ("list") ((mem "reverse" false))))
 (DUse false (UseGroup ("types" "tc_types") ((mem "OblProjection" true) (mem "GoalReach" true) (mem "BindingRole" true) (mem "Predicate" true) (mem "UObligation" true) (mem "ConstraintReg" false) (mem "DynCtx" false) (mem "GraphCtx" false) (mem "ImplRow" false) (mem "ModuleCtx" false) (mem "ReqWalk" false) (mem "ScopedMember" false) (mem "siteFor" false) (mem "TcEnv" false) (mem "ReqStep" true))))
@@ -2649,7 +2650,7 @@ ifaceMethodEVars (IfaceMethod _ _ d _) = match d
 (DTypeSig false "dedupVecObls" (TyFun (TyApp (TyCon "List") (TyCon "VecObl")) (TyApp (TyCon "List") (TyCon "VecObl"))))
 (DFunDef false "dedupVecObls" ((PVar "xs")) (EApp (EApp (EVar "dedupBy") (EVar "vecOblKey")) (EVar "xs")))
 (DTypeSig false "vecOblKey" (TyFun (TyCon "VecObl") (TyCon "String")))
-(DFunDef false "vecOblKey" ((PVar "o")) (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "")) (EApp (EVar "display") (EApp (EVar "lenKey") (EFieldAccess (EFieldAccess (EVar "o") "voIface") "irName")))) (ELit (LString ""))) (EApp (EVar "display") (EApp (EApp (EVar "joinWith") (ELit (LString ","))) (EApp (EApp (EVar "map") (EVar "intToString")) (EFieldAccess (EVar "o") "voIds"))))) (ELit (LString "|"))) (EApp (EVar "display") (EApp (EApp (EVar "joinWith") (ELit (LString ","))) (EApp (EApp (EVar "map") (EVar "oblArgKey")) (EFieldAccess (EVar "o") "voArgs"))))) (ELit (LString ""))))
+(DFunDef false "vecOblKey" ((PVar "o")) (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "")) (EApp (EVar "$core.display") (EApp (EVar "lenKey") (EFieldAccess (EFieldAccess (EVar "o") "voIface") "irName")))) (ELit (LString ""))) (EApp (EVar "$core.display") (EApp (EApp (EVar "joinWith") (ELit (LString ","))) (EApp (EApp (EVar "map") (EVar "intToString")) (EFieldAccess (EVar "o") "voIds"))))) (ELit (LString "|"))) (EApp (EVar "$core.display") (EApp (EApp (EVar "joinWith") (ELit (LString ","))) (EApp (EApp (EVar "map") (EVar "oblArgKey")) (EFieldAccess (EVar "o") "voArgs"))))) (ELit (LString ""))))
 (DTypeSig false "containsVecObl" (TyFun (TyCon "VecObl") (TyFun (TyApp (TyCon "List") (TyCon "VecObl")) (TyCon "Bool"))))
 (DFunDef false "containsVecObl" (PWild (PList)) (EVar "False"))
 (DFunDef false "containsVecObl" ((PVar "o") (PCons (PVar "o2") (PVar "rest"))) (EBinOp "||" (EBinOp "&&" (EApp (EApp (EVar "sameIfaceDecl") (EFieldAccess (EVar "o") "voIface")) (EFieldAccess (EVar "o2") "voIface")) (EBinOp "==" (EFieldAccess (EVar "o") "voIds") (EFieldAccess (EVar "o2") "voIds"))) (EApp (EApp (EVar "containsVecObl") (EVar "o")) (EVar "rest"))))

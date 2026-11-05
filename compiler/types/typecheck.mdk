@@ -82,6 +82,7 @@ import frontend.ast.{
   qualifiedLocal,
   TabKey(..),
   lookupTab,
+  programIsCore,
 }
 import types.repr.{
   Tyvar(..),
@@ -204,7 +205,6 @@ import frontend.visibility.{
 }
 import types.value_main.{inMainBinding}
 import frontend.resolve.{
-  programIsCore,
   -- #1280: the extern-signature half of the identity supply — see `externSchemes`.
   stampTyOrigins,
   runtimeExternTyOriginScope,

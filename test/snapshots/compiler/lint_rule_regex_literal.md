@@ -163,6 +163,7 @@ regexLiteralErrFinding loc pat = match compile pat
     fix = None,
   }
 # DESUGAR
+(DUse false (UseAlias ("core") "$core"))
 (DUse false (UseGroup ("frontend" "ast") ((mem "Loc" true) (mem "Lit" true) (mem "UsePath" true) (mem "qualifiedLocal" false) (mem "Expr" true) (mem "Decl" true))))
 (DUse false (UseGroup ("frontend" "parser") ((mem "Positions" true))))
 (DUse false (UseGroup ("driver" "diagnostics") ((mem "Severity" true))))
@@ -209,7 +210,7 @@ regexLiteralErrFinding loc pat = match compile pat
 (DFunDef false "regexLiteralFindingArg" ((PVar "loc") (PCon "ELit" (PCon "LString" (PVar "pat")))) (EApp (EApp (EVar "regexLiteralErrFinding") (EVar "loc")) (EVar "pat")))
 (DFunDef false "regexLiteralFindingArg" ((PVar "loc") PWild) (EApp (EApp (EVar "regexLiteralErrFinding") (EVar "loc")) (ELit (LString ""))))
 (DTypeSig false "regexLiteralErrFinding" (TyFun (TyApp (TyCon "Option") (TyCon "Loc")) (TyFun (TyCon "String") (TyCon "Finding"))))
-(DFunDef false "regexLiteralErrFinding" ((PVar "loc") (PVar "pat")) (EMatch (EApp (EVar "compile") (EVar "pat")) (arm (PCon "Err" (PRec "RegexError" ((rf "message" None) (rf "position" None)) false)) () (ERecordCreate "Finding" ((fa "rule" (EVar "ruleNameRegexLiteral")) (fa "message" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "regex pattern \"")) (EApp (EVar "display") (EVar "pat"))) (ELit (LString "\" fails to compile: "))) (EApp (EVar "display") (EVar "message"))) (ELit (LString " (position "))) (EApp (EVar "display") (EApp (EVar "intToString") (EVar "position")))) (ELit (LString ")")))) (fa "severity" (EVar "SevWarning")) (fa "loc" (EVar "loc")) (fa "fix" (EVar "None"))))) (arm (PCon "Ok" PWild) () (ERecordCreate "Finding" ((fa "rule" (EVar "ruleNameRegexLiteral")) (fa "message" (EBinOp "++" (EBinOp "++" (ELit (LString "regex pattern \"")) (EApp (EVar "display") (EVar "pat"))) (ELit (LString "\" fails to compile")))) (fa "severity" (EVar "SevWarning")) (fa "loc" (EVar "loc")) (fa "fix" (EVar "None")))))))
+(DFunDef false "regexLiteralErrFinding" ((PVar "loc") (PVar "pat")) (EMatch (EApp (EVar "compile") (EVar "pat")) (arm (PCon "Err" (PRec "RegexError" ((rf "message" None) (rf "position" None)) false)) () (ERecordCreate "Finding" ((fa "rule" (EVar "ruleNameRegexLiteral")) (fa "message" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "regex pattern \"")) (EApp (EVar "$core.display") (EVar "pat"))) (ELit (LString "\" fails to compile: "))) (EApp (EVar "$core.display") (EVar "message"))) (ELit (LString " (position "))) (EApp (EVar "$core.display") (EApp (EVar "intToString") (EVar "position")))) (ELit (LString ")")))) (fa "severity" (EVar "SevWarning")) (fa "loc" (EVar "loc")) (fa "fix" (EVar "None"))))) (arm (PCon "Ok" PWild) () (ERecordCreate "Finding" ((fa "rule" (EVar "ruleNameRegexLiteral")) (fa "message" (EBinOp "++" (EBinOp "++" (ELit (LString "regex pattern \"")) (EApp (EVar "$core.display") (EVar "pat"))) (ELit (LString "\" fails to compile")))) (fa "severity" (EVar "SevWarning")) (fa "loc" (EVar "loc")) (fa "fix" (EVar "None")))))))
 # MARK
 (DUse false (UseGroup ("frontend" "ast") ((mem "Loc" true) (mem "Lit" true) (mem "UsePath" true) (mem "qualifiedLocal" false) (mem "Expr" true) (mem "Decl" true))))
 (DUse false (UseGroup ("frontend" "parser") ((mem "Positions" true))))

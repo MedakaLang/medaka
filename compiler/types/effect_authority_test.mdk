@@ -1668,36 +1668,38 @@ test "a pattern-ranging binder admits a right extension" = expectAll
         "effect Store Prefix\n\ndata H (d : Authority Store*) = H (String @d)\n\nsame : (dir : String @Store*) -> String @dir\nsame dir = dir\n"),
   ]
 
--- #3629: an interpolated part is read as its operand only when `display` is
--- the prelude's method, whose `String` impl is the identity. This harness
--- declares no prelude, so a `Display` written here is a program's own, and
--- its `String` impl may be anything: the part stays the whole domain. The
--- accepting rows are the abstraction's own, in `effect_infer_test.mdk`, and
--- `test/effect_builtin_param_fixtures/filewrite_interp_binder_manifest_accept.mdk`,
--- which is checked against the real prelude.
+-- #3629: an interpolated part is read as its operand because it applies the
+-- prelude's `display`, whose `String` impl is the identity, whatever `display`
+-- the program binds itself.  This harness supplies that prelude.  A `display`
+-- call the program writes denotes its own binding, which may be anything, so
+-- that part stays the whole domain.
 test "an interpolated binder is read through the prelude's display only" =
-  let ownDisplay =
-    "interface Display a where\n  display : a -> String\nimpl Display String where\n  display s = \"../\" ++ s\n"
+  let coreDisplay =
+    "export interface Display a where\n  display : a -> String\nexport impl Display String where\n  display s = s\n"
+  let ownDisplay = "display : String -> String\ndisplay s = \"../\" ++ s\n"
   let under = "under : (d : String @Store*) -> String -> <Store d> Int\n"
-  expectAll
-    [
-      expectEqual
-        []
-        (codes "\{ownDisplay}\{under}under d x = load (d ++ \"/\" ++ x)\n"),
-      expectEqual
-        ["T-AUTHORITY"]
-        (codes (ownDisplay ++ under ++ "under d x = load \"\\{d}/\\{x}\"\n")),
-      -- the report names the program's `display` as the cause, not the
-      -- appending the body already does
-      anyMentions
-        "this module's own `display`"
-        (messagesOf
-          (ownDisplay ++ under ++ "under d x = load \"\\{d}/\\{x}\"\n")),
-      noneMention
-        "appending to the named argument"
-        (messagesOf
-          (ownDisplay ++ under ++ "under d x = load \"\\{d}/\\{x}\"\n")),
-    ]
+  expectAll [
+    expectEqual
+      []
+      (codesUnder
+        coreDisplay
+        (ownDisplay ++ under ++ "under d x = load \"\\{d}/\\{x}\"\n")),
+    expectEqual
+      ["T-AUTHORITY"]
+      (codesUnder
+        coreDisplay
+        "\{ownDisplay}\{under}under d x = load (display d ++ \"/\" ++ x)\n"),
+  ]
+
+-- `codes` with [core] as the prelude.
+codesUnder : String -> String -> List String
+codesUnder core source =
+  let (errors, _) = checkOneDiags defaultDriveInputs [] (desugar
+    (parseLocated core)) (
+    "authority",
+    desugar (parseLocated (prelude ++ source)),
+  )
+  map (d => codeText (tcCode d)) errors
 
 test "two sites with identical authority-pattern text each report" =
   expectEqual

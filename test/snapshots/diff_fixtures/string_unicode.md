@@ -41,10 +41,11 @@ NEWLINE
 NEWLINE
 EOF
 # DESUGAR
+(DUse false (UseAlias ("core") "$core"))
 (DTypeSig false "greeting" (TyCon "String"))
 (DFunDef false "greeting" () (ELit (LString "Hi")))
 (DTypeSig false "shout" (TyCon "String"))
-(DFunDef false "shout" () (EBinOp "++" (EBinOp "++" (ELit (LString "")) (EApp (EVar "display") (EVar "greeting"))) (ELit (LString "!"))))
+(DFunDef false "shout" () (EBinOp "++" (EBinOp "++" (ELit (LString "")) (EApp (EVar "$core.display") (EVar "greeting"))) (ELit (LString "!"))))
 (DFunDef false "main" () (EApp (EVar "println") (EVar "shout")))
 # MARK
 (DTypeSig false "greeting" (TyCon "String"))

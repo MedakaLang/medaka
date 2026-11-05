@@ -904,21 +904,37 @@ test "an annotated pattern is checked through a name no program binds" = expectE
     ),
   ]
 
--- Without the annotation this program checks clean.
+-- Without the annotation this program checks clean.  A `do` block binds
+-- through the prelude's `andThen`, so the harness supplies it as the prelude.
 test "a do-bind annotation is checked against the bound value" =
   expectEqual
     [("T-TYPE-MISMATCH", "type mismatch: Int vs String")]
-    (checkedErrors
+    (preludeErrors
       """
+        public export data Option a = None | Some a
+        export
         andThen : Option a -> (a -> Option b) -> Option b
         andThen o k = match o
           Some x => k x
           None => None
+        """
+      """
         f : Option Int
         f = do
           (a, b) : (String, String) <- Some (3, 4)
           Some (a + b)
         """)
+
+-- The `(code, message)` of every error [src] reports with [core] as its
+-- prelude.
+preludeErrors : String -> String -> List (String, String)
+preludeErrors core src =
+  let (errors, _) = checkOneDiags defaultDriveInputs [] (desugar
+    (parseLocated core)) (
+    "kinds",
+    desugar (parseLocated src),
+  )
+  map (e => (codeText (tcCode e), tcMsg e)) errors
 
 -- The `(line, column)` of every kind error a whole check of [src] reports.
 kindErrorStarts : String -> List (Int, Int)
