@@ -1,5 +1,5 @@
 # META
-source_lines=2136
+source_lines=2135
 stages=DESUGAR,MARK
 # SOURCE
 -- A faithful, fail-closed codec for the elaborated AST and the evidence rows.
@@ -57,17 +57,16 @@ decodeEvEntries text = decodeAll readEvEntries text
 decodeAll : (SexpCursor -> Result SexpError a) -> String -> Result SexpError a
 decodeAll reader text =
   let cur = cursorOf text
-  match reader cur
-    Err e => Err e
-    Ok v =>
-      if cursorAtEnd cur then
-        Ok v
-      else
-        Err SexpError {
-          seOffset = cursorOffset cur,
-          sePath = "",
-          seWhat = "trailing text after the encoded value",
-        }
+  do
+    v <- reader cur
+    if cursorAtEnd cur then
+      Ok v
+    else
+      Err SexpError {
+        seOffset = cursorOffset cur,
+        sePath = "",
+        seWhat = "trailing text after the encoded value",
+      }
 
 checked : String -> SexpCursor -> a -> Result SexpError a
 checked path cur v =
@@ -2154,7 +2153,7 @@ readDeclTagged t cur
 (DTypeSig true "decodeEvEntries" (TyFun (TyCon "String") (TyApp (TyApp (TyCon "Result") (TyCon "SexpError")) (TyApp (TyCon "List") (TyCon "EvEntry")))))
 (DFunDef false "decodeEvEntries" ((PVar "text")) (EApp (EApp (EVar "decodeAll") (EVar "readEvEntries")) (EVar "text")))
 (DTypeSig false "decodeAll" (TyFun (TyFun (TyCon "SexpCursor") (TyApp (TyApp (TyCon "Result") (TyCon "SexpError")) (TyVar "a"))) (TyFun (TyCon "String") (TyApp (TyApp (TyCon "Result") (TyCon "SexpError")) (TyVar "a")))))
-(DFunDef false "decodeAll" ((PVar "reader") (PVar "text")) (EBlock (DoLet false false (PVar "cur") (EApp (EVar "cursorOf") (EVar "text"))) (DoExpr (EMatch (EApp (EVar "reader") (EVar "cur")) (arm (PCon "Err" (PVar "e")) () (EApp (EVar "Err") (EVar "e"))) (arm (PCon "Ok" (PVar "v")) () (EIf (EApp (EVar "cursorAtEnd") (EVar "cur")) (EApp (EVar "Ok") (EVar "v")) (EApp (EVar "Err") (ERecordCreate "SexpError" ((fa "seOffset" (EApp (EVar "cursorOffset") (EVar "cur"))) (fa "sePath" (ELit (LString ""))) (fa "seWhat" (ELit (LString "trailing text after the encoded value"))))))))))))
+(DFunDef false "decodeAll" ((PVar "reader") (PVar "text")) (EBlock (DoLet false false (PVar "cur") (EApp (EVar "cursorOf") (EVar "text"))) (DoExpr (EApp (EApp (EVar "andThen") (EApp (EVar "reader") (EVar "cur"))) (ELam ((PVar "v")) (EIf (EApp (EVar "cursorAtEnd") (EVar "cur")) (EApp (EVar "Ok") (EVar "v")) (EApp (EVar "Err") (ERecordCreate "SexpError" ((fa "seOffset" (EApp (EVar "cursorOffset") (EVar "cur"))) (fa "sePath" (ELit (LString ""))) (fa "seWhat" (ELit (LString "trailing text after the encoded value"))))))))))))
 (DTypeSig false "checked" (TyFun (TyCon "String") (TyFun (TyCon "SexpCursor") (TyFun (TyVar "a") (TyApp (TyApp (TyCon "Result") (TyCon "SexpError")) (TyVar "a"))))))
 (DFunDef false "checked" ((PVar "path") (PVar "cur") (PVar "v")) (EIf (EApp (EVar "cursorFailed") (EVar "cur")) (EApp (EVar "Err") (ERecordCreate "SexpError" ((fa "seOffset" (EApp (EVar "cursorOffset") (EVar "cur"))) (fa "sePath" (EVar "path")) (fa "seWhat" (ELit (LString "malformed or truncated encoding")))))) (EApp (EVar "Ok") (EVar "v"))))
 (DTypeSig false "sexpInt" (TyFun (TyCon "Int") (TyCon "SExp")))
@@ -2886,7 +2885,7 @@ readDeclTagged t cur
 (DTypeSig true "decodeEvEntries" (TyFun (TyCon "String") (TyApp (TyApp (TyCon "Result") (TyCon "SexpError")) (TyApp (TyCon "List") (TyCon "EvEntry")))))
 (DFunDef false "decodeEvEntries" ((PVar "text")) (EApp (EApp (EVar "decodeAll") (EVar "readEvEntries")) (EVar "text")))
 (DTypeSig false "decodeAll" (TyFun (TyFun (TyCon "SexpCursor") (TyApp (TyApp (TyCon "Result") (TyCon "SexpError")) (TyVar "a"))) (TyFun (TyCon "String") (TyApp (TyApp (TyCon "Result") (TyCon "SexpError")) (TyVar "a")))))
-(DFunDef false "decodeAll" ((PVar "reader") (PVar "text")) (EBlock (DoLet false false (PVar "cur") (EApp (EVar "cursorOf") (EVar "text"))) (DoExpr (EMatch (EApp (EVar "reader") (EVar "cur")) (arm (PCon "Err" (PVar "e")) () (EApp (EVar "Err") (EVar "e"))) (arm (PCon "Ok" (PVar "v")) () (EIf (EApp (EVar "cursorAtEnd") (EVar "cur")) (EApp (EVar "Ok") (EVar "v")) (EApp (EVar "Err") (ERecordCreate "SexpError" ((fa "seOffset" (EApp (EVar "cursorOffset") (EVar "cur"))) (fa "sePath" (ELit (LString ""))) (fa "seWhat" (ELit (LString "trailing text after the encoded value"))))))))))))
+(DFunDef false "decodeAll" ((PVar "reader") (PVar "text")) (EBlock (DoLet false false (PVar "cur") (EApp (EVar "cursorOf") (EVar "text"))) (DoExpr (EApp (EApp (EMethodRef "andThen") (EApp (EVar "reader") (EVar "cur"))) (ELam ((PVar "v")) (EIf (EApp (EVar "cursorAtEnd") (EVar "cur")) (EApp (EVar "Ok") (EVar "v")) (EApp (EVar "Err") (ERecordCreate "SexpError" ((fa "seOffset" (EApp (EVar "cursorOffset") (EVar "cur"))) (fa "sePath" (ELit (LString ""))) (fa "seWhat" (ELit (LString "trailing text after the encoded value"))))))))))))
 (DTypeSig false "checked" (TyFun (TyCon "String") (TyFun (TyCon "SexpCursor") (TyFun (TyVar "a") (TyApp (TyApp (TyCon "Result") (TyCon "SexpError")) (TyVar "a"))))))
 (DFunDef false "checked" ((PVar "path") (PVar "cur") (PVar "v")) (EIf (EApp (EVar "cursorFailed") (EVar "cur")) (EApp (EVar "Err") (ERecordCreate "SexpError" ((fa "seOffset" (EApp (EVar "cursorOffset") (EVar "cur"))) (fa "sePath" (EVar "path")) (fa "seWhat" (ELit (LString "malformed or truncated encoding")))))) (EApp (EVar "Ok") (EVar "v"))))
 (DTypeSig false "sexpInt" (TyFun (TyCon "Int") (TyCon "SExp")))

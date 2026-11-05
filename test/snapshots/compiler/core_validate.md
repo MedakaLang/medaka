@@ -1,5 +1,5 @@
 # META
-source_lines=1813
+source_lines=1812
 stages=DESUGAR,MARK
 # SOURCE
 import backend.impl_groups.{validateImplGroups}
@@ -426,15 +426,15 @@ findingBinding (ExternFinding _ _ _ _ binding) = binding
 -- or `None` for an extern it lowers and for a name that is not a runtime extern.
 export
 unprovidedOn : Backend -> String -> Option (GapKind, String)
-unprovidedOn LlvmBackend name = match catalogRow name
-  Some r => notProvidedOf (rowLlvm r)
-  None => None
-unprovidedOn WasmBackend name = match catalogRow name
-  Some r => notProvidedOf (rowWasm r)
-  None => None
-unprovidedOn EvalBackend name = match catalogRow name
-  Some r => notProvidedOf (rowEval r)
-  None => None
+unprovidedOn LlvmBackend name = do
+  r <- catalogRow name
+  notProvidedOf (rowLlvm r)
+unprovidedOn WasmBackend name = do
+  r <- catalogRow name
+  notProvidedOf (rowWasm r)
+unprovidedOn EvalBackend name = do
+  r <- catalogRow name
+  notProvidedOf (rowEval r)
 
 notProvidedOf : Disposition f -> Option (GapKind, String)
 notProvidedOf (NotProvided kind why) = Some (kind, why)
@@ -1736,16 +1736,15 @@ stampFault rows ctors arities rhs x (BinderId _ n) =
     Some "\{x} has no id, so no stamped type"
   else match BM.get n rows
     None => Some "\{x} has no stamped type"
-    Some row => match rhs
-      None => None
-      Some e => match boundShape ctors arities e
-        None => None
-        Some shape =>
-          if stampAllows shape row.brType then
-            None
-          else
-            Some
-              "\{x} is stamped \{runtimeTypeName row.brType} but is bound to \{shapeName shape}"
+    Some row => do
+      e <- rhs
+      do
+        shape <- boundShape ctors arities e
+        if stampAllows shape row.brType then
+          None
+        else
+          Some
+            "\{x} is stamped \{runtimeTypeName row.brType} but is bound to \{shapeName shape}"
 
 -- What a `let` right-hand side is, where that fixes what its binder holds.
 data BoundShape = BoundLit RuntimeType | BoundInt | BoundCell
@@ -1887,9 +1886,9 @@ validatePhysicalDemand _ _ _ = []
 (DTypeSig true "findingBinding" (TyFun (TyCon "ExternFinding") (TyCon "String")))
 (DFunDef false "findingBinding" ((PCon "ExternFinding" PWild PWild PWild PWild (PVar "binding"))) (EVar "binding"))
 (DTypeSig true "unprovidedOn" (TyFun (TyCon "Backend") (TyFun (TyCon "String") (TyApp (TyCon "Option") (TyTuple (TyCon "GapKind") (TyCon "String"))))))
-(DFunDef false "unprovidedOn" ((PCon "LlvmBackend") (PVar "name")) (EMatch (EApp (EVar "catalogRow") (EVar "name")) (arm (PCon "Some" (PVar "r")) () (EApp (EVar "notProvidedOf") (EApp (EVar "rowLlvm") (EVar "r")))) (arm (PCon "None") () (EVar "None"))))
-(DFunDef false "unprovidedOn" ((PCon "WasmBackend") (PVar "name")) (EMatch (EApp (EVar "catalogRow") (EVar "name")) (arm (PCon "Some" (PVar "r")) () (EApp (EVar "notProvidedOf") (EApp (EVar "rowWasm") (EVar "r")))) (arm (PCon "None") () (EVar "None"))))
-(DFunDef false "unprovidedOn" ((PCon "EvalBackend") (PVar "name")) (EMatch (EApp (EVar "catalogRow") (EVar "name")) (arm (PCon "Some" (PVar "r")) () (EApp (EVar "notProvidedOf") (EApp (EVar "rowEval") (EVar "r")))) (arm (PCon "None") () (EVar "None"))))
+(DFunDef false "unprovidedOn" ((PCon "LlvmBackend") (PVar "name")) (EApp (EApp (EVar "andThen") (EApp (EVar "catalogRow") (EVar "name"))) (ELam ((PVar "r")) (EApp (EVar "notProvidedOf") (EApp (EVar "rowLlvm") (EVar "r"))))))
+(DFunDef false "unprovidedOn" ((PCon "WasmBackend") (PVar "name")) (EApp (EApp (EVar "andThen") (EApp (EVar "catalogRow") (EVar "name"))) (ELam ((PVar "r")) (EApp (EVar "notProvidedOf") (EApp (EVar "rowWasm") (EVar "r"))))))
+(DFunDef false "unprovidedOn" ((PCon "EvalBackend") (PVar "name")) (EApp (EApp (EVar "andThen") (EApp (EVar "catalogRow") (EVar "name"))) (ELam ((PVar "r")) (EApp (EVar "notProvidedOf") (EApp (EVar "rowEval") (EVar "r"))))))
 (DTypeSig false "notProvidedOf" (TyFun (TyApp (TyCon "Disposition") (TyVar "f")) (TyApp (TyCon "Option") (TyTuple (TyCon "GapKind") (TyCon "String")))))
 (DFunDef false "notProvidedOf" ((PCon "NotProvided" (PVar "kind") (PVar "why"))) (EApp (EVar "Some") (ETuple (EVar "kind") (EVar "why"))))
 (DFunDef false "notProvidedOf" (PWild) (EVar "None"))
@@ -2303,7 +2302,7 @@ validatePhysicalDemand _ _ _ = []
 (DTypeSig false "returnFault" (TyFun (TyApp (TyApp (TyCon "BM.Map") (TyCon "Int")) (TyCon "BinderRow")) (TyFun (TyCon "String") (TyFun (TyCon "BinderId") (TyApp (TyCon "Option") (TyCon "String"))))))
 (DFunDef false "returnFault" ((PVar "rows") (PVar "x") (PCon "BinderId" PWild (PVar "n"))) (EIf (EBinOp "<" (EVar "n") (ELit (LInt 0))) (EApp (EVar "Some") (EBinOp "++" (EBinOp "++" (ELit (LString "")) (EApp (EVar "display") (EVar "x"))) (ELit (LString " has no id, so no return type")))) (EMatch (EApp (EApp (EVar "BM.get") (EVar "n")) (EVar "rows")) (arm (PCon "None") () (EApp (EVar "Some") (EBinOp "++" (EBinOp "++" (ELit (LString "")) (EApp (EVar "display") (EVar "x"))) (ELit (LString " has no stamped type"))))) (arm (PCon "Some" (PVar "row")) () (EMatch (EFieldAccess (EVar "row") "brReturns") (arm (PCon "None") () (EApp (EVar "Some") (EBinOp "++" (EBinOp "++" (ELit (LString "")) (EApp (EVar "display") (EVar "x"))) (ELit (LString " has no return type"))))) (arm (PCon "Some" PWild) () (EVar "None")))))))
 (DTypeSig false "stampFault" (TyFun (TyApp (TyApp (TyCon "BM.Map") (TyCon "Int")) (TyCon "BinderRow")) (TyFun (TyApp (TyCon "OrdMap") (TyCon "String")) (TyFun (TyApp (TyCon "OrdMap") (TyCon "Int")) (TyFun (TyApp (TyCon "Option") (TyCon "CExpr")) (TyFun (TyCon "String") (TyFun (TyCon "BinderId") (TyApp (TyCon "Option") (TyCon "String")))))))))
-(DFunDef false "stampFault" ((PVar "rows") (PVar "ctors") (PVar "arities") (PVar "rhs") (PVar "x") (PCon "BinderId" PWild (PVar "n"))) (EIf (EBinOp "<" (EVar "n") (ELit (LInt 0))) (EApp (EVar "Some") (EBinOp "++" (EBinOp "++" (ELit (LString "")) (EApp (EVar "display") (EVar "x"))) (ELit (LString " has no id, so no stamped type")))) (EMatch (EApp (EApp (EVar "BM.get") (EVar "n")) (EVar "rows")) (arm (PCon "None") () (EApp (EVar "Some") (EBinOp "++" (EBinOp "++" (ELit (LString "")) (EApp (EVar "display") (EVar "x"))) (ELit (LString " has no stamped type"))))) (arm (PCon "Some" (PVar "row")) () (EMatch (EVar "rhs") (arm (PCon "None") () (EVar "None")) (arm (PCon "Some" (PVar "e")) () (EMatch (EApp (EApp (EApp (EVar "boundShape") (EVar "ctors")) (EVar "arities")) (EVar "e")) (arm (PCon "None") () (EVar "None")) (arm (PCon "Some" (PVar "shape")) () (EIf (EApp (EApp (EVar "stampAllows") (EVar "shape")) (EFieldAccess (EVar "row") "brType")) (EVar "None") (EApp (EVar "Some") (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "")) (EApp (EVar "display") (EVar "x"))) (ELit (LString " is stamped "))) (EApp (EVar "display") (EApp (EVar "runtimeTypeName") (EFieldAccess (EVar "row") "brType")))) (ELit (LString " but is bound to "))) (EApp (EVar "display") (EApp (EVar "shapeName") (EVar "shape")))) (ELit (LString "")))))))))))))
+(DFunDef false "stampFault" ((PVar "rows") (PVar "ctors") (PVar "arities") (PVar "rhs") (PVar "x") (PCon "BinderId" PWild (PVar "n"))) (EIf (EBinOp "<" (EVar "n") (ELit (LInt 0))) (EApp (EVar "Some") (EBinOp "++" (EBinOp "++" (ELit (LString "")) (EApp (EVar "display") (EVar "x"))) (ELit (LString " has no id, so no stamped type")))) (EMatch (EApp (EApp (EVar "BM.get") (EVar "n")) (EVar "rows")) (arm (PCon "None") () (EApp (EVar "Some") (EBinOp "++" (EBinOp "++" (ELit (LString "")) (EApp (EVar "display") (EVar "x"))) (ELit (LString " has no stamped type"))))) (arm (PCon "Some" (PVar "row")) () (EApp (EApp (EVar "andThen") (EVar "rhs")) (ELam ((PVar "e")) (EApp (EApp (EVar "andThen") (EApp (EApp (EApp (EVar "boundShape") (EVar "ctors")) (EVar "arities")) (EVar "e"))) (ELam ((PVar "shape")) (EIf (EApp (EApp (EVar "stampAllows") (EVar "shape")) (EFieldAccess (EVar "row") "brType")) (EVar "None") (EApp (EVar "Some") (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "")) (EApp (EVar "display") (EVar "x"))) (ELit (LString " is stamped "))) (EApp (EVar "display") (EApp (EVar "runtimeTypeName") (EFieldAccess (EVar "row") "brType")))) (ELit (LString " but is bound to "))) (EApp (EVar "display") (EApp (EVar "shapeName") (EVar "shape")))) (ELit (LString "")))))))))))))
 (DData Private "BoundShape" () ((variant "BoundLit" (ConPos (TyCon "RuntimeType"))) (variant "BoundInt" (ConPos)) (variant "BoundCell" (ConPos))) ())
 (DTypeSig false "boundShape" (TyFun (TyApp (TyCon "OrdMap") (TyCon "String")) (TyFun (TyApp (TyCon "OrdMap") (TyCon "Int")) (TyFun (TyCon "CExpr") (TyApp (TyCon "Option") (TyCon "BoundShape"))))))
 (DFunDef false "boundShape" (PWild PWild (PCon "CLit" (PCon "LInt" PWild))) (EApp (EVar "Some") (EVar "BoundInt")))
@@ -2411,9 +2410,9 @@ validatePhysicalDemand _ _ _ = []
 (DTypeSig true "findingBinding" (TyFun (TyCon "ExternFinding") (TyCon "String")))
 (DFunDef false "findingBinding" ((PCon "ExternFinding" PWild PWild PWild PWild (PVar "binding"))) (EVar "binding"))
 (DTypeSig true "unprovidedOn" (TyFun (TyCon "Backend") (TyFun (TyCon "String") (TyApp (TyCon "Option") (TyTuple (TyCon "GapKind") (TyCon "String"))))))
-(DFunDef false "unprovidedOn" ((PCon "LlvmBackend") (PVar "name")) (EMatch (EApp (EVar "catalogRow") (EVar "name")) (arm (PCon "Some" (PVar "r")) () (EApp (EVar "notProvidedOf") (EApp (EVar "rowLlvm") (EVar "r")))) (arm (PCon "None") () (EVar "None"))))
-(DFunDef false "unprovidedOn" ((PCon "WasmBackend") (PVar "name")) (EMatch (EApp (EVar "catalogRow") (EVar "name")) (arm (PCon "Some" (PVar "r")) () (EApp (EVar "notProvidedOf") (EApp (EVar "rowWasm") (EVar "r")))) (arm (PCon "None") () (EVar "None"))))
-(DFunDef false "unprovidedOn" ((PCon "EvalBackend") (PVar "name")) (EMatch (EApp (EVar "catalogRow") (EVar "name")) (arm (PCon "Some" (PVar "r")) () (EApp (EVar "notProvidedOf") (EApp (EVar "rowEval") (EVar "r")))) (arm (PCon "None") () (EVar "None"))))
+(DFunDef false "unprovidedOn" ((PCon "LlvmBackend") (PVar "name")) (EApp (EApp (EMethodRef "andThen") (EApp (EVar "catalogRow") (EVar "name"))) (ELam ((PVar "r")) (EApp (EVar "notProvidedOf") (EApp (EVar "rowLlvm") (EVar "r"))))))
+(DFunDef false "unprovidedOn" ((PCon "WasmBackend") (PVar "name")) (EApp (EApp (EMethodRef "andThen") (EApp (EVar "catalogRow") (EVar "name"))) (ELam ((PVar "r")) (EApp (EVar "notProvidedOf") (EApp (EVar "rowWasm") (EVar "r"))))))
+(DFunDef false "unprovidedOn" ((PCon "EvalBackend") (PVar "name")) (EApp (EApp (EMethodRef "andThen") (EApp (EVar "catalogRow") (EVar "name"))) (ELam ((PVar "r")) (EApp (EVar "notProvidedOf") (EApp (EVar "rowEval") (EVar "r"))))))
 (DTypeSig false "notProvidedOf" (TyFun (TyApp (TyCon "Disposition") (TyVar "f")) (TyApp (TyCon "Option") (TyTuple (TyCon "GapKind") (TyCon "String")))))
 (DFunDef false "notProvidedOf" ((PCon "NotProvided" (PVar "kind") (PVar "why"))) (EApp (EVar "Some") (ETuple (EVar "kind") (EVar "why"))))
 (DFunDef false "notProvidedOf" (PWild) (EVar "None"))
@@ -2827,7 +2826,7 @@ validatePhysicalDemand _ _ _ = []
 (DTypeSig false "returnFault" (TyFun (TyApp (TyApp (TyCon "BM.Map") (TyCon "Int")) (TyCon "BinderRow")) (TyFun (TyCon "String") (TyFun (TyCon "BinderId") (TyApp (TyCon "Option") (TyCon "String"))))))
 (DFunDef false "returnFault" ((PVar "rows") (PVar "x") (PCon "BinderId" PWild (PVar "n"))) (EIf (EBinOp "<" (EVar "n") (ELit (LInt 0))) (EApp (EVar "Some") (EBinOp "++" (EBinOp "++" (ELit (LString "")) (EApp (EMethodRef "display") (EVar "x"))) (ELit (LString " has no id, so no return type")))) (EMatch (EApp (EApp (EVar "BM.get") (EVar "n")) (EVar "rows")) (arm (PCon "None") () (EApp (EVar "Some") (EBinOp "++" (EBinOp "++" (ELit (LString "")) (EApp (EMethodRef "display") (EVar "x"))) (ELit (LString " has no stamped type"))))) (arm (PCon "Some" (PVar "row")) () (EMatch (EFieldAccess (EVar "row") "brReturns") (arm (PCon "None") () (EApp (EVar "Some") (EBinOp "++" (EBinOp "++" (ELit (LString "")) (EApp (EMethodRef "display") (EVar "x"))) (ELit (LString " has no return type"))))) (arm (PCon "Some" PWild) () (EVar "None")))))))
 (DTypeSig false "stampFault" (TyFun (TyApp (TyApp (TyCon "BM.Map") (TyCon "Int")) (TyCon "BinderRow")) (TyFun (TyApp (TyCon "OrdMap") (TyCon "String")) (TyFun (TyApp (TyCon "OrdMap") (TyCon "Int")) (TyFun (TyApp (TyCon "Option") (TyCon "CExpr")) (TyFun (TyCon "String") (TyFun (TyCon "BinderId") (TyApp (TyCon "Option") (TyCon "String")))))))))
-(DFunDef false "stampFault" ((PVar "rows") (PVar "ctors") (PVar "arities") (PVar "rhs") (PVar "x") (PCon "BinderId" PWild (PVar "n"))) (EIf (EBinOp "<" (EVar "n") (ELit (LInt 0))) (EApp (EVar "Some") (EBinOp "++" (EBinOp "++" (ELit (LString "")) (EApp (EMethodRef "display") (EVar "x"))) (ELit (LString " has no id, so no stamped type")))) (EMatch (EApp (EApp (EVar "BM.get") (EVar "n")) (EVar "rows")) (arm (PCon "None") () (EApp (EVar "Some") (EBinOp "++" (EBinOp "++" (ELit (LString "")) (EApp (EMethodRef "display") (EVar "x"))) (ELit (LString " has no stamped type"))))) (arm (PCon "Some" (PVar "row")) () (EMatch (EVar "rhs") (arm (PCon "None") () (EVar "None")) (arm (PCon "Some" (PVar "e")) () (EMatch (EApp (EApp (EApp (EVar "boundShape") (EVar "ctors")) (EVar "arities")) (EVar "e")) (arm (PCon "None") () (EVar "None")) (arm (PCon "Some" (PVar "shape")) () (EIf (EApp (EApp (EVar "stampAllows") (EVar "shape")) (EFieldAccess (EVar "row") "brType")) (EVar "None") (EApp (EVar "Some") (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "")) (EApp (EMethodRef "display") (EVar "x"))) (ELit (LString " is stamped "))) (EApp (EMethodRef "display") (EApp (EVar "runtimeTypeName") (EFieldAccess (EVar "row") "brType")))) (ELit (LString " but is bound to "))) (EApp (EMethodRef "display") (EApp (EVar "shapeName") (EVar "shape")))) (ELit (LString "")))))))))))))
+(DFunDef false "stampFault" ((PVar "rows") (PVar "ctors") (PVar "arities") (PVar "rhs") (PVar "x") (PCon "BinderId" PWild (PVar "n"))) (EIf (EBinOp "<" (EVar "n") (ELit (LInt 0))) (EApp (EVar "Some") (EBinOp "++" (EBinOp "++" (ELit (LString "")) (EApp (EMethodRef "display") (EVar "x"))) (ELit (LString " has no id, so no stamped type")))) (EMatch (EApp (EApp (EVar "BM.get") (EVar "n")) (EVar "rows")) (arm (PCon "None") () (EApp (EVar "Some") (EBinOp "++" (EBinOp "++" (ELit (LString "")) (EApp (EMethodRef "display") (EVar "x"))) (ELit (LString " has no stamped type"))))) (arm (PCon "Some" (PVar "row")) () (EApp (EApp (EMethodRef "andThen") (EVar "rhs")) (ELam ((PVar "e")) (EApp (EApp (EMethodRef "andThen") (EApp (EApp (EApp (EVar "boundShape") (EVar "ctors")) (EVar "arities")) (EVar "e"))) (ELam ((PVar "shape")) (EIf (EApp (EApp (EVar "stampAllows") (EVar "shape")) (EFieldAccess (EVar "row") "brType")) (EVar "None") (EApp (EVar "Some") (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "")) (EApp (EMethodRef "display") (EVar "x"))) (ELit (LString " is stamped "))) (EApp (EMethodRef "display") (EApp (EVar "runtimeTypeName") (EFieldAccess (EVar "row") "brType")))) (ELit (LString " but is bound to "))) (EApp (EMethodRef "display") (EApp (EVar "shapeName") (EVar "shape")))) (ELit (LString "")))))))))))))
 (DData Private "BoundShape" () ((variant "BoundLit" (ConPos (TyCon "RuntimeType"))) (variant "BoundInt" (ConPos)) (variant "BoundCell" (ConPos))) ())
 (DTypeSig false "boundShape" (TyFun (TyApp (TyCon "OrdMap") (TyCon "String")) (TyFun (TyApp (TyCon "OrdMap") (TyCon "Int")) (TyFun (TyCon "CExpr") (TyApp (TyCon "Option") (TyCon "BoundShape"))))))
 (DFunDef false "boundShape" (PWild PWild (PCon "CLit" (PCon "LInt" PWild))) (EApp (EVar "Some") (EVar "BoundInt")))

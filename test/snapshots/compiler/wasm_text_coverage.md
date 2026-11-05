@@ -291,9 +291,9 @@ symbolFrom "d" n = WasmData n
 symbolFrom _ n = WasmElem n
 
 symbolLookup : WasmSymbol -> SymbolIndex a -> Option a
-symbolLookup sym index = match omLookup (symbolNamespace sym) index
-  None => None
-  Some names => omLookup (symbolName sym) names
+symbolLookup sym index = do
+  names <- omLookup (symbolNamespace sym) index
+  omLookup (symbolName sym) names
 
 symbolHas : WasmSymbol -> SymbolIndex a -> Bool
 symbolHas sym index = isSome (symbolLookup sym index)
@@ -861,7 +861,7 @@ finishCheckedText policy reg (CallCoverage _ entries) text =
 (DFunDef false "symbolFrom" ((PLit (LString "d")) (PVar "n")) (EApp (EVar "WasmData") (EVar "n")))
 (DFunDef false "symbolFrom" (PWild (PVar "n")) (EApp (EVar "WasmElem") (EVar "n")))
 (DTypeSig false "symbolLookup" (TyFun (TyCon "WasmSymbol") (TyFun (TyApp (TyCon "SymbolIndex") (TyVar "a")) (TyApp (TyCon "Option") (TyVar "a")))))
-(DFunDef false "symbolLookup" ((PVar "sym") (PVar "index")) (EMatch (EApp (EApp (EVar "omLookup") (EApp (EVar "symbolNamespace") (EVar "sym"))) (EVar "index")) (arm (PCon "None") () (EVar "None")) (arm (PCon "Some" (PVar "names")) () (EApp (EApp (EVar "omLookup") (EApp (EVar "symbolName") (EVar "sym"))) (EVar "names")))))
+(DFunDef false "symbolLookup" ((PVar "sym") (PVar "index")) (EApp (EApp (EVar "andThen") (EApp (EApp (EVar "omLookup") (EApp (EVar "symbolNamespace") (EVar "sym"))) (EVar "index"))) (ELam ((PVar "names")) (EApp (EApp (EVar "omLookup") (EApp (EVar "symbolName") (EVar "sym"))) (EVar "names")))))
 (DTypeSig false "symbolHas" (TyFun (TyCon "WasmSymbol") (TyFun (TyApp (TyCon "SymbolIndex") (TyVar "a")) (TyCon "Bool"))))
 (DFunDef false "symbolHas" ((PVar "sym") (PVar "index")) (EApp (EVar "isSome") (EApp (EApp (EVar "symbolLookup") (EVar "sym")) (EVar "index"))))
 (DTypeSig false "symbolInsert" (TyFun (TyCon "WasmSymbol") (TyFun (TyVar "a") (TyFun (TyApp (TyCon "SymbolIndex") (TyVar "a")) (TyApp (TyCon "SymbolIndex") (TyVar "a"))))))
@@ -1042,7 +1042,7 @@ finishCheckedText policy reg (CallCoverage _ entries) text =
 (DFunDef false "symbolFrom" ((PLit (LString "d")) (PVar "n")) (EApp (EVar "WasmData") (EVar "n")))
 (DFunDef false "symbolFrom" (PWild (PVar "n")) (EApp (EVar "WasmElem") (EVar "n")))
 (DTypeSig false "symbolLookup" (TyFun (TyCon "WasmSymbol") (TyFun (TyApp (TyCon "SymbolIndex") (TyVar "a")) (TyApp (TyCon "Option") (TyVar "a")))))
-(DFunDef false "symbolLookup" ((PVar "sym") (PVar "index")) (EMatch (EApp (EApp (EVar "omLookup") (EApp (EVar "symbolNamespace") (EVar "sym"))) (EMethodRef "index")) (arm (PCon "None") () (EVar "None")) (arm (PCon "Some" (PVar "names")) () (EApp (EApp (EVar "omLookup") (EApp (EVar "symbolName") (EVar "sym"))) (EVar "names")))))
+(DFunDef false "symbolLookup" ((PVar "sym") (PVar "index")) (EApp (EApp (EMethodRef "andThen") (EApp (EApp (EVar "omLookup") (EApp (EVar "symbolNamespace") (EVar "sym"))) (EMethodRef "index"))) (ELam ((PVar "names")) (EApp (EApp (EVar "omLookup") (EApp (EVar "symbolName") (EVar "sym"))) (EVar "names")))))
 (DTypeSig false "symbolHas" (TyFun (TyCon "WasmSymbol") (TyFun (TyApp (TyCon "SymbolIndex") (TyVar "a")) (TyCon "Bool"))))
 (DFunDef false "symbolHas" ((PVar "sym") (PVar "index")) (EApp (EVar "isSome") (EApp (EApp (EVar "symbolLookup") (EVar "sym")) (EMethodRef "index"))))
 (DTypeSig false "symbolInsert" (TyFun (TyCon "WasmSymbol") (TyFun (TyVar "a") (TyFun (TyApp (TyCon "SymbolIndex") (TyVar "a")) (TyApp (TyCon "SymbolIndex") (TyVar "a"))))))

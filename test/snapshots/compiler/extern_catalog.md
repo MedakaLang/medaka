@@ -211,9 +211,9 @@ catalogRow name = omLookup name catalogIndex
 -- runtime extern or has no llvm lowering.
 export
 llvmFamily : String -> Option LlvmFamily
-llvmFamily name = match catalogRow name
-  Some r => dispositionFamily (rowLlvm r)
-  None => None
+llvmFamily name = do
+  r <- catalogRow name
+  dispositionFamily (rowLlvm r)
 
 -- Is this llvm family one a saturated call dispatches through?  The `Ref` cell,
 -- the in-place constants and the fallthrough sentinel are matched by their own
@@ -229,9 +229,9 @@ isLlvmExternFamily _ = True
 -- runtime extern or has no wasm lowering.
 export
 wasmFamily : String -> Option WasmFamily
-wasmFamily name = match catalogRow name
-  Some r => dispositionFamily (rowWasm r)
-  None => None
+wasmFamily name = do
+  r <- catalogRow name
+  dispositionFamily (rowWasm r)
 
 -- Is this wasm family one an application dispatches through?  The `Ref` cell,
 -- the in-place constants and the fallthrough sentinel are matched by their own
@@ -1633,14 +1633,14 @@ catalogRows = [
 (DTypeSig true "catalogRow" (TyFun (TyCon "String") (TyApp (TyCon "Option") (TyCon "ExternRow"))))
 (DFunDef false "catalogRow" ((PVar "name")) (EApp (EApp (EVar "omLookup") (EVar "name")) (EVar "catalogIndex")))
 (DTypeSig true "llvmFamily" (TyFun (TyCon "String") (TyApp (TyCon "Option") (TyCon "LlvmFamily"))))
-(DFunDef false "llvmFamily" ((PVar "name")) (EMatch (EApp (EVar "catalogRow") (EVar "name")) (arm (PCon "Some" (PVar "r")) () (EApp (EVar "dispositionFamily") (EApp (EVar "rowLlvm") (EVar "r")))) (arm (PCon "None") () (EVar "None"))))
+(DFunDef false "llvmFamily" ((PVar "name")) (EApp (EApp (EVar "andThen") (EApp (EVar "catalogRow") (EVar "name"))) (ELam ((PVar "r")) (EApp (EVar "dispositionFamily") (EApp (EVar "rowLlvm") (EVar "r"))))))
 (DTypeSig true "isLlvmExternFamily" (TyFun (TyCon "LlvmFamily") (TyCon "Bool")))
 (DFunDef false "isLlvmExternFamily" ((PCon "LlvmRefCell")) (EVar "False"))
 (DFunDef false "isLlvmExternFamily" ((PCon "LlvmConstant")) (EVar "False"))
 (DFunDef false "isLlvmExternFamily" ((PCon "LlvmFallthrough")) (EVar "False"))
 (DFunDef false "isLlvmExternFamily" (PWild) (EVar "True"))
 (DTypeSig true "wasmFamily" (TyFun (TyCon "String") (TyApp (TyCon "Option") (TyCon "WasmFamily"))))
-(DFunDef false "wasmFamily" ((PVar "name")) (EMatch (EApp (EVar "catalogRow") (EVar "name")) (arm (PCon "Some" (PVar "r")) () (EApp (EVar "dispositionFamily") (EApp (EVar "rowWasm") (EVar "r")))) (arm (PCon "None") () (EVar "None"))))
+(DFunDef false "wasmFamily" ((PVar "name")) (EApp (EApp (EVar "andThen") (EApp (EVar "catalogRow") (EVar "name"))) (ELam ((PVar "r")) (EApp (EVar "dispositionFamily") (EApp (EVar "rowWasm") (EVar "r"))))))
 (DTypeSig true "isWasmExternFamily" (TyFun (TyCon "WasmFamily") (TyCon "Bool")))
 (DFunDef false "isWasmExternFamily" ((PCon "WasmRefCell")) (EVar "False"))
 (DFunDef false "isWasmExternFamily" ((PCon "WasmConstant")) (EVar "False"))
@@ -1741,14 +1741,14 @@ catalogRows = [
 (DTypeSig true "catalogRow" (TyFun (TyCon "String") (TyApp (TyCon "Option") (TyCon "ExternRow"))))
 (DFunDef false "catalogRow" ((PVar "name")) (EApp (EApp (EVar "omLookup") (EVar "name")) (EVar "catalogIndex")))
 (DTypeSig true "llvmFamily" (TyFun (TyCon "String") (TyApp (TyCon "Option") (TyCon "LlvmFamily"))))
-(DFunDef false "llvmFamily" ((PVar "name")) (EMatch (EApp (EVar "catalogRow") (EVar "name")) (arm (PCon "Some" (PVar "r")) () (EApp (EVar "dispositionFamily") (EApp (EVar "rowLlvm") (EVar "r")))) (arm (PCon "None") () (EVar "None"))))
+(DFunDef false "llvmFamily" ((PVar "name")) (EApp (EApp (EMethodRef "andThen") (EApp (EVar "catalogRow") (EVar "name"))) (ELam ((PVar "r")) (EApp (EVar "dispositionFamily") (EApp (EVar "rowLlvm") (EVar "r"))))))
 (DTypeSig true "isLlvmExternFamily" (TyFun (TyCon "LlvmFamily") (TyCon "Bool")))
 (DFunDef false "isLlvmExternFamily" ((PCon "LlvmRefCell")) (EVar "False"))
 (DFunDef false "isLlvmExternFamily" ((PCon "LlvmConstant")) (EVar "False"))
 (DFunDef false "isLlvmExternFamily" ((PCon "LlvmFallthrough")) (EVar "False"))
 (DFunDef false "isLlvmExternFamily" (PWild) (EVar "True"))
 (DTypeSig true "wasmFamily" (TyFun (TyCon "String") (TyApp (TyCon "Option") (TyCon "WasmFamily"))))
-(DFunDef false "wasmFamily" ((PVar "name")) (EMatch (EApp (EVar "catalogRow") (EVar "name")) (arm (PCon "Some" (PVar "r")) () (EApp (EVar "dispositionFamily") (EApp (EVar "rowWasm") (EVar "r")))) (arm (PCon "None") () (EVar "None"))))
+(DFunDef false "wasmFamily" ((PVar "name")) (EApp (EApp (EMethodRef "andThen") (EApp (EVar "catalogRow") (EVar "name"))) (ELam ((PVar "r")) (EApp (EVar "dispositionFamily") (EApp (EVar "rowWasm") (EVar "r"))))))
 (DTypeSig true "isWasmExternFamily" (TyFun (TyCon "WasmFamily") (TyCon "Bool")))
 (DFunDef false "isWasmExternFamily" ((PCon "WasmRefCell")) (EVar "False"))
 (DFunDef false "isWasmExternFamily" ((PCon "WasmConstant")) (EVar "False"))

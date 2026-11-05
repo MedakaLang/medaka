@@ -293,9 +293,9 @@ cevalArm env root arms i = match nthArmParts arms i
   None => panic "core_ir decision tree: arm index out of range"
 
 nthArmParts : List CArm -> Int -> Option (Pat, List CGuard, CExpr)
-nthArmParts arms i = match nthArm arms i
-  Some arm => cArmParts arms arm
-  None => None
+nthArmParts arms i = do
+  arm <- nthArm arms i
+  cArmParts arms arm
 
 cevalArmBody : EvalEnv (Value e) -> Value e -> Pat -> CExpr -> <e> Value e
 cevalArmBody env root pat body = match matchPat pat root
@@ -963,7 +963,7 @@ cevalModulesOutputFacts facts preludeDecls modules =
 (DTypeSig false "cevalArm" (TyFun (TyApp (TyCon "EvalEnv") (TyApp (TyCon "Value") (TyVar "e"))) (TyFun (TyApp (TyCon "Value") (TyVar "e")) (TyFun (TyApp (TyCon "List") (TyCon "CArm")) (TyFun (TyCon "Int") (TyEffect () (Some "e") (TyApp (TyCon "Value") (TyVar "e"))))))))
 (DFunDef false "cevalArm" ((PVar "env") (PVar "root") (PVar "arms") (PVar "i")) (EMatch (EApp (EApp (EVar "nthArmParts") (EVar "arms")) (EVar "i")) (arm (PCon "Some" (PTuple (PVar "pat") PWild (PVar "body"))) () (EApp (EApp (EApp (EApp (EVar "cevalArmBody") (EVar "env")) (EVar "root")) (EVar "pat")) (EVar "body"))) (arm (PCon "None") () (EApp (EVar "panic") (ELit (LString "core_ir decision tree: arm index out of range"))))))
 (DTypeSig false "nthArmParts" (TyFun (TyApp (TyCon "List") (TyCon "CArm")) (TyFun (TyCon "Int") (TyApp (TyCon "Option") (TyTuple (TyCon "Pat") (TyApp (TyCon "List") (TyCon "CGuard")) (TyCon "CExpr"))))))
-(DFunDef false "nthArmParts" ((PVar "arms") (PVar "i")) (EMatch (EApp (EApp (EVar "nthArm") (EVar "arms")) (EVar "i")) (arm (PCon "Some" (PVar "arm")) () (EApp (EApp (EVar "cArmParts") (EVar "arms")) (EVar "arm"))) (arm (PCon "None") () (EVar "None"))))
+(DFunDef false "nthArmParts" ((PVar "arms") (PVar "i")) (EApp (EApp (EVar "andThen") (EApp (EApp (EVar "nthArm") (EVar "arms")) (EVar "i"))) (ELam ((PVar "arm")) (EApp (EApp (EVar "cArmParts") (EVar "arms")) (EVar "arm")))))
 (DTypeSig false "cevalArmBody" (TyFun (TyApp (TyCon "EvalEnv") (TyApp (TyCon "Value") (TyVar "e"))) (TyFun (TyApp (TyCon "Value") (TyVar "e")) (TyFun (TyCon "Pat") (TyFun (TyCon "CExpr") (TyEffect () (Some "e") (TyApp (TyCon "Value") (TyVar "e"))))))))
 (DFunDef false "cevalArmBody" ((PVar "env") (PVar "root") (PVar "pat") (PVar "body")) (EMatch (EApp (EApp (EVar "matchPat") (EVar "pat")) (EVar "root")) (arm (PCon "Some" (PVar "binds")) () (EApp (EApp (EVar "ceval") (EApp (EApp (EVar "extendEnv") (EVar "env")) (EVar "binds"))) (EVar "body"))) (arm (PCon "None") () (EApp (EVar "panic") (ELit (LString "core_ir decision tree: leaf pattern did not match scrutinee"))))))
 (DTypeSig false "cevalGuardedArm" (TyFun (TyApp (TyCon "EvalEnv") (TyApp (TyCon "Value") (TyVar "e"))) (TyFun (TyApp (TyCon "Value") (TyVar "e")) (TyFun (TyApp (TyCon "List") (TyCon "CArm")) (TyFun (TyApp (TyCon "List") (TyApp (TyCon "Value") (TyVar "e"))) (TyFun (TyCon "Int") (TyFun (TyCon "CTree") (TyEffect () (Some "e") (TyApp (TyCon "Value") (TyVar "e"))))))))))
@@ -1177,7 +1177,7 @@ cevalModulesOutputFacts facts preludeDecls modules =
 (DTypeSig false "cevalArm" (TyFun (TyApp (TyCon "EvalEnv") (TyApp (TyCon "Value") (TyVar "e"))) (TyFun (TyApp (TyCon "Value") (TyVar "e")) (TyFun (TyApp (TyCon "List") (TyCon "CArm")) (TyFun (TyCon "Int") (TyEffect () (Some "e") (TyApp (TyCon "Value") (TyVar "e"))))))))
 (DFunDef false "cevalArm" ((PVar "env") (PVar "root") (PVar "arms") (PVar "i")) (EMatch (EApp (EApp (EVar "nthArmParts") (EVar "arms")) (EVar "i")) (arm (PCon "Some" (PTuple (PVar "pat") PWild (PVar "body"))) () (EApp (EApp (EApp (EApp (EVar "cevalArmBody") (EVar "env")) (EVar "root")) (EVar "pat")) (EVar "body"))) (arm (PCon "None") () (EApp (EVar "panic") (ELit (LString "core_ir decision tree: arm index out of range"))))))
 (DTypeSig false "nthArmParts" (TyFun (TyApp (TyCon "List") (TyCon "CArm")) (TyFun (TyCon "Int") (TyApp (TyCon "Option") (TyTuple (TyCon "Pat") (TyApp (TyCon "List") (TyCon "CGuard")) (TyCon "CExpr"))))))
-(DFunDef false "nthArmParts" ((PVar "arms") (PVar "i")) (EMatch (EApp (EApp (EVar "nthArm") (EVar "arms")) (EVar "i")) (arm (PCon "Some" (PVar "arm")) () (EApp (EApp (EVar "cArmParts") (EVar "arms")) (EVar "arm"))) (arm (PCon "None") () (EVar "None"))))
+(DFunDef false "nthArmParts" ((PVar "arms") (PVar "i")) (EApp (EApp (EMethodRef "andThen") (EApp (EApp (EVar "nthArm") (EVar "arms")) (EVar "i"))) (ELam ((PVar "arm")) (EApp (EApp (EVar "cArmParts") (EVar "arms")) (EVar "arm")))))
 (DTypeSig false "cevalArmBody" (TyFun (TyApp (TyCon "EvalEnv") (TyApp (TyCon "Value") (TyVar "e"))) (TyFun (TyApp (TyCon "Value") (TyVar "e")) (TyFun (TyCon "Pat") (TyFun (TyCon "CExpr") (TyEffect () (Some "e") (TyApp (TyCon "Value") (TyVar "e"))))))))
 (DFunDef false "cevalArmBody" ((PVar "env") (PVar "root") (PVar "pat") (PVar "body")) (EMatch (EApp (EApp (EVar "matchPat") (EVar "pat")) (EVar "root")) (arm (PCon "Some" (PVar "binds")) () (EApp (EApp (EVar "ceval") (EApp (EApp (EVar "extendEnv") (EVar "env")) (EVar "binds"))) (EVar "body"))) (arm (PCon "None") () (EApp (EVar "panic") (ELit (LString "core_ir decision tree: leaf pattern did not match scrutinee"))))))
 (DTypeSig false "cevalGuardedArm" (TyFun (TyApp (TyCon "EvalEnv") (TyApp (TyCon "Value") (TyVar "e"))) (TyFun (TyApp (TyCon "Value") (TyVar "e")) (TyFun (TyApp (TyCon "List") (TyCon "CArm")) (TyFun (TyApp (TyCon "List") (TyApp (TyCon "Value") (TyVar "e"))) (TyFun (TyCon "Int") (TyFun (TyCon "CTree") (TyEffect () (Some "e") (TyApp (TyCon "Value") (TyVar "e"))))))))))
