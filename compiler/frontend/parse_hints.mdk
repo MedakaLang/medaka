@@ -64,12 +64,14 @@ rawLiteralAfterDot src toks offs pos =
     _ => None
 
 matchHeaderStart : HintInput -> Int -> Int -> Int -> (Int, Int)
-matchHeaderStart input start i left
-  | left <= 0 || i <= 0 = (i, left)
-  | i - 1 >= arrayLength input.hintOffsets = (i, 0)
-  | fst (arrayGetUnsafe (i - 1) input.hintOffsets) < start = (i, left)
-  | isLayoutTok (peekTok input.hintTokens (i - 1)) = (i, left - 1)
-  | otherwise = matchHeaderStart input start (i - 1) (left - 1)
+matchHeaderStart input start i0 left0 = go i0 left0
+  where
+    go i left
+      | left <= 0 || i <= 0 = (i, left)
+      | i - 1 >= arrayLength input.hintOffsets = (i, 0)
+      | fst (arrayGetUnsafe (i - 1) input.hintOffsets) < start = (i, left)
+      | isLayoutTok (peekTok input.hintTokens (i - 1)) = (i, left - 1)
+      | otherwise = go (i - 1) (left - 1)
 
 matchHeaderAnchor : HintInput -> Int -> Int -> Int -> Option Int
 matchHeaderAnchor input header matchPos matchCol =
@@ -802,21 +804,21 @@ prescanWalk : Array Token ->
   Bool ->
   PrescanHits ->
   PrescanHits
-prescanWalk toks offs n i depth ls sb im h
-  | i >= n = h
-  | otherwise =
-    let t = peekTok toks i
-    let h1 = if ls then prescanLineStart toks i t depth h else h
-    let h2 = prescanTokHit toks offs i t depth sb im h1
-    match t
-      TIndent => prescanWalk toks offs n (i + 1) (depth + 1) True False False h2
-      TDedent =>
-        prescanWalk toks offs n (i + 1) (depth - 1) True (depth == 1) False h2
-      TNewline =>
-        prescanWalk toks offs n (i + 1) depth True (depth == 0) False h2
-      TMatch => prescanWalk toks offs n (i + 1) depth False False True h2
-      TWith => prescanWalk toks offs n (i + 1) depth False False False h2
-      _ => prescanWalk toks offs n (i + 1) depth False False im h2
+prescanWalk toks offs n i0 depth0 ls0 sb0 im0 h0 = go i0 depth0 ls0 sb0 im0 h0
+  where
+    go i depth ls sb im h
+      | i >= n = h
+      | otherwise =
+        let t = peekTok toks i
+        let h1 = if ls then prescanLineStart toks i t depth h else h
+        let h2 = prescanTokHit toks offs i t depth sb im h1
+        match t
+          TIndent => go (i + 1) (depth + 1) True False False h2
+          TDedent => go (i + 1) (depth - 1) True (depth == 1) False h2
+          TNewline => go (i + 1) depth True (depth == 0) False h2
+          TMatch => go (i + 1) depth False False True h2
+          TWith => go (i + 1) depth False False False h2
+          _ => go (i + 1) depth False False im h2
 
 -- The removed-construct and lex-error pre-scans over an ALREADY-tokenized
 -- stream, in the order the diagnostics take precedence: the first one that

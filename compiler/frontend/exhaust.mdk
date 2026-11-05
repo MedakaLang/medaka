@@ -113,16 +113,13 @@ parseDigits : Array Char -> Int -> Int -> Option Int
 parseDigits cs start end = parseDigitsGo cs start end 0 False
 
 parseDigitsGo : Array Char -> Int -> Int -> Int -> Bool -> Option Int
-parseDigitsGo cs i end acc seen
-  | i >= end = if seen then Some acc else None
-  | isDigitC (arrayGetUnsafe i cs) =
-    parseDigitsGo
-      cs
-      (i + 1)
-      end
-      (acc * 10 + digitVal (arrayGetUnsafe i cs))
-      True
-  | otherwise = None
+parseDigitsGo cs i0 end acc0 seen0 = go i0 acc0 seen0
+  where
+    go i acc seen
+      | i >= end = if seen then Some acc else None
+      | isDigitC (arrayGetUnsafe i cs) =
+        go (i + 1) (acc * 10 + digitVal (arrayGetUnsafe i cs)) True
+      | otherwise = None
 
 isDigitC : Char -> Bool
 isDigitC c = c >= '0' && c <= '9'
@@ -456,6 +453,8 @@ findRecField fn ((RecPatField f _ _ mPat) :: rest)
 -- recursion makes the inner call a statically-known one: same rows, same order,
 -- no allocation per row visited.
 specializeCon : String -> Int -> List (List Pat) -> List (List Pat)
+-- Bound: hot compiler path: the where-go form allocates one closure per call until the lambda-lift pass (#4878); convert then.
+-- lint-disable-next-line rule-threaded-invariant
 specializeCon _ _ [] = []
 specializeCon c arity (row :: rest) = match specConRow c arity row
   Some r => r :: specializeCon c arity rest
@@ -768,11 +767,12 @@ firstWitnessBranch : Oracle ->
   List (List Pat) ->
   Int ->
   Option (List Pat)
-firstWitnessBranch _ [] _ _ = None
-firstWitnessBranch oracle (c :: cs) pmat ncols =
-  match witnessBranch oracle c pmat ncols
-    Some w => Some w
-    None => firstWitnessBranch oracle cs pmat ncols
+firstWitnessBranch oracle xs0 pmat ncols = go xs0
+  where
+    go [] = None
+    go (c :: cs) = match witnessBranch oracle c pmat ncols
+      Some w => Some w
+      None => go cs
 
 witnessBranch : Oracle -> String -> List (List Pat) -> Int -> Option (List Pat)
 witnessBranch oracle c pmat ncols =

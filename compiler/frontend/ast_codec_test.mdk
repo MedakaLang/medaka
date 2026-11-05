@@ -50,15 +50,14 @@ pickSeeded : Int -> Int -> List a -> List a
 pickSeeded seed k xs = pickGo seed k (length xs) xs []
 
 pickGo : Int -> Int -> Int -> List a -> List Int -> List a
-pickGo seed k n xs chosen
-  | k <= 0 || n == 0 || length chosen >= n = pickAt xs (sort chosen)
-  | otherwise =
-    let s = nextSeed seed
-    let i = s / 65536 % n
-    if elem i chosen then
-      pickGo s k n xs chosen
-    else
-      pickGo s (k - 1) n xs (i :: chosen)
+pickGo seed0 k0 n xs chosen0 = go seed0 k0 chosen0
+  where
+    go seed k chosen
+      | k <= 0 || n == 0 || length chosen >= n = pickAt xs (sort chosen)
+      | otherwise =
+        let s = nextSeed seed
+        let i = s / 65536 % n
+        if elem i chosen then go s k chosen else go s (k - 1) (i :: chosen)
 
 pickAt : List a -> List Int -> List a
 pickAt xs idxs = filterIdx 0 xs idxs

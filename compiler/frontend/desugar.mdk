@@ -316,14 +316,15 @@ fallthrough : Expr
 fallthrough = EApp (EVar fallthroughName) (ELit LUnit)
 
 armChain : List Guard -> Expr -> Expr -> Expr
-armChain [] body _ = body
-armChain ((GBool e) :: qs) body els = EIf e (armChain qs body els) els
--- A guard-bind through an or-pattern keeps the guards after it on its match
--- arm, so a later guard that fails under one alternative re-tries the next.
-armChain ((GBind p e) :: qs) body els
-  | patHasOr p = eraseMatchAnnots e [Arm p qs body, Arm PWild [] els]
-  | otherwise =
-    eraseMatchAnnots e [Arm p [] (armChain qs body els), Arm PWild [] els]
+armChain quals0 body els = go quals0
+  where
+    go [] = body
+    go ((GBool e) :: qs) = EIf e (go qs) els
+    -- A guard-bind through an or-pattern keeps the guards after it on its match
+    -- arm, so a later guard that fails under one alternative re-tries the next.
+    go ((GBind p e) :: qs)
+      | patHasOr p = eraseMatchAnnots e [Arm p qs body, Arm PWild [] els]
+      | otherwise = eraseMatchAnnots e [Arm p [] (go qs), Arm PWild [] els]
 
 -- ── Pattern annotations ───────────────────────────────────────────────────
 -- `(p : T)` in a binding position is checked as the expression annotation
@@ -961,6 +962,8 @@ genVars : String -> Int -> List String
 genVars prefix n = genVarsGo prefix 0 n
 
 genVarsGo : String -> Int -> Int -> List String
+-- Bound: list built in tail position modulo cons: a where-local go loses the constant-stack loop until the lambda-lift pass (#4878); convert then.
+-- lint-disable-next-line rule-threaded-invariant
 genVarsGo prefix i n
   | i >= n = []
   | otherwise = prefix ++ intToString i :: genVarsGo prefix (i + 1) n
