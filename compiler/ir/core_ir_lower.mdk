@@ -17,6 +17,7 @@ import types.symbol_origins.{
 
 import ir.extern_lower.{lowerExterns}
 import ir.core_walk.{patBinders}
+import ir.core_opt_num.{foldNumIntFromInt}
 import ir.core_pass.{
   CorePass(..), PassConfig(..), PassRun(..), PassFault(..), defaultPassConfig,
   runPasses
@@ -1517,10 +1518,10 @@ emitPasses =
       namedPass "refold-lets" (_ p =>
         refoldProgram (patCanMiss (siblingTable (cprogramCtorTypes p))) p),
       namedPass "hoist-nullary-memo" (_ p => hoistNullaryMemo p),
+      -- optimization slot: passes here run before the stamps below, so eta, call
+      -- modes, tail marks and binder stamps all see their output
+      namedPass "fold-num-int-fromint" (_ p => foldNumIntFromInt p),
     ]
-    -- optimization slot: passes here run before the stamps below, so eta, call
-    -- modes, tail marks and binder stamps all see their output
-
     ++ finishPasses
     ++ [namedPass "lower-externs" (c p => lowerExterns c.pcFacts c.pcDecls p)]
 
