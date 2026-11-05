@@ -1,5 +1,5 @@
 # META
-source_lines=710
+source_lines=711
 stages=DESUGAR,MARK
 # SOURCE
 -- BACKEND-NEUTRAL EMIT SUPPORT — helpers shared verbatim by BOTH the LLVM
@@ -111,7 +111,7 @@ eagerVars b (CSlice a lo hi _) =
 -- a `CDict` head is a saturated call to the named top-level function — an eager
 -- callee edge (the routes it carries hold no CExpr, so nothing to descend).
 eagerVars b (CDict name _) = if omHasKey name b then [] else [name]
-eagerVars _ _ = []
+eagerVars _ (CMethod _ _) = []
 
 eagerVarsList : OrdMap Unit -> List CExpr -> List String
 eagerVarsList _ [] = []
@@ -645,7 +645,8 @@ labelFallthrough (CDecision scrut arms tree) label =
     (labelFallthrough scrut label)
     (map (a => labelFallthroughArm a label) arms)
     tree
-labelFallthrough e _ = e
+labelFallthrough (e@(CLit _ | CLam _ _ | CMatch _ _ | CBinPrim _ _ _ _ _ | CUnOp _ _ | CTuple _ | CList _ | CRecord _ _ | CFieldAccess _ _ _ _ | CRecordUpdate _ _ _ | CVariantUpdate _ _ _ | CArray _ | CRangeList _ _ _ | CRangeArray _ _ _ | CIndex _ _ | CSlice _ _ _ _ | CStringIndex _ _ | CStringSlice _ _ _ _ | CListIndex _ _ | CListSlice _ _ _ _ | CMethod _ _ | CDict _ _)) _ =
+  e
 
 labelFallthroughStmt : CStmt -> String -> CStmt
 labelFallthroughStmt (CSExpr e) label = CSExpr (labelFallthrough e label)
@@ -749,7 +750,7 @@ bindingOrigin name (Loc f line col _ _) = SymbolOrigin name f line col
 (DFunDef false "eagerVars" ((PVar "b") (PCon "CListSlice" (PVar "a") (PVar "lo") (PVar "hi") PWild)) (EBinOp "++" (EBinOp "++" (EApp (EApp (EVar "eagerVars") (EVar "b")) (EVar "a")) (EApp (EApp (EVar "eagerVars") (EVar "b")) (EVar "lo"))) (EApp (EApp (EVar "eagerVars") (EVar "b")) (EVar "hi"))))
 (DFunDef false "eagerVars" ((PVar "b") (PCon "CSlice" (PVar "a") (PVar "lo") (PVar "hi") PWild)) (EBinOp "++" (EBinOp "++" (EApp (EApp (EVar "eagerVars") (EVar "b")) (EVar "a")) (EApp (EApp (EVar "eagerVars") (EVar "b")) (EVar "lo"))) (EApp (EApp (EVar "eagerVars") (EVar "b")) (EVar "hi"))))
 (DFunDef false "eagerVars" ((PVar "b") (PCon "CDict" (PVar "name") PWild)) (EIf (EApp (EApp (EVar "omHasKey") (EVar "name")) (EVar "b")) (EListLit) (EListLit (EVar "name"))))
-(DFunDef false "eagerVars" (PWild PWild) (EListLit))
+(DFunDef false "eagerVars" (PWild (PCon "CMethod" PWild PWild)) (EListLit))
 (DTypeSig false "eagerVarsList" (TyFun (TyApp (TyCon "OrdMap") (TyCon "Unit")) (TyFun (TyApp (TyCon "List") (TyCon "CExpr")) (TyApp (TyCon "List") (TyCon "String")))))
 (DFunDef false "eagerVarsList" (PWild (PList)) (EListLit))
 (DFunDef false "eagerVarsList" ((PVar "b") (PCons (PVar "e") (PVar "rest"))) (EBinOp "++" (EApp (EApp (EVar "eagerVars") (EVar "b")) (EVar "e")) (EApp (EApp (EVar "eagerVarsList") (EVar "b")) (EVar "rest"))))
@@ -928,7 +929,7 @@ bindingOrigin name (Loc f line col _ _) = SymbolOrigin name f line col
 (DFunDef false "labelFallthrough" ((PCon "CLetGroup" (PVar "binds") (PVar "b")) (PVar "label")) (EApp (EApp (EVar "CLetGroup") (EVar "binds")) (EApp (EApp (EVar "labelFallthrough") (EVar "b")) (EVar "label"))))
 (DFunDef false "labelFallthrough" ((PCon "CBlock" (PVar "stmts")) (PVar "label")) (EApp (EVar "CBlock") (EApp (EApp (EVar "map") (ELam ((PVar "s")) (EApp (EApp (EVar "labelFallthroughStmt") (EVar "s")) (EVar "label")))) (EVar "stmts"))))
 (DFunDef false "labelFallthrough" ((PCon "CDecision" (PVar "scrut") (PVar "arms") (PVar "tree")) (PVar "label")) (EApp (EApp (EApp (EVar "CDecision") (EApp (EApp (EVar "labelFallthrough") (EVar "scrut")) (EVar "label"))) (EApp (EApp (EVar "map") (ELam ((PVar "a")) (EApp (EApp (EVar "labelFallthroughArm") (EVar "a")) (EVar "label")))) (EVar "arms"))) (EVar "tree")))
-(DFunDef false "labelFallthrough" ((PVar "e") PWild) (EVar "e"))
+(DFunDef false "labelFallthrough" ((PAs "e" (POr (PCon "CLit" PWild) (PCon "CLam" PWild PWild) (PCon "CMatch" PWild PWild) (PCon "CBinPrim" PWild PWild PWild PWild PWild) (PCon "CUnOp" PWild PWild) (PCon "CTuple" PWild) (PCon "CList" PWild) (PCon "CRecord" PWild PWild) (PCon "CFieldAccess" PWild PWild PWild PWild) (PCon "CRecordUpdate" PWild PWild PWild) (PCon "CVariantUpdate" PWild PWild PWild) (PCon "CArray" PWild) (PCon "CRangeList" PWild PWild PWild) (PCon "CRangeArray" PWild PWild PWild) (PCon "CIndex" PWild PWild) (PCon "CSlice" PWild PWild PWild PWild) (PCon "CStringIndex" PWild PWild) (PCon "CStringSlice" PWild PWild PWild PWild) (PCon "CListIndex" PWild PWild) (PCon "CListSlice" PWild PWild PWild PWild) (PCon "CMethod" PWild PWild) (PCon "CDict" PWild PWild))) PWild) (EVar "e"))
 (DTypeSig false "labelFallthroughStmt" (TyFun (TyCon "CStmt") (TyFun (TyCon "String") (TyCon "CStmt"))))
 (DFunDef false "labelFallthroughStmt" ((PCon "CSExpr" (PVar "e")) (PVar "label")) (EApp (EVar "CSExpr") (EApp (EApp (EVar "labelFallthrough") (EVar "e")) (EVar "label"))))
 (DFunDef false "labelFallthroughStmt" ((PCon "CSLet" (PVar "rf") (PVar "p") (PVar "e")) (PVar "label")) (EApp (EApp (EApp (EVar "CSLet") (EVar "rf")) (EVar "p")) (EApp (EApp (EVar "labelFallthrough") (EVar "e")) (EVar "label"))))
@@ -994,7 +995,7 @@ bindingOrigin name (Loc f line col _ _) = SymbolOrigin name f line col
 (DFunDef false "eagerVars" ((PVar "b") (PCon "CListSlice" (PVar "a") (PVar "lo") (PVar "hi") PWild)) (EBinOp "++" (EBinOp "++" (EApp (EApp (EVar "eagerVars") (EVar "b")) (EVar "a")) (EApp (EApp (EVar "eagerVars") (EVar "b")) (EVar "lo"))) (EApp (EApp (EVar "eagerVars") (EVar "b")) (EVar "hi"))))
 (DFunDef false "eagerVars" ((PVar "b") (PCon "CSlice" (PVar "a") (PVar "lo") (PVar "hi") PWild)) (EBinOp "++" (EBinOp "++" (EApp (EApp (EVar "eagerVars") (EVar "b")) (EVar "a")) (EApp (EApp (EVar "eagerVars") (EVar "b")) (EVar "lo"))) (EApp (EApp (EVar "eagerVars") (EVar "b")) (EVar "hi"))))
 (DFunDef false "eagerVars" ((PVar "b") (PCon "CDict" (PVar "name") PWild)) (EIf (EApp (EApp (EVar "omHasKey") (EVar "name")) (EVar "b")) (EListLit) (EListLit (EVar "name"))))
-(DFunDef false "eagerVars" (PWild PWild) (EListLit))
+(DFunDef false "eagerVars" (PWild (PCon "CMethod" PWild PWild)) (EListLit))
 (DTypeSig false "eagerVarsList" (TyFun (TyApp (TyCon "OrdMap") (TyCon "Unit")) (TyFun (TyApp (TyCon "List") (TyCon "CExpr")) (TyApp (TyCon "List") (TyCon "String")))))
 (DFunDef false "eagerVarsList" (PWild (PList)) (EListLit))
 (DFunDef false "eagerVarsList" ((PVar "b") (PCons (PVar "e") (PVar "rest"))) (EBinOp "++" (EApp (EApp (EVar "eagerVars") (EVar "b")) (EVar "e")) (EApp (EApp (EVar "eagerVarsList") (EVar "b")) (EVar "rest"))))
@@ -1173,7 +1174,7 @@ bindingOrigin name (Loc f line col _ _) = SymbolOrigin name f line col
 (DFunDef false "labelFallthrough" ((PCon "CLetGroup" (PVar "binds") (PVar "b")) (PVar "label")) (EApp (EApp (EVar "CLetGroup") (EVar "binds")) (EApp (EApp (EVar "labelFallthrough") (EVar "b")) (EVar "label"))))
 (DFunDef false "labelFallthrough" ((PCon "CBlock" (PVar "stmts")) (PVar "label")) (EApp (EVar "CBlock") (EApp (EApp (EMethodRef "map") (ELam ((PVar "s")) (EApp (EApp (EVar "labelFallthroughStmt") (EVar "s")) (EVar "label")))) (EVar "stmts"))))
 (DFunDef false "labelFallthrough" ((PCon "CDecision" (PVar "scrut") (PVar "arms") (PVar "tree")) (PVar "label")) (EApp (EApp (EApp (EVar "CDecision") (EApp (EApp (EVar "labelFallthrough") (EVar "scrut")) (EVar "label"))) (EApp (EApp (EMethodRef "map") (ELam ((PVar "a")) (EApp (EApp (EVar "labelFallthroughArm") (EVar "a")) (EVar "label")))) (EVar "arms"))) (EVar "tree")))
-(DFunDef false "labelFallthrough" ((PVar "e") PWild) (EVar "e"))
+(DFunDef false "labelFallthrough" ((PAs "e" (POr (PCon "CLit" PWild) (PCon "CLam" PWild PWild) (PCon "CMatch" PWild PWild) (PCon "CBinPrim" PWild PWild PWild PWild PWild) (PCon "CUnOp" PWild PWild) (PCon "CTuple" PWild) (PCon "CList" PWild) (PCon "CRecord" PWild PWild) (PCon "CFieldAccess" PWild PWild PWild PWild) (PCon "CRecordUpdate" PWild PWild PWild) (PCon "CVariantUpdate" PWild PWild PWild) (PCon "CArray" PWild) (PCon "CRangeList" PWild PWild PWild) (PCon "CRangeArray" PWild PWild PWild) (PCon "CIndex" PWild PWild) (PCon "CSlice" PWild PWild PWild PWild) (PCon "CStringIndex" PWild PWild) (PCon "CStringSlice" PWild PWild PWild PWild) (PCon "CListIndex" PWild PWild) (PCon "CListSlice" PWild PWild PWild PWild) (PCon "CMethod" PWild PWild) (PCon "CDict" PWild PWild))) PWild) (EVar "e"))
 (DTypeSig false "labelFallthroughStmt" (TyFun (TyCon "CStmt") (TyFun (TyCon "String") (TyCon "CStmt"))))
 (DFunDef false "labelFallthroughStmt" ((PCon "CSExpr" (PVar "e")) (PVar "label")) (EApp (EVar "CSExpr") (EApp (EApp (EVar "labelFallthrough") (EVar "e")) (EVar "label"))))
 (DFunDef false "labelFallthroughStmt" ((PCon "CSLet" (PVar "rf") (PVar "p") (PVar "e")) (PVar "label")) (EApp (EApp (EApp (EVar "CSLet") (EVar "rf")) (EVar "p")) (EApp (EApp (EVar "labelFallthrough") (EVar "e")) (EVar "label"))))

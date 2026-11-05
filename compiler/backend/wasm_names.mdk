@@ -87,7 +87,7 @@ ubPat sc (PCons h t) = PCons (ubPat sc h) (ubPat sc t)
 ubPat sc (PTuple ps) = PTuple (map (ubPat sc) ps)
 ubPat sc (PList ps) = PList (map (ubPat sc) ps)
 ubPat sc (PAs x l bid p) = PAs (ubNew sc x) l bid (ubPat sc p)
-ubPat _ p = p
+ubPat _ (p@(PWild | PLit _ | POr _ | PRng _ _ _ | PRec _ _ _ | PAnn _ _)) = p
 
 ubBind : OrdMap Int -> CBind -> CBind
 ubBind sc (CBind n clauses loc bid) =
@@ -142,7 +142,7 @@ ubExpr sc (CListIndex b i) = CListIndex (ubExpr sc b) (ubExpr sc i)
 ubExpr sc (CListSlice b lo hi i) =
   CListSlice (ubExpr sc b) (ubExpr sc lo) (ubExpr sc hi) i
 ubExpr sc (CBlock stmts) = CBlock (ubStmts sc stmts)
-ubExpr _ e = e
+ubExpr _ (e@(CLit _ | CMethod _ _ | CDict _ _)) = e
 
 -- a let-group member's own name, as bound in the enclosing scope
 ubRenameBind : OrdMap Int -> CBind -> CBind

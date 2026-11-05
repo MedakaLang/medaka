@@ -337,7 +337,12 @@ dExpr sc acc (CMatch scrut arms) = walkEach (dArm sc) (dExpr sc acc scrut) arms
 dExpr sc acc (CLetGroup binds b) =
   let inner = { sc | locals = omFromNames (map bindName binds) sc.locals }
   dExpr inner (walkEach (dBind inner) acc binds) b
-dExpr _ acc _ = acc
+dExpr sc acc (CStringIndex a i) = dExpr sc (dExpr sc acc a) i
+dExpr sc acc (CStringSlice a lo hi _) =
+  dExpr sc (dExpr sc (dExpr sc acc a) lo) hi
+dExpr sc acc (CListIndex a i) = dExpr sc (dExpr sc acc a) i
+dExpr sc acc (CListSlice a lo hi _) = dExpr sc (dExpr sc (dExpr sc acc a) lo) hi
+dExpr _ acc (CLit _ | CMethod _ _ | CDict _ _) = acc
 
 -- an applied name: a local is a closure call, a `core__` function a call to it
 dAppHead : DemandScope -> DemandAcc -> CExpr -> DemandAcc
@@ -631,7 +636,8 @@ exprHasDecision (CUnOp _ a) = exprHasDecision a
 exprHasDecision (CApp f args _) =
   exprHasDecision f || anyList exprHasDecision args
 exprHasDecision (CBlock stmts) = anyList stmtHasDecision stmts
-exprHasDecision _ = False
+exprHasDecision (CLit _ | CVar _ _ | CLam _ _ | CLetGroup _ _ | CTuple _ | CList _ | CRecord _ _ | CFieldAccess _ _ _ _ | CRecordUpdate _ _ _ | CVariantUpdate _ _ _ | CArray _ | CRangeList _ _ _ | CRangeArray _ _ _ | CIndex _ _ | CSlice _ _ _ _ | CStringIndex _ _ | CStringSlice _ _ _ _ | CListIndex _ _ | CListSlice _ _ _ _ | CMethod _ _ | CDict _ _) =
+  False
 
 stmtHasDecision : CStmt -> Bool
 stmtHasDecision (CSExpr e) = exprHasDecision e
@@ -1612,7 +1618,16 @@ hExpr ctx refMode str acc env (CVariantUpdate _ x fs) =
     (a (CField _ _ e) => hExpr ctx refMode str a env e)
     (hExpr ctx refMode str acc env x)
     fs
-hExpr _ _ _ acc _ _ = acc
+hExpr ctx refMode str acc env (CStringIndex a i) =
+  fold (b x => hExpr ctx refMode str b env x) acc [a, i]
+hExpr ctx refMode str acc env (CStringSlice a lo hi _) =
+  fold (b x => hExpr ctx refMode str b env x) acc [a, lo, hi]
+hExpr ctx refMode str acc env (CListIndex a i) =
+  fold (b x => hExpr ctx refMode str b env x) acc [a, i]
+hExpr ctx refMode str acc env (CListSlice a lo hi _) =
+  fold (b x => hExpr ctx refMode str b env x) acc [a, lo, hi]
+hExpr ctx refMode str acc env (CUnOp _ x) = hExpr ctx refMode str acc env x
+hExpr _ _ _ acc _ (CLit _ | CMethod _ _ | CDict _ _) = acc
 
 externNeedsClosure : WasmTypeContext -> String -> Bool
 externNeedsClosure ctx symbol = match omLookup symbol ctx.externFacts
@@ -1706,7 +1721,7 @@ hTree refMode acc (CTGuard _ t) = hTree refMode acc t
 hTree refMode acc (CTDrop t) = hTree refMode acc t
 hTree refMode acc (CTSwitch branches dft) =
   hTree refMode (fold (hBranch refMode) acc branches) dft
-hTree _ acc _ = acc
+hTree _ acc (CTFail _ | CTLeaf _) = acc
 
 hBranch : Bool -> HelperAcc -> CTBranch -> HelperAcc
 hBranch refMode acc (CTBranch head tree) =
@@ -3067,7 +3082,8 @@ exprHasFallthrough (CLetGroup _ body) = exprHasFallthrough body
 exprHasFallthrough (CBlock stmts) = anyList stmtHasFallthrough stmts
 exprHasFallthrough (CDecision scrut arms _) =
   exprHasFallthrough scrut || anyList (a => exprHasFallthrough (armBody a)) arms
-exprHasFallthrough _ = False
+exprHasFallthrough (CLit _ | CLam _ _ | CMatch _ _ | CBinPrim _ _ _ _ _ | CUnOp _ _ | CTuple _ | CList _ | CRecord _ _ | CFieldAccess _ _ _ _ | CRecordUpdate _ _ _ | CVariantUpdate _ _ _ | CArray _ | CRangeList _ _ _ | CRangeArray _ _ _ | CIndex _ _ | CSlice _ _ _ _ | CStringIndex _ _ | CStringSlice _ _ _ _ | CListIndex _ _ | CListSlice _ _ _ _ | CMethod _ _ | CDict _ _) =
+  False
 
 stmtHasFallthrough : CStmt -> Bool
 stmtHasFallthrough (CSExpr e) = exprHasFallthrough e

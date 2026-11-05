@@ -1,5 +1,5 @@
 # META
-source_lines=11284
+source_lines=11300
 stages=DESUGAR,MARK
 # SOURCE
 import ir.constructor_facts.{
@@ -2797,7 +2797,8 @@ mainBodyIsUnit prog cafs (CLet _ pat _ b) =
 mainBodyIsUnit prog cafs (CDecision _ arms _) = allArmsUnit prog cafs arms
 mainBodyIsUnit prog cafs (CMatch _ arms) = allArmsUnit prog cafs arms
 mainBodyIsUnit prog cafs (CBlock stmts) = blockTailIsUnit prog cafs stmts
-mainBodyIsUnit _ _ _ = False
+mainBodyIsUnit _ _ (CLit _ | CLam _ _ | CLetGroup _ _ | CIf _ _ _ | CBinPrim _ _ _ _ _ | CUnOp _ _ | CTuple _ | CList _ | CRecord _ _ | CFieldAccess _ _ _ _ | CRecordUpdate _ _ _ | CVariantUpdate _ _ _ | CArray _ | CRangeList _ _ _ | CRangeArray _ _ _ | CIndex _ _ | CSlice _ _ _ _ | CStringIndex _ _ | CStringSlice _ _ _ _ | CListIndex _ _ | CListSlice _ _ _ _ | CMethod _ _) =
+  False
 
 -- True iff every match/decision arm body is itself a Unit main body.  Empty ⇒ False
 -- (no leaves to prove Unit ⇒ don't suppress).
@@ -3962,7 +3963,7 @@ closedDictW prog (RKey tag reqs sups) =
 closedDictW _ RNone = Some "(ref.i31 (i32.const 0))"
 closedDictW _ (RLocal _ _) = Some "(ref.i31 (i32.const 0))"
 closedDictW _ (RScalar _) = Some "(ref.i31 (i32.const 0))"
-closedDictW _ _ = None
+closedDictW _ (RDict _ | RDictFwd _ | RProj _ _) = None
 
 -- the constant array of type [ty] holding [elements], each a folded expression
 constArrayW : String -> List String -> String
@@ -9212,7 +9213,14 @@ freeVarsExpr bound (CMethod _ (MethodEvidence _ _ route implRoutes methRoutes)) 
   freeGivens bound (route :: implRoutes ++ methRoutes)
 freeVarsExpr bound (CDict name routes) =
   (if omHasKey name bound then [] else [name]) ++ freeGivens bound routes
-freeVarsExpr _bound _ = []
+freeVarsExpr bound (CStringIndex e i) =
+  freeVarsExpr bound e ++ freeVarsExpr bound i
+freeVarsExpr bound (CStringSlice e lo hi _) =
+  freeVarsExpr bound e ++ freeVarsExpr bound lo ++ freeVarsExpr bound hi
+freeVarsExpr bound (CListIndex e i) =
+  freeVarsExpr bound e ++ freeVarsExpr bound i
+freeVarsExpr bound (CListSlice e lo hi _) =
+  freeVarsExpr bound e ++ freeVarsExpr bound lo ++ freeVarsExpr bound hi
 
 -- free vars of a CLetGroup binding's clauses (each clause's params are locally bound).
 freeVarsClauses : OrdMap Unit -> CBind -> List String
@@ -10517,7 +10525,15 @@ collectExprLocals (CLetGroup binds body) =
 -- a method dispatched on a projected super dictionary reads it through a local
 collectExprLocals (CMethod _ (MethodEvidence _ _ (RProj r path) _ _)) =
   [projLocalName r path]
-collectExprLocals _ = []
+collectExprLocals (CStringIndex base index) =
+  collectExprLocals base ++ collectExprLocals index
+collectExprLocals (CStringSlice base lo hi _) =
+  collectExprLocals base ++ collectExprLocals lo ++ collectExprLocals hi
+collectExprLocals (CListIndex base index) =
+  collectExprLocals base ++ collectExprLocals index
+collectExprLocals (CListSlice base lo hi _) =
+  collectExprLocals base ++ collectExprLocals lo ++ collectExprLocals hi
+collectExprLocals (CMethod _ _ | CLit _ | CVar _ _ | CLam _ _ | CDict _ _) = []
 
 collectFieldLocals : CField -> List String
 collectFieldLocals (CField _ _ value) = collectExprLocals value
@@ -11762,7 +11778,7 @@ hasFamilyW prog symbol tag =
 (DFunDef false "mainBodyIsUnit" ((PVar "prog") (PVar "cafs") (PCon "CDecision" PWild (PVar "arms") PWild)) (EApp (EApp (EApp (EVar "allArmsUnit") (EVar "prog")) (EVar "cafs")) (EVar "arms")))
 (DFunDef false "mainBodyIsUnit" ((PVar "prog") (PVar "cafs") (PCon "CMatch" PWild (PVar "arms"))) (EApp (EApp (EApp (EVar "allArmsUnit") (EVar "prog")) (EVar "cafs")) (EVar "arms")))
 (DFunDef false "mainBodyIsUnit" ((PVar "prog") (PVar "cafs") (PCon "CBlock" (PVar "stmts"))) (EApp (EApp (EApp (EVar "blockTailIsUnit") (EVar "prog")) (EVar "cafs")) (EVar "stmts")))
-(DFunDef false "mainBodyIsUnit" (PWild PWild PWild) (EVar "False"))
+(DFunDef false "mainBodyIsUnit" (PWild PWild (POr (PCon "CLit" PWild) (PCon "CLam" PWild PWild) (PCon "CLetGroup" PWild PWild) (PCon "CIf" PWild PWild PWild) (PCon "CBinPrim" PWild PWild PWild PWild PWild) (PCon "CUnOp" PWild PWild) (PCon "CTuple" PWild) (PCon "CList" PWild) (PCon "CRecord" PWild PWild) (PCon "CFieldAccess" PWild PWild PWild PWild) (PCon "CRecordUpdate" PWild PWild PWild) (PCon "CVariantUpdate" PWild PWild PWild) (PCon "CArray" PWild) (PCon "CRangeList" PWild PWild PWild) (PCon "CRangeArray" PWild PWild PWild) (PCon "CIndex" PWild PWild) (PCon "CSlice" PWild PWild PWild PWild) (PCon "CStringIndex" PWild PWild) (PCon "CStringSlice" PWild PWild PWild PWild) (PCon "CListIndex" PWild PWild) (PCon "CListSlice" PWild PWild PWild PWild) (PCon "CMethod" PWild PWild))) (EVar "False"))
 (DTypeSig false "allArmsUnit" (TyFun (TyCon "Prog") (TyFun (TyApp (TyCon "OrdMap") (TyCon "CExpr")) (TyFun (TyApp (TyCon "List") (TyCon "CArm")) (TyCon "Bool")))))
 (DFunDef false "allArmsUnit" (PWild PWild (PList)) (EVar "False"))
 (DFunDef false "allArmsUnit" ((PVar "prog") (PVar "cafs") (PVar "arms")) (EApp (EApp (EApp (EVar "allArmsUnitGo") (EVar "prog")) (EVar "cafs")) (EVar "arms")))
@@ -11974,7 +11990,7 @@ hasFamilyW prog symbol tag =
 (DFunDef false "closedDictW" (PWild (PCon "RNone")) (EApp (EVar "Some") (ELit (LString "(ref.i31 (i32.const 0))"))))
 (DFunDef false "closedDictW" (PWild (PCon "RLocal" PWild PWild)) (EApp (EVar "Some") (ELit (LString "(ref.i31 (i32.const 0))"))))
 (DFunDef false "closedDictW" (PWild (PCon "RScalar" PWild)) (EApp (EVar "Some") (ELit (LString "(ref.i31 (i32.const 0))"))))
-(DFunDef false "closedDictW" (PWild PWild) (EVar "None"))
+(DFunDef false "closedDictW" (PWild (POr (PCon "RDict" PWild) (PCon "RDictFwd" PWild) (PCon "RProj" PWild PWild))) (EVar "None"))
 (DTypeSig false "constArrayW" (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyCon "String"))))
 (DFunDef false "constArrayW" ((PVar "ty") (PVar "elements")) (EBlock (DoLet false false (PVar "elementText") (EApp (EApp (EVar "joinWith") (ELit (LString ""))) (EApp (EApp (EVar "map") (ELam ((PVar "_s")) (EBinOp "++" (ELit (LString " ")) (EVar "_s")))) (EVar "elements")))) (DoExpr (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "(array.new_fixed ")) (EApp (EVar "display") (EVar "ty"))) (ELit (LString " "))) (EApp (EVar "display") (EApp (EVar "intToString") (EApp (EVar "listLen") (EVar "elements"))))) (ELit (LString ""))) (EApp (EVar "display") (EVar "elementText"))) (ELit (LString ")"))))))
 (DTypeSig false "foldedW" (TyFun (TyCon "String") (TyCon "String")))
@@ -12870,7 +12886,10 @@ hasFamilyW prog symbol tag =
 (DFunDef false "freeVarsExpr" ((PVar "bound") (PCon "CSlice" (PVar "e") (PVar "lo") (PVar "hi") PWild)) (EBinOp "++" (EBinOp "++" (EApp (EApp (EVar "freeVarsExpr") (EVar "bound")) (EVar "e")) (EApp (EApp (EVar "freeVarsExpr") (EVar "bound")) (EVar "lo"))) (EApp (EApp (EVar "freeVarsExpr") (EVar "bound")) (EVar "hi"))))
 (DFunDef false "freeVarsExpr" ((PVar "bound") (PCon "CMethod" PWild (PCon "MethodEvidence" PWild PWild (PVar "route") (PVar "implRoutes") (PVar "methRoutes")))) (EApp (EApp (EVar "freeGivens") (EVar "bound")) (EBinOp "::" (EVar "route") (EBinOp "++" (EVar "implRoutes") (EVar "methRoutes")))))
 (DFunDef false "freeVarsExpr" ((PVar "bound") (PCon "CDict" (PVar "name") (PVar "routes"))) (EBinOp "++" (EIf (EApp (EApp (EVar "omHasKey") (EVar "name")) (EVar "bound")) (EListLit) (EListLit (EVar "name"))) (EApp (EApp (EVar "freeGivens") (EVar "bound")) (EVar "routes"))))
-(DFunDef false "freeVarsExpr" ((PVar "_bound") PWild) (EListLit))
+(DFunDef false "freeVarsExpr" ((PVar "bound") (PCon "CStringIndex" (PVar "e") (PVar "i"))) (EBinOp "++" (EApp (EApp (EVar "freeVarsExpr") (EVar "bound")) (EVar "e")) (EApp (EApp (EVar "freeVarsExpr") (EVar "bound")) (EVar "i"))))
+(DFunDef false "freeVarsExpr" ((PVar "bound") (PCon "CStringSlice" (PVar "e") (PVar "lo") (PVar "hi") PWild)) (EBinOp "++" (EBinOp "++" (EApp (EApp (EVar "freeVarsExpr") (EVar "bound")) (EVar "e")) (EApp (EApp (EVar "freeVarsExpr") (EVar "bound")) (EVar "lo"))) (EApp (EApp (EVar "freeVarsExpr") (EVar "bound")) (EVar "hi"))))
+(DFunDef false "freeVarsExpr" ((PVar "bound") (PCon "CListIndex" (PVar "e") (PVar "i"))) (EBinOp "++" (EApp (EApp (EVar "freeVarsExpr") (EVar "bound")) (EVar "e")) (EApp (EApp (EVar "freeVarsExpr") (EVar "bound")) (EVar "i"))))
+(DFunDef false "freeVarsExpr" ((PVar "bound") (PCon "CListSlice" (PVar "e") (PVar "lo") (PVar "hi") PWild)) (EBinOp "++" (EBinOp "++" (EApp (EApp (EVar "freeVarsExpr") (EVar "bound")) (EVar "e")) (EApp (EApp (EVar "freeVarsExpr") (EVar "bound")) (EVar "lo"))) (EApp (EApp (EVar "freeVarsExpr") (EVar "bound")) (EVar "hi"))))
 (DTypeSig false "freeVarsClauses" (TyFun (TyApp (TyCon "OrdMap") (TyCon "Unit")) (TyFun (TyCon "CBind") (TyApp (TyCon "List") (TyCon "String")))))
 (DFunDef false "freeVarsClauses" ((PVar "bound") (PCon "CBind" PWild (PVar "clauses") PWild PWild)) (EApp (EApp (EVar "flatMap") (EApp (EVar "freeVarsClause") (EVar "bound"))) (EVar "clauses")))
 (DTypeSig false "freeVarsClause" (TyFun (TyApp (TyCon "OrdMap") (TyCon "Unit")) (TyFun (TyCon "CClause") (TyApp (TyCon "List") (TyCon "String")))))
@@ -13060,7 +13079,11 @@ hasFamilyW prog symbol tag =
 (DFunDef false "collectExprLocals" ((PCon "CMatch" (PVar "scrut") (PVar "arms"))) (EBinOp "++" (EApp (EVar "collectExprLocals") (EVar "scrut")) (EApp (EApp (EVar "flatMap") (EVar "collectArmLocals")) (EVar "arms"))))
 (DFunDef false "collectExprLocals" ((PCon "CLetGroup" (PVar "binds") (PVar "body"))) (EBinOp "++" (EBinOp "++" (EApp (EApp (EVar "map") (EVar "lgBindName")) (EVar "binds")) (EApp (EApp (EVar "flatMap") (EVar "collectLgValLocals")) (EVar "binds"))) (EApp (EVar "collectExprLocals") (EVar "body"))))
 (DFunDef false "collectExprLocals" ((PCon "CMethod" PWild (PCon "MethodEvidence" PWild PWild (PCon "RProj" (PVar "r") (PVar "path")) PWild PWild))) (EListLit (EApp (EApp (EVar "projLocalName") (EVar "r")) (EVar "path"))))
-(DFunDef false "collectExprLocals" (PWild) (EListLit))
+(DFunDef false "collectExprLocals" ((PCon "CStringIndex" (PVar "base") (PVar "index"))) (EBinOp "++" (EApp (EVar "collectExprLocals") (EVar "base")) (EApp (EVar "collectExprLocals") (EVar "index"))))
+(DFunDef false "collectExprLocals" ((PCon "CStringSlice" (PVar "base") (PVar "lo") (PVar "hi") PWild)) (EBinOp "++" (EBinOp "++" (EApp (EVar "collectExprLocals") (EVar "base")) (EApp (EVar "collectExprLocals") (EVar "lo"))) (EApp (EVar "collectExprLocals") (EVar "hi"))))
+(DFunDef false "collectExprLocals" ((PCon "CListIndex" (PVar "base") (PVar "index"))) (EBinOp "++" (EApp (EVar "collectExprLocals") (EVar "base")) (EApp (EVar "collectExprLocals") (EVar "index"))))
+(DFunDef false "collectExprLocals" ((PCon "CListSlice" (PVar "base") (PVar "lo") (PVar "hi") PWild)) (EBinOp "++" (EBinOp "++" (EApp (EVar "collectExprLocals") (EVar "base")) (EApp (EVar "collectExprLocals") (EVar "lo"))) (EApp (EVar "collectExprLocals") (EVar "hi"))))
+(DFunDef false "collectExprLocals" ((POr (PCon "CMethod" PWild PWild) (PCon "CLit" PWild) (PCon "CVar" PWild PWild) (PCon "CLam" PWild PWild) (PCon "CDict" PWild PWild))) (EListLit))
 (DTypeSig false "collectFieldLocals" (TyFun (TyCon "CField") (TyApp (TyCon "List") (TyCon "String"))))
 (DFunDef false "collectFieldLocals" ((PCon "CField" PWild PWild (PVar "value"))) (EApp (EVar "collectExprLocals") (EVar "value")))
 (DTypeSig false "collectLgValLocals" (TyFun (TyCon "CBind") (TyApp (TyCon "List") (TyCon "String"))))
@@ -13818,7 +13841,7 @@ hasFamilyW prog symbol tag =
 (DFunDef false "mainBodyIsUnit" ((PVar "prog") (PVar "cafs") (PCon "CDecision" PWild (PVar "arms") PWild)) (EApp (EApp (EApp (EVar "allArmsUnit") (EVar "prog")) (EVar "cafs")) (EVar "arms")))
 (DFunDef false "mainBodyIsUnit" ((PVar "prog") (PVar "cafs") (PCon "CMatch" PWild (PVar "arms"))) (EApp (EApp (EApp (EVar "allArmsUnit") (EVar "prog")) (EVar "cafs")) (EVar "arms")))
 (DFunDef false "mainBodyIsUnit" ((PVar "prog") (PVar "cafs") (PCon "CBlock" (PVar "stmts"))) (EApp (EApp (EApp (EVar "blockTailIsUnit") (EVar "prog")) (EVar "cafs")) (EVar "stmts")))
-(DFunDef false "mainBodyIsUnit" (PWild PWild PWild) (EVar "False"))
+(DFunDef false "mainBodyIsUnit" (PWild PWild (POr (PCon "CLit" PWild) (PCon "CLam" PWild PWild) (PCon "CLetGroup" PWild PWild) (PCon "CIf" PWild PWild PWild) (PCon "CBinPrim" PWild PWild PWild PWild PWild) (PCon "CUnOp" PWild PWild) (PCon "CTuple" PWild) (PCon "CList" PWild) (PCon "CRecord" PWild PWild) (PCon "CFieldAccess" PWild PWild PWild PWild) (PCon "CRecordUpdate" PWild PWild PWild) (PCon "CVariantUpdate" PWild PWild PWild) (PCon "CArray" PWild) (PCon "CRangeList" PWild PWild PWild) (PCon "CRangeArray" PWild PWild PWild) (PCon "CIndex" PWild PWild) (PCon "CSlice" PWild PWild PWild PWild) (PCon "CStringIndex" PWild PWild) (PCon "CStringSlice" PWild PWild PWild PWild) (PCon "CListIndex" PWild PWild) (PCon "CListSlice" PWild PWild PWild PWild) (PCon "CMethod" PWild PWild))) (EVar "False"))
 (DTypeSig false "allArmsUnit" (TyFun (TyCon "Prog") (TyFun (TyApp (TyCon "OrdMap") (TyCon "CExpr")) (TyFun (TyApp (TyCon "List") (TyCon "CArm")) (TyCon "Bool")))))
 (DFunDef false "allArmsUnit" (PWild PWild (PList)) (EVar "False"))
 (DFunDef false "allArmsUnit" ((PVar "prog") (PVar "cafs") (PVar "arms")) (EApp (EApp (EApp (EVar "allArmsUnitGo") (EVar "prog")) (EVar "cafs")) (EVar "arms")))
@@ -14030,7 +14053,7 @@ hasFamilyW prog symbol tag =
 (DFunDef false "closedDictW" (PWild (PCon "RNone")) (EApp (EVar "Some") (ELit (LString "(ref.i31 (i32.const 0))"))))
 (DFunDef false "closedDictW" (PWild (PCon "RLocal" PWild PWild)) (EApp (EVar "Some") (ELit (LString "(ref.i31 (i32.const 0))"))))
 (DFunDef false "closedDictW" (PWild (PCon "RScalar" PWild)) (EApp (EVar "Some") (ELit (LString "(ref.i31 (i32.const 0))"))))
-(DFunDef false "closedDictW" (PWild PWild) (EVar "None"))
+(DFunDef false "closedDictW" (PWild (POr (PCon "RDict" PWild) (PCon "RDictFwd" PWild) (PCon "RProj" PWild PWild))) (EVar "None"))
 (DTypeSig false "constArrayW" (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyCon "String"))))
 (DFunDef false "constArrayW" ((PVar "ty") (PVar "elements")) (EBlock (DoLet false false (PVar "elementText") (EApp (EApp (EVar "joinWith") (ELit (LString ""))) (EApp (EApp (EMethodRef "map") (ELam ((PVar "_s")) (EBinOp "++" (ELit (LString " ")) (EVar "_s")))) (EVar "elements")))) (DoExpr (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "(array.new_fixed ")) (EApp (EMethodRef "display") (EVar "ty"))) (ELit (LString " "))) (EApp (EMethodRef "display") (EApp (EVar "intToString") (EApp (EVar "listLen") (EVar "elements"))))) (ELit (LString ""))) (EApp (EMethodRef "display") (EVar "elementText"))) (ELit (LString ")"))))))
 (DTypeSig false "foldedW" (TyFun (TyCon "String") (TyCon "String")))
@@ -14926,7 +14949,10 @@ hasFamilyW prog symbol tag =
 (DFunDef false "freeVarsExpr" ((PVar "bound") (PCon "CSlice" (PVar "e") (PVar "lo") (PVar "hi") PWild)) (EBinOp "++" (EBinOp "++" (EApp (EApp (EVar "freeVarsExpr") (EVar "bound")) (EVar "e")) (EApp (EApp (EVar "freeVarsExpr") (EVar "bound")) (EVar "lo"))) (EApp (EApp (EVar "freeVarsExpr") (EVar "bound")) (EVar "hi"))))
 (DFunDef false "freeVarsExpr" ((PVar "bound") (PCon "CMethod" PWild (PCon "MethodEvidence" PWild PWild (PVar "route") (PVar "implRoutes") (PVar "methRoutes")))) (EApp (EApp (EVar "freeGivens") (EVar "bound")) (EBinOp "::" (EVar "route") (EBinOp "++" (EVar "implRoutes") (EVar "methRoutes")))))
 (DFunDef false "freeVarsExpr" ((PVar "bound") (PCon "CDict" (PVar "name") (PVar "routes"))) (EBinOp "++" (EIf (EApp (EApp (EVar "omHasKey") (EVar "name")) (EVar "bound")) (EListLit) (EListLit (EVar "name"))) (EApp (EApp (EVar "freeGivens") (EVar "bound")) (EVar "routes"))))
-(DFunDef false "freeVarsExpr" ((PVar "_bound") PWild) (EListLit))
+(DFunDef false "freeVarsExpr" ((PVar "bound") (PCon "CStringIndex" (PVar "e") (PVar "i"))) (EBinOp "++" (EApp (EApp (EVar "freeVarsExpr") (EVar "bound")) (EVar "e")) (EApp (EApp (EVar "freeVarsExpr") (EVar "bound")) (EVar "i"))))
+(DFunDef false "freeVarsExpr" ((PVar "bound") (PCon "CStringSlice" (PVar "e") (PVar "lo") (PVar "hi") PWild)) (EBinOp "++" (EBinOp "++" (EApp (EApp (EVar "freeVarsExpr") (EVar "bound")) (EVar "e")) (EApp (EApp (EVar "freeVarsExpr") (EVar "bound")) (EVar "lo"))) (EApp (EApp (EVar "freeVarsExpr") (EVar "bound")) (EVar "hi"))))
+(DFunDef false "freeVarsExpr" ((PVar "bound") (PCon "CListIndex" (PVar "e") (PVar "i"))) (EBinOp "++" (EApp (EApp (EVar "freeVarsExpr") (EVar "bound")) (EVar "e")) (EApp (EApp (EVar "freeVarsExpr") (EVar "bound")) (EVar "i"))))
+(DFunDef false "freeVarsExpr" ((PVar "bound") (PCon "CListSlice" (PVar "e") (PVar "lo") (PVar "hi") PWild)) (EBinOp "++" (EBinOp "++" (EApp (EApp (EVar "freeVarsExpr") (EVar "bound")) (EVar "e")) (EApp (EApp (EVar "freeVarsExpr") (EVar "bound")) (EVar "lo"))) (EApp (EApp (EVar "freeVarsExpr") (EVar "bound")) (EVar "hi"))))
 (DTypeSig false "freeVarsClauses" (TyFun (TyApp (TyCon "OrdMap") (TyCon "Unit")) (TyFun (TyCon "CBind") (TyApp (TyCon "List") (TyCon "String")))))
 (DFunDef false "freeVarsClauses" ((PVar "bound") (PCon "CBind" PWild (PVar "clauses") PWild PWild)) (EApp (EApp (EDictApp "flatMap") (EApp (EVar "freeVarsClause") (EVar "bound"))) (EVar "clauses")))
 (DTypeSig false "freeVarsClause" (TyFun (TyApp (TyCon "OrdMap") (TyCon "Unit")) (TyFun (TyCon "CClause") (TyApp (TyCon "List") (TyCon "String")))))
@@ -15116,7 +15142,11 @@ hasFamilyW prog symbol tag =
 (DFunDef false "collectExprLocals" ((PCon "CMatch" (PVar "scrut") (PVar "arms"))) (EBinOp "++" (EApp (EVar "collectExprLocals") (EVar "scrut")) (EApp (EApp (EDictApp "flatMap") (EVar "collectArmLocals")) (EVar "arms"))))
 (DFunDef false "collectExprLocals" ((PCon "CLetGroup" (PVar "binds") (PVar "body"))) (EBinOp "++" (EBinOp "++" (EApp (EApp (EMethodRef "map") (EVar "lgBindName")) (EVar "binds")) (EApp (EApp (EDictApp "flatMap") (EVar "collectLgValLocals")) (EVar "binds"))) (EApp (EVar "collectExprLocals") (EVar "body"))))
 (DFunDef false "collectExprLocals" ((PCon "CMethod" PWild (PCon "MethodEvidence" PWild PWild (PCon "RProj" (PVar "r") (PVar "path")) PWild PWild))) (EListLit (EApp (EApp (EVar "projLocalName") (EVar "r")) (EVar "path"))))
-(DFunDef false "collectExprLocals" (PWild) (EListLit))
+(DFunDef false "collectExprLocals" ((PCon "CStringIndex" (PVar "base") (PVar "index"))) (EBinOp "++" (EApp (EVar "collectExprLocals") (EVar "base")) (EApp (EVar "collectExprLocals") (EMethodRef "index"))))
+(DFunDef false "collectExprLocals" ((PCon "CStringSlice" (PVar "base") (PVar "lo") (PVar "hi") PWild)) (EBinOp "++" (EBinOp "++" (EApp (EVar "collectExprLocals") (EVar "base")) (EApp (EVar "collectExprLocals") (EVar "lo"))) (EApp (EVar "collectExprLocals") (EVar "hi"))))
+(DFunDef false "collectExprLocals" ((PCon "CListIndex" (PVar "base") (PVar "index"))) (EBinOp "++" (EApp (EVar "collectExprLocals") (EVar "base")) (EApp (EVar "collectExprLocals") (EMethodRef "index"))))
+(DFunDef false "collectExprLocals" ((PCon "CListSlice" (PVar "base") (PVar "lo") (PVar "hi") PWild)) (EBinOp "++" (EBinOp "++" (EApp (EVar "collectExprLocals") (EVar "base")) (EApp (EVar "collectExprLocals") (EVar "lo"))) (EApp (EVar "collectExprLocals") (EVar "hi"))))
+(DFunDef false "collectExprLocals" ((POr (PCon "CMethod" PWild PWild) (PCon "CLit" PWild) (PCon "CVar" PWild PWild) (PCon "CLam" PWild PWild) (PCon "CDict" PWild PWild))) (EListLit))
 (DTypeSig false "collectFieldLocals" (TyFun (TyCon "CField") (TyApp (TyCon "List") (TyCon "String"))))
 (DFunDef false "collectFieldLocals" ((PCon "CField" PWild PWild (PVar "value"))) (EApp (EVar "collectExprLocals") (EVar "value")))
 (DTypeSig false "collectLgValLocals" (TyFun (TyCon "CBind") (TyApp (TyCon "List") (TyCon "String"))))

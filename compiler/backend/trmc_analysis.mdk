@@ -554,7 +554,7 @@ mentionsSelfMethod method tag (CListSlice a lo hi _) =
   mentionsSelfMethod method tag a
     || mentionsSelfMethod method tag lo
     || mentionsSelfMethod method tag hi
-mentionsSelfMethod _ _ _ = False
+mentionsSelfMethod _ _ (CLit _ | CVar _ _ | CDict _ _) = False
 
 export
 mentionsSelfMethodList : String -> String -> List CExpr -> Bool
@@ -671,7 +671,7 @@ mentionsSelfDict self (CListSlice a lo hi _) =
   mentionsSelfDict self a
     || mentionsSelfDict self lo
     || mentionsSelfDict self hi
-mentionsSelfDict _ _ = False
+mentionsSelfDict _ (CLit _ | CVar _ _ | CMethod _ _) = False
 
 mentionsSelfDictList : String -> List CExpr -> Bool
 mentionsSelfDictList _ [] = False
@@ -1314,7 +1314,7 @@ allCallHeads cf (CStringSlice a lo hi _) =
 allCallHeads cf (CListIndex a i) = allCallHeads cf a ++ allCallHeads cf i
 allCallHeads cf (CListSlice a lo hi _) =
   allCallHeads cf a ++ allCallHeads cf lo ++ allCallHeads cf hi
-allCallHeads _ _ = []
+allCallHeads _ (CLit _ | CMethod _ _ | CDict _ _) = []
 
 -- an arm's heads, INCLUDING its guard expressions (a guard runs before the arm
 -- body is selected — a group-fn reference there is just as live as one in the body).

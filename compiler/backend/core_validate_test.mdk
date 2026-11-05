@@ -715,7 +715,8 @@ restampExpr name mode (CLet r pat rhs body) =
   CLet r pat (restampExpr name mode rhs) (restampExpr name mode body)
 restampExpr name mode (CBlock stmts) =
   CBlock (map (restampStmt name mode) stmts)
-restampExpr _ _ e = e
+restampExpr _ _ (e@(CLit _ | CVar _ _ | CLam _ _ | CLetGroup _ _ | CMatch _ _ | CDecision _ _ _ | CIf _ _ _ | CBinPrim _ _ _ _ _ | CUnOp _ _ | CTuple _ | CList _ | CRecord _ _ | CFieldAccess _ _ _ _ | CRecordUpdate _ _ _ | CVariantUpdate _ _ _ | CArray _ | CRangeList _ _ _ | CRangeArray _ _ _ | CIndex _ _ | CSlice _ _ _ _ | CStringIndex _ _ | CStringSlice _ _ _ _ | CListIndex _ _ | CListSlice _ _ _ _ | CMethod _ _ | CDict _ _)) =
+  e
 
 restampStmt : String -> CallMode -> CStmt -> CStmt
 restampStmt name mode (CSExpr e) = CSExpr (restampExpr name mode e)
@@ -824,7 +825,8 @@ reflagExpr name flag (CLet r pat rhs body) =
   CLet r pat (reflagExpr name flag rhs) (reflagExpr name flag body)
 reflagExpr name flag (CIf c t e) =
   CIf (reflagExpr name flag c) (reflagExpr name flag t) (reflagExpr name flag e)
-reflagExpr _ _ e = e
+reflagExpr _ _ (e@(CLit _ | CVar _ _ | CLam _ _ | CLetGroup _ _ | CMatch _ _ | CDecision _ _ _ | CBinPrim _ _ _ _ _ | CUnOp _ _ | CTuple _ | CList _ | CRecord _ _ | CFieldAccess _ _ _ _ | CRecordUpdate _ _ _ | CVariantUpdate _ _ _ | CArray _ | CRangeList _ _ _ | CRangeArray _ _ _ | CIndex _ _ | CSlice _ _ _ _ | CStringIndex _ _ | CStringSlice _ _ _ _ | CListIndex _ _ | CListSlice _ _ _ _ | CBlock _ | CMethod _ _ | CDict _ _)) =
+  e
 
 tailSrc : String
 tailSrc = "g x = x\nf x = g x\nmain = f 1"
@@ -1238,7 +1240,8 @@ dropRoutesExpr name (CApp hd args site) =
   CApp (dropRoutesExpr name hd) (map (dropRoutesExpr name) args) site
 dropRoutesExpr name (m@(CMethod n (MethodEvidence iface arity route impls _))) =
   if n == name then CMethod n (MethodEvidence iface arity route impls []) else m
-dropRoutesExpr _ e = e
+dropRoutesExpr _ (e@(CLit _ | CVar _ _ | CLam _ _ | CLet _ _ _ _ | CLetGroup _ _ | CMatch _ _ | CDecision _ _ _ | CIf _ _ _ | CBinPrim _ _ _ _ _ | CUnOp _ _ | CTuple _ | CList _ | CRecord _ _ | CFieldAccess _ _ _ _ | CRecordUpdate _ _ _ | CVariantUpdate _ _ _ | CArray _ | CRangeList _ _ _ | CRangeArray _ _ _ | CIndex _ _ | CSlice _ _ _ _ | CStringIndex _ _ | CStringSlice _ _ _ _ | CListIndex _ _ | CListSlice _ _ _ _ | CBlock _ | CDict _ _)) =
+  e
 
 -- [prog] with the leading parameter of every impl entry of method [m] dropped.
 dropEntryDict : String -> CProgram -> CProgram
@@ -1309,7 +1312,8 @@ addRouteExpr name (m@(CMethod n (MethodEvidence iface arity route impls meths)))
     CMethod n (MethodEvidence iface arity route impls (meths ++ [route]))
   else
     m
-addRouteExpr _ e = e
+addRouteExpr _ (e@(CLit _ | CVar _ _ | CLam _ _ | CLet _ _ _ _ | CLetGroup _ _ | CMatch _ _ | CDecision _ _ _ | CIf _ _ _ | CBinPrim _ _ _ _ _ | CUnOp _ _ | CTuple _ | CList _ | CRecord _ _ | CFieldAccess _ _ _ _ | CRecordUpdate _ _ _ | CVariantUpdate _ _ _ | CArray _ | CRangeList _ _ _ | CRangeArray _ _ _ | CIndex _ _ | CSlice _ _ _ _ | CStringIndex _ _ | CStringSlice _ _ _ _ | CListIndex _ _ | CListSlice _ _ _ _ | CBlock _ | CDict _ _)) =
+  e
 
 -- [prog] with a leading `$dict_<m>_0` parameter on every impl entry of method [m].
 addEntryDict : String -> CProgram -> CProgram
@@ -1574,7 +1578,8 @@ dropPrereqsExpr name (m@(CMethod n (MethodEvidence iface arity route impls meths
     CMethod n (MethodEvidence iface arity route impls (map dropReqs meths))
   else
     m
-dropPrereqsExpr _ e = e
+dropPrereqsExpr _ (e@(CLit _ | CVar _ _ | CLam _ _ | CLet _ _ _ _ | CLetGroup _ _ | CMatch _ _ | CDecision _ _ _ | CIf _ _ _ | CBinPrim _ _ _ _ _ | CUnOp _ _ | CTuple _ | CList _ | CRecord _ _ | CFieldAccess _ _ _ _ | CRecordUpdate _ _ _ | CVariantUpdate _ _ _ | CArray _ | CRangeList _ _ _ | CRangeArray _ _ _ | CIndex _ _ | CSlice _ _ _ _ | CStringIndex _ _ | CStringSlice _ _ _ _ | CListIndex _ _ | CListSlice _ _ _ _ | CBlock _ | CDict _ _)) =
+  e
 
 dropReqs : Route -> Route
 dropReqs (RKey key _ sups) = RKey key [] sups
@@ -2543,7 +2548,10 @@ typeMentions name (TyApp a b) = typeMentions name a || typeMentions name b
 typeMentions name (TyTuple ts) = any (typeMentions name) ts
 typeMentions name (TyEffect _ _ ty) = typeMentions name ty
 typeMentions name (TyConstrained _ ty) = typeMentions name ty
-typeMentions _ _ = False
+typeMentions name (TyFun a b) = typeMentions name a || typeMentions name b
+typeMentions name (TyNamed _ ty _) = typeMentions name ty
+typeMentions name (TyQual ty _ _) = typeMentions name ty
+typeMentions _ (TyVar _ | TyRow _ _ _ | TyAuth _ _) = False
 
 rendererRoute : String -> String
 rendererRoute "llvm-stats" = "llvm/emitProgramWithStats"
@@ -2559,6 +2567,13 @@ publicRendererRoutes : String -> <IO, FileRead> Result String (List String)
 publicRendererRoutes emitter = do
   src <- readFile (underRoot "compiler/backend/\{emitter}_emit.mdk")
   Ok (map (name => "\{emitter}/\{name}") (publicRendererNames (parse src)))
+
+test "renderer discovery reads through named binders, arrows and qualifiers" =
+  expectEqual
+    ["named", "nested"]
+    (publicRendererNames
+      (parse
+        "export named : (plan : EmitPlan) -> (prog : CProgram) -> String\nexport nested : (EmitPlan -> Int) -> CProgram -> String\nexport other : Int -> String\n"))
 
 test "the emission gateway matrix covers every public renderer derived from both emitters" =
   match (publicRendererRoutes "llvm", publicRendererRoutes "wasm")

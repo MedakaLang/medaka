@@ -558,7 +558,7 @@ mentionsSelfMethod method tag (CListSlice a lo hi _) =
   mentionsSelfMethod method tag a
     || mentionsSelfMethod method tag lo
     || mentionsSelfMethod method tag hi
-mentionsSelfMethod _ _ _ = False
+mentionsSelfMethod _ _ (CLit _ | CVar _ _ | CDict _ _) = False
 
 export
 mentionsSelfMethodList : String -> String -> List CExpr -> Bool
@@ -675,7 +675,7 @@ mentionsSelfDict self (CListSlice a lo hi _) =
   mentionsSelfDict self a
     || mentionsSelfDict self lo
     || mentionsSelfDict self hi
-mentionsSelfDict _ _ = False
+mentionsSelfDict _ (CLit _ | CVar _ _ | CMethod _ _) = False
 
 mentionsSelfDictList : String -> List CExpr -> Bool
 mentionsSelfDictList _ [] = False
@@ -1318,7 +1318,7 @@ allCallHeads cf (CStringSlice a lo hi _) =
 allCallHeads cf (CListIndex a i) = allCallHeads cf a ++ allCallHeads cf i
 allCallHeads cf (CListSlice a lo hi _) =
   allCallHeads cf a ++ allCallHeads cf lo ++ allCallHeads cf hi
-allCallHeads _ _ = []
+allCallHeads _ (CLit _ | CMethod _ _ | CDict _ _) = []
 
 -- an arm's heads, INCLUDING its guard expressions (a guard runs before the arm
 -- body is selected — a group-fn reference there is just as live as one in the body).
@@ -1950,7 +1950,7 @@ isTrmcImpl v method key = omHasKey (lenKey method ++ key) v.eligibleImpls
 (DFunDef false "mentionsSelfMethod" ((PVar "method") (PVar "tag") (PCon "CStringSlice" (PVar "a") (PVar "lo") (PVar "hi") PWild)) (EBinOp "||" (EBinOp "||" (EApp (EApp (EApp (EVar "mentionsSelfMethod") (EVar "method")) (EVar "tag")) (EVar "a")) (EApp (EApp (EApp (EVar "mentionsSelfMethod") (EVar "method")) (EVar "tag")) (EVar "lo"))) (EApp (EApp (EApp (EVar "mentionsSelfMethod") (EVar "method")) (EVar "tag")) (EVar "hi"))))
 (DFunDef false "mentionsSelfMethod" ((PVar "method") (PVar "tag") (PCon "CListIndex" (PVar "a") (PVar "i"))) (EBinOp "||" (EApp (EApp (EApp (EVar "mentionsSelfMethod") (EVar "method")) (EVar "tag")) (EVar "a")) (EApp (EApp (EApp (EVar "mentionsSelfMethod") (EVar "method")) (EVar "tag")) (EVar "i"))))
 (DFunDef false "mentionsSelfMethod" ((PVar "method") (PVar "tag") (PCon "CListSlice" (PVar "a") (PVar "lo") (PVar "hi") PWild)) (EBinOp "||" (EBinOp "||" (EApp (EApp (EApp (EVar "mentionsSelfMethod") (EVar "method")) (EVar "tag")) (EVar "a")) (EApp (EApp (EApp (EVar "mentionsSelfMethod") (EVar "method")) (EVar "tag")) (EVar "lo"))) (EApp (EApp (EApp (EVar "mentionsSelfMethod") (EVar "method")) (EVar "tag")) (EVar "hi"))))
-(DFunDef false "mentionsSelfMethod" (PWild PWild PWild) (EVar "False"))
+(DFunDef false "mentionsSelfMethod" (PWild PWild (POr (PCon "CLit" PWild) (PCon "CVar" PWild PWild) (PCon "CDict" PWild PWild))) (EVar "False"))
 (DTypeSig true "mentionsSelfMethodList" (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "CExpr")) (TyCon "Bool")))))
 (DFunDef false "mentionsSelfMethodList" (PWild PWild (PList)) (EVar "False"))
 (DFunDef false "mentionsSelfMethodList" ((PVar "method") (PVar "tag") (PCons (PVar "x") (PVar "rest"))) (EBinOp "||" (EApp (EApp (EApp (EVar "mentionsSelfMethod") (EVar "method")) (EVar "tag")) (EVar "x")) (EApp (EApp (EApp (EVar "mentionsSelfMethodList") (EVar "method")) (EVar "tag")) (EVar "rest"))))
@@ -2005,7 +2005,7 @@ isTrmcImpl v method key = omHasKey (lenKey method ++ key) v.eligibleImpls
 (DFunDef false "mentionsSelfDict" ((PVar "self") (PCon "CStringSlice" (PVar "a") (PVar "lo") (PVar "hi") PWild)) (EBinOp "||" (EBinOp "||" (EApp (EApp (EVar "mentionsSelfDict") (EVar "self")) (EVar "a")) (EApp (EApp (EVar "mentionsSelfDict") (EVar "self")) (EVar "lo"))) (EApp (EApp (EVar "mentionsSelfDict") (EVar "self")) (EVar "hi"))))
 (DFunDef false "mentionsSelfDict" ((PVar "self") (PCon "CListIndex" (PVar "a") (PVar "i"))) (EBinOp "||" (EApp (EApp (EVar "mentionsSelfDict") (EVar "self")) (EVar "a")) (EApp (EApp (EVar "mentionsSelfDict") (EVar "self")) (EVar "i"))))
 (DFunDef false "mentionsSelfDict" ((PVar "self") (PCon "CListSlice" (PVar "a") (PVar "lo") (PVar "hi") PWild)) (EBinOp "||" (EBinOp "||" (EApp (EApp (EVar "mentionsSelfDict") (EVar "self")) (EVar "a")) (EApp (EApp (EVar "mentionsSelfDict") (EVar "self")) (EVar "lo"))) (EApp (EApp (EVar "mentionsSelfDict") (EVar "self")) (EVar "hi"))))
-(DFunDef false "mentionsSelfDict" (PWild PWild) (EVar "False"))
+(DFunDef false "mentionsSelfDict" (PWild (POr (PCon "CLit" PWild) (PCon "CVar" PWild PWild) (PCon "CMethod" PWild PWild))) (EVar "False"))
 (DTypeSig false "mentionsSelfDictList" (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "CExpr")) (TyCon "Bool"))))
 (DFunDef false "mentionsSelfDictList" (PWild (PList)) (EVar "False"))
 (DFunDef false "mentionsSelfDictList" ((PVar "self") (PCons (PVar "x") (PVar "rest"))) (EBinOp "||" (EApp (EApp (EVar "mentionsSelfDict") (EVar "self")) (EVar "x")) (EApp (EApp (EVar "mentionsSelfDictList") (EVar "self")) (EVar "rest"))))
@@ -2162,7 +2162,7 @@ isTrmcImpl v method key = omHasKey (lenKey method ++ key) v.eligibleImpls
 (DFunDef false "allCallHeads" ((PVar "cf") (PCon "CStringSlice" (PVar "a") (PVar "lo") (PVar "hi") PWild)) (EBinOp "++" (EBinOp "++" (EApp (EApp (EVar "allCallHeads") (EVar "cf")) (EVar "a")) (EApp (EApp (EVar "allCallHeads") (EVar "cf")) (EVar "lo"))) (EApp (EApp (EVar "allCallHeads") (EVar "cf")) (EVar "hi"))))
 (DFunDef false "allCallHeads" ((PVar "cf") (PCon "CListIndex" (PVar "a") (PVar "i"))) (EBinOp "++" (EApp (EApp (EVar "allCallHeads") (EVar "cf")) (EVar "a")) (EApp (EApp (EVar "allCallHeads") (EVar "cf")) (EVar "i"))))
 (DFunDef false "allCallHeads" ((PVar "cf") (PCon "CListSlice" (PVar "a") (PVar "lo") (PVar "hi") PWild)) (EBinOp "++" (EBinOp "++" (EApp (EApp (EVar "allCallHeads") (EVar "cf")) (EVar "a")) (EApp (EApp (EVar "allCallHeads") (EVar "cf")) (EVar "lo"))) (EApp (EApp (EVar "allCallHeads") (EVar "cf")) (EVar "hi"))))
-(DFunDef false "allCallHeads" (PWild PWild) (EListLit))
+(DFunDef false "allCallHeads" (PWild (POr (PCon "CLit" PWild) (PCon "CMethod" PWild PWild) (PCon "CDict" PWild PWild))) (EListLit))
 (DTypeSig false "allArmHeads" (TyFun (TyFun (TyCon "String") (TyCon "String")) (TyFun (TyCon "CArm") (TyApp (TyCon "List") (TyCon "String")))))
 (DFunDef false "allArmHeads" ((PVar "cf") (PCon "CArm" PWild (PVar "guards") (PVar "body"))) (EBinOp "++" (EApp (EApp (EVar "flatMap") (EApp (EVar "dispGuardHeads") (EVar "cf"))) (EVar "guards")) (EApp (EApp (EVar "allCallHeads") (EVar "cf")) (EVar "body"))))
 (DFunDef false "allArmHeads" ((PVar "cf") (PCon "CArmAlt" PWild (PVar "guards") PWild)) (EApp (EApp (EVar "flatMap") (EApp (EVar "dispGuardHeads") (EVar "cf"))) (EVar "guards")))
@@ -2423,7 +2423,7 @@ isTrmcImpl v method key = omHasKey (lenKey method ++ key) v.eligibleImpls
 (DFunDef false "mentionsSelfMethod" ((PVar "method") (PVar "tag") (PCon "CStringSlice" (PVar "a") (PVar "lo") (PVar "hi") PWild)) (EBinOp "||" (EBinOp "||" (EApp (EApp (EApp (EVar "mentionsSelfMethod") (EVar "method")) (EVar "tag")) (EVar "a")) (EApp (EApp (EApp (EVar "mentionsSelfMethod") (EVar "method")) (EVar "tag")) (EVar "lo"))) (EApp (EApp (EApp (EVar "mentionsSelfMethod") (EVar "method")) (EVar "tag")) (EVar "hi"))))
 (DFunDef false "mentionsSelfMethod" ((PVar "method") (PVar "tag") (PCon "CListIndex" (PVar "a") (PVar "i"))) (EBinOp "||" (EApp (EApp (EApp (EVar "mentionsSelfMethod") (EVar "method")) (EVar "tag")) (EVar "a")) (EApp (EApp (EApp (EVar "mentionsSelfMethod") (EVar "method")) (EVar "tag")) (EVar "i"))))
 (DFunDef false "mentionsSelfMethod" ((PVar "method") (PVar "tag") (PCon "CListSlice" (PVar "a") (PVar "lo") (PVar "hi") PWild)) (EBinOp "||" (EBinOp "||" (EApp (EApp (EApp (EVar "mentionsSelfMethod") (EVar "method")) (EVar "tag")) (EVar "a")) (EApp (EApp (EApp (EVar "mentionsSelfMethod") (EVar "method")) (EVar "tag")) (EVar "lo"))) (EApp (EApp (EApp (EVar "mentionsSelfMethod") (EVar "method")) (EVar "tag")) (EVar "hi"))))
-(DFunDef false "mentionsSelfMethod" (PWild PWild PWild) (EVar "False"))
+(DFunDef false "mentionsSelfMethod" (PWild PWild (POr (PCon "CLit" PWild) (PCon "CVar" PWild PWild) (PCon "CDict" PWild PWild))) (EVar "False"))
 (DTypeSig true "mentionsSelfMethodList" (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "CExpr")) (TyCon "Bool")))))
 (DFunDef false "mentionsSelfMethodList" (PWild PWild (PList)) (EVar "False"))
 (DFunDef false "mentionsSelfMethodList" ((PVar "method") (PVar "tag") (PCons (PVar "x") (PVar "rest"))) (EBinOp "||" (EApp (EApp (EApp (EVar "mentionsSelfMethod") (EVar "method")) (EVar "tag")) (EVar "x")) (EApp (EApp (EApp (EVar "mentionsSelfMethodList") (EVar "method")) (EVar "tag")) (EVar "rest"))))
@@ -2478,7 +2478,7 @@ isTrmcImpl v method key = omHasKey (lenKey method ++ key) v.eligibleImpls
 (DFunDef false "mentionsSelfDict" ((PVar "self") (PCon "CStringSlice" (PVar "a") (PVar "lo") (PVar "hi") PWild)) (EBinOp "||" (EBinOp "||" (EApp (EApp (EVar "mentionsSelfDict") (EVar "self")) (EVar "a")) (EApp (EApp (EVar "mentionsSelfDict") (EVar "self")) (EVar "lo"))) (EApp (EApp (EVar "mentionsSelfDict") (EVar "self")) (EVar "hi"))))
 (DFunDef false "mentionsSelfDict" ((PVar "self") (PCon "CListIndex" (PVar "a") (PVar "i"))) (EBinOp "||" (EApp (EApp (EVar "mentionsSelfDict") (EVar "self")) (EVar "a")) (EApp (EApp (EVar "mentionsSelfDict") (EVar "self")) (EVar "i"))))
 (DFunDef false "mentionsSelfDict" ((PVar "self") (PCon "CListSlice" (PVar "a") (PVar "lo") (PVar "hi") PWild)) (EBinOp "||" (EBinOp "||" (EApp (EApp (EVar "mentionsSelfDict") (EVar "self")) (EVar "a")) (EApp (EApp (EVar "mentionsSelfDict") (EVar "self")) (EVar "lo"))) (EApp (EApp (EVar "mentionsSelfDict") (EVar "self")) (EVar "hi"))))
-(DFunDef false "mentionsSelfDict" (PWild PWild) (EVar "False"))
+(DFunDef false "mentionsSelfDict" (PWild (POr (PCon "CLit" PWild) (PCon "CVar" PWild PWild) (PCon "CMethod" PWild PWild))) (EVar "False"))
 (DTypeSig false "mentionsSelfDictList" (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "CExpr")) (TyCon "Bool"))))
 (DFunDef false "mentionsSelfDictList" (PWild (PList)) (EVar "False"))
 (DFunDef false "mentionsSelfDictList" ((PVar "self") (PCons (PVar "x") (PVar "rest"))) (EBinOp "||" (EApp (EApp (EVar "mentionsSelfDict") (EVar "self")) (EVar "x")) (EApp (EApp (EVar "mentionsSelfDictList") (EVar "self")) (EVar "rest"))))
@@ -2635,7 +2635,7 @@ isTrmcImpl v method key = omHasKey (lenKey method ++ key) v.eligibleImpls
 (DFunDef false "allCallHeads" ((PVar "cf") (PCon "CStringSlice" (PVar "a") (PVar "lo") (PVar "hi") PWild)) (EBinOp "++" (EBinOp "++" (EApp (EApp (EVar "allCallHeads") (EVar "cf")) (EVar "a")) (EApp (EApp (EVar "allCallHeads") (EVar "cf")) (EVar "lo"))) (EApp (EApp (EVar "allCallHeads") (EVar "cf")) (EVar "hi"))))
 (DFunDef false "allCallHeads" ((PVar "cf") (PCon "CListIndex" (PVar "a") (PVar "i"))) (EBinOp "++" (EApp (EApp (EVar "allCallHeads") (EVar "cf")) (EVar "a")) (EApp (EApp (EVar "allCallHeads") (EVar "cf")) (EVar "i"))))
 (DFunDef false "allCallHeads" ((PVar "cf") (PCon "CListSlice" (PVar "a") (PVar "lo") (PVar "hi") PWild)) (EBinOp "++" (EBinOp "++" (EApp (EApp (EVar "allCallHeads") (EVar "cf")) (EVar "a")) (EApp (EApp (EVar "allCallHeads") (EVar "cf")) (EVar "lo"))) (EApp (EApp (EVar "allCallHeads") (EVar "cf")) (EVar "hi"))))
-(DFunDef false "allCallHeads" (PWild PWild) (EListLit))
+(DFunDef false "allCallHeads" (PWild (POr (PCon "CLit" PWild) (PCon "CMethod" PWild PWild) (PCon "CDict" PWild PWild))) (EListLit))
 (DTypeSig false "allArmHeads" (TyFun (TyFun (TyCon "String") (TyCon "String")) (TyFun (TyCon "CArm") (TyApp (TyCon "List") (TyCon "String")))))
 (DFunDef false "allArmHeads" ((PVar "cf") (PCon "CArm" PWild (PVar "guards") (PVar "body"))) (EBinOp "++" (EApp (EApp (EDictApp "flatMap") (EApp (EVar "dispGuardHeads") (EVar "cf"))) (EVar "guards")) (EApp (EApp (EVar "allCallHeads") (EVar "cf")) (EVar "body"))))
 (DFunDef false "allArmHeads" ((PVar "cf") (PCon "CArmAlt" PWild (PVar "guards") PWild)) (EApp (EApp (EDictApp "flatMap") (EApp (EVar "dispGuardHeads") (EVar "cf"))) (EVar "guards")))

@@ -421,7 +421,8 @@ cFallsThrough (CDecision scrut arms _) =
   cFallsThrough scrut || any armFallsThrough arms
 cFallsThrough (CMatch scrut arms) =
   cFallsThrough scrut || any armFallsThrough arms
-cFallsThrough _ = False
+cFallsThrough (CLit _ | CLam _ _ | CBinPrim _ _ _ _ _ | CUnOp _ _ | CTuple _ | CList _ | CRecord _ _ | CFieldAccess _ _ _ _ | CRecordUpdate _ _ _ | CVariantUpdate _ _ _ | CArray _ | CRangeList _ _ _ | CRangeArray _ _ _ | CIndex _ _ | CSlice _ _ _ _ | CStringIndex _ _ | CStringSlice _ _ _ _ | CListIndex _ _ | CListSlice _ _ _ _ | CMethod _ _ | CDict _ _) =
+  False
 
 stmtFallsThrough : CStmt -> Bool
 stmtFallsThrough (CSExpr e) = cFallsThrough e
@@ -445,7 +446,8 @@ patMayFail (PVar _ _ _) = False
 patMayFail (PLit LUnit) = False
 patMayFail (PAs _ _ _ p) = patMayFail p
 patMayFail (PTuple ps) = anyList patMayFail ps
-patMayFail _ = True
+patMayFail (PLit _ | PCon _ _ | PCons _ _ | PList _ | POr _ | PRng _ _ _ | PRec _ _ _ | PAnn _ _) =
+  True
 
 -- A block's statements.  A refutable `let` takes the rest of the block as its
 -- decision's body, so the block ends with that decision; a refutable `let` that
@@ -507,7 +509,7 @@ patNeedsGuard (PList ps) = anyList patNeedsGuard ps
 patNeedsGuard (PTuple ps) = anyList patNeedsGuard ps
 patNeedsGuard (PAs _ _ _ p) = patNeedsGuard p
 patNeedsGuard (POr _) = True
-patNeedsGuard _ = False
+patNeedsGuard (PVar _ _ _ | PWild | PLit _ | PAnn _ _) = False
 
 -- one matrix row per arm: its (canonicalised) pattern as a single column, paired
 -- with the arm's index (the leaves carry it back to the original CArm).
@@ -705,7 +707,7 @@ eraseBytePat (PAs x l bid p) = PAs x l bid (eraseBytePat p)
 eraseBytePat (POr ps) = POr (map eraseBytePat ps)
 eraseBytePat (PRng lo hi incl) = PRng (eraseByteLit lo) (eraseByteLit hi) incl
 eraseBytePat (PRec n fs open) = PRec n (map eraseBytePatField fs) open
-eraseBytePat p = p
+eraseBytePat (p@(PLit _ | PVar _ _ _ | PWild | PAnn _ _)) = p
 
 eraseBytePatField : RecPatField -> RecPatField
 eraseBytePatField (RecPatField n l bid sub) =
@@ -1062,7 +1064,7 @@ patCanMiss sib (PAs _ _ _ p) = patCanMiss sib p
 patCanMiss sib (PTuple ps) = anyList (patCanMiss sib) ps
 patCanMiss sib (PCon c ps) = ctorHasSibling sib c || anyList (patCanMiss sib) ps
 patCanMiss _ (PRec _ _ _) = False
-patCanMiss _ _ = True
+patCanMiss _ (PCons _ _ | PList _ | POr _ | PRng _ _ _ | PAnn _ _) = True
 
 ctorHasSibling : OrdMap Bool -> String -> Bool
 ctorHasSibling sib c = optionOr True (omLookup c sib)
@@ -1541,7 +1543,8 @@ definedArityOf env _ (CMethod name (MethodEvidence _ _ (RLocal sym dicts) _ _)) 
   lessDicts (listLen dicts) (topArityOf env (if sym == "" then name else sym))
 definedArityOf env scope (CDict name routes) =
   lessDicts (listLen routes) (definedArityOf env scope (CVar name AGlobal))
-definedArityOf _ _ _ = None
+definedArityOf _ _ (CMethod _ _ | CLit _ | CApp _ _ _ | CLam _ _ | CLet _ _ _ _ | CLetGroup _ _ | CMatch _ _ | CDecision _ _ _ | CIf _ _ _ | CBinPrim _ _ _ _ _ | CUnOp _ _ | CTuple _ | CList _ | CRecord _ _ | CFieldAccess _ _ _ _ | CRecordUpdate _ _ _ | CVariantUpdate _ _ _ | CArray _ | CRangeList _ _ _ | CRangeArray _ _ _ | CIndex _ _ | CSlice _ _ _ _ | CStringIndex _ _ | CStringSlice _ _ _ _ | CListIndex _ _ | CListSlice _ _ _ _ | CBlock _) =
+  None
 
 lessDicts : Int -> Option Int -> Option Int
 lessDicts n (Some k) = Some (k - n)
@@ -2306,7 +2309,8 @@ rewritePat fo (PCons h t) = PCons (rewritePat fo h) (rewritePat fo t)
 rewritePat fo (PTuple ps) = PTuple (map (rewritePat fo) ps)
 rewritePat fo (PList ps) = PList (map (rewritePat fo) ps)
 rewritePat fo (PAs x l bid p) = PAs x l bid (rewritePat fo p)
-rewritePat _ p = p
+rewritePat _ (p@(PVar _ _ _ | PWild | PLit _ | POr _ | PRng _ _ _ | PAnn _ _)) =
+  p
 
 -- the sub-pattern bound to declared field `label`: the named field's sub-pattern
 -- (recursively rewritten), `PVar label` for a pun, or `PWild` when the field is
@@ -3768,7 +3772,8 @@ methodArgTys (TyConstrained _ t) = methodArgTys t
 methodArgTys (TyEffect _ _ t) = methodArgTys t
 methodArgTys (TyFun (TyNamed _ a _) b) = a :: methodArgTys b
 methodArgTys (TyFun a b) = a :: methodArgTys b
-methodArgTys _ = []
+methodArgTys (TyCon {  } | TyVar _ | TyApp _ _ | TyTuple _ | TyNamed _ _ _ | TyQual _ _ _ | TyRow _ _ _ | TyAuth _ _) =
+  []
 
 -- ── method → (interface, full-arity) table (native backend: default methods) ─
 -- Per interface method name: the interface it belongs to and its full argument

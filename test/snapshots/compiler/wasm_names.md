@@ -91,7 +91,7 @@ ubPat sc (PCons h t) = PCons (ubPat sc h) (ubPat sc t)
 ubPat sc (PTuple ps) = PTuple (map (ubPat sc) ps)
 ubPat sc (PList ps) = PList (map (ubPat sc) ps)
 ubPat sc (PAs x l bid p) = PAs (ubNew sc x) l bid (ubPat sc p)
-ubPat _ p = p
+ubPat _ (p@(PWild | PLit _ | POr _ | PRng _ _ _ | PRec _ _ _ | PAnn _ _)) = p
 
 ubBind : OrdMap Int -> CBind -> CBind
 ubBind sc (CBind n clauses loc bid) =
@@ -146,7 +146,7 @@ ubExpr sc (CListIndex b i) = CListIndex (ubExpr sc b) (ubExpr sc i)
 ubExpr sc (CListSlice b lo hi i) =
   CListSlice (ubExpr sc b) (ubExpr sc lo) (ubExpr sc hi) i
 ubExpr sc (CBlock stmts) = CBlock (ubStmts sc stmts)
-ubExpr _ e = e
+ubExpr _ (e@(CLit _ | CMethod _ _ | CDict _ _)) = e
 
 -- a let-group member's own name, as bound in the enclosing scope
 ubRenameBind : OrdMap Int -> CBind -> CBind
@@ -208,7 +208,7 @@ ubGuards sc ((CGBind p e) :: rest) =
 (DFunDef false "ubPat" ((PVar "sc") (PCon "PTuple" (PVar "ps"))) (EApp (EVar "PTuple") (EApp (EApp (EVar "map") (EApp (EVar "ubPat") (EVar "sc"))) (EVar "ps"))))
 (DFunDef false "ubPat" ((PVar "sc") (PCon "PList" (PVar "ps"))) (EApp (EVar "PList") (EApp (EApp (EVar "map") (EApp (EVar "ubPat") (EVar "sc"))) (EVar "ps"))))
 (DFunDef false "ubPat" ((PVar "sc") (PCon "PAs" (PVar "x") (PVar "l") (PVar "bid") (PVar "p"))) (EApp (EApp (EApp (EApp (EVar "PAs") (EApp (EApp (EVar "ubNew") (EVar "sc")) (EVar "x"))) (EVar "l")) (EVar "bid")) (EApp (EApp (EVar "ubPat") (EVar "sc")) (EVar "p"))))
-(DFunDef false "ubPat" (PWild (PVar "p")) (EVar "p"))
+(DFunDef false "ubPat" (PWild (PAs "p" (POr (PCon "PWild") (PCon "PLit" PWild) (PCon "POr" PWild) (PCon "PRng" PWild PWild PWild) (PCon "PRec" PWild PWild PWild) (PCon "PAnn" PWild PWild)))) (EVar "p"))
 (DTypeSig false "ubBind" (TyFun (TyApp (TyCon "OrdMap") (TyCon "Int")) (TyFun (TyCon "CBind") (TyCon "CBind"))))
 (DFunDef false "ubBind" ((PVar "sc") (PCon "CBind" (PVar "n") (PVar "clauses") (PVar "loc") (PVar "bid"))) (EApp (EApp (EApp (EApp (EVar "CBind") (EVar "n")) (EApp (EApp (EVar "map") (EApp (EVar "ubClause") (EVar "sc"))) (EVar "clauses"))) (EVar "loc")) (EVar "bid")))
 (DTypeSig false "ubClause" (TyFun (TyApp (TyCon "OrdMap") (TyCon "Int")) (TyFun (TyCon "CClause") (TyCon "CClause"))))
@@ -244,7 +244,7 @@ ubGuards sc ((CGBind p e) :: rest) =
 (DFunDef false "ubExpr" ((PVar "sc") (PCon "CListIndex" (PVar "b") (PVar "i"))) (EApp (EApp (EVar "CListIndex") (EApp (EApp (EVar "ubExpr") (EVar "sc")) (EVar "b"))) (EApp (EApp (EVar "ubExpr") (EVar "sc")) (EVar "i"))))
 (DFunDef false "ubExpr" ((PVar "sc") (PCon "CListSlice" (PVar "b") (PVar "lo") (PVar "hi") (PVar "i"))) (EApp (EApp (EApp (EApp (EVar "CListSlice") (EApp (EApp (EVar "ubExpr") (EVar "sc")) (EVar "b"))) (EApp (EApp (EVar "ubExpr") (EVar "sc")) (EVar "lo"))) (EApp (EApp (EVar "ubExpr") (EVar "sc")) (EVar "hi"))) (EVar "i")))
 (DFunDef false "ubExpr" ((PVar "sc") (PCon "CBlock" (PVar "stmts"))) (EApp (EVar "CBlock") (EApp (EApp (EVar "ubStmts") (EVar "sc")) (EVar "stmts"))))
-(DFunDef false "ubExpr" (PWild (PVar "e")) (EVar "e"))
+(DFunDef false "ubExpr" (PWild (PAs "e" (POr (PCon "CLit" PWild) (PCon "CMethod" PWild PWild) (PCon "CDict" PWild PWild)))) (EVar "e"))
 (DTypeSig false "ubRenameBind" (TyFun (TyApp (TyCon "OrdMap") (TyCon "Int")) (TyFun (TyCon "CBind") (TyCon "CBind"))))
 (DFunDef false "ubRenameBind" ((PVar "sc") (PCon "CBind" (PVar "n") (PVar "clauses") (PVar "loc") (PVar "bid"))) (EApp (EApp (EApp (EApp (EVar "CBind") (EApp (EApp (EVar "ubNew") (EVar "sc")) (EVar "n"))) (EVar "clauses")) (EVar "loc")) (EVar "bid")))
 (DTypeSig false "ubStmts" (TyFun (TyApp (TyCon "OrdMap") (TyCon "Int")) (TyFun (TyApp (TyCon "List") (TyCon "CStmt")) (TyApp (TyCon "List") (TyCon "CStmt")))))
@@ -290,7 +290,7 @@ ubGuards sc ((CGBind p e) :: rest) =
 (DFunDef false "ubPat" ((PVar "sc") (PCon "PTuple" (PVar "ps"))) (EApp (EVar "PTuple") (EApp (EApp (EMethodRef "map") (EApp (EVar "ubPat") (EVar "sc"))) (EVar "ps"))))
 (DFunDef false "ubPat" ((PVar "sc") (PCon "PList" (PVar "ps"))) (EApp (EVar "PList") (EApp (EApp (EMethodRef "map") (EApp (EVar "ubPat") (EVar "sc"))) (EVar "ps"))))
 (DFunDef false "ubPat" ((PVar "sc") (PCon "PAs" (PVar "x") (PVar "l") (PVar "bid") (PVar "p"))) (EApp (EApp (EApp (EApp (EVar "PAs") (EApp (EApp (EVar "ubNew") (EVar "sc")) (EVar "x"))) (EVar "l")) (EVar "bid")) (EApp (EApp (EVar "ubPat") (EVar "sc")) (EVar "p"))))
-(DFunDef false "ubPat" (PWild (PVar "p")) (EVar "p"))
+(DFunDef false "ubPat" (PWild (PAs "p" (POr (PCon "PWild") (PCon "PLit" PWild) (PCon "POr" PWild) (PCon "PRng" PWild PWild PWild) (PCon "PRec" PWild PWild PWild) (PCon "PAnn" PWild PWild)))) (EVar "p"))
 (DTypeSig false "ubBind" (TyFun (TyApp (TyCon "OrdMap") (TyCon "Int")) (TyFun (TyCon "CBind") (TyCon "CBind"))))
 (DFunDef false "ubBind" ((PVar "sc") (PCon "CBind" (PVar "n") (PVar "clauses") (PVar "loc") (PVar "bid"))) (EApp (EApp (EApp (EApp (EVar "CBind") (EVar "n")) (EApp (EApp (EMethodRef "map") (EApp (EVar "ubClause") (EVar "sc"))) (EVar "clauses"))) (EVar "loc")) (EVar "bid")))
 (DTypeSig false "ubClause" (TyFun (TyApp (TyCon "OrdMap") (TyCon "Int")) (TyFun (TyCon "CClause") (TyCon "CClause"))))
@@ -326,7 +326,7 @@ ubGuards sc ((CGBind p e) :: rest) =
 (DFunDef false "ubExpr" ((PVar "sc") (PCon "CListIndex" (PVar "b") (PVar "i"))) (EApp (EApp (EVar "CListIndex") (EApp (EApp (EVar "ubExpr") (EVar "sc")) (EVar "b"))) (EApp (EApp (EVar "ubExpr") (EVar "sc")) (EVar "i"))))
 (DFunDef false "ubExpr" ((PVar "sc") (PCon "CListSlice" (PVar "b") (PVar "lo") (PVar "hi") (PVar "i"))) (EApp (EApp (EApp (EApp (EVar "CListSlice") (EApp (EApp (EVar "ubExpr") (EVar "sc")) (EVar "b"))) (EApp (EApp (EVar "ubExpr") (EVar "sc")) (EVar "lo"))) (EApp (EApp (EVar "ubExpr") (EVar "sc")) (EVar "hi"))) (EVar "i")))
 (DFunDef false "ubExpr" ((PVar "sc") (PCon "CBlock" (PVar "stmts"))) (EApp (EVar "CBlock") (EApp (EApp (EVar "ubStmts") (EVar "sc")) (EVar "stmts"))))
-(DFunDef false "ubExpr" (PWild (PVar "e")) (EVar "e"))
+(DFunDef false "ubExpr" (PWild (PAs "e" (POr (PCon "CLit" PWild) (PCon "CMethod" PWild PWild) (PCon "CDict" PWild PWild)))) (EVar "e"))
 (DTypeSig false "ubRenameBind" (TyFun (TyApp (TyCon "OrdMap") (TyCon "Int")) (TyFun (TyCon "CBind") (TyCon "CBind"))))
 (DFunDef false "ubRenameBind" ((PVar "sc") (PCon "CBind" (PVar "n") (PVar "clauses") (PVar "loc") (PVar "bid"))) (EApp (EApp (EApp (EApp (EVar "CBind") (EApp (EApp (EVar "ubNew") (EVar "sc")) (EVar "n"))) (EVar "clauses")) (EVar "loc")) (EVar "bid")))
 (DTypeSig false "ubStmts" (TyFun (TyApp (TyCon "OrdMap") (TyCon "Int")) (TyFun (TyApp (TyCon "List") (TyCon "CStmt")) (TyApp (TyCon "List") (TyCon "CStmt")))))

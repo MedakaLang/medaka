@@ -1,5 +1,5 @@
 # META
-source_lines=15467
+source_lines=15468
 stages=DESUGAR,MARK
 # SOURCE
 import ir.constructor_facts.{
@@ -5337,7 +5337,8 @@ constFoldFloat (CBinPrim op l r _ _) = match (
 )
   (Some a, Some b) => hostFloatOp op a b
   _ => None
-constFoldFloat _ = None
+constFoldFloat (CLit _ | CVar _ _ | CApp _ _ _ | CLam _ _ | CLet _ _ _ _ | CLetGroup _ _ | CMatch _ _ | CDecision _ _ _ | CIf _ _ _ | CUnOp _ _ | CTuple _ | CList _ | CRecord _ _ | CFieldAccess _ _ _ _ | CRecordUpdate _ _ _ | CVariantUpdate _ _ _ | CArray _ | CRangeList _ _ _ | CRangeArray _ _ _ | CIndex _ _ | CSlice _ _ _ _ | CStringIndex _ _ | CStringSlice _ _ _ _ | CListIndex _ _ | CListSlice _ _ _ _ | CBlock _ | CMethod _ _ | CDict _ _) =
+  None
 
 -- Host float op for the const-fold — each computed with the SAME operation the
 -- runtime routes this operator to, so the host fold is bit-identical to what the
@@ -13856,7 +13857,7 @@ bindPatStamps e env (PList ps) = bindPatsStamps e env ps
 bindPatStamps e env (PCons h t) = bindPatsStamps e env [h, t]
 bindPatStamps e env (PRec _ fields _) =
   fold (acc f => bindFieldStamps e acc f) env fields
-bindPatStamps _ env _ = env
+bindPatStamps _ env (PWild | PLit _ | POr _ | PRng _ _ _ | PAnn _ _) = env
 
 bindPatsStamps : Emit ->
   OrdMap (String, LTy) ->
@@ -16528,7 +16529,7 @@ runtimeName e symbol = optionOr "" (externRuntimeKey e.externFacts symbol)
 (DTypeSig false "constFoldFloat" (TyFun (TyCon "CExpr") (TyApp (TyCon "Option") (TyCon "Float"))))
 (DFunDef false "constFoldFloat" ((PCon "CLit" (PCon "LFloat" (PVar "f")))) (EApp (EVar "Some") (EVar "f")))
 (DFunDef false "constFoldFloat" ((PCon "CBinPrim" (PVar "op") (PVar "l") (PVar "r") PWild PWild)) (EMatch (ETuple (EApp (EVar "constFoldFloat") (EVar "l")) (EApp (EVar "constFoldFloat") (EVar "r"))) (arm (PTuple (PCon "Some" (PVar "a")) (PCon "Some" (PVar "b"))) () (EApp (EApp (EApp (EVar "hostFloatOp") (EVar "op")) (EVar "a")) (EVar "b"))) (arm PWild () (EVar "None"))))
-(DFunDef false "constFoldFloat" (PWild) (EVar "None"))
+(DFunDef false "constFoldFloat" ((POr (PCon "CLit" PWild) (PCon "CVar" PWild PWild) (PCon "CApp" PWild PWild PWild) (PCon "CLam" PWild PWild) (PCon "CLet" PWild PWild PWild PWild) (PCon "CLetGroup" PWild PWild) (PCon "CMatch" PWild PWild) (PCon "CDecision" PWild PWild PWild) (PCon "CIf" PWild PWild PWild) (PCon "CUnOp" PWild PWild) (PCon "CTuple" PWild) (PCon "CList" PWild) (PCon "CRecord" PWild PWild) (PCon "CFieldAccess" PWild PWild PWild PWild) (PCon "CRecordUpdate" PWild PWild PWild) (PCon "CVariantUpdate" PWild PWild PWild) (PCon "CArray" PWild) (PCon "CRangeList" PWild PWild PWild) (PCon "CRangeArray" PWild PWild PWild) (PCon "CIndex" PWild PWild) (PCon "CSlice" PWild PWild PWild PWild) (PCon "CStringIndex" PWild PWild) (PCon "CStringSlice" PWild PWild PWild PWild) (PCon "CListIndex" PWild PWild) (PCon "CListSlice" PWild PWild PWild PWild) (PCon "CBlock" PWild) (PCon "CMethod" PWild PWild) (PCon "CDict" PWild PWild))) (EVar "None"))
 (DTypeSig false "hostFloatOp" (TyFun (TyCon "String") (TyFun (TyCon "Float") (TyFun (TyCon "Float") (TyApp (TyCon "Option") (TyCon "Float"))))))
 (DFunDef false "hostFloatOp" ((PLit (LString "+")) (PVar "a") (PVar "b")) (EApp (EVar "Some") (EBinOp "+" (EVar "a") (EVar "b"))))
 (DFunDef false "hostFloatOp" ((PLit (LString "-")) (PVar "a") (PVar "b")) (EApp (EVar "Some") (EBinOp "-" (EVar "a") (EVar "b"))))
@@ -18025,7 +18026,7 @@ runtimeName e symbol = optionOr "" (externRuntimeKey e.externFacts symbol)
 (DFunDef false "bindPatStamps" ((PVar "e") (PVar "env") (PCon "PList" (PVar "ps"))) (EApp (EApp (EApp (EVar "bindPatsStamps") (EVar "e")) (EVar "env")) (EVar "ps")))
 (DFunDef false "bindPatStamps" ((PVar "e") (PVar "env") (PCon "PCons" (PVar "h") (PVar "t"))) (EApp (EApp (EApp (EVar "bindPatsStamps") (EVar "e")) (EVar "env")) (EListLit (EVar "h") (EVar "t"))))
 (DFunDef false "bindPatStamps" ((PVar "e") (PVar "env") (PCon "PRec" PWild (PVar "fields") PWild)) (EApp (EApp (EApp (EVar "fold") (ELam ((PVar "acc") (PVar "f")) (EApp (EApp (EApp (EVar "bindFieldStamps") (EVar "e")) (EVar "acc")) (EVar "f")))) (EVar "env")) (EVar "fields")))
-(DFunDef false "bindPatStamps" (PWild (PVar "env") PWild) (EVar "env"))
+(DFunDef false "bindPatStamps" (PWild (PVar "env") (POr (PCon "PWild") (PCon "PLit" PWild) (PCon "POr" PWild) (PCon "PRng" PWild PWild PWild) (PCon "PAnn" PWild PWild))) (EVar "env"))
 (DTypeSig false "bindPatsStamps" (TyFun (TyCon "Emit") (TyFun (TyApp (TyCon "OrdMap") (TyTuple (TyCon "String") (TyCon "LTy"))) (TyFun (TyApp (TyCon "List") (TyCon "Pat")) (TyApp (TyCon "OrdMap") (TyTuple (TyCon "String") (TyCon "LTy")))))))
 (DFunDef false "bindPatsStamps" ((PVar "e") (PVar "env") (PVar "pats")) (EApp (EApp (EApp (EVar "fold") (ELam ((PVar "acc") (PVar "p")) (EApp (EApp (EApp (EVar "bindPatStamps") (EVar "e")) (EVar "acc")) (EVar "p")))) (EVar "env")) (EVar "pats")))
 (DTypeSig false "bindFieldStamps" (TyFun (TyCon "Emit") (TyFun (TyApp (TyCon "OrdMap") (TyTuple (TyCon "String") (TyCon "LTy"))) (TyFun (TyCon "RecPatField") (TyApp (TyCon "OrdMap") (TyTuple (TyCon "String") (TyCon "LTy")))))))
@@ -19352,7 +19353,7 @@ runtimeName e symbol = optionOr "" (externRuntimeKey e.externFacts symbol)
 (DTypeSig false "constFoldFloat" (TyFun (TyCon "CExpr") (TyApp (TyCon "Option") (TyCon "Float"))))
 (DFunDef false "constFoldFloat" ((PCon "CLit" (PCon "LFloat" (PVar "f")))) (EApp (EVar "Some") (EVar "f")))
 (DFunDef false "constFoldFloat" ((PCon "CBinPrim" (PVar "op") (PVar "l") (PVar "r") PWild PWild)) (EMatch (ETuple (EApp (EVar "constFoldFloat") (EVar "l")) (EApp (EVar "constFoldFloat") (EVar "r"))) (arm (PTuple (PCon "Some" (PVar "a")) (PCon "Some" (PVar "b"))) () (EApp (EApp (EApp (EVar "hostFloatOp") (EVar "op")) (EVar "a")) (EVar "b"))) (arm PWild () (EVar "None"))))
-(DFunDef false "constFoldFloat" (PWild) (EVar "None"))
+(DFunDef false "constFoldFloat" ((POr (PCon "CLit" PWild) (PCon "CVar" PWild PWild) (PCon "CApp" PWild PWild PWild) (PCon "CLam" PWild PWild) (PCon "CLet" PWild PWild PWild PWild) (PCon "CLetGroup" PWild PWild) (PCon "CMatch" PWild PWild) (PCon "CDecision" PWild PWild PWild) (PCon "CIf" PWild PWild PWild) (PCon "CUnOp" PWild PWild) (PCon "CTuple" PWild) (PCon "CList" PWild) (PCon "CRecord" PWild PWild) (PCon "CFieldAccess" PWild PWild PWild PWild) (PCon "CRecordUpdate" PWild PWild PWild) (PCon "CVariantUpdate" PWild PWild PWild) (PCon "CArray" PWild) (PCon "CRangeList" PWild PWild PWild) (PCon "CRangeArray" PWild PWild PWild) (PCon "CIndex" PWild PWild) (PCon "CSlice" PWild PWild PWild PWild) (PCon "CStringIndex" PWild PWild) (PCon "CStringSlice" PWild PWild PWild PWild) (PCon "CListIndex" PWild PWild) (PCon "CListSlice" PWild PWild PWild PWild) (PCon "CBlock" PWild) (PCon "CMethod" PWild PWild) (PCon "CDict" PWild PWild))) (EVar "None"))
 (DTypeSig false "hostFloatOp" (TyFun (TyCon "String") (TyFun (TyCon "Float") (TyFun (TyCon "Float") (TyApp (TyCon "Option") (TyCon "Float"))))))
 (DFunDef false "hostFloatOp" ((PLit (LString "+")) (PVar "a") (PVar "b")) (EApp (EVar "Some") (EBinOp "+" (EVar "a") (EVar "b"))))
 (DFunDef false "hostFloatOp" ((PLit (LString "-")) (PVar "a") (PVar "b")) (EApp (EVar "Some") (EBinOp "-" (EVar "a") (EVar "b"))))
@@ -20849,7 +20850,7 @@ runtimeName e symbol = optionOr "" (externRuntimeKey e.externFacts symbol)
 (DFunDef false "bindPatStamps" ((PVar "e") (PVar "env") (PCon "PList" (PVar "ps"))) (EApp (EApp (EApp (EVar "bindPatsStamps") (EVar "e")) (EVar "env")) (EVar "ps")))
 (DFunDef false "bindPatStamps" ((PVar "e") (PVar "env") (PCon "PCons" (PVar "h") (PVar "t"))) (EApp (EApp (EApp (EVar "bindPatsStamps") (EVar "e")) (EVar "env")) (EListLit (EVar "h") (EVar "t"))))
 (DFunDef false "bindPatStamps" ((PVar "e") (PVar "env") (PCon "PRec" PWild (PVar "fields") PWild)) (EApp (EApp (EApp (EMethodRef "fold") (ELam ((PVar "acc") (PVar "f")) (EApp (EApp (EApp (EVar "bindFieldStamps") (EVar "e")) (EVar "acc")) (EVar "f")))) (EVar "env")) (EVar "fields")))
-(DFunDef false "bindPatStamps" (PWild (PVar "env") PWild) (EVar "env"))
+(DFunDef false "bindPatStamps" (PWild (PVar "env") (POr (PCon "PWild") (PCon "PLit" PWild) (PCon "POr" PWild) (PCon "PRng" PWild PWild PWild) (PCon "PAnn" PWild PWild))) (EVar "env"))
 (DTypeSig false "bindPatsStamps" (TyFun (TyCon "Emit") (TyFun (TyApp (TyCon "OrdMap") (TyTuple (TyCon "String") (TyCon "LTy"))) (TyFun (TyApp (TyCon "List") (TyCon "Pat")) (TyApp (TyCon "OrdMap") (TyTuple (TyCon "String") (TyCon "LTy")))))))
 (DFunDef false "bindPatsStamps" ((PVar "e") (PVar "env") (PVar "pats")) (EApp (EApp (EApp (EMethodRef "fold") (ELam ((PVar "acc") (PVar "p")) (EApp (EApp (EApp (EVar "bindPatStamps") (EVar "e")) (EVar "acc")) (EVar "p")))) (EVar "env")) (EVar "pats")))
 (DTypeSig false "bindFieldStamps" (TyFun (TyCon "Emit") (TyFun (TyApp (TyCon "OrdMap") (TyTuple (TyCon "String") (TyCon "LTy"))) (TyFun (TyCon "RecPatField") (TyApp (TyCon "OrdMap") (TyTuple (TyCon "String") (TyCon "LTy")))))))

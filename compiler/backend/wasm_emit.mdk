@@ -2793,7 +2793,8 @@ mainBodyIsUnit prog cafs (CLet _ pat _ b) =
 mainBodyIsUnit prog cafs (CDecision _ arms _) = allArmsUnit prog cafs arms
 mainBodyIsUnit prog cafs (CMatch _ arms) = allArmsUnit prog cafs arms
 mainBodyIsUnit prog cafs (CBlock stmts) = blockTailIsUnit prog cafs stmts
-mainBodyIsUnit _ _ _ = False
+mainBodyIsUnit _ _ (CLit _ | CLam _ _ | CLetGroup _ _ | CIf _ _ _ | CBinPrim _ _ _ _ _ | CUnOp _ _ | CTuple _ | CList _ | CRecord _ _ | CFieldAccess _ _ _ _ | CRecordUpdate _ _ _ | CVariantUpdate _ _ _ | CArray _ | CRangeList _ _ _ | CRangeArray _ _ _ | CIndex _ _ | CSlice _ _ _ _ | CStringIndex _ _ | CStringSlice _ _ _ _ | CListIndex _ _ | CListSlice _ _ _ _ | CMethod _ _) =
+  False
 
 -- True iff every match/decision arm body is itself a Unit main body.  Empty ⇒ False
 -- (no leaves to prove Unit ⇒ don't suppress).
@@ -3958,7 +3959,7 @@ closedDictW prog (RKey tag reqs sups) =
 closedDictW _ RNone = Some "(ref.i31 (i32.const 0))"
 closedDictW _ (RLocal _ _) = Some "(ref.i31 (i32.const 0))"
 closedDictW _ (RScalar _) = Some "(ref.i31 (i32.const 0))"
-closedDictW _ _ = None
+closedDictW _ (RDict _ | RDictFwd _ | RProj _ _) = None
 
 -- the constant array of type [ty] holding [elements], each a folded expression
 constArrayW : String -> List String -> String
@@ -9208,7 +9209,14 @@ freeVarsExpr bound (CMethod _ (MethodEvidence _ _ route implRoutes methRoutes)) 
   freeGivens bound (route :: implRoutes ++ methRoutes)
 freeVarsExpr bound (CDict name routes) =
   (if omHasKey name bound then [] else [name]) ++ freeGivens bound routes
-freeVarsExpr _bound _ = []
+freeVarsExpr bound (CStringIndex e i) =
+  freeVarsExpr bound e ++ freeVarsExpr bound i
+freeVarsExpr bound (CStringSlice e lo hi _) =
+  freeVarsExpr bound e ++ freeVarsExpr bound lo ++ freeVarsExpr bound hi
+freeVarsExpr bound (CListIndex e i) =
+  freeVarsExpr bound e ++ freeVarsExpr bound i
+freeVarsExpr bound (CListSlice e lo hi _) =
+  freeVarsExpr bound e ++ freeVarsExpr bound lo ++ freeVarsExpr bound hi
 
 -- free vars of a CLetGroup binding's clauses (each clause's params are locally bound).
 freeVarsClauses : OrdMap Unit -> CBind -> List String
@@ -10513,7 +10521,15 @@ collectExprLocals (CLetGroup binds body) =
 -- a method dispatched on a projected super dictionary reads it through a local
 collectExprLocals (CMethod _ (MethodEvidence _ _ (RProj r path) _ _)) =
   [projLocalName r path]
-collectExprLocals _ = []
+collectExprLocals (CStringIndex base index) =
+  collectExprLocals base ++ collectExprLocals index
+collectExprLocals (CStringSlice base lo hi _) =
+  collectExprLocals base ++ collectExprLocals lo ++ collectExprLocals hi
+collectExprLocals (CListIndex base index) =
+  collectExprLocals base ++ collectExprLocals index
+collectExprLocals (CListSlice base lo hi _) =
+  collectExprLocals base ++ collectExprLocals lo ++ collectExprLocals hi
+collectExprLocals (CMethod _ _ | CLit _ | CVar _ _ | CLam _ _ | CDict _ _) = []
 
 collectFieldLocals : CField -> List String
 collectFieldLocals (CField _ _ value) = collectExprLocals value

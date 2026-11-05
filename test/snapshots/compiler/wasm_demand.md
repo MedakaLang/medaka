@@ -1,5 +1,5 @@
 # META
-source_lines=3075
+source_lines=3091
 stages=DESUGAR,MARK
 # SOURCE
 import backend.wasm_symbols.{WasmSymbol(..)}
@@ -341,7 +341,12 @@ dExpr sc acc (CMatch scrut arms) = walkEach (dArm sc) (dExpr sc acc scrut) arms
 dExpr sc acc (CLetGroup binds b) =
   let inner = { sc | locals = omFromNames (map bindName binds) sc.locals }
   dExpr inner (walkEach (dBind inner) acc binds) b
-dExpr _ acc _ = acc
+dExpr sc acc (CStringIndex a i) = dExpr sc (dExpr sc acc a) i
+dExpr sc acc (CStringSlice a lo hi _) =
+  dExpr sc (dExpr sc (dExpr sc acc a) lo) hi
+dExpr sc acc (CListIndex a i) = dExpr sc (dExpr sc acc a) i
+dExpr sc acc (CListSlice a lo hi _) = dExpr sc (dExpr sc (dExpr sc acc a) lo) hi
+dExpr _ acc (CLit _ | CMethod _ _ | CDict _ _) = acc
 
 -- an applied name: a local is a closure call, a `core__` function a call to it
 dAppHead : DemandScope -> DemandAcc -> CExpr -> DemandAcc
@@ -635,7 +640,8 @@ exprHasDecision (CUnOp _ a) = exprHasDecision a
 exprHasDecision (CApp f args _) =
   exprHasDecision f || anyList exprHasDecision args
 exprHasDecision (CBlock stmts) = anyList stmtHasDecision stmts
-exprHasDecision _ = False
+exprHasDecision (CLit _ | CVar _ _ | CLam _ _ | CLetGroup _ _ | CTuple _ | CList _ | CRecord _ _ | CFieldAccess _ _ _ _ | CRecordUpdate _ _ _ | CVariantUpdate _ _ _ | CArray _ | CRangeList _ _ _ | CRangeArray _ _ _ | CIndex _ _ | CSlice _ _ _ _ | CStringIndex _ _ | CStringSlice _ _ _ _ | CListIndex _ _ | CListSlice _ _ _ _ | CMethod _ _ | CDict _ _) =
+  False
 
 stmtHasDecision : CStmt -> Bool
 stmtHasDecision (CSExpr e) = exprHasDecision e
@@ -1616,7 +1622,16 @@ hExpr ctx refMode str acc env (CVariantUpdate _ x fs) =
     (a (CField _ _ e) => hExpr ctx refMode str a env e)
     (hExpr ctx refMode str acc env x)
     fs
-hExpr _ _ _ acc _ _ = acc
+hExpr ctx refMode str acc env (CStringIndex a i) =
+  fold (b x => hExpr ctx refMode str b env x) acc [a, i]
+hExpr ctx refMode str acc env (CStringSlice a lo hi _) =
+  fold (b x => hExpr ctx refMode str b env x) acc [a, lo, hi]
+hExpr ctx refMode str acc env (CListIndex a i) =
+  fold (b x => hExpr ctx refMode str b env x) acc [a, i]
+hExpr ctx refMode str acc env (CListSlice a lo hi _) =
+  fold (b x => hExpr ctx refMode str b env x) acc [a, lo, hi]
+hExpr ctx refMode str acc env (CUnOp _ x) = hExpr ctx refMode str acc env x
+hExpr _ _ _ acc _ (CLit _ | CMethod _ _ | CDict _ _) = acc
 
 externNeedsClosure : WasmTypeContext -> String -> Bool
 externNeedsClosure ctx symbol = match omLookup symbol ctx.externFacts
@@ -1710,7 +1725,7 @@ hTree refMode acc (CTGuard _ t) = hTree refMode acc t
 hTree refMode acc (CTDrop t) = hTree refMode acc t
 hTree refMode acc (CTSwitch branches dft) =
   hTree refMode (fold (hBranch refMode) acc branches) dft
-hTree _ acc _ = acc
+hTree _ acc (CTFail _ | CTLeaf _) = acc
 
 hBranch : Bool -> HelperAcc -> CTBranch -> HelperAcc
 hBranch refMode acc (CTBranch head tree) =
@@ -3071,7 +3086,8 @@ exprHasFallthrough (CLetGroup _ body) = exprHasFallthrough body
 exprHasFallthrough (CBlock stmts) = anyList stmtHasFallthrough stmts
 exprHasFallthrough (CDecision scrut arms _) =
   exprHasFallthrough scrut || anyList (a => exprHasFallthrough (armBody a)) arms
-exprHasFallthrough _ = False
+exprHasFallthrough (CLit _ | CLam _ _ | CMatch _ _ | CBinPrim _ _ _ _ _ | CUnOp _ _ | CTuple _ | CList _ | CRecord _ _ | CFieldAccess _ _ _ _ | CRecordUpdate _ _ _ | CVariantUpdate _ _ _ | CArray _ | CRangeList _ _ _ | CRangeArray _ _ _ | CIndex _ _ | CSlice _ _ _ _ | CStringIndex _ _ | CStringSlice _ _ _ _ | CListIndex _ _ | CListSlice _ _ _ _ | CMethod _ _ | CDict _ _) =
+  False
 
 stmtHasFallthrough : CStmt -> Bool
 stmtHasFallthrough (CSExpr e) = exprHasFallthrough e
@@ -3198,7 +3214,11 @@ stmtHasFallthrough (CSAssign _ e) = exprHasFallthrough e
 (DFunDef false "dExpr" ((PVar "sc") (PVar "acc") (PCon "CDecision" (PVar "scrut") (PVar "arms") (PVar "tree"))) (EApp (EApp (EVar "dTree") (EApp (EApp (EApp (EVar "walkEach") (EApp (EVar "dArm") (EVar "sc"))) (EApp (EApp (EApp (EVar "dExpr") (EVar "sc")) (EVar "acc")) (EVar "scrut"))) (EVar "arms"))) (EVar "tree")))
 (DFunDef false "dExpr" ((PVar "sc") (PVar "acc") (PCon "CMatch" (PVar "scrut") (PVar "arms"))) (EApp (EApp (EApp (EVar "walkEach") (EApp (EVar "dArm") (EVar "sc"))) (EApp (EApp (EApp (EVar "dExpr") (EVar "sc")) (EVar "acc")) (EVar "scrut"))) (EVar "arms")))
 (DFunDef false "dExpr" ((PVar "sc") (PVar "acc") (PCon "CLetGroup" (PVar "binds") (PVar "b"))) (EBlock (DoLet false false (PVar "inner") (ERecordUpdate (EVar "sc") ((fa "locals" (EApp (EApp (EVar "omFromNames") (EApp (EApp (EVar "map") (EVar "bindName")) (EVar "binds"))) (EFieldAccess (EVar "sc") "locals")))))) (DoExpr (EApp (EApp (EApp (EVar "dExpr") (EVar "inner")) (EApp (EApp (EApp (EVar "walkEach") (EApp (EVar "dBind") (EVar "inner"))) (EVar "acc")) (EVar "binds"))) (EVar "b")))))
-(DFunDef false "dExpr" (PWild (PVar "acc") PWild) (EVar "acc"))
+(DFunDef false "dExpr" ((PVar "sc") (PVar "acc") (PCon "CStringIndex" (PVar "a") (PVar "i"))) (EApp (EApp (EApp (EVar "dExpr") (EVar "sc")) (EApp (EApp (EApp (EVar "dExpr") (EVar "sc")) (EVar "acc")) (EVar "a"))) (EVar "i")))
+(DFunDef false "dExpr" ((PVar "sc") (PVar "acc") (PCon "CStringSlice" (PVar "a") (PVar "lo") (PVar "hi") PWild)) (EApp (EApp (EApp (EVar "dExpr") (EVar "sc")) (EApp (EApp (EApp (EVar "dExpr") (EVar "sc")) (EApp (EApp (EApp (EVar "dExpr") (EVar "sc")) (EVar "acc")) (EVar "a"))) (EVar "lo"))) (EVar "hi")))
+(DFunDef false "dExpr" ((PVar "sc") (PVar "acc") (PCon "CListIndex" (PVar "a") (PVar "i"))) (EApp (EApp (EApp (EVar "dExpr") (EVar "sc")) (EApp (EApp (EApp (EVar "dExpr") (EVar "sc")) (EVar "acc")) (EVar "a"))) (EVar "i")))
+(DFunDef false "dExpr" ((PVar "sc") (PVar "acc") (PCon "CListSlice" (PVar "a") (PVar "lo") (PVar "hi") PWild)) (EApp (EApp (EApp (EVar "dExpr") (EVar "sc")) (EApp (EApp (EApp (EVar "dExpr") (EVar "sc")) (EApp (EApp (EApp (EVar "dExpr") (EVar "sc")) (EVar "acc")) (EVar "a"))) (EVar "lo"))) (EVar "hi")))
+(DFunDef false "dExpr" (PWild (PVar "acc") (POr (PCon "CLit" PWild) (PCon "CMethod" PWild PWild) (PCon "CDict" PWild PWild))) (EVar "acc"))
 (DTypeSig false "dAppHead" (TyFun (TyCon "DemandScope") (TyFun (TyCon "DemandAcc") (TyFun (TyCon "CExpr") (TyCon "DemandAcc")))))
 (DFunDef false "dAppHead" ((PVar "sc") (PVar "acc") (PCon "CVar" (PVar "f") PWild)) (EIf (EBinOp "||" (EApp (EApp (EVar "isLocal") (EVar "sc")) (EVar "f")) (EBinOp "&&" (EApp (EVar "not") (EApp (EApp (EVar "omHasKey") (EVar "f")) (EFieldAccess (EVar "sc") "topFns"))) (EApp (EApp (EVar "isCoreFn") (EVar "sc")) (EVar "f")))) (EVar "acc") (EApp (EApp (EApp (EVar "noteExtern") (EVar "sc")) (EVar "acc")) (EVar "f"))))
 (DFunDef false "dAppHead" ((PVar "sc") (PVar "acc") (PVar "h")) (EApp (EApp (EApp (EVar "dExpr") (EVar "sc")) (EVar "acc")) (EVar "h")))
@@ -3333,7 +3353,7 @@ stmtHasFallthrough (CSAssign _ e) = exprHasFallthrough e
 (DFunDef false "exprHasDecision" ((PCon "CUnOp" PWild (PVar "a"))) (EApp (EVar "exprHasDecision") (EVar "a")))
 (DFunDef false "exprHasDecision" ((PCon "CApp" (PVar "f") (PVar "args") PWild)) (EBinOp "||" (EApp (EVar "exprHasDecision") (EVar "f")) (EApp (EApp (EVar "anyList") (EVar "exprHasDecision")) (EVar "args"))))
 (DFunDef false "exprHasDecision" ((PCon "CBlock" (PVar "stmts"))) (EApp (EApp (EVar "anyList") (EVar "stmtHasDecision")) (EVar "stmts")))
-(DFunDef false "exprHasDecision" (PWild) (EVar "False"))
+(DFunDef false "exprHasDecision" ((POr (PCon "CLit" PWild) (PCon "CVar" PWild PWild) (PCon "CLam" PWild PWild) (PCon "CLetGroup" PWild PWild) (PCon "CTuple" PWild) (PCon "CList" PWild) (PCon "CRecord" PWild PWild) (PCon "CFieldAccess" PWild PWild PWild PWild) (PCon "CRecordUpdate" PWild PWild PWild) (PCon "CVariantUpdate" PWild PWild PWild) (PCon "CArray" PWild) (PCon "CRangeList" PWild PWild PWild) (PCon "CRangeArray" PWild PWild PWild) (PCon "CIndex" PWild PWild) (PCon "CSlice" PWild PWild PWild PWild) (PCon "CStringIndex" PWild PWild) (PCon "CStringSlice" PWild PWild PWild PWild) (PCon "CListIndex" PWild PWild) (PCon "CListSlice" PWild PWild PWild PWild) (PCon "CMethod" PWild PWild) (PCon "CDict" PWild PWild))) (EVar "False"))
 (DTypeSig false "stmtHasDecision" (TyFun (TyCon "CStmt") (TyCon "Bool")))
 (DFunDef false "stmtHasDecision" ((PCon "CSExpr" (PVar "e"))) (EApp (EVar "exprHasDecision") (EVar "e")))
 (DFunDef false "stmtHasDecision" ((PCon "CSLet" PWild PWild (PVar "e"))) (EApp (EVar "exprHasDecision") (EVar "e")))
@@ -3531,7 +3551,12 @@ stmtHasFallthrough (CSAssign _ e) = exprHasFallthrough e
 (DFunDef false "hExpr" ((PVar "ctx") (PVar "refMode") (PVar "str") (PVar "acc") (PVar "env") (PCon "CFieldAccess" (PVar "x") PWild PWild PWild)) (EApp (EApp (EApp (EApp (EApp (EApp (EVar "hExpr") (EVar "ctx")) (EVar "refMode")) (EVar "str")) (EVar "acc")) (EVar "env")) (EVar "x")))
 (DFunDef false "hExpr" ((PVar "ctx") (PVar "refMode") (PVar "str") (PVar "acc") (PVar "env") (PCon "CRecordUpdate" PWild (PVar "x") (PVar "fs"))) (EApp (EApp (EApp (EVar "fold") (ELam ((PVar "a") (PCon "CField" PWild PWild (PVar "e"))) (EApp (EApp (EApp (EApp (EApp (EApp (EVar "hExpr") (EVar "ctx")) (EVar "refMode")) (EVar "str")) (EVar "a")) (EVar "env")) (EVar "e")))) (EApp (EApp (EApp (EApp (EApp (EApp (EVar "hExpr") (EVar "ctx")) (EVar "refMode")) (EVar "str")) (EVar "acc")) (EVar "env")) (EVar "x"))) (EVar "fs")))
 (DFunDef false "hExpr" ((PVar "ctx") (PVar "refMode") (PVar "str") (PVar "acc") (PVar "env") (PCon "CVariantUpdate" PWild (PVar "x") (PVar "fs"))) (EApp (EApp (EApp (EVar "fold") (ELam ((PVar "a") (PCon "CField" PWild PWild (PVar "e"))) (EApp (EApp (EApp (EApp (EApp (EApp (EVar "hExpr") (EVar "ctx")) (EVar "refMode")) (EVar "str")) (EVar "a")) (EVar "env")) (EVar "e")))) (EApp (EApp (EApp (EApp (EApp (EApp (EVar "hExpr") (EVar "ctx")) (EVar "refMode")) (EVar "str")) (EVar "acc")) (EVar "env")) (EVar "x"))) (EVar "fs")))
-(DFunDef false "hExpr" (PWild PWild PWild (PVar "acc") PWild PWild) (EVar "acc"))
+(DFunDef false "hExpr" ((PVar "ctx") (PVar "refMode") (PVar "str") (PVar "acc") (PVar "env") (PCon "CStringIndex" (PVar "a") (PVar "i"))) (EApp (EApp (EApp (EVar "fold") (ELam ((PVar "b") (PVar "x")) (EApp (EApp (EApp (EApp (EApp (EApp (EVar "hExpr") (EVar "ctx")) (EVar "refMode")) (EVar "str")) (EVar "b")) (EVar "env")) (EVar "x")))) (EVar "acc")) (EListLit (EVar "a") (EVar "i"))))
+(DFunDef false "hExpr" ((PVar "ctx") (PVar "refMode") (PVar "str") (PVar "acc") (PVar "env") (PCon "CStringSlice" (PVar "a") (PVar "lo") (PVar "hi") PWild)) (EApp (EApp (EApp (EVar "fold") (ELam ((PVar "b") (PVar "x")) (EApp (EApp (EApp (EApp (EApp (EApp (EVar "hExpr") (EVar "ctx")) (EVar "refMode")) (EVar "str")) (EVar "b")) (EVar "env")) (EVar "x")))) (EVar "acc")) (EListLit (EVar "a") (EVar "lo") (EVar "hi"))))
+(DFunDef false "hExpr" ((PVar "ctx") (PVar "refMode") (PVar "str") (PVar "acc") (PVar "env") (PCon "CListIndex" (PVar "a") (PVar "i"))) (EApp (EApp (EApp (EVar "fold") (ELam ((PVar "b") (PVar "x")) (EApp (EApp (EApp (EApp (EApp (EApp (EVar "hExpr") (EVar "ctx")) (EVar "refMode")) (EVar "str")) (EVar "b")) (EVar "env")) (EVar "x")))) (EVar "acc")) (EListLit (EVar "a") (EVar "i"))))
+(DFunDef false "hExpr" ((PVar "ctx") (PVar "refMode") (PVar "str") (PVar "acc") (PVar "env") (PCon "CListSlice" (PVar "a") (PVar "lo") (PVar "hi") PWild)) (EApp (EApp (EApp (EVar "fold") (ELam ((PVar "b") (PVar "x")) (EApp (EApp (EApp (EApp (EApp (EApp (EVar "hExpr") (EVar "ctx")) (EVar "refMode")) (EVar "str")) (EVar "b")) (EVar "env")) (EVar "x")))) (EVar "acc")) (EListLit (EVar "a") (EVar "lo") (EVar "hi"))))
+(DFunDef false "hExpr" ((PVar "ctx") (PVar "refMode") (PVar "str") (PVar "acc") (PVar "env") (PCon "CUnOp" PWild (PVar "x"))) (EApp (EApp (EApp (EApp (EApp (EApp (EVar "hExpr") (EVar "ctx")) (EVar "refMode")) (EVar "str")) (EVar "acc")) (EVar "env")) (EVar "x")))
+(DFunDef false "hExpr" (PWild PWild PWild (PVar "acc") PWild (POr (PCon "CLit" PWild) (PCon "CMethod" PWild PWild) (PCon "CDict" PWild PWild))) (EVar "acc"))
 (DTypeSig false "externNeedsClosure" (TyFun (TyCon "WasmTypeContext") (TyFun (TyCon "String") (TyCon "Bool"))))
 (DFunDef false "externNeedsClosure" ((PVar "ctx") (PVar "symbol")) (EMatch (EApp (EApp (EVar "omLookup") (EVar "symbol")) (EFieldAccess (EVar "ctx") "externFacts")) (arm (PCon "Some" (PVar "fact")) () (EMatch (ETuple (EApp (EApp (EVar "externRuntimeKey") (EFieldAccess (EVar "ctx") "externFacts")) (EVar "symbol")) (EFieldAccess (EVar "fact") "callableShape")) (arm (PTuple (PCon "Some" (PVar "key")) (PCon "Some" (PVar "shape"))) () (EBinOp "&&" (EBinOp ">" (EFieldAccess (EVar "shape") "loweredCoreArity") (ELit (LInt 0))) (EMatch (EApp (EVar "wasmFamily") (EVar "key")) (arm (PCon "Some" (PVar "family")) () (EApp (EVar "isWasmExternFamily") (EVar "family"))) (arm (PCon "None") () (EVar "False"))))) (arm (PTuple (PCon "None") PWild) () (EVar "True")) (arm PWild () (EVar "False")))) (arm (PCon "None") () (EVar "False"))))
 (DTypeSig false "hStmts" (TyFun (TyCon "WasmTypeContext") (TyFun (TyCon "Bool") (TyFun (TyCon "Bool") (TyFun (TyCon "HelperAcc") (TyFun (TyCon "Env") (TyFun (TyApp (TyCon "List") (TyCon "CStmt")) (TyCon "HelperAcc"))))))))
@@ -3551,7 +3576,7 @@ stmtHasFallthrough (CSAssign _ e) = exprHasFallthrough e
 (DFunDef false "hTree" ((PVar "refMode") (PVar "acc") (PCon "CTGuard" PWild (PVar "t"))) (EApp (EApp (EApp (EVar "hTree") (EVar "refMode")) (EVar "acc")) (EVar "t")))
 (DFunDef false "hTree" ((PVar "refMode") (PVar "acc") (PCon "CTDrop" (PVar "t"))) (EApp (EApp (EApp (EVar "hTree") (EVar "refMode")) (EVar "acc")) (EVar "t")))
 (DFunDef false "hTree" ((PVar "refMode") (PVar "acc") (PCon "CTSwitch" (PVar "branches") (PVar "dft"))) (EApp (EApp (EApp (EVar "hTree") (EVar "refMode")) (EApp (EApp (EApp (EVar "fold") (EApp (EVar "hBranch") (EVar "refMode"))) (EVar "acc")) (EVar "branches"))) (EVar "dft")))
-(DFunDef false "hTree" (PWild (PVar "acc") PWild) (EVar "acc"))
+(DFunDef false "hTree" (PWild (PVar "acc") (POr (PCon "CTFail" PWild) (PCon "CTLeaf" PWild))) (EVar "acc"))
 (DTypeSig false "hBranch" (TyFun (TyCon "Bool") (TyFun (TyCon "HelperAcc") (TyFun (TyCon "CTBranch") (TyCon "HelperAcc")))))
 (DFunDef false "hBranch" ((PVar "refMode") (PVar "acc") (PCon "CTBranch" (PVar "head") (PVar "tree"))) (EBlock (DoLet false false (PVar "acc") (EMatch (EVar "head") (arm (PCon "HLit" (PVar "lit")) () (EApp (EApp (EApp (EVar "hPat") (EVar "refMode")) (EVar "acc")) (EApp (EVar "PLit") (EVar "lit")))) (arm (PCon "HCons") () (ERecordUpdate (EVar "acc") ((fa "patternList" (EVar "True"))))) (arm (PCon "HNil") () (ERecordUpdate (EVar "acc") ((fa "patternList" (EVar "True"))))) (arm (PCon "HTuple" (PVar "n")) () (ERecordUpdate (EVar "acc") ((fa "patternTuples" (EApp (EApp (EApp (EVar "omInsert") (EApp (EVar "intToString") (EVar "n"))) (EVar "n")) (EFieldAccess (EVar "acc") "patternTuples")))))) (arm PWild () (EVar "acc")))) (DoExpr (EApp (EApp (EApp (EVar "hTree") (EVar "refMode")) (EVar "acc")) (EVar "tree")))))
 (DTypeSig false "locatedTrap" (TyFun (TyCon "HelperAcc") (TyFun (TyCon "Loc") (TyCon "HelperAcc"))))
@@ -4040,7 +4065,7 @@ stmtHasFallthrough (CSAssign _ e) = exprHasFallthrough e
 (DFunDef false "exprHasFallthrough" ((PCon "CLetGroup" PWild (PVar "body"))) (EApp (EVar "exprHasFallthrough") (EVar "body")))
 (DFunDef false "exprHasFallthrough" ((PCon "CBlock" (PVar "stmts"))) (EApp (EApp (EVar "anyList") (EVar "stmtHasFallthrough")) (EVar "stmts")))
 (DFunDef false "exprHasFallthrough" ((PCon "CDecision" (PVar "scrut") (PVar "arms") PWild)) (EBinOp "||" (EApp (EVar "exprHasFallthrough") (EVar "scrut")) (EApp (EApp (EVar "anyList") (ELam ((PVar "a")) (EApp (EVar "exprHasFallthrough") (EApp (EVar "armBody") (EVar "a"))))) (EVar "arms"))))
-(DFunDef false "exprHasFallthrough" (PWild) (EVar "False"))
+(DFunDef false "exprHasFallthrough" ((POr (PCon "CLit" PWild) (PCon "CLam" PWild PWild) (PCon "CMatch" PWild PWild) (PCon "CBinPrim" PWild PWild PWild PWild PWild) (PCon "CUnOp" PWild PWild) (PCon "CTuple" PWild) (PCon "CList" PWild) (PCon "CRecord" PWild PWild) (PCon "CFieldAccess" PWild PWild PWild PWild) (PCon "CRecordUpdate" PWild PWild PWild) (PCon "CVariantUpdate" PWild PWild PWild) (PCon "CArray" PWild) (PCon "CRangeList" PWild PWild PWild) (PCon "CRangeArray" PWild PWild PWild) (PCon "CIndex" PWild PWild) (PCon "CSlice" PWild PWild PWild PWild) (PCon "CStringIndex" PWild PWild) (PCon "CStringSlice" PWild PWild PWild PWild) (PCon "CListIndex" PWild PWild) (PCon "CListSlice" PWild PWild PWild PWild) (PCon "CMethod" PWild PWild) (PCon "CDict" PWild PWild))) (EVar "False"))
 (DTypeSig false "stmtHasFallthrough" (TyFun (TyCon "CStmt") (TyCon "Bool")))
 (DFunDef false "stmtHasFallthrough" ((PCon "CSExpr" (PVar "e"))) (EApp (EVar "exprHasFallthrough") (EVar "e")))
 (DFunDef false "stmtHasFallthrough" ((PCon "CSLet" PWild PWild (PVar "e"))) (EApp (EVar "exprHasFallthrough") (EVar "e")))
@@ -4166,7 +4191,11 @@ stmtHasFallthrough (CSAssign _ e) = exprHasFallthrough e
 (DFunDef false "dExpr" ((PVar "sc") (PVar "acc") (PCon "CDecision" (PVar "scrut") (PVar "arms") (PVar "tree"))) (EApp (EApp (EVar "dTree") (EApp (EApp (EApp (EVar "walkEach") (EApp (EVar "dArm") (EVar "sc"))) (EApp (EApp (EApp (EVar "dExpr") (EVar "sc")) (EVar "acc")) (EVar "scrut"))) (EVar "arms"))) (EVar "tree")))
 (DFunDef false "dExpr" ((PVar "sc") (PVar "acc") (PCon "CMatch" (PVar "scrut") (PVar "arms"))) (EApp (EApp (EApp (EVar "walkEach") (EApp (EVar "dArm") (EVar "sc"))) (EApp (EApp (EApp (EVar "dExpr") (EVar "sc")) (EVar "acc")) (EVar "scrut"))) (EVar "arms")))
 (DFunDef false "dExpr" ((PVar "sc") (PVar "acc") (PCon "CLetGroup" (PVar "binds") (PVar "b"))) (EBlock (DoLet false false (PVar "inner") (ERecordUpdate (EVar "sc") ((fa "locals" (EApp (EApp (EVar "omFromNames") (EApp (EApp (EMethodRef "map") (EVar "bindName")) (EVar "binds"))) (EFieldAccess (EVar "sc") "locals")))))) (DoExpr (EApp (EApp (EApp (EVar "dExpr") (EVar "inner")) (EApp (EApp (EApp (EVar "walkEach") (EApp (EVar "dBind") (EVar "inner"))) (EVar "acc")) (EVar "binds"))) (EVar "b")))))
-(DFunDef false "dExpr" (PWild (PVar "acc") PWild) (EVar "acc"))
+(DFunDef false "dExpr" ((PVar "sc") (PVar "acc") (PCon "CStringIndex" (PVar "a") (PVar "i"))) (EApp (EApp (EApp (EVar "dExpr") (EVar "sc")) (EApp (EApp (EApp (EVar "dExpr") (EVar "sc")) (EVar "acc")) (EVar "a"))) (EVar "i")))
+(DFunDef false "dExpr" ((PVar "sc") (PVar "acc") (PCon "CStringSlice" (PVar "a") (PVar "lo") (PVar "hi") PWild)) (EApp (EApp (EApp (EVar "dExpr") (EVar "sc")) (EApp (EApp (EApp (EVar "dExpr") (EVar "sc")) (EApp (EApp (EApp (EVar "dExpr") (EVar "sc")) (EVar "acc")) (EVar "a"))) (EVar "lo"))) (EVar "hi")))
+(DFunDef false "dExpr" ((PVar "sc") (PVar "acc") (PCon "CListIndex" (PVar "a") (PVar "i"))) (EApp (EApp (EApp (EVar "dExpr") (EVar "sc")) (EApp (EApp (EApp (EVar "dExpr") (EVar "sc")) (EVar "acc")) (EVar "a"))) (EVar "i")))
+(DFunDef false "dExpr" ((PVar "sc") (PVar "acc") (PCon "CListSlice" (PVar "a") (PVar "lo") (PVar "hi") PWild)) (EApp (EApp (EApp (EVar "dExpr") (EVar "sc")) (EApp (EApp (EApp (EVar "dExpr") (EVar "sc")) (EApp (EApp (EApp (EVar "dExpr") (EVar "sc")) (EVar "acc")) (EVar "a"))) (EVar "lo"))) (EVar "hi")))
+(DFunDef false "dExpr" (PWild (PVar "acc") (POr (PCon "CLit" PWild) (PCon "CMethod" PWild PWild) (PCon "CDict" PWild PWild))) (EVar "acc"))
 (DTypeSig false "dAppHead" (TyFun (TyCon "DemandScope") (TyFun (TyCon "DemandAcc") (TyFun (TyCon "CExpr") (TyCon "DemandAcc")))))
 (DFunDef false "dAppHead" ((PVar "sc") (PVar "acc") (PCon "CVar" (PVar "f") PWild)) (EIf (EBinOp "||" (EApp (EApp (EVar "isLocal") (EVar "sc")) (EVar "f")) (EBinOp "&&" (EApp (EVar "not") (EApp (EApp (EVar "omHasKey") (EVar "f")) (EFieldAccess (EVar "sc") "topFns"))) (EApp (EApp (EVar "isCoreFn") (EVar "sc")) (EVar "f")))) (EVar "acc") (EApp (EApp (EApp (EVar "noteExtern") (EVar "sc")) (EVar "acc")) (EVar "f"))))
 (DFunDef false "dAppHead" ((PVar "sc") (PVar "acc") (PVar "h")) (EApp (EApp (EApp (EVar "dExpr") (EVar "sc")) (EVar "acc")) (EVar "h")))
@@ -4301,7 +4330,7 @@ stmtHasFallthrough (CSAssign _ e) = exprHasFallthrough e
 (DFunDef false "exprHasDecision" ((PCon "CUnOp" PWild (PVar "a"))) (EApp (EVar "exprHasDecision") (EVar "a")))
 (DFunDef false "exprHasDecision" ((PCon "CApp" (PVar "f") (PVar "args") PWild)) (EBinOp "||" (EApp (EVar "exprHasDecision") (EVar "f")) (EApp (EApp (EVar "anyList") (EVar "exprHasDecision")) (EVar "args"))))
 (DFunDef false "exprHasDecision" ((PCon "CBlock" (PVar "stmts"))) (EApp (EApp (EVar "anyList") (EVar "stmtHasDecision")) (EVar "stmts")))
-(DFunDef false "exprHasDecision" (PWild) (EVar "False"))
+(DFunDef false "exprHasDecision" ((POr (PCon "CLit" PWild) (PCon "CVar" PWild PWild) (PCon "CLam" PWild PWild) (PCon "CLetGroup" PWild PWild) (PCon "CTuple" PWild) (PCon "CList" PWild) (PCon "CRecord" PWild PWild) (PCon "CFieldAccess" PWild PWild PWild PWild) (PCon "CRecordUpdate" PWild PWild PWild) (PCon "CVariantUpdate" PWild PWild PWild) (PCon "CArray" PWild) (PCon "CRangeList" PWild PWild PWild) (PCon "CRangeArray" PWild PWild PWild) (PCon "CIndex" PWild PWild) (PCon "CSlice" PWild PWild PWild PWild) (PCon "CStringIndex" PWild PWild) (PCon "CStringSlice" PWild PWild PWild PWild) (PCon "CListIndex" PWild PWild) (PCon "CListSlice" PWild PWild PWild PWild) (PCon "CMethod" PWild PWild) (PCon "CDict" PWild PWild))) (EVar "False"))
 (DTypeSig false "stmtHasDecision" (TyFun (TyCon "CStmt") (TyCon "Bool")))
 (DFunDef false "stmtHasDecision" ((PCon "CSExpr" (PVar "e"))) (EApp (EVar "exprHasDecision") (EVar "e")))
 (DFunDef false "stmtHasDecision" ((PCon "CSLet" PWild PWild (PVar "e"))) (EApp (EVar "exprHasDecision") (EVar "e")))
@@ -4499,7 +4528,12 @@ stmtHasFallthrough (CSAssign _ e) = exprHasFallthrough e
 (DFunDef false "hExpr" ((PVar "ctx") (PVar "refMode") (PVar "str") (PVar "acc") (PVar "env") (PCon "CFieldAccess" (PVar "x") PWild PWild PWild)) (EApp (EApp (EApp (EApp (EApp (EApp (EVar "hExpr") (EVar "ctx")) (EVar "refMode")) (EVar "str")) (EVar "acc")) (EVar "env")) (EVar "x")))
 (DFunDef false "hExpr" ((PVar "ctx") (PVar "refMode") (PVar "str") (PVar "acc") (PVar "env") (PCon "CRecordUpdate" PWild (PVar "x") (PVar "fs"))) (EApp (EApp (EApp (EMethodRef "fold") (ELam ((PVar "a") (PCon "CField" PWild PWild (PVar "e"))) (EApp (EApp (EApp (EApp (EApp (EApp (EVar "hExpr") (EVar "ctx")) (EVar "refMode")) (EVar "str")) (EVar "a")) (EVar "env")) (EVar "e")))) (EApp (EApp (EApp (EApp (EApp (EApp (EVar "hExpr") (EVar "ctx")) (EVar "refMode")) (EVar "str")) (EVar "acc")) (EVar "env")) (EVar "x"))) (EVar "fs")))
 (DFunDef false "hExpr" ((PVar "ctx") (PVar "refMode") (PVar "str") (PVar "acc") (PVar "env") (PCon "CVariantUpdate" PWild (PVar "x") (PVar "fs"))) (EApp (EApp (EApp (EMethodRef "fold") (ELam ((PVar "a") (PCon "CField" PWild PWild (PVar "e"))) (EApp (EApp (EApp (EApp (EApp (EApp (EVar "hExpr") (EVar "ctx")) (EVar "refMode")) (EVar "str")) (EVar "a")) (EVar "env")) (EVar "e")))) (EApp (EApp (EApp (EApp (EApp (EApp (EVar "hExpr") (EVar "ctx")) (EVar "refMode")) (EVar "str")) (EVar "acc")) (EVar "env")) (EVar "x"))) (EVar "fs")))
-(DFunDef false "hExpr" (PWild PWild PWild (PVar "acc") PWild PWild) (EVar "acc"))
+(DFunDef false "hExpr" ((PVar "ctx") (PVar "refMode") (PVar "str") (PVar "acc") (PVar "env") (PCon "CStringIndex" (PVar "a") (PVar "i"))) (EApp (EApp (EApp (EMethodRef "fold") (ELam ((PVar "b") (PVar "x")) (EApp (EApp (EApp (EApp (EApp (EApp (EVar "hExpr") (EVar "ctx")) (EVar "refMode")) (EVar "str")) (EVar "b")) (EVar "env")) (EVar "x")))) (EVar "acc")) (EListLit (EVar "a") (EVar "i"))))
+(DFunDef false "hExpr" ((PVar "ctx") (PVar "refMode") (PVar "str") (PVar "acc") (PVar "env") (PCon "CStringSlice" (PVar "a") (PVar "lo") (PVar "hi") PWild)) (EApp (EApp (EApp (EMethodRef "fold") (ELam ((PVar "b") (PVar "x")) (EApp (EApp (EApp (EApp (EApp (EApp (EVar "hExpr") (EVar "ctx")) (EVar "refMode")) (EVar "str")) (EVar "b")) (EVar "env")) (EVar "x")))) (EVar "acc")) (EListLit (EVar "a") (EVar "lo") (EVar "hi"))))
+(DFunDef false "hExpr" ((PVar "ctx") (PVar "refMode") (PVar "str") (PVar "acc") (PVar "env") (PCon "CListIndex" (PVar "a") (PVar "i"))) (EApp (EApp (EApp (EMethodRef "fold") (ELam ((PVar "b") (PVar "x")) (EApp (EApp (EApp (EApp (EApp (EApp (EVar "hExpr") (EVar "ctx")) (EVar "refMode")) (EVar "str")) (EVar "b")) (EVar "env")) (EVar "x")))) (EVar "acc")) (EListLit (EVar "a") (EVar "i"))))
+(DFunDef false "hExpr" ((PVar "ctx") (PVar "refMode") (PVar "str") (PVar "acc") (PVar "env") (PCon "CListSlice" (PVar "a") (PVar "lo") (PVar "hi") PWild)) (EApp (EApp (EApp (EMethodRef "fold") (ELam ((PVar "b") (PVar "x")) (EApp (EApp (EApp (EApp (EApp (EApp (EVar "hExpr") (EVar "ctx")) (EVar "refMode")) (EVar "str")) (EVar "b")) (EVar "env")) (EVar "x")))) (EVar "acc")) (EListLit (EVar "a") (EVar "lo") (EVar "hi"))))
+(DFunDef false "hExpr" ((PVar "ctx") (PVar "refMode") (PVar "str") (PVar "acc") (PVar "env") (PCon "CUnOp" PWild (PVar "x"))) (EApp (EApp (EApp (EApp (EApp (EApp (EVar "hExpr") (EVar "ctx")) (EVar "refMode")) (EVar "str")) (EVar "acc")) (EVar "env")) (EVar "x")))
+(DFunDef false "hExpr" (PWild PWild PWild (PVar "acc") PWild (POr (PCon "CLit" PWild) (PCon "CMethod" PWild PWild) (PCon "CDict" PWild PWild))) (EVar "acc"))
 (DTypeSig false "externNeedsClosure" (TyFun (TyCon "WasmTypeContext") (TyFun (TyCon "String") (TyCon "Bool"))))
 (DFunDef false "externNeedsClosure" ((PVar "ctx") (PVar "symbol")) (EMatch (EApp (EApp (EVar "omLookup") (EVar "symbol")) (EFieldAccess (EVar "ctx") "externFacts")) (arm (PCon "Some" (PVar "fact")) () (EMatch (ETuple (EApp (EApp (EVar "externRuntimeKey") (EFieldAccess (EVar "ctx") "externFacts")) (EVar "symbol")) (EFieldAccess (EVar "fact") "callableShape")) (arm (PTuple (PCon "Some" (PVar "key")) (PCon "Some" (PVar "shape"))) () (EBinOp "&&" (EBinOp ">" (EFieldAccess (EVar "shape") "loweredCoreArity") (ELit (LInt 0))) (EMatch (EApp (EVar "wasmFamily") (EVar "key")) (arm (PCon "Some" (PVar "family")) () (EApp (EVar "isWasmExternFamily") (EVar "family"))) (arm (PCon "None") () (EVar "False"))))) (arm (PTuple (PCon "None") PWild) () (EVar "True")) (arm PWild () (EVar "False")))) (arm (PCon "None") () (EVar "False"))))
 (DTypeSig false "hStmts" (TyFun (TyCon "WasmTypeContext") (TyFun (TyCon "Bool") (TyFun (TyCon "Bool") (TyFun (TyCon "HelperAcc") (TyFun (TyCon "Env") (TyFun (TyApp (TyCon "List") (TyCon "CStmt")) (TyCon "HelperAcc"))))))))
@@ -4519,7 +4553,7 @@ stmtHasFallthrough (CSAssign _ e) = exprHasFallthrough e
 (DFunDef false "hTree" ((PVar "refMode") (PVar "acc") (PCon "CTGuard" PWild (PVar "t"))) (EApp (EApp (EApp (EVar "hTree") (EVar "refMode")) (EVar "acc")) (EVar "t")))
 (DFunDef false "hTree" ((PVar "refMode") (PVar "acc") (PCon "CTDrop" (PVar "t"))) (EApp (EApp (EApp (EVar "hTree") (EVar "refMode")) (EVar "acc")) (EVar "t")))
 (DFunDef false "hTree" ((PVar "refMode") (PVar "acc") (PCon "CTSwitch" (PVar "branches") (PVar "dft"))) (EApp (EApp (EApp (EVar "hTree") (EVar "refMode")) (EApp (EApp (EApp (EMethodRef "fold") (EApp (EVar "hBranch") (EVar "refMode"))) (EVar "acc")) (EVar "branches"))) (EVar "dft")))
-(DFunDef false "hTree" (PWild (PVar "acc") PWild) (EVar "acc"))
+(DFunDef false "hTree" (PWild (PVar "acc") (POr (PCon "CTFail" PWild) (PCon "CTLeaf" PWild))) (EVar "acc"))
 (DTypeSig false "hBranch" (TyFun (TyCon "Bool") (TyFun (TyCon "HelperAcc") (TyFun (TyCon "CTBranch") (TyCon "HelperAcc")))))
 (DFunDef false "hBranch" ((PVar "refMode") (PVar "acc") (PCon "CTBranch" (PVar "head") (PVar "tree"))) (EBlock (DoLet false false (PVar "acc") (EMatch (EVar "head") (arm (PCon "HLit" (PVar "lit")) () (EApp (EApp (EApp (EVar "hPat") (EVar "refMode")) (EVar "acc")) (EApp (EVar "PLit") (EVar "lit")))) (arm (PCon "HCons") () (ERecordUpdate (EVar "acc") ((fa "patternList" (EVar "True"))))) (arm (PCon "HNil") () (ERecordUpdate (EVar "acc") ((fa "patternList" (EVar "True"))))) (arm (PCon "HTuple" (PVar "n")) () (ERecordUpdate (EVar "acc") ((fa "patternTuples" (EApp (EApp (EApp (EVar "omInsert") (EApp (EVar "intToString") (EVar "n"))) (EVar "n")) (EFieldAccess (EVar "acc") "patternTuples")))))) (arm PWild () (EVar "acc")))) (DoExpr (EApp (EApp (EApp (EVar "hTree") (EVar "refMode")) (EVar "acc")) (EVar "tree")))))
 (DTypeSig false "locatedTrap" (TyFun (TyCon "HelperAcc") (TyFun (TyCon "Loc") (TyCon "HelperAcc"))))
@@ -5008,7 +5042,7 @@ stmtHasFallthrough (CSAssign _ e) = exprHasFallthrough e
 (DFunDef false "exprHasFallthrough" ((PCon "CLetGroup" PWild (PVar "body"))) (EApp (EVar "exprHasFallthrough") (EVar "body")))
 (DFunDef false "exprHasFallthrough" ((PCon "CBlock" (PVar "stmts"))) (EApp (EApp (EVar "anyList") (EVar "stmtHasFallthrough")) (EVar "stmts")))
 (DFunDef false "exprHasFallthrough" ((PCon "CDecision" (PVar "scrut") (PVar "arms") PWild)) (EBinOp "||" (EApp (EVar "exprHasFallthrough") (EVar "scrut")) (EApp (EApp (EVar "anyList") (ELam ((PVar "a")) (EApp (EVar "exprHasFallthrough") (EApp (EVar "armBody") (EVar "a"))))) (EVar "arms"))))
-(DFunDef false "exprHasFallthrough" (PWild) (EVar "False"))
+(DFunDef false "exprHasFallthrough" ((POr (PCon "CLit" PWild) (PCon "CLam" PWild PWild) (PCon "CMatch" PWild PWild) (PCon "CBinPrim" PWild PWild PWild PWild PWild) (PCon "CUnOp" PWild PWild) (PCon "CTuple" PWild) (PCon "CList" PWild) (PCon "CRecord" PWild PWild) (PCon "CFieldAccess" PWild PWild PWild PWild) (PCon "CRecordUpdate" PWild PWild PWild) (PCon "CVariantUpdate" PWild PWild PWild) (PCon "CArray" PWild) (PCon "CRangeList" PWild PWild PWild) (PCon "CRangeArray" PWild PWild PWild) (PCon "CIndex" PWild PWild) (PCon "CSlice" PWild PWild PWild PWild) (PCon "CStringIndex" PWild PWild) (PCon "CStringSlice" PWild PWild PWild PWild) (PCon "CListIndex" PWild PWild) (PCon "CListSlice" PWild PWild PWild PWild) (PCon "CMethod" PWild PWild) (PCon "CDict" PWild PWild))) (EVar "False"))
 (DTypeSig false "stmtHasFallthrough" (TyFun (TyCon "CStmt") (TyCon "Bool")))
 (DFunDef false "stmtHasFallthrough" ((PCon "CSExpr" (PVar "e"))) (EApp (EVar "exprHasFallthrough") (EVar "e")))
 (DFunDef false "stmtHasFallthrough" ((PCon "CSLet" PWild PWild (PVar "e"))) (EApp (EVar "exprHasFallthrough") (EVar "e")))

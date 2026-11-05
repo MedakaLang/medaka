@@ -959,7 +959,7 @@ routeProjectionFaults bound (RKey _ reqs sups) =
   flatMap (routeProjectionFaults bound) (reqs ++ sups)
 routeProjectionFaults bound (RLocal _ ds) =
   flatMap (routeProjectionFaults bound) ds
-routeProjectionFaults _ _ = []
+routeProjectionFaults _ (RNone | RDict _ | RDictFwd _ | RScalar _) = []
 
 rootProjectionFaults : ProjBound -> Route -> List Int -> List String
 rootProjectionFaults (ProjBound recv limit cap) (RDict d) (i :: rest) =
@@ -1212,7 +1212,7 @@ builtDictFaults facts (RKey key reqs sups) =
     ++ flatMap (builtDictFaults facts) (reqs ++ sups)
 builtDictFaults facts (RLocal _ ds) = flatMap (builtDictFaults facts) ds
 builtDictFaults facts (RProj r _) = builtDictFaults facts r
-builtDictFaults _ _ = []
+builtDictFaults _ (RNone | RDict _ | RDictFwd _ | RScalar _) = []
 
 -- An occurrence answered by a dictionary names the interface whose method it is.
 ifaceWordFaults : String -> Route -> List String
@@ -1256,7 +1256,7 @@ routeShapeFaults (RProj r _) =
     ++ routeShapeFaults r
 routeShapeFaults (RKey _ reqs sups) = flatMap routeShapeFaults (reqs ++ sups)
 routeShapeFaults (RLocal _ ds) = flatMap routeShapeFaults ds
-routeShapeFaults _ = []
+routeShapeFaults (RNone | RDict _ | RDictFwd _) = []
 
 -- Stricter than core_ir.isGivenRooted, which accepts any projection: a projection
 -- is rooted only when the route it projects from is.

@@ -107,7 +107,7 @@ eagerVars b (CSlice a lo hi _) =
 -- a `CDict` head is a saturated call to the named top-level function — an eager
 -- callee edge (the routes it carries hold no CExpr, so nothing to descend).
 eagerVars b (CDict name _) = if omHasKey name b then [] else [name]
-eagerVars _ _ = []
+eagerVars _ (CMethod _ _) = []
 
 eagerVarsList : OrdMap Unit -> List CExpr -> List String
 eagerVarsList _ [] = []
@@ -641,7 +641,8 @@ labelFallthrough (CDecision scrut arms tree) label =
     (labelFallthrough scrut label)
     (map (a => labelFallthroughArm a label) arms)
     tree
-labelFallthrough e _ = e
+labelFallthrough (e@(CLit _ | CLam _ _ | CMatch _ _ | CBinPrim _ _ _ _ _ | CUnOp _ _ | CTuple _ | CList _ | CRecord _ _ | CFieldAccess _ _ _ _ | CRecordUpdate _ _ _ | CVariantUpdate _ _ _ | CArray _ | CRangeList _ _ _ | CRangeArray _ _ _ | CIndex _ _ | CSlice _ _ _ _ | CStringIndex _ _ | CStringSlice _ _ _ _ | CListIndex _ _ | CListSlice _ _ _ _ | CMethod _ _ | CDict _ _)) _ =
+  e
 
 labelFallthroughStmt : CStmt -> String -> CStmt
 labelFallthroughStmt (CSExpr e) label = CSExpr (labelFallthrough e label)

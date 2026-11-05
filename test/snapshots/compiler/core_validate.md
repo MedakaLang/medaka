@@ -963,7 +963,7 @@ routeProjectionFaults bound (RKey _ reqs sups) =
   flatMap (routeProjectionFaults bound) (reqs ++ sups)
 routeProjectionFaults bound (RLocal _ ds) =
   flatMap (routeProjectionFaults bound) ds
-routeProjectionFaults _ _ = []
+routeProjectionFaults _ (RNone | RDict _ | RDictFwd _ | RScalar _) = []
 
 rootProjectionFaults : ProjBound -> Route -> List Int -> List String
 rootProjectionFaults (ProjBound recv limit cap) (RDict d) (i :: rest) =
@@ -1216,7 +1216,7 @@ builtDictFaults facts (RKey key reqs sups) =
     ++ flatMap (builtDictFaults facts) (reqs ++ sups)
 builtDictFaults facts (RLocal _ ds) = flatMap (builtDictFaults facts) ds
 builtDictFaults facts (RProj r _) = builtDictFaults facts r
-builtDictFaults _ _ = []
+builtDictFaults _ (RNone | RDict _ | RDictFwd _ | RScalar _) = []
 
 -- An occurrence answered by a dictionary names the interface whose method it is.
 ifaceWordFaults : String -> Route -> List String
@@ -1260,7 +1260,7 @@ routeShapeFaults (RProj r _) =
     ++ routeShapeFaults r
 routeShapeFaults (RKey _ reqs sups) = flatMap routeShapeFaults (reqs ++ sups)
 routeShapeFaults (RLocal _ ds) = flatMap routeShapeFaults ds
-routeShapeFaults _ = []
+routeShapeFaults (RNone | RDict _ | RDictFwd _) = []
 
 -- Stricter than core_ir.isGivenRooted, which accepts any projection: a projection
 -- is rooted only when the route it projects from is.
@@ -2031,7 +2031,7 @@ validatePhysicalDemand _ _ _ = []
 (DFunDef false "routeProjectionFaults" ((PVar "bound") (PCon "RProj" (PVar "r") (PVar "path"))) (EBinOp "++" (EApp (EApp (EApp (EVar "rootProjectionFaults") (EVar "bound")) (EVar "r")) (EVar "path")) (EApp (EApp (EVar "routeProjectionFaults") (EVar "bound")) (EVar "r"))))
 (DFunDef false "routeProjectionFaults" ((PVar "bound") (PCon "RKey" PWild (PVar "reqs") (PVar "sups"))) (EApp (EApp (EVar "flatMap") (EApp (EVar "routeProjectionFaults") (EVar "bound"))) (EBinOp "++" (EVar "reqs") (EVar "sups"))))
 (DFunDef false "routeProjectionFaults" ((PVar "bound") (PCon "RLocal" PWild (PVar "ds"))) (EApp (EApp (EVar "flatMap") (EApp (EVar "routeProjectionFaults") (EVar "bound"))) (EVar "ds")))
-(DFunDef false "routeProjectionFaults" (PWild PWild) (EListLit))
+(DFunDef false "routeProjectionFaults" (PWild (POr (PCon "RNone") (PCon "RDict" PWild) (PCon "RDictFwd" PWild) (PCon "RScalar" PWild))) (EListLit))
 (DTypeSig false "rootProjectionFaults" (TyFun (TyCon "ProjBound") (TyFun (TyCon "Route") (TyFun (TyApp (TyCon "List") (TyCon "Int")) (TyApp (TyCon "List") (TyCon "String"))))))
 (DFunDef false "rootProjectionFaults" ((PCon "ProjBound" (PVar "recv") (PVar "limit") (PVar "cap")) (PCon "RDict" (PVar "d")) (PCons (PVar "i") (PVar "rest"))) (EBinOp "++" (EApp (EApp (EApp (EVar "projectionIndexFaults") (EIf (EBinOp "==" (EVar "d") (EVar "recv")) (EVar "limit") (EVar "cap"))) (EVar "d")) (EVar "i")) (EApp (EApp (EVar "flatMap") (EApp (EApp (EVar "projectionIndexFaults") (EVar "cap")) (EVar "d"))) (EVar "rest"))))
 (DFunDef false "rootProjectionFaults" ((PCon "ProjBound" (PVar "recv") (PVar "limit") (PVar "cap")) (PCon "RDictFwd" (PVar "d")) (PCons (PVar "i") (PVar "rest"))) (EBinOp "++" (EApp (EApp (EApp (EVar "projectionIndexFaults") (EIf (EBinOp "==" (EVar "d") (EVar "recv")) (EVar "limit") (EVar "cap"))) (EVar "d")) (EVar "i")) (EApp (EApp (EVar "flatMap") (EApp (EApp (EVar "projectionIndexFaults") (EVar "cap")) (EVar "d"))) (EVar "rest"))))
@@ -2119,7 +2119,7 @@ validatePhysicalDemand _ _ _ = []
 (DFunDef false "builtDictFaults" ((PVar "facts") (PCon "RKey" (PVar "key") (PVar "reqs") (PVar "sups"))) (EBlock (DoLet false false (PVar "n") (EApp (EApp (EVar "optionOr") (ELit (LInt 0))) (EApp (EApp (EVar "omLookup") (EVar "key")) (EFieldAccess (EVar "facts") "efRequires")))) (DoLet false false (PVar "word") (EApp (EVar "ifaceWordOfKey") (EVar "key"))) (DoLet false false (PVar "k") (EApp (EApp (EVar "optionOr") (ELit (LInt 0))) (EApp (EApp (EVar "omLookup") (EVar "word")) (EFieldAccess (EVar "facts") "efSupers")))) (DoExpr (EBinOp "++" (EBinOp "++" (EIf (EBinOp "==" (EApp (EVar "listLen") (EVar "reqs")) (EVar "n")) (EListLit) (EListLit (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "builds instance `")) (EApp (EVar "display") (EVar "key"))) (ELit (LString "` from "))) (EApp (EVar "display") (EApp (EVar "intToString") (EApp (EVar "listLen") (EVar "reqs"))))) (ELit (LString " prerequisite dictionaries, it requires "))) (EApp (EVar "display") (EApp (EVar "intToString") (EVar "n")))) (ELit (LString ""))))) (EIf (EBinOp "==" (EApp (EVar "listLen") (EVar "sups")) (EVar "k")) (EListLit) (EListLit (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "builds instance `")) (EApp (EVar "display") (EVar "key"))) (ELit (LString "` with "))) (EApp (EVar "display") (EApp (EVar "intToString") (EApp (EVar "listLen") (EVar "sups"))))) (ELit (LString " super dictionaries, `"))) (EApp (EVar "display") (EVar "word"))) (ELit (LString "` has "))) (EApp (EVar "display") (EApp (EVar "intToString") (EVar "k")))) (ELit (LString "")))))) (EApp (EApp (EVar "flatMap") (EApp (EVar "builtDictFaults") (EVar "facts"))) (EBinOp "++" (EVar "reqs") (EVar "sups")))))))
 (DFunDef false "builtDictFaults" ((PVar "facts") (PCon "RLocal" PWild (PVar "ds"))) (EApp (EApp (EVar "flatMap") (EApp (EVar "builtDictFaults") (EVar "facts"))) (EVar "ds")))
 (DFunDef false "builtDictFaults" ((PVar "facts") (PCon "RProj" (PVar "r") PWild)) (EApp (EApp (EVar "builtDictFaults") (EVar "facts")) (EVar "r")))
-(DFunDef false "builtDictFaults" (PWild PWild) (EListLit))
+(DFunDef false "builtDictFaults" (PWild (POr (PCon "RNone") (PCon "RDict" PWild) (PCon "RDictFwd" PWild) (PCon "RScalar" PWild))) (EListLit))
 (DTypeSig false "ifaceWordFaults" (TyFun (TyCon "String") (TyFun (TyCon "Route") (TyApp (TyCon "List") (TyCon "String")))))
 (DFunDef false "ifaceWordFaults" ((PLit (LString "")) (PCon "RKey" PWild PWild PWild)) (EListLit (ELit (LString "dispatches with no interface word"))))
 (DFunDef false "ifaceWordFaults" ((PLit (LString "")) (PCon "RDict" PWild)) (EListLit (ELit (LString "dispatches with no interface word"))))
@@ -2140,7 +2140,7 @@ validatePhysicalDemand _ _ _ = []
 (DFunDef false "routeShapeFaults" ((PCon "RProj" (PVar "r") PWild)) (EBinOp "++" (EIf (EApp (EVar "givenRooted") (EVar "r")) (EListLit) (EListLit (ELit (LString "projects from a route that is not a given dictionary")))) (EApp (EVar "routeShapeFaults") (EVar "r"))))
 (DFunDef false "routeShapeFaults" ((PCon "RKey" PWild (PVar "reqs") (PVar "sups"))) (EApp (EApp (EVar "flatMap") (EVar "routeShapeFaults")) (EBinOp "++" (EVar "reqs") (EVar "sups"))))
 (DFunDef false "routeShapeFaults" ((PCon "RLocal" PWild (PVar "ds"))) (EApp (EApp (EVar "flatMap") (EVar "routeShapeFaults")) (EVar "ds")))
-(DFunDef false "routeShapeFaults" (PWild) (EListLit))
+(DFunDef false "routeShapeFaults" ((POr (PCon "RNone") (PCon "RDict" PWild) (PCon "RDictFwd" PWild))) (EListLit))
 (DTypeSig false "givenRooted" (TyFun (TyCon "Route") (TyCon "Bool")))
 (DFunDef false "givenRooted" ((PCon "RDict" PWild)) (EVar "True"))
 (DFunDef false "givenRooted" ((PCon "RDictFwd" PWild)) (EVar "True"))
@@ -2555,7 +2555,7 @@ validatePhysicalDemand _ _ _ = []
 (DFunDef false "routeProjectionFaults" ((PVar "bound") (PCon "RProj" (PVar "r") (PVar "path"))) (EBinOp "++" (EApp (EApp (EApp (EVar "rootProjectionFaults") (EVar "bound")) (EVar "r")) (EVar "path")) (EApp (EApp (EVar "routeProjectionFaults") (EVar "bound")) (EVar "r"))))
 (DFunDef false "routeProjectionFaults" ((PVar "bound") (PCon "RKey" PWild (PVar "reqs") (PVar "sups"))) (EApp (EApp (EDictApp "flatMap") (EApp (EVar "routeProjectionFaults") (EVar "bound"))) (EBinOp "++" (EVar "reqs") (EVar "sups"))))
 (DFunDef false "routeProjectionFaults" ((PVar "bound") (PCon "RLocal" PWild (PVar "ds"))) (EApp (EApp (EDictApp "flatMap") (EApp (EVar "routeProjectionFaults") (EVar "bound"))) (EVar "ds")))
-(DFunDef false "routeProjectionFaults" (PWild PWild) (EListLit))
+(DFunDef false "routeProjectionFaults" (PWild (POr (PCon "RNone") (PCon "RDict" PWild) (PCon "RDictFwd" PWild) (PCon "RScalar" PWild))) (EListLit))
 (DTypeSig false "rootProjectionFaults" (TyFun (TyCon "ProjBound") (TyFun (TyCon "Route") (TyFun (TyApp (TyCon "List") (TyCon "Int")) (TyApp (TyCon "List") (TyCon "String"))))))
 (DFunDef false "rootProjectionFaults" ((PCon "ProjBound" (PVar "recv") (PVar "limit") (PVar "cap")) (PCon "RDict" (PVar "d")) (PCons (PVar "i") (PVar "rest"))) (EBinOp "++" (EApp (EApp (EApp (EVar "projectionIndexFaults") (EIf (EBinOp "==" (EVar "d") (EVar "recv")) (EVar "limit") (EVar "cap"))) (EVar "d")) (EVar "i")) (EApp (EApp (EDictApp "flatMap") (EApp (EApp (EVar "projectionIndexFaults") (EVar "cap")) (EVar "d"))) (EVar "rest"))))
 (DFunDef false "rootProjectionFaults" ((PCon "ProjBound" (PVar "recv") (PVar "limit") (PVar "cap")) (PCon "RDictFwd" (PVar "d")) (PCons (PVar "i") (PVar "rest"))) (EBinOp "++" (EApp (EApp (EApp (EVar "projectionIndexFaults") (EIf (EBinOp "==" (EVar "d") (EVar "recv")) (EVar "limit") (EVar "cap"))) (EVar "d")) (EVar "i")) (EApp (EApp (EDictApp "flatMap") (EApp (EApp (EVar "projectionIndexFaults") (EVar "cap")) (EVar "d"))) (EVar "rest"))))
@@ -2643,7 +2643,7 @@ validatePhysicalDemand _ _ _ = []
 (DFunDef false "builtDictFaults" ((PVar "facts") (PCon "RKey" (PVar "key") (PVar "reqs") (PVar "sups"))) (EBlock (DoLet false false (PVar "n") (EApp (EApp (EVar "optionOr") (ELit (LInt 0))) (EApp (EApp (EVar "omLookup") (EVar "key")) (EFieldAccess (EVar "facts") "efRequires")))) (DoLet false false (PVar "word") (EApp (EVar "ifaceWordOfKey") (EVar "key"))) (DoLet false false (PVar "k") (EApp (EApp (EVar "optionOr") (ELit (LInt 0))) (EApp (EApp (EVar "omLookup") (EVar "word")) (EFieldAccess (EVar "facts") "efSupers")))) (DoExpr (EBinOp "++" (EBinOp "++" (EIf (EBinOp "==" (EApp (EVar "listLen") (EVar "reqs")) (EVar "n")) (EListLit) (EListLit (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "builds instance `")) (EApp (EMethodRef "display") (EVar "key"))) (ELit (LString "` from "))) (EApp (EMethodRef "display") (EApp (EVar "intToString") (EApp (EVar "listLen") (EVar "reqs"))))) (ELit (LString " prerequisite dictionaries, it requires "))) (EApp (EMethodRef "display") (EApp (EVar "intToString") (EVar "n")))) (ELit (LString ""))))) (EIf (EBinOp "==" (EApp (EVar "listLen") (EVar "sups")) (EVar "k")) (EListLit) (EListLit (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "builds instance `")) (EApp (EMethodRef "display") (EVar "key"))) (ELit (LString "` with "))) (EApp (EMethodRef "display") (EApp (EVar "intToString") (EApp (EVar "listLen") (EVar "sups"))))) (ELit (LString " super dictionaries, `"))) (EApp (EMethodRef "display") (EVar "word"))) (ELit (LString "` has "))) (EApp (EMethodRef "display") (EApp (EVar "intToString") (EVar "k")))) (ELit (LString "")))))) (EApp (EApp (EDictApp "flatMap") (EApp (EVar "builtDictFaults") (EVar "facts"))) (EBinOp "++" (EVar "reqs") (EVar "sups")))))))
 (DFunDef false "builtDictFaults" ((PVar "facts") (PCon "RLocal" PWild (PVar "ds"))) (EApp (EApp (EDictApp "flatMap") (EApp (EVar "builtDictFaults") (EVar "facts"))) (EVar "ds")))
 (DFunDef false "builtDictFaults" ((PVar "facts") (PCon "RProj" (PVar "r") PWild)) (EApp (EApp (EVar "builtDictFaults") (EVar "facts")) (EVar "r")))
-(DFunDef false "builtDictFaults" (PWild PWild) (EListLit))
+(DFunDef false "builtDictFaults" (PWild (POr (PCon "RNone") (PCon "RDict" PWild) (PCon "RDictFwd" PWild) (PCon "RScalar" PWild))) (EListLit))
 (DTypeSig false "ifaceWordFaults" (TyFun (TyCon "String") (TyFun (TyCon "Route") (TyApp (TyCon "List") (TyCon "String")))))
 (DFunDef false "ifaceWordFaults" ((PLit (LString "")) (PCon "RKey" PWild PWild PWild)) (EListLit (ELit (LString "dispatches with no interface word"))))
 (DFunDef false "ifaceWordFaults" ((PLit (LString "")) (PCon "RDict" PWild)) (EListLit (ELit (LString "dispatches with no interface word"))))
@@ -2664,7 +2664,7 @@ validatePhysicalDemand _ _ _ = []
 (DFunDef false "routeShapeFaults" ((PCon "RProj" (PVar "r") PWild)) (EBinOp "++" (EIf (EApp (EVar "givenRooted") (EVar "r")) (EListLit) (EListLit (ELit (LString "projects from a route that is not a given dictionary")))) (EApp (EVar "routeShapeFaults") (EVar "r"))))
 (DFunDef false "routeShapeFaults" ((PCon "RKey" PWild (PVar "reqs") (PVar "sups"))) (EApp (EApp (EDictApp "flatMap") (EVar "routeShapeFaults")) (EBinOp "++" (EVar "reqs") (EVar "sups"))))
 (DFunDef false "routeShapeFaults" ((PCon "RLocal" PWild (PVar "ds"))) (EApp (EApp (EDictApp "flatMap") (EVar "routeShapeFaults")) (EVar "ds")))
-(DFunDef false "routeShapeFaults" (PWild) (EListLit))
+(DFunDef false "routeShapeFaults" ((POr (PCon "RNone") (PCon "RDict" PWild) (PCon "RDictFwd" PWild))) (EListLit))
 (DTypeSig false "givenRooted" (TyFun (TyCon "Route") (TyCon "Bool")))
 (DFunDef false "givenRooted" ((PCon "RDict" PWild)) (EVar "True"))
 (DFunDef false "givenRooted" ((PCon "RDictFwd" PWild)) (EVar "True"))

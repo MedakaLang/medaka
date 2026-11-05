@@ -5333,7 +5333,8 @@ constFoldFloat (CBinPrim op l r _ _) = match (
 )
   (Some a, Some b) => hostFloatOp op a b
   _ => None
-constFoldFloat _ = None
+constFoldFloat (CLit _ | CVar _ _ | CApp _ _ _ | CLam _ _ | CLet _ _ _ _ | CLetGroup _ _ | CMatch _ _ | CDecision _ _ _ | CIf _ _ _ | CUnOp _ _ | CTuple _ | CList _ | CRecord _ _ | CFieldAccess _ _ _ _ | CRecordUpdate _ _ _ | CVariantUpdate _ _ _ | CArray _ | CRangeList _ _ _ | CRangeArray _ _ _ | CIndex _ _ | CSlice _ _ _ _ | CStringIndex _ _ | CStringSlice _ _ _ _ | CListIndex _ _ | CListSlice _ _ _ _ | CBlock _ | CMethod _ _ | CDict _ _) =
+  None
 
 -- Host float op for the const-fold — each computed with the SAME operation the
 -- runtime routes this operator to, so the host fold is bit-identical to what the
@@ -13852,7 +13853,7 @@ bindPatStamps e env (PList ps) = bindPatsStamps e env ps
 bindPatStamps e env (PCons h t) = bindPatsStamps e env [h, t]
 bindPatStamps e env (PRec _ fields _) =
   fold (acc f => bindFieldStamps e acc f) env fields
-bindPatStamps _ env _ = env
+bindPatStamps _ env (PWild | PLit _ | POr _ | PRng _ _ _ | PAnn _ _) = env
 
 bindPatsStamps : Emit ->
   OrdMap (String, LTy) ->
