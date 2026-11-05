@@ -1261,26 +1261,33 @@ and `import emit_b as B` puts both modules' `emit` in scope, as `A.emit` and `B.
 
 **Interface methods follow the same rule.** `import m as A` binds `m`'s methods as
 `A.method` only; the bare `method` stays unbound until a selective import
-(`import m.{method}`) or a wildcard brings it in. What every import form shares, aliased
-or not, is dispatch: importing a module in any form brings its `impl`s into scope, the
-same rule that makes a bare `import map` (binding no names at all) still change dispatch
-behavior (see stdlib import forms, above).
+(`import m.{method}`) or a wildcard brings it in. `import m.{I}` (an interface name)
+binds no bare method name either. What every import form shares, aliased or not, is
+dispatch: importing a module in any form brings its `impl`s into scope, the same rule that
+makes a bare `import map` (binding no names at all) still change dispatch behavior (see
+stdlib import forms, above).
+
+**A bare name means one declaration, chosen by scope alone** (SHADOW-SEMANTICS L1-L5).
+The rungs, innermost first: local binders; the module's own top-level declarations
+(including the methods of its own interfaces); explicit imports (`import m.{x}`,
+`import m.{y as x}`); wildcard imports; the prelude. No impl, receiver type or syntactic
+position takes part, so `length xs`, `xs |> length` and `map length [xs]` all mean the
+same `length`. An explicit import of a name the module also declares at top level is an
+error at the import member; a wildcard import loses to the module's own declaration
+silently. An interface method and a top-level function of one name in one module is a
+duplicate-declaration error. Record fields are not bare bindings (`w.size` reads a field).
 
 **A member RENAME of a method binds only its alias; so does a module ALIAS.**
 `import m.{size as sz}` binds the local name `sz` to `m`'s method and nothing else, so a
 module that also declares its own `size` keeps that one for the bare `size`, and `sz`
 reaches the method past it. `import m as M` does the same under the dotted spelling
-`M.size`. Both spellings survive inference and are restored to the origin name afterwards.
-This is not a prelude rule: the implicit prelude, aliasable as of #95, is just the case
-where it is easiest to hit, because its names are in scope everywhere without an import.
-Pinned at `test/shadow_fixtures/x19_prelude_module_alias_escapes_shadow.mdk` (module alias)
-and `test/shadow_fixtures/x20_prelude_member_rename_lands_on_shadow.mdk` (member rename);
-both print `(False, True)`. One case is not yet ruled: a member alias of an interface
-method whose interface the importer cannot name, beside an imported standalone of the
-origin name (`test/shadow_fixtures/i22_importer_member_alias_not_nameable/`), still
-resolves per SHADOW-SEMANTICS S2-DECL (d) and prints the impl's `7`, row 42's KNOWN-BAD cell.
-A module's own top-level binding named like the alias wins over the alias: with
-`import m.{size as sz}` and a top-level `sz`, `sz` is the module's own.
+`M.size`. This is the only way to reach a method that a nearer rung hides (L8): the
+prelude, aliasable as of #95, is the case where it is easiest to hit, because its names
+are in scope everywhere without an import. Pinned at
+`test/shadow_fixtures/x19_prelude_module_alias_escapes_shadow.mdk` (module alias) and
+`test/shadow_fixtures/x20_prelude_member_rename_lands_on_shadow.mdk` (member rename); both
+print `(False, True)`. A module's own top-level binding named like the alias wins over the
+alias: with `import m.{size as sz}` and a top-level `sz`, `sz` is the module's own.
 
 Rules, each a real error rather than a silent no-op:
 
