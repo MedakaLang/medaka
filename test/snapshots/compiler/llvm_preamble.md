@@ -81,11 +81,11 @@ siteTrapDecls = [
 ]
 
 export
-siteTrapDecl : String -> RuntimeDecl
+siteTrapDecl : String -> Option RuntimeDecl
 siteTrapDecl name =
   match filter (d => runtimeName d == name ++ "_at") siteTrapDecls
-    [d] => d
-    _ => noReturn (name ++ "_at") ["i64"]
+    [d] => Some d
+    _ => None
 
 -- The preamble: two comment lines, one `declare` per row, then a blank line.
 export
@@ -379,8 +379,8 @@ runtimeDecls = [
 (DFunDef false "declareRuntime" ((PVar "origin") (PCons (PVar "d") (PVar "rest")) (PVar "reg")) (EMatch (EApp (EApp (EApp (EApp (EVar "declareOnce") (EApp (EVar "Foreign") (EApp (EVar "runtimeName") (EVar "d")))) (EApp (EVar "runtimePrototype") (EVar "d"))) (EVar "origin")) (EVar "reg")) (arm (PCon "Ok" (PVar "reg2")) () (EApp (EApp (EApp (EVar "declareRuntime") (EVar "origin")) (EVar "rest")) (EVar "reg2"))) (arm (PCon "Err" (PVar "defect")) () (EApp (EVar "Err") (EVar "defect")))))
 (DTypeSig true "siteTrapDecls" (TyApp (TyCon "List") (TyCon "RuntimeDecl")))
 (DFunDef false "siteTrapDecls" () (EListLit (EApp (EApp (EVar "noReturn") (ELit (LString "mdk_panic_at"))) (EListLit (ELit (LString "i64")) (ELit (LString "i64")))) (EApp (EApp (EVar "noReturn") (ELit (LString "mdk_oob_at_at"))) (EListLit (ELit (LString "i64")) (ELit (LString "i64")))) (EApp (EApp (EVar "noReturn") (ELit (LString "mdk_int_overflow_at"))) (EListLit (ELit (LString "i64")) (ELit (LString "i64")) (ELit (LString "i64")) (ELit (LString "i64")))) (EApp (EApp (EVar "noReturn") (ELit (LString "mdk_mod_zero_at"))) (EListLit (ELit (LString "i64")))) (EApp (EApp (EVar "noReturn") (ELit (LString "mdk_div_zero_at"))) (EListLit (ELit (LString "i64")))) (EApp (EApp (EVar "noReturn") (ELit (LString "mdk_nonexhaustive_match_at"))) (EListLit (ELit (LString "i64")))) (EApp (EApp (EVar "noReturn") (ELit (LString "mdk_let_refute_at"))) (EListLit (ELit (LString "i64"))))))
-(DTypeSig true "siteTrapDecl" (TyFun (TyCon "String") (TyCon "RuntimeDecl")))
-(DFunDef false "siteTrapDecl" ((PVar "name")) (EMatch (EApp (EApp (EVar "filter") (ELam ((PVar "d")) (EBinOp "==" (EApp (EVar "runtimeName") (EVar "d")) (EBinOp "++" (EVar "name") (ELit (LString "_at")))))) (EVar "siteTrapDecls")) (arm (PList (PVar "d")) () (EVar "d")) (arm PWild () (EApp (EApp (EVar "noReturn") (EBinOp "++" (EVar "name") (ELit (LString "_at")))) (EListLit (ELit (LString "i64")))))))
+(DTypeSig true "siteTrapDecl" (TyFun (TyCon "String") (TyApp (TyCon "Option") (TyCon "RuntimeDecl"))))
+(DFunDef false "siteTrapDecl" ((PVar "name")) (EMatch (EApp (EApp (EVar "filter") (ELam ((PVar "d")) (EBinOp "==" (EApp (EVar "runtimeName") (EVar "d")) (EBinOp "++" (EVar "name") (ELit (LString "_at")))))) (EVar "siteTrapDecls")) (arm (PList (PVar "d")) () (EApp (EVar "Some") (EVar "d"))) (arm PWild () (EVar "None"))))
 (DTypeSig true "preambleLines" (TyApp (TyCon "List") (TyCon "String")))
 (DFunDef false "preambleLines" () (EBinOp "++" (EBinOp "++" (EListLit (ELit (LString "; Medaka native spike (Stage 2.4) — emitted textual LLVM IR.")) (ELit (LString "; Value rep is PROVISIONAL (uniform 64-bit tagged word); see RUNTIME-DESIGN.md."))) (EApp (EApp (EVar "map") (EVar "declareLine")) (EVar "runtimeDecls"))) (EListLit (ELit (LString "")))))
 (DTypeSig true "ffiRuntimeDecls" (TyApp (TyCon "List") (TyCon "RuntimeDecl")))
@@ -408,8 +408,8 @@ runtimeDecls = [
 (DFunDef false "declareRuntime" ((PVar "origin") (PCons (PVar "d") (PVar "rest")) (PVar "reg")) (EMatch (EApp (EApp (EApp (EApp (EVar "declareOnce") (EApp (EVar "Foreign") (EApp (EVar "runtimeName") (EVar "d")))) (EApp (EVar "runtimePrototype") (EVar "d"))) (EVar "origin")) (EVar "reg")) (arm (PCon "Ok" (PVar "reg2")) () (EApp (EApp (EApp (EVar "declareRuntime") (EVar "origin")) (EVar "rest")) (EVar "reg2"))) (arm (PCon "Err" (PVar "defect")) () (EApp (EVar "Err") (EVar "defect")))))
 (DTypeSig true "siteTrapDecls" (TyApp (TyCon "List") (TyCon "RuntimeDecl")))
 (DFunDef false "siteTrapDecls" () (EListLit (EApp (EApp (EVar "noReturn") (ELit (LString "mdk_panic_at"))) (EListLit (ELit (LString "i64")) (ELit (LString "i64")))) (EApp (EApp (EVar "noReturn") (ELit (LString "mdk_oob_at_at"))) (EListLit (ELit (LString "i64")) (ELit (LString "i64")))) (EApp (EApp (EVar "noReturn") (ELit (LString "mdk_int_overflow_at"))) (EListLit (ELit (LString "i64")) (ELit (LString "i64")) (ELit (LString "i64")) (ELit (LString "i64")))) (EApp (EApp (EVar "noReturn") (ELit (LString "mdk_mod_zero_at"))) (EListLit (ELit (LString "i64")))) (EApp (EApp (EVar "noReturn") (ELit (LString "mdk_div_zero_at"))) (EListLit (ELit (LString "i64")))) (EApp (EApp (EVar "noReturn") (ELit (LString "mdk_nonexhaustive_match_at"))) (EListLit (ELit (LString "i64")))) (EApp (EApp (EVar "noReturn") (ELit (LString "mdk_let_refute_at"))) (EListLit (ELit (LString "i64"))))))
-(DTypeSig true "siteTrapDecl" (TyFun (TyCon "String") (TyCon "RuntimeDecl")))
-(DFunDef false "siteTrapDecl" ((PVar "name")) (EMatch (EApp (EApp (EMethodRef "filter") (ELam ((PVar "d")) (EBinOp "==" (EApp (EVar "runtimeName") (EVar "d")) (EBinOp "++" (EVar "name") (ELit (LString "_at")))))) (EVar "siteTrapDecls")) (arm (PList (PVar "d")) () (EVar "d")) (arm PWild () (EApp (EApp (EVar "noReturn") (EBinOp "++" (EVar "name") (ELit (LString "_at")))) (EListLit (ELit (LString "i64")))))))
+(DTypeSig true "siteTrapDecl" (TyFun (TyCon "String") (TyApp (TyCon "Option") (TyCon "RuntimeDecl"))))
+(DFunDef false "siteTrapDecl" ((PVar "name")) (EMatch (EApp (EApp (EMethodRef "filter") (ELam ((PVar "d")) (EBinOp "==" (EApp (EVar "runtimeName") (EVar "d")) (EBinOp "++" (EVar "name") (ELit (LString "_at")))))) (EVar "siteTrapDecls")) (arm (PList (PVar "d")) () (EApp (EVar "Some") (EVar "d"))) (arm PWild () (EVar "None"))))
 (DTypeSig true "preambleLines" (TyApp (TyCon "List") (TyCon "String")))
 (DFunDef false "preambleLines" () (EBinOp "++" (EBinOp "++" (EListLit (ELit (LString "; Medaka native spike (Stage 2.4) — emitted textual LLVM IR.")) (ELit (LString "; Value rep is PROVISIONAL (uniform 64-bit tagged word); see RUNTIME-DESIGN.md."))) (EApp (EApp (EMethodRef "map") (EVar "declareLine")) (EVar "runtimeDecls"))) (EListLit (ELit (LString "")))))
 (DTypeSig true "ffiRuntimeDecls" (TyApp (TyCon "List") (TyCon "RuntimeDecl")))

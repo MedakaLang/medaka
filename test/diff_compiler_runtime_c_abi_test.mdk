@@ -1,95 +1,106 @@
 import test.{Expectation, expectAll, expectAtLeast, expectEqual, fail, pass}
-import test_process.{medakaBin, medakaRoot, boundedVerbSeconds, withScratchDir}
-import list.{last}
+import test_process.{medakaBin, medakaRoot, boundedVerb, withScratchDir}
+import list.{head, last}
 import string.{contains, startsWith, lines, words, split, join, replaceOnce}
 
-paramType : String -> String
-paramType s = match words s
-  [] => ""
-  t :: _ => t
+data CheckError =
+  | BadDefinition String
+  | BadDescriptor String
+  | MissingDefinition String
+  | DuplicateDefinition String
+  | SignatureMismatch String String String
+  | AttributeError String
+  deriving (Eq, Debug, Display)
 
-attributeGroup : String -> List String -> Result String Bool
-attributeGroup group ls =
+paramType : String -> Result CheckError String
+paramType s = match head (words s)
+  Some t => Ok t
+  None => Err (BadDefinition s)
+
+attributeGroup : String -> String -> List String -> Result CheckError Bool
+attributeGroup name group ls =
   match filter (l => startsWith ("attributes " ++ group ++ " = {") l) ls
     [line] => Ok (any (t => t == "noreturn") (words line))
-    [] => Err ("missing attribute group " ++ group)
-    _ => Err ("duplicate attribute group " ++ group)
+    [] => Err (AttributeError (name ++ ": missing attribute group " ++ group))
+    _ => Err (AttributeError (name ++ ": duplicate attribute group " ++ group))
 
-returnAttribute : String -> List String -> Result String String
-returnAttribute suffix ls =
+returnAttribute : String -> String -> List String -> Result CheckError String
+returnAttribute name suffix ls =
   let tokens = words suffix
   let groups = filter (startsWith "#") tokens
   match groups
     [] =>
       Ok (if any (t => t == "noreturn") tokens then "noreturn" else "returns")
-    [group] => match attributeGroup group ls
-      Err e => Err e
-      Ok noReturn => Ok (if noReturn || any (t => t == "noreturn") tokens then
+    [group] => do
+      noReturn <- attributeGroup name group ls
+      Ok (if noReturn || any (t => t == "noreturn") tokens then
         "noreturn"
       else
         "returns")
-    _ => Err ("unsupported definition attributes: " ++ suffix)
+    _ =>
+      Err
+        (AttributeError
+          (name ++ ": unsupported definition attributes: " ++ suffix))
 
-signature : List String -> String -> Result String String
-signature ls line = match split "@" line
-  [prefix, suffix] => match split "(" suffix
-    [name, tail] => match split ")" tail
-      [params, suffix] =>
-        let types =
-          if params == "" then [] else map paramType (split "," params)
-        match returnAttribute suffix ls
-          Err e => Err (name ++ ": " ++ e)
-          Ok attr =>
-            Ok
-              (name
-                ++ "|"
-                ++ optionOr "" (last (words prefix))
-                ++ "|"
-                ++ join "," types
-                ++ "|"
-                ++ attr)
-      _ => Err ("bad definition: " ++ line)
-    _ => Err ("bad definition: " ++ line)
-  _ => Err ("bad definition: " ++ line)
+splitPair : String -> String -> String -> Result CheckError (String, String)
+splitPair delimiter line value = match split delimiter value
+  [first, second] => Ok (first, second)
+  _ => Err (BadDefinition line)
 
-findDefinition : String -> List String -> Result String String
+parameterList : List String -> Result CheckError (List String)
+parameterList [] = Ok []
+parameterList (p :: ps) = do
+  ty <- paramType p
+  map (ty :: _) (parameterList ps)
+
+signature : List String -> String -> Result CheckError String
+signature ls line = do
+  (prefix, suffix) <- splitPair "@" line line
+  (name, tail) <- splitPair "(" line suffix
+  (params, attrs) <- splitPair ")" line tail
+  types <- if params == "" then Ok [] else parameterList (split "," params)
+  result <- match last (words prefix)
+    Some ty => Ok ty
+    None => Err (BadDefinition line)
+  attr <- returnAttribute name attrs ls
+  Ok (name ++ "|" ++ result ++ "|" ++ join "," types ++ "|" ++ attr)
+
+findDefinition : String -> List String -> Result CheckError String
 findDefinition name ls =
   match (filter
     (l => startsWith "define " l && contains ("@" ++ name ++ "(") l)
     ls)
     [line] => signature ls line
-    [] => Err (name ++ ": missing definition")
-    _ => Err (name ++ ": duplicate definition")
+    [] => Err (MissingDefinition name)
+    _ => Err (DuplicateDefinition name)
 
-compareRow : List String -> String -> Result String String
+compareRow : List String -> String -> Result CheckError String
 compareRow definitions row = match split "|" row
-  [name, _, _, _] => match findDefinition name definitions
-    Err e => Err e
-    Ok actual =>
-      if row == actual then
-        Ok row
-      else
-        Err (name ++ ": expected " ++ row ++ ", got " ++ actual)
-  _ => Err ("bad descriptor: " ++ row)
+  [name, _, _, _] => do
+    actual <- findDefinition name definitions
+    if row == actual then Ok row else Err (SignatureMismatch name row actual)
+  _ => Err (BadDescriptor row)
 
-compareRows : List String -> List String -> Result String Int
+compareRows : List String -> List String -> Result CheckError Int
 compareRows _ [] = Ok 0
-compareRows definitions (row :: rest) = match compareRow definitions row
-  Err e => Err e
-  Ok _ => match compareRows definitions rest
-    Err e => Err e
-    Ok n => Ok (n + 1)
+compareRows definitions (row :: rest) = do
+  _ <- compareRow definitions row
+  n <- compareRows definitions rest
+  Ok (n + 1)
+
+data CompileInput = CompileInput { label : String, source : String }
 
 compile : String ->
-  String ->
-  String ->
+  CompileInput ->
   <Exec, IO, FileRead, FileWrite> Result String String
-compile dir label source =
+compile dir input =
+  let label = input.label
+  let source = input.source
   let c = dir ++ "/" ++ label ++ ".c"
   let ll = dir ++ "/" ++ label ++ ".ll"
-  match writeFile c source
-    Err e => Err e
-    Ok _ => match boundedVerbSeconds 60 "sh" [
+  do
+    _ <- writeFile c source
+    (code, out, err) <- boundedVerb "sh" [
       "-c",
       """
       if [ -n "${GC_PREFIX:-}" ]; then
@@ -111,122 +122,155 @@ compile dir label source =
       "-o",
       ll,
     ]
-      Err e => Err e
-      Ok (code, out, err) =>
-        if code /= 0 || out /= "" || err /= "" then
-          Err (label ++ ": clang failed: " ++ out ++ err)
-        else
-          readFile ll
+    if code /= 0 || out /= "" || err /= "" then
+      Err (label ++ ": clang failed: " ++ out ++ err)
+    else
+      readFile ll
 
 expectMismatch : String -> List String -> String -> Expectation
 expectMismatch name rows ir = match compareRows (lines ir) rows
-  Err e => if contains name e then pass else fail ("wrong mismatch: " ++ e)
+  Err (MissingDefinition actual) =>
+    if actual == name then pass else fail ("wrong missing symbol: " ++ actual)
+  Err (SignatureMismatch actual _ _) =>
+    if actual == name then pass else fail ("wrong mismatch: " ++ actual)
+  Err e => fail ("unexpected mismatch: " ++ display e)
   Ok _ => fail (name ++ ": mismatch was accepted")
 
+data Mutation = Mutation {
+  name : String,
+  original : String,
+  replacement : String,
+}
+
 mutated : String ->
-  String ->
-  String ->
-  String ->
+  Mutation ->
   List String ->
   String ->
   <Exec, IO, FileRead, FileWrite> Expectation
-mutated dir label old new rows source = match replaceOnce old new source
-  Err e => fail (label ++ ": " ++ e)
-  Ok changed => match compile dir label changed
-    Err e => fail e
-    Ok ir => expectMismatch label rows ir
+mutated dir change rows source =
+  match replaceOnce change.original change.replacement source
+    Err e => fail (change.name ++ ": " ++ e)
+    Ok changed =>
+      match compile dir CompileInput { label = change.name, source = changed }
+        Err e => fail e
+        Ok ir => expectMismatch change.name rows ir
+
+prepare : String ->
+  <Exec, IO, FileRead, FileWrite> Result String (String, String, String)
+prepare dir = do
+  (code, out, err) <- boundedVerb medakaBin [
+    "run",
+    medakaRoot ++ "/compiler/entries/runtime_c_abi_main.mdk",
+  ]
+  if code /= 0 || err /= "" then
+    Err ("descriptor probe failed: " ++ out ++ err)
+  else do
+    source <- readFile (medakaRoot ++ "/runtime/medaka_rt.c")
+    ir <- compile dir CompileInput { label = "runtime", source = source }
+    Ok (out, source, ir)
 
 runGate : String -> <Exec, IO, FileRead, FileWrite> Expectation
-runGate dir = match boundedVerbSeconds 60 medakaBin [
-  "run",
-  medakaRoot ++ "/compiler/entries/runtime_c_abi_main.mdk",
-]
+runGate dir = match prepare dir
   Err e => fail e
-  Ok (code, out, err) =>
-    if code /= 0 || err /= "" then
-      fail ("descriptor probe failed: " ++ out ++ err)
-    else match readFile (medakaRoot ++ "/runtime/medaka_rt.c")
+  Ok (out, source, ir) =>
+    match readFile (medakaRoot ++ "/runtime/medaka_process.c")
       Err e => fail e
-      Ok source => match readFile (medakaRoot ++ "/runtime/medaka_process.c")
-        Err e => fail e
-        Ok processSource => match compile dir "process" processSource
+      Ok processSource =>
+        match (compile dir CompileInput {
+          label = "process",
+          source = processSource,
+        })
           Err e => fail e
-          Ok processIr => match compile dir "runtime" source
-            Err e => fail e
-            Ok ir =>
-              let allRows = filter (r => r /= "") (lines out)
-              let processRows = filter (startsWith "mdk_process_") allRows
-              let rows = filter (r => not (startsWith "mdk_process_" r)) allRows
-              let processPositive =
-                match compareRows (lines processIr) processRows
-                  Err e => fail e
-                  Ok n => expectAll [
-                    expectEqual 7 n,
-                    expectEqual (length processRows) n,
-                  ]
-              let positive = match compareRows (lines ir) rows
+          Ok processIr =>
+            let allRows = filter (r => r /= "") (lines out)
+            let processRows = filter (startsWith "mdk_process_") allRows
+            let rows = filter (r => not (startsWith "mdk_process_" r)) allRows
+            let processPositive =
+              match compareRows (lines processIr) processRows
+                Err e => fail (display e)
+                Ok n => expectAll [
+                  expectEqual 7 n,
+                  expectEqual (length processRows) n,
+                ]
+            let positive = match compareRows (lines ir) rows
+              Err e => fail (display e)
+              Ok n => expectAll [expectAtLeast 1 n, expectEqual (length rows) n]
+            let preamble =
+              match (replaceOnce
+                "mdk_print_unit|void|"
+                "mdk_print_unit|void|i64"
+                out)
                 Err e => fail e
-                Ok n =>
-                  expectAll [expectAtLeast 1 n, expectEqual (length rows) n]
-              let preamble =
-                match (replaceOnce
-                  "mdk_print_unit|void|"
-                  "mdk_print_unit|void|i64"
-                  out)
-                  Err e => fail e
-                  Ok changed =>
-                    expectMismatch
-                      "mdk_print_unit"
-                      (filter (r => r /= "") (lines changed))
-                      ir
-              expectAll [
-                positive,
-                processPositive,
-                preamble,
-                mutated
-                  dir
-                  "mdk_panic"
-                  "noreturn void mdk_panic(long long w)"
-                  "void mdk_panic(long long w)"
-                  rows
-                  source,
-                expectEqual
-                  (Ok "mdk_panic|void|i64|noreturn")
-                  (signature
-                    ["attributes #6 = { noreturn nounwind }"]
-                    "define void @mdk_panic(i64 %w) #6 {"),
-                expectEqual
-                  (Err "mdk_panic: missing attribute group #6")
-                  (signature [] "define void @mdk_panic(i64 %w) #6 {"),
-                mutated
-                  dir
-                  "mdk_print_unit"
-                  "void mdk_print_unit(void)"
-                  "void mdk_print_unit(long long ignored)"
-                  rows
-                  source,
-                mutated
-                  dir
-                  "mdk_float_rem"
-                  "double mdk_float_rem(double a, double b)"
-                  "double mdk_float_rem(long long a, double b)"
-                  rows
-                  source,
-                mutated
-                  dir
-                  "mdk_float_rem"
-                  "double mdk_float_rem(double a, double b)"
-                  "long long mdk_float_rem(double a, double b)"
-                  rows
-                  source,
-                mutated
-                  dir
-                  "mdk_float_rem"
-                  "double mdk_float_rem(double a, double b)"
-                  "double mdk_float_rem_changed(double a, double b)"
-                  rows
-                  source,
-              ]
+                Ok changed =>
+                  expectMismatch
+                    "mdk_print_unit"
+                    (filter
+                      (r => r /= "" && not (startsWith "mdk_process_" r))
+                      (lines changed))
+                    ir
+            expectAll [
+              positive,
+              processPositive,
+              preamble,
+              mutated
+                dir
+                Mutation {
+                  name = "mdk_panic",
+                  original = "noreturn void mdk_panic(long long w)",
+                  replacement = "void mdk_panic(long long w)",
+                }
+                rows
+                source,
+              expectEqual
+                (Ok "mdk_panic|void|i64|noreturn")
+                (signature
+                  ["attributes #6 = { noreturn nounwind }"]
+                  "define void @mdk_panic(i64 %w) #6 {"),
+              expectEqual (Err (BadDefinition "")) (paramType ""),
+              expectEqual
+                (Err (BadDefinition "not an LLVM definition"))
+                (signature [] "not an LLVM definition"),
+              expectEqual
+                (Err (AttributeError "mdk_panic: missing attribute group #6"))
+                (signature [] "define void @mdk_panic(i64 %w) #6 {"),
+              mutated
+                dir
+                Mutation {
+                  name = "mdk_print_unit",
+                  original = "void mdk_print_unit(void)",
+                  replacement = "void mdk_print_unit(long long ignored)",
+                }
+                rows
+                source,
+              mutated
+                dir
+                Mutation {
+                  name = "mdk_float_rem",
+                  original = "double mdk_float_rem(double a, double b)",
+                  replacement = "double mdk_float_rem(long long a, double b)",
+                }
+                rows
+                source,
+              mutated
+                dir
+                Mutation {
+                  name = "mdk_float_rem",
+                  original = "double mdk_float_rem(double a, double b)",
+                  replacement = "long long mdk_float_rem(double a, double b)",
+                }
+                rows
+                source,
+              mutated
+                dir
+                Mutation {
+                  name = "mdk_float_rem",
+                  original = "double mdk_float_rem(double a, double b)",
+                  replacement =
+                    "double mdk_float_rem_changed(double a, double b)",
+                }
+                rows
+                source,
+            ]
 
 test "runtime C definitions match every derived LLVM ABI row" =
   withScratchDir runGate

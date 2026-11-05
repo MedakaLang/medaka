@@ -62,6 +62,14 @@ regardless of whether anything relevant had changed, and cost a dozen recorded
 dispatches — worktree mint plus a refusal write-up — on docs-only, CI-only and
 stdlib-only landings.)
 
+**Scratch and waiting, one line in every packet.** Make scratch directories with
+`mktemp -d` and never write into an existing `/var/tmp/medaka-scratch/*`
+directory (one slice overwrote a `medaka` binary in another session's tree). Wait
+on a build or a gate in the foreground (or with `pr.sh` for a PR), never with a
+hand-rolled `until ! pgrep -f "<pattern>"; do sleep N; done`: `pgrep -f` matches
+the loop's own wrapper shell, so the loop never ends (three agents left such
+loops running for 17 to 25 hours).
+
 **§3 Mission.** One paragraph: the transformation and what is true after it
 lands. State the classification: parity (behavior identical, IR may prove it)
 or behavior-changing (say what changes). A behavior-changing packet names the
@@ -108,7 +116,12 @@ written down, the one targeted test (a `test` case in `<module>_test.mdk` or a
 snapshot bless the diff obviously moves. §6 is a CEILING as well as a floor — every gate, oracle, or suite it
 does not name is the end-of-sprint review's and CI's job. Name any golden the
 slice is licensed to bless, BY PATH; an unlisted golden move is a report
-finding, never a bless. Decide expected values from semantics before
+finding, never a bless. The one exception is the snapshot of a source file the
+slice itself edits (a comment edit moves it too, `[T-SNAPSHOT-SELF]`): do not
+hand-list those, run `make snapshot-check` and bless each file it names by path
+in the same slice. A snapshot of a file the slice did not edit moving is the
+finding. (param-clump-sweep FIX-3 hand-listed five snapshots and missed the
+sixth, `medaka_cli`.) Decide expected values from semantics before
 capturing anything — a captured golden records what the engine DID, not what
 is correct.
 
