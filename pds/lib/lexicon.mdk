@@ -44,6 +44,7 @@
 
 import bytes as B
 import bytes.{Bytes, decodeUtf8, encodeUtf8}
+import core as C
 import json.{Json(..), get, stringify}
 import list.{dropWhile, reverse}
 import map as M
@@ -863,7 +864,7 @@ startsExtension [] = False
 
 privateUseTail : List String -> Bool
 privateUseTail subtags =
-  not (isEmpty subtags) && all (subtagOf 1 8 isAlnumCode) subtags
+  not (C.isEmpty subtags) && all (subtagOf 1 8 isAlnumCode) subtags
 
 isRegion : String -> Bool
 isRegion subtag =
