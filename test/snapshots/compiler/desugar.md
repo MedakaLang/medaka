@@ -1,5 +1,5 @@
 # META
-source_lines=1633
+source_lines=1636
 stages=DESUGAR,MARK
 # SOURCE
 -- Self-hosted desugar stage.  Lowers surface
@@ -320,14 +320,15 @@ fallthrough : Expr
 fallthrough = EApp (EVar fallthroughName) (ELit LUnit)
 
 armChain : List Guard -> Expr -> Expr -> Expr
-armChain [] body _ = body
-armChain ((GBool e) :: qs) body els = EIf e (armChain qs body els) els
--- A guard-bind through an or-pattern keeps the guards after it on its match
--- arm, so a later guard that fails under one alternative re-tries the next.
-armChain ((GBind p e) :: qs) body els
-  | patHasOr p = eraseMatchAnnots e [Arm p qs body, Arm PWild [] els]
-  | otherwise =
-    eraseMatchAnnots e [Arm p [] (armChain qs body els), Arm PWild [] els]
+armChain quals0 body els = go quals0
+  where
+    go [] = body
+    go ((GBool e) :: qs) = EIf e (go qs) els
+    -- A guard-bind through an or-pattern keeps the guards after it on its match
+    -- arm, so a later guard that fails under one alternative re-tries the next.
+    go ((GBind p e) :: qs)
+      | patHasOr p = eraseMatchAnnots e [Arm p qs body, Arm PWild [] els]
+      | otherwise = eraseMatchAnnots e [Arm p [] (go qs), Arm PWild [] els]
 
 -- ── Pattern annotations ───────────────────────────────────────────────────
 -- `(p : T)` in a binding position is checked as the expression annotation
@@ -965,6 +966,8 @@ genVars : String -> Int -> List String
 genVars prefix n = genVarsGo prefix 0 n
 
 genVarsGo : String -> Int -> Int -> List String
+-- Bound: list built in tail position modulo cons: a where-local go loses the constant-stack loop until the lambda-lift pass (#4878); convert then.
+-- lint-disable-next-line rule-threaded-invariant
 genVarsGo prefix i n
   | i >= n = []
   | otherwise = prefix ++ intToString i :: genVarsGo prefix (i + 1) n
@@ -1750,9 +1753,7 @@ stampRecFieldBy mint (RecPatField l loc _ (Some p)) =
 (DTypeSig false "fallthrough" (TyCon "Expr"))
 (DFunDef false "fallthrough" () (EApp (EApp (EVar "EApp") (EApp (EVar "EVar") (EVar "fallthroughName"))) (EApp (EVar "ELit") (EVar "LUnit"))))
 (DTypeSig false "armChain" (TyFun (TyApp (TyCon "List") (TyCon "Guard")) (TyFun (TyCon "Expr") (TyFun (TyCon "Expr") (TyCon "Expr")))))
-(DFunDef false "armChain" ((PList) (PVar "body") PWild) (EVar "body"))
-(DFunDef false "armChain" ((PCons (PCon "GBool" (PVar "e")) (PVar "qs")) (PVar "body") (PVar "els")) (EApp (EApp (EApp (EVar "EIf") (EVar "e")) (EApp (EApp (EApp (EVar "armChain") (EVar "qs")) (EVar "body")) (EVar "els"))) (EVar "els")))
-(DFunDef false "armChain" ((PCons (PCon "GBind" (PVar "p") (PVar "e")) (PVar "qs")) (PVar "body") (PVar "els")) (EIf (EApp (EVar "patHasOr") (EVar "p")) (EApp (EApp (EVar "eraseMatchAnnots") (EVar "e")) (EListLit (EApp (EApp (EApp (EVar "Arm") (EVar "p")) (EVar "qs")) (EVar "body")) (EApp (EApp (EApp (EVar "Arm") (EVar "PWild")) (EListLit)) (EVar "els")))) (EIf (EVar "otherwise") (EApp (EApp (EVar "eraseMatchAnnots") (EVar "e")) (EListLit (EApp (EApp (EApp (EVar "Arm") (EVar "p")) (EListLit)) (EApp (EApp (EApp (EVar "armChain") (EVar "qs")) (EVar "body")) (EVar "els"))) (EApp (EApp (EApp (EVar "Arm") (EVar "PWild")) (EListLit)) (EVar "els")))) (EApp (EVar "__fallthrough__") (ELit LUnit)))))
+(DFunDef false "armChain" ((PVar "quals0") (PVar "body") (PVar "els")) (ELetGroup ((lgb "go" (clause ((PList)) (EVar "body")) (clause ((PCons (PCon "GBool" (PVar "e")) (PVar "qs"))) (EApp (EApp (EApp (EVar "EIf") (EVar "e")) (EApp (EVar "go") (EVar "qs"))) (EVar "els"))) (clause ((PCons (PCon "GBind" (PVar "p") (PVar "e")) (PVar "qs"))) (EIf (EApp (EVar "patHasOr") (EVar "p")) (EApp (EApp (EVar "eraseMatchAnnots") (EVar "e")) (EListLit (EApp (EApp (EApp (EVar "Arm") (EVar "p")) (EVar "qs")) (EVar "body")) (EApp (EApp (EApp (EVar "Arm") (EVar "PWild")) (EListLit)) (EVar "els")))) (EIf (EVar "otherwise") (EApp (EApp (EVar "eraseMatchAnnots") (EVar "e")) (EListLit (EApp (EApp (EApp (EVar "Arm") (EVar "p")) (EListLit)) (EApp (EVar "go") (EVar "qs"))) (EApp (EApp (EApp (EVar "Arm") (EVar "PWild")) (EListLit)) (EVar "els")))) (EApp (EVar "__fallthrough__") (ELit LUnit))))))) (EApp (EVar "go") (EVar "quals0"))))
 (DTypeSig false "eraseLamAnnots" (TyFun (TyApp (TyCon "List") (TyCon "Pat")) (TyFun (TyCon "Expr") (TyCon "Expr"))))
 (DFunDef false "eraseLamAnnots" ((PVar "ps") (PVar "body")) (EBlock (DoLet false false (PTuple (PVar "ps2") (PVar "checks") PWild) (EApp (EApp (EVar "annotsOutOf") (EVar "ps")) (ELit (LInt 0)))) (DoExpr (EApp (EApp (EVar "ELam") (EVar "ps2")) (EApp (EApp (EVar "annotChecks") (EVar "checks")) (EVar "body"))))))
 (DTypeSig false "eraseMatchAnnots" (TyFun (TyCon "Expr") (TyFun (TyApp (TyCon "List") (TyCon "Arm")) (TyCon "Expr"))))
@@ -2339,9 +2340,7 @@ stampRecFieldBy mint (RecPatField l loc _ (Some p)) =
 (DTypeSig false "fallthrough" (TyCon "Expr"))
 (DFunDef false "fallthrough" () (EApp (EApp (EVar "EApp") (EApp (EVar "EVar") (EVar "fallthroughName"))) (EApp (EVar "ELit") (EVar "LUnit"))))
 (DTypeSig false "armChain" (TyFun (TyApp (TyCon "List") (TyCon "Guard")) (TyFun (TyCon "Expr") (TyFun (TyCon "Expr") (TyCon "Expr")))))
-(DFunDef false "armChain" ((PList) (PVar "body") PWild) (EVar "body"))
-(DFunDef false "armChain" ((PCons (PCon "GBool" (PVar "e")) (PVar "qs")) (PVar "body") (PVar "els")) (EApp (EApp (EApp (EVar "EIf") (EVar "e")) (EApp (EApp (EApp (EVar "armChain") (EVar "qs")) (EVar "body")) (EVar "els"))) (EVar "els")))
-(DFunDef false "armChain" ((PCons (PCon "GBind" (PVar "p") (PVar "e")) (PVar "qs")) (PVar "body") (PVar "els")) (EIf (EApp (EVar "patHasOr") (EVar "p")) (EApp (EApp (EVar "eraseMatchAnnots") (EVar "e")) (EListLit (EApp (EApp (EApp (EVar "Arm") (EVar "p")) (EVar "qs")) (EVar "body")) (EApp (EApp (EApp (EVar "Arm") (EVar "PWild")) (EListLit)) (EVar "els")))) (EIf (EVar "otherwise") (EApp (EApp (EVar "eraseMatchAnnots") (EVar "e")) (EListLit (EApp (EApp (EApp (EVar "Arm") (EVar "p")) (EListLit)) (EApp (EApp (EApp (EVar "armChain") (EVar "qs")) (EVar "body")) (EVar "els"))) (EApp (EApp (EApp (EVar "Arm") (EVar "PWild")) (EListLit)) (EVar "els")))) (EApp (EVar "__fallthrough__") (ELit LUnit)))))
+(DFunDef false "armChain" ((PVar "quals0") (PVar "body") (PVar "els")) (ELetGroup ((lgb "go" (clause ((PList)) (EVar "body")) (clause ((PCons (PCon "GBool" (PVar "e")) (PVar "qs"))) (EApp (EApp (EApp (EVar "EIf") (EVar "e")) (EApp (EVar "go") (EVar "qs"))) (EVar "els"))) (clause ((PCons (PCon "GBind" (PVar "p") (PVar "e")) (PVar "qs"))) (EIf (EApp (EVar "patHasOr") (EVar "p")) (EApp (EApp (EVar "eraseMatchAnnots") (EVar "e")) (EListLit (EApp (EApp (EApp (EVar "Arm") (EVar "p")) (EVar "qs")) (EVar "body")) (EApp (EApp (EApp (EVar "Arm") (EVar "PWild")) (EListLit)) (EVar "els")))) (EIf (EVar "otherwise") (EApp (EApp (EVar "eraseMatchAnnots") (EVar "e")) (EListLit (EApp (EApp (EApp (EVar "Arm") (EVar "p")) (EListLit)) (EApp (EVar "go") (EVar "qs"))) (EApp (EApp (EApp (EVar "Arm") (EVar "PWild")) (EListLit)) (EVar "els")))) (EApp (EVar "__fallthrough__") (ELit LUnit))))))) (EApp (EVar "go") (EVar "quals0"))))
 (DTypeSig false "eraseLamAnnots" (TyFun (TyApp (TyCon "List") (TyCon "Pat")) (TyFun (TyCon "Expr") (TyCon "Expr"))))
 (DFunDef false "eraseLamAnnots" ((PVar "ps") (PVar "body")) (EBlock (DoLet false false (PTuple (PVar "ps2") (PVar "checks") PWild) (EApp (EApp (EVar "annotsOutOf") (EVar "ps")) (ELit (LInt 0)))) (DoExpr (EApp (EApp (EVar "ELam") (EVar "ps2")) (EApp (EApp (EVar "annotChecks") (EVar "checks")) (EVar "body"))))))
 (DTypeSig false "eraseMatchAnnots" (TyFun (TyCon "Expr") (TyFun (TyApp (TyCon "List") (TyCon "Arm")) (TyCon "Expr"))))

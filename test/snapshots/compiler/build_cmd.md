@@ -1,5 +1,5 @@
 # META
-source_lines=2730
+source_lines=2734
 stages=DESUGAR,MARK
 # SOURCE
 -- compiler/driver/build_cmd.mdk — `medaka build`, self-hosted
@@ -1936,18 +1936,22 @@ foreignLibErrGo : String ->
   String ->
   List (String, String) ->
   <IO> String
-foreignLibErrGo _ _ _ _ [] = ""
-foreignLibErrGo cc tmpDir projRoot probeC ((name, dir) :: rest) =
-  let probeOut = joinPath tmpDir "ffi_lib_probe.out"
-  match runCommand cc ([probeC, "-o", probeOut] ++ libLinkFlags [(name, dir)])
-    Err e =>
-      "error: could not run \{cc} to check the foreign library `\{name}`: \{e}"
-    -- bucket-adjacent, not fail-open and not converted: a probe failure here
-    -- deliberately replaces the probe's own stderr with missingLibMsg, a
-    -- purpose-built diagnostic naming the library/manifest key/searched
-    -- dirs — intentional UX, not lost information.
-    Ok (0, _, _) => foreignLibErrGo cc tmpDir projRoot probeC rest
-    Ok (_, _, _) => missingLibMsg projRoot name dir
+foreignLibErrGo cc tmpDir projRoot probeC xs0 = go xs0
+  where
+    go [] = ""
+    go ((name, dir) :: rest) =
+      let probeOut = joinPath tmpDir "ffi_lib_probe.out"
+      match (runCommand
+        cc
+        ([probeC, "-o", probeOut] ++ libLinkFlags [(name, dir)]))
+        Err e =>
+          "error: could not run \{cc} to check the foreign library `\{name}`: \{e}"
+        -- bucket-adjacent, not fail-open and not converted: a probe failure here
+        -- deliberately replaces the probe's own stderr with missingLibMsg, a
+        -- purpose-built diagnostic naming the library/manifest key/searched
+        -- dirs — intentional UX, not lost information.
+        Ok (0, _, _) => go rest
+        Ok (_, _, _) => missingLibMsg projRoot name dir
 
 -- The missing-library diagnostic: names the library, the manifest KEY that
 -- declared it, the file that key lives in, where we looked, and the edit that
@@ -3020,8 +3024,7 @@ emitRtObjGo cc root outObjPath = match makeTempDir ()
 (DFunDef false "foreignLibErr" (PWild PWild PWild (PList)) (ELit (LString "")))
 (DFunDef false "foreignLibErr" ((PVar "cc") (PVar "tmpDir") (PVar "projRoot") (PVar "libs")) (EBlock (DoLet false false (PVar "probeC") (EApp (EApp (EVar "joinPath") (EVar "tmpDir")) (ELit (LString "ffi_lib_probe.c")))) (DoExpr (EMatch (EApp (EApp (EVar "writeFile") (EVar "probeC")) (ELit (LString "int main(void) { return 0; }\n"))) (arm (PCon "Err" (PVar "e")) () (EBinOp "++" (EBinOp "++" (ELit (LString "error: could not write the foreign-library probe source: ")) (EApp (EVar "display") (EVar "e"))) (ELit (LString "")))) (arm (PCon "Ok" PWild) () (EApp (EApp (EApp (EApp (EApp (EVar "foreignLibErrGo") (EVar "cc")) (EVar "tmpDir")) (EVar "projRoot")) (EVar "probeC")) (EVar "libs")))))))
 (DTypeSig false "foreignLibErrGo" (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "String"))) (TyEffect ("IO") None (TyCon "String"))))))))
-(DFunDef false "foreignLibErrGo" (PWild PWild PWild PWild (PList)) (ELit (LString "")))
-(DFunDef false "foreignLibErrGo" ((PVar "cc") (PVar "tmpDir") (PVar "projRoot") (PVar "probeC") (PCons (PTuple (PVar "name") (PVar "dir")) (PVar "rest"))) (EBlock (DoLet false false (PVar "probeOut") (EApp (EApp (EVar "joinPath") (EVar "tmpDir")) (ELit (LString "ffi_lib_probe.out")))) (DoExpr (EMatch (EApp (EApp (EVar "runCommand") (EVar "cc")) (EBinOp "++" (EListLit (EVar "probeC") (ELit (LString "-o")) (EVar "probeOut")) (EApp (EVar "libLinkFlags") (EListLit (ETuple (EVar "name") (EVar "dir")))))) (arm (PCon "Err" (PVar "e")) () (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "error: could not run ")) (EApp (EVar "display") (EVar "cc"))) (ELit (LString " to check the foreign library `"))) (EApp (EVar "display") (EVar "name"))) (ELit (LString "`: "))) (EApp (EVar "display") (EVar "e"))) (ELit (LString "")))) (arm (PCon "Ok" (PTuple (PLit (LInt 0)) PWild PWild)) () (EApp (EApp (EApp (EApp (EApp (EVar "foreignLibErrGo") (EVar "cc")) (EVar "tmpDir")) (EVar "projRoot")) (EVar "probeC")) (EVar "rest"))) (arm (PCon "Ok" (PTuple PWild PWild PWild)) () (EApp (EApp (EApp (EVar "missingLibMsg") (EVar "projRoot")) (EVar "name")) (EVar "dir")))))))
+(DFunDef false "foreignLibErrGo" ((PVar "cc") (PVar "tmpDir") (PVar "projRoot") (PVar "probeC") (PVar "xs0")) (ELetGroup ((lgb "go" (clause ((PList)) (ELit (LString ""))) (clause ((PCons (PTuple (PVar "name") (PVar "dir")) (PVar "rest"))) (EBlock (DoLet false false (PVar "probeOut") (EApp (EApp (EVar "joinPath") (EVar "tmpDir")) (ELit (LString "ffi_lib_probe.out")))) (DoExpr (EMatch (EApp (EApp (EVar "runCommand") (EVar "cc")) (EBinOp "++" (EListLit (EVar "probeC") (ELit (LString "-o")) (EVar "probeOut")) (EApp (EVar "libLinkFlags") (EListLit (ETuple (EVar "name") (EVar "dir")))))) (arm (PCon "Err" (PVar "e")) () (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "error: could not run ")) (EApp (EVar "display") (EVar "cc"))) (ELit (LString " to check the foreign library `"))) (EApp (EVar "display") (EVar "name"))) (ELit (LString "`: "))) (EApp (EVar "display") (EVar "e"))) (ELit (LString "")))) (arm (PCon "Ok" (PTuple (PLit (LInt 0)) PWild PWild)) () (EApp (EVar "go") (EVar "rest"))) (arm (PCon "Ok" (PTuple PWild PWild PWild)) () (EApp (EApp (EApp (EVar "missingLibMsg") (EVar "projRoot")) (EVar "name")) (EVar "dir"))))))))) (EApp (EVar "go") (EVar "xs0"))))
 (DTypeSig false "missingLibMsg" (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyCon "String") (TyCon "String")))))
 (DFunDef false "missingLibMsg" ((PVar "projRoot") (PVar "name") (PVar "dir")) (EBlock (DoLet false false (PVar "searched") (EIf (EBinOp "==" (EVar "dir") (ELit (LString ""))) (ELit (LString "the linker's default search path")) (EBinOp "++" (EBinOp "++" (ELit (LString "")) (EApp (EVar "display") (EVar "dir"))) (ELit (LString " or on the linker's default search path"))))) (DoExpr (EApp (EVar "stringConcat") (EListLit (ELit (LString "error [B-FFI-LIB-NOT-FOUND]: foreign library `")) (EVar "name") (ELit (LString "` not found in ")) (EVar "searched") (ELit (LString "; point the key `")) (EVar "name") (ELit (LString "` under [foreign-libraries] in ")) (EVar "projRoot") (ELit (LString "/medaka.toml")) (ELit (LString " at the directory holding it, such as `")) (EVar "name") (ELit (LString " = \"vendor/lib\"`")))))))
 (DTypeSig false "provenanceObject" (TyFun (TyCon "Bool") (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyCon "String") (TyEffect ("IO") None (TyApp (TyApp (TyCon "Result") (TyCon "String")) (TyCon "String"))))))))
@@ -3363,8 +3366,7 @@ emitRtObjGo cc root outObjPath = match makeTempDir ()
 (DFunDef false "foreignLibErr" (PWild PWild PWild (PList)) (ELit (LString "")))
 (DFunDef false "foreignLibErr" ((PVar "cc") (PVar "tmpDir") (PVar "projRoot") (PVar "libs")) (EBlock (DoLet false false (PVar "probeC") (EApp (EApp (EVar "joinPath") (EVar "tmpDir")) (ELit (LString "ffi_lib_probe.c")))) (DoExpr (EMatch (EApp (EApp (EVar "writeFile") (EVar "probeC")) (ELit (LString "int main(void) { return 0; }\n"))) (arm (PCon "Err" (PVar "e")) () (EBinOp "++" (EBinOp "++" (ELit (LString "error: could not write the foreign-library probe source: ")) (EApp (EMethodRef "display") (EVar "e"))) (ELit (LString "")))) (arm (PCon "Ok" PWild) () (EApp (EApp (EApp (EApp (EApp (EVar "foreignLibErrGo") (EVar "cc")) (EVar "tmpDir")) (EVar "projRoot")) (EVar "probeC")) (EVar "libs")))))))
 (DTypeSig false "foreignLibErrGo" (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "String"))) (TyEffect ("IO") None (TyCon "String"))))))))
-(DFunDef false "foreignLibErrGo" (PWild PWild PWild PWild (PList)) (ELit (LString "")))
-(DFunDef false "foreignLibErrGo" ((PVar "cc") (PVar "tmpDir") (PVar "projRoot") (PVar "probeC") (PCons (PTuple (PVar "name") (PVar "dir")) (PVar "rest"))) (EBlock (DoLet false false (PVar "probeOut") (EApp (EApp (EVar "joinPath") (EVar "tmpDir")) (ELit (LString "ffi_lib_probe.out")))) (DoExpr (EMatch (EApp (EApp (EVar "runCommand") (EVar "cc")) (EBinOp "++" (EListLit (EVar "probeC") (ELit (LString "-o")) (EVar "probeOut")) (EApp (EVar "libLinkFlags") (EListLit (ETuple (EVar "name") (EVar "dir")))))) (arm (PCon "Err" (PVar "e")) () (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "error: could not run ")) (EApp (EMethodRef "display") (EVar "cc"))) (ELit (LString " to check the foreign library `"))) (EApp (EMethodRef "display") (EVar "name"))) (ELit (LString "`: "))) (EApp (EMethodRef "display") (EVar "e"))) (ELit (LString "")))) (arm (PCon "Ok" (PTuple (PLit (LInt 0)) PWild PWild)) () (EApp (EApp (EApp (EApp (EApp (EVar "foreignLibErrGo") (EVar "cc")) (EVar "tmpDir")) (EVar "projRoot")) (EVar "probeC")) (EVar "rest"))) (arm (PCon "Ok" (PTuple PWild PWild PWild)) () (EApp (EApp (EApp (EVar "missingLibMsg") (EVar "projRoot")) (EVar "name")) (EVar "dir")))))))
+(DFunDef false "foreignLibErrGo" ((PVar "cc") (PVar "tmpDir") (PVar "projRoot") (PVar "probeC") (PVar "xs0")) (ELetGroup ((lgb "go" (clause ((PList)) (ELit (LString ""))) (clause ((PCons (PTuple (PVar "name") (PVar "dir")) (PVar "rest"))) (EBlock (DoLet false false (PVar "probeOut") (EApp (EApp (EVar "joinPath") (EVar "tmpDir")) (ELit (LString "ffi_lib_probe.out")))) (DoExpr (EMatch (EApp (EApp (EVar "runCommand") (EVar "cc")) (EBinOp "++" (EListLit (EVar "probeC") (ELit (LString "-o")) (EVar "probeOut")) (EApp (EVar "libLinkFlags") (EListLit (ETuple (EVar "name") (EVar "dir")))))) (arm (PCon "Err" (PVar "e")) () (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "error: could not run ")) (EApp (EMethodRef "display") (EVar "cc"))) (ELit (LString " to check the foreign library `"))) (EApp (EMethodRef "display") (EVar "name"))) (ELit (LString "`: "))) (EApp (EMethodRef "display") (EVar "e"))) (ELit (LString "")))) (arm (PCon "Ok" (PTuple (PLit (LInt 0)) PWild PWild)) () (EApp (EVar "go") (EVar "rest"))) (arm (PCon "Ok" (PTuple PWild PWild PWild)) () (EApp (EApp (EApp (EVar "missingLibMsg") (EVar "projRoot")) (EVar "name")) (EVar "dir"))))))))) (EApp (EVar "go") (EVar "xs0"))))
 (DTypeSig false "missingLibMsg" (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyCon "String") (TyCon "String")))))
 (DFunDef false "missingLibMsg" ((PVar "projRoot") (PVar "name") (PVar "dir")) (EBlock (DoLet false false (PVar "searched") (EIf (EBinOp "==" (EVar "dir") (ELit (LString ""))) (ELit (LString "the linker's default search path")) (EBinOp "++" (EBinOp "++" (ELit (LString "")) (EApp (EMethodRef "display") (EVar "dir"))) (ELit (LString " or on the linker's default search path"))))) (DoExpr (EApp (EVar "stringConcat") (EListLit (ELit (LString "error [B-FFI-LIB-NOT-FOUND]: foreign library `")) (EVar "name") (ELit (LString "` not found in ")) (EVar "searched") (ELit (LString "; point the key `")) (EVar "name") (ELit (LString "` under [foreign-libraries] in ")) (EVar "projRoot") (ELit (LString "/medaka.toml")) (ELit (LString " at the directory holding it, such as `")) (EVar "name") (ELit (LString " = \"vendor/lib\"`")))))))
 (DTypeSig false "provenanceObject" (TyFun (TyCon "Bool") (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyCon "String") (TyEffect ("IO") None (TyApp (TyApp (TyCon "Result") (TyCon "String")) (TyCon "String"))))))))

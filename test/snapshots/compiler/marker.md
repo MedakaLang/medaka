@@ -1,5 +1,5 @@
 # META
-source_lines=560
+source_lines=562
 stages=DESUGAR,MARK
 # SOURCE
 -- Self-hosted method_marker stage.
@@ -243,6 +243,8 @@ shadowedMethodsOf : OrdMap Unit ->
   String ->
   List IfaceMethod ->
   List (String, String, Option Loc)
+-- Bound: list built in tail position modulo cons: a where-local go loses the constant-stack loop until the lambda-lift pass (#4878); convert then.
+-- lint-disable-next-line rule-threaded-invariant
 shadowedMethodsOf _ _ [] = []
 shadowedMethodsOf pool iface ((IfaceMethod n _ _ mloc) :: rest)
   | omHasKey n pool = (iface, n, mloc) :: shadowedMethodsOf pool iface rest

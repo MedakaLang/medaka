@@ -1,5 +1,5 @@
 # META
-source_lines=4669
+source_lines=4675
 stages=DESUGAR,MARK
 # SOURCE
 import support.diag_codes.{DiagCode(..), codeText}
@@ -996,6 +996,8 @@ residualJsonTriples : String ->
   List (String, String) ->
   List (String, TcDiag) ->
   <IO> List (String, String, List Diag)
+-- Bound: list built in tail position modulo cons: a where-local go loses the constant-stack loop until the lambda-lift pass (#4878); convert then.
+-- lint-disable-next-line rule-threaded-invariant
 residualJsonTriples entryFile _ [] =
   [(entryFile, readFileSafe entryFile, [genericResidualDiag entryFile])]
 residualJsonTriples entryFile pathMap ((mid, d) :: rest) =
@@ -2230,10 +2232,12 @@ codemodFilesGo : CodeMode ->
   List String ->
   Bool ->
   <IO> Bool
-codemodFilesGo _ _ _ [] acc = acc
-codemodFilesGo mode xf warnFn (f :: rest) acc =
-  let signal = codemodOneReport mode xf warnFn f
-  codemodFilesGo mode xf warnFn rest (acc || signal)
+codemodFilesGo mode xf warnFn xs0 acc0 = go xs0 acc0
+  where
+    go [] acc = acc
+    go (f :: rest) acc =
+      let signal = codemodOneReport mode xf warnFn f
+      go rest (acc || signal)
 
 codemodOneReport : CodeMode ->
   (Decl -> (Decl, Bool)) ->
@@ -3532,15 +3536,17 @@ collectModuleDocs : String ->
   String ->
   List String ->
   <IO> Result String (List ModuleDoc)
-collectModuleDocs _ _ _ [] = Ok []
-collectModuleDocs rsrc csrc stdlibDir (target :: rest) = match readSource target
-  Err msg => Err "\{target}: \{msg}"
-  Ok tsrc => match docParseError target tsrc
-    Some msg => Err msg
-    None =>
-      let roots = entrySearchRoots (dirOf target) ++ [stdlibDir]
-      let md = computeModuleDoc rsrc csrc tsrc target roots
-      map (md :: _) (collectModuleDocs rsrc csrc stdlibDir rest)
+collectModuleDocs rsrc csrc stdlibDir xs0 = go xs0
+  where
+    go [] = Ok []
+    go (target :: rest) = match readSource target
+      Err msg => Err "\{target}: \{msg}"
+      Ok tsrc => match docParseError target tsrc
+        Some msg => Err msg
+        None =>
+          let roots = entrySearchRoots (dirOf target) ++ [stdlibDir]
+          let md = computeModuleDoc rsrc csrc tsrc target roots
+          map (md :: _) (go rest)
 
 -- A library page is named for its module's DERIVED name (`mdName`: a stdlib
 -- module's import id, otherwise the basename minus `.mdk`), so two non-stdlib
@@ -4969,8 +4975,7 @@ runMcpServerFromEnv _ =
 (DTypeSig false "codemodStdout" (TyFun (TyFun (TyCon "Decl") (TyTuple (TyCon "Decl") (TyCon "Bool"))) (TyFun (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyApp (TyCon "List") (TyCon "String"))) (TyFun (TyCon "String") (TyEffect ("IO") None (TyCon "Unit"))))))
 (DFunDef false "codemodStdout" ((PVar "xf") (PVar "warnFn") (PVar "file")) (EMatch (EApp (EVar "readSourceE") (EVar "file")) (arm (PCon "Err" (PVar "e")) () (EApp (EVar "dieMsg") (EApp (EApp (EVar "sourceReadLine") (EVar "file")) (EVar "e")))) (arm (PCon "Ok" (PVar "src")) () (EMatch (EApp (EApp (EVar "codemodSource") (EVar "xf")) (EVar "src")) (arm (PCon "Err" (PVar "e")) () (EApp (EVar "dieMsg") (EApp (EApp (EApp (EVar "ppParseError") (EVar "src")) (EVar "file")) (EVar "e")))) (arm (PCon "Ok" (PVar "result")) () (EBlock (DoExpr (EApp (EApp (EApp (EVar "emitCodemodWarns") (EVar "warnFn")) (EVar "file")) (EVar "src"))) (DoExpr (EMatch (EVar "result") (arm (PCon "None") () (EApp (EVar "putStr") (EVar "src"))) (arm (PCon "Some" (PVar "out")) () (EApp (EVar "putStr") (EVar "out")))))))))))
 (DTypeSig false "codemodFilesGo" (TyFun (TyCon "CodeMode") (TyFun (TyFun (TyCon "Decl") (TyTuple (TyCon "Decl") (TyCon "Bool"))) (TyFun (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyApp (TyCon "List") (TyCon "String"))) (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyCon "Bool") (TyEffect ("IO") None (TyCon "Bool"))))))))
-(DFunDef false "codemodFilesGo" (PWild PWild PWild (PList) (PVar "acc")) (EVar "acc"))
-(DFunDef false "codemodFilesGo" ((PVar "mode") (PVar "xf") (PVar "warnFn") (PCons (PVar "f") (PVar "rest")) (PVar "acc")) (EBlock (DoLet false false (PVar "signal") (EApp (EApp (EApp (EApp (EVar "codemodOneReport") (EVar "mode")) (EVar "xf")) (EVar "warnFn")) (EVar "f"))) (DoExpr (EApp (EApp (EApp (EApp (EApp (EVar "codemodFilesGo") (EVar "mode")) (EVar "xf")) (EVar "warnFn")) (EVar "rest")) (EBinOp "||" (EVar "acc") (EVar "signal"))))))
+(DFunDef false "codemodFilesGo" ((PVar "mode") (PVar "xf") (PVar "warnFn") (PVar "xs0") (PVar "acc0")) (ELetGroup ((lgb "go" (clause ((PList) (PVar "acc")) (EVar "acc")) (clause ((PCons (PVar "f") (PVar "rest")) (PVar "acc")) (EBlock (DoLet false false (PVar "signal") (EApp (EApp (EApp (EApp (EVar "codemodOneReport") (EVar "mode")) (EVar "xf")) (EVar "warnFn")) (EVar "f"))) (DoExpr (EApp (EApp (EVar "go") (EVar "rest")) (EBinOp "||" (EVar "acc") (EVar "signal")))))))) (EApp (EApp (EVar "go") (EVar "xs0")) (EVar "acc0"))))
 (DTypeSig false "codemodOneReport" (TyFun (TyCon "CodeMode") (TyFun (TyFun (TyCon "Decl") (TyTuple (TyCon "Decl") (TyCon "Bool"))) (TyFun (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyApp (TyCon "List") (TyCon "String"))) (TyFun (TyCon "String") (TyEffect ("IO") None (TyCon "Bool")))))))
 (DFunDef false "codemodOneReport" ((PVar "mode") (PVar "xf") (PVar "warnFn") (PVar "file")) (EMatch (EApp (EVar "readSourceE") (EVar "file")) (arm (PCon "Err" (PVar "e")) () (EBlock (DoExpr (EApp (EVar "ePutStrLn") (EApp (EApp (EVar "sourceReadLine") (EVar "file")) (EVar "e")))) (DoExpr (EVar "True")))) (arm (PCon "Ok" (PVar "src")) () (EMatch (EApp (EApp (EVar "codemodSource") (EVar "xf")) (EVar "src")) (arm (PCon "Err" (PVar "e")) () (EBlock (DoExpr (EApp (EVar "ePutStrLn") (EApp (EApp (EApp (EVar "ppParseError") (EVar "src")) (EVar "file")) (EVar "e")))) (DoExpr (EVar "True")))) (arm (PCon "Ok" (PVar "result")) () (EBlock (DoExpr (EApp (EApp (EApp (EVar "emitCodemodWarns") (EVar "warnFn")) (EVar "file")) (EVar "src"))) (DoExpr (EMatch (EVar "result") (arm (PCon "None") () (EVar "False")) (arm (PCon "Some" (PVar "out")) () (EMatch (EVar "mode") (arm (PCon "CmWrite") () (EMatch (EApp (EApp (EVar "writeFile") (EVar "file")) (EVar "out")) (arm (PCon "Err" (PVar "msg")) () (EBlock (DoExpr (EApp (EVar "ePutStrLn") (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "")) (EApp (EVar "display") (EVar "file"))) (ELit (LString ": "))) (EApp (EVar "display") (EVar "msg"))) (ELit (LString ""))))) (DoExpr (EVar "True")))) (arm (PCon "Ok" PWild) () (EVar "False")))) (arm PWild () (EBlock (DoExpr (EApp (EVar "putStrLn") (EBinOp "++" (EBinOp "++" (ELit (LString "would rewrite: ")) (EApp (EVar "display") (EVar "file"))) (ELit (LString ""))))) (DoExpr (EVar "True"))))))))))))))
 (DTypeSig false "emitCodemodWarns" (TyFun (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyApp (TyCon "List") (TyCon "String"))) (TyFun (TyCon "String") (TyFun (TyCon "String") (TyEffect ("IO") None (TyCon "Unit"))))))
@@ -5081,8 +5086,7 @@ runMcpServerFromEnv _ =
 (DTypeSig false "ensureOutDir" (TyFun (TyCon "String") (TyEffect ("FileWrite") None (TyApp (TyApp (TyCon "Result") (TyCon "String")) (TyCon "Unit")))))
 (DFunDef false "ensureOutDir" ((PVar "dir")) (EMatch (EApp (EVar "makeDir") (EVar "dir")) (arm (PCon "Ok" PWild) () (EApp (EVar "Ok") (ELit LUnit))) (arm (PCon "Err" (PVar "e")) () (EIf (EApp (EVar "isSome") (EApp (EApp (EVar "stringIndexOf") (ELit (LString "exists"))) (EVar "e"))) (EApp (EVar "Ok") (ELit LUnit)) (EApp (EVar "Err") (EVar "e"))))))
 (DTypeSig false "collectModuleDocs" (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyEffect ("IO") None (TyApp (TyApp (TyCon "Result") (TyCon "String")) (TyApp (TyCon "List") (TyCon "ModuleDoc")))))))))
-(DFunDef false "collectModuleDocs" (PWild PWild PWild (PList)) (EApp (EVar "Ok") (EListLit)))
-(DFunDef false "collectModuleDocs" ((PVar "rsrc") (PVar "csrc") (PVar "stdlibDir") (PCons (PVar "target") (PVar "rest"))) (EMatch (EApp (EVar "readSource") (EVar "target")) (arm (PCon "Err" (PVar "msg")) () (EApp (EVar "Err") (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "")) (EApp (EVar "display") (EVar "target"))) (ELit (LString ": "))) (EApp (EVar "display") (EVar "msg"))) (ELit (LString ""))))) (arm (PCon "Ok" (PVar "tsrc")) () (EMatch (EApp (EApp (EVar "docParseError") (EVar "target")) (EVar "tsrc")) (arm (PCon "Some" (PVar "msg")) () (EApp (EVar "Err") (EVar "msg"))) (arm (PCon "None") () (EBlock (DoLet false false (PVar "roots") (EBinOp "++" (EApp (EVar "entrySearchRoots") (EApp (EVar "dirOf") (EVar "target"))) (EListLit (EVar "stdlibDir")))) (DoLet false false (PVar "md") (EApp (EApp (EApp (EApp (EApp (EVar "computeModuleDoc") (EVar "rsrc")) (EVar "csrc")) (EVar "tsrc")) (EVar "target")) (EVar "roots"))) (DoExpr (EApp (EApp (EVar "map") (ELam ((PVar "_s")) (EBinOp "::" (EVar "md") (EVar "_s")))) (EApp (EApp (EApp (EApp (EVar "collectModuleDocs") (EVar "rsrc")) (EVar "csrc")) (EVar "stdlibDir")) (EVar "rest"))))))))))
+(DFunDef false "collectModuleDocs" ((PVar "rsrc") (PVar "csrc") (PVar "stdlibDir") (PVar "xs0")) (ELetGroup ((lgb "go" (clause ((PList)) (EApp (EVar "Ok") (EListLit))) (clause ((PCons (PVar "target") (PVar "rest"))) (EMatch (EApp (EVar "readSource") (EVar "target")) (arm (PCon "Err" (PVar "msg")) () (EApp (EVar "Err") (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "")) (EApp (EVar "display") (EVar "target"))) (ELit (LString ": "))) (EApp (EVar "display") (EVar "msg"))) (ELit (LString ""))))) (arm (PCon "Ok" (PVar "tsrc")) () (EMatch (EApp (EApp (EVar "docParseError") (EVar "target")) (EVar "tsrc")) (arm (PCon "Some" (PVar "msg")) () (EApp (EVar "Err") (EVar "msg"))) (arm (PCon "None") () (EBlock (DoLet false false (PVar "roots") (EBinOp "++" (EApp (EVar "entrySearchRoots") (EApp (EVar "dirOf") (EVar "target"))) (EListLit (EVar "stdlibDir")))) (DoLet false false (PVar "md") (EApp (EApp (EApp (EApp (EApp (EVar "computeModuleDoc") (EVar "rsrc")) (EVar "csrc")) (EVar "tsrc")) (EVar "target")) (EVar "roots"))) (DoExpr (EApp (EApp (EVar "map") (ELam ((PVar "_s")) (EBinOp "::" (EVar "md") (EVar "_s")))) (EApp (EVar "go") (EVar "rest")))))))))))) (EApp (EVar "go") (EVar "xs0"))))
 (DTypeSig false "checkDistinctModuleNames" (TyFun (TyApp (TyCon "List") (TyCon "ModuleDoc")) (TyEffect ("IO") None (TyCon "Unit"))))
 (DFunDef false "checkDistinctModuleNames" ((PVar "mds")) (EApp (EApp (EVar "checkDistinctGo") (EVar "mds")) (EListLit)))
 (DTypeSig false "checkDistinctGo" (TyFun (TyApp (TyCon "List") (TyCon "ModuleDoc")) (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyEffect ("IO") None (TyCon "Unit")))))
@@ -5521,8 +5525,7 @@ runMcpServerFromEnv _ =
 (DTypeSig false "codemodStdout" (TyFun (TyFun (TyCon "Decl") (TyTuple (TyCon "Decl") (TyCon "Bool"))) (TyFun (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyApp (TyCon "List") (TyCon "String"))) (TyFun (TyCon "String") (TyEffect ("IO") None (TyCon "Unit"))))))
 (DFunDef false "codemodStdout" ((PVar "xf") (PVar "warnFn") (PVar "file")) (EMatch (EApp (EVar "readSourceE") (EVar "file")) (arm (PCon "Err" (PVar "e")) () (EApp (EVar "dieMsg") (EApp (EApp (EVar "sourceReadLine") (EVar "file")) (EVar "e")))) (arm (PCon "Ok" (PVar "src")) () (EMatch (EApp (EApp (EVar "codemodSource") (EVar "xf")) (EVar "src")) (arm (PCon "Err" (PVar "e")) () (EApp (EVar "dieMsg") (EApp (EApp (EApp (EVar "ppParseError") (EVar "src")) (EVar "file")) (EVar "e")))) (arm (PCon "Ok" (PVar "result")) () (EBlock (DoExpr (EApp (EApp (EApp (EVar "emitCodemodWarns") (EVar "warnFn")) (EVar "file")) (EVar "src"))) (DoExpr (EMatch (EVar "result") (arm (PCon "None") () (EApp (EVar "putStr") (EVar "src"))) (arm (PCon "Some" (PVar "out")) () (EApp (EVar "putStr") (EVar "out")))))))))))
 (DTypeSig false "codemodFilesGo" (TyFun (TyCon "CodeMode") (TyFun (TyFun (TyCon "Decl") (TyTuple (TyCon "Decl") (TyCon "Bool"))) (TyFun (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyApp (TyCon "List") (TyCon "String"))) (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyCon "Bool") (TyEffect ("IO") None (TyCon "Bool"))))))))
-(DFunDef false "codemodFilesGo" (PWild PWild PWild (PList) (PVar "acc")) (EVar "acc"))
-(DFunDef false "codemodFilesGo" ((PVar "mode") (PVar "xf") (PVar "warnFn") (PCons (PVar "f") (PVar "rest")) (PVar "acc")) (EBlock (DoLet false false (PVar "signal") (EApp (EApp (EApp (EApp (EVar "codemodOneReport") (EVar "mode")) (EVar "xf")) (EVar "warnFn")) (EVar "f"))) (DoExpr (EApp (EApp (EApp (EApp (EApp (EVar "codemodFilesGo") (EVar "mode")) (EVar "xf")) (EVar "warnFn")) (EVar "rest")) (EBinOp "||" (EVar "acc") (EVar "signal"))))))
+(DFunDef false "codemodFilesGo" ((PVar "mode") (PVar "xf") (PVar "warnFn") (PVar "xs0") (PVar "acc0")) (ELetGroup ((lgb "go" (clause ((PList) (PVar "acc")) (EVar "acc")) (clause ((PCons (PVar "f") (PVar "rest")) (PVar "acc")) (EBlock (DoLet false false (PVar "signal") (EApp (EApp (EApp (EApp (EVar "codemodOneReport") (EVar "mode")) (EVar "xf")) (EVar "warnFn")) (EVar "f"))) (DoExpr (EApp (EApp (EVar "go") (EVar "rest")) (EBinOp "||" (EVar "acc") (EVar "signal")))))))) (EApp (EApp (EVar "go") (EVar "xs0")) (EVar "acc0"))))
 (DTypeSig false "codemodOneReport" (TyFun (TyCon "CodeMode") (TyFun (TyFun (TyCon "Decl") (TyTuple (TyCon "Decl") (TyCon "Bool"))) (TyFun (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyApp (TyCon "List") (TyCon "String"))) (TyFun (TyCon "String") (TyEffect ("IO") None (TyCon "Bool")))))))
 (DFunDef false "codemodOneReport" ((PVar "mode") (PVar "xf") (PVar "warnFn") (PVar "file")) (EMatch (EApp (EVar "readSourceE") (EVar "file")) (arm (PCon "Err" (PVar "e")) () (EBlock (DoExpr (EApp (EVar "ePutStrLn") (EApp (EApp (EVar "sourceReadLine") (EVar "file")) (EVar "e")))) (DoExpr (EVar "True")))) (arm (PCon "Ok" (PVar "src")) () (EMatch (EApp (EApp (EVar "codemodSource") (EVar "xf")) (EVar "src")) (arm (PCon "Err" (PVar "e")) () (EBlock (DoExpr (EApp (EVar "ePutStrLn") (EApp (EApp (EApp (EVar "ppParseError") (EVar "src")) (EVar "file")) (EVar "e")))) (DoExpr (EVar "True")))) (arm (PCon "Ok" (PVar "result")) () (EBlock (DoExpr (EApp (EApp (EApp (EVar "emitCodemodWarns") (EVar "warnFn")) (EVar "file")) (EVar "src"))) (DoExpr (EMatch (EVar "result") (arm (PCon "None") () (EVar "False")) (arm (PCon "Some" (PVar "out")) () (EMatch (EVar "mode") (arm (PCon "CmWrite") () (EMatch (EApp (EApp (EVar "writeFile") (EVar "file")) (EVar "out")) (arm (PCon "Err" (PVar "msg")) () (EBlock (DoExpr (EApp (EVar "ePutStrLn") (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "")) (EApp (EMethodRef "display") (EVar "file"))) (ELit (LString ": "))) (EApp (EMethodRef "display") (EVar "msg"))) (ELit (LString ""))))) (DoExpr (EVar "True")))) (arm (PCon "Ok" PWild) () (EVar "False")))) (arm PWild () (EBlock (DoExpr (EApp (EVar "putStrLn") (EBinOp "++" (EBinOp "++" (ELit (LString "would rewrite: ")) (EApp (EMethodRef "display") (EVar "file"))) (ELit (LString ""))))) (DoExpr (EVar "True"))))))))))))))
 (DTypeSig false "emitCodemodWarns" (TyFun (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyApp (TyCon "List") (TyCon "String"))) (TyFun (TyCon "String") (TyFun (TyCon "String") (TyEffect ("IO") None (TyCon "Unit"))))))
@@ -5633,8 +5636,7 @@ runMcpServerFromEnv _ =
 (DTypeSig false "ensureOutDir" (TyFun (TyCon "String") (TyEffect ("FileWrite") None (TyApp (TyApp (TyCon "Result") (TyCon "String")) (TyCon "Unit")))))
 (DFunDef false "ensureOutDir" ((PVar "dir")) (EMatch (EApp (EVar "makeDir") (EVar "dir")) (arm (PCon "Ok" PWild) () (EApp (EVar "Ok") (ELit LUnit))) (arm (PCon "Err" (PVar "e")) () (EIf (EApp (EVar "isSome") (EApp (EApp (EVar "stringIndexOf") (ELit (LString "exists"))) (EVar "e"))) (EApp (EVar "Ok") (ELit LUnit)) (EApp (EVar "Err") (EVar "e"))))))
 (DTypeSig false "collectModuleDocs" (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyEffect ("IO") None (TyApp (TyApp (TyCon "Result") (TyCon "String")) (TyApp (TyCon "List") (TyCon "ModuleDoc")))))))))
-(DFunDef false "collectModuleDocs" (PWild PWild PWild (PList)) (EApp (EVar "Ok") (EListLit)))
-(DFunDef false "collectModuleDocs" ((PVar "rsrc") (PVar "csrc") (PVar "stdlibDir") (PCons (PVar "target") (PVar "rest"))) (EMatch (EApp (EVar "readSource") (EVar "target")) (arm (PCon "Err" (PVar "msg")) () (EApp (EVar "Err") (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "")) (EApp (EMethodRef "display") (EVar "target"))) (ELit (LString ": "))) (EApp (EMethodRef "display") (EVar "msg"))) (ELit (LString ""))))) (arm (PCon "Ok" (PVar "tsrc")) () (EMatch (EApp (EApp (EVar "docParseError") (EVar "target")) (EVar "tsrc")) (arm (PCon "Some" (PVar "msg")) () (EApp (EVar "Err") (EVar "msg"))) (arm (PCon "None") () (EBlock (DoLet false false (PVar "roots") (EBinOp "++" (EApp (EVar "entrySearchRoots") (EApp (EVar "dirOf") (EVar "target"))) (EListLit (EVar "stdlibDir")))) (DoLet false false (PVar "md") (EApp (EApp (EApp (EApp (EApp (EVar "computeModuleDoc") (EVar "rsrc")) (EVar "csrc")) (EVar "tsrc")) (EVar "target")) (EVar "roots"))) (DoExpr (EApp (EApp (EMethodRef "map") (ELam ((PVar "_s")) (EBinOp "::" (EVar "md") (EVar "_s")))) (EApp (EApp (EApp (EApp (EVar "collectModuleDocs") (EVar "rsrc")) (EVar "csrc")) (EVar "stdlibDir")) (EVar "rest"))))))))))
+(DFunDef false "collectModuleDocs" ((PVar "rsrc") (PVar "csrc") (PVar "stdlibDir") (PVar "xs0")) (ELetGroup ((lgb "go" (clause ((PList)) (EApp (EVar "Ok") (EListLit))) (clause ((PCons (PVar "target") (PVar "rest"))) (EMatch (EApp (EVar "readSource") (EVar "target")) (arm (PCon "Err" (PVar "msg")) () (EApp (EVar "Err") (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "")) (EApp (EMethodRef "display") (EVar "target"))) (ELit (LString ": "))) (EApp (EMethodRef "display") (EVar "msg"))) (ELit (LString ""))))) (arm (PCon "Ok" (PVar "tsrc")) () (EMatch (EApp (EApp (EVar "docParseError") (EVar "target")) (EVar "tsrc")) (arm (PCon "Some" (PVar "msg")) () (EApp (EVar "Err") (EVar "msg"))) (arm (PCon "None") () (EBlock (DoLet false false (PVar "roots") (EBinOp "++" (EApp (EVar "entrySearchRoots") (EApp (EVar "dirOf") (EVar "target"))) (EListLit (EVar "stdlibDir")))) (DoLet false false (PVar "md") (EApp (EApp (EApp (EApp (EApp (EVar "computeModuleDoc") (EVar "rsrc")) (EVar "csrc")) (EVar "tsrc")) (EVar "target")) (EVar "roots"))) (DoExpr (EApp (EApp (EMethodRef "map") (ELam ((PVar "_s")) (EBinOp "::" (EVar "md") (EVar "_s")))) (EApp (EVar "go") (EVar "rest")))))))))))) (EApp (EVar "go") (EVar "xs0"))))
 (DTypeSig false "checkDistinctModuleNames" (TyFun (TyApp (TyCon "List") (TyCon "ModuleDoc")) (TyEffect ("IO") None (TyCon "Unit"))))
 (DFunDef false "checkDistinctModuleNames" ((PVar "mds")) (EApp (EApp (EVar "checkDistinctGo") (EVar "mds")) (EListLit)))
 (DTypeSig false "checkDistinctGo" (TyFun (TyApp (TyCon "List") (TyCon "ModuleDoc")) (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyEffect ("IO") None (TyCon "Unit")))))

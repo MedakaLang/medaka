@@ -1,5 +1,5 @@
 # META
-source_lines=6440
+source_lines=6469
 stages=DESUGAR,MARK
 # SOURCE
 -- Self-hosted resolve stage (single-file
@@ -571,75 +571,78 @@ checkTypeGo : List String ->
   Env ->
   Ty ->
   (List ResError, List String)
-checkTypeGo bound cur env (TyCon { tyConName = n, tyConLoc = loc }) =
-  let errs =
-    if omHasKey n env.types
-      || omHasKey n env.imported
-      || isTupleCtorTyName n then
-      -- in scope — but a cross-module duplicate TYPE name (≥2 explicitly-importing
-      -- modules) is AMBIGUOUS at this use site (#1110); a type declared in THIS
-      -- module is excluded from `typeAmbiguous`, so this only fires on a genuine
-      -- import collision.  Exactly the ctor peer's guard in `checkPat`'s PCon arm.
-      ambiguousTypeErrors env n (orElseLoc loc cur)
-    else
-      [UnknownType n (orElseLoc loc cur) (suggestType env n)]
-  (errs, bound)
--- (helper below `checkType`) — accept the bare tuple type constructors
--- `(,)`…`(,,,,)` (which the parser lowers to `TyCon "__tupleN__"`, arities 2–5)
--- as known type names WITHOUT adding them to `env.types`/`primitiveTypes`: those
--- feed the emitter's per-head default-method enumeration, and a spurious
--- `__tupleN__` head there makes it try to emit a `Bimappable` default at a tuple
--- with no `bimap` impl.  Kept in sync with the parser's `tupleCtorTyName` and
--- typecheck's `tupleHeadTagTc`.
-checkTypeGo bound _ _ (TyVar n) = ([], n :: bound)
-checkTypeGo bound cur env (TyApp a b) =
-  let (e1, b1) = checkTypeGo bound cur env a
-  let (e2, b2) = checkTypeGo b1 cur env b
-  (e1 ++ e2, b2)
--- A written domain names a label as a row atom does, and is checked as one.
-checkTypeGo bound cur env (TyFun (TyNamed n a d) b) =
-  let (e1, b1) = checkTypeGo bound cur env a
-  let ed = match d
-    Some atom => checkEffAtoms b1 cur env [atom]
-    None => []
-  let (e2, b2) = checkTypeGo (n :: b1) cur env b
-  (e1 ++ ed ++ e2, b2)
-checkTypeGo bound cur env (TyFun a b) =
-  let (e1, b1) = checkTypeGo bound cur env a
-  let (e2, b2) = checkTypeGo b1 cur env b
-  (e1 ++ e2, b2)
-checkTypeGo bound cur env (TyTuple ts) = checkTypesGo bound cur env ts
-checkTypeGo bound cur env (TyEffect labels _ t) =
-  let errs = checkEffAtoms bound cur env labels
-  let (e2, b2) = checkTypeGo bound cur env t
-  (errs ++ e2, b2)
-checkTypeGo bound cur _ (TyNamed n _ _) =
-  ([MisplacedAuthorityBinder n cur], bound)
-checkTypeGo bound cur env (TyQual t ps l) =
-  let (e1, b1) = checkTypeGo bound cur env t
-  (
-    e1 ++ flatMap (checkAuthorityName b1 (orElseLoc l cur)) (authTermNames ps),
-    b1,
-  )
--- ⚠️ The predicates are checked with `cur` WIDENED by the constrained type's own
--- first span, not with the bare `cur`.  A `Constraint` carries no `Loc` (see
--- `ambiguousIfaceErrors`), and at DECL level `cur` is `None`, so `f : Speak a =>
--- a -> String` had no span anywhere for an interface-position diagnostic to use —
--- the constrained body does, one token away.  `cur` still wins where it exists (it
--- is the nearer enclosing span, from an `EAnnot` inside a body).  This also
--- narrows the pre-existing `UnknownInterface` at this site from `<unknown
--- location>` to the signature it was written in.
-checkTypeGo bound cur env (TyConstrained cs t) =
-  let errs = flatMap (checkConstraint (orElseLoc cur (firstTyLoc t)) env) cs
-  let (e2, b2) = checkTypeGo bound cur env t
-  (errs ++ e2, b2)
--- A bare row atom (#997) wraps no inner type, but its labels are the same
--- written effect labels a `TyEffect` carries — validate them the same way.
-checkTypeGo bound cur env (TyRow labels _ _) =
-  (checkEffAtoms bound cur env labels, bound)
--- A written authority term binds the names it joins, as a bare index name
--- (`Handle p`) does; its literals name nothing.
-checkTypeGo bound _ _ (TyAuth ps _) = ([], authTermNames ps ++ bound)
+checkTypeGo bound0 cur env x0 = go bound0 x0
+  where
+    go bound (TyCon { tyConName = n, tyConLoc = loc }) =
+      let errs =
+        if omHasKey n env.types
+          || omHasKey n env.imported
+          || isTupleCtorTyName n then
+          -- in scope — but a cross-module duplicate TYPE name (≥2 explicitly-importing
+          -- modules) is AMBIGUOUS at this use site (#1110); a type declared in THIS
+          -- module is excluded from `typeAmbiguous`, so this only fires on a genuine
+          -- import collision.  Exactly the ctor peer's guard in `checkPat`'s PCon arm.
+          ambiguousTypeErrors env n (orElseLoc loc cur)
+        else
+          [UnknownType n (orElseLoc loc cur) (suggestType env n)]
+      (errs, bound)
+    -- (helper below `checkType`) — accept the bare tuple type constructors
+    -- `(,)`…`(,,,,)` (which the parser lowers to `TyCon "__tupleN__"`, arities 2–5)
+    -- as known type names WITHOUT adding them to `env.types`/`primitiveTypes`: those
+    -- feed the emitter's per-head default-method enumeration, and a spurious
+    -- `__tupleN__` head there makes it try to emit a `Bimappable` default at a tuple
+    -- with no `bimap` impl.  Kept in sync with the parser's `tupleCtorTyName` and
+    -- typecheck's `tupleHeadTagTc`.
+    go bound (TyVar n) = ([], n :: bound)
+    go bound (TyApp a b) =
+      let (e1, b1) = go bound a
+      let (e2, b2) = go b1 b
+      (e1 ++ e2, b2)
+    -- A written domain names a label as a row atom does, and is checked as one.
+    go bound (TyFun (TyNamed n a d) b) =
+      let (e1, b1) = go bound a
+      let ed = match d
+        Some atom => checkEffAtoms b1 cur env [atom]
+        None => []
+      let (e2, b2) = go (n :: b1) b
+      (e1 ++ ed ++ e2, b2)
+    go bound (TyFun a b) =
+      let (e1, b1) = go bound a
+      let (e2, b2) = go b1 b
+      (e1 ++ e2, b2)
+    go bound (TyTuple ts) = checkTypesGo bound cur env ts
+    go bound (TyEffect labels _ t) =
+      let errs = checkEffAtoms bound cur env labels
+      let (e2, b2) = go bound t
+      (errs ++ e2, b2)
+    go bound (TyNamed n _ _) = ([MisplacedAuthorityBinder n cur], bound)
+    go bound (TyQual t ps l) =
+      let (e1, b1) = go bound t
+      (
+        e1
+          ++ flatMap
+            (checkAuthorityName b1 (orElseLoc l cur))
+            (authTermNames ps),
+        b1,
+      )
+    -- ⚠️ The predicates are checked with `cur` WIDENED by the constrained type's own
+    -- first span, not with the bare `cur`.  A `Constraint` carries no `Loc` (see
+    -- `ambiguousIfaceErrors`), and at DECL level `cur` is `None`, so `f : Speak a =>
+    -- a -> String` had no span anywhere for an interface-position diagnostic to use —
+    -- the constrained body does, one token away.  `cur` still wins where it exists (it
+    -- is the nearer enclosing span, from an `EAnnot` inside a body).  This also
+    -- narrows the pre-existing `UnknownInterface` at this site from `<unknown
+    -- location>` to the signature it was written in.
+    go bound (TyConstrained cs t) =
+      let errs = flatMap (checkConstraint (orElseLoc cur (firstTyLoc t)) env) cs
+      let (e2, b2) = go bound t
+      (errs ++ e2, b2)
+    -- A bare row atom (#997) wraps no inner type, but its labels are the same
+    -- written effect labels a `TyEffect` carries — validate them the same way.
+    go bound (TyRow labels _ _) = (checkEffAtoms bound cur env labels, bound)
+    -- A written authority term binds the names it joins, as a bare index name
+    -- (`Handle p`) does; its literals name nothing.
+    go bound (TyAuth ps _) = ([], authTermNames ps ++ bound)
 
 -- Tuple components bind left to right, as arrow domains do.
 checkTypesGo : List String ->
@@ -647,11 +650,13 @@ checkTypesGo : List String ->
   Env ->
   List Ty ->
   (List ResError, List String)
-checkTypesGo bound _ _ [] = ([], bound)
-checkTypesGo bound cur env (t :: ts) =
-  let (e1, b1) = checkTypeGo bound cur env t
-  let (e2, b2) = checkTypesGo b1 cur env ts
-  (e1 ++ e2, b2)
+checkTypesGo bound0 cur env xs0 = go bound0 xs0
+  where
+    go bound [] = ([], bound)
+    go bound (t :: ts) =
+      let (e1, b1) = checkTypeGo bound cur env t
+      let (e2, b2) = go b1 ts
+      (e1 ++ e2, b2)
 
 -- The names a declaration head binds as authorities: its `Authority`-kinded
 -- parameters (positional with the name list, as the kinds are stored).
@@ -814,24 +819,25 @@ checkConstraint cur env (Constraint { constraintHead = iface, constraintArgs = a
 
 -- ── check_pat ─────────────────────────────────────────────────────────────
 checkPat : Option Loc -> Env -> Pat -> List ResError
-checkPat cur env (PCon c ps) =
-  (if omHasKey c env.ctors || omHasKey c env.imported then
-      -- in scope — but a cross-module duplicate ctor (≥2 explicitly-importing
-      -- modules) is AMBIGUOUS at this use site (#674); local ctors are excluded
-      -- from ctorAmbiguous, so this only fires on a genuine import collision.
-      ambiguousCtorErrors env c cur
-    else
-      [UnknownConstructor c cur (suggestCtor c)])
-    ++ flatMap (checkPat cur env) ps
-checkPat cur env (PCons a b) = checkPat cur env a ++ checkPat cur env b
-checkPat cur env (PTuple ps) = flatMap (checkPat cur env) ps
-checkPat cur env (PList ps) = flatMap (checkPat cur env) ps
-checkPat cur env (PAs _ _ _ p) = checkPat cur env p
-checkPat cur env (POr ps) =
-  flatMap (checkPat cur env) ps ++ orBinderErrors cur ps
-checkPat cur env (PRec name fields _) = checkRecPat cur env name fields
-checkPat cur env (PAnn p _) = checkPat cur env p
-checkPat _ _ (PVar _ _ _ | PWild | PLit _ | PRng _ _ _) = []
+checkPat cur env x0 = go x0
+  where
+    go (PCon c ps) =
+      (if omHasKey c env.ctors || omHasKey c env.imported then
+          -- in scope — but a cross-module duplicate ctor (≥2 explicitly-importing
+          -- modules) is AMBIGUOUS at this use site (#674); local ctors are excluded
+          -- from ctorAmbiguous, so this only fires on a genuine import collision.
+          ambiguousCtorErrors env c cur
+        else
+          [UnknownConstructor c cur (suggestCtor c)])
+        ++ flatMap (checkPat cur env) ps
+    go (PCons a b) = go a ++ go b
+    go (PTuple ps) = flatMap (checkPat cur env) ps
+    go (PList ps) = flatMap (checkPat cur env) ps
+    go (PAs _ _ _ p) = go p
+    go (POr ps) = flatMap (checkPat cur env) ps ++ orBinderErrors cur ps
+    go (PRec name fields _) = checkRecPat cur env name fields
+    go (PAnn p _) = go p
+    go (PVar _ _ _ | PWild | PLit _ | PRng _ _ _) = []
 
 -- Every alternative of an or-pattern binds the same names (order and
 -- repetition aside).  One error per or-pattern: the first alternative that
@@ -1588,18 +1594,18 @@ charMask : Int -> String -> Int
 charMask sh n = charMaskGo sh (stringToChars n) 0 0
 
 charMaskGo : Int -> Array Char -> Int -> Int -> Int
-charMaskGo sh cs i acc
-  | i >= arrayLength cs = acc
-  | otherwise =
-    charMaskGo
-      sh
-      cs
-      (i + 1)
-      (bitOr
-        acc
-        (shiftLeft
-          1
-          (bitAnd (shiftRight (hashChar (arrayGetUnsafe i cs)) sh) 31)))
+charMaskGo sh cs i0 acc0 = go i0 acc0
+  where
+    go i acc
+      | i >= arrayLength cs = acc
+      | otherwise =
+        go
+          (i + 1)
+          (bitOr
+            acc
+            (shiftLeft
+              1
+              (bitAnd (shiftRight (hashChar (arrayGetUnsafe i cs)) sh) 31)))
 
 -- Does `x` have at most `k` bits set?  Clears the lowest set bit (`x & (x - 1)`)
 -- at most `k` times — O(k) with k = 2*lim <= 4, never a full popcount.
@@ -1755,10 +1761,12 @@ hasNullaryClause ((FunClause ps _) :: rest) =
   isEmptyL ps || hasNullaryClause rest
 
 dupClauseTail : Option Loc -> String -> Bool -> List FunClause -> List ResError
-dupClauseTail _ _ _ [] = []
-dupClauseTail cur n seen ((FunClause _ body) :: rest) =
-  whenL seen [DuplicateValueBinding n (orElseLoc (firstExprLoc body) cur)]
-    ++ dupClauseTail cur n True rest
+dupClauseTail cur n seen0 xs0 = go seen0 xs0
+  where
+    go _ [] = []
+    go seen ((FunClause _ body) :: rest) =
+      whenL seen [DuplicateValueBinding n (orElseLoc (firstExprLoc body) cur)]
+        ++ go True rest
 
 -- Parameter patterns are checked BEFORE the body's expr walk ever sees an
 -- ELoc, so a bare `cur` (often None here — e.g. a top-level where-group)
@@ -1790,18 +1798,19 @@ checkArmGuards : Option Loc ->
   Scope ->
   List Guard ->
   (List ResError, Scope)
-checkArmGuards _ _ scope [] = ([], scope)
-checkArmGuards cur env scope ((GBool e) :: rest) =
-  let (rErrs, scope2) = checkArmGuards cur env scope rest
-  (checkExpr cur env scope e ++ rErrs, scope2)
-checkArmGuards cur env scope ((GBind p e) :: rest) =
-  let here =
-    checkExpr cur env scope e
-      ++ checkPat cur env p
-      ++ patGroupDupErrors cur "pattern" [p]
-  let (rErrs, scope2) =
-    checkArmGuards cur env (scopeExtend (patBindings p) scope) rest
-  (here ++ rErrs, scope2)
+checkArmGuards cur env scope0 xs0 = go scope0 xs0
+  where
+    go scope [] = ([], scope)
+    go scope ((GBool e) :: rest) =
+      let (rErrs, scope2) = go scope rest
+      (checkExpr cur env scope e ++ rErrs, scope2)
+    go scope ((GBind p e) :: rest) =
+      let here =
+        checkExpr cur env scope e
+          ++ checkPat cur env p
+          ++ patGroupDupErrors cur "pattern" [p]
+      let (rErrs, scope2) = go (scopeExtend (patBindings p) scope) rest
+      (here ++ rErrs, scope2)
 
 checkGuardArm : Option Loc -> Env -> Scope -> GuardArm -> List ResError
 checkGuardArm cur env scope (GuardArm gs body) =
@@ -1812,10 +1821,12 @@ checkGuard cur env scope (GBool e) = checkExpr cur env scope e
 checkGuard cur env scope (GBind _ e) = checkExpr cur env scope e
 
 checkStmts : Option Loc -> Env -> Scope -> List DoStmt -> List ResError
-checkStmts _ _ _ [] = []
-checkStmts cur env scope (s :: rest) =
-  let (errs, scope2) = checkStmt cur env scope s
-  errs ++ checkStmts cur env scope2 rest
+checkStmts cur env scope0 xs0 = go scope0 xs0
+  where
+    go _ [] = []
+    go scope (s :: rest) =
+      let (errs, scope2) = checkStmt cur env scope s
+      errs ++ go scope2 rest
 
 checkStmt : Option Loc -> Env -> Scope -> DoStmt -> (List ResError, Scope)
 checkStmt cur env scope (DoExpr e) = (checkExpr cur env scope e, scope)
@@ -1954,12 +1965,14 @@ checkVariants : Env ->
   List Variant ->
   List (List (String, KindAnn)) ->
   List ResError
-checkVariants env bound (v :: vs) (bs :: rest) =
-  checkBinderLabels env bs
-    ++ duplicateCtorBinders bound bs (firstTyLocList (variantFieldTys v))
-    ++ checkVariant env (map fst bs ++ bound) v
-    ++ checkVariants env bound vs rest
-checkVariants _ _ _ _ = []
+checkVariants env bound xs0 xs1 = go xs0 xs1
+  where
+    go (v :: vs) (bs :: rest) =
+      checkBinderLabels env bs
+        ++ duplicateCtorBinders bound bs (firstTyLocList (variantFieldTys v))
+        ++ checkVariant env (map fst bs ++ bound) v
+        ++ go vs rest
+    go _ _ = []
 
 -- A constructor's binders are one binding group with the head's authority
 -- parameters: a binder spelled like a parameter would shadow the parameter
@@ -2332,6 +2345,8 @@ filterOutNamesIn : List String ->
   (ResError -> String) ->
   List ResError ->
   List ResError
+-- Bound: list built in tail position modulo cons: a where-local go loses the constant-stack loop until the lambda-lift pass (#4878); convert then.
+-- lint-disable-next-line rule-threaded-invariant
 filterOutNamesIn _ _ [] = []
 filterOutNamesIn names nameOf (e :: rest)
   | contains (nameOf e) names = filterOutNamesIn names nameOf rest
@@ -2503,6 +2518,8 @@ deleteAllStr (n :: ns) closed = deleteAllStr ns (omDelete n closed)
 -- a bound name that is in the closed set is a non-contiguous re-appearance.
 -- Stage B: carry the offending decl's source span (first ELoc in its body).
 newlyDuplicated : Option Loc -> OrdMap Unit -> List String -> List ResError
+-- Bound: list built in tail position modulo cons: a where-local go loses the constant-stack loop until the lambda-lift pass (#4878); convert then.
+-- lint-disable-next-line rule-threaded-invariant
 newlyDuplicated _ _ [] = []
 newlyDuplicated loc closed (n :: ns)
   | omHasKey n closed = DuplicateBinding n loc :: newlyDuplicated loc closed ns
@@ -2721,6 +2738,8 @@ ifaceMethodCollisionsGo seen ((iname, ms) :: rest) =
     ++ ifaceMethodCollisionsGo (addIfaceMethods iname ms seen) rest
 
 ifaceMethodErrs : String -> OrdMap String -> List String -> List ResError
+-- Bound: list built in tail position modulo cons: a where-local go loses the constant-stack loop until the lambda-lift pass (#4878); convert then.
+-- lint-disable-next-line rule-threaded-invariant
 ifaceMethodErrs _ _ [] = []
 ifaceMethodErrs iname seen (m :: rest) = match omLookup m seen
   Some prev =>
@@ -3399,12 +3418,17 @@ foldDeclProvenance : (OrdMap ModuleExports -> UsePath -> List (String, String)) 
   (OrdMap (List String), OrdMap Unit) ->
   List UsePath ->
   (OrdMap (List String), OrdMap Unit)
-foldDeclProvenance _ _ acc [] = acc
-foldDeclProvenance declsOf known acc (p :: rest) =
-  let mid = useModId p
-  let acc2 =
-    if mid == "core" then acc else addDeclProvenance acc mid (declsOf known p)
-  foldDeclProvenance declsOf known acc2 rest
+foldDeclProvenance declsOf known acc0 xs0 = go acc0 xs0
+  where
+    go acc [] = acc
+    go acc (p :: rest) =
+      let mid = useModId p
+      let acc2 =
+        if mid == "core" then
+          acc
+        else
+          addDeclProvenance acc mid (declsOf known p)
+      go acc2 rest
 
 addDeclProvenance : (OrdMap (List String), OrdMap Unit) ->
   String ->
@@ -3577,6 +3601,8 @@ importedCtorDeclsGo : (Option (String, List Decl) -> OrdMap ModuleExports -> (St
   OrdMap ModuleExports ->
   List (String, List Decl) ->
   List (String, List Decl)
+-- Bound: list built in tail position modulo cons: a where-local go loses the constant-stack loop until the lambda-lift pass (#4878); convert then.
+-- lint-disable-next-line rule-threaded-invariant
 importedCtorDeclsGo _ _ _ [] = []
 importedCtorDeclsGo step subjectOf known ((mid, prog) :: rest) =
   let (decls, exp) = step (subjectOf mid) known (mid, prog)
@@ -3832,15 +3858,16 @@ foldMergedProvenance : (UsePath -> String -> String) ->
   (OrdMap (List String), OrdMap Unit) ->
   List UsePath ->
   (OrdMap (List String), OrdMap Unit)
-foldMergedProvenance _ _ _ _ acc [] = acc
-foldMergedProvenance localOf ns originNs known acc (p :: rest) =
-  foldMergedProvenance
-    localOf
-    ns
-    originNs
-    known
-    (addMergedOrigins (localOf p) acc (importNameOrigins ns originNs known p))
-    rest
+foldMergedProvenance localOf ns originNs known acc0 xs0 = go acc0 xs0
+  where
+    go acc [] = acc
+    go acc (p :: rest) =
+      go
+        (addMergedOrigins
+          (localOf p)
+          acc
+          (importNameOrigins ns originNs known p))
+        rest
 
 addMergedOrigins : (String -> String) ->
   (OrdMap (List String), OrdMap Unit) ->
@@ -4474,6 +4501,8 @@ resolvePairsGo : Bool ->
   OrdMap ModuleExports ->
   List (String, List Decl) ->
   List (String, List ResError)
+-- Bound: list built in tail position modulo cons: a where-local go loses the constant-stack loop until the lambda-lift pass (#4878); convert then.
+-- lint-disable-next-line rule-threaded-invariant
 resolvePairsGo _ _ _ _ _ _ _ [] = []
 resolvePairsGo allowInternal trustedMods subjectOf preludeKey rt pre known ((mid, prog) :: rest) =
   let guard =
@@ -6198,6 +6227,8 @@ stampModulesGo : List (String, String) ->
   OrdMap (List (String, String)) ->
   List (String, List Decl) ->
   List (String, List Decl)
+-- Bound: list built in tail position modulo cons: a where-local go loses the constant-stack loop until the lambda-lift pass (#4878); convert then.
+-- lint-disable-next-line rule-threaded-invariant
 stampModulesGo _ _ _ [] = []
 stampModulesGo coreTypes subjectOf known ((mid, prog) :: rest) =
   let seen = match subjectOf mid
@@ -6435,13 +6466,11 @@ addOriginsProvenance : (OrdMap (List String), OrdMap Unit) ->
   String ->
   List String ->
   (OrdMap (List String), OrdMap Unit)
-addOriginsProvenance acc _ _ [] = acc
-addOriginsProvenance acc n base (m :: rest) =
-  addOriginsProvenance
-    (addDeclProvenance acc m [(n, declKey (m, base))])
-    n
-    base
-    rest
+addOriginsProvenance acc0 n base xs0 = go acc0 xs0
+  where
+    go acc [] = acc
+    go acc (m :: rest) =
+      go (addDeclProvenance acc m [(n, declKey (m, base))]) rest
 # DESUGAR
 (DUse false (UseGroup ("support" "diag_codes") ((mem "DiagCode" true))))
 (DUse false (UseGroup ("support" "stage_count") ((mem "stageBump" false))))
@@ -6529,21 +6558,9 @@ addOriginsProvenance acc n base (m :: rest) =
 (DTypeSig false "checkTypeIn" (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyApp (TyCon "Option") (TyCon "Loc")) (TyFun (TyCon "Env") (TyFun (TyCon "Ty") (TyApp (TyCon "List") (TyCon "ResError")))))))
 (DFunDef false "checkTypeIn" ((PVar "bound") (PVar "cur") (PVar "env") (PVar "t")) (EApp (EVar "fst") (EApp (EApp (EApp (EApp (EVar "checkTypeGo") (EVar "bound")) (EVar "cur")) (EVar "env")) (EVar "t"))))
 (DTypeSig false "checkTypeGo" (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyApp (TyCon "Option") (TyCon "Loc")) (TyFun (TyCon "Env") (TyFun (TyCon "Ty") (TyTuple (TyApp (TyCon "List") (TyCon "ResError")) (TyApp (TyCon "List") (TyCon "String"))))))))
-(DFunDef false "checkTypeGo" ((PVar "bound") (PVar "cur") (PVar "env") (PRec "TyCon" ((rf "tyConName" (PVar "n")) (rf "tyConLoc" (PVar "loc"))) false)) (EBlock (DoLet false false (PVar "errs") (EIf (EBinOp "||" (EBinOp "||" (EApp (EApp (EVar "omHasKey") (EVar "n")) (EFieldAccess (EVar "env") "types")) (EApp (EApp (EVar "omHasKey") (EVar "n")) (EFieldAccess (EVar "env") "imported"))) (EApp (EVar "isTupleCtorTyName") (EVar "n"))) (EApp (EApp (EApp (EVar "ambiguousTypeErrors") (EVar "env")) (EVar "n")) (EApp (EApp (EVar "orElseLoc") (EVar "loc")) (EVar "cur"))) (EListLit (EApp (EApp (EApp (EVar "UnknownType") (EVar "n")) (EApp (EApp (EVar "orElseLoc") (EVar "loc")) (EVar "cur"))) (EApp (EApp (EVar "suggestType") (EVar "env")) (EVar "n")))))) (DoExpr (ETuple (EVar "errs") (EVar "bound")))))
-(DFunDef false "checkTypeGo" ((PVar "bound") PWild PWild (PCon "TyVar" (PVar "n"))) (ETuple (EListLit) (EBinOp "::" (EVar "n") (EVar "bound"))))
-(DFunDef false "checkTypeGo" ((PVar "bound") (PVar "cur") (PVar "env") (PCon "TyApp" (PVar "a") (PVar "b"))) (EBlock (DoLet false false (PTuple (PVar "e1") (PVar "b1")) (EApp (EApp (EApp (EApp (EVar "checkTypeGo") (EVar "bound")) (EVar "cur")) (EVar "env")) (EVar "a"))) (DoLet false false (PTuple (PVar "e2") (PVar "b2")) (EApp (EApp (EApp (EApp (EVar "checkTypeGo") (EVar "b1")) (EVar "cur")) (EVar "env")) (EVar "b"))) (DoExpr (ETuple (EBinOp "++" (EVar "e1") (EVar "e2")) (EVar "b2")))))
-(DFunDef false "checkTypeGo" ((PVar "bound") (PVar "cur") (PVar "env") (PCon "TyFun" (PCon "TyNamed" (PVar "n") (PVar "a") (PVar "d")) (PVar "b"))) (EBlock (DoLet false false (PTuple (PVar "e1") (PVar "b1")) (EApp (EApp (EApp (EApp (EVar "checkTypeGo") (EVar "bound")) (EVar "cur")) (EVar "env")) (EVar "a"))) (DoLet false false (PVar "ed") (EMatch (EVar "d") (arm (PCon "Some" (PVar "atom")) () (EApp (EApp (EApp (EApp (EVar "checkEffAtoms") (EVar "b1")) (EVar "cur")) (EVar "env")) (EListLit (EVar "atom")))) (arm (PCon "None") () (EListLit)))) (DoLet false false (PTuple (PVar "e2") (PVar "b2")) (EApp (EApp (EApp (EApp (EVar "checkTypeGo") (EBinOp "::" (EVar "n") (EVar "b1"))) (EVar "cur")) (EVar "env")) (EVar "b"))) (DoExpr (ETuple (EBinOp "++" (EBinOp "++" (EVar "e1") (EVar "ed")) (EVar "e2")) (EVar "b2")))))
-(DFunDef false "checkTypeGo" ((PVar "bound") (PVar "cur") (PVar "env") (PCon "TyFun" (PVar "a") (PVar "b"))) (EBlock (DoLet false false (PTuple (PVar "e1") (PVar "b1")) (EApp (EApp (EApp (EApp (EVar "checkTypeGo") (EVar "bound")) (EVar "cur")) (EVar "env")) (EVar "a"))) (DoLet false false (PTuple (PVar "e2") (PVar "b2")) (EApp (EApp (EApp (EApp (EVar "checkTypeGo") (EVar "b1")) (EVar "cur")) (EVar "env")) (EVar "b"))) (DoExpr (ETuple (EBinOp "++" (EVar "e1") (EVar "e2")) (EVar "b2")))))
-(DFunDef false "checkTypeGo" ((PVar "bound") (PVar "cur") (PVar "env") (PCon "TyTuple" (PVar "ts"))) (EApp (EApp (EApp (EApp (EVar "checkTypesGo") (EVar "bound")) (EVar "cur")) (EVar "env")) (EVar "ts")))
-(DFunDef false "checkTypeGo" ((PVar "bound") (PVar "cur") (PVar "env") (PCon "TyEffect" (PVar "labels") PWild (PVar "t"))) (EBlock (DoLet false false (PVar "errs") (EApp (EApp (EApp (EApp (EVar "checkEffAtoms") (EVar "bound")) (EVar "cur")) (EVar "env")) (EVar "labels"))) (DoLet false false (PTuple (PVar "e2") (PVar "b2")) (EApp (EApp (EApp (EApp (EVar "checkTypeGo") (EVar "bound")) (EVar "cur")) (EVar "env")) (EVar "t"))) (DoExpr (ETuple (EBinOp "++" (EVar "errs") (EVar "e2")) (EVar "b2")))))
-(DFunDef false "checkTypeGo" ((PVar "bound") (PVar "cur") PWild (PCon "TyNamed" (PVar "n") PWild PWild)) (ETuple (EListLit (EApp (EApp (EVar "MisplacedAuthorityBinder") (EVar "n")) (EVar "cur"))) (EVar "bound")))
-(DFunDef false "checkTypeGo" ((PVar "bound") (PVar "cur") (PVar "env") (PCon "TyQual" (PVar "t") (PVar "ps") (PVar "l"))) (EBlock (DoLet false false (PTuple (PVar "e1") (PVar "b1")) (EApp (EApp (EApp (EApp (EVar "checkTypeGo") (EVar "bound")) (EVar "cur")) (EVar "env")) (EVar "t"))) (DoExpr (ETuple (EBinOp "++" (EVar "e1") (EApp (EApp (EVar "flatMap") (EApp (EApp (EVar "checkAuthorityName") (EVar "b1")) (EApp (EApp (EVar "orElseLoc") (EVar "l")) (EVar "cur")))) (EApp (EVar "authTermNames") (EVar "ps")))) (EVar "b1")))))
-(DFunDef false "checkTypeGo" ((PVar "bound") (PVar "cur") (PVar "env") (PCon "TyConstrained" (PVar "cs") (PVar "t"))) (EBlock (DoLet false false (PVar "errs") (EApp (EApp (EVar "flatMap") (EApp (EApp (EVar "checkConstraint") (EApp (EApp (EVar "orElseLoc") (EVar "cur")) (EApp (EVar "firstTyLoc") (EVar "t")))) (EVar "env"))) (EVar "cs"))) (DoLet false false (PTuple (PVar "e2") (PVar "b2")) (EApp (EApp (EApp (EApp (EVar "checkTypeGo") (EVar "bound")) (EVar "cur")) (EVar "env")) (EVar "t"))) (DoExpr (ETuple (EBinOp "++" (EVar "errs") (EVar "e2")) (EVar "b2")))))
-(DFunDef false "checkTypeGo" ((PVar "bound") (PVar "cur") (PVar "env") (PCon "TyRow" (PVar "labels") PWild PWild)) (ETuple (EApp (EApp (EApp (EApp (EVar "checkEffAtoms") (EVar "bound")) (EVar "cur")) (EVar "env")) (EVar "labels")) (EVar "bound")))
-(DFunDef false "checkTypeGo" ((PVar "bound") PWild PWild (PCon "TyAuth" (PVar "ps") PWild)) (ETuple (EListLit) (EBinOp "++" (EApp (EVar "authTermNames") (EVar "ps")) (EVar "bound"))))
+(DFunDef false "checkTypeGo" ((PVar "bound0") (PVar "cur") (PVar "env") (PVar "x0")) (ELetGroup ((lgb "go" (clause ((PVar "bound") (PRec "TyCon" ((rf "tyConName" (PVar "n")) (rf "tyConLoc" (PVar "loc"))) false)) (EBlock (DoLet false false (PVar "errs") (EIf (EBinOp "||" (EBinOp "||" (EApp (EApp (EVar "omHasKey") (EVar "n")) (EFieldAccess (EVar "env") "types")) (EApp (EApp (EVar "omHasKey") (EVar "n")) (EFieldAccess (EVar "env") "imported"))) (EApp (EVar "isTupleCtorTyName") (EVar "n"))) (EApp (EApp (EApp (EVar "ambiguousTypeErrors") (EVar "env")) (EVar "n")) (EApp (EApp (EVar "orElseLoc") (EVar "loc")) (EVar "cur"))) (EListLit (EApp (EApp (EApp (EVar "UnknownType") (EVar "n")) (EApp (EApp (EVar "orElseLoc") (EVar "loc")) (EVar "cur"))) (EApp (EApp (EVar "suggestType") (EVar "env")) (EVar "n")))))) (DoExpr (ETuple (EVar "errs") (EVar "bound"))))) (clause ((PVar "bound") (PCon "TyVar" (PVar "n"))) (ETuple (EListLit) (EBinOp "::" (EVar "n") (EVar "bound")))) (clause ((PVar "bound") (PCon "TyApp" (PVar "a") (PVar "b"))) (EBlock (DoLet false false (PTuple (PVar "e1") (PVar "b1")) (EApp (EApp (EVar "go") (EVar "bound")) (EVar "a"))) (DoLet false false (PTuple (PVar "e2") (PVar "b2")) (EApp (EApp (EVar "go") (EVar "b1")) (EVar "b"))) (DoExpr (ETuple (EBinOp "++" (EVar "e1") (EVar "e2")) (EVar "b2"))))) (clause ((PVar "bound") (PCon "TyFun" (PCon "TyNamed" (PVar "n") (PVar "a") (PVar "d")) (PVar "b"))) (EBlock (DoLet false false (PTuple (PVar "e1") (PVar "b1")) (EApp (EApp (EVar "go") (EVar "bound")) (EVar "a"))) (DoLet false false (PVar "ed") (EMatch (EVar "d") (arm (PCon "Some" (PVar "atom")) () (EApp (EApp (EApp (EApp (EVar "checkEffAtoms") (EVar "b1")) (EVar "cur")) (EVar "env")) (EListLit (EVar "atom")))) (arm (PCon "None") () (EListLit)))) (DoLet false false (PTuple (PVar "e2") (PVar "b2")) (EApp (EApp (EVar "go") (EBinOp "::" (EVar "n") (EVar "b1"))) (EVar "b"))) (DoExpr (ETuple (EBinOp "++" (EBinOp "++" (EVar "e1") (EVar "ed")) (EVar "e2")) (EVar "b2"))))) (clause ((PVar "bound") (PCon "TyFun" (PVar "a") (PVar "b"))) (EBlock (DoLet false false (PTuple (PVar "e1") (PVar "b1")) (EApp (EApp (EVar "go") (EVar "bound")) (EVar "a"))) (DoLet false false (PTuple (PVar "e2") (PVar "b2")) (EApp (EApp (EVar "go") (EVar "b1")) (EVar "b"))) (DoExpr (ETuple (EBinOp "++" (EVar "e1") (EVar "e2")) (EVar "b2"))))) (clause ((PVar "bound") (PCon "TyTuple" (PVar "ts"))) (EApp (EApp (EApp (EApp (EVar "checkTypesGo") (EVar "bound")) (EVar "cur")) (EVar "env")) (EVar "ts"))) (clause ((PVar "bound") (PCon "TyEffect" (PVar "labels") PWild (PVar "t"))) (EBlock (DoLet false false (PVar "errs") (EApp (EApp (EApp (EApp (EVar "checkEffAtoms") (EVar "bound")) (EVar "cur")) (EVar "env")) (EVar "labels"))) (DoLet false false (PTuple (PVar "e2") (PVar "b2")) (EApp (EApp (EVar "go") (EVar "bound")) (EVar "t"))) (DoExpr (ETuple (EBinOp "++" (EVar "errs") (EVar "e2")) (EVar "b2"))))) (clause ((PVar "bound") (PCon "TyNamed" (PVar "n") PWild PWild)) (ETuple (EListLit (EApp (EApp (EVar "MisplacedAuthorityBinder") (EVar "n")) (EVar "cur"))) (EVar "bound"))) (clause ((PVar "bound") (PCon "TyQual" (PVar "t") (PVar "ps") (PVar "l"))) (EBlock (DoLet false false (PTuple (PVar "e1") (PVar "b1")) (EApp (EApp (EVar "go") (EVar "bound")) (EVar "t"))) (DoExpr (ETuple (EBinOp "++" (EVar "e1") (EApp (EApp (EVar "flatMap") (EApp (EApp (EVar "checkAuthorityName") (EVar "b1")) (EApp (EApp (EVar "orElseLoc") (EVar "l")) (EVar "cur")))) (EApp (EVar "authTermNames") (EVar "ps")))) (EVar "b1"))))) (clause ((PVar "bound") (PCon "TyConstrained" (PVar "cs") (PVar "t"))) (EBlock (DoLet false false (PVar "errs") (EApp (EApp (EVar "flatMap") (EApp (EApp (EVar "checkConstraint") (EApp (EApp (EVar "orElseLoc") (EVar "cur")) (EApp (EVar "firstTyLoc") (EVar "t")))) (EVar "env"))) (EVar "cs"))) (DoLet false false (PTuple (PVar "e2") (PVar "b2")) (EApp (EApp (EVar "go") (EVar "bound")) (EVar "t"))) (DoExpr (ETuple (EBinOp "++" (EVar "errs") (EVar "e2")) (EVar "b2"))))) (clause ((PVar "bound") (PCon "TyRow" (PVar "labels") PWild PWild)) (ETuple (EApp (EApp (EApp (EApp (EVar "checkEffAtoms") (EVar "bound")) (EVar "cur")) (EVar "env")) (EVar "labels")) (EVar "bound"))) (clause ((PVar "bound") (PCon "TyAuth" (PVar "ps") PWild)) (ETuple (EListLit) (EBinOp "++" (EApp (EVar "authTermNames") (EVar "ps")) (EVar "bound")))))) (EApp (EApp (EVar "go") (EVar "bound0")) (EVar "x0"))))
 (DTypeSig false "checkTypesGo" (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyApp (TyCon "Option") (TyCon "Loc")) (TyFun (TyCon "Env") (TyFun (TyApp (TyCon "List") (TyCon "Ty")) (TyTuple (TyApp (TyCon "List") (TyCon "ResError")) (TyApp (TyCon "List") (TyCon "String"))))))))
-(DFunDef false "checkTypesGo" ((PVar "bound") PWild PWild (PList)) (ETuple (EListLit) (EVar "bound")))
-(DFunDef false "checkTypesGo" ((PVar "bound") (PVar "cur") (PVar "env") (PCons (PVar "t") (PVar "ts"))) (EBlock (DoLet false false (PTuple (PVar "e1") (PVar "b1")) (EApp (EApp (EApp (EApp (EVar "checkTypeGo") (EVar "bound")) (EVar "cur")) (EVar "env")) (EVar "t"))) (DoLet false false (PTuple (PVar "e2") (PVar "b2")) (EApp (EApp (EApp (EApp (EVar "checkTypesGo") (EVar "b1")) (EVar "cur")) (EVar "env")) (EVar "ts"))) (DoExpr (ETuple (EBinOp "++" (EVar "e1") (EVar "e2")) (EVar "b2")))))
+(DFunDef false "checkTypesGo" ((PVar "bound0") (PVar "cur") (PVar "env") (PVar "xs0")) (ELetGroup ((lgb "go" (clause ((PVar "bound") (PList)) (ETuple (EListLit) (EVar "bound"))) (clause ((PVar "bound") (PCons (PVar "t") (PVar "ts"))) (EBlock (DoLet false false (PTuple (PVar "e1") (PVar "b1")) (EApp (EApp (EApp (EApp (EVar "checkTypeGo") (EVar "bound")) (EVar "cur")) (EVar "env")) (EVar "t"))) (DoLet false false (PTuple (PVar "e2") (PVar "b2")) (EApp (EApp (EVar "go") (EVar "b1")) (EVar "ts"))) (DoExpr (ETuple (EBinOp "++" (EVar "e1") (EVar "e2")) (EVar "b2"))))))) (EApp (EApp (EVar "go") (EVar "bound0")) (EVar "xs0"))))
 (DTypeSig false "authorityParams" (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyApp (TyCon "List") (TyApp (TyCon "Option") (TyCon "KindAnn"))) (TyApp (TyCon "List") (TyCon "String")))))
 (DFunDef false "authorityParams" ((PCons (PVar "p") (PVar "ps")) (PCons (PCon "Some" (PCon "KindAuthority" PWild PWild PWild PWild)) (PVar "ks"))) (EBinOp "::" (EVar "p") (EApp (EApp (EVar "authorityParams") (EVar "ps")) (EVar "ks"))))
 (DFunDef false "authorityParams" ((PCons PWild (PVar "ps")) (PCons PWild (PVar "ks"))) (EApp (EApp (EVar "authorityParams") (EVar "ps")) (EVar "ks")))
@@ -6574,15 +6591,7 @@ addOriginsProvenance acc n base (m :: rest) =
 (DTypeSig false "checkConstraint" (TyFun (TyApp (TyCon "Option") (TyCon "Loc")) (TyFun (TyCon "Env") (TyFun (TyCon "Constraint") (TyApp (TyCon "List") (TyCon "ResError"))))))
 (DFunDef false "checkConstraint" ((PVar "cur") (PVar "env") (PRec "Constraint" ((rf "constraintHead" (PVar "iface")) (rf "constraintArgs" (PVar "args"))) false)) (EBinOp "++" (EIf (EApp (EApp (EVar "contains") (EVar "iface")) (EFieldAccess (EVar "env") "interfaces")) (EApp (EApp (EApp (EVar "ambiguousIfaceErrors") (EVar "env")) (EVar "iface")) (EApp (EApp (EVar "orElseLoc") (EApp (EVar "firstTyLocList") (EVar "args"))) (EVar "cur"))) (EListLit (EApp (EApp (EVar "UnknownInterface") (EVar "iface")) (EVar "cur")))) (EApp (EApp (EVar "flatMap") (EApp (EApp (EVar "checkType") (EVar "cur")) (EVar "env"))) (EVar "args"))))
 (DTypeSig false "checkPat" (TyFun (TyApp (TyCon "Option") (TyCon "Loc")) (TyFun (TyCon "Env") (TyFun (TyCon "Pat") (TyApp (TyCon "List") (TyCon "ResError"))))))
-(DFunDef false "checkPat" ((PVar "cur") (PVar "env") (PCon "PCon" (PVar "c") (PVar "ps"))) (EBinOp "++" (EIf (EBinOp "||" (EApp (EApp (EVar "omHasKey") (EVar "c")) (EFieldAccess (EVar "env") "ctors")) (EApp (EApp (EVar "omHasKey") (EVar "c")) (EFieldAccess (EVar "env") "imported"))) (EApp (EApp (EApp (EVar "ambiguousCtorErrors") (EVar "env")) (EVar "c")) (EVar "cur")) (EListLit (EApp (EApp (EApp (EVar "UnknownConstructor") (EVar "c")) (EVar "cur")) (EApp (EVar "suggestCtor") (EVar "c"))))) (EApp (EApp (EVar "flatMap") (EApp (EApp (EVar "checkPat") (EVar "cur")) (EVar "env"))) (EVar "ps"))))
-(DFunDef false "checkPat" ((PVar "cur") (PVar "env") (PCon "PCons" (PVar "a") (PVar "b"))) (EBinOp "++" (EApp (EApp (EApp (EVar "checkPat") (EVar "cur")) (EVar "env")) (EVar "a")) (EApp (EApp (EApp (EVar "checkPat") (EVar "cur")) (EVar "env")) (EVar "b"))))
-(DFunDef false "checkPat" ((PVar "cur") (PVar "env") (PCon "PTuple" (PVar "ps"))) (EApp (EApp (EVar "flatMap") (EApp (EApp (EVar "checkPat") (EVar "cur")) (EVar "env"))) (EVar "ps")))
-(DFunDef false "checkPat" ((PVar "cur") (PVar "env") (PCon "PList" (PVar "ps"))) (EApp (EApp (EVar "flatMap") (EApp (EApp (EVar "checkPat") (EVar "cur")) (EVar "env"))) (EVar "ps")))
-(DFunDef false "checkPat" ((PVar "cur") (PVar "env") (PCon "PAs" PWild PWild PWild (PVar "p"))) (EApp (EApp (EApp (EVar "checkPat") (EVar "cur")) (EVar "env")) (EVar "p")))
-(DFunDef false "checkPat" ((PVar "cur") (PVar "env") (PCon "POr" (PVar "ps"))) (EBinOp "++" (EApp (EApp (EVar "flatMap") (EApp (EApp (EVar "checkPat") (EVar "cur")) (EVar "env"))) (EVar "ps")) (EApp (EApp (EVar "orBinderErrors") (EVar "cur")) (EVar "ps"))))
-(DFunDef false "checkPat" ((PVar "cur") (PVar "env") (PCon "PRec" (PVar "name") (PVar "fields") PWild)) (EApp (EApp (EApp (EApp (EVar "checkRecPat") (EVar "cur")) (EVar "env")) (EVar "name")) (EVar "fields")))
-(DFunDef false "checkPat" ((PVar "cur") (PVar "env") (PCon "PAnn" (PVar "p") PWild)) (EApp (EApp (EApp (EVar "checkPat") (EVar "cur")) (EVar "env")) (EVar "p")))
-(DFunDef false "checkPat" (PWild PWild (POr (PCon "PVar" PWild PWild PWild) (PCon "PWild") (PCon "PLit" PWild) (PCon "PRng" PWild PWild PWild))) (EListLit))
+(DFunDef false "checkPat" ((PVar "cur") (PVar "env") (PVar "x0")) (ELetGroup ((lgb "go" (clause ((PCon "PCon" (PVar "c") (PVar "ps"))) (EBinOp "++" (EIf (EBinOp "||" (EApp (EApp (EVar "omHasKey") (EVar "c")) (EFieldAccess (EVar "env") "ctors")) (EApp (EApp (EVar "omHasKey") (EVar "c")) (EFieldAccess (EVar "env") "imported"))) (EApp (EApp (EApp (EVar "ambiguousCtorErrors") (EVar "env")) (EVar "c")) (EVar "cur")) (EListLit (EApp (EApp (EApp (EVar "UnknownConstructor") (EVar "c")) (EVar "cur")) (EApp (EVar "suggestCtor") (EVar "c"))))) (EApp (EApp (EVar "flatMap") (EApp (EApp (EVar "checkPat") (EVar "cur")) (EVar "env"))) (EVar "ps")))) (clause ((PCon "PCons" (PVar "a") (PVar "b"))) (EBinOp "++" (EApp (EVar "go") (EVar "a")) (EApp (EVar "go") (EVar "b")))) (clause ((PCon "PTuple" (PVar "ps"))) (EApp (EApp (EVar "flatMap") (EApp (EApp (EVar "checkPat") (EVar "cur")) (EVar "env"))) (EVar "ps"))) (clause ((PCon "PList" (PVar "ps"))) (EApp (EApp (EVar "flatMap") (EApp (EApp (EVar "checkPat") (EVar "cur")) (EVar "env"))) (EVar "ps"))) (clause ((PCon "PAs" PWild PWild PWild (PVar "p"))) (EApp (EVar "go") (EVar "p"))) (clause ((PCon "POr" (PVar "ps"))) (EBinOp "++" (EApp (EApp (EVar "flatMap") (EApp (EApp (EVar "checkPat") (EVar "cur")) (EVar "env"))) (EVar "ps")) (EApp (EApp (EVar "orBinderErrors") (EVar "cur")) (EVar "ps")))) (clause ((PCon "PRec" (PVar "name") (PVar "fields") PWild)) (EApp (EApp (EApp (EApp (EVar "checkRecPat") (EVar "cur")) (EVar "env")) (EVar "name")) (EVar "fields"))) (clause ((PCon "PAnn" (PVar "p") PWild)) (EApp (EVar "go") (EVar "p"))) (clause ((POr (PCon "PVar" PWild PWild PWild) (PCon "PWild") (PCon "PLit" PWild) (PCon "PRng" PWild PWild PWild))) (EListLit)))) (EApp (EVar "go") (EVar "x0"))))
 (DTypeSig false "orBinderErrors" (TyFun (TyApp (TyCon "Option") (TyCon "Loc")) (TyFun (TyApp (TyCon "List") (TyCon "Pat")) (TyApp (TyCon "List") (TyCon "ResError")))))
 (DFunDef false "orBinderErrors" (PWild (PList)) (EListLit))
 (DFunDef false "orBinderErrors" ((PVar "cur") (PCons (PVar "p") (PVar "rest"))) (EBlock (DoLet false false (PVar "names") (EApp (EVar "patBindings") (EVar "p"))) (DoExpr (EMatch (EApp (EApp (EVar "filter") (ELam ((PVar "q")) (EApp (EVar "not") (EApp (EApp (EVar "sameBinders") (EVar "names")) (EApp (EVar "patBindings") (EVar "q")))))) (EVar "rest")) (arm (PList) () (EListLit)) (arm (PCons (PVar "q") PWild) () (EListLit (EApp (EApp (EApp (EApp (EVar "OrPatternBinders") (EVar "names")) (EApp (EVar "patBindings") (EVar "q"))) (EApp (EApp (EVar "any") (EVar "isBareVarPat")) (EBinOp "::" (EVar "p") (EVar "rest")))) (EVar "cur"))))))))
@@ -6768,7 +6777,7 @@ addOriginsProvenance acc n base (m :: rest) =
 (DTypeSig false "charMask" (TyFun (TyCon "Int") (TyFun (TyCon "String") (TyCon "Int"))))
 (DFunDef false "charMask" ((PVar "sh") (PVar "n")) (EApp (EApp (EApp (EApp (EVar "charMaskGo") (EVar "sh")) (EApp (EVar "stringToChars") (EVar "n"))) (ELit (LInt 0))) (ELit (LInt 0))))
 (DTypeSig false "charMaskGo" (TyFun (TyCon "Int") (TyFun (TyApp (TyCon "Array") (TyCon "Char")) (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyCon "Int"))))))
-(DFunDef false "charMaskGo" ((PVar "sh") (PVar "cs") (PVar "i") (PVar "acc")) (EIf (EBinOp ">=" (EVar "i") (EApp (EVar "arrayLength") (EVar "cs"))) (EVar "acc") (EIf (EVar "otherwise") (EApp (EApp (EApp (EApp (EVar "charMaskGo") (EVar "sh")) (EVar "cs")) (EBinOp "+" (EVar "i") (ELit (LInt 1)))) (EApp (EApp (EVar "bitOr") (EVar "acc")) (EApp (EApp (EVar "shiftLeft") (ELit (LInt 1))) (EApp (EApp (EVar "bitAnd") (EApp (EApp (EVar "shiftRight") (EApp (EVar "hashChar") (EApp (EApp (EVar "arrayGetUnsafe") (EVar "i")) (EVar "cs")))) (EVar "sh"))) (ELit (LInt 31)))))) (EApp (EVar "__fallthrough__") (ELit LUnit)))))
+(DFunDef false "charMaskGo" ((PVar "sh") (PVar "cs") (PVar "i0") (PVar "acc0")) (ELetGroup ((lgb "go" (clause ((PVar "i") (PVar "acc")) (EIf (EBinOp ">=" (EVar "i") (EApp (EVar "arrayLength") (EVar "cs"))) (EVar "acc") (EIf (EVar "otherwise") (EApp (EApp (EVar "go") (EBinOp "+" (EVar "i") (ELit (LInt 1)))) (EApp (EApp (EVar "bitOr") (EVar "acc")) (EApp (EApp (EVar "shiftLeft") (ELit (LInt 1))) (EApp (EApp (EVar "bitAnd") (EApp (EApp (EVar "shiftRight") (EApp (EVar "hashChar") (EApp (EApp (EVar "arrayGetUnsafe") (EVar "i")) (EVar "cs")))) (EVar "sh"))) (ELit (LInt 31)))))) (EApp (EVar "__fallthrough__") (ELit LUnit))))))) (EApp (EApp (EVar "go") (EVar "i0")) (EVar "acc0"))))
 (DTypeSig false "bitsAtMost" (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyCon "Bool"))))
 (DFunDef false "bitsAtMost" ((PVar "k") (PVar "x")) (EIf (EBinOp "==" (EVar "x") (ELit (LInt 0))) (EVar "True") (EIf (EBinOp "<=" (EVar "k") (ELit (LInt 0))) (EVar "False") (EIf (EVar "otherwise") (EApp (EApp (EVar "bitsAtMost") (EBinOp "-" (EVar "k") (ELit (LInt 1)))) (EApp (EApp (EVar "bitAnd") (EVar "x")) (EBinOp "-" (EVar "x") (ELit (LInt 1))))) (EApp (EVar "__fallthrough__") (ELit LUnit))))))
 (DTypeSig false "bestOfPool" (TyFun (TyCon "SugQuery") (TyFun (TyApp (TyCon "List") (TyCon "SugCand")) (TyApp (TyCon "Option") (TyCon "String")))))
@@ -6812,24 +6821,20 @@ addOriginsProvenance acc n base (m :: rest) =
 (DFunDef false "hasNullaryClause" ((PList)) (EVar "False"))
 (DFunDef false "hasNullaryClause" ((PCons (PCon "FunClause" (PVar "ps") PWild) (PVar "rest"))) (EBinOp "||" (EApp (EVar "isEmptyL") (EVar "ps")) (EApp (EVar "hasNullaryClause") (EVar "rest"))))
 (DTypeSig false "dupClauseTail" (TyFun (TyApp (TyCon "Option") (TyCon "Loc")) (TyFun (TyCon "String") (TyFun (TyCon "Bool") (TyFun (TyApp (TyCon "List") (TyCon "FunClause")) (TyApp (TyCon "List") (TyCon "ResError")))))))
-(DFunDef false "dupClauseTail" (PWild PWild PWild (PList)) (EListLit))
-(DFunDef false "dupClauseTail" ((PVar "cur") (PVar "n") (PVar "seen") (PCons (PCon "FunClause" PWild (PVar "body")) (PVar "rest"))) (EBinOp "++" (EApp (EApp (EVar "whenL") (EVar "seen")) (EListLit (EApp (EApp (EVar "DuplicateValueBinding") (EVar "n")) (EApp (EApp (EVar "orElseLoc") (EApp (EVar "firstExprLoc") (EVar "body"))) (EVar "cur"))))) (EApp (EApp (EApp (EApp (EVar "dupClauseTail") (EVar "cur")) (EVar "n")) (EVar "True")) (EVar "rest"))))
+(DFunDef false "dupClauseTail" ((PVar "cur") (PVar "n") (PVar "seen0") (PVar "xs0")) (ELetGroup ((lgb "go" (clause (PWild (PList)) (EListLit)) (clause ((PVar "seen") (PCons (PCon "FunClause" PWild (PVar "body")) (PVar "rest"))) (EBinOp "++" (EApp (EApp (EVar "whenL") (EVar "seen")) (EListLit (EApp (EApp (EVar "DuplicateValueBinding") (EVar "n")) (EApp (EApp (EVar "orElseLoc") (EApp (EVar "firstExprLoc") (EVar "body"))) (EVar "cur"))))) (EApp (EApp (EVar "go") (EVar "True")) (EVar "rest")))))) (EApp (EApp (EVar "go") (EVar "seen0")) (EVar "xs0"))))
 (DTypeSig false "checkFunClause" (TyFun (TyApp (TyCon "Option") (TyCon "Loc")) (TyFun (TyCon "Env") (TyFun (TyCon "Scope") (TyFun (TyCon "FunClause") (TyApp (TyCon "List") (TyCon "ResError")))))))
 (DFunDef false "checkFunClause" ((PVar "cur") (PVar "env") (PVar "scope") (PCon "FunClause" (PVar "pats") (PVar "body"))) (EBlock (DoLet false false (PVar "patLoc") (EApp (EApp (EVar "orElseLoc") (EApp (EVar "firstExprLoc") (EVar "body"))) (EVar "cur"))) (DoExpr (EBinOp "++" (EBinOp "++" (EApp (EApp (EVar "flatMap") (EApp (EApp (EVar "checkPat") (EVar "patLoc")) (EVar "env"))) (EVar "pats")) (EApp (EApp (EApp (EVar "patGroupDupErrors") (EVar "patLoc")) (ELit (LString "parameter list"))) (EVar "pats"))) (EApp (EApp (EApp (EApp (EVar "checkExpr") (EVar "cur")) (EVar "env")) (EApp (EApp (EVar "scopeExtend") (EApp (EVar "patsBindings") (EVar "pats"))) (EVar "scope"))) (EVar "body"))))))
 (DTypeSig false "checkArm" (TyFun (TyApp (TyCon "Option") (TyCon "Loc")) (TyFun (TyCon "Env") (TyFun (TyCon "Scope") (TyFun (TyCon "Arm") (TyApp (TyCon "List") (TyCon "ResError")))))))
 (DFunDef false "checkArm" ((PVar "cur") (PVar "env") (PVar "scope") (PCon "Arm" (PVar "pat") (PVar "gs") (PVar "body"))) (EBlock (DoLet false false (PVar "scope0") (EApp (EApp (EVar "scopeExtend") (EApp (EVar "patBindings") (EVar "pat"))) (EVar "scope"))) (DoLet false false (PTuple (PVar "gErrs") (PVar "scope2")) (EApp (EApp (EApp (EApp (EVar "checkArmGuards") (EVar "cur")) (EVar "env")) (EVar "scope0")) (EVar "gs"))) (DoExpr (EBinOp "++" (EBinOp "++" (EBinOp "++" (EApp (EApp (EApp (EVar "checkPat") (EVar "cur")) (EVar "env")) (EVar "pat")) (EApp (EApp (EApp (EVar "patGroupDupErrors") (EVar "cur")) (ELit (LString "pattern"))) (EListLit (EVar "pat")))) (EVar "gErrs")) (EApp (EApp (EApp (EApp (EVar "checkExpr") (EVar "cur")) (EVar "env")) (EVar "scope2")) (EVar "body"))))))
 (DTypeSig false "checkArmGuards" (TyFun (TyApp (TyCon "Option") (TyCon "Loc")) (TyFun (TyCon "Env") (TyFun (TyCon "Scope") (TyFun (TyApp (TyCon "List") (TyCon "Guard")) (TyTuple (TyApp (TyCon "List") (TyCon "ResError")) (TyCon "Scope")))))))
-(DFunDef false "checkArmGuards" (PWild PWild (PVar "scope") (PList)) (ETuple (EListLit) (EVar "scope")))
-(DFunDef false "checkArmGuards" ((PVar "cur") (PVar "env") (PVar "scope") (PCons (PCon "GBool" (PVar "e")) (PVar "rest"))) (EBlock (DoLet false false (PTuple (PVar "rErrs") (PVar "scope2")) (EApp (EApp (EApp (EApp (EVar "checkArmGuards") (EVar "cur")) (EVar "env")) (EVar "scope")) (EVar "rest"))) (DoExpr (ETuple (EBinOp "++" (EApp (EApp (EApp (EApp (EVar "checkExpr") (EVar "cur")) (EVar "env")) (EVar "scope")) (EVar "e")) (EVar "rErrs")) (EVar "scope2")))))
-(DFunDef false "checkArmGuards" ((PVar "cur") (PVar "env") (PVar "scope") (PCons (PCon "GBind" (PVar "p") (PVar "e")) (PVar "rest"))) (EBlock (DoLet false false (PVar "here") (EBinOp "++" (EBinOp "++" (EApp (EApp (EApp (EApp (EVar "checkExpr") (EVar "cur")) (EVar "env")) (EVar "scope")) (EVar "e")) (EApp (EApp (EApp (EVar "checkPat") (EVar "cur")) (EVar "env")) (EVar "p"))) (EApp (EApp (EApp (EVar "patGroupDupErrors") (EVar "cur")) (ELit (LString "pattern"))) (EListLit (EVar "p"))))) (DoLet false false (PTuple (PVar "rErrs") (PVar "scope2")) (EApp (EApp (EApp (EApp (EVar "checkArmGuards") (EVar "cur")) (EVar "env")) (EApp (EApp (EVar "scopeExtend") (EApp (EVar "patBindings") (EVar "p"))) (EVar "scope"))) (EVar "rest"))) (DoExpr (ETuple (EBinOp "++" (EVar "here") (EVar "rErrs")) (EVar "scope2")))))
+(DFunDef false "checkArmGuards" ((PVar "cur") (PVar "env") (PVar "scope0") (PVar "xs0")) (ELetGroup ((lgb "go" (clause ((PVar "scope") (PList)) (ETuple (EListLit) (EVar "scope"))) (clause ((PVar "scope") (PCons (PCon "GBool" (PVar "e")) (PVar "rest"))) (EBlock (DoLet false false (PTuple (PVar "rErrs") (PVar "scope2")) (EApp (EApp (EVar "go") (EVar "scope")) (EVar "rest"))) (DoExpr (ETuple (EBinOp "++" (EApp (EApp (EApp (EApp (EVar "checkExpr") (EVar "cur")) (EVar "env")) (EVar "scope")) (EVar "e")) (EVar "rErrs")) (EVar "scope2"))))) (clause ((PVar "scope") (PCons (PCon "GBind" (PVar "p") (PVar "e")) (PVar "rest"))) (EBlock (DoLet false false (PVar "here") (EBinOp "++" (EBinOp "++" (EApp (EApp (EApp (EApp (EVar "checkExpr") (EVar "cur")) (EVar "env")) (EVar "scope")) (EVar "e")) (EApp (EApp (EApp (EVar "checkPat") (EVar "cur")) (EVar "env")) (EVar "p"))) (EApp (EApp (EApp (EVar "patGroupDupErrors") (EVar "cur")) (ELit (LString "pattern"))) (EListLit (EVar "p"))))) (DoLet false false (PTuple (PVar "rErrs") (PVar "scope2")) (EApp (EApp (EVar "go") (EApp (EApp (EVar "scopeExtend") (EApp (EVar "patBindings") (EVar "p"))) (EVar "scope"))) (EVar "rest"))) (DoExpr (ETuple (EBinOp "++" (EVar "here") (EVar "rErrs")) (EVar "scope2"))))))) (EApp (EApp (EVar "go") (EVar "scope0")) (EVar "xs0"))))
 (DTypeSig false "checkGuardArm" (TyFun (TyApp (TyCon "Option") (TyCon "Loc")) (TyFun (TyCon "Env") (TyFun (TyCon "Scope") (TyFun (TyCon "GuardArm") (TyApp (TyCon "List") (TyCon "ResError")))))))
 (DFunDef false "checkGuardArm" ((PVar "cur") (PVar "env") (PVar "scope") (PCon "GuardArm" (PVar "gs") (PVar "body"))) (EBinOp "++" (EApp (EApp (EVar "flatMap") (EApp (EApp (EApp (EVar "checkGuard") (EVar "cur")) (EVar "env")) (EVar "scope"))) (EVar "gs")) (EApp (EApp (EApp (EApp (EVar "checkExpr") (EVar "cur")) (EVar "env")) (EVar "scope")) (EVar "body"))))
 (DTypeSig false "checkGuard" (TyFun (TyApp (TyCon "Option") (TyCon "Loc")) (TyFun (TyCon "Env") (TyFun (TyCon "Scope") (TyFun (TyCon "Guard") (TyApp (TyCon "List") (TyCon "ResError")))))))
 (DFunDef false "checkGuard" ((PVar "cur") (PVar "env") (PVar "scope") (PCon "GBool" (PVar "e"))) (EApp (EApp (EApp (EApp (EVar "checkExpr") (EVar "cur")) (EVar "env")) (EVar "scope")) (EVar "e")))
 (DFunDef false "checkGuard" ((PVar "cur") (PVar "env") (PVar "scope") (PCon "GBind" PWild (PVar "e"))) (EApp (EApp (EApp (EApp (EVar "checkExpr") (EVar "cur")) (EVar "env")) (EVar "scope")) (EVar "e")))
 (DTypeSig false "checkStmts" (TyFun (TyApp (TyCon "Option") (TyCon "Loc")) (TyFun (TyCon "Env") (TyFun (TyCon "Scope") (TyFun (TyApp (TyCon "List") (TyCon "DoStmt")) (TyApp (TyCon "List") (TyCon "ResError")))))))
-(DFunDef false "checkStmts" (PWild PWild PWild (PList)) (EListLit))
-(DFunDef false "checkStmts" ((PVar "cur") (PVar "env") (PVar "scope") (PCons (PVar "s") (PVar "rest"))) (EBlock (DoLet false false (PTuple (PVar "errs") (PVar "scope2")) (EApp (EApp (EApp (EApp (EVar "checkStmt") (EVar "cur")) (EVar "env")) (EVar "scope")) (EVar "s"))) (DoExpr (EBinOp "++" (EVar "errs") (EApp (EApp (EApp (EApp (EVar "checkStmts") (EVar "cur")) (EVar "env")) (EVar "scope2")) (EVar "rest"))))))
+(DFunDef false "checkStmts" ((PVar "cur") (PVar "env") (PVar "scope0") (PVar "xs0")) (ELetGroup ((lgb "go" (clause (PWild (PList)) (EListLit)) (clause ((PVar "scope") (PCons (PVar "s") (PVar "rest"))) (EBlock (DoLet false false (PTuple (PVar "errs") (PVar "scope2")) (EApp (EApp (EApp (EApp (EVar "checkStmt") (EVar "cur")) (EVar "env")) (EVar "scope")) (EVar "s"))) (DoExpr (EBinOp "++" (EVar "errs") (EApp (EApp (EVar "go") (EVar "scope2")) (EVar "rest")))))))) (EApp (EApp (EVar "go") (EVar "scope0")) (EVar "xs0"))))
 (DTypeSig false "checkStmt" (TyFun (TyApp (TyCon "Option") (TyCon "Loc")) (TyFun (TyCon "Env") (TyFun (TyCon "Scope") (TyFun (TyCon "DoStmt") (TyTuple (TyApp (TyCon "List") (TyCon "ResError")) (TyCon "Scope")))))))
 (DFunDef false "checkStmt" ((PVar "cur") (PVar "env") (PVar "scope") (PCon "DoExpr" (PVar "e"))) (ETuple (EApp (EApp (EApp (EApp (EVar "checkExpr") (EVar "cur")) (EVar "env")) (EVar "scope")) (EVar "e")) (EVar "scope")))
 (DFunDef false "checkStmt" ((PVar "cur") (PVar "env") (PVar "scope") (PCon "DoBind" (PVar "p") (PVar "e"))) (ETuple (EBinOp "++" (EBinOp "++" (EApp (EApp (EApp (EVar "checkPat") (EVar "cur")) (EVar "env")) (EVar "p")) (EApp (EApp (EApp (EVar "patGroupDupErrors") (EVar "cur")) (ELit (LString "pattern"))) (EListLit (EVar "p")))) (EApp (EApp (EApp (EApp (EVar "checkExpr") (EVar "cur")) (EVar "env")) (EVar "scope")) (EVar "e"))) (EApp (EApp (EVar "scopeExtend") (EApp (EVar "patBindings") (EVar "p"))) (EVar "scope"))))
@@ -6880,8 +6885,7 @@ addOriginsProvenance acc n base (m :: rest) =
 (DFunDef false "padBinders" ((PCons PWild (PVar "vs")) (PCons (PVar "b") (PVar "bs"))) (EBinOp "::" (EVar "b") (EApp (EApp (EVar "padBinders") (EVar "vs")) (EVar "bs"))))
 (DFunDef false "padBinders" ((PCons PWild (PVar "vs")) (PList)) (EBinOp "::" (EListLit) (EApp (EApp (EVar "padBinders") (EVar "vs")) (EListLit))))
 (DTypeSig false "checkVariants" (TyFun (TyCon "Env") (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyApp (TyCon "List") (TyCon "Variant")) (TyFun (TyApp (TyCon "List") (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "KindAnn")))) (TyApp (TyCon "List") (TyCon "ResError")))))))
-(DFunDef false "checkVariants" ((PVar "env") (PVar "bound") (PCons (PVar "v") (PVar "vs")) (PCons (PVar "bs") (PVar "rest"))) (EBinOp "++" (EBinOp "++" (EBinOp "++" (EApp (EApp (EVar "checkBinderLabels") (EVar "env")) (EVar "bs")) (EApp (EApp (EApp (EVar "duplicateCtorBinders") (EVar "bound")) (EVar "bs")) (EApp (EVar "firstTyLocList") (EApp (EVar "variantFieldTys") (EVar "v"))))) (EApp (EApp (EApp (EVar "checkVariant") (EVar "env")) (EBinOp "++" (EApp (EApp (EVar "map") (EVar "fst")) (EVar "bs")) (EVar "bound"))) (EVar "v"))) (EApp (EApp (EApp (EApp (EVar "checkVariants") (EVar "env")) (EVar "bound")) (EVar "vs")) (EVar "rest"))))
-(DFunDef false "checkVariants" (PWild PWild PWild PWild) (EListLit))
+(DFunDef false "checkVariants" ((PVar "env") (PVar "bound") (PVar "xs0") (PVar "xs1")) (ELetGroup ((lgb "go" (clause ((PCons (PVar "v") (PVar "vs")) (PCons (PVar "bs") (PVar "rest"))) (EBinOp "++" (EBinOp "++" (EBinOp "++" (EApp (EApp (EVar "checkBinderLabels") (EVar "env")) (EVar "bs")) (EApp (EApp (EApp (EVar "duplicateCtorBinders") (EVar "bound")) (EVar "bs")) (EApp (EVar "firstTyLocList") (EApp (EVar "variantFieldTys") (EVar "v"))))) (EApp (EApp (EApp (EVar "checkVariant") (EVar "env")) (EBinOp "++" (EApp (EApp (EVar "map") (EVar "fst")) (EVar "bs")) (EVar "bound"))) (EVar "v"))) (EApp (EApp (EVar "go") (EVar "vs")) (EVar "rest")))) (clause (PWild PWild) (EListLit)))) (EApp (EApp (EVar "go") (EVar "xs0")) (EVar "xs1"))))
 (DTypeSig false "duplicateCtorBinders" (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "KindAnn"))) (TyFun (TyApp (TyCon "Option") (TyCon "Loc")) (TyApp (TyCon "List") (TyCon "ResError"))))))
 (DFunDef false "duplicateCtorBinders" ((PVar "bound") (PVar "binders") (PVar "loc")) (EApp (EApp (EVar "map") (ELam ((PVar "n")) (EApp (EApp (EApp (EVar "DuplicateBinder") (ELit (LString "constructor"))) (EVar "n")) (EVar "loc")))) (EApp (EApp (EVar "findDups") (EVar "bound")) (EApp (EApp (EVar "map") (EVar "fst")) (EVar "binders")))))
 (DTypeSig false "checkVariant" (TyFun (TyCon "Env") (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyCon "Variant") (TyApp (TyCon "List") (TyCon "ResError"))))))
@@ -7334,8 +7338,7 @@ addOriginsProvenance acc n base (m :: rest) =
 (DTypeSig false "valueProvenance" (TyFun (TyApp (TyCon "OrdMap") (TyCon "ModuleExports")) (TyFun (TyApp (TyCon "List") (TyCon "UsePath")) (TyApp (TyCon "OrdMap") (TyApp (TyCon "List") (TyCon "String"))))))
 (DFunDef false "valueProvenance" ((PVar "known") (PVar "paths")) (EApp (EVar "fst") (EApp (EApp (EApp (EApp (EVar "foldDeclProvenance") (EVar "importValueDecls")) (EVar "known")) (ETuple (EVar "omEmpty") (EVar "omEmpty"))) (EVar "paths"))))
 (DTypeSig false "foldDeclProvenance" (TyFun (TyFun (TyApp (TyCon "OrdMap") (TyCon "ModuleExports")) (TyFun (TyCon "UsePath") (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "String"))))) (TyFun (TyApp (TyCon "OrdMap") (TyCon "ModuleExports")) (TyFun (TyTuple (TyApp (TyCon "OrdMap") (TyApp (TyCon "List") (TyCon "String"))) (TyApp (TyCon "OrdMap") (TyCon "Unit"))) (TyFun (TyApp (TyCon "List") (TyCon "UsePath")) (TyTuple (TyApp (TyCon "OrdMap") (TyApp (TyCon "List") (TyCon "String"))) (TyApp (TyCon "OrdMap") (TyCon "Unit"))))))))
-(DFunDef false "foldDeclProvenance" (PWild PWild (PVar "acc") (PList)) (EVar "acc"))
-(DFunDef false "foldDeclProvenance" ((PVar "declsOf") (PVar "known") (PVar "acc") (PCons (PVar "p") (PVar "rest"))) (EBlock (DoLet false false (PVar "mid") (EApp (EVar "useModId") (EVar "p"))) (DoLet false false (PVar "acc2") (EIf (EBinOp "==" (EVar "mid") (ELit (LString "core"))) (EVar "acc") (EApp (EApp (EApp (EVar "addDeclProvenance") (EVar "acc")) (EVar "mid")) (EApp (EApp (EVar "declsOf") (EVar "known")) (EVar "p"))))) (DoExpr (EApp (EApp (EApp (EApp (EVar "foldDeclProvenance") (EVar "declsOf")) (EVar "known")) (EVar "acc2")) (EVar "rest")))))
+(DFunDef false "foldDeclProvenance" ((PVar "declsOf") (PVar "known") (PVar "acc0") (PVar "xs0")) (ELetGroup ((lgb "go" (clause ((PVar "acc") (PList)) (EVar "acc")) (clause ((PVar "acc") (PCons (PVar "p") (PVar "rest"))) (EBlock (DoLet false false (PVar "mid") (EApp (EVar "useModId") (EVar "p"))) (DoLet false false (PVar "acc2") (EIf (EBinOp "==" (EVar "mid") (ELit (LString "core"))) (EVar "acc") (EApp (EApp (EApp (EVar "addDeclProvenance") (EVar "acc")) (EVar "mid")) (EApp (EApp (EVar "declsOf") (EVar "known")) (EVar "p"))))) (DoExpr (EApp (EApp (EVar "go") (EVar "acc2")) (EVar "rest"))))))) (EApp (EApp (EVar "go") (EVar "acc0")) (EVar "xs0"))))
 (DTypeSig false "addDeclProvenance" (TyFun (TyTuple (TyApp (TyCon "OrdMap") (TyApp (TyCon "List") (TyCon "String"))) (TyApp (TyCon "OrdMap") (TyCon "Unit"))) (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "String"))) (TyTuple (TyApp (TyCon "OrdMap") (TyApp (TyCon "List") (TyCon "String"))) (TyApp (TyCon "OrdMap") (TyCon "Unit")))))))
 (DFunDef false "addDeclProvenance" ((PVar "acc") PWild (PList)) (EVar "acc"))
 (DFunDef false "addDeclProvenance" ((PTuple (PVar "prov") (PVar "seen")) (PVar "mid") (PCons (PTuple (PVar "n") (PVar "decl")) (PVar "rest"))) (EBlock (DoLet false false (PVar "k") (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "")) (EApp (EVar "display") (EApp (EVar "lenKey") (EVar "n")))) (ELit (LString ""))) (EApp (EVar "display") (EVar "decl"))) (ELit (LString "")))) (DoExpr (EIf (EApp (EApp (EVar "omHasKey") (EVar "k")) (EVar "seen")) (EApp (EApp (EApp (EVar "addDeclProvenance") (ETuple (EVar "prov") (EVar "seen"))) (EVar "mid")) (EVar "rest")) (EBlock (DoLet false false (PVar "mids") (EMatch (EApp (EApp (EVar "omLookup") (EVar "n")) (EVar "prov")) (arm (PCon "Some" (PVar "ms")) () (EBinOp "++" (EVar "ms") (EListLit (EVar "mid")))) (arm (PCon "None") () (EListLit (EVar "mid"))))) (DoExpr (EApp (EApp (EApp (EVar "addDeclProvenance") (ETuple (EApp (EApp (EApp (EVar "omInsert") (EVar "n")) (EVar "mids")) (EVar "prov")) (EApp (EApp (EApp (EVar "omInsert") (EVar "k")) (ELit LUnit)) (EVar "seen")))) (EVar "mid")) (EVar "rest"))))))))
@@ -7408,8 +7411,7 @@ addOriginsProvenance acc n base (m :: rest) =
 (DFunDef false "unmergedDecl" ((PVar "localOf") (PTuple (PVar "n") (PVar "base") (PList (PVar "m")))) (EListLit (ETuple (EApp (EVar "localOf") (EVar "n")) (EApp (EVar "declKey") (ETuple (EVar "m") (EVar "base"))))))
 (DFunDef false "unmergedDecl" (PWild PWild) (EListLit))
 (DTypeSig false "foldMergedProvenance" (TyFun (TyFun (TyCon "UsePath") (TyFun (TyCon "String") (TyCon "String"))) (TyFun (TyApp (TyCon "ExpNs") (TyCon "String")) (TyFun (TyApp (TyCon "ExpNs") (TyTuple (TyCon "String") (TyCon "String"))) (TyFun (TyApp (TyCon "OrdMap") (TyCon "ModuleExports")) (TyFun (TyTuple (TyApp (TyCon "OrdMap") (TyApp (TyCon "List") (TyCon "String"))) (TyApp (TyCon "OrdMap") (TyCon "Unit"))) (TyFun (TyApp (TyCon "List") (TyCon "UsePath")) (TyTuple (TyApp (TyCon "OrdMap") (TyApp (TyCon "List") (TyCon "String"))) (TyApp (TyCon "OrdMap") (TyCon "Unit"))))))))))
-(DFunDef false "foldMergedProvenance" (PWild PWild PWild PWild (PVar "acc") (PList)) (EVar "acc"))
-(DFunDef false "foldMergedProvenance" ((PVar "localOf") (PVar "ns") (PVar "originNs") (PVar "known") (PVar "acc") (PCons (PVar "p") (PVar "rest"))) (EApp (EApp (EApp (EApp (EApp (EApp (EVar "foldMergedProvenance") (EVar "localOf")) (EVar "ns")) (EVar "originNs")) (EVar "known")) (EApp (EApp (EApp (EVar "addMergedOrigins") (EApp (EVar "localOf") (EVar "p"))) (EVar "acc")) (EApp (EApp (EApp (EApp (EVar "importNameOrigins") (EVar "ns")) (EVar "originNs")) (EVar "known")) (EVar "p")))) (EVar "rest")))
+(DFunDef false "foldMergedProvenance" ((PVar "localOf") (PVar "ns") (PVar "originNs") (PVar "known") (PVar "acc0") (PVar "xs0")) (ELetGroup ((lgb "go" (clause ((PVar "acc") (PList)) (EVar "acc")) (clause ((PVar "acc") (PCons (PVar "p") (PVar "rest"))) (EApp (EApp (EVar "go") (EApp (EApp (EApp (EVar "addMergedOrigins") (EApp (EVar "localOf") (EVar "p"))) (EVar "acc")) (EApp (EApp (EApp (EApp (EVar "importNameOrigins") (EVar "ns")) (EVar "originNs")) (EVar "known")) (EVar "p")))) (EVar "rest"))))) (EApp (EApp (EVar "go") (EVar "acc0")) (EVar "xs0"))))
 (DTypeSig false "addMergedOrigins" (TyFun (TyFun (TyCon "String") (TyCon "String")) (TyFun (TyTuple (TyApp (TyCon "OrdMap") (TyApp (TyCon "List") (TyCon "String"))) (TyApp (TyCon "OrdMap") (TyCon "Unit"))) (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "String") (TyApp (TyCon "List") (TyCon "String")))) (TyTuple (TyApp (TyCon "OrdMap") (TyApp (TyCon "List") (TyCon "String"))) (TyApp (TyCon "OrdMap") (TyCon "Unit")))))))
 (DFunDef false "addMergedOrigins" (PWild (PVar "acc") (PList)) (EVar "acc"))
 (DFunDef false "addMergedOrigins" ((PVar "localOf") (PVar "acc") (PCons (PTuple (PVar "n") (PVar "base") (PVar "ms")) (PVar "rest"))) (EBlock (DoLet false false (PVar "acc2") (EIf (EBinOp ">=" (EApp (EVar "listLen") (EVar "ms")) (ELit (LInt 2))) (EApp (EApp (EApp (EApp (EVar "addOriginsProvenance") (EVar "acc")) (EApp (EVar "localOf") (EVar "n"))) (EVar "base")) (EVar "ms")) (EVar "acc"))) (DoExpr (EApp (EApp (EApp (EVar "addMergedOrigins") (EVar "localOf")) (EVar "acc2")) (EVar "rest")))))
@@ -7947,8 +7949,7 @@ addOriginsProvenance acc n base (m :: rest) =
 (DTypeSig true "takeOriginTrace" (TyFun (TyCon "Unit") (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "Decl"))))))
 (DFunDef false "takeOriginTrace" (PWild) (EBlock (DoLet false false (PVar "rows") (EUnOp "!" (EVar "originTraceLog"))) (DoExpr (EApp (EApp (EVar "setRef") (EVar "originTraceLog")) (EListLit))) (DoExpr (EVar "rows"))))
 (DTypeSig false "addOriginsProvenance" (TyFun (TyTuple (TyApp (TyCon "OrdMap") (TyApp (TyCon "List") (TyCon "String"))) (TyApp (TyCon "OrdMap") (TyCon "Unit"))) (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyTuple (TyApp (TyCon "OrdMap") (TyApp (TyCon "List") (TyCon "String"))) (TyApp (TyCon "OrdMap") (TyCon "Unit"))))))))
-(DFunDef false "addOriginsProvenance" ((PVar "acc") PWild PWild (PList)) (EVar "acc"))
-(DFunDef false "addOriginsProvenance" ((PVar "acc") (PVar "n") (PVar "base") (PCons (PVar "m") (PVar "rest"))) (EApp (EApp (EApp (EApp (EVar "addOriginsProvenance") (EApp (EApp (EApp (EVar "addDeclProvenance") (EVar "acc")) (EVar "m")) (EListLit (ETuple (EVar "n") (EApp (EVar "declKey") (ETuple (EVar "m") (EVar "base"))))))) (EVar "n")) (EVar "base")) (EVar "rest")))
+(DFunDef false "addOriginsProvenance" ((PVar "acc0") (PVar "n") (PVar "base") (PVar "xs0")) (ELetGroup ((lgb "go" (clause ((PVar "acc") (PList)) (EVar "acc")) (clause ((PVar "acc") (PCons (PVar "m") (PVar "rest"))) (EApp (EApp (EVar "go") (EApp (EApp (EApp (EVar "addDeclProvenance") (EVar "acc")) (EVar "m")) (EListLit (ETuple (EVar "n") (EApp (EVar "declKey") (ETuple (EVar "m") (EVar "base"))))))) (EVar "rest"))))) (EApp (EApp (EVar "go") (EVar "acc0")) (EVar "xs0"))))
 # MARK
 (DUse false (UseGroup ("support" "diag_codes") ((mem "DiagCode" true))))
 (DUse false (UseGroup ("support" "stage_count") ((mem "stageBump" false))))
@@ -8036,21 +8037,9 @@ addOriginsProvenance acc n base (m :: rest) =
 (DTypeSig false "checkTypeIn" (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyApp (TyCon "Option") (TyCon "Loc")) (TyFun (TyCon "Env") (TyFun (TyCon "Ty") (TyApp (TyCon "List") (TyCon "ResError")))))))
 (DFunDef false "checkTypeIn" ((PVar "bound") (PVar "cur") (PVar "env") (PVar "t")) (EApp (EVar "fst") (EApp (EApp (EApp (EApp (EVar "checkTypeGo") (EVar "bound")) (EVar "cur")) (EVar "env")) (EVar "t"))))
 (DTypeSig false "checkTypeGo" (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyApp (TyCon "Option") (TyCon "Loc")) (TyFun (TyCon "Env") (TyFun (TyCon "Ty") (TyTuple (TyApp (TyCon "List") (TyCon "ResError")) (TyApp (TyCon "List") (TyCon "String"))))))))
-(DFunDef false "checkTypeGo" ((PVar "bound") (PVar "cur") (PVar "env") (PRec "TyCon" ((rf "tyConName" (PVar "n")) (rf "tyConLoc" (PVar "loc"))) false)) (EBlock (DoLet false false (PVar "errs") (EIf (EBinOp "||" (EBinOp "||" (EApp (EApp (EVar "omHasKey") (EVar "n")) (EFieldAccess (EVar "env") "types")) (EApp (EApp (EVar "omHasKey") (EVar "n")) (EFieldAccess (EVar "env") "imported"))) (EApp (EVar "isTupleCtorTyName") (EVar "n"))) (EApp (EApp (EApp (EVar "ambiguousTypeErrors") (EVar "env")) (EVar "n")) (EApp (EApp (EVar "orElseLoc") (EVar "loc")) (EVar "cur"))) (EListLit (EApp (EApp (EApp (EVar "UnknownType") (EVar "n")) (EApp (EApp (EVar "orElseLoc") (EVar "loc")) (EVar "cur"))) (EApp (EApp (EVar "suggestType") (EVar "env")) (EVar "n")))))) (DoExpr (ETuple (EVar "errs") (EVar "bound")))))
-(DFunDef false "checkTypeGo" ((PVar "bound") PWild PWild (PCon "TyVar" (PVar "n"))) (ETuple (EListLit) (EBinOp "::" (EVar "n") (EVar "bound"))))
-(DFunDef false "checkTypeGo" ((PVar "bound") (PVar "cur") (PVar "env") (PCon "TyApp" (PVar "a") (PVar "b"))) (EBlock (DoLet false false (PTuple (PVar "e1") (PVar "b1")) (EApp (EApp (EApp (EApp (EVar "checkTypeGo") (EVar "bound")) (EVar "cur")) (EVar "env")) (EVar "a"))) (DoLet false false (PTuple (PVar "e2") (PVar "b2")) (EApp (EApp (EApp (EApp (EVar "checkTypeGo") (EVar "b1")) (EVar "cur")) (EVar "env")) (EVar "b"))) (DoExpr (ETuple (EBinOp "++" (EVar "e1") (EVar "e2")) (EVar "b2")))))
-(DFunDef false "checkTypeGo" ((PVar "bound") (PVar "cur") (PVar "env") (PCon "TyFun" (PCon "TyNamed" (PVar "n") (PVar "a") (PVar "d")) (PVar "b"))) (EBlock (DoLet false false (PTuple (PVar "e1") (PVar "b1")) (EApp (EApp (EApp (EApp (EVar "checkTypeGo") (EVar "bound")) (EVar "cur")) (EVar "env")) (EVar "a"))) (DoLet false false (PVar "ed") (EMatch (EVar "d") (arm (PCon "Some" (PVar "atom")) () (EApp (EApp (EApp (EApp (EVar "checkEffAtoms") (EVar "b1")) (EVar "cur")) (EVar "env")) (EListLit (EVar "atom")))) (arm (PCon "None") () (EListLit)))) (DoLet false false (PTuple (PVar "e2") (PVar "b2")) (EApp (EApp (EApp (EApp (EVar "checkTypeGo") (EBinOp "::" (EVar "n") (EVar "b1"))) (EVar "cur")) (EVar "env")) (EVar "b"))) (DoExpr (ETuple (EBinOp "++" (EBinOp "++" (EVar "e1") (EVar "ed")) (EVar "e2")) (EVar "b2")))))
-(DFunDef false "checkTypeGo" ((PVar "bound") (PVar "cur") (PVar "env") (PCon "TyFun" (PVar "a") (PVar "b"))) (EBlock (DoLet false false (PTuple (PVar "e1") (PVar "b1")) (EApp (EApp (EApp (EApp (EVar "checkTypeGo") (EVar "bound")) (EVar "cur")) (EVar "env")) (EVar "a"))) (DoLet false false (PTuple (PVar "e2") (PVar "b2")) (EApp (EApp (EApp (EApp (EVar "checkTypeGo") (EVar "b1")) (EVar "cur")) (EVar "env")) (EVar "b"))) (DoExpr (ETuple (EBinOp "++" (EVar "e1") (EVar "e2")) (EVar "b2")))))
-(DFunDef false "checkTypeGo" ((PVar "bound") (PVar "cur") (PVar "env") (PCon "TyTuple" (PVar "ts"))) (EApp (EApp (EApp (EApp (EVar "checkTypesGo") (EVar "bound")) (EVar "cur")) (EVar "env")) (EVar "ts")))
-(DFunDef false "checkTypeGo" ((PVar "bound") (PVar "cur") (PVar "env") (PCon "TyEffect" (PVar "labels") PWild (PVar "t"))) (EBlock (DoLet false false (PVar "errs") (EApp (EApp (EApp (EApp (EVar "checkEffAtoms") (EVar "bound")) (EVar "cur")) (EVar "env")) (EVar "labels"))) (DoLet false false (PTuple (PVar "e2") (PVar "b2")) (EApp (EApp (EApp (EApp (EVar "checkTypeGo") (EVar "bound")) (EVar "cur")) (EVar "env")) (EVar "t"))) (DoExpr (ETuple (EBinOp "++" (EVar "errs") (EVar "e2")) (EVar "b2")))))
-(DFunDef false "checkTypeGo" ((PVar "bound") (PVar "cur") PWild (PCon "TyNamed" (PVar "n") PWild PWild)) (ETuple (EListLit (EApp (EApp (EVar "MisplacedAuthorityBinder") (EVar "n")) (EVar "cur"))) (EVar "bound")))
-(DFunDef false "checkTypeGo" ((PVar "bound") (PVar "cur") (PVar "env") (PCon "TyQual" (PVar "t") (PVar "ps") (PVar "l"))) (EBlock (DoLet false false (PTuple (PVar "e1") (PVar "b1")) (EApp (EApp (EApp (EApp (EVar "checkTypeGo") (EVar "bound")) (EVar "cur")) (EVar "env")) (EVar "t"))) (DoExpr (ETuple (EBinOp "++" (EVar "e1") (EApp (EApp (EDictApp "flatMap") (EApp (EApp (EVar "checkAuthorityName") (EVar "b1")) (EApp (EApp (EVar "orElseLoc") (EVar "l")) (EVar "cur")))) (EApp (EVar "authTermNames") (EVar "ps")))) (EVar "b1")))))
-(DFunDef false "checkTypeGo" ((PVar "bound") (PVar "cur") (PVar "env") (PCon "TyConstrained" (PVar "cs") (PVar "t"))) (EBlock (DoLet false false (PVar "errs") (EApp (EApp (EDictApp "flatMap") (EApp (EApp (EVar "checkConstraint") (EApp (EApp (EVar "orElseLoc") (EVar "cur")) (EApp (EVar "firstTyLoc") (EVar "t")))) (EVar "env"))) (EVar "cs"))) (DoLet false false (PTuple (PVar "e2") (PVar "b2")) (EApp (EApp (EApp (EApp (EVar "checkTypeGo") (EVar "bound")) (EVar "cur")) (EVar "env")) (EVar "t"))) (DoExpr (ETuple (EBinOp "++" (EVar "errs") (EVar "e2")) (EVar "b2")))))
-(DFunDef false "checkTypeGo" ((PVar "bound") (PVar "cur") (PVar "env") (PCon "TyRow" (PVar "labels") PWild PWild)) (ETuple (EApp (EApp (EApp (EApp (EVar "checkEffAtoms") (EVar "bound")) (EVar "cur")) (EVar "env")) (EVar "labels")) (EVar "bound")))
-(DFunDef false "checkTypeGo" ((PVar "bound") PWild PWild (PCon "TyAuth" (PVar "ps") PWild)) (ETuple (EListLit) (EBinOp "++" (EApp (EVar "authTermNames") (EVar "ps")) (EVar "bound"))))
+(DFunDef false "checkTypeGo" ((PVar "bound0") (PVar "cur") (PVar "env") (PVar "x0")) (ELetGroup ((lgb "go" (clause ((PVar "bound") (PRec "TyCon" ((rf "tyConName" (PVar "n")) (rf "tyConLoc" (PVar "loc"))) false)) (EBlock (DoLet false false (PVar "errs") (EIf (EBinOp "||" (EBinOp "||" (EApp (EApp (EVar "omHasKey") (EVar "n")) (EFieldAccess (EVar "env") "types")) (EApp (EApp (EVar "omHasKey") (EVar "n")) (EFieldAccess (EVar "env") "imported"))) (EApp (EVar "isTupleCtorTyName") (EVar "n"))) (EApp (EApp (EApp (EVar "ambiguousTypeErrors") (EVar "env")) (EVar "n")) (EApp (EApp (EVar "orElseLoc") (EVar "loc")) (EVar "cur"))) (EListLit (EApp (EApp (EApp (EVar "UnknownType") (EVar "n")) (EApp (EApp (EVar "orElseLoc") (EVar "loc")) (EVar "cur"))) (EApp (EApp (EVar "suggestType") (EVar "env")) (EVar "n")))))) (DoExpr (ETuple (EVar "errs") (EVar "bound"))))) (clause ((PVar "bound") (PCon "TyVar" (PVar "n"))) (ETuple (EListLit) (EBinOp "::" (EVar "n") (EVar "bound")))) (clause ((PVar "bound") (PCon "TyApp" (PVar "a") (PVar "b"))) (EBlock (DoLet false false (PTuple (PVar "e1") (PVar "b1")) (EApp (EApp (EVar "go") (EVar "bound")) (EVar "a"))) (DoLet false false (PTuple (PVar "e2") (PVar "b2")) (EApp (EApp (EVar "go") (EVar "b1")) (EVar "b"))) (DoExpr (ETuple (EBinOp "++" (EVar "e1") (EVar "e2")) (EVar "b2"))))) (clause ((PVar "bound") (PCon "TyFun" (PCon "TyNamed" (PVar "n") (PVar "a") (PVar "d")) (PVar "b"))) (EBlock (DoLet false false (PTuple (PVar "e1") (PVar "b1")) (EApp (EApp (EVar "go") (EVar "bound")) (EVar "a"))) (DoLet false false (PVar "ed") (EMatch (EVar "d") (arm (PCon "Some" (PVar "atom")) () (EApp (EApp (EApp (EApp (EVar "checkEffAtoms") (EVar "b1")) (EVar "cur")) (EVar "env")) (EListLit (EVar "atom")))) (arm (PCon "None") () (EListLit)))) (DoLet false false (PTuple (PVar "e2") (PVar "b2")) (EApp (EApp (EVar "go") (EBinOp "::" (EVar "n") (EVar "b1"))) (EVar "b"))) (DoExpr (ETuple (EBinOp "++" (EBinOp "++" (EVar "e1") (EVar "ed")) (EVar "e2")) (EVar "b2"))))) (clause ((PVar "bound") (PCon "TyFun" (PVar "a") (PVar "b"))) (EBlock (DoLet false false (PTuple (PVar "e1") (PVar "b1")) (EApp (EApp (EVar "go") (EVar "bound")) (EVar "a"))) (DoLet false false (PTuple (PVar "e2") (PVar "b2")) (EApp (EApp (EVar "go") (EVar "b1")) (EVar "b"))) (DoExpr (ETuple (EBinOp "++" (EVar "e1") (EVar "e2")) (EVar "b2"))))) (clause ((PVar "bound") (PCon "TyTuple" (PVar "ts"))) (EApp (EApp (EApp (EApp (EVar "checkTypesGo") (EVar "bound")) (EVar "cur")) (EVar "env")) (EVar "ts"))) (clause ((PVar "bound") (PCon "TyEffect" (PVar "labels") PWild (PVar "t"))) (EBlock (DoLet false false (PVar "errs") (EApp (EApp (EApp (EApp (EVar "checkEffAtoms") (EVar "bound")) (EVar "cur")) (EVar "env")) (EVar "labels"))) (DoLet false false (PTuple (PVar "e2") (PVar "b2")) (EApp (EApp (EVar "go") (EVar "bound")) (EVar "t"))) (DoExpr (ETuple (EBinOp "++" (EVar "errs") (EVar "e2")) (EVar "b2"))))) (clause ((PVar "bound") (PCon "TyNamed" (PVar "n") PWild PWild)) (ETuple (EListLit (EApp (EApp (EVar "MisplacedAuthorityBinder") (EVar "n")) (EVar "cur"))) (EVar "bound"))) (clause ((PVar "bound") (PCon "TyQual" (PVar "t") (PVar "ps") (PVar "l"))) (EBlock (DoLet false false (PTuple (PVar "e1") (PVar "b1")) (EApp (EApp (EVar "go") (EVar "bound")) (EVar "t"))) (DoExpr (ETuple (EBinOp "++" (EVar "e1") (EApp (EApp (EDictApp "flatMap") (EApp (EApp (EVar "checkAuthorityName") (EVar "b1")) (EApp (EApp (EVar "orElseLoc") (EVar "l")) (EVar "cur")))) (EApp (EVar "authTermNames") (EVar "ps")))) (EVar "b1"))))) (clause ((PVar "bound") (PCon "TyConstrained" (PVar "cs") (PVar "t"))) (EBlock (DoLet false false (PVar "errs") (EApp (EApp (EDictApp "flatMap") (EApp (EApp (EVar "checkConstraint") (EApp (EApp (EVar "orElseLoc") (EVar "cur")) (EApp (EVar "firstTyLoc") (EVar "t")))) (EVar "env"))) (EVar "cs"))) (DoLet false false (PTuple (PVar "e2") (PVar "b2")) (EApp (EApp (EVar "go") (EVar "bound")) (EVar "t"))) (DoExpr (ETuple (EBinOp "++" (EVar "errs") (EVar "e2")) (EVar "b2"))))) (clause ((PVar "bound") (PCon "TyRow" (PVar "labels") PWild PWild)) (ETuple (EApp (EApp (EApp (EApp (EVar "checkEffAtoms") (EVar "bound")) (EVar "cur")) (EVar "env")) (EVar "labels")) (EVar "bound"))) (clause ((PVar "bound") (PCon "TyAuth" (PVar "ps") PWild)) (ETuple (EListLit) (EBinOp "++" (EApp (EVar "authTermNames") (EVar "ps")) (EVar "bound")))))) (EApp (EApp (EVar "go") (EVar "bound0")) (EVar "x0"))))
 (DTypeSig false "checkTypesGo" (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyApp (TyCon "Option") (TyCon "Loc")) (TyFun (TyCon "Env") (TyFun (TyApp (TyCon "List") (TyCon "Ty")) (TyTuple (TyApp (TyCon "List") (TyCon "ResError")) (TyApp (TyCon "List") (TyCon "String"))))))))
-(DFunDef false "checkTypesGo" ((PVar "bound") PWild PWild (PList)) (ETuple (EListLit) (EVar "bound")))
-(DFunDef false "checkTypesGo" ((PVar "bound") (PVar "cur") (PVar "env") (PCons (PVar "t") (PVar "ts"))) (EBlock (DoLet false false (PTuple (PVar "e1") (PVar "b1")) (EApp (EApp (EApp (EApp (EVar "checkTypeGo") (EVar "bound")) (EVar "cur")) (EVar "env")) (EVar "t"))) (DoLet false false (PTuple (PVar "e2") (PVar "b2")) (EApp (EApp (EApp (EApp (EVar "checkTypesGo") (EVar "b1")) (EVar "cur")) (EVar "env")) (EVar "ts"))) (DoExpr (ETuple (EBinOp "++" (EVar "e1") (EVar "e2")) (EVar "b2")))))
+(DFunDef false "checkTypesGo" ((PVar "bound0") (PVar "cur") (PVar "env") (PVar "xs0")) (ELetGroup ((lgb "go" (clause ((PVar "bound") (PList)) (ETuple (EListLit) (EVar "bound"))) (clause ((PVar "bound") (PCons (PVar "t") (PVar "ts"))) (EBlock (DoLet false false (PTuple (PVar "e1") (PVar "b1")) (EApp (EApp (EApp (EApp (EVar "checkTypeGo") (EVar "bound")) (EVar "cur")) (EVar "env")) (EVar "t"))) (DoLet false false (PTuple (PVar "e2") (PVar "b2")) (EApp (EApp (EVar "go") (EVar "b1")) (EVar "ts"))) (DoExpr (ETuple (EBinOp "++" (EVar "e1") (EVar "e2")) (EVar "b2"))))))) (EApp (EApp (EVar "go") (EVar "bound0")) (EVar "xs0"))))
 (DTypeSig false "authorityParams" (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyApp (TyCon "List") (TyApp (TyCon "Option") (TyCon "KindAnn"))) (TyApp (TyCon "List") (TyCon "String")))))
 (DFunDef false "authorityParams" ((PCons (PVar "p") (PVar "ps")) (PCons (PCon "Some" (PCon "KindAuthority" PWild PWild PWild PWild)) (PVar "ks"))) (EBinOp "::" (EVar "p") (EApp (EApp (EVar "authorityParams") (EVar "ps")) (EVar "ks"))))
 (DFunDef false "authorityParams" ((PCons PWild (PVar "ps")) (PCons PWild (PVar "ks"))) (EApp (EApp (EVar "authorityParams") (EVar "ps")) (EVar "ks")))
@@ -8081,15 +8070,7 @@ addOriginsProvenance acc n base (m :: rest) =
 (DTypeSig false "checkConstraint" (TyFun (TyApp (TyCon "Option") (TyCon "Loc")) (TyFun (TyCon "Env") (TyFun (TyCon "Constraint") (TyApp (TyCon "List") (TyCon "ResError"))))))
 (DFunDef false "checkConstraint" ((PVar "cur") (PVar "env") (PRec "Constraint" ((rf "constraintHead" (PVar "iface")) (rf "constraintArgs" (PVar "args"))) false)) (EBinOp "++" (EIf (EApp (EApp (EVar "contains") (EVar "iface")) (EFieldAccess (EVar "env") "interfaces")) (EApp (EApp (EApp (EVar "ambiguousIfaceErrors") (EVar "env")) (EVar "iface")) (EApp (EApp (EVar "orElseLoc") (EApp (EVar "firstTyLocList") (EVar "args"))) (EVar "cur"))) (EListLit (EApp (EApp (EVar "UnknownInterface") (EVar "iface")) (EVar "cur")))) (EApp (EApp (EDictApp "flatMap") (EApp (EApp (EVar "checkType") (EVar "cur")) (EVar "env"))) (EVar "args"))))
 (DTypeSig false "checkPat" (TyFun (TyApp (TyCon "Option") (TyCon "Loc")) (TyFun (TyCon "Env") (TyFun (TyCon "Pat") (TyApp (TyCon "List") (TyCon "ResError"))))))
-(DFunDef false "checkPat" ((PVar "cur") (PVar "env") (PCon "PCon" (PVar "c") (PVar "ps"))) (EBinOp "++" (EIf (EBinOp "||" (EApp (EApp (EVar "omHasKey") (EVar "c")) (EFieldAccess (EVar "env") "ctors")) (EApp (EApp (EVar "omHasKey") (EVar "c")) (EFieldAccess (EVar "env") "imported"))) (EApp (EApp (EApp (EVar "ambiguousCtorErrors") (EVar "env")) (EVar "c")) (EVar "cur")) (EListLit (EApp (EApp (EApp (EVar "UnknownConstructor") (EVar "c")) (EVar "cur")) (EApp (EVar "suggestCtor") (EVar "c"))))) (EApp (EApp (EDictApp "flatMap") (EApp (EApp (EVar "checkPat") (EVar "cur")) (EVar "env"))) (EVar "ps"))))
-(DFunDef false "checkPat" ((PVar "cur") (PVar "env") (PCon "PCons" (PVar "a") (PVar "b"))) (EBinOp "++" (EApp (EApp (EApp (EVar "checkPat") (EVar "cur")) (EVar "env")) (EVar "a")) (EApp (EApp (EApp (EVar "checkPat") (EVar "cur")) (EVar "env")) (EVar "b"))))
-(DFunDef false "checkPat" ((PVar "cur") (PVar "env") (PCon "PTuple" (PVar "ps"))) (EApp (EApp (EDictApp "flatMap") (EApp (EApp (EVar "checkPat") (EVar "cur")) (EVar "env"))) (EVar "ps")))
-(DFunDef false "checkPat" ((PVar "cur") (PVar "env") (PCon "PList" (PVar "ps"))) (EApp (EApp (EDictApp "flatMap") (EApp (EApp (EVar "checkPat") (EVar "cur")) (EVar "env"))) (EVar "ps")))
-(DFunDef false "checkPat" ((PVar "cur") (PVar "env") (PCon "PAs" PWild PWild PWild (PVar "p"))) (EApp (EApp (EApp (EVar "checkPat") (EVar "cur")) (EVar "env")) (EVar "p")))
-(DFunDef false "checkPat" ((PVar "cur") (PVar "env") (PCon "POr" (PVar "ps"))) (EBinOp "++" (EApp (EApp (EDictApp "flatMap") (EApp (EApp (EVar "checkPat") (EVar "cur")) (EVar "env"))) (EVar "ps")) (EApp (EApp (EVar "orBinderErrors") (EVar "cur")) (EVar "ps"))))
-(DFunDef false "checkPat" ((PVar "cur") (PVar "env") (PCon "PRec" (PVar "name") (PVar "fields") PWild)) (EApp (EApp (EApp (EApp (EVar "checkRecPat") (EVar "cur")) (EVar "env")) (EVar "name")) (EVar "fields")))
-(DFunDef false "checkPat" ((PVar "cur") (PVar "env") (PCon "PAnn" (PVar "p") PWild)) (EApp (EApp (EApp (EVar "checkPat") (EVar "cur")) (EVar "env")) (EVar "p")))
-(DFunDef false "checkPat" (PWild PWild (POr (PCon "PVar" PWild PWild PWild) (PCon "PWild") (PCon "PLit" PWild) (PCon "PRng" PWild PWild PWild))) (EListLit))
+(DFunDef false "checkPat" ((PVar "cur") (PVar "env") (PVar "x0")) (ELetGroup ((lgb "go" (clause ((PCon "PCon" (PVar "c") (PVar "ps"))) (EBinOp "++" (EIf (EBinOp "||" (EApp (EApp (EVar "omHasKey") (EVar "c")) (EFieldAccess (EVar "env") "ctors")) (EApp (EApp (EVar "omHasKey") (EVar "c")) (EFieldAccess (EVar "env") "imported"))) (EApp (EApp (EApp (EVar "ambiguousCtorErrors") (EVar "env")) (EVar "c")) (EVar "cur")) (EListLit (EApp (EApp (EApp (EVar "UnknownConstructor") (EVar "c")) (EVar "cur")) (EApp (EVar "suggestCtor") (EVar "c"))))) (EApp (EApp (EDictApp "flatMap") (EApp (EApp (EVar "checkPat") (EVar "cur")) (EVar "env"))) (EVar "ps")))) (clause ((PCon "PCons" (PVar "a") (PVar "b"))) (EBinOp "++" (EApp (EVar "go") (EVar "a")) (EApp (EVar "go") (EVar "b")))) (clause ((PCon "PTuple" (PVar "ps"))) (EApp (EApp (EDictApp "flatMap") (EApp (EApp (EVar "checkPat") (EVar "cur")) (EVar "env"))) (EVar "ps"))) (clause ((PCon "PList" (PVar "ps"))) (EApp (EApp (EDictApp "flatMap") (EApp (EApp (EVar "checkPat") (EVar "cur")) (EVar "env"))) (EVar "ps"))) (clause ((PCon "PAs" PWild PWild PWild (PVar "p"))) (EApp (EVar "go") (EVar "p"))) (clause ((PCon "POr" (PVar "ps"))) (EBinOp "++" (EApp (EApp (EDictApp "flatMap") (EApp (EApp (EVar "checkPat") (EVar "cur")) (EVar "env"))) (EVar "ps")) (EApp (EApp (EVar "orBinderErrors") (EVar "cur")) (EVar "ps")))) (clause ((PCon "PRec" (PVar "name") (PVar "fields") PWild)) (EApp (EApp (EApp (EApp (EVar "checkRecPat") (EVar "cur")) (EVar "env")) (EVar "name")) (EVar "fields"))) (clause ((PCon "PAnn" (PVar "p") PWild)) (EApp (EVar "go") (EVar "p"))) (clause ((POr (PCon "PVar" PWild PWild PWild) (PCon "PWild") (PCon "PLit" PWild) (PCon "PRng" PWild PWild PWild))) (EListLit)))) (EApp (EVar "go") (EVar "x0"))))
 (DTypeSig false "orBinderErrors" (TyFun (TyApp (TyCon "Option") (TyCon "Loc")) (TyFun (TyApp (TyCon "List") (TyCon "Pat")) (TyApp (TyCon "List") (TyCon "ResError")))))
 (DFunDef false "orBinderErrors" (PWild (PList)) (EListLit))
 (DFunDef false "orBinderErrors" ((PVar "cur") (PCons (PVar "p") (PVar "rest"))) (EBlock (DoLet false false (PVar "names") (EApp (EVar "patBindings") (EVar "p"))) (DoExpr (EMatch (EApp (EApp (EMethodRef "filter") (ELam ((PVar "q")) (EApp (EVar "not") (EApp (EApp (EVar "sameBinders") (EVar "names")) (EApp (EVar "patBindings") (EVar "q")))))) (EVar "rest")) (arm (PList) () (EListLit)) (arm (PCons (PVar "q") PWild) () (EListLit (EApp (EApp (EApp (EApp (EVar "OrPatternBinders") (EVar "names")) (EApp (EVar "patBindings") (EVar "q"))) (EApp (EApp (EDictApp "any") (EVar "isBareVarPat")) (EBinOp "::" (EVar "p") (EVar "rest")))) (EVar "cur"))))))))
@@ -8275,7 +8256,7 @@ addOriginsProvenance acc n base (m :: rest) =
 (DTypeSig false "charMask" (TyFun (TyCon "Int") (TyFun (TyCon "String") (TyCon "Int"))))
 (DFunDef false "charMask" ((PVar "sh") (PVar "n")) (EApp (EApp (EApp (EApp (EVar "charMaskGo") (EVar "sh")) (EApp (EVar "stringToChars") (EVar "n"))) (ELit (LInt 0))) (ELit (LInt 0))))
 (DTypeSig false "charMaskGo" (TyFun (TyCon "Int") (TyFun (TyApp (TyCon "Array") (TyCon "Char")) (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyCon "Int"))))))
-(DFunDef false "charMaskGo" ((PVar "sh") (PVar "cs") (PVar "i") (PVar "acc")) (EIf (EBinOp ">=" (EVar "i") (EApp (EVar "arrayLength") (EVar "cs"))) (EVar "acc") (EIf (EVar "otherwise") (EApp (EApp (EApp (EApp (EVar "charMaskGo") (EVar "sh")) (EVar "cs")) (EBinOp "+" (EVar "i") (ELit (LInt 1)))) (EApp (EApp (EVar "bitOr") (EVar "acc")) (EApp (EApp (EVar "shiftLeft") (ELit (LInt 1))) (EApp (EApp (EVar "bitAnd") (EApp (EApp (EVar "shiftRight") (EApp (EVar "hashChar") (EApp (EApp (EVar "arrayGetUnsafe") (EVar "i")) (EVar "cs")))) (EVar "sh"))) (ELit (LInt 31)))))) (EApp (EVar "__fallthrough__") (ELit LUnit)))))
+(DFunDef false "charMaskGo" ((PVar "sh") (PVar "cs") (PVar "i0") (PVar "acc0")) (ELetGroup ((lgb "go" (clause ((PVar "i") (PVar "acc")) (EIf (EBinOp ">=" (EVar "i") (EApp (EVar "arrayLength") (EVar "cs"))) (EVar "acc") (EIf (EVar "otherwise") (EApp (EApp (EVar "go") (EBinOp "+" (EVar "i") (ELit (LInt 1)))) (EApp (EApp (EVar "bitOr") (EVar "acc")) (EApp (EApp (EVar "shiftLeft") (ELit (LInt 1))) (EApp (EApp (EVar "bitAnd") (EApp (EApp (EVar "shiftRight") (EApp (EVar "hashChar") (EApp (EApp (EVar "arrayGetUnsafe") (EVar "i")) (EVar "cs")))) (EVar "sh"))) (ELit (LInt 31)))))) (EApp (EVar "__fallthrough__") (ELit LUnit))))))) (EApp (EApp (EVar "go") (EVar "i0")) (EVar "acc0"))))
 (DTypeSig false "bitsAtMost" (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyCon "Bool"))))
 (DFunDef false "bitsAtMost" ((PVar "k") (PVar "x")) (EIf (EBinOp "==" (EVar "x") (ELit (LInt 0))) (EVar "True") (EIf (EBinOp "<=" (EVar "k") (ELit (LInt 0))) (EVar "False") (EIf (EVar "otherwise") (EApp (EApp (EVar "bitsAtMost") (EBinOp "-" (EVar "k") (ELit (LInt 1)))) (EApp (EApp (EVar "bitAnd") (EVar "x")) (EBinOp "-" (EVar "x") (ELit (LInt 1))))) (EApp (EVar "__fallthrough__") (ELit LUnit))))))
 (DTypeSig false "bestOfPool" (TyFun (TyCon "SugQuery") (TyFun (TyApp (TyCon "List") (TyCon "SugCand")) (TyApp (TyCon "Option") (TyCon "String")))))
@@ -8319,24 +8300,20 @@ addOriginsProvenance acc n base (m :: rest) =
 (DFunDef false "hasNullaryClause" ((PList)) (EVar "False"))
 (DFunDef false "hasNullaryClause" ((PCons (PCon "FunClause" (PVar "ps") PWild) (PVar "rest"))) (EBinOp "||" (EApp (EVar "isEmptyL") (EVar "ps")) (EApp (EVar "hasNullaryClause") (EVar "rest"))))
 (DTypeSig false "dupClauseTail" (TyFun (TyApp (TyCon "Option") (TyCon "Loc")) (TyFun (TyCon "String") (TyFun (TyCon "Bool") (TyFun (TyApp (TyCon "List") (TyCon "FunClause")) (TyApp (TyCon "List") (TyCon "ResError")))))))
-(DFunDef false "dupClauseTail" (PWild PWild PWild (PList)) (EListLit))
-(DFunDef false "dupClauseTail" ((PVar "cur") (PVar "n") (PVar "seen") (PCons (PCon "FunClause" PWild (PVar "body")) (PVar "rest"))) (EBinOp "++" (EApp (EApp (EVar "whenL") (EVar "seen")) (EListLit (EApp (EApp (EVar "DuplicateValueBinding") (EVar "n")) (EApp (EApp (EVar "orElseLoc") (EApp (EVar "firstExprLoc") (EVar "body"))) (EVar "cur"))))) (EApp (EApp (EApp (EApp (EVar "dupClauseTail") (EVar "cur")) (EVar "n")) (EVar "True")) (EVar "rest"))))
+(DFunDef false "dupClauseTail" ((PVar "cur") (PVar "n") (PVar "seen0") (PVar "xs0")) (ELetGroup ((lgb "go" (clause (PWild (PList)) (EListLit)) (clause ((PVar "seen") (PCons (PCon "FunClause" PWild (PVar "body")) (PVar "rest"))) (EBinOp "++" (EApp (EApp (EVar "whenL") (EVar "seen")) (EListLit (EApp (EApp (EVar "DuplicateValueBinding") (EVar "n")) (EApp (EApp (EVar "orElseLoc") (EApp (EVar "firstExprLoc") (EVar "body"))) (EVar "cur"))))) (EApp (EApp (EVar "go") (EVar "True")) (EVar "rest")))))) (EApp (EApp (EVar "go") (EVar "seen0")) (EVar "xs0"))))
 (DTypeSig false "checkFunClause" (TyFun (TyApp (TyCon "Option") (TyCon "Loc")) (TyFun (TyCon "Env") (TyFun (TyCon "Scope") (TyFun (TyCon "FunClause") (TyApp (TyCon "List") (TyCon "ResError")))))))
 (DFunDef false "checkFunClause" ((PVar "cur") (PVar "env") (PVar "scope") (PCon "FunClause" (PVar "pats") (PVar "body"))) (EBlock (DoLet false false (PVar "patLoc") (EApp (EApp (EVar "orElseLoc") (EApp (EVar "firstExprLoc") (EVar "body"))) (EVar "cur"))) (DoExpr (EBinOp "++" (EBinOp "++" (EApp (EApp (EDictApp "flatMap") (EApp (EApp (EVar "checkPat") (EVar "patLoc")) (EVar "env"))) (EVar "pats")) (EApp (EApp (EApp (EVar "patGroupDupErrors") (EVar "patLoc")) (ELit (LString "parameter list"))) (EVar "pats"))) (EApp (EApp (EApp (EApp (EVar "checkExpr") (EVar "cur")) (EVar "env")) (EApp (EApp (EVar "scopeExtend") (EApp (EVar "patsBindings") (EVar "pats"))) (EVar "scope"))) (EVar "body"))))))
 (DTypeSig false "checkArm" (TyFun (TyApp (TyCon "Option") (TyCon "Loc")) (TyFun (TyCon "Env") (TyFun (TyCon "Scope") (TyFun (TyCon "Arm") (TyApp (TyCon "List") (TyCon "ResError")))))))
 (DFunDef false "checkArm" ((PVar "cur") (PVar "env") (PVar "scope") (PCon "Arm" (PVar "pat") (PVar "gs") (PVar "body"))) (EBlock (DoLet false false (PVar "scope0") (EApp (EApp (EVar "scopeExtend") (EApp (EVar "patBindings") (EVar "pat"))) (EVar "scope"))) (DoLet false false (PTuple (PVar "gErrs") (PVar "scope2")) (EApp (EApp (EApp (EApp (EVar "checkArmGuards") (EVar "cur")) (EVar "env")) (EVar "scope0")) (EVar "gs"))) (DoExpr (EBinOp "++" (EBinOp "++" (EBinOp "++" (EApp (EApp (EApp (EVar "checkPat") (EVar "cur")) (EVar "env")) (EVar "pat")) (EApp (EApp (EApp (EVar "patGroupDupErrors") (EVar "cur")) (ELit (LString "pattern"))) (EListLit (EVar "pat")))) (EVar "gErrs")) (EApp (EApp (EApp (EApp (EVar "checkExpr") (EVar "cur")) (EVar "env")) (EVar "scope2")) (EVar "body"))))))
 (DTypeSig false "checkArmGuards" (TyFun (TyApp (TyCon "Option") (TyCon "Loc")) (TyFun (TyCon "Env") (TyFun (TyCon "Scope") (TyFun (TyApp (TyCon "List") (TyCon "Guard")) (TyTuple (TyApp (TyCon "List") (TyCon "ResError")) (TyCon "Scope")))))))
-(DFunDef false "checkArmGuards" (PWild PWild (PVar "scope") (PList)) (ETuple (EListLit) (EVar "scope")))
-(DFunDef false "checkArmGuards" ((PVar "cur") (PVar "env") (PVar "scope") (PCons (PCon "GBool" (PVar "e")) (PVar "rest"))) (EBlock (DoLet false false (PTuple (PVar "rErrs") (PVar "scope2")) (EApp (EApp (EApp (EApp (EVar "checkArmGuards") (EVar "cur")) (EVar "env")) (EVar "scope")) (EVar "rest"))) (DoExpr (ETuple (EBinOp "++" (EApp (EApp (EApp (EApp (EVar "checkExpr") (EVar "cur")) (EVar "env")) (EVar "scope")) (EVar "e")) (EVar "rErrs")) (EVar "scope2")))))
-(DFunDef false "checkArmGuards" ((PVar "cur") (PVar "env") (PVar "scope") (PCons (PCon "GBind" (PVar "p") (PVar "e")) (PVar "rest"))) (EBlock (DoLet false false (PVar "here") (EBinOp "++" (EBinOp "++" (EApp (EApp (EApp (EApp (EVar "checkExpr") (EVar "cur")) (EVar "env")) (EVar "scope")) (EVar "e")) (EApp (EApp (EApp (EVar "checkPat") (EVar "cur")) (EVar "env")) (EVar "p"))) (EApp (EApp (EApp (EVar "patGroupDupErrors") (EVar "cur")) (ELit (LString "pattern"))) (EListLit (EVar "p"))))) (DoLet false false (PTuple (PVar "rErrs") (PVar "scope2")) (EApp (EApp (EApp (EApp (EVar "checkArmGuards") (EVar "cur")) (EVar "env")) (EApp (EApp (EVar "scopeExtend") (EApp (EVar "patBindings") (EVar "p"))) (EVar "scope"))) (EVar "rest"))) (DoExpr (ETuple (EBinOp "++" (EVar "here") (EVar "rErrs")) (EVar "scope2")))))
+(DFunDef false "checkArmGuards" ((PVar "cur") (PVar "env") (PVar "scope0") (PVar "xs0")) (ELetGroup ((lgb "go" (clause ((PVar "scope") (PList)) (ETuple (EListLit) (EVar "scope"))) (clause ((PVar "scope") (PCons (PCon "GBool" (PVar "e")) (PVar "rest"))) (EBlock (DoLet false false (PTuple (PVar "rErrs") (PVar "scope2")) (EApp (EApp (EVar "go") (EVar "scope")) (EVar "rest"))) (DoExpr (ETuple (EBinOp "++" (EApp (EApp (EApp (EApp (EVar "checkExpr") (EVar "cur")) (EVar "env")) (EVar "scope")) (EVar "e")) (EVar "rErrs")) (EVar "scope2"))))) (clause ((PVar "scope") (PCons (PCon "GBind" (PVar "p") (PVar "e")) (PVar "rest"))) (EBlock (DoLet false false (PVar "here") (EBinOp "++" (EBinOp "++" (EApp (EApp (EApp (EApp (EVar "checkExpr") (EVar "cur")) (EVar "env")) (EVar "scope")) (EVar "e")) (EApp (EApp (EApp (EVar "checkPat") (EVar "cur")) (EVar "env")) (EVar "p"))) (EApp (EApp (EApp (EVar "patGroupDupErrors") (EVar "cur")) (ELit (LString "pattern"))) (EListLit (EVar "p"))))) (DoLet false false (PTuple (PVar "rErrs") (PVar "scope2")) (EApp (EApp (EVar "go") (EApp (EApp (EVar "scopeExtend") (EApp (EVar "patBindings") (EVar "p"))) (EVar "scope"))) (EVar "rest"))) (DoExpr (ETuple (EBinOp "++" (EVar "here") (EVar "rErrs")) (EVar "scope2"))))))) (EApp (EApp (EVar "go") (EVar "scope0")) (EVar "xs0"))))
 (DTypeSig false "checkGuardArm" (TyFun (TyApp (TyCon "Option") (TyCon "Loc")) (TyFun (TyCon "Env") (TyFun (TyCon "Scope") (TyFun (TyCon "GuardArm") (TyApp (TyCon "List") (TyCon "ResError")))))))
 (DFunDef false "checkGuardArm" ((PVar "cur") (PVar "env") (PVar "scope") (PCon "GuardArm" (PVar "gs") (PVar "body"))) (EBinOp "++" (EApp (EApp (EDictApp "flatMap") (EApp (EApp (EApp (EVar "checkGuard") (EVar "cur")) (EVar "env")) (EVar "scope"))) (EVar "gs")) (EApp (EApp (EApp (EApp (EVar "checkExpr") (EVar "cur")) (EVar "env")) (EVar "scope")) (EVar "body"))))
 (DTypeSig false "checkGuard" (TyFun (TyApp (TyCon "Option") (TyCon "Loc")) (TyFun (TyCon "Env") (TyFun (TyCon "Scope") (TyFun (TyCon "Guard") (TyApp (TyCon "List") (TyCon "ResError")))))))
 (DFunDef false "checkGuard" ((PVar "cur") (PVar "env") (PVar "scope") (PCon "GBool" (PVar "e"))) (EApp (EApp (EApp (EApp (EVar "checkExpr") (EVar "cur")) (EVar "env")) (EVar "scope")) (EVar "e")))
 (DFunDef false "checkGuard" ((PVar "cur") (PVar "env") (PVar "scope") (PCon "GBind" PWild (PVar "e"))) (EApp (EApp (EApp (EApp (EVar "checkExpr") (EVar "cur")) (EVar "env")) (EVar "scope")) (EVar "e")))
 (DTypeSig false "checkStmts" (TyFun (TyApp (TyCon "Option") (TyCon "Loc")) (TyFun (TyCon "Env") (TyFun (TyCon "Scope") (TyFun (TyApp (TyCon "List") (TyCon "DoStmt")) (TyApp (TyCon "List") (TyCon "ResError")))))))
-(DFunDef false "checkStmts" (PWild PWild PWild (PList)) (EListLit))
-(DFunDef false "checkStmts" ((PVar "cur") (PVar "env") (PVar "scope") (PCons (PVar "s") (PVar "rest"))) (EBlock (DoLet false false (PTuple (PVar "errs") (PVar "scope2")) (EApp (EApp (EApp (EApp (EVar "checkStmt") (EVar "cur")) (EVar "env")) (EVar "scope")) (EVar "s"))) (DoExpr (EBinOp "++" (EVar "errs") (EApp (EApp (EApp (EApp (EVar "checkStmts") (EVar "cur")) (EVar "env")) (EVar "scope2")) (EVar "rest"))))))
+(DFunDef false "checkStmts" ((PVar "cur") (PVar "env") (PVar "scope0") (PVar "xs0")) (ELetGroup ((lgb "go" (clause (PWild (PList)) (EListLit)) (clause ((PVar "scope") (PCons (PVar "s") (PVar "rest"))) (EBlock (DoLet false false (PTuple (PVar "errs") (PVar "scope2")) (EApp (EApp (EApp (EApp (EVar "checkStmt") (EVar "cur")) (EVar "env")) (EVar "scope")) (EVar "s"))) (DoExpr (EBinOp "++" (EVar "errs") (EApp (EApp (EVar "go") (EVar "scope2")) (EVar "rest")))))))) (EApp (EApp (EVar "go") (EVar "scope0")) (EVar "xs0"))))
 (DTypeSig false "checkStmt" (TyFun (TyApp (TyCon "Option") (TyCon "Loc")) (TyFun (TyCon "Env") (TyFun (TyCon "Scope") (TyFun (TyCon "DoStmt") (TyTuple (TyApp (TyCon "List") (TyCon "ResError")) (TyCon "Scope")))))))
 (DFunDef false "checkStmt" ((PVar "cur") (PVar "env") (PVar "scope") (PCon "DoExpr" (PVar "e"))) (ETuple (EApp (EApp (EApp (EApp (EVar "checkExpr") (EVar "cur")) (EVar "env")) (EVar "scope")) (EVar "e")) (EVar "scope")))
 (DFunDef false "checkStmt" ((PVar "cur") (PVar "env") (PVar "scope") (PCon "DoBind" (PVar "p") (PVar "e"))) (ETuple (EBinOp "++" (EBinOp "++" (EApp (EApp (EApp (EVar "checkPat") (EVar "cur")) (EVar "env")) (EVar "p")) (EApp (EApp (EApp (EVar "patGroupDupErrors") (EVar "cur")) (ELit (LString "pattern"))) (EListLit (EVar "p")))) (EApp (EApp (EApp (EApp (EVar "checkExpr") (EVar "cur")) (EVar "env")) (EVar "scope")) (EVar "e"))) (EApp (EApp (EVar "scopeExtend") (EApp (EVar "patBindings") (EVar "p"))) (EVar "scope"))))
@@ -8387,8 +8364,7 @@ addOriginsProvenance acc n base (m :: rest) =
 (DFunDef false "padBinders" ((PCons PWild (PVar "vs")) (PCons (PVar "b") (PVar "bs"))) (EBinOp "::" (EVar "b") (EApp (EApp (EVar "padBinders") (EVar "vs")) (EVar "bs"))))
 (DFunDef false "padBinders" ((PCons PWild (PVar "vs")) (PList)) (EBinOp "::" (EListLit) (EApp (EApp (EVar "padBinders") (EVar "vs")) (EListLit))))
 (DTypeSig false "checkVariants" (TyFun (TyCon "Env") (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyApp (TyCon "List") (TyCon "Variant")) (TyFun (TyApp (TyCon "List") (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "KindAnn")))) (TyApp (TyCon "List") (TyCon "ResError")))))))
-(DFunDef false "checkVariants" ((PVar "env") (PVar "bound") (PCons (PVar "v") (PVar "vs")) (PCons (PVar "bs") (PVar "rest"))) (EBinOp "++" (EBinOp "++" (EBinOp "++" (EApp (EApp (EVar "checkBinderLabels") (EVar "env")) (EVar "bs")) (EApp (EApp (EApp (EVar "duplicateCtorBinders") (EVar "bound")) (EVar "bs")) (EApp (EVar "firstTyLocList") (EApp (EVar "variantFieldTys") (EVar "v"))))) (EApp (EApp (EApp (EVar "checkVariant") (EVar "env")) (EBinOp "++" (EApp (EApp (EMethodRef "map") (EVar "fst")) (EVar "bs")) (EVar "bound"))) (EVar "v"))) (EApp (EApp (EApp (EApp (EVar "checkVariants") (EVar "env")) (EVar "bound")) (EVar "vs")) (EVar "rest"))))
-(DFunDef false "checkVariants" (PWild PWild PWild PWild) (EListLit))
+(DFunDef false "checkVariants" ((PVar "env") (PVar "bound") (PVar "xs0") (PVar "xs1")) (ELetGroup ((lgb "go" (clause ((PCons (PVar "v") (PVar "vs")) (PCons (PVar "bs") (PVar "rest"))) (EBinOp "++" (EBinOp "++" (EBinOp "++" (EApp (EApp (EVar "checkBinderLabels") (EVar "env")) (EVar "bs")) (EApp (EApp (EApp (EVar "duplicateCtorBinders") (EVar "bound")) (EVar "bs")) (EApp (EVar "firstTyLocList") (EApp (EVar "variantFieldTys") (EVar "v"))))) (EApp (EApp (EApp (EVar "checkVariant") (EVar "env")) (EBinOp "++" (EApp (EApp (EMethodRef "map") (EVar "fst")) (EVar "bs")) (EVar "bound"))) (EVar "v"))) (EApp (EApp (EVar "go") (EVar "vs")) (EVar "rest")))) (clause (PWild PWild) (EListLit)))) (EApp (EApp (EVar "go") (EVar "xs0")) (EVar "xs1"))))
 (DTypeSig false "duplicateCtorBinders" (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "KindAnn"))) (TyFun (TyApp (TyCon "Option") (TyCon "Loc")) (TyApp (TyCon "List") (TyCon "ResError"))))))
 (DFunDef false "duplicateCtorBinders" ((PVar "bound") (PVar "binders") (PVar "loc")) (EApp (EApp (EMethodRef "map") (ELam ((PVar "n")) (EApp (EApp (EApp (EVar "DuplicateBinder") (ELit (LString "constructor"))) (EVar "n")) (EVar "loc")))) (EApp (EApp (EVar "findDups") (EVar "bound")) (EApp (EApp (EMethodRef "map") (EVar "fst")) (EVar "binders")))))
 (DTypeSig false "checkVariant" (TyFun (TyCon "Env") (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyCon "Variant") (TyApp (TyCon "List") (TyCon "ResError"))))))
@@ -8841,8 +8817,7 @@ addOriginsProvenance acc n base (m :: rest) =
 (DTypeSig false "valueProvenance" (TyFun (TyApp (TyCon "OrdMap") (TyCon "ModuleExports")) (TyFun (TyApp (TyCon "List") (TyCon "UsePath")) (TyApp (TyCon "OrdMap") (TyApp (TyCon "List") (TyCon "String"))))))
 (DFunDef false "valueProvenance" ((PVar "known") (PVar "paths")) (EApp (EVar "fst") (EApp (EApp (EApp (EApp (EVar "foldDeclProvenance") (EVar "importValueDecls")) (EVar "known")) (ETuple (EVar "omEmpty") (EVar "omEmpty"))) (EVar "paths"))))
 (DTypeSig false "foldDeclProvenance" (TyFun (TyFun (TyApp (TyCon "OrdMap") (TyCon "ModuleExports")) (TyFun (TyCon "UsePath") (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "String"))))) (TyFun (TyApp (TyCon "OrdMap") (TyCon "ModuleExports")) (TyFun (TyTuple (TyApp (TyCon "OrdMap") (TyApp (TyCon "List") (TyCon "String"))) (TyApp (TyCon "OrdMap") (TyCon "Unit"))) (TyFun (TyApp (TyCon "List") (TyCon "UsePath")) (TyTuple (TyApp (TyCon "OrdMap") (TyApp (TyCon "List") (TyCon "String"))) (TyApp (TyCon "OrdMap") (TyCon "Unit"))))))))
-(DFunDef false "foldDeclProvenance" (PWild PWild (PVar "acc") (PList)) (EVar "acc"))
-(DFunDef false "foldDeclProvenance" ((PVar "declsOf") (PVar "known") (PVar "acc") (PCons (PVar "p") (PVar "rest"))) (EBlock (DoLet false false (PVar "mid") (EApp (EVar "useModId") (EVar "p"))) (DoLet false false (PVar "acc2") (EIf (EBinOp "==" (EVar "mid") (ELit (LString "core"))) (EVar "acc") (EApp (EApp (EApp (EVar "addDeclProvenance") (EVar "acc")) (EVar "mid")) (EApp (EApp (EVar "declsOf") (EVar "known")) (EVar "p"))))) (DoExpr (EApp (EApp (EApp (EApp (EVar "foldDeclProvenance") (EVar "declsOf")) (EVar "known")) (EVar "acc2")) (EVar "rest")))))
+(DFunDef false "foldDeclProvenance" ((PVar "declsOf") (PVar "known") (PVar "acc0") (PVar "xs0")) (ELetGroup ((lgb "go" (clause ((PVar "acc") (PList)) (EVar "acc")) (clause ((PVar "acc") (PCons (PVar "p") (PVar "rest"))) (EBlock (DoLet false false (PVar "mid") (EApp (EVar "useModId") (EVar "p"))) (DoLet false false (PVar "acc2") (EIf (EBinOp "==" (EVar "mid") (ELit (LString "core"))) (EVar "acc") (EApp (EApp (EApp (EVar "addDeclProvenance") (EVar "acc")) (EVar "mid")) (EApp (EApp (EVar "declsOf") (EVar "known")) (EVar "p"))))) (DoExpr (EApp (EApp (EVar "go") (EVar "acc2")) (EVar "rest"))))))) (EApp (EApp (EVar "go") (EVar "acc0")) (EVar "xs0"))))
 (DTypeSig false "addDeclProvenance" (TyFun (TyTuple (TyApp (TyCon "OrdMap") (TyApp (TyCon "List") (TyCon "String"))) (TyApp (TyCon "OrdMap") (TyCon "Unit"))) (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "String"))) (TyTuple (TyApp (TyCon "OrdMap") (TyApp (TyCon "List") (TyCon "String"))) (TyApp (TyCon "OrdMap") (TyCon "Unit")))))))
 (DFunDef false "addDeclProvenance" ((PVar "acc") PWild (PList)) (EVar "acc"))
 (DFunDef false "addDeclProvenance" ((PTuple (PVar "prov") (PVar "seen")) (PVar "mid") (PCons (PTuple (PVar "n") (PVar "decl")) (PVar "rest"))) (EBlock (DoLet false false (PVar "k") (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "")) (EApp (EMethodRef "display") (EApp (EVar "lenKey") (EVar "n")))) (ELit (LString ""))) (EApp (EMethodRef "display") (EVar "decl"))) (ELit (LString "")))) (DoExpr (EIf (EApp (EApp (EVar "omHasKey") (EVar "k")) (EVar "seen")) (EApp (EApp (EApp (EVar "addDeclProvenance") (ETuple (EVar "prov") (EVar "seen"))) (EVar "mid")) (EVar "rest")) (EBlock (DoLet false false (PVar "mids") (EMatch (EApp (EApp (EVar "omLookup") (EVar "n")) (EVar "prov")) (arm (PCon "Some" (PVar "ms")) () (EBinOp "++" (EVar "ms") (EListLit (EVar "mid")))) (arm (PCon "None") () (EListLit (EVar "mid"))))) (DoExpr (EApp (EApp (EApp (EVar "addDeclProvenance") (ETuple (EApp (EApp (EApp (EVar "omInsert") (EVar "n")) (EVar "mids")) (EVar "prov")) (EApp (EApp (EApp (EVar "omInsert") (EVar "k")) (ELit LUnit)) (EVar "seen")))) (EVar "mid")) (EVar "rest"))))))))
@@ -8915,8 +8890,7 @@ addOriginsProvenance acc n base (m :: rest) =
 (DFunDef false "unmergedDecl" ((PVar "localOf") (PTuple (PVar "n") (PVar "base") (PList (PVar "m")))) (EListLit (ETuple (EApp (EVar "localOf") (EVar "n")) (EApp (EVar "declKey") (ETuple (EVar "m") (EVar "base"))))))
 (DFunDef false "unmergedDecl" (PWild PWild) (EListLit))
 (DTypeSig false "foldMergedProvenance" (TyFun (TyFun (TyCon "UsePath") (TyFun (TyCon "String") (TyCon "String"))) (TyFun (TyApp (TyCon "ExpNs") (TyCon "String")) (TyFun (TyApp (TyCon "ExpNs") (TyTuple (TyCon "String") (TyCon "String"))) (TyFun (TyApp (TyCon "OrdMap") (TyCon "ModuleExports")) (TyFun (TyTuple (TyApp (TyCon "OrdMap") (TyApp (TyCon "List") (TyCon "String"))) (TyApp (TyCon "OrdMap") (TyCon "Unit"))) (TyFun (TyApp (TyCon "List") (TyCon "UsePath")) (TyTuple (TyApp (TyCon "OrdMap") (TyApp (TyCon "List") (TyCon "String"))) (TyApp (TyCon "OrdMap") (TyCon "Unit"))))))))))
-(DFunDef false "foldMergedProvenance" (PWild PWild PWild PWild (PVar "acc") (PList)) (EVar "acc"))
-(DFunDef false "foldMergedProvenance" ((PVar "localOf") (PVar "ns") (PVar "originNs") (PVar "known") (PVar "acc") (PCons (PVar "p") (PVar "rest"))) (EApp (EApp (EApp (EApp (EApp (EApp (EVar "foldMergedProvenance") (EVar "localOf")) (EVar "ns")) (EVar "originNs")) (EVar "known")) (EApp (EApp (EApp (EVar "addMergedOrigins") (EApp (EVar "localOf") (EVar "p"))) (EVar "acc")) (EApp (EApp (EApp (EApp (EVar "importNameOrigins") (EVar "ns")) (EVar "originNs")) (EVar "known")) (EVar "p")))) (EVar "rest")))
+(DFunDef false "foldMergedProvenance" ((PVar "localOf") (PVar "ns") (PVar "originNs") (PVar "known") (PVar "acc0") (PVar "xs0")) (ELetGroup ((lgb "go" (clause ((PVar "acc") (PList)) (EVar "acc")) (clause ((PVar "acc") (PCons (PVar "p") (PVar "rest"))) (EApp (EApp (EVar "go") (EApp (EApp (EApp (EVar "addMergedOrigins") (EApp (EVar "localOf") (EVar "p"))) (EVar "acc")) (EApp (EApp (EApp (EApp (EVar "importNameOrigins") (EVar "ns")) (EVar "originNs")) (EVar "known")) (EVar "p")))) (EVar "rest"))))) (EApp (EApp (EVar "go") (EVar "acc0")) (EVar "xs0"))))
 (DTypeSig false "addMergedOrigins" (TyFun (TyFun (TyCon "String") (TyCon "String")) (TyFun (TyTuple (TyApp (TyCon "OrdMap") (TyApp (TyCon "List") (TyCon "String"))) (TyApp (TyCon "OrdMap") (TyCon "Unit"))) (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "String") (TyApp (TyCon "List") (TyCon "String")))) (TyTuple (TyApp (TyCon "OrdMap") (TyApp (TyCon "List") (TyCon "String"))) (TyApp (TyCon "OrdMap") (TyCon "Unit")))))))
 (DFunDef false "addMergedOrigins" (PWild (PVar "acc") (PList)) (EVar "acc"))
 (DFunDef false "addMergedOrigins" ((PVar "localOf") (PVar "acc") (PCons (PTuple (PVar "n") (PVar "base") (PVar "ms")) (PVar "rest"))) (EBlock (DoLet false false (PVar "acc2") (EIf (EBinOp ">=" (EApp (EVar "listLen") (EVar "ms")) (ELit (LInt 2))) (EApp (EApp (EApp (EApp (EVar "addOriginsProvenance") (EVar "acc")) (EApp (EVar "localOf") (EVar "n"))) (EVar "base")) (EVar "ms")) (EVar "acc"))) (DoExpr (EApp (EApp (EApp (EVar "addMergedOrigins") (EVar "localOf")) (EVar "acc2")) (EVar "rest")))))
@@ -9454,5 +9428,4 @@ addOriginsProvenance acc n base (m :: rest) =
 (DTypeSig true "takeOriginTrace" (TyFun (TyCon "Unit") (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "Decl"))))))
 (DFunDef false "takeOriginTrace" (PWild) (EBlock (DoLet false false (PVar "rows") (EUnOp "!" (EVar "originTraceLog"))) (DoExpr (EApp (EApp (EVar "setRef") (EVar "originTraceLog")) (EListLit))) (DoExpr (EVar "rows"))))
 (DTypeSig false "addOriginsProvenance" (TyFun (TyTuple (TyApp (TyCon "OrdMap") (TyApp (TyCon "List") (TyCon "String"))) (TyApp (TyCon "OrdMap") (TyCon "Unit"))) (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyTuple (TyApp (TyCon "OrdMap") (TyApp (TyCon "List") (TyCon "String"))) (TyApp (TyCon "OrdMap") (TyCon "Unit"))))))))
-(DFunDef false "addOriginsProvenance" ((PVar "acc") PWild PWild (PList)) (EVar "acc"))
-(DFunDef false "addOriginsProvenance" ((PVar "acc") (PVar "n") (PVar "base") (PCons (PVar "m") (PVar "rest"))) (EApp (EApp (EApp (EApp (EVar "addOriginsProvenance") (EApp (EApp (EApp (EVar "addDeclProvenance") (EVar "acc")) (EVar "m")) (EListLit (ETuple (EVar "n") (EApp (EVar "declKey") (ETuple (EVar "m") (EVar "base"))))))) (EVar "n")) (EVar "base")) (EVar "rest")))
+(DFunDef false "addOriginsProvenance" ((PVar "acc0") (PVar "n") (PVar "base") (PVar "xs0")) (ELetGroup ((lgb "go" (clause ((PVar "acc") (PList)) (EVar "acc")) (clause ((PVar "acc") (PCons (PVar "m") (PVar "rest"))) (EApp (EApp (EVar "go") (EApp (EApp (EApp (EVar "addDeclProvenance") (EVar "acc")) (EVar "m")) (EListLit (ETuple (EVar "n") (EApp (EVar "declKey") (ETuple (EVar "m") (EVar "base"))))))) (EVar "rest"))))) (EApp (EApp (EVar "go") (EVar "acc0")) (EVar "xs0"))))

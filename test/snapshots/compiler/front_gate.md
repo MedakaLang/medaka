@@ -1,5 +1,5 @@
 # META
-source_lines=508
+source_lines=510
 stages=DESUGAR,MARK
 # SOURCE
 import support.diag_codes.{DiagCode(..)}
@@ -487,6 +487,8 @@ filesWithNotes key notes ("files", JArray files) = (
 filesWithNotes _ _ member = member
 
 foldNotesInto : String -> List Diag -> List Json -> List Json
+-- Bound: list built in tail position modulo cons: a where-local go loses the constant-stack loop until the lambda-lift pass (#4878); convert then.
+-- lint-disable-next-line rule-threaded-invariant
 foldNotesInto _ _ [] = []
 foldNotesInto key notes (file :: rest) = match fileWithNotes key notes file
   Some folded => folded :: rest

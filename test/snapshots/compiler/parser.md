@@ -1,5 +1,5 @@
 # META
-source_lines=5077
+source_lines=5081
 stages=DESUGAR,MARK
 # SOURCE
 import frontend.parse_locate.{locateOffset, locateTokenDiagnostic}
@@ -466,6 +466,8 @@ parseOr = ParserE (binLevel orLevel)
 -- up as the very `PR` its level returned, so a descent through all nine levels
 -- allocates nothing of its own.
 binLevel : Int -> ParseContext -> Int -> PR Expr
+-- Bound: hot compiler path: the where-go form allocates one closure per call until the lambda-lift pass (#4878); convert then.
+-- lint-disable-next-line rule-threaded-invariant
 binLevel lvl ctx pos
   | lvl > mulLevel = runPWith ctx parseUnary pos
   | otherwise = binLevelRest lvl ctx (binLevel (lvl + 1) ctx pos)
@@ -4927,12 +4929,14 @@ leadingIndentLineStart chars i
   | otherwise = leadingIndentLineStart chars (i - 1)
 
 leadingIndentAllBlank : Array Char -> Int -> Int -> Bool
-leadingIndentAllBlank chars i limit
-  | i >= limit = True
-  | otherwise = match arrayGetUnsafe i chars
-    ' ' => leadingIndentAllBlank chars (i + 1) limit
-    '\t' => leadingIndentAllBlank chars (i + 1) limit
-    _ => False
+leadingIndentAllBlank chars i0 limit = go i0
+  where
+    go i
+      | i >= limit = True
+      | otherwise = match arrayGetUnsafe i chars
+        ' ' => go (i + 1)
+        '\t' => go (i + 1)
+        _ => False
 
 -- Build the leftover-token "unexpected `X`" message, appending an
 -- indentation-aware hint when the token is the sole content that dedented
@@ -6556,7 +6560,7 @@ parseResultWith mode src tokList offList =
 (DTypeSig false "leadingIndentLineStart" (TyFun (TyApp (TyCon "Array") (TyCon "Char")) (TyFun (TyCon "Int") (TyCon "Int"))))
 (DFunDef false "leadingIndentLineStart" ((PVar "chars") (PVar "i")) (EIf (EBinOp "<" (EVar "i") (ELit (LInt 0))) (ELit (LInt 0)) (EIf (EBinOp "||" (EBinOp "==" (EApp (EApp (EVar "arrayGetUnsafe") (EVar "i")) (EVar "chars")) (ELit (LChar "\n"))) (EBinOp "==" (EApp (EApp (EVar "arrayGetUnsafe") (EVar "i")) (EVar "chars")) (ELit (LChar "\r")))) (EBinOp "+" (EVar "i") (ELit (LInt 1))) (EIf (EVar "otherwise") (EApp (EApp (EVar "leadingIndentLineStart") (EVar "chars")) (EBinOp "-" (EVar "i") (ELit (LInt 1)))) (EApp (EVar "__fallthrough__") (ELit LUnit))))))
 (DTypeSig false "leadingIndentAllBlank" (TyFun (TyApp (TyCon "Array") (TyCon "Char")) (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyCon "Bool")))))
-(DFunDef false "leadingIndentAllBlank" ((PVar "chars") (PVar "i") (PVar "limit")) (EIf (EBinOp ">=" (EVar "i") (EVar "limit")) (EVar "True") (EIf (EVar "otherwise") (EMatch (EApp (EApp (EVar "arrayGetUnsafe") (EVar "i")) (EVar "chars")) (arm (PLit (LChar " ")) () (EApp (EApp (EApp (EVar "leadingIndentAllBlank") (EVar "chars")) (EBinOp "+" (EVar "i") (ELit (LInt 1)))) (EVar "limit"))) (arm (PLit (LChar "\t")) () (EApp (EApp (EApp (EVar "leadingIndentAllBlank") (EVar "chars")) (EBinOp "+" (EVar "i") (ELit (LInt 1)))) (EVar "limit"))) (arm PWild () (EVar "False"))) (EApp (EVar "__fallthrough__") (ELit LUnit)))))
+(DFunDef false "leadingIndentAllBlank" ((PVar "chars") (PVar "i0") (PVar "limit")) (ELetGroup ((lgb "go" (clause ((PVar "i")) (EIf (EBinOp ">=" (EVar "i") (EVar "limit")) (EVar "True") (EIf (EVar "otherwise") (EMatch (EApp (EApp (EVar "arrayGetUnsafe") (EVar "i")) (EVar "chars")) (arm (PLit (LChar " ")) () (EApp (EVar "go") (EBinOp "+" (EVar "i") (ELit (LInt 1))))) (arm (PLit (LChar "\t")) () (EApp (EVar "go") (EBinOp "+" (EVar "i") (ELit (LInt 1))))) (arm PWild () (EVar "False"))) (EApp (EVar "__fallthrough__") (ELit LUnit))))))) (EApp (EVar "go") (EVar "i0"))))
 (DTypeSig false "unexpectedLeftoverMsg" (TyFun (TyCon "String") (TyFun (TyApp (TyCon "Array") (TyCon "Token")) (TyFun (TyApp (TyCon "Array") (TyCon "Int")) (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyCon "String")))))))
 (DFunDef false "unexpectedLeftoverMsg" ((PVar "src") (PVar "toks") (PVar "offs") (PVar "srcLen") (PVar "pos")) (EBlock (DoLet false false (PVar "base") (EApp (EVar "unexpectedTokenMsg") (EApp (EApp (EVar "peekTok") (EVar "toks")) (EVar "pos")))) (DoLet false false (PVar "offset") (EApp (EApp (EApp (EApp (EVar "locateOffset") (EVar "toks")) (EVar "offs")) (EVar "srcLen")) (EVar "pos"))) (DoExpr (EMatch (EApp (EApp (EVar "leadingIndentAt") (EVar "src")) (EVar "offset")) (arm (PCon "Some" (PVar "col")) ((GBool (EBinOp ">" (EVar "col") (ELit (LInt 0))))) (EApp (EApp (EApp (EVar "leadingIndentMsg") (EApp (EApp (EVar "peekTok") (EVar "toks")) (EVar "pos"))) (EVar "base")) (EVar "col"))) (arm PWild () (EApp (EApp (EVar "trailingArrowLeftoverMsg") (EApp (EApp (EVar "peekTok") (EVar "toks")) (EVar "pos"))) (EVar "base")))))))
 (DTypeSig false "trailingArrowLeftoverMsg" (TyFun (TyCon "Token") (TyFun (TyCon "String") (TyCon "String"))))
@@ -8058,7 +8062,7 @@ parseResultWith mode src tokList offList =
 (DTypeSig false "leadingIndentLineStart" (TyFun (TyApp (TyCon "Array") (TyCon "Char")) (TyFun (TyCon "Int") (TyCon "Int"))))
 (DFunDef false "leadingIndentLineStart" ((PVar "chars") (PVar "i")) (EIf (EBinOp "<" (EVar "i") (ELit (LInt 0))) (ELit (LInt 0)) (EIf (EBinOp "||" (EBinOp "==" (EApp (EApp (EVar "arrayGetUnsafe") (EVar "i")) (EVar "chars")) (ELit (LChar "\n"))) (EBinOp "==" (EApp (EApp (EVar "arrayGetUnsafe") (EVar "i")) (EVar "chars")) (ELit (LChar "\r")))) (EBinOp "+" (EVar "i") (ELit (LInt 1))) (EIf (EVar "otherwise") (EApp (EApp (EVar "leadingIndentLineStart") (EVar "chars")) (EBinOp "-" (EVar "i") (ELit (LInt 1)))) (EApp (EVar "__fallthrough__") (ELit LUnit))))))
 (DTypeSig false "leadingIndentAllBlank" (TyFun (TyApp (TyCon "Array") (TyCon "Char")) (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyCon "Bool")))))
-(DFunDef false "leadingIndentAllBlank" ((PVar "chars") (PVar "i") (PVar "limit")) (EIf (EBinOp ">=" (EVar "i") (EVar "limit")) (EVar "True") (EIf (EVar "otherwise") (EMatch (EApp (EApp (EVar "arrayGetUnsafe") (EVar "i")) (EVar "chars")) (arm (PLit (LChar " ")) () (EApp (EApp (EApp (EVar "leadingIndentAllBlank") (EVar "chars")) (EBinOp "+" (EVar "i") (ELit (LInt 1)))) (EVar "limit"))) (arm (PLit (LChar "\t")) () (EApp (EApp (EApp (EVar "leadingIndentAllBlank") (EVar "chars")) (EBinOp "+" (EVar "i") (ELit (LInt 1)))) (EVar "limit"))) (arm PWild () (EVar "False"))) (EApp (EVar "__fallthrough__") (ELit LUnit)))))
+(DFunDef false "leadingIndentAllBlank" ((PVar "chars") (PVar "i0") (PVar "limit")) (ELetGroup ((lgb "go" (clause ((PVar "i")) (EIf (EBinOp ">=" (EVar "i") (EVar "limit")) (EVar "True") (EIf (EVar "otherwise") (EMatch (EApp (EApp (EVar "arrayGetUnsafe") (EVar "i")) (EVar "chars")) (arm (PLit (LChar " ")) () (EApp (EVar "go") (EBinOp "+" (EVar "i") (ELit (LInt 1))))) (arm (PLit (LChar "\t")) () (EApp (EVar "go") (EBinOp "+" (EVar "i") (ELit (LInt 1))))) (arm PWild () (EVar "False"))) (EApp (EVar "__fallthrough__") (ELit LUnit))))))) (EApp (EVar "go") (EVar "i0"))))
 (DTypeSig false "unexpectedLeftoverMsg" (TyFun (TyCon "String") (TyFun (TyApp (TyCon "Array") (TyCon "Token")) (TyFun (TyApp (TyCon "Array") (TyCon "Int")) (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyCon "String")))))))
 (DFunDef false "unexpectedLeftoverMsg" ((PVar "src") (PVar "toks") (PVar "offs") (PVar "srcLen") (PVar "pos")) (EBlock (DoLet false false (PVar "base") (EApp (EVar "unexpectedTokenMsg") (EApp (EApp (EVar "peekTok") (EVar "toks")) (EVar "pos")))) (DoLet false false (PVar "offset") (EApp (EApp (EApp (EApp (EVar "locateOffset") (EVar "toks")) (EVar "offs")) (EVar "srcLen")) (EVar "pos"))) (DoExpr (EMatch (EApp (EApp (EVar "leadingIndentAt") (EVar "src")) (EVar "offset")) (arm (PCon "Some" (PVar "col")) ((GBool (EBinOp ">" (EVar "col") (ELit (LInt 0))))) (EApp (EApp (EApp (EVar "leadingIndentMsg") (EApp (EApp (EVar "peekTok") (EVar "toks")) (EVar "pos"))) (EVar "base")) (EVar "col"))) (arm PWild () (EApp (EApp (EVar "trailingArrowLeftoverMsg") (EApp (EApp (EVar "peekTok") (EVar "toks")) (EVar "pos"))) (EVar "base")))))))
 (DTypeSig false "trailingArrowLeftoverMsg" (TyFun (TyCon "Token") (TyFun (TyCon "String") (TyCon "String"))))

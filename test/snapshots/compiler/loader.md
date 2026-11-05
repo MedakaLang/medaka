@@ -1,5 +1,5 @@
 # META
-source_lines=1776
+source_lines=1786
 stages=DESUGAR,MARK
 # SOURCE
 -- Parse a root .mdk file's transitive imports and return
@@ -448,16 +448,18 @@ moduleIdsUnder dir prefix = match listDir dir
   Ok entries => entryModuleIds dir prefix entries
 
 entryModuleIds : String -> String -> List String -> <IO> List String
-entryModuleIds _ _ [] = []
-entryModuleIds dir prefix (name :: rest) =
-  let here = match mdkBaseName name
-    Some base => ["\{prefix}\{base}"]
-    None =>
-      if startsWith "." name then
-        []
-      else
-        moduleIdsUnder "\{dir}/\{name}" "\{prefix}\{name}."
-  here ++ entryModuleIds dir prefix rest
+entryModuleIds dir prefix xs0 = go xs0
+  where
+    go [] = []
+    go (name :: rest) =
+      let here = match mdkBaseName name
+        Some base => ["\{prefix}\{base}"]
+        None =>
+          if startsWith "." name then
+            []
+          else
+            moduleIdsUnder "\{dir}/\{name}" "\{prefix}\{name}."
+      here ++ go rest
 
 -- `foo.mdk` -> `Some "foo"`; dotfiles, non-`.mdk` entries, the two implicit
 -- prelude modules, and a `*_test.mdk` sibling (a module's tests, never an
@@ -1031,6 +1033,8 @@ rewriteDecls : List (String, String) ->
   List String ->
   List Decl ->
   <IO> List Decl
+-- Bound: list built in tail position modulo cons: a where-local go loses the constant-stack loop until the lambda-lift pass (#4878); convert then.
+-- lint-disable-next-line rule-threaded-invariant
 rewriteDecls _ _ [] = []
 rewriteDecls deps roots (d :: ds) =
   let d2 = rewriteDecl deps roots d
@@ -1379,17 +1383,21 @@ trustedModsGo : List (String, String) ->
   List String ->
   List String ->
   <IO> List String
-trustedModsGo _ _ _ _ [] = []
-trustedModsGo deps roots stdlibRoot trustedRoots (m :: ms) =
-  let rest = trustedModsGo deps roots stdlibRoot trustedRoots ms
-  match findModuleFile deps roots m
-    Some (path, owningRoot) =>
-      if contains (canonicalizePath owningRoot) trustedRoots
-        || underDir (canonicalizePath stdlibRoot) (canonicalizePath path) then
-        m :: rest
-      else
-        rest
-    None => rest
+trustedModsGo deps roots stdlibRoot trustedRoots xs0 = go xs0
+  where
+    go [] = []
+    go (m :: ms) =
+      let rest = go ms
+      match findModuleFile deps roots m
+        Some (path, owningRoot) =>
+          if contains (canonicalizePath owningRoot) trustedRoots
+            || underDir
+              (canonicalizePath stdlibRoot)
+              (canonicalizePath path) then
+            m :: rest
+          else
+            rest
+        None => rest
 
 underDir : String -> String -> Bool
 underDir dir path = startsWith "\{dir}/" path
@@ -1588,11 +1596,13 @@ visitModsF : (String -> String -> Result ParseError (List Decl)) ->
   String ->
   List String ->
   <IO> Result LoadError (List String, List (String, String, List Decl))
-visitModsF _ _ _ _ _ visited acc _ [] = Ok (visited, acc)
-visitModsF parseFn read deps roots stack visited acc importer (d :: ds) =
-  match visitModF parseFn read deps roots stack visited acc importer "" d
-    Err e => Err e
-    Ok (v2, a2) => visitModsF parseFn read deps roots stack v2 a2 importer ds
+visitModsF parseFn read deps roots stack v0 a0 importer xs0 = go v0 a0 xs0
+  where
+    go visited acc [] = Ok (visited, acc)
+    go visited acc (d :: ds) =
+      match visitModF parseFn read deps roots stack visited acc importer "" d
+        Err e => Err e
+        Ok (v2, a2) => go v2 a2 ds
 
 -- A walk's result as the loaders return it: the modules, with the source records
 -- narrowed to them.
@@ -1871,8 +1881,7 @@ loadProgramFilesLocatedCachedSourcesE parseCacheRef read entry roots =
 (DTypeSig false "moduleIdsUnder" (TyFun (TyCon "String") (TyFun (TyCon "String") (TyEffect ("IO") None (TyApp (TyCon "List") (TyCon "String"))))))
 (DFunDef false "moduleIdsUnder" ((PVar "dir") (PVar "prefix")) (EMatch (EApp (EVar "listDir") (EVar "dir")) (arm (PCon "Err" PWild) () (EListLit)) (arm (PCon "Ok" (PVar "entries")) () (EApp (EApp (EApp (EVar "entryModuleIds") (EVar "dir")) (EVar "prefix")) (EVar "entries")))))
 (DTypeSig false "entryModuleIds" (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyEffect ("IO") None (TyApp (TyCon "List") (TyCon "String")))))))
-(DFunDef false "entryModuleIds" (PWild PWild (PList)) (EListLit))
-(DFunDef false "entryModuleIds" ((PVar "dir") (PVar "prefix") (PCons (PVar "name") (PVar "rest"))) (EBlock (DoLet false false (PVar "here") (EMatch (EApp (EVar "mdkBaseName") (EVar "name")) (arm (PCon "Some" (PVar "base")) () (EListLit (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "")) (EApp (EVar "display") (EVar "prefix"))) (ELit (LString ""))) (EApp (EVar "display") (EVar "base"))) (ELit (LString ""))))) (arm (PCon "None") () (EIf (EApp (EApp (EVar "startsWith") (ELit (LString "."))) (EVar "name")) (EListLit) (EApp (EApp (EVar "moduleIdsUnder") (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "")) (EApp (EVar "display") (EVar "dir"))) (ELit (LString "/"))) (EApp (EVar "display") (EVar "name"))) (ELit (LString "")))) (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "")) (EApp (EVar "display") (EVar "prefix"))) (ELit (LString ""))) (EApp (EVar "display") (EVar "name"))) (ELit (LString ".")))))))) (DoExpr (EBinOp "++" (EVar "here") (EApp (EApp (EApp (EVar "entryModuleIds") (EVar "dir")) (EVar "prefix")) (EVar "rest"))))))
+(DFunDef false "entryModuleIds" ((PVar "dir") (PVar "prefix") (PVar "xs0")) (ELetGroup ((lgb "go" (clause ((PList)) (EListLit)) (clause ((PCons (PVar "name") (PVar "rest"))) (EBlock (DoLet false false (PVar "here") (EMatch (EApp (EVar "mdkBaseName") (EVar "name")) (arm (PCon "Some" (PVar "base")) () (EListLit (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "")) (EApp (EVar "display") (EVar "prefix"))) (ELit (LString ""))) (EApp (EVar "display") (EVar "base"))) (ELit (LString ""))))) (arm (PCon "None") () (EIf (EApp (EApp (EVar "startsWith") (ELit (LString "."))) (EVar "name")) (EListLit) (EApp (EApp (EVar "moduleIdsUnder") (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "")) (EApp (EVar "display") (EVar "dir"))) (ELit (LString "/"))) (EApp (EVar "display") (EVar "name"))) (ELit (LString "")))) (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "")) (EApp (EVar "display") (EVar "prefix"))) (ELit (LString ""))) (EApp (EVar "display") (EVar "name"))) (ELit (LString ".")))))))) (DoExpr (EBinOp "++" (EVar "here") (EApp (EVar "go") (EVar "rest")))))))) (EApp (EVar "go") (EVar "xs0"))))
 (DTypeSig false "mdkBaseName" (TyFun (TyCon "String") (TyApp (TyCon "Option") (TyCon "String"))))
 (DFunDef false "mdkBaseName" ((PVar "name")) (EIf (EBinOp "&&" (EApp (EApp (EVar "endsWith") (ELit (LString ".mdk"))) (EVar "name")) (EApp (EVar "not") (EApp (EApp (EVar "startsWith") (ELit (LString "."))) (EVar "name")))) (EBlock (DoLet false false (PVar "base") (EApp (EApp (EApp (EVar "stringSlice") (ELit (LInt 0))) (EBinOp "-" (EApp (EVar "stringLength") (EVar "name")) (ELit (LInt 4)))) (EVar "name"))) (DoExpr (EIf (EBinOp "||" (EBinOp "||" (EBinOp "==" (EVar "base") (ELit (LString "core"))) (EBinOp "==" (EVar "base") (ELit (LString "runtime")))) (EApp (EApp (EVar "endsWith") (ELit (LString "_test"))) (EVar "base"))) (EVar "None") (EApp (EVar "Some") (EVar "base"))))) (EVar "None")))
 (DTypeSig true "availableModulesText" (TyFun (TyCon "String") (TyEffect ("IO") None (TyCon "String"))))
@@ -1998,8 +2007,7 @@ loadProgramFilesLocatedCachedSourcesE parseCacheRef read entry roots =
 (DTypeSig false "lineValueIsTrue" (TyFun (TyCon "String") (TyCon "Bool")))
 (DFunDef false "lineValueIsTrue" ((PVar "t")) (EMatch (EApp (EApp (EVar "splitOnChar") (ELit (LString "#"))) (EApp (EVar "rawValAfterEq") (EVar "t"))) (arm (PCons (PVar "value") PWild) () (EBinOp "==" (EApp (EVar "Str.trimAscii") (EVar "value")) (ELit (LString "true")))) (arm (PList) () (EVar "False"))))
 (DTypeSig false "trustedModsGo" (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "String"))) (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyEffect ("IO") None (TyApp (TyCon "List") (TyCon "String")))))))))
-(DFunDef false "trustedModsGo" (PWild PWild PWild PWild (PList)) (EListLit))
-(DFunDef false "trustedModsGo" ((PVar "deps") (PVar "roots") (PVar "stdlibRoot") (PVar "trustedRoots") (PCons (PVar "m") (PVar "ms"))) (EBlock (DoLet false false (PVar "rest") (EApp (EApp (EApp (EApp (EApp (EVar "trustedModsGo") (EVar "deps")) (EVar "roots")) (EVar "stdlibRoot")) (EVar "trustedRoots")) (EVar "ms"))) (DoExpr (EMatch (EApp (EApp (EApp (EVar "findModuleFile") (EVar "deps")) (EVar "roots")) (EVar "m")) (arm (PCon "Some" (PTuple (PVar "path") (PVar "owningRoot"))) () (EIf (EBinOp "||" (EApp (EApp (EVar "contains") (EApp (EVar "canonicalizePath") (EVar "owningRoot"))) (EVar "trustedRoots")) (EApp (EApp (EVar "underDir") (EApp (EVar "canonicalizePath") (EVar "stdlibRoot"))) (EApp (EVar "canonicalizePath") (EVar "path")))) (EBinOp "::" (EVar "m") (EVar "rest")) (EVar "rest"))) (arm (PCon "None") () (EVar "rest"))))))
+(DFunDef false "trustedModsGo" ((PVar "deps") (PVar "roots") (PVar "stdlibRoot") (PVar "trustedRoots") (PVar "xs0")) (ELetGroup ((lgb "go" (clause ((PList)) (EListLit)) (clause ((PCons (PVar "m") (PVar "ms"))) (EBlock (DoLet false false (PVar "rest") (EApp (EVar "go") (EVar "ms"))) (DoExpr (EMatch (EApp (EApp (EApp (EVar "findModuleFile") (EVar "deps")) (EVar "roots")) (EVar "m")) (arm (PCon "Some" (PTuple (PVar "path") (PVar "owningRoot"))) () (EIf (EBinOp "||" (EApp (EApp (EVar "contains") (EApp (EVar "canonicalizePath") (EVar "owningRoot"))) (EVar "trustedRoots")) (EApp (EApp (EVar "underDir") (EApp (EVar "canonicalizePath") (EVar "stdlibRoot"))) (EApp (EVar "canonicalizePath") (EVar "path")))) (EBinOp "::" (EVar "m") (EVar "rest")) (EVar "rest"))) (arm (PCon "None") () (EVar "rest")))))))) (EApp (EVar "go") (EVar "xs0"))))
 (DTypeSig false "underDir" (TyFun (TyCon "String") (TyFun (TyCon "String") (TyCon "Bool"))))
 (DFunDef false "underDir" ((PVar "dir") (PVar "path")) (EApp (EApp (EVar "startsWith") (EBinOp "++" (EBinOp "++" (ELit (LString "")) (EApp (EVar "display") (EVar "dir"))) (ELit (LString "/")))) (EVar "path")))
 (DTypeSig true "loadProgram" (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyEffect ("IO") None (TyApp (TyApp (TyCon "Result") (TyCon "String")) (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "Decl")))))))))
@@ -2026,8 +2034,7 @@ loadProgramFilesLocatedCachedSourcesE parseCacheRef read entry roots =
 (DTypeSig false "visitModChecked" (TyFun (TyFun (TyCon "String") (TyFun (TyCon "String") (TyApp (TyApp (TyCon "Result") (TyCon "ParseError")) (TyApp (TyCon "List") (TyCon "Decl"))))) (TyFun (TyFun (TyCon "String") (TyApp (TyCon "Option") (TyCon "String"))) (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "String"))) (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "String") (TyApp (TyCon "List") (TyCon "Decl")))) (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyCon "String") (TyEffect ("IO") None (TyApp (TyApp (TyCon "Result") (TyCon "LoadError")) (TyTuple (TyApp (TyCon "List") (TyCon "String")) (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "String") (TyApp (TyCon "List") (TyCon "Decl"))))))))))))))))))
 (DFunDef false "visitModChecked" ((PVar "parseFn") (PVar "read") (PVar "deps") (PVar "roots") (PVar "stack") (PVar "visited") (PVar "acc") (PVar "importer") (PVar "entry") (PVar "modId")) (EIf (EApp (EApp (EVar "contains") (EVar "modId")) (EVar "visited")) (EApp (EVar "Ok") (ETuple (EVar "visited") (EVar "acc"))) (EIf (EApp (EApp (EVar "contains") (EVar "modId")) (EVar "stack")) (EApp (EVar "Err") (EApp (EApp (EApp (EVar "LoadCycle") (EApp (EVar "stringConcat") (EListLit (ELit (LString "cyclic dependency: ")) (EApp (EVar "joinArrow") (EApp (EApp (EVar "cycleChain") (EVar "modId")) (EVar "stack")))))) (EVar "importer")) (EApp (EApp (EApp (EApp (EVar "cycleSite") (EVar "deps")) (EVar "roots")) (EVar "importer")) (EVar "modId")))) (EApp (EApp (EVar "andThen") (EApp (EApp (EApp (EApp (EApp (EApp (EVar "readModuleProgF") (EVar "parseFn")) (EVar "read")) (EVar "deps")) (EVar "roots")) (EVar "entry")) (EVar "modId"))) (ELam ((PVar "__do_x")) (EMatch (EVar "__do_x") (arm (PTuple (PVar "owningRoot") (PVar "path") (PVar "prog")) () (ELet false (PVar "croots") (EApp (EApp (EVar "childRoots") (EVar "owningRoot")) (EVar "roots")) (ELet false (PVar "cdeps") (EApp (EApp (EApp (EVar "childDeps") (EVar "deps")) (EVar "owningRoot")) (EVar "roots")) (ELet false (PVar "prog2") (EApp (EApp (EApp (EVar "rewriteDecls") (EVar "cdeps")) (EVar "croots")) (EVar "prog")) (EApp (EApp (EVar "map") (ELam ((PTuple (PVar "visited2") (PVar "acc2"))) (ETuple (EBinOp "::" (EVar "modId") (EVar "visited2")) (EBinOp "++" (EVar "acc2") (EListLit (ETuple (EVar "modId") (EVar "path") (EVar "prog2"))))))) (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EVar "visitModsF") (EVar "parseFn")) (EVar "read")) (EVar "cdeps")) (EVar "croots")) (EBinOp "::" (EVar "modId") (EVar "stack"))) (EVar "visited")) (EVar "acc")) (EVar "path")) (EApp (EVar "directImports") (EVar "prog2"))))))))))))))
 (DTypeSig false "visitModsF" (TyFun (TyFun (TyCon "String") (TyFun (TyCon "String") (TyApp (TyApp (TyCon "Result") (TyCon "ParseError")) (TyApp (TyCon "List") (TyCon "Decl"))))) (TyFun (TyFun (TyCon "String") (TyApp (TyCon "Option") (TyCon "String"))) (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "String"))) (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "String") (TyApp (TyCon "List") (TyCon "Decl")))) (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyEffect ("IO") None (TyApp (TyApp (TyCon "Result") (TyCon "LoadError")) (TyTuple (TyApp (TyCon "List") (TyCon "String")) (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "String") (TyApp (TyCon "List") (TyCon "Decl")))))))))))))))))
-(DFunDef false "visitModsF" (PWild PWild PWild PWild PWild (PVar "visited") (PVar "acc") PWild (PList)) (EApp (EVar "Ok") (ETuple (EVar "visited") (EVar "acc"))))
-(DFunDef false "visitModsF" ((PVar "parseFn") (PVar "read") (PVar "deps") (PVar "roots") (PVar "stack") (PVar "visited") (PVar "acc") (PVar "importer") (PCons (PVar "d") (PVar "ds"))) (EMatch (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EVar "visitModF") (EVar "parseFn")) (EVar "read")) (EVar "deps")) (EVar "roots")) (EVar "stack")) (EVar "visited")) (EVar "acc")) (EVar "importer")) (ELit (LString ""))) (EVar "d")) (arm (PCon "Err" (PVar "e")) () (EApp (EVar "Err") (EVar "e"))) (arm (PCon "Ok" (PTuple (PVar "v2") (PVar "a2"))) () (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EVar "visitModsF") (EVar "parseFn")) (EVar "read")) (EVar "deps")) (EVar "roots")) (EVar "stack")) (EVar "v2")) (EVar "a2")) (EVar "importer")) (EVar "ds")))))
+(DFunDef false "visitModsF" ((PVar "parseFn") (PVar "read") (PVar "deps") (PVar "roots") (PVar "stack") (PVar "v0") (PVar "a0") (PVar "importer") (PVar "xs0")) (ELetGroup ((lgb "go" (clause ((PVar "visited") (PVar "acc") (PList)) (EApp (EVar "Ok") (ETuple (EVar "visited") (EVar "acc")))) (clause ((PVar "visited") (PVar "acc") (PCons (PVar "d") (PVar "ds"))) (EMatch (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EVar "visitModF") (EVar "parseFn")) (EVar "read")) (EVar "deps")) (EVar "roots")) (EVar "stack")) (EVar "visited")) (EVar "acc")) (EVar "importer")) (ELit (LString ""))) (EVar "d")) (arm (PCon "Err" (PVar "e")) () (EApp (EVar "Err") (EVar "e"))) (arm (PCon "Ok" (PTuple (PVar "v2") (PVar "a2"))) () (EApp (EApp (EApp (EVar "go") (EVar "v2")) (EVar "a2")) (EVar "ds"))))))) (EApp (EApp (EApp (EVar "go") (EVar "v0")) (EVar "a0")) (EVar "xs0"))))
 (DTypeSig false "finishLoad" (TyFun (TyApp (TyApp (TyCon "Result") (TyCon "LoadError")) (TyTuple (TyApp (TyCon "List") (TyCon "String")) (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "String") (TyApp (TyCon "List") (TyCon "Decl")))))) (TyApp (TyApp (TyCon "Result") (TyCon "LoadError")) (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "String") (TyApp (TyCon "List") (TyCon "Decl")))))))
 (DFunDef false "finishLoad" ((PCon "Ok" (PTuple PWild (PVar "acc")))) (EBlock (DoLet false false PWild (EApp (EVar "settleLoad") (EVar "acc"))) (DoExpr (EApp (EVar "Ok") (EVar "acc")))))
 (DFunDef false "finishLoad" ((PCon "Err" (PVar "e"))) (EApp (EVar "Err") (EVar "e")))
@@ -2144,8 +2151,7 @@ loadProgramFilesLocatedCachedSourcesE parseCacheRef read entry roots =
 (DTypeSig false "moduleIdsUnder" (TyFun (TyCon "String") (TyFun (TyCon "String") (TyEffect ("IO") None (TyApp (TyCon "List") (TyCon "String"))))))
 (DFunDef false "moduleIdsUnder" ((PVar "dir") (PVar "prefix")) (EMatch (EApp (EVar "listDir") (EVar "dir")) (arm (PCon "Err" PWild) () (EListLit)) (arm (PCon "Ok" (PVar "entries")) () (EApp (EApp (EApp (EVar "entryModuleIds") (EVar "dir")) (EVar "prefix")) (EVar "entries")))))
 (DTypeSig false "entryModuleIds" (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyEffect ("IO") None (TyApp (TyCon "List") (TyCon "String")))))))
-(DFunDef false "entryModuleIds" (PWild PWild (PList)) (EListLit))
-(DFunDef false "entryModuleIds" ((PVar "dir") (PVar "prefix") (PCons (PVar "name") (PVar "rest"))) (EBlock (DoLet false false (PVar "here") (EMatch (EApp (EVar "mdkBaseName") (EVar "name")) (arm (PCon "Some" (PVar "base")) () (EListLit (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "")) (EApp (EMethodRef "display") (EVar "prefix"))) (ELit (LString ""))) (EApp (EMethodRef "display") (EVar "base"))) (ELit (LString ""))))) (arm (PCon "None") () (EIf (EApp (EApp (EVar "startsWith") (ELit (LString "."))) (EVar "name")) (EListLit) (EApp (EApp (EVar "moduleIdsUnder") (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "")) (EApp (EMethodRef "display") (EVar "dir"))) (ELit (LString "/"))) (EApp (EMethodRef "display") (EVar "name"))) (ELit (LString "")))) (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "")) (EApp (EMethodRef "display") (EVar "prefix"))) (ELit (LString ""))) (EApp (EMethodRef "display") (EVar "name"))) (ELit (LString ".")))))))) (DoExpr (EBinOp "++" (EVar "here") (EApp (EApp (EApp (EVar "entryModuleIds") (EVar "dir")) (EVar "prefix")) (EVar "rest"))))))
+(DFunDef false "entryModuleIds" ((PVar "dir") (PVar "prefix") (PVar "xs0")) (ELetGroup ((lgb "go" (clause ((PList)) (EListLit)) (clause ((PCons (PVar "name") (PVar "rest"))) (EBlock (DoLet false false (PVar "here") (EMatch (EApp (EVar "mdkBaseName") (EVar "name")) (arm (PCon "Some" (PVar "base")) () (EListLit (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "")) (EApp (EMethodRef "display") (EVar "prefix"))) (ELit (LString ""))) (EApp (EMethodRef "display") (EVar "base"))) (ELit (LString ""))))) (arm (PCon "None") () (EIf (EApp (EApp (EVar "startsWith") (ELit (LString "."))) (EVar "name")) (EListLit) (EApp (EApp (EVar "moduleIdsUnder") (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "")) (EApp (EMethodRef "display") (EVar "dir"))) (ELit (LString "/"))) (EApp (EMethodRef "display") (EVar "name"))) (ELit (LString "")))) (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "")) (EApp (EMethodRef "display") (EVar "prefix"))) (ELit (LString ""))) (EApp (EMethodRef "display") (EVar "name"))) (ELit (LString ".")))))))) (DoExpr (EBinOp "++" (EVar "here") (EApp (EVar "go") (EVar "rest")))))))) (EApp (EVar "go") (EVar "xs0"))))
 (DTypeSig false "mdkBaseName" (TyFun (TyCon "String") (TyApp (TyCon "Option") (TyCon "String"))))
 (DFunDef false "mdkBaseName" ((PVar "name")) (EIf (EBinOp "&&" (EApp (EApp (EVar "endsWith") (ELit (LString ".mdk"))) (EVar "name")) (EApp (EVar "not") (EApp (EApp (EVar "startsWith") (ELit (LString "."))) (EVar "name")))) (EBlock (DoLet false false (PVar "base") (EApp (EApp (EApp (EVar "stringSlice") (ELit (LInt 0))) (EBinOp "-" (EApp (EVar "stringLength") (EVar "name")) (ELit (LInt 4)))) (EVar "name"))) (DoExpr (EIf (EBinOp "||" (EBinOp "||" (EBinOp "==" (EVar "base") (ELit (LString "core"))) (EBinOp "==" (EVar "base") (ELit (LString "runtime")))) (EApp (EApp (EVar "endsWith") (ELit (LString "_test"))) (EVar "base"))) (EVar "None") (EApp (EVar "Some") (EVar "base"))))) (EVar "None")))
 (DTypeSig true "availableModulesText" (TyFun (TyCon "String") (TyEffect ("IO") None (TyCon "String"))))
@@ -2271,8 +2277,7 @@ loadProgramFilesLocatedCachedSourcesE parseCacheRef read entry roots =
 (DTypeSig false "lineValueIsTrue" (TyFun (TyCon "String") (TyCon "Bool")))
 (DFunDef false "lineValueIsTrue" ((PVar "t")) (EMatch (EApp (EApp (EVar "splitOnChar") (ELit (LString "#"))) (EApp (EVar "rawValAfterEq") (EVar "t"))) (arm (PCons (PVar "value") PWild) () (EBinOp "==" (EApp (EVar "Str.trimAscii") (EVar "value")) (ELit (LString "true")))) (arm (PList) () (EVar "False"))))
 (DTypeSig false "trustedModsGo" (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "String"))) (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyEffect ("IO") None (TyApp (TyCon "List") (TyCon "String")))))))))
-(DFunDef false "trustedModsGo" (PWild PWild PWild PWild (PList)) (EListLit))
-(DFunDef false "trustedModsGo" ((PVar "deps") (PVar "roots") (PVar "stdlibRoot") (PVar "trustedRoots") (PCons (PVar "m") (PVar "ms"))) (EBlock (DoLet false false (PVar "rest") (EApp (EApp (EApp (EApp (EApp (EVar "trustedModsGo") (EVar "deps")) (EVar "roots")) (EVar "stdlibRoot")) (EVar "trustedRoots")) (EVar "ms"))) (DoExpr (EMatch (EApp (EApp (EApp (EVar "findModuleFile") (EVar "deps")) (EVar "roots")) (EVar "m")) (arm (PCon "Some" (PTuple (PVar "path") (PVar "owningRoot"))) () (EIf (EBinOp "||" (EApp (EApp (EVar "contains") (EApp (EVar "canonicalizePath") (EVar "owningRoot"))) (EVar "trustedRoots")) (EApp (EApp (EVar "underDir") (EApp (EVar "canonicalizePath") (EVar "stdlibRoot"))) (EApp (EVar "canonicalizePath") (EVar "path")))) (EBinOp "::" (EVar "m") (EVar "rest")) (EVar "rest"))) (arm (PCon "None") () (EVar "rest"))))))
+(DFunDef false "trustedModsGo" ((PVar "deps") (PVar "roots") (PVar "stdlibRoot") (PVar "trustedRoots") (PVar "xs0")) (ELetGroup ((lgb "go" (clause ((PList)) (EListLit)) (clause ((PCons (PVar "m") (PVar "ms"))) (EBlock (DoLet false false (PVar "rest") (EApp (EVar "go") (EVar "ms"))) (DoExpr (EMatch (EApp (EApp (EApp (EVar "findModuleFile") (EVar "deps")) (EVar "roots")) (EVar "m")) (arm (PCon "Some" (PTuple (PVar "path") (PVar "owningRoot"))) () (EIf (EBinOp "||" (EApp (EApp (EVar "contains") (EApp (EVar "canonicalizePath") (EVar "owningRoot"))) (EVar "trustedRoots")) (EApp (EApp (EVar "underDir") (EApp (EVar "canonicalizePath") (EVar "stdlibRoot"))) (EApp (EVar "canonicalizePath") (EVar "path")))) (EBinOp "::" (EVar "m") (EVar "rest")) (EVar "rest"))) (arm (PCon "None") () (EVar "rest")))))))) (EApp (EVar "go") (EVar "xs0"))))
 (DTypeSig false "underDir" (TyFun (TyCon "String") (TyFun (TyCon "String") (TyCon "Bool"))))
 (DFunDef false "underDir" ((PVar "dir") (PVar "path")) (EApp (EApp (EVar "startsWith") (EBinOp "++" (EBinOp "++" (ELit (LString "")) (EApp (EMethodRef "display") (EVar "dir"))) (ELit (LString "/")))) (EVar "path")))
 (DTypeSig true "loadProgram" (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyEffect ("IO") None (TyApp (TyApp (TyCon "Result") (TyCon "String")) (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "Decl")))))))))
@@ -2299,8 +2304,7 @@ loadProgramFilesLocatedCachedSourcesE parseCacheRef read entry roots =
 (DTypeSig false "visitModChecked" (TyFun (TyFun (TyCon "String") (TyFun (TyCon "String") (TyApp (TyApp (TyCon "Result") (TyCon "ParseError")) (TyApp (TyCon "List") (TyCon "Decl"))))) (TyFun (TyFun (TyCon "String") (TyApp (TyCon "Option") (TyCon "String"))) (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "String"))) (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "String") (TyApp (TyCon "List") (TyCon "Decl")))) (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyCon "String") (TyEffect ("IO") None (TyApp (TyApp (TyCon "Result") (TyCon "LoadError")) (TyTuple (TyApp (TyCon "List") (TyCon "String")) (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "String") (TyApp (TyCon "List") (TyCon "Decl"))))))))))))))))))
 (DFunDef false "visitModChecked" ((PVar "parseFn") (PVar "read") (PVar "deps") (PVar "roots") (PVar "stack") (PVar "visited") (PVar "acc") (PVar "importer") (PVar "entry") (PVar "modId")) (EIf (EApp (EApp (EVar "contains") (EVar "modId")) (EVar "visited")) (EApp (EVar "Ok") (ETuple (EVar "visited") (EVar "acc"))) (EIf (EApp (EApp (EVar "contains") (EVar "modId")) (EVar "stack")) (EApp (EVar "Err") (EApp (EApp (EApp (EVar "LoadCycle") (EApp (EVar "stringConcat") (EListLit (ELit (LString "cyclic dependency: ")) (EApp (EVar "joinArrow") (EApp (EApp (EVar "cycleChain") (EVar "modId")) (EVar "stack")))))) (EVar "importer")) (EApp (EApp (EApp (EApp (EVar "cycleSite") (EVar "deps")) (EVar "roots")) (EVar "importer")) (EVar "modId")))) (EApp (EApp (EMethodRef "andThen") (EApp (EApp (EApp (EApp (EApp (EApp (EVar "readModuleProgF") (EVar "parseFn")) (EVar "read")) (EVar "deps")) (EVar "roots")) (EVar "entry")) (EVar "modId"))) (ELam ((PVar "__do_x")) (EMatch (EVar "__do_x") (arm (PTuple (PVar "owningRoot") (PVar "path") (PVar "prog")) () (ELet false (PVar "croots") (EApp (EApp (EVar "childRoots") (EVar "owningRoot")) (EVar "roots")) (ELet false (PVar "cdeps") (EApp (EApp (EApp (EVar "childDeps") (EVar "deps")) (EVar "owningRoot")) (EVar "roots")) (ELet false (PVar "prog2") (EApp (EApp (EApp (EVar "rewriteDecls") (EVar "cdeps")) (EVar "croots")) (EVar "prog")) (EApp (EApp (EMethodRef "map") (ELam ((PTuple (PVar "visited2") (PVar "acc2"))) (ETuple (EBinOp "::" (EVar "modId") (EVar "visited2")) (EBinOp "++" (EVar "acc2") (EListLit (ETuple (EVar "modId") (EVar "path") (EVar "prog2"))))))) (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EVar "visitModsF") (EVar "parseFn")) (EVar "read")) (EVar "cdeps")) (EVar "croots")) (EBinOp "::" (EVar "modId") (EVar "stack"))) (EVar "visited")) (EVar "acc")) (EVar "path")) (EApp (EVar "directImports") (EVar "prog2"))))))))))))))
 (DTypeSig false "visitModsF" (TyFun (TyFun (TyCon "String") (TyFun (TyCon "String") (TyApp (TyApp (TyCon "Result") (TyCon "ParseError")) (TyApp (TyCon "List") (TyCon "Decl"))))) (TyFun (TyFun (TyCon "String") (TyApp (TyCon "Option") (TyCon "String"))) (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "String"))) (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "String") (TyApp (TyCon "List") (TyCon "Decl")))) (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyEffect ("IO") None (TyApp (TyApp (TyCon "Result") (TyCon "LoadError")) (TyTuple (TyApp (TyCon "List") (TyCon "String")) (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "String") (TyApp (TyCon "List") (TyCon "Decl")))))))))))))))))
-(DFunDef false "visitModsF" (PWild PWild PWild PWild PWild (PVar "visited") (PVar "acc") PWild (PList)) (EApp (EVar "Ok") (ETuple (EVar "visited") (EVar "acc"))))
-(DFunDef false "visitModsF" ((PVar "parseFn") (PVar "read") (PVar "deps") (PVar "roots") (PVar "stack") (PVar "visited") (PVar "acc") (PVar "importer") (PCons (PVar "d") (PVar "ds"))) (EMatch (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EVar "visitModF") (EVar "parseFn")) (EVar "read")) (EVar "deps")) (EVar "roots")) (EVar "stack")) (EVar "visited")) (EVar "acc")) (EVar "importer")) (ELit (LString ""))) (EVar "d")) (arm (PCon "Err" (PVar "e")) () (EApp (EVar "Err") (EVar "e"))) (arm (PCon "Ok" (PTuple (PVar "v2") (PVar "a2"))) () (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EVar "visitModsF") (EVar "parseFn")) (EVar "read")) (EVar "deps")) (EVar "roots")) (EVar "stack")) (EVar "v2")) (EVar "a2")) (EVar "importer")) (EVar "ds")))))
+(DFunDef false "visitModsF" ((PVar "parseFn") (PVar "read") (PVar "deps") (PVar "roots") (PVar "stack") (PVar "v0") (PVar "a0") (PVar "importer") (PVar "xs0")) (ELetGroup ((lgb "go" (clause ((PVar "visited") (PVar "acc") (PList)) (EApp (EVar "Ok") (ETuple (EVar "visited") (EVar "acc")))) (clause ((PVar "visited") (PVar "acc") (PCons (PVar "d") (PVar "ds"))) (EMatch (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EVar "visitModF") (EVar "parseFn")) (EVar "read")) (EVar "deps")) (EVar "roots")) (EVar "stack")) (EVar "visited")) (EVar "acc")) (EVar "importer")) (ELit (LString ""))) (EVar "d")) (arm (PCon "Err" (PVar "e")) () (EApp (EVar "Err") (EVar "e"))) (arm (PCon "Ok" (PTuple (PVar "v2") (PVar "a2"))) () (EApp (EApp (EApp (EVar "go") (EVar "v2")) (EVar "a2")) (EVar "ds"))))))) (EApp (EApp (EApp (EVar "go") (EVar "v0")) (EVar "a0")) (EVar "xs0"))))
 (DTypeSig false "finishLoad" (TyFun (TyApp (TyApp (TyCon "Result") (TyCon "LoadError")) (TyTuple (TyApp (TyCon "List") (TyCon "String")) (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "String") (TyApp (TyCon "List") (TyCon "Decl")))))) (TyApp (TyApp (TyCon "Result") (TyCon "LoadError")) (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "String") (TyApp (TyCon "List") (TyCon "Decl")))))))
 (DFunDef false "finishLoad" ((PCon "Ok" (PTuple PWild (PVar "acc")))) (EBlock (DoLet false false PWild (EApp (EVar "settleLoad") (EVar "acc"))) (DoExpr (EApp (EVar "Ok") (EVar "acc")))))
 (DFunDef false "finishLoad" ((PCon "Err" (PVar "e"))) (EApp (EVar "Err") (EVar "e")))
