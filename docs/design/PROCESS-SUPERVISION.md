@@ -511,10 +511,17 @@ external broker/service. It is **not an established deployment**. Exec p gives
 no cgroup/namespace privilege. Ordinary users need a host-provided protected
 broker; an arbitrary login user's ability to create it is not assumed.
 
-The measured host exposes cgroup2 read-only; creating a child of its own scope
-fails EROFS=30. Attempting an ordinary-user receipt by dropping uid fails
-EPERM=1 in this sandbox, so ordinary-user availability remains blocked. A
-writable cgroup alone would not suffice: worker access to a destination
+The [ownership authority replay](../../scripts/mcp_bench/prototypes/ownership_probe.py)
+and [2026-11-05 receipt](../findings/mcp-runtime-authority/OWNERSHIP.md) measure
+the current blockers independently. The cgroup2 mount is read-only; a unique
+disposable child mkdir fails EROFS=30. The probe has uid/euid 0 with zero
+effective capabilities, and its child setresuid attempt fails EINVAL=22.
+SO_PASSCRED setup fails EPERM=1. No protected delegated manager is configured;
+ordinary-client deployment and credential authentication remain unqualified.
+The local token/state and external nonexecution controls run without claiming
+containment. Both full and `--refusal-only` replay exit 77; every positive
+deployment row remains UNQUALIFIED. A writable cgroup alone would not suffice:
+worker access to a destination
 cgroup.procs, inherited management fd, broker memory/ptrace or namespace/mount
 authority can permit escape. Require inaccessible broker management authority,
 including protection from `/proc` fd theft and ambient capabilities; a separate
