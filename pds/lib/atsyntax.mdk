@@ -84,10 +84,9 @@ validateHandle handle =
   let len = B.length bytes
   if len < 1 || len > 253 then
     Err "handle: length must be 1..253 characters"
-  else match validateHandleLabels bytes 0 len 0 0
-    Err message => Err message
-    Ok labelCount =>
-      if labelCount < 2 then Err "handle: needs at least two labels" else Ok ()
+  else do
+    labelCount <- validateHandleLabels bytes 0 len 0 0
+    if labelCount < 2 then Err "handle: needs at least two labels" else Ok ()
 
 -- did ---------------------------------------------------------------------------
 

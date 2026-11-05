@@ -92,9 +92,9 @@ lexJsonToDagCbor (JObject pairs) = lexJsonObject pairs
 lexJsonArray : Array Json -> Int -> Int -> Result String (List DagCbor)
 lexJsonArray arr i n
   | i >= n = Ok []
-  | otherwise = match lexJsonToDagCbor arr[i]
-    Err message => Err message
-    Ok value => map (value :: _) (lexJsonArray arr (i + 1) n)
+  | otherwise = do
+    value <- lexJsonToDagCbor arr[i]
+    map (value :: _) (lexJsonArray arr (i + 1) n)
 
 lexJsonObject : Array (String, Json) -> Result String DagCbor
 lexJsonObject pairs =
@@ -127,16 +127,15 @@ lexJsonLink _ = Err "lexjson: '$link' value must be a string"
 -- base64 character that no canonical encoder ever sets — decodes to the
 -- same bytes but is rejected rather than silently normalized.
 lexJsonBytes : Json -> Result String DagCbor
-lexJsonBytes (JString text) = match padBase64 text
-  Err message => Err message
-  Ok padded => match decode padded
-    Err message => Err message
-    Ok bytes =>
-      let fullyPadded = encode bytes
-      if text == stripBase64Padding fullyPadded || text == fullyPadded then
-        Ok (DcBytes bytes)
-      else
-        Err "lexjson: '$bytes' value is not canonical base64"
+lexJsonBytes (JString text) = do
+  padded <- padBase64 text
+  do
+    bytes <- decode padded
+    let fullyPadded = encode bytes
+    if text == stripBase64Padding fullyPadded || text == fullyPadded then
+      Ok (DcBytes bytes)
+    else
+      Err "lexjson: '$bytes' value is not canonical base64"
 lexJsonBytes _ = Err "lexjson: '$bytes' value must be a string"
 
 lexJsonFields : Array (String, Json) ->
@@ -145,9 +144,9 @@ lexJsonFields : Array (String, Json) ->
   Result String (List (String, DagCbor))
 lexJsonFields pairs i n
   | i >= n = Ok []
-  | otherwise = match lexJsonToDagCbor (snd pairs[i])
-    Err message => Err message
-    Ok value => map ((fst pairs[i], value) :: _) (lexJsonFields pairs (i + 1) n)
+  | otherwise = do
+    value <- lexJsonToDagCbor (snd pairs[i])
+    map ((fst pairs[i], value) :: _) (lexJsonFields pairs (i + 1) n)
 
 hasKey : String -> Array (String, Json) -> Int -> Int -> Bool
 hasKey key pairs i n

@@ -579,16 +579,15 @@ xffLastHop headers = match last (filter isXffHeader headers)
    decode that repaired or replaced bytes would charge two different headers
    to one bucket. -}
 lastHopToken : Bytes -> Result String (Option String)
-lastHopToken bytes = match checkXffHeaderBytes (B.length bytes)
-  Err message => Err message
-  Ok () => match checkXffTokens (B.fold countComma 1 bytes)
-    Err message => Err message
-    Ok () => match decodeUtf8 bytes
+lastHopToken bytes = do
+  _ <- checkXffHeaderBytes (B.length bytes)
+  _ <- checkXffTokens (B.fold countComma 1 bytes)
+  match decodeUtf8 bytes
+    None => Ok None
+    Some text => match last (map trimAscii (split "," text))
+      Some candidate =>
+        if isAddressToken candidate then Ok (Some candidate) else Ok None
       None => Ok None
-      Some text => match last (map trimAscii (split "," text))
-        Some candidate =>
-          if isAddressToken candidate then Ok (Some candidate) else Ok None
-        None => Ok None
 
 -- One more token per `,`, which is the count `split ","` produces.
 countComma : Int -> U8 -> Int

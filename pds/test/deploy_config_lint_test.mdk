@@ -358,16 +358,14 @@ missingDirectives : String ->
   List (String, String) ->
   <Exec> Result String (List String)
 missingDirectives _ [] = Ok []
-missingDirectives file ((label, pattern) :: rest) =
-  match grepMatches pattern file
-    Err e => Err e
-    Ok hit => match missingDirectives file rest
-      Err e => Err e
-      Ok more =>
-        if hit then
-          Ok more
-        else
-          Ok ("\{file}: missing \{label} (pattern: \{pattern})" :: more)
+missingDirectives file ((label, pattern) :: rest) = do
+  hit <- grepMatches pattern file
+  do
+    more <- missingDirectives file rest
+    if hit then
+      Ok more
+    else
+      Ok ("\{file}: missing \{label} (pattern: \{pattern})" :: more)
 
 -- | One violation line per pattern in `roster` that `file` does carry — the
 -- mirror image of `missingDirectives`.
@@ -375,18 +373,16 @@ presentForbidden : String ->
   List (String, String) ->
   <Exec> Result String (List String)
 presentForbidden _ [] = Ok []
-presentForbidden file ((label, pattern) :: rest) =
-  match grepMatches pattern file
-    Err e => Err e
-    Ok hit => match presentForbidden file rest
-      Err e => Err e
-      Ok more =>
-        if hit then
-          Ok
-            ("\{file}: forbidden construct present: \{label} (pattern: \{pattern})"
-              :: more)
-        else
-          Ok more
+presentForbidden file ((label, pattern) :: rest) = do
+  hit <- grepMatches pattern file
+  do
+    more <- presentForbidden file rest
+    if hit then
+      Ok
+        ("\{file}: forbidden construct present: \{label} (pattern: \{pattern})"
+          :: more)
+    else
+      Ok more
 
 -- # Mutation copies
 
@@ -573,14 +569,13 @@ test "pds.service carries every required hardening directive" =
 -- systemd accepts repeated assignments; a weaker final row overrides the
 -- roster's 110s line. Exactly one effective stop allowance must remain.
 stopTimeoutFindings : String -> <FileRead> Result String (List String)
-stopTimeoutFindings path = match readFile path
-  Err e => Err e
-  Ok text =>
-    let directives = filter (startsWith "TimeoutStopSec=") (lines text)
-    if directives == ["TimeoutStopSec=110s"] then
-      Ok []
-    else
-      Ok ["\{path}: expected only TimeoutStopSec=110s"]
+stopTimeoutFindings path = do
+  text <- readFile path
+  let directives = filter (startsWith "TimeoutStopSec=") (lines text)
+  if directives == ["TimeoutStopSec=110s"] then
+    Ok []
+  else
+    Ok ["\{path}: expected only TimeoutStopSec=110s"]
 
 stopTimeoutIn : Result String String -> <FileRead> Result String (List String)
 stopTimeoutIn (Err e) = Err e
@@ -710,27 +705,26 @@ test "pds-alert@.service carries its own oneshot and curl directives" =
 -- A later assignment can undo the in-memory incident hold or the retry
 -- limit even if the roster still matches an earlier assignment.
 alertLimitFindings : String -> <FileRead> Result String (List String)
-alertLimitFindings path = match readFile path
-  Err e => Err e
-  Ok text =>
-    let rows =
-      filter
-        (l =>
-          startsWith "StartLimitIntervalSec=" l
-            || startsWith "StartLimitBurst=" l
-            || startsWith "RemainAfterExit=" l)
-        (lines text)
-    if rows
-      == [
-        "StartLimitIntervalSec=infinity",
-        "StartLimitBurst=1",
-        "RemainAfterExit=yes",
-      ] then
-      Ok []
-    else
-      Ok [
-        "\{path}: expected only StartLimitIntervalSec=infinity, StartLimitBurst=1 and RemainAfterExit=yes",
-      ]
+alertLimitFindings path = do
+  text <- readFile path
+  let rows =
+    filter
+      (l =>
+        startsWith "StartLimitIntervalSec=" l
+          || startsWith "StartLimitBurst=" l
+          || startsWith "RemainAfterExit=" l)
+      (lines text)
+  if rows
+    == [
+      "StartLimitIntervalSec=infinity",
+      "StartLimitBurst=1",
+      "RemainAfterExit=yes",
+    ] then
+    Ok []
+  else
+    Ok [
+      "\{path}: expected only StartLimitIntervalSec=infinity, StartLimitBurst=1 and RemainAfterExit=yes",
+    ]
 
 alertLimitIn : Result String String -> <FileRead> Result String (List String)
 alertLimitIn (Err e) = Err e

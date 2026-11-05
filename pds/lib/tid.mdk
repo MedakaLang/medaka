@@ -63,13 +63,12 @@ tidParse text =
     Some first =>
       if first >= 16 then
         Err "tid: high bit must be zero"
-      else match decodeDigits chars 0 11 0
-        Err message => Err message
-        Ok micros =>
-          if micros > tidTimestampMax then
-            Err "tid: timestamp is outside the representable 53-bit range"
-          else
-            map (Tid text micros) (decodeDigits chars 11 13 0)
+      else do
+        micros <- decodeDigits chars 0 11 0
+        if micros > tidTimestampMax then
+          Err "tid: timestamp is outside the representable 53-bit range"
+        else
+          map (Tid text micros) (decodeDigits chars 11 13 0)
 
 -- | Canonical thirteen-character spelling.
 export

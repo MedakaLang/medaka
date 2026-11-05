@@ -60,16 +60,14 @@ asHex bytes = "<hex:\{Hex.encode bytes}>"
    None -}
 export
 headContentLength : Bytes -> Option Int
-headContentLength head = match B.indexOf contentLengthField head
-  None => None
-  Some at =>
-    let from = at + B.length contentLengthField
-    let end = match B.indexOfWithin from (B.length head) crlf head
-      Some e => e
-      None => B.length head
-    match decodeUtf8 (B.sliceClamped from end head)
-      Some value => toInt (trim value)
-      None => None
+headContentLength head = do
+  at <- B.indexOf contentLengthField head
+  let from = at + B.length contentLengthField
+  let end = match B.indexOfWithin from (B.length head) crlf head
+    Some e => e
+    None => B.length head
+  value <- decodeUtf8 (B.sliceClamped from end head)
+  toInt (trim value)
 
 contentLengthField : Bytes
 contentLengthField = encodeUtf8 "\r\ncontent-length:"

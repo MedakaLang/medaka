@@ -553,17 +553,13 @@ importClauses (line :: rest) =
    the selective form `import m.{a, b}`, which is the only form the verifier
    may use: a bare, aliased or wildcard import takes names nobody listed. -}
 selectiveImport : String -> Option (String, List String)
-selectiveImport clause = match S.indexOf ".{" clause
-  None => None
-  Some at =>
-    let target = S.drop 7 (S.take at clause)
-    let inner = S.drop (at + 2) clause
-    match S.indexOf "}" inner
-      None => None
-      Some close =>
-        let names =
-          filter (/= "") (map S.trim (S.split "," (S.take close inner)))
-        Some (target, names)
+selectiveImport clause = do
+  at <- S.indexOf ".{" clause
+  let target = S.drop 7 (S.take at clause)
+  let inner = S.drop (at + 2) clause
+  close <- S.indexOf "}" inner
+  let names = filter (/= "") (map S.trim (S.split "," (S.take close inner)))
+  Some (target, names)
 
 verifierImports : <FileRead, Env "MEDAKA_ROOT"> List String
 verifierImports = match readFile (underRoot "pds/lib/service_jwt_verify.mdk")

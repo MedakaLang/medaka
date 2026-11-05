@@ -38,11 +38,10 @@ export
 filesForConsumer : String ->
   String ->
   <FileRead, Exec> Result String (List String)
-filesForConsumer root consumer = match loadStanzas root
-  Err e => Err e
-  Ok stanzas =>
-    let matching = filter (isVectorForConsumer consumer) stanzas
-    map sort (collectRows root matching)
+filesForConsumer root consumer = do
+  stanzas <- loadStanzas root
+  let matching = filter (isVectorForConsumer consumer) stanzas
+  map sort (collectRows root matching)
 
 {- | Validate an explicit, caller-ordered list of repo-relative paths
    against the ledger: each path must name a `[vector]` stanza, and that
@@ -57,9 +56,9 @@ export
 validatePaths : String ->
   List String ->
   <FileRead, Exec> Result String (List String)
-validatePaths root paths = match loadStanzas root
-  Err e => Err e
-  Ok stanzas => validateEach root stanzas paths
+validatePaths root paths = do
+  stanzas <- loadStanzas root
+  validateEach root stanzas paths
 
 validateEach : String ->
   List Stanza ->
@@ -68,9 +67,9 @@ validateEach : String ->
 validateEach _ _ [] = Ok []
 validateEach root stanzas (p :: rest) = match findStanzaForFile p stanzas
   None => Err "vector_ledger: no [vector] stanza names file \"\{p}\""
-  Some s => match validateRow root s
-    Err e => Err e
-    Ok _ => map (p :: _) (validateEach root stanzas rest)
+  Some s => do
+    _ <- validateRow root s
+    map (p :: _) (validateEach root stanzas rest)
 
 findStanzaForFile : String -> List Stanza -> Option Stanza
 findStanzaForFile _ [] = None
@@ -159,9 +158,9 @@ collectRows : String ->
   List Stanza ->
   <FileRead, Exec> Result String (List String)
 collectRows _ [] = Ok []
-collectRows root (s :: rest) = match validateRow root s
-  Err e => Err e
-  Ok file => map (file :: _) (collectRows root rest)
+collectRows root (s :: rest) = do
+  file <- validateRow root s
+  map (file :: _) (collectRows root rest)
 
 validateRow : String -> Stanza -> <FileRead, Exec> Result String String
 validateRow root stanza = match fieldValue "file" stanza

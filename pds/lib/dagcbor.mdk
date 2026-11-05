@@ -78,9 +78,9 @@ keyCompare left right =
    same nesting levels: a value's children are emitted one level below it, a
    map key counts as a child alongside its value, and a tag-42 link is a leaf. -}
 emitValue : DagCbor -> Int -> Builder -> Result String Unit
-emitValue value depth out = match checkDagCborDepth depth
-  Err e => Err e
-  Ok () => emitValueAt value depth out
+emitValue value depth out = do
+  _ <- checkDagCborDepth depth
+  emitValueAt value depth out
 
 emitValueAt : DagCbor -> Int -> Builder -> Result String Unit
 emitValueAt DcNull _ out =

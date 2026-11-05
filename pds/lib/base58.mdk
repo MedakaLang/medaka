@@ -215,9 +215,9 @@ collectDigitValues : Array Char -> Int -> Int -> Result String (List Int)
 collectDigitValues chars i n =
   if i >= n then
     Ok []
-  else match digitValueOrErr (charAtA i chars)
-    Err e => Err e
-    Ok d => map (d :: _) (collectDigitValues chars (i + 1) n)
+  else do
+    d <- digitValueOrErr (charAtA i chars)
+    map (d :: _) (collectDigitValues chars (i + 1) n)
 
 -- Mirror of `carryByteIntoDigits`, base 58 -> base 256.
 carryDigitIntoBytes : Array Int -> Int -> Int -> Int -> Int -> Int
@@ -272,18 +272,17 @@ base58btcDecode s =
       "base58btcDecode: input longer than \{intToString base58btcMaxInputChars} characters (denial-of-service guard, not a protocol limit)"
   else
     let zeroes = countLeadingOneChars chars 0 n
-    match collectDigitValues chars zeroes n
-      Err e => Err e
-      Ok digits =>
-        let remaining = n - zeroes
-        let size = remaining * 733 / 1000 + 1
-        let buf = make size 0
-        let length = foldDigitsIntoBytes digits buf size 0
-        let start = size - length
-        -- masked: every element of this array is `cur % 256` from
-        -- `carryDigitIntoBytes`, or a literal `0` from `replicateInt`, so it
-        -- is in the byte domain by construction — no scan is owed.
-        Ok
-          (fromArrayAssumeByteDomain
-            (arrayFromList
-              (replicateInt 0 zeroes ++ collectBytesFrom buf start size)))
+    do
+      digits <- collectDigitValues chars zeroes n
+      let remaining = n - zeroes
+      let size = remaining * 733 / 1000 + 1
+      let buf = make size 0
+      let length = foldDigitsIntoBytes digits buf size 0
+      let start = size - length
+      -- masked: every element of this array is `cur % 256` from
+      -- `carryDigitIntoBytes`, or a literal `0` from `replicateInt`, so it
+      -- is in the byte domain by construction — no scan is owed.
+      Ok
+        (fromArrayAssumeByteDomain
+          (arrayFromList
+            (replicateInt 0 zeroes ++ collectBytesFrom buf start size)))

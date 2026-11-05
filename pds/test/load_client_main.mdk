@@ -310,12 +310,11 @@ timedRequest : Connection * ->
   <Clock, Net> Result String (Int, Bytes, Int)
 timedRequest conn pending request =
   let t0 = monotonic ()
-  match sendAll conn request
-    Err message => Err message
-    Ok () =>
-      map
-        ((status, _, rest) => (status, rest, microsSince t0))
-        (readOneResponse conn pending)
+  do
+    _ <- sendAll conn request
+    map
+      ((status, _, rest) => (status, rest, microsSince t0))
+      (readOneResponse conn pending)
 
 -- # Authenticated write workload
 
@@ -383,9 +382,9 @@ responseRoundTrip : Connection * ->
   Bytes ->
   Bytes ->
   <Net> Result String (Int, Bytes, Bytes)
-responseRoundTrip conn pending request = match sendAll conn request
-  Err message => Err message
-  Ok () => readOneResponse conn pending
+responseRoundTrip conn pending request = do
+  _ <- sendAll conn request
+  readOneResponse conn pending
 
 -- | One writer's settings, fixed for its whole run.
 data WriteRun = WriteRun {

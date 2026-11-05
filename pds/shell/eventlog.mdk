@@ -409,11 +409,10 @@ eventLogSweep : DataDir d ->
   Int ->
   Int ->
   <FileRead d, FileWrite d> Result String Int
-eventLogSweep dir retentionSeconds nowSeconds = match listEntryRows dir
-  Err message => Err message
-  Ok rows =>
-    let (expired, _) = eventLogPartitionExpired retentionSeconds nowSeconds rows
-    dropRows dir expired 0
+eventLogSweep dir retentionSeconds nowSeconds = do
+  rows <- listEntryRows dir
+  let (expired, _) = eventLogPartitionExpired retentionSeconds nowSeconds rows
+  dropRows dir expired 0
 
 readRows : DataDir d ->
   List (Int, Int, String) ->
@@ -458,12 +457,11 @@ export
 eventLogRead : DataDir d ->
   Int ->
   <FileRead d> Result String (List EventLogEntry)
-eventLogRead dir cursor = match listEntryRows dir
-  Err message => Err message
-  Ok rows =>
-    map
-      (eventLogAfterCursor cursor)
-      (readRows dir (filter (row => rowSeq row > cursor) rows) [])
+eventLogRead dir cursor = do
+  rows <- listEntryRows dir
+  map
+    (eventLogAfterCursor cursor)
+    (readRows dir (filter (row => rowSeq row > cursor) rows) [])
 
 rowSeq : (Int, Int, String) -> Int
 rowSeq (seq, _, _) = seq

@@ -137,13 +137,12 @@ entryCompare : MstEntry -> MstEntry -> Ordering
 entryCompare (MstEntry left _ _) (MstEntry right _ _) = bytesCompare left right
 
 prepareEntries : List (Bytes, Cid) -> Result String (List MstEntry)
-prepareEntries entries = match prepareEntriesGo entries []
-  Err message => Err message
-  Ok prepared =>
-    let sorted = sortBy entryCompare prepared
-    match duplicateKey sorted None
-      Some _ => Err "mst: duplicate key is not allowed"
-      None => Ok sorted
+prepareEntries entries = do
+  prepared <- prepareEntriesGo entries []
+  let sorted = sortBy entryCompare prepared
+  match duplicateKey sorted None
+    Some _ => Err "mst: duplicate key is not allowed"
+    None => Ok sorted
 
 prepareEntriesGo : List (Bytes, Cid) ->
   List MstEntry ->
@@ -583,9 +582,9 @@ insertSorted (entry@(MstEntry key _ _)) ((candidate@(MstEntry other _ _)) :: res
 -- | Insert a previously absent key.
 export
 mstInsert : Bytes -> Cid -> Mst -> Result String Mst
-mstInsert key value tree = match mstKeyDepth key
-  Err message => Err message
-  Ok depth => match mstLookup key tree
+mstInsert key value tree = do
+  depth <- mstKeyDepth key
+  match mstLookup key tree
     Some _ => Err "mst: duplicate key is not allowed"
     None =>
       let (Mst entries _ _ _) = tree
@@ -603,9 +602,9 @@ replaceEntry key value ((entry@(MstEntry candidate _ depth)) :: rest) =
 -- | Replace the value at an existing key.
 export
 mstReplace : Bytes -> Cid -> Mst -> Result String Mst
-mstReplace key value tree = match mstKeyDepth key
-  Err message => Err message
-  Ok _ => match mstLookup key tree
+mstReplace key value tree = do
+  _ <- mstKeyDepth key
+  match mstLookup key tree
     None => Err "mst: replace key was not found"
     Some _ =>
       let (Mst entries _ _ _) = tree
@@ -622,9 +621,9 @@ deleteEntry key ((entry@(MstEntry candidate _ _)) :: rest) =
 -- | Delete an existing key, pruning the root back to the canonical empty node.
 export
 mstDelete : Bytes -> Mst -> Result String Mst
-mstDelete key tree = match mstKeyDepth key
-  Err message => Err message
-  Ok _ => match mstLookup key tree
+mstDelete key tree = do
+  _ <- mstKeyDepth key
+  match mstLookup key tree
     None => Err "mst: delete key was not found"
     Some _ =>
       let (Mst entries _ _ _) = tree
@@ -698,11 +697,9 @@ decodeNode : Bytes -> Result String DecodedNode
 decodeNode bytes = match dagCborDecode bytes
   Err message => Err "mst: \{message}"
   Ok value => match value
-    DcMap [("e", DcArray entries), ("l", left)] =>
-      match decodeOptionalLink "left subtree" left
-        Err message => Err message
-        Ok leftLink =>
-          map (DecodedNode leftLink) (decodeEntries entries None [])
+    DcMap [("e", DcArray entries), ("l", left)] => do
+      leftLink <- decodeOptionalLink "left subtree" left
+      map (DecodedNode leftLink) (decodeEntries entries None [])
     _ => Err "mst: invalid node form; expected exactly fields e and l"
 
 entryKey : DecodedEntry -> Bytes
@@ -885,27 +882,26 @@ walkNodeChildren (DecodedNode left entries) expected lower upper blocks active v
   let leftUpper = match entries
     [] => upper
     entry :: _ => Some (entryKey entry)
-  match (walkOptionalChild
-    left
-    expected
-    lower
-    leftUpper
-    blocks
-    active
-    visited
-    traversal
-    limit)
-    Err message => Err message
-    Ok nextVisited =>
-      walkEntryChildren
-        entries
-        expected
-        upper
-        blocks
-        active
-        nextVisited
-        traversal
-        limit
+  do
+    nextVisited <- walkOptionalChild
+      left
+      expected
+      lower
+      leftUpper
+      blocks
+      active
+      visited
+      traversal
+      limit
+    walkEntryChildren
+      entries
+      expected
+      upper
+      blocks
+      active
+      nextVisited
+      traversal
+      limit
 
 walkKnownBlock : Bytes ->
   Option Int ->
@@ -965,29 +961,28 @@ walkBlock : Cid ->
   Int ->
   Result String (Set String)
 walkBlock cid expected isRoot lower upper blocks active visited traversal limit =
-  match checkTraversalDepth limit traversal
-    Err message => Err message
-    Ok () =>
-      let key = cidKey cid
-      if Set.has key active then
-        Err "mst: invalid node form; subtree link cycle"
-      else if Set.has key visited then
-        Err "mst: invalid node form; subtree block is referenced more than once"
-      else match get key blocks
-        None => Err "mst: missing reachable node block"
-        Some bytes =>
-          walkKnownBlock
-            bytes
-            expected
-            isRoot
-            lower
-            upper
-            blocks
-            active
-            visited
-            key
-            traversal
-            limit
+  do
+    _ <- checkTraversalDepth limit traversal
+    let key = cidKey cid
+    if Set.has key active then
+      Err "mst: invalid node form; subtree link cycle"
+    else if Set.has key visited then
+      Err "mst: invalid node form; subtree block is referenced more than once"
+    else match get key blocks
+      None => Err "mst: missing reachable node block"
+      Some bytes =>
+        walkKnownBlock
+          bytes
+          expected
+          isRoot
+          lower
+          upper
+          blocks
+          active
+          visited
+          key
+          traversal
+          limit
 
 validateBlocksWithTraversalLimit : Int ->
   Cid ->

@@ -84,9 +84,9 @@ runRow line = match split "\t" line
   [name, cborHex, expectedCidText] =>
     let expectedBytes = mustHex cborHex
     let constructed = dagCborEncode (fixtureValue name)
-    let decodedReencoded = match dagCborDecode expectedBytes
-      Err message => Err message
-      Ok value => dagCborEncode value
+    let decodedReencoded = do
+      value <- dagCborDecode expectedBytes
+      dagCborEncode value
     let calculatedCidText = cidToString (cidForDagCbor expectedBytes)
     let parsedCidText = match cidFromString expectedCidText
       Err message => "ERR:\{message}"

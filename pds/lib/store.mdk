@@ -165,9 +165,9 @@ blobHalfEmpty = BlobHalf blockStoreEmpty Tip 0 0
 -- The declared type recorded for a blob, or `None` for one that has no entry
 -- at all as well as one inserted without a type.
 declaredTypeOf : Cid -> BlobHalf -> Option String
-declaredTypeOf cid (BlobHalf _ index _ _) = match get (cidToString cid) index
-  Some (_, declared) => declared
-  None => None
+declaredTypeOf cid (BlobHalf _ index _ _) = do
+  (_, declared) <- get (cidToString cid) index
+  declared
 
 -- Insert one verified blob under an already-decided declared type. The byte
 -- total moves only when the block store gains a row: `blockStorePut` accepts

@@ -317,11 +317,11 @@ countOk : String -> Int
 countOk out = sum (filterMap okCount (lines out))
 
 okCount : String -> Option Int
-okCount l = match indexOf " ok," l
-  None => None
-  Some i => match last (words (take i l))
-    None => None
-    Some w => toInt w
+okCount l = do
+  i <- indexOf " ok," l
+  do
+    w <- last (words (take i l))
+    toInt w
 
 export
 lastLineOf : String -> String
@@ -900,17 +900,16 @@ stageMutation : MutationTest ->
   Int ->
   Mutation ->
   <Exec, FileRead, FileWrite, IO> Result (List String) (String, Mutation)
-stageMutation t tree i m = match mutantText t m
-  Err fs => Err fs
-  Ok text =>
-    let root = "\{tree}/mutant\{intToString i}"
-    match spawn runSeconds [] "sh" (copyArgs root "\{tree}/pds")
-      Ok (0, _, _) => match writeFile "\{root}/\{m.file}" text
-        Err e => Err ["\{labelOf t m}: could not write the mutant: \{e}"]
-        Ok _ => Ok (root, m)
-      Ok (code, _, err) =>
-        Err ["\{labelOf t m}: copying pds/ exited \{intToString code}: \{err}"]
-      Err e => Err ["\{labelOf t m}: could not copy pds/: \{e}"]
+stageMutation t tree i m = do
+  text <- mutantText t m
+  let root = "\{tree}/mutant\{intToString i}"
+  match spawn runSeconds [] "sh" (copyArgs root "\{tree}/pds")
+    Ok (0, _, _) => match writeFile "\{root}/\{m.file}" text
+      Err e => Err ["\{labelOf t m}: could not write the mutant: \{e}"]
+      Ok _ => Ok (root, m)
+    Ok (code, _, err) =>
+      Err ["\{labelOf t m}: copying pds/ exited \{intToString code}: \{err}"]
+    Err e => Err ["\{labelOf t m}: could not copy pds/: \{e}"]
 
 -- The `Ok` payloads of `xs`, in order.
 okValues : List (Result e a) -> List a

@@ -761,9 +761,9 @@ persistRepoHalf dir did nowSeconds before after = match storeRepo after
   Some next =>
     if not (repoAdvanced before after) then
       Ok ()
-    else match stageCommitEvent dir did nowSeconds (storeRepo before) next
-      Err message => Err message
-      Ok () => match persistRepo dir (storeRepo before) next
+    else do
+      _ <- stageCommitEvent dir did nowSeconds (storeRepo before) next
+      match persistRepo dir (storeRepo before) next
         Err message => match eventLogDiscardStaged dir
           Err _ => Err message
           Ok () => Err message
@@ -2113,9 +2113,9 @@ acceptOrSignal lis signalFd = defer
   if requested then
     deferPure (Ok None)
   else defer
-    attempt <- liftIO (u => match netSetNonblockListener lis True
-      Err message => Err message
-      Ok () => netTryAccept lis)
+    attempt <- liftIO (u => do
+      _ <- netSetNonblockListener lis True
+      netTryAccept lis)
     match attempt
       Err message => deferPure (Err message)
       Ok (Some conn) => defer

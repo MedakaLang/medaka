@@ -941,9 +941,9 @@ cleanProbe : List String
 cleanProbe = ["export", "topProbeForTest : Int -> Int", "topProbeForTest x = x"]
 
 nestedSources : <Exec, FileRead, FileWrite> Result String (List (String, String))
-nestedSources = match nestedTree
-  Err e => Err e
-  Ok root => sourcesUnder root
+nestedSources = do
+  root <- nestedTree
+  sourcesUnder root
 
 test "mutation control: an effect-bearing export in a nested directory is caught" =
   expectFindings
@@ -1068,13 +1068,12 @@ serverContent = match readFile serverPath
 
 test "mutation control: the pds/shell call site this control mutates is still there" = expectNoFindings
   "the pds/shell call site this control mutates has moved — repoint it"
-  (match serverContent
-    Err e => Err e
-    Ok content =>
-      if contains realCallSite content then
-        Ok []
-      else
-        Ok ["\{serverPath}: no `\{realCallSite}` call site"])
+  (do
+    content <- serverContent
+    if contains realCallSite content then
+      Ok []
+    else
+      Ok ["\{serverPath}: no `\{realCallSite}` call site"])
 
 test "mutation control: a secret at a real pds/shell call site is caught" =
   expectFindings
@@ -1155,9 +1154,9 @@ test "mutation control: the raw-signer ledger is per name, not per file" =
    the count at the time of writing, less a small margin for a module being
    deleted. -}
 sourceCount : <FileRead, IO> Result String Int
-sourceCount = match plusEntry libSources
-  Err e => Err e
-  Ok lib => map (shell => length lib + length shell) shellSources
+sourceCount = do
+  lib <- plusEntry libSources
+  map (shell => length lib + length shell) shellSources
 
 fileFloor : Int
 fileFloor = 40

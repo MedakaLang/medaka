@@ -148,36 +148,35 @@ prefixEquals a b i len =
    Err "uvarint: non-minimal encoding" -}
 export
 uvarintDecode : Bytes -> Result String (Int, Int)
-uvarintDecode bytes = match uvarintDecodeGo bytes 0 (B.length bytes) 0 0
-  Err e => Err e
-  Ok (value, consumed) =>
-    -- RANGE, checked FIRST and EXPLICITLY. Only the 9th byte can shift a
-    -- payload past `intMaxBound` (shifts of 49 or less contribute < 2^56),
-    -- and the accumulator wraps into the negatives exactly when the true
-    -- value is >= 2^62 — so `value < 0` is a total, exact discriminator for
-    -- "out of representable range", not a heuristic.
-    --
-    -- The check belongs here and not in the minimality arm below: a value
-    -- above the representable range can be perfectly minimal, so diagnosing
-    -- it as "non-minimal" would name the wrong defect. Deleting this arm
-    -- does not make the value decode: a negative `value` would reach the
-    -- minimality arm's `uvarintEncode value` call below, which panics on
-    -- its own `n < 0` guard -- turning this function's `Err` into a process
-    -- abort, exactly the promise its `Result` signature exists to keep.
-    if value < 0 then
-      Err "uvarint: value exceeds the representable Int range (max 2^62-1)"
+uvarintDecode bytes = do
+  (value, consumed) <- uvarintDecodeGo bytes 0 (B.length bytes) 0 0
+  -- RANGE, checked FIRST and EXPLICITLY. Only the 9th byte can shift a
+  -- payload past `intMaxBound` (shifts of 49 or less contribute < 2^56),
+  -- and the accumulator wraps into the negatives exactly when the true
+  -- value is >= 2^62 — so `value < 0` is a total, exact discriminator for
+  -- "out of representable range", not a heuristic.
+  --
+  -- The check belongs here and not in the minimality arm below: a value
+  -- above the representable range can be perfectly minimal, so diagnosing
+  -- it as "non-minimal" would name the wrong defect. Deleting this arm
+  -- does not make the value decode: a negative `value` would reach the
+  -- minimality arm's `uvarintEncode value` call below, which panics on
+  -- its own `n < 0` guard -- turning this function's `Err` into a process
+  -- abort, exactly the promise its `Result` signature exists to keep.
+  if value < 0 then
+    Err "uvarint: value exceeds the representable Int range (max 2^62-1)"
+  else
+    -- MINIMALITY, and after the arm above it covers minimality ONLY. Do
+    -- not refactor it away as redundant with the range check: it is the
+    -- sole enforcement of the spec's MUST-reject-non-minimal-encoding
+    -- requirement (the published `{0x81, 0x00}` case), which the range
+    -- check does not touch.
+    let reencoded = uvarintEncode value
+    if B.length reencoded /= consumed
+      || not (prefixEquals reencoded bytes 0 consumed) then
+      Err "uvarint: non-minimal encoding"
     else
-      -- MINIMALITY, and after the arm above it covers minimality ONLY. Do
-      -- not refactor it away as redundant with the range check: it is the
-      -- sole enforcement of the spec's MUST-reject-non-minimal-encoding
-      -- requirement (the published `{0x81, 0x00}` case), which the range
-      -- check does not touch.
-      let reencoded = uvarintEncode value
-      if B.length reencoded /= consumed
-        || not (prefixEquals reencoded bytes 0 consumed) then
-        Err "uvarint: non-minimal encoding"
-      else
-        Ok (value, consumed)
+      Ok (value, consumed)
 
 {- | `uvarintDecode`, additionally requiring the WHOLE input be consumed.
 
@@ -185,13 +184,12 @@ uvarintDecode bytes = match uvarintDecodeGo bytes 0 (B.length bytes) 0 0
    Ok 300 -}
 export
 uvarintDecodeAll : Bytes -> Result String Int
-uvarintDecodeAll bytes = match uvarintDecode bytes
-  Err e => Err e
-  Ok (value, consumed) =>
-    if consumed /= B.length bytes then
-      Err "uvarint: trailing bytes after value"
-    else
-      Ok value
+uvarintDecodeAll bytes = do
+  (value, consumed) <- uvarintDecode bytes
+  if consumed /= B.length bytes then
+    Err "uvarint: trailing bytes after value"
+  else
+    Ok value
 
 -- ── multicodec constants (multicodec_table.csv, pinned commit above) ─────
 

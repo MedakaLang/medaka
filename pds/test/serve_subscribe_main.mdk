@@ -378,9 +378,9 @@ runLive port token did collection rkeyPrefix =
   ignoreResult (close conn)
 
 twoCommits : Connection * -> Bytes -> <Net> Result String (Int, Int)
-twoCommits conn buffered = match commitSeq conn buffered
-  Err message => Err message
-  Ok (first, rest) => map ((second, _) => (first, second)) (commitSeq conn rest)
+twoCommits conn buffered = do
+  (first, rest) <- commitSeq conn buffered
+  map ((second, _) => (first, second)) (commitSeq conn rest)
 
 -- | The sequence number of the next `#commit` event, refusing any other kind:
 -- an `#info` or an error frame where a commit is expected is a different
@@ -389,14 +389,13 @@ commitSeq : Connection * -> Bytes -> <Net> Result String (Int, Bytes)
 commitSeq conn buffered = match nextEvent conn buffered
   Err message => Err message
   Ok None => Err "serve_subscribe: stream ended before the next #commit"
-  Ok (Some (payload, rest)) => match splitEvent payload
-    Err message => Err message
-    Ok (header, body) =>
-      let kind = eventKind header
-      if kind /= "#commit" then
-        Err "serve_subscribe: expected a #commit event, got '\{kind}'"
-      else
-        Ok (intField body "seq", rest)
+  Ok (Some (payload, rest)) => do
+    (header, body) <- splitEvent payload
+    let kind = eventKind header
+    if kind /= "#commit" then
+      Err "serve_subscribe: expected a #commit event, got '\{kind}'"
+    else
+      Ok (intField body "seq", rest)
 
 {- | A repository's creation announces itself: a subscriber attached at cursor
    0 to a server whose data directory this run created receives exactly the
@@ -476,13 +475,12 @@ gradeGenesis [(identity, identityBody), (account, accountBody), (commit, commitB
     Err "serve_subscribe: genesis kinds \{join " " kinds}"
   else if seqs /= [1, 2, 3, 4] then
     Err "serve_subscribe: genesis sequence \{join " " (map intToString seqs)}"
-  else match gradeCommitCar commitBody
-    Err message => Err message
-    Ok dataCid =>
-      map
-        (head =>
-          "\{join " " kinds} at seq 1..4, #commit CAR = commit + data root \{dataCid}, #sync rooted at \{head}")
-        (gradeSyncCar commitBody syncBody)
+  else do
+    dataCid <- gradeCommitCar commitBody
+    map
+      (head =>
+        "\{join " " kinds} at seq 1..4, #commit CAR = commit + data root \{dataCid}, #sync rooted at \{head}")
+      (gradeSyncCar commitBody syncBody)
 gradeGenesis events =
   Err
     "serve_subscribe: read \{intToString (length events)} genesis events, expected \{intToString (length genesisKinds)}"
@@ -508,20 +506,19 @@ gradeCommitCar commitBody = match (
 )
   (Some head, Some (DcBytes carBytes)) => match carDecode carBytes
     Err message => Err "serve_subscribe: #commit CAR: \{message}"
-    Ok car => match commitDataCid car head
-      Err message => Err message
-      Ok dataCid =>
-        let roots = map cidToString (carRoots car)
-        let blocks = map ((cid, _) => cidToString cid) (carBlocks car)
-        if roots /= [cidToString head] then
-          Err "serve_subscribe: #commit CAR roots \{join " " roots}"
-        else if length blocks /= 2
-          || not (elem (cidToString head) blocks)
-          || not (elem dataCid blocks) then
-          Err
-            "serve_subscribe: #commit CAR blocks \{join " " blocks}, expected the commit and its data root \{dataCid}"
-        else
-          Ok dataCid
+    Ok car => do
+      dataCid <- commitDataCid car head
+      let roots = map cidToString (carRoots car)
+      let blocks = map ((cid, _) => cidToString cid) (carBlocks car)
+      if roots /= [cidToString head] then
+        Err "serve_subscribe: #commit CAR roots \{join " " roots}"
+      else if length blocks /= 2
+        || not (elem (cidToString head) blocks)
+        || not (elem dataCid blocks) then
+        Err
+          "serve_subscribe: #commit CAR blocks \{join " " blocks}, expected the commit and its data root \{dataCid}"
+      else
+        Ok dataCid
   _ => Err "serve_subscribe: #commit named no commit, or carried no blocks"
 
 -- | The `data` link inside the commit block the CAR is rooted at.
@@ -864,12 +861,11 @@ postUpdateHandle port token handle =
       (encodeUtf8
           "POST /xrpc/com.atproto.identity.updateHandle HTTP/1.1\r\nHost: 127.0.0.1\r\nAuthorization: Bearer \{token}\r\nContent-Type: application/json\r\nContent-Length: \{intToString (B.length body)}\r\n\r\n"
         ++ body)
-  let answer = match readHead conn empty
-    Err message => Err message
-    Ok (status, headerText, rest) =>
-      map
-        (text => (status, headerText, text))
-        (readRefusalBody conn headerText rest)
+  let answer = do
+    (status, headerText, rest) <- readHead conn empty
+    map
+      (text => (status, headerText, text))
+      (readRefusalBody conn headerText rest)
   let () = ignoreResult (close conn)
   answer
 
@@ -904,24 +900,23 @@ gradeHandleCell conn buffered did current previous (HandleCell sent wantStatus w
   else match nextEvent conn buffered
     Err message => Err "\{label}: \{message}"
     Ok None => Err "\{label}: stream ended before its #identity"
-    Ok (Some (payload, rest)) => match splitEvent payload
-      Err message => Err message
-      Ok (header, event) =>
-        let kind = eventKind header
-        let seq = intField event "seq"
-        let seqOk = match previous
-          None => True
-          Some prior => seq == prior + 1
-        if kind /= "#identity" then
-          Err "\{label}: expected #identity, got '\{kind}'"
-        else if textField event "did" /= did
-          || textField event "handle" /= current then
-          Err
-            "\{label}: #identity names '\{textField event "did"}' '\{textField event "handle"}'"
-        else if not seqOk then
-          Err "\{label}: #identity seq \{intToString seq} is not the next one"
-        else
-          Ok (Some seq, rest)
+    Ok (Some (payload, rest)) => do
+      (header, event) <- splitEvent payload
+      let kind = eventKind header
+      let seq = intField event "seq"
+      let seqOk = match previous
+        None => True
+        Some prior => seq == prior + 1
+      if kind /= "#identity" then
+        Err "\{label}: expected #identity, got '\{kind}'"
+      else if textField event "did" /= did
+        || textField event "handle" /= current then
+        Err
+          "\{label}: #identity names '\{textField event "did"}' '\{textField event "handle"}'"
+      else if not seqOk then
+        Err "\{label}: #identity seq \{intToString seq} is not the next one"
+      else
+        Ok (Some seq, rest)
 
 runHandleCells : Int ->
   Connection * ->
