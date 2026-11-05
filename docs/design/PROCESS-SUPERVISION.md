@@ -504,6 +504,17 @@ Prevent read-ahead loss, mixed output and descriptor replacement; silent legacy
 success/data loss after EAGAIN is unacceptable. Until that interlock or an
 enforceable MCP-entry restriction is designed, stdio integration is blocked.
 
+The [stdio authority replay](../findings/mcp-runtime-authority/STDIO.md) refuses
+the narrow all-content-openers runtime seal: it blocks required source/config
+reads, telemetry and scratch content before effects, although metadata and real
+native worker submission remain possible. Non-dumpability blocks the measured
+fresh-stdio child's parent-fd reopen, while supervisor self aliases and libc
+HOSTALIASES still transfer protocol bytes when their model guard is disabled.
+The replay also reproduces #4865's exposed stash/flush primitives and automatic
+main output outside the effect manifest. No candidate is qualified. A narrower
+file/resolver/buffering policy or an explicit protocol-owner/workspace split
+needs a new measured cut; neither cgroups nor an empty-main control supplies it.
+
 ### Candidate Linux containment and blocked proof
 
 The candidate is a Linux cgroup-v2 per-worker scope managed by a trusted
