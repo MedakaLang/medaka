@@ -554,9 +554,9 @@ takeN n (x :: rest) = x :: takeN (n - 1) rest
 -- Callers take the indexed Option once and derive every consumer from it (see
 -- applyMethodDicts).
 lookupMethodReqCountOpt : String -> String -> Option Int
-lookupMethodReqCountOpt mname tag = match omLookup mname !methodReqCountRef
-  Some routes => omLookup tag routes
-  None => None
+lookupMethodReqCountOpt mname tag = do
+  routes <- omLookup mname !methodReqCountRef
+  omLookup tag routes
 
 export
 buildCtorFieldOrders : List Decl -> List (String, List String)
@@ -938,9 +938,9 @@ matchPat (PRec ctor fields _) (VRecord ctor2 recFields)
   | ctor == ctor2 = matchRecFields fields recFields
   | otherwise = None
 matchPat (PRec ctor fields _) (VCon ctor2 vals)
-  | ctor == ctor2 = match lookupAssoc ctor !ctorFieldOrdersRef
-    Some order => matchRecFields fields (zipFieldOrder order vals)
-    None => None
+  | ctor == ctor2 = do
+    order <- lookupAssoc ctor !ctorFieldOrdersRef
+    matchRecFields fields (zipFieldOrder order vals)
   | otherwise = None
 matchPat (PRng (LInt lo) (LInt hi) incl) (VInt v)
   | inIntRange v lo hi incl = Some []
@@ -978,10 +978,13 @@ matchRecFields : List RecPatField ->
   List (String, Value e) ->
   Option (List (String, Value e))
 matchRecFields [] _ = Some []
-matchRecFields ((RecPatField fname _ _ mp) :: rest) recFields =
-  match lookupAssoc fname recFields
-    None => None
-    Some v => matchRecField fname mp v rest recFields
+-- Bound: runs once per field of every record pattern, mutually recursive with
+-- `matchRecField` through `map`; the `do` form allocated a closure per field and
+-- measurably slowed record patterns in `medaka run`.
+-- lint-disable-next-line rule-passthrough-arm
+matchRecFields ((RecPatField f _ _ mp) :: rest) fs = match lookupAssoc f fs
+  None => None
+  Some v => matchRecField f mp v rest fs
 
 -- Zip a registered ctor's field order with its positional VCon vals into a
 -- name->value assoc, so a record pattern can match a named-field data variant
@@ -999,6 +1002,10 @@ matchRecField : String ->
   Option (List (String, Value e))
 matchRecField fname None v rest recFields =
   map ((fname, v) :: _) (matchRecFields rest recFields)
+-- Bound: runs once per labelled field of every record pattern, a recursion through
+-- `map` that is not a tail call; the `do` form allocated a closure per field and
+-- measurably slowed record patterns in `medaka run`.
+-- lint-disable-next-line rule-passthrough-arm
 matchRecField _ (Some q) v rest recFields = match matchPat q v
   None => None
   Some b => map (b ++ _) (matchRecFields rest recFields)
@@ -1008,6 +1015,10 @@ matchCons : Pat ->
   Value e ->
   List (Value e) ->
   Option (List (String, Value e))
+-- Bound: runs once per cons cell of every list pattern, a recursion through `map` that is
+-- not a tail call; the `do` form allocated a closure per cell and measurably slowed
+-- list recursion in `medaka run`.
+-- lint-disable-next-line rule-passthrough-arm
 matchCons h t x xs = match matchPat h x
   None => None
   Some b1 => map (b1 ++ _) (matchPat t (VList xs))
@@ -1017,6 +1028,10 @@ matchAs x p v = map ((x, v) :: _) (matchPat p v)
 
 matchPats : List Pat -> List (Value e) -> Option (List (String, Value e))
 matchPats [] [] = Some []
+-- Bound: the pattern matcher's list-and-tuple spine, a recursion through `map` that is
+-- not a tail call; the `do` form allocated a closure per sub-pattern and measurably
+-- slowed tuple and list patterns in `medaka run`.
+-- lint-disable-next-line rule-passthrough-arm
 matchPats (p :: ps) (v :: vs) = match matchPat p v
   None => None
   Some b => map (b ++ _) (matchPats ps vs)
@@ -1499,10 +1514,9 @@ applyClosure _ [] _ _ _ = panic "applied closure with no parameters"
 applyClosure env [PVar name _ _] body _ arg =
   fallthroughToNone
     (withCallFile env (() => eval (pushFrame env [(name, Ref arg)]) body))
-applyClosure env [p] body _ arg = match matchPat p arg
-  None => None
-  Some binds =>
-    fallthroughToNone (withCallFile env (() => eval (extendEnv env binds) body))
+applyClosure env [p] body _ arg = do
+  binds <- matchPat p arg
+  fallthroughToNone (withCallFile env (() => eval (extendEnv env binds) body))
 applyClosure env ((PVar name _ _) :: ps) body site arg =
   Some (VClosure (pushFrame env [(name, Ref arg)]) ps body site)
 applyClosure env (p :: ps) body site arg =
@@ -1521,10 +1535,9 @@ applyClosureF _ [] _ _ = panic "applied closure with no parameters"
 applyClosureF env [PVar name _ _] f arg =
   fallthroughToNone
     (withCallFile env (() => f (pushFrame env [(name, Ref arg)])))
-applyClosureF env [p] f arg = match matchPat p arg
-  None => None
-  Some binds =>
-    fallthroughToNone (withCallFile env (() => f (extendEnv env binds)))
+applyClosureF env [p] f arg = do
+  binds <- matchPat p arg
+  fallthroughToNone (withCallFile env (() => f (extendEnv env binds)))
 applyClosureF env ((PVar name _ _) :: ps) f arg =
   Some (VClosureF (pushFrame env [(name, Ref arg)]) ps f)
 applyClosureF env (p :: ps) f arg =

@@ -1,5 +1,5 @@
 # META
-source_lines=5535
+source_lines=5548
 stages=DESUGAR,MARK
 # SOURCE
 -- Self-hosted eval stage — Stage-1 capstone, the tree-walking
@@ -558,9 +558,9 @@ takeN n (x :: rest) = x :: takeN (n - 1) rest
 -- Callers take the indexed Option once and derive every consumer from it (see
 -- applyMethodDicts).
 lookupMethodReqCountOpt : String -> String -> Option Int
-lookupMethodReqCountOpt mname tag = match omLookup mname !methodReqCountRef
-  Some routes => omLookup tag routes
-  None => None
+lookupMethodReqCountOpt mname tag = do
+  routes <- omLookup mname !methodReqCountRef
+  omLookup tag routes
 
 export
 buildCtorFieldOrders : List Decl -> List (String, List String)
@@ -942,9 +942,9 @@ matchPat (PRec ctor fields _) (VRecord ctor2 recFields)
   | ctor == ctor2 = matchRecFields fields recFields
   | otherwise = None
 matchPat (PRec ctor fields _) (VCon ctor2 vals)
-  | ctor == ctor2 = match lookupAssoc ctor !ctorFieldOrdersRef
-    Some order => matchRecFields fields (zipFieldOrder order vals)
-    None => None
+  | ctor == ctor2 = do
+    order <- lookupAssoc ctor !ctorFieldOrdersRef
+    matchRecFields fields (zipFieldOrder order vals)
   | otherwise = None
 matchPat (PRng (LInt lo) (LInt hi) incl) (VInt v)
   | inIntRange v lo hi incl = Some []
@@ -982,10 +982,13 @@ matchRecFields : List RecPatField ->
   List (String, Value e) ->
   Option (List (String, Value e))
 matchRecFields [] _ = Some []
-matchRecFields ((RecPatField fname _ _ mp) :: rest) recFields =
-  match lookupAssoc fname recFields
-    None => None
-    Some v => matchRecField fname mp v rest recFields
+-- Bound: runs once per field of every record pattern, mutually recursive with
+-- `matchRecField` through `map`; the `do` form allocated a closure per field and
+-- measurably slowed record patterns in `medaka run`.
+-- lint-disable-next-line rule-passthrough-arm
+matchRecFields ((RecPatField f _ _ mp) :: rest) fs = match lookupAssoc f fs
+  None => None
+  Some v => matchRecField f mp v rest fs
 
 -- Zip a registered ctor's field order with its positional VCon vals into a
 -- name->value assoc, so a record pattern can match a named-field data variant
@@ -1003,6 +1006,10 @@ matchRecField : String ->
   Option (List (String, Value e))
 matchRecField fname None v rest recFields =
   map ((fname, v) :: _) (matchRecFields rest recFields)
+-- Bound: runs once per labelled field of every record pattern, a recursion through
+-- `map` that is not a tail call; the `do` form allocated a closure per field and
+-- measurably slowed record patterns in `medaka run`.
+-- lint-disable-next-line rule-passthrough-arm
 matchRecField _ (Some q) v rest recFields = match matchPat q v
   None => None
   Some b => map (b ++ _) (matchRecFields rest recFields)
@@ -1012,6 +1019,10 @@ matchCons : Pat ->
   Value e ->
   List (Value e) ->
   Option (List (String, Value e))
+-- Bound: runs once per cons cell of every list pattern, a recursion through `map` that is
+-- not a tail call; the `do` form allocated a closure per cell and measurably slowed
+-- list recursion in `medaka run`.
+-- lint-disable-next-line rule-passthrough-arm
 matchCons h t x xs = match matchPat h x
   None => None
   Some b1 => map (b1 ++ _) (matchPat t (VList xs))
@@ -1021,6 +1032,10 @@ matchAs x p v = map ((x, v) :: _) (matchPat p v)
 
 matchPats : List Pat -> List (Value e) -> Option (List (String, Value e))
 matchPats [] [] = Some []
+-- Bound: the pattern matcher's list-and-tuple spine, a recursion through `map` that is
+-- not a tail call; the `do` form allocated a closure per sub-pattern and measurably
+-- slowed tuple and list patterns in `medaka run`.
+-- lint-disable-next-line rule-passthrough-arm
 matchPats (p :: ps) (v :: vs) = match matchPat p v
   None => None
   Some b => map (b ++ _) (matchPats ps vs)
@@ -1503,10 +1518,9 @@ applyClosure _ [] _ _ _ = panic "applied closure with no parameters"
 applyClosure env [PVar name _ _] body _ arg =
   fallthroughToNone
     (withCallFile env (() => eval (pushFrame env [(name, Ref arg)]) body))
-applyClosure env [p] body _ arg = match matchPat p arg
-  None => None
-  Some binds =>
-    fallthroughToNone (withCallFile env (() => eval (extendEnv env binds) body))
+applyClosure env [p] body _ arg = do
+  binds <- matchPat p arg
+  fallthroughToNone (withCallFile env (() => eval (extendEnv env binds) body))
 applyClosure env ((PVar name _ _) :: ps) body site arg =
   Some (VClosure (pushFrame env [(name, Ref arg)]) ps body site)
 applyClosure env (p :: ps) body site arg =
@@ -1525,10 +1539,9 @@ applyClosureF _ [] _ _ = panic "applied closure with no parameters"
 applyClosureF env [PVar name _ _] f arg =
   fallthroughToNone
     (withCallFile env (() => f (pushFrame env [(name, Ref arg)])))
-applyClosureF env [p] f arg = match matchPat p arg
-  None => None
-  Some binds =>
-    fallthroughToNone (withCallFile env (() => f (extendEnv env binds)))
+applyClosureF env [p] f arg = do
+  binds <- matchPat p arg
+  fallthroughToNone (withCallFile env (() => f (extendEnv env binds)))
 applyClosureF env ((PVar name _ _) :: ps) f arg =
   Some (VClosureF (pushFrame env [(name, Ref arg)]) ps f)
 applyClosureF env (p :: ps) f arg =
@@ -5677,7 +5690,7 @@ evalOneRootEnvFacts facts extraExterns preludeDecls (rootId, prog) =
 (DFunDef false "takeN" (PWild (PList)) (EListLit))
 (DFunDef false "takeN" ((PVar "n") (PCons (PVar "x") (PVar "rest"))) (EBinOp "::" (EVar "x") (EApp (EApp (EVar "takeN") (EBinOp "-" (EVar "n") (ELit (LInt 1)))) (EVar "rest"))))
 (DTypeSig false "lookupMethodReqCountOpt" (TyFun (TyCon "String") (TyFun (TyCon "String") (TyApp (TyCon "Option") (TyCon "Int")))))
-(DFunDef false "lookupMethodReqCountOpt" ((PVar "mname") (PVar "tag")) (EMatch (EApp (EApp (EVar "omLookup") (EVar "mname")) (EUnOp "!" (EVar "methodReqCountRef"))) (arm (PCon "Some" (PVar "routes")) () (EApp (EApp (EVar "omLookup") (EVar "tag")) (EVar "routes"))) (arm (PCon "None") () (EVar "None"))))
+(DFunDef false "lookupMethodReqCountOpt" ((PVar "mname") (PVar "tag")) (EApp (EApp (EVar "andThen") (EApp (EApp (EVar "omLookup") (EVar "mname")) (EUnOp "!" (EVar "methodReqCountRef")))) (ELam ((PVar "routes")) (EApp (EApp (EVar "omLookup") (EVar "tag")) (EVar "routes")))))
 (DTypeSig true "buildCtorFieldOrders" (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "String"))))))
 (DFunDef false "buildCtorFieldOrders" ((PVar "prog")) (EApp (EApp (EVar "flatMap") (EVar "ctorFieldOrderEntries")) (EVar "prog")))
 (DTypeSig false "ctorFieldOrderEntries" (TyFun (TyCon "Decl") (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "String"))))))
@@ -5871,7 +5884,7 @@ evalOneRootEnvFacts facts extraExterns preludeDecls (rootId, prog) =
 (DFunDef false "matchPat" ((PCon "PList" (PVar "pats")) (PCon "VList" (PVar "vals"))) (EApp (EApp (EVar "matchPats") (EVar "pats")) (EVar "vals")))
 (DFunDef false "matchPat" ((PCon "PAs" (PVar "x") PWild PWild (PVar "p")) (PVar "v")) (EApp (EApp (EApp (EVar "matchAs") (EVar "x")) (EVar "p")) (EVar "v")))
 (DFunDef false "matchPat" ((PCon "PRec" (PVar "ctor") (PVar "fields") PWild) (PCon "VRecord" (PVar "ctor2") (PVar "recFields"))) (EIf (EBinOp "==" (EVar "ctor") (EVar "ctor2")) (EApp (EApp (EVar "matchRecFields") (EVar "fields")) (EVar "recFields")) (EIf (EVar "otherwise") (EVar "None") (EApp (EVar "__fallthrough__") (ELit LUnit)))))
-(DFunDef false "matchPat" ((PCon "PRec" (PVar "ctor") (PVar "fields") PWild) (PCon "VCon" (PVar "ctor2") (PVar "vals"))) (EIf (EBinOp "==" (EVar "ctor") (EVar "ctor2")) (EMatch (EApp (EApp (EVar "lookupAssoc") (EVar "ctor")) (EUnOp "!" (EVar "ctorFieldOrdersRef"))) (arm (PCon "Some" (PVar "order")) () (EApp (EApp (EVar "matchRecFields") (EVar "fields")) (EApp (EApp (EVar "zipFieldOrder") (EVar "order")) (EVar "vals")))) (arm (PCon "None") () (EVar "None"))) (EIf (EVar "otherwise") (EVar "None") (EApp (EVar "__fallthrough__") (ELit LUnit)))))
+(DFunDef false "matchPat" ((PCon "PRec" (PVar "ctor") (PVar "fields") PWild) (PCon "VCon" (PVar "ctor2") (PVar "vals"))) (EIf (EBinOp "==" (EVar "ctor") (EVar "ctor2")) (EApp (EApp (EVar "andThen") (EApp (EApp (EVar "lookupAssoc") (EVar "ctor")) (EUnOp "!" (EVar "ctorFieldOrdersRef")))) (ELam ((PVar "order")) (EApp (EApp (EVar "matchRecFields") (EVar "fields")) (EApp (EApp (EVar "zipFieldOrder") (EVar "order")) (EVar "vals"))))) (EIf (EVar "otherwise") (EVar "None") (EApp (EVar "__fallthrough__") (ELit LUnit)))))
 (DFunDef false "matchPat" ((PCon "PRng" (PCon "LInt" (PVar "lo")) (PCon "LInt" (PVar "hi")) (PVar "incl")) (PCon "VInt" (PVar "v"))) (EIf (EApp (EApp (EApp (EApp (EVar "inIntRange") (EVar "v")) (EVar "lo")) (EVar "hi")) (EVar "incl")) (EApp (EVar "Some") (EListLit)) (EApp (EVar "__fallthrough__") (ELit LUnit))))
 (DFunDef false "matchPat" ((PCon "PRng" (PCon "LChar" (PVar "lo")) (PCon "LChar" (PVar "hi")) (PVar "incl")) (PCon "VChar" (PVar "c"))) (EIf (EApp (EApp (EApp (EApp (EVar "inCharRange") (EVar "c")) (EVar "lo")) (EVar "hi")) (EVar "incl")) (EApp (EVar "Some") (EListLit)) (EApp (EVar "__fallthrough__") (ELit LUnit))))
 (DFunDef false "matchPat" ((PCon "PRng" (PCon "LByte" (PVar "lo")) (PCon "LByte" (PVar "hi")) (PVar "incl")) (PCon "VInt" (PVar "v"))) (EIf (EApp (EApp (EApp (EApp (EVar "inIntRange") (EVar "v")) (EVar "lo")) (EVar "hi")) (EVar "incl")) (EApp (EVar "Some") (EListLit)) (EApp (EVar "__fallthrough__") (ELit LUnit))))
@@ -5889,7 +5902,7 @@ evalOneRootEnvFacts facts extraExterns preludeDecls (rootId, prog) =
 (DFunDef false "charUpper" ((PVar "c") (PVar "hi") (PCon "False")) (EApp (EVar "ordLt") (EApp (EApp (EVar "stringCompare") (EVar "c")) (EVar "hi"))))
 (DTypeSig false "matchRecFields" (TyFun (TyApp (TyCon "List") (TyCon "RecPatField")) (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "Value") (TyVar "e")))) (TyApp (TyCon "Option") (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "Value") (TyVar "e"))))))))
 (DFunDef false "matchRecFields" ((PList) PWild) (EApp (EVar "Some") (EListLit)))
-(DFunDef false "matchRecFields" ((PCons (PCon "RecPatField" (PVar "fname") PWild PWild (PVar "mp")) (PVar "rest")) (PVar "recFields")) (EMatch (EApp (EApp (EVar "lookupAssoc") (EVar "fname")) (EVar "recFields")) (arm (PCon "None") () (EVar "None")) (arm (PCon "Some" (PVar "v")) () (EApp (EApp (EApp (EApp (EApp (EVar "matchRecField") (EVar "fname")) (EVar "mp")) (EVar "v")) (EVar "rest")) (EVar "recFields")))))
+(DFunDef false "matchRecFields" ((PCons (PCon "RecPatField" (PVar "f") PWild PWild (PVar "mp")) (PVar "rest")) (PVar "fs")) (EMatch (EApp (EApp (EVar "lookupAssoc") (EVar "f")) (EVar "fs")) (arm (PCon "None") () (EVar "None")) (arm (PCon "Some" (PVar "v")) () (EApp (EApp (EApp (EApp (EApp (EVar "matchRecField") (EVar "f")) (EVar "mp")) (EVar "v")) (EVar "rest")) (EVar "fs")))))
 (DTypeSig false "zipFieldOrder" (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyApp (TyCon "List") (TyApp (TyCon "Value") (TyVar "e"))) (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "Value") (TyVar "e")))))))
 (DFunDef false "zipFieldOrder" ((PList) PWild) (EListLit))
 (DFunDef false "zipFieldOrder" (PWild (PList)) (EListLit))
@@ -6049,13 +6062,13 @@ evalOneRootEnvFacts facts extraExterns preludeDecls (rootId, prog) =
 (DTypeSig false "applyClosure" (TyFun (TyApp (TyCon "EvalEnv") (TyApp (TyCon "Value") (TyVar "e"))) (TyFun (TyApp (TyCon "List") (TyCon "Pat")) (TyFun (TyCon "Expr") (TyFun (TyCon "Loc") (TyFun (TyApp (TyCon "Value") (TyVar "e")) (TyEffect () (Some "e") (TyApp (TyCon "Option") (TyApp (TyCon "Value") (TyVar "e"))))))))))
 (DFunDef false "applyClosure" (PWild (PList) PWild PWild PWild) (EApp (EVar "panic") (ELit (LString "applied closure with no parameters"))))
 (DFunDef false "applyClosure" ((PVar "env") (PList (PCon "PVar" (PVar "name") PWild PWild)) (PVar "body") PWild (PVar "arg")) (EApp (EVar "fallthroughToNone") (EApp (EApp (EVar "withCallFile") (EVar "env")) (ELam ((PLit LUnit)) (EApp (EApp (EVar "eval") (EApp (EApp (EVar "pushFrame") (EVar "env")) (EListLit (ETuple (EVar "name") (EApp (EVar "Ref") (EVar "arg")))))) (EVar "body"))))))
-(DFunDef false "applyClosure" ((PVar "env") (PList (PVar "p")) (PVar "body") PWild (PVar "arg")) (EMatch (EApp (EApp (EVar "matchPat") (EVar "p")) (EVar "arg")) (arm (PCon "None") () (EVar "None")) (arm (PCon "Some" (PVar "binds")) () (EApp (EVar "fallthroughToNone") (EApp (EApp (EVar "withCallFile") (EVar "env")) (ELam ((PLit LUnit)) (EApp (EApp (EVar "eval") (EApp (EApp (EVar "extendEnv") (EVar "env")) (EVar "binds"))) (EVar "body"))))))))
+(DFunDef false "applyClosure" ((PVar "env") (PList (PVar "p")) (PVar "body") PWild (PVar "arg")) (EApp (EApp (EVar "andThen") (EApp (EApp (EVar "matchPat") (EVar "p")) (EVar "arg"))) (ELam ((PVar "binds")) (EApp (EVar "fallthroughToNone") (EApp (EApp (EVar "withCallFile") (EVar "env")) (ELam ((PLit LUnit)) (EApp (EApp (EVar "eval") (EApp (EApp (EVar "extendEnv") (EVar "env")) (EVar "binds"))) (EVar "body"))))))))
 (DFunDef false "applyClosure" ((PVar "env") (PCons (PCon "PVar" (PVar "name") PWild PWild) (PVar "ps")) (PVar "body") (PVar "site") (PVar "arg")) (EApp (EVar "Some") (EApp (EApp (EApp (EApp (EVar "VClosure") (EApp (EApp (EVar "pushFrame") (EVar "env")) (EListLit (ETuple (EVar "name") (EApp (EVar "Ref") (EVar "arg")))))) (EVar "ps")) (EVar "body")) (EVar "site"))))
 (DFunDef false "applyClosure" ((PVar "env") (PCons (PVar "p") (PVar "ps")) (PVar "body") (PVar "site") (PVar "arg")) (EApp (EApp (EVar "map") (ELam ((PVar "binds")) (EApp (EApp (EApp (EApp (EVar "VClosure") (EApp (EApp (EVar "extendEnv") (EVar "env")) (EVar "binds"))) (EVar "ps")) (EVar "body")) (EVar "site")))) (EApp (EApp (EVar "matchPat") (EVar "p")) (EVar "arg"))))
 (DTypeSig true "applyClosureF" (TyFun (TyApp (TyCon "EvalEnv") (TyApp (TyCon "Value") (TyVar "e"))) (TyFun (TyApp (TyCon "List") (TyCon "Pat")) (TyFun (TyFun (TyApp (TyCon "EvalEnv") (TyApp (TyCon "Value") (TyVar "e"))) (TyEffect () (Some "e") (TyApp (TyCon "Value") (TyVar "e")))) (TyFun (TyApp (TyCon "Value") (TyVar "e")) (TyEffect () (Some "e") (TyApp (TyCon "Option") (TyApp (TyCon "Value") (TyVar "e")))))))))
 (DFunDef false "applyClosureF" (PWild (PList) PWild PWild) (EApp (EVar "panic") (ELit (LString "applied closure with no parameters"))))
 (DFunDef false "applyClosureF" ((PVar "env") (PList (PCon "PVar" (PVar "name") PWild PWild)) (PVar "f") (PVar "arg")) (EApp (EVar "fallthroughToNone") (EApp (EApp (EVar "withCallFile") (EVar "env")) (ELam ((PLit LUnit)) (EApp (EVar "f") (EApp (EApp (EVar "pushFrame") (EVar "env")) (EListLit (ETuple (EVar "name") (EApp (EVar "Ref") (EVar "arg"))))))))))
-(DFunDef false "applyClosureF" ((PVar "env") (PList (PVar "p")) (PVar "f") (PVar "arg")) (EMatch (EApp (EApp (EVar "matchPat") (EVar "p")) (EVar "arg")) (arm (PCon "None") () (EVar "None")) (arm (PCon "Some" (PVar "binds")) () (EApp (EVar "fallthroughToNone") (EApp (EApp (EVar "withCallFile") (EVar "env")) (ELam ((PLit LUnit)) (EApp (EVar "f") (EApp (EApp (EVar "extendEnv") (EVar "env")) (EVar "binds")))))))))
+(DFunDef false "applyClosureF" ((PVar "env") (PList (PVar "p")) (PVar "f") (PVar "arg")) (EApp (EApp (EVar "andThen") (EApp (EApp (EVar "matchPat") (EVar "p")) (EVar "arg"))) (ELam ((PVar "binds")) (EApp (EVar "fallthroughToNone") (EApp (EApp (EVar "withCallFile") (EVar "env")) (ELam ((PLit LUnit)) (EApp (EVar "f") (EApp (EApp (EVar "extendEnv") (EVar "env")) (EVar "binds")))))))))
 (DFunDef false "applyClosureF" ((PVar "env") (PCons (PCon "PVar" (PVar "name") PWild PWild) (PVar "ps")) (PVar "f") (PVar "arg")) (EApp (EVar "Some") (EApp (EApp (EApp (EVar "VClosureF") (EApp (EApp (EVar "pushFrame") (EVar "env")) (EListLit (ETuple (EVar "name") (EApp (EVar "Ref") (EVar "arg")))))) (EVar "ps")) (EVar "f"))))
 (DFunDef false "applyClosureF" ((PVar "env") (PCons (PVar "p") (PVar "ps")) (PVar "f") (PVar "arg")) (EApp (EApp (EVar "map") (ELam ((PVar "binds")) (EApp (EApp (EApp (EVar "VClosureF") (EApp (EApp (EVar "extendEnv") (EVar "env")) (EVar "binds"))) (EVar "ps")) (EVar "f")))) (EApp (EApp (EVar "matchPat") (EVar "p")) (EVar "arg"))))
 (DTypeSig false "fallthroughToNone" (TyFun (TyApp (TyCon "Value") (TyVar "e")) (TyApp (TyCon "Option") (TyApp (TyCon "Value") (TyVar "e")))))
@@ -7494,7 +7507,7 @@ evalOneRootEnvFacts facts extraExterns preludeDecls (rootId, prog) =
 (DFunDef false "takeN" (PWild (PList)) (EListLit))
 (DFunDef false "takeN" ((PVar "n") (PCons (PVar "x") (PVar "rest"))) (EBinOp "::" (EVar "x") (EApp (EApp (EVar "takeN") (EBinOp "-" (EVar "n") (ELit (LInt 1)))) (EVar "rest"))))
 (DTypeSig false "lookupMethodReqCountOpt" (TyFun (TyCon "String") (TyFun (TyCon "String") (TyApp (TyCon "Option") (TyCon "Int")))))
-(DFunDef false "lookupMethodReqCountOpt" ((PVar "mname") (PVar "tag")) (EMatch (EApp (EApp (EVar "omLookup") (EVar "mname")) (EUnOp "!" (EVar "methodReqCountRef"))) (arm (PCon "Some" (PVar "routes")) () (EApp (EApp (EVar "omLookup") (EVar "tag")) (EVar "routes"))) (arm (PCon "None") () (EVar "None"))))
+(DFunDef false "lookupMethodReqCountOpt" ((PVar "mname") (PVar "tag")) (EApp (EApp (EMethodRef "andThen") (EApp (EApp (EVar "omLookup") (EVar "mname")) (EUnOp "!" (EVar "methodReqCountRef")))) (ELam ((PVar "routes")) (EApp (EApp (EVar "omLookup") (EVar "tag")) (EVar "routes")))))
 (DTypeSig true "buildCtorFieldOrders" (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "String"))))))
 (DFunDef false "buildCtorFieldOrders" ((PVar "prog")) (EApp (EApp (EDictApp "flatMap") (EVar "ctorFieldOrderEntries")) (EVar "prog")))
 (DTypeSig false "ctorFieldOrderEntries" (TyFun (TyCon "Decl") (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "String"))))))
@@ -7688,7 +7701,7 @@ evalOneRootEnvFacts facts extraExterns preludeDecls (rootId, prog) =
 (DFunDef false "matchPat" ((PCon "PList" (PVar "pats")) (PCon "VList" (PVar "vals"))) (EApp (EApp (EVar "matchPats") (EVar "pats")) (EVar "vals")))
 (DFunDef false "matchPat" ((PCon "PAs" (PVar "x") PWild PWild (PVar "p")) (PVar "v")) (EApp (EApp (EApp (EVar "matchAs") (EVar "x")) (EVar "p")) (EVar "v")))
 (DFunDef false "matchPat" ((PCon "PRec" (PVar "ctor") (PVar "fields") PWild) (PCon "VRecord" (PVar "ctor2") (PVar "recFields"))) (EIf (EBinOp "==" (EVar "ctor") (EVar "ctor2")) (EApp (EApp (EVar "matchRecFields") (EVar "fields")) (EVar "recFields")) (EIf (EVar "otherwise") (EVar "None") (EApp (EVar "__fallthrough__") (ELit LUnit)))))
-(DFunDef false "matchPat" ((PCon "PRec" (PVar "ctor") (PVar "fields") PWild) (PCon "VCon" (PVar "ctor2") (PVar "vals"))) (EIf (EBinOp "==" (EVar "ctor") (EVar "ctor2")) (EMatch (EApp (EApp (EVar "lookupAssoc") (EVar "ctor")) (EUnOp "!" (EVar "ctorFieldOrdersRef"))) (arm (PCon "Some" (PVar "order")) () (EApp (EApp (EVar "matchRecFields") (EVar "fields")) (EApp (EApp (EVar "zipFieldOrder") (EVar "order")) (EVar "vals")))) (arm (PCon "None") () (EVar "None"))) (EIf (EVar "otherwise") (EVar "None") (EApp (EVar "__fallthrough__") (ELit LUnit)))))
+(DFunDef false "matchPat" ((PCon "PRec" (PVar "ctor") (PVar "fields") PWild) (PCon "VCon" (PVar "ctor2") (PVar "vals"))) (EIf (EBinOp "==" (EVar "ctor") (EVar "ctor2")) (EApp (EApp (EMethodRef "andThen") (EApp (EApp (EVar "lookupAssoc") (EVar "ctor")) (EUnOp "!" (EVar "ctorFieldOrdersRef")))) (ELam ((PVar "order")) (EApp (EApp (EVar "matchRecFields") (EVar "fields")) (EApp (EApp (EVar "zipFieldOrder") (EVar "order")) (EVar "vals"))))) (EIf (EVar "otherwise") (EVar "None") (EApp (EVar "__fallthrough__") (ELit LUnit)))))
 (DFunDef false "matchPat" ((PCon "PRng" (PCon "LInt" (PVar "lo")) (PCon "LInt" (PVar "hi")) (PVar "incl")) (PCon "VInt" (PVar "v"))) (EIf (EApp (EApp (EApp (EApp (EVar "inIntRange") (EVar "v")) (EVar "lo")) (EVar "hi")) (EVar "incl")) (EApp (EVar "Some") (EListLit)) (EApp (EVar "__fallthrough__") (ELit LUnit))))
 (DFunDef false "matchPat" ((PCon "PRng" (PCon "LChar" (PVar "lo")) (PCon "LChar" (PVar "hi")) (PVar "incl")) (PCon "VChar" (PVar "c"))) (EIf (EApp (EApp (EApp (EApp (EVar "inCharRange") (EVar "c")) (EVar "lo")) (EVar "hi")) (EVar "incl")) (EApp (EVar "Some") (EListLit)) (EApp (EVar "__fallthrough__") (ELit LUnit))))
 (DFunDef false "matchPat" ((PCon "PRng" (PCon "LByte" (PVar "lo")) (PCon "LByte" (PVar "hi")) (PVar "incl")) (PCon "VInt" (PVar "v"))) (EIf (EApp (EApp (EApp (EApp (EVar "inIntRange") (EVar "v")) (EVar "lo")) (EVar "hi")) (EVar "incl")) (EApp (EVar "Some") (EListLit)) (EApp (EVar "__fallthrough__") (ELit LUnit))))
@@ -7706,7 +7719,7 @@ evalOneRootEnvFacts facts extraExterns preludeDecls (rootId, prog) =
 (DFunDef false "charUpper" ((PVar "c") (PVar "hi") (PCon "False")) (EApp (EVar "ordLt") (EApp (EApp (EVar "stringCompare") (EVar "c")) (EVar "hi"))))
 (DTypeSig false "matchRecFields" (TyFun (TyApp (TyCon "List") (TyCon "RecPatField")) (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "Value") (TyVar "e")))) (TyApp (TyCon "Option") (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "Value") (TyVar "e"))))))))
 (DFunDef false "matchRecFields" ((PList) PWild) (EApp (EVar "Some") (EListLit)))
-(DFunDef false "matchRecFields" ((PCons (PCon "RecPatField" (PVar "fname") PWild PWild (PVar "mp")) (PVar "rest")) (PVar "recFields")) (EMatch (EApp (EApp (EVar "lookupAssoc") (EVar "fname")) (EVar "recFields")) (arm (PCon "None") () (EVar "None")) (arm (PCon "Some" (PVar "v")) () (EApp (EApp (EApp (EApp (EApp (EVar "matchRecField") (EVar "fname")) (EVar "mp")) (EVar "v")) (EVar "rest")) (EVar "recFields")))))
+(DFunDef false "matchRecFields" ((PCons (PCon "RecPatField" (PVar "f") PWild PWild (PVar "mp")) (PVar "rest")) (PVar "fs")) (EMatch (EApp (EApp (EVar "lookupAssoc") (EVar "f")) (EVar "fs")) (arm (PCon "None") () (EVar "None")) (arm (PCon "Some" (PVar "v")) () (EApp (EApp (EApp (EApp (EApp (EVar "matchRecField") (EVar "f")) (EVar "mp")) (EVar "v")) (EVar "rest")) (EVar "fs")))))
 (DTypeSig false "zipFieldOrder" (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyApp (TyCon "List") (TyApp (TyCon "Value") (TyVar "e"))) (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "Value") (TyVar "e")))))))
 (DFunDef false "zipFieldOrder" ((PList) PWild) (EListLit))
 (DFunDef false "zipFieldOrder" (PWild (PList)) (EListLit))
@@ -7866,13 +7879,13 @@ evalOneRootEnvFacts facts extraExterns preludeDecls (rootId, prog) =
 (DTypeSig false "applyClosure" (TyFun (TyApp (TyCon "EvalEnv") (TyApp (TyCon "Value") (TyVar "e"))) (TyFun (TyApp (TyCon "List") (TyCon "Pat")) (TyFun (TyCon "Expr") (TyFun (TyCon "Loc") (TyFun (TyApp (TyCon "Value") (TyVar "e")) (TyEffect () (Some "e") (TyApp (TyCon "Option") (TyApp (TyCon "Value") (TyVar "e"))))))))))
 (DFunDef false "applyClosure" (PWild (PList) PWild PWild PWild) (EApp (EVar "panic") (ELit (LString "applied closure with no parameters"))))
 (DFunDef false "applyClosure" ((PVar "env") (PList (PCon "PVar" (PVar "name") PWild PWild)) (PVar "body") PWild (PVar "arg")) (EApp (EVar "fallthroughToNone") (EApp (EApp (EVar "withCallFile") (EVar "env")) (ELam ((PLit LUnit)) (EApp (EApp (EVar "eval") (EApp (EApp (EVar "pushFrame") (EVar "env")) (EListLit (ETuple (EVar "name") (EApp (EVar "Ref") (EVar "arg")))))) (EVar "body"))))))
-(DFunDef false "applyClosure" ((PVar "env") (PList (PVar "p")) (PVar "body") PWild (PVar "arg")) (EMatch (EApp (EApp (EVar "matchPat") (EVar "p")) (EVar "arg")) (arm (PCon "None") () (EVar "None")) (arm (PCon "Some" (PVar "binds")) () (EApp (EVar "fallthroughToNone") (EApp (EApp (EVar "withCallFile") (EVar "env")) (ELam ((PLit LUnit)) (EApp (EApp (EVar "eval") (EApp (EApp (EVar "extendEnv") (EVar "env")) (EVar "binds"))) (EVar "body"))))))))
+(DFunDef false "applyClosure" ((PVar "env") (PList (PVar "p")) (PVar "body") PWild (PVar "arg")) (EApp (EApp (EMethodRef "andThen") (EApp (EApp (EVar "matchPat") (EVar "p")) (EVar "arg"))) (ELam ((PVar "binds")) (EApp (EVar "fallthroughToNone") (EApp (EApp (EVar "withCallFile") (EVar "env")) (ELam ((PLit LUnit)) (EApp (EApp (EVar "eval") (EApp (EApp (EVar "extendEnv") (EVar "env")) (EVar "binds"))) (EVar "body"))))))))
 (DFunDef false "applyClosure" ((PVar "env") (PCons (PCon "PVar" (PVar "name") PWild PWild) (PVar "ps")) (PVar "body") (PVar "site") (PVar "arg")) (EApp (EVar "Some") (EApp (EApp (EApp (EApp (EVar "VClosure") (EApp (EApp (EVar "pushFrame") (EVar "env")) (EListLit (ETuple (EVar "name") (EApp (EVar "Ref") (EVar "arg")))))) (EVar "ps")) (EVar "body")) (EVar "site"))))
 (DFunDef false "applyClosure" ((PVar "env") (PCons (PVar "p") (PVar "ps")) (PVar "body") (PVar "site") (PVar "arg")) (EApp (EApp (EMethodRef "map") (ELam ((PVar "binds")) (EApp (EApp (EApp (EApp (EVar "VClosure") (EApp (EApp (EVar "extendEnv") (EVar "env")) (EVar "binds"))) (EVar "ps")) (EVar "body")) (EVar "site")))) (EApp (EApp (EVar "matchPat") (EVar "p")) (EVar "arg"))))
 (DTypeSig true "applyClosureF" (TyFun (TyApp (TyCon "EvalEnv") (TyApp (TyCon "Value") (TyVar "e"))) (TyFun (TyApp (TyCon "List") (TyCon "Pat")) (TyFun (TyFun (TyApp (TyCon "EvalEnv") (TyApp (TyCon "Value") (TyVar "e"))) (TyEffect () (Some "e") (TyApp (TyCon "Value") (TyVar "e")))) (TyFun (TyApp (TyCon "Value") (TyVar "e")) (TyEffect () (Some "e") (TyApp (TyCon "Option") (TyApp (TyCon "Value") (TyVar "e")))))))))
 (DFunDef false "applyClosureF" (PWild (PList) PWild PWild) (EApp (EVar "panic") (ELit (LString "applied closure with no parameters"))))
 (DFunDef false "applyClosureF" ((PVar "env") (PList (PCon "PVar" (PVar "name") PWild PWild)) (PVar "f") (PVar "arg")) (EApp (EVar "fallthroughToNone") (EApp (EApp (EVar "withCallFile") (EVar "env")) (ELam ((PLit LUnit)) (EApp (EVar "f") (EApp (EApp (EVar "pushFrame") (EVar "env")) (EListLit (ETuple (EVar "name") (EApp (EVar "Ref") (EVar "arg"))))))))))
-(DFunDef false "applyClosureF" ((PVar "env") (PList (PVar "p")) (PVar "f") (PVar "arg")) (EMatch (EApp (EApp (EVar "matchPat") (EVar "p")) (EVar "arg")) (arm (PCon "None") () (EVar "None")) (arm (PCon "Some" (PVar "binds")) () (EApp (EVar "fallthroughToNone") (EApp (EApp (EVar "withCallFile") (EVar "env")) (ELam ((PLit LUnit)) (EApp (EVar "f") (EApp (EApp (EVar "extendEnv") (EVar "env")) (EVar "binds")))))))))
+(DFunDef false "applyClosureF" ((PVar "env") (PList (PVar "p")) (PVar "f") (PVar "arg")) (EApp (EApp (EMethodRef "andThen") (EApp (EApp (EVar "matchPat") (EVar "p")) (EVar "arg"))) (ELam ((PVar "binds")) (EApp (EVar "fallthroughToNone") (EApp (EApp (EVar "withCallFile") (EVar "env")) (ELam ((PLit LUnit)) (EApp (EVar "f") (EApp (EApp (EVar "extendEnv") (EVar "env")) (EVar "binds")))))))))
 (DFunDef false "applyClosureF" ((PVar "env") (PCons (PCon "PVar" (PVar "name") PWild PWild) (PVar "ps")) (PVar "f") (PVar "arg")) (EApp (EVar "Some") (EApp (EApp (EApp (EVar "VClosureF") (EApp (EApp (EVar "pushFrame") (EVar "env")) (EListLit (ETuple (EVar "name") (EApp (EVar "Ref") (EVar "arg")))))) (EVar "ps")) (EVar "f"))))
 (DFunDef false "applyClosureF" ((PVar "env") (PCons (PVar "p") (PVar "ps")) (PVar "f") (PVar "arg")) (EApp (EApp (EMethodRef "map") (ELam ((PVar "binds")) (EApp (EApp (EApp (EVar "VClosureF") (EApp (EApp (EVar "extendEnv") (EVar "env")) (EVar "binds"))) (EVar "ps")) (EVar "f")))) (EApp (EApp (EVar "matchPat") (EVar "p")) (EVar "arg"))))
 (DTypeSig false "fallthroughToNone" (TyFun (TyApp (TyCon "Value") (TyVar "e")) (TyApp (TyCon "Option") (TyApp (TyCon "Value") (TyVar "e")))))
