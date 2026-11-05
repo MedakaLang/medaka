@@ -258,6 +258,7 @@ projectRuleActive only disable r =
 (DTypeSig true "projectRuleActive" (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyCon "ProjectRule") (TyCon "Bool")))))
 (DFunDef false "projectRuleActive" ((PVar "only") (PVar "disable") (PVar "r")) (EBinOp "&&" (EBinOp "&&" (EFieldAccess (EVar "r") "enabled") (EBinOp "||" (EApp (EVar "isEmptyL") (EVar "only")) (EApp (EApp (EVar "contains") (EFieldAccess (EVar "r") "name")) (EVar "only")))) (EApp (EVar "not") (EApp (EApp (EVar "contains") (EFieldAccess (EVar "r") "name")) (EVar "disable")))))
 # MARK
+(DUse false (UseAlias ("core") "$core"))
 (DUse false (UseGroup ("support" "util") ((mem "contains" false) (mem "anyList" false) (mem "filterList" false) (mem "isEmptyL" false))))
 (DUse false (UseGroup ("tools" "lint_core") ((mem "ProjectRule" true) (mem "Ratchet" true) (mem "Rule" true) (mem "RuleMeta" true))))
 (DUse false (UseAlias ("tools" "lint_rule_internal_match_on_param") "MatchOnParam"))
@@ -311,7 +312,7 @@ projectRuleActive only disable r =
 (DTypeSig true "projectRuleMetaProblems" (TyFun (TyApp (TyCon "List") (TyCon "ProjectRule")) (TyApp (TyCon "List") (TyCon "String"))))
 (DFunDef false "projectRuleMetaProblems" ((PVar "rules")) (EApp (EApp (EDictApp "flatMap") (EVar "projectRuleProblems")) (EVar "rules")))
 (DTypeSig false "projectRuleProblems" (TyFun (TyCon "ProjectRule") (TyApp (TyCon "List") (TyCon "String"))))
-(DFunDef false "projectRuleProblems" ((PVar "r")) (EMatch (EFieldAccess (EFieldAccess (EVar "r") "meta") "ratchet") (arm (PCon "Baselined") () (EListLit (EBinOp "++" (EBinOp "++" (ELit (LString "project rule `")) (EApp (EMethodRef "display") (EFieldAccess (EVar "r") "name"))) (ELit (LString "` is Baselined; only a per-file rule can be (no count row exists for a project finding), so it would be enforced by nothing"))))) (arm (PCon "Gated") () (EListLit))))
+(DFunDef false "projectRuleProblems" ((PVar "r")) (EMatch (EFieldAccess (EFieldAccess (EVar "r") "meta") "ratchet") (arm (PCon "Baselined") () (EListLit (EBinOp "++" (EBinOp "++" (ELit (LString "project rule `")) (EApp (EVar "$core.display") (EFieldAccess (EVar "r") "name"))) (ELit (LString "` is Baselined; only a per-file rule can be (no count row exists for a project finding), so it would be enforced by nothing"))))) (arm (PCon "Gated") () (EListLit))))
 (DTypeSig true "allRuleNames" (TyApp (TyCon "List") (TyCon "String")))
 (DFunDef false "allRuleNames" () (EBlock (DoLet false false (PVar "perFile") (EApp (EApp (EMethodRef "map") (EVar "ruleNameOf")) (EVar "allRules"))) (DoExpr (EBinOp "++" (EVar "perFile") (EApp (EApp (EVar "filterList") (ELam ((PVar "n")) (EApp (EVar "not") (EApp (EApp (EVar "contains") (EVar "n")) (EVar "perFile"))))) (EApp (EApp (EMethodRef "map") (EVar "projectRuleNameOf")) (EVar "allProjectRules")))))))
 (DTypeSig false "ruleNameOf" (TyFun (TyCon "Rule") (TyCon "String")))

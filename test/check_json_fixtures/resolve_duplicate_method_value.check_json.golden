@@ -1,0 +1,1 @@
+{"files":[{"file":"<fixture>","diagnostics":[{"code":"R-DUPLICATE-METHOD-VALUE","kind":"resolve","message":"duplicate definition of `size`: this module declares it as a method of interface `Sized` and as a top-level binding; rename one of them","range":{"end":{"character":4,"line":6},"start":{"character":0,"line":6}},"severity":1,"source":"medaka"}]}]}

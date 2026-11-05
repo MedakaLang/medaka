@@ -419,6 +419,7 @@ stringFix =
 (DTypeSig false "stringFix" (TyCon "String"))
 (DFunDef false "stringFix" () (ELit (LString "Walk a `StrCursor` (`startCursor`, `nextChar`, `sliceBetween`), or convert with `toChars` once and index the `Array`")))
 # MARK
+(DUse false (UseAlias ("core") "$core"))
 (DUse false (UseGroup ("driver" "diagnostics") ((mem "Severity" true))))
 (DUse false (UseGroup ("frontend" "ast") ((mem "Decl" true) (mem "Expr" true) (mem "Loc" false) (mem "Pat" true) (mem "Ty" true) (mem "orElseLoc" false) (mem "patBoundNames" false))))
 (DUse false (UseGroup ("frontend" "ast_walk") ((mem "BodyOwner" true) (mem "DeclBody" true) (mem "ExprKind" true) (mem "childExprs" false) (mem "declBodies" false))))
@@ -512,7 +513,7 @@ stringFix =
 (DTypeSig false "report" (TyFun (TyApp (TyCon "Option") (TyCon "Loc")) (TyFun (TyCon "String") (TyCon "Finding"))))
 (DFunDef false "report" ((PVar "loc") (PVar "msg")) (ERecordCreate "Finding" ((fa "rule" (EVar "ruleNameResliceInLoop")) (fa "message" (EVar "msg")) (fa "severity" (EVar "SevWarning")) (fa "loc" (EVar "loc")) (fa "fix" (EVar "None")))))
 (DTypeSig false "message" (TyFun (TyCon "Form") (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyApp (TyCon "Option") (TyCon "String")) (TyCon "String"))))))
-(DFunDef false "message" ((PVar "form") (PVar "callee") (PVar "v") (PVar "ty")) (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "`")) (EApp (EMethodRef "display") (EVar "callee"))) (ELit (LString "` on `"))) (EApp (EMethodRef "display") (EVar "v"))) (ELit (LString "`, which the loop passes on unchanged while another argument advances, starts from the front of `"))) (EApp (EMethodRef "display") (EVar "v"))) (ELit (LString "` on every step. "))) (EApp (EMethodRef "display") (EApp (EApp (EVar "costNote") (EVar "form")) (EVar "ty")))) (ELit (LString " "))) (EApp (EMethodRef "display") (EApp (EApp (EVar "fixTarget") (EVar "form")) (EVar "ty")))) (ELit (LString ""))))
+(DFunDef false "message" ((PVar "form") (PVar "callee") (PVar "v") (PVar "ty")) (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "`")) (EApp (EVar "$core.display") (EVar "callee"))) (ELit (LString "` on `"))) (EApp (EVar "$core.display") (EVar "v"))) (ELit (LString "`, which the loop passes on unchanged while another argument advances, starts from the front of `"))) (EApp (EVar "$core.display") (EVar "v"))) (ELit (LString "` on every step. "))) (EApp (EVar "$core.display") (EApp (EApp (EVar "costNote") (EVar "form")) (EVar "ty")))) (ELit (LString " "))) (EApp (EVar "$core.display") (EApp (EApp (EVar "fixTarget") (EVar "form")) (EVar "ty")))) (ELit (LString ""))))
 (DTypeSig false "costNote" (TyFun (TyCon "Form") (TyFun (TyApp (TyCon "Option") (TyCon "String")) (TyCon "String"))))
 (DFunDef false "costNote" ((PCon "Extern") PWild) (EVar "stringCost"))
 (DFunDef false "costNote" ((PCon "Polymorphic") (PCon "Some" (PLit (LString "String")))) (EVar "stringCost"))

@@ -1,0 +1,10 @@
+interface Sized a where
+  size : a -> Int
+
+impl Sized Int where
+  size _ = 7
+
+size : Int -> Int
+size n = n
+
+main = println (size 5)

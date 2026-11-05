@@ -163,6 +163,7 @@ The tables below stay as narrative.
 | `R-DUPLICATE-BINDING` | live | resolve error `DuplicateBinding` |
 | `R-DUPLICATE-DEF` | live | resolve error `DuplicateDefinition` |
 | `R-DUPLICATE-IFACE-METHOD` | live | resolve error `DuplicateInterfaceMethod` |
+| `R-DUPLICATE-METHOD-VALUE` | live | resolve error `DuplicateMethodValue`: an interface method and a top-level binding of one name in one module |
 | `R-DUPLICATE-SIGNATURE` | live | resolve error `DuplicateSignature` |
 | `R-EFFECT-LABEL-NO-MEMBERS` | live | an effect label imported with (..) has no constructors to bring |
 | `R-EXTERN-WITH-BODY` | live | resolve error `ExternWithBody` |
@@ -170,6 +171,7 @@ The tables below stay as narrative.
 | `R-FILE-NOT-FOUND` | live | the CLI target path could not be read |
 | `R-FILE-NOT-UTF8` | live | the CLI target file is readable but its bytes are not valid UTF-8 |
 | `R-IMMUTABLE-ASSIGN` | live | resolve error `ReassignImmutable` |
+| `R-IMPORT-OWN-NAME` | live | resolve error `ImportOwnName`: an explicit import of a name the module declares at top level |
 | `R-INTERNAL-EXTERN` | live | resolve error `InternalExternAccess` |
 | `R-METHOD-NOT-IN-INTERFACE` | live | resolve error `MethodNotInInterface` |
 | `R-MISPLACED-AUTHORITY-BINDER` | live | resolve error `MisplacedAuthorityBinder` |
