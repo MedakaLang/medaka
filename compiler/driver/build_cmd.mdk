@@ -2448,12 +2448,12 @@ clangLinkTimed job libFlags provObj perfOn tLink0 =
       -- prelude functions into user code without LTO.  Proven output-identical
       -- inline-vs-prebuilt by test/diff_compiler_prelude_obj.sh.
       let preludeObj = preludeObjOf ()
-      let processC = joinPath (dirOf rtC) "medaka_process.c"
+      let processLib = joinPath tmpDir "process.a"
       let objInputs =
         if preludeObj == "" then
-          [llPath, rtInput, processC]
+          [llPath, rtInput, processLib]
         else
-          [llPath, preludeObj, rtInput, processC]
+          [llPath, preludeObj, rtInput, processLib]
       -- `--stamp-build`'s provenance object, LAST so it overrides the weak,
       -- empty definitions medaka_rt.c contributes; "" (the default) leaves the
       -- input list byte-identical to the unstamped one.
@@ -2478,12 +2478,37 @@ clangLinkTimed job libFlags provObj perfOn tLink0 =
       -- ONCE, after the clang child exits, without duplicating the row across three
       -- result arms.  Medaka is strict, so this runs clang exactly where the
       -- `match` would.
-      let ccRes = linkWithGcFallback cc argsWith gcLibs
+      let ccRes = match archiveProcessRuntime cc rtC optFlag gcCflags tmpDir
+        Err e => Err e
+        Ok _ => linkWithGcFallback cc argsWith gcLibs
       let tClang = now ()
       emitPhase perfOn "clang" (tClang - tRtObj) inputAbs
       match ccRes
         Err e => buildErr "error: linking \{inputAbs} failed\n\{e}"
         Ok _ => buildOk "built \{inputAbs} -> \{outPath}"
+
+-- Only a strong process API reference extracts this archive member. The runtime's
+-- weak startup hook then initializes it before Medaka code; unrelated programs
+-- retain neither the worker nor its queue. Keep the member native so the system
+-- archiver needs no LLVM bitcode plugin, including on installed toolchains.
+archiveProcessRuntime : String ->
+  String ->
+  String ->
+  List String ->
+  String ->
+  <IO> Result String (String, String)
+archiveProcessRuntime cc rtC optFlag gcCflags tmpDir =
+  let processC = joinPath (dirOf rtC) "medaka_process.c"
+  let processObj = joinPath tmpDir "process.o"
+  let processLib = joinPath tmpDir "process.a"
+  let args =
+    [optFlag, "-pthread"]
+      ++ gcSectionsCflags
+      ++ gcCflags
+      ++ ["-c", processC, "-o", processObj]
+  match runCommandOk cc args
+    Err e => Err e
+    Ok _ => runCommandOk "ar" ["rcs", processLib, processObj]
 
 -- A link against libgc.a that fails is retried once against the shared library,
 -- so an archive this toolchain cannot link (non-PIC, or another compiler's LTO

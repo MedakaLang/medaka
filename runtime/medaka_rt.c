@@ -79,7 +79,7 @@
  * collect still-live objects and corrupt the heap.  GC_pthread_create registers
  * the worker's stack, keeping conservative scanning correct on it. */
 #include "medaka_process.h"
-/* Standalone runtime fixtures omit the process unit; a linked process API pulls it in. */
+/* A process API reference extracts its archive member; this weak hook alone must not. */
 #ifdef __APPLE__
 extern void mdk_process_submission_init(void) __attribute__((weak_import));
 #else

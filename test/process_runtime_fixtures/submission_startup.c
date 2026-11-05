@@ -9,6 +9,9 @@ static int ok(long long value) { return field(value, 0) == MDK_TAG_OK; }
 
 int mdk_program_main(int argc, char **argv) {
   (void)argc; (void)argv; alarm(10);
+#ifndef MDK_SUBMIT_UNSUPPORTED
+  if (mdk_process_test_workers() != 1) return 7;
+#endif
   long long nil = (MDK_TAG_NIL << 1) | 1;
   long long path = mdk_runtime_string("/bin/true"), cwd = mdk_runtime_string("/tmp");
   long long submitted = mdk_process_submit(path, nil, cwd, nil, 1, 1, 1);
