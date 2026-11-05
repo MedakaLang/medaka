@@ -9,6 +9,7 @@
 #include <pthread.h>
 #include <signal.h>
 #include <stddef.h>
+#include <limits.h>
 #include <linux/filter.h>
 #include <linux/seccomp.h>
 #include <sys/prctl.h>
@@ -56,6 +57,40 @@ int mdk_program_main(int argc, char **argv) {
     long long p=must_start("/bin/true",nil(),0), t=wait_exit(p);
     CHECK(field(t,2)==1); CHECK(field(mdk_process_dispose(p),0)==MDK_TAG_OK);
     return 0;
+  }
+  if (argc > 1 && !strcmp(argv[1], "selective-close")) {
+    int baseline=fd_count();
+    pid_t other=fork(); CHECK(other>=0); if (!other) _exit(23);
+    struct sock_filter insns[] = {
+      BPF_STMT(BPF_LD | BPF_W | BPF_ABS, offsetof(struct seccomp_data, nr)),
+      BPF_JUMP(BPF_JMP | BPF_JEQ | BPF_K, SYS_close_range, 0, 3),
+      BPF_STMT(BPF_LD | BPF_W | BPF_ABS, offsetof(struct seccomp_data, args[0])),
+      BPF_JUMP(BPF_JMP | BPF_JEQ | BPF_K, 3, 0, 1),
+      BPF_STMT(BPF_RET | BPF_K, SECCOMP_RET_ERRNO | EPERM),
+      BPF_STMT(BPF_RET | BPF_K, SECCOMP_RET_ALLOW)
+    };
+    struct sock_fprog filter={sizeof(insns)/sizeof(insns[0]),insns};
+    CHECK(prctl(PR_SET_NO_NEW_PRIVS,1,0,0,0)==0);
+    CHECK(prctl(PR_SET_SECCOMP,SECCOMP_MODE_FILTER,&filter)==0);
+    long long r=start("/bin/true",nil(),"/tmp",nil(),0);
+    CHECK(error_code(r)==10); CHECK((field(field(r,1),2)>>1)==EPERM);
+    int status; CHECK(waitpid(other,&status,0)==other && WIFEXITED(status) && WEXITSTATUS(status)==23);
+    CHECK(mdk_process_test_roots()==0 && fd_count()==baseline);
+    CHECK(waitpid(-1,&status,WNOHANG)==-1 && errno==ECHILD);
+    printf("selective close: %d checks passed\n",checks); return 0;
+  }
+  if (argc > 1 && !strcmp(argv[1], "sigpipe")) {
+    struct sigaction before, after, reset={0};
+    CHECK(sigaction(SIGPIPE,NULL,&before)==0 && before.sa_handler==SIG_IGN);
+    pid_t direct=fork(); CHECK(direct>=0);
+    if (!direct) { reset.sa_handler=SIG_DFL; sigemptyset(&reset.sa_mask); sigaction(SIGPIPE,&reset,NULL); execl("/bin/sh","sh","-c","kill -PIPE $$; exit 42",(char *)NULL); _exit(127); }
+    int status; CHECK(waitpid(direct,&status,0)==direct && WIFSIGNALED(status) && WTERMSIG(status)==SIGPIPE);
+    long long p=shell("kill -PIPE $$; exit 42",0), t=wait_exit(p);
+    CHECK(field(t,1)==3 && field(t,2)==27);
+    CHECK(field(mdk_process_dispose(p),0)==MDK_TAG_OK);
+    CHECK(sigaction(SIGPIPE,NULL,&after)==0 && after.sa_handler==before.sa_handler);
+    CHECK(mdk_process_test_roots()==0);
+    printf("sigpipe: %d checks passed\n",checks); return 0;
   }
   if (argc > 1 && !strncmp(argv[1], "deny-", 5)) {
     int denied = !strcmp(argv[1], "deny-clone") ? SYS_clone3 :
