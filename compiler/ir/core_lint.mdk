@@ -1,0 +1,196 @@
+-- compiler/ir/core_lint.mdk — invariants of Core IR that hold after every pass
+-- of every pass list, checked on a program value.
+--
+-- Three rules, one finding line each:
+--   scope    every variable is bound by an enclosing pattern, lambda, `let`,
+--            let-group, block statement or clause, or names a program-level
+--            thing (a binding, constructor, impl entry, extern or runtime name,
+--            the last being a name of the runtime ABI table);
+--   spine    no application has an application as its head, and none is empty;
+--   decision every leaf of a decision tree indexes an arm of its `CDecision`.
+-- An extern symbol (`$extern$…`, `extern_lower.externVar`) names an extern the
+-- program does not declare before `lower-externs`.
+-- A variable's `Addr` is not read: a clause parameter carries `AGlobal`.
+
+import frontend.ast.{Pat}
+import ir.core_ir.{
+  CArm(..),
+  CBind(..),
+  CClause(..),
+  CExpr(..),
+  CField(..),
+  CGuard(..),
+  CImplBody(..),
+  CImplEntry(..),
+  CProgram(..),
+  CStmt(..),
+  CTBranch(..),
+  CTree(..),
+  DeclFacts(..),
+  siteSentinelName,
+}
+import ir.core_walk.{foldExpr, patBinders}
+import list.{reverse}
+import types.runtime_abi_data.{runtimeAbiRows}
+import support.ordmap.{OrdMap, omEmpty, omFromNames, omHasKey, omKeys}
+import support.util.{fallthroughName, startsWith}
+
+-- One line per fault, empty when the program is clean.
+export
+lintProgram : CProgram -> List String
+lintProgram (CProgram binds ctors _ impls _ facts) =
+  let globals =
+    omFromNames
+      (bindNames binds
+        ++ map fst ctors
+        ++ map implName impls
+        ++ omKeys facts.factExterns
+        ++ builtinCtors
+        ++ map fst runtimeAbiRows)
+      omEmpty
+  flatMap (lintBind globals) binds ++ flatMap (lintImpl globals) impls
+
+-- Names a program reads without declaring them: the two constructors `Bool` has
+-- without a `data` declaration, the trap-site sentinel a native lowering packs,
+-- and the heads the checker wraps around a declared file bound.
+builtinCtors : List String
+builtinCtors = [
+  "True",
+  "False",
+  siteSentinelName,
+  "$withFileReadBound",
+  "$withFileWriteBound",
+]
+
+bindNames : List CBind -> List String
+bindNames binds = map ((CBind n _ _ _) => n) binds
+
+implName : CImplEntry -> String
+implName (CImplEntry n _ _ _) = n
+
+lintBind : OrdMap Unit -> CBind -> List String
+lintBind globals (CBind name clauses _ _) =
+  flatMap (lintClause globals ("binding " ++ name)) clauses
+
+lintClause : OrdMap Unit -> String -> CClause -> List String
+lintClause globals where_ (CClause pats body) =
+  lintBody globals (bindAll pats omEmpty) where_ body
+
+lintImpl : OrdMap Unit -> CImplEntry -> List String
+lintImpl globals (CImplEntry name _ _ (CImplTagged _ _ _ _ _ pats body)) =
+  lintBody globals (bindAll pats omEmpty) ("impl " ++ name) body
+lintImpl globals (CImplEntry name _ _ (CImplDefault _ _ _ _ _ pats body)) =
+  lintBody globals (bindAll pats omEmpty) ("impl " ++ name) body
+
+lintBody : OrdMap Unit -> OrdMap Unit -> String -> CExpr -> List String
+lintBody globals scope where_ body =
+  map
+    (f => "\{where_}: \{f}")
+    (scopeFaults globals scope body ++ shapeFaults body)
+
+bindAll : List Pat -> OrdMap Unit -> OrdMap Unit
+bindAll pats scope = omFromNames (flatMap patBinders pats) scope
+
+-- ── spine and decision shape: node-local, so one fold ───────────────────────
+shapeFaults : CExpr -> List String
+shapeFaults e = reverse (foldExpr shapeStep [] e)
+
+shapeStep : List String -> CExpr -> List String
+shapeStep acc (CApp (CApp _ _ _) _ _) =
+  "application headed by an application" :: acc
+shapeStep acc (CApp _ [] _) = "application with no arguments" :: acc
+shapeStep acc (CDecision _ arms tree) =
+  fold (addLeafFault (length arms)) acc (leafIndices tree)
+shapeStep acc _ = acc
+
+addLeafFault : Int -> List String -> Int -> List String
+addLeafFault n acc i =
+  if i < 0 || i >= n then "decision leaf \{i} outside \{n} arms" :: acc else acc
+
+leafIndices : CTree -> List Int
+leafIndices (CTFail _) = []
+leafIndices (CTLeaf i) = [i]
+leafIndices (CTGuard i rest) = i :: leafIndices rest
+leafIndices (CTSwitch branches def) =
+  flatMap branchLeaves branches ++ leafIndices def
+leafIndices (CTDrop rest) = leafIndices rest
+
+branchLeaves : CTBranch -> List Int
+branchLeaves (CTBranch _ t) = leafIndices t
+
+-- ── scope: binders scope, so this walk carries the names in scope ───────────
+scopeFaults : OrdMap Unit -> OrdMap Unit -> CExpr -> List String
+scopeFaults globals scope (CVar x _) =
+  if x == fallthroughName
+    || startsWith "$extern$" x
+    || omHasKey x scope
+    || omHasKey x globals then
+    []
+  else
+    ["unbound variable \{x}"]
+scopeFaults _ _ (CLit _) = []
+scopeFaults g s (CApp h args _) = flatMap (scopeFaults g s) (h :: args)
+scopeFaults g s (CLam pats body) = scopeFaults g (bindAll pats s) body
+scopeFaults g s (CLet isRec pat rhs body) =
+  let inner = bindAll [pat] s
+  scopeFaults g (if isRec then inner else s) rhs ++ scopeFaults g inner body
+scopeFaults g s (CLetGroup binds body) =
+  let inner = omFromNames (bindNames binds) s
+  flatMap (groupClauseFaults g inner) binds ++ scopeFaults g inner body
+scopeFaults g s (CMatch scrut arms) =
+  scopeFaults g s scrut ++ flatMap (armFaults g s) arms
+scopeFaults g s (CDecision scrut arms _) =
+  scopeFaults g s scrut ++ flatMap (armFaults g s) arms
+scopeFaults g s (CIf c t e) = flatMap (scopeFaults g s) [c, t, e]
+scopeFaults g s (CBinPrim _ l r _ _) = flatMap (scopeFaults g s) [l, r]
+scopeFaults g s (CUnOp _ x) = scopeFaults g s x
+scopeFaults g s (CTuple es) = flatMap (scopeFaults g s) es
+scopeFaults g s (CList es) = flatMap (scopeFaults g s) es
+scopeFaults g s (CRecord _ fields) = flatMap (fieldFaults g s) fields
+scopeFaults g s (CFieldAccess x _ _ _) = scopeFaults g s x
+scopeFaults g s (CRecordUpdate _ base fields) =
+  scopeFaults g s base ++ flatMap (fieldFaults g s) fields
+scopeFaults g s (CVariantUpdate _ base fields) =
+  scopeFaults g s base ++ flatMap (fieldFaults g s) fields
+scopeFaults g s (CArray es) = flatMap (scopeFaults g s) es
+scopeFaults g s (CRangeList lo hi _) = flatMap (scopeFaults g s) [lo, hi]
+scopeFaults g s (CRangeArray lo hi _) = flatMap (scopeFaults g s) [lo, hi]
+scopeFaults g s (CBlock stmts) = blockFaults g s stmts
+scopeFaults _ _ (CMethod _ _) = []
+scopeFaults _ _ (CDict _ _) = []
+
+fieldFaults : OrdMap Unit -> OrdMap Unit -> CField -> List String
+fieldFaults g s (CField _ _ e) = scopeFaults g s e
+
+groupClauseFaults : OrdMap Unit -> OrdMap Unit -> CBind -> List String
+groupClauseFaults g s (CBind _ clauses _ _) =
+  flatMap ((CClause pats body) => scopeFaults g (bindAll pats s) body) clauses
+
+-- A guard's pattern binds for the guards after it and for the body.
+armFaults : OrdMap Unit -> OrdMap Unit -> CArm -> List String
+armFaults g s (CArm pat guards body) =
+  let (faults, inner) = guardFaults g (bindAll [pat] s) guards
+  faults ++ scopeFaults g inner body
+armFaults g s (CArmAlt pat guards _) =
+  fst (guardFaults g (bindAll [pat] s) guards)
+
+guardFaults : OrdMap Unit ->
+  OrdMap Unit ->
+  List CGuard ->
+  (List String, OrdMap Unit)
+guardFaults _ s [] = ([], s)
+guardFaults g s ((CGBool e) :: rest) =
+  let (more, out) = guardFaults g s rest
+  (scopeFaults g s e ++ more, out)
+guardFaults g s ((CGBind p e) :: rest) =
+  let (more, out) = guardFaults g (bindAll [p] s) rest
+  (scopeFaults g s e ++ more, out)
+
+blockFaults : OrdMap Unit -> OrdMap Unit -> List CStmt -> List String
+blockFaults _ _ [] = []
+blockFaults g s ((CSExpr e) :: rest) = scopeFaults g s e ++ blockFaults g s rest
+blockFaults g s ((CSAssign _ e) :: rest) =
+  scopeFaults g s e ++ blockFaults g s rest
+blockFaults g s ((CSLet isRec pat e) :: rest) =
+  let inner = bindAll [pat] s
+  scopeFaults g (if isRec then inner else s) e ++ blockFaults g inner rest

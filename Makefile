@@ -248,6 +248,11 @@ inlang-ir-core-ir-lower-test:
 inlang-ir-core-pass-test:
 	./medaka test compiler/ir/core_pass_test.mdk
 
+## The Core IR lint fires each rule on a bad program and stays silent on its good
+## twin; no entry imports this sibling.
+inlang-ir-core-lint-test:
+	./medaka test compiler/ir/core_lint_test.mdk
+
 ## The Core IR walk rewrites, folds and collects binders over every `CExpr`
 ## constructor; no entry imports this sibling.
 inlang-ir-core-walk-test:

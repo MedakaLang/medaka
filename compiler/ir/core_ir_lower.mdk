@@ -17,7 +17,7 @@ import types.symbol_origins.{
 
 import ir.extern_lower.{lowerExterns}
 import ir.core_pass.{
-  CorePass(..), PassConfig, PassRun(..), PassFault(..), defaultPassConfig,
+  CorePass(..), PassConfig(..), PassRun(..), PassFault(..), defaultPassConfig,
   runPasses
 }
 import frontend.ast.{
@@ -1483,7 +1483,8 @@ namedPass passName f = CorePass { passName = passName, passRun = f }
 
 runLowering : PassCtx -> List (CorePass PassCtx) -> CProgram -> CProgram
 runLowering ctx passes start =
-  programOrPanic (runPasses defaultPassConfig ctx passes start)
+  programOrPanic
+    (runPasses { defaultPassConfig | lint = False } ctx passes start)
 
 -- A fault is an internal compiler error naming its pass.
 programOrPanic : PassRun -> CProgram

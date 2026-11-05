@@ -37,8 +37,8 @@ import types.tc_types.{DriveOutputs}
 import ir.core_ir.{CProgram(..), CBind(..)}
 import ir.core_ir_lower.{
   ifaceImplHeadTable,
+  lowerProgramEmitConfigured,
   lowerProgramEmitWith,
-  lowerProgramEmitPinnedWith,
   ctorFieldTypeNames,
   validateFfiExternTypeNames,
   noInlineFnNames,
@@ -56,6 +56,8 @@ import ir.dce.{dceFilter}
 import driver.emit_diagnostics.{refuseLlvmSymbolDefects}
 import entries.entry_support.{
   driveEmitLocated,
+  passConfigOfEnv,
+  programOfRun,
   stampSiteFiles,
 }
 import support.timer.{statsEnabled, emitStats}
@@ -161,7 +163,9 @@ emitTail mods requirement _outputs facts runtimeDecls coreD modules1 =
 
   let input = withNoInlineFns (noInlineFnNames allDecls) base
   let statsOn = statsEnabled ()
-  let cp = lowerProgramEmitPinnedWith facts preludeImpls allDecls
+  let config = passConfigOfEnv
+  let cp =
+    programOfRun (lowerProgramEmitConfigured config facts preludeImpls allDecls)
   let plan =
     buildEmitPlan LlvmBackend (runtimeDomain (externDecls runtimeDecls)) cp
   if statsOn then match emitProgramWithStats input plan cp
