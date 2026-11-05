@@ -474,9 +474,9 @@ staleLine _ _ = None
 -- The interface's line for this process's last load.
 export
 lastPreludeStaleLine : Unit -> Option String
-lastPreludeStaleLine _ = match !preludeVerdictRef
-  Some (_, verdict) => staleLine InterfaceFile verdict
-  None => None
+lastPreludeStaleLine _ = do
+  (_, verdict) <- !preludeVerdictRef
+  staleLine InterfaceFile verdict
 
 -- ---- the prelude's desugared declarations ----
 -- `<stdlib>/core.mdkd`, written beside `core.mdki` by the same `medaka interface
@@ -760,12 +760,13 @@ makeScratchIn root = match runCommand "sh" [
   root,
 ]
   Err e => Err e
-  Ok (0, _, _) =>
-    match runCommandOk "mktemp" ["-d", joinPath root "medaka_build_XXXXXX"]
-      Err e => Err e
-      Ok (out, _) =>
-        let dir = trimAscii out
-        if dir == "" then Err "mktemp -d printed no path" else Ok dir
+  Ok (0, _, _) => do
+    (out, _) <- runCommandOk "mktemp" [
+      "-d",
+      joinPath root "medaka_build_XXXXXX",
+    ]
+    let dir = trimAscii out
+    if dir == "" then Err "mktemp -d printed no path" else Ok dir
   Ok (_, _, err) => Err (trimAscii err)
 
 -- `mktemp -d` ignores TMPDIR once its template names a directory, so the root
@@ -1746,10 +1747,9 @@ wasmAssemble watPath outPath inputAbs =
 -- the host module copy (`medaka_host.mjs`) or the other loader form (`<x>.bytes.mjs`),
 -- must leave nothing behind.  `None` is also what every other profile gets.
 edgeOutPathError : String -> <IO> Option String
-edgeOutPathError outPath = match !selectedProfile
-  None => None
-  Some p =>
-    if isNone (edgeLoader p "") then None else edgeOutNameError p outPath
+edgeOutPathError outPath = do
+  p <- !selectedProfile
+  if isNone (edgeLoader p "") then None else edgeOutNameError p outPath
 
 edgeOutNameError : TargetProfile -> String -> Option String
 edgeOutNameError p outPath =
@@ -1767,16 +1767,15 @@ edgeOutNameError p outPath =
 -- wasm_loader.mdk): `<base>.mjs`, `<base>.bytes.mjs`, and a copy of the host
 -- module they import.  `None` is success, and also what every other profile gets.
 writeEdgeLoader : String -> String -> <IO> Option String
-writeEdgeLoader root outPath = match !selectedProfile
-  None => None
-  Some p => match edgeTexts p (baseOf outPath)
-    None => None
-    Some texts => writeEdgeFiles root outPath p texts
+writeEdgeLoader root outPath = do
+  p <- !selectedProfile
+  texts <- edgeTexts p (baseOf outPath)
+  writeEdgeFiles root outPath p texts
 
 edgeTexts : TargetProfile -> String -> Option (String, String)
-edgeTexts p wasmFile = match edgeLoader p wasmFile
-  None => None
-  Some sourceForm => map (b => (sourceForm, b)) (edgeBytesLoader p wasmFile)
+edgeTexts p wasmFile = do
+  sourceForm <- edgeLoader p wasmFile
+  map (b => (sourceForm, b)) (edgeBytesLoader p wasmFile)
 
 writeEdgeFiles : String ->
   String ->

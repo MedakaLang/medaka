@@ -388,9 +388,9 @@ asyncMainShapeError : EntryOutcome -> List (String, List Decl) -> Option String
 asyncMainShapeError outcome modules =
   if not outcome.eoMainIsAsync || outcome.eoMainAsyncPayloadIsUnit then
     None
-  else match entryPair modules
-    None => None
-    Some (_, decls) => match findMainParams decls
+  else do
+    (_, decls) <- entryPair modules
+    match findMainParams decls
       Some [] =>
         Some
           "main : Async e a must have a Unit payload (`main : Async e Unit`) — the driver runs the program for its effects and has nowhere to put a value; print it inside the program instead"

@@ -408,9 +408,9 @@ sourceStalenessVerdict _ =
     let compilerDir = joinPath root "compiler"
     if not (fileExists compilerDir) then
       None
-    else match liveSourceFingerprint root
-      None => None
-      Some live => if live == baked then None else Some compilerDir
+    else do
+      live <- liveSourceFingerprint root
+      if live == baked then None else Some compilerDir
 
 -- C4 (docs/ops/CLI-CONFORMANCE.md §4): `run --json` is the ONE invocation whose
 -- MACHINE channel is stderr — `run`'s stdout belongs to the user program — and
@@ -1260,9 +1260,9 @@ checkTargetJson : String ->
   CheckJson ->
   Option CheckDrive ->
   <IO> Option CheckJson
-checkTargetJson rsrc csrc target stdlibDir cj drive = match !selectedProfile
-  None => None
-  Some _ => match drive
+checkTargetJson rsrc csrc target stdlibDir cj drive = do
+  _ <- !selectedProfile
+  match drive
     None => panic "check --json --target: a clean check left no drive to judge"
     Some dr =>
       let paths =
@@ -2194,13 +2194,12 @@ splitCodemodArgv (tok :: rest) mode cargs paths =
 -- which names to split).  A leading `=` (`--=v`) is not a flag name; leave it
 -- to the codemod's own `mk` to reject by name.
 codemodFlagEq : String -> Option (String, String)
-codemodFlagEq tok = match stringIndexOf "=" tok
-  Some i =>
-    if i <= 2 then
-      None
-    else
-      Some (stringSlice 0 i tok, stringSlice (i + 1) (stringLength tok) tok)
-  None => None
+codemodFlagEq tok = do
+  i <- stringIndexOf "=" tok
+  if i <= 2 then
+    None
+  else
+    Some (stringSlice 0 i tok, stringSlice (i + 1) (stringLength tok) tok)
 
 -- --stdout for a single file: parse errors exit 1, otherwise print the rewritten
 -- (or, if unchanged, the original) source.  Advisory warnings go to stderr.
@@ -2574,9 +2573,9 @@ defaultOutPath TWasm input = chopExt (baseOf input) ++ ".wasm"
 -- positionals any more, which is what the old "strip it here so it doesn't
 -- fall through to finishBuildArgs" arms existed to arrange (#1078).
 parseBuildArgs : Args -> Result String (String, Option String, BuildTarget)
-parseBuildArgs a = match buildTargetOf (lastValue "--target" a)
-  Err msg => Err msg
-  Ok target => finishBuildArgs a.positionals (lastValue "-o" a) target
+parseBuildArgs a = do
+  target <- buildTargetOf (lastValue "--target" a)
+  finishBuildArgs a.positionals (lastValue "-o" a) target
 
 buildTargetOf : Option String -> Result String BuildTarget
 buildTargetOf None = Ok TNative
@@ -2606,11 +2605,10 @@ selectBuildProfile a input =
     Err m => Err ("error: " ++ m)
     Ok name => match lookupProfile name
       Err m => Err ("error: " ++ m)
-      Ok p => match parseTarget name
-        Err m => Err m
-        Ok target =>
-          selectedProfile := Some p
-          Ok target
+      Ok p => do
+        target <- parseTarget name
+        let _ = selectedProfile := Some p
+        Ok target
 
 buildTargetOrDie : Args -> String -> <IO> BuildTarget
 buildTargetOrDie a input = match selectBuildProfile a input

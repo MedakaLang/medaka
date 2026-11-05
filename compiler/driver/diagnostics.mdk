@@ -183,9 +183,9 @@ resErrorHelpFix : ResError -> (Option String, Option Fix)
 resErrorHelpFix e = match resErrorDidYouMean e
   Some (bad, sug) =>
     let help = Some "did you mean `\{sug}`?"
-    let fix = match resErrorLoc e
-      Some l => didYouMeanFix e bad sug l
-      None => None
+    let fix = do
+      l <- resErrorLoc e
+      didYouMeanFix e bad sug l
     (help, fix)
   None => (None, None)
 
@@ -1378,9 +1378,9 @@ wrappedRead : Ref (List (String, String)) ->
   (String -> Option String) ->
   String ->
   Option String
-wrappedRead cacheRef staleRef parseCacheRef read path = match read path
-  None => None
-  Some src => match parseCachedLocated parseCacheRef src
+wrappedRead cacheRef staleRef parseCacheRef read path = do
+  src <- read path
+  match parseCachedLocated parseCacheRef src
     Ok _ =>
       cacheRef := cachePut path src !cacheRef
       Some src
@@ -2474,9 +2474,9 @@ servedPass kind (Some g) ids (mid, path, prog) compute =
         pkSource = src,
         pkImports = map (i => omLookup i ids) (useModuleIds prog),
       }
-      let hit = match omLookup mid (passEntries kind passCacheRef.value)
-        Some e => if e.peKey == key then Some e else None
-        None => None
+      let hit = do
+        e <- omLookup mid (passEntries kind passCacheRef.value)
+        if e.peKey == key then Some e else None
       match hit
         Some e => (e.peDiags, e.peExports, Some e.peIdentity)
         None =>
@@ -3508,12 +3508,12 @@ checkJsonLoadErr : String ->
 checkJsonLoadErr _ _ _ (LoadParseFailed mpath msrc pe) =
   (CjRendered (cjParseErrJson mpath msrc pe), True)
 checkJsonLoadErr target src stdlibDir (LoadMsg lmsg) =
-  let mloc = match unknownModuleIdOf lmsg
-    None => None
-    Some mid => findImportLoc mid (parseLocated src)
-  let mhelp = match unknownModuleIdOf lmsg
-    None => None
-    Some _ => match availableModulesText stdlibDir
+  let mloc = do
+    mid <- unknownModuleIdOf lmsg
+    findImportLoc mid (parseLocated src)
+  let mhelp = do
+    _ <- unknownModuleIdOf lmsg
+    match availableModulesText stdlibDir
       "" => None
       txt => Some txt
   let jmsg =

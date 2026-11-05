@@ -65,9 +65,9 @@ sourcesIn dir = match fixtureFiles dir
 
 allSources : List String -> <FileRead> Result String (List String)
 allSources [] = Ok []
-allSources (d :: rest) = match sourcesIn d
-  Err e => Err e
-  Ok here => map (here ++ _) (allSources rest)
+allSources (d :: rest) = do
+  here <- sourcesIn d
+  map (here ++ _) (allSources rest)
 
 failureOf : String -> String -> String -> <FileRead> Option String
 failureOf rsrc csrc path = match readFile path
@@ -601,20 +601,18 @@ cachedInterfaceIds _ =
 -- A library and an entry that imports it, under module ids that begin with [p].
 -- The library's incomplete clause function leaves a warning to serve.
 writeLibPair : String -> String -> <FileWrite> Result String Unit
-writeLibPair dir p =
-  match (writeFile
+writeLibPair dir p = do
+  _ <- writeFile
     "\{dir}/\{p}lib.mdk"
     """public export data Shape = Circle Int | Square Int
 
 export
 area : Shape -> Int
 area (Circle r) = r
-""")
-    Err e => Err e
-    Ok _ =>
-      writeFile
-        "\{dir}/\{p}main.mdk"
-        """import \{p}lib.{area, Shape(..)}
+"""
+  writeFile
+    "\{dir}/\{p}main.mdk"
+    """import \{p}lib.{area, Shape(..)}
 
 main = println (area (Circle 1))
 """

@@ -1,5 +1,5 @@
 # META
-source_lines=512
+source_lines=508
 stages=DESUGAR,MARK
 # SOURCE
 import support.diag_codes.{DiagCode(..)}
@@ -261,12 +261,9 @@ resolveRefusal allowInternal stdlibDir trusted rsrc csrc entry g =
 -- A program `build` cannot start: a function-shaped `main` or none at all in
 -- the entry, which the loader puts last.
 mainRefusal : String -> List (String, List Decl) -> <IO> Option String
-mainRefusal entry pairs = match splitLast pairs
-  None => None
-  Some (_, (_, decls)) =>
-    map
-      (d => ppMainEntryError (entrySource entry) entry d)
-      (mainEntryError decls)
+mainRefusal entry pairs = do
+  (_, (_, decls)) <- splitLast pairs
+  map (d => ppMainEntryError (entrySource entry) entry d) (mainEntryError decls)
 
 -- The entry's text, for rendering a refusal; the loader has already read it.
 entrySource : String -> <IO> String
@@ -434,12 +431,11 @@ jsonFrontKey front _ path = relDiagPath (dirOf front.jfStdlibDir) path
 mainRefusalJson : String ->
   List (String, String, List Decl) ->
   <IO> Option CheckJson
-mainRefusalJson entry mods = match splitLast mods
-  None => None
-  Some (_, (_, _, decls)) =>
-    map
-      (d => CjParts entry [(entry, readFileSafe entry, [d])])
-      (mainEntryError decls)
+mainRefusalJson entry mods = do
+  (_, (_, _, decls)) <- splitLast mods
+  map
+    (d => CjParts entry [(entry, readFileSafe entry, [d])])
+    (mainEntryError decls)
 
 -- The child's write: the key line, then the envelope.  A file it cannot write
 -- is a build failure in its own words, not an envelope the parent never sees.
@@ -462,9 +458,9 @@ export
 readDiagJson : String -> <IO> Option (String, String)
 readDiagJson path = match readFile path
   Err _ => None
-  Ok text => match stringIndexOf "\n" text
-    None => None
-    Some i => match parse (stringSlice 0 i text)
+  Ok text => do
+    i <- stringIndexOf "\n" text
+    match parse (stringSlice 0 i text)
       Ok (JString key) =>
         Some (key, stringSlice (i + 1) (stringLength text) text)
       _ => None
@@ -554,7 +550,7 @@ fileWithNotes _ _ _ = None
 (DTypeSig false "resolveRefusal" (TyFun (TyCon "Bool") (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyCon "FrontGraph") (TyEffect ("IO") None (TyApp (TyCon "Option") (TyCon "String")))))))))))
 (DFunDef false "resolveRefusal" ((PVar "allowInternal") (PVar "stdlibDir") (PVar "trusted") (PVar "rsrc") (PVar "csrc") (PVar "entry") (PVar "g")) (EBlock (DoLet false false (PVar "trees") (ETuple (EFieldAccess (EVar "g") "fgMods") (EFieldAccess (EVar "g") "fgModsD"))) (DoExpr (EMatch (EVar "trees") (arm (PTuple (PList (PTuple (PVar "mid") PWild (PVar "raw"))) (PList (PTuple PWild (PVar "desugared")))) () (EBlock (DoLet false false (PVar "errs") (EApp (EApp (EApp (EApp (EApp (EApp (EVar "surfaceErrors") (EApp (EVar "cliStdlibExports") (EVar "stdlibDir"))) (EFieldAccess (EVar "g") "fgRuntimeD")) (EFieldAccess (EVar "g") "fgCoreD")) (EVar "raw")) (EVar "desugared")) (EApp (EVar "internalGuardFor") (EBinOp "||" (EVar "allowInternal") (EApp (EApp (EVar "contains") (EVar "mid")) (EVar "trusted")))))) (DoExpr (EMatch (EVar "errs") (arm (PList) () (EVar "None")) (arm PWild () (EBlock (DoLet false false (PVar "lines") (EApp (EVar "srcLinesArr") (EApp (EVar "entrySource") (EVar "entry")))) (DoExpr (EApp (EVar "Some") (EApp (EVar "joinNl") (EApp (EApp (EVar "map") (EApp (EApp (EVar "ppDiagCliLines") (EVar "lines")) (EVar "entry"))) (EVar "errs"))))))))))) (arm PWild () (EBlock (DoLet false false (PVar "text") (EApp (EVar "ppResolveErrorsByFile") (EApp (EApp (EVar "hintResErrorPairs") (EApp (EVar "cliStdlibExports") (EVar "stdlibDir"))) (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EVar "resolveModulesErrorsByFile") (EApp (EApp (EVar "map") (EVar "modIdToPath")) (EFieldAccess (EVar "g") "fgMods"))) (EVar "allowInternal")) (EVar "trusted")) (EApp (EApp (EVar "siblingPairsOf") (EFieldAccess (EVar "g") "fgRoots")) (EFieldAccess (EVar "g") "fgMods"))) (EApp (EVar "Some") (EApp (EApp (EVar "preludeGeneration") (EVar "rsrc")) (EVar "csrc")))) (EFieldAccess (EVar "g") "fgRuntimeD")) (EFieldAccess (EVar "g") "fgCoreD")) (EFieldAccess (EVar "g") "fgModsD"))))) (DoExpr (EIf (EBinOp "==" (EVar "text") (ELit (LString ""))) (EVar "None") (EApp (EVar "Some") (EVar "text"))))))))))
 (DTypeSig false "mainRefusal" (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "Decl")))) (TyEffect ("IO") None (TyApp (TyCon "Option") (TyCon "String"))))))
-(DFunDef false "mainRefusal" ((PVar "entry") (PVar "pairs")) (EMatch (EApp (EVar "splitLast") (EVar "pairs")) (arm (PCon "None") () (EVar "None")) (arm (PCon "Some" (PTuple PWild (PTuple PWild (PVar "decls")))) () (EApp (EApp (EVar "map") (ELam ((PVar "d")) (EApp (EApp (EApp (EVar "ppMainEntryError") (EApp (EVar "entrySource") (EVar "entry"))) (EVar "entry")) (EVar "d")))) (EApp (EVar "mainEntryError") (EVar "decls"))))))
+(DFunDef false "mainRefusal" ((PVar "entry") (PVar "pairs")) (EApp (EApp (EVar "andThen") (EApp (EVar "splitLast") (EVar "pairs"))) (ELam ((PVar "__do_x")) (EMatch (EVar "__do_x") (arm (PTuple PWild (PTuple PWild (PVar "decls"))) () (EApp (EApp (EVar "map") (ELam ((PVar "d")) (EApp (EApp (EApp (EVar "ppMainEntryError") (EApp (EVar "entrySource") (EVar "entry"))) (EVar "entry")) (EVar "d")))) (EApp (EVar "mainEntryError") (EVar "decls"))))))))
 (DTypeSig false "entrySource" (TyFun (TyCon "String") (TyEffect ("IO") None (TyCon "String"))))
 (DFunDef false "entrySource" ((PVar "entry")) (EApp (EApp (EVar "resultOr") (ELit (LString ""))) (EApp (EVar "readFile") (EVar "entry"))))
 (DData Public "GateAsk" () ((variant "GateAsk" (ConNamed (field "askAllowInternal" (TyCon "Bool")) (field "askDiagJson" (TyCon "Bool"))))) ())
@@ -582,11 +578,11 @@ fileWithNotes _ _ _ = None
 (DFunDef false "jsonFrontKey" ((PVar "front") (PList PWild) PWild) (EFieldAccess (EVar "front") "jfEntry"))
 (DFunDef false "jsonFrontKey" ((PVar "front") PWild (PVar "path")) (EApp (EApp (EVar "relDiagPath") (EApp (EVar "dirOf") (EFieldAccess (EVar "front") "jfStdlibDir"))) (EVar "path")))
 (DTypeSig false "mainRefusalJson" (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "String") (TyApp (TyCon "List") (TyCon "Decl")))) (TyEffect ("IO") None (TyApp (TyCon "Option") (TyCon "CheckJson"))))))
-(DFunDef false "mainRefusalJson" ((PVar "entry") (PVar "mods")) (EMatch (EApp (EVar "splitLast") (EVar "mods")) (arm (PCon "None") () (EVar "None")) (arm (PCon "Some" (PTuple PWild (PTuple PWild PWild (PVar "decls")))) () (EApp (EApp (EVar "map") (ELam ((PVar "d")) (EApp (EApp (EVar "CjParts") (EVar "entry")) (EListLit (ETuple (EVar "entry") (EApp (EVar "readFileSafe") (EVar "entry")) (EListLit (EVar "d"))))))) (EApp (EVar "mainEntryError") (EVar "decls"))))))
+(DFunDef false "mainRefusalJson" ((PVar "entry") (PVar "mods")) (EApp (EApp (EVar "andThen") (EApp (EVar "splitLast") (EVar "mods"))) (ELam ((PVar "__do_x")) (EMatch (EVar "__do_x") (arm (PTuple PWild (PTuple PWild PWild (PVar "decls"))) () (EApp (EApp (EVar "map") (ELam ((PVar "d")) (EApp (EApp (EVar "CjParts") (EVar "entry")) (EListLit (ETuple (EVar "entry") (EApp (EVar "readFileSafe") (EVar "entry")) (EListLit (EVar "d"))))))) (EApp (EVar "mainEntryError") (EVar "decls"))))))))
 (DTypeSig true "writeDiagJson" (TyFun (TyCon "String") (TyFun (TyCon "CheckJson") (TyEffect ("IO") None (TyCon "Unit")))))
 (DFunDef false "writeDiagJson" ((PVar "path") (PVar "cj")) (EBlock (DoLet false false (PVar "key") (EMatch (EVar "cj") (arm (PCon "CjParts" (PVar "k") PWild) () (EVar "k")) (arm (PCon "CjRendered" PWild) () (ELit (LString ""))))) (DoExpr (EMatch (EApp (EApp (EVar "writeFile") (EVar "path")) (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "")) (EApp (EVar "display") (EApp (EVar "stringify") (EApp (EVar "JString") (EVar "key"))))) (ELit (LString "\n"))) (EApp (EVar "display") (EApp (EVar "ppCheckJson") (EVar "cj")))) (ELit (LString "")))) (arm (PCon "Ok" PWild) () (ELit LUnit)) (arm (PCon "Err" (PVar "e")) () (EBlock (DoExpr (EApp (EVar "ePutStrLn") (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "error: could not write the diagnostics envelope to ")) (EApp (EVar "display") (EVar "path"))) (ELit (LString ": "))) (EApp (EVar "display") (EVar "e"))) (ELit (LString ""))))) (DoExpr (EApp (EVar "stageExit") (ELit (LInt 1))))))))))
 (DTypeSig true "readDiagJson" (TyFun (TyCon "String") (TyEffect ("IO") None (TyApp (TyCon "Option") (TyTuple (TyCon "String") (TyCon "String"))))))
-(DFunDef false "readDiagJson" ((PVar "path")) (EMatch (EApp (EVar "readFile") (EVar "path")) (arm (PCon "Err" PWild) () (EVar "None")) (arm (PCon "Ok" (PVar "text")) () (EMatch (EApp (EApp (EVar "stringIndexOf") (ELit (LString "\n"))) (EVar "text")) (arm (PCon "None") () (EVar "None")) (arm (PCon "Some" (PVar "i")) () (EMatch (EApp (EVar "parse") (EApp (EApp (EApp (EVar "stringSlice") (ELit (LInt 0))) (EVar "i")) (EVar "text"))) (arm (PCon "Ok" (PCon "JString" (PVar "key"))) () (EApp (EVar "Some") (ETuple (EVar "key") (EApp (EApp (EApp (EVar "stringSlice") (EBinOp "+" (EVar "i") (ELit (LInt 1)))) (EApp (EVar "stringLength") (EVar "text"))) (EVar "text"))))) (arm PWild () (EVar "None"))))))))
+(DFunDef false "readDiagJson" ((PVar "path")) (EMatch (EApp (EVar "readFile") (EVar "path")) (arm (PCon "Err" PWild) () (EVar "None")) (arm (PCon "Ok" (PVar "text")) () (EApp (EApp (EVar "andThen") (EApp (EApp (EVar "stringIndexOf") (ELit (LString "\n"))) (EVar "text"))) (ELam ((PVar "i")) (EMatch (EApp (EVar "parse") (EApp (EApp (EApp (EVar "stringSlice") (ELit (LInt 0))) (EVar "i")) (EVar "text"))) (arm (PCon "Ok" (PCon "JString" (PVar "key"))) () (EApp (EVar "Some") (ETuple (EVar "key") (EApp (EApp (EApp (EVar "stringSlice") (EBinOp "+" (EVar "i") (ELit (LInt 1)))) (EApp (EVar "stringLength") (EVar "text"))) (EVar "text"))))) (arm PWild () (EVar "None"))))))))
 (DTypeSig true "envelopeWithNotes" (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "Diag")) (TyFun (TyCon "String") (TyCon "String")))))
 (DFunDef false "envelopeWithNotes" (PWild (PList) (PVar "envelope")) (EVar "envelope"))
 (DFunDef false "envelopeWithNotes" ((PVar "key") (PVar "notes") (PVar "envelope")) (EMatch (EApp (EVar "parse") (EVar "envelope")) (arm (PCon "Ok" (PCon "JObject" (PVar "members"))) () (EApp (EVar "stringify") (EApp (EVar "JObject") (EApp (EVar "arrayFromList") (EApp (EApp (EVar "map") (EApp (EApp (EVar "filesWithNotes") (EVar "key")) (EVar "notes"))) (EApp (EVar "toList") (EVar "members"))))))) (arm PWild () (EVar "envelope"))))
@@ -639,7 +635,7 @@ fileWithNotes _ _ _ = None
 (DTypeSig false "resolveRefusal" (TyFun (TyCon "Bool") (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyCon "FrontGraph") (TyEffect ("IO") None (TyApp (TyCon "Option") (TyCon "String")))))))))))
 (DFunDef false "resolveRefusal" ((PVar "allowInternal") (PVar "stdlibDir") (PVar "trusted") (PVar "rsrc") (PVar "csrc") (PVar "entry") (PVar "g")) (EBlock (DoLet false false (PVar "trees") (ETuple (EFieldAccess (EVar "g") "fgMods") (EFieldAccess (EVar "g") "fgModsD"))) (DoExpr (EMatch (EVar "trees") (arm (PTuple (PList (PTuple (PVar "mid") PWild (PVar "raw"))) (PList (PTuple PWild (PVar "desugared")))) () (EBlock (DoLet false false (PVar "errs") (EApp (EApp (EApp (EApp (EApp (EApp (EVar "surfaceErrors") (EApp (EVar "cliStdlibExports") (EVar "stdlibDir"))) (EFieldAccess (EVar "g") "fgRuntimeD")) (EFieldAccess (EVar "g") "fgCoreD")) (EVar "raw")) (EVar "desugared")) (EApp (EVar "internalGuardFor") (EBinOp "||" (EVar "allowInternal") (EApp (EApp (EVar "contains") (EVar "mid")) (EVar "trusted")))))) (DoExpr (EMatch (EVar "errs") (arm (PList) () (EVar "None")) (arm PWild () (EBlock (DoLet false false (PVar "lines") (EApp (EVar "srcLinesArr") (EApp (EVar "entrySource") (EVar "entry")))) (DoExpr (EApp (EVar "Some") (EApp (EVar "joinNl") (EApp (EApp (EMethodRef "map") (EApp (EApp (EVar "ppDiagCliLines") (EVar "lines")) (EVar "entry"))) (EVar "errs"))))))))))) (arm PWild () (EBlock (DoLet false false (PVar "text") (EApp (EVar "ppResolveErrorsByFile") (EApp (EApp (EVar "hintResErrorPairs") (EApp (EVar "cliStdlibExports") (EVar "stdlibDir"))) (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EVar "resolveModulesErrorsByFile") (EApp (EApp (EMethodRef "map") (EVar "modIdToPath")) (EFieldAccess (EVar "g") "fgMods"))) (EVar "allowInternal")) (EVar "trusted")) (EApp (EApp (EVar "siblingPairsOf") (EFieldAccess (EVar "g") "fgRoots")) (EFieldAccess (EVar "g") "fgMods"))) (EApp (EVar "Some") (EApp (EApp (EVar "preludeGeneration") (EVar "rsrc")) (EVar "csrc")))) (EFieldAccess (EVar "g") "fgRuntimeD")) (EFieldAccess (EVar "g") "fgCoreD")) (EFieldAccess (EVar "g") "fgModsD"))))) (DoExpr (EIf (EBinOp "==" (EVar "text") (ELit (LString ""))) (EVar "None") (EApp (EVar "Some") (EVar "text"))))))))))
 (DTypeSig false "mainRefusal" (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "Decl")))) (TyEffect ("IO") None (TyApp (TyCon "Option") (TyCon "String"))))))
-(DFunDef false "mainRefusal" ((PVar "entry") (PVar "pairs")) (EMatch (EApp (EVar "splitLast") (EVar "pairs")) (arm (PCon "None") () (EVar "None")) (arm (PCon "Some" (PTuple PWild (PTuple PWild (PVar "decls")))) () (EApp (EApp (EMethodRef "map") (ELam ((PVar "d")) (EApp (EApp (EApp (EVar "ppMainEntryError") (EApp (EVar "entrySource") (EVar "entry"))) (EVar "entry")) (EVar "d")))) (EApp (EVar "mainEntryError") (EVar "decls"))))))
+(DFunDef false "mainRefusal" ((PVar "entry") (PVar "pairs")) (EApp (EApp (EMethodRef "andThen") (EApp (EVar "splitLast") (EVar "pairs"))) (ELam ((PVar "__do_x")) (EMatch (EVar "__do_x") (arm (PTuple PWild (PTuple PWild (PVar "decls"))) () (EApp (EApp (EMethodRef "map") (ELam ((PVar "d")) (EApp (EApp (EApp (EVar "ppMainEntryError") (EApp (EVar "entrySource") (EVar "entry"))) (EVar "entry")) (EVar "d")))) (EApp (EVar "mainEntryError") (EVar "decls"))))))))
 (DTypeSig false "entrySource" (TyFun (TyCon "String") (TyEffect ("IO") None (TyCon "String"))))
 (DFunDef false "entrySource" ((PVar "entry")) (EApp (EApp (EVar "resultOr") (ELit (LString ""))) (EApp (EVar "readFile") (EVar "entry"))))
 (DData Public "GateAsk" () ((variant "GateAsk" (ConNamed (field "askAllowInternal" (TyCon "Bool")) (field "askDiagJson" (TyCon "Bool"))))) ())
@@ -667,11 +663,11 @@ fileWithNotes _ _ _ = None
 (DFunDef false "jsonFrontKey" ((PVar "front") (PList PWild) PWild) (EFieldAccess (EVar "front") "jfEntry"))
 (DFunDef false "jsonFrontKey" ((PVar "front") PWild (PVar "path")) (EApp (EApp (EVar "relDiagPath") (EApp (EVar "dirOf") (EFieldAccess (EVar "front") "jfStdlibDir"))) (EVar "path")))
 (DTypeSig false "mainRefusalJson" (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "String") (TyApp (TyCon "List") (TyCon "Decl")))) (TyEffect ("IO") None (TyApp (TyCon "Option") (TyCon "CheckJson"))))))
-(DFunDef false "mainRefusalJson" ((PVar "entry") (PVar "mods")) (EMatch (EApp (EVar "splitLast") (EVar "mods")) (arm (PCon "None") () (EVar "None")) (arm (PCon "Some" (PTuple PWild (PTuple PWild PWild (PVar "decls")))) () (EApp (EApp (EMethodRef "map") (ELam ((PVar "d")) (EApp (EApp (EVar "CjParts") (EVar "entry")) (EListLit (ETuple (EVar "entry") (EApp (EVar "readFileSafe") (EVar "entry")) (EListLit (EVar "d"))))))) (EApp (EVar "mainEntryError") (EVar "decls"))))))
+(DFunDef false "mainRefusalJson" ((PVar "entry") (PVar "mods")) (EApp (EApp (EMethodRef "andThen") (EApp (EVar "splitLast") (EVar "mods"))) (ELam ((PVar "__do_x")) (EMatch (EVar "__do_x") (arm (PTuple PWild (PTuple PWild PWild (PVar "decls"))) () (EApp (EApp (EMethodRef "map") (ELam ((PVar "d")) (EApp (EApp (EVar "CjParts") (EVar "entry")) (EListLit (ETuple (EVar "entry") (EApp (EVar "readFileSafe") (EVar "entry")) (EListLit (EVar "d"))))))) (EApp (EVar "mainEntryError") (EVar "decls"))))))))
 (DTypeSig true "writeDiagJson" (TyFun (TyCon "String") (TyFun (TyCon "CheckJson") (TyEffect ("IO") None (TyCon "Unit")))))
 (DFunDef false "writeDiagJson" ((PVar "path") (PVar "cj")) (EBlock (DoLet false false (PVar "key") (EMatch (EVar "cj") (arm (PCon "CjParts" (PVar "k") PWild) () (EVar "k")) (arm (PCon "CjRendered" PWild) () (ELit (LString ""))))) (DoExpr (EMatch (EApp (EApp (EVar "writeFile") (EVar "path")) (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "")) (EApp (EMethodRef "display") (EApp (EVar "stringify") (EApp (EVar "JString") (EVar "key"))))) (ELit (LString "\n"))) (EApp (EMethodRef "display") (EApp (EVar "ppCheckJson") (EVar "cj")))) (ELit (LString "")))) (arm (PCon "Ok" PWild) () (ELit LUnit)) (arm (PCon "Err" (PVar "e")) () (EBlock (DoExpr (EApp (EVar "ePutStrLn") (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "error: could not write the diagnostics envelope to ")) (EApp (EMethodRef "display") (EVar "path"))) (ELit (LString ": "))) (EApp (EMethodRef "display") (EVar "e"))) (ELit (LString ""))))) (DoExpr (EApp (EVar "stageExit") (ELit (LInt 1))))))))))
 (DTypeSig true "readDiagJson" (TyFun (TyCon "String") (TyEffect ("IO") None (TyApp (TyCon "Option") (TyTuple (TyCon "String") (TyCon "String"))))))
-(DFunDef false "readDiagJson" ((PVar "path")) (EMatch (EApp (EVar "readFile") (EVar "path")) (arm (PCon "Err" PWild) () (EVar "None")) (arm (PCon "Ok" (PVar "text")) () (EMatch (EApp (EApp (EVar "stringIndexOf") (ELit (LString "\n"))) (EVar "text")) (arm (PCon "None") () (EVar "None")) (arm (PCon "Some" (PVar "i")) () (EMatch (EApp (EVar "parse") (EApp (EApp (EApp (EVar "stringSlice") (ELit (LInt 0))) (EVar "i")) (EVar "text"))) (arm (PCon "Ok" (PCon "JString" (PVar "key"))) () (EApp (EVar "Some") (ETuple (EVar "key") (EApp (EApp (EApp (EVar "stringSlice") (EBinOp "+" (EVar "i") (ELit (LInt 1)))) (EApp (EVar "stringLength") (EVar "text"))) (EVar "text"))))) (arm PWild () (EVar "None"))))))))
+(DFunDef false "readDiagJson" ((PVar "path")) (EMatch (EApp (EVar "readFile") (EVar "path")) (arm (PCon "Err" PWild) () (EVar "None")) (arm (PCon "Ok" (PVar "text")) () (EApp (EApp (EMethodRef "andThen") (EApp (EApp (EVar "stringIndexOf") (ELit (LString "\n"))) (EVar "text"))) (ELam ((PVar "i")) (EMatch (EApp (EVar "parse") (EApp (EApp (EApp (EVar "stringSlice") (ELit (LInt 0))) (EVar "i")) (EVar "text"))) (arm (PCon "Ok" (PCon "JString" (PVar "key"))) () (EApp (EVar "Some") (ETuple (EVar "key") (EApp (EApp (EApp (EVar "stringSlice") (EBinOp "+" (EVar "i") (ELit (LInt 1)))) (EApp (EVar "stringLength") (EVar "text"))) (EVar "text"))))) (arm PWild () (EVar "None"))))))))
 (DTypeSig true "envelopeWithNotes" (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "Diag")) (TyFun (TyCon "String") (TyCon "String")))))
 (DFunDef false "envelopeWithNotes" (PWild (PList) (PVar "envelope")) (EVar "envelope"))
 (DFunDef false "envelopeWithNotes" ((PVar "key") (PVar "notes") (PVar "envelope")) (EMatch (EApp (EVar "parse") (EVar "envelope")) (arm (PCon "Ok" (PCon "JObject" (PVar "members"))) () (EApp (EVar "stringify") (EApp (EVar "JObject") (EApp (EVar "arrayFromList") (EApp (EApp (EMethodRef "map") (EApp (EApp (EVar "filesWithNotes") (EVar "key")) (EVar "notes"))) (EApp (EMethodRef "toList") (EVar "members"))))))) (arm PWild () (EVar "envelope"))))

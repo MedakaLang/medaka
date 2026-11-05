@@ -1,5 +1,5 @@
 # META
-source_lines=2731
+source_lines=2730
 stages=DESUGAR,MARK
 # SOURCE
 -- compiler/driver/build_cmd.mdk — `medaka build`, self-hosted
@@ -478,9 +478,9 @@ staleLine _ _ = None
 -- The interface's line for this process's last load.
 export
 lastPreludeStaleLine : Unit -> Option String
-lastPreludeStaleLine _ = match !preludeVerdictRef
-  Some (_, verdict) => staleLine InterfaceFile verdict
-  None => None
+lastPreludeStaleLine _ = do
+  (_, verdict) <- !preludeVerdictRef
+  staleLine InterfaceFile verdict
 
 -- ---- the prelude's desugared declarations ----
 -- `<stdlib>/core.mdkd`, written beside `core.mdki` by the same `medaka interface
@@ -764,12 +764,13 @@ makeScratchIn root = match runCommand "sh" [
   root,
 ]
   Err e => Err e
-  Ok (0, _, _) =>
-    match runCommandOk "mktemp" ["-d", joinPath root "medaka_build_XXXXXX"]
-      Err e => Err e
-      Ok (out, _) =>
-        let dir = trimAscii out
-        if dir == "" then Err "mktemp -d printed no path" else Ok dir
+  Ok (0, _, _) => do
+    (out, _) <- runCommandOk "mktemp" [
+      "-d",
+      joinPath root "medaka_build_XXXXXX",
+    ]
+    let dir = trimAscii out
+    if dir == "" then Err "mktemp -d printed no path" else Ok dir
   Ok (_, _, err) => Err (trimAscii err)
 
 -- `mktemp -d` ignores TMPDIR once its template names a directory, so the root
@@ -1750,10 +1751,9 @@ wasmAssemble watPath outPath inputAbs =
 -- the host module copy (`medaka_host.mjs`) or the other loader form (`<x>.bytes.mjs`),
 -- must leave nothing behind.  `None` is also what every other profile gets.
 edgeOutPathError : String -> <IO> Option String
-edgeOutPathError outPath = match !selectedProfile
-  None => None
-  Some p =>
-    if isNone (edgeLoader p "") then None else edgeOutNameError p outPath
+edgeOutPathError outPath = do
+  p <- !selectedProfile
+  if isNone (edgeLoader p "") then None else edgeOutNameError p outPath
 
 edgeOutNameError : TargetProfile -> String -> Option String
 edgeOutNameError p outPath =
@@ -1771,16 +1771,15 @@ edgeOutNameError p outPath =
 -- wasm_loader.mdk): `<base>.mjs`, `<base>.bytes.mjs`, and a copy of the host
 -- module they import.  `None` is success, and also what every other profile gets.
 writeEdgeLoader : String -> String -> <IO> Option String
-writeEdgeLoader root outPath = match !selectedProfile
-  None => None
-  Some p => match edgeTexts p (baseOf outPath)
-    None => None
-    Some texts => writeEdgeFiles root outPath p texts
+writeEdgeLoader root outPath = do
+  p <- !selectedProfile
+  texts <- edgeTexts p (baseOf outPath)
+  writeEdgeFiles root outPath p texts
 
 edgeTexts : TargetProfile -> String -> Option (String, String)
-edgeTexts p wasmFile = match edgeLoader p wasmFile
-  None => None
-  Some sourceForm => map (b => (sourceForm, b)) (edgeBytesLoader p wasmFile)
+edgeTexts p wasmFile = do
+  sourceForm <- edgeLoader p wasmFile
+  map (b => (sourceForm, b)) (edgeBytesLoader p wasmFile)
 
 writeEdgeFiles : String ->
   String ->
@@ -2831,7 +2830,7 @@ emitRtObjGo cc root outObjPath = match makeTempDir ()
 (DFunDef false "staleLine" ((PCon "DeclsFile") (PCon "FileStale" (PVar "component"))) (EApp (EVar "Some") (EBinOp "++" (EBinOp "++" (ELit (LString "prelude decls stale: parsing stdlib/core.mdk (")) (EApp (EVar "display") (EVar "component"))) (ELit (LString ")")))))
 (DFunDef false "staleLine" (PWild PWild) (EVar "None"))
 (DTypeSig true "lastPreludeStaleLine" (TyFun (TyCon "Unit") (TyApp (TyCon "Option") (TyCon "String"))))
-(DFunDef false "lastPreludeStaleLine" (PWild) (EMatch (EUnOp "!" (EVar "preludeVerdictRef")) (arm (PCon "Some" (PTuple PWild (PVar "verdict"))) () (EApp (EApp (EVar "staleLine") (EVar "InterfaceFile")) (EVar "verdict"))) (arm (PCon "None") () (EVar "None"))))
+(DFunDef false "lastPreludeStaleLine" (PWild) (EApp (EApp (EVar "andThen") (EUnOp "!" (EVar "preludeVerdictRef"))) (ELam ((PVar "__do_x")) (EMatch (EVar "__do_x") (arm (PTuple PWild (PVar "verdict")) () (EApp (EApp (EVar "staleLine") (EVar "InterfaceFile")) (EVar "verdict")))))))
 (DTypeSig false "readPreludeDecls" (TyFun (TyCon "PreludeInputs") (TyEffect ("IO") None (TyTuple (TyCon "FileVerdict") (TyApp (TyCon "Option") (TyCon "String"))))))
 (DFunDef false "readPreludeDecls" ((PVar "inputs")) (EIf (EBinOp "/=" (EApp (EApp (EVar "envOr") (ELit (LString "MEDAKA_NO_INTERFACE"))) (ELit (LString ""))) (ELit (LString ""))) (ETuple (EVar "FileDisabled") (EVar "None")) (EIf (EApp (EVar "not") (EApp (EVar "interfaceHeaderFresh") (EVar "inputs"))) (ETuple (EVar "FileMissing") (EVar "None")) (EIf (EVar "otherwise") (EApp (EApp (EApp (EApp (EApp (EVar "verdictOfFile") (ELit (LString "core.mdkd"))) (EApp (EVar "FileStale") (ELit (LString "missing")))) (EVar "declsKeyOf")) (ELam ((PVar "gate") (PVar "text")) (EApp (EApp (EVar "map") (EVar "snd")) (EApp (EApp (EVar "readDeclsFramedGated") (EVar "gate")) (EVar "text"))))) (EVar "inputs")) (EApp (EVar "__fallthrough__") (ELit LUnit))))))
 (DTypeSig false "interfaceHeaderFresh" (TyFun (TyCon "PreludeInputs") (TyEffect ("IO") None (TyCon "Bool"))))
@@ -2878,7 +2877,7 @@ emitRtObjGo cc root outObjPath = match makeTempDir ()
 (DFunDef false "firstScratchDir" ((PList (PVar "root"))) (EApp (EVar "makeScratchIn") (EVar "root")))
 (DFunDef false "firstScratchDir" ((PCons (PVar "root") (PVar "rest"))) (EMatch (EApp (EVar "makeScratchIn") (EVar "root")) (arm (PCon "Ok" (PVar "dir")) () (EApp (EVar "Ok") (EVar "dir"))) (arm (PCon "Err" (PVar "e")) () (EMatch (EApp (EVar "firstScratchDir") (EVar "rest")) (arm (PCon "Ok" (PVar "dir")) () (EApp (EVar "Ok") (EVar "dir"))) (arm (PCon "Err" (PVar "e2")) () (EApp (EVar "Err") (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "")) (EApp (EVar "display") (EVar "e"))) (ELit (LString "; "))) (EApp (EVar "display") (EVar "e2"))) (ELit (LString "")))))))))
 (DTypeSig false "makeScratchIn" (TyFun (TyCon "String") (TyEffect ("IO") None (TyApp (TyApp (TyCon "Result") (TyCon "String")) (TyCon "String")))))
-(DFunDef false "makeScratchIn" ((PVar "root")) (EMatch (EApp (EApp (EVar "runCommand") (ELit (LString "sh"))) (EListLit (ELit (LString "-c")) (ELit (LString "mkdir -p \"$1\" 2>/dev/null && test -w \"$1\" || { echo \"cannot use scratch root $1\" >&2; exit 1; }")) (ELit (LString "sh")) (EVar "root"))) (arm (PCon "Err" (PVar "e")) () (EApp (EVar "Err") (EVar "e"))) (arm (PCon "Ok" (PTuple (PLit (LInt 0)) PWild PWild)) () (EMatch (EApp (EApp (EVar "runCommandOk") (ELit (LString "mktemp"))) (EListLit (ELit (LString "-d")) (EApp (EApp (EVar "joinPath") (EVar "root")) (ELit (LString "medaka_build_XXXXXX"))))) (arm (PCon "Err" (PVar "e")) () (EApp (EVar "Err") (EVar "e"))) (arm (PCon "Ok" (PTuple (PVar "out") PWild)) () (EBlock (DoLet false false (PVar "dir") (EApp (EVar "trimAscii") (EVar "out"))) (DoExpr (EIf (EBinOp "==" (EVar "dir") (ELit (LString ""))) (EApp (EVar "Err") (ELit (LString "mktemp -d printed no path"))) (EApp (EVar "Ok") (EVar "dir")))))))) (arm (PCon "Ok" (PTuple PWild PWild (PVar "err"))) () (EApp (EVar "Err") (EApp (EVar "trimAscii") (EVar "err"))))))
+(DFunDef false "makeScratchIn" ((PVar "root")) (EMatch (EApp (EApp (EVar "runCommand") (ELit (LString "sh"))) (EListLit (ELit (LString "-c")) (ELit (LString "mkdir -p \"$1\" 2>/dev/null && test -w \"$1\" || { echo \"cannot use scratch root $1\" >&2; exit 1; }")) (ELit (LString "sh")) (EVar "root"))) (arm (PCon "Err" (PVar "e")) () (EApp (EVar "Err") (EVar "e"))) (arm (PCon "Ok" (PTuple (PLit (LInt 0)) PWild PWild)) () (EApp (EApp (EVar "andThen") (EApp (EApp (EVar "runCommandOk") (ELit (LString "mktemp"))) (EListLit (ELit (LString "-d")) (EApp (EApp (EVar "joinPath") (EVar "root")) (ELit (LString "medaka_build_XXXXXX")))))) (ELam ((PVar "__do_x")) (EMatch (EVar "__do_x") (arm (PTuple (PVar "out") PWild) () (ELet false (PVar "dir") (EApp (EVar "trimAscii") (EVar "out")) (EIf (EBinOp "==" (EVar "dir") (ELit (LString ""))) (EApp (EVar "Err") (ELit (LString "mktemp -d printed no path"))) (EApp (EVar "Ok") (EVar "dir"))))))))) (arm (PCon "Ok" (PTuple PWild PWild (PVar "err"))) () (EApp (EVar "Err") (EApp (EVar "trimAscii") (EVar "err"))))))
 (DTypeSig true "defaultScratchRoot" (TyCon "String"))
 (DFunDef false "defaultScratchRoot" () (ELit (LString "/var/tmp/medaka-scratch")))
 (DTypeSig false "isTmpRoot" (TyFun (TyCon "String") (TyCon "Bool")))
@@ -2992,13 +2991,13 @@ emitRtObjGo cc root outObjPath = match makeTempDir ()
 (DTypeSig false "wasmAssemble" (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyCon "String") (TyEffect ("IO") None (TyApp (TyApp (TyCon "Result") (TyCon "BuildReport")) (TyCon "BuildReport")))))))
 (DFunDef false "wasmAssemble" ((PVar "watPath") (PVar "outPath") (PVar "inputAbs")) (EMatch (EApp (EApp (EVar "runCommandOk") (ELit (LString "wasm-tools"))) (EListLit (ELit (LString "parse")) (EVar "watPath") (ELit (LString "-o")) (EVar "outPath"))) (arm (PCon "Err" (PVar "e")) () (EApp (EVar "buildErr") (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "error: assembling ")) (EApp (EVar "display") (EVar "inputAbs"))) (ELit (LString " failed\n"))) (EApp (EVar "display") (EVar "e"))) (ELit (LString ""))))) (arm (PCon "Ok" PWild) () (EMatch (EApp (EApp (EVar "runCommandOk") (ELit (LString "wasm-tools"))) (EListLit (ELit (LString "validate")) (ELit (LString "--features=all")) (EVar "outPath"))) (arm (PCon "Err" (PVar "e")) () (EApp (EVar "buildErr") (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "error: validating ")) (EApp (EVar "display") (EVar "outPath"))) (ELit (LString " failed\n"))) (EApp (EVar "display") (EVar "e"))) (ELit (LString ""))))) (arm (PCon "Ok" PWild) () (EMatch (EApp (EApp (EVar "runCommandOk") (ELit (LString "wasm-tools"))) (EListLit (ELit (LString "strip")) (ELit (LString "--all")) (EVar "outPath") (ELit (LString "-o")) (EVar "outPath"))) (arm (PCon "Err" (PVar "e")) () (EApp (EVar "buildErr") (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "error: stripping ")) (EApp (EVar "display") (EVar "outPath"))) (ELit (LString " failed\n"))) (EApp (EVar "display") (EVar "e"))) (ELit (LString ""))))) (arm (PCon "Ok" PWild) () (EApp (EVar "buildOk") (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "built ")) (EApp (EVar "display") (EVar "inputAbs"))) (ELit (LString " -> "))) (EApp (EVar "display") (EVar "outPath"))) (ELit (LString "")))))))))))
 (DTypeSig false "edgeOutPathError" (TyFun (TyCon "String") (TyEffect ("IO") None (TyApp (TyCon "Option") (TyCon "String")))))
-(DFunDef false "edgeOutPathError" ((PVar "outPath")) (EMatch (EUnOp "!" (EVar "selectedProfile")) (arm (PCon "None") () (EVar "None")) (arm (PCon "Some" (PVar "p")) () (EIf (EApp (EVar "isNone") (EApp (EApp (EVar "edgeLoader") (EVar "p")) (ELit (LString "")))) (EVar "None") (EApp (EApp (EVar "edgeOutNameError") (EVar "p")) (EVar "outPath"))))))
+(DFunDef false "edgeOutPathError" ((PVar "outPath")) (EApp (EApp (EVar "andThen") (EUnOp "!" (EVar "selectedProfile"))) (ELam ((PVar "p")) (EIf (EApp (EVar "isNone") (EApp (EApp (EVar "edgeLoader") (EVar "p")) (ELit (LString "")))) (EVar "None") (EApp (EApp (EVar "edgeOutNameError") (EVar "p")) (EVar "outPath"))))))
 (DTypeSig false "edgeOutNameError" (TyFun (TyCon "TargetProfile") (TyFun (TyCon "String") (TyApp (TyCon "Option") (TyCon "String")))))
 (DFunDef false "edgeOutNameError" ((PVar "p") (PVar "outPath")) (EBlock (DoLet false false (PVar "stem") (EApp (EVar "chopExt") (EApp (EVar "baseOf") (EVar "outPath")))) (DoExpr (EIf (EApp (EVar "not") (EApp (EApp (EVar "endsWith") (ELit (LString ".wasm"))) (EVar "outPath"))) (EApp (EVar "Some") (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "error: --target ")) (EApp (EVar "display") (EApp (EVar "profileName") (EVar "p")))) (ELit (LString " writes a loader beside the wasm and needs `-o` to end in `.wasm`, got `"))) (EApp (EVar "display") (EVar "outPath"))) (ELit (LString "`")))) (EIf (EBinOp "||" (EBinOp "==" (EVar "stem") (ELit (LString "medaka_host"))) (EApp (EApp (EVar "endsWith") (ELit (LString ".bytes"))) (EVar "stem"))) (EApp (EVar "Some") (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "error: --target ")) (EApp (EVar "display") (EApp (EVar "profileName") (EVar "p")))) (ELit (LString " writes `"))) (EApp (EVar "display") (EVar "stem"))) (ELit (LString ".mjs` and `"))) (EApp (EVar "display") (EVar "stem"))) (ELit (LString ".bytes.mjs` beside the wasm, which would collide with the host module copy or the other loader form; choose a `-o` name other than `medaka_host` or one ending in `.bytes`, got `"))) (EApp (EVar "display") (EVar "outPath"))) (ELit (LString "`")))) (EVar "None"))))))
 (DTypeSig false "writeEdgeLoader" (TyFun (TyCon "String") (TyFun (TyCon "String") (TyEffect ("IO") None (TyApp (TyCon "Option") (TyCon "String"))))))
-(DFunDef false "writeEdgeLoader" ((PVar "root") (PVar "outPath")) (EMatch (EUnOp "!" (EVar "selectedProfile")) (arm (PCon "None") () (EVar "None")) (arm (PCon "Some" (PVar "p")) () (EMatch (EApp (EApp (EVar "edgeTexts") (EVar "p")) (EApp (EVar "baseOf") (EVar "outPath"))) (arm (PCon "None") () (EVar "None")) (arm (PCon "Some" (PVar "texts")) () (EApp (EApp (EApp (EApp (EVar "writeEdgeFiles") (EVar "root")) (EVar "outPath")) (EVar "p")) (EVar "texts")))))))
+(DFunDef false "writeEdgeLoader" ((PVar "root") (PVar "outPath")) (EApp (EApp (EVar "andThen") (EUnOp "!" (EVar "selectedProfile"))) (ELam ((PVar "p")) (EApp (EApp (EVar "andThen") (EApp (EApp (EVar "edgeTexts") (EVar "p")) (EApp (EVar "baseOf") (EVar "outPath")))) (ELam ((PVar "texts")) (EApp (EApp (EApp (EApp (EVar "writeEdgeFiles") (EVar "root")) (EVar "outPath")) (EVar "p")) (EVar "texts")))))))
 (DTypeSig false "edgeTexts" (TyFun (TyCon "TargetProfile") (TyFun (TyCon "String") (TyApp (TyCon "Option") (TyTuple (TyCon "String") (TyCon "String"))))))
-(DFunDef false "edgeTexts" ((PVar "p") (PVar "wasmFile")) (EMatch (EApp (EApp (EVar "edgeLoader") (EVar "p")) (EVar "wasmFile")) (arm (PCon "None") () (EVar "None")) (arm (PCon "Some" (PVar "sourceForm")) () (EApp (EApp (EVar "map") (ELam ((PVar "b")) (ETuple (EVar "sourceForm") (EVar "b")))) (EApp (EApp (EVar "edgeBytesLoader") (EVar "p")) (EVar "wasmFile"))))))
+(DFunDef false "edgeTexts" ((PVar "p") (PVar "wasmFile")) (EApp (EApp (EVar "andThen") (EApp (EApp (EVar "edgeLoader") (EVar "p")) (EVar "wasmFile"))) (ELam ((PVar "sourceForm")) (EApp (EApp (EVar "map") (ELam ((PVar "b")) (ETuple (EVar "sourceForm") (EVar "b")))) (EApp (EApp (EVar "edgeBytesLoader") (EVar "p")) (EVar "wasmFile"))))))
 (DTypeSig false "writeEdgeFiles" (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyCon "TargetProfile") (TyFun (TyTuple (TyCon "String") (TyCon "String")) (TyEffect ("IO") None (TyApp (TyCon "Option") (TyCon "String"))))))))
 (DFunDef false "writeEdgeFiles" ((PVar "root") (PVar "outPath") (PVar "_p") (PTuple (PVar "sourceForm") (PVar "bytesForm"))) (EBlock (DoLet false false (PVar "hostSrc") (EApp (EApp (EVar "joinPath") (EVar "root")) (ELit (LString "playground/medaka_host.mjs")))) (DoExpr (EMatch (EApp (EVar "readFile") (EVar "hostSrc")) (arm (PCon "Err" (PVar "e")) () (EApp (EVar "Some") (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "error: cannot read the wasm host module at `")) (EApp (EVar "display") (EVar "hostSrc"))) (ELit (LString "`: "))) (EApp (EVar "display") (EVar "e"))) (ELit (LString "; set MEDAKA_ROOT to your medaka checkout"))))) (arm (PCon "Ok" (PVar "host")) () (EBlock (DoLet false false (PVar "base") (EApp (EVar "chopExt") (EVar "outPath"))) (DoExpr (EApp (EVar "firstWriteError") (EListLit (ETuple (EBinOp "++" (EVar "base") (ELit (LString ".mjs"))) (EVar "sourceForm")) (ETuple (EBinOp "++" (EVar "base") (ELit (LString ".bytes.mjs"))) (EVar "bytesForm")) (ETuple (EApp (EApp (EVar "joinPath") (EApp (EVar "dirOf") (EVar "outPath"))) (ELit (LString "medaka_host.mjs"))) (EVar "host")))))))))))
 (DTypeSig false "firstWriteError" (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "String"))) (TyEffect ("IO") None (TyApp (TyCon "Option") (TyCon "String")))))
@@ -3174,7 +3173,7 @@ emitRtObjGo cc root outObjPath = match makeTempDir ()
 (DFunDef false "staleLine" ((PCon "DeclsFile") (PCon "FileStale" (PVar "component"))) (EApp (EVar "Some") (EBinOp "++" (EBinOp "++" (ELit (LString "prelude decls stale: parsing stdlib/core.mdk (")) (EApp (EMethodRef "display") (EVar "component"))) (ELit (LString ")")))))
 (DFunDef false "staleLine" (PWild PWild) (EVar "None"))
 (DTypeSig true "lastPreludeStaleLine" (TyFun (TyCon "Unit") (TyApp (TyCon "Option") (TyCon "String"))))
-(DFunDef false "lastPreludeStaleLine" (PWild) (EMatch (EUnOp "!" (EVar "preludeVerdictRef")) (arm (PCon "Some" (PTuple PWild (PVar "verdict"))) () (EApp (EApp (EVar "staleLine") (EVar "InterfaceFile")) (EVar "verdict"))) (arm (PCon "None") () (EVar "None"))))
+(DFunDef false "lastPreludeStaleLine" (PWild) (EApp (EApp (EMethodRef "andThen") (EUnOp "!" (EVar "preludeVerdictRef"))) (ELam ((PVar "__do_x")) (EMatch (EVar "__do_x") (arm (PTuple PWild (PVar "verdict")) () (EApp (EApp (EVar "staleLine") (EVar "InterfaceFile")) (EVar "verdict")))))))
 (DTypeSig false "readPreludeDecls" (TyFun (TyCon "PreludeInputs") (TyEffect ("IO") None (TyTuple (TyCon "FileVerdict") (TyApp (TyCon "Option") (TyCon "String"))))))
 (DFunDef false "readPreludeDecls" ((PVar "inputs")) (EIf (EBinOp "/=" (EApp (EApp (EVar "envOr") (ELit (LString "MEDAKA_NO_INTERFACE"))) (ELit (LString ""))) (ELit (LString ""))) (ETuple (EVar "FileDisabled") (EVar "None")) (EIf (EApp (EVar "not") (EApp (EVar "interfaceHeaderFresh") (EVar "inputs"))) (ETuple (EVar "FileMissing") (EVar "None")) (EIf (EVar "otherwise") (EApp (EApp (EApp (EApp (EApp (EVar "verdictOfFile") (ELit (LString "core.mdkd"))) (EApp (EVar "FileStale") (ELit (LString "missing")))) (EVar "declsKeyOf")) (ELam ((PVar "gate") (PVar "text")) (EApp (EApp (EMethodRef "map") (EVar "snd")) (EApp (EApp (EVar "readDeclsFramedGated") (EVar "gate")) (EVar "text"))))) (EVar "inputs")) (EApp (EVar "__fallthrough__") (ELit LUnit))))))
 (DTypeSig false "interfaceHeaderFresh" (TyFun (TyCon "PreludeInputs") (TyEffect ("IO") None (TyCon "Bool"))))
@@ -3221,7 +3220,7 @@ emitRtObjGo cc root outObjPath = match makeTempDir ()
 (DFunDef false "firstScratchDir" ((PList (PVar "root"))) (EApp (EVar "makeScratchIn") (EVar "root")))
 (DFunDef false "firstScratchDir" ((PCons (PVar "root") (PVar "rest"))) (EMatch (EApp (EVar "makeScratchIn") (EVar "root")) (arm (PCon "Ok" (PVar "dir")) () (EApp (EVar "Ok") (EVar "dir"))) (arm (PCon "Err" (PVar "e")) () (EMatch (EApp (EVar "firstScratchDir") (EVar "rest")) (arm (PCon "Ok" (PVar "dir")) () (EApp (EVar "Ok") (EVar "dir"))) (arm (PCon "Err" (PVar "e2")) () (EApp (EVar "Err") (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "")) (EApp (EMethodRef "display") (EVar "e"))) (ELit (LString "; "))) (EApp (EMethodRef "display") (EVar "e2"))) (ELit (LString "")))))))))
 (DTypeSig false "makeScratchIn" (TyFun (TyCon "String") (TyEffect ("IO") None (TyApp (TyApp (TyCon "Result") (TyCon "String")) (TyCon "String")))))
-(DFunDef false "makeScratchIn" ((PVar "root")) (EMatch (EApp (EApp (EVar "runCommand") (ELit (LString "sh"))) (EListLit (ELit (LString "-c")) (ELit (LString "mkdir -p \"$1\" 2>/dev/null && test -w \"$1\" || { echo \"cannot use scratch root $1\" >&2; exit 1; }")) (ELit (LString "sh")) (EVar "root"))) (arm (PCon "Err" (PVar "e")) () (EApp (EVar "Err") (EVar "e"))) (arm (PCon "Ok" (PTuple (PLit (LInt 0)) PWild PWild)) () (EMatch (EApp (EApp (EVar "runCommandOk") (ELit (LString "mktemp"))) (EListLit (ELit (LString "-d")) (EApp (EApp (EVar "joinPath") (EVar "root")) (ELit (LString "medaka_build_XXXXXX"))))) (arm (PCon "Err" (PVar "e")) () (EApp (EVar "Err") (EVar "e"))) (arm (PCon "Ok" (PTuple (PVar "out") PWild)) () (EBlock (DoLet false false (PVar "dir") (EApp (EVar "trimAscii") (EVar "out"))) (DoExpr (EIf (EBinOp "==" (EVar "dir") (ELit (LString ""))) (EApp (EVar "Err") (ELit (LString "mktemp -d printed no path"))) (EApp (EVar "Ok") (EVar "dir")))))))) (arm (PCon "Ok" (PTuple PWild PWild (PVar "err"))) () (EApp (EVar "Err") (EApp (EVar "trimAscii") (EVar "err"))))))
+(DFunDef false "makeScratchIn" ((PVar "root")) (EMatch (EApp (EApp (EVar "runCommand") (ELit (LString "sh"))) (EListLit (ELit (LString "-c")) (ELit (LString "mkdir -p \"$1\" 2>/dev/null && test -w \"$1\" || { echo \"cannot use scratch root $1\" >&2; exit 1; }")) (ELit (LString "sh")) (EVar "root"))) (arm (PCon "Err" (PVar "e")) () (EApp (EVar "Err") (EVar "e"))) (arm (PCon "Ok" (PTuple (PLit (LInt 0)) PWild PWild)) () (EApp (EApp (EMethodRef "andThen") (EApp (EApp (EVar "runCommandOk") (ELit (LString "mktemp"))) (EListLit (ELit (LString "-d")) (EApp (EApp (EVar "joinPath") (EVar "root")) (ELit (LString "medaka_build_XXXXXX")))))) (ELam ((PVar "__do_x")) (EMatch (EVar "__do_x") (arm (PTuple (PVar "out") PWild) () (ELet false (PVar "dir") (EApp (EVar "trimAscii") (EVar "out")) (EIf (EBinOp "==" (EVar "dir") (ELit (LString ""))) (EApp (EVar "Err") (ELit (LString "mktemp -d printed no path"))) (EApp (EVar "Ok") (EVar "dir"))))))))) (arm (PCon "Ok" (PTuple PWild PWild (PVar "err"))) () (EApp (EVar "Err") (EApp (EVar "trimAscii") (EVar "err"))))))
 (DTypeSig true "defaultScratchRoot" (TyCon "String"))
 (DFunDef false "defaultScratchRoot" () (ELit (LString "/var/tmp/medaka-scratch")))
 (DTypeSig false "isTmpRoot" (TyFun (TyCon "String") (TyCon "Bool")))
@@ -3335,13 +3334,13 @@ emitRtObjGo cc root outObjPath = match makeTempDir ()
 (DTypeSig false "wasmAssemble" (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyCon "String") (TyEffect ("IO") None (TyApp (TyApp (TyCon "Result") (TyCon "BuildReport")) (TyCon "BuildReport")))))))
 (DFunDef false "wasmAssemble" ((PVar "watPath") (PVar "outPath") (PVar "inputAbs")) (EMatch (EApp (EApp (EVar "runCommandOk") (ELit (LString "wasm-tools"))) (EListLit (ELit (LString "parse")) (EVar "watPath") (ELit (LString "-o")) (EVar "outPath"))) (arm (PCon "Err" (PVar "e")) () (EApp (EVar "buildErr") (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "error: assembling ")) (EApp (EMethodRef "display") (EVar "inputAbs"))) (ELit (LString " failed\n"))) (EApp (EMethodRef "display") (EVar "e"))) (ELit (LString ""))))) (arm (PCon "Ok" PWild) () (EMatch (EApp (EApp (EVar "runCommandOk") (ELit (LString "wasm-tools"))) (EListLit (ELit (LString "validate")) (ELit (LString "--features=all")) (EVar "outPath"))) (arm (PCon "Err" (PVar "e")) () (EApp (EVar "buildErr") (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "error: validating ")) (EApp (EMethodRef "display") (EVar "outPath"))) (ELit (LString " failed\n"))) (EApp (EMethodRef "display") (EVar "e"))) (ELit (LString ""))))) (arm (PCon "Ok" PWild) () (EMatch (EApp (EApp (EVar "runCommandOk") (ELit (LString "wasm-tools"))) (EListLit (ELit (LString "strip")) (ELit (LString "--all")) (EVar "outPath") (ELit (LString "-o")) (EVar "outPath"))) (arm (PCon "Err" (PVar "e")) () (EApp (EVar "buildErr") (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "error: stripping ")) (EApp (EMethodRef "display") (EVar "outPath"))) (ELit (LString " failed\n"))) (EApp (EMethodRef "display") (EVar "e"))) (ELit (LString ""))))) (arm (PCon "Ok" PWild) () (EApp (EVar "buildOk") (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "built ")) (EApp (EMethodRef "display") (EVar "inputAbs"))) (ELit (LString " -> "))) (EApp (EMethodRef "display") (EVar "outPath"))) (ELit (LString "")))))))))))
 (DTypeSig false "edgeOutPathError" (TyFun (TyCon "String") (TyEffect ("IO") None (TyApp (TyCon "Option") (TyCon "String")))))
-(DFunDef false "edgeOutPathError" ((PVar "outPath")) (EMatch (EUnOp "!" (EVar "selectedProfile")) (arm (PCon "None") () (EVar "None")) (arm (PCon "Some" (PVar "p")) () (EIf (EApp (EVar "isNone") (EApp (EApp (EVar "edgeLoader") (EVar "p")) (ELit (LString "")))) (EVar "None") (EApp (EApp (EVar "edgeOutNameError") (EVar "p")) (EVar "outPath"))))))
+(DFunDef false "edgeOutPathError" ((PVar "outPath")) (EApp (EApp (EMethodRef "andThen") (EUnOp "!" (EVar "selectedProfile"))) (ELam ((PVar "p")) (EIf (EApp (EVar "isNone") (EApp (EApp (EVar "edgeLoader") (EVar "p")) (ELit (LString "")))) (EVar "None") (EApp (EApp (EVar "edgeOutNameError") (EVar "p")) (EVar "outPath"))))))
 (DTypeSig false "edgeOutNameError" (TyFun (TyCon "TargetProfile") (TyFun (TyCon "String") (TyApp (TyCon "Option") (TyCon "String")))))
 (DFunDef false "edgeOutNameError" ((PVar "p") (PVar "outPath")) (EBlock (DoLet false false (PVar "stem") (EApp (EVar "chopExt") (EApp (EVar "baseOf") (EVar "outPath")))) (DoExpr (EIf (EApp (EVar "not") (EApp (EApp (EVar "endsWith") (ELit (LString ".wasm"))) (EVar "outPath"))) (EApp (EVar "Some") (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "error: --target ")) (EApp (EMethodRef "display") (EApp (EVar "profileName") (EVar "p")))) (ELit (LString " writes a loader beside the wasm and needs `-o` to end in `.wasm`, got `"))) (EApp (EMethodRef "display") (EVar "outPath"))) (ELit (LString "`")))) (EIf (EBinOp "||" (EBinOp "==" (EVar "stem") (ELit (LString "medaka_host"))) (EApp (EApp (EVar "endsWith") (ELit (LString ".bytes"))) (EVar "stem"))) (EApp (EVar "Some") (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "error: --target ")) (EApp (EMethodRef "display") (EApp (EVar "profileName") (EVar "p")))) (ELit (LString " writes `"))) (EApp (EMethodRef "display") (EVar "stem"))) (ELit (LString ".mjs` and `"))) (EApp (EMethodRef "display") (EVar "stem"))) (ELit (LString ".bytes.mjs` beside the wasm, which would collide with the host module copy or the other loader form; choose a `-o` name other than `medaka_host` or one ending in `.bytes`, got `"))) (EApp (EMethodRef "display") (EVar "outPath"))) (ELit (LString "`")))) (EVar "None"))))))
 (DTypeSig false "writeEdgeLoader" (TyFun (TyCon "String") (TyFun (TyCon "String") (TyEffect ("IO") None (TyApp (TyCon "Option") (TyCon "String"))))))
-(DFunDef false "writeEdgeLoader" ((PVar "root") (PVar "outPath")) (EMatch (EUnOp "!" (EVar "selectedProfile")) (arm (PCon "None") () (EVar "None")) (arm (PCon "Some" (PVar "p")) () (EMatch (EApp (EApp (EVar "edgeTexts") (EVar "p")) (EApp (EVar "baseOf") (EVar "outPath"))) (arm (PCon "None") () (EVar "None")) (arm (PCon "Some" (PVar "texts")) () (EApp (EApp (EApp (EApp (EVar "writeEdgeFiles") (EVar "root")) (EVar "outPath")) (EVar "p")) (EVar "texts")))))))
+(DFunDef false "writeEdgeLoader" ((PVar "root") (PVar "outPath")) (EApp (EApp (EMethodRef "andThen") (EUnOp "!" (EVar "selectedProfile"))) (ELam ((PVar "p")) (EApp (EApp (EMethodRef "andThen") (EApp (EApp (EVar "edgeTexts") (EVar "p")) (EApp (EVar "baseOf") (EVar "outPath")))) (ELam ((PVar "texts")) (EApp (EApp (EApp (EApp (EVar "writeEdgeFiles") (EVar "root")) (EVar "outPath")) (EVar "p")) (EVar "texts")))))))
 (DTypeSig false "edgeTexts" (TyFun (TyCon "TargetProfile") (TyFun (TyCon "String") (TyApp (TyCon "Option") (TyTuple (TyCon "String") (TyCon "String"))))))
-(DFunDef false "edgeTexts" ((PVar "p") (PVar "wasmFile")) (EMatch (EApp (EApp (EVar "edgeLoader") (EVar "p")) (EVar "wasmFile")) (arm (PCon "None") () (EVar "None")) (arm (PCon "Some" (PVar "sourceForm")) () (EApp (EApp (EMethodRef "map") (ELam ((PVar "b")) (ETuple (EVar "sourceForm") (EVar "b")))) (EApp (EApp (EVar "edgeBytesLoader") (EVar "p")) (EVar "wasmFile"))))))
+(DFunDef false "edgeTexts" ((PVar "p") (PVar "wasmFile")) (EApp (EApp (EMethodRef "andThen") (EApp (EApp (EVar "edgeLoader") (EVar "p")) (EVar "wasmFile"))) (ELam ((PVar "sourceForm")) (EApp (EApp (EMethodRef "map") (ELam ((PVar "b")) (ETuple (EVar "sourceForm") (EVar "b")))) (EApp (EApp (EVar "edgeBytesLoader") (EVar "p")) (EVar "wasmFile"))))))
 (DTypeSig false "writeEdgeFiles" (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyCon "TargetProfile") (TyFun (TyTuple (TyCon "String") (TyCon "String")) (TyEffect ("IO") None (TyApp (TyCon "Option") (TyCon "String"))))))))
 (DFunDef false "writeEdgeFiles" ((PVar "root") (PVar "outPath") (PVar "_p") (PTuple (PVar "sourceForm") (PVar "bytesForm"))) (EBlock (DoLet false false (PVar "hostSrc") (EApp (EApp (EVar "joinPath") (EVar "root")) (ELit (LString "playground/medaka_host.mjs")))) (DoExpr (EMatch (EApp (EVar "readFile") (EVar "hostSrc")) (arm (PCon "Err" (PVar "e")) () (EApp (EVar "Some") (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "error: cannot read the wasm host module at `")) (EApp (EMethodRef "display") (EVar "hostSrc"))) (ELit (LString "`: "))) (EApp (EMethodRef "display") (EVar "e"))) (ELit (LString "; set MEDAKA_ROOT to your medaka checkout"))))) (arm (PCon "Ok" (PVar "host")) () (EBlock (DoLet false false (PVar "base") (EApp (EVar "chopExt") (EVar "outPath"))) (DoExpr (EApp (EVar "firstWriteError") (EListLit (ETuple (EBinOp "++" (EVar "base") (ELit (LString ".mjs"))) (EVar "sourceForm")) (ETuple (EBinOp "++" (EVar "base") (ELit (LString ".bytes.mjs"))) (EVar "bytesForm")) (ETuple (EApp (EApp (EVar "joinPath") (EApp (EVar "dirOf") (EVar "outPath"))) (ELit (LString "medaka_host.mjs"))) (EVar "host")))))))))))
 (DTypeSig false "firstWriteError" (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "String"))) (TyEffect ("IO") None (TyApp (TyCon "Option") (TyCon "String")))))

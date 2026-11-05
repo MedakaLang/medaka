@@ -363,9 +363,9 @@ readForeignLibs root =
 resolveDepFile : List (String, String) -> String -> <IO> Option (String, String)
 resolveDepFile deps modId = match splitOnChar "." modId
   [] => None
-  seg0 :: restSegs => match lookupAssoc seg0 deps
-    None => None
-    Some depRoot => match restSegs
+  seg0 :: restSegs => do
+    depRoot <- lookupAssoc seg0 deps
+    match restSegs
       [] => None
       _ =>
         let path = fileOfModuleId depRoot (joinDot restSegs)
@@ -1486,18 +1486,17 @@ testImportViolation : List (String, String) ->
 testImportViolation deps roots importer entry modId =
   if importer == "" || endsWith testFileSuffix importer then
     None
-  else match findModuleOrEntryFile deps roots entry modId
-    Some (path, _) =>
-      if endsWith testFileSuffix path then
-        let (written, site) = importSite deps roots importer modId
-        Some
-          (LoadTestImport
-            "import `\{written}` in \{importer}: `\{written}` is a test module; only `*_test.mdk` files may import one. Move the shared code out of the test file."
-            importer
-            site)
-      else
-        None
-    None => None
+  else do
+    (path, _) <- findModuleOrEntryFile deps roots entry modId
+    if endsWith testFileSuffix path then
+      let (written, site) = importSite deps roots importer modId
+      Some
+        (LoadTestImport
+          "import `\{written}` in \{importer}: `\{written}` is a test module; only `*_test.mdk` files may import one. Move the shared code out of the test file."
+          importer
+          site)
+    else
+      None
 
 visitModF : (String -> String -> Result ParseError (List Decl)) ->
   (String -> Option String) ->
@@ -1551,25 +1550,29 @@ visitModChecked parseFn read deps roots stack visited acc importer entry modId =
         ])
         importer
         (cycleSite deps roots importer modId))
-  else match readModuleProgF parseFn read deps roots entry modId
-    Err e => Err e
-    Ok (owningRoot, path, prog) =>
-      let croots = childRoots owningRoot roots
-      let cdeps = childDeps deps owningRoot roots
-      let prog2 = rewriteDecls cdeps croots prog
-      map
-        ((visited2, acc2) =>
-          (modId :: visited2, acc2 ++ [(modId, path, prog2)]))
-        (visitModsF
-          parseFn
-          read
-          cdeps
-          croots
-          (modId :: stack)
-          visited
-          acc
-          path
-          (directImports prog2))
+  else do
+    (owningRoot, path, prog) <- readModuleProgF
+      parseFn
+      read
+      deps
+      roots
+      entry
+      modId
+    let croots = childRoots owningRoot roots
+    let cdeps = childDeps deps owningRoot roots
+    let prog2 = rewriteDecls cdeps croots prog
+    map
+      ((visited2, acc2) => (modId :: visited2, acc2 ++ [(modId, path, prog2)]))
+      (visitModsF
+        parseFn
+        read
+        cdeps
+        croots
+        (modId :: stack)
+        visited
+        acc
+        path
+        (directImports prog2))
 
 visitModsF : (String -> String -> Result ParseError (List Decl)) ->
   (String -> Option String) ->
@@ -1674,11 +1677,10 @@ parseCachedLocated : Ref (OrdMap (List Decl)) ->
   Result ParseError (List Decl)
 parseCachedLocated cacheRef src = match omLookup src !cacheRef
   Some decls => Ok decls
-  None => match parseLocatedResult src
-    Err e => Err e
-    Ok decls =>
-      cacheRef := omInsert src decls !cacheRef
-      Ok decls
+  None => do
+    decls <- parseLocatedResult src
+    let _ = cacheRef := omInsert src decls !cacheRef
+    Ok decls
 
 -- Narrow a parse memo to the entries whose source is in `srcs`: a caller that
 -- parsed through the memo without loading a graph (a buffer with no imports)

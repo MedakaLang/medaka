@@ -33,29 +33,28 @@ diagMessage (Diag _ _ msg _ _ _) = msg
 -- The messages `analyzeProject` reports for a project holding `program`, after
 -- selecting that project's profile the way the language server does.
 analyzedIn : String -> String -> String -> <IO> Result String (List String)
-analyzedIn rsrc csrc manifestText = match makeTempDir ()
-  Err e => Err e
-  Ok dir =>
-    let entry = dir ++ "/main.mdk"
-    let written = andThen (writeFile (dir ++ "/medaka.toml") manifestText) (_ =>
-      writeFile entry program)
-    let stdlibDir = "stdlib"
-    let selected = carryProjectProfile None entry
-    let results =
-      analyzeProject
-        (stdlibExportsReader stdlibDir)
-        True
-        []
-        (Ref [])
-        (Ref omEmpty)
-        (_ => None)
-        entry
-        [dir, stdlibDir]
-        rsrc
-        csrc
-    let msgs = flatMap (r => map diagMessage (snd r)) results
-    cleanupTempDir dir
-    andThen written (_ => map (_ => msgs) selected)
+analyzedIn rsrc csrc manifestText = do
+  dir <- makeTempDir ()
+  let entry = dir ++ "/main.mdk"
+  let written = andThen (writeFile (dir ++ "/medaka.toml") manifestText) (_ =>
+    writeFile entry program)
+  let stdlibDir = "stdlib"
+  let selected = carryProjectProfile None entry
+  let results =
+    analyzeProject
+      (stdlibExportsReader stdlibDir)
+      True
+      []
+      (Ref [])
+      (Ref omEmpty)
+      (_ => None)
+      entry
+      [dir, stdlibDir]
+      rsrc
+      csrc
+  let msgs = flatMap (r => map diagMessage (snd r)) results
+  let _ = cleanupTempDir dir
+  andThen written (_ => map (_ => msgs) selected)
 
 edgeRefusal : String
 edgeRefusal =
