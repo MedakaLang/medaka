@@ -175,102 +175,110 @@ runGate dir = match prepare dir
   Ok (out, source, ir) =>
     match readFile (medakaRoot ++ "/runtime/medaka_process.c")
       Err e => fail e
-      Ok processSource =>
-        match (compile dir CompileInput {
-          label = "process",
-          source = processSource,
-        })
-          Err e => fail e
-          Ok processIr =>
-            let allRows = filter (r => r /= "") (lines out)
-            let processRows = filter (startsWith "mdk_process_") allRows
-            let rows = filter (r => not (startsWith "mdk_process_" r)) allRows
-            let processPositive =
-              match compareRows (lines processIr) processRows
-                Err e => fail (display e)
-                Ok n => expectAll [
-                  expectEqual 7 n,
-                  expectEqual (length processRows) n,
-                ]
-            let positive = match compareRows (lines ir) rows
-              Err e => fail (display e)
-              Ok n => expectAll [expectAtLeast 1 n, expectEqual (length rows) n]
-            let preamble =
-              match (replaceOnce
-                "mdk_print_unit|void|"
-                "mdk_print_unit|void|i64"
-                out)
-                Err e => fail e
-                Ok changed =>
-                  expectMismatch
-                    "mdk_print_unit"
-                    (filter
-                      (r => r /= "" && not (startsWith "mdk_process_" r))
-                      (lines changed))
-                    ir
-            expectAll [
-              positive,
-              processPositive,
-              preamble,
-              mutated
-                dir
-                Mutation {
-                  name = "mdk_panic",
-                  original = "noreturn void mdk_panic(long long w)",
-                  replacement = "void mdk_panic(long long w)",
-                }
-                rows
-                source,
-              expectEqual
-                (Ok "mdk_panic|void|i64|noreturn")
-                (signature
-                  ["attributes #6 = { noreturn nounwind }"]
-                  "define void @mdk_panic(i64 %w) #6 {"),
-              expectEqual (Err (BadDefinition "")) (paramType ""),
-              expectEqual
-                (Err (BadDefinition "not an LLVM definition"))
-                (signature [] "not an LLVM definition"),
-              expectEqual
-                (Err (AttributeError "mdk_panic: missing attribute group #6"))
-                (signature [] "define void @mdk_panic(i64 %w) #6 {"),
-              mutated
-                dir
-                Mutation {
-                  name = "mdk_print_unit",
-                  original = "void mdk_print_unit(void)",
-                  replacement = "void mdk_print_unit(long long ignored)",
-                }
-                rows
-                source,
-              mutated
-                dir
-                Mutation {
-                  name = "mdk_float_rem",
-                  original = "double mdk_float_rem(double a, double b)",
-                  replacement = "double mdk_float_rem(long long a, double b)",
-                }
-                rows
-                source,
-              mutated
-                dir
-                Mutation {
-                  name = "mdk_float_rem",
-                  original = "double mdk_float_rem(double a, double b)",
-                  replacement = "long long mdk_float_rem(double a, double b)",
-                }
-                rows
-                source,
-              mutated
-                dir
-                Mutation {
-                  name = "mdk_float_rem",
-                  original = "double mdk_float_rem(double a, double b)",
-                  replacement =
-                    "double mdk_float_rem_changed(double a, double b)",
-                }
-                rows
-                source,
+      Ok processSource => match compile dir CompileInput {
+        label = "process",
+        source = processSource,
+      }
+        Err e => fail e
+        Ok processIr =>
+          let allRows = filter (r => r /= "") (lines out)
+          let processRows = filter (startsWith "mdk_process_") allRows
+          let rows = filter (r => not (startsWith "mdk_process_" r)) allRows
+          let processPositive = match compareRows (lines processIr) processRows
+            Err e => fail (display e)
+            Ok n => expectAll [
+              expectAtLeast 1 n,
+              expectEqual (length processRows) n,
             ]
+          let positive = match compareRows (lines ir) rows
+            Err e => fail (display e)
+            Ok n => expectAll [expectAtLeast 1 n, expectEqual (length rows) n]
+          let preamble =
+            match (replaceOnce
+              "mdk_print_unit|void|"
+              "mdk_print_unit|void|i64"
+              out)
+              Err e => fail e
+              Ok changed =>
+                expectMismatch
+                  "mdk_print_unit"
+                  (filter
+                    (r => r /= "" && not (startsWith "mdk_process_" r))
+                    (lines changed))
+                  ir
+          expectAll [
+            positive,
+            processPositive,
+            expectMismatch
+              "mdk_process_start"
+              processRows
+              (join
+                "\n"
+                (filter
+                  (l =>
+                    not
+                      (startsWith "define " l
+                        && contains "@mdk_process_start(" l))
+                  (lines processIr))),
+            preamble,
+            mutated
+              dir
+              Mutation {
+                name = "mdk_panic",
+                original = "noreturn void mdk_panic(long long w)",
+                replacement = "void mdk_panic(long long w)",
+              }
+              rows
+              source,
+            expectEqual
+              (Ok "mdk_panic|void|i64|noreturn")
+              (signature
+                ["attributes #6 = { noreturn nounwind }"]
+                "define void @mdk_panic(i64 %w) #6 {"),
+            expectEqual (Err (BadDefinition "")) (paramType ""),
+            expectEqual
+              (Err (BadDefinition "not an LLVM definition"))
+              (signature [] "not an LLVM definition"),
+            expectEqual
+              (Err (AttributeError "mdk_panic: missing attribute group #6"))
+              (signature [] "define void @mdk_panic(i64 %w) #6 {"),
+            mutated
+              dir
+              Mutation {
+                name = "mdk_print_unit",
+                original = "void mdk_print_unit(void)",
+                replacement = "void mdk_print_unit(long long ignored)",
+              }
+              rows
+              source,
+            mutated
+              dir
+              Mutation {
+                name = "mdk_float_rem",
+                original = "double mdk_float_rem(double a, double b)",
+                replacement = "double mdk_float_rem(long long a, double b)",
+              }
+              rows
+              source,
+            mutated
+              dir
+              Mutation {
+                name = "mdk_float_rem",
+                original = "double mdk_float_rem(double a, double b)",
+                replacement = "long long mdk_float_rem(double a, double b)",
+              }
+              rows
+              source,
+            mutated
+              dir
+              Mutation {
+                name = "mdk_float_rem",
+                original = "double mdk_float_rem(double a, double b)",
+                replacement = "double mdk_float_rem_changed(double a, double b)",
+              }
+              rows
+              source,
+          ]
 
 test "runtime C definitions match every derived LLVM ABI row" =
   withScratchDir runGate
