@@ -233,7 +233,7 @@ if [ -n "$lintfiles" ]; then
       echo "✗ pre-commit: lint violated (a gated rule may not fire at all; a baselined" >&2
       echo "  rule's count may only fall below its row in $LINT_BASELINE_FILE):" >&2
       printf '%s\n' "$blocking" | while IFS= read -r f; do [ -n "$f" ] && echo "      $f" >&2; done
-      grep -q '^error: ' "$lintout" || cat "$lintout" "$lintErr" | sed 's/^/      /' | head -20 >&2
+      grep -q '^error: ' "$lintout" || cat "$lintErr" "$lintout" | sed 's/^/      /' | head -20 >&2
       echo "" >&2
       echo "  See findings:  medaka lint --internal --baseline=$LINT_BASELINE_FILE --only=$ONLY_RULES$lintfiles" >&2
       echo "  If intentional, silence inline with a directive comment above the site:" >&2
