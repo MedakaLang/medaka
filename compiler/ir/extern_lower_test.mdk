@@ -7,7 +7,12 @@ import ir.core_ir.{CProgram(..), CExpr(..), DeclFacts(..), withBinderRows}
 import ir.extern_lower.{walkExternVars}
 import ir.extern_types.{ExternDeclFact(..)}
 import types.extern_source.{ExternProvenance(..)}
-import ir.core_ir_lower.{lowerProgramEmitWith, stampCallModes, markTailSites}
+import ir.core_ir_lower.{
+  lowerProgramEmitConfigured,
+  stampCallModes,
+  markTailSites,
+}
+import ir.core_pass.{PassConfig(..), PassRun(..)}
 import ir.core_ir_sexp.{cprogramToSexp}
 import ir.core_ir_sexp_parse.{parseCProgram}
 import ir.extern_uses.{collectExternUses}
@@ -15,12 +20,17 @@ import ir.extern_types.{ExternUse(..), ExternUseKind(..)}
 import support.ordmap.{omKeys, omLookup}
 import test.{expectAll, expectEach, expectEqual}
 
+-- Lint is off: `ordinaryUnknown` below is a free name on purpose.
 lowered : String -> CProgram
 lowered src =
   let ast = parse src
   let coreSyntax = desugar ast
   let annotated = annotateProgram coreSyntax
-  lowerProgramEmitWith emptyFacts annotated
+  (lowerProgramEmitConfigured
+    PassConfig { lint = False, dumpAfter = [] }
+    emptyFacts
+    []
+    annotated).program
 
 symbols : CProgram -> List String
 symbols cp = map (row => row.useSymbol) (collectExternUses cp)

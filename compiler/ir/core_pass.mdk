@@ -1,6 +1,7 @@
 import list.{reverse}
 import ir.core_ir.{CProgram}
 import ir.core_ir_sexp.{cprogramToSexp}
+import ir.core_lint.{lintProgram}
 -- The runner for a declared list of Core IR passes.  A pass is a named
 -- `CProgram -> CProgram` step over a context `c` that the pass list's owner
 -- defines, so this module knows no pass and imports no lowering.
@@ -21,7 +22,7 @@ public export data PassConfig = PassConfig {
 
 export
 defaultPassConfig : PassConfig
-defaultPassConfig = PassConfig { lint = False, dumpAfter = [] }
+defaultPassConfig = PassConfig { lint = True, dumpAfter = [] }
 
 -- A broken invariant found after pass [faultPass].
 public export data PassFault = PassFault {
@@ -42,11 +43,23 @@ wantsDump config which =
   elem "all" config.dumpAfter || elem which config.dumpAfter
 
 -- Runs [passes] left to right over [start].  A pass that panics is not caught.
+-- With [lint] on, the start program is checked under the name `input` and the
+-- program after each pass under that pass's name.
 export
 runPasses : PassConfig -> c -> List (CorePass c) -> CProgram -> PassRun
 runPasses config ctx passes start =
-  let stepped = fold (step config ctx) (PassRun start [] []) passes
-  PassRun stepped.program (reverse stepped.dumps) stepped.faults
+  let first = PassRun start [] (reverse (lintFaults config "input" start))
+  let stepped = fold (step config ctx) first passes
+  PassRun stepped.program (reverse stepped.dumps) (reverse stepped.faults)
+
+lintFaults : PassConfig -> String -> CProgram -> List PassFault
+lintFaults config which prog =
+  if config.lint then
+    map
+      (message => PassFault { faultPass = which, faultMessage = message })
+      (lintProgram prog)
+  else
+    []
 
 step : PassConfig -> c -> PassRun -> CorePass c -> PassRun
 step config ctx acc pass =
@@ -56,4 +69,7 @@ step config ctx acc pass =
       (pass.passName, cprogramToSexp next) :: acc.dumps
     else
       acc.dumps
-  PassRun next dumps acc.faults
+  PassRun
+    next
+    dumps
+    (reverse (lintFaults config pass.passName next) ++ acc.faults)

@@ -322,6 +322,17 @@ block to **stderr**, stdout empty, rc **1**.
 → **slice S-3**, closed. The `run --json` routing choice landed as envelope-embed (extra
 `perf`/`staleBinary` fields), not a documented third channel.
 
+### 4b. Environment switches of the emit entries
+
+The LLVM and Wasm emit entries read these once per process into the Core IR pass
+configuration; `medaka build` passes its environment and its stderr through to the
+emitter child, so they work on a build with no CLI flag.
+
+| Variable | Effect |
+|---|---|
+| `MEDAKA_CORE_LINT` | `1` checks the Core IR after every lowering pass (and the input), and a finding aborts the emit naming the pass; `0` disables. The default is on for the emitting lowerings (measured at under 2% of `medaka build` CPU), so a finding aborts every emit; the interpreter's lowerings never lint. |
+| `MEDAKA_DUMP_CORE_AFTER` | A comma-separated list of lowering pass names, or `all`; the program after each named pass is written to stderr under a `[core-after <pass>]` line. |
+
 ---
 
 ## 5. The conformance table

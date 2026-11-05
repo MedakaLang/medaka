@@ -1,5 +1,13 @@
 import test.{expectAll, expectEqual, expectNotEqual}
-import ir.core_ir.{CBind(..), CProgram(..), noDeclFacts, synthBind}
+import frontend.ast.{Addr(..)}
+import ir.core_ir.{
+  CBind(..),
+  CClause(..),
+  CExpr(..),
+  CProgram(..),
+  noDeclFacts,
+  synthBind,
+}
 import ir.core_ir_sexp.{cprogramToSexp}
 import ir.core_pass.{
   CorePass(..),
@@ -87,6 +95,20 @@ test "a fault names its pass" =
     PassFault { faultPass = "second", faultMessage = "bad" },
   ]
   expectEqual ["second"] (map (f => f.faultPass) run.faults)
+
+test "a lint-on run turns a finding into a fault naming its pass" =
+  let breakIt = CorePass {
+    passName = "break",
+    passRun =
+      _ (CProgram _ a b c d e) =>
+        CProgram [synthBind "f" [CClause [] (CVar "nowhere" AGlobal)]] a b c d e,
+  }
+  let config = PassConfig { lint = True, dumpAfter = [] }
+  expectEqual
+    ["break"]
+    (map
+      (f => f.faultPass)
+      (runPasses config "ctx" [breakIt] emptyProgram).faults)
 
 bindName : CBind -> String
 bindName (CBind n _ _ _) = n

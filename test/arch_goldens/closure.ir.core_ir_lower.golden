@@ -6,7 +6,9 @@ frontend.runtime_constructors
 frontend.visibility
 ir.core_ir
 ir.core_ir_sexp
+ir.core_lint
 ir.core_pass
+ir.core_walk
 ir.extern_lower
 ir.extern_types
 ir.sexp

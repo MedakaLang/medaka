@@ -22,6 +22,9 @@ import types.program_facts.{
   ProgramFacts, factsOfChecked, withCheckedExternSources, factsWithEvidence
 }
 import frontend.parser.{parse}
+import ir.core_ir.{CProgram}
+import ir.core_pass.{PassConfig(..), PassRun(..), defaultPassConfig}
+import string.{split}
 import frontend.desugar.{desugar, desugarIn, mapProg}
 import frontend.desugar_cache.{desugaredPrelude, preludeGeneration}
 import driver.build_cmd.{
@@ -44,7 +47,7 @@ import driver.front_gate.{
   writeDiagJson,
 }
 export import support.util.{rootsOrDefault}
-import support.util.{anyList, splitLast, startsWith, joinNl}
+import support.util.{anyList, splitLast, startsWith, joinNl, filterList}
 import types.tc_types.{ElabResult, DriveInputs(..), DriveOutputs(..)}
 import types.typecheck.{
   defaultDriveInputs,
@@ -972,3 +975,38 @@ stampStmtFile _ s = s
 withSiteFile : String -> Loc -> Loc
 withSiteFile path (Loc "" sl sc el ec) = Loc path sl sc el ec
 withSiteFile _ l = l
+
+-- The pass configuration the environment asks for, read once per process:
+-- `MEDAKA_CORE_LINT` (`1` on, `0` off) and `MEDAKA_DUMP_CORE_AFTER`
+-- (comma-separated pass names, or `all`).
+export
+passConfigOfEnv : <IO> PassConfig
+passConfigOfEnv =
+  let lintOn = match getEnv "MEDAKA_CORE_LINT"
+    Some "1" => True
+    Some "0" => False
+    _ => defaultPassConfig.lint
+  let dumps = match getEnv "MEDAKA_DUMP_CORE_AFTER"
+    Some names => filterList (/= "") (split "," names)
+    None => []
+  PassConfig { lint = lintOn, dumpAfter = dumps }
+
+-- The program of a pass run, after writing each requested dump to stderr framed
+-- `[core-after <pass>]`.  A lint finding is an internal compiler error that
+-- names its pass and every finding of that pass.
+export
+programOfRun : PassRun -> <IO> CProgram
+programOfRun run =
+  let _ = map writeDumpFrame run.dumps
+  match run.faults
+    [] => run.program
+    fault :: _ =>
+      let same = filterList (f => f.faultPass == fault.faultPass) run.faults
+      panic
+        ("core lint after \{fault.faultPass}: "
+          ++ joinNl (map (f => f.faultMessage) same))
+
+writeDumpFrame : (String, String) -> <IO> Unit
+writeDumpFrame (passName, text) =
+  ePutStrLn "[core-after \{passName}]"
+  ePutStrLn text
