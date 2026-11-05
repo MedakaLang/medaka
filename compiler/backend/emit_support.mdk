@@ -95,15 +95,6 @@ eagerVars b (CVariantUpdate _ base updates) =
   eagerVars b base ++ eagerVarsFields b updates
 eagerVars b (CArray es) = eagerVarsList b es
 eagerVars b (CRangeArray lo hi _) = eagerVars b lo ++ eagerVars b hi
-eagerVars b (CIndex a i) = eagerVars b a ++ eagerVars b i
-eagerVars b (CStringIndex a i) = eagerVars b a ++ eagerVars b i
-eagerVars b (CStringSlice a lo hi _) =
-  eagerVars b a ++ eagerVars b lo ++ eagerVars b hi
-eagerVars b (CListIndex a i) = eagerVars b a ++ eagerVars b i
-eagerVars b (CListSlice a lo hi _) =
-  eagerVars b a ++ eagerVars b lo ++ eagerVars b hi
-eagerVars b (CSlice a lo hi _) =
-  eagerVars b a ++ eagerVars b lo ++ eagerVars b hi
 -- a `CDict` head is a saturated call to the named top-level function — an eager
 -- callee edge (the routes it carries hold no CExpr, so nothing to descend).
 eagerVars b (CDict name _) = if omHasKey name b then [] else [name]
@@ -437,15 +428,6 @@ eagerHasMethod (CRecordUpdate _ base updates) =
 eagerHasMethod (CVariantUpdate _ base updates) =
   eagerHasMethod base || fieldsHaveMethod updates
 eagerHasMethod (CArray es) = listHaveMethod es
-eagerHasMethod (CIndex a i) = eagerHasMethod a || eagerHasMethod i
-eagerHasMethod (CStringIndex a i) = eagerHasMethod a || eagerHasMethod i
-eagerHasMethod (CStringSlice a lo hi _) =
-  eagerHasMethod a || eagerHasMethod lo || eagerHasMethod hi
-eagerHasMethod (CListIndex a i) = eagerHasMethod a || eagerHasMethod i
-eagerHasMethod (CListSlice a lo hi _) =
-  eagerHasMethod a || eagerHasMethod lo || eagerHasMethod hi
-eagerHasMethod (CSlice a lo hi _) =
-  eagerHasMethod a || eagerHasMethod lo || eagerHasMethod hi
 eagerHasMethod _ = False
 
 listHaveMethod : List CExpr -> Bool

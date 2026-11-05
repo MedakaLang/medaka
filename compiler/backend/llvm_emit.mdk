@@ -113,10 +113,10 @@ import backend.trmc_analysis.{TrmcVerdicts, isTrmcFn, isTrmcImpl}
 --   • slice 8 — ARRAYS + RANGES.  CArray allocates a length-prefixed boxed cell
 --     (layout: [ i64 raw_len | elem0 | elem1 … ], reusing the slice-3 cell shape
 --     but with the header word = raw element count rather than a constructor hash).
---     CIndex loads the length, bounds-checks (calls @mdk_oob() on failure), then
---     GEPs to field (idx+1) dynamically.  CRangeArray and CSlice both emit an
+--     Array index loads the length, bounds-checks (calls @mdk_oob() on failure), then
+--     GEPs to field (idx+1) dynamically.  CRangeArray and the array slice both emit an
 --     alloca-counter loop (the spike's first non-recursion loop): CRangeArray fills
---     i ↦ lo+i (tagged Int word); CSlice copies elements from the source array —
+--     i ↦ lo+i (tagged Int word); the array slice copies elements from the source array —
 --     after its own bounds check (@mdk_slice_oob; #550, see emitArraySlice).
 --   • slice 9 — LISTS (CList + CRangeList).  CList [e0…en] right-folds inline into
 --     Cons/Nil boxed cells (the same cells the slice-5b HCons/HNil match heads test,
@@ -1833,12 +1833,6 @@ emitExpr e env (CMethod name (MethodEvidence iface arity route implRoutes methRo
 emitExpr e env (CDict name routes) = emitDictValue e env name routes
 emitExpr e env (CArray es) = emitArrayCreate e env es
 emitExpr e env (CRangeArray lo hi incl) = emitRangeArray e env lo hi incl
-emitExpr e env (CIndex a i) = emitArrayIndex e env a i
-emitExpr e env (CSlice a lo hi incl) = emitArraySlice e env a lo hi incl
-emitExpr e env (CStringIndex a i) = emitStringIndex e env a i
-emitExpr e env (CStringSlice a lo hi incl) = emitStringSlice e env a lo hi incl
-emitExpr e env (CListIndex a i) = emitListIndex e env a i
-emitExpr e env (CListSlice a lo hi incl) = emitListSlice e env a lo hi incl
 emitExpr e env (CList es) = emitList e env es
 emitExpr e env (CRangeList lo hi incl) = emitRangeList e env lo hi incl
 emitExpr e _ other = gapE e ("unsupported Core IR node " ++ ctag other)
@@ -2479,7 +2473,7 @@ emitAbortExtern e env name args = match emitArgs e env args
 -- array intrinsics (native extern catalog slice 6).
 -- pure-inline: no C helper; all three reuse loadTag/loadFieldDyn/storeFieldDyn.
 -- arrayLength: header word = raw element count; tag it as a Medaka Int.
--- arrayGetUnsafe: CIndex path minus bounds-check.
+-- arrayGetUnsafe: array-index path minus bounds-check.
 -- arraySetUnsafe: store to element slot; returns Unit.
 emitArrIntrinsic : Emit ->
   OrdMap (String, LTy) ->
@@ -2506,7 +2500,7 @@ emitArrIntrinsic e _ name _ = gapE e ("unsupported array intrinsic " ++ name)
 -- C helpers in runtime/medaka_rt.c; array cell = [i64 count | elem@8 | ...].
 -- arrayMake/arrayCopy/arrayFromList return Array (LTCon); arrayBlit/arrayFill return Unit.
 -- Do NOT end a fixture with an array-returning call: emitPrint LTCon panics.
--- Project to scalar via .[i] (CIndex) in every fixture.
+-- Project to scalar via .[i] (array index) in every fixture.
 emitArrLeafExtern : Emit ->
   OrdMap (String, LTy) ->
   String ->
@@ -4104,7 +4098,6 @@ coreChildren (CUnOp _ x) = Some [x]
 coreChildren (CIf c t f) = Some [c, t, f]
 coreChildren (CLet _ _ e1 e2) = Some [e1, e2]
 coreChildren (CBlock stmts) = Some (stmtExprs stmts)
-coreChildren (CIndex a i) = Some [a, i]
 coreChildren (CTuple es) = Some es
 coreChildren (CMethod _ _) = Some []
 coreChildren (CDict _ _) = Some []
@@ -4145,7 +4138,6 @@ u64Escapes e x raw (CBlock stmts) = u64EscapesBlock e x raw stmts
 u64Escapes e x _ (CArray es) = u64EscapesWords e x es
 u64Escapes e x _ (CTuple es) = u64EscapesWords e x es
 u64Escapes e x _ (CList es) = u64EscapesWords e x es
-u64Escapes e x _ (CIndex a i) = u64EscapesWords e x [a, i]
 u64Escapes e x _ (CUnOp _ a) = u64Escapes e x False a
 u64Escapes e x _raw ex = match flattenApp ex []
   (CVar f _, args) =>
@@ -6602,24 +6594,6 @@ satOnlyUses name arity (CRecordUpdate _ base updates) =
   satOnlyUses name arity base && satOnlyFields name arity updates
 satOnlyUses name arity (CVariantUpdate _ base updates) =
   satOnlyUses name arity base && satOnlyFields name arity updates
-satOnlyUses name arity (CIndex a i) =
-  satOnlyUses name arity a && satOnlyUses name arity i
-satOnlyUses name arity (CStringIndex a i) =
-  satOnlyUses name arity a && satOnlyUses name arity i
-satOnlyUses name arity (CListIndex a i) =
-  satOnlyUses name arity a && satOnlyUses name arity i
-satOnlyUses name arity (CSlice a lo hi _) =
-  satOnlyUses name arity a
-    && satOnlyUses name arity lo
-    && satOnlyUses name arity hi
-satOnlyUses name arity (CStringSlice a lo hi _) =
-  satOnlyUses name arity a
-    && satOnlyUses name arity lo
-    && satOnlyUses name arity hi
-satOnlyUses name arity (CListSlice a lo hi _) =
-  satOnlyUses name arity a
-    && satOnlyUses name arity lo
-    && satOnlyUses name arity hi
 satOnlyUses name arity (CBlock stmts) = satOnlyStmts name arity stmts
 -- a dict/method occurrence names its captured dict PARAMS, never a local
 -- function binding — but read them anyway rather than assume it.
@@ -14136,10 +14110,10 @@ lookupOrdinal i ((o, w) :: rest) =
 -- (at offset 8*(i+1)), exactly the ADT field convention.  Allocation reuses
 -- @mdk_alloc; element words are uniform i64 (tagged Ints for range elements).
 -- BOUNDS CHECKS: an OOB index calls @mdk_oob(), an OOB slice @mdk_slice_oob(lo, hi)
--- (both noreturn; print + exit, matching eval's panic).  CSlice's check is #550 — it
+-- (both noreturn; print + exit, matching eval's panic).  the array slice's check is #550 — it
 -- was missing entirely, which made an over-range slice an out-of-bounds HEAP READ
 -- rather than a diagnostic; see emitArraySlice.
--- LOOPS: CRangeArray and CSlice use an alloca-counter loop (the first non-recursion
+-- LOOPS: CRangeArray and the array slice use an alloca-counter loop (the first non-recursion
 -- loop in the spike — avoids phi instructions and matches the alloca/store/load
 -- pattern the rest of the emitter uses for multi-path merges).
 -- SCOPE: CList and CRangeList are covered by slice 9 ("lists" section below).
@@ -14188,8 +14162,8 @@ emitArrayCreate e env es =
   let words = emitArgs e env es
   emitArrayAlloc e (lengthS words) words
 
--- load a cell field at a DYNAMIC index (offset = (idxRaw+1)*8).  Used for CIndex
--- and the CSlice copy loop.
+-- load a cell field at a DYNAMIC index (offset = (idxRaw+1)*8).  Used for array index
+-- and the array slice copy loop.
 loadFieldDyn : Emit -> String -> String -> String
 loadFieldDyn e ptrWord idxRaw =
   let p = freshReg e
@@ -14218,30 +14192,6 @@ storeFieldDyn e ptrWord idxRaw val =
   emit e "  \{fp} = getelementptr i8, ptr \{p}, i64 \{off}"
   emit e "  store i64 \{val}, ptr \{fp}"
   ()
-
--- CIndex arr i: bounds-check, then load element at dynamic offset.
-emitArrayIndex : Emit -> OrdMap (String, LTy) -> CExpr -> CExpr -> (String, LTy)
-emitArrayIndex e env a i =
-  let (arr_w, _) = emitExpr e env a
-  let (idx_w, _) = emitExpr e env i
-  let idx_raw = untagInt e idx_w
-  let arr_len = loadTag e arr_w
-  let c1 = freshReg e
-  emit e "  \{c1} = icmp slt i64 \{idx_raw}, 0"
-  let c2 = freshReg e
-  emit e "  \{c2} = icmp sge i64 \{idx_raw}, \{arr_len}"
-  let oob = freshReg e
-  emit e "  \{oob} = or i1 \{c1}, \{c2}"
-  let n = intToString (freshLocal e)
-  let oobL = "oob" ++ n
-  let okL = "idx_ok" ++ n
-  emit e "  br i1 \{oob}, label %\{oobL}, label %\{okL}"
-  emit e (oobL ++ ":")
-  emit e (rtLine e "" "void" "mdk_oob" [])
-  emit e "  unreachable"
-  emit e (okL ++ ":")
-  let r = loadFieldDyn e arr_w idx_raw
-  (r, LTInt)
 
 -- CRangeArray lo hi incl: compute count, alloc, fill with alloca-counter loop.
 emitRangeArray : Emit ->
@@ -14298,209 +14248,6 @@ emitRangeArray e env lo hi incl =
   let w = freshReg e
   emit e "  \{w} = ptrtoint ptr \{p} to i64"
   (w, LTCon)
-
--- CSlice arr lo hi incl: bounds-check, then compute new_len, alloc, copy with a loop.
---
--- #550: the bounds check is NOT optional and NOT a clamp.  Without it this emitted
--- `new_len = end - lo` slots and copied `a[lo + i]` unchecked, so `[|1,2,3,4,5|].[2..99]`
--- allocated 97 slots and READ 94 words PAST THE ARRAY, publishing raw heap words (live
--- pointers among them) as ordinary Ints at exit 0 — while `run` raised E-SLICE-OOB.  The
--- guard mirrors sliceArray (compiler/eval/eval.mdk): `lo < 0 || end > len || end - lo < 0`.
--- All three disjuncts are load-bearing: `lo < 0` catches a read BEFORE the array, `end >
--- len` a read past it, and `end - lo < 0` an inverted range (whose negative new_len would
--- otherwise reach emitArrayDynAlloc).
---
--- Deliberately NOT a clamp: `arr.[lo..hi]` panicking is the documented contract that
--- distinguishes it from stdlib `array.slice`, which clamps (stdlib/array.mdk).  Clamping
--- here would silently merge the two and destroy the only bounds-checked slice in the
--- language.
---
--- The check is `end` (exclusive) vs the length, so the INCLUSIVE form is guarded on its
--- already-adjusted end_raw = hi+1 — i.e. the +1 happens BEFORE the compare, not after, so
--- `[|1,2,3|].[0..=2]` (end 3 == len 3) is legal while `.[0..=3]` (end 4 > 3) aborts.
--- mdk_slice_oob wants the INCLUSIVE upper bound for its message, so it is handed
--- `end_raw - 1`, matching the interpreter's `hiX - 1` text in both forms.
-emitArraySlice : Emit ->
-  OrdMap (String, LTy) ->
-  CExpr ->
-  CExpr ->
-  CExpr ->
-  Bool ->
-  (String, LTy)
-emitArraySlice e env a lo hi incl =
-  let (arr_w, _) = emitExpr e env a
-  let (lo_w, _) = emitExpr e env lo
-  let (hi_w, _) = emitExpr e env hi
-  let lo_raw = untagInt e lo_w
-  let hi_raw = untagInt e hi_w
-  let end_raw =
-    if incl then
-      let r = freshReg e
-      emit e "  \{r} = add i64 \{hi_raw}, 1"
-      r
-    else
-      hi_raw
-  let new_len = freshReg e
-  emit e "  \{new_len} = sub i64 \{end_raw}, \{lo_raw}"
-  let arr_len = loadTag e arr_w
-  let s1 = freshReg e
-  emit e "  \{s1} = icmp slt i64 \{lo_raw}, 0"
-  let s2 = freshReg e
-  emit e "  \{s2} = icmp sgt i64 \{end_raw}, \{arr_len}"
-  let s3 = freshReg e
-  emit e "  \{s3} = icmp slt i64 \{new_len}, 0"
-  let s12 = freshReg e
-  emit e "  \{s12} = or i1 \{s1}, \{s2}"
-  let sbad = freshReg e
-  emit e "  \{sbad} = or i1 \{s12}, \{s3}"
-  let sn = intToString (freshLocal e)
-  let sBadL = "sloob" ++ sn
-  let sOkL = "sl_ok" ++ sn
-  emit e "  br i1 \{sbad}, label %\{sBadL}, label %\{sOkL}"
-  emit e (sBadL ++ ":")
-  let hi_incl = freshReg e
-  emit e "  \{hi_incl} = sub i64 \{end_raw}, 1"
-  emit e (rtLine e "" "void" "mdk_slice_oob" (i64Ops [lo_raw, hi_incl]))
-  emit e "  unreachable"
-  emit e (sOkL ++ ":")
-  let p = emitArrayDynAlloc e new_len
-  let n = intToString (freshLocal e)
-  let condL = "sl_cond" ++ n
-  let bodyL = "sl_body" ++ n
-  let doneL = "sl_done" ++ n
-  let ic = freshReg e
-  emit e ("  " ++ ic ++ " = alloca i64")
-  emit e ("  store i64 0, ptr " ++ ic)
-  emit e ("  br label %" ++ condL)
-  emit e (condL ++ ":")
-  let iv = freshReg e
-  emit e "  \{iv} = load i64, ptr \{ic}"
-  let cmp = freshReg e
-  emit e "  \{cmp} = icmp sge i64 \{iv}, \{new_len}"
-  emit e "  br i1 \{cmp}, label %\{doneL}, label %\{bodyL}"
-  emit e (bodyL ++ ":")
-  let src_idx = freshReg e
-  emit e "  \{src_idx} = add i64 \{lo_raw}, \{iv}"
-  let elem = loadFieldDyn e arr_w src_idx
-  let dst_off1 = freshReg e
-  emit e "  \{dst_off1} = add i64 \{iv}, 1"
-  let dst_off = freshReg e
-  emit e "  \{dst_off} = mul i64 \{dst_off1}, 8"
-  let dst_fp = freshReg e
-  emit e "  \{dst_fp} = getelementptr i8, ptr \{p}, i64 \{dst_off}"
-  emit e "  store i64 \{elem}, ptr \{dst_fp}"
-  let iv2 = freshReg e
-  emit e "  \{iv2} = add i64 \{iv}, 1"
-  emit e "  store i64 \{iv2}, ptr \{ic}"
-  emit e ("  br label %" ++ condL)
-  emit e (doneL ++ ":")
-  let w = freshReg e
-  emit e "  \{w} = ptrtoint ptr \{p} to i64"
-  (w, LTCon)
-
--- CStringIndex s i: codepoint-indexed Char.  The String runtime rep is a packed
--- UTF-8 cell (NOT an i64-element array), so we mirror the interpreter's
--- stringIndexCp: convert to a Char array via @mdk_string_to_chars (each element
--- already a Char immediate (cp<<1)|1, header = codepoint count), bounds-check the
--- codepoint index against that count, then load element i.  Result LTy = LTChar.
--- Bounds violation calls @mdk_oob (matching the interpreter's index-OOB panic).
-emitStringIndex : Emit ->
-  OrdMap (String, LTy) ->
-  CExpr ->
-  CExpr ->
-  (String, LTy)
-emitStringIndex e env a i =
-  let (str_w, _) = emitExpr e env a
-  let (idx_w, _) = emitExpr e env i
-  let chars = freshReg e
-  emit e (rtLine e chars "i64" "mdk_string_to_chars" (i64Ops [str_w]))
-  let idx_raw = untagInt e idx_w
-  let arr_len = loadTag e chars
-  let c1 = freshReg e
-  emit e "  \{c1} = icmp slt i64 \{idx_raw}, 0"
-  let c2 = freshReg e
-  emit e "  \{c2} = icmp sge i64 \{idx_raw}, \{arr_len}"
-  let oob = freshReg e
-  emit e "  \{oob} = or i1 \{c1}, \{c2}"
-  let n = intToString (freshLocal e)
-  let oobL = "soob" ++ n
-  let okL = "sidx_ok" ++ n
-  emit e "  br i1 \{oob}, label %\{oobL}, label %\{okL}"
-  emit e (oobL ++ ":")
-  emit e (rtLine e "" "void" "mdk_oob" [])
-  emit e "  unreachable"
-  emit e (okL ++ ":")
-  let r = loadFieldDyn e chars idx_raw
-  (r, LTChar)
-
--- CStringSlice s lo hi incl: codepoint substring.  Mirror the interpreter's
--- evalSliceInt VString = stringSlice lo (incl ? hi+1 : hi) s — which CLAMPS lo/hi
--- to [0, cp_count] (no OOB panic, unlike the array slice).  Reuse the
--- @mdk_string_slice extern (it >>1-untags the tagged Int bounds internally); for
--- the inclusive form hi+1 in value space is +2 on the tagged word (tag = n*2+1).
-emitStringSlice : Emit ->
-  OrdMap (String, LTy) ->
-  CExpr ->
-  CExpr ->
-  CExpr ->
-  Bool ->
-  (String, LTy)
-emitStringSlice e env a lo hi incl =
-  let (str_w, _) = emitExpr e env a
-  let (lo_w, _) = emitExpr e env lo
-  let (hi_w, _) = emitExpr e env hi
-  let hi_adj =
-    if incl then
-      let r = freshReg e
-      emit e "  \{r} = add i64 \{hi_w}, 2"
-      r
-    else
-      hi_w
-  let r = freshReg e
-  emit e (rtLine e r "i64" "mdk_string_slice" (i64Ops [lo_w, hi_adj, str_w]))
-  (r, LTStr)
-
--- CListIndex xs i: walk the Cons chain to the i-th element.  A List is a chain of
--- Cons cells ([tag|head@8|tail@16], Nil = odd immediate), NOT an i64-element
--- array, so we can't array-GEP it.  Mirror the interpreter's listNthAt: walk
--- (i decrementing) returning the head once i<=0, panic (@mdk_oob) on running off
--- the end.  @mdk_list_index does the walk in C (>>1-untags the tagged index).
--- Result word is the stored head (same shape as an array load → LTInt).
-emitListIndex : Emit -> OrdMap (String, LTy) -> CExpr -> CExpr -> (String, LTy)
-emitListIndex e env a i =
-  let (lst_w, _) = emitExpr e env a
-  let (idx_w, _) = emitExpr e env i
-  let r = freshReg e
-  emit e (rtLine e r "i64" "mdk_list_index" (i64Ops [lst_w, idx_w]))
-  (r, LTInt)
-
--- CListSlice xs lo hi incl: collect elements at indices [lo, hi) into a NEW list.
--- Mirror the interpreter's listSliceV/listSliceGo — which CLAMPS (no OOB panic):
--- walks the chain with a running index, keeps heads in [lo, hi), stops at hi or
--- end-of-list.  @mdk_list_slice does the walk + rebuild in C (>>1-untags lo/hi);
--- for the inclusive form hi+1 in value space is +2 on the tagged word (tag n*2+1).
--- Result is a boxed Cons/Nil list → LTCon (same as the array slice).
-emitListSlice : Emit ->
-  OrdMap (String, LTy) ->
-  CExpr ->
-  CExpr ->
-  CExpr ->
-  Bool ->
-  (String, LTy)
-emitListSlice e env a lo hi incl =
-  let (lst_w, _) = emitExpr e env a
-  let (lo_w, _) = emitExpr e env lo
-  let (hi_w, _) = emitExpr e env hi
-  let hi_adj =
-    if incl then
-      let r = freshReg e
-      emit e "  \{r} = add i64 \{hi_w}, 2"
-      r
-    else
-      hi_w
-  let r = freshReg e
-  emit e (rtLine e r "i64" "mdk_list_slice" (i64Ops [lst_w, lo_w, hi_adj]))
-  (r, LTCon)
 
 -- arrayMakeWith n f: INLINE INTRINSIC.  Allocates a dynamic array of `n` elements;
 -- fills element i by calling the Medaka closure `f` with the tagged index `i`.
@@ -15365,12 +15112,6 @@ ctag (CFieldAccess _ _ _ _) = "CFieldAccess"
 ctag (CRecordUpdate _ _ _) = "CRecordUpdate"
 ctag (CRangeList _ _ _) = "CRangeList"
 ctag (CRangeArray _ _ _) = "CRangeArray"
-ctag (CIndex _ _) = "CIndex"
-ctag (CSlice _ _ _ _) = "CSlice"
-ctag (CStringIndex _ _) = "CStringIndex"
-ctag (CStringSlice _ _ _ _) = "CStringSlice"
-ctag (CListIndex _ _) = "CListIndex"
-ctag (CListSlice _ _ _ _) = "CListSlice"
 ctag (CMethod _ _) = "CMethod (typeclass dispatch)"
 ctag (CDict _ _) = "CDict (dictionary)"
 ctag (CVariantUpdate _ _ _) = "CVariantUpdate (named-field variant update)"

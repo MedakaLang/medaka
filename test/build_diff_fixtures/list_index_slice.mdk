@@ -1,8 +1,8 @@
 -- List `.[]` index/slice sugar on the build path (run≠build regression, sibling
 -- of the String Bug-3 fix).  A List is a chain of Cons cells ([tag|head@8|tail@16],
--- Nil = odd immediate), NOT a contiguous i64-element array, so index/slice lower to
--- CListIndex/CListSlice (a cons-cell walk via @mdk_list_index / @mdk_list_slice)
--- rather than the array GEP path (which read garbage past index 0).  Covers: index
+-- Nil = odd immediate), NOT a contiguous i64-element array, so index/slice dispatch to
+-- the List `index`/`slice` methods (a cons-cell walk), not an array GEP.
+-- Covers: index
 -- 0/mid/last, exclusive + inclusive slice, a slice ending exactly at the length, an
 -- empty slice, and a nested-list element.
 main : <IO> Unit

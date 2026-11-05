@@ -1,5 +1,5 @@
 # META
-source_lines=747
+source_lines=710
 stages=DESUGAR,MARK
 # SOURCE
 import types.symbol_origins.{CoreSymbolOrigins}
@@ -131,26 +131,10 @@ public export data CExpr =
   | CRecordUpdate String CExpr (List CField)
   -- named-field variant (constructor) update: `Con { base | f = v … }` (§2.3)
   | CVariantUpdate String CExpr (List CField)
-  -- array / range / index / slice (slice 3)
+  -- array / range (slice 3)
   | CArray (List CExpr)
   | CRangeList CExpr CExpr Bool
   | CRangeArray CExpr CExpr Bool
-  | CIndex CExpr CExpr
-  | CSlice CExpr CExpr CExpr Bool
-  -- String-receiver index/slice.  No lowering produces these any more (#4261).
-  -- The String runtime rep is a packed UTF-8 cell,
-  -- NOT an i64-element array, so these emit codepoint-indexed char extract /
-  -- substring (via @mdk_string_to_chars / @mdk_string_slice) instead of the
-  -- array GEP path.  CIndex/CSlice stay array-only (byte-identical emit).
-  | CStringIndex CExpr CExpr
-  | CStringSlice CExpr CExpr CExpr Bool
-  -- List-receiver index/slice; likewise produced by no lowering (#4261).
-  -- A List is a chain of Cons cells ([tag|head@8|
-  -- tail@16], Nil = odd immediate), NOT a contiguous i64-element array, so these
-  -- emit a cons-cell walk (via @mdk_list_index / @mdk_list_slice) instead of the
-  -- array GEP path.  CIndex/CSlice stay array-only (byte-identical emit).
-  | CListIndex CExpr CExpr
-  | CListSlice CExpr CExpr CExpr Bool
   -- a bare sequential block (desugar's EBlock — imperative IO / let-sequencing)
   | CBlock (List CStmt)
   -- typeclass dispatch, dicts explicit (slice 5; Route read out of the AST's
@@ -700,27 +684,6 @@ mapExprBinders f (CRangeList lo hi incl) =
 mapExprBinders f (CRangeArray lo hi incl) =
   let lo2 = mapExprBinders f lo
   CRangeArray lo2 (mapExprBinders f hi) incl
-mapExprBinders f (CIndex a i) =
-  let a2 = mapExprBinders f a
-  CIndex a2 (mapExprBinders f i)
-mapExprBinders f (CSlice a lo hi incl) =
-  let a2 = mapExprBinders f a
-  let lo2 = mapExprBinders f lo
-  CSlice a2 lo2 (mapExprBinders f hi) incl
-mapExprBinders f (CStringIndex a i) =
-  let a2 = mapExprBinders f a
-  CStringIndex a2 (mapExprBinders f i)
-mapExprBinders f (CStringSlice a lo hi incl) =
-  let a2 = mapExprBinders f a
-  let lo2 = mapExprBinders f lo
-  CStringSlice a2 lo2 (mapExprBinders f hi) incl
-mapExprBinders f (CListIndex a i) =
-  let a2 = mapExprBinders f a
-  CListIndex a2 (mapExprBinders f i)
-mapExprBinders f (CListSlice a lo hi incl) =
-  let a2 = mapExprBinders f a
-  let lo2 = mapExprBinders f lo
-  CListSlice a2 lo2 (mapExprBinders f hi) incl
 mapExprBinders f (CBlock stmts) = CBlock (map (mapStmtBinders f) stmts)
 mapExprBinders _ (CMethod name ev) = CMethod name ev
 mapExprBinders _ (CDict name rs) = CDict name rs
@@ -757,7 +720,7 @@ mapStmtBinders f (CSAssign x e) = CSAssign x (mapExprBinders f e)
 (DUse false (UseGroup ("ir" "extern_types") ((mem "ExternDeclFact" false))))
 (DUse false (UseGroup ("types" "runtime_types") ((mem "BinderRow" true) (mem "RuntimeType" true))))
 (DUse false (UseGroup ("support" "util") ((mem "reverseL" false) (mem "startsWith" false))))
-(DData Public "CExpr" () ((variant "CLit" (ConPos (TyCon "Lit"))) (variant "CVar" (ConPos (TyCon "String") (TyCon "Addr"))) (variant "CApp" (ConPos (TyCon "CExpr") (TyApp (TyCon "List") (TyCon "CExpr")) (TyCon "CallSite"))) (variant "CLam" (ConPos (TyApp (TyCon "List") (TyCon "Pat")) (TyCon "CExpr"))) (variant "CLet" (ConPos (TyCon "Bool") (TyCon "Pat") (TyCon "CExpr") (TyCon "CExpr"))) (variant "CLetGroup" (ConPos (TyApp (TyCon "List") (TyCon "CBind")) (TyCon "CExpr"))) (variant "CMatch" (ConPos (TyCon "CExpr") (TyApp (TyCon "List") (TyCon "CArm")))) (variant "CDecision" (ConPos (TyCon "CExpr") (TyApp (TyCon "List") (TyCon "CArm")) (TyCon "CTree"))) (variant "CIf" (ConPos (TyCon "CExpr") (TyCon "CExpr") (TyCon "CExpr"))) (variant "CBinPrim" (ConPos (TyCon "String") (TyCon "CExpr") (TyCon "CExpr") (TyCon "String") (TyCon "Loc"))) (variant "CUnOp" (ConPos (TyCon "String") (TyCon "CExpr"))) (variant "CTuple" (ConPos (TyApp (TyCon "List") (TyCon "CExpr")))) (variant "CList" (ConPos (TyApp (TyCon "List") (TyCon "CExpr")))) (variant "CRecord" (ConPos (TyCon "String") (TyApp (TyCon "List") (TyCon "CField")))) (variant "CFieldAccess" (ConPos (TyCon "CExpr") (TyCon "String") (TyCon "String") (TyCon "Int"))) (variant "CRecordUpdate" (ConPos (TyCon "String") (TyCon "CExpr") (TyApp (TyCon "List") (TyCon "CField")))) (variant "CVariantUpdate" (ConPos (TyCon "String") (TyCon "CExpr") (TyApp (TyCon "List") (TyCon "CField")))) (variant "CArray" (ConPos (TyApp (TyCon "List") (TyCon "CExpr")))) (variant "CRangeList" (ConPos (TyCon "CExpr") (TyCon "CExpr") (TyCon "Bool"))) (variant "CRangeArray" (ConPos (TyCon "CExpr") (TyCon "CExpr") (TyCon "Bool"))) (variant "CIndex" (ConPos (TyCon "CExpr") (TyCon "CExpr"))) (variant "CSlice" (ConPos (TyCon "CExpr") (TyCon "CExpr") (TyCon "CExpr") (TyCon "Bool"))) (variant "CStringIndex" (ConPos (TyCon "CExpr") (TyCon "CExpr"))) (variant "CStringSlice" (ConPos (TyCon "CExpr") (TyCon "CExpr") (TyCon "CExpr") (TyCon "Bool"))) (variant "CListIndex" (ConPos (TyCon "CExpr") (TyCon "CExpr"))) (variant "CListSlice" (ConPos (TyCon "CExpr") (TyCon "CExpr") (TyCon "CExpr") (TyCon "Bool"))) (variant "CBlock" (ConPos (TyApp (TyCon "List") (TyCon "CStmt")))) (variant "CMethod" (ConPos (TyCon "String") (TyCon "MethodEvidence"))) (variant "CDict" (ConPos (TyCon "String") (TyApp (TyCon "List") (TyCon "Route"))))) ())
+(DData Public "CExpr" () ((variant "CLit" (ConPos (TyCon "Lit"))) (variant "CVar" (ConPos (TyCon "String") (TyCon "Addr"))) (variant "CApp" (ConPos (TyCon "CExpr") (TyApp (TyCon "List") (TyCon "CExpr")) (TyCon "CallSite"))) (variant "CLam" (ConPos (TyApp (TyCon "List") (TyCon "Pat")) (TyCon "CExpr"))) (variant "CLet" (ConPos (TyCon "Bool") (TyCon "Pat") (TyCon "CExpr") (TyCon "CExpr"))) (variant "CLetGroup" (ConPos (TyApp (TyCon "List") (TyCon "CBind")) (TyCon "CExpr"))) (variant "CMatch" (ConPos (TyCon "CExpr") (TyApp (TyCon "List") (TyCon "CArm")))) (variant "CDecision" (ConPos (TyCon "CExpr") (TyApp (TyCon "List") (TyCon "CArm")) (TyCon "CTree"))) (variant "CIf" (ConPos (TyCon "CExpr") (TyCon "CExpr") (TyCon "CExpr"))) (variant "CBinPrim" (ConPos (TyCon "String") (TyCon "CExpr") (TyCon "CExpr") (TyCon "String") (TyCon "Loc"))) (variant "CUnOp" (ConPos (TyCon "String") (TyCon "CExpr"))) (variant "CTuple" (ConPos (TyApp (TyCon "List") (TyCon "CExpr")))) (variant "CList" (ConPos (TyApp (TyCon "List") (TyCon "CExpr")))) (variant "CRecord" (ConPos (TyCon "String") (TyApp (TyCon "List") (TyCon "CField")))) (variant "CFieldAccess" (ConPos (TyCon "CExpr") (TyCon "String") (TyCon "String") (TyCon "Int"))) (variant "CRecordUpdate" (ConPos (TyCon "String") (TyCon "CExpr") (TyApp (TyCon "List") (TyCon "CField")))) (variant "CVariantUpdate" (ConPos (TyCon "String") (TyCon "CExpr") (TyApp (TyCon "List") (TyCon "CField")))) (variant "CArray" (ConPos (TyApp (TyCon "List") (TyCon "CExpr")))) (variant "CRangeList" (ConPos (TyCon "CExpr") (TyCon "CExpr") (TyCon "Bool"))) (variant "CRangeArray" (ConPos (TyCon "CExpr") (TyCon "CExpr") (TyCon "Bool"))) (variant "CBlock" (ConPos (TyApp (TyCon "List") (TyCon "CStmt")))) (variant "CMethod" (ConPos (TyCon "String") (TyCon "MethodEvidence"))) (variant "CDict" (ConPos (TyCon "String") (TyApp (TyCon "List") (TyCon "Route"))))) ())
 (DData Public "MethodEvidence" () ((variant "MethodEvidence" (ConNamed (field "meIface" (TyCon "String")) (field "meArity" (TyCon "Int")) (field "meDispatch" (TyCon "Route")) (field "mePrereqs" (TyApp (TyCon "List") (TyCon "Route"))) (field "meContext" (TyApp (TyCon "List") (TyCon "Route")))))) ())
 (DTypeSig true "givenNames" (TyFun (TyCon "Route") (TyApp (TyCon "List") (TyCon "String"))))
 (DFunDef false "givenNames" ((PCon "RDict" (PVar "d"))) (EListLit (EVar "d")))
@@ -893,12 +856,6 @@ mapStmtBinders f (CSAssign x e) = CSAssign x (mapExprBinders f e)
 (DFunDef false "mapExprBinders" ((PVar "f") (PCon "CArray" (PVar "es"))) (EApp (EVar "CArray") (EApp (EApp (EVar "map") (EApp (EVar "mapExprBinders") (EVar "f"))) (EVar "es"))))
 (DFunDef false "mapExprBinders" ((PVar "f") (PCon "CRangeList" (PVar "lo") (PVar "hi") (PVar "incl"))) (EBlock (DoLet false false (PVar "lo2") (EApp (EApp (EVar "mapExprBinders") (EVar "f")) (EVar "lo"))) (DoExpr (EApp (EApp (EApp (EVar "CRangeList") (EVar "lo2")) (EApp (EApp (EVar "mapExprBinders") (EVar "f")) (EVar "hi"))) (EVar "incl")))))
 (DFunDef false "mapExprBinders" ((PVar "f") (PCon "CRangeArray" (PVar "lo") (PVar "hi") (PVar "incl"))) (EBlock (DoLet false false (PVar "lo2") (EApp (EApp (EVar "mapExprBinders") (EVar "f")) (EVar "lo"))) (DoExpr (EApp (EApp (EApp (EVar "CRangeArray") (EVar "lo2")) (EApp (EApp (EVar "mapExprBinders") (EVar "f")) (EVar "hi"))) (EVar "incl")))))
-(DFunDef false "mapExprBinders" ((PVar "f") (PCon "CIndex" (PVar "a") (PVar "i"))) (EBlock (DoLet false false (PVar "a2") (EApp (EApp (EVar "mapExprBinders") (EVar "f")) (EVar "a"))) (DoExpr (EApp (EApp (EVar "CIndex") (EVar "a2")) (EApp (EApp (EVar "mapExprBinders") (EVar "f")) (EVar "i"))))))
-(DFunDef false "mapExprBinders" ((PVar "f") (PCon "CSlice" (PVar "a") (PVar "lo") (PVar "hi") (PVar "incl"))) (EBlock (DoLet false false (PVar "a2") (EApp (EApp (EVar "mapExprBinders") (EVar "f")) (EVar "a"))) (DoLet false false (PVar "lo2") (EApp (EApp (EVar "mapExprBinders") (EVar "f")) (EVar "lo"))) (DoExpr (EApp (EApp (EApp (EApp (EVar "CSlice") (EVar "a2")) (EVar "lo2")) (EApp (EApp (EVar "mapExprBinders") (EVar "f")) (EVar "hi"))) (EVar "incl")))))
-(DFunDef false "mapExprBinders" ((PVar "f") (PCon "CStringIndex" (PVar "a") (PVar "i"))) (EBlock (DoLet false false (PVar "a2") (EApp (EApp (EVar "mapExprBinders") (EVar "f")) (EVar "a"))) (DoExpr (EApp (EApp (EVar "CStringIndex") (EVar "a2")) (EApp (EApp (EVar "mapExprBinders") (EVar "f")) (EVar "i"))))))
-(DFunDef false "mapExprBinders" ((PVar "f") (PCon "CStringSlice" (PVar "a") (PVar "lo") (PVar "hi") (PVar "incl"))) (EBlock (DoLet false false (PVar "a2") (EApp (EApp (EVar "mapExprBinders") (EVar "f")) (EVar "a"))) (DoLet false false (PVar "lo2") (EApp (EApp (EVar "mapExprBinders") (EVar "f")) (EVar "lo"))) (DoExpr (EApp (EApp (EApp (EApp (EVar "CStringSlice") (EVar "a2")) (EVar "lo2")) (EApp (EApp (EVar "mapExprBinders") (EVar "f")) (EVar "hi"))) (EVar "incl")))))
-(DFunDef false "mapExprBinders" ((PVar "f") (PCon "CListIndex" (PVar "a") (PVar "i"))) (EBlock (DoLet false false (PVar "a2") (EApp (EApp (EVar "mapExprBinders") (EVar "f")) (EVar "a"))) (DoExpr (EApp (EApp (EVar "CListIndex") (EVar "a2")) (EApp (EApp (EVar "mapExprBinders") (EVar "f")) (EVar "i"))))))
-(DFunDef false "mapExprBinders" ((PVar "f") (PCon "CListSlice" (PVar "a") (PVar "lo") (PVar "hi") (PVar "incl"))) (EBlock (DoLet false false (PVar "a2") (EApp (EApp (EVar "mapExprBinders") (EVar "f")) (EVar "a"))) (DoLet false false (PVar "lo2") (EApp (EApp (EVar "mapExprBinders") (EVar "f")) (EVar "lo"))) (DoExpr (EApp (EApp (EApp (EApp (EVar "CListSlice") (EVar "a2")) (EVar "lo2")) (EApp (EApp (EVar "mapExprBinders") (EVar "f")) (EVar "hi"))) (EVar "incl")))))
 (DFunDef false "mapExprBinders" ((PVar "f") (PCon "CBlock" (PVar "stmts"))) (EApp (EVar "CBlock") (EApp (EApp (EVar "map") (EApp (EVar "mapStmtBinders") (EVar "f"))) (EVar "stmts"))))
 (DFunDef false "mapExprBinders" (PWild (PCon "CMethod" (PVar "name") (PVar "ev"))) (EApp (EApp (EVar "CMethod") (EVar "name")) (EVar "ev")))
 (DFunDef false "mapExprBinders" (PWild (PCon "CDict" (PVar "name") (PVar "rs"))) (EApp (EApp (EVar "CDict") (EVar "name")) (EVar "rs")))
@@ -922,7 +879,7 @@ mapStmtBinders f (CSAssign x e) = CSAssign x (mapExprBinders f e)
 (DUse false (UseGroup ("ir" "extern_types") ((mem "ExternDeclFact" false))))
 (DUse false (UseGroup ("types" "runtime_types") ((mem "BinderRow" true) (mem "RuntimeType" true))))
 (DUse false (UseGroup ("support" "util") ((mem "reverseL" false) (mem "startsWith" false))))
-(DData Public "CExpr" () ((variant "CLit" (ConPos (TyCon "Lit"))) (variant "CVar" (ConPos (TyCon "String") (TyCon "Addr"))) (variant "CApp" (ConPos (TyCon "CExpr") (TyApp (TyCon "List") (TyCon "CExpr")) (TyCon "CallSite"))) (variant "CLam" (ConPos (TyApp (TyCon "List") (TyCon "Pat")) (TyCon "CExpr"))) (variant "CLet" (ConPos (TyCon "Bool") (TyCon "Pat") (TyCon "CExpr") (TyCon "CExpr"))) (variant "CLetGroup" (ConPos (TyApp (TyCon "List") (TyCon "CBind")) (TyCon "CExpr"))) (variant "CMatch" (ConPos (TyCon "CExpr") (TyApp (TyCon "List") (TyCon "CArm")))) (variant "CDecision" (ConPos (TyCon "CExpr") (TyApp (TyCon "List") (TyCon "CArm")) (TyCon "CTree"))) (variant "CIf" (ConPos (TyCon "CExpr") (TyCon "CExpr") (TyCon "CExpr"))) (variant "CBinPrim" (ConPos (TyCon "String") (TyCon "CExpr") (TyCon "CExpr") (TyCon "String") (TyCon "Loc"))) (variant "CUnOp" (ConPos (TyCon "String") (TyCon "CExpr"))) (variant "CTuple" (ConPos (TyApp (TyCon "List") (TyCon "CExpr")))) (variant "CList" (ConPos (TyApp (TyCon "List") (TyCon "CExpr")))) (variant "CRecord" (ConPos (TyCon "String") (TyApp (TyCon "List") (TyCon "CField")))) (variant "CFieldAccess" (ConPos (TyCon "CExpr") (TyCon "String") (TyCon "String") (TyCon "Int"))) (variant "CRecordUpdate" (ConPos (TyCon "String") (TyCon "CExpr") (TyApp (TyCon "List") (TyCon "CField")))) (variant "CVariantUpdate" (ConPos (TyCon "String") (TyCon "CExpr") (TyApp (TyCon "List") (TyCon "CField")))) (variant "CArray" (ConPos (TyApp (TyCon "List") (TyCon "CExpr")))) (variant "CRangeList" (ConPos (TyCon "CExpr") (TyCon "CExpr") (TyCon "Bool"))) (variant "CRangeArray" (ConPos (TyCon "CExpr") (TyCon "CExpr") (TyCon "Bool"))) (variant "CIndex" (ConPos (TyCon "CExpr") (TyCon "CExpr"))) (variant "CSlice" (ConPos (TyCon "CExpr") (TyCon "CExpr") (TyCon "CExpr") (TyCon "Bool"))) (variant "CStringIndex" (ConPos (TyCon "CExpr") (TyCon "CExpr"))) (variant "CStringSlice" (ConPos (TyCon "CExpr") (TyCon "CExpr") (TyCon "CExpr") (TyCon "Bool"))) (variant "CListIndex" (ConPos (TyCon "CExpr") (TyCon "CExpr"))) (variant "CListSlice" (ConPos (TyCon "CExpr") (TyCon "CExpr") (TyCon "CExpr") (TyCon "Bool"))) (variant "CBlock" (ConPos (TyApp (TyCon "List") (TyCon "CStmt")))) (variant "CMethod" (ConPos (TyCon "String") (TyCon "MethodEvidence"))) (variant "CDict" (ConPos (TyCon "String") (TyApp (TyCon "List") (TyCon "Route"))))) ())
+(DData Public "CExpr" () ((variant "CLit" (ConPos (TyCon "Lit"))) (variant "CVar" (ConPos (TyCon "String") (TyCon "Addr"))) (variant "CApp" (ConPos (TyCon "CExpr") (TyApp (TyCon "List") (TyCon "CExpr")) (TyCon "CallSite"))) (variant "CLam" (ConPos (TyApp (TyCon "List") (TyCon "Pat")) (TyCon "CExpr"))) (variant "CLet" (ConPos (TyCon "Bool") (TyCon "Pat") (TyCon "CExpr") (TyCon "CExpr"))) (variant "CLetGroup" (ConPos (TyApp (TyCon "List") (TyCon "CBind")) (TyCon "CExpr"))) (variant "CMatch" (ConPos (TyCon "CExpr") (TyApp (TyCon "List") (TyCon "CArm")))) (variant "CDecision" (ConPos (TyCon "CExpr") (TyApp (TyCon "List") (TyCon "CArm")) (TyCon "CTree"))) (variant "CIf" (ConPos (TyCon "CExpr") (TyCon "CExpr") (TyCon "CExpr"))) (variant "CBinPrim" (ConPos (TyCon "String") (TyCon "CExpr") (TyCon "CExpr") (TyCon "String") (TyCon "Loc"))) (variant "CUnOp" (ConPos (TyCon "String") (TyCon "CExpr"))) (variant "CTuple" (ConPos (TyApp (TyCon "List") (TyCon "CExpr")))) (variant "CList" (ConPos (TyApp (TyCon "List") (TyCon "CExpr")))) (variant "CRecord" (ConPos (TyCon "String") (TyApp (TyCon "List") (TyCon "CField")))) (variant "CFieldAccess" (ConPos (TyCon "CExpr") (TyCon "String") (TyCon "String") (TyCon "Int"))) (variant "CRecordUpdate" (ConPos (TyCon "String") (TyCon "CExpr") (TyApp (TyCon "List") (TyCon "CField")))) (variant "CVariantUpdate" (ConPos (TyCon "String") (TyCon "CExpr") (TyApp (TyCon "List") (TyCon "CField")))) (variant "CArray" (ConPos (TyApp (TyCon "List") (TyCon "CExpr")))) (variant "CRangeList" (ConPos (TyCon "CExpr") (TyCon "CExpr") (TyCon "Bool"))) (variant "CRangeArray" (ConPos (TyCon "CExpr") (TyCon "CExpr") (TyCon "Bool"))) (variant "CBlock" (ConPos (TyApp (TyCon "List") (TyCon "CStmt")))) (variant "CMethod" (ConPos (TyCon "String") (TyCon "MethodEvidence"))) (variant "CDict" (ConPos (TyCon "String") (TyApp (TyCon "List") (TyCon "Route"))))) ())
 (DData Public "MethodEvidence" () ((variant "MethodEvidence" (ConNamed (field "meIface" (TyCon "String")) (field "meArity" (TyCon "Int")) (field "meDispatch" (TyCon "Route")) (field "mePrereqs" (TyApp (TyCon "List") (TyCon "Route"))) (field "meContext" (TyApp (TyCon "List") (TyCon "Route")))))) ())
 (DTypeSig true "givenNames" (TyFun (TyCon "Route") (TyApp (TyCon "List") (TyCon "String"))))
 (DFunDef false "givenNames" ((PCon "RDict" (PVar "d"))) (EListLit (EVar "d")))
@@ -1058,12 +1015,6 @@ mapStmtBinders f (CSAssign x e) = CSAssign x (mapExprBinders f e)
 (DFunDef false "mapExprBinders" ((PVar "f") (PCon "CArray" (PVar "es"))) (EApp (EVar "CArray") (EApp (EApp (EMethodRef "map") (EApp (EVar "mapExprBinders") (EVar "f"))) (EVar "es"))))
 (DFunDef false "mapExprBinders" ((PVar "f") (PCon "CRangeList" (PVar "lo") (PVar "hi") (PVar "incl"))) (EBlock (DoLet false false (PVar "lo2") (EApp (EApp (EVar "mapExprBinders") (EVar "f")) (EVar "lo"))) (DoExpr (EApp (EApp (EApp (EVar "CRangeList") (EVar "lo2")) (EApp (EApp (EVar "mapExprBinders") (EVar "f")) (EVar "hi"))) (EVar "incl")))))
 (DFunDef false "mapExprBinders" ((PVar "f") (PCon "CRangeArray" (PVar "lo") (PVar "hi") (PVar "incl"))) (EBlock (DoLet false false (PVar "lo2") (EApp (EApp (EVar "mapExprBinders") (EVar "f")) (EVar "lo"))) (DoExpr (EApp (EApp (EApp (EVar "CRangeArray") (EVar "lo2")) (EApp (EApp (EVar "mapExprBinders") (EVar "f")) (EVar "hi"))) (EVar "incl")))))
-(DFunDef false "mapExprBinders" ((PVar "f") (PCon "CIndex" (PVar "a") (PVar "i"))) (EBlock (DoLet false false (PVar "a2") (EApp (EApp (EVar "mapExprBinders") (EVar "f")) (EVar "a"))) (DoExpr (EApp (EApp (EVar "CIndex") (EVar "a2")) (EApp (EApp (EVar "mapExprBinders") (EVar "f")) (EVar "i"))))))
-(DFunDef false "mapExprBinders" ((PVar "f") (PCon "CSlice" (PVar "a") (PVar "lo") (PVar "hi") (PVar "incl"))) (EBlock (DoLet false false (PVar "a2") (EApp (EApp (EVar "mapExprBinders") (EVar "f")) (EVar "a"))) (DoLet false false (PVar "lo2") (EApp (EApp (EVar "mapExprBinders") (EVar "f")) (EVar "lo"))) (DoExpr (EApp (EApp (EApp (EApp (EVar "CSlice") (EVar "a2")) (EVar "lo2")) (EApp (EApp (EVar "mapExprBinders") (EVar "f")) (EVar "hi"))) (EVar "incl")))))
-(DFunDef false "mapExprBinders" ((PVar "f") (PCon "CStringIndex" (PVar "a") (PVar "i"))) (EBlock (DoLet false false (PVar "a2") (EApp (EApp (EVar "mapExprBinders") (EVar "f")) (EVar "a"))) (DoExpr (EApp (EApp (EVar "CStringIndex") (EVar "a2")) (EApp (EApp (EVar "mapExprBinders") (EVar "f")) (EVar "i"))))))
-(DFunDef false "mapExprBinders" ((PVar "f") (PCon "CStringSlice" (PVar "a") (PVar "lo") (PVar "hi") (PVar "incl"))) (EBlock (DoLet false false (PVar "a2") (EApp (EApp (EVar "mapExprBinders") (EVar "f")) (EVar "a"))) (DoLet false false (PVar "lo2") (EApp (EApp (EVar "mapExprBinders") (EVar "f")) (EVar "lo"))) (DoExpr (EApp (EApp (EApp (EApp (EVar "CStringSlice") (EVar "a2")) (EVar "lo2")) (EApp (EApp (EVar "mapExprBinders") (EVar "f")) (EVar "hi"))) (EVar "incl")))))
-(DFunDef false "mapExprBinders" ((PVar "f") (PCon "CListIndex" (PVar "a") (PVar "i"))) (EBlock (DoLet false false (PVar "a2") (EApp (EApp (EVar "mapExprBinders") (EVar "f")) (EVar "a"))) (DoExpr (EApp (EApp (EVar "CListIndex") (EVar "a2")) (EApp (EApp (EVar "mapExprBinders") (EVar "f")) (EVar "i"))))))
-(DFunDef false "mapExprBinders" ((PVar "f") (PCon "CListSlice" (PVar "a") (PVar "lo") (PVar "hi") (PVar "incl"))) (EBlock (DoLet false false (PVar "a2") (EApp (EApp (EVar "mapExprBinders") (EVar "f")) (EVar "a"))) (DoLet false false (PVar "lo2") (EApp (EApp (EVar "mapExprBinders") (EVar "f")) (EVar "lo"))) (DoExpr (EApp (EApp (EApp (EApp (EVar "CListSlice") (EVar "a2")) (EVar "lo2")) (EApp (EApp (EVar "mapExprBinders") (EVar "f")) (EVar "hi"))) (EVar "incl")))))
 (DFunDef false "mapExprBinders" ((PVar "f") (PCon "CBlock" (PVar "stmts"))) (EApp (EVar "CBlock") (EApp (EApp (EMethodRef "map") (EApp (EVar "mapStmtBinders") (EVar "f"))) (EVar "stmts"))))
 (DFunDef false "mapExprBinders" (PWild (PCon "CMethod" (PVar "name") (PVar "ev"))) (EApp (EApp (EVar "CMethod") (EVar "name")) (EVar "ev")))
 (DFunDef false "mapExprBinders" (PWild (PCon "CDict" (PVar "name") (PVar "rs"))) (EApp (EApp (EVar "CDict") (EVar "name")) (EVar "rs")))

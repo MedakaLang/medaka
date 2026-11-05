@@ -765,7 +765,7 @@ Surfaced by porting the pure-Medaka SQLite library to `--target wasm` (the censu
 
 - **W-SQLITE-1 — array extern in point-free position (`3d15756`).** `emitExternEtaDefine` (`wasm_emit.mdk` ~3421) dispatched `isStrExternW → emitStrExternRef else emitLeafExternRef`, with NO `isArrayExternW` branch → a point-free array extern (e.g. `arrayFromList` in the byteparser parse path) fell to the leaf path → "unsupported leaf extern". Fix: added the `isArrayExternW → emitArrayExternRef` branch (mirrors the direct-call arm at ~3717) + a new `arrayEtaScratchLocals` helper so the synthesized eta `(func …)` declares the depth-0 array scratch locals (it previously declared only param locals).
 - **W-SQLITE-2 — tuple-pattern lambda param in the free-var walk (`3d15756`).** `freeVarsExpr` CLam case used `map patName pats`, which gaps on any non-`PVar`/`PWild` param — so a `do`-bind with a tuple LHS (`(a,b) <- m` → `andThen m (\(a,b) => …)`) broke, even though `emitClosure`/`emitLamDefine` already destructure such params via `bindPatRef`. Fix: `flatMap patVars pats` (matching the CLet case). General — affects ANY wasm program with a tuple/ctor-pattern lambda param.
-- **W-SQLITE-3 — `maxIndexAt` scratch-local undercount (`3a633d7`).** `CIndex`/`CSlice`/`CRangeList`/`CRangeArray`/`CRecordUpdate`/`CVariantUpdate` allocate depth-`d` scratch locals at their emit site but didn't contribute `d` to the depth bound → masked at depths 0/1 by the `maxI maxDepth 1` floor, but an `arr[i]` nested ≥2 matches deep (the sqlite mutate/select path) left `$__ixarr2` undeclared → wasm-tools "unknown local". Fix widens the bound (over-declaring locals is harmless). General — any ≥2-deep nested array index.
+- **W-SQLITE-3 — `maxIndexAt` scratch-local undercount (`3a633d7`).** the index/slice nodes (removed by #4261), `CRangeList`/`CRangeArray`/`CRecordUpdate`/`CVariantUpdate` allocate depth-`d` scratch locals at their emit site but didn't contribute `d` to the depth bound → masked at depths 0/1 by the `maxI maxDepth 1` floor, but an `arr[i]` nested ≥2 matches deep (the sqlite mutate/select path) left `$__ixarr2` undeclared → wasm-tools "unknown local". Fix widens the bound (over-declaring locals is harmless). General — any ≥2-deep nested array index.
 
 ### W-SQLITE-4 (RESIDUAL, worked around library-side, 2026-06-30) — type-erased Float arithmetic on WasmGC
 
@@ -883,7 +883,7 @@ hidden behind a call is now an init-order edge. The two remaining arms need thun
 | # | shape | eval | native | status |
 |---|---|---|---|---|
 | 1 | `mkVal _ = base` · `cell = mkVal ()` · `base = 42` | `42` | was `0` silent | ✅ **FIXED (Stage B)** — the reachability closure follows the call to `mkVal` and sees the `base` edge |
-| 2 | `src = "hello"` · `part = src.[lo..3]` · `lo = 1` | `el` | was `hel` silent | ✅ **FIXED (Stage A)** — `CStringSlice` now descends `lo`/`hi` |
+| 2 | `src = "hello"` · `part = src.[lo..3]` · `lo = 1` | `el` | was `hel` silent | ✅ **FIXED (Stage A)** — the string-slice node now descends `lo`/`hi` |
 | 3 | `m if m < lim` guard in a global's rhs, `lim` later | `under` | was `over` silent | ✅ **FIXED (Stage A)** — `eagerVarsGuarded` replaces the guard-discarding wildcard |
 | 4 | `cell = mk True`, impl body reads a later global | `42` | `0` silent | **OPEN (deviation, #561)** — an interface-method `CMethod` dispatch head, which Stage B does NOT resolve to impl bodies (see below) |
 | 5 | `x = x + 1` | `E-CYCLIC-VALUE` exit 1 | `1` exit 0 | **OPEN (deviation, #561)** — a sort has no answer for a genuine cycle; laziness does |
@@ -903,8 +903,8 @@ either). The ONE call form it does NOT follow is a **`CMethod` interface-method 
 (#4): resolving a method route to its impl body/bodies is a strictly larger analysis, left as
 the bounded deviation #561 drains. **A `CVar`-only Stage B would have shipped a fresh S0.**
 
-⭐ **The Stage A decisive control:** `CListSlice` descended `lo`/`hi` all along and was **green
-on the identical program** while `CStringSlice` was wrong. Same shape, neighbouring arm — that
+⭐ **The Stage A decisive control:** the list-slice node descended `lo`/`hi` all along and was **green
+on the identical program** while the string-slice node was wrong. Same shape, neighbouring arm — that
 is what made #2 **structural completeness**, not an algorithm choice. Pinned by
 `test/llvm_fixtures_typed/eager_global_{string,list}_slice.mdk` and
 `test/llvm_fixtures/eager_global_guard.mdk`. **Stage B pins:** #1's call-hidden arm promotes to

@@ -1,5 +1,5 @@
 # META
-source_lines=325
+source_lines=301
 stages=DESUGAR,MARK
 # SOURCE
 import support.symbol_encoding.{encodePair}
@@ -251,30 +251,6 @@ walkExpr env scope (CRangeList lo hi incl) =
   CRangeList (walkExpr env scope lo) (walkExpr env scope hi) incl
 walkExpr env scope (CRangeArray lo hi incl) =
   CRangeArray (walkExpr env scope lo) (walkExpr env scope hi) incl
-walkExpr env scope (CIndex a i) =
-  CIndex (walkExpr env scope a) (walkExpr env scope i)
-walkExpr env scope (CSlice a lo hi incl) =
-  CSlice
-    (walkExpr env scope a)
-    (walkExpr env scope lo)
-    (walkExpr env scope hi)
-    incl
-walkExpr env scope (CStringIndex a i) =
-  CStringIndex (walkExpr env scope a) (walkExpr env scope i)
-walkExpr env scope (CStringSlice a lo hi incl) =
-  CStringSlice
-    (walkExpr env scope a)
-    (walkExpr env scope lo)
-    (walkExpr env scope hi)
-    incl
-walkExpr env scope (CListIndex a i) =
-  CListIndex (walkExpr env scope a) (walkExpr env scope i)
-walkExpr env scope (CListSlice a lo hi incl) =
-  CListSlice
-    (walkExpr env scope a)
-    (walkExpr env scope lo)
-    (walkExpr env scope hi)
-    incl
 walkExpr env scope (CBlock stmts) = CBlock (walkStmts env scope stmts)
 walkExpr _ _ (CMethod name (MethodEvidence iface arity r ir mr)) =
   CMethod name (MethodEvidence iface arity r ir mr)
@@ -408,12 +384,6 @@ externFactIndex =
 (DFunDef false "walkExpr" ((PVar "env") (PVar "scope") (PCon "CArray" (PVar "es"))) (EApp (EVar "CArray") (EApp (EApp (EVar "map") (EApp (EApp (EVar "walkExpr") (EVar "env")) (EVar "scope"))) (EVar "es"))))
 (DFunDef false "walkExpr" ((PVar "env") (PVar "scope") (PCon "CRangeList" (PVar "lo") (PVar "hi") (PVar "incl"))) (EApp (EApp (EApp (EVar "CRangeList") (EApp (EApp (EApp (EVar "walkExpr") (EVar "env")) (EVar "scope")) (EVar "lo"))) (EApp (EApp (EApp (EVar "walkExpr") (EVar "env")) (EVar "scope")) (EVar "hi"))) (EVar "incl")))
 (DFunDef false "walkExpr" ((PVar "env") (PVar "scope") (PCon "CRangeArray" (PVar "lo") (PVar "hi") (PVar "incl"))) (EApp (EApp (EApp (EVar "CRangeArray") (EApp (EApp (EApp (EVar "walkExpr") (EVar "env")) (EVar "scope")) (EVar "lo"))) (EApp (EApp (EApp (EVar "walkExpr") (EVar "env")) (EVar "scope")) (EVar "hi"))) (EVar "incl")))
-(DFunDef false "walkExpr" ((PVar "env") (PVar "scope") (PCon "CIndex" (PVar "a") (PVar "i"))) (EApp (EApp (EVar "CIndex") (EApp (EApp (EApp (EVar "walkExpr") (EVar "env")) (EVar "scope")) (EVar "a"))) (EApp (EApp (EApp (EVar "walkExpr") (EVar "env")) (EVar "scope")) (EVar "i"))))
-(DFunDef false "walkExpr" ((PVar "env") (PVar "scope") (PCon "CSlice" (PVar "a") (PVar "lo") (PVar "hi") (PVar "incl"))) (EApp (EApp (EApp (EApp (EVar "CSlice") (EApp (EApp (EApp (EVar "walkExpr") (EVar "env")) (EVar "scope")) (EVar "a"))) (EApp (EApp (EApp (EVar "walkExpr") (EVar "env")) (EVar "scope")) (EVar "lo"))) (EApp (EApp (EApp (EVar "walkExpr") (EVar "env")) (EVar "scope")) (EVar "hi"))) (EVar "incl")))
-(DFunDef false "walkExpr" ((PVar "env") (PVar "scope") (PCon "CStringIndex" (PVar "a") (PVar "i"))) (EApp (EApp (EVar "CStringIndex") (EApp (EApp (EApp (EVar "walkExpr") (EVar "env")) (EVar "scope")) (EVar "a"))) (EApp (EApp (EApp (EVar "walkExpr") (EVar "env")) (EVar "scope")) (EVar "i"))))
-(DFunDef false "walkExpr" ((PVar "env") (PVar "scope") (PCon "CStringSlice" (PVar "a") (PVar "lo") (PVar "hi") (PVar "incl"))) (EApp (EApp (EApp (EApp (EVar "CStringSlice") (EApp (EApp (EApp (EVar "walkExpr") (EVar "env")) (EVar "scope")) (EVar "a"))) (EApp (EApp (EApp (EVar "walkExpr") (EVar "env")) (EVar "scope")) (EVar "lo"))) (EApp (EApp (EApp (EVar "walkExpr") (EVar "env")) (EVar "scope")) (EVar "hi"))) (EVar "incl")))
-(DFunDef false "walkExpr" ((PVar "env") (PVar "scope") (PCon "CListIndex" (PVar "a") (PVar "i"))) (EApp (EApp (EVar "CListIndex") (EApp (EApp (EApp (EVar "walkExpr") (EVar "env")) (EVar "scope")) (EVar "a"))) (EApp (EApp (EApp (EVar "walkExpr") (EVar "env")) (EVar "scope")) (EVar "i"))))
-(DFunDef false "walkExpr" ((PVar "env") (PVar "scope") (PCon "CListSlice" (PVar "a") (PVar "lo") (PVar "hi") (PVar "incl"))) (EApp (EApp (EApp (EApp (EVar "CListSlice") (EApp (EApp (EApp (EVar "walkExpr") (EVar "env")) (EVar "scope")) (EVar "a"))) (EApp (EApp (EApp (EVar "walkExpr") (EVar "env")) (EVar "scope")) (EVar "lo"))) (EApp (EApp (EApp (EVar "walkExpr") (EVar "env")) (EVar "scope")) (EVar "hi"))) (EVar "incl")))
 (DFunDef false "walkExpr" ((PVar "env") (PVar "scope") (PCon "CBlock" (PVar "stmts"))) (EApp (EVar "CBlock") (EApp (EApp (EApp (EVar "walkStmts") (EVar "env")) (EVar "scope")) (EVar "stmts"))))
 (DFunDef false "walkExpr" (PWild PWild (PCon "CMethod" (PVar "name") (PCon "MethodEvidence" (PVar "iface") (PVar "arity") (PVar "r") (PVar "ir") (PVar "mr")))) (EApp (EApp (EVar "CMethod") (EVar "name")) (EApp (EApp (EApp (EApp (EApp (EVar "MethodEvidence") (EVar "iface")) (EVar "arity")) (EVar "r")) (EVar "ir")) (EVar "mr"))))
 (DFunDef false "walkExpr" (PWild PWild (PCon "CDict" (PVar "name") (PVar "rs"))) (EApp (EApp (EVar "CDict") (EVar "name")) (EVar "rs")))
@@ -514,12 +484,6 @@ externFactIndex =
 (DFunDef false "walkExpr" ((PVar "env") (PVar "scope") (PCon "CArray" (PVar "es"))) (EApp (EVar "CArray") (EApp (EApp (EMethodRef "map") (EApp (EApp (EVar "walkExpr") (EVar "env")) (EVar "scope"))) (EVar "es"))))
 (DFunDef false "walkExpr" ((PVar "env") (PVar "scope") (PCon "CRangeList" (PVar "lo") (PVar "hi") (PVar "incl"))) (EApp (EApp (EApp (EVar "CRangeList") (EApp (EApp (EApp (EVar "walkExpr") (EVar "env")) (EVar "scope")) (EVar "lo"))) (EApp (EApp (EApp (EVar "walkExpr") (EVar "env")) (EVar "scope")) (EVar "hi"))) (EVar "incl")))
 (DFunDef false "walkExpr" ((PVar "env") (PVar "scope") (PCon "CRangeArray" (PVar "lo") (PVar "hi") (PVar "incl"))) (EApp (EApp (EApp (EVar "CRangeArray") (EApp (EApp (EApp (EVar "walkExpr") (EVar "env")) (EVar "scope")) (EVar "lo"))) (EApp (EApp (EApp (EVar "walkExpr") (EVar "env")) (EVar "scope")) (EVar "hi"))) (EVar "incl")))
-(DFunDef false "walkExpr" ((PVar "env") (PVar "scope") (PCon "CIndex" (PVar "a") (PVar "i"))) (EApp (EApp (EVar "CIndex") (EApp (EApp (EApp (EVar "walkExpr") (EVar "env")) (EVar "scope")) (EVar "a"))) (EApp (EApp (EApp (EVar "walkExpr") (EVar "env")) (EVar "scope")) (EVar "i"))))
-(DFunDef false "walkExpr" ((PVar "env") (PVar "scope") (PCon "CSlice" (PVar "a") (PVar "lo") (PVar "hi") (PVar "incl"))) (EApp (EApp (EApp (EApp (EVar "CSlice") (EApp (EApp (EApp (EVar "walkExpr") (EVar "env")) (EVar "scope")) (EVar "a"))) (EApp (EApp (EApp (EVar "walkExpr") (EVar "env")) (EVar "scope")) (EVar "lo"))) (EApp (EApp (EApp (EVar "walkExpr") (EVar "env")) (EVar "scope")) (EVar "hi"))) (EVar "incl")))
-(DFunDef false "walkExpr" ((PVar "env") (PVar "scope") (PCon "CStringIndex" (PVar "a") (PVar "i"))) (EApp (EApp (EVar "CStringIndex") (EApp (EApp (EApp (EVar "walkExpr") (EVar "env")) (EVar "scope")) (EVar "a"))) (EApp (EApp (EApp (EVar "walkExpr") (EVar "env")) (EVar "scope")) (EVar "i"))))
-(DFunDef false "walkExpr" ((PVar "env") (PVar "scope") (PCon "CStringSlice" (PVar "a") (PVar "lo") (PVar "hi") (PVar "incl"))) (EApp (EApp (EApp (EApp (EVar "CStringSlice") (EApp (EApp (EApp (EVar "walkExpr") (EVar "env")) (EVar "scope")) (EVar "a"))) (EApp (EApp (EApp (EVar "walkExpr") (EVar "env")) (EVar "scope")) (EVar "lo"))) (EApp (EApp (EApp (EVar "walkExpr") (EVar "env")) (EVar "scope")) (EVar "hi"))) (EVar "incl")))
-(DFunDef false "walkExpr" ((PVar "env") (PVar "scope") (PCon "CListIndex" (PVar "a") (PVar "i"))) (EApp (EApp (EVar "CListIndex") (EApp (EApp (EApp (EVar "walkExpr") (EVar "env")) (EVar "scope")) (EVar "a"))) (EApp (EApp (EApp (EVar "walkExpr") (EVar "env")) (EVar "scope")) (EVar "i"))))
-(DFunDef false "walkExpr" ((PVar "env") (PVar "scope") (PCon "CListSlice" (PVar "a") (PVar "lo") (PVar "hi") (PVar "incl"))) (EApp (EApp (EApp (EApp (EVar "CListSlice") (EApp (EApp (EApp (EVar "walkExpr") (EVar "env")) (EVar "scope")) (EVar "a"))) (EApp (EApp (EApp (EVar "walkExpr") (EVar "env")) (EVar "scope")) (EVar "lo"))) (EApp (EApp (EApp (EVar "walkExpr") (EVar "env")) (EVar "scope")) (EVar "hi"))) (EVar "incl")))
 (DFunDef false "walkExpr" ((PVar "env") (PVar "scope") (PCon "CBlock" (PVar "stmts"))) (EApp (EVar "CBlock") (EApp (EApp (EApp (EVar "walkStmts") (EVar "env")) (EVar "scope")) (EVar "stmts"))))
 (DFunDef false "walkExpr" (PWild PWild (PCon "CMethod" (PVar "name") (PCon "MethodEvidence" (PVar "iface") (PVar "arity") (PVar "r") (PVar "ir") (PVar "mr")))) (EApp (EApp (EVar "CMethod") (EVar "name")) (EApp (EApp (EApp (EApp (EApp (EVar "MethodEvidence") (EVar "iface")) (EVar "arity")) (EVar "r")) (EVar "ir")) (EVar "mr"))))
 (DFunDef false "walkExpr" (PWild PWild (PCon "CDict" (PVar "name") (PVar "rs"))) (EApp (EApp (EVar "CDict") (EVar "name")) (EVar "rs")))

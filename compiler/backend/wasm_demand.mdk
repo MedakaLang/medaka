@@ -305,9 +305,6 @@ dExpr sc acc (CTuple es) = walkEach (dExpr sc) (noteArity acc (listLen es)) es
 dExpr sc acc (CArray es) = walkEach (dExpr sc) (noteUse acc UseArray) es
 dExpr sc acc (CRangeArray lo hi _) =
   dExpr sc (dExpr sc (noteUse acc UseArray) lo) hi
-dExpr sc acc (CIndex a i) = dExpr sc (dExpr sc (noteUse acc UseArray) a) i
-dExpr sc acc (CSlice a lo hi _) =
-  dExpr sc (dExpr sc (dExpr sc (noteUse acc UseArray) a) lo) hi
 dExpr sc acc (CRecord _ fields) = walkEach (dField sc) acc fields
 dExpr sc acc (CFieldAccess ex _ _ _) = dExpr sc acc ex
 dExpr sc acc (CRecordUpdate _ base fields) =
@@ -1532,19 +1529,6 @@ hExpr ctx refMode str acc env (CDecision scrut arms tree) =
     tree
 hExpr ctx refMode str acc env (CMatch scrut arms) =
   fold (hArm ctx refMode str env) (hExpr ctx refMode str acc env scrut) arms
-hExpr ctx refMode str acc env (CIndex a i) =
-  hExpr
-    ctx
-    refMode
-    str
-    (hExpr ctx refMode str (if refMode then needTrap acc else acc) env a)
-    env
-    i
-hExpr ctx refMode str acc env (CSlice a lo hi _) =
-  fold
-    (a x => hExpr ctx refMode str a env x)
-    (if refMode then needTrap acc else acc)
-    [a, lo, hi]
 hExpr ctx refMode str acc env (CTuple xs) =
   fold (a x => hExpr ctx refMode str a env x) acc xs
 hExpr ctx refMode str acc env (CList xs) =
