@@ -172,7 +172,10 @@ and precompiled code to share them. Each is a fact with one producer (law A4).
    dependency order at load (OCaml module initialisation), a program's modules run theirs
    in import order, and the VM's user globals are plain cells the module initialiser
    fills. `compiler/backend/global_plan.mdk` already computes the order; its lazy bucket
-   becomes a static error at the declaration.
+   becomes a static error at the declaration. The work lands in two sprints: v0-4 writes
+   the static rules (I1 to I5 in `docs/spec/language-design.md`: the purity and
+   value-cycle rejections in `check`), and v0-5 changes the engines to initialise
+   strictly and deletes the forcer and the trap.
 
 ### 3.5 Linking
 
