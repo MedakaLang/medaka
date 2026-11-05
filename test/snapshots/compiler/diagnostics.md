@@ -1,5 +1,5 @@
 # META
-source_lines=3353
+source_lines=3276
 stages=DESUGAR,MARK
 # SOURCE
 import support.diag_codes.{DiagCode(..)}
@@ -27,8 +27,7 @@ import types.capability_manifest.{EntryKey(..)}
 -- one per line, sorted by the harness.
 
 import frontend.ast.{
-  Decl(..), Expr(..), Loc(..), Pat, Ty, UsePath(..), UseMember(..),
-  useMemberLocal
+  Decl(..), Expr(..), Loc(..), Pat, UsePath(..), UseMember(..), useMemberLocal
 }
 import frontend.parser.{
   parse,
@@ -103,11 +102,6 @@ import types.typecheck.{
 import types.tc_types.{DriveInputs(..), DriveOutputs(..), emptyDriveOutputs}
 import types.target_profile.{selectedProfile}
 import types.module_interface.{retainModuleInterfaces}
--- #2738: the two colliding signatures are SURFACE types, and this is the one
--- surface-type renderer in the tree (`tools/doc.mdk`'s `ppTyP` is private to the
--- doc generator).  Imported here, at the driver, rather than into
--- `types/typecheck.mdk`, so the detector's home layer gains no edge to `tools/`.
-import tools.printer.{ppTy}
 import driver.loader.{
   LoadError(..),
   loadErrorSite,
@@ -159,7 +153,6 @@ import backend.wasm_symbols.{
 import backend.llvm_symbols as LlvmSymbols
 import support.symbol_origin.{SymbolOrigin, originPosition}
 import json.{Json(..), jObject, stringify}
-import types.tc_shadow.{importedStandaloneShadows, importedStandaloneShadowsIn}
 
 -- ── types ──────────────────────────────────────────────────────────────────
 
@@ -827,14 +820,6 @@ analyzeSurface exportsFor modName runtimeSrc coreSrc raw internalGuard =
   -- (desugar.mdk) folds into one; reading `raw` here double-fires the warning (F2).
   -- This is the FLAT half; `foldModuleTc` carries the per-module half.
   let shadowWarns = preludeStandaloneShadows (runtimeP ++ coreP) desugared
-  -- #2738's importer peer.  The flat path analyses exactly ONE module, so it can
-  -- name no dependency's decls: every `DUse` misses the (empty) graph and the walk
-  -- yields `[]`.  Wired anyway, beside its sibling, so the two directions stay one
-  -- SET here as they are at their detection sites — and so the multi-module half
-  -- below is not the only place a reader can find this warning's wiring.  The
-  -- interface-row index is passed empty: the one the typechecker holds here is a
-  -- previous drive's, and this file's drive has not run.
-  let importShadowWarns = importedStandaloneShadowsIn omEmpty [] desugared
   -- Derives live only on the RAW tree (`desugar` clears the field), so this reads
   -- `raw`, not `desugared`.
   let deriveDiags = map deriveErrToDiag (checkDerives raw)
@@ -845,13 +830,11 @@ analyzeSurface exportsFor modName runtimeSrc coreSrc raw internalGuard =
   let resDiags = map diagOfResError resErrs
   let guardDiags = map guardWarnToDiag guardWarns
   let shadowDiags = map (preludeShadowWarnToDiag modName) shadowWarns
-  let importShadowDiags = map (importShadowWarnToDiag modName) importShadowWarns
   let clean = match resErrs
     [] => True
     _ => False
   SurfaceAnalysis {
-    surfaceDiags =
-      deriveDiags ++ guardDiags ++ shadowDiags ++ importShadowDiags ++ resDiags,
+    surfaceDiags = deriveDiags ++ guardDiags ++ shadowDiags ++ resDiags,
     resolveClean = clean,
     surfaceDesugared = desugared,
     surfaceRuntimeP = runtimeP,
@@ -860,7 +843,7 @@ analyzeSurface exportsFor modName runtimeSrc coreSrc raw internalGuard =
   }
 
 -- The errors among `analyzeSurface`'s diagnostics, in its order, without its
--- warning passes (guard exhaustiveness and the two shadow checks), which a
+-- warning passes (guard exhaustiveness and the prelude shadow check), which a
 -- caller that renders warnings from a later typecheck would otherwise run twice.
 -- `desugared` is the tree resolve reads: `raw` desugared by the caller.
 export
@@ -1183,56 +1166,6 @@ preludeShadowWarnToDiag modName (_, mname, loc) =
     loc
     (Some (stringConcat ["rename the interface method `", mname, "`"]))
     None
-
--- #2738 / `SHADOW-SEMANTICS.md` S1-PRELUDE (b)'s register, one direction over:
--- a name the module explicitly and selectively IMPORTED is also an interface method
--- nameable here, and the two carry DIFFERENT schemes, so at any receiver with an impl
--- the occurrence means the method rather than the function the import names.  S1/S2
--- make that resolution conformant (§2 row 17); silence about it is what is not.
---
--- Both bindings are named with their types, because the whole defect is that the two
--- differ and only one of them is written in this file.
---
--- NO machine-applicable `fix`, for the same reason `W-PRELUDE-METHOD-SHADOW` ships
--- none: a `Fix` is a single-span replacement and the repair (aliasing the import, or
--- renaming one side) is multi-site — a one-span edit would rewrite the import line and
--- leave every call site meaning the other binding, silently.
-importShadowWarnToDiag : String -> (String, String, Option Ty, Ty, Loc) -> Diag
-importShadowWarnToDiag modName (name, iface, sty, mty, loc) =
-  Diag
-    SevWarning
-    (Coded WImportMethodShadow)
-    (stringConcat [
-      "imported `",
-      name,
-      " : ",
-      importedSchemeText sty,
-      "` is shadowed in ",
-      moduleScopeText modName,
-      " by interface method `",
-      iface,
-      ".",
-      name,
-      " : ",
-      ppTy mty,
-      "`; at a receiver with an impl of `",
-      iface,
-      "` the name means the method",
-    ])
-    (Some loc)
-    (Some
-      (stringConcat [
-        "import it under another name, `import m.{", name, " as ", name, "2}`"
-      ]))
-    None
-
--- The displaced import's own signature, or the reason there is none to show: a
--- module that declares the function WITHOUT a signature offers no scheme to compare,
--- and an unreadable scheme cannot be shown harmless — so it counts as differing and
--- says so here rather than printing a guess.
-importedSchemeText : Option Ty -> String
-importedSchemeText (Some t) = ppTy t
-importedSchemeText None = "no declared signature"
 
 -- "module 'main'" when the caller knows the module id; "this module" when it
 -- does not (an inline source, the LSP live buffer) — never "module ''".
@@ -2143,7 +2076,7 @@ foldModuleTc passes graph known ids ((mid, path, prog) :: rest) buckets =
     rest
     (pushDiags path (rawDiags ++ errDiags ++ warnDiags) buckets)
 
--- One module's derive, guard-exhaustiveness and two shadow diagnostics, and its
+-- One module's derive, guard-exhaustiveness and prelude-shadow diagnostics, and its
 -- exports for the modules after it.
 rawTreeDiags : RawPasses ->
   OrdMap ModuleExports ->
@@ -2171,20 +2104,10 @@ rawTreeDiags passes known (mid, _, prog) =
     map
       (preludeShadowWarnToDiag mid)
       (preludeStandaloneShadowsWith passes.rpShadowPool desugared)
-  -- #2738, the importer direction: this module's own selective imports against the
-  -- interfaces it can name, named by its own module id.
-  let importShadowDiags =
-    map
-      (importShadowWarnToDiag mid)
-      (importedStandaloneShadows
-        passes.rpOutputs
-        passes.rpShadowGraph
-        desugared)
   (
     map deriveErrToDiag (checkDerives prog)
       ++ map guardWarnToDiag guardWarns
-      ++ shadowDiags
-      ++ importShadowDiags,
+      ++ shadowDiags,
     exp,
   )
 
@@ -3362,7 +3285,7 @@ checkJsonLoadErr target src _ le = match loadErrorSite target le
 (DUse false (UseGroup ("driver" "main_autoprint") ((mem "executedMainInputs" false))))
 (DUse false (UseGroup ("support" "source_index") ((mem "indexSource" false) (mem "sourcePositionToOffset" false) (mem "offsetToUtf16Position" false))))
 (DUse false (UseGroup ("types" "capability_manifest") ((mem "EntryKey" true))))
-(DUse false (UseGroup ("frontend" "ast") ((mem "Decl" true) (mem "Expr" true) (mem "Loc" true) (mem "Pat" false) (mem "Ty" false) (mem "UsePath" true) (mem "UseMember" true) (mem "useMemberLocal" false))))
+(DUse false (UseGroup ("frontend" "ast") ((mem "Decl" true) (mem "Expr" true) (mem "Loc" true) (mem "Pat" false) (mem "UsePath" true) (mem "UseMember" true) (mem "useMemberLocal" false))))
 (DUse false (UseGroup ("frontend" "parser") ((mem "parse" false) (mem "parseLocated" false) (mem "parseResult" false) (mem "ParseError" false) (mem "parseErrorDiagnostic" false))))
 (DUse false (UseGroup ("frontend" "desugar_cache") ((mem "desugaredPrelude" false) (mem "preludeGeneration" false))))
 (DUse false (UseGroup ("frontend" "desugar") ((mem "desugar" false) (mem "checkDerives" false))))
@@ -3379,7 +3302,6 @@ checkJsonLoadErr target src _ le = match loadErrorSite target le
 (DUse false (UseGroup ("types" "tc_types") ((mem "DriveInputs" true) (mem "DriveOutputs" true) (mem "emptyDriveOutputs" false))))
 (DUse false (UseGroup ("types" "target_profile") ((mem "selectedProfile" false))))
 (DUse false (UseGroup ("types" "module_interface") ((mem "retainModuleInterfaces" false))))
-(DUse false (UseGroup ("tools" "printer") ((mem "ppTy" false))))
 (DUse false (UseGroup ("driver" "loader") ((mem "LoadError" true) (mem "loadErrorSite" false) (mem "loadProgramFilesLocatedCached" false) (mem "loadProgramFilesLocatedCachedE" false) (mem "loadProgramFilesLocatedCachedSourcesE" false) (mem "loadedSourceOf" false) (mem "stdinEntry" false) (mem "parseCachedLocated" false) (mem "loadProgramFilesLocatedE" false) (mem "dropPathTriple" false) (mem "projectTrustedMods" false) (mem "stdlibOwnership" false) (mem "entrySearchRoots" false) (mem "findImportLoc" false) (mem "unknownModuleIdOf" false) (mem "availableModulesText" false) (mem "availableModulesHint" false) (mem "availableModuleIds" false) (mem "fileOfModuleId" false) (mem "modIdToPath" false) (mem "siblingSubjectId" false) (mem "readDeps" false) (mem "findProjectRootOrSelf" false))))
 (DUse false (UseGroup ("support" "path") ((mem "dirOf" false))))
 (DUse false (UseGroup ("driver" "main_autoprint") ((mem "valueMainCandidate" false))))
@@ -3389,7 +3311,6 @@ checkJsonLoadErr target src _ le = match loadErrorSite target le
 (DUse false (UseAlias ("backend" "llvm_symbols") "LlvmSymbols"))
 (DUse false (UseGroup ("support" "symbol_origin") ((mem "SymbolOrigin" false) (mem "originPosition" false))))
 (DUse false (UseGroup ("json") ((mem "Json" true) (mem "jObject" false) (mem "stringify" false))))
-(DUse false (UseGroup ("types" "tc_shadow") ((mem "importedStandaloneShadows" false) (mem "importedStandaloneShadowsIn" false))))
 (DUse true (UseGroup ("driver" "diagnostic_value") ((mem "Severity" true) (mem "Fix" true) (mem "Diag" true) (mem "DiagId" true) (mem "mkDiag" false) (mem "diagIdText" false) (mem "diagIdKind" false) (mem "diagIdIsSyntax" false))))
 (DTypeSig false "didYouMeanFix" (TyFun (TyCon "ResError") (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyCon "Loc") (TyApp (TyCon "Option") (TyCon "Fix")))))))
 (DFunDef false "didYouMeanFix" ((PVar "e") (PVar "bad") (PVar "sug") (PCon "Loc" (PVar "f") (PVar "sl") (PVar "sc") (PVar "el") (PVar "ec"))) (EIf (EBinOp "&&" (EApp (EVar "resErrorIsPrivateName") (EVar "e")) (EApp (EVar "not") (EBinOp "&&" (EBinOp "==" (EVar "el") (EVar "sl")) (EBinOp "==" (EVar "ec") (EBinOp "+" (EVar "sc") (EApp (EVar "stringLength") (EVar "bad"))))))) (EVar "None") (EApp (EVar "Some") (EApp (EApp (EVar "Fix") (EApp (EApp (EApp (EApp (EApp (EVar "Loc") (EVar "f")) (EVar "sl")) (EVar "sc")) (EVar "sl")) (EBinOp "+" (EVar "sc") (EApp (EVar "stringLength") (EVar "bad"))))) (EVar "sug")))))
@@ -3482,7 +3403,7 @@ checkJsonLoadErr target src _ le = match loadErrorSite target le
 (DTypeSig true "checkFrontDrive" (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyCon "FrontDriveIn") (TyTuple (TyCon "CheckDump") (TyCon "TcReport") (TyCon "DriveOutputs"))))))
 (DFunDef false "checkFrontDrive" ((PVar "target") (PVar "roots") (PVar "d")) (EBlock (DoLet false false (PTuple (PVar "drive") (PVar "r") (PVar "outputs")) (EApp (EApp (EVar "checkDriveReport") (EApp (EApp (EVar "chainKeyOf") (EVar "target")) (EVar "roots"))) (EVar "d"))) (DoLet false false (PVar "lines") (EMatch (ETuple (EFieldAccess (EVar "d") "fdMods") (EFieldAccess (EVar "d") "fdPairs")) (arm (PTuple (PList) (PList PWild)) () (EBlock (DoLet false false (PTuple PWild (PVar "schemes") PWild (PVar "tcWarns")) (EApp (EVar "entrySplit") (EVar "r"))) (DoExpr (EBinOp "++" (EApp (EVar "schemeLines") (EVar "schemes")) (EApp (EApp (EVar "map") (EVar "tcMsg")) (EVar "tcWarns")))))) (arm PWild () (EListLit)))) (DoExpr (ETuple (ERecordCreate "CheckDump" ((fa "cdLines" (EVar "lines")) (fa "cdDrive" (EVar "drive")))) (EVar "r") (EVar "outputs")))))
 (DTypeSig false "analyzeSurface" (TyFun (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyEffect () (Some "e") (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "String")))))) (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyEffect () (Some "e") (TyCon "SurfaceAnalysis")))))))))
-(DFunDef false "analyzeSurface" ((PVar "exportsFor") (PVar "modName") (PVar "runtimeSrc") (PVar "coreSrc") (PVar "raw") (PVar "internalGuard")) (EBlock (DoLet false false (PVar "desugared") (EApp (EVar "desugar") (EVar "raw"))) (DoLet false false (PVar "runtimeP") (EApp (EVar "desugaredPrelude") (EVar "runtimeSrc"))) (DoLet false false (PVar "coreP") (EApp (EVar "desugaredPrelude") (EVar "coreSrc"))) (DoLet false false (PVar "preludeKey") (EApp (EVar "Some") (EApp (EApp (EVar "preludeGeneration") (EVar "runtimeSrc")) (EVar "coreSrc")))) (DoLet false false (PVar "guardWarns") (EApp (EApp (EVar "checkGuardExhaustivenessWith") (EBinOp "++" (EBinOp "++" (EVar "raw") (EVar "runtimeP")) (EVar "coreP"))) (EVar "raw"))) (DoLet false false (PVar "shadowWarns") (EApp (EApp (EVar "preludeStandaloneShadows") (EBinOp "++" (EVar "runtimeP") (EVar "coreP"))) (EVar "desugared"))) (DoLet false false (PVar "importShadowWarns") (EApp (EApp (EApp (EVar "importedStandaloneShadowsIn") (EVar "omEmpty")) (EListLit)) (EVar "desugared"))) (DoLet false false (PVar "deriveDiags") (EApp (EApp (EVar "map") (EVar "deriveErrToDiag")) (EApp (EVar "checkDerives") (EVar "raw")))) (DoLet false false (PVar "resErrs") (EApp (EApp (EVar "hintResErrors") (EVar "exportsFor")) (EApp (EApp (EApp (EApp (EVar "resolveProgramG2") (EVar "internalGuard")) (EVar "runtimeP")) (EVar "coreP")) (EVar "desugared")))) (DoLet false false (PVar "resDiags") (EApp (EApp (EVar "map") (EVar "diagOfResError")) (EVar "resErrs"))) (DoLet false false (PVar "guardDiags") (EApp (EApp (EVar "map") (EVar "guardWarnToDiag")) (EVar "guardWarns"))) (DoLet false false (PVar "shadowDiags") (EApp (EApp (EVar "map") (EApp (EVar "preludeShadowWarnToDiag") (EVar "modName"))) (EVar "shadowWarns"))) (DoLet false false (PVar "importShadowDiags") (EApp (EApp (EVar "map") (EApp (EVar "importShadowWarnToDiag") (EVar "modName"))) (EVar "importShadowWarns"))) (DoLet false false (PVar "clean") (EMatch (EVar "resErrs") (arm (PList) () (EVar "True")) (arm PWild () (EVar "False")))) (DoExpr (ERecordCreate "SurfaceAnalysis" ((fa "surfaceDiags" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EVar "deriveDiags") (EVar "guardDiags")) (EVar "shadowDiags")) (EVar "importShadowDiags")) (EVar "resDiags"))) (fa "resolveClean" (EVar "clean")) (fa "surfaceDesugared" (EVar "desugared")) (fa "surfaceRuntimeP" (EVar "runtimeP")) (fa "surfaceCoreP" (EVar "coreP")) (fa "surfacePreludeKey" (EVar "preludeKey")))))))
+(DFunDef false "analyzeSurface" ((PVar "exportsFor") (PVar "modName") (PVar "runtimeSrc") (PVar "coreSrc") (PVar "raw") (PVar "internalGuard")) (EBlock (DoLet false false (PVar "desugared") (EApp (EVar "desugar") (EVar "raw"))) (DoLet false false (PVar "runtimeP") (EApp (EVar "desugaredPrelude") (EVar "runtimeSrc"))) (DoLet false false (PVar "coreP") (EApp (EVar "desugaredPrelude") (EVar "coreSrc"))) (DoLet false false (PVar "preludeKey") (EApp (EVar "Some") (EApp (EApp (EVar "preludeGeneration") (EVar "runtimeSrc")) (EVar "coreSrc")))) (DoLet false false (PVar "guardWarns") (EApp (EApp (EVar "checkGuardExhaustivenessWith") (EBinOp "++" (EBinOp "++" (EVar "raw") (EVar "runtimeP")) (EVar "coreP"))) (EVar "raw"))) (DoLet false false (PVar "shadowWarns") (EApp (EApp (EVar "preludeStandaloneShadows") (EBinOp "++" (EVar "runtimeP") (EVar "coreP"))) (EVar "desugared"))) (DoLet false false (PVar "deriveDiags") (EApp (EApp (EVar "map") (EVar "deriveErrToDiag")) (EApp (EVar "checkDerives") (EVar "raw")))) (DoLet false false (PVar "resErrs") (EApp (EApp (EVar "hintResErrors") (EVar "exportsFor")) (EApp (EApp (EApp (EApp (EVar "resolveProgramG2") (EVar "internalGuard")) (EVar "runtimeP")) (EVar "coreP")) (EVar "desugared")))) (DoLet false false (PVar "resDiags") (EApp (EApp (EVar "map") (EVar "diagOfResError")) (EVar "resErrs"))) (DoLet false false (PVar "guardDiags") (EApp (EApp (EVar "map") (EVar "guardWarnToDiag")) (EVar "guardWarns"))) (DoLet false false (PVar "shadowDiags") (EApp (EApp (EVar "map") (EApp (EVar "preludeShadowWarnToDiag") (EVar "modName"))) (EVar "shadowWarns"))) (DoLet false false (PVar "clean") (EMatch (EVar "resErrs") (arm (PList) () (EVar "True")) (arm PWild () (EVar "False")))) (DoExpr (ERecordCreate "SurfaceAnalysis" ((fa "surfaceDiags" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EVar "deriveDiags") (EVar "guardDiags")) (EVar "shadowDiags")) (EVar "resDiags"))) (fa "resolveClean" (EVar "clean")) (fa "surfaceDesugared" (EVar "desugared")) (fa "surfaceRuntimeP" (EVar "runtimeP")) (fa "surfaceCoreP" (EVar "coreP")) (fa "surfacePreludeKey" (EVar "preludeKey")))))))
 (DTypeSig true "surfaceErrors" (TyFun (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyEffect () (Some "e") (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "String")))))) (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyEffect () (Some "e") (TyApp (TyCon "List") (TyCon "Diag"))))))))))
 (DFunDef false "surfaceErrors" ((PVar "exportsFor") (PVar "runtimeP") (PVar "coreP") (PVar "raw") (PVar "desugared") (PVar "internalGuard")) (EBinOp "++" (EApp (EApp (EVar "map") (EVar "deriveErrToDiag")) (EApp (EVar "checkDerives") (EVar "raw"))) (EApp (EApp (EVar "map") (EVar "diagOfResError")) (EApp (EApp (EVar "hintResErrors") (EVar "exportsFor")) (EApp (EApp (EApp (EApp (EVar "resolveProgramG2") (EVar "internalGuard")) (EVar "runtimeP")) (EVar "coreP")) (EVar "desugared"))))))
 (DTypeSig false "tcHalfOfPerModule" (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyTuple (TyApp (TyCon "List") (TyCon "TcDiag")) (TyApp (TyCon "List") (TyCon "TcDiag"))))) (TyApp (TyCon "List") (TyCon "Diag"))))
@@ -3517,11 +3438,6 @@ checkJsonLoadErr target src _ le = match loadErrorSite target le
 (DFunDef false "guardWarnToDiag" ((PTuple (PVar "code") (PVar "msg") (PVar "loc"))) (EApp (EApp (EApp (EApp (EVar "mkDiag") (EVar "SevWarning")) (EVar "code")) (EApp (EVar "stripWarnPrefix") (EVar "msg"))) (EVar "loc")))
 (DTypeSig false "preludeShadowWarnToDiag" (TyFun (TyCon "String") (TyFun (TyTuple (TyCon "String") (TyCon "String") (TyApp (TyCon "Option") (TyCon "Loc"))) (TyCon "Diag"))))
 (DFunDef false "preludeShadowWarnToDiag" ((PVar "modName") (PTuple PWild (PVar "mname") (PVar "loc"))) (EApp (EApp (EApp (EApp (EApp (EApp (EVar "Diag") (EVar "SevWarning")) (EApp (EVar "Coded") (EVar "WPreludeMethodShadow"))) (EApp (EVar "stringConcat") (EListLit (ELit (LString "interface method `")) (EVar "mname") (ELit (LString "` shadows the prelude function `")) (EVar "mname") (ELit (LString "`, which is no longer reachable by its bare name in ")) (EApp (EVar "moduleScopeText") (EVar "modName"))))) (EVar "loc")) (EApp (EVar "Some") (EApp (EVar "stringConcat") (EListLit (ELit (LString "rename the interface method `")) (EVar "mname") (ELit (LString "`")))))) (EVar "None")))
-(DTypeSig false "importShadowWarnToDiag" (TyFun (TyCon "String") (TyFun (TyTuple (TyCon "String") (TyCon "String") (TyApp (TyCon "Option") (TyCon "Ty")) (TyCon "Ty") (TyCon "Loc")) (TyCon "Diag"))))
-(DFunDef false "importShadowWarnToDiag" ((PVar "modName") (PTuple (PVar "name") (PVar "iface") (PVar "sty") (PVar "mty") (PVar "loc"))) (EApp (EApp (EApp (EApp (EApp (EApp (EVar "Diag") (EVar "SevWarning")) (EApp (EVar "Coded") (EVar "WImportMethodShadow"))) (EApp (EVar "stringConcat") (EListLit (ELit (LString "imported `")) (EVar "name") (ELit (LString " : ")) (EApp (EVar "importedSchemeText") (EVar "sty")) (ELit (LString "` is shadowed in ")) (EApp (EVar "moduleScopeText") (EVar "modName")) (ELit (LString " by interface method `")) (EVar "iface") (ELit (LString ".")) (EVar "name") (ELit (LString " : ")) (EApp (EVar "ppTy") (EVar "mty")) (ELit (LString "`; at a receiver with an impl of `")) (EVar "iface") (ELit (LString "` the name means the method"))))) (EApp (EVar "Some") (EVar "loc"))) (EApp (EVar "Some") (EApp (EVar "stringConcat") (EListLit (ELit (LString "import it under another name, `import m.{")) (EVar "name") (ELit (LString " as ")) (EVar "name") (ELit (LString "2}`")))))) (EVar "None")))
-(DTypeSig false "importedSchemeText" (TyFun (TyApp (TyCon "Option") (TyCon "Ty")) (TyCon "String")))
-(DFunDef false "importedSchemeText" ((PCon "Some" (PVar "t"))) (EApp (EVar "ppTy") (EVar "t")))
-(DFunDef false "importedSchemeText" ((PCon "None")) (ELit (LString "no declared signature")))
 (DTypeSig false "moduleScopeText" (TyFun (TyCon "String") (TyCon "String")))
 (DFunDef false "moduleScopeText" ((PLit (LString ""))) (ELit (LString "this module")))
 (DFunDef false "moduleScopeText" ((PVar "m")) (EApp (EVar "stringConcat") (EListLit (ELit (LString "module `")) (EVar "m") (ELit (LString "`")))))
@@ -3664,7 +3580,7 @@ checkJsonLoadErr target src _ le = match loadErrorSite target le
 (DFunDef false "foldModuleTc" (PWild PWild PWild PWild (PList) (PVar "buckets")) (EVar "buckets"))
 (DFunDef false "foldModuleTc" ((PVar "passes") (PVar "graph") (PVar "known") (PVar "ids") (PCons (PTuple (PVar "mid") (PVar "path") (PVar "prog")) (PVar "rest")) (PVar "buckets")) (EBlock (DoLet false false (PVar "sibling") (EApp (EVar "isSome") (EApp (EFieldAccess (EVar "passes") "rpSubjectOf") (EVar "mid")))) (DoLet false false (PTuple (PVar "rawDiags") (PVar "exp") (PVar "ident")) (EApp (EApp (EApp (EApp (EApp (EVar "servedPass") (EVar "FoldKind")) (EApp (EApp (EVar "map") (ELam ((PVar "k")) (EApp (EVar "joinNl") (EListLit (EVar "k") (EApp (EVar "boolKey") (EVar "sibling")))))) (EVar "graph"))) (EVar "ids")) (ETuple (EVar "mid") (EVar "path") (EVar "prog"))) (ELam (PWild) (EApp (EApp (EApp (EVar "rawTreeDiags") (EVar "passes")) (EVar "known")) (ETuple (EVar "mid") (EVar "path") (EVar "prog")))))) (DoLet false false (PTuple (PVar "tcErrs") (PVar "tcWarns")) (EApp (EApp (EVar "optionOr") (ETuple (EListLit) (EListLit))) (EApp (EApp (EVar "omLookup") (EVar "mid")) (EFieldAccess (EVar "passes") "rpTc")))) (DoLet false false (PVar "tcReported") (EMatch (EApp (EApp (EVar "lookupBucket") (EVar "path")) (EVar "buckets")) (arm (PCon "Some" (PVar "existing")) () (EApp (EVar "not") (EApp (EVar "resolveRejected") (EVar "existing")))) (arm (PCon "None") () (EVar "True")))) (DoLet false false (PVar "errDiags") (EIf (EVar "tcReported") (EApp (EApp (EVar "map") (EVar "diagOfTypeError")) (EVar "tcErrs")) (EListLit))) (DoLet false false (PVar "warnDiags") (EIf (EVar "tcReported") (EApp (EApp (EVar "map") (EVar "diagOfTypeWarning")) (EVar "tcWarns")) (EListLit))) (DoExpr (EApp (EApp (EApp (EApp (EApp (EApp (EVar "foldModuleTc") (EVar "passes")) (EVar "graph")) (EApp (EApp (EApp (EVar "omInsert") (EFieldAccess (EVar "exp") "modId")) (EVar "exp")) (EVar "known"))) (EApp (EApp (EApp (EVar "withIdentity") (EVar "mid")) (EVar "ident")) (EVar "ids"))) (EVar "rest")) (EApp (EApp (EApp (EVar "pushDiags") (EVar "path")) (EBinOp "++" (EBinOp "++" (EVar "rawDiags") (EVar "errDiags")) (EVar "warnDiags"))) (EVar "buckets"))))))
 (DTypeSig false "rawTreeDiags" (TyFun (TyCon "RawPasses") (TyFun (TyApp (TyCon "OrdMap") (TyCon "ModuleExports")) (TyFun (TyTuple (TyCon "String") (TyCon "String") (TyApp (TyCon "List") (TyCon "Decl"))) (TyTuple (TyApp (TyCon "List") (TyCon "Diag")) (TyCon "ModuleExports"))))))
-(DFunDef false "rawTreeDiags" ((PVar "passes") (PVar "known") (PTuple (PVar "mid") PWild (PVar "prog"))) (EBlock (DoLet false false (PVar "desugared") (EApp (EApp (EVar "optionOr") (EListLit)) (EApp (EApp (EVar "omLookup") (EVar "mid")) (EFieldAccess (EVar "passes") "rpDesugared")))) (DoLet false false (PTuple (PVar "imported") (PVar "exp")) (EApp (EApp (EApp (EApp (EApp (EVar "importedCtorDeclsStep") (EFieldAccess (EVar "passes") "rpCoreExports")) (EFieldAccess (EVar "passes") "rpPool")) (EApp (EFieldAccess (EVar "passes") "rpSubjectOf") (EVar "mid"))) (EVar "known")) (ETuple (EVar "mid") (EVar "desugared")))) (DoLet false false (PVar "guardWarns") (EApp (EApp (EVar "checkGuardExhaustivenessWith") (EBinOp "++" (EVar "imported") (EFieldAccess (EVar "passes") "rpPrelude"))) (EVar "prog"))) (DoLet false false (PVar "shadowDiags") (EApp (EApp (EVar "map") (EApp (EVar "preludeShadowWarnToDiag") (EVar "mid"))) (EApp (EApp (EVar "preludeStandaloneShadowsWith") (EFieldAccess (EVar "passes") "rpShadowPool")) (EVar "desugared")))) (DoLet false false (PVar "importShadowDiags") (EApp (EApp (EVar "map") (EApp (EVar "importShadowWarnToDiag") (EVar "mid"))) (EApp (EApp (EApp (EVar "importedStandaloneShadows") (EFieldAccess (EVar "passes") "rpOutputs")) (EFieldAccess (EVar "passes") "rpShadowGraph")) (EVar "desugared")))) (DoExpr (ETuple (EBinOp "++" (EBinOp "++" (EBinOp "++" (EApp (EApp (EVar "map") (EVar "deriveErrToDiag")) (EApp (EVar "checkDerives") (EVar "prog"))) (EApp (EApp (EVar "map") (EVar "guardWarnToDiag")) (EVar "guardWarns"))) (EVar "shadowDiags")) (EVar "importShadowDiags")) (EVar "exp")))))
+(DFunDef false "rawTreeDiags" ((PVar "passes") (PVar "known") (PTuple (PVar "mid") PWild (PVar "prog"))) (EBlock (DoLet false false (PVar "desugared") (EApp (EApp (EVar "optionOr") (EListLit)) (EApp (EApp (EVar "omLookup") (EVar "mid")) (EFieldAccess (EVar "passes") "rpDesugared")))) (DoLet false false (PTuple (PVar "imported") (PVar "exp")) (EApp (EApp (EApp (EApp (EApp (EVar "importedCtorDeclsStep") (EFieldAccess (EVar "passes") "rpCoreExports")) (EFieldAccess (EVar "passes") "rpPool")) (EApp (EFieldAccess (EVar "passes") "rpSubjectOf") (EVar "mid"))) (EVar "known")) (ETuple (EVar "mid") (EVar "desugared")))) (DoLet false false (PVar "guardWarns") (EApp (EApp (EVar "checkGuardExhaustivenessWith") (EBinOp "++" (EVar "imported") (EFieldAccess (EVar "passes") "rpPrelude"))) (EVar "prog"))) (DoLet false false (PVar "shadowDiags") (EApp (EApp (EVar "map") (EApp (EVar "preludeShadowWarnToDiag") (EVar "mid"))) (EApp (EApp (EVar "preludeStandaloneShadowsWith") (EFieldAccess (EVar "passes") "rpShadowPool")) (EVar "desugared")))) (DoExpr (ETuple (EBinOp "++" (EBinOp "++" (EApp (EApp (EVar "map") (EVar "deriveErrToDiag")) (EApp (EVar "checkDerives") (EVar "prog"))) (EApp (EApp (EVar "map") (EVar "guardWarnToDiag")) (EVar "guardWarns"))) (EVar "shadowDiags")) (EVar "exp")))))
 (DData Private "PassKey" () ((variant "PassKey" (ConNamed (field "pkGraph" (TyCon "String")) (field "pkPath" (TyCon "String")) (field "pkSource" (TyCon "String")) (field "pkImports" (TyApp (TyCon "List") (TyApp (TyCon "Option") (TyCon "Int"))))))) ())
 (DImpl true "Eq" ((TyCon "PassKey")) () ((im "eq" ((PVar "__x") (PVar "__y")) (EMatch (ETuple (EVar "__x") (EVar "__y")) (arm (PTuple (PRec "PassKey" ((rf "pkGraph" (PVar "__a0")) (rf "pkPath" (PVar "__a1")) (rf "pkSource" (PVar "__a2")) (rf "pkImports" (PVar "__a3"))) false) (PRec "PassKey" ((rf "pkGraph" (PVar "__b0")) (rf "pkPath" (PVar "__b1")) (rf "pkSource" (PVar "__b2")) (rf "pkImports" (PVar "__b3"))) false)) () (EBinOp "&&" (EBinOp "&&" (EBinOp "&&" (EApp (EApp (EVar "$core.eq") (EVar "__a0")) (EVar "__b0")) (EApp (EApp (EVar "$core.eq") (EVar "__a1")) (EVar "__b1"))) (EApp (EApp (EVar "$core.eq") (EVar "__a2")) (EVar "__b2"))) (EApp (EApp (EVar "$core.eq") (EVar "__a3")) (EVar "__b3"))))))))
 (DData Private "PassEntry" () ((variant "PassEntry" (ConNamed (field "peKey" (TyCon "PassKey")) (field "peIdentity" (TyCon "Int")) (field "peDiags" (TyApp (TyCon "List") (TyCon "Diag"))) (field "peExports" (TyCon "ModuleExports"))))) ())
@@ -3892,7 +3808,7 @@ checkJsonLoadErr target src _ le = match loadErrorSite target le
 (DUse false (UseGroup ("driver" "main_autoprint") ((mem "executedMainInputs" false))))
 (DUse false (UseGroup ("support" "source_index") ((mem "indexSource" false) (mem "sourcePositionToOffset" false) (mem "offsetToUtf16Position" false))))
 (DUse false (UseGroup ("types" "capability_manifest") ((mem "EntryKey" true))))
-(DUse false (UseGroup ("frontend" "ast") ((mem "Decl" true) (mem "Expr" true) (mem "Loc" true) (mem "Pat" false) (mem "Ty" false) (mem "UsePath" true) (mem "UseMember" true) (mem "useMemberLocal" false))))
+(DUse false (UseGroup ("frontend" "ast") ((mem "Decl" true) (mem "Expr" true) (mem "Loc" true) (mem "Pat" false) (mem "UsePath" true) (mem "UseMember" true) (mem "useMemberLocal" false))))
 (DUse false (UseGroup ("frontend" "parser") ((mem "parse" false) (mem "parseLocated" false) (mem "parseResult" false) (mem "ParseError" false) (mem "parseErrorDiagnostic" false))))
 (DUse false (UseGroup ("frontend" "desugar_cache") ((mem "desugaredPrelude" false) (mem "preludeGeneration" false))))
 (DUse false (UseGroup ("frontend" "desugar") ((mem "desugar" false) (mem "checkDerives" false))))
@@ -3909,7 +3825,6 @@ checkJsonLoadErr target src _ le = match loadErrorSite target le
 (DUse false (UseGroup ("types" "tc_types") ((mem "DriveInputs" true) (mem "DriveOutputs" true) (mem "emptyDriveOutputs" false))))
 (DUse false (UseGroup ("types" "target_profile") ((mem "selectedProfile" false))))
 (DUse false (UseGroup ("types" "module_interface") ((mem "retainModuleInterfaces" false))))
-(DUse false (UseGroup ("tools" "printer") ((mem "ppTy" false))))
 (DUse false (UseGroup ("driver" "loader") ((mem "LoadError" true) (mem "loadErrorSite" false) (mem "loadProgramFilesLocatedCached" false) (mem "loadProgramFilesLocatedCachedE" false) (mem "loadProgramFilesLocatedCachedSourcesE" false) (mem "loadedSourceOf" false) (mem "stdinEntry" false) (mem "parseCachedLocated" false) (mem "loadProgramFilesLocatedE" false) (mem "dropPathTriple" false) (mem "projectTrustedMods" false) (mem "stdlibOwnership" false) (mem "entrySearchRoots" false) (mem "findImportLoc" false) (mem "unknownModuleIdOf" false) (mem "availableModulesText" false) (mem "availableModulesHint" false) (mem "availableModuleIds" false) (mem "fileOfModuleId" false) (mem "modIdToPath" false) (mem "siblingSubjectId" false) (mem "readDeps" false) (mem "findProjectRootOrSelf" false))))
 (DUse false (UseGroup ("support" "path") ((mem "dirOf" false))))
 (DUse false (UseGroup ("driver" "main_autoprint") ((mem "valueMainCandidate" false))))
@@ -3919,7 +3834,6 @@ checkJsonLoadErr target src _ le = match loadErrorSite target le
 (DUse false (UseAlias ("backend" "llvm_symbols") "LlvmSymbols"))
 (DUse false (UseGroup ("support" "symbol_origin") ((mem "SymbolOrigin" false) (mem "originPosition" false))))
 (DUse false (UseGroup ("json") ((mem "Json" true) (mem "jObject" false) (mem "stringify" false))))
-(DUse false (UseGroup ("types" "tc_shadow") ((mem "importedStandaloneShadows" false) (mem "importedStandaloneShadowsIn" false))))
 (DUse true (UseGroup ("driver" "diagnostic_value") ((mem "Severity" true) (mem "Fix" true) (mem "Diag" true) (mem "DiagId" true) (mem "mkDiag" false) (mem "diagIdText" false) (mem "diagIdKind" false) (mem "diagIdIsSyntax" false))))
 (DTypeSig false "didYouMeanFix" (TyFun (TyCon "ResError") (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyCon "Loc") (TyApp (TyCon "Option") (TyCon "Fix")))))))
 (DFunDef false "didYouMeanFix" ((PVar "e") (PVar "bad") (PVar "sug") (PCon "Loc" (PVar "f") (PVar "sl") (PVar "sc") (PVar "el") (PVar "ec"))) (EIf (EBinOp "&&" (EApp (EVar "resErrorIsPrivateName") (EVar "e")) (EApp (EVar "not") (EBinOp "&&" (EBinOp "==" (EVar "el") (EVar "sl")) (EBinOp "==" (EVar "ec") (EBinOp "+" (EVar "sc") (EApp (EVar "stringLength") (EVar "bad"))))))) (EVar "None") (EApp (EVar "Some") (EApp (EApp (EVar "Fix") (EApp (EApp (EApp (EApp (EApp (EVar "Loc") (EVar "f")) (EVar "sl")) (EVar "sc")) (EVar "sl")) (EBinOp "+" (EVar "sc") (EApp (EVar "stringLength") (EVar "bad"))))) (EVar "sug")))))
@@ -4012,7 +3926,7 @@ checkJsonLoadErr target src _ le = match loadErrorSite target le
 (DTypeSig true "checkFrontDrive" (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyCon "FrontDriveIn") (TyTuple (TyCon "CheckDump") (TyCon "TcReport") (TyCon "DriveOutputs"))))))
 (DFunDef false "checkFrontDrive" ((PVar "target") (PVar "roots") (PVar "d")) (EBlock (DoLet false false (PTuple (PVar "drive") (PVar "r") (PVar "outputs")) (EApp (EApp (EVar "checkDriveReport") (EApp (EApp (EVar "chainKeyOf") (EVar "target")) (EVar "roots"))) (EVar "d"))) (DoLet false false (PVar "lines") (EMatch (ETuple (EFieldAccess (EVar "d") "fdMods") (EFieldAccess (EVar "d") "fdPairs")) (arm (PTuple (PList) (PList PWild)) () (EBlock (DoLet false false (PTuple PWild (PVar "schemes") PWild (PVar "tcWarns")) (EApp (EVar "entrySplit") (EVar "r"))) (DoExpr (EBinOp "++" (EApp (EVar "schemeLines") (EVar "schemes")) (EApp (EApp (EMethodRef "map") (EVar "tcMsg")) (EVar "tcWarns")))))) (arm PWild () (EListLit)))) (DoExpr (ETuple (ERecordCreate "CheckDump" ((fa "cdLines" (EVar "lines")) (fa "cdDrive" (EVar "drive")))) (EVar "r") (EVar "outputs")))))
 (DTypeSig false "analyzeSurface" (TyFun (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyEffect () (Some "e") (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "String")))))) (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyEffect () (Some "e") (TyCon "SurfaceAnalysis")))))))))
-(DFunDef false "analyzeSurface" ((PVar "exportsFor") (PVar "modName") (PVar "runtimeSrc") (PVar "coreSrc") (PVar "raw") (PVar "internalGuard")) (EBlock (DoLet false false (PVar "desugared") (EApp (EVar "desugar") (EVar "raw"))) (DoLet false false (PVar "runtimeP") (EApp (EVar "desugaredPrelude") (EVar "runtimeSrc"))) (DoLet false false (PVar "coreP") (EApp (EVar "desugaredPrelude") (EVar "coreSrc"))) (DoLet false false (PVar "preludeKey") (EApp (EVar "Some") (EApp (EApp (EVar "preludeGeneration") (EVar "runtimeSrc")) (EVar "coreSrc")))) (DoLet false false (PVar "guardWarns") (EApp (EApp (EVar "checkGuardExhaustivenessWith") (EBinOp "++" (EBinOp "++" (EVar "raw") (EVar "runtimeP")) (EVar "coreP"))) (EVar "raw"))) (DoLet false false (PVar "shadowWarns") (EApp (EApp (EVar "preludeStandaloneShadows") (EBinOp "++" (EVar "runtimeP") (EVar "coreP"))) (EVar "desugared"))) (DoLet false false (PVar "importShadowWarns") (EApp (EApp (EApp (EVar "importedStandaloneShadowsIn") (EVar "omEmpty")) (EListLit)) (EVar "desugared"))) (DoLet false false (PVar "deriveDiags") (EApp (EApp (EMethodRef "map") (EVar "deriveErrToDiag")) (EApp (EVar "checkDerives") (EVar "raw")))) (DoLet false false (PVar "resErrs") (EApp (EApp (EVar "hintResErrors") (EVar "exportsFor")) (EApp (EApp (EApp (EApp (EVar "resolveProgramG2") (EVar "internalGuard")) (EVar "runtimeP")) (EVar "coreP")) (EVar "desugared")))) (DoLet false false (PVar "resDiags") (EApp (EApp (EMethodRef "map") (EVar "diagOfResError")) (EVar "resErrs"))) (DoLet false false (PVar "guardDiags") (EApp (EApp (EMethodRef "map") (EVar "guardWarnToDiag")) (EVar "guardWarns"))) (DoLet false false (PVar "shadowDiags") (EApp (EApp (EMethodRef "map") (EApp (EVar "preludeShadowWarnToDiag") (EVar "modName"))) (EVar "shadowWarns"))) (DoLet false false (PVar "importShadowDiags") (EApp (EApp (EMethodRef "map") (EApp (EVar "importShadowWarnToDiag") (EVar "modName"))) (EVar "importShadowWarns"))) (DoLet false false (PVar "clean") (EMatch (EVar "resErrs") (arm (PList) () (EVar "True")) (arm PWild () (EVar "False")))) (DoExpr (ERecordCreate "SurfaceAnalysis" ((fa "surfaceDiags" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EVar "deriveDiags") (EVar "guardDiags")) (EVar "shadowDiags")) (EVar "importShadowDiags")) (EVar "resDiags"))) (fa "resolveClean" (EVar "clean")) (fa "surfaceDesugared" (EVar "desugared")) (fa "surfaceRuntimeP" (EVar "runtimeP")) (fa "surfaceCoreP" (EVar "coreP")) (fa "surfacePreludeKey" (EVar "preludeKey")))))))
+(DFunDef false "analyzeSurface" ((PVar "exportsFor") (PVar "modName") (PVar "runtimeSrc") (PVar "coreSrc") (PVar "raw") (PVar "internalGuard")) (EBlock (DoLet false false (PVar "desugared") (EApp (EVar "desugar") (EVar "raw"))) (DoLet false false (PVar "runtimeP") (EApp (EVar "desugaredPrelude") (EVar "runtimeSrc"))) (DoLet false false (PVar "coreP") (EApp (EVar "desugaredPrelude") (EVar "coreSrc"))) (DoLet false false (PVar "preludeKey") (EApp (EVar "Some") (EApp (EApp (EVar "preludeGeneration") (EVar "runtimeSrc")) (EVar "coreSrc")))) (DoLet false false (PVar "guardWarns") (EApp (EApp (EVar "checkGuardExhaustivenessWith") (EBinOp "++" (EBinOp "++" (EVar "raw") (EVar "runtimeP")) (EVar "coreP"))) (EVar "raw"))) (DoLet false false (PVar "shadowWarns") (EApp (EApp (EVar "preludeStandaloneShadows") (EBinOp "++" (EVar "runtimeP") (EVar "coreP"))) (EVar "desugared"))) (DoLet false false (PVar "deriveDiags") (EApp (EApp (EMethodRef "map") (EVar "deriveErrToDiag")) (EApp (EVar "checkDerives") (EVar "raw")))) (DoLet false false (PVar "resErrs") (EApp (EApp (EVar "hintResErrors") (EVar "exportsFor")) (EApp (EApp (EApp (EApp (EVar "resolveProgramG2") (EVar "internalGuard")) (EVar "runtimeP")) (EVar "coreP")) (EVar "desugared")))) (DoLet false false (PVar "resDiags") (EApp (EApp (EMethodRef "map") (EVar "diagOfResError")) (EVar "resErrs"))) (DoLet false false (PVar "guardDiags") (EApp (EApp (EMethodRef "map") (EVar "guardWarnToDiag")) (EVar "guardWarns"))) (DoLet false false (PVar "shadowDiags") (EApp (EApp (EMethodRef "map") (EApp (EVar "preludeShadowWarnToDiag") (EVar "modName"))) (EVar "shadowWarns"))) (DoLet false false (PVar "clean") (EMatch (EVar "resErrs") (arm (PList) () (EVar "True")) (arm PWild () (EVar "False")))) (DoExpr (ERecordCreate "SurfaceAnalysis" ((fa "surfaceDiags" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EVar "deriveDiags") (EVar "guardDiags")) (EVar "shadowDiags")) (EVar "resDiags"))) (fa "resolveClean" (EVar "clean")) (fa "surfaceDesugared" (EVar "desugared")) (fa "surfaceRuntimeP" (EVar "runtimeP")) (fa "surfaceCoreP" (EVar "coreP")) (fa "surfacePreludeKey" (EVar "preludeKey")))))))
 (DTypeSig true "surfaceErrors" (TyFun (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyEffect () (Some "e") (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "String")))))) (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyEffect () (Some "e") (TyApp (TyCon "List") (TyCon "Diag"))))))))))
 (DFunDef false "surfaceErrors" ((PVar "exportsFor") (PVar "runtimeP") (PVar "coreP") (PVar "raw") (PVar "desugared") (PVar "internalGuard")) (EBinOp "++" (EApp (EApp (EMethodRef "map") (EVar "deriveErrToDiag")) (EApp (EVar "checkDerives") (EVar "raw"))) (EApp (EApp (EMethodRef "map") (EVar "diagOfResError")) (EApp (EApp (EVar "hintResErrors") (EVar "exportsFor")) (EApp (EApp (EApp (EApp (EVar "resolveProgramG2") (EVar "internalGuard")) (EVar "runtimeP")) (EVar "coreP")) (EVar "desugared"))))))
 (DTypeSig false "tcHalfOfPerModule" (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyTuple (TyApp (TyCon "List") (TyCon "TcDiag")) (TyApp (TyCon "List") (TyCon "TcDiag"))))) (TyApp (TyCon "List") (TyCon "Diag"))))
@@ -4047,11 +3961,6 @@ checkJsonLoadErr target src _ le = match loadErrorSite target le
 (DFunDef false "guardWarnToDiag" ((PTuple (PVar "code") (PVar "msg") (PVar "loc"))) (EApp (EApp (EApp (EApp (EVar "mkDiag") (EVar "SevWarning")) (EVar "code")) (EApp (EVar "stripWarnPrefix") (EVar "msg"))) (EVar "loc")))
 (DTypeSig false "preludeShadowWarnToDiag" (TyFun (TyCon "String") (TyFun (TyTuple (TyCon "String") (TyCon "String") (TyApp (TyCon "Option") (TyCon "Loc"))) (TyCon "Diag"))))
 (DFunDef false "preludeShadowWarnToDiag" ((PVar "modName") (PTuple PWild (PVar "mname") (PVar "loc"))) (EApp (EApp (EApp (EApp (EApp (EApp (EVar "Diag") (EVar "SevWarning")) (EApp (EVar "Coded") (EVar "WPreludeMethodShadow"))) (EApp (EVar "stringConcat") (EListLit (ELit (LString "interface method `")) (EVar "mname") (ELit (LString "` shadows the prelude function `")) (EVar "mname") (ELit (LString "`, which is no longer reachable by its bare name in ")) (EApp (EVar "moduleScopeText") (EVar "modName"))))) (EVar "loc")) (EApp (EVar "Some") (EApp (EVar "stringConcat") (EListLit (ELit (LString "rename the interface method `")) (EVar "mname") (ELit (LString "`")))))) (EVar "None")))
-(DTypeSig false "importShadowWarnToDiag" (TyFun (TyCon "String") (TyFun (TyTuple (TyCon "String") (TyCon "String") (TyApp (TyCon "Option") (TyCon "Ty")) (TyCon "Ty") (TyCon "Loc")) (TyCon "Diag"))))
-(DFunDef false "importShadowWarnToDiag" ((PVar "modName") (PTuple (PVar "name") (PVar "iface") (PVar "sty") (PVar "mty") (PVar "loc"))) (EApp (EApp (EApp (EApp (EApp (EApp (EVar "Diag") (EVar "SevWarning")) (EApp (EVar "Coded") (EVar "WImportMethodShadow"))) (EApp (EVar "stringConcat") (EListLit (ELit (LString "imported `")) (EVar "name") (ELit (LString " : ")) (EApp (EVar "importedSchemeText") (EVar "sty")) (ELit (LString "` is shadowed in ")) (EApp (EVar "moduleScopeText") (EVar "modName")) (ELit (LString " by interface method `")) (EVar "iface") (ELit (LString ".")) (EVar "name") (ELit (LString " : ")) (EApp (EVar "ppTy") (EVar "mty")) (ELit (LString "`; at a receiver with an impl of `")) (EVar "iface") (ELit (LString "` the name means the method"))))) (EApp (EVar "Some") (EVar "loc"))) (EApp (EVar "Some") (EApp (EVar "stringConcat") (EListLit (ELit (LString "import it under another name, `import m.{")) (EVar "name") (ELit (LString " as ")) (EVar "name") (ELit (LString "2}`")))))) (EVar "None")))
-(DTypeSig false "importedSchemeText" (TyFun (TyApp (TyCon "Option") (TyCon "Ty")) (TyCon "String")))
-(DFunDef false "importedSchemeText" ((PCon "Some" (PVar "t"))) (EApp (EVar "ppTy") (EVar "t")))
-(DFunDef false "importedSchemeText" ((PCon "None")) (ELit (LString "no declared signature")))
 (DTypeSig false "moduleScopeText" (TyFun (TyCon "String") (TyCon "String")))
 (DFunDef false "moduleScopeText" ((PLit (LString ""))) (ELit (LString "this module")))
 (DFunDef false "moduleScopeText" ((PVar "m")) (EApp (EVar "stringConcat") (EListLit (ELit (LString "module `")) (EVar "m") (ELit (LString "`")))))
@@ -4194,7 +4103,7 @@ checkJsonLoadErr target src _ le = match loadErrorSite target le
 (DFunDef false "foldModuleTc" (PWild PWild PWild PWild (PList) (PVar "buckets")) (EVar "buckets"))
 (DFunDef false "foldModuleTc" ((PVar "passes") (PVar "graph") (PVar "known") (PVar "ids") (PCons (PTuple (PVar "mid") (PVar "path") (PVar "prog")) (PVar "rest")) (PVar "buckets")) (EBlock (DoLet false false (PVar "sibling") (EApp (EVar "isSome") (EApp (EFieldAccess (EVar "passes") "rpSubjectOf") (EVar "mid")))) (DoLet false false (PTuple (PVar "rawDiags") (PVar "exp") (PVar "ident")) (EApp (EApp (EApp (EApp (EApp (EVar "servedPass") (EVar "FoldKind")) (EApp (EApp (EMethodRef "map") (ELam ((PVar "k")) (EApp (EVar "joinNl") (EListLit (EVar "k") (EApp (EVar "boolKey") (EVar "sibling")))))) (EVar "graph"))) (EVar "ids")) (ETuple (EVar "mid") (EVar "path") (EVar "prog"))) (ELam (PWild) (EApp (EApp (EApp (EVar "rawTreeDiags") (EVar "passes")) (EVar "known")) (ETuple (EVar "mid") (EVar "path") (EVar "prog")))))) (DoLet false false (PTuple (PVar "tcErrs") (PVar "tcWarns")) (EApp (EApp (EVar "optionOr") (ETuple (EListLit) (EListLit))) (EApp (EApp (EVar "omLookup") (EVar "mid")) (EFieldAccess (EVar "passes") "rpTc")))) (DoLet false false (PVar "tcReported") (EMatch (EApp (EApp (EVar "lookupBucket") (EVar "path")) (EVar "buckets")) (arm (PCon "Some" (PVar "existing")) () (EApp (EVar "not") (EApp (EVar "resolveRejected") (EVar "existing")))) (arm (PCon "None") () (EVar "True")))) (DoLet false false (PVar "errDiags") (EIf (EVar "tcReported") (EApp (EApp (EMethodRef "map") (EVar "diagOfTypeError")) (EVar "tcErrs")) (EListLit))) (DoLet false false (PVar "warnDiags") (EIf (EVar "tcReported") (EApp (EApp (EMethodRef "map") (EVar "diagOfTypeWarning")) (EVar "tcWarns")) (EListLit))) (DoExpr (EApp (EApp (EApp (EApp (EApp (EApp (EVar "foldModuleTc") (EVar "passes")) (EVar "graph")) (EApp (EApp (EApp (EVar "omInsert") (EFieldAccess (EVar "exp") "modId")) (EVar "exp")) (EVar "known"))) (EApp (EApp (EApp (EVar "withIdentity") (EVar "mid")) (EVar "ident")) (EVar "ids"))) (EVar "rest")) (EApp (EApp (EApp (EVar "pushDiags") (EVar "path")) (EBinOp "++" (EBinOp "++" (EVar "rawDiags") (EVar "errDiags")) (EVar "warnDiags"))) (EVar "buckets"))))))
 (DTypeSig false "rawTreeDiags" (TyFun (TyCon "RawPasses") (TyFun (TyApp (TyCon "OrdMap") (TyCon "ModuleExports")) (TyFun (TyTuple (TyCon "String") (TyCon "String") (TyApp (TyCon "List") (TyCon "Decl"))) (TyTuple (TyApp (TyCon "List") (TyCon "Diag")) (TyCon "ModuleExports"))))))
-(DFunDef false "rawTreeDiags" ((PVar "passes") (PVar "known") (PTuple (PVar "mid") PWild (PVar "prog"))) (EBlock (DoLet false false (PVar "desugared") (EApp (EApp (EVar "optionOr") (EListLit)) (EApp (EApp (EVar "omLookup") (EVar "mid")) (EFieldAccess (EVar "passes") "rpDesugared")))) (DoLet false false (PTuple (PVar "imported") (PVar "exp")) (EApp (EApp (EApp (EApp (EApp (EVar "importedCtorDeclsStep") (EFieldAccess (EVar "passes") "rpCoreExports")) (EFieldAccess (EVar "passes") "rpPool")) (EApp (EFieldAccess (EVar "passes") "rpSubjectOf") (EVar "mid"))) (EVar "known")) (ETuple (EVar "mid") (EVar "desugared")))) (DoLet false false (PVar "guardWarns") (EApp (EApp (EVar "checkGuardExhaustivenessWith") (EBinOp "++" (EVar "imported") (EFieldAccess (EVar "passes") "rpPrelude"))) (EVar "prog"))) (DoLet false false (PVar "shadowDiags") (EApp (EApp (EMethodRef "map") (EApp (EVar "preludeShadowWarnToDiag") (EVar "mid"))) (EApp (EApp (EVar "preludeStandaloneShadowsWith") (EFieldAccess (EVar "passes") "rpShadowPool")) (EVar "desugared")))) (DoLet false false (PVar "importShadowDiags") (EApp (EApp (EMethodRef "map") (EApp (EVar "importShadowWarnToDiag") (EVar "mid"))) (EApp (EApp (EApp (EVar "importedStandaloneShadows") (EFieldAccess (EVar "passes") "rpOutputs")) (EFieldAccess (EVar "passes") "rpShadowGraph")) (EVar "desugared")))) (DoExpr (ETuple (EBinOp "++" (EBinOp "++" (EBinOp "++" (EApp (EApp (EMethodRef "map") (EVar "deriveErrToDiag")) (EApp (EVar "checkDerives") (EVar "prog"))) (EApp (EApp (EMethodRef "map") (EVar "guardWarnToDiag")) (EVar "guardWarns"))) (EVar "shadowDiags")) (EVar "importShadowDiags")) (EVar "exp")))))
+(DFunDef false "rawTreeDiags" ((PVar "passes") (PVar "known") (PTuple (PVar "mid") PWild (PVar "prog"))) (EBlock (DoLet false false (PVar "desugared") (EApp (EApp (EVar "optionOr") (EListLit)) (EApp (EApp (EVar "omLookup") (EVar "mid")) (EFieldAccess (EVar "passes") "rpDesugared")))) (DoLet false false (PTuple (PVar "imported") (PVar "exp")) (EApp (EApp (EApp (EApp (EApp (EVar "importedCtorDeclsStep") (EFieldAccess (EVar "passes") "rpCoreExports")) (EFieldAccess (EVar "passes") "rpPool")) (EApp (EFieldAccess (EVar "passes") "rpSubjectOf") (EVar "mid"))) (EVar "known")) (ETuple (EVar "mid") (EVar "desugared")))) (DoLet false false (PVar "guardWarns") (EApp (EApp (EVar "checkGuardExhaustivenessWith") (EBinOp "++" (EVar "imported") (EFieldAccess (EVar "passes") "rpPrelude"))) (EVar "prog"))) (DoLet false false (PVar "shadowDiags") (EApp (EApp (EMethodRef "map") (EApp (EVar "preludeShadowWarnToDiag") (EVar "mid"))) (EApp (EApp (EVar "preludeStandaloneShadowsWith") (EFieldAccess (EVar "passes") "rpShadowPool")) (EVar "desugared")))) (DoExpr (ETuple (EBinOp "++" (EBinOp "++" (EApp (EApp (EMethodRef "map") (EVar "deriveErrToDiag")) (EApp (EVar "checkDerives") (EVar "prog"))) (EApp (EApp (EMethodRef "map") (EVar "guardWarnToDiag")) (EVar "guardWarns"))) (EVar "shadowDiags")) (EVar "exp")))))
 (DData Private "PassKey" () ((variant "PassKey" (ConNamed (field "pkGraph" (TyCon "String")) (field "pkPath" (TyCon "String")) (field "pkSource" (TyCon "String")) (field "pkImports" (TyApp (TyCon "List") (TyApp (TyCon "Option") (TyCon "Int"))))))) ())
 (DImpl true "Eq" ((TyCon "PassKey")) () ((im "eq" ((PVar "__x") (PVar "__y")) (EMatch (ETuple (EVar "__x") (EVar "__y")) (arm (PTuple (PRec "PassKey" ((rf "pkGraph" (PVar "__a0")) (rf "pkPath" (PVar "__a1")) (rf "pkSource" (PVar "__a2")) (rf "pkImports" (PVar "__a3"))) false) (PRec "PassKey" ((rf "pkGraph" (PVar "__b0")) (rf "pkPath" (PVar "__b1")) (rf "pkSource" (PVar "__b2")) (rf "pkImports" (PVar "__b3"))) false)) () (EBinOp "&&" (EBinOp "&&" (EBinOp "&&" (EApp (EApp (EVar "$core.eq") (EVar "__a0")) (EVar "__b0")) (EApp (EApp (EVar "$core.eq") (EVar "__a1")) (EVar "__b1"))) (EApp (EApp (EVar "$core.eq") (EVar "__a2")) (EVar "__b2"))) (EApp (EApp (EVar "$core.eq") (EVar "__a3")) (EVar "__b3"))))))))
 (DData Private "PassEntry" () ((variant "PassEntry" (ConNamed (field "peKey" (TyCon "PassKey")) (field "peIdentity" (TyCon "Int")) (field "peDiags" (TyApp (TyCon "List") (TyCon "Diag"))) (field "peExports" (TyCon "ModuleExports"))))) ())

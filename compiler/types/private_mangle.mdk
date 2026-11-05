@@ -156,6 +156,8 @@ import frontend.visibility.{
   valueDeclsOf,
   valueDeclOf,
   typeOfCtor,
+  explicitImportNames,
+  withoutShadowedWild,
 }
 import u64 as U64
 import list.{last, zip}
@@ -660,6 +662,7 @@ renameKeyCollides collided (n, _) = omHasKey n collided
 -- decls' own are every public interface's methods, where resolve passes only the
 -- bound ones (`keepBoundMethods`), so a re-export carries those as resolve's
 -- surface would once it has them.
+export
 unitSurfaces : List (String, List Decl) -> List (String, ModuleExports)
 unitSurfaces units = surfacesGo (coreExportsOf units) omEmpty units
 
@@ -1134,11 +1137,21 @@ buildUnitRenameMap entryMid mid exportsPerUnit externName externExports decls =
   let localEntries =
     map (n => (n, mangledName mid n)) localFns
       ++ externDeclEntries (externName mid) decls
-  let importEntries = importRenameEntries mid exportsPerUnit decls
+  let importedNames d =
+    map
+      fst
+      (declImportEntries exportsPerUnit d
+        ++ externImportEntries externExports d)
+  let explicit = explicitImportNames importedNames decls
+  let importEntries = importRenameEntries explicit exportsPerUnit decls
   let entries =
     localEntries
       ++ importEntries
-      ++ flatMap (externImportEntries externExports) decls
+      ++ withoutShadowedWild
+        explicit
+        fst
+        (externImportEntries externExports)
+        decls
   if mid == entryMid then
     filterList (e => not (isEntryMainKey entryMid mid (fst e))) entries
   else
@@ -1312,12 +1325,14 @@ isEntryMainKey entryMid mid n = mid == entryMid && n == "main"
 -- explicit sibling imports first (they shadow the implicit prelude), prelude last.
 -- The prelude half is filtered by the unit's own interface-method names — see
 -- `notIfaceMethodKey` above for why, and why the explicit half is NOT filtered.
-importRenameEntries : String ->
+-- A wildcard's entry for a name in [explicit] (the names the unit's explicit
+-- imports bind) is left out: the explicit import is what the name denotes.
+importRenameEntries : OrdMap Unit ->
   List (String, List (String, String)) ->
   List Decl ->
   List (String, String)
-importRenameEntries _ exportsPerUnit decls =
-  flatMap (declImportEntries exportsPerUnit) decls
+importRenameEntries explicit exportsPerUnit decls =
+  withoutShadowedWild explicit fst (declImportEntries exportsPerUnit) decls
     ++ filterList
       (notIfaceMethodKey (omFromNames (unitIfaceMethodNames decls) omEmpty))
       (coreImportEntries exportsPerUnit)

@@ -3526,7 +3526,18 @@ public export data MarkSets = MarkSets {
   msCoreShadowMap : List (String, String),
   msBareDictNames : List String,
   msUnits : List (String, List Decl),  -- `("core", coreDecls) :: modules`, for import-alias expansion
+  -- What a module's scope binds a bare name to at rungs 2 to 4, by module id
+  -- and name (`frontend/name_scope.mdk`).
+  msScopeClass : String -> String -> ScopeClass,
 }
+
+-- A bare name's binding at rungs 2 to 4 of the ladder (docs/spec/SHADOW-SEMANTICS.md
+-- L2): a value, an interface method, or neither (unbound there, or ambiguous).
+public export data ScopeClass =
+  | ScopeValue
+  | ScopeMethod
+  | ScopeOther
+  deriving (Eq, Debug)
 
 -- What `graphPreamble` returns: the runtime seed rows, the prelude's schemes, its
 -- published rows (present only when the pass closed core), its contexts, its

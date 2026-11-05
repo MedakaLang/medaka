@@ -1,5 +1,5 @@
 # META
-source_lines=5528
+source_lines=5531
 stages=DESUGAR,MARK
 # SOURCE
 -- Self-hosted eval stage — Stage-1 capstone, the tree-walking
@@ -116,6 +116,7 @@ import frontend.visibility.{
   declExportsCtors,
   subjectOf,
   isSubjectIn,
+  explicitOverWild,
 }
 import list.{drop, findMap}
 import eval.u64_halves as H
@@ -4892,14 +4893,16 @@ ctorNamesOfDecl _ = []
 
 -- value names a DUse binds, resolved to the exporting module's exported cells
 -- names resolving to a ctor/global are
--- omitted (reached via the global frame instead).
+-- omitted (reached via the global frame instead).  The frame is read first
+-- match, so a wildcard's cell for a name an explicit import binds is left out
+-- (`explicitOverWild`), not merely ordered after it.
 export
 importFrameOf : ModExports (Value e) ->
   List (String, ModExports (Value e)) ->
   List Decl ->
   List (String, Ref (Value e))
 importFrameOf coreExports exportsMap decls =
-  flatMap (useImports coreExports exportsMap) decls
+  explicitOverWild fst (_ => True) (useImports coreExports exportsMap) decls
 
 useImports : ModExports (Value e) ->
   List (String, ModExports (Value e)) ->
@@ -5543,7 +5546,7 @@ evalOneRootEnvFacts facts extraExterns preludeDecls (rootId, prog) =
 (DUse false (UseAlias ("hash_map") "HM"))
 (DUse false (UseGroup ("support" "ordmap") ((mem "OrdMap" false) (mem "omEmpty" false) (mem "omFromNames" false) (mem "omFromPairs" false) (mem "omHasKey" false) (mem "omInsert" false) (mem "omLookup" false))))
 (DUse false (UseGroup ("frontend" "ast") ((mem "SiblingPair" false))))
-(DUse false (UseGroup ("frontend" "visibility") ((mem "ExportView" true) (mem "directUnder" false) (mem "carriedPaths" false) (mem "nsValues" false) (mem "nsIfaceMethods" false) (mem "nsTypeCtors" false) (mem "declExportsCtors" false) (mem "subjectOf" false) (mem "isSubjectIn" false))))
+(DUse false (UseGroup ("frontend" "visibility") ((mem "ExportView" true) (mem "directUnder" false) (mem "carriedPaths" false) (mem "nsValues" false) (mem "nsIfaceMethods" false) (mem "nsTypeCtors" false) (mem "declExportsCtors" false) (mem "subjectOf" false) (mem "isSubjectIn" false) (mem "explicitOverWild" false))))
 (DUse false (UseGroup ("list") ((mem "drop" false) (mem "findMap" false))))
 (DUse false (UseAlias ("eval" "u64_halves") "H"))
 (DUse false (UseAlias ("u64") "U64"))
@@ -7151,7 +7154,7 @@ evalOneRootEnvFacts facts extraExterns preludeDecls (rootId, prog) =
 (DFunDef false "ctorNamesOfDecl" ((PAs "d" (PRec "DData" ((rf "dataName" (PVar "tyname")) (rf "dataCtors" (PVar "variants"))) false))) (EIf (EApp (EVar "declExportsCtors") (EVar "d")) (EListLit (ETuple (EVar "tyname") (EApp (EApp (EVar "map") (EVar "variantName")) (EVar "variants")))) (EListLit)))
 (DFunDef false "ctorNamesOfDecl" (PWild) (EListLit))
 (DTypeSig true "importFrameOf" (TyFun (TyApp (TyCon "ModExports") (TyApp (TyCon "Value") (TyVar "e"))) (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "ModExports") (TyApp (TyCon "Value") (TyVar "e"))))) (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "Ref") (TyApp (TyCon "Value") (TyVar "e")))))))))
-(DFunDef false "importFrameOf" ((PVar "coreExports") (PVar "exportsMap") (PVar "decls")) (EApp (EApp (EVar "flatMap") (EApp (EApp (EVar "useImports") (EVar "coreExports")) (EVar "exportsMap"))) (EVar "decls")))
+(DFunDef false "importFrameOf" ((PVar "coreExports") (PVar "exportsMap") (PVar "decls")) (EApp (EApp (EApp (EApp (EVar "explicitOverWild") (EVar "fst")) (ELam (PWild) (EVar "True"))) (EApp (EApp (EVar "useImports") (EVar "coreExports")) (EVar "exportsMap"))) (EVar "decls")))
 (DTypeSig false "useImports" (TyFun (TyApp (TyCon "ModExports") (TyApp (TyCon "Value") (TyVar "e"))) (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "ModExports") (TyApp (TyCon "Value") (TyVar "e"))))) (TyFun (TyCon "Decl") (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "Ref") (TyApp (TyCon "Value") (TyVar "e")))))))))
 (DFunDef false "useImports" ((PVar "coreExports") (PVar "exportsMap") (PCon "DUse" PWild (PVar "path") PWild)) (EIf (EBinOp "==" (EApp (EVar "useModuleId") (EVar "path")) (ELit (LString "core"))) (EApp (EApp (EVar "coreAliasCells") (EVar "path")) (EVar "coreExports")) (EMatch (EApp (EApp (EVar "lookupAssoc") (EApp (EVar "useModuleId") (EVar "path"))) (EVar "exportsMap")) (arm (PCon "None") () (EListLit)) (arm (PCon "Some" (PVar "exports")) () (EApp (EApp (EVar "resolveMembers") (EVar "path")) (EVar "exports"))))))
 (DFunDef false "useImports" (PWild PWild PWild) (EListLit))
@@ -7360,7 +7363,7 @@ evalOneRootEnvFacts facts extraExterns preludeDecls (rootId, prog) =
 (DUse false (UseAlias ("hash_map") "HM"))
 (DUse false (UseGroup ("support" "ordmap") ((mem "OrdMap" false) (mem "omEmpty" false) (mem "omFromNames" false) (mem "omFromPairs" false) (mem "omHasKey" false) (mem "omInsert" false) (mem "omLookup" false))))
 (DUse false (UseGroup ("frontend" "ast") ((mem "SiblingPair" false))))
-(DUse false (UseGroup ("frontend" "visibility") ((mem "ExportView" true) (mem "directUnder" false) (mem "carriedPaths" false) (mem "nsValues" false) (mem "nsIfaceMethods" false) (mem "nsTypeCtors" false) (mem "declExportsCtors" false) (mem "subjectOf" false) (mem "isSubjectIn" false))))
+(DUse false (UseGroup ("frontend" "visibility") ((mem "ExportView" true) (mem "directUnder" false) (mem "carriedPaths" false) (mem "nsValues" false) (mem "nsIfaceMethods" false) (mem "nsTypeCtors" false) (mem "declExportsCtors" false) (mem "subjectOf" false) (mem "isSubjectIn" false) (mem "explicitOverWild" false))))
 (DUse false (UseGroup ("list") ((mem "drop" false) (mem "findMap" false))))
 (DUse false (UseAlias ("eval" "u64_halves") "H"))
 (DUse false (UseAlias ("u64") "U64"))
@@ -8968,7 +8971,7 @@ evalOneRootEnvFacts facts extraExterns preludeDecls (rootId, prog) =
 (DFunDef false "ctorNamesOfDecl" ((PAs "d" (PRec "DData" ((rf "dataName" (PVar "tyname")) (rf "dataCtors" (PVar "variants"))) false))) (EIf (EApp (EVar "declExportsCtors") (EVar "d")) (EListLit (ETuple (EVar "tyname") (EApp (EApp (EMethodRef "map") (EVar "variantName")) (EVar "variants")))) (EListLit)))
 (DFunDef false "ctorNamesOfDecl" (PWild) (EListLit))
 (DTypeSig true "importFrameOf" (TyFun (TyApp (TyCon "ModExports") (TyApp (TyCon "Value") (TyVar "e"))) (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "ModExports") (TyApp (TyCon "Value") (TyVar "e"))))) (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "Ref") (TyApp (TyCon "Value") (TyVar "e")))))))))
-(DFunDef false "importFrameOf" ((PVar "coreExports") (PVar "exportsMap") (PVar "decls")) (EApp (EApp (EDictApp "flatMap") (EApp (EApp (EVar "useImports") (EVar "coreExports")) (EVar "exportsMap"))) (EVar "decls")))
+(DFunDef false "importFrameOf" ((PVar "coreExports") (PVar "exportsMap") (PVar "decls")) (EApp (EApp (EApp (EApp (EVar "explicitOverWild") (EVar "fst")) (ELam (PWild) (EVar "True"))) (EApp (EApp (EVar "useImports") (EVar "coreExports")) (EVar "exportsMap"))) (EVar "decls")))
 (DTypeSig false "useImports" (TyFun (TyApp (TyCon "ModExports") (TyApp (TyCon "Value") (TyVar "e"))) (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "ModExports") (TyApp (TyCon "Value") (TyVar "e"))))) (TyFun (TyCon "Decl") (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "Ref") (TyApp (TyCon "Value") (TyVar "e")))))))))
 (DFunDef false "useImports" ((PVar "coreExports") (PVar "exportsMap") (PCon "DUse" PWild (PVar "path") PWild)) (EIf (EBinOp "==" (EApp (EVar "useModuleId") (EVar "path")) (ELit (LString "core"))) (EApp (EApp (EVar "coreAliasCells") (EVar "path")) (EVar "coreExports")) (EMatch (EApp (EApp (EVar "lookupAssoc") (EApp (EVar "useModuleId") (EVar "path"))) (EVar "exportsMap")) (arm (PCon "None") () (EListLit)) (arm (PCon "Some" (PVar "exports")) () (EApp (EApp (EVar "resolveMembers") (EVar "path")) (EVar "exports"))))))
 (DFunDef false "useImports" (PWild PWild PWild) (EListLit))

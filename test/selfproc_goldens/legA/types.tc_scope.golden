@@ -8,13 +8,13 @@ aliasDictNamesOfDecl : (String -> List (String, (String, String))) -> Map String
 aliasDictNamesOfPath : (String -> List (String, (String, String))) -> Map String Unit -> List (String, List Decl) -> String -> UsePath -> List String
 aliasDictNamesOfUnit : (String -> List (String, (String, String))) -> Map String Unit -> List (String, List Decl) -> List Decl -> List String
 aliasEntriesFor : (String -> List (String, (String, String))) -> String -> UsePath -> List ((String, String), a) -> List (String, a)
-aliasImportSites : List Decl -> List (List String, Loc)
 aliasMethodKeyApply : ModuleCtx -> Map String (List (String, String, String, Ident, Loc)) -> List String -> Map String (IfaceRef, List String, Ty, List (String, List Kind)) -> Map String (IfaceRef, List String, Ty, List (String, List Kind))
 aliasMethodKeyCands : GraphCtx -> List Decl -> List (String, String, String, Ident, Loc)
 aliasMethodKeyEntry : ModuleCtx -> String -> List (String, String, String, Ident, Loc) -> Map String (IfaceRef, List String, Ty, List (String, List Kind)) -> Map String (IfaceRef, List String, Ty, List (String, List Kind))
 aliasMethodKeyGroup : List (String, String, String, Ident, Loc) -> Map String (List (String, String, String, Ident, Loc)) -> Map String (List (String, String, String, Ident, Loc))
 aliasMethodKeyRows : String -> String -> Loc -> List (String, Ident) -> List (String, String, String, Ident, Loc)
 aliasMethodKeysFor : GraphCtx -> String -> String -> Loc -> List (String, String, String, Ident, Loc)
+aliasMethodNames : List Decl -> List String -> List String
 aliasMethodSpellings : GraphCtx -> List Decl -> List (String, String)
 aliasQualifiedMethodEntries : ModuleCtx -> List Decl -> Map String (IfaceRef, List String, Ty, List (String, List Kind)) -> Map String (IfaceRef, List String, Ty, List (String, List Kind))
 aliasRowIdents : List (String, String, String, Ident, Loc) -> List Ident -> List Ident
@@ -55,7 +55,6 @@ insertCtorVariants : TcEnv -> String -> TyConOrigin -> List Variant -> SpellingP
 insertRecordPop : ModuleCtx -> List Decl -> SpellingPop RecordInfo -> SpellingPop RecordInfo
 insertRecordRow : ModuleCtx -> String -> TyConOrigin -> String -> SpellingPop RecordInfo -> SpellingPop RecordInfo
 insertRecordVariants : ModuleCtx -> String -> TyConOrigin -> List Variant -> SpellingPop RecordInfo -> SpellingPop RecordInfo
-isAliasMethodImport : List (List String, Loc) -> Decl -> Bool
 memberAliasCands : GraphCtx -> List Decl -> List (String, String, String, Ident, Loc)
 memberAliasEntry : String -> List ((String, String), a) -> UseMember -> List (String, a)
 memberAliasKeys : GraphCtx -> UsePath -> Loc -> List (String, String, String, Ident, Loc)
@@ -94,6 +93,7 @@ resolveMemberRows : (String, String) -> List (String, a) -> List (String, a)
 schemeOblEntriesFor : String -> UsePath -> List ((String, String), List VecObl) -> List (String, List VecObl)
 scopedCtorEntry : GraphCtx -> List Decl -> String -> List (Ident, String, Scheme) -> Option Scheme
 scopedRecordEntry : GraphCtx -> List Decl -> String -> List (Ident, String, RecordInfo) -> Option RecordInfo
+seedExplicitOverWild : (List Decl -> a -> List (String, (Option String, b))) -> List Decl -> a -> List (String, (Option String, b))
 sortIfaceRefs : List IfaceRef -> List IfaceRef
 sortIfaceRefsGo : List IfaceRef -> List IfaceRef -> List IfaceRef
 sortInsertIfaceRef : IfaceRef -> List IfaceRef -> List IfaceRef
@@ -106,4 +106,3 @@ usePathWitnesses : GraphCtx -> UsePath -> Bool -> String -> (Ident, (IfaceRef, L
 usePathWitnessesCtor : GraphCtx -> UsePath -> String -> String -> Ident -> Bool
 wildSchemeOblEntry : String -> ((String, String), List VecObl) -> List (String, List VecObl)
 withAliasMethodNames : List (String, String) -> Map String Unit -> Map String Unit
-writtenImportsOf : List Decl -> List Decl

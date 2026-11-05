@@ -1,0 +1,6 @@
+-- An imported `orElse : P -> P -> P` is the bare name at every receiver
+-- (docs/spec/SHADOW-SEMANTICS.md L2, L5), not the prelude's `Alternative.orElse`
+-- at a list, so `orElse [1] [2]` is a type mismatch.
+import lib.ladder_pe.{orElse, runP, P(..)}
+
+main = println (orElse [1] [2], runP (orElse (P (x => x)) (P (x => 10))) 1)
