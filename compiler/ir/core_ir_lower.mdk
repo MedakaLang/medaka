@@ -1534,6 +1534,8 @@ implEntryMethodName (CImplEntry m _ _ _) = m
 -- dictionary or through no route, an application's result.
 export
 definedArityOf : ArityEnv -> CallScope -> CExpr -> Option Int
+-- Bound: hot compiler path: the where-go form allocates one closure per call until the lambda-lift pass (#4878); convert then.
+-- lint-disable-next-line rule-threaded-invariant
 definedArityOf env scope (CVar x _) = match omLookup x scope
   Some local => local
   None => globalArityOf env x
@@ -2216,13 +2218,15 @@ attribTargetName (DFunDef _ n _ _ _ _) = [n]
 attribTargetName _ = []
 
 indexTwinOf : ProgramFacts -> OrdMap String -> Expr -> Option String
-indexTwinOf facts twins (ELoc _ h) = indexTwinOf facts twins h
-indexTwinOf facts twins (EMethodAt "index" _ ev) =
-  let evidence = facts.pfEvidence
-  match evMethodRoutesIn evidence ev
-    (_, _, RKey key _ _, _, _) => omLookup key twins
-    _ => None
-indexTwinOf _ _ _ = None
+indexTwinOf facts twins x0 = go x0
+  where
+    go (ELoc _ h) = go h
+    go (EMethodAt "index" _ ev) =
+      let evidence = facts.pfEvidence
+      match evMethodRoutesIn evidence ev
+        (_, _, RKey key _ _, _, _) => omLookup key twins
+        _ => None
+    go _ = None
 
 -- Every name a pattern or a local function binds in [d], its own parameters
 -- and its methods' included.
@@ -2708,9 +2712,11 @@ memoSelectorOf : List (String, String, String) ->
   String ->
   String ->
   Option String
-memoSelectorOf [] _ _ = None
-memoSelectorOf ((m2, k2, sel) :: rest) m key =
-  if m == m2 && key == k2 then Some sel else memoSelectorOf rest m key
+memoSelectorOf xs0 m key = go xs0
+  where
+    go [] = None
+    go ((m2, k2, sel) :: rest) =
+      if m == m2 && key == k2 then Some sel else go rest
 
 -- #731 item 1: the (method, selector) instances whose dispatch is UNAMBIGUOUS by
 -- STATIC KNOWLEDGE regardless of route — exactly one tagged impl and no interface
@@ -2741,23 +2747,22 @@ distinctImplKeysL : List CImplEntry ->
   Int ->
   List String ->
   List String
-distinctImplKeysL [] _ _ acc = acc
-distinctImplKeysL _ _ cap acc
-  | listLen acc > cap = acc
-distinctImplKeysL ((CImplEntry n _ _ (CImplTagged _ k _ _ _ _ _)) :: rest) method cap acc
-  -- Bound: the only caller passes `cap = 1`, so the guard above stops the walk once `acc` holds more than 1 key.
-  -- lint-disable-next-line rule-list-as-set
-  | n == method && not (contains k acc) =
-    distinctImplKeysL rest method cap (k :: acc)
-  | otherwise = distinctImplKeysL rest method cap acc
-distinctImplKeysL ((CImplEntry n _ _ (CImplDefault _ _ k _ _ _ _)) :: rest) method cap acc
-  -- Bound: the only caller passes `cap = 1`, so the guard above stops the walk once `acc` holds more than 1 key.
-  -- lint-disable-next-line rule-list-as-set
-  | n == method && not (contains k acc) =
-    distinctImplKeysL rest method cap (k :: acc)
-  | otherwise = distinctImplKeysL rest method cap acc
-distinctImplKeysL (_ :: rest) method cap acc =
-  distinctImplKeysL rest method cap acc
+distinctImplKeysL xs0 method cap acc0 = go xs0 acc0
+  where
+    go [] acc = acc
+    go _ acc
+      | listLen acc > cap = acc
+    go ((CImplEntry n _ _ (CImplTagged _ k _ _ _ _ _)) :: rest) acc
+      -- Bound: the only caller passes `cap = 1`, so the guard above stops the walk once `acc` holds more than 1 key.
+      -- lint-disable-next-line rule-list-as-set
+      | n == method && not (contains k acc) = go rest (k :: acc)
+      | otherwise = go rest acc
+    go ((CImplEntry n _ _ (CImplDefault _ _ k _ _ _ _)) :: rest) acc
+      -- Bound: the only caller passes `cap = 1`, so the guard above stops the walk once `acc` holds more than 1 key.
+      -- lint-disable-next-line rule-list-as-set
+      | n == method && not (contains k acc) = go rest (k :: acc)
+      | otherwise = go rest acc
+    go (_ :: rest) acc = go rest acc
 
 -- ── LowerState — the per-emission hoist carrier (#1954) ──────────────────────
 -- Constructed once per `hoistNullaryMemo` call and threaded explicitly through the
@@ -2834,12 +2839,14 @@ recordMultiImplMemoGo : LowerState ->
   String ->
   List (String, String, String) ->
   Unit
-recordMultiImplMemoGo _ _ [] = ()
-recordMultiImplMemoGo st name ((m, key, sel) :: rest)
-  | m == name =
-    recordMemoRef st sel key name
-    recordMultiImplMemoGo st name rest
-  | otherwise = recordMultiImplMemoGo st name rest
+recordMultiImplMemoGo st name xs0 = go xs0
+  where
+    go [] = ()
+    go ((m, key, sel) :: rest)
+      | m == name =
+        recordMemoRef st sel key name
+        go rest
+      | otherwise = go rest
 
 -- the whole-program hoist: rewrite every memoisable occurrence to a CAF reference,
 -- then prepend one synthesized CAF value-bind per referenced instance.  A no-op (the
@@ -3358,32 +3365,36 @@ lowerDeclImpl : ProgramFacts ->
   Option DispositionTable ->
   Decl ->
   List CImplEntry
--- #1037: an ATTRIBUTE IS METADATA — it must never change which impls exist.  A
--- decl attribute parses to `DAttrib attrs <decl>` (parser.parseAttrib wraps ANY
--- decl), so `@deprecated "…" impl Speak Cat where …` reaches here as a DAttrib and
--- fell through to `_ => []`: the impl contributed ZERO entries and simply VANISHED
--- from the program's impl set.  Native then had an impl-less interface-with-default
--- and SIGSEGV'd through #948's arm-less dispatcher; eval's `declImplEntries` has the
--- same shape and silently answered from the interface default instead.
-lowerDeclImpl facts disp reqCounts arities dt (DAttrib _ d) =
-  lowerDeclImpl facts disp reqCounts arities dt d
--- B-2.2-e: `implOrigin` is bound here purely to reach `lowerImplMethod`'s route
--- word (the definition side of the identity-bearing key `keyForSite` stamps at the
--- call site).  Matched arm-for-arm by `eval.declImplEntries`, which threads the
--- same field for the same reason.
-lowerDeclImpl facts disp _ arities _ (DImpl { iface = ifaceName, implOrigin = o, tys = typeArgs, methods, ... }) =
-  flatMap (lowerImplMethod facts disp arities o ifaceName typeArgs) methods
--- An interface lowers one entry for each default per instance the table says
--- inherits it — lowered HERE, beside the interface's other code, because the body
--- is the interface module's (its names resolve there).  Every inherited slot
--- therefore has its own entry, and no engine is left to choose a default.  The interface word is read straight off `DInterface.ifaceOrigin`
--- (resolve stamps it in `elaborateModules`' preamble — `stampGraphTyOrigins`), the
--- same spelling the table's producer keys the slot by.
-lowerDeclImpl facts disp reqCounts arities (Some dt) (DInterface { name = ifaceName, ifaceOrigin = o, methods, ... }) =
-  flatMap
-    (lowerInheritedDefault facts disp reqCounts arities dt o ifaceName)
-    methods
-lowerDeclImpl _ _ _ _ _ _ = []
+lowerDeclImpl facts disp reqCounts arities dt decl0 = go decl0
+  where
+    -- #1037: an ATTRIBUTE IS METADATA — it must never change which impls exist.  A
+    -- decl attribute parses to `DAttrib attrs <decl>` (parser.parseAttrib wraps ANY
+    -- decl), so `@deprecated "…" impl Speak Cat where …` reaches here as a DAttrib and
+    -- fell through to `_ => []`: the impl contributed ZERO entries and simply VANISHED
+    -- from the program's impl set.  Native then had an impl-less interface-with-default
+    -- and SIGSEGV'd through #948's arm-less dispatcher; eval's `declImplEntries` has the
+    -- same shape and silently answered from the interface default instead.
+    go (DAttrib _ d) = go d
+    -- B-2.2-e: `implOrigin` is bound here purely to reach `lowerImplMethod`'s route
+    -- word (the definition side of the identity-bearing key `keyForSite` stamps at the
+    -- call site).  Matched arm-for-arm by `eval.declImplEntries`, which threads the
+    -- same field for the same reason.
+    go (DImpl { iface = ifaceName, implOrigin = o, tys = typeArgs, methods, ... }) =
+      flatMap (lowerImplMethod facts disp arities o ifaceName typeArgs) methods
+    -- An interface lowers one entry for each default per instance the table says
+    -- inherits it — lowered HERE, beside the interface's other code, because the body
+    -- is the interface module's (its names resolve there).  Every inherited slot
+    -- therefore has its own entry, and no engine is left to choose a default.  The interface word is read straight off `DInterface.ifaceOrigin`
+    -- (resolve stamps it in `elaborateModules`' preamble — `stampGraphTyOrigins`), the
+    -- same spelling the table's producer keys the slot by.
+    go (DInterface { name = ifaceName, ifaceOrigin = o, methods, ... }) =
+      match dt
+        Some t =>
+          flatMap
+            (lowerInheritedDefault facts disp reqCounts arities t o ifaceName)
+            methods
+        None => []
+    go _ = []
 
 lowerImplMethod : ProgramFacts ->
   PositionsIndex ->
@@ -4097,24 +4108,25 @@ tyIsFunReturningSelf (TyEffect _ _ t) params = tyIsFunReturningSelf t params
 tyIsFunReturningSelf _ _ = False
 
 funClausesOf : ProgramFacts -> SymbolOrigins -> List Decl -> List OriginClause
-funClausesOf _ _ [] = []
-funClausesOf facts origins ((DFunDef _ n pats body site bid) :: rest) =
-  originClauses facts origins n site bid (FunClause pats body)
-    ++ funClausesOf facts origins rest
-funClausesOf facts origins ((DLetGroup _ binds) :: rest) =
-  letGroupClausesOf facts origins binds ++ funClausesOf facts origins rest
-funClausesOf facts origins ((DAttrib _ d) :: rest) =
-  funClausesOf facts origins (d :: rest)
-funClausesOf facts origins (_ :: rest) = funClausesOf facts origins rest
+funClausesOf facts origins xs0 = go xs0
+  where
+    go [] = []
+    go ((DFunDef _ n pats body site bid) :: rest) =
+      originClauses facts origins n site bid (FunClause pats body) ++ go rest
+    go ((DLetGroup _ binds) :: rest) =
+      letGroupClausesOf facts origins binds ++ go rest
+    go ((DAttrib _ d) :: rest) = go (d :: rest)
+    go (_ :: rest) = go rest
 
 letGroupClausesOf : ProgramFacts ->
   SymbolOrigins ->
   List LetBind ->
   List OriginClause
-letGroupClausesOf _ _ [] = []
-letGroupClausesOf facts origins ((LetBind n clauses site bid) :: rest) =
-  flatMap (originClauses facts origins n site bid) clauses
-    ++ letGroupClausesOf facts origins rest
+letGroupClausesOf facts origins xs0 = go xs0
+  where
+    go [] = []
+    go ((LetBind n clauses site bid) :: rest) =
+      flatMap (originClauses facts origins n site bid) clauses ++ go rest
 
 originClauses : ProgramFacts ->
   SymbolOrigins ->

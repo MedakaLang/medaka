@@ -78,6 +78,8 @@ buildSlice : Array Char -> Int -> Int -> String
 buildSlice cs i end = stringConcat (sliceChars cs i end)
 
 sliceChars : Array Char -> Int -> Int -> List String
+-- Bound: list built in tail position modulo cons: a where-local go loses the constant-stack loop until the lambda-lift pass (#4878); convert then.
+-- lint-disable-next-line rule-threaded-invariant
 sliceChars cs i end
   | i >= end = []
   | otherwise = charToStr (arrayGetUnsafe i cs) :: sliceChars cs (i + 1) end
@@ -106,18 +108,20 @@ tokFrom cs i
       tokWord cs i (i + 1)
 
 tokWord : Array Char -> Int -> Int -> List SToken
-tokWord cs start i
-  | i >= arrayLength cs = [TAtom (buildSlice cs start i)]
-  | otherwise =
-    let c = arrayGetUnsafe i cs
-    if c == '(' then
-      TAtom (buildSlice cs start i) :: TOpen :: tokFrom cs (i + 1)
-    else if c == ')' then
-      TAtom (buildSlice cs start i) :: TClose :: tokFrom cs (i + 1)
-    else if isSpaceChar c then
-      TAtom (buildSlice cs start i) :: tokFrom cs (i + 1)
-    else
-      tokWord cs start (i + 1)
+tokWord cs start i0 = go i0
+  where
+    go i
+      | i >= arrayLength cs = [TAtom (buildSlice cs start i)]
+      | otherwise =
+        let c = arrayGetUnsafe i cs
+        if c == '(' then
+          TAtom (buildSlice cs start i) :: TOpen :: tokFrom cs (i + 1)
+        else if c == ')' then
+          TAtom (buildSlice cs start i) :: TClose :: tokFrom cs (i + 1)
+        else if isSpaceChar c then
+          TAtom (buildSlice cs start i) :: tokFrom cs (i + 1)
+        else
+          go (i + 1)
 
 -- tokQuoted: accumulate a quoted string (without the outer quotes, which we
 -- add back so unquote can strip them; this preserves the escStr-escaped form).
@@ -179,6 +183,8 @@ unquote s =
   if n < 2 then s else stringConcat (unqFrom cs 1 (n - 1))
 
 unqFrom : Array Char -> Int -> Int -> List String
+-- Bound: list built in tail position modulo cons: a where-local go loses the constant-stack loop until the lambda-lift pass (#4878); convert then.
+-- lint-disable-next-line rule-threaded-invariant
 unqFrom cs i lim
   | i >= lim = []
   | otherwise =
@@ -224,14 +230,12 @@ parseIntStr s =
 -- The digits of [cs] from [i], negated.  It accumulates downward because the
 -- least Int has no positive counterpart.
 negDigits : Array Char -> Int -> Int -> Int -> Int
-negDigits cs i n acc
-  | i >= n = acc
-  | otherwise =
-    negDigits
-      cs
-      (i + 1)
-      n
-      (acc * 10 - (charCode (arrayGetUnsafe i cs) - charCode '0'))
+negDigits cs i0 n acc0 = go i0 acc0
+  where
+    go i acc
+      | i >= n = acc
+      | otherwise =
+        go (i + 1) (acc * 10 - (charCode (arrayGetUnsafe i cs) - charCode '0'))
 
 toInt : SExp -> Int
 toInt (SAtom s) = parseIntStr s
