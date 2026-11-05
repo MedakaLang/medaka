@@ -1,5 +1,5 @@
 # META
-source_lines=2486
+source_lines=2489
 stages=DESUGAR,MARK
 # SOURCE
 {- | The prelude: the types, interfaces, and functions every Medaka program
@@ -2488,6 +2488,9 @@ prop "Ord Array: equal prefixes order by length" (xs : List Int) (ys : List Int)
   eq
     (compare (arrayFromList xs) (arrayFromList (xs ++ ys)))
     (compare (length xs) (length (xs ++ ys)))
+
+export extern data Process (p : Authority Exec)
+export extern data LaunchTicket (p : Authority Exec)
 # DESUGAR
 (DData Public "Ordering" () ((variant "Lt" (ConPos)) (variant "Eq" (ConPos)) (variant "Gt" (ConPos))) ())
 (DData Public "Option" ("a") ((variant "Some" (ConPos (TyVar "a"))) (variant "None" (ConPos))) ())
@@ -2944,6 +2947,8 @@ prop "Ord Array: equal prefixes order by length" (xs : List Int) (ys : List Int)
 (DProp false "Array append with an empty left side copies the right input" ((pp "ys" (TyApp (TyCon "List") (TyCon "Int")))) (EBlock (DoLet false false (PVar "b") (EApp (EVar "arrayFromList") (EBinOp "::" (ELit (LInt 1)) (EVar "ys")))) (DoLet false false (PVar "r") (EApp (EApp (EVar "append") (EApp (EVar "arrayFromList") (EAnnot (EListLit) (TyApp (TyCon "List") (TyCon "Int"))))) (EVar "b"))) (DoExpr (EApp (EApp (EApp (EVar "arraySetUnsafe") (ELit (LInt 0))) (ELit (LInt 0))) (EVar "r"))) (DoExpr (EBinOp "&&" (EApp (EApp (EVar "eq") (EApp (EVar "toList") (EVar "b"))) (EBinOp "::" (ELit (LInt 1)) (EVar "ys"))) (EApp (EApp (EVar "eq") (EApp (EVar "toList") (EVar "r"))) (EBinOp "::" (ELit (LInt 0)) (EVar "ys")))))))
 (DProp false "Array slice agrees with List slice" ((pp "xs" (TyApp (TyCon "List") (TyCon "Int"))) (pp "lo" (TyCon "Int")) (pp "hi" (TyCon "Int"))) (EBlock (DoLet false false (PVar "n") (EApp (EVar "length") (EVar "xs"))) (DoLet false false (PVar "l") (EIf (EBinOp "<" (EVar "lo") (ELit (LInt 0))) (ELit (LInt 0)) (EApp (EApp (EVar "min") (EVar "lo")) (EVar "n")))) (DoLet false false (PVar "h") (EIf (EBinOp "<" (EVar "hi") (EVar "l")) (EVar "l") (EApp (EApp (EVar "min") (EVar "hi")) (EVar "n")))) (DoExpr (EApp (EApp (EVar "eq") (EApp (EVar "toList") (EApp (EApp (EApp (EVar "slice") (EApp (EVar "arrayFromList") (EVar "xs"))) (EVar "l")) (EVar "h")))) (EApp (EApp (EApp (EVar "slice") (EVar "xs")) (EVar "l")) (EVar "h"))))))
 (DProp false "Ord Array: equal prefixes order by length" ((pp "xs" (TyApp (TyCon "List") (TyCon "Int"))) (pp "ys" (TyApp (TyCon "List") (TyCon "Int")))) (EApp (EApp (EVar "eq") (EApp (EApp (EVar "compare") (EApp (EVar "arrayFromList") (EVar "xs"))) (EApp (EVar "arrayFromList") (EBinOp "++" (EVar "xs") (EVar "ys"))))) (EApp (EApp (EVar "compare") (EApp (EVar "length") (EVar "xs"))) (EApp (EVar "length") (EBinOp "++" (EVar "xs") (EVar "ys"))))))
+(DExternData Abstract "Process" ("p"))
+(DExternData Abstract "LaunchTicket" ("p"))
 # MARK
 (DData Public "Ordering" () ((variant "Lt" (ConPos)) (variant "Eq" (ConPos)) (variant "Gt" (ConPos))) ())
 (DData Public "Option" ("a") ((variant "Some" (ConPos (TyVar "a"))) (variant "None" (ConPos))) ())
@@ -3400,3 +3405,5 @@ prop "Ord Array: equal prefixes order by length" (xs : List Int) (ys : List Int)
 (DProp false "Array append with an empty left side copies the right input" ((pp "ys" (TyApp (TyCon "List") (TyCon "Int")))) (EBlock (DoLet false false (PVar "b") (EApp (EVar "arrayFromList") (EBinOp "::" (ELit (LInt 1)) (EVar "ys")))) (DoLet false false (PVar "r") (EApp (EApp (EMethodRef "append") (EApp (EVar "arrayFromList") (EAnnot (EListLit) (TyApp (TyCon "List") (TyCon "Int"))))) (EVar "b"))) (DoExpr (EApp (EApp (EApp (EVar "arraySetUnsafe") (ELit (LInt 0))) (ELit (LInt 0))) (EVar "r"))) (DoExpr (EBinOp "&&" (EApp (EApp (EMethodRef "eq") (EApp (EMethodRef "toList") (EVar "b"))) (EBinOp "::" (ELit (LInt 1)) (EVar "ys"))) (EApp (EApp (EMethodRef "eq") (EApp (EMethodRef "toList") (EVar "r"))) (EBinOp "::" (ELit (LInt 0)) (EVar "ys")))))))
 (DProp false "Array slice agrees with List slice" ((pp "xs" (TyApp (TyCon "List") (TyCon "Int"))) (pp "lo" (TyCon "Int")) (pp "hi" (TyCon "Int"))) (EBlock (DoLet false false (PVar "n") (EApp (EMethodRef "length") (EVar "xs"))) (DoLet false false (PVar "l") (EIf (EBinOp "<" (EVar "lo") (ELit (LInt 0))) (ELit (LInt 0)) (EApp (EApp (EMethodRef "min") (EVar "lo")) (EVar "n")))) (DoLet false false (PVar "h") (EIf (EBinOp "<" (EVar "hi") (EVar "l")) (EVar "l") (EApp (EApp (EMethodRef "min") (EVar "hi")) (EVar "n")))) (DoExpr (EApp (EApp (EMethodRef "eq") (EApp (EMethodRef "toList") (EApp (EApp (EApp (EMethodRef "slice") (EApp (EVar "arrayFromList") (EVar "xs"))) (EVar "l")) (EVar "h")))) (EApp (EApp (EApp (EMethodRef "slice") (EVar "xs")) (EVar "l")) (EVar "h"))))))
 (DProp false "Ord Array: equal prefixes order by length" ((pp "xs" (TyApp (TyCon "List") (TyCon "Int"))) (pp "ys" (TyApp (TyCon "List") (TyCon "Int")))) (EApp (EApp (EMethodRef "eq") (EApp (EApp (EMethodRef "compare") (EApp (EVar "arrayFromList") (EVar "xs"))) (EApp (EVar "arrayFromList") (EBinOp "++" (EVar "xs") (EVar "ys"))))) (EApp (EApp (EMethodRef "compare") (EApp (EMethodRef "length") (EVar "xs"))) (EApp (EMethodRef "length") (EBinOp "++" (EVar "xs") (EVar "ys"))))))
+(DExternData Abstract "Process" ("p"))
+(DExternData Abstract "LaunchTicket" ("p"))

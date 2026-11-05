@@ -165,6 +165,7 @@ suites = [
   -- array 52 + core 138 = 190 after it (one doctest moved, two props added).
   ("array", (52, EvalAndNative)),
   ("async", (10, Eval)),
+  ("process", (2, NativeCapability)),
   -- The RFC 4648 vectors and the canonical-rejection checks. Neither of the
   -- two vehicles named in the header reaches this module, so without this
   -- row nothing would run them.
