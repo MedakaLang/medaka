@@ -1,24 +1,193 @@
--- Two bounds ride along unchanged through every self-call.
+-- Positives the fix withholds come first: the fix adds lines, and the
+-- `unfixed` positives must keep their line numbers.
+
+-- A list built in tail position modulo cons: the top-level form runs in
+-- constant stack, a where-local `go` would not.
 clampAll : Int -> Int -> List Int -> List Int
 -- expect-next-line rule-threaded-invariant unfixed
 clampAll _ _ [] = []
 clampAll lo hi (x :: xs) = max lo (min hi x) :: clampAll lo hi xs
 
+-- A clause pattern-matches an invariant parameter.
+fromZero : Int -> Int -> List Int -> Int
+-- expect-next-line rule-threaded-invariant unfixed
+fromZero 0 step xs = step + listSum xs
+fromZero base step [] = base + step
+fromZero base step (_ :: xs) = fromZero base step xs
+
+-- Two clauses name the same invariant parameter differently.
+renamed : Int -> Int -> List Int -> Int
+-- expect-next-line rule-threaded-invariant unfixed
+renamed lo hi [] = lo + hi
+renamed a b (x :: xs) = a * b + x + renamed a b xs
+
+limit : Int
+limit = 10
+
+-- The base clause ignores `limit` and reads the top-level `limit`, which the
+-- closed-over parameter would capture.
+capped : Int -> Int -> List Int -> Int
+-- expect-next-line rule-threaded-invariant unfixed
+capped _ _ [] = limit
+capped limit step (x :: xs) = limit + step + x + capped limit step xs
+
+-- A class constraint on a type variable only the changing parameter carries:
+-- the local `go` would be generalised over it.
+allSame : Eq a => Int -> Int -> List a -> Int
+-- expect-next-line rule-threaded-invariant unfixed
+allSame lo _ [] = lo
+allSame lo hi (x :: y :: rest) = if x == y then allSame lo hi (y :: rest) else hi
+allSame lo _ [_] = lo
+
+-- `tag` is only passed on: a dead parameter, not one to close over.
+depthOf : Int -> String -> List Int -> Int
+-- expect-next-line rule-threaded-invariant unfixed
+depthOf d _ [] = d
+depthOf d tag (_ :: xs) = d + depthOf d tag xs
+
+-- A `where` of its own on one of two clauses.
+scaledSum : Int -> Int -> List Int -> Int
+-- expect-next-line rule-threaded-invariant unfixed
+scaledSum _ _ [] = 0
+scaledSum k m (x :: xs) = scale x + scaledSum k m xs
+  where
+    scale y = y * k + m
+
+-- No signature.
+-- expect-next-line rule-threaded-invariant unfixed
+unsigned lo hi n = if n <= 0 then lo else hi + unsigned lo hi (n - 1)
+
+-- An invariant argument in brackets.
+bracketed : Int -> Int -> Int -> Int
+-- expect-next-line rule-threaded-invariant unfixed
+bracketed lo hi n = if n <= 0 then lo + hi else bracketed (lo) hi (n - 1)
+
+data Pt = Pt { px : Int, tag : Int }
+
+data Label = Label { tag : Int }
+
+-- A field read on a changing parameter: two records declare `tag`, and the
+-- local `go` would learn the record type too late to choose.
+tagsIn : Int -> Int -> List Pt -> Int
+-- expect-next-line rule-threaded-invariant unfixed
+tagsIn _ _ [] = 0
+tagsIn lo hi (p :: ps) = if p.tag >= lo && p.tag <= hi then 1 + tagsIn lo hi ps else tagsIn lo hi ps
+
+-- An effect row variable in the signature: the local `go` would infer and
+-- generalise a row of its own.
+eachUpTo : (Int -> <e> Unit) -> Int -> Int -> <e> Unit
+-- expect-next-line rule-threaded-invariant unfixed
+eachUpTo f hi i
+  | i > hi = ()
+  | otherwise =
+    f i
+    eachUpTo f hi (i + 1)
+
+-- The positives the fix rewrites.
+
 -- Both invariants are threaded through guarded match arms.
 sumBetween : Int -> Int -> Int -> List Int -> Int
--- expect-next-line rule-threaded-invariant unfixed
-sumBetween lo hi acc xs = match xs
-  [] => acc
-  y :: ys if y >= lo && y <= hi => sumBetween lo hi (acc + y) ys
-  _ :: ys => sumBetween lo hi acc ys
+-- expect-next-line rule-threaded-invariant
+sumBetween lo hi acc0 xs0 = go acc0 xs0
+  where
+    go acc xs = match xs
+      [] => acc
+      y :: ys if y >= lo && y <= hi => go (acc + y) ys
+      _ :: ys => go acc ys
 
--- The self-call sits under a let.
+-- The self-call sits under a let; the base clause ignores both invariants.
 countIn : Int -> Int -> List Int -> Int
--- expect-next-line rule-threaded-invariant unfixed
-countIn _ _ [] = 0
-countIn lo hi (x :: xs) =
-  let rest = countIn lo hi xs
-  if x >= lo && x <= hi then 1 + rest else rest
+-- expect-next-line rule-threaded-invariant
+countIn lo hi xs0 = go xs0
+  where
+    go [] = 0
+    go (x :: xs) =
+      -- the rest first
+      let rest = go xs
+      if x >= lo && x <= hi then 1 + rest else rest
+
+-- Guards on the lines after the head.
+skipTo : Int -> Int -> Int -> Int
+-- expect-next-line rule-threaded-invariant
+skipTo step n p0 = go p0
+  where
+    go p
+      | p < n && p % step == 0 = go (p + 1)
+      | otherwise = p
+
+-- The invariants sit between the changing parameters, and the base clause
+-- ignores them under `_`-names.
+interleave : Int -> Int -> Int -> Int -> Int
+-- expect-next-line rule-threaded-invariant
+interleave a n0 b acc0 = go n0 acc0
+  where
+    go 0 acc = acc
+    go n acc = go (n - 1) (acc + a * b)
+
+-- Each argument of the self-call on its own line.
+sumWidths : Int -> Int -> Int -> Int -> Int
+-- expect-next-line rule-threaded-invariant
+sumWidths w len i0 acc0 = go i0 acc0
+  where
+    go i acc
+      | i >= len = acc
+      | otherwise =
+        go
+          (i + 1)
+          (acc + i * w)
+
+-- A `where` of its own on the only clause joins the new one.
+weigh : Int -> Int -> Int -> Int
+-- expect-next-line rule-threaded-invariant
+weigh k m n0 = go n0
+  where
+    go n = if n <= 0 then 0 else scale n + go (n - 1)
+    scale y = y * k + m
+
+-- Every parameter is invariant: `go` takes `()`.
+spin : Int -> Int -> Int
+-- expect-next-line rule-threaded-invariant
+spin a b = go ()
+  where
+    go () = if a > b then go () else a + b
+
+-- A class constraint the closed-over parameter carries.
+countEq : Eq a => a -> Int -> List a -> Int
+-- expect-next-line rule-threaded-invariant
+countEq x bonus xs0 = go xs0
+  where
+    go [] = bonus
+    go (y :: ys) = (if x == y then 1 else 0) + go ys
+
+-- The function already mentions `go`, so the local is `go1`.
+withGo : Int -> Int -> Int -> Int
+-- expect-next-line rule-threaded-invariant
+withGo go step n0 = go1 n0
+  where
+    go1 n = if n <= 0 then go else step + go1 (n - 1)
+
+-- A token after the self-call continues deeper on the next line: the cut is
+-- padded so the columns below keep their place.
+padded : Int -> Int -> Int -> Int
+-- expect-next-line rule-threaded-invariant
+padded lo hi n0 = go n0
+  where
+    go n =
+      if n <= 0 then lo else go           (n - 1) + listSum [hi,
+                                                             n]
+
+-- A field read on an invariant parameter: its type comes from the signature.
+tagged : Pt -> Int -> Int -> Int
+-- expect-next-line rule-threaded-invariant
+tagged p k n0 = go n0
+  where
+    go n = if n <= 0 then k else p.tag + go (n - 1)
+
+listSum : List Int -> Int
+listSum [] = 0
+listSum (x :: xs) = x + listSum xs
+
+-- Negatives.
 
 -- A where-local go already closes over the invariants.
 clampLocal : Int -> Int -> List Int -> List Int

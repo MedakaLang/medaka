@@ -50,7 +50,7 @@ Every rule `medaka lint` knows. `universal` rules are meaningful in any Medaka p
 | [`rule-reslice-in-loop`](#rule-reslice-in-loop) | universal | perf | gated | not-fixable | file |
 | [`rule-list-as-set`](#rule-list-as-set) | universal | perf | gated | not-fixable | file |
 | [`rule-walker-wildcard`](#rule-walker-wildcard) | internal | style | gated | not-fixable | file |
-| [`rule-threaded-invariant`](#rule-threaded-invariant) | internal | style | gated | suggest-only | file |
+| [`rule-threaded-invariant`](#rule-threaded-invariant) | internal | style | gated | fixable-unsafe | file |
 | [`rule-passthrough-arm`](#rule-passthrough-arm) | internal | style | gated | fixable-unsafe | file |
 
 ## rule-match-on-param
@@ -694,6 +694,8 @@ After:
 a self-recursive function passes two or more of its parameters through every self-call unchanged: close over them in a where-local `go`
 
 A top-level function that calls itself with the same two or more parameters, in the same positions, in every self-call carries those parameters through the whole recursion for nothing. A local `go` in a `where` closes over them, so the recursion names only what changes. The rule reads each function as a group of clauses: a position counts when every full-arity self-call of every clause that makes one passes that clause's own parameter there, unchanged. One invariant parameter is not reported, nor is a `go` that already closes over its invariants, a partial application, mutual recursion, or a loop local to a `let` or `where`.
+
+`--fix --unsafe-fixes` writes the `go` form when the whole shape is known: a signature whose class constraints the closed-over parameters carry, each invariant parameter a plain name (or ignored) in every clause, no list builder in tail position modulo cons, no invariant parameter used only to be passed on, and a `where` of its own only on a single clause. The rest are reported only. Run `medaka fmt --write` after it.
 
 ```
 Before:
