@@ -799,8 +799,8 @@ Its output is:
 
 ```medaka
 opt = Some 5
-doThing = println "a"
-doOther = println "b"
+doThing () = println "a"
+doOther () = println "b"
 
 p1 = if 1 > 0 then 1 else 0
 p2 = match opt
@@ -810,8 +810,8 @@ p3 x = if x > 0 then println "pos"  -- else-less: else defaults to (); then must
 main =
   if 1 > 0 then
     -- else-less with an indented side-effecting block
-    doThing
-    doOther
+    doThing ()
+    doOther ()
 ```
 
 Branches may be inline or indented blocks, in any combination; `else` may begin

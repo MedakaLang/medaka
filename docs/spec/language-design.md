@@ -315,7 +315,7 @@ Function definitions are implicitly self-recursive — `factorial n = n * factor
 fact n = if n == 0 then 1 else n * fact (n - 1)
 ```
 
-Plain value bindings are **not** recursive. `let x = ... x ...` is an error because Medaka evaluates strictly — without lazy thunks, a self-referencing value either loops forever or produces nonsense. Forgetting this gets a targeted diagnostic suggesting `let rec`.
+Plain value bindings are **not** recursive. `let x = ... x ...` is an error because Medaka evaluates strictly — without lazy thunks, a self-referencing value either loops forever or produces nonsense. Forgetting this gets a targeted diagnostic suggesting `let rec`. Top-level values follow the initialisation rules in [Module System](#top-level-initialisation-l1).
 
 For explicit value recursion and mutual recursion, use `let rec ... with ...`:
 
@@ -628,6 +628,50 @@ toList (Node l v r) = toList l ++ (v :: toList r)
 - **`import` for imports** — clean and explicit
 - **No circular dependencies** — enforced by compiler
 - **No first-class modules or functors** — OCaml-style complexity explicitly rejected
+
+### Top-level initialisation (L1)
+
+A module's top-level value bindings (nullary bindings: `x = ...`, `x : T`) are initialised once, at startup, strictly. A binding with parameters is a function and is not initialised. Clauses I1 to I6 state what a conforming implementation produces and what `check` rejects. The rejections belong to the static rules (`medaka check`); making every engine initialise strictly is a separate, later step, so a clause about order or failure describes the conforming result, not a claim about any engine today.
+
+- **(I1) Order.** Initialisation runs dependency-first: a value is initialised after every value its initialiser reaches. Ties are broken by source position. Modules run in import order; imports are acyclic.
+- **(I2) Purity.** The initialiser of a non-`main` top-level value has an empty forcing row. Looking up a top-level value is pure, so a function that mentions a value carries nothing for it. Effect labels are host capabilities only, so allocating or writing a `Ref`, `panic` and `exit` are pure for this rule; `putStrLn`, `readFile` and every other labelled primitive are not.
+- **(I3) Value cycles.** A value's initialiser may not reach its own recursive group outside a lambda. The check builds a graph whose nodes are the module's top-level bindings plus one node per `impl`; an edge is any mention of a top-level name anywhere in a body, lambdas included, plus a dictionary edge to every impl of the interface (or of an interface that has it as a super) whenever an interface method is mentioned. A value is rejected iff its eager walk, which does not enter lambdas, reaches a member of its own strongly connected component, itself included. Whatever the walk reaches outside the component lies in an earlier component, so it is already initialised.
+- **(I4) `main`.** A binding named `main` in any module is exempt from I2 and is never initialised; it is the program body. Another top-level binding may not use it in expression position. Local binders named `main` are unaffected.
+- **(I5) Failure.** A `panic` or `exit` in an initialiser aborts startup, before `main` runs, with the program's usual panic or exit behaviour.
+- **(I6) Constrained nullary bindings.** A nullary binding with a class constraint (`callMax = max`) is a function of its dictionaries and is not initialised. I1 to I3 do not apply to it.
+
+```
+-- rejected by I2
+banner : <Stdout> Unit
+banner = putStrLn "== banner =="
+
+-- accepted: a function, called from main
+banner () = putStrLn "== banner =="
+main = banner ()
+```
+
+#### Decision table
+
+Every row class the whole-tree census measured at the base (counts are rows, not files):
+
+| Class | Shape | Rows | Decided by | Verdict |
+|---|---|---|---|---|
+| C1 | non-`main` value with a non-empty forcing row (`check : <FileRead> Expectation`, `exeDir : <IO> String`) | 485 (466 outside fixture corpora, mostly test modules) | I2 | rejected with `T-TOPLEVEL-EFFECT`; rewrite as `name () = ...` |
+| C2 | value cycle that traps `E-CYCLIC-VALUE` at run or build today | 5, all test fixtures; one is visible only through an impl dictionary | I3 | rejected with `T-CYCLIC-VALUE` |
+| C2s | static value-cycle candidate under an over-approximate mention graph | 187 | I3 | decided by the eager walk, which skips lambdas; most are function-typed point-free bindings and are accepted |
+| C3 | rowless value whose body can panic or exit, referenced nowhere | 0 | I5 | startup failure if forced |
+| C3r | same body shape, referenced | 44 | I5 | startup failure under I1; whether a conditional reader moves is reviewed when engines change |
+| C4 | expression-position use of a top-level `main` | 2, both already rejected by `check` (`main` is the auto-printed entry point) | I4 | rejected; I4 codifies existing behaviour |
+| C4local, C4neg | local binder named `main`; `import m.{main}` | 48; 3 | I4 | admitted; an imported `main` is the entry |
+| C5 | constrained nullary binding | 24; 23 are function-typed | I6 | not initialised |
+| C6 | REPL binding of an effectful value | 0 | I2 | the REPL re-checks accumulated declarations, so such a binding is rejected; the hint says to bind `f () = ...` and call it |
+
+#### Diagnostics
+
+Both are `T-` codes minted per `compiler/DIAGNOSTIC-CODES-DESIGN.md`; the names are working names until the rule lands.
+
+- `T-TOPLEVEL-EFFECT`: "top-level value `banner` performs `<Stdout>` when it is initialised; a top-level value must have an empty effect row". The message names the binding and the row, points at the first effectful call in the initialiser, and gives the fix: "make it a function, `banner () = ...`, and call it from `main`".
+- `T-CYCLIC-VALUE`: "top-level value `a` depends on itself when it is initialised: `a` (m.mdk:3:1) -> `b` (m.mdk:7:1) -> `a`". The message names the binding, prints the cycle path hop by hop with each hop's location (an impl hop names the impl and the interface method that reached it), and gives the fix: "make one of them a function, `name () = ...`, so the reference happens at call time".
 
 ### Abstract Type Exports
 
