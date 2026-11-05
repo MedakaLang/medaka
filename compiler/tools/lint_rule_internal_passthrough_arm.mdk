@@ -205,6 +205,8 @@ report loc kind fix = Finding {
 --     `Err x => Err x`;
 --   * the success pattern is a variable, `_`, or a tuple of them, which a `do`
 --     bind accepts without a failure path;
+--   * the success body has no bare expression statement before its last one,
+--     which would be a statement in the scrutinee's monad inside the `do`;
 --   * no comment touches an edited line (the driver demotes such a fix).
 -- The passthrough arm is listed first or second. A success body that starts on
 -- the arrow's line moves to the arm's column, and the bind is placed there; a
@@ -229,6 +231,7 @@ passthroughFix facts ctx e = do
   ensure (isPassthroughText (lineAt facts passLine))
   ensure (indentOf (lineAt facts succLine) == ac)
   (ctorName, inner) <- successParts succArm
+  ensure (not (hasBareStatement succArm))
   let sline = lineAt facts succLine
   arrow <- indexOf "=>" sline
   ensure
@@ -282,6 +285,22 @@ passthroughArms (EMatch _ [a1, a2]) =
   else
     None
 passthroughArms _ = None
+
+-- The success body is a block with a bare expression statement before its last
+-- statement, as in `log x` then the result.
+hasBareStatement : Arm -> Bool
+hasBareStatement (Arm _ _ body) = match unwrapLoc body
+  EBlock stmts => anyList isBare (dropLast stmts)
+  _ => False
+
+isBare : DoStmt -> Bool
+isBare (DoExpr _) = True
+isBare _ = False
+
+dropLast : List DoStmt -> List DoStmt
+dropLast [] = []
+dropLast [_] = []
+dropLast (s :: ss) = s :: dropLast ss
 
 -- The success arm's constructor and the pattern it wraps.
 successParts : Arm -> Option (String, Pat)

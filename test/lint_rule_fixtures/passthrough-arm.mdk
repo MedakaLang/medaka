@@ -60,6 +60,16 @@ operand o =
       None => None,
   ]
 
+-- A bare statement before the last one would not type in the `do`.
+bareStatement : Option Int -> Option Int
+bareStatement o =
+  -- expect-next-line rule-passthrough-arm unfixed
+  match o
+    Some n =>
+      note n
+      half n
+    None => None
+
 -- The fixes below. One level, Option, success arm first.
 lookupDouble : Option Int -> Option Int
 lookupDouble o =
@@ -185,6 +195,9 @@ suppressed o =
 
 bump : Result String Int -> Result String Int
 bump r = r
+
+note : Int -> Unit
+note _ = ()
 
 half : Int -> Option Int
 half n = if n % 2 == 0 then Some (n / 2) else None
