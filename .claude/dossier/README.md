@@ -19,6 +19,9 @@ carries a bracketed ID and a link into one of the files below.
 | `traps.md` | The Traps section, dogfooding, writing tests, the shell-gate traps, and the skill table |
 | `website.md` | The playground deploy: `--branch`, the explicit file list, stale `dist/`, `og:image`, playground scripts as gates |
 | `ci.md` | `ci.yml` incident narrative: shard-cost derivation, build-once/fan-out, and the per-shard job-guard mechanisms |
+| `sprint.md` | The incidents behind the rules in the `sprint-plan`, `sprint-orchestrator` and `sprint-packet` skills |
+| `sprint-families.md` | Sprint rules that apply to one kind of sprint only (migrations, dead-code deletion criteria) |
+| `retro-candidates.md` | Workflow rules seen once, waiting for a second sighting before they enter a sprint skill |
 
 ## Why here and not `docs/ops/`
 
