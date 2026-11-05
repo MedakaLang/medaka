@@ -1,5 +1,5 @@
 # META
-source_lines=11288
+source_lines=11128
 stages=DESUGAR,MARK
 # SOURCE
 import backend.runtime_layout.{
@@ -137,9 +137,9 @@ import backend.trmc_analysis.{TrmcVerdicts, isTrmcFn, isTrmcImpl}
 --     struct $C_Tup<n> {tag + n (ref eq)}.  `CTuple` = struct.new; HTuple n drives the
 --     same (single-slot) br_table; tuple-pattern fields extract via struct.get i+1.
 --   * Array: $arr = (array (mut (ref eq))).  `CArray` = array.new_fixed; `CRangeArray`
---     = a counted fill loop; `CIndex` = a bounds-checked array.get (i<0 || i>=len →
+--     = a counted fill loop; `array index` = a bounds-checked array.get (i<0 || i>=len →
 --     `unreachable`, matching native @mdk_oob's abort — both abort with empty stdout);
---     `CSlice` = array.new + array.copy.  Array temps are (ref null $arr) scratch
+--     `array slice` = array.new + array.copy.  Array temps are (ref null $arr) scratch
 --     locals (`ref.as_non_null` before array ops).
 --   * Record: a named-field ctor is ALREADY a W3 user ctor (its $C_<name> struct is
 --     declared), so `CRecord` = positional struct.new in declared field order;
@@ -1303,7 +1303,7 @@ gapL3P prog reason = gapL3 (progEmit prog) reason
 -- Which collection reps the program actually uses (gates their type-section decls,
 -- peer to `useStr`).  `useList`: any CList/CRangeList or a HCons/HNil match
 -- head → the cons-cell `$C_Cons` + root `$T_List` (Nil is an i31).  `useArray`:
--- any CArray/CRangeArray/CIndex/CSlice → the `$arr` (array (mut (ref eq))) type.
+-- any CArray/CRangeArray/array index/array slice → the `$arr` (array (mut (ref eq))) type.
 -- `useRefBox`: any Ref/setRef/.value → the `$refbox` 1-field mutable struct.
 -- `tupleArities`: the distinct tuple arities present (CTuple / HTuple) → one
 -- per-arity struct `$C_TupN`.  Records reuse the EXISTING per-ctor struct ($C_<ctor>,
@@ -4596,10 +4596,6 @@ emitValueW prog env d (node@(CArray es)) =
   refOnlyValueW prog node (() => emitArrayCreateRef prog env d es)
 emitValueW prog env d (node@(CRangeArray lo hi incl)) =
   refOnlyValueW prog node (() => emitRangeArrayRef prog env d lo hi incl)
-emitValueW prog env d (node@(CIndex a i)) =
-  refOnlyValueW prog node (() => emitIndexRef prog env d a i)
-emitValueW prog env d (node@(CSlice a lo hi incl)) =
-  refOnlyValueW prog node (() => emitSliceRef prog env d a lo hi incl)
 emitValueW prog env d (node@(CRecord name fields)) =
   refOnlyValueW prog node (() => emitRecordRef prog env d name fields)
 emitValueW prog env d (node@(CFieldAccess ex label recName ord)) = refOnlyValueW
@@ -9205,9 +9201,6 @@ freeVarsExpr bound (CRangeList lo hi _) =
   freeVarsExpr bound lo ++ freeVarsExpr bound hi
 freeVarsExpr bound (CRangeArray lo hi _) =
   freeVarsExpr bound lo ++ freeVarsExpr bound hi
-freeVarsExpr bound (CIndex e i) = freeVarsExpr bound e ++ freeVarsExpr bound i
-freeVarsExpr bound (CSlice e lo hi _) =
-  freeVarsExpr bound e ++ freeVarsExpr bound lo ++ freeVarsExpr bound hi
 -- cat4/W5: a return-position method occurrence (CMethod) and a constrained-fn
 -- occurrence (CDict) carry their dispatch Routes; a route's RDict/RDictFwd names a
 -- dict PARAM that is read at the use site.  Without surfacing it here, a method/
@@ -9437,150 +9430,6 @@ emitRangeArrayRef prog env d lo hi incl =
     ++ ["local.get " ++ iL, "i32.const 1", "i32.add", "local.set " ++ iL]
     ++ ["br " ++ labelName WN.WLabelRal d, "end", "end"]
     ++ ["local.get " ++ arrL, "ref.as_non_null"]
-
--- CIndex arr i: bounds-check (i<0 or i>=len → trap, matching native @mdk_oob), then
--- array.get.  The trap is `unreachable` (WasmGC has no host-trap call here; an OOB
--- access aborting the module mirrors the native abort).
-emitIndexRef : Prog -> Env -> Int -> CExpr -> CExpr -> List String
-emitIndexRef prog env d a i =
-  let arrL = w7Local (progEmit prog) WN.W7Ixarr d
-  let idxL = w7Local (progEmit prog) WN.W7Ixi d
-  let arrI =
-    emitRefExpr prog env d a ++ ["ref.cast (ref $arr)", "local.set " ++ arrL]
-  let idxI =
-    emitRefExpr prog env d i
-      ++ ["ref.cast (ref i31)", "i31.get_s", "local.set " ++ idxL]
-  arrI
-    ++ idxI
-    -- bounds: idx < 0 || idx >= len → B5 coded [E-INDEX-OOB] trap (peer of native
-    -- @mdk_oob; message matches medaka_rt.c, sans the index value native also omits).
-    ++ ["local.get " ++ idxL, "i32.const 0", "i32.lt_s"]
-    ++ [
-      "local.get " ++ idxL,
-      "local.get " ++ arrL,
-      "ref.as_non_null",
-      "array.len",
-      "i32.ge_s",
-    ]
-    ++ ["i32.or", "if"]
-    ++ indent (wasmTrap (progEmit prog) EIndexOob "index out of bounds")
-    ++ ["end"]
-    ++ [
-      "local.get " ++ arrL,
-      "ref.as_non_null",
-      "local.get " ++ idxL,
-      "array.get $arr",
-      "ref.as_non_null",
-    ]
-
--- CSlice arr lo hi incl: bounds-check, then new array of (end-lo) slots, copy via
--- array.copy.  end = incl ? hi+1 : hi.
---
--- #550: this used to carry NO bounds check — the comment here read "an over-range copy
--- traps in-engine", which was true but is not the contract: the trap is a RAW ENGINE
--- trap, not the coded [E-SLICE-OOB] line `run` produces (sliceArray, eval.mdk).  So wasm
--- was memory-safe but diagnosed wrong, while the LLVM backend (which the comment claimed
--- to "mirror") had no check at all and read out of bounds.  Both are now guarded on the
--- same predicate: `lo < 0 || end > len || end - lo < 0`.  Guarding explicitly rather than
--- leaning on array.new/array.copy's own traps also keeps the two backends' ABORT
--- CONDITION identical instead of merely coincidentally-both-fatal.
---
--- Message parity, and its one REMAINING GAP: this trap line is static bytes (wasmTrap
--- streams them through $mdk_write_err_byte at emit time, no $str value and no data
--- segment), so wasm reports the CODE but not the `[lo..hi]` numbers that eval and
--- native's @mdk_slice_oob both print.
---
--- E-INDEX-OOB does not have this gap: #1787's wasmTrapNum
--- streams a runtime value through $mdk_write_err_int between two fixed byte runs, so
--- all three engines name the offending index.  The same treatment would work here (two
--- numbers instead of one); it is simply not done yet.
---
--- ⚠️ Do NOT read this gap as unobserved.  An earlier version of this comment claimed
--- "nothing compares stderr text across engines: diff_wasm*.sh diff stdout" — that has
--- been FALSE since #531, which made test/wasm/diff_wasm_modules.sh compare stdout,
--- stderr AND exit code (see its `diverges` reporting).  E-SLICE-OOB survives only
--- because no wasm module fixture trips an out-of-range slice; add one and this gate
--- goes red until the numbers match.  (diff_compiler_engines.sh does still classify an
--- interpreter `runtime error [E-` as n/a.)
--- The ABORT CONDITION — which is what soundness turns on — is identical on all three.
-emitSliceRef : Prog ->
-  Env ->
-  Int ->
-  CExpr ->
-  CExpr ->
-  CExpr ->
-  Bool ->
-  List String
-emitSliceRef prog env d a lo hi incl =
-  let srcL = w7Local (progEmit prog) WN.W7Slsrc d
-  let dstL = w7Local (progEmit prog) WN.W7Sldst d
-  let loL = w7Local (progEmit prog) WN.W7Sllo d
-  let lenL = w7Local (progEmit prog) WN.W7Sllen d
-  let arrI =
-    emitRefExpr prog env d a ++ ["ref.cast (ref $arr)", "local.set " ++ srcL]
-  let loI =
-    emitRefExpr prog env d lo
-      ++ ["ref.cast (ref i31)", "i31.get_s", "local.set " ++ loL]
-  let hiI = emitRefExpr prog env d hi ++ ["ref.cast (ref i31)", "i31.get_s"]
-  let adj = if incl then ["i32.const 1", "i32.add"] else []
-  -- `end` is live on the stack after adj; stash it in lenL, guard, then turn it into the
-  -- element count.  Ordering matters: the `end > len` compare needs `end`, and the
-  -- `len < 0` compare needs `end - lo`, so the two uses are sequenced through lenL.
-  let guardI =
-    ["local.set " ++ lenL]
-      -- lo < 0
-      ++ ["local.get " ++ loL, "i32.const 0", "i32.lt_s"]
-      -- end > array.len src
-      ++ [
-        "local.get " ++ lenL,
-        "local.get " ++ srcL,
-        "ref.as_non_null",
-        "array.len",
-        "i32.gt_s",
-        "i32.or",
-      ]
-      -- (end - lo) < 0  (inverted range)
-      ++ [
-        "local.get " ++ lenL,
-        "local.get " ++ loL,
-        "i32.sub",
-        "i32.const 0",
-        "i32.lt_s",
-        "i32.or",
-      ]
-      ++ ["if"]
-      ++ indent (wasmTrap (progEmit prog) ESliceOob "slice out of bounds")
-      ++ ["end"]
-      ++ [
-        "local.get " ++ lenL,
-        "local.get " ++ loL,
-        "i32.sub",
-        "local.set " ++ lenL,
-      ]
-  arrI
-    ++ loI
-    ++ hiI
-    ++ adj
-    ++ guardI
-    ++ [
-      "i32.const 0",
-      "ref.i31",
-      "local.get " ++ lenL,
-      "array.new $arr",
-      "local.set " ++ dstL,
-    ]
-    -- array.copy dst dstoff src srcoff len
-    ++ [
-      "local.get " ++ dstL,
-      "ref.as_non_null",
-      "i32.const 0",
-      "local.get " ++ srcL,
-      "ref.as_non_null",
-      "local.get " ++ loL,
-      "local.get " ++ lenL,
-      "array.copy $arr $arr",
-    ]
-    ++ ["local.get " ++ dstL, "ref.as_non_null"]
 
 -- a named-field record construction: CRecord carries fields in DECLARED order
 -- (lowering preserves it), so emit positionally — identical to a positional ctor
@@ -10502,10 +10351,6 @@ collectExprLocals (CRangeList lo hi _) =
   collectExprLocals lo ++ collectExprLocals hi
 collectExprLocals (CRangeArray lo hi _) =
   collectExprLocals lo ++ collectExprLocals hi
-collectExprLocals (CIndex base index) =
-  collectExprLocals base ++ collectExprLocals index
-collectExprLocals (CSlice base lo hi _) =
-  collectExprLocals base ++ collectExprLocals lo ++ collectExprLocals hi
 collectExprLocals (CBlock stmts) = flatMap collectStmtLocals stmts
 collectExprLocals (CDecision scrut arms _) =
   collectExprLocals scrut ++ flatMap collectArmLocals arms
@@ -10999,7 +10844,7 @@ maxIndexAt (CBlock stmts) d = foldMaxI (map (s => maxIndexAtStmt s d) stmts)
 maxIndexAt (CLetGroup binds body) d =
   foldMaxI (maxIndexAt body d :: map (b => maxIndexAtLgVal b d) binds)
 -- compound value nodes emit their sub-expressions at depth `d` (no own stash slot);
--- descend so a scratch-using element (e.g. CIndex/CSlice/a nested match) is counted.
+-- descend so a scratch-using element (e.g. array index/slice, a nested match) is counted.
 maxIndexAt (CTuple es) d = foldMaxI (map (x => maxIndexAt x d) es)
 maxIndexAt (CList es) d = foldMaxI (map (x => maxIndexAt x d) es)
 maxIndexAt (CArray es) d = foldMaxI (map (x => maxIndexAt x d) es)
@@ -11030,9 +10875,6 @@ maxIndexAt (CRangeList lo hi _) d =
   maxI d (maxI (maxIndexAt lo d) (maxIndexAt hi d))
 maxIndexAt (CRangeArray lo hi _) d =
   maxI d (maxI (maxIndexAt lo d) (maxIndexAt hi d))
-maxIndexAt (CIndex a i) d = maxI d (maxI (maxIndexAt a d) (maxIndexAt i d))
-maxIndexAt (CSlice a lo hi _) d =
-  maxI d (maxI (maxIndexAt a d) (maxI (maxIndexAt lo d) (maxIndexAt hi d)))
 maxIndexAt _ d = d - 1
 
 -- the deepest switch nesting in a tree (each CTSwitch increments the emit depth by
@@ -11234,8 +11076,6 @@ ctag (CRecordUpdate _ _ _) = "CRecordUpdate (W7)"
 ctag (CVariantUpdate _ _ _) = "CVariantUpdate (W7)"
 ctag (CRangeList _ _ _) = "CRangeList (W7)"
 ctag (CRangeArray _ _ _) = "CRangeArray (W7)"
-ctag (CIndex _ _) = "CIndex (W7)"
-ctag (CSlice _ _ _ _) = "CSlice (W7)"
 ctag (CMethod _ _) = "CMethod (dispatch — W5)"
 ctag (CDict _ _) = "CDict (dispatch — W5)"
 ctag (CLetGroup _ _) = "CLetGroup (where/let-group — W4)"
@@ -12098,8 +11938,6 @@ hasFamilyW prog symbol tag =
 (DFunDef false "emitValueW" ((PVar "prog") (PVar "env") (PVar "d") (PAs "node" (PCon "CRangeList" (PVar "lo") (PVar "hi") (PVar "incl")))) (EApp (EApp (EApp (EVar "refOnlyValueW") (EVar "prog")) (EVar "node")) (ELam ((PLit LUnit)) (EApp (EApp (EApp (EApp (EApp (EApp (EVar "emitRangeListRef") (EVar "prog")) (EVar "env")) (EVar "d")) (EVar "lo")) (EVar "hi")) (EVar "incl")))))
 (DFunDef false "emitValueW" ((PVar "prog") (PVar "env") (PVar "d") (PAs "node" (PCon "CArray" (PVar "es")))) (EApp (EApp (EApp (EVar "refOnlyValueW") (EVar "prog")) (EVar "node")) (ELam ((PLit LUnit)) (EApp (EApp (EApp (EApp (EVar "emitArrayCreateRef") (EVar "prog")) (EVar "env")) (EVar "d")) (EVar "es")))))
 (DFunDef false "emitValueW" ((PVar "prog") (PVar "env") (PVar "d") (PAs "node" (PCon "CRangeArray" (PVar "lo") (PVar "hi") (PVar "incl")))) (EApp (EApp (EApp (EVar "refOnlyValueW") (EVar "prog")) (EVar "node")) (ELam ((PLit LUnit)) (EApp (EApp (EApp (EApp (EApp (EApp (EVar "emitRangeArrayRef") (EVar "prog")) (EVar "env")) (EVar "d")) (EVar "lo")) (EVar "hi")) (EVar "incl")))))
-(DFunDef false "emitValueW" ((PVar "prog") (PVar "env") (PVar "d") (PAs "node" (PCon "CIndex" (PVar "a") (PVar "i")))) (EApp (EApp (EApp (EVar "refOnlyValueW") (EVar "prog")) (EVar "node")) (ELam ((PLit LUnit)) (EApp (EApp (EApp (EApp (EApp (EVar "emitIndexRef") (EVar "prog")) (EVar "env")) (EVar "d")) (EVar "a")) (EVar "i")))))
-(DFunDef false "emitValueW" ((PVar "prog") (PVar "env") (PVar "d") (PAs "node" (PCon "CSlice" (PVar "a") (PVar "lo") (PVar "hi") (PVar "incl")))) (EApp (EApp (EApp (EVar "refOnlyValueW") (EVar "prog")) (EVar "node")) (ELam ((PLit LUnit)) (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EVar "emitSliceRef") (EVar "prog")) (EVar "env")) (EVar "d")) (EVar "a")) (EVar "lo")) (EVar "hi")) (EVar "incl")))))
 (DFunDef false "emitValueW" ((PVar "prog") (PVar "env") (PVar "d") (PAs "node" (PCon "CRecord" (PVar "name") (PVar "fields")))) (EApp (EApp (EApp (EVar "refOnlyValueW") (EVar "prog")) (EVar "node")) (ELam ((PLit LUnit)) (EApp (EApp (EApp (EApp (EApp (EVar "emitRecordRef") (EVar "prog")) (EVar "env")) (EVar "d")) (EVar "name")) (EVar "fields")))))
 (DFunDef false "emitValueW" ((PVar "prog") (PVar "env") (PVar "d") (PAs "node" (PCon "CFieldAccess" (PVar "ex") (PVar "label") (PVar "recName") (PVar "ord")))) (EApp (EApp (EApp (EVar "refOnlyValueW") (EVar "prog")) (EVar "node")) (ELam ((PLit LUnit)) (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EVar "emitFieldAccessRef") (EVar "prog")) (EVar "env")) (EVar "d")) (EVar "ex")) (EVar "label")) (EVar "recName")) (EVar "ord")))))
 (DFunDef false "emitValueW" ((PVar "prog") (PVar "env") (PVar "d") (PAs "node" (PCon "CRecordUpdate" (PVar "recName") (PVar "base") (PVar "fields")))) (EApp (EApp (EApp (EVar "refOnlyValueW") (EVar "prog")) (EVar "node")) (ELam ((PLit LUnit)) (EApp (EApp (EApp (EApp (EApp (EApp (EVar "emitRecordUpdateRef") (EVar "prog")) (EVar "env")) (EVar "d")) (EVar "recName")) (EVar "base")) (EVar "fields")))))
@@ -12871,8 +12709,6 @@ hasFamilyW prog symbol tag =
 (DFunDef false "freeVarsExpr" ((PVar "bound") (PCon "CVariantUpdate" PWild (PVar "e") (PVar "fields"))) (EBinOp "++" (EApp (EApp (EVar "freeVarsExpr") (EVar "bound")) (EVar "e")) (EApp (EApp (EVar "flatMap") (EApp (EVar "freeVarsField") (EVar "bound"))) (EVar "fields"))))
 (DFunDef false "freeVarsExpr" ((PVar "bound") (PCon "CRangeList" (PVar "lo") (PVar "hi") PWild)) (EBinOp "++" (EApp (EApp (EVar "freeVarsExpr") (EVar "bound")) (EVar "lo")) (EApp (EApp (EVar "freeVarsExpr") (EVar "bound")) (EVar "hi"))))
 (DFunDef false "freeVarsExpr" ((PVar "bound") (PCon "CRangeArray" (PVar "lo") (PVar "hi") PWild)) (EBinOp "++" (EApp (EApp (EVar "freeVarsExpr") (EVar "bound")) (EVar "lo")) (EApp (EApp (EVar "freeVarsExpr") (EVar "bound")) (EVar "hi"))))
-(DFunDef false "freeVarsExpr" ((PVar "bound") (PCon "CIndex" (PVar "e") (PVar "i"))) (EBinOp "++" (EApp (EApp (EVar "freeVarsExpr") (EVar "bound")) (EVar "e")) (EApp (EApp (EVar "freeVarsExpr") (EVar "bound")) (EVar "i"))))
-(DFunDef false "freeVarsExpr" ((PVar "bound") (PCon "CSlice" (PVar "e") (PVar "lo") (PVar "hi") PWild)) (EBinOp "++" (EBinOp "++" (EApp (EApp (EVar "freeVarsExpr") (EVar "bound")) (EVar "e")) (EApp (EApp (EVar "freeVarsExpr") (EVar "bound")) (EVar "lo"))) (EApp (EApp (EVar "freeVarsExpr") (EVar "bound")) (EVar "hi"))))
 (DFunDef false "freeVarsExpr" ((PVar "bound") (PCon "CMethod" PWild (PCon "MethodEvidence" PWild PWild (PVar "route") (PVar "implRoutes") (PVar "methRoutes")))) (EApp (EApp (EVar "freeGivens") (EVar "bound")) (EBinOp "::" (EVar "route") (EBinOp "++" (EVar "implRoutes") (EVar "methRoutes")))))
 (DFunDef false "freeVarsExpr" ((PVar "bound") (PCon "CDict" (PVar "name") (PVar "routes"))) (EBinOp "++" (EIf (EApp (EApp (EVar "omHasKey") (EVar "name")) (EVar "bound")) (EListLit) (EListLit (EVar "name"))) (EApp (EApp (EVar "freeGivens") (EVar "bound")) (EVar "routes"))))
 (DFunDef false "freeVarsExpr" ((PVar "_bound") PWild) (EListLit))
@@ -12907,10 +12743,6 @@ hasFamilyW prog symbol tag =
 (DFunDef false "emitArrayCreateRef" ((PVar "prog") (PVar "env") (PVar "d") (PVar "es")) (EBlock (DoLet false false (PVar "argInstrs") (EApp (EApp (EVar "flatMap") (ELam ((PVar "a")) (EApp (EApp (EApp (EApp (EVar "emitRefExpr") (EVar "prog")) (EVar "env")) (EVar "d")) (EVar "a")))) (EVar "es"))) (DoExpr (EBinOp "++" (EVar "argInstrs") (EListLit (EBinOp "++" (ELit (LString "array.new_fixed $arr ")) (EApp (EVar "intToString") (EApp (EVar "listLen") (EVar "es")))))))))
 (DTypeSig false "emitRangeArrayRef" (TyFun (TyCon "Prog") (TyFun (TyCon "Env") (TyFun (TyCon "Int") (TyFun (TyCon "CExpr") (TyFun (TyCon "CExpr") (TyFun (TyCon "Bool") (TyApp (TyCon "List") (TyCon "String")))))))))
 (DFunDef false "emitRangeArrayRef" ((PVar "prog") (PVar "env") (PVar "d") (PVar "lo") (PVar "hi") (PVar "incl")) (EBlock (DoLet false false (PVar "loI") (EBinOp "++" (EApp (EApp (EApp (EApp (EVar "emitRefExpr") (EVar "prog")) (EVar "env")) (EVar "d")) (EVar "lo")) (EListLit (EApp (EVar "unboxIntW") (EVar "prog"))))) (DoLet false false (PVar "hiI") (EBinOp "++" (EApp (EApp (EApp (EApp (EVar "emitRefExpr") (EVar "prog")) (EVar "env")) (EVar "d")) (EVar "hi")) (EListLit (EApp (EVar "unboxIntW") (EVar "prog"))))) (DoLet false false (PVar "arrL") (EApp (EApp (EApp (EVar "w7Local") (EApp (EVar "progEmit") (EVar "prog"))) (EVar "WN.W7Raarr")) (EVar "d"))) (DoLet false false (PVar "iL") (EApp (EApp (EApp (EVar "w7Local") (EApp (EVar "progEmit") (EVar "prog"))) (EVar "WN.W7Rai")) (EVar "d"))) (DoLet false false (PVar "loL") (EApp (EApp (EApp (EVar "w7Local") (EApp (EVar "progEmit") (EVar "prog"))) (EVar "WN.W7Ralo")) (EVar "d"))) (DoLet false false (PVar "cntL") (EApp (EApp (EApp (EVar "w7Local") (EApp (EVar "progEmit") (EVar "prog"))) (EVar "WN.W7Racnt")) (EVar "d"))) (DoLet false false (PVar "adj") (EIf (EVar "incl") (EListLit (ELit (LString "i64.const 1")) (ELit (LString "i64.add"))) (EListLit))) (DoExpr (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EVar "loI") (EListLit (EBinOp "++" (ELit (LString "local.set ")) (EVar "loL")))) (EVar "hiI")) (EVar "adj")) (EListLit (EBinOp "++" (ELit (LString "local.get ")) (EVar "loL")) (ELit (LString "i64.sub")) (EBinOp "++" (ELit (LString "local.set ")) (EVar "cntL")))) (EListLit (EBinOp "++" (ELit (LString "local.get ")) (EVar "cntL")) (ELit (LString "i64.const 0")) (ELit (LString "i64.lt_s")) (ELit (LString "if")) (ELit (LString "i64.const 0")) (EBinOp "++" (ELit (LString "local.set ")) (EVar "cntL")) (ELit (LString "end")))) (EListLit (EBinOp "++" (ELit (LString "local.get ")) (EVar "cntL")) (ELit (LString "i64.const 2147483647")) (ELit (LString "i64.gt_s")) (ELit (LString "if")) (ELit (LString "i64.const 2147483647")) (EBinOp "++" (ELit (LString "local.set ")) (EVar "cntL")) (ELit (LString "end")))) (EListLit (ELit (LString "i32.const 0")) (ELit (LString "ref.i31")) (EBinOp "++" (ELit (LString "local.get ")) (EVar "cntL")) (ELit (LString "i32.wrap_i64")) (ELit (LString "array.new $arr")) (EBinOp "++" (ELit (LString "local.set ")) (EVar "arrL")))) (EListLit (ELit (LString "i32.const 0")) (EBinOp "++" (ELit (LString "local.set ")) (EVar "iL")))) (EListLit (EBinOp "++" (ELit (LString "block ")) (EApp (EApp (EVar "labelName") (EVar "WN.WLabelRad")) (EVar "d"))) (EBinOp "++" (ELit (LString "loop ")) (EApp (EApp (EVar "labelName") (EVar "WN.WLabelRal")) (EVar "d"))))) (EListLit (EBinOp "++" (ELit (LString "local.get ")) (EVar "iL")) (ELit (LString "i64.extend_i32_u")) (EBinOp "++" (ELit (LString "local.get ")) (EVar "cntL")) (ELit (LString "i64.ge_s")) (EBinOp "++" (ELit (LString "br_if ")) (EApp (EApp (EVar "labelName") (EVar "WN.WLabelRad")) (EVar "d"))))) (EListLit (EBinOp "++" (ELit (LString "local.get ")) (EVar "arrL")) (ELit (LString "ref.as_non_null")) (EBinOp "++" (ELit (LString "local.get ")) (EVar "iL")))) (EListLit (EBinOp "++" (ELit (LString "local.get ")) (EVar "loL")) (EBinOp "++" (ELit (LString "local.get ")) (EVar "iL")) (ELit (LString "i64.extend_i32_u")) (ELit (LString "i64.add")) (EApp (EVar "boxIntW") (EVar "prog")))) (EListLit (ELit (LString "array.set $arr")))) (EListLit (EBinOp "++" (ELit (LString "local.get ")) (EVar "iL")) (ELit (LString "i32.const 1")) (ELit (LString "i32.add")) (EBinOp "++" (ELit (LString "local.set ")) (EVar "iL")))) (EListLit (EBinOp "++" (ELit (LString "br ")) (EApp (EApp (EVar "labelName") (EVar "WN.WLabelRal")) (EVar "d"))) (ELit (LString "end")) (ELit (LString "end")))) (EListLit (EBinOp "++" (ELit (LString "local.get ")) (EVar "arrL")) (ELit (LString "ref.as_non_null")))))))
-(DTypeSig false "emitIndexRef" (TyFun (TyCon "Prog") (TyFun (TyCon "Env") (TyFun (TyCon "Int") (TyFun (TyCon "CExpr") (TyFun (TyCon "CExpr") (TyApp (TyCon "List") (TyCon "String"))))))))
-(DFunDef false "emitIndexRef" ((PVar "prog") (PVar "env") (PVar "d") (PVar "a") (PVar "i")) (EBlock (DoLet false false (PVar "arrL") (EApp (EApp (EApp (EVar "w7Local") (EApp (EVar "progEmit") (EVar "prog"))) (EVar "WN.W7Ixarr")) (EVar "d"))) (DoLet false false (PVar "idxL") (EApp (EApp (EApp (EVar "w7Local") (EApp (EVar "progEmit") (EVar "prog"))) (EVar "WN.W7Ixi")) (EVar "d"))) (DoLet false false (PVar "arrI") (EBinOp "++" (EApp (EApp (EApp (EApp (EVar "emitRefExpr") (EVar "prog")) (EVar "env")) (EVar "d")) (EVar "a")) (EListLit (ELit (LString "ref.cast (ref $arr)")) (EBinOp "++" (ELit (LString "local.set ")) (EVar "arrL"))))) (DoLet false false (PVar "idxI") (EBinOp "++" (EApp (EApp (EApp (EApp (EVar "emitRefExpr") (EVar "prog")) (EVar "env")) (EVar "d")) (EVar "i")) (EListLit (ELit (LString "ref.cast (ref i31)")) (ELit (LString "i31.get_s")) (EBinOp "++" (ELit (LString "local.set ")) (EVar "idxL"))))) (DoExpr (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EVar "arrI") (EVar "idxI")) (EListLit (EBinOp "++" (ELit (LString "local.get ")) (EVar "idxL")) (ELit (LString "i32.const 0")) (ELit (LString "i32.lt_s")))) (EListLit (EBinOp "++" (ELit (LString "local.get ")) (EVar "idxL")) (EBinOp "++" (ELit (LString "local.get ")) (EVar "arrL")) (ELit (LString "ref.as_non_null")) (ELit (LString "array.len")) (ELit (LString "i32.ge_s")))) (EListLit (ELit (LString "i32.or")) (ELit (LString "if")))) (EApp (EVar "indent") (EApp (EApp (EApp (EVar "wasmTrap") (EApp (EVar "progEmit") (EVar "prog"))) (EVar "EIndexOob")) (ELit (LString "index out of bounds"))))) (EListLit (ELit (LString "end")))) (EListLit (EBinOp "++" (ELit (LString "local.get ")) (EVar "arrL")) (ELit (LString "ref.as_non_null")) (EBinOp "++" (ELit (LString "local.get ")) (EVar "idxL")) (ELit (LString "array.get $arr")) (ELit (LString "ref.as_non_null")))))))
-(DTypeSig false "emitSliceRef" (TyFun (TyCon "Prog") (TyFun (TyCon "Env") (TyFun (TyCon "Int") (TyFun (TyCon "CExpr") (TyFun (TyCon "CExpr") (TyFun (TyCon "CExpr") (TyFun (TyCon "Bool") (TyApp (TyCon "List") (TyCon "String"))))))))))
-(DFunDef false "emitSliceRef" ((PVar "prog") (PVar "env") (PVar "d") (PVar "a") (PVar "lo") (PVar "hi") (PVar "incl")) (EBlock (DoLet false false (PVar "srcL") (EApp (EApp (EApp (EVar "w7Local") (EApp (EVar "progEmit") (EVar "prog"))) (EVar "WN.W7Slsrc")) (EVar "d"))) (DoLet false false (PVar "dstL") (EApp (EApp (EApp (EVar "w7Local") (EApp (EVar "progEmit") (EVar "prog"))) (EVar "WN.W7Sldst")) (EVar "d"))) (DoLet false false (PVar "loL") (EApp (EApp (EApp (EVar "w7Local") (EApp (EVar "progEmit") (EVar "prog"))) (EVar "WN.W7Sllo")) (EVar "d"))) (DoLet false false (PVar "lenL") (EApp (EApp (EApp (EVar "w7Local") (EApp (EVar "progEmit") (EVar "prog"))) (EVar "WN.W7Sllen")) (EVar "d"))) (DoLet false false (PVar "arrI") (EBinOp "++" (EApp (EApp (EApp (EApp (EVar "emitRefExpr") (EVar "prog")) (EVar "env")) (EVar "d")) (EVar "a")) (EListLit (ELit (LString "ref.cast (ref $arr)")) (EBinOp "++" (ELit (LString "local.set ")) (EVar "srcL"))))) (DoLet false false (PVar "loI") (EBinOp "++" (EApp (EApp (EApp (EApp (EVar "emitRefExpr") (EVar "prog")) (EVar "env")) (EVar "d")) (EVar "lo")) (EListLit (ELit (LString "ref.cast (ref i31)")) (ELit (LString "i31.get_s")) (EBinOp "++" (ELit (LString "local.set ")) (EVar "loL"))))) (DoLet false false (PVar "hiI") (EBinOp "++" (EApp (EApp (EApp (EApp (EVar "emitRefExpr") (EVar "prog")) (EVar "env")) (EVar "d")) (EVar "hi")) (EListLit (ELit (LString "ref.cast (ref i31)")) (ELit (LString "i31.get_s"))))) (DoLet false false (PVar "adj") (EIf (EVar "incl") (EListLit (ELit (LString "i32.const 1")) (ELit (LString "i32.add"))) (EListLit))) (DoLet false false (PVar "guardI") (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EListLit (EBinOp "++" (ELit (LString "local.set ")) (EVar "lenL"))) (EListLit (EBinOp "++" (ELit (LString "local.get ")) (EVar "loL")) (ELit (LString "i32.const 0")) (ELit (LString "i32.lt_s")))) (EListLit (EBinOp "++" (ELit (LString "local.get ")) (EVar "lenL")) (EBinOp "++" (ELit (LString "local.get ")) (EVar "srcL")) (ELit (LString "ref.as_non_null")) (ELit (LString "array.len")) (ELit (LString "i32.gt_s")) (ELit (LString "i32.or")))) (EListLit (EBinOp "++" (ELit (LString "local.get ")) (EVar "lenL")) (EBinOp "++" (ELit (LString "local.get ")) (EVar "loL")) (ELit (LString "i32.sub")) (ELit (LString "i32.const 0")) (ELit (LString "i32.lt_s")) (ELit (LString "i32.or")))) (EListLit (ELit (LString "if")))) (EApp (EVar "indent") (EApp (EApp (EApp (EVar "wasmTrap") (EApp (EVar "progEmit") (EVar "prog"))) (EVar "ESliceOob")) (ELit (LString "slice out of bounds"))))) (EListLit (ELit (LString "end")))) (EListLit (EBinOp "++" (ELit (LString "local.get ")) (EVar "lenL")) (EBinOp "++" (ELit (LString "local.get ")) (EVar "loL")) (ELit (LString "i32.sub")) (EBinOp "++" (ELit (LString "local.set ")) (EVar "lenL"))))) (DoExpr (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EVar "arrI") (EVar "loI")) (EVar "hiI")) (EVar "adj")) (EVar "guardI")) (EListLit (ELit (LString "i32.const 0")) (ELit (LString "ref.i31")) (EBinOp "++" (ELit (LString "local.get ")) (EVar "lenL")) (ELit (LString "array.new $arr")) (EBinOp "++" (ELit (LString "local.set ")) (EVar "dstL")))) (EListLit (EBinOp "++" (ELit (LString "local.get ")) (EVar "dstL")) (ELit (LString "ref.as_non_null")) (ELit (LString "i32.const 0")) (EBinOp "++" (ELit (LString "local.get ")) (EVar "srcL")) (ELit (LString "ref.as_non_null")) (EBinOp "++" (ELit (LString "local.get ")) (EVar "loL")) (EBinOp "++" (ELit (LString "local.get ")) (EVar "lenL")) (ELit (LString "array.copy $arr $arr")))) (EListLit (EBinOp "++" (ELit (LString "local.get ")) (EVar "dstL")) (ELit (LString "ref.as_non_null")))))))
 (DTypeSig false "emitRecordRef" (TyFun (TyCon "Prog") (TyFun (TyCon "Env") (TyFun (TyCon "Int") (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "CField")) (TyApp (TyCon "List") (TyCon "String"))))))))
 (DFunDef false "emitRecordRef" ((PVar "prog") (PVar "env") (PVar "d") (PVar "name") (PVar "fields")) (EBlock (DoLet false false (PVar "tagField") (EListLit (EBinOp "++" (ELit (LString "i32.const ")) (EApp (EVar "intToString") (EApp (EApp (EVar "ctorOrdinal") (EVar "prog")) (EVar "name")))))) (DoLet false false (PVar "argInstrs") (EApp (EApp (EVar "flatMap") (ELam ((PVar "f")) (EApp (EApp (EApp (EApp (EVar "emitRefExpr") (EVar "prog")) (EVar "env")) (EVar "d")) (EApp (EVar "cFieldExpr") (EVar "f"))))) (EVar "fields"))) (DoExpr (EBinOp "++" (EBinOp "++" (EVar "tagField") (EVar "argInstrs")) (EListLit (EBinOp "++" (ELit (LString "struct.new $")) (EApp (EApp (EVar "typeNameW") (EVar "prog")) (EApp (EVar "ctorStructName") (EVar "name")))))))))
 (DTypeSig false "emitFieldAccessRef" (TyFun (TyCon "Prog") (TyFun (TyCon "Env") (TyFun (TyCon "Int") (TyFun (TyCon "CExpr") (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyCon "Int") (TyApp (TyCon "List") (TyCon "String"))))))))))
@@ -13058,8 +12890,6 @@ hasFamilyW prog symbol tag =
 (DFunDef false "collectExprLocals" ((PCon "CVariantUpdate" PWild (PVar "base") (PVar "fields"))) (EBinOp "++" (EApp (EVar "collectExprLocals") (EVar "base")) (EApp (EApp (EVar "flatMap") (EVar "collectFieldLocals")) (EVar "fields"))))
 (DFunDef false "collectExprLocals" ((PCon "CRangeList" (PVar "lo") (PVar "hi") PWild)) (EBinOp "++" (EApp (EVar "collectExprLocals") (EVar "lo")) (EApp (EVar "collectExprLocals") (EVar "hi"))))
 (DFunDef false "collectExprLocals" ((PCon "CRangeArray" (PVar "lo") (PVar "hi") PWild)) (EBinOp "++" (EApp (EVar "collectExprLocals") (EVar "lo")) (EApp (EVar "collectExprLocals") (EVar "hi"))))
-(DFunDef false "collectExprLocals" ((PCon "CIndex" (PVar "base") (PVar "index"))) (EBinOp "++" (EApp (EVar "collectExprLocals") (EVar "base")) (EApp (EVar "collectExprLocals") (EVar "index"))))
-(DFunDef false "collectExprLocals" ((PCon "CSlice" (PVar "base") (PVar "lo") (PVar "hi") PWild)) (EBinOp "++" (EBinOp "++" (EApp (EVar "collectExprLocals") (EVar "base")) (EApp (EVar "collectExprLocals") (EVar "lo"))) (EApp (EVar "collectExprLocals") (EVar "hi"))))
 (DFunDef false "collectExprLocals" ((PCon "CBlock" (PVar "stmts"))) (EApp (EApp (EVar "flatMap") (EVar "collectStmtLocals")) (EVar "stmts")))
 (DFunDef false "collectExprLocals" ((PCon "CDecision" (PVar "scrut") (PVar "arms") PWild)) (EBinOp "++" (EApp (EVar "collectExprLocals") (EVar "scrut")) (EApp (EApp (EVar "flatMap") (EVar "collectArmLocals")) (EVar "arms"))))
 (DFunDef false "collectExprLocals" ((PCon "CMatch" (PVar "scrut") (PVar "arms"))) (EBinOp "++" (EApp (EVar "collectExprLocals") (EVar "scrut")) (EApp (EApp (EVar "flatMap") (EVar "collectArmLocals")) (EVar "arms"))))
@@ -13216,8 +13046,6 @@ hasFamilyW prog symbol tag =
 (DFunDef false "maxIndexAt" ((PCon "CFieldAccess" (PVar "e1") PWild PWild PWild) (PVar "d")) (EApp (EApp (EVar "maxIndexAt") (EVar "e1")) (EVar "d")))
 (DFunDef false "maxIndexAt" ((PCon "CRangeList" (PVar "lo") (PVar "hi") PWild) (PVar "d")) (EApp (EApp (EVar "maxI") (EVar "d")) (EApp (EApp (EVar "maxI") (EApp (EApp (EVar "maxIndexAt") (EVar "lo")) (EVar "d"))) (EApp (EApp (EVar "maxIndexAt") (EVar "hi")) (EVar "d")))))
 (DFunDef false "maxIndexAt" ((PCon "CRangeArray" (PVar "lo") (PVar "hi") PWild) (PVar "d")) (EApp (EApp (EVar "maxI") (EVar "d")) (EApp (EApp (EVar "maxI") (EApp (EApp (EVar "maxIndexAt") (EVar "lo")) (EVar "d"))) (EApp (EApp (EVar "maxIndexAt") (EVar "hi")) (EVar "d")))))
-(DFunDef false "maxIndexAt" ((PCon "CIndex" (PVar "a") (PVar "i")) (PVar "d")) (EApp (EApp (EVar "maxI") (EVar "d")) (EApp (EApp (EVar "maxI") (EApp (EApp (EVar "maxIndexAt") (EVar "a")) (EVar "d"))) (EApp (EApp (EVar "maxIndexAt") (EVar "i")) (EVar "d")))))
-(DFunDef false "maxIndexAt" ((PCon "CSlice" (PVar "a") (PVar "lo") (PVar "hi") PWild) (PVar "d")) (EApp (EApp (EVar "maxI") (EVar "d")) (EApp (EApp (EVar "maxI") (EApp (EApp (EVar "maxIndexAt") (EVar "a")) (EVar "d"))) (EApp (EApp (EVar "maxI") (EApp (EApp (EVar "maxIndexAt") (EVar "lo")) (EVar "d"))) (EApp (EApp (EVar "maxIndexAt") (EVar "hi")) (EVar "d"))))))
 (DFunDef false "maxIndexAt" (PWild (PVar "d")) (EBinOp "-" (EVar "d") (ELit (LInt 1))))
 (DTypeSig false "treeSwitchNesting" (TyFun (TyCon "CTree") (TyCon "Int")))
 (DFunDef false "treeSwitchNesting" ((PCon "CTFail" PWild)) (ELit (LInt 0)))
@@ -13315,8 +13143,6 @@ hasFamilyW prog symbol tag =
 (DFunDef false "ctag" ((PCon "CVariantUpdate" PWild PWild PWild)) (ELit (LString "CVariantUpdate (W7)")))
 (DFunDef false "ctag" ((PCon "CRangeList" PWild PWild PWild)) (ELit (LString "CRangeList (W7)")))
 (DFunDef false "ctag" ((PCon "CRangeArray" PWild PWild PWild)) (ELit (LString "CRangeArray (W7)")))
-(DFunDef false "ctag" ((PCon "CIndex" PWild PWild)) (ELit (LString "CIndex (W7)")))
-(DFunDef false "ctag" ((PCon "CSlice" PWild PWild PWild PWild)) (ELit (LString "CSlice (W7)")))
 (DFunDef false "ctag" ((PCon "CMethod" PWild PWild)) (ELit (LString "CMethod (dispatch — W5)")))
 (DFunDef false "ctag" ((PCon "CDict" PWild PWild)) (ELit (LString "CDict (dispatch — W5)")))
 (DFunDef false "ctag" ((PCon "CLetGroup" PWild PWild)) (ELit (LString "CLetGroup (where/let-group — W4)")))
@@ -14155,8 +13981,6 @@ hasFamilyW prog symbol tag =
 (DFunDef false "emitValueW" ((PVar "prog") (PVar "env") (PVar "d") (PAs "node" (PCon "CRangeList" (PVar "lo") (PVar "hi") (PVar "incl")))) (EApp (EApp (EApp (EVar "refOnlyValueW") (EVar "prog")) (EVar "node")) (ELam ((PLit LUnit)) (EApp (EApp (EApp (EApp (EApp (EApp (EVar "emitRangeListRef") (EVar "prog")) (EVar "env")) (EVar "d")) (EVar "lo")) (EVar "hi")) (EVar "incl")))))
 (DFunDef false "emitValueW" ((PVar "prog") (PVar "env") (PVar "d") (PAs "node" (PCon "CArray" (PVar "es")))) (EApp (EApp (EApp (EVar "refOnlyValueW") (EVar "prog")) (EVar "node")) (ELam ((PLit LUnit)) (EApp (EApp (EApp (EApp (EVar "emitArrayCreateRef") (EVar "prog")) (EVar "env")) (EVar "d")) (EVar "es")))))
 (DFunDef false "emitValueW" ((PVar "prog") (PVar "env") (PVar "d") (PAs "node" (PCon "CRangeArray" (PVar "lo") (PVar "hi") (PVar "incl")))) (EApp (EApp (EApp (EVar "refOnlyValueW") (EVar "prog")) (EVar "node")) (ELam ((PLit LUnit)) (EApp (EApp (EApp (EApp (EApp (EApp (EVar "emitRangeArrayRef") (EVar "prog")) (EVar "env")) (EVar "d")) (EVar "lo")) (EVar "hi")) (EVar "incl")))))
-(DFunDef false "emitValueW" ((PVar "prog") (PVar "env") (PVar "d") (PAs "node" (PCon "CIndex" (PVar "a") (PVar "i")))) (EApp (EApp (EApp (EVar "refOnlyValueW") (EVar "prog")) (EVar "node")) (ELam ((PLit LUnit)) (EApp (EApp (EApp (EApp (EApp (EVar "emitIndexRef") (EVar "prog")) (EVar "env")) (EVar "d")) (EVar "a")) (EVar "i")))))
-(DFunDef false "emitValueW" ((PVar "prog") (PVar "env") (PVar "d") (PAs "node" (PCon "CSlice" (PVar "a") (PVar "lo") (PVar "hi") (PVar "incl")))) (EApp (EApp (EApp (EVar "refOnlyValueW") (EVar "prog")) (EVar "node")) (ELam ((PLit LUnit)) (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EVar "emitSliceRef") (EVar "prog")) (EVar "env")) (EVar "d")) (EVar "a")) (EVar "lo")) (EVar "hi")) (EVar "incl")))))
 (DFunDef false "emitValueW" ((PVar "prog") (PVar "env") (PVar "d") (PAs "node" (PCon "CRecord" (PVar "name") (PVar "fields")))) (EApp (EApp (EApp (EVar "refOnlyValueW") (EVar "prog")) (EVar "node")) (ELam ((PLit LUnit)) (EApp (EApp (EApp (EApp (EApp (EVar "emitRecordRef") (EVar "prog")) (EVar "env")) (EVar "d")) (EVar "name")) (EVar "fields")))))
 (DFunDef false "emitValueW" ((PVar "prog") (PVar "env") (PVar "d") (PAs "node" (PCon "CFieldAccess" (PVar "ex") (PVar "label") (PVar "recName") (PVar "ord")))) (EApp (EApp (EApp (EVar "refOnlyValueW") (EVar "prog")) (EVar "node")) (ELam ((PLit LUnit)) (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EVar "emitFieldAccessRef") (EVar "prog")) (EVar "env")) (EVar "d")) (EVar "ex")) (EVar "label")) (EVar "recName")) (EVar "ord")))))
 (DFunDef false "emitValueW" ((PVar "prog") (PVar "env") (PVar "d") (PAs "node" (PCon "CRecordUpdate" (PVar "recName") (PVar "base") (PVar "fields")))) (EApp (EApp (EApp (EVar "refOnlyValueW") (EVar "prog")) (EVar "node")) (ELam ((PLit LUnit)) (EApp (EApp (EApp (EApp (EApp (EApp (EVar "emitRecordUpdateRef") (EVar "prog")) (EVar "env")) (EVar "d")) (EVar "recName")) (EVar "base")) (EVar "fields")))))
@@ -14928,8 +14752,6 @@ hasFamilyW prog symbol tag =
 (DFunDef false "freeVarsExpr" ((PVar "bound") (PCon "CVariantUpdate" PWild (PVar "e") (PVar "fields"))) (EBinOp "++" (EApp (EApp (EVar "freeVarsExpr") (EVar "bound")) (EVar "e")) (EApp (EApp (EDictApp "flatMap") (EApp (EVar "freeVarsField") (EVar "bound"))) (EVar "fields"))))
 (DFunDef false "freeVarsExpr" ((PVar "bound") (PCon "CRangeList" (PVar "lo") (PVar "hi") PWild)) (EBinOp "++" (EApp (EApp (EVar "freeVarsExpr") (EVar "bound")) (EVar "lo")) (EApp (EApp (EVar "freeVarsExpr") (EVar "bound")) (EVar "hi"))))
 (DFunDef false "freeVarsExpr" ((PVar "bound") (PCon "CRangeArray" (PVar "lo") (PVar "hi") PWild)) (EBinOp "++" (EApp (EApp (EVar "freeVarsExpr") (EVar "bound")) (EVar "lo")) (EApp (EApp (EVar "freeVarsExpr") (EVar "bound")) (EVar "hi"))))
-(DFunDef false "freeVarsExpr" ((PVar "bound") (PCon "CIndex" (PVar "e") (PVar "i"))) (EBinOp "++" (EApp (EApp (EVar "freeVarsExpr") (EVar "bound")) (EVar "e")) (EApp (EApp (EVar "freeVarsExpr") (EVar "bound")) (EVar "i"))))
-(DFunDef false "freeVarsExpr" ((PVar "bound") (PCon "CSlice" (PVar "e") (PVar "lo") (PVar "hi") PWild)) (EBinOp "++" (EBinOp "++" (EApp (EApp (EVar "freeVarsExpr") (EVar "bound")) (EVar "e")) (EApp (EApp (EVar "freeVarsExpr") (EVar "bound")) (EVar "lo"))) (EApp (EApp (EVar "freeVarsExpr") (EVar "bound")) (EVar "hi"))))
 (DFunDef false "freeVarsExpr" ((PVar "bound") (PCon "CMethod" PWild (PCon "MethodEvidence" PWild PWild (PVar "route") (PVar "implRoutes") (PVar "methRoutes")))) (EApp (EApp (EVar "freeGivens") (EVar "bound")) (EBinOp "::" (EVar "route") (EBinOp "++" (EVar "implRoutes") (EVar "methRoutes")))))
 (DFunDef false "freeVarsExpr" ((PVar "bound") (PCon "CDict" (PVar "name") (PVar "routes"))) (EBinOp "++" (EIf (EApp (EApp (EVar "omHasKey") (EVar "name")) (EVar "bound")) (EListLit) (EListLit (EVar "name"))) (EApp (EApp (EVar "freeGivens") (EVar "bound")) (EVar "routes"))))
 (DFunDef false "freeVarsExpr" ((PVar "_bound") PWild) (EListLit))
@@ -14964,10 +14786,6 @@ hasFamilyW prog symbol tag =
 (DFunDef false "emitArrayCreateRef" ((PVar "prog") (PVar "env") (PVar "d") (PVar "es")) (EBlock (DoLet false false (PVar "argInstrs") (EApp (EApp (EDictApp "flatMap") (ELam ((PVar "a")) (EApp (EApp (EApp (EApp (EVar "emitRefExpr") (EVar "prog")) (EVar "env")) (EVar "d")) (EVar "a")))) (EVar "es"))) (DoExpr (EBinOp "++" (EVar "argInstrs") (EListLit (EBinOp "++" (ELit (LString "array.new_fixed $arr ")) (EApp (EVar "intToString") (EApp (EVar "listLen") (EVar "es")))))))))
 (DTypeSig false "emitRangeArrayRef" (TyFun (TyCon "Prog") (TyFun (TyCon "Env") (TyFun (TyCon "Int") (TyFun (TyCon "CExpr") (TyFun (TyCon "CExpr") (TyFun (TyCon "Bool") (TyApp (TyCon "List") (TyCon "String")))))))))
 (DFunDef false "emitRangeArrayRef" ((PVar "prog") (PVar "env") (PVar "d") (PVar "lo") (PVar "hi") (PVar "incl")) (EBlock (DoLet false false (PVar "loI") (EBinOp "++" (EApp (EApp (EApp (EApp (EVar "emitRefExpr") (EVar "prog")) (EVar "env")) (EVar "d")) (EVar "lo")) (EListLit (EApp (EVar "unboxIntW") (EVar "prog"))))) (DoLet false false (PVar "hiI") (EBinOp "++" (EApp (EApp (EApp (EApp (EVar "emitRefExpr") (EVar "prog")) (EVar "env")) (EVar "d")) (EVar "hi")) (EListLit (EApp (EVar "unboxIntW") (EVar "prog"))))) (DoLet false false (PVar "arrL") (EApp (EApp (EApp (EVar "w7Local") (EApp (EVar "progEmit") (EVar "prog"))) (EVar "WN.W7Raarr")) (EVar "d"))) (DoLet false false (PVar "iL") (EApp (EApp (EApp (EVar "w7Local") (EApp (EVar "progEmit") (EVar "prog"))) (EVar "WN.W7Rai")) (EVar "d"))) (DoLet false false (PVar "loL") (EApp (EApp (EApp (EVar "w7Local") (EApp (EVar "progEmit") (EVar "prog"))) (EVar "WN.W7Ralo")) (EVar "d"))) (DoLet false false (PVar "cntL") (EApp (EApp (EApp (EVar "w7Local") (EApp (EVar "progEmit") (EVar "prog"))) (EVar "WN.W7Racnt")) (EVar "d"))) (DoLet false false (PVar "adj") (EIf (EVar "incl") (EListLit (ELit (LString "i64.const 1")) (ELit (LString "i64.add"))) (EListLit))) (DoExpr (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EVar "loI") (EListLit (EBinOp "++" (ELit (LString "local.set ")) (EVar "loL")))) (EVar "hiI")) (EVar "adj")) (EListLit (EBinOp "++" (ELit (LString "local.get ")) (EVar "loL")) (ELit (LString "i64.sub")) (EBinOp "++" (ELit (LString "local.set ")) (EVar "cntL")))) (EListLit (EBinOp "++" (ELit (LString "local.get ")) (EVar "cntL")) (ELit (LString "i64.const 0")) (ELit (LString "i64.lt_s")) (ELit (LString "if")) (ELit (LString "i64.const 0")) (EBinOp "++" (ELit (LString "local.set ")) (EVar "cntL")) (ELit (LString "end")))) (EListLit (EBinOp "++" (ELit (LString "local.get ")) (EVar "cntL")) (ELit (LString "i64.const 2147483647")) (ELit (LString "i64.gt_s")) (ELit (LString "if")) (ELit (LString "i64.const 2147483647")) (EBinOp "++" (ELit (LString "local.set ")) (EVar "cntL")) (ELit (LString "end")))) (EListLit (ELit (LString "i32.const 0")) (ELit (LString "ref.i31")) (EBinOp "++" (ELit (LString "local.get ")) (EVar "cntL")) (ELit (LString "i32.wrap_i64")) (ELit (LString "array.new $arr")) (EBinOp "++" (ELit (LString "local.set ")) (EVar "arrL")))) (EListLit (ELit (LString "i32.const 0")) (EBinOp "++" (ELit (LString "local.set ")) (EVar "iL")))) (EListLit (EBinOp "++" (ELit (LString "block ")) (EApp (EApp (EVar "labelName") (EVar "WN.WLabelRad")) (EVar "d"))) (EBinOp "++" (ELit (LString "loop ")) (EApp (EApp (EVar "labelName") (EVar "WN.WLabelRal")) (EVar "d"))))) (EListLit (EBinOp "++" (ELit (LString "local.get ")) (EVar "iL")) (ELit (LString "i64.extend_i32_u")) (EBinOp "++" (ELit (LString "local.get ")) (EVar "cntL")) (ELit (LString "i64.ge_s")) (EBinOp "++" (ELit (LString "br_if ")) (EApp (EApp (EVar "labelName") (EVar "WN.WLabelRad")) (EVar "d"))))) (EListLit (EBinOp "++" (ELit (LString "local.get ")) (EVar "arrL")) (ELit (LString "ref.as_non_null")) (EBinOp "++" (ELit (LString "local.get ")) (EVar "iL")))) (EListLit (EBinOp "++" (ELit (LString "local.get ")) (EVar "loL")) (EBinOp "++" (ELit (LString "local.get ")) (EVar "iL")) (ELit (LString "i64.extend_i32_u")) (ELit (LString "i64.add")) (EApp (EVar "boxIntW") (EVar "prog")))) (EListLit (ELit (LString "array.set $arr")))) (EListLit (EBinOp "++" (ELit (LString "local.get ")) (EVar "iL")) (ELit (LString "i32.const 1")) (ELit (LString "i32.add")) (EBinOp "++" (ELit (LString "local.set ")) (EVar "iL")))) (EListLit (EBinOp "++" (ELit (LString "br ")) (EApp (EApp (EVar "labelName") (EVar "WN.WLabelRal")) (EVar "d"))) (ELit (LString "end")) (ELit (LString "end")))) (EListLit (EBinOp "++" (ELit (LString "local.get ")) (EVar "arrL")) (ELit (LString "ref.as_non_null")))))))
-(DTypeSig false "emitIndexRef" (TyFun (TyCon "Prog") (TyFun (TyCon "Env") (TyFun (TyCon "Int") (TyFun (TyCon "CExpr") (TyFun (TyCon "CExpr") (TyApp (TyCon "List") (TyCon "String"))))))))
-(DFunDef false "emitIndexRef" ((PVar "prog") (PVar "env") (PVar "d") (PVar "a") (PVar "i")) (EBlock (DoLet false false (PVar "arrL") (EApp (EApp (EApp (EVar "w7Local") (EApp (EVar "progEmit") (EVar "prog"))) (EVar "WN.W7Ixarr")) (EVar "d"))) (DoLet false false (PVar "idxL") (EApp (EApp (EApp (EVar "w7Local") (EApp (EVar "progEmit") (EVar "prog"))) (EVar "WN.W7Ixi")) (EVar "d"))) (DoLet false false (PVar "arrI") (EBinOp "++" (EApp (EApp (EApp (EApp (EVar "emitRefExpr") (EVar "prog")) (EVar "env")) (EVar "d")) (EVar "a")) (EListLit (ELit (LString "ref.cast (ref $arr)")) (EBinOp "++" (ELit (LString "local.set ")) (EVar "arrL"))))) (DoLet false false (PVar "idxI") (EBinOp "++" (EApp (EApp (EApp (EApp (EVar "emitRefExpr") (EVar "prog")) (EVar "env")) (EVar "d")) (EVar "i")) (EListLit (ELit (LString "ref.cast (ref i31)")) (ELit (LString "i31.get_s")) (EBinOp "++" (ELit (LString "local.set ")) (EVar "idxL"))))) (DoExpr (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EVar "arrI") (EVar "idxI")) (EListLit (EBinOp "++" (ELit (LString "local.get ")) (EVar "idxL")) (ELit (LString "i32.const 0")) (ELit (LString "i32.lt_s")))) (EListLit (EBinOp "++" (ELit (LString "local.get ")) (EVar "idxL")) (EBinOp "++" (ELit (LString "local.get ")) (EVar "arrL")) (ELit (LString "ref.as_non_null")) (ELit (LString "array.len")) (ELit (LString "i32.ge_s")))) (EListLit (ELit (LString "i32.or")) (ELit (LString "if")))) (EApp (EVar "indent") (EApp (EApp (EApp (EVar "wasmTrap") (EApp (EVar "progEmit") (EVar "prog"))) (EVar "EIndexOob")) (ELit (LString "index out of bounds"))))) (EListLit (ELit (LString "end")))) (EListLit (EBinOp "++" (ELit (LString "local.get ")) (EVar "arrL")) (ELit (LString "ref.as_non_null")) (EBinOp "++" (ELit (LString "local.get ")) (EVar "idxL")) (ELit (LString "array.get $arr")) (ELit (LString "ref.as_non_null")))))))
-(DTypeSig false "emitSliceRef" (TyFun (TyCon "Prog") (TyFun (TyCon "Env") (TyFun (TyCon "Int") (TyFun (TyCon "CExpr") (TyFun (TyCon "CExpr") (TyFun (TyCon "CExpr") (TyFun (TyCon "Bool") (TyApp (TyCon "List") (TyCon "String"))))))))))
-(DFunDef false "emitSliceRef" ((PVar "prog") (PVar "env") (PVar "d") (PVar "a") (PVar "lo") (PVar "hi") (PVar "incl")) (EBlock (DoLet false false (PVar "srcL") (EApp (EApp (EApp (EVar "w7Local") (EApp (EVar "progEmit") (EVar "prog"))) (EVar "WN.W7Slsrc")) (EVar "d"))) (DoLet false false (PVar "dstL") (EApp (EApp (EApp (EVar "w7Local") (EApp (EVar "progEmit") (EVar "prog"))) (EVar "WN.W7Sldst")) (EVar "d"))) (DoLet false false (PVar "loL") (EApp (EApp (EApp (EVar "w7Local") (EApp (EVar "progEmit") (EVar "prog"))) (EVar "WN.W7Sllo")) (EVar "d"))) (DoLet false false (PVar "lenL") (EApp (EApp (EApp (EVar "w7Local") (EApp (EVar "progEmit") (EVar "prog"))) (EVar "WN.W7Sllen")) (EVar "d"))) (DoLet false false (PVar "arrI") (EBinOp "++" (EApp (EApp (EApp (EApp (EVar "emitRefExpr") (EVar "prog")) (EVar "env")) (EVar "d")) (EVar "a")) (EListLit (ELit (LString "ref.cast (ref $arr)")) (EBinOp "++" (ELit (LString "local.set ")) (EVar "srcL"))))) (DoLet false false (PVar "loI") (EBinOp "++" (EApp (EApp (EApp (EApp (EVar "emitRefExpr") (EVar "prog")) (EVar "env")) (EVar "d")) (EVar "lo")) (EListLit (ELit (LString "ref.cast (ref i31)")) (ELit (LString "i31.get_s")) (EBinOp "++" (ELit (LString "local.set ")) (EVar "loL"))))) (DoLet false false (PVar "hiI") (EBinOp "++" (EApp (EApp (EApp (EApp (EVar "emitRefExpr") (EVar "prog")) (EVar "env")) (EVar "d")) (EVar "hi")) (EListLit (ELit (LString "ref.cast (ref i31)")) (ELit (LString "i31.get_s"))))) (DoLet false false (PVar "adj") (EIf (EVar "incl") (EListLit (ELit (LString "i32.const 1")) (ELit (LString "i32.add"))) (EListLit))) (DoLet false false (PVar "guardI") (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EListLit (EBinOp "++" (ELit (LString "local.set ")) (EVar "lenL"))) (EListLit (EBinOp "++" (ELit (LString "local.get ")) (EVar "loL")) (ELit (LString "i32.const 0")) (ELit (LString "i32.lt_s")))) (EListLit (EBinOp "++" (ELit (LString "local.get ")) (EVar "lenL")) (EBinOp "++" (ELit (LString "local.get ")) (EVar "srcL")) (ELit (LString "ref.as_non_null")) (ELit (LString "array.len")) (ELit (LString "i32.gt_s")) (ELit (LString "i32.or")))) (EListLit (EBinOp "++" (ELit (LString "local.get ")) (EVar "lenL")) (EBinOp "++" (ELit (LString "local.get ")) (EVar "loL")) (ELit (LString "i32.sub")) (ELit (LString "i32.const 0")) (ELit (LString "i32.lt_s")) (ELit (LString "i32.or")))) (EListLit (ELit (LString "if")))) (EApp (EVar "indent") (EApp (EApp (EApp (EVar "wasmTrap") (EApp (EVar "progEmit") (EVar "prog"))) (EVar "ESliceOob")) (ELit (LString "slice out of bounds"))))) (EListLit (ELit (LString "end")))) (EListLit (EBinOp "++" (ELit (LString "local.get ")) (EVar "lenL")) (EBinOp "++" (ELit (LString "local.get ")) (EVar "loL")) (ELit (LString "i32.sub")) (EBinOp "++" (ELit (LString "local.set ")) (EVar "lenL"))))) (DoExpr (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EVar "arrI") (EVar "loI")) (EVar "hiI")) (EVar "adj")) (EVar "guardI")) (EListLit (ELit (LString "i32.const 0")) (ELit (LString "ref.i31")) (EBinOp "++" (ELit (LString "local.get ")) (EVar "lenL")) (ELit (LString "array.new $arr")) (EBinOp "++" (ELit (LString "local.set ")) (EVar "dstL")))) (EListLit (EBinOp "++" (ELit (LString "local.get ")) (EVar "dstL")) (ELit (LString "ref.as_non_null")) (ELit (LString "i32.const 0")) (EBinOp "++" (ELit (LString "local.get ")) (EVar "srcL")) (ELit (LString "ref.as_non_null")) (EBinOp "++" (ELit (LString "local.get ")) (EVar "loL")) (EBinOp "++" (ELit (LString "local.get ")) (EVar "lenL")) (ELit (LString "array.copy $arr $arr")))) (EListLit (EBinOp "++" (ELit (LString "local.get ")) (EVar "dstL")) (ELit (LString "ref.as_non_null")))))))
 (DTypeSig false "emitRecordRef" (TyFun (TyCon "Prog") (TyFun (TyCon "Env") (TyFun (TyCon "Int") (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "CField")) (TyApp (TyCon "List") (TyCon "String"))))))))
 (DFunDef false "emitRecordRef" ((PVar "prog") (PVar "env") (PVar "d") (PVar "name") (PVar "fields")) (EBlock (DoLet false false (PVar "tagField") (EListLit (EBinOp "++" (ELit (LString "i32.const ")) (EApp (EVar "intToString") (EApp (EApp (EVar "ctorOrdinal") (EVar "prog")) (EVar "name")))))) (DoLet false false (PVar "argInstrs") (EApp (EApp (EDictApp "flatMap") (ELam ((PVar "f")) (EApp (EApp (EApp (EApp (EVar "emitRefExpr") (EVar "prog")) (EVar "env")) (EVar "d")) (EApp (EVar "cFieldExpr") (EVar "f"))))) (EVar "fields"))) (DoExpr (EBinOp "++" (EBinOp "++" (EVar "tagField") (EVar "argInstrs")) (EListLit (EBinOp "++" (ELit (LString "struct.new $")) (EApp (EApp (EVar "typeNameW") (EVar "prog")) (EApp (EVar "ctorStructName") (EVar "name")))))))))
 (DTypeSig false "emitFieldAccessRef" (TyFun (TyCon "Prog") (TyFun (TyCon "Env") (TyFun (TyCon "Int") (TyFun (TyCon "CExpr") (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyCon "Int") (TyApp (TyCon "List") (TyCon "String"))))))))))
@@ -15115,8 +14933,6 @@ hasFamilyW prog symbol tag =
 (DFunDef false "collectExprLocals" ((PCon "CVariantUpdate" PWild (PVar "base") (PVar "fields"))) (EBinOp "++" (EApp (EVar "collectExprLocals") (EVar "base")) (EApp (EApp (EDictApp "flatMap") (EVar "collectFieldLocals")) (EVar "fields"))))
 (DFunDef false "collectExprLocals" ((PCon "CRangeList" (PVar "lo") (PVar "hi") PWild)) (EBinOp "++" (EApp (EVar "collectExprLocals") (EVar "lo")) (EApp (EVar "collectExprLocals") (EVar "hi"))))
 (DFunDef false "collectExprLocals" ((PCon "CRangeArray" (PVar "lo") (PVar "hi") PWild)) (EBinOp "++" (EApp (EVar "collectExprLocals") (EVar "lo")) (EApp (EVar "collectExprLocals") (EVar "hi"))))
-(DFunDef false "collectExprLocals" ((PCon "CIndex" (PVar "base") (PVar "index"))) (EBinOp "++" (EApp (EVar "collectExprLocals") (EVar "base")) (EApp (EVar "collectExprLocals") (EMethodRef "index"))))
-(DFunDef false "collectExprLocals" ((PCon "CSlice" (PVar "base") (PVar "lo") (PVar "hi") PWild)) (EBinOp "++" (EBinOp "++" (EApp (EVar "collectExprLocals") (EVar "base")) (EApp (EVar "collectExprLocals") (EVar "lo"))) (EApp (EVar "collectExprLocals") (EVar "hi"))))
 (DFunDef false "collectExprLocals" ((PCon "CBlock" (PVar "stmts"))) (EApp (EApp (EDictApp "flatMap") (EVar "collectStmtLocals")) (EVar "stmts")))
 (DFunDef false "collectExprLocals" ((PCon "CDecision" (PVar "scrut") (PVar "arms") PWild)) (EBinOp "++" (EApp (EVar "collectExprLocals") (EVar "scrut")) (EApp (EApp (EDictApp "flatMap") (EVar "collectArmLocals")) (EVar "arms"))))
 (DFunDef false "collectExprLocals" ((PCon "CMatch" (PVar "scrut") (PVar "arms"))) (EBinOp "++" (EApp (EVar "collectExprLocals") (EVar "scrut")) (EApp (EApp (EDictApp "flatMap") (EVar "collectArmLocals")) (EVar "arms"))))
@@ -15273,8 +15089,6 @@ hasFamilyW prog symbol tag =
 (DFunDef false "maxIndexAt" ((PCon "CFieldAccess" (PVar "e1") PWild PWild PWild) (PVar "d")) (EApp (EApp (EVar "maxIndexAt") (EVar "e1")) (EVar "d")))
 (DFunDef false "maxIndexAt" ((PCon "CRangeList" (PVar "lo") (PVar "hi") PWild) (PVar "d")) (EApp (EApp (EVar "maxI") (EVar "d")) (EApp (EApp (EVar "maxI") (EApp (EApp (EVar "maxIndexAt") (EVar "lo")) (EVar "d"))) (EApp (EApp (EVar "maxIndexAt") (EVar "hi")) (EVar "d")))))
 (DFunDef false "maxIndexAt" ((PCon "CRangeArray" (PVar "lo") (PVar "hi") PWild) (PVar "d")) (EApp (EApp (EVar "maxI") (EVar "d")) (EApp (EApp (EVar "maxI") (EApp (EApp (EVar "maxIndexAt") (EVar "lo")) (EVar "d"))) (EApp (EApp (EVar "maxIndexAt") (EVar "hi")) (EVar "d")))))
-(DFunDef false "maxIndexAt" ((PCon "CIndex" (PVar "a") (PVar "i")) (PVar "d")) (EApp (EApp (EVar "maxI") (EVar "d")) (EApp (EApp (EVar "maxI") (EApp (EApp (EVar "maxIndexAt") (EVar "a")) (EVar "d"))) (EApp (EApp (EVar "maxIndexAt") (EVar "i")) (EVar "d")))))
-(DFunDef false "maxIndexAt" ((PCon "CSlice" (PVar "a") (PVar "lo") (PVar "hi") PWild) (PVar "d")) (EApp (EApp (EVar "maxI") (EVar "d")) (EApp (EApp (EVar "maxI") (EApp (EApp (EVar "maxIndexAt") (EVar "a")) (EVar "d"))) (EApp (EApp (EVar "maxI") (EApp (EApp (EVar "maxIndexAt") (EVar "lo")) (EVar "d"))) (EApp (EApp (EVar "maxIndexAt") (EVar "hi")) (EVar "d"))))))
 (DFunDef false "maxIndexAt" (PWild (PVar "d")) (EBinOp "-" (EVar "d") (ELit (LInt 1))))
 (DTypeSig false "treeSwitchNesting" (TyFun (TyCon "CTree") (TyCon "Int")))
 (DFunDef false "treeSwitchNesting" ((PCon "CTFail" PWild)) (ELit (LInt 0)))
@@ -15372,8 +15186,6 @@ hasFamilyW prog symbol tag =
 (DFunDef false "ctag" ((PCon "CVariantUpdate" PWild PWild PWild)) (ELit (LString "CVariantUpdate (W7)")))
 (DFunDef false "ctag" ((PCon "CRangeList" PWild PWild PWild)) (ELit (LString "CRangeList (W7)")))
 (DFunDef false "ctag" ((PCon "CRangeArray" PWild PWild PWild)) (ELit (LString "CRangeArray (W7)")))
-(DFunDef false "ctag" ((PCon "CIndex" PWild PWild)) (ELit (LString "CIndex (W7)")))
-(DFunDef false "ctag" ((PCon "CSlice" PWild PWild PWild PWild)) (ELit (LString "CSlice (W7)")))
 (DFunDef false "ctag" ((PCon "CMethod" PWild PWild)) (ELit (LString "CMethod (dispatch — W5)")))
 (DFunDef false "ctag" ((PCon "CDict" PWild PWild)) (ELit (LString "CDict (dispatch — W5)")))
 (DFunDef false "ctag" ((PCon "CLetGroup" PWild PWild)) (ELit (LString "CLetGroup (where/let-group — W4)")))

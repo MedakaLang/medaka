@@ -1,5 +1,5 @@
 # META
-source_lines=710
+source_lines=692
 stages=DESUGAR,MARK
 # SOURCE
 -- BACKEND-NEUTRAL EMIT SUPPORT — helpers shared verbatim by BOTH the LLVM
@@ -99,15 +99,6 @@ eagerVars b (CVariantUpdate _ base updates) =
   eagerVars b base ++ eagerVarsFields b updates
 eagerVars b (CArray es) = eagerVarsList b es
 eagerVars b (CRangeArray lo hi _) = eagerVars b lo ++ eagerVars b hi
-eagerVars b (CIndex a i) = eagerVars b a ++ eagerVars b i
-eagerVars b (CStringIndex a i) = eagerVars b a ++ eagerVars b i
-eagerVars b (CStringSlice a lo hi _) =
-  eagerVars b a ++ eagerVars b lo ++ eagerVars b hi
-eagerVars b (CListIndex a i) = eagerVars b a ++ eagerVars b i
-eagerVars b (CListSlice a lo hi _) =
-  eagerVars b a ++ eagerVars b lo ++ eagerVars b hi
-eagerVars b (CSlice a lo hi _) =
-  eagerVars b a ++ eagerVars b lo ++ eagerVars b hi
 -- a `CDict` head is a saturated call to the named top-level function — an eager
 -- callee edge (the routes it carries hold no CExpr, so nothing to descend).
 eagerVars b (CDict name _) = if omHasKey name b then [] else [name]
@@ -441,15 +432,6 @@ eagerHasMethod (CRecordUpdate _ base updates) =
 eagerHasMethod (CVariantUpdate _ base updates) =
   eagerHasMethod base || fieldsHaveMethod updates
 eagerHasMethod (CArray es) = listHaveMethod es
-eagerHasMethod (CIndex a i) = eagerHasMethod a || eagerHasMethod i
-eagerHasMethod (CStringIndex a i) = eagerHasMethod a || eagerHasMethod i
-eagerHasMethod (CStringSlice a lo hi _) =
-  eagerHasMethod a || eagerHasMethod lo || eagerHasMethod hi
-eagerHasMethod (CListIndex a i) = eagerHasMethod a || eagerHasMethod i
-eagerHasMethod (CListSlice a lo hi _) =
-  eagerHasMethod a || eagerHasMethod lo || eagerHasMethod hi
-eagerHasMethod (CSlice a lo hi _) =
-  eagerHasMethod a || eagerHasMethod lo || eagerHasMethod hi
 eagerHasMethod _ = False
 
 listHaveMethod : List CExpr -> Bool
@@ -742,12 +724,6 @@ bindingOrigin name (Loc f line col _ _) = SymbolOrigin name f line col
 (DFunDef false "eagerVars" ((PVar "b") (PCon "CVariantUpdate" PWild (PVar "base") (PVar "updates"))) (EBinOp "++" (EApp (EApp (EVar "eagerVars") (EVar "b")) (EVar "base")) (EApp (EApp (EVar "eagerVarsFields") (EVar "b")) (EVar "updates"))))
 (DFunDef false "eagerVars" ((PVar "b") (PCon "CArray" (PVar "es"))) (EApp (EApp (EVar "eagerVarsList") (EVar "b")) (EVar "es")))
 (DFunDef false "eagerVars" ((PVar "b") (PCon "CRangeArray" (PVar "lo") (PVar "hi") PWild)) (EBinOp "++" (EApp (EApp (EVar "eagerVars") (EVar "b")) (EVar "lo")) (EApp (EApp (EVar "eagerVars") (EVar "b")) (EVar "hi"))))
-(DFunDef false "eagerVars" ((PVar "b") (PCon "CIndex" (PVar "a") (PVar "i"))) (EBinOp "++" (EApp (EApp (EVar "eagerVars") (EVar "b")) (EVar "a")) (EApp (EApp (EVar "eagerVars") (EVar "b")) (EVar "i"))))
-(DFunDef false "eagerVars" ((PVar "b") (PCon "CStringIndex" (PVar "a") (PVar "i"))) (EBinOp "++" (EApp (EApp (EVar "eagerVars") (EVar "b")) (EVar "a")) (EApp (EApp (EVar "eagerVars") (EVar "b")) (EVar "i"))))
-(DFunDef false "eagerVars" ((PVar "b") (PCon "CStringSlice" (PVar "a") (PVar "lo") (PVar "hi") PWild)) (EBinOp "++" (EBinOp "++" (EApp (EApp (EVar "eagerVars") (EVar "b")) (EVar "a")) (EApp (EApp (EVar "eagerVars") (EVar "b")) (EVar "lo"))) (EApp (EApp (EVar "eagerVars") (EVar "b")) (EVar "hi"))))
-(DFunDef false "eagerVars" ((PVar "b") (PCon "CListIndex" (PVar "a") (PVar "i"))) (EBinOp "++" (EApp (EApp (EVar "eagerVars") (EVar "b")) (EVar "a")) (EApp (EApp (EVar "eagerVars") (EVar "b")) (EVar "i"))))
-(DFunDef false "eagerVars" ((PVar "b") (PCon "CListSlice" (PVar "a") (PVar "lo") (PVar "hi") PWild)) (EBinOp "++" (EBinOp "++" (EApp (EApp (EVar "eagerVars") (EVar "b")) (EVar "a")) (EApp (EApp (EVar "eagerVars") (EVar "b")) (EVar "lo"))) (EApp (EApp (EVar "eagerVars") (EVar "b")) (EVar "hi"))))
-(DFunDef false "eagerVars" ((PVar "b") (PCon "CSlice" (PVar "a") (PVar "lo") (PVar "hi") PWild)) (EBinOp "++" (EBinOp "++" (EApp (EApp (EVar "eagerVars") (EVar "b")) (EVar "a")) (EApp (EApp (EVar "eagerVars") (EVar "b")) (EVar "lo"))) (EApp (EApp (EVar "eagerVars") (EVar "b")) (EVar "hi"))))
 (DFunDef false "eagerVars" ((PVar "b") (PCon "CDict" (PVar "name") PWild)) (EIf (EApp (EApp (EVar "omHasKey") (EVar "name")) (EVar "b")) (EListLit) (EListLit (EVar "name"))))
 (DFunDef false "eagerVars" (PWild PWild) (EListLit))
 (DTypeSig false "eagerVarsList" (TyFun (TyApp (TyCon "OrdMap") (TyCon "Unit")) (TyFun (TyApp (TyCon "List") (TyCon "CExpr")) (TyApp (TyCon "List") (TyCon "String")))))
@@ -855,12 +831,6 @@ bindingOrigin name (Loc f line col _ _) = SymbolOrigin name f line col
 (DFunDef false "eagerHasMethod" ((PCon "CRecordUpdate" PWild (PVar "base") (PVar "updates"))) (EBinOp "||" (EApp (EVar "eagerHasMethod") (EVar "base")) (EApp (EVar "fieldsHaveMethod") (EVar "updates"))))
 (DFunDef false "eagerHasMethod" ((PCon "CVariantUpdate" PWild (PVar "base") (PVar "updates"))) (EBinOp "||" (EApp (EVar "eagerHasMethod") (EVar "base")) (EApp (EVar "fieldsHaveMethod") (EVar "updates"))))
 (DFunDef false "eagerHasMethod" ((PCon "CArray" (PVar "es"))) (EApp (EVar "listHaveMethod") (EVar "es")))
-(DFunDef false "eagerHasMethod" ((PCon "CIndex" (PVar "a") (PVar "i"))) (EBinOp "||" (EApp (EVar "eagerHasMethod") (EVar "a")) (EApp (EVar "eagerHasMethod") (EVar "i"))))
-(DFunDef false "eagerHasMethod" ((PCon "CStringIndex" (PVar "a") (PVar "i"))) (EBinOp "||" (EApp (EVar "eagerHasMethod") (EVar "a")) (EApp (EVar "eagerHasMethod") (EVar "i"))))
-(DFunDef false "eagerHasMethod" ((PCon "CStringSlice" (PVar "a") (PVar "lo") (PVar "hi") PWild)) (EBinOp "||" (EBinOp "||" (EApp (EVar "eagerHasMethod") (EVar "a")) (EApp (EVar "eagerHasMethod") (EVar "lo"))) (EApp (EVar "eagerHasMethod") (EVar "hi"))))
-(DFunDef false "eagerHasMethod" ((PCon "CListIndex" (PVar "a") (PVar "i"))) (EBinOp "||" (EApp (EVar "eagerHasMethod") (EVar "a")) (EApp (EVar "eagerHasMethod") (EVar "i"))))
-(DFunDef false "eagerHasMethod" ((PCon "CListSlice" (PVar "a") (PVar "lo") (PVar "hi") PWild)) (EBinOp "||" (EBinOp "||" (EApp (EVar "eagerHasMethod") (EVar "a")) (EApp (EVar "eagerHasMethod") (EVar "lo"))) (EApp (EVar "eagerHasMethod") (EVar "hi"))))
-(DFunDef false "eagerHasMethod" ((PCon "CSlice" (PVar "a") (PVar "lo") (PVar "hi") PWild)) (EBinOp "||" (EBinOp "||" (EApp (EVar "eagerHasMethod") (EVar "a")) (EApp (EVar "eagerHasMethod") (EVar "lo"))) (EApp (EVar "eagerHasMethod") (EVar "hi"))))
 (DFunDef false "eagerHasMethod" (PWild) (EVar "False"))
 (DTypeSig false "listHaveMethod" (TyFun (TyApp (TyCon "List") (TyCon "CExpr")) (TyCon "Bool")))
 (DFunDef false "listHaveMethod" ((PList)) (EVar "False"))
@@ -987,12 +957,6 @@ bindingOrigin name (Loc f line col _ _) = SymbolOrigin name f line col
 (DFunDef false "eagerVars" ((PVar "b") (PCon "CVariantUpdate" PWild (PVar "base") (PVar "updates"))) (EBinOp "++" (EApp (EApp (EVar "eagerVars") (EVar "b")) (EVar "base")) (EApp (EApp (EVar "eagerVarsFields") (EVar "b")) (EVar "updates"))))
 (DFunDef false "eagerVars" ((PVar "b") (PCon "CArray" (PVar "es"))) (EApp (EApp (EVar "eagerVarsList") (EVar "b")) (EVar "es")))
 (DFunDef false "eagerVars" ((PVar "b") (PCon "CRangeArray" (PVar "lo") (PVar "hi") PWild)) (EBinOp "++" (EApp (EApp (EVar "eagerVars") (EVar "b")) (EVar "lo")) (EApp (EApp (EVar "eagerVars") (EVar "b")) (EVar "hi"))))
-(DFunDef false "eagerVars" ((PVar "b") (PCon "CIndex" (PVar "a") (PVar "i"))) (EBinOp "++" (EApp (EApp (EVar "eagerVars") (EVar "b")) (EVar "a")) (EApp (EApp (EVar "eagerVars") (EVar "b")) (EVar "i"))))
-(DFunDef false "eagerVars" ((PVar "b") (PCon "CStringIndex" (PVar "a") (PVar "i"))) (EBinOp "++" (EApp (EApp (EVar "eagerVars") (EVar "b")) (EVar "a")) (EApp (EApp (EVar "eagerVars") (EVar "b")) (EVar "i"))))
-(DFunDef false "eagerVars" ((PVar "b") (PCon "CStringSlice" (PVar "a") (PVar "lo") (PVar "hi") PWild)) (EBinOp "++" (EBinOp "++" (EApp (EApp (EVar "eagerVars") (EVar "b")) (EVar "a")) (EApp (EApp (EVar "eagerVars") (EVar "b")) (EVar "lo"))) (EApp (EApp (EVar "eagerVars") (EVar "b")) (EVar "hi"))))
-(DFunDef false "eagerVars" ((PVar "b") (PCon "CListIndex" (PVar "a") (PVar "i"))) (EBinOp "++" (EApp (EApp (EVar "eagerVars") (EVar "b")) (EVar "a")) (EApp (EApp (EVar "eagerVars") (EVar "b")) (EVar "i"))))
-(DFunDef false "eagerVars" ((PVar "b") (PCon "CListSlice" (PVar "a") (PVar "lo") (PVar "hi") PWild)) (EBinOp "++" (EBinOp "++" (EApp (EApp (EVar "eagerVars") (EVar "b")) (EVar "a")) (EApp (EApp (EVar "eagerVars") (EVar "b")) (EVar "lo"))) (EApp (EApp (EVar "eagerVars") (EVar "b")) (EVar "hi"))))
-(DFunDef false "eagerVars" ((PVar "b") (PCon "CSlice" (PVar "a") (PVar "lo") (PVar "hi") PWild)) (EBinOp "++" (EBinOp "++" (EApp (EApp (EVar "eagerVars") (EVar "b")) (EVar "a")) (EApp (EApp (EVar "eagerVars") (EVar "b")) (EVar "lo"))) (EApp (EApp (EVar "eagerVars") (EVar "b")) (EVar "hi"))))
 (DFunDef false "eagerVars" ((PVar "b") (PCon "CDict" (PVar "name") PWild)) (EIf (EApp (EApp (EVar "omHasKey") (EVar "name")) (EVar "b")) (EListLit) (EListLit (EVar "name"))))
 (DFunDef false "eagerVars" (PWild PWild) (EListLit))
 (DTypeSig false "eagerVarsList" (TyFun (TyApp (TyCon "OrdMap") (TyCon "Unit")) (TyFun (TyApp (TyCon "List") (TyCon "CExpr")) (TyApp (TyCon "List") (TyCon "String")))))
@@ -1100,12 +1064,6 @@ bindingOrigin name (Loc f line col _ _) = SymbolOrigin name f line col
 (DFunDef false "eagerHasMethod" ((PCon "CRecordUpdate" PWild (PVar "base") (PVar "updates"))) (EBinOp "||" (EApp (EVar "eagerHasMethod") (EVar "base")) (EApp (EVar "fieldsHaveMethod") (EVar "updates"))))
 (DFunDef false "eagerHasMethod" ((PCon "CVariantUpdate" PWild (PVar "base") (PVar "updates"))) (EBinOp "||" (EApp (EVar "eagerHasMethod") (EVar "base")) (EApp (EVar "fieldsHaveMethod") (EVar "updates"))))
 (DFunDef false "eagerHasMethod" ((PCon "CArray" (PVar "es"))) (EApp (EVar "listHaveMethod") (EVar "es")))
-(DFunDef false "eagerHasMethod" ((PCon "CIndex" (PVar "a") (PVar "i"))) (EBinOp "||" (EApp (EVar "eagerHasMethod") (EVar "a")) (EApp (EVar "eagerHasMethod") (EVar "i"))))
-(DFunDef false "eagerHasMethod" ((PCon "CStringIndex" (PVar "a") (PVar "i"))) (EBinOp "||" (EApp (EVar "eagerHasMethod") (EVar "a")) (EApp (EVar "eagerHasMethod") (EVar "i"))))
-(DFunDef false "eagerHasMethod" ((PCon "CStringSlice" (PVar "a") (PVar "lo") (PVar "hi") PWild)) (EBinOp "||" (EBinOp "||" (EApp (EVar "eagerHasMethod") (EVar "a")) (EApp (EVar "eagerHasMethod") (EVar "lo"))) (EApp (EVar "eagerHasMethod") (EVar "hi"))))
-(DFunDef false "eagerHasMethod" ((PCon "CListIndex" (PVar "a") (PVar "i"))) (EBinOp "||" (EApp (EVar "eagerHasMethod") (EVar "a")) (EApp (EVar "eagerHasMethod") (EVar "i"))))
-(DFunDef false "eagerHasMethod" ((PCon "CListSlice" (PVar "a") (PVar "lo") (PVar "hi") PWild)) (EBinOp "||" (EBinOp "||" (EApp (EVar "eagerHasMethod") (EVar "a")) (EApp (EVar "eagerHasMethod") (EVar "lo"))) (EApp (EVar "eagerHasMethod") (EVar "hi"))))
-(DFunDef false "eagerHasMethod" ((PCon "CSlice" (PVar "a") (PVar "lo") (PVar "hi") PWild)) (EBinOp "||" (EBinOp "||" (EApp (EVar "eagerHasMethod") (EVar "a")) (EApp (EVar "eagerHasMethod") (EVar "lo"))) (EApp (EVar "eagerHasMethod") (EVar "hi"))))
 (DFunDef false "eagerHasMethod" (PWild) (EVar "False"))
 (DTypeSig false "listHaveMethod" (TyFun (TyApp (TyCon "List") (TyCon "CExpr")) (TyCon "Bool")))
 (DFunDef false "listHaveMethod" ((PList)) (EVar "False"))

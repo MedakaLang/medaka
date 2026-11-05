@@ -1,5 +1,5 @@
 # META
-source_lines=175
+source_lines=166
 stages=DESUGAR,MARK
 # SOURCE
 import frontend.ast.{Pat(..)}
@@ -136,15 +136,6 @@ ubExpr sc (CVariantUpdate n e fs) =
   CVariantUpdate n (ubExpr sc e) (map (ubField sc) fs)
 ubExpr sc (CRangeList lo hi i) = CRangeList (ubExpr sc lo) (ubExpr sc hi) i
 ubExpr sc (CRangeArray lo hi i) = CRangeArray (ubExpr sc lo) (ubExpr sc hi) i
-ubExpr sc (CIndex b i) = CIndex (ubExpr sc b) (ubExpr sc i)
-ubExpr sc (CSlice b lo hi i) =
-  CSlice (ubExpr sc b) (ubExpr sc lo) (ubExpr sc hi) i
-ubExpr sc (CStringIndex b i) = CStringIndex (ubExpr sc b) (ubExpr sc i)
-ubExpr sc (CStringSlice b lo hi i) =
-  CStringSlice (ubExpr sc b) (ubExpr sc lo) (ubExpr sc hi) i
-ubExpr sc (CListIndex b i) = CListIndex (ubExpr sc b) (ubExpr sc i)
-ubExpr sc (CListSlice b lo hi i) =
-  CListSlice (ubExpr sc b) (ubExpr sc lo) (ubExpr sc hi) i
 ubExpr sc (CBlock stmts) = CBlock (ubStmts sc stmts)
 ubExpr _ e = e
 
@@ -237,12 +228,6 @@ ubGuards sc ((CGBind p e) :: rest) =
 (DFunDef false "ubExpr" ((PVar "sc") (PCon "CVariantUpdate" (PVar "n") (PVar "e") (PVar "fs"))) (EApp (EApp (EApp (EVar "CVariantUpdate") (EVar "n")) (EApp (EApp (EVar "ubExpr") (EVar "sc")) (EVar "e"))) (EApp (EApp (EVar "map") (EApp (EVar "ubField") (EVar "sc"))) (EVar "fs"))))
 (DFunDef false "ubExpr" ((PVar "sc") (PCon "CRangeList" (PVar "lo") (PVar "hi") (PVar "i"))) (EApp (EApp (EApp (EVar "CRangeList") (EApp (EApp (EVar "ubExpr") (EVar "sc")) (EVar "lo"))) (EApp (EApp (EVar "ubExpr") (EVar "sc")) (EVar "hi"))) (EVar "i")))
 (DFunDef false "ubExpr" ((PVar "sc") (PCon "CRangeArray" (PVar "lo") (PVar "hi") (PVar "i"))) (EApp (EApp (EApp (EVar "CRangeArray") (EApp (EApp (EVar "ubExpr") (EVar "sc")) (EVar "lo"))) (EApp (EApp (EVar "ubExpr") (EVar "sc")) (EVar "hi"))) (EVar "i")))
-(DFunDef false "ubExpr" ((PVar "sc") (PCon "CIndex" (PVar "b") (PVar "i"))) (EApp (EApp (EVar "CIndex") (EApp (EApp (EVar "ubExpr") (EVar "sc")) (EVar "b"))) (EApp (EApp (EVar "ubExpr") (EVar "sc")) (EVar "i"))))
-(DFunDef false "ubExpr" ((PVar "sc") (PCon "CSlice" (PVar "b") (PVar "lo") (PVar "hi") (PVar "i"))) (EApp (EApp (EApp (EApp (EVar "CSlice") (EApp (EApp (EVar "ubExpr") (EVar "sc")) (EVar "b"))) (EApp (EApp (EVar "ubExpr") (EVar "sc")) (EVar "lo"))) (EApp (EApp (EVar "ubExpr") (EVar "sc")) (EVar "hi"))) (EVar "i")))
-(DFunDef false "ubExpr" ((PVar "sc") (PCon "CStringIndex" (PVar "b") (PVar "i"))) (EApp (EApp (EVar "CStringIndex") (EApp (EApp (EVar "ubExpr") (EVar "sc")) (EVar "b"))) (EApp (EApp (EVar "ubExpr") (EVar "sc")) (EVar "i"))))
-(DFunDef false "ubExpr" ((PVar "sc") (PCon "CStringSlice" (PVar "b") (PVar "lo") (PVar "hi") (PVar "i"))) (EApp (EApp (EApp (EApp (EVar "CStringSlice") (EApp (EApp (EVar "ubExpr") (EVar "sc")) (EVar "b"))) (EApp (EApp (EVar "ubExpr") (EVar "sc")) (EVar "lo"))) (EApp (EApp (EVar "ubExpr") (EVar "sc")) (EVar "hi"))) (EVar "i")))
-(DFunDef false "ubExpr" ((PVar "sc") (PCon "CListIndex" (PVar "b") (PVar "i"))) (EApp (EApp (EVar "CListIndex") (EApp (EApp (EVar "ubExpr") (EVar "sc")) (EVar "b"))) (EApp (EApp (EVar "ubExpr") (EVar "sc")) (EVar "i"))))
-(DFunDef false "ubExpr" ((PVar "sc") (PCon "CListSlice" (PVar "b") (PVar "lo") (PVar "hi") (PVar "i"))) (EApp (EApp (EApp (EApp (EVar "CListSlice") (EApp (EApp (EVar "ubExpr") (EVar "sc")) (EVar "b"))) (EApp (EApp (EVar "ubExpr") (EVar "sc")) (EVar "lo"))) (EApp (EApp (EVar "ubExpr") (EVar "sc")) (EVar "hi"))) (EVar "i")))
 (DFunDef false "ubExpr" ((PVar "sc") (PCon "CBlock" (PVar "stmts"))) (EApp (EVar "CBlock") (EApp (EApp (EVar "ubStmts") (EVar "sc")) (EVar "stmts"))))
 (DFunDef false "ubExpr" (PWild (PVar "e")) (EVar "e"))
 (DTypeSig false "ubRenameBind" (TyFun (TyApp (TyCon "OrdMap") (TyCon "Int")) (TyFun (TyCon "CBind") (TyCon "CBind"))))
@@ -319,12 +304,6 @@ ubGuards sc ((CGBind p e) :: rest) =
 (DFunDef false "ubExpr" ((PVar "sc") (PCon "CVariantUpdate" (PVar "n") (PVar "e") (PVar "fs"))) (EApp (EApp (EApp (EVar "CVariantUpdate") (EVar "n")) (EApp (EApp (EVar "ubExpr") (EVar "sc")) (EVar "e"))) (EApp (EApp (EMethodRef "map") (EApp (EVar "ubField") (EVar "sc"))) (EVar "fs"))))
 (DFunDef false "ubExpr" ((PVar "sc") (PCon "CRangeList" (PVar "lo") (PVar "hi") (PVar "i"))) (EApp (EApp (EApp (EVar "CRangeList") (EApp (EApp (EVar "ubExpr") (EVar "sc")) (EVar "lo"))) (EApp (EApp (EVar "ubExpr") (EVar "sc")) (EVar "hi"))) (EVar "i")))
 (DFunDef false "ubExpr" ((PVar "sc") (PCon "CRangeArray" (PVar "lo") (PVar "hi") (PVar "i"))) (EApp (EApp (EApp (EVar "CRangeArray") (EApp (EApp (EVar "ubExpr") (EVar "sc")) (EVar "lo"))) (EApp (EApp (EVar "ubExpr") (EVar "sc")) (EVar "hi"))) (EVar "i")))
-(DFunDef false "ubExpr" ((PVar "sc") (PCon "CIndex" (PVar "b") (PVar "i"))) (EApp (EApp (EVar "CIndex") (EApp (EApp (EVar "ubExpr") (EVar "sc")) (EVar "b"))) (EApp (EApp (EVar "ubExpr") (EVar "sc")) (EVar "i"))))
-(DFunDef false "ubExpr" ((PVar "sc") (PCon "CSlice" (PVar "b") (PVar "lo") (PVar "hi") (PVar "i"))) (EApp (EApp (EApp (EApp (EVar "CSlice") (EApp (EApp (EVar "ubExpr") (EVar "sc")) (EVar "b"))) (EApp (EApp (EVar "ubExpr") (EVar "sc")) (EVar "lo"))) (EApp (EApp (EVar "ubExpr") (EVar "sc")) (EVar "hi"))) (EVar "i")))
-(DFunDef false "ubExpr" ((PVar "sc") (PCon "CStringIndex" (PVar "b") (PVar "i"))) (EApp (EApp (EVar "CStringIndex") (EApp (EApp (EVar "ubExpr") (EVar "sc")) (EVar "b"))) (EApp (EApp (EVar "ubExpr") (EVar "sc")) (EVar "i"))))
-(DFunDef false "ubExpr" ((PVar "sc") (PCon "CStringSlice" (PVar "b") (PVar "lo") (PVar "hi") (PVar "i"))) (EApp (EApp (EApp (EApp (EVar "CStringSlice") (EApp (EApp (EVar "ubExpr") (EVar "sc")) (EVar "b"))) (EApp (EApp (EVar "ubExpr") (EVar "sc")) (EVar "lo"))) (EApp (EApp (EVar "ubExpr") (EVar "sc")) (EVar "hi"))) (EVar "i")))
-(DFunDef false "ubExpr" ((PVar "sc") (PCon "CListIndex" (PVar "b") (PVar "i"))) (EApp (EApp (EVar "CListIndex") (EApp (EApp (EVar "ubExpr") (EVar "sc")) (EVar "b"))) (EApp (EApp (EVar "ubExpr") (EVar "sc")) (EVar "i"))))
-(DFunDef false "ubExpr" ((PVar "sc") (PCon "CListSlice" (PVar "b") (PVar "lo") (PVar "hi") (PVar "i"))) (EApp (EApp (EApp (EApp (EVar "CListSlice") (EApp (EApp (EVar "ubExpr") (EVar "sc")) (EVar "b"))) (EApp (EApp (EVar "ubExpr") (EVar "sc")) (EVar "lo"))) (EApp (EApp (EVar "ubExpr") (EVar "sc")) (EVar "hi"))) (EVar "i")))
 (DFunDef false "ubExpr" ((PVar "sc") (PCon "CBlock" (PVar "stmts"))) (EApp (EVar "CBlock") (EApp (EApp (EVar "ubStmts") (EVar "sc")) (EVar "stmts"))))
 (DFunDef false "ubExpr" (PWild (PVar "e")) (EVar "e"))
 (DTypeSig false "ubRenameBind" (TyFun (TyApp (TyCon "OrdMap") (TyCon "Int")) (TyFun (TyCon "CBind") (TyCon "CBind"))))

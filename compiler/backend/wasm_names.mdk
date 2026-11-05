@@ -132,15 +132,6 @@ ubExpr sc (CVariantUpdate n e fs) =
   CVariantUpdate n (ubExpr sc e) (map (ubField sc) fs)
 ubExpr sc (CRangeList lo hi i) = CRangeList (ubExpr sc lo) (ubExpr sc hi) i
 ubExpr sc (CRangeArray lo hi i) = CRangeArray (ubExpr sc lo) (ubExpr sc hi) i
-ubExpr sc (CIndex b i) = CIndex (ubExpr sc b) (ubExpr sc i)
-ubExpr sc (CSlice b lo hi i) =
-  CSlice (ubExpr sc b) (ubExpr sc lo) (ubExpr sc hi) i
-ubExpr sc (CStringIndex b i) = CStringIndex (ubExpr sc b) (ubExpr sc i)
-ubExpr sc (CStringSlice b lo hi i) =
-  CStringSlice (ubExpr sc b) (ubExpr sc lo) (ubExpr sc hi) i
-ubExpr sc (CListIndex b i) = CListIndex (ubExpr sc b) (ubExpr sc i)
-ubExpr sc (CListSlice b lo hi i) =
-  CListSlice (ubExpr sc b) (ubExpr sc lo) (ubExpr sc hi) i
 ubExpr sc (CBlock stmts) = CBlock (ubStmts sc stmts)
 ubExpr _ e = e
 

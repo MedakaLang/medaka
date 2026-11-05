@@ -182,14 +182,6 @@ walkExpr scope acc (CVariantUpdate _ base fields) =
   walkFields scope (walkExpr scope acc base) fields
 walkExpr scope acc (CRangeList lo hi _) = walkExprs scope acc [lo, hi]
 walkExpr scope acc (CRangeArray lo hi _) = walkExprs scope acc [lo, hi]
-walkExpr scope acc (CIndex base index) = walkExprs scope acc [base, index]
-walkExpr scope acc (CSlice base lo hi _) = walkExprs scope acc [base, lo, hi]
-walkExpr scope acc (CStringIndex base index) = walkExprs scope acc [base, index]
-walkExpr scope acc (CStringSlice base lo hi _) =
-  walkExprs scope acc [base, lo, hi]
-walkExpr scope acc (CListIndex base index) = walkExprs scope acc [base, index]
-walkExpr scope acc (CListSlice base lo hi _) =
-  walkExprs scope acc [base, lo, hi]
 walkExpr scope acc (CBlock stmts) = walkBlock scope acc stmts
 walkExpr _ acc (CMethod _ _) = acc
 walkExpr _ acc (CDict _ _) = acc

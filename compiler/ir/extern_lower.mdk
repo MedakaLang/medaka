@@ -247,30 +247,6 @@ walkExpr env scope (CRangeList lo hi incl) =
   CRangeList (walkExpr env scope lo) (walkExpr env scope hi) incl
 walkExpr env scope (CRangeArray lo hi incl) =
   CRangeArray (walkExpr env scope lo) (walkExpr env scope hi) incl
-walkExpr env scope (CIndex a i) =
-  CIndex (walkExpr env scope a) (walkExpr env scope i)
-walkExpr env scope (CSlice a lo hi incl) =
-  CSlice
-    (walkExpr env scope a)
-    (walkExpr env scope lo)
-    (walkExpr env scope hi)
-    incl
-walkExpr env scope (CStringIndex a i) =
-  CStringIndex (walkExpr env scope a) (walkExpr env scope i)
-walkExpr env scope (CStringSlice a lo hi incl) =
-  CStringSlice
-    (walkExpr env scope a)
-    (walkExpr env scope lo)
-    (walkExpr env scope hi)
-    incl
-walkExpr env scope (CListIndex a i) =
-  CListIndex (walkExpr env scope a) (walkExpr env scope i)
-walkExpr env scope (CListSlice a lo hi incl) =
-  CListSlice
-    (walkExpr env scope a)
-    (walkExpr env scope lo)
-    (walkExpr env scope hi)
-    incl
 walkExpr env scope (CBlock stmts) = CBlock (walkStmts env scope stmts)
 walkExpr _ _ (CMethod name (MethodEvidence iface arity r ir mr)) =
   CMethod name (MethodEvidence iface arity r ir mr)
