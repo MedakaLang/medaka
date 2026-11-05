@@ -1,0 +1,5 @@
+import lib.ladder_hh_d.{h}
+
+export
+useM : Int -> Int
+useM x = h x

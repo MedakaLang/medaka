@@ -72,6 +72,7 @@ import types.tc_types.{
   GraphCtx(..),
   MarkCtx(..),
   MarkSets(..),
+  ScopeClass(..),
 }
 import types.tc_grants.{clausesOf}
 import support.util.{
@@ -520,6 +521,7 @@ marksOf rp shared args coreMap = MarkSets {
   msCoreShadowMap = coreMap,
   msBareDictNames = [],
   msUnits = [],
+  msScopeClass = _ _ => ScopeOther,
 }
 
 -- A graph whose interface index lists the interface `Sizeable` and its method `size` under core.

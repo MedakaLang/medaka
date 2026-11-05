@@ -112,6 +112,7 @@ import frontend.visibility.{
   declExportsCtors,
   subjectOf,
   isSubjectIn,
+  explicitOverWild,
 }
 import list.{drop, findMap}
 import eval.u64_halves as H
@@ -4888,14 +4889,16 @@ ctorNamesOfDecl _ = []
 
 -- value names a DUse binds, resolved to the exporting module's exported cells
 -- names resolving to a ctor/global are
--- omitted (reached via the global frame instead).
+-- omitted (reached via the global frame instead).  The frame is read first
+-- match, so a wildcard's cell for a name an explicit import binds is left out
+-- (`explicitOverWild`), not merely ordered after it.
 export
 importFrameOf : ModExports (Value e) ->
   List (String, ModExports (Value e)) ->
   List Decl ->
   List (String, Ref (Value e))
 importFrameOf coreExports exportsMap decls =
-  flatMap (useImports coreExports exportsMap) decls
+  explicitOverWild fst (_ => True) (useImports coreExports exportsMap) decls
 
 useImports : ModExports (Value e) ->
   List (String, ModExports (Value e)) ->

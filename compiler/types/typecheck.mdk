@@ -360,10 +360,12 @@ import types.tc_diag_text.{
   stickyDiagsInPushOrder,
 }
 import types.tc_scope.{
+  aliasMethodNames,
   aliasRowSpelling,
   importFormRows,
   memberAliasCands,
   moduleAliasKeys,
+  seedExplicitOverWild,
   useKeyCands,
 }
 import types.tc_unify.{
@@ -942,11 +944,11 @@ unitCarriesMangledFunDefs _mid [] = False
 unitCarriesMangledFunDefs mid ((n, _) :: rest) =
   if isMangledFor mid n then True else unitCarriesMangledFunDefs mid rest
 
--- The first row for a name wins, unless a second import supplies a different
--- declaration of the same name: then the occurrence is the ambiguity the
--- resolver reports as R-AMBIGUOUS-OCCURRENCE (`ambiguousSet`, keyed by
--- declaration through `importValueDecls`, whichever module each import names;
--- a local definition, which it exempts, shadows the seed here anyway).
+-- The first row for a name wins, unless a second import on the same rung
+-- supplies a different declaration of the same name: then the occurrence is the
+-- ambiguity the resolver reports as R-AMBIGUOUS-OCCURRENCE (the scope's
+-- `Ambiguous` binding, `frontend/name_scope.mdk`; a local definition shadows the
+-- seed here anyway).
 -- Choosing either supplier would type the use against a definition the program
 -- never named, and the cascade would change with the order the imports were
 -- written.
@@ -1240,8 +1242,8 @@ methodsPerMidGo : List (String, List String) ->
   List (String, List String)
 methodsPerMidGo _ [] = []
 methodsPerMidGo acc ((mid, decls) :: rest) =
-  let entry =
-    (mid, dedup (declMethodNames decls ++ reexportedMethodNames acc decls))
+  let names = declMethodNames decls ++ reexportedMethodNames acc decls
+  let entry = (mid, aliasMethodNames decls names)
   entry :: methodsPerMidGo (entry :: acc) rest
 
 -- method names a module re-exports via `export import src.{…}` (`DUse True`), taken
@@ -1381,7 +1383,7 @@ declMethodNamesOf _ = []
 -- site, which is what #95 measured for six years.
 -- Each row a use-path BINDS carries the declaration it denotes
 -- (`importSupplierKey`), the same identity the resolver's value ambiguity check
--- keys on (`importValueDecls`), so `moduleImportSeed` can refuse to pick a winner
+-- keys on (`frontend/name_scope.mdk`), so `moduleImportSeed` can refuse to pick a winner
 -- by import order for a name the resolver has already rejected, and still
 -- accept one declaration reached through two imports. A row the form admits
 -- without binding its name (a bare method row admitted for dispatch, a mangled
@@ -1620,11 +1622,8 @@ moduleSeedFor prev baseSeed coreV mid prog depEnv =
   moduleImportSeed
     prev
     baseSeed
-    (importSeed
-      prev.mcGraph
-      mid
-      coreV
-      (admittedIn prev.mcGraph mid)
+    (seedExplicitOverWild
+      (importSeed prev.mcGraph mid coreV (admittedIn prev.mcGraph mid))
       prog
       depEnv)
 

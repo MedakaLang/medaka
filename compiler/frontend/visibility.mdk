@@ -151,6 +151,114 @@ declUseIds (DUse _ path _) = [useModId path]
 declUseIds (DAttrib _ d) = declUseIds d
 declUseIds _ = []
 
+-- The rows [decls]' imports give, one import at a time from [rowsOf], without
+-- the rows a wildcard import gives a bare name an explicit import binds: an
+-- explicit import answers over a wildcard (docs/spec/SHADOW-SEMANTICS.md L2,
+-- L3), whichever is written first.  [nameOf] is a row's bare name and [binds]
+-- says whether the row binds it.  Two declarations on one rung keep both rows,
+-- and an alias's method import (`writtenImportsOf`) is no explicit import.
+-- The checker's import seed, the interpreters' import frame and the emit
+-- path's rename entries all bind imports through this rule.
+export
+explicitOverWild : (r -> String) ->
+  (r -> Bool) ->
+  (Decl -> List r) ->
+  List Decl ->
+  List r
+explicitOverWild nameOf binds rowsOf decls =
+  let forms = importFormsOf decls
+  let perUse = map (d => (forms d, rowsOf d)) decls
+  let explicit =
+    fold
+      (acc (form, rows) =>
+        if form == ExplicitImport then
+          omFromNames (map nameOf (filterList binds rows)) acc
+        else
+          acc)
+      omEmpty
+      perUse
+  flatMap (dropShadowedWild explicit nameOf) perUse
+
+-- The bare names [decls]' explicit imports bind, by [namesOf] each import.
+export
+explicitImportNames : (Decl -> List String) -> List Decl -> OrdMap Unit
+explicitImportNames namesOf decls =
+  let forms = importFormsOf decls
+  fold
+    (acc d =>
+      if forms d == ExplicitImport then omFromNames (namesOf d) acc else acc)
+    omEmpty
+    decls
+
+-- `explicitOverWild` against a name set built once for several row kinds
+-- (`explicitImportNames`).
+export
+withoutShadowedWild : OrdMap Unit ->
+  (r -> String) ->
+  (Decl -> List r) ->
+  List Decl ->
+  List r
+withoutShadowedWild explicit nameOf rowsOf decls =
+  let forms = importFormsOf decls
+  flatMap (d => dropShadowedWild explicit nameOf (forms d, rowsOf d)) decls
+
+dropShadowedWild : OrdMap Unit ->
+  (r -> String) ->
+  (ImportForm, List r) ->
+  List r
+dropShadowedWild explicit nameOf (form, rows) =
+  if form == WildImport then
+    filterList (r => not (omHasKey (nameOf r) explicit)) rows
+  else
+    rows
+
+-- How a declaration of a module binds bare names: an import that names them,
+-- a wildcard, or anything else (an alias's method import binds none).
+data ImportForm = ExplicitImport | WildImport | NoBareImport deriving (Eq)
+
+importFormsOf : List Decl -> Decl -> ImportForm
+importFormsOf decls =
+  let sites = aliasImportSites decls
+  d => importFormIn sites d
+
+importFormIn : List (List String, Loc) -> Decl -> ImportForm
+importFormIn sites (DAttrib _ d) = importFormIn sites d
+importFormIn _ (DUse _ (UseWild _) _) = WildImport
+importFormIn _ (DUse _ (UseAlias _ _) _) = NoBareImport
+importFormIn sites (d@(DUse _ _ _)) =
+  if isAliasMethodImport sites d then NoBareImport else ExplicitImport
+importFormIn _ _ = NoBareImport
+
+-- [prog] without the method imports `deAliasMethodImports` appends beside each
+-- `import m as A`.  That import exists so the elaborated tree has the origin name the
+-- alias-qualified spelling resolves to after inference; the source never wrote it, and
+-- an alias binds no bare method name (docs/spec/SYNTAX.md § "Import aliasing"), so it
+-- must not witness a declaration on rung 1 or 2.  It is recognised by carrying the
+-- alias import's own module path and location.
+export
+writtenImportsOf : List Decl -> List Decl
+writtenImportsOf prog = match aliasImportSites prog
+  [] => prog
+  sites => filterList (d => not (isAliasMethodImport sites d)) prog
+
+-- The module path and location of each `import m as A` in [prog].
+export
+aliasImportSites : List Decl -> List (List String, Loc)
+aliasImportSites [] = []
+aliasImportSites ((DAttrib _ d) :: rest) =
+  aliasImportSites [d] ++ aliasImportSites rest
+aliasImportSites ((DUse _ (UseAlias quals _) loc) :: rest) =
+  (quals, loc) :: aliasImportSites rest
+aliasImportSites (_ :: rest) = aliasImportSites rest
+
+-- Only a `UseGroup` import is ever synthesized, so the final catch-all answering False
+-- for every other declaration is exhaustive by construction.
+isAliasMethodImport : List (List String, Loc) -> Decl -> Bool
+isAliasMethodImport sites (DAttrib _ d) = isAliasMethodImport sites d
+isAliasMethodImport sites (DUse _ (UseGroup quals _) loc) =
+  anyList (s => fst s == quals && snd s == loc) sites
+isAliasMethodImport _ _ = False
+
 -- The public interface of a resolved module
 -- (exp_fields is dropped — consumers only read field OWNERS).
 public export data ModuleExports = ModuleExports {

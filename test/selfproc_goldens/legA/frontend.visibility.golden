@@ -1,3 +1,4 @@
+aliasImportSites : List Decl -> List (List String, Loc)
 bindsNonCtorExport : ModuleExports -> String -> Bool
 buildExportsWith : ModuleExports -> Map String ModuleExports -> String -> List Decl -> List String -> ModuleExports
 buildSurface : ExportView -> ModuleExports -> Map String ModuleExports -> String -> List Decl -> List String -> ModuleExports
@@ -21,8 +22,11 @@ declUseIds : Decl -> List String
 directIn : ExpNs a -> List Decl -> List a
 directUnder : ExportView -> ExpNs a -> List Decl -> List a
 dropLocOfExpanded : (String, String, Loc) -> (String, String)
+dropShadowedWild : Map String Unit -> (a -> String) -> (ImportForm, List a) -> List a
 effectNames : List Decl -> List String
 expandMemberNames : ModuleExports -> UseMember -> List (String, String, Loc)
+explicitImportNames : (Decl -> List String) -> List Decl -> Map String Unit
+explicitOverWild : (a -> String) -> (a -> Bool) -> (Decl -> List a) -> List Decl -> List a
 exportedValueNames : List Decl -> List String
 exportsIn : ExpNs a -> ModuleExports -> List a
 fieldOwnersOf : List Decl -> List (String, String)
@@ -33,8 +37,11 @@ ifaceMethodNm : IfaceMethod -> String
 ifaceMethodPairs : ModuleExports -> List String -> List (String, List String)
 ifaceMethodsOf : String -> List (String, List String) -> List String
 implMethodNm : ImplMethod -> String
+importFormIn : List (List String, Loc) -> Decl -> ImportForm
+importFormsOf : List Decl -> Decl -> ImportForm
 indexExports : ModuleExports -> ModuleExports
 interfaceList : List Decl -> List (String, List String)
+isAliasMethodImport : List (List String, Loc) -> Decl -> Bool
 isNewtypeExport : String -> ModuleExports -> Bool
 isPubExp : ModuleExports -> String -> Bool
 isSubjectIn : List SiblingPair -> String -> Bool
@@ -85,3 +92,5 @@ variantFieldOwners : Variant -> List (String, String)
 viewFor : List SiblingPair -> String -> String -> ExportView
 viewOf : Option String -> String -> ExportView
 withSubjectView : ModuleExports -> Map String ModuleExports -> Option (String, List Decl) -> Map String ModuleExports
+withoutShadowedWild : Map String Unit -> (a -> String) -> (Decl -> List a) -> List Decl -> List a
+writtenImportsOf : List Decl -> List Decl
