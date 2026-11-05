@@ -1,5 +1,5 @@
 # META
-source_lines=439
+source_lines=440
 stages=DESUGAR,MARK
 # SOURCE
 import string.{split}
@@ -334,7 +334,8 @@ wrapMainDecl : Expr -> Decl -> Decl
 wrapMainDecl callee (DFunDef vis "main" [] body site bid) =
   DFunDef vis "main" [] (wrapCall callee site body) site bid
 wrapMainDecl callee (DAttrib a d) = DAttrib a (wrapMainDecl callee d)
-wrapMainDecl _ d = d
+wrapMainDecl _ (d@(DTypeSig _ _ _ _ | DExtern _ | DFunDef _ _ _ _ _ _ | DData {  } | DUse _ _ _ | DEffect _ _ _ _ _ _ | DProp _ _ _ _ | DTest _ _ _ | DInterface {  } | DImpl {  } | DTypeAlias {  } | DNewtype {  } | DLetGroup _ _)) =
+  d
 
 -- `<e>` → `callee <e>`, keeping the body's outer `ELoc` around the application.
 -- A body with none (an application such as `Err "x"`) is located at the `main`
@@ -520,7 +521,7 @@ asyncPinImport driver =
 (DTypeSig false "wrapMainDecl" (TyFun (TyCon "Expr") (TyFun (TyCon "Decl") (TyCon "Decl"))))
 (DFunDef false "wrapMainDecl" ((PVar "callee") (PCon "DFunDef" (PVar "vis") (PLit (LString "main")) (PList) (PVar "body") (PVar "site") (PVar "bid"))) (EApp (EApp (EApp (EApp (EApp (EApp (EVar "DFunDef") (EVar "vis")) (ELit (LString "main"))) (EListLit)) (EApp (EApp (EApp (EVar "wrapCall") (EVar "callee")) (EVar "site")) (EVar "body"))) (EVar "site")) (EVar "bid")))
 (DFunDef false "wrapMainDecl" ((PVar "callee") (PCon "DAttrib" (PVar "a") (PVar "d"))) (EApp (EApp (EVar "DAttrib") (EVar "a")) (EApp (EApp (EVar "wrapMainDecl") (EVar "callee")) (EVar "d"))))
-(DFunDef false "wrapMainDecl" (PWild (PVar "d")) (EVar "d"))
+(DFunDef false "wrapMainDecl" (PWild (PAs "d" (POr (PCon "DTypeSig" PWild PWild PWild PWild) (PCon "DExtern" PWild) (PCon "DFunDef" PWild PWild PWild PWild PWild PWild) (PRec "DData" () false) (PCon "DUse" PWild PWild PWild) (PCon "DEffect" PWild PWild PWild PWild PWild PWild) (PCon "DProp" PWild PWild PWild PWild) (PCon "DTest" PWild PWild PWild) (PRec "DInterface" () false) (PRec "DImpl" () false) (PRec "DTypeAlias" () false) (PRec "DNewtype" () false) (PCon "DLetGroup" PWild PWild)))) (EVar "d"))
 (DTypeSig false "wrapCall" (TyFun (TyCon "Expr") (TyFun (TyCon "Loc") (TyFun (TyCon "Expr") (TyCon "Expr")))))
 (DFunDef false "wrapCall" ((PVar "callee") PWild (PCon "ELoc" (PVar "l") (PVar "inner"))) (EApp (EApp (EVar "ELoc") (EVar "l")) (EApp (EApp (EVar "EApp") (EVar "callee")) (EApp (EApp (EVar "ELoc") (EVar "l")) (EVar "inner")))))
 (DFunDef false "wrapCall" ((PVar "callee") (PVar "site") (PVar "body")) (EApp (EApp (EVar "ELoc") (EVar "site")) (EApp (EApp (EVar "EApp") (EVar "callee")) (EVar "body"))))
@@ -626,7 +627,7 @@ asyncPinImport driver =
 (DTypeSig false "wrapMainDecl" (TyFun (TyCon "Expr") (TyFun (TyCon "Decl") (TyCon "Decl"))))
 (DFunDef false "wrapMainDecl" ((PVar "callee") (PCon "DFunDef" (PVar "vis") (PLit (LString "main")) (PList) (PVar "body") (PVar "site") (PVar "bid"))) (EApp (EApp (EApp (EApp (EApp (EApp (EVar "DFunDef") (EVar "vis")) (ELit (LString "main"))) (EListLit)) (EApp (EApp (EApp (EVar "wrapCall") (EVar "callee")) (EVar "site")) (EVar "body"))) (EVar "site")) (EVar "bid")))
 (DFunDef false "wrapMainDecl" ((PVar "callee") (PCon "DAttrib" (PVar "a") (PVar "d"))) (EApp (EApp (EVar "DAttrib") (EVar "a")) (EApp (EApp (EVar "wrapMainDecl") (EVar "callee")) (EVar "d"))))
-(DFunDef false "wrapMainDecl" (PWild (PVar "d")) (EVar "d"))
+(DFunDef false "wrapMainDecl" (PWild (PAs "d" (POr (PCon "DTypeSig" PWild PWild PWild PWild) (PCon "DExtern" PWild) (PCon "DFunDef" PWild PWild PWild PWild PWild PWild) (PRec "DData" () false) (PCon "DUse" PWild PWild PWild) (PCon "DEffect" PWild PWild PWild PWild PWild PWild) (PCon "DProp" PWild PWild PWild PWild) (PCon "DTest" PWild PWild PWild) (PRec "DInterface" () false) (PRec "DImpl" () false) (PRec "DTypeAlias" () false) (PRec "DNewtype" () false) (PCon "DLetGroup" PWild PWild)))) (EVar "d"))
 (DTypeSig false "wrapCall" (TyFun (TyCon "Expr") (TyFun (TyCon "Loc") (TyFun (TyCon "Expr") (TyCon "Expr")))))
 (DFunDef false "wrapCall" ((PVar "callee") PWild (PCon "ELoc" (PVar "l") (PVar "inner"))) (EApp (EApp (EVar "ELoc") (EVar "l")) (EApp (EApp (EVar "EApp") (EVar "callee")) (EApp (EApp (EVar "ELoc") (EVar "l")) (EVar "inner")))))
 (DFunDef false "wrapCall" ((PVar "callee") (PVar "site") (PVar "body")) (EApp (EApp (EVar "ELoc") (EVar "site")) (EApp (EApp (EVar "EApp") (EVar "callee")) (EVar "body"))))

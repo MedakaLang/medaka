@@ -297,7 +297,7 @@ patNames (PAs _ _ _ p) = patNames p
 patNames (POr ps) = flatMap patNames ps
 patNames (PRec n fields _) = n :: flatMap recFieldNames fields
 patNames (PAnn p ty) = patNames p ++ tyNames ty
-patNames _ = []
+patNames (PVar _ _ _ | PWild | PLit _ | PRng _ _ _) = []
 
 recFieldNames : RecPatField -> List String
 recFieldNames (RecPatField _ _ _ (Some p)) = patNames p
@@ -741,7 +741,7 @@ walkAssign w scope loc x e =
 (DFunDef false "patNames" ((PCon "POr" (PVar "ps"))) (EApp (EApp (EVar "flatMap") (EVar "patNames")) (EVar "ps")))
 (DFunDef false "patNames" ((PCon "PRec" (PVar "n") (PVar "fields") PWild)) (EBinOp "::" (EVar "n") (EApp (EApp (EVar "flatMap") (EVar "recFieldNames")) (EVar "fields"))))
 (DFunDef false "patNames" ((PCon "PAnn" (PVar "p") (PVar "ty"))) (EBinOp "++" (EApp (EVar "patNames") (EVar "p")) (EApp (EVar "tyNames") (EVar "ty"))))
-(DFunDef false "patNames" (PWild) (EListLit))
+(DFunDef false "patNames" ((POr (PCon "PVar" PWild PWild PWild) (PCon "PWild") (PCon "PLit" PWild) (PCon "PRng" PWild PWild PWild))) (EListLit))
 (DTypeSig false "recFieldNames" (TyFun (TyCon "RecPatField") (TyApp (TyCon "List") (TyCon "String"))))
 (DFunDef false "recFieldNames" ((PCon "RecPatField" PWild PWild PWild (PCon "Some" (PVar "p")))) (EApp (EVar "patNames") (EVar "p")))
 (DFunDef false "recFieldNames" (PWild) (EListLit))
@@ -1010,7 +1010,7 @@ walkAssign w scope loc x e =
 (DFunDef false "patNames" ((PCon "POr" (PVar "ps"))) (EApp (EApp (EDictApp "flatMap") (EVar "patNames")) (EVar "ps")))
 (DFunDef false "patNames" ((PCon "PRec" (PVar "n") (PVar "fields") PWild)) (EBinOp "::" (EVar "n") (EApp (EApp (EDictApp "flatMap") (EVar "recFieldNames")) (EVar "fields"))))
 (DFunDef false "patNames" ((PCon "PAnn" (PVar "p") (PVar "ty"))) (EBinOp "++" (EApp (EVar "patNames") (EVar "p")) (EApp (EVar "tyNames") (EVar "ty"))))
-(DFunDef false "patNames" (PWild) (EListLit))
+(DFunDef false "patNames" ((POr (PCon "PVar" PWild PWild PWild) (PCon "PWild") (PCon "PLit" PWild) (PCon "PRng" PWild PWild PWild))) (EListLit))
 (DTypeSig false "recFieldNames" (TyFun (TyCon "RecPatField") (TyApp (TyCon "List") (TyCon "String"))))
 (DFunDef false "recFieldNames" ((PCon "RecPatField" PWild PWild PWild (PCon "Some" (PVar "p")))) (EApp (EVar "patNames") (EVar "p")))
 (DFunDef false "recFieldNames" (PWild) (EListLit))

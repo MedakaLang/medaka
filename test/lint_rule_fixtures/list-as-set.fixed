@@ -57,6 +57,14 @@ foldDedup xs =
   -- expect-next-line rule-list-as-set unfixed
   fold (acc x => if contains x acc then acc else x :: acc) [] xs
 
+-- a fold lambda whose block body ends by consing onto the tested accumulator
+foldBlockDedup : List String -> List String
+foldBlockDedup xs =
+  fold (acc x =>
+    -- expect-next-line rule-list-as-set unfixed
+    let seen = contains x acc
+    if seen then acc else x :: acc) [] xs
+
 -- a fold lambda that only tests its accumulator
 foldTestOnly : List String -> Bool
 foldTestOnly xs = fold (acc x => acc && contains x xs) True xs

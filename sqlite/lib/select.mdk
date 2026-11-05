@@ -1357,7 +1357,7 @@ compileOperand _ (EAgg fn _) =
 -- `EIsNull`/`ENotNull`) are not usable as VALUE operands — a pre-existing
 -- limitation this task does not extend (real SQLite treats a boolean as an
 -- Int 0/1/NULL value; this engine does not, for ANY of these nodes).
-compileOperand _lookup _ =
+compileOperand _lookup (EBin _ _ _ | EAnd _ _ | EOr _ _ | ENot _ | EIsNull _ | ENotNull _ | ELike _ _ | EIn _ _ | EInSubquery _ _) =
   Err "compilePred: operand must be a column or literal"
 
 -- | Compile any `SqlExpr` value operand to a per-row `List Cell -> Cell`

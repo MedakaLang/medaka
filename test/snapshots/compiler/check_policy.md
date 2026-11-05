@@ -1,5 +1,5 @@
 # META
-source_lines=767
+source_lines=768
 stages=DESUGAR,MARK
 # SOURCE
 import types.capability_manifest.{
@@ -479,7 +479,8 @@ isStringCon : Mono -> Bool
 isStringCon (TCon "String" _) = True
 -- A named argument's type is `String @κ`; the qualifier erases before runtime.
 isStringCon (TQual t _) = isStringCon (normalize t)
-isStringCon _ = False
+isStringCon (TVar _ | TCon _ _ | TRigid _ | TApp _ _ | TFun _ _ _ | TEff _ | TAuth _) =
+  False
 
 firstOf : List String -> String
 firstOf [] = ""
@@ -683,7 +684,7 @@ frozenVars (FrozenJoin members) vars =
   fold (acc a => frozenVars a acc) vars members
 frozenVars (FrozenProduct axes) vars =
   fold (acc a => frozenVars (snd a) acc) vars axes
-frozenVars _ vars = vars
+frozenVars (FrozenConst _) vars = vars
 
 frozenVariablesWhy : List FrozenVariable -> String
 frozenVariablesWhy vars = match map (v => "`" ++ frozenVarName v ++ "`") vars
@@ -860,7 +861,7 @@ joinSemiTok xs = joinWith ";" xs
 (DTypeSig false "isStringCon" (TyFun (TyCon "Mono") (TyCon "Bool")))
 (DFunDef false "isStringCon" ((PCon "TCon" (PLit (LString "String")) PWild)) (EVar "True"))
 (DFunDef false "isStringCon" ((PCon "TQual" (PVar "t") PWild)) (EApp (EVar "isStringCon") (EApp (EVar "normalize") (EVar "t"))))
-(DFunDef false "isStringCon" (PWild) (EVar "False"))
+(DFunDef false "isStringCon" ((POr (PCon "TVar" PWild) (PCon "TCon" PWild PWild) (PCon "TRigid" PWild) (PCon "TApp" PWild PWild) (PCon "TFun" PWild PWild PWild) (PCon "TEff" PWild) (PCon "TAuth" PWild))) (EVar "False"))
 (DTypeSig false "firstOf" (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyCon "String")))
 (DFunDef false "firstOf" ((PList)) (ELit (LString "")))
 (DFunDef false "firstOf" ((PCons (PVar "x") PWild)) (EVar "x"))
@@ -924,7 +925,7 @@ joinSemiTok xs = joinWith ";" xs
 (DFunDef false "frozenVars" ((PCon "FrozenVar" (PVar "v")) (PVar "vars")) (EApp (EApp (EApp (EVar "FV.set") (EFieldAccess (EVar "v") "localId")) (EVar "v")) (EVar "vars")))
 (DFunDef false "frozenVars" ((PCon "FrozenJoin" (PVar "members")) (PVar "vars")) (EApp (EApp (EApp (EVar "fold") (ELam ((PVar "acc") (PVar "a")) (EApp (EApp (EVar "frozenVars") (EVar "a")) (EVar "acc")))) (EVar "vars")) (EVar "members")))
 (DFunDef false "frozenVars" ((PCon "FrozenProduct" (PVar "axes")) (PVar "vars")) (EApp (EApp (EApp (EVar "fold") (ELam ((PVar "acc") (PVar "a")) (EApp (EApp (EVar "frozenVars") (EApp (EVar "snd") (EVar "a"))) (EVar "acc")))) (EVar "vars")) (EVar "axes")))
-(DFunDef false "frozenVars" (PWild (PVar "vars")) (EVar "vars"))
+(DFunDef false "frozenVars" ((PCon "FrozenConst" PWild) (PVar "vars")) (EVar "vars"))
 (DTypeSig false "frozenVariablesWhy" (TyFun (TyApp (TyCon "List") (TyCon "FrozenVariable")) (TyCon "String")))
 (DFunDef false "frozenVariablesWhy" ((PVar "vars")) (EMatch (EApp (EApp (EVar "map") (ELam ((PVar "v")) (EBinOp "++" (EBinOp "++" (ELit (LString "`")) (EApp (EVar "frozenVarName") (EVar "v"))) (ELit (LString "`"))))) (EVar "vars")) (arm (PList (PVar "one")) () (EBinOp "++" (EBinOp "++" (ELit (LString "authority variable ")) (EApp (EVar "display") (EVar "one"))) (ELit (LString "")))) (arm (PVar "names") () (EBinOp "++" (EBinOp "++" (ELit (LString "authority variables ")) (EApp (EVar "display") (EApp (EApp (EVar "joinWith") (ELit (LString ", "))) (EVar "names")))) (ELit (LString ""))))))
 (DTypeSig true "frozenAtomText" (TyFun (TyCon "FrozenAtom") (TyCon "String")))
@@ -1046,7 +1047,7 @@ joinSemiTok xs = joinWith ";" xs
 (DTypeSig false "isStringCon" (TyFun (TyCon "Mono") (TyCon "Bool")))
 (DFunDef false "isStringCon" ((PCon "TCon" (PLit (LString "String")) PWild)) (EVar "True"))
 (DFunDef false "isStringCon" ((PCon "TQual" (PVar "t") PWild)) (EApp (EVar "isStringCon") (EApp (EVar "normalize") (EVar "t"))))
-(DFunDef false "isStringCon" (PWild) (EVar "False"))
+(DFunDef false "isStringCon" ((POr (PCon "TVar" PWild) (PCon "TCon" PWild PWild) (PCon "TRigid" PWild) (PCon "TApp" PWild PWild) (PCon "TFun" PWild PWild PWild) (PCon "TEff" PWild) (PCon "TAuth" PWild))) (EVar "False"))
 (DTypeSig false "firstOf" (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyCon "String")))
 (DFunDef false "firstOf" ((PList)) (ELit (LString "")))
 (DFunDef false "firstOf" ((PCons (PVar "x") PWild)) (EVar "x"))
@@ -1110,7 +1111,7 @@ joinSemiTok xs = joinWith ";" xs
 (DFunDef false "frozenVars" ((PCon "FrozenVar" (PVar "v")) (PVar "vars")) (EApp (EApp (EApp (EVar "FV.set") (EFieldAccess (EVar "v") "localId")) (EVar "v")) (EVar "vars")))
 (DFunDef false "frozenVars" ((PCon "FrozenJoin" (PVar "members")) (PVar "vars")) (EApp (EApp (EApp (EMethodRef "fold") (ELam ((PVar "acc") (PVar "a")) (EApp (EApp (EVar "frozenVars") (EVar "a")) (EVar "acc")))) (EVar "vars")) (EVar "members")))
 (DFunDef false "frozenVars" ((PCon "FrozenProduct" (PVar "axes")) (PVar "vars")) (EApp (EApp (EApp (EMethodRef "fold") (ELam ((PVar "acc") (PVar "a")) (EApp (EApp (EVar "frozenVars") (EApp (EVar "snd") (EVar "a"))) (EVar "acc")))) (EVar "vars")) (EVar "axes")))
-(DFunDef false "frozenVars" (PWild (PVar "vars")) (EVar "vars"))
+(DFunDef false "frozenVars" ((PCon "FrozenConst" PWild) (PVar "vars")) (EVar "vars"))
 (DTypeSig false "frozenVariablesWhy" (TyFun (TyApp (TyCon "List") (TyCon "FrozenVariable")) (TyCon "String")))
 (DFunDef false "frozenVariablesWhy" ((PVar "vars")) (EMatch (EApp (EApp (EMethodRef "map") (ELam ((PVar "v")) (EBinOp "++" (EBinOp "++" (ELit (LString "`")) (EApp (EVar "frozenVarName") (EVar "v"))) (ELit (LString "`"))))) (EVar "vars")) (arm (PList (PVar "one")) () (EBinOp "++" (EBinOp "++" (ELit (LString "authority variable ")) (EApp (EMethodRef "display") (EVar "one"))) (ELit (LString "")))) (arm (PVar "names") () (EBinOp "++" (EBinOp "++" (ELit (LString "authority variables ")) (EApp (EMethodRef "display") (EApp (EApp (EVar "joinWith") (ELit (LString ", "))) (EVar "names")))) (ELit (LString ""))))))
 (DTypeSig true "frozenAtomText" (TyFun (TyCon "FrozenAtom") (TyCon "String")))

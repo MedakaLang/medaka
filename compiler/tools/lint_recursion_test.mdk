@@ -170,3 +170,13 @@ test "foldRight's accumulator is its second parameter" =
 
 test "a call that is not a fold is NotAFold" =
   expectEqual NotAFold (foldOf "g xs = map (x => x ++ [x]) xs\n")
+
+test "an append at the end of a fold lambda's let block counts" =
+  expectEqual
+    FoldAppends
+    (foldOf "g xs = fold (acc x =>\n    let y = x\n    acc ++ [y]) [] xs\n")
+
+test "a statement block that ends in a cons is not an append" =
+  expectEqual
+    FoldPlain
+    (foldOf "g xs = fold (acc x =>\n    let y = x\n    y :: acc) [] xs\n")

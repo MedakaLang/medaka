@@ -116,7 +116,7 @@ templateOf (EBinOp op a b r) = match (templateOf a, templateOf b)
   (Ok a2, Ok b2) => Ok (EBinOp op a2 b2 r)
   (Err m, _) => Err m
   (_, Err m) => Err m
-templateOf _ =
+templateOf (ELam _ _ | ELet _ _ _ _ _ | EMatch _ _ | EIf _ _ _ | EUnOp _ _ _ | EInfix _ _ _ | EFieldAccess _ _ _ | ETuple _ | EArrayLit _ | ERangeList _ _ _ | ERangeArray _ _ _ | ESlice _ _ _ _ | ELetGroup _ _ | ESection _ | EIndex _ _ | EAnnot _ _ | EHeadAnnot _ _ | EBlock _ | EDo _ _ | EStringInterp _ | EGuards _ | ERecordCreate _ _ | ERecordUpdate _ _ _ | EVariantUpdate _ _ _ | EMapLit _ _ | ESetLit _ _ | EAsPat _ _ | EOrPat _ | EMethodRef _ | EDictApp _ | EVarAt _ _ | EVarId _ _ | EMethodAt _ _ _ | EDictAt _ _ | EDoOrigin _ _ | EWideLit _ _ _ _ | EListLit _) =
   Err "a template holds only names, literals, `[]`, applications and operators"
 
 -- The lowercase literal names a right side writes: the names the rewrite
@@ -125,13 +125,15 @@ introducedOf : Expr -> List String
 introducedOf (EVar n) = if isMeta n || not (isHeadName n) then [] else [n]
 introducedOf (EApp f x) = nub (introducedOf f ++ introducedOf x)
 introducedOf (EBinOp _ a b _) = nub (introducedOf a ++ introducedOf b)
-introducedOf _ = []
+introducedOf (ELit _ | ELam _ _ | ELet _ _ _ _ _ | EMatch _ _ | EIf _ _ _ | EUnOp _ _ _ | EInfix _ _ _ | EFieldAccess _ _ _ | ETuple _ | EListLit _ | EArrayLit _ | ERangeList _ _ _ | ERangeArray _ _ _ | ESlice _ _ _ _ | ELetGroup _ _ | ESection _ | EIndex _ _ | EAnnot _ _ | EHeadAnnot _ _ | EBlock _ | EDo _ _ | EStringInterp _ | EGuards _ | ERecordCreate _ _ | ERecordUpdate _ _ _ | EVariantUpdate _ _ _ | EMapLit _ _ | ESetLit _ _ | EAsPat _ _ | EOrPat _ | EMethodRef _ | EDictApp _ | EVarAt _ _ | EVarId _ _ | EMethodAt _ _ _ | EDictAt _ _ | ELoc _ _ | EDoOrigin _ _ | ENumLit _ _ _ | EWideLit _ _ _ _) =
+  []
 
 metasOf : Expr -> List String
 metasOf (EVar n) = if isMeta n then [n] else []
 metasOf (EApp f x) = metasOf f ++ metasOf x
 metasOf (EBinOp _ a b _) = metasOf a ++ metasOf b
-metasOf _ = []
+metasOf (ELit _ | ELam _ _ | ELet _ _ _ _ _ | EMatch _ _ | EIf _ _ _ | EUnOp _ _ _ | EInfix _ _ _ | EFieldAccess _ _ _ | ETuple _ | EListLit _ | EArrayLit _ | ERangeList _ _ _ | ERangeArray _ _ _ | ESlice _ _ _ _ | ELetGroup _ _ | ESection _ | EIndex _ _ | EAnnot _ _ | EHeadAnnot _ _ | EBlock _ | EDo _ _ | EStringInterp _ | EGuards _ | ERecordCreate _ _ | ERecordUpdate _ _ _ | EVariantUpdate _ _ _ | EMapLit _ _ | ESetLit _ _ | EAsPat _ _ | EOrPat _ | EMethodRef _ | EDictApp _ | EVarAt _ _ | EVarId _ _ | EMethodAt _ _ _ | EDictAt _ _ | ELoc _ _ | EDoOrigin _ _ | ENumLit _ _ _ | EWideLit _ _ _ _) =
+  []
 
 tmplOf : Expr -> Tmpl
 tmplOf (EVar n) = if isMeta n then TMeta n else TName n (isHeadName n)
@@ -307,7 +309,8 @@ fill : List (String, Expr) -> Expr -> Expr
 fill binds (EVar n) = optionOr (EVar n) (lookupAssoc n binds)
 fill binds (EApp f x) = EApp (fill binds f) (fill binds x)
 fill binds (EBinOp op a b r) = EBinOp op (fill binds a) (fill binds b) r
-fill _ e = e
+fill _ (e@(ELit _ | ELam _ _ | ELet _ _ _ _ _ | EMatch _ _ | EIf _ _ _ | EUnOp _ _ _ | EInfix _ _ _ | EFieldAccess _ _ _ | ETuple _ | EListLit _ | EArrayLit _ | ERangeList _ _ _ | ERangeArray _ _ _ | ESlice _ _ _ _ | ELetGroup _ _ | ESection _ | EIndex _ _ | EAnnot _ _ | EHeadAnnot _ _ | EBlock _ | EDo _ _ | EStringInterp _ | EGuards _ | ERecordCreate _ _ | ERecordUpdate _ _ _ | EVariantUpdate _ _ _ | EMapLit _ _ | ESetLit _ _ | EAsPat _ _ | EOrPat _ | EMethodRef _ | EDictApp _ | EVarAt _ _ | EVarId _ _ | EMethodAt _ _ _ | EDictAt _ _ | ELoc _ _ | EDoOrigin _ _ | ENumLit _ _ _ | EWideLit _ _ _ _)) =
+  e
 
 -- ── the rule ─────────────────────────────────────────────────────────────────
 

@@ -67,7 +67,8 @@ isPureDataExpr e =
     EAnnot inner _ => isPureDataExpr inner
     EUnOp _ inner _ => isPureDataExpr inner
     EApp _ _ if appHeadIsCtor e2 => allList isPureDataExpr (appArgs e2)
-    _ => False
+    ELam _ _ | ELet _ _ _ _ _ | EMatch _ _ | EIf _ _ _ | EBinOp _ _ _ _ | EInfix _ _ _ | EFieldAccess _ _ _ | ERangeList _ _ _ | ERangeArray _ _ _ | ESlice _ _ _ _ | ELetGroup _ _ | ESection _ | EIndex _ _ | EHeadAnnot _ _ | EBlock _ | EDo _ _ | EStringInterp _ | EGuards _ | ERecordUpdate _ _ _ | EVariantUpdate _ _ _ | EAsPat _ _ | EOrPat _ | EMethodRef _ | EDictApp _ | EVarAt _ _ | EVarId _ _ | EMethodAt _ _ _ | EDictAt _ _ | ELoc _ _ | EDoOrigin _ _ | EApp _ _ =>
+      False
 
 isPureDataField : FieldAssign -> Bool
 isPureDataField (FieldAssign _ e) = isPureDataExpr e
@@ -250,7 +251,8 @@ dupClauseOfDecl (d, loc) = match d
     },
   ]
   DAttrib _ inner => dupClauseOfDecl (inner, loc)
-  _ => []
+  DTypeSig _ _ _ _ | DExtern _ | DData {  } | DUse _ _ _ | DEffect _ _ _ _ _ _ | DProp _ _ _ _ | DTest _ _ _ | DInterface {  } | DImpl {  } | DTypeAlias {  } | DNewtype {  } | DLetGroup _ _ =>
+    []
 
 -- Clauses of one function are adjacent in the decl list, so consecutive runs of
 -- a name group them.  Grouping by name across the whole file instead would fuse

@@ -1,5 +1,5 @@
 # META
-source_lines=2012
+source_lines=2013
 stages=DESUGAR,MARK
 # SOURCE
 -- compiler/tools/refindex.mdk — cross-file reference index (#254 Stage 0).
@@ -592,7 +592,8 @@ walkExpr w scope curLoc (ESetLit _ es) = walkEach w scope curLoc es
 walkExpr w scope curLoc (EAsPat _ e0) = walkExpr w scope curLoc e0
 walkExpr w scope curLoc (EOrPat es) = walkEach w scope curLoc es
 walkExpr w scope curLoc (ESection s) = walkSection w scope curLoc s
-walkExpr _ _ _ _ = ()
+walkExpr _ _ _ (ELit _ | EMethodRef _ | EDictApp _ | EVarAt _ _ | EVarId _ _ | EMethodAt _ _ _ | EDictAt _ _ | ENumLit _ _ _ | EWideLit _ _ _ _) =
+  ()
 
 -- alias-qualified `A.f` vs a genuine record field access `record.field`.
 walkFieldAccess : W ->
@@ -2149,7 +2150,7 @@ splitLastL (x :: rest) = map ((pre, last) => (x :: pre, last)) (splitLastL rest)
 (DFunDef false "walkExpr" ((PVar "w") (PVar "scope") (PVar "curLoc") (PCon "EAsPat" PWild (PVar "e0"))) (EApp (EApp (EApp (EApp (EVar "walkExpr") (EVar "w")) (EVar "scope")) (EVar "curLoc")) (EVar "e0")))
 (DFunDef false "walkExpr" ((PVar "w") (PVar "scope") (PVar "curLoc") (PCon "EOrPat" (PVar "es"))) (EApp (EApp (EApp (EApp (EVar "walkEach") (EVar "w")) (EVar "scope")) (EVar "curLoc")) (EVar "es")))
 (DFunDef false "walkExpr" ((PVar "w") (PVar "scope") (PVar "curLoc") (PCon "ESection" (PVar "s"))) (EApp (EApp (EApp (EApp (EVar "walkSection") (EVar "w")) (EVar "scope")) (EVar "curLoc")) (EVar "s")))
-(DFunDef false "walkExpr" (PWild PWild PWild PWild) (ELit LUnit))
+(DFunDef false "walkExpr" (PWild PWild PWild (POr (PCon "ELit" PWild) (PCon "EMethodRef" PWild) (PCon "EDictApp" PWild) (PCon "EVarAt" PWild PWild) (PCon "EVarId" PWild PWild) (PCon "EMethodAt" PWild PWild PWild) (PCon "EDictAt" PWild PWild) (PCon "ENumLit" PWild PWild PWild) (PCon "EWideLit" PWild PWild PWild PWild))) (ELit LUnit))
 (DTypeSig false "walkFieldAccess" (TyFun (TyCon "W") (TyFun (TyApp (TyCon "List") (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "String")))) (TyFun (TyCon "Loc") (TyFun (TyCon "Expr") (TyFun (TyCon "String") (TyCon "Unit")))))))
 (DFunDef false "walkFieldAccess" ((PVar "w") (PVar "scope") (PVar "curLoc") (PVar "e0") (PVar "f")) (EMatch (EApp (EApp (EVar "aliasHeadOf") (EVar "w")) (EApp (EVar "peelLoc") (EVar "e0"))) (arm (PCon "Some" (PVar "srcMod")) () (EApp (EApp (EApp (EApp (EVar "recordRef") (EApp (EVar "ctxOf") (EVar "w"))) (EApp (EApp (EApp (EVar "aliasOriginKey") (EVar "w")) (EVar "srcMod")) (EVar "f"))) (EApp (EVar "uriOf") (EVar "w"))) (EVar "curLoc"))) (arm (PCon "None") () (EBlock (DoExpr (EApp (EApp (EApp (EApp (EVar "recordRef") (EApp (EVar "ctxOf") (EVar "w"))) (EApp (EApp (EVar "resolveField") (EVar "w")) (EVar "f"))) (EApp (EVar "uriOf") (EVar "w"))) (EVar "curLoc"))) (DoExpr (EApp (EApp (EApp (EApp (EVar "walkExpr") (EVar "w")) (EVar "scope")) (EVar "curLoc")) (EVar "e0")))))))
 (DTypeSig false "aliasHeadOf" (TyFun (TyCon "W") (TyFun (TyCon "Expr") (TyApp (TyCon "Option") (TyCon "String")))))
@@ -2707,7 +2708,7 @@ splitLastL (x :: rest) = map ((pre, last) => (x :: pre, last)) (splitLastL rest)
 (DFunDef false "walkExpr" ((PVar "w") (PVar "scope") (PVar "curLoc") (PCon "EAsPat" PWild (PVar "e0"))) (EApp (EApp (EApp (EApp (EVar "walkExpr") (EVar "w")) (EVar "scope")) (EVar "curLoc")) (EVar "e0")))
 (DFunDef false "walkExpr" ((PVar "w") (PVar "scope") (PVar "curLoc") (PCon "EOrPat" (PVar "es"))) (EApp (EApp (EApp (EApp (EVar "walkEach") (EVar "w")) (EVar "scope")) (EVar "curLoc")) (EVar "es")))
 (DFunDef false "walkExpr" ((PVar "w") (PVar "scope") (PVar "curLoc") (PCon "ESection" (PVar "s"))) (EApp (EApp (EApp (EApp (EVar "walkSection") (EVar "w")) (EVar "scope")) (EVar "curLoc")) (EVar "s")))
-(DFunDef false "walkExpr" (PWild PWild PWild PWild) (ELit LUnit))
+(DFunDef false "walkExpr" (PWild PWild PWild (POr (PCon "ELit" PWild) (PCon "EMethodRef" PWild) (PCon "EDictApp" PWild) (PCon "EVarAt" PWild PWild) (PCon "EVarId" PWild PWild) (PCon "EMethodAt" PWild PWild PWild) (PCon "EDictAt" PWild PWild) (PCon "ENumLit" PWild PWild PWild) (PCon "EWideLit" PWild PWild PWild PWild))) (ELit LUnit))
 (DTypeSig false "walkFieldAccess" (TyFun (TyCon "W") (TyFun (TyApp (TyCon "List") (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "String")))) (TyFun (TyCon "Loc") (TyFun (TyCon "Expr") (TyFun (TyCon "String") (TyCon "Unit")))))))
 (DFunDef false "walkFieldAccess" ((PVar "w") (PVar "scope") (PVar "curLoc") (PVar "e0") (PVar "f")) (EMatch (EApp (EApp (EVar "aliasHeadOf") (EVar "w")) (EApp (EVar "peelLoc") (EVar "e0"))) (arm (PCon "Some" (PVar "srcMod")) () (EApp (EApp (EApp (EApp (EVar "recordRef") (EApp (EVar "ctxOf") (EVar "w"))) (EApp (EApp (EApp (EVar "aliasOriginKey") (EVar "w")) (EVar "srcMod")) (EVar "f"))) (EApp (EVar "uriOf") (EVar "w"))) (EVar "curLoc"))) (arm (PCon "None") () (EBlock (DoExpr (EApp (EApp (EApp (EApp (EVar "recordRef") (EApp (EVar "ctxOf") (EVar "w"))) (EApp (EApp (EVar "resolveField") (EVar "w")) (EVar "f"))) (EApp (EVar "uriOf") (EVar "w"))) (EVar "curLoc"))) (DoExpr (EApp (EApp (EApp (EApp (EVar "walkExpr") (EVar "w")) (EVar "scope")) (EVar "curLoc")) (EVar "e0")))))))
 (DTypeSig false "aliasHeadOf" (TyFun (TyCon "W") (TyFun (TyCon "Expr") (TyApp (TyCon "Option") (TyCon "String")))))

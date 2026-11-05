@@ -146,7 +146,8 @@ patIrrefutable orc (PCon c ps) =
 patIrrefutable orc (PRec c fs _) =
   ctorIsSingle orc c && allList (recPatFieldIrrefutable orc) fs
 patIrrefutable orc (PAs _ _ _ p) = patIrrefutable orc p
-patIrrefutable _ _ = False
+patIrrefutable _ (PLit _ | PCons _ _ | PList _ | POr _ | PRng _ _ _ | PAnn _ _) =
+  False
 
 recPatFieldIrrefutable : Oracle -> RecPatField -> Bool
 recPatFieldIrrefutable _ (RecPatField _ _ _ None) = True

@@ -330,7 +330,8 @@ wrapMainDecl : Expr -> Decl -> Decl
 wrapMainDecl callee (DFunDef vis "main" [] body site bid) =
   DFunDef vis "main" [] (wrapCall callee site body) site bid
 wrapMainDecl callee (DAttrib a d) = DAttrib a (wrapMainDecl callee d)
-wrapMainDecl _ d = d
+wrapMainDecl _ (d@(DTypeSig _ _ _ _ | DExtern _ | DFunDef _ _ _ _ _ _ | DData {  } | DUse _ _ _ | DEffect _ _ _ _ _ _ | DProp _ _ _ _ | DTest _ _ _ | DInterface {  } | DImpl {  } | DTypeAlias {  } | DNewtype {  } | DLetGroup _ _)) =
+  d
 
 -- `<e>` → `callee <e>`, keeping the body's outer `ELoc` around the application.
 -- A body with none (an application such as `Err "x"`) is located at the `main`

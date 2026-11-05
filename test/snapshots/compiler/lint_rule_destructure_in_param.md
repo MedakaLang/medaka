@@ -1,5 +1,5 @@
 # META
-source_lines=180
+source_lines=181
 stages=DESUGAR,MARK
 # SOURCE
 -- lint rule rule-destructure-in-param: a single-arm irrefutable `match` on a bare parameter. Destructure in the parameter position.
@@ -150,7 +150,8 @@ patIrrefutable orc (PCon c ps) =
 patIrrefutable orc (PRec c fs _) =
   ctorIsSingle orc c && allList (recPatFieldIrrefutable orc) fs
 patIrrefutable orc (PAs _ _ _ p) = patIrrefutable orc p
-patIrrefutable _ _ = False
+patIrrefutable _ (PLit _ | PCons _ _ | PList _ | POr _ | PRng _ _ _ | PAnn _ _) =
+  False
 
 recPatFieldIrrefutable : Oracle -> RecPatField -> Bool
 recPatFieldIrrefutable _ (RecPatField _ _ _ None) = True
@@ -216,7 +217,7 @@ destructureInParamFixArms _ _ _ _ _ _ _ = None
 (DFunDef false "patIrrefutable" ((PVar "orc") (PCon "PCon" (PVar "c") (PVar "ps"))) (EBinOp "&&" (EApp (EApp (EVar "ctorIsSingle") (EVar "orc")) (EVar "c")) (EApp (EApp (EVar "allList") (EApp (EVar "patIrrefutable") (EVar "orc"))) (EVar "ps"))))
 (DFunDef false "patIrrefutable" ((PVar "orc") (PCon "PRec" (PVar "c") (PVar "fs") PWild)) (EBinOp "&&" (EApp (EApp (EVar "ctorIsSingle") (EVar "orc")) (EVar "c")) (EApp (EApp (EVar "allList") (EApp (EVar "recPatFieldIrrefutable") (EVar "orc"))) (EVar "fs"))))
 (DFunDef false "patIrrefutable" ((PVar "orc") (PCon "PAs" PWild PWild PWild (PVar "p"))) (EApp (EApp (EVar "patIrrefutable") (EVar "orc")) (EVar "p")))
-(DFunDef false "patIrrefutable" (PWild PWild) (EVar "False"))
+(DFunDef false "patIrrefutable" (PWild (POr (PCon "PLit" PWild) (PCon "PCons" PWild PWild) (PCon "PList" PWild) (PCon "POr" PWild) (PCon "PRng" PWild PWild PWild) (PCon "PAnn" PWild PWild))) (EVar "False"))
 (DTypeSig false "recPatFieldIrrefutable" (TyFun (TyCon "Oracle") (TyFun (TyCon "RecPatField") (TyCon "Bool"))))
 (DFunDef false "recPatFieldIrrefutable" (PWild (PCon "RecPatField" PWild PWild PWild (PCon "None"))) (EVar "True"))
 (DFunDef false "recPatFieldIrrefutable" ((PVar "orc") (PCon "RecPatField" PWild PWild PWild (PCon "Some" (PVar "p")))) (EApp (EApp (EVar "patIrrefutable") (EVar "orc")) (EVar "p")))
@@ -260,7 +261,7 @@ destructureInParamFixArms _ _ _ _ _ _ _ = None
 (DFunDef false "patIrrefutable" ((PVar "orc") (PCon "PCon" (PVar "c") (PVar "ps"))) (EBinOp "&&" (EApp (EApp (EVar "ctorIsSingle") (EVar "orc")) (EVar "c")) (EApp (EApp (EVar "allList") (EApp (EVar "patIrrefutable") (EVar "orc"))) (EVar "ps"))))
 (DFunDef false "patIrrefutable" ((PVar "orc") (PCon "PRec" (PVar "c") (PVar "fs") PWild)) (EBinOp "&&" (EApp (EApp (EVar "ctorIsSingle") (EVar "orc")) (EVar "c")) (EApp (EApp (EVar "allList") (EApp (EVar "recPatFieldIrrefutable") (EVar "orc"))) (EVar "fs"))))
 (DFunDef false "patIrrefutable" ((PVar "orc") (PCon "PAs" PWild PWild PWild (PVar "p"))) (EApp (EApp (EVar "patIrrefutable") (EVar "orc")) (EVar "p")))
-(DFunDef false "patIrrefutable" (PWild PWild) (EVar "False"))
+(DFunDef false "patIrrefutable" (PWild (POr (PCon "PLit" PWild) (PCon "PCons" PWild PWild) (PCon "PList" PWild) (PCon "POr" PWild) (PCon "PRng" PWild PWild PWild) (PCon "PAnn" PWild PWild))) (EVar "False"))
 (DTypeSig false "recPatFieldIrrefutable" (TyFun (TyCon "Oracle") (TyFun (TyCon "RecPatField") (TyCon "Bool"))))
 (DFunDef false "recPatFieldIrrefutable" (PWild (PCon "RecPatField" PWild PWild PWild (PCon "None"))) (EVar "True"))
 (DFunDef false "recPatFieldIrrefutable" ((PVar "orc") (PCon "RecPatField" PWild PWild PWild (PCon "Some" (PVar "p")))) (EApp (EApp (EVar "patIrrefutable") (EVar "orc")) (EVar "p")))

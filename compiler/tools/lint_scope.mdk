@@ -293,7 +293,7 @@ patNames (PAs _ _ _ p) = patNames p
 patNames (POr ps) = flatMap patNames ps
 patNames (PRec n fields _) = n :: flatMap recFieldNames fields
 patNames (PAnn p ty) = patNames p ++ tyNames ty
-patNames _ = []
+patNames (PVar _ _ _ | PWild | PLit _ | PRng _ _ _) = []
 
 recFieldNames : RecPatField -> List String
 recFieldNames (RecPatField _ _ _ (Some p)) = patNames p

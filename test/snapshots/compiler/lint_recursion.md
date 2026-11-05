@@ -1,5 +1,5 @@
 # META
-source_lines=340
+source_lines=344
 stages=DESUGAR,MARK
 # SOURCE
 -- compiler/tools/lint_recursion.mdk — the shared reader of self-recursion: the
@@ -37,7 +37,7 @@ import frontend.ast.{
   patBoundNames,
 }
 import frontend.ast_walk.{childExprs}
-import list.{findMap, get}
+import list.{findMap, get, last}
 import tools.lint_calls.{lastSegment}
 import tools.lint_scope.{Binder(..), BinderKind(..), FileScopes, binderOf}
 import tools.lint_shared.{mentionsVar, unwrapLoc, varSite}
@@ -332,7 +332,11 @@ tailAppends acc e = match unwrapLoc e
   EMatch _ arms => any (armAppends acc) arms
   ELet _ _ _ _ body => tailAppends acc body
   ELetGroup _ body => tailAppends acc body
-  _ => False
+  EBlock stmts => match last stmts
+    Some (DoExpr l) => tailAppends acc l
+    _ => False
+  ELit _ | EVar _ | EApp _ _ | ELam _ _ | EUnOp _ _ _ | EInfix _ _ _ | EFieldAccess _ _ _ | ETuple _ | EListLit _ | EArrayLit _ | ERangeList _ _ _ | ERangeArray _ _ _ | ESlice _ _ _ _ | ESection _ | EIndex _ _ | EAnnot _ _ | EHeadAnnot _ _ | EDo _ _ | EStringInterp _ | EGuards _ | ERecordCreate _ _ | ERecordUpdate _ _ _ | EVariantUpdate _ _ _ | EMapLit _ _ | ESetLit _ _ | EAsPat _ _ | EOrPat _ | EMethodRef _ | EDictApp _ | EVarAt _ _ | EVarId _ _ | EMethodAt _ _ _ | EDictAt _ _ | ELoc _ _ | EDoOrigin _ _ | ENumLit _ _ _ | EWideLit _ _ _ _ | EBinOp _ _ _ _ =>
+    False
 
 leftIsAcc : String -> Expr -> Bool
 leftIsAcc acc a = match unwrapLoc a
@@ -345,7 +349,7 @@ armAppends acc (Arm _ _ body) = tailAppends acc body
 # DESUGAR
 (DUse false (UseGroup ("frontend" "ast") ((mem "Arm" true) (mem "DoStmt" true) (mem "Expr" true) (mem "FunClause" true) (mem "Guard" true) (mem "GuardArm" true) (mem "LetBind" true) (mem "Loc" false) (mem "Pat" true) (mem "patBoundNames" false))))
 (DUse false (UseGroup ("frontend" "ast_walk") ((mem "childExprs" false))))
-(DUse false (UseGroup ("list") ((mem "findMap" false) (mem "get" false))))
+(DUse false (UseGroup ("list") ((mem "findMap" false) (mem "get" false) (mem "last" false))))
 (DUse false (UseGroup ("tools" "lint_calls") ((mem "lastSegment" false))))
 (DUse false (UseGroup ("tools" "lint_scope") ((mem "Binder" true) (mem "BinderKind" true) (mem "FileScopes" false) (mem "binderOf" false))))
 (DUse false (UseGroup ("tools" "lint_shared") ((mem "mentionsVar" false) (mem "unwrapLoc" false) (mem "varSite" false))))
@@ -444,7 +448,7 @@ armAppends acc (Arm _ _ body) = tailAppends acc body
 (DTypeSig false "lamAppends" (TyFun (TyCon "Int") (TyFun (TyCon "Expr") (TyCon "Bool"))))
 (DFunDef false "lamAppends" ((PVar "k") (PVar "e")) (EMatch (EApp (EVar "unwrapLoc") (EVar "e")) (arm (PCon "ELam" (PVar "ps") (PVar "body")) () (EMatch (EApp (EApp (EVar "get") (EVar "k")) (EVar "ps")) (arm (PCon "Some" (PCon "PVar" (PVar "acc") PWild PWild)) () (EApp (EApp (EVar "tailAppends") (EVar "acc")) (EVar "body"))) (arm PWild () (EVar "False")))) (arm PWild () (EVar "False"))))
 (DTypeSig false "tailAppends" (TyFun (TyCon "String") (TyFun (TyCon "Expr") (TyCon "Bool"))))
-(DFunDef false "tailAppends" ((PVar "acc") (PVar "e")) (EMatch (EApp (EVar "unwrapLoc") (EVar "e")) (arm (PCon "EBinOp" (PLit (LString "++")) (PVar "a") PWild PWild) () (EApp (EApp (EVar "leftIsAcc") (EVar "acc")) (EVar "a"))) (arm (PCon "EIf" PWild (PVar "t") (PVar "el")) () (EBinOp "||" (EApp (EApp (EVar "tailAppends") (EVar "acc")) (EVar "t")) (EApp (EApp (EVar "tailAppends") (EVar "acc")) (EVar "el")))) (arm (PCon "EMatch" PWild (PVar "arms")) () (EApp (EApp (EVar "any") (EApp (EVar "armAppends") (EVar "acc"))) (EVar "arms"))) (arm (PCon "ELet" PWild PWild PWild PWild (PVar "body")) () (EApp (EApp (EVar "tailAppends") (EVar "acc")) (EVar "body"))) (arm (PCon "ELetGroup" PWild (PVar "body")) () (EApp (EApp (EVar "tailAppends") (EVar "acc")) (EVar "body"))) (arm PWild () (EVar "False"))))
+(DFunDef false "tailAppends" ((PVar "acc") (PVar "e")) (EMatch (EApp (EVar "unwrapLoc") (EVar "e")) (arm (PCon "EBinOp" (PLit (LString "++")) (PVar "a") PWild PWild) () (EApp (EApp (EVar "leftIsAcc") (EVar "acc")) (EVar "a"))) (arm (PCon "EIf" PWild (PVar "t") (PVar "el")) () (EBinOp "||" (EApp (EApp (EVar "tailAppends") (EVar "acc")) (EVar "t")) (EApp (EApp (EVar "tailAppends") (EVar "acc")) (EVar "el")))) (arm (PCon "EMatch" PWild (PVar "arms")) () (EApp (EApp (EVar "any") (EApp (EVar "armAppends") (EVar "acc"))) (EVar "arms"))) (arm (PCon "ELet" PWild PWild PWild PWild (PVar "body")) () (EApp (EApp (EVar "tailAppends") (EVar "acc")) (EVar "body"))) (arm (PCon "ELetGroup" PWild (PVar "body")) () (EApp (EApp (EVar "tailAppends") (EVar "acc")) (EVar "body"))) (arm (PCon "EBlock" (PVar "stmts")) () (EMatch (EApp (EVar "last") (EVar "stmts")) (arm (PCon "Some" (PCon "DoExpr" (PVar "l"))) () (EApp (EApp (EVar "tailAppends") (EVar "acc")) (EVar "l"))) (arm PWild () (EVar "False")))) (arm (POr (PCon "ELit" PWild) (PCon "EVar" PWild) (PCon "EApp" PWild PWild) (PCon "ELam" PWild PWild) (PCon "EUnOp" PWild PWild PWild) (PCon "EInfix" PWild PWild PWild) (PCon "EFieldAccess" PWild PWild PWild) (PCon "ETuple" PWild) (PCon "EListLit" PWild) (PCon "EArrayLit" PWild) (PCon "ERangeList" PWild PWild PWild) (PCon "ERangeArray" PWild PWild PWild) (PCon "ESlice" PWild PWild PWild PWild) (PCon "ESection" PWild) (PCon "EIndex" PWild PWild) (PCon "EAnnot" PWild PWild) (PCon "EHeadAnnot" PWild PWild) (PCon "EDo" PWild PWild) (PCon "EStringInterp" PWild) (PCon "EGuards" PWild) (PCon "ERecordCreate" PWild PWild) (PCon "ERecordUpdate" PWild PWild PWild) (PCon "EVariantUpdate" PWild PWild PWild) (PCon "EMapLit" PWild PWild) (PCon "ESetLit" PWild PWild) (PCon "EAsPat" PWild PWild) (PCon "EOrPat" PWild) (PCon "EMethodRef" PWild) (PCon "EDictApp" PWild) (PCon "EVarAt" PWild PWild) (PCon "EVarId" PWild PWild) (PCon "EMethodAt" PWild PWild PWild) (PCon "EDictAt" PWild PWild) (PCon "ELoc" PWild PWild) (PCon "EDoOrigin" PWild PWild) (PCon "ENumLit" PWild PWild PWild) (PCon "EWideLit" PWild PWild PWild PWild) (PCon "EBinOp" PWild PWild PWild PWild)) () (EVar "False"))))
 (DTypeSig false "leftIsAcc" (TyFun (TyCon "String") (TyFun (TyCon "Expr") (TyCon "Bool"))))
 (DFunDef false "leftIsAcc" ((PVar "acc") (PVar "a")) (EMatch (EApp (EVar "unwrapLoc") (EVar "a")) (arm (PCon "EVar" (PVar "n")) () (EBinOp "==" (EVar "n") (EVar "acc"))) (arm (PCon "EBinOp" (PLit (LString "++")) (PVar "a2") PWild PWild) () (EApp (EApp (EVar "leftIsAcc") (EVar "acc")) (EVar "a2"))) (arm PWild () (EVar "False"))))
 (DTypeSig false "armAppends" (TyFun (TyCon "String") (TyFun (TyCon "Arm") (TyCon "Bool"))))
@@ -452,7 +456,7 @@ armAppends acc (Arm _ _ body) = tailAppends acc body
 # MARK
 (DUse false (UseGroup ("frontend" "ast") ((mem "Arm" true) (mem "DoStmt" true) (mem "Expr" true) (mem "FunClause" true) (mem "Guard" true) (mem "GuardArm" true) (mem "LetBind" true) (mem "Loc" false) (mem "Pat" true) (mem "patBoundNames" false))))
 (DUse false (UseGroup ("frontend" "ast_walk") ((mem "childExprs" false))))
-(DUse false (UseGroup ("list") ((mem "findMap" false) (mem "get" false))))
+(DUse false (UseGroup ("list") ((mem "findMap" false) (mem "get" false) (mem "last" false))))
 (DUse false (UseGroup ("tools" "lint_calls") ((mem "lastSegment" false))))
 (DUse false (UseGroup ("tools" "lint_scope") ((mem "Binder" true) (mem "BinderKind" true) (mem "FileScopes" false) (mem "binderOf" false))))
 (DUse false (UseGroup ("tools" "lint_shared") ((mem "mentionsVar" false) (mem "unwrapLoc" false) (mem "varSite" false))))
@@ -551,7 +555,7 @@ armAppends acc (Arm _ _ body) = tailAppends acc body
 (DTypeSig false "lamAppends" (TyFun (TyCon "Int") (TyFun (TyCon "Expr") (TyCon "Bool"))))
 (DFunDef false "lamAppends" ((PVar "k") (PVar "e")) (EMatch (EApp (EVar "unwrapLoc") (EVar "e")) (arm (PCon "ELam" (PVar "ps") (PVar "body")) () (EMatch (EApp (EApp (EVar "get") (EVar "k")) (EVar "ps")) (arm (PCon "Some" (PCon "PVar" (PVar "acc") PWild PWild)) () (EApp (EApp (EVar "tailAppends") (EVar "acc")) (EVar "body"))) (arm PWild () (EVar "False")))) (arm PWild () (EVar "False"))))
 (DTypeSig false "tailAppends" (TyFun (TyCon "String") (TyFun (TyCon "Expr") (TyCon "Bool"))))
-(DFunDef false "tailAppends" ((PVar "acc") (PVar "e")) (EMatch (EApp (EVar "unwrapLoc") (EVar "e")) (arm (PCon "EBinOp" (PLit (LString "++")) (PVar "a") PWild PWild) () (EApp (EApp (EVar "leftIsAcc") (EVar "acc")) (EVar "a"))) (arm (PCon "EIf" PWild (PVar "t") (PVar "el")) () (EBinOp "||" (EApp (EApp (EVar "tailAppends") (EVar "acc")) (EVar "t")) (EApp (EApp (EVar "tailAppends") (EVar "acc")) (EVar "el")))) (arm (PCon "EMatch" PWild (PVar "arms")) () (EApp (EApp (EDictApp "any") (EApp (EVar "armAppends") (EVar "acc"))) (EVar "arms"))) (arm (PCon "ELet" PWild PWild PWild PWild (PVar "body")) () (EApp (EApp (EVar "tailAppends") (EVar "acc")) (EVar "body"))) (arm (PCon "ELetGroup" PWild (PVar "body")) () (EApp (EApp (EVar "tailAppends") (EVar "acc")) (EVar "body"))) (arm PWild () (EVar "False"))))
+(DFunDef false "tailAppends" ((PVar "acc") (PVar "e")) (EMatch (EApp (EVar "unwrapLoc") (EVar "e")) (arm (PCon "EBinOp" (PLit (LString "++")) (PVar "a") PWild PWild) () (EApp (EApp (EVar "leftIsAcc") (EVar "acc")) (EVar "a"))) (arm (PCon "EIf" PWild (PVar "t") (PVar "el")) () (EBinOp "||" (EApp (EApp (EVar "tailAppends") (EVar "acc")) (EVar "t")) (EApp (EApp (EVar "tailAppends") (EVar "acc")) (EVar "el")))) (arm (PCon "EMatch" PWild (PVar "arms")) () (EApp (EApp (EDictApp "any") (EApp (EVar "armAppends") (EVar "acc"))) (EVar "arms"))) (arm (PCon "ELet" PWild PWild PWild PWild (PVar "body")) () (EApp (EApp (EVar "tailAppends") (EVar "acc")) (EVar "body"))) (arm (PCon "ELetGroup" PWild (PVar "body")) () (EApp (EApp (EVar "tailAppends") (EVar "acc")) (EVar "body"))) (arm (PCon "EBlock" (PVar "stmts")) () (EMatch (EApp (EVar "last") (EVar "stmts")) (arm (PCon "Some" (PCon "DoExpr" (PVar "l"))) () (EApp (EApp (EVar "tailAppends") (EVar "acc")) (EVar "l"))) (arm PWild () (EVar "False")))) (arm (POr (PCon "ELit" PWild) (PCon "EVar" PWild) (PCon "EApp" PWild PWild) (PCon "ELam" PWild PWild) (PCon "EUnOp" PWild PWild PWild) (PCon "EInfix" PWild PWild PWild) (PCon "EFieldAccess" PWild PWild PWild) (PCon "ETuple" PWild) (PCon "EListLit" PWild) (PCon "EArrayLit" PWild) (PCon "ERangeList" PWild PWild PWild) (PCon "ERangeArray" PWild PWild PWild) (PCon "ESlice" PWild PWild PWild PWild) (PCon "ESection" PWild) (PCon "EIndex" PWild PWild) (PCon "EAnnot" PWild PWild) (PCon "EHeadAnnot" PWild PWild) (PCon "EDo" PWild PWild) (PCon "EStringInterp" PWild) (PCon "EGuards" PWild) (PCon "ERecordCreate" PWild PWild) (PCon "ERecordUpdate" PWild PWild PWild) (PCon "EVariantUpdate" PWild PWild PWild) (PCon "EMapLit" PWild PWild) (PCon "ESetLit" PWild PWild) (PCon "EAsPat" PWild PWild) (PCon "EOrPat" PWild) (PCon "EMethodRef" PWild) (PCon "EDictApp" PWild) (PCon "EVarAt" PWild PWild) (PCon "EVarId" PWild PWild) (PCon "EMethodAt" PWild PWild PWild) (PCon "EDictAt" PWild PWild) (PCon "ELoc" PWild PWild) (PCon "EDoOrigin" PWild PWild) (PCon "ENumLit" PWild PWild PWild) (PCon "EWideLit" PWild PWild PWild PWild) (PCon "EBinOp" PWild PWild PWild PWild)) () (EVar "False"))))
 (DTypeSig false "leftIsAcc" (TyFun (TyCon "String") (TyFun (TyCon "Expr") (TyCon "Bool"))))
 (DFunDef false "leftIsAcc" ((PVar "acc") (PVar "a")) (EMatch (EApp (EVar "unwrapLoc") (EVar "a")) (arm (PCon "EVar" (PVar "n")) () (EBinOp "==" (EVar "n") (EVar "acc"))) (arm (PCon "EBinOp" (PLit (LString "++")) (PVar "a2") PWild PWild) () (EApp (EApp (EVar "leftIsAcc") (EVar "acc")) (EVar "a2"))) (arm PWild () (EVar "False"))))
 (DTypeSig false "armAppends" (TyFun (TyCon "String") (TyFun (TyCon "Arm") (TyCon "Bool"))))

@@ -1386,7 +1386,8 @@ isFillAtom e = match stripLocE e
   EMethodRef _ => True
   EDictApp _ => True
   EUnOp op inner _ => op == "-" && isFillAtom inner
-  _ => False
+  EApp _ _ | ELam _ _ | ELet _ _ _ _ _ | EMatch _ _ | EIf _ _ _ | EBinOp _ _ _ _ | EInfix _ _ _ | EFieldAccess _ _ _ | ETuple _ | EListLit _ | EArrayLit _ | ERangeList _ _ _ | ERangeArray _ _ _ | ESlice _ _ _ _ | ELetGroup _ _ | ESection _ | EIndex _ _ | EAnnot _ _ | EHeadAnnot _ _ | EBlock _ | EDo _ _ | EStringInterp _ | EGuards _ | ERecordCreate _ _ | ERecordUpdate _ _ _ | EVariantUpdate _ _ _ | EMapLit _ _ | ESetLit _ _ | EAsPat _ _ | EOrPat _ | EVarAt _ _ | EMethodAt _ _ _ | EDictAt _ _ | ELoc _ _ | EDoOrigin _ _ =>
+    False
 
 isFillable : List Expr -> Bool
 isFillable es = listLen es >= 2 && allList isFillAtom es
@@ -1833,7 +1834,7 @@ docHasHardline (FlatAlt _ b) = docHasHardline b
 docHasHardline (Alt a _) = docHasHardline a
 docHasHardline (Hang _ d) = docHasHardline d
 docHasHardline (Fill _ ds) = docsHaveHardline ds
-docHasHardline _ = False
+docHasHardline (Nil | Text _ | Line | Softline) = False
 
 docsHaveHardline : List Doc -> Bool
 docsHaveHardline [] = False
@@ -1980,7 +1981,8 @@ endsInLayoutBlock e = match stripLocE e
   EAnnot body _ => endsInLayoutBlock body
   EHeadAnnot body _ => endsInLayoutBlock body
   EBinOp ":=" _ r _ => endsInLayoutBlock r
-  _ => False
+  ELit _ | EVar _ | EApp _ _ | EUnOp _ _ _ | EInfix _ _ _ | EFieldAccess _ _ _ | ETuple _ | EListLit _ | EArrayLit _ | ERangeList _ _ _ | ERangeArray _ _ _ | ESlice _ _ _ _ | ESection _ | EIndex _ _ | EStringInterp _ | ERecordCreate _ _ | ERecordUpdate _ _ _ | EVariantUpdate _ _ _ | EMapLit _ _ | ESetLit _ _ | EAsPat _ _ | EOrPat _ | EMethodRef _ | EDictApp _ | EVarAt _ _ | EVarId _ _ | EMethodAt _ _ _ | EDictAt _ _ | ELoc _ _ | EDoOrigin _ _ | ENumLit _ _ _ | EWideLit _ _ _ _ | EBinOp _ _ _ _ =>
+    False
 
 isMultiBindGroup : List LetBind -> Bool
 isMultiBindGroup (_ :: _ :: _) = True

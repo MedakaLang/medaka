@@ -475,7 +475,8 @@ isStringCon : Mono -> Bool
 isStringCon (TCon "String" _) = True
 -- A named argument's type is `String @κ`; the qualifier erases before runtime.
 isStringCon (TQual t _) = isStringCon (normalize t)
-isStringCon _ = False
+isStringCon (TVar _ | TCon _ _ | TRigid _ | TApp _ _ | TFun _ _ _ | TEff _ | TAuth _) =
+  False
 
 firstOf : List String -> String
 firstOf [] = ""
@@ -679,7 +680,7 @@ frozenVars (FrozenJoin members) vars =
   fold (acc a => frozenVars a acc) vars members
 frozenVars (FrozenProduct axes) vars =
   fold (acc a => frozenVars (snd a) acc) vars axes
-frozenVars _ vars = vars
+frozenVars (FrozenConst _) vars = vars
 
 frozenVariablesWhy : List FrozenVariable -> String
 frozenVariablesWhy vars = match map (v => "`" ++ frozenVarName v ++ "`") vars

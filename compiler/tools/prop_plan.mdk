@@ -867,7 +867,7 @@ substTyRaw subst (TyEffect es tail t) = TyEffect es tail (substTyRaw subst t)
 substTyRaw subst (TyNamed n t dom) = TyNamed n (substTyRaw subst t) dom
 substTyRaw subst (TyQual t qs loc) = TyQual (substTyRaw subst t) qs loc
 substTyRaw subst (TyConstrained cs t) = TyConstrained cs (substTyRaw subst t)
-substTyRaw _ t = t
+substTyRaw _ (t@(TyCon {  } | TyRow _ _ _ | TyAuth _ _)) = t
 
 export
 planTy : GenPlan -> Ty
@@ -1139,7 +1139,8 @@ seedPlan env truth (nominal@(GNominal key args)) states =
     truth
     args
     (omInsert (stateWord env truth key args) nominal states)
-seedPlan _ _ _ states = states
+seedPlan _ _ (GInt | GBool | GFloat | GChar | GString | GUnit | GCustom _) states =
+  states
 
 discoverStates : PlanEnv ->
   OrdMap Unit ->
@@ -1418,7 +1419,8 @@ nominalLeaves (GResult err ok) crossed acc =
   nominalLeaves err crossed (nominalLeaves ok crossed acc)
 nominalLeaves (GTuple ps) crossed acc = nominalLeavesAll ps crossed acc
 nominalLeaves (nominal@(GNominal _ _)) crossed acc = (nominal, crossed) :: acc
-nominalLeaves _ _ acc = acc
+nominalLeaves (GInt | GBool | GFloat | GChar | GString | GUnit | GCustom _) _ acc =
+  acc
 
 nominalLeavesAll : List GenPlan ->
   Bool ->
