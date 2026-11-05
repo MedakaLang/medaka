@@ -14,8 +14,9 @@
    Runs under `medaka test --native`: it spawns node. -}
 
 import string.{unwords}
-import test.{Expectation, fail, pass}
-import test_process.{boundedVerbSeconds, underRoot}
+import test.{Expectation, expectAll, expectEach, expectEqual, fail, pass}
+import test_process.{boundedVerbSeconds, medakaBin, underRoot, withScratchDir}
+import compiler_cli_test_support.{wasmBuildArgv}
 
 probes : <IO, Exec, Env "MEDAKA_ROOT"> Expectation
 probes =
@@ -31,3 +32,83 @@ probes =
           "medaka_host_test.mjs exited \{debug code} (2 = setup missing): \{unwords [out, err]}"
 
 test "wasm host probes: playground/medaka_host_test.mjs passes" = probes
+
+locatedRow : String ->
+  String ->
+  String ->
+  String ->
+  <IO, Exec, FileRead, FileWrite> Expectation
+locatedRow dir name source expected =
+  let path = "\{dir}/\{name}.mdk"
+  let native = "\{dir}/\{name}.native"
+  let wasm = "\{dir}/\{name}.wasm"
+  match writeFile path source
+    Err e => fail "cannot write \{path}: \{e}"
+    Ok _ =>
+      match (boundedVerbSeconds 120 "env" [
+        "MEDAKA_STRICT=1", medakaBin, "build", path, "-o", native
+      ])
+        Err e => fail "native build: \{e}"
+        Ok (nativeCode, _, nativeErr) =>
+          if nativeCode /= 0 then
+            fail "native build failed: \{nativeErr}"
+          else match boundedVerbSeconds 120 "env" (wasmBuildArgv path wasm)
+            Err e => fail "wasm build: \{e}"
+            Ok (wasmCode, _, wasmErr) =>
+              if wasmCode /= 0 then
+                fail "wasm build failed: \{wasmErr}"
+              else match boundedVerbSeconds 120 native []
+                Err e => fail "native run: \{e}"
+                Ok nativeResult =>
+                  match (boundedVerbSeconds 120 "node" [
+                    underRoot "test/wasm/run.js",
+                    wasm,
+                  ])
+                    Err e => fail "wasm run: \{e}"
+                    Ok wasmResult => expectAll [
+                      expectEqual (1, "", expected) nativeResult,
+                      expectEqual (1, "", expected) wasmResult,
+                    ]
+
+locatedSites : String -> <IO, Exec, FileRead, FileWrite> Expectation
+locatedSites dir =
+  let lib = "\{dir}/library.mdk"
+  match writeFile lib "export bad : Int -> Int\nbad n = 10 / n\n"
+    Err e => fail "cannot write imported file: \{e}"
+    Ok _ => expectEach [
+      (
+        "explicit",
+        locatedRow
+          dir
+          "explicit"
+          "main =\n  [|1|][2]\n"
+          "\{dir}/explicit.mdk:2:2: runtime error [E-INDEX-OOB]: index 2 out of bounds\n",
+      ),
+      (
+        "arithmetic",
+        locatedRow
+          dir
+          "arith"
+          "zero = 0\nmain = 10 / zero\n"
+          "\{dir}/arith.mdk:2:7: runtime error [E-DIV-ZERO]: division by zero\n",
+      ),
+      (
+        "guard",
+        locatedRow
+          dir
+          "guard"
+          "classify : Int -> Int\nclassify n\n  | n > 3 = 1\nmain = classify 1\n"
+          "\{dir}/guard.mdk:2:0: runtime error [E-NONEXHAUSTIVE-MATCH]: non-exhaustive match\n",
+      ),
+      (
+        "imported",
+        locatedRow
+          dir
+          "imported"
+          "import library.{bad}\nmain = bad 0\n"
+          "\{lib}:2:8: runtime error [E-DIV-ZERO]: division by zero\n",
+      ),
+    ]
+
+test "wasm host probes: native and wasm retain local and imported trap locations" =
+  withScratchDir locatedSites
