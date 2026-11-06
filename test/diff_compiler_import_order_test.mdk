@@ -430,7 +430,7 @@ runWorks : List (Result String Work) ->
 runWorks works =
   let bin = medakaBin ()
   let root = medakaRoot ()
-  let emitter = emitterBin
+  let emitter = emitterBin ()
   let s1 =
     stage
       (spawnEach perSpawnSeconds (w => [
@@ -928,7 +928,7 @@ test "neither ledger names a case that is not in the corpus" =
    Named as a precondition instead, before any row is graded. -}
 emitterPrecondition : Unit -> <FileRead, IO> Option String
 emitterPrecondition () =
-  let bin = emitterBin
+  let bin = emitterBin ()
   if fileExists bin then
     None
   else

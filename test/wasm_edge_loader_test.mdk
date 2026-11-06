@@ -23,7 +23,7 @@ corpus () = "\{medakaRoot ()}/test/wasm_edge_loader_fixtures"
 buildArgv : String -> String -> String -> <IO> List String
 buildArgv target src out = [
   "MEDAKA_STRICT=1",
-  "MEDAKA_WASM_EMITTER=\{wasmEmitter}",
+  "MEDAKA_WASM_EMITTER=\{wasmEmitter ()}",
   medakaBin (),
   "build",
   "--target",

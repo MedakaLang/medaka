@@ -340,8 +340,8 @@ valueName nonce i = "__tsv_\{probeNameNonce nonce}_\{intToString i}__"
 -- before `main` runs, when its body is a direct effect or panic —
 -- `boom = panic "boom"` kills the program before `main`'s first `putStrLn`
 -- reaches stdout, where the interpreter prints it first.  The behavior is
--- shape-dependent: a doctest smoke binding is forced at startup, but
--- `__ndt_i__ = debug (bump ())` is not.  As nullary bindings, test bodies of the
+-- shape-dependent: `x = bump ()` is forced at startup, but
+-- `x = debug (bump ())` is not.  As nullary bindings, test bodies of the
 -- forced shape would be forced at startup, so one panicking test would abort the
 -- probe before ANY sentinel was printed and the whole file would report as one
 -- undifferentiated abort.  Under a parameter the body is evaluated where it is called — inside `main`, in test
