@@ -38,3 +38,9 @@ created; each had one recorded incident behind it.
 - **Make scratch directories with `mktemp -d`; never write into an existing scratch directory.**
   First sighting: param-clump-sweep, 2026-11-04, where one slice overwrote a `medaka` binary in
   another session's tree. Would land in: `sprint-packet` §2. Expires: 2026-12-16.
+- **A "red on base" claim names a commit on `origin/main` (the sprint's cut SHA), never a sprint-branch
+  commit; a packet that attributes a red states the base SHA it measured against.** First sighting:
+  core-pass-pipeline, 2026-11-06, where two regressions were dismissed as red on base because the
+  "base" was a sprint commit; the review found them green at the cut `f52a37d57`. Possible form: a
+  `scripts/red_on_base.sh <gate> [sha]` that reads the base from the STATUS.md header. Would land in:
+  `sprint-packet` §4 (attribution line). Expires: 2026-12-16.
