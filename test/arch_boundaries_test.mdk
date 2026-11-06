@@ -659,6 +659,9 @@ test "arch_boundaries: types.tc_global closure matches its golden" =
 test "arch_boundaries: types.tc_stamp closure matches its golden" =
   closurePin "types.tc_stamp"
 
+test "arch_boundaries: types.tc_init closure matches its golden" =
+  closurePin "types.tc_init"
+
 test "arch_boundaries: types.tc_module closure matches its golden" =
   closurePin "types.tc_module"
 
@@ -1214,6 +1217,7 @@ typecheckFamily = [
   "types.tc_elab",
   "types.tc_global",
   "types.tc_stamp",
+  "types.tc_init",
   "types.tc_module",
 ]
 

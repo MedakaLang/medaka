@@ -1,0 +1,667 @@
+-- Tests of `types.tc_init`: the initialisation graph and order of one module's top-level
+-- values.  Each program is checked module by module in one graph with no prelude, the way
+-- `checkModuleFullDiags` ends a module's check, and the last module's marked tree is
+-- projected with `initInputsAt` exactly as `tc_module` projects it.  A program uses no
+-- prelude interface: it declares what it dispatches on, and a prelude function it calls
+-- is unbound here, which the graph treats as any other foreign value.
+--
+-- Expected edges come from the L1 clauses (`docs/spec/language-design.md`, "Top-level
+-- initialisation") and the position rule the cycle rule reads: an application head or
+-- argument, a scrutinee, a `let` right-hand side and an operand are evaluated (`deref`); a
+-- constructor component, and anything inside a lambda that is the whole right-hand side or a
+-- component, is read (`guard`); a direct lambda argument of a `Deferred*` call in guarded
+-- position is delayed (`delay`).  An edge renders as `target kind position`.
+
+import frontend.ast.{Decl}
+import frontend.desugar.{desugar}
+import frontend.parser.{parse}
+import frontend.resolve.{stampGraphTyOrigins}
+import support.ordmap.{omEmpty, omFromNames, omHasKey}
+import support.util.{isEmptyL, orElseOpt, sortUniqS}
+import test.{expectAll, expectEqual, expectTrue}
+import types.repr.{Scheme}
+import types.tc_decls.{buildDeclEnvs, declEnvModulesFrom}
+import types.tc_env.{declEnvModule, emptyDeclEnvAcc}
+import types.tc_init.{
+  InitEdgeKind(..),
+  InitGraph(..),
+  InitInputs,
+  InitMention(..),
+  InitNode(..),
+  InitNodeKind(..),
+  InitPosition(..),
+  initGraphOf,
+  initInputsAt,
+  initOrder,
+}
+import types.tc_mark.{markSetsOf}
+import types.tc_module.{checkModuleFullDiags}
+import types.tc_occurrence.{arithDispatchMethod, binopMethod, unopMethod}
+import types.tc_state.{plainModuleSeed}
+import types.tc_test_support.{fresh}
+import types.tc_types.{GraphCtx, ModuleBindings(..), PreludeMarkFacts(..)}
+
+-- ── the harness ──────────────────────────────────────────────────────────────
+
+noPreludeFacts : PreludeMarkFacts
+noPreludeFacts = PreludeMarkFacts {
+  pmfReturnPos = [],
+  pmfMethodConstraints = [],
+  pmfArgDispatch = [],
+  pmfArgDispatchById = [],
+  pmfConstrainedNames = [],
+}
+
+-- The graph of the last of [mods] (id, source), the modules checked in order in one
+-- graph, the last one's imports binding the value names [imported].
+graphOf : List (String, String) -> List String -> InitGraph
+graphOf mods imported =
+  let parsed = map (m => (fst m, desugar (parse (snd m)))) mods
+  let stamped = snd (stampGraphTyOrigins [] [] parsed)
+  let g = (fresh ()).mcGraph
+  g.declEnvsRef :=
+    buildDeclEnvs
+      g
+      emptyDeclEnvAcc
+      (declEnvModule g 0 "core" [])
+      (declEnvModulesFrom g 1 stamped)
+  let _ = markSetsOf g noPreludeFacts [] stamped (flatMap snd stamped)
+  initGraphOf (subjectInputs g [] imported 1 stamped)
+
+-- One module, importing nothing.
+graphOne : String -> InitGraph
+graphOne src = graphOf [("m", src)] []
+
+subjectInputs : GraphCtx ->
+  List (String, Scheme) ->
+  List String ->
+  Int ->
+  List (String, List Decl) ->
+  InitInputs
+subjectInputs _ _ _ _ [] = panic "subjectInputs: no module"
+subjectInputs g seed imported ord ((mid, ds) :: rest) =
+  let plain = plainModuleSeed seed
+  let ms = { plain |
+    msImportedNames =
+      omFromNames (if isEmptyL rest then imported else []) omEmpty,
+  }
+  let (b, marked, _, _, mctx) = checkModuleFullDiags g mid ms [] [] ds
+  match rest
+    [] =>
+      initInputsAt
+        mid
+        ms
+        b
+        marked
+        mctx
+        g.declEnvsRef.value
+        ord
+        (op => orElseOpt (binopMethod op) (arithDispatchMethod op))
+        unopMethod
+    -- Bound: one step per module of a test program, at most two.
+    -- lint-disable-next-line rule-accumulator-append
+    _ => subjectInputs g (seed ++ b.mbSchemes) imported (ord + 1) rest
+
+kindTag : InitEdgeKind -> String
+kindTag ByName = "name"
+kindTag ByDispatch = "dispatch"
+kindTag ByOperator = "operator"
+kindTag ByOrphan = "orphan"
+kindTag ByClosure = "closure"
+
+posTag : InitPosition -> String
+posTag AtDeref = "deref"
+posTag AtGuard = "guard"
+posTag AtDelay = "delay"
+
+edgeTag : InitMention -> String
+edgeTag m =
+  "\{m.mentionTarget} \{kindTag m.mentionKind} \{posTag m.mentionPosition}"
+
+nodeNamed : InitGraph -> String -> Option InitNode
+nodeNamed g n = find (x => x.inodeName == n) g.igraphNodes
+
+-- The distinct edges of node [n], sorted.
+edgesOf : InitGraph -> String -> List String
+edgesOf g n = match nodeNamed g n
+  Some node => sortUniqS (map edgeTag node.inodeMentions)
+  None => ["no node \{n}"]
+
+kindOf : InitGraph -> String -> Option InitNodeKind
+kindOf g n = map (x => x.inodeKind) (nodeNamed g n)
+
+-- ── name edges and positions (I3) ────────────────────────────────────────────
+
+test "a value reading itself as an operand is a deref name edge (cyc)" =
+  let g = graphOne "x : Int\nx = x + 1\n"
+  expectEqual ["x name deref"] (edgesOf g "x")
+
+test "a cons component is guarded and an application argument is deref (mcyc)" =
+  let g =
+    graphOne "xs : List Int\nxs = 1 :: ys\n\nys : List Int\nys = map (+ 1) xs\n"
+  expectAll [
+    expectEqual ["ys name guard"] (edgesOf g "xs"),
+    expectEqual ["xs name deref"] (edgesOf g "ys"),
+  ]
+
+test "a value with no top-level mention has no edge (refg, ex, eff)" =
+  let refg =
+    graphOne "counter = Ref 0\n\nmain =\n  counter := 5\n  println !counter\n"
+  let ex = graphOne "main = putStrLn \"ok\"\n\nside = exit 3\n"
+  let eff =
+    graphOne
+      "main = if False then side else putStrLn \"ok\"\n\nside = putStrLn \"BOOM\"\n"
+  expectAll [
+    expectEqual [] (edgesOf refg "counter"),
+    expectEqual ["counter"] (initOrder refg),
+    expectEqual [] (edgesOf ex "side"),
+    expectEqual ["side"] (initOrder ex),
+    expectEqual [] (edgesOf eff "side"),
+    expectEqual ["side name deref"] (edgesOf eff "main"),
+    expectEqual ["side"] (initOrder eff),
+  ]
+
+test "a lambda passed to a call is walked as called (lamcyc)" =
+  let g =
+    graphOne
+      "apply0 : (Unit -> Int) -> Int\napply0 f = f ()\n\ntotal : Int\ntotal = apply0 (_ => total + 1)\n"
+  expectEqual ["apply0 name deref", "total name deref"] (edgesOf g "total")
+
+test "a local function's body is walked as called (letfcyc)" =
+  let g = graphOne "total : Int\ntotal =\n  let f _ = total + 1\n  f ()\n"
+  expectEqual ["total name deref"] (edgesOf g "total")
+
+test "a lambda under an evaluated call is deref however deep (mapcyc)" =
+  let g =
+    graphOne
+      "total : Int\ntotal = optionOr 0 (head (map (_ => total + 1) [1]))\n"
+  expectEqual ["total name deref"] (edgesOf g "total")
+
+test "a lambda stored in a constructor is guarded; its caller derefs the value (wrapcyc)" =
+  let g =
+    graphOne
+      """
+data Wrap = Wrap (Unit -> Int)
+
+callW : Wrap -> Int
+callW (Wrap f) = f ()
+
+p : Wrap
+p = Wrap (u => total + 1)
+
+total : Int
+total = callW p
+"""
+  expectAll [
+    expectEqual ["total name guard"] (edgesOf g "p"),
+    expectEqual ["callW name deref", "p name deref"] (edgesOf g "total"),
+  ]
+
+-- ── the `Deferred*` exemption ────────────────────────────────────────────────
+
+test "a defer block's continuation is delayed and its receiver is deref (storedcyc)" =
+  let g =
+    graphOne
+      """
+p = defer
+  x <- deferPure 1
+  deferPure (x + total)
+
+total : Int
+total = runAsync p
+"""
+  expectAll [
+    expectEqual ["total name delay"] (edgesOf g "p"),
+    expectEqual ["p name deref"] (edgesOf g "total"),
+  ]
+
+test "a defer block under an evaluated call is not exempt (runcyc)" =
+  let g =
+    graphOne
+      """
+total : Int
+total = runAsync (defer
+  x <- deferPure 1
+  deferPure (x + total))
+"""
+  expectEqual ["total name deref"] (edgesOf g "total")
+
+test "a receiver of an exempt deferThen stays deref, its continuation is delayed (lzcyc3)" =
+  let g =
+    graphOne
+      """
+data Lz = Lz (Unit -> Int) (Unit -> Int)
+
+peek : Lz -> Int
+peek (Lz p _) = p ()
+
+other : Int
+other = 1
+
+total = deferThen (Lz (u => peek total + 1) (u => 1)) (x => deferPure (x + other))
+"""
+  expectEqual
+    ["other name delay", "peek name deref", "total name deref"]
+    (edgesOf g "total")
+
+test "an imported plain deferThen is not exempt (fakedefer2)" =
+  let lib =
+    """
+public export data P a = P a
+
+export
+runP : P a -> a
+runP (P a) = a
+
+export
+deferThen : P a -> (a -> P b) -> P b
+deferThen p k = k (runP p)
+"""
+  let main =
+    """
+import lib.{P(..), runP, deferThen}
+
+total : P Int
+total = deferThen (P 1) (_ => P (runP total + 1))
+"""
+  let unbound = "total = deferThen (P 1) (_ => P (runP total + 1))\n"
+  expectAll [
+    expectEqual
+      ["total name deref"]
+      (edgesOf
+        (graphOf [("lib", lib), ("main", main)] ["runP", "deferThen"])
+        "total"),
+    expectEqual ["total name delay"] (edgesOf (graphOne unbound) "total"),
+  ]
+
+test "a top-level deferThen of the module captures defer blocks and is not exempt" =
+  let g =
+    graphOne
+      """
+data P a = P a
+
+runP : P a -> a
+runP (P a) = a
+
+deferThen : P a -> (a -> P b) -> P b
+deferThen p k = k (runP p)
+
+total : P Int
+total = deferThen (P 1) (_ => P (runP total + 1))
+
+q : P Int
+q = defer
+  x <- P 1
+  P (runP q + x)
+"""
+  expectAll [
+    expectEqual
+      ["deferThen name deref", "runP name deref", "total name deref"]
+      (edgesOf g "total"),
+    expectEqual
+      ["deferThen name deref", "q name deref", "runP name deref"]
+      (edgesOf g "q"),
+  ]
+
+-- The `interpRest` row of `compiler/frontend/parser.mdk`.  Each value is a `defer` block
+-- whose first bind's receiver is the next value of the group, and the group closes through
+-- a continuation.  By the deref rule the receivers are deref and the continuations are
+-- delayed, so every member reaches the next in a deref position and the group is one
+-- may-reach component: the cycle rule rejects `interpRest`.
+test "interpRest: each receiver is deref and the continuations are delayed" =
+  let g =
+    graphOne
+      """
+interpRest = defer
+  e <- parseExpr
+  t <- peekP
+  interpRestFor e t
+
+interpRestFor e t = defer
+  rest <- interpRest
+  deferPure (e :: rest)
+
+parseExpr = defer
+  r <- parseAtom
+  deferPure r
+
+parseAtom = defer
+  s <- interpRest
+  deferPure s
+"""
+  expectAll [
+    expectEqual
+      ["interpRestFor name delay", "parseExpr name deref"]
+      (edgesOf g "interpRest"),
+    expectEqual ["interpRest name deref"] (edgesOf g "interpRestFor"),
+    expectEqual ["parseAtom name deref"] (edgesOf g "parseExpr"),
+    expectEqual ["interpRest name deref"] (edgesOf g "parseAtom"),
+    expectEqual ["interpRest", "parseExpr", "parseAtom"] (initOrder g),
+  ]
+
+-- ── dispatch edges (A1, A3, A8) ──────────────────────────────────────────────
+
+test "a method occurrence reaches the local impl of its interface (dcyc, dok)" =
+  let iface = "interface Gives a where\n  give : a -> Int\n\ndata Box = Box\n\n"
+  let dcyc =
+    graphOne
+      (iface
+        ++ "impl Gives Box where\n  give _ = total + 1\n\ntotal : Int\ntotal = give Box\n")
+  let dok =
+    graphOne
+      (iface
+        ++ "impl Gives Box where\n  give _ = base + 1\n\nbase : Int\nbase = 41\n\ntotal : Int\ntotal = give Box\n")
+  expectAll [
+    expectEqual ["impl#0:Gives dispatch deref"] (edgesOf dcyc "total"),
+    expectEqual ["total name deref"] (edgesOf dcyc "impl#0:Gives"),
+    expectEqual ["base name deref"] (edgesOf dok "impl#0:Gives"),
+    expectEqual [] (edgesOf dok "base"),
+    expectEqual ["base", "total"] (initOrder dok),
+  ]
+
+test "an operator reaches the local impl of its method's interface (opcyc)" =
+  let g =
+    graphOne
+      """
+interface Eq a where
+  eq : a -> a -> Bool
+
+data Box = Box
+
+impl Eq Box where
+  eq _ _ = total > 0
+
+total : Int
+total = if Box == Box then 1 else 0
+"""
+  expectAll [
+    expectEqual ["impl#0:Eq operator deref"] (edgesOf g "total"),
+    expectEqual ["total name deref"] (edgesOf g "impl#0:Eq"),
+  ]
+
+test "a literal reaches the local impl of fromInt's interface (litcyc)" =
+  let g =
+    graphOne
+      """
+interface Num a where
+  fromInt : Int -> a
+
+data Box = Box Int
+
+impl Num Box where
+  fromInt n = Box (n + unbox total)
+
+unbox : Box -> Int
+unbox (Box n) = n
+
+total : Box
+total = 1
+"""
+  expectAll [
+    expectEqual ["impl#0:Num operator deref"] (edgesOf g "total"),
+    expectEqual
+      ["total name deref", "unbox name deref"]
+      (edgesOf g "impl#0:Num"),
+  ]
+
+test "an imported value reaches a local orphan impl (orph)" =
+  let lib =
+    """
+export interface Gives a where
+  give : a -> Int
+
+public export data Box = Box
+
+export
+useGives : Box -> Int
+useGives b = give b
+"""
+  let main =
+    """
+import lib.{Gives, Box(..), useGives}
+
+impl Gives Box where
+  give _ = total + 1
+
+total : Int
+total = useGives Box
+"""
+  let g = graphOf [("lib", lib), ("main", main)] ["useGives"]
+  expectAll [
+    expectEqual ["impl#0:Gives orphan deref"] (edgesOf g "total"),
+    expectEqual ["total name deref"] (edgesOf g "impl#0:Gives"),
+  ]
+
+test "a call constrained on a sub-interface reaches the impls of its supers (sup)" =
+  let lib =
+    """
+export interface Sup a where
+  sup : a -> Int
+
+export interface Sub a requires Sup a where
+  sub : a -> Int
+
+export
+viaSub : Sub a => a -> Int
+viaSub x = sup x
+"""
+  let main =
+    """
+import lib.{Sup, Sub, viaSub}
+
+data Box = Box
+
+impl Sup Box where
+  sup _ = total + 1
+
+impl Sub Box where
+  sub _ = 0
+
+total : Int
+total = viaSub Box
+"""
+  let g = graphOf [("lib", lib), ("main", main)] ["viaSub"]
+  expectEqual
+    ["impl#0:Sup closure deref", "impl#1:Sub dispatch deref"]
+    (edgesOf g "total")
+
+test "a method reaches impls through the requires of its interface's impl rows (reqcyc)" =
+  let lib =
+    """
+export interface Gives a where
+  give : a -> Int
+
+export interface Describe a where
+  describe : a -> Int
+
+export impl Gives (List a) requires Describe a where
+  give xs = sum (map describe xs)
+"""
+  let main =
+    """
+import lib.{Gives, Describe, give, describe}
+
+data Box = Box
+
+impl Describe Box where
+  describe _ = total + 1
+
+total : Int
+total = give [Box]
+"""
+  let g = graphOf [("lib", lib), ("main", main)] ["give", "describe"]
+  expectEqual ["impl#0:Describe closure deref"] (edgesOf g "total")
+
+test "a method reaches impls through its method-level constraint (mlcyc)" =
+  let lib =
+    """
+export interface Describe a where
+  describe : a -> Int
+
+export interface Gives a where
+  give : Describe b => a -> b -> Int
+
+export impl Gives Int where
+  give n b = n + describe b
+"""
+  let main =
+    """
+import lib.{Gives, Describe, give, describe}
+
+data Box = Box
+
+impl Describe Box where
+  describe _ = total + 1
+
+total : Int
+total = give 1 Box
+"""
+  let g = graphOf [("lib", lib), ("main", main)] ["give", "describe"]
+  expectEqual ["impl#0:Describe closure deref"] (edgesOf g "total")
+
+test "an operator reaches impls through the requires of an imported container impl" =
+  let lib =
+    """
+export interface Eq a where
+  eq : a -> a -> Bool
+
+export interface Hashable a where
+  hash : a -> Int
+
+public export data Bag a = Bag a
+
+export impl Eq (Bag a) requires Hashable a where
+  eq _ _ = True
+"""
+  let main =
+    """
+import lib.{Eq, Hashable, Bag(..)}
+
+data Box = Box
+
+impl Hashable Box where
+  hash _ = total
+
+total : Int
+total = if Bag Box == Bag Box then 1 else 0
+"""
+  let g = graphOf [("lib", lib), ("main", main)] []
+  expectEqual ["impl#0:Hashable closure deref"] (edgesOf g "total")
+
+test "an imported default body runs as the local impl, which the method reaches (dflt)" =
+  let lib =
+    """
+export interface Gives a where
+  give : a -> Int
+  other : a -> Int
+  give x = other x + 1
+"""
+  let main =
+    """
+import lib.{Gives, give}
+
+data Box = Box
+
+impl Gives Box where
+  other _ = total
+
+total : Int
+total = give Box
+"""
+  let g = graphOf [("lib", lib), ("main", main)] ["give"]
+  expectAll [
+    expectEqual ["impl#0:Gives dispatch deref"] (edgesOf g "total"),
+    expectEqual ["total name deref"] (edgesOf g "impl#0:Gives"),
+  ]
+
+test "a local interface's default body belongs to each local impl of it" =
+  let g =
+    graphOne
+      """
+interface Gives a where
+  give : a -> Int
+  other : a -> Int
+  give x = other x + total
+
+data Box = Box
+
+impl Gives Box where
+  other _ = 0
+
+total : Int
+total = give Box
+"""
+  expectAll [
+    expectEqual
+      ["impl#0:Gives dispatch deref", "total name deref"]
+      (edgesOf g "impl#0:Gives"),
+    expectEqual ["impl#0:Gives dispatch deref"] (edgesOf g "total"),
+  ]
+
+test "a local constrained callee is a name edge" =
+  let g =
+    graphOne
+      """
+interface Gives a where
+  give : a -> Int
+
+data Box = Box
+
+impl Gives Box where
+  give _ = 1
+
+localVia : Gives a => a -> Int
+localVia x = give x
+
+other : Int
+other = localVia Box
+"""
+  expectAll [
+    expectEqual ["localVia name deref"] (edgesOf g "other"),
+    expectEqual ["impl#0:Gives dispatch deref"] (edgesOf g "localVia"),
+  ]
+
+-- ── the order (I1, I4, I6) ───────────────────────────────────────────────────
+
+test "initOrder is dependency-first with ties by source position" =
+  let g = graphOne "a = b + 1\n\nc = 2\n\nb = 3\n"
+  expectEqual ["c", "b", "a"] (initOrder g)
+
+test "a value calling a closure value is initialised after what the closure reaches" =
+  let g = graphOne "f = x => h + x\n\ng = f 1\n\nh = 5\n"
+  expectAll [
+    expectEqual ["h name guard"] (edgesOf g "f"),
+    expectEqual ["h", "f", "g"] (initOrder g),
+  ]
+
+test "main is never initialised, here or imported" =
+  let lib = "main = println helper\n\nhelper = 2\n"
+  let entry = "import lib.{main}\n\nlocal = 3\n"
+  let libG = graphOne lib
+  expectAll [
+    expectEqual ["helper"] (initOrder libG),
+    expectTrue (omHasKey "main" libG.igraphNotInitialised),
+    expectEqual
+      ["local"]
+      (initOrder (graphOf [("lib", lib), ("entry", entry)] ["main"])),
+  ]
+
+test "a constrained nullary binding is a function of its dictionaries (I6)" =
+  let g =
+    graphOne
+      """
+interface Sel a where
+  choose : a
+
+pick : Sel a => a
+pick = choose
+
+v : Int
+v = 1
+"""
+  expectAll [
+    expectEqual (Some FunctionNode) (kindOf g "pick"),
+    expectEqual (Some ValueNode) (kindOf g "v"),
+    expectTrue (omHasKey "pick" g.igraphNotInitialised),
+    expectEqual ["v"] (initOrder g),
+  ]
