@@ -808,6 +808,50 @@ table = [
     diag = "",
   },
   Row {
+    entry = "i40_importer_core_member_over_wildcard/main.mdk",
+    label =
+      "L2 rung 3 over rung 4: `import core.{clamp}` binds the prelude's constrained `clamp`; the wildcard-imported `clamp` is not it, so 5",
+    expCheck = "ACCEPT",
+    expRun = "ACCEPT",
+    expBuild = "ACCEPT",
+    mode = AllExact,
+    pinned = "5\n",
+    diag = "",
+  },
+  Row {
+    entry = "i40_importer_core_member_over_wildcard/swapped.mdk",
+    label =
+      "L3: import order never decides; with the wildcard written first the prelude's `clamp` still answers 5",
+    expCheck = "ACCEPT",
+    expRun = "ACCEPT",
+    expBuild = "ACCEPT",
+    mode = AllExact,
+    pinned = "5\n",
+    diag = "",
+  },
+  Row {
+    entry = "i41_importer_explicit_method_over_wildcard_method/main.mdk",
+    label =
+      "L2 rung 3 over rung 4: `import szmod.{sz}` binds `Sz`'s method; the wildcard's `Tz` method of the same name is not it, so 1001",
+    expCheck = "ACCEPT",
+    expRun = "ACCEPT",
+    expBuild = "ACCEPT",
+    mode = AllExact,
+    pinned = "1001\n",
+    diag = "",
+  },
+  Row {
+    entry = "i41_importer_explicit_method_over_wildcard_method/swapped.mdk",
+    label =
+      "L3: the roles swapped; `import tzmod.{sz}` binds `Tz`'s method, so 2001",
+    expCheck = "ACCEPT",
+    expRun = "ACCEPT",
+    expBuild = "ACCEPT",
+    mode = AllExact,
+    pinned = "2001\n",
+    diag = "",
+  },
+  Row {
     entry = "x1_prelude_standalone_not_left_operand.mdk",
     label =
       "L2 rung 2 over rung 5: the own method `isEven` beats the prelude standalone, so `isEven 7` has no impl (W-PRELUDE-METHOD-SHADOW stays true)",

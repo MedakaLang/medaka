@@ -1,0 +1,8 @@
+-- An explicit import of the prelude's constrained `clamp` and a wildcard
+-- import of a module exporting its own `clamp`.  The explicit import binds
+-- `clamp` (docs/spec/SHADOW-SEMANTICS.md L2, L3), core's import included, so
+-- the program prints core's `5`, not the wildcard's `99`.
+import core.{clamp}
+import lib.ladder_clamp.*
+
+main = println (clamp 0 10 5)

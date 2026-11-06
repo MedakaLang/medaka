@@ -1,0 +1,7 @@
+export
+interface Tz a where
+  sz : a -> Int
+
+export
+impl Tz Int where
+  sz x = x + 2000

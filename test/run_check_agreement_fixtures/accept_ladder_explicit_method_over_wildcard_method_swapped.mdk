@@ -1,0 +1,6 @@
+-- `accept_ladder_explicit_method_over_wildcard_method` with the two modules'
+-- roles swapped: the explicit import is `Tz`'s `sz`, so the program prints `2001`.
+import lib.ladder_sz.*
+import lib.ladder_tz.{sz}
+
+main = println (sz 1)

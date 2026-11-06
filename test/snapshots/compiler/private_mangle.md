@@ -1,5 +1,5 @@
 # META
-source_lines=2036
+source_lines=2032
 stages=DESUGAR,MARK
 # SOURCE
 import frontend.runtime_constructors.{namedRuntimeCtor}
@@ -134,7 +134,6 @@ import frontend.ast.{
   UseMember(..),
   useMemberOrigin,
   useMemberLocal,
-  useMemberAlias,
   qualifiedLocal,
   Variant(..),
   DataVis(..),
@@ -1415,11 +1414,12 @@ usePathEntries exportsPerUnit path =
       UseAlias _ a => flatMap (aliasEntryPair a) exports
 
 -- The implicit prelude's BARE spellings are already entered for every unit by
--- `coreImportEntries`, so the only prelude rows an explicit `import core …` owes are the
--- ones that introduce a name the bare pass cannot know: the alias-qualified `C.<name>`
--- and a member RENAME's new local.  Everything else stays `[]`, which is what this arm
--- returned for all four spellings before.  The name set is the same `exportsPerUnit`
--- row `coreImportEntries` reads, deliberately: resolve decides what a prelude alias may
+-- `coreImportEntries`.  An explicit `import core …` still owes a row for each name it
+-- binds: the alias-qualified `C.<name>` and a member rename's new local are spellings
+-- the bare pass cannot know, and a plain member or dotted name is an explicit import,
+-- so its row keeps a wildcard's entry of that name out (`explicitImportNames`).  A
+-- core wildcard owes nothing.  The name set is the same `exportsPerUnit` row
+-- `coreImportEntries` reads, deliberately: resolve decides what a prelude import may
 -- name, and an entry here for a name resolve refuses is never reachable from emitted
 -- code.  Widening THIS row is therefore not the #2640 question; `withPreludeDefs` is.
 corePathEntries : List (String, List (String, String)) ->
@@ -1429,13 +1429,9 @@ corePathEntries exportsPerUnit path = match lookupExports "core" exportsPerUnit
   None => []
   Some exports => match path
     UseAlias _ a => flatMap (aliasEntryPair a) exports
-    UseGroup _ members => flatMap (coreRenamedEntry exports) members
-    _ => []
-
-coreRenamedEntry : List (String, String) -> UseMember -> List (String, String)
-coreRenamedEntry exports m = match useMemberAlias m
-  None => []
-  Some local => originEntryAs exports (useMemberOrigin m) local
+    UseGroup _ members => flatMap (memberEntry exports) members
+    UseName ns => originEntry exports (lastOfPM ns)
+    UseWild _ => []
 
 -- a UseGroup member → entry if its ORIGIN names an exported fn of the origin module;
 -- the entry is keyed by the member's LOCAL name (its alias, if it has one).
@@ -2044,7 +2040,7 @@ recPatFieldVarsPM (RecPatField _ _ _ (Some p)) = patVarsPM p
 (DUse false (UseGroup ("support" "symbol_encoding") ((mem "encodePair" false))))
 (DUse false (UseGroup ("types" "symbol_origins") ((mem "SymbolOrigins" false) (mem "emptyOrigins" false) (mem "unitOrigins" false) (mem "mergeOrigins" false))))
 (DUse false (UseGroup ("types" "extern_source") ((mem "sourceExternSymbol" false) (mem "externDisplayName" false))))
-(DUse false (UseGroup ("frontend" "ast") ((mem "letBindName" false) (mem "declBinderNames" false) (mem "Decl" true) (mem "ExternDecl" true) (mem "Expr" true) (mem "Pat" true) (mem "Arm" true) (mem "Guard" true) (mem "GuardArm" true) (mem "DoStmt" true) (mem "Section" true) (mem "InterpPart" true) (mem "FieldAssign" true) (mem "RecPatField" true) (mem "LetBind" true) (mem "FunClause" true) (mem "IfaceMethod" true) (mem "MethodDefault" true) (mem "ImplMethod" true) (mem "PropParam" true) (mem "UsePath" true) (mem "UseMember" true) (mem "useMemberOrigin" false) (mem "useMemberLocal" false) (mem "useMemberAlias" false) (mem "qualifiedLocal" false) (mem "Variant" true) (mem "DataVis" true) (mem "Route" true) (mem "EvVal" true) (mem "EvEntry" true) (mem "EvId" true) (mem "EvTable" false))))
+(DUse false (UseGroup ("frontend" "ast") ((mem "letBindName" false) (mem "declBinderNames" false) (mem "Decl" true) (mem "ExternDecl" true) (mem "Expr" true) (mem "Pat" true) (mem "Arm" true) (mem "Guard" true) (mem "GuardArm" true) (mem "DoStmt" true) (mem "Section" true) (mem "InterpPart" true) (mem "FieldAssign" true) (mem "RecPatField" true) (mem "LetBind" true) (mem "FunClause" true) (mem "IfaceMethod" true) (mem "MethodDefault" true) (mem "ImplMethod" true) (mem "PropParam" true) (mem "UsePath" true) (mem "UseMember" true) (mem "useMemberOrigin" false) (mem "useMemberLocal" false) (mem "qualifiedLocal" false) (mem "Variant" true) (mem "DataVis" true) (mem "Route" true) (mem "EvVal" true) (mem "EvEntry" true) (mem "EvId" true) (mem "EvTable" false))))
 (DUse false (UseGroup ("frontend" "ast") ((mem "SiblingPair" true))))
 (DUse false (UseGroup ("frontend" "visibility") ((mem "ModuleExports" true) (mem "useModId" false) (mem "coreExports" false) (mem "buildExportsWith" false) (mem "pubIfaceMethodSets" false) (mem "ExportView" true) (mem "viewOf" false) (mem "fullExportsOf" false) (mem "directUnder" false) (mem "filterInSet" false) (mem "nsValues" false) (mem "valueDeclsOf" false) (mem "valueDeclOf" false) (mem "typeOfCtor" false) (mem "explicitImportNames" false) (mem "withoutShadowedWild" false))))
 (DUse false (UseAlias ("u64") "U64"))
@@ -2275,9 +2271,7 @@ recPatFieldVarsPM (RecPatField _ _ _ (Some p)) = patVarsPM p
 (DTypeSig false "usePathEntries" (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "String"))))) (TyFun (TyCon "UsePath") (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "String"))))))
 (DFunDef false "usePathEntries" ((PVar "exportsPerUnit") (PVar "path")) (EBlock (DoLet false false (PVar "mid") (EApp (EVar "useModId") (EVar "path"))) (DoExpr (EIf (EBinOp "==" (EVar "mid") (ELit (LString "core"))) (EApp (EApp (EVar "corePathEntries") (EVar "exportsPerUnit")) (EVar "path")) (EMatch (EApp (EApp (EVar "lookupExports") (EVar "mid")) (EVar "exportsPerUnit")) (arm (PCon "None") () (EListLit)) (arm (PCon "Some" (PVar "exports")) () (EMatch (EVar "path") (arm (PCon "UseGroup" PWild (PVar "members")) () (EApp (EApp (EVar "flatMap") (EApp (EVar "memberEntry") (EVar "exports"))) (EVar "members"))) (arm (PCon "UseWild" PWild) () (EApp (EApp (EVar "flatMap") (EVar "originEntryPair")) (EVar "exports"))) (arm (PCon "UseName" (PVar "ns")) () (EApp (EApp (EVar "originEntry") (EVar "exports")) (EApp (EVar "lastOfPM") (EVar "ns")))) (arm (PCon "UseAlias" PWild (PVar "a")) () (EApp (EApp (EVar "flatMap") (EApp (EVar "aliasEntryPair") (EVar "a"))) (EVar "exports"))))))))))
 (DTypeSig false "corePathEntries" (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "String"))))) (TyFun (TyCon "UsePath") (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "String"))))))
-(DFunDef false "corePathEntries" ((PVar "exportsPerUnit") (PVar "path")) (EMatch (EApp (EApp (EVar "lookupExports") (ELit (LString "core"))) (EVar "exportsPerUnit")) (arm (PCon "None") () (EListLit)) (arm (PCon "Some" (PVar "exports")) () (EMatch (EVar "path") (arm (PCon "UseAlias" PWild (PVar "a")) () (EApp (EApp (EVar "flatMap") (EApp (EVar "aliasEntryPair") (EVar "a"))) (EVar "exports"))) (arm (PCon "UseGroup" PWild (PVar "members")) () (EApp (EApp (EVar "flatMap") (EApp (EVar "coreRenamedEntry") (EVar "exports"))) (EVar "members"))) (arm PWild () (EListLit))))))
-(DTypeSig false "coreRenamedEntry" (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "String"))) (TyFun (TyCon "UseMember") (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "String"))))))
-(DFunDef false "coreRenamedEntry" ((PVar "exports") (PVar "m")) (EMatch (EApp (EVar "useMemberAlias") (EVar "m")) (arm (PCon "None") () (EListLit)) (arm (PCon "Some" (PVar "local")) () (EApp (EApp (EApp (EVar "originEntryAs") (EVar "exports")) (EApp (EVar "useMemberOrigin") (EVar "m"))) (EVar "local")))))
+(DFunDef false "corePathEntries" ((PVar "exportsPerUnit") (PVar "path")) (EMatch (EApp (EApp (EVar "lookupExports") (ELit (LString "core"))) (EVar "exportsPerUnit")) (arm (PCon "None") () (EListLit)) (arm (PCon "Some" (PVar "exports")) () (EMatch (EVar "path") (arm (PCon "UseAlias" PWild (PVar "a")) () (EApp (EApp (EVar "flatMap") (EApp (EVar "aliasEntryPair") (EVar "a"))) (EVar "exports"))) (arm (PCon "UseGroup" PWild (PVar "members")) () (EApp (EApp (EVar "flatMap") (EApp (EVar "memberEntry") (EVar "exports"))) (EVar "members"))) (arm (PCon "UseName" (PVar "ns")) () (EApp (EApp (EVar "originEntry") (EVar "exports")) (EApp (EVar "lastOfPM") (EVar "ns")))) (arm (PCon "UseWild" PWild) () (EListLit))))))
 (DTypeSig false "memberEntry" (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "String"))) (TyFun (TyCon "UseMember") (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "String"))))))
 (DFunDef false "memberEntry" ((PVar "exports") (PVar "m")) (EApp (EApp (EApp (EVar "originEntryAs") (EVar "exports")) (EApp (EVar "useMemberOrigin") (EVar "m"))) (EApp (EVar "useMemberLocal") (EVar "m"))))
 (DTypeSig false "originEntry" (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "String"))) (TyFun (TyCon "String") (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "String"))))))
@@ -2480,7 +2474,7 @@ recPatFieldVarsPM (RecPatField _ _ _ (Some p)) = patVarsPM p
 (DUse false (UseGroup ("support" "symbol_encoding") ((mem "encodePair" false))))
 (DUse false (UseGroup ("types" "symbol_origins") ((mem "SymbolOrigins" false) (mem "emptyOrigins" false) (mem "unitOrigins" false) (mem "mergeOrigins" false))))
 (DUse false (UseGroup ("types" "extern_source") ((mem "sourceExternSymbol" false) (mem "externDisplayName" false))))
-(DUse false (UseGroup ("frontend" "ast") ((mem "letBindName" false) (mem "declBinderNames" false) (mem "Decl" true) (mem "ExternDecl" true) (mem "Expr" true) (mem "Pat" true) (mem "Arm" true) (mem "Guard" true) (mem "GuardArm" true) (mem "DoStmt" true) (mem "Section" true) (mem "InterpPart" true) (mem "FieldAssign" true) (mem "RecPatField" true) (mem "LetBind" true) (mem "FunClause" true) (mem "IfaceMethod" true) (mem "MethodDefault" true) (mem "ImplMethod" true) (mem "PropParam" true) (mem "UsePath" true) (mem "UseMember" true) (mem "useMemberOrigin" false) (mem "useMemberLocal" false) (mem "useMemberAlias" false) (mem "qualifiedLocal" false) (mem "Variant" true) (mem "DataVis" true) (mem "Route" true) (mem "EvVal" true) (mem "EvEntry" true) (mem "EvId" true) (mem "EvTable" false))))
+(DUse false (UseGroup ("frontend" "ast") ((mem "letBindName" false) (mem "declBinderNames" false) (mem "Decl" true) (mem "ExternDecl" true) (mem "Expr" true) (mem "Pat" true) (mem "Arm" true) (mem "Guard" true) (mem "GuardArm" true) (mem "DoStmt" true) (mem "Section" true) (mem "InterpPart" true) (mem "FieldAssign" true) (mem "RecPatField" true) (mem "LetBind" true) (mem "FunClause" true) (mem "IfaceMethod" true) (mem "MethodDefault" true) (mem "ImplMethod" true) (mem "PropParam" true) (mem "UsePath" true) (mem "UseMember" true) (mem "useMemberOrigin" false) (mem "useMemberLocal" false) (mem "qualifiedLocal" false) (mem "Variant" true) (mem "DataVis" true) (mem "Route" true) (mem "EvVal" true) (mem "EvEntry" true) (mem "EvId" true) (mem "EvTable" false))))
 (DUse false (UseGroup ("frontend" "ast") ((mem "SiblingPair" true))))
 (DUse false (UseGroup ("frontend" "visibility") ((mem "ModuleExports" true) (mem "useModId" false) (mem "coreExports" false) (mem "buildExportsWith" false) (mem "pubIfaceMethodSets" false) (mem "ExportView" true) (mem "viewOf" false) (mem "fullExportsOf" false) (mem "directUnder" false) (mem "filterInSet" false) (mem "nsValues" false) (mem "valueDeclsOf" false) (mem "valueDeclOf" false) (mem "typeOfCtor" false) (mem "explicitImportNames" false) (mem "withoutShadowedWild" false))))
 (DUse false (UseAlias ("u64") "U64"))
@@ -2711,9 +2705,7 @@ recPatFieldVarsPM (RecPatField _ _ _ (Some p)) = patVarsPM p
 (DTypeSig false "usePathEntries" (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "String"))))) (TyFun (TyCon "UsePath") (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "String"))))))
 (DFunDef false "usePathEntries" ((PVar "exportsPerUnit") (PVar "path")) (EBlock (DoLet false false (PVar "mid") (EApp (EVar "useModId") (EVar "path"))) (DoExpr (EIf (EBinOp "==" (EVar "mid") (ELit (LString "core"))) (EApp (EApp (EVar "corePathEntries") (EVar "exportsPerUnit")) (EVar "path")) (EMatch (EApp (EApp (EVar "lookupExports") (EVar "mid")) (EVar "exportsPerUnit")) (arm (PCon "None") () (EListLit)) (arm (PCon "Some" (PVar "exports")) () (EMatch (EVar "path") (arm (PCon "UseGroup" PWild (PVar "members")) () (EApp (EApp (EDictApp "flatMap") (EApp (EVar "memberEntry") (EVar "exports"))) (EVar "members"))) (arm (PCon "UseWild" PWild) () (EApp (EApp (EDictApp "flatMap") (EVar "originEntryPair")) (EVar "exports"))) (arm (PCon "UseName" (PVar "ns")) () (EApp (EApp (EVar "originEntry") (EVar "exports")) (EApp (EVar "lastOfPM") (EVar "ns")))) (arm (PCon "UseAlias" PWild (PVar "a")) () (EApp (EApp (EDictApp "flatMap") (EApp (EVar "aliasEntryPair") (EVar "a"))) (EVar "exports"))))))))))
 (DTypeSig false "corePathEntries" (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "String"))))) (TyFun (TyCon "UsePath") (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "String"))))))
-(DFunDef false "corePathEntries" ((PVar "exportsPerUnit") (PVar "path")) (EMatch (EApp (EApp (EVar "lookupExports") (ELit (LString "core"))) (EVar "exportsPerUnit")) (arm (PCon "None") () (EListLit)) (arm (PCon "Some" (PVar "exports")) () (EMatch (EVar "path") (arm (PCon "UseAlias" PWild (PVar "a")) () (EApp (EApp (EDictApp "flatMap") (EApp (EVar "aliasEntryPair") (EVar "a"))) (EVar "exports"))) (arm (PCon "UseGroup" PWild (PVar "members")) () (EApp (EApp (EDictApp "flatMap") (EApp (EVar "coreRenamedEntry") (EVar "exports"))) (EVar "members"))) (arm PWild () (EListLit))))))
-(DTypeSig false "coreRenamedEntry" (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "String"))) (TyFun (TyCon "UseMember") (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "String"))))))
-(DFunDef false "coreRenamedEntry" ((PVar "exports") (PVar "m")) (EMatch (EApp (EVar "useMemberAlias") (EVar "m")) (arm (PCon "None") () (EListLit)) (arm (PCon "Some" (PVar "local")) () (EApp (EApp (EApp (EVar "originEntryAs") (EVar "exports")) (EApp (EVar "useMemberOrigin") (EVar "m"))) (EVar "local")))))
+(DFunDef false "corePathEntries" ((PVar "exportsPerUnit") (PVar "path")) (EMatch (EApp (EApp (EVar "lookupExports") (ELit (LString "core"))) (EVar "exportsPerUnit")) (arm (PCon "None") () (EListLit)) (arm (PCon "Some" (PVar "exports")) () (EMatch (EVar "path") (arm (PCon "UseAlias" PWild (PVar "a")) () (EApp (EApp (EDictApp "flatMap") (EApp (EVar "aliasEntryPair") (EVar "a"))) (EVar "exports"))) (arm (PCon "UseGroup" PWild (PVar "members")) () (EApp (EApp (EDictApp "flatMap") (EApp (EVar "memberEntry") (EVar "exports"))) (EVar "members"))) (arm (PCon "UseName" (PVar "ns")) () (EApp (EApp (EVar "originEntry") (EVar "exports")) (EApp (EVar "lastOfPM") (EVar "ns")))) (arm (PCon "UseWild" PWild) () (EListLit))))))
 (DTypeSig false "memberEntry" (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "String"))) (TyFun (TyCon "UseMember") (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "String"))))))
 (DFunDef false "memberEntry" ((PVar "exports") (PVar "m")) (EApp (EApp (EApp (EVar "originEntryAs") (EVar "exports")) (EApp (EVar "useMemberOrigin") (EVar "m"))) (EApp (EVar "useMemberLocal") (EVar "m"))))
 (DTypeSig false "originEntry" (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "String"))) (TyFun (TyCon "String") (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "String"))))))

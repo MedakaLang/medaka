@@ -32,6 +32,7 @@ anyUsePathBindsCtor : GraphCtx -> List Decl -> String -> String -> Ident -> Bool
 applyCtorScopeOverrides : List Decl -> TcEnv -> TcEnv
 applyRecordScopeOverrides : ModuleCtx -> List Decl -> Unit
 argDispatchOf : ModuleCtx -> String -> Option Int
+coreImportLocals : Decl -> List String
 ctorCandImported : GraphCtx -> List Decl -> String -> (Ident, String, Scheme) -> Bool
 ctorCandScheme : (Ident, String, Scheme) -> Scheme
 declCtorNamed : String -> Decl -> Bool
@@ -39,6 +40,7 @@ declaresCtorNamed : List Decl -> String -> Bool
 depExportsCtorIdent : GraphCtx -> String -> String -> Ident -> Bool
 depExportsMethodIdent : GraphCtx -> String -> String -> Ident -> Bool
 dispatchIdxScoped : ModuleCtx -> String -> List ((IfaceRef, String), Int) -> Option Int
+explicitCoreLocals : List Decl -> List String
 exportsCtorIdentFor : String -> Ident -> List (String, String, Ident) -> Bool
 exportsIdentFor : String -> Ident -> List (String, Ident) -> Bool
 graphAliasEntry : String -> List ((String, String), a) -> (String, (String, String)) -> List (String, a)
@@ -75,6 +77,7 @@ methodIfaceHere : ModuleCtx -> String -> Option IfaceRef
 methodImportedScope : GraphCtx -> Bool -> List Decl -> String -> List MethodRow -> MethodScope
 methodNameDeclaredAt : Int -> MethodEnv -> String -> Bool
 methodOwnScope : GraphCtx -> Bool -> List Decl -> String -> List MethodRow -> MethodScope
+methodRungOne : GraphCtx -> List Decl -> String -> List MethodRow -> List MethodRow
 methodScopeAt : GraphCtx -> Bool -> List Decl -> String -> Int -> DeclEnvs -> MethodScope
 methodScopeHere : ModuleCtx -> String -> MethodScope
 methodUndecided : GraphCtx -> List Decl -> String -> List MethodRow -> List MethodRow -> MethodScope
@@ -94,6 +97,7 @@ schemeOblEntriesFor : String -> UsePath -> List ((String, String), List VecObl) 
 scopedCtorEntry : GraphCtx -> List Decl -> String -> List (Ident, String, Scheme) -> Option Scheme
 scopedRecordEntry : GraphCtx -> List Decl -> String -> List (Ident, String, RecordInfo) -> Option RecordInfo
 seedExplicitOverWild : (List Decl -> a -> List (String, (Option String, b))) -> List Decl -> a -> List (String, (Option String, b))
+seededRow : (String, (Bool, Option a)) -> List a
 sortIfaceRefs : List IfaceRef -> List IfaceRef
 sortIfaceRefsGo : List IfaceRef -> List IfaceRef -> List IfaceRef
 sortInsertIfaceRef : IfaceRef -> List IfaceRef -> List IfaceRef

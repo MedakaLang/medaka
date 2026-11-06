@@ -1,0 +1,5 @@
+-- L2 rung 3 over rung 4: the explicit `import core.{clamp}` binds the
+-- prelude's constrained `clamp`; the wildcard's `clamp` is not it, so 5
+import core.{clamp}
+import clampmod.*
+main = println (clamp 0 10 5)
