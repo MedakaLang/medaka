@@ -339,7 +339,6 @@ import backend.trmc_analysis.{
   lastStmtExpr,
 }
 import types.private_mangle.{hashName}
-import types.route_key.{numIntWord}
 import backend.impl_groups.{ImplClauseGroup(..)}
 import backend.emit_plan.{
   EmitPlan(..),
@@ -4371,12 +4370,9 @@ u64AliasBody e ps body _ = match u64KernelApplied e ps body
   Some kern => if isU64ShiftKernel kern then None else Some kern
   None => None
 
--- The value of an Int literal as the emitter receives it: bare, or still the
--- `fromInt` application the typechecker routed to `Num Int`.
+-- The value of a bare Int literal as the emitter receives it.
 intLitOf : CExpr -> Option Int
 intLitOf (CLit (LInt n)) = Some n
-intLitOf (CApp (CMethod "fromInt" (MethodEvidence _ _ (RKey word _ _) _ _)) [CLit (LInt n)] _)
-  | word == numIntWord = Some n
 intLitOf _ = None
 
 -- a guard's `| otherwise = e` arm, which lowers to `if otherwise then e else …`.
@@ -5500,25 +5496,6 @@ floatFromIntArg e env ex = match flattenApp ex []
   (h, a :: []) =>
     if headNameIs h "intToFloat" || headNameIs h "fromInt" then Some a else None
   _ => None
-
--- #2729 item 3: `Num Int`'s own `fromInt` IS the identity — `stdlib/core.mdk` defines
--- it `fromInt x = x`, on a word that is already a tagged Int — so a SATURATED
--- occurrence routed to that impl emits its argument and nothing else.  The witness is
--- the route's own word, `Num Int`'s (`numIntWord`, the instance emitMethod would
--- call as `@mdk_impl_Int_fromInt`), never the argument's shape: `fromInt` at any other
--- head (`Float`'s intToFloat, a user `impl Num`) is a real conversion and keeps its
--- call.  Empty impl/method dict routes are required rather than assumed — `Num` has no
--- element `requires`, so a non-empty route vector here is some other shape and is left
--- alone.
-intFromIntIdentityArg : String ->
-  Route ->
-  List Route ->
-  List Route ->
-  List CExpr ->
-  Option CExpr
-intFromIntIdentityArg "fromInt" (RKey word [] _) [] [] (a :: [])
-  | word == numIntWord = Some a
-intFromIntIdentityArg _ _ _ _ _ = None
 
 headNameIs : CExpr -> String -> Bool
 headNameIs (CVar n _) name = n == name
@@ -7051,21 +7028,8 @@ emitApp e env app =
         else
           emitIndirect e env hd args mode
     CMethod name (MethodEvidence iface arity route implRoutes methRoutes) =>
-      match intFromIntIdentityArg name route implRoutes methRoutes args
-        Some a => emitExpr e env a
-        None =>
-          let argOps = emitArgs e env args
-          emitMethod
-            e
-            env
-            name
-            iface
-            arity
-            route
-            implRoutes
-            methRoutes
-            argOps
-            mode
+      let argOps = emitArgs e env args
+      emitMethod e env name iface arity route implRoutes methRoutes argOps mode
     CDict name routes =>
       let argOps = emitArgs e env args
       emitDictApp e env name routes argOps mode
@@ -13449,8 +13413,7 @@ emitTailLeaf e env self ex orValue =
 -- statically known: a top-level function (one with no raw worker or `u64`
 -- kernel for this call, which `emitApp` emits instead), a constrained one (its
 -- dictionary words lead), or the impl entry an `RKey` route selects
--- (`emitMethod`'s choice, not the `fromInt` identity it folds away).  None for
--- any other application, emitting nothing.
+-- (`emitMethod`'s choice).  None for any other application, emitting nothing.
 --
 -- #1101: only an application stamped `CallExact` passes every argument to the
 -- define; an over- or under-application goes through `emitApp` in its own mode.
@@ -13482,9 +13445,7 @@ directCallOperands e env ex =
       else
         None
     CMethod name (MethodEvidence iface siteArity (route@(RKey tag _ _)) implRoutes methRoutes) =>
-      let folded = intFromIntIdentityArg name route implRoutes methRoutes args
-      if hasArgs args
-        && isNone folded then match implForSite e name iface tag siteArity
+      if hasArgs args then match implForSite e name iface tag siteArity
         Some ent =>
           let argOps = emitArgs e env args
           let dictRoutes =

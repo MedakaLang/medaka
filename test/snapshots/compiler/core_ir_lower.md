@@ -75,7 +75,6 @@ import types.route_key.{
   evDictRoutesIn,
   evMethodRoutesIn,
   evSiteHeadIn,
-  numIntWord,
   numFloatWord,
 }
 import ir.core_ir.{
@@ -1811,9 +1810,10 @@ spineOf (CApp f args _) =
 spineOf e = (e, [])
 
 -- an argument whose evaluation has no effect and does no work worth delaying.  A
--- literal's `fromInt` is one only through the prelude's `Num` at `Int` and
--- `Float`, whose conversions cannot fail: any other impl may panic (a range
--- check), and delaying it would move or drop the panic.
+-- literal's `fromInt` is one only through the prelude's `Num` at `Float`, whose
+-- conversion cannot fail: any other impl may panic (a range check), and delaying it
+-- would move or drop the panic.  `Num Int`'s `fromInt` is already folded to its
+-- literal by `fold-num-int-fromint`, which runs before `eta-saturate` reads this.
 isAtomicArg : CExpr -> Bool
 isAtomicArg (CVar _ _) = True
 isAtomicArg (CLit _) = True
@@ -1821,7 +1821,7 @@ isAtomicArg (CLam _ _) = True
 isAtomicArg (CMethod _ _) = True
 isAtomicArg (CDict _ _) = True
 isAtomicArg (CApp (CMethod "fromInt" (MethodEvidence _ _ (RKey key _ _) _ _)) [CLit _] _) =
-  key == numIntWord || key == numFloatWord
+  key == numFloatWord
 isAtomicArg _ = False
 
 isFunctionBind : CBind -> Bool
@@ -4127,7 +4127,7 @@ nodeTag _ = "?"
 (DUse false (UseGroup ("ir" "core_opt_num") ((mem "foldNumIntFromInt" false))))
 (DUse false (UseGroup ("ir" "core_pass") ((mem "CorePass" true) (mem "PassConfig" true) (mem "PassRun" true) (mem "PassFault" true) (mem "defaultPassConfig" false) (mem "runPasses" false))))
 (DUse false (UseGroup ("frontend" "ast") ((mem "isWildPat" false) (mem "letBindName" false) (mem "noBinderId" false) (mem "BinderId" true) (mem "Lit" true) (mem "Loc" true) (mem "noDeclLoc" false) (mem "Pat" true) (mem "RecPatField" true) (mem "Expr" true) (mem "Arm" true) (mem "Guard" true) (mem "DoStmt" true) (mem "FieldAssign" true) (mem "LetBind" true) (mem "FunClause" true) (mem "Addr" true) (mem "Decl" true) (mem "ExternDecl" true) (mem "hostRows" false) (mem "Attr" true) (mem "Variant" true) (mem "ConPayload" true) (mem "Field" true) (mem "Ty" true) (mem "Constraint" true) (mem "IfaceMethod" true) (mem "MethodDefault" true) (mem "ImplMethod" true) (mem "Route" true) (mem "TyConOrigin" false) (mem "ifaceIdentity" false) (mem "defaultReceiverDict" false) (mem "patHasOr" false) (mem "orCandidates" false) (mem "paramCandidates" false) (mem "armCandidates" false) (mem "armHasOr" false))))
-(DUse false (UseGroup ("types" "route_key") ((mem "implRouteKeyWord" false) (mem "ifaceWordOf" false) (mem "evDictRoutesIn" false) (mem "evMethodRoutesIn" false) (mem "evSiteHeadIn" false) (mem "numIntWord" false) (mem "numFloatWord" false))))
+(DUse false (UseGroup ("types" "route_key") ((mem "implRouteKeyWord" false) (mem "ifaceWordOf" false) (mem "evDictRoutesIn" false) (mem "evMethodRoutesIn" false) (mem "evSiteHeadIn" false) (mem "numFloatWord" false))))
 (DUse false (UseGroup ("ir" "core_ir") ((mem "CExpr" true) (mem "MethodEvidence" true) (mem "isGivenRooted" false) (mem "ifaceMethodArityKey" false) (mem "CArm" true) (mem "CGuard" true) (mem "CStmt" true) (mem "CField" true) (mem "CBind" true) (mem "CClause" true) (mem "CImplEntry" true) (mem "CImplBody" true) (mem "ImplSym" true) (mem "noImplSym" false) (mem "CProgram" true) (mem "DeclFacts" true) (mem "EntryFact" true) (mem "MethodResultFact" true) (mem "noDeclFacts" false) (mem "CallMode" true) (mem "CallSite" true) (mem "mkApp" false) (mem "leadingDictParams" false) (mem "CTree" true) (mem "CTBranch" true) (mem "CHead" true) (mem "FailSite" true) (mem "siteSentinelName" false) (mem "mapProgramBinders" false) (mem "BinderSite" true) (mem "obviousRuntimeType" false) (mem "withBinderRows" false))))
 (DUse false (UseGroup ("frontend" "desugar") ((mem "mapProg" false) (mem "freshBinderId" false))))
 (DUse false (UseGroup ("types" "runtime_types") ((mem "BinderRow" true) (mem "RuntimeType" true) (mem "binderOrdinal" false) (mem "binderRowIn" false) (mem "BinderTypeTable" false))))
@@ -4684,7 +4684,7 @@ nodeTag _ = "?"
 (DFunDef false "isAtomicArg" ((PCon "CLam" PWild PWild)) (EVar "True"))
 (DFunDef false "isAtomicArg" ((PCon "CMethod" PWild PWild)) (EVar "True"))
 (DFunDef false "isAtomicArg" ((PCon "CDict" PWild PWild)) (EVar "True"))
-(DFunDef false "isAtomicArg" ((PCon "CApp" (PCon "CMethod" (PLit (LString "fromInt")) (PCon "MethodEvidence" PWild PWild (PCon "RKey" (PVar "key") PWild PWild) PWild PWild)) (PList (PCon "CLit" PWild)) PWild)) (EBinOp "||" (EBinOp "==" (EVar "key") (EVar "numIntWord")) (EBinOp "==" (EVar "key") (EVar "numFloatWord"))))
+(DFunDef false "isAtomicArg" ((PCon "CApp" (PCon "CMethod" (PLit (LString "fromInt")) (PCon "MethodEvidence" PWild PWild (PCon "RKey" (PVar "key") PWild PWild) PWild PWild)) (PList (PCon "CLit" PWild)) PWild)) (EBinOp "==" (EVar "key") (EVar "numFloatWord")))
 (DFunDef false "isAtomicArg" (PWild) (EVar "False"))
 (DTypeSig false "isFunctionBind" (TyFun (TyCon "CBind") (TyCon "Bool")))
 (DFunDef false "isFunctionBind" ((PCon "CBind" PWild (PVar "clauses") PWild PWild)) (EApp (EApp (EVar "allList") (EVar "clauseHasParams")) (EVar "clauses")))
@@ -5467,7 +5467,7 @@ nodeTag _ = "?"
 (DUse false (UseGroup ("ir" "core_opt_num") ((mem "foldNumIntFromInt" false))))
 (DUse false (UseGroup ("ir" "core_pass") ((mem "CorePass" true) (mem "PassConfig" true) (mem "PassRun" true) (mem "PassFault" true) (mem "defaultPassConfig" false) (mem "runPasses" false))))
 (DUse false (UseGroup ("frontend" "ast") ((mem "isWildPat" false) (mem "letBindName" false) (mem "noBinderId" false) (mem "BinderId" true) (mem "Lit" true) (mem "Loc" true) (mem "noDeclLoc" false) (mem "Pat" true) (mem "RecPatField" true) (mem "Expr" true) (mem "Arm" true) (mem "Guard" true) (mem "DoStmt" true) (mem "FieldAssign" true) (mem "LetBind" true) (mem "FunClause" true) (mem "Addr" true) (mem "Decl" true) (mem "ExternDecl" true) (mem "hostRows" false) (mem "Attr" true) (mem "Variant" true) (mem "ConPayload" true) (mem "Field" true) (mem "Ty" true) (mem "Constraint" true) (mem "IfaceMethod" true) (mem "MethodDefault" true) (mem "ImplMethod" true) (mem "Route" true) (mem "TyConOrigin" false) (mem "ifaceIdentity" false) (mem "defaultReceiverDict" false) (mem "patHasOr" false) (mem "orCandidates" false) (mem "paramCandidates" false) (mem "armCandidates" false) (mem "armHasOr" false))))
-(DUse false (UseGroup ("types" "route_key") ((mem "implRouteKeyWord" false) (mem "ifaceWordOf" false) (mem "evDictRoutesIn" false) (mem "evMethodRoutesIn" false) (mem "evSiteHeadIn" false) (mem "numIntWord" false) (mem "numFloatWord" false))))
+(DUse false (UseGroup ("types" "route_key") ((mem "implRouteKeyWord" false) (mem "ifaceWordOf" false) (mem "evDictRoutesIn" false) (mem "evMethodRoutesIn" false) (mem "evSiteHeadIn" false) (mem "numFloatWord" false))))
 (DUse false (UseGroup ("ir" "core_ir") ((mem "CExpr" true) (mem "MethodEvidence" true) (mem "isGivenRooted" false) (mem "ifaceMethodArityKey" false) (mem "CArm" true) (mem "CGuard" true) (mem "CStmt" true) (mem "CField" true) (mem "CBind" true) (mem "CClause" true) (mem "CImplEntry" true) (mem "CImplBody" true) (mem "ImplSym" true) (mem "noImplSym" false) (mem "CProgram" true) (mem "DeclFacts" true) (mem "EntryFact" true) (mem "MethodResultFact" true) (mem "noDeclFacts" false) (mem "CallMode" true) (mem "CallSite" true) (mem "mkApp" false) (mem "leadingDictParams" false) (mem "CTree" true) (mem "CTBranch" true) (mem "CHead" true) (mem "FailSite" true) (mem "siteSentinelName" false) (mem "mapProgramBinders" false) (mem "BinderSite" true) (mem "obviousRuntimeType" false) (mem "withBinderRows" false))))
 (DUse false (UseGroup ("frontend" "desugar") ((mem "mapProg" false) (mem "freshBinderId" false))))
 (DUse false (UseGroup ("types" "runtime_types") ((mem "BinderRow" true) (mem "RuntimeType" true) (mem "binderOrdinal" false) (mem "binderRowIn" false) (mem "BinderTypeTable" false))))
@@ -6024,7 +6024,7 @@ nodeTag _ = "?"
 (DFunDef false "isAtomicArg" ((PCon "CLam" PWild PWild)) (EVar "True"))
 (DFunDef false "isAtomicArg" ((PCon "CMethod" PWild PWild)) (EVar "True"))
 (DFunDef false "isAtomicArg" ((PCon "CDict" PWild PWild)) (EVar "True"))
-(DFunDef false "isAtomicArg" ((PCon "CApp" (PCon "CMethod" (PLit (LString "fromInt")) (PCon "MethodEvidence" PWild PWild (PCon "RKey" (PVar "key") PWild PWild) PWild PWild)) (PList (PCon "CLit" PWild)) PWild)) (EBinOp "||" (EBinOp "==" (EVar "key") (EVar "numIntWord")) (EBinOp "==" (EVar "key") (EVar "numFloatWord"))))
+(DFunDef false "isAtomicArg" ((PCon "CApp" (PCon "CMethod" (PLit (LString "fromInt")) (PCon "MethodEvidence" PWild PWild (PCon "RKey" (PVar "key") PWild PWild) PWild PWild)) (PList (PCon "CLit" PWild)) PWild)) (EBinOp "==" (EVar "key") (EVar "numFloatWord")))
 (DFunDef false "isAtomicArg" (PWild) (EVar "False"))
 (DTypeSig false "isFunctionBind" (TyFun (TyCon "CBind") (TyCon "Bool")))
 (DFunDef false "isFunctionBind" ((PCon "CBind" PWild (PVar "clauses") PWild PWild)) (EApp (EApp (EVar "allList") (EVar "clauseHasParams")) (EVar "clauses")))
