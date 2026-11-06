@@ -1,5 +1,5 @@
 # META
-source_lines=1276
+source_lines=1278
 stages=DESUGAR,MARK
 # SOURCE
 -- A module's export surface, built from its declarations and the surfaces of
@@ -247,7 +247,9 @@ writtenImportsOf prog = match aliasImportSites prog
   [] => prog
   sites => filterList (d => not (isAliasMethodImport sites d)) prog
 
--- The module path and location of one `import m as A`.
+-- The module path and location of one `import m as A`.  Built with record
+-- syntax and read with `.field`: eval represents positional and record
+-- construction differently, so one form per type (#TBD).
 public export data AliasSite = AliasSite { asQuals : List String, asLoc : Loc }
 
 -- The module path and location of each `import m as A` in [prog].
@@ -257,7 +259,7 @@ aliasImportSites [] = []
 aliasImportSites ((DAttrib _ d) :: rest) =
   aliasImportSites [d] ++ aliasImportSites rest
 aliasImportSites ((DUse _ (UseAlias quals _) loc) :: rest) =
-  AliasSite quals loc :: aliasImportSites rest
+  AliasSite { asQuals = quals, asLoc = loc } :: aliasImportSites rest
 aliasImportSites (_ :: rest) = aliasImportSites rest
 
 -- Only a `UseGroup` import is ever synthesized, so the final catch-all answering False
@@ -1364,7 +1366,7 @@ overPubUse coreExp known f path =
 (DTypeSig true "aliasImportSites" (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyApp (TyCon "List") (TyCon "AliasSite"))))
 (DFunDef false "aliasImportSites" ((PList)) (EListLit))
 (DFunDef false "aliasImportSites" ((PCons (PCon "DAttrib" PWild (PVar "d")) (PVar "rest"))) (EBinOp "++" (EApp (EVar "aliasImportSites") (EListLit (EVar "d"))) (EApp (EVar "aliasImportSites") (EVar "rest"))))
-(DFunDef false "aliasImportSites" ((PCons (PCon "DUse" PWild (PCon "UseAlias" (PVar "quals") PWild) (PVar "loc")) (PVar "rest"))) (EBinOp "::" (EApp (EApp (EVar "AliasSite") (EVar "quals")) (EVar "loc")) (EApp (EVar "aliasImportSites") (EVar "rest"))))
+(DFunDef false "aliasImportSites" ((PCons (PCon "DUse" PWild (PCon "UseAlias" (PVar "quals") PWild) (PVar "loc")) (PVar "rest"))) (EBinOp "::" (ERecordCreate "AliasSite" ((fa "asQuals" (EVar "quals")) (fa "asLoc" (EVar "loc")))) (EApp (EVar "aliasImportSites") (EVar "rest"))))
 (DFunDef false "aliasImportSites" ((PCons PWild (PVar "rest"))) (EApp (EVar "aliasImportSites") (EVar "rest")))
 (DTypeSig false "isAliasMethodImport" (TyFun (TyApp (TyCon "List") (TyCon "AliasSite")) (TyFun (TyCon "Decl") (TyCon "Bool"))))
 (DFunDef false "isAliasMethodImport" ((PVar "sites") (PCon "DAttrib" PWild (PVar "d"))) (EApp (EApp (EVar "isAliasMethodImport") (EVar "sites")) (EVar "d")))
@@ -1627,7 +1629,7 @@ overPubUse coreExp known f path =
 (DTypeSig true "aliasImportSites" (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyApp (TyCon "List") (TyCon "AliasSite"))))
 (DFunDef false "aliasImportSites" ((PList)) (EListLit))
 (DFunDef false "aliasImportSites" ((PCons (PCon "DAttrib" PWild (PVar "d")) (PVar "rest"))) (EBinOp "++" (EApp (EVar "aliasImportSites") (EListLit (EVar "d"))) (EApp (EVar "aliasImportSites") (EVar "rest"))))
-(DFunDef false "aliasImportSites" ((PCons (PCon "DUse" PWild (PCon "UseAlias" (PVar "quals") PWild) (PVar "loc")) (PVar "rest"))) (EBinOp "::" (EApp (EApp (EVar "AliasSite") (EVar "quals")) (EVar "loc")) (EApp (EVar "aliasImportSites") (EVar "rest"))))
+(DFunDef false "aliasImportSites" ((PCons (PCon "DUse" PWild (PCon "UseAlias" (PVar "quals") PWild) (PVar "loc")) (PVar "rest"))) (EBinOp "::" (ERecordCreate "AliasSite" ((fa "asQuals" (EVar "quals")) (fa "asLoc" (EVar "loc")))) (EApp (EVar "aliasImportSites") (EVar "rest"))))
 (DFunDef false "aliasImportSites" ((PCons PWild (PVar "rest"))) (EApp (EVar "aliasImportSites") (EVar "rest")))
 (DTypeSig false "isAliasMethodImport" (TyFun (TyApp (TyCon "List") (TyCon "AliasSite")) (TyFun (TyCon "Decl") (TyCon "Bool"))))
 (DFunDef false "isAliasMethodImport" ((PVar "sites") (PCon "DAttrib" PWild (PVar "d"))) (EApp (EApp (EVar "isAliasMethodImport") (EVar "sites")) (EVar "d")))

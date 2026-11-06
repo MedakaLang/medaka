@@ -1,5 +1,5 @@
 # META
-source_lines=417
+source_lines=441
 stages=DESUGAR,MARK
 # SOURCE
 -- The binding of every bare lowercase name in one module, by scope alone: the
@@ -104,12 +104,15 @@ data ImportBind = ImportBind {
 }
 
 -- An interface that declares a method, and the module declaring that interface.
+-- Built with record syntax and read with `.field`: eval represents positional and
+-- record construction differently, so one form per type (#TBD).
 data MethodOrigin = MethodOrigin { moIface : String, moModule : String }
 
 -- A declaration by its declaring module and the name it is declared under.
 data DeclRef = DeclRef { drModule : String, drName : String } deriving (Eq)
 
--- A declaration an import brings, with the importing module.
+-- A declaration an import brings, with the importing module.  Record form only
+-- (see MethodOrigin).
 data Brought = Brought { brTarget : NameTarget, brModule : String }
 
 -- A name an import rung binds, with the declarations it denotes there.
@@ -188,7 +191,8 @@ data OwnWalk = OwnWalk {
   owClashes : List NameCollision,
 }
 
--- One name a declaration binds, with the declaration and its span.
+-- One name a declaration binds, with the declaration and its span.  Record form
+-- only (see MethodOrigin).
 data Binder = Binder {
   bdName : String,
   bdTarget : NameTarget,
@@ -199,25 +203,30 @@ emptyOwnWalk : OwnWalk
 emptyOwnWalk = OwnWalk { owFirst = omEmpty, owOrder = [], owClashes = [] }
 
 ownStep : OwnWalk -> Binder -> OwnWalk
-ownStep walk (b@(Binder n t l)) = match omLookup n walk.owFirst
-  None => { walk |
-    owFirst = omInsert n b walk.owFirst,
-    owOrder = b :: walk.owOrder,
-  }
-  Some (Binder _ first firstLoc) =>
-    if isMethod first /= isMethod t && not (anyClash n walk.owClashes) then
-      -- The later declaration's span, else the earlier one's: an interface
-      -- method parsed without a span still reports at a real declaration.
-      let clash = NameCollision {
-        ncName = n,
-        ncFirst = first,
-        ncSecond = t,
-        ncRungs = (RungOwn, RungOwn),
-        ncLoc = orElse l firstLoc,
-      }
-      { walk | owClashes = clash :: walk.owClashes }
-    else
-      walk
+ownStep walk b =
+  let n = b.bdName
+  let t = b.bdTarget
+  let l = b.bdLoc
+  match omLookup n walk.owFirst
+    None => { walk |
+      owFirst = omInsert n b walk.owFirst,
+      owOrder = b :: walk.owOrder,
+    }
+    Some prior =>
+      if isMethod prior.bdTarget /= isMethod t
+        && not (anyClash n walk.owClashes) then
+        -- The later declaration's span, else the earlier one's: an interface
+        -- method parsed without a span still reports at a real declaration.
+        let clash = NameCollision {
+          ncName = n,
+          ncFirst = prior.bdTarget,
+          ncSecond = t,
+          ncRungs = (RungOwn, RungOwn),
+          ncLoc = orElse l prior.bdLoc,
+        }
+        { walk | owClashes = clash :: walk.owClashes }
+      else
+        walk
 
 anyClash : String -> List NameCollision -> Bool
 anyClash n clashes = any (c => c.ncName == n) clashes
@@ -240,16 +249,16 @@ declBinders (DAttrib _ d) = declBinders d
 declBinders _ = []
 
 ownValue : String -> Option Loc -> Binder
-ownValue n l = Binder n (TargetValue "" n) l
+ownValue n l = Binder { bdName = n, bdTarget = TargetValue "" n, bdLoc = l }
 
 letBinder : LetBind -> Binder
 letBinder (LetBind n _ loc _) = ownValue n (Some loc)
 
 methodBinder : String -> Option Loc -> IfaceMethod -> Binder
 methodBinder i _ (IfaceMethod m _ _ (Some loc)) =
-  Binder m (TargetMethod "" i m) (Some loc)
+  Binder { bdName = m, bdTarget = TargetMethod "" i m, bdLoc = Some loc }
 methodBinder i nameLoc (IfaceMethod m _ _ None) =
-  Binder m (TargetMethod "" i m) nameLoc
+  Binder { bdName = m, bdTarget = TargetMethod "" i m, bdLoc = nameLoc }
 
 -- ── rungs 3 and 4: explicit and wildcard imports ───────────────────────────
 
@@ -315,8 +324,17 @@ methodOrigins exp =
       let owners = map snd (filter (o => fst o == i) exp.expIfaceOrigins)
       fold
         (acc meth => match omLookup meth acc
-          Some ps => omInsert meth (ps ++ map (MethodOrigin i) owners) acc
-          None => omInsert meth (map (MethodOrigin i) owners) acc)
+          Some ps =>
+            omInsert
+              meth
+              (ps
+                ++ map (o => MethodOrigin { moIface = i, moModule = o }) owners)
+              acc
+          None =>
+            omInsert
+              meth
+              (map (o => MethodOrigin { moIface = i, moModule = o }) owners)
+              acc)
         m
         ms)
     omEmpty
@@ -369,12 +387,18 @@ addBind (m, order) b =
     Some known => (
       omInsert
         b.ibName
-        (known ++ map (t => Brought t b.ibModule) (fresh known))
+        (known
+          ++ map
+            (t => Brought { brTarget = t, brModule = b.ibModule })
+            (fresh known))
         m,
       order,
     )
     None => (
-      omInsert b.ibName (map (t => Brought t b.ibModule) (fresh [])) m,
+      omInsert
+        b.ibName
+        (map (t => Brought { brTarget = t, brModule = b.ibModule }) (fresh []))
+        m,
       b.ibName :: order,
     )
 
@@ -463,7 +487,7 @@ preludeBinding prelude n = match omLookup n (declsByName prelude)
 (DTypeSig false "emptyOwnWalk" (TyCon "OwnWalk"))
 (DFunDef false "emptyOwnWalk" () (ERecordCreate "OwnWalk" ((fa "owFirst" (EVar "omEmpty")) (fa "owOrder" (EListLit)) (fa "owClashes" (EListLit)))))
 (DTypeSig false "ownStep" (TyFun (TyCon "OwnWalk") (TyFun (TyCon "Binder") (TyCon "OwnWalk"))))
-(DFunDef false "ownStep" ((PVar "walk") (PAs "b" (PCon "Binder" (PVar "n") (PVar "t") (PVar "l")))) (EMatch (EApp (EApp (EVar "omLookup") (EVar "n")) (EFieldAccess (EVar "walk") "owFirst")) (arm (PCon "None") () (ERecordUpdate (EVar "walk") ((fa "owFirst" (EApp (EApp (EApp (EVar "omInsert") (EVar "n")) (EVar "b")) (EFieldAccess (EVar "walk") "owFirst"))) (fa "owOrder" (EBinOp "::" (EVar "b") (EFieldAccess (EVar "walk") "owOrder")))))) (arm (PCon "Some" (PCon "Binder" PWild (PVar "first") (PVar "firstLoc"))) () (EIf (EBinOp "&&" (EBinOp "/=" (EApp (EVar "isMethod") (EVar "first")) (EApp (EVar "isMethod") (EVar "t"))) (EApp (EVar "not") (EApp (EApp (EVar "anyClash") (EVar "n")) (EFieldAccess (EVar "walk") "owClashes")))) (EBlock (DoLet false false (PVar "clash") (ERecordCreate "NameCollision" ((fa "ncName" (EVar "n")) (fa "ncFirst" (EVar "first")) (fa "ncSecond" (EVar "t")) (fa "ncRungs" (ETuple (EVar "RungOwn") (EVar "RungOwn"))) (fa "ncLoc" (EApp (EApp (EVar "orElse") (EVar "l")) (EVar "firstLoc")))))) (DoExpr (ERecordUpdate (EVar "walk") ((fa "owClashes" (EBinOp "::" (EVar "clash") (EFieldAccess (EVar "walk") "owClashes"))))))) (EVar "walk")))))
+(DFunDef false "ownStep" ((PVar "walk") (PVar "b")) (EBlock (DoLet false false (PVar "n") (EFieldAccess (EVar "b") "bdName")) (DoLet false false (PVar "t") (EFieldAccess (EVar "b") "bdTarget")) (DoLet false false (PVar "l") (EFieldAccess (EVar "b") "bdLoc")) (DoExpr (EMatch (EApp (EApp (EVar "omLookup") (EVar "n")) (EFieldAccess (EVar "walk") "owFirst")) (arm (PCon "None") () (ERecordUpdate (EVar "walk") ((fa "owFirst" (EApp (EApp (EApp (EVar "omInsert") (EVar "n")) (EVar "b")) (EFieldAccess (EVar "walk") "owFirst"))) (fa "owOrder" (EBinOp "::" (EVar "b") (EFieldAccess (EVar "walk") "owOrder")))))) (arm (PCon "Some" (PVar "prior")) () (EIf (EBinOp "&&" (EBinOp "/=" (EApp (EVar "isMethod") (EFieldAccess (EVar "prior") "bdTarget")) (EApp (EVar "isMethod") (EVar "t"))) (EApp (EVar "not") (EApp (EApp (EVar "anyClash") (EVar "n")) (EFieldAccess (EVar "walk") "owClashes")))) (EBlock (DoLet false false (PVar "clash") (ERecordCreate "NameCollision" ((fa "ncName" (EVar "n")) (fa "ncFirst" (EFieldAccess (EVar "prior") "bdTarget")) (fa "ncSecond" (EVar "t")) (fa "ncRungs" (ETuple (EVar "RungOwn") (EVar "RungOwn"))) (fa "ncLoc" (EApp (EApp (EVar "orElse") (EVar "l")) (EFieldAccess (EVar "prior") "bdLoc")))))) (DoExpr (ERecordUpdate (EVar "walk") ((fa "owClashes" (EBinOp "::" (EVar "clash") (EFieldAccess (EVar "walk") "owClashes"))))))) (EVar "walk")))))))
 (DTypeSig false "anyClash" (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "NameCollision")) (TyCon "Bool"))))
 (DFunDef false "anyClash" ((PVar "n") (PVar "clashes")) (EApp (EApp (EVar "any") (ELam ((PVar "c")) (EBinOp "==" (EFieldAccess (EVar "c") "ncName") (EVar "n")))) (EVar "clashes")))
 (DTypeSig false "isMethod" (TyFun (TyCon "NameTarget") (TyCon "Bool")))
@@ -478,12 +502,12 @@ preludeBinding prelude n = match omLookup n (declsByName prelude)
 (DFunDef false "declBinders" ((PCon "DAttrib" PWild (PVar "d"))) (EApp (EVar "declBinders") (EVar "d")))
 (DFunDef false "declBinders" (PWild) (EListLit))
 (DTypeSig false "ownValue" (TyFun (TyCon "String") (TyFun (TyApp (TyCon "Option") (TyCon "Loc")) (TyCon "Binder"))))
-(DFunDef false "ownValue" ((PVar "n") (PVar "l")) (EApp (EApp (EApp (EVar "Binder") (EVar "n")) (EApp (EApp (EVar "TargetValue") (ELit (LString ""))) (EVar "n"))) (EVar "l")))
+(DFunDef false "ownValue" ((PVar "n") (PVar "l")) (ERecordCreate "Binder" ((fa "bdName" (EVar "n")) (fa "bdTarget" (EApp (EApp (EVar "TargetValue") (ELit (LString ""))) (EVar "n"))) (fa "bdLoc" (EVar "l")))))
 (DTypeSig false "letBinder" (TyFun (TyCon "LetBind") (TyCon "Binder")))
 (DFunDef false "letBinder" ((PCon "LetBind" (PVar "n") PWild (PVar "loc") PWild)) (EApp (EApp (EVar "ownValue") (EVar "n")) (EApp (EVar "Some") (EVar "loc"))))
 (DTypeSig false "methodBinder" (TyFun (TyCon "String") (TyFun (TyApp (TyCon "Option") (TyCon "Loc")) (TyFun (TyCon "IfaceMethod") (TyCon "Binder")))))
-(DFunDef false "methodBinder" ((PVar "i") PWild (PCon "IfaceMethod" (PVar "m") PWild PWild (PCon "Some" (PVar "loc")))) (EApp (EApp (EApp (EVar "Binder") (EVar "m")) (EApp (EApp (EApp (EVar "TargetMethod") (ELit (LString ""))) (EVar "i")) (EVar "m"))) (EApp (EVar "Some") (EVar "loc"))))
-(DFunDef false "methodBinder" ((PVar "i") (PVar "nameLoc") (PCon "IfaceMethod" (PVar "m") PWild PWild (PCon "None"))) (EApp (EApp (EApp (EVar "Binder") (EVar "m")) (EApp (EApp (EApp (EVar "TargetMethod") (ELit (LString ""))) (EVar "i")) (EVar "m"))) (EVar "nameLoc")))
+(DFunDef false "methodBinder" ((PVar "i") PWild (PCon "IfaceMethod" (PVar "m") PWild PWild (PCon "Some" (PVar "loc")))) (ERecordCreate "Binder" ((fa "bdName" (EVar "m")) (fa "bdTarget" (EApp (EApp (EApp (EVar "TargetMethod") (ELit (LString ""))) (EVar "i")) (EVar "m"))) (fa "bdLoc" (EApp (EVar "Some") (EVar "loc"))))))
+(DFunDef false "methodBinder" ((PVar "i") (PVar "nameLoc") (PCon "IfaceMethod" (PVar "m") PWild PWild (PCon "None"))) (ERecordCreate "Binder" ((fa "bdName" (EVar "m")) (fa "bdTarget" (EApp (EApp (EApp (EVar "TargetMethod") (ELit (LString ""))) (EVar "i")) (EVar "m"))) (fa "bdLoc" (EVar "nameLoc")))))
 (DTypeSig false "surfaceBinds" (TyFun (TyApp (TyCon "OrdMap") (TyApp (TyCon "List") (TyCon "MethodOrigin"))) (TyFun (TyCon "ImportedSurface") (TyApp (TyCon "List") (TyCon "ImportBind")))))
 (DFunDef false "surfaceBinds" ((PVar "preludeMethods") (PCon "ImportedSurface" (PCon "DAttrib" PWild (PVar "d")) (PVar "exp"))) (EApp (EApp (EVar "surfaceBinds") (EVar "preludeMethods")) (EApp (EApp (EVar "ImportedSurface") (EVar "d")) (EVar "exp"))))
 (DFunDef false "surfaceBinds" ((PVar "preludeMethods") (PCon "ImportedSurface" (PCon "DUse" PWild (PVar "path") (PVar "useLoc")) (PVar "exp"))) (EBlock (DoLet false false (PVar "decls") (EApp (EVar "declsByName") (EVar "exp"))) (DoLet false false (PVar "methods") (EApp (EVar "methodOrigins") (EVar "exp"))) (DoLet false false (PVar "mid") (EApp (EVar "useModId") (EVar "path"))) (DoLet false true (PVar "bindAt") (ELam ((PVar "rung")) (ELam ((PVar "local")) (ELam ((PVar "origin")) (ELam ((PVar "loc")) (EMatch (EApp (EApp (EVar "omLookup") (EVar "origin")) (EVar "decls")) (arm (PCon "Some" (PVar "ds")) () (EListLit (ERecordCreate "ImportBind" ((fa "ibName" (EVar "local")) (fa "ibRung" (EVar "rung")) (fa "ibTargets" (EApp (EApp (EVar "map") (EApp (EApp (EVar "classify") (EVar "preludeMethods")) (EVar "methods"))) (EVar "ds"))) (fa "ibLoc" (EVar "loc")) (fa "ibModule" (EVar "mid")))))) (arm (PCon "None") () (EListLit)))))))) (DoExpr (EMatch (EVar "path") (arm (PCon "UseGroup" PWild (PVar "members")) () (EApp (EApp (EVar "flatMap") (ELam ((PVar "m")) (EApp (EApp (EApp (EApp (EVar "bindAt") (EVar "RungExplicit")) (EApp (EVar "useMemberLocal") (EVar "m"))) (EApp (EVar "useMemberOrigin") (EVar "m"))) (EApp (EVar "useMemberLoc") (EVar "m"))))) (EVar "members"))) (arm (PCon "UseName" (PVar "ns")) () (EMatch (ETuple (EBinOp ">" (EApp (EVar "listLen") (EVar "ns")) (ELit (LInt 1))) (EApp (EVar "last") (EVar "ns"))) (arm (PTuple (PCon "True") (PCon "Some" (PVar "n"))) () (EApp (EApp (EApp (EApp (EVar "bindAt") (EVar "RungExplicit")) (EVar "n")) (EVar "n")) (EVar "useLoc"))) (arm PWild () (EListLit)))) (arm (PCon "UseWild" PWild) () (EApp (EApp (EVar "flatMap") (ELam ((PVar "v")) (EApp (EApp (EApp (EApp (EVar "bindAt") (EVar "RungWild")) (EVar "v")) (EVar "v")) (EVar "useLoc")))) (EApp (EVar "dedup") (EFieldAccess (EVar "exp") "expValues")))) (arm (PCon "UseAlias" PWild PWild) () (EListLit))))))
@@ -491,7 +515,7 @@ preludeBinding prelude n = match omLookup n (declsByName prelude)
 (DTypeSig false "declsByName" (TyFun (TyCon "ModuleExports") (TyApp (TyCon "OrdMap") (TyApp (TyCon "List") (TyCon "DeclRef")))))
 (DFunDef false "declsByName" ((PVar "exp")) (EApp (EApp (EApp (EVar "fold") (ELam ((PVar "m") (PTuple (PVar "n") (PTuple (PVar "mod") (PVar "d")))) (EBlock (DoLet false false (PVar "ref") (EApp (EApp (EVar "DeclRef") (EVar "mod")) (EVar "d"))) (DoExpr (EMatch (EApp (EApp (EVar "omLookup") (EVar "n")) (EVar "m")) (arm (PCon "Some" (PVar "ds")) () (EIf (EApp (EApp (EVar "any") (ELam ((PVar "_s")) (EBinOp "==" (EVar "_s") (EVar "ref")))) (EVar "ds")) (EVar "m") (EApp (EApp (EApp (EVar "omInsert") (EVar "n")) (EBinOp "++" (EVar "ds") (EListLit (EVar "ref")))) (EVar "m")))) (arm (PCon "None") () (EApp (EApp (EApp (EVar "omInsert") (EVar "n")) (EListLit (EVar "ref"))) (EVar "m")))))))) (EVar "omEmpty")) (EFieldAccess (EVar "exp") "expValueOrigins")))
 (DTypeSig false "methodOrigins" (TyFun (TyCon "ModuleExports") (TyApp (TyCon "OrdMap") (TyApp (TyCon "List") (TyCon "MethodOrigin")))))
-(DFunDef false "methodOrigins" ((PVar "exp")) (EApp (EApp (EApp (EVar "fold") (ELam ((PVar "m") (PTuple (PVar "i") (PVar "ms"))) (EBlock (DoLet false false (PVar "owners") (EApp (EApp (EVar "map") (EVar "snd")) (EApp (EApp (EVar "filter") (ELam ((PVar "o")) (EBinOp "==" (EApp (EVar "fst") (EVar "o")) (EVar "i")))) (EFieldAccess (EVar "exp") "expIfaceOrigins")))) (DoExpr (EApp (EApp (EApp (EVar "fold") (ELam ((PVar "acc") (PVar "meth")) (EMatch (EApp (EApp (EVar "omLookup") (EVar "meth")) (EVar "acc")) (arm (PCon "Some" (PVar "ps")) () (EApp (EApp (EApp (EVar "omInsert") (EVar "meth")) (EBinOp "++" (EVar "ps") (EApp (EApp (EVar "map") (EApp (EVar "MethodOrigin") (EVar "i"))) (EVar "owners")))) (EVar "acc"))) (arm (PCon "None") () (EApp (EApp (EApp (EVar "omInsert") (EVar "meth")) (EApp (EApp (EVar "map") (EApp (EVar "MethodOrigin") (EVar "i"))) (EVar "owners"))) (EVar "acc")))))) (EVar "m")) (EVar "ms")))))) (EVar "omEmpty")) (EFieldAccess (EVar "exp") "expIfaceMethods")))
+(DFunDef false "methodOrigins" ((PVar "exp")) (EApp (EApp (EApp (EVar "fold") (ELam ((PVar "m") (PTuple (PVar "i") (PVar "ms"))) (EBlock (DoLet false false (PVar "owners") (EApp (EApp (EVar "map") (EVar "snd")) (EApp (EApp (EVar "filter") (ELam ((PVar "o")) (EBinOp "==" (EApp (EVar "fst") (EVar "o")) (EVar "i")))) (EFieldAccess (EVar "exp") "expIfaceOrigins")))) (DoExpr (EApp (EApp (EApp (EVar "fold") (ELam ((PVar "acc") (PVar "meth")) (EMatch (EApp (EApp (EVar "omLookup") (EVar "meth")) (EVar "acc")) (arm (PCon "Some" (PVar "ps")) () (EApp (EApp (EApp (EVar "omInsert") (EVar "meth")) (EBinOp "++" (EVar "ps") (EApp (EApp (EVar "map") (ELam ((PVar "o")) (ERecordCreate "MethodOrigin" ((fa "moIface" (EVar "i")) (fa "moModule" (EVar "o")))))) (EVar "owners")))) (EVar "acc"))) (arm (PCon "None") () (EApp (EApp (EApp (EVar "omInsert") (EVar "meth")) (EApp (EApp (EVar "map") (ELam ((PVar "o")) (ERecordCreate "MethodOrigin" ((fa "moIface" (EVar "i")) (fa "moModule" (EVar "o")))))) (EVar "owners"))) (EVar "acc")))))) (EVar "m")) (EVar "ms")))))) (EVar "omEmpty")) (EFieldAccess (EVar "exp") "expIfaceMethods")))
 (DTypeSig false "classify" (TyFun (TyApp (TyCon "OrdMap") (TyApp (TyCon "List") (TyCon "MethodOrigin"))) (TyFun (TyApp (TyCon "OrdMap") (TyApp (TyCon "List") (TyCon "MethodOrigin"))) (TyFun (TyCon "DeclRef") (TyCon "NameTarget")))))
 (DFunDef false "classify" ((PVar "preludeMethods") (PVar "methods") (PCon "DeclRef" (PVar "m") (PVar "d"))) (EMatch (EApp (EApp (EApp (EVar "declaringIface") (EVar "m")) (EVar "d")) (EVar "methods")) (arm (PCon "Some" (PVar "i")) () (EApp (EApp (EApp (EVar "TargetMethod") (EVar "m")) (EVar "i")) (EVar "d"))) (arm (PCon "None") () (EApp (EApp (EVar "classifyPrelude") (EVar "preludeMethods")) (EApp (EApp (EVar "DeclRef") (EVar "m")) (EVar "d"))))))
 (DTypeSig false "classifyPrelude" (TyFun (TyApp (TyCon "OrdMap") (TyApp (TyCon "List") (TyCon "MethodOrigin"))) (TyFun (TyCon "DeclRef") (TyCon "NameTarget"))))
@@ -503,7 +527,7 @@ preludeBinding prelude n = match omLookup n (declsByName prelude)
 (DTypeSig false "rungTargets" (TyFun (TyCon "NameRung") (TyFun (TyApp (TyCon "List") (TyCon "ImportBind")) (TyApp (TyCon "List") (TyCon "RungRow")))))
 (DFunDef false "rungTargets" ((PVar "rung") (PVar "binds")) (EBlock (DoLet false false (PTuple (PVar "m") (PVar "order")) (EApp (EApp (EApp (EVar "fold") (ELam ((PVar "acc") (PVar "b")) (EIf (EBinOp "==" (EFieldAccess (EVar "b") "ibRung") (EVar "rung")) (EApp (EApp (EVar "addBind") (EVar "acc")) (EVar "b")) (EVar "acc")))) (ETuple (EVar "omEmpty") (EListLit))) (EVar "binds"))) (DoExpr (EApp (EApp (EVar "map") (ELam ((PVar "n")) (EApp (EApp (EVar "RungRow") (EVar "n")) (EApp (EApp (EVar "targetsOf") (EVar "n")) (EVar "m"))))) (EApp (EVar "reverseL") (EVar "order"))))))
 (DTypeSig false "addBind" (TyFun (TyTuple (TyApp (TyCon "OrdMap") (TyApp (TyCon "List") (TyCon "Brought"))) (TyApp (TyCon "List") (TyCon "String"))) (TyFun (TyCon "ImportBind") (TyTuple (TyApp (TyCon "OrdMap") (TyApp (TyCon "List") (TyCon "Brought"))) (TyApp (TyCon "List") (TyCon "String"))))))
-(DFunDef false "addBind" ((PTuple (PVar "m") (PVar "order")) (PVar "b")) (EBlock (DoLet false true (PVar "fresh") (ELam ((PVar "known")) (EApp (EApp (EVar "filter") (ELam ((PVar "t")) (EApp (EVar "not") (EApp (EApp (EVar "any") (ELam ((PVar "p")) (EBinOp "==" (EFieldAccess (EVar "p") "brTarget") (EVar "t")))) (EVar "known"))))) (EFieldAccess (EVar "b") "ibTargets")))) (DoExpr (EMatch (EApp (EApp (EVar "omLookup") (EFieldAccess (EVar "b") "ibName")) (EVar "m")) (arm (PCon "Some" (PVar "known")) () (ETuple (EApp (EApp (EApp (EVar "omInsert") (EFieldAccess (EVar "b") "ibName")) (EBinOp "++" (EVar "known") (EApp (EApp (EVar "map") (ELam ((PVar "t")) (EApp (EApp (EVar "Brought") (EVar "t")) (EFieldAccess (EVar "b") "ibModule")))) (EApp (EVar "fresh") (EVar "known"))))) (EVar "m")) (EVar "order"))) (arm (PCon "None") () (ETuple (EApp (EApp (EApp (EVar "omInsert") (EFieldAccess (EVar "b") "ibName")) (EApp (EApp (EVar "map") (ELam ((PVar "t")) (EApp (EApp (EVar "Brought") (EVar "t")) (EFieldAccess (EVar "b") "ibModule")))) (EApp (EVar "fresh") (EListLit)))) (EVar "m")) (EBinOp "::" (EFieldAccess (EVar "b") "ibName") (EVar "order"))))))))
+(DFunDef false "addBind" ((PTuple (PVar "m") (PVar "order")) (PVar "b")) (EBlock (DoLet false true (PVar "fresh") (ELam ((PVar "known")) (EApp (EApp (EVar "filter") (ELam ((PVar "t")) (EApp (EVar "not") (EApp (EApp (EVar "any") (ELam ((PVar "p")) (EBinOp "==" (EFieldAccess (EVar "p") "brTarget") (EVar "t")))) (EVar "known"))))) (EFieldAccess (EVar "b") "ibTargets")))) (DoExpr (EMatch (EApp (EApp (EVar "omLookup") (EFieldAccess (EVar "b") "ibName")) (EVar "m")) (arm (PCon "Some" (PVar "known")) () (ETuple (EApp (EApp (EApp (EVar "omInsert") (EFieldAccess (EVar "b") "ibName")) (EBinOp "++" (EVar "known") (EApp (EApp (EVar "map") (ELam ((PVar "t")) (ERecordCreate "Brought" ((fa "brTarget" (EVar "t")) (fa "brModule" (EFieldAccess (EVar "b") "ibModule")))))) (EApp (EVar "fresh") (EVar "known"))))) (EVar "m")) (EVar "order"))) (arm (PCon "None") () (ETuple (EApp (EApp (EApp (EVar "omInsert") (EFieldAccess (EVar "b") "ibName")) (EApp (EApp (EVar "map") (ELam ((PVar "t")) (ERecordCreate "Brought" ((fa "brTarget" (EVar "t")) (fa "brModule" (EFieldAccess (EVar "b") "ibModule")))))) (EApp (EVar "fresh") (EListLit)))) (EVar "m")) (EBinOp "::" (EFieldAccess (EVar "b") "ibName") (EVar "order"))))))))
 (DTypeSig false "targetsOf" (TyFun (TyCon "String") (TyFun (TyApp (TyCon "OrdMap") (TyApp (TyCon "List") (TyCon "Brought"))) (TyApp (TyCon "List") (TyCon "Brought")))))
 (DFunDef false "targetsOf" ((PVar "n") (PVar "m")) (EApp (EApp (EVar "optionOr") (EListLit)) (EApp (EApp (EVar "omLookup") (EVar "n")) (EVar "m"))))
 (DTypeSig false "insertRung" (TyFun (TyCon "NameRung") (TyFun (TyApp (TyCon "OrdMap") (TyCon "NameBinding")) (TyFun (TyCon "RungRow") (TyApp (TyCon "OrdMap") (TyCon "NameBinding"))))))
@@ -563,7 +587,7 @@ preludeBinding prelude n = match omLookup n (declsByName prelude)
 (DTypeSig false "emptyOwnWalk" (TyCon "OwnWalk"))
 (DFunDef false "emptyOwnWalk" () (ERecordCreate "OwnWalk" ((fa "owFirst" (EVar "omEmpty")) (fa "owOrder" (EListLit)) (fa "owClashes" (EListLit)))))
 (DTypeSig false "ownStep" (TyFun (TyCon "OwnWalk") (TyFun (TyCon "Binder") (TyCon "OwnWalk"))))
-(DFunDef false "ownStep" ((PVar "walk") (PAs "b" (PCon "Binder" (PVar "n") (PVar "t") (PVar "l")))) (EMatch (EApp (EApp (EVar "omLookup") (EVar "n")) (EFieldAccess (EVar "walk") "owFirst")) (arm (PCon "None") () (ERecordUpdate (EVar "walk") ((fa "owFirst" (EApp (EApp (EApp (EVar "omInsert") (EVar "n")) (EVar "b")) (EFieldAccess (EVar "walk") "owFirst"))) (fa "owOrder" (EBinOp "::" (EVar "b") (EFieldAccess (EVar "walk") "owOrder")))))) (arm (PCon "Some" (PCon "Binder" PWild (PVar "first") (PVar "firstLoc"))) () (EIf (EBinOp "&&" (EBinOp "/=" (EApp (EVar "isMethod") (EVar "first")) (EApp (EVar "isMethod") (EVar "t"))) (EApp (EVar "not") (EApp (EApp (EVar "anyClash") (EVar "n")) (EFieldAccess (EVar "walk") "owClashes")))) (EBlock (DoLet false false (PVar "clash") (ERecordCreate "NameCollision" ((fa "ncName" (EVar "n")) (fa "ncFirst" (EVar "first")) (fa "ncSecond" (EVar "t")) (fa "ncRungs" (ETuple (EVar "RungOwn") (EVar "RungOwn"))) (fa "ncLoc" (EApp (EApp (EMethodRef "orElse") (EVar "l")) (EVar "firstLoc")))))) (DoExpr (ERecordUpdate (EVar "walk") ((fa "owClashes" (EBinOp "::" (EVar "clash") (EFieldAccess (EVar "walk") "owClashes"))))))) (EVar "walk")))))
+(DFunDef false "ownStep" ((PVar "walk") (PVar "b")) (EBlock (DoLet false false (PVar "n") (EFieldAccess (EVar "b") "bdName")) (DoLet false false (PVar "t") (EFieldAccess (EVar "b") "bdTarget")) (DoLet false false (PVar "l") (EFieldAccess (EVar "b") "bdLoc")) (DoExpr (EMatch (EApp (EApp (EVar "omLookup") (EVar "n")) (EFieldAccess (EVar "walk") "owFirst")) (arm (PCon "None") () (ERecordUpdate (EVar "walk") ((fa "owFirst" (EApp (EApp (EApp (EVar "omInsert") (EVar "n")) (EVar "b")) (EFieldAccess (EVar "walk") "owFirst"))) (fa "owOrder" (EBinOp "::" (EVar "b") (EFieldAccess (EVar "walk") "owOrder")))))) (arm (PCon "Some" (PVar "prior")) () (EIf (EBinOp "&&" (EBinOp "/=" (EApp (EVar "isMethod") (EFieldAccess (EVar "prior") "bdTarget")) (EApp (EVar "isMethod") (EVar "t"))) (EApp (EVar "not") (EApp (EApp (EVar "anyClash") (EVar "n")) (EFieldAccess (EVar "walk") "owClashes")))) (EBlock (DoLet false false (PVar "clash") (ERecordCreate "NameCollision" ((fa "ncName" (EVar "n")) (fa "ncFirst" (EFieldAccess (EVar "prior") "bdTarget")) (fa "ncSecond" (EVar "t")) (fa "ncRungs" (ETuple (EVar "RungOwn") (EVar "RungOwn"))) (fa "ncLoc" (EApp (EApp (EMethodRef "orElse") (EVar "l")) (EFieldAccess (EVar "prior") "bdLoc")))))) (DoExpr (ERecordUpdate (EVar "walk") ((fa "owClashes" (EBinOp "::" (EVar "clash") (EFieldAccess (EVar "walk") "owClashes"))))))) (EVar "walk")))))))
 (DTypeSig false "anyClash" (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "NameCollision")) (TyCon "Bool"))))
 (DFunDef false "anyClash" ((PVar "n") (PVar "clashes")) (EApp (EApp (EDictApp "any") (ELam ((PVar "c")) (EBinOp "==" (EFieldAccess (EVar "c") "ncName") (EVar "n")))) (EVar "clashes")))
 (DTypeSig false "isMethod" (TyFun (TyCon "NameTarget") (TyCon "Bool")))
@@ -578,12 +602,12 @@ preludeBinding prelude n = match omLookup n (declsByName prelude)
 (DFunDef false "declBinders" ((PCon "DAttrib" PWild (PVar "d"))) (EApp (EVar "declBinders") (EVar "d")))
 (DFunDef false "declBinders" (PWild) (EListLit))
 (DTypeSig false "ownValue" (TyFun (TyCon "String") (TyFun (TyApp (TyCon "Option") (TyCon "Loc")) (TyCon "Binder"))))
-(DFunDef false "ownValue" ((PVar "n") (PVar "l")) (EApp (EApp (EApp (EVar "Binder") (EVar "n")) (EApp (EApp (EVar "TargetValue") (ELit (LString ""))) (EVar "n"))) (EVar "l")))
+(DFunDef false "ownValue" ((PVar "n") (PVar "l")) (ERecordCreate "Binder" ((fa "bdName" (EVar "n")) (fa "bdTarget" (EApp (EApp (EVar "TargetValue") (ELit (LString ""))) (EVar "n"))) (fa "bdLoc" (EVar "l")))))
 (DTypeSig false "letBinder" (TyFun (TyCon "LetBind") (TyCon "Binder")))
 (DFunDef false "letBinder" ((PCon "LetBind" (PVar "n") PWild (PVar "loc") PWild)) (EApp (EApp (EVar "ownValue") (EVar "n")) (EApp (EVar "Some") (EVar "loc"))))
 (DTypeSig false "methodBinder" (TyFun (TyCon "String") (TyFun (TyApp (TyCon "Option") (TyCon "Loc")) (TyFun (TyCon "IfaceMethod") (TyCon "Binder")))))
-(DFunDef false "methodBinder" ((PVar "i") PWild (PCon "IfaceMethod" (PVar "m") PWild PWild (PCon "Some" (PVar "loc")))) (EApp (EApp (EApp (EVar "Binder") (EVar "m")) (EApp (EApp (EApp (EVar "TargetMethod") (ELit (LString ""))) (EVar "i")) (EVar "m"))) (EApp (EVar "Some") (EVar "loc"))))
-(DFunDef false "methodBinder" ((PVar "i") (PVar "nameLoc") (PCon "IfaceMethod" (PVar "m") PWild PWild (PCon "None"))) (EApp (EApp (EApp (EVar "Binder") (EVar "m")) (EApp (EApp (EApp (EVar "TargetMethod") (ELit (LString ""))) (EVar "i")) (EVar "m"))) (EVar "nameLoc")))
+(DFunDef false "methodBinder" ((PVar "i") PWild (PCon "IfaceMethod" (PVar "m") PWild PWild (PCon "Some" (PVar "loc")))) (ERecordCreate "Binder" ((fa "bdName" (EVar "m")) (fa "bdTarget" (EApp (EApp (EApp (EVar "TargetMethod") (ELit (LString ""))) (EVar "i")) (EVar "m"))) (fa "bdLoc" (EApp (EVar "Some") (EVar "loc"))))))
+(DFunDef false "methodBinder" ((PVar "i") (PVar "nameLoc") (PCon "IfaceMethod" (PVar "m") PWild PWild (PCon "None"))) (ERecordCreate "Binder" ((fa "bdName" (EVar "m")) (fa "bdTarget" (EApp (EApp (EApp (EVar "TargetMethod") (ELit (LString ""))) (EVar "i")) (EVar "m"))) (fa "bdLoc" (EVar "nameLoc")))))
 (DTypeSig false "surfaceBinds" (TyFun (TyApp (TyCon "OrdMap") (TyApp (TyCon "List") (TyCon "MethodOrigin"))) (TyFun (TyCon "ImportedSurface") (TyApp (TyCon "List") (TyCon "ImportBind")))))
 (DFunDef false "surfaceBinds" ((PVar "preludeMethods") (PCon "ImportedSurface" (PCon "DAttrib" PWild (PVar "d")) (PVar "exp"))) (EApp (EApp (EVar "surfaceBinds") (EVar "preludeMethods")) (EApp (EApp (EVar "ImportedSurface") (EVar "d")) (EVar "exp"))))
 (DFunDef false "surfaceBinds" ((PVar "preludeMethods") (PCon "ImportedSurface" (PCon "DUse" PWild (PVar "path") (PVar "useLoc")) (PVar "exp"))) (EBlock (DoLet false false (PVar "decls") (EApp (EVar "declsByName") (EVar "exp"))) (DoLet false false (PVar "methods") (EApp (EVar "methodOrigins") (EVar "exp"))) (DoLet false false (PVar "mid") (EApp (EVar "useModId") (EVar "path"))) (DoLet false true (PVar "bindAt") (ELam ((PVar "rung")) (ELam ((PVar "local")) (ELam ((PVar "origin")) (ELam ((PVar "loc")) (EMatch (EApp (EApp (EVar "omLookup") (EVar "origin")) (EVar "decls")) (arm (PCon "Some" (PVar "ds")) () (EListLit (ERecordCreate "ImportBind" ((fa "ibName" (EVar "local")) (fa "ibRung" (EVar "rung")) (fa "ibTargets" (EApp (EApp (EMethodRef "map") (EApp (EApp (EVar "classify") (EVar "preludeMethods")) (EVar "methods"))) (EVar "ds"))) (fa "ibLoc" (EVar "loc")) (fa "ibModule" (EVar "mid")))))) (arm (PCon "None") () (EListLit)))))))) (DoExpr (EMatch (EVar "path") (arm (PCon "UseGroup" PWild (PVar "members")) () (EApp (EApp (EDictApp "flatMap") (ELam ((PVar "m")) (EApp (EApp (EApp (EApp (EVar "bindAt") (EVar "RungExplicit")) (EApp (EVar "useMemberLocal") (EVar "m"))) (EApp (EVar "useMemberOrigin") (EVar "m"))) (EApp (EVar "useMemberLoc") (EVar "m"))))) (EVar "members"))) (arm (PCon "UseName" (PVar "ns")) () (EMatch (ETuple (EBinOp ">" (EApp (EVar "listLen") (EVar "ns")) (ELit (LInt 1))) (EApp (EVar "last") (EVar "ns"))) (arm (PTuple (PCon "True") (PCon "Some" (PVar "n"))) () (EApp (EApp (EApp (EApp (EVar "bindAt") (EVar "RungExplicit")) (EVar "n")) (EVar "n")) (EVar "useLoc"))) (arm PWild () (EListLit)))) (arm (PCon "UseWild" PWild) () (EApp (EApp (EDictApp "flatMap") (ELam ((PVar "v")) (EApp (EApp (EApp (EApp (EVar "bindAt") (EVar "RungWild")) (EVar "v")) (EVar "v")) (EVar "useLoc")))) (EApp (EVar "dedup") (EFieldAccess (EVar "exp") "expValues")))) (arm (PCon "UseAlias" PWild PWild) () (EListLit))))))
@@ -591,7 +615,7 @@ preludeBinding prelude n = match omLookup n (declsByName prelude)
 (DTypeSig false "declsByName" (TyFun (TyCon "ModuleExports") (TyApp (TyCon "OrdMap") (TyApp (TyCon "List") (TyCon "DeclRef")))))
 (DFunDef false "declsByName" ((PVar "exp")) (EApp (EApp (EApp (EMethodRef "fold") (ELam ((PVar "m") (PTuple (PVar "n") (PTuple (PVar "mod") (PVar "d")))) (EBlock (DoLet false false (PVar "ref") (EApp (EApp (EVar "DeclRef") (EVar "mod")) (EVar "d"))) (DoExpr (EMatch (EApp (EApp (EVar "omLookup") (EVar "n")) (EVar "m")) (arm (PCon "Some" (PVar "ds")) () (EIf (EApp (EApp (EDictApp "any") (ELam ((PVar "_s")) (EBinOp "==" (EVar "_s") (EVar "ref")))) (EVar "ds")) (EVar "m") (EApp (EApp (EApp (EVar "omInsert") (EVar "n")) (EBinOp "++" (EVar "ds") (EListLit (EVar "ref")))) (EVar "m")))) (arm (PCon "None") () (EApp (EApp (EApp (EVar "omInsert") (EVar "n")) (EListLit (EVar "ref"))) (EVar "m")))))))) (EVar "omEmpty")) (EFieldAccess (EVar "exp") "expValueOrigins")))
 (DTypeSig false "methodOrigins" (TyFun (TyCon "ModuleExports") (TyApp (TyCon "OrdMap") (TyApp (TyCon "List") (TyCon "MethodOrigin")))))
-(DFunDef false "methodOrigins" ((PVar "exp")) (EApp (EApp (EApp (EMethodRef "fold") (ELam ((PVar "m") (PTuple (PVar "i") (PVar "ms"))) (EBlock (DoLet false false (PVar "owners") (EApp (EApp (EMethodRef "map") (EVar "snd")) (EApp (EApp (EMethodRef "filter") (ELam ((PVar "o")) (EBinOp "==" (EApp (EVar "fst") (EVar "o")) (EVar "i")))) (EFieldAccess (EVar "exp") "expIfaceOrigins")))) (DoExpr (EApp (EApp (EApp (EMethodRef "fold") (ELam ((PVar "acc") (PVar "meth")) (EMatch (EApp (EApp (EVar "omLookup") (EVar "meth")) (EVar "acc")) (arm (PCon "Some" (PVar "ps")) () (EApp (EApp (EApp (EVar "omInsert") (EVar "meth")) (EBinOp "++" (EVar "ps") (EApp (EApp (EMethodRef "map") (EApp (EVar "MethodOrigin") (EVar "i"))) (EVar "owners")))) (EVar "acc"))) (arm (PCon "None") () (EApp (EApp (EApp (EVar "omInsert") (EVar "meth")) (EApp (EApp (EMethodRef "map") (EApp (EVar "MethodOrigin") (EVar "i"))) (EVar "owners"))) (EVar "acc")))))) (EVar "m")) (EVar "ms")))))) (EVar "omEmpty")) (EFieldAccess (EVar "exp") "expIfaceMethods")))
+(DFunDef false "methodOrigins" ((PVar "exp")) (EApp (EApp (EApp (EMethodRef "fold") (ELam ((PVar "m") (PTuple (PVar "i") (PVar "ms"))) (EBlock (DoLet false false (PVar "owners") (EApp (EApp (EMethodRef "map") (EVar "snd")) (EApp (EApp (EMethodRef "filter") (ELam ((PVar "o")) (EBinOp "==" (EApp (EVar "fst") (EVar "o")) (EVar "i")))) (EFieldAccess (EVar "exp") "expIfaceOrigins")))) (DoExpr (EApp (EApp (EApp (EMethodRef "fold") (ELam ((PVar "acc") (PVar "meth")) (EMatch (EApp (EApp (EVar "omLookup") (EVar "meth")) (EVar "acc")) (arm (PCon "Some" (PVar "ps")) () (EApp (EApp (EApp (EVar "omInsert") (EVar "meth")) (EBinOp "++" (EVar "ps") (EApp (EApp (EMethodRef "map") (ELam ((PVar "o")) (ERecordCreate "MethodOrigin" ((fa "moIface" (EVar "i")) (fa "moModule" (EVar "o")))))) (EVar "owners")))) (EVar "acc"))) (arm (PCon "None") () (EApp (EApp (EApp (EVar "omInsert") (EVar "meth")) (EApp (EApp (EMethodRef "map") (ELam ((PVar "o")) (ERecordCreate "MethodOrigin" ((fa "moIface" (EVar "i")) (fa "moModule" (EVar "o")))))) (EVar "owners"))) (EVar "acc")))))) (EVar "m")) (EVar "ms")))))) (EVar "omEmpty")) (EFieldAccess (EVar "exp") "expIfaceMethods")))
 (DTypeSig false "classify" (TyFun (TyApp (TyCon "OrdMap") (TyApp (TyCon "List") (TyCon "MethodOrigin"))) (TyFun (TyApp (TyCon "OrdMap") (TyApp (TyCon "List") (TyCon "MethodOrigin"))) (TyFun (TyCon "DeclRef") (TyCon "NameTarget")))))
 (DFunDef false "classify" ((PVar "preludeMethods") (PVar "methods") (PCon "DeclRef" (PVar "m") (PVar "d"))) (EMatch (EApp (EApp (EApp (EVar "declaringIface") (EVar "m")) (EVar "d")) (EVar "methods")) (arm (PCon "Some" (PVar "i")) () (EApp (EApp (EApp (EVar "TargetMethod") (EVar "m")) (EVar "i")) (EVar "d"))) (arm (PCon "None") () (EApp (EApp (EVar "classifyPrelude") (EVar "preludeMethods")) (EApp (EApp (EVar "DeclRef") (EVar "m")) (EVar "d"))))))
 (DTypeSig false "classifyPrelude" (TyFun (TyApp (TyCon "OrdMap") (TyApp (TyCon "List") (TyCon "MethodOrigin"))) (TyFun (TyCon "DeclRef") (TyCon "NameTarget"))))
@@ -603,7 +627,7 @@ preludeBinding prelude n = match omLookup n (declsByName prelude)
 (DTypeSig false "rungTargets" (TyFun (TyCon "NameRung") (TyFun (TyApp (TyCon "List") (TyCon "ImportBind")) (TyApp (TyCon "List") (TyCon "RungRow")))))
 (DFunDef false "rungTargets" ((PVar "rung") (PVar "binds")) (EBlock (DoLet false false (PTuple (PVar "m") (PVar "order")) (EApp (EApp (EApp (EMethodRef "fold") (ELam ((PVar "acc") (PVar "b")) (EIf (EBinOp "==" (EFieldAccess (EVar "b") "ibRung") (EVar "rung")) (EApp (EApp (EVar "addBind") (EVar "acc")) (EVar "b")) (EVar "acc")))) (ETuple (EVar "omEmpty") (EListLit))) (EVar "binds"))) (DoExpr (EApp (EApp (EMethodRef "map") (ELam ((PVar "n")) (EApp (EApp (EVar "RungRow") (EVar "n")) (EApp (EApp (EVar "targetsOf") (EVar "n")) (EVar "m"))))) (EApp (EVar "reverseL") (EVar "order"))))))
 (DTypeSig false "addBind" (TyFun (TyTuple (TyApp (TyCon "OrdMap") (TyApp (TyCon "List") (TyCon "Brought"))) (TyApp (TyCon "List") (TyCon "String"))) (TyFun (TyCon "ImportBind") (TyTuple (TyApp (TyCon "OrdMap") (TyApp (TyCon "List") (TyCon "Brought"))) (TyApp (TyCon "List") (TyCon "String"))))))
-(DFunDef false "addBind" ((PTuple (PVar "m") (PVar "order")) (PVar "b")) (EBlock (DoLet false true (PVar "fresh") (ELam ((PVar "known")) (EApp (EApp (EMethodRef "filter") (ELam ((PVar "t")) (EApp (EVar "not") (EApp (EApp (EDictApp "any") (ELam ((PVar "p")) (EBinOp "==" (EFieldAccess (EVar "p") "brTarget") (EVar "t")))) (EVar "known"))))) (EFieldAccess (EVar "b") "ibTargets")))) (DoExpr (EMatch (EApp (EApp (EVar "omLookup") (EFieldAccess (EVar "b") "ibName")) (EVar "m")) (arm (PCon "Some" (PVar "known")) () (ETuple (EApp (EApp (EApp (EVar "omInsert") (EFieldAccess (EVar "b") "ibName")) (EBinOp "++" (EVar "known") (EApp (EApp (EMethodRef "map") (ELam ((PVar "t")) (EApp (EApp (EVar "Brought") (EVar "t")) (EFieldAccess (EVar "b") "ibModule")))) (EApp (EVar "fresh") (EVar "known"))))) (EVar "m")) (EVar "order"))) (arm (PCon "None") () (ETuple (EApp (EApp (EApp (EVar "omInsert") (EFieldAccess (EVar "b") "ibName")) (EApp (EApp (EMethodRef "map") (ELam ((PVar "t")) (EApp (EApp (EVar "Brought") (EVar "t")) (EFieldAccess (EVar "b") "ibModule")))) (EApp (EVar "fresh") (EListLit)))) (EVar "m")) (EBinOp "::" (EFieldAccess (EVar "b") "ibName") (EVar "order"))))))))
+(DFunDef false "addBind" ((PTuple (PVar "m") (PVar "order")) (PVar "b")) (EBlock (DoLet false true (PVar "fresh") (ELam ((PVar "known")) (EApp (EApp (EMethodRef "filter") (ELam ((PVar "t")) (EApp (EVar "not") (EApp (EApp (EDictApp "any") (ELam ((PVar "p")) (EBinOp "==" (EFieldAccess (EVar "p") "brTarget") (EVar "t")))) (EVar "known"))))) (EFieldAccess (EVar "b") "ibTargets")))) (DoExpr (EMatch (EApp (EApp (EVar "omLookup") (EFieldAccess (EVar "b") "ibName")) (EVar "m")) (arm (PCon "Some" (PVar "known")) () (ETuple (EApp (EApp (EApp (EVar "omInsert") (EFieldAccess (EVar "b") "ibName")) (EBinOp "++" (EVar "known") (EApp (EApp (EMethodRef "map") (ELam ((PVar "t")) (ERecordCreate "Brought" ((fa "brTarget" (EVar "t")) (fa "brModule" (EFieldAccess (EVar "b") "ibModule")))))) (EApp (EVar "fresh") (EVar "known"))))) (EVar "m")) (EVar "order"))) (arm (PCon "None") () (ETuple (EApp (EApp (EApp (EVar "omInsert") (EFieldAccess (EVar "b") "ibName")) (EApp (EApp (EMethodRef "map") (ELam ((PVar "t")) (ERecordCreate "Brought" ((fa "brTarget" (EVar "t")) (fa "brModule" (EFieldAccess (EVar "b") "ibModule")))))) (EApp (EVar "fresh") (EListLit)))) (EVar "m")) (EBinOp "::" (EFieldAccess (EVar "b") "ibName") (EVar "order"))))))))
 (DTypeSig false "targetsOf" (TyFun (TyCon "String") (TyFun (TyApp (TyCon "OrdMap") (TyApp (TyCon "List") (TyCon "Brought"))) (TyApp (TyCon "List") (TyCon "Brought")))))
 (DFunDef false "targetsOf" ((PVar "n") (PVar "m")) (EApp (EApp (EVar "optionOr") (EListLit)) (EApp (EApp (EVar "omLookup") (EVar "n")) (EVar "m"))))
 (DTypeSig false "insertRung" (TyFun (TyCon "NameRung") (TyFun (TyApp (TyCon "OrdMap") (TyCon "NameBinding")) (TyFun (TyCon "RungRow") (TyApp (TyCon "OrdMap") (TyCon "NameBinding"))))))
